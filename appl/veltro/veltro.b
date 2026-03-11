@@ -565,9 +565,36 @@ checkandcompact(llmsessionid: string)
 
 # ---- Parallel tool execution ----
 
+# Per-tool timeout: 60 seconds default
+TOOL_TIMEOUT: con 60000;
+
 runtoolchan(tool, args: string, ch: chan of string)
 {
 	ch <-= agentlib->calltool(tool, args);
+}
+
+tooltimer(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
+}
+
+# Execute a single tool call with a timeout.
+# Returns result string, or an error if the tool hangs.
+exectool1(name, args: string): string
+{
+	resultch := chan of string;
+	spawn runtoolchan(name, args, resultch);
+	timeoutch := chan of int;
+	spawn tooltimer(timeoutch, TOOL_TIMEOUT);
+	r := "";
+	alt {
+	r = <-resultch =>
+		;
+	<-timeoutch =>
+		r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
+	}
+	return r;
 }
 
 # Execute a list of native tool_use calls in parallel.
@@ -580,10 +607,10 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 	for(cl := calls; cl != nil; cl = tl cl)
 		n++;
 
-	# Single tool: execute inline (avoid goroutine overhead)
+	# Single tool: execute with timeout
 	if(n == 1) {
 		(id, name, args) := hd calls;
-		r := agentlib->calltool(name, args);
+		r := exectool1(name, args);
 		if(len r > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(r, step);
 			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
@@ -603,13 +630,21 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 		spawn runtoolchan(name, args, channels[i]);
 	}
 
-	# Collect results in original order
+	# Collect results in original order, with per-tool timeout
 	results: list of (string, string);
 	cl3 := calls;
 	for(i = 0; cl3 != nil; i++) {
-		(id, nil, nil) := hd cl3;
+		(id, name, nil) := hd cl3;
 		cl3 = tl cl3;
-		r := <-channels[i];
+		timeoutch := chan of int;
+		spawn tooltimer(timeoutch, TOOL_TIMEOUT);
+		r := "";
+		alt {
+		r = <-channels[i] =>
+			;
+		<-timeoutch =>
+			r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
+		}
 		if(len r > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(r, step * 10 + i);
 			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);

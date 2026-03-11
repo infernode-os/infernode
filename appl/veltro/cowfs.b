@@ -190,7 +190,10 @@ promote(basepath, overlaydir: string): (int, string)
 	# Apply whiteout deletes to base
 	wh := loadwhiteouts(overlaydir);
 	for(; wh != nil; wh = tl wh) {
-		relpath := hd wh;
+		# Validate whiteout path — reject traversal attempts
+		(relpath, pathok) := cleanrelpath(hd wh);
+		if(!pathok)
+			continue;
 		bpath := basepath + "/" + relpath;
 		# Remove from base (best-effort)
 		removefile(bpath);
@@ -215,6 +218,12 @@ promote(basepath, overlaydir: string): (int, string)
 promotefile(basepath, overlaydir, relpath: string): string
 {
 	initsys();
+
+	# Validate path — reject traversal attempts
+	pathok: int;
+	(relpath, pathok) = cleanrelpath(relpath);
+	if(!pathok)
+		return "invalid path: contains traversal";
 
 	# Check if it's a whiteout (deletion)
 	wh := loadwhiteouts(overlaydir);
@@ -322,14 +331,21 @@ loadwhiteouts(overlaydir: string): list of string
 	line := "";
 	for(i := 0; i < len content; i++) {
 		if(content[i] == '\n') {
-			if(len line > 0)
-				result = line :: result;
+			if(len line > 0) {
+				# Validate: reject entries with path traversal
+				(clean, ok) := cleanrelpath(line);
+				if(ok && clean != "")
+					result = clean :: result;
+			}
 			line = "";
 		} else
 			line[len line] = content[i];
 	}
-	if(len line > 0)
-		result = line :: result;
+	if(len line > 0) {
+		(clean, ok) := cleanrelpath(line);
+		if(ok && clean != "")
+			result = clean :: result;
+	}
 
 	return result;
 }
@@ -412,6 +428,63 @@ joinrel(parent, name: string): string
 	if(parent == "")
 		return name;
 	return parent + "/" + name;
+}
+
+# --- Path validation ---
+
+# Canonicalize a relative path and reject traversal attempts.
+# Removes "." components, resolves ".." by removing the preceding component,
+# and rejects any result that would escape the base (net ".." remaining).
+# Returns (cleaned_path, ok) — ok=0 means the path is invalid.
+cleanrelpath(relpath: string): (string, int)
+{
+	if(relpath == "")
+		return ("", 1);
+
+	# Split on /
+	parts: list of string;
+	seg := "";
+	for(i := 0; i < len relpath; i++) {
+		if(relpath[i] == '/') {
+			if(seg != "")
+				parts = seg :: parts;
+			seg = "";
+		} else
+			seg += relpath[i:i+1];
+	}
+	if(seg != "")
+		parts = seg :: parts;
+
+	# Reverse to process left-to-right
+	rev: list of string;
+	for(; parts != nil; parts = tl parts)
+		rev = hd parts :: rev;
+
+	# Build canonical path, rejecting ..
+	stack: list of string;
+	for(; rev != nil; rev = tl rev) {
+		component := hd rev;
+		if(component == ".")
+			continue;
+		if(component == "..") {
+			if(stack == nil)
+				return ("", 0);  # Would escape base
+			stack = tl stack;
+		} else
+			stack = component :: stack;
+	}
+
+	# Reverse stack to build result
+	result := "";
+	revstack: list of string;
+	for(; stack != nil; stack = tl stack)
+		revstack = hd stack :: revstack;
+	for(; revstack != nil; revstack = tl revstack) {
+		if(result != "")
+			result += "/";
+		result += hd revstack;
+	}
+	return (result, 1);
 }
 
 # --- File resolution: overlay-first, then base ---
@@ -666,8 +739,12 @@ navigator(navops: chan of ref Navop, state: ref SrvState)
 				continue;
 			}
 
-			# Walk into child
-			childrel := joinrel(pe.relpath, n.name);
+			# Walk into child — validate path stays within base
+			(childrel, pathok) := cleanrelpath(joinrel(pe.relpath, n.name));
+			if(!pathok) {
+				n.reply <-= (nil, Eperm);
+				continue;
+			}
 
 			# Check whiteout
 			if(iswhiteout(state, childrel)) {

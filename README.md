@@ -8,7 +8,7 @@
 
 **64-bit Inferno® OS for embedded systems, servers, and AI agents**
 
-InferNode is a modern Inferno® OS distribution designed for 64-bit systems. It provides a complete Plan 9-inspired operating environment with JIT compilation, namespace-based security, and an AI agent system — all in under 30 MB of RAM. A portable GUI (Xenith) may be compiled in, if desired.
+InferNode is a modern Inferno® OS distribution designed for 64-bit systems. It provides a complete Plan 9-inspired operating environment with JIT compilation, namespace-based security, and an AI agent system — all in under 30 MB of RAM. An optional SDL3 GUI (Lucia) provides a three-zone AI workspace with Metal/Vulkan/D3D acceleration.
 
 ## Features
 
@@ -17,7 +17,7 @@ InferNode is a modern Inferno® OS distribution designed for 64-bit systems. It 
 - **AI Agents:** Namespace-isolated agents with 39 tool modules, LLM integration via 9P (Veltro)
 - **Payments:** Native cryptocurrency wallet with x402 payment protocol, ERC-20 tokens, and budget-enforced agent spending (**experimental — testnet only**)
 - **Complete:** 800+ Limbo source files, 815 compiled utilities, full shell environment
-- **GUI:** Three-zone tiling GUI (Lucia), AI-native text editor (Xenith), login screen with secstore authentication
+- **GUI:** Three-zone AI workspace (Lucia), AI-native text editor (Xenith), login screen with secstore authentication
 - **Networked:** TCP/IP stack, 9P filesystem protocol, distributed namespaces
 - **Formally Verified:** Namespace isolation proven via TLA+, SPIN, and CBMC
 - **Headless by Default:** No GUI dependency; optional SDL3 with Metal/Vulkan/D3D
@@ -57,38 +57,30 @@ See [QUICKSTART.md](QUICKSTART.md) for details.
 
 ## GUI Support (Optional)
 
-InferNode supports an **optional SDL3 GUI backend** with **Xenith** as the default graphical interface.
+InferNode ships **headless by default** (no SDL dependency). An optional SDL3 backend enables GPU-accelerated graphics with Metal (macOS), Vulkan (Linux), and D3D (Windows).
 
-### Xenith - AI-Native Text Environment
+### Lucia — Three-Zone AI Workspace
 
-Xenith is an Acme fork optimized for AI agents and AI-human collaboration:
+Lucia is the primary graphical interface, organizing the screen into three zones for AI-human collaboration:
 
-- **9P Filesystem Interface** — Agents interact via file operations, no SDK needed
-- **Namespace Security** — Capability-based containment for AI agents
-- **Observable** — All agent activity visible to humans
+- **Conversation** — Chat interface with streaming LLM responses and tool-call activity tiles
+- **Presentation** — Rich content display (artifacts, code, diagrams, images) with a mini window manager supporting up to 16 concurrent apps
+- **Context** — Tool toggles, namespace path management, and activity tracking
+
+Features include live theme sync across all apps, HiDPI antialiased fonts, voice input, and a comprehensive test suite (80+ unit tests for the UI server).
+
+### Xenith — AI-Native Text Editor
+
+Xenith is an Acme fork optimized for AI agents and developer workflows. It can run standalone or inside Lucia's presentation zone.
+
+- **9P Filesystem Interface** — Agents interact via file operations at `/mnt/xenith/`, no SDK needed
+- **Async I/O** — Non-blocking file and network operations keep the UI responsive
+- **Observable** — All agent activity visible to humans in real time
 - **Multimodal** — Text and images in the same environment
+- **HiDPI Fonts** — Antialiased combined fonts for sharp text on Retina/HiDPI displays
 - **Dark Mode** — Modern theming (Catppuccin) with full customization
 
 See [docs/XENITH.md](docs/XENITH.md) for details.
-
-### Lucia - Three-Zone Tiling GUI
-
-Lucia is the primary GUI for AI-human collaboration, organizing the workspace into three zones:
-
-- **Conversation** — Chat interface with streaming LLM responses and tool-call activity tiles
-- **Presentation** — Rich content display (artifacts, code, diagrams, images)
-- **Context** — Tool toggles, namespace path management, and activity tracking
-
-Features include live theme sync across all apps, HiDPI antialiased fonts, and a comprehensive test suite (80+ unit tests for the UI server).
-
-### UI Improvements
-
-Xenith replaces classic Acme's blocking I/O with an async architecture:
-
-- **Async File I/O** — Text, images, directories, and saves run in background threads
-- **Non-Blocking UI** — Remains responsive during file operations and on high-latency 9P mounts
-- **Unicode Input** — UTF-8 text entry with Plan 9 latin1 composition (e.g., `a'` → `á`)
-- **HiDPI Fonts** — Antialiased combined fonts replace bitmap fonts for sharp text on Retina/HiDPI displays
 
 ### Building with GUI
 
@@ -100,11 +92,11 @@ brew install sdl3 sdl3_ttf
 cd emu/MacOSX
 mk GUIBACK=sdl3 o.emu
 
-# Run Xenith (AI-native interface)
-./o.emu -r../.. xenith
+# Run Lucia (three-zone AI workspace)
+./run-lucia.sh
 
-# Run Acme (traditional)
-./o.emu -r../.. acme
+# Run Xenith (standalone text editor)
+./o.emu -r../.. xenith
 
 # Run window manager
 ./o.emu -r../.. wm/wm
@@ -117,18 +109,12 @@ mk GUIBACK=sdl3 o.emu
 powershell -ExecutionPolicy Bypass -File build-windows-amd64.ps1   # build libraries first
 powershell -ExecutionPolicy Bypass -File build-windows-sdl3.ps1    # build GUI emulator
 
-# Run Xenith
+# Run Lucia
+.\Lucia.bat
+
+# Run Xenith (standalone)
 .\emu\Nt\o.emu.exe -g 1024x768 -r . sh -l -c xenith
-
-# Run window manager
-.\emu\Nt\o.emu.exe -g 1024x768 -r . wm/wm
 ```
-
-**Features:**
-- Cross-platform (macOS Metal, Linux Vulkan, Windows D3D)
-- GPU-accelerated rendering
-- High-DPI support (Retina displays)
-- Zero overhead when GUI not used
 
 **Default is headless** (no SDL dependency). See [docs/SDL3-GUI-PLAN.md](docs/SDL3-GUI-PLAN.md) for details.
 
@@ -139,7 +125,7 @@ Veltro is an AI agent system that operates within InferNode's namespace. The nam
 ### Quick Start
 
 ```bash
-# Inside Inferno (terminal or Xenith)
+# Inside Inferno (terminal, Xenith, or Lucia)
 llmsrv &                                  # Start LLM service (self-mounts at /n/llm)
 tools9p read list find search exec &       # Start tool server with chosen tools
 veltro "list the files in /appl"           # Single-shot task
@@ -148,9 +134,9 @@ repl                                       # Interactive REPL
 
 ### Modes
 
-- **Single-shot** (`veltro "task"`) — Runs a task to completion and exits. The agent queries the LLM, invokes tools, feeds results back, and repeats until done.
+- **Lucia** — Three-zone GUI (Conversation | Presentation | Context) for AI-human collaboration. Includes activity tracking, tool toggles, and namespace path management with per-path read/write permissions.
 - **Interactive REPL** (`repl`) — Conversational agent sessions with ongoing context. Works in both Xenith (GUI with tag buttons) and terminal (line-oriented with `veltro>` prompt) modes.
-- **Lucia** — Three-zone tiling GUI (Conversation | Presentation | Context) for AI-human collaboration. Includes activity tracking, tool toggles, and namespace path management with per-path read/write permissions.
+- **Single-shot** (`veltro "task"`) — Runs a task to completion and exits. The agent queries the LLM, invokes tools, feeds results back, and repeats until done.
 
 ### Key Components
 
@@ -196,58 +182,40 @@ See [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) for the full arch
 
 ## GoDis — Go-to-Dis Compiler (Preliminary)
 
-GoDis compiles Go source code to Dis bytecode, allowing Go programs to run on Inferno's virtual machine alongside native Limbo programs. It exploits the shared Bell Labs lineage between Go and Limbo — goroutines map to `SPAWN`, channels to `NEWC`/`SEND`/`RECV`, and `select` to `ALT` — making compiled Go programs first-class Dis citizens that can share channels with Limbo code and participate in Inferno's namespace and security model.
+GoDis compiles Go source code to Dis bytecode, letting Go programs run on Inferno's VM as first-class citizens alongside Limbo code. Goroutines map to Dis `SPAWN`, channels to `NEWC`/`SEND`/`RECV` — exploiting the shared Bell Labs lineage between the two languages. 190+ test programs pass end-to-end.
 
 ```bash
-cd tools/godis
-
-# Compile a Go program to Dis bytecode
-go run ./cmd/godis/ testdata/hello.go
-
-# Run it on the Inferno emulator (from project root)
+go run ./tools/godis/cmd/godis/ tools/godis/testdata/hello.go
 ./emu/Linux/o.emu -r. /tools/godis/hello.dis
 ```
 
-### What Works
-
-- **Core language** — variables, constants, loops, conditionals, functions, methods, multiple returns, recursion
-- **Data structures** — slices, maps, structs (nested/embedded), strings, pointers, heap allocation
-- **Concurrency** — goroutines, channels (buffered/unbuffered/directional), select, close, for-range over channels
-- **Advanced features** — closures, higher-order functions, defer, panic/recover, interfaces (type assertion, type switch), generics
-- **Standard library** — `fmt`, `strings`, `strconv`, `math`, `errors`, `sort`, `sync`, `time`, `log`, `io` (intercepted and inlined as Dis instruction sequences)
-- **Inferno integration** — `inferno/sys` package provides direct access to Sys module functions (open, read, write, bind, pipe, pctl, etc.)
-- **Multi-package** — local package imports with transitive dependency resolution, compiled into a single `.dis` file
-- **190+ test programs** passing end-to-end on the Dis VM
-
-### Known Limitations
-
-No reflection, no cgo, no full standard library — stdlib calls are intercepted and inlined. Maps use sorted arrays rather than hash tables. Single-binary output (no separate compilation).
-
-See [tools/godis/README.md](tools/godis/README.md) for the compiler architecture, translation strategy, and bug log.
+See [tools/godis/README.md](tools/godis/README.md) for the full architecture, feature matrix, and known limitations.
 
 ## Use Cases
 
-- **AI Agents** — Namespace-isolated agents with capability-based security, LLM integration via 9P
-- **Embedded Systems** — Minimal footprint (~10 MB on disk, 15-30 MB RAM)
+- **AI Agents** — Namespace-isolated agents with capability-based security, LLM integration via 9P, and Lucia GUI for human-in-the-loop collaboration
+- **Edge Computing** — ARM64 JIT on NVIDIA Jetson, Raspberry Pi; 15-30 MB RAM footprint
+- **Embedded Systems** — Minimal footprint (~10 MB on disk), 2-second cold start
 - **Server Applications** — Lightweight services with 9P filesystem export
-- **Development** — Fast Limbo compilation and testing; Go programs via GoDis
-- **Edge Computing** — ARM64 JIT on NVIDIA Jetson, Raspberry Pi
+- **Development** — Fast Limbo compilation and testing; Go programs via GoDis (preliminary)
 
 ## What's Inside
 
+- **Veltro AI Agents** — Namespace-isolated agents with 39 tool modules, sub-agent spawning, LLM via 9P
+- **Lucia GUI** — Three-zone AI workspace (Conversation | Presentation | Context) with voice input
+- **Xenith Editor** — AI-native Acme fork with 9P agent interface and async I/O
+- **JIT Compilers** — AMD64 and ARM64 native code generation
 - **Shell** — Interactive rc-style command environment
 - **815 Utilities** — Standard tools compiled to Dis bytecode (the Inferno `/usr/bin`)
 - **Limbo Compiler** — Fast compilation of Limbo programs
-- **Go-to-Dis Compiler** — Compile Go programs to Dis bytecode (preliminary)
-- **JIT Compilers** — AMD64 and ARM64 native code generation
 - **9P Protocol** — Distributed filesystem support
 - **Namespace Management** — Plan 9 style bind/mount with formal verification
 - **TCP/IP Stack** — Full networking capabilities
 - **Wallet & Payments** — Cryptocurrency wallet, x402 protocol, budget-enforced agent spending (**experimental — testnet only**)
 - **Secstore & Factotum** — Encrypted key persistence with PAK authentication
 - **Quantum-Safe Cryptography** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205)
-- **Text Editor** — Built-in editor with undo/redo, find & replace, 9P IPC for agent control
 - **Web Browser** — Charon browser with CSS layout engine (block, inline-block, flex, grid)
+- **GoDis** — Go-to-Dis compiler (preliminary)
 
 ## Performance
 
@@ -278,11 +246,11 @@ Cross-language benchmarks (C, Java, Limbo) in `benchmarks/`. Full data in [docs/
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — **Comprehensive user guide** (namespaces, devices, host integration)
 - [QUICKSTART.md](QUICKSTART.md) — Getting started in 3 commands
 - [RUN_TOUR.md](RUN_TOUR.md) — Interactive Veltro feature tour
-- [docs/XENITH.md](docs/XENITH.md) — Xenith text environment for AI agents
+- [docs/XENITH.md](docs/XENITH.md) — Xenith text editor for AI agents
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture and component diagram
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — Wallet, x402 payments, secstore, and key management
 - [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) — Veltro agent security model
-- [tools/godis/README.md](tools/godis/README.md) — GoDis compiler architecture and translation strategy
+- [tools/godis/README.md](tools/godis/README.md) — GoDis compiler architecture
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — Cross-language JIT benchmarks (C, Java, Limbo)
 - [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md) — Performance specs and binary sizes
 - [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md) — Building and running on Windows
@@ -316,10 +284,10 @@ See [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md) for detailed Windows instruct
 ### Working
 
 - **Dis Virtual Machine** — Interpreter and JIT compiler on AMD64 and ARM64. See `docs/arm64-jit/`.
-- **GoDis Compiler** — Preliminary Go-to-Dis compiler; 190+ test programs passing. See `tools/godis/`.
+- **GoDis Compiler** — Preliminary Go-to-Dis compiler (190+ tests passing). See `tools/godis/`.
 - **SDL3 GUI Backend** — Cross-platform graphics with Metal/Vulkan/D3D (macOS, Linux, Windows)
-- **Xenith** — AI-native text environment with async I/O, dark mode, HiDPI fonts, image support
-- **Lucia** — Three-zone tiling GUI with live theme sync, activity tracking, 80+ unit tests
+- **Lucia** — Three-zone AI workspace with live theme sync, voice input, activity tracking, 80+ unit tests
+- **Xenith** — AI-native text editor with async I/O, dark mode, HiDPI fonts, image support
 - **Veltro** — AI agent system with namespace-based security, 39 tool modules, REPL, and sub-agent spawning
 - **llmsrv** — LLM providers exposed as 9P filesystem (Anthropic + OpenAI-compatible)
 - **Wallet & Payments** — Cryptocurrency wallet (wallet9p), x402 payment protocol, ERC-20 tokens, budget enforcement (**experimental — testnet only**)
@@ -338,7 +306,7 @@ See [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md) for detailed Windows instruct
 
 - Linux ARM64 SDL3 GUI support (backend 95% complete, build system integration remaining)
 - Windows JIT compiler
-- Lucia P0 fixes (app slot watchdog, voice FD leak, font nil guards) — see [docs/LUCIA-EVALUATION.md](docs/LUCIA-EVALUATION.md)
+- Lucia P0 fixes (app slot watchdog, voice FD leak, font nil guards)
 
 ## Contributing
 
@@ -348,7 +316,7 @@ started, what the project needs most, and development workflow details.
 
 ## About
 
-InferNode is a GPL-free Inferno® OS distribution. It extends the MIT-licensed Inferno® OS codebase with JIT compilers for AMD64 and ARM64, an AI agent system (Veltro) with formally verified namespace isolation, a cryptocurrency wallet with x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). Designed for embedded systems, servers, and AI agent applications where lightweight footprint and capability-based security matter.
+InferNode is a GPL-free Inferno® OS distribution. It extends the MIT-licensed Inferno® OS codebase with JIT compilers for AMD64 and ARM64, an AI agent system (Veltro) with formally verified namespace isolation, a three-zone AI workspace (Lucia), an AI-native text editor (Xenith), a cryptocurrency wallet with x402 payment protocol, and quantum-safe cryptography. Designed for embedded systems, servers, and AI agent applications where lightweight footprint and capability-based security matter.
 
 ## License
 
@@ -356,6 +324,6 @@ MIT License (as per original Inferno® OS).
 
 ---
 
-**InferNode** — Lightweight Inferno® OS for AMD64, ARM64, and Windows
+**InferNode** — Secure, lightweight Inferno® OS for AI agents on AMD64, ARM64, and Windows
 
 <sub>Inferno® is a distributed operating system, originally developed at Bell Labs, but now maintained by trademark owner Vita Nuova®.</sub>

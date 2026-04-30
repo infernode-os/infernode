@@ -1,4 +1,15 @@
-charon - Control the Charon web browser
+charon - Control the Charon web browser (does NOT launch it).
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: navigate, back, forward, follow, read,
+search, status. To start the Charon app, use the launch tool with
+args = "charon" or args = "charon <url>".
+Examples on this tool:
+  args = "navigate https://example.com"
+  args = "read body"
+  args = "follow 3"
+  args = "search Plan 9"
+If the user says "launch the browser" or "open Charon", use the launch
+tool, NOT this tool.
 
 Charon is the InferNode built-in web browser. It must be launched
 first via the `launch` tool: `launch charon` (optionally with a URL).

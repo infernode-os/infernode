@@ -1,4 +1,13 @@
-wallet - Cryptocurrency and fiat payment operations (no key access)
+wallet - Cryptocurrency and fiat payment operations (no key access).
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: accounts, address, balance, chain, sign,
+history, pay.
+Examples:
+  args = "accounts"
+  args = "balance main"
+  args = "address main"
+  args = "history main"
+The agent NEVER sees private keys — signing happens inside wallet9p.
 
 Provides wallet operations via the wallet9p filesystem at /n/wallet/.
 The agent NEVER sees private keys — signing happens inside wallet9p,

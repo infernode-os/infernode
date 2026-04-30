@@ -1,4 +1,15 @@
-editor - AI remote control for the Editor app
+editor - AI remote control for the Editor app (does NOT launch it).
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: read, write, append, save, open, goto, find,
+replace, replaceall, addr, insert, delete, name, close, status.
+To start the editor app first, use the launch tool with args = "editor".
+Examples on this tool:
+  args = "open /usr/me/notes.txt"
+  args = "read"
+  args = "goto 42"
+  args = "find TODO"
+  args = "save"
+If the user says "launch the editor", use the launch tool, NOT this tool.
 
 NOTE: This tool does NOT launch the editor. To start the editor,
 use the launch tool: "launch editor". This tool sends commands to

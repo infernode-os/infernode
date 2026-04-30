@@ -149,6 +149,7 @@ MODULES=
 SYSMODULES=\
 	9p.m\
 	acmewin.m\
+	agentlib.m\
 	arg.m\
 	xenithwin.m\
 	asn1.m\

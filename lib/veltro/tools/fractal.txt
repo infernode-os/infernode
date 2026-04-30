@@ -1,4 +1,19 @@
-fractal - AI control for the Mandelbrot/Julia fractal viewer
+fractal - Show and control the Mandelbrot/Julia fractal viewer.
+USE THIS TOOL whenever the user asks to see, render, or explore any
+fractal (Mandelbrot, Julia, etc.). Do NOT try to render fractals as
+mermaid or other diagrams — this tool drives a real fractal renderer.
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: state, view, zoomin, center, zoomout, julia,
+mandelbrot, depth, fill, restart.
+Workflow when the user asks for a fractal: first call the launch tool
+with args = "fractals" to start the viewer, then call this tool.
+Examples on this tool:
+  args = "julia -0.4 0.6"                (Julia set for c=-0.4+0.6i)
+  args = "mandelbrot"                    (switch to Mandelbrot set)
+  args = "center -0.75 0.1 0.05"         (zoom on seahorse valley)
+  args = "view"                          (read current view description)
+Commands are processed once per tick (~500ms); send one at a time and
+read state before sending the next.
 
 Usage:
   state                          Read fractal state (type, coords, depth)

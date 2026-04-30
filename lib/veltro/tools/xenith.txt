@@ -1,4 +1,14 @@
-xenith - AI control for Xenith windowing system
+xenith - AI control for Xenith windowing system.
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: create, write, read, append, ctl, colors,
+delete, list, status. Workflow:
+  1. args = "create <name>"   creates a window, returns its ID
+  2. args = "write <id> body <text>"   writes content
+  3. args = "status <id> ok"   sets visual status
+Examples:
+  args = "create notes"
+  args = "write 7 body Hello world"
+  args = "read 7"
 
 Commands:
   create [name]              Create window, returns ID

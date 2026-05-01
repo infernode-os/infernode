@@ -535,7 +535,7 @@ restrict to a specific interface — for example, only the ZeroTier
 interface — change the listen address in `lib/sh/serve-profile`:
 
 ```
-listen -sA 'tcp!10.243.169.78!5640' {export /n/llm}
+listen -sA 'tcp!10.0.0.5!5640' {export /n/llm}
 ```
 
 Alternatively, leave the listener wide and rely on the host firewall

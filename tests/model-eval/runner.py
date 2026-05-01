@@ -23,6 +23,7 @@ behavior so improvements can be measured without rebuilding emu.
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -176,12 +177,15 @@ def run_loop(url: str, model: str, scenario: dict,
     all_content = []
     final_finish = ""
 
-    # Setup turns establish prior context (tool calls + fake results)
+    # Setup turns establish prior context (tool calls + fake results).
+    # turn_kind: "simulated_failure" overrides the synthetic tool result
+    # with an error string, so error-recovery scenarios can be tested.
     for t in scenario.get("setup_turns", []):
         if isinstance(t, str):
-            user_msg = t
+            user_msg, force_failure = t, False
         elif isinstance(t, dict):
             user_msg = t.get("prompt", "")
+            force_failure = t.get("turn_kind") == "simulated_failure"
         else:
             continue
         messages.append({"role": "user", "content": user_msg})
@@ -199,10 +203,13 @@ def run_loop(url: str, model: str, scenario: dict,
                              "content": msg.get("content", "") or "",
                              "tool_calls": tcs})
             for tc in tcs:
+                if force_failure:
+                    res = "error: simulated failure for testing — try a different argument shape"
+                else:
+                    res = fake_tool_result(
+                        tc["function"]["name"], tc["function"]["arguments"])
                 messages.append({"role": "tool", "tool_call_id": tc["id"],
-                                 "content": fake_tool_result(
-                                     tc["function"]["name"],
-                                     tc["function"]["arguments"])})
+                                 "content": res})
 
     # Real probe turn
     messages.append({"role": "user", "content": scenario["prompt"]})
@@ -401,6 +408,15 @@ def render_report(rows: list[tuple], models: list[str], scenarios: list[dict]) -
 
 # -------- Main --------
 
+def _safe_print(msg: str) -> None:
+    """Print to stdout, surviving BrokenPipeError if stdout is gone (SSH dropped)."""
+    try:
+        print(msg, flush=True)
+    except (BrokenPipeError, OSError):
+        # Detach stdout so future prints don't keep raising
+        sys.stdout = open(os.devnull, "w")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:11434/v1/chat/completions")
@@ -410,30 +426,62 @@ def main():
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--output", default="-")
+    ap.add_argument("--results-jsonl", default=None,
+                    help="Append per-run results here as JSON lines so a crash leaves partial data behind")
     args = ap.parse_args()
 
     scenarios_data = yaml.safe_load(Path(args.scenarios).read_text())
     scenarios = scenarios_data["scenarios"]
     tools = build_tools(Path(args.tools_dir))
 
+    # Default JSONL path next to the report so nothing is ever lost
+    jsonl_path = args.results_jsonl
+    if jsonl_path is None and args.output != "-":
+        jsonl_path = str(Path(args.output).with_suffix(".jsonl"))
+
     rows = []  # (model, scenario_name, run_idx, status)
-    for m in args.models:
-        for s in scenarios:
-            for run_idx in range(args.runs):
-                run = run_loop(args.url, m, s, tools, args.temperature)
-                status, label = grade(s, run)
-                rows.append((m, s["name"], run_idx, status))
-                msg = f"  {m:30s} {s['name']:32s} run {run_idx + 1:2d}/{args.runs}: {status}"
-                if label:
-                    msg += f" — {label}"
-                print(msg, flush=True)
+    jsonl_fp = open(jsonl_path, "a", buffering=1) if jsonl_path else None  # line-buffered
+    try:
+        for m in args.models:
+            for s in scenarios:
+                for run_idx in range(args.runs):
+                    run = run_loop(args.url, m, s, tools, args.temperature)
+                    status, label = grade(s, run)
+                    rows.append((m, s["name"], run_idx, status))
+
+                    # Append to JSONL immediately so partial results survive a crash
+                    if jsonl_fp:
+                        rec = {
+                            "model": m,
+                            "scenario": s["name"],
+                            "run": run_idx,
+                            "status": status,
+                            "label": label,
+                            "calls": run.get("calls", []),
+                            "content_len": len(run.get("content", "")),
+                        }
+                        try:
+                            jsonl_fp.write(json.dumps(rec) + "\n")
+                        except Exception:
+                            pass
+
+                    msg = f"  {m:30s} {s['name']:32s} run {run_idx + 1:2d}/{args.runs}: {status}"
+                    if label:
+                        msg += f" — {label}"
+                    _safe_print(msg)
+    finally:
+        if jsonl_fp:
+            jsonl_fp.close()
 
     report = render_report(rows, args.models, scenarios)
     if args.output == "-":
-        print("\n" + report)
+        _safe_print("\n" + report)
     else:
         Path(args.output).write_text(report)
-        print(f"\nreport written to {args.output}", file=sys.stderr)
+        try:
+            print(f"\nreport written to {args.output}", file=sys.stderr)
+        except (BrokenPipeError, OSError):
+            pass
 
 
 if __name__ == "__main__":

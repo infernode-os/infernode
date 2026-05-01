@@ -29,10 +29,13 @@ an editor that is already visible in the presentation zone.
 If the user says "launch the editor" or "open the editor", use
 the launch tool, not this tool.
 
-How it works: The Editor app exposes its state as files under
-/tmp/veltro/editor/. This tool reads and writes those files.
-The editor polls for commands every 500ms, so there is a brief
-delay between sending a command and it taking effect.
+How it works: send subcommands as the args string to this tool. The
+editor polls for commands every 500ms, so there is a brief delay
+between sending a command and it taking effect. Internal file paths
+under /tmp/veltro/editor/ are an implementation detail used by this
+tool internally — never address them directly from your tool calls.
+The only paths you ever pass to this tool are real files for the
+"open" and "name" subcommands.
 
 Commands (only work after "launch editor"):
   read [body]              Read document body text

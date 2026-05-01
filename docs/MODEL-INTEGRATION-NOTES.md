@@ -9,18 +9,35 @@ ones that don't.
 
 | Model | Status | Notes |
 |---|---|---|
-| `mistral-small3.2:24b` | Works | Default local model. Standard Mistral chat template, clean Ollama tool-call translation. Recommended. |
+| `mistral-small3.2:24b` | Works (with caveat) | Default local model. Mostly clean Ollama tool-call translation. Occasionally drops `[TOOL_CALLS]` markers (~5–10% of follow-up turns), leaking bare JSON or `read[ARGS]{...}` into chat content. Same root cause as Devstral; lower rate. |
 | `qwen2.5:32b` | Works | Verified via offline A/B harness (5/5 with directive descriptions). Larger memory footprint. |
 | `mistral-nemo:latest` | Untested in real session | Should work — same family as Mistral Small. |
 | `devstral:latest` | **Broken** with our harness | See "Devstral" section below. |
+
+## The `[TOOL_CALLS]` marker drop (Mistral-family Ollama bug)
+
+This is **family-wide** Mistral-on-Ollama behavior, not Devstral-specific
+as originally documented. Any Mistral-template model in Ollama can
+drop the `[TOOL_CALLS][...]` wrapper around its tool-call JSON, in
+which case Ollama returns the malformed payload as plain
+`message.content` instead of as structured `tool_calls`.
+
+Failure rate observed (rough):
+- `mistral-small3.2:24b`: ~5–10% of *follow-up* turns (very rare on
+  the first turn; more common after a tool result has been fed back).
+- `devstral:latest`: significantly higher, especially under big prompts.
+
+The right fix is harness-level — see "What would need to change to
+support Devstral", item 3 (bare-JSON detector in `llmclient.b`). It
+benefits every Mistral-family model.
 
 ## Devstral
 
 Devstral is Mistral's agentic-fine-tuned model. ~24B params, similar
 size to Mistral Small. Trained for tool use. **Should** be a strict
-upgrade for our workload. In practice it isn't — probabilistically,
-under longer/more-complex production prompts, it emits tool-call
-JSON as plain chat content instead of structured tool calls.
+upgrade for our workload. In practice it isn't — same `[TOOL_CALLS]`
+marker-drop class as Mistral Small but at a much higher rate,
+especially under longer/more-complex production prompts.
 
 ### Symptom
 

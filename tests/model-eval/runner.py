@@ -150,7 +150,8 @@ def fake_tool_result(name: str, args: str) -> str:
 
 
 def call(url: str, model: str, messages: list[dict], tools: list[dict],
-         temperature: float, timeout: int = 180) -> dict:
+         temperature: float, timeout: int = 180,
+         extra_options: dict | None = None) -> tuple[dict, float]:
     payload = {
         "model": model,
         "messages": messages,
@@ -158,24 +159,38 @@ def call(url: str, model: str, messages: list[dict], tools: list[dict],
         "tool_choice": "auto",
         "temperature": temperature,
     }
+    if extra_options:
+        # Ollama-specific options pass through under "options"
+        payload["options"] = extra_options
+        # Some Ollama versions accept a top-level "reasoning" or "think" too;
+        # pass them through if the caller specified them.
+        for k in ("reasoning", "think"):
+            if k in extra_options:
+                payload[k] = extra_options[k]
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
+    t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)["choices"][0]
+        data = json.load(r)
+    dt = time.perf_counter() - t0
+    return data["choices"][0], dt
 
 
 def run_loop(url: str, model: str, scenario: dict,
              tools: list[dict], temperature: float,
-             max_turns: int = 4) -> dict:
+             max_turns: int = 4,
+             extra_options: dict | None = None) -> dict:
     """Execute one scenario over an agent loop. Returns a record with
-    every tool call attempted and any final text content."""
+    every tool call attempted, any final text content, and per-call
+    wall-clock latencies."""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     all_calls = []
     all_content = []
     final_finish = ""
+    latencies: list[float] = []
 
     # Setup turns establish prior context (tool calls + fake results).
     # turn_kind: "simulated_failure" overrides the synthetic tool result
@@ -191,10 +206,13 @@ def run_loop(url: str, model: str, scenario: dict,
         messages.append({"role": "user", "content": user_msg})
         for _ in range(max_turns):
             try:
-                choice = call(url, model, messages, tools, temperature)
+                choice, dt = call(url, model, messages, tools, temperature,
+                                  extra_options=extra_options)
+                latencies.append(dt)
             except Exception as e:
                 return {"error": str(e), "calls": all_calls,
-                        "content": "\n".join(all_content), "finish": "error"}
+                        "content": "\n".join(all_content), "finish": "error",
+                        "latencies": latencies}
             msg = choice["message"]
             tcs = msg.get("tool_calls") or []
             if not tcs:
@@ -215,10 +233,13 @@ def run_loop(url: str, model: str, scenario: dict,
     messages.append({"role": "user", "content": scenario["prompt"]})
     for _ in range(max_turns):
         try:
-            choice = call(url, model, messages, tools, temperature)
+            choice, dt = call(url, model, messages, tools, temperature,
+                              extra_options=extra_options)
+            latencies.append(dt)
         except Exception as e:
             return {"error": str(e), "calls": all_calls,
-                    "content": "\n".join(all_content), "finish": "error"}
+                    "content": "\n".join(all_content), "finish": "error",
+                    "latencies": latencies}
         msg = choice["message"]
         tcs = msg.get("tool_calls") or []
         content = msg.get("content", "") or ""
@@ -240,7 +261,7 @@ def run_loop(url: str, model: str, scenario: dict,
                                  tc["function"]["name"],
                                  tc["function"]["arguments"])})
     return {"calls": all_calls, "content": "\n".join(all_content),
-            "finish": final_finish}
+            "finish": final_finish, "latencies": latencies}
 
 
 # -------- Grading --------
@@ -428,7 +449,10 @@ def main():
     ap.add_argument("--output", default="-")
     ap.add_argument("--results-jsonl", default=None,
                     help="Append per-run results here as JSON lines so a crash leaves partial data behind")
+    ap.add_argument("--reasoning", default=None,
+                    help="Reasoning level for thinking-capable models (low|medium|high). Forwarded as Ollama 'reasoning' option.")
     args = ap.parse_args()
+    extra_options = {"reasoning": args.reasoning} if args.reasoning else None
 
     scenarios_data = yaml.safe_load(Path(args.scenarios).read_text())
     scenarios = scenarios_data["scenarios"]
@@ -445,12 +469,14 @@ def main():
         for m in args.models:
             for s in scenarios:
                 for run_idx in range(args.runs):
-                    run = run_loop(args.url, m, s, tools, args.temperature)
+                    run = run_loop(args.url, m, s, tools, args.temperature,
+                                   extra_options=extra_options)
                     status, label = grade(s, run)
                     rows.append((m, s["name"], run_idx, status))
 
                     # Append to JSONL immediately so partial results survive a crash
                     if jsonl_fp:
+                        lats = run.get("latencies", [])
                         rec = {
                             "model": m,
                             "scenario": s["name"],
@@ -459,6 +485,10 @@ def main():
                             "label": label,
                             "calls": run.get("calls", []),
                             "content_len": len(run.get("content", "")),
+                            "latencies": lats,
+                            "total_latency": sum(lats),
+                            "n_turns": len(lats),
+                            "reasoning": args.reasoning,
                         }
                         try:
                             jsonl_fp.write(json.dumps(rec) + "\n")

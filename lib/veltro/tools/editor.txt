@@ -3,12 +3,23 @@ This tool takes one string argument named "args". The first word of
 "args" is the subcommand: read, write, append, save, open, goto, find,
 replace, replaceall, addr, insert, delete, name, close, status.
 To start the editor app first, use the launch tool with args = "editor".
-Examples on this tool:
-  args = "open /usr/me/notes.txt"
-  args = "read"
-  args = "goto 42"
-  args = "find TODO"
-  args = "save"
+
+Argument shapes — read carefully, paths are NOT a universal argument:
+  write  takes literal <text> only — args = "write Hello world"
+         (NOT a path; the text becomes the entire document body)
+  append takes literal <text> only — args = "append more text"
+  read   takes "body" or "addr" — args = "read body"
+         (NOT a path; "body" is the document text)
+  open   takes a <path>       — args = "open /usr/me/notes.txt"
+  name   takes a <path>       — args = "name /usr/me/new.txt"
+  goto   takes a <line>       — args = "goto 42"
+  find   takes a <string>     — args = "find TODO"
+  save, close, status, addr  take no arguments
+
+To display a message to the user in the editor: args = "write Hello!"
+Do NOT include any path or filename — write replaces the body with
+exactly the literal text after "write ".
+
 If the user says "launch the editor", use the launch tool, NOT this tool.
 
 NOTE: This tool does NOT launch the editor. To start the editor,

@@ -29,6 +29,9 @@ default model and understand which families are worth investing in.
 | `qwen3:30b-a3b`           | 13/14   |   25.0 s |       85.2 s | 3.4 |
 | `mistral-small3.2:24b`    | 12/14   |    7.4 s |       19.9 s | 2.7 |
 | `magistral:24b`           | 10/14   |    8.1 s |       22.0 s | 2.7 |
+| `llama3.3:70b`            | 0/14    |        — |            — |   — | _HTTP 500 — too big for AGX memory budget_ |
+| `mixtral:8x7b`            | 0/17    |        — |            — |   — | _Ollama modelfile lacks `tools` capability_ |
+| `deepseek-r1:14b`         | 0/17    |        — |            — |   — | _Same reason as Mixtral_ |
 
 ## Observations
 
@@ -77,13 +80,22 @@ differentiated 100% from 93%.
 
 Worth designing more 4+ step scenarios to find the next ceiling.
 
-### Models that don't tool-call at all
+### Models that didn't tool-call at all (three different reasons)
 
 `mixtral:8x7b`, `deepseek-r1:14b`: HTTP 400 on every tool-bearing
 request. Ollama's modelfile for these doesn't declare the `tools`
 capability. The underlying weights *can* tool-call (with caveats —
 Mixtral 8x7B was released before Mistral standardised on
 `[TOOL_CALLS]` template), but a custom modelfile is required.
+
+`llama3.3:70b`: HTTP 500 on every request (different failure mode).
+Modelfile *does* declare `tools` capability. The errors are
+infrastructure-side: 70 B at Q4_K_M is ~40 GB just for weights,
+which plus Ollama overhead and 8192-dim activations exceeds what
+the AGX's 64 GB unified memory can serve responsively. The model
+is configurable but impractical on this hardware. A larger
+machine (or a higher-quantisation variant) would unblock it; not
+worth chasing for the AGX deployment.
 
 ## Speed: dense vs MoE on Jetson AGX
 

@@ -237,6 +237,14 @@ dowrite(args: string): string
 	if(content == "")
 		return "error: content required";
 
+	# Strip a single pair of surrounding double quotes if present.
+	# Models trained on example syntax `args = "write id \"content\""`
+	# tend to wrap the content in literal quotes, which then break
+	# downstream renderers (notably mermaid, which sees `"flowchart`
+	# instead of `flowchart` as the diagram-type token).
+	if(len content >= 2 && content[0] == '"' && content[len content - 1] == '"')
+		content = content[1:len content - 1];
+
 	# Process escape sequences
 	content = unescape(content);
 
@@ -269,6 +277,11 @@ doappend(args: string): string
 	(id, content) := splitfirst(args);
 	if(id == "")
 		return "error: artifact id required";
+
+	# Strip a single pair of surrounding double quotes if present
+	# (same reasoning as in dowrite — models copy quoted-arg examples).
+	if(len content >= 2 && content[0] == '"' && content[len content - 1] == '"')
+		content = content[1:len content - 1];
 
 	# Process escape sequences in content
 	content = unescape(content);

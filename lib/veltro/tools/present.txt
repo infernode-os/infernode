@@ -2,12 +2,15 @@ present - Display artifacts in the Lucifer presentation zone.
 This tool takes one string argument named "args". The first word of
 "args" is the subcommand (create, write, center, delete, list, status).
 ALWAYS use the two-step workflow for new content:
-  1. Call with args = "create <id> type=<markdown|mermaid|table|code|text|pdf|image> label=\"<title>\""
-  2. Call with args = "write <id> \"<content>\""
-For type=mermaid, the content must be RAW mermaid syntax with NO ```mermaid
-fences. Example — a complete mermaid demo is two calls:
-  args = "create demo type=mermaid label=\"Demo\""
-  args = "write demo \"flowchart LR\nA-->B-->C\""
+  1. Call with args = "create <id> type=<markdown|mermaid|table|code|text|pdf|image> label=<title>"
+  2. Call with args = "write <id> <content>"
+DO NOT wrap the <content> in surrounding double quotes — the content
+is everything after "write <id> ", taken literally. Use \n for
+newlines inside <content>.
+For type=mermaid, the content must be RAW mermaid syntax with NO
+```mermaid fences. Example — a complete mermaid demo is two calls:
+  args = "create demo type=mermaid label=Demo"
+  args = "write demo flowchart LR\nA-->B-->C"
 Pick a sensible default and execute both steps when asked for a demo;
 do not ask the user which subtype to use.
 

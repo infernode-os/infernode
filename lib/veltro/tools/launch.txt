@@ -1,4 +1,15 @@
-Launch — Launch a GUI app in the presentation zone.
+launch - Launch a GUI app in the presentation zone.
+This tool takes one string argument named "args" containing the app
+name (and any app-specific arguments). Confirmed apps include: shell,
+charon, editor, fractals, keyring, man, view, lens, about.
+Examples:
+  args = "shell"                       (open the shell window)
+  args = "editor"                      (open the editor)
+  args = "charon https://example.com"  (open browser at URL)
+  args = "list"                        (list available apps)
+Use this tool whenever the user says "launch X", "open X", or "start X".
+Do NOT call the X tool itself for launching — the X tool typically
+controls an app that is already running.
 
 Usage:
   Launch list                     — show available apps

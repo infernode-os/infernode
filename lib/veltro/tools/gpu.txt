@@ -1,4 +1,12 @@
-gpu - GPU inference (object detection, classification, generic inference)
+gpu - GPU inference (object detection, classification, generic inference).
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: info, models, detect, classify, infer.
+Examples:
+  args = "info"
+  args = "models"
+  args = "detect yolov8n /tmp/photo.jpg"
+  args = "classify resnet50 /tmp/cat.png"
+The image path can be on the local filesystem or a 9P-mounted path.
 
 Wraps the /mnt/gpu filesystem to run inference on images using
 locally-loaded models. Uses a clone-based session pattern; each call

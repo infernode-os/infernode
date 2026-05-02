@@ -1,6 +1,14 @@
 shell - Read-only access to the shell terminal transcript.
-Does NOT execute commands and does NOT start a shell — to start a
-shell window, use the `launch` tool: `launch shell`.
+Does NOT execute commands and does NOT start a shell. To start a
+shell window, use the launch tool with args = "shell" — NOT this tool.
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: read, tail, status.
+Examples on this tool:
+  args = "read"          (read the full transcript)
+  args = "tail 50"       (last 50 lines)
+  args = "status"        (check if a shell is running)
+If the user says "launch the shell" or "open a shell", use the launch
+tool with args = "shell", NOT this tool.
 
 Usage:
   read [body]     Read the shell transcript

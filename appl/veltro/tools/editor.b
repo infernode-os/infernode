@@ -152,7 +152,9 @@ doread(args: string): string
 	if(target == "addr") {
 		return doaddr();
 	}
-	return "error: read target must be 'body' or 'addr'";
+	return sys->sprint("error: read target must be 'body' or 'addr'; got %q. " +
+		"To read the document text, use 'read body'. " +
+		"To read cursor position, use 'read addr'.", target);
 }
 
 dowrite(text: string): string

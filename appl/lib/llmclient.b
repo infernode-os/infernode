@@ -503,6 +503,9 @@ askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, strin
 	if(err != nil)
 		return (nil, "openai: " + err);
 
+	# DEBUG 2026-05-04: which parser?
+	sys->fprint(sys->fildes(2), "llmclient: askopenai got body_len=%d streamch=%s\n", len respbody, (string (req.streamch != nil)));
+
 	if(req.streamch != nil)
 		return parseopenaisseresponse(respbody, req);
 
@@ -710,6 +713,13 @@ thinkoptions(tokens: int): string
 
 parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string)
 {
+	# DEBUG 2026-05-04: trace where chat content gets dropped
+	plen := len body;
+	prev := body;
+	if(plen > 400)
+		prev = body[0:400];
+	sys->fprint(sys->fildes(2), "llmclient: parseopenairesponse body_len=%d preview=%s\n", plen, prev);
+
 	(jv, jerr) := readjsonstring(body);
 	if(jerr != nil)
 		return (nil, "openai: parse error: " + jerr);
@@ -752,6 +762,8 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 		if(msg != nil) {
 			cv := msg.get("content");
 			if(cv != nil) pick c := cv { String => responsetext = c.s; }
+			# DEBUG 2026-05-04
+			sys->fprint(sys->fildes(2), "llmclient: parsed responsetext_len=%d finishreason=%s\n", len responsetext, finishreason);
 
 			tcv := msg.get("tool_calls");
 			if(tcv != nil) {
@@ -845,6 +857,31 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 
 parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, string)
 {
+	# DEBUG 2026-05-04
+	plen := len body;
+	prev := body;
+	if(plen > 400)
+		prev = body[0:400];
+	sys->fprint(sys->fildes(2), "llmclient: parseopenaisseresponse body_len=%d preview=%s\n", plen, prev);
+
+	# Backward-compat: if the server ignored `stream: true` and returned
+	# a complete chat.completion object instead of SSE, fall back to the
+	# non-streaming parser. Detected by leading '{' (after optional
+	# whitespace) AND no "data: " prefix anywhere. Some OpenAI-shape
+	# backends (e.g. our local Devstral chat_server) don't implement
+	# streaming.
+	stripped := body;
+	wsi := 0;
+	for(; wsi < len stripped; wsi++)
+		if(stripped[wsi] != ' ' && stripped[wsi] != '\t' && stripped[wsi] != '\r' && stripped[wsi] != '\n')
+			break;
+	if(wsi > 0 && wsi < len stripped)
+		stripped = stripped[wsi:];
+	if(len stripped > 0 && stripped[0] == '{') {
+		sys->fprint(sys->fildes(2), "llmclient: body looks like plain chat.completion JSON (server ignored stream:true), falling back to non-stream parser\n");
+		return parseopenairesponse(body, req);
+	}
+
 	fulltext := "";
 	tokens := 0;
 	finishreason := "";

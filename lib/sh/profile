@@ -89,7 +89,11 @@ if {~ $emuhost MacOSX Linux}{
 	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
 	if {~ $llmmode remote} {
 		llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}
-		mount -A $llmdial /n/llm >[2] /dev/null
+		# Background: 9P mount has no protocol-level timeout, and the
+		# remote export can degrade to "accepts TCP, never reads
+		# TVERSION". A foreground mount in that state wedges boot.
+		# See docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md
+		mount -A $llmdial /n/llm >[2] /dev/null &
 	}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}

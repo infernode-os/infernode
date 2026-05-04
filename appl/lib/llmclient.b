@@ -92,7 +92,10 @@ buildanthropicrequest(req: ref AskRequest): string
 {
 	s := "{";
 	s += "\"model\":" + jquote(req.model) + ",";
-	s += "\"max_tokens\":8192,";
+	mt := req.maxtokens;
+	if(mt <= 0)
+		mt = 8192;
+	s += sys->sprint("\"max_tokens\":%d,", mt);
 	s += sys->sprint("\"temperature\":%.2f", req.temperature);
 
 	# System prompt — cache_control marks it for Anthropic prompt caching.
@@ -516,7 +519,10 @@ buildopenairequestjson(req: ref AskRequest): string
 {
 	s := "{";
 	s += "\"model\":" + jquote(req.model) + ",";
-	s += "\"max_tokens\":4096,";
+	mt := req.maxtokens;
+	if(mt <= 0)
+		mt = 1024;
+	s += sys->sprint("\"max_tokens\":%d,", mt);
 	s += sys->sprint("\"temperature\":%.2f", req.temperature);
 
 	# Stream

@@ -90,8 +90,9 @@ Qcontext: con 25;
 Qcompact: con 26;
 Qctl:     con 27;
 Qusage:   con 28;
+Qmaxtokens: con 29;
 
-NSESSFILES: con 12;  # number of files per session dir
+NSESSFILES: con 13;  # number of files per session dir
 
 # Session state
 LlmSession: adt {
@@ -103,6 +104,7 @@ LlmSession: adt {
 	# Per-session settings
 	model:          string;
 	temperature:    real;
+	maxtokens:      int;     # generation cap; 0 = backend default
 	systemprompt:   string;
 	thinkingtokens: int;
 	prefill:        string;
@@ -285,6 +287,8 @@ newsession(): ref LlmSession
 		0,             # totaltokens
 		defaultmodel,  # model
 		0.7,           # temperature
+		1024,          # maxtokens (per-session; previously hardcoded 4096
+		               # in llmclient.b, now overridable via /n/llm/$id/maxtokens)
 		"",            # systemprompt
 		0,             # thinkingtokens
 		"",            # prefill
@@ -549,6 +553,14 @@ Serve:
 				content := sys->sprint("%d/%d\n", estimated, CONTEXTLIMIT);
 				srv.reply(styxservers->readbytes(m, array of byte content));
 
+			Qmaxtokens =>
+				sess := findsession(sid);
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte sys->sprint("%d\n", sess.maxtokens)));
+
 			Qtools =>
 				# Write-only
 				srv.reply(styxservers->readbytes(m, nil));
@@ -661,6 +673,23 @@ Serve:
 				sess.prefill = pf;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
+			Qmaxtokens =>
+				sess := findsession(sid);
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				value := strip(string m.data);
+				n := strtoint(value);
+				# 0 means "use backend default"; negative is invalid;
+				# upper bound matches the highest sane LLM context cap.
+				if(n < 0 || n > 65536) {
+					srv.reply(ref Rmsg.Error(m.tag, "maxtokens must be 0..65536"));
+					break;
+				}
+				sess.maxtokens = n;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
 			Qtools =>
 				sess := findsession(sid);
 				if(sess == nil) {
@@ -758,6 +787,7 @@ askprompt(sess: ref LlmSession, prompt: string)
 		prompt,           # prompt
 		sess.model,       # model
 		sess.temperature, # temperature
+		sess.maxtokens,   # maxtokens
 		sess.systemprompt,# systemprompt
 		sess.thinkingtokens, # thinkingtokens
 		sess.prefill,     # prefill
@@ -804,6 +834,7 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 		"",               # prompt (empty for tool results)
 		sess.model,       # model
 		sess.temperature, # temperature
+		sess.maxtokens,   # maxtokens
 		sess.systemprompt,# systemprompt
 		sess.thinkingtokens, # thinkingtokens
 		"",               # prefill (empty mid-tool-loop)
@@ -925,6 +956,7 @@ asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
 		"Summarize this conversation concisely, preserving key facts, decisions, file paths, code snippets, and all context needed to continue the work:\n\n" + convtext,
 		sess.model,
 		0.3,       # low temperature for summarization
+		2048,      # maxtokens (compact: longer than chat default for summary breathing room)
 		"",        # no system prompt
 		0,         # no thinking
 		"",        # no prefill
@@ -1055,6 +1087,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r222), nil);
 	Qusage =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "usage", big 0, 8r444), nil);
+	Qmaxtokens =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "maxtokens", big 0, 8r666), nil);
 	}
 
 	return (nil, Enotfound);
@@ -1120,6 +1154,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(sid, Qctl);
 				"usage" =>
 					n.path = MKPATH(sid, Qusage);
+				"maxtokens" =>
+					n.path = MKPATH(sid, Qmaxtokens);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1182,6 +1218,7 @@ navigator(navops: chan of ref Navop)
 					MKPATH(sid, Qcompact),
 					MKPATH(sid, Qctl),
 					MKPATH(sid, Qusage),
+					MKPATH(sid, Qmaxtokens),
 				};
 				i := n.offset;
 				for(; i < len files && n.count > 0; i++) {

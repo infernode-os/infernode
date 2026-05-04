@@ -1371,6 +1371,25 @@ agentturn(input: string)
 
 		(stopreason, tools, text) := agentlib->parsellmresponse(response);
 
+		# Harness: 9P-native tool-call fallback. Models fine-tuned for
+		# coding (e.g. devstral-limbo-v2) emit tool invocations as plain
+		# text — `<toolname>\n<args-or-codefence>` — rather than the
+		# OpenAI structured tool_calls JSON that llmsrv translates into
+		# STOP:tool_use / TOOL: lines. parseaction matches the first
+		# token of the response against the live /tool/tools registry
+		# (toolmount + "/tools"), so this only fires for actual known
+		# tools and won't trip on conversational prose.
+		if(stopreason != "tool_use" && text != "") {
+			(nativetool, nativeargs) := agentlib->parseaction(text);
+			if(nativetool != "" && nativetool != "DONE") {
+				stopreason = "tool_use";
+				nativeid := sys->sprint("native-%s-%d", sessionid, step);
+				tools = (nativeid, nativetool, nativeargs) :: nil;
+				text = "";
+				log("harness: 9P-native tool call: " + nativetool);
+			}
+		}
+
 		# Display response: update placeholder (streaming) or add new message (legacy).
 		# When text is empty during tool_use, the LLM emitted only tool calls
 		# with no accompanying text — clear the placeholder so no empty tile

@@ -376,7 +376,10 @@ parseaction(response: string): (string, string)
 					args = collectsaytext(args, tl lines);
 				else
 					(args, lines) = parseheredoc(args, tl lines);
-				return (first, args);
+				# Return canonical (lowercase) name — tools9p paths
+				# are case-sensitive at the 9P layer, and weaker
+				# fine-tunes occasionally Title-Case tool names.
+				return (tool, args);
 			}
 		}
 
@@ -434,12 +437,12 @@ parseactions(response: string): list of (string, string)
 				if(tool == "say") {
 					# say consumes all remaining lines — it is terminal
 					args = collectsaytext(args, lines);
-					result = (first, args) :: result;
+					result = (tool, args) :: result;
 					found_first = 1;
 					lines = nil;	# consumed
 				} else {
 					(args, lines) = parseheredoc(args, lines);
-					result = (first, args) :: result;
+					result = (tool, args) :: result;
 					found_first = 1;
 				}
 				matched = 1;

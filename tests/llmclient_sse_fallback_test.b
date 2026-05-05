@@ -227,6 +227,72 @@ testStreamFallbackTolerantOfLeadingWhitespace(t: ref T)
 		"fallback must tolerate leading whitespace in body");
 }
 
+# Mistral chat-template "[TOOL_CALLS]" / "<SPECIAL_66>" leakage:
+# Devstral fine-tunes occasionally emit the tool-call special token after
+# preamble text, which Ollama's parser then leaves as visible content.
+# parseopenairesponse must recognise the pattern and recover the call.
+TOOLCALL_RESP_JSON: con "{\"id\":\"chatcmpl-tc\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"devstral-limbo-v3\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I'll check the file. <SPECIAL_66>[{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{\\\"args\\\":\\\"/tool/editor/doc\\\"}}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"completion_tokens\":-1,\"prompt_tokens\":-1,\"total_tokens\":-1}}";
+
+mockservertc(port: string, ready, done: chan of int)
+{
+	addr := "tcp!127.0.0.1!" + port;
+	(ok, c) := sys->announce(addr);
+	if(ok < 0) { ready <-= -1; done <-= -1; return; }
+	ready <-= 1;
+	(lok, lc) := sys->listen(c);
+	if(lok < 0) { done <-= -1; return; }
+	dfd := sys->open(lc.dir + "/data", Sys->ORDWR);
+	if(dfd == nil) { done <-= -1; return; }
+	buf := array[8192] of byte;
+	sys->read(dfd, buf, len buf);
+	body := array of byte TOOLCALL_RESP_JSON;
+	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+		string len body + "\r\nConnection: close\r\n\r\n" + TOOLCALL_RESP_JSON;
+	rdata := array of byte resp;
+	sys->write(dfd, rdata, len rdata);
+	dfd = nil;
+	done <-= 1;
+}
+
+# Build an AskRequest with one tooldef so parseopenairesponse will run
+# the text-tool-call fallback path.
+mkreqtools(): ref AskRequest
+{
+	td := ref llmclient->ToolDef;
+	td.name = "read";
+	td.description = "Read a file";
+	td.inputschema = "{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"}}}";
+	r := mkreq(0);
+	r.tooldefs = td :: nil;
+	return r;
+}
+
+testToolCallsArrayFromSpecial66(t: ref T)
+{
+	ready := chan[1] of int;
+	done := chan[1] of int;
+	spawn mockservertc("29994", ready, done);
+	rok := <-ready;
+	if(rok < 0) { t.skip("port in use"); return; }
+	baseurl := "http://127.0.0.1:29994/v1";
+	(resp, err) := llmclient->askopenai(baseurl, "", mkreqtools());
+	<-done;
+	if(err != nil || resp == nil) {
+		t.error(sys->sprint("askopenai: err=%s resp=%d", err, resp != nil));
+		return;
+	}
+	t.log("response: " + resp.response);
+	# Must produce a TOOL: line for the recovered call
+	t.assert(strstr(resp.response, "TOOL:") >= 0,
+		"<SPECIAL_66>[{...}] must surface as a TOOL: line");
+	t.assert(strstr(resp.response, ":read:") >= 0,
+		"recovered tool name must be 'read'");
+	t.assert(strstr(resp.response, "/tool/editor/doc") >= 0,
+		"recovered args must include the path");
+	t.assert(strstr(resp.response, "STOP:tool_use") >= 0,
+		"finish_reason must flip to tool_use after recovery");
+}
+
 # Variant of mockserver that prepends whitespace to RESP_JSON.
 mockserverws(port: string, ready, done: chan of int)
 {
@@ -305,6 +371,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("StreamFallbackOnPlainJson", testStreamFallbackOnPlainJson);
 	run("NonStreamingBaseline", testNonStreamingBaseline);
 	run("StreamFallbackTolerantOfLeadingWhitespace", testStreamFallbackTolerantOfLeadingWhitespace);
+	run("ToolCallsArrayFromSpecial66", testToolCallsArrayFromSpecial66);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

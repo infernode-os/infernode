@@ -92,7 +92,10 @@ buildanthropicrequest(req: ref AskRequest): string
 {
 	s := "{";
 	s += "\"model\":" + jquote(req.model) + ",";
-	s += "\"max_tokens\":8192,";
+	mt := req.maxtokens;
+	if(mt <= 0)
+		mt = 8192;
+	s += sys->sprint("\"max_tokens\":%d,", mt);
 	s += sys->sprint("\"temperature\":%.2f", req.temperature);
 
 	# System prompt — cache_control marks it for Anthropic prompt caching.
@@ -513,7 +516,10 @@ buildopenairequestjson(req: ref AskRequest): string
 {
 	s := "{";
 	s += "\"model\":" + jquote(req.model) + ",";
-	s += "\"max_tokens\":4096,";
+	mt := req.maxtokens;
+	if(mt <= 0)
+		mt = 1024;
+	s += sys->sprint("\"max_tokens\":%d,", mt);
 	s += sys->sprint("\"temperature\":%.2f", req.temperature);
 
 	# Stream
@@ -719,7 +725,13 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	if(errv != nil) {
 		emsg := errv.get("message");
 		if(emsg != nil) pick em := emsg { String => return (nil, em.s); }
-		return (nil, "openai: API error");
+		# Fall back to the error value's JSON text — gives the
+		# operator something to grep for. Some backends (Ollama,
+		# the Mac→Hephaestus path) return tiny non-standard error
+		# bodies like {"error":"timeout"} where there is no
+		# message field; "openai: API error" alone hid them.
+		pick es := errv { String => return (nil, "openai: " + es.s); }
+		return (nil, "openai: API error: " + errv.text());
 	}
 
 	# Extract tokens
@@ -845,6 +857,22 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 
 parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, string)
 {
+	# Backward-compat: if the server ignored `stream: true` and returned a
+	# complete chat.completion object instead of SSE, fall back to the
+	# non-streaming parser. Detected by a leading '{' after any whitespace.
+	# Some OpenAI-shape backends (e.g. the local Devstral chat_server.py)
+	# don't implement streaming and silently return a single JSON body.
+	# See tests/llmclient_sse_fallback_test.b.
+	stripped := body;
+	wsi := 0;
+	for(; wsi < len stripped; wsi++)
+		if(stripped[wsi] != ' ' && stripped[wsi] != '\t' && stripped[wsi] != '\r' && stripped[wsi] != '\n')
+			break;
+	if(wsi > 0 && wsi < len stripped)
+		stripped = stripped[wsi:];
+	if(len stripped > 0 && stripped[0] == '{')
+		return parseopenairesponse(body, req);
+
 	fulltext := "";
 	tokens := 0;
 	finishreason := "";
@@ -1035,6 +1063,21 @@ extracttexttoolcalls(content: string, tooldefs: list of ref ToolDef): (string, l
 
 	i := 0;
 	while(i < len content) {
+		# Try [TOOL_CALLS]/<SPECIAL_66> array (Mistral chat-template
+		# leakage when Ollama doesn't translate the special token).
+		(matched0, end0, multi) := trytoolcallsarray(content, i);
+		if(matched0) {
+			for(; multi != nil; multi = tl multi) {
+				(mname, margs) := hd multi;
+				if(validtoolname(mname, tooldefs)) {
+					id := sys->sprint("fallback_%d", nextid++);
+					calls = (id, mname, margs) :: calls;
+				}
+			}
+			i = end0;
+			continue;
+		}
+
 		# Try <function=name> format
 		(matched, end, name, args) := tryfunctiontag(content, i);
 		if(matched) {
@@ -1203,6 +1246,100 @@ trytoolcalltag(s: string, pos: int, opentag, closetag: string): (int, int, strin
 		args = argsv.text();
 
 	return (1, endpos, name, args);
+}
+
+# trytoolcallsarray: Mistral [TOOL_CALLS]/<SPECIAL_66> marker followed by
+# a JSON array of {name, arguments} objects. Used when the chat-template
+# special token leaks into chat content — observed with Ollama serving
+# Devstral fine-tunes that emit a text preamble before the tool call,
+# breaking Ollama's "tool_calls must be the first thing in the assistant
+# turn" parser. Returns (matched, end_pos, list of (name, args_json)).
+trytoolcallsarray(s: string, pos: int): (int, int, list of (string, string))
+{
+	# Match either canonical name or special-token text form
+	m1 := "[TOOL_CALLS]";
+	m2 := "<SPECIAL_66>";
+	j := pos;
+	if(pos + len m1 <= len s && s[pos:pos+len m1] == m1)
+		j = pos + len m1;
+	else if(pos + len m2 <= len s && s[pos:pos+len m2] == m2)
+		j = pos + len m2;
+	else
+		return (0, 0, nil);
+
+	# Skip whitespace before the array opener
+	while(j < len s && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r'))
+		j++;
+
+	if(j >= len s || s[j] != '[')
+		return (0, 0, nil);
+
+	# Find matching ']' with depth + string tracking so args containing
+	# brackets in quoted strings don't fool us.
+	start := j;
+	depth := 0;
+	inq := 0;
+	esc := 0;
+	while(j < len s) {
+		c := s[j];
+		if(esc) {
+			esc = 0;
+		} else if(inq) {
+			if(c == '\\')
+				esc = 1;
+			else if(c == '"')
+				inq = 0;
+		} else {
+			if(c == '"')
+				inq = 1;
+			else if(c == '[')
+				depth++;
+			else if(c == ']') {
+				depth--;
+				if(depth == 0) {
+					j++;
+					break;
+				}
+			}
+		}
+		j++;
+	}
+	if(depth != 0)
+		return (0, 0, nil);
+
+	body := s[start:j];
+	(jv, jerr) := readjsonstring(body);
+	if(jerr != nil)
+		return (0, 0, nil);
+
+	calls: list of (string, string);
+	pick av := jv {
+	Array =>
+		for(k := 0; k < len av.a; k++) {
+			entry := av.a[k];
+			if(entry == nil)
+				continue;
+			namev := entry.get("name");
+			name := "";
+			if(namev != nil) pick nv := namev { String => name = nv.s; }
+			if(name == "")
+				continue;
+			argsv := entry.get("arguments");
+			args := "{}";
+			if(argsv != nil)
+				args = argsv.text();
+			calls = (name, args) :: calls;
+		}
+	* =>
+		return (0, 0, nil);
+	}
+
+	# Reverse to preserve original order
+	rev: list of (string, string);
+	for(; calls != nil; calls = tl calls)
+		rev = hd calls :: rev;
+
+	return (1, j, rev);
 }
 
 # validtoolname checks whether name matches one of the provided tool definitions.

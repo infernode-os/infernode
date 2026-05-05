@@ -133,6 +133,39 @@ testParseReadTool(t: ref T)
 	t.assertseq(args, "/appl/veltro/repl.b", "read args captured");
 }
 
+# Tool name returned in canonical (lowercase) form even when the model
+# Title-Cases it. Devstral fine-tunes occasionally emit "Read",
+# "Write", "List" etc. — tools9p file paths are case-sensitive at 9P,
+# so dispatch must use the registry's canonical casing.
+testParseToolCaseNormalized(t: ref T)
+{
+	if(!hastoolfs()) {
+		t.skip("/tool not mounted — skipping case-normalize test");
+		return;
+	}
+	(tool, args) := agentlib->parseaction("Read /tool/editor/doc");
+	t.assertseq(tool, "read", "Title-Case Read normalized to lowercase read");
+	t.assertseq(args, "/tool/editor/doc", "args preserved through case fix");
+
+	(tool2, nil) := agentlib->parseaction("LIST /tool");
+	t.assertseq(tool2, "list", "all-caps LIST normalized to lowercase list");
+}
+
+# Same canonicalisation in the multi-action parser.
+testParseActionsCaseNormalized(t: ref T)
+{
+	if(!hastoolfs()) {
+		t.skip("/tool not mounted — skipping case-normalize actions test");
+		return;
+	}
+	actions := agentlib->parseactions("Read /tool/a\nWrite /tool/b\n");
+	t.assert(listlen(actions) == 2, "two tools picked up");
+	(tool0, nil) := hd actions;
+	(tool1, nil) := hd tl actions;
+	t.assertseq(tool0, "read", "first tool normalized");
+	t.assertseq(tool1, "write", "second tool normalized");
+}
+
 # say before DONE: say is picked, not DONE (say comes first)
 testParseSayBeforeDone(t: ref T)
 {
@@ -484,6 +517,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# parseaction — tool parsing (skipped without /tool)
 	run("ParseSay", testParseSay);
 	run("ParseReadTool", testParseReadTool);
+	run("ParseToolCaseNormalized", testParseToolCaseNormalized);
+	run("ParseActionsCaseNormalized", testParseActionsCaseNormalized);
 	run("ParseSayBeforeDone", testParseSayBeforeDone);
 	run("ParseSayHeredoc", testParseSayHeredoc);
 

@@ -11,11 +11,15 @@ ls /usr/inferno/secstore/$user >[2] /dev/null
 # Login screen (unlocks secstore, loads keys into factotum)
 wm/logon
 
-# (Re-)start LLM service — profile's llmsrv may have failed pre-logon
-# because the API key wasn't in factotum yet (secstore not yet unlocked).
-# Note: ftest -d /n/llm is useless here — mntgen auto-creates the stub.
-# Check if the service is actually responding by opening /n/llm/new.
-if {! ftest -f /n/llm/new} {
+# (Re-)start LLM service in the background.
+#
+# Local boot must NEVER block on remote InferNode availability — see
+# docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md.
+# The previous version probed `ftest -f /n/llm/new`; that walk into a
+# potentially-degraded 9P export blocks indefinitely (no protocol-level
+# timeout) and wedges the entire desktop boot. Run the whole LLM setup
+# in a backgrounded subshell so the desktop comes up regardless.
+{
 	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
 	if {~ $llmmode remote} {
 		llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}
@@ -25,17 +29,16 @@ if {! ftest -f /n/llm/new} {
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
 		llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
 		if {~ $llmbackend openai} {
-			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null &
+			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
 		}{
 			if {! ~ $llmmodel ''} {
-				llmsrv -M $llmmodel >[2] /dev/null &
+				llmsrv -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv >[2] /dev/null &
+				llmsrv >[2] /dev/null
 			}
 		}
 	}
-	sleep 1
-}
+} &
 
 # Wallet service
 /dis/veltro/wallet9p.dis >[2] /dev/null &

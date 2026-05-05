@@ -768,7 +768,7 @@ drawcontext(zone: Rect)
 		nind := "▸";
 		if(agentns_expanded) nind = "▾";
 		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont,
+			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont,
 				agentname + " Namespace " + nind);
 		agentnshdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
 		y += mainfont.height + 4;
@@ -862,7 +862,7 @@ drawcontext(zone: Rect)
 		ind := "▸";
 		if(toolsec_expanded) ind = "▾";
 		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont, toolseclabel + " " + ind);
+			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont, toolseclabel + " " + ind);
 		toolsechdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
 		y += mainfont.height + 4;
 
@@ -878,8 +878,8 @@ drawcontext(zone: Rect)
 
 			# Column headers
 			if(y + mainfont.height > vis_top && y < vis_bot) {
-				mainwin.text((lcol + pad, y), dimcol, (0, 0), mainfont, "Active");
-				mainwin.text((rcol + pad, y), dimcol, (0, 0), mainfont, "Loadable");
+				mainwin.text((lcol + pad, y), text2col, (0, 0), mainfont, "Active");
+				mainwin.text((rcol + pad, y), text2col, (0, 0), mainfont, "Loadable");
 			}
 			y += mainfont.height + 2;
 
@@ -991,7 +991,7 @@ drawcontext(zone: Rect)
 					aname := hd avp;
 
 					if(visible)
-						mainwin.text((rcol + pad, y), dimcol, (0, 0),
+						mainwin.text((rcol + pad, y), text2col, (0, 0),
 							mainfont, "○ " + aname);
 					if(ntoolplusrects < len toolplusrects)
 						toolplusrects[ntoolplusrects++] = Rect(
@@ -1029,7 +1029,7 @@ drawcontext(zone: Rect)
 		uind := "▸";
 		if(userns_expanded) uind = "▾";
 		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont,
+			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont,
 				username + " Namespace " + uind);
 		usernshdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
 		y += mainfont.height + 4;
@@ -1233,7 +1233,7 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 					brow_dirnames[brow_ndirs] = hd dl;
 					brow_ndirs++;
 				}
-				mainwin.text((cx, vcur), text2col, (0, 0), mainfont, hd dl + "/");
+				mainwin.text((cx, vcur), textcol, (0, 0), mainfont, hd dl + "/");
 			}
 		}
 		vcol++;
@@ -1275,7 +1275,7 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 						brow_filenames[brow_nfiles] = hd fl;
 						brow_nfiles++;
 					}
-					mainwin.text((cx, vcur), dimcol, (0, 0), mainfont, hd fl);
+					mainwin.text((cx, vcur), textcol, (0, 0), mainfont, hd fl);
 				}
 			}
 			vcol++;

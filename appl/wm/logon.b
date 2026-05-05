@@ -284,13 +284,32 @@ redraw()
 
 	r := screen.r;
 	cx := (r.min.x + r.max.x) / 2;
+	cy := (r.min.y + r.max.y) / 2;
 
 	# Black background
 	black := display_g.rgb(16r1a, 16r1a, 16r1a);
 	screen.draw(r, black, nil, ZP);
 
+	# Field dimensions (declared early so we can size the centered group)
+	fh := bodyfont.height + 12;
+	fw := 300;
+
+	# Compute total height of the logo + prompt + field group so the
+	# grouping stays vertically centered on any screen size while
+	# preserving the spacing between elements.
+	grouph := 0;
+	if(logo_g != nil)
+		grouph += logo_g.r.dy() + PADDING * 2;
+	else
+		grouph += PADDING * 4;
+	grouph += bodyfont.height + 4;	# prompt + spacing
+	grouph += fh;			# password field
+
+	y := cy - grouph / 2;
+	if(y < r.min.y + PADDING)
+		y = r.min.y + PADDING;
+
 	# Draw cached brand image (centered)
-	y := r.min.y + PADDING * 3;
 	if(logo_g != nil) {
 		lw := logo_g.r.dx();
 		lh := logo_g.r.dy();
@@ -301,8 +320,6 @@ redraw()
 		y += PADDING * 4;
 
 	# Password field (manual draw — centered on screen)
-	fh := bodyfont.height + 12;
-	fw := 300;
 	orange := display_g.rgb(16rff, 16r55, 16r00);
 	dimgrey := display_g.rgb(16r66, 16r66, 16r66);
 	fieldbg := display_g.rgb(16r2a, 16r2a, 16r2a);

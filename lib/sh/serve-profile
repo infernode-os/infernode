@@ -36,7 +36,11 @@ llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm}
 llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm}
 
 if {~ $llmbackend openai} {
-	llmsrv -D -b openai -u $llmurl -M $llmmodel &
+	# -r low: reasoning_effort default for o1-style / gpt-oss models.
+	# Per InferNode MODEL-EVAL: low gives ~15× speedup on tool-driven
+	# scenarios with no quality loss vs default medium. Devstral and
+	# Anthropic backends ignore the field — safe to set unconditionally.
+	llmsrv -D -b openai -u $llmurl -M $llmmodel -r low &
 }{
 	if {! ~ $llmmodel ''} {
 		llmsrv -D -M $llmmodel &

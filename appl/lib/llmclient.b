@@ -526,6 +526,12 @@ buildopenairequestjson(req: ref AskRequest): string
 	if(req.streamch != nil)
 		s += ",\"stream\":true,\"stream_options\":{\"include_usage\":true}";
 
+	# OpenAI-standard reasoning_effort for o1-style / gpt-oss models.
+	# Empty means "let the backend pick its default" — typically medium
+	# for gpt-oss, which is slower than necessary on tool-driven turns.
+	if(req.reasoningeffort != "")
+		s += sys->sprint(",\"reasoning_effort\":%s", jquote(req.reasoningeffort));
+
 	# Ollama thinking options
 	s += ",\"options\":" + thinkoptions(req.thinkingtokens);
 

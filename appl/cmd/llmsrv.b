@@ -134,6 +134,12 @@ backend: string;      # "api" or "openai"
 apikey: string;
 apiurl: string;       # Anthropic: hostname; OpenAI: base URL
 defaultmodel: string;
+defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
+                           # daemon launch. Threaded into AskRequest so
+                           # gpt-oss-style reasoning models default to a
+                           # sensible effort. InferNode MODEL-EVAL recommends
+                           # "low" for tool-driven scenarios (~15× faster than
+                           # default medium with no quality loss on dispatch).
 
 # Completion notification for async ask reads
 # When ask read arrives during generation, we spawn a goroutine
@@ -141,7 +147,7 @@ defaultmodel: string;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model]\n");
+	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model] [-r low|medium|high]\n");
 	raise "fail:usage";
 }
 
@@ -192,6 +198,7 @@ init(nil: ref Draw->Context, args: list of string)
 	apiurl = "";
 	apikey = "";
 	defaultmodel = "claude-sonnet-4-5-20250929";
+	defaultreasoning = "";
 
 	while((o := arg->opt()) != 0)
 		case o {
@@ -201,6 +208,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'u' => apiurl = arg->earg();
 		'k' => apikey = arg->earg();
 		'M' => defaultmodel = arg->earg();
+		'r' => defaultreasoning = arg->earg();
 		* =>   usage();
 		}
 	arg = nil;
@@ -790,6 +798,7 @@ askprompt(sess: ref LlmSession, prompt: string)
 		sess.maxtokens,   # maxtokens
 		sess.systemprompt,# systemprompt
 		sess.thinkingtokens, # thinkingtokens
+		defaultreasoning, # reasoningeffort — daemon-wide default from -r
 		sess.prefill,     # prefill
 		sess.tools,       # tooldefs
 		nil,              # toolresults
@@ -837,6 +846,7 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 		sess.maxtokens,   # maxtokens
 		sess.systemprompt,# systemprompt
 		sess.thinkingtokens, # thinkingtokens
+		defaultreasoning, # reasoningeffort
 		"",               # prefill (empty mid-tool-loop)
 		sess.tools,       # tooldefs
 		results,          # toolresults
@@ -959,6 +969,7 @@ asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
 		2048,      # maxtokens (compact: longer than chat default for summary breathing room)
 		"",        # no system prompt
 		0,         # no thinking
+		defaultreasoning, # reasoningeffort
 		"",        # no prefill
 		nil,       # no tools
 		nil,       # no tool results

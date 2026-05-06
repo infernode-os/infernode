@@ -157,6 +157,7 @@ usernshdrrect: Rect;
 nsentryrects: array of Rect;
 nnsentryrects := 0;
 nsentry_pathrects: array of Rect;	# clickable path portion
+nsentry_badgerects: array of Rect;	# clickable [ro]/[rw] permission badge
 
 # Catalog entry rects (for unmounted catalog entries at bottom of agent NS)
 ctxentryrects: array of Rect;
@@ -381,6 +382,33 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 								break;
 							}
 							kidx++;
+						}
+						break;
+					}
+				}
+			}
+
+			# Agent NS entry [ro]/[rw] badge click — toggle permission
+			# (checked before path-click since the badge is right-aligned
+			# inside the same row band)
+			if(!tabclicked && agentns_expanded) {
+				for(bi := 0; bi < nnsentryrects; bi++) {
+					if(nsentry_badgerects != nil &&
+							bi < len nsentry_badgerects &&
+							nsentry_badgerects[bi].max.x > nsentry_badgerects[bi].min.x &&
+							nsentry_badgerects[bi].contains(p.xy)) {
+						bsi := 0;
+						for(bsl := nsmanifest; bsl != nil; bsl = tl bsl) {
+							if(bsi == bi) {
+								bse := hd bsl;
+								ppb := findpinnedpath(bse.path);
+								if(ppb != nil) {
+									togglepathperm(ppb);
+									tabclicked = 1;
+								}
+								break;
+							}
+							bsi++;
 						}
 						break;
 					}
@@ -776,6 +804,7 @@ drawcontext(zone: Rect)
 		if(agentns_expanded) {
 			nsentryrects = array[64] of Rect;
 			nsentry_pathrects = array[64] of Rect;
+			nsentry_badgerects = array[64] of Rect;
 			glyphw := mainfont.width("● ");
 
 			for(nse := nsmanifest; nse != nil; nse = tl nse) {
@@ -817,15 +846,21 @@ drawcontext(zone: Rect)
 						(pathx, y), (pathx + pathw, y + mainfont.height));
 				}
 
-				# Permission badge [ro]/[rw]/[cow] — right-aligned
-				if(entry.mounted && visible) {
+				# Permission badge [ro]/[rw]/[cow] — right-aligned, clickable
+				if(entry.mounted) {
 					badge := "[" + entry.perm + "]";
 					badgew := mainfont.width(badge);
 					badgex := zone.max.x - pad - badgew;
-					badgecol := dimcol;
-					if(entry.perm == "rw" || entry.perm == "cow")
-						badgecol = yellowcol;
-					mainwin.text((badgex, y), badgecol, (0, 0), mainfont, badge);
+					if(nnsentryrects < len nsentry_badgerects) {
+						nsentry_badgerects[nnsentryrects] = Rect(
+							(badgex, y), (badgex + badgew, y + mainfont.height));
+					}
+					if(visible) {
+						badgecol := dimcol;
+						if(entry.perm == "rw" || entry.perm == "cow")
+							badgecol = yellowcol;
+						mainwin.text((badgex, y), badgecol, (0, 0), mainfont, badge);
+					}
 				}
 
 				if(nnsentryrects < len nsentryrects)

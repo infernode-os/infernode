@@ -3,6 +3,7 @@
 # Core UI
 bg 080808
 border 131313
+windowborder 1A1A1A
 header 0A0A0A
 accent E8553A
 text CCCCCC

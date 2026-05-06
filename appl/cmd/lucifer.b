@@ -767,9 +767,10 @@ drawchrome(r: Rect)
 		}
 	}
 
-	# Header/zone separator
+	# Header/zone separator — drawn with headercol so it blends with the
+	# header bar above instead of standing out as a brighter line.
 	zonety := r.min.y + headerh + 1;
-	mainwin.draw(Rect((r.min.x, zonety - 1), (r.max.x, zonety)), bordercol, nil, (0, 0));
+	mainwin.draw(Rect((r.min.x, zonety - 1), (r.max.x, zonety)), headercol, nil, (0, 0));
 
 	# Zone width calculations (must match zonerects)
 	w := r.dx();
@@ -778,9 +779,10 @@ drawchrome(r: Rect)
 	presx := r.min.x + convw;
 	ctxx  := presx + presw;
 
-	# Zone separator lines (1px vertical)
-	mainwin.draw(Rect((presx, zonety), (presx + 1, r.max.y)), bordercol, nil, (0, 0));
-	mainwin.draw(Rect((ctxx,  zonety), (ctxx + 1,  r.max.y)), bordercol, nil, (0, 0));
+	# Zone separator lines (1px vertical) — headercol matches the subdued
+	# grey used for the header bar, keeping the chrome unobtrusive.
+	mainwin.draw(Rect((presx, zonety), (presx + 1, r.max.y)), headercol, nil, (0, 0));
+	mainwin.draw(Rect((ctxx,  zonety), (ctxx + 1,  r.max.y)), headercol, nil, (0, 0));
 
 	mainwin.flush(Draw->Flushnow);
 }

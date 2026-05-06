@@ -79,6 +79,7 @@ setkey(th: ref Theme, key: string, val: int)
 	case key {
 	"bg" =>		th.bg = val;
 	"border" =>	th.border = val;
+	"windowborder" => th.windowborder = val;
 	"header" =>	th.header = val;
 	"accent" =>	th.accent = val;
 	"text" =>	th.text = val;
@@ -193,7 +194,10 @@ brimstone(): ref Theme
 		int 16rCBA6F7FF,	# pie4
 		int 16r94E2D5FF,	# pie5
 		int 16rFAB387FF,	# pie6
-		int 16r89DCEBFF	# pie7
+		int 16r89DCEBFF,	# pie7
+
+		# Window chrome (trailing field — see lucitheme.m)
+		int 16r1A1A1AFF		# windowborder — subdued frame around wmclient apps
 	);
 }
 

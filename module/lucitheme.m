@@ -79,6 +79,12 @@ Lucitheme: module
 		pie5:         int;
 		pie6:         int;
 		pie7:         int;
+
+		# --- Window chrome (added at the end to preserve adt layout
+		# compatibility with .dis files compiled before this field
+		# existed; positional initialisers in lucitheme.b construct it
+		# in the same trailing slot.) ---
+		windowborder: int;
 	};
 
 	# Load the currently active theme.

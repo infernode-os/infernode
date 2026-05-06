@@ -294,9 +294,10 @@ redraw()
 	fh := bodyfont.height + 12;
 	fw := 300;
 
-	# Compute total height of the logo + prompt + field group so the
-	# grouping stays vertically centered on any screen size while
-	# preserving the spacing between elements.
+	# Total height of the logo + prompt + field + status group. The
+	# status line below the field is part of the visible group, so
+	# include it when present — otherwise the group's visual centroid
+	# sits below cy and the grouping reads as too low.
 	grouph := 0;
 	if(logo_g != nil)
 		grouph += logo_g.r.dy() + PADDING * 2;
@@ -304,8 +305,13 @@ redraw()
 		grouph += PADDING * 4;
 	grouph += bodyfont.height + 4;	# prompt + spacing
 	grouph += fh;			# password field
+	if(state != STATE_LOGIN_FAILED && statusmsg != nil && statusmsg != "")
+		grouph += PADDING + bodyfont.height;	# gap + status line
 
-	y := cy - grouph / 2;
+	# Small upward optical bias: the bottom-anchored version/copyright
+	# adds visual weight near r.max.y, so pure geometric centre reads
+	# as low. Nudging up by ~1/24 of the viewport balances it.
+	y := cy - grouph / 2 - r.dy() / 24;
 	if(y < r.min.y + PADDING)
 		y = r.min.y + PADDING;
 

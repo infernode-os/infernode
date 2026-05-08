@@ -228,3 +228,7 @@ dis/mermaid_test.dis
 
 # Runtime overlay root — populated by emu at boot, never tracked
 n/local/
+
+# Output of scripts/create-jira-todos.sh (runtime logs, not source)
+/created-issues.tsv
+/failed-issues.tsv

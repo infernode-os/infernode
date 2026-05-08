@@ -9,6 +9,8 @@
 | [USER-MANUAL.md](USER-MANUAL.md) | **Comprehensive user guide** - namespaces, devices, host integration |
 | [QUICKSTART.md](../QUICKSTART.md) | Get running in 3 commands |
 | [RUN_TOUR.md](../RUN_TOUR.md) | Interactive Veltro feature tour |
+| [LUCIFER-GUI.md](LUCIFER-GUI.md) | **Lucifer/Lucia GUI guide** - three-zone tiling UI, activities, tiles, themes |
+| [VELTRO.md](VELTRO.md) | **Veltro agent guide** - veltro/repl/spawn, 40 tools, models, capabilities |
 | [XENITH.md](XENITH.md) | Xenith AI-native text environment |
 | [NAMESPACE.md](NAMESPACE.md) | Namespace architecture and configuration |
 | [FILESYSTEM-MOUNTING.md](FILESYSTEM-MOUNTING.md) | Filesystem mounting guide |
@@ -19,7 +21,7 @@
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, layer diagram, and component overview |
-| [LUCIFER-EVALUATION.md](LUCIFER-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
+| [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
 | [evaluations/fractal-app-evaluation.md](evaluations/fractal-app-evaluation.md) | Fractal app production readiness evaluation |
 | [architecture-review-veltro-unification.md](architecture-review-veltro-unification.md) | Veltro architecture review |
 | [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md) | Recommended feature additions |
@@ -30,6 +32,7 @@
 |----------|-------------|
 | [CLAUDE.md](../CLAUDE.md) | Development guide for Claude Code (build, test, project structure) |
 | [TESTING.md](TESTING.md) | Testing guide (unit tests, integration tests, CI) |
+| [JIT.md](JIT.md) | **JIT compilation guide** - `-c` flag, AMD64/ARM64 backends, coverage, troubleshooting |
 | [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) | Performance specifications and benchmarks |
 | [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results (v1, v2, v3 suites) |
 | [SDL3-GUI-PLAN.md](SDL3-GUI-PLAN.md) | SDL3 cross-platform GUI implementation plan |
@@ -74,7 +77,7 @@
 
 ## ARM64 JIT Compiler
 
-Detailed JIT documentation is in `docs/arm64-jit/` (27 files covering implementation, debugging, benchmarks across all platforms).
+User-facing JIT guide: [JIT.md](JIT.md). Detailed implementation, debug logs, and benchmarks across all platforms are in `docs/arm64-jit/` (27 files).
 
 ## Additional Guides
 

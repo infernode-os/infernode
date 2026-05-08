@@ -155,12 +155,56 @@ Done when:
 - Benchmark: 10k-document recall under 100 ms on the dev box.
 Source: docs/GAP-ANALYSIS-OPENCLAW.md (gap G11)."
 
+# --- Hardening tickets (S1-S4): derived from documented OpenClaw incidents -----
+
+add "Capability-token tool dispatch + immutable audit log" "Epic" "Highest" "Why: OpenClaw's CVE-2026-32922 (pairing-token to admin RCE, CVSS 9.9) is the canonical confused-deputy attack on an agent control plane. Generalising our existing spawn attenuation into first-class capability tokens prevents the entire class.
+Done when:
+- module/cap.m defines a capability token (scope, parent, expiry, signed by parent's cap).
+- Tool dispatcher (tools9p) verifies the caller's token against the requested tool + arguments before dispatch.
+- spawn issues child tokens that are provably attenuated (TLA+ invariant: child.scope subset of parent.scope).
+- Per-agent immutable audit log on 9P (append-only file with sequence numbers + hash chain).
+- All channel-sourced invocations carry a token derived from the channel adapter's grant.
+Source: docs/GAP-ANALYSIS-OPENCLAW.md section 4a + ticket S1."
+
+add "Skill signing, reproducible builds, capability manifests" "Epic" "Highest" "Why: ClawHavoc put 824+ malicious skills (~20% of the OpenClaw registry) into circulation through ClawHub. If we ship the plugin system (T7) without supply-chain controls baked in we will repeat that incident on our own ecosystem. This ticket gates T7.
+Done when:
+- Manifest format declares: required tools, FS roots, network egress hosts, peripherals - runtime denies anything not declared.
+- All skill artifacts signed with SLH-DSA (already shipped); signature verified at install and at every load.
+- Reproducible-build attestation alongside the artifact; registry signs metadata; mismatched binary refuses to load.
+- Registry is mirror-able offline; an air-gapped install is identical to an online one.
+- Typosquat protection: registry rejects names within edit-distance <=2 of an existing popular skill without manual review.
+- 'Required prerequisite' social-engineering blocked: a skill's docs cannot trigger another install path; only the manifest can.
+Source: docs/GAP-ANALYSIS-OPENCLAW.md section 4a + ticket S2. Hard dependency for T7."
+
+add "Outbound network allowlist + content provenance taint" "Story" "High" "Why: closes the credential-exfiltration pattern from ClawHavoc (skills POSTing tokens to attacker webhooks) and the April 27 2026 disclosure (prompt-injected outputs redirecting API traffic to attacker hosts).
+Done when:
+- Each agent (and each skill) declares allowed egress destinations (host[:port]) in its manifest.
+- http, webfetch, payfetch tools enforce the allowlist; deny is a hard error, logged.
+- Tool outputs from external sources are wrapped with a provenance marker that survives into the next prompt.
+- A tainted argument to a sensitive tool (http POST, write outside scratch, keyring.read) requires explicit re-confirmation - second tool call from a non-tainted code path, or user approval.
+- Provenance taint propagates across spawn boundaries.
+Source: docs/GAP-ANALYSIS-OPENCLAW.md section 4a + ticket S3."
+
+add "Channel-input quarantine: planner/executor split" "Epic" "High" "Why: OpenClaw's ~17% defense rate against prompt injection is a topology problem, not a prompting problem. Inbound channel bytes should never share a context window with the tool-using LLM unmediated.
+Done when:
+- Channel adapters (T2) deliver messages to a planner agent that has no tools - it can only emit a structured intent.
+- A separate executor agent receives the intent (not the raw text) plus a minimal, named context bundle, with the original channel text behind a provenance marker.
+- Spoofed [System Message] and similar in-band injection patterns are stripped/escaped at the adapter; planner sees structured envelope only.
+- Agent-hijacking benchmarks (NIST CAISI subset + OpenClaw red-team corpus) run in CI and gate releases; target >=90% defense rate at launch, regression-tested on every model bump.
+- Persistent session memory (T3) tags every stored entry with the channel/peer that produced it; recall API filters by trust level.
+Source: docs/GAP-ANALYSIS-OPENCLAW.md section 4a + ticket S4. Closely coupled with T2 and T3."
+
 build_payload() {
     local summary="$1" issuetype="$2" priority="$3" body="$4"
     local description; description=$(adf_doc "$body")
-    python3 - "$JIRA_PROJECT_KEY" "$summary" "$issuetype" "$priority" "$description" <<'PY'
+    python3 - "$JIRA_PROJECT_KEY" "$summary" "$issuetype" "$priority" "$description" "$body" <<'PY'
 import json, sys
-proj, summary, issuetype, priority, desc_json = sys.argv[1:]
+proj, summary, issuetype, priority, desc_json, body = sys.argv[1:]
+labels = ["openclaw-gap-analysis", "competitive-parity"]
+# Flag the hardening tickets (S1-S4) for security filtering.
+if "ticket S1" in body or "ticket S2" in body or "ticket S3" in body or "ticket S4" in body:
+    labels.append("security")
+    labels.append("hardening")
 payload = {
     "fields": {
         "project": {"key": proj},
@@ -168,7 +212,7 @@ payload = {
         "issuetype": {"name": issuetype},
         "priority": {"name": priority},
         "description": json.loads(desc_json),
-        "labels": ["openclaw-gap-analysis", "competitive-parity"],
+        "labels": labels,
     }
 }
 print(json.dumps(payload))

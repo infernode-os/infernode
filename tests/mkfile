@@ -62,6 +62,9 @@ TARG=\
 	widget_kbdfilter_test.dis\
 	widget_scrollbar_test.dis\
 	veltro_concurrent_test.dis\
+	veltro_launch_test.dis\
+	veltro_more_tools_test.dis\
+	veltro_safeexec_test.dis\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
@@ -86,6 +89,7 @@ TARG=\
 	fractal_tool_test.dis\
 	menu_test.dis\
 	wm_apps_test.dis\
+	lucibridge_approval_test.dis\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
 

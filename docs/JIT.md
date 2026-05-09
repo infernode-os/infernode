@@ -109,7 +109,7 @@ Pool quanta affect both the interpreter and the JIT:
 emu -p heap=512m -p main=512m -p image=512m ...
 ```
 
-These are the values the [Lucifer launch scripts](LUCIFER-GUI.md#launching) use. Lower values are fine for a shell or batch tasks; the GUI wants the larger pool because it allocates `Image`s.
+These are the values the [Lucia launch scripts](LUCIA.md#launching) use. Lower values are fine for a shell or batch tasks; the GUI wants the larger pool because it allocates `Image`s.
 
 > 🔑 **The 64-bit fix.** Pool quanta must be 127 on 64-bit (not 31 as on 32-bit) — the single change in `emu/port/alloc.c` that made the 64-bit port work. See [LESSONS-LEARNED.md](LESSONS-LEARNED.md) for the story.
 

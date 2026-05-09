@@ -22,7 +22,7 @@ Three things the agent sees as files: **the LLM, the tools, the host filesystem*
 | `veltro`  | one-shot, `veltro "do X"`     | scripted tasks, batch runs, resumable sessions                        |
 | `repl`    | interactive                   | iterative work; opens a Xenith window if available, terminal otherwise|
 | `spawn`   | inside a tool call            | parallel subagents launched by a parent agent                         |
-| `lucibridge` | embedded in Lucifer GUI    | the agent loop driving the [Lucifer](LUCIFER-GUI.md) UI               |
+| `lucibridge` | embedded in Lucia          | the agent loop driving the [Lucia](LUCIA.md) UI                       |
 
 ### `veltro` — one-shot
 
@@ -119,7 +119,7 @@ When `tools9p` is started, two flags shape what agents see:
 - The **positional tools** are loaded for the agent running this `tools9p`.
 - The `-b` budget is the **maximum a child can be granted**. Subagents can never exceed it.
 
-The Lucifer launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical configuration. Edit them to lock down a deployment.
+The Lucia launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical configuration. Edit them to lock down a deployment.
 
 ## LLM configuration
 
@@ -216,9 +216,9 @@ Spawn -- tools=read,list,grep :: find every place that touches /n/llm
 
 The three children run in parallel, each in its own restricted namespace. Results stream back to the parent's conversation.
 
-### Embedded in Lucifer
+### Embedded in Lucia
 
-The Lucifer launch scripts wire everything up: `tools9p` with the default budget, `lucibridge` as the agent loop, `speech9p` for voice. See [LUCIFER-GUI.md](LUCIFER-GUI.md).
+The Lucia launch scripts wire everything up: `tools9p` with the default budget, `lucibridge` as the agent loop, `speech9p` for voice. See [LUCIA.md](LUCIA.md).
 
 ## Hardening checklist
 
@@ -246,7 +246,7 @@ For deployments where untrusted prompts may reach the agent:
 
 - [appl/veltro/SECURITY.md](../appl/veltro/SECURITY.md) — namespace isolation model (the security boundary).
 - [appl/veltro/IDEAS.md](../appl/veltro/IDEAS.md) — implemented features and roadmap.
-- [LUCIFER-GUI.md](LUCIFER-GUI.md) — the GUI driven by `lucibridge`.
+- [LUCIA.md](LUCIA.md) — the GUI driven by `lucibridge`.
 - [NAMESPACE.md](NAMESPACE.md) — namespace primitives Veltro builds on.
 - [WALLET-AND-PAYMENTS.md](WALLET-AND-PAYMENTS.md) — wallet and x402, used by `wallet` and `payfetch` tools.
 - [formal-verification/README.md](../formal-verification/README.md) — TLA+/SPIN/CBMC proofs of namespace isolation.

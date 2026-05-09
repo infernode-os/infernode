@@ -9,7 +9,7 @@
 | [USER-MANUAL.md](USER-MANUAL.md) | **Comprehensive user guide** - namespaces, devices, host integration |
 | [QUICKSTART.md](../QUICKSTART.md) | Get running in 3 commands |
 | [RUN_TOUR.md](../RUN_TOUR.md) | Interactive Veltro feature tour |
-| [LUCIFER-GUI.md](LUCIFER-GUI.md) | **Lucifer/Lucia GUI guide** - three-zone tiling UI, activities, tiles, themes |
+| [LUCIA.md](LUCIA.md) | **Lucia GUI guide** - three-zone tiling UI, activities, tiles, themes |
 | [VELTRO.md](VELTRO.md) | **Veltro agent guide** - veltro/repl/spawn, 40 tools, models, capabilities |
 | [XENITH.md](XENITH.md) | Xenith AI-native text environment |
 | [NAMESPACE.md](NAMESPACE.md) | Namespace architecture and configuration |
@@ -21,7 +21,7 @@
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, layer diagram, and component overview |
-| [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
+| [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md) | Lucia GUI production readiness evaluation (P0/P1/P2 issues) |
 | [evaluations/fractal-app-evaluation.md](evaluations/fractal-app-evaluation.md) | Fractal app production readiness evaluation |
 | [architecture-review-veltro-unification.md](architecture-review-veltro-unification.md) | Veltro architecture review |
 | [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md) | Recommended feature additions |

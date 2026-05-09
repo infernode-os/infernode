@@ -1,12 +1,12 @@
-# Lucifer GUI
+# Lucia
 
-**Purpose:** User and operator guide for the Lucifer desktop UI — InferNode's three-zone tiling environment for AI-assisted work. Marketed as **Lucia**, named **Lucifer** in code.
+**Purpose:** User and operator guide for Lucia, InferNode's desktop UI — a three-zone tiling environment for AI-assisted work.
 
 > Looking for the production-readiness audit (P0/P1/P2 issues)? See [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md). This document is the user-facing guide.
 
 ## What it is
 
-Lucifer is a fullscreen Limbo application that splits the display into three vertical zones:
+Lucia is a fullscreen Limbo application that splits the display into three vertical zones:
 
 ```
 +----------------+--------------------+----------------+
@@ -94,7 +94,9 @@ A small `wmsrv` runs inside `lucifer.b` (the `preswmloop`) so app artifacts get 
 - **Tasks** — in-flight background work.
 - **Tool toggles** — enable/disable tools at runtime; reflects bindings in `/tool`.
 
-## Components
+## Components (source layout)
+
+The internal module names use the `luci-` prefix; this is an implementation detail and not a user-facing brand.
 
 | File (in `appl/cmd/`) | Role |
 |-----------------------|------|
@@ -108,7 +110,7 @@ A small `wmsrv` runs inside `lucifer.b` (the `preswmloop`) so app artifacts get 
 
 ## Filesystem map
 
-Lucifer stitches together several 9P services. Once the UI is up, you can `cat` any of these from a shell.
+Lucia stitches together several 9P services. Once the UI is up, you can `cat` any of these from a shell.
 
 | Mount        | Server      | What lives there |
 |--------------|-------------|------------------|
@@ -168,7 +170,7 @@ To switch:
 
 ```sh
 echo halo > lib/lucifer/theme/current
-# restart Lucifer
+# restart Lucia
 ```
 
 ## The default tool budget
@@ -186,7 +188,7 @@ For details on what each tool does and how capability attenuation works, see [VE
 
 ## Multiple activities, scripted setup
 
-You can pre-populate Lucifer at launch by appending commands to `LUCIFER_CMD` in the launch script. Example: open the Veltro tour artifact and a fractal app on startup.
+You can pre-populate Lucia at launch by appending commands to the launch command in `run-lucia*.sh`. Example: open the Veltro tour artifact and a fractal app on startup.
 
 ```
 echo 'create id=tour    type=markdown   label=Tour'   > /n/ui/activity/0/presentation/ctl
@@ -203,13 +205,13 @@ Anything you can write through `/n/ui/...` from a normal shell works at startup 
 | `ANTHROPIC_API_KEY not set` warning | Host env var missing | `export ANTHROPIC_API_KEY=sk-ant-…` and relaunch. |
 | Voice button does nothing for 30s | `speech9p` not running, or no host audio access | Check `/n/speech` exists; on Linux confirm PulseAudio/PipeWire is reachable from the emulator. |
 | `link typecheck` errors at startup | Stale `.dis` after a `git pull` | `./hooks/install.sh` (one-time) or `cd appl/cmd && mk install`. |
-| Apps fail to launch in the presentation zone | `MAXAPPSLOTS` (16) exhausted | Restart Lucifer. Tracked as a known issue in [LUCIA-EVALUATION.md §P0.2](LUCIA-EVALUATION.md). |
+| Apps fail to launch in the presentation zone | `MAXAPPSLOTS` (16) exhausted | Restart Lucia. Tracked as a known issue in [LUCIA-EVALUATION.md §P0.2](LUCIA-EVALUATION.md). |
 | Header shows no activity label | `nslistener` isn't seeing `status`/`label` events | Confirm `luciuisrv` is running: `ps | grep luciuisrv`. |
 
 ## See also
 
 - [USER-MANUAL.md](USER-MANUAL.md) — namespace and host-integration basics.
-- [VELTRO.md](VELTRO.md) — the agent system that drives Lucifer.
+- [VELTRO.md](VELTRO.md) — the agent system that drives Lucia.
 - [XENITH.md](XENITH.md) — the AI-native text environment used inside the presentation zone.
 - [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md) — production-readiness audit (P0/P1/P2 issues).
 - [DIALOGUE-TILES.md](DIALOGUE-TILES.md) — interactive dialogue/form tile reference.

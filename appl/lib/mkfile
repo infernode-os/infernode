@@ -100,6 +100,7 @@ TARG=\
 	regex.dis\
 	regexutils.dis\
 	registries.dis\
+	rfc3339.dis\
 	rfc822.dis\
 	secstore.dis\
 	sets.dis\
@@ -227,6 +228,7 @@ SYSMODULES=\
 	regex.m\
 	regexutils.m\
 	registries.m\
+	rfc3339.m\
 	rfc822.m\
 	secstore.m\
 	security.m\

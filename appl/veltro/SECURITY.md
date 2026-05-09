@@ -316,7 +316,16 @@ cat /prog/<pid>/ns                  # confirm caps
 
 `at=` accepts RFC3339 timestamps (`Z`, `+HH:MM`, or `-HH:MM` zones,
 optional fractional seconds). Past times are rejected at parse time.
-`every=` accepts `<int><s|m|h|d>` durations.
+`every=` accepts `<int><s|m|h|d>` durations. Parsing of RFC3339 lives
+in the shared library `appl/lib/rfc3339.b` (interface `module/rfc3339.m`),
+also intended for `calendar9p` (INFR-9) and any other consumer.
+
+**Y2038 limit:** `at=` timestamps at or after **2038-01-19T03:14:08Z**
+silently wrap to negative because Inferno's `daytime->tm2epoch` returns
+a 32-bit signed `int`. Inside the limit (~12 years from now) `at=` is
+correct; beyond it, the parser succeeds but the wake never fires
+correctly. Lifting this requires `daytime` to use `big` — a separate,
+larger refactor out of scope for INFR-14.
 
 `every=` v1 reuses the same LLM session across iterations — conversation
 history accumulates. For tasks where this matters (e.g. "summarise new

@@ -46,6 +46,9 @@ include "string.m";
 include "daytime.m";
 	daytime: Daytime;
 
+include "rfc3339.m";
+	rfc3339: Rfc3339;
+
 include "../tool.m";
 include "../nsconstruct.m";
 	nsconstruct: NsConstruct;
@@ -113,9 +116,13 @@ init(): string
 	if(nsconstruct == nil)
 		return "cannot load NsConstruct";
 	nsconstruct->init();
-	# daytime is optional — only needed by at= scheduling. If load fails,
-	# at= parsing returns an error; the rest of spawn keeps working.
+	# daytime + rfc3339 are optional — only needed by at= scheduling.
+	# If either load fails, at= parsing returns an error; the rest of
+	# spawn keeps working.
 	daytime = load Daytime Daytime->PATH;
+	rfc3339 = load Rfc3339 Rfc3339->PATH;
+	if(rfc3339 != nil)
+		rfc3339->init();
 	inited = 1;
 	return nil;
 }
@@ -555,115 +562,22 @@ parseduration(s: string): (int, string)
 	return (val * mult, "");
 }
 
-# parserfc3339delta parses an RFC3339 timestamp and returns the delta
-# from now in milliseconds. Returns an error if parsing fails or the
-# target is in the past.
-#
-# Accepted shape: YYYY-MM-DDTHH:MM:SS<TZ>
-#   TZ is one of: Z, +HH:MM, -HH:MM
-# Examples: 2026-05-10T09:00:00Z, 2026-05-10T11:00:00+02:00
-#
-# (daytime->string2tm only handles RFC822/RFC1123/asctime — not RFC3339.)
+# parserfc3339delta wraps the shared appl/lib/rfc3339 parser to return
+# the delta from now in milliseconds. Returns an error if parsing fails
+# or the target is in the past. The "in the past" policy is local to
+# scheduling — rfc3339->parse itself is policy-free and just returns
+# absolute UTC epoch seconds.
 parserfc3339delta(s: string): (int, string)
 {
-	if(daytime == nil)
-		return (0, "daytime module not available");
-	(tm, tzoff_s, perr) := parserfc3339(s);
+	if(rfc3339 == nil || daytime == nil)
+		return (0, "rfc3339 / daytime module not available");
+	(target, perr) := rfc3339->parse(s);
 	if(perr != "")
 		return (0, perr);
-	target_local := daytime->tm2epoch(tm);  # interprets tm as GMT
-	# tzoff_s is the offset east of UTC; e.g. +02:00 means local clock is
-	# 2h ahead of UTC. To convert local → UTC subtract the offset.
-	target_utc := target_local - tzoff_s;
 	now := daytime->now();
-	if(target_utc <= now)
+	if(target <= now)
 		return (0, "target time is in the past");
-	return ((target_utc - now) * 1000, "");
-}
-
-# parserfc3339 returns (tm, tzoff_seconds, err). tm has GMT-style fields;
-# tzoff_seconds is the offset to subtract from the local-clock epoch to
-# get UTC.
-parserfc3339(s: string): (ref Daytime->Tm, int, string)
-{
-	# Minimum length: YYYY-MM-DDTHH:MM:SSZ = 20 chars
-	if(len s < 20)
-		return (nil, 0, "rfc3339 timestamp too short");
-
-	# Verify fixed punctuation positions.
-	if(s[4] != '-' || s[7] != '-' || (s[10] != 'T' && s[10] != ' ') ||
-	   s[13] != ':' || s[16] != ':')
-		return (nil, 0, "rfc3339 punctuation: expected YYYY-MM-DDTHH:MM:SS<TZ>");
-
-	year   := atoi4(s[0:4]);
-	month  := atoi2(s[5:7]);
-	day    := atoi2(s[8:10]);
-	hour   := atoi2(s[11:13]);
-	minute := atoi2(s[14:16]);
-	sec    := atoi2(s[17:19]);
-	if(year < 0 || month < 1 || month > 12 || day < 1 || day > 31 ||
-	   hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
-	   sec < 0 || sec > 60)
-		return (nil, 0, "rfc3339 numeric field out of range");
-
-	tz := s[19:];
-	# Tolerate fractional seconds (".sss" before the TZ marker) by skipping them.
-	if(len tz > 0 && tz[0] == '.') {
-		i := 1;
-		while(i < len tz && tz[i] >= '0' && tz[i] <= '9')
-			i++;
-		tz = tz[i:];
-	}
-
-	tzoff := 0;  # seconds east of UTC
-	if(len tz == 1 && (tz[0] == 'Z' || tz[0] == 'z')) {
-		tzoff = 0;
-	} else if(len tz == 6 && (tz[0] == '+' || tz[0] == '-') && tz[3] == ':') {
-		off_h := atoi2(tz[1:3]);
-		off_m := atoi2(tz[4:6]);
-		if(off_h < 0 || off_h > 23 || off_m < 0 || off_m > 59)
-			return (nil, 0, "rfc3339 timezone offset out of range");
-		tzoff = (off_h * 3600) + (off_m * 60);
-		if(tz[0] == '-')
-			tzoff = -tzoff;
-	} else {
-		return (nil, 0, "rfc3339 timezone: expected Z, +HH:MM, or -HH:MM");
-	}
-
-	tm := ref Daytime->Tm;
-	tm.sec  = sec;
-	tm.min  = minute;
-	tm.hour = hour;
-	tm.mday = day;
-	tm.mon  = month - 1;     # daytime uses 0-11
-	tm.year = year - 1900;   # daytime uses year-1900
-	tm.zone = "GMT";
-	tm.tzoff = 0;
-	return (tm, tzoff, "");
-}
-
-# atoi2 / atoi4: strict-width unsigned decimal parsers. Return -1 on
-# any non-digit character. Used by parserfc3339 so a stray letter
-# anywhere in a fixed-width field fails the parse cleanly rather than
-# silently producing the wrong number.
-atoi2(s: string): int
-{
-	if(len s != 2 || s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9')
-		return -1;
-	return (s[0] - '0') * 10 + (s[1] - '0');
-}
-
-atoi4(s: string): int
-{
-	if(len s != 4)
-		return -1;
-	v := 0;
-	for(i := 0; i < 4; i++) {
-		if(s[i] < '0' || s[i] > '9')
-			return -1;
-		v = v * 10 + (s[i] - '0');
-	}
-	return v;
+	return ((target - now) * 1000, "");
 }
 
 # Collector goroutine: reads result from pipe with a per-subagent timeout.

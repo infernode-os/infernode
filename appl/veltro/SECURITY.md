@@ -284,6 +284,46 @@ Options:
 - `temperature=<float>` -- 0.0-2.0 (default: 0.7)
 - `thinking=<val>` -- off, max, or token budget 0-30000
 - `system=<prompt>` -- explicit system prompt (overrides agenttype)
+- `at=<rfc3339>` -- delay until the named instant, then run a single iteration (INFR-14)
+- `every=<int><s|m|h|d>` -- loop, sleeping that long between iterations, until killed (INFR-14)
+
+### Scheduling: sleeping subagents (INFR-14)
+
+`at=` and `every=` schedule work the Inferno-native way: the schedule
+**is** a sleeping subagent in `/prog`, in its own attenuated namespace.
+There is no scheduler service, no central registry, no cron syntax, and
+no shared mutable state. Capabilities are bound at spawn time (FORKNS +
+restrictns happen *before* the sleep), so the sleeping process holds
+exactly the namespace it will run in — even if every relevant config
+changes before the wake.
+
+```
+# Run once at a specific instant:
+spawn tools=read,list at=2026-05-10T09:00:00Z -- list /n/llm
+
+# Run hourly until killed:
+spawn tools=read,list every=1h -- list /n/mail/<acct>/boxes/INBOX
+```
+
+`spawn` returns immediately with `scheduled: ...` (no waiting on the
+collector). To inspect or cancel:
+
+```
+ps                                  # the sleeping subagent shows up here
+echo kill > /prog/<pid>/ctl         # cancellation
+cat /prog/<pid>/ns                  # confirm caps
+```
+
+`at=` accepts RFC3339 timestamps (`Z`, `+HH:MM`, or `-HH:MM` zones,
+optional fractional seconds). Past times are rejected at parse time.
+`every=` accepts `<int><s|m|h|d>` durations.
+
+`every=` v1 reuses the same LLM session across iterations — conversation
+history accumulates. For tasks where this matters (e.g. "summarise new
+items each hour" against an LLM that should not see previous summaries),
+opening a fresh session per iteration is a future revision; for polling
+tasks against a freshly-mounted 9P fs that doesn't depend on prior
+context, history reuse is fine.
 
 ### Speech
 

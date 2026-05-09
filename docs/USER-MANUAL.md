@@ -2,6 +2,12 @@
 
 A practical guide to using InferNode, the AI-agent-friendly operating system.
 
+> **First time?** The fastest way to see what InferNode does is the
+> interactive guided tour. Launch Lucia and type `run the tour` in the
+> conversation zone, or run `veltro 'run the tour'` from a headless
+> shell. See [RUN_TOUR.md](../RUN_TOUR.md). The rest of this manual is
+> the reference; the tour is the demo.
+
 ---
 
 ## Table of Contents

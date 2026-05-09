@@ -8,8 +8,12 @@
 # Started by serve-llm.sh on the host:
 #   emu -c1 -r$ROOT sh /lib/sh/serve-profile
 #
-# Round 2 will add gpusrv (TensorRT 9P) once emu is rebuilt with GPU
-# support (mkfile-gpu-1).
+# Listen-side authentication mode is read from the host environment via
+# `os sh`:
+#   SERVE_LLM_AUTH=keyring   (default; requires keyfile)
+#   SERVE_LLM_AUTH=anon      (--anon-lan opt-in; preserves pre-INFR-16 behaviour)
+#   SERVE_LLM_KEY=<path>     (in-emu path to the signer keyfile; default /lib/keyring/serve-llm)
+# These are set by serve-llm.sh; never edit this profile to flip them.
 
 load std
 path=(/dis .)
@@ -22,12 +26,16 @@ ndb/cs
 # ── Host filesystem (read-only is fine for the daemon) ─────
 trfs '#U*' /n/local
 
-# ── Bind user config over /lib/ndb so the daemon reads the
-#    same backend/model the desktop is configured with. ────
+# ── Bind user config over /lib/ndb (same backend/model the desktop
+#    uses) and /lib/keyring (signer keys) into the in-emu namespace. ──
 ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 infhome=$ghome^/.infernode
 if {ftest -d $infhome/lib/ndb} {
 	bind -bc $infhome/lib/ndb /lib/ndb
+}
+if {ftest -d $infhome/lib/keyring} {
+	mkdir -p /lib/keyring >[2] /dev/null
+	bind -bc $infhome/lib/keyring /lib/keyring
 }
 
 # ── LLM service (mounts /n/llm) ─────────────────────────────
@@ -49,7 +57,28 @@ if {~ $llmbackend openai} {
 sleep 2
 
 # ── 9P export ───────────────────────────────────────────────
-# -A: no auth (LAN/ZeroTier only — switch to keyring for prod)
+# Default: keyring auth (Inferno Ed25519 signer). Clients dial with
+#   mount -k <keyfile> tcp!host!5640 /n/llm
+# --anon-lan: anonymous attach (-A), the pre-INFR-16 default. Only safe
+# on a trusted network (LAN, ZeroTier with strict ACLs, VPN).
 # -s: synchronous, blocks here so emu stays alive while listening.
-# Single quotes around the addr prevent rc from globbing '*'.
-listen -sA 'tcp!*!5640' {export /n/llm}
+#
+# Mode is read from the host environment via `os sh`. serve-llm.sh
+# always exports both vars (defaults baked in there), so we don't try
+# to apply ${VAR:-default} fallbacks here — rc's quoting and brace
+# parsing make that fragile.
+authmode=`{os sh -c 'printf %s "$SERVE_LLM_AUTH"'}
+keyfile=`{os sh -c 'printf %s "$SERVE_LLM_KEY"'}
+if {~ $authmode anon} {
+	echo 'serve-profile: WARNING listen mode anon (--anon-lan) - no authentication'
+	listen -sA 'tcp!*!5640' {export /n/llm}
+}{
+	if {! ftest -f $keyfile} {
+		echo 'serve-profile: ERROR keyring auth requested but keyfile not found at' $keyfile
+		echo 'serve-profile: generate one with: serve-llm.sh --gen-key'
+		echo 'serve-profile: or pass --anon-lan to listen without authentication'
+		exit fail
+	}
+	echo 'serve-profile: listen mode keyring keyfile' $keyfile
+	listen -s -k $keyfile 'tcp!*!5640' {export /n/llm}
+}

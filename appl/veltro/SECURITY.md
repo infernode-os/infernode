@@ -609,26 +609,28 @@ This is where `nswalk` lives: not as a user-facing tool, but as a
 subroutine of the ground-truth check. Once it exists as a subroutine,
 exposing it as a user tool is cheap.
 
-### NODEVS short-term fix, independent of nsaudit
+### NODEVS at top-level FORKNS sites — applied (INFR-17)
 
-`pctl(NODEVS)` is applied only in the spawned-child path
-(`spawn.b:576`). Top-level agents (`veltro.b:168`, `repl.b:169`,
-`tools9p.b:644`) call `pctl(FORKNS)` and `restrictns()` but leave
-`pgrp->nodevs == 0`. The kernel device gate is at
-`emu/port/chan.c:1041-1051`; with `nodevs` unset, `sys->bind("#sfactotum",
-"/tmp/veltro/x", MREPL)` succeeds and reaches factotum regardless of
-path-based restriction.
+`pctl(NODEVS)` is now applied at all three top-level FORKNS sites
+(`veltro.b:168`, `repl.b:169`, `tools9p.b:644`) in addition to the
+spawned-child path (`spawn.b:576`). The kernel device gate is at
+`emu/port/chan.c:1041-1051`; the gate fails attach on any `#x` path
+outside the `|esDa` allowlist (and on subspecs of `#s` such as
+`#sfactotum`).
 
-Today this is latent — top-level agents do not invoke `bind` on `#x`
-paths from model-driven code. It becomes exploitable the moment any tool
-or exec invocation does.
+Before the fix this was latent — top-level agents did not invoke `bind`
+on `#x` paths from model-driven code, but it would have become
+exploitable the moment any tool or `exec` invocation did. Equivalent
+of OpenClaw's CSWSH-class reach, at the kernel-attach layer instead of
+HTTP.
 
-Fix: add `sys->pctl(Sys->NODEVS, nil)` to the three top-level FORKNS
-sites. The kernel gate is strictly stronger than the path gate for
-device-attach, and none of the top-level agents has a documented need for
-`#x` devices outside the `nodevs` allowlist (`|esDa`). Once fixed,
-`SUBAGENT_MISSING_NODEVS` plus an analogous `TOPLEVEL_MISSING_NODEVS`
-rule keep it fixed.
+Verified by `tests/veltro_security_test.b::testNodevsBlocksDeviceAttach`
+which establishes a positive control (bind on `#p` succeeds before
+NODEVS) and two negative controls (bind on `#p` and `#sfactotum` fail
+after NODEVS).
+
+The companion `TOPLEVEL_MISSING_NODEVS` static rule for `nsaudit` keeps
+this gate from being silently removed by future edits.
 
 ### Sequencing
 

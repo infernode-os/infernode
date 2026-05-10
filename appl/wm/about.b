@@ -42,9 +42,32 @@ WINH: con 590;
 PADDING: con 12;
 LINEH: con 18;	# line height for body labels
 
-init(ctxt: ref Draw->Context, nil: list of string)
+# INFR-26 timing instrumentation. Set ABOUT_TIMING=1 in env (or pass
+# -t in argv) to enable; logs "about: T+<ms> <label>" to stderr at
+# each measurement point. T+0 is the start of init().
+tstart_g: int;
+ttrace_g: int;
+tlog(label: string)
+{
+	if(!ttrace_g)
+		return;
+	sys->fprint(sys->fildes(2), "about: T+%d %s\n",
+		sys->millisec() - tstart_g, label);
+}
+
+init(ctxt: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	tstart_g = sys->millisec();
+	# Honour -t flag for opt-in timing without env var fishing.
+	for(a := args; a != nil; a = tl a)
+		if(hd a == "-t")
+			ttrace_g = 1;
+	if(!ttrace_g) {
+		envfd := sys->open("/env/ABOUT_TIMING", Sys->OREAD);
+		if(envfd != nil) ttrace_g = 1;
+	}
+	tlog("init enter");
 	if(ctxt == nil) {
 		sys->fprint(sys->fildes(2), "about: no window context\n");
 		raise "fail:bad context";
@@ -62,12 +85,15 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		sys->fprint(sys->fildes(2), "about: cannot load widget: %r\n");
 		raise "fail:load widget";
 	}
+	tlog("modules loaded");
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
+	tlog("wmclient->init done");
 
 	w := wmclient->window(ctxt, "About InferNode", Wmclient->Appl);
 	display := w.display;
+	tlog("window allocated");
 
 	# Init widget module with body font
 	bodyfont := Font.open(display, "/fonts/combined/unicode.sans.12.font");
@@ -75,13 +101,16 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		bodyfont = Font.open(display, "/fonts/combined/unicode.sans.14.font");
 	if(bodyfont == nil)
 		bodyfont = Font.open(display, "*default*");
+	tlog("body font open");
 	widgetmod->init(display, bodyfont);
 
 	w.reshape(Rect((0, 0), (WINW, WINH)));
 	w.startinput("ptr" :: "kbd" :: nil);
 	w.onscreen(nil);
+	tlog("window onscreen");
 
 	redraw(w, display);
+	tlog("first paint complete");
 
 	# Listen for live theme changes
 	themech := chan[1] of int;
@@ -101,9 +130,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		w.pointer(*p);
 
 	<-themech =>
+		tlog("themech retheme begin");
 		widgetmod->retheme(display);
 		wmclient->retheme(w);
 		redraw(w, display);
+		tlog("themech retheme paint complete");
 	}
 }
 
@@ -112,6 +143,8 @@ redraw(w: ref Window, display: ref Display)
 	screen := w.image;
 	if(screen == nil)
 		return;
+
+	tlog("redraw enter");
 
 	# Load theme
 	theme: ref Theme;
@@ -133,6 +166,7 @@ redraw(w: ref Window, display: ref Display)
 		titlefont = Font.open(display, "/fonts/combined/unicode.sans.14.font");
 	if(titlefont == nil)
 		titlefont = Font.open(display, "*default*");
+	tlog("title font open");
 
 	r := screen.r;
 	cx := (r.min.x + r.max.x) / 2;
@@ -157,14 +191,17 @@ redraw(w: ref Window, display: ref Display)
 		if(bufio != nil) {
 			readpng := load RImagefile RImagefile->READPNGPATH;
 			remap := load Imageremap Imageremap->PATH;
+			tlog("png modules loaded");
 			if(readpng != nil && remap != nil) {
 				readpng->init(bufio);
 				remap->init(display);
 				fd := bufio->open(logopath, Bufio->OREAD);
 				if(fd != nil) {
 					(raw, nil) := readpng->read(fd);
+					tlog("png decoded");
 					if(raw != nil)
 						(logo, nil) = remap->remap(raw, display, 0);
+					tlog("png remapped to display");
 				}
 			}
 		}
@@ -240,6 +277,7 @@ redraw(w: ref Window, display: ref Display)
 	}
 
 	screen.flush(Draw->Flushnow);
+	tlog("redraw flush done");
 }
 
 # Nearest-neighbor scale: blit src into dst at integer scale factor

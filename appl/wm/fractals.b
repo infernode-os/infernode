@@ -45,6 +45,19 @@ Fractals: module
 };
 
 stderr: ref Sys->FD;
+
+# INFR-26 timing instrumentation. -t flag in argv or /env/FRACTALS_TIMING
+# enables; logs "fractals: T+<ms> <label>" to stderr. T+0 is start of init().
+tstart_g: int;
+ttrace_g: int;
+tlog(label: string)
+{
+	if(!ttrace_g)
+		return;
+	sys->fprint(sys->fildes(2), "fractals: T+%d %s\n",
+		sys->millisec() - tstart_g, label);
+}
+
 w: ref Window;
 display: ref Display;
 font: ref Font;
@@ -164,10 +177,22 @@ juliapresets := array[JULIA_PRESETS] of {
 init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
+	tstart_g = sys->millisec();
+	# INFR-26: opt-in timing instrumentation. -t in argv enables;
+	# /env/FRACTALS_TIMING also enables. Logs "fractals: T+<ms> <label>".
+	for(a := argv; a != nil; a = tl a)
+		if(hd a == "-t")
+			ttrace_g = 1;
+	if(!ttrace_g) {
+		envfd := sys->open("/env/FRACTALS_TIMING", Sys->OREAD);
+		if(envfd != nil) ttrace_g = 1;
+	}
+	tlog("init enter");
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	menumod = load Menu Menu->PATH;
 	stderr = sys->fildes(2);
+	tlog("modules loaded (Sys/Draw/Wmclient/Menu)");
 
 	if(ctxt == nil) {
 		sys->fprint(stderr, "fractals: no window context\n");
@@ -176,6 +201,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
+	tlog("wmclient->init done");
 
 	# Parse colour cube args
 	R = G = B = 6;
@@ -187,10 +213,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	sys->sleep(100);
 	w = wmclient->window(ctxt, "Fractals", Wmclient->Appl);
 	display = w.display;
+	tlog("window allocated (after 100ms sleep)");
 
 	font = Font.open(display, "/fonts/combined/unicode.sans.14.font");
 	if(font == nil)
 		font = Font.open(display, "*default*");
+	tlog("font open");
 
 	# Build colour palette
 	colours = array[256] of ref Image;
@@ -198,22 +226,27 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		colours[i] = display.rgb(col(i / (G * B), R),
 					col(i / B, G),
 					col(i, B));
+	tlog("256-entry colour palette built");
 
 	loadcanvasbg();
+	tlog("canvasbg loaded from theme");
 
 	w.reshape(Rect((0, 0), (WIDTH, HEIGHT)));
 	w.startinput("kbd" :: "ptr" :: nil);
 	w.onscreen(nil);
+	tlog("window onscreen");
 
 	if(menumod != nil) {
 		menumod->init(display, font);
 		mainmenu = menumod->newgen(mainmenuitems);
 		juliamenu = menumod->newgen(juliamenuitems);
 	}
+	tlog("menus built");
 
 	widget = load Widget Widget->PATH;
 	if(widget != nil)
 		widget->init(display, font);
+	tlog("widget loaded + init");
 
 	# Initialize Veltro IPC
 	initfractdir();
@@ -259,6 +292,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		spawn docalculate(sync, p, imgch);
 		pid = <-sync;
 		imgch <-= (w.image, canvr);
+		tlog("first compute kicked off (imgch <- canvas)");
 	}
 
 	stack: list of (Fracrect, Params);
@@ -419,11 +453,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			updatesbar();
 		<-sync =>
 			w.image.flush(Draw->Flushon);
+			tlog("compute complete (sync <- worker)");
 			pid = -1;
 			g_computing = 0;
 			writefractstate();
 			updatesbar();
 		<-themech =>
+			tlog("themech retheme begin");
 			loadcanvasbg();
 			if(widget != nil)
 				widget->retheme(display);

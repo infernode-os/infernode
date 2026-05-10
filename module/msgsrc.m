@@ -50,8 +50,10 @@ MsgSrc: module
 	# Send on stop channel to terminate. Returns error or nil.
 	watch:   fn(updates: chan of ref Notification, stop: chan of int): string;
 
-	# Pull interface (on-demand queries)
-	list:    fn(channel: string, count: int): (list of ref Message, string);
+	# Pull interface (on-demand queries).
+	# enumerate: return up to `count` messages from `channel` (avoids
+	# clashing with the `list` type keyword).
+	enumerate: fn(channel: string, count: int): (list of ref Message, string);
 	fetch:   fn(id: string): (ref Message, string);
 	search:  fn(query: string): (list of ref Message, string);
 

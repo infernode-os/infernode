@@ -56,6 +56,7 @@ include "arg.m";
 
 include "plumbmsg.m";
 	plumbmod: Plumbmsg;
+	Msg: import plumbmod;
 
 Ftree: module
 {
@@ -535,7 +536,7 @@ loadchildren(pi: int)
 		for(i := nnodes - 1; i >= insert; i--)
 			nodes[i + count] = nodes[i];
 		# Fix parent indices that shifted
-		for(i := 0; i < nnodes + count; i++) {
+		for(i = 0; i < nnodes + count; i++) {
 			if(i >= insert && i < insert + count)
 				continue;
 			if(nodes[i] != nil && nodes[i].parent >= insert)
@@ -546,7 +547,7 @@ loadchildren(pi: int)
 	# Add directory entries first, then files (dirs sort to top)
 	j := insert;
 	# Directories first
-	for(i := 0; i < n; i++) {
+	for(i = 0; i < n; i++) {
 		d := dirs[i];
 		if(d.mode & Sys->DMDIR) {
 			childpath := p.path;
@@ -561,7 +562,7 @@ loadchildren(pi: int)
 		}
 	}
 	# Then files
-	for(i := 0; i < n; i++) {
+	for(i = 0; i < n; i++) {
 		d := dirs[i];
 		if(!(d.mode & Sys->DMDIR)) {
 			childpath := p.path;

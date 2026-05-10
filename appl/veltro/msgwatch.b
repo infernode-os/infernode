@@ -27,7 +27,7 @@ include "string.m";
 
 include "arg.m";
 
-include "../agentlib.m";
+include "agentlib.m";
 	agentlib: AgentLib;
 
 Msgwatch: module {

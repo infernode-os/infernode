@@ -38,7 +38,7 @@ EmailSrc: module {
 	status:  fn(): string;
 	close:   fn(): string;
 	watch:   fn(updates: chan of ref MsgSrc->Notification, stop: chan of int): string;
-	list:    fn(channel: string, count: int): (list of ref MsgSrc->Message, string);
+	enumerate: fn(channel: string, count: int): (list of ref MsgSrc->Message, string);
 	fetch:   fn(id: string): (ref MsgSrc->Message, string);
 	search:  fn(query: string): (list of ref MsgSrc->Message, string);
 	send:    fn(msg: ref MsgSrc->Message): string;
@@ -311,8 +311,8 @@ reconnect(): string
 	return nil;
 }
 
-# list: return last N messages from the current folder
-list(channel: string, count: int): (list of ref Message, string)
+# enumerate: return last N messages from the current folder
+enumerate(channel: string, count: int): (list of ref Message, string)
 {
 	err := ensureconnected();
 	if(err != nil)
@@ -437,7 +437,7 @@ send(msg: ref Message): string
 	lines = "To: " + msg.recipient :: lines;
 	lines = "Subject: " + subject :: lines;
 	if(daytime != nil)
-		lines = "Date: " + daytime->text(daytime->now()) :: lines;
+		lines = "Date: " + daytime->text(daytime->local(daytime->now())) :: lines;
 	lines = "" :: lines;
 	lines = msg.body :: lines;
 
@@ -518,7 +518,7 @@ reply(origid, body: string): string
 	if(refs != "")
 		lines = "References: " + refs :: lines;
 	if(daytime != nil)
-		lines = "Date: " + daytime->text(daytime->now()) :: lines;
+		lines = "Date: " + daytime->text(daytime->local(daytime->now())) :: lines;
 	lines = "" :: lines;
 	lines = body :: lines;
 

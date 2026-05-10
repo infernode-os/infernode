@@ -35,15 +35,6 @@ Wmclient: module
 		ptrfocus:	int;
 		saved:	Draw->Point;			# saved origin before task
 
-		# kbd safety-net (INFR-29): Wmclient->window spawns a default
-		# drainer on ctxt.kbd that discards events the app didn't
-		# subscribe to.  startinput("kbd") signals the drainer to
-		# exit so the app can read ctxt.kbd directly.  Apps don't
-		# need to know about these fields — they're managed
-		# entirely by wmclient.
-		kbdsubscribed:	int;
-		kbdstop:	chan of int;
-
 		startinput:	fn(w: self ref Window, devs: list of string);
 		wmctl:	fn(w: self ref Window, request: string): string;
 		settitle:	fn(w: self ref Window, name: string): string;

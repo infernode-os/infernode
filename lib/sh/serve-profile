@@ -62,6 +62,12 @@ sleep 2
 # --anon-lan: anonymous attach (-A), the pre-INFR-16 default. Only safe
 # on a trusted network (LAN, ZeroTier with strict ACLs, VPN).
 # -s: synchronous, blocks here so emu stays alive while listening.
+# {export /n/llm &}: fork the export so listen's accept loop can take
+# the next connection immediately. Without the &, listen runs export
+# inline and blocks until that single client disconnects — a second
+# mount attempt then silently hangs at TVERSION. The & makes export
+# a child; each new connect spawns its own export against the shared
+# /n/llm namespace.
 #
 # Mode is read from the host environment via `os sh`. serve-llm.sh
 # always exports both vars (defaults baked in there), so we don't try
@@ -71,7 +77,7 @@ authmode=`{os sh -c 'printf %s "$SERVE_LLM_AUTH"'}
 keyfile=`{os sh -c 'printf %s "$SERVE_LLM_KEY"'}
 if {~ $authmode anon} {
 	echo 'serve-profile: WARNING listen mode anon (--anon-lan) - no authentication'
-	listen -sA 'tcp!*!5640' {export /n/llm}
+	listen -sA 'tcp!*!5640' {export /n/llm &}
 }{
 	if {! ftest -f $keyfile} {
 		echo 'serve-profile: ERROR keyring auth requested but keyfile not found at' $keyfile
@@ -80,5 +86,5 @@ if {~ $authmode anon} {
 		exit fail
 	}
 	echo 'serve-profile: listen mode keyring keyfile' $keyfile
-	listen -s -k $keyfile 'tcp!*!5640' {export /n/llm}
+	listen -s -k $keyfile 'tcp!*!5640' {export /n/llm &}
 }

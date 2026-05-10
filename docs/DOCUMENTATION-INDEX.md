@@ -9,8 +9,6 @@
 | [USER-MANUAL.md](USER-MANUAL.md) | **Comprehensive user guide** - namespaces, devices, host integration |
 | [QUICKSTART.md](../QUICKSTART.md) | Get running in 3 commands |
 | [RUN_TOUR.md](../RUN_TOUR.md) | Interactive Veltro feature tour |
-| [LUCIA.md](LUCIA.md) | **Lucia GUI guide** - three-zone tiling UI, activities, tiles, themes |
-| [VELTRO.md](VELTRO.md) | **Veltro agent guide** - veltro/repl/spawn, 40 tools, models, capabilities |
 | [XENITH.md](XENITH.md) | Xenith AI-native text environment |
 | [NAMESPACE.md](NAMESPACE.md) | Namespace architecture and configuration |
 | [FILESYSTEM-MOUNTING.md](FILESYSTEM-MOUNTING.md) | Filesystem mounting guide |
@@ -21,7 +19,7 @@
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, layer diagram, and component overview |
-| [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md) | Lucia GUI production readiness evaluation (P0/P1/P2 issues) |
+| [LUCIFER-EVALUATION.md](LUCIFER-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
 | [evaluations/fractal-app-evaluation.md](evaluations/fractal-app-evaluation.md) | Fractal app production readiness evaluation |
 | [architecture-review-veltro-unification.md](architecture-review-veltro-unification.md) | Veltro architecture review |
 | [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md) | Recommended feature additions |
@@ -32,7 +30,6 @@
 |----------|-------------|
 | [CLAUDE.md](../CLAUDE.md) | Development guide for Claude Code (build, test, project structure) |
 | [TESTING.md](TESTING.md) | Testing guide (unit tests, integration tests, CI) |
-| [JIT.md](JIT.md) | **JIT compilation guide** - `-c` flag, AMD64/ARM64 backends, coverage, troubleshooting |
 | [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) | Performance specifications and benchmarks |
 | [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results (v1, v2, v3 suites) |
 | [SDL3-GUI-PLAN.md](SDL3-GUI-PLAN.md) | SDL3 cross-platform GUI implementation plan |
@@ -43,6 +40,13 @@
 | Document | Description |
 |----------|-------------|
 | [WALLET-AND-PAYMENTS.md](WALLET-AND-PAYMENTS.md) | **Comprehensive guide** - wallet9p, x402 protocol, secstore, factotum, key persistence, login screen |
+
+## Authentication
+
+| Document | Description |
+|----------|-------------|
+| [AUTHENTICATION.md](AUTHENTICATION.md) | **Canonical reference** — secstore + factotum protocol, PAK exchange, on-disk format, boot orchestration, threat model |
+| [DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md) | Multi-host deployment topologies — standalone, dedicated server, p2p, hybrid; includes diagrams and a comparison matrix |
 
 ## Security
 
@@ -77,14 +81,15 @@
 
 ## ARM64 JIT Compiler
 
-User-facing JIT guide: [JIT.md](JIT.md). Detailed implementation, debug logs, and benchmarks across all platforms are in `docs/arm64-jit/` (27 files).
+Detailed JIT documentation is in `docs/arm64-jit/` (27 files covering implementation, debugging, benchmarks across all platforms).
 
 ## Additional Guides
 
 | Document | Description |
 |----------|-------------|
 | [PDF.md](PDF.md) | PDF support documentation |
-| [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md) | Speech and remote audio |
+| [SPEECH-ARCHITECTURE.md](SPEECH-ARCHITECTURE.md) | **speech9p architecture** — file tree, three engines (cmd / api / local), TTS/STT data flow, devcmd bridge, Veltro + lucibridge integration, threat surface |
+| [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md) | Cross-host speech via 9P namespace composition |
 | [RUNNING-ACME.md](RUNNING-ACME.md) | Running the Acme editor |
 | [SONARQUBE_WORK.md](SONARQUBE_WORK.md) | SonarQube static analysis work |
 

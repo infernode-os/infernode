@@ -89,18 +89,13 @@ Or with the shell profile loaded (sets up PATH, creates `/tmp`, etc.):
 
 ### Lucifer (GUI build)
 
-Lucifer is a three-zone AI interface (conversation, presentation, context) designed for human-AI collaboration. Launch it with:
+Lucifer is a three-zone AI interface (conversation, presentation, context) designed for human-AI collaboration. Launch it the same way as on macOS and Linux — direct `emu` against the canonical boot script:
 
 ```powershell
-.\run-lucifer.ps1
-.\run-lucifer.ps1 -Width 1920 -Height 1080    # custom resolution
+.\emu\Nt\o.emu.exe -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r%CD% sh -l /lib/lucifer/boot.sh
 ```
 
-Or manually:
-
-```powershell
-.\emu\Nt\o.emu.exe -g 1280x800 -pheap=512m -pmain=512m -pimage=512m -r . sh -l -c 'luciuisrv; echo activity create Main > /n/ui/ctl; lucifer'
-```
+Add `-g WxH` for a custom window size (e.g. `-g 1920x1080`). `/lib/lucifer/boot.sh` is the canonical boot orchestration shared with macOS and Linux. See [QUICKSTART.md](../QUICKSTART.md#running-for-development) for the cross-platform table.
 
 ### Common Flags
 

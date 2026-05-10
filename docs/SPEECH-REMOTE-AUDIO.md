@@ -1,5 +1,11 @@
 # Remote Speech: 9P Audio Composition
 
+> **Scope.** This document covers *remoting* — putting the speech server on a
+> different host from the audio device, exploiting Plan 9 namespace
+> composition. For the architecture of `speech9p` itself (file tree, engines,
+> data flow, agent integration), see
+> [SPEECH-ARCHITECTURE.md](SPEECH-ARCHITECTURE.md).
+
 ## Current Design
 
 `speech9p` presents TTS/STT as a 9P filesystem at `/n/speech`:

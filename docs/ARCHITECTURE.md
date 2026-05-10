@@ -27,8 +27,13 @@ Host OS (macOS / Linux / Windows)
 │           ├── /lib/         ← runtime data (fonts, tool docs, resources)
 │           └── /tmp/         ← scratch (writable at /tmp/veltro/scratch/)
 │
-└── secstored (TCP 5356)      ← encrypted key persistence (AES-256-GCM)
+└── secstored (TCP 5356)      ← encrypted key persistence
+                                  (PAK auth on the wire; client-side
+                                   AES-256-GCM at rest)
 ```
+
+See [AUTHENTICATION.md](AUTHENTICATION.md) for the full secstore/factotum architecture
+and threat model.
 
 ## Boot Sequence
 
@@ -284,9 +289,11 @@ their parent didn't have.
 
 ## Cross-Host
 
-The same stack runs on Linux ARM64 (e.g. Jetson) over ZeroTier with Ed25519 authentication
-and RC4-256 encryption. 9P mounts work cross-host: the remote Inferno namespace is
-accessible locally via `mount -A tcp!<host>!<port> /n/remote`.
+The same stack runs on Linux ARM64 (e.g. Jetson) over ZeroTier (Ed25519 host identity,
+Salsa20/Poly1305 link encryption — provided by ZeroTier itself, independent of Inferno).
+9P mounts work cross-host: the remote Inferno namespace is accessible locally via
+`mount -A tcp!<host>!<port> /n/remote`. Cross-host secstore/factotum behaviour is
+documented in [DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md).
 
 ---
 

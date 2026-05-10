@@ -314,12 +314,13 @@ if [[ -x "$ROOT/emu/Linux/o.emu" ]]; then
     fi
     echo ""
     if [[ "$GUIMODE" == "sdl3" ]]; then
-        echo "To launch Lucifer:"
-        echo "  ./run-lucifer-linux.sh"
+        echo "Run from terminal (standard dev path):"
+        echo "  $ROOT/emu/Linux/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$ROOT sh -l /lib/lucifer/boot.sh"
+        echo ""
+        echo "  stdout/stderr stream to the terminal; Ctrl-C exits."
     else
-        echo "To run (headless):"
-        echo "  cd $ROOT/emu/Linux"
-        echo "  ./o.emu -r../.. sh -l"
+        echo "Run from terminal (headless, drops to Inferno shell):"
+        echo "  $ROOT/emu/Linux/o.emu -c1 -r$ROOT sh -l"
     fi
 else
     echo "Emulator binary not found. Checking for build output..."

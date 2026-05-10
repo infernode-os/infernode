@@ -45,11 +45,12 @@ Prefer a release unless you need bleeding-edge `master` or a platform without a 
 git clone https://github.com/infernode-os/infernode.git
 cd infernode
 ./install-sdl3.sh              # one-time, GUI only
-./build-linux-amd64.sh         # or ./build-linux-arm64.sh
-./run-lucia-linux.sh           # launch the GUI
+./build-linux-amd64.sh         # or ./build-linux-arm64.sh; add 'headless' to skip SDL3
+# GUI:
+./emu/Linux/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh
+# Headless (Inferno ';' shell):
+./emu/Linux/o.emu -c1 -r$PWD sh -l
 ```
-Pass `headless` to the build script to skip SDL3. For a headless shell, run
-`./emu/Linux/o.emu -c1 -r.` (the `;` prompt gives you a full Inferno® shell with 815 utilities).
 
 **macOS (Apple Silicon):**
 ```bash
@@ -58,22 +59,21 @@ cd infernode
 ./makemk.sh                    # bootstrap mk (one-time)
 brew install sdl3 sdl3_ttf     # GUI only
 ./build-macos-sdl3.sh          # or ./build-macos-headless.sh
-./run-lucia.sh                 # launch the GUI
+# GUI:
+./emu/MacOSX/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh
+# Headless:
+./emu/MacOSX/o.emu -c1 -r$PWD sh -l
 ```
-For a headless shell, run `./emu/MacOSX/o.emu -c1 -r.`.
 
 **Windows (x86_64)** — from an **x64 Native Tools Command Prompt**:
 ```powershell
 powershell -ExecutionPolicy Bypass -File build-windows-amd64.ps1
-.\emu\Nt\o.emu.exe -r .
+# Headless (Inferno ';' shell):
+.\emu\Nt\o.emu.exe -c1 -r%CD% sh -l
 ```
-For the SDL3 GUI, see [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md).
+For the SDL3 GUI on Windows, see [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md); the launch shape matches the macOS/Linux GUI lines above.
 
-The `-c1` flag enables the JIT; `-r.` tells the emulator to use the current directory as the Inferno® root. See [QUICKSTART.md](QUICKSTART.md) and [docs/USER-MANUAL.md](docs/USER-MANUAL.md) for more.
-
-## Try the agent
-
-Once Lucia is up, type **`run the tour`** in the conversation zone on the left. Veltro (the in-system AI agent) walks you through the system live — opening windows, launching the fractal viewer and editor, demonstrating namespace isolation, persistent memory, and voice — using its own tools in real time. Twelve self-paced sections, nothing pre-recorded. Headless: `./emu/<plat>/o.emu -c1 -r. veltro 'run the tour'`. Full notes in [RUN_TOUR.md](RUN_TOUR.md).
+stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$PWD` tells the emulator to use the working tree as the Inferno® root, so `mk install` results show up on the next launch. See [QUICKSTART.md](QUICKSTART.md#running-for-development) and [docs/USER-MANUAL.md](docs/USER-MANUAL.md) for more.
 
 ## Highlights
 
@@ -103,7 +103,6 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 ## Documentation
 
 - [QUICKSTART.md](QUICKSTART.md) — running in under a minute
-- [RUN_TOUR.md](RUN_TOUR.md) — interactive Veltro feature tour (`run the tour`)
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — namespaces, devices, host integration
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment

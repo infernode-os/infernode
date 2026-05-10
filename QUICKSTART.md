@@ -24,22 +24,20 @@ cd infernode-*-linux-*
 # Linux x86_64 (Intel/AMD) — GUI build (requires SDL3)
 ./install-sdl3.sh                 # install SDL3 from source (one time)
 ./build-linux-amd64.sh            # builds with SDL3 GUI (default)
-./run-lucia-linux.sh              # launch Lucia GUI
+# launch — see "Running for Development" below
 
 # Linux x86_64 (Intel/AMD) — headless build (no GUI dependencies)
 ./build-linux-amd64.sh headless
-./emu/Linux/o.emu -c1 -r.         # -c1 enables JIT compiler
+# launch — see "Running for Development" below
 
 # Linux ARM64 (Jetson, Raspberry Pi, etc.)
 ./install-sdl3.sh                 # GUI only, one time
-./build-linux-arm64.sh
-./run-lucia-linux.sh              # or ./emu/Linux/o.emu -c1 -r. for headless
+./build-linux-arm64.sh            # add 'headless' to skip SDL3
 
 # macOS ARM64 (Apple Silicon)
 ./makemk.sh                       # bootstrap mk (one time)
 brew install sdl3 sdl3_ttf        # GUI only
 ./build-macos-sdl3.sh             # or ./build-macos-headless.sh
-./run-lucia.sh                    # or ./emu/MacOSX/o.emu -c1 -r. for headless
 ```
 
 ### What does `-r.` mean?
@@ -137,6 +135,39 @@ powershell -ExecutionPolicy Bypass -File build-windows-amd64.ps1
 ```
 
 This builds libraries, the `limbo` compiler, the headless emulator, and all Dis bytecode. For SDL3 GUI support, see [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md).
+
+## Running for Development
+
+Run `emu` directly from a terminal — this is the standard developer launch path on every platform. stdout/stderr stream to the terminal, Ctrl-C exits, and there is no platform packaging or signing in the loop. The runtime tree (`dis/`, `lib/`, `module/`, …) is read live from the working tree, so `mk install` results show up on the next launch with no rebuild step.
+
+| Platform | Mode | Run from the repo root |
+|---|---|---|
+| macOS   | GUI       | `./emu/MacOSX/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh` |
+| macOS   | headless  | `./emu/MacOSX/o.emu -c1 -r$PWD sh -l` |
+| Linux   | GUI       | `./emu/Linux/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh` |
+| Linux   | headless  | `./emu/Linux/o.emu -c1 -r$PWD sh -l` |
+| Windows | headless  | `.\emu\Nt\o.emu.exe -c1 -r%CD% sh -l` |
+| Windows | GUI       | Build per [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md), then same shape as the macOS/Linux GUI rows. |
+
+Same shape on every platform; only the emu path and the trailing command differ. The GUI rows invoke `/lib/lucifer/boot.sh` — the canonical boot orchestration (login → LLM service → wallet → UI server → tools9p → lucibridge → lucifer GUI) and the same script the production macOS `.app` launcher invokes, so direct-emu tests the same code path end users run. The headless rows drop you at the Inferno `;` shell prompt.
+
+Flags worth knowing:
+
+- `-c1` — JIT on (default for performance). Use `-c0` for interpreter-only when investigating a JIT-suspected bug.
+- `-pheap`/`-pmain`/`-pimage` — pool sizes; raise if you hit allocation pressure with large LLM contexts.
+- `-r<path>` — Inferno root. Use `-r$PWD` from the repo root to run against the working tree.
+
+### macOS: testing the `.app` packaging path
+
+For the rare case when you need to validate the bundle layout, launcher script, or the read-only `Resources/` snapshot semantics — not for code iteration:
+
+```sh
+./build-dev-bundle.sh
+open --stdout /tmp/infernode-dev.out --stderr /tmp/infernode-dev.err /tmp/InferNode-dev.app
+tail -F /tmp/infernode-dev.out /tmp/infernode-dev.err
+```
+
+`build-dev-bundle.sh` mirrors the CI release pipeline (`.github/workflows/release.yml`) minus codesign, notarize, and strip. It produces `/tmp/InferNode-dev.app`, an unsigned but otherwise byte-identical bundle. `open --stdout/--stderr` is required because `open` detaches from the controlling terminal; for the direct-emu path above you don't need it.
 
 ## Architecture Notes
 

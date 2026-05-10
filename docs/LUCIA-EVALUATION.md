@@ -145,23 +145,9 @@ Deleted activities are removed from the activity list but their data structures 
 
 **Fix:** Buffer global events symmetrically with per-activity events.
 
-### 18. Linux launch script argument parsing broken (run-lucifer-linux.sh)
+### 18-20. Linux/Windows launcher script bugs — RESOLVED 2026-05-06
 
-`shift` inside a `for arg in "$@"` loop doesn't work in POSIX shell -- the `for` loop iterates over the original snapshot of `$@`. The `-g` geometry flag may not parse correctly.
-
-**Fix:** Use a `while [ $# -gt 0 ]` loop with explicit `shift`.
-
-### 19. Linux launch script forces theme on every start (run-lucifer-linux.sh:45)
-
-`echo brimstone > "$ROOT/lib/lucifer/theme/current"` overwrites user theme preference on every launch. Neither macOS nor Windows scripts do this.
-
-**Fix:** Only write the default if the `current` file doesn't exist.
-
-### 20. Windows launcher missing `-l` flag (run-lucifer.ps1:28)
-
-The Windows emulator is invoked with `sh` instead of `sh -l`, so the Inferno login profile is never sourced. This skips LLM configuration, factotum setup, and other profile-based initialization that macOS/Linux get.
-
-**Fix:** Add `-l` flag to the `sh` invocation.
+The `run-lucia-linux.sh`, `run-lucia.sh`, and `run-lucia.ps1` host launch scripts (formerly `run-lucifer-*`) were removed in favour of direct `emu` invocation against `/lib/lucifer/boot.sh`, which is now the cross-platform standard documented in `QUICKSTART.md` → "Running for Development". The argument-parsing bug (P1.18), forced theme write (P1.19), and missing `-l` flag (P1.20) no longer apply — `boot.sh` is invoked through `sh -l` directly, geometry is passed to `emu` via `-g`, and theme state is no longer touched by host scripts.
 
 ---
 

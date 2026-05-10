@@ -73,6 +73,19 @@ Select the speech engine backend.
 .RI ( cmd (3)).
 .B api
 uses an HTTP API (OpenAI-compatible).
+A third backend,
+.BR local ,
+shells out to local ML binaries
+.RB ( piper " for TTS, " whisper-cli " for STT)"
+and is selected automatically on Linux when both binaries are on
+.BR $PATH ;
+the
+.B \-e
+flag itself currently rejects
+.BR local ,
+so set it via
+.B "echo 'engine local' > /n/speech/ctl"
+or rely on auto-detection.
 .TP
 .BI \-k " apikey"
 API authentication key (for
@@ -108,9 +121,7 @@ to change settings:
 .TP
 .BI engine " name"
 Switch engine backend
-.RB ( cmd
-or
-.BR api ).
+.RB ( cmd ", " api ", or " local ).
 .TP
 .BI voice " name"
 Set the voice.
@@ -142,6 +153,36 @@ Set the API endpoint URL.
 .TP
 .BI apikey " key"
 Set the API authentication key.
+.TP
+.BI piperbin " path"
+Path to the
+.I piper
+binary (for the
+.B local
+engine; default
+.IR piper ).
+.TP
+.BI pipermodel " path"
+Path to a Piper
+.I .onnx
+voice model file (for the
+.B local
+engine).
+.TP
+.BI whisperbin " path"
+Path to the
+.I whisper-cli
+binary (for the
+.B local
+engine; default
+.IR whisper-cli ).
+.TP
+.BI whispermodel " path"
+Path to a whisper.cpp
+.I .bin
+GGML model file (for the
+.B local
+engine).
 .SS Platform Support
 The
 .B cmd

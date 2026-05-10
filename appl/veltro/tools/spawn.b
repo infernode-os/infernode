@@ -43,6 +43,12 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "daytime.m";
+	daytime: Daytime;
+
+include "rfc3339.m";
+	rfc3339: Rfc3339;
+
 include "../tool.m";
 include "../nsconstruct.m";
 	nsconstruct: NsConstruct;
@@ -62,6 +68,11 @@ SubSpec: adt {
 	shellcmds: list of string;
 	llmconfig: ref NsConstruct->LLMConfig;
 	task:      string;
+	# Scheduling (INFR-14). Inferno-native scheduling primitive: a sleeping
+	# subagent in its own attenuated namespace, registered in /prog. No
+	# scheduler service, no central registry, no cron syntax.
+	at_ms:     int;   # >0: sleep this many ms before single runloop call
+	every_ms:  int;   # >0: loop {sleep this many ms; runloop} until killed
 };
 
 # Wrapper so SubAgent module values can be stored in a list
@@ -105,6 +116,13 @@ init(): string
 	if(nsconstruct == nil)
 		return "cannot load NsConstruct";
 	nsconstruct->init();
+	# daytime + rfc3339 are optional — only needed by at= scheduling.
+	# If either load fails, at= parsing returns an error; the rest of
+	# spawn keeps working.
+	daytime = load Daytime Daytime->PATH;
+	rfc3339 = load Rfc3339 Rfc3339->PATH;
+	if(rfc3339 != nil)
+		rfc3339->init();
 	inited = 1;
 	return nil;
 }
@@ -132,7 +150,11 @@ doc(): string
 		"  temperature=  LLM temperature 0.0-2.0 (default: 0.7)\n" +
 		"  thinking=     Thinking budget: off, max, or token count\n" +
 		"  agenttype=    Load prompt from /lib/veltro/agents/<type>.txt\n" +
-		"  system=       System prompt string (overrides agenttype)\n\n" +
+		"  system=       System prompt string (overrides agenttype)\n" +
+		"  at=           Sleep until RFC3339 instant (e.g. 2026-05-10T09:00:00Z)\n" +
+		"                then run a single iteration (returns 'scheduled' immediately)\n" +
+		"  every=        Sleep <int><s|m|h|d> between iterations, looping forever\n" +
+		"                until killed (echo kill > /prog/<pid>/ctl)\n\n" +
 		"Examples:\n" +
 		"  Spawn -- tools=read,list paths=/appl :: List all .b files\n" +
 		"  Spawn -- tools=read,list agenttype=explore paths=/appl :: Find handlers\n" +
@@ -238,6 +260,24 @@ exec(args: string): string
 			-1    # No cowfs — subagents inherit parent's cowfs via FORKNS
 		);
 
+		# Scheduled (at= or every=): fire-and-forget. The child becomes a
+		# real, killable process visible in /prog; result collection
+		# would block well past any sane timeout (at= may be hours away;
+		# every= never returns), so we report "scheduled" immediately and
+		# do not spawn a collector. Cancellation: echo kill > /prog/$pid/ctl.
+		if(spec.at_ms > 0 || spec.every_ms > 0) {
+			# Pass nil pipe — runchild detects this and writes nothing back.
+			spawn runchild(nil, caps, spec.task, slot.mod, spec.at_ms, spec.every_ms);
+			schedmsg: string;
+			if(spec.at_ms > 0)
+				schedmsg = sys->sprint("scheduled: single run in %d ms", spec.at_ms);
+			else
+				schedmsg = sys->sprint("scheduled: every %d ms (kill via /prog/<pid>/ctl)", spec.every_ms);
+			resultchan <-= ref ResultMsg(idx, schedmsg);
+			idx++;
+			continue;
+		}
+
 		pipefds := array[2] of ref Sys->FD;
 		if(sys->pipe(pipefds) < 0) {
 			# Send error directly — channel is buffered, won't block
@@ -246,7 +286,7 @@ exec(args: string): string
 			continue;
 		}
 
-		spawn runchild(pipefds[1], caps, spec.task, slot.mod);
+		spawn runchild(pipefds[1], caps, spec.task, slot.mod, 0, 0);
 		pipefds[1] = nil;
 		spawn collectorwithTimeout(pipefds[0], resultchan, timeout_ms, idx);
 		idx++;
@@ -456,8 +496,28 @@ parsespecsection(section: string): (ref SubSpec, string)
 			llmsystem = stripquotes(tv[7:]);
 		} else if(hasprefix(tv, "agenttype=")) {
 			agenttype = str->tolower(tv[10:]);
+		} else if(hasprefix(tv, "at=")) {
+			# Schedule a single run after sleeping until the named
+			# RFC3339 instant. Inferno-native: the schedule IS a
+			# sleeping subagent in /prog. No daemon, no registry.
+			(delta_ms, derr) := parserfc3339delta(tv[3:]);
+			if(derr != "")
+				return (nil, "at=: " + derr);
+			spec.at_ms = delta_ms;
+		} else if(hasprefix(tv, "every=")) {
+			# Schedule a recurring run every <duration>. Loops until
+			# the subagent process is killed (echo kill > /prog/$pid/ctl).
+			(period_ms, perr) := parseduration(tv[6:]);
+			if(perr != "")
+				return (nil, "every=: " + perr);
+			if(period_ms <= 0)
+				return (nil, "every=: period must be positive");
+			spec.every_ms = period_ms;
 		}
 	}
+
+	if(spec.at_ms > 0 && spec.every_ms > 0)
+		return (nil, "cannot combine at= and every= in the same section");
 
 	if(spec.tools == nil)
 		return (nil, "tools= is required in each section");
@@ -469,6 +529,55 @@ parsespecsection(section: string): (ref SubSpec, string)
 
 	spec.llmconfig = ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem, llmthink);
 	return (spec, "");
+}
+
+# parseduration accepts ISO-8601-flavoured suffixes: <int><unit>
+# where unit is s, m, h, or d. Returns (milliseconds, error).
+# Examples: "30s" -> (30000, ""); "1h" -> (3600000, ""); "1d" -> (86400000, "").
+parseduration(s: string): (int, string)
+{
+	if(s == "")
+		return (0, "empty duration");
+	n := len s;
+	if(n < 2)
+		return (0, "duration too short (need <int><s|m|h|d>)");
+	unit := s[n-1];
+	digits := s[0:n-1];
+	# Reject non-digit prefixes early — `int "30s"` would silently strip
+	# the suffix and succeed, defeating the unit check.
+	for(i := 0; i < len digits; i++)
+		if(digits[i] < '0' || digits[i] > '9')
+			return (0, "duration must be <int><unit>");
+	val := int digits;
+	if(val < 0)
+		return (0, "negative duration");
+	mult: int;
+	case unit {
+	's' => mult = 1000;
+	'm' => mult = 60 * 1000;
+	'h' => mult = 3600 * 1000;
+	'd' => mult = 86400 * 1000;
+	*   => return (0, "unknown unit (use s/m/h/d)");
+	}
+	return (val * mult, "");
+}
+
+# parserfc3339delta wraps the shared appl/lib/rfc3339 parser to return
+# the delta from now in milliseconds. Returns an error if parsing fails
+# or the target is in the past. The "in the past" policy is local to
+# scheduling — rfc3339->parse itself is policy-free and just returns
+# absolute UTC epoch seconds.
+parserfc3339delta(s: string): (int, string)
+{
+	if(rfc3339 == nil || daytime == nil)
+		return (0, "rfc3339 / daytime module not available");
+	(target, perr) := rfc3339->parse(s);
+	if(perr != "")
+		return (0, perr);
+	now := daytime->now();
+	if(target <= now)
+		return (0, "target time is in the past");
+	return ((target - now) * 1000, "");
 }
 
 # Collector goroutine: reads result from pipe with a per-subagent timeout.
@@ -496,7 +605,15 @@ collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, tim
 
 # Run one child agent with FORKNS + bind-replace namespace isolation.
 # samod is a dedicated SubAgent instance — not shared with any other child.
-runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string, samod: SubAgent)
+#
+# Scheduling caps (INFR-14):
+#   at_ms > 0    -> sleep that many ms once, then run a single iteration
+#   every_ms > 0 -> loop {sleep that many ms; run iteration} until killed
+#   both 0       -> single iteration immediately (existing behaviour)
+# When scheduled, pipefd is nil: parent has already reported "scheduled"
+# and is not waiting. Cancellation: echo kill > /prog/$pid/ctl.
+runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string,
+         samod: SubAgent, at_ms: int, every_ms: int)
 {
 	# Step 1: Fresh process group (empty service registry)
 	sys->pctl(Sys->NEWPGRP, nil);
@@ -566,8 +683,11 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string,
 	# Step 6: Verify FDs 0-2 are safe endpoints
 	verifysafefds();
 
-	# Step 7: Prune FDs — keep stdin, stdout, stderr, pipe, and LLM ask fd
-	keepfds := 0 :: 1 :: 2 :: pipefd.fd :: nil;
+	# Step 7: Prune FDs — keep stdin, stdout, stderr; pipe (if present);
+	# and the LLM ask fd. pipefd is nil for fire-and-forget scheduled runs.
+	keepfds := 0 :: 1 :: 2 :: nil;
+	if(pipefd != nil)
+		keepfds = pipefd.fd :: keepfds;
 	if(llmaskfd != nil)
 		keepfds = llmaskfd.fd :: keepfds;
 	sys->pctl(Sys->NEWFD, keepfds);
@@ -588,6 +708,28 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string,
 	systemprompt := "";
 	if(caps.llmconfig != nil)
 		systemprompt = caps.llmconfig.system;
+
+	# at= scheduling: sleep once before the (single) iteration. Caps are
+	# already attenuated above — the sleeping process holds the same
+	# restricted namespace it will run in. Cancellation works as expected
+	# (echo kill > /prog/$pid/ctl) because we are a real Limbo process.
+	if(at_ms > 0)
+		sys->sleep(at_ms);
+
+	# every= scheduling: loop forever. Each iteration reuses the LLM
+	# session opened in Step 4, so conversation history accumulates across
+	# runs (the SubAgent is essentially having one long conversation,
+	# punctuated by sleeps). For tasks where this matters, opening a
+	# fresh session per iteration is a follow-up; for "list new emails
+	# every hour"-style polling against tools that read a freshly-mounted
+	# 9P fs, history reuse is fine.
+	if(every_ms > 0) {
+		for(;;) {
+			sys->sleep(every_ms);
+			samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, 50);
+		}
+		# unreachable
+	}
 
 	# Run the agent loop using the dedicated (non-shared) SubAgent instance
 	result := samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, 50);
@@ -633,6 +775,11 @@ verifysafefds()
 # Write result string to pipe followed by the sentinel marker.
 writeresult(fd: ref Sys->FD, result: string)
 {
+	# fd is nil for fire-and-forget scheduled children (at=/every= caps).
+	# Discard quietly; the parent has already reported "scheduled" to the
+	# user and is no longer waiting on a result.
+	if(fd == nil)
+		return;
 	data := array of byte (result + RESULT_END);
 	sys->write(fd, data, len data);
 }

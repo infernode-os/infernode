@@ -77,8 +77,11 @@ if [[ "$FAIL" -eq 0 ]]; then
     MODS=$(grep -c '^JIT compiled ' "$LOG" || true)
     echo "PASS: $MODS modules JIT-compiled, $TOOLS tools loaded, no crashes"
 else
-    echo "--- boot log tail ---"
-    tail -20 "$LOG"
+    # tail -20 was not enough to localise [Sh] Broken: messages — see INFR-25.
+    # Dump the full boot log so the failing shell command is visible in CI.
+    echo "--- full boot log ---"
+    cat "$LOG"
+    echo "--- end boot log ---"
 fi
 
 rm -f "$LOG"

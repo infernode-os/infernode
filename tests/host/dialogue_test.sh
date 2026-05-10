@@ -14,7 +14,7 @@
 #
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 SH="/dis/sh.dis"
 VERBOSE=0
 

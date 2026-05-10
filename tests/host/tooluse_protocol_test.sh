@@ -11,7 +11,7 @@
 #
 # Requirements:
 #   - LLM 9P service running on LLM9P_PORT (default 5640)
-#   - Inferno emulator at $ROOT/emu/MacOSX/o.emu
+#   - Inferno emulator at $EMU (set by common.sh; MacOSX or Linux)
 #
 # Usage:
 #   ./tests/host/tooluse_protocol_test.sh            # port 5640
@@ -22,7 +22,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 LLM9P_PORT="${LLM9P_PORT:-5640}"
 VERBOSE=0
 

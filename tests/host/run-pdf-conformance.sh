@@ -7,7 +7,7 @@
 #
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 RESULTS="$ROOT/usr/inferno/test-pdfs/results.txt"
 HEAP=1024  # MB per process
 

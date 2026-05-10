@@ -37,7 +37,7 @@ EMU_PATH=""
 if [ -x "$ROOT/emu/$_EMUHOST/o.emu" ]; then
     EMU_PATH="$ROOT/emu/$_EMUHOST/o.emu"
 fi
-RUNNER_DIS="/tests/runner.dis"
+RUNNER_DIS="/dis/tests/runner.dis"
 VERBOSE=0
 RUN_HOST=1
 RUN_INTERNAL=1

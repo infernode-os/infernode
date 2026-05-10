@@ -2,8 +2,17 @@
 #
 # Build InferNode for macOS ARM64 (Headless mode)
 #
+# This test is macOS-specific — it runs `mk` against emu/MacOSX with macOS
+# linker conventions and uses `otool` to check for SDL dependencies. On
+# Linux, exit 77 (skip); use build-linux-{amd64,arm64}.sh instead.
+#
 
 set -e
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "SKIP: build_test is macOS-only (use build-linux-*.sh on Linux)"
+    exit 77
+fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export ROOT

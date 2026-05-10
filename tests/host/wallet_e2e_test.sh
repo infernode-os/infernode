@@ -3,7 +3,7 @@
 set -e
 
 ROOT="${ROOT:-.}"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 
 if [ ! -x "$EMU" ]; then
     echo "SKIP: emu not found at $EMU"

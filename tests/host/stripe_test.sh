@@ -13,7 +13,7 @@
 set -e
 
 ROOT="${ROOT:-.}"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 PASS="stripetest42"
 
 if [ ! -x "$EMU" ]; then

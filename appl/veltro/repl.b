@@ -167,6 +167,7 @@ init(nil: ref Draw->Context, args: list of string)
 			if(hd tl2 == "xenith") { xgrant = 1; break; }
 
 		sys->pctl(Sys->FORKNS, nil);
+		sys->pctl(Sys->NODEVS, nil);
 
 		caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1

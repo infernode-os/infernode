@@ -71,6 +71,10 @@ For the SDL3 GUI, see [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md).
 
 The `-c1` flag enables the JIT; `-r.` tells the emulator to use the current directory as the Inferno® root. See [QUICKSTART.md](QUICKSTART.md) and [docs/USER-MANUAL.md](docs/USER-MANUAL.md) for more.
 
+## Try the agent
+
+Once Lucia is up, type **`run the tour`** in the conversation zone on the left. Veltro (the in-system AI agent) walks you through the system live — opening windows, launching the fractal viewer and editor, demonstrating namespace isolation, persistent memory, and voice — using its own tools in real time. Twelve self-paced sections, nothing pre-recorded. Headless: `./emu/<plat>/o.emu -c1 -r. veltro 'run the tour'`. Full notes in [RUN_TOUR.md](RUN_TOUR.md).
+
 ## Highlights
 
 - **Lightweight** — 15–30 MB RAM, 2-second startup, ~10 MB on disk.
@@ -99,6 +103,7 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 ## Documentation
 
 - [QUICKSTART.md](QUICKSTART.md) — running in under a minute
+- [RUN_TOUR.md](RUN_TOUR.md) — interactive Veltro feature tour (`run the tour`)
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — namespaces, devices, host integration
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment

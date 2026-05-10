@@ -12,10 +12,12 @@ include "lucitheme.m";
 
 Focusnone, Focusimage, Focustitle: con iota;
 
-# Colours loaded from theme; defaults kept as fallback
-bdfocused:   int = int 16r448888ff;
-bdunfocused: int = int 16r1a1a1aff;
-screenbg:    int = int 16r000000ff;	# screen fill shown between windows
+# Single subdued window border, applied uniformly to focused and
+# unfocused windows so every wm app shows the same calm frame in
+# Lucifer's presentation zone.  Focus state is signalled elsewhere
+# (cursor, status, content), not by a brighter chrome line.
+windowbordercol: int = int 16r1a1a1aff;
+screenbg:        int = int 16r000000ff;	# screen fill shown between windows
 
 init()
 {
@@ -31,9 +33,8 @@ init()
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
-		bdfocused   = th.accent;
-		bdunfocused = th.border;
-		screenbg    = th.bg;
+		windowbordercol = th.windowborder;
+		screenbg        = th.bg;
 	}
 }
 
@@ -42,9 +43,8 @@ retheme(w: ref Window)
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
-		bdfocused   = th.accent;
-		bdunfocused = th.border;
-		screenbg    = th.bg;
+		windowbordercol = th.windowborder;
+		screenbg        = th.bg;
 	}
 	drawborder(w);
 }
@@ -156,15 +156,13 @@ Window.imager(w: self ref Window, r: Rect): Rect
 	return r;
 }
 
-# draw an imitation tk border.
+# draw an imitation tk border using a single subdued, theme-driven colour
+# regardless of focus state.
 drawborder(w: ref Window)
 {
 	if(w.screen == nil)
 		return;
-	if(w.focused)
-		col := w.display.color(bdfocused);
-	else
-		col = w.display.color(bdunfocused);
+	col := w.display.color(windowbordercol);
 	i := w.screen.image;
 	r := w.screen.image.r;
 	i.draw((r.min, (r.min.x+w.bd, r.max.y)), col, nil, (0, 0));

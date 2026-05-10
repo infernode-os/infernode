@@ -37,6 +37,8 @@ include "widget.m";
 	widget: Widget;
 	Statusbar: import widget;
 
+include "lucitheme.m";
+
 Fractals: module
 {
 	init: fn(nil: ref Draw->Context, argv: list of string);
@@ -47,6 +49,7 @@ w: ref Window;
 display: ref Display;
 font: ref Font;
 colours: array of ref Image;
+canvasbg: ref Image;	# theme-driven canvas clear color (was display.white)
 sbar: ref Statusbar;
 mainmenu: ref Popup;
 juliamenu: ref Popup;
@@ -195,6 +198,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		colours[i] = display.rgb(col(i / (G * B), R),
 					col(i / B, G),
 					col(i, B));
+
+	loadcanvasbg();
 
 	w.reshape(Rect((0, 0), (WIDTH, HEIGHT)));
 	w.startinput("kbd" :: "ptr" :: nil);
@@ -419,6 +424,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			writefractstate();
 			updatesbar();
 		<-themech =>
+			loadcanvasbg();
 			if(widget != nil)
 				widget->retheme(display);
 			wmclient->retheme(w);
@@ -607,6 +613,22 @@ canvposn(): Rect
 	return r;
 }
 
+# Load the canvas background image from the active theme.  Called at
+# startup and on every theme change so the next fractal computation
+# clears to the right colour for the current theme.
+loadcanvasbg()
+{
+	if(display == nil)
+		return;
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme == nil) {
+		canvasbg = display.black;
+		return;
+	}
+	th := lucitheme->gettheme();
+	canvasbg = display.color(th.bg);
+}
+
 canvsize(): Point
 {
 	r := canvposn();
@@ -687,8 +709,12 @@ calculate(p: Params, imgch: chan of (ref Image, Rect))
 	calc.morj = p.m;
 	initr(calc, p);
 
-	# Clear to white
-	calc.img.draw(r, calc.img.display.white, nil, (0, 0));
+	# Clear the fractal canvas to the theme background so areas not covered
+	# by computed pixels blend with the rest of the app, not flash white.
+	bg := canvasbg;
+	if(bg == nil)
+		bg = calc.img.display.black;
+	calc.img.draw(r, bg, nil, (0, 0));
 
 	if(p.fill) {
 		calc.dispbase = array[calc.supx * calc.supy] of byte;

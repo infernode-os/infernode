@@ -22,7 +22,20 @@ across sessions, browse the web, send email, draw fractals, and more.
 Everything I do is visible — my tools are files, my actions show up in
 your workspace. 
 
-## Things to try
+## Start here: the guided tour
+
+> **Say "run the tour"** in the conversation zone on the left.
+
+I will walk you through the system interactively — opening windows,
+demonstrating tools, and letting you try things hands-on. It is the
+fastest way to see what InferNode actually does. Twelve sections,
+self-paced, runs live (nothing pre-recorded; I am using my own tools
+in real time).
+
+If you would rather poke around on your own, the rest of this page is
+the cheat sheet.
+
+## Other things to try
 
 **Talk to me.** Ask a question, give me a task, or just say hello.
 
@@ -34,10 +47,6 @@ your workspace.
 
 **Explore the system.** Ask me to show you what's in `/appl` or
 `/module`, or to explain how the namespace works.
-
-**Run the guided tour.** Say **"run the tour"** and I will walk you
-through the system interactively — opening windows, demonstrating tools,
-and letting you try things hands-on.
 
 ## Setup
 

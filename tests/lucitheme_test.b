@@ -80,11 +80,11 @@ testBrimstoneColors(t: ref T)
 	t.asserteq(th.editcursor, int 16rE8553AFF, "editcursor is orange/accent (0xE8553AFF)");
 	t.asserteq(th.red,        int 16rAA4444FF, "red is muted red (0xAA4444FF)");
 
-	# wmclient border fix: bdfocused = th.accent, NOT old hardcoded teal
-	t.assertne(th.accent, int 16r448888FF, "accent is not old hardcoded teal (0x448888FF)");
-
-	# wmclient border fix: bdunfocused = th.border, NOT old hardcoded cyan
-	t.assertne(th.border, int 16r9EEEEEFF, "border is not old hardcoded cyan (0x9EEEEEFF)");
+	# wmclient now draws a single subdued border using th.windowborder
+	# regardless of focus state.  Brimstone default sits between bg and
+	# header so the frame is visible but doesn't compete with content.
+	t.asserteq(th.windowborder, int 16r1A1A1AFF, "windowborder is subdued grey (0x1A1A1AFF)");
+	t.assertne(th.windowborder, int 16rFFFFFFFF, "windowborder is not white");
 
 	# wmclient background fix: screenbg = th.bg, must not be white
 	t.assertne(th.bg, int 16rFFFFFFFF, "bg is not white — no white flash on window close");

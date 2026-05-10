@@ -646,6 +646,7 @@ exectool(name, args: string): string
 asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
 	mypid := sys->pctl(Sys->FORKNS, nil);
+	sys->pctl(Sys->NODEVS, nil);
 	# Bind our mount point over /tool BEFORE namespace restriction.
 	# /tool.N is still visible in the inherited namespace at this point.
 	# restrictdir("/", safe) preserves "tool" and captures the current

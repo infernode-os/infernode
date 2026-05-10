@@ -206,11 +206,24 @@ Two scripts in the repository wire the daemon together:
   `PATH`, pre-flights the Ollama API, and execs `emu` against the lean
   profile. It is the entry point the systemd unit will call.
 
-Start it ad-hoc to verify everything works before installing the unit:
+First-run prerequisite (since INFR-16): generate the signer keyfile
+that the keyring-authenticated listener requires.
+
+```sh
+./serve-llm.sh --gen-key
+# wrote /home/<you>/.infernode/lib/keyring/serve-llm
+```
+
+Then start the daemon ad-hoc to verify everything works before
+installing the unit:
 
 ```sh
 ./serve-llm.sh
 ```
+
+(If you specifically want anonymous attach on a trusted-LAN deployment,
+pass `--anon-lan` instead — see `Hardening` § `--anon-lan: opting out`
+below for the trade-offs.)
 
 You should see the wrapper announce itself, then a couple of lines of
 emulator startup, then output of the form:
@@ -361,14 +374,22 @@ visible to all child processes that fork the namespace.
 
 ### From the InferNode shell
 
-Equivalent direct command, run from the InferNode shell after start:
+If the server runs the default keyring-authenticated listener, copy the
+server's keyfile (`~/.infernode/lib/keyring/serve-llm` on the server)
+to the client and mount with `-k`:
+
+```sh
+mount -k /usr/$user/keyring/serve-llm 'tcp!server.example.net!5640' /n/llm
+```
+
+If the server explicitly runs `--anon-lan`, mount with `-A`:
 
 ```sh
 mount -A 'tcp!server.example.net!5640' /n/llm
 ```
 
-`-A` selects unauthenticated 9P. For authenticated 9P over an Inferno
-keyring, see the **Hardening** section below.
+`-A` is only safe on a trusted network. See **Hardening** §
+`--anon-lan: opting out` for when this is and isn't appropriate.
 
 ## Step 7: Verify end-to-end
 
@@ -500,33 +521,72 @@ service config (`~/.infernode/lib/ndb/llm`) and restart.
 
 ## Hardening
 
-The defaults in this tutorial trade away security for ease of setup.
-Before exposing the service beyond a trusted network, address each of
-the following.
+The hardening sections below cover non-default concerns. Authentication
+itself is **on by default as of INFR-16** — the section immediately
+below describes how to set up the keyfile a fresh install needs.
 
-### Authentication
+### Authentication (default — keyring)
 
-`listen -A` and `mount -A` bypass authentication. Anyone who can reach
-the TCP port can open sessions. For trusted networks (LAN, ZeroTier,
-Tailscale) this is often acceptable; for the open internet it is not.
+`serve-llm.sh` listens with Inferno Ed25519 keyring authentication by
+default. Clients must dial with `mount -k <keyfile>`. On a fresh
+install the daemon refuses to start until you generate the signer
+keyfile:
 
-To enable Inferno keyring authentication:
+```sh
+./serve-llm.sh --gen-key
+# wrote /home/<you>/.infernode/lib/keyring/serve-llm (~690 bytes; mode 600)
+# clients dial with: mount -k <keyfile> tcp!<host>!5640 /n/llm
+```
 
-1. Generate a keyfile on the server: see `appl/cmd/auth/` for the
-   relevant tooling (`changelogin`, `getauthinfo`).
-2. Distribute the public component to authorised clients.
-3. In `lib/sh/serve-profile`, replace
-   ```
-   listen -sA 'tcp!*!5640' {export /n/llm}
-   ```
-   with
-   ```
-   listen -s -k /usr/$user/keyring/default 'tcp!*!5640' {export /n/llm}
-   ```
-4. On the client, `mount -k /usr/$user/keyring/default 'tcp!host!5640' /n/llm`.
+`--gen-key` invokes `auth/createsignerkey -a ed25519` inside emu and
+stages the file under `~/.infernode/lib/keyring/`. `serve-profile`
+binds that directory over `/lib/keyring` inside the namespace, so the
+in-emu path is `/lib/keyring/serve-llm`. The keyfile is mode 600 —
+keep it that way.
 
-The pattern is exercised by `tests/test-distributed.sh`, which sets up
-two emulator instances communicating over authenticated, encrypted 9P.
+Distribute the keyfile to each authorised client (scp, your password
+manager, etc.). Each client mounts with:
+
+```sh
+mount -k /home/<you>/.infernode/lib/keyring/serve-llm 'tcp!server!5640' /n/llm
+```
+
+Or, if you've configured `~/.infernode/lib/ndb/llm` with `mode=remote`
+and `dial=tcp!server!5640`, the desktop will use the keyfile path you
+configure in Settings (after the GUI gains a keyfile field — for now,
+hand-edit `~/.infernode/lib/ndb/llm` to add `keyfile=<path>`).
+
+The pattern is exercised end-to-end by `tests/test-distributed.sh`,
+which sets up two emulator instances communicating over authenticated,
+encrypted 9P.
+
+### `--anon-lan`: opting out
+
+The pre-INFR-16 default was anonymous attach (`-A`) — anyone reaching
+the TCP port could mount `/n/llm` and use the user's local Ollama or
+API credentials. That mode is preserved behind an explicit flag:
+
+```sh
+./serve-llm.sh --anon-lan
+# WARNING: listen mode anon (--anon-lan) - no authentication
+# anyone reaching :5640 can mount /n/llm
+```
+
+Use only on a network where you've already established trust (LAN
+behind a firewall, ZeroTier with strict ACLs, WireGuard / Tailscale
+peer-to-peer). Public-internet exposure with `--anon-lan` is the same
+shape of bug as OpenClaw's CVE-2026-25253 (anonymous attach to a
+service that holds local credentials), at the network layer instead
+of the HTTP layer.
+
+If you have an existing systemd unit invoking `serve-llm.sh` with no
+arguments, **upgrading to a build with INFR-16 requires** either:
+
+- Generating a keyfile (`./serve-llm.sh --gen-key`) — recommended.
+- Editing the unit file to pass `--anon-lan`.
+
+Otherwise the daemon will exit with a clear error pointing at both
+remediations.
 
 ### Network exposure
 

@@ -102,7 +102,7 @@ Node: adt {
 	Block	=> stmts: cyclic list of ref Node;
 	Return	=> val: cyclic ref Node;
 	Delete	=> arr: string; idx: cyclic ref Node;
-	Next	=> ;
+	Next	=>
 	Exit	=> val: cyclic ref Node;
 	Getline	=> var: cyclic ref Node; src: cyclic ref Node; cmd: int;
 	Cond	=> cond, texpr, fexpr: cyclic ref Node;

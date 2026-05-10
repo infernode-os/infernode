@@ -1,0 +1,27 @@
+limbo - Author a complete, compilable Limbo source file.
+
+  Args: a natural-language description of what the program should do.
+  Returns: the source code, in a ```limbo code fence.
+
+  Use this whenever the user asks for Limbo, .b files, Inferno modules,
+  or any code that needs to run on Inferno.
+
+  DO NOT attempt to write Limbo yourself — your general-purpose training
+  produces Go-style or Python-style code the Inferno compiler rejects
+  (verified 0/10 compile-pass on standard scenarios). The limbo tool
+  dispatches the request to a dedicated Limbo-trained model that
+  produces compileable code (10/10 on the same scenarios).
+
+Examples:
+
+  limbo a Cat command that copies stdin to stdout if argv is empty,
+        or concatenates each named file to stdout otherwise
+
+  limbo a hello-world program that prints "hello, limbo" and exits
+
+  limbo a wcl (word-count-lines) command that reads stdin via bufio and
+        prints the number of lines followed by a newline
+
+The dispatched model uses a focused system prompt that asks for one
+fenced ```limbo block with no surrounding prose. The response is
+returned verbatim.

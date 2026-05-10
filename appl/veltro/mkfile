@@ -58,6 +58,7 @@ TOOLS=\
     tools/plan.dis\
     tools/keyring.dis\
     tools/wiki.dis\
+    tools/limbo.dis\
 
 all:V: $MAIN $TOOLS $SOURCES
 
@@ -220,6 +221,10 @@ tools/keyring.dis: tools/keyring.b tool.m
 # Wiki knowledge base tool
 tools/wiki.dis: tools/wiki.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/wiki.dis tools/wiki.b
+
+# Limbo authoring tool — LLM-as-tool routing to devstral-limbo-v3
+tools/limbo.dis: tools/limbo.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/limbo.dis tools/limbo.b
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools $DISBIN/sources

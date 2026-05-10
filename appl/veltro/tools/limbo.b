@@ -41,6 +41,11 @@ ToolLimbo: module {
 	exec: fn(args: string): string;
 };
 
+# Hosted Limbo compiler is a Command-style module loaded dynamically in gate().
+Command: module {
+	init: fn(ctxt: ref Draw->Context, args: list of string);
+};
+
 # Configuration. The model name is the Ollama tag of the dedicated
 # Limbo-author LoRA. If this isn't loaded on the configured serve-llm,
 # the model write below will succeed (llmsrv accepts any string) and
@@ -249,14 +254,122 @@ exec(args: string): string
 	if(rerr2 != nil)
 		return rerr2;
 
-	# 5. Return the response. v0 returns it verbatim; the orchestrator
-	#    sees the model's full output (typically a ```limbo fence with
-	#    the source). Compile-gate-in-the-loop is a follow-up — when
-	#    added, this is the place to extract the fenced block, run the
-	#    gate, and either return clean source or the gate error so the
-	#    orchestrator can re-prompt with the failure visible.
 	if(resp == "")
 		return "error: empty response from " + LIMBO_MODEL +
 			" (is the model loaded on the configured serve-llm?)";
-	return resp;
+
+	# 5. Compile-gate-in-loop. Extract the first ```limbo block and run
+	#    the hosted Limbo compiler against it. On compile-pass: return
+	#    the response verbatim (orchestrator sees the source). On fail:
+	#    append a structured <gate> diagnostic so the orchestrator can
+	#    re-call /tool/limbo with a refined description that addresses
+	#    the error. v1 is single-shot per call; internal retry is a v2
+	#    follow-up (would require pushing failure context into the same
+	#    /n/llm/<sid> conversation rather than re-entering at the tool
+	#    boundary).
+	gateerr := gate(resp, idstr);
+	if(gateerr == "")
+		return resp;
+	return resp + "\n\n" + gateerr;
+}
+
+# Extract the first ```limbo ... ``` block from a model response.
+# Returns "" if no fenced block is found (caller treats as gate-skip).
+# Accepts ```limbo, ```b, or bare ``` as the opening fence — devstral
+# is consistent with ```limbo but be liberal in what we accept.
+extractblock(s: string): string
+{
+	(start, fencelen) := (-1, 0);
+	tags := array[] of {"```limbo", "```b\n", "```b\r", "```\n"};
+	taglens := array[] of {8, 5, 5, 4};
+	for(i := 0; i < len tags; i++) {
+		p := strstr(s, tags[i]);
+		if(p >= 0 && (start < 0 || p < start)) {
+			start = p;
+			fencelen = taglens[i];
+		}
+	}
+	if(start < 0)
+		return "";
+	body := start + fencelen;
+	# tag list above already swallows the trailing \n where applicable;
+	# for ```limbo we still need to skip an immediately-following \n.
+	if(body < len s && s[body] == '\n')
+		body++;
+	for(end := body; end + 3 <= len s; end++) {
+		if(s[end:end+3] == "```")
+			return s[body:end];
+	}
+	return "";
+}
+
+# Compile-gate the response. Returns "" on pass (or skip), or a
+# diagnostic block on fail. Uses the hosted /dis/limbo.dis compiler;
+# stderr is redirected to a temp file via sys->dup so we can recover
+# the diagnostic text and surface it to the orchestrator.
+gate(resp: string, sid: string): string
+{
+	code := extractblock(resp);
+	if(code == "")
+		return "";
+
+	srcpath := sys->sprint("/tmp/limbo-gate-%s.b", sid);
+	werr := writefile(srcpath, code);
+	if(werr != nil)
+		return "";
+
+	errpath := sys->sprint("/tmp/limbo-gate-%s.err", sid);
+	dispath := srcpath[:len srcpath - 2] + ".dis";
+
+	saved := sys->dup(2, -1);
+	if(saved < 0) {
+		sys->remove(srcpath);
+		return "";
+	}
+	errfd := sys->create(errpath, Sys->OWRITE, 8r644);
+	if(errfd == nil) {
+		sys->dup(saved, 2);
+		sys->remove(srcpath);
+		return "";
+	}
+	sys->dup(errfd.fd, 2);
+	errfd = nil;
+
+	ok := 1;
+	limbo := load Command "/dis/limbo.dis";
+	if(limbo == nil) {
+		ok = 0;
+	} else {
+		{
+			limbo->init(nil, "limbo" :: "-I" :: "/module" :: srcpath :: nil);
+		} exception {
+		"*" =>
+			ok = 0;
+		}
+	}
+	limbo = nil;
+
+	(stok, nil) := sys->stat(dispath);
+	if(stok < 0)
+		ok = 0;
+
+	sys->dup(saved, 2);
+	sys->remove(dispath);
+
+	if(ok) {
+		sys->remove(srcpath);
+		sys->remove(errpath);
+		return "";
+	}
+
+	(errtxt, _) := readfile(errpath);
+	sys->remove(srcpath);
+	sys->remove(errpath);
+
+	return "<gate>\n" +
+		"status: failed\n" +
+		"compiler: hosted limbo (/dis/limbo.dis)\n" +
+		"stderr:\n" + errtxt +
+		"</gate>\n" +
+		"The emitted Limbo did not compile. Re-call /tool/limbo with a description that avoids the above errors, or quote the failing line back to the user if the error is unfixable.";
 }

@@ -84,10 +84,10 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	salt := ivec[0:20];
 	prk := array[Keyring->SHA256dlen] of byte;
 	kr->hmac_sha256(pwdigest, len pwdigest, salt, prk, nil);
-	info := array of byte "infernode login aead";
-	expandinput := array[len info + 1] of byte;
-	expandinput[0:] = info;
-	expandinput[len info] = byte 1;
+	hkdfinfo := array of byte "infernode login aead";
+	expandinput := array[len hkdfinfo + 1] of byte;
+	expandinput[0:] = hkdfinfo;
+	expandinput[len hkdfinfo] = byte 1;
 	aeadkey := array[Keyring->SHA256dlen] of byte;
 	kr->hmac_sha256(expandinput, len expandinput, prk, aeadkey, nil);
 	nonce := ivec[20:32];

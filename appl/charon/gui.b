@@ -55,7 +55,7 @@ kbdescarg := 0;
 lastbuttons := 0;
 
 # Theme change notification
-themech: chan[1] of int;
+themech: chan of int;
 
 # Key codes for escape sequence parsing
 KCup:		con 16rFF52;

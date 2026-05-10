@@ -100,9 +100,9 @@ TESTDIS="$ROOT/dis/tests/tooluse_test.dis"
 TESTB="$ROOT/tests/tooluse_test.b"
 if [[ ! -f "$TESTDIS" ]] || [[ "$TESTB" -nt "$TESTDIS" ]]; then
 	info "Building tooluse_test.dis..."
-	PATH="$ROOT/MacOSX/arm64/bin:$PATH" \
+	PATH="$BINDIR:$PATH" \
 		ROOT="$ROOT" \
-		"$ROOT/MacOSX/arm64/bin/limbo" \
+		"$LIMBO" \
 		-I"$ROOT/module" -I"$ROOT/appl/veltro" -gw \
 		-o "$TESTDIS" "$TESTB" 2>&1 || {
 		echo "ERROR: failed to build tooluse_test.dis" >&2

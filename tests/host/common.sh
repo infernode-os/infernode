@@ -21,6 +21,14 @@ case "$(uname -s)" in
     *)      echo "SKIP: unsupported platform $(uname -s)"; exit 77 ;;
 esac
 
-EMU="$ROOT/emu/$EMUHOST/o.emu"
+case "$(uname -m)" in
+    x86_64)         OBJTYPE=amd64 ;;
+    aarch64|arm64)  OBJTYPE=arm64 ;;
+    *) echo "SKIP: unsupported arch $(uname -m)"; exit 77 ;;
+esac
 
-export ROOT EMUHOST EMU
+EMU="$ROOT/emu/$EMUHOST/o.emu"
+BINDIR="$ROOT/$EMUHOST/$OBJTYPE/bin"
+LIMBO="$BINDIR/limbo"
+
+export ROOT EMUHOST OBJTYPE EMU BINDIR LIMBO

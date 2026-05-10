@@ -1,7 +1,11 @@
 limbo - Author a complete, compilable Limbo source file.
 
-  Args: a natural-language description of what the program should do.
-  Returns: the source code, in a ```limbo code fence.
+  Args: a NATURAL-LANGUAGE DESCRIPTION of what the program should do.
+        Pass the user's request as plain English. DO NOT try to
+        write code yourself and pass it as args — your code will be
+        treated as a noisy prompt by the dedicated Limbo author and
+        produce wrong, unrelated output.
+  Returns: the source code in a ```limbo code fence.
 
   Use this whenever the user asks for Limbo, .b files, Inferno modules,
   or any code that needs to run on Inferno.
@@ -11,6 +15,15 @@ limbo - Author a complete, compilable Limbo source file.
   (verified 0/10 compile-pass on standard scenarios). The limbo tool
   dispatches the request to a dedicated Limbo-trained model that
   produces compileable code (10/10 on the same scenarios).
+
+  Concrete contract:
+    args is a SHORT natural-language sentence (10-50 words).
+    args MUST NOT contain { or }, ;, package main, "implement",
+        "import", "include", or any other code tokens.
+    If the user gave you code in a different language and wants
+        it ported to Limbo, args should be e.g. "port this Python
+        wc-l to Limbo: <python source>" — embed the source as
+        context, but the directive must be in English.
 
 Examples:
 

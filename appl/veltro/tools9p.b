@@ -158,6 +158,10 @@ TOOL_PATHS := array[] of {
 	("wallet",  "/dis/veltro/tools/wallet.dis"),
 	# Paid web fetch (x402 payment-enabled HTTP client)
 	("payfetch", "/dis/veltro/tools/payfetch.dis"),
+	# Limbo authoring via LLM-as-tool (delegates to devstral-limbo-v3
+	# through a private /n/llm session). See appl/veltro/tools/limbo.b
+	# and docs/LLM-AS-TOOL.md.
+	("limbo",   "/dis/veltro/tools/limbo.dis"),
 };
 
 usage()

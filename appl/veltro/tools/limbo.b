@@ -85,6 +85,50 @@ doc(): string
 		"empty, or concatenates each named file to stdout otherwise";
 }
 
+# Returns a non-empty token-name if the description looks like code
+# the orchestrator wrote itself rather than a natural-language request.
+# Empty return = looks like a description, OK to pass through.
+# Detection is heuristic (tokens that are unambiguously code-shaped);
+# the false-positive cost is low (orchestrator gets a clear error and
+# re-prompts), the false-negative cost is high (devstral gets garbage).
+codeshape(s: string): string
+{
+	# Multi-char language-marker tokens. Order matters: longer first.
+	patterns := array[] of {
+		"package main", "func main(", "func main {", "import \"",
+		"#include", "include \"sys.m\"", "implement ", "<?php",
+		"def main", "public static void", "console.log",
+		"fmt.Println",
+	};
+	for(i := 0; i < len patterns; i++) {
+		if(strstr(s, patterns[i]) >= 0)
+			return patterns[i];
+	}
+	# Single-char tokens: braces and semicolons are decisive in this
+	# arg context (no description should contain them). Allow common
+	# punctuation: . , ' " - / etc.
+	for(j := 0; j < len s; j++) {
+		c := s[j];
+		if(c == '{' || c == '}')
+			return "{ or } (curly brace — code shape)";
+		if(c == ';')
+			return "; (semicolon — code shape)";
+	}
+	return "";
+}
+
+# strstr — substring search; returns first index or -1.
+strstr(s, sub: string): int
+{
+	if(len sub == 0)
+		return 0;
+	for(i := 0; i + len sub <= len s; i++) {
+		if(s[i:i+len sub] == sub)
+			return i;
+	}
+	return -1;
+}
+
 # Write `data` to the file at `path`, replacing existing contents.
 writefile(path: string, data: string): string
 {
@@ -139,6 +183,25 @@ exec(args: string): string
 
 	if(desc == "")
 		return "error: usage: limbo <description-of-what-to-write>";
+
+	# 0. Args validation — orchestrators trained for code generation
+	#    sometimes pass their own (wrong-language) source as args
+	#    instead of a description. Catch the obvious cases and return
+	#    a structured error so the orchestrator can re-prompt with
+	#    a real description. Verified V4-PLAN finding: gpt-oss/low
+	#    passed `args="package main\nimport \"fmt\"\nfunc main(){...}"`
+	#    when asked for Limbo hello-world; devstral got Go-as-prompt
+	#    and produced unrelated Limbo. (See INFR-2 v0 e2e findings.)
+	bad := codeshape(desc);
+	if(bad != "") {
+		return "error: limbo tool received code-shaped input as args (token: " + bad + ").\n" +
+			"Args must be a natural-language DESCRIPTION of what the program should do, " +
+			"not source code. Re-call with a description.\n" +
+			"Example: \"write a Limbo hello-world that prints 'hello, limbo'\"\n" +
+			"Not:     \"package main; func main() {...}\"\n" +
+			"If you have source in another language and want it ported, frame args as: " +
+			"\"port this Python <description>: <source>\".";
+	}
 
 	# 1. Create a fresh session via /n/llm/new
 	(idstr, rerr) := readfile(LLMROOT + "/new");

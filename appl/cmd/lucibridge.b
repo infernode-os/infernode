@@ -1379,7 +1379,18 @@ agentturn(input: string)
 		# token of the response against the live /tool/tools registry
 		# (toolmount + "/tools"), so this only fires for actual known
 		# tools and won't trip on conversational prose.
-		if(stopreason != "tool_use" && text != "") {
+		#
+		# Critically: do NOT run on stopreason "end_turn". end_turn is
+		# the model's definitive terminus — it has chosen to stop. The
+		# wrap-up text often mentions tool names in prose ("save this as
+		# limbo hello.b", "use the limbo tool to ..."), and parseaction
+		# walks every line looking for a tool match, so it fires false
+		# positives on this content. The fallback is only for models
+		# whose ENTIRE response is meant to be a 9P-native tool call,
+		# i.e. they didn't end the turn — they emitted a tool call as
+		# their primary output and the runtime cut on stop or length.
+		# (See INFR-21.)
+		if(stopreason != "tool_use" && stopreason != "end_turn" && text != "") {
 			(nativetool, nativeargs) := agentlib->parseaction(text);
 			if(nativetool != "" && nativetool != "DONE") {
 				stopreason = "tool_use";

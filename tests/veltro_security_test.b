@@ -19,6 +19,7 @@ implement VeltroSecurityTest;
 #   10. /tmp writable after restriction (MCREATE on shadow bind)
 #   11. exec in tools grants sh.dis (shell interpreter needed by exec tool)
 #   12. caps.paths exposes granted /n/local/ subtree
+#   13. pctl(NODEVS) blocks attach of devices outside |esDa allowlist
 #
 
 include "sys.m";
@@ -727,6 +728,67 @@ pathsExposureWorker(result: chan of string)
 }
 
 # ============================================================================
+# Test 13: NodevsBlocksDeviceAttach
+# Verifies pctl(NODEVS) blocks attach of devices outside the |esDa kernel
+# allowlist. Runtime ground-truth for the SECURITY.md "NODEVS short-term
+# fix" applied at the three top-level FORKNS sites (repl.b:169,
+# veltro.b:168, tools9p.b:644). Without this gate, a tool or exec
+# invocation could sys->bind("#sfactotum", ...) and reach factotum
+# regardless of path-based restriction (kernel gate at
+# emu/port/chan.c:1041-1051).
+# ============================================================================
+testNodevsBlocksDeviceAttach(t: ref T)
+{
+	result := chan of string;
+	spawn nodevsWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+nodevsWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Baseline: without NODEVS, bind on #p (proc device, not in |esDa)
+	# should succeed. Establishes that the second bind failing is the
+	# NODEVS gate, not "device unavailable" or some unrelated error.
+	pos := "/tmp/nodevs-test-positive";
+	sys->create(pos, Sys->OREAD, Sys->DMDIR | 8r700);
+	rc1 := sys->bind("#p", pos, Sys->MREPL);
+	if(rc1 < 0) {
+		result <-= sys->sprint("baseline: bind(#p) failed without NODEVS: %r");
+		return;
+	}
+
+	# Apply the gate.
+	sys->pctl(Sys->NODEVS, nil);
+
+	# With NODEVS set, bind on #p must fail: 'p' is not in the |esDa
+	# allowlist at emu/port/chan.c:1050.
+	neg := "/tmp/nodevs-test-negative";
+	sys->create(neg, Sys->OREAD, Sys->DMDIR | 8r700);
+	rc2 := sys->bind("#p", neg, Sys->MREPL);
+	if(rc2 >= 0) {
+		result <-= "bind(#p) succeeded after NODEVS — kernel gate did not fire";
+		return;
+	}
+
+	# Also verify the SECURITY.md exemplar: #sfactotum (subspec of #s).
+	# Even with #s itself in |esDa, the kernel disallows subspecs when
+	# nodevs is set: r == 's' && genbuf[n] != '\0' triggers Enoattach.
+	neg2 := "/tmp/nodevs-test-factotum";
+	sys->create(neg2, Sys->OREAD, Sys->DMDIR | 8r700);
+	rc3 := sys->bind("#sfactotum", neg2, Sys->MREPL);
+	if(rc3 >= 0) {
+		result <-= "bind(#sfactotum) succeeded after NODEVS — subspec gate did not fire";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -809,6 +871,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TmpWritable", testTmpWritable);
 	run("ExecGrantsShDis", testExecGrantsShDis);
 	run("PathsExposure", testPathsExposure);
+	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

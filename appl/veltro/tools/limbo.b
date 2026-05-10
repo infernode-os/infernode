@@ -144,7 +144,12 @@ exec(args: string): string
 	(idstr, rerr) := readfile(LLMROOT + "/new");
 	if(rerr != nil)
 		return "error: cannot create session (is /n/llm mounted? is serve-llm running?): " + rerr;
-	idstr = str->drop(idstr, " \t\n");
+	# str->drop only strips LEADING chars; trim both ends manually so a
+	# trailing newline doesn't end up in the session-dir path.
+	while(len idstr > 0 && (idstr[0] == ' ' || idstr[0] == '\t' || idstr[0] == '\n' || idstr[0] == '\r'))
+		idstr = idstr[1:];
+	while(len idstr > 0 && (idstr[len idstr - 1] == ' ' || idstr[len idstr - 1] == '\t' || idstr[len idstr - 1] == '\n' || idstr[len idstr - 1] == '\r'))
+		idstr = idstr[:len idstr - 1];
 	if(idstr == "")
 		return "error: /n/llm/new returned empty session id";
 
@@ -153,6 +158,15 @@ exec(args: string): string
 	# 2. Override session model to the Limbo author. llmsrv accepts any
 	#    string; resolution happens at request-time.
 	werr := writefile(sessdir + "/model", LIMBO_MODEL);
+	if(werr != nil)
+		return werr;
+
+	# 2a. Clear reasoning_effort. The serve-llm daemon default is "low"
+	#     (set via -r flag) for the gpt-oss orchestrator's benefit, but
+	#     devstral-limbo-v3 doesn't support reasoning_effort and Ollama
+	#     returns 500 if it's set. Per-session writable file added in
+	#     llmsrv (Qreasoning) for exactly this case.
+	werr = writefile(sessdir + "/reasoning", "");
 	if(werr != nil)
 		return werr;
 

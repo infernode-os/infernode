@@ -54,6 +54,17 @@ sleep 2
 
 # ── 9P export ───────────────────────────────────────────────
 # -A: no auth (LAN/ZeroTier only — switch to keyring for prod)
-# -s: synchronous, blocks here so emu stays alive while listening.
+# -s: synchronous (-s applies to listen's startup signal, not to
+#     multi-client behaviour; keep it so emu stays alive).
+# {export /n/llm &}: fork the export to background so the listen
+#     for-loop can immediately accept the next connection. Without
+#     the trailing &, listen runs export inline and blocks the
+#     accept loop until that single client disconnects — only ONE
+#     client can be served at a time, and a second mount attempt
+#     queues at the kernel level and silently hangs at TVERSION.
+#     The dev bundle hit this when launched alongside the prod
+#     bundle (or any concurrent emu). The & makes export a child;
+#     each new connect spawns its own export against the shared
+#     /n/llm namespace.
 # Single quotes around the addr prevent rc from globbing '*'.
-listen -sA 'tcp!*!5640' {export /n/llm}
+listen -sA 'tcp!*!5640' {export /n/llm &}

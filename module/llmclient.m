@@ -40,6 +40,12 @@ Llmclient: module
 		maxtokens:      int;      # 0 = backend default
 		systemprompt:   string;
 		thinkingtokens: int;      # 0=disabled, -1=max, >0=budget
+		reasoningeffort: string;  # ""=backend default; "low"|"medium"|"high"
+		                          # for OpenAI-shape backends serving o1-style /
+		                          # gpt-oss models. Forwarded as the OpenAI-
+		                          # standard `reasoning_effort` top-level field.
+		                          # InferNode MODEL-EVAL: "low" is the right
+		                          # default for tool-driven scenarios.
 		prefill:        string;
 		tooldefs:       list of ref ToolDef;    # nil = text-only mode
 		toolresults:    list of ref ToolResult;  # nil = normal prompt

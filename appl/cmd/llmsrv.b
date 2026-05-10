@@ -91,6 +91,15 @@ Qcompact: con 26;
 Qctl:     con 27;
 Qusage:   con 28;
 Qmaxtokens: con 29;
+Qreasoning: con 30;  # per-session reasoning_effort override:
+                     # ""|"low"|"medium"|"high". Defaults to the
+                     # daemon-wide value set via -r at launch.
+                     # Per-session override exists because models
+                     # like devstral don't support reasoning_effort
+                     # and Ollama 500s if it's set; a session that
+                     # overrides its model to a non-reasoning model
+                     # must also clear reasoning. (See
+                     # /tool/limbo flow for canonical use.)
 
 NSESSFILES: con 13;  # number of files per session dir
 
@@ -107,6 +116,7 @@ LlmSession: adt {
 	maxtokens:      int;     # generation cap; 0 = backend default
 	systemprompt:   string;
 	thinkingtokens: int;
+	reasoningeffort: string; # "" | "low" | "medium" | "high"
 	prefill:        string;
 	tools:          list of ref ToolDef;
 
@@ -134,6 +144,12 @@ backend: string;      # "api" or "openai"
 apikey: string;
 apiurl: string;       # Anthropic: hostname; OpenAI: base URL
 defaultmodel: string;
+defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
+                           # daemon launch. Threaded into AskRequest so
+                           # gpt-oss-style reasoning models default to a
+                           # sensible effort. InferNode MODEL-EVAL recommends
+                           # "low" for tool-driven scenarios (~15× faster than
+                           # default medium with no quality loss on dispatch).
 
 # Completion notification for async ask reads
 # When ask read arrives during generation, we spawn a goroutine
@@ -141,7 +157,7 @@ defaultmodel: string;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model]\n");
+	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model] [-r low|medium|high]\n");
 	raise "fail:usage";
 }
 
@@ -192,6 +208,7 @@ init(nil: ref Draw->Context, args: list of string)
 	apiurl = "";
 	apikey = "";
 	defaultmodel = "claude-sonnet-4-5-20250929";
+	defaultreasoning = "";
 
 	while((o := arg->opt()) != 0)
 		case o {
@@ -201,6 +218,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'u' => apiurl = arg->earg();
 		'k' => apikey = arg->earg();
 		'M' => defaultmodel = arg->earg();
+		'r' => defaultreasoning = arg->earg();
 		* =>   usage();
 		}
 	arg = nil;
@@ -291,6 +309,10 @@ newsession(): ref LlmSession
 		               # in llmclient.b, now overridable via /n/llm/$id/maxtokens)
 		"",            # systemprompt
 		0,             # thinkingtokens
+		defaultreasoning, # reasoningeffort — daemon default; per-session
+		                  # writable via /n/llm/$id/reasoning. Sessions
+		                  # that override model to a non-reasoning model
+		                  # MUST also clear this or Ollama 500s.
 		"",            # prefill
 		nil,           # tools
 		nil,           # streamch
@@ -561,6 +583,17 @@ Serve:
 				}
 				srv.reply(styxservers->readbytes(m, array of byte sys->sprint("%d\n", sess.maxtokens)));
 
+			Qreasoning =>
+				sess := findsession(sid);
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				val := sess.reasoningeffort;
+				if(val == "")
+					val = "(default)";
+				srv.reply(styxservers->readbytes(m, array of byte (val + "\n")));
+
 			Qtools =>
 				# Write-only
 				srv.reply(styxservers->readbytes(m, nil));
@@ -690,6 +723,23 @@ Serve:
 				sess.maxtokens = n;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
+			Qreasoning =>
+				sess := findsession(sid);
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				value := strip(string m.data);
+				# Empty string clears (== use no reasoning_effort, e.g.
+				# for sessions that override their model to a non-reasoning
+				# backend). Otherwise must be one of low/medium/high.
+				if(value != "" && value != "low" && value != "medium" && value != "high") {
+					srv.reply(ref Rmsg.Error(m.tag, "reasoning must be ''|low|medium|high"));
+					break;
+				}
+				sess.reasoningeffort = value;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
 			Qtools =>
 				sess := findsession(sid);
 				if(sess == nil) {
@@ -790,6 +840,7 @@ askprompt(sess: ref LlmSession, prompt: string)
 		sess.maxtokens,   # maxtokens
 		sess.systemprompt,# systemprompt
 		sess.thinkingtokens, # thinkingtokens
+		sess.reasoningeffort, # per-session override (defaults to daemon -r)
 		sess.prefill,     # prefill
 		sess.tools,       # tooldefs
 		nil,              # toolresults
@@ -837,6 +888,7 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 		sess.maxtokens,   # maxtokens
 		sess.systemprompt,# systemprompt
 		sess.thinkingtokens, # thinkingtokens
+		defaultreasoning, # reasoningeffort
 		"",               # prefill (empty mid-tool-loop)
 		sess.tools,       # tooldefs
 		results,          # toolresults
@@ -959,6 +1011,7 @@ asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
 		2048,      # maxtokens (compact: longer than chat default for summary breathing room)
 		"",        # no system prompt
 		0,         # no thinking
+		sess.reasoningeffort, # per-session override
 		"",        # no prefill
 		nil,       # no tools
 		nil,       # no tool results
@@ -1089,6 +1142,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "usage", big 0, 8r444), nil);
 	Qmaxtokens =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "maxtokens", big 0, 8r666), nil);
+	Qreasoning =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "reasoning", big 0, 8r666), nil);
 	}
 
 	return (nil, Enotfound);
@@ -1156,6 +1211,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(sid, Qusage);
 				"maxtokens" =>
 					n.path = MKPATH(sid, Qmaxtokens);
+				"reasoning" =>
+					n.path = MKPATH(sid, Qreasoning);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1219,6 +1276,7 @@ navigator(navops: chan of ref Navop)
 					MKPATH(sid, Qctl),
 					MKPATH(sid, Qusage),
 					MKPATH(sid, Qmaxtokens),
+					MKPATH(sid, Qreasoning),
 				};
 				i := n.offset;
 				for(; i < len files && n.count > 0; i++) {

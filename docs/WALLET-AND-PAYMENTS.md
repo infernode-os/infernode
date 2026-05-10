@@ -92,15 +92,36 @@ After successful unlock, `wm/logon` creates a sentinel file at `/tmp/.secstore-u
 
 ## Secstore (Persistent Key Storage)
 
-Secstore is the Plan 9 secure storage service. It encrypts all keys at rest using AES-256-GCM and authenticates clients using the PAK (Password Authenticated Key exchange) protocol.
+Secstore is the Plan 9 secure storage service. The server stores opaque encrypted
+blobs; encryption and decryption happen entirely on the client side (factotum or
+the `auth/secstore` CLI). Clients authenticate to the server using the PAK
+(Password Authenticated Key exchange) protocol.
+
+For the protocol-level reference (PAK exchange, file format, threat model,
+deployment topologies), see [AUTHENTICATION.md](AUTHENTICATION.md) and
+[DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md). The summary below is
+intentionally short.
 
 ### How It Works
 
-- **secstored** runs as a background service, listening on TCP port 5356
-- Keys are stored in `/usr/inferno/secstore/<username>/`
-- The `factotum` file contains all keys, encrypted with AES-256-GCM
-- The `PAK` file contains the password verifier (never the password itself)
-- Authentication uses 1024-bit modular exponentiation (takes ~5 seconds)
+- **secstored** runs as a background service, listening on TCP port 5356 by
+  default (`tcp!*!5356` — all interfaces).
+- Keys are stored in `/usr/inferno/secstore/<username>/`.
+- The `factotum` file is a newline-separated list of `key <attrs>` lines,
+  encrypted client-side. New writes use AES-256-GCM (magic header `SGCM1\n`,
+  12-byte nonce, 16-byte tag); old files written by legacy clients are read
+  back via AES-CBC fallback (`secstore.b:decrypt2`).
+- The file-encryption key is derived from the user's password via 10 000 rounds
+  of HMAC-SHA-256 with salt `"secstore filekey"` (not PBKDF2 / scrypt / Argon2).
+- The `PAK` file contains the password verifier `Hi = H⁻¹ mod p` — a function
+  of (username, password) but not the password itself.
+- The PAK exchange uses a 1024-bit prime; the first authentication of a session
+  takes ~5 seconds on a laptop because of `H = (...)^r mod p`. Factotum caches
+  `Hi` per (user, password) so subsequent auth is fast.
+- The wire is wrapped with Inferno SSL (`alg sha256 aes_128_cbc`); the bulk
+  cipher is AES-128-CBC and integrity is HMAC-SHA-256, with keys derived from
+  the PAK shared secret. There is no PKI / no X.509 — the SSL handshake is
+  symmetric, keyed entirely by PAK.
 
 ### Key Persistence Flow
 

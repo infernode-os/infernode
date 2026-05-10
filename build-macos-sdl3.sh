@@ -80,11 +80,14 @@ if [[ -f o.emu ]]; then
     cp o.emu InferNode
     echo "Copied o.emu -> InferNode (for InferNode.app bundle)"
     echo ""
-    echo "Launch with:"
-    echo "  open $ROOT/MacOSX/InferNode.app"
+    echo "Run from terminal (standard dev path):"
+    echo "  $ROOT/emu/MacOSX/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$ROOT sh -l /lib/lucifer/boot.sh"
     echo ""
-    echo "Or run directly:"
-    echo "  ./o.emu -r../.. sh -l -c 'xenith -t dark'"
+    echo "  stdout/stderr stream to the terminal; Ctrl-C exits."
+    echo ""
+    echo "To test the .app packaging path (codesign skipped):"
+    echo "  $ROOT/build-dev-bundle.sh"
+    echo "  open --stdout /tmp/infernode-dev.out --stderr /tmp/infernode-dev.err /tmp/InferNode-dev.app"
 else
     echo "Build failed!"
     exit 1

@@ -91,6 +91,26 @@ Do NOT:
 - Use Plan 9 Port's mk (may have subtle incompatibilities)
 - Use bash-isms like `&&` to chain commands (use `;` or separate commands)
 
+## Running for Development
+
+The standard developer launch is `emu` invoked directly from a terminal — same shape on macOS, Linux, and Windows; only the binary path differs:
+
+```sh
+# GUI (lucifer) — same shape on every platform
+./emu/MacOSX/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh   # macOS
+./emu/Linux/o.emu  -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh   # Linux
+.\emu\Nt\o.emu.exe -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r%CD% sh -l /lib/lucifer/boot.sh  # Windows
+
+# Headless (drops to Inferno ';' shell)
+./emu/MacOSX/o.emu -c1 -r$PWD sh -l                                                                # macOS
+./emu/Linux/o.emu  -c1 -r$PWD sh -l                                                                # Linux
+.\emu\Nt\o.emu.exe -c1 -r%CD% sh -l                                                               # Windows
+```
+
+stdout/stderr stream to the terminal, Ctrl-C exits, no signing/Gatekeeper/Translocation in the loop. `/lib/lucifer/boot.sh` is the canonical boot orchestration and is the same script the production macOS `.app` launcher invokes. See [QUICKSTART.md](QUICKSTART.md#running-for-development) for the full table and flag reference.
+
+The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` is currently untracked and authored ad-hoc — treat it as the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
+
 ## Inferno® Shell Differences
 
 The Inferno® shell is rc-style, not POSIX sh:
@@ -354,3 +374,20 @@ infernode/
 ├── .github/workflows/   # CI/CD (ci, security, scorecard)
 └── build-*.sh           # Platform build scripts
 ```
+
+## Project tracking — Jira (Atlassian Cloud, free tier)
+
+Work on this project is tracked in Jira at **https://nervsystems-team.atlassian.net**.
+
+- **`INFR`** (this repo) — InferNode runtime, llmsrv, lucibridge, Veltro tools, headless serve-llm. Epic: `INFR-1` (LLM-as-tool routing + multi-model serving).
+- **`IOL`** (sibling: `pdfinn/infernode-os-llm`) — LLM corpus, training, eval harness. Epic: `IOL-1` (v4 corpus + harness extensions).
+- **`SCRUM`** — NERV Systems work, compliance.
+
+A helper script lives in the sibling repo at `pdfinn/infernode-os-llm/tools/jira.py`. Auth: reads `ATL_EMAIL` + `ATL_TOKEN` from env, or `~/.atlassian/credentials` (mode 600). Never commit credentials.
+
+When closing a code change that resolves a Jira ticket, **reference the key in the commit message** (e.g. `Refs: INFR-2`) — Jira links them automatically.
+
+Notable open INFR tasks at time of this writing:
+- `INFR-2` — implement `/tool/limbo/run` (LLM-as-tool routing pattern; see `docs/LLM-AS-TOOL.md` in the IOL repo for design)
+- `INFR-3` — wire lucibridge per-capability routing (likely superseded by INFR-2)
+- `INFR-4` — verify `/n/llm/$id/model` accepts writes (5-min spike; prerequisite for INFR-2)

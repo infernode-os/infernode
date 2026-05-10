@@ -284,55 +284,6 @@ Options:
 - `temperature=<float>` -- 0.0-2.0 (default: 0.7)
 - `thinking=<val>` -- off, max, or token budget 0-30000
 - `system=<prompt>` -- explicit system prompt (overrides agenttype)
-- `at=<rfc3339>` -- delay until the named instant, then run a single iteration (INFR-14)
-- `every=<int><s|m|h|d>` -- loop, sleeping that long between iterations, until killed (INFR-14)
-
-### Scheduling: sleeping subagents (INFR-14)
-
-`at=` and `every=` schedule work the Inferno-native way: the schedule
-**is** a sleeping subagent in `/prog`, in its own attenuated namespace.
-There is no scheduler service, no central registry, no cron syntax, and
-no shared mutable state. Capabilities are bound at spawn time (FORKNS +
-restrictns happen *before* the sleep), so the sleeping process holds
-exactly the namespace it will run in — even if every relevant config
-changes before the wake.
-
-```
-# Run once at a specific instant:
-spawn tools=read,list at=2026-05-10T09:00:00Z -- list /n/llm
-
-# Run hourly until killed:
-spawn tools=read,list every=1h -- list /n/mail/<acct>/boxes/INBOX
-```
-
-`spawn` returns immediately with `scheduled: ...` (no waiting on the
-collector). To inspect or cancel:
-
-```
-ps                                  # the sleeping subagent shows up here
-echo kill > /prog/<pid>/ctl         # cancellation
-cat /prog/<pid>/ns                  # confirm caps
-```
-
-`at=` accepts RFC3339 timestamps (`Z`, `+HH:MM`, or `-HH:MM` zones,
-optional fractional seconds). Past times are rejected at parse time.
-`every=` accepts `<int><s|m|h|d>` durations. Parsing of RFC3339 lives
-in the shared library `appl/lib/rfc3339.b` (interface `module/rfc3339.m`),
-also intended for `calendar9p` (INFR-9) and any other consumer.
-
-**Y2038 limit:** `at=` timestamps at or after **2038-01-19T03:14:08Z**
-silently wrap to negative because Inferno's `daytime->tm2epoch` returns
-a 32-bit signed `int`. Inside the limit (~12 years from now) `at=` is
-correct; beyond it, the parser succeeds but the wake never fires
-correctly. Lifting this requires `daytime` to use `big` — a separate,
-larger refactor out of scope for INFR-14.
-
-`every=` v1 reuses the same LLM session across iterations — conversation
-history accumulates. For tasks where this matters (e.g. "summarise new
-items each hour" against an LLM that should not see previous summaries),
-opening a fresh session per iteration is a future revision; for polling
-tasks against a freshly-mounted 9P fs that doesn't depend on prior
-context, history reuse is fine.
 
 ### Speech
 
@@ -615,9 +566,9 @@ snapshot. Exit nonzero on any difference. Wire into
 `.github/workflows/` alongside the existing security checks.
 
 A companion script, `tests/nsaudit-fixtures/verify-matches-boot.sh`,
-diffs fixture contents against the tool lists in `lib/lucifer/boot.sh`,
-`dis/lucifer-start.sh`, `run-lucia.sh`, and friends — so the fixture
-cannot silently drift from the real shipping commands.
+diffs fixture contents against the tool lists in `lib/lucifer/boot.sh`
+and `dis/lucifer-start.sh` — so the fixture cannot silently drift from
+the real shipping commands.
 
 Updating a fixture or snapshot requires a deliberate edit in the PR,
 visible to reviewers. Adding a suppression requires a named, dated file
@@ -658,28 +609,26 @@ This is where `nswalk` lives: not as a user-facing tool, but as a
 subroutine of the ground-truth check. Once it exists as a subroutine,
 exposing it as a user tool is cheap.
 
-### NODEVS at top-level FORKNS sites — applied (INFR-17)
+### NODEVS short-term fix, independent of nsaudit
 
-`pctl(NODEVS)` is now applied at all three top-level FORKNS sites
-(`veltro.b:168`, `repl.b:169`, `tools9p.b:644`) in addition to the
-spawned-child path (`spawn.b:576`). The kernel device gate is at
-`emu/port/chan.c:1041-1051`; the gate fails attach on any `#x` path
-outside the `|esDa` allowlist (and on subspecs of `#s` such as
-`#sfactotum`).
+`pctl(NODEVS)` is applied only in the spawned-child path
+(`spawn.b:576`). Top-level agents (`veltro.b:168`, `repl.b:169`,
+`tools9p.b:644`) call `pctl(FORKNS)` and `restrictns()` but leave
+`pgrp->nodevs == 0`. The kernel device gate is at
+`emu/port/chan.c:1041-1051`; with `nodevs` unset, `sys->bind("#sfactotum",
+"/tmp/veltro/x", MREPL)` succeeds and reaches factotum regardless of
+path-based restriction.
 
-Before the fix this was latent — top-level agents did not invoke `bind`
-on `#x` paths from model-driven code, but it would have become
-exploitable the moment any tool or `exec` invocation did. Equivalent
-of OpenClaw's CSWSH-class reach, at the kernel-attach layer instead of
-HTTP.
+Today this is latent — top-level agents do not invoke `bind` on `#x`
+paths from model-driven code. It becomes exploitable the moment any tool
+or exec invocation does.
 
-Verified by `tests/veltro_security_test.b::testNodevsBlocksDeviceAttach`
-which establishes a positive control (bind on `#p` succeeds before
-NODEVS) and two negative controls (bind on `#p` and `#sfactotum` fail
-after NODEVS).
-
-The companion `TOPLEVEL_MISSING_NODEVS` static rule for `nsaudit` keeps
-this gate from being silently removed by future edits.
+Fix: add `sys->pctl(Sys->NODEVS, nil)` to the three top-level FORKNS
+sites. The kernel gate is strictly stronger than the path gate for
+device-attach, and none of the top-level agents has a documented need for
+`#x` devices outside the `nodevs` allowlist (`|esDa`). Once fixed,
+`SUBAGENT_MISSING_NODEVS` plus an analogous `TOPLEVEL_MISSING_NODEVS`
+rule keep it fixed.
 
 ### Sequencing
 

@@ -742,9 +742,10 @@ if (Test-Path $emuPath) {
     Write-Host "SUCCESS: Emulator built at $emuPath" -ForegroundColor Green
     Write-Host "  Size: $([math]::Round($size, 1)) KB"
     Write-Host ""
-    Write-Host "To run:" -ForegroundColor Yellow
-    Write-Host "  cd $ROOT"
-    Write-Host "  .\emu\Nt\o.emu.exe -r ."
+    Write-Host "Run from terminal (headless, drops to Inferno shell):" -ForegroundColor Yellow
+    Write-Host "  $ROOT\emu\Nt\o.emu.exe -c1 -r$ROOT sh -l"
+    Write-Host ""
+    Write-Host "For SDL3 GUI build, see docs\WINDOWS-BUILD.md"
 } else {
     Write-Host "Emulator binary not found." -ForegroundColor Red
     Write-Host "Check build output above for errors."

@@ -41,8 +41,8 @@ if [[ -f o.emu ]]; then
     echo "Checking for SDL dependencies..."
     otool -L o.emu | grep -i sdl || echo "  ✓ No SDL dependencies (correct for headless)"
     echo ""
-    echo "Emulator: $ROOT/emu/MacOSX/o.emu"
-    echo "Run with: ./o.emu -r../.."
+    echo "Run from terminal (headless, drops to Inferno shell):"
+    echo "  $ROOT/emu/MacOSX/o.emu -c1 -r$ROOT sh -l"
 else
     echo "Build failed!"
     exit 1

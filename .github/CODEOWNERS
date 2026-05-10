@@ -1,0 +1,5 @@
+# Solo maintainer — owns everything by default.
+# Format: <pattern> <owner> [<owner>...]
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @pdfinn

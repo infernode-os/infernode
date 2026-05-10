@@ -520,8 +520,9 @@ flush(nil: Rect)
 		return;
 	if(mainwin != nil) {
 		drawstatusbar(mainwin);
-		if(widgetmod != nil)
-			widgetmod->contentborder(mainwin);
+		# INFR-27: window border is the wmclient frame (th.windowborder).
+		# Don't draw widget.contentborder here — it would paint th.accent
+		# over the wmclient frame and break border consistency across apps.
 		mainwin.flush(D->Flushnow);
 	}
 }
@@ -619,8 +620,9 @@ startinput(mode: int)
 	}
 	if(mainwin != nil) {
 		drawstatusbar(mainwin);
-		if(widgetmod != nil)
-			widgetmod->contentborder(mainwin);
+		# INFR-27: window border is the wmclient frame (th.windowborder).
+		# Don't draw widget.contentborder here — it would paint th.accent
+		# over the wmclient frame and break border consistency across apps.
 		mainwin.flush(D->Flushnow);
 	}
 }

@@ -820,7 +820,9 @@ redraw()
 		statbar.left = rootpath;
 	statbar.right = sys->sprint("%d items", nvisible);
 	statbar.draw(screen);
-	widgetmod->contentborder(screen);
+	# INFR-27: window border is the wmclient frame (th.windowborder).
+	# Don't draw widget.contentborder here — it would paint th.accent
+	# over the wmclient frame and break border consistency across apps.
 
 	screen.flush(Draw->Flushnow);
 }

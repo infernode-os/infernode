@@ -1228,8 +1228,9 @@ redraw()
 	if(comp != nil && comp.layout != nil)
 		drawlayout(img, comp.layout);
 
-	if(widgetmod != nil)
-		widgetmod->contentborder(img);
+	# INFR-27: window border is the wmclient frame (th.windowborder).
+	# Don't draw widget.contentborder here — it would paint th.accent
+	# over the wmclient frame and break border consistency across apps.
 	img.flush(Draw->Flushnow);
 }
 

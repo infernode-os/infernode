@@ -275,6 +275,11 @@ view(ctxt: ref Context, ims, masks: array of ref Image, file: string)
 			}else if(p.buttons &4)
 				w.ctl <-= sys->sprint("!size . -1 %d %d", 0, 0);
 		}
+	# ctxt.kbd is unbuffered; not draining deadlocks the wm on first
+	# keypress with focus and freezes the whole UI.  view requested
+	# kbd input above but never read it.  Discard.
+	<-w.ctxt.kbd =>
+		;
 	<-ticks =>
 		;
 #		if(masks[imno] != nil)

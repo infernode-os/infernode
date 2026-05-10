@@ -73,6 +73,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		w.wmctl(ctl);
 		if(ctl != nil && ctl[0] == '!')
 			drawclock(w.image, now);
+	# ctxt.kbd is an UNBUFFERED chan of int; if the wm sends a key
+	# event and we don't drain, the wm blocks forever and the entire
+	# UI freezes.  We don't want kbd input here, but we MUST drain.
+	# (clock.b previously froze the GUI on first keypress with focus.)
+	<-w.ctxt.kbd =>
+		;	# discard
 	p := <-w.ctxt.ptr =>
 		if(!w.pointer(*p)  && (p.buttons & (1|2))){
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);

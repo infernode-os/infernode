@@ -63,6 +63,14 @@ window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
 	w.ctl = chan[2] of string;
 	readscreenrect(w);
 
+	# INFR-29 safety net: wm sends kbd events to focused windows on an
+	# unbuffered chan.  Apps that don't drain it deadlock the entire
+	# UI on the first keypress.  Spawn a default drainer that discards
+	# kbd events; startinput("kbd") below stops it so apps that DO
+	# subscribe read ctxt.kbd as before.  No app-side change required.
+	w.kbdstop = chan of int;
+	spawn kbddrainer(w);
+
 	if(buts & Plain)
 		return w;
 
@@ -73,6 +81,19 @@ window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
 
 	w.wmctl("fixedorigin");
 	return w;
+}
+
+# Default kbd drainer.  Runs until the app calls startinput("kbd"),
+# which sends to kbdstop.  Until then, every kbd event from the wm
+# is consumed and discarded so the wm's send doesn't block.
+kbddrainer(w: ref Window)
+{
+	for(;;) alt {
+	<-w.kbdstop =>
+		return;
+	<-w.ctxt.kbd =>
+		;	# discard
+	}
 }
 
 Window.pointer(w: self ref Window, p: Draw->Pointer): int
@@ -133,6 +154,15 @@ putimage(w: ref Window, i: ref Image)
 	if(ir.dy() < 0)
 		ir.max.y = ir.min.y;
 	w.image = w.screen.newwindow(ir, Draw->Refnone, Draw->Nofill);
+	# INFR-27: Pre-fill w.image with the screen background so that
+	# any region the app doesn't paint (notably the 1-pixel ring
+	# inside w.image when an app uses w.imager(w.image.r) for its
+	# content rect — fractals, keyring, settings, wallet) shows a
+	# dark, themed colour instead of undefined display memory
+	# (often white). Apps that fill w.image.r themselves overwrite
+	# this and pay nothing.
+	if(w.image != nil)
+		w.image.draw(w.image.r, w.display.color(screenbg), nil, (0, 0));
 	drawborder(w);
 	w.r = i.r;
 }
@@ -202,8 +232,20 @@ Window.onscreen(w: self ref Window, how: string)
 
 Window.startinput(w: self ref Window, devs: list of string)
 {
-	for(; devs != nil; devs = tl devs)
+	for(; devs != nil; devs = tl devs) {
+		# INFR-29 safety net: an app subscribing to kbd takes
+		# ownership of ctxt.kbd, so signal the default drainer to
+		# exit (idempotent — only the first "kbd" subscription
+		# stops it; later calls are no-ops).
+		if(hd devs == "kbd" && !w.kbdsubscribed) {
+			w.kbdsubscribed = 1;
+			alt {
+			w.kbdstop <-= 1 => ;
+			* => ;	# drainer already gone
+			}
+		}
 		w.wmctl(sys->sprint("start %q", hd devs));
+	}
 }
 
 # commands originating both from tkclient and wm (via ctl)

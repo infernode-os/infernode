@@ -261,7 +261,8 @@ $secSrc = @(
     "hmac.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
     "sha2.c", "sha256block.c", "sha512block.c",
     "sha1pickle.c", "md5pickle.c", "rc4.c",
-    "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c",
+    "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c", "securezero.c",
+    "secp256k1.c", "keccak256.c",
     "probably_prime.c", "smallprimetest.c", "genprime.c", "dsaprimes.c",
     "gensafeprime.c", "genstrongprime.c", "dhparams.c",
     "rsagen.c", "rsafill.c", "rsaencrypt.c", "rsadecrypt.c", "rsaalloc.c", "rsaprivtopub.c",
@@ -657,7 +658,7 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "$LibDir\libmemlayer.lib" `
     "$LibDir\libmemdraw.lib" `
     "$LibDir\lib9.lib" `
-    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib
+    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib bcrypt.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
     exit 1

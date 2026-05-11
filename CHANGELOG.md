@@ -2,6 +2,28 @@
 
 All notable changes to InferNode are documented in this file.
 
+## [0.2] - 2026-04-14
+
+### Windows AMD64 Release
+
+- **Windows JIT compiler** — AMD64 JIT with 5.7x speedup (181/181 correctness tests pass)
+- **Host filesystem mounting** — Drive letters mounted at `/n/C`, `/n/D` etc. via `#U` device; `~/.infernode` overlay for persistent user state
+- **Secstore and factotum** — Encrypted key persistence works on Windows with PAK authentication
+- **SDL3 GUI** — Xenith, Lucifer, and window manager with D3D acceleration
+- **Build system** — Complete MSVC build via `build-windows-amd64.ps1` and `build-windows-sdl3.ps1`; crypto libraries (secp256k1, keccak256, securezero) fully linked
+- **CSPRNG** — Secure random via `BCryptGenRandom` (replaces `/dev/urandom`)
+- **CI/CD** — Windows build and test verification in GitHub Actions
+- **Packaging** — Portable zip and MSIX packaging scripts
+
+### Platforms
+
+| Platform | Architecture | GUI | JIT |
+|----------|-------------|-----|-----|
+| macOS | ARM64 (Apple Silicon) | SDL3 | 9.6x |
+| Linux | AMD64 | Headless / SDL3 | 14.2x |
+| Linux | ARM64 | Headless / SDL3 | 8.3x |
+| Windows | AMD64 | SDL3 | 5.7x |
+
 ## [0.1] - 2026-04-09
 
 First public release of InferNode, a 64-bit fork of Inferno OS for AI agents.

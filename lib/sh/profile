@@ -8,15 +8,32 @@ path=(/dis .)
 # Get username
 user="{cat /dev/user}
 
+# ── Windows: capture host env vars before mntgen (os cmd hangs after) ──
+if {~ $emuhost Nt} {
+	_nt_secpass=`{os cmd /c 'if defined SECSTORE_PASSWORD echo %SECSTORE_PASSWORD%'}
+	_nt_apikey=`{os cmd /c 'if defined ANTHROPIC_API_KEY echo key proto=pass service=anthropic user=apikey !password=%ANTHROPIC_API_KEY%'}
+}
+
 # ── Networking ──────────────────────────────────────────────
 mount -ac {mntgen} /n >[2] /dev/null
 bind -a '#I' /net >[2] /dev/null
 ndb/cs
 
 # ── Host filesystem + home directory (early — needed for overlays) ──
-if {~ $emuhost MacOSX Linux}{
-	trfs '#U*' /n/local >[2] /dev/null
-	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+if {~ $emuhost MacOSX Linux Nt}{
+	if {~ $emuhost Nt} {
+		# Windows: mount drive letters via #U, then resolve home.
+		# Pattern from Acme-SAC: #U with drive:/ spec mounts that drive.
+		for i in C D {
+			trfs '#U'^$i^':/' /n/$i >[2] /dev/null
+		}
+		# Construct home from $user. On Windows, profiles live at C:\Users\<name>.
+		# The C: drive is mounted above at /n/C.
+		ghome=/n/C/Users/^$user
+	}{
+		trfs '#U*' /n/local >[2] /dev/null
+		ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+	}
 	home=$ghome
 
 	# ── Writable overlay from ~/.infernode ──────────────────
@@ -61,7 +78,11 @@ if {~ $emuhost MacOSX Linux}{
 # ── Secstored (persistent encrypted key storage) ──────────
 # Kill stale secstored from a previous emu session — a stale
 # instance with different PAK data causes login to hang indefinitely.
-os sh -c 'lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null; sleep 1; true' >[2] /dev/null
+if {~ $emuhost Nt} {
+	os cmd /c 'for /f "tokens=5" %a in (''netstat -ano ^| findstr :5356 ^| findstr LISTENING'') do taskkill /F /PID %a >nul 2>&1' >[2] /dev/null
+}{
+	os sh -c 'lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null; sleep 1; true' >[2] /dev/null
+}
 mkdir -p /usr/inferno/secstore >[2] /dev/null
 auth/secstored >[2] /dev/null &
 sleep 1
@@ -71,9 +92,17 @@ sleep 1
 # with secstore backing so all keys are loaded automatically.
 # GUI: factotum starts empty; wm/logon unlocks secstore interactively.
 if {! ftest -f /mnt/factotum/proto}{
-	havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
-	if {~ $havesecpass yes} {
-		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
+	if {~ $emuhost Nt} {
+		havesecpass=$_nt_secpass
+	}{
+		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
+	}
+	if {! ~ $havesecpass ''} {
+		if {~ $emuhost Nt} {
+			secpass=$_nt_secpass
+		}{
+			secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
+		}
 		auth/factotum -S tcp!localhost!5356 -P $secpass
 	}{
 		auth/factotum
@@ -81,11 +110,15 @@ if {! ftest -f /mnt/factotum/proto}{
 }
 
 # Provision API key from host env (fallback for CLI users without secstore)
-factotumkey=`{os sh -c 'if [ -n "$ANTHROPIC_API_KEY" ]; then echo "key proto=pass service=anthropic user=apikey !password=$ANTHROPIC_API_KEY"; fi'}
+if {~ $emuhost Nt} {
+	factotumkey=$_nt_apikey
+}{
+	factotumkey=`{os sh -c 'if [ -n "$ANTHROPIC_API_KEY" ]; then echo "key proto=pass service=anthropic user=apikey !password=$ANTHROPIC_API_KEY"; fi'}
+}
 echo $factotumkey > /mnt/factotum/ctl >[2] /dev/null
 
 # ── LLM + Speech (desktop platforms) ──────────────────────
-if {~ $emuhost MacOSX Linux}{
+if {~ $emuhost MacOSX Linux Nt}{
 	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
 	if {~ $llmmode remote} {
 		llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}

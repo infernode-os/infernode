@@ -337,7 +337,7 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "$LibDir\libmemdraw.lib" `
     "$LibDir\lib9.lib" `
     $sdl3Lib `
-    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib
+    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib bcrypt.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
     exit 1

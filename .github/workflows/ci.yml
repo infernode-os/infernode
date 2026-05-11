@@ -879,3 +879,131 @@ jobs:
           MacOSX/arm64/bin/limbo
           MacOSX/arm64/bin/mk
         retention-days: 14
+
+  # ─────────────────────────────────────────────
+  # Windows AMD64: MSVC build from source
+  # ─────────────────────────────────────────────
+  windows-amd64:
+    name: Windows AMD64 Build & Test
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Stamp build version
+      shell: powershell
+      run: |
+        $buildDate = Get-Date -Format "yyyyMMdd"
+        $shortSha = $env:GITHUB_SHA.Substring(0, 8)
+        $versionFile = "include/version.h"
+        (Get-Content $versionFile) -replace 'InferNode 0.1', "InferNode 0.1 build $buildDate-$shortSha" | Set-Content $versionFile
+        Write-Host "Version: $(Get-Content $versionFile)"
+
+    - name: Install build dependencies
+      shell: powershell
+      run: |
+        choco install winflexbison3 -y
+
+    - name: Setup MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64
+
+    - name: Bootstrap build (mk, libraries, limbo, emulator)
+      shell: powershell
+      run: |
+        .\build-windows-amd64.ps1
+
+    - name: Verify emulator binary
+      shell: powershell
+      run: |
+        if (-not (Test-Path 'emu\Nt\o.emu.exe')) {
+          Write-Error "Emulator not built"
+          exit 1
+        }
+        Get-Item 'emu\Nt\o.emu.exe'
+        if (-not (Test-Path 'Nt\amd64\bin\limbo.exe')) {
+          Write-Error "Limbo compiler not built"
+          exit 1
+        }
+
+    - name: Run test suite
+      shell: powershell
+      run: |
+        # Create tmp directory inside Inferno root for tmp_writable test
+        New-Item -ItemType Directory -Force -Path tmp
+
+        Write-Host "Running test suite inside Inferno emulator..."
+        $proc = Start-Process -FilePath '.\emu\Nt\o.emu.exe' -ArgumentList '-c1', '-r', '.', '/dis/tests/runner.dis', '-v' -NoNewWindow -PassThru -RedirectStandardOutput 'test-output.txt' -RedirectStandardError 'test-err.txt'
+        $timedOut = $null
+        $proc | Wait-Process -Timeout 60 -ErrorVariable timedOut -ErrorAction SilentlyContinue
+        if ($timedOut) {
+          Write-Host "Test process timed out after 60 seconds, killing..."
+          $proc | Stop-Process -Force
+        }
+
+        Get-Content 'test-output.txt'
+
+        $output = Get-Content 'test-output.txt' -Raw
+        if ($output -match '(?m)^PASS$') {
+          Write-Host "Tests passed."
+        } elseif ($output -match '(?m)^FAIL$') {
+          Write-Error "Tests failed."
+          exit 1
+        } else {
+          Write-Error "No test result found in output - tests may not have run."
+          exit 1
+        }
+
+    - name: Run JIT correctness tests
+      shell: powershell
+      run: |
+        Write-Host "Running JIT correctness tests (-c1)..."
+        $proc = Start-Process -FilePath '.\emu\Nt\o.emu.exe' -ArgumentList '-c1', '-r', '.', '/dis/jittest.dis' -NoNewWindow -PassThru -RedirectStandardOutput 'jit-test.txt' -RedirectStandardError 'jit-err.txt'
+        $timedOut = $null
+        $proc | Wait-Process -Timeout 120 -ErrorVariable timedOut -ErrorAction SilentlyContinue
+        if ($timedOut) {
+          Write-Host "JIT test process timed out after 120 seconds, killing..."
+          $proc | Stop-Process -Force
+        }
+
+        Get-Content 'jit-test.txt'
+
+        $output = Get-Content 'jit-test.txt' -Raw
+        if ($output -match '(?m)^PASS$') {
+          Write-Host "JIT correctness tests: PASS"
+        } else {
+          Write-Error "JIT correctness tests: FAIL"
+          exit 1
+        }
+
+    - name: Run JIT benchmarks (informational)
+      shell: powershell
+      run: |
+        Write-Host "Running JIT benchmarks..."
+        $proc = Start-Process -FilePath '.\emu\Nt\o.emu.exe' -ArgumentList '-c1', '-r', '.', '/dis/jitbench2.dis' -NoNewWindow -PassThru -RedirectStandardOutput 'jit-bench.txt' -RedirectStandardError 'jit-bench-err.txt'
+        $timedOut = $null
+        $proc | Wait-Process -Timeout 180 -ErrorVariable timedOut -ErrorAction SilentlyContinue
+        if ($timedOut) {
+          Write-Host "JIT benchmark timed out after 180 seconds, killing..."
+          $proc | Stop-Process -Force
+        }
+
+        Get-Content 'jit-bench.txt'
+        Write-Host "JIT benchmarks complete (informational only)."
+
+    - name: Upload Windows build artifacts
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      if: success()
+      with:
+        name: infernode-windows-amd64
+        path: |
+          emu\Nt\o.emu.exe
+          Nt\amd64\bin\limbo.exe
+          Nt\amd64\bin\mk.exe
+        retention-days: 14

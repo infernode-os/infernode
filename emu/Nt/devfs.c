@@ -399,7 +399,10 @@ fsattach(char *spec)
 	static Lock l;
 	char *drive = (char *)spec;
 
-	if (!emptystr(drive) && (drive[1] != ':' || drive[2] != '\0'))
+	/* Accept "*" (whole filesystem) like POSIX devfs — treat as empty spec */
+	if (!emptystr(drive) && strcmp(drive, "*") == 0)
+		spec = "";
+	if (!emptystr(drive) && strcmp(drive, "*") != 0 && (drive[1] != ':' || drive[2] != '\0'))
 		error(Ebadspec);
 
 	c = devattach('U', spec);

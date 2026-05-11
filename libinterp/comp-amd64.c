@@ -60,7 +60,7 @@ jitmalloc(size_t size)
 			break;
 		p = VirtualAlloc((void*)try, size,
 		         MEM_COMMIT|MEM_RESERVE,
-		         PAGE_READWRITE);
+		         PAGE_EXECUTE_READWRITE);
 		if(p != NULL) {
 			vlong diff = (vlong)((uvlong)p - base_addr);
 			if(diff < 0) diff = -diff;
@@ -73,7 +73,7 @@ jitmalloc(size_t size)
 		try = base_addr + (uvlong)i * 0x10000ULL;
 		p = VirtualAlloc((void*)try, size,
 		         MEM_COMMIT|MEM_RESERVE,
-		         PAGE_READWRITE);
+		         PAGE_EXECUTE_READWRITE);
 		if(p != NULL) {
 			vlong diff = (vlong)((uvlong)p - base_addr);
 			if(diff < 0) diff = -diff;
@@ -2615,6 +2615,12 @@ typecom(Type *t)
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
+#elif defined(_WIN32)
+	{
+		unsigned long old;
+		__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);
+		VirtualProtect(code, n, PAGE_EXECUTE_READWRITE, &old);
+	}
 #endif
 
 	t->initialize = code;
@@ -2823,8 +2829,6 @@ compile(Module *m, int size, Modlink *ml)
 	segflush(base, n + nlit);
 #endif
 
-	print("JIT compiled %s: base=%p size=%d comvec=%p compile=%p\n",
-		m->name ? m->name : "?", base, n+nlit, comvec, compile);
 	return 1;
 bad:
 	free(patch);

@@ -3,6 +3,10 @@
 #include <libsec.h>
 #if defined(__linux__)
 #include <sys/random.h>
+#elif defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <bcrypt.h>
 #endif
 
 //
@@ -13,6 +17,11 @@ prng(uchar *p, int n)
 {
 #if defined(__APPLE__)
 	arc4random_buf(p, n);
+#elif defined(_WIN32)
+	if(BCryptGenRandom(NULL, p, n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+		fprint(2, "prng: BCryptGenRandom failed, aborting\n");
+		abort();
+	}
 #elif defined(__linux__)
 	while(n > 0) {
 		ssize_t r = getrandom(p, n, 0);

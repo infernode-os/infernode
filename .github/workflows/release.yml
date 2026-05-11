@@ -1000,14 +1000,102 @@ jobs:
         path: infernode-*-macos-arm64.dmg
         retention-days: 3
 
-  # Windows AMD64: deferred to v0.2 (linker issues with crypto libs)
+  # ─────────────────────────────────────────────
+  # Windows AMD64: Headless emulator + toolchain
+  # ─────────────────────────────────────────────
+  windows-amd64:
+    name: Windows AMD64
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Extract version from tag
+      id: version
+      shell: pwsh
+      run: |
+        $version = "${{ github.ref_name }}" -replace '^v',''
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+
+    - name: Setup MSVC environment
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592571 # v1
+      with:
+        arch: amd64
+
+    - name: Stamp build version
+      shell: pwsh
+      run: |
+        $VERSION = "${{ steps.version.outputs.version }}"
+        $BUILD_DATE = Get-Date -Format "yyyyMMdd"
+        $SHORT_SHA = "${{ github.sha }}".Substring(0, 8)
+        $versionFile = "${{ github.workspace }}\include\version.h"
+        (Get-Content $versionFile) -replace 'InferNode 0.1', "InferNode $VERSION build $BUILD_DATE-$SHORT_SHA" | Set-Content $versionFile
+        Write-Host "Version: $(Get-Content $versionFile)"
+
+    - name: Build (headless)
+      shell: pwsh
+      run: |
+        & .\build-windows-amd64.ps1
+
+    - name: Verify build
+      shell: pwsh
+      run: |
+        if (-not (Test-Path "emu\Nt\o.emu.exe")) { Write-Host "Emulator not built"; exit 1 }
+        if (-not (Test-Path "Nt\amd64\bin\limbo.exe")) { Write-Host "Limbo compiler not built"; exit 1 }
+        if (-not (Test-Path "Nt\amd64\bin\mk.exe")) { Write-Host "mk not built"; exit 1 }
+
+    - name: Package archive
+      shell: pwsh
+      run: |
+        $VERSION = "${{ steps.version.outputs.version }}"
+        $STAGE = "infernode-$VERSION-windows-amd64"
+
+        New-Item -ItemType Directory -Force -Path "$STAGE\emu\Nt" | Out-Null
+        New-Item -ItemType Directory -Force -Path "$STAGE\Nt\amd64\bin" | Out-Null
+
+        # Platform binaries
+        Copy-Item "emu\Nt\o.emu.exe" "$STAGE\emu\Nt\"
+        Copy-Item "Nt\amd64\bin\limbo.exe" "$STAGE\Nt\amd64\bin\"
+        Copy-Item "Nt\amd64\bin\mk.exe" "$STAGE\Nt\amd64\bin\"
+
+        # Shared runtime tree
+        foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale")) {
+          if (Test-Path $d) {
+            Copy-Item -Recurse $d "$STAGE\$d"
+          }
+        }
+
+        # tmp directory (needed by profile)
+        New-Item -ItemType Directory -Force -Path "$STAGE\tmp" | Out-Null
+
+        # Docs and legal
+        foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md")) {
+          if (Test-Path $f) {
+            Copy-Item $f "$STAGE\"
+          }
+        }
+
+        Compress-Archive -Path $STAGE -DestinationPath "$STAGE.zip" -CompressionLevel Optimal
+        Write-Host "Archive: $STAGE.zip"
+        Write-Host "Size: $([math]::Round((Get-Item "$STAGE.zip").Length / 1MB, 1)) MB"
+
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: infernode-windows-amd64
+        path: infernode-*-windows-amd64.zip
+        retention-days: 3
 
   # ─────────────────────────────────────────────
   # Create GitHub Release with all archives
   # ─────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos-arm64]
+    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos-arm64, windows-amd64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -1046,7 +1134,7 @@ jobs:
     - name: Attest build provenance
       run: |
         cd artifacts
-        for f in infernode-*.tar.gz infernode-*.dmg; do
+        for f in infernode-*.tar.gz infernode-*.dmg infernode-*.zip; do
           [ -f "$f" ] && echo "Attesting $f" || continue
         done
     - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -1055,6 +1143,9 @@ jobs:
     - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
       with:
         subject-path: artifacts/infernode-*.dmg
+    - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+      with:
+        subject-path: artifacts/infernode-*.zip
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
@@ -1080,8 +1171,7 @@ jobs:
           | Linux | ARM64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-linux-arm64-gui.tar.gz` |
           | Linux | ARM64 (headless) | `infernode-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
           | macOS | ARM64 (Apple Silicon, SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
-
-          Windows support is in progress and will ship in a future release.
+          | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
 
           ### Quick Start
 
@@ -1090,6 +1180,8 @@ jobs:
           **Linux (GUI):** Extract, then `./infernode`
 
           **Linux (headless):** Extract, then `./infernode-headless`
+
+          **Windows:** Extract the zip, then run `emu\Nt\o.emu.exe -r . sh -l`
 
           ### Verification
 

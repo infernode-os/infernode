@@ -34,6 +34,7 @@ TARG=\
 	bytes.dis\
 	cal.dis\
 	calc.dis\
+	calendar9p.dis\
 	cat.dis\
 	cd.dis\
 	cddb.dis\

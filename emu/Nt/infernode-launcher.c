@@ -51,10 +51,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		if (h < 600)  h = 600;
 
 		/* Launch InferNode emu with Lucifer GUI.
+		 * -c0: interpreter mode for GUI (JIT + SDL3 threading race pending fix)
+		 * -c1: can be used for headless workloads (5.7x speedup)
 		 * -l sources lib/sh/profile (mounts host FS, overlay, secstore).
 		 * The boot script starts luciuisrv, tools9p, lucibridge, lucifer. */
 		_snprintf(cmd, sizeof(cmd),
-			"\"%s\\o.emu.exe\" -g %dx%d"
+			"\"%s\\o.emu.exe\" -c0 -g %dx%d"
 			" -pheap=1024m -pmain=1024m -pimage=1024m"
 			" -r . sh -l /dis/lucifer-start.sh",
 			dir, w, h);

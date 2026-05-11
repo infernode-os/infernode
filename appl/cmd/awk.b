@@ -1882,7 +1882,13 @@ evalcall(name: string, args: list of ref Node): ref Val
 		return mknum(math->sqrt(numval(eval(hd args))));
 	"int" =>
 		if(args == nil) fatal("int requires 1 argument");
-		return mknum(real int numval(eval(hd args)));
+		# POSIX awk: truncate toward zero. Limbo's int cast on real
+		# rounds (round-to-even), which gives wrong answers for
+		# fractional values, so dispatch on sign and use floor/ceil.
+		x := numval(eval(hd args));
+		if(x < 0.0)
+			return mknum(real -int math->floor(-x));
+		return mknum(real int math->floor(x));
 	"rand" =>
 		return mknum(real randmod->rand(1000000) / 1000000.0);
 	"srand" =>
@@ -2004,6 +2010,27 @@ builtin_index(args: list of ref Node): ref Val
 	return mknum(0.0);
 }
 
+# Resolve a function-argument node to a compiled regex and its source text.
+# Regex literals (/foo/) inside expressions are parsed as Match($0 ~ /foo/),
+# so naïvely eval'ing them yields the boolean match against $0 instead of the
+# regex itself. split/sub/gsub/match all want the underlying regex; this
+# unwraps the Match (or rare bare Regex) node and falls back to compiling a
+# string-valued argument when the caller passed a dynamic pattern.
+extractregex(n: ref Node): (Regex->Re, string)
+{
+	pick p := n {
+	Match =>
+		return (p.re, p.pat);
+	Regex =>
+		return (p.re, p.pat);
+	}
+	pat := strval(eval(n));
+	(re, err) := regex->compile(pat, 0);
+	if(re == nil)
+		fatal(sys->sprint("bad regex %s: %s", pat, err));
+	return (re, pat);
+}
+
 builtin_split(args: list of ref Node): ref Val
 {
 	if(args == nil || tl args == nil) fatal("split requires 2-3 arguments");
@@ -2021,8 +2048,22 @@ builtin_split(args: list of ref Node): ref Val
 	args = tl args;
 
 	sep := fs_var;
-	if(args != nil)
-		sep = strval(eval(hd args));
+	sep_re: Regex->Re;
+	isregex := 0;
+	if(args != nil) {
+		pick p := hd args {
+		Match =>
+			sep_re = p.re;
+			sep = p.pat;
+			isregex = 1;
+		Regex =>
+			sep_re = p.re;
+			sep = p.pat;
+			isregex = 1;
+		* =>
+			sep = strval(eval(hd args));
+		}
+	}
 
 	# clear array
 	sym := getsym(arrname);
@@ -2030,14 +2071,15 @@ builtin_split(args: list of ref Node): ref Val
 	a := sym.arr;
 
 	count := 0;
-	if(sep == " ") {
-		(count, fl) := sys->tokenize(s, " \t");
+	if(!isregex && sep == " ") {
+		(n, fl) := sys->tokenize(s, " \t");
 		i := 1;
 		for(; fl != nil; fl = tl fl) {
 			a.set(string i, mkstr(hd fl));
 			i++;
 		}
-	} else if(len sep == 1) {
+		count = n;
+	} else if(!isregex && len sep == 1) {
 		delim := sep[0];
 		start := 0;
 		for(i := 0; i <= len s; i++) {
@@ -2048,10 +2090,15 @@ builtin_split(args: list of ref Node): ref Val
 			}
 		}
 	} else {
-		# regex separator
-		(re, nil) := regex->compile(sep, 0);
+		# regex separator: precompiled if the caller passed /pat/,
+		# otherwise compiled here from the (multi-char) string sep.
+		re := sep_re;
+		if(!isregex) {
+			(rv, nil) := regex->compile(sep, 0);
+			re = rv;
+		}
 		if(re == nil) {
-			# literal
+			# compile failed: treat as a single literal field
 			count = 1;
 			a.set("1", mkstr(s));
 		} else {
@@ -2071,7 +2118,16 @@ builtin_split(args: list of ref Node): ref Val
 				(ms, me) := result[0];
 				count++;
 				a.set(string count, mkstr(rest[:ms]));
-				rest = rest[me:];
+				if(ms == me) {
+					# zero-length match: emit one char and step past it
+					if(me < len rest) {
+						count++;
+						a.set(string count, mkstr(rest[me:me+1]));
+					}
+					rest = rest[me+1:];
+				} else {
+					rest = rest[me:];
+				}
 			}
 		}
 	}
@@ -2082,11 +2138,10 @@ builtin_sub(args: list of ref Node, global: int): ref Val
 {
 	if(args == nil || tl args == nil) fatal("sub/gsub requires 2-3 arguments");
 
-	# first arg is regex
-	pat := strval(eval(hd args));
-	(re, err) := regex->compile(pat, 0);
+	# first arg is the pattern (regex literal or dynamic string)
+	(re, nil) := extractregex(hd args);
 	if(re == nil)
-		fatal(sys->sprint("bad regex: %s", err));
+		return mknum(0.0);
 
 	# second arg is replacement
 	repl := strval(eval(hd tl args));
@@ -2110,11 +2165,12 @@ builtin_sub(args: list of ref Node, global: int): ref Val
 		matches := regex->execute(re, remaining);
 		if(matches == nil) {
 			result += remaining;
+			pos = len s + 1;	# remaining already appended; suppress trailing copy
 			break;
 		}
 		(ms, me) := matches[0];
 		result += remaining[:ms];
-		# process replacement: & means matched text
+		# expand replacement: & is matched text, \& is literal &
 		matched := remaining[ms:me];
 		for(i := 0; i < len repl; i++) {
 			if(repl[i] == '&')
@@ -2126,19 +2182,20 @@ builtin_sub(args: list of ref Node, global: int): ref Val
 				result[len result] = repl[i];
 		}
 		nsubs++;
-		pos += ms + me;
-		if(ms == me)
-			pos++;	# prevent infinite loop on zero-length match
+		if(ms == me) {
+			# zero-length match: copy the next char to step past it
+			if(ms < len remaining)
+				result[len result] = remaining[ms];
+			pos += me + 1;
+		} else {
+			pos += me;
+		}
 		if(!global)
 			break;
-		if(ms == me && pos <= len s)
-			result[len result] = s[pos-1];
 	}
-	# for non-global, append rest
-	if(!global && pos <= len s && nsubs > 0) {
-		remaining := s[pos:];
-		result += remaining;
-	}
+	# append the suffix that follows the (last) match
+	if(pos <= len s)
+		result += s[pos:];
 
 	if(nsubs > 0)
 		assignto(target, mkstr(result));
@@ -2149,8 +2206,7 @@ builtin_match(args: list of ref Node): ref Val
 {
 	if(args == nil || tl args == nil) fatal("match requires 2 arguments");
 	s := strval(eval(hd args));
-	pat := strval(eval(hd tl args));
-	(re, nil) := regex->compile(pat, 0);
+	(re, nil) := extractregex(hd tl args);
 	if(re == nil) {
 		rstart_var = 0;
 		rlength_var = -1;

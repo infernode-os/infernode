@@ -184,7 +184,7 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 
 	{
 		HANDLE th;
-		th = CreateThread(0, 16*1024*1024, tramp, p, 0, &h);
+		th = CreateThread(0, 16384, tramp, p, 0, &h);
 		p->pid = (int)(intptr_t)th;
 		if(th == NULL)
 			panic("ran out of  kernel processes");
@@ -480,7 +480,7 @@ libinit(char *imod)
 	{
 		HANDLE th;
 		DWORD tid;
-		th = CreateThread(NULL, 16*1024*1024, emuinit_worker, imod, 0, &tid);
+		th = CreateThread(NULL, 16384, emuinit_worker, imod, 0, &tid);
 		if(th == NULL)
 			panic("cannot create emuinit worker thread");
 		CloseHandle(th);

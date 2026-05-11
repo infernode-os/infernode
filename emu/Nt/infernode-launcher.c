@@ -51,10 +51,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		if (h < 600)  h = 600;
 
 		/* Launch InferNode emu with Lucifer GUI.
-		 * -c0: interpreter mode for GUI (JIT + SDL3 threading race pending fix)
-		 * -c1: can be used for headless workloads (5.7x speedup)
-		 * -l sources lib/sh/profile (mounts host FS, overlay, secstore).
-		 * The boot script starts luciuisrv, tools9p, lucibridge, lucifer. */
+		 * GUI uses interpreter (-c0): JIT + Win32 qlock interaction causes
+		 * RtlpNotOwnerCriticalSection in ntdll when kproc thread signaling
+		 * (osblock/osready via Win32 Events) races with pool allocator locks
+		 * under high-frequency JIT module calls.  Headless -c1 is unaffected.
+		 * See WINDOWS-BUILD.md for details. */
 		_snprintf(cmd, sizeof(cmd),
 			"\"%s\\o.emu.exe\" -c0 -g %dx%d"
 			" -pheap=1024m -pmain=1024m -pimage=1024m"

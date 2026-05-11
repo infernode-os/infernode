@@ -646,7 +646,7 @@ $configC | Set-Content -Path "emu-config.c" -Encoding ASCII
 Write-Host "  Linking o.emu.exe..."
 $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
 
-& link.exe /nologo /subsystem:console /STACK:8388608 `
+& link.exe /nologo /subsystem:console `
     "/OUT:o.emu.exe" `
     @allObjs `
     "$LibDir\libinterp.lib" `

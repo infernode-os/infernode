@@ -371,6 +371,9 @@ if (Test-Path $emuPath) {
     Write-Host ""
     Write-Host "Or double-click emu\Nt\InferNode.exe (Windows-subsystem launcher)."
     Write-Host ""
+    Write-Host "To assemble a dev bundle for testing the packaging path:" -ForegroundColor Yellow
+    Write-Host "  .\build-dev-bundle.ps1"
+    Write-Host ""
     if (-not (Test-Path "$ROOT\emu\Nt\SDL3.dll")) {
         Write-Host "Note: SDL3.dll must be in PATH or next to o.emu.exe." -ForegroundColor Yellow
     }

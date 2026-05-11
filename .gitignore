@@ -114,6 +114,13 @@ Nt/*/lib/*
 emu/*/o.emu
 emu/*/o.*
 emu/*/InferNode
+emu/*/InferNode.exe
+emu/*/SDL3.dll
+
+# Build logs and transient artefacts at repo root
+.build-*.log
+.rebase-backup/
+InferNode-windows-amd64.zip
 
 # Bootstrap mk build output
 utils/mk/mk

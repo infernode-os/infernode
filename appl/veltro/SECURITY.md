@@ -566,9 +566,8 @@ snapshot. Exit nonzero on any difference. Wire into
 `.github/workflows/` alongside the existing security checks.
 
 A companion script, `tests/nsaudit-fixtures/verify-matches-boot.sh`,
-diffs fixture contents against the tool lists in `lib/lucifer/boot.sh`
-and `dis/lucifer-start.sh` — so the fixture cannot silently drift from
-the real shipping commands.
+diffs fixture contents against the tool list in `lib/lucifer/boot.sh`
+— so the fixture cannot silently drift from the real shipping commands.
 
 Updating a fixture or snapshot requires a deliberate edit in the PR,
 visible to reviewers. Adding a suppression requires a named, dated file

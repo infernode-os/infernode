@@ -337,7 +337,7 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "$LibDir\libmemdraw.lib" `
     "$LibDir\lib9.lib" `
     $sdl3Lib `
-    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib
+    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib bcrypt.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
     exit 1
@@ -364,9 +364,12 @@ if (Test-Path $emuPath) {
     Write-Host "SUCCESS: SDL3 GUI Emulator built at $emuPath" -ForegroundColor Green
     Write-Host "  Size: $([math]::Round($size, 1)) KB"
     Write-Host ""
-    Write-Host "To run:" -ForegroundColor Yellow
-    Write-Host "  cd $ROOT"
-    Write-Host "  .\emu\Nt\o.emu.exe -r . sh -l"
+    Write-Host "Run from terminal (standard dev path):" -ForegroundColor Yellow
+    Write-Host "  $ROOT\emu\Nt\o.emu.exe -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r $ROOT sh -l /lib/lucifer/boot.sh"
+    Write-Host ""
+    Write-Host "  stdout/stderr stream to the terminal; Ctrl-C exits."
+    Write-Host ""
+    Write-Host "Or double-click emu\Nt\InferNode.exe (Windows-subsystem launcher)."
     Write-Host ""
     if (-not (Test-Path "$ROOT\emu\Nt\SDL3.dll")) {
         Write-Host "Note: SDL3.dll must be in PATH or next to o.emu.exe." -ForegroundColor Yellow

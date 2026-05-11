@@ -261,7 +261,8 @@ $secSrc = @(
     "hmac.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
     "sha2.c", "sha256block.c", "sha512block.c",
     "sha1pickle.c", "md5pickle.c", "rc4.c",
-    "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c",
+    "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c", "securezero.c",
+    "secp256k1.c", "keccak256.c",
     "probably_prime.c", "smallprimetest.c", "genprime.c", "dsaprimes.c",
     "gensafeprime.c", "genstrongprime.c", "dhparams.c",
     "rsagen.c", "rsafill.c", "rsaencrypt.c", "rsadecrypt.c", "rsaalloc.c", "rsaprivtopub.c",
@@ -376,14 +377,22 @@ Write-Host "=== Building Limbo Compiler ===" -ForegroundColor Cyan
 Push-Location "$ROOT\limbo"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
-# Generate y.tab.c and y.tab.h from limbo.y if needed
+# Generate y.tab.c and y.tab.h from limbo.y if needed.
+# Locate win_bison.exe via PATH (choco/scoop installs) or WinGet packages dir.
 if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
-    $bison = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($bison) {
-        Write-Host "  Generating y.tab.c/h from limbo.y..."
-        & $bison.FullName -d -o y.tab.c limbo.y
+    $bisonCmd = Get-Command win_bison.exe -ErrorAction SilentlyContinue
+    if ($bisonCmd) {
+        $bisonPath = $bisonCmd.Source
     } else {
-        Write-Host "ERROR: y.tab.c/h missing and win_bison not found. Install: winget install WinFlexBison.win_flex_bison" -ForegroundColor Red
+        $bison = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($bison) { $bisonPath = $bison.FullName }
+    }
+    if ($bisonPath) {
+        Write-Host "  Generating y.tab.c/h from limbo.y using $bisonPath..."
+        & $bisonPath -d -o y.tab.c limbo.y
+    } else {
+        Write-Host "ERROR: y.tab.c/h missing and win_bison not found." -ForegroundColor Red
+        Write-Host "Install via: 'winget install WinFlexBison.win_flex_bison' or 'choco install winflexbison3 -y'" -ForegroundColor Red
         exit 1
     }
 }
@@ -657,7 +666,7 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "$LibDir\libmemlayer.lib" `
     "$LibDir\libmemdraw.lib" `
     "$LibDir\lib9.lib" `
-    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib
+    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib bcrypt.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
     exit 1
@@ -737,7 +746,8 @@ Write-Host "=== Build Summary ===" -ForegroundColor Cyan
 Write-Host ""
 
 $emuPath = "$ROOT\emu\Nt\o.emu.exe"
-if (Test-Path $emuPath) {
+$buildOk = Test-Path $emuPath
+if ($buildOk) {
     $size = (Get-Item $emuPath).Length / 1KB
     Write-Host "SUCCESS: Emulator built at $emuPath" -ForegroundColor Green
     Write-Host "  Size: $([math]::Round($size, 1)) KB"
@@ -760,3 +770,8 @@ if (Test-Path "$BinDir\mk.exe") {
 }
 
 Write-Host ""
+
+# Explicit exit so $LASTEXITCODE from intermediate native commands
+# (limbo/mk produce non-zero on warnings) doesn't leak as the script's
+# own exit code and fail CI after a successful build.
+if ($buildOk) { exit 0 } else { exit 1 }

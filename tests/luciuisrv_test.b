@@ -1325,6 +1325,96 @@ teardown()
 }
 
 # ============================================================================
+# Test: ThemeEventStreaming
+#
+# Regression: every wm app's themelistener opens /n/ui/event ONCE and
+# reads from that fd in a loop.  Before INFR-28 (commit 5f90faba) the
+# styx fid's client-side offset accumulated by each read's byte count;
+# the second read returned only the tail of the next event (data[offset:])
+# and the third returned 0 / EOF, killing the listener.  Every theme
+# switch after the first was thus silently dropped.
+#
+# Fix: themelisteners sys->seek(fd, big 0, Sys->SEEKSTART) after each
+# successful read.  This test simulates that pattern and asserts each
+# pushed event is fully delivered to a long-lived subscriber.
+#
+# DO NOT close+reopen the fd between iterations — that would mask the
+# offset bug.  The whole point is that ONE fd survives many events.
+# ============================================================================
+
+testThemeEventStreaming(t: ref T)
+{
+	evpath := TESTMNT + "/event";
+	ctlpath := TESTMNT + "/ctl";
+
+	# Drain any earlier events so our reads see only what we push here.
+	drainall(evpath);
+
+	# Open the event stream ONCE — exactly as themelistener does.
+	fd := sys->open(evpath, Sys->OREAD);
+	if(fd == nil) {
+		t.assert(0, "cannot open " + evpath + ": %r");
+		return;
+	}
+
+	# Push a sequence of theme events and verify each one round-trips
+	# through the open fd in order, in full.
+	themes := array[] of {"brimstone", "halo", "brimstone", "halo", "brimstone"};
+	buf := array[256] of byte;
+
+	for(i := 0; i < len themes; i++) {
+		# Trigger a global "theme <name>" event via /n/ui/ctl.
+		n := writefile(ctlpath, "theme " + themes[i]);
+		t.assert(n > 0,
+			sys->sprint("write 'theme %s' to ctl should succeed", themes[i]));
+
+		# Read on the long-lived fd.  Must use a goroutine + timeout
+		# because read blocks until the event arrives.
+		rch := chan[1] of (int, string);
+		spawn fdreader(fd, buf, rch);
+		toch := chan[1] of int;
+		spawn timerwait(toch, 3000);
+
+		nread: int;
+		ev: string;
+		alt {
+		(nread, ev) = <-rch =>
+			;
+		<-toch =>
+			t.assert(0, sys->sprint(
+				"timed out waiting for 'theme %s' event (iteration %d)",
+				themes[i], i));
+			return;
+		}
+
+		t.assert(nread > 0,
+			sys->sprint("read should return >0 bytes (got %d) on iter %d — "+
+				"if 0/EOF, the fid-offset regression has returned",
+				nread, i));
+
+		expected := "theme " + themes[i] + "\n";
+		t.assertseq(ev, expected,
+			sys->sprint("event content should match exactly on iter %d", i));
+
+		# Reset client-side fid offset — exactly as the themelistener
+		# fix does.  Without this, the bug returns immediately.
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+	}
+
+	fd = nil;
+}
+
+# Read into buf on fd, send (n, string) on ch.
+fdreader(fd: ref Sys->FD, buf: array of byte, ch: chan of (int, string))
+{
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		ch <-= (n, "");
+	else
+		ch <-= (n, string buf[0:n]);
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -1383,6 +1473,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Activity metadata tests
 	run("ActivityLabel", testActivityLabel);
 	run("ActivityStatus", testActivityStatus);
+
+	# INFR-28 regression: theme events must stream to long-lived
+	# subscribers across many switches (fid offset must reset).
+	run("ThemeEventStreaming", testThemeEventStreaming);
 
 	teardown();
 

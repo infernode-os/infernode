@@ -239,6 +239,7 @@ enum
 #define BR_REG(Rn)		*code++ = (0xD61F0000 | ((Rn)<<5))
 #define BLR_REG(Rn)		*code++ = (0xD63F0000 | ((Rn)<<5))
 #define RET_X30()		*code++ = 0xD65F03C0
+#define NOP_INSN()		*code++ = 0xD503201F	/* HINT 0 */
 
 /* Conditional Branch */
 #define BCOND(cond, imm19) \
@@ -406,6 +407,22 @@ con(uvlong val, int rd)
 
 /*
  * bcondbra — emit B.cond to a macro.
+ *
+ * ARM64 B.cond has a 19-bit signed immediate (±1MB byte range), but
+ * macros sit at the very end of the JIT'd module and large modules
+ * (limbo.dis pushes the bounds-check macro past 1MB) can place them
+ * out of B.cond reach. When that happens we emit a long-form
+ * trampoline:
+ *
+ *     B.<inv_cond> +2     ; skip the unconditional B if !cond
+ *     B            target ; 26-bit imm = ±128MB, easily reaches macro
+ *     ; fallthrough is the instruction after the B
+ *
+ * To keep pass 0 (sizing) and pass 1 (emit) layouts in lock-step we
+ * always reserve TWO instruction slots for bcondbra. The short-form
+ * case pads with a NOP so patch[] / macro[] positions stay valid.
+ *
+ * Refs: INFR-22.
  */
 static void
 bcondbra(int cond, int macidx)
@@ -413,15 +430,31 @@ bcondbra(int cond, int macidx)
 	long off;
 
 	if(pass == 0) {
+		/* reserve two slots; pass 1 picks short or long form */
 		BCOND(cond, 0);
+		NOP_INSN();
 		return;
 	}
 	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
-	if(off > 0x3FFFF || off < -0x40000) {
-		print("bcondbra overflow: off=%ld macidx=%d\n", off, macidx);
-		urk("bcondbra: branch too far");
+	if(off <= 0x3FFFF && off >= -0x40000) {
+		/* short form: direct B.cond + NOP padding */
+		BCOND(cond, off);
+		NOP_INSN();
+		return;
 	}
-	BCOND(cond, off);
+	/*
+	 * long form: invert condition, fall through to the unconditional
+	 * B when cond is true. The B's offset is one instruction past the
+	 * BCOND we're about to emit, so subtract 1 from `off`.
+	 */
+	BCOND(cond ^ 1, 2);
+	off -= 1;
+	if(off > 0x1FFFFFF || off < -0x2000000) {
+		print("bcondbra long-form overflow: off=%ld macidx=%d\n",
+			off, macidx);
+		urk("bcondbra: branch too far even in long form");
+	}
+	B_IMM(off);
 }
 
 /*

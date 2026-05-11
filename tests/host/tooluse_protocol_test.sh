@@ -85,7 +85,7 @@ if ! nc -z localhost "$LLM9P_PORT" 2>/dev/null; then
 	skip "LLM service not running on port $LLM9P_PORT (start llmsrv or mount remote)"
 	echo ""
 	echo "  Total: 0 passed, $FAILED failed, $SKIPPED skipped"
-	exit 0
+	exit 77
 fi
 info "LLM service listening on port $LLM9P_PORT"
 
@@ -94,6 +94,20 @@ if [[ ! -x "$EMU" ]]; then
 	echo "ERROR: emulator not found at $EMU" >&2
 	exit 1
 fi
+
+# The port being open isn't enough — since INFR-16, llmsrv defaults to
+# keyring auth, so anonymous attaches hang at TVERSION. Probe with an
+# actual anon mount + short timeout; if it doesn't complete, the listener
+# isn't accepting anonymous clients and this test can't run.
+if ! timeout 5 "$EMU" -r"$ROOT" -c0 /dis/sh.dis \
+		-c "mount -A tcp!127.0.0.1!${LLM9P_PORT} /n/llm" \
+		</dev/null >/dev/null 2>&1; then
+	skip "anonymous mount to llmsrv on port $LLM9P_PORT failed (keyring auth required?)"
+	echo ""
+	echo "  Total: 0 passed, $FAILED failed, $SKIPPED skipped"
+	exit 77
+fi
+info "anonymous mount to llmsrv succeeded"
 
 # Build tooluse_test.dis if missing or stale
 TESTDIS="$ROOT/dis/tests/tooluse_test.dis"

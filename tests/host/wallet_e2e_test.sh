@@ -7,7 +7,17 @@ ROOT="${ROOT:-.}"
 
 if [ ! -x "$EMU" ]; then
     echo "SKIP: emu not found at $EMU"
-    exit 0
+    exit 77
+fi
+
+# The test queries Base Sepolia RPC. If we can't reach the public node
+# from the host, the emu's dial inside will fail with "invalid IP address"
+# and the test FAILs — but that's an environment issue, not a wallet
+# regression. Probe reachability up front; SKIP if unreachable.
+RPC_HOST=ethereum-sepolia-rpc.publicnode.com
+if ! nc -z -w 3 "$RPC_HOST" 443 2>/dev/null; then
+    echo "SKIP: cannot reach $RPC_HOST:443 (network/DNS unavailable)"
+    exit 77
 fi
 
 echo "=== wallet end-to-end test (Base Sepolia) ==="

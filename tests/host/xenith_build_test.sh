@@ -45,7 +45,7 @@ fi
 
 # Get sizes
 XENITH_SIZE=$(stat -f%z "$TMPDIR/xenith.dis" 2>/dev/null || stat -c%s "$TMPDIR/xenith.dis")
-ACME_SIZE=$(stat -f%z "$INFERNODE_ROOT/appl/acme/acme.dis" 2>/dev/null || stat -c%s "$INFERNODE_ROOT/appl/acme/acme.dis")
+ACME_SIZE=$(stat -f%z "$ROOT/dis/acme.dis" 2>/dev/null || stat -c%s "$ROOT/dis/acme.dis")
 
 echo "  xenith.dis size: $XENITH_SIZE bytes"
 echo "  acme.dis size:   $ACME_SIZE bytes"
@@ -77,7 +77,7 @@ for mod in gui col row; do
     fi
 
     XENITH_MOD_SIZE=$(stat -f%z "$TMPDIR/${mod}.dis" 2>/dev/null || stat -c%s "$TMPDIR/${mod}.dis")
-    ACME_MOD_SIZE=$(stat -f%z "$INFERNODE_ROOT/appl/acme/${mod}.dis" 2>/dev/null || stat -c%s "$INFERNODE_ROOT/appl/acme/${mod}.dis")
+    ACME_MOD_SIZE=$(stat -f%z "$ROOT/dis/acme/${mod}.dis" 2>/dev/null || stat -c%s "$ROOT/dis/acme/${mod}.dis")
 
     echo "    xenith/${mod}.dis: $XENITH_MOD_SIZE bytes"
     echo "    acme/${mod}.dis:   $ACME_MOD_SIZE bytes"

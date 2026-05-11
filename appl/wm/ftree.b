@@ -820,7 +820,9 @@ redraw()
 		statbar.left = rootpath;
 	statbar.right = sys->sprint("%d items", nvisible);
 	statbar.draw(screen);
-	widgetmod->contentborder(screen);
+	# INFR-27: window border is the wmclient frame (th.windowborder).
+	# Don't draw widget.contentborder here — it would paint th.accent
+	# over the wmclient frame and break border consistency across apps.
 
 	screen.flush(Draw->Flushnow);
 }
@@ -971,8 +973,13 @@ themelistener(ch: chan of int)
 		if(n <= 0)
 			break;
 		ev := string buf[0:n];
+		# INFR-28: reset client-side fid offset so the next read on
+		# this streaming queue starts at 0 (otherwise the kernel
+		# applies the accumulated offset to the server reply and
+		# truncates / EOFs on the third read onward).
+		sys->seek(fd, big 0, Sys->SEEKSTART);
 		if(len ev >= 6 && ev[0:6] == "theme ")
-			alt { ch <-= 1 => ; * => ; }
+			ch <-= 1;
 	}
 }
 

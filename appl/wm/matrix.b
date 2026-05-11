@@ -1119,20 +1119,25 @@ updatetimer()
 
 themelistener()
 {
-	fd := sys->open("/lib/lucifer/theme/event", Sys->OREAD);
+	# Use the canonical UI event stream (matrix was opening a
+	# non-existent /lib/lucifer/theme/event path and silently
+	# exiting, so it never received any theme events at all).
+	fd := sys->open("/n/ui/event", Sys->OREAD);
 	if(fd == nil)
 		return;
-	buf := array[64] of byte;
+	buf := array[256] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
-		alt {
-		themech <-= 1 =>
-			;
-		* =>
-			;
-		}
+		ev := string buf[0:n];
+		# INFR-28: reset client-side fid offset so the next read on
+		# this streaming queue starts at 0 (otherwise the kernel
+		# applies the accumulated offset to the server reply and
+		# truncates / EOFs on the third read onward).
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+		if(len ev >= 6 && ev[0:6] == "theme ")
+			themech <-= 1;
 	}
 }
 
@@ -1228,8 +1233,9 @@ redraw()
 	if(comp != nil && comp.layout != nil)
 		drawlayout(img, comp.layout);
 
-	if(widgetmod != nil)
-		widgetmod->contentborder(img);
+	# INFR-27: window border is the wmclient frame (th.windowborder).
+	# Don't draw widget.contentborder here — it would paint th.accent
+	# over the wmclient frame and break border consistency across apps.
 	img.flush(Draw->Flushnow);
 }
 

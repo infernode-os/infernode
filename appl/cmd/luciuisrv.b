@@ -623,7 +623,12 @@ srv_g: ref Styxserver;
 
 srv_reply_read(p: ref PendingRead, data: array of byte)
 {
-	srv_g.reply(styxservers->readbytes(p.m, data));
+	# Streaming queues (Qevent, Qnotification, Qtoast) — reply with the
+	# raw bytes directly.  Going through styxservers->readbytes slices
+	# data by p.m.offset, which advances past the end after the first
+	# successful read and returns 0 bytes thereafter (EOF), breaking
+	# every long-lived consumer's read loop.  See INFR-28.
+	srv_g.reply(ref Rmsg.Read(p.m.tag, data));
 }
 
 addpending(fid, tag, ft, actid: int, m: ref Tmsg.Read)
@@ -814,34 +819,42 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 
 	Qevent =>
 		# Return buffered event for this fid if available; otherwise block.
+		# CRITICAL: Qevent / Qnotification / Qtoast are streaming queues —
+		# each read returns the next queued message in full.  Must reply
+		# with Rmsg.Read directly, NOT via styxservers->readbytes(m, data)
+		# which slices `data` according to m.offset.  After the first
+		# successful read the kernel-side fid offset is past the end of
+		# the previous event's bytes, so the next read via readbytes
+		# returns 0 bytes (EOF) — that broke every consumer's reader
+		# loop after one event (INFR-28 root cause).
 		s := findeventsub(m.fid);
 		if(s != nil && s.events != nil) {
 			s.events = qrev(s.events);
 			data := array of byte (hd s.events + "\n");
 			s.events = tl s.events;
-			srv.reply(styxservers->readbytes(m, data));
+			srv.reply(ref Rmsg.Read(m.tag, data));
 		} else {
 			addpending(m.fid, m.tag, Qevent, 0, m);
 		}
 
 	Qnotification =>
 		if(notifyq == nil) {
-			srv.reply(styxservers->readbytes(m, array[0] of byte));
+			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else {
 			notifyq = qrev(notifyq);
 			data := array of byte (hd notifyq + "\n");
 			notifyq = tl notifyq;
-			srv.reply(styxservers->readbytes(m, data));
+			srv.reply(ref Rmsg.Read(m.tag, data));
 		}
 
 	Qtoast =>
 		if(toastq == nil) {
-			srv.reply(styxservers->readbytes(m, array[0] of byte));
+			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else {
 			toastq = qrev(toastq);
 			data := array of byte (hd toastq + "\n");
 			toastq = tl toastq;
-			srv.reply(styxservers->readbytes(m, data));
+			srv.reply(ref Rmsg.Read(m.tag, data));
 		}
 
 	Qactcurrent =>

@@ -19,6 +19,23 @@ Focusnone, Focusimage, Focustitle: con iota;
 windowbordercol: int = int 16r1a1a1aff;
 screenbg:        int = int 16r000000ff;	# screen fill shown between windows
 
+# INFR-29 kbd safety net.  ctxt.kbd is unbuffered; if the wm sends
+# a kbd event to a focused window whose app doesn't read it, the
+# wm send blocks and the entire UI freezes.  wmclient.window()
+# spawns a default drainer per Window that discards kbd events
+# until the app calls startinput("kbd"), at which point the
+# drainer exits so the app can read ctxt.kbd directly.
+#
+# State lives module-private (NOT in the Window adt) so the
+# adt's interface signature stays stable — adding fields to
+# Window would force a rebuild of every wm app + lucifer.
+KbdState: adt {
+	ctxt:	ref Draw->Wmcontext;	# identity key
+	stop:	chan of int;		# send to terminate drainer
+	subscribed:	int;		# set after first startinput("kbd")
+};
+kbdstates: list of ref KbdState;
+
 init()
 {
 	sys = load Sys Sys->PATH;
@@ -63,6 +80,17 @@ window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
 	w.ctl = chan[2] of string;
 	readscreenrect(w);
 
+	# INFR-29 safety net: wm sends kbd events to focused windows on
+	# an unbuffered chan.  Apps that don't drain it deadlock the
+	# entire UI on the first keypress.  Spawn a default drainer
+	# that discards kbd events; startinput("kbd") stops it so apps
+	# that subscribe read ctxt.kbd as before.  No app-side change
+	# required and Window adt is not extended (keeps wmclient.m's
+	# interface signature stable for all callers).
+	ks := ref KbdState(w.ctxt, chan of int, 0);
+	kbdstates = ks :: kbdstates;
+	spawn kbddrainer(ks);
+
 	if(buts & Plain)
 		return w;
 
@@ -73,6 +101,28 @@ window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
 
 	w.wmctl("fixedorigin");
 	return w;
+}
+
+# Default kbd drainer.  Runs until startinput("kbd") sends to the
+# corresponding KbdState.stop channel.  Until then, every kbd event
+# from the wm is consumed and discarded so the wm send doesn't block.
+kbddrainer(ks: ref KbdState)
+{
+	for(;;) alt {
+	<-ks.stop =>
+		return;
+	<-ks.ctxt.kbd =>
+		;	# discard
+	}
+}
+
+# Find the KbdState entry for a given Wmcontext, or nil.
+findkbdstate(ctxt: ref Draw->Wmcontext): ref KbdState
+{
+	for(l := kbdstates; l != nil; l = tl l)
+		if((hd l).ctxt == ctxt)
+			return hd l;
+	return nil;
 }
 
 Window.pointer(w: self ref Window, p: Draw->Pointer): int
@@ -133,6 +183,15 @@ putimage(w: ref Window, i: ref Image)
 	if(ir.dy() < 0)
 		ir.max.y = ir.min.y;
 	w.image = w.screen.newwindow(ir, Draw->Refnone, Draw->Nofill);
+	# INFR-27: Pre-fill w.image with the screen background so that
+	# any region the app doesn't paint (notably the 1-pixel ring
+	# inside w.image when an app uses w.imager(w.image.r) for its
+	# content rect — fractals, keyring, settings, wallet) shows a
+	# dark, themed colour instead of undefined display memory
+	# (often white). Apps that fill w.image.r themselves overwrite
+	# this and pay nothing.
+	if(w.image != nil)
+		w.image.draw(w.image.r, w.display.color(screenbg), nil, (0, 0));
 	drawborder(w);
 	w.r = i.r;
 }
@@ -202,8 +261,23 @@ Window.onscreen(w: self ref Window, how: string)
 
 Window.startinput(w: self ref Window, devs: list of string)
 {
-	for(; devs != nil; devs = tl devs)
+	for(; devs != nil; devs = tl devs) {
+		# INFR-29 safety net: an app subscribing to kbd takes
+		# ownership of ctxt.kbd, so signal the default drainer
+		# to exit.  Idempotent — only the first "kbd" subscription
+		# triggers; later calls find subscribed=1 and do nothing.
+		if(hd devs == "kbd") {
+			ks := findkbdstate(w.ctxt);
+			if(ks != nil && !ks.subscribed) {
+				ks.subscribed = 1;
+				alt {
+				ks.stop <-= 1 => ;
+				* => ;	# drainer already gone
+				}
+			}
+		}
 		w.wmctl(sys->sprint("start %q", hd devs));
+	}
 }
 
 # commands originating both from tkclient and wm (via ctl)

@@ -55,6 +55,11 @@ init1(ctxt: ref Draw->Context)
 			if(n == 0)
 				exit;
 		}
+	# ctxt.kbd is unbuffered; not draining it deadlocks the wm on
+	# first keypress with focus and freezes the whole UI.  We don't
+	# want kbd here, but must drain.  (Mirrors the clock.b fix.)
+	<-w.ctxt.kbd =>
+		;	# discard
 	ctl := <-w.ctl or
 	ctl = <-w.ctxt.ctl =>
 		w.wmctl(ctl);

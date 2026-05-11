@@ -251,6 +251,14 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			loadcolors();
 			widgetmod->retheme(display_g);
 			wmclient->retheme(w);
+			# menu.b caches theme colours (mbg, mborder, mhilit,
+			# mtext, mdim) at init() time and has no separate
+			# retheme() entry point — re-init it here so the
+			# context menu tracks live theme switches.  Other
+			# wm apps do this in their reloadcolors(); wallet
+			# was missing it.
+			if(menumod != nil)
+				menumod->init(display_g, font);
 			layoutall();
 			dirty = 1;
 		<-balancech =>
@@ -1368,10 +1376,12 @@ themelistener()
 		if(n <= 0)
 			break;
 		ev := string buf[0:n];
+		# INFR-28: reset client-side fid offset so the next read on
+		# this streaming queue starts at 0 (otherwise the kernel
+		# applies the accumulated offset to the server reply and
+		# truncates / EOFs on the third read onward).
+		sys->seek(fd, big 0, Sys->SEEKSTART);
 		if(len ev >= 6 && ev[0:6] == "theme ")
-			alt {
-			themech <-= 1 => ;
-			* => ;
-			}
+			themech <-= 1;
 	}
 }

@@ -1467,8 +1467,13 @@ themelistener()
 		if(n <= 0)
 			break;
 		ev := string buf[0:n];
+		# INFR-28: reset client-side fid offset so the next read on
+		# this streaming queue starts at 0 (otherwise the kernel
+		# applies the accumulated offset to the server reply and
+		# truncates / EOFs on the third read onward).
+		sys->seek(fd, big 0, Sys->SEEKSTART);
 		if(len ev >= 6 && ev[0:6] == "theme ")
-			alt { themech <-= 1 => ; * => ; }
+			themech <-= 1;
 	}
 }
 

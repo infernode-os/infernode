@@ -939,7 +939,12 @@ jobs:
         New-Item -ItemType Directory -Force -Path tmp
 
         Write-Host "Running test suite inside Inferno emulator..."
-        $proc = Start-Process -FilePath '.\emu\Nt\o.emu.exe' -ArgumentList '-c1', '-r', '.', '/dis/tests/runner.dis', '-v' -NoNewWindow -PassThru -RedirectStandardOutput 'test-output.txt' -RedirectStandardError 'test-err.txt'
+        # Match Linux/macOS: merge stderr into stdout via cmd /c, because
+        # the test runner writes PASS/FAIL to fildes(2) and we grep one
+        # combined transcript for the verdict. Separate -Redirect* streams
+        # used previously made the script never find ^PASS$.
+        $emu = (Resolve-Path '.\emu\Nt\o.emu.exe').Path
+        $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$emu`" -c1 -r . /dis/tests/runner.dis -v > test-output.txt 2>&1" -NoNewWindow -PassThru
         $timedOut = $null
         $proc | Wait-Process -Timeout 60 -ErrorVariable timedOut -ErrorAction SilentlyContinue
         if ($timedOut) {
@@ -964,7 +969,8 @@ jobs:
       shell: powershell
       run: |
         Write-Host "Running JIT correctness tests (-c1)..."
-        $proc = Start-Process -FilePath '.\emu\Nt\o.emu.exe' -ArgumentList '-c1', '-r', '.', '/dis/jittest.dis' -NoNewWindow -PassThru -RedirectStandardOutput 'jit-test.txt' -RedirectStandardError 'jit-err.txt'
+        $emu = (Resolve-Path '.\emu\Nt\o.emu.exe').Path
+        $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$emu`" -c1 -r . /dis/jittest.dis > jit-test.txt 2>&1" -NoNewWindow -PassThru
         $timedOut = $null
         $proc | Wait-Process -Timeout 120 -ErrorVariable timedOut -ErrorAction SilentlyContinue
         if ($timedOut) {
@@ -986,7 +992,8 @@ jobs:
       shell: powershell
       run: |
         Write-Host "Running JIT benchmarks..."
-        $proc = Start-Process -FilePath '.\emu\Nt\o.emu.exe' -ArgumentList '-c1', '-r', '.', '/dis/jitbench2.dis' -NoNewWindow -PassThru -RedirectStandardOutput 'jit-bench.txt' -RedirectStandardError 'jit-bench-err.txt'
+        $emu = (Resolve-Path '.\emu\Nt\o.emu.exe').Path
+        $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$emu`" -c1 -r . /dis/jitbench2.dis > jit-bench.txt 2>&1" -NoNewWindow -PassThru
         $timedOut = $null
         $proc | Wait-Process -Timeout 180 -ErrorVariable timedOut -ErrorAction SilentlyContinue
         if ($timedOut) {

@@ -55,8 +55,8 @@ if [[ -z "$API_KEY" ]]; then
 		~/Library/LaunchAgents/com.nervsystems.llm9p.plist 2>/dev/null || true)
 fi
 if [[ -z "$API_KEY" ]]; then
-	echo "ERROR: no API key found (set ANTHROPIC_API_KEY or configure LaunchAgent)" >&2
-	exit 1
+	echo "SKIP: no API key (set ANTHROPIC_API_KEY or configure LaunchAgent)"
+	exit 77
 fi
 
 # Check emulator

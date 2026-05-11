@@ -73,6 +73,10 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		w.wmctl(ctl);
 		if(ctl != nil && ctl[0] == '!')
 			drawclock(w.image, now);
+	# Drain kbd so a focused-but-keyboardless app never blocks the wm.
+	# See INFR-29.
+	<-w.ctxt.kbd =>
+		;
 	p := <-w.ctxt.ptr =>
 		if(!w.pointer(*p)  && (p.buttons & (1|2))){
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);

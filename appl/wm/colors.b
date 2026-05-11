@@ -60,6 +60,10 @@ init1(ctxt: ref Draw->Context)
 		w.wmctl(ctl);
 		if(ctl != nil && ctl[0] == '!')
 			w.image.draw(w.image.r, cmap((w.image.r.dx(), w.image.r.dy())), nil, ZP);
+	# Drain kbd so a focused-but-keyboardless app never blocks the wm.
+	# See INFR-29.
+	<-w.ctxt.kbd =>
+		;
 	}
 }
 

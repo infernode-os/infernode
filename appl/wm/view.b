@@ -222,6 +222,10 @@ view(ctxt: ref Context, ims, masks: array of ref Image, file: string)
 #	ul = w.image.r.min;
 			redraw(image, w.image);
 		}
+	# view subscribes to "kbd"::"ptr"::nil but doesn't act on key events;
+	# drain so the wm send never blocks (INFR-29).
+	<-w.ctxt.kbd =>
+		;
 	p := <-w.ctxt.ptr =>
 		if(!w.pointer(*p)){
 			if (p.buttons & 2){

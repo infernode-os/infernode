@@ -16,9 +16,6 @@ DIRS=\
 	fs\
 	dbm\
 
-# awk.dis is intentionally absent: the port in appl/cmd/awk.b does not yet
-# compile — printf/sprintf use sys->sprint with a runtime fmtspec, but Limbo
-# requires a compile-time constant. Re-add to TARG when INFR-23 is resolved.
 TARG=\
 	9660srv.dis\
 	9cpu.dis\
@@ -28,6 +25,7 @@ TARG=\
 	ar.dis\
 	archfs.dis\
 	auplay.dis\
+	awk.dis\
 	basename.dis\
 	bdf2subfont.dis\
 	bind.dis\

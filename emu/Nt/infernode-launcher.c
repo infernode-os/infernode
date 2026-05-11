@@ -39,11 +39,13 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 	SetCurrentDirectoryA(dir);
 
-	/* Launch InferNode emu with Lucifer startup script */
+	/* Launch InferNode emu with Lucifer GUI.
+	 * -l sources lib/sh/profile (mounts host FS, overlay, secstore).
+	 * The boot script starts luciuisrv, tools9p, lucibridge, and lucifer. */
 	_snprintf(cmd, sizeof(cmd),
 		"\"%s\\o.emu.exe\" -c1 -g 1280x800"
 		" -pheap=512m -pmain=512m -pimage=512m"
-		" -r . sh /dis/lucifer-start.sh",
+		" -r . sh -l /dis/lucifer-start.sh",
 		dir);
 
 	memset(&si, 0, sizeof(si));

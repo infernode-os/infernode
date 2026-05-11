@@ -377,14 +377,22 @@ Write-Host "=== Building Limbo Compiler ===" -ForegroundColor Cyan
 Push-Location "$ROOT\limbo"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
-# Generate y.tab.c and y.tab.h from limbo.y if needed
+# Generate y.tab.c and y.tab.h from limbo.y if needed.
+# Locate win_bison.exe via PATH (choco/scoop installs) or WinGet packages dir.
 if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
-    $bison = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($bison) {
-        Write-Host "  Generating y.tab.c/h from limbo.y..."
-        & $bison.FullName -d -o y.tab.c limbo.y
+    $bisonCmd = Get-Command win_bison.exe -ErrorAction SilentlyContinue
+    if ($bisonCmd) {
+        $bisonPath = $bisonCmd.Source
     } else {
-        Write-Host "ERROR: y.tab.c/h missing and win_bison not found. Install: winget install WinFlexBison.win_flex_bison" -ForegroundColor Red
+        $bison = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($bison) { $bisonPath = $bison.FullName }
+    }
+    if ($bisonPath) {
+        Write-Host "  Generating y.tab.c/h from limbo.y using $bisonPath..."
+        & $bisonPath -d -o y.tab.c limbo.y
+    } else {
+        Write-Host "ERROR: y.tab.c/h missing and win_bison not found." -ForegroundColor Red
+        Write-Host "Install via: 'winget install WinFlexBison.win_flex_bison' or 'choco install winflexbison3 -y'" -ForegroundColor Red
         exit 1
     }
 }

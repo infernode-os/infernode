@@ -1436,19 +1436,35 @@ splitwords(s: string): list of string
 # Listen for global events (activity new/delete/switch/urgency)
 globallistener()
 {
+	# INFR-28: open the event stream ONCE and reuse the fid across
+	# many reads, seeking back to 0 after each read so the styx
+	# client-side offset doesn't accumulate (same fix the wm apps'
+	# themelistener uses).  The previous open-read-close-per-event
+	# pattern caused events published BETWEEN close and reopen to
+	# be lost — luciuisrv removes the EventSub on Clunk, so during
+	# the gap no buffered subscription exists for lucifer.  Result:
+	# lucifer chrome (top bar, activity tile) and the zones it routes
+	# to via channels (chat / context / presentation) silently missed
+	# many theme switches even though wm apps with persistent fds
+	# always saw them.
 	evpath := mountpt + "/event";
+	fd: ref Sys->FD;
 	backoff := 500;
 	for(;;) {
-		fd := sys->open(evpath, Sys->OREAD);
 		if(fd == nil) {
-			sys->sleep(backoff);
-			if(backoff < 8000)
-				backoff *= 2;
-			continue;
+			fd = sys->open(evpath, Sys->OREAD);
+			if(fd == nil) {
+				sys->sleep(backoff);
+				if(backoff < 8000)
+					backoff *= 2;
+				continue;
+			}
 		}
 		buf := array[4096] of byte;
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0) {
+			# Spurious EOF — drop the fid and re-open after backoff.
+			fd = nil;
 			sys->sleep(backoff);
 			if(backoff < 8000)
 				backoff *= 2;
@@ -1456,6 +1472,8 @@ globallistener()
 		}
 		backoff = 500;
 		ev := strip(string buf[0:n]);
+		# Reset client-side offset for the next read on this fid.
+		sys->seek(fd, big 0, Sys->SEEKSTART);
 		if(hasprefix(ev, "newtask ")) {
 			# Direct task creation from lucipres "+" button.
 			# Provision with full budget (no tools= → default) and
@@ -1571,20 +1589,27 @@ tileblinker()
 
 nslistener()
 {
+	# INFR-28: same long-lived fid + seek-to-0 pattern as
+	# globallistener.  Per-activity events also get lost when
+	# the open-close-reopen gap straddles a publish.
 	nslistenerpid = sys->pctl(0, nil);
 	evpath := sys->sprint("%s/activity/%d/event", mountpt, actid);
+	fd: ref Sys->FD;
 	backoff := 500;
 	for(;;) {
-		fd := sys->open(evpath, Sys->OREAD);
 		if(fd == nil) {
-			sys->sleep(backoff);
-			if(backoff < 8000)
-				backoff *= 2;
-			continue;
+			fd = sys->open(evpath, Sys->OREAD);
+			if(fd == nil) {
+				sys->sleep(backoff);
+				if(backoff < 8000)
+					backoff *= 2;
+				continue;
+			}
 		}
 		buf := array[4096] of byte;
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0) {
+			fd = nil;
 			sys->sleep(backoff);
 			if(backoff < 8000)
 				backoff *= 2;
@@ -1592,6 +1617,7 @@ nslistener()
 		}
 		backoff = 500;	# reset on successful read
 		ev := strip(string buf[0:n]);
+		sys->seek(fd, big 0, Sys->SEEKSTART);
 		if(ev == "status") {
 			loadstatus();
 			updatetile(actid, "status", actstatus);

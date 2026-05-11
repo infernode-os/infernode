@@ -446,6 +446,16 @@ reloadcolors()
 	progbgcol = display_g.color(th.progbg);
 	progfgcol = display_g.color(th.progfg);
 	bordercol = display_g.color(th.border);
+	# INFR-28: widget + menu modules cache theme colours at init()
+	# time; widget.b has retheme() but menu.b does not (INFR-35), so
+	# we re-init the menu module here.  Dialogue buttons in the chat
+	# zone (LLM setup wizard etc.) use widgetmod's button colours and
+	# would otherwise stay on the previous theme's palette across
+	# live theme switches.
+	if(widgetmod != nil)
+		widgetmod->retheme(display_g);
+	if(menumod != nil && mainfont != nil)
+		menumod->init(display_g, mainfont);
 	# Invalidate rendered message caches so they redraw with new colours
 	for(i := 0; i < nmsg; i++)
 		msgstore[i].rendimg = nil;

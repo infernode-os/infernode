@@ -39,14 +39,26 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 	SetCurrentDirectoryA(dir);
 
-	/* Launch InferNode emu with Lucifer GUI.
-	 * -l sources lib/sh/profile (mounts host FS, overlay, secstore).
-	 * The boot script starts luciuisrv, tools9p, lucibridge, and lucifer. */
-	_snprintf(cmd, sizeof(cmd),
-		"\"%s\\o.emu.exe\" -c1 -g 1280x800"
-		" -pheap=512m -pmain=512m -pimage=512m"
-		" -r . sh -l /dis/lucifer-start.sh",
-		dir);
+	/* Size window to 80% of the primary monitor, capped at 1920x1080 */
+	{
+		int sw = GetSystemMetrics(SM_CXSCREEN);
+		int sh = GetSystemMetrics(SM_CYSCREEN);
+		int w = sw * 80 / 100;
+		int h = sh * 80 / 100;
+		if (w > 1920) w = 1920;
+		if (h > 1080) h = 1080;
+		if (w < 800)  w = 800;
+		if (h < 600)  h = 600;
+
+		/* Launch InferNode emu with Lucifer GUI.
+		 * -l sources lib/sh/profile (mounts host FS, overlay, secstore).
+		 * The boot script starts luciuisrv, tools9p, lucibridge, lucifer. */
+		_snprintf(cmd, sizeof(cmd),
+			"\"%s\\o.emu.exe\" -g %dx%d"
+			" -pheap=1024m -pmain=1024m -pimage=1024m"
+			" -r . sh -l /dis/lucifer-start.sh",
+			dir, w, h);
+	}
 
 	memset(&si, 0, sizeof(si));
 	si.cb = sizeof(si);

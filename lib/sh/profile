@@ -8,11 +8,6 @@ path=(/dis .)
 # Get username
 user="{cat /dev/user}
 
-# ── Windows: capture host env vars before mntgen (os cmd hangs after) ──
-if {~ $emuhost Nt} {
-	_nt_secpass=`{os cmd /c 'if defined SECSTORE_PASSWORD echo %SECSTORE_PASSWORD%'}
-	_nt_apikey=`{os cmd /c 'if defined ANTHROPIC_API_KEY echo key proto=pass service=anthropic user=apikey !password=%ANTHROPIC_API_KEY%'}
-}
 
 # ── Networking ──────────────────────────────────────────────
 mount -ac {mntgen} /n >[2] /dev/null
@@ -79,7 +74,8 @@ if {~ $emuhost MacOSX Linux Nt}{
 # Kill stale secstored from a previous emu session — a stale
 # instance with different PAK data causes login to hang indefinitely.
 if {~ $emuhost Nt} {
-	os cmd /c 'for /f "tokens=5" %a in (''netstat -ano ^| findstr :5356 ^| findstr LISTENING'') do taskkill /F /PID %a >nul 2>&1' >[2] /dev/null
+	# Windows: kill stale secstored — os without backticks (fire and forget)
+	os cmd /c 'taskkill /F /IM secstored.exe >nul 2>&1' >[2] /dev/null
 }{
 	os sh -c 'lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null; sleep 1; true' >[2] /dev/null
 }
@@ -93,16 +89,14 @@ sleep 1
 # GUI: factotum starts empty; wm/logon unlocks secstore interactively.
 if {! ftest -f /mnt/factotum/proto}{
 	if {~ $emuhost Nt} {
-		havesecpass=$_nt_secpass
+		# Windows: secstore password not yet supported via env var
+		# (os cmd in backticks hangs). Use GUI login or setup script.
+		havesecpass=''
 	}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}
 	if {! ~ $havesecpass ''} {
-		if {~ $emuhost Nt} {
-			secpass=$_nt_secpass
-		}{
-			secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
-		}
+		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
 		auth/factotum -S tcp!localhost!5356 -P $secpass
 	}{
 		auth/factotum
@@ -111,7 +105,11 @@ if {! ftest -f /mnt/factotum/proto}{
 
 # Provision API key from host env (fallback for CLI users without secstore)
 if {~ $emuhost Nt} {
-	factotumkey=$_nt_apikey
+	# Windows: read API key from key file (written by setup-windows.ps1)
+	_apikey=`{cat /lib/veltro/keys/anthropic >[2] /dev/null}
+	if {! ~ $_apikey ''} {
+		factotumkey='key proto=pass service=anthropic user=apikey !password='^$_apikey
+	}
 }{
 	factotumkey=`{os sh -c 'if [ -n "$ANTHROPIC_API_KEY" ]; then echo "key proto=pass service=anthropic user=apikey !password=$ANTHROPIC_API_KEY"; fi'}
 }

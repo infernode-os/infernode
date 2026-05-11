@@ -44,12 +44,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		int w = GetSystemMetrics(SM_CXSCREEN);
 		int h = GetSystemMetrics(SM_CYSCREEN);
 
-		/* Launch InferNode emu with Lucifer GUI + JIT.
-		 * -l sources lib/sh/profile (mounts host FS, overlay, secstore). */
+		/* -l sources lib/sh/profile; /lib/lucifer/boot.sh is the
+		 * unified GUI boot script shared with macOS/Linux. */
 		_snprintf(cmd, sizeof(cmd),
 			"\"%s\\o.emu.exe\" -c1 -g %dx%d"
 			" -pheap=1024m -pmain=1024m -pimage=1024m"
-			" -r . sh -l /dis/lucifer-start.sh",
+			" -r . sh -l /lib/lucifer/boot.sh",
 			dir, w, h);
 	}
 

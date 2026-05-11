@@ -272,7 +272,13 @@ strval(v: ref Val): string
 		n := v.num;
 		if(n == real int n)
 			return string int n;
-		return sys->sprint(ofmt_var, n);
+		# Format using awk's user-overridable OFMT (default "%.6g"),
+		# parsed at call time so a runtime change to OFMT takes effect
+		# without sys->sprint requiring a constant format. See INFR-23.
+		(flags, width, precision, conv, ni, na) :=
+			parseformat(ofmt_var, 0, nil);
+		ni = ni; na = na;	# parseformat returns full state; suppress unused-local
+		return fmtval(flags, width, precision, conv, "", 0, n);
 	}
 	return "";
 }
@@ -2170,6 +2176,259 @@ builtin_sprintf(args: list of ref Node): ref Val
 	return mkstr(dosprintf(fmt, args));
 }
 
+#
+# printf/sprintf formatting
+#
+# Limbo's sys->sprint requires its first arg to be a compile-time
+# constant string for type-checking variadic args. awk's printf/sprintf
+# is the opposite — the format string is user-supplied at runtime and
+# decomposed per-conversion. So instead of forwarding the runtime
+# fmtspec into sys->sprint, we parse it once into typed flags/width/
+# precision/conv locals and format each value using constant-format
+# sys->sprint calls plus manual post-processing for awk-style padding,
+# sign handling, and uppercase conversions.
+#
+# See INFR-23 for the original report and design notes.
+#
+
+FLG_MINUS: con 1<<0;	# '-'
+FLG_PLUS:  con 1<<1;	# '+'
+FLG_SPACE: con 1<<2;	# ' '
+FLG_HASH:  con 1<<3;	# '#'
+FLG_ZERO:  con 1<<4;	# '0'
+
+# Repeat a 7-bit ASCII char `count` times. Caller passes ' ' or '0' only.
+strrep(ch: int, count: int): string
+{
+	if(count <= 0)
+		return "";
+	s := "";
+	for(i := 0; i < count; i++)
+		s[len s] = ch;
+	return s;
+}
+
+# Parse a format spec starting at fmt[start] (assumed to begin with '%')
+# into flags, width, precision, conv. Consumes `*` width/precision args
+# from the supplied list. Returns the remaining args, the typed values,
+# and the index after the conv char.
+# conv == 0 means parsing reached the end of fmt without a conv letter.
+parseformat(fmt: string, start: int, args: list of ref Node)
+	: (int, int, int, int, int, list of ref Node)
+{
+	i := start;
+	flags := 0;
+	width := 0;
+	precision := -1;
+
+	if(i >= len fmt || fmt[i] != '%')
+		return (flags, width, precision, 0, i, args);
+	i++;
+
+	# Flags. POSIX allows repeats and arbitrary order; loop until a
+	# non-flag char.
+	isflag := 1;
+	while(i < len fmt && isflag) {
+		case fmt[i] {
+		'-' => flags |= FLG_MINUS; i++;
+		'+' => flags |= FLG_PLUS;  i++;
+		' ' => flags |= FLG_SPACE; i++;
+		'#' => flags |= FLG_HASH;  i++;
+		'0' => flags |= FLG_ZERO;  i++;
+		*   => isflag = 0;
+		}
+	}
+
+	# Width
+	if(i < len fmt && fmt[i] == '*') {
+		i++;
+		if(args != nil) {
+			width = int numval(eval(hd args));
+			args = tl args;
+		}
+		if(width < 0) {
+			flags |= FLG_MINUS;
+			width = -width;
+		}
+	} else {
+		while(i < len fmt && isdigit(fmt[i])) {
+			width = width * 10 + (fmt[i] - '0');
+			i++;
+		}
+	}
+
+	# Precision
+	if(i < len fmt && fmt[i] == '.') {
+		i++;
+		precision = 0;
+		if(i < len fmt && fmt[i] == '*') {
+			i++;
+			if(args != nil) {
+				precision = int numval(eval(hd args));
+				args = tl args;
+			}
+			if(precision < 0)
+				precision = -1;
+		} else {
+			while(i < len fmt && isdigit(fmt[i])) {
+				precision = precision * 10 + (fmt[i] - '0');
+				i++;
+			}
+		}
+	}
+
+	conv := 0;
+	if(i < len fmt) {
+		conv = fmt[i];
+		i++;
+	}
+	return (flags, width, precision, conv, i, args);
+}
+
+# Apply parsed flags/width/precision to a value of the appropriate
+# type for `conv`. sval is used for %s; ival for %d/i/o/x/X; fval for
+# %f/e/E/g/G. Returns "" for unrecognised conv.
+fmtval(flags, width, precision, conv: int, sval: string, ival: int, fval: real): string
+{
+	s := "";
+
+	case conv {
+	'd' or 'i' =>
+		s = sys->sprint("%d", ival);
+		negative := 0;
+		if(len s > 0 && s[0] == '-') {
+			negative = 1;
+			s = s[1:];
+		}
+		# Precision = minimum number of digits (zero-extends).
+		# Per POSIX, precision 0 with value 0 yields no digits.
+		if(precision >= 0) {
+			if(precision == 0 && ival == 0)
+				s = "";
+			else if(len s < precision)
+				s = strrep('0', precision - len s) + s;
+		}
+		# Sign prefix
+		if(negative)
+			s = "-" + s;
+		else if(flags & FLG_PLUS)
+			s = "+" + s;
+		else if(flags & FLG_SPACE)
+			s = " " + s;
+	'o' =>
+		s = sys->sprint("%o", ival);
+		if(precision >= 0 && len s < precision)
+			s = strrep('0', precision - len s) + s;
+		if((flags & FLG_HASH) && (len s == 0 || s[0] != '0'))
+			s = "0" + s;
+	'x' =>
+		s = sys->sprint("%x", ival);
+		if(precision >= 0 && len s < precision)
+			s = strrep('0', precision - len s) + s;
+		if((flags & FLG_HASH) && ival != 0)
+			s = "0x" + s;
+	'X' =>
+		s = str->toupper(sys->sprint("%x", ival));
+		if(precision >= 0 && len s < precision)
+			s = strrep('0', precision - len s) + s;
+		if((flags & FLG_HASH) && ival != 0)
+			s = "0X" + s;
+	'f' =>
+		if(precision >= 0)
+			s = sys->sprint("%.*f", precision, fval);
+		else
+			s = sys->sprint("%f", fval);
+		if(len s > 0 && s[0] != '-') {
+			if(flags & FLG_PLUS)
+				s = "+" + s;
+			else if(flags & FLG_SPACE)
+				s = " " + s;
+		}
+	'e' =>
+		if(precision >= 0)
+			s = sys->sprint("%.*e", precision, fval);
+		else
+			s = sys->sprint("%e", fval);
+		if(len s > 0 && s[0] != '-') {
+			if(flags & FLG_PLUS)
+				s = "+" + s;
+			else if(flags & FLG_SPACE)
+				s = " " + s;
+		}
+	'E' =>
+		if(precision >= 0)
+			s = sys->sprint("%.*e", precision, fval);
+		else
+			s = sys->sprint("%e", fval);
+		s = str->toupper(s);
+		if(len s > 0 && s[0] != '-') {
+			if(flags & FLG_PLUS)
+				s = "+" + s;
+			else if(flags & FLG_SPACE)
+				s = " " + s;
+		}
+	'g' =>
+		if(precision >= 0)
+			s = sys->sprint("%.*g", precision, fval);
+		else
+			s = sys->sprint("%g", fval);
+		if(len s > 0 && s[0] != '-') {
+			if(flags & FLG_PLUS)
+				s = "+" + s;
+			else if(flags & FLG_SPACE)
+				s = " " + s;
+		}
+	'G' =>
+		if(precision >= 0)
+			s = sys->sprint("%.*g", precision, fval);
+		else
+			s = sys->sprint("%g", fval);
+		s = str->toupper(s);
+		if(len s > 0 && s[0] != '-') {
+			if(flags & FLG_PLUS)
+				s = "+" + s;
+			else if(flags & FLG_SPACE)
+				s = " " + s;
+		}
+	's' =>
+		s = sval;
+		# Precision truncates the string.
+		if(precision >= 0 && precision < len s)
+			s = s[0:precision];
+	* =>
+		return "";
+	}
+
+	# Width: pad to at least `width` characters.
+	if(width > len s) {
+		pad := width - len s;
+		# Zero-pad applies only to numerics, only without '-', and is
+		# suppressed for integer conversions when an explicit
+		# precision is given (per POSIX).
+		usezero := (flags & FLG_ZERO) != 0
+			&& (flags & FLG_MINUS) == 0
+			&& conv != 's'
+			&& !(precision >= 0 &&
+				(conv == 'd' || conv == 'i' || conv == 'o'
+				 || conv == 'x' || conv == 'X'));
+		if(flags & FLG_MINUS) {
+			s = s + strrep(' ', pad);
+		} else if(usezero) {
+			# Keep the sign / 0x / 0X prefix at the front.
+			pfx := 0;
+			if(len s > 0 && (s[0] == '-' || s[0] == '+' || s[0] == ' '))
+				pfx = 1;
+			else if(len s >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+				pfx = 2;
+			s = s[0:pfx] + strrep('0', pad) + s[pfx:];
+		} else {
+			s = strrep(' ', pad) + s;
+		}
+	}
+
+	return s;
+}
+
 dosprintf(fmt: string, args: list of ref Node): string
 {
 	result := "";
@@ -2181,68 +2440,41 @@ dosprintf(fmt: string, args: list of ref Node): string
 				i += 2;
 				continue;
 			}
-			# parse format specifier
+
 			fmtstart := i;
-			i++;
-			# flags
-			while(i < len fmt && (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' || fmt[i] == '0' || fmt[i] == '#'))
-				i++;
-			# width
-			if(i < len fmt && fmt[i] == '*') {
-				i++;
-				# consume width from args
-				if(args != nil) {
-					eval(hd args);
-					args = tl args;
-				}
-			} else {
-				while(i < len fmt && isdigit(fmt[i]))
-					i++;
-			}
-			# precision
-			if(i < len fmt && fmt[i] == '.') {
-				i++;
-				if(i < len fmt && fmt[i] == '*') {
-					i++;
-					if(args != nil) {
-						eval(hd args);
-						args = tl args;
-					}
-				} else {
-					while(i < len fmt && isdigit(fmt[i]))
-						i++;
-				}
-			}
-			if(i >= len fmt)
+			(flags, width, precision, conv, ni, nargs) :=
+				parseformat(fmt, i, args);
+			i = ni;
+			args = nargs;
+			if(conv == 0)
 				break;
-			conv := fmt[i];
-			i++;
-			fmtspec := fmt[fmtstart:i];
 
 			if(args == nil) {
-				result += fmtspec;
+				result += fmt[fmtstart:i];
 				continue;
 			}
 			v := eval(hd args);
 			args = tl args;
 
 			case conv {
-			'd' or 'i' =>
-				result += sys->sprint(fmtspec, int numval(v));
-			'o' =>
-				result += sys->sprint(fmtspec, int numval(v));
-			'x' or 'X' =>
-				result += sys->sprint(fmtspec, int numval(v));
+			'd' or 'i' or 'o' or 'x' or 'X' =>
+				result += fmtval(flags, width, precision, conv,
+					"", int numval(v), 0.0);
 			'f' or 'e' or 'E' or 'g' or 'G' =>
-				result += sys->sprint(fmtspec, numval(v));
+				result += fmtval(flags, width, precision, conv,
+					"", 0, numval(v));
 			's' =>
-				result += sys->sprint(fmtspec, strval(v));
+				result += fmtval(flags, width, precision, conv,
+					strval(v), 0, 0.0);
 			'c' =>
+				# %c writes a single character; width/precision/
+				# flags don't make semantic sense for awk here, so
+				# keep the original character-append behaviour.
 				n := int numval(v);
 				if(n == 0) n = int (strval(v))[0];
 				result[len result] = n;
 			* =>
-				result += fmtspec;
+				result += fmt[fmtstart:i];
 			}
 		} else if(fmt[i] == '\\') {
 			i++;

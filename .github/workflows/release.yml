@@ -1001,7 +1001,7 @@ jobs:
         retention-days: 3
 
   # ─────────────────────────────────────────────
-  # Windows AMD64: Headless emulator + toolchain
+  # Windows AMD64: SDL3 GUI emulator + launcher
   # ─────────────────────────────────────────────
   windows-amd64:
     name: Windows AMD64
@@ -1011,6 +1011,7 @@ jobs:
       contents: read
     env:
       ROOT: ${{ github.workspace }}
+      SDL3_VERSION: "3.2.20"
 
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -1021,6 +1022,11 @@ jobs:
       run: |
         $version = "${{ github.ref_name }}" -replace '^v',''
         echo "version=$version" >> $env:GITHUB_OUTPUT
+
+    - name: Install build dependencies (win_bison via choco)
+      shell: pwsh
+      run: |
+        choco install winflexbison3 -y
 
     - name: Setup MSVC environment
       uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592571 # v1
@@ -1037,17 +1043,49 @@ jobs:
         (Get-Content $versionFile) -replace 'InferNode 0.1', "InferNode $VERSION build $BUILD_DATE-$SHORT_SHA" | Set-Content $versionFile
         Write-Host "Version: $(Get-Content $versionFile)"
 
-    - name: Build (headless)
+    - name: Download SDL3 development libraries
+      shell: pwsh
+      run: |
+        $v = $env:SDL3_VERSION
+        $url = "https://github.com/libsdl-org/SDL/releases/download/release-$v/SDL3-devel-$v-VC.zip"
+        Write-Host "Downloading $url"
+        Invoke-WebRequest -Uri $url -OutFile sdl3-devel.zip -UseBasicParsing
+        Expand-Archive -Path sdl3-devel.zip -DestinationPath sdl3-extract -Force
+        $sdl3Root = (Get-ChildItem sdl3-extract -Directory | Select-Object -First 1).FullName
+        Write-Host "SDL3 at: $sdl3Root"
+        if (-not (Test-Path "$sdl3Root\include\SDL3\SDL.h")) { Write-Error "SDL.h not found in SDL3 download"; exit 1 }
+        echo "SDL3DIR=$sdl3Root" >> $env:GITHUB_ENV
+
+    - name: Build (libs, headless emu, .dis tree)
       shell: pwsh
       run: |
         & .\build-windows-amd64.ps1
 
-    - name: Verify build
+    - name: Build (SDL3 GUI emu)
       shell: pwsh
       run: |
-        if (-not (Test-Path "emu\Nt\o.emu.exe")) { Write-Host "Emulator not built"; exit 1 }
-        if (-not (Test-Path "Nt\amd64\bin\limbo.exe")) { Write-Host "Limbo compiler not built"; exit 1 }
-        if (-not (Test-Path "Nt\amd64\bin\mk.exe")) { Write-Host "mk not built"; exit 1 }
+        & .\build-windows-sdl3.ps1 -SDL3Dir $env:SDL3DIR
+
+    - name: Build (Windows launcher InferNode.exe)
+      shell: pwsh
+      run: |
+        & .\emu\Nt\build-launcher.ps1
+
+    - name: Verify build artefacts
+      shell: pwsh
+      run: |
+        $required = @(
+          "emu\Nt\o.emu.exe",       # SDL3 GUI emulator
+          "emu\Nt\InferNode.exe",   # Windows-subsystem launcher
+          "emu\Nt\SDL3.dll",        # SDL3 runtime
+          "Nt\amd64\bin\limbo.exe", # Limbo compiler
+          "Nt\amd64\bin\mk.exe"     # mk build tool
+        )
+        foreach ($f in $required) {
+          if (-not (Test-Path $f)) { Write-Error "Missing: $f"; exit 1 }
+          $size = [math]::Round((Get-Item $f).Length / 1KB, 1)
+          Write-Host "OK $f ($size KB)"
+        }
 
     - name: Package archive
       shell: pwsh
@@ -1055,25 +1093,25 @@ jobs:
         $VERSION = "${{ steps.version.outputs.version }}"
         $STAGE = "infernode-$VERSION-windows-amd64"
 
-        New-Item -ItemType Directory -Force -Path "$STAGE\emu\Nt" | Out-Null
+        # Flat layout matching the launcher's expectations: $STAGE\InferNode.exe
+        # invokes %dir%\o.emu.exe with -r ., so launcher + emu + SDL3.dll +
+        # runtime tree all live at the top level of the bundle.
         New-Item -ItemType Directory -Force -Path "$STAGE\Nt\amd64\bin" | Out-Null
 
-        # Platform binaries
-        Copy-Item "emu\Nt\o.emu.exe" "$STAGE\emu\Nt\"
+        Copy-Item "emu\Nt\InferNode.exe" "$STAGE\"
+        Copy-Item "emu\Nt\o.emu.exe"     "$STAGE\"
+        Copy-Item "emu\Nt\SDL3.dll"      "$STAGE\"
         Copy-Item "Nt\amd64\bin\limbo.exe" "$STAGE\Nt\amd64\bin\"
-        Copy-Item "Nt\amd64\bin\mk.exe" "$STAGE\Nt\amd64\bin\"
+        Copy-Item "Nt\amd64\bin\mk.exe"    "$STAGE\Nt\amd64\bin\"
 
-        # Shared runtime tree
         foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale")) {
           if (Test-Path $d) {
             Copy-Item -Recurse $d "$STAGE\$d"
           }
         }
 
-        # tmp directory (needed by profile)
         New-Item -ItemType Directory -Force -Path "$STAGE\tmp" | Out-Null
 
-        # Docs and legal
         foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md")) {
           if (Test-Path $f) {
             Copy-Item $f "$STAGE\"

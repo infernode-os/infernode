@@ -534,7 +534,31 @@ InferNode includes a crypto wallet and supports h402 (HTTP 402 Payment
 Required) micropayments. This creates the infrastructure for a module
 and composition marketplace without building a marketplace platform.
 
-### Mechanism
+The marketplace itself is **not yet designed**. Three design-exploration
+tickets (all deferred) capture the open questions that must be answered
+before any implementation begins:
+
+- **INFR-13** — what trust model does the marketplace use? Publisher-as-mount
+  (each publisher = a 9P share authenticated by keyring; mount is the trust
+  boundary; reuses INFR-16's existing pattern), aggregator-with-attestation
+  (single endpoint, modules carry embedded signatures via the dormant
+  `sign(3)` / SMAGIC facility), or hybrid. Original prescription for
+  detached `.dis.sig` sidecars retracted; see ticket for the architectural
+  framing.
+- **INFR-41** — how does payment actually gate 9P access? The current
+  payment client (`appl/veltro/tools/payfetch.b`) is x402-over-HTTP only;
+  no 9P-level payment gating exists in the tree today. Without it, the
+  mechanism described below is aspirational.
+- **INFR-42** — how do consumers discover publishers? Every P2P consumer
+  in InferNode (mail9p, calendar9p, Matrix shares, serve-llm) currently
+  relies on out-of-band addressing. `ndb` is the Plan-9 answer for the
+  registry shape; question is what attribute schema, what bootstrap,
+  what announcement convention.
+
+The sketch below describes what the marketplace *could* look like once
+those questions are resolved. It is not a specification.
+
+### Mechanism (sketch)
 
 A module or pinned composition is a file. Files are served over 9P.
 9P connections can be gated by payment. Therefore:

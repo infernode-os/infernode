@@ -1,0 +1,27 @@
+name: Verify dis-paths
+
+# Universal backstop for the "stale build artefact" bug class
+# (INFR-28 history): a Limbo source file is committed, but the
+# corresponding compiled .dis at the path declared in the module's
+# PATH constant is missing or older than the source.  emu loads the
+# stale .dis; every "fix" appears to do nothing locally.
+#
+# This job runs in seconds and blocks merge.  It catches contributors
+# who don't have the local pre-commit hook installed (hooks/install.sh)
+# or who used the wrong manual `limbo -o ...` target.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify dis paths
+        run: ./tools/verify-dis-paths.sh

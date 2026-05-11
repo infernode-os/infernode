@@ -5,11 +5,14 @@
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOOKDIR="$ROOT/.git/hooks"
 
-for hook in "$ROOT"/hooks/post-merge; do
+# Iterate every executable file in hooks/ except install.sh itself.
+# Avoids having to update this loop each time a new hook is added.
+for hook in "$ROOT"/hooks/*; do
     name="$(basename "$hook")"
-    if [ "$name" = "install.sh" ]; then
-        continue
-    fi
+    case "$name" in
+        install.sh|*.md|*.txt) continue ;;
+    esac
+    [ -f "$hook" ] || continue
     cp "$hook" "$HOOKDIR/$name"
     chmod +x "$HOOKDIR/$name"
     echo "installed $name"

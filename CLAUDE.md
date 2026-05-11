@@ -57,6 +57,16 @@ This means: the runtime tree ships pre-built, but you never commit `.dis` files 
 
 After that, every `git pull` triggers an automatic rebuild of stale bytecode. See `hooks/post-merge` for details.
 
+**The wrong-target trap (READ THIS BEFORE COMPILING ANYTHING).** A separate class of stale-bytecode bug: a module declares `PATH: con "/dis/foo.dis";` so the runtime loads `dis/foo.dis`. The mkfile installs to `dis/foo.dis`. But there is *also* an `appl/cmd/foo.dis` (intermediate) and there used to be a parallel `dis/cmd/foo.dis` tree. If you manually compile with `limbo -o dis/cmd/foo.dis ...` (or any path that is NOT what the module's PATH constant declares), `emu` cheerfully keeps loading the old `dis/foo.dis` while your "fix" silently lands in a directory it never reads from. This has burned multiple debug sessions. The defences:
+
+- **Never run `limbo -o ...` directly.** Use one of:
+  - `tools/compile-limbo.sh <source.b>` — reads the module's `PATH` constant and emits to that exact location. No `-o` to get wrong.
+  - `mk install` from the appropriate `appl/<dir>/` — also installs to the canonical path (`DISBIN=$ROOT/dis`).
+- **Pre-commit hook** (installed by `./hooks/install.sh`) runs `tools/verify-dis-paths.sh`, which refuses any commit where a source's `dis/<PATH>.dis` is missing or older than the source.
+- **CI** (`.github/workflows/verify-dis-paths.yml`) runs the same verifier on every PR — universal backstop for contributors who didn't install the local hook.
+
+If you see "my fix isn't taking effect" symptoms (the bug looks the same after recompile, diagnostic prints don't appear in logs), check `tools/verify-dis-paths.sh` immediately before chasing anything else.
+
 ### Build Commands
 
 Build from macOS terminal (not inside Inferno):

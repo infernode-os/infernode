@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# pre-commit — refuse to commit if any tracked Limbo source has a
+# stale or missing .dis at its module's declared PATH.
+#
+# This is the local catch for the recurring "stale build artefacts"
+# bug class: someone (often Claude) edits appl/cmd/lucictx.b, manually
+# compiles to dis/cmd/lucictx.dis, but lucifer loads /dis/lucictx.dis
+# and runs the old code.  Every fix appears to "do nothing" until
+# someone notices the path mismatch.  We've burned multiple debug
+# sessions on this — see INFR-28 history.
+#
+# What this hook does:
+#   1. Run tools/verify-dis-paths.sh, which compares each
+#      appl/cmd/*.b's mtime against dis/<declared-PATH>.dis.
+#   2. If any source is newer than its installed .dis, ABORT the
+#      commit and print the failing source/target pairs.
+#
+# To recover: rebuild with tools/compile-limbo.sh (or `mk install`),
+# then re-run `git commit`.
+#
+# Bypass for emergencies: `git commit --no-verify`.  Don't do it.
+
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+if [ ! -x "$ROOT/tools/verify-dis-paths.sh" ]; then
+	# Hook is newer than the verifier on disk — let the commit through
+	# rather than block on missing infrastructure.
+	exit 0
+fi
+
+if ! "$ROOT/tools/verify-dis-paths.sh"; then
+	echo "" >&2
+	echo "pre-commit: refusing to commit with stale .dis artefacts." >&2
+	echo "  Fix: tools/compile-limbo.sh <changed-source>.b" >&2
+	echo "  Or:  mk install   (in the affected source dir)" >&2
+	echo "  Bypass (don't): git commit --no-verify" >&2
+	exit 1
+fi

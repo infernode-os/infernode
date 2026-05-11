@@ -1468,7 +1468,7 @@ themelistener()
 			break;
 		ev := string buf[0:n];
 		if(len ev >= 6 && ev[0:6] == "theme ")
-			alt { themech <-= 1 => ; * => ; }
+			themech <-= 1;
 	}
 }
 

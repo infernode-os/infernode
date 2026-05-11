@@ -746,7 +746,8 @@ Write-Host "=== Build Summary ===" -ForegroundColor Cyan
 Write-Host ""
 
 $emuPath = "$ROOT\emu\Nt\o.emu.exe"
-if (Test-Path $emuPath) {
+$buildOk = Test-Path $emuPath
+if ($buildOk) {
     $size = (Get-Item $emuPath).Length / 1KB
     Write-Host "SUCCESS: Emulator built at $emuPath" -ForegroundColor Green
     Write-Host "  Size: $([math]::Round($size, 1)) KB"
@@ -769,3 +770,8 @@ if (Test-Path "$BinDir\mk.exe") {
 }
 
 Write-Host ""
+
+# Explicit exit so $LASTEXITCODE from intermediate native commands
+# (limbo/mk produce non-zero on warnings) doesn't leak as the script's
+# own exit code and fail CI after a successful build.
+if ($buildOk) { exit 0 } else { exit 1 }

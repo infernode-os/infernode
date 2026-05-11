@@ -30,6 +30,18 @@ cd "$ROOT"
 fail=0
 checked=0
 
+# stat(1) is the classic cross-platform divergence:
+#   macOS / BSD:  stat -f %m FILE   → mtime as epoch seconds
+#   GNU / Linux:  stat -c %Y FILE   → mtime as epoch seconds
+# Picking the wrong one prints filesystem-info text starting with
+# "File:", which the (( … )) arithmetic later treated as an unset
+# variable name and crashed CI.  Detect once and stash a function.
+if stat -c %Y "$0" >/dev/null 2>&1; then
+	mtime() { stat -c %Y "$1"; }
+else
+	mtime() { stat -f %m "$1"; }
+fi
+
 scan_module_path() {
 	# Return the PATH constant of the module that this .b file
 	# IMPLEMENTS (top-level `implement Foo;`), not the first PATH it
@@ -75,8 +87,8 @@ for src in appl/cmd/*.b; do
 		continue
 	fi
 
-	src_t=$(stat -f %m "$src" 2>/dev/null || stat -c %Y "$src")
-	dis_t=$(stat -f %m "$dispath" 2>/dev/null || stat -c %Y "$dispath")
+	src_t=$(mtime "$src")
+	dis_t=$(mtime "$dispath")
 
 	if (( src_t > dis_t )); then
 		echo "FAIL: $src is newer than $dispath (recompile needed)" >&2

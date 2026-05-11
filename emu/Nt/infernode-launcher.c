@@ -39,25 +39,15 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 	SetCurrentDirectoryA(dir);
 
-	/* Size window to 80% of the primary monitor, capped at 1920x1080 */
+	/* Use the full screen resolution */
 	{
-		int sw = GetSystemMetrics(SM_CXSCREEN);
-		int sh = GetSystemMetrics(SM_CYSCREEN);
-		int w = sw * 80 / 100;
-		int h = sh * 80 / 100;
-		if (w > 1920) w = 1920;
-		if (h > 1080) h = 1080;
-		if (w < 800)  w = 800;
-		if (h < 600)  h = 600;
+		int w = GetSystemMetrics(SM_CXSCREEN);
+		int h = GetSystemMetrics(SM_CYSCREEN);
 
-		/* Launch InferNode emu with Lucifer GUI.
-		 * GUI uses interpreter (-c0): JIT + Win32 qlock interaction causes
-		 * RtlpNotOwnerCriticalSection in ntdll when kproc thread signaling
-		 * (osblock/osready via Win32 Events) races with pool allocator locks
-		 * under high-frequency JIT module calls.  Headless -c1 is unaffected.
-		 * See WINDOWS-BUILD.md for details. */
+		/* Launch InferNode emu with Lucifer GUI + JIT.
+		 * -l sources lib/sh/profile (mounts host FS, overlay, secstore). */
 		_snprintf(cmd, sizeof(cmd),
-			"\"%s\\o.emu.exe\" -c0 -g %dx%d"
+			"\"%s\\o.emu.exe\" -c1 -g %dx%d"
 			" -pheap=1024m -pmain=1024m -pimage=1024m"
 			" -r . sh -l /dis/lucifer-start.sh",
 			dir, w, h);

@@ -142,6 +142,9 @@ lasttoolsraw := "";
 mousech_g: chan of ref Pointer;
 ctxreqch_g: chan of string;
 rszch_g: chan of ref Image;
+evch_g: chan of string;	# INFR-28: also exposed to filebrowser so it
+			# can process theme events without losing them
+			# while the modal is open
 
 # Scroll state for context zone
 ctx_scroll := 0;		# pixel offset from top (0 = no scroll)
@@ -205,6 +208,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	mousech_g = mouse;
 	ctxreqch_g = req;
 	rszch_g = rsz;
+	evch_g = evch;
 
 	# Create colors from theme
 	lucitheme := load Lucitheme Lucitheme->PATH;
@@ -1332,7 +1336,13 @@ filebrowser(startpath: string): string
 		# Draw browser UI (populates brow_* module-level arrays)
 		drawbrowser(curpath, dirs, files, scroll);
 
-		# Wait for mouse event or zone resize
+		# Wait for mouse event, zone resize, or context event.
+		# INFR-28: also handle ctx events here so theme switches that
+		# happen while the file browser is open update the browser's
+		# colours.  Previously this modal ignored evch_g entirely and
+		# the browser stayed frozen on the theme that was active when
+		# it opened — visible especially when the base context view
+		# (which DID retheme) sat behind a stuck browser overlay.
 		p: ref Pointer;
 		alt {
 		p = <-mousech_g =>
@@ -1344,6 +1354,9 @@ filebrowser(startpath: string): string
 				break;
 			}
 			continue;
+		ev := <-evch_g =>
+			handleevent(ev);
+			continue;	# loop redraws browser with refreshed colours
 		}
 		if(p == nil)
 			continue;

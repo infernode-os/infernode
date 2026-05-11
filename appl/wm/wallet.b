@@ -251,6 +251,14 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			loadcolors();
 			widgetmod->retheme(display_g);
 			wmclient->retheme(w);
+			# menu.b caches theme colours (mbg, mborder, mhilit,
+			# mtext, mdim) at init() time and has no separate
+			# retheme() entry point — re-init it here so the
+			# context menu tracks live theme switches.  Other
+			# wm apps do this in their reloadcolors(); wallet
+			# was missing it.
+			if(menumod != nil)
+				menumod->init(display_g, font);
 			layoutall();
 			dirty = 1;
 		<-balancech =>

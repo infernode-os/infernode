@@ -16,13 +16,13 @@
 
 set -e
 
-INFERNODE_ROOT="${INFERNODE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-LIMBO="${INFERNODE_ROOT}/MacOSX/arm64/bin/limbo"
+. "$(dirname "$0")/common.sh"
+INFERNODE_ROOT="$ROOT"
 
 # Check if limbo compiler exists
 if [ ! -x "$LIMBO" ]; then
-    echo "SKIP: limbo compiler not found at $LIMBO"
-    exit 0
+    echo "SKIP: limbo compiler not found at $LIMBO (run build-{linux,macos}-*.sh first)"
+    exit 77
 fi
 
 echo "Testing Xenith build integrity..."

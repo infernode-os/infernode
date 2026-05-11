@@ -19,7 +19,7 @@
 set -e
 
 ROOT="${ROOT:-.}"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 X402_SERVER="$ROOT/../x402-test-server"
 PASS="payfetchtest42"
 

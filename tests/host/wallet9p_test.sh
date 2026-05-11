@@ -2,18 +2,11 @@
 # wallet9p integration test (host-side)
 set -e
 
-ROOT="${ROOT:-.}"
-
-# Detect platform and locate emulator
-case "$(uname -s)" in
-    Darwin) EMU="$ROOT/emu/MacOSX/o.emu" ;;
-    Linux)  EMU="$ROOT/emu/Linux/o.emu" ;;
-    *)      echo "SKIP: unsupported platform $(uname -s)"; exit 0 ;;
-esac
+. "$(dirname "$0")/common.sh"
 
 if [ ! -x "$EMU" ]; then
     echo "SKIP: emu not found at $EMU"
-    exit 0
+    exit 77
 fi
 
 echo "=== wallet9p integration test ==="

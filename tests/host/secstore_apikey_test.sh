@@ -13,7 +13,7 @@
 set -e
 
 ROOT="${ROOT:-.}"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 PASS="testpass-apikey"
 USER="testuser-apikey"
 

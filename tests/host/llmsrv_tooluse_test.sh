@@ -13,7 +13,7 @@
 #
 # Requirements:
 #   - ANTHROPIC_API_KEY (env var or LaunchAgent plist)
-#   - Inferno emulator at $ROOT/emu/MacOSX/o.emu
+#   - Inferno emulator at $EMU (set by common.sh; MacOSX or Linux)
 #
 # Usage:
 #   ./tests/host/llmsrv_tooluse_test.sh        # run all tests
@@ -23,7 +23,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 VERBOSE=0
 
 while getopts "v" opt; do

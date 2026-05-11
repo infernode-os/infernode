@@ -11,7 +11,7 @@
 #
 # Requirements:
 #   - LLM 9P service running on LLM9P_PORT (default 5640)
-#   - Inferno emulator at $ROOT/emu/MacOSX/o.emu
+#   - Inferno emulator at $EMU (set by common.sh; MacOSX or Linux)
 #
 # Usage:
 #   ./tests/host/tooluse_protocol_test.sh            # port 5640
@@ -22,7 +22,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-EMU="$ROOT/emu/MacOSX/o.emu"
+. "$(dirname "$0")/common.sh"
 LLM9P_PORT="${LLM9P_PORT:-5640}"
 VERBOSE=0
 
@@ -100,9 +100,9 @@ TESTDIS="$ROOT/dis/tests/tooluse_test.dis"
 TESTB="$ROOT/tests/tooluse_test.b"
 if [[ ! -f "$TESTDIS" ]] || [[ "$TESTB" -nt "$TESTDIS" ]]; then
 	info "Building tooluse_test.dis..."
-	PATH="$ROOT/MacOSX/arm64/bin:$PATH" \
+	PATH="$BINDIR:$PATH" \
 		ROOT="$ROOT" \
-		"$ROOT/MacOSX/arm64/bin/limbo" \
+		"$LIMBO" \
 		-I"$ROOT/module" -I"$ROOT/appl/veltro" -gw \
 		-o "$TESTDIS" "$TESTB" 2>&1 || {
 		echo "ERROR: failed to build tooluse_test.dis" >&2

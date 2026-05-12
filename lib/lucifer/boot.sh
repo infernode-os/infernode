@@ -8,8 +8,14 @@ user=`{cat /dev/user}
 ls /usr/inferno/secstore >[2] /dev/null
 ls /usr/inferno/secstore/$user >[2] /dev/null
 
-# Login screen (unlocks secstore, loads keys into factotum)
-wm/logon
+# Login screen (unlocks secstore, loads keys into factotum).
+# Skipped when invoked as `sh -l /lib/lucifer/boot.sh skip-login`
+# from app-bundled launchers (InferNode.exe, InferNode.app), where the
+# API key is provisioned from the host env via profile and the friction
+# of a password prompt isn't appropriate for first-run users.
+if {! ~ $* skip-login} {
+	wm/logon
+}
 
 # (Re-)start LLM service in the background.
 #
@@ -40,9 +46,12 @@ wm/logon
 	}
 } &
 
-# Wallet service
-/dis/veltro/wallet9p.dis >[2] /dev/null &
-sleep 1
+# Wallet service. Also skipped on skip-login: wallet9p needs unlocked
+# keys from factotum, which depend on secstore being unlocked.
+if {! ~ $* skip-login} {
+	/dis/veltro/wallet9p.dis >[2] /dev/null &
+	sleep 1
+}
 
 # GUI services
 luciuisrv

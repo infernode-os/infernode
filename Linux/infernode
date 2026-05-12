@@ -18,4 +18,7 @@ fi
 # LD_LIBRARY_PATH as fallback in case patchelf wasn't applied.
 export LD_LIBRARY_PATH="$SCRIPT_DIR/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-exec "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m "-r$RESOURCES" sh -l /lib/lucifer/boot.sh
+# skip-login: app-bundle first run skips secstore password + wallet9p
+# so new users can try InferNode without setting up credentials first.
+# Dev path (emu -r$PWD sh -l /lib/lucifer/boot.sh, no arg) still prompts.
+exec "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m "-r$RESOURCES" sh -l /lib/lucifer/boot.sh skip-login

@@ -45,11 +45,14 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		int h = GetSystemMetrics(SM_CYSCREEN);
 
 		/* -l sources lib/sh/profile; /lib/lucifer/boot.sh is the
-		 * unified GUI boot script shared with macOS/Linux. */
+		 * unified GUI boot script shared with macOS/Linux. The
+		 * skip-login arg tells boot.sh to skip the secstore password
+		 * prompt + wallet9p for frictionless first run (host-env API
+		 * key still flows through via profile). */
 		_snprintf(cmd, sizeof(cmd),
 			"\"%s\\o.emu.exe\" -c1 -g %dx%d"
 			" -pheap=1024m -pmain=1024m -pimage=1024m"
-			" -r . sh -l /lib/lucifer/boot.sh",
+			" -r . sh -l /lib/lucifer/boot.sh skip-login",
 			dir, w, h);
 	}
 

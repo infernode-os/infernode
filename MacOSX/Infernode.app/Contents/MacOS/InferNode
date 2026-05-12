@@ -19,4 +19,7 @@ esac
 EMU="$SCRIPT_DIR/emu"
 
 # Launch: profile (-l) sets up overlays, then boot.sh starts the GUI.
-exec "$EMU" -c1 "-pheap=1024m" "-pmain=1024m" "-pimage=1024m" "-r$RESOURCES" sh -l /lib/lucifer/boot.sh
+# skip-login: app-bundle first run skips secstore password + wallet9p
+# so new users can try InferNode without setting up credentials first.
+# Dev path (emu -r$PWD sh -l /lib/lucifer/boot.sh, no arg) still prompts.
+exec "$EMU" -c1 "-pheap=1024m" "-pmain=1024m" "-pimage=1024m" "-r$RESOURCES" sh -l /lib/lucifer/boot.sh skip-login

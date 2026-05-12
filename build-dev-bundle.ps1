@@ -99,6 +99,12 @@ foreach ($f in @("build-windows-amd64.ps1", "build-windows-sdl3.ps1")) {
     }
 }
 
+# Post-install setup (Anthropic API key / Ollama install + model pull).
+# Users run this once after extracting the bundle to wire up Veltro's LLM.
+if (Test-Path "$ROOT\setup-windows.ps1") {
+    Copy-Item "$ROOT\setup-windows.ps1" "$OutDir\"
+}
+
 # Build provenance stamp.
 $sha = "unknown"
 try {

@@ -1112,7 +1112,7 @@ jobs:
 
         New-Item -ItemType Directory -Force -Path "$STAGE\tmp" | Out-Null
 
-        foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md")) {
+        foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1")) {
           if (Test-Path $f) {
             Copy-Item $f "$STAGE\"
           }

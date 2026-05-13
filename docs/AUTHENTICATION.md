@@ -6,6 +6,10 @@
 > together. Topology variants (single host, dedicated server, peer-to-peer) live
 > in the companion document, [DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md).
 >
+> Auth-suite rationale and compatibility policy, including the `secstore3`
+> default, are
+> tracked in [SECSTORE-AUTH-SUITE-PLAN.md](SECSTORE-AUTH-SUITE-PLAN.md).
+>
 > **Audience.** Operators who need to reason about what is encrypted by what,
 > what an attacker on the wire can or cannot do, and how to deploy the stack
 > beyond a single host.
@@ -70,7 +74,7 @@ flowchart TB
     pw([password]) -- "longhash · r mod p" --> H["H = H(user, password)"]
     H -- "H⁻¹ mod p" --> Hi["Hi (PAK verifier)"]
     pw -- "100 000 × HMAC-SHA-256<br/>salt = \"secstore filekey seed:\" + user" --> Fk["root key<br/>(SGCM2 writes)"]
-    pw -- "secstore2: SHA-256(pass)<br/>legacy secstore: SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
+    pw -- "secstore3/secstore2: SHA-256(pass)<br/>legacy secstore: SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
 
     Hi --> diskpak[("&lt;user&gt;/PAK on disk")]
     Fk -.encrypts.-> diskblob[("&lt;user&gt;/factotum<br/>on disk")]
@@ -100,22 +104,18 @@ either side.
 
 | Parameter | Source                          | Notes                                              |
 |-----------|---------------------------------|----------------------------------------------------|
-| `p`       | 1024-bit prime, fixed in code   | `appl/lib/secstore.b:initPAKparams` and mirrored in `secstored.b` and `factotum.b`. |
-| `q`       | 160-bit prime, `q | (p−1)`      | Subgroup order.                                    |
-| `g`       | Generator of order `q`          |                                                    |
-| `r`       | Used to stretch the password    | `H = h(...)^r mod p` is the slow step.             |
-| Hash      | `secstore2`: SHA-256; legacy `secstore`: SHA-1 | `secstore2` uses SHA-256 for the password hash and transcript confirmation. |
+| `p,q,g,r` | Fixed suite parameters in code  | `secstore3` uses an RFC 5114 2048/256 subgroup set; `secstore2` and legacy `secstore` use the inherited 1024/160 set. |
+| Hash      | `secstore3`/`secstore2`: SHA-256; legacy `secstore`: SHA-1 | Modern suites use SHA-256 for the password hash and transcript confirmation. |
 | KDF       | Iterated `h^r mod p`            | ~5 s on a laptop; cached per (user, pwhash).       |
 
-The same `(p, q, r, g)` are hard-coded in **client** (`secstore.b`), **server**
-(`secstored.b`), and **factotum** (`factotum.b:secstoresetup`). All three must
-agree, and they do; do not edit one without the others.
+The suite parameters are hard-coded in **client** (`secstore.b`), **server**
+(`secstored.b`), and account-creation code (`secstore-setup`, `factotum`,
+`wm/logon`). All participants must agree on the suite selected by the `PAK`
+tag.
 
-New accounts default to the `secstore2` verifier format. Clients try
-`secstore2` first and fall back to legacy `secstore` when talking to an older
-account or an older server. The group parameters are still the inherited
-1024-bit set for both versions; this upgrade removes the SHA-1 dependency first
-without breaking existing accounts.
+New accounts default to the `secstore3` verifier format. Clients try
+`secstore3` first, then `secstore2`, then legacy `secstore` when talking to an
+older account or server.
 
 ### 3.2 Wire transcript
 
@@ -132,24 +132,24 @@ sequenceDiagram
 
     Note over C: Compute H = (longhash)^r mod p   (~5 s, cached)<br/>Compute Hi = H⁻¹ mod p<br/>Pick x ∈ [1, q)<br/>Compute m = (g^x · H) mod p
 
-    C->>S: secstore2␉PAK\nC=&lt;user&gt;\nm=&lt;hexm&gt;\n
+    C->>S: secstore3␉PAK\nC=&lt;user&gt;\nm=&lt;hexm&gt;\n
     S->>D: read &lt;user&gt;/PAK
     D-->>S: hexHi
-    Note over S: Pick y ∈ [1, q)<br/>mu = g^y mod p<br/>sigma = (m · Hi)^y mod p<br/>ks = base64(SHA1("server", C, S, m, mu, sigma, Hi))
+    Note over S: Pick y ∈ [1, q)<br/>mu = g^y mod p<br/>sigma = (m · Hi)^y mod p<br/>ks = base64(SHA-256("server", C, S, m, mu, sigma, Hi))
     S-->>C: mu=&lt;hexmu&gt;\nk=&lt;ks&gt;\nS=&lt;sname&gt;\n
 
-    Note over C: sigma = mu^x mod p<br/>verify ks against own SHA1(...)
+    Note over C: sigma = mu^x mod p<br/>verify ks against own SHA-256(...)
     alt server didn't know Hi
         C-->>S: abort (verifier mismatch)
     end
 
-    Note over C: kc = base64(SHA1("client", C, S, m, mu, sigma, Hi))
+    Note over C: kc = base64(SHA-256("client", C, S, m, mu, sigma, Hi))
     C->>S: k'=&lt;kc&gt;\n
     alt client didn't know password
         S-->>C: abort (verifier didn't match)
     end
 
-    Note over C,S: digest = SHA1("session", C, S, m, mu, sigma, Hi)<br/>secret_out = HMAC-SHA1(digest, "one")<br/>secret_in  = HMAC-SHA1(digest, "two")<br/>(server uses opposite direction labels)
+    Note over C,S: digest = SHA-256("session", C, S, m, mu, sigma, Hi)<br/>secret_out = HMAC-SHA-256(digest, "one")<br/>secret_in  = HMAC-SHA-256(digest, "two")<br/>(server uses opposite direction labels)
     C-)S: ssl->secret(in, out)
     S-)C: ssl->secret(in, out)
     C->>S: alg sha256 aes_128_cbc
@@ -286,14 +286,13 @@ remains only as a legacy fallback for older clients.
 
 ### 4.2 The `PAK` file
 
-Current accounts store `secstore2 <hexHi>` in the `PAK` file. Legacy accounts
-store bare `hexHi` with no prefix; the server treats that as the original
-`secstore` format. The file is writable only by the user who owns the directory
-(mode `0600`). The verifier alone is *not* directly invertible to the password
-— a brute-force attacker who steals the file must compute
-`H(user, candidate_password)⁻¹ mod p` per guess, which is the same ~5 s
-1024-bit modexp the legitimate client pays. That work factor becomes the
-password's last line of defence.
+Current accounts store `secstore3 <hexHi>` in the `PAK` file. Compatibility
+accounts may store `secstore2 <hexHi>`, and legacy accounts store bare `hexHi`
+with no prefix; the server treats that as the original `secstore` format. The
+file is writable only by the user who owns the directory (mode `0600`). The
+verifier alone is *not* directly invertible to the password — a brute-force
+attacker who steals the file must compute `H(user, candidate_password)⁻¹ mod p`
+per guess, which is the same expensive modexp the legitimate client pays.
 
 ### 4.3 Server enforcement
 

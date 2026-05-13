@@ -102,6 +102,11 @@ testVerifierFormats(t: ref T)
 	t.assertseq(ver, "secstore2", "parseverifier keeps secstore2 prefix");
 	t.assertseq(hexHi, "deadbeef", "parseverifier keeps secstore2 verifier body");
 
+	formatted = secstore->formatverifier("secstore3", "feedface");
+	(ver, hexHi) = secstore->parseverifier(formatted);
+	t.assertseq(ver, "secstore3", "parseverifier keeps secstore3 prefix");
+	t.assertseq(hexHi, "feedface", "parseverifier keeps secstore3 verifier body");
+
 	(ver, hexHi) = secstore->parseverifier("cafebabe");
 	t.assertseq(ver, "secstore", "bare verifier parses as legacy secstore");
 	t.assertseq(hexHi, "cafebabe", "bare verifier keeps legacy body");

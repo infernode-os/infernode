@@ -10,31 +10,19 @@ implement Mail9p;
 # system anywhere in this server — bind triage-only paths for a triage
 # agent, bind compose for a reply-allowed agent, and so on.
 #
-# See INFR-8 for the design ticket and the full namespace shape.
-#
-# Filesystem layout (this scaffold implements the directories and ctl
-# paths; per-message field files and SMTP send come in the next
-# implementation pass):
+# See INFR-8 for the design ticket. man/4/mail9p documents the
+# user-facing shape.
 #
 #   /n/mail/
-#       ctl                    write: connect <name> <server> [-m starttls]
-#                              write: disconnect <name>
-#                              write: sync <name>
-#                              read:  (write-only; reads return empty)
-#       accounts/
-#           <name>/
-#               ctl            read:  status line (connected|disconnected,
-#                                     server, mailbox if selected)
-#                              write: per-account ops (select <box>,
-#                                     search <criteria>, ...)
-#               boxes/         [next-pass: contains <boxname>/ dirs with
-#                              message UIDs as subdirs]
-#
-# Per the INFR-8 acceptance criteria the legacy tool at
-# appl/veltro/tools/mail.{b,m,sbl,dis} must be deleted once mail9p is
-# consumable. That deletion lands together with the IMAP-wiring pass —
-# this scaffold establishes the 9P shape without yet replacing the
-# tool's functionality.
+#       ctl                          connect / disconnect / sync
+#       accounts/<name>/
+#           ctl                      status / select / sync
+#           compose                  write RFC822 → SMTP
+#           boxes/<box>/
+#               ctl                  search / archive / move
+#               <uid>/
+#                   from to cc subject date flags
+#                   body body.html raw draft-reply
 #
 # Architectural guard-rail (binding): the namespace is the only
 # enforcement primitive. No permission daemon, no policy engine, no

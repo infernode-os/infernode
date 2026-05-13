@@ -132,7 +132,7 @@ TOOL_PATHS := array[] of {
 	("todo",    "/dis/veltro/tools/todo.dis"),
 	# Network tools
 	("websearch", "/dis/veltro/tools/websearch.dis"),
-	("mail",      "/dis/veltro/tools/mail.dis"),
+	# Mail: superseded by mail9p (mounts /n/mail). See man/4/mail9p.
 	# Web browsing
 	("browse",    "/dis/veltro/tools/browse.dis"),
 	("charon",    "/dis/veltro/tools/charon.dis"),
@@ -178,7 +178,7 @@ usage()
 	sys->fprint(stderr, "  Core:    read, list, find, search, grep, write, edit\n");
 	sys->fprint(stderr, "  Execute: exec, launch, spawn\n");
 	sys->fprint(stderr, "  UI:      xenith, ask, present, gap\n");
-	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory, todo, websearch, mail\n");
+	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory, todo, websearch\n");
 	sys->fprint(stderr, "  Vision:  vision, gpu\n");
 	raise "fail:usage";
 }

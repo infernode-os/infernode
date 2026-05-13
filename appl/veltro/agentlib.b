@@ -47,19 +47,20 @@ settoolmount(path: string)
 
 # Create LLM session using clone pattern
 # Returns session ID (e.g., "0") or empty string on error
-# (from veltro.b — has verbose logging on failure)
 createsession(): string
 {
 	fd := sys->open("/n/llm/new", Sys->OREAD);
 	if(fd == nil) {
-		if(verbose)
-			sys->fprint(stderr, "agentlib: cannot open /n/llm/new: %r\n");
+		sys->fprint(stderr, "agentlib: cannot open /n/llm/new: %r\n");
+		sys->fprint(stderr, "agentlib: hint: is llm9p running and mounted at /n/llm?\n");
 		return "";
 	}
 	buf := array[32] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	if(n <= 0) {
+		sys->fprint(stderr, "agentlib: read /n/llm/new returned %d: %r\n", n);
 		return "";
+	}
 	# Trim newline if present
 	id := string buf[:n];
 	if(len id > 0 && id[len id - 1] == '\n')
@@ -121,8 +122,10 @@ queryllmfd(fd: ref Sys->FD, prompt: string): string
 		if(attempt < len delays)
 			sys->sleep(delays[attempt]);
 	}
-	if(!ok)
+	if(!ok) {
+		sys->fprint(stderr, "agentlib: queryllmfd: all write attempts failed\n");
 		return "";
+	}
 
 	if(verbose)
 		sys->fprint(stderr, "agentlib: queryllmfd: write done, reading response\n");
@@ -133,12 +136,18 @@ queryllmfd(fd: ref Sys->FD, prompt: string): string
 	offset := big 0;
 	for(;;) {
 		n := sys->pread(fd, buf, len buf, offset);
-		if(n <= 0)
+		if(n < 0) {
+			sys->fprint(stderr, "agentlib: queryllmfd: read error at offset %bd: %r\n", offset);
+			break;
+		}
+		if(n == 0)
 			break;
 		result += string buf[0:n];
 		offset += big n;
 	}
-	if(verbose)
+	if(result == "")
+		sys->fprint(stderr, "agentlib: queryllmfd: LLM returned empty response\n");
+	else if(verbose)
 		sys->fprint(stderr, "agentlib: queryllmfd: response %d bytes\n", len array of byte result);
 	return result;
 }

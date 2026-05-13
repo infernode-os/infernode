@@ -62,6 +62,7 @@ FidState: adt {
 	fid:      int;
 	sayreq:   string;          # Text written to say
 	sayresp:  array of byte;   # Status response from say
+	saydone:  chan of array of byte;  # Completion channel for async TTS
 	hearresp: array of byte;   # Transcription result from hear
 };
 
@@ -419,11 +420,12 @@ listlocalvoices(): string
 
 # === TTS: Text to Speech ===
 
-# Async wrapper for TTS — runs in spawned thread so serveloop stays responsive
-asyncsay(fs: ref FidState, text: string)
+# Async wrapper for TTS — runs in spawned thread so serveloop stays responsive.
+# Sends result on completion channel instead of writing to shared state directly.
+asyncsay(donech: chan of array of byte, text: string)
 {
 	result := dosay(text);
-	fs.sayresp = array of byte result;
+	donech <-= array of byte result;
 }
 
 # Synthesize text and play through /dev/audio
@@ -1405,7 +1407,7 @@ getfidstate(fid: int): ref FidState
 		if((hd l).fid == fid)
 			return hd l;
 	}
-	fs := ref FidState(fid, "", nil, nil);
+	fs := ref FidState(fid, "", nil, nil, nil);
 	fidstates = fs :: fidstates;
 	return fs;
 }
@@ -1542,6 +1544,11 @@ Serve:
 				srv.reply(styxservers->readstr(m, readconfig()));
 			Qsay =>
 				fs := getfidstate(m.fid);
+				# If async TTS is pending, wait for completion
+				if(fs.sayresp == nil && fs.saydone != nil) {
+					fs.sayresp = <-fs.saydone;
+					fs.saydone = nil;
+				}
 				if(fs.sayresp != nil)
 					srv.reply(styxservers->readbytes(m, fs.sayresp));
 				else
@@ -1578,12 +1585,15 @@ Serve:
 				text := string m.data;
 				fs := getfidstate(m.fid);
 				fs.sayreq = text;
+				fs.sayresp = nil;
+				# Create a new completion channel for this operation
+				fs.saydone = chan of array of byte;
 				# Reply immediately, run TTS in background.
 				# dosay() blocks for the full duration of audio playback
 				# (e.g. 10-15s for macOS 'say'). Running it inline freezes
 				# the serveloop, blocking all other 9P traffic.
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				spawn asyncsay(fs, strip(text));
+				spawn asyncsay(fs.saydone, strip(text));
 			Qhear =>
 				# Writing to hear resets/starts a new recording
 				# Parse optional duration: "start 10000" = 10 seconds

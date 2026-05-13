@@ -729,10 +729,10 @@ writellmfd(fd: ref Sys->FD, prompt: string)
 		sys->fprint(stderr, "lucibridge: writellmfd failed: %r\n");
 }
 
-# Read complete LLM response from the ask fd at offset 0.
-# Blocks until the background generation goroutine completes.
-# Uses chunked reads to avoid a 1MB pool allocation per LLM call.
-readllmfd(fd: ref Sys->FD): string
+# Timeout for LLM response reads: 5 minutes (long for extended thinking)
+LLM_READ_TIMEOUT: con 300000;
+
+llmreadworker(fd: ref Sys->FD, ch: chan of string)
 {
 	result := "";
 	buf := array[8192] of byte;
@@ -744,7 +744,32 @@ readllmfd(fd: ref Sys->FD): string
 		result += string buf[0:n];
 		offset += big n;
 	}
-	return result;
+	ch <-= result;
+}
+
+llmreadtimer(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
+}
+
+# Read complete LLM response from the ask fd at offset 0.
+# Blocks until the background generation goroutine completes,
+# or until the timeout expires (prevents infinite hangs on network drop).
+readllmfd(fd: ref Sys->FD): string
+{
+	resultch := chan of string;
+	spawn llmreadworker(fd, resultch);
+	timeoutch := chan of int;
+	spawn llmreadtimer(timeoutch, LLM_READ_TIMEOUT);
+	alt {
+	result := <-resultch =>
+		return result;
+	<-timeoutch =>
+		sys->fprint(stderr, "lucibridge: LLM read timed out after %d seconds\n",
+			LLM_READ_TIMEOUT / 1000);
+		return "";
+	}
 }
 
 # Update an existing conversation message in place (for streaming token display).

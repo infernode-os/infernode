@@ -360,8 +360,8 @@ convertquotes(s: string): string
 #   >{cmd}   — process substitution (write end)
 #
 # Note: Inferno does NOT support bash's $() syntax or bare backticks.
-# Semicolons and pipes are intentionally allowed (multi-command support;
-# namespace restriction is the primary security boundary).
+# Semicolons and pipes are stripped to prevent command chaining that could
+# discover paths outside the agent's declared namespace (defense-in-depth).
 sanitizecmd(s: string): string
 {
 	result := "";
@@ -403,6 +403,13 @@ sanitizecmd(s: string): string
 		# Strip process substitution: <{cmd} and >{cmd}
 		if((c == '<' || c == '>') && i + 1 < len s && s[i+1] == '{') {
 			i = skipbraced(s, i + 1);
+			continue;
+		}
+
+		# Strip semicolons and pipes — prevents command chaining
+		# that could discover namespace contents outside declared scope
+		if(c == ';' || c == '|') {
+			i++;
 			continue;
 		}
 

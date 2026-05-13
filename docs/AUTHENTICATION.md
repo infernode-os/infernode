@@ -21,7 +21,7 @@ flowchart LR
     subgraph emu["Inferno emu"]
         logon["wm/logon<br/>(login screen)"]
         factotum["factotum<br/>/mnt/factotum<br/>in-memory key agent"]
-        secstored["secstored<br/>tcp!*!5356<br/>blob server"]
+        secstored["secstored<br/>tcp!localhost!5356<br/>blob server"]
     end
 
     user(["user"]) -- password --> logon
@@ -164,6 +164,12 @@ A successful exchange establishes:
 A client may probe whether an account exists without attempting auth, by sending
 `m=0`. The probe is unauthenticated.
 
+This is inherited secstore protocol behavior, not an InferNode-specific
+extension: upstream secstore exposes the same `cansecstore()` client API.
+InferNode hardens deployment by defaulting the server to loopback, while
+keeping the wire behavior compatible when an operator intentionally exposes
+`secstored` with `-a`.
+
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -179,6 +185,13 @@ sequenceDiagram
 
 Anyone reachable on TCP 5356 can enumerate which usernames exist. Treat user
 names as semi-public.
+
+Historically this sat behind Inferno/Plan 9's normal auth-service naming
+convention rather than an internet-facing listener. Upstream clients default to
+`net!$auth!secstore`, with `$auth` resolved by the system's name service
+(`cs`/`ndb`) to the site's chosen authentication host. In that model, the
+service is expected to live on a trusted site or VPN-like network, not on every
+interface of a workstation by default.
 
 ## 4. File format on disk
 
@@ -585,9 +598,10 @@ flowchart LR
 
 ### 8.2 Recommended deployment posture
 
-- Run secstored bound to loopback (`-a tcp!127.0.0.1!5356`) when only a single
-  host needs it. The default `tcp!*!5356` is convenient but exposes the port
-  on every interface.
+- InferNode now defaults secstored to loopback (`tcp!localhost!5356`) because
+  the inherited secstore protocol includes unauthenticated `cansecstore`
+  probes and has no built-in lockout. Use `-a` explicitly when you intend to
+  serve remote clients.
 - For multi-host, run secstored only on a private overlay network. ZeroTier
   with a managed network ID is the InferNode default; WireGuard works equally.
 - Choose a password that survives 10 000 HMAC-SHA-256 rounds against an

@@ -9,6 +9,12 @@
 > sharing keys*, on a private overlay network. Secstore was not designed to
 > face the open internet; every topology below assumes ZeroTier, WireGuard,
 > Tailscale, a VPN, or a physically isolated LAN.
+>
+> **Historical note.** Classic secstore clients default to
+> `net!$auth!secstore`, with `$auth` resolved by Inferno's normal connection
+> server / name database (`cs` / `ndb`) to the site's authentication host.
+> "Auth network" in old documentation usually means that trusted, site-local
+> network context, not a separate cryptographic subsystem.
 
 ## 1. Choosing a topology
 
@@ -146,7 +152,7 @@ sequenceDiagram
     participant client as client emu
     participant F as client factotum
 
-    Note over admin,store: One-time server setup
+    Note over admin,store: One-time server setup<br/>remote serving is explicit because InferNode defaults secstored to loopback
     admin->>srv: auth/secstored -a tcp!*!5356
     admin->>srv: auth/secstore-setup -u alice
     srv->>store: write &lt;alice&gt;/PAK
@@ -184,6 +190,12 @@ For interactive (GUI) clients, see §8 — `wm/logon` currently hard-codes
 - **A storedir compromise on the server compromises every user.** Encrypt
   the underlying disk; restrict shell access; back up to immutable storage
   so that ransomware can't simultaneously corrupt and exfiltrate.
+
+This topology is intentionally explicit in InferNode. The original secstore
+client API includes `cansecstore()` account probes, and InferNode keeps that
+wire compatibility. What InferNode changes is the deployment default:
+single-host boot uses loopback, and an operator must opt into remote exposure
+with `-a tcp!*!5356` or another non-loopback address.
 
 ## 4. Topology C — Peer-to-peer
 

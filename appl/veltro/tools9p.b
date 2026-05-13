@@ -21,7 +21,8 @@ implement Tools9p;
 #   /tool/
 #   ├── tools        (r)   List available tool names
 #   ├── help         (rw)  Write name, read documentation
-#   ├── ctl          (rw)  add/remove tools, bind/unbind paths
+#   ├── ctl          (rw)  trusted control plane (user/UI only)
+#   ├── provision    (rw)  child-task provisioning (narrowing only)
 #   ├── _registry    (r)   Space-separated tool names
 #   ├── paths        (r)   Bound namespace paths
 #   └── <tool>/      (dir) Per-tool directory
@@ -58,7 +59,7 @@ Tools9p: module {
 };
 
 # Qid types for synthetic files
-Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity: con iota;
+Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 4;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=reserved
 Qtool_dir: con 0;         # Offset: tool directory
@@ -182,6 +183,15 @@ usage()
 	raise "fail:usage";
 }
 
+controlmount(mpt: string): string
+{
+	if(mpt == "/tool")
+		return "/mnt/toolctl";
+	if(len mpt > 6 && mpt[0:6] == "/tool.")
+		return "/mnt/toolctl." + mpt[6:];
+	return "/mnt/toolctl";
+}
+
 nomod(s: string)
 {
 	sys->fprint(stderr, "tools9p: can't load %s: %r\n", s);
@@ -220,7 +230,15 @@ init(nil: ref Draw->Context, args: list of string)
 		'D' =>	styxservers->traceset(1);
 		'v' =>	verbose = 1;
 		'm' =>	mountpt = arg->earg();
-		'p' =>	extpaths = arg->earg() :: extpaths;
+		'p' =>
+			parg := arg->earg();
+			explicitperm := "";
+			if(len parg > 3 && (parg[len parg - 3:] == ":ro" || parg[len parg - 3:] == ":rw"))
+				explicitperm = parg[len parg - 2:];
+			(ppath, pperm) := splitpathperm(parg);
+			extpaths = ppath :: extpaths;
+			if(explicitperm != "" && findboundpath(ppath) == nil)
+				boundpaths = ref BoundPath(ppath, pperm) :: boundpaths;
 		'a' =>
 			aarg := arg->earg();
 			(aid, nil) := str->toint(aarg, 10);
@@ -300,6 +318,11 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "tools9p: mount failed: %r\n");
 		raise "fail:mount";
 	}
+
+	ctlmount := controlmount(mountpt);
+	ensuredir(ctlmount);
+	if(sys->bind(mountpt, ctlmount, Sys->MREPL) < 0)
+		sys->fprint(stderr, "tools9p: control bind %s -> %s failed: %r\n", mountpt, ctlmount);
 
 	# Signal serveloop that mount is complete — safe to FORKNS now
 	mounted <-= 1;
@@ -524,6 +547,9 @@ findboundpath(path: string): ref BoundPath
 # Split "path [perm]" into (path, perm). Default perm is "rw".
 splitpathperm(s: string): (string, string)
 {
+	if(len s > 3 && s[len s - 3] == ':' && (s[len s - 2:] == "ro" || s[len s - 2:] == "rw"))
+		return (s[0:len s - 3], s[len s - 2:]);
+
 	# Find last space — everything after it is perm if it's "ro" or "rw"
 	for(i := len s - 1; i > 0; i--) {
 		if(s[i] == ' ') {
@@ -534,6 +560,52 @@ splitpathperm(s: string): (string, string)
 		}
 	}
 	return (s, "rw");
+}
+
+pathwithin(grant, want: string): int
+{
+	if(grant == want)
+		return 1;
+	if(len want > len grant && want[0:len grant] == grant && want[len grant] == '/')
+		return 1;
+	return 0;
+}
+
+childbudget(): list of string
+{
+	ok: list of string;
+	for(bl := budget; bl != nil; bl = tl bl)
+		if(findtool(hd bl) != nil)
+			ok = hd bl :: ok;
+	return ok;
+}
+
+childpathallowed(path: string): int
+{
+	for(ep := extpaths; ep != nil; ep = tl ep)
+		if(pathwithin(hd ep, path))
+			return 1;
+	for(bp := boundpaths; bp != nil; bp = tl bp)
+		if(pathwithin((hd bp).path, path))
+			return 1;
+	return 0;
+}
+
+pathperm(path: string): string
+{
+	for(bp := boundpaths; bp != nil; bp = tl bp)
+		if(pathwithin((hd bp).path, path))
+			return (hd bp).perm;
+	return "ro";
+}
+
+genwritepaths(): list of string
+{
+	paths: list of string;
+	for(bp := boundpaths; bp != nil; bp = tl bp)
+		if((hd bp).perm == "rw")
+			paths = (hd bp).path :: paths;
+	return paths;
 }
 
 # Check if any BoundPath has the given path string.
@@ -813,15 +885,22 @@ provisiontask(args: string)
 			pathsarg = tok[6:];
 	}
 
-	# Build tool list: start with requested or budget tools
+	# Build tool list: requested tools must stay within the active parent set
+	# and current delegation budget. Child tasks may narrow, never expand.
 	toollist: list of string;
 	if(toolsarg != "") {
 		(nil, ttoks) := sys->tokenize(toolsarg, ",");
-		for(; ttoks != nil; ttoks = tl ttoks)
-			toollist = hd ttoks :: toollist;
+		for(; ttoks != nil; ttoks = tl ttoks) {
+			tname := hd ttoks;
+			if(!strlist_contains(childbudget(), tname) || findtool(tname) == nil) {
+				sys->fprint(stderr, "tools9p: provision: denied tool %s\n", tname);
+				continue;
+			}
+			toollist = tname :: toollist;
+		}
 	} else {
 		# Default: delegate all budget tools
-		for(b := budget; b != nil; b = tl b)
+		for(b := childbudget(); b != nil; b = tl b)
 			toollist = hd b :: toollist;
 	}
 
@@ -830,8 +909,26 @@ provisiontask(args: string)
 	# search, and delegation via spawn)
 	basics := "read" :: "list" :: "find" :: "search" :: "grep" :: "memory" :: "todo" :: "plan" :: "spawn" :: "present" :: "gap" :: nil;
 	for(bl := basics; bl != nil; bl = tl bl)
-		if(!strlist_contains(toollist, hd bl))
+		if(findtool(hd bl) != nil && !strlist_contains(toollist, hd bl))
 			toollist = hd bl :: toollist;
+
+	pathcaps: list of ref BoundPath;
+	if(pathsarg != "") {
+		(nil, ptoks0) := sys->tokenize(pathsarg, ",");
+		for(; ptoks0 != nil; ptoks0 = tl ptoks0) {
+			raw := hd ptoks0;
+			if(raw == "")
+				continue;
+			(ppath, pperm) := splitpathperm(raw);
+			if(!childpathallowed(ppath)) {
+				sys->fprint(stderr, "tools9p: provision: denied path %s\n", ppath);
+				continue;
+			}
+			if(pathperm(ppath) == "ro")
+				pperm = "ro";
+			pathcaps = ref BoundPath(ppath, pperm) :: pathcaps;
+		}
+	}
 
 	# Build tools9p args list (reversed, then flip at end)
 	mpt := "/tool." + string id;
@@ -840,10 +937,11 @@ provisiontask(args: string)
 	for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
 		rargs = hd tl2 :: rargs;
 	# Paths go before tools: explicit paths from task create
-	if(pathsarg != "") {
-		(nil, ptoks) := sys->tokenize(pathsarg, ",");
-		for(; ptoks != nil; ptoks = tl ptoks) {
-			rargs = hd ptoks :: rargs;
+	if(pathcaps != nil) {
+		for(pl := pathcaps; pl != nil; pl = tl pl) {
+			bp := hd pl;
+			parg := bp.path + ":" + bp.perm;
+			rargs = parg :: rargs;
 			rargs = "-p" :: rargs;
 		}
 	}
@@ -875,8 +973,8 @@ provisiontask(args: string)
 	}
 	spawn t9p->init(nil, rargs);
 
-	# Poll for mount readiness — wait until /tool.N/ctl exists
-	ctlpath := mpt + "/ctl";
+	# Poll for mount readiness — wait until the trusted control alias exists
+	ctlpath := controlmount(mpt) + "/ctl";
 	ready := 0;
 	for(i := 0; i < 20; i++) {
 		sys->sleep(500);
@@ -948,7 +1046,7 @@ emitmanifestnow(mpath: string)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
-		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, -1
+		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);
@@ -1005,7 +1103,7 @@ applynsrestriction()
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
-		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, -1
+		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);
@@ -1227,6 +1325,12 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw> or budget-add|budget-remove <tool> or provision <id>"));
 				}
 
+			Qprovision =>
+				# Agent-visible provisioning is intentionally narrow: the child task
+				# may only receive subsets of the current tool/path grants.
+				spawn provisiontask(data);
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
 			* =>
 				# Tool ctl writes - execute asynchronously to avoid blocking serveloop.
 				# Long-running tools (e.g. spawn with multi-step LLM) can take
@@ -1307,6 +1411,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 
 	Qactivity =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "activity", big 0, 8r444), nil);
+
+	Qprovision =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "provision", big 0, 8r644), nil);
 	}
 
 	# Check if it's a tool directory or subfile
@@ -1356,6 +1463,12 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qbudget;
 				"activity" =>
 					n.path = big Qactivity;
+				"provision" =>
+					if(findtool("task") == nil) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = big Qprovision;
 				* =>
 					# Check if it's a registered tool name
 					ti := findtool(n.name);
@@ -1394,7 +1507,8 @@ navigator(navops: chan of ref Navop)
 
 			case qtype {
 			Qroot =>
-				# Root contains: tools, help, _registry, ctl, paths, and tool directories
+				# Root contains: tools, help, _registry, ctl, paths, budget, activity,
+				# optional provision, and tool directories.
 				i := n.offset;
 				count := n.count;
 
@@ -1447,11 +1561,20 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
+				if(findtool("task") != nil && i <= 7 && count > 0) {
+					n.reply <-= dirgen(big Qprovision);
+					count--;
+					i++;
+				}
+
 				# Remaining entries: registered tool directories
+				baseoff := 7;
+				if(findtool("task") != nil)
+					baseoff = 8;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;
-					if(i <= 7 + idx) {
+					if(i <= baseoff + idx) {
 						n.reply <-= dirgen(big ti.qid);
 						count--;
 					}

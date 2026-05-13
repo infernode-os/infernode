@@ -170,7 +170,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->pctl(Sys->NODEVS, nil);
 
 		caps := ref NsConstruct->Capabilities(
-			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1
+			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
 		);
 
 		nserr := nsconstruct->restrictns(caps);

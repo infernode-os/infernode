@@ -590,10 +590,19 @@ updatetoolmount()
 		toolmount_g = "/tool." + string actid_g;
 }
 
+toolctlmount(): string
+{
+	if(toolmount_g == "/tool")
+		return "/mnt/toolctl";
+	if(len toolmount_g > 6 && toolmount_g[0:6] == "/tool.")
+		return "/mnt/toolctl." + toolmount_g[6:];
+	return "/mnt/toolctl";
+}
+
 # Check if the current activity's tools9p is mounted and ready.
 toolmount_ready(): int
 {
-	(ok, nil) := sys->stat(toolmount_g + "/ctl");
+	(ok, nil) := sys->stat(toolctlmount() + "/ctl");
 	return ok >= 0;
 }
 
@@ -1660,7 +1669,7 @@ mountresource(ce: ref CatalogEntry)
 	if(ce.rtype == "path") {
 		# Local filesystem path: route through tools9p so lucibridge
 		# binds it in the agent namespace (not lucifer's).
-		writetofile(toolmount_g + "/ctl", "bindpath " + ce.dial);
+		writetofile(toolctlmount() + "/ctl", "bindpath " + ce.dial);
 		writetofile(mountpt_g + "/ctl",
 			"catalog mounted name=" + ce.name + " path=" + ce.dial);
 	} else {
@@ -1691,7 +1700,7 @@ unmountresource(ce: ref CatalogEntry)
 	if(ce == nil || ce.mntpath == "")
 		return;
 	if(ce.rtype == "path") {
-		writetofile(toolmount_g + "/ctl", "unbindpath " + ce.mntpath);
+		writetofile(toolctlmount() + "/ctl", "unbindpath " + ce.mntpath);
 	} else {
 		sys->unmount(nil, ce.mntpath);
 	}
@@ -1752,10 +1761,10 @@ addtool(name: string)
 			return;
 	if(!toolmount_ready())
 		return;
-	writetofile(toolmount_g + "/ctl", "add " + name);
+	writetofile(toolctlmount() + "/ctl", "add " + name);
 	if(actid_g == 0) {
 		# MA: also add to delegation budget so child tasks can use it
-		writetofile(toolmount_g + "/ctl", "budget-add " + name);
+		writetofile(toolctlmount() + "/ctl", "budget-add " + name);
 	} else {
 		writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g),
 			"resource add path=" + name + " label=" + name + " type=tool status=idle");
@@ -1770,10 +1779,10 @@ removetool(name: string)
 {
 	if(!toolmount_ready())
 		return;
-	writetofile(toolmount_g + "/ctl", "remove " + name);
+	writetofile(toolctlmount() + "/ctl", "remove " + name);
 	if(actid_g == 0) {
 		# MA: also remove from delegation budget
-		writetofile(toolmount_g + "/ctl", "budget-remove " + name);
+		writetofile(toolctlmount() + "/ctl", "budget-remove " + name);
 	} else {
 		writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g), "resource remove " + name);
 	}
@@ -1934,7 +1943,7 @@ bindpath(srcpath: string)
 	if(!toolmount_ready())
 		return;
 	# Register in tools9p; lucibridge reads /tool/paths and binds in its namespace.
-	writetofile(toolmount_g + "/ctl", "bindpath " + srcpath);
+	writetofile(toolctlmount() + "/ctl", "bindpath " + srcpath);
 	loadpinnedpaths();
 	loadmanifest();
 	loadcontext();
@@ -1945,7 +1954,7 @@ unbindpath(pp: ref PinnedPath)
 {
 	if(pp == nil)
 		return;
-	writetofile(toolmount_g + "/ctl", "unbindpath " + pp.srcpath);
+	writetofile(toolctlmount() + "/ctl", "unbindpath " + pp.srcpath);
 	loadpinnedpaths();
 	loadmanifest();
 	loadcontext();
@@ -1961,7 +1970,7 @@ togglepathperm(pp: ref PinnedPath)
 	newperm := "ro";
 	if(pp.perm == "ro")
 		newperm = "rw";
-	writetofile(toolmount_g + "/ctl", "setperm " + pp.srcpath + " " + newperm);
+	writetofile(toolctlmount() + "/ctl", "setperm " + pp.srcpath + " " + newperm);
 	loadpinnedpaths();
 	loadcontext();
 	redrawctx();

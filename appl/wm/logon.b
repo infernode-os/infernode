@@ -608,13 +608,13 @@ createsecstoreacct(pass: string): string
 	fd = nil;
 
 	pwhash2 := secstore->mkseckey2(pass);
-	hexHi := secstore->mkverifier(user, "secstore2", pwhash2);
+	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
 
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte secstore->formatverifier("secstore2", hexHi);
+	b := array of byte secstore->formatverifier("secstore3", hexHi);
 	sys->write(fd, b, len b);
 	fd = nil;
 

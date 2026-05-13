@@ -79,6 +79,11 @@ connect2(addr: string, user: string, pwhash: array of byte, pwhash2: array of by
 	lastdiag := "no secstore credentials";
 
 	if(pwhash2 != nil){
+		(conn, sname, diag) = connectver(addr, user, VERSION3, pwhash2);
+		if(conn != nil)
+			return (conn, sname, diag);
+		lastdiag = diag;
+
 		(conn, sname, diag) = connectver(addr, user, VERSION2, pwhash2);
 		if(conn != nil)
 			return (conn, sname, diag);
@@ -91,6 +96,10 @@ connect2(addr: string, user: string, pwhash: array of byte, pwhash2: array of by
 
 connectver(addr: string, user: string, version: string, pwhash: array of byte): (ref Dial->Connection, string, string)
 {
+	params := pakparams(version);
+	if(params == nil)
+		return (nil, nil, "unsupported verifier version");
+
 	# Pre-compute PAK crypto before dialing to avoid TCP idle timeout.
 	# Use cached PAK_Hi if (user, pwhash) match — avoids expensive modexp.
 	hexHi: string;
@@ -112,27 +121,27 @@ connectver(addr: string, user: string, version: string, pwhash: array of byte): 
 		cached_pakhi_H = H;
 	}
 	sys->fprint(sys->fildes(2), "secstore: step 2: random...\n");
-	x := mod(IPint.random(240, 240), pak.q);
+	x := mod(IPint.random(exponentbits(version), exponentbits(version)), params.q);
 	if(x.eq(IPint.inttoip(0)))
 		x = IPint.inttoip(1);
 	sys->fprint(sys->fildes(2), "secstore: step 3: g^x mod p...\n");
-	gx := pak.g.expmod(x, pak.p);
+	gx := params.g.expmod(x, params.p);
 	sys->fprint(sys->fildes(2), "secstore: step 4: m = gx*H mod p...\n");
-	m := mod(gx.mul(H), pak.p);
+	m := mod(gx.mul(H), params.p);
 	hexm := m.iptostr(64);
 	sys->fprint(sys->fildes(2), "secstore: PAK pre-computed, dialing...\n");
 
-	conn := dial(addr);
-	if(conn == nil){
+	dconn := dial(addr);
+	if(dconn == nil){
 		sys->werrstr(sys->sprint("can't dial %s: %r", addr));
 		return (nil, nil, sys->sprint("%r"));
 	}
-	(sname, diag) := authprecompver(conn, user, version, hexHi, x, hexm);
+	(sname, diag) := authprecompver(dconn, user, version, hexHi, x, hexm);
 	if(sname == nil){
 		sys->werrstr(sys->sprint("can't authenticate: %s", diag));
 		return (nil, nil, sys->sprint("%r"));
 	}
-	return (conn, sname, diag);
+	return (dconn, sname, diag);
 }
 
 dial(netaddr: string): ref Dial->Connection
@@ -363,7 +372,7 @@ parseverifier(s: string): (string, string)
 	if(nf >= 2){
 		version := hd flds;
 		hexHi := hd tl flds;
-		if(version == VERSION1 || version == VERSION2)
+		if(version == VERSION1 || version == VERSION2 || version == VERSION3)
 			return (version, hexHi);
 	}
 	return (nil, nil);
@@ -733,7 +742,7 @@ setsecret(conn: ref Dial->Connection, sigma: array of byte, direction: int): str
 
 setsecretver(conn: ref Dial->Connection, sigma: array of byte, direction: int, version: string): string
 {
-	if(version == VERSION2){
+	if(hashis256(version)){
 		secretin := array[Keyring->SHA256dlen] of byte;
 		secretout := array[Keyring->SHA256dlen] of byte;
 		if(direction != 0){
@@ -775,6 +784,11 @@ PAKclientprecomp(conn: ref Dial->Connection, C: string, hexHi: string, x: ref IP
 
 PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexHi: string, x: ref IPint, hexm: string): string
 {
+	params := pakparams(version);
+	if(params == nil){
+		sys->werrstr("unsupported verifier version");
+		return nil;
+	}
 	dfd := conn.dfd;
 
 	# Send hello immediately — crypto was pre-computed
@@ -806,7 +820,7 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
-	sigma := mu.expmod(x, pak.p);
+	sigma := mu.expmod(x, params.p);
 	hexsigma := sigma.iptostr(64);
 	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);
 	kc := base64->enc(digest);
@@ -841,6 +855,7 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 
 VERSION1: con "secstore";
 VERSION2: con "secstore2";
+VERSION3: con "secstore3";
 
 PAKparams: adt {
 	q:	ref IPint;
@@ -849,13 +864,14 @@ PAKparams: adt {
 	g:	ref IPint;
 };
 
-pak: ref PAKparams;
+paklegacy: ref PAKparams;
+pak3: ref PAKparams;
 
 # from seed EB7B6E35F7CD37B511D96C67D6688CC4DD440E1E
 
 initPAKparams()
 {
-	if(pak != nil)
+	if(paklegacy != nil && pak3 != nil)
 		return;
 	lpak := ref PAKparams;
 	lpak.q = IPint.strtoip("E0F0EF284E10796C5A2A511E94748BA03C795C13", 16);
@@ -871,7 +887,58 @@ initPAKparams()
 		"44ED6E65E074694246E07F9FD4AE26E0FDDD9F54F813C40CB9BCD4338EA6F242AB94CD"+
 		"410E676C290368A16B1A3594877437E516C53A6EEE5493A038A017E955E218E7819734"+
 		"E3E2A6E0BAE08B14258F8C03CC1B30E0DDADFCF7CEDF0727684D3D255F1", 16);
-	pak = lpak;	# atomic store
+	paklegacy = lpak;
+
+	lpak = ref PAKparams;
+	lpak.q = IPint.strtoip("8CF83642A709A097B447997640129DA299B1A47D1EB3750BA308B0FE64F5FBD3", 16);
+	lpak.p = IPint.strtoip("87A8E61DB4B6663CFFBBD19C651959998CEEF608660DD0F25D2CEED4"+
+		"435E3B00E00DF8F1D61957D4FAF7DF4561B2AA3016C3D91134096FAA3BF4296D"+
+		"830E9A7C209E0C6497517ABD5A8A9D306BCF67ED91F9E6725B4758C022E0B1EF"+
+		"4275BF7B6C5BFC11D45F9088B941F54EB1E59BB8BC39A0BF12307F5C4FDB70C5"+
+		"81B23F76B63ACAE1CAA6B7902D52526735488A0EF13C6D9A51BFA4AB3AD83477"+
+		"96524D8EF6A167B5A41825D967E144E5140564251CCACB83E6B486F6B3CA3F79"+
+		"71506026C0B857F689962856DED4010ABD0BE621C3A3960A54E710C375F26375"+
+		"D7014103A4B54330C198AF126116D2276E11715F693877FAD7EF09CADB094AE9"+
+		"1E1A1597", 16);
+	lpak.r = IPint.strtoip("F65B7EA7706034A28A29B9436AF161BBF3632483671C60AEE9B1A6A496FFF904"+
+		"FCB09731B6C6E16B551CEC2C063910B04E40795D4BEB474DB762E28CC923AE40"+
+		"FDBAF05BF7501D0314C3CBE4BAD7329DD473BDF441E7B8B387B402CD0BE7DC53"+
+		"4FA6D3C039BDAD133F59DC899FD570A667C453D08150A35CF5E845087BD9ACFA"+
+		"8333343375E8EE52965A84C699C59DFEF852EFB96023BEF0FFB2F99C53AC2D94"+
+		"CD2969764698B8DDE401DA6AA6BDB3B03B5506D287090F8E852C05EC0BDB3C0C"+
+		"4FBEC1A4AB9FE141E8A7C9EADB17D335921B673615A7FC0C92384946B9AB6452", 16);
+	lpak.g = IPint.strtoip("3FB32C9B73134D0B2E77506660EDBD484CA7B18F21EF205407F4793A"+
+		"1A0BA12510DBC15077BE463FFF4FED4AAC0BB555BE3A6C1B0C6B47B1BC3773BF"+
+		"7E8C6F62901228F8C28CBB18A55AE31341000A650196F931C77A57F2DDF463E5"+
+		"E9EC144B777DE62AAAB8A8628AC376D282D6ED3864E67982428EBC831D14348F"+
+		"6F2F9193B5045AF2767164E1DFC967C1FB3F2E55A4BD1BFFE83B9C80D052B985"+
+		"D182EA0ADB2A3B7313D3FE14C8484B1E052588B9B7D2BBD2DF016199ECD06E15"+
+		"57CD0915B3353BBB64E0EC377FD028370DF92B52C7891428CDC67EB6184B523D"+
+		"1DB246C32F63078490F00EF8D647D148D47954515E2327CFEF98C582664B4C0F"+
+		"6CC41659", 16);
+	pak3 = lpak;
+}
+
+pakparams(version: string): ref PAKparams
+{
+	initPAKparams();
+	if(version == VERSION3)
+		return pak3;
+	if(version == VERSION1 || version == VERSION2)
+		return paklegacy;
+	return nil;
+}
+
+hashis256(version: string): int
+{
+	return version == VERSION2 || version == VERSION3;
+}
+
+exponentbits(version: string): int
+{
+	if(version == VERSION3)
+		return 320;
+	return 240;
 }
 
 # H = (sha(ver,C,sha(passphrase)))^r mod p,
@@ -884,20 +951,24 @@ longhash(ver: string, C: string, passwd: array of byte): ref IPint
 
 longhashver(ver: string, C: string, passwd: array of byte): ref IPint
 {
+	params := pakparams(ver);
+	if(params == nil)
+		return nil;
+
 	aver := array of byte ver;
 	aC := array of byte C;
 	Cp := array[len aver + len aC + len passwd] of byte;
 	Cp[0:] = aver;
 	Cp[len aver:] = aC;
 	Cp[len aver+len aC:] = passwd;
-	if(ver == VERSION2){
+	if(hashis256(ver)){
 		buf := array[7*Keyring->SHA256dlen] of byte;
 		for(i := 0; i < 7; i++){
 			key := array[] of { byte('A'+i) };
 			kr->hmac_sha256(Cp, len Cp, key, buf[i*Keyring->SHA256dlen:], nil);
 		}
 		erasekey(Cp);
-		return mod(IPint.bebytestoip(buf), pak.p).expmod(pak.r, pak.p);
+		return mod(IPint.bebytestoip(buf), params.p).expmod(params.r, params.p);
 	}
 	buf := array[7*Keyring->SHA1dlen] of byte;
 	for(i := 0; i < 7; i++){
@@ -905,7 +976,7 @@ longhashver(ver: string, C: string, passwd: array of byte): ref IPint
 		kr->hmac_sha1(Cp, len Cp, key, buf[i*Keyring->SHA1dlen:], nil);
 	}
 	erasekey(Cp);
-	return mod(IPint.bebytestoip(buf), pak.p).expmod(pak.r, pak.p);	# H
+	return mod(IPint.bebytestoip(buf), params.p).expmod(params.r, params.p);	# H
 }
 
 mod(a, b: ref IPint): ref IPint
@@ -937,8 +1008,13 @@ PAK_Hi(C: string, passhash: array of byte): (string, ref IPint, ref IPint)
 
 PAK_Hiver(version: string, C: string, passhash: array of byte): (string, ref IPint, ref IPint)
 {
+	params := pakparams(version);
+	if(params == nil)
+		return (nil, nil, nil);
 	H := longhashver(version, C, passhash);
-	Hi := H.invert(pak.p);
+	if(H == nil)
+		return (nil, nil, nil);
+	Hi := H.invert(params.p);
 	return (Hi.iptostr(64), H, Hi);
 }
 
@@ -952,7 +1028,7 @@ shorthash(mess: string, C: string, S: string, m: string, mu: string, sigma: stri
 
 shorthashver(version: string, mess: string, C: string, S: string, m: string, mu: string, sigma: string, Hi: string): array of byte
 {
-	if(version == VERSION2){
+	if(hashis256(version)){
 		state := shaz256(mess, nil, nil);
 		state = shaz256(C, nil, state);
 		state = shaz256(S, nil, state);
@@ -1003,6 +1079,11 @@ PAKclient(conn: ref Dial->Connection, C: string, pwhash: array of byte): string
 
 PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: array of byte): string
 {
+	params := pakparams(version);
+	if(params == nil){
+		sys->werrstr("unsupported verifier version");
+		return nil;
+	}
 	dfd := conn.dfd;
 
 	sys->fprint(sys->fildes(2), "secstore: PAK_Hi starting...\n");
@@ -1010,10 +1091,10 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 	sys->fprint(sys->fildes(2), "secstore: PAK_Hi done, computing m...\n");
 
 	# random 1<=x<=q-1; send C, m=g**x H
-	x := mod(IPint.random(240, 240), pak.q);
+	x := mod(IPint.random(exponentbits(version), exponentbits(version)), params.q);
 	if(x.eq(IPint.inttoip(0)))
 		x = IPint.inttoip(1);
-	m := mod(pak.g.expmod(x, pak.p).mul(H), pak.p);
+	m := mod(params.g.expmod(x, params.p).mul(H), params.p);
 	hexm := m.iptostr(64);
 
 	sys->fprint(sys->fildes(2), "secstore: PAKclient crypto done, writing hello to fd=%d\n", dfd.fd);
@@ -1045,7 +1126,7 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
-	sigma := mu.expmod(x, pak.p);
+	sigma := mu.expmod(x, params.p);
 	hexsigma := sigma.iptostr(64);
 	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);
 	kc := base64->enc(digest);

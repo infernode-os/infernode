@@ -64,6 +64,10 @@ include "string.m";
 
 include "imap.m";
 
+include "smtp.m";
+
+include "factotum.m";
+
 Mail9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
@@ -89,6 +93,7 @@ Qboxesdir:  con 5;	# /accounts/<name>/boxes
 Qboxdir:    con 6;	# /accounts/<name>/boxes/<box>
 Qboxctl:    con 7;	# /accounts/<name>/boxes/<box>/ctl
 Qmsgdir:    con 8;	# /accounts/<name>/boxes/<box>/<uid>
+Qcompose:   con 9;	# /accounts/<name>/compose (write-only SMTP send)
 
 # Per-message field files start at 16. They share the qid encoding
 # with their parent Qmsgdir (account / box / uid all populated).
@@ -320,6 +325,7 @@ PACCTS:   con big Qacctsdir;
 
 mkacctdir(idx: int): big { return MKPATH(Qacctdir, idx, 0, big 0); }
 mkacctctl(idx: int): big { return MKPATH(Qacctctl, idx, 0, big 0); }
+mkacctcompose(idx: int): big { return MKPATH(Qcompose, idx, 0, big 0); }
 mkboxesdir(idx: int): big { return MKPATH(Qboxesdir, idx, 0, big 0); }
 mkboxdir(aidx, bidx: int): big { return MKPATH(Qboxdir, aidx, bidx, big 0); }
 mkboxctl(aidx, bidx: int): big { return MKPATH(Qboxctl, aidx, bidx, big 0); }
@@ -511,6 +517,8 @@ navigator(navops: chan of ref Navop)
 					n.path = mkacctctl(idx);
 				"boxes" =>
 					n.path = mkboxesdir(idx);
+				"compose" =>
+					n.path = mkacctcompose(idx);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -594,7 +602,7 @@ navigator(navops: chan of ref Navop)
 					case ft {
 					Qrootctl =>
 						n.path = PROOT;
-					Qacctctl =>
+					Qacctctl or Qcompose =>
 						n.path = mkacctdir(ACCT(n.path));
 					Qboxctl =>
 						n.path = mkboxdir(ACCT(n.path), BOX(n.path));
@@ -638,7 +646,8 @@ navigator(navops: chan of ref Navop)
 
 			Qacctdir =>
 				idx := ACCT(m.path);
-				entries = mkboxesdir(idx) :: nil;
+				entries = mkacctcompose(idx) :: nil;
+				entries = mkboxesdir(idx) :: entries;
 				entries = mkacctctl(idx) :: entries;
 
 			Qboxesdir =>
@@ -767,6 +776,12 @@ dirgen(path: big): (ref Sys->Dir, string)
 		if(idx >= naccounts || accounts[idx] == nil)
 			return (nil, Enotfound);
 		return (mkdir(Sys->Qid(path, vers, Sys->QTDIR), "boxes", 8r555), nil);
+
+	Qcompose =>
+		idx := ACCT(path);
+		if(idx >= naccounts || accounts[idx] == nil)
+			return (nil, Enotfound);
+		return (mkdir(Sys->Qid(path, vers, Sys->QTFILE), "compose", 8r222), nil);
 
 	Qboxdir =>
 		aidx := ACCT(path);
@@ -907,6 +922,10 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 				srv.reply(styxservers->readbytes(gm,
 					array of byte accounts[aidx].lastsearch));
 
+			Qcompose =>
+				# Write-only.
+				srv.reply(styxservers->readbytes(gm, nil));
+
 			Qfrom or Qto or Qcc or Qsubject or Qdate or Qflags or
 			Qbody or Qbodyhtml or Qraw =>
 				(data, derr) := readmsgfield(c.path, ft);
@@ -963,6 +982,22 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 
 			Qflags =>
 				err = handleflagswrite(c.path, string gm.data);
+				if(err != nil) {
+					srv.reply(ref Rmsg.Error(gm.tag, err));
+					continue;
+				}
+				srv.reply(ref Rmsg.Write(gm.tag, len gm.data));
+
+			Qcompose =>
+				err = handlecompose(c.path, string gm.data);
+				if(err != nil) {
+					srv.reply(ref Rmsg.Error(gm.tag, err));
+					continue;
+				}
+				srv.reply(ref Rmsg.Write(gm.tag, len gm.data));
+
+			Qdraftreply =>
+				err = handledraftreply(c.path, string gm.data);
 				if(err != nil) {
 					srv.reply(ref Rmsg.Error(gm.tag, err));
 					continue;
@@ -1380,6 +1415,261 @@ parseflagswrite(s: string): (int, int, int, string)
 	if(diffmode)
 		return (add, remove, -1, nil);
 	return (0, 0, replace, nil);
+}
+
+#
+# SMTP send paths.
+#
+#   /n/mail/<acct>/compose                — write RFC822 message.
+#   /n/mail/<acct>/boxes/<box>/<uid>/draft-reply
+#     — write a reply body; threading headers (In-Reply-To,
+#       References, Subject Re:) are added from the original message.
+#
+
+include_smtp(): (Smtp, string)
+{
+	smtp := load Smtp Smtp->PATH;
+	if(smtp == nil)
+		return (nil, "cannot load " + Smtp->PATH);
+	return (smtp, nil);
+}
+
+# Lookup SMTP credentials in factotum. Tries the smtp-specific key
+# first, then falls back to the imap key (most providers share creds).
+smtpcreds(a: ref Account): (string, string, string)
+{
+	fac := load Factotum Factotum->PATH;
+	if(fac == nil)
+		return (nil, nil, "cannot load Factotum");
+	fac->init();
+	(u, p) := fac->getuserpasswd("proto=pass service=smtp dom=" + a.smtpserver);
+	if(u != nil && p != nil)
+		return (u, p, nil);
+	(u, p) = fac->getuserpasswd("proto=pass service=imap dom=" + a.server);
+	if(u != nil && p != nil)
+		return (u, p, nil);
+	return (nil, nil, "no SMTP creds in factotum (tried service=smtp,imap)");
+}
+
+handlecompose(path: big, body: string): string
+{
+	aidx := ACCT(path);
+	if(aidx >= naccounts || accounts[aidx] == nil)
+		return Enotfound;
+	a := accounts[aidx];
+	return smtpsend(a, body, nil);
+}
+
+handledraftreply(path: big, body: string): string
+{
+	aidx := ACCT(path);
+	bidx := BOX(path);
+	uid := UID(path);
+	if(aidx >= naccounts || accounts[aidx] == nil)
+		return Enotfound;
+	a := accounts[aidx];
+	if(!a.connected || a.imap == nil)
+		return "not connected";
+	if(bidx >= a.nfolders || a.folders[bidx] == nil)
+		return Enotfound;
+	if(a.folders[bidx].name != a.currentbox)
+		return "box not selected";
+	m := findmsgbyuid(a, uid);
+	if(m == nil)
+		return "no such uid";
+	env := m.msg.envelope;
+	if(env == nil)
+		return "no envelope on message";
+	rcpt := env.sender;
+	if(env.replyto != "")
+		rcpt = env.replyto;
+	if(rcpt == "")
+		return "no sender / reply-to on message";
+
+	subj := env.subject;
+	if(subj == "")
+		subj = "Re: (no subject)";
+	else if(len subj < 3 || str->tolower(subj[0:3]) != "re:")
+		subj = "Re: " + subj;
+
+	# Add threading headers and a default Subject. The body the caller
+	# wrote may already include its own headers; if so, leave it
+	# alone (the consumer knows what they're doing).
+	hdrs := "";
+	if(!hasheaderfield(body, "Subject:"))
+		hdrs += "Subject: " + subj + "\r\n";
+	if(!hasheaderfield(body, "To:"))
+		hdrs += "To: " + rcpt + "\r\n";
+	if(env.messageid != "" && !hasheaderfield(body, "In-Reply-To:"))
+		hdrs += "In-Reply-To: " + env.messageid + "\r\n";
+	if(env.messageid != "" && !hasheaderfield(body, "References:"))
+		hdrs += "References: " + env.messageid + "\r\n";
+
+	final := hdrs + body;
+	# Ensure header/body separator if the caller wrote only a body.
+	if(!bodyhasblankline(final))
+		final = hdrs + "\r\n" + body;
+
+	err := smtpsend(a, final, rcpt :: nil);
+	if(err != nil)
+		return err;
+	# Mark original \Answered.
+	a.imap->store(m.msg.seq, Imap->FANSWERED, 1);
+	m.msg.flags |= Imap->FANSWERED;
+	vers++;
+	return nil;
+}
+
+# True if `body` contains a header line starting with `field` (case
+# insensitive, only checking the leading part of each header line up
+# to the first blank-line separator).
+hasheaderfield(body, field: string): int
+{
+	fl := str->tolower(field);
+	# Walk header lines only.
+	i := 0;
+	for(start := 0; start < len body; ) {
+		# Find end of line.
+		i = start;
+		while(i < len body && body[i] != '\n')
+			i++;
+		line := body[start:i];
+		if(len line > 0 && line[len line - 1] == '\r')
+			line = line[0:len line - 1];
+		if(line == "")
+			return 0;	# header section ended
+		if(len line >= len field && str->tolower(line[0:len field]) == fl)
+			return 1;
+		start = i + 1;
+	}
+	return 0;
+}
+
+# True if body contains a blank line (the RFC822 header/body separator).
+bodyhasblankline(body: string): int
+{
+	for(i := 0; i + 1 < len body; i++) {
+		if(body[i] == '\n' && body[i+1] == '\n')
+			return 1;
+		if(i + 3 < len body && body[i] == '\r' && body[i+1] == '\n' &&
+		   body[i+2] == '\r' && body[i+3] == '\n')
+			return 1;
+	}
+	return 0;
+}
+
+# Open SMTP, authenticate via factotum creds, send, close. Recipients
+# (`recips`, nil to extract from To:/Cc: headers in body) and the From:
+# address default to the credential user.
+smtpsend(a: ref Account, msg: string, recips: list of string): string
+{
+	(smtp, lerr) := include_smtp();
+	if(smtp == nil)
+		return lerr;
+
+	(u, p, cerr) := smtpcreds(a);
+	if(cerr != nil)
+		return cerr;
+
+	# Implicit-TLS port 465 if account uses IMAPS, otherwise plain port 25.
+	usessl := 0;
+	if(a.mode == Imap->IMPLICIT_TLS)
+		usessl = 1;
+
+	(ok, oerr) := smtp->authopen(u, p, a.smtpserver, usessl);
+	if(ok < 0)
+		return "smtp authopen: " + oerr;
+
+	from := extractheader(msg, "From:");
+	if(from == "")
+		from = u;
+	if(recips == nil)
+		recips = parseaddrlist(extractheader(msg, "To:"));
+
+	# sendmail expects each list element to be a logical line block.
+	# Pass the whole message as one block; the lib splits on \n.
+	(sok, serr) := smtp->sendmail(from, recips, nil, msg :: nil);
+	smtp->close();
+	if(sok < 0)
+		return "smtp sendmail: " + serr;
+	return nil;
+}
+
+# Extract the first header field value (trimmed) from an RFC822 message.
+extractheader(body, field: string): string
+{
+	fl := str->tolower(field);
+	start := 0;
+	for(i := 0; i < len body; ) {
+		# Find end of line.
+		i = start;
+		while(i < len body && body[i] != '\n')
+			i++;
+		line := body[start:i];
+		if(len line > 0 && line[len line - 1] == '\r')
+			line = line[0:len line - 1];
+		if(line == "")
+			return "";	# end of headers
+		if(len line >= len field && str->tolower(line[0:len field]) == fl) {
+			v := line[len field:];
+			# trim leading whitespace
+			j := 0;
+			while(j < len v && (v[j] == ' ' || v[j] == '\t'))
+				j++;
+			return v[j:];
+		}
+		start = i + 1;
+	}
+	return "";
+}
+
+# Split a comma-separated address list. v1: assumes each comma is a
+# separator (no quoted commas inside display names). Good enough for
+# tool-driven sends.
+parseaddrlist(s: string): list of string
+{
+	out: list of string;
+	start := 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] == ',') {
+			a := str->splitstrl(s[start:i], "<");
+			# either "addr@dom" or "Name <addr@dom>"
+			out = trimaddr(s[start:i]) :: out;
+			start = i + 1;
+			a = a;
+		}
+	}
+	if(start < len s)
+		out = trimaddr(s[start:]) :: out;
+	# Reverse
+	rev: list of string;
+	for(; out != nil; out = tl out)
+		rev = hd out :: rev;
+	return rev;
+}
+
+# Extract `addr@dom` from `Name <addr@dom>` or `addr@dom`, trimming
+# surrounding whitespace.
+trimaddr(s: string): string
+{
+	# Trim whitespace.
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t'))
+		j--;
+	s = s[i:j];
+	# If there's a `<...>`, pull out the inside.
+	lt := -1;
+	gt := -1;
+	for(k := 0; k < len s; k++) {
+		if(s[k] == '<') lt = k;
+		else if(s[k] == '>') gt = k;
+	}
+	if(lt >= 0 && gt > lt)
+		return s[lt+1:gt];
+	return s;
 }
 
 acctstatus(a: ref Account): string

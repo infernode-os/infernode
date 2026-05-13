@@ -1,0 +1,238 @@
+.TH MAIL9P 4
+.SH NAME
+mail9p \- IMAP/SMTP mailbox as a 9P filesystem
+.SH SYNOPSIS
+.B mail9p
+[
+.B -D
+] [
+.B -m
+.I mountpoint
+]
+.SH DESCRIPTION
+.I Mail9p
+exposes one or more IMAP4rev1 mailboxes (RFC 3501) as a Plan 9-style
+filesystem so an agent can read, classify, flag, move, and (separately)
+reply to mail using ordinary file operations. Credentials live in
+.IR factotum (4);
+.I mail9p
+never sees them on its own command line.
+.PP
+By default it mounts at
+.BR /n/mail .
+The
+.B -m
+flag relocates the mount; the
+.B -D
+flag enables Styx tracing on stderr.
+.SH FILESYSTEM
+.TF accounts/
+.TP
+.B ctl
+write-only:
+.BR "connect " "\fIname server\fP [\fBtls\fP|\fBstarttls\fP] [\fBsmtp=\fP\fIhost\fP]"
+opens an IMAP session and best-effort SELECTs INBOX;
+.BR "disconnect " \fIname\fP
+LOGOUTs and frees the slot;
+.BR "sync " \fIname\fP
+re-fetches the folder list and re-SELECTs the current mailbox.
+.TP
+.B accounts/
+one entry per connected account.
+.TP
+.BI accounts/ name /ctl
+read: status line
+.RB ( connected | disconnected ", " "box=" "\fIname\fP, " "exists=" "N, " "unseen=" "N" );
+write:
+.BR "select " \fImailbox\fP
+or
+.BR sync .
+.TP
+.BI accounts/ name /compose
+write-only. Writes a full RFC822 message; it is sent via SMTP using
+factotum credentials. Recipients are extracted from the
+.B To:
+header unless overridden.
+.TP
+.BI accounts/ name /boxes/
+one entry per server-reported mailbox.
+.TP
+.BI accounts/ name /boxes/ box /ctl
+write:
+.BR "search " \fIimap-criteria\fP
+runs IMAP SEARCH; the matching UIDs land in the same ctl file (one
+per line) and are returned on the next
+.B read.
+.BR "archive " \fIuid\fP
+COPYs the message to
+.B Archive
+and STOREs
+.BR \eDeleted .
+.BR "move " "\fIuid\fP \fIdest-box\fP"
+COPYs then STOREs
+.BR \eDeleted .
+Operations only succeed against the currently-selected box; SELECT
+via the account ctl first.
+.TP
+.BI accounts/ name /boxes/ box / uid
+one directory per message in the currently-selected box, named by
+IMAP UID. Non-current boxes are listable but have no message
+sub-entries (select the box first).
+.TP
+.BI accounts/ name /boxes/ box / uid /from
+.PD 0
+.TP
+.BI accounts/ name /boxes/ box / uid /to
+.TP
+.BI accounts/ name /boxes/ box / uid /cc
+.TP
+.BI accounts/ name /boxes/ box / uid /subject
+.TP
+.BI accounts/ name /boxes/ box / uid /date
+.PD
+read-only header fields, parsed from the IMAP envelope.
+.TP
+.BI accounts/ name /boxes/ box / uid /flags
+read: space-separated flag tokens (\fB\eSeen\fP, \fB\eFlagged\fP, ...).
+.br
+write: replace mode (\fB\eSeen \eFlagged\fP) sets the exact flag set;
+diff mode (\fB+\eSeen -\eFlagged\fP) adds or removes individual
+flags. Mixing the two styles in a single write is an error.
+.TP
+.BI accounts/ name /boxes/ box / uid /body
+text section of the message (everything after the first blank line).
+Fetched lazily and cached.
+.TP
+.BI accounts/ name /boxes/ box / uid /body.html
+empty in v1. MIME parsing is out of scope; consumers that need
+HTML should parse
+.B raw
+themselves.
+.TP
+.BI accounts/ name /boxes/ box / uid /raw
+full RFC822 message (headers + body). Fetched lazily and cached.
+.TP
+.BI accounts/ name /boxes/ box / uid /draft-reply
+write-only. The body is sent via SMTP with
+.BR Subject ,
+.BR To ,
+.BR In-Reply-To ,
+and
+.B References
+auto-injected from the original envelope (the caller's body wins if
+it already supplies any of them). On success the original message is
+STOREd
+.BR \eAnswered .
+.SH CAPABILITY MODEL
+The namespace is the only enforcement primitive. Bind paths into a
+sub-agent's namespace to grant capabilities; refuse to bind to deny
+them:
+.PP
+.RS
+.PD 0
+.TP
+\fBTriage-only\fP:
+bind
+.B from to subject date flags
+and
+.BR boxes/.../ctl ;
+do not bind
+.BR compose
+or
+.BR draft-reply .
+.TP
+\fBReply-allowed\fP:
+additionally bind specific
+.B draft-reply
+files per thread.
+.TP
+\fBCompose-from-scratch\fP:
+additionally bind
+.BR compose .
+.PD
+.RE
+.PP
+There is no permission system inside
+.IR mail9p .
+.SH AUTHENTICATION
+IMAP credentials are read from
+.IR factotum (4)
+at connect time using
+.PP
+.B proto=pass service=imap dom=\fIserver\fP
+.PP
+SMTP send tries the
+.BR service=smtp
+key first and falls back to the
+.BR service=imap
+key for the corresponding IMAP server, since most providers share
+credentials. SMTP transport mirrors the account's IMAP mode:
+implicit TLS over port 465 when IMAPS is in use, plaintext port 25
+otherwise. STARTTLS on SMTP is not yet supported.
+.SH EXAMPLES
+.PP
+Connect, list folders, read the latest message in INBOX, mark it
+read:
+.IP
+.EX
+mail9p
+echo connect work imap.fastmail.com > /n/mail/ctl
+ls /n/mail/accounts/work/boxes
+last=`{ls /n/mail/accounts/work/boxes/INBOX | grep -v ctl | tail -1}
+cat /n/mail/accounts/work/boxes/INBOX/$last/subject
+cat /n/mail/accounts/work/boxes/INBOX/$last/body
+echo '\eSeen' > /n/mail/accounts/work/boxes/INBOX/$last/flags
+.EE
+.PP
+Search and archive:
+.IP
+.EX
+echo 'search FROM noreply@example.com' > /n/mail/accounts/work/boxes/INBOX/ctl
+for u in `{cat /n/mail/accounts/work/boxes/INBOX/ctl} {
+    echo 'archive '^$u > /n/mail/accounts/work/boxes/INBOX/ctl
+}
+.EE
+.PP
+Reply with threading headers auto-injected:
+.IP
+.EX
+echo 'Got it, thanks.' > /n/mail/accounts/work/boxes/INBOX/$last/draft-reply
+.EE
+.SH FILES
+.TF /dis/mail9p.dis
+.TP
+.B /dis/mail9p.dis
+binary
+.TP
+.B /dis/lib/mailparse.dis
+shared parser library (also used by the test suite)
+.TP
+.B /mnt/factotum
+credential source
+.SH SOURCE
+.B /appl/cmd/mail9p.b
+.PP
+.B /appl/lib/mailparse.b
+.SH BUGS
+MIME parsing is not implemented; the
+.B body.html
+file is always empty. Use
+.B raw
+and parse it yourself.
+.PP
+Only the currently-selected mailbox surfaces message contents under
+.BR boxes/<box>/<uid>/ .
+Non-selected boxes are visible as directories but have no message
+entries until SELECTed via the account ctl.
+.PP
+Archive and move STORE
+.B \eDeleted
+but do not EXPUNGE, mirroring Gmail-style retention. There is no
+EXPUNGE verb exposed yet.
+.PP
+STARTTLS for SMTP is not supported; sends go over plain port 25 or
+implicit TLS port 465.
+.SH SEE ALSO
+.IR factotum (4),
+.IR llmsrv (4),
+.IR styx (5)

@@ -57,6 +57,7 @@ TARG=\
 	html.dis\
 	imap.dis\
 	imageremap.dis\
+	mailparse.dis\
 	inflate.dis\
 	ip.dis\
 	ipattr.dis\

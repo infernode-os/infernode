@@ -62,6 +62,8 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
+include "imap.m";
+
 Mail9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
@@ -85,12 +87,27 @@ Qacctdir:   con 3;	# /accounts/<name>
 Qacctctl:   con 4;	# /accounts/<name>/ctl
 Qboxesdir:  con 5;	# /accounts/<name>/boxes
 
-# Account state (in-memory only for this scaffold).
+# Per-account IMAP state. Each account loads its own Imap module
+# instance so the module-level globals in appl/lib/imap.b
+# (fd/ibuf/connected/currentmbox) belong to exactly one account.
 Account: adt {
-	name:    string;
-	server:  string;
-	mode:    int;	# Imap->IMPLICIT_TLS | Imap->STARTTLS
-	# IMAP-wiring pass will add: imapconnected, currentmbox, etc.
+	name:      string;
+	server:    string;	# IMAP server hostname
+	smtpserver: string;	# SMTP server (defaults to server)
+	mode:      int;		# Imap->IMPLICIT_TLS | Imap->STARTTLS
+	imap:      Imap;	# loaded Imap module instance
+	connected: int;
+	# Cached folder list, refreshed on sync. nil before first sync.
+	folders:   array of string;
+	# Currently SELECTed mailbox, or "" if none.
+	currentbox: string;
+	# Mailbox state from the last SELECT.
+	mbox:      ref Imap->Mailbox;
+	# Cached message list for currentbox, in IMAP sequence order.
+	# Indexed in the array by (seq - 1). nil before first fetch.
+	# UID-to-seq lookup is linear; v1 mailboxes are bounded by the
+	# IMAP server's FETCH window so this is fine.
+	msgs:      array of ref Imap->Msg;
 };
 
 stderr: ref Sys->FD;
@@ -213,12 +230,12 @@ mkboxesdir(idx: int): big { return MKPATH(Qboxesdir, idx, 0, big 0); }
 # Account management
 #
 
-newaccount(name, server: string, mode: int): int
+newaccount(name, server, smtpserver: string, mode: int): (int, ref Account)
 {
 	# Reject duplicates by name.
 	for(i := 0; i < naccounts; i++)
 		if(accounts[i] != nil && accounts[i].name == name)
-			return -1;
+			return (-1, nil);
 
 	# Place into first nil slot, else grow.
 	idx := -1;
@@ -237,9 +254,20 @@ newaccount(name, server: string, mode: int): int
 		idx = naccounts++;
 	}
 
-	accounts[idx] = ref Account(name, server, mode);
+	a := ref Account;
+	a.name = name;
+	a.server = server;
+	a.smtpserver = smtpserver;
+	a.mode = mode;
+	a.imap = nil;
+	a.connected = 0;
+	a.folders = nil;
+	a.currentbox = "";
+	a.mbox = nil;
+	a.msgs = nil;
+	accounts[idx] = a;
 	vers++;
-	return idx;
+	return (idx, a);
 }
 
 findaccountbyname(name: string): (int, ref Account)
@@ -255,9 +283,35 @@ delaccount(name: string): int
 	(idx, a) := findaccountbyname(name);
 	if(idx < 0 || a == nil)
 		return -1;
+	if(a.connected && a.imap != nil)
+		a.imap->logout();
+	a.imap = nil;
+	a.connected = 0;
 	accounts[idx] = nil;
 	vers++;
 	return 0;
+}
+
+# Default the SMTP server when only the IMAP server was given. We follow
+# the convention `imap.<rest>` → `smtp.<rest>`; if the IMAP server does
+# not start with `imap.`, fall back to the IMAP server itself (so a
+# generic mail host works).
+defaultsmtp(imapserver: string): string
+{
+	prefix := "imap.";
+	if(len imapserver > len prefix && imapserver[0:len prefix] == prefix)
+		return "smtp." + imapserver[len prefix:];
+	return imapserver;
+}
+
+# Load a fresh Imap module instance. Each account has its own loaded
+# module so the lib's module-level globals don't collide across accounts.
+loadimap(): (Imap, string)
+{
+	m := load Imap Imap->PATH;
+	if(m == nil)
+		return (nil, "cannot load " + Imap->PATH);
+	return (m, nil);
 }
 
 #
@@ -539,10 +593,8 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 					continue;
 				}
 				a := accounts[idx];
-				status := "disconnected " + a.server + "\n";
-				# Next-pass: report selected mailbox, message
-				# counts, etc. from a live IMAP connection.
-				srv.reply(styxservers->readbytes(gm, array of byte status));
+				srv.reply(styxservers->readbytes(gm,
+					array of byte acctstatus(a)));
 
 			* =>
 				srv.reply(ref Rmsg.Error(gm.tag, Enotfound));
@@ -594,7 +646,7 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 #
 # /ctl write commands.
 #
-#   connect <name> <server> [tls|starttls]
+#   connect <name> <server> [tls|starttls] [smtp=<host>]
 #   disconnect <name>
 #   sync <name>
 #
@@ -608,22 +660,7 @@ handlerootctl(cmd: string): string
 
 	case verb {
 	"connect" =>
-		(name, after) := splitfield(rest);
-		if(name == "")
-			return "connect: name required";
-		(server, modearg) := splitfield(after);
-		if(server == "")
-			return "connect: server required";
-		mode := 0;	# Imap->IMPLICIT_TLS (0) — see module/imap.m
-		if(modearg == "starttls")
-			mode = 1;	# Imap->STARTTLS
-		else if(modearg != "" && modearg != "tls")
-			return "connect: mode must be tls or starttls";
-
-		if(newaccount(name, server, mode) < 0)
-			return "connect: account already exists";
-		# Next-pass: trigger IMAP open via factotum credentials here.
-		return nil;
+		return doconnect(rest);
 
 	"disconnect" =>
 		name := stripnl(rest);
@@ -637,21 +674,129 @@ handlerootctl(cmd: string): string
 		name := stripnl(rest);
 		if(name == "")
 			return "sync: name required";
-		(idx, a) := findaccountbyname(name);
-		idx = idx;	# index unused in scaffold; next-pass uses it
+		(nil, a) := findaccountbyname(name);
 		if(a == nil)
 			return "sync: no such account";
-		# Next-pass: re-fetch mailbox state from IMAP.
-		return nil;
+		return dosync(a);
 
 	* =>
 		return "unknown ctl verb (want: connect|disconnect|sync)";
 	}
 }
 
+# connect <name> <server> [tls|starttls] [smtp=<host>]
+doconnect(rest: string): string
+{
+	(name, r1) := splitfield(rest);
+	if(name == "")
+		return "connect: name required";
+	(server, r2) := splitfield(r1);
+	if(server == "")
+		return "connect: server required";
+
+	mode := Imap->IMPLICIT_TLS;
+	smtpserver := "";
+
+	# Remaining tokens: mode flag and/or smtp=<host>, any order.
+	for(rem := r2; rem != ""; ) {
+		(tok, after) := splitfield(rem);
+		rem = after;
+		if(tok == "")
+			break;
+		if(tok == "tls")
+			mode = Imap->IMPLICIT_TLS;
+		else if(tok == "starttls")
+			mode = Imap->STARTTLS;
+		else if(len tok > 5 && tok[0:5] == "smtp=")
+			smtpserver = tok[5:];
+		else
+			return "connect: unrecognised arg: " + tok;
+	}
+	if(smtpserver == "")
+		smtpserver = defaultsmtp(server);
+
+	(idx, a) := newaccount(name, server, smtpserver, mode);
+	if(idx < 0)
+		return "connect: account already exists";
+
+	(im, lerr) := loadimap();
+	if(im == nil) {
+		accounts[idx] = nil;
+		vers++;
+		return "connect: " + lerr;
+	}
+	a.imap = im;
+
+	# IMAP credentials come from factotum:
+	#   proto=pass service=imap dom=<server>
+	# Passing nil/nil tells the lib to query factotum itself.
+	err := im->open(nil, nil, server, mode);
+	if(err != nil) {
+		a.imap = nil;
+		accounts[idx] = nil;
+		vers++;
+		return "connect: " + err;
+	}
+	a.connected = 1;
+
+	# Best-effort INBOX SELECT so the account is usable immediately. A
+	# server that returns a different error here still counts as
+	# connected — the caller can SELECT a different folder via
+	# /accounts/<n>/ctl.
+	(mbox, serr) := im->select("INBOX");
+	if(serr == nil && mbox != nil) {
+		a.currentbox = mbox.name;
+		a.mbox = mbox;
+	}
+
+	# Populate folder list. Soft-fail: connection is still usable
+	# without a folder list, but the user gets fewer signals.
+	(fl, ferr) := im->folders();
+	if(ferr == nil)
+		a.folders = listtoarray(fl);
+
+	vers++;
+	return nil;
+}
+
+dosync(a: ref Account): string
+{
+	if(!a.connected || a.imap == nil)
+		return "sync: not connected";
+	(fl, ferr) := a.imap->folders();
+	if(ferr != nil)
+		return "sync: folders: " + ferr;
+	a.folders = listtoarray(fl);
+	# If a mailbox is currently selected, re-SELECT to refresh counts.
+	if(a.currentbox != "") {
+		(mbox, serr) := a.imap->select(a.currentbox);
+		if(serr == nil && mbox != nil)
+			a.mbox = mbox;
+	}
+	vers++;
+	return nil;
+}
+
+acctstatus(a: ref Account): string
+{
+	if(!a.connected)
+		return "disconnected " + a.server + "\n";
+	s := "connected " + a.server;
+	if(a.currentbox != "")
+		s += " box=" + a.currentbox;
+	if(a.mbox != nil)
+		s += sys->sprint(" exists=%d unseen=%d", a.mbox.exists, a.mbox.unseen);
+	return s + "\n";
+}
+
 #
-# /accounts/<name>/ctl write commands. Scaffold accepts the verbs but
-# defers actual IMAP work to the IMAP-wiring pass.
+# /accounts/<name>/ctl write commands.
+#
+#   select <mailbox>        SELECT a mailbox; updates currentbox/mbox/msgs.
+#   sync                    Re-SELECT currentbox to refresh counts.
+#
+# Search and per-message operations live on the box-level ctl (next
+# pass).
 #
 
 handleacctctl(a: ref Account, cmd: string): string
@@ -659,18 +804,26 @@ handleacctctl(a: ref Account, cmd: string): string
 	cmd = stripnl(cmd);
 	(verb, rest) := splitfield(cmd);
 
-	# `a` and `rest` are unused in the scaffold; the IMAP-wiring pass
-	# will dispatch (a, rest) to imap->select / imap->search etc.
-	rest = rest;
-	a = a;
+	if(!a.connected || a.imap == nil)
+		return "not connected";
 
 	case verb {
 	"select" =>
+		box := stripnl(rest);
+		if(box == "")
+			return "select: mailbox required";
+		(mbox, err) := a.imap->select(box);
+		if(err != nil)
+			return "select: " + err;
+		a.currentbox = mbox.name;
+		a.mbox = mbox;
+		a.msgs = nil;
+		vers++;
 		return nil;
-	"search" =>
-		return nil;
+	"sync" =>
+		return dosync(a);
 	* =>
-		return "unknown account-ctl verb (want: select|search)";
+		return "unknown account-ctl verb (want: select|sync)";
 	}
 }
 
@@ -710,6 +863,18 @@ stripnl(s: string): string
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == '\r'))
 		s = s[0:len s - 1];
 	return s;
+}
+
+listtoarray(l: list of string): array of string
+{
+	n := 0;
+	for(p := l; p != nil; p = tl p)
+		n++;
+	a := array[n] of string;
+	i := 0;
+	for(p = l; p != nil; p = tl p)
+		a[i++] = hd p;
+	return a;
 }
 
 # Split into (first whitespace-delimited field, rest with leading

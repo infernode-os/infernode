@@ -72,7 +72,8 @@ if ! emu_c "smoke" 10 "tools9p read & sleep 2; cat /tool/paths; echo READY"; the
     echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     exit 0
 fi
-if echo "$OUTPUT" | grep -qE "typecheck|does not exist|cannot open|fail:"; then
+CLEAN_OUTPUT=$(echo "$OUTPUT" | grep -v "git/fs: mount /n/git: '/n' file does not exist" || true)
+if echo "$CLEAN_OUTPUT" | grep -qE "typecheck|does not exist|cannot open|fail:"; then
     skip "tools9p failed to start (output: $OUTPUT)"
     echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     exit 0
@@ -81,7 +82,7 @@ pass "tools9p starts and /tool/paths is readable"
 
 # bindpath adds a path — just cat the paths file; bash does the grep
 if emu_c "bind1" 10 \
-    "tools9p read & sleep 2; echo bindpath /tmp > /tool/ctl; cat /tool/paths"; then
+    "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
     if echo "$OUTPUT" | grep -q "/tmp"; then
         pass "bindpath adds path to /tool/paths"
     else
@@ -93,7 +94,7 @@ fi
 
 # Idempotent: bind same path twice — cat the file; bash counts
 if emu_c "bind_idem" 10 \
-    "tools9p read & sleep 2; echo bindpath /tmp > /tool/ctl; echo bindpath /tmp > /tool/ctl; cat /tool/paths"; then
+    "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; echo bindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
     COUNT=$(echo "$OUTPUT" | grep -c "/tmp" || echo 0)
     if [[ "$COUNT" = "1" ]]; then
         pass "duplicate bindpath not duplicated (count=1)"
@@ -106,7 +107,7 @@ fi
 
 # unbindpath removes the path — cat paths after unbind; bash checks absence
 if emu_c "unbind1" 10 \
-    "tools9p read & sleep 2; echo bindpath /tmp > /tool/ctl; echo unbindpath /tmp > /tool/ctl; cat /tool/paths"; then
+    "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; echo unbindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
     if echo "$OUTPUT" | grep -q "/tmp"; then
         fail "unbindpath: /tmp still in /tool/paths (got: $OUTPUT)"
     else
@@ -118,7 +119,7 @@ fi
 
 # Multiple paths: add three, remove the middle one
 if emu_c "multi" 12 \
-    "tools9p read & sleep 2; echo bindpath /tmp > /tool/ctl; echo bindpath /lib > /tool/ctl; echo bindpath /dis > /tool/ctl; echo unbindpath /lib > /tool/ctl; cat /tool/paths"; then
+    "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; echo bindpath /lib > /mnt/toolctl/ctl; echo bindpath /dis > /mnt/toolctl/ctl; echo unbindpath /lib > /mnt/toolctl/ctl; cat /tool/paths"; then
     if echo "$OUTPUT" | grep -q "/tmp" && echo "$OUTPUT" | grep -q "/dis" && ! echo "$OUTPUT" | grep -q "/lib"; then
         pass "multiple paths: selective unbind preserves others"
     elif echo "$OUTPUT" | grep -q "/lib"; then
@@ -136,7 +137,7 @@ echo "── namespace bind plumbing ──"
 # Test that bind/unmount work (applypathchanges does bind into /n/local/).
 # /n/local requires the profile (trfs '#U*' /n/local), so skip cleanly if absent.
 if emu_c "localbind" 8 \
-    "tools9p read &sleep 3; echo bindpath /dis > /tool/ctl; cat /tool/paths"; then
+    "tools9p read &sleep 3; echo bindpath /dis > /mnt/toolctl/ctl; cat /tool/paths"; then
     if echo "$OUTPUT" | grep -q "/dis"; then
         pass "bind /dis: path registered and visible in /tool/paths"
     else

@@ -44,6 +44,7 @@ NsConstruct: module {
 		memory:      int;                  # 1 = enable agent memory
 		xenith:      int;                  # 1 = grant /chan (Xenith 9P) access
 		actid:       int;                  # Lucifer activity ID (-1 = no cowfs)
+		writepaths:  list of string;       # Granted paths that should get staged cowfs writes
 	};
 
 	# Initialize the module

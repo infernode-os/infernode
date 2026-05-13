@@ -273,7 +273,7 @@ restrictns(caps: ref Capabilities): string
 
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
-			lerr := restrictlocal(localpaths, caps.actid);
+			lerr := restrictlocal(localpaths);
 			if(lerr != nil)
 				return sys->sprint("restrict /n/local: %s", lerr);
 		}
@@ -340,6 +340,22 @@ restrictns(caps: ref Capabilities): string
 	if(err != nil)
 		return sys->sprint("restrict /: %s", err);
 
+	# Restrict /tool itself so the confined agent sees a stable capability view
+	# without the generic root control file. User/UI mutations happen through the
+	# trusted /mnt/toolctl* alias outside the restricted root.
+	(toolok, nil) := sys->stat("/tool");
+	if(toolok >= 0) {
+		toolallow := "tools" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
+		if(inlist("task", caps.tools))
+			toolallow = "provision" :: toolallow;
+		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
+			if(!inlist(hd tl2, toolallow))
+				toolallow = hd tl2 :: toolallow;
+		terr := restrictdir("/tool", toolallow, 0);
+		if(terr != nil)
+			return sys->sprint("restrict /tool: %s", terr);
+	}
+
 	# Restrict each extra root-level dir to only the granted sub-paths.
 	# e.g. "/appl/veltro" → restrictpath("/appl", "veltro"::nil)
 	# This prevents the agent from browsing sibling dirs (e.g. /appl/cmd).
@@ -351,6 +367,12 @@ restrictns(caps: ref Capabilities): string
 			if(ederr != nil)
 				sys->fprint(sys->fildes(2), "nsconstruct: restrict %s: %s\n", topdir, ederr);
 		}
+	}
+
+	if(caps.actid >= 0 && caps.writepaths != nil) {
+		werr := overlaywritepaths(caps.writepaths, caps.actid);
+		if(werr != nil)
+			return sys->sprint("overlay writes: %s", werr);
 	}
 
 	return nil;
@@ -374,37 +396,11 @@ filterpaths(paths: list of string, prefix: string): list of string
 # Restrict /n/local to only the granted host paths.
 # Each path is relative to /n/local/ (e.g., "Users/pdfinn/tmp").
 # Drills down component by component using restrictdir().
-# If actid >= 0, overlay each leaf path with cowfs.
-restrictlocal(paths: list of string, actid: int): string
+restrictlocal(paths: list of string): string
 {
 	err := restrictpath("/n/local", paths);
 	if(err != nil)
 		return err;
-
-	# If actid >= 0, overlay each leaf path with cowfs
-	if(actid < 0)
-		return nil;
-
-	cowfs := load Cowfs Cowfs->PATH;
-	if(cowfs == nil)
-		return sys->sprint("cannot load cowfs: %r");
-
-	seq := 0;
-	for(p := paths; p != nil; p = tl p) {
-		fullpath := "/n/local/" + hd p;
-		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%d", actid, seq);
-		seq++;
-		merr := mkdirp(overlaydir);
-		if(merr != nil)
-			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
-
-		(mntfd, cerr) := cowfs->start(fullpath, overlaydir);
-		if(cerr != nil)
-			return sys->sprint("cowfs %s: %s", fullpath, cerr);
-
-		if(sys->mount(mntfd, nil, fullpath, Sys->MREPL, nil) < 0)
-			return sys->sprint("cowfs mount %s: %r", fullpath);
-	}
 	return nil;
 }
 
@@ -467,6 +463,43 @@ splitfirst(p: string): (string, string)
 	return (p, "");
 }
 
+pathwithin(grant, want: string): int
+{
+	if(grant == want)
+		return 1;
+	if(len want > len grant && want[0:len grant] == grant && want[len grant] == '/')
+		return 1;
+	return 0;
+}
+
+overlaywritepaths(paths: list of string, actid: int): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return sys->sprint("cannot load cowfs: %r");
+
+	seq := 0;
+	for(p := paths; p != nil; p = tl p) {
+		fullpath := hd p;
+		(ok, nil) := sys->stat(fullpath);
+		if(ok < 0)
+			continue;
+		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%d", actid, seq);
+		seq++;
+		merr := mkdirp(overlaydir);
+		if(merr != nil)
+			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
+
+		(mntfd, cerr) := cowfs->start(fullpath, overlaydir);
+		if(cerr != nil)
+			return sys->sprint("cowfs %s: %s", fullpath, cerr);
+
+		if(sys->mount(mntfd, nil, fullpath, Sys->MREPL, nil) < 0)
+			return sys->sprint("cowfs mount %s: %r", fullpath);
+	}
+	return nil;
+}
+
 # Emit namespace manifest for the UI to display.
 # Writes to /tmp/veltro/.ns/manifest — one entry per line:
 #   path=/dev/time label=System Clock perm=ro
@@ -524,8 +557,11 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		fullpath := "/n/local/" + hd lp;
 		(ok, nil) := sys->stat(fullpath);
 		perm := "ro";
-		if(caps.actid >= 0)
-			perm = "cow";  # copy-on-write overlay
+		for(wp := caps.writepaths; wp != nil; wp = tl wp)
+			if(pathwithin(hd wp, fullpath))
+				perm = "cow";
+		if(caps.actid < 0)
+			perm = "ro";
 		if(ok >= 0)
 			sys->fprint(fd, "path=%s label=%s perm=%s\n", fullpath, hd lp, perm);
 	}
@@ -566,8 +602,14 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		if(inlist(p, emitted))
 			continue;
 		(ok, nil) := sys->stat(p);
+		perm := "ro";
+		for(wp2 := caps.writepaths; wp2 != nil; wp2 = tl wp2)
+			if(pathwithin(hd wp2, p))
+				perm = "cow";
+		if(caps.actid < 0)
+			perm = "ro";
 		if(ok >= 0)
-			sys->fprint(fd, "path=%s label=%s perm=ro\n", p, p[1:]);
+			sys->fprint(fd, "path=%s label=%s perm=%s\n", p, p[1:], perm);
 	}
 
 	fd = nil;

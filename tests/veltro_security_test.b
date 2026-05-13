@@ -276,7 +276,8 @@ restrictNsWorker(result: chan of string)
 		nil,                  # mcproviders
 		0,                    # memory
 		0,                    # xenith
-		-1                    # actid
+		-1,                   # actid
+		nil
 	);
 
 	# Apply namespace restriction
@@ -352,7 +353,8 @@ shellWorker(result: chan of string)
 		nil,                      # mcproviders
 		0,                        # memory
 		0,                        # xenith
-		-1                        # actid
+		-1,                       # actid
+		nil
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -421,7 +423,8 @@ raceWorker(done: chan of int, errors: chan of string)
 		nil,
 		0,
 		0,
-		-1
+		-1,
+		nil
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -453,7 +456,7 @@ verifyNsWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		nil, nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
-		nil, 0, 0, -1
+		nil, 0, 0, -1, nil
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -586,7 +589,7 @@ tmpWritableWorker(result: chan of string)
 		"write" :: nil,
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
-		nil, 0, 0, -1
+		nil, 0, 0, -1, nil
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -638,7 +641,7 @@ execGrantsShDisWorker(result: chan of string)
 		"read" :: "exec" :: nil,
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
-		nil, 0, 0, -1
+		nil, 0, 0, -1, nil
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -708,7 +711,7 @@ pathsExposureWorker(result: chan of string)
 		grantpath :: nil,
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
-		nil, 0, 0, -1
+		nil, 0, 0, -1, nil
 	);
 
 	err := nsconstruct->restrictns(caps);
@@ -789,6 +792,114 @@ nodevsWorker(result: chan of string)
 }
 
 # ============================================================================
+# Test 14: ToolCtlHidden
+# Verifies restrictns() removes the generic /tool/ctl mutator from the agent
+# view while preserving tool directories and the narrow /tool/provision path
+# when task delegation is granted.
+# ============================================================================
+testToolCtlHidden(t: ref T)
+{
+	result := chan of string;
+	spawn toolCtlHiddenWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+toolCtlHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Build a synthetic /tool tree so restrictns() can exercise its allowlist
+	# behavior without requiring a running tools9p instance.
+	mkdirp("/tool");
+	createfile("/tool/tools");
+	createfile("/tool/help");
+	createfile("/tool/_registry");
+	createfile("/tool/ctl");
+	createfile("/tool/paths");
+	createfile("/tool/budget");
+	createfile("/tool/activity");
+	createfile("/tool/provision");
+	mkdirp("/tool/read");
+	mkdirp("/tool/task");
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: "task" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	(ctlok, nil) := sys->stat("/tool/ctl");
+	if(ctlok >= 0) {
+		result <-= "/tool/ctl should be hidden after restrictns";
+		return;
+	}
+
+	(provok, nil) := sys->stat("/tool/provision");
+	if(provok < 0) {
+		result <-= "/tool/provision should remain visible for task delegation";
+		return;
+	}
+
+	(readok, nil) := sys->stat("/tool/read");
+	if(readok < 0) {
+		result <-= "/tool/read should remain visible after restrictns";
+		return;
+	}
+
+	(taskok, nil) := sys->stat("/tool/task");
+	if(taskok < 0) {
+		result <-= "/tool/task should remain visible after restrictns";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 15: StagedWriteManifest
+# Verifies the staged-write backend contract that writable granted paths are
+# surfaced as perm=cow in the namespace manifest when writepaths + actid are
+# present. Full cowfs lifecycle tests still live separately because mounted
+# cowfs servers do not yet tear down cleanly inside the Limbo unit runner.
+# ============================================================================
+testStagedWriteOverlay(t: ref T)
+{
+	base := "/tmp/veltro/cowgrant";
+	mkdirp(base);
+	writefilecontent(base + "/file.txt", "original\n");
+	manifest := "/tmp/veltro/.ns/test-manifest-cow";
+	sys->remove(manifest);
+
+	caps := ref NsConstruct->Capabilities(
+		"write" :: nil,
+		base :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil,
+		0,
+		0,
+		41,
+		base :: nil
+	);
+
+	nsconstruct->emitmanifest(caps, manifest);
+	mdata := readfilecontent(manifest);
+	t.assert(contains(mdata, "path=" + base), "manifest includes writable granted path");
+	t.assert(contains(mdata, "perm=cow"), "manifest marks writable path as cow");
+	t.assertseq(readfilecontent(base + "/file.txt"), "original\n",
+		"manifest generation does not mutate the underlying file");
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -816,6 +927,28 @@ createfile(path: string)
 	fd := sys->create(path, Sys->OWRITE, 8r644);
 	if(fd != nil)
 		fd = nil;
+}
+
+writefilecontent(path, content: string)
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	sys->fprint(fd, "%s", content);
+	fd = nil;
+}
+
+readfilecontent(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }
 
 # Check if string contains substring
@@ -872,6 +1005,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ExecGrantsShDis", testExecGrantsShDis);
 	run("PathsExposure", testPathsExposure);
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
+	run("ToolCtlHidden", testToolCtlHidden);
+	run("StagedWriteOverlay", testStagedWriteOverlay);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

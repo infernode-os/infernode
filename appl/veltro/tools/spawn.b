@@ -257,7 +257,8 @@ exec(args: string): string
 			nil,
 			0,    # No memory
 			0,    # No xenith
-			-1    # No cowfs — subagents inherit parent's cowfs via FORKNS
+			-1,   # No cowfs — subagents inherit parent's cowfs via FORKNS
+			nil
 		);
 
 		# Scheduled (at= or every=): fire-and-forget. The child becomes a

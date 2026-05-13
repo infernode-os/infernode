@@ -163,7 +163,9 @@ Bash tests that run on the host OS. Each starts emu with required services.
 | `wallet9p_test.sh` | wallet9p basic operations: create account, read address, sign hash |
 | `wallet_e2e_test.sh` | Base Sepolia RPC connectivity and balance queries |
 | `wallet_persist_test.sh` | Wallet key survival across emu restarts via factotum/secstore (7 tests) |
-| `secstore_logon_test.sh` | Secstore + factotum persistence: PAK auth, key round-trip (10 tests) |
+| `secstore_logon_test.sh` | Secstore + factotum persistence: PAK auth, verifier/blob format checks, key round-trip (12 tests) |
+| `secstore_e2e_test.sh` | Secstore setup + factotum save/reload against the current `secstore2` verifier format |
+| `secstore_legacy_auth_test.sh` | Current client/server fallback against a legacy bare-hex `PAK` verifier |
 | `payfetch_test.sh` | x402 payfetch end-to-end payment flow (requires x402-test-server) |
 
 ### Test Safety

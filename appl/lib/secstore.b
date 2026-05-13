@@ -41,6 +41,7 @@ init()
 }
 
 # PAK_Hi cache — deterministic function of (user, pwhash), expensive to compute
+cached_pakhi_version: string;
 cached_pakhi_user: string;
 cached_pakhi_pwhash: array of byte;
 cached_pakhi_hexHi: string;
@@ -68,19 +69,42 @@ privacy(): int
 
 connect(addr: string, user: string, pwhash: array of byte): (ref Dial->Connection, string, string)
 {
+	return connectver(addr, user, VERSION1, pwhash);
+}
+
+connect2(addr: string, user: string, pwhash: array of byte, pwhash2: array of byte): (ref Dial->Connection, string, string)
+{
+	conn: ref Dial->Connection;
+	sname, diag: string;
+	lastdiag := "no secstore credentials";
+
+	if(pwhash2 != nil){
+		(conn, sname, diag) = connectver(addr, user, VERSION2, pwhash2);
+		if(conn != nil)
+			return (conn, sname, diag);
+		lastdiag = diag;
+	}
+	if(pwhash != nil)
+		return connectver(addr, user, VERSION1, pwhash);
+	return (nil, nil, lastdiag);
+}
+
+connectver(addr: string, user: string, version: string, pwhash: array of byte): (ref Dial->Connection, string, string)
+{
 	# Pre-compute PAK crypto before dialing to avoid TCP idle timeout.
 	# Use cached PAK_Hi if (user, pwhash) match — avoids expensive modexp.
 	hexHi: string;
 	H: ref IPint;
-	if(cached_pakhi_user == user && pwhash_eq(cached_pakhi_pwhash, pwhash)
+	if(cached_pakhi_version == version && cached_pakhi_user == user && pwhash_eq(cached_pakhi_pwhash, pwhash)
 	   && cached_pakhi_hexHi != nil) {
 		sys->fprint(sys->fildes(2), "secstore: step 1: PAK_Hi (cached)\n");
 		hexHi = cached_pakhi_hexHi;
 		H = cached_pakhi_H;
 	} else {
 		sys->fprint(sys->fildes(2), "secstore: step 1: PAK_Hi...\n");
-		(hexHi, H, nil) = PAK_Hi(user, pwhash);
+		(hexHi, H, nil) = PAK_Hiver(version, user, pwhash);
 		# Cache for next time
+		cached_pakhi_version = version;
 		cached_pakhi_user = user;
 		cached_pakhi_pwhash = array[len pwhash] of byte;
 		cached_pakhi_pwhash[0:] = pwhash;
@@ -103,7 +127,7 @@ connect(addr: string, user: string, pwhash: array of byte): (ref Dial->Connectio
 		sys->werrstr(sys->sprint("can't dial %s: %r", addr));
 		return (nil, nil, sys->sprint("%r"));
 	}
-	(sname, diag) := authprecomp(conn, user, hexHi, x, hexm);
+	(sname, diag) := authprecompver(conn, user, version, hexHi, x, hexm);
 	if(sname == nil){
 		sys->werrstr(sys->sprint("can't authenticate: %s", diag));
 		return (nil, nil, sys->sprint("%r"));
@@ -132,7 +156,12 @@ dial(netaddr: string): ref Dial->Connection
 
 authprecomp(conn: ref Dial->Connection, user: string, hexHi: string, x: ref IPint, hexm: string): (string, string)
 {
-	sname := PAKclientprecomp(conn, user, hexHi, x, hexm);
+	return authprecompver(conn, user, VERSION1, hexHi, x, hexm);
+}
+
+authprecompver(conn: ref Dial->Connection, user: string, version: string, hexHi: string, x: ref IPint, hexm: string): (string, string)
+{
+	sname := PAKclientprecompver(conn, user, version, hexHi, x, hexm);
 	if(sname == nil)
 		return (nil, sys->sprint("%r"));
 	s := readstr(conn.dfd);
@@ -148,7 +177,7 @@ authprecomp(conn: ref Dial->Connection, user: string, hexHi: string, x: ref IPin
 
 auth(conn: ref Dial->Connection, user: string, pwhash: array of byte): (string, string)
 {
-	sname := PAKclient(conn, user, pwhash);
+	sname := PAKclientver(conn, user, VERSION1, pwhash);
 	if(sname == nil)
 		return (nil, sys->sprint("%r"));
 	s := readstr(conn.dfd);
@@ -298,6 +327,46 @@ mkseckey(s: string): array of byte
 	kr->sha1(key, len key, skey, nil);
 	erasekey(key);
 	return skey;
+}
+
+mkseckey2(s: string): array of byte
+{
+	key := array of byte s;
+	skey := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(key, len key, skey, nil);
+	erasekey(key);
+	return skey;
+}
+
+mkverifier(user, version: string, passhash: array of byte): string
+{
+	(hexHi, nil, nil) := PAK_Hiver(version, user, passhash);
+	return hexHi;
+}
+
+formatverifier(version, hexHi: string): string
+{
+	if(version == nil || version == "" || version == VERSION1)
+		return hexHi;
+	return version + " " + hexHi;
+}
+
+parseverifier(s: string): (string, string)
+{
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' ' || s[len s-1] == '\t'))
+		s = s[:len s-1];
+	if(s == nil || s == "")
+		return (nil, nil);
+	(nf, flds) := sys->tokenize(s, " \t");
+	if(nf == 1)
+		return (VERSION1, hd flds);
+	if(nf >= 2){
+		version := hd flds;
+		hexHi := hd tl flds;
+		if(version == VERSION1 || version == VERSION2)
+			return (version, hexHi);
+	}
+	return (nil, nil);
 }
 
 Checkpat: con "XXXXXXXXXXXXXXXX";	# it's what Plan 9's aescbc uses
@@ -659,6 +728,24 @@ writerr(fd: ref Sys->FD, s: string)
 
 setsecret(conn: ref Dial->Connection, sigma: array of byte, direction: int): string
 {
+	return setsecretver(conn, sigma, direction, VERSION1);
+}
+
+setsecretver(conn: ref Dial->Connection, sigma: array of byte, direction: int, version: string): string
+{
+	if(version == VERSION2){
+		secretin := array[Keyring->SHA256dlen] of byte;
+		secretout := array[Keyring->SHA256dlen] of byte;
+		if(direction != 0){
+			kr->hmac_sha256(sigma, len sigma, array of byte "one", secretout, nil);
+			kr->hmac_sha256(sigma, len sigma, array of byte "two", secretin, nil);
+		}else{
+			kr->hmac_sha256(sigma, len sigma, array of byte "two", secretout, nil);
+			kr->hmac_sha256(sigma, len sigma, array of byte "one", secretin, nil);
+		}
+		return ssl->secret(conn, secretin, secretout);
+	}
+
 	secretin := array[Keyring->SHA1dlen] of byte;
 	secretout := array[Keyring->SHA1dlen] of byte;
 	if(direction != 0){
@@ -683,11 +770,16 @@ erasekey(a: array of byte)
 #
 PAKclientprecomp(conn: ref Dial->Connection, C: string, hexHi: string, x: ref IPint, hexm: string): string
 {
+	return PAKclientprecompver(conn, C, VERSION1, hexHi, x, hexm);
+}
+
+PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexHi: string, x: ref IPint, hexm: string): string
+{
 	dfd := conn.dfd;
 
 	# Send hello immediately — crypto was pre-computed
 	sys->fprint(sys->fildes(2), "secstore: PAKclient sending pre-computed hello\n");
-	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", VERSION, C, hexm) < 0){
+	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", version, C, hexm) < 0){
 		sys->fprint(sys->fildes(2), "secstore: PAKclient hello write failed: %r\n");
 		return nil;
 	}
@@ -716,7 +808,7 @@ PAKclientprecomp(conn: ref Dial->Connection, C: string, hexHi: string, x: ref IP
 	mu := IPint.strtoip(hexmu, 64);
 	sigma := mu.expmod(x, pak.p);
 	hexsigma := sigma.iptostr(64);
-	digest := shorthash("server", C, S, hexm, hexmu, hexsigma, hexHi);
+	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);
 	kc := base64->enc(digest);
 	if(ks != kc){
 		writerr(dfd, "verifier didn't match");
@@ -724,17 +816,17 @@ PAKclientprecomp(conn: ref Dial->Connection, C: string, hexHi: string, x: ref IP
 	}
 
 	# send hash2(g**xy)
-	digest = shorthash("client", C, S, hexm, hexmu, hexsigma, hexHi);
+	digest = shorthashver(version, "client", C, S, hexm, hexmu, hexsigma, hexHi);
 	kc = base64->enc(digest);
 	if(sys->fprint(dfd, "k'=%s\n", kc) < 0)
 		return nil;
 
 	# set session key
-	digest = shorthash("session", C, S, hexm, hexmu, hexsigma, hexHi);
+	digest = shorthashver(version, "session", C, S, hexm, hexmu, hexsigma, hexHi);
 	for(i := 0; i < len hexsigma; i++)
 		hexsigma[i] = 0;
 
-	err := setsecret(conn, digest, 0);
+	err := setsecretver(conn, digest, 0, version);
 	if(err != nil)
 		return nil;
 	erasekey(digest);
@@ -747,7 +839,8 @@ PAKclientprecomp(conn: ref Dial->Connection, C: string, hexHi: string, x: ref IP
 # the following must only be used to talk to a Plan 9 secstore
 #
 
-VERSION: con "secstore";
+VERSION1: con "secstore";
+VERSION2: con "secstore2";
 
 PAKparams: adt {
 	q:	ref IPint;
@@ -786,12 +879,26 @@ initPAKparams()
 
 longhash(ver: string, C: string, passwd: array of byte): ref IPint
 {
+	return longhashver(ver, C, passwd);
+}
+
+longhashver(ver: string, C: string, passwd: array of byte): ref IPint
+{
 	aver := array of byte ver;
 	aC := array of byte C;
 	Cp := array[len aver + len aC + len passwd] of byte;
 	Cp[0:] = aver;
 	Cp[len aver:] = aC;
 	Cp[len aver+len aC:] = passwd;
+	if(ver == VERSION2){
+		buf := array[7*Keyring->SHA256dlen] of byte;
+		for(i := 0; i < 7; i++){
+			key := array[] of { byte('A'+i) };
+			kr->hmac_sha256(Cp, len Cp, key, buf[i*Keyring->SHA256dlen:], nil);
+		}
+		erasekey(Cp);
+		return mod(IPint.bebytestoip(buf), pak.p).expmod(pak.r, pak.p);
+	}
 	buf := array[7*Keyring->SHA1dlen] of byte;
 	for(i := 0; i < 7; i++){
 		key := array[] of { byte('A'+i) };
@@ -814,10 +921,23 @@ shaz(s: string, digest: array of byte, state: ref DigestState): ref DigestState
 	return state;
 }
 
+shaz256(s: string, digest: array of byte, state: ref DigestState): ref DigestState
+{
+	a := array of byte s;
+	state = kr->sha256(a, len a, digest, state);
+	erasekey(a);
+	return state;
+}
+
 # Hi = H^-1 mod p
 PAK_Hi(C: string, passhash: array of byte): (string, ref IPint, ref IPint)
 {
-	H := longhash(VERSION, C, passhash);
+	return PAK_Hiver(VERSION1, C, passhash);
+}
+
+PAK_Hiver(version: string, C: string, passhash: array of byte): (string, ref IPint, ref IPint)
+{
+	H := longhashver(version, C, passhash);
 	Hi := H.invert(pak.p);
 	return (Hi.iptostr(64), H, Hi);
 }
@@ -827,6 +947,30 @@ PAK_Hi(C: string, passhash: array of byte): (string, ref IPint, ref IPint)
 
 shorthash(mess: string, C: string, S: string, m: string, mu: string, sigma: string, Hi: string): array of byte
 {
+	return shorthashver(VERSION1, mess, C, S, m, mu, sigma, Hi);
+}
+
+shorthashver(version: string, mess: string, C: string, S: string, m: string, mu: string, sigma: string, Hi: string): array of byte
+{
+	if(version == VERSION2){
+		state := shaz256(mess, nil, nil);
+		state = shaz256(C, nil, state);
+		state = shaz256(S, nil, state);
+		state = shaz256(m, nil, state);
+		state = shaz256(mu, nil, state);
+		state = shaz256(sigma, nil, state);
+		state = shaz256(Hi, nil, state);
+		state = shaz256(mess, nil, state);
+		state = shaz256(C, nil, state);
+		state = shaz256(S, nil, state);
+		state = shaz256(m, nil, state);
+		state = shaz256(mu, nil, state);
+		state = shaz256(sigma, nil, state);
+		digest := array[Keyring->SHA256dlen] of byte;
+		shaz256(Hi, digest, state);
+		return digest;
+	}
+
 	state := shaz(mess, nil, nil);
 	state = shaz(C, nil, state);
 	state = shaz(S, nil, state);
@@ -854,10 +998,15 @@ shorthash(mess: string, C: string, S: string, m: string, mu: string, sigma: stri
 #
 PAKclient(conn: ref Dial->Connection, C: string, pwhash: array of byte): string
 {
+	return PAKclientver(conn, C, VERSION1, pwhash);
+}
+
+PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: array of byte): string
+{
 	dfd := conn.dfd;
 
 	sys->fprint(sys->fildes(2), "secstore: PAK_Hi starting...\n");
-	(hexHi, H, nil) := PAK_Hi(C, pwhash);
+	(hexHi, H, nil) := PAK_Hiver(version, C, pwhash);
 	sys->fprint(sys->fildes(2), "secstore: PAK_Hi done, computing m...\n");
 
 	# random 1<=x<=q-1; send C, m=g**x H
@@ -868,7 +1017,7 @@ PAKclient(conn: ref Dial->Connection, C: string, pwhash: array of byte): string
 	hexm := m.iptostr(64);
 
 	sys->fprint(sys->fildes(2), "secstore: PAKclient crypto done, writing hello to fd=%d\n", dfd.fd);
-	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", VERSION, C, hexm) < 0){
+	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", version, C, hexm) < 0){
 		sys->fprint(sys->fildes(2), "secstore: PAKclient hello write failed: %r\n");
 		return nil;
 	}
@@ -898,7 +1047,7 @@ PAKclient(conn: ref Dial->Connection, C: string, pwhash: array of byte): string
 	mu := IPint.strtoip(hexmu, 64);
 	sigma := mu.expmod(x, pak.p);
 	hexsigma := sigma.iptostr(64);
-	digest := shorthash("server", C, S, hexm, hexmu, hexsigma, hexHi);
+	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);
 	kc := base64->enc(digest);
 	if(ks != kc){
 		writerr(dfd, "verifier didn't match");
@@ -906,17 +1055,17 @@ PAKclient(conn: ref Dial->Connection, C: string, pwhash: array of byte): string
 	}
 
 	# send hash2(g**xy)
-	digest = shorthash("client", C, S, hexm, hexmu, hexsigma, hexHi);
+	digest = shorthashver(version, "client", C, S, hexm, hexmu, hexsigma, hexHi);
 	kc = base64->enc(digest);
 	if(sys->fprint(dfd, "k'=%s\n", kc) < 0)
 		return nil;
 
 	# set session key
-	digest = shorthash("session", C, S, hexm, hexmu, hexsigma, hexHi);
+	digest = shorthashver(version, "session", C, S, hexm, hexmu, hexsigma, hexHi);
 	for(i := 0; i < len hexsigma; i++)
 		hexsigma[i] = 0;
 
-	err := setsecret(conn, digest, 0);
+	err := setsecretver(conn, digest, 0, version);
 	if(err != nil)
 		return nil;
 	erasekey(digest);

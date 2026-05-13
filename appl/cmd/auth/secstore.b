@@ -31,6 +31,7 @@ Maxfilesize: con 128*1024;
 stderr: ref Sys->FD;
 conn: ref Dial->Connection;
 seckey: array of byte;
+seckey2: array of byte;
 filekey: array of byte;
 file: array of byte;
 verbose := 0;
@@ -109,15 +110,12 @@ Auth:
 			exit;
 		erase();
 		seckey = secstore->mkseckey(pass);
+		seckey2 = secstore->mkseckey2(pass);
 		filekey = secstore->mkfilekey(pass);
 		for(i := 0; i < len pass; i++)
 			pass[i] = 0;	# clear it
-		conn = secstore->dial(dial->netmkaddr(addr, "net", "secstore"));
-		if(conn == nil)
-			error(sys->sprint("can't connect to secstore: %r"));
-		(srvname, diag) := secstore->auth(conn, user, seckey);
+		(conn, srvname, diag) := secstore->connect2(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2);
 		if(srvname == nil){
-			secstore->bye(conn);
 			sys->fprint(stderr, "secstore: authentication failed: %s\n",  diag);
 			if(iflag)
 				raise "fail:auth";
@@ -128,7 +126,9 @@ Auth:
 			if(verbose)
 				sys->fprint(stderr, "server: %s\n", srvname);
 			secstore->erasekey(seckey);
+			secstore->erasekey(seckey2);
 			seckey = nil;
+			seckey2 = nil;
 			break Auth;
 		"need pin" =>
 			if(!iflag){

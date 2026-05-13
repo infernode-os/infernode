@@ -38,7 +38,7 @@ InferNode provides a native cryptocurrency wallet that enables Veltro AI agents 
 ## Boot Sequence
 
 ```
-1. secstored starts (listens on tcp!*!5356)
+1. secstored starts (listens on tcp!localhost!5356 by default)
 2. factotum starts:
    - If $SECSTORE_PASSWORD set: factotum -S -P (keys loaded automatically)
    - Otherwise: factotum starts empty (keys loaded by login screen)
@@ -105,7 +105,9 @@ intentionally short.
 ### How It Works
 
 - **secstored** runs as a background service, listening on TCP port 5356 by
-  default (`tcp!*!5356` — all interfaces).
+  default on loopback (`tcp!localhost!5356`). Remote exposure is explicit via
+  `-a` because secstore compatibility includes unauthenticated account-existence
+  probes and no built-in server lockout.
 - Keys are stored in `/usr/inferno/secstore/<username>/`.
 - The `factotum` file is a newline-separated list of `key <attrs>` lines,
   encrypted client-side. New writes use AES-256-GCM (magic header `SGCM1\n`,

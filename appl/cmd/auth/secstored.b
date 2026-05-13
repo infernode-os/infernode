@@ -13,7 +13,7 @@ implement Secstored;
 # Options:
 #   -d            debug mode (verbose logging)
 #   -s storedir   directory for user data (default: /usr/inferno/secstore)
-#   -a addr       listen address (default: tcp!*!5356)
+#   -a addr       listen address (default: tcp!localhost!5356)
 #
 # Storage layout:
 #   storedir/
@@ -88,7 +88,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 	initPAKparams();
 
-	addr := "tcp!*!5356";
+	# Keep secstore protocol compatibility, including cansecstore (m=0), but
+	# default InferNode deployments to loopback. Upstream secstore assumes the
+	# service lives on a trusted auth network; InferNode's common case is a
+	# single host with logon/factotum connecting over localhost. Exposing the
+	# service on all interfaces should therefore be explicit via -a.
+	addr := "tcp!localhost!5356";
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
@@ -108,6 +113,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Ensure store directory exists
 	sys->create(storedir, Sys->OREAD, Sys->DMDIR | 8r700);
 
+	warnremote(addr);
 	log(sys->sprint("listening on %s, store=%s", addr, storedir));
 
 	conn := dialler->announce(addr);
@@ -122,6 +128,19 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 		spawn serve(lconn);
 	}
+}
+
+loopbackaddr(addr: string): int
+{
+	return (len addr >= 14 && addr[0:14] == "tcp!localhost!")
+		|| (len addr >= 14 && addr[0:14] == "tcp!127.0.0.1!");
+}
+
+warnremote(addr: string)
+{
+	if(loopbackaddr(addr))
+		return;
+	log(sys->sprint("warning: non-loopback secstore listener %s is exposed intentionally; reachable clients can probe account existence via cansecstore (m=0) and attempt online password guessing; prefer a private overlay or firewall when using -a", addr));
 }
 
 serve(lconn: ref Dial->Connection)

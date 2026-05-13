@@ -195,6 +195,10 @@ Account: adt {
 	# UID-to-seq lookup is linear; v1 mailboxes are bounded by the
 	# IMAP server's FETCH window so this is fine.
 	msgs:      array of ref MsgCache;
+	# Last `search <criteria>` result, as readable text. Reset on
+	# select. Box ctl reads return this so callers can chain writes
+	# and reads of the same file.
+	lastsearch: string;
 };
 
 stderr: ref Sys->FD;
@@ -895,8 +899,13 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 					array of byte acctstatus(a)));
 
 			Qboxctl =>
-				# Write-only for now (Chunk D adds search/archive/move).
-				srv.reply(styxservers->readbytes(gm, nil));
+				aidx := ACCT(c.path);
+				if(aidx >= naccounts || accounts[aidx] == nil) {
+					srv.reply(ref Rmsg.Error(gm.tag, Enotfound));
+					continue;
+				}
+				srv.reply(styxservers->readbytes(gm,
+					array of byte accounts[aidx].lastsearch));
 
 			Qfrom or Qto or Qcc or Qsubject or Qdate or Qflags or
 			Qbody or Qbodyhtml or Qraw =>
@@ -938,6 +947,22 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 					continue;
 				}
 				err = handleacctctl(accounts[idx], string gm.data);
+				if(err != nil) {
+					srv.reply(ref Rmsg.Error(gm.tag, err));
+					continue;
+				}
+				srv.reply(ref Rmsg.Write(gm.tag, len gm.data));
+
+			Qboxctl =>
+				err = handleboxctl(c.path, string gm.data);
+				if(err != nil) {
+					srv.reply(ref Rmsg.Error(gm.tag, err));
+					continue;
+				}
+				srv.reply(ref Rmsg.Write(gm.tag, len gm.data));
+
+			Qflags =>
+				err = handleflagswrite(c.path, string gm.data);
 				if(err != nil) {
 					srv.reply(ref Rmsg.Error(gm.tag, err));
 					continue;
@@ -1165,6 +1190,198 @@ lineof(s: string): array of byte
 	return array of byte (s + "\n");
 }
 
+#
+# /accounts/<name>/boxes/<box>/ctl write commands.
+#
+#   search <imap-criteria>     e.g. "UNSEEN" or "FROM alice"
+#   archive <uid>              COPY to Archive + mark \Deleted
+#   move <uid> <dest-box>      COPY to dest + mark \Deleted
+#
+# Search results land in Account.lastsearch (readable via the same
+# ctl file). Archive/move work on UIDs, looked up via the cached
+# message list.
+#
+
+handleboxctl(path: big, cmd: string): string
+{
+	aidx := ACCT(path);
+	bidx := BOX(path);
+	if(aidx >= naccounts || accounts[aidx] == nil)
+		return Enotfound;
+	a := accounts[aidx];
+	if(!a.connected || a.imap == nil)
+		return "not connected";
+	if(bidx >= a.nfolders || a.folders[bidx] == nil)
+		return Enotfound;
+	if(a.folders[bidx].name != a.currentbox)
+		return "box not selected (use /accounts/<n>/ctl select)";
+
+	cmd = stripnl(cmd);
+	(verb, rest) := splitfield(cmd);
+
+	case verb {
+	"search" =>
+		criteria := stripnl(rest);
+		if(criteria == "")
+			return "search: criteria required";
+		(seqs, serr) := a.imap->search(criteria);
+		if(serr != nil)
+			return "search: " + serr;
+		# Map seq → uid via the cached message list. Sequences not
+		# present in cache are skipped (the cache predates a possible
+		# server-side change since SELECT).
+		s := "";
+		for(l := seqs; l != nil; l = tl l) {
+			seq := hd l;
+			if(seq >= 1 && seq <= len a.msgs && a.msgs[seq - 1] != nil)
+				s += string a.msgs[seq - 1].msg.uid + "\n";
+		}
+		a.lastsearch = s;
+		return nil;
+
+	"archive" =>
+		uid := strtobig(stripnl(rest));
+		if(uid <= big 0)
+			return "archive: uid required";
+		return movemsg(a, uid, "Archive");
+
+	"move" =>
+		(uidstr, after) := splitfield(rest);
+		dest := stripnl(after);
+		if(uidstr == "" || dest == "")
+			return "move: usage: move <uid> <dest-box>";
+		uid := strtobig(uidstr);
+		if(uid <= big 0)
+			return "move: bad uid";
+		return movemsg(a, uid, dest);
+
+	* =>
+		return "unknown box-ctl verb (want: search|archive|move)";
+	}
+}
+
+# Copy + mark \Deleted. EXPUNGE is deferred — keeps Gmail-style
+# semantics where the message is still listable until purged.
+movemsg(a: ref Account, uid: big, dest: string): string
+{
+	m := findmsgbyuid(a, uid);
+	if(m == nil)
+		return "no such uid";
+	cerr := a.imap->copy(string m.msg.seq, dest);
+	if(cerr != nil)
+		return "copy: " + cerr;
+	serr := a.imap->store(m.msg.seq, Imap->FDELETED, 1);
+	if(serr != nil)
+		return "copy ok, store \\Deleted: " + serr;
+	# Update local flags so subsequent reads reflect the change.
+	m.msg.flags |= Imap->FDELETED;
+	vers++;
+	return nil;
+}
+
+# Write to <uid>/flags. Body is whitespace-separated flag tokens,
+# with optional leading + or - to mark add/remove. Bare flags replace
+# the message's flag set (add the listed, clear everything else).
+handleflagswrite(path: big, body: string): string
+{
+	aidx := ACCT(path);
+	bidx := BOX(path);
+	uid := UID(path);
+	if(aidx >= naccounts || accounts[aidx] == nil)
+		return Enotfound;
+	a := accounts[aidx];
+	if(!a.connected || a.imap == nil)
+		return "not connected";
+	if(bidx >= a.nfolders || a.folders[bidx] == nil)
+		return Enotfound;
+	if(a.folders[bidx].name != a.currentbox)
+		return "box not selected";
+	m := findmsgbyuid(a, uid);
+	if(m == nil)
+		return "no such uid";
+
+	(add, remove, replace, perr) := parseflagswrite(body);
+	if(perr != nil)
+		return perr;
+
+	if(replace != -1) {
+		# Compute add/remove diffs from current flags.
+		cur := m.msg.flags;
+		add = replace & ~cur;
+		remove = cur & ~replace;
+	}
+
+	if(add != 0) {
+		serr := a.imap->store(m.msg.seq, add, 1);
+		if(serr != nil)
+			return "store add: " + serr;
+		m.msg.flags |= add;
+	}
+	if(remove != 0) {
+		serr := a.imap->store(m.msg.seq, remove, 0);
+		if(serr != nil)
+			return "store remove: " + serr;
+		m.msg.flags &= ~remove;
+	}
+	vers++;
+	return nil;
+}
+
+# Parse "\Seen \Flagged" → (add, remove=-1, replace=...) replace mode,
+# or "+\Seen -\Flagged" → (add, remove, replace=-1) diff mode. Mixing
+# +/- with bare tokens is an error.
+parseflagswrite(s: string): (int, int, int, string)
+{
+	(nil, toks) := sys->tokenize(s, " \t\r\n");
+	if(toks == nil)
+		return (0, 0, 0, "no flags");
+
+	# Decide replace-vs-diff by the first token's leading sign.
+	first := hd toks;
+	diffmode := len first > 0 && (first[0] == '+' || first[0] == '-');
+
+	add := 0;
+	remove := 0;
+	replace := 0;
+	for(; toks != nil; toks = tl toks) {
+		t := hd toks;
+		if(len t == 0)
+			continue;
+		signed := t[0] == '+' || t[0] == '-';
+		if(diffmode != signed)
+			return (0, 0, 0, "mix of signed and bare flags");
+		bits := 0;
+		flagname := t;
+		if(signed)
+			flagname = t[1:];
+		case flagname {
+		"\\Seen" or "Seen" =>
+			bits = Imap->FSEEN;
+		"\\Answered" or "Answered" =>
+			bits = Imap->FANSWERED;
+		"\\Flagged" or "Flagged" =>
+			bits = Imap->FFLAGGED;
+		"\\Deleted" or "Deleted" =>
+			bits = Imap->FDELETED;
+		"\\Draft" or "Draft" =>
+			bits = Imap->FDRAFT;
+		* =>
+			return (0, 0, 0, "unknown flag: " + flagname);
+		}
+		if(signed) {
+			if(t[0] == '+')
+				add |= bits;
+			else
+				remove |= bits;
+		} else {
+			replace |= bits;
+		}
+	}
+	if(diffmode)
+		return (add, remove, -1, nil);
+	return (0, 0, replace, nil);
+}
+
 acctstatus(a: ref Account): string
 {
 	if(!a.connected)
@@ -1219,6 +1436,7 @@ doselect(a: ref Account, box: string): string
 	a.currentbox = mbox.name;
 	a.mbox = mbox;
 	a.msgs = nil;
+	a.lastsearch = "";
 	# Ensure the folder appears in the cached folder list. Servers
 	# sometimes report SELECTable mailboxes that LIST omitted.
 	if(findfolderidx(a, mbox.name) < 0)

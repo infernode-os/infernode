@@ -44,8 +44,8 @@ if [ ! -f "$ROOT/tmp/secstore_legacy/legacyuser/PAK" ]; then
     exit 1
 fi
 PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/tmp/secstore_legacy/legacyuser/PAK" 2>/dev/null || true)
-if [ "$PAKHDR" = "secstore2" ]; then
-    echo "FAIL: legacy account unexpectedly wrote secstore2 verifier"
+if [ "$PAKHDR" = "secstore2" ] || [ "$PAKHDR" = "secstore3" ]; then
+    echo "FAIL: legacy account unexpectedly wrote modern verifier"
     exit 1
 fi
 

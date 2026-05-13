@@ -8,13 +8,13 @@ implement SecstoreSetup;
 # current factotum keys into the new secstore account.
 #
 # Usage:
-#   auth/secstore-setup [-s storedir] [-u user] [-i] [-V secstore|secstore2]
+#   auth/secstore-setup [-s storedir] [-u user] [-i] [-V secstore|secstore2|secstore3]
 #
 # Options:
 #   -s storedir   secstore data directory (default: /usr/inferno/secstore)
 #   -u user       username (default: current user from /dev/user)
 #   -i            import current factotum keys into secstore
-#   -V version    PAK verifier version (default: secstore2)
+#   -V version    PAK verifier version (default: secstore3)
 #
 
 include "sys.m";
@@ -51,12 +51,12 @@ init(nil: ref Draw->Context, args: list of string)
 	user := readfile("/dev/user");
 	importkeys := 0;
 	pass: string;
-	version := "secstore2";
+	version := "secstore3";
 
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("auth/secstore-setup [-i] [-k password] [-s storedir] [-u user] [-V secstore|secstore2]");
+		arg->setusage("auth/secstore-setup [-i] [-k password] [-s storedir] [-u user] [-V secstore|secstore2|secstore3]");
 		while((o := arg->opt()) != 0)
 			case o {
 			'i' =>	importkeys = 1;
@@ -84,12 +84,12 @@ init(nil: ref Draw->Context, args: list of string)
 			fatal("passwords don't match");
 	}
 
-	if(version != "secstore" && version != "secstore2")
+	if(version != "secstore" && version != "secstore2" && version != "secstore3")
 		fatal("unsupported verifier version");
 
 	# Compute PAK verifier
 	pwhash := secstore->mkseckey(pass);
-	if(version == "secstore2"){
+	if(version != "secstore"){
 		secstore->erasekey(pwhash);
 		pwhash = secstore->mkseckey2(pass);
 	}

@@ -118,10 +118,10 @@ intentionally short.
   100 000 rounds of HMAC-SHA-256, then derive a fresh per-blob file key from
   random salt. This is stronger than the older fixed-salt `SGCM1` design, but
   still not a memory-hard KDF like scrypt or Argon2.
-- New secstore accounts now write a tagged `PAK` verifier in `secstore2`
-  format, using SHA-256 for the password hash and PAK transcript checks.
-  Legacy bare-hex `PAK` files still authenticate via fallback. The inherited
-  1024-bit Diffie-Hellman group is still in use for both versions.
+- New secstore accounts now write a tagged `PAK` verifier in `secstore3`
+  format, using SHA-256 for the password hash and PAK transcript checks on a
+  stronger 2048/256 subgroup set. `secstore2` and legacy bare-hex `PAK` files
+  still authenticate via fallback.
 - The `PAK` file contains the password verifier `Hi = H⁻¹ mod p` — a function
   of (username, password) but not the password itself.
 - The PAK exchange uses a 1024-bit prime; the first authentication of a session

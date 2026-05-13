@@ -97,8 +97,8 @@ check "secstore-setup creates account" "$OUTPUT" "setup complete"
 if [ -f "$ROOT/usr/inferno/secstore/testuser-seclogon/PAK" ]; then
     pass "PAK verifier file exists"
     PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/usr/inferno/secstore/testuser-seclogon/PAK" 2>/dev/null || true)
-    if [ "$PAKHDR" = "secstore2" ]; then
-        pass "PAK verifier uses secstore2 format"
+    if [ "$PAKHDR" = "secstore3" ]; then
+        pass "PAK verifier uses secstore3 format"
     else
         fail "PAK verifier format mismatch (got '$PAKHDR')"
     fi

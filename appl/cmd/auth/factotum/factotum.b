@@ -1665,14 +1665,14 @@ secstoresetup(): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	hexHi := secstore->mkverifier(secstoreuser, "secstore2", secstorepwhash2);
+	hexHi := secstore->mkverifier(secstoreuser, "secstore3", secstorepwhash2);
 
 	# Write PAK verifier
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte secstore->formatverifier("secstore2", hexHi);
+	b := array of byte secstore->formatverifier("secstore3", hexHi);
 	sys->write(fd, b, len b);
 	fd = nil;
 

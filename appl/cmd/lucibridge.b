@@ -540,6 +540,25 @@ initsession(): string
 		return "cannot create LLM session";
 	log("initsession: session " + sessionid);
 
+	# Apply model override from the task tool (INFR-55). Activity 0 inherits
+	# the system default; child activities may carry a /tmp/veltro/model.<id>
+	# file selecting a specific backend (e.g. daedalus for coder tasks).
+	if(actid > 0) {
+		modelname := agentlib->strip(agentlib->readfile(
+			sys->sprint("/tmp/veltro/model.%d", actid)));
+		if(modelname != "") {
+			mfd := sys->open("/n/llm/" + sessionid + "/model", Sys->OWRITE);
+			if(mfd != nil) {
+				mb := array of byte modelname;
+				sys->write(mfd, mb, len mb);
+				mfd = nil;
+				log("session model set to " + modelname);
+			} else {
+				log("session model write failed for " + modelname + ": %r");
+			}
+		}
+	}
+
 	# Build system prompt from namespace discovery
 	ns := agentlib->discovernamespace();
 	log("initsession: namespace discovered");
@@ -547,14 +566,23 @@ initsession(): string
 	log(sys->sprint("initsession: system prompt %d bytes", len array of byte sysprompt));
 
 	# Append role-specific suffix: meta prompt for activity 0 (main agent),
-	# task agent prompt for child activities (actid > 0)
+	# task agent prompt for child activities (actid > 0). The task tool may
+	# override the default task prompt by writing /tmp/veltro/agenttype.<id>
+	# (e.g. "coder" -> /lib/veltro/agents/coder.txt) — see INFR-55.
 	suffix := BRIDGE_SUFFIX;
 	if(actid == 0) {
 		meta := agentlib->readfile(META_PROMPT_PATH);
 		if(meta != nil)
 			suffix = "\n\n" + agentlib->strip(meta);
 	} else {
-		taskprompt := agentlib->readfile("/lib/veltro/agents/task.txt");
+		atype := agentlib->strip(agentlib->readfile(
+			sys->sprint("/tmp/veltro/agenttype.%d", actid)));
+		promptpath := "/lib/veltro/agents/task.txt";
+		if(atype != "" && safeagenttype(atype))
+			promptpath = "/lib/veltro/agents/" + atype + ".txt";
+		taskprompt := agentlib->readfile(promptpath);
+		if(taskprompt == nil && promptpath != "/lib/veltro/agents/task.txt")
+			taskprompt = agentlib->readfile("/lib/veltro/agents/task.txt");
 		if(taskprompt != nil)
 			suffix = "\n\n" + agentlib->strip(taskprompt);
 	}
@@ -1863,4 +1891,19 @@ init(nil: ref Draw->Context, args: list of string)
 		# Run agent turn
 		agentturn(human);
 	}
+}
+
+# Guard against path traversal in /tmp/veltro/agenttype.<id> contents. The
+# agenttype is used unsanitised as a path component when opening the prompt
+# file, so we restrict it to bare lowercase identifiers.
+safeagenttype(t: string): int
+{
+	if(t == "" || len t > 32)
+		return 0;
+	for(i := 0; i < len t; i++) {
+		c := t[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return 0;
+	}
+	return 1;
 }

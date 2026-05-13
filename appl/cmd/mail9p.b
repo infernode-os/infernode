@@ -68,6 +68,9 @@ include "smtp.m";
 
 include "factotum.m";
 
+include "mailparse.m";
+	mailparse: Mailparse;
+
 Mail9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
@@ -246,6 +249,10 @@ init(nil: ref Draw->Context, args: list of string)
 
 	str = load String String->PATH;
 	if(str == nil) nomod(String->PATH);
+
+	mailparse = load Mailparse Mailparse->PATH;
+	if(mailparse == nil) nomod(Mailparse->PATH);
+	mailparse->init();
 
 	arg := load Arg Arg->PATH;
 	if(arg == nil) nomod(Arg->PATH);
@@ -568,7 +575,7 @@ navigator(navops: chan of ref Navop)
 						n.reply <-= (nil, Enotfound);
 						continue;
 					}
-					uid := strtobig(n.name);
+					uid := mailparse->strtobig(n.name);
 					if(uid <= big 0 || !uidpresent(a, uid)) {
 						n.reply <-= (nil, Enotfound);
 						continue;
@@ -1275,7 +1282,7 @@ handleboxctl(path: big, cmd: string): string
 		return nil;
 
 	"archive" =>
-		uid := strtobig(stripnl(rest));
+		uid := mailparse->strtobig(stripnl(rest));
 		if(uid <= big 0)
 			return "archive: uid required";
 		return movemsg(a, uid, "Archive");
@@ -1285,7 +1292,7 @@ handleboxctl(path: big, cmd: string): string
 		dest := stripnl(after);
 		if(uidstr == "" || dest == "")
 			return "move: usage: move <uid> <dest-box>";
-		uid := strtobig(uidstr);
+		uid := mailparse->strtobig(uidstr);
 		if(uid <= big 0)
 			return "move: bad uid";
 		return movemsg(a, uid, dest);
@@ -1335,7 +1342,7 @@ handleflagswrite(path: big, body: string): string
 	if(m == nil)
 		return "no such uid";
 
-	(add, remove, replace, perr) := parseflagswrite(body);
+	(add, remove, replace, perr) := mailparse->parseflagswrite(body);
 	if(perr != nil)
 		return perr;
 
@@ -1362,60 +1369,8 @@ handleflagswrite(path: big, body: string): string
 	return nil;
 }
 
-# Parse "\Seen \Flagged" → (add, remove=-1, replace=...) replace mode,
-# or "+\Seen -\Flagged" → (add, remove, replace=-1) diff mode. Mixing
-# +/- with bare tokens is an error.
-parseflagswrite(s: string): (int, int, int, string)
-{
-	(nil, toks) := sys->tokenize(s, " \t\r\n");
-	if(toks == nil)
-		return (0, 0, 0, "no flags");
-
-	# Decide replace-vs-diff by the first token's leading sign.
-	first := hd toks;
-	diffmode := len first > 0 && (first[0] == '+' || first[0] == '-');
-
-	add := 0;
-	remove := 0;
-	replace := 0;
-	for(; toks != nil; toks = tl toks) {
-		t := hd toks;
-		if(len t == 0)
-			continue;
-		signed := t[0] == '+' || t[0] == '-';
-		if(diffmode != signed)
-			return (0, 0, 0, "mix of signed and bare flags");
-		bits := 0;
-		flagname := t;
-		if(signed)
-			flagname = t[1:];
-		case flagname {
-		"\\Seen" or "Seen" =>
-			bits = Imap->FSEEN;
-		"\\Answered" or "Answered" =>
-			bits = Imap->FANSWERED;
-		"\\Flagged" or "Flagged" =>
-			bits = Imap->FFLAGGED;
-		"\\Deleted" or "Deleted" =>
-			bits = Imap->FDELETED;
-		"\\Draft" or "Draft" =>
-			bits = Imap->FDRAFT;
-		* =>
-			return (0, 0, 0, "unknown flag: " + flagname);
-		}
-		if(signed) {
-			if(t[0] == '+')
-				add |= bits;
-			else
-				remove |= bits;
-		} else {
-			replace |= bits;
-		}
-	}
-	if(diffmode)
-		return (add, remove, -1, nil);
-	return (0, 0, replace, nil);
-}
+# Flag parser lives in mailparse so tests can exercise it without
+# spinning up a mail9p instance.
 
 #
 # SMTP send paths.
@@ -1496,18 +1451,18 @@ handledraftreply(path: big, body: string): string
 	# wrote may already include its own headers; if so, leave it
 	# alone (the consumer knows what they're doing).
 	hdrs := "";
-	if(!hasheaderfield(body, "Subject:"))
+	if(!mailparse->hasheaderfield(body, "Subject:"))
 		hdrs += "Subject: " + subj + "\r\n";
-	if(!hasheaderfield(body, "To:"))
+	if(!mailparse->hasheaderfield(body, "To:"))
 		hdrs += "To: " + rcpt + "\r\n";
-	if(env.messageid != "" && !hasheaderfield(body, "In-Reply-To:"))
+	if(env.messageid != "" && !mailparse->hasheaderfield(body, "In-Reply-To:"))
 		hdrs += "In-Reply-To: " + env.messageid + "\r\n";
-	if(env.messageid != "" && !hasheaderfield(body, "References:"))
+	if(env.messageid != "" && !mailparse->hasheaderfield(body, "References:"))
 		hdrs += "References: " + env.messageid + "\r\n";
 
 	final := hdrs + body;
 	# Ensure header/body separator if the caller wrote only a body.
-	if(!bodyhasblankline(final))
+	if(!mailparse->bodyhasblankline(final))
 		final = hdrs + "\r\n" + body;
 
 	err := smtpsend(a, final, rcpt :: nil);
@@ -1520,43 +1475,7 @@ handledraftreply(path: big, body: string): string
 	return nil;
 }
 
-# True if `body` contains a header line starting with `field` (case
-# insensitive, only checking the leading part of each header line up
-# to the first blank-line separator).
-hasheaderfield(body, field: string): int
-{
-	fl := str->tolower(field);
-	# Walk header lines only.
-	i := 0;
-	for(start := 0; start < len body; ) {
-		# Find end of line.
-		i = start;
-		while(i < len body && body[i] != '\n')
-			i++;
-		line := body[start:i];
-		if(len line > 0 && line[len line - 1] == '\r')
-			line = line[0:len line - 1];
-		if(line == "")
-			return 0;	# header section ended
-		if(len line >= len field && str->tolower(line[0:len field]) == fl)
-			return 1;
-		start = i + 1;
-	}
-	return 0;
-}
-
-# True if body contains a blank line (the RFC822 header/body separator).
-bodyhasblankline(body: string): int
-{
-	for(i := 0; i + 1 < len body; i++) {
-		if(body[i] == '\n' && body[i+1] == '\n')
-			return 1;
-		if(i + 3 < len body && body[i] == '\r' && body[i+1] == '\n' &&
-		   body[i+2] == '\r' && body[i+3] == '\n')
-			return 1;
-	}
-	return 0;
-}
+# Header-presence and body/blank-line predicates live in mailparse.
 
 # Open SMTP, authenticate via factotum creds, send, close. Recipients
 # (`recips`, nil to extract from To:/Cc: headers in body) and the From:
@@ -1580,11 +1499,11 @@ smtpsend(a: ref Account, msg: string, recips: list of string): string
 	if(ok < 0)
 		return "smtp authopen: " + oerr;
 
-	from := extractheader(msg, "From:");
+	from := mailparse->extractheader(msg, "From:");
 	if(from == "")
 		from = u;
 	if(recips == nil)
-		recips = parseaddrlist(extractheader(msg, "To:"));
+		recips = mailparse->parseaddrlist(mailparse->extractheader(msg, "To:"));
 
 	# sendmail expects each list element to be a logical line block.
 	# Pass the whole message as one block; the lib splits on \n.
@@ -1595,82 +1514,7 @@ smtpsend(a: ref Account, msg: string, recips: list of string): string
 	return nil;
 }
 
-# Extract the first header field value (trimmed) from an RFC822 message.
-extractheader(body, field: string): string
-{
-	fl := str->tolower(field);
-	start := 0;
-	for(i := 0; i < len body; ) {
-		# Find end of line.
-		i = start;
-		while(i < len body && body[i] != '\n')
-			i++;
-		line := body[start:i];
-		if(len line > 0 && line[len line - 1] == '\r')
-			line = line[0:len line - 1];
-		if(line == "")
-			return "";	# end of headers
-		if(len line >= len field && str->tolower(line[0:len field]) == fl) {
-			v := line[len field:];
-			# trim leading whitespace
-			j := 0;
-			while(j < len v && (v[j] == ' ' || v[j] == '\t'))
-				j++;
-			return v[j:];
-		}
-		start = i + 1;
-	}
-	return "";
-}
-
-# Split a comma-separated address list. v1: assumes each comma is a
-# separator (no quoted commas inside display names). Good enough for
-# tool-driven sends.
-parseaddrlist(s: string): list of string
-{
-	out: list of string;
-	start := 0;
-	for(i := 0; i < len s; i++) {
-		if(s[i] == ',') {
-			a := str->splitstrl(s[start:i], "<");
-			# either "addr@dom" or "Name <addr@dom>"
-			out = trimaddr(s[start:i]) :: out;
-			start = i + 1;
-			a = a;
-		}
-	}
-	if(start < len s)
-		out = trimaddr(s[start:]) :: out;
-	# Reverse
-	rev: list of string;
-	for(; out != nil; out = tl out)
-		rev = hd out :: rev;
-	return rev;
-}
-
-# Extract `addr@dom` from `Name <addr@dom>` or `addr@dom`, trimming
-# surrounding whitespace.
-trimaddr(s: string): string
-{
-	# Trim whitespace.
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t'))
-		j--;
-	s = s[i:j];
-	# If there's a `<...>`, pull out the inside.
-	lt := -1;
-	gt := -1;
-	for(k := 0; k < len s; k++) {
-		if(s[k] == '<') lt = k;
-		else if(s[k] == '>') gt = k;
-	}
-	if(lt >= 0 && gt > lt)
-		return s[lt+1:gt];
-	return s;
-}
+# Header extraction and address-list parsing live in mailparse.
 
 acctstatus(a: ref Account): string
 {
@@ -1785,44 +1629,14 @@ ensurebody(a: ref Account, m: ref MsgCache): string
 	if(ferr != nil)
 		return ferr;
 	m.raw = raw;
-	m.body = splitbody(raw);
+	m.body = mailparse->splitbody(raw);
 	m.bodyset = 1;
 	return nil;
-}
-
-# Return the section of an RFC822 message after the first blank line
-# (header / body separator). Handles both CRLF and LF terminators.
-splitbody(raw: string): string
-{
-	for(i := 0; i + 1 < len raw; i++) {
-		if(raw[i] == '\n' && raw[i+1] == '\n')
-			return raw[i+2:];
-		if(i + 3 < len raw && raw[i] == '\r' && raw[i+1] == '\n' &&
-		   raw[i+2] == '\r' && raw[i+3] == '\n')
-			return raw[i+4:];
-	}
-	return "";
 }
 
 uidpresent(a: ref Account, uid: big): int
 {
 	return findmsgbyuid(a, uid) != nil;
-}
-
-# Parse a base-10 unsigned integer string into big. Returns big -1 if
-# the string is empty or contains non-digits.
-strtobig(s: string): big
-{
-	if(len s == 0)
-		return big -1;
-	v := big 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c < '0' || c > '9')
-			return big -1;
-		v = v * big 10 + big (c - '0');
-	}
-	return v;
 }
 
 #

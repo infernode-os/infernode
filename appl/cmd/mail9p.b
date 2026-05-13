@@ -89,14 +89,82 @@ Qboxesdir:  con 5;	# /accounts/<name>/boxes
 Qboxdir:    con 6;	# /accounts/<name>/boxes/<box>
 Qboxctl:    con 7;	# /accounts/<name>/boxes/<box>/ctl
 Qmsgdir:    con 8;	# /accounts/<name>/boxes/<box>/<uid>
-# Per-message field files (Chunk C) start at 16 and below the 0x10
-# space we leave room for any additional directory types.
+
+# Per-message field files start at 16. They share the qid encoding
+# with their parent Qmsgdir (account / box / uid all populated).
+Qfrom:      con 16;
+Qto:        con 17;
+Qcc:        con 18;
+Qsubject:   con 19;
+Qdate:      con 20;
+Qflags:     con 21;
+Qbody:      con 22;
+Qbodyhtml:  con 23;
+Qraw:       con 24;
+Qdraftreply:con 25;	# write-only; SMTP send wired in Chunk E
+
+# Order matches what the message directory exposes via Readdir.
+# Initialised in init() because Limbo `con` cannot bind array literals.
+msgfields: array of int;
+
+msgfieldname(ft: int): string
+{
+	case ft {
+	Qfrom =>     return "from";
+	Qto =>       return "to";
+	Qcc =>       return "cc";
+	Qsubject =>  return "subject";
+	Qdate =>     return "date";
+	Qflags =>    return "flags";
+	Qbody =>     return "body";
+	Qbodyhtml => return "body.html";
+	Qraw =>      return "raw";
+	Qdraftreply => return "draft-reply";
+	}
+	return "";
+}
+
+msgfieldperm(ft: int): int
+{
+	case ft {
+	Qflags =>      return 8r666;	# writable in Chunk D
+	Qdraftreply => return 8r222;	# write-only (Chunk E)
+	}
+	return 8r444;
+}
+
+msgfieldfromname(s: string): int
+{
+	case s {
+	"from" =>        return Qfrom;
+	"to" =>          return Qto;
+	"cc" =>          return Qcc;
+	"subject" =>     return Qsubject;
+	"date" =>        return Qdate;
+	"flags" =>       return Qflags;
+	"body" =>        return Qbody;
+	"body.html" =>   return Qbodyhtml;
+	"raw" =>         return Qraw;
+	"draft-reply" => return Qdraftreply;
+	}
+	return -1;
+}
 
 # A folder is stable identified by its index into Account.folders.
 # Folders that disappear on sync get the .name cleared but their slot
 # is never reused, keeping qid paths stable for the process lifetime.
 Folder: adt {
 	name:     string;	# empty if folder no longer exists
+};
+
+# Per-message wrapper. Envelope + flags + sequence come from the
+# msglist FETCH at select time; body/raw are lazy-fetched on first
+# read and then cached for the lifetime of the box selection.
+MsgCache: adt {
+	msg:     ref Imap->Msg;
+	bodyset: int;
+	raw:     string;	# full RFC822 (headers + blank + body)
+	body:    string;	# section after first blank line
 };
 
 # Per-account IMAP state. Each account loads its own Imap module
@@ -122,11 +190,11 @@ Account: adt {
 	currentbox: string;
 	# Mailbox state from the last SELECT.
 	mbox:      ref Imap->Mailbox;
-	# Cached message list for currentbox, in IMAP sequence order.
+	# Cached message wrappers for currentbox, in IMAP sequence order.
 	# Indexed in the array by (seq - 1). nil before first fetch.
 	# UID-to-seq lookup is linear; v1 mailboxes are bounded by the
 	# IMAP server's FETCH window so this is fine.
-	msgs:      array of ref Imap->Msg;
+	msgs:      array of ref MsgCache;
 };
 
 stderr: ref Sys->FD;
@@ -186,6 +254,11 @@ init(nil: ref Draw->Context, args: list of string)
 	accounts = array[8] of ref Account;
 	naccounts = 0;
 	vers = 0;
+
+	msgfields = array[] of {
+		Qfrom, Qto, Qcc, Qsubject, Qdate, Qflags,
+		Qbody, Qbodyhtml, Qraw, Qdraftreply,
+	};
 
 	sys->pctl(Sys->FORKFD, nil);
 
@@ -492,6 +565,24 @@ navigator(navops: chan of ref Navop)
 					n.reply <-= dirgen(n.path);
 				}
 
+			Qmsgdir =>
+				aidx := ACCT(n.path);
+				bidx := BOX(n.path);
+				uid := UID(n.path);
+				case n.name {
+				".." =>
+					n.path = mkboxdir(aidx, bidx);
+					n.reply <-= dirgen(n.path);
+				* =>
+					ftnext := msgfieldfromname(n.name);
+					if(ftnext < 0) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = MKPATH(ftnext, aidx, bidx, uid);
+					n.reply <-= dirgen(n.path);
+				}
+
 			* =>
 				# Files are not directories. Only ".." is meaningful.
 				case n.name {
@@ -503,6 +594,9 @@ navigator(navops: chan of ref Navop)
 						n.path = mkacctdir(ACCT(n.path));
 					Qboxctl =>
 						n.path = mkboxdir(ACCT(n.path), BOX(n.path));
+					Qfrom or Qto or Qcc or Qsubject or Qdate or
+					Qflags or Qbody or Qbodyhtml or Qraw or Qdraftreply =>
+						n.path = mkmsgdir(ACCT(n.path), BOX(n.path), UID(n.path));
 					* =>
 						n.path = PROOT;
 					}
@@ -570,13 +664,24 @@ navigator(navops: chan of ref Navop)
 						msgs := a.msgs;
 						for(i := 0; i < len msgs; i++)
 							if(msgs[i] != nil)
-								entries = mkmsgdir(aidx, bidx, big msgs[i].uid) :: entries;
+								entries = mkmsgdir(aidx, bidx, big msgs[i].msg.uid) :: entries;
 					}
 				}
 				rev3: list of big;
 				for(; entries != nil; entries = tl entries)
 					rev3 = hd entries :: rev3;
 				entries = rev3;
+
+			Qmsgdir =>
+				aidx := ACCT(m.path);
+				bidx := BOX(m.path);
+				uid := UID(m.path);
+				for(i := 0; i < len msgfields; i++)
+					entries = MKPATH(msgfields[i], aidx, bidx, uid) :: entries;
+				rev4: list of big;
+				for(; entries != nil; entries = tl entries)
+					rev4 = hd entries :: rev4;
+				entries = rev4;
 
 			* =>
 				entries = nil;
@@ -696,6 +801,21 @@ dirgen(path: big): (ref Sys->Dir, string)
 		return (mkdir(Sys->Qid(path, vers, Sys->QTDIR),
 			string uid, 8r555), nil);
 
+	Qfrom or Qto or Qcc or Qsubject or Qdate or Qflags or
+	Qbody or Qbodyhtml or Qraw or Qdraftreply =>
+		aidx := ACCT(path);
+		bidx := BOX(path);
+		uid := UID(path);
+		if(aidx >= naccounts || accounts[aidx] == nil)
+			return (nil, Enotfound);
+		a := accounts[aidx];
+		if(bidx >= a.nfolders || a.folders[bidx] == nil)
+			return (nil, Enotfound);
+		if(a.folders[bidx].name != a.currentbox || !uidpresent(a, uid))
+			return (nil, Enotfound);
+		return (mkdir(Sys->Qid(path, vers, Sys->QTFILE),
+			msgfieldname(ft), msgfieldperm(ft)), nil);
+
 	* =>
 		return (nil, Enotfound);
 	}
@@ -776,6 +896,18 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 
 			Qboxctl =>
 				# Write-only for now (Chunk D adds search/archive/move).
+				srv.reply(styxservers->readbytes(gm, nil));
+
+			Qfrom or Qto or Qcc or Qsubject or Qdate or Qflags or
+			Qbody or Qbodyhtml or Qraw =>
+				(data, derr) := readmsgfield(c.path, ft);
+				if(derr != nil)
+					srv.reply(ref Rmsg.Error(gm.tag, derr));
+				else
+					srv.reply(styxservers->readbytes(gm, data));
+
+			Qdraftreply =>
+				# Write-only; reads return empty.
 				srv.reply(styxservers->readbytes(gm, nil));
 
 			* =>
@@ -956,6 +1088,83 @@ dosync(a: ref Account): string
 	return nil;
 }
 
+# Read one of the per-message field files. Returns (data, errstring);
+# err is non-nil iff the read should error out (e.g. body fetch failed).
+readmsgfield(path: big, ft: int): (array of byte, string)
+{
+	aidx := ACCT(path);
+	bidx := BOX(path);
+	uid := UID(path);
+	if(aidx >= naccounts || accounts[aidx] == nil)
+		return (nil, Enotfound);
+	a := accounts[aidx];
+	if(bidx >= a.nfolders || a.folders[bidx] == nil)
+		return (nil, Enotfound);
+	if(a.folders[bidx].name != a.currentbox)
+		return (nil, Enotfound);
+	m := findmsgbyuid(a, uid);
+	if(m == nil)
+		return (nil, Enotfound);
+	env := m.msg.envelope;
+
+	case ft {
+	Qfrom =>
+		return (lineof(envstr(env, Qfrom)), nil);
+	Qto =>
+		return (lineof(envstr(env, Qto)), nil);
+	Qcc =>
+		return (lineof(envstr(env, Qcc)), nil);
+	Qsubject =>
+		return (lineof(envstr(env, Qsubject)), nil);
+	Qdate =>
+		return (lineof(envstr(env, Qdate)), nil);
+	Qflags =>
+		# Imap->flagstostring formats as e.g. "\\Seen \\Flagged".
+		return (lineof(a.imap->flagstostring(m.msg.flags)), nil);
+	Qbody =>
+		berr := ensurebody(a, m);
+		if(berr != nil)
+			return (nil, "fetch: " + berr);
+		return (array of byte m.body, nil);
+	Qbodyhtml =>
+		# MIME parsing is out of scope for v1. Surface raw if the
+		# consumer wants HTML; document the limitation.
+		return (nil, nil);
+	Qraw =>
+		rerr := ensurebody(a, m);
+		if(rerr != nil)
+			return (nil, "fetch: " + rerr);
+		return (array of byte m.raw, nil);
+	}
+	return (nil, Enotfound);
+}
+
+# Convenience: extract one field from an Envelope by Qid type.
+envstr(env: ref Imap->Envelope, ft: int): string
+{
+	if(env == nil)
+		return "";
+	case ft {
+	Qfrom =>    return env.sender;
+	Qto =>      return env.recipient;
+	Qcc =>      return env.cc;
+	Qsubject => return env.subject;
+	Qdate =>    return env.date;
+	}
+	return "";
+}
+
+# Append a trailing newline to a string and return as bytes, unless
+# the string already ends in one.
+lineof(s: string): array of byte
+{
+	if(len s == 0)
+		return array of byte "\n";
+	if(s[len s - 1] == '\n')
+		return array of byte s;
+	return array of byte (s + "\n");
+}
+
 acctstatus(a: ref Account): string
 {
 	if(!a.connected)
@@ -1032,30 +1241,59 @@ findfolderidx(a: ref Account, name: string): int
 	return i;
 }
 
-msglisttoarray(l: list of ref Imap->Msg, total: int): array of ref Imap->Msg
+msglisttoarray(l: list of ref Imap->Msg, total: int): array of ref MsgCache
 {
 	# Build an array large enough to index by (seq-1). Slots not
 	# present in the fetch result remain nil and are skipped during
 	# directory enumeration.
-	a := array[total] of ref Imap->Msg;
+	a := array[total] of ref MsgCache;
 	for(p := l; p != nil; p = tl p) {
 		m := hd p;
 		if(m != nil && m.seq >= 1 && m.seq <= total)
-			a[m.seq - 1] = m;
+			a[m.seq - 1] = ref MsgCache(m, 0, "", "");
 	}
 	return a;
 }
 
 # Linear UID lookup over the cached message list. Returns nil if absent.
-findmsgbyuid(a: ref Account, uid: big): ref Imap->Msg
+findmsgbyuid(a: ref Account, uid: big): ref MsgCache
 {
 	if(a.msgs == nil)
 		return nil;
 	u := int uid;
 	for(i := 0; i < len a.msgs; i++)
-		if(a.msgs[i] != nil && a.msgs[i].uid == u)
+		if(a.msgs[i] != nil && a.msgs[i].msg.uid == u)
 			return a.msgs[i];
 	return nil;
+}
+
+# Lazily fetch the full RFC822 message body and cache it on m. Returns
+# any IMAP error from the FETCH. Idempotent: subsequent calls noop.
+ensurebody(a: ref Account, m: ref MsgCache): string
+{
+	if(m.bodyset)
+		return nil;
+	(raw, ferr) := a.imap->fetch(m.msg.seq);
+	if(ferr != nil)
+		return ferr;
+	m.raw = raw;
+	m.body = splitbody(raw);
+	m.bodyset = 1;
+	return nil;
+}
+
+# Return the section of an RFC822 message after the first blank line
+# (header / body separator). Handles both CRLF and LF terminators.
+splitbody(raw: string): string
+{
+	for(i := 0; i + 1 < len raw; i++) {
+		if(raw[i] == '\n' && raw[i+1] == '\n')
+			return raw[i+2:];
+		if(i + 3 < len raw && raw[i] == '\r' && raw[i+1] == '\n' &&
+		   raw[i+2] == '\r' && raw[i+3] == '\n')
+			return raw[i+4:];
+	}
+	return "";
 }
 
 uidpresent(a: ref Account, uid: big): int

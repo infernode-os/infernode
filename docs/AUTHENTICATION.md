@@ -69,7 +69,7 @@ The full table is in §8. Up front:
 flowchart TB
     pw([password]) -- "longhash · r mod p" --> H["H = H(user, password)"]
     H -- "H⁻¹ mod p" --> Hi["Hi (PAK verifier)"]
-    pw -- "10 000 × HMAC-SHA-256<br/>salt = secstore filekey" --> Fk["filekey<br/>(AES-256-GCM)"]
+    pw -- "100 000 × HMAC-SHA-256<br/>salt = \"secstore filekey seed:\" + user" --> Fk["root key<br/>(SGCM2 writes)"]
     pw -- "SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
 
     Hi --> diskpak[("&lt;user&gt;/PAK on disk")]
@@ -224,17 +224,23 @@ key proto=pass service=ssh user=alice !password=...
 key proto=pass service=wallet-eth-default user=alice !password=0x...
 ```
 
-Two on-disk formats coexist (auto-detected on read by `secstore.b:decrypt2`):
+Three on-disk formats coexist (auto-detected on read by `secstore.b:decrypt3`):
 
 ```mermaid
 flowchart TB
-    blob[("&lt;user&gt;/factotum bytes")] --> magic{"first 6 bytes<br/>== SGCM1\n ?"}
-    magic -- yes --> modern["Modern format (writes use this)"]
-    magic -- no --> legacy["Legacy format (read-only fallback)"]
+    blob[("&lt;user&gt;/factotum bytes")] --> magic{"first 6 bytes"}
+    magic -- "SGCM2\n" --> modern["Current format (writes use this)"]
+    magic -- "SGCM1\n" --> compat["Previous GCM format (read-compatible)"]
+    magic -- other --> legacy["Legacy CBC fallback (read-compatible)"]
 
-    subgraph modernfmt["Modern (AES-256-GCM)"]
+    subgraph modernfmt["Current (AES-256-GCM, SGCM2)"]
         direction LR
-        m1["SGCM1\n<br/>(6 B magic)"] --> m2["nonce<br/>(12 B)"] --> m3["ciphertext<br/>(N B)"] --> m4["GCM tag<br/>(16 B)"]
+        m1["SGCM2\n<br/>(6 B magic)"] --> m2["blob salt<br/>(16 B)"] --> m3["nonce<br/>(12 B)"] --> m4["ciphertext<br/>(N B)"] --> m5["GCM tag<br/>(16 B)"]
+    end
+
+    subgraph compatfmt["Older GCM (AES-256-GCM, SGCM1)"]
+        direction LR
+        c1["SGCM1\n<br/>(6 B magic)"] --> c2["nonce<br/>(12 B)"] --> c3["ciphertext<br/>(N B)"] --> c4["GCM tag<br/>(16 B)"]
     end
 
     subgraph legacyfmt["Legacy (AES-128-CBC, no MAC)"]
@@ -243,33 +249,34 @@ flowchart TB
     end
 
     modern -.--> modernfmt
+    compat -.--> compatfmt
     legacy -.--> legacyfmt
 
     classDef good fill:#dcfce7,stroke:#15803d
     classDef bad fill:#fecaca,stroke:#b91c1c
-    class modernfmt good
+    class modernfmt,compatfmt good
     class legacyfmt bad
 ```
 
 | Format          | Magic        | Cipher         | KDF                                                  | Integrity        |
 |-----------------|--------------|----------------|------------------------------------------------------|------------------|
-| **Modern**      | `SGCM1\n`    | AES-256-GCM    | 10 000 rounds HMAC-SHA-256, salt `"secstore filekey"`| GCM tag (16 B), AAD = magic |
+| **Current**     | `SGCM2\n`    | AES-256-GCM    | 100 000 rounds HMAC-SHA-256 for a user-scoped root key, plus per-blob random salt-derived file key | GCM tag (16 B), AAD = magic + blob salt |
+| Compatible read | `SGCM1\n`    | AES-256-GCM    | 10 000 rounds HMAC-SHA-256, salt `"secstore filekey"` | GCM tag (16 B), AAD = magic |
 | Legacy (read-only) | none      | AES-128-CBC    | `SHA1("aescbc file" ‖ password)` truncated to 16 B   | trailing constant `"XXXXXXXXXXXXXXXX"` (no MAC) |
 
-All new writes use the modern format. The legacy format is kept solely so an
-upgraded client can still read files written by older clients before the
-transition; **do not deploy fresh installs that produce legacy files**.
+All new writes use `SGCM2`. `SGCM1` is kept so upgraded clients can still read
+files written by the earlier InferNode GCM implementation, and the CBC format
+remains only as a legacy fallback for older clients.
 
 #### KDF caveats
 
-- 10 000 rounds of HMAC-SHA-256 with a constant salt is *not* PBKDF2, scrypt or
-  Argon2. It is fast enough that an offline attacker with the encrypted blob can
-  brute-force weak passwords. The strength of secstore-at-rest is therefore
-  dominated by password entropy. Pick a strong password and rotate if it leaks.
-- The salt is constant across users (`"secstore filekey"`), so the KDF output is
-  not user-distinct beyond the password itself. An attacker who steals two users'
-  blobs cannot share a precomputed table because the key is per-password — but
-  rainbow tables across users are no harder to build than for one.
+- `SGCM2` removes the constant-salt weakness from new writes by deriving a
+  user-scoped root key and then a fresh per-blob file key from random salt.
+- Even so, this is still CPU-hard HMAC-SHA-256 rather than a memory-hard KDF
+  like scrypt or Argon2. Offline guessing remains bounded mainly by password
+  entropy. Pick a strong password and rotate if it leaks.
+- `SGCM1` and legacy CBC remain readable for compatibility, so an attacker who
+  steals an old blob still gets only the older KDF work factor for that file.
 
 ### 4.2 The `PAK` file
 
@@ -316,7 +323,7 @@ sequenceDiagram
         activate F
         F->>SS: PAK + GET factotum
         SS-->>F: encrypted blob
-        F->>F: decrypt2, parse, hold keys
+        F->>F: decrypt3, parse, hold keys
         F->>F: spawn persist()
     else no (interactive)
         E->>F: auth/factotum (empty)

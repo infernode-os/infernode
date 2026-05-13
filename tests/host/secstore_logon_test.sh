@@ -127,6 +127,12 @@ check "key stored in factotum" "$OUTPUT" "service=test-regression"
 # Verify secstore has the encrypted factotum file
 if [ -f "$ROOT/usr/inferno/secstore/testuser-seclogon/factotum" ]; then
     pass "secstore factotum file exists (keys persisted)"
+    HDR=$(LC_ALL=C dd if="$ROOT/usr/inferno/secstore/testuser-seclogon/factotum" bs=1 count=6 2>/dev/null || true)
+    if [ "$HDR" = "SGCM2" ] || [ "$HDR" = "SGCM2\n" ]; then
+        pass "secstore factotum blob uses SGCM2 format"
+    else
+        fail "secstore factotum blob header mismatch (got '$HDR')"
+    fi
 else
     fail "secstore factotum file missing (keys not persisted)"
 fi

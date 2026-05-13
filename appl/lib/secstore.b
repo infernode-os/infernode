@@ -354,10 +354,13 @@ encrypt(file: array of byte, key: array of byte): array of byte
 
 # ── Modern crypto (AES-256-GCM, HMAC-SHA256 key derivation) ──
 
-SGCM_MAGIC: con "SGCM1\n";
+SGCM1_MAGIC: con "SGCM1\n";
+SGCM2_MAGIC: con "SGCM2\n";
 SGCM_NONCE_LEN: con 12;
 SGCM_TAG_LEN: con 16;
-SGCM_KDF_ROUNDS: con 10000;
+SGCM1_KDF_ROUNDS: con 10000;
+SGCM3_ROOT_ROUNDS: con 100000;
+SGCM3_SALT_LEN: con 16;
 
 #
 # Derive a 32-byte AES-256 key from a password using iterated HMAC-SHA256.
@@ -372,7 +375,7 @@ mkfilekey2(s: string): array of byte
 	kr->hmac_sha256(salt, len salt, pass, key, nil);
 
 	# Iterate
-	for(i := 1; i < SGCM_KDF_ROUNDS; i++){
+	for(i := 1; i < SGCM1_KDF_ROUNDS; i++){
 		prev := array[Keyring->SHA256dlen] of byte;
 		prev[0:] = key;
 		kr->hmac_sha256(prev, len prev, pass, key, nil);
@@ -383,13 +386,60 @@ mkfilekey2(s: string): array of byte
 }
 
 #
-# Encrypt with AES-256-GCM.
-# Output format: "SGCM1\n" + 12-byte nonce + ciphertext + 16-byte GCM tag
-# AAD is the magic header for domain separation.
+# Derive a stronger secstore root key from (user, password).
+# This is used for SGCM2 blobs: the root key is user-scoped and expensive to
+# guess, and each blob derives its actual AES key from a fresh random salt.
+#
+mkfilekey3(user, s: string): array of byte
+{
+	pass := array of byte s;
+	salt := array of byte "secstore filekey seed:";
+	u := array of byte user;
+	data := array[len salt + len u] of byte;
+	data[0:] = salt;
+	data[len salt:] = u;
+	key := array[Keyring->SHA256dlen] of byte;
+
+	kr->hmac_sha256(data, len data, pass, key, nil);
+	for(i := 1; i < SGCM3_ROOT_ROUNDS; i++){
+		prev := array[Keyring->SHA256dlen] of byte;
+		prev[0:] = key;
+		kr->hmac_sha256(prev, len prev, pass, key, nil);
+	}
+
+	erasekey(pass);
+	erasekey(data);
+	return key;
+}
+
+mkblobkey3(rootkey, salt: array of byte): array of byte
+{
+	label := array of byte "secstore file";
+	data := array[len label + len salt] of byte;
+	data[0:] = label;
+	data[len label:] = salt;
+	key := array[Keyring->SHA256dlen] of byte;
+	kr->hmac_sha256(data, len data, rootkey, key, nil);
+	erasekey(data);
+	return key;
+}
+
+mkaddaad(magic, salt: array of byte): array of byte
+{
+	aad := array[len magic + len salt] of byte;
+	aad[0:] = magic;
+	aad[len magic:] = salt;
+	return aad;
+}
+
+#
+# Encrypt with AES-256-GCM using the older SGCM1 format.
+# Output format: "SGCM1\n" + 12-byte nonce + ciphertext + 16-byte GCM tag.
+# Kept for compatibility; new callers should prefer encrypt3.
 #
 encrypt2(file: array of byte, key: array of byte): array of byte
 {
-	magic := array of byte SGCM_MAGIC;
+	magic := array of byte SGCM1_MAGIC;
 
 	# Generate random nonce using host CSPRNG
 	nonce := random->randombuf(random->ReallyRandom, SGCM_NONCE_LEN);
@@ -424,14 +474,62 @@ encrypt2(file: array of byte, key: array of byte): array of byte
 }
 
 #
-# Decrypt with auto-format detection.
-# If the file starts with "SGCM1\n", uses AES-256-GCM with key.
-# Otherwise falls back to legacy AES-CBC with legacykey.
-# legacykey may be nil if only GCM files are expected.
+# Encrypt with AES-256-GCM using the SGCM2 format.
+# Output format: "SGCM2\n" + 16-byte kdf salt + 12-byte nonce + ciphertext + tag
+# The rootkey is user-scoped and stable for the session; each blob gets a fresh
+# random salt and derives its own AES key from that root.
+#
+encrypt3(file: array of byte, rootkey: array of byte): array of byte
+{
+	magic := array of byte SGCM2_MAGIC;
+	salt := random->randombuf(random->ReallyRandom, SGCM3_SALT_LEN);
+	if(salt == nil || len salt != SGCM3_SALT_LEN){
+		sys->werrstr("can't generate blob salt");
+		return nil;
+	}
+	nonce := random->randombuf(random->ReallyRandom, SGCM_NONCE_LEN);
+	if(nonce == nil || len nonce != SGCM_NONCE_LEN){
+		sys->werrstr("can't generate nonce");
+		return nil;
+	}
+	filekey := mkblobkey3(rootkey, salt);
+	state := kr->aesgcmsetup(filekey, nonce);
+	if(state == nil){
+		erasekey(filekey);
+		sys->werrstr("can't set AES-GCM state");
+		return nil;
+	}
+	aad := mkaddaad(magic, salt);
+	(ciphertext, tag) := kr->aesgcmencrypt(state, file, aad);
+	erasekey(filekey);
+	erasekey(aad);
+	if(ciphertext == nil || tag == nil){
+		sys->werrstr("AES-GCM encryption failed");
+		return nil;
+	}
+
+	outlen := len magic + SGCM3_SALT_LEN + SGCM_NONCE_LEN + len ciphertext + len tag;
+	out := array[outlen] of byte;
+	off := 0;
+	out[off:] = magic;
+	off += len magic;
+	out[off:] = salt;
+	off += SGCM3_SALT_LEN;
+	out[off:] = nonce;
+	off += SGCM_NONCE_LEN;
+	out[off:] = ciphertext;
+	off += len ciphertext;
+	out[off:] = tag;
+	return out;
+}
+
+#
+# Decrypt SGCM1 or legacy CBC.
+# New callers should prefer decrypt3, which also understands SGCM2.
 #
 decrypt2(file: array of byte, key: array of byte, legacykey: array of byte): array of byte
 {
-	magic := array of byte SGCM_MAGIC;
+	magic := array of byte SGCM1_MAGIC;
 	length := len file;
 
 	# Check for modern format
@@ -474,6 +572,51 @@ decrypt2(file: array of byte, key: array of byte, legacykey: array of byte): arr
 		return nil;
 	}
 	return decrypt(file, legacykey);
+}
+
+decrypt3(file: array of byte, rootkey: array of byte, gcm1key: array of byte, legacykey: array of byte): array of byte
+{
+	magic := array of byte SGCM2_MAGIC;
+	length := len file;
+
+	if(length >= len magic){
+		ismodern := 1;
+		for(i := 0; i < len magic; i++)
+			if(file[i] != magic[i]){
+				ismodern = 0;
+				break;
+			}
+		if(ismodern){
+			off := len magic;
+			if(length - off < SGCM3_SALT_LEN + SGCM_NONCE_LEN + SGCM_TAG_LEN){
+				sys->werrstr("file too short for SGCM2 salt+nonce+tag");
+				return nil;
+			}
+			salt := file[off:off+SGCM3_SALT_LEN];
+			off += SGCM3_SALT_LEN;
+			nonce := file[off:off+SGCM_NONCE_LEN];
+			off += SGCM_NONCE_LEN;
+			ciphertext := file[off:length-SGCM_TAG_LEN];
+			tag := file[length-SGCM_TAG_LEN:length];
+			filekey := mkblobkey3(rootkey, salt);
+			state := kr->aesgcmsetup(filekey, nonce);
+			erasekey(filekey);
+			if(state == nil){
+				sys->werrstr("can't set AES-GCM state");
+				return nil;
+			}
+			aad := mkaddaad(magic, salt);
+			plaintext := kr->aesgcmdecrypt(state, ciphertext, aad, tag);
+			erasekey(aad);
+			if(plaintext == nil){
+				sys->werrstr("SGCM2 decryption failed (wrong key?)");
+				return nil;
+			}
+			return plaintext;
+		}
+	}
+
+	return decrypt2(file, gcm1key, legacykey);
 }
 
 lines(file: array of byte): list of array of byte

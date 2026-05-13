@@ -533,6 +533,7 @@ connectfactotum(pass: string): string
 		user = "inferno";
 
 	pwhash := secstore->mkseckey(pass);
+	rootkey := secstore->mkfilekey3(user, pass);
 	filekey := secstore->mkfilekey2(pass);
 	legacykey := secstore->mkfilekey(pass);
 
@@ -551,7 +552,7 @@ connectfactotum(pass: string): string
 		return nil;
 	}
 
-	plaintext := secstore->decrypt2(file, filekey, legacykey);
+	plaintext := secstore->decrypt3(file, rootkey, filekey, legacykey);
 	if(plaintext == nil)
 		return "wrong password";
 

@@ -114,9 +114,9 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->fprint(stderr, "no keys in factotum to import\n");
 		} else {
 			# Encrypt with modern AES-GCM file key
-			filekey := secstore->mkfilekey2(pass);
+			filekey := secstore->mkfilekey3(user, pass);
 			plaintext := array of byte keys;
-			encrypted := secstore->encrypt2(plaintext, filekey);
+			encrypted := secstore->encrypt3(plaintext, filekey);
 			secstore->erasekey(filekey);
 			secstore->erasekey(plaintext);
 

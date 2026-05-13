@@ -69,7 +69,8 @@ syncc: chan of chan of int;	# request sync, reply when done
 secstoreaddr: string;		# secstore server address (e.g. "net!localhost!secstore")
 secstoreuser: string;		# username for secstore auth
 secstorepwhash: array of byte;	# password hash for secstore auth
-secstorefilekey: array of byte;	# modern file encryption key (AES-256-GCM)
+secstorerootkey: array of byte;	# SGCM2 root key for new secstore blobs
+secstorefilekey: array of byte;	# SGCM1 key for reading existing secstore blobs
 secstorelkey: array of byte;	# legacy file encryption key (AES-CBC, for reading old files)
 
 # Cached secstore connection — avoids full PAK handshake on every save
@@ -125,6 +126,7 @@ init(nil: ref Draw->Context, args: list of string)
 			secstoreuser = user();
 		if(secstorepassarg != nil){
 			secstorepwhash = secstore->mkseckey(secstorepassarg);
+			secstorerootkey = secstore->mkfilekey3(secstoreuser, secstorepassarg);
 			secstorefilekey = secstore->mkfilekey2(secstorepassarg);
 			secstorelkey = secstore->mkfilekey(secstorepassarg);
 			secstorepassarg = nil;
@@ -309,6 +311,7 @@ factotumsrv()
 			}
 			if(secstore != nil){
 				secstorepwhash = secstore->mkseckey(spass);
+				secstorerootkey = secstore->mkfilekey3(secstoreuser, spass);
 				secstorefilekey = secstore->mkfilekey2(spass);
 				secstorelkey = secstore->mkfilekey(spass);
 			}
@@ -1556,6 +1559,7 @@ secstoreload(): string
 		if(pass == nil)
 			return "no password provided";
 		secstorepwhash = secstore->mkseckey(pass);
+		secstorerootkey = secstore->mkfilekey3(secstoreuser, pass);
 		secstorefilekey = secstore->mkfilekey2(pass);
 		secstorelkey = secstore->mkfilekey(pass);
 		pass = nil;
@@ -1599,7 +1603,7 @@ secstoreload(): string
 	}
 
 	# Decrypt (auto-detects modern GCM vs legacy CBC format)
-	plaintext := secstore->decrypt2(file, secstorefilekey, secstorelkey);
+	plaintext := secstore->decrypt3(file, secstorerootkey, secstorefilekey, secstorelkey);
 	if(plaintext == nil)
 		return "secstore: decryption failed (wrong password?)";
 
@@ -1711,7 +1715,7 @@ secstoresave(): string
 {
 	if(secstoreaddr == nil)
 		return "no secstore address";
-	if(secstorepwhash == nil || secstorefilekey == nil)
+	if(secstorepwhash == nil || secstorerootkey == nil)
 		return "no secstore credentials";
 
 	# Serialize all keys
@@ -1723,7 +1727,7 @@ secstoresave(): string
 	plaintext := array of byte s;
 
 	# Encrypt with modern AES-GCM
-	encrypted := secstore->encrypt2(plaintext, secstorefilekey);
+	encrypted := secstore->encrypt3(plaintext, secstorerootkey);
 	secstore->erasekey(plaintext);
 
 	if(encrypted == nil)

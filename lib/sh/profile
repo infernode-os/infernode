@@ -6,7 +6,7 @@ load std
 path=(/dis .)
 
 # Get username
-user="{cat /dev/user}
+user=`{cat /dev/user}
 
 
 # ── Networking ──────────────────────────────────────────────
@@ -96,7 +96,11 @@ if {! ftest -f /mnt/factotum/proto}{
 	}
 	if {! ~ $havesecpass ''} {
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
-		auth/factotum -S tcp!localhost!5356 -P $secpass
+		if {! ~ $secpass ''} {
+			auth/factotum -S tcp!localhost!5356 -u $user -P $secpass
+		}{
+			auth/factotum
+		}
 	}{
 		auth/factotum
 	}

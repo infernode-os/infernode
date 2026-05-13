@@ -119,7 +119,8 @@ restrictedworker(result: chan of string)
 		nil,
 		0,
 		0,
-		-1
+		-1,
+		nil
 	);
 
 	err := nsconstruct->restrictns(caps);

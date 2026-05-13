@@ -146,11 +146,11 @@ init(nil: ref Draw->Context, args: list of string)
 		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
 			if(hd tl2 == "xenith") { xgrant = 1; break; }
 
-		# Register -p paths in tools9p store (before FORKNS so /tool/ctl is
+		# Register -p paths in tools9p store (before FORKNS so trusted control is
 		# reachable). caps.paths drives restrictns; /tool/paths gives observability.
 		if(agentlib->pathexists("/tool"))
 			for(pp := pathlist; pp != nil; pp = tl pp)
-				writefile("/tool/ctl", "bindpath " + hd pp);
+				writefile("/mnt/toolctl/ctl", "bindpath " + hd pp);
 
 		# Write agent name before FORKNS so user process can read it.
 		# /tmp/veltro/ and .ns/ may not exist yet — create them.
@@ -169,7 +169,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->pctl(Sys->NODEVS, nil);
 
 		parent_caps := ref NsConstruct->Capabilities(
-			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1
+			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
 		);
 
 		# Apply namespace restrictions

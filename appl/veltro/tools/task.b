@@ -247,16 +247,15 @@ docreate(args: string): string
 			writefile(dashctl, "instructions " + string newid + " " + instructions);
 	}
 
-	# Delegate provisioning to the unrestricted parent serveloop.
-	# We cannot spawn tools9p/lucibridge from here because asyncexec()
-	# restricts our namespace — /dis is hidden.  Writing to /tool/ctl
-	# routes to the serveloop which runs in the full namespace.
+	# Delegate provisioning to tools9p's narrow child-provision path.
+	# The server runs in the unrestricted parent namespace, but it validates
+	# child tools and paths as a subset of the current grants before spawning.
 	provcmd := "provision " + string newid;
 	if(toolsarg != "")
 		provcmd += " tools=" + toolsarg;
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
-	perr := writefile("/tool/ctl", provcmd);
+	perr := writefile("/tool/provision", provcmd[10:]);
 	if(perr != nil)
 		sys->fprint(sys->fildes(2), "task: provision warning: %s\n", perr);
 

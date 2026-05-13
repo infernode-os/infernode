@@ -1500,7 +1500,7 @@ globallistener()
 					if(pcsv != "")
 						provision += " paths=" + pcsv;
 				}
-				writefile("/tool/ctl", provision);
+				writefile("/mnt/toolctl/ctl", provision);
 				# Create per-task wmsrv and relay its events to the main preswmloop
 				newtp := newtaskpres(newid);
 				if(newtp == nil)

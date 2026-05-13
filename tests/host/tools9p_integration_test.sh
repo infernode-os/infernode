@@ -78,7 +78,8 @@ if ! emu_c "smoke" 12 \
     echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     exit 0
 fi
-if echo "$OUTPUT" | grep -qE "typecheck|does not exist|cannot open|fail:"; then
+CLEAN_OUTPUT=$(echo "$OUTPUT" | grep -v "git/fs: mount /n/git: '/n' file does not exist" || true)
+if echo "$CLEAN_OUTPUT" | grep -qE "typecheck|does not exist|cannot open|fail:"; then
     skip "tools9p startup error: $OUTPUT"
     echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     exit 0
@@ -165,7 +166,7 @@ echo "── /tool/ctl add/remove ──"
 
 # Remove 'diff', verify gone, add back, verify present
 if emu_c "ctl_remove" 12 \
-    "tools9p read list diff & sleep 2; echo remove diff > /tool/ctl; cat /tool/tools"; then
+    "tools9p read list diff & sleep 2; echo remove diff > /mnt/toolctl/ctl; cat /tool/tools"; then
     if echo "$OUTPUT" | grep -q "diff"; then
         fail "ctl remove: 'diff' still in /tool/tools after remove"
     else
@@ -176,7 +177,7 @@ else
 fi
 
 if emu_c "ctl_add" 12 \
-    "tools9p read list diff & sleep 2; echo remove diff > /tool/ctl; echo add diff > /tool/ctl; cat /tool/tools"; then
+    "tools9p read list diff & sleep 2; echo remove diff > /mnt/toolctl/ctl; echo add diff > /mnt/toolctl/ctl; cat /tool/tools"; then
     if echo "$OUTPUT" | grep -q "diff"; then
         pass "ctl add: 'diff' re-added to /tool/tools"
     else
@@ -189,9 +190,9 @@ fi
 # Unknown tool add should fail with error (write() returns error, sh exits nonzero)
 # We test this by checking the exit code vs what happens with a valid add.
 if emu_c "ctl_add_unknown" 10 \
-    "tools9p read & sleep 2; echo add no_such_tool_xyz > /tool/ctl; echo STATUS_AFTER"; then
-    # The write to /tool/ctl for unknown tool returns a 9P error.
-    # The shell command `echo x > /tool/ctl` will see the error.
+    "tools9p read & sleep 2; echo add no_such_tool_xyz > /mnt/toolctl/ctl; echo STATUS_AFTER"; then
+    # The write to /mnt/toolctl/ctl for unknown tool returns a 9P error.
+    # The shell command `echo x > /mnt/toolctl/ctl` will see the error.
     # However, the shell might not propagate it visibly. Check the output.
     if echo "$OUTPUT" | grep -q "STATUS_AFTER"; then
         info "ctl add unknown: shell continued (may or may not have errored)"
@@ -257,15 +258,15 @@ echo "── /tool/paths ──"
 
 if emu_c "paths_empty" 10 \
     "tools9p read & sleep 2; cat /tool/paths"; then
-    # May be empty (no paths registered at startup) — that's valid
-    pass "/tool/paths is readable (content: '$(echo -n "$OUTPUT" | head -c 40)')"
+    # May be empty (no paths registered at startup) — that's valid.
+    pass "/tool/paths is readable"
 else
     fail "/tool/paths read failed"
 fi
 
 # bindpath then check paths
 if emu_c "paths_bind" 10 \
-    "tools9p read & sleep 2; echo bindpath /tmp > /tool/ctl; cat /tool/paths"; then
+    "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
     if echo "$OUTPUT" | grep -q "/tmp"; then
         pass "/tool/paths shows bound path after bindpath"
     else
@@ -273,6 +274,26 @@ if emu_c "paths_bind" 10 \
     fi
 else
     fail "/tool/paths bindpath test failed"
+fi
+
+echo ""
+echo "── child provision narrowing ──"
+
+if emu_c "provision_subset" 14 \
+    "tools9p -b diff -p /tmp:rw read list diff task & sleep 3; echo '9 tools=diff,exec paths=/tmp:rw,/lib' > /tool/provision; sleep 5; echo TOOLS; cat /tool.9/tools; echo PATHS; cat /mnt/toolctl.9/paths"; then
+    if echo "$OUTPUT" | grep -q "^exec$"; then
+        fail "child provision should not grant exec outside the parent budget"
+    elif ! echo "$OUTPUT" | grep -q "^diff$"; then
+        fail "child provision should preserve allowed diff tool"
+    elif ! echo "$OUTPUT" | grep -q "/tmp rw"; then
+        fail "child provision should preserve allowed /tmp rw path"
+    elif echo "$OUTPUT" | grep -q "^/lib"; then
+        fail "child provision should reject non-granted /lib path"
+    else
+        pass "child provision narrows tools and paths to parent grants"
+    fi
+else
+    fail "child provision narrowing test failed"
 fi
 
 # ── summary ──────────────────────────────────────────────────────────────────

@@ -100,6 +100,15 @@ writefile(path, data: string): int
 	return sys->write(fd, b, len b);
 }
 
+toolctlmount(mpt: string): string
+{
+	if(mpt == "/tool")
+		return "/mnt/toolctl";
+	if(len mpt > 6 && mpt[0:6] == "/tool.")
+		return "/mnt/toolctl." + mpt[6:];
+	return "/mnt/toolctl";
+}
+
 # Extract value for key from "key1=val1 key2=val2 ..." string
 getkv(line, key: string): string
 {
@@ -972,10 +981,10 @@ synctoolset(want: list of string)
 	(nil, curtl) := sys->tokenize(cur, "\n");
 	for(w := want; w != nil; w = tl w)
 		if(!strcontains(curtl, hd w))
-			writefile(toolmount + "/ctl", "add " + hd w);
+			writefile(toolctlmount(toolmount) + "/ctl", "add " + hd w);
 	for(c := curtl; c != nil; c = tl c)
 		if(!strcontains(want, hd c))
-			writefile(toolmount + "/ctl", "remove " + hd c);
+			writefile(toolctlmount(toolmount) + "/ctl", "remove " + hd c);
 }
 
 # Apply path changes from /tool/paths into lucibridge's namespace.
@@ -1084,7 +1093,7 @@ handleslash(cmd: string): int
 		if(cmdarg == "") {
 			ack = "usage: /bind <path> [ro|rw]";
 		} else {
-			writefile(toolmount + "/ctl", "bindpath " + cmdarg);
+			writefile(toolctlmount(toolmount) + "/ctl", "bindpath " + cmdarg);
 			# Push context event so the namespace view updates immediately
 			ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
 			base := pathbase(cmdarg);
@@ -1098,7 +1107,7 @@ handleslash(cmd: string): int
 		if(cmdarg == "") {
 			ack = "usage: /unbind <path>";
 		} else {
-			writefile(toolmount + "/ctl", "unbindpath " + cmdarg);
+			writefile(toolctlmount(toolmount) + "/ctl", "unbindpath " + cmdarg);
 			# Push context event so the namespace view updates immediately
 			ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
 			writefile(ctxpath, "resource remove " + cmdarg);
@@ -1108,10 +1117,10 @@ handleslash(cmd: string): int
 		if(len cmdarg == 0) {
 			ack = "usage: /tools +name or /tools -name";
 		} else if(cmdarg[0] == '+') {
-			writefile(toolmount + "/ctl", "add " + cmdarg[1:]);
+			writefile(toolctlmount(toolmount) + "/ctl", "add " + cmdarg[1:]);
 			ack = "tool added: " + cmdarg[1:];
 		} else if(cmdarg[0] == '-') {
-			writefile(toolmount + "/ctl", "remove " + cmdarg[1:]);
+			writefile(toolctlmount(toolmount) + "/ctl", "remove " + cmdarg[1:]);
 			ack = "tool removed: " + cmdarg[1:];
 		} else {
 			ack = "usage: /tools +name or /tools -name";
@@ -1732,7 +1741,7 @@ init(nil: ref Draw->Context, args: list of string)
 			parg = parg[0:len parg - 3] + " ro";
 		else if(len parg > 3 && parg[len parg - 3:] == ":rw")
 			parg = parg[0:len parg - 3] + " rw";
-		writefile(toolmount + "/ctl", "bindpath " + parg);
+		writefile(toolctlmount(toolmount) + "/ctl", "bindpath " + parg);
 	}
 
 	# Create LLM session

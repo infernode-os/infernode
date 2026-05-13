@@ -36,6 +36,7 @@ Tools9pTest: module {
 
 SRCFILE: con "/tests/tools9p_test.b";
 TOOLMNT: con "/tool";
+TOOLCTL: con "/mnt/toolctl";
 
 passed := 0;
 failed := 0;
@@ -64,6 +65,12 @@ run(name: string, testfn: ref fn(t: ref T))
 hastool(): int
 {
 	(ok, nil) := sys->stat(TOOLMNT + "/tools");
+	return ok >= 0;
+}
+
+hasctlalias(): int
+{
+	(ok, nil) := sys->stat(TOOLCTL + "/ctl");
 	return ok >= 0;
 }
 
@@ -321,6 +328,55 @@ testCtlAddUnknown(t: ref T)
 	t.assert(n < 0, "add of unknown tool should fail with 9P error (n=" + string n + ")");
 }
 
+# Test 5b: Trusted /mnt/toolctl alias mutates the live /tool view
+testCtlAliasRemoveAdd(t: ref T)
+{
+	if(!hastool()) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	if(!hasctlalias()) {
+		t.skip("trusted control alias not mounted at /mnt/toolctl");
+		return;
+	}
+
+	tools := readfile(TOOLMNT + "/tools");
+	if(tools == nil) {
+		t.skip("cannot read /tool/tools");
+		return;
+	}
+
+	names: list of string = nil;
+	cur := "";
+	for(i := 0; i < len tools; i++) {
+		if(tools[i] == '\n') {
+			if(len cur > 0)
+				names = cur :: names;
+			cur = "";
+		} else
+			cur[len cur] = tools[i];
+	}
+	if(len cur > 0)
+		names = cur :: names;
+	if(names == nil || tl names == nil) {
+		t.skip("need at least 2 active tools to safely toggle one");
+		return;
+	}
+
+	victim := hd names;
+	n := writefile(TOOLCTL + "/ctl", "remove " + victim);
+	t.assert(n > 0, "remove via /mnt/toolctl/ctl should succeed");
+
+	tools2 := readfile(TOOLMNT + "/tools");
+	t.assert(!strcontains(tools2, victim), "tool removed via alias disappears from /tool/tools");
+
+	n = writefile(TOOLCTL + "/ctl", "add " + victim);
+	t.assert(n > 0, "add via /mnt/toolctl/ctl should succeed");
+
+	tools3 := readfile(TOOLMNT + "/tools");
+	t.assert(strcontains(tools3, victim), "tool re-added via alias appears in /tool/tools");
+}
+
 # Test 6: Read tool execution via 9P
 testReadToolExec(t: ref T)
 {
@@ -495,6 +551,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HelpLookup",            testHelpLookup);
 	run("CtlRemoveAdd",          testCtlRemoveAdd);
 	run("CtlAddUnknown",         testCtlAddUnknown);
+	run("CtlAliasRemoveAdd",     testCtlAliasRemoveAdd);
 	run("ReadToolExec",          testReadToolExec);
 	run("ListToolExec",          testListToolExec);
 	run("NoResultBeforeWrite",   testNoResultBeforeWrite);

@@ -18,17 +18,24 @@ set -e
 ROOT="${ROOT:-.}"
 . "$(dirname "$0")/common.sh"
 PASS="wallettest42"
+TESTUSER="testuser-walletpersist"
 
 if [ ! -x "$EMU" ]; then
     echo "SKIP: emu not found at $EMU"
     exit 0
 fi
 
+cleanup() {
+    lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
+    rm -rf "$ROOT/usr/inferno/secstore/$TESTUSER" 2>/dev/null || true
+}
+
+trap cleanup EXIT INT TERM
+
 # Clean state
 lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 # Use a dedicated test user so we never touch the real user's secstore
-TESTUSER="testuser-walletpersist"
 rm -rf "$ROOT/usr/inferno/secstore/$TESTUSER" 2>/dev/null || true
 
 FAILURES=0
@@ -140,6 +147,3 @@ if [ $FAILURES -gt 0 ]; then
     exit 1
 fi
 echo "PASS"
-
-# Clean up test data only (uses TESTUSER, never touches real user account)
-rm -rf "$ROOT/usr/inferno/secstore/$TESTUSER" 2>/dev/null || true

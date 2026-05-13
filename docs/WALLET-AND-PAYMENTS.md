@@ -110,11 +110,18 @@ intentionally short.
   probes and no built-in server lockout.
 - Keys are stored in `/usr/inferno/secstore/<username>/`.
 - The `factotum` file is a newline-separated list of `key <attrs>` lines,
-  encrypted client-side. New writes use AES-256-GCM (magic header `SGCM1\n`,
-  12-byte nonce, 16-byte tag); old files written by legacy clients are read
-  back via AES-CBC fallback (`secstore.b:decrypt2`).
-- The file-encryption key is derived from the user's password via 10 000 rounds
-  of HMAC-SHA-256 with salt `"secstore filekey"` (not PBKDF2 / scrypt / Argon2).
+  encrypted client-side. New writes use AES-256-GCM in `SGCM2` format
+  (`SGCM2\n` + 16-byte blob salt + 12-byte nonce + ciphertext + 16-byte tag).
+  Older `SGCM1` GCM blobs and legacy AES-CBC blobs remain readable for
+  compatibility.
+- New `SGCM2` writes derive a user-scoped root key from the password with
+  100 000 rounds of HMAC-SHA-256, then derive a fresh per-blob file key from
+  random salt. This is stronger than the older fixed-salt `SGCM1` design, but
+  still not a memory-hard KDF like scrypt or Argon2.
+- New secstore accounts now write a tagged `PAK` verifier in `secstore3`
+  format, using SHA-256 for the password hash and PAK transcript checks on a
+  stronger 2048/256 subgroup set. `secstore2` and legacy bare-hex `PAK` files
+  still authenticate via fallback.
 - The `PAK` file contains the password verifier `Hi = H⁻¹ mod p` — a function
   of (username, password) but not the password itself.
 - The PAK exchange uses a 1024-bit prime; the first authentication of a session

@@ -60,6 +60,11 @@ echo "$P1_OUT"
 if [ -d "$ROOT/tmp/secstore_e2e/testuser" ]; then
     echo "--- secstore user dir exists ---"
     ls -la "$ROOT/tmp/secstore_e2e/testuser/"
+    PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/tmp/secstore_e2e/testuser/PAK" 2>/dev/null || true)
+    if [ "$PAKHDR" != "secstore3" ]; then
+        echo "FAIL: PAK verifier format mismatch (got '$PAKHDR')"
+        exit 1
+    fi
 else
     echo "FAIL: secstore user directory not created"
     exit 1

@@ -6,6 +6,10 @@
 > together. Topology variants (single host, dedicated server, peer-to-peer) live
 > in the companion document, [DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md).
 >
+> Auth-suite rationale and compatibility policy, including the `secstore3`
+> default, are
+> tracked in [SECSTORE-AUTH-SUITE-PLAN.md](SECSTORE-AUTH-SUITE-PLAN.md).
+>
 > **Audience.** Operators who need to reason about what is encrypted by what,
 > what an attacker on the wire can or cannot do, and how to deploy the stack
 > beyond a single host.
@@ -69,8 +73,8 @@ The full table is in §8. Up front:
 flowchart TB
     pw([password]) -- "longhash · r mod p" --> H["H = H(user, password)"]
     H -- "H⁻¹ mod p" --> Hi["Hi (PAK verifier)"]
-    pw -- "10 000 × HMAC-SHA-256<br/>salt = secstore filekey" --> Fk["filekey<br/>(AES-256-GCM)"]
-    pw -- "SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
+    pw -- "100 000 × HMAC-SHA-256<br/>salt = \"secstore filekey seed:\" + user" --> Fk["root key<br/>(SGCM2 writes)"]
+    pw -- "secstore3/secstore2: SHA-256(pass)<br/>legacy secstore: SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
 
     Hi --> diskpak[("&lt;user&gt;/PAK on disk")]
     Fk -.encrypts.-> diskblob[("&lt;user&gt;/factotum<br/>on disk")]
@@ -100,16 +104,18 @@ either side.
 
 | Parameter | Source                          | Notes                                              |
 |-----------|---------------------------------|----------------------------------------------------|
-| `p`       | 1024-bit prime, fixed in code   | `appl/lib/secstore.b:initPAKparams` and mirrored in `secstored.b` and `factotum.b`. |
-| `q`       | 160-bit prime, `q | (p−1)`      | Subgroup order.                                    |
-| `g`       | Generator of order `q`          |                                                    |
-| `r`       | Used to stretch the password    | `H = h(...)^r mod p` is the slow step.             |
-| Hash      | SHA-1                           | Used in `longhash` and `shorthash`.                |
+| `p,q,g,r` | Fixed suite parameters in code  | `secstore3` uses an RFC 5114 2048/256 subgroup set; `secstore2` and legacy `secstore` use the inherited 1024/160 set. |
+| Hash      | `secstore3`/`secstore2`: SHA-256; legacy `secstore`: SHA-1 | Modern suites use SHA-256 for the password hash and transcript confirmation. |
 | KDF       | Iterated `h^r mod p`            | ~5 s on a laptop; cached per (user, pwhash).       |
 
-The same `(p, q, r, g)` are hard-coded in **client** (`secstore.b`), **server**
-(`secstored.b`), and **factotum** (`factotum.b:secstoresetup`). All three must
-agree, and they do; do not edit one without the others.
+The suite parameters are hard-coded in **client** (`secstore.b`), **server**
+(`secstored.b`), and account-creation code (`secstore-setup`, `factotum`,
+`wm/logon`). All participants must agree on the suite selected by the `PAK`
+tag.
+
+New accounts default to the `secstore3` verifier format. Clients try
+`secstore3` first, then `secstore2`, then legacy `secstore` when talking to an
+older account or server.
 
 ### 3.2 Wire transcript
 
@@ -126,24 +132,24 @@ sequenceDiagram
 
     Note over C: Compute H = (longhash)^r mod p   (~5 s, cached)<br/>Compute Hi = H⁻¹ mod p<br/>Pick x ∈ [1, q)<br/>Compute m = (g^x · H) mod p
 
-    C->>S: secstore␉PAK\nC=&lt;user&gt;\nm=&lt;hexm&gt;\n
+    C->>S: secstore3␉PAK\nC=&lt;user&gt;\nm=&lt;hexm&gt;\n
     S->>D: read &lt;user&gt;/PAK
     D-->>S: hexHi
-    Note over S: Pick y ∈ [1, q)<br/>mu = g^y mod p<br/>sigma = (m · Hi)^y mod p<br/>ks = base64(SHA1("server", C, S, m, mu, sigma, Hi))
+    Note over S: Pick y ∈ [1, q)<br/>mu = g^y mod p<br/>sigma = (m · Hi)^y mod p<br/>ks = base64(SHA-256("server", C, S, m, mu, sigma, Hi))
     S-->>C: mu=&lt;hexmu&gt;\nk=&lt;ks&gt;\nS=&lt;sname&gt;\n
 
-    Note over C: sigma = mu^x mod p<br/>verify ks against own SHA1(...)
+    Note over C: sigma = mu^x mod p<br/>verify ks against own SHA-256(...)
     alt server didn't know Hi
         C-->>S: abort (verifier mismatch)
     end
 
-    Note over C: kc = base64(SHA1("client", C, S, m, mu, sigma, Hi))
+    Note over C: kc = base64(SHA-256("client", C, S, m, mu, sigma, Hi))
     C->>S: k'=&lt;kc&gt;\n
     alt client didn't know password
         S-->>C: abort (verifier didn't match)
     end
 
-    Note over C,S: digest = SHA1("session", C, S, m, mu, sigma, Hi)<br/>secret_out = HMAC-SHA1(digest, "one")<br/>secret_in  = HMAC-SHA1(digest, "two")<br/>(server uses opposite direction labels)
+    Note over C,S: digest = SHA-256("session", C, S, m, mu, sigma, Hi)<br/>secret_out = HMAC-SHA-256(digest, "one")<br/>secret_in  = HMAC-SHA-256(digest, "two")<br/>(server uses opposite direction labels)
     C-)S: ssl->secret(in, out)
     S-)C: ssl->secret(in, out)
     C->>S: alg sha256 aes_128_cbc
@@ -224,17 +230,23 @@ key proto=pass service=ssh user=alice !password=...
 key proto=pass service=wallet-eth-default user=alice !password=0x...
 ```
 
-Two on-disk formats coexist (auto-detected on read by `secstore.b:decrypt2`):
+Three on-disk formats coexist (auto-detected on read by `secstore.b:decrypt3`):
 
 ```mermaid
 flowchart TB
-    blob[("&lt;user&gt;/factotum bytes")] --> magic{"first 6 bytes<br/>== SGCM1\n ?"}
-    magic -- yes --> modern["Modern format (writes use this)"]
-    magic -- no --> legacy["Legacy format (read-only fallback)"]
+    blob[("&lt;user&gt;/factotum bytes")] --> magic{"first 6 bytes"}
+    magic -- "SGCM2\n" --> modern["Current format (writes use this)"]
+    magic -- "SGCM1\n" --> compat["Previous GCM format (read-compatible)"]
+    magic -- other --> legacy["Legacy CBC fallback (read-compatible)"]
 
-    subgraph modernfmt["Modern (AES-256-GCM)"]
+    subgraph modernfmt["Current (AES-256-GCM, SGCM2)"]
         direction LR
-        m1["SGCM1\n<br/>(6 B magic)"] --> m2["nonce<br/>(12 B)"] --> m3["ciphertext<br/>(N B)"] --> m4["GCM tag<br/>(16 B)"]
+        m1["SGCM2\n<br/>(6 B magic)"] --> m2["blob salt<br/>(16 B)"] --> m3["nonce<br/>(12 B)"] --> m4["ciphertext<br/>(N B)"] --> m5["GCM tag<br/>(16 B)"]
+    end
+
+    subgraph compatfmt["Older GCM (AES-256-GCM, SGCM1)"]
+        direction LR
+        c1["SGCM1\n<br/>(6 B magic)"] --> c2["nonce<br/>(12 B)"] --> c3["ciphertext<br/>(N B)"] --> c4["GCM tag<br/>(16 B)"]
     end
 
     subgraph legacyfmt["Legacy (AES-128-CBC, no MAC)"]
@@ -243,42 +255,44 @@ flowchart TB
     end
 
     modern -.--> modernfmt
+    compat -.--> compatfmt
     legacy -.--> legacyfmt
 
     classDef good fill:#dcfce7,stroke:#15803d
     classDef bad fill:#fecaca,stroke:#b91c1c
-    class modernfmt good
+    class modernfmt,compatfmt good
     class legacyfmt bad
 ```
 
 | Format          | Magic        | Cipher         | KDF                                                  | Integrity        |
 |-----------------|--------------|----------------|------------------------------------------------------|------------------|
-| **Modern**      | `SGCM1\n`    | AES-256-GCM    | 10 000 rounds HMAC-SHA-256, salt `"secstore filekey"`| GCM tag (16 B), AAD = magic |
+| **Current**     | `SGCM2\n`    | AES-256-GCM    | 100 000 rounds HMAC-SHA-256 for a user-scoped root key, plus per-blob random salt-derived file key | GCM tag (16 B), AAD = magic + blob salt |
+| Compatible read | `SGCM1\n`    | AES-256-GCM    | 10 000 rounds HMAC-SHA-256, salt `"secstore filekey"` | GCM tag (16 B), AAD = magic |
 | Legacy (read-only) | none      | AES-128-CBC    | `SHA1("aescbc file" ‖ password)` truncated to 16 B   | trailing constant `"XXXXXXXXXXXXXXXX"` (no MAC) |
 
-All new writes use the modern format. The legacy format is kept solely so an
-upgraded client can still read files written by older clients before the
-transition; **do not deploy fresh installs that produce legacy files**.
+All new writes use `SGCM2`. `SGCM1` is kept so upgraded clients can still read
+files written by the earlier InferNode GCM implementation, and the CBC format
+remains only as a legacy fallback for older clients.
 
 #### KDF caveats
 
-- 10 000 rounds of HMAC-SHA-256 with a constant salt is *not* PBKDF2, scrypt or
-  Argon2. It is fast enough that an offline attacker with the encrypted blob can
-  brute-force weak passwords. The strength of secstore-at-rest is therefore
-  dominated by password entropy. Pick a strong password and rotate if it leaks.
-- The salt is constant across users (`"secstore filekey"`), so the KDF output is
-  not user-distinct beyond the password itself. An attacker who steals two users'
-  blobs cannot share a precomputed table because the key is per-password — but
-  rainbow tables across users are no harder to build than for one.
+- `SGCM2` removes the constant-salt weakness from new writes by deriving a
+  user-scoped root key and then a fresh per-blob file key from random salt.
+- Even so, this is still CPU-hard HMAC-SHA-256 rather than a memory-hard KDF
+  like scrypt or Argon2. Offline guessing remains bounded mainly by password
+  entropy. Pick a strong password and rotate if it leaks.
+- `SGCM1` and legacy CBC remain readable for compatibility, so an attacker who
+  steals an old blob still gets only the older KDF work factor for that file.
 
 ### 4.2 The `PAK` file
 
-A single line of hex: the server's PAK verifier `Hi` for that user. Writable
-only by the user who owns the directory (mode `0600`). The verifier alone is
-*not* directly invertible to the password — a brute-force attacker who steals
-the file must compute `H(user, candidate_password)⁻¹ mod p` per guess, which is
-the same ~5 s 1024-bit modexp the legitimate client pays. That work factor
-becomes the password's last line of defence.
+Current accounts store `secstore3 <hexHi>` in the `PAK` file. Compatibility
+accounts may store `secstore2 <hexHi>`, and legacy accounts store bare `hexHi`
+with no prefix; the server treats that as the original `secstore` format. The
+file is writable only by the user who owns the directory (mode `0600`). The
+verifier alone is *not* directly invertible to the password — a brute-force
+attacker who steals the file must compute `H(user, candidate_password)⁻¹ mod p`
+per guess, which is the same expensive modexp the legitimate client pays.
 
 ### 4.3 Server enforcement
 
@@ -316,7 +330,7 @@ sequenceDiagram
         activate F
         F->>SS: PAK + GET factotum
         SS-->>F: encrypted blob
-        F->>F: decrypt2, parse, hold keys
+        F->>F: decrypt3, parse, hold keys
         F->>F: spawn persist()
     else no (interactive)
         E->>F: auth/factotum (empty)

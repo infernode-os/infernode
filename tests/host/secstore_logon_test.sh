@@ -96,6 +96,12 @@ check "secstore-setup creates account" "$OUTPUT" "setup complete"
 # Verify PAK file exists on host
 if [ -f "$ROOT/usr/inferno/secstore/testuser-seclogon/PAK" ]; then
     pass "PAK verifier file exists"
+    PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/usr/inferno/secstore/testuser-seclogon/PAK" 2>/dev/null || true)
+    if [ "$PAKHDR" = "secstore3" ]; then
+        pass "PAK verifier uses secstore3 format"
+    else
+        fail "PAK verifier format mismatch (got '$PAKHDR')"
+    fi
 else
     fail "PAK verifier file missing"
 fi
@@ -127,6 +133,12 @@ check "key stored in factotum" "$OUTPUT" "service=test-regression"
 # Verify secstore has the encrypted factotum file
 if [ -f "$ROOT/usr/inferno/secstore/testuser-seclogon/factotum" ]; then
     pass "secstore factotum file exists (keys persisted)"
+    HDR=$(LC_ALL=C dd if="$ROOT/usr/inferno/secstore/testuser-seclogon/factotum" bs=1 count=6 2>/dev/null || true)
+    if [ "$HDR" = "SGCM2" ] || [ "$HDR" = "SGCM2\n" ]; then
+        pass "secstore factotum blob uses SGCM2 format"
+    else
+        fail "secstore factotum blob header mismatch (got '$HDR')"
+    fi
 else
     fail "secstore factotum file missing (keys not persisted)"
 fi

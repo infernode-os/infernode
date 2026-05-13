@@ -68,8 +68,10 @@ syncc: chan of chan of int;	# request sync, reply when done
 # Secstore persistence
 secstoreaddr: string;		# secstore server address (e.g. "net!localhost!secstore")
 secstoreuser: string;		# username for secstore auth
-secstorepwhash: array of byte;	# password hash for secstore auth
-secstorefilekey: array of byte;	# modern file encryption key (AES-256-GCM)
+secstorepwhash: array of byte;	# legacy password hash for secstore auth
+secstorepwhash2: array of byte;	# secstore2 password hash for new PAK auth
+secstorerootkey: array of byte;	# SGCM2 root key for new secstore blobs
+secstorefilekey: array of byte;	# SGCM1 key for reading existing secstore blobs
 secstorelkey: array of byte;	# legacy file encryption key (AES-CBC, for reading old files)
 
 # Cached secstore connection — avoids full PAK handshake on every save
@@ -125,6 +127,8 @@ init(nil: ref Draw->Context, args: list of string)
 			secstoreuser = user();
 		if(secstorepassarg != nil){
 			secstorepwhash = secstore->mkseckey(secstorepassarg);
+			secstorepwhash2 = secstore->mkseckey2(secstorepassarg);
+			secstorerootkey = secstore->mkfilekey3(secstoreuser, secstorepassarg);
 			secstorefilekey = secstore->mkfilekey2(secstorepassarg);
 			secstorelkey = secstore->mkfilekey(secstorepassarg);
 			secstorepassarg = nil;
@@ -309,6 +313,8 @@ factotumsrv()
 			}
 			if(secstore != nil){
 				secstorepwhash = secstore->mkseckey(spass);
+				secstorepwhash2 = secstore->mkseckey2(spass);
+				secstorerootkey = secstore->mkfilekey3(secstoreuser, spass);
 				secstorefilekey = secstore->mkfilekey2(spass);
 				secstorelkey = secstore->mkfilekey(spass);
 			}
@@ -1556,13 +1562,15 @@ secstoreload(): string
 		if(pass == nil)
 			return "no password provided";
 		secstorepwhash = secstore->mkseckey(pass);
+		secstorepwhash2 = secstore->mkseckey2(pass);
+		secstorerootkey = secstore->mkfilekey3(secstoreuser, pass);
 		secstorefilekey = secstore->mkfilekey2(pass);
 		secstorelkey = secstore->mkfilekey(pass);
 		pass = nil;
 	}
 
 	# Connect and authenticate
-	(conn, sname, diag) := secstore->connect(secstoreaddr, secstoreuser, secstorepwhash);
+	(conn, sname, diag) := secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
 	if(conn == nil){
 		# Connect failed — auto-create account if it doesn't exist
 		reason := "";
@@ -1576,7 +1584,7 @@ secstoreload(): string
 		if(e != nil)
 			return "secstore setup: " + e;
 		# Retry connect after setup
-		(conn, sname, diag) = secstore->connect(secstoreaddr, secstoreuser, secstorepwhash);
+		(conn, sname, diag) = secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
 		if(conn == nil){
 			if(diag != nil)
 				return "secstore connect after setup: " + diag;
@@ -1599,7 +1607,7 @@ secstoreload(): string
 	}
 
 	# Decrypt (auto-detects modern GCM vs legacy CBC format)
-	plaintext := secstore->decrypt2(file, secstorefilekey, secstorelkey);
+	plaintext := secstore->decrypt3(file, secstorerootkey, secstorefilekey, secstorelkey);
 	if(plaintext == nil)
 		return "secstore: decryption failed (wrong password?)";
 
@@ -1644,7 +1652,7 @@ secstoreload(): string
 #
 secstoresetup(): string
 {
-	if(secstorepwhash == nil)
+	if(secstorepwhash == nil || secstorepwhash2 == nil)
 		return "no password";
 
 	storedir := "/usr/inferno/secstore";
@@ -1657,45 +1665,14 @@ secstoresetup(): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	# Compute PAK verifier: Hi = H^-1 mod p
-	p := kr->IPint.strtoip("C41CFBE4D4846F67A3DF7DE9921A49D3B42DC33728427AB159CEC8CBB"+
-		"DB12B5F0C244F1A734AEB9840804EA3C25036AD1B61AFF3ABBC247CD4B384224567A86"+
-		"3A6F020E7EE9795554BCD08ABAD7321AF27E1E92E3DB1C6E7E94FAAE590AE9C48F96D9"+
-		"3D178E809401ABE8A534A1EC44359733475A36A70C7B425125062B1142D", 16);
-	r := kr->IPint.strtoip("DF310F4E54A5FEC5D86D3E14863921E834113E060F90052AD332B3241"+
-		"CEF2497EFA0303D6344F7C819691A0F9C4A773815AF8EAECFB7EC1D98F039F17A32A7E"+
-		"887D97251A927D093F44A55577F4D70444AEBD06B9B45695EC23962B175F266895C67D"+
-		"21C4656848614D888A4", 16);
-
-	# H = longhash("secstore", user, pwhash)
-	aver := array of byte "secstore";
-	aC := array of byte secstoreuser;
-	Cp := array[len aver + len aC + len secstorepwhash] of byte;
-	Cp[0:] = aver;
-	Cp[len aver:] = aC;
-	Cp[len aver + len aC:] = secstorepwhash;
-
-	buf := array[7 * Keyring->SHA1dlen] of byte;
-	for(i := 0; i < 7; i++){
-		hmackey := array[] of { byte ('A' + i) };
-		kr->hmac_sha1(Cp, len Cp, hmackey, buf[i * Keyring->SHA1dlen:], nil);
-	}
-	# zero Cp
-	for(i = 0; i < len Cp; i++)
-		Cp[i] = byte 0;
-
-	H := kr->IPint.bebytestoip(buf);
-	Hmod := H.div(p).t1;	# H mod p
-	Hexp := Hmod.expmod(r, p);
-	Hi := Hexp.invert(p);
-	hexHi := Hi.iptostr(64);
+	hexHi := secstore->mkverifier(secstoreuser, "secstore3", secstorepwhash2);
 
 	# Write PAK verifier
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte hexHi;
+	b := array of byte secstore->formatverifier("secstore3", hexHi);
 	sys->write(fd, b, len b);
 	fd = nil;
 
@@ -1711,7 +1688,7 @@ secstoresave(): string
 {
 	if(secstoreaddr == nil)
 		return "no secstore address";
-	if(secstorepwhash == nil || secstorefilekey == nil)
+	if(secstorepwhash == nil || secstorerootkey == nil)
 		return "no secstore credentials";
 
 	# Serialize all keys
@@ -1723,7 +1700,7 @@ secstoresave(): string
 	plaintext := array of byte s;
 
 	# Encrypt with modern AES-GCM
-	encrypted := secstore->encrypt2(plaintext, secstorefilekey);
+	encrypted := secstore->encrypt3(plaintext, secstorerootkey);
 	secstore->erasekey(plaintext);
 
 	if(encrypted == nil)
@@ -1746,7 +1723,7 @@ secstoresave(): string
 	}
 
 	# Connect and authenticate (full PAK handshake)
-	(conn, nil, diag) := secstore->connect(secstoreaddr, secstoreuser, secstorepwhash);
+	(conn, nil, diag) := secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore save connect: " + diag;

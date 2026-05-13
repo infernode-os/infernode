@@ -88,6 +88,7 @@ TARG=\
 	spawn_helpers_test.dis\
 	shell_tool_test.dis\
 	fractal_tool_test.dis\
+	secstore_crypto_test.dis\
 	menu_test.dis\
 	wm_apps_test.dis\
 	lucibridge_approval_test.dis\

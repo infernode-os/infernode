@@ -533,10 +533,12 @@ connectfactotum(pass: string): string
 		user = "inferno";
 
 	pwhash := secstore->mkseckey(pass);
+	pwhash2 := secstore->mkseckey2(pass);
+	rootkey := secstore->mkfilekey3(user, pass);
 	filekey := secstore->mkfilekey2(pass);
 	legacykey := secstore->mkfilekey(pass);
 
-	(conn, nil, diag) := secstore->connect("tcp!localhost!5356", user, pwhash);
+	(conn, nil, diag) := secstore->connect2("tcp!localhost!5356", user, pwhash, pwhash2);
 	if(conn == nil) {
 		if(diag != nil)
 			return "secstore: " + diag;
@@ -551,7 +553,7 @@ connectfactotum(pass: string): string
 		return nil;
 	}
 
-	plaintext := secstore->decrypt2(file, filekey, legacykey);
+	plaintext := secstore->decrypt3(file, rootkey, filekey, legacykey);
 	if(plaintext == nil)
 		return "wrong password";
 
@@ -605,42 +607,14 @@ createsecstoreacct(pass: string): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	pwhash := secstore->mkseckey(pass);
-	p := IPint.strtoip("C41CFBE4D4846F67A3DF7DE9921A49D3B42DC33728427AB159CEC8CBB"+
-		"DB12B5F0C244F1A734AEB9840804EA3C25036AD1B61AFF3ABBC247CD4B384224567A86"+
-		"3A6F020E7EE9795554BCD08ABAD7321AF27E1E92E3DB1C6E7E94FAAE590AE9C48F96D9"+
-		"3D178E809401ABE8A534A1EC44359733475A36A70C7B425125062B1142D", 16);
-	r := IPint.strtoip("DF310F4E54A5FEC5D86D3E14863921E834113E060F90052AD332B3241"+
-		"CEF2497EFA0303D6344F7C819691A0F9C4A773815AF8EAECFB7EC1D98F039F17A32A7E"+
-		"887D97251A927D093F44A55577F4D70444AEBD06B9B45695EC23962B175F266895C67D"+
-		"21C4656848614D888A4", 16);
-
-	aver := array of byte "secstore";
-	aC := array of byte user;
-	Cp := array[len aver + len aC + len pwhash] of byte;
-	Cp[0:] = aver;
-	Cp[len aver:] = aC;
-	Cp[len aver + len aC:] = pwhash;
-
-	buf := array[7 * Keyring->SHA1dlen] of byte;
-	for(i := 0; i < 7; i++) {
-		hmackey := array[] of { byte ('A' + i) };
-		kr->hmac_sha1(Cp, len Cp, hmackey, buf[i * Keyring->SHA1dlen:], nil);
-	}
-	for(i = 0; i < len Cp; i++)
-		Cp[i] = byte 0;
-
-	H := IPint.bebytestoip(buf);
-	Hmod := H.div(p).t1;
-	Hexp := Hmod.expmod(r, p);
-	Hi := Hexp.invert(p);
-	hexHi := Hi.iptostr(64);
+	pwhash2 := secstore->mkseckey2(pass);
+	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
 
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte hexHi;
+	b := array of byte secstore->formatverifier("secstore3", hexHi);
 	sys->write(fd, b, len b);
 	fd = nil;
 

@@ -70,7 +70,7 @@ flowchart TB
     pw([password]) -- "longhash · r mod p" --> H["H = H(user, password)"]
     H -- "H⁻¹ mod p" --> Hi["Hi (PAK verifier)"]
     pw -- "100 000 × HMAC-SHA-256<br/>salt = \"secstore filekey seed:\" + user" --> Fk["root key<br/>(SGCM2 writes)"]
-    pw -- "SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
+    pw -- "secstore2: SHA-256(pass)<br/>legacy secstore: SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
 
     Hi --> diskpak[("&lt;user&gt;/PAK on disk")]
     Fk -.encrypts.-> diskblob[("&lt;user&gt;/factotum<br/>on disk")]
@@ -104,12 +104,18 @@ either side.
 | `q`       | 160-bit prime, `q | (p−1)`      | Subgroup order.                                    |
 | `g`       | Generator of order `q`          |                                                    |
 | `r`       | Used to stretch the password    | `H = h(...)^r mod p` is the slow step.             |
-| Hash      | SHA-1                           | Used in `longhash` and `shorthash`.                |
+| Hash      | `secstore2`: SHA-256; legacy `secstore`: SHA-1 | `secstore2` uses SHA-256 for the password hash and transcript confirmation. |
 | KDF       | Iterated `h^r mod p`            | ~5 s on a laptop; cached per (user, pwhash).       |
 
 The same `(p, q, r, g)` are hard-coded in **client** (`secstore.b`), **server**
 (`secstored.b`), and **factotum** (`factotum.b:secstoresetup`). All three must
 agree, and they do; do not edit one without the others.
+
+New accounts default to the `secstore2` verifier format. Clients try
+`secstore2` first and fall back to legacy `secstore` when talking to an older
+account or an older server. The group parameters are still the inherited
+1024-bit set for both versions; this upgrade removes the SHA-1 dependency first
+without breaking existing accounts.
 
 ### 3.2 Wire transcript
 
@@ -126,7 +132,7 @@ sequenceDiagram
 
     Note over C: Compute H = (longhash)^r mod p   (~5 s, cached)<br/>Compute Hi = H⁻¹ mod p<br/>Pick x ∈ [1, q)<br/>Compute m = (g^x · H) mod p
 
-    C->>S: secstore␉PAK\nC=&lt;user&gt;\nm=&lt;hexm&gt;\n
+    C->>S: secstore2␉PAK\nC=&lt;user&gt;\nm=&lt;hexm&gt;\n
     S->>D: read &lt;user&gt;/PAK
     D-->>S: hexHi
     Note over S: Pick y ∈ [1, q)<br/>mu = g^y mod p<br/>sigma = (m · Hi)^y mod p<br/>ks = base64(SHA1("server", C, S, m, mu, sigma, Hi))
@@ -280,12 +286,14 @@ remains only as a legacy fallback for older clients.
 
 ### 4.2 The `PAK` file
 
-A single line of hex: the server's PAK verifier `Hi` for that user. Writable
-only by the user who owns the directory (mode `0600`). The verifier alone is
-*not* directly invertible to the password — a brute-force attacker who steals
-the file must compute `H(user, candidate_password)⁻¹ mod p` per guess, which is
-the same ~5 s 1024-bit modexp the legitimate client pays. That work factor
-becomes the password's last line of defence.
+Current accounts store `secstore2 <hexHi>` in the `PAK` file. Legacy accounts
+store bare `hexHi` with no prefix; the server treats that as the original
+`secstore` format. The file is writable only by the user who owns the directory
+(mode `0600`). The verifier alone is *not* directly invertible to the password
+— a brute-force attacker who steals the file must compute
+`H(user, candidate_password)⁻¹ mod p` per guess, which is the same ~5 s
+1024-bit modexp the legitimate client pays. That work factor becomes the
+password's last line of defence.
 
 ### 4.3 Server enforcement
 

@@ -9,7 +9,9 @@ Secstore: module
 	privacy:	fn(): int;
 	cansecstore:	fn(addr: string, user: string): int;
 	mkseckey:	fn(pass: string): array of byte;
+	mkseckey2:	fn(pass: string): array of byte;
 	connect:		fn(addr: string, user: string, pwhash: array of byte): (ref Dial->Connection, string, string);
+	connect2:	fn(addr: string, user: string, pwhash: array of byte, pwhash2: array of byte): (ref Dial->Connection, string, string);
 	dial:		fn(addr: string): ref Dial->Connection;
 	auth:		fn(conn: ref Dial->Connection, user: string, pwhash: array of byte): (string, string);
 	sendpin:	fn(conn: ref Dial->Connection, pin: string): int;
@@ -18,6 +20,9 @@ Secstore: module
 	remove:	fn(conn: ref Dial->Connection, filename: string): int;
 	putfile:	fn(conn: ref Dial->Connection, filename: string, data: array of byte): int;
 	bye:		fn(conn: ref Dial->Connection);
+	mkverifier:	fn(user, version: string, passhash: array of byte): string;
+	formatverifier:	fn(version, hexHi: string): string;
+	parseverifier:	fn(s: string): (string, string);
 
 	mkfilekey:	fn(pass: string): array of byte;
 	decrypt:	fn(a: array of byte, key: array of byte): array of byte;

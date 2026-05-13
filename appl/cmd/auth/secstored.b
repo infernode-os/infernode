@@ -56,7 +56,8 @@ Secstored: module
 	init: fn(nil: ref Draw->Context, nil: list of string);
 };
 
-VERSION: con "secstore";
+VERSION1: con "secstore";
+VERSION2: con "secstore2";
 Maxfilesize: con 128*1024;
 Maxmsg: con 4096;
 
@@ -209,11 +210,16 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		return (nil, nil);
 	}
 
-	# First line: "secstore\tPAK"
+	# First line: "<version>\tPAK"
 	hdr := hd flds; flds = tl flds;
 	if(debug)
 		log(sys->sprint("PAK hdr: %q", hdr));
-	if(hdr != "secstore\tPAK"){
+	if(len hdr <= 4 || hdr[len hdr-4:] != "\tPAK"){
+		writerr(fd, "bad protocol");
+		return (nil, nil);
+	}
+	ver := hdr[0:len hdr-4];
+	if(ver != VERSION1 && ver != VERSION2){
 		writerr(fd, "bad protocol");
 		return (nil, nil);
 	}
@@ -234,7 +240,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 
 	# Handle cansecstore probe (m=0)
 	if(hexm == "0"){
-		hexHi := readverifier(C);
+		(nil, hexHi) := readverifier(C);
 		if(hexHi != nil)
 			sys->fprint(fd, "!account exists");
 		else
@@ -243,9 +249,13 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	}
 
 	# Look up user's PAK verifier
-	hexHi := readverifier(C);
+	(acctver, hexHi) := readverifier(C);
 	if(hexHi == nil){
 		writerr(fd, "no account");
+		return (nil, nil);
+	}
+	if(acctver != ver){
+		writerr(fd, "account version mismatch");
 		return (nil, nil);
 	}
 	Hi := IPint.strtoip(hexHi, 64);
@@ -263,7 +273,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	hexsigma := sigma.iptostr(64);
 
 	# Compute server verification hash
-	digest := shorthash("server", C, sname, hexm, hexmu, hexsigma, hexHi);
+	digest := shorthashver(ver, "server", C, sname, hexm, hexmu, hexsigma, hexHi);
 	ks := base64->enc(digest);
 
 	# Send mu, k (server hash), S (server name)
@@ -298,7 +308,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		kprime = kprime[:len kprime - 1];
 
 	# Verify client hash
-	digest = shorthash("client", C, sname, hexm, hexmu, hexsigma, hexHi);
+	digest = shorthashver(ver, "client", C, sname, hexm, hexmu, hexsigma, hexHi);
 	kc := base64->enc(digest);
 	if(debug)
 		log(sys->sprint("PAK client k'=%q expected=%q", kprime, kc));
@@ -308,21 +318,34 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	}
 
 	# Set session secret (direction=1 for server, opposite of client's 0)
-	digest = shorthash("session", C, sname, hexm, hexmu, hexsigma, hexHi);
+	digest = shorthashver(ver, "session", C, sname, hexm, hexmu, hexsigma, hexHi);
 
 	# Zero sigma
 	for(i := 0; i < len hexsigma; i++)
 		hexsigma[i] = 0;
 
-	secretin := array[Keyring->SHA1dlen] of byte;
-	secretout := array[Keyring->SHA1dlen] of byte;
-	# Server reverses client's direction: client out=HMAC("two"), so server in=HMAC("two")
-	kr->hmac_sha1(digest, len digest, array of byte "one", secretout, nil);
-	kr->hmac_sha1(digest, len digest, array of byte "two", secretin, nil);
-	e := ssl->secret(conn, secretin, secretout);
-	if(e != nil){
-		log("setsecret: " + e);
-		return (nil, nil);
+	if(ver == VERSION2){
+		secretin := array[Keyring->SHA256dlen] of byte;
+		secretout := array[Keyring->SHA256dlen] of byte;
+		# Server reverses client's direction: client out=HMAC("two"), so server in=HMAC("two")
+		kr->hmac_sha256(digest, len digest, array of byte "one", secretout, nil);
+		kr->hmac_sha256(digest, len digest, array of byte "two", secretin, nil);
+		e := ssl->secret(conn, secretin, secretout);
+		if(e != nil){
+			log("setsecret: " + e);
+			return (nil, nil);
+		}
+	}else{
+		secretin := array[Keyring->SHA1dlen] of byte;
+		secretout := array[Keyring->SHA1dlen] of byte;
+		# Server reverses client's direction: client out=HMAC("two"), so server in=HMAC("two")
+		kr->hmac_sha1(digest, len digest, array of byte "one", secretout, nil);
+		kr->hmac_sha1(digest, len digest, array of byte "two", secretin, nil);
+		e := ssl->secret(conn, secretin, secretout);
+		if(e != nil){
+			log("setsecret: " + e);
+			return (nil, nil);
+		}
 	}
 	erasekey(digest);
 
@@ -510,8 +533,40 @@ shaz(s: string, digest: array of byte, state: ref DigestState): ref DigestState
 	return state;
 }
 
+shaz256(s: string, digest: array of byte, state: ref DigestState): ref DigestState
+{
+	a := array of byte s;
+	state = kr->sha256(a, len a, digest, state);
+	erasekey(a);
+	return state;
+}
+
 shorthash(mess: string, C: string, S: string, m: string, mu: string, sigma: string, Hi: string): array of byte
 {
+	return shorthashver(VERSION1, mess, C, S, m, mu, sigma, Hi);
+}
+
+shorthashver(version: string, mess: string, C: string, S: string, m: string, mu: string, sigma: string, Hi: string): array of byte
+{
+	if(version == VERSION2){
+		state := shaz256(mess, nil, nil);
+		state = shaz256(C, nil, state);
+		state = shaz256(S, nil, state);
+		state = shaz256(m, nil, state);
+		state = shaz256(mu, nil, state);
+		state = shaz256(sigma, nil, state);
+		state = shaz256(Hi, nil, state);
+		state = shaz256(mess, nil, state);
+		state = shaz256(C, nil, state);
+		state = shaz256(S, nil, state);
+		state = shaz256(m, nil, state);
+		state = shaz256(mu, nil, state);
+		state = shaz256(sigma, nil, state);
+		digest := array[Keyring->SHA256dlen] of byte;
+		shaz256(Hi, digest, state);
+		return digest;
+	}
+
 	state := shaz(mess, nil, nil);
 	state = shaz(C, nil, state);
 	state = shaz(S, nil, state);
@@ -538,23 +593,34 @@ erasekey(a: array of byte)
 
 # ── User/File Management ─────────────────────────────────────
 
-readverifier(user: string): string
+readverifier(user: string): (string, string)
 {
 	if(!safename(user))
-		return nil;
+		return (nil, nil);
 	path := storedir + "/" + user + "/PAK";
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return nil;
+		return (nil, nil);
 	buf := array[1024] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0)
-		return nil;
+		return (nil, nil);
 	s := string buf[0:n];
 	# Strip trailing whitespace
-	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' ' || s[len s-1] == '\t'))
 		s = s[:len s-1];
-	return s;
+	if(s == nil || s == "")
+		return (nil, nil);
+	(nf, flds) := sys->tokenize(s, " \t");
+	if(nf == 1)
+		return (VERSION1, hd flds);
+	if(nf >= 2){
+		version := hd flds;
+		hexHi := hd tl flds;
+		if(version == VERSION1 || version == VERSION2)
+			return (version, hexHi);
+	}
+	return (nil, nil);
 }
 
 userpath(user: string, name: string): string

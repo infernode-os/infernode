@@ -95,6 +95,18 @@ testSGCM2UserBinding(t: ref T)
 	t.assert(out == nil, "wrong user root key cannot decrypt SGCM2 blob");
 }
 
+testVerifierFormats(t: ref T)
+{
+	formatted := secstore->formatverifier("secstore2", "deadbeef");
+	(ver, hexHi) := secstore->parseverifier(formatted);
+	t.assertseq(ver, "secstore2", "parseverifier keeps secstore2 prefix");
+	t.assertseq(hexHi, "deadbeef", "parseverifier keeps secstore2 verifier body");
+
+	(ver, hexHi) = secstore->parseverifier("cafebabe");
+	t.assertseq(ver, "secstore", "bare verifier parses as legacy secstore");
+	t.assertseq(hexHi, "cafebabe", "bare verifier keeps legacy body");
+}
+
 hasprefix(a: array of byte, s: string): int
 {
 	p := array of byte s;
@@ -131,6 +143,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SGCM2RoundTrip", testSGCM2RoundTrip);
 	run("SGCM1Compat", testSGCM1Compat);
 	run("SGCM2UserBinding", testSGCM2UserBinding);
+	run("VerifierFormats", testVerifierFormats);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

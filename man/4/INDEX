@@ -18,6 +18,7 @@ keysrv keysrv
 kfs kfs
 lockfs lockfs
 logfile logfile
+mail9p mail9p
 memfs memfs
 mntgen mntgen
 namespace namespace

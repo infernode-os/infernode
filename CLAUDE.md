@@ -360,7 +360,7 @@ infernode/
 │   ├── Linux/           #   Linux emulator (build with build-linux-*.sh)
 │   └── port/            #   Platform-independent emulator source
 ├── appl/                # Limbo application source (~700 .b files)
-│   ├── cmd/             #   Command-line utilities
+│   ├── cmd/             #   Command-line utilities (incl. mail9p — IMAP/SMTP at /n/mail)
 │   ├── lib/             #   Library modules
 │   ├── veltro/          #   Veltro AI agent system
 │   ├── xenith/          #   Xenith text environment (Acme fork)

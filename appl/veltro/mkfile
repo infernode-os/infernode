@@ -47,7 +47,6 @@ TOOLS=\
     tools/say.dis\
     tools/hear.dis\
     tools/websearch.dis\
-    tools/mail.dis\
     tools/browse.dis\
     tools/charon.dis\
     tools/gpu.dis\
@@ -177,10 +176,6 @@ tools/hear.dis: tools/hear.b tool.m
 
 tools/websearch.dis: tools/websearch.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/websearch.dis tools/websearch.b
-
-# Mail tool
-tools/mail.dis: tools/mail.b tool.m
-	limbo $LIMBOFLAGS -gw -o tools/mail.dis tools/mail.b
 
 # Browse tool
 tools/browse.dis: tools/browse.b tool.m

@@ -100,12 +100,14 @@ check "Scroll-anywhere feature comment exists" \
     "grep -q 'scroll window body from anywhere' '$XENITH_FILE'"
 
 # Test 9: Uses w.body for scrolling (not t)
+# Window-body extraction sits inside a larger conditional block; widen the
+# window so the assertions don't drift on minor restructures.
 check "Scroll-anywhere targets w.body (not current text)" \
-    "grep -A10 'scroll window body from anywhere' '$XENITH_FILE' | grep -q 'w.body.typex'"
+    "grep -A20 'scroll window body from anywhere' '$XENITH_FILE' | grep -q 'w.body.typex'"
 
 # Test 10: Sets w.body.eq0 for scroll anywhere
 check "Scroll-anywhere sets w.body.eq0" \
-    "grep -A10 'scroll window body from anywhere' '$XENITH_FILE' | grep -q 'w.body.eq0'"
+    "grep -A20 'scroll window body from anywhere' '$XENITH_FILE' | grep -q 'w.body.eq0'"
 
 echo ""
 echo "--- Xenith Acme-Style Variable Scroll Speed ---"

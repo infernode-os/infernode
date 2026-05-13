@@ -7,10 +7,17 @@ implement ToolTask;
 # Each task gets its own activity, tools9p, and lucibridge.
 #
 # Commands:
-#   create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [instructions=<text>] [category=<text>]
+#   create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [brief=<text>]
+#          [instructions=<text>] [category=<text>] [model=<name>] [agenttype=<type>]
 #   status <id>
 #   list
 #   close <id>
+#
+# Unknown create args are rejected loudly (with the valid set listed) so the
+# caller — typically an LLM — gets a clear signal instead of having silently
+# dropped fields. Allowed model names live in MODELS; "" inherits from parent.
+# agenttype= names a prompt under /lib/veltro/agents/<type>.txt and sets
+# category-specific defaults (see AGENT_DEFAULTS below).
 #
 
 include "sys.m";
@@ -32,6 +39,24 @@ ToolTask: module {
 
 UI_MOUNT: con "/n/ui";
 
+# Keys accepted by `task create`. Anything else is rejected; this is the
+# signal the LLM relies on to self-correct when it hallucinates fields.
+# Initialized in init() since Limbo `con` does not support array literals.
+createkeys: list of string;
+
+# Recognised models. "" means "inherit parent session's model" (current
+# default behaviour). Keep in sync with serve-llm's backend registry.
+models: list of string;
+
+# Per-agenttype defaults applied when a field is omitted. Fields the caller
+# supplies always win — agenttype only fills blanks. Each tuple is
+# (name, default-model, default-tools-csv).
+#
+# coder: backed by the Daedalus fine-tune (Limbo-capable), with the tool
+# surface a coding loop typically needs. Tools must still be in the
+# delegation budget; missing ones are dropped at provision time.
+agentdefs: list of (string, string, string);
+
 init(): string
 {
 	sys = load Sys Sys->PATH;
@@ -40,6 +65,14 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+
+	createkeys = "label" :: "tools" :: "paths" :: "urgency" :: "brief" ::
+		"instructions" :: "category" :: "model" :: "agenttype" :: nil;
+
+	models = "gpt-oss" :: "daedalus" :: "haiku" :: "sonnet" :: "opus" :: nil;
+
+	agentdefs = ("coder", "daedalus", "read,write,edit,find,grep,list,limbo") :: nil;
+
 	return nil;
 }
 
@@ -52,10 +85,18 @@ doc(): string
 {
 	return "task - Create and manage delegated AI tasks\n\n" +
 		"Commands:\n" +
-		"  create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [instructions=<text>]\n" +
+		"  create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]\n" +
+		"         [brief=<text>] [instructions=<text>] [category=<text>]\n" +
+		"         [model=<name>] [agenttype=<type>]\n" +
 		"      Create new task with isolated tools and conversation.\n" +
 		"      Tools validated against delegation budget.\n" +
 		"      instructions= sets structured directives injected into the TA system prompt.\n" +
+		"      model= selects the LLM backing the new activity (gpt-oss, daedalus,\n" +
+		"        haiku, sonnet, opus). Omit to inherit parent session's model.\n" +
+		"      agenttype= picks a prompt under /lib/veltro/agents/<type>.txt and\n" +
+		"        fills sensible defaults (e.g. agenttype=coder ⇒ model=daedalus,\n" +
+		"        tools=read,write,edit,find,grep,list,limbo).\n" +
+		"      Unknown args are rejected with the list of valid keys.\n" +
 		"  status <id>     Show task status and urgency\n" +
 		"  list            List all active tasks\n" +
 		"  close <id>      Archive a completed task\n\n" +
@@ -64,6 +105,8 @@ doc(): string
 		"Examples:\n" +
 		"  task create label=Review tools=read,list,find,grep\n" +
 		"  task create label=Editor instructions=\"Open /lib/veltro/system.txt and edit it\"\n" +
+		"  task create label=BugFix agenttype=coder brief=\"fix the bug in cat.b\"\n" +
+		"  task create label=Refactor model=daedalus tools=read,write,edit\n" +
 		"  task list\n" +
 		"  task status 2\n" +
 		"  task close 2";
@@ -153,11 +196,35 @@ getattr(attrs: list of (string, string), key: string): string
 docreate(args: string): string
 {
 	attrs := parseattrs(args);
+
+	# Reject unknown keys before doing any work. The error names the offender
+	# and lists the full valid set so a model can correct on the next attempt
+	# instead of having the field silently dropped (the v3-era behaviour).
+	badkey := firstunknownkey(attrs);
+	if(badkey != "")
+		return sys->sprint("error: unknown arg '%s' (valid: %s). See INFR-55.",
+			badkey, joinstrs(createkeys, ", "));
+
 	label := getattr(attrs, "label");
 	if(label == "")
 		return "error: label required. Usage: create label=<name> [tools=<csv>]";
 
+	agenttype := str->tolower(getattr(attrs, "agenttype"));
+	(deftools, defmodel) := agentdefaults(agenttype);
+	if(agenttype != "" && deftools == "" && defmodel == "")
+		return sys->sprint("error: unknown agenttype '%s' (valid: %s).",
+			agenttype, knownagenttypes());
+
+	model := getattr(attrs, "model");
+	if(model == "" && defmodel != "")
+		model = defmodel;
+	if(model != "" && !knownmodel(model))
+		return sys->sprint("error: unknown model '%s' (valid: %s).",
+			model, joinmodels());
+
 	toolsarg := getattr(attrs, "tools");
+	if(toolsarg == "" && deftools != "")
+		toolsarg = deftools;
 	urgstr := getattr(attrs, "urgency");
 
 	# Validate tools against budget
@@ -231,6 +298,30 @@ docreate(args: string): string
 			ib := array of byte instructions;
 			sys->write(ifd, ib, len ib);
 			ifd = nil;
+		}
+	}
+
+	# Model and agenttype are propagated to the child lucibridge via the
+	# same /tmp/veltro/<key>.<id> pattern as brief/instructions. lucibridge
+	# reads these files at startup (before opening the LLM session). Files
+	# are only written when explicitly set so the absence still means
+	# "inherit parent session's model" / "use default task prompt".
+	if(model != "") {
+		mpath := sys->sprint("/tmp/veltro/model.%d", newid);
+		mfd := sys->create(mpath, Sys->OWRITE, 8r644);
+		if(mfd != nil) {
+			mb := array of byte model;
+			sys->write(mfd, mb, len mb);
+			mfd = nil;
+		}
+	}
+	if(agenttype != "") {
+		apath := sys->sprint("/tmp/veltro/agenttype.%d", newid);
+		afd := sys->create(apath, Sys->OWRITE, 8r644);
+		if(afd != nil) {
+			ab := array of byte agenttype;
+			sys->write(afd, ab, len ab);
+			afd = nil;
 		}
 	}
 
@@ -396,6 +487,75 @@ splitlines(s: string): list of string
 	for(; result != nil; result = tl result)
 		rev = hd result :: rev;
 	return rev;
+}
+
+# Return the first attr key that is not in createkeys, or "" if all are valid.
+firstunknownkey(attrs: list of (string, string)): string
+{
+	for(; attrs != nil; attrs = tl attrs) {
+		(k, nil) := hd attrs;
+		if(!strlistcontains(createkeys, k))
+			return k;
+	}
+	return "";
+}
+
+strlistcontains(l: list of string, s: string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+joinstrs(l: list of string, sep: string): string
+{
+	r := "";
+	first := 1;
+	for(; l != nil; l = tl l) {
+		if(!first)
+			r += sep;
+		r += hd l;
+		first = 0;
+	}
+	return r;
+}
+
+knownmodel(m: string): int
+{
+	return strlistcontains(models, m);
+}
+
+joinmodels(): string
+{
+	return joinstrs(models, ", ");
+}
+
+# Look up agenttype defaults. Returns (tools, model). Both empty if unknown.
+agentdefaults(t: string): (string, string)
+{
+	if(t == "")
+		return ("", "");
+	for(l := agentdefs; l != nil; l = tl l) {
+		(name, defmodel, deftools) := hd l;
+		if(name == t)
+			return (deftools, defmodel);
+	}
+	return ("", "");
+}
+
+knownagenttypes(): string
+{
+	r := "";
+	first := 1;
+	for(l := agentdefs; l != nil; l = tl l) {
+		(name, nil, nil) := hd l;
+		if(!first)
+			r += ", ";
+		r += name;
+		first = 0;
+	}
+	return r;
 }
 
 contains(haystack, needle: string): int

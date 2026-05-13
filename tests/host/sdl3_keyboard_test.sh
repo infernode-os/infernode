@@ -17,7 +17,7 @@
 #    - Subsequent keypresses compose via latin1.h table
 #
 # 4. UTF-8 support in TEXT_INPUT
-#    - Full UTF-8 decoding (1-4 byte sequences)
+#    - Full UTF-8 decoding via Plan 9 chartorune() (handles 1-4 byte sequences)
 #
 # See: emu/port/draw-sdl3.c keyboard event handlers
 #
@@ -109,28 +109,33 @@ check "Latin NOT sent on KEY_DOWN for Alt" \
 echo ""
 echo "--- UTF-8 Support ---"
 
-# Test 11: UTF-8 1-byte ASCII handling (0x80 check)
-check "UTF-8 1-byte ASCII detection (0x80)" \
-    "grep -q '0x80.*== 0' '$SDL3_FILE' || grep -q '\*text & 0x80' '$SDL3_FILE'"
+# UTF-8 decoding was simplified to use Plan 9's chartorune() (libutf), which
+# handles 1-4 byte sequences uniformly. Validate that path is in use rather
+# than hand-rolled byte-pattern matching.
 
-# Test 12: UTF-8 2-byte sequence handling (0xE0/0xC0)
-check "UTF-8 2-byte sequence handling" \
-    "grep -q '0xE0.*0xC0\|0xC0.*0x1F' '$SDL3_FILE'"
+# Test 11: UTF-8 decoded via Plan 9 chartorune()
+check "UTF-8 decoded via chartorune()" \
+    "grep -q 'chartorune(' '$SDL3_FILE'"
 
-# Test 13: UTF-8 3-byte sequence handling (0xF0/0xE0)
-check "UTF-8 3-byte sequence handling" \
-    "grep -q '0xF0.*0xE0\|0x0F.*12' '$SDL3_FILE'"
+# Test 12: Decoded codepoint stored in a Rune
+check "Decoded codepoint stored in Rune" \
+    "grep -A8 'handle_text_input' '$SDL3_FILE' | grep -q 'Rune '"
 
-# Test 14: UTF-8 4-byte sequence handling (0xF8/0xF0)
-check "UTF-8 4-byte sequence handling" \
-    "grep -q '0xF8.*0xF0\|0x07.*18' '$SDL3_FILE'"
+# Test 13: Invalid sequences detected via Runeerror sentinel
+check "Invalid UTF-8 sequences handled (Runeerror)" \
+    "grep -q 'Runeerror' '$SDL3_FILE'"
+
+# Test 14: Decoder advances by byte count returned from chartorune()
+check "Decoder advances by chartorune() byte count" \
+    "awk '/^handle_text_input\\(/,/^}/' '$SDL3_FILE' | grep -q 'text += n'"
 
 echo ""
 echo "--- Event Modifier Handling ---"
 
-# Test 15: Uses event.key.mod instead of SDL_GetModState() for KEY_DOWN
+# Test 15: KEY_DOWN handler uses event->key.mod (not SDL_GetModState()) for modifiers.
+# Per-event modifiers were factored into handle_key_down(), so look there.
 check "KEY_DOWN uses event.key.mod for modifiers" \
-    "grep -A10 'SDL_EVENT_KEY_DOWN' '$SDL3_FILE' | grep -q 'event.key.mod'"
+    "awk '/^handle_key_down\\(/,/^}/' '$SDL3_FILE' | grep -q 'event->key.mod'"
 
 echo ""
 echo "=== Results ==="

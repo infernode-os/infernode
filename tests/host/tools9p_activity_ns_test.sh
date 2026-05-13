@@ -52,7 +52,16 @@ echo ""
 [[ -f "$ROOT/dis/veltro/tools9p.dis" ]] || {
     skip "tools9p.dis not found"; echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"; exit 0; }
 
-# emu_c: run a short Inferno sh -c command
+# emu_c: run a short Inferno sh -c command.
+#
+# Each test command ends with "echo DONE"; we treat the presence of that
+# sentinel in stdout as the success signal, independent of emu's exit code.
+# Rationale: the test commands background a long-lived tools9p daemon that
+# keeps emu alive past the trailing `echo DONE`. Depending on the host (CI
+# container, Jetson, sandbox) the host process is then reaped via SIGTERM
+# (exit 124 from timeout(1)) or SIGKILL (exit 137). Both outcomes are fine
+# — we already captured the relevant output before emu died. Only treat
+# missing DONE as an actual failure to launch.
 emu_c() {
     local name="$1" tout="$2" cmd="$3"
     local log="/tmp/.t9pnstest-${name}.log"
@@ -60,13 +69,12 @@ emu_c() {
             </dev/null >"$log" 2>&1
     local rc=$?
     OUTPUT=$(cat "$log")
-    if [[ "$rc" -eq 0 ]] || [[ "$rc" -eq 124 ]]; then
-        info "[$name] ok: $OUTPUT"
+    if echo "$OUTPUT" | grep -q "DONE"; then
+        info "[$name] ok (rc=$rc): $OUTPUT"
         return 0
-    else
-        info "[$name] error (rc=$rc): $OUTPUT"
-        return 1
     fi
+    info "[$name] error (rc=$rc, no DONE sentinel): $OUTPUT"
+    return 1
 }
 
 # --- Test 1: /tool/activity via direct read (no asyncexec) ---
@@ -94,8 +102,10 @@ echo "── activity ID via tool exec (through asyncexec + restriction) ──"
 # The result is read back from the same ctl file.
 # The read tool returns "1: <content>" format.
 if emu_c "toolexec0" 15 "tools9p -a 5 -m /tool read & sleep 2; echo '/tool/activity' > /tool/read/ctl; sleep 1; cat /tool/read/ctl; echo DONE"; then
-    # Read tool output format: "    1\t5" (tab-separated line-numbered)
-    if echo "$OUTPUT" | grep -q $'\\t5'; then
+    # Read tool output format: "    1\t5" (line-number, TAB, then file contents)
+    # $'\t' yields a literal tab; $'\\t' yields a backslash-t (matches "t5"
+    # rather than tab+5) — keep the single-backslash form.
+    if echo "$OUTPUT" | grep -q $'\t5'; then
         pass "tool exec: /tool/activity returns 5 for -a 5 (parent mount)"
     else
         fail "tool exec: expected 5 in output, got: $(echo "$OUTPUT" | head -5)"
@@ -113,12 +123,12 @@ fi
 echo ""
 echo "── activity ID via tool exec with child mount /tool.7 (REGRESSION) ──"
 if emu_c "childns" 15 "tools9p -a 7 -m /tool.7 -p /dis/wm read & sleep 2; echo '/tool/activity' > /tool.7/read/ctl; sleep 1; cat /tool.7/read/ctl; echo DONE"; then
-    # Must match tab-7 (tool result), not "7" in "/tool.7" paths
-    if echo "$OUTPUT" | grep -q $'\\t7'; then
+    # Must match tab-7 (tool result), not "7" in "/tool.7" paths.
+    if echo "$OUTPUT" | grep -q $'\t7'; then
         pass "child mount /tool.7: tool exec sees activity 7 after restriction"
     else
         # The old bug: /tool/activity returns 0 (parent) instead of 7 (child)
-        if echo "$OUTPUT" | grep -q $'\\t0'; then
+        if echo "$OUTPUT" | grep -q $'\t0'; then
             fail "child mount /tool.7: tool exec returned 0 (parent ID) — bind-before-restrict regression!"
         else
             fail "child mount /tool.7: expected 7, got: $(echo "$OUTPUT" | head -5)"
@@ -134,8 +144,8 @@ fi
 echo ""
 echo "── two instances: child /tool.9 must not see parent's activity 0 ──"
 if emu_c "twoinstance" 20 "tools9p -a 0 -m /tool read & sleep 2; tools9p -a 9 -m /tool.9 -p /dis/wm read & sleep 2; echo '/tool/activity' > /tool.9/read/ctl; sleep 1; cat /tool.9/read/ctl; echo DONE"; then
-    # Must match tab-9 (tool result), not "9" in "/tool.9" paths
-    if echo "$OUTPUT" | grep -q $'\\t9'; then
+    # Must match tab-9 (tool result), not "9" in "/tool.9" paths.
+    if echo "$OUTPUT" | grep -q $'\t9'; then
         pass "child /tool.9 tool exec sees activity 9 (not parent's 0)"
     else
         fail "child /tool.9: expected 9, got: $(echo "$OUTPUT" | head -5)"

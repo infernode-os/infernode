@@ -1,6 +1,8 @@
 task - Create and manage delegated AI tasks
 
-  task create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [brief=<text>] [instructions=<text>]
+  task create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
+              [brief=<text>] [instructions=<text>] [category=<text>]
+              [model=<name>] [agenttype=<type>]
       Create new task with isolated conversation and tools.
       Tools validated against delegation budget (/tool/budget).
       brief= sets the initial context message for the task agent.
@@ -8,6 +10,14 @@ task - Create and manage delegated AI tasks
       instructions= sets structured directives injected into the
       TA system prompt via <instructions> tags. Use for specific
       procedural guidance the task agent should follow.
+      model= selects the LLM backing the new activity. Valid:
+      gpt-oss, daedalus, haiku, sonnet, opus. Omit to inherit the
+      parent session's model.
+      agenttype= picks a preset prompt + defaults. Currently:
+        coder — Limbo-capable Daedalus fine-tune with
+                tools=read,write,edit,find,grep,list,limbo
+      Unknown args (e.g. priority=high) are rejected with the list
+      of valid keys instead of being silently dropped.
       Returns activity ID.
 
   task status <id>     Show task status, urgency, label
@@ -31,6 +41,8 @@ Examples:
   task create label="Poetry" brief="Help the user write and refine poems"
   task create label=Editor instructions="Open /lib/veltro/system.txt and suggest improvements"
   task create label=Refactor tools=read,edit,grep instructions="Refactor all uses of foo() to bar()"
+  task create label=BugFix agenttype=coder brief="fix the bug in cat.b"
+  task create label=Port model=daedalus tools=read,write,edit,limbo brief="port spawn.b to ARM64"
   task list
   task status 2
   task close 2

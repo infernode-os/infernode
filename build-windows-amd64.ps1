@@ -685,6 +685,8 @@ $MODULE = "$ROOT\module"
 
 # Helper: compile all .b files in a source dir to a target dis dir.
 # Compiles to a temp file first to avoid clobbering existing .dis on failure.
+# Runs limbo with CWD=SrcDir so relative includes (e.g. "../tool.m" in
+# appl/veltro/tools/*.b) resolve the same way mk does them.
 function Build-DisDir {
     param(
         [string]$SrcDir,
@@ -695,10 +697,11 @@ function Build-DisDir {
     $count = 0
     $prevPref = $ErrorActionPreference
     $ErrorActionPreference = "SilentlyContinue"
-    Get-ChildItem -Path $SrcDir -Filter "*.b" -File | ForEach-Object {
+    Push-Location $SrcDir
+    Get-ChildItem -Path . -Filter "*.b" -File | ForEach-Object {
         $name = $_.BaseName
         $tmpDis = "$DisDir\$name.dis.tmp"
-        $output = & $LIMBO -I $MODULE -o $tmpDis $_.FullName 2>&1
+        $output = & $LIMBO -I $MODULE -o $tmpDis $_.Name 2>&1
         if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpDis)) {
             Move-Item -Force $tmpDis "$DisDir\$name.dis"
             $count++
@@ -706,6 +709,7 @@ function Build-DisDir {
             Remove-Item -Force $tmpDis -ErrorAction SilentlyContinue
         }
     }
+    Pop-Location
     $ErrorActionPreference = $prevPref
     return $count
 }
@@ -733,6 +737,13 @@ $totalDis += $n
 $applDirs = @("acme","charon","grid","math","svc","veltro","wm","xenith")
 foreach ($dir in $applDirs) {
     $n = Build-DisDir "$ROOT\appl\$dir" "$ROOT\dis\$dir"
+    $totalDis += $n
+}
+
+# appl/veltro subdirs -> dis/veltro/<sub>/
+$veltroSubdirs = @("sources","tools")
+foreach ($sub in $veltroSubdirs) {
+    $n = Build-DisDir "$ROOT\appl\veltro\$sub" "$ROOT\dis\veltro\$sub"
     $totalDis += $n
 }
 

@@ -86,10 +86,27 @@ Qacctsdir:  con 2;	# /accounts
 Qacctdir:   con 3;	# /accounts/<name>
 Qacctctl:   con 4;	# /accounts/<name>/ctl
 Qboxesdir:  con 5;	# /accounts/<name>/boxes
+Qboxdir:    con 6;	# /accounts/<name>/boxes/<box>
+Qboxctl:    con 7;	# /accounts/<name>/boxes/<box>/ctl
+Qmsgdir:    con 8;	# /accounts/<name>/boxes/<box>/<uid>
+# Per-message field files (Chunk C) start at 16 and below the 0x10
+# space we leave room for any additional directory types.
+
+# A folder is stable identified by its index into Account.folders.
+# Folders that disappear on sync get the .name cleared but their slot
+# is never reused, keeping qid paths stable for the process lifetime.
+Folder: adt {
+	name:     string;	# empty if folder no longer exists
+};
 
 # Per-account IMAP state. Each account loads its own Imap module
 # instance so the module-level globals in appl/lib/imap.b
 # (fd/ibuf/connected/currentmbox) belong to exactly one account.
+#
+# Concurrency model: all IMAP calls happen from the serveloop. The
+# navigator goroutine only reads cached state (folders / msgs /
+# currentbox), never calls into a.imap. This keeps the lib's
+# module-level globals race-free without explicit locking.
 Account: adt {
 	name:      string;
 	server:    string;	# IMAP server hostname
@@ -97,8 +114,10 @@ Account: adt {
 	mode:      int;		# Imap->IMPLICIT_TLS | Imap->STARTTLS
 	imap:      Imap;	# loaded Imap module instance
 	connected: int;
-	# Cached folder list, refreshed on sync. nil before first sync.
-	folders:   array of string;
+	# Append-only folder slots. Sync nils the .name of folders the
+	# server no longer reports.
+	folders:   array of ref Folder;
+	nfolders:  int;
 	# Currently SELECTed mailbox, or "" if none.
 	currentbox: string;
 	# Mailbox state from the last SELECT.
@@ -225,6 +244,9 @@ PACCTS:   con big Qacctsdir;
 mkacctdir(idx: int): big { return MKPATH(Qacctdir, idx, 0, big 0); }
 mkacctctl(idx: int): big { return MKPATH(Qacctctl, idx, 0, big 0); }
 mkboxesdir(idx: int): big { return MKPATH(Qboxesdir, idx, 0, big 0); }
+mkboxdir(aidx, bidx: int): big { return MKPATH(Qboxdir, aidx, bidx, big 0); }
+mkboxctl(aidx, bidx: int): big { return MKPATH(Qboxctl, aidx, bidx, big 0); }
+mkmsgdir(aidx, bidx: int, uid: big): big { return MKPATH(Qmsgdir, aidx, bidx, uid); }
 
 #
 # Account management
@@ -261,13 +283,59 @@ newaccount(name, server, smtpserver: string, mode: int): (int, ref Account)
 	a.mode = mode;
 	a.imap = nil;
 	a.connected = 0;
-	a.folders = nil;
+	a.folders = array[16] of ref Folder;
+	a.nfolders = 0;
 	a.currentbox = "";
 	a.mbox = nil;
 	a.msgs = nil;
 	accounts[idx] = a;
 	vers++;
 	return (idx, a);
+}
+
+# Find a folder by name; returns (-1, nil) if not present (or deleted).
+findfolder(a: ref Account, name: string): (int, ref Folder)
+{
+	for(i := 0; i < a.nfolders; i++)
+		if(a.folders[i] != nil && a.folders[i].name == name)
+			return (i, a.folders[i]);
+	return (-1, nil);
+}
+
+# Append a folder slot, growing the array if needed.
+appendfolder(a: ref Account, name: string)
+{
+	if(a.nfolders >= len a.folders) {
+		ns := array[len a.folders * 2] of ref Folder;
+		ns[0:] = a.folders[0:a.nfolders];
+		a.folders = ns;
+	}
+	a.folders[a.nfolders++] = ref Folder(name);
+}
+
+# Reconcile cached folder list against a fresh server list. Names not
+# in the new list are nilled in-place (slot index preserved); new
+# names are appended.
+mergefolders(a: ref Account, fresh: list of string)
+{
+	# Mark which existing slots are still present.
+	seen := array[a.nfolders] of int;
+	for(l := fresh; l != nil; l = tl l) {
+		name := hd l;
+		found := 0;
+		for(i := 0; i < a.nfolders; i++) {
+			if(a.folders[i] != nil && a.folders[i].name == name) {
+				seen[i] = 1;
+				found = 1;
+				break;
+			}
+		}
+		if(!found)
+			appendfolder(a, name);
+	}
+	for(i := 0; i < a.nfolders; i++)
+		if(a.folders[i] != nil && !seen[i])
+			a.folders[i] = nil;
 }
 
 findaccountbyname(name: string): (int, ref Account)
@@ -373,14 +441,55 @@ navigator(navops: chan of ref Navop)
 				n.reply <-= dirgen(n.path);
 
 			Qboxesdir =>
-				# Next-pass: walk into <boxname> here. For the
-				# scaffold the directory is empty.
+				aidx := ACCT(n.path);
 				case n.name {
 				".." =>
-					n.path = mkacctdir(ACCT(n.path));
+					n.path = mkacctdir(aidx);
 					n.reply <-= dirgen(n.path);
 				* =>
-					n.reply <-= (nil, Enotfound);
+					if(aidx >= naccounts || accounts[aidx] == nil) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					(bidx, f) := findfolder(accounts[aidx], n.name);
+					if(f == nil) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = mkboxdir(aidx, bidx);
+					n.reply <-= dirgen(n.path);
+				}
+
+			Qboxdir =>
+				aidx := ACCT(n.path);
+				bidx := BOX(n.path);
+				case n.name {
+				".." =>
+					n.path = mkboxesdir(aidx);
+					n.reply <-= dirgen(n.path);
+				"ctl" =>
+					n.path = mkboxctl(aidx, bidx);
+					n.reply <-= dirgen(n.path);
+				* =>
+					# Walk by UID. Only the currently-selected box has
+					# a cached msg list; other boxes appear as empty.
+					if(aidx >= naccounts || accounts[aidx] == nil) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					a := accounts[aidx];
+					if(bidx >= a.nfolders || a.folders[bidx] == nil ||
+					   a.folders[bidx].name != a.currentbox) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					uid := strtobig(n.name);
+					if(uid <= big 0 || !uidpresent(a, uid)) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = mkmsgdir(aidx, bidx, uid);
+					n.reply <-= dirgen(n.path);
 				}
 
 			* =>
@@ -392,6 +501,8 @@ navigator(navops: chan of ref Navop)
 						n.path = PROOT;
 					Qacctctl =>
 						n.path = mkacctdir(ACCT(n.path));
+					Qboxctl =>
+						n.path = mkboxdir(ACCT(n.path), BOX(n.path));
 					* =>
 						n.path = PROOT;
 					}
@@ -433,9 +544,39 @@ navigator(navops: chan of ref Navop)
 				entries = mkacctctl(idx) :: entries;
 
 			Qboxesdir =>
-				# Empty in the scaffold; next-pass fills with the
-				# IMAP folder list.
-				entries = nil;
+				aidx := ACCT(m.path);
+				if(aidx < naccounts && accounts[aidx] != nil) {
+					a := accounts[aidx];
+					for(i := 0; i < a.nfolders; i++)
+						if(a.folders[i] != nil)
+							entries = mkboxdir(aidx, i) :: entries;
+					rev2: list of big;
+					for(; entries != nil; entries = tl entries)
+						rev2 = hd entries :: rev2;
+					entries = rev2;
+				}
+
+			Qboxdir =>
+				aidx := ACCT(m.path);
+				bidx := BOX(m.path);
+				entries = mkboxctl(aidx, bidx) :: entries;
+				# UID-named message dirs visible only when this folder
+				# is the currently-selected box.
+				if(aidx < naccounts && accounts[aidx] != nil) {
+					a := accounts[aidx];
+					if(bidx < a.nfolders && a.folders[bidx] != nil &&
+					   a.folders[bidx].name == a.currentbox &&
+					   a.msgs != nil) {
+						msgs := a.msgs;
+						for(i := 0; i < len msgs; i++)
+							if(msgs[i] != nil)
+								entries = mkmsgdir(aidx, bidx, big msgs[i].uid) :: entries;
+					}
+				}
+				rev3: list of big;
+				for(; entries != nil; entries = tl entries)
+					rev3 = hd entries :: rev3;
+				entries = rev3;
 
 			* =>
 				entries = nil;
@@ -518,6 +659,43 @@ dirgen(path: big): (ref Sys->Dir, string)
 			return (nil, Enotfound);
 		return (mkdir(Sys->Qid(path, vers, Sys->QTDIR), "boxes", 8r555), nil);
 
+	Qboxdir =>
+		aidx := ACCT(path);
+		bidx := BOX(path);
+		if(aidx >= naccounts || accounts[aidx] == nil)
+			return (nil, Enotfound);
+		a := accounts[aidx];
+		if(bidx >= a.nfolders || a.folders[bidx] == nil)
+			return (nil, Enotfound);
+		return (mkdir(Sys->Qid(path, vers, Sys->QTDIR),
+			a.folders[bidx].name, 8r555), nil);
+
+	Qboxctl =>
+		aidx := ACCT(path);
+		bidx := BOX(path);
+		if(aidx >= naccounts || accounts[aidx] == nil)
+			return (nil, Enotfound);
+		a := accounts[aidx];
+		if(bidx >= a.nfolders || a.folders[bidx] == nil)
+			return (nil, Enotfound);
+		return (mkdir(Sys->Qid(path, vers, Sys->QTFILE), "ctl", 8r666), nil);
+
+	Qmsgdir =>
+		aidx := ACCT(path);
+		bidx := BOX(path);
+		uid := UID(path);
+		if(aidx >= naccounts || accounts[aidx] == nil)
+			return (nil, Enotfound);
+		a := accounts[aidx];
+		if(bidx >= a.nfolders || a.folders[bidx] == nil)
+			return (nil, Enotfound);
+		# UID is the directory name. The message dir is only navigable
+		# for currentbox; non-current boxes don't list their messages.
+		if(a.folders[bidx].name != a.currentbox || !uidpresent(a, uid))
+			return (nil, Enotfound);
+		return (mkdir(Sys->Qid(path, vers, Sys->QTDIR),
+			string uid, 8r555), nil);
+
 	* =>
 		return (nil, Enotfound);
 	}
@@ -595,6 +773,10 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int)
 				a := accounts[idx];
 				srv.reply(styxservers->readbytes(gm,
 					array of byte acctstatus(a)));
+
+			Qboxctl =>
+				# Write-only for now (Chunk D adds search/archive/move).
+				srv.reply(styxservers->readbytes(gm, nil));
 
 			* =>
 				srv.reply(ref Rmsg.Error(gm.tag, Enotfound));
@@ -739,21 +921,18 @@ doconnect(rest: string): string
 	}
 	a.connected = 1;
 
+	# Populate folder list first so doselect can deduplicate against it.
+	# Soft-fail: connection is still usable without a folder list, but
+	# the user gets fewer signals.
+	(fl, ferr) := im->folders();
+	if(ferr == nil)
+		mergefolders(a, fl);
+
 	# Best-effort INBOX SELECT so the account is usable immediately. A
 	# server that returns a different error here still counts as
 	# connected — the caller can SELECT a different folder via
 	# /accounts/<n>/ctl.
-	(mbox, serr) := im->select("INBOX");
-	if(serr == nil && mbox != nil) {
-		a.currentbox = mbox.name;
-		a.mbox = mbox;
-	}
-
-	# Populate folder list. Soft-fail: connection is still usable
-	# without a folder list, but the user gets fewer signals.
-	(fl, ferr) := im->folders();
-	if(ferr == nil)
-		a.folders = listtoarray(fl);
+	doselect(a, "INBOX");
 
 	vers++;
 	return nil;
@@ -766,7 +945,7 @@ dosync(a: ref Account): string
 	(fl, ferr) := a.imap->folders();
 	if(ferr != nil)
 		return "sync: folders: " + ferr;
-	a.folders = listtoarray(fl);
+	mergefolders(a, fl);
 	# If a mailbox is currently selected, re-SELECT to refresh counts.
 	if(a.currentbox != "") {
 		(mbox, serr) := a.imap->select(a.currentbox);
@@ -812,19 +991,92 @@ handleacctctl(a: ref Account, cmd: string): string
 		box := stripnl(rest);
 		if(box == "")
 			return "select: mailbox required";
-		(mbox, err) := a.imap->select(box);
-		if(err != nil)
-			return "select: " + err;
-		a.currentbox = mbox.name;
-		a.mbox = mbox;
-		a.msgs = nil;
-		vers++;
-		return nil;
+		return doselect(a, box);
 	"sync" =>
 		return dosync(a);
 	* =>
 		return "unknown account-ctl verb (want: select|sync)";
 	}
+}
+
+# Select a mailbox and populate the cached msg list. Folder slots are
+# guaranteed to exist by the time this is called (callers ensure the
+# box name appears in a.folders or appendfolder on success).
+doselect(a: ref Account, box: string): string
+{
+	(mbox, err) := a.imap->select(box);
+	if(err != nil)
+		return "select: " + err;
+	a.currentbox = mbox.name;
+	a.mbox = mbox;
+	a.msgs = nil;
+	# Ensure the folder appears in the cached folder list. Servers
+	# sometimes report SELECTable mailboxes that LIST omitted.
+	if(findfolderidx(a, mbox.name) < 0)
+		appendfolder(a, mbox.name);
+	# Fetch envelopes for the whole mailbox. For very large mailboxes
+	# this should be paginated, but v1 ships the simple path.
+	if(mbox.exists > 0) {
+		(msgs, ferr) := a.imap->msglist(1, mbox.exists);
+		if(ferr != nil)
+			return "select ok, msglist: " + ferr;
+		a.msgs = msglisttoarray(msgs, mbox.exists);
+	}
+	vers++;
+	return nil;
+}
+
+findfolderidx(a: ref Account, name: string): int
+{
+	(i, nil) := findfolder(a, name);
+	return i;
+}
+
+msglisttoarray(l: list of ref Imap->Msg, total: int): array of ref Imap->Msg
+{
+	# Build an array large enough to index by (seq-1). Slots not
+	# present in the fetch result remain nil and are skipped during
+	# directory enumeration.
+	a := array[total] of ref Imap->Msg;
+	for(p := l; p != nil; p = tl p) {
+		m := hd p;
+		if(m != nil && m.seq >= 1 && m.seq <= total)
+			a[m.seq - 1] = m;
+	}
+	return a;
+}
+
+# Linear UID lookup over the cached message list. Returns nil if absent.
+findmsgbyuid(a: ref Account, uid: big): ref Imap->Msg
+{
+	if(a.msgs == nil)
+		return nil;
+	u := int uid;
+	for(i := 0; i < len a.msgs; i++)
+		if(a.msgs[i] != nil && a.msgs[i].uid == u)
+			return a.msgs[i];
+	return nil;
+}
+
+uidpresent(a: ref Account, uid: big): int
+{
+	return findmsgbyuid(a, uid) != nil;
+}
+
+# Parse a base-10 unsigned integer string into big. Returns big -1 if
+# the string is empty or contains non-digits.
+strtobig(s: string): big
+{
+	if(len s == 0)
+		return big -1;
+	v := big 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < '0' || c > '9')
+			return big -1;
+		v = v * big 10 + big (c - '0');
+	}
+	return v;
 }
 
 #
@@ -863,18 +1115,6 @@ stripnl(s: string): string
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == '\r'))
 		s = s[0:len s - 1];
 	return s;
-}
-
-listtoarray(l: list of string): array of string
-{
-	n := 0;
-	for(p := l; p != nil; p = tl p)
-		n++;
-	a := array[n] of string;
-	i := 0;
-	for(p = l; p != nil; p = tl p)
-		a[i++] = hd p;
-	return a;
 }
 
 # Split into (first whitespace-delimited field, rest with leading

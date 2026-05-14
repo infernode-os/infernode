@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    InferNode Setup — Windows
+    InferNode Setup - Windows
 
 .DESCRIPTION
     Configures the LLM backend that Veltro needs to operate.
@@ -15,11 +15,32 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
+# Mirror everything to a log file so right-click "Run with PowerShell" runs
+# have a post-mortem when the window closes too fast to read.
+$LogFile = Join-Path $env:TEMP "infernode-setup-windows.log"
+try { Start-Transcript -Path $LogFile -Force -ErrorAction Stop | Out-Null } catch {}
+
+# Right-click "Run with PowerShell" opens a console that closes on exit.
+# Wrap everything in a try so any error surfaces before we pause, and
+# always pause at the end - success or failure - so the user can read
+# what happened.
+function Pause-OnExit {
+    param([string]$Reason = "Setup finished.")
+    Write-Host ""
+    Write-Host "  $Reason" -ForegroundColor DarkGray
+    Write-Host "  Log: $LogFile" -ForegroundColor DarkGray
+    if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+        Write-Host ""
+        $null = Read-Host "Press Enter to close"
+    }
+    try { Stop-Transcript | Out-Null } catch {}
+}
+
 # ── Helpers ────────────────────────────────────────────────────────
 function Write-Info  { param($msg) Write-Host "  > " -ForegroundColor Cyan -NoNewline; Write-Host $msg }
 function Write-Ok    { param($msg) Write-Host "  + " -ForegroundColor Green -NoNewline; Write-Host $msg }
 function Write-Warn  { param($msg) Write-Host "  ! " -ForegroundColor Yellow -NoNewline; Write-Host $msg }
-function Write-Fail  { param($msg) Write-Host "  X " -ForegroundColor Red -NoNewline; Write-Host $msg; exit 1 }
+function Write-Fail  { param($msg) Write-Host "  X " -ForegroundColor Red -NoNewline; Write-Host $msg; throw $msg }
 
 function Write-Key {
     param([string]$Service, [string]$Key)
@@ -29,6 +50,8 @@ function Write-Key {
     Set-Content -Path $path -Value $Key -NoNewline
     Write-Ok "Key saved to lib\veltro\keys\$Service"
 }
+
+try {
 
 # ── Banner ─────────────────────────────────────────────────────────
 Write-Host ""
@@ -98,7 +121,7 @@ function Setup-Anthropic {
         $status = $_.Exception.Response.StatusCode.value__
         switch ($status) {
             401     { Write-Fail "API key rejected (401 Unauthorized). Check your key and try again." }
-            default { Write-Warn "Status $status — key saved but check your account." }
+            default { Write-Warn "Status $status - key saved but check your account." }
         }
     }
 
@@ -271,7 +294,28 @@ Write-Host ""
 Write-Host "  Setup complete!" -ForegroundColor Green
 Write-Host ""
 
-# Note: Windows emulator not yet available — point to WSL or build instructions
-Write-Host "InferNode on Windows runs via WSL2 or a native Windows build (coming soon)."
-Write-Host "  See docs/ for build instructions." -ForegroundColor DarkGray
+# Point at the native launcher (this directory's InferNode.exe)
+$launcher = Join-Path $Root "InferNode.exe"
+if (Test-Path $launcher) {
+    Write-Host "Launch InferNode by double-clicking InferNode.exe in this folder,"
+    Write-Host "or from a terminal:" -ForegroundColor DarkGray
+    Write-Host "  $launcher" -ForegroundColor White
+} else {
+    Write-Host "Build the emulator with:" -ForegroundColor DarkGray
+    Write-Host "  .\build-windows-amd64.ps1" -ForegroundColor White
+    Write-Host "  .\build-windows-sdl3.ps1" -ForegroundColor White
+}
 Write-Host ""
+
+} catch {
+    Write-Host ""
+    Write-Host "  X Setup failed:" -ForegroundColor Red
+    Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.InvocationInfo.PositionMessage) {
+        Write-Host "    $($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkRed
+    }
+    Pause-OnExit -Reason "Setup did not complete - see error above."
+    exit 1
+}
+
+Pause-OnExit -Reason "Setup complete."

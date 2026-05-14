@@ -39,11 +39,29 @@ __declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);
  * Returns NULL on failure (not MAP_FAILED).
  */
 #ifdef _WIN32
+/* Forward decls — emu/Nt/jit-unwind.c. Keeping a local declaration
+ * here avoids dragging windows.h into a file that needs interp.h. */
+int  jit_unwind_register(void *base, size_t length, int kind);
+void jit_unwind_unregister(void *base);
+#define JIT_UNWIND_HEADER	16	/* must match JIT_UNWIND_HEADER_SIZE in jit-unwind.h */
+#define JIT_KIND_COMVEC_FRAME	1
+#define JIT_KIND_LEAF		0
+/* Internal: the next jitmalloc() call should register with this kind.
+ * Defaults to COMVEC_FRAME (the common case for comvec + per-module).
+ * Caller sets this to LEAF before allocating the typecom slab. */
+static int next_jitmalloc_kind = JIT_KIND_COMVEC_FRAME;
+
 static void
 jitfree(void *p, size_t size)
 {
 	USED(size);
-	VirtualFree(p, 0, MEM_RELEASE);
+	/* p is the pointer returned by jitmalloc (past the unwind header).
+	 * Recover the original VirtualAlloc base and unregister before freeing. */
+	if(p == NULL)
+		return;
+	void *base = (void*)((uchar*)p - JIT_UNWIND_HEADER);
+	jit_unwind_unregister(base);
+	VirtualFree(base, 0, MEM_RELEASE);
 }
 
 static void*
@@ -53,32 +71,43 @@ jitmalloc(size_t size)
 	uvlong base_addr = (uvlong)compile & ~0xFFFULL;
 	uvlong try;
 	int i;
+	size_t alloc_size = size + JIT_UNWIND_HEADER;
 
 	for(i = 1; i < 1024; i++) {
 		try = base_addr - (uvlong)i * 0x10000ULL;
 		if(try < 0x10000ULL)
 			break;
-		p = VirtualAlloc((void*)try, size,
+		p = VirtualAlloc((void*)try, alloc_size,
 		         MEM_COMMIT|MEM_RESERVE,
-		         PAGE_EXECUTE_READWRITE);
+		         PAGE_READWRITE);
 		if(p != NULL) {
 			vlong diff = (vlong)((uvlong)p - base_addr);
 			if(diff < 0) diff = -diff;
-			if(diff < 0x70000000LL)  /* within ~1.75 GB */
-				return p;
+			if(diff < 0x70000000LL) {  /* within ~1.75 GB */
+				if(jit_unwind_register(p, alloc_size, next_jitmalloc_kind) != 0) {
+					VirtualFree(p, 0, MEM_RELEASE);
+					return NULL;
+				}
+				return (uchar*)p + JIT_UNWIND_HEADER;
+			}
 			VirtualFree(p, 0, MEM_RELEASE);
 		}
 	}
 	for(i = 1; i < 1024; i++) {
 		try = base_addr + (uvlong)i * 0x10000ULL;
-		p = VirtualAlloc((void*)try, size,
+		p = VirtualAlloc((void*)try, alloc_size,
 		         MEM_COMMIT|MEM_RESERVE,
-		         PAGE_EXECUTE_READWRITE);
+		         PAGE_READWRITE);
 		if(p != NULL) {
 			vlong diff = (vlong)((uvlong)p - base_addr);
 			if(diff < 0) diff = -diff;
-			if(diff < 0x70000000LL)
-				return p;
+			if(diff < 0x70000000LL) {
+				if(jit_unwind_register(p, alloc_size, next_jitmalloc_kind) != 0) {
+					VirtualFree(p, 0, MEM_RELEASE);
+					return NULL;
+				}
+				return (uchar*)p + JIT_UNWIND_HEADER;
+			}
 			VirtualFree(p, 0, MEM_RELEASE);
 		}
 	}
@@ -2565,7 +2594,16 @@ typecom_alloc(int n)
 			return nil;
 		}
 #else
+#ifdef _WIN32
+		/* typecom init/destroy snippets are called directly from C
+		 * (via t->initialize / t->destroy function pointers), not
+		 * through comvec. Use leaf-style unwind info for this slab. */
+		next_jitmalloc_kind = JIT_KIND_LEAF;
+#endif
 		typecom_slab = jitmalloc(TYPECOM_SLAB_SIZE);
+#ifdef _WIN32
+		next_jitmalloc_kind = JIT_KIND_COMVEC_FRAME;
+#endif
 		if(typecom_slab == nil)
 			return nil;
 		memset(typecom_slab, 0, TYPECOM_SLAB_SIZE);
@@ -2617,9 +2655,14 @@ typecom(Type *t)
 	pthread_jit_write_protect_np(0);
 #elif defined(_WIN32)
 	{
+		/* W^X: ensure slab is writable for codegen. segflush() below
+		 * flips it back to PAGE_EXECUTE_READ. jitmalloc allocates as
+		 * PAGE_READWRITE; this VirtualProtect is a no-op on the first
+		 * typecom into a fresh slab and a flip-back on subsequent ones
+		 * after the slab has already been segflush'd RX. */
 		unsigned long old;
 		__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);
-		VirtualProtect(code, n, PAGE_EXECUTE_READWRITE, &old);
+		VirtualProtect(code, n, PAGE_READWRITE, &old);
 	}
 #endif
 

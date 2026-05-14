@@ -142,7 +142,7 @@ fdclose(Fgrp *f, int fd)
 int
 kchdir(char *path)
 {
-	Chan *c;
+	Chan *c, *old;
 	Pgrp *pg;
 
 	if(waserror())
@@ -150,8 +150,11 @@ kchdir(char *path)
 
 	c = namec(path, Atodir, 0, 0);
 	pg = up->env->pgrp;
-	cclose(pg->dot);
+	wlock(&pg->ns);
+	old = pg->dot;
 	pg->dot = c;
+	wunlock(&pg->ns);
+	cclose(old);
 	poperror();
 	return 0;
 }

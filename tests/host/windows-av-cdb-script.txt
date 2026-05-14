@@ -1,0 +1,13 @@
+$$ ============================================================
+$$ cdb script: catch STATUS_ACCESS_VIOLATION during emu boot.
+$$ Used to diagnose INFR-69 (AV after JIT SEH fix landed).
+$$ ============================================================
+
+$$ First-chance break on STATUS_ACCESS_VIOLATION (0xc0000005).
+sxe -c ".echo === AV_HIT ===;r;.echo --- stack ---;kn 50;.echo --- exception record ---;.exr -1;.echo --- exception context ---;.ecxr;.echo --- modules near RIP ---;lmDvm o.emu;lmDvm ntdll;.echo === END_DIAGNOSTICS ===;q" av
+
+$$ Also catch BAD_FUNCTION_TABLE in case it comes back.
+sxe -c ".echo === BFT_HIT ===;r;kn 50;.exr -1;.echo === END_BFT ===;q" c00000ff
+
+$$ Run the program.
+g

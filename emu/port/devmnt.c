@@ -35,6 +35,7 @@ struct Mntrpc
 
 enum
 {
+	Version9Plen = sizeof(VERSION9P)-1,
 	Min9pmsg = BIT32SZ+BIT8SZ+BIT16SZ,
 	TAGSHIFT = 5,			/* ulong has to be 32 bits */
 	TAGMASK = (1<<TAGSHIFT)-1,
@@ -72,6 +73,7 @@ int	rpcattn(void*);
 Chan*	mntchan(void);
 static int	versionrequested(char*);
 static int	versioncompatible(char*, char*);
+static int	versionexact(char*, char*);
 
 char	Esbadstat[] = "invalid directory entry received from server";
 char Enoversion[] = "version not established for mount channel";
@@ -82,18 +84,31 @@ void (*mntstats)(int, Chan*, uvlong, ulong);
 static int
 versionrequested(char *v)
 {
-	int n;
+	int i;
 
-	n = strlen(VERSION9P);
-	return strncmp(v, VERSION9P, n) == 0 && (v[n] == '\0' || v[n] == '.');
+	for(i=0; i<Version9Plen; i++)
+		if(v[i] == '\0' || v[i] != VERSION9P[i])
+			return 0;
+	return v[Version9Plen] == '\0' || v[Version9Plen] == '.';
+}
+
+static int
+versionexact(char *a, char *b)
+{
+	for(;; a++, b++){
+		if(*a != *b)
+			return 0;
+		if(*a == '\0')
+			return 1;
+	}
 }
 
 static int
 versioncompatible(char *req, char *got)
 {
-	if(strcmp(req, got) == 0)
+	if(versionexact(req, got))
 		return 1;
-	return strcmp(got, VERSION9P) == 0 && versionrequested(req) && req[strlen(VERSION9P)] == '.';
+	return versionexact(got, VERSION9P) && versionrequested(req) && req[Version9Plen] == '.';
 }
 
 static void

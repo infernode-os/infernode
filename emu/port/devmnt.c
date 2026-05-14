@@ -849,6 +849,10 @@ mntrpcread(Mnt *m, Mntrpc *r)
 	int i, t, len, hlen;
 	Block *b, **l, *nb;
 
+	if(r->b != nil){
+		freeblist(r->b);
+		r->b = nil;
+	}
 	r->reply.type = 0;
 	r->reply.tag = 0;
 
@@ -967,6 +971,10 @@ mountmux(Mnt *m, Mntrpc *r)
 		l = &q->list;
 	}
 	unlock(&m->l);
+	if(r->b != nil){
+		freeblist(r->b);
+		r->b = nil;
+	}
 	if(r->reply.type == Rerror)
 		print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
 	else

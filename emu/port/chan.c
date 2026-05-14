@@ -1005,6 +1005,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	Elemlist e;
 	Rune r;
 	Mhead *m;
+	Pgrp *pg;
 	char *createerr, tmperrbuf[ERRMAX];
 	char *name;
 
@@ -1019,10 +1020,13 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * evaluate starting there.
 	 */
 	nomount = 0;
+	pg = up->env->pgrp;
 	switch(name[0]){
 	case '/':
-		c = up->env->pgrp->slash;
+		rlock(&pg->ns);
+		c = pg->slash;
 		incref(&c->r);
+		runlock(&pg->ns);
 		break;
 	
 	case '#':
@@ -1046,7 +1050,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		 *	D private secure sockets name space
 		 *	a private TLS name space
 		 */
-		if(up->env->pgrp->nodevs &&
+		if(pg->nodevs &&
 		   (utfrune("|esDa", r) == nil || r == 's' && up->genbuf[n]!='\0'))
 			error(Enoattach);
 		t = devno(r, 1);
@@ -1056,8 +1060,10 @@ namec(char *aname, int amode, int omode, ulong perm)
 		break;
 
 	default:
-		c = up->env->pgrp->dot;
+		rlock(&pg->ns);
+		c = pg->dot;
 		incref(&c->r);
+		runlock(&pg->ns);
 		break;
 	}
 	prefix = name - aname;

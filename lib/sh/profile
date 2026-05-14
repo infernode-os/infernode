@@ -97,7 +97,11 @@ if {! ftest -f /mnt/factotum/proto}{
 	if {! ~ $havesecpass ''} {
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
 		if {! ~ $secpass ''} {
-			auth/factotum -S tcp!localhost!5356 -u $user -P $secpass
+			if {! ~ $user ''} {
+				auth/factotum -S tcp!localhost!5356 -u $user -P $secpass
+			}{
+				auth/factotum -S tcp!localhost!5356 -P $secpass
+			}
 		}{
 			auth/factotum
 		}

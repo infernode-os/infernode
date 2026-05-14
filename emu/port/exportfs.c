@@ -9,6 +9,7 @@ typedef	struct Exq	Exq;
 
 enum
 {
+	Version9Plen	= sizeof(VERSION9P)-1,
 	Nfidhash	= 32,
 	MAXFDATA	= 8192,
 	MAXRPCDEF		= IOHDRSZ+MAXFDATA,	/* initial/default */
@@ -82,6 +83,7 @@ static void	exfreeq(Exq*);
 static void	exportproc(void*);
 static void	exreply(Exq*, char*);
 static int	exisroot(Export*, Chan*);
+static int	versionrequested(char*);
 
 static char*	Exversion(Export*, Fcall*, Fcall*);
 static char*	Exauth(Export*, Fcall*, Fcall*);
@@ -223,7 +225,7 @@ exreadmsg(Chan *c, void *a, uint n)
 		return 0;
 	}
 	len = GBIT32(buf);
-	if(len <= BIT32SZ || len > n){
+	if(len < MSGHDRSZ || len > n){
 		kwerrstr("bad length in Styx message header");
 		return -1;
 	}
@@ -760,7 +762,6 @@ exmount(Chan *c, Mhead **mp, int doname)
 static char*
 Exversion(Export *fs, Fcall *t, Fcall *r)
 {
-	char *p;
 	static char version[] = VERSION9P;
 	int iounit;
 
@@ -774,14 +775,23 @@ Exversion(Export *fs, Fcall *t, Fcall *r)
 		return "message size too small";
 	if(0)
 		print("msgsize=%d\n", r->msize);
-	if((p = strchr(t->version, '.')) != nil)
-		*p = 0;
-	if(strncmp(t->version, "9P", 2) ==0 && strcmp(version, t->version) <= 0){
+	if(versionrequested(t->version)){
 		r->version = version;
 		fs->msize = r->msize;
 	}else
 		r->version = "unknown";
 	return nil;
+}
+
+static int
+versionrequested(char *v)
+{
+	int i;
+
+	for(i=0; i<Version9Plen; i++)
+		if(v[i] == '\0' || v[i] != VERSION9P[i])
+			return 0;
+	return v[Version9Plen] == '\0' || v[Version9Plen] == '.';
 }
 
 static char*
@@ -867,6 +877,7 @@ Exwalk(Export *fs, Fcall *t, Fcall *r)
 	if(t->nwname > 0){
 		for(i=0; i<t->nwname; i++){
 			name = t->wname[i];
+			validname(name, 0);
 			if(!exisroot(fs, c) || *name != '\0' && strcmp(name, "..") != 0){
 				if(safewalk(&c, &name, 1, 0, nil) < 0){
 					/* leave the original state on error */

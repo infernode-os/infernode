@@ -760,9 +760,9 @@ exmount(Chan *c, Mhead **mp, int doname)
 static char*
 Exversion(Export *fs, Fcall *t, Fcall *r)
 {
-	char *p;
 	static char version[] = VERSION9P;
 	int iounit;
+	int vlen;
 
 	r->msize = t->msize;
 	if(r->msize > MAXRPCMAX)
@@ -774,9 +774,9 @@ Exversion(Export *fs, Fcall *t, Fcall *r)
 		return "message size too small";
 	if(0)
 		print("msgsize=%d\n", r->msize);
-	if((p = strchr(t->version, '.')) != nil)
-		*p = 0;
-	if(strncmp(t->version, "9P", 2) ==0 && strcmp(version, t->version) <= 0){
+	vlen = strlen(version);
+	if(strncmp(t->version, version, vlen) == 0 &&
+	   (t->version[vlen] == '\0' || t->version[vlen] == '.')){
 		r->version = version;
 		fs->msize = r->msize;
 	}else

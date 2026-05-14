@@ -73,6 +73,19 @@ if grep -q '\[Sh\] Broken:' "$LOG"; then
     FAIL=1
 fi
 
+# Check for ANY module crash during boot (catches intermittent nil-derefs
+# in wallet9p, factotum, lucibridge etc — see INFR-25). The shell-death
+# check above is the most critical case (it stops tools9p from loading),
+# but any module crash during boot is a real bug, not just noise.
+if grep -qE '\] Broken: "dereference of nil"' "$LOG"; then
+    if ! grep -q '\[Sh\] Broken: "dereference of nil"' "$LOG"; then
+        # Distinct from the shell-death case above; surface separately.
+        echo "FAIL: module crashed during boot (nil deref)"
+        grep -E '\] Broken: "dereference of nil"' "$LOG"
+        FAIL=1
+    fi
+fi
+
 if [[ "$FAIL" -eq 0 ]]; then
     MODS=$(grep -c '^JIT compiled ' "$LOG" || true)
     echo "PASS: $MODS modules JIT-compiled, $TOOLS tools loaded, no crashes"

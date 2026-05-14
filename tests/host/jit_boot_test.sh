@@ -11,6 +11,16 @@
 #   - SIGSEGV from NULL typecom init/destroy pointer
 #   - alloc:D2B heap corruption
 #
+# Also catches intermittent boot-time nil-derefs (INFR-25). The crash
+# at c95970a2 was ~13% flaky over a 60s wait; running the boot multiple
+# times sharply increases detection. STRESS_RUNS controls the iteration
+# count (default 3); each iteration kills the emu as soon as boot
+# completes (lucifer: INIT seen) rather than waiting the full BOOT_WAIT.
+#
+# Environment:
+#   STRESS_RUNS   number of boot iterations (default 3)
+#   BOOT_WAIT     per-iteration ceiling in seconds (default 30)
+#
 # Exit 0 = pass, exit 1 = fail.
 #
 
@@ -18,8 +28,8 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/Linux/o.emu"
-TIMEOUT=60
-LOG=$(mktemp /tmp/jit-boot-test.XXXXXX)
+STRESS_RUNS="${STRESS_RUNS:-3}"
+BOOT_WAIT="${BOOT_WAIT:-30}"
 BOOTSCRIPT=$(mktemp /tmp/jit-boot-script.XXXXXX)
 
 if [[ ! -x "$EMU" ]]; then
@@ -49,68 +59,120 @@ fi
 } > "$BOOTSCRIPT"
 cp "$BOOTSCRIPT" "$ROOT/tmp_jit_boot_test.sh"
 
-echo "JIT boot smoke test (timeout ${TIMEOUT}s)..."
+cleanup() {
+    rm -f "$BOOTSCRIPT" "$ROOT/tmp_jit_boot_test.sh"
+}
+trap cleanup EXIT
 
-timeout "$TIMEOUT" "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m \
-    -r"$ROOT" sh -l /tmp_jit_boot_test.sh \
-    > "$LOG" 2>&1 < /dev/null || true
+echo "JIT boot smoke test (stress=$STRESS_RUNS, wait=${BOOT_WAIT}s)..."
 
-rm -f "$BOOTSCRIPT" "$ROOT/tmp_jit_boot_test.sh"
+# Run one boot iteration. Sets RUN_RESULT to PASS/FAIL and leaves the
+# full boot log at $LOG. Kills the emu as soon as either lucifer: INIT
+# or a crash marker is seen so iterations cost ~5s instead of the full
+# BOOT_WAIT — letting CI run several without inflating wall time.
+run_one_boot() {
+    local log=$1
+    "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m \
+        -r"$ROOT" sh -l /tmp_jit_boot_test.sh \
+        > "$log" 2>&1 < /dev/null &
+    local emu_pid=$!
+
+    local elapsed=0
+    local deadline=$((BOOT_WAIT * 2))   # tick is 0.5s
+    while [[ $elapsed -lt $deadline ]]; do
+        if grep -qE '\] Broken: |exNomem|SIGSEGV|alloc:D2B|panic:|POOL CORRUPTION' "$log" 2>/dev/null; then
+            break
+        fi
+        if grep -q 'lucifer: INIT' "$log" 2>/dev/null; then
+            break
+        fi
+        if ! kill -0 $emu_pid 2>/dev/null; then
+            break
+        fi
+        sleep 0.5
+        elapsed=$((elapsed + 1))
+    done
+
+    kill -9 $emu_pid 2>/dev/null || true
+    wait $emu_pid 2>/dev/null || true
+}
+
+# Check the log of one iteration. Sets RUN_FAIL=1 on any failure and
+# prints diagnostics. The full log is dumped at the call site only when
+# every iteration completes — keeps CI output compact for the common
+# happy path.
+check_one_boot() {
+    local log=$1
+    local iter=$2
+    RUN_FAIL=0
+
+    for pat in "exNomem" "SIGSEGV" "alloc:D2B" "panic:" "POOL CORRUPTION"; do
+        if grep -q "$pat" "$log"; then
+            echo "FAIL[run $iter]: found '$pat' in boot log"
+            grep "$pat" "$log" | head -3
+            RUN_FAIL=1
+        fi
+    done
+
+    local tools
+    tools=$(grep -c 'tools9p\[/tool\]: loaded' "$log" || true)
+    if [[ "$tools" -lt 12 ]]; then
+        echo "FAIL[run $iter]: only $tools/12 tools9p plugins loaded"
+        RUN_FAIL=1
+    fi
+
+    if ! grep -q "lucifer: INIT" "$log"; then
+        echo "FAIL[run $iter]: Lucifer did not initialize"
+        RUN_FAIL=1
+    fi
+
+    if grep -q '\[Sh\] Broken:' "$log"; then
+        echo "FAIL[run $iter]: boot shell died"
+        grep '\[Sh\] Broken:' "$log"
+        RUN_FAIL=1
+    fi
+
+    # Catches intermittent nil-derefs in wallet9p, factotum, lucibridge
+    # etc (INFR-25). [Sh] death is most critical (stops tools9p loading)
+    # but any module crash during boot is a real bug.
+    if grep -qE '\] Broken: "dereference of nil"' "$log"; then
+        if ! grep -q '\[Sh\] Broken: "dereference of nil"' "$log"; then
+            echo "FAIL[run $iter]: module crashed during boot (nil deref)"
+            grep -E '\] Broken: "dereference of nil"' "$log"
+            RUN_FAIL=1
+        fi
+    fi
+}
 
 FAIL=0
-
-# Check for crash signatures
-for pat in "exNomem" "SIGSEGV" "alloc:D2B" "panic:" "POOL CORRUPTION"; do
-    if grep -q "$pat" "$LOG"; then
-        echo "FAIL: found '$pat' in boot log"
-        grep "$pat" "$LOG" | head -3
+FAILED_LOG=""
+for ((i = 1; i <= STRESS_RUNS; i++)); do
+    LOG=$(mktemp /tmp/jit-boot-test.XXXXXX)
+    run_one_boot "$LOG"
+    check_one_boot "$LOG" "$i"
+    if [[ "$RUN_FAIL" -ne 0 ]]; then
         FAIL=1
+        # Keep the first failing log for diagnostics; discard subsequent.
+        if [[ -z "$FAILED_LOG" ]]; then
+            FAILED_LOG="$LOG"
+        else
+            rm -f "$LOG"
+        fi
+    else
+        MODS=$(grep -c '^JIT compiled ' "$LOG" || true)
+        TOOLS=$(grep -c 'tools9p\[/tool\]: loaded' "$LOG" || true)
+        echo "PASS[run $i]: $MODS modules JIT-compiled, $TOOLS tools loaded"
+        rm -f "$LOG"
     fi
 done
 
-# Check that tools9p loaded all 12 active plugins
-TOOLS=$(grep -c 'tools9p\[/tool\]: loaded' "$LOG" || true)
-if [[ "$TOOLS" -lt 12 ]]; then
-    echo "FAIL: only $TOOLS/12 tools9p plugins loaded"
-    FAIL=1
-fi
-
-# Check that Lucifer initialized
-if ! grep -q "lucifer: INIT" "$LOG"; then
-    echo "FAIL: Lucifer did not initialize"
-    FAIL=1
-fi
-
-# Check for shell death
-if grep -q '\[Sh\] Broken:' "$LOG"; then
-    echo "FAIL: boot shell died"
-    grep '\[Sh\] Broken:' "$LOG"
-    FAIL=1
-fi
-
-# Check for ANY module crash during boot (catches intermittent nil-derefs
-# in wallet9p, factotum, lucibridge etc — see INFR-25). The shell-death
-# check above is the most critical case (it stops tools9p from loading),
-# but any module crash during boot is a real bug, not just noise.
-if grep -qE '\] Broken: "dereference of nil"' "$LOG"; then
-    if ! grep -q '\[Sh\] Broken: "dereference of nil"' "$LOG"; then
-        # Distinct from the shell-death case above; surface separately.
-        echo "FAIL: module crashed during boot (nil deref)"
-        grep -E '\] Broken: "dereference of nil"' "$LOG"
-        FAIL=1
-    fi
-fi
-
-if [[ "$FAIL" -eq 0 ]]; then
-    MODS=$(grep -c '^JIT compiled ' "$LOG" || true)
-    echo "PASS: $MODS modules JIT-compiled, $TOOLS tools loaded, no crashes"
-else
-    # tail -20 was not enough to localise [Sh] Broken: messages — see INFR-25.
+if [[ "$FAIL" -ne 0 ]]; then
     # Dump the full boot log so the failing shell command is visible in CI.
-    echo "--- full boot log ---"
-    cat "$LOG"
+    # tail -20 was not enough to localise [Sh] Broken: messages — see INFR-25.
+    echo "--- full boot log (first failing run) ---"
+    cat "$FAILED_LOG"
     echo "--- end boot log ---"
+    rm -f "$FAILED_LOG"
 fi
 
-rm -f "$LOG"
 exit $FAIL

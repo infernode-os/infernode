@@ -73,6 +73,7 @@ ENGINE_LOCAL: con 2; # Local ML models (Piper TTS, whisper.cpp STT)
 
 # Current configuration
 engine := ENGINE_CMD;
+engineexplicit := 0;
 voice := "";
 lang := "en";
 apiurl := "";
@@ -150,10 +151,12 @@ init(nil: ref Draw->Context, args: list of string)
 			case e {
 			"cmd" =>	engine = ENGINE_CMD;
 			"api" =>	engine = ENGINE_API;
+			"local" =>	engine = ENGINE_LOCAL;
 			* =>
 				sys->fprint(stderr, "speech9p: unknown engine '%s'\n", e);
 				usage();
 			}
+			engineexplicit = 1;
 		'k' =>	apikey = arg->earg();
 		'u' =>	apiurl = arg->earg();
 		'v' =>	voice = arg->earg();
@@ -216,7 +219,7 @@ initplatform()
 	"linux" =>
 		# Linux: prefer local ML engine if Piper/whisper are available
 		# On Jetson (ARM64 + GPU), these get CUDA acceleration automatically
-		if(engine == ENGINE_CMD && probelocal()) {
+		if(!engineexplicit && engine == ENGINE_CMD && probelocal()) {
 			engine = ENGINE_LOCAL;
 			sys->fprint(stderr, "speech9p: detected local ML tools, using local engine\n");
 		}

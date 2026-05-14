@@ -158,7 +158,8 @@ Write-Host "  Compiling platform sources..."
 $ntSources = @(
     "os.c", "cmd.c", "no_win.c", "fp.c",
     "devfs.c",
-    "ipif6.c"
+    "ipif6.c",
+    "jit-unwind.c"
 )
 foreach ($src in $ntSources) {
     if (Test-Path $src) {

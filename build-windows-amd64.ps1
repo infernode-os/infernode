@@ -507,7 +507,8 @@ $ntSources = @(
     "os.c", "cmd.c", "no_win.c", "fp.c",
     "stubs-headless.c",
     "devfs.c",
-    "ipif6.c"
+    "ipif6.c",
+    "jit-unwind.c"
 )
 foreach ($src in $ntSources) {
     if (Test-Path $src) {

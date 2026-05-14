@@ -294,16 +294,28 @@ Write-Host ""
 Write-Host "  Setup complete!" -ForegroundColor Green
 Write-Host ""
 
-# Point at the native launcher (this directory's InferNode.exe)
-$launcher = Join-Path $Root "InferNode.exe"
-if (Test-Path $launcher) {
-    Write-Host "Launch InferNode by double-clicking InferNode.exe in this folder,"
-    Write-Host "or from a terminal:" -ForegroundColor DarkGray
+# Find InferNode.exe and tell the user exactly where it is. The launcher
+# may sit next to this script (release bundle layout) or under emu\Nt\
+# (developer build layout), so check both before giving up.
+$candidates = @(
+    (Join-Path $Root "InferNode.exe"),
+    (Join-Path $Root "emu\Nt\InferNode.exe")
+)
+$launcher = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($launcher) {
+    Write-Host "Launch InferNode:"
     Write-Host "  $launcher" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  (double-click in Explorer, or run from a terminal)" -ForegroundColor DarkGray
 } else {
-    Write-Host "Build the emulator with:" -ForegroundColor DarkGray
+    Write-Host "InferNode.exe was not found in any known location:" -ForegroundColor Yellow
+    foreach ($c in $candidates) { Write-Host "    $c" -ForegroundColor DarkGray }
+    Write-Host ""
+    Write-Host "Build the emulator with:"
     Write-Host "  .\build-windows-amd64.ps1" -ForegroundColor White
     Write-Host "  .\build-windows-sdl3.ps1" -ForegroundColor White
+    Write-Host "  .\emu\Nt\build-launcher.ps1" -ForegroundColor White
 }
 Write-Host ""
 

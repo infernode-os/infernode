@@ -1,13 +1,18 @@
 implement Ftree;
 
 #
-# wm/ftree - Draw-based file tree viewer
+# wm/ftree - Draw-based namespace browser and file tree viewer
 #
-# Browse the Inferno namespace as an expandable tree.
+# Browse the Inferno namespace as an expandable tree with live
+# namespace metadata.  Shows bind sources, mount points, union
+# directory layers, and permission flags inline.  Supports
+# interactive namespace manipulation (bind, unmount).
+#
 # Uses the native widget toolkit — no Tk.
 #
 # Usage:
-#   wm/ftree [root]
+#   wm/ftree [-n] [root]
+#   -n  start in namespace mode (annotate mount points)
 #
 # Keyboard:
 #   Up/Down      move selection
@@ -15,11 +20,16 @@ implement Ftree;
 #   Right/Enter  expand directory / plumb file
 #   Page Up/Down scroll one screenful
 #   Home/End     go to top/bottom
+#   Ctrl-B       bind prompt
 #   Ctrl-G       goto path prompt
+#   Ctrl-N       toggle namespace annotations
+#   Ctrl-U       unmount selected
 #   Ctrl-Q       quit
+#   r/R          refresh tree
 #
 # Mouse:
-#   Button 1     select item; double-click to expand/plumb
+#   Button 1     select; click indicator to expand/collapse
+#   Button 2     plumb selected file
 #   Button 3     context menu
 #   Scroll wheel scroll up/down
 #
@@ -69,14 +79,16 @@ FTREE_DIR: con "/tmp/veltro/ftree";
 # Fallback colours (overridden by theme)
 BG:	con int 16rFFFDF6FF;
 FG:	con int 16r333333FF;
-DIRCOL:	con int 16r1A1A1AFF;	# directory name colour (bold)
-SELCOL:	con int 16rB4D5FEFF;	# selection highlight
-DIMCOL:	con int 16r999999FF;	# metadata colour
+DIRCOL:	con int 16r1A1A1AFF;
+SELCOL:	con int 16rB4D5FEFF;
+DIMCOL:	con int 16r999999FF;
+MNTCOL:	con int 16r886644FF;	# mount annotation colour
+DEVCOL:	con int 16r668844FF;	# device path colour
 
 # Dimensions
 MARGIN:		con 6;
-INDENT:		con 16;		# pixels per indent level
-ICON_W:		con 14;		# expand/collapse indicator width
+INDENT:		con 16;
+ICON_W:		con 14;
 
 # Key constants
 Khome:		con 16rFF61;
@@ -92,31 +104,54 @@ Kins:		con 16rFF63;
 Kbs:		con 8;
 Kesc:		con 27;
 
+# ---------- Namespace entry ----------
+
+NsOp: adt {
+	cmd:	string;		# "bind" or "mount"
+	flags:	string;		# "-b", "-ac", etc. or ""
+	src:	string;		# source path / device
+	dst:	string;		# mount point (target)
+	spec:	string;		# mount spec (or "")
+};
+
 # ---------- Tree node ----------
 
 Node: adt {
-	path:		string;		# full path
-	name:		string;		# display name
-	depth:		int;		# indent level (0 = root)
-	isdir:		int;		# 1 = directory
-	expanded:	int;		# 1 = children visible
-	mode:		int;		# file mode bits
-	length:		big;		# file size
-	loaded:		int;		# 1 = children have been read
-	nchildren:	int;		# number of direct children
+	path:		string;
+	name:		string;
+	depth:		int;
+	isdir:		int;
+	expanded:	int;
+	mode:		int;
+	length:		big;
+	loaded:		int;
+	nchildren:	int;
 	parent:		int;		# index of parent in nodes[], or -1
+
+	# Namespace metadata
+	bindsrc:	string;		# primary bind/mount source (e.g. "#c")
+	bindflags:	string;		# flag string (e.g. "-b")
+	bindcmd:	string;		# "bind" or "mount"
+	nunion:		int;		# number of union layers (0 = not a union)
+	unionlayers:	list of ref NsOp;	# union layers if > 1
+	isdevice:	int;		# 1 = kernel device (#X path)
 };
 
 # ---------- Global state ----------
 
-nodes:		array of ref Node;	# all nodes (tree structure flattened)
-nnodes:		int;			# number of nodes
-visible:	array of int;		# indices into nodes[] of visible rows
-nvisible:	int;			# number of visible rows
+nodes:		array of ref Node;
+nnodes:		int;
+visible:	array of int;
+nvisible:	int;
 
-topline:	int;			# first visible row (scroll offset)
-vislines:	int;			# rows that fit on screen
-selected:	int;			# index into visible[] (-1 = none)
+topline:	int;
+vislines:	int;
+selected:	int;
+
+# Namespace state
+nsops:		list of ref NsOp;	# parsed /dev/ns entries
+nsmode:		int;			# 1 = show namespace annotations
+nssnapshot:	string;			# snapshot of /dev/ns for change detection
 
 # Display resources
 display:	ref Display;
@@ -127,6 +162,9 @@ fgcolor:	ref Image;
 dircol:		ref Image;
 selcolor:	ref Image;
 dimcolor:	ref Image;
+mntcolor:	ref Image;
+devcolor:	ref Image;
+accentcol:	ref Image;
 
 scrollbar:	ref Scrollbar;
 statbar:	ref Statusbar;
@@ -137,8 +175,13 @@ stderr:		ref Sys->FD;
 
 rootpath:	string;
 
-# Prompt mode: 0=none, 1=goto
+# Prompt modes
+PROMPT_NONE: con 0;
+PROMPT_GOTO: con 1;
+PROMPT_BIND_SRC: con 2;
+PROMPT_BIND_FLAGS: con 3;
 promptmode := 0;
+bindsrc_pending := "";		# stash source path during bind flow
 
 # ---------- Initialisation ----------
 
@@ -178,11 +221,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# Parse arguments
 	rootpath = "/";
+	nsmode = 0;
 	arg = load Arg Arg->PATH;
 	if(arg != nil) {
 		arg->init(argv);
-		while(arg->opt())
-			;
+		while((c := arg->opt()))
+			case c {
+			'n' =>
+				nsmode = 1;
+			}
 		argv = arg->argv();
 	} else
 		argv = tl argv;
@@ -207,6 +254,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	scrollbar = Scrollbar.new(Rect((0,0),(0,0)), 1);
 	statbar = Statusbar.new(Rect((0,0),(0,0)));
 
+	# Parse namespace
+	nsops = nil;
+	nssnapshot = "";
+	loadnamespace();
+
 	# Initialise tree
 	nodes = array[4096] of ref Node;
 	nnodes = 0;
@@ -222,19 +274,23 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		rebuildvisible();
 	}
 
-	w.reshape(Rect((0, 0), (400, 520)));
+	w.reshape(Rect((0, 0), (480, 560)));
 	w.startinput("kbd" :: "ptr" :: nil);
 	w.onscreen(nil);
 
 	if(menumod != nil)
 		menumod->init(display, bfont);
-	menu := menumod->new(array[] of {"open", "expand all", "collapse all", "refresh", "goto", "exit"});
+	menu := menumod->newgen(menugenfn);
 
 	# Veltro IPC
 	initftreedir();
 	writeftreestate();
 	ticks := chan of int;
 	spawn timer(ticks, 500);
+
+	# Namespace change watcher
+	nsch := chan[1] of int;
+	spawn nswatcher(nsch);
 
 	# Theme listener
 	themech := chan[1] of int;
@@ -245,6 +301,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	for(;;) alt {
 	<-themech =>
 		reloadcolors();
+		redraw();
+	<-nsch =>
+		loadnamespace();
+		annotatenodes();
 		redraw();
 	<-ticks =>
 		if(checkctlfile())
@@ -262,12 +322,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				(done, val) := statbar.key(key);
 				if(done == 1) {
 					statbar.prompt = nil;
-					if(promptmode == 1)
-						gotopath(val);
-					promptmode = 0;
+					handleprompt(val);
+					promptmode = PROMPT_NONE;
 				} else if(done < 0) {
 					statbar.prompt = nil;
-					promptmode = 0;
+					promptmode = PROMPT_NONE;
 				}
 				redraw();
 			} else
@@ -288,7 +347,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				redraw();
 			}
 		} else if(p.buttons & 16r18) {
-			# Scroll wheel
 			scrollbar.total = nvisible;
 			scrollbar.visible = vislines;
 			scrollbar.origin = topline;
@@ -298,15 +356,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			# Button 3 — context menu
 			if(menu != nil) {
 				n := menu.show(w.image, p.xy, w.ctxt.ptr);
-				case n {
-				0 =>	plumbselected();
-				1 =>	expandall();
-				2 =>	collapseall();
-				3 =>	refreshtree();
-				4 =>	startgoto();
-				5 =>	exit;
-				}
+				handlemenu(n);
 			}
+		} else if(p.buttons & 2) {
+			# Button 2 — plumb
+			plumbselected();
 		} else if(p.buttons & 1) {
 			sr := scrollrect();
 			if(sr.contains(p.xy)) {
@@ -323,6 +377,100 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			}
 		} else
 			w.pointer(*p);
+	}
+}
+
+# ---------- Context menu ----------
+
+menugenfn(m: ref Popup)
+{
+	if(selected >= 0 && selected < nvisible) {
+		ni := visible[selected];
+		n := nodes[ni];
+		if(n.isdir) {
+			if(n.bindsrc != nil)
+				m.items = array[] of {
+					"open", "bind here...",
+					"unmount", "expand all",
+					"collapse all", "refresh",
+					"ns mode " + nsmodetoggle(),
+					"goto", "exit"};
+			else
+				m.items = array[] of {
+					"open", "bind here...",
+					"expand all", "collapse all",
+					"refresh",
+					"ns mode " + nsmodetoggle(),
+					"goto", "exit"};
+		} else
+			m.items = array[] of {
+				"plumb", "bind here...",
+				"refresh",
+				"ns mode " + nsmodetoggle(),
+				"goto", "exit"};
+	} else
+		m.items = array[] of {
+			"refresh",
+			"ns mode " + nsmodetoggle(),
+			"goto", "exit"};
+}
+
+nsmodetoggle(): string
+{
+	if(nsmode)
+		return "off";
+	return "on";
+}
+
+handlemenu(n: int)
+{
+	if(n < 0)
+		return;
+	if(selected < 0 || selected >= nvisible) {
+		# No selection — limited menu
+		case n {
+		0 =>	refreshtree();
+		1 =>	togglensmode();
+		2 =>	startgoto();
+		3 =>	exit;
+		}
+		return;
+	}
+
+	ni := visible[selected];
+	nd := nodes[ni];
+	if(nd.isdir && nd.bindsrc != nil) {
+		case n {
+		0 =>	activateselected();
+		1 =>	startbind();
+		2 =>	dounmount(nd.path);
+		3 =>	expandall();
+		4 =>	collapseall();
+		5 =>	refreshtree();
+		6 =>	togglensmode();
+		7 =>	startgoto();
+		8 =>	exit;
+		}
+	} else if(nd.isdir) {
+		case n {
+		0 =>	activateselected();
+		1 =>	startbind();
+		2 =>	expandall();
+		3 =>	collapseall();
+		4 =>	refreshtree();
+		5 =>	togglensmode();
+		6 =>	startgoto();
+		7 =>	exit;
+		}
+	} else {
+		case n {
+		0 =>	plumbselected();
+		1 =>	startbind();
+		2 =>	refreshtree();
+		3 =>	togglensmode();
+		4 =>	startgoto();
+		5 =>	exit;
+		}
 	}
 }
 
@@ -355,17 +503,52 @@ handlekey(key: int)
 		activateselected();
 	Kleft =>
 		collapseselected();
-	'q' & 16r1f =>	# Ctrl-Q
+	'q' & 16r1f =>
 		exit;
-	'g' & 16r1f =>	# Ctrl-G
+	'g' & 16r1f =>
 		startgoto();
+	'b' & 16r1f =>
+		startbind();
+	'n' & 16r1f =>
+		togglensmode();
+	'u' & 16r1f =>
+		unmountselected();
 	'q' or 'Q' =>
 		exit;
 	'r' or 'R' =>
 		refreshtree();
+	'n' =>
+		togglensmode();
 	* =>
 		return;
 	}
+	redraw();
+}
+
+handleprompt(val: string)
+{
+	case promptmode {
+	PROMPT_GOTO =>
+		gotopath(val);
+	PROMPT_BIND_SRC =>
+		if(val != nil && len val > 0) {
+			bindsrc_pending = val;
+			promptmode = PROMPT_BIND_FLAGS;
+			statbar.prompt = "Flags [-b|-a|-bc]: ";
+			statbar.buf = "";
+		}
+	PROMPT_BIND_FLAGS =>
+		dobind(bindsrc_pending, val);
+		bindsrc_pending = "";
+	}
+}
+
+togglensmode()
+{
+	nsmode = 1 - nsmode;
+	if(nsmode && nsops == nil)
+		loadnamespace();
+	annotatenodes();
 	redraw();
 }
 
@@ -408,7 +591,6 @@ collapseselected()
 		collapse(ni);
 		rebuildvisible();
 	} else if(n.parent >= 0) {
-		# Move selection to parent
 		pi := n.parent;
 		for(i := 0; i < nvisible; i++) {
 			if(visible[i] == pi) {
@@ -434,7 +616,6 @@ clicktree(p: Point)
 		return;
 	selected = idx;
 
-	# Check if click is on the expand/collapse indicator
 	ni := visible[idx];
 	n := nodes[ni];
 	ix := tr.min.x + n.depth * INDENT;
@@ -447,6 +628,8 @@ clicktree(p: Point)
 	}
 	redraw();
 }
+
+# ---------- Plumbing ----------
 
 plumbselected()
 {
@@ -472,18 +655,275 @@ plumbfile(path: string)
 		redraw();
 		return;
 	}
+
+	# Detect file type for smarter plumbing
+	kind := "text";
+	attrs := "";
+	ext := fileext(path);
+	case ext {
+	"b" or "m" or "sh" =>
+		attrs = "action=showfile";
+	"dis" =>
+		kind = "text";
+		attrs = "action=showdata";
+	"bit" or "jpg" or "jpeg" or "png" or "gif" =>
+		kind = "image";
+	"html" or "htm" =>
+		kind = "text";
+		attrs = "action=showurl";
+	* =>
+		attrs = "action=showfile";
+	}
+
 	msg := ref Plumbmsg->Msg(
 		"ftree",
 		nil,
-		"/",
-		"text",
-		nil,
+		dirof(path),
+		kind,
+		attrs,
 		array of byte path
 	);
 	if(msg.send() < 0)
 		statbar.right = "plumb failed";
 	else
-		statbar.right = "plumbed " + path;
+		statbar.right = "plumbed " + basename(path);
+	redraw();
+}
+
+fileext(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--) {
+		if(path[i] == '.')
+			return path[i+1:];
+		if(path[i] == '/')
+			break;
+	}
+	return "";
+}
+
+dirof(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--) {
+		if(path[i] == '/')
+			return path[:i+1];
+	}
+	return "/";
+}
+
+# ---------- Namespace parsing ----------
+
+loadnamespace()
+{
+	pid := sys->pctl(0, nil);
+	nspath := sys->sprint("/prog/%d/ns", pid);
+	fd := sys->open(nspath, Sys->OREAD);
+	if(fd == nil)
+		return;
+
+	nsops = nil;
+	raw := "";
+	buf := array[4096] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		chunk := string buf[0:n];
+		raw += chunk;
+
+		# Parse line (one ns entry per read)
+		(ntoks, toks) := sys->tokenize(chunk, " \n");
+		if(ntoks < 2)
+			continue;
+		cmd := hd toks;
+		toks = tl toks;
+
+		if(cmd == "cd")
+			continue;
+
+		if(cmd != "bind" && cmd != "mount")
+			continue;
+
+		flags := "";
+		if(toks != nil && len hd toks > 0 && (hd toks)[0] == '-') {
+			flags = hd toks;
+			toks = tl toks;
+		}
+		if(len toks < 2)
+			continue;
+
+		src := hd toks;
+		toks = tl toks;
+		dst := hd toks;
+		toks = tl toks;
+
+		# Clean up kernel decoration
+		if(len src >= 2 && src[0:2] == "#/")
+			src = src[2:];
+		if(dst == "#M")
+			dst = "/";
+		else if(len dst >= 2 && dst[0:2] == "#M")
+			dst = dst[2:];
+
+		spec := "";
+		if(toks != nil)
+			spec = hd toks;
+
+		op := ref NsOp(cmd, flags, src, dst, spec);
+		nsops = op :: nsops;
+	}
+	nssnapshot = raw;
+
+	# Reverse to preserve order
+	rev: list of ref NsOp;
+	for(l := nsops; l != nil; l = tl l)
+		rev = hd l :: rev;
+	nsops = rev;
+}
+
+# Annotate existing tree nodes with namespace metadata
+annotatenodes()
+{
+	if(!nsmode) {
+		for(i := 0; i < nnodes; i++) {
+			nodes[i].bindsrc = nil;
+			nodes[i].bindflags = "";
+			nodes[i].bindcmd = "";
+			nodes[i].nunion = 0;
+			nodes[i].unionlayers = nil;
+			nodes[i].isdevice = 0;
+		}
+		return;
+	}
+
+	# Build a map: for each destination path, collect all ns ops
+	for(i := 0; i < nnodes; i++) {
+		n := nodes[i];
+		n.bindsrc = nil;
+		n.bindflags = "";
+		n.bindcmd = "";
+		n.nunion = 0;
+		n.unionlayers = nil;
+		n.isdevice = 0;
+
+		layers: list of ref NsOp;
+		nlayers := 0;
+		lastop: ref NsOp;
+
+		for(ops := nsops; ops != nil; ops = tl ops) {
+			op := hd ops;
+			if(pathmatch(op.dst, n.path)) {
+				layers = op :: layers;
+				nlayers++;
+				lastop = op;
+			}
+		}
+
+		if(nlayers > 0) {
+			n.bindcmd = lastop.cmd;
+			n.bindsrc = lastop.src;
+			n.bindflags = lastop.flags;
+			n.nunion = nlayers;
+			if(nlayers > 1)
+				n.unionlayers = layers;
+
+			# Detect kernel devices (#X paths)
+			if(len lastop.src > 0 && lastop.src[0] == '#')
+				n.isdevice = 1;
+		}
+	}
+}
+
+pathmatch(a, b: string): int
+{
+	# Normalise: strip trailing /
+	if(len a > 1 && a[len a - 1] == '/')
+		a = a[:len a - 1];
+	if(len b > 1 && b[len b - 1] == '/')
+		b = b[:len b - 1];
+	return a == b;
+}
+
+# ---------- Namespace operations ----------
+
+startbind()
+{
+	if(selected < 0 || selected >= nvisible)
+		return;
+	ni := visible[selected];
+	n := nodes[ni];
+	target := n.path;
+	if(!n.isdir)
+		target = dirof(n.path);
+	promptmode = PROMPT_BIND_SRC;
+	statbar.prompt = "Bind src (onto " + target + "): ";
+	statbar.buf = "";
+	redraw();
+}
+
+startgoto()
+{
+	promptmode = PROMPT_GOTO;
+	statbar.prompt = "Path: ";
+	statbar.buf = "";
+	redraw();
+}
+
+dobind(src, flagstr: string)
+{
+	if(selected < 0 || selected >= nvisible)
+		return;
+	ni := visible[selected];
+	n := nodes[ni];
+	target := n.path;
+	if(!n.isdir)
+		target = dirof(n.path);
+
+	flags := Sys->MREPL;
+	for(i := 0; i < len flagstr; i++) {
+		case flagstr[i] {
+		'b' =>	flags |= Sys->MBEFORE;
+		'a' =>	flags |= Sys->MAFTER;
+		'c' =>	flags |= Sys->MCREATE;
+		}
+	}
+	rc := sys->bind(src, target, flags);
+	if(rc < 0) {
+		statbar.right = sys->sprint("bind failed: %r");
+	} else {
+		statbar.right = sys->sprint("bound %s on %s", src, target);
+		# Refresh namespace and tree
+		loadnamespace();
+		refreshsubtree(ni);
+		annotatenodes();
+	}
+	redraw();
+}
+
+unmountselected()
+{
+	if(selected < 0 || selected >= nvisible)
+		return;
+	ni := visible[selected];
+	n := nodes[ni];
+	if(!n.isdir || n.bindsrc == nil) {
+		statbar.right = "no mount to remove";
+		redraw();
+		return;
+	}
+	dounmount(n.path);
+}
+
+dounmount(path: string)
+{
+	rc := sys->unmount(nil, path);
+	if(rc < 0) {
+		statbar.right = sys->sprint("unmount %s: %r", path);
+	} else {
+		statbar.right = "unmounted " + path;
+		loadnamespace();
+		refreshtree();
+		annotatenodes();
+	}
 	redraw();
 }
 
@@ -496,7 +936,8 @@ addnode(path, name: string, depth, isdir, parent: int): int
 		newnodes[0:] = nodes;
 		nodes = newnodes;
 	}
-	n := ref Node(path, name, depth, isdir, 0, 0, big 0, 0, 0, parent);
+	n := ref Node(path, name, depth, isdir, 0, 0, big 0, 0, 0, parent,
+		nil, "", "", 0, nil, 0);
 	idx := nnodes;
 	nodes[idx] = n;
 	nnodes++;
@@ -514,24 +955,19 @@ loadchildren(pi: int)
 	if(n <= 0)
 		return;
 
-	# Insert children right after parent.
-	# First, count existing children to find insertion point.
 	insert := pi + 1;
-	# Skip past any existing subtree rooted at pi
 	for(i := pi + 1; i < nnodes; i++) {
 		if(nodes[i].depth <= p.depth)
 			break;
 		insert = i + 1;
 	}
 
-	# Make room
 	count := n;
 	if(nnodes + count > len nodes) {
 		newnodes := array[(nnodes + count) * 2] of ref Node;
 		newnodes[0:] = nodes[0:nnodes];
 		nodes = newnodes;
 	}
-	# Shift nodes after insertion point
 	if(insert < nnodes) {
 		for(i := nnodes - 1; i >= insert; i--)
 			nodes[i + count] = nodes[i];
@@ -544,20 +980,15 @@ loadchildren(pi: int)
 		}
 	}
 
-	# Add directory entries first, then files (dirs sort to top)
 	j := insert;
 	# Directories first
 	for(i = 0; i < n; i++) {
 		d := dirs[i];
 		if(d.mode & Sys->DMDIR) {
-			childpath := p.path;
-			if(childpath != "/" && len childpath > 0)
-				childpath += "/";
-			else if(childpath == "/")
-				childpath = "/";
-			childpath += d.name;
+			childpath := joinpath(p.path, d.name);
 			nodes[j] = ref Node(childpath, d.name, p.depth + 1,
-				1, 0, d.mode, big d.length, 0, 0, pi);
+				1, 0, d.mode, big d.length, 0, 0, pi,
+				nil, "", "", 0, nil, 0);
 			j++;
 		}
 	}
@@ -565,19 +996,25 @@ loadchildren(pi: int)
 	for(i = 0; i < n; i++) {
 		d := dirs[i];
 		if(!(d.mode & Sys->DMDIR)) {
-			childpath := p.path;
-			if(childpath != "/" && len childpath > 0)
-				childpath += "/";
-			else if(childpath == "/")
-				childpath = "/";
-			childpath += d.name;
+			childpath := joinpath(p.path, d.name);
 			nodes[j] = ref Node(childpath, d.name, p.depth + 1,
-				0, 0, d.mode, big d.length, 0, 0, pi);
+				0, 0, d.mode, big d.length, 0, 0, pi,
+				nil, "", "", 0, nil, 0);
 			j++;
 		}
 	}
 	nnodes += count;
 	p.nchildren = count;
+
+	if(nsmode)
+		annotatenodes();
+}
+
+joinpath(dir, name: string): string
+{
+	if(dir == "/")
+		return "/" + name;
+	return dir + "/" + name;
 }
 
 expand(ni: int)
@@ -595,7 +1032,6 @@ collapse(ni: int)
 	n := nodes[ni];
 	if(!n.isdir)
 		return;
-	# Recursively collapse children
 	for(i := ni + 1; i < nnodes; i++) {
 		if(nodes[i].depth <= n.depth)
 			break;
@@ -621,7 +1057,6 @@ expandsubtree(ni: int)
 	if(!n.isdir)
 		return;
 	expand(ni);
-	# Expand children recursively
 	for(i := ni + 1; i < nnodes; i++) {
 		if(nodes[i].depth <= n.depth)
 			break;
@@ -632,7 +1067,6 @@ expandsubtree(ni: int)
 
 collapseall()
 {
-	# Collapse everything except root
 	for(i := 0; i < nnodes; i++) {
 		if(nodes[i].isdir && i > 0)
 			nodes[i].expanded = 0;
@@ -645,24 +1079,22 @@ collapseall()
 
 refreshtree()
 {
-	# Remember selected path
 	selpath := "";
 	if(selected >= 0 && selected < nvisible)
 		selpath = nodes[visible[selected]].path;
 
-	# Rebuild from root
 	nnodes = 0;
 	addnode(rootpath, basename(rootpath), 0, 1, -1);
 	if(nnodes > 0) {
 		nodes[0].expanded = 1;
 		nodes[0].loaded = 0;
 		loadchildren(0);
-		# Re-expand paths that were expanded before
-		# (simplified: just expand first level)
 		rebuildvisible();
 	}
 
-	# Try to restore selection
+	loadnamespace();
+	annotatenodes();
+
 	selected = 0;
 	for(i := 0; i < nvisible; i++) {
 		if(nodes[visible[i]].path == selpath) {
@@ -674,13 +1106,45 @@ refreshtree()
 	redraw();
 }
 
+refreshsubtree(ni: int)
+{
+	n := nodes[ni];
+	if(!n.isdir)
+		return;
+	# Mark as unloaded so next expand re-reads
+	n.loaded = 0;
+	n.nchildren = 0;
+	# Remove children from nodes array
+	first := ni + 1;
+	last := first;
+	for(i := first; i < nnodes; i++) {
+		if(nodes[i].depth <= n.depth)
+			break;
+		last = i + 1;
+	}
+	count := last - first;
+	if(count > 0) {
+		for(i := last; i < nnodes; i++) {
+			nodes[i - count] = nodes[i];
+			if(nodes[i - count].parent >= last)
+				nodes[i - count].parent -= count;
+		}
+		nnodes -= count;
+	}
+	# Re-expand if it was expanded
+	if(n.expanded) {
+		n.expanded = 0;
+		expand(ni);
+	}
+	rebuildvisible();
+}
+
 rebuildvisible()
 {
-	if(nvisible > len visible)
+	if(nnodes > len visible)
 		visible = array[nnodes * 2] of int;
 	nvisible = 0;
 	for(i := 0; i < nnodes; i++) {
-		# A node is visible if all its ancestors are expanded
 		vis := 1;
 		pi := nodes[i].parent;
 		while(pi >= 0) {
@@ -733,10 +1197,8 @@ redraw()
 	r := screen.r;
 	ZP := Point(0, 0);
 
-	# Clear background
 	screen.draw(r, bgcolor, nil, ZP);
 
-	# Calculate text area
 	tr := textrect();
 	fh := font.height;
 	maxvrows := tr.dy() / fh;
@@ -744,7 +1206,6 @@ redraw()
 		maxvrows = 1;
 	vislines = maxvrows;
 
-	# Draw tree rows
 	y := tr.min.y;
 	for(i := topline; i < nvisible && (y + fh) <= tr.max.y; i++) {
 		ni := visible[i];
@@ -758,10 +1219,9 @@ redraw()
 
 		x := tr.min.x + n.depth * INDENT;
 
-		# Expand/collapse indicator for directories
-		if(n.isdir) {
+		# Expand/collapse indicator
+		if(n.isdir)
 			drawexpander(screen, Point(x, y), fh, n.expanded);
-		}
 		x += ICON_W;
 
 		# Name
@@ -771,39 +1231,52 @@ redraw()
 			f = bfont;
 			col = dircol;
 		}
+		if(n.isdevice)
+			col = devcolor;
 
-		# Truncate if needed
 		name := n.name;
 		if(n.isdir)
 			name += "/";
-		maxw := tr.max.x - x;
+
+		# Calculate available width for name + annotation
+		rightx := tr.max.x;
+		annot := "";
+		annotw := 0;
+		if(nsmode && n.bindsrc != nil) {
+			annot = nsannotation(n);
+			annotw = font.width(annot) + 8;
+		} else if(!n.isdir && n.length >= big 0) {
+			annot = fmtsize(n.length);
+			annotw = font.width(annot) + 8;
+		}
+
+		maxw := rightx - x - annotw;
 		if(maxw > 0) {
 			tw := f.width(name);
 			if(tw > maxw) {
 				for(k := len name; k > 0; k--) {
-					if(f.width(name[:k]) <= maxw - font.width("...")) {
-						name = name[:k] + "...";
+					if(f.width(name[:k]) <= maxw - font.width("..")) {
+						name = name[:k] + "..";
 						break;
 					}
 				}
 			}
 			screen.text(Point(x, y), col, ZP, f, name);
 
-			# File size for non-directories
-			if(!n.isdir && n.length >= big 0) {
-				sz := fmtsize(n.length);
-				szw := font.width(sz);
-				szx := tr.max.x - szw;
-				namex := x + f.width(name) + 8;
-				if(szx > namex)
-					screen.text(Point(szx, y), dimcolor, ZP, font, sz);
+			# Right-aligned annotation
+			if(annotw > 0 && len annot > 0) {
+				ax := rightx - font.width(annot);
+				acol := dimcolor;
+				if(nsmode && n.bindsrc != nil)
+					acol = mntcolor;
+				screen.text(Point(ax, y), acol, ZP, font, annot);
 			}
 		}
 
 		y += fh;
 	}
 
-	# Update and draw scrollbar
+	# Scrollbar
 	sr := scrollrect();
 	scrollbar.resize(sr);
 	scrollbar.total = nvisible;
@@ -814,11 +1287,19 @@ redraw()
 	# Status bar
 	sth := widgetmod->statusheight();
 	statbar.resize(Rect((r.min.x, r.max.y - sth), (r.max.x, r.max.y)));
-	if(selected >= 0 && selected < nvisible)
-		statbar.left = nodes[visible[selected]].path;
-	else
-		statbar.left = rootpath;
-	statbar.right = sys->sprint("%d items", nvisible);
+	if(statbar.prompt == nil) {
+		if(selected >= 0 && selected < nvisible) {
+			nd := nodes[visible[selected]];
+			statbar.left = nd.path;
+			if(nsmode && nd.bindsrc != nil)
+				statbar.right = nd.bindcmd + " " + nd.bindflags + " " + nd.bindsrc;
+			else
+				statbar.right = sys->sprint("%d items", nvisible);
+		} else {
+			statbar.left = rootpath;
+			statbar.right = sys->sprint("%d items", nvisible);
+		}
+	}
 	statbar.draw(screen);
 	# INFR-27: window border is the wmclient frame (th.windowborder).
 	# Don't draw widget.contentborder here — it would paint th.accent
@@ -827,16 +1308,32 @@ redraw()
 	screen.flush(Draw->Flushnow);
 }
 
+nsannotation(n: ref Node): string
+{
+	if(n.bindsrc == nil)
+		return "";
+	s := "";
+	if(n.nunion > 1)
+		s += "[+" + string (n.nunion - 1) + "] ";
+	# Show source: trim long paths
+	src := n.bindsrc;
+	if(len src > 20)
+		src = ".." + src[len src - 18:];
+	flags := "";
+	if(n.bindflags != nil && len n.bindflags > 0)
+		flags = n.bindflags + " ";
+	s += flags + src;
+	return s;
+}
+
 drawexpander(screen: ref Image, p: Point, fh: int, expanded: int)
 {
-	# Draw a small triangle: right-pointing (collapsed) or down-pointing (expanded)
 	ZP := Point(0, 0);
 	cx := p.x + ICON_W / 2;
 	cy := p.y + fh / 2;
-	sz := 4;	# half-size of triangle
+	sz := 4;
 
 	if(expanded) {
-		# Down-pointing triangle: three lines
 		for(i := 0; i <= sz; i++) {
 			x0 := cx - sz + i;
 			x1 := cx + sz - i;
@@ -844,7 +1341,6 @@ drawexpander(screen: ref Image, p: Point, fh: int, expanded: int)
 				0, 0, 0, dimcolor, ZP);
 		}
 	} else {
-		# Right-pointing triangle
 		for(i := 0; i <= sz; i++) {
 			y0 := cy - sz + i;
 			y1 := cy + sz - i;
@@ -867,30 +1363,19 @@ fmtsize(n: big): string
 
 # ---------- Navigation ----------
 
-startgoto()
-{
-	promptmode = 1;
-	statbar.prompt = "Path: ";
-	statbar.buf = "";
-	redraw();
-}
-
 gotopath(path: string)
 {
 	if(path == nil || len path == 0)
 		return;
-	# Check if path is a directory
 	(ok, d) := sys->stat(path);
 	if(ok < 0) {
 		statbar.right = path + ": not found";
 		return;
 	}
 	if(!(d.mode & Sys->DMDIR)) {
-		# It's a file — plumb it
 		plumbfile(path);
 		return;
 	}
-	# Change root to new path
 	rootpath = path;
 	nnodes = 0;
 	addnode(rootpath, basename(rootpath), 0, 1, -1);
@@ -899,9 +1384,11 @@ gotopath(path: string)
 		loadchildren(0);
 		rebuildvisible();
 	}
+	loadnamespace();
+	annotatenodes();
 	selected = 0;
 	topline = 0;
-	w.settitle("ftree \u2014 " + rootpath);
+	w.settitle("ftree — " + rootpath);
 }
 
 # ---------- Helpers ----------
@@ -942,12 +1429,18 @@ loadcolors()
 		dircol = display.color(th.text);
 		selcolor = display.color(th.accent);
 		dimcolor = display.color(th.dim);
+		mntcolor = display.color(th.yellow);
+		devcolor = display.color(th.green);
+		accentcol = display.color(th.accent);
 	} else {
 		bgcolor = display.color(BG);
 		fgcolor = display.color(FG);
 		dircol = display.color(DIRCOL);
 		selcolor = display.color(SELCOL);
 		dimcolor = display.color(DIMCOL);
+		mntcolor = display.color(MNTCOL);
+		devcolor = display.color(DEVCOL);
+		accentcol = display.color(SELCOL);
 	}
 }
 
@@ -958,6 +1451,30 @@ reloadcolors()
 	wmclient->retheme(w);
 	if(menumod != nil)
 		menumod->init(display, bfont);
+}
+
+# ---------- Namespace change watcher ----------
+
+nswatcher(ch: chan of int)
+{
+	for(;;) {
+		sys->sleep(2000);
+		pid := sys->pctl(0, nil);
+		nspath := sys->sprint("/prog/%d/ns", pid);
+		fd := sys->open(nspath, Sys->OREAD);
+		if(fd == nil)
+			continue;
+		raw := "";
+		buf := array[4096] of byte;
+		for(;;) {
+			n := sys->read(fd, buf, len buf);
+			if(n <= 0)
+				break;
+			raw += string buf[0:n];
+		}
+		if(raw != nssnapshot)
+			alt { ch <-= 1 => ; * => ; }
+	}
 }
 
 # ---------- Theme listener ----------
@@ -1015,14 +1532,22 @@ mkdirq(path: string)
 writeftreestate()
 {
 	state := sys->sprint("root %s\n", rootpath);
-	if(selected >= 0 && selected < nvisible)
-		state += sys->sprint("selected %s\n", nodes[visible[selected]].path);
+	state += sys->sprint("nsmode %d\n", nsmode);
+	if(selected >= 0 && selected < nvisible) {
+		nd := nodes[visible[selected]];
+		state += sys->sprint("selected %s\n", nd.path);
+		if(nsmode && nd.bindsrc != nil)
+			state += sys->sprint("bindsrc %s\n", nd.bindsrc);
+	}
 	state += sys->sprint("items %d\n", nvisible);
 	state += sys->sprint("topline %d\n", topline);
 	state += sys->sprint("visible %d\n", vislines);
 
-	# Plain text listing of visible items for AI context
-	view := sys->sprint("File tree: %s\n", rootpath);
+	# Plain text listing for AI context
+	view := sys->sprint("File tree: %s", rootpath);
+	if(nsmode)
+		view += " [ns mode]";
+	view += "\n";
 	view += sys->sprint("Items %d-%d of %d\n\n", topline + 1,
 		min(topline + vislines, nvisible), nvisible);
 	end := topline + vislines;
@@ -1048,6 +1573,15 @@ writeftreestate()
 		view += sel + indent + marker + n.name;
 		if(n.isdir)
 			view += "/";
+		if(nsmode && n.bindsrc != nil) {
+			view += "  <- " + n.bindsrc;
+			if(n.nunion > 1)
+				view += " [+" + string (n.nunion - 1) + "]";
+			if(n.bindflags != nil && len n.bindflags > 0)
+				view += " " + n.bindflags;
+		} else if(!n.isdir && n.length >= big 0) {
+			view += "  " + fmtsize(n.length);
+		}
 		view += "\n";
 	}
 
@@ -1116,6 +1650,36 @@ checkctlfile(): int
 	"refresh" =>
 		refreshtree();
 		return 1;
+	"nsmode" =>
+		togglensmode();
+		return 1;
+	"bind" =>
+		if(len toks < 2)
+			return 0;
+		src := hd toks;
+		toks = tl toks;
+		target := hd toks;
+		flagstr := "";
+		if(toks != nil) {
+			toks = tl toks;
+			if(toks != nil)
+				flagstr = hd toks;
+		}
+		# Find or select target
+		for(i := 0; i < nvisible; i++) {
+			if(nodes[visible[i]].path == target) {
+				selected = i;
+				break;
+			}
+		}
+		bindsrc_pending = src;
+		dobind(src, flagstr);
+		return 1;
+	"unmount" =>
+		if(toks == nil)
+			return 0;
+		dounmount(hd toks);
+		return 1;
 	"scroll" =>
 		if(toks == nil)
 			return 0;
@@ -1150,10 +1714,8 @@ readrmfile(path: string): string
 	if(n <= 0)
 		return nil;
 	s := string buf[0:n];
-	# Truncate file to consume the command
 	fd = sys->create(path, Sys->OWRITE, 8r666);
 	fd = nil;
-	# Strip trailing whitespace
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
 		s = s[:len s - 1];
 	return s;

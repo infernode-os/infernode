@@ -1,0 +1,19 @@
+$$ ============================================================
+$$ cdb script: catch STATUS_BAD_FUNCTION_TABLE during JIT spawn.
+$$
+$$ Run via:
+$$   cdb.exe -cf windows-jit-cdb-script.txt -y "srv*C:\symbols*https://msdl.microsoft.com/download/symbols" \
+$$           o.emu.exe -c1 -r <bundle> sh -c "load std; mount -ac {mntgen} /n; echo OK"
+$$
+$$ Output written to stdout / a logfile. Look for "BAD_FUNC_TABLE_HIT".
+$$ ============================================================
+
+$$ First-chance break on STATUS_BAD_FUNCTION_TABLE (0xc00000ff).
+$$ When it fires, dump everything useful, then quit.
+sxe -c ".echo === BAD_FUNC_TABLE_HIT ===;r;.echo --- stack ---;kn 30;.echo --- exception record ---;.exr -1;.echo --- exception context ---;.ecxr;.echo --- modules near RIP ---;lmDvm ntdll;.echo === END_DIAGNOSTICS ===;q" c00000ff
+
+$$ Also catch access violations in case the unwinder turns it into AV first.
+sxe -c ".echo === AV_HIT ===;r;.echo --- stack ---;kn 30;.exr -1;.echo === END_AV ===;q" av
+
+$$ Run the program.
+g

@@ -743,6 +743,10 @@ exmount(Chan *c, Mhead **mp, int doname)
 	if((c->flag & COPEN) == 0 && findmount(&nc.nc, mp, c->type, c->dev, c->qid)){
 		if(waserror()){
 			cclose(nc.nc);
+			if(mp != nil && *mp != nil){
+				putmhead(*mp);
+				*mp = nil;
+			}
 			nexterror();
 		}
 		nc.nc = cunique(nc.nc);
@@ -867,8 +871,10 @@ Exwalk(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return Eopen;
 	}
-	if(waserror())
+	if(waserror()){
+		Exputfid(fs, f);
 		return up->env->errstr;
+	}
 	c = cclone(f->chan);
 	poperror();
 	qid = f->qid;
@@ -931,19 +937,26 @@ Exopen(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return Emode;
 	}
+	c = nil;
 	m = nil;
-	c = exmount(f->chan, &m, 1);
 	if(waserror()){
-		cclose(c);
+		if(c != nil)
+			cclose(c);
+		if(m != nil)
+			putmhead(m);
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	c = exmount(f->chan, &m, 1);
 
 	/* only save the mount head if it's a multiple element union */
-	if(m && m->mount && m->mount->next)
+	if(m && m->mount && m->mount->next){
 		c->umh = m;
-	else
+		m = nil;
+	}else{
 		putmhead(m);
+		m = nil;
+	}
 
 	c = devtab[c->type]->open(c, t->mode);
 	if(t->mode & ORCLOSE)
@@ -1144,12 +1157,14 @@ Exstat(Export *fs, Fcall *t, Fcall *r)
 	f = Exgetfid(fs, t->fid);
 	if(f == nil)
 		return Enofid;
-	c = exmount(f->chan, nil, 1);
+	c = nil;
 	if(waserror()){
-		cclose(c);
+		if(c != nil)
+			cclose(c);
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	c = exmount(f->chan, nil, 1);
 	n = devtab[c->type]->stat(c, r->stat, r->nstat);
 	if(n <= BIT16SZ)
 		error(Eshortstat);

@@ -223,7 +223,7 @@ exreadmsg(Chan *c, void *a, uint n)
 		return 0;
 	}
 	len = GBIT32(buf);
-	if(len <= BIT32SZ || len > n){
+	if(len < MSGHDRSZ || len > n){
 		kwerrstr("bad length in Styx message header");
 		return -1;
 	}

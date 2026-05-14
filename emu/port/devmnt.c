@@ -35,6 +35,7 @@ struct Mntrpc
 
 enum
 {
+	Min9pmsg = BIT32SZ+BIT8SZ+BIT16SZ,
 	TAGSHIFT = 5,			/* ulong has to be 32 bits */
 	TAGMASK = (1<<TAGSHIFT)-1,
 	NMASK = (64*1024)>>TAGSHIFT,
@@ -852,13 +853,13 @@ mntrpcread(Mnt *m, Mntrpc *r)
 	r->reply.tag = 0;
 
 	/* read at least length, type, and tag and pullup to a single block */
-	if(doread(m, BIT32SZ+BIT8SZ+BIT16SZ) < 0)
+	if(doread(m, Min9pmsg) < 0)
 		return -1;
-	nb = pullupqueue(m->q, BIT32SZ+BIT8SZ+BIT16SZ);
+	nb = pullupqueue(m->q, Min9pmsg);
 
 	/* read in the rest of the message, avoid ridiculous (for now) message sizes */
 	len = GBIT32(nb->rp);
-	if(len > m->msize){
+	if(len < Min9pmsg || len > m->msize){
 		qdiscard(m->q, qlen(m->q));
 		return -1;
 	}
@@ -869,11 +870,15 @@ mntrpcread(Mnt *m, Mntrpc *r)
 	t = nb->rp[BIT32SZ];
 	switch(t){
 	case Rread:
-		hlen = BIT32SZ+BIT8SZ+BIT16SZ+BIT32SZ;
+		hlen = Min9pmsg+BIT32SZ;
 		break;
 	default:
 		hlen = len;
 		break;
+	}
+	if(hlen > len){
+		qdiscard(m->q, qlen(m->q));
+		return -1;
 	}
 	nb = pullupqueue(m->q, hlen);
 

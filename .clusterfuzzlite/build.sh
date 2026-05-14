@@ -36,3 +36,5 @@ printf '\x09\x00\x00\x00\x6c\x03\x00\x02\x00' \
     > "$OUT/fuzz_9p_messages_seed_corpus/tflush.bin"
 printf '\x0f\x00\x00\x00\x75\x02\x00\x04\x00\x00\x00ABCD' \
     > "$OUT/fuzz_9p_messages_seed_corpus/rread.bin"
+printf '\x05\x00\x00\x00\x6d\x00\x00' \
+    > "$OUT/fuzz_9p_messages_seed_corpus/short-header.bin"

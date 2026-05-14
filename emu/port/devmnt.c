@@ -70,12 +70,31 @@ void	mountmux(Mnt*, Mntrpc*);
 void	mountrpc(Mnt*, Mntrpc*);
 int	rpcattn(void*);
 Chan*	mntchan(void);
+static int	versionrequested(char*);
+static int	versioncompatible(char*, char*);
 
 char	Esbadstat[] = "invalid directory entry received from server";
 char Enoversion[] = "version not established for mount channel";
 
 
 void (*mntstats)(int, Chan*, uvlong, ulong);
+
+static int
+versionrequested(char *v)
+{
+	int n;
+
+	n = strlen(VERSION9P);
+	return strncmp(v, VERSION9P, n) == 0 && (v[n] == '\0' || v[n] == '.');
+}
+
+static int
+versioncompatible(char *req, char *got)
+{
+	if(strcmp(req, got) == 0)
+		return 1;
+	return strcmp(got, VERSION9P) == 0 && versionrequested(req) && req[strlen(VERSION9P)] == '.';
+}
 
 static void
 mntinit(void)
@@ -122,7 +141,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	/* validity */
 	if(msize < 0)
 		error("bad iounit in version call");
-	if(strncmp(v, VERSION9P, strlen(VERSION9P)) != 0)
+	if(!versionrequested(v))
 		error("bad 9P version specification");
 
 	m = c->mux;
@@ -133,7 +152,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 
 		strecpy(buf, buf+sizeof buf, m->version);
 		k = strlen(buf);
-		if(strncmp(buf, v, k) != 0){
+		if(!versioncompatible(v, buf)){
 			snprint(buf, sizeof buf, "incompatible 9P versions %s %s", m->version, v);
 			error(buf);
 		}
@@ -195,7 +214,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 		error("server tries to increase msize in fversion");
 	if(f.msize<256 || f.msize>1024*1024)
 		error("nonsense value of msize in fversion");
-	if(strncmp(f.version, v, strlen(f.version)) != 0)
+	if(!versioncompatible(v, f.version))
 		error("bad 9P version returned from server");
 
 	/* now build Mnt associated with this connection */

@@ -6,7 +6,9 @@
 # the directory contents yet when the overlay bind was set up in profile).
 user=`{cat /dev/user}
 ls /usr/inferno/secstore >[2] /dev/null
-ls /usr/inferno/secstore/$user >[2] /dev/null
+if {! ~ $user ''} {
+	ls /usr/inferno/secstore/$user >[2] /dev/null
+}
 
 # Login screen (unlocks secstore, loads keys into factotum)
 wm/logon

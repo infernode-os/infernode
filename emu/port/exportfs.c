@@ -382,6 +382,7 @@ exflushed(Export *fs, Exq *fq)
 			if(q->finished){
 				/* slave replied and emptied its flush queue; we can Rflush now */
 				unlock(&q->l);
+				unlock(&fs->l);
 				return 1;
 			}
 			/* append to slave's flush queue */

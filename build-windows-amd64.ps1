@@ -489,6 +489,16 @@ Write-Host "=== Building Headless Emulator ===" -ForegroundColor Cyan
 Push-Location "$ROOT\emu\Nt"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
+# Regenerate the Srv runtime-module headers with the freshly-built 64-bit
+# limbo. The committed copies came from the old OBJTYPE=386 mkfile and
+# encode 32-bit WORD sizes (temps[12], frame size 40), which corrupts the
+# F_Srv_iph2a frame layout on amd64 and triggers a NULL-pointer AV inside
+# string2c. See docs/postmortems/2026-05-14-windows-jit-seh-unwind.md
+# (INFR-69 section) for the diagnosis.
+Write-Host "  Regenerating Srv runtime headers..."
+& $LIMBO -a -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srv.h" -Encoding ASCII
+& $LIMBO -t Srv -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srvm.h" -Encoding ASCII
+
 $emuCFlags = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
     "/W3", "/wd4018", "/wd4244", "/wd4245", "/wd4068",

@@ -140,6 +140,19 @@ Push-Location "$ROOT\emu\Nt"
 # Clean all .obj files for a fresh GUI build
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
+# Regenerate the Srv runtime-module headers with the 64-bit limbo built by
+# build-windows-amd64.ps1. The committed copies in this directory came
+# from the old OBJTYPE=386 mkfile and encode 32-bit WORDs (temps[12],
+# frame size 40), which corrupts F_Srv_iph2a on amd64 and triggers a
+# NULL-pointer AV inside string2c. See docs/postmortems/
+# 2026-05-14-windows-jit-seh-unwind.md (INFR-69) for the diagnosis.
+$LIMBO = "$BinDir\limbo.exe"
+if (Test-Path $LIMBO) {
+    Write-Host "  Regenerating Srv runtime headers..."
+    & $LIMBO -a -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srv.h" -Encoding ASCII
+    & $LIMBO -t Srv -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srvm.h" -Encoding ASCII
+}
+
 $emuCFlags = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
     "/W3", "/wd4018", "/wd4244", "/wd4245", "/wd4068",

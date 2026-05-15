@@ -1,0 +1,281 @@
+#!/bin/bash
+# llmctl — Switch the local LLM backend (Ollama ↔ SGLang) cleanly.
+#
+# Acts as the single point of authority over which local-LLM serving
+# stack is running. Stops the other one, starts the chosen one, waits
+# for it to be healthy, and then updates the in-emu config
+# (`~/.infernode/lib/ndb/llm`) so that `infernode-llm.service`
+# (lucibridge / llmsrv) dials the now-running backend.
+#
+# Designed to be called from anywhere: a headless shell over SSH, a
+# user's interactive session, or the in-emu Plan-9-style /llm/ctl
+# synthetic filesystem (which executes `os llmctl …` for its writes).
+#
+# Usage:
+#   llmctl status                  # print: backend / url / health
+#   llmctl set <ollama|sglang|none>
+#   llmctl health [ollama|sglang]  # probe only — no state change
+#   llmctl --help
+#
+# Conventions:
+#   • Only one local backend runs at a time. systemd Conflicts= is
+#     intentionally NOT used in the unit files; llmctl owns the
+#     stop-before-start ordering so manual `systemctl --user start`
+#     of either service doesn't kill the other behind a user's back.
+#   • User-scope systemd. No sudo, no polkit.
+#   • Backend URLs follow upstream defaults:
+#         OLLAMA_URL=${OLLAMA_URL:-http://127.0.0.1:11434}
+#         SGLANG_URL=${SGLANG_URL:-http://127.0.0.1:30000}
+#     Override via env if your deploy uses non-default ports.
+#   • On a failed `set X`, llmctl restarts the previously-running
+#     backend (if any) and does NOT update ndb. Exit code is non-zero
+#     and the error reason goes to stderr.
+
+set -euo pipefail
+
+NDB="${HOME}/.infernode/lib/ndb/llm"
+
+OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
+SGLANG_URL="${SGLANG_URL:-http://127.0.0.1:30000}"
+
+OLLAMA_UNIT="ollama.service"
+SGLANG_UNIT="serving-sglang.service"
+
+# Seconds to wait for a freshly-started backend to become healthy.
+# Ollama: model load is usually a few seconds, GGUF warm caches are
+# already in. SGLang: model load ~10s + flashinfer JIT compile on the
+# first /v1/chat/completions call can take ~60s — see runbook §5 in
+# infernode-os/serving for the cold-start tax. Health here only checks
+# /v1/models (not chat), so 90s is comfortable.
+HEALTH_TIMEOUT_SEC="${LLMCTL_HEALTH_TIMEOUT:-90}"
+
+print_help() {
+	sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+die() {
+	echo "llmctl: $*" >&2
+	exit 1
+}
+
+# ── helpers ────────────────────────────────────────────────────
+
+is_active() {
+	# Returns 0 if the named unit is currently active.
+	systemctl --user is-active --quiet "$1" 2>/dev/null
+}
+
+unit_status() {
+	# Human-readable single word; matches `systemctl is-active` output
+	# (active|inactive|failed|activating|deactivating). Always succeeds.
+	systemctl --user is-active "$1" 2>/dev/null || true
+}
+
+probe_ollama() {
+	# /api/tags is the canonical liveness endpoint (returns model list).
+	curl -sf -m 3 -o /dev/null "${OLLAMA_URL}/api/tags"
+}
+
+probe_sglang() {
+	# /v1/models returns the loaded model list once SGLang's
+	# launch_server has finished its load + KV-cache allocation.
+	curl -sf -m 3 -o /dev/null "${SGLANG_URL}/v1/models"
+}
+
+wait_healthy() {
+	# Polls probe_<backend> up to HEALTH_TIMEOUT_SEC. Returns 0 on
+	# success, 1 on timeout.
+	local backend="$1"
+	local probe deadline
+	case "$backend" in
+		ollama) probe=probe_ollama ;;
+		sglang) probe=probe_sglang ;;
+		*) die "wait_healthy: unknown backend $backend" ;;
+	esac
+	deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SEC ))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if "$probe" 2>/dev/null; then
+			return 0
+		fi
+		sleep 1
+	done
+	return 1
+}
+
+current_backend() {
+	# Best-effort answer: prefer "active" unit over a port probe; if
+	# neither unit is active but a port answers, name that. This lets
+	# `status` report sensibly even when SGLang or Ollama were started
+	# outside of llmctl.
+	if is_active "$SGLANG_UNIT"; then
+		echo sglang; return
+	fi
+	if is_active "$OLLAMA_UNIT"; then
+		echo ollama; return
+	fi
+	if probe_sglang 2>/dev/null; then
+		echo sglang; return
+	fi
+	if probe_ollama 2>/dev/null; then
+		echo ollama; return
+	fi
+	echo none
+}
+
+# Backup the ndb file before mutating it, leaving a trail parallel to
+# the existing `llm.bak.<epoch>` files in ~/.infernode/lib/ndb/.
+backup_ndb() {
+	[ -f "$NDB" ] || return 0
+	local bak
+	bak="${NDB}.bak.$(date +%s)"
+	cp -p "$NDB" "$bak"
+	echo "$bak"
+}
+
+# Update or insert a single key=value pair in the ndb file. Preserves
+# any other keys present. The ndb-llm format is one `key=value` per
+# line (see lib/ndb/llm in this repo for the canonical shape).
+ndb_set() {
+	local key="$1" value="$2"
+	[ -d "$(dirname "$NDB")" ] || die "ndb dir missing: $(dirname "$NDB")"
+	if [ ! -f "$NDB" ]; then
+		# Bootstrap a minimal file if it doesn't exist yet.
+		: > "$NDB"
+	fi
+	if grep -q "^${key}=" "$NDB"; then
+		# Replace existing line. Use a temp file for atomicity.
+		sed "s|^${key}=.*|${key}=${value}|" "$NDB" > "${NDB}.tmp.$$"
+		mv "${NDB}.tmp.$$" "$NDB"
+	else
+		echo "${key}=${value}" >> "$NDB"
+	fi
+}
+
+ndb_get() {
+	local key="$1"
+	[ -f "$NDB" ] || { echo ""; return 0; }
+	sed -n "s/^${key}=//p" "$NDB" | head -1
+}
+
+stop_unit() {
+	local unit="$1"
+	if is_active "$unit"; then
+		systemctl --user stop "$unit"
+	fi
+}
+
+start_unit() {
+	local unit="$1"
+	systemctl --user start "$unit"
+}
+
+# ── subcommands ────────────────────────────────────────────────
+
+cmd_status() {
+	local backend healthy url ndb_url
+	backend="$(current_backend)"
+	ndb_url="$(ndb_get url)"
+	case "$backend" in
+		ollama) url="$OLLAMA_URL/v1"; probe_ollama >/dev/null 2>&1 && healthy=yes || healthy=no ;;
+		sglang) url="$SGLANG_URL/v1"; probe_sglang >/dev/null 2>&1 && healthy=yes || healthy=no ;;
+		none)   url=""; healthy=no ;;
+	esac
+	printf 'backend  %s\n' "$backend"
+	printf 'url      %s\n' "$url"
+	printf 'healthy  %s\n' "$healthy"
+	printf 'ndb_url  %s\n' "$ndb_url"
+	printf 'ollama   %s\n' "$(unit_status "$OLLAMA_UNIT")"
+	printf 'sglang   %s\n' "$(unit_status "$SGLANG_UNIT")"
+}
+
+cmd_health() {
+	local target="${1:-both}"
+	local rc=0
+	case "$target" in
+		ollama)
+			probe_ollama && printf 'ollama  healthy\n' || { printf 'ollama  unhealthy\n'; rc=1; }
+			;;
+		sglang)
+			probe_sglang && printf 'sglang  healthy\n' || { printf 'sglang  unhealthy\n'; rc=1; }
+			;;
+		both|"")
+			probe_ollama && printf 'ollama  healthy\n' || { printf 'ollama  unhealthy\n'; rc=1; }
+			probe_sglang && printf 'sglang  healthy\n' || { printf 'sglang  unhealthy\n'; rc=1; }
+			;;
+		*) die "health: unknown target '$target' (expected ollama|sglang|both)" ;;
+	esac
+	return $rc
+}
+
+cmd_set() {
+	local target="${1:-}"
+	[ -n "$target" ] || die "set: missing argument (ollama|sglang|none)"
+
+	local before
+	before="$(current_backend)"
+
+	case "$target" in
+		none)
+			# Stop whatever's up. Don't touch ndb — config preference
+			# remains whatever the user had set.
+			stop_unit "$SGLANG_UNIT"
+			stop_unit "$OLLAMA_UNIT"
+			echo "llmctl: stopped both backends (ndb unchanged)" >&2
+			return 0
+			;;
+		ollama)
+			local new_url="$OLLAMA_URL/v1"
+			if [ "$before" = "ollama" ] && probe_ollama 2>/dev/null; then
+				# Idempotent: already there + healthy. Just make ndb match.
+				ndb_set url "$new_url"
+				echo "llmctl: ollama already active and healthy; ndb url=$new_url" >&2
+				return 0
+			fi
+			# Stop SGLang first (per the mutual-exclusion contract).
+			stop_unit "$SGLANG_UNIT"
+			start_unit "$OLLAMA_UNIT"
+			if ! wait_healthy ollama; then
+				echo "llmctl: ollama failed to become healthy within ${HEALTH_TIMEOUT_SEC}s" >&2
+				# Best-effort rollback: stop the failed unit. We don't
+				# auto-restart SGLang since the user explicitly asked
+				# to switch off it.
+				stop_unit "$OLLAMA_UNIT"
+				return 1
+			fi
+			backup_ndb >/dev/null
+			ndb_set url "$new_url"
+			echo "llmctl: ollama active; ndb url=$new_url" >&2
+			;;
+		sglang)
+			local new_url="$SGLANG_URL/v1"
+			if [ "$before" = "sglang" ] && probe_sglang 2>/dev/null; then
+				ndb_set url "$new_url"
+				echo "llmctl: sglang already active and healthy; ndb url=$new_url" >&2
+				return 0
+			fi
+			stop_unit "$OLLAMA_UNIT"
+			start_unit "$SGLANG_UNIT"
+			if ! wait_healthy sglang; then
+				echo "llmctl: sglang failed to become healthy within ${HEALTH_TIMEOUT_SEC}s" >&2
+				stop_unit "$SGLANG_UNIT"
+				return 1
+			fi
+			backup_ndb >/dev/null
+			ndb_set url "$new_url"
+			echo "llmctl: sglang active; ndb url=$new_url" >&2
+			;;
+		*)
+			die "set: unknown target '$target' (expected ollama|sglang|none)"
+			;;
+	esac
+}
+
+# ── dispatch ───────────────────────────────────────────────────
+
+case "${1:-}" in
+	status)      shift; cmd_status "$@" ;;
+	set)         shift; cmd_set    "$@" ;;
+	health)      shift; cmd_health "$@" ;;
+	-h|--help|"") print_help; exit 0 ;;
+	*) die "unknown command '$1' (try --help)" ;;
+esac

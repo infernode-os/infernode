@@ -38,6 +38,25 @@ if {ftest -d $infhome/lib/keyring} {
 	bind -bc $infhome/lib/keyring /lib/keyring
 }
 
+# ── LLM backend switcher control plane (/llm/{ctl,status}) ──
+# llmctl9p serves a tiny synthetic FS that lets anything in the
+# emu namespace switch the local LLM backend (Ollama/SGLang/none)
+# by writing a verb to /llm/ctl. The daemon delegates the actual
+# systemctl + ndb work to the host `llmctl` bash tool via os(1).
+#
+# Host binary path comes from $LLMCTL_BIN if set, otherwise the
+# unqualified "llmctl" which `os` resolves against the host PATH.
+# Skip silently if the .dis is missing — the headless gateway still
+# serves with the existing /lib/ndb/llm contents; only the dynamic
+# switch is unavailable.
+mkdir -p /llm >[2] /dev/null
+if {ftest -f /dis/llmctl9p.dis} {
+	llmctlbin=`{os sh -c 'printf %s "${LLMCTL_BIN:-llmctl}"'}
+	mount {/dis/llmctl9p.dis -b $llmctlbin} /llm
+}{
+	echo 'serve-profile: NOTE /dis/llmctl9p.dis missing - /llm switcher disabled'
+}
+
 # ── LLM service (mounts /n/llm) ─────────────────────────────
 llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm}
 llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm}

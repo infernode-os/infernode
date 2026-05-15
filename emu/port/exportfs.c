@@ -9,6 +9,7 @@ typedef	struct Exq	Exq;
 
 enum
 {
+	Version9Plen	= sizeof(VERSION9P)-1,
 	Nfidhash	= 32,
 	MAXFDATA	= 8192,
 	MAXRPCDEF		= IOHDRSZ+MAXFDATA,	/* initial/default */
@@ -82,6 +83,7 @@ static void	exfreeq(Exq*);
 static void	exportproc(void*);
 static void	exreply(Exq*, char*);
 static int	exisroot(Export*, Chan*);
+static int	versionrequested(char*);
 
 static char*	Exversion(Export*, Fcall*, Fcall*);
 static char*	Exauth(Export*, Fcall*, Fcall*);
@@ -223,7 +225,7 @@ exreadmsg(Chan *c, void *a, uint n)
 		return 0;
 	}
 	len = GBIT32(buf);
-	if(len <= BIT32SZ || len > n){
+	if(len < MSGHDRSZ || len > n){
 		kwerrstr("bad length in Styx message header");
 		return -1;
 	}
@@ -380,6 +382,7 @@ exflushed(Export *fs, Exq *fq)
 			if(q->finished){
 				/* slave replied and emptied its flush queue; we can Rflush now */
 				unlock(&q->l);
+				unlock(&fs->l);
 				return 1;
 			}
 			/* append to slave's flush queue */
@@ -741,6 +744,10 @@ exmount(Chan *c, Mhead **mp, int doname)
 	if((c->flag & COPEN) == 0 && findmount(&nc.nc, mp, c->type, c->dev, c->qid)){
 		if(waserror()){
 			cclose(nc.nc);
+			if(mp != nil && *mp != nil){
+				putmhead(*mp);
+				*mp = nil;
+			}
 			nexterror();
 		}
 		nc.nc = cunique(nc.nc);
@@ -760,7 +767,6 @@ exmount(Chan *c, Mhead **mp, int doname)
 static char*
 Exversion(Export *fs, Fcall *t, Fcall *r)
 {
-	char *p;
 	static char version[] = VERSION9P;
 	int iounit;
 
@@ -774,14 +780,23 @@ Exversion(Export *fs, Fcall *t, Fcall *r)
 		return "message size too small";
 	if(0)
 		print("msgsize=%d\n", r->msize);
-	if((p = strchr(t->version, '.')) != nil)
-		*p = 0;
-	if(strncmp(t->version, "9P", 2) ==0 && strcmp(version, t->version) <= 0){
+	if(versionrequested(t->version)){
 		r->version = version;
 		fs->msize = r->msize;
 	}else
 		r->version = "unknown";
 	return nil;
+}
+
+static int
+versionrequested(char *v)
+{
+	int i;
+
+	for(i=0; i<Version9Plen; i++)
+		if(v[i] == '\0' || v[i] != VERSION9P[i])
+			return 0;
+	return v[Version9Plen] == '\0' || v[Version9Plen] == '.';
 }
 
 static char*
@@ -857,8 +872,10 @@ Exwalk(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return Eopen;
 	}
-	if(waserror())
+	if(waserror()){
+		Exputfid(fs, f);
 		return up->env->errstr;
+	}
 	c = cclone(f->chan);
 	poperror();
 	qid = f->qid;
@@ -867,6 +884,7 @@ Exwalk(Export *fs, Fcall *t, Fcall *r)
 	if(t->nwname > 0){
 		for(i=0; i<t->nwname; i++){
 			name = t->wname[i];
+			validname(name, 0);
 			if(!exisroot(fs, c) || *name != '\0' && strcmp(name, "..") != 0){
 				if(safewalk(&c, &name, 1, 0, nil) < 0){
 					/* leave the original state on error */
@@ -920,19 +938,26 @@ Exopen(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return Emode;
 	}
+	c = nil;
 	m = nil;
-	c = exmount(f->chan, &m, 1);
 	if(waserror()){
-		cclose(c);
+		if(c != nil)
+			cclose(c);
+		if(m != nil)
+			putmhead(m);
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	c = exmount(f->chan, &m, 1);
 
 	/* only save the mount head if it's a multiple element union */
-	if(m && m->mount && m->mount->next)
+	if(m && m->mount && m->mount->next){
 		c->umh = m;
-	else
+		m = nil;
+	}else{
 		putmhead(m);
+		m = nil;
+	}
 
 	c = devtab[c->type]->open(c, t->mode);
 	if(t->mode & ORCLOSE)
@@ -1133,12 +1158,14 @@ Exstat(Export *fs, Fcall *t, Fcall *r)
 	f = Exgetfid(fs, t->fid);
 	if(f == nil)
 		return Enofid;
-	c = exmount(f->chan, nil, 1);
+	c = nil;
 	if(waserror()){
-		cclose(c);
+		if(c != nil)
+			cclose(c);
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	c = exmount(f->chan, nil, 1);
 	n = devtab[c->type]->stat(c, r->stat, r->nstat);
 	if(n <= BIT16SZ)
 		error(Eshortstat);

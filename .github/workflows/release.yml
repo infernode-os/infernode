@@ -1026,7 +1026,18 @@ jobs:
     - name: Install build dependencies (win_bison via choco)
       shell: pwsh
       run: |
-        choco install winflexbison3 -y
+        $attempts = 3
+        for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+          choco install winflexbison3 -y --no-progress
+          if ($LASTEXITCODE -eq 0) {
+            break
+          }
+          if ($attempt -eq $attempts) {
+            throw "Failed to install winflexbison3 after $attempts attempts"
+          }
+          Write-Warning "winflexbison3 install attempt $attempt failed with exit code $LASTEXITCODE; retrying..."
+          Start-Sleep -Seconds (15 * $attempt)
+        }
 
     - name: Setup MSVC environment
       uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592571 # v1

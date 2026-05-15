@@ -94,10 +94,14 @@ if {! ftest -f /mnt/factotum/proto}{
 	}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}
-	if {! ~ $havesecpass ''} {
+	if {! ~ $#havesecpass 0} {
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
-		if {! ~ $secpass ''} {
-			auth/factotum -S tcp!localhost!5356 -u $user -P $secpass
+		if {! ~ $#secpass 0} {
+			if {! ~ $#user 0} {
+				auth/factotum -S tcp!localhost!5356 -u $user -P $secpass
+			}{
+				auth/factotum -S tcp!localhost!5356 -P $secpass
+			}
 		}{
 			auth/factotum
 		}

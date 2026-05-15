@@ -20,14 +20,33 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 $ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $ROOT
 
+# Repo-relative path to the multi-resolution icon. rc.exe needs the file
+# next to the .rc OR an /I include path. Copy it next to the .rc so the
+# resource script can reference it by bare filename (avoids absolute
+# paths in committed source).
+$repoRoot = Resolve-Path "$ROOT\..\.."
+$iconSrc = Join-Path $repoRoot "Nt\Infernode.ico"
+if (-not (Test-Path $iconSrc)) {
+    Write-Host "ERROR: icon not found at $iconSrc" -ForegroundColor Red
+    exit 1
+}
+Copy-Item $iconSrc -Destination "$ROOT\Infernode.ico" -Force
+
+Write-Host "Compiling resource script (icon + version info)..."
+& rc.exe /nologo /fo infernode-launcher.res infernode-launcher.rc
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "FAILED to compile resource script" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "Compiling InferNode.exe launcher..."
-& cl.exe /O2 /MT /Fe:InferNode.exe infernode-launcher.c /link /subsystem:windows user32.lib shell32.lib
+& cl.exe /O2 /MT /Fe:InferNode.exe infernode-launcher.c infernode-launcher.res /link /subsystem:windows user32.lib shell32.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "FAILED to compile InferNode.exe" -ForegroundColor Red
     exit 1
 }
 
-Remove-Item "infernode-launcher.obj" -ErrorAction SilentlyContinue
+Remove-Item "infernode-launcher.obj","infernode-launcher.res","Infernode.ico" -ErrorAction SilentlyContinue
 
 if (Test-Path "InferNode.exe") {
     $sz = (Get-Item "InferNode.exe").Length / 1KB

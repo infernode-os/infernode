@@ -1,40 +1,35 @@
 limbo - Author a complete, compilable Limbo source file.
 
-  Args: a NATURAL-LANGUAGE DESCRIPTION of what the program should do.
-        Pass the user's request as plain English. DO NOT try to
-        write code yourself and pass it as args — your code will be
-        treated as a noisy prompt by the dedicated Limbo author and
-        produce wrong, unrelated output.
-  Returns: the source code in a ```limbo code fence.
+  WHEN TO CALL
+    Call ONLY when the user has explicitly asked you to write, author,
+    create, generate, port, or "give me" Limbo code (.b files, Inferno
+    modules, code that must compile on Inferno).
 
-  Use this whenever the user asks for Limbo, .b files, Inferno modules,
-  or any code that needs to run on Inferno.
+    DO NOT call on:
+      - greetings ("hello", "hi", "hey")
+      - questions about how something works
+      - any message that does not contain an explicit authoring directive
 
-  DO NOT attempt to write Limbo yourself — your general-purpose training
-  produces Go-style or Python-style code the Inferno compiler rejects
-  (verified 0/10 compile-pass on standard scenarios). The limbo tool
-  dispatches the request to a dedicated Limbo-trained model that
-  produces compileable code (10/10 on the same scenarios).
+  ARGS
+    A single short natural-language sentence describing the program.
+    Plain English only. Pass the user's request verbatim if it already
+    describes the program; otherwise paraphrase in one sentence.
 
-  Concrete contract:
-    args is a SHORT natural-language sentence (10-50 words).
-    args MUST NOT contain { or }, ;, package main, "implement",
-        "import", "include", or any other code tokens.
-    If the user gave you code in a different language and wants
-        it ported to Limbo, args should be e.g. "port this Python
-        wc-l to Limbo: <python source>" — embed the source as
-        context, but the directive must be in English.
+    args MUST NOT contain code tokens: { } ; "implement" "import"
+    "include" "package main" "def main" "#include".
 
-Examples:
+  RETURNS
+    The Limbo source code in a single ```limbo fenced block.
 
-  limbo a Cat command that copies stdin to stdout if argv is empty,
-        or concatenates each named file to stdout otherwise
+  WHY THIS TOOL EXISTS
+    The orchestrator's general-purpose training produces Go-style or
+    Python-style code that the Inferno compiler rejects (verified 0/10
+    compile-pass). This tool dispatches to a Limbo-trained model that
+    produces compileable code (10/10 on the same scenarios). Even with
+    a fallback to a non-specialised model, quality is more predictable
+    when the request goes through this tool than when the orchestrator
+    inlines its own attempt.
 
-  limbo a hello-world program that prints "hello, limbo" and exits
-
-  limbo a wcl (word-count-lines) command that reads stdin via bufio and
-        prints the number of lines followed by a newline
-
-The dispatched model uses a focused system prompt that asks for one
-fenced ```limbo block with no surrounding prose. The response is
-returned verbatim.
+  EXAMPLES IN THIS DOCUMENT ARE DOCUMENTATION. Never copy an example's
+  argument text as your own tool call. Construct args from the user's
+  actual request.

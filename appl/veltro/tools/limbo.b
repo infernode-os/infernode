@@ -46,12 +46,14 @@ Command: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-# Configuration. The model name is the Ollama tag of the dedicated
-# Limbo-author LoRA. If this isn't loaded on the configured serve-llm,
-# the model write below will succeed (llmsrv accepts any string) and
-# the request will fail when the backend reports the model as missing —
-# the error surfaces in /ask's response, which we return verbatim.
-LIMBO_MODEL:    con "devstral-limbo-v3:latest";
+# Configuration. LIMBO_MODEL_DEFAULT is the Ollama tag of the dedicated
+# Limbo-author LoRA when one is installed. Anyone running InferNode without
+# that specific model (the common case for end users) gets the override
+# from /lib/veltro/limbo-model, or - if that file is absent or empty -
+# the tool falls back to the main session model (we just don't write
+# /model on the new session, leaving llmsrv on its configured default).
+LIMBO_MODEL_DEFAULT: con "devstral-limbo-v3:latest";
+LIMBO_MODEL_FILE:    con "/lib/veltro/limbo-model";
 LIMBO_SYSTEM:   con "You are an expert Limbo programmer for the Inferno operating system. When given a description, respond with one complete, compilable Limbo source file inside a single ```limbo code fence. Do not add explanation outside the code fence.";
 
 LLMROOT: con "/n/llm";
@@ -147,6 +149,23 @@ writefile(path: string, data: string): string
 	return nil;
 }
 
+# Read the Limbo author override model name from /lib/veltro/limbo-model.
+# Returns the tag (stripped) if the file exists and is non-empty;
+# returns "" if the file is missing or empty - the caller leaves the
+# llmsrv session on its default model in that case.
+readlimbomodel(): string
+{
+	(s, err) := readfile(LIMBO_MODEL_FILE);
+	if(err != nil)
+		return "";
+	# Strip whitespace; reject obvious junk.
+	while(len s > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n' || s[0] == '\r'))
+		s = s[1:];
+	while(len s > 0 && (s[len s - 1] == ' ' || s[len s - 1] == '\t' || s[len s - 1] == '\n' || s[len s - 1] == '\r'))
+		s = s[:len s - 1];
+	return s;
+}
+
 # Read `path` fully (handles synthetic 9P files with length=0).
 readfile(path: string): (string, string)
 {
@@ -223,17 +242,24 @@ exec(args: string): string
 
 	sessdir := sys->sprint("%s/%s", LLMROOT, idstr);
 
-	# 2. Override session model to the Limbo author. llmsrv accepts any
-	#    string; resolution happens at request-time.
-	werr := writefile(sessdir + "/model", LIMBO_MODEL);
-	if(werr != nil)
-		return werr;
+	# 2. Optionally override the session model. If the user has configured
+	#    a dedicated Limbo author at /lib/veltro/limbo-model, use it.
+	#    Otherwise (the common case for fresh installs), leave the session
+	#    on the main /lib/ndb/llm model - quality is lower but the tool at
+	#    least returns a response instead of "model not found".
+	limbomodel := readlimbomodel();
+	werr: string;
+	if(limbomodel != "") {
+		werr = writefile(sessdir + "/model", limbomodel);
+		if(werr != nil)
+			return werr;
+	}
 
 	# 2a. Clear reasoning_effort. The serve-llm daemon default is "low"
 	#     (set via -r flag) for the gpt-oss orchestrator's benefit, but
-	#     devstral-limbo-v3 doesn't support reasoning_effort and Ollama
-	#     returns 500 if it's set. Per-session writable file added in
-	#     llmsrv (Qreasoning) for exactly this case.
+	#     devstral-limbo-v3 (and most local models) don't support
+	#     reasoning_effort and Ollama returns 500 if it's set. Per-session
+	#     writable file added in llmsrv (Qreasoning) for exactly this case.
 	werr = writefile(sessdir + "/reasoning", "");
 	if(werr != nil)
 		return werr;
@@ -254,9 +280,13 @@ exec(args: string): string
 	if(rerr2 != nil)
 		return rerr2;
 
-	if(resp == "")
-		return "error: empty response from " + LIMBO_MODEL +
+	if(resp == "") {
+		modelname := limbomodel;
+		if(modelname == "")
+			modelname = "the configured main model";
+		return "error: empty response from " + modelname +
 			" (is the model loaded on the configured serve-llm?)";
+	}
 
 	# 5. Compile-gate-in-loop. Extract the first ```limbo block and run
 	#    the hosted Limbo compiler against it. On compile-pass: return

@@ -1026,10 +1026,21 @@ jobs:
     - name: Install build dependencies (win_bison via choco)
       shell: pwsh
       run: |
-        choco install winflexbison3 -y
+        $attempts = 3
+        for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+          choco install winflexbison3 -y --no-progress
+          if ($LASTEXITCODE -eq 0) {
+            break
+          }
+          if ($attempt -eq $attempts) {
+            throw "Failed to install winflexbison3 after $attempts attempts"
+          }
+          Write-Warning "winflexbison3 install attempt $attempt failed with exit code $LASTEXITCODE; retrying..."
+          Start-Sleep -Seconds (15 * $attempt)
+        }
 
     - name: Setup MSVC environment
-      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592571 # v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       with:
         arch: amd64
 
@@ -1112,7 +1123,7 @@ jobs:
 
         New-Item -ItemType Directory -Force -Path "$STAGE\tmp" | Out-Null
 
-        foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1")) {
+        foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
           if (Test-Path $f) {
             Copy-Item $f "$STAGE\"
           }
@@ -1164,9 +1175,16 @@ jobs:
 
     - name: Sign release artifacts
       run: |
+        # cosign-installer v4.x ships a cosign that defaults to the new
+        # bundle format and treats --output-signature / --output-certificate
+        # as deprecated. With the new format they get ignored and cosign
+        # then tries to write to an empty --bundle path, failing with
+        # "create bundle file: open : no such file or directory". Pass an
+        # explicit --bundle path to produce a single .sigstore file per
+        # artefact instead of separate .sig/.pem files.
         cd artifacts
         for f in infernode-* SHA256SUMS.txt; do
-          cosign sign-blob --yes --output-signature "${f}.sig" --output-certificate "${f}.pem" "$f"
+          cosign sign-blob --yes --bundle "${f}.sigstore" "$f"
         done
 
     - name: Attest build provenance
@@ -1219,14 +1237,14 @@ jobs:
 
           **Linux (headless):** Extract, then `./infernode-headless`
 
-          **Windows:** Extract the zip, then run `emu\Nt\o.emu.exe -r . sh -l`
+          **Windows:** Extract the zip, optionally run `setup-windows.ps1` (or `setup-windows.bat`) to configure an LLM backend, then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; SDL3 GUI ships in the same zip.
 
           ### Verification
 
-          All release artifacts are signed with [Sigstore](https://sigstore.dev) cosign (keyless).
+          All release artifacts are signed with [Sigstore](https://sigstore.dev) cosign (keyless), one `.sigstore` bundle per file.
 
           ```
-          cosign verify-blob --signature <file>.sig --certificate <file>.pem \
+          cosign verify-blob --bundle <file>.sigstore \
             --certificate-identity-regexp 'github.com/infernode-os/infernode' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>
           ```

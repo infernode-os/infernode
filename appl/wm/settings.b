@@ -993,7 +993,11 @@ clickllm(ptr: ref Pointer)
 		if(llm_backend_group != nil && llm_backend_group.contains(ptr.xy)) {
 			i := llm_backend_group.click(ptr.xy);
 			if(i >= 0 && i < len llm_backend_names) {
-				# Update URL default when switching backend
+				# Update URL default when switching backend, and clear
+				# the model field - the previous model is almost certainly
+				# wrong for the new backend (claude-... isn't an Ollama
+				# tag; llama3.2:3b isn't an Anthropic model id). User
+				# retypes; Tab/Enter triggers save as before.
 				if(llm_backend_names[i] == "openai" && llm_url_tf != nil) {
 					cur := strip(llm_url_tf.value());
 					if(cur == "" || cur == "https://api.anthropic.com")
@@ -1003,6 +1007,8 @@ clickllm(ptr: ref Pointer)
 					if(cur == "" || cur == "http://localhost:11434/v1")
 						llm_url_tf.setval("https://api.anthropic.com");
 				}
+				if(llm_model_tf != nil)
+					llm_model_tf.setval("");
 				dirty = 1;
 			}
 			return;
@@ -1307,11 +1313,16 @@ applyllm()
 
 readllmconfig(): (string, string, string, string, string, int)
 {
-	# Returns (mode, backend, url, model, dial, haskey)
+	# Returns (mode, backend, url, model, dial, haskey).
+	# Fallbacks are intentionally blank: a fresh install ships
+	# /lib/ndb/llm with no backend or model set, and the Settings UI
+	# is the user's first opportunity to pick. Pre-populating a model
+	# string (especially one from a different backend than the user
+	# is about to choose) is the wrong default.
 	mode := "local";
-	backend := "api";
-	url := "https://api.anthropic.com";
-	model := "claude-sonnet-4-5-20250929";
+	backend := "";
+	url := "";
+	model := "";
 	dial := "";
 	haskey := 0;
 
@@ -1332,11 +1343,13 @@ readllmconfig(): (string, string, string, string, string, int)
 		}
 	}
 
-	# Set default URL based on backend if not specified
-	if(url == "" || url == "https://api.anthropic.com") {
+	# Set a default URL ONLY when the user has already chosen a backend
+	# but the URL field is empty. If backend is also blank (fresh install),
+	# leave URL blank too - the user picks both.
+	if(url == "" && backend != "") {
 		if(backend == "openai")
 			url = "http://localhost:11434/v1";
-		else
+		else if(backend == "api")
 			url = "https://api.anthropic.com";
 	}
 

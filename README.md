@@ -17,9 +17,10 @@ InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×
 
 ### Install (recommended)
 
-Every tagged release ships signed binaries for macOS and Linux on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
+Every tagged release ships signed binaries for macOS, Linux, and Windows on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
 
 - **macOS (Apple Silicon)** — `infernode-*-macos-arm64.dmg`: open, drag to Applications, launch.
+- **Windows (x86_64)** — `infernode-*-windows-amd64.zip`: **before extracting**, right-click the downloaded zip → Properties → tick **Unblock** → OK. Then extract, optionally run `setup-windows.ps1` (or `setup-windows.bat`) to configure an LLM backend, double-click `InferNode.exe`. (Without the Unblock step Windows propagates the browser's Mark-of-the-Web to every extracted file; SmartScreen then silently refuses to launch the unsigned exe with no error dialog. Code-signing is on the roadmap.)
 - **Linux x86_64 (GUI)** — `infernode-*-linux-amd64-gui.tar.gz`: SDL3 is bundled.
 - **Linux ARM64 (GUI)** — `infernode-*-linux-arm64-gui.tar.gz`: for Jetson, Raspberry Pi, etc.
 - **Linux (headless)** — `infernode-*-linux-amd64.tar.gz` or `infernode-*-linux-arm64.tar.gz`.

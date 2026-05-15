@@ -80,6 +80,7 @@ TARG=\
 	gettar.dis\
 	gif2bit.dis\
 	gpusrv.dis\
+	llmctl9p.dis\
 	llmsrv.dis\
 	mail9p.dis\
 	grep.dis\

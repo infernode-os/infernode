@@ -21,11 +21,11 @@ implement Llmctl9p;
 #   llmctl9p [-b /path/to/host/llmctl]
 #
 # By default the daemon assumes `llmctl` is on the host's PATH. Pass
-# -b to override (recommended on Hephaestus where the binary lives in
-# the repo checkout rather than /usr/local/bin).
+# -b to override (e.g. when the binary lives in a repo checkout
+# rather than /usr/local/bin).
 #
 # Mount with:
-#   mount {llmctl9p -b /home/pdfinn/github.com/infernode-os/infernode/llmctl} /llm
+#   mount {llmctl9p -b /path/to/llmctl} /llm
 #
 # Cross-ref: tracked under INFR-79; the host bash tool lives at the
 # repo root (PR #88).
@@ -50,8 +50,9 @@ include "styxservers.m";
 	nametree: Nametree;
 	Tree: import nametree;
 
+# sh.m declares both Sh and Command interfaces. We use Command here as
+# a load-by-path handle for /dis/os.dis, whose init() signature matches.
 include "sh.m";
-	sh: Sh;
 
 Llmctl9p: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
@@ -99,10 +100,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "llmctl9p: cannot load %s: %r\n", Nametree->PATH);
 		raise "fail:load nametree";
 	}
-	sh = load Sh Sh->PATH;
-	if(sh == nil) {
-		sys->fprint(stderr, "llmctl9p: cannot load %s: %r\n", Sh->PATH);
-		raise "fail:load sh";
+	# /dis/os.dis is what we exec children through. Verify it's present
+	# so we fail loudly at startup instead of silently per-request.
+	(ok, nil) := sys->stat("/dis/os.dis");
+	if(ok < 0) {
+		sys->fprint(stderr, "llmctl9p: /dis/os.dis missing — needed for host crossing\n");
+		raise "fail:no os";
 	}
 
 	arg->init(args);
@@ -166,17 +169,68 @@ valid_verb(line: string): int
 }
 
 # ── Host crossing ──────────────────────────────────────────────
-# Runs `os <hostbin> <args>` through Sh->system and returns the
-# combined stdout/stderr as a single string. Sh->system swallows the
-# exit status; we'd need run() + a custom collector to surface it.
-# For status reads that's fine (the host output is self-describing).
-# For ctl writes we look for a leading "llmctl:" stderr line as the
-# failure signal.
+# Run `os <hostbin> <verb>` and return its combined stdout+stderr as
+# a string. Sh->system writes the child's stdout to the calling
+# process's stdout — for this daemon that's the 9P channel back to
+# the mount client, which would corrupt the protocol if we let it.
+# Redirect via a pipe: spawn a helper that does FORKFD + dup(wr, 1/2)
+# before invoking sh, then drain the read side from this process.
 
 run_host(verb: string): string
 {
-	cmd := "os " + hostbin + " " + verb;
-	return sh->system(ctxt_g, cmd);
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		return "llmctl9p: pipe: " + sys->sprint("%r");
+
+	spawn run_host_child(fds[1], verb);
+	# Drop our write-end reference so the spawned helper holds the
+	# only writer. When it exits, pipe writes EOF and our drain loop
+	# terminates.
+	fds[1] = nil;
+
+	buf := array[4096] of byte;
+	out := "";
+	while((n := sys->read(fds[0], buf, len buf)) > 0)
+		out += string buf[0:n];
+	return out;
+}
+
+run_host_child(wr: ref Sys->FD, verb: string)
+{
+	sys->pctl(Sys->FORKFD, nil);
+	sys->dup(wr.fd, 1);
+	sys->dup(wr.fd, 2);
+	wr = nil;
+	# Load /dis/os.dis directly and call its init — bypasses the rc
+	# parser/shell entirely. The verb string may contain a space
+	# ("set ollama"); split it so each token is its own argv element.
+	osmod := load Command "/dis/os.dis";
+	if(osmod == nil) {
+		sys->print("llmctl9p: load /dis/os.dis: %r\n");
+		return;
+	}
+	args := "os" :: hostbin :: split(verb, ' ');
+	osmod->init(nil, args);
+}
+
+split(s: string, sep: int): list of string
+{
+	out: list of string;
+	last := 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] == sep) {
+			if(i > last)
+				out = s[last:i] :: out;
+			last = i + 1;
+		}
+	}
+	if(last < len s)
+		out = s[last:] :: out;
+	# Reverse to preserve order.
+	r: list of string;
+	for(; out != nil; out = tl out)
+		r = hd out :: r;
+	return r;
 }
 
 # ── Serve loop ─────────────────────────────────────────────────
@@ -204,7 +258,17 @@ serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 				# /ctl is write-only by convention; return empty on read.
 				srv.reply(styxservers->readstr(tm, ""));
 			Qstatus =>
-				srv.reply(styxservers->readstr(tm, run_host("status")));
+				# KNOWN ISSUE: the run_host() path hangs in this version.
+				# The Styx serving + nametree layers work (a static reply
+				# round-trips fine), but loading os.dis from a spawned
+				# helper with FORKFD + dup'd pipe write-ends never sees
+				# EOF, so the drain loop blocks the Tread reply. Until
+				# that's fixed, /llm/status returns a marker string so
+				# clients don't hang. The host `llmctl status` is the
+				# headless code path in the meantime.
+				srv.reply(styxservers->readstr(tm,
+					"llmctl9p: host-crossing read disabled — run `llmctl status` on the host directly\n"))
+;
 			* =>
 				srv.reply(ref Rmsg.Error(tm.tag, "phase error -- bad path"));
 			}
@@ -225,19 +289,15 @@ serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 					"llmctl9p: bad verb '" + line + "' (allowed: set ollama|sglang|none)"));
 				continue;
 			}
-			# Synchronous host call. `set sglang` can take ~60s on a
-			# cold start due to flashinfer JIT compile; the Styx Twrite
-			# blocks for the duration. Clients should spawn writes off
-			# any UI thread.
-			out := run_host(line);
-			# llmctl reports failures via "llmctl:" stderr lines and a
-			# non-zero exit. Sh->system doesn't surface the exit, so we
-			# pattern-match the stderr prefix as a best-effort signal.
-			if(failure_in(out)) {
-				srv.reply(ref Rmsg.Error(tm.tag, "llmctl9p: " + firstline(out)));
-				continue;
-			}
-			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+			# KNOWN ISSUE: run_host() hangs (see /llm/status handler
+			# above). Verb validation works; the actual host crossing
+			# is disabled until the spawned-helper EOF problem is
+			# diagnosed. Reject writes with a clear error so callers
+			# don't think the verb was accepted. Users should call
+			# `llmctl set <verb>` on the host directly in the meantime.
+			srv.reply(ref Rmsg.Error(tm.tag,
+				"llmctl9p: host-crossing write disabled — run `llmctl set " + line + "` on the host directly"));
+			continue;
 
 		Clunk =>
 			srv.clunk(tm);

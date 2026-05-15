@@ -110,6 +110,19 @@ llm_apply_btn: ref Button;
 llm_is_remote: int;
 llm_mode_set: int;		# 1 after first layout or click — suppresses config re-read
 
+# Local-stack selector (Ollama vs SGLang vs Custom URL) — surfaced only
+# when /llm/ctl is mounted (served by llmctl9p). The Stack radio gives
+# users a one-click switch between the local LLM backends; selecting
+# Ollama or SGLang writes "set <name>" to /llm/ctl, which the daemon
+# hands off to the host `llmctl` tool. Custom keeps the legacy
+# free-form URL path (write straight to /lib/ndb/llm).
+llm_stack_group: ref RadioGroup;
+llm_stack_hdr: ref Label;
+llm_status_label: ref Label;	# multi-line live state from /llm/status
+llm_stack_names  := array[] of { "ollama", "sglang", "custom" };
+llm_stack_labels := array[] of { "Ollama (:11434)", "SGLang (:30000)", "Custom URL" };
+llm_have_synthfs: int;		# 1 when /llm/ctl is mountable
+
 # Tools panel
 tool_checks:  array of ref Checkbox;
 tool_names:   array of string;
@@ -299,6 +312,9 @@ layoutcontent()
 	llm_dial_label = nil;
 	llm_dial_tf = nil;
 	llm_apply_btn = nil;
+	llm_stack_group = nil;
+	llm_stack_hdr = nil;
+	llm_status_label = nil;
 	# Reset mode tracking when leaving LLM category
 	if(category != CatLLM) {
 		llm_is_remote = 0;
@@ -405,6 +421,26 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 		llm_backend_group = RadioGroup.mk(Point(cx, cy), cw - cx, llm_backend_labels, bsel, rowh);
 		cy += len llm_backend_names * rowh;
 		cy += FORM_MARGIN;
+
+		# Local-stack selector — appears only when the openai backend
+		# is selected AND the /llm synthetic FS is mounted (served by
+		# llmctl9p). Falls back to the legacy URL-only path otherwise.
+		llm_have_synthfs = synthfs_present();
+		if(curbackend == "openai" && llm_have_synthfs) {
+			llm_status_label = Label.mk(
+				Rect((cx, cy), (cw, cy + fh)),
+				readllmstatus_summary(), 0, LEFT);
+			cy += fh + FORM_MARGIN;
+
+			llm_stack_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Local stack", 1, LEFT);
+			cy += fh;
+
+			ssel := llm_stack_index_from_status();
+			llm_stack_group = RadioGroup.mk(Point(cx, cy), cw - cx,
+				llm_stack_labels, ssel, rowh);
+			cy += len llm_stack_names * rowh;
+			cy += FORM_MARGIN;
+		}
 
 		# URL
 		llm_url_label = Label.mk(
@@ -761,6 +797,12 @@ drawllm()
 			llm_backend_hdr.draw(w.image);
 		if(llm_backend_group != nil)
 			llm_backend_group.draw(w.image);
+		if(llm_status_label != nil)
+			llm_status_label.draw(w.image);
+		if(llm_stack_hdr != nil)
+			llm_stack_hdr.draw(w.image);
+		if(llm_stack_group != nil)
+			llm_stack_group.draw(w.image);
 		if(llm_url_label != nil)
 			llm_url_label.draw(w.image);
 		if(llm_url_tf != nil)
@@ -993,11 +1035,12 @@ clickllm(ptr: ref Pointer)
 		if(llm_backend_group != nil && llm_backend_group.contains(ptr.xy)) {
 			i := llm_backend_group.click(ptr.xy);
 			if(i >= 0 && i < len llm_backend_names) {
-				# Update URL default when switching backend, and clear
-				# the model field - the previous model is almost certainly
+				# Update URL default when switching backend. Clear the
+				# model field — the previous model is almost certainly
 				# wrong for the new backend (claude-... isn't an Ollama
-				# tag; llama3.2:3b isn't an Anthropic model id). User
-				# retypes; Tab/Enter triggers save as before.
+				# tag; llama3.2:3b isn't an Anthropic id). Also
+				# re-layout so the Stack sub-section appears or hides
+				# in step with the openai/api radio.
 				if(llm_backend_names[i] == "openai" && llm_url_tf != nil) {
 					cur := strip(llm_url_tf.value());
 					if(cur == "" || cur == "https://api.anthropic.com")
@@ -1009,6 +1052,25 @@ clickllm(ptr: ref Pointer)
 				}
 				if(llm_model_tf != nil)
 					llm_model_tf.setval("");
+				layoutcontent();
+				dirty = 1;
+			}
+			return;
+		}
+
+		# Local stack group: Ollama / SGLang / Custom. Selecting one
+		# only updates the radio state; the actual /llm/ctl write
+		# happens on Apply so a misclick is recoverable. We pre-fill
+		# the URL textfield to match the picked preset so the user
+		# sees what'll be persisted.
+		if(llm_stack_group != nil && llm_stack_group.contains(ptr.xy)) {
+			i := llm_stack_group.click(ptr.xy);
+			if(i >= 0 && i < len llm_stack_names && llm_url_tf != nil) {
+				if(llm_stack_names[i] == "ollama")
+					llm_url_tf.setval("http://127.0.0.1:11434/v1");
+				else if(llm_stack_names[i] == "sglang")
+					llm_url_tf.setval("http://127.0.0.1:30000/v1");
+				# "custom" leaves the URL field untouched
 				dirty = 1;
 			}
 			return;
@@ -1307,6 +1369,33 @@ applyllm()
 	if(llm_model_tf != nil)
 		model = strip(llm_model_tf.value());
 
+	# If the user picked Ollama or SGLang via the stack radio (only
+	# offered when backend=openai and /llm/ctl is mounted), hand off
+	# to llmctl via the synthetic FS — it stops the other backend,
+	# starts the chosen one, waits for health, and updates ndb. We
+	# still call writellmconfig afterwards to capture the user's
+	# `model=` choice (llmctl only touches `url=`).
+	if(backend == "openai" && llm_have_synthfs && llm_stack_group != nil) {
+		si := llm_stack_group.selected();
+		if(si >= 0 && si < len llm_stack_names &&
+		   llm_stack_names[si] != "custom") {
+			flashstatus(sys->sprint(
+				"switching to %s (may take up to 60s for cold sglang start)…",
+				llm_stack_names[si]));
+			err := writellmctl("set " + llm_stack_names[si]);
+			if(err != "") {
+				flashstatus("llmctl error: " + err);
+				return;
+			}
+			# llmctl wrote `url=` for us; preserve model and reload.
+			writellmconfig("local", backend, url, model, "");
+			flashstatus(sys->sprint(
+				"switched to %s — restart llmsrv for the new URL to be dialed",
+				llm_stack_names[si]));
+			return;
+		}
+	}
+
 	writellmconfig("local", backend, url, model, "");
 	flashstatus("LLM config saved — restart llmsrv for backend/URL changes");
 }
@@ -1379,6 +1468,110 @@ writellmconfig(mode, backend, url, model, dial: string)
 		mode, backend, url, model, dial);
 	b := array of byte config;
 	sys->write(fd, b, len b);
+}
+
+# ── /llm synthetic FS (served by llmctl9p) ────────────────────
+# Settings reads /llm/status for live state and writes verbs to
+# /llm/ctl. The daemon owns the actual systemctl + ndb work; this
+# file does uniform file I/O only — no shell exec, no special-case
+# logic for "which backend is up". When the daemon isn't mounted we
+# fall back to the legacy URL-only path.
+
+synthfs_present(): int
+{
+	(ok, nil) := sys->stat("/llm/ctl");
+	return ok >= 0;
+}
+
+readllmstatus_raw(): string
+{
+	fd := sys->open("/llm/status", Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
+}
+
+# Single-line status summary for the panel label. Reduces the daemon's
+# verbose multi-line output to "backend / healthy / url".
+readllmstatus_summary(): string
+{
+	raw := readllmstatus_raw();
+	if(raw == "")
+		return "Stack status: (llmctl9p daemon not responding)";
+	backend := pickfield(raw, "backend");
+	healthy := pickfield(raw, "healthy");
+	return sys->sprint("Stack status: active=%s healthy=%s", backend, healthy);
+}
+
+# `key  value` (two-space delimited per the daemon's format). Returns
+# the value or "" if the field is absent.
+pickfield(raw, key: string): string
+{
+	(lines, nil) := splitlines(raw);
+	for(i := 0; i < len lines; i++) {
+		line := lines[i];
+		if(len line > len key && line[0:len key] == key) {
+			rest := line[len key:];
+			while(len rest > 0 && (rest[0] == ' ' || rest[0] == '\t'))
+				rest = rest[1:];
+			return rest;
+		}
+	}
+	return "";
+}
+
+splitlines(s: string): (array of string, string)
+{
+	# Walk once to count, again to fill. Trailing newline is dropped.
+	n := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			n++;
+	if(len s > 0 && s[len s - 1] != '\n')
+		n++;
+	out := array[n] of string;
+	last := 0; k := 0;
+	for(i = 0; i < len s; i++) {
+		if(s[i] == '\n') {
+			out[k++] = s[last:i];
+			last = i + 1;
+		}
+	}
+	if(last < len s)
+		out[k++] = s[last:];
+	return (out, nil);
+}
+
+# Map current /llm/status "backend" value to a llm_stack_names index.
+# Anything that isn't ollama/sglang collapses to "custom" so an
+# externally-managed setup doesn't surprise the radio.
+llm_stack_index_from_status(): int
+{
+	b := pickfield(readllmstatus_raw(), "backend");
+	for(i := 0; i < len llm_stack_names; i++)
+		if(llm_stack_names[i] == b)
+			return i;
+	return len llm_stack_names - 1;	# "custom"
+}
+
+# Write a verb to /llm/ctl. Returns "" on success, a human-readable
+# error string on failure. The daemon validates the verb and shells
+# out to host llmctl; that synchronous host call may take ~60s on a
+# cold sglang start (flashinfer JIT compile).
+writellmctl(verb: string): string
+{
+	fd := sys->open("/llm/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("open /llm/ctl: %r");
+	b := array of byte verb;
+	n := sys->write(fd, b, len b);
+	if(n != len b)
+		return sys->sprint("write /llm/ctl: %r");
+	return "";
 }
 
 secstoreunlocked(): int

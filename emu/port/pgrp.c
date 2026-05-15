@@ -93,7 +93,7 @@ pgrpcpy(Pgrp *to, Pgrp *from)
 				runlock(&f->lock);
 				nexterror();
 			}
-			mh = malloc(sizeof(Mhead));
+			mh = mallocz(sizeof(Mhead), 1);
 			if(mh == nil)
 				error(Enomem);
 			mh->from = f->from;

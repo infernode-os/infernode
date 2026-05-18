@@ -2369,20 +2369,26 @@ parse_exts(exts: list of ref Extension): (string, list of ref ExtClass)
 	while(l != nil) {
 		ext := hd l;
 		oid := asn1->oid_lookup(ext.oid, objIdTab);
-		if(oid == id_ce_subjectAltName) {
-			# SAN: always decode — required for hostname verification.
+		# Allowlisted decoders — kept small to dodge the historical JIT SEGV
+		# in more complex decode paths (nested GeneralName, IPint, etc.).
+		# SAN is required for TLS hostname verification; KeyUsage / BasicConstraints
+		# / SubjectKeyIdentifier are simple enough to decode safely and are
+		# exercised directly by tests/x509_test.b.
+		decodeit := oid == id_ce_subjectAltName
+			|| oid == id_ce_keyUsage
+			|| oid == id_ce_basicConstraints
+			|| oid == id_ce_subjectKeyIdentifier;
+		if(decodeit) {
 			(err, et) := ExtClass.decode(ext);
 			if(err != "")
 				return (err, nil);
 			if(et != nil)
 				ets = et :: ets;
 		} else {
-			# For all other extensions: avoid calling ExtClass.decode —
-			# some decode paths trigger JIT SEGV in the current emu binary.
 			# RFC 5280 §4.2: only reject for unknown OIDs that are critical.
 			if(oid == -1 && ext.critical)
 				return ("unknown critical extension", nil);
-			# else: known non-SAN extension, or unknown non-critical — skip.
+			# else: known non-allowlisted extension, or unknown non-critical — skip.
 		}
 		l = tl l;
 	}
@@ -2875,10 +2881,24 @@ decode_keyUsage(ext: ref Extension): (string, ref ExtClass)
 {
 parse:
 	for(;;) {
-		# assert bits can fit into a limbo int
-		if(len ext.value > 4)
+		(err, all) := asn1->decode(ext.value);
+		if(err != "")
 			break parse;
-		return ("", ref ExtClass.KeyUsage(b4int(ext.value)));
+		(ok, unused, bits) := all.is_bitstring();
+		if(!ok)
+			break parse;
+		# RFC 5280 §4.2.1.3 names 9 bits (DigitalSignature..DecipherOnly);
+		# refuse bits past that range so the result fits a limbo int cleanly.
+		nbits := len bits * 8 - unused;
+		if(nbits > 16)
+			break parse;
+		# BIT STRING is MSB-first: bit position N (from MSB of byte 0) maps to (1 << N),
+		# matching the KeyUsage_* iota positions in module/x509.m.
+		usage := 0;
+		for(i := 0; i < nbits; i++)
+			if(int bits[i >> 3] & (1 << (7 - (i & 7))))
+				usage |= 1 << i;
+		return ("", ref ExtClass.KeyUsage(usage));
 	}
 	return ("key usage: syntax error", nil);
 }
@@ -2887,7 +2907,24 @@ parse:
 
 encode_keyUsage(c: ref ExtClass.KeyUsage): (string, array of byte)
 {
-	return ("", int4b(c.usage));
+	# KeyUsage_* are single-bit masks at positions 0..8; emit BIT STRING MSB-first.
+	maxbit := -1;
+	i: int;
+	for(i = 0; i < 16; i++)
+		if(c.usage & (1 << i))
+			maxbit = i;
+	if(maxbit < 0)
+		return asn1->encode(ref Elem(Tag(Universal, BIT_STRING, 0),
+			ref Value.BitString(0, array[0] of byte)));
+	nbits := maxbit + 1;
+	nbytes := (nbits + 7) / 8;
+	bits := array[nbytes] of {* => byte 0};
+	for(i = 0; i <= maxbit; i++)
+		if(c.usage & (1 << i))
+			bits[i >> 3] |= byte (1 << (7 - (i & 7)));
+	unused := nbytes * 8 - nbits;
+	return asn1->encode(ref Elem(Tag(Universal, BIT_STRING, 0),
+		ref Value.BitString(unused, bits)));
 }
 
 # [private]

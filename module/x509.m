@@ -269,10 +269,10 @@ X509: module {
 		tostring: fn(et: self ref ExtClass): string;
 	};
 
-	# key usage
+	# key usage — single-bit masks, indexed by RFC 5280 §4.2.1.3 bit positions
 	KeyUsage_DigitalSignature, KeyUsage_NonRepudiation, KeyUsage_KeyEncipherment,
-	KeyUsage_DataEncipherment, KeyUsage_KeyAgreement, KeyUsage_KeyCertSign, 
-	KeyUsage_CRLSign, KeyUsage_EncipherOnly, KeyUsage_DecipherOnly : con iota << 1;
+	KeyUsage_DataEncipherment, KeyUsage_KeyAgreement, KeyUsage_KeyCertSign,
+	KeyUsage_CRLSign, KeyUsage_EncipherOnly, KeyUsage_DecipherOnly : con 1 << iota;
 
 	# CRL reason
 	Reason_Unspecified, Reason_KeyCompromise, Reason_CACompromise, 

@@ -57,6 +57,27 @@ audio_file_close(Chan *c)
 	USED(c);
 }
 
+long
+audio_file_read(Chan *c, void *va, long count, vlong offset)
+{
+	USED(c); USED(va); USED(count); USED(offset);
+	return 0;
+}
+
+long
+audio_file_write(Chan *c, void *va, long count, vlong offset)
+{
+	USED(c); USED(va); USED(offset);
+	return count;
+}
+
+long
+audio_ctl_write(Chan *c, void *va, long count, vlong offset)
+{
+	USED(c); USED(va); USED(offset);
+	return count;
+}
+
 #else /* !__BIONIC__ — original OSS backend below */
 
 #include "dat.h"

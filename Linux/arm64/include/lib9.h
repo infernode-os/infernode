@@ -89,6 +89,10 @@ typedef uint64_t	uint64;
  * the same way the conflicts above are handled. Only 2 call sites
  * (limbo/typecheck.c) and neither uses stdio's rewind. Phase 0 hellaphone. */
 #define	rewind	infrewind
+/* Bionic's <string.h> declares memrchr as an overloadable __attribute_pure__
+ * function, colliding with emu/port/chan.c's own memrchr helper. One
+ * definition and one caller, both in chan.c — rename is safe. Phase 0. */
+#define	memrchr	infmemrchr
 
 #ifndef EMU
 typedef struct Proc Proc;

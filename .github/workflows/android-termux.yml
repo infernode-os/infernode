@@ -36,6 +36,11 @@ jobs:
     - name: Build o.emu and smoke-boot inside termux-docker
       run: |
         set -euo pipefail
+        # The container runs as a non-root Termux user; the bind-mounted
+        # /work is owned by the GitHub runner UID (1001). Loosen perms so
+        # the container can create Linux/arm64/{bin,lib} and write
+        # *.o / *.a / o.emu under $PWD.
+        chmod -R a+rwX "$PWD"
         docker run --rm \
           -v "$PWD":/work \
           -w /work \

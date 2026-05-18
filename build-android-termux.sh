@@ -18,7 +18,7 @@
 #   INFR-107                   tracking epic
 #
 # Usage (run inside Termux on the device):
-#   pkg install -y clang make binutils pkg-config which awk perl
+#   pkg install -y clang make binutils pkg-config which perl
 #   ./build-android-termux.sh             # headless (recommended)
 #   ./build-android-termux.sh sdl3        # SDL3 GUI (unlikely to work on Termux)
 #
@@ -49,12 +49,15 @@ if ! command -v "$CC" >/dev/null 2>&1; then
 fi
 
 SH_BIN="$(command -v sh || true)"
-AWK_BIN="$(command -v awk || true)"
-if [ -z "$SH_BIN" ] || [ -z "$AWK_BIN" ]; then
-    echo "ERROR: sh or awk not found on PATH."
-    echo "  In Termux:  pkg install which awk"
+if [ -z "$SH_BIN" ]; then
+    echo "ERROR: sh not found on PATH."
+    echo "  In Termux:  pkg install which"
     exit 1
 fi
+# InferNode's awk is a Limbo program (appl/cmd/awk.b -> dis/awk.dis); the
+# Plan 9 mk bootstrap does not invoke a host awk, so we deliberately do
+# NOT require one here. mkfiles/mkhost-Linux defines AWK=awk but no mkfile
+# in the bootstrap reads $AWK.
 
 for t in ar strip make; do
     if ! command -v "$t" >/dev/null 2>&1; then
@@ -77,12 +80,10 @@ mkdir -p "$ROOT/Linux/arm64/lib"
 export PATH="$ROOT/Linux/arm64/bin:$PATH"
 export SHELL="$SH_BIN"
 export SHELLNAME=sh
-export AWK="$AWK_BIN"
 
 echo "ROOT=$ROOT"
 echo "CC=$CC"
 echo "SHELL=$SHELL"
-echo "AWK=$AWK"
 echo ""
 
 ARCH="$(uname -m)"

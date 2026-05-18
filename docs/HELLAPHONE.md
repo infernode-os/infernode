@@ -25,10 +25,13 @@ a proper Android app shell. Phase 0's job is to de-risk that work.
 ## Prerequisites
 
 * An ARM64 Android device (modern Android phones are all aarch64).
-* **Termux installed from F-Droid**, not the Google Play Store. The
-  Play Store build is frozen on an old Android API and `pkg install`
-  will not work reliably. Get it from
-  <https://f-droid.org/en/packages/com.termux/>.
+* **Termux from F-Droid** (recommended) or the modern Play Store
+  build (`googleplay.2025.10.05` or later, `targetSdk=36`). The older
+  Play Store Termux was frozen on an old Android API for years and
+  could not `pkg install` reliably; Termux re-released a modern build
+  in October 2025 that works for Phase 0. F-Droid remains the
+  default channel for the wider Termux community.
+  F-Droid: <https://f-droid.org/en/packages/com.termux/>.
 * ~2 GB of free storage for the source tree and build outputs.
 * A few hundred MB of RAM headroom while building.
 
@@ -38,12 +41,37 @@ Inside the Termux shell:
 
 ```sh
 pkg update
-pkg install -y clang make binutils pkg-config which awk perl git
+pkg install -y clang make binutils pkg-config which awk perl git byacc
 termux-setup-storage   # optional, lets you read ~/storage/shared
 ```
 
+`byacc` is required for the limbo compiler grammar (`limbo.y`); without
+it the build dies with `yacc: not found` after the C libraries finish.
+
 If you want to clone over SSH, also `pkg install openssh`. HTTPS clone
 works out of the box.
+
+### Keep the device awake during the build
+
+The Phase 0 build runs for several minutes. Android's Doze and Samsung
+One UI's background-app management can suspend Termux while the screen
+is off, stalling or killing the build. Before kicking off a long build,
+acquire a wake-lock:
+
+```sh
+termux-wake-lock
+```
+
+Release it after the build finishes (or just close Termux):
+
+```sh
+termux-wake-unlock
+```
+
+If you are driving the build over `adb` + `ssh` from a host machine
+(see `INFR-107` discussion notes for the canonical workflow), the
+wake-lock is mandatory — otherwise the device sleeps and the ssh
+session stalls.
 
 ## Build
 

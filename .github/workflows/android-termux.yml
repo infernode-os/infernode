@@ -58,8 +58,10 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Phase 0 build (build-android-termux.sh headless)"
-            chmod +x build-android-termux.sh
-            ./build-android-termux.sh headless
+            # Invoke via sh so we don'\''t depend on the file having the
+            # executable bit set inside the docker mount (the bit is also
+            # being fixed in PR #98). sh respects the script'\''s shebang.
+            sh build-android-termux.sh headless
             echo "::endgroup::"
 
             echo "::group::Verify build artifacts"

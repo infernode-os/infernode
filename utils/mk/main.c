@@ -22,6 +22,8 @@ void badusage(void);
 short buf[10000];
 #endif
 
+extern void shellinit(void);
+
 void
 main(int argc, char **argv)
 {
@@ -41,6 +43,7 @@ main(int argc, char **argv)
 	 */
 
 	Binit(&bout, 1, OWRITE);
+	shellinit();		/* honour MKSHELL before any backquote subst. */
 	buf = newbuf();
 	whatif = 0;
 	USED(argc);

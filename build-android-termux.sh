@@ -80,6 +80,12 @@ mkdir -p "$ROOT/Linux/arm64/lib"
 export PATH="$ROOT/Linux/arm64/bin:$PATH"
 export SHELL="$SH_BIN"
 export SHELLNAME=sh
+# mk hardcodes /bin/sh in Posix.c at compile time. On real Android handsets
+# /bin -> /system/bin so /bin/sh resolves; in pure-Termux environments
+# (e.g. termux-docker) it does not. Honour the new MKSHELL hook so mk uses
+# Termux's sh for backquote substitution and recipe execution. See the
+# shellinit() addition in utils/mk/Posix.c.
+export MKSHELL="$SH_BIN"
 
 echo "ROOT=$ROOT"
 echo "CC=$CC"

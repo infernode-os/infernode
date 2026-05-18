@@ -39,6 +39,17 @@
 #include <endian.h>
 /* #include <math.h>  - commented out to avoid isnan macro conflict with fdlibm */
 
+#ifdef __BIONIC__
+/* Bionic does not expose the BSD shorthand types `ushort`/`uint` via
+ * <sys/types.h> the way glibc does with _BSD_SOURCE / _DEFAULT_SOURCE.
+ * `uchar` and `ulong` are already typedef'd explicitly below, but the
+ * 89-odd uses of `ushort`/`uint` across lib9/limbo/libinterp/utils rely
+ * on the implicit glibc definitions. Provide them here so Android/Termux
+ * builds compile unchanged. Phase 0 hellaphone shim. */
+typedef unsigned short ushort;
+typedef unsigned int   uint;
+#endif
+
 #define nil		((void*)0)
 
 typedef	unsigned char	uchar;
@@ -73,6 +84,11 @@ typedef uint64_t	uint64;
 #define rint	infrint
 #define	rcmd	infrcmd
 #define	pow10	infpow10
+/* Bionic's <stdio.h> declares rewind(FILE*) unconditionally, colliding with
+ * limbo/typecheck.c's static rewind(Node*) for AST traversal. Rename it
+ * the same way the conflicts above are handled. Only 2 call sites
+ * (limbo/typecheck.c) and neither uses stdio's rewind. Phase 0 hellaphone. */
+#define	rewind	infrewind
 
 #ifndef EMU
 typedef struct Proc Proc;

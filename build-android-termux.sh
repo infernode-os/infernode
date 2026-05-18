@@ -18,7 +18,7 @@
 #   INFR-107                   tracking epic
 #
 # Usage (run inside Termux on the device):
-#   pkg install -y clang make binutils pkg-config which awk perl
+#   pkg install -y clang make binutils pkg-config which gawk perl
 #   ./build-android-termux.sh             # headless (recommended)
 #   ./build-android-termux.sh sdl3        # SDL3 GUI (unlikely to work on Termux)
 #
@@ -52,7 +52,7 @@ SH_BIN="$(command -v sh || true)"
 AWK_BIN="$(command -v awk || true)"
 if [ -z "$SH_BIN" ] || [ -z "$AWK_BIN" ]; then
     echo "ERROR: sh or awk not found on PATH."
-    echo "  In Termux:  pkg install which awk"
+    echo "  In Termux:  pkg install which gawk  # 'gawk' provides /usr/bin/awk"
     exit 1
 fi
 

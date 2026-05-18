@@ -41,7 +41,7 @@ Inside the Termux shell:
 
 ```sh
 pkg update
-pkg install -y clang make binutils pkg-config which awk perl git byacc
+pkg install -y clang make binutils pkg-config which gawk perl git byacc
 termux-setup-storage   # optional, lets you read ~/storage/shared
 ```
 

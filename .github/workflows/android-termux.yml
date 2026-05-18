@@ -54,7 +54,7 @@ jobs:
 
             echo "::group::Install build prerequisites"
             pkg update -y
-            pkg install -y clang make binutils pkg-config which awk perl git byacc
+            pkg install -y clang make binutils pkg-config which perl git byacc
             echo "::endgroup::"
 
             echo "::group::Phase 0 build (build-android-termux.sh headless)"

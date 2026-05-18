@@ -454,8 +454,8 @@ reloadcolors()
 	# live theme switches.
 	if(widgetmod != nil)
 		widgetmod->retheme(display_g);
-	if(menumod != nil && mainfont != nil)
-		menumod->init(display_g, mainfont);
+	if(menumod != nil)
+		menumod->retheme(display_g);
 	# Invalidate rendered message caches so they redraw with new colours
 	for(i := 0; i < nmsg; i++)
 		msgstore[i].rendimg = nil;

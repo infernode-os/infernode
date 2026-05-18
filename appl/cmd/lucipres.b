@@ -614,12 +614,8 @@ reloadcolors()
 	greencol_g = display_g.color(th.green);
 	yellowcol_g = display_g.color(th.yellow);
 	redcol_g = display_g.color(th.red);
-	# INFR-28: menu module caches theme colours at init() and has no
-	# retheme entry point (INFR-35); re-init it so the taskboard's
-	# right-click menu and any other popup menus in the presentation
-	# zone track live theme switches.
-	if(menumod != nil && mainfont != nil)
-		menumod->init(display_g, mainfont);
+	if(menumod != nil)
+		menumod->retheme(display_g);
 	# Invalidate rendered artifact caches
 	for(al := artifacts; al != nil; al = tl al)
 		(hd al).rendimg = nil;

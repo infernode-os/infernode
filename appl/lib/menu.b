@@ -53,6 +53,18 @@ init(d: ref Display, f: ref Font)
 	mfont = f;
 	if(d == nil || f == nil)
 		return;
+	loadcolors(d);
+}
+
+retheme(d: ref Display)
+{
+	if(d == nil)
+		return;
+	loadcolors(d);
+}
+
+loadcolors(d: ref Display)
+{
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	th := lucitheme->gettheme();
 	mbg     = d.color(th.menubg);

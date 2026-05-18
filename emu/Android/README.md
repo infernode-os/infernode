@@ -18,6 +18,30 @@ the device before we invest in NDK plumbing.
 
 See `docs/HELLAPHONE.md` for end-user setup.
 
+### Phase 0 surfaced Bionic gaps (now in master)
+
+Building on real hardware (Samsung Galaxy A55 5G, Android 16, Termux
+`googleplay.2025.10.05`, byacc 2.0, clang 21) turned up three Bionic
+vs glibc incompatibilities that the Linux ARM64 mkfile assumes away:
+
+| File patched                     | Symbol                         | Why Bionic differs                                                                 |
+| -------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------- |
+| `Linux/arm64/include/lib9.h`     | `ushort`, `uint` typedefs      | Bionic's `<sys/types.h>` does not expose the BSD shorthands even with `_BSD_SOURCE`. |
+| `Linux/arm64/include/lib9.h`     | `#define rewind infrewind`     | Bionic's `<stdio.h>` declares `rewind(FILE*)` unconditionally; collides with limbo/typecheck.c. |
+| `emu/Linux/audio-oss.c`          | `#ifdef __BIONIC__` stub branch | Bionic does not ship `<sys/soundcard.h>` — Android replaced OSS with AAudio years ago. |
+| `emu/Linux/cmd.c`                | `sysconf(_SC_OPEN_MAX)`        | Bionic's `<unistd.h>` does not expose the BSD `getdtablesize()`; the POSIX `sysconf` equivalent works on both. |
+| `emu/port/alloc.c`               | `const void *` parameter       | Bionic's `<malloc.h>` declares `size_t malloc_usable_size(const void *)`; the deliberate override needs to match — a `#define` rename would break dlopen'd consumers (libnss_systemd etc.). |
+
+All three patches are no-ops on glibc / real-Linux ARM64 (gated either
+on `__BIONIC__` or on the `lib9.h` rename pattern that has carried
+half-a-dozen identifiers since Inferno's macOS port). The audio stub
+returns "audio not supported" if anything actually opens `/dev/audio`,
+which never fires in the Phase 0 headless boot path.
+
+Expect more such gaps to surface as more of the tree compiles
+(libinterp's JIT path, Veltro's network code, anything that calls a
+glibc-only syscall wrapper). Each is captured against INFR-107.
+
 **Phase 1 — native NDK build.** Not started. Will introduce:
 
 * `os.c`, `cmd.c` — Bionic-aware versions of the Linux equivalents

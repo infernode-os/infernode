@@ -41,7 +41,13 @@ childproc(Targ *t)
 	if(Debug)
 		print("devcmd: '%s'", t->args[0]);
 
+#ifdef __BIONIC__
+	/* Bionic does not expose getdtablesize(); use the POSIX
+	 * equivalent. Identical return on Linux. Phase 0 hellaphone. */
+	nfd = sysconf(_SC_OPEN_MAX);
+#else
 	nfd = getdtablesize();
+#endif
 	for(i = 0; i < nfd; i++)
 		if(i != t->fd[0] && i != t->fd[1] && i != t->fd[2] && i != t->wfd)
 			close(i);

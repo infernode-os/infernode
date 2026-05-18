@@ -1,3 +1,85 @@
+/* Pull in <sys/cdefs.h> first so __BIONIC__ is defined on Android before
+ * the gate below. lib9.h gets this for free via its earlier system
+ * includes; this file is special because the gate must wrap the entire
+ * translation unit, including the `#include "dat.h"` line. */
+#include <sys/cdefs.h>
+
+#ifdef __BIONIC__
+/* Phase 0 hellaphone: Android Bionic does not ship <sys/soundcard.h>
+ * because Android replaced OSS years ago. The headless o.emu does not
+ * use audio at all, but devaudio.c references getaudiodev/audio_file_*,
+ * so provide compiling stubs to satisfy the linker. Any actual audio
+ * I/O raises an Inferno error — which never fires in headless mode.
+ * Phase 1 will replace with a real AAudio/OpenSL-ES backend. */
+#include "dat.h"
+#include "fns.h"
+#include "error.h"
+#include "audio.h"
+
+/* audio-tbls.c references these OSS mixer/format constants, which the
+ * non-Bionic branch gets from <sys/soundcard.h>. Provide dummy values
+ * so the tables compile; nothing on Android dereferences them. */
+#define Audio_Mic_Val		0
+#define Audio_Linein_Val	1
+#define Audio_Speaker_Val	2
+#define Audio_Headphone_Val	3
+#define Audio_Lineout_Val	4
+#define Audio_Pcm_Val		0
+#define Audio_Ulaw_Val		1
+#define Audio_Alaw_Val		2
+
+#include "audio-tbls.c"
+
+static Audio_t av;
+
+Audio_t*
+getaudiodev(void)
+{
+	return &av;
+}
+
+void
+audio_file_init(void)
+{
+}
+
+void
+audio_file_open(Chan *c, int omode)
+{
+	USED(c);
+	USED(omode);
+	error("audio not supported on this platform");
+}
+
+void
+audio_file_close(Chan *c)
+{
+	USED(c);
+}
+
+long
+audio_file_read(Chan *c, void *va, long count, vlong offset)
+{
+	USED(c); USED(va); USED(count); USED(offset);
+	return 0;
+}
+
+long
+audio_file_write(Chan *c, void *va, long count, vlong offset)
+{
+	USED(c); USED(va); USED(offset);
+	return count;
+}
+
+long
+audio_ctl_write(Chan *c, void *va, long count, vlong offset)
+{
+	USED(c); USED(va); USED(offset);
+	return count;
+}
+
+#else /* !__BIONIC__ — original OSS backend below */
+
 #include "dat.h"
 #include "fns.h"
 #include "error.h"
@@ -439,3 +521,5 @@ audio_pause(int fd, int f)
 	qunlock(&afd.lk);
 	return status;
 }
+
+#endif /* __BIONIC__ */

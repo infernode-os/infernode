@@ -177,7 +177,7 @@ jobs:
           [ -f "$f" ] && cp "$f" "$STAGE/"
         done
 
-        tar czf "${STAGE}.tar.gz" "$STAGE"
+        tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -393,7 +393,7 @@ jobs:
         dial=
         LLMCONF
 
-        tar czf "${STAGE}.tar.gz" "$STAGE"
+        tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -566,7 +566,7 @@ jobs:
           [ -f "$f" ] && cp "$f" "$STAGE/"
         done
 
-        tar czf "${STAGE}.tar.gz" "$STAGE"
+        tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -780,7 +780,7 @@ jobs:
         dial=
         LLMCONF
 
-        tar czf "${STAGE}.tar.gz" "$STAGE"
+        tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1129,7 +1129,7 @@ jobs:
           }
         }
 
-        Compress-Archive -Path $STAGE -DestinationPath "$STAGE.zip" -CompressionLevel Optimal
+        Compress-Archive -Path "$STAGE\*" -DestinationPath "$STAGE.zip" -CompressionLevel Optimal
         Write-Host "Archive: $STAGE.zip"
         Write-Host "Size: $([math]::Round((Get-Item "$STAGE.zip").Length / 1MB, 1)) MB"
 

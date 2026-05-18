@@ -710,12 +710,8 @@ reloadcolors()
 	redcol = display_g.color(th.red);
 	progbgcol = display_g.color(th.progbg);
 	progfgcol = display_g.color(th.progfg);
-	# INFR-28: menu module caches theme colours at init() and has no
-	# retheme entry point (INFR-35); re-init so the context zone's
-	# popup menus (e.g. open-as-app, file actions in file-browser
-	# mode) track live theme switches.
-	if(menumod != nil && mainfont != nil)
-		menumod->init(display_g, mainfont);
+	if(menumod != nil)
+		menumod->retheme(display_g);
 }
 
 # --- Drawing ---

@@ -1,3 +1,45 @@
+#ifdef __BIONIC__
+/* Phase 0 hellaphone: Android Bionic does not ship <sys/soundcard.h>
+ * because Android replaced OSS years ago. The headless o.emu does not
+ * use audio at all, but devaudio.c references getaudiodev/audio_file_*,
+ * so provide compiling stubs to satisfy the linker. Any actual audio
+ * I/O raises an Inferno error — which never fires in headless mode.
+ * Phase 1 will replace with a real AAudio/OpenSL-ES backend. */
+#include "dat.h"
+#include "fns.h"
+#include "error.h"
+#include "audio.h"
+#include "audio-tbls.c"
+
+static Audio_t av;
+
+Audio_t*
+getaudiodev(void)
+{
+	return &av;
+}
+
+void
+audio_file_init(void)
+{
+}
+
+void
+audio_file_open(Chan *c, int omode)
+{
+	USED(c);
+	USED(omode);
+	error("audio not supported on this platform");
+}
+
+void
+audio_file_close(Chan *c)
+{
+	USED(c);
+}
+
+#else /* !__BIONIC__ — original OSS backend below */
+
 #include "dat.h"
 #include "fns.h"
 #include "error.h"
@@ -439,3 +481,5 @@ audio_pause(int fd, int f)
 	qunlock(&afd.lk);
 	return status;
 }
+
+#endif /* __BIONIC__ */

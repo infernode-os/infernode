@@ -1,3 +1,9 @@
+/* Pull in <sys/cdefs.h> first so __BIONIC__ is defined on Android before
+ * the gate below. lib9.h gets this for free via its earlier system
+ * includes; this file is special because the gate must wrap the entire
+ * translation unit, including the `#include "dat.h"` line. */
+#include <sys/cdefs.h>
+
 #ifdef __BIONIC__
 /* Phase 0 hellaphone: Android Bionic does not ship <sys/soundcard.h>
  * because Android replaced OSS years ago. The headless o.emu does not

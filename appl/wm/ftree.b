@@ -1450,7 +1450,7 @@ reloadcolors()
 	widgetmod->retheme(display);
 	wmclient->retheme(w);
 	if(menumod != nil)
-		menumod->init(display, bfont);
+		menumod->retheme(display);
 }
 
 # ---------- Namespace change watcher ----------

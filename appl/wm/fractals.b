@@ -429,7 +429,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				widget->retheme(display);
 			wmclient->retheme(w);
 			if(menumod != nil)
-				menumod->init(display, font);
+				menumod->retheme(display);
 			updatesbar();
 		}
 		if(restart) {

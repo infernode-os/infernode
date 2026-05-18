@@ -847,11 +847,11 @@ msize(void *v)
  * ARM64 UDIV with 0 dividend returns 0 (no trap).
  */
 size_t
-malloc_usable_size(void *v)
+malloc_usable_size(const void *v)
 {
 	if(v == nil)
 		return 0;
-	return msize(v);
+	return msize((void*)v);
 }
 
 void*

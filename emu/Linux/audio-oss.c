@@ -15,6 +15,19 @@
 #include "fns.h"
 #include "error.h"
 #include "audio.h"
+
+/* audio-tbls.c references these OSS mixer/format constants, which the
+ * non-Bionic branch gets from <sys/soundcard.h>. Provide dummy values
+ * so the tables compile; nothing on Android dereferences them. */
+#define Audio_Mic_Val		0
+#define Audio_Linein_Val	1
+#define Audio_Speaker_Val	2
+#define Audio_Headphone_Val	3
+#define Audio_Lineout_Val	4
+#define Audio_Pcm_Val		0
+#define Audio_Ulaw_Val		1
+#define Audio_Alaw_Val		2
+
 #include "audio-tbls.c"
 
 static Audio_t av;

@@ -414,8 +414,8 @@ reloadcolors()
 		widgetmod->retheme(display);
 	if(wmclient != nil)
 		wmclient->retheme(window);
-	if(menumod != nil && guifont != nil)
-		menumod->init(display, guifont);
+	if(menumod != nil)
+		menumod->retheme(display);
 }
 
 makewins()

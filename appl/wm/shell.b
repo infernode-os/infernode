@@ -2001,7 +2001,7 @@ reloadcolors()
 	widgetmod->retheme(display_g);
 	wmclient->retheme(w);
 	if(menumod != nil)
-		menumod->init(display_g, font);
+		menumod->retheme(display_g);
 }
 
 timer(c: chan of int, ms: int)

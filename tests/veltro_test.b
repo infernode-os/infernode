@@ -288,8 +288,9 @@ testSpawnExecValid(t: ref T)
 	}
 	fd = nil;
 
-	# Test spawning with list tool to list a known directory
-	result := tool->exec("tools=list -- list /appl");
+	# Test spawning with list tool to list a known directory.
+	# Format: [globals] -- tools=<t> paths=<p> :: <task>
+	result := tool->exec("-- tools=list paths=/appl :: list /appl");
 
 	# If spawn worked, we should get directory content or entries count
 	# If it failed, we'll see "error:" prefix

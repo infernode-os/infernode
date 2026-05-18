@@ -61,6 +61,11 @@ Menu: module
 	# display and font are the window's display and main UI font.
 	init:	fn(display: ref Draw->Display, font: ref Draw->Font);
 
+	# Refresh cached theme colours after a theme change.
+	# Callers invoke this from their reloadcolors() / themech handler
+	# instead of re-running init() — mirrors widget.m's retheme().
+	retheme: fn(display: ref Draw->Display);
+
 	# Allocate a Popup with static item labels.
 	new:	fn(items: array of string): ref Popup;
 

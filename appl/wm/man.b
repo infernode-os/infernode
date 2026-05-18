@@ -858,7 +858,7 @@ reloadcolors()
 	widgetmod->retheme(display);
 	wmclient->retheme(w);
 	if(menumod != nil)
-		menumod->init(display, rfont);
+		menumod->retheme(display);
 }
 
 # ---------- Timer ----------

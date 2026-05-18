@@ -1019,7 +1019,7 @@ reloadcolors()
 	widgetmod->retheme(display_g);
 	wmclient->retheme(w);
 	if(menumod != nil)
-		menumod->init(display_g, font);
+		menumod->retheme(display_g);
 }
 
 strcontains(s, sub: string): int

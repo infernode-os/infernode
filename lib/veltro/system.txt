@@ -82,8 +82,12 @@ When webfetch is available but websearch is not:
   Do not guess or fabricate URLs.
 
 Planning discipline:
-  For multi-step work, use plan or todo BEFORE acting.
-  Plan first, then execute steps in order. Do not jump ahead.
+  The todo tool is EXTREMELY helpful for tracking multi-step work and
+  showing the user that nothing has been forgotten. Use plan or todo
+  for non-trivial tasks — anything that takes more than one tool call
+  or depends on previous steps. Add every step before starting; mark
+  items done as you finish them. Single, obvious actions don't need a
+  todo.
 </grounding>
 
 <knowledge_gaps>

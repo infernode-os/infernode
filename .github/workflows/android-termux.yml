@@ -1,0 +1,92 @@
+name: Android (Termux)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Termux on Android — Phase 0 hellaphone (INFR-107).
+  # Runs build-android-termux.sh inside termux-docker
+  # on a GitHub aarch64 runner so the Bionic compat
+  # patches (lib9.h shims, audio-oss.c stub, alloc.c
+  # malloc_usable_size const, libsec/securezero.c
+  # fallback, etc.) can't silently regress.
+  # See docs/HELLAPHONE.md, emu/Android/README.md.
+  # ─────────────────────────────────────────────
+  android-termux:
+    name: Termux ARM64 build & smoke
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Build o.emu and smoke-boot inside termux-docker
+      run: |
+        set -euo pipefail
+        docker run --rm \
+          -v "$PWD":/work \
+          -w /work \
+          termux/termux-docker:aarch64 \
+          bash -lc '
+            set -euo pipefail
+
+            echo "::group::Termux sanity"
+            uname -a
+            uname -o
+            echo "PREFIX=$PREFIX"
+            echo "PATH=$PATH"
+            command -v clang || true
+            command -v sh || true
+            echo "::endgroup::"
+
+            echo "::group::Install build prerequisites"
+            pkg update -y
+            pkg install -y clang make binutils pkg-config which awk perl git byacc
+            echo "::endgroup::"
+
+            echo "::group::Phase 0 build (build-android-termux.sh headless)"
+            chmod +x build-android-termux.sh
+            ./build-android-termux.sh headless
+            echo "::endgroup::"
+
+            echo "::group::Verify build artifacts"
+            test -x emu/Linux/o.emu     || { echo "::error::o.emu was not built"; exit 1; }
+            test -x Linux/arm64/bin/mk  || { echo "::error::mk was not built";    exit 1; }
+            test -x Linux/arm64/bin/limbo || { echo "::error::limbo was not built"; exit 1; }
+            file emu/Linux/o.emu
+            file emu/Linux/o.emu | grep -q "aarch64\|arm64" || { echo "::error::o.emu is not aarch64"; exit 1; }
+            echo "::endgroup::"
+
+            echo "::group::Phase 0 smoke (cat /dev/sysname, /dev/user, ls /dis | wc -l)"
+            printf "%s\n" \
+              "cat /dev/sysname" \
+              "cat /dev/user" \
+              "echo dis count: \`{ls /dis | wc -l}" \
+              "echo phase 0 ok" \
+              "exit" \
+              | timeout 30 ./emu/Linux/o.emu -c1 -r"$PWD" /dis/sh.dis -l 2>&1 | tee /work/smoke.log
+            grep -q "phase 0 ok" /work/smoke.log || { echo "::error::smoke test did not reach phase 0 ok"; exit 1; }
+            echo "::endgroup::"
+          '
+
+    - name: Upload smoke log
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: termux-smoke-log
+        path: smoke.log
+        if-no-files-found: ignore
+        retention-days: 7

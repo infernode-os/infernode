@@ -728,7 +728,7 @@ inpool(void *v)
  * free() with pointers from the C library's malloc.  Detect these
  * and forward them to the real C library free via __libc_free.
  */
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__BIONIC__)
 extern void __libc_free(void*);
 #endif
 
@@ -740,7 +740,12 @@ free(void *v)
 	if(v != nil) {
 		if(Npadlong)
 			v = (ulong*)v-Npadlong;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__BIONIC__)
+		/* glibc fallback: pointers not in our pool came from libc's
+		 * own malloc (e.g. via dlopen'd libnss_systemd); bypass the
+		 * Inferno allocator and call glibc's real free directly.
+		 * Bionic has no equivalent symbol and headless Phase 0 has
+		 * no dlopen consumers, so the branch is gated off there. */
 		if(!inpool(v)){
 			if(Npadlong)
 				v = (ulong*)v+Npadlong;

@@ -244,3 +244,12 @@ android-app/app/src/main/assets/inferno-root/
 emu/Android/libemu.so
 emu/Android/o.emu
 build-android-apk.ndk.log
+
+# Gradle local state. The wrapper jar + properties + the gradlew
+# scripts are tracked (they are the build entry point); .gradle/ and
+# build/ are per-build caches that don't belong in git. local.properties
+# carries the host's sdk.dir, which is per-machine.
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties

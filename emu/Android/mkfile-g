@@ -55,8 +55,16 @@ SYSLIBS=\
 
 default:V:	$O.$CONF
 
-$O.$CONF:	$OBJ $CONF.c $CONF.root.h
+# Build $CONF.$O (emu.o) as its own rule so both the executable and
+# the libemu.so target below can depend on it. Previously the compile
+# was inlined in the o.emu recipe body, which meant the libemu.so
+# rule fell back to the generic `%.$O: %.c` meta-rule — and that
+# meta-rule does not pass -DKERNDATE, so emu.c failed with
+# `use of undeclared identifier 'KERNDATE'`.
+$CONF.$O: $CONF.c $CONF.root.h
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
+
+$O.$CONF:	$OBJ $CONF.$O
 	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
 
 # Phase 1c (INFR-110) — shared library variant for the APK build.

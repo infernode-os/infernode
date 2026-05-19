@@ -35,6 +35,32 @@ a proper Android app shell. Phase 0's job is to de-risk that work.
 * ~2 GB of free storage for the source tree and build outputs.
 * A few hundred MB of RAM headroom while building.
 
+## Installing Termux
+
+Termux is on the F-Droid app store, not the Play Store's default catalog
+(see prereqs note above for the Play Store caveat). Two ways:
+
+* **From the phone browser.** Go to
+  <https://f-droid.org/en/packages/com.termux/>, download the `.apk`,
+  tap to install. Android will ask you to allow "Install unknown apps"
+  for the browser; grant it.
+* **Via adb from a host machine.** Faster if you already have a USB
+  cable plugged in:
+
+  ```sh
+  # On the host (Linux/macOS with adb installed)
+  curl -fL --proto '=https' -o F-Droid.apk https://f-droid.org/F-Droid.apk
+  adb install F-Droid.apk
+  # Then open F-Droid on the phone, search "Termux", install.
+  ```
+
+  On a Samsung device running One UI you may need to disable Auto Blocker
+  (Settings → Security and privacy → Auto Blocker) to sideload.
+
+Modern Samsung devices (and most other vendor skins) ship with Auto
+Blocker on by default — install F-Droid first, the Auto Blocker prompt
+will let you make an exception.
+
 ## One-time Termux setup
 
 Inside the Termux shell:
@@ -42,14 +68,15 @@ Inside the Termux shell:
 ```sh
 pkg update
 pkg install -y clang make binutils pkg-config which perl git byacc
-termux-setup-storage   # optional, lets you read ~/storage/shared
+termux-setup-storage   # grant the "Files" permission prompt — needed
+                       # for the daemon recipe later to expose /sdcard
 ```
 
 `byacc` is required for the limbo compiler grammar (`limbo.y`); without
 it the build dies with `yacc: not found` after the C libraries finish.
 
-If you want to clone over SSH, also `pkg install openssh`. HTTPS clone
-works out of the box.
+If you want to clone over SSH or run the host-driven workflow below,
+also `pkg install openssh`. HTTPS clone works out of the box.
 
 ### Keep the device awake during the build
 
@@ -69,9 +96,47 @@ termux-wake-unlock
 ```
 
 If you are driving the build over `adb` + `ssh` from a host machine
-(see `INFR-107` discussion notes for the canonical workflow), the
-wake-lock is mandatory — otherwise the device sleeps and the ssh
-session stalls.
+(see the section below), the wake-lock is mandatory — otherwise the
+device sleeps and the ssh session stalls.
+
+### Driving the build from a host machine (adb + ssh)
+
+Typing a 5–15 minute build on a phone keyboard is painful. If you
+have the phone plugged in via USB with `adb` working, this is the
+canonical workflow:
+
+```sh
+# --- on the host, once ---
+# Generate a key pair for the phone (no passphrase).
+ssh-keygen -t ed25519 -f ~/.ssh/infernode-phone -N "" -C "infernode-phone"
+
+# Push the public key to the phone's shared storage.
+adb push ~/.ssh/infernode-phone.pub /sdcard/Download/
+
+# --- on the phone, once ---
+# Inside Termux:
+pkg install -y openssh
+termux-wake-lock
+termux-setup-storage   # answer the "Files" prompt
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+cat ~/storage/downloads/infernode-phone.pub >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+sshd                   # listens on 8022 by default
+whoami                 # note the username, e.g. u0_a330
+
+# --- back on the host ---
+adb forward tcp:8022 tcp:8022
+# Now host:8022 -> phone-Termux:8022.
+ssh -i ~/.ssh/infernode-phone -p 8022 u0_a330@localhost
+```
+
+From that ssh session you have a real terminal into Termux — clone,
+build, smoke-test, all from your host keyboard. To clean up:
+
+```sh
+adb forward --remove tcp:8022      # on host
+termux-wake-unlock                 # on phone (or just close Termux)
+```
 
 ## Build
 
@@ -116,6 +181,212 @@ You should land in an Inferno shell prompt (`;` by default). Try:
 If that works, **Phase 0 is done.** You have InferNode running on a
 phone. Capture the output, attach it to `INFR-107`, and we move on.
 
+## Running as a daemon — 9P export over TCP
+
+The interactive smoke test is fine for a one-off check, but the more
+interesting use case is running `o.emu` as a background daemon that
+exports an Inferno namespace over 9P/Styx — so a desktop, laptop, or
+another phone can mount the handset's filesystem (or anything else
+visible to Termux) and pipe data through Inferno.
+
+This is exactly the same `listen + exportfs` pattern that other
+InferNodes use; the only Termux-specific part is the wake-lock and
+the `-r` rooting decision.
+
+### Minimal recipe
+
+Run inside Termux on the phone:
+
+```sh
+termux-wake-lock
+termux-setup-storage     # grant the "Files" prompt if you have not
+
+cd ~/infernode
+
+# (Optional) Expose host paths outside the build tree by symlinking
+# them into the -r root. `#U` is confined to the -r directory, so
+# anything you want visible has to be reachable from there. The
+# symlinks below give you access to /sdcard and your Termux $HOME.
+ln -sfn /sdcard ./sdcard
+ln -sfn /data/data/com.termux/files/home ./termux-home
+
+# Write the Inferno-side script the daemon will run.
+cat > ./serve9p.b <<'EOF'
+mkdir /n
+mkdir /n/host
+mkdir /n/sdcard
+mkdir /n/home
+
+# `#U` is the host-OS filesystem device, confined to the `-r` root.
+# First, mount the whole tree at /n/host so we can navigate into it.
+bind -ac '#U' /n/host
+
+# Then re-bind the interesting subtrees to their idiomatic /n/ paths.
+# The symlinks added above (./sdcard, ./termux-home) let us reach
+# host paths outside the -r sandbox.
+bind -ac /n/host/sdcard      /n/sdcard
+bind -ac /n/host/termux-home /n/home
+
+# /n/sdcard now serves Android's shared storage (subject to Termux's
+# storage permission). /n/home serves your Termux $HOME. /n/host
+# stays available for the whole -r tree if you want it.
+
+listen -A 'tcp!*!17564' {exportfs -r /} &
+# Keep the kernel alive — `listen` is in the background, and
+# without something blocking in the foreground the shell would
+# exit and emu with it.
+wait
+EOF
+
+# Launch the daemon. nohup detaches it from the Termux session so
+# it survives terminal close; stdout/stderr go to a log file.
+nohup ./emu/Linux/o.emu -c1 -r"$PWD" /dis/sh.dis serve9p.b \
+  > emu-daemon.log 2>&1 &
+
+echo "daemon pid: $!  (logs in $PWD/emu-daemon.log)"
+```
+
+The daemon now listens on TCP port 17564 and serves a 9P/Styx export
+of the entire Inferno namespace. The interesting subtrees, in the
+order you'll usually want them:
+
+| Inferno path | Backing |
+|---|---|
+| `/n/sdcard` | Android shared storage (`/sdcard`, the symlink target) |
+| `/n/home`   | Your Termux `$HOME` (`/data/data/com.termux/files/home`) |
+| `/n/host`   | The whole `-r` root (`~/infernode/`); includes both of the above plus the build tree |
+| `/dis`, `/appl`, `/dev`, … | Inferno's own namespace |
+
+Add more subtrees by symlinking into the `-r` root and adding the
+matching `bind` line in `serve9p.b`. Why a re-bind rather than a
+direct `bind '#U/sdcard' /n/sdcard`? — this build's `#U` does not
+accept a subpath in the attach spec; the rebind-from-`/n/host` form
+is the portable pattern.
+
+Stop it with `pkill -x o.emu`.
+
+### Reachability from a client
+
+The phone needs to be reachable from your client. Three common
+setups:
+
+* **Plugged in via USB** — use `adb reverse` to expose the phone's
+  listening port on the client:
+
+  ```sh
+  adb reverse tcp:17564 tcp:17564
+  ```
+
+  Then on the client, `127.0.0.1:17564` reaches the phone.
+
+* **Same WiFi as the client.** Just use the phone's WiFi IP. Find
+  it with `ifconfig wlan0` inside Termux, or read it off Android's
+  WiFi settings.
+
+* **Cellular / VPN.** Works the same way as long as your client has
+  a route to the phone's IP; usually requires a personal VPN
+  (Tailscale, WireGuard) since carrier NATs block inbound TCP.
+
+### Mounting from a Linux client
+
+Two reasonable client choices:
+
+```sh
+# 9pfuse (lightweight, FUSE-based)
+9pfuse 'tcp!127.0.0.1!17564' /mnt/phone
+ls /mnt/phone/n/host
+ls /mnt/phone/n/host/sdcard      # if storage permission was granted
+
+# Or v9fs in the kernel:
+mount -t 9p -o trans=tcp,port=17564 127.0.0.1 /mnt/phone
+```
+
+`umount /mnt/phone` (or `fusermount -u` for 9pfuse) when done.
+
+### Mounting from another Inferno
+
+From inside any other InferNode (host laptop, Jetson, whatever):
+
+```
+; mount 'tcp!127.0.0.1!17564' /n/phone
+; ls /n/phone/n/host
+```
+
+### What the security boundary actually is
+
+* **`#U` is confined to the `-r` root.** Inferno's host-OS device
+  cannot see paths above the directory passed to `emu -r`. This is
+  a deliberate sandbox. Use symlinks pointing into the `-r` root
+  (as in the recipe above) to widen the surface deliberately, one
+  path at a time.
+
+* **There is no authentication on the listener as written.** Anyone
+  who can TCP-connect to the port reads (and writes — `exportfs` is
+  read-write by default) the exported namespace. For a dev machine
+  on a private network this is usually fine. For anything else,
+  wrap the listener in TLS and require a client cert:
+
+  ```
+  # Inferno-side — pseudo, requires factotum + cert setup
+  listen -A -s 'tcp!*!17564' tls {... exportfs -r /n/host}
+  ```
+
+  And mount client-side via `mount -A 'tls!host!port'`.
+
+* **Termux's own permission boundary still applies.** Even if you
+  mount everything from your client, you can only read paths Termux
+  can read. `/sdcard` works after `termux-setup-storage`; other
+  apps' private data dirs do not, and there is no root-only path
+  visible to Termux without root.
+
+### Persistent daemon (autostart)
+
+For a daemon that survives reboots and Android's Doze killer, use
+`termux-services`:
+
+```sh
+pkg install -y termux-services
+mkdir -p $PREFIX/var/service/inferno9p/log
+cat > $PREFIX/var/service/inferno9p/run <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+exec 2>&1
+cd /data/data/com.termux/files/home/infernode
+exec ./emu/Linux/o.emu -c1 -r"$PWD" /dis/sh.dis serve9p.b
+EOF
+chmod +x $PREFIX/var/service/inferno9p/run
+ln -sf $PREFIX/share/termux-services/svlogger \
+       $PREFIX/var/service/inferno9p/log/run
+sv-enable inferno9p
+```
+
+Optionally `pkg install termux-boot` and add a wake-lock acquisition
+to `~/.termux/boot/0-wake-lock` so the service comes up on boot:
+
+```sh
+mkdir -p ~/.termux/boot
+cat > ~/.termux/boot/0-wake-lock <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock
+EOF
+chmod +x ~/.termux/boot/0-wake-lock
+```
+
+### What works (Phase 0) / what doesn't
+
+| Capability | State |
+|---|---|
+| Build `o.emu` on Termux/arm64 | ✓ |
+| Dis VM, 9P, namespace, Limbo bytecode | ✓ |
+| ARM64 JIT (`-c1`) | ✓ (~3× faster than `-c0`) |
+| TCP / TLS / live network handshakes | ✓ |
+| Veltro agent harness | ✓ |
+| `listen` + `exportfs` over TCP | ✓ |
+| Mounting host paths via `#U` | ✓ (confined to `-r` root) |
+| GUI (Lucia / Xenith / SDL3) | ✗ (Phase 1) |
+| On-device LLM via `/n/llm` | ✗ (Phase 1) |
+| Standalone APK (no Termux dependency) | ✗ (Phase 1) |
+| x86 / x86_64 Android emulator (AVD) | ✗ (would need a separate cross-build) |
+
 ## Troubleshooting
 
 **`clang: command not found`** — you missed `pkg install clang`, or the
@@ -137,6 +408,18 @@ old, try a `headless` build only and skip the Limbo applications step.
 
 **SDL3 build fails** — Phase 0 defaults to headless. Do not try the
 SDL3 path on Termux yet; Phase 1 will sort the display backend.
+
+**`ls /n/host/sdcard: permission denied`** when running the daemon —
+you have not granted Termux storage access. Run `termux-setup-storage`
+on the phone (or in Termux Settings → Apps → Termux → Permissions →
+Files), then restart the daemon. The `#U` mount itself succeeded;
+this is Termux's own permission boundary, not InferNode's.
+
+**The 9P listener accepts connections but mounting hangs** — almost
+always a wake-lock issue. Android put Termux to sleep mid-handshake.
+`termux-wake-lock` before starting the daemon, and confirm with
+`pgrep -af o.emu` from another Termux session that the process is
+still running.
 
 ## What this is NOT
 

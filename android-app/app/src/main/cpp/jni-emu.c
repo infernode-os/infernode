@@ -2,32 +2,23 @@
  * jni-emu.c — JNI bridge between Java (io.infernode.Emu) and the
  * InferNode emulator entry point.
  *
- * Phase 1d (INFR-111) refactor. Previously this file just marshalled
- * argv and called emu_run(...) on the JVM-attached JNI thread. That
- * crashed the process within ~22 ms of libemu.so loading, because
- * emu's headless boot path ends in `for(;;) ospause();` and
- * ospause() does pthread_exit(0). pthread_exit on a JNI-attached
- * thread is undefined; the zygote saw the thread vanish and SIGKILLed
- * the process.
+ * Phase 2a (INFR-NNN): real interactive shell.
+ *   - capture_stdio replaces the previous capture_stdio: it now wires
+ *     fd 0, 1, and 2. fd 0 is the read end of a stdin pipe owned by
+ *     this C side; Java writes to it via writeStdin(). fd 1/2 are
+ *     dup2'd to a stdout pipe whose read end is consumed by a reader
+ *     thread that fans output to logcat AND a Java OutputListener.
+ *   - The reader thread attaches to the JVM so it can call back into
+ *     Kotlin. AttachCurrentThread is required because the thread
+ *     wasn't created by the JVM.
  *
- * Two changes fix it:
+ * Phase 1d (INFR-111) earlier landed:
+ *   - Detached pthread for emu_run so JVM-attached thread can return.
+ *   - Stdio capture to logcat under tag "InferNode".
+ *   - Atomic guard against multiple Emu.run calls per process.
  *
- * 1. emu_run runs on its own detached pthread, not on the JVM caller.
- *    The JVM caller returns to Java immediately. emu's eventual
- *    pthread_exit lands on a thread the JVM doesn't know about, so
- *    the runtime never sees a stray death and the process keeps
- *    running indefinitely.
- *
- * 2. stdio (fd 1 and fd 2) is redirected to a pipe at JNI_OnLoad,
- *    and a reader thread pushes lines to __android_log_write so
- *    emu's print()/fprint() output shows up in logcat under the
- *    "InferNode" tag. Without this, every diagnostic emu emits goes
- *    to /dev/null and the boot is invisible.
- *
- * Single-instance constraint: emu's globals (rootdir, eve, libinit
- * state, etc.) are process-scoped. A static guard ensures emu_run is
- * spawned at most once per process — repeat clicks on the boot
- * button are no-ops.
+ * Single-instance constraint: emu's globals are process-scoped. A
+ * second Emu.run is rejected.
  */
 
 #include <jni.h>
@@ -38,80 +29,136 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <errno.h>
 
 #define TAG "InferNode"
 
 extern int emu_run(int argc, char **argv);
 
 /*
- * Stdio capture: pipe fd1/fd2 into a reader that flushes line-by-line
- * to logcat. setvbuf on stdout/stderr to line-buffered so prints
- * surface promptly even before any newline.
- *
- * Buffer size 1024 matches emu's internal print buffer in
- * emu/port/main.c iprint(). Long lines get split across reads, which
- * logcat shows as separate entries — acceptable for a debug surface.
+ * JNI globals captured at load time / when a listener registers.
+ * Access to g_listener / g_onLine_mid is guarded by g_listener_lock
+ * because the stdio reader pthread and Java callers both touch them.
  */
+static JavaVM *g_vm;
+static jobject g_listener;          /* global ref */
+static jmethodID g_onLine_mid;
+static pthread_mutex_t g_listener_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ * Write end of the stdin pipe — fd 0 is the read end (dup2'd at
+ * capture time). Java's writeStdin writes here; emu's readkbd kproc
+ * reads from fd 0 and pushes to kbdq.
+ */
+static int g_stdin_write_fd = -1;
+
+/*
+ * Reader thread for the stdout/stderr pipe. Splits on '\n' so each
+ * line becomes one logcat entry / one OutputListener call. emu's
+ * print() output reaches both surfaces.
+ */
+static void
+deliver_line(JNIEnv *env, const char *line)
+{
+	if (line[0] != '\0')
+		__android_log_write(ANDROID_LOG_INFO, TAG, line);
+
+	pthread_mutex_lock(&g_listener_lock);
+	jobject listener = g_listener;
+	jmethodID mid = g_onLine_mid;
+	pthread_mutex_unlock(&g_listener_lock);
+
+	if (env != NULL && listener != NULL && mid != NULL) {
+		jstring jline = (*env)->NewStringUTF(env, line);
+		if (jline != NULL) {
+			(*env)->CallVoidMethod(env, listener, mid, jline);
+			(*env)->DeleteLocalRef(env, jline);
+		}
+		if ((*env)->ExceptionCheck(env))
+			(*env)->ExceptionClear(env);
+	}
+}
+
 static void *
 stdio_reader(void *arg)
 {
 	int fd = (int)(intptr_t)arg;
 	char buf[1024];
-	ssize_t n, lineLen;
-	char *p, *eol;
+	ssize_t n;
+	JNIEnv *env = NULL;
 
 	pthread_setname_np(pthread_self(), "emu-stdio");
 
+	/* Attach this pthread to the JVM so we can call into Kotlin. */
+	if (g_vm != NULL &&
+	    (*g_vm)->AttachCurrentThread(g_vm, &env, NULL) != JNI_OK) {
+		env = NULL;
+		__android_log_write(ANDROID_LOG_WARN, TAG,
+			"stdio reader: AttachCurrentThread failed; "
+			"output will reach logcat only, not the Activity");
+	}
+
 	while ((n = read(fd, buf, sizeof(buf) - 1)) > 0) {
 		buf[n] = '\0';
-		/* Split on newlines so each log entry is one line. */
-		p = buf;
+		char *p = buf;
 		while (*p != '\0') {
-			eol = strchr(p, '\n');
-			if (eol != NULL) {
+			char *eol = strchr(p, '\n');
+			if (eol != NULL)
 				*eol = '\0';
-				lineLen = eol - p;
-			} else {
-				lineLen = (ssize_t)strlen(p);
-			}
-			if (lineLen > 0)
-				__android_log_write(ANDROID_LOG_INFO, TAG, p);
+			deliver_line(env, p);
 			if (eol == NULL)
 				break;
 			p = eol + 1;
 		}
 	}
+
+	if (env != NULL && g_vm != NULL)
+		(*g_vm)->DetachCurrentThread(g_vm);
 	return NULL;
 }
 
 static void
 capture_stdio(void)
 {
-	int p[2];
+	int sp[2], op[2];
 	pthread_t reader;
 
-	if (pipe(p) != 0) {
+	/*
+	 * Stdin: read end goes to fd 0; emu's readkbd will read from
+	 * here. Java owns the write end via g_stdin_write_fd.
+	 */
+	if (pipe(sp) != 0) {
 		__android_log_write(ANDROID_LOG_WARN, TAG,
-			"stdio pipe() failed; emu output will not reach logcat");
+			"stdin pipe() failed; emu shell will read /dev/null");
+	} else {
+		dup2(sp[0], STDIN_FILENO);
+		close(sp[0]);
+		g_stdin_write_fd = sp[1];
+	}
+
+	/*
+	 * Stdout + stderr: both dup2'd to the same pipe write end so
+	 * one reader thread sees all emu output in order.
+	 */
+	if (pipe(op) != 0) {
+		__android_log_write(ANDROID_LOG_WARN, TAG,
+			"stdout pipe() failed; emu output discarded");
 		return;
 	}
-	dup2(p[1], STDOUT_FILENO);
-	dup2(p[1], STDERR_FILENO);
-	close(p[1]);
+	dup2(op[1], STDOUT_FILENO);
+	dup2(op[1], STDERR_FILENO);
+	close(op[1]);
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
 	if (pthread_create(&reader, NULL, stdio_reader,
-	    (void *)(intptr_t)p[0]) == 0)
+	    (void *)(intptr_t)op[0]) == 0)
 		pthread_detach(reader);
 }
 
-/*
- * Worker thread that owns emu's lifetime. Takes ownership of the
- * heap-allocated argv built by Java_io_infernode_Emu_run; frees it
- * after emu_run returns (which in headless mode means: never).
- */
+/* ─── emu lifecycle ──────────────────────────────────────────── */
+
 struct emu_args {
 	int argc;
 	char **argv;
@@ -127,15 +174,12 @@ emu_thread(void *arg)
 	__android_log_print(ANDROID_LOG_INFO, TAG,
 		"emu_run starting (argc=%d)", a->argc);
 
-	/* In headless mode emu_run never returns — emuinit() does
-	 * for(;;) ospause() and ospause() pthread_exit()s this very
-	 * thread. The free() below only runs if the build path ever
-	 * grows a clean shutdown. */
 	int rc = emu_run(a->argc, a->argv);
 
+	/* Headless emu_run is not supposed to return; if it does, free
+	 * the heap argv we own and report the surprise. */
 	__android_log_print(ANDROID_LOG_INFO, TAG,
 		"emu_run returned %d (unexpected for headless)", rc);
-
 	for (i = 0; i < a->argc; i++)
 		free(a->argv[i]);
 	free(a->argv);
@@ -143,12 +187,6 @@ emu_thread(void *arg)
 	return NULL;
 }
 
-/*
- * Guard against multiple Emu.run calls. emu can only boot once per
- * process; a second call would race on globals and almost certainly
- * crash. Using an atomic flag rather than pthread_once because we
- * want to *report* re-entry via a logcat line, not silently swallow it.
- */
 static atomic_int emu_launched = ATOMIC_VAR_INIT(0);
 
 JNIEXPORT jint JNICALL
@@ -168,8 +206,6 @@ Java_io_infernode_Emu_run(JNIEnv *env, jobject thiz, jobjectArray jargv)
 	struct emu_args *a = (struct emu_args *)calloc(1, sizeof(*a));
 	if (a == NULL)
 		return -1;
-
-	/* argv layout: [0] = "emu", [1..n] = caller args, [n+1] = NULL. */
 	a->argv = (char **)calloc((size_t)n + 2, sizeof(char *));
 	if (a->argv == NULL) {
 		free(a);
@@ -201,19 +237,79 @@ Java_io_infernode_Emu_run(JNIEnv *env, jobject thiz, jobjectArray jargv)
 	return 0;
 }
 
+/* ─── stdin write ────────────────────────────────────────────── */
+
 /*
- * JNI_OnLoad runs once when System.loadLibrary("emu") completes.
- * Wire up stdio capture here so even emu's earliest startup prints
- * (before emu_thread takes off) reach logcat — useful when the
- * crash is in argument parsing or the env scan.
+ * Write the given bytes to emu's stdin pipe. Returns the number of
+ * bytes written (>= 0) or -1 on error. Java is expected to append
+ * '\n' itself for line-oriented input.
  */
+JNIEXPORT jint JNICALL
+Java_io_infernode_Emu_writeStdin(JNIEnv *env, jclass cls, jstring jdata)
+{
+	(void)cls;
+
+	if (g_stdin_write_fd < 0)
+		return -1;
+
+	const char *data = (*env)->GetStringUTFChars(env, jdata, NULL);
+	if (data == NULL)
+		return -1;
+	jsize len = (*env)->GetStringUTFLength(env, jdata);
+
+	ssize_t total = 0;
+	while (total < len) {
+		ssize_t w = write(g_stdin_write_fd, data + total, len - total);
+		if (w < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		total += w;
+	}
+
+	(*env)->ReleaseStringUTFChars(env, jdata, data);
+	return (jint)total;
+}
+
+/* ─── output listener ────────────────────────────────────────── */
+
+JNIEXPORT void JNICALL
+Java_io_infernode_Emu_setOutputListener(JNIEnv *env, jclass cls, jobject listener)
+{
+	(void)cls;
+
+	pthread_mutex_lock(&g_listener_lock);
+
+	if (g_listener != NULL) {
+		(*env)->DeleteGlobalRef(env, g_listener);
+		g_listener = NULL;
+	}
+	g_onLine_mid = NULL;
+
+	if (listener != NULL) {
+		g_listener = (*env)->NewGlobalRef(env, listener);
+		if (g_listener != NULL) {
+			jclass lcls = (*env)->GetObjectClass(env, g_listener);
+			g_onLine_mid = (*env)->GetMethodID(env, lcls,
+				"onLine", "(Ljava/lang/String;)V");
+			if ((*env)->ExceptionCheck(env))
+				(*env)->ExceptionClear(env);
+		}
+	}
+
+	pthread_mutex_unlock(&g_listener_lock);
+}
+
+/* ─── load entry ─────────────────────────────────────────────── */
+
 JNIEXPORT jint JNICALL
 JNI_OnLoad(JavaVM *vm, void *reserved)
 {
-	(void)vm;
 	(void)reserved;
+	g_vm = vm;
 	capture_stdio();
 	__android_log_write(ANDROID_LOG_INFO, TAG,
-		"libemu.so JNI_OnLoad — stdio routed to logcat");
+		"libemu.so JNI_OnLoad — stdin/stdout routed");
 	return JNI_VERSION_1_6;
 }

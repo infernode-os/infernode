@@ -240,6 +240,7 @@ n/local/
 # chain stages these into the Android-app tree at build time; they
 # are produced fresh by ./build-android-apk.sh on every invocation.
 android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
+android-app/app/src/main/jniLibs/arm64-v8a/libSDL3.so
 android-app/app/src/main/assets/inferno-root/
 emu/Android/libemu.so
 emu/Android/o.emu

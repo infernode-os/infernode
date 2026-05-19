@@ -70,7 +70,25 @@ fi
 # SYSTARG / OBJTYPE must be passed to mk as COMMAND-LINE variables, not env.
 # mkconfig reassigns `SYSTARG=$SYSHOST` after auto-detect, which clobbers any
 # env value — but Plan 9 mk freezes command-line vars so they survive.
-MKARGS="SYSTARG=Android OBJTYPE=arm64"
+#
+# GUIBACK selects the GUI backend. Default headless (Phase 0–2a). Set
+# GUIBACK=sdl3 in the environment to build the Lucifer-capable variant
+# (Phase 2b.0+); that requires SDL3 cross-built for Android arm64,
+# which build-sdl3-android.sh produces.
+: "${GUIBACK:=headless}"
+MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK"
+
+if [ "$GUIBACK" = "sdl3" ]; then
+    : "${SDL3_PREFIX:=$HOME/sdks/SDL3-android-arm64}"
+    if [ ! -f "$SDL3_PREFIX/lib/libSDL3.so" ]; then
+        echo "ERROR: SDL3 not found at $SDL3_PREFIX/lib/libSDL3.so" >&2
+        echo "  Run ./build-sdl3-android.sh first, or set SDL3_PREFIX." >&2
+        exit 1
+    fi
+    export SDL3_PREFIX
+    MKARGS="$MKARGS SDL3_PREFIX=$SDL3_PREFIX"
+fi
+
 export PATH="$ROOT/Linux/amd64/bin:$PATH"
 
 mkdir -p "$ROOT/Android/arm64/bin" "$ROOT/Android/arm64/lib"
@@ -116,7 +134,7 @@ done
 
 # --- Cross-compile emulator -----------------------------------------------
 echo ""
-echo "=== Cross-compiling emulator (headless) ==="
+echo "=== Cross-compiling emulator (GUIBACK=$GUIBACK) ==="
 cd "$ROOT/emu/Android"
 rm -f *.o *.emu emu.root.h emu.root.c emu.root.s 2>/dev/null || true
 "$MK" -f mkfile-g $MKARGS || { echo "ERROR: emulator build failed" >&2; exit 1; }

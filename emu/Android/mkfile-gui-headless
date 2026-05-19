@@ -1,0 +1,9 @@
+# Headless GUI backend for Android — no display.
+# Used by the Phase 0–2a headless APK build. Stub implementations of
+# attachscreen, flushmemscreen, etc. so emu links without a real GUI.
+
+GUISRC=\
+	stubs-headless.$O\
+
+GUIFLAGS=
+GUILIBS=

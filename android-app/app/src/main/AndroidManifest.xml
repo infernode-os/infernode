@@ -23,16 +23,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-      icon/roundIcon intentionally omitted for the Phase 1c scaffold.
-      Android falls back to the system default launcher icon. Branded
-      mipmap drawables can be added later without touching the
-      manifest schema — they just need files under
-      res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png and
-      a matching ic_launcher_round.png, then re-add the attributes
-      here.
+      Launcher icons sourced from MacOSX/InferNode.icns (1024x1024
+      master) and downsampled into res/mipmap-{m,h,xh,xxh,xxxh}dpi/
+      at the standard Android density steps. ic_launcher.png is the
+      square variant; ic_launcher_round.png is the same logo with a
+      circular alpha mask for launchers that prefer circular icons.
     -->
     <application
         android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">

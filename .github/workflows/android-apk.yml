@@ -115,9 +115,68 @@ jobs:
         echo "dis/ files staged: $DIS_COUNT"
         test "$DIS_COUNT" -gt 100 || { echo "::error::suspiciously few .dis files"; exit 1; }
 
+    # ─────────────────────────────────────────────
+    # Gradle assemble — produces app-debug.apk.
+    #
+    # JDK 17 is mandatory for AGP 8.7 (the gradle.properties pin). The
+    # actions/setup-java action wires JAVA_HOME automatically. The
+    # Android SDK comes from setup-android, which installs platforms;35
+    # + build-tools;35.0.0 — that pair matches what
+    # android-app/app/build.gradle.kts compiles against.
+    #
+    # The local-property pattern (write a local.properties file with
+    # sdk.dir=...) is the standard way to tell Gradle where the SDK
+    # lives without baking it into the repo. setup-android exports
+    # ANDROID_HOME but Gradle also reads local.properties first, so we
+    # set both.
+    # ─────────────────────────────────────────────
+    - name: Set up JDK 17
+      uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      with:
+        packages: 'platforms;android-35 build-tools;35.0.0'
+
+    - name: Cache Gradle
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ hashFiles('android-app/gradle/wrapper/gradle-wrapper.properties', 'android-app/**/*.gradle.kts') }}
+
+    - name: Build debug APK
+      working-directory: android-app
+      run: |
+        echo "sdk.dir=$ANDROID_HOME" > local.properties
+        chmod +x gradlew
+        ./gradlew --no-daemon assembleDebug
+
+    - name: Verify APK
+      run: |
+        set -e
+        APK=android-app/app/build/outputs/apk/debug/app-debug.apk
+        test -f "$APK" || { echo "::error::APK missing"; exit 1; }
+        # APK is a zip; the first 4 bytes are PK\003\004.
+        head -c 4 "$APK" | od -An -tx1 | tr -d ' \n' | grep -q '^504b0304' \
+          || { echo "::error::$APK is not a valid zip/APK"; exit 1; }
+        ls -la "$APK"
+        echo "APK OK"
+
     - name: Upload libemu.so
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: libemu-arm64
         path: android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
+        retention-days: 14
+
+    - name: Upload debug APK
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: infernode-debug-apk
+        path: android-app/app/build/outputs/apk/debug/app-debug.apk
         retention-days: 14

@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.os.Bundle
 import android.util.Log
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -24,24 +26,52 @@ import kotlin.concurrent.thread
  * Lifecycle:
  *   onCreate -> extract /dis/ assets to filesDir/inferno-root/
  *             -> request RECORD_AUDIO
- *             -> spawn worker thread that calls Emu.run(...) targeting
- *                /dis/sh.dis with stdin piped to the UI (TODO)
+ *             -> wait for user tap on the "boot" button before
+ *                spawning emu-boot (see DEFERRED_EMU_BOOT below)
+ *
+ * DEFERRED_EMU_BOOT — Phase 1c milestone is "the build path works":
+ * APK assembled, libemu.so loaded, JNI entry callable. The actual
+ * emu_run integration is Phase 1d, because emu's threading model
+ * (libinit -> kproc(emuinit) -> for(;;) ospause(); ospause() does
+ * pthread_exit(0)) tears down the calling thread. On Android that
+ * thread is a JVM-managed JNI thread; pthread_exit on it is UB and
+ * the zygote reaps the process with SIGKILL within ~20ms. Fix
+ * requires either a fork()-and-exec-from-asset-dir scheme or a
+ * proper Posix main-loop-on-detached-pthread refactor in emu/port.
+ * The button below makes the crash opt-in so the build artefact
+ * survives the smoke test until that work lands. See INFR-NEW
+ * (Phase 1d emu_run/JNI lifecycle).
  */
 class InfernodeActivity : Activity() {
 
     private lateinit var consoleView: TextView
+    private lateinit var bootButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        consoleView = TextView(this).apply {
-            text = "InferNode booting..."
-            isClickable = false
-            isLongClickable = false
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
-        setContentView(consoleView)
+        consoleView = TextView(this).apply {
+            text = "InferNode APK v0.1.0-phase1c\n" +
+                "libemu.so loaded.\n" +
+                "Tap to attempt emu_run() — known to SIGKILL the process " +
+                "until the Phase 1d threading refactor lands.\n"
+        }
+        bootButton = Button(this).apply {
+            text = "Boot Inferno (Phase 1d preview)"
+            setOnClickListener {
+                isEnabled = false
+                post("Booting...\n")
+                thread(name = "emu-boot") { bootInferno() }
+            }
+        }
+        layout.addView(consoleView)
+        layout.addView(bootButton)
+        setContentView(layout)
 
         ensureRecordAudioPermission()
-        thread(name = "emu-boot") { bootInferno() }
     }
 
     private fun ensureRecordAudioPermission() {

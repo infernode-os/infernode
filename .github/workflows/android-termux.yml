@@ -102,13 +102,20 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Phase 0 smoke (cat /dev/sysname, /dev/user, ls /dis | wc -l)"
+            # 30s was too tight in CI containers (emu boot + shell + .dis
+            # loading is markedly slower than on a handset). Bump to 120s.
+            # `stdbuf -oL` line-buffers o.emu stdout so partial output makes
+            # it to the log on timeout, instead of being lost in libc buffers.
             printf "%s\n" \
               "cat /dev/sysname" \
               "cat /dev/user" \
               "echo dis count: \`{ls /dis | wc -l}" \
               "echo phase 0 ok" \
               "exit" \
-              | timeout 30 ./emu/Linux/o.emu -c1 -r"$PWD" /dis/sh.dis -l 2>&1 | tee /work/smoke.log
+              | timeout 120 stdbuf -oL ./emu/Linux/o.emu -c1 -r"$PWD" /dis/sh.dis -l 2>&1 | tee /work/smoke.log || true
+            echo "--- smoke.log snapshot ---"
+            cat /work/smoke.log || true
+            echo "--- end smoke.log ---"
             grep -q "phase 0 ok" /work/smoke.log || { echo "::error::smoke test did not reach phase 0 ok"; exit 1; }
             echo "::endgroup::"
           '

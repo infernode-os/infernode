@@ -1,0 +1,19 @@
+# SDL3 GUI backend for Android arm64 — Lucifer / wm rendering target.
+#
+# Phase 2b.0 (hellaphone GUI). SDL3 is cross-compiled from source via
+# build-sdl3-android.sh into $SDL3_PREFIX (default: $HOME/sdks/
+# SDL3-android-arm64). The build driver (build-android-apk.sh with the
+# --gui sdl3 flag) ensures that script has run before invoking mk.
+#
+# Unlike Linux/macOS, there is no pkg-config on the Inferno mk side
+# during cross-compile; paths are pinned via the SDL3_PREFIX env var.
+# Override with `SDL3_PREFIX=/path/to/sdl3 mk libemu-gui.so` if you
+# built SDL3 somewhere else.
+
+SDL3_PREFIX=$HOME/sdks/SDL3-android-arm64
+
+GUISRC=\
+	draw-sdl3.$O\
+
+GUIFLAGS=-DGUI_SDL3 -I$SDL3_PREFIX/include
+GUILIBS=-L$SDL3_PREFIX/lib -lSDL3

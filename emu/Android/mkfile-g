@@ -1,7 +1,14 @@
-# Headless o.emu for Android arm64, cross-compiled via NDK.
+# o.emu and libemu.so for Android arm64, cross-compiled via NDK.
 # Mirrors emu/Linux/mkfile-g but targets SYSTARG=Android so output
 # lands in Android/arm64/ and the binary links against Bionic at the
 # Android system path, not Termux's $PREFIX/lib.
+#
+# GUI backend is selectable via GUIBACK:
+#   GUIBACK=headless  (default) — Phase 0–2a, no display, stubs.
+#   GUIBACK=sdl3                — Phase 2b.0+, draw-sdl3 + libSDL3.
+#
+# The build driver (build-android-apk.sh) selects this via env var
+# before invoking mk.
 
 SYSTARG=Android
 <$ROOT/mkconfig
@@ -13,6 +20,11 @@ CONF=emu			#default configuration
 CONFLIST=emu
 CLEANCONFLIST=
 
+# GUI backend selection. Options: headless, sdl3.
+# Phase 0–2a kept everything headless; Phase 2b.0 introduces sdl3.
+# Override at invocation time: `GUIBACK=sdl3 mk libemu.so`.
+GUIBACK=headless
+
 INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
 
 #end configurable parameters
@@ -21,13 +33,17 @@ INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is instal
 <| $SHELLNAME ../port/mkdevlist  $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 <mkfile-$OBJTYPE	# sets $ARCHFILES
 
+# GUI backend variables (GUISRC, GUIFLAGS, GUILIBS). Pulled in here
+# so OBJ/CFLAGS/SYSLIBS below can reference them.
+<mkfile-gui-$GUIBACK
+
 OBJ=\
 	asm-$OBJTYPE.$O\
 	$ARCHFILES\
 	os.$O\
 	kproc-pthreads.$O\
 	segflush-$OBJTYPE.$O\
-	stubs-headless.$O\
+	$GUISRC\
 	$CONF.root.$O\
 	lock.$O\
 	$DEVS\
@@ -41,17 +57,13 @@ CFLAGS=\
 	-I$ROOT/$SYSTARG/$OBJTYPE/include\
 	-I$ROOT/include\
 	-I$ROOT/libinterp\
-	$CTHREADFLAGS $CFLAGS $EMUOPTIONS\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS\
 
 KERNDATE=`{$NDATE}
 
-# Headless build — no X11, no SDL3. AAudio backend (audio-aaudio.c)
-# replaces the Phase 0 no-op stub. -llog is the Android system log
-# library, used by jni-emu.c (Phase 1d, INFR-111) to surface emu's
-# stdio output to logcat. liblog.so is always present on every
-# Android device, so the dep is free; o.emu links against it too but
-# doesn't call it — at most a few unresolved-relocation table bytes
-# in the standalone executable.
+# Headless build links against the AAudio backend and the Android
+# system log library directly. With GUIBACK=sdl3, $GUILIBS pulls in
+# libSDL3; everything else is unchanged.
 SYSLIBS=\
 	-lm\
 	-laaudio\
@@ -71,7 +83,13 @@ $CONF.$O: $CONF.c $CONF.root.h
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
 
 $O.$CONF:	$OBJ $CONF.$O
-	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $GUILIBS
+
+# SDL3 backend source — only built when GUIBACK=sdl3.
+# Place after the default target so we don't accidentally take it
+# over as default.
+draw-sdl3.$O: ../port/draw-sdl3.c
+	$CC $CFLAGS $GUIFLAGS -I. ../port/draw-sdl3.c
 
 # Phase 1c (INFR-110) — shared library variant for the APK build.
 #
@@ -90,7 +108,7 @@ jni-emu.$O: $JNI_SRC
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE -o jni-emu.$O $JNI_SRC
 
 libemu.so: $OBJ $CONF.$O jni-emu.$O
-	$LD -shared $LDFLAGS -o $target $OBJ $CONF.$O jni-emu.$O $LIBFILES $SYSLIBS
+	$LD -shared $LDFLAGS -o $target $OBJ $CONF.$O jni-emu.$O $LIBFILES $SYSLIBS $GUILIBS
 
 libemu:V: libemu.so
 

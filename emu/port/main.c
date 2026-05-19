@@ -226,8 +226,27 @@ putenvqv(char *name, char **v, int n, int conf)
 	free(val);
 }
 
-void
-main(int argc, char *argv[])
+/*
+ * emu_run — the body of main(), extracted as a callable entry point.
+ *
+ * This is the function the JNI bridge in android-app/.../jni-emu.c
+ * delegates to. The standalone `o.emu` executable (used via
+ * `adb shell /data/local/tmp/o.emu` and on Linux/macOS) calls it
+ * directly from main() below.
+ *
+ * Returns an int for JNI compatibility, but in practice never returns
+ * in headless mode — libinit() does not return (worker threads take
+ * over and the original thread sleeps). On the GUI_SDL3 path it can
+ * unwind through sdl3_mainloop only on shutdown.
+ *
+ * Single-instance constraint: emu's globals (rootdir, eve, libinit
+ * state, etc.) are process-scoped, so emu_run must not be called more
+ * than once per process. The Android APK enforces this by holding the
+ * lone io.infernode.Emu object — its run() native method is a class
+ * member and naturally serialises caller threads.
+ */
+int
+emu_run(int argc, char *argv[])
 {
 	char *opt, *p;
 	char *enva[20];
@@ -270,6 +289,13 @@ main(int argc, char *argv[])
 	sdl3_mainloop();  /* NEVER RETURNS */
 #endif
 	/* Headless: libinit never returns, so we never get here */
+	return 0;
+}
+
+void
+main(int argc, char *argv[])
+{
+	emu_run(argc, argv);
 }
 
 void

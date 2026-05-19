@@ -1,0 +1,72 @@
+// InferNode app module.
+//
+// Strategy: the C/asm build is driven by our existing Inferno mkfiles
+// via build-android-ndk-arm64.sh. Gradle does NOT call mk; it expects
+// libemu.so to be produced by the wrapper script before assemble, and
+// just packages it into the APK's jniLibs/arm64-v8a/. This keeps the
+// two build systems decoupled — Inferno's mk stays the source of truth
+// for the runtime, Gradle handles the Android-shell side only.
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "io.infernode"
+    compileSdk = 35
+    ndkVersion = "29.0.0"   // matches the toolchain build-android-ndk-arm64.sh uses
+
+    defaultConfig {
+        applicationId = "io.infernode"
+        minSdk = 28         // matches mkfiles/mkfile-Android-arm64 API floor
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0-phase1c"
+
+        ndk {
+            // Only ship the ABIs we actually cross-compile for. Adding
+            // x86_64 would let us run in Android Studio AVDs but needs a
+            // separate cross-build pass through our mkfiles.
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // libemu.so is built outside Gradle. Pick it up from the Inferno
+    // build output path the wrapper script writes to.
+    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+
+    // The dis/ runtime tree ships as APK assets and is extracted on
+    // first launch into the app's private files dir, then handed to
+    // emu via the -r flag.
+    sourceSets["main"].assets.srcDirs("src/main/assets")
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+        debug {
+            // Debug APKs are signed with the Android debug keystore by
+            // default. Sufficient for adb install on dev devices.
+        }
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+}

@@ -1,0 +1,45 @@
+# Target flags for Android arm64 (Bionic), cross-compiled via NDK r29+.
+# Phase 1a hellaphone: o.emu links against Android system libc at
+# /system/lib64/, runs via `adb shell` without Termux.
+
+TARGMODEL=	Posix
+TARGSHTYPE=	sh
+CPUS=		arm64
+
+O=		o
+OS=		o
+
+# NDK location: required in environment. build-android-ndk-arm64.sh
+# sets it explicitly and falls back to $HOME/Android/Sdk/ndk/android-ndk-r29
+# at the shell level. mk has no `${VAR:-default}` expansion, so the
+# default has to live in the build driver, not here.
+NDK=		$ANDROID_NDK_HOME
+TOOLCHAIN=	$NDK/toolchains/llvm/prebuilt/linux-x86_64
+TARGET=		aarch64-linux-android
+# minSdk: API 28 (Android 9 Pie). Required by libc symbols we depend on
+# — getrandom() in particular is gated on >= 28 in Bionic. Android 9 covers
+# ~97% of in-use Android devices as of 2026, so this is the right floor.
+# Bump only if a newer Bionic feature is needed.
+API=		28
+
+AR=		$TOOLCHAIN/bin/llvm-ar
+ARFLAGS=	ruvs
+
+AS=		$TOOLCHAIN/bin/${TARGET}${API}-clang -c
+ASFLAGS=
+
+CC=		$TOOLCHAIN/bin/${TARGET}${API}-clang -c
+CFLAGS=		-g\
+		-O\
+		-fno-strict-aliasing\
+		-fstack-protector-strong\
+		-Wuninitialized -Wunused-variable -Wreturn-type -Wimplicit\
+		-Werror=return-type -Werror=implicit-function-declaration\
+		-I$ROOT/Android/arm64/include\
+		-I$ROOT/include\
+		-DANDROID_ARM64\
+		-fcommon
+
+ANSICPP=
+LD=		$TOOLCHAIN/bin/${TARGET}${API}-clang
+LDFLAGS=	-fcommon

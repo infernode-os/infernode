@@ -32,7 +32,14 @@ enum
 	NSTACKSPERALLOC = 16,
 	X11STACK=	256*1024
 };
-char *hosttype = "Linux";
+/* hosttype propagates to $emuhost so Inferno-side scripts can branch
+ * on it (see /lib/lucifer/boot.sh — when $emuhost is "Android" we
+ * bind larger fonts over the default 14-point references for the
+ * phone screen). Distinguishing from desktop Linux is the whole
+ * point of this string — leave it set to "Android" even though
+ * Bionic shares a lot of surface with glibc.
+ */
+char *hosttype = "Android";
 
 typedef sem_t	Sem;
 

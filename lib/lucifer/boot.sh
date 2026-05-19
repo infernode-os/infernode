@@ -1,6 +1,25 @@
 # InferNode GUI boot sequence
 # Runs AFTER profile (invoked as: sh -l /lib/lucifer/boot.sh)
 
+# Mobile (Android) font tuning.
+#
+# Lucifer and most UI elements (wm/shell, wm/editor, acme, xenith,
+# charon, lucipres) open "/fonts/combined/unicode.14.font". On a ~388
+# dpi phone screen that 14-point text is microscopic. emu/Android/os.c
+# sets $emuhost to "Android" specifically so we can detect mobile
+# here and bind a larger font over the default. The bind is at the
+# file level so every consumer of unicode.14.font gets the bigger
+# glyphs without code changes.
+#
+# Desktop boot ($emuhost == Linux / MacOSX / Nt) skips this block —
+# 14pt is fine at 96dpi.
+if {~ $emuhost Android} {
+	# 24-point sans serves as a reasonable mobile default — close to
+	# the ~16-20sp Android material scale once Inferno's bitmap
+	# rendering is factored in.
+	bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.14.font >[2] /dev/null
+}
+
 # Warm trfs cache for the secstore overlay so logon and secstored can
 # find PAK/factotum files on second launch (trfs may not have read-ahead
 # the directory contents yet when the overlay bind was set up in profile).

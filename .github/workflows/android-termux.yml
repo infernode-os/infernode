@@ -48,6 +48,12 @@ jobs:
           bash -lc '
             set -euo pipefail
 
+            # bash -lc does not always source the Termux profile that
+            # sets PATH to include $PREFIX/bin (depends on termux-docker
+            # version + image entrypoint). Set it explicitly so pkg and
+            # apt-get are reachable.
+            export PATH="/data/data/com.termux/files/usr/bin:$PATH"
+
             echo "::group::Termux sanity"
             uname -a
             uname -o
@@ -55,19 +61,19 @@ jobs:
             echo "PATH=$PATH"
             command -v clang || true
             command -v sh || true
+            command -v apt-get || true
             echo "::endgroup::"
 
             echo "::group::Install build prerequisites"
-            # `pkg update -y` refreshes index. `pkg upgrade -y` then drags
-            # already-installed bootstrap packages forward, which avoids
-            # transient `ncurses-ui-libs : Depends: ncurses (= old) but
-            # (new) is to be installed` mid-upgrade failures from Termux's
-            # mirror catching itself between point releases.
-            # `--no-install-recommends` keeps soft deps (like ncurses-ui-libs
-            # via clang) out of the install set — we don't need them and
-            # they're the primary source of the version-skew aborts.
-            pkg update -y
-            pkg upgrade -y || true
+            # Skip pkg entirely — it is a Termux wrapper that has been
+            # observed to disappear mid-upgrade (its own package gets
+            # replaced by termux-tools and the new symlink is not yet
+            # in place). apt-get is the underlying tool, lives next to
+            # pkg in $PREFIX/bin/, and is stable. --no-install-recommends
+            # keeps soft deps (ncurses-ui-libs etc.) out of the install
+            # set; those are the primary source of the historical
+            # version-skew failures.
+            apt-get update -y
             apt-get install -y --no-install-recommends \
               clang make binutils pkg-config which perl git byacc
             echo "::endgroup::"

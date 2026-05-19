@@ -14,10 +14,30 @@
 # Desktop boot ($emuhost == Linux / MacOSX / Nt) skips this block —
 # 14pt is fine at 96dpi.
 if {~ $emuhost Android} {
-	# 24-point sans serves as a reasonable mobile default — close to
-	# the ~16-20sp Android material scale once Inferno's bitmap
-	# rendering is factored in.
+	# Two families to consider:
+	#   unicode.14.font          — proportional sans-mono, used by wm/shell,
+	#                              wm/editor, acme, xenith, charon, lucifer,
+	#                              lucipres (anything with code/terminal
+	#                              alignment). On mobile the alignment matters
+	#                              less than legibility — bind sans.24 over
+	#                              it. Trade-off: code columns won't align
+	#                              under proportional rendering. Acceptable
+	#                              for phone use; revisit when we generate
+	#                              real larger mono glyphs from DejaVuSansMono.
+	#   unicode.sans.* family    — proportional sans, used by wm/logon body
+	#                              text, smallfont, Lucifer chat, Veltro
+	#                              chrome. These respond cleanly to scale.
+	#
+	# Floor is sans.18 (small UI labels). Body text and anything previously
+	# 14pt or 18pt goes to sans.24. Bold tier scales the same.
 	bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.14.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.bold.18.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
 }
 
 # Warm trfs cache for the secstore overlay so logon and secstored can

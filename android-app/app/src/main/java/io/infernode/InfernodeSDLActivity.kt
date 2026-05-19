@@ -81,7 +81,11 @@ class InfernodeSDLActivity : SDLActivity() {
             "-pimage=1024m",
             "-r", infernoRoot.absolutePath,
             "sh",
-            "-l", "/lib/lucifer/boot.sh",
+            // boot-mobile.sh applies mobile-only setup (bigger fonts,
+            // future hit-target tuning, swipe-nav hooks) and then
+            // sources the regular boot.sh. Keeps desktop boot.sh
+            // untouched. INFR-113.
+            "-l", "/lib/lucifer/boot-mobile.sh",
         )
     }
 

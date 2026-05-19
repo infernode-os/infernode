@@ -1,0 +1,54 @@
+# Mobile boot wrapper — Phase 2b.2 (INFR-113).
+#
+# Invoked as: sh -l /lib/lucifer/boot-mobile.sh
+# (from android-app/.../InfernodeSDLActivity.kt getArguments())
+#
+# Does mobile-specific setup that should NOT run on desktop, then
+# hands off to the regular boot.sh. Keeping mobile concerns in a
+# separate file means desktop boot is unchanged byte-for-byte —
+# no risk of regressing desktop boot timings or behaviour from
+# Android-only patches.
+#
+# Why not gate the mobile setup inside boot.sh on $emuhost? Because
+# changing emu/Android/os.c's hosttype to "Android" broke critical
+# profile blocks gated on `$emuhost MacOSX Linux Nt` (trfs /n/local,
+# $infhome, secstore overlay binds). hosttype stays "Linux"; the
+# Android-specific behaviour selector is *which boot script* the
+# Activity invokes.
+
+# Bigger fonts for phone screens.
+#
+# Lucifer and most UI elements (wm/shell, wm/editor, acme, xenith,
+# charon, lucipres, wm/logon) open fonts from /fonts/combined/. On a
+# ~388 dpi phone screen the default 10–14 pt sizes are microscopic
+# and tap targets sized to them are unhittable. Bind larger glyphs
+# over the small-tier paths at the file level so every consumer
+# picks up the bigger sizes without code changes.
+#
+# Two families:
+#   unicode.14.font          — proportional sans-mono, used by
+#                              wm/shell, wm/editor, acme, xenith,
+#                              charon, lucifer, lucipres (anything
+#                              with code/terminal alignment). On
+#                              mobile we sacrifice column alignment
+#                              for legibility — bind sans.24 over
+#                              it. Revisit when we generate real
+#                              larger mono glyphs from DejaVuSansMono.
+#   unicode.sans.* family    — proportional sans, used by wm/logon
+#                              body text, smallfont, Lucifer chrome,
+#                              Veltro UI. Responds cleanly to scale.
+#
+# Floor is sans.18 (small UI labels). 14 and 18 jump to 24. Bold
+# tier scales the same.
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.18.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
+
+# Hand off to the canonical boot sequence. Using `run` (rather than
+# `exec` or sourcing) keeps the binds in scope for boot.sh's children.
+. /lib/lucifer/boot.sh

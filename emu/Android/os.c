@@ -32,14 +32,14 @@ enum
 	NSTACKSPERALLOC = 16,
 	X11STACK=	256*1024
 };
-/* hosttype propagates to $emuhost so Inferno-side scripts can branch
- * on it (see /lib/lucifer/boot.sh — when $emuhost is "Android" we
- * bind larger fonts over the default 14-point references for the
- * phone screen). Distinguishing from desktop Linux is the whole
- * point of this string — leave it set to "Android" even though
- * Bionic shares a lot of surface with glibc.
- */
-char *hosttype = "Android";
+/* Keep hosttype = "Linux" because lib/sh/profile branches on
+ * $emuhost MacOSX Linux Nt to do critical setup ($infhome, trfs
+ * '/n/local', secstore overlay, LLM init). Changing to "Android"
+ * skipped all of those and slowed first-launch by 5+s while binds
+ * timed out. Android-specific behaviour goes in a separate boot
+ * wrapper (/lib/lucifer/boot-mobile.sh) selected by the Activity,
+ * not via $emuhost branching. */
+char *hosttype = "Linux";
 
 typedef sem_t	Sem;
 

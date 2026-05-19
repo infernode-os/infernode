@@ -45,10 +45,11 @@ CFLAGS=\
 
 KERNDATE=`{$NDATE}
 
-# Headless build — no X11, no SDL3, no audio backend yet (audio-oss.c
-# stub from Phase 0 still compiles into a no-op on Bionic).
+# Headless build — no X11, no SDL3. AAudio backend (audio-aaudio.c)
+# replaces the Phase 0 no-op stub.
 SYSLIBS=\
 	-lm\
+	-laaudio\
 
 # Note: no -lpthread on Android. Bionic merges pthread into libc.
 

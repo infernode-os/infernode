@@ -16,31 +16,31 @@ import java.io.FileOutputStream
 import kotlin.concurrent.thread
 
 /**
- * Phase 1c v1 Activity — a text-only console placeholder.
+ * Phase 1d Activity (INFR-111). The Phase 1c scaffold deferred
+ * `emu_run()` invocation behind an opt-in button because the call
+ * SIGKILLed the process. Phase 1d makes the button actually work:
  *
- * The shape of the UI here is intentionally minimal: this is the
- * "prove the build path end-to-end" milestone, not the design
- * milestone. Once everything links, a Compose-based real UI replaces
- * the TextView.
+ *   1. jni-emu.c spawns a detached pthread for emu_run, so the
+ *      JVM-attached JNI thread returns immediately and emu's
+ *      eventual pthread_exit lands on a thread the JVM doesn't track.
  *
- * Lifecycle:
- *   onCreate -> extract /dis/ assets to filesDir/inferno-root/
- *             -> request RECORD_AUDIO
- *             -> wait for user tap on the "boot" button before
- *                spawning emu-boot (see DEFERRED_EMU_BOOT below)
+ *   2. The argv below includes `-s` ("no trap handling") which tells
+ *      emu to skip installing SIGILL/SIGFPE/SIGBUS/SIGSEGV handlers.
+ *      Without this flag emu overwrites the JVM's signal handlers in
+ *      libinit, and the first JVM-internal SIGSEGV (used for null-
+ *      pointer-exception, GC barriers, etc.) routes to emu's
+ *      trapmemref, which panics from a non-Inferno-Proc context and
+ *      kills the process. -s is the correct Phase 1d flag; the
+ *      Phase 2+ work is a proper chained-handler scheme so emu can
+ *      catch Limbo runtime traps on Android without clobbering the
+ *      JVM.
  *
- * DEFERRED_EMU_BOOT — Phase 1c milestone is "the build path works":
- * APK assembled, libemu.so loaded, JNI entry callable. The actual
- * emu_run integration is Phase 1d, because emu's threading model
- * (libinit -> kproc(emuinit) -> for(;;) ospause(); ospause() does
- * pthread_exit(0)) tears down the calling thread. On Android that
- * thread is a JVM-managed JNI thread; pthread_exit on it is UB and
- * the zygote reaps the process with SIGKILL within ~20ms. Fix
- * requires either a fork()-and-exec-from-asset-dir scheme or a
- * proper Posix main-loop-on-detached-pthread refactor in emu/port.
- * The button below makes the crash opt-in so the build artefact
- * survives the smoke test until that work lands. See INFR-NEW
- * (Phase 1d emu_run/JNI lifecycle).
+ *   3. stdio (fd1/fd2) is captured in JNI_OnLoad and routed to
+ *      logcat under the "InferNode" tag so emu's print() output
+ *      surfaces in the device log instead of /dev/null.
+ *
+ * The Activity itself is unchanged in shape — single console TextView
+ * and a boot button. Replacing it with a Compose chat UI is Phase 2.
  */
 class InfernodeActivity : Activity() {
 
@@ -54,13 +54,13 @@ class InfernodeActivity : Activity() {
             orientation = LinearLayout.VERTICAL
         }
         consoleView = TextView(this).apply {
-            text = "InferNode APK v0.1.0-phase1c\n" +
-                "libemu.so loaded.\n" +
-                "Tap to attempt emu_run() — known to SIGKILL the process " +
-                "until the Phase 1d threading refactor lands.\n"
+            text = "InferNode APK v0.1.0-phase1d\n" +
+                "libemu.so loaded; tap below to boot Inferno. " +
+                "emu output appears in logcat under tag \"InferNode\" " +
+                "(adb logcat -s InferNode:*).\n"
         }
         bootButton = Button(this).apply {
-            text = "Boot Inferno (Phase 1d preview)"
+            text = "Boot Inferno"
             setOnClickListener {
                 isEnabled = false
                 post("Booting...\n")
@@ -89,10 +89,27 @@ class InfernodeActivity : Activity() {
         val infernoRoot = File(filesDir, "inferno-root").apply { mkdirs() }
         extractAssetsIfNeeded(infernoRoot)
         post("Inferno root: ${infernoRoot.absolutePath}\n")
+
+        // -s: skip emu's trap-handler installation. Required on Android
+        // so libinit doesn't overwrite the JVM's SIGSEGV/SIGBUS/SIGILL/
+        // SIGFPE handlers. See INFR-111 / class doc for the rationale.
+        //
+        // -c1: JIT compile (the A55 is arm64 and the ARM64 JIT works).
+        // -r:  set Inferno root to filesDir/inferno-root, where
+        //      extractAssetsIfNeeded unpacked the dis/ + lib/ + module/
+        //      trees from the APK assets.
+        // /dis/sh.dis: boot the Inferno shell. It will EOF on stdin
+        //      almost immediately (Android JNI stdin is /dev/null) and
+        //      idle in the kproc loop — the process stays alive but no
+        //      further commands run until a real stdin pipe is wired
+        //      up (Phase 2 work).
         val exit = Emu.run(
-            arrayOf("-c1", "-r", infernoRoot.absolutePath, "/dis/sh.dis")
+            arrayOf("-s", "-c1", "-r", infernoRoot.absolutePath, "/dis/sh.dis")
         )
-        post("emu exited with status $exit\n")
+        // emu_run returns immediately in Phase 1d (the JNI bridge
+        // spawns a detached pthread). A non-zero return here means the
+        // bridge refused to launch, not that emu itself exited.
+        post("emu launched (jni rc=$exit)\nWatch logcat for boot output.\n")
     }
 
     /**

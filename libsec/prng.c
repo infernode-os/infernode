@@ -15,7 +15,12 @@
  * 23, and Bionic's wrapper has been exported since 28), so it is safe
  * to re-declare here. No effect on non-Bionic platforms.
  */
-extern int getrandom(void *buf, size_t buflen, unsigned int flags);
+/* Match Bionic's actual signature (ssize_t return) so this extern is
+ * identical to the one in <sys/random.h> when __ANDROID_API__ >= 28
+ * (no redeclaration conflict), and still satisfies the call site below
+ * when the header guard hides the libc declaration on older API
+ * targets. */
+extern ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 #endif
 #elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN

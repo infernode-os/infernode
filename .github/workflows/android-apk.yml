@@ -45,6 +45,13 @@ jobs:
         sudo apt-get install -y build-essential
 
     - name: Bootstrap host mk
+      env:
+        # makemk.sh defaults SYSTARG=MacOSX (the upstream Inferno
+        # development host historically). Override for the Linux
+        # runner — without this, lib9.h pulls in <machine/endian.h>
+        # which doesn't exist on glibc.
+        SYSTARG: Linux
+        OBJTYPE: amd64
       run: |
         chmod +x makemk.sh
         ./makemk.sh

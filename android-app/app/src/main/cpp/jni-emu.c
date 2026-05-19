@@ -217,3 +217,31 @@ JNI_OnLoad(JavaVM *vm, void *reserved)
 		"libemu.so JNI_OnLoad — stdio routed to logcat");
 	return JNI_VERSION_1_6;
 }
+
+#ifdef GUI_SDL3
+/*
+ * SDL_main — entry point invoked by SDL3 on the SDL thread, after
+ * SDLActivity has set up the surface, audio devices, and IME plumbing.
+ *
+ * Phase 2b.1 wiring: when InfernodeSDLActivity launches, SDL3's Java
+ * layer loads libSDL3.so + libemu.so, creates the SurfaceView, and
+ * resolves this symbol via dlsym(libemu.so, "SDL_main"). The argv it
+ * passes comes from InfernodeSDLActivity.getArguments() — the same
+ * shape as the headless boot, minus argv[0].
+ *
+ * We just hand control to emu_run. Unlike the JNI path
+ * (Java_io_infernode_Emu_run), there is no separate worker pthread
+ * here — SDL3 owns this thread and expects SDL_main to either return
+ * (clean shutdown) or block forever (typical for emulators). emu's
+ * `for(;;) ospause();` is the latter; the thread becomes the emu
+ * main kproc, which is fine because no JVM-thread invariants apply
+ * (this thread was created by SDL3, not the JVM).
+ */
+int
+SDL_main(int argc, char *argv[])
+{
+	__android_log_print(ANDROID_LOG_INFO, TAG,
+		"SDL_main starting (argc=%d)", argc);
+	return emu_run(argc, argv);
+}
+#endif

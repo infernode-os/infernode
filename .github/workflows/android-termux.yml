@@ -88,8 +88,17 @@ jobs:
             test -x emu/Linux/o.emu     || { echo "::error::o.emu was not built"; exit 1; }
             test -x Linux/arm64/bin/mk  || { echo "::error::mk was not built";    exit 1; }
             test -x Linux/arm64/bin/limbo || { echo "::error::limbo was not built"; exit 1; }
-            file emu/Linux/o.emu
-            file emu/Linux/o.emu | grep -q "aarch64\|arm64" || { echo "::error::o.emu is not aarch64"; exit 1; }
+            # ELF magic check (`file` is not in termux-docker base bootstrap).
+            # Bytes 0-3 of any ELF are 0x7f 0x45 0x4c 0x46; byte 18 is the
+            # machine type (0xb7 = EM_AARCH64). Termux has no /tmp, so keep
+            # the hex blob in shell-state instead of an external temp file.
+            elfhex=$(head -c 19 emu/Linux/o.emu | od -An -tx1 | tr -d " \n" || true)
+            case "$elfhex" in
+              7f454c46*b7) ;;
+              7f454c46*)   echo "::error::o.emu is not aarch64 (machine byte: ${elfhex##*7f454c46})"; exit 1 ;;
+              *)           echo "::error::o.emu is not an ELF file (header: $elfhex)"; exit 1 ;;
+            esac
+            ls -la emu/Linux/o.emu
             echo "::endgroup::"
 
             echo "::group::Phase 0 smoke (cat /dev/sysname, /dev/user, ls /dis | wc -l)"

@@ -168,7 +168,14 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 		pthread_attr_setstacksize(&attr, 512*1024);	/* could be a parameter */
 	else if(KSTACK > 0)
 		pthread_attr_setstacksize(&attr, (KSTACK < PTHREAD_STACK_MIN? PTHREAD_STACK_MIN: KSTACK)+1024);
+#ifndef __BIONIC__
+	/* Bionic does not implement pthread_attr_setinheritsched (the
+	 * inherit-sched attribute is unsupported; new threads inherit
+	 * scheduling from the creator by default, which is exactly what
+	 * PTHREAD_INHERIT_SCHED requests). Skip on Bionic — no behavioural
+	 * change, just removing a missing function reference. Phase 0. */
 	pthread_attr_setinheritsched(&attr, PTHREAD_INHERIT_SCHED);
+#endif
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 	if(pthread_create(&thread, &attr, tramp, p))
 		panic("thr_create failed\n");

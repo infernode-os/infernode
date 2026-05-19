@@ -52,19 +52,36 @@ class InfernodeSDLActivity : SDLActivity() {
     override fun getMainFunction(): String = "SDL_main"
 
     /**
-     * argv passed to SDL_main. The same shape the headless Activity
-     * uses for emu_run, with the addition of /dis/wm/wm.dis as the
-     * boot target — once 2b.2 wires draw-sdl3 to the Android surface,
-     * Lucifer will appear here. Until then SDL_main still calls emu
-     * with these args, but rendering is a no-op pending 2b.2.
+     * argv passed to SDL_main. Mirrors the canonical macOS/Linux
+     * developer-launch shape from CLAUDE.md:
+     *
+     *   emu -c1 -pheap=... -r$ROOT sh -l /lib/lucifer/boot.sh
+     *
+     * `sh -l /lib/lucifer/boot.sh` is what actually brings Lucifer up:
+     * sh runs as a login shell so /lib/sh/profile fires (sets up /n,
+     * mntgen, secstore binds, etc.), then boot.sh executes wm/logon
+     * which puts the login screen + window manager on screen.
+     *
+     * Trying to invoke /dis/wm/wm.dis directly skips both stages and
+     * dies with "mount /mnt/wm: '/mnt' file does not exist" — Phase
+     * 2b.1's first integration on the A55 showed exactly this.
+     *
+     * Pool sizes: the macOS launch passes -pheap/-pmain/-pimage=1024m
+     * each. Inferno's default pools are stingy and Lucifer + Veltro +
+     * an LLM client outgrow them. Match the desktop launch numbers
+     * here; the A55 has 8 GB and we're a single foreground app.
      */
     override fun getArguments(): Array<String> {
         val infernoRoot = File(filesDir, "inferno-root")
         return arrayOf(
             "-s",
             "-c1",
+            "-pheap=1024m",
+            "-pmain=1024m",
+            "-pimage=1024m",
             "-r", infernoRoot.absolutePath,
-            "/dis/wm/wm.dis",
+            "sh",
+            "-l", "/lib/lucifer/boot.sh",
         )
     }
 

@@ -47,6 +47,35 @@
             </intent-filter>
         </activity>
 
+        <!--
+          Phase 2b.1 (INFR-110) — SDL3-hosted Activity for the Lucifer/wm
+          port. Lives alongside the headless InfernodeActivity, so the
+          user can pick "InferNode" (the Phase 2a interactive shell) or
+          "InferNode (Lucifer)" (this) from the launcher. Once Lucifer is
+          mature enough to be the default surface, the headless icon
+          can drop its LAUNCHER intent.
+
+          Attributes copied from SDL3's android-project AndroidManifest:
+            launchMode=singleInstance — SDL3 expects one instance.
+            configChanges= — SDL3 handles these internally; without
+              this, every rotate / IME open destroys + recreates the
+              Activity and the SDL window goes with it.
+        -->
+        <activity
+            android:name=".InfernodeSDLActivity"
+            android:label="InferNode (Lucifer)"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="emu" />
+        </activity>
+
         <service
             android:name=".InfernodeService"
             android:foregroundServiceType="dataSync"

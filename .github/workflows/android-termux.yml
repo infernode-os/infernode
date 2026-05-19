@@ -48,6 +48,12 @@ jobs:
           bash -lc '
             set -euo pipefail
 
+            # bash -lc does not always source the Termux profile that
+            # sets PATH to include $PREFIX/bin (depends on termux-docker
+            # version + image entrypoint). Set it explicitly so pkg and
+            # apt-get are reachable.
+            export PATH="/data/data/com.termux/files/usr/bin:$PATH"
+
             echo "::group::Termux sanity"
             uname -a
             uname -o
@@ -55,11 +61,21 @@ jobs:
             echo "PATH=$PATH"
             command -v clang || true
             command -v sh || true
+            command -v apt-get || true
             echo "::endgroup::"
 
             echo "::group::Install build prerequisites"
-            pkg update -y
-            pkg install -y clang make binutils pkg-config which perl git byacc
+            # Skip pkg entirely — it is a Termux wrapper that has been
+            # observed to disappear mid-upgrade (its own package gets
+            # replaced by termux-tools and the new symlink is not yet
+            # in place). apt-get is the underlying tool, lives next to
+            # pkg in $PREFIX/bin/, and is stable. --no-install-recommends
+            # keeps soft deps (ncurses-ui-libs etc.) out of the install
+            # set; those are the primary source of the historical
+            # version-skew failures.
+            apt-get update -y
+            apt-get install -y --no-install-recommends \
+              clang make binutils pkg-config which perl git byacc
             echo "::endgroup::"
 
             echo "::group::Enable termux-exec LD_PRELOAD"

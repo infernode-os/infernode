@@ -58,8 +58,18 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Install build prerequisites"
+            # `pkg update -y` refreshes index. `pkg upgrade -y` then drags
+            # already-installed bootstrap packages forward, which avoids
+            # transient `ncurses-ui-libs : Depends: ncurses (= old) but
+            # (new) is to be installed` mid-upgrade failures from Termux's
+            # mirror catching itself between point releases.
+            # `--no-install-recommends` keeps soft deps (like ncurses-ui-libs
+            # via clang) out of the install set — we don't need them and
+            # they're the primary source of the version-skew aborts.
             pkg update -y
-            pkg install -y clang make binutils pkg-config which perl git byacc
+            pkg upgrade -y || true
+            apt-get install -y --no-install-recommends \
+              clang make binutils pkg-config which perl git byacc
             echo "::endgroup::"
 
             echo "::group::Enable termux-exec LD_PRELOAD"

@@ -3,6 +3,20 @@
 #include <libsec.h>
 #if defined(__linux__)
 #include <sys/random.h>
+#if defined(__BIONIC__)
+/*
+ * Bionic's <sys/random.h> hides the getrandom() declaration behind
+ * __ANDROID_API__ >= 28. Termux's clang may target a lower minSdk
+ * (16/24/etc.) even on a current device, so the prototype stays
+ * invisible and -Werror=implicit-function-declaration kills the build.
+ *
+ * The symbol is in libc.so on every Android Termux supports
+ * (the Linux getrandom syscall has been around since Android 6 / API
+ * 23, and Bionic's wrapper has been exported since 28), so it is safe
+ * to re-declare here. No effect on non-Bionic platforms.
+ */
+extern int getrandom(void *buf, size_t buflen, unsigned int flags);
+#endif
 #elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

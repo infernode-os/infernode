@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  InferNode hellaphone manifest (Phase 1c).
+
+  RECORD_AUDIO is required for AAudio capture (the Phase 1b backend).
+  Granted at runtime via Activity.requestPermissions before the audio
+  loop opens /dev/audio.
+
+  INTERNET is for the LLM-as-9P-service use case (llmsrv.dis hits
+  Anthropic / OpenAI / a self-hosted endpoint).
+
+  FOREGROUND_SERVICE_DATA_SYNC is needed so the 9P daemon Service can
+  run with a sticky notification on Android 14+. The `dataSync` type
+  matches the export-9P-to-LAN use case; revisit if we add
+  `mediaPlayback` for the voice-loop.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+
+        <activity
+            android:name=".InfernodeActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".InfernodeService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+    </application>
+
+</manifest>

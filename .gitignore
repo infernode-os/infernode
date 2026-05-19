@@ -235,3 +235,12 @@ dis/mermaid_test.dis
 
 # Runtime overlay root — populated by emu at boot, never tracked
 n/local/
+
+# Phase 1c (INFR-110) APK build artefacts. The Inferno-side mkfile
+# chain stages these into the Android-app tree at build time; they
+# are produced fresh by ./build-android-apk.sh on every invocation.
+android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
+android-app/app/src/main/assets/inferno-root/
+emu/Android/libemu.so
+emu/Android/o.emu
+build-android-apk.ndk.log

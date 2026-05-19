@@ -1,0 +1,123 @@
+name: Android (APK staging)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Phase 1c (INFR-110) — cross-build libs + libemu.so + stage runtime
+  # assets into android-app/, the inputs to `./gradlew assembleDebug`.
+  #
+  # This gate verifies:
+  #   * the NDK toolchain still cross-compiles cleanly
+  #   * libemu.so links and exports the JNI entry point
+  #   * the runtime tree (dis/ + lib/ + module/) stages into the APK
+  #     assets dir.
+  #
+  # The Gradle assemble step that turns the staged tree into an
+  # installable APK is intentionally left out of this job for now —
+  # it needs JDK + Android SDK + Gradle wrapper bootstrap, ~5+ min
+  # additional CI time. Adding it is tracked in INFR-110.
+  # ─────────────────────────────────────────────
+  android-apk-staging:
+    name: Cross-build + libemu.so + asset staging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Install host build prerequisites
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Bootstrap host mk
+      env:
+        # makemk.sh defaults SYSTARG=MacOSX (the upstream Inferno
+        # development host historically). Override for the Linux
+        # runner — without this, lib9.h pulls in <machine/endian.h>
+        # which doesn't exist on glibc.
+        SYSTARG: Linux
+        OBJTYPE: amd64
+      run: |
+        chmod +x makemk.sh
+        ./makemk.sh
+
+    - name: Build host limbo (and the rest of Linux amd64)
+      run: |
+        chmod +x build-linux-amd64.sh
+        ./build-linux-amd64.sh
+
+    - name: Cache Android NDK r29
+      id: cache-ndk
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+      with:
+        path: ~/Android/Sdk/ndk/android-ndk-r29
+        key: ndk-r29-linux-x86_64
+
+    - name: Download Android NDK r29
+      if: steps.cache-ndk.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ~/Android/Sdk/ndk
+        cd ~/Android/Sdk/ndk
+        curl -fL --proto '=https' --tlsv1.2 -o ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+        unzip -q ndk.zip
+        rm ndk.zip
+
+    - name: Stage APK artefacts (libemu.so + dis/ assets)
+      run: |
+        export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/android-ndk-r29
+        ./build-android-apk.sh --skip-gradle
+
+    - name: Verify libemu.so + JNI symbols
+      run: |
+        set -e
+        SO=android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
+        test -f "$SO" || { echo "::error::libemu.so missing"; exit 1; }
+        elfhex=$(head -c 19 "$SO" | od -An -tx1 | tr -d " \n")
+        case "$elfhex" in
+          7f454c46*b7) ;;
+          *) echo "::error::libemu.so is not aarch64 ELF (hex=$elfhex)"; exit 1 ;;
+        esac
+        NM=$HOME/Android/Sdk/ndk/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
+        for sym in Java_io_infernode_Emu_run emu_run; do
+          if ! "$NM" -D --defined-only "$SO" | grep -q " T $sym\$"; then
+            echo "::error::libemu.so missing exported symbol: $sym"
+            exit 1
+          fi
+        done
+        echo "libemu.so OK: aarch64, JNI + emu_run exported"
+
+    - name: Verify staged runtime tree
+      run: |
+        set -e
+        ASSETS=android-app/app/src/main/assets/inferno-root
+        for d in dis lib module; do
+          if [ ! -d "$ASSETS/$d" ]; then
+            echo "::error::$ASSETS/$d missing"
+            exit 1
+          fi
+        done
+        DIS_COUNT=$(find "$ASSETS/dis" -name '*.dis' | wc -l)
+        echo "dis/ files staged: $DIS_COUNT"
+        test "$DIS_COUNT" -gt 100 || { echo "::error::suspiciously few .dis files"; exit 1; }
+
+    - name: Upload libemu.so
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: libemu-arm64
+        path: android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
+        retention-days: 14

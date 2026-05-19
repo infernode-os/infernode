@@ -59,6 +59,27 @@ $O.$CONF:	$OBJ $CONF.c $CONF.root.h
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
 	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
 
+# Phase 1c (INFR-110) — shared library variant for the APK build.
+#
+# Same .o set as o.emu, plus the JNI wrapper that exposes
+# Java_io_infernode_Emu_run, linked -shared. android-app/.../build.gradle.kts
+# picks libemu.so up from src/main/jniLibs/arm64-v8a/; the
+# build-android-apk.sh driver copies it there before invoking Gradle.
+#
+# The JNI bridge source lives next to the Android-app project rather than
+# under emu/Android/ because conceptually it belongs to the APK layer,
+# not to the kernel target. The relative path keeps the mkfile honest
+# about that division.
+JNI_SRC=../../android-app/app/src/main/cpp/jni-emu.c
+
+jni-emu.$O: $JNI_SRC
+	$CC $CFLAGS '-DKERNDATE='$KERNDATE -o jni-emu.$O $JNI_SRC
+
+libemu.so: $OBJ $CONF.$O jni-emu.$O
+	$LD -shared $LDFLAGS -o $target $OBJ $CONF.$O jni-emu.$O $LIBFILES $SYSLIBS
+
+libemu:V: libemu.so
+
 install:V: $O.$CONF
 	mkdir -p $INSTALLDIR
 	cp $O.$CONF $INSTALLDIR/$CONF

@@ -214,11 +214,24 @@ ln -sfn /data/data/com.termux/files/home ./termux-home
 cat > ./serve9p.b <<'EOF'
 mkdir /n
 mkdir /n/host
+mkdir /n/sdcard
+mkdir /n/home
+
+# `#U` is the host-OS filesystem device, confined to the `-r` root.
+# First, mount the whole tree at /n/host so we can navigate into it.
 bind -ac '#U' /n/host
-# /n/host now shows everything under the -r root, including the
-# symlinks added above; /n/host/sdcard follows into Android's
-# shared storage subject to Termux's storage permission.
-listen -A 'tcp!*!17564' {exportfs -r /n/host} &
+
+# Then re-bind the interesting subtrees to their idiomatic /n/ paths.
+# The symlinks added above (./sdcard, ./termux-home) let us reach
+# host paths outside the -r sandbox.
+bind -ac /n/host/sdcard      /n/sdcard
+bind -ac /n/host/termux-home /n/home
+
+# /n/sdcard now serves Android's shared storage (subject to Termux's
+# storage permission). /n/home serves your Termux $HOME. /n/host
+# stays available for the whole -r tree if you want it.
+
+listen -A 'tcp!*!17564' {exportfs -r /} &
 # Keep the kernel alive — `listen` is in the background, and
 # without something blocking in the foreground the shell would
 # exit and emu with it.
@@ -234,9 +247,21 @@ echo "daemon pid: $!  (logs in $PWD/emu-daemon.log)"
 ```
 
 The daemon now listens on TCP port 17564 and serves a 9P/Styx export
-of `/n/host` — which is rooted at `~/infernode/` and includes
-`./sdcard` (via the symlink) and anything else you drop in or symlink
-in.
+of the entire Inferno namespace. The interesting subtrees, in the
+order you'll usually want them:
+
+| Inferno path | Backing |
+|---|---|
+| `/n/sdcard` | Android shared storage (`/sdcard`, the symlink target) |
+| `/n/home`   | Your Termux `$HOME` (`/data/data/com.termux/files/home`) |
+| `/n/host`   | The whole `-r` root (`~/infernode/`); includes both of the above plus the build tree |
+| `/dis`, `/appl`, `/dev`, … | Inferno's own namespace |
+
+Add more subtrees by symlinking into the `-r` root and adding the
+matching `bind` line in `serve9p.b`. Why a re-bind rather than a
+direct `bind '#U/sdcard' /n/sdcard`? — this build's `#U` does not
+accept a subpath in the attach spec; the rebind-from-`/n/host` form
+is the portable pattern.
 
 Stop it with `pkill -x o.emu`.
 

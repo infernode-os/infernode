@@ -49,6 +49,9 @@ bind /fonts/combined/unicode.sans.bold.18.font /fonts/combined/unicode.sans.bold
 bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
 bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
 
-# Hand off to the canonical boot sequence. Using `run` (rather than
-# `exec` or sourcing) keeps the binds in scope for boot.sh's children.
-. /lib/lucifer/boot.sh
+# Hand off to the canonical boot sequence. `run` is Inferno sh's
+# source-include builtin (sh-std(1)); `. file` is NOT the same as
+# in POSIX sh — there `.` is a command name and resolves to ./..dis,
+# which silently failed and left the user staring at a blank screen
+# for 30+ seconds while boot stalled.
+run /lib/lucifer/boot.sh

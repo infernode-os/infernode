@@ -46,10 +46,16 @@ CFLAGS=\
 KERNDATE=`{$NDATE}
 
 # Headless build — no X11, no SDL3. AAudio backend (audio-aaudio.c)
-# replaces the Phase 0 no-op stub.
+# replaces the Phase 0 no-op stub. -llog is the Android system log
+# library, used by jni-emu.c (Phase 1d, INFR-111) to surface emu's
+# stdio output to logcat. liblog.so is always present on every
+# Android device, so the dep is free; o.emu links against it too but
+# doesn't call it — at most a few unresolved-relocation table bytes
+# in the standalone executable.
 SYSLIBS=\
 	-lm\
 	-laaudio\
+	-llog\
 
 # Note: no -lpthread on Android. Bionic merges pthread into libc.
 

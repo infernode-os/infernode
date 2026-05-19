@@ -3,6 +3,7 @@
 #include	<termios.h>
 #include	<signal.h>
 #include 	<pwd.h>
+#include	<pthread.h>  /* cleanexit calls pthread_exit on Android (INFR-111) */
 #include	<sched.h>
 #include	<sys/resource.h>
 #include	<sys/wait.h>
@@ -135,7 +136,10 @@ cleanexit(int x)
 {
 	USED(x);
 
-	if(up->intwait) {
+	/* up can be nil if cleanexit is called from a signal handler
+	 * before any kproc has been bound to a thread. The original
+	 * code dereferenced it unconditionally. */
+	if(up != nil && up->intwait) {
 		up->intwait = 0;
 		return;
 	}
@@ -143,8 +147,22 @@ cleanexit(int x)
 	if(dflag == 0)
 		termrestore();
 
+	/* On the standalone o.emu binary, kill(0, SIGKILL) followed by
+	 * exit(0) is the documented Plan 9 "everyone in this process
+	 * group goes away now" gesture — it tears down all the kproc
+	 * pthreads at once. Inside an APK, libemu.so shares its process
+	 * (and process group) with the Activity's JVM; kill(0, SIGKILL)
+	 * takes the whole Activity down, which is exactly the SIGKILL
+	 * we saw in INFR-111 when the shell EOFed on stdin and routed
+	 * here via Limbo exits(). On Android, just let this thread die;
+	 * the other emu kprocs (and the JVM) keep running. emuinit() is
+	 * already sitting in `for(;;) ospause();` and will continue. */
+#ifdef ANDROID_ARM64
+	pthread_exit(0);
+#else
 	kill(0, SIGKILL);
 	exit(0);
+#endif
 }
 
 void

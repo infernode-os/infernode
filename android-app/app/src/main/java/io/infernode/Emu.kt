@@ -3,25 +3,30 @@ package io.infernode
 /**
  * JNI bridge to the InferNode emulator (libemu.so).
  *
- * The C side lives in android-app/app/src/main/cpp/jni-emu.c and is
- * itself a thin wrapper over emu's `emu_run()` entry — the same path
- * used by the existing `main()` for the `adb shell /data/local/tmp/o.emu`
- * use case. JNI does no work other than translating argv between
- * Java and C.
+ * The C side lives in android-app/app/src/main/cpp/jni-emu.c.
  *
- * The library name `emu` resolves to `libemu.so`, which is produced by
- * `build-android-apk.sh` (a Phase 1c follow-up driver) from the same
- * Inferno mkfile chain that produces the standalone o.emu binary in
- * Phase 1a/1b.
+ * Threading: `run` is fire-and-forget. The native side spawns its
+ * own pthread for emu and returns to Java immediately. `writeStdin`
+ * is safe to call from any thread; the C side writes are atomic for
+ * pipe-buffer-sized writes (PIPE_BUF, typically 4 KiB).
  *
- * Threading: `run` blocks for the lifetime of the emulator. Call it
- * from a dedicated background thread (typically inside a
- * [InfernodeService]); the caller is responsible for not invoking it
- * twice in the same process — the emulator was historically not
- * designed for multiple instantiations and refactoring that out is
- * tracked separately.
+ * Single-instance: emu can only boot once per process. A second
+ * `run` returns -1.
  */
 object Emu {
+
+    /**
+     * Output sink for emu's stdout/stderr. The native reader thread
+     * calls [onLine] once per newline-terminated chunk it sees. Use
+     * [setOutputListener] to register / clear.
+     *
+     * Implementations should be cheap and non-blocking — they run on
+     * a JNI-attached pthread, not the Android UI thread. Marshal to
+     * the UI via `Activity.runOnUiThread` or a `Handler`.
+     */
+    interface OutputListener {
+        fun onLine(line: String)
+    }
 
     init {
         System.loadLibrary("emu")
@@ -30,14 +35,24 @@ object Emu {
     /**
      * Boot the emulator with the given argv. Mirrors `main(int argc, char **argv)`.
      *
-     * Typical args:
-     *   ["-c1", "-r", root, "/dis/sh.dis"]            # interactive shell
-     *   ["-c1", "-r", root, "/dis/sh.dis", "/serve9p.b"]  # 9P daemon
-     *
-     * @param argv the argument vector, *without* the leading program name
-     *             (the C side prepends "emu" itself).
-     * @return the emulator's exit code.
+     * Returns 0 on successful launch (emu is now running on its own
+     * pthread), -1 if a previous Emu.run already claimed the slot.
      */
     @JvmStatic
     external fun run(argv: Array<String>): Int
+
+    /**
+     * Write bytes to emu's stdin. Caller appends `\n` for line input.
+     * Returns the number of bytes written, or -1 on error.
+     */
+    @JvmStatic
+    external fun writeStdin(data: String): Int
+
+    /**
+     * Register an output sink. Pass `null` to clear. The native side
+     * holds a JNI global ref to the listener; the previous listener
+     * is released. Only one listener at a time.
+     */
+    @JvmStatic
+    external fun setOutputListener(listener: OutputListener?)
 }

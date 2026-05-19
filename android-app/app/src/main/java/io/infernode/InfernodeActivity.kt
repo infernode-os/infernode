@@ -5,9 +5,13 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.os.Bundle
-import android.util.Log
+import android.text.method.ScrollingMovementMethod
+import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -16,67 +20,145 @@ import java.io.FileOutputStream
 import kotlin.concurrent.thread
 
 /**
- * Phase 1d Activity (INFR-111). The Phase 1c scaffold deferred
- * `emu_run()` invocation behind an opt-in button because the call
- * SIGKILLed the process. Phase 1d makes the button actually work:
+ * Phase 2a Activity — interactive Inferno shell inside the APK.
  *
- *   1. jni-emu.c spawns a detached pthread for emu_run, so the
- *      JVM-attached JNI thread returns immediately and emu's
- *      eventual pthread_exit lands on a thread the JVM doesn't track.
+ * Previous phases (1c branding, 1d threading) proved emu boots inside
+ * libemu.so without taking the JVM down with it. This phase wires the
+ * I/O the other direction: a stdin pipe so the user can type commands,
+ * and an output listener so emu's stdout shows up in the Activity
+ * (not just `adb logcat`).
  *
- *   2. The argv below includes `-s` ("no trap handling") which tells
- *      emu to skip installing SIGILL/SIGFPE/SIGBUS/SIGSEGV handlers.
- *      Without this flag emu overwrites the JVM's signal handlers in
- *      libinit, and the first JVM-internal SIGSEGV (used for null-
- *      pointer-exception, GC barriers, etc.) routes to emu's
- *      trapmemref, which panics from a non-Inferno-Proc context and
- *      kills the process. -s is the correct Phase 1d flag; the
- *      Phase 2+ work is a proper chained-handler scheme so emu can
- *      catch Limbo runtime traps on Android without clobbering the
- *      JVM.
+ * Layout (top-to-bottom): scrolling output view, input row (EditText
+ * + Send button). The whole thing is a plain View hierarchy — Compose
+ * is Phase 2b. Keeping it minimal here so the integration concern
+ * (does the pipe wiring actually work end-to-end?) is testable
+ * independently of UI choice.
  *
- *   3. stdio (fd1/fd2) is captured in JNI_OnLoad and routed to
- *      logcat under the "InferNode" tag so emu's print() output
- *      surfaces in the device log instead of /dev/null.
- *
- * The Activity itself is unchanged in shape — single console TextView
- * and a boot button. Replacing it with a Compose chat UI is Phase 2.
+ * Boot is automatic on onCreate. The Phase 1c/1d boot button is
+ * gone — emu_run is safe now.
  */
-class InfernodeActivity : Activity() {
+class InfernodeActivity : Activity(), Emu.OutputListener {
 
-    private lateinit var consoleView: TextView
-    private lateinit var bootButton: Button
+    private lateinit var outputView: TextView
+    private lateinit var outputScroll: ScrollView
+    private lateinit var inputView: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(buildLayout())
+        ensureRecordAudioPermission()
 
-        val layout = LinearLayout(this).apply {
+        Emu.setOutputListener(this)
+        thread(name = "emu-boot") { bootInferno() }
+    }
+
+    override fun onDestroy() {
+        // Release the native global ref. emu itself keeps running in
+        // the background — the process stays alive even after the
+        // Activity goes away — but without a listener the output
+        // just goes to logcat until the Activity comes back.
+        Emu.setOutputListener(null)
+        super.onDestroy()
+    }
+
+    /**
+     * OutputListener.onLine runs on a JNI-attached pthread, not the
+     * UI thread. Marshal to the UI thread before touching views.
+     */
+    override fun onLine(line: String) {
+        runOnUiThread {
+            outputView.append(line)
+            outputView.append("\n")
+            outputScroll.post { outputScroll.fullScroll(ScrollView.FOCUS_DOWN) }
+        }
+    }
+
+    private fun buildLayout(): LinearLayout {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(16, 16, 16, 16)
         }
-        consoleView = TextView(this).apply {
-            text = "InferNode APK v0.1.0-phase1d\n" +
-                "libemu.so loaded; tap below to boot Inferno. " +
-                "emu output appears in logcat under tag \"InferNode\" " +
-                "(adb logcat -s InferNode:*).\n"
+
+        outputView = TextView(this).apply {
+            text = "InferNode v0.1.0-phase2a\nBooting Inferno...\n"
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 13f
+            setTextIsSelectable(true)
+            movementMethod = ScrollingMovementMethod()
         }
-        bootButton = Button(this).apply {
-            text = "Boot Inferno"
-            setOnClickListener {
-                isEnabled = false
-                post("Booting...\n")
-                thread(name = "emu-boot") { bootInferno() }
+
+        outputScroll = ScrollView(this).apply {
+            addView(
+                outputView,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        root.addView(
+            outputScroll,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                /* weight = */ 1f
+            )
+        )
+
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        inputView = EditText(this).apply {
+            hint = "type a command, e.g. ls /dis"
+            typeface = android.graphics.Typeface.MONOSPACE
+            isSingleLine = true
+            setOnEditorActionListener { _, _, _ ->
+                sendCurrentInput()
+                true
             }
         }
-        layout.addView(consoleView)
-        layout.addView(bootButton)
-        setContentView(layout)
+        val sendButton = Button(this).apply {
+            text = "Send"
+            setOnClickListener { sendCurrentInput() }
+        }
+        inputRow.addView(
+            inputView,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        inputRow.addView(
+            sendButton,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+        root.addView(
+            inputRow,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
 
-        ensureRecordAudioPermission()
+        return root
+    }
+
+    private fun sendCurrentInput() {
+        val line = inputView.text.toString()
+        // Echo locally so the user sees what they typed (the Inferno
+        // shell on the other side of the pipe will reflect this back
+        // too if cons echo is on, but echoing here makes the UI feel
+        // responsive regardless of cons mode).
+        outputView.append("> $line\n")
+        Emu.writeStdin("$line\n")
+        inputView.text.clear()
     }
 
     private fun ensureRecordAudioPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
+            != PackageManager.PERMISSION_GRANTED
+        ) {
             ActivityCompat.requestPermissions(
                 this,
                 arrayOf(Manifest.permission.RECORD_AUDIO),
@@ -88,41 +170,28 @@ class InfernodeActivity : Activity() {
     private fun bootInferno() {
         val infernoRoot = File(filesDir, "inferno-root").apply { mkdirs() }
         extractAssetsIfNeeded(infernoRoot)
-        post("Inferno root: ${infernoRoot.absolutePath}\n")
 
-        // -s: skip emu's trap-handler installation. Required on Android
-        // so libinit doesn't overwrite the JVM's SIGSEGV/SIGBUS/SIGILL/
-        // SIGFPE handlers. See INFR-111 / class doc for the rationale.
-        //
-        // -c1: JIT compile (the A55 is arm64 and the ARM64 JIT works).
-        // -r:  set Inferno root to filesDir/inferno-root, where
-        //      extractAssetsIfNeeded unpacked the dis/ + lib/ + module/
-        //      trees from the APK assets.
-        // /dis/sh.dis: boot the Inferno shell. It will EOF on stdin
-        //      almost immediately (Android JNI stdin is /dev/null) and
-        //      idle in the kproc loop — the process stays alive but no
-        //      further commands run until a real stdin pipe is wired
-        //      up (Phase 2 work).
-        val exit = Emu.run(
+        // -s: skip emu trap-handler installs — they'd clobber the
+        //     JVM's signal handlers and crash the process (INFR-111).
+        // -c1: arm64 JIT.
+        // -r: Inferno root = extracted asset tree under filesDir.
+        // /dis/sh.dis: boot the Inferno shell. Now that stdin is a
+        //     real pipe (Phase 2a), the shell stays alive waiting
+        //     for input instead of EOFing.
+        val rc = Emu.run(
             arrayOf("-s", "-c1", "-r", infernoRoot.absolutePath, "/dis/sh.dis")
         )
-        // emu_run returns immediately in Phase 1d (the JNI bridge
-        // spawns a detached pthread). A non-zero return here means the
-        // bridge refused to launch, not that emu itself exited.
-        post("emu launched (jni rc=$exit)\nWatch logcat for boot output.\n")
+        if (rc != 0) {
+            runOnUiThread {
+                outputView.append("Emu.run failed (rc=$rc)\n")
+            }
+        }
     }
 
     /**
-     * Extract the Inferno runtime tree shipped as APK assets (`dis/`,
-     * `lib/`, `module/` under `assets/inferno-root/`) on first launch.
-     * Idempotent: skipped if the version marker file is present, so
-     * repeat starts are cheap.
-     *
-     * The version suffix on the marker (`.extracted-v1`) lets a future
-     * APK release force a re-extract just by bumping the suffix when
-     * the runtime tree changes. Bytecode is recompiled into the APK
-     * with each release; users who upgrade get the new runtime
-     * automatically.
+     * Extract /dis/, /lib/, /module/ from APK assets to filesDir on
+     * first launch. Idempotent: skipped if the version marker is
+     * present.
      */
     private fun extractAssetsIfNeeded(root: File) {
         val marker = File(root, ".extracted-v1")
@@ -131,36 +200,19 @@ class InfernodeActivity : Activity() {
         marker.createNewFile()
     }
 
-    /**
-     * Recursively copy `src` (an asset path, relative to the APK's
-     * assets/ root) into `dst` (a host directory). Preserves the
-     * directory tree; files become regular files under `dst`.
-     *
-     * `AssetManager.list(path)` returns an empty array for files, which
-     * is how we distinguish file-vs-dir nodes — there is no `isFile`
-     * predicate on the asset namespace.
-     */
     private fun copyAssetTree(am: AssetManager, src: String, dst: File) {
         val children = am.list(src) ?: emptyArray()
         if (children.isEmpty()) {
-            // Leaf: copy as a regular file.
             dst.parentFile?.mkdirs()
             am.open(src).use { input ->
                 FileOutputStream(dst).use { output -> input.copyTo(output) }
             }
             return
         }
-        // Directory: recurse into each child.
         dst.mkdirs()
         for (child in children) {
             val childSrc = if (src.isEmpty()) child else "$src/$child"
             copyAssetTree(am, childSrc, File(dst, child))
         }
-    }
-
-    private fun logTag(): String = "InferNode"
-
-    private fun post(text: String) {
-        runOnUiThread { consoleView.append(text) }
     }
 }

@@ -10,6 +10,35 @@ char 	*shellname =	"sh";
 
 extern char **environ;
 
+/*
+ * shellinit - honour MKSHELL env var for backquote substitution and
+ * recipe execution.
+ *
+ * mk's default shell is hardcoded to /bin/sh at compile time. That works
+ * on Plan 9, glibc Linux, macOS, and on Android handsets where /bin is a
+ * symlink to /system/bin. It does NOT work in pure-Termux environments
+ * such as termux-docker, where /bin/sh does not exist (Termux puts its
+ * sh under $PREFIX/bin/sh). When invoked there, the very first backquote
+ * substitution in mkconfig fails silently and SYSHOST/OBJTYPE end up
+ * empty, breaking every downstream lookup.
+ *
+ * MKSHELL is namespaced to mk on purpose: SHELL on glibc commonly points
+ * at bash, and using bash for mk recipes changes their semantics. Users
+ * who hit the /bin/sh-missing case can set MKSHELL explicitly without
+ * disturbing anything else. The Termux build driver sets it.
+ */
+void
+shellinit(void)
+{
+	char *s = getenv("MKSHELL");
+	if(s != nil && *s != '\0') {
+		char *p;
+		shell = s;
+		p = strrchr(s, '/');
+		shellname = p ? p + 1 : s;
+	}
+}
+
 void
 readenv(void)
 {

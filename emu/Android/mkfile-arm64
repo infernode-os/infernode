@@ -1,0 +1,3 @@
+# ARM64-specific files for Android. Same as the Linux variant: tas is
+# inlined in asm-arm64.S, no separate file needed.
+ARCHFILES=

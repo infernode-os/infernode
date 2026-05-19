@@ -62,6 +62,21 @@ jobs:
             pkg install -y clang make binutils pkg-config which perl git byacc
             echo "::endgroup::"
 
+            echo "::group::Enable termux-exec LD_PRELOAD"
+            # Termux normally sets termux-exec as LD_PRELOAD via its postinst,
+            # which intercepts exec*() calls and rewrites hardcoded /bin/sh,
+            # /usr/bin/sh, /system/bin/sh paths to $PREFIX/bin/sh. In termux-docker
+            # the postinst skips this because getprop is missing (no /system/bin
+            # bridge), so libc system(3) and any /bin/sh execve in mk, awk,
+            # popen-using tools, etc. fail with 127. Set LD_PRELOAD explicitly
+            # to make the environment behave like a real Termux. Without this,
+            # emu/port/mkroot (an awk script that uses system("test -d ...") and
+            # system(data2c ...)) exits 1 with no output.
+            export LD_PRELOAD="$PREFIX/lib/libtermux-exec-ld-preload.so"
+            echo "LD_PRELOAD=$LD_PRELOAD"
+            test -f "$LD_PRELOAD" || { echo "::error::termux-exec preload library missing"; exit 1; }
+            echo "::endgroup::"
+
             echo "::group::Phase 0 build (build-android-termux.sh headless)"
             # Invoke via sh so we don'\''t depend on the file having the
             # executable bit set inside the docker mount (the bit is also

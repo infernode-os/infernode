@@ -1317,10 +1317,11 @@ drawpicker(dst: ref Image)
 	pad := 12;
 	rowh := font_g.height + 8;
 
-	# Header.
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent),
+	# Header.  image.text() takes the top-left of the text rect, so use
+	# the bare y of each text line as the top-edge.
+	dst.text(Point(r.min.x + pad, r.min.y + pad),
 		textcolor, (0, 0), font_g, title);
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent + rowh),
+	dst.text(Point(r.min.x + pad, r.min.y + pad + rowh),
 		dimcolor, (0, 0), font_g, hint);
 
 	y := r.min.y + pad + 2 * rowh + rowh / 2;
@@ -1335,7 +1336,7 @@ drawpicker(dst: ref Image)
 
 	if(n == 0) {
 		msg := "no compositions in /lib/matrix/compositions/";
-		dst.text(Point(r.min.x + pad, y + font_g.ascent),
+		dst.text(Point(r.min.x + pad, y),
 			dimcolor, (0, 0), font_g, msg);
 		return;
 	}
@@ -1343,6 +1344,10 @@ drawpicker(dst: ref Image)
 	hits := array[n] of string;
 	rects := array[n] of Rect;
 	nhit := 0;
+	# Vertically center the label inside the row.  image.text() draws
+	# with the supplied Point as the top-left of the text rect (height
+	# = font_g.height), so the top padding to center is (rowh - height)/2.
+	textpad := (rowh - font_g.height) / 2;
 	for(i := 0; i < n; i++) {
 		nm := entries[i].name;
 		if(nm == "" || nm[0] == '.')
@@ -1351,7 +1356,7 @@ drawpicker(dst: ref Image)
 			    (r.max.x - pad, y + rowh));
 		# Subtle row background so the click affordance is visible.
 		dst.draw(row, divcolor, nil, (0, 0));
-		dst.text(Point(row.min.x + pad, y + font_g.ascent + 4),
+		dst.text(Point(row.min.x + pad, y + textpad),
 			textcolor, (0, 0), font_g, nm);
 		hits[nhit]  = nm;
 		rects[nhit] = row;

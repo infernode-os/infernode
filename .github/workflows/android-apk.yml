@@ -39,6 +39,14 @@ jobs:
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+    # ── Source-level lint for Android-specific traps ─────────────
+    # Catches unguarded syscalls that Android's app-sandbox seccomp
+    # filter blocks (setgid/setuid/etc). Runs before the build so a
+    # PR that re-introduces one fails fast without burning runner
+    # minutes on cross-compile.  See INFR-114 for the case study.
+    - name: Lint emu/Android/*.c for seccomp-blocked syscalls
+      run: ./tools/check-android-syscalls.sh
+
     - name: Install host build prerequisites
       run: |
         sudo apt-get update

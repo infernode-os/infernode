@@ -40,14 +40,28 @@
 #
 # Floor is sans.18 (small UI labels). 14 and 18 jump to 24. Bold
 # tier scales the same.
-bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.18.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
+# INFR-115 mobile font ladder: real 32pt subfonts from
+# tools/gen-mobile-fonts.sh (DejaVu*.32.* under fonts/dejavu/ + the
+# matching unicode.sans.32.font / unicode.sans.bold.32.font /
+# unicode.32.font combined manifests under fonts/combined/).
+#
+# Small UI labels (10/12) → sans.24. Body and anything 14/18/24
+# → sans.32. Bold tier scales the same. The unicode.14.font slot —
+# used by mono-context apps (wm/shell, wm/editor, acme, xenith,
+# charon, lucifer, lucipres) — binds to the proportional-mono
+# unicode.32.font so terminals and code editors get crisp mono
+# glyphs at the new size instead of the proportional fallback the
+# earlier (sans.24 over unicode.14.font) stopgap produced.
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.32.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.32.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.32.font /fonts/combined/unicode.sans.24.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.32.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.32.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.32.font /fonts/combined/unicode.sans.bold.24.font >[2] /dev/null
+bind /fonts/combined/unicode.32.font /fonts/combined/unicode.14.font >[2] /dev/null
 
 # Dev-mode toggle: when the Activity passes --no-logon as the last
 # argv, skip wm/logon in boot.sh below. Temporary convenience for

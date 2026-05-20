@@ -135,14 +135,18 @@ fi
 
 # Runtime tree shipped as APK assets. dis/ is the compiled bytecode
 # (sh.dis, cat.dis, the veltro suite, etc.). lib/ has shell profile +
-# font data + boot scripts. module/ has the .m interface files some
-# apps consult at runtime. Other top-level dirs (appl/, tests/, src,
-# etc.) are not needed at runtime and stay out of the APK to keep it
-# small.
-rm -rf "$ASSETS/dis" "$ASSETS/lib" "$ASSETS/module"
+# boot scripts. module/ has the .m interface files some apps consult
+# at runtime. fonts/ holds the bitmap subfonts + combined manifests
+# every UI widget loads via Font.open("/fonts/combined/…") — without
+# this, libdraw falls back to *default* and every font bind in
+# boot-mobile.sh is a no-op (this is exactly what bit INFR-115).
+# Other top-level dirs (appl/, tests/, src, etc.) are not needed at
+# runtime and stay out of the APK to keep it small.
+rm -rf "$ASSETS/dis" "$ASSETS/lib" "$ASSETS/module" "$ASSETS/fonts"
 cp -a "$ROOT/dis"    "$ASSETS/dis"
 [ -d "$ROOT/lib" ]    && cp -a "$ROOT/lib"    "$ASSETS/lib"    || true
 [ -d "$ROOT/module" ] && cp -a "$ROOT/module" "$ASSETS/module" || true
+[ -d "$ROOT/fonts" ]  && cp -a "$ROOT/fonts"  "$ASSETS/fonts"  || true
 
 ASSET_SIZE=$(du -sh "$ASSETS" | cut -f1)
 echo "    -> $ASSETS ($ASSET_SIZE)"

@@ -42,7 +42,7 @@
 # tier scales the same.
 # INFR-115 mobile font ladder: real 32pt subfonts from
 # tools/gen-mobile-fonts.sh (DejaVu*.32.* under fonts/dejavu/ + the
-# matching unicode.sans.32.font / unicode.sans.bold.32.font /
+# matching unicode.sans.48.font / unicode.sans.bold.48.font /
 # unicode.32.font combined manifests under fonts/combined/).
 #
 # Small UI labels (10/12) → sans.24. Body and anything 14/18/24
@@ -54,14 +54,14 @@
 # earlier (sans.24 over unicode.14.font) stopgap produced.
 bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
 bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.32.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.32.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.32.font /fonts/combined/unicode.sans.24.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.48.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.48.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.48.font /fonts/combined/unicode.sans.24.font >[2] /dev/null
 bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.32.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.32.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.32.font /fonts/combined/unicode.sans.bold.24.font >[2] /dev/null
-bind /fonts/combined/unicode.32.font /fonts/combined/unicode.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.24.font >[2] /dev/null
+bind /fonts/combined/unicode.48.font /fonts/combined/unicode.14.font >[2] /dev/null
 
 # Dev-mode toggle: when the Activity passes --no-logon as the last
 # argv, skip wm/logon in boot.sh below. Temporary convenience for

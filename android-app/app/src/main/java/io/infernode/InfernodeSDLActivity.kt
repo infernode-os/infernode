@@ -171,7 +171,10 @@ class InfernodeSDLActivity : SDLActivity() {
 
     private fun extractInfernoRootIfNeeded() {
         val root = File(filesDir, "inferno-root").apply { mkdirs() }
-        val marker = File(root, ".extracted-v1")
+        // .extracted-v2 — bumped from v1 when fonts/ was added to the
+        // asset staging (INFR-115). Devices that already extracted at
+        // v1 won't have fonts/ unless they re-extract.
+        val marker = File(root, ".extracted-v2")
         if (marker.exists()) return
         copyAssetTree(assets, "inferno-root", root)
         marker.createNewFile()

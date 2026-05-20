@@ -309,7 +309,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	initshelldirs();
 
 	# Start shell process (uses file2chan, must happen before window)
-	spawn startshell();
+	spawn startshell(ctxt);
 
 	# Create window
 	title := "Shell " + cwd;
@@ -725,7 +725,7 @@ isspace(c: int): int
 
 # ---------- Shell process ----------
 
-startshell()
+startshell(ctxt: ref Draw->Context)
 {
 	# Fork namespace so our synthetic /dev/cons doesn't affect parent
 	sys->pctl(Sys->FORKNS, nil);
@@ -795,7 +795,11 @@ startshell()
 		return;
 	}
 
-	spawn sh->init(nil, shellargv);
+	# Pass the real Draw context so GUI apps invoked from this shell
+	# (wm/matrix, wm/man, wm/clock, etc.) can open their own windows.
+	# Previously this was nil, which made every GUI app fall back to
+	# headless / refuse to start.
+	spawn sh->init(ctxt, shellargv);
 }
 
 # consserver: services reads and writes on synthetic /dev/cons and /dev/consctl.

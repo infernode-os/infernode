@@ -46,6 +46,7 @@ if {~ $emuhost MacOSX Linux Nt}{
 		mkdir -p $infhome/lib/veltro
 		mkdir -p $infhome/lib/veltro-agents
 		mkdir -p $infhome/lib/veltro-keys
+		mkdir -p $infhome/lib/keyring
 		mkdir -p $infhome/tmp
 		# Seed writable defaults from the emu root
 		cp /lib/ndb/llm $infhome/lib/ndb/llm >[2] /dev/null
@@ -62,6 +63,8 @@ if {~ $emuhost MacOSX Linux Nt}{
 	bind -bc $infhome/lib/veltro           /lib/veltro
 	bind -bc $infhome/lib/veltro-agents    /lib/veltro/agents
 	bind -bc $infhome/lib/veltro-keys      /lib/veltro/keys >[2] /dev/null
+	mkdir -p /lib/keyring >[2] /dev/null
+	bind -bc $infhome/lib/keyring          /lib/keyring >[2] /dev/null
 	bind -bc $infhome/tmp /tmp >[2] /dev/null
 }{
 	# Non-desktop platforms (native hardware, embedded)
@@ -127,11 +130,22 @@ if {~ $emuhost MacOSX Linux Nt}{
 	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
 	if {~ $llmmode remote} {
 		llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}
+		llmauth=`{sed -n 's/^auth=//p' /lib/ndb/llm >[2] /dev/null}
+		llmkey=`{sed -n 's/^keyfile=//p' /lib/ndb/llm >[2] /dev/null}
+		if {~ $llmkey ''} { llmkey=/lib/keyring/serve-llm }
 		# Background: 9P mount has no protocol-level timeout, and the
 		# remote export can degrade to "accepts TCP, never reads
 		# TVERSION". A foreground mount in that state wedges boot.
 		# See docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md
-		mount -A $llmdial /n/llm >[2] /dev/null &
+		if {~ $llmauth keyring} {
+			if {ftest -f $llmkey} {
+				mount -k $llmkey $llmdial /n/llm >[2] /dev/null &
+			}{
+				echo 'profile: keyring auth requested but keyfile not found at' $llmkey
+			}
+		}{
+			mount -A $llmdial /n/llm >[2] /dev/null &
+		}
 	}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}

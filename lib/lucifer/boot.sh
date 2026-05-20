@@ -25,7 +25,18 @@ wm/logon
 	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
 	if {~ $llmmode remote} {
 		llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}
-		mount -A $llmdial /n/llm >[2] /dev/null
+		llmauth=`{sed -n 's/^auth=//p' /lib/ndb/llm >[2] /dev/null}
+		llmkey=`{sed -n 's/^keyfile=//p' /lib/ndb/llm >[2] /dev/null}
+		if {~ $llmkey ''} { llmkey=/lib/keyring/serve-llm }
+		if {~ $llmauth keyring} {
+			if {ftest -f $llmkey} {
+				mount -k $llmkey $llmdial /n/llm >[2] /dev/null
+			}{
+				echo 'boot: keyring auth requested but keyfile not found at' $llmkey
+			}
+		}{
+			mount -A $llmdial /n/llm >[2] /dev/null
+		}
 	}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}

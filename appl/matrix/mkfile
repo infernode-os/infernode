@@ -5,6 +5,9 @@ TARG=\
 	signal-feed.dis\
 	risk-gauge.dis\
 	alert-watcher.dis\
+	llm-recorder.dis\
+	llm-context.dis\
+	llm-sessions.dis\
 
 SYSMODULES=\
 	sys.m\

@@ -94,6 +94,7 @@ TARG=\
 	lucibridge_approval_test.dis\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
+	matrix_perfdashboard_test.dis\
 
 MODULES=
 
@@ -113,6 +114,7 @@ SYSMODULES=\
 	json.m\
 	llmclient.m\
 	keyring.m\
+	matrix.m\
 	lists.m\
 	math.m\
 	menu.m\

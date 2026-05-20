@@ -204,7 +204,12 @@ drawtrack(dst: ref Image, y: int, t: Track, tx0, tw, span: int)
 pointer(nil: ref Draw->Pointer): int { return 0; }
 key(nil: int): int { return 0; }
 retheme(display: ref Display) { display_g = display; loadcolors(); }
-shutdown() { }
+shutdown()
+{
+	tracks = nil;
+	bgcolor = textcol = dimcol = headcol = nil;
+	trackbg = tokcol = bordercol = nil;
+}
 
 # ── Data ─────────────────────────────────────────────────────
 

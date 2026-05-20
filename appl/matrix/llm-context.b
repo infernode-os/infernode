@@ -154,10 +154,12 @@ drawrow(dst: ref Image, y: int, s: SessView)
 	label := sys->sprint("%-3d %-22s %6d / %d", s.id, s.model, s.tokens, s.limit);
 	dst.text(Point(r_g.min.x + PAD, y), textcol, (0, 0), font_g, label);
 
-	# Bar geometry
+	# Bar geometry — give up if the pane is too narrow to draw into.
 	bx0 := r_g.min.x + PAD;
 	bx1 := r_g.max.x - PAD;
 	bw := bx1 - bx0;
+	if(bw <= 0)
+		return;
 	by := y + font_g.height + 4;
 
 	# Background
@@ -184,7 +186,12 @@ drawrow(dst: ref Image, y: int, s: SessView)
 pointer(nil: ref Draw->Pointer): int { return 0; }
 key(nil: int): int { return 0; }
 retheme(display: ref Display) { display_g = display; loadcolors(); }
-shutdown() { }
+shutdown()
+{
+	sessions = nil;
+	bgcolor = textcol = dimcol = headcol = nil;
+	barfg = barbg = watcol = bordercol = nil;
+}
 
 # ── Data ─────────────────────────────────────────────────────
 

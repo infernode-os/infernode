@@ -329,6 +329,21 @@ sdl3_preinit(void)
 	const char *driver;
 
 	/*
+	 * On Android, single-finger touches do not generate SDL_MOUSE_*
+	 * events by default — they only fire SDL_FINGER_* events. emu's
+	 * event pump (sdl3_mainloop) handles SDL_MOUSE_*, so without this
+	 * hint a tap on the phone produces FINGER events that go nowhere
+	 * and the user sees their tap ignored. Setting this hint before
+	 * SDL_Init tells SDL3 to also synthesise mouse events from
+	 * touches — left-click on tap, drag-as-motion — which is exactly
+	 * the Plan 9-style mouse semantics emu expects.
+	 *
+	 * Set on all platforms (no-op where touches aren't a thing) so
+	 * touchscreen laptops behave the same way.
+	 */
+	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
+
+	/*
 	 * Initialize SDL3 on the main thread.
 	 * On macOS, this must happen before any Cocoa window operations.
 	 * We use the native driver (Cocoa on macOS) for real GUI.

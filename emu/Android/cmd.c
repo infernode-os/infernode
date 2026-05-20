@@ -60,6 +60,20 @@ childproc(Targ *t)
 	close(t->fd[2]);
 
 	/* should have an auth file to do host-specific authorisation? */
+#ifndef __BIONIC__
+	/*
+	 * setgid/setuid are blocked by Android's app-sandbox seccomp
+	 * filter — calling them raises SIGSYS and kills the child.
+	 * Skip on Bionic. The Android app already runs as a specific
+	 * uid (its package uid, e.g. 10263) imposed by the OS sandbox
+	 * before fork; we can't change to anything else and don't need
+	 * to. Inferno-side $user is independent of the host uid anyway.
+	 *
+	 * Profile's `os sh -c '…'` calls were silently failing because
+	 * of this — we'd lose the spawn and then `$ghome` / `$infhome`
+	 * stayed empty and the cascade of `bind -bc $infhome/...` did
+	 * unproductive namespace walks. INFR-114.
+	 */
 	if(t->gid != -1){
 		if(setgid(t->gid) < 0 && getegid() == 0){
 			fprint(t->wfd, "can't set gid %d: %s", t->gid, strerror(errno));
@@ -73,6 +87,7 @@ childproc(Targ *t)
 			_exit(1);
 		}
 	}
+#endif
 
 	if(t->dir != nil && chdir(t->dir) < 0){
 		fprint(t->wfd, "can't chdir to %s: %s", t->dir, strerror(errno));

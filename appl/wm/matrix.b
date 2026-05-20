@@ -50,6 +50,17 @@ include "widget.m";
 	widgetmod: Widget;
 	Scrollbar, Label, Statusbar, Kbdfilter: import widgetmod;
 
+include "menu.m";
+	menumod: Menu;
+	Popup: import menumod;
+
+include "readdir.m";
+	readdir: Readdir;
+
+# sh.m brings in the Command module type used by `load Command "..."`
+# below when spawning wm/editor.  We don't use Sh itself.
+include "sh.m";
+
 include "matrix.m";
 
 Matrix: module
@@ -133,6 +144,7 @@ comp: ref Composition;
 complock: chan of int;	# mutex for comp access
 
 # GUI state
+ctxt_g: ref Draw->Context;	# preserved from init() for child-app spawn
 w: ref Window;
 display_g: ref Display;
 font_g: ref Font;
@@ -155,6 +167,24 @@ themech: chan of int;
 
 # Module tracking
 allmodules: list of (string, string, string);	# (name, type, mount) for 9P
+
+# Composition source (for the right-click menu's edit/reload affordances)
+comppath: string;	# full path passed at startup or set by reload-from-disk
+compname: string;	# basename of comppath, or "" for unnamed/empty
+
+# Right-click menu state.  ctxmenuactions is a parallel array to
+# ctxmenu.items: action[i] is a verb consumed by domenuitem(i).
+ctxmenu: ref Popup;
+ctxmenuactions: array of string;
+
+# Picker state.  When comp.layout is nil and we're in GUI mode, the
+# window body is a list of /lib/matrix/compositions/ — one row per
+# composition, left-click loads it.  pickerhits is a parallel array
+# to pickerrects: a click in rect[i] sends "load <hits[i]>" to ctl.
+pickerrects: array of Rect;
+pickerhits:  array of string;
+# Edge-trigger for button-1 click detection in the picker.
+lastbtn1: int;
 
 # ── Init ────────────────────────────────────────────────────
 
@@ -202,8 +232,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	# Parse initial composition
 	comptext := "";
-	if(args != nil)
-		comptext = readfile(hd args);
+	if(args != nil) {
+		comppath = hd args;
+		comptext = readfile(comppath);
+		compname = basename(comppath);
+	}
 	if(comptext == nil || comptext == "")
 		comptext = "# empty\n";
 
@@ -217,17 +250,16 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Start 9P server (always, both modes)
 	start9p();
 
-	# Determine mode
-	guimode = !forceheadless && comp.layout != nil && comp.assigns != nil;
+	# Determine mode.  Open a GUI window whenever we have a Draw
+	# context — the empty/no-layout state is now a clickable picker
+	# of /lib/matrix/compositions/, not a silent headless service.
+	# -h still forces pure-headless for service-only callers.
+	guimode = !forceheadless && ctxt != nil;
+	if(!guimode && !forceheadless && ctxt == nil)
+		sys->fprint(stderr, "matrix: no display context, falling back to headless\n");
 
 	if(guimode) {
-		if(ctxt == nil) {
-			sys->fprint(stderr, "matrix: no display context, falling back to headless\n");
-			guimode = 0;
-		}
-	}
-
-	if(guimode) {
+		ctxt_g = ctxt;
 		initgui(ctxt);
 		loaddisplaymodules();
 		loadservicemodules();
@@ -728,9 +760,12 @@ handlectl(data: string): string
 				text = comp.text;
 			complock <-= 1;
 		} else {
-			text = readfile("/lib/matrix/compositions/" + name);
+			path := "/lib/matrix/compositions/" + name;
+			text = readfile(path);
 			if(text == nil)
 				return "composition not found: " + name;
+			comppath = path;
+			compname = name;
 		}
 		alt {
 		reloadch <-= text =>
@@ -742,6 +777,8 @@ handlectl(data: string): string
 	}
 
 	if(data == "unload") {
+		comppath = "";
+		compname = "";
 		alt {
 		reloadch <-= "# empty\n" =>
 			;
@@ -1061,6 +1098,15 @@ initgui(ctxt: ref Draw->Context)
 	if(widgetmod != nil)
 		widgetmod->init(display_g, font_g);
 
+	menumod = load Menu Menu->PATH;
+	if(menumod != nil) {
+		menumod->init(display_g, font_g);
+		ctxmenu = menumod->new(array[] of {"(menu)"});
+	}
+
+	if(readdir == nil)
+		readdir = load Readdir Readdir->PATH;
+
 	kf = Kbdfilter.new();
 
 	loadcolors();
@@ -1169,9 +1215,26 @@ guiloop()
 			if(ptr == nil)
 				;
 			else if(w.pointer(*ptr))
-				;
-			else
+				lastbtn1 = 0;
+			else if(ptr.buttons & 4 && menumod != nil && ctxmenu != nil) {
+				rebuildctxmenu();
+				n := ctxmenu.show(w.image, ptr.xy, w.ctxt.ptr);
+				if(n >= 0 && n < len ctxmenuactions)
+					domenuitem(ctxmenuactions[n]);
+				lastbtn1 = 0;
+				dirty = 1;
+			}
+			else if(comp == nil || comp.layout == nil) {
+				# Empty-state picker: edge-triggered button-1 click.
+				cur := ptr.buttons & 1;
+				if(cur && !lastbtn1)
+					pickerclick(ptr.xy);
+				lastbtn1 = cur;
+			}
+			else {
+				lastbtn1 = ptr.buttons & 1;
 				handleptr(ptr);
+			}
 
 		<-updatech =>
 			if(updatedisplaymodules(comp.layout))
@@ -1185,6 +1248,8 @@ guiloop()
 			loadcolors();
 			if(widgetmod != nil)
 				widgetmod->retheme(display_g);
+			if(menumod != nil)
+				menumod->retheme(display_g);
 			if(wmclient != nil)
 				wmclient->retheme(w);
 			rethemedisplaymodules(comp.layout);
@@ -1232,11 +1297,97 @@ redraw()
 
 	if(comp != nil && comp.layout != nil)
 		drawlayout(img, comp.layout);
+	else
+		drawpicker(img);
 
 	# INFR-27: window border is the wmclient frame (th.windowborder).
 	# Don't draw widget.contentborder here — it would paint th.accent
 	# over the wmclient frame and break border consistency across apps.
 	img.flush(Draw->Flushnow);
+}
+
+# drawpicker — empty-state body.  Lists every composition in
+# /lib/matrix/compositions/ as a clickable row.  Records the
+# row rects + names in pickerrects/pickerhits so the ptr handler
+# can map a left-click back to a `load <name>` ctl verb.
+drawpicker(dst: ref Image)
+{
+	pickerrects = nil;
+	pickerhits = nil;
+	if(font_g == nil)
+		return;
+
+	r := dst.r;
+	title := "Matrix — click a composition to load";
+	hint  := "(right-click for the full menu)";
+	pad := 12;
+	rowh := font_g.height + 8;
+
+	# Header.
+	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent),
+		textcolor, (0, 0), font_g, title);
+	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent + rowh),
+		dimcolor, (0, 0), font_g, hint);
+
+	y := r.min.y + pad + 2 * rowh + rowh / 2;
+
+	if(readdir == nil)
+		readdir = load Readdir Readdir->PATH;
+	entries: array of ref Sys->Dir;
+	n := 0;
+	if(readdir != nil)
+		(entries, n) = readdir->init("/lib/matrix/compositions",
+			Readdir->NAME);
+
+	if(n == 0) {
+		msg := "no compositions in /lib/matrix/compositions/";
+		dst.text(Point(r.min.x + pad, y + font_g.ascent),
+			dimcolor, (0, 0), font_g, msg);
+		return;
+	}
+
+	hits := array[n] of string;
+	rects := array[n] of Rect;
+	nhit := 0;
+	for(i := 0; i < n; i++) {
+		nm := entries[i].name;
+		if(nm == "" || nm[0] == '.')
+			continue;
+		row := Rect((r.min.x + pad, y),
+			    (r.max.x - pad, y + rowh));
+		# Subtle row background so the click affordance is visible.
+		dst.draw(row, divcolor, nil, (0, 0));
+		dst.text(Point(row.min.x + pad, y + font_g.ascent + 4),
+			textcolor, (0, 0), font_g, nm);
+		hits[nhit]  = nm;
+		rects[nhit] = row;
+		nhit++;
+		y += rowh + 4;
+		if(y >= r.max.y - rowh)
+			break;
+	}
+	if(nhit < n) {
+		pickerhits  = array[nhit] of string;
+		pickerrects = array[nhit] of Rect;
+		for(i = 0; i < nhit; i++) {
+			pickerhits[i]  = hits[i];
+			pickerrects[i] = rects[i];
+		}
+	} else {
+		pickerhits  = hits;
+		pickerrects = rects;
+	}
+}
+
+# pickerclick — call when comp.layout is nil and the user left-clicks
+# in the body.  Maps the click to a `load <name>` ctl verb.
+pickerclick(at: Point)
+{
+	for(i := 0; i < len pickerrects; i++)
+		if(pickerrects[i].contains(at)) {
+			handlectl("load " + pickerhits[i]);
+			return;
+		}
 }
 
 drawlayout(dst: ref Image, node: ref LayoutNode)
@@ -1421,6 +1572,83 @@ shutdownservicemodules()
 			se.mod->shutdown();
 		se.mod = nil;
 	}
+}
+
+# ── Right-click composition menu ────────────────────────────
+#
+# Items are rebuilt on every show so the menu reflects the current
+# state of /lib/matrix/compositions/.  Each item has a parallel
+# action string in ctxmenuactions[] consumed by domenuitem().
+# Action verbs: "load <name>", "edit", "unload".
+
+rebuildctxmenu()
+{
+	if(menumod == nil)
+		return;
+	labels: list of string;
+	actions: list of string;
+	# "Load ..." entries, one per pinned composition.
+	if(readdir != nil) {
+		(entries, n) := readdir->init("/lib/matrix/compositions",
+			Readdir->NAME);
+		# Append in directory order so list reverse yields alphabetical.
+		for(i := n - 1; i >= 0; i--) {
+			nm := entries[i].name;
+			if(nm == "" || nm[0] == '.')
+				continue;
+			labels = ("Load " + nm) :: labels;
+			actions = ("load " + nm) :: actions;
+		}
+	}
+	# Edit the currently-loaded composition (if any) in wm/editor.
+	if(comppath != "") {
+		labels = ("Edit " + compname) :: labels;
+		actions = "edit" :: actions;
+	}
+	# Always-on: unload to the empty composition.
+	labels = "Unload" :: labels;
+	actions = "unload" :: actions;
+	# Convert to arrays.
+	nl := 0;
+	for(p := labels; p != nil; p = tl p) nl++;
+	larr := array[nl] of string;
+	aarr := array[nl] of string;
+	i := 0;
+	for(p = labels; p != nil; p = tl p) { larr[i] = hd p; i++; }
+	i = 0;
+	for(p = actions; p != nil; p = tl p) { aarr[i] = hd p; i++; }
+	ctxmenu = menumod->new(larr);
+	ctxmenuactions = aarr;
+}
+
+domenuitem(action: string)
+{
+	if(len action > 5 && action[0:5] == "load ") {
+		handlectl(action);
+		return;
+	}
+	if(action == "unload") {
+		handlectl(action);
+		return;
+	}
+	if(action == "edit") {
+		if(comppath == "")
+			return;
+		ed := load Command "/dis/wm/editor.dis";
+		if(ed == nil) {
+			sys->fprint(stderr, "matrix: cannot load editor: %r\n");
+			return;
+		}
+		spawn ed->init(ctxt_g, "editor" :: comppath :: nil);
+	}
+}
+
+basename(p: string): string
+{
+	for(i := len p - 1; i >= 0; i--)
+		if(p[i] == '/')
+			return p[i+1:];
+	return p;
 }
 
 # ── Event routing ───────────────────────────────────────────

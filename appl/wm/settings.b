@@ -1459,6 +1459,20 @@ readllmconfig(): (string, string, string, string, string, int)
 
 writellmconfig(mode, backend, url, model, dial: string)
 {
+	# Preserve unknown keys (e.g. auth=, keyfile=) that other consumers
+	# of /lib/ndb/llm rely on. Settings only manages the
+	# mode/backend/url/model/dial subset.
+	extra := "";
+	existing := readlines("/lib/ndb/llm");
+	for(i := 0; i < len existing; i++) {
+		line := existing[i];
+		if(islinekey(line, "mode") || islinekey(line, "backend") ||
+		   islinekey(line, "url") || islinekey(line, "model") ||
+		   islinekey(line, "dial"))
+			continue;
+		extra += line + "\n";
+	}
+
 	fd := sys->create("/lib/ndb/llm", Sys->OWRITE, 8r666);
 	if(fd == nil) {
 		flashstatus(sys->sprint("cannot write config: %r"));
@@ -1466,8 +1480,15 @@ writellmconfig(mode, backend, url, model, dial: string)
 	}
 	config := sys->sprint("mode=%s\nbackend=%s\nurl=%s\nmodel=%s\ndial=%s\n",
 		mode, backend, url, model, dial);
+	config += extra;
 	b := array of byte config;
 	sys->write(fd, b, len b);
+}
+
+islinekey(line, key: string): int
+{
+	klen := len key + 1;
+	return len line >= klen && line[0:klen] == key + "=";
 }
 
 # ── /llm synthetic FS (served by llmctl9p) ────────────────────

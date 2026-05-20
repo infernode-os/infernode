@@ -10,8 +10,20 @@ if {! ~ $user ''} {
 	ls /usr/inferno/secstore/$user >[2] /dev/null
 }
 
-# Login screen (unlocks secstore, loads keys into factotum)
-wm/logon
+# Login screen (unlocks secstore, loads keys into factotum).
+#
+# Skippable via $skiplogon. Mobile dev iteration (hellaphone) sets
+# this from /lib/lucifer/boot-mobile.sh when the Activity passes
+# --no-logon — typing a password on every UI rebuild is wasted
+# iteration time. Default behaviour is unchanged (variable unset =
+# logon runs). When $skiplogon is 1, secstore stays locked and
+# factotum starts empty; downstream code that needs keys (LLM
+# keyring mounts, etc.) will fail in expected ways.
+if {! ~ $skiplogon 1} {
+	wm/logon
+}{
+	echo 'boot: skiplogon=1 — wm/logon bypassed (dev mode; no factotum, no secstore)'
+}
 
 # (Re-)start LLM service in the background.
 #

@@ -49,6 +49,18 @@ bind /fonts/combined/unicode.sans.bold.18.font /fonts/combined/unicode.sans.bold
 bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
 bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
 
+# Dev-mode toggle: when the Activity passes --no-logon as the last
+# argv, skip wm/logon in boot.sh below. Temporary convenience for
+# mobile UI iteration — every test rebuild would otherwise demand a
+# password before the screen we're trying to inspect renders.
+# secstore stays locked and factotum starts empty in this mode.
+# Flip the default in InfernodeSDLActivity when LLM/keyring work
+# needs auth.
+if {~ $* --no-logon} {
+	skiplogon = 1
+	echo 'boot-mobile: dev mode (--no-logon)'
+}
+
 # Hand off to the canonical boot sequence. `run` is Inferno sh's
 # source-include builtin (sh-std(1)); `. file` is NOT the same as
 # in POSIX sh — there `.` is a command name and resolves to ./..dis,

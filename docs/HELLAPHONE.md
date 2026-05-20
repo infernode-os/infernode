@@ -430,9 +430,52 @@ still running.
   useful on the phone yet; that retarget happens in Phase 1.
 * It is not GUI. No Lucia, no Xenith on the phone yet. Headless only.
 
+## Android app-sandbox seccomp restrictions
+
+Phase 1c+ (APK path) runs InferNode under the Android app sandbox.
+The OS installs a seccomp-bpf filter that blocks a list of syscalls
+that desktop Linux freely allows. Calling a blocked syscall raises
+`SIGSYS` and kills the calling thread on the spot — there is no
+errno path to handle this; the process is just gone (or the thread
+disappears, depending on the filter's action).
+
+InferNode's emu has historically targeted desktop Linux and calls
+some of these syscalls in places `os(1)` traditionally expects.
+Each one needs an `#ifndef __BIONIC__` gate in `emu/Android/` or
+it'll crash on Android.
+
+Known disallowed syscalls and where they bit us:
+
+| syscall (arm64 #) | site | symptom | fix |
+|---|---|---|---|
+| `setgid` (#144) | `emu/Android/cmd.c` `childproc()` after fork in `os(1)` | SIGSYS kills `SDLThread`; profile's `os sh -c '...'` calls silently fail; `$ghome`/`$infhome` stay empty; boot stalls on dead overlay binds. **INFR-114.** | gated behind `#ifndef __BIONIC__` (commit `1b136db8`). |
+| `setuid` | same site | same | same gate |
+
+The app process is already pinned to its package uid by the OS
+sandbox before any of our code runs — privilege drop in `childproc`
+is neither possible nor necessary. Inferno-side `$user` is
+independent of the host uid so the user-facing semantics are
+unchanged.
+
+**Regression test.** `tools/check-android-syscalls.sh` lints
+`emu/Android/*.c` for unguarded calls to any function on the
+blocklist. It runs in CI (`.github/workflows/android-apk.yml`)
+before the cross-compile, so a PR that re-introduces a forbidden
+call fails fast. Extend the blocklist in that script when a new
+SIGSYS lands on a device.
+
+When adding new code that goes through fork+exec or any privileged
+operation, sanity-check the syscall against the device's actual
+policy:
+
+```
+adb shell cat /system/etc/seccomp_policy/app.policy 2>/dev/null
+```
+
 ## References
 
 * `emu/Android/README.md` — what eventually lives in that directory.
 * `build-android-termux.sh` — the Phase 0 build driver.
 * `build-linux-arm64.sh` — the Linux ARM64 driver we piggyback on.
-* `INFR-107` — tracking epic.
+* `INFR-107` — Phase 0 tracking epic.
+* `INFR-114` — APK boot speed (closed; setgid seccomp was the cause).

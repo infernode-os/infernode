@@ -1,8 +1,13 @@
 package io.infernode
 
 import android.content.res.AssetManager
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.util.Log
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import org.libsdl.app.SDLActivity
 import java.io.File
 import java.io.FileOutputStream
@@ -81,7 +86,11 @@ class InfernodeSDLActivity : SDLActivity() {
             "-pimage=1024m",
             "-r", infernoRoot.absolutePath,
             "sh",
-            "-l", "/lib/lucifer/boot.sh",
+            // boot-mobile.sh applies mobile-only setup (bigger fonts,
+            // future hit-target tuning, swipe-nav hooks) and then
+            // sources the regular boot.sh. Keeps desktop boot.sh
+            // untouched. INFR-113.
+            "-l", "/lib/lucifer/boot-mobile.sh",
         )
     }
 
@@ -90,6 +99,48 @@ class InfernodeSDLActivity : SDLActivity() {
         // calls SDL_main: emu's argv references the root directory.
         extractInfernoRootIfNeeded()
         super.onCreate(savedInstanceState)
+
+        // Phase 2b.2 / INFR-115 — keep Lucifer's SDL surface inside the
+        // safe rectangle (no overlap with the status bar at top or
+        // gesture / nav bar at bottom).
+        //
+        // Android 15 (targetSdk=35) is edge-to-edge by default and
+        // setDecorFitsSystemWindows(true) didn't actually inset the
+        // SDLSurface — it kept extending to the screen edges. So we
+        // stay edge-to-edge but pad the surface ourselves via
+        // SDLActivity.mLayout (the SurfaceView's parent).
+        //
+        // Background: in edge-to-edge mode the system bars are a
+        // transparent overlay. The status bar's white icons need to
+        // contrast with whatever's underneath. The activity's default
+        // window background is light (Theme.AppCompat.Light), which
+        // showed through the top inset as a white bar that hid the
+        // status bar icons. Force the window background to black —
+        // matches Lucifer's brimstone palette (#080808) and gives the
+        // status bar icons a dark backdrop. The Inferno wm draws over
+        // it inside the safe rectangle.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+
+        val layout = mLayout
+        if (layout != null) {
+            ViewCompat.setOnApplyWindowInsetsListener(layout) { v, insets ->
+                val bars = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars()
+                            or WindowInsetsCompat.Type.displayCutout()
+                )
+                Log.i(
+                    TAG,
+                    "applying insets: top=${bars.top} bottom=${bars.bottom} " +
+                        "left=${bars.left} right=${bars.right}"
+                )
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                WindowInsetsCompat.CONSUMED
+            }
+        } else {
+            Log.w(TAG, "mLayout was null in onCreate; safe-area insets not applied")
+        }
+
         Log.i(TAG, "InfernodeSDLActivity created; SDL_main will boot wm")
     }
 

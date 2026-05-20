@@ -856,10 +856,16 @@ Sys_pctl(void *fp)
 		closefgrp(ofg);
 	}
 
-	if((f->flags & (Sys_NEWNS|Sys_FORKNS)) && vmreleased){
-		acquire();
-		vmreleased = 0;
-	}
+	/*
+	 * Intentionally do NOT acquire() here for NEWNS/FORKNS.
+	 * cclone(dot) in NEWNS (and pgrpcpy in FORKNS) can issue 9P
+	 * requests to Limbo-implemented file servers (trfs serves
+	 * /n/local, mntgen serves /n, etc.). Those servers need the VM
+	 * lock to run. Holding it across cclone deadlocks the emulator:
+	 * pctl waits for the 9P reply that trfs can't produce because
+	 * we hold the VM lock. The ns rwlock in chan.c/sysfile.c covers
+	 * the data race the original "ns race fix" was after.
+	 */
 
 	if(f->flags & Sys_NEWNS) {
 		Pgrp *pg;

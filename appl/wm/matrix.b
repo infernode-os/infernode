@@ -57,10 +57,6 @@ include "menu.m";
 include "readdir.m";
 	readdir: Readdir;
 
-# sh.m brings in the Command module type used by `load Command "..."`
-# below when spawning wm/editor.  We don't use Sh itself.
-include "sh.m";
-
 include "matrix.m";
 
 Matrix: module
@@ -144,7 +140,6 @@ comp: ref Composition;
 complock: chan of int;	# mutex for comp access
 
 # GUI state
-ctxt_g: ref Draw->Context;	# preserved from init() for child-app spawn
 w: ref Window;
 display_g: ref Display;
 font_g: ref Font;
@@ -259,7 +254,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "matrix: no display context, falling back to headless\n");
 
 	if(guimode) {
-		ctxt_g = ctxt;
 		initgui(ctxt);
 		loaddisplaymodules();
 		loadservicemodules();
@@ -1634,12 +1628,40 @@ domenuitem(action: string)
 	if(action == "edit") {
 		if(comppath == "")
 			return;
-		ed := load Command "/dis/wm/editor.dis";
-		if(ed == nil) {
-			sys->fprint(stderr, "matrix: cannot load editor: %r\n");
+		# Route through luciuisrv's artifact ctl rather than spawning
+		# wm/editor in matrix's own slot.  Each Lucifer app slot has a
+		# single-shot appwm (lucifer.b:appwmrelay reads exactly once);
+		# matrix already consumed its slot for its own window, so
+		# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
+		# leave editor's wmclient->window blocked with no reader.
+		# Letting luciuisrv launch editor gives it its own slot + ctxt.
+		s := readfile("/n/ui/activity/current");
+		if(s == nil)
+			s = "0";
+		# Trim trailing whitespace from the activity id read.
+		for(i := len s - 1; i >= 0; i--)
+			if(s[i] != ' ' && s[i] != '\t' &&
+			   s[i] != '\n' && s[i] != '\r') {
+				s = s[0:i+1];
+				break;
+			}
+		pctl := "/n/ui/activity/" + s + "/presentation/ctl";
+		cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
+			"label=Edit data=" + comppath;
+		fd := sys->open(pctl, Sys->OWRITE);
+		if(fd == nil) {
+			sys->fprint(stderr, "matrix: cannot open %s: %r\n", pctl);
 			return;
 		}
-		spawn ed->init(ctxt_g, "editor" :: comppath :: nil);
+		b := array of byte cmd;
+		sys->write(fd, b, len b);
+		fd = nil;
+		# Surface the new editor tab.
+		fd = sys->open(pctl, Sys->OWRITE);
+		if(fd != nil) {
+			cb := array of byte "center id=editor";
+			sys->write(fd, cb, len cb);
+		}
 	}
 }
 

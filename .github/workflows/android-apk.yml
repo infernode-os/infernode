@@ -47,6 +47,12 @@ jobs:
     - name: Lint emu/Android/*.c for seccomp-blocked syscalls
       run: ./tools/check-android-syscalls.sh
 
+    # Verify InfernodeSDLActivity still has the safe-area inset
+    # handling. Without it, Lucifer overlaps the status bar / nav
+    # bar on Android 15+. INFR-115.
+    - name: Lint safe-area handling in SDL Activity
+      run: ./tools/check-android-safearea.sh
+
     - name: Install host build prerequisites
       run: |
         sudo apt-get update

@@ -1989,6 +1989,78 @@ cleanupappslot(c: ref Client)
 	}
 }
 
+# appreaper — process-lifecycle backstop for artifact-launched GUI apps.
+#
+# Plan-9 plumbing: read on /prog/<pid>/wait blocks until the proc
+# (and any child procs in its lineage created via spawn) terminate.
+# When that read returns, the app is gone — whether it called exit
+# cleanly, was killed by a note, panicked, segfaulted, or had any
+# other terminal misfortune.  At that point we write `delete id=<id>`
+# to the activity's presentation/ctl and compact the matching AppSlot.
+#
+# Note on duplication: preswmloop already has a `rc == nil` reaper
+# that fires on wmsrv channel disconnect and calls cleanupappslot().
+# Both paths converge on the same delete-id ctl write and slot
+# removal, so whichever fires first wins; the other is a harmless
+# no-op (luciuisrv ignores delete for an unknown id; the slot search
+# returns without acting).  appreaper exists because the wmsrv-
+# disconnect path turns out to be unreliable when apps exit via the
+# common `postnote(kill); exit` pattern (editor.b:494 et al.).
+appreaper(actid: int, id: string, pid: int)
+{
+	waitpath := sys->sprint("/prog/%d/wait", pid);
+	fd := sys->open(waitpath, Sys->OREAD);
+	if(fd != nil) {
+		buf := array[512] of byte;
+		# A single read on /prog/*/wait blocks until the proc exits
+		# and returns the exit status as a Plan-9-format wait
+		# message.  We don't parse it — we only care that it
+		# returned at all.
+		sys->read(fd, buf, len buf);
+		fd = nil;
+	}
+	# Either /prog/<pid>/wait returned (the canonical case) or the
+	# pid was already gone by the time we tried to open (the proc
+	# died between spawn and us getting here).  Both cases want the
+	# same cleanup; preswmloop's reaper races us harmlessly.
+	if(actid < 0 || id == "")
+		return;
+	writetofile(
+		sys->sprint("%s/activity/%d/presentation/ctl", mountpt, actid),
+		"delete id=" + id);
+	cleanupappslotbyid(actid, id);
+}
+
+# cleanupappslotbyid — slot-array twin of cleanupappslot.  Same
+# bookkeeping (bottom the client if it joined, remove and compact
+# the slot, clear activeappid if needed), but matched on
+# (actid, id) instead of on a known Client ref — because the
+# appreaper path doesn't have one.
+cleanupappslotbyid(actid: int, id: string)
+{
+	for(tpi := 0; tpi < ntaskpres; tpi++) {
+		tp := taskpres[tpi];
+		if(tp == nil || tp.actid != actid)
+			continue;
+		<-tp.applock;
+		for(ci := 0; ci < tp.nappslots; ci++) {
+			if(tp.appslots[ci] != nil && tp.appslots[ci].id == id) {
+				if(tp.appslots[ci].client != nil)
+					tp.appslots[ci].client.bottom();
+				tp.appslots[ci] = nil;
+				for(cj := ci; cj + 1 < tp.nappslots; cj++)
+					tp.appslots[cj] = tp.appslots[cj + 1];
+				tp.nappslots--;
+				if(tp.activeappid == id)
+					tp.activeappid = "";
+				tp.applock <-= 1;
+				return;
+			}
+		}
+		tp.applock <-= 1;
+	}
+}
+
 # writetofile: write a string to a file path
 writetofile(path, data: string): string
 {
@@ -2152,17 +2224,31 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		appargs = dispath :: datatl;
 	} else
 		appargs = dispath :: nil;
-	# Spawn app in a forked namespace where /chan/wmctl → task's wmsrv
-	spawn launchappns(tp, guimod, newctxt, appargs);
+	# Spawn app in a forked namespace where /chan/wmctl → task's wmsrv.
+	# launchappns also spawns a /prog/<pid>/wait reaper so the artifact
+	# tab is cleaned up when the app exits — see INFR-118.  Without
+	# this, apps that quit via their own in-menu Exit (postnote+exit
+	# pattern in editor.b:494, clock.b:87, …) sometimes don't disconnect
+	# their wmsrv channel cleanly, preswmloop's "rc == nil" reaper never
+	# fires, and the tab persists in the presentation zone.
+	spawn launchappns(tp, guimod, newctxt, appargs, id);
 	writeappstatus(id, "running", targetact);
 }
 
 # launchappns: spawn a GUI app in a FORKNS namespace where /chan/wmctl
 # is bound to the target task's wmsrv.  The app opens /chan/wmctl as
 # usual — the namespace resolves it to the correct per-task server.
+#
+# Before handing off to the app, spawn an appreaper that blocks on
+# /prog/<this-pid>/wait and tears down the artifact + AppSlot when
+# the app proc exits — the Plan-9 lifecycle-plumbing backstop for
+# apps whose in-menu Exit doesn't cleanly disconnect their wmsrv
+# channel (see INFR-118).  Capturing the pid here, before the app's
+# own pctl(NEWPGRP) call, gives us the canonical proc to wait on.
 launchappns(tp: ref TaskPres, guimod: GuiApp,
-	ctxt: ref Draw->Context, args: list of string)
+	ctxt: ref Draw->Context, args: list of string, id: string)
 {
+	spawn appreaper(tp.actid, id, sys->pctl(0, nil));
 	# Activity 0 uses the default /chan/wmctl — no FORKNS needed.
 	# Child tasks use /chan/wmctl.N and need FORKNS + bind so apps
 	# find the task's wmsrv at the well-known /chan/wmctl path.

@@ -177,6 +177,14 @@ jobs:
           [ -f "$f" ] && cp "$f" "$STAGE/"
         done
 
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        if find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in release stage:" >&2
+          find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
+
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
@@ -393,6 +401,14 @@ jobs:
         dial=
         LLMCONF
 
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        if find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in release stage:" >&2
+          find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
+
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
@@ -565,6 +581,14 @@ jobs:
         for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
           [ -f "$f" ] && cp "$f" "$STAGE/"
         done
+
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        if find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in release stage:" >&2
+          find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
 
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
@@ -780,6 +804,14 @@ jobs:
         dial=
         LLMCONF
 
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        if find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in release stage:" >&2
+          find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
+
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
@@ -933,6 +965,14 @@ jobs:
                  build-macos-sdl3.sh build-macos-headless.sh makemk.sh; do
           [ -f "$f" ] && cp "$f" "$RESOURCES/"
         done
+
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        if find "$APP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in release stage:" >&2
+          find "$APP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
 
     - name: Sign app bundle
       run: |
@@ -1127,6 +1167,17 @@ jobs:
           if (Test-Path $f) {
             Copy-Item $f "$STAGE\"
           }
+        }
+
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        $forbidden = Get-ChildItem -Path $STAGE -Recurse -ErrorAction SilentlyContinue | Where-Object {
+          $_.Name -like 'serve-agent*' -or $_.FullName -like '*agent-harness*'
+        }
+        if ($forbidden) {
+          Write-Host "FATAL: testing-only harness files found in release stage:"
+          $forbidden | ForEach-Object { Write-Host $_.FullName }
+          exit 1
         }
 
         Compress-Archive -Path "$STAGE\*" -DestinationPath "$STAGE.zip" -CompressionLevel Optimal

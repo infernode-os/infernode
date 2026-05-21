@@ -371,7 +371,8 @@ infernode/
 ├── tests/               # Unit tests (Limbo + shell)
 │   ├── host/            #   Host-side shell tests
 │   ├── inferno/         #   Inferno-side shell tests
-│   └── testing/         #   Testing framework self-tests
+│   ├── testing/         #   Testing framework self-tests
+│   └── agent-harness/   #   Ring-fenced eval-harness gateway (see Ring-fence rule)
 ├── dis/                 # Compiled Dis bytecode (~630 .dis files)
 ├── lib/                 # Runtime data (fonts, shell profile, etc.)
 │   └── veltro/          #   Veltro tools, agents, reminders
@@ -384,6 +385,40 @@ infernode/
 ├── .github/workflows/   # CI/CD (ci, security, scorecard)
 └── build-*.sh           # Platform build scripts
 ```
+
+## Ring-fence rule (tests/agent-harness/)
+
+`tests/agent-harness/` holds the in-tree pieces of the external evaluation
+harness — currently `serve-agent` (an Inferno rc profile that starts the
+headless agent stack) and `serve-agent.sh` (its host launcher). These
+files are **testing-only and must never ship in a release**:
+
+- The release tarballs / .app bundle / DMG / .zip would each expose
+  `/n/ui` over a 9P port if they included these files. That is not the
+  posture a default install should ever land in.
+- The harness configuration assumes localhost binding and a single
+  trusted operator — fine for a private evaluation rig, wrong for any
+  shipped artefact.
+
+Two CI guards enforce this, and they are load-bearing:
+
+1. **`.github/workflows/release.yml`** — after staging files for the
+   release tarball/.app/.zip but before archiving, every job runs a
+   `find` (bash) or `Get-ChildItem` (PowerShell) over the stage dir and
+   fails the build if anything matches `serve-agent*` or `*agent-harness*`.
+2. **`.github/workflows/ci.yml`** — a separate `ring-fence` job runs on
+   every PR and fails if those patterns appear in the source tree
+   outside `tests/agent-harness/`.
+
+**Do not move serve-agent files into `lib/sh/` or any path that the
+release copy loop touches** (currently `dis lib fonts module services
+locale usr mnt`, in `release.yml`). If the harness ever genuinely
+becomes a shippable feature, that decision needs explicit design work
+and the CI guards updated together — never silently.
+
+The subagent trajectory logging added in `appl/veltro/{spawn,subagent}.b`
+is *not* ring-fenced: it's a general observability improvement to the
+agent stack, useful outside the harness, and ships normally.
 
 ## Project tracking — Jira (Atlassian Cloud, free tier)
 

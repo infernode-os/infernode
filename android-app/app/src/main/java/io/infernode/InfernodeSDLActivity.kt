@@ -1,10 +1,14 @@
 package io.infernode
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -98,6 +102,11 @@ class InfernodeSDLActivity : SDLActivity() {
         // Asset extraction has to happen *before* SDLActivity.onCreate
         // calls SDL_main: emu's argv references the root directory.
         extractInfernoRootIfNeeded()
+        // Mic permission has to be requested at runtime — manifest
+        // declaration alone is not enough on API >= 23. Kick the
+        // dialog off before SDL takes the surface; AAudio capture in
+        // /dev/audio would silently return zeros otherwise.
+        ensureRecordAudioPermission()
         super.onCreate(savedInstanceState)
 
         // Phase 2b.2 / INFR-115 — keep Lucifer's SDL surface inside the
@@ -142,6 +151,18 @@ class InfernodeSDLActivity : SDLActivity() {
         }
 
         Log.i(TAG, "InfernodeSDLActivity created; SDL_main will boot wm")
+    }
+
+    private fun ensureRecordAudioPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                /* requestCode = */ 1
+            )
+        }
     }
 
     private fun extractInfernoRootIfNeeded() {

@@ -338,6 +338,7 @@ emuinit(void *imod)
 	kbind("#^", "/chan", MBEFORE);
 	kbind("#m", "/dev", MBEFORE);	/* pointer */
 	kbind("#c", "/dev", MBEFORE);
+	kbind("#A", "/dev", MBEFORE);	/* audio; no-op on hosts without devaudio */
 	kbind("#p", "/prog", MREPL);
 	kbind("#d", "/fd", MREPL);
 	kbind("#I", "/net", MAFTER);	/* will fail on Plan 9 */

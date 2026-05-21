@@ -82,7 +82,25 @@ static int mouse_buttons = 0;
  */
 static Uint32 sdl_button_state = 0;
 
-/* HiDPI state - for coordinate conversion */
+/* HiDPI state — pixel-per-logical-point ratio used to map SDL event
+ * coordinates (logical) to pixel-space coordinates the renderer/
+ * window_to_texture_coords logic operates in.
+ *
+ * Earlier this was SDL_GetWindowDisplayScale (the *display density*
+ * factor, e.g. 2.8125 on a 388 dpi Android phone). On platforms where
+ * SDL3 reports event coordinates already in pixels (Android in
+ * particular), using density-as-multiplier produced nonsense: a tap
+ * at 540×711 logical was converted to 1520×2000 pixels, far outside
+ * the 1080×2116 canvas, and every touch landed in or past the right/
+ * bottom edge.
+ *
+ * Compute it as the actual GetWindowSizeInPixels / GetWindowSize
+ * ratio in init_hidpi and on every WINDOW_PIXEL_SIZE_CHANGED:
+ *   - Android logical == pixels → 1.0 (no multiplier needed)
+ *   - Linux 150% HiDPI: 1.5
+ *   - macOS Retina: 2.0
+ * Universal correctness, no platform branches.
+ */
 static float display_scale = 1.0f;
 
 /* Shutdown request flag - can be set from any thread */
@@ -207,13 +225,18 @@ static void
 init_hidpi(void)
 {
 	int win_w, win_h, pix_w, pix_h;
-	float scale;
 
 	SDL_GetWindowSize(sdl_window, &win_w, &win_h);
 	SDL_GetWindowSizeInPixels(sdl_window, &pix_w, &pix_h);
-	scale = SDL_GetWindowDisplayScale(sdl_window);
 
-	display_scale = scale;
+	/* See the display_scale comment for why this is the right
+	 * definition (it's the pixels-per-logical-point ratio, not the
+	 * display density). */
+	if (win_w > 0)
+		display_scale = (float)pix_w / (float)win_w;
+	else
+		display_scale = 1.0f;
+
 	sdl_width = pix_w;
 	sdl_height = pix_h;
 	window_width = pix_w;
@@ -936,7 +959,9 @@ sdl3_mainloop(void)
 				break;
 
 			case SDL_EVENT_MOUSE_MOTION:
-				/* SDL reports mouse in logical (window) coords; scale to physical (renderer) coords */
+				/* SDL event coords are in window logical points;
+				 * display_scale converts to pixels (1.0 on Android,
+				 * where logical == pixels). */
 				window_to_texture_coords(event.motion.x * display_scale, event.motion.y * display_scale, &mouse_x, &mouse_y);
 				mousetrack(map_buttons(sdl_button_state), mouse_x, mouse_y, 0);
 				break;
@@ -1004,7 +1029,16 @@ sdl3_mainloop(void)
 					SDL_GetWindowSizeInPixels(sdl_window, &pix_w, &pix_h);
 					window_width = pix_w;
 					window_height = pix_h;
-					display_scale = SDL_GetWindowDisplayScale(sdl_window);
+					/* See display_scale comment: pixel/logical
+					 * ratio, not density. */
+					{
+						int log_w = 0, log_h = 0;
+						SDL_GetWindowSize(sdl_window, &log_w, &log_h);
+						if (log_w > 0)
+							display_scale = (float)pix_w / (float)log_w;
+						else
+							display_scale = 1.0f;
+					}
 					calc_dest_rect();
 				}
 				break;

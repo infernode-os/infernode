@@ -16,6 +16,13 @@
 # Android-specific behaviour selector is *which boot script* the
 # Activity invokes.
 
+# KLUDGE-MOBILE-ACCORDION-INFR-119 — mobile-mode signal for
+# wm/lucifer. Lucifer reads /env/infmobile in init() and switches
+# to the accordion layout (zonerects / drawchrome / mouseproc) when
+# this is "1". Remove this line + every other site tagged INFR-119
+# when the proper split-zones + pager refactor lands.
+infmobile = 1
+
 # Bigger fonts for phone screens.
 #
 # Lucifer and most UI elements (wm/shell, wm/editor, acme, xenith,

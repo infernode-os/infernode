@@ -10,6 +10,14 @@ This directory ships the in-tree pieces needed to drive an InferNode
 instance from an external evaluation harness. The harness itself lives
 in a private repo and talks 9P to two localhost ports.
 
+## Reading order
+
+| Doc | When to read it |
+|---|---|
+| **This README** | Quick start — what's here, how to run it. |
+| [PROTOCOL.md](PROTOCOL.md) | The 9P contract — every path, event, log file the harness can rely on. |
+| [HARNESS-GUIDE.md](HARNESS-GUIDE.md) | Practitioner guide — how to actually build a harness against the protocol. Sample flows in pseudocode. |
+
 ## Files
 
 | File | Purpose |
@@ -106,10 +114,46 @@ filesystem state, not parse the log.
 ## What's *not* here
 
 - The harness itself (scoring, judge calls, scenario YAML) — that lives
-  in a private repo per the design decision.
+  in a private repo per the design decision. See [HARNESS-GUIDE.md](HARNESS-GUIDE.md)
+  for what the harness needs to do.
 - A second keyfile for `/n/ui` — by choice we share the `serve-llm` key.
   If you ever need to separate them, generate two keys and edit
   `SERVE_LLM_KEY` in `serve-agent.sh`.
 - A network-reachable export. If you genuinely need remote orchestration,
   change the `tcp!127.0.0.1!` prefixes in `serve-agent`, but be aware
   the keyfile becomes a network-reachable credential.
+- Per-turn token and latency telemetry. Phase 1 has running-total token
+  count and end-to-end wall clock; phase 2 will likely add per-turn
+  signal if the harness needs it. See [HARNESS-GUIDE.md § Phase 2
+  telemetry](HARNESS-GUIDE.md#phase-2-telemetry-when-the-time-comes).
+
+## Smoke-test
+
+```sh
+./tests/agent-harness/serve-agent.sh &
+# wait ~5 seconds for boot
+ss -tlnp | grep -E ':5640|:5641'
+# Both ports should show LISTEN on 127.0.0.1. From a second emu:
+emu -c1 -r. /dis/sh.dis tmp/smoke.rc
+```
+
+`tmp/smoke.rc` (Inferno sh):
+
+```rc
+load std
+bind -a '#I' /net
+mount -ac {mntgen} /n
+trfs '#U*' /n/local
+ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+bind -bc $ghome/.infernode/lib/keyring /lib/keyring
+
+mount -k /lib/keyring/serve-llm 'tcp!127.0.0.1!5641' /n/ui
+cat /n/ui/ctl                          # expect: "activities: 0\ncurrent: 0"
+cat /n/ui/activity/0/label             # expect: "Main"
+
+mount -k /lib/keyring/serve-llm 'tcp!127.0.0.1!5640' /n/llm
+cat /n/llm/new                         # expect: a session id (e.g. "1")
+```
+
+If those three reads return as expected, the gateway is working
+end-to-end and the harness's 9P transport story is validated.

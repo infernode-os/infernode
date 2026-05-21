@@ -424,6 +424,58 @@ the layout. Veltro's workflow: read the current composition, modify it,
 write it back.
 
 
+## GUI Control Surface
+
+In GUI mode under Lucifer, Matrix exposes the same `load` / `unload` /
+composition-editing operations through direct manipulation. The GUI is
+a thin shortcut over the 9P control surface above -- every click ends
+up writing the same verbs to `/n/matrix/ctl`.
+
+### Empty-state picker
+
+When Matrix opens without a composition loaded (or after `unload`), the
+pane body is a picker. The header is followed by one row per file in
+`/lib/matrix/compositions/`. Left-clicking a row issues a `load <name>`
+through the control surface; the picker is replaced by the
+composition's display modules.
+
+Click detection is edge-triggered (button-1 down transition only), so
+dragging across rows does not fire repeated loads. The right-click menu
+path resets this latch on dismiss, so a click immediately after the
+menu closes still registers.
+
+### Right-click composition menu
+
+Right-click anywhere in the Matrix pane to open a contextual menu
+(Plan 9 hold-and-release style, via `module/menu.m`). The menu is
+rebuilt on every show by listing `/lib/matrix/compositions/`, so newly
+pinned compositions appear without restarting:
+
+| Item | Action |
+|------|--------|
+| `Unload` | `unload` -- clears the current composition; returns to the picker. |
+| `Edit <current>` | Opens the current composition file in `wm/editor` as a new presentation-zone tab. Disabled when no composition is loaded. |
+| `Load <name>` | One entry per file under `/lib/matrix/compositions/`. Issues `load <name>`. |
+
+The `Edit` action is routed through Lucifer's artifact-ctl mechanism
+(`/n/ui/activity/<id>/presentation/ctl`) rather than spawning
+`wm/editor` directly. This is necessary because each presentation
+tab is a single-shot wmclient slot under Lucifer; routing through
+artifact-ctl gives `wm/editor` its own slot, its own `Draw->Context`,
+and its own wmsrv connection -- the same shape as launching it from a
+Lucifer Apps menu.
+
+### Headless equivalence
+
+The GUI surface adds no new operations: the picker is `load`, the
+right-click menu is `load` / `unload` / artifact-tab spawn. A headless
+process driving `/n/matrix/ctl` and `/n/matrix/composition` directly
+has the same reach as a user clicking through the menu. This matters
+for agents: Veltro can drive Matrix end-to-end without ever rendering
+the GUI surface, and what it does is observable in the same namespace
+the user manipulates.
+
+
 ## Proof of Concept: TBL4 Trading System
 
 The POC demonstrates the full Matrix loop using the TBL4 trading system

@@ -16,6 +16,13 @@
 # Android-specific behaviour selector is *which boot script* the
 # Activity invokes.
 
+# KLUDGE-MOBILE-ACCORDION-INFR-119 — mobile-mode signal for
+# wm/lucifer. Lucifer reads /env/infmobile in init() and switches
+# to the accordion layout (zonerects / drawchrome / mouseproc) when
+# this is "1". Remove this line + every other site tagged INFR-119
+# when the proper split-zones + pager refactor lands.
+infmobile = 1
+
 # Bigger fonts for phone screens.
 #
 # Lucifer and most UI elements (wm/shell, wm/editor, acme, xenith,
@@ -40,14 +47,40 @@
 #
 # Floor is sans.18 (small UI labels). 14 and 18 jump to 24. Bold
 # tier scales the same.
-bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.18.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.18.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
-bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
+# INFR-115 mobile font ladder: real 32pt subfonts from
+# tools/gen-mobile-fonts.sh (DejaVu*.32.* under fonts/dejavu/ + the
+# matching unicode.sans.48.font / unicode.sans.bold.48.font /
+# unicode.32.font combined manifests under fonts/combined/).
+#
+# Small UI labels (10/12) → sans.24. Body and anything 14/18/24
+# → sans.32. Bold tier scales the same. The unicode.14.font slot —
+# used by mono-context apps (wm/shell, wm/editor, acme, xenith,
+# charon, lucifer, lucipres) — binds to the proportional-mono
+# unicode.32.font so terminals and code editors get crisp mono
+# glyphs at the new size instead of the proportional fallback the
+# earlier (sans.24 over unicode.14.font) stopgap produced.
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.10.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.24.font /fonts/combined/unicode.sans.12.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.48.font /fonts/combined/unicode.sans.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.48.font /fonts/combined/unicode.sans.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.48.font /fonts/combined/unicode.sans.24.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.24.font /fonts/combined/unicode.sans.bold.12.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.14.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
+bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.24.font >[2] /dev/null
+bind /fonts/combined/unicode.48.font /fonts/combined/unicode.14.font >[2] /dev/null
+
+# Dev-mode toggle: when the Activity passes --no-logon as the last
+# argv, skip wm/logon in boot.sh below. Temporary convenience for
+# mobile UI iteration — every test rebuild would otherwise demand a
+# password before the screen we're trying to inspect renders.
+# secstore stays locked and factotum starts empty in this mode.
+# Flip the default in InfernodeSDLActivity when LLM/keyring work
+# needs auth.
+if {~ $* --no-logon} {
+	skiplogon = 1
+	echo 'boot-mobile: dev mode (--no-logon)'
+}
 
 # Hand off to the canonical boot sequence. `run` is Inferno sh's
 # source-include builtin (sh-std(1)); `. file` is NOT the same as

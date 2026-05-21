@@ -219,6 +219,33 @@ lastmousex := 0;
 conv_pct := 30;
 pres_pct := 45;
 
+# KLUDGE-MOBILE-ACCORDION-INFR-119 — temporary mobile layout.
+#
+# This block and every other site tagged KLUDGE-MOBILE-ACCORDION-INFR-119
+# is a stopgap that bends Lucifer's monolithic three-sub-image
+# compositor into a tap-to-expand accordion for phones. The proper
+# architecture (INFR-119) splits LuciConv / LuciCtx / LuciPres into
+# real wm windows and drives layout from a generic wm/pager daemon —
+# at that point all KLUDGE-MOBILE-ACCORDION-INFR-119 marked code
+# should be deleted wholesale, not edited. Do not extend this code
+# expecting it to live long.
+#
+# When $infmobile is "1" in the environment Lucifer was started in
+# (boot-mobile.sh sets it), zonerects() / drawchrome() / mouseproc
+# switch to a stacked accordion layout. expanded_zone is the index of
+# the zone whose body is visible (0 = conv, 1 = pres, 2 = ctx); the
+# other two zones collapse to a tappable title bar. Title bar geometry
+# is recorded on every layout pass so mouseproc can route taps.
+mobile := 0;
+expanded_zone := 0;
+mobile_conv_title_y := 0;
+mobile_pres_title_y := 0;
+mobile_ctx_title_y := 0;
+
+# KLUDGE-MOBILE-ACCORDION-INFR-119
+MOBILE_HEADERH:   con 88;        # task bar height in mobile mode
+MOBILE_TITLEBARH: con 72;        # per-zone title bar height in mobile mode
+
 # nslistener process ID — killed and respawned on activity switch
 nslistenerpid := -1;
 
@@ -287,6 +314,16 @@ init(ctxt: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 	stderr = sys->fildes(2);
 	initallowed();
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — mobile-mode detection.
+	# boot-mobile.sh sets infmobile=1 in the shell that exec's us.
+	# Remove this block + everything else tagged INFR-119 when the
+	# split-zones + pager refactor lands.
+	mobenv := readfile("/env/infmobile");
+	if(mobenv != nil && strip(mobenv) == "1") {
+		mobile = 1;
+		sys->fprint(stderr, "lucifer: mobile=1 (accordion layout)\n");
+	}
 
 	buildstamp := readfile("/lib/lucifer/buildstamp");
 	if(buildstamp == nil || buildstamp == "")
@@ -559,10 +596,59 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
+	if(mobile) {
+		# KLUDGE-MOBILE-ACCORDION-INFR-119 — accordion layout.
+		# Three stacked title bars, one expanded body.
+		# Layout from top:
+		#   header (bigger MOBILE_HEADERH for tap-friendly task tiles)
+		#   title bar for conv  +  conv body (zero if not expanded)
+		#   title bar for pres  +  pres body
+		#   title bar for ctx   +  ctx body
+		# Exactly one of the three bodies has non-zero height; the
+		# expanded zone gets all the remaining vertical space.
+		headerh := MOBILE_HEADERH;
+		titleh  := MOBILE_TITLEBARH;
+		zonety  := r.min.y + headerh + 1;
+		avail   := r.max.y - zonety - 3 * titleh;
+		if(avail < 0)
+			avail = 0;
+
+		convtitle_y := zonety;
+		convbody_h  := 0;
+		if(expanded_zone == 0)
+			convbody_h = avail;
+		prestitle_y := convtitle_y + titleh + convbody_h;
+		presbody_h  := 0;
+		if(expanded_zone == 1)
+			presbody_h = avail;
+		ctxtitle_y  := prestitle_y + titleh + presbody_h;
+		ctxbody_h   := 0;
+		if(expanded_zone == 2)
+			ctxbody_h = avail;
+
+		mobile_conv_title_y = convtitle_y;
+		mobile_pres_title_y = prestitle_y;
+		mobile_ctx_title_y  = ctxtitle_y;
+
+		# The x-based mouse routing in desktop mode is disabled in
+		# mobile mode — mouseproc reads mobile_*_title_y instead.
+		pres_zone_minx = -1;
+		pres_zone_maxx = -1;
+		ctx_zone_minx  = -1;
+
+		convr := Rect((r.min.x, convtitle_y + titleh),
+			(r.max.x, convtitle_y + titleh + convbody_h));
+		presr := Rect((r.min.x, prestitle_y + titleh),
+			(r.max.x, prestitle_y + titleh + presbody_h));
+		ctxr  := Rect((r.min.x, ctxtitle_y  + titleh),
+			(r.max.x, ctxtitle_y  + titleh + ctxbody_h));
+		return (convr, presr, ctxr);
+	}
+
+	# Desktop: classic three-column.
 	headerh := 40;
 	zonety := r.min.y + headerh + 1;
 	w := r.dx();
-
 	convw := w * conv_pct / 100;
 	presw := w * pres_pct / 100;
 
@@ -643,6 +729,8 @@ drawchrome(r: Rect)
 	# The full-window clear would blank all zone sub-images and leave them
 	# black until the next user interaction triggers a zone redraw.
 	headerh := 40;
+	if(mobile)
+		headerh = MOBILE_HEADERH;
 	headerr := Rect((r.min.x, r.min.y), (r.max.x, r.min.y + headerh));
 	mainwin.draw(headerr, headercol, nil, (0, 0));
 
@@ -772,19 +860,80 @@ drawchrome(r: Rect)
 	zonety := r.min.y + headerh + 1;
 	mainwin.draw(Rect((r.min.x, zonety - 1), (r.max.x, zonety)), headercol, nil, (0, 0));
 
-	# Zone width calculations (must match zonerects)
-	w := r.dx();
-	convw := w * conv_pct / 100;
-	presw := w * pres_pct / 100;
-	presx := r.min.x + convw;
-	ctxx  := presx + presw;
-
-	# Zone separator lines (1px vertical) — headercol matches the subdued
-	# grey used for the header bar, keeping the chrome unobtrusive.
-	mainwin.draw(Rect((presx, zonety), (presx + 1, r.max.y)), headercol, nil, (0, 0));
-	mainwin.draw(Rect((ctxx,  zonety), (ctxx + 1,  r.max.y)), headercol, nil, (0, 0));
+	if(mobile) {
+		# KLUDGE-MOBILE-ACCORDION-INFR-119 — three tappable title
+		# bars at known y-coordinates (computed by zonerects()).
+		# Title bar label tells the user what's collapsed; a small
+		# chevron hints at tap-to-expand. The expanded zone's title
+		# bar uses accentcol for the chevron so the eye can find
+		# which view is open.
+		drawmobiletitle("Chat",      mobile_conv_title_y, expanded_zone == 0);
+		drawmobiletitle("Workspace", mobile_pres_title_y, expanded_zone == 1);
+		drawmobiletitle("Context",   mobile_ctx_title_y,  expanded_zone == 2);
+	} else {
+		# Desktop: vertical separator lines at presx and ctxx.
+		w := r.dx();
+		convw := w * conv_pct / 100;
+		presw := w * pres_pct / 100;
+		presx := r.min.x + convw;
+		ctxx  := presx + presw;
+		mainwin.draw(Rect((presx, zonety), (presx + 1, r.max.y)), headercol, nil, (0, 0));
+		mainwin.draw(Rect((ctxx,  zonety), (ctxx + 1,  r.max.y)), headercol, nil, (0, 0));
+	}
 
 	mainwin.flush(Draw->Flushnow);
+}
+
+# KLUDGE-MOBILE-ACCORDION-INFR-119
+# Draw a single mobile-mode zone title bar at the given y-coordinate.
+# The bar is full-width × MOBILE_TITLEBARH, painted with headercol so
+# it blends with the main header strip above. Label text on the left;
+# chevron on the right ("v" when collapsed, "^" when expanded). The
+# expanded bar's chevron is drawn in accentcol so the eye can find
+# the currently open view at a glance.
+drawmobiletitle(label: string, y, expanded: int)
+{
+	if(mainwin == nil)
+		return;
+	titler := Rect((mainwin.r.min.x, y),
+		(mainwin.r.max.x, y + MOBILE_TITLEBARH));
+	mainwin.draw(titler, headercol, nil, (0, 0));
+	# Bottom border separator
+	mainwin.draw(Rect((mainwin.r.min.x, y + MOBILE_TITLEBARH - 1),
+		(mainwin.r.max.x, y + MOBILE_TITLEBARH)),
+		bordercol, nil, (0, 0));
+	if(mainfont != nil) {
+		textx := mainwin.r.min.x + 24;
+		texty := y + (MOBILE_TITLEBARH - mainfont.height) / 2;
+		mainwin.text((textx, texty), textcol, (0, 0), mainfont, label);
+
+		chev := "v";
+		col  := textcol;
+		if(expanded) {
+			chev = "^";
+			col = accentcol;
+		}
+		cw := mainfont.width(chev);
+		cx := mainwin.r.max.x - cw - 24;
+		mainwin.text((cx, texty), col, (0, 0), mainfont, chev);
+	}
+}
+
+# KLUDGE-MOBILE-ACCORDION-INFR-119
+# Switch which zone body is expanded. No-op if z is already the
+# expanded zone. Kicks the mainloop into a full layout pass via a
+# synthetic M_RESIZE pointer event so handleresize() runs and the
+# zone modules get fresh sub-images.
+setexpandedzone(z: int)
+{
+	if(!mobile || z == expanded_zone)
+		return;
+	if(z < 0 || z > 2)
+		return;
+	expanded_zone = z;
+	p := zpointer;
+	p.buttons = M_RESIZE;
+	alt { cmouse <-= ref p => ; * => ; }
 }
 
 # --- Per-task presentation zone management ---
@@ -1687,11 +1836,35 @@ eventproc()
 
 mouseproc()
 {
-	headerh := 40;
 	for(;;) {
 		p := <-win.ctxt.ptr;
 		lastmousex = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
+			headerh := 40;
+			titleh  := 0;
+			if(mobile) {
+				headerh = MOBILE_HEADERH;
+				titleh  = MOBILE_TITLEBARH;
+			}
+			# KLUDGE-MOBILE-ACCORDION-INFR-119 — title-bar tap →
+			# switch expanded zone. Check this before falling through
+			# to header / zone routing so a tap in a title bar can't
+			# accidentally fire other handlers.
+			if(mobile && (p.buttons & 1)) {
+				y := p.xy.y;
+				if(y >= mobile_conv_title_y && y < mobile_conv_title_y + titleh) {
+					setexpandedzone(0);
+					continue;
+				}
+				if(y >= mobile_pres_title_y && y < mobile_pres_title_y + titleh) {
+					setexpandedzone(1);
+					continue;
+				}
+				if(y >= mobile_ctx_title_y && y < mobile_ctx_title_y + titleh) {
+					setexpandedzone(2);
+					continue;
+				}
+			}
 			# Header area: tile clicks and scroll
 			if(p.xy.y < mainwin.r.min.y + headerh) {
 				if(p.buttons & 1) {
@@ -1745,17 +1918,28 @@ mouseproc()
 				}
 				continue;
 			}
-			# Route by X position to zones
-			if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx &&
-					p.xy.x < pres_zone_maxx) {
-				# Presentation zone
-				alt { presMouseCh <-= p => ; * => ; }
-			} else if(ctx_zone_minx > 0 && p.xy.x >= ctx_zone_minx) {
-				# Context zone
-				alt { ctxMouseCh <-= p => ; * => ; }
+			if(mobile) {
+				# KLUDGE-MOBILE-ACCORDION-INFR-119 — only the expanded
+				# zone gets pointer events; the collapsed ones have
+				# zero body height anyway.
+				case expanded_zone {
+				1 => alt { presMouseCh <-= p => ; * => ; }
+				2 => alt { ctxMouseCh  <-= p => ; * => ; }
+				*  => alt { convMouseCh <-= p => ; * => ; }
+				}
 			} else {
-				# Conversation zone (default)
-				alt { convMouseCh <-= p => ; * => ; }
+				# Desktop: route by X position to zones
+				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx &&
+						p.xy.x < pres_zone_maxx) {
+					# Presentation zone
+					alt { presMouseCh <-= p => ; * => ; }
+				} else if(ctx_zone_minx > 0 && p.xy.x >= ctx_zone_minx) {
+					# Context zone
+					alt { ctxMouseCh <-= p => ; * => ; }
+				} else {
+					# Conversation zone (default)
+					alt { convMouseCh <-= p => ; * => ; }
+				}
 			}
 		}
 	}

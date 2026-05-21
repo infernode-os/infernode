@@ -82,7 +82,7 @@ class InfernodeSDLActivity : SDLActivity() {
      */
     override fun getArguments(): Array<String> {
         val infernoRoot = File(filesDir, "inferno-root")
-        return arrayOf(
+        val args = mutableListOf(
             "-s",
             "-c1",
             "-pheap=1024m",
@@ -93,9 +93,13 @@ class InfernodeSDLActivity : SDLActivity() {
             // boot-mobile.sh applies mobile-only setup (bigger fonts,
             // future hit-target tuning, swipe-nav hooks) and then
             // sources the regular boot.sh. Keeps desktop boot.sh
-            // untouched. INFR-113.
+            // untouched.
             "-l", "/lib/lucifer/boot-mobile.sh",
         )
+        if (DEV_SKIP_LOGON) {
+            args += "--no-logon"
+        }
+        return args.toTypedArray()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,7 +171,10 @@ class InfernodeSDLActivity : SDLActivity() {
 
     private fun extractInfernoRootIfNeeded() {
         val root = File(filesDir, "inferno-root").apply { mkdirs() }
-        val marker = File(root, ".extracted-v1")
+        // .extracted-v2 — bumped from v1 when fonts/ was added to the
+        // asset staging (INFR-115). Devices that already extracted at
+        // v1 won't have fonts/ unless they re-extract.
+        val marker = File(root, ".extracted-v2")
         if (marker.exists()) return
         copyAssetTree(assets, "inferno-root", root)
         marker.createNewFile()
@@ -191,5 +198,22 @@ class InfernodeSDLActivity : SDLActivity() {
 
     companion object {
         private const val TAG = "InfernodeSDL"
+
+        /**
+         * TEMPORARY: skip wm/logon during mobile dev iteration.
+         *
+         * Typing a password on every test rebuild is wasted time when
+         * iterating on fonts / layouts / hit-targets. When this is
+         * true, the Activity appends `--no-logon` to the argv;
+         * /lib/lucifer/boot-mobile.sh forwards it as `$skiplogon=1`;
+         * /lib/lucifer/boot.sh skips wm/logon. secstore stays locked,
+         * factotum has no keys — LLM/keyring features won't work in
+         * this mode.
+         *
+         * Flip back to `false` once we're past the UI iteration phase
+         * and ready to wire INFR-117 (LLM in the APK), which needs
+         * factotum to be populated.
+         */
+        private const val DEV_SKIP_LOGON = true
     }
 }

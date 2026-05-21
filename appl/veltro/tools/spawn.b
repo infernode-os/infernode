@@ -100,6 +100,12 @@ DEFAULT_TIMEOUT_MS: con 300000;   # 5 minutes
 RESULT_END:         con "\n<<EOF>>\n";
 UI_MOUNT:           con "/n/ui";
 
+# Per-subagent trajectory log directory. spawn.b opens one file per child
+# before FORKNS and passes the fd into subagent->runloop. /usr/inferno/...
+# is unreachable from inside the restricted namespace; opening before
+# restriction is the only way to give subagents an observable record.
+SUBAGENT_LOG_BASE:  con "/usr/inferno/veltro/subagents";
+
 inited := 0;
 
 init(): string
@@ -234,6 +240,10 @@ exec(args: string): string
 	# Result channel: buffered N so collector goroutines never block.
 	resultchan := chan[N] of ref ResultMsg;
 
+	# Common timestamp for all subagents in this batch — combined with idx,
+	# gives each child a unique log filename without coordinating writers.
+	batchms := sys->millisec();
+
 	# Launch all subagents in parallel
 	idx := 0;
 	speclist := specs;
@@ -261,6 +271,12 @@ exec(args: string): string
 			nil
 		);
 
+		# Open the trajectory log fd in the parent namespace, before
+		# spawning. Survives FORKNS + bind-replace via the same fd-keep
+		# pattern as llmaskfd. nil-on-failure: logging is best-effort —
+		# a missing log must never break the agent loop.
+		logfd := opensubagentlog(batchms, idx);
+
 		# Scheduled (at= or every=): fire-and-forget. The child becomes a
 		# real, killable process visible in /prog; result collection
 		# would block well past any sane timeout (at= may be hours away;
@@ -268,7 +284,7 @@ exec(args: string): string
 		# do not spawn a collector. Cancellation: echo kill > /prog/$pid/ctl.
 		if(spec.at_ms > 0 || spec.every_ms > 0) {
 			# Pass nil pipe — runchild detects this and writes nothing back.
-			spawn runchild(nil, caps, spec.task, slot.mod, spec.at_ms, spec.every_ms);
+			spawn runchild(nil, logfd, caps, spec.task, slot.mod, spec.at_ms, spec.every_ms);
 			schedmsg: string;
 			if(spec.at_ms > 0)
 				schedmsg = sys->sprint("scheduled: single run in %d ms", spec.at_ms);
@@ -287,7 +303,7 @@ exec(args: string): string
 			continue;
 		}
 
-		spawn runchild(pipefds[1], caps, spec.task, slot.mod, 0, 0);
+		spawn runchild(pipefds[1], logfd, caps, spec.task, slot.mod, 0, 0);
 		pipefds[1] = nil;
 		spawn collectorwithTimeout(pipefds[0], resultchan, timeout_ms, idx);
 		idx++;
@@ -613,7 +629,8 @@ collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, tim
 #   both 0       -> single iteration immediately (existing behaviour)
 # When scheduled, pipefd is nil: parent has already reported "scheduled"
 # and is not waiting. Cancellation: echo kill > /prog/$pid/ctl.
-runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string,
+runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
+         caps: ref NsConstruct->Capabilities, task: string,
          samod: SubAgent, at_ms: int, every_ms: int)
 {
 	# Step 1: Fresh process group (empty service registry)
@@ -685,12 +702,16 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string,
 	verifysafefds();
 
 	# Step 7: Prune FDs — keep stdin, stdout, stderr; pipe (if present);
-	# and the LLM ask fd. pipefd is nil for fire-and-forget scheduled runs.
+	# the LLM ask fd; and the trajectory log fd (if present). pipefd and
+	# logfd may both be nil (logfd: log creation failed; pipefd:
+	# fire-and-forget scheduled run).
 	keepfds := 0 :: 1 :: 2 :: nil;
 	if(pipefd != nil)
 		keepfds = pipefd.fd :: keepfds;
 	if(llmaskfd != nil)
 		keepfds = llmaskfd.fd :: keepfds;
+	if(logfd != nil)
+		keepfds = logfd.fd :: keepfds;
 	sys->pctl(Sys->NEWFD, keepfds);
 
 	# Step 8: Block device naming (after all bind operations)
@@ -727,13 +748,13 @@ runchild(pipefd: ref Sys->FD, caps: ref NsConstruct->Capabilities, task: string,
 	if(every_ms > 0) {
 		for(;;) {
 			sys->sleep(every_ms);
-			samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, 50);
+			samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, logfd, 50);
 		}
 		# unreachable
 	}
 
 	# Run the agent loop using the dedicated (non-shared) SubAgent instance
-	result := samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, 50);
+	result := samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, logfd, 50);
 
 	writeresult(pipefd, result);
 	pipefd = nil;
@@ -1023,4 +1044,26 @@ stripquotes(s: string): string
 	   (s[0] == '\'' && s[len s - 1] == '\''))
 		return s[1:len s - 1];
 	return s;
+}
+
+# Open a per-subagent trajectory log fd. Best-effort: returns nil on any
+# failure so logging never breaks the agent loop. Caller passes the fd
+# into runchild before FORKNS; subagent.b writes step entries to it.
+opensubagentlog(batchms, idx: int): ref Sys->FD
+{
+	ensuredir("/usr/inferno");
+	ensuredir("/usr/inferno/veltro");
+	ensuredir(SUBAGENT_LOG_BASE);
+
+	path := sys->sprint("%s/%d.%d.log", SUBAGENT_LOG_BASE, batchms, idx);
+	return sys->create(path, Sys->OWRITE, 8r644);
+}
+
+# Ensure a directory exists; no-op if already present.
+ensuredir(path: string)
+{
+	(ok, nil) := sys->stat(path);
+	if(ok >= 0)
+		return;
+	sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
 }

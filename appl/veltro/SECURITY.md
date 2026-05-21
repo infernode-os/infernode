@@ -192,7 +192,7 @@ Parent (spawn.b):
 Child (runchild):
   1. Apply namespace restrictions (steps 1-8 above)
   2. Build tool list from preloadedtools (already in memory)
-  3. subagent->runloop(task, toolmods, toolnames, prompt, llmfd, 50)
+  3. subagent->runloop(task, toolmods, toolnames, prompt, llmfd, logfd, 50)
 ```
 
 The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded before namespace restriction. Tool invocations in the runloop call `mod->exec(args)` directly on the pre-loaded module references.

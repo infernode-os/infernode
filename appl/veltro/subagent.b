@@ -34,6 +34,10 @@ include "subagent.m";
 STREAM_THRESHOLD: con 4096;
 SCRATCH_PATH: con "/tmp/scratch";
 
+# Per-step truncation length for trajectory log entries. Matches veltro.b's
+# LOG_PREVIEW so parent and subagent logs share one format.
+LOG_PREVIEW: con 200;
+
 stderr: ref Sys->FD;
 
 # Pre-loaded tool storage (set by runloop)
@@ -43,6 +47,10 @@ loadedtoolnames: list of string;
 # LLM ask file descriptor (opened before FORKNS + bind-replace restriction)
 # Session is already created and configured - just use this fd
 llmaskfd: ref Sys->FD;
+
+# Trajectory log file descriptor (opened before FORKNS, nil = no logging).
+# Survives namespace restriction via the same fd-keep pattern as llmaskfd.
+logfd: ref Sys->FD;
 
 init(): string
 {
@@ -65,7 +73,7 @@ init(): string
 # Main agent loop
 # Session is already created and configured by spawn.b - just use the ask fd
 runloop(task: string, tools: list of Tool, toolnames: list of string,
-        systemprompt: string, askfd: ref Sys->FD, maxsteps: int): string
+        systemprompt: string, askfd: ref Sys->FD, lfd: ref Sys->FD, maxsteps: int): string
 {
 	if(sys == nil) {
 		err := init();
@@ -81,11 +89,16 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	# Session is already fresh and configured - no reset needed
 	llmaskfd = askfd;
 
+	# Store trajectory log fd (survives NEWNS). nil = no logging.
+	logfd = lfd;
+
 	# Build namespace description
 	ns := discovernamespace(toolnames);
 
 	# Assemble initial prompt
 	prompt := assembleprompt(task, ns, systemprompt);
+
+	logheader(task);
 
 	lastresult := "";
 	loopstart := sys->millisec();
@@ -102,6 +115,7 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 		if(tool == "" || str->tolower(tool) == "done") {
 			totaltime := sys->millisec() - loopstart;
 			sys->fprint(stderr, "subagent: completed in %d steps, %dms total\n", step + 1, totaltime);
+			logfooter("done", step + 1, totaltime);
 			# Return final response (excluding the DONE marker)
 			final := stripaction(response);
 			if(final != "")
@@ -115,6 +129,8 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 		result := calltool(tool, toolargs);
 		lastresult = result;
 
+		logstep(step + 1, tool, toolargs, result);
+
 		# Check for large result - write to scratch
 		if(len result > STREAM_THRESHOLD) {
 			scratchfile := writescratch(result, step);
@@ -127,7 +143,59 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 
 	totaltime := sys->millisec() - loopstart;
 	sys->fprint(stderr, "subagent: max steps reached after %dms\n", totaltime);
+	logfooter("max-steps", maxsteps, totaltime);
 	return sys->sprint("ERROR:max steps (%d) reached without completion", maxsteps);
+}
+
+# Replace newlines and tabs with spaces (single-line log entries).
+# Matches veltro.b's collapsenl so parent and subagent logs share one format.
+collapsenl(s: string): string
+{
+	result := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '\n' || c == '\r' || c == '\t')
+			result += " ";
+		else
+			result += string c;
+	}
+	return result;
+}
+
+# Truncate to LOG_PREVIEW chars with "..." marker (matches veltro.b).
+preview(s: string): string
+{
+	if(len s <= LOG_PREVIEW)
+		return s;
+	return s[0:LOG_PREVIEW] + "...";
+}
+
+logheader(task: string)
+{
+	if(logfd == nil)
+		return;
+	line := sys->sprint("# subagent task=%s\n", collapsenl(preview(task)));
+	data := array of byte line;
+	sys->write(logfd, data, len data);
+}
+
+logstep(step: int, tool, toolargs, result: string)
+{
+	if(logfd == nil)
+		return;
+	line := sys->sprint("step %d: %s %s -> %s\n",
+		step, tool, collapsenl(preview(toolargs)), collapsenl(preview(result)));
+	data := array of byte line;
+	sys->write(logfd, data, len data);
+}
+
+logfooter(status: string, steps, totalms: int)
+{
+	if(logfd == nil)
+		return;
+	line := sys->sprint("# end status=%s steps=%d total_ms=%d\n", status, steps, totalms);
+	data := array of byte line;
+	sys->write(logfd, data, len data);
 }
 
 # Discover namespace - list available tools

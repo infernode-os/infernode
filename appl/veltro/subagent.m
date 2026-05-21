@@ -24,6 +24,10 @@ SubAgent: module {
 	# toolnames: list of tool name strings (for namespace discovery)
 	# systemprompt: system prompt from parent (session already configured)
 	# llmaskfd: file descriptor for session's /n/llm/<id>/ask (opened before restriction)
+	# logfd: file descriptor for per-subagent trajectory log (nil = no logging).
+	#        Same "open before FORKNS, kept across NEWFD" pattern as llmaskfd —
+	#        gives the harness an observable record of each step taken inside
+	#        the restricted namespace, where /usr/inferno/... is not reachable.
 	# maxsteps: maximum agent steps (typically 50)
 	# Returns final result string
 	#
@@ -34,5 +38,6 @@ SubAgent: module {
 	             toolnames: list of string,
 	             systemprompt: string,
 	             llmaskfd: ref Sys->FD,
+	             logfd: ref Sys->FD,
 	             maxsteps: int): string;
 };

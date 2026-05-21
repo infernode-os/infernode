@@ -15,6 +15,38 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────
+  # Ring-fence pre-flight: testing-only harness files must live
+  # under tests/agent-harness/. Catches "someone moved serve-agent
+  # back into lib/sh/" before any release build runs. See CLAUDE.md.
+  # ─────────────────────────────────────────────
+  ring-fence:
+    name: Ring-fence (tests/agent-harness/)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Verify serve-agent* files only under tests/agent-harness/
+      run: |
+        offenders=$(find . -path ./.git -prune -o \
+          \( -name 'serve-agent*' -o -path '*agent-harness*' \) \
+          -not -path './tests/agent-harness/*' \
+          -not -path './tests/agent-harness' \
+          -print 2>/dev/null | grep -v '^$' || true)
+        if [ -n "$offenders" ]; then
+          echo "FATAL: testing-only harness files found outside tests/agent-harness/:" >&2
+          echo "$offenders" >&2
+          echo "" >&2
+          echo "These files must live under tests/agent-harness/ so CI guards" >&2
+          echo "in release.yml can keep them out of shipped artefacts." >&2
+          exit 1
+        fi
+        echo "Ring-fence OK: no testing-only harness files outside tests/agent-harness/."
+
+  # ─────────────────────────────────────────────
   # Linux AMD64: Full bootstrap build from source
   # ─────────────────────────────────────────────
   linux-amd64:

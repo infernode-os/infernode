@@ -12,8 +12,10 @@ If you discover a security vulnerability in InferNode, please report it
 responsibly:
 
 1. **Do not** open a public GitHub issue for security vulnerabilities.
-2. Email security details to the maintainers via GitHub private vulnerability
-   reporting: https://github.com/infernode-os/infernode/security/advisories/new
+2. Report via one of:
+   - GitHub private vulnerability reporting (preferred):
+     https://github.com/infernode-os/infernode/security/advisories/new
+   - Email: security@infernode.io
 3. Include a description of the vulnerability, steps to reproduce, and any
    relevant proof-of-concept code.
 

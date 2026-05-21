@@ -26,8 +26,8 @@ requests, discussions, and any other channels used for project communication.
 ## Enforcement
 
 Instances of unacceptable behavior may be reported to the project maintainers
-via email or GitHub private message. All reports will be reviewed and handled
-with discretion. Maintainers have the right to remove, edit, or reject
+at contact@infernode.io or via GitHub private message. All reports will be
+reviewed and handled with discretion. Maintainers have the right to remove, edit, or reject
 contributions that violate this code of conduct, and to temporarily or
 permanently ban contributors for repeated or severe violations.
 

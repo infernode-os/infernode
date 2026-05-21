@@ -1,0 +1,11 @@
+# GitHub Sponsors / funding configuration.
+# The `github:` entry only renders a Sponsor button once the org has
+# enrolled in GitHub Sponsors (Settings -> Sponsors on infernode-os).
+# Until then GitHub silently ignores it; no harm in committing it now.
+github: [infernode-os]
+
+# Uncomment and fill in once accounts are set up on those platforms.
+# open_collective: infernode
+# patreon: infernode
+# ko_fi: infernode
+# custom: ["https://infernode.io/donate"]

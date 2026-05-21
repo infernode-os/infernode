@@ -27,11 +27,26 @@ if [[ ! -x "$EMU" ]]; then
     exit 0
 fi
 
-# Create a headless boot script that skips wm/logon (no interactive login
-# possible in CI) but runs everything else: tools9p, luciuisrv, lucifer.
-sed 's/^wm\/logon/#wm\/logon  # skipped for CI/' \
-    "$ROOT/lib/lucifer/boot.sh" > "$BOOTSCRIPT"
-# Copy into emu root so the emu can see it
+# Create a headless boot script that skips wm/logon (no interactive
+# login possible in CI) but runs everything else: tools9p, luciuisrv,
+# lucifer.
+#
+# boot.sh gates wm/logon behind `if {! ~ $skiplogon 1} { wm/logon }` —
+# the same mechanism mobile dev iteration uses (see
+# lib/lucifer/boot-mobile.sh). Set the variable in a wrapper script
+# and source boot.sh from it. We source via Inferno sh's `run`
+# builtin (NOT POSIX `.`, which in Inferno sh would try to load `./..dis`
+# and silently fail).
+#
+# Earlier the test used `sed 's/^wm\/logon/.../'` to comment out the
+# line directly. That broke when boot.sh wrapped wm/logon in an `if`
+# block — `wm/logon` was no longer at column 0, the anchored sed
+# didn't match, logon ran, blocked on stdin, and the 60s timeout
+# fired with a near-empty boot log.
+{
+    echo 'skiplogon = 1'
+    echo 'run /lib/lucifer/boot.sh'
+} > "$BOOTSCRIPT"
 cp "$BOOTSCRIPT" "$ROOT/tmp_jit_boot_test.sh"
 
 echo "JIT boot smoke test (timeout ${TIMEOUT}s)..."

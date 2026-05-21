@@ -32,6 +32,7 @@ ToolKeyring: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 UI_MOUNT: con "/n/ui";
@@ -72,6 +73,22 @@ doc(): string
 		"  - When a service fails with authentication errors\n" +
 		"  - When setting up email, LLM, or other services\n" +
 		"  - When the user asks about managing passwords/keys";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"keyring\"," +
+		"\"description\":\"Launch the credential manager for the user. Cannot read key values \\u2014 only opens the GUI or checks whether a service has credentials configured.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: open, need, check. Omit (or 'open') to just launch the GUI.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For need: free-text description of what credentials are needed. For check: the service name (e.g. anthropic, imap). Omit for open.\"}" +
+			"}," +
+			"\"required\":[]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

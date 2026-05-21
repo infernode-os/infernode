@@ -34,6 +34,7 @@ ToolHear: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 SPEECH_HEAR: con "/n/speech/hear";
@@ -68,6 +69,21 @@ doc(): string
 		"  hear 10000                 Listen for 10 seconds\n\n" +
 		"Requires /n/speech (run speech9p first).\n" +
 		"Configure STT engine via: echo 'engine api' > /n/speech/ctl";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"hear\"," +
+		"\"description\":\"Listen and transcribe speech via /n/speech (run speech9p first).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"duration_ms\":{\"type\":\"string\",\"description\":\"Recording duration in milliseconds. Optional; default 5000, max 60000.\"}" +
+			"}," +
+			"\"required\":[]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

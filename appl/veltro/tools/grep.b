@@ -43,6 +43,7 @@ ToolGrep: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 MAX_MATCHES:  con 200;
@@ -91,6 +92,23 @@ doc(): string
 		"  grep -r 'include.*sys.m' /appl/veltro\n" +
 		"  grep -rl TODO /appl\n" +
 		"  grep -i error /appl/veltro/tools/memory.b";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"grep\"," +
+		"\"description\":\"Regex search within files. Output format: file:line: content. Plan 9 ERE syntax: . * + ? | () [] ^ $. Backslash classes like \\\\d are silently treated as literals.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"flags\":{\"type\":\"string\",\"description\":\"Optional flag bundle: -r (recursive), -l (list filenames only), -i (case insensitive). Combine freely, e.g. -rl. Omit for default behaviour.\"}," +
+				"\"pattern\":{\"type\":\"string\",\"description\":\"Regular expression to match.\"}," +
+				"\"path\":{\"type\":\"string\",\"description\":\"File or directory to search.\"}" +
+			"}," +
+			"\"required\":[\"pattern\",\"path\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

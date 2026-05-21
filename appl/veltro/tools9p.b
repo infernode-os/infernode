@@ -27,7 +27,8 @@ implement Tools9p;
 #   ├── paths        (r)   Bound namespace paths
 #   └── <tool>/      (dir) Per-tool directory
 #       ├── ctl      (rw)  Write args, read result
-#       └── doc      (r)   Tool documentation
+#       ├── doc      (r)   Tool documentation
+#       └── schema   (r)   OpenAI function-schema JSON (per INFR-126)
 #
 
 include "sys.m";
@@ -61,10 +62,11 @@ Tools9p: module {
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
-TOOL_STRIDE: con 4;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=reserved
+TOOL_STRIDE: con 4;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema
 Qtool_dir: con 0;         # Offset: tool directory
 Qtool_ctl: con 1;         # Offset: ctl subfile (write args, read result)
 Qtool_doc: con 2;         # Offset: doc subfile (read-only documentation)
+Qtool_schema: con 3;      # Offset: schema subfile (OpenAI function-schema JSON)
 
 # Tool info structure
 ToolInfo: adt {
@@ -675,6 +677,40 @@ gettooldoc(name: string): string
 	return ti.mod->doc();
 }
 
+# Get OpenAI-format function-schema for a tool.
+# Returns the tool's schema() output, or a generic fallback if the tool
+# hasn't published one yet. The fallback matches the legacy contract
+# (single "args" string parameter) so partially-rolled-out toolsets
+# remain valid for an OpenAI tool-call client.
+gettoolschema(name: string): string
+{
+	ti := findtool(name);
+	if(ti == nil)
+		return "error: unknown tool: " + name;
+
+	err := loadtool(ti);
+	if(err != nil)
+		return "error: " + err;
+
+	s := ti.mod->schema();
+	if(s == "" || s == nil)
+		return defaultschema(ti.name);
+	return s;
+}
+
+# Generic legacy schema: one free-form string argument. Used when a
+# tool hasn't been migrated to a per-tool schema yet. Matches the shape
+# the agentlib bridge formerly hardcoded for every tool.
+defaultschema(name: string): string
+{
+	return "{\"name\":\"" + name + "\"," +
+		"\"description\":\"Run the " + name + " tool with the given arguments\"," +
+		"\"parameters\":{\"type\":\"object\"," +
+		"\"properties\":{\"args\":{\"type\":\"string\"," +
+		"\"description\":\"Tool arguments as a single string\"}}," +
+		"\"required\":[\"args\"]}}";
+}
+
 # Read entire file contents (for documentation files)
 readfile(path: string): string
 {
@@ -1229,6 +1265,9 @@ Serve:
 					Qtool_doc =>
 						doc := gettooldoc(ti.name);
 						srv.reply(styxservers->readbytes(m, array of byte doc));
+					Qtool_schema =>
+						sch := gettoolschema(ti.name);
+						srv.reply(styxservers->readbytes(m, array of byte sch));
 					* =>
 						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					}
@@ -1428,6 +1467,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 				return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r644), nil);
 			Qtool_doc =>
 				return (dir(Qid(p, vers, Sys->QTFILE), "doc", big 0, 8r444), nil);
+			Qtool_schema =>
+				return (dir(Qid(p, vers, Sys->QTFILE), "schema", big 0, 8r444), nil);
 			}
 		}
 	}
@@ -1493,6 +1534,8 @@ navigator(navops: chan of ref Navop)
 					n.path = big(qtype + Qtool_ctl);
 				"doc" =>
 					n.path = big(qtype + Qtool_doc);
+				"schema" =>
+					n.path = big(qtype + Qtool_schema);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1589,7 +1632,7 @@ navigator(navops: chan of ref Navop)
 					if(suboff != Qtool_dir) {
 						n.reply <-= (nil, "not a directory");
 					} else {
-						# Tool directory: list ctl and doc subfiles
+						# Tool directory: list ctl, doc and schema subfiles
 						i := n.offset;
 						count := n.count;
 						if(i == 0 && count > 0) {
@@ -1599,6 +1642,11 @@ navigator(navops: chan of ref Navop)
 						}
 						if(i <= 1 && count > 0) {
 							n.reply <-= dirgen(big(qtype + Qtool_doc));
+							count--;
+							i++;
+						}
+						if(i <= 2 && count > 0) {
+							n.reply <-= dirgen(big(qtype + Qtool_schema));
 							count--;
 						}
 						n.reply <-= (nil, nil);

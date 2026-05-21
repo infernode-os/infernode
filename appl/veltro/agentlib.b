@@ -862,23 +862,75 @@ jsonstr(s: string): string
 }
 
 # Build a JSON array of tool definitions for the native tool_use protocol.
-# Each tool uses a single string "args" parameter — compatible with /tool/*.
+#
+# Per INFR-126, each tool publishes its own OpenAI-format function schema
+# at /tool/<name>/schema. buildtooldefs reads each schema and concatenates
+# them into the array written to /n/llm/{id}/tools. Tools without a
+# published schema (or that return "") fall back to a single-string "args"
+# parameter — the legacy contract — so partially-migrated toolsets stay
+# valid against an OpenAI tool-call client.
+#
 # Returns a JSON string suitable for writing to /n/llm/{id}/tools.
 buildtooldefs(toollist: list of string): string
 {
-	schema := "{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"}},\"required\":[\"args\"]}";
 	parts := "";
 	first := 1;
 	for(t := toollist; t != nil; t = tl t) {
-		name := jsonstr(hd t);
-		desc := jsonstr(tooldesc(hd t));
-		entry := "{\"name\":\"" + name + "\",\"description\":\"" + desc + "\",\"input_schema\":" + schema + "}";
+		name := hd t;
+		entry := readtoolschema(name);
+		if(entry == "" || !looksjsonobj(entry))
+			entry = defaulttoolschema(name);
 		if(!first)
 			parts += ",";
 		parts += entry;
 		first = 0;
 	}
 	return "[" + parts + "]";
+}
+
+# Read a tool's published OpenAI function-schema from
+# /tool/<name>/schema (served by tools9p). Returns "" if the file is
+# missing, empty, or contains an error stub.
+readtoolschema(name: string): string
+{
+	path := toolmount_g + "/" + str->tolower(name) + "/schema";
+	s := readfile(path);
+	s = strip(s);
+	if(s == "")
+		return "";
+	# tools9p emits "error: ..." for unknown tools; treat as missing.
+	if(len s >= 6 && s[0:6] == "error:")
+		return "";
+	return s;
+}
+
+# Cheap sanity check that a string is a JSON object literal (starts
+# with '{' and ends with '}'). Avoids feeding garbage into the wire
+# format if a tool's schema() is malformed.
+looksjsonobj(s: string): int
+{
+	if(len s < 2)
+		return 0;
+	if(s[0] != '{')
+		return 0;
+	if(s[len s - 1] != '}')
+		return 0;
+	return 1;
+}
+
+# Generic legacy schema: a single string parameter. Used when a tool
+# hasn't published its own schema yet. Matches the historical shape
+# this function emitted for every tool before INFR-126.
+defaulttoolschema(name: string): string
+{
+	jn := jsonstr(name);
+	desc := jsonstr(tooldesc(name));
+	return "{\"name\":\"" + jn + "\"," +
+		"\"description\":\"" + desc + "\"," +
+		"\"parameters\":{\"type\":\"object\"," +
+		"\"properties\":{\"args\":{\"type\":\"string\"," +
+		"\"description\":\"Tool arguments as a single string\"}}," +
+		"\"required\":[\"args\"]}}";
 }
 
 # Install tool definitions on an LLM session by writing to /n/llm/{id}/tools.

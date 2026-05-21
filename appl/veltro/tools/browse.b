@@ -39,6 +39,7 @@ ToolBrowse: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 XENITH_ROOT: con "/chan";
@@ -95,6 +96,21 @@ doc(): string
 		"Examples:\n" +
 		"  browse https://example.com\n" +
 		"  browse https://www.ietf.org/rfc/rfc2616.txt\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"browse\"," +
+		"\"description\":\"Fetch a URL, format HTML to plain text, and display the result in a new Xenith window. Returns the window id and page title.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"url\":{\"type\":\"string\",\"description\":\"Full URL beginning with http:// or https://.\"}" +
+			"}," +
+			"\"required\":[\"url\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

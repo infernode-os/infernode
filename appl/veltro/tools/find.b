@@ -38,6 +38,7 @@ ToolFind: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Limits
@@ -81,6 +82,22 @@ doc(): string
 		"  Find / -name *tetris*\n" +
 		"  Find *_test.b /tests\n\n" +
 		"Returns list of matching file paths (max 100 results, max 2000 directories).";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"find\"," +
+		"\"description\":\"Find files by glob pattern. Returns matching file paths (max 100). Patterns support * ? and [abc] character classes.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"pattern\":{\"type\":\"string\",\"description\":\"Glob pattern, e.g. *.b or *_test.b.\"}," +
+				"\"path\":{\"type\":\"string\",\"description\":\"Search root directory. Optional; defaults to the current directory.\"}" +
+			"}," +
+			"\"required\":[\"pattern\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

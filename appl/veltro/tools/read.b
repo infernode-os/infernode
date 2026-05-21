@@ -35,6 +35,7 @@ ToolRead: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Defaults and limits
@@ -76,6 +77,23 @@ doc(): string
 		"  Read /appl/veltro/veltro.b 10\n" +
 		"  Read /appl/veltro/veltro.b 10 50\n\n" +
 		"Returns file contents with line numbers, or error message.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"read\"," +
+		"\"description\":\"Read file contents with optional line offset and limit. Returns the file contents annotated with line numbers, or an error message.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"path\":{\"type\":\"string\",\"description\":\"File path to read (e.g. /appl/veltro/veltro.b).\"}," +
+				"\"offset\":{\"type\":\"string\",\"description\":\"Starting line number (0-indexed). Optional; defaults to 0.\"}," +
+				"\"limit\":{\"type\":\"string\",\"description\":\"Maximum lines to return. Optional; default 100, max 1000.\"}" +
+			"}," +
+			"\"required\":[\"path\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

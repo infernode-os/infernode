@@ -41,6 +41,7 @@ ToolMemory: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Memory storage base path
@@ -94,6 +95,22 @@ doc(): string
 		"  memory append notes \" - added login\"\n" +
 		"  memory list\n\n" +
 		"Data persists across agent sessions.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"memory\"," +
+		"\"description\":\"Persistent key-value storage that survives across agent sessions. Keys are alphanumeric plus underscore.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: save, load, delete, list, clear, append.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For save/append: key followed by value. For load/delete: the key. Omit for list/clear.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

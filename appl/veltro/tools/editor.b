@@ -40,6 +40,7 @@ ToolEditor: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 EDIT_ROOT: con "/tmp/veltro/editor";
@@ -90,6 +91,22 @@ doc(): string
 		"  editor read                    3. Read the document\n" +
 		"  editor write Hello world       4. Replace body\n" +
 		"  editor save                    5. Save to disk\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"editor\"," +
+		"\"description\":\"Remote-control a running Editor app (launch with 'launch editor' first). Reads and writes /tmp/veltro/editor/ control files at ~500ms polling.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: read, write, append, save, open, goto, find, replace, replaceall, addr, insert, delete, name, close, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Command-specific. For read: [body|addr]. For write/append: <text>. For open: <path>. For goto: <line>. For find: <string>. For replace/replaceall: <find> <repl>. For insert: <line> <col> <text>. For delete: <startline> <startcol> <endline> <endcol>. Omit for save/close/status.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

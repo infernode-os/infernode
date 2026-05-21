@@ -45,6 +45,7 @@ ToolPayfetch: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 REQUEST_TIMEOUT: con 30000;
@@ -96,6 +97,22 @@ doc(): string
 		"  3. Reports what was paid before returning content\n\n" +
 		"The agent must have /n/wallet access (caps.paths must include /n/wallet).\n" +
 		"Budget limits set on the wallet account are enforced.\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"payfetch\"," +
+		"\"description\":\"Fetch a URL, automatically paying via x402 if the server returns 402 Payment Required. Reports what was paid before returning content. Requires /n/wallet access.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"url\":{\"type\":\"string\",\"description\":\"Full URL beginning with https://.\"}," +
+				"\"flags\":{\"type\":\"string\",\"description\":\"Optional flags: -a <account> to choose a wallet account, -c <chain> to override the chain (default base). Pass both space-separated, e.g. '-a myacct -c base'.\"}" +
+			"}," +
+			"\"required\":[\"url\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

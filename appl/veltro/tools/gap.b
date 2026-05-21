@@ -33,6 +33,7 @@ ToolGap: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 UI_MOUNT: con "/n/ui";
@@ -78,6 +79,22 @@ currentactid(): int
 	s = strip(s);
 	(n, nil) := str->toint(s, 10);
 	return n;
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"gap\"," +
+		"\"description\":\"Track knowledge gaps in the context zone. The add command is idempotent (upsert by description).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: add, resolve, list.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For add: \\\"<description>\\\" [high|medium|low] (description in double quotes, optional relevance). For resolve: \\\"<description>\\\". Omit for list.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

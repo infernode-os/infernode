@@ -30,6 +30,7 @@ ToolShell: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 SHELL_ROOT: con "/tmp/veltro/shell";
@@ -69,6 +70,22 @@ doc(): string
 		"  shell tail 50           Last 50 lines\n" +
 		"  shell read input        Current input line\n" +
 		"  shell status            Check shell status\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"shell\"," +
+		"\"description\":\"Read-only access to the shell terminal. This tool cannot send commands \\u2014 it only inspects the running shell's transcript and input line. Use 'launch shell' first if the shell is not running.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: read, tail, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For read: 'body' (default) or 'input'. For tail: line count (default 30). Omit for status.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

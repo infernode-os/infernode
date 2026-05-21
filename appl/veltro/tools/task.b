@@ -35,6 +35,7 @@ ToolTask: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 UI_MOUNT: con "/n/ui";
@@ -110,6 +111,22 @@ doc(): string
 		"  task list\n" +
 		"  task status 2\n" +
 		"  task close 2";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"task\"," +
+		"\"description\":\"Create and manage delegated AI tasks. Each task has its own conversation, tools, and filesystem overlay.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, close.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes (label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [brief=<text>] [instructions=<text>] [category=<text>] [model=<name>] [agenttype=<type>]). For status/close: the task id. Omit for list.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

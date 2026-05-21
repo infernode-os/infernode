@@ -28,6 +28,7 @@ ToolMan: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 MAN_ROOT: con "/tmp/veltro/man";
@@ -63,6 +64,22 @@ doc(): string
 		"  man view                   See what's on screen\n" +
 		"  man scroll down            Scroll down one page\n" +
 		"  man find SYNOPSIS          Jump to SYNOPSIS section\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"man\"," +
+		"\"description\":\"Control the manual page viewer (launch with 'launch man' first).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: open, view, state, scroll, find.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For open: [section] title or a full /man/<sect>/<title> path. For scroll: up|down|top|bottom or a line number. For find: search text. Omit for view/state.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

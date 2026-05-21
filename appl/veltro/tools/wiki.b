@@ -41,6 +41,7 @@ ToolWiki: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 WIKIA_CTL:    con "/n/wikia/ctl";
@@ -79,6 +80,22 @@ doc(): string
 		"  bind /n/local/docs /n/wikia/raw\n\n" +
 		"The wiki is browsable via Charon at the httpd wiki URL.\n" +
 		"Requires /n/wikia (run wiki9p), /mnt/wiki (run wikifs), /n/llm.\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"wiki\"," +
+		"\"description\":\"LLM-maintained knowledge base. Requires /n/wikia (wiki9p), /mnt/wiki (wikifs), and /n/llm.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: ingest, query, lint, status, log.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For ingest: optional path to a specific file. For query: the question text. Omit for lint/status/log.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

@@ -41,6 +41,7 @@ ToolExec: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Limits
@@ -94,6 +95,21 @@ doc(): string
 		"  - Single quotes for strings\n\n" +
 		"Returns program output (CLI), or 'launched ... in presentation zone' (GUI).\n" +
 		"Default timeout: 5 seconds (max 30s).";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"exec\"," +
+		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax (no && or ||; sequence with ;). For GUI/wm apps, do NOT add & or wrap in wm/wm \\u2014 launch handles the presentation zone.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. 'wm/clock' or '/dis/bind.dis -a /mnt/foo /n/bar'.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

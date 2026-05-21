@@ -45,6 +45,7 @@ ToolPlan: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 PLAN_DEFAULT_DIR: con "/tmp/veltro/plans";
@@ -106,6 +107,22 @@ doc(): string
 		"MANDATORY for complex tasks: create a plan before starting work.\n" +
 		"Break the approach into concrete steps. Approve before executing.\n" +
 		"Mark steps done as you go. Complete or abandon when finished.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"plan\"," +
+		"\"description\":\"Structured planning for complex tasks. Workflow: create \\u2192 goal \\u2192 approach \\u2192 step(s) \\u2192 approve \\u2192 progress \\u2192 complete. Mandatory before starting complex work.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, goal, approach, step, context, show, approve, progress, skip, revise, addstep, complete, abandon, list, switch, export-todo, export-memory.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Command-specific arguments: title for create; free text for goal/approach/step/context; step number for progress/skip; step number followed by text for revise/addstep; plan id for switch; key name for export-memory; reason for abandon. Omit for show/approve/complete/list/export-todo.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

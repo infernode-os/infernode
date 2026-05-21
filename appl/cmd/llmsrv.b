@@ -1058,7 +1058,12 @@ parsetooldefs(content: string): (list of ref ToolDef, string)
 			if(nv != nil) pick n := nv { String => name = n.s; }
 			dv := td.get("description");
 			if(dv != nil) pick d := dv { String => desc = d.s; }
-			sv := td.get("input_schema");
+			# Accept either "parameters" (OpenAI shape, per INFR-126) or
+			# "input_schema" (legacy Anthropic shape). Prefer "parameters"
+			# when both are present.
+			sv := td.get("parameters");
+			if(sv == nil)
+				sv = td.get("input_schema");
 			if(sv != nil)
 				schema = sv.text();
 			tools = ref ToolDef(name, desc, schema) :: tools;

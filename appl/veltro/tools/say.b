@@ -31,6 +31,7 @@ ToolSay: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 SPEECH_SAY: con "/n/speech/say";
@@ -66,6 +67,22 @@ doc(): string
 		"  say -v echo The task is complete.\n\n" +
 		"Requires /n/speech (run speech9p first).\n" +
 		"Configure via: echo 'voice <name>' > /n/speech/ctl";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"say\"," +
+		"\"description\":\"Speak text aloud via /n/speech (run speech9p first). Optionally select a voice with -v <name>.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"voice\":{\"type\":\"string\",\"description\":\"Optional voice selector: pass '-v <name>' (literal -v followed by the voice name). Omit for the default voice.\"}," +
+				"\"text\":{\"type\":\"string\",\"description\":\"The text to speak.\"}" +
+			"}," +
+			"\"required\":[\"text\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

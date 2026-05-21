@@ -31,6 +31,7 @@ ToolFractal: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 FRACT_ROOT: con "/tmp/veltro/fractal";
@@ -78,6 +79,22 @@ doc(): string
 		"  fractal julia -0.4 0.6                  Show Julia set\n" +
 		"  fractal depth 3                          Increase detail\n" +
 		"  fractal zoomout                          Go back\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"fractal\"," +
+		"\"description\":\"Control the running Mandelbrot/Julia fractal viewer (launch with 'launch fractals' first). Coordinates are in the complex plane, clamped to \\u00b14.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: state, view, zoomin, center, zoomout, julia, mandelbrot, depth, fill, restart.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For zoomin: x1 y1 x2 y2. For center: re im radius. For julia: re im. For depth: n. For fill: on|off. Omit for state/view/zoomout/mandelbrot/restart.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

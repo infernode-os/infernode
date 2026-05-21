@@ -38,6 +38,7 @@ ToolWebfetch: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 REQUEST_TIMEOUT: con 30000;	# 30 seconds
@@ -81,6 +82,22 @@ doc(): string
 		"HTML tags, scripts, styles, and navigation are stripped.\n" +
 		"Block elements become paragraphs. Links show their URLs.\n" +
 		"Requires /net access (trusted agents only).";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"webfetch\"," +
+		"\"description\":\"Fetch a web page and return clean readable text (HTML stripped, scripts/styles removed, block elements rendered as paragraphs).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"url\":{\"type\":\"string\",\"description\":\"Full URL beginning with http:// or https://.\"}," +
+				"\"prompt\":{\"type\":\"string\",\"description\":\"Optional focus hint for the fetch (currently advisory).\"}" +
+			"}," +
+			"\"required\":[\"url\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

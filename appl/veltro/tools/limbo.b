@@ -39,6 +39,7 @@ ToolLimbo: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Hosted Limbo compiler is a Command-style module loaded dynamically in gate().
@@ -189,6 +190,21 @@ readfile(path: string): (string, string)
 		total += n;
 	}
 	return (string buf[0:total], nil);
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"limbo\"," +
+		"\"description\":\"Author a complete, compilable Limbo source file. Delegates to a dedicated Limbo-trained model. Use this whenever the user asks for Limbo, .b files, or any code that must run on Inferno \\u2014 DO NOT attempt to write Limbo yourself.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies.\"}" +
+			"}," +
+			"\"required\":[\"description\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

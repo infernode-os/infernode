@@ -29,6 +29,7 @@ ToolWrite: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 init(): string
@@ -56,6 +57,22 @@ doc(): string
 		"  Write /tmp/veltro/scratch/test.txt \"Hello World\"\n" +
 		"  Write /tmp/veltro/scratch/script.sh \"#!/bin/sh\\necho hello\"\n\n" +
 		"Returns confirmation with bytes written, or error message.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"write\"," +
+		"\"description\":\"Write content to a file, creating it if needed. Use \\\\n inside content for newlines.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"path\":{\"type\":\"string\",\"description\":\"File path to create or overwrite (use /tmp/veltro/scratch/ for temporary files).\"}," +
+				"\"content\":{\"type\":\"string\",\"description\":\"Content to write. May contain newlines and quotes; escape sequences like \\\\n are processed.\"}" +
+			"}," +
+			"\"required\":[\"path\",\"content\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

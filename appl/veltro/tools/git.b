@@ -31,6 +31,7 @@ ToolGit: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 Gitfs: module {
@@ -195,6 +196,22 @@ doc(): string
 		"  git checkout <branch>   Switch to branch\n" +
 		"  git merge <branch>      Fast-forward merge branch into current\n" +
 		"  git rm <path> [path..]  Remove files from index and working tree\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"git\"," +
+		"\"description\":\"Git repository access and management. Read operations go through git/fs; write operations call git via the host.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"subcommand\":{\"type\":\"string\",\"description\":\"One of: status, log, show, branch, tag, cat, add, commit, push, fetch, branch-create, branch-delete, checkout, merge, rm.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Subcommand arguments: count for log; hash for show; path [ref] for cat; paths for add/rm; message for commit; remote for push/fetch; branch name for branch-create/branch-delete/checkout/merge. Omit for status/branch/tag.\"}" +
+			"}," +
+			"\"required\":[\"subcommand\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

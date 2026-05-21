@@ -28,9 +28,11 @@ include "string.m";
 include "../tool.m";
 
 ToolSafeExec: module {
+	init: fn(): string;
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Whitelist of allowed tools (tools that exist in /dis/veltro/tools/)
@@ -69,6 +71,22 @@ doc(): string
 		"  - No shell interpretation (prevents injection attacks)\n" +
 		"  - Only tools in /dis/veltro/tools/ can be executed\n" +
 		"  - Tool name parsed directly from first argument\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"safeexec\"," +
+		"\"description\":\"Run a whitelisted Veltro tool directly without shell interpretation. The first word is the tool name; the rest are passed as its arguments. Prevents shell metacharacter injection.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"tool\":{\"type\":\"string\",\"description\":\"Name of a tool under /dis/veltro/tools/ (e.g. read, list, search).\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Arguments to pass to the tool. Optional.\"}" +
+			"}," +
+			"\"required\":[\"tool\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

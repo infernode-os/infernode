@@ -39,6 +39,7 @@ ToolPresent: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 UI_MOUNT: con "/n/ui";
@@ -118,6 +119,22 @@ currentactid(): int
 	s = strip(s);
 	(n, nil) := str->toint(s, 10);
 	return n;
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"present\"," +
+		"\"description\":\"Manage the Lucifer presentation zone. Create, write to, center, list, or remove artifacts (markdown, text, table, code, pdf, image, mermaid).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, write, append, center, delete, kill, navigate, list, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: <id> [type=...] [label=...] [data=<path>]. For write/append: <id> <content> (use \\\\n for newlines). For center/delete/kill: <id>. For navigate: <id> <url>. Omit for list/status.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

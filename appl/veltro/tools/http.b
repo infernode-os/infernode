@@ -38,6 +38,7 @@ ToolHttp: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 init(): string
@@ -80,6 +81,23 @@ doc(): string
 		"  http POST http://localhost:8080/data '{\"key\": \"value\"}'\n\n" +
 		"HTTP and HTTPS use native TLS 1.3 with certificate verification.\n" +
 		"Hostnames are resolved via Inferno's connection server.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"http\"," +
+		"\"description\":\"Make an HTTP/HTTPS request. TLS 1.3 with certificate verification.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"method\":{\"type\":\"string\",\"description\":\"HTTP method: GET, POST, PUT, DELETE, HEAD.\"}," +
+				"\"url\":{\"type\":\"string\",\"description\":\"Full URL including scheme, e.g. https://api.example.com/v1/x.\"}," +
+				"\"body\":{\"type\":\"string\",\"description\":\"Request body. Required for POST/PUT; omit otherwise.\"}" +
+			"}," +
+			"\"required\":[\"method\",\"url\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

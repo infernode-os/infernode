@@ -37,6 +37,7 @@ ToolWebsearch: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 APIKEY_PATH: con "/lib/veltro/keys/brave";
@@ -76,6 +77,21 @@ doc(): string
 		"  websearch Plan 9 from Bell Labs\n\n" +
 		"Returns titles, URLs, and descriptions of up to 15 results.\n" +
 		"Requires API key in /lib/veltro/keys/brave.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"websearch\"," +
+		"\"description\":\"Search the web via the Brave Search API. Returns up to 15 results with titles, URLs and descriptions.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"query\":{\"type\":\"string\",\"description\":\"Search query string.\"}" +
+			"}," +
+			"\"required\":[\"query\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

@@ -30,6 +30,7 @@ ToolGpu: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 GPUDIR: con "/mnt/gpu";
@@ -69,6 +70,22 @@ doc(): string
 		"  Gpu classify resnet50 /tmp/cat.png\n\n" +
 		"Returns inference results as tab-separated text,\n" +
 		"or GPU/model information.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"gpu\"," +
+		"\"description\":\"GPU inference via /mnt/gpu. Returns results as tab-separated text or hardware/model information.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: info, models, infer, detect, classify.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For infer/detect/classify: <model> <imagepath>. Omit for info/models.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

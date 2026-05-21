@@ -43,6 +43,7 @@ ToolVision: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Cloud backend constants
@@ -114,6 +115,23 @@ doc(): string
 		"  Maximum image size: 5MB\n" +
 		"  Cloud requires API key in " + APIKEY_PATH + "\n" +
 		"  Local requires /mnt/gpu mounted with a vision model loaded";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"vision\"," +
+		"\"description\":\"Analyse images using local GPU (TensorRT via /mnt/gpu) or the Anthropic cloud API. Max image size 5MB.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"backend\":{\"type\":\"string\",\"description\":\"Optional backend selector: --local, --cloud, or omit for auto (prefer local GPU when available).\"}," +
+				"\"imagepath\":{\"type\":\"string\",\"description\":\"Path to a PNG/JPEG/GIF/WebP image.\"}," +
+				"\"prompt\":{\"type\":\"string\",\"description\":\"Analysis prompt (cloud only). Optional; defaults to 'Describe this image in detail.'.\"}" +
+			"}," +
+			"\"required\":[\"imagepath\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

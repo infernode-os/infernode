@@ -50,6 +50,7 @@ ToolXenith: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 XENITH_ROOT: con "/chan";
@@ -173,6 +174,22 @@ dirname(path: string): string
 		if(path[i] == '/')
 			return path[0:i];
 	return "/";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"xenith\"," +
+		"\"description\":\"Control the Xenith windowing system: create, read, write, append, ctl, colors, delete, list, and status windows. Body reads are namespace-checked; writes are restricted to windows this agent created.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, write, read, append, ctl, colors, delete, list, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Command-specific. For create: [name]. For write: <id> body|tag <text>. For read: <id> [body|tag]. For append: <id> <text>. For ctl: <id> <subcommand-line>. For colors: <id> <settings>. For delete: <id>. For status: <id> <state>. Omit for list.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

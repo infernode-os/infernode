@@ -35,6 +35,7 @@ ToolWallet: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 WALLET_MOUNT: con "/n/wallet";
@@ -85,6 +86,22 @@ doc(): string
 		"  - Stripe amounts are in cents (500 = $5.00 USD)\n" +
 		"  - Private keys are never exposed to the agent\n" +
 		"  - Budget limits are enforced server-side\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"wallet\"," +
+		"\"description\":\"Cryptocurrency and fiat payment operations via /n/wallet. Private keys are never exposed; budget limits are enforced server-side.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: accounts, address, balance, chain, history, network, pay.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For address/balance/chain/history: account name. For network: omit to read, or pass the network name to switch. For pay: <account> <wei> <to-address> for ETH, or <account> usdc <amount> <to-address> for USDC. Omit for accounts.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

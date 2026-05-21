@@ -33,4 +33,16 @@ Tool: module {
 	# Execute the tool with given arguments
 	# Returns result string (may include error messages)
 	exec: fn(args: string): string;
+
+	# Return the OpenAI-format function-schema for this tool, as a JSON
+	# object string. Read by tools9p as /tool/<name>/schema and used by
+	# the LLM-facing bridge to advertise the tool to pretrained models
+	# via their native tool-call API.
+	#
+	# Convention (V1): properties are string-only and declared in the
+	# order that the existing exec() argv parser expects, so the bridge's
+	# default insertion-order space-join produces a valid ctl-line.
+	# Return "" if the tool does not yet have a published schema; callers
+	# fall back to a generic "args:string" definition in that case.
+	schema: fn(): string;
 };

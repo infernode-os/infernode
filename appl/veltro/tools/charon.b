@@ -37,6 +37,7 @@ ToolCharon: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 BROWSER_DIR: con "/tmp/veltro/browser";
@@ -83,6 +84,22 @@ doc(): string
 		"  charon follow 3                Follow link #3\n" +
 		"  charon back                    Go back\n" +
 		"  charon search authentication   Find text on page\n";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"charon\"," +
+		"\"description\":\"Control a running Charon browser. Use 'launch charon' first if Charon is not already running.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: navigate, back, forward, reload, follow, read, search, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Command argument: a URL for navigate; a link number for follow; one of body|url|title|links|forms for read; the search string for search. Omit for back/forward/reload/status.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

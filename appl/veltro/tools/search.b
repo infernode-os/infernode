@@ -40,6 +40,7 @@ ToolSearch: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Limits
@@ -90,6 +91,22 @@ Match: adt {
 	lineno: int;
 	line:   string;
 };
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"search\"," +
+		"\"description\":\"Search file contents for a regular expression. Returns matching lines in file:line:content format (max 20).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"pattern\":{\"type\":\"string\",\"description\":\"Regular expression to search for. Quote multi-word patterns.\"}," +
+				"\"path\":{\"type\":\"string\",\"description\":\"Search root directory. Optional; defaults to the current directory.\"}" +
+			"}," +
+			"\"required\":[\"pattern\"]" +
+		"}" +
+	"}";
+}
 
 exec(args: string): string
 {

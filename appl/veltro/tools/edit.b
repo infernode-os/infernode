@@ -38,6 +38,7 @@ ToolEdit: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 init(): string
@@ -76,6 +77,24 @@ doc(): string
 		"  Edit /appl/veltro/veltro.b \"MAX: con 50\" \"MAX: con 100\"\n" +
 		"  Edit /tmp/test.txt \"foo\" \"bar\" all\n\n" +
 		"Fails if old text not found. Without 'all', fails if multiple matches.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"edit\"," +
+		"\"description\":\"Find and replace inside a file. Fails if old text is not present, or if there are multiple matches and 'all' is not specified.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"path\":{\"type\":\"string\",\"description\":\"File path to edit. Quote if it contains spaces.\"}," +
+				"\"old\":{\"type\":\"string\",\"description\":\"Text to find. Quote if it contains spaces; \\\\n for newlines.\"}," +
+				"\"new\":{\"type\":\"string\",\"description\":\"Replacement text. Quote if it contains spaces; \\\\n for newlines.\"}," +
+				"\"all\":{\"type\":\"string\",\"description\":\"Set to 'all' to replace every occurrence. Optional; default replaces only the first match.\"}" +
+			"}," +
+			"\"required\":[\"path\",\"old\",\"new\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

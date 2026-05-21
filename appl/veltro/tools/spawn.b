@@ -59,6 +59,7 @@ ToolSpawn: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # Per-subagent specification (parsed from args)
@@ -175,6 +176,21 @@ doc(): string
 		"  Each parallel child gets a fresh SubAgent instance (no data races).\n" +
 		"  Environment is empty. Capability attenuation: child can only narrow.\n" +
 		"  Task text must not contain ' -- ' (section separator).";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"spawn\"," +
+		"\"description\":\"Create one or more subagents with isolated namespaces. Each section begins with -- and ends with :: <task>. Up to a small bounded number per call.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"spec\":{\"type\":\"string\",\"description\":\"Full spec string. Form: [timeout=N] -- tools=<csv> [paths=<csv>] [shellcmds=<csv>] [model=<name>] [temperature=<float>] [thinking=<budget>] [agenttype=<type>] [system=<prompt>] [at=<rfc3339>] [every=<int><s|m|h|d>] :: <task>  (repeat -- ... :: for additional subagents).\"}" +
+			"}," +
+			"\"required\":[\"spec\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

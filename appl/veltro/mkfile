@@ -58,6 +58,11 @@ TOOLS=\
     tools/keyring.dis\
     tools/wiki.dis\
     tools/limbo.dis\
+    tools/http.dis\
+    tools/man.dis\
+    tools/mount.dis\
+    tools/payfetch.dis\
+    tools/wallet.dis\
 
 all:V: $MAIN $TOOLS $SOURCES
 
@@ -220,6 +225,26 @@ tools/wiki.dis: tools/wiki.b tool.m
 # Limbo authoring tool — LLM-as-tool routing to devstral-limbo-v3
 tools/limbo.dis: tools/limbo.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/limbo.dis tools/limbo.b
+
+# HTTP client tool
+tools/http.dis: tools/http.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/http.dis tools/http.b
+
+# Manual page viewer control tool
+tools/man.dis: tools/man.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/man.dis tools/man.b
+
+# Namespace mount guidance tool (stub: namespace mounting is user-only)
+tools/mount.dis: tools/mount.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/mount.dis tools/mount.b
+
+# x402-aware paid-fetch tool
+tools/payfetch.dis: tools/payfetch.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/payfetch.dis tools/payfetch.b
+
+# Wallet operations tool
+tools/wallet.dis: tools/wallet.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/wallet.dis tools/wallet.b
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools $DISBIN/sources

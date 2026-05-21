@@ -25,6 +25,7 @@ ToolList: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 init(): string
@@ -51,6 +52,21 @@ doc(): string
 		"  List /appl/veltro\n" +
 		"  List /\n\n" +
 		"Returns entries with type (d=directory, f=file), size, and name.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"list\"," +
+		"\"description\":\"List directory contents. Returns one entry per line with type (d=dir, f=file), size, and name.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"path\":{\"type\":\"string\",\"description\":\"Directory path to list (e.g. /appl/veltro).\"}" +
+			"}," +
+			"\"required\":[\"path\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

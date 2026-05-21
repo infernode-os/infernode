@@ -42,6 +42,7 @@ ToolDiff: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 DEFAULT_CONTEXT: con 3;
@@ -81,6 +82,23 @@ doc(): string
 		"  diff /tmp/old.txt /tmp/new.txt\n" +
 		"  diff /appl/veltro/veltro.b /tmp/modified.b 5\n\n" +
 		"Returns unified diff format or 'files are identical'.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"diff\"," +
+		"\"description\":\"Compare two files and return a unified diff, or 'files are identical' when there are no differences.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"file1\":{\"type\":\"string\",\"description\":\"First file path.\"}," +
+				"\"file2\":{\"type\":\"string\",\"description\":\"Second file path.\"}," +
+				"\"context\":{\"type\":\"string\",\"description\":\"Context lines around each hunk. Optional; default 3, max 20.\"}" +
+			"}," +
+			"\"required\":[\"file1\",\"file2\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

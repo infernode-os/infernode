@@ -29,6 +29,7 @@ ToolLaunch: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 UI_MOUNT: con "/n/ui";
@@ -74,6 +75,22 @@ doc(): string
 		"Not available (require Tk, which is not built in):\n" +
 		"  task, tetris, sh, ftree, deb\n\n" +
 		"Returns 'launched <name> in presentation zone' on success.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"launch\"," +
+		"\"description\":\"Launch a GUI app in the Lucifer presentation zone. Pass 'list' to see available apps. For charon, pass a URL as the extra argument.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"app\":{\"type\":\"string\",\"description\":\"App name (e.g. xenith, shell, editor, charon, clock), wm-prefixed path (wm/clock), or full path (/dis/wm/clock).\"}," +
+				"\"extra\":{\"type\":\"string\",\"description\":\"Optional extra data; for charon this is the initial URL.\"}" +
+			"}," +
+			"\"required\":[\"app\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

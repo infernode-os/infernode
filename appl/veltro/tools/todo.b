@@ -31,6 +31,7 @@ ToolTodo: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 TODO_DEFAULT: con "/tmp/veltro/todo.txt";
@@ -104,6 +105,22 @@ doc(): string
 		"  2 [done]    Read the relevant files\n\n" +
 		"Items persist in the session directory (or /tmp/veltro) across tool calls.\n" +
 		"Use todo to decompose complex tasks into tracked steps.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"todo\"," +
+		"\"description\":\"Agent task list. Items persist in the session directory across tool calls. Use to decompose complex tasks into tracked steps.\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: add, list, done, delete, clear, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For add: the item text. For done/delete: the item number. Omit for list/clear/status.\"}" +
+			"}," +
+			"\"required\":[\"command\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

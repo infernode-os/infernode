@@ -42,6 +42,7 @@ ToolJson: module {
 	name: fn(): string;
 	doc:  fn(): string;
 	exec: fn(args: string): string;
+	schema: fn(): string;
 };
 
 # JSON value types
@@ -95,6 +96,22 @@ doc(): string
 		"  json /tmp/data.json .users[0].email\n" +
 		"  json -d '{\"x\":1}' .x\n\n" +
 		"Returns the extracted value or error message.";
+}
+
+schema(): string
+{
+	return "{" +
+		"\"name\":\"json\"," +
+		"\"description\":\"Query JSON data using a dot/bracket path expression. .key for object keys, [N] for array indices, chain freely (.users[0].email).\"," +
+		"\"parameters\":{" +
+			"\"type\":\"object\"," +
+			"\"properties\":{" +
+				"\"source\":{\"type\":\"string\",\"description\":\"Either a file path containing JSON, or '-d' followed by a single-quoted inline JSON literal.\"}," +
+				"\"path\":{\"type\":\"string\",\"description\":\"Query path, e.g. .name or .users[0].email.\"}" +
+			"}," +
+			"\"required\":[\"source\",\"path\"]" +
+		"}" +
+	"}";
 }
 
 exec(args: string): string

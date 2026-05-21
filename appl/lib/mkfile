@@ -103,6 +103,7 @@ TARG=\
 	registries.dis\
 	rfc3339.dis\
 	rfc822.dis\
+	scoretable.dis\
 	secstore.dis\
 	sets.dis\
 	sets32.dis\

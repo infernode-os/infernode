@@ -1,0 +1,31 @@
+<../mkconfig
+
+# Parallel install of pristine vita-nuova upstream libtk. Lives beside the
+# tree's primary libtk/ (which carries local fixes: 64-bit alt-structure,
+# malloc-failure guards in menus.c, divide-by-zero guards in packr.c).
+# Builds to a distinct archive so the two never collide at link time.
+LIB=libtk-upstream.a
+
+OFILES=\
+	ebind.$O\
+	grids.$O\
+	image.$O\
+	packr.$O\
+	panel.$O\
+	parse.$O\
+	utils.$O\
+	varbl.$O\
+	windw.$O\
+	xdata.$O\
+
+HFILES=\
+	$ROOT/include/tk.h\
+	$ROOT/include/draw.h\
+
+default:V:	all
+
+<mkfile-$TKSTYLE
+<$ROOT/mkfiles/mksyslib-$SHELLTYPE
+
+ebind.$O:		$ROOT/include/interp.h
+windw.$O:	canvs.h textw.h

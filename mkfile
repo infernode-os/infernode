@@ -17,6 +17,7 @@ EMUDIRS=\
 	libinterp\
 	libkeyring\
 	libdraw\
+	libtk\
 	libmemdraw\
 	libmemlayer\
 	utils/data2c\

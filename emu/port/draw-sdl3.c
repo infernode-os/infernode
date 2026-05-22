@@ -970,9 +970,24 @@ sdl3_mainloop(void)
 			case SDL_EVENT_MOUSE_BUTTON_UP:
 				{
 					Uint32 mask = button_event_mask(event.button.button);
-					if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+					if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 						sdl_button_state |= mask;
-					else
+						/*
+						 * Re-arm text input on every press. Android's
+						 * soft keyboard gets dismissed by gestures
+						 * outside the IME (back button, swipe-down,
+						 * permission dialogs) and SDL doesn't restore
+						 * it on its own. Inferno has no per-widget
+						 * focus model to drive the IME from Limbo —
+						 * every key event already goes to the active
+						 * window — so the cheapest correct policy on
+						 * a touch device is "any tap brings the
+						 * keyboard back." On desktops with a real
+						 * keyboard this is a no-op (SDL_StartTextInput
+						 * is idempotent and no IME is involved).
+						 */
+						SDL_StartTextInput(sdl_window);
+					} else
 						sdl_button_state &= ~mask;
 
 					window_to_texture_coords(event.button.x * display_scale, event.button.y * display_scale, &mouse_x, &mouse_y);

@@ -88,18 +88,47 @@ if [ "$GEN_KEY" -eq 1 ]; then
 
 	# emu may not exit cleanly after the key is written; cap with timeout.
 	# Direct invocation of createsignerkey.dis (no sh -c indirection).
+	#
+	# Bash writes a "Killed   timeout 30 ..." notification to its own
+	# fd 2 whenever a waited-for child dies via SIGKILL — which happens
+	# here once `timeout` escalates after emu fails to shut down within
+	# the deadline (the keyfile has *already* been written cleanly by
+	# that point; emu just doesn't tear down promptly). That diagnostic
+	# is misleading on the docs-friction path: a first-time user reading
+	# `docs/HEADLESS-LLM-DAEMON.md` §Step 4 sees "Killed" and reasonably
+	# suspects key generation failed. So we redirect bash's own fd 2 to
+	# /dev/null around the timeout invocation, but route emu's stderr
+	# through a saved real-stderr fd (9) so the user still sees emu's
+	# own diagnostics. See INFR-125.
+	exec 9>&2
+	exec 2>/dev/null
 	timeout 30 "$EMU" -c1 "-r$ROOT" \
 		/dis/auth/createsignerkey.dis \
 		-a ed25519 -f "$STAGE_INFPATH" "$OWNER" \
-		</dev/null >&2 || true
+		</dev/null >&9 2>&9 &
+	gen_pid=$!
+	set +e
+	wait "$gen_pid"
+	gen_ec=$?
+	set -e
+	exec 2>&9
+	exec 9>&-
 
+	# 0       = clean exit
+	# 124     = timeout fired (SIGTERM after grace)
+	# 137     = SIGKILL escalation
+	# anything else is unexpected and worth surfacing.
 	if [ ! -s "$STAGE_HOSTPATH" ]; then
-		echo "serve-llm: key generation failed (staging file missing or empty)" >&2
+		echo "serve-llm: key generation failed (staging file missing or empty; createsignerkey exit=$gen_ec)" >&2
 		echo "serve-llm: try running by hand:" >&2
 		echo "  $EMU -r$ROOT /dis/auth/createsignerkey.dis -a ed25519 -f $STAGE_INFPATH $OWNER" >&2
 		rm -f "$STAGE_HOSTPATH"
 		exit 1
 	fi
+	case "$gen_ec" in
+		0|124|137) : ;;
+		*) echo "serve-llm: WARN createsignerkey returned unexpected exit $gen_ec (staged file looks ok, proceeding)" >&2 ;;
+	esac
 
 	mv "$STAGE_HOSTPATH" "$KEY_HOSTPATH"
 	chmod 600 "$KEY_HOSTPATH"

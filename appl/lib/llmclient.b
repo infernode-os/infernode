@@ -526,14 +526,27 @@ buildopenairequestjson(req: ref AskRequest): string
 	if(req.streamch != nil)
 		s += ",\"stream\":true,\"stream_options\":{\"include_usage\":true}";
 
-	# OpenAI-standard reasoning_effort for o1-style / gpt-oss models.
-	# Empty means "let the backend pick its default" — typically medium
-	# for gpt-oss, which is slower than necessary on tool-driven turns.
-	if(req.reasoningeffort != "")
-		s += sys->sprint(",\"reasoning_effort\":%s", jquote(req.reasoningeffort));
-
-	# Ollama thinking options
-	s += ",\"options\":" + thinkoptions(req.thinkingtokens);
+	# Two thinking-related fields, BOTH gated on model capability (INFR-132):
+	#
+	#   1. reasoning_effort (OpenAI-standard top-level field). Set by
+	#      serve-profile via `llmsrv -r low` to optimise gpt-oss latency.
+	#      Ollama's mistral REJECTS this field with "does not support
+	#      thinking" even though it's OpenAI-standard — the field itself
+	#      is a thinking-enable signal regardless of who standardised it.
+	#
+	#   2. options.think / options.think_level (Ollama-specific sub-object).
+	#      Same constraint: gpt-oss requires it set, mistral can't have it.
+	#
+	# thinkmode() returns "" for models that don't support thinking at
+	# all; in that case we omit BOTH fields. For models that do, we emit
+	# both reasoning_effort (top-level) and options.think (Ollama).
+	thinkopts := thinkmode(req.model, req.thinkingtokens);
+	if(thinkopts != "") {
+		if(req.reasoningeffort != "")
+			s += sys->sprint(",\"reasoning_effort\":%s",
+				jquote(req.reasoningeffort));
+		s += ",\"options\":" + thinkopts;
+	}
 
 	# Messages
 	s += ",\"messages\":[";
@@ -710,6 +723,9 @@ buildopenaitoolresultmessages(m: ref LlmMessage, first: int): string
 
 thinkoptions(tokens: int): string
 {
+	# Retained for backward compatibility with any in-tree caller that
+	# can't pass a model name. New code should call thinkmode(model,
+	# tokens) instead — see INFR-132.
 	if(tokens == 0)
 		return "{\"think\":false}";
 	level := "high";
@@ -718,6 +734,41 @@ thinkoptions(tokens: int): string
 	else if(tokens > 0 && tokens <= 20000)
 		level = "medium";
 	return "{\"think\":true,\"think_level\":\"" + level + "\"}";
+}
+
+# thinkmode emits the Ollama `options.think*` JSON object based on the
+# *model's* capability, not just the requested budget. INFR-132.
+#
+# Operator-confirmed constraints (pdf, 2026-05):
+#   - gpt-oss family REQUIRES think:true to function. Sending {think:false}
+#     actively breaks it. Best default level is "low" — measured 15x faster
+#     on tool-driven scenarios with no quality loss vs medium.
+#   - Mistral family (via Ollama right now) does not support the
+#     `reasoning_effort` / `options.think` fields. Sending either errors
+#     the request with: `Error: "<model>" does not support thinking`.
+#     Must be omitted entirely.
+#
+# Returns the JSON value for options.think (or the full options sub-object
+# when needed) or "" to signal "do not emit the options key at all".
+thinkmode(model: string, tokens: int): string
+{
+	if(hasprefix(model, "gpt-oss") || hasprefix(model, "deepseek-r1")) {
+		# Thinking-required family. tokens==0 means "use the operator
+		# default" — low — not "disable thinking".
+		level := "low";
+		if(tokens > 0 && tokens <= 10000)
+			level = "low";
+		else if(tokens > 0 && tokens <= 20000)
+			level = "medium";
+		else if(tokens > 20000)
+			level = "high";
+		return "{\"think\":true,\"think_level\":\"" + level + "\"}";
+	}
+	# Thinking-unsupported family: mistral, llama, plain qwen, etc.
+	# Emitting nothing here causes the call site to drop the entire
+	# options key from the request body. This is exactly what these
+	# backends need.
+	return "";
 }
 
 parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string)

@@ -71,6 +71,19 @@ catnames := array[] of {
 	"Startup Profile",
 };
 
+# Short aliases for -c <name>: tab-friendly identifiers a launcher can
+# pass to open Settings directly on a given panel. Index parallels
+# CatTheme..CatProfile. See INFR-100.
+catshortnames := array[] of {
+	"theme",
+	"llm",
+	"tools",
+	"delegated",
+	"paths",
+	"prompts",
+	"profile",
+};
+
 # ── State ──────────────────────────────────────────────────────
 
 w: ref Window;
@@ -163,7 +176,7 @@ CHECK_H: con 0;		# computed from font
 BTN_W: con 100;
 BTN_H: con 0;
 
-init(ctxt: ref Draw->Context, nil: list of string)
+init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
@@ -175,6 +188,27 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	if(ctxt == nil) {
 		sys->fprint(stderr, "settings: no window context\n");
 		raise "fail:no context";
+	}
+
+	# Parse -c <name> to choose initial category. Quietly ignore unknown
+	# flags / arguments — launchers should not crash settings if a future
+	# build of lucibridge passes options this version doesn't understand.
+	startcat := CatTheme;
+	if(argv != nil)
+		argv = tl argv;	# drop progname
+	while(argv != nil) {
+		a := hd argv;
+		argv = tl argv;
+		if(a == "-c" && argv != nil) {
+			name := hd argv;
+			argv = tl argv;
+			for(i := 0; i < len catshortnames; i++) {
+				if(catshortnames[i] == name) {
+					startcat = i;
+					break;
+				}
+			}
+		}
 	}
 
 	sys->pctl(Sys->NEWPGRP, nil);
@@ -210,7 +244,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	w.startinput("kbd" :: "ptr" :: nil);
 	w.onscreen(nil);
 
-	category = CatTheme;
+	category = startcat;
 	layoutall();
 	loadcategory();
 	dirty = 1;

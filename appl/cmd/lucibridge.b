@@ -72,7 +72,9 @@ currentpathsraw := "";
 toolargs: list of string;	# from -t flag (comma-separated tool names)
 pathargs: list of string;	# from -p flag (comma-separated paths)
 
-BRIDGE_SUFFIX: con "\n\nYou are the AI assistant in a Lucifer activity. " +
+BRIDGE_SUFFIX: con "\n\nYou are Veltro, the AI agent in a Lucifer activity. " +
+	"You are NOT ChatGPT, NOT Claude, NOT Llama, NOT any other named model. " +
+	"If asked your identity, the first sentence of your reply is exactly: \"I am Veltro.\" " +
 	"The user sends messages through the UI. " +
 	"Respond naturally with text for conversational messages, greetings, and answers. " +
 	"Use tools only when the user asks you to perform a specific task.";
@@ -355,19 +357,22 @@ runsetupwizard()
 				"Keyring is open. Select API Key, enter `anthropic` as the service, paste your key. " +
 				"Then close InferNode and relaunch it.");
 		} else if(choice == "Local Ollama") {
-			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings");
+			# data= must come last (terminal attribute, consumes the
+			# remainder of the line). -c llm tells wm/settings to open
+			# directly on the LLM Service panel — INFR-100.
+			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
 			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
-				"Settings is open. Go to LLM Service, keep Mode on Local, choose the Ollama backend, " +
+				"Settings is open on **LLM Service**. Keep Mode on Local, choose the Ollama backend, " +
 				"and set the URL (e.g. `http://localhost:11434/v1`). " +
 				"Then close InferNode and relaunch it.");
 		} else if(choice == "Remote 9P") {
-			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings");
+			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
 			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
-				"Settings is open. Go to LLM Service, switch Mode to Remote (9P), and enter the " +
+				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
 				"dial address (`tcp!host!port`) of an InferNode exporting `/n/llm`. " +
 				"Then close InferNode and relaunch it.");
 		}
@@ -1763,10 +1768,11 @@ init(nil: ref Draw->Context, args: list of string)
 				if(choice == nil) break;
 				if(choice == "Open Settings") {
 					pctl := sys->sprint("/n/ui/activity/%d/presentation/ctl", actid);
-					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings");
+					# Open directly on the LLM Service panel (INFR-100).
+					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
 					sys->sleep(500);
 					writefile(pctl, "center id=settings");
-					writemsg("veltro", "Settings is open. Check your LLM configuration, then restart.");
+					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
 				}
 				for(;;) sys->sleep(60000);
 			}

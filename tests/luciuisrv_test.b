@@ -1404,6 +1404,83 @@ testThemeEventStreaming(t: ref T)
 	fd = nil;
 }
 
+# ============================================================================
+# Test: BufferedEventOrder
+#
+# Regression: INFR-36 — when MULTIPLE global events accumulate in a
+# subscriber's buffer (no pending reader at write time), they must
+# drain in FIFO order. The earlier implementation cons'd events to the
+# head of a "list of string" and called qrev() on every doread, which
+# only ordered the first event correctly:
+#
+#   buffer [E3,E2,E1] (cons order, E3 newest)
+#   read 1: qrev -> [E1,E2,E3]; take E1; left = [E2,E3]
+#   read 2: qrev([E2,E3]) -> [E3,E2]; take E3 (WRONG, should be E2)
+#   read 3: qrev([E2]) -> [E2]; take E2 (WRONG, should be E3)
+#
+# Theme events were idempotent so the visible damage was small, but
+# applaunch / activity-new / activity-delete were vulnerable.
+#
+# To exercise the buffer path: open the event fd but DO NOT start a
+# read goroutine before the writes, so pushglobalevent has no pending
+# reader to deliver to and must buffer.
+# ============================================================================
+
+testBufferedEventOrder(t: ref T)
+{
+	evpath := TESTMNT + "/event";
+	ctlpath := TESTMNT + "/ctl";
+
+	drainall(evpath);
+
+	fd := sys->open(evpath, Sys->OREAD);
+	if(fd == nil) {
+		t.assert(0, "cannot open " + evpath + ": %r");
+		return;
+	}
+
+	# Burst three writes back-to-back with no intervening read. With no
+	# pending reader, all three accumulate in s.events.
+	bursts := array[] of {"brimstone", "halo", "brimstone"};
+	for(wi := 0; wi < len bursts; wi++) {
+		n := writefile(ctlpath, "theme " + bursts[wi]);
+		t.assert(n > 0,
+			sys->sprint("write 'theme %s' to ctl should succeed", bursts[wi]));
+	}
+
+	# Now drain three reads on the same fd and check FIFO order.
+	buf := array[256] of byte;
+	for(i := 0; i < len bursts; i++) {
+		rch := chan[1] of (int, string);
+		spawn fdreader(fd, buf, rch);
+		toch := chan[1] of int;
+		spawn timerwait(toch, 3000);
+
+		nread: int;
+		ev: string;
+		alt {
+		(nread, ev) = <-rch =>
+			;
+		<-toch =>
+			t.assert(0, sys->sprint(
+				"timed out draining buffered event %d (got %d so far)",
+				i, i));
+			fd = nil;
+			return;
+		}
+
+		expected := "theme " + bursts[i] + "\n";
+		t.assertseq(ev, expected,
+			sys->sprint("buffered event %d should be %q (got %q) — "+
+				"FIFO ordering regression (INFR-36)",
+				i, expected, ev));
+
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+	}
+
+	fd = nil;
+}
+
 # Read into buf on fd, send (n, string) on ch.
 fdreader(fd: ref Sys->FD, buf: array of byte, ch: chan of (int, string))
 {
@@ -1477,6 +1554,11 @@ init(nil: ref Draw->Context, args: list of string)
 	# INFR-28 regression: theme events must stream to long-lived
 	# subscribers across many switches (fid offset must reset).
 	run("ThemeEventStreaming", testThemeEventStreaming);
+
+	# INFR-36 regression: multiple buffered events must drain in
+	# FIFO order (earlier qrev-on-every-read corrupted order from
+	# the second event onward).
+	run("BufferedEventOrder", testBufferedEventOrder);
 
 	teardown();
 

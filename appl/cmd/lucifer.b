@@ -598,50 +598,58 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 {
 	if(mobile) {
 		# KLUDGE-MOBILE-ACCORDION-INFR-119 — accordion layout.
-		# Three stacked title bars, one expanded body.
-		# Layout from top:
-		#   header (bigger MOBILE_HEADERH for tap-friendly task tiles)
-		#   title bar for conv  +  conv body (zero if not expanded)
-		#   title bar for pres  +  pres body
-		#   title bar for ctx   +  ctx body
-		# Exactly one of the three bodies has non-zero height; the
-		# expanded zone gets all the remaining vertical space.
+		#
+		# All three title bars stack immediately under the LUCI
+		# header at fixed positions. The *expanded* zone gets the
+		# entire body area below them. The two collapsed zones get
+		# 1×1 sentinel sub-windows tucked into the bottom-right
+		# corner of mainwin — they're not degenerate (so
+		# mainscr.newwindow + flushimage stays happy), they're not
+		# visible (1 pixel each at the screen edge), and the zone
+		# modules don't need to know about a special "hidden" state.
+		#
+		# Earlier this code gave the collapsed bodies y_min == y_max,
+		# which made newwindow return a malformed image and the
+		# subsequent flushimage chain failed with "image name in
+		# use" — half-applying the resize, dropping repaints, and
+		# producing the flaky behaviour the user reported.
 		headerh := MOBILE_HEADERH;
 		titleh  := MOBILE_TITLEBARH;
 		zonety  := r.min.y + headerh + 1;
-		avail   := r.max.y - zonety - 3 * titleh;
-		if(avail < 0)
-			avail = 0;
 
 		convtitle_y := zonety;
-		convbody_h  := 0;
-		if(expanded_zone == 0)
-			convbody_h = avail;
-		prestitle_y := convtitle_y + titleh + convbody_h;
-		presbody_h  := 0;
-		if(expanded_zone == 1)
-			presbody_h = avail;
-		ctxtitle_y  := prestitle_y + titleh + presbody_h;
-		ctxbody_h   := 0;
-		if(expanded_zone == 2)
-			ctxbody_h = avail;
+		prestitle_y := convtitle_y + titleh;
+		ctxtitle_y  := prestitle_y + titleh;
+		bodytop     := ctxtitle_y  + titleh;
 
 		mobile_conv_title_y = convtitle_y;
 		mobile_pres_title_y = prestitle_y;
 		mobile_ctx_title_y  = ctxtitle_y;
 
-		# The x-based mouse routing in desktop mode is disabled in
-		# mobile mode — mouseproc reads mobile_*_title_y instead.
+		# Mobile mode disables x-based mouse routing — mouseproc
+		# reads mobile_*_title_y to dispatch taps.
 		pres_zone_minx = -1;
 		pres_zone_maxx = -1;
 		ctx_zone_minx  = -1;
 
-		convr := Rect((r.min.x, convtitle_y + titleh),
-			(r.max.x, convtitle_y + titleh + convbody_h));
-		presr := Rect((r.min.x, prestitle_y + titleh),
-			(r.max.x, prestitle_y + titleh + presbody_h));
-		ctxr  := Rect((r.min.x, ctxtitle_y  + titleh),
-			(r.max.x, ctxtitle_y  + titleh + ctxbody_h));
+		# Body rect (used by whichever zone is expanded).
+		bodyr := Rect((r.min.x, bodytop), (r.max.x, r.max.y));
+
+		# Three 1×1 sentinels along the bottom edge, side-by-side.
+		# Adjacent (not overlapping) so newwindow never rejects them.
+		# Painted-over by the Android safe-area / nav-bar inset.
+		hide0 := Rect((r.max.x - 3, r.max.y - 1), (r.max.x - 2, r.max.y));
+		hide1 := Rect((r.max.x - 2, r.max.y - 1), (r.max.x - 1, r.max.y));
+		hide2 := Rect((r.max.x - 1, r.max.y - 1), (r.max.x,     r.max.y));
+
+		convr := hide0;
+		presr := hide1;
+		ctxr  := hide2;
+		case expanded_zone {
+		0 => convr = bodyr;
+		1 => presr = bodyr;
+		2 => ctxr  = bodyr;
+		}
 		return (convr, presr, ctxr);
 	}
 
@@ -933,7 +941,18 @@ setexpandedzone(z: int)
 	expanded_zone = z;
 	p := zpointer;
 	p.buttons = M_RESIZE;
-	alt { cmouse <-= ref p => ; * => ; }
+	# Blocking send is required here. cmouse is unbuffered; the
+	# previous non-blocking alt-with-default would silently drop
+	# the M_RESIZE whenever the mainloop was still processing a
+	# prior handleresize (e.g. when the user taps title bars in
+	# quick succession). expanded_zone got updated, drawchrome
+	# painted the new chevrons on the next mainloop iteration, but
+	# handleresize never re-ran, so the zone sub-images stayed at
+	# the previous expansion — Chat body would be empty after
+	# tap → tap → tap-back-to-Chat. mouseproc happily blocks here
+	# until mainloop drains; the wm pointer channel buffers
+	# upstream so taps aren't lost.
+	cmouse <-= ref p;
 }
 
 # --- Per-task presentation zone management ---
@@ -1397,6 +1416,17 @@ handleresize()
 	(convr, presr, ctxr) := zonerects(r);
 	preszone = presr;
 
+	# Release the "lucifer-pres" name from the previous pressubimg
+	# BEFORE allocating a new one. Otherwise the server-side name
+	# table still has the name claimed against the old image's id
+	# when we try to claim it for the new image — flushimage fails
+	# with "image name in use" and the resize half-applies. (Child
+	# windows on the old presscr keep the old pressubimg alive past
+	# our local reassignment below; explicit name release is the
+	# only safe path.)
+	if(pressubimg != nil)
+		pressubimg.name("lucifer-pres", 0);
+
 	# Recreate all zone sub-images on a fresh mainscr.
 	# Must happen before drawchrome so separators are drawn on top of the fill.
 	mainscr = Screen.allocate(mainwin, bgcol, 0);
@@ -1405,8 +1435,11 @@ handleresize()
 	convimg = mainscr.newwindow(convr, Draw->Refbackup, Draw->Nofill);
 	ctximg  = mainscr.newwindow(ctxr,  Draw->Refbackup, Draw->Nofill);
 	pressubimg = mainscr.newwindow(presr, Draw->Refbackup, Draw->Nofill);
-	if(convimg == nil || ctximg == nil || pressubimg == nil)
+	if(convimg == nil || ctximg == nil || pressubimg == nil) {
+		sys->fprint(sys->fildes(2), "lucifer: handleresize: newwindow failed (mobile=%d expanded=%d) convr=%s presr=%s ctxr=%s\n",
+			mobile, expanded_zone, r2s(convr), r2s(presr), r2s(ctxr));
 		return;
+	}
 	presscr = Screen.allocate(pressubimg, bgcol, 0);
 	if(presscr == nil)
 		return;
@@ -1415,13 +1448,28 @@ handleresize()
 	# Redraw chrome after zone allocation so separators are visible
 	drawchrome(r);
 
-	# Send new images to conv and ctx zones
-	alt { convRszCh <-= convimg => ; * => ; }
-	alt { ctxRszCh  <-= ctximg  => ; * => ; }
+	# Send new images to conv and ctx zones.
+	#
+	# These were previously `alt { ... <-= ... => ; * => ; }` —
+	# non-blocking with default-drop. On a chan[1], the second
+	# rapid tap silently dropped the new image because the receiver
+	# was still consuming the first one. Symptom: tap Workspace,
+	# then quickly tap back to Chat — the chat body stays empty
+	# because LuciConv never got the new image and its for-select
+	# loop never re-entered the redraw path. (See INFR-121 bug #1
+	# "display does not always refresh".)
+	#
+	# Blocking is safe: the zone goroutines are always spawned
+	# before any handleresize fires (see init()), and their
+	# select loops are non-blocking on the receive side. Worst case
+	# we wait for a busy redraw to drain, which is the right
+	# behaviour — better visible latency than silent drop.
+	convRszCh <-= convimg;
+	ctxRszCh  <-= ctximg;
 
 	# For pres zone: update presscr global first (preswmloop reads it),
 	# then send new rect; channel ordering ensures preswmloop sees new presscr.
-	alt { presRszCh <-= presr => ; * => ; }
+	presRszCh <-= presr;
 }
 
 shutdown()

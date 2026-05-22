@@ -397,11 +397,21 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		redrawconv();
 	newimg := <-rsz =>
 		mainwin = newimg;
-		# Invalidate render caches on resize
-		for(ri := 0; ri < nmsg; ri++)
-			msgstore[ri].rendimg = nil;
-		lastrendw = 0;
-		redrawconv();
+		# Skip the redraw when the sub-image is a 1×1 mobile-accordion
+		# sentinel (the collapsed-zone placeholder lucifer.b hands us
+		# to keep mainscr.newwindow happy). Running drawconversation
+		# against a degenerate zone corrupts module-global geometry
+		# (inputrect, micrect, tilelayout) and leaves the next *real*
+		# resize unable to repaint. See INFR-121 "display does not
+		# always refresh".
+		if(mainwin.r.dx() < 16 || mainwin.r.dy() < 16)
+			;
+		else {
+			for(ri := 0; ri < nmsg; ri++)
+				msgstore[ri].rendimg = nil;
+			lastrendw = 0;
+			redrawconv();
+		}
 	}
 }
 

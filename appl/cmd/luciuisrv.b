@@ -531,19 +531,22 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 }
 
 # Append s to the end of list l (FIFO queue push).
-# O(1) cons to front; callers use qrev() before draining.
+#
+# Stored in true FIFO order — oldest at head, newest at tail. Earlier
+# revisions cons'd to the front O(1) and expected callers to qrev() on
+# every drain. That only delivers the right element on the FIRST read:
+# for [E3,E2,E1] (cons order) qrev gives [E1,E2,E3] -> take E1; on the
+# next read qrev([E2,E3]) flips it back to [E3,E2] -> take E3 instead
+# of E2. INFR-36.
+#
+# Walks the list to find the tail (O(n)); event queues here stay short
+# and writes are far less frequent than the bug surface (rapid theme
+# switches, batched activity events) is wide.
 qpush(l: list of string, s: string): list of string
 {
-	return s :: l;
-}
-
-# Reverse a string list (used to restore FIFO order before draining).
-qrev(l: list of string): list of string
-{
-	r: list of string = nil;
-	for(; l != nil; l = tl l)
-		r = hd l :: r;
-	return r;
+	if(l == nil)
+		return s :: nil;
+	return hd l :: qpush(tl l, s);
 }
 
 # --- Event dispatch ---
@@ -829,7 +832,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		# loop after one event (INFR-28 root cause).
 		s := findeventsub(m.fid);
 		if(s != nil && s.events != nil) {
-			s.events = qrev(s.events);
+			# s.events is in FIFO order (head = oldest). INFR-36.
 			data := array of byte (hd s.events + "\n");
 			s.events = tl s.events;
 			srv.reply(ref Rmsg.Read(m.tag, data));
@@ -841,7 +844,6 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		if(notifyq == nil) {
 			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else {
-			notifyq = qrev(notifyq);
 			data := array of byte (hd notifyq + "\n");
 			notifyq = tl notifyq;
 			srv.reply(ref Rmsg.Read(m.tag, data));
@@ -851,7 +853,6 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		if(toastq == nil) {
 			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else {
-			toastq = qrev(toastq);
 			data := array of byte (hd toastq + "\n");
 			toastq = tl toastq;
 			srv.reply(ref Rmsg.Read(m.tag, data));
@@ -890,7 +891,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		# waits on this file — prevents drain goroutines from stealing events.
 		a := findactivity(actid);
 		if(a != nil && a.pendingevent != nil) {
-			a.pendingevent = qrev(a.pendingevent);
+			# pendingevent is in FIFO order (head = oldest). INFR-36.
 			data := array of byte (hd a.pendingevent + "\n");
 			a.pendingevent = tl a.pendingevent;
 			srv.reply(styxservers->readbytes(m, data));
@@ -909,7 +910,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			# Blocking read
 			addpending(m.fid, m.tag, Qconvinput, actid, m);
 		} else {
-			a.inputq = qrev(a.inputq);
+			# inputq is in FIFO order (head = oldest). INFR-36.
 			data := array of byte (hd a.inputq + "\n");
 			a.inputq = tl a.inputq;
 			srv.reply(styxservers->readbytes(m, data));
@@ -2604,8 +2605,10 @@ validid(id: string): int
 
 appendstr(l: list of string, s: string): list of string
 {
-	# O(1) cons to front; callers use qrev() before draining.
-	return s :: l;
+	# True FIFO append — see qpush() for the rationale (INFR-36).
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
 }
 
 qlen(l: list of string): int

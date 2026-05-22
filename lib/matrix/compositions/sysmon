@@ -1,0 +1,17 @@
+# sysmon — InferNode system monitor
+#
+# Replaces /dis/wm/task and /dis/wm/memory with a composable
+# Matrix dashboard: live CPU usage, memory pool occupancy, and
+# an interactive process table.  All data is sourced from the
+# Inferno namespace — /dev/memory for pools, /prog/<pid>/status
+# for processes — so a headless agent that mounts /n/matrix
+# observes the same view a local user does.
+
+layout hsplit 50 50
+left vsplit 50 50
+
+left/top    cpu-gauge  /tmp/matrix/sysmon
+left/bottom mem-gauge  /tmp/matrix/sysmon
+right       proc-list  /tmp/matrix/sysmon
+
+service sysmon-svc /

@@ -8,6 +8,10 @@ TARG=\
 	llm-recorder.dis\
 	llm-context.dis\
 	llm-sessions.dis\
+	sysmon-svc.dis\
+	cpu-gauge.dis\
+	mem-gauge.dis\
+	proc-list.dis\
 
 SYSMODULES=\
 	sys.m\

@@ -479,14 +479,196 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 
 # ==================== OpenAI-Compatible API ====================
 
-askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string)
+# Streaming OpenAI dispatch — used when req.streamch != nil. Reads
+# the HTTP response incrementally and forwards `delta.content` chunks
+# to req.streamch as they arrive on the wire, instead of buffering
+# the full body and replaying chunks in a burst.
+#
+# Failure-mode change vs. the buffered path: when the read stalls
+# mid-response, the caller still gets back whatever content arrived
+# before the stall (in fulltext) plus a non-nil error string. The
+# old code would return (nil, err) and the user would see nothing.
+askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string)
 {
 	if(baseurl == nil || baseurl == "")
 		baseurl = "http://localhost:11434/v1";
 
 	body := buildopenairequestjson(req);
 
-	# Parse URL to determine http vs https, host, port, path
+	(scheme, host, port, path, uerr) := parseurl(baseurl + "/chat/completions");
+	if(uerr != nil)
+		return (nil, "openai: " + uerr);
+
+	headers := "Content-Type: application/json\r\n";
+	if(apikey != nil && apikey != "" && apikey != "not-needed")
+		headers += "Authorization: Bearer " + apikey + "\r\n";
+
+	contentlen := len array of byte body;
+	reqdata := "POST " + path + " HTTP/1.0\r\n" +
+		"Host: " + host + "\r\n" +
+		"Content-Length: " + string contentlen + "\r\n" +
+		headers +
+		"Connection: close\r\n" +
+		"\r\n" + body;
+
+	if(scheme == "https") {
+		if(tlsmod == nil) {
+			tlsmod = load TLS TLS->PATH;
+			if(tlsmod == nil)
+				return (nil, "openai: cannot load TLS module");
+			terr := tlsmod->init();
+			if(terr != nil)
+				return (nil, "openai: TLS init: " + terr);
+		}
+		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+		if(ok < 0)
+			return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
+		config := tlsmod->defaultconfig();
+		config.servername = host;
+		(tc, cerr) := tlsmod->client(conn.dfd, config);
+		if(cerr != nil)
+			return (nil, "openai: TLS: " + cerr);
+		d := array of byte reqdata;
+		if(tc.write(d, len d) < 0) {
+			tc.close();
+			return (nil, "openai: TLS write failed");
+		}
+		rch := chan[1] of (int, array of byte);
+		spawn _httpsread(tc, rch);
+		(resp, rerr) := _sseconsume(conn, rch, req);
+		tc.close();
+		if(rerr != nil)
+			return (resp, "openai: " + rerr);
+		return (resp, nil);
+	}
+
+	# Plain HTTP path (typical: Ollama at localhost:11434).
+	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	if(ok < 0)
+		return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
+	d := array of byte reqdata;
+	if(sys->write(conn.dfd, d, len d) < 0)
+		return (nil, sys->sprint("openai: write failed: %r"));
+	rch := chan[1] of (int, array of byte);
+	spawn _httpread(conn.dfd, rch);
+	(resp, rerr) := _sseconsume(conn, rch, req);
+	if(rerr != nil)
+		return (resp, "openai: " + rerr);
+	return (resp, nil);
+}
+
+# Incremental SSE consumer. Drives a byte channel (filled by
+# _httpread / _httpsread) through:
+#   1. HTTP header drain (until \r\n\r\n)
+#   2. Status line check
+#   3. SSE event drain via _ssedrain_lines, which calls
+#      _ssehandle_event for each complete `data: ...` line and
+#      forwards content deltas to req.streamch in real time
+#
+# Per-read no-progress watchdog: same shape as _httpreadloop —
+# HTTP_NO_PROGRESS_MS without any bytes triggers a hangup, but a
+# successful read at any time resets the timer.
+#
+# On timeout, returns the partial response (fulltext + tool calls
+# accumulated so far) plus an error string. Caller decides what to
+# do with the partial.
+_sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
+            req: ref AskRequest): (ref AskResponse, string)
+{
+	st := ref _SseState("", 0, "", nil, nil, nil);
+	headersbuf := array[0] of byte;
+	bodybuf := array[0] of byte;
+	in_body := 0;
+	status := "";
+	idle_ms := 0;
+	done := 0;
+	while(!done) {
+		alt {
+		rr := <-rch =>
+			(n, rdata) := rr;
+			if(n <= 0) {
+				done = 1;
+				break;
+			}
+			idle_ms = 0;
+			if(!in_body) {
+				# Accumulate header bytes; look for \r\n\r\n
+				old := headersbuf;
+				headersbuf = array[len old + n] of byte;
+				headersbuf[0:] = old;
+				headersbuf[len old:] = rdata[0:n];
+				boundary := -1;
+				for(i := 0; i + 3 < len headersbuf; i++) {
+					if(headersbuf[i] == byte '\r' && headersbuf[i+1] == byte '\n' &&
+					   headersbuf[i+2] == byte '\r' && headersbuf[i+3] == byte '\n') {
+						boundary = i;
+						break;
+					}
+				}
+				if(boundary >= 0) {
+					# Pull status line out of the header block
+					hdrs := string headersbuf[0:boundary];
+					nl := 0;
+					for(; nl < len hdrs; nl++)
+						if(hdrs[nl] == '\n')
+							break;
+					if(nl > 0)
+						status = hdrs[0:nl];
+					# Validate status
+					if(status != "" && !hasprefix(status, "HTTP/1.1 200") &&
+					   !hasprefix(status, "HTTP/1.0 200"))
+						return (nil, "HTTP error: " + strip(status));
+					in_body = 1;
+					after := boundary + 4;
+					if(after < len headersbuf)
+						bodybuf = headersbuf[after:];
+					headersbuf = array[0] of byte;
+				}
+			} else {
+				# Append new bytes to bodybuf
+				old := bodybuf;
+				bodybuf = array[len old + n] of byte;
+				bodybuf[0:] = old;
+				bodybuf[len old:] = rdata[0:n];
+			}
+			if(in_body) {
+				(remaining, ssedone) := _ssedrain_lines(bodybuf, st, req);
+				bodybuf = remaining;
+				if(ssedone)
+					done = 1;
+			}
+		* =>
+			sys->sleep(HTTP_POLL_MS);
+			idle_ms += HTTP_POLL_MS;
+			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+				if(conn.cfd != nil)
+					sys->fprint(conn.cfd, "hangup");
+				# Build partial response from whatever arrived
+				(presp, _) := _ssebuild_response(st, req);
+				return (presp, sys->sprint(
+					"HTTP read no-progress timeout after %d ms (got %d bytes of content, %d tool deltas)",
+					HTTP_NO_PROGRESS_MS, len st.fulltext, listlen(st.tcids)));
+			}
+		}
+	}
+	return _ssebuild_response(st, req);
+}
+
+askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string)
+{
+	# Streaming path — true incremental SSE consumption.
+	# Forwards delta.content to req.streamch as it arrives on the
+	# wire, not after buffering. On mid-response stall, returns
+	# whatever content arrived plus an error so the caller can
+	# distinguish "no data" from "stalled at chunk N."
+	if(req.streamch != nil)
+		return askopenaistream(baseurl, apikey, req);
+
+	if(baseurl == nil || baseurl == "")
+		baseurl = "http://localhost:11434/v1";
+
+	body := buildopenairequestjson(req);
+
 	(scheme, host, port, path, uerr) := parseurl(baseurl + "/chat/completions");
 	if(uerr != nil)
 		return (nil, "openai: " + uerr);
@@ -505,9 +687,6 @@ askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, strin
 
 	if(err != nil)
 		return (nil, "openai: " + err);
-
-	if(req.streamch != nil)
-		return parseopenaisseresponse(respbody, req);
 
 	return parseopenairesponse(respbody, req);
 }
@@ -912,6 +1091,213 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	return (ref AskResponse(response, structjson, tokens), nil);
 }
 
+# Streaming SSE state — accumulated across multiple `data: {...}` events.
+# Lives inside _ssehandle_event (called per-event) and in the new
+# askopenaistream / parseopenaisseresponse drivers. ref adt so callers
+# can mutate via the helper without passing 6 separate by-ref params.
+_SseState: adt {
+	fulltext:     string;
+	tokens:       int;
+	finishreason: string;
+	# Tool-call delta accumulation. Parallel lists as maps
+	# (index → id, name, args). Each new SSE event may extend
+	# any of these.
+	tcids:    list of string;
+	tcnames:  list of string;
+	tcargs:   list of string;
+};
+
+# Process one parsed SSE event JSON value into the running state.
+# Mutates `st` in place (it's a ref adt — list reassignments survive
+# because the adt itself is shared).
+_ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
+{
+	# Usage
+	usagev := jv.get("usage");
+	if(usagev != nil) {
+		tv := usagev.get("total_tokens");
+		if(tv != nil) pick t := tv { Int => st.tokens = int t.value; }
+	}
+
+	# Choices
+	choices := jv.get("choices");
+	if(choices == nil)
+		return;
+	pick ca := choices {
+	Array =>
+		if(len ca.a == 0)
+			return;
+		choice := ca.a[0];
+
+		# Finish reason
+		frv := choice.get("finish_reason");
+		if(frv != nil) pick fr := frv { String => if(fr.s != "") st.finishreason = fr.s; }
+
+		delta := choice.get("delta");
+		if(delta == nil)
+			return;
+
+		# Text delta — append to fulltext AND forward to streamch
+		# (non-blocking; drops on full because streamch is the live
+		# display feed, not the authoritative response — fulltext is).
+		cv := delta.get("content");
+		if(cv != nil) {
+			pick c := cv {
+			String =>
+				if(c.s != "") {
+					st.fulltext += c.s;
+					if(req.streamch != nil) {
+						alt {
+							req.streamch <-= c.s => ;
+							* => ;
+						}
+					}
+				}
+			}
+		}
+
+		# Tool-call deltas
+		tcv := delta.get("tool_calls");
+		if(tcv != nil) {
+			pick tca := tcv {
+			Array =>
+				for(i := 0; i < len tca.a; i++) {
+					tc := tca.a[i];
+					idxv := tc.get("index");
+					idx := 0;
+					if(idxv != nil) pick iv := idxv { Int => idx = int iv.value; }
+					while(listlen(st.tcids) <= idx) {
+						st.tcids = append(st.tcids, "");
+						st.tcnames = append(st.tcnames, "");
+						st.tcargs = append(st.tcargs, "");
+					}
+					idv := tc.get("id");
+					if(idv != nil) pick iv := idv { String => if(iv.s != "") st.tcids = listset(st.tcids, idx, iv.s); }
+					fnv := tc.get("function");
+					if(fnv != nil) {
+						nv := fnv.get("name");
+						if(nv != nil) pick n := nv { String => if(n.s != "") st.tcnames = listset(st.tcnames, idx, listget(st.tcnames, idx) + n.s); }
+						av := fnv.get("arguments");
+						if(av != nil) pick a := av { String => st.tcargs = listset(st.tcargs, idx, listget(st.tcargs, idx) + a.s); }
+					}
+				}
+			}
+		}
+	}
+}
+
+# Build the final AskResponse from the accumulated SSE state.
+# Shared between the streaming driver (askopenaistream) and the
+# buffered fallback (parseopenaisseresponse).
+_ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, string)
+{
+	if(st.tokens == 0)
+		st.tokens = estimatetokens(st.fulltext);
+
+	# Text tool-call fallback for models that emit tools as plain text
+	if(st.tcids == nil && st.fulltext != "" && req.tooldefs != nil) {
+		(remaining, extracted) := extracttexttoolcalls(st.fulltext, req.tooldefs);
+		if(extracted != nil) {
+			for(el := extracted; el != nil; el = tl el) {
+				(eid, ename, eargs) := hd el;
+				st.tcids = append(st.tcids, eid);
+				st.tcnames = append(st.tcnames, ename);
+				st.tcargs = append(st.tcargs, eargs);
+			}
+			st.fulltext = strip(remaining);
+			st.finishreason = "tool_calls";
+		}
+	}
+
+	# Plain text mode
+	if(req.tooldefs == nil) {
+		if(req.prefill != "" && !hasprefix(st.fulltext, req.prefill))
+			st.fulltext = req.prefill + st.fulltext;
+		return (ref AskResponse(st.fulltext, "", st.tokens), nil);
+	}
+
+	# Tool mode
+	textparts: list of string;
+	toolentries: list of string;
+	structblocks: list of string;
+
+	if(st.fulltext != "") {
+		textparts = st.fulltext :: nil;
+		structblocks = ("{\"type\":\"text\",\"text\":" + jquote(st.fulltext) + "}") :: nil;
+	}
+
+	n := listlen(st.tcids);
+	for(i := 0; i < n; i++) {
+		id := listget(st.tcids, i);
+		name := listget(st.tcnames, i);
+		rawargs := listget(st.tcargs, i);
+		args := extracttoolargs(rawargs);
+		safeargs := replaceall(args, "\n", "\\n");
+		toolentries = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toolentries;
+		inputjson := rawargs;
+		if(inputjson == "")
+			inputjson = "{}";
+		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
+			",\"name\":" + jquote(name) +
+			",\"input\":" + inputjson + "}") :: structblocks;
+	}
+
+	structjson := "";
+	if(structblocks != nil)
+		structjson = "[" + joinrev(structblocks, ",") + "]";
+
+	response := "";
+	if(st.finishreason == "tool_calls")
+		response = "STOP:tool_use\n";
+	else
+		response = "STOP:end_turn\n";
+	response += joinrev(toolentries, "\n");
+	if(toolentries != nil)
+		response += "\n";
+	response += joinrev(textparts, "");
+
+	return (ref AskResponse(response, structjson, st.tokens), nil);
+}
+
+# Drain whole `data: {...}` lines out of `buf`, calling
+# _ssehandle_event for each. Returns (remaining_partial_line, done_flag).
+# `done_flag` = 1 iff `data: [DONE]` was seen.
+# Also tolerates Transfer-Encoding chunked size lines (`42\r\n`) that
+# show up inline — they don't start with "data: " so they're skipped.
+_ssedrain_lines(buf: array of byte, st: ref _SseState, req: ref AskRequest): (array of byte, int)
+{
+	start := 0;
+	done := 0;
+	for(i := 0; i < len buf; i++) {
+		if(buf[i] != byte '\n')
+			continue;
+		# Extract line buf[start:i], strip trailing \r
+		end := i;
+		if(end > start && buf[end-1] == byte '\r')
+			end--;
+		line := string buf[start:end];
+		start = i + 1;
+		if(line == "")
+			continue;
+		if(!hasprefix(line, "data: "))
+			continue;
+		data := line[6:];
+		if(data == "[DONE]") {
+			done = 1;
+			break;
+		}
+		(jv, jerr) := readjsonstring(data);
+		if(jerr != nil)
+			continue;
+		_ssehandle_event(jv, st, req);
+	}
+	# Anything from `start` onwards is the trailing partial line —
+	# return it so the caller carries it forward to the next read.
+	if(start < len buf)
+		return (buf[start:], done);
+	return (array[0] of byte, done);
+}
+
 parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, string)
 {
 	# Backward-compat: if the server ignored `stream: true` and returned a
@@ -930,16 +1316,11 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	if(len stripped > 0 && stripped[0] == '{')
 		return parseopenairesponse(body, req);
 
-	fulltext := "";
-	tokens := 0;
-	finishreason := "";
-
-	# Tool call delta accumulation
-	# Using parallel lists as maps (index → id, name, args)
-	tcids: list of string;
-	tcnames: list of string;
-	tcargs: list of string;
-
+	# Buffered-body SSE parse — used when the whole response was read
+	# in one go (askopenaistream's non-streaming peer, error fallback,
+	# or the existing fallback tests). For true incremental streaming,
+	# askopenaistream uses _ssehandle_event + _ssebuild_response directly.
+	st := ref _SseState("", 0, "", nil, nil, nil);
 	lines := splitlines(body);
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
@@ -951,156 +1332,12 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 		data := line[6:];
 		if(data == "[DONE]")
 			break;
-
 		(jv, jerr) := readjsonstring(data);
 		if(jerr != nil)
 			continue;
-
-		# Usage
-		usagev := jv.get("usage");
-		if(usagev != nil) {
-			tv := usagev.get("total_tokens");
-			if(tv != nil) pick t := tv { Int => tokens = int t.value; }
-		}
-
-		# Choices
-		choices := jv.get("choices");
-		if(choices == nil)
-			continue;
-
-		pick ca := choices {
-		Array =>
-			if(len ca.a == 0)
-				continue;
-			choice := ca.a[0];
-
-			# Finish reason
-			frv := choice.get("finish_reason");
-			if(frv != nil) pick fr := frv { String => if(fr.s != "") finishreason = fr.s; }
-
-			delta := choice.get("delta");
-			if(delta == nil)
-				continue;
-
-			# Text delta
-			cv := delta.get("content");
-			if(cv != nil) {
-				pick c := cv {
-				String =>
-					if(c.s != "") {
-						fulltext += c.s;
-						if(req.streamch != nil) {
-							alt {
-								req.streamch <-= c.s => ;
-								* => ;  # drop if full
-							}
-						}
-					}
-				}
-			}
-
-			# Tool call deltas
-			tcv := delta.get("tool_calls");
-			if(tcv != nil) {
-				pick tca := tcv {
-				Array =>
-					for(i := 0; i < len tca.a; i++) {
-						tc := tca.a[i];
-						# Get index
-						idxv := tc.get("index");
-						idx := 0;
-						if(idxv != nil) pick iv := idxv { Int => idx = int iv.value; }
-
-						# Ensure lists are long enough
-						while(listlen(tcids) <= idx) {
-							tcids = append(tcids, "");
-							tcnames = append(tcnames, "");
-							tcargs = append(tcargs, "");
-						}
-
-						# Merge deltas
-						idv := tc.get("id");
-						if(idv != nil) pick iv := idv { String => if(iv.s != "") tcids = listset(tcids, idx, iv.s); }
-
-						fnv := tc.get("function");
-						if(fnv != nil) {
-							nv := fnv.get("name");
-							if(nv != nil) pick n := nv { String => if(n.s != "") tcnames = listset(tcnames, idx, listget(tcnames, idx) + n.s); }
-							av := fnv.get("arguments");
-							if(av != nil) pick a := av { String => tcargs = listset(tcargs, idx, listget(tcargs, idx) + a.s); }
-						}
-					}
-				}
-			}
-		}
+		_ssehandle_event(jv, st, req);
 	}
-
-	if(tokens == 0)
-		tokens = estimatetokens(fulltext);
-
-	# Fallback: parse tool calls from text content if model didn't use structured API
-	if(tcids == nil && fulltext != "" && req.tooldefs != nil) {
-		(remaining, extracted) := extracttexttoolcalls(fulltext, req.tooldefs);
-		if(extracted != nil) {
-			for(el := extracted; el != nil; el = tl el) {
-				(eid, ename, eargs) := hd el;
-				tcids = append(tcids, eid);
-				tcnames = append(tcnames, ename);
-				tcargs = append(tcargs, eargs);
-			}
-			fulltext = strip(remaining);
-			finishreason = "tool_calls";
-		}
-	}
-
-	# Plain text mode
-	if(req.tooldefs == nil) {
-		if(req.prefill != "" && !hasprefix(fulltext, req.prefill))
-			fulltext = req.prefill + fulltext;
-		return (ref AskResponse(fulltext, "", tokens), nil);
-	}
-
-	# Tool mode
-	textparts: list of string;
-	toolentries: list of string;
-	structblocks: list of string;
-
-	if(fulltext != "") {
-		textparts = fulltext :: nil;
-		structblocks = ("{\"type\":\"text\",\"text\":" + jquote(fulltext) + "}") :: nil;
-	}
-
-	n := listlen(tcids);
-	for(i := 0; i < n; i++) {
-		id := listget(tcids, i);
-		name := listget(tcnames, i);
-		rawargs := listget(tcargs, i);
-		args := extracttoolargs(rawargs);
-		safeargs := replaceall(args, "\n", "\\n");
-		toolentries = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toolentries;
-		inputjson := rawargs;
-		if(inputjson == "")
-			inputjson = "{}";
-		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
-			",\"name\":" + jquote(name) +
-			",\"input\":" + inputjson + "}") :: structblocks;
-	}
-
-	structjson := "";
-	if(structblocks != nil)
-		structjson = "[" + joinrev(structblocks, ",") + "]";
-
-	response := "";
-	if(finishreason == "tool_calls")
-		response = "STOP:tool_use\n";
-	else
-		response = "STOP:end_turn\n";
-	response += joinrev(toolentries, "\n");
-	if(toolentries != nil)
-		response += "\n";
-	response += joinrev(textparts, "");
-
-	return (ref AskResponse(response, structjson, tokens), nil);
+	return _ssebuild_response(st, req);
 }
 
 # ==================== Fallback Text Tool Call Parser ====================

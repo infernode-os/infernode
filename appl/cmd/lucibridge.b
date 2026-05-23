@@ -625,6 +625,15 @@ initsession(): string
 	systempath := "/n/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, sysprompt);
 
+	# Anchor every response in Veltro identity by prefilling the assistant
+	# turn with "[Veltro] ". agentlib strips the marker on display (see
+	# agentlib.b:hasprefix("[Veltro]") sites) so the user only ever sees
+	# clean text. The prefill is the strongest cheap defence against the
+	# model reflexively introducing itself as ChatGPT / Llama / etc.
+	# Wired only when agentlib has the API available — see INFR-130.
+	prefillpath := "/n/llm/" + sessionid + "/prefill";
+	agentlib->setprefillpath(prefillpath, "[Veltro] ");
+
 	# Install tool definitions for native tool_use protocol.
 	# "say" is intentionally excluded: Claude responds with end_turn text directly,
 	# avoiding the tool-call→acknowledgement loop that produces spurious "..." replies.

@@ -1743,20 +1743,73 @@ extracttoolargs(inputjson: string): string
 
 	pick obj := jv {
 	Object =>
-		# Check for "args" key first
+		# Assembly order is "command first, args second, then any
+		# remaining string properties in JSON order."
+		#
+		# Why: tools like task and memory use a `{command, args}`
+		# schema where the value of `args` is itself a key=value
+		# string. exec() splits on first whitespace to extract the
+		# command, so command must come first.
+		#
+		# Smaller models (notably gpt-oss:20b) frequently emit the
+		# object in args-first order despite the schema declaring
+		# command first. A naive JSON-encounter-order join would
+		# produce "args command" — wrong. Hence the special-case
+		# ordering here.
+		#
+		# Reproduced in the eval harness as the "Tool X has failed 3
+		# consecutive times" loop; see pdfinn/infernode-eval-harness
+		# FINDINGS.md §F3.
+		cmdval := "";
+		hascmd := 0;
+		argsval := "";
+		hasargs := 0;
+		nprops := 0;
+		# `others` collected in reverse — reversed back into JSON
+		# order below before joining.
+		others_rev: list of string;
 		for(ml := obj.mem; ml != nil; ml = tl ml) {
 			(name, val) := hd ml;
-			if(name == "args") {
-				pick sv := val { String => return sv.s; }
+			nprops++;
+			s := "";
+			pick sv := val {
+			String => s = sv.s;
+			* => s = val.text();
+			}
+			if(name == "command") {
+				cmdval = s;
+				hascmd = 1;
+			} else if(name == "args") {
+				argsval = s;
+				hasargs = 1;
+			} else {
+				others_rev = s :: others_rev;
 			}
 		}
-		# Fallback: join all string values
-		parts: list of string;
-		for(ml = obj.mem; ml != nil; ml = tl ml) {
-			(nil, val) := hd ml;
-			pick sv := val { String => parts = sv.s :: parts; }
+		# Legacy shortcut: tool's whole surface is a single `args`.
+		if(hasargs && nprops == 1)
+			return argsval;
+		# Reverse others_rev once so we can iterate in JSON-encounter
+		# order.
+		others: list of string;
+		for(orl := others_rev; orl != nil; orl = tl orl)
+			others = hd orl :: others;
+		# Forward-build the final result in canonical order:
+		#   command first, args second, remaining string props in JSON order.
+		result := "";
+		if(hascmd)
+			result = cmdval;
+		if(hasargs) {
+			if(result != "")
+				result += " ";
+			result += argsval;
 		}
-		return joinrev(parts, " ");
+		for(ofl := others; ofl != nil; ofl = tl ofl) {
+			if(result != "")
+				result += " ";
+			result += hd ofl;
+		}
+		return result;
 	}
 	return inputjson;
 }

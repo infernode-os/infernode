@@ -1519,6 +1519,72 @@ jsonescapestr(s: string): string
 }
 
 # ==================== HTTP Client ====================
+#
+# Read loop with no-progress watchdog. Two tunables:
+#   HTTP_POLL_MS        — how often main wakes to check the watchdog
+#                          channel + progress timer
+#   HTTP_NO_PROGRESS_MS — kill the connection if no bytes arrive within
+#                          this window
+#
+# The watchdog is *per quiet period*, not per call: every successful
+# read resets the timer. So a 5-minute Ollama call that delivers a
+# chunk every few seconds will not trip it; a hung connection that
+# stops delivering bytes for >NO_PROGRESS_MS will.
+#
+# On trip, we write "hangup" to the TCP ctl file (devip.c:896 — Inferno
+# IP stack closes the socket at the kernel level), which forces the
+# in-flight sys->read to fail. The reader thread then deposits its
+# final (n, buf) tuple onto a buffered channel and exits. We don't wait
+# for it.
+HTTP_POLL_MS:        con 200;
+HTTP_NO_PROGRESS_MS: con 60000;
+
+# Per-read reader thread: blocks on sys->read, pushes one chunk per
+# iteration. Caller's channel must be buffered (capacity >= 1) so a
+# final post-hangup tuple can be deposited even if main has bailed.
+_httpread(fd: ref Sys->FD, ch: chan of (int, array of byte))
+{
+	for(;;) {
+		buf := array[8192] of byte;
+		n := sys->read(fd, buf, len buf);
+		ch <-= (n, buf);
+		if(n <= 0)
+			break;
+	}
+}
+
+# Common read-with-watchdog loop. Drives _httpread and collects bytes
+# until EOF, error, or the no-progress watchdog fires. Returns
+# (response, errstr) — errstr non-nil only on timeout (EOF/sys errors
+# are normal terminators, surfaced by parse).
+_httpreadloop(conn: Sys->Connection): (string, string)
+{
+	response := "";
+	rch := chan[1] of (int, array of byte);
+	spawn _httpread(conn.dfd, rch);
+	idle_ms := 0;
+	for(;;) {
+		alt {
+		rr := <-rch =>
+			(n, rdata) := rr;
+			if(n <= 0)
+				return (response, nil);
+			response += string rdata[0:n];
+			idle_ms = 0;
+		* =>
+			sys->sleep(HTTP_POLL_MS);
+			idle_ms += HTTP_POLL_MS;
+			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+				if(conn.cfd != nil)
+					sys->fprint(conn.cfd, "hangup");
+				return (response, sys->sprint(
+					"HTTP read no-progress timeout after %d ms (got %d bytes)",
+					HTTP_NO_PROGRESS_MS, len response));
+			}
+		}
+	}
+	return (response, nil);  # unreachable; satisfies the type checker
+}
 
 httppost(host, port, path, headers, body: string): (string, string)
 {
@@ -1539,14 +1605,59 @@ httppost(host, port, path, headers, body: string): (string, string)
 	if(sys->write(conn.dfd, data, len data) < 0)
 		return (nil, sys->sprint("write failed: %r"));
 
-	# Read response
-	response := "";
-	buf := array[8192] of byte;
-	while((n := sys->read(conn.dfd, buf, len buf)) > 0)
-		response += string buf[0:n];
+	(response, rerr) := _httpreadloop(conn);
+	if(rerr != nil)
+		return (nil, rerr);
 
 	(nil, nil, rbody) := parsehttpresponse(response);
 	return (rbody, nil);
+}
+
+# TLS variant of _httpread: reads through the TLS wrapper. Same
+# contract (buffered channel, deposits one tuple per chunk + a
+# terminator on EOF/err).
+_httpsread(tc: ref Conn, ch: chan of (int, array of byte))
+{
+	for(;;) {
+		buf := array[8192] of byte;
+		n := tc.read(buf, len buf);
+		ch <-= (n, buf);
+		if(n <= 0)
+			break;
+	}
+}
+
+# Same watchdog shape as _httpreadloop but for TLS. The TLS layer
+# wraps conn.dfd; writing "hangup" to conn.cfd closes the underlying
+# TCP socket, which makes the in-flight tc.read fail (TLS sees socket
+# error and surfaces it).
+_httpsreadloop(conn: Sys->Connection, tc: ref Conn): (string, string)
+{
+	response := "";
+	rch := chan[1] of (int, array of byte);
+	spawn _httpsread(tc, rch);
+	idle_ms := 0;
+	for(;;) {
+		alt {
+		rr := <-rch =>
+			(n, rdata) := rr;
+			if(n <= 0)
+				return (response, nil);
+			response += string rdata[0:n];
+			idle_ms = 0;
+		* =>
+			sys->sleep(HTTP_POLL_MS);
+			idle_ms += HTTP_POLL_MS;
+			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+				if(conn.cfd != nil)
+					sys->fprint(conn.cfd, "hangup");
+				return (response, sys->sprint(
+					"HTTPS read no-progress timeout after %d ms (got %d bytes)",
+					HTTP_NO_PROGRESS_MS, len response));
+			}
+		}
+	}
+	return (response, nil);
 }
 
 httpspost(host, port, path, headers, body: string): (string, string)
@@ -1585,12 +1696,10 @@ httpspost(host, port, path, headers, body: string): (string, string)
 		return (nil, "TLS write failed");
 	}
 
-	# Read response
-	response := "";
-	buf := array[8192] of byte;
-	while((n := tc.read(buf, len buf)) > 0)
-		response += string buf[0:n];
+	(response, rerr) := _httpsreadloop(conn, tc);
 	tc.close();
+	if(rerr != nil)
+		return (nil, rerr);
 
 	# Check for HTTP error status
 	(status, nil, rbody) := parsehttpresponse(response);

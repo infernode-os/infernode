@@ -79,6 +79,12 @@ Popup: import menumod;
 stderr: ref Sys->FD;
 mainwin: ref Image;		# current zone sub-image
 backbuf: ref Image;		# off-screen back buffer for double-buffered redraw
+
+# KLUDGE-MOBILE-ACCORDION-INFR-119
+# Mobile mode: bumps input bar height + mic width and adds a
+# visible Send button. Set in init() by reading /env/infmobile.
+mobile := 0;
+sendrect: Rect;
 display_g: ref Display;
 mainfont: ref Font;
 monofont_g: ref Font;
@@ -141,6 +147,18 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	stderr = sys->fildes(2);
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — same env var lucifer.b reads.
+	(ok, st) := sys->stat("/env/infmobile");
+	if(ok == 0 && st.length > big 0) {
+		fd := sys->open("/env/infmobile", Sys->OREAD);
+		if(fd != nil) {
+			buf := array[16] of byte;
+			n := sys->read(fd, buf, len buf);
+			if(n > 0 && buf[0] == byte '1')
+				mobile = 1;
+		}
+	}
 
 	mainwin = img;
 	display_g = dsp;
@@ -222,6 +240,18 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		}
 		# Button-1 just pressed
 		if(p.buttons == 1 && wasdown == 0) {
+			# KLUDGE-MOBILE-ACCORDION-INFR-119 — Send button hit
+			# test before any other handlers. Same effect as
+			# pressing Return on desktop: submit inputbuf if
+			# non-empty, then clear it.
+			if(mobile && sendrect.dx() > 0 && sendrect.contains(p.xy)) {
+				if(len inputbuf > 0) {
+					sendinput(inputbuf);
+					inputbuf = "";
+					inputpos = 0;
+				}
+				redrawconv();
+			} else
 			# Check mic button first
 			if(micrect.dx() > 0 && micrect.contains(p.xy)) {
 				startvoice();
@@ -498,6 +528,14 @@ drawconversation(zone: Rect)
 {
 	pad := 8;
 	inputh := mainfont.height + 2 * pad;
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — the desktop input bar is
+	# one font height + a tiny pad; that's too short to thumb-tap on
+	# a phone, and the mic button at its right is barely wider than
+	# the label. Roughly double both, and add a visible Send button.
+	if(mobile) {
+		pad = 16;
+		inputh = mainfont.height * 2 + 2 * pad;
+	}
 	msgy := zone.max.y - inputh - 2;
 
 	# Draw input field at bottom
@@ -506,7 +544,24 @@ drawconversation(zone: Rect)
 	inputrect = inputr;
 	mainwin.draw(inputr, inputcol, nil, (0, 0));
 
-	# Mic button at right edge of input
+	# Send button — mobile only. Sits between the input area and
+	# the mic button. Tapping it submits the current inputbuf, same
+	# as Return on desktop. Without it there's no visible affordance
+	# on a phone, where the soft keyboard's Enter key often hides
+	# behind the IME.
+	sendrect = Rect((0, 0), (0, 0));
+	sendw := 0;
+	if(mobile) {
+		sendw = mainfont.width("Send") + 2 * pad;
+		sendx := inputr.max.x - sendw;
+		sendy := inputr.min.y;
+		sendrect = Rect((sendx, sendy), (inputr.max.x, inputr.max.y));
+		mainwin.draw(sendrect, accentcol, nil, (0, 0));
+		sty := sendy + (inputh - mainfont.height) / 2;
+		mainwin.text((sendx + pad, sty), bgcol, (0, 0), mainfont, "Send");
+	}
+
+	# Mic button at right edge of input (or left of Send on mobile)
 	miclabel: string;
 	miccol: ref Image;
 	case voicestate {
@@ -518,9 +573,11 @@ drawconversation(zone: Rect)
 		miccol = dimcol;
 	}
 	micw := mainfont.width(miclabel) + 2 * pad;
-	micx := inputr.max.x - micw;
+	micx := inputr.max.x - micw - sendw;
+	if(mobile && sendw > 0)
+		micx -= 4;	# small gap between mic and Send
 	micy := inputr.min.y;
-	micrect = Rect((micx, micy), (inputr.max.x, inputr.max.y));
+	micrect = Rect((micx, micy), (micx + micw, inputr.max.y));
 	ity := inputr.min.y + (inputh - mainfont.height) / 2;
 	mainwin.text((micx + pad, ity), miccol, (0, 0), mainfont, miclabel);
 	# Separator line between input and mic
@@ -529,7 +586,7 @@ drawconversation(zone: Rect)
 
 	# Input text — scroll so cursor is always visible
 	itx := inputr.min.x + pad;
-	maxitw := inputr.dx() - 2 * pad - 8 - micw;
+	maxitw := inputr.dx() - 2 * pad - 8 - micw - sendw;
 	cw := 8;
 
 	# Clamp inputpos

@@ -758,11 +758,21 @@ drawchrome(r: Rect)
 			textx = textx + lw + 8;
 		}
 
-		# Task tiles — scrollable strip after logo
+		# Task tiles — scrollable strip after logo.
+		# In mobile mode the header is much taller (MOBILE_HEADERH)
+		# and we want the tiles big enough to be thumb-tappable.
+		# KLUDGE-MOBILE-ACCORDION-INFR-119.
 		tileh := 28;
-		tiley := headerr.min.y + (headerh - tileh) / 2;
 		tilepad := 8;	# horizontal text padding per side
 		tilegap := 4;	# gap between tiles
+		if(mobile) {
+			# Aim for ~48dp-equivalent tap target — leave a small
+			# margin so the tile doesn't crowd the LUCI header edges.
+			tileh = MOBILE_HEADERH - 24;
+			tilepad = 20;
+			tilegap = 12;
+		}
+		tiley := headerr.min.y + (headerh - tileh) / 2;
 		tilestripx := textx;	# start of tile strip (after logo)
 
 		if(ntiles > 0) {
@@ -779,8 +789,11 @@ drawchrome(r: Rect)
 				if(istool)
 					tlabel += " · " + t.status;
 				tw := mainfont.width(tlabel) + tilepad * 2;
-				if(tw < 60)
-					tw = 60;
+				mintw := 60;
+				if(mobile)
+					mintw = 140;	# thumb-target minimum
+				if(tw < mintw)
+					tw = mintw;
 
 				# Cache position for mouse hit testing (screen coords)
 				t.x = tx;

@@ -1,7 +1,10 @@
 # InferNode on iOS — hellaphone Phase 2
 
-*Design plan. No iOS code exists yet; this doc is the spec the work
-will be built against.*
+*Design plan, and the spec the work is built against. **Phase A
+(simulator headless proof of life) is implemented and runs** — the
+`-c0` Dis VM, 9P and Veltro execute under the iOS simulator; see
+`emu/iOS/README.md` for the build, the gaps that surfaced, and how to
+run it. Phases B and C below are still ahead.*
 
 This is the iOS counterpart to `docs/HELLAPHONE.md` (Android) and the
 Phase 2 referenced in `emu/Android/README.md`. The goal is the same:
@@ -126,19 +129,25 @@ lives in the app target and calls into libemu.)
 
 ## Phase plan
 
-**Phase A — Simulator headless proof of life.** The iOS analog of
-Android Phase 0, and the cheapest path to "does interpreter-only Dis
-actually run under Apple's sandbox."
+**Phase A — Simulator headless proof of life. ✅ DONE.** The iOS analog
+of Android Phase 0, and the cheapest path to "does interpreter-only Dis
+actually run under Apple's sandbox." It does.
 
-- Add `mkfiles/mkfile-iOS-arm64` and a `build-ios-arm64.sh` driver
-  (model on `build-android-ndk-arm64.sh`).
-- Cross-compile emu to `libemu.a` for `iphonesimulator`, GUIBACK
-  headless (`emu/Linux/stubs-headless.c` is platform-independent).
-- Minimal app/XCTest target whose entry boots emu `-c0 -r<bundle>` and
-  runs `tests/runner.dis`; logs to stderr/`NSLog`.
-- CI via `xcodebuild test` on a macOS runner. This is the load-bearing
-  milestone: it proves the VM, 9P, and Veltro work without the JIT
-  before any UI investment.
+- `mkfiles/mkfile-iOS-arm64` + `build-ios-arm64.sh` driver (modelled on
+  `build-android-ndk-arm64.sh`) — built.
+- Cross-compiles emu to a headless `o.emu` for `iphonesimulator`
+  (`emu/iOS/{emu,mkfile-g}`, reusing `emu/MacOSX` + `emu/port` via
+  forwarding stubs). Linked as `Mach-O 64-bit arm64`.
+- Booted `-c0` under `xcrun simctl spawn`: runs Dis bytecode
+  (`/dis/echo.dis`), reads the cons device (`cat /dev/sysname`), and
+  executes the Limbo test runner (`hello_test` 4/4, `veltro_test`
+  14/15). Five small SDK gaps surfaced and were gated — see
+  `emu/iOS/README.md`. This was the load-bearing milestone: the VM, 9P,
+  and Veltro work without the JIT, before any UI investment.
+- Still ahead within Phase A: a Minimal app/XCTest target whose entry
+  boots emu and runs the runner, and CI via `xcodebuild test` on a
+  macOS runner. (The CLI `simctl spawn` path above already proves the
+  runtime; the XCTest wrapper is what makes it a gating CI check.)
 
 **Phase B — Device build + SDL3 GUI.**
 

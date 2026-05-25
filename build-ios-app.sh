@@ -1,28 +1,33 @@
 #!/bin/sh
 #
-# build-ios-app.sh — assemble the InferNode iOS .app (hellaphone Phase 2b,
-# B0: headless shell on the simulator).
+# build-ios-app.sh — assemble + install the InferNode iOS .app on the
+# simulator (hellaphone Phase 2b).
 #
-# Pipeline:
-#   1. archive emu objects into libemu.a (mk libemu, with -DEMU_NO_MAIN)
-#   2. compile the UIKit entry point (emu/iOS/app/main_ios.m)
-#   3. link the app executable against libemu.a + the Inferno C libs
-#   4. assemble <App>.app: Info.plist, executable, and a bundled Inferno
-#      root (dis/ tests/ lib/) staged under <App>.app/root
-#   5. ad-hoc codesign (simulator needs no real identity)
-#   6. install on the booted simulator
-#   7. (--verify) launch it, capture the console, assert the test passed
+# Two modes:
+#   headless (default, B0) — libemu links stubs-headless; the app boots
+#     emu -c0 and runs the Limbo test runner. With --verify it launches,
+#     captures the console, and asserts the tests passed.
+#   --gui (B1.2) — libemu links the SDL3 backend; the app is bootstrapped
+#     by SDL3 (UIKit + Metal) and boots the lucifer GUI. Launches and
+#     screenshots (no PASS assertion — it's a GUI).
+#
+# Pipeline: archive libemu.a (mk libemu, -DEMU_NO_MAIN) -> compile the
+# UIKit entry point -> link against libemu + the Inferno C libs (+ SDL3
+# for --gui) -> assemble <App>.app with a bundled Inferno root under
+# <App>.app/root -> ad-hoc codesign -> install on the booted simulator.
 #
 # Simulator only for now — device builds need an Apple Development cert +
 # provisioning profile (see emu/iOS/README.md, Phase B3).
 #
-# Prereqs: a Mac with Xcode, and the Inferno C libs already cross-built
-# (run ./build-ios-arm64.sh first — it produces iOS/arm64/lib/*.a).
+# Prereqs: a Mac with Xcode; the Inferno C libs cross-built
+# (./build-ios-arm64.sh -> iOS/arm64/lib/*.a); and for --gui, SDL3
+# cross-built (./build-sdl3-ios.sh -> ~/sdks/SDL3-ios-sim-arm64).
 #
 # Usage:
 #   ./build-ios-arm64.sh          # once, to build the C libs
-#   ./build-ios-app.sh            # build + install on the booted sim
-#   ./build-ios-app.sh --verify   # the above, then launch + assert
+#   ./build-ios-app.sh --verify   # headless: build, install, assert PASS
+#   ./build-sdl3-ios.sh           # once, for the GUI
+#   ./build-ios-app.sh --gui      # GUI: build, install, launch, screenshot
 #
 
 set -eu
@@ -37,14 +42,40 @@ BUNDLE_ID=os.infernode.ios
 APPDIR="$ROOT/iOS/arm64/InferNode.app"
 
 VERIFY=0
+GUI=0
 for arg in "$@"; do
 	case "$arg" in
 		--verify) VERIFY=1 ;;
+		--gui) GUI=1 ;;
 		*) echo "unknown arg: $arg" >&2; exit 1 ;;
 	esac
 done
 
-echo "=== InferNode iOS app build (Phase 2b, B0 headless) ==="
+# Mode-specific knobs: which entry point, libemu backend, link flags,
+# and which Inferno dirs to bundle as the root.
+SDL3_PREFIX=${SDL3_PREFIX:-$HOME/sdks/SDL3-ios-sim-arm64}
+if [ "$GUI" -eq 1 ]; then
+	MODE="GUI (SDL3/Metal — lucifer)"
+	APPSRC=main_ios_gui.m
+	MK_GUI="GUIBACK=sdl3 SDL3_PREFIX=$SDL3_PREFIX"
+	CC_EXTRA_INC="-I$SDL3_PREFIX/include"
+	GUI_LINK="-L$SDL3_PREFIX/lib -lSDL3 \
+		-framework Metal -framework QuartzCore -framework CoreGraphics \
+		-framework CoreMedia -framework CoreVideo -framework CoreAudio \
+		-framework AudioToolbox -framework AVFoundation -framework CoreBluetooth \
+		-framework CoreMotion -framework GameController -framework OpenGLES \
+		-weak_framework CoreHaptics"
+	STAGE_DIRS="dis lib fonts"
+else
+	MODE="headless"
+	APPSRC=main_ios.m
+	MK_GUI=""
+	CC_EXTRA_INC=""
+	GUI_LINK=""
+	STAGE_DIRS="dis tests lib"
+fi
+
+echo "=== InferNode iOS app build (Phase 2b) — $MODE ==="
 
 # --- host / SDK checks --------------------------------------------------
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -63,22 +94,29 @@ if [ ! -f "$ROOT/iOS/arm64/lib/lib9.a" ]; then
 	echo "ERROR: Inferno C libs missing. Run ./build-ios-arm64.sh first." >&2
 	exit 1
 fi
+if [ "$GUI" -eq 1 ] && [ ! -f "$SDL3_PREFIX/lib/libSDL3.a" ]; then
+	echo "ERROR: SDL3 not found at $SDL3_PREFIX. Run ./build-sdl3-ios.sh first." >&2
+	exit 1
+fi
 
 # --- 1. libemu.a --------------------------------------------------------
-echo "=== archiving libemu.a (emu objects, -DEMU_NO_MAIN) ==="
+echo "=== archiving libemu.a (emu objects, -DEMU_NO_MAIN${MK_GUI:+, sdl3}) ==="
 cd "$ROOT/emu/iOS"
-rm -f *.o *.emu emu.root.h emu.root.c emu.root.s emu.c 2>/dev/null || true
+find . -maxdepth 1 \( -name '*.o' -o -name 'o.emu' -o -name 'emu.root.*' -o -name 'emu.c' \) -delete 2>/dev/null || true
+# shellcheck disable=SC2086
 mk -f mkfile-g IOSSDK="$IOSSDK" IOSTRIPLE="$IOSTRIPLE" IOSMIN="$IOSMIN" \
-	EMUOPTIONS=-DEMU_NO_MAIN libemu >/dev/null || {
+	$MK_GUI EMUOPTIONS=-DEMU_NO_MAIN libemu >/dev/null || {
 		echo "ERROR: libemu.a build failed" >&2; exit 1; }
 
 # --- 2. compile the app entry point ------------------------------------
-echo "=== compiling main_ios.m ==="
+echo "=== compiling $APPSRC ==="
 cd "$ROOT/emu/iOS/app"
+APPOBJ=${APPSRC%.m}.o
+# shellcheck disable=SC2086
 "$CLANG" -c -target "$IOSTRIPLE" -isysroot "$SDKPATH" \
-	-fobjc-arc -fmodules -O -g \
-	-o main_ios.o main_ios.m || {
-		echo "ERROR: main_ios.m compile failed" >&2; exit 1; }
+	-fobjc-arc -fmodules -O -g $CC_EXTRA_INC \
+	-o "$APPOBJ" "$APPSRC" || {
+		echo "ERROR: $APPSRC compile failed" >&2; exit 1; }
 
 # --- 3. link the app executable ----------------------------------------
 echo "=== linking executable ==="
@@ -92,19 +130,19 @@ mkdir -p "$APPDIR"
 # shellcheck disable=SC2086
 "$CLANG" -target "$IOSTRIPLE" -isysroot "$SDKPATH" \
 	-o "$APPDIR/InferNode" \
-	main_ios.o $INFERNO_LIBS \
+	"$APPOBJ" $INFERNO_LIBS \
 	-framework UIKit -framework Foundation -framework CoreFoundation \
-	-lpthread -lm || {
+	$GUI_LINK -lpthread -lm || {
 		echo "ERROR: app link failed" >&2; exit 1; }
 
 # --- 4. assemble the bundle --------------------------------------------
-echo "=== assembling $APPDIR ==="
+echo "=== assembling $APPDIR (root: $STAGE_DIRS) ==="
 cp "$ROOT/emu/iOS/app/Info.plist" "$APPDIR/Info.plist"
 # Stage the Inferno root the app boots from (<App>.app/root). dis/ is the
 # runtime (emuinit, sh, modules); tests/ has the compiled *_test.dis;
-# lib/ carries the shell profile and friends.
+# lib/ carries the shell profile + lucifer boot; fonts/ feeds the GUI.
 mkdir -p "$APPDIR/root"
-for d in dis tests lib; do
+for d in $STAGE_DIRS; do
 	[ -d "$ROOT/$d" ] && cp -R "$ROOT/$d" "$APPDIR/root/$d"
 done
 
@@ -121,8 +159,25 @@ if ! xcrun simctl list devices booted 2>/dev/null | grep -q '(Booted)'; then
 	exit 0
 fi
 echo "=== installing on booted simulator ==="
+xcrun simctl install booted "$BUNDLE_ID" >/dev/null 2>&1 || true
 xcrun simctl install booted "$APPDIR"
 echo "installed $BUNDLE_ID"
+
+# --- GUI: launch + screenshot (no PASS to assert — it's a GUI) ---------
+if [ "$GUI" -eq 1 ]; then
+	echo "=== launching GUI (watch it with: open -a Simulator) ==="
+	xcrun simctl launch --terminate-running-process booted "$BUNDLE_ID" >/dev/null 2>&1 || true
+	SHOT=${TMPDIR:-/tmp}/infernode-ios-gui.png
+	echo "    booting lucifer (-c0 interpreter — give it ~30s)…"
+	sleep 30
+	xcrun simctl io booted screenshot "$SHOT" >/dev/null 2>&1 \
+		&& echo "screenshot: $SHOT" || echo "(screenshot failed)"
+	echo ""
+	echo "The SDL3/Metal window is up. Lucifer won't fully render yet —"
+	echo "the read-only bundle root blocks /n (writable-state work, B1.2 cont.)."
+	echo "Open the Simulator to watch live:  open -a Simulator"
+	exit 0
+fi
 
 if [ "$VERIFY" -eq 0 ]; then
 	echo ""

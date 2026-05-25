@@ -102,18 +102,44 @@ entry for the uid) and falls through. Cosmetic for Phase A; a Phase B
 unreferenced). All gated against `INFR-107`, as the Android Bionic gaps
 were.
 
-## Phase B — device build + SDL3 GUI. Not started.
+## Phase B — the app. In progress (simulator only).
 
-Will introduce:
+Sub-phased; device/signing (B3) is gated on an Apple Development cert +
+provisioning profile, which we don't have yet (the only Apple cert on
+hand is a macOS "Developer ID Application", which cannot sign iOS). So
+B0–B2 are simulator-only.
 
-* `os.c`, `cmd.c` — iOS-specific forks (compile out host fork/exec;
-  whatever the Phase A gaps require).
-* An Xcode app target linking the emu objects as `libemu.a` plus the
-  Inferno C libs, providing `UIApplicationMain` and code-signing.
-* SDL3 (UIKit + Metal) wired to `emu/port/draw-sdl3.c`, reusing the
-  touch/HiDPI logic already added there for Android.
-* Inferno root bundled read-only in the `.app`; writable state in the
-  app container; `emu -r <bundle>/inferno`.
+**B0 — headless app shell. DONE.** A real iOS `.app` (not a bare binary
+under `simctl spawn`) that boots emu `-c0` and runs the Limbo test
+runner, proving the app-target + libemu + bundled-root mechanics.
+
+* `libemu.a` — the emu objects archived instead of linked, built with
+  `EMUOPTIONS=-DEMU_NO_MAIN` so `emu/port/main.c` exports `emu_run()`
+  but not `main()` (`mk -f mkfile-g … libemu`). The app owns `main`.
+* `emu/iOS/app/main_ios.m` — UIKit `UIApplicationMain` on the main
+  thread; `emu_run()` runs on a detached pthread (headless `libinit()`
+  never returns, so it can't sit on the main/UI thread).
+* `emu/iOS/app/Info.plist` + `build-ios-app.sh` assemble the bundle,
+  stage `dis/ tests/ lib/` under `<App>.app/root`, ad-hoc sign, install
+  and `--verify` (launch + assert `hello_test` passes). No signing
+  identity needed for the simulator.
+* **Gotcha gated:** the installed-bundle path (~180 chars) overflows
+  emu's `rootdir` buffer (`MAXROOT = 5*KNAMELEN = 140`), so the app
+  `chdir()`s into the bundle root and passes `-r .` (devfs-posix
+  resolves relative to the CWD). A future general fix would bump
+  `MAXROOT` in `emu/port/dat.h`.
+
+**B1 — SDL3 GUI (Lucifer). Next.** GUI `libemu` linking the iOS SDL3
+static lib (`build-sdl3-ios.sh` → `~/sdks/SDL3-ios-sim-arm64`), with
+`emu/port/draw-sdl3.c` adapted to the iOS UIKit/Metal/SDL lifecycle
+(the desktop `SDL_PollEvent` loop vs iOS's `SDL_RunApp`/main-callbacks
+is the real work).
+
+**B2 — `os.c`/`cmd.c` iOS forks.** Default `getuser()` past the
+`cannot getpwuid` warning; compile out host `fork`/`exec` (impossible
+under the app sandbox).
+
+**B3 — device build + code-signing. Blocked** on an iOS signing cert.
 
 ## Phase C — on-device `/n/llm`. Not started.
 
@@ -151,6 +177,22 @@ capture it against `INFR-107`.
 > piping a script into an interactive `sh`. And the simulator sandbox
 > denies writes to the host repo path, so read results from **stdout**,
 > not from a file under `-r$PWD`.
+
+## Build (Phase B0 — the headless app)
+
+After `./build-ios-arm64.sh` has produced `iOS/arm64/lib/*.a`, with a
+simulator booted:
+
+```sh
+xcrun simctl boot 'iPhone 15'
+./build-ios-app.sh --verify    # build .app, install, launch, assert PASS
+```
+
+`--verify` launches the app with `simctl launch --console-pty` and fails
+unless `hello_test` prints `PASS`. Drop `--verify` to just build+install,
+then launch yourself with `xcrun simctl launch --console-pty booted
+os.infernode.ios`. The app's `main_ios.m` boots emu `-c0` on a worker
+thread against the Inferno root bundled at `<App>.app/root`.
 
 ## References
 

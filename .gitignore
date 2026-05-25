@@ -109,6 +109,11 @@ MacOSX/*/bin/*
 MacOSX/*/lib/*
 Nt/*/bin/*
 Nt/*/lib/*
+iOS/*/bin/*
+iOS/*/lib/*
+# iOS app bundle (assembled by build-ios-app.sh; staged Inferno root + binary)
+iOS/*/*.app/
+emu/iOS/app/*.o
 
 # Emulator binaries (built locally)
 emu/*/o.emu

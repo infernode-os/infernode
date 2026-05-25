@@ -71,6 +71,19 @@ $O.$CONF:	$OBJ $CONF.c $CONF.root.h
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF
 
+# libemu.a — the same emu objects archived instead of linked, for the
+# iOS app target to link against (the design's "thin Xcode wrapper links
+# libemu" path). The app provides main(); build with EMUOPTIONS=-DEMU_NO_MAIN
+# so emu's own main() (in port/main.c) is compiled out and only emu_run()
+# is exported. CONF stays the headless `emu` config for B0.
+LIBEMU=$ROOT/$SYSTARG/$OBJTYPE/lib/libemu.a
+
+libemu:V:	$LIBEMU
+
+$LIBEMU:	$OBJ $CONF.c $CONF.root.h
+	$CC $CFLAGS -DKERNDATE=$KERNDATE $CONF.c
+	$AR $ARFLAGS $target $OBJ $CONF.$O
+
 <../port/portmkfile
 
 # Phase A source reuse. iOS shares macOS's libc, so most platform

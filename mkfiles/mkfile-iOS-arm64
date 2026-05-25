@@ -42,6 +42,11 @@ AS=		$XCLANG -c -target $IOSTRIPLE -isysroot $SDKPATH
 ASFLAGS=
 
 CC=		$XCLANG -c -target $IOSTRIPLE -isysroot $SDKPATH
+# -DIOS_ARM64 self-identifies the target (the iOS analogue of the macOS
+# build's -DMACOSX_ARM64). No source keys off it yet; it's the hook a
+# Phase B os.c/cmd.c fork uses to diverge from the shared macOS path.
+# We do NOT also define MACOSX_ARM64 here: it's unused tree-wide and on
+# an iOS target it would simply be false.
 CFLAGS=		-g\
 		-O\
 		-fno-strict-aliasing\
@@ -50,8 +55,7 @@ CFLAGS=		-g\
 		-Werror=return-type -Werror=implicit-function-declaration\
 		-I$ROOT/iOS/arm64/include\
 		-I$ROOT/include\
-		-DIOS_ARM64\
-		-DMACOSX_ARM64
+		-DIOS_ARM64
 
 ANSICPP=
 LD=		$XCLANG -target $IOSTRIPLE -isysroot $SDKPATH

@@ -7,7 +7,9 @@
 #include	<sys/time.h>
 #include	<sys/socket.h>
 #include	<net/if.h>
-#include	<net/if_arp.h>
+#ifndef IOS_ARM64
+#include	<net/if_arp.h>	/* not shipped in the iOS SDK; only used under #ifdef SIOCGARP (undefined on iOS), so arpadd() falls back to "arp not implemented" */
+#endif
 #include	<netinet/in.h>
 #include	<netinet/tcp.h>
 #include	<arpa/inet.h>

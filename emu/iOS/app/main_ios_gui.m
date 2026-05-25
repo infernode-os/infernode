@@ -20,8 +20,58 @@
 #include <SDL3/SDL_main.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <ftw.h>
+#include <sys/stat.h>
 
 extern int emu_run(int argc, char *argv[]);
+
+/* nftw callback: make the copied root writable so the boot can create
+ * /n, /tmp, /usr, etc.
+ *
+ * Two reasons it isn't already: (1) the bundle is code-signed read-only
+ * and copyItemAtPath preserves those perms; (2) more subtly, emu runs as
+ * Inferno user eve="inferno" (getpwuid fails in the iOS sandbox), which
+ * doesn't match the copied files' host owner, so Inferno's 9P permission
+ * check uses the "other" bits. World-writable dirs (0777) therefore let
+ * the boot write. Acceptable here: the tree lives in the app's private,
+ * sandboxed container. A cleaner fix (Phase B2) makes os.c default eve
+ * to the file owner so 0755 suffices. */
+static int
+mk_writable(const char *p, const struct stat *sb, int typeflag, struct FTW *ftw)
+{
+	(void)typeflag;
+	(void)ftw;
+	chmod(p, S_ISDIR(sb->st_mode) ? 0777 : 0666);
+	return 0;
+}
+
+/*
+ * The Inferno root is bundled read-only in the .app, but the boot must
+ * create writable dirs (/n for the UI 9P mount, /tmp, /usr, ...). So on
+ * launch, copy the bundled root into the app's writable Caches container
+ * and run emu from there. Fresh copy each launch so a rebuilt bundle
+ * takes effect (a later optimisation can symlink the read-only dis/lib/
+ * fonts and only copy the writable mountpoints). Returns a strdup'd path.
+ */
+static char *
+prepare_writable_root(void)
+{
+	NSFileManager *fm = [NSFileManager defaultManager];
+	NSString *src = [[[NSBundle mainBundle] resourcePath]
+			stringByAppendingPathComponent:@"root"];
+	NSString *dst = [[NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES) firstObject]
+			stringByAppendingPathComponent:@"inferno"];
+	[fm removeItemAtPath:dst error:nil];
+	NSError *err = nil;
+	if (![fm copyItemAtPath:src toPath:dst error:&err]) {
+		fprintf(stderr, "InferNode: root copy failed (%s); falling back to read-only bundle\n",
+				err.localizedDescription.UTF8String);
+		return strdup([src fileSystemRepresentation]);
+	}
+	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
+	return strdup([dst fileSystemRepresentation]);
+}
 
 int
 main(int argc, char *argv[])
@@ -29,11 +79,18 @@ main(int argc, char *argv[])
 	(void)argc;
 	(void)argv;
 	@autoreleasepool {
-		NSString *root = [[[NSBundle mainBundle] resourcePath]
-				stringByAppendingPathComponent:@"root"];
-		if (chdir([root fileSystemRepresentation]) != 0)
-			fprintf(stderr, "InferNode: chdir(%s) failed\n",
-					[root fileSystemRepresentation]);
+		/* Don't let the umask strip group/other bits off dirs the boot
+		 * creates: devfs-posix mkdir's at the requested mode minus umask,
+		 * so umask 022 turns /n (DMDIR|0777) into 0755, and services
+		 * running as a non-owner Inferno user then can't create /n/ui.
+		 * umask 0 keeps created dirs fully writable. */
+		umask(0);
+
+		char *root = prepare_writable_root();
+		/* chdir + "-r ." dodges emu's MAXROOT(140) rootdir overflow on
+		 * the long container path; devfs-posix resolves relative to CWD. */
+		if (chdir(root) != 0)
+			fprintf(stderr, "InferNode: chdir(%s) failed\n", root);
 
 		/* emu's option parser (poolopt) writes into argv strings in
 		 * place (it splits "-pheap=512m" on '='), so these must be
@@ -56,8 +113,7 @@ main(int argc, char *argv[])
 		};
 		int ac = (int)(sizeof(av) / sizeof(av[0])) - 1;
 
-		fprintf(stderr, "InferNode GUI: emu_run booting lucifer (-c0), root=%s\n",
-				[root fileSystemRepresentation]);
+		fprintf(stderr, "InferNode GUI: emu_run booting lucifer (-c0), root=%s\n", root);
 		return emu_run(ac, av);
 	}
 }

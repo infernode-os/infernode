@@ -84,7 +84,11 @@ class InfernodeSDLActivity : SDLActivity() {
         val infernoRoot = File(filesDir, "inferno-root")
         val args = mutableListOf(
             "-s",
-            "-c1",
+            // TEMPORARY x86_64-debug: dropped to -c0 (interpreter only) to
+            // isolate a GC crash on Android x86_64 emulator. JIT for amd64
+            // is comp-amd64.c, untested in our Bionic build. Flip back to
+            // -c1 once that path is validated (task #69).
+            "-c0",
             "-pheap=1024m",
             "-pmain=1024m",
             "-pimage=1024m",

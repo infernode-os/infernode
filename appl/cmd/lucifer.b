@@ -171,6 +171,7 @@ monofont: ref Font;
 
 # Logo
 logoimg: ref Image;
+logobig: ref Image;	# mobile-only enlarged copy of logoimg (lazy, cached)
 
 # Mount point and activity
 mountpt: string;
@@ -243,7 +244,7 @@ mobile_pres_title_y := 0;
 mobile_ctx_title_y := 0;
 
 # KLUDGE-MOBILE-ACCORDION-INFR-119
-MOBILE_HEADERH:   con 88;        # task bar height in mobile mode
+MOBILE_HEADERH:   con 132;       # task bar height in mobile mode (room for a prominent logo)
 MOBILE_TITLEBARH: con 72;        # per-zone title bar height in mobile mode
 
 # nslistener process ID — killed and respawned on activity switch
@@ -727,6 +728,49 @@ reloadlogo()
 		if(raw != nil)
 			(logoimg, nil) = remap->remap(raw, display, 0);
 	}
+	logobig = nil;	# rebuild the enlarged mobile copy for the new theme
+}
+
+# Mobile-only: nearest-neighbour upscale of the header logo so it reads
+# on the taller mobile header. draw() can't scale, so resample via
+# read/writepixels. Called lazily from the draw path (cached in logobig)
+# and never on desktop. Returns src unchanged on any problem.
+biglogo(src: ref Image): ref Image
+{
+	if(src == nil || display == nil)
+		return src;
+	sw := src.r.dx();
+	sh := src.r.dy();
+	bpp := src.depth / 8;
+	if(sw <= 0 || sh <= 0 || bpp <= 0)
+		return src;
+	# target ~75% of the mobile header height, at least 3x.
+	f := (MOBILE_HEADERH * 3 / 4) / sh;
+	if(f < 3)
+		f = 3;
+	dw := sw * f;
+	dh := sh * f;
+	dst := display.newimage(Rect((0,0),(dw,dh)), src.chans, 0, Draw->Black);
+	if(dst == nil)
+		return src;
+	srow := array[sw * bpp] of byte;
+	drow := array[dw * bpp] of byte;
+	for(sy := 0; sy < sh; sy++) {
+		sr := Rect((src.r.min.x, src.r.min.y + sy),
+			(src.r.max.x, src.r.min.y + sy + 1));
+		if(src.readpixels(sr, srow) <= 0)
+			return src;	# can't read the source; leave logo unscaled
+		for(sx := 0; sx < sw; sx++) {
+			so := sx * bpp;
+			for(fx := 0; fx < f; fx++) {
+				dbo := (sx*f+fx)*bpp;
+				drow[dbo :] = srow[so : so+bpp];	# copies bpp elems
+			}
+		}
+		for(fy := 0; fy < f; fy++)
+			dst.writepixels(Rect((0, sy*f+fy), (dw, sy*f+fy+1)), drow);
+	}
+	return dst;
 }
 
 # --- Header / chrome drawing ---
@@ -750,11 +794,19 @@ drawchrome(r: Rect)
 		# Logo
 		textx := r.min.x + 16;
 		if(logoimg != nil) {
-			lw := logoimg.r.dx();
-			lh := logoimg.r.dy();
+			# Mobile: draw an enlarged copy (built once, cached in
+			# logobig). Desktop draws the logo at native size.
+			limg := logoimg;
+			if(mobile) {
+				if(logobig == nil)
+					logobig = biglogo(logoimg);
+				limg = logobig;
+			}
+			lw := limg.r.dx();
+			lh := limg.r.dy();
 			logoy := headerr.min.y + (headerh - lh) / 2;
 			logodst := Rect((textx, logoy), (textx + lw, logoy + lh));
-			mainwin.draw(logodst, logoimg, nil, (0, 0));
+			mainwin.draw(logodst, limg, nil, (0, 0));
 			textx = textx + lw + 8;
 		}
 
@@ -928,10 +980,13 @@ drawmobiletitle(label: string, y, expanded: int)
 		texty := y + (MOBILE_TITLEBARH - mainfont.height) / 2;
 		mainwin.text((textx, texty), textcol, (0, 0), mainfont, label);
 
-		chev := "v";
+		# Disclosure triangles ("twirl-down"): collapsed points right,
+		# expanded points down. Mobile-only — this whole routine is the
+		# accordion path. (Desktop chrome is unaffected.)
+		chev := "▸";
 		col  := textcol;
 		if(expanded) {
-			chev = "^";
+			chev = "▾";
 			col = accentcol;
 		}
 		cw := mainfont.width(chev);

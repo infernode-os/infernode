@@ -796,7 +796,7 @@ updatelist()
 	if(keylist == nil)
 		return;
 	if(keys == nil || len keys == 0) {
-		keylist.setitems(array[] of { "(no keys — right-click to add)" });
+		keylist.setitems(array[] of { "(no keys — long-press / right-click to add)" });
 		return;
 	}
 	items := array[len keys] of string;

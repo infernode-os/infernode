@@ -67,6 +67,10 @@ LuciPres: module
 	PATH: con "/dis/lucipres.dis";
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 	deliverevent: fn(ev: string);
+	# lucifer hands us the current shared presscr (re-sent on resize)
+	# so context menus can be drawn on a top-most overlay window above
+	# the app windows that cover the presentation content area.
+	setpresscr: fn(scr: ref Screen);
 };
 
 # --- ADTs ---
@@ -134,6 +138,7 @@ win: ref Wmclient->Window;
 mainwin: ref Image;
 backbuf: ref Image;		# off-screen back buffer for double-buffered redraw
 display_g: ref Display;
+presscr_g: ref Screen;		# shared presscr (from lucifer) for menu overlays
 mainfont: ref Font;
 monofont_g: ref Font;
 mountpt_g: string;
@@ -362,6 +367,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 	b2tabdragging := 0;
 	b2dragstartx := 0;
 	b2dragstartoff := 0;
+	# Mobile touch (button-1) tab-strip gesture state: a press in the tab
+	# strip becomes a horizontal drag-scroll if it moves, or a tab switch
+	# on release if it doesn't (so a swipe never activates the tab under
+	# the finger).  Desktop keeps switch-on-press.
+	b1tabdragging := 0;
+	b1dragstartx := 0;
+	b1dragstartoff := 0;
+	b1pendid := "";		# artifact id to switch to on release (mobile tap)
 	for(;;) alt {
 	p := <-win.ctxt.ptr =>
 		if(wmclient->win.pointer(*p) == 0) {
@@ -377,6 +390,28 @@ init(ctxt: ref Draw->Context, args: list of string)
 				if((p.buttons & 1) == 0 ||
 						dx > LONGPRESS_SLOP || dy > LONGPRESS_SLOP)
 					lppending = 0;
+			}
+
+			# Mobile: a held button-1 drag inside the tab strip scrolls
+			# it horizontally.  Once the finger moves past the slop the
+			# press is a drag, not a tap, so the deferred switch is
+			# suppressed on release (see the button-1 release handler).
+			if(mobile && b1pendid != "" && (p.buttons & 1)) {
+				ddx := b1dragstartx - p.xy.x;
+				addx := ddx;
+				if(addx < 0) addx = -addx;
+				if(addx > LONGPRESS_SLOP)
+					b1tabdragging = 1;
+				if(b1tabdragging) {
+					noff := b1dragstartoff + ddx / TABDRAGPX;
+					if(noff < 0) noff = 0;
+					if(noff >= nart) noff = nart - 1;
+					if(noff < 0) noff = 0;
+					if(noff != tabscrolloff) {
+						tabscrolloff = noff;
+						redrawpres();
+					}
+				}
 			}
 
 			# Scroll wheel
@@ -413,6 +448,18 @@ init(ctxt: ref Draw->Context, args: list of string)
 				# Tab clicks
 				for(ti := 0; ti < ntabs; ti++) {
 					if(tablayout[ti].r.contains(p.xy)) {
+						if(mobile) {
+							# Defer the switch to release: a press
+							# that turns into a horizontal drag
+							# scrolls the strip instead of switching
+							# (see the button-1 move/release handlers).
+							b1pendid = tablayout[ti].id;
+							b1dragstartx = p.xy.x;
+							b1dragstartoff = tabscrolloff;
+							b1tabdragging = 0;
+							tabclicked = 1;
+							break;
+						}
 						if(tablayout[ti].id != centeredart) {
 							oldart := findartifact(centeredart);
 							centeredart = tablayout[ti].id;
@@ -523,12 +570,34 @@ init(ctxt: ref Draw->Context, args: list of string)
 					redrawpres();
 				}
 			}
+
+			# Mobile: button-1 released after a tab-strip press.  If the
+			# press never became a drag, it was a tap → switch tabs now.
+			if(mobile && b1pendid != "" && (p.buttons & 1) == 0) {
+				if(!b1tabdragging && b1pendid != centeredart) {
+					oldart := findartifact(centeredart);
+					centeredart = b1pendid;
+					if(actid_g >= 0)
+						writetofile(
+							sys->sprint("%s/activity/%d/presentation/ctl",
+								mountpt_g, actid_g),
+							"center id=" + centeredart);
+					if(oldart == nil || oldart.atype != "app")
+						redrawpres();
+				}
+				b1pendid = "";
+				b1tabdragging = 0;
+			}
 		}
 	seq := <-lpch =>
 		# Long-press fired: if that press is still held (not lifted/moved)
 		# open the context menu at the press point, mimicking button-3.
 		if(mobile && lppending && seq == lpseq) {
 			lppending = 0;
+			# This press opened a menu, not a tab tap: drop the
+			# deferred switch so releasing afterwards is a no-op.
+			b1pendid = "";
+			b1tabdragging = 0;
 			if(menumod != nil) {
 				handlecontextmenu(ref Pointer(0, lppos, 0));
 				prevbuttons = 0;
@@ -568,6 +637,14 @@ deliverevent(ev: string)
 	* =>
 		;
 	}
+}
+
+# lucifer calls this at startup and after every resize (handleresize
+# reallocates presscr).  Context menus are drawn on a top-most overlay
+# window allocated here so they float above the presentation app window.
+setpresscr(scr: ref Screen)
+{
+	presscr_g = scr;
 }
 
 handleevent(ev: string)
@@ -983,6 +1060,18 @@ lptimer(seq: int)
 	lpch <-= seq;
 }
 
+# Show a context menu.  When lucifer has handed us the shared presscr
+# (setpresscr), draw on a top-most overlay window so the menu floats
+# above the presentation app window — which is stacked above our own
+# zone window, and would otherwise occlude a menu drawn on mainwin.
+# Falls back to drawing on our own window if presscr isn't available.
+popmenu(pop: ref Popup, at: Point): int
+{
+	if(presscr_g != nil && win != nil && win.image != nil)
+		return pop.showtop(presscr_g, win.image.r, at, win.ctxt.ptr);
+	return pop.show(mainwin, at, win.ctxt.ptr);
+}
+
 handlecontextmenu(p: ref Pointer)
 {
 	# Dashboard card right-click — "End Task" menu
@@ -996,7 +1085,7 @@ handlecontextmenu(p: ref Pointer)
 						return;	# "+ New Task" button — no context menu
 					mitems := array[] of {"End Task"};
 					mpop := menumod->new(mitems);
-					mres := mpop.show(mainwin, p.xy, win.ctxt.ptr);
+					mres := popmenu(mpop, p.xy);
 					if(mres == 0)
 						writetofile(mountpt_g + "/ctl",
 							"activity delete " + string cid);
@@ -1025,7 +1114,7 @@ handlecontextmenu(p: ref Pointer)
 	if(art != nil && art.atype == "app") {
 		closeitems := array[] of {"Close"};
 		closepop := menumod->new(closeitems);
-		killresult := closepop.show(mainwin, p.xy, win.ctxt.ptr);
+		killresult := popmenu(closepop, p.xy);
 		if(killresult == 0 && actid_g >= 0)
 			writetofile(
 				sys->sprint("%s/activity/%d/presentation/ctl",
@@ -1050,7 +1139,7 @@ handlecontextmenu(p: ref Pointer)
 		items = array[] of {"Close", "Zoom In", "Zoom Out", "Reset View", "Export"};
 	}
 	pop := menumod->new(items);
-	result := pop.show(mainwin, p.xy, win.ctxt.ptr);
+	result := popmenu(pop, p.xy);
 	case result {
 	0 =>
 		deleteartifactui(artid);

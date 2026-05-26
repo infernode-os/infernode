@@ -294,6 +294,10 @@ pressubimg: ref Image;
 presscr: ref Screen;
 convimg: ref Image;
 ctximg: ref Image;
+# mainwin.r at the last FULL layout (sub-image recreation).  In the mobile
+# accordion a zone toggle leaves geometry unchanged, so handleresize() can
+# skip the destructive recreate and just re-z-order — see INFR-137.
+lastlaidout: Rect;
 
 nomod(s: string)
 {
@@ -517,6 +521,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Publish pressubimg by name so namedimage() works cross-connection
 	pressubimg.name("lucifer-pres", 1);
 
+	# The three mobile zones overlap on the full body rect; pressubimg was
+	# created last (on top), so raise the actually-expanded zone now —
+	# otherwise the Workspace covers Chat at boot.  Record the geometry so
+	# the first zone toggle takes handleresize()'s cheap re-z-order path.
+	topexpandedzone();
+	lastlaidout = r;
+
 	# Initialize per-task presentation array
 	taskpres = array[MAXTASKPRES] of ref TaskPres;
 	ntaskpres = 0;
@@ -598,22 +609,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
 	if(mobile) {
-		# KLUDGE-MOBILE-ACCORDION-INFR-119 — accordion layout.
+		# KLUDGE-MOBILE-ACCORDION-INFR-119 / INFR-137 — accordion layout.
 		#
-		# All three title bars stack immediately under the LUCI
-		# header at fixed positions. The *expanded* zone gets the
-		# entire body area below them. The two collapsed zones get
-		# 1×1 sentinel sub-windows tucked into the bottom-right
-		# corner of mainwin — they're not degenerate (so
-		# mainscr.newwindow + flushimage stays happy), they're not
-		# visible (1 pixel each at the screen edge), and the zone
-		# modules don't need to know about a special "hidden" state.
+		# All three title bars stack immediately under the LUCI header
+		# at fixed positions.  ALL THREE zones get the SAME full body
+		# rect below them — they overlap, and which one is visible is
+		# decided purely by z-order (topexpandedzone() raises the
+		# expanded zone's sub-image to the front).
 		#
-		# Earlier this code gave the collapsed bodies y_min == y_max,
-		# which made newwindow return a malformed image and the
-		# subsequent flushimage chain failed with "image name in
-		# use" — half-applying the resize, dropping repaints, and
-		# producing the flaky behaviour the user reported.
+		# This replaces the old scheme where the collapsed zones got
+		# 1×1 sentinel sub-windows.  That shrank the presentation
+		# screen (presscr) to 1×1 on every collapse, which destroyed
+		# the child app windows living on it; re-expanding reallocated
+		# them blank (INFR-137).  Keeping presscr full-size across
+		# collapse/expand means app windows survive untouched — a zone
+		# toggle is just a z-order change, not a re-layout.
 		headerh := MOBILE_HEADERH;
 		titleh  := MOBILE_TITLEBARH;
 		zonety  := r.min.y + headerh + 1;
@@ -633,25 +643,9 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 		pres_zone_maxx = -1;
 		ctx_zone_minx  = -1;
 
-		# Body rect (used by whichever zone is expanded).
+		# Full body rect below the title bars; all three zones share it.
 		bodyr := Rect((r.min.x, bodytop), (r.max.x, r.max.y));
-
-		# Three 1×1 sentinels along the bottom edge, side-by-side.
-		# Adjacent (not overlapping) so newwindow never rejects them.
-		# Painted-over by the Android safe-area / nav-bar inset.
-		hide0 := Rect((r.max.x - 3, r.max.y - 1), (r.max.x - 2, r.max.y));
-		hide1 := Rect((r.max.x - 2, r.max.y - 1), (r.max.x - 1, r.max.y));
-		hide2 := Rect((r.max.x - 1, r.max.y - 1), (r.max.x,     r.max.y));
-
-		convr := hide0;
-		presr := hide1;
-		ctxr  := hide2;
-		case expanded_zone {
-		0 => convr = bodyr;
-		1 => presr = bodyr;
-		2 => ctxr  = bodyr;
-		}
-		return (convr, presr, ctxr);
+		return (bodyr, bodyr, bodyr);
 	}
 
 	# Desktop: classic three-column.
@@ -1494,9 +1488,45 @@ handlectxlayout(cp, pp: int)
 	handleresize();
 }
 
+# topexpandedzone: raise the expanded accordion zone's sub-image to the
+# front of mainscr.  All three mobile zones share the full body rect and
+# overlap, so visibility is pure z-order.  Raising pressubimg brings its
+# child app windows (on presscr) along with it.
+topexpandedzone()
+{
+	if(!mobile)
+		return;
+	case expanded_zone {
+	0 => if(convimg != nil) convimg.top();
+	1 => if(pressubimg != nil) pressubimg.top();
+	2 => if(ctximg != nil) ctximg.top();
+	}
+}
+
 handleresize()
 {
 	r := mainwin.r;
+
+	# Mobile accordion: a zone toggle keeps mainwin geometry unchanged —
+	# only which zone is on top changes.  Recreating mainscr/presscr here
+	# would destroy the app windows that live on presscr (INFR-137), so
+	# take the cheap path: re-z-order the expanded zone and repaint chrome,
+	# leaving every sub-image (and presscr's app windows) intact.  The full
+	# recreate below only runs on a genuine geometry change (or first call).
+	if(mobile && r.eq(lastlaidout) && mainscr != nil && pressubimg != nil) {
+		topexpandedzone();
+		drawchrome(r);
+		# Refresh the conv/ctx zone content (its sub-image persisted but
+		# may have missed redraws while hidden).  Do NOT touch presRszCh:
+		# that would reshape/reallocate the app windows we are preserving;
+		# topexpandedzone() already revealed them with content intact.
+		if(expanded_zone == 0)
+			convRszCh <-= convimg;
+		else if(expanded_zone == 2)
+			ctxRszCh <-= ctximg;
+		return;
+	}
+
 	(convr, presr, ctxr) := zonerects(r);
 	preszone = presr;
 
@@ -1554,6 +1584,12 @@ handleresize()
 	# For pres zone: update presscr global first (preswmloop reads it),
 	# then send new rect; channel ordering ensures preswmloop sees new presscr.
 	presRszCh <-= presr;
+
+	# All three mobile zones now overlap on the full body rect; raise the
+	# expanded one to the front.  Record the geometry so a subsequent zone
+	# toggle takes the cheap re-z-order path above.
+	topexpandedzone();
+	lastlaidout = r;
 }
 
 shutdown()

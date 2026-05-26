@@ -918,7 +918,13 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 
 	Qconvmsg =>
 		a := findactivity(actid);
-		if(a == nil || subid >= a.nmsg) {
+		# Guard every nil/bounds case: a concurrent conversation reset
+		# (messages=nil/nmsg=0) on another proc can race with this read
+		# while a child streams, leaving a nil array or nil slot even
+		# though subid<nmsg. Without these guards the deref crashes the
+		# whole gateway (INFR-129). Degrade to "not found" instead.
+		if(a == nil || a.messages == nil || subid < 0 || subid >= a.nmsg
+				|| subid >= len a.messages || a.messages[subid] == nil) {
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
@@ -1347,13 +1353,20 @@ globalctl(data: string): string
 
 convctl(a: ref Activity, data: string): string
 {
+	if(a == nil)
+		return "no such activity";
 	# In-place update of an existing message (for streaming token updates
 	# and dialogue tile field changes like progress or clearing options).
 	# Format: "update idx=N text=..." or "update idx=N progress=50"
 	if(hasprefix(data, "update ")) {
 		attrs := parseattrs(data[len "update ":]);
 		idx := strtoint(getattr(attrs, "idx"));
-		if(idx < 0 || idx >= a.nmsg)
+		# Same race as the Qconvmsg read: a concurrent reset can null
+		# the array/slot across luciuisrv's per-connection procs. Guard
+		# every nil/bounds case so a lost streaming update degrades to
+		# "bad idx" instead of crashing the gateway (INFR-129).
+		if(idx < 0 || idx >= a.nmsg || a.messages == nil
+				|| idx >= len a.messages || a.messages[idx] == nil)
 			return "bad idx";
 		# In Limbo, nil == "" for strings, so getattr returning ""
 		# is indistinguishable from "key not found". We need hasattr

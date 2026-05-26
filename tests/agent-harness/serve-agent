@@ -93,7 +93,17 @@ sleep 1
 # The -b set is the full delegation budget; -p is the tool slice for
 # activity 0 (the meta-agent). Matches lib/lucifer/boot.sh so harness
 # scenarios see the same agent capabilities a desktop user would.
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
+#
+# `-p /workspace:rw` is harness-specific: scenario fixtures live under
+# /workspace/<run-sid>, and for a DELEGATED child to read/write them the
+# path must be in the gateway's grantable set (childpathallowed checks
+# extpaths/boundpaths). A desktop user gets this implicitly — the GUI
+# registers a bound path when they open a file — but the headless harness
+# has no such step, so child tasks granted paths=/workspace/... were
+# silently denied and born without it. Registering it rw here lets
+# delegation scenarios actually produce their deliverables. Not in
+# boot.sh: production has no /workspace.
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm -p /workspace:rw read list find present say hear task memory gap keyring editor shell limbo
 
 # ── lucibridge for activity 0 ─────
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &

@@ -741,8 +741,12 @@ drawcontext(zone: Rect)
 	pad := 8;
 	y := zone.min.y + pad - ctx_scroll;
 	secgap := 12;
-	indw := 10;
-	indh := 10;
+	# Active-tool indicator square, sized relative to the font so it stays
+	# visible on Retina/mobile while remaining 10px on desktop.
+	indw := mainfont.height * 3 / 4;
+	if(indw < 10)
+		indw = 10;
+	indh := indw;
 	now := sys->millisec();
 
 	# Helper: test whether a row at y with given height is visible

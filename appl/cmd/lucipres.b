@@ -703,9 +703,15 @@ drawpresentation(zone: Rect)
 				dotcol = greencol_g;
 			else
 				dotcol = dimcol;
+			# Size the running-status dot relative to the font so it
+			# stays visible on Retina/mobile (a fixed 5px is microscopic
+			# at 3x) while remaining ~5px on desktop.
+			dotsz := mainfont.height / 3;
+			if(dotsz < 5)
+				dotsz = 5;
 			dotx := tx + tw + 4;
-			doty := tabr.min.y + (tabr.dy() - 5) / 2;
-			mainwin.draw(Rect((dotx, doty), (dotx + 5, doty + 5)), dotcol, nil, (0, 0));
+			doty := tabr.min.y + (tabr.dy() - dotsz) / 2;
+			mainwin.draw(Rect((dotx, doty), (dotx + dotsz, doty + dotsz)), dotcol, nil, (0, 0));
 		}
 		if(ntabs < len tablayout)
 			tablayout[ntabs++] = ref TabRect(

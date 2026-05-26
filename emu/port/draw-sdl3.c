@@ -115,6 +115,42 @@ static float display_scale = 1.0f;
 static volatile int sdl_quit_requested = 0;
 
 /*
+ * Touch / multi-finger gesture state.  INFR-121.
+ *
+ * Touchscreen SDL_VIDEO platforms (Android, iOS) send SDL_EVENT_FINGER_*
+ * for every touch and ALSO synthesise SDL_EVENT_MOUSE_* for the first
+ * finger by default — single-finger touches keep working as clicks/drags
+ * through the existing mouse path unchanged.  Here we track the active
+ * finger set and turn TWO-FINGER drags into scroll-wheel events, the
+ * conventional mobile gesture for "scroll content".  Lands once in
+ * shared code, benefits iOS + Android + (any touch-capable) desktop.
+ *
+ *   one finger:   existing mouse semantics (select, drag)
+ *   two fingers:  swipe → wheel ticks (buttons 8/16/32/64)
+ *
+ * Multi-finger gesture starts when finger #2 lands; ends when finger
+ * count drops below 2.  While in gesture, mouse motion is suppressed
+ * (SDL keeps synthesising mouse motion from the first finger even
+ * while the second is down, which would otherwise fight the scroll).
+ */
+#define TOUCH_MAX_FINGERS	10
+/* 50 physical pixels ≈ a finger's width swipe per wheel tick.  On a 450dpi
+ * screen that's ~3mm — flick-sensitive without being twitchy.  Each
+ * mousetrack(8/16) call is one wheel tick (3-5 lines in most wm apps),
+ * so a 500px swipe ≈ 10 ticks ≈ half a screen.  Tune if needed. */
+#define TOUCH_SCROLL_TICK_PX	50.0f
+struct touch_finger {
+	SDL_FingerID	id;
+	float		last_x;	/* physical pixels (matches mouse path's space) */
+	float		last_y;
+};
+static struct touch_finger touch_fingers[TOUCH_MAX_FINGERS];
+static int touch_finger_count = 0;
+static float touch_scroll_accum_x = 0.0f;
+static float touch_scroll_accum_y = 0.0f;
+static int touch_in_multi_gesture = 0;
+
+/*
  * Dirty rectangle accumulator for batched updates.
  *
  * CRITICAL PERFORMANCE FIX:
@@ -378,6 +414,52 @@ button_event_mask(Uint8 button)
 /* Forward declarations */
 static void sdl_atexit_handler(void);
 void sdl_shutdown(void);
+
+/*
+ * Find an active finger by SDL_FingerID. Returns -1 if not tracked.
+ * INFR-121.
+ */
+static int
+touch_finger_index(SDL_FingerID id)
+{
+	int i;
+	for (i = 0; i < touch_finger_count; i++)
+		if (touch_fingers[i].id == id)
+			return i;
+	return -1;
+}
+
+/*
+ * Remove an active finger from the tracked set, compacting the array.
+ * INFR-121.
+ */
+static void
+touch_finger_remove_at(int idx)
+{
+	int j;
+	if (idx < 0 || idx >= touch_finger_count)
+		return;
+	for (j = idx; j < touch_finger_count - 1; j++)
+		touch_fingers[j] = touch_fingers[j + 1];
+	touch_finger_count--;
+}
+
+/*
+ * Convert SDL_TouchFingerEvent normalised coords (0..1 relative to the
+ * window's logical size) to physical-pixel coords matching the rest of
+ * the mouse path. On Android logical == pixels so display_scale is 1.0
+ * and the multiplication is a no-op. INFR-121.
+ */
+static void
+touch_finger_to_pixels(const SDL_TouchFingerEvent *ev, float *px, float *py)
+{
+	int lw = 0, lh = 0;
+	SDL_GetWindowSize(sdl_window, &lw, &lh);
+	if (lw <= 0 && display_scale > 0.0f) lw = (int)(window_width / display_scale);
+	if (lh <= 0 && display_scale > 0.0f) lh = (int)(window_height / display_scale);
+	*px = ev->x * (float)lw * display_scale;
+	*py = ev->y * (float)lh * display_scale;
+}
 
 /*
  * Pre-initialize SDL3 on main thread
@@ -1057,6 +1139,90 @@ sdl3_mainloop(void)
 					mousetrack(64, mouse_x, mouse_y, 0);  /* scroll right */
 				else if (wx2 < 0)
 					mousetrack(32, mouse_x, mouse_y, 0);  /* scroll left */
+				break;
+			}
+
+			/*
+			 * INFR-121: two-finger swipe → scroll-wheel synthesis.
+			 * Track active fingers; when two or more are down, route
+			 * finger motion into wheel-tick events so every wm app
+			 * scrolls without per-app changes.  Single-finger touches
+			 * continue to flow through SDL's synthesised mouse events
+			 * (SDL_HINT_TOUCH_MOUSE_EVENTS=1, set in sdl3_preinit).
+			 */
+			case SDL_EVENT_FINGER_DOWN: {
+				float px, py;
+				touch_finger_to_pixels(&event.tfinger, &px, &py);
+				if (touch_finger_count < TOUCH_MAX_FINGERS) {
+					touch_fingers[touch_finger_count].id = event.tfinger.fingerID;
+					touch_fingers[touch_finger_count].last_x = px;
+					touch_fingers[touch_finger_count].last_y = py;
+					touch_finger_count++;
+				}
+				if (touch_finger_count == 2) {
+					/*
+					 * Entering two-finger gesture.  Release any
+					 * synthesised mouse button so we don't leave a
+					 * click-drag in flight under the scroll; reset
+					 * the scroll accumulators so a slow-drag-then-
+					 * second-finger doesn't immediately flush a tick.
+					 */
+					if (sdl_button_state) {
+						sdl_button_state = 0;
+						mousetrack(0, mouse_x, mouse_y, 0);
+					}
+					touch_scroll_accum_x = 0.0f;
+					touch_scroll_accum_y = 0.0f;
+					touch_in_multi_gesture = 1;
+				}
+				break;
+			}
+
+			case SDL_EVENT_FINGER_UP: {
+				int idx = touch_finger_index(event.tfinger.fingerID);
+				touch_finger_remove_at(idx);
+				if (touch_finger_count < 2)
+					touch_in_multi_gesture = 0;
+				break;
+			}
+
+			case SDL_EVENT_FINGER_MOTION: {
+				int idx = touch_finger_index(event.tfinger.fingerID);
+				float px, py, dx, dy;
+				if (idx < 0)
+					break;
+				touch_finger_to_pixels(&event.tfinger, &px, &py);
+				dx = px - touch_fingers[idx].last_x;
+				dy = py - touch_fingers[idx].last_y;
+				touch_fingers[idx].last_x = px;
+				touch_fingers[idx].last_y = py;
+				if (!touch_in_multi_gesture)
+					break;
+				touch_scroll_accum_x += dx;
+				touch_scroll_accum_y += dy;
+				/*
+				 * Natural scroll direction: drag finger UP (dy < 0)
+				 * means user wants to see content BELOW (viewport
+				 * moves down) → wheel "scroll down" = button 16.
+				 * Drag finger DOWN (dy > 0) → "scroll up" = button 8.
+				 * Same for horizontal.
+				 */
+				while (touch_scroll_accum_y <= -TOUCH_SCROLL_TICK_PX) {
+					mousetrack(16, mouse_x, mouse_y, 0);
+					touch_scroll_accum_y += TOUCH_SCROLL_TICK_PX;
+				}
+				while (touch_scroll_accum_y >= TOUCH_SCROLL_TICK_PX) {
+					mousetrack(8, mouse_x, mouse_y, 0);
+					touch_scroll_accum_y -= TOUCH_SCROLL_TICK_PX;
+				}
+				while (touch_scroll_accum_x <= -TOUCH_SCROLL_TICK_PX) {
+					mousetrack(32, mouse_x, mouse_y, 0);
+					touch_scroll_accum_x += TOUCH_SCROLL_TICK_PX;
+				}
+				while (touch_scroll_accum_x >= TOUCH_SCROLL_TICK_PX) {
+					mousetrack(64, mouse_x, mouse_y, 0);
+					touch_scroll_accum_x -= TOUCH_SCROLL_TICK_PX;
+				}
 				break;
 			}
 

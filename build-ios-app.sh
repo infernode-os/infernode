@@ -47,13 +47,21 @@ for arg in "$@"; do
 	case "$arg" in
 		--verify) VERIFY=1 ;;
 		--gui) GUI=1 ;;
+		--device) IOSSDK=iphoneos ;;	# real hardware (signed); else simulator
 		*) echo "unknown arg: $arg" >&2; exit 1 ;;
 	esac
 done
 
+# Device vs simulator: pick the matching SDL3 slice (sim/dev) and ABI.
+if [ "$IOSSDK" = "iphoneos" ]; then
+	IS_DEVICE=1; SDL3_SLICE=dev
+else
+	IS_DEVICE=0; SDL3_SLICE=sim
+fi
+
 # Mode-specific knobs: which entry point, libemu backend, link flags,
 # and which Inferno dirs to bundle as the root.
-SDL3_PREFIX=${SDL3_PREFIX:-$HOME/sdks/SDL3-ios-sim-arm64}
+SDL3_PREFIX=${SDL3_PREFIX:-$HOME/sdks/SDL3-ios-$SDL3_SLICE-arm64}
 if [ "$GUI" -eq 1 ]; then
 	MODE="GUI (SDL3/Metal — lucifer)"
 	APPSRC=main_ios_gui.m
@@ -81,12 +89,11 @@ echo "=== InferNode iOS app build (Phase 2b) — $MODE ==="
 if [ "$(uname -s)" != "Darwin" ]; then
 	echo "ERROR: iOS builds require a macOS host." >&2; exit 1
 fi
-if [ "$IOSSDK" != "iphonesimulator" ]; then
-	echo "ERROR: only iphonesimulator is wired up. Device builds need an" >&2
-	echo "  Apple Development cert + provisioning profile (Phase B3)." >&2
-	exit 1
-fi
-IOSTRIPLE=arm64-apple-ios${IOSMIN}-simulator
+case "$IOSSDK" in
+	iphonesimulator) IOSTRIPLE=arm64-apple-ios${IOSMIN}-simulator ;;
+	iphoneos)        IOSTRIPLE=arm64-apple-ios${IOSMIN} ;;
+	*) echo "ERROR: IOSSDK must be iphonesimulator or iphoneos (got $IOSSDK)" >&2; exit 1 ;;
+esac
 SDKPATH=$(xcrun --sdk "$IOSSDK" --show-sdk-path)
 CLANG=$(xcrun --sdk "$IOSSDK" -f clang)
 
@@ -176,13 +183,103 @@ for d in n tmp usr mnt; do
 	mkdir -p "$APPDIR/root/$d"
 done
 
-# --- 5. ad-hoc codesign (simulator needs no identity) ------------------
-codesign --force --sign - --timestamp=none "$APPDIR" >/dev/null 2>&1 || {
-	echo "WARNING: ad-hoc codesign failed (simulator may still run it)" >&2; }
+# --- 5. codesign -------------------------------------------------------
+# Simulator: ad-hoc (no identity). Device: real Apple Development cert +
+# embedded provisioning profile + its entitlements. The profile and the
+# matching identity are auto-detected from the bundle id unless overridden
+# via IOS_PROFILE / IOS_IDENTITY.
+if [ "$IS_DEVICE" -eq 1 ]; then
+	echo "=== device code-sign ==="
+	PROFILE="${IOS_PROFILE:-}"
+	if [ -z "$PROFILE" ]; then
+		for d in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+		         "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+			[ -d "$d" ] || continue
+			for p in "$d"/*.mobileprovision; do
+				[ -f "$p" ] || continue
+				security cms -D -i "$p" >/tmp/_ppscan.plist 2>/dev/null || continue
+				aid=$(/usr/libexec/PlistBuddy -c 'Print:Entitlements:application-identifier' /tmp/_ppscan.plist 2>/dev/null)
+				case "$aid" in
+					*".$BUNDLE_ID") PROFILE="$p"; break ;;
+				esac
+			done
+			[ -n "$PROFILE" ] && break
+		done
+	fi
+	if [ -z "$PROFILE" ] || [ ! -f "$PROFILE" ]; then
+		echo "ERROR: no provisioning profile for '$BUNDLE_ID' found." >&2
+		echo "  Create a development profile (in Xcode or the portal) that" >&2
+		echo "  includes this device, or set IOS_PROFILE=/path/to.mobileprovision." >&2
+		exit 1
+	fi
+	security cms -D -i "$PROFILE" >/tmp/_pp.plist 2>/dev/null
+	cp "$PROFILE" "$APPDIR/embedded.mobileprovision"
+	ENT=$(mktemp -t infernode-ent-XXXXXX.plist)
+	/usr/libexec/PlistBuddy -x -c 'Print:Entitlements' /tmp/_pp.plist >"$ENT" 2>/dev/null
+	# Signing identity = the cert the profile trusts (guaranteed to match).
+	IDENTITY="${IOS_IDENTITY:-$(python3 - /tmp/_pp.plist <<'PY'
+import sys, plistlib, hashlib
+p = plistlib.load(open(sys.argv[1], 'rb'))
+print(hashlib.sha1(bytes(p['DeveloperCertificates'][0])).hexdigest().upper())
+PY
+)}"
+	echo "  profile : $(/usr/libexec/PlistBuddy -c 'Print:Name' /tmp/_pp.plist 2>/dev/null)"
+	echo "  identity: $IDENTITY"
+	codesign --force --sign "$IDENTITY" --entitlements "$ENT" \
+		--generate-entitlement-der --timestamp=none "$APPDIR" || {
+			echo "ERROR: device codesign failed" >&2; rm -f "$ENT"; exit 1; }
+	rm -f "$ENT"
+else
+	codesign --force --sign - --timestamp=none "$APPDIR" >/dev/null 2>&1 || {
+		echo "WARNING: ad-hoc codesign failed (simulator may still run it)" >&2; }
+fi
 
 echo "built: $APPDIR ($(du -sh "$APPDIR" | cut -f1))"
 
-# --- 6. install on the booted simulator --------------------------------
+# --- 6a. install on a connected hardware device (devicectl) ------------
+if [ "$IS_DEVICE" -eq 1 ]; then
+	DEV_ID="${IOS_DEVICE_UDID:-}"
+	if [ -z "$DEV_ID" ]; then
+		xcrun devicectl list devices --json-output /tmp/_devs.json >/dev/null 2>&1 || true
+		DEV_ID=$(python3 - <<'PY'
+import json
+try:
+    d = json.load(open('/tmp/_devs.json'))
+    for dev in d.get('result', {}).get('devices', []):
+        st = dev.get('connectionProperties', {}).get('tunnelState', '')
+        if dev.get('deviceProperties', {}).get('developerModeStatus') == 'enabled' or st:
+            print(dev['identifier']); break
+except Exception:
+    pass
+PY
+)
+	fi
+	if [ -z "$DEV_ID" ]; then
+		echo "ERROR: no connected device found. Plug in the iPhone (Developer" >&2
+		echo "  Mode on) or set IOS_DEVICE_UDID. devicectl list devices:" >&2
+		xcrun devicectl list devices >&2 || true
+		exit 1
+	fi
+	echo "=== installing on device $DEV_ID ==="
+	xcrun devicectl device install app --device "$DEV_ID" "$APPDIR" || {
+		echo "ERROR: device install failed. First install may need the developer" >&2
+		echo "  trusted: on the iPhone, Settings > General > VPN & Device" >&2
+		echo "  Management > (your Apple ID) > Trust. Then re-run." >&2
+		exit 1; }
+	echo "installed $BUNDLE_ID on device"
+	if [ "$GUI" -eq 1 ]; then
+		echo "=== launching on device ==="
+		xcrun devicectl device process launch --device "$DEV_ID" "$BUNDLE_ID" 2>&1 | tail -3 || {
+			echo "(launch via devicectl failed — tap the icon on the device)" >&2; }
+		echo ""
+		echo "InferNode is on the device. Watch it on the iPhone screen."
+		echo "If it won't open: Settings > General > VPN & Device Management >"
+		echo "  trust the developer, then tap the InferNode icon."
+	fi
+	exit 0
+fi
+
+# --- 6b. install on the booted simulator -------------------------------
 if ! xcrun simctl list devices booted 2>/dev/null | grep -q '(Booted)'; then
 	echo "No simulator booted. Boot one, then re-run:" >&2
 	echo "  xcrun simctl boot 'iPhone 15'" >&2

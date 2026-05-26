@@ -138,6 +138,29 @@ mkdir -p "$APPDIR"
 # --- 4. assemble the bundle --------------------------------------------
 echo "=== assembling $APPDIR (root: $STAGE_DIRS) ==="
 cp "$ROOT/emu/iOS/app/Info.plist" "$APPDIR/Info.plist"
+
+# App icon (INFR-149): compile the asset catalog into the bundle and
+# merge actool's CFBundleIcons keys into Info.plist. Best-effort — a
+# failure here must not break the build (the app just ships iconless).
+ICON_CATALOG="$ROOT/emu/iOS/app/Assets.xcassets"
+if [ -d "$ICON_CATALOG" ]; then
+	ICON_PARTIAL=$(mktemp -t infernode-appicon-XXXXXX.plist)
+	if xcrun actool "$ICON_CATALOG" \
+			--compile "$APPDIR" \
+			--app-icon AppIcon \
+			--platform "$IOSSDK" \
+			--minimum-deployment-target "$IOSMIN" \
+			--target-device iphone --target-device ipad \
+			--output-partial-info-plist "$ICON_PARTIAL" \
+			--output-format human-readable-text >/dev/null 2>&1; then
+		/usr/libexec/PlistBuddy -c "Merge $ICON_PARTIAL" "$APPDIR/Info.plist" >/dev/null 2>&1 \
+			&& echo "app icon: compiled AppIcon into bundle" \
+			|| echo "WARNING: app-icon plist merge failed (app will be iconless)" >&2
+	else
+		echo "WARNING: actool failed — app ships without a custom icon" >&2
+	fi
+	rm -f "$ICON_PARTIAL"
+fi
 # Stage the Inferno root the app boots from (<App>.app/root). dis/ is the
 # runtime (emuinit, sh, modules); tests/ has the compiled *_test.dis;
 # lib/ carries the shell profile + lucifer boot; fonts/ feeds the GUI.

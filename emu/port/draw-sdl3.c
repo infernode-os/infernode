@@ -465,7 +465,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		sdl_window = SDL_CreateWindow(
 			"InferNode",
 			sdl_width, sdl_height,
-			SDL_WINDOW_RESIZABLE
+			/* HIGH_PIXEL_DENSITY: without it iOS gives a 1x (logical)
+			 * backing, so the screen is ~393px not ~1179px and the
+			 * mobile fonts render ~3x too large (≈8 chars/line). With
+			 * it, GetWindowSizeInPixels reports real Retina pixels and
+			 * the UI is properly sized + crisp. */
+			SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
 		);
 	});
 	if (!sdl_window)
@@ -829,7 +834,7 @@ handle_window_creation(void)
 	sdl_window = SDL_CreateWindow(
 		"InferNode",
 		sdl_width, sdl_height,
-		SDL_WINDOW_RESIZABLE
+		SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
 	);
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: SDL_CreateWindow failed: %s\n", SDL_GetError());

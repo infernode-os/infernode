@@ -390,27 +390,45 @@ update_text_input_area(void)
  * "kbd off"). The keyboard must surface only while a text field is
  * focused — not on every tap — so text input is no longer started
  * unconditionally; the GUI requests it on focus and drops it on blur.
- * softkbd_on also gates the per-tap re-assert below (which exists so
- * Android restores the keyboard after a system gesture dismisses it).
+ *
+ * setsoftkbd runs on an Inferno worker thread (the devcons write), but
+ * SDL_StartTextInput/StopTextInput touch UIKit and MUST run on the main
+ * thread — calling them here crashes on device. So setsoftkbd only sets
+ * a desired-state flag; sdl3_mainloop (main thread) reconciles it. The
+ * flag is a plain int written from one thread and read from another: the
+ * only race is a one-frame delay, which is harmless.
  */
-static int softkbd_on = 0;
+static volatile int softkbd_want = 0;	/* desired state (set from any thread) */
+static int softkbd_applied = 0;		/* last state pushed to SDL (main thread) */
 
 void
 setsoftkbd(int on)
 {
 #if MOBILE_TOUCH
-	softkbd_on = on;
-	if (!sdl_window)
+	softkbd_want = on ? 1 : 0;
+#else
+	/* Desktop: text input stays enabled; nothing to toggle. */
+	USED(on);
+#endif
+}
+
+/*
+ * Apply a pending soft-keyboard request. MUST be called on the main
+ * (SDL/UIKit) thread — sdl3_mainloop calls it each iteration.
+ */
+static void
+apply_softkbd(void)
+{
+#if MOBILE_TOUCH
+	if (softkbd_want == softkbd_applied || !sdl_window)
 		return;
-	if (on) {
+	softkbd_applied = softkbd_want;
+	if (softkbd_applied) {
 		SDL_StartTextInput(sdl_window);
 		update_text_input_area();
 	} else {
 		SDL_StopTextInput(sdl_window);
 	}
-#else
-	/* Desktop: text input stays enabled; nothing to toggle. */
-	USED(on);
 #endif
 }
 
@@ -1183,6 +1201,10 @@ sdl3_mainloop(void)
 		now = SDL_GetTicks();
 		last_refresh = update_and_present(now, last_refresh);
 
+		/* Apply any pending soft-keyboard request on the main thread
+		 * (setsoftkbd, called from a worker thread, only set a flag). */
+		apply_softkbd();
+
 		/*
 		 * Long-press fire: a single finger held still past the threshold
 		 * becomes a button-3 (context-menu) press. Checked here each loop
@@ -1220,15 +1242,16 @@ sdl3_mainloop(void)
 						sdl_button_state |= mask;
 						/*
 						 * Re-assert text input on a press ONLY while a
-						 * text field is focused (softkbd_on, set by the
+						 * text field is focused (softkbd_want, set by the
 						 * GUI via setsoftkbd). A system gesture (back,
 						 * swipe-down, a permission dialog) can dismiss
 						 * the IME and SDL won't restore it; re-asserting
 						 * on the next tap brings it back. When no field
 						 * is focused this is skipped, so a tap no longer
-						 * pops the keyboard. (On desktop, no IME.)
+						 * pops the keyboard. (On desktop, no IME.) This
+						 * runs on the main thread, so the SDL call is safe.
 						 */
-						if (softkbd_on)
+						if (softkbd_want)
 							SDL_StartTextInput(sdl_window);
 					} else
 						sdl_button_state &= ~mask;

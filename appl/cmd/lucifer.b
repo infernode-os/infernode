@@ -1266,7 +1266,8 @@ preswmloop(scr: ref Screen, zoner: Rect,
 							for(oai := 0; oai < otp2.nappslots; oai++) {
 								if(otp2.appslots[oai] != nil &&
 								   otp2.appslots[oai].client == c &&
-								   otp2.actid != actid) {
+								   (otp2.actid != actid ||
+									    otp2.appslots[oai].id != otp2.activeappid)) {
 									hideit = 1;
 									break;
 								}
@@ -1335,8 +1336,25 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					img3 := presscr.newwindow(appr2, Draw->Refbackup, Draw->Nofill);
 					if(img3 != nil) {
 						rtp.appslots[asi3].client.setimage("app", img3);
-						rtp.appslots[asi3].client.ctl <-= sys->sprint("!reshape app -1 %s", r2s(appr2));
+						# Notify with window name "." (NOT "app"): wmclient's
+						# wmreq rejects any other name, so "!reshape app" was
+						# silently dropped and the app never repainted its new
+						# window — leaving a fresh Refbackup window showing
+						# stale backed-up screen content (e.g. the previously
+						# visible app) under the active tab.  "." makes the app
+						# pick up the reallocated image and redraw.
+						rtp.appslots[asi3].client.ctl <-= sys->sprint("!reshape . -1 %s", r2s(appr2));
 					}
+					# scr.newwindow() above tops the window on the Screen
+					# z-stack.  Reallocating every app on a resize therefore
+					# leaves whichever app was iterated last on top — not
+					# necessarily the active one — so a stale window can
+					# cover the active app (multi-app overlap after a
+					# resize / activity switch).  Bottom every window except
+					# the focused activity's active app; lucipres's own
+					# reshape re-raises the active app above it.
+					if(!(rtp.actid == actid && rtp.appslots[asi3].id == rtp.activeappid))
+						rtp.appslots[asi3].client.bottom();
 				}
 			}
 			rtp.applock <-= 1;
@@ -1422,26 +1440,14 @@ switchactivity(newid: int)
 	writefile(sys->sprint("%s/activity/%d/urgency", mountpt, newid), "0");
 	updatetile(newid, "urgency", "0");
 
-	# Hide ALL apps from the OLD task; show the new task's current app.
-	# Each task has its own appslots so we only need to bottom the old
-	# task's apps and top the new task's current app.
-	oldtp := curtaskpres;
+	# Point at the new task, set its active app from its persisted
+	# /presentation/current, then let enforcepreszorder() re-assert the
+	# whole shared-presscr z-stack (bottom every other activity's apps,
+	# lucipres above them, the new active app on top).  Doing the bulk
+	# bottom/top by hand here used to leave windows from the previous
+	# activity floating over the new one on the shared screen.
 	newtp := lookuptaskpres(newid);
-
-	# Bottom all apps in old task
-	if(oldtp != nil) {
-		<-oldtp.applock;
-		for(sai := 0; sai < oldtp.nappslots; sai++) {
-			if(oldtp.appslots[sai] != nil && oldtp.appslots[sai].client != nil)
-				oldtp.appslots[sai].client.bottom();
-		}
-		oldtp.applock <-= 1;
-	}
-
-	# Update curtaskpres pointer
 	curtaskpres = newtp;
-
-	# Show new task's current app (if any)
 	if(newtp != nil) {
 		curid := "";
 		s := readfile(sys->sprint("%s/activity/%d/presentation/current", mountpt, newid));
@@ -1454,17 +1460,10 @@ switchactivity(newid: int)
 				curid = "";
 		}
 		<-newtp.applock;
-		for(sai2 := 0; sai2 < newtp.nappslots; sai2++) {
-			if(newtp.appslots[sai2] != nil && newtp.appslots[sai2].client != nil) {
-				if(newtp.appslots[sai2].id == curid && curid != "")
-					newtp.appslots[sai2].client.top();
-				else
-					newtp.appslots[sai2].client.bottom();
-			}
-		}
 		newtp.activeappid = curid;
 		newtp.applock <-= 1;
 	}
+	enforcepreszorder();
 
 	# Kill and respawn nslistener so it reads events for the new activity.
 	# nslistener blocks on sys->read() of the per-activity event file;
@@ -2714,6 +2713,47 @@ hideapp(id: string)
 	tp.applock <-= 1;
 }
 
+# enforcepreszorder: single source of truth for presentation z-order on
+# the shared presscr.  All apps across all activities live on one Screen,
+# and the desync bugs (wrong window visible, previous app peeking through)
+# all stem from ad-hoc top()/bottom() calls racing each other across the
+# launch / center / activity-switch / resize paths.  This re-asserts the
+# invariant deterministically, regardless of how we got here:
+#
+#   focused-activity active app   (z-top, fully covers the content area)
+#   lucipres                      (beneath it; covers every other window)
+#   all other app windows         (bottomed: this activity's inactive apps
+#                                  AND every background activity's apps)
+#
+# Safe to call after any z-perturbing operation.
+enforcepreszorder()
+{
+	# 1. Bottom every app window in every activity.
+	for(ti := 0; ti < ntaskpres; ti++) {
+		etp := taskpres[ti];
+		if(etp == nil)
+			continue;
+		<-etp.applock;
+		for(ai := 0; ai < etp.nappslots; ai++)
+			if(etp.appslots[ai] != nil && etp.appslots[ai].client != nil)
+				etp.appslots[ai].client.bottom();
+		etp.applock <-= 1;
+	}
+	# 2. lucipres above all bottomed app windows.
+	if(lucipresclient != nil)
+		lucipresclient.top();
+	# 3. Focused activity's active app above lucipres (if it has joined).
+	if(curtaskpres != nil && curtaskpres.activeappid != "") {
+		ctp := curtaskpres;
+		<-ctp.applock;
+		for(ai := 0; ai < ctp.nappslots; ai++)
+			if(ctp.appslots[ai] != nil && ctp.appslots[ai].client != nil &&
+					ctp.appslots[ai].id == ctp.activeappid)
+				ctp.appslots[ai].client.top();
+		ctp.applock <-= 1;
+	}
+}
+
 # killapp: terminate the app process and free its AppSlot.
 #
 # Sends bottom() first so the app window disappears immediately while the
@@ -2777,30 +2817,17 @@ handleprescurrent()
 	atype := readfile(sys->sprint("%s/activity/%d/presentation/%s/type",
 		mountpt, actid, newid));
 	if(atype != nil) atype = strip(atype);
-	# Collect IDs under lock, then call show/hide outside lock to avoid deadlock
-	# (showapp/hideapp take tp.applock internally).
-	hideids: list of string;
-	showid := "";
+	# Update which app (if any) is active for the focused activity, then
+	# let enforcepreszorder() re-assert the whole z-stack.  (Previously
+	# this hand-rolled the hide/show with a `newid != activeappid`
+	# short-circuit, which left the z-order desynced whenever an app
+	# joined or was reallocated out of band — the wrong-window-visible
+	# bug.  Always enforcing is idempotent and race-proof.)
 	<-tp.applock;
-	if(atype == "app") {
-		if(newid != tp.activeappid) {
-			for(hsi := 0; hsi < tp.nappslots; hsi++)
-				if(tp.appslots[hsi] != nil && tp.appslots[hsi].id != newid)
-					hideids = tp.appslots[hsi].id :: hideids;
-			showid = newid;
-			tp.activeappid = newid;
-		}
-	} else {
-		for(hsi2 := 0; hsi2 < tp.nappslots; hsi2++)
-			if(tp.appslots[hsi2] != nil && tp.appslots[hsi2].id != "")
-				hideids = tp.appslots[hsi2].id :: hideids;
+	if(atype == "app")
+		tp.activeappid = newid;
+	else
 		tp.activeappid = "";
-	}
 	tp.applock <-= 1;
-	for(; hideids != nil; hideids = tl hideids)
-		hideapp(hd hideids);
-	if(showid != "")
-		showapp(showid);
-	else if(lucipresclient != nil)
-		lucipresclient.top();	# force lucipres above bottomed apps
+	enforcepreszorder();
 }

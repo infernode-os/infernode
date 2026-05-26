@@ -670,6 +670,7 @@ drawconversation(zone: Rect)
 					# Mobile: each option is its own full-width,
 					# finger-sized row stacked vertically.
 					mbtnh := mainfont.height + 24;
+					if(mbtnh < 132) mbtnh = 132;	# 44pt finger tap target
 					(nil, mopts) := sys->tokenize(marr[pi].options, ",");
 					for(; mopts != nil; mopts = tl mopts)
 						h += mbtnh + 6;
@@ -855,6 +856,7 @@ drawconversation(zone: Rect)
 					# them onto one line (tiny tap targets) and silently
 					# dropped any that didn't fit the narrow width.
 					mbtnh := mainfont.height + 24;
+					if(mbtnh < 132) mbtnh = 132;	# 44pt finger tap target
 					for(; opts != nil; opts = tl opts) {
 						opt := hd opts;
 						br := Rect((dx, dy), (dx + dw, dy + mbtnh));

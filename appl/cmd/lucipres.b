@@ -160,6 +160,7 @@ centeredart: string;
 artrendw := 0;
 maxpresscrollpx := 0;
 maxpanx := 0;
+mobile := 0;	# set from /env/infmobile in init() (accordion / 44pt tap targets)
 pres_viewport_h := 400;
 
 # Tab state
@@ -215,6 +216,18 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(display_g == nil) {
 		sys->fprint(stderr, "lucipres: display is nil\n");
 		return;
+	}
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — same env var lucifer.b reads.
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				mobile = 1;
+		}
 	}
 
 	# Load theme colours
@@ -669,6 +682,8 @@ drawpresentation(zone: Rect)
 
 	# Tab strip at top
 	tabh := mainfont.height + 12;
+	if(mobile && tabh < 132)
+		tabh = 132;	# 44pt finger tap target for the tab strip
 	tabr := Rect((zone.min.x, zone.min.y), (zone.max.x, zone.min.y + tabh));
 	mainwin.draw(tabr, headercol, nil, (0, 0));
 
@@ -690,12 +705,15 @@ drawpresentation(zone: Rect)
 		if(art.id == centart.id)
 			active = 1;
 		tcol := text2col;
+		# Centre the label vertically within the (possibly tall, on mobile)
+		# tab strip; the active-tab accent stays a bottom border.
+		laby := tabr.min.y + (tabh - mainfont.height) / 2;
 		if(active) {
 			tcol = textcol;
 			mainwin.draw(Rect((tx, tabr.max.y - 3), (tx + tw, tabr.max.y - 1)),
 				accentcol, nil, (0, 0));
 		}
-		mainwin.text((tx, tabr.min.y + 6), tcol, (0, 0), mainfont, art.label);
+		mainwin.text((tx, laby), tcol, (0, 0), mainfont, art.label);
 		# Status dot for app tabs
 		if(art.atype == "app") {
 			dotcol: ref Image;

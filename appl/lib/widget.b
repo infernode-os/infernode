@@ -1086,10 +1086,29 @@ Textfield.key(tf: self ref Textfield, c: int): int
 	return 0;
 }
 
+# Request the on-screen keyboard (touch builds) via /dev/consctl, which
+# the SDL3 backend maps to SDL_StartTextInput. Called when a text field is
+# tapped so the keyboard surfaces on focus, not on every tap. No-op unless
+# /env/infmobile=1 (wmobile), so desktop is unaffected.
+reqkbd(on: int)
+{
+	if(!wmobile)
+		return;
+	fd := sys->open("/dev/consctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	if(on)
+		sys->fprint(fd, "kbd on");
+	else
+		sys->fprint(fd, "kbd off");
+}
+
 Textfield.click(tf: self ref Textfield, p: Point)
 {
 	if(wfont == nil)
 		return;
+	# A tap on a text field focuses it for editing → raise the keyboard.
+	reqkbd(1);
 	ir := tfinputr(tf);
 	tx := ir.min.x + FIELDPAD + 1;
 	ds := tfdisplay(tf);

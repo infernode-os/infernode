@@ -437,13 +437,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 			# Button-1 just pressed
 			if(p.buttons == 1 && wasdown == 0) {
-				# Mobile: arm a long-press → context menu (no right-click).
-				if(mobile) {
-					lpseq++;
-					lppending = 1;
-					lppos = p.xy;
-					spawn lptimer(lpseq);
-				}
+				# Mobile long-press → context menu is now synthesised in
+				# the shared SDL3 touch layer as a real button-3 press
+				# (INFR-163), handled by the button-3 branch below — same
+				# path as a desktop right-click. No per-zone timer here.
 				tabclicked := 0;
 				# Tab clicks
 				for(ti := 0; ti < ntabs; ti++) {
@@ -562,9 +559,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 			} else
 				b2tabdragging = 0;
 
-			# Button-3: context menu
+			# Button-3: context menu (desktop right-click, or a touch
+			# long-press synthesised as button-3 by the SDL3 layer).
 			if((p.buttons & 4) != 0 && (wasdown & 4) == 0) {
 				if(menumod != nil) {
+					# A touch long-press lands as button-1 down then a
+					# transition to button-3; drop the deferred tab tap so
+					# the menu doesn't also switch tabs on release.
+					b1pendid = "";
+					b1tabdragging = 0;
 					handlecontextmenu(p);
 					prevbuttons = 0;
 					redrawpres();

@@ -37,10 +37,17 @@ About: module
 
 ZP := Point(0, 0);
 
+# Desktop cap. On phone-class screens the window fills (with margins)
+# instead; type and spacing scale to the actual window (see pickfonts).
 WINW: con 600;
 WINH: con 590;
-PADDING: con 12;
-LINEH: con 18;	# line height for body labels
+
+# Responsive type + spacing, chosen from the real window width in
+# pickfonts() rather than fixed desktop pixels (INFR-159).
+bodyfont_g:  ref Font;
+titlefont_g: ref Font;
+PAD: int;	# padding, = body font height
+LINEH: int;	# line height for body labels
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -69,17 +76,33 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	w := wmclient->window(ctxt, "About InferNode", Wmclient->Appl);
 	display := w.display;
 
-	# Init widget module with body font
-	bodyfont := Font.open(display, "/fonts/combined/unicode.sans.12.font");
-	if(bodyfont == nil)
-		bodyfont = Font.open(display, "/fonts/combined/unicode.sans.14.font");
-	if(bodyfont == nil)
-		bodyfont = Font.open(display, "*default*");
-	widgetmod->init(display, bodyfont);
-
-	w.reshape(Rect((0, 0), (WINW, WINH)));
+	# Size the window from the screen, not fixed desktop pixels: fill
+	# (with margins) on a phone-class screen, cap-and-centre on desktop.
+	# (Under the lucifer presentation zone preswmloop dictates the size
+	# and ignores this reshape — harmless; layout derives from the real
+	# window in redraw() either way.)
+	scr := display.image.r;
+	sw := scr.dx();
+	sh := scr.dy();
+	if(ismobile()) {
+		m := sw / 24;
+		w.reshape(Rect((scr.min.x + m, scr.min.y + m),
+			(scr.max.x - m, scr.max.y - m)));
+	} else {
+		ww := WINW; wh := WINH;
+		if(ww > sw) ww = sw;
+		if(wh > sh) wh = sh;
+		ox := scr.min.x + (sw - ww) / 2;
+		oy := scr.min.y + (sh - wh) / 2;
+		w.reshape(Rect((ox, oy), (ox + ww, oy + wh)));
+	}
 	w.startinput("ptr" :: "kbd" :: nil);
 	w.onscreen(nil);
+
+	# Pick fonts + spacing from the actual granted window width, then
+	# init the widget module with the chosen body font.
+	pickfonts(display, w.image.r.dx());
+	widgetmod->init(display, bodyfont_g);
 
 	redraw(w, display);
 
@@ -107,11 +130,56 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	}
 }
 
+# Read /env/infmobile (set on iOS/Android) — phone-class layout.
+ismobile(): int
+{
+	(ok, st) := sys->stat("/env/infmobile");
+	if(ok != 0 || st.length == big 0)
+		return 0;
+	fd := sys->open("/env/infmobile", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	return n > 0 && buf[0] == byte '1';
+}
+
+# Open a unicode.sans face at the given pixel size, falling back to
+# smaller faces, then the built-in default.
+openface(display: ref Display, px: int): ref Font
+{
+	f := Font.open(display, sys->sprint("/fonts/combined/unicode.sans.%d.font", px));
+	if(f == nil)
+		f = Font.open(display, "/fonts/combined/unicode.sans.14.font");
+	if(f == nil)
+		f = Font.open(display, "*default*");
+	return f;
+}
+
+# Choose body/title faces and derived spacing from the window width.
+# Available faces: 12 14 18 24 32 48.
+pickfonts(display: ref Display, ww: int)
+{
+	bp, tp: int;
+	if(ww >= 1000)     { bp = 32; tp = 48; }
+	else if(ww >= 640) { bp = 18; tp = 32; }
+	else if(ww >= 380) { bp = 14; tp = 24; }
+	else               { bp = 12; tp = 18; }
+	bodyfont_g  = openface(display, bp);
+	titlefont_g = openface(display, tp);
+	if(bodyfont_g == nil)		# *default* failed too — last resort
+		bodyfont_g = titlefont_g;
+	PAD = bodyfont_g.height;
+	LINEH = bodyfont_g.height + bodyfont_g.height / 3;
+}
+
 redraw(w: ref Window, display: ref Display)
 {
 	screen := w.image;
 	if(screen == nil)
 		return;
+	if(bodyfont_g == nil)		# defensive: ensure fonts exist
+		pickfonts(display, screen.r.dx());
 
 	# Load theme
 	theme: ref Theme;
@@ -127,16 +195,11 @@ redraw(w: ref Window, display: ref Display)
 	# Clear background
 	screen.draw(screen.r, bg, nil, ZP);
 
-	# Title font (larger than widget font)
-	titlefont := Font.open(display, "/fonts/combined/unicode.sans.18.font");
-	if(titlefont == nil)
-		titlefont = Font.open(display, "/fonts/combined/unicode.sans.14.font");
-	if(titlefont == nil)
-		titlefont = Font.open(display, "*default*");
+	titlefont := titlefont_g;	# responsive title face (see pickfonts)
 
 	r := screen.r;
 	cx := (r.min.x + r.max.x) / 2;
-	y := r.min.y + PADDING;
+	y := r.min.y + PAD;
 
 	# Load and draw logo via PNG decoder (display.open only handles Plan 9 format)
 	logopath := "/lib/lucifer/about-screen.png";
@@ -173,7 +236,10 @@ redraw(w: ref Window, display: ref Display)
 		lw := logo.r.dx();
 		lh := logo.r.dy();
 		if(lw < 48) {
-			scale := 4;
+			# Scale a small source logo up proportionally to the
+			# window so it isn't a tiny mark on a phone screen.
+			scale := 2 + screen.r.dx() / 300;
+			if(scale > 8) scale = 8;
 			sw := lw * scale;
 			sh := lh * scale;
 			dst := Rect((cx - sw/2, y), (cx + sw/2, y + sh));
@@ -182,15 +248,15 @@ redraw(w: ref Window, display: ref Display)
 				scaleblit(scaled, logo, scale);
 				screen.draw(dst, scaled, nil, dst.min);
 			}
-			y += sh + PADDING * 2;
+			y += sh + PAD * 2;
 		} else {
 			lx := cx - lw/2;
 			dst := Rect((lx, y), (lx + lw, y + lh));
 			screen.draw(dst, logo, nil, logo.r.min);
-			y += lh + PADDING * 2;
+			y += lh + PAD * 2;
 		}
 	} else
-		y += PADDING;
+		y += PAD;
 
 	# Title — uses larger font, drawn manually
 	title := "InferNode";
@@ -208,7 +274,7 @@ redraw(w: ref Window, display: ref Display)
 
 	# Separator line
 	y += 8;
-	screen.line(Point(r.min.x + PADDING*2, y), Point(r.max.x - PADDING*2, y),
+	screen.line(Point(r.min.x + PAD*2, y), Point(r.max.x - PAD*2, y),
 		0, 0, 0, dimcol, ZP);
 	y += 12;
 

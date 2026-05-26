@@ -1,0 +1,5 @@
+# Headless backend (default) — no display; graphics calls are no-op
+# stubs. This is the Phase A / B0 path. Selected by GUIBACK=headless.
+GUISRC=stubs-headless.$O
+GUIFLAGS=
+GUILIBS=

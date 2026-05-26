@@ -111,7 +111,9 @@ llm_mode_labels := array[] of { "Local", "Remote (9P)" };
 llm_conn_hdr: ref Label;
 llm_backend_group: ref RadioGroup;
 llm_backend_names := array[] of { "api", "openai" };
-llm_backend_labels := array[] of { "Anthropic API", "Ollama / OpenAI-compatible" };
+# Display labels only — dispatch uses llm_backend_names above, so these
+# are safe to reword (aligned with the onboarding buttons, INFR-156).
+llm_backend_labels := array[] of { "Remote API", "Local model" };
 llm_backend_hdr: ref Label;
 llm_url_label: ref Label;
 llm_url_tf: ref Textfield;

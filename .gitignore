@@ -276,3 +276,9 @@ android-app/.gradle/
 android-app/build/
 android-app/app/build/
 android-app/local.properties
+
+# Multi-arch APK build artefacts (INFR-67 x86_64 NDK target).
+android-app/app/src/main/jniLibs/x86_64/libemu.so
+android-app/app/src/main/jniLibs/x86_64/libSDL3.so
+build-android-apk.ndk-arm64-v8a.log
+build-android-apk.ndk-x86_64.log

@@ -25,10 +25,14 @@ android {
         versionName = "0.1.0-phase1c"
 
         ndk {
-            // Only ship the ABIs we actually cross-compile for. Adding
-            // x86_64 would let us run in Android Studio AVDs but needs a
-            // separate cross-build pass through our mkfiles.
-            abiFilters += listOf("arm64-v8a")
+            // Ship every ABI for which we have a cross-built libemu.so
+            // staged in jniLibs/. build-android-apk.sh produces these:
+            //   --abi=arm64-v8a (default)  → phone hardware
+            //   --abi=x86_64               → Android emulator on x86 hosts
+            //   --abi=both                 → multi-arch APK
+            // Listing both here is harmless when only one is built —
+            // Gradle silently skips ABIs that have no jniLibs entries.
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 

@@ -114,6 +114,7 @@ AppSlot: adt {
 	id:     string;
 	owneract: int;		# activity that created this app (immutable after alloc)
 	client: ref Client;
+	wantskbd: int;		# app subscribed to keyboard (startinput "kbd") → soft kbd
 };
 MAXAPPSLOTS: con 16;
 MAXTOKENPENDING: con 16;
@@ -1009,6 +1010,40 @@ drawmobiletitle(label: string, y, expanded: int)
 # expanded zone. Kicks the mainloop into a full layout pass via a
 # synthetic M_RESIZE pointer event so handleresize() runs and the
 # zone modules get fresh sub-images.
+# Request/hide the on-screen keyboard (touch builds) via /dev/consctl,
+# which the SDL3 backend maps to SDL_StartTextInput/StopTextInput.
+reqkbd(on: int)
+{
+	if(!mobile)
+		return;
+	fd := sys->open("/dev/consctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	if(on)
+		sys->fprint(fd, "kbd on");
+	else
+		sys->fprint(fd, "kbd off");
+}
+
+# 1 if the focused activity's active workspace app subscribed to the
+# keyboard (a text app), else 0. Used to restore the keyboard when the
+# Workspace zone is brought back on screen.
+activeappwantskbd(): int
+{
+	tp := curtaskpres;
+	if(tp == nil || tp.activeappid == "")
+		return 0;
+	wk := 0;
+	<-tp.applock;
+	for(ci := 0; ci < tp.nappslots; ci++)
+		if(tp.appslots[ci] != nil && tp.appslots[ci].id == tp.activeappid) {
+			wk = tp.appslots[ci].wantskbd;
+			break;
+		}
+	tp.applock <-= 1;
+	return wk;
+}
+
 setexpandedzone(z: int)
 {
 	if(!mobile || z == expanded_zone)
@@ -1016,6 +1051,14 @@ setexpandedzone(z: int)
 	if(z < 0 || z > 2)
 		return;
 	expanded_zone = z;
+	# Match the soft keyboard to the newly-shown zone (INFR-155):
+	# entering the Workspace restores the keyboard if its focused app is a
+	# text app; Chat and Context start hidden (the chat input re-requests
+	# it when tapped). reqkbd no-ops off mobile.
+	if(z == 1)
+		reqkbd(activeappwantskbd());
+	else
+		reqkbd(0);
 	p := zpointer;
 	p.buttons = M_RESIZE;
 	# Blocking send is required here. cmouse is unbuffered; the
@@ -1295,6 +1338,12 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			# Remove the tab immediately rather than waiting for the async fd close.
 			if(s == "embedded-exit")
 				cleanupappslot(c);
+			# An app subscribing to keyboard (startinput "kbd") declares it
+			# is a text context (shell, editor, man, settings, ...). Note it
+			# so the soft keyboard reveals when this app is the active one
+			# (INFR-155: text apps had no way to summon the keyboard).
+			if(len s >= 9 && s[0:9] == "start kbd")
+				markappwantskbd(c);
 			# All other req messages ("start ptr", "start kbd", "raise", etc.) — reply OK
 			alt { rc <-= (n, err) => ; * => ; }
 		}
@@ -2674,7 +2723,7 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		writeappstatus(id, "dead", targetact);
 		return;
 	}
-	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil);
+	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil, 0);
 	tp.nappslots++;
 	tp.applock <-= 1;
 	# Load the GUI app module
@@ -2942,11 +2991,47 @@ handleprescurrent()
 	# short-circuit, which left the z-order desynced whenever an app
 	# joined or was reallocated out of band — the wrong-window-visible
 	# bug.  Always enforcing is idempotent and race-proof.)
+	wk := 0;	# does the newly-focused app want the keyboard?
 	<-tp.applock;
-	if(atype == "app")
+	if(atype == "app") {
 		tp.activeappid = newid;
-	else
+		for(ci := 0; ci < tp.nappslots; ci++)
+			if(tp.appslots[ci] != nil && tp.appslots[ci].id == newid) {
+				wk = tp.appslots[ci].wantskbd;
+				break;
+			}
+	} else
 		tp.activeappid = "";
 	tp.applock <-= 1;
+	# Reveal/hide the soft keyboard to match the focused workspace app —
+	# but only while the Workspace zone is the one on screen, else the
+	# chat zone owns the keyboard. reqkbd no-ops off mobile.
+	if(!mobile || expanded_zone == 1)
+		reqkbd(wk);
 	enforcepreszorder();
+}
+
+# An app subscribed to keyboard input (startinput "kbd") → it's a text
+# context. Record it, and if it's the app currently in focus, raise the
+# soft keyboard now (apps subscribe after they're centred, so the
+# handleprescurrent reveal above can't see it yet). INFR-155.
+markappwantskbd(c: ref Client)
+{
+	for(tpi := 0; tpi < ntaskpres; tpi++) {
+		tp := taskpres[tpi];
+		if(tp == nil)
+			continue;
+		<-tp.applock;
+		for(ci := 0; ci < tp.nappslots; ci++) {
+			if(tp.appslots[ci] != nil && tp.appslots[ci].client == c) {
+				tp.appslots[ci].wantskbd = 1;
+				isactive := tp == curtaskpres && tp.activeappid == tp.appslots[ci].id;
+				tp.applock <-= 1;
+				if(isactive && (!mobile || expanded_zone == 1))
+					reqkbd(1);
+				return;
+			}
+		}
+		tp.applock <-= 1;
+	}
 }

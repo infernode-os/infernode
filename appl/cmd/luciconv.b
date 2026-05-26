@@ -240,6 +240,14 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		}
 		# Button-1 just pressed
 		if(p.buttons == 1 && wasdown == 0) {
+			# Mobile soft keyboard: raise it only when the input field
+			# is tapped; hide it on any other tap in the chat zone.
+			if(mobile) {
+				if(inputrect.dx() > 0 && inputrect.contains(p.xy))
+					reqkbd(1);
+				else
+					reqkbd(0);
+			}
 			# KLUDGE-MOBILE-ACCORDION-INFR-119 — Send button hit
 			# test before any other handlers. Same effect as
 			# pressing Return on desktop: submit inputbuf if
@@ -1334,6 +1342,20 @@ writetosnarf(text: string)
 		return;
 	b := array of byte text;
 	sys->write(fd, b, len b);
+}
+
+# Request the on-screen keyboard (touch builds). Writes to /dev/consctl,
+# which the SDL3 backend turns into SDL_StartTextInput / SDL_StopTextInput
+# so the keyboard surfaces only while the chat input is focused.
+reqkbd(on: int)
+{
+	fd := sys->open("/dev/consctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	if(on)
+		sys->fprint(fd, "kbd on");
+	else
+		sys->fprint(fd, "kbd off");
 }
 
 readfromsnarf(): string

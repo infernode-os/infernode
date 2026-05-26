@@ -11,6 +11,10 @@ void setpointer(int x, int y) {
 	USED(y);
 }
 
+void setsoftkbd(int on) {
+	USED(on);
+}
+
 uchar* attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen) {
 	USED(r);
 	USED(chan);

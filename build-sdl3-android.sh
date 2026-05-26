@@ -18,16 +18,29 @@ set -eu
 
 VERSION=${SDL3_VERSION:-3.2.16}
 SDK_HOME=${SDK_HOME:-$HOME/sdks}
-PREFIX=$SDK_HOME/SDL3-android-arm64
 SRC=$SDK_HOME/SDL3-$VERSION-src
 NDK=${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/android-ndk-r29}
 
+# ABI selection: arm64-v8a (default, for phone hardware) or x86_64 (for
+# emulator iteration on x86_64 hosts now that the Android emulator no
+# longer translates arm64 → x86). Pass --abi=<name> or set SDL3_ABI.
+ABI=${SDL3_ABI:-arm64-v8a}
 FORCE=0
 for arg in "$@"; do
     case "$arg" in
-        --force) FORCE=1 ;;
+        --force)   FORCE=1 ;;
+        --abi=*)   ABI="${arg#--abi=}" ;;
     esac
 done
+
+case "$ABI" in
+    arm64-v8a)  PREFIX=$SDK_HOME/SDL3-android-arm64 ;;
+    x86_64)     PREFIX=$SDK_HOME/SDL3-android-x86_64 ;;
+    *)
+        echo "::error::unsupported ABI '$ABI' (expected arm64-v8a or x86_64)" >&2
+        exit 2
+        ;;
+esac
 
 if [ ! -d "$NDK" ]; then
     echo "::error::ANDROID_NDK_HOME not set or NDK not found at $NDK" >&2
@@ -49,15 +62,15 @@ if [ ! -d "$SRC" ]; then
     mv "$SDK_HOME/SDL3-$VERSION" "$SRC"
 fi
 
-BUILD="$SRC/build-android-arm64"
+BUILD="$SRC/build-android-${ABI}"
 rm -rf "$BUILD"
 mkdir -p "$BUILD"
 cd "$BUILD"
 
-echo "::: Configuring SDL3 for Android arm64 (NDK at $NDK)"
+echo "::: Configuring SDL3 for Android $ABI (NDK at $NDK)"
 cmake "$SRC" \
     -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-    -DANDROID_ABI=arm64-v8a \
+    -DANDROID_ABI="$ABI" \
     -DANDROID_PLATFORM=android-28 \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -88,7 +101,7 @@ cmake --install . > cmake-install.log 2>&1 || {
     exit 1
 }
 
-# Sanity check: the .so must be aarch64.
+# Sanity check: the .so must match the requested ABI's ELF e_machine.
 SO="$PREFIX/lib/libSDL3.so"
 if [ ! -f "$SO" ]; then
     # Some installs land it as libSDL3.so.0 or similar — check.
@@ -99,11 +112,16 @@ if [ -z "$SO" ] || [ ! -f "$SO" ]; then
     exit 1
 fi
 
-# ELF magic + EM_AARCH64 (0xb7) at byte 18.
+# ELF magic at bytes 0-3 + EM_* at byte 18 (e_machine little-endian).
+# arm64 → EM_AARCH64 = 0xb7;  x86_64 → EM_X86_64 = 0x3e.
+case "$ABI" in
+    arm64-v8a) want=b7 ;;
+    x86_64)    want=3e ;;
+esac
 elfhex=$(head -c 19 "$SO" | od -An -tx1 | tr -d ' \n')
 case "$elfhex" in
-    7f454c46*b7) ;;
-    *) echo "::error::$SO is not aarch64 ELF (hex=$elfhex)" >&2; exit 1 ;;
+    7f454c46*${want}) ;;
+    *) echo "::error::$SO is not $ABI ELF (hex=$elfhex, want e_machine=$want)" >&2; exit 1 ;;
 esac
 
 echo ""

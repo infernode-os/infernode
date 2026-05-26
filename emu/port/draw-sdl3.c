@@ -152,6 +152,28 @@ static float touch_scroll_accum_y = 0.0f;
 static int touch_in_multi_gesture = 0;
 
 /*
+ * Long-press → context-menu (button-3) synthesis. INFR-163/160/162.
+ *
+ * A touchscreen produces no button-2/3, so the Plan 9 context menus across
+ * the wm apps (and lucipres) are otherwise unreachable. A single finger held
+ * roughly still past LONGPRESS_MS is promoted to a button-3 press at the
+ * touch point: we drop the synthesised left button (so it isn't read as a
+ * click/drag) and raise the right button, held until the finger lifts —
+ * exactly the Plan 9 hold-to-show / release-to-select menu interaction.
+ * Moving past the slop (a drag), a second finger (scroll), or an early lift
+ * (a tap) all cancel it, leaving normal single-finger mouse semantics.
+ * Shared path → fixes iOS and Android at once; button-3 is the standard
+ * context-menu button, so wm.b's old button-2 menu is migrated to match.
+ */
+#define LONGPRESS_MS		500
+#define LONGPRESS_SLOP_PX	16.0f
+static int touch_lp_armed = 0;		/* a single-finger press may become a long-press */
+static int touch_lp_fired = 0;		/* button-3 has been synthesised, awaiting lift */
+static Uint64 touch_lp_down_ms = 0;	/* when the finger landed */
+static float touch_lp_x0 = 0.0f;	/* landing point (physical px) for slop test */
+static float touch_lp_y0 = 0.0f;
+
+/*
  * Dirty rectangle accumulator for batched updates.
  *
  * CRITICAL PERFORMANCE FIX:
@@ -1114,6 +1136,20 @@ sdl3_mainloop(void)
 		now = SDL_GetTicks();
 		last_refresh = update_and_present(now, last_refresh);
 
+		/*
+		 * Long-press fire: a single finger held still past the threshold
+		 * becomes a button-3 (context-menu) press. Checked here each loop
+		 * because a stationary finger emits no further SDL events.
+		 */
+		if (touch_lp_armed && !touch_lp_fired && touch_finger_count == 1 &&
+		    !touch_in_multi_gesture &&
+		    now - touch_lp_down_ms >= LONGPRESS_MS) {
+			sdl_button_state = SDL_BUTTON_RMASK;	/* drop synth left, raise right */
+			mousetrack(map_buttons(sdl_button_state), mouse_x, mouse_y, 0);
+			touch_lp_fired = 1;
+			touch_lp_armed = 0;
+		}
+
 		/* Poll for events (non-blocking) */
 		while (SDL_PollEvent(&event)) {
 			switch (event.type) {
@@ -1194,6 +1230,17 @@ sdl3_mainloop(void)
 					touch_fingers[touch_finger_count].last_y = py;
 					touch_finger_count++;
 				}
+				if (touch_finger_count == 1) {
+					/* Arm a possible long-press for this single finger. */
+					touch_lp_armed = 1;
+					touch_lp_fired = 0;
+					touch_lp_down_ms = now;
+					touch_lp_x0 = px;
+					touch_lp_y0 = py;
+				} else {
+					/* >1 finger: not a context-menu long-press. */
+					touch_lp_armed = 0;
+				}
 				if (touch_finger_count == 2) {
 					/*
 					 * Entering two-finger gesture.  Release any
@@ -1218,6 +1265,18 @@ sdl3_mainloop(void)
 				touch_finger_remove_at(idx);
 				if (touch_finger_count < 2)
 					touch_in_multi_gesture = 0;
+				/*
+				 * Finger lifted. If a long-press had promoted to
+				 * button-3, release it now (→ menu select/dismiss).
+				 * SDL's own MOUSE_BUTTON_UP only clears the left mask,
+				 * so the right button must be cleared here.
+				 */
+				if (touch_lp_fired) {
+					sdl_button_state &= ~SDL_BUTTON_RMASK;
+					mousetrack(map_buttons(sdl_button_state), mouse_x, mouse_y, 0);
+					touch_lp_fired = 0;
+				}
+				touch_lp_armed = 0;
 				break;
 			}
 
@@ -1231,6 +1290,18 @@ sdl3_mainloop(void)
 				dy = py - touch_fingers[idx].last_y;
 				touch_fingers[idx].last_x = px;
 				touch_fingers[idx].last_y = py;
+				/*
+				 * Moved past the slop from the landing point → this is a
+				 * drag, not a long-press: cancel the armed context menu
+				 * (but only before it fires; once button-3 is down the
+				 * finger may move to highlight menu items).
+				 */
+				if (touch_lp_armed && !touch_lp_fired) {
+					float mdx = px - touch_lp_x0;
+					float mdy = py - touch_lp_y0;
+					if (mdx * mdx + mdy * mdy > LONGPRESS_SLOP_PX * LONGPRESS_SLOP_PX)
+						touch_lp_armed = 0;
+				}
 				if (!touch_in_multi_gesture)
 					break;
 				touch_scroll_accum_x += dx;

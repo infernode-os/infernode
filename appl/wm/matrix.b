@@ -1313,7 +1313,7 @@ drawpicker(dst: ref Image)
 
 	r := dst.r;
 	title := "Matrix — click a composition to load";
-	hint  := "(right-click for the full menu)";
+	hint  := "(long-press / right-click for the full menu)";
 	pad := 12;
 	rowh := font_g.height + 8;
 

@@ -325,8 +325,12 @@ writedialogue(title, text, progress, options: string): int
 }
 
 # Show the first-run LLM setup wizard. Offers three peer options
-# (Anthropic API, Local Ollama, Remote 9P), launches the right
+# (Remote API, Local model, Remote 9P), launches the right
 # configurator for each, and parks until the user restarts.
+#
+# NOTE: the dialogue returns the clicked LABEL as the choice string, so
+# the labels in the option list below and the choice comparisons further
+# down MUST stay in sync.  If you rename a button, rename its comparison.
 runsetupwizard()
 {
 	writemsg("veltro",
@@ -334,7 +338,7 @@ runsetupwizard()
 		"I need an LLM connection to get started. Choose an option below:");
 	writedialogue("LLM Setup",
 		"Choose how to connect to an AI model:",
-		"", "Anthropic API,Local Ollama,Remote 9P");
+		"", "Remote API,Local model,Remote 9P");
 	log("displayed LLM setup dialogue");
 
 	pctl := sys->sprint("/n/ui/activity/%d/presentation/ctl", actid);
@@ -349,14 +353,14 @@ runsetupwizard()
 			break;
 		log("setup choice: " + choice);
 
-		if(choice == "Anthropic API") {
+		if(choice == "Remote API") {
 			writefile(pctl, "create id=keyring type=app dis=/dis/wm/keyring.dis label=Keyring");
 			sys->sleep(500);
 			writefile(pctl, "center id=keyring");
 			writemsg("veltro",
 				"Keyring is open. Select API Key, enter `anthropic` as the service, paste your key. " +
 				"Then close InferNode and relaunch it.");
-		} else if(choice == "Local Ollama") {
+		} else if(choice == "Local model") {
 			# data= must come last (terminal attribute, consumes the
 			# remainder of the line). -c llm tells wm/settings to open
 			# directly on the LLM Service panel — INFR-100.

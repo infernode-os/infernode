@@ -1294,18 +1294,30 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		}
 	newzoner := <-rszch =>
 		curzone = newzoner;
-		# Resize lucipres window (full zone)
+		# handleresize() rebuilt the module-global presscr before
+		# sending here.  Adopt it as our working screen: the req handler
+		# below services client-initiated reshapes via scr.newwindow,
+		# and the spawn-time scr param is stale once the mobile
+		# accordion has rebuilt presscr (it points at the old, often
+		# 1×1, collapsed screen).  Without this, lucipres and app
+		# windows reallocate on a dead screen after the Workspace zone
+		# is expanded post-boot.
+		scr = presscr;
+		# Repaint lucipres at the new zone size.  We can NOT just
+		# setimage+notify: wmclient's wmreq (wmclient.b) rejects any
+		# !reshape whose window name isn't "." with "invalid window
+		# name", so a pushed "!reshape app ..." is silently dropped and
+		# win.image never updates — the blank-white-Workspace bug after
+		# a post-boot accordion expand.  Instead push a name-"." reshape
+		# so lucipres re-initiates through the normal client path; the
+		# req handler allocates the new window on scr and hands it back,
+		# and lucipres repaints.
 		if(lucipresclient != nil) {
-			# presscr (module global) was updated by handleresize before sending
-			# Fill old image with bg before replacing to prevent ghost artifacts
+			# Fill old image with bg before replacing to prevent ghosts.
 			oldimg := lucipresclient.image("app");
 			if(oldimg != nil)
 				oldimg.draw(oldimg.r, bgcol, nil, (0, 0));
-			img := presscr.newwindow(curzone, Draw->Refbackup, Draw->Nofill);
-			if(img != nil) {
-				lucipresclient.setimage("app", img);
-				lucipresclient.ctl <-= sys->sprint("!reshape app -1 %s", r2s(curzone));
-			}
+			lucipresclient.ctl <-= sys->sprint("!reshape . -1 %s", r2s(curzone));
 		}
 		# Resize ALL tasks' app windows (content area)
 		tabh3 := 0;
@@ -2313,21 +2325,31 @@ cleanupappslot(c: ref Client)
 # common `postnote(kill); exit` pattern (editor.b:494 et al.).
 appreaper(actid: int, id: string, pid: int)
 {
-	waitpath := sys->sprint("/prog/%d/wait", pid);
-	fd := sys->open(waitpath, Sys->OREAD);
-	if(fd != nil) {
-		buf := array[512] of byte;
-		# A single read on /prog/*/wait blocks until the proc exits
-		# and returns the exit status as a Plan-9-format wait
-		# message.  We don't parse it — we only care that it
-		# returned at all.
-		sys->read(fd, buf, len buf);
-		fd = nil;
+	# Track the app's MAIN proc by liveness, not by /prog/<pid>/wait.
+	#
+	# /prog/<pid>/wait returns when the FIRST CHILD of <pid> exits —
+	# not when <pid> itself dies.  Every wmclient app spawns a
+	# short-lived `kbddrainer` child (see wmclient.b) that exits
+	# normally the instant the app calls startinput("kbd"), which is
+	# during init.  The old single-read-then-delete logic therefore
+	# reaped every healthy GUI app a few milliseconds after launch:
+	# the artifact was deleted out from under the running app and the
+	# presentation zone autocentered back to the taskboard, so the
+	# app never appeared.  (INFR-119 mobile launch bug.)
+	#
+	# Instead, poll /prog/<pid>/status: it is readable for exactly as
+	# long as the app's main proc is alive.  When the app's event loop
+	# returns (window closed, exec failure, exception) the proc exits,
+	# the status file vanishes, and we clean up.  Child churn is
+	# invisible to this check.
+	statuspath := sys->sprint("/prog/%d/status", pid);
+	for(;;) {
+		sfd := sys->open(statuspath, Sys->OREAD);
+		if(sfd == nil)
+			break;		# main proc gone -> app exited
+		sfd = nil;
+		sys->sleep(500);
 	}
-	# Either /prog/<pid>/wait returned (the canonical case) or the
-	# pid was already gone by the time we tried to open (the proc
-	# died between spawn and us getting here).  Both cases want the
-	# same cleanup; preswmloop's reaper races us harmlessly.
 	if(actid < 0 || id == "")
 		return;
 	writetofile(
@@ -2483,6 +2505,33 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		sys->fprint(stderr, "lucifer: blocked load of %s: not in allowed path\n", dispath);
 		writeappstatus(id, "dead", targetact);
 		return;
+	}
+	# Mobile accordion: a collapsed Workspace zone is a 1×1 sentinel
+	# sub-image, so presscr is 1×1 and any window an app allocates on
+	# it insets to a zero rect — newwindow returns nil and the app
+	# nil-derefs w.image (Segmentation violation) during init.  Expand
+	# the Workspace before the app's window registers so it has a real
+	# drawing surface.  This is also the right UX: launching an app
+	# means the user wants to see it.
+	#
+	# setexpandedzone() only *queues* the relayout (mainloop runs
+	# handleresize, which rebuilds presscr and pushes it to preswmloop
+	# via presRszCh).  We must let that fully settle before allocating
+	# the app's window: if the app joins preswmloop while the resize is
+	# in flight, preswmloop doesn't reshape its existing clients and
+	# the zone renders as an unpainted (white) full-size surface.  Wait
+	# for presscr to reach full size before proceeding.
+	if(mobile) {
+		setexpandedzone(1);
+		for(tries := 0; tries < 200; tries++) {
+			if(presscr != nil && presscr.image != nil &&
+					presscr.image.r.dx() > 100)
+				break;
+			sys->sleep(10);
+		}
+		# Small extra settle so preswmloop has reshaped lucipres's
+		# window (and redrawn the tab strip) before the app joins.
+		sys->sleep(150);
 	}
 	# Find or create the target task's presentation state
 	tp := lookuptaskpres(targetact);

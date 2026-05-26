@@ -2223,25 +2223,28 @@ macfrp(void)
 
 	modrm(Ostw, O(REG, FP), RLINK, RRFP);
 	modrm(Ostw, O(REG, s), RLINK, RAX);
-#ifdef _WIN32
 	/*
 	 * macfrp is called from two different stack depths:
 	 *   1. JIT instruction code (IMOVP): RSP = 0 mod 16
 	 *   2. type destructor (comd) via macret: RSP varies
-	 * Use dynamic alignment via RBP to handle both cases.
+	 * Either way RSP is not guaranteed 16-aligned at the rdestroy call,
+	 * so align dynamically via RBP.  Without this, destroy()->freeFD()->
+	 * release()->kproc() can zero a pthread_attr_t with aligned SSE
+	 * (movaps) on a misaligned stack and #GP-fault, which Linux reports
+	 * as a spurious "dereference of nil".  The Windows path already did
+	 * this; the SysV path was missing it.  See INFR-135.
 	 */
 	genb(Opushq+RBP);
 	modrr(Oldw, RSP, RBP);		/* MOV RBP, RSP */
 	genb(REXW);
 	gen2(0x83, (3<<6)|(4<<3)|RSP);	/* AND RSP, imm8 */
 	genb(0xf0);			/* -16 (align to 16) */
+#ifdef _WIN32
 	gen_subsp(WINSHADOW_MAC);
+#endif
 	bra((uvlong)rdestroy, Ocall);
 	modrr(Oldw, RBP, RSP);		/* MOV RSP, RBP */
 	genb(Opopq+RBP);
-#else
-	bra((uvlong)rdestroy, Ocall);
-#endif
 	modrm(Oldw, O(REG, FP), RLINK, RRFP);
 	modrm(Oldw, O(REG, MP), RLINK, RRMP);
 	genb(Oret);

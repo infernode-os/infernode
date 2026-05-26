@@ -1009,6 +1009,21 @@ drawmobiletitle(label: string, y, expanded: int)
 # expanded zone. Kicks the mainloop into a full layout pass via a
 # synthetic M_RESIZE pointer event so handleresize() runs and the
 # zone modules get fresh sub-images.
+# Request/hide the on-screen keyboard (touch builds) via /dev/consctl,
+# which the SDL3 backend maps to SDL_StartTextInput/StopTextInput.
+reqkbd(on: int)
+{
+	if(!mobile)
+		return;
+	fd := sys->open("/dev/consctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	if(on)
+		sys->fprint(fd, "kbd on");
+	else
+		sys->fprint(fd, "kbd off");
+}
+
 setexpandedzone(z: int)
 {
 	if(!mobile || z == expanded_zone)
@@ -1016,6 +1031,9 @@ setexpandedzone(z: int)
 	if(z < 0 || z > 2)
 		return;
 	expanded_zone = z;
+	# Leaving the current zone drops text-input focus — hide the soft
+	# keyboard (the chat input re-requests it when tapped). INFR-155.
+	reqkbd(0);
 	p := zpointer;
 	p.buttons = M_RESIZE;
 	# Blocking send is required here. cmouse is unbuffered; the

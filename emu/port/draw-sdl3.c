@@ -51,6 +51,18 @@
 #include <TargetConditionals.h>
 #endif
 
+/*
+ * Touch platforms with an on-screen keyboard (iOS, Android). On these the
+ * keyboard must be requested explicitly (setsoftkbd) so it appears only on
+ * text-field focus. On desktop there is no soft keyboard and text input is
+ * simply left enabled, so typing (SDL_EVENT_TEXT_INPUT) always works.
+ */
+#if (defined(__APPLE__) && TARGET_OS_IOS) || defined(__ANDROID__)
+#define MOBILE_TOUCH 1
+#else
+#define MOBILE_TOUCH 0
+#endif
+
 /* External keyboard queue (from devcons.c) */
 extern Queue *gkbdq;
 
@@ -374,6 +386,35 @@ update_text_input_area(void)
 }
 
 /*
+ * Soft-keyboard control, driven from Limbo via /dev/consctl ("kbd on" /
+ * "kbd off"). The keyboard must surface only while a text field is
+ * focused — not on every tap — so text input is no longer started
+ * unconditionally; the GUI requests it on focus and drops it on blur.
+ * softkbd_on also gates the per-tap re-assert below (which exists so
+ * Android restores the keyboard after a system gesture dismisses it).
+ */
+static int softkbd_on = 0;
+
+void
+setsoftkbd(int on)
+{
+#if MOBILE_TOUCH
+	softkbd_on = on;
+	if (!sdl_window)
+		return;
+	if (on) {
+		SDL_StartTextInput(sdl_window);
+		update_text_input_area();
+	} else {
+		SDL_StopTextInput(sdl_window);
+	}
+#else
+	/* Desktop: text input stays enabled; nothing to toggle. */
+	USED(on);
+#endif
+}
+
+/*
  * Create SDL renderer and streaming texture for the window.
  * Must be called on the main thread (Cocoa/Windows requirement)
  * and after init_hidpi() so sdl_width/sdl_height are physical pixels.
@@ -404,8 +445,14 @@ create_renderer_and_texture(void)
 
 	SDL_SetTextureScaleMode(sdl_texture, SDL_SCALEMODE_NEAREST);
 	SDL_ShowWindow(sdl_window);
+#if !MOBILE_TOUCH
+	/* Desktop: no soft keyboard, so leave text input enabled — typing
+	 * (SDL_EVENT_TEXT_INPUT) needs it. On mobile we deliberately do NOT
+	 * start it here; the keyboard must appear only on text-field focus
+	 * (the GUI calls setsoftkbd via /dev/consctl). */
 	SDL_StartTextInput(sdl_window);
-	update_text_input_area();	/* iOS: keep the input row above the keyboard */
+#endif
+	update_text_input_area();
 	return 1;
 }
 
@@ -1172,20 +1219,17 @@ sdl3_mainloop(void)
 					if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 						sdl_button_state |= mask;
 						/*
-						 * Re-arm text input on every press. Android's
-						 * soft keyboard gets dismissed by gestures
-						 * outside the IME (back button, swipe-down,
-						 * permission dialogs) and SDL doesn't restore
-						 * it on its own. Inferno has no per-widget
-						 * focus model to drive the IME from Limbo —
-						 * every key event already goes to the active
-						 * window — so the cheapest correct policy on
-						 * a touch device is "any tap brings the
-						 * keyboard back." On desktops with a real
-						 * keyboard this is a no-op (SDL_StartTextInput
-						 * is idempotent and no IME is involved).
+						 * Re-assert text input on a press ONLY while a
+						 * text field is focused (softkbd_on, set by the
+						 * GUI via setsoftkbd). A system gesture (back,
+						 * swipe-down, a permission dialog) can dismiss
+						 * the IME and SDL won't restore it; re-asserting
+						 * on the next tap brings it back. When no field
+						 * is focused this is skipped, so a tap no longer
+						 * pops the keyboard. (On desktop, no IME.)
 						 */
-						SDL_StartTextInput(sdl_window);
+						if (softkbd_on)
+							SDL_StartTextInput(sdl_window);
 					} else
 						sdl_button_state &= ~mask;
 

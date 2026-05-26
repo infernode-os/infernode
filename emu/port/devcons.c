@@ -470,6 +470,12 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 				qwrite(kbdq, &ch, 1);
 			} else if(strncmp(buf, "rawoff", 6) == 0){
 				kbd.raw = 0;
+			} else if(strncmp(a, "kbd on", 6) == 0){
+				/* GUI focused a text field — raise the soft keyboard. */
+				setsoftkbd(1);
+			} else if(strncmp(a, "kbd off", 7) == 0){
+				/* text field lost focus — hide the soft keyboard. */
+				setsoftkbd(0);
 			}
 			if((a = strchr(a, ' ')) != nil)
 				a++;

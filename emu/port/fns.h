@@ -187,6 +187,7 @@ int		readstr(ulong, char*, ulong, char*);
 void		seterror(char*, ...);
 void		setid(char*, int);
 void	setpointer(int, int);
+void	setsoftkbd(int);	/* show/hide the on-screen keyboard (GUI backends) */
 char*	skipslash(char*);
 void		srvrtinit(void);
 void		swiproc(Proc*, int);

@@ -980,18 +980,23 @@ drawmobiletitle(label: string, y, expanded: int)
 		texty := y + (MOBILE_TITLEBARH - mainfont.height) / 2;
 		mainwin.text((textx, texty), textcol, (0, 0), mainfont, label);
 
-		# Disclosure triangles ("twirl-down"): collapsed points right,
-		# expanded points down. Mobile-only — this whole routine is the
-		# accordion path. (Desktop chrome is unaffected.)
-		chev := "▸";
-		col  := textcol;
+		# Disclosure triangle ("twirl-down"): collapsed points right,
+		# expanded points down (in accent colour). Drawn as a filled
+		# polygon rather than a font glyph so it's a clear, suitably
+		# large tap affordance (the 48px font ceiling is too small).
+		# Mobile-only — this whole routine is the accordion path.
+		ts := 40;	# triangle bounding box, px
+		col := textcol;
+		ty := y + (MOBILE_TITLEBARH - ts) / 2;
+		tx := mainwin.r.max.x - ts - 28;
+		pts: array of Point;
 		if(expanded) {
-			chev = "▾";
 			col = accentcol;
+			pts = array[] of { (tx, ty), (tx + ts, ty), (tx + ts / 2, ty + ts) };
+		} else {
+			pts = array[] of { (tx, ty), (tx, ty + ts), (tx + ts, ty + ts / 2) };
 		}
-		cw := mainfont.width(chev);
-		cx := mainwin.r.max.x - cw - 24;
-		mainwin.text((cx, texty), col, (0, 0), mainfont, chev);
+		mainwin.fillpoly(pts, ~0, col, (0, 0));
 	}
 }
 

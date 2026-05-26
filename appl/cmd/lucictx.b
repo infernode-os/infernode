@@ -1140,10 +1140,13 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 	mainwin.draw(zone, bgcol, nil, (0, 0));
 
 	# Header row: ↑  <path>  Bind ✕
-	# Nerd Font icons: U+EAA1 (cod-arrow_up), U+EB15 (cod-link), U+EA76 (cod-close)
-	upicon   := "\uEAA1";
-	bindlbl  := "\uEB15 Bind";
-	closeicon := "\uEA76";
+	# Reliable Unicode glyphs (the bundled unicode.sans font has no Nerd
+	# Font / Private-Use-Area coverage, so the old codicons U+EAA1/EB15/EA76
+	# rendered as missing-glyph boxes). \u25B2 up, \u2715 close; "Bind" stays text
+	# (no chain-link glyph exists in this font's coverage).
+	upicon   := "\u25B2";		# \u25B2
+	bindlbl  := "Bind";
+	closeicon := "\u2715";		# \u2715
 	backw   := mainfont.width(upicon);
 	cancelw := mainfont.width(closeicon);
 	bindw   := mainfont.width(bindlbl);

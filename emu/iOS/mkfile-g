@@ -30,16 +30,23 @@ CONF=emu			#default configuration
 CONFLIST=emu
 CLEANCONFLIST=
 
+# GUI backend: headless (stubs-headless.c, default — Phase A/B0) or
+# sdl3 (draw-sdl3.c + libSDL3, Phase B1). Same switch as macOS's mkfile.
+GUIBACK=headless
+
 INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
 
 #end configurable parameters
 
 <| AWK=$AWK sh ../port/mkdevlist < $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 
+# sets $GUISRC (graphics object), $GUIFLAGS, $GUILIBS
+<mkfile-gui-$GUIBACK
+
 OBJ=\
 	asm-$OBJTYPE.$O\
 	os.$O\
-	stubs-headless.$O\
+	$GUISRC\
 	$CONF.root.$O\
 	lock.$O\
 	$DEVS\
@@ -53,7 +60,7 @@ CFLAGS=\
 	-I$ROOT/$SYSTARG/$OBJTYPE/include\
 	-I$ROOT/include\
 	-I$ROOT/libinterp\
-	$CTHREADFLAGS $CFLAGS $EMUOPTIONS\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS\
 
 KERNDATE=0
 
@@ -66,10 +73,23 @@ default:V:	$O.$CONF
 
 $O.$CONF:	$OBJ $CONF.c $CONF.root.h
 	$CC $CFLAGS -DKERNDATE=$KERNDATE $CONF.c
-	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $GUILIBS
 
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF
+
+# libemu.a — the same emu objects archived instead of linked, for the
+# iOS app target to link against (the design's "thin Xcode wrapper links
+# libemu" path). The app provides main(); build with EMUOPTIONS=-DEMU_NO_MAIN
+# so emu's own main() (in port/main.c) is compiled out and only emu_run()
+# is exported. CONF stays the headless `emu` config for B0.
+LIBEMU=$ROOT/$SYSTARG/$OBJTYPE/lib/libemu.a
+
+libemu:V:	$LIBEMU
+
+$LIBEMU:	$OBJ $CONF.c $CONF.root.h
+	$CC $CFLAGS -DKERNDATE=$KERNDATE $CONF.c
+	$AR $ARFLAGS $target $OBJ $CONF.$O
 
 <../port/portmkfile
 

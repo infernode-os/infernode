@@ -292,11 +292,19 @@ emu_run(int argc, char *argv[])
 	return 0;
 }
 
+/*
+ * EMU_NO_MAIN: a libemu build (the iOS app target) provides its own
+ * entry point — UIApplicationMain on the main thread — and calls
+ * emu_run() from a worker thread. Compile out emu's main() there so it
+ * doesn't collide with the app's. Inert for every normal build.
+ */
+#ifndef EMU_NO_MAIN
 void
 main(int argc, char *argv[])
 {
 	emu_run(argc, argv);
 }
+#endif
 
 void
 emuinit(void *imod)

@@ -171,6 +171,7 @@ monofont: ref Font;
 
 # Logo
 logoimg: ref Image;
+logobig: ref Image;	# mobile-only enlarged copy of logoimg (lazy, cached)
 
 # Mount point and activity
 mountpt: string;
@@ -243,7 +244,7 @@ mobile_pres_title_y := 0;
 mobile_ctx_title_y := 0;
 
 # KLUDGE-MOBILE-ACCORDION-INFR-119
-MOBILE_HEADERH:   con 88;        # task bar height in mobile mode
+MOBILE_HEADERH:   con 132;       # task bar height in mobile mode (room for a prominent logo)
 MOBILE_TITLEBARH: con 72;        # per-zone title bar height in mobile mode
 
 # nslistener process ID — killed and respawned on activity switch
@@ -293,6 +294,10 @@ pressubimg: ref Image;
 presscr: ref Screen;
 convimg: ref Image;
 ctximg: ref Image;
+# mainwin.r at the last FULL layout (sub-image recreation).  In the mobile
+# accordion a zone toggle leaves geometry unchanged, so handleresize() can
+# skip the destructive recreate and just re-z-order — see INFR-137.
+lastlaidout: Rect;
 
 nomod(s: string)
 {
@@ -516,6 +521,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Publish pressubimg by name so namedimage() works cross-connection
 	pressubimg.name("lucifer-pres", 1);
 
+	# The three mobile zones overlap on the full body rect; pressubimg was
+	# created last (on top), so raise the actually-expanded zone now —
+	# otherwise the Workspace covers Chat at boot.  Record the geometry so
+	# the first zone toggle takes handleresize()'s cheap re-z-order path.
+	topexpandedzone();
+	lastlaidout = r;
+
 	# Initialize per-task presentation array
 	taskpres = array[MAXTASKPRES] of ref TaskPres;
 	ntaskpres = 0;
@@ -597,22 +609,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
 	if(mobile) {
-		# KLUDGE-MOBILE-ACCORDION-INFR-119 — accordion layout.
+		# KLUDGE-MOBILE-ACCORDION-INFR-119 / INFR-137 — accordion layout.
 		#
-		# All three title bars stack immediately under the LUCI
-		# header at fixed positions. The *expanded* zone gets the
-		# entire body area below them. The two collapsed zones get
-		# 1×1 sentinel sub-windows tucked into the bottom-right
-		# corner of mainwin — they're not degenerate (so
-		# mainscr.newwindow + flushimage stays happy), they're not
-		# visible (1 pixel each at the screen edge), and the zone
-		# modules don't need to know about a special "hidden" state.
+		# All three title bars stack immediately under the LUCI header
+		# at fixed positions.  ALL THREE zones get the SAME full body
+		# rect below them — they overlap, and which one is visible is
+		# decided purely by z-order (topexpandedzone() raises the
+		# expanded zone's sub-image to the front).
 		#
-		# Earlier this code gave the collapsed bodies y_min == y_max,
-		# which made newwindow return a malformed image and the
-		# subsequent flushimage chain failed with "image name in
-		# use" — half-applying the resize, dropping repaints, and
-		# producing the flaky behaviour the user reported.
+		# This replaces the old scheme where the collapsed zones got
+		# 1×1 sentinel sub-windows.  That shrank the presentation
+		# screen (presscr) to 1×1 on every collapse, which destroyed
+		# the child app windows living on it; re-expanding reallocated
+		# them blank (INFR-137).  Keeping presscr full-size across
+		# collapse/expand means app windows survive untouched — a zone
+		# toggle is just a z-order change, not a re-layout.
 		headerh := MOBILE_HEADERH;
 		titleh  := MOBILE_TITLEBARH;
 		zonety  := r.min.y + headerh + 1;
@@ -632,25 +643,9 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 		pres_zone_maxx = -1;
 		ctx_zone_minx  = -1;
 
-		# Body rect (used by whichever zone is expanded).
+		# Full body rect below the title bars; all three zones share it.
 		bodyr := Rect((r.min.x, bodytop), (r.max.x, r.max.y));
-
-		# Three 1×1 sentinels along the bottom edge, side-by-side.
-		# Adjacent (not overlapping) so newwindow never rejects them.
-		# Painted-over by the Android safe-area / nav-bar inset.
-		hide0 := Rect((r.max.x - 3, r.max.y - 1), (r.max.x - 2, r.max.y));
-		hide1 := Rect((r.max.x - 2, r.max.y - 1), (r.max.x - 1, r.max.y));
-		hide2 := Rect((r.max.x - 1, r.max.y - 1), (r.max.x,     r.max.y));
-
-		convr := hide0;
-		presr := hide1;
-		ctxr  := hide2;
-		case expanded_zone {
-		0 => convr = bodyr;
-		1 => presr = bodyr;
-		2 => ctxr  = bodyr;
-		}
-		return (convr, presr, ctxr);
+		return (bodyr, bodyr, bodyr);
 	}
 
 	# Desktop: classic three-column.
@@ -727,6 +722,49 @@ reloadlogo()
 		if(raw != nil)
 			(logoimg, nil) = remap->remap(raw, display, 0);
 	}
+	logobig = nil;	# rebuild the enlarged mobile copy for the new theme
+}
+
+# Mobile-only: nearest-neighbour upscale of the header logo so it reads
+# on the taller mobile header. draw() can't scale, so resample via
+# read/writepixels. Called lazily from the draw path (cached in logobig)
+# and never on desktop. Returns src unchanged on any problem.
+biglogo(src: ref Image): ref Image
+{
+	if(src == nil || display == nil)
+		return src;
+	sw := src.r.dx();
+	sh := src.r.dy();
+	bpp := src.depth / 8;
+	if(sw <= 0 || sh <= 0 || bpp <= 0)
+		return src;
+	# target ~75% of the mobile header height, at least 3x.
+	f := (MOBILE_HEADERH * 3 / 4) / sh;
+	if(f < 3)
+		f = 3;
+	dw := sw * f;
+	dh := sh * f;
+	dst := display.newimage(Rect((0,0),(dw,dh)), src.chans, 0, Draw->Black);
+	if(dst == nil)
+		return src;
+	srow := array[sw * bpp] of byte;
+	drow := array[dw * bpp] of byte;
+	for(sy := 0; sy < sh; sy++) {
+		sr := Rect((src.r.min.x, src.r.min.y + sy),
+			(src.r.max.x, src.r.min.y + sy + 1));
+		if(src.readpixels(sr, srow) <= 0)
+			return src;	# can't read the source; leave logo unscaled
+		for(sx := 0; sx < sw; sx++) {
+			so := sx * bpp;
+			for(fx := 0; fx < f; fx++) {
+				dbo := (sx*f+fx)*bpp;
+				drow[dbo :] = srow[so : so+bpp];	# copies bpp elems
+			}
+		}
+		for(fy := 0; fy < f; fy++)
+			dst.writepixels(Rect((0, sy*f+fy), (dw, sy*f+fy+1)), drow);
+	}
+	return dst;
 }
 
 # --- Header / chrome drawing ---
@@ -750,11 +788,19 @@ drawchrome(r: Rect)
 		# Logo
 		textx := r.min.x + 16;
 		if(logoimg != nil) {
-			lw := logoimg.r.dx();
-			lh := logoimg.r.dy();
+			# Mobile: draw an enlarged copy (built once, cached in
+			# logobig). Desktop draws the logo at native size.
+			limg := logoimg;
+			if(mobile) {
+				if(logobig == nil)
+					logobig = biglogo(logoimg);
+				limg = logobig;
+			}
+			lw := limg.r.dx();
+			lh := limg.r.dy();
 			logoy := headerr.min.y + (headerh - lh) / 2;
 			logodst := Rect((textx, logoy), (textx + lw, logoy + lh));
-			mainwin.draw(logodst, logoimg, nil, (0, 0));
+			mainwin.draw(logodst, limg, nil, (0, 0));
 			textx = textx + lw + 8;
 		}
 
@@ -928,15 +974,23 @@ drawmobiletitle(label: string, y, expanded: int)
 		texty := y + (MOBILE_TITLEBARH - mainfont.height) / 2;
 		mainwin.text((textx, texty), textcol, (0, 0), mainfont, label);
 
-		chev := "v";
-		col  := textcol;
+		# Disclosure triangle ("twirl-down"): collapsed points right,
+		# expanded points down (in accent colour). Drawn as a filled
+		# polygon rather than a font glyph so it's a clear, suitably
+		# large tap affordance (the 48px font ceiling is too small).
+		# Mobile-only — this whole routine is the accordion path.
+		ts := 40;	# triangle bounding box, px
+		col := textcol;
+		ty := y + (MOBILE_TITLEBARH - ts) / 2;
+		tx := mainwin.r.max.x - ts - 28;
+		pts: array of Point;
 		if(expanded) {
-			chev = "^";
 			col = accentcol;
+			pts = array[] of { (tx, ty), (tx + ts, ty), (tx + ts / 2, ty + ts) };
+		} else {
+			pts = array[] of { (tx, ty), (tx, ty + ts), (tx + ts, ty + ts / 2) };
 		}
-		cw := mainfont.width(chev);
-		cx := mainwin.r.max.x - cw - 24;
-		mainwin.text((cx, texty), col, (0, 0), mainfont, chev);
+		mainwin.fillpoly(pts, ~0, col, (0, 0));
 	}
 }
 
@@ -1206,7 +1260,8 @@ preswmloop(scr: ref Screen, zoner: Rect,
 							for(oai := 0; oai < otp2.nappslots; oai++) {
 								if(otp2.appslots[oai] != nil &&
 								   otp2.appslots[oai].client == c &&
-								   otp2.actid != actid) {
+								   (otp2.actid != actid ||
+									    otp2.appslots[oai].id != otp2.activeappid)) {
 									hideit = 1;
 									break;
 								}
@@ -1234,18 +1289,30 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		}
 	newzoner := <-rszch =>
 		curzone = newzoner;
-		# Resize lucipres window (full zone)
+		# handleresize() rebuilt the module-global presscr before
+		# sending here.  Adopt it as our working screen: the req handler
+		# below services client-initiated reshapes via scr.newwindow,
+		# and the spawn-time scr param is stale once the mobile
+		# accordion has rebuilt presscr (it points at the old, often
+		# 1×1, collapsed screen).  Without this, lucipres and app
+		# windows reallocate on a dead screen after the Workspace zone
+		# is expanded post-boot.
+		scr = presscr;
+		# Repaint lucipres at the new zone size.  We can NOT just
+		# setimage+notify: wmclient's wmreq (wmclient.b) rejects any
+		# !reshape whose window name isn't "." with "invalid window
+		# name", so a pushed "!reshape app ..." is silently dropped and
+		# win.image never updates — the blank-white-Workspace bug after
+		# a post-boot accordion expand.  Instead push a name-"." reshape
+		# so lucipres re-initiates through the normal client path; the
+		# req handler allocates the new window on scr and hands it back,
+		# and lucipres repaints.
 		if(lucipresclient != nil) {
-			# presscr (module global) was updated by handleresize before sending
-			# Fill old image with bg before replacing to prevent ghost artifacts
+			# Fill old image with bg before replacing to prevent ghosts.
 			oldimg := lucipresclient.image("app");
 			if(oldimg != nil)
 				oldimg.draw(oldimg.r, bgcol, nil, (0, 0));
-			img := presscr.newwindow(curzone, Draw->Refbackup, Draw->Nofill);
-			if(img != nil) {
-				lucipresclient.setimage("app", img);
-				lucipresclient.ctl <-= sys->sprint("!reshape app -1 %s", r2s(curzone));
-			}
+			lucipresclient.ctl <-= sys->sprint("!reshape . -1 %s", r2s(curzone));
 		}
 		# Resize ALL tasks' app windows (content area)
 		tabh3 := 0;
@@ -1263,8 +1330,25 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					img3 := presscr.newwindow(appr2, Draw->Refbackup, Draw->Nofill);
 					if(img3 != nil) {
 						rtp.appslots[asi3].client.setimage("app", img3);
-						rtp.appslots[asi3].client.ctl <-= sys->sprint("!reshape app -1 %s", r2s(appr2));
+						# Notify with window name "." (NOT "app"): wmclient's
+						# wmreq rejects any other name, so "!reshape app" was
+						# silently dropped and the app never repainted its new
+						# window — leaving a fresh Refbackup window showing
+						# stale backed-up screen content (e.g. the previously
+						# visible app) under the active tab.  "." makes the app
+						# pick up the reallocated image and redraw.
+						rtp.appslots[asi3].client.ctl <-= sys->sprint("!reshape . -1 %s", r2s(appr2));
 					}
+					# scr.newwindow() above tops the window on the Screen
+					# z-stack.  Reallocating every app on a resize therefore
+					# leaves whichever app was iterated last on top — not
+					# necessarily the active one — so a stale window can
+					# cover the active app (multi-app overlap after a
+					# resize / activity switch).  Bottom every window except
+					# the focused activity's active app; lucipres's own
+					# reshape re-raises the active app above it.
+					if(!(rtp.actid == actid && rtp.appslots[asi3].id == rtp.activeappid))
+						rtp.appslots[asi3].client.bottom();
 				}
 			}
 			rtp.applock <-= 1;
@@ -1350,26 +1434,14 @@ switchactivity(newid: int)
 	writefile(sys->sprint("%s/activity/%d/urgency", mountpt, newid), "0");
 	updatetile(newid, "urgency", "0");
 
-	# Hide ALL apps from the OLD task; show the new task's current app.
-	# Each task has its own appslots so we only need to bottom the old
-	# task's apps and top the new task's current app.
-	oldtp := curtaskpres;
+	# Point at the new task, set its active app from its persisted
+	# /presentation/current, then let enforcepreszorder() re-assert the
+	# whole shared-presscr z-stack (bottom every other activity's apps,
+	# lucipres above them, the new active app on top).  Doing the bulk
+	# bottom/top by hand here used to leave windows from the previous
+	# activity floating over the new one on the shared screen.
 	newtp := lookuptaskpres(newid);
-
-	# Bottom all apps in old task
-	if(oldtp != nil) {
-		<-oldtp.applock;
-		for(sai := 0; sai < oldtp.nappslots; sai++) {
-			if(oldtp.appslots[sai] != nil && oldtp.appslots[sai].client != nil)
-				oldtp.appslots[sai].client.bottom();
-		}
-		oldtp.applock <-= 1;
-	}
-
-	# Update curtaskpres pointer
 	curtaskpres = newtp;
-
-	# Show new task's current app (if any)
 	if(newtp != nil) {
 		curid := "";
 		s := readfile(sys->sprint("%s/activity/%d/presentation/current", mountpt, newid));
@@ -1382,17 +1454,10 @@ switchactivity(newid: int)
 				curid = "";
 		}
 		<-newtp.applock;
-		for(sai2 := 0; sai2 < newtp.nappslots; sai2++) {
-			if(newtp.appslots[sai2] != nil && newtp.appslots[sai2].client != nil) {
-				if(newtp.appslots[sai2].id == curid && curid != "")
-					newtp.appslots[sai2].client.top();
-				else
-					newtp.appslots[sai2].client.bottom();
-			}
-		}
 		newtp.activeappid = curid;
 		newtp.applock <-= 1;
 	}
+	enforcepreszorder();
 
 	# Kill and respawn nslistener so it reads events for the new activity.
 	# nslistener blocks on sys->read() of the per-activity event file;
@@ -1423,9 +1488,45 @@ handlectxlayout(cp, pp: int)
 	handleresize();
 }
 
+# topexpandedzone: raise the expanded accordion zone's sub-image to the
+# front of mainscr.  All three mobile zones share the full body rect and
+# overlap, so visibility is pure z-order.  Raising pressubimg brings its
+# child app windows (on presscr) along with it.
+topexpandedzone()
+{
+	if(!mobile)
+		return;
+	case expanded_zone {
+	0 => if(convimg != nil) convimg.top();
+	1 => if(pressubimg != nil) pressubimg.top();
+	2 => if(ctximg != nil) ctximg.top();
+	}
+}
+
 handleresize()
 {
 	r := mainwin.r;
+
+	# Mobile accordion: a zone toggle keeps mainwin geometry unchanged —
+	# only which zone is on top changes.  Recreating mainscr/presscr here
+	# would destroy the app windows that live on presscr (INFR-137), so
+	# take the cheap path: re-z-order the expanded zone and repaint chrome,
+	# leaving every sub-image (and presscr's app windows) intact.  The full
+	# recreate below only runs on a genuine geometry change (or first call).
+	if(mobile && r.eq(lastlaidout) && mainscr != nil && pressubimg != nil) {
+		topexpandedzone();
+		drawchrome(r);
+		# Refresh the conv/ctx zone content (its sub-image persisted but
+		# may have missed redraws while hidden).  Do NOT touch presRszCh:
+		# that would reshape/reallocate the app windows we are preserving;
+		# topexpandedzone() already revealed them with content intact.
+		if(expanded_zone == 0)
+			convRszCh <-= convimg;
+		else if(expanded_zone == 2)
+			ctxRszCh <-= ctximg;
+		return;
+	}
+
 	(convr, presr, ctxr) := zonerects(r);
 	preszone = presr;
 
@@ -1483,6 +1584,12 @@ handleresize()
 	# For pres zone: update presscr global first (preswmloop reads it),
 	# then send new rect; channel ordering ensures preswmloop sees new presscr.
 	presRszCh <-= presr;
+
+	# All three mobile zones now overlap on the full body rect; raise the
+	# expanded one to the front.  Record the geometry so a subsequent zone
+	# toggle takes the cheap re-z-order path above.
+	topexpandedzone();
+	lastlaidout = r;
 }
 
 shutdown()
@@ -2253,21 +2360,31 @@ cleanupappslot(c: ref Client)
 # common `postnote(kill); exit` pattern (editor.b:494 et al.).
 appreaper(actid: int, id: string, pid: int)
 {
-	waitpath := sys->sprint("/prog/%d/wait", pid);
-	fd := sys->open(waitpath, Sys->OREAD);
-	if(fd != nil) {
-		buf := array[512] of byte;
-		# A single read on /prog/*/wait blocks until the proc exits
-		# and returns the exit status as a Plan-9-format wait
-		# message.  We don't parse it — we only care that it
-		# returned at all.
-		sys->read(fd, buf, len buf);
-		fd = nil;
+	# Track the app's MAIN proc by liveness, not by /prog/<pid>/wait.
+	#
+	# /prog/<pid>/wait returns when the FIRST CHILD of <pid> exits —
+	# not when <pid> itself dies.  Every wmclient app spawns a
+	# short-lived `kbddrainer` child (see wmclient.b) that exits
+	# normally the instant the app calls startinput("kbd"), which is
+	# during init.  The old single-read-then-delete logic therefore
+	# reaped every healthy GUI app a few milliseconds after launch:
+	# the artifact was deleted out from under the running app and the
+	# presentation zone autocentered back to the taskboard, so the
+	# app never appeared.  (INFR-119 mobile launch bug.)
+	#
+	# Instead, poll /prog/<pid>/status: it is readable for exactly as
+	# long as the app's main proc is alive.  When the app's event loop
+	# returns (window closed, exec failure, exception) the proc exits,
+	# the status file vanishes, and we clean up.  Child churn is
+	# invisible to this check.
+	statuspath := sys->sprint("/prog/%d/status", pid);
+	for(;;) {
+		sfd := sys->open(statuspath, Sys->OREAD);
+		if(sfd == nil)
+			break;		# main proc gone -> app exited
+		sfd = nil;
+		sys->sleep(500);
 	}
-	# Either /prog/<pid>/wait returned (the canonical case) or the
-	# pid was already gone by the time we tried to open (the proc
-	# died between spawn and us getting here).  Both cases want the
-	# same cleanup; preswmloop's reaper races us harmlessly.
 	if(actid < 0 || id == "")
 		return;
 	writetofile(
@@ -2423,6 +2540,33 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		sys->fprint(stderr, "lucifer: blocked load of %s: not in allowed path\n", dispath);
 		writeappstatus(id, "dead", targetact);
 		return;
+	}
+	# Mobile accordion: a collapsed Workspace zone is a 1×1 sentinel
+	# sub-image, so presscr is 1×1 and any window an app allocates on
+	# it insets to a zero rect — newwindow returns nil and the app
+	# nil-derefs w.image (Segmentation violation) during init.  Expand
+	# the Workspace before the app's window registers so it has a real
+	# drawing surface.  This is also the right UX: launching an app
+	# means the user wants to see it.
+	#
+	# setexpandedzone() only *queues* the relayout (mainloop runs
+	# handleresize, which rebuilds presscr and pushes it to preswmloop
+	# via presRszCh).  We must let that fully settle before allocating
+	# the app's window: if the app joins preswmloop while the resize is
+	# in flight, preswmloop doesn't reshape its existing clients and
+	# the zone renders as an unpainted (white) full-size surface.  Wait
+	# for presscr to reach full size before proceeding.
+	if(mobile) {
+		setexpandedzone(1);
+		for(tries := 0; tries < 200; tries++) {
+			if(presscr != nil && presscr.image != nil &&
+					presscr.image.r.dx() > 100)
+				break;
+			sys->sleep(10);
+		}
+		# Small extra settle so preswmloop has reshaped lucipres's
+		# window (and redrawn the tab strip) before the app joins.
+		sys->sleep(150);
 	}
 	# Find or create the target task's presentation state
 	tp := lookuptaskpres(targetact);
@@ -2605,6 +2749,47 @@ hideapp(id: string)
 	tp.applock <-= 1;
 }
 
+# enforcepreszorder: single source of truth for presentation z-order on
+# the shared presscr.  All apps across all activities live on one Screen,
+# and the desync bugs (wrong window visible, previous app peeking through)
+# all stem from ad-hoc top()/bottom() calls racing each other across the
+# launch / center / activity-switch / resize paths.  This re-asserts the
+# invariant deterministically, regardless of how we got here:
+#
+#   focused-activity active app   (z-top, fully covers the content area)
+#   lucipres                      (beneath it; covers every other window)
+#   all other app windows         (bottomed: this activity's inactive apps
+#                                  AND every background activity's apps)
+#
+# Safe to call after any z-perturbing operation.
+enforcepreszorder()
+{
+	# 1. Bottom every app window in every activity.
+	for(ti := 0; ti < ntaskpres; ti++) {
+		etp := taskpres[ti];
+		if(etp == nil)
+			continue;
+		<-etp.applock;
+		for(ai := 0; ai < etp.nappslots; ai++)
+			if(etp.appslots[ai] != nil && etp.appslots[ai].client != nil)
+				etp.appslots[ai].client.bottom();
+		etp.applock <-= 1;
+	}
+	# 2. lucipres above all bottomed app windows.
+	if(lucipresclient != nil)
+		lucipresclient.top();
+	# 3. Focused activity's active app above lucipres (if it has joined).
+	if(curtaskpres != nil && curtaskpres.activeappid != "") {
+		ctp := curtaskpres;
+		<-ctp.applock;
+		for(ai := 0; ai < ctp.nappslots; ai++)
+			if(ctp.appslots[ai] != nil && ctp.appslots[ai].client != nil &&
+					ctp.appslots[ai].id == ctp.activeappid)
+				ctp.appslots[ai].client.top();
+		ctp.applock <-= 1;
+	}
+}
+
 # killapp: terminate the app process and free its AppSlot.
 #
 # Sends bottom() first so the app window disappears immediately while the
@@ -2668,30 +2853,17 @@ handleprescurrent()
 	atype := readfile(sys->sprint("%s/activity/%d/presentation/%s/type",
 		mountpt, actid, newid));
 	if(atype != nil) atype = strip(atype);
-	# Collect IDs under lock, then call show/hide outside lock to avoid deadlock
-	# (showapp/hideapp take tp.applock internally).
-	hideids: list of string;
-	showid := "";
+	# Update which app (if any) is active for the focused activity, then
+	# let enforcepreszorder() re-assert the whole z-stack.  (Previously
+	# this hand-rolled the hide/show with a `newid != activeappid`
+	# short-circuit, which left the z-order desynced whenever an app
+	# joined or was reallocated out of band — the wrong-window-visible
+	# bug.  Always enforcing is idempotent and race-proof.)
 	<-tp.applock;
-	if(atype == "app") {
-		if(newid != tp.activeappid) {
-			for(hsi := 0; hsi < tp.nappslots; hsi++)
-				if(tp.appslots[hsi] != nil && tp.appslots[hsi].id != newid)
-					hideids = tp.appslots[hsi].id :: hideids;
-			showid = newid;
-			tp.activeappid = newid;
-		}
-	} else {
-		for(hsi2 := 0; hsi2 < tp.nappslots; hsi2++)
-			if(tp.appslots[hsi2] != nil && tp.appslots[hsi2].id != "")
-				hideids = tp.appslots[hsi2].id :: hideids;
+	if(atype == "app")
+		tp.activeappid = newid;
+	else
 		tp.activeappid = "";
-	}
 	tp.applock <-= 1;
-	for(; hideids != nil; hideids = tl hideids)
-		hideapp(hd hideids);
-	if(showid != "")
-		showapp(showid);
-	else if(lucipresclient != nil)
-		lucipresclient.top();	# force lucipres above bottomed apps
+	enforcepreszorder();
 }

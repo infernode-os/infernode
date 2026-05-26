@@ -1,0 +1,89 @@
+# xcodegen spec for the InferNode iOS app (hellaphone Phase 2b, device).
+#
+# The design's "thin Xcode wrapper": this target compiles only the UIKit
+# entry point and links the pre-built libemu.a + Inferno C libs + SDL3
+# (all cross-compiled by build-ios-arm64.sh / build-sdl3-ios.sh for the
+# iphoneos slice). xcodebuild does the code-signing under the paid team,
+# which is the one thing a hand-built .app + simctl can't do for a device.
+#
+# Generate + build + install onto Ba'al:
+#   xcodegen generate
+#   xcodebuild -project InferNode.xcodeproj -scheme InferNode \
+#     -configuration Release -destination 'id=<device-udid>' \
+#     -allowProvisioningUpdates build
+#   xcrun devicectl device install app --device <udid> <built .app>
+#
+# Prereq: ./build-ios-arm64.sh (IOSSDK=iphoneos) and ./build-sdl3-ios.sh
+# (IOSSDK=iphoneos) have produced the device-slice libs, and
+# iOS/arm64/appbundle/root holds the staged Inferno root.
+
+name: InferNode
+options:
+  bundleIdPrefix: os.infernode
+  deploymentTarget:
+    iOS: "14.0"
+  developmentLanguage: en
+
+targets:
+  InferNode:
+    type: application
+    platform: iOS
+    sources:
+      - path: emu/iOS/app/main_ios_gui.m
+      # Inferno root, bundled read-only as <App>.app/root (folder ref).
+      # main_ios_gui.m copies it into the writable container at launch.
+      - path: iOS/arm64/appbundle/root
+        type: folder
+    info:
+      path: iOS/arm64/appbundle/Info.plist
+      properties:
+        CFBundleDisplayName: InferNode
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        # SDL needs this for touch/indirect-pointer input.
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: os.infernode.ios
+        DEVELOPMENT_TEAM: TJ448C32Q3
+        CODE_SIGN_STYLE: Automatic
+        IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_BITCODE: false
+        # libemu + the Inferno C libs are pre-built (device slice).
+        HEADER_SEARCH_PATHS:
+          - $(HOME)/sdks/SDL3-ios-dev-arm64/include
+        LIBRARY_SEARCH_PATHS:
+          - $(HOME)/sdks/SDL3-ios-dev-arm64/lib
+        OTHER_LDFLAGS:
+          - $(SRCROOT)/iOS/arm64/lib/libemu.a
+          - $(SRCROOT)/iOS/arm64/lib/libinterp.a
+          - $(SRCROOT)/iOS/arm64/lib/libmath.a
+          - $(SRCROOT)/iOS/arm64/lib/libdraw.a
+          - $(SRCROOT)/iOS/arm64/lib/libmemlayer.a
+          - $(SRCROOT)/iOS/arm64/lib/libmemdraw.a
+          - $(SRCROOT)/iOS/arm64/lib/libkeyring.a
+          - $(SRCROOT)/iOS/arm64/lib/libsec.a
+          - $(SRCROOT)/iOS/arm64/lib/libmp.a
+          - $(SRCROOT)/iOS/arm64/lib/lib9.a
+          - -lSDL3
+          - -framework UIKit
+          - -framework Foundation
+          - -framework CoreFoundation
+          - -framework CoreGraphics
+          - -framework Metal
+          - -framework QuartzCore
+          - -framework CoreMedia
+          - -framework CoreVideo
+          - -framework CoreAudio
+          - -framework AudioToolbox
+          - -framework AVFoundation
+          - -framework CoreBluetooth
+          - -framework CoreMotion
+          - -framework GameController
+          - -framework OpenGLES
+          - -weak_framework CoreHaptics

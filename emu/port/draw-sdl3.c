@@ -59,6 +59,14 @@ static SDL_Renderer *sdl_renderer = NULL;
 static SDL_Texture *sdl_texture = NULL;
 static int sdl_width = 0;
 static int sdl_height = 0;
+/* Byte stride of a screen_data row. NOT sdl_width*4: Inferno's memimage
+ * pads each scan line up to a whole number of ulong words (wordsperline),
+ * so for an odd pixel width (e.g. iPhone 15 at 3x = 1179px) the real
+ * stride is sdl_width*4 + 4. Using sdl_width*4 as the texture-upload pitch
+ * then drifts every row by a pixel — the diagonal shear seen on iOS. On
+ * even widths (macOS/Linux Retina 2x) this equals sdl_width*4, so it's a
+ * no-op there. */
+static int sdl_stride = 0;
 static int sdl_running = 0;
 static int sdl_initialized = 0;  /* Flag: SDL already initialized on main thread */
 
@@ -145,6 +153,12 @@ static volatile int create_window_result = 0;
 static SDL_FRect dest_rect = {0, 0, 0, 0};
 static int window_width = 0;
 static int window_height = 0;
+/* Safe-area rect in physical pixels: the part of the window not covered by
+ * the iOS status bar / Dynamic Island / home indicator. The Inferno screen
+ * is sized to this and presented here, so the UI isn't occluded. On desktop
+ * SDL_GetWindowSafeArea returns the whole window, so this equals the full
+ * window and the behaviour is unchanged. */
+static int safe_x = 0, safe_y = 0, safe_w = 0, safe_h = 0;
 
 /*
  * Calculate destination rectangle for centered, aspect-ratio-preserving render.
@@ -155,28 +169,34 @@ calc_dest_rect(void)
 {
 	float scale_x, scale_y, scale;
 	float dest_w, dest_h;
+	int aw = safe_w, ah = safe_h, ax = safe_x, ay = safe_y;
 
-	if (window_width <= 0 || window_height <= 0 ||
-	    sdl_width <= 0 || sdl_height <= 0) {
-		dest_rect.x = 0;
-		dest_rect.y = 0;
+	/* Present into the safe area, not the full window, so the iOS status
+	 * bar / home indicator don't occlude the UI. Fall back to the full
+	 * window if the safe area isn't known yet. */
+	if (aw <= 0 || ah <= 0) {
+		aw = window_width; ah = window_height; ax = 0; ay = 0;
+	}
+
+	if (aw <= 0 || ah <= 0 || sdl_width <= 0 || sdl_height <= 0) {
+		dest_rect.x = (float)ax;
+		dest_rect.y = (float)ay;
 		dest_rect.w = (float)sdl_width;
 		dest_rect.h = (float)sdl_height;
 		return;
 	}
 
-	/* Calculate scale to fit texture in window while maintaining aspect ratio */
-	scale_x = (float)window_width / (float)sdl_width;
-	scale_y = (float)window_height / (float)sdl_height;
+	/* Scale to fit the surface in the safe area, preserving aspect. */
+	scale_x = (float)aw / (float)sdl_width;
+	scale_y = (float)ah / (float)sdl_height;
 	scale = (scale_x < scale_y) ? scale_x : scale_y;
 
-	/* Calculate destination size */
 	dest_w = (float)sdl_width * scale;
 	dest_h = (float)sdl_height * scale;
 
-	/* Center in window */
-	dest_rect.x = ((float)window_width - dest_w) / 2.0f;
-	dest_rect.y = ((float)window_height - dest_h) / 2.0f;
+	/* Centre within the safe area (offset by the safe-area origin). */
+	dest_rect.x = (float)ax + ((float)aw - dest_w) / 2.0f;
+	dest_rect.y = (float)ay + ((float)ah - dest_h) / 2.0f;
 	dest_rect.w = dest_w;
 	dest_rect.h = dest_h;
 }
@@ -237,10 +257,27 @@ init_hidpi(void)
 	else
 		display_scale = 1.0f;
 
-	sdl_width = pix_w;
-	sdl_height = pix_h;
 	window_width = pix_w;
 	window_height = pix_h;
+
+	/* Safe area (logical points) -> physical pixels. On iOS this excludes
+	 * the status bar / Dynamic Island / home indicator; on desktop it is
+	 * the whole window. The Inferno screen is sized to the safe area so
+	 * the UI isn't drawn under those system regions. */
+	{
+		SDL_Rect safe;
+		if (SDL_GetWindowSafeArea(sdl_window, &safe) && safe.w > 0 && safe.h > 0) {
+			safe_x = (int)(safe.x * display_scale);
+			safe_y = (int)(safe.y * display_scale);
+			safe_w = (int)(safe.w * display_scale);
+			safe_h = (int)(safe.h * display_scale);
+		} else {
+			safe_x = 0; safe_y = 0; safe_w = pix_w; safe_h = pix_h;
+		}
+	}
+
+	sdl_width = safe_w;
+	sdl_height = safe_h;
 	calc_dest_rect();
 }
 
@@ -428,7 +465,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		sdl_window = SDL_CreateWindow(
 			"InferNode",
 			sdl_width, sdl_height,
-			SDL_WINDOW_RESIZABLE
+			/* HIGH_PIXEL_DENSITY: without it iOS gives a 1x (logical)
+			 * backing, so the screen is ~393px not ~1179px and the
+			 * mobile fonts render ~3x too large (≈8 chars/line). With
+			 * it, GetWindowSizeInPixels reports real Retina pixels and
+			 * the UI is properly sized + crisp. */
+			SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
 		);
 	});
 	if (!sdl_window)
@@ -469,8 +511,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 
 	sdl_running = 1;
 
-	/* Allocate screen buffer */
-	screen_data = malloc(sdl_width * sdl_height * 4);
+	/* Row stride must match Inferno's memimage layout (wordsperline),
+	 * not sdl_width*4 — see the sdl_stride comment. */
+	sdl_stride = wordsperline(Rect(0, 0, sdl_width, sdl_height), 32) * sizeof(ulong);
+
+	/* Allocate screen buffer at the padded stride. */
+	screen_data = malloc(sdl_stride * sdl_height);
 	if (!screen_data) {
 		SDL_DestroyTexture(sdl_texture);
 		SDL_DestroyRenderer(sdl_renderer);
@@ -479,7 +525,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	}
 
 	/* Initialize buffer to white (Infernode default) */
-	memset(screen_data, 0xFF, sdl_width * sdl_height * 4);
+	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
 	/* Return screen parameters to Infernode */
 	*r = Rect(0, 0, sdl_width, sdl_height);
@@ -788,7 +834,7 @@ handle_window_creation(void)
 	sdl_window = SDL_CreateWindow(
 		"InferNode",
 		sdl_width, sdl_height,
-		SDL_WINDOW_RESIZABLE
+		SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
 	);
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -834,7 +880,7 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 		dirty.w = dirty_max_x - dirty_min_x;
 		dirty.h = dirty_max_y - dirty_min_y;
 
-		pitch = sdl_width * 4;
+		pitch = sdl_stride;
 		src = screen_data + (dirty_min_y * pitch) + (dirty_min_x * 4);
 
 		SDL_UpdateTexture(sdl_texture, &dirty, src, pitch);

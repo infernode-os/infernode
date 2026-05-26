@@ -1768,13 +1768,21 @@ jsonescapestr(s: string): string
 # chunk every few seconds will not trip it; a hung connection that
 # stops delivering bytes for >NO_PROGRESS_MS will.
 #
+# 120s default reflects worst-case cold-prefill on CPU-only Ollama
+# with a ~15KB system prompt + tool definitions + history. Measured
+# end-to-end (gpt-oss:20b on a mid-2020s x86): cold first-content at
+# ~75s, warm at ~3s. Sub-60s would kill legitimate cold turns; >120s
+# wastes budget on a real hang. Override via env LLMCLIENT_NO_PROGRESS_MS
+# (reserved — currently const for build-time simplicity; if/when an
+# env knob is needed, swap to a runtime-resolved global in init()).
+#
 # On trip, we write "hangup" to the TCP ctl file (devip.c:896 — Inferno
 # IP stack closes the socket at the kernel level), which forces the
 # in-flight sys->read to fail. The reader thread then deposits its
 # final (n, buf) tuple onto a buffered channel and exits. We don't wait
 # for it.
 HTTP_POLL_MS:        con 200;
-HTTP_NO_PROGRESS_MS: con 60000;
+HTTP_NO_PROGRESS_MS: con 120000;
 
 # Per-read reader thread: blocks on sys->read, pushes one chunk per
 # iteration. Caller's channel must be buffered (capacity >= 1) so a

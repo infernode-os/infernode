@@ -1,0 +1,21 @@
+# SDL3 GUI backend for iOS (UIKit + Metal) — hellaphone Phase 2b.1.
+# Selected by GUIBACK=sdl3. The cross-platform backend emu/port/draw-sdl3.c
+# drives SDL3; on iOS SDL renders through Metal.
+#
+# SDL3 has no system package on iOS, so it's cross-built (static) by
+# build-sdl3-ios.sh into $SDL3_PREFIX. Default is the simulator slice;
+# override on the mk command line for the device slice. The framework
+# set is exactly what $SDL3_PREFIX/lib/pkgconfig/sdl3.pc lists for iOS.
+
+GUISRC=draw-sdl3.$O
+
+SDL3_PREFIX=`{echo $HOME/sdks/SDL3-ios-sim-arm64}
+
+GUIFLAGS=-DGUI_SDL3 -I$SDL3_PREFIX/include
+
+GUILIBS=-L$SDL3_PREFIX/lib -lSDL3\
+	-framework CoreMedia -framework CoreVideo -framework CoreAudio\
+	-framework AudioToolbox -framework AVFoundation -framework CoreBluetooth\
+	-framework CoreGraphics -framework CoreMotion -framework Foundation\
+	-framework GameController -framework Metal -framework OpenGLES\
+	-framework QuartzCore -framework UIKit -weak_framework CoreHaptics

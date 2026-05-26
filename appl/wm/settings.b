@@ -342,11 +342,15 @@ layoutcontent()
 	cw := wr.max.x - FORM_MARGIN;
 	cbottom := wr.max.y - sh - FORM_MARGIN;
 
-	fh := font.height + 8;
+	fh := font.height + 8;		# label/header height — NOT a tap target,
+					# kept compact so the form isn't stretched
 	bh := font.height + 10;
-	ch := font.height + 6;	# checkbox row height
-	if(mobile) {		# floor interactive rows at a 44pt tap target
-		if(fh < TAPMIN) fh = TAPMIN;
+	ch := font.height + 6;		# checkbox/radio row height
+	fieldh := fh;			# interactive text-field height
+	if(mobile) {
+		# Floor only the INTERACTIVE rows at a 44pt tap target; labels
+		# and section headers stay compact (balanced mobile form).
+		if(fieldh < TAPMIN) fieldh = TAPMIN;
 		if(bh < TAPMIN) bh = TAPMIN;
 		if(ch < TAPMIN) ch = TAPMIN;
 	}
@@ -389,13 +393,13 @@ layoutcontent()
 	CatTheme =>
 		layouttheme(cx, cy, cw, ch);
 	CatLLM =>
-		layoutllm(cx, cy, cw, fh, bh, ch);
+		layoutllm(cx, cy, cw, fh, fieldh, bh, ch);
 	CatTools =>
 		layouttools(cx, cy, cw, cbottom, ch);
 	CatBudget =>
 		layoutbudget(cx, cy, cw, cbottom, ch);
 	CatPaths =>
-		layoutpaths(cx, cy, cw, cbottom, fh, bh);
+		layoutpaths(cx, cy, cw, cbottom, fieldh, bh);
 	CatPrompts =>
 		layoutprompts(cx, cy, cw, fh, bh);
 	CatProfile =>
@@ -418,7 +422,7 @@ layouttheme(cx, cy, cw, ch: int)
 	theme_group = RadioGroup.mk(Point(cx, cy), cw - cx, theme_names, sel, rowh);
 }
 
-layoutllm(cx, cy, cw, fh, bh, ch: int)
+layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 {
 	(curmode, curbackend, cururl, curmodel, curdial, haskey) := readllmconfig();
 	# On first entry, set mode from config; on re-layout after a radio
@@ -455,11 +459,11 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 			"Dial address (tcp!host!port):", 0, LEFT);
 		cy += fh;
 		llm_dial_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fh)),
+			Rect((cx, cy), (cw, cy + fieldh)),
 			"", 0);
 		llm_dial_tf.setval(curdial);
 		llm_dial_tf.focused = 1;
-		cy += fh + FORM_MARGIN;
+		cy += fieldh + FORM_MARGIN;
 	} else {
 		# Section header: Backend
 		llm_backend_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Backend", 1, LEFT);
@@ -502,10 +506,10 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 			"Endpoint URL:", 0, LEFT);
 		cy += fh;
 		llm_url_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fh)),
+			Rect((cx, cy), (cw, cy + fieldh)),
 			"", 0);
 		llm_url_tf.setval(cururl);
-		cy += fh + FORM_MARGIN;
+		cy += fieldh + FORM_MARGIN;
 
 		# Model
 		llm_model_label = Label.mk(
@@ -513,11 +517,11 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 			"Model:", 0, LEFT);
 		cy += fh;
 		llm_model_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fh)),
+			Rect((cx, cy), (cw, cy + fieldh)),
 			"", 0);
 		llm_model_tf.setval(curmodel);
 		llm_model_tf.focused = 1;
-		cy += fh + FORM_MARGIN;
+		cy += fieldh + FORM_MARGIN;
 
 		# API key status
 		keystatus: string;

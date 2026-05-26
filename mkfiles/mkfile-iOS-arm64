@@ -1,0 +1,69 @@
+# Target flags for iOS arm64, cross-compiled with the Xcode toolchain
+# from a macOS host (you can only build for iOS on a Mac). This is the
+# Apple-toolchain analogue of mkfiles/mkfile-Android-arm64 — it forks
+# from mkfile-MacOSX-arm64 and swaps native `cc` for `xcrun`-resolved
+# clang with an -isysroot and an iOS target triple.
+#
+# hellaphone Phase 2. Phase A builds a headless o.emu against the
+# iphonesimulator SDK and runs it via `xcrun simctl spawn` — the iOS
+# analogue of Android Phase 0's "just run the binary" smoke test.
+#
+# SDK + triple are selectable so the same file serves both targets;
+# the build driver (build-ios-arm64.sh) overrides on the mk command
+# line, and Plan 9 mk freezes command-line vars so they win:
+#   simulator (Phase A, default): IOSSDK=iphonesimulator
+#                                 IOSTRIPLE=arm64-apple-ios$IOSMIN-simulator
+#   device    (Phase B):          IOSSDK=iphoneos
+#                                 IOSTRIPLE=arm64-apple-ios$IOSMIN
+#
+# No JIT. Apple's W^X policy denies executable mmap/mprotect to stock
+# apps, so libinterp/comp-arm64.c is unusable on-device and emu must run
+# -c0 (pure interpreter). Nothing here enables the ARM64 JIT.
+
+TARGMODEL=	Posix
+TARGSHTYPE=	sh
+CPUS=		arm64
+
+O=		o
+OS=		o
+
+# minimum iOS version. Start at 14; raise only if an API forces it.
+IOSMIN=		14.0
+IOSSDK=		iphonesimulator
+IOSTRIPLE=	arm64-apple-ios$IOSMIN-simulator
+
+SDKPATH=	`{xcrun --sdk $IOSSDK --show-sdk-path}
+XCLANG=		`{xcrun --sdk $IOSSDK -f clang}
+
+AR=		`{xcrun --sdk $IOSSDK -f ar}
+ARFLAGS=	rcs
+
+AS=		$XCLANG -c -target $IOSTRIPLE -isysroot $SDKPATH
+ASFLAGS=
+
+CC=		$XCLANG -c -target $IOSTRIPLE -isysroot $SDKPATH
+# -DIOS_ARM64 self-identifies the target (the iOS analogue of the macOS
+# build's -DMACOSX_ARM64). No source keys off it yet; it's the hook a
+# Phase B os.c/cmd.c fork uses to diverge from the shared macOS path.
+# We do NOT also define MACOSX_ARM64 here: it's unused tree-wide and on
+# an iOS target it would simply be false.
+CFLAGS=		-g\
+		-O\
+		-fno-strict-aliasing\
+		-fstack-protector-strong\
+		-Wuninitialized -Wunused-variable -Wreturn-type -Wimplicit\
+		-Werror=return-type -Werror=implicit-function-declaration\
+		-I$ROOT/iOS/arm64/include\
+		-I$ROOT/include\
+		-DIOS_ARM64
+
+ANSICPP=
+LD=		$XCLANG -target $IOSTRIPLE -isysroot $SDKPATH
+LDFLAGS=
+
+SYSLIBS=
+
+YACC=		yacc
+YFLAGS=		-d
+
+MACOSINF=caseinsensitive	# nobble .S rules

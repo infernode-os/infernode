@@ -1,0 +1,94 @@
+# Headless o.emu for iOS arm64 — hellaphone Phase 2, Phase A.
+#
+# Built against the iphonesimulator SDK and run via `xcrun simctl spawn`
+# (the iOS analogue of Android Phase 0's "just run the binary" smoke
+# test). Device builds (Phase B) link the same objects as libemu.a into
+# an Xcode app target instead — see emu/iOS/README.md.
+#
+# iOS shares Apple's libc with macOS, so Phase A reuses emu/MacOSX/ and
+# emu/port/ sources UNCHANGED: the :N: rules at the bottom point each
+# object at its origin. Only mkfiles/mkfile-iOS-arm64 (the toolchain)
+# and this directory's config differ. Phase B forks any source that has
+# to diverge (e.g. cmd.c, which fork/execs host commands — impossible
+# under the iOS app sandbox).
+#
+# Host is always macOS for an iOS cross-build, so the host tools come
+# from mkhost-MacOSX and the target flags from mkfile-iOS-arm64. We do
+# NOT go through mkconfig here: its auto-detect would load the native
+# MacOSX target flags instead of the iOS ones.
+
+SYSTARG=iOS
+OBJTYPE=arm64
+SHELLTYPE=sh
+OBJDIR=$SYSTARG/$OBJTYPE
+<$ROOT/mkfiles/mkhost-MacOSX
+<$ROOT/mkfiles/mkfile-iOS-arm64
+
+#Configurable parameters
+
+CONF=emu			#default configuration
+CONFLIST=emu
+CLEANCONFLIST=
+
+INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
+
+#end configurable parameters
+
+<| AWK=$AWK sh ../port/mkdevlist < $CONF	#sets $IP, $DEVS, $PORT, $LIBS
+
+OBJ=\
+	asm-$OBJTYPE.$O\
+	os.$O\
+	stubs-headless.$O\
+	$CONF.root.$O\
+	lock.$O\
+	$DEVS\
+	$PORT\
+
+HFILES=\
+
+CFLAGS=\
+	'-DROOT="'$ROOT'"'\
+	-DEMU -I. -I../port\
+	-I$ROOT/$SYSTARG/$OBJTYPE/include\
+	-I$ROOT/include\
+	-I$ROOT/libinterp\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS\
+
+KERNDATE=0
+
+SYSLIBS=\
+	-lm\
+	-lpthread\
+	-framework CoreFoundation\
+
+default:V:	$O.$CONF
+
+$O.$CONF:	$OBJ $CONF.c $CONF.root.h
+	$CC $CFLAGS -DKERNDATE=$KERNDATE $CONF.c
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
+
+install:V: $O.$CONF
+	cp $O.$CONF $INSTALLDIR/$CONF
+
+<../port/portmkfile
+
+# Phase A source reuse. iOS shares macOS's libc, so most platform
+# sources are reused unchanged via thin forwarding stubs in THIS
+# directory (each is a one-line #include of the macOS/port original —
+# see emu/iOS/os.c etc.). The stub files are what actually pull the
+# source in; the :N: rules below just record the transitive dependency
+# so the object rebuilds when the upstream original changes. (A bare
+# :N: cannot itself supply a source — mk(1): "If there is no recipe,
+# the target has its time updated" — which is why the stubs exist.)
+#
+# deveia.c is the one source that already had to FORK for Phase A: the
+# macOS serial driver enumerates ports through IOKit, which the iOS SDK
+# does not ship, so emu/iOS/deveia.c is a real BSD-template driver (no
+# :N: — it's a first-class local source, like Linux/FreeBSD deveia.c).
+os.c:N:			../MacOSX/os.c
+cmd.c:N:		../MacOSX/cmd.c
+asm-arm64.s:N:		../MacOSX/asm-arm64.s
+stubs-headless.c:N:	../MacOSX/stubs-headless.c
+ipif.c:N:		../port/ipif6-posix.c
+devfs.c:N:		../MacOSX/devfs.c

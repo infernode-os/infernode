@@ -13,7 +13,21 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#ifdef __APPLE__
+/*
+ * Apple's per-thread W^X JIT controls (pthread_jit_write_protect_np and
+ * the MAP_JIT mapping) exist on macOS but are unavailable on iOS, where
+ * stock apps get no executable JIT mapping at all (W^X). InferNode on
+ * iOS is interpreter-only (-c0; see docs/IOS.md), so the codegen below
+ * is compiled but never invoked. APPLE_JIT gates the macOS-only W^X
+ * dance; iOS (and every non-Apple target) falls to the generic mmap
+ * path so the file still builds. Inert off iOS: there APPLE_JIT ==
+ * __APPLE__ exactly as before.
+ */
+#if defined(__APPLE__) && !defined(IOS_ARM64)
+#define APPLE_JIT 1
+#endif
+
+#ifdef APPLE_JIT
 #include <pthread.h>
 #include <libkern/OSCacheControl.h>
 #endif
@@ -2105,7 +2119,7 @@ preamble(void)
 		return;
 
 	sz = 64 * sizeof(u32int);
-#ifdef __APPLE__
+#ifdef APPLE_JIT
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
@@ -2161,7 +2175,7 @@ preamble(void)
 		code = save;
 	}
 
-#ifdef __APPLE__
+#ifdef APPLE_JIT
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2568,7 +2582,7 @@ typecom(Type *t)
 
 	sz = n * sizeof(u32int);
 
-#ifdef __APPLE__
+#ifdef APPLE_JIT
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(start == MAP_FAILED)
@@ -2587,7 +2601,7 @@ typecom(Type *t)
 	t->destroy = code;
 	comd(t);
 
-#ifdef __APPLE__
+#ifdef APPLE_JIT
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2703,7 +2717,7 @@ compile(Module *m, int size, Modlink *ml)
 		codesize += pagesz;	/* extra guard page */
 	}
 
-#ifdef __APPLE__
+#ifdef APPLE_JIT
 	base = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(base == MAP_FAILED) {
@@ -2811,7 +2825,7 @@ compile(Module *m, int size, Modlink *ml)
 	}
 	m->pctab = patch;
 
-#ifdef __APPLE__
+#ifdef APPLE_JIT
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(base, codesize);
 #else

@@ -175,9 +175,21 @@ class InfernodeSDLActivity : SDLActivity() {
         // asset staging (INFR-115). Devices that already extracted at
         // v1 won't have fonts/ unless they re-extract.
         val marker = File(root, ".extracted-v2")
-        if (marker.exists()) return
+        // Re-extract whenever the installed APK is newer than our last
+        // extraction. Without this, every `adb install -r` (and every
+        // user-side APK upgrade) would leave the previous .dis tree on
+        // disk and silently ignore the new APK's runtime — surfacing as
+        // "I rebuilt and reinstalled but my fix isn't there", and the
+        // only escape was `pm clear`. copyAssetTree overwrites in place,
+        // so user-added files outside the asset tree (e.g. anything
+        // under usr/inferno/) survive.
+        val installTime = try {
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        } catch (e: Exception) { 0L }
+        if (marker.exists() && marker.lastModified() >= installTime) return
         copyAssetTree(assets, "inferno-root", root)
         marker.createNewFile()
+        marker.setLastModified(System.currentTimeMillis())
     }
 
     private fun copyAssetTree(am: AssetManager, src: String, dst: File) {

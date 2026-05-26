@@ -145,6 +145,13 @@ mkdir -p "$APPDIR/root"
 for d in $STAGE_DIRS; do
 	[ -d "$ROOT/$d" ] && cp -R "$ROOT/$d" "$APPDIR/root/$d"
 done
+# Mountpoint dirs the boot mounts/binds onto (/n via mntgen, /tmp, /usr,
+# /mnt). macOS gets these from the full repo it boots from; the bundle
+# must supply them or `mount {mntgen} /n` (and the /usr,/tmp binds) fail
+# and the GUI never comes up. Empty is fine — they're mounted/written over.
+for d in n tmp usr mnt; do
+	mkdir -p "$APPDIR/root/$d"
+done
 
 # --- 5. ad-hoc codesign (simulator needs no identity) ------------------
 codesign --force --sign - --timestamp=none "$APPDIR" >/dev/null 2>&1 || {

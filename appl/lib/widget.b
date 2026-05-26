@@ -1097,8 +1097,10 @@ reqkbd(on: int)
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
+	# Widget text fields live in workspace apps (settings, …) that fill
+	# the upper area — keep the top pinned (don't slide the view up).
 	if(on)
-		sys->fprint(fd, "kbd on");
+		sys->fprint(fd, "kbd ontop");
 	else
 		sys->fprint(fd, "kbd off");
 }

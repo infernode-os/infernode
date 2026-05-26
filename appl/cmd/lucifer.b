@@ -1012,6 +1012,11 @@ drawmobiletitle(label: string, y, expanded: int)
 # zone modules get fresh sub-images.
 # Request/hide the on-screen keyboard (touch builds) via /dev/consctl,
 # which the SDL3 backend maps to SDL_StartTextInput/StopTextInput.
+# Workspace text apps (editor/man/settings) fill the upper area, so we
+# use "kbd ontop": raise the keyboard but keep the top pinned (don't
+# slide the view up — a cursor near the top must not scroll off-screen).
+# The chat input, at the very bottom, uses plain "kbd on" (luciconv) so
+# SDL slides it above the keyboard.
 reqkbd(on: int)
 {
 	if(!mobile)
@@ -1020,7 +1025,7 @@ reqkbd(on: int)
 	if(fd == nil)
 		return;
 	if(on)
-		sys->fprint(fd, "kbd on");
+		sys->fprint(fd, "kbd ontop");
 	else
 		sys->fprint(fd, "kbd off");
 }

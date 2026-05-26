@@ -355,13 +355,25 @@ init_hidpi(void)
 	update_text_input_area();	/* window may have resized/rotated */
 }
 
+/* Keep the top pinned (don't slide) for the focused input; set when the
+ * GUI requests the keyboard for a workspace text app. See setsoftkbd.
+ * Written from the devcons worker thread, read on the main thread. */
+static volatile int softkbd_keeptop = 0;
+
 /*
- * iOS soft-keyboard avoidance.  Lucifer's text input row lives at the
- * very bottom of the screen, exactly where the on-screen keyboard appears,
- * so without a hint iOS leaves the field hidden behind the keyboard.
- * SDL_SetTextInputArea tells UIKit where the caret is (in window POINTS,
- * not drawable pixels); SDL then slides the view up so that rect stays
- * visible above the keyboard.  No-op on macOS/Linux (no soft keyboard).
+ * iOS soft-keyboard avoidance via SDL_SetTextInputArea, which tells UIKit
+ * where the caret is (window POINTS); SDL then slides the view up so that
+ * rect stays above the keyboard. The rect is position-aware:
+ *
+ *   keeptop == 0 (chat input, at the very bottom): put the rect at the
+ *     bottom so SDL slides the input up into view.
+ *   keeptop == 1 (a workspace text app — editor/man/settings, which fill
+ *     the upper area below the header): put the rect at the TOP. It's
+ *     already above the keyboard, so SDL does NOT slide — the top stays
+ *     pinned and a cursor near the top no longer scrolls off-screen. The
+ *     keyboard simply overlays the lower part of the app.
+ *
+ * No-op on macOS/Linux (no soft keyboard).
  */
 static void
 update_text_input_area(void)
@@ -380,7 +392,10 @@ update_text_input_area(void)
 	r.x = 0;
 	r.w = win_w;
 	r.h = ih;
-	r.y = win_h - ih;				/* bottom input row */
+	if (softkbd_keeptop)
+		r.y = 0;				/* top — SDL won't need to slide */
+	else
+		r.y = win_h - ih;			/* bottom input row — SDL slides it up */
 	SDL_SetTextInputArea(sdl_window, &r, 0);
 #endif
 }
@@ -401,11 +416,18 @@ update_text_input_area(void)
 static volatile int softkbd_want = 0;	/* desired state (set from any thread) */
 static int softkbd_applied = 0;		/* last state pushed to SDL (main thread) */
 
+/*
+ * on: 0 = hide, 1 = show (bottom input — slide to keep it above the
+ * keyboard), 2 = show + keep the top pinned (workspace text app — don't
+ * slide). Encoded in the int so the headless stubs and the signature
+ * stay unchanged.
+ */
 void
 setsoftkbd(int on)
 {
 #if MOBILE_TOUCH
 	softkbd_want = on ? 1 : 0;
+	softkbd_keeptop = (on == 2);
 #else
 	/* Desktop: text input stays enabled; nothing to toggle. */
 	USED(on);
@@ -420,15 +442,23 @@ static void
 apply_softkbd(void)
 {
 #if MOBILE_TOUCH
-	if (softkbd_want == softkbd_applied || !sdl_window)
+	static int applied_keeptop = 0;
+	if (!sdl_window)
 		return;
-	softkbd_applied = softkbd_want;
-	if (softkbd_applied) {
-		SDL_StartTextInput(sdl_window);
+	if (softkbd_want != softkbd_applied) {
+		softkbd_applied = softkbd_want;
+		if (softkbd_applied) {
+			SDL_StartTextInput(sdl_window);
+			update_text_input_area();
+		} else {
+			SDL_StopTextInput(sdl_window);
+		}
+	} else if (softkbd_want && softkbd_keeptop != applied_keeptop) {
+		/* keyboard already up but the top/bottom mode changed (e.g.
+		 * focus moved between chat and a workspace app) — re-apply. */
 		update_text_input_area();
-	} else {
-		SDL_StopTextInput(sdl_window);
 	}
+	applied_keeptop = softkbd_keeptop;
 #endif
 }
 

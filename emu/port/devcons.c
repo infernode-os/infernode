@@ -470,8 +470,12 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 				qwrite(kbdq, &ch, 1);
 			} else if(strncmp(buf, "rawoff", 6) == 0){
 				kbd.raw = 0;
+			} else if(strncmp(a, "kbd ontop", 9) == 0){
+				/* workspace text app focused — raise the keyboard but
+				 * keep the top pinned (don't slide the view up). */
+				setsoftkbd(2);
 			} else if(strncmp(a, "kbd on", 6) == 0){
-				/* GUI focused a text field — raise the soft keyboard. */
+				/* GUI focused a bottom input (chat) — raise + slide. */
 				setsoftkbd(1);
 			} else if(strncmp(a, "kbd off", 7) == 0){
 				/* text field lost focus — hide the soft keyboard. */

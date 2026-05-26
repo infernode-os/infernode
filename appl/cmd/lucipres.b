@@ -163,6 +163,15 @@ maxpanx := 0;
 mobile := 0;	# set from /env/infmobile in init() (accordion / 44pt tap targets)
 pres_viewport_h := 400;
 
+# Long-press → context menu (mobile).  Desktop uses button-3; touch has no
+# right-click, so a press-and-hold that doesn't move opens the same menu.
+LONGPRESS_MS:  con 500;	# hold duration
+LONGPRESS_SLOP: con 20;	# movement (px) that cancels the press
+lpch:      chan of int;	# timer fires the press sequence id back here
+lpseq      := 0;	# bumped on every new press; stale timers are ignored
+lppending  := 0;	# a press is being timed
+lppos:     Point;	# where the press started
+
 # Tab state
 tablayout: array of ref TabRect;
 ntabs := 0;
@@ -229,6 +238,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 				mobile = 1;
 		}
 	}
+	lpch = chan of int;	# long-press timer signal
 
 	# Load theme colours
 	lucitheme := load Lucitheme Lucitheme->PATH;
@@ -358,6 +368,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 			wasdown := prevbuttons;
 			prevbuttons = p.buttons;
 
+			# Cancel a pending long-press if the finger lifted or moved.
+			if(lppending) {
+				dx := p.xy.x - lppos.x;
+				if(dx < 0) dx = -dx;
+				dy := p.xy.y - lppos.y;
+				if(dy < 0) dy = -dy;
+				if((p.buttons & 1) == 0 ||
+						dx > LONGPRESS_SLOP || dy > LONGPRESS_SLOP)
+					lppending = 0;
+			}
+
 			# Scroll wheel
 			if(p.buttons & 8) {
 				intabstrip := (tabstrip_maxy > tabstrip_miny &&
@@ -381,6 +402,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 			# Button-1 just pressed
 			if(p.buttons == 1 && wasdown == 0) {
+				# Mobile: arm a long-press → context menu (no right-click).
+				if(mobile) {
+					lpseq++;
+					lppending = 1;
+					lppos = p.xy;
+					spawn lptimer(lpseq);
+				}
 				tabclicked := 0;
 				# Tab clicks
 				for(ti := 0; ti < ntabs; ti++) {
@@ -494,6 +522,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 					prevbuttons = 0;
 					redrawpres();
 				}
+			}
+		}
+	seq := <-lpch =>
+		# Long-press fired: if that press is still held (not lifted/moved)
+		# open the context menu at the press point, mimicking button-3.
+		if(mobile && lppending && seq == lpseq) {
+			lppending = 0;
+			if(menumod != nil) {
+				handlecontextmenu(ref Pointer(0, lppos, 0));
+				prevbuttons = 0;
+				redrawpres();
 			}
 		}
 	ev := <-preseventch =>
@@ -935,6 +974,14 @@ handledrag(art: ref Artifact, startpt: Point)
 }
 
 # --- Context menu ---
+
+# Long-press timer: after LONGPRESS_MS, signal the press sequence back to
+# the event loop, which opens the context menu if that press is still held.
+lptimer(seq: int)
+{
+	sys->sleep(LONGPRESS_MS);
+	lpch <-= seq;
+}
 
 handlecontextmenu(p: ref Pointer)
 {

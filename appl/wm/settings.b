@@ -93,6 +93,8 @@ kf: ref Kbdfilter;
 sbar: ref Statusbar;
 catlist: ref Listbox;
 category: int;		# current category index
+mobile := 0;		# /env/infmobile=1 — floor row heights at a 44pt tap target
+TAPMIN: con 132;	# 44pt at a 3x device
 
 # Colours
 bgcolor:   ref Image;
@@ -188,6 +190,19 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	if(ctxt == nil) {
 		sys->fprint(stderr, "settings: no window context\n");
 		raise "fail:no context";
+	}
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — same env var lucifer.b reads;
+	# floors interactive row heights at a 44pt finger tap target.
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				mobile = 1;
+		}
 	}
 
 	# Parse -c <name> to choose initial category. Quietly ignore unknown
@@ -330,6 +345,11 @@ layoutcontent()
 	fh := font.height + 8;
 	bh := font.height + 10;
 	ch := font.height + 6;	# checkbox row height
+	if(mobile) {		# floor interactive rows at a 44pt tap target
+		if(fh < TAPMIN) fh = TAPMIN;
+		if(bh < TAPMIN) bh = TAPMIN;
+		if(ch < TAPMIN) ch = TAPMIN;
+	}
 
 	# Clear old panel state
 	theme_group = nil;
@@ -623,6 +643,7 @@ layoutprompts(cx, cy, cw, fh, bh: int)
 layoutprofile(cx, cy, cw, bh: int)
 {
 	fh := font.height + 8;
+	if(mobile && fh < TAPMIN) fh = TAPMIN;
 	profile_label = Label.mk(
 		Rect((cx, cy), (cw, cy + fh)),
 		"Startup profile: /lib/sh/profile", 0, LEFT);

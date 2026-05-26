@@ -114,6 +114,9 @@ iOS/*/lib/*
 # iOS app bundle (assembled by build-ios-app.sh; staged Inferno root + binary)
 iOS/*/*.app/
 emu/iOS/app/*.o
+# iOS device app: staged root + generated Xcode project (from project.yml)
+iOS/*/appbundle/
+/InferNode.xcodeproj/
 
 # Emulator binaries (built locally)
 emu/*/o.emu

@@ -102,12 +102,10 @@ entry for the uid) and falls through. Cosmetic for Phase A; a Phase B
 unreferenced). All gated against `INFR-107`, as the Android Bionic gaps
 were.
 
-## Phase B — the app. In progress (simulator only).
+## Phase B — the app. In progress.
 
-Sub-phased; device/signing (B3) is gated on an Apple Development cert +
-provisioning profile, which we don't have yet (the only Apple cert on
-hand is a macOS "Developer ID Application", which cannot sign iOS). So
-B0–B2 are simulator-only.
+Sub-phased. B0/B1 run on the simulator (no signing). B3 (device) signs
+under a paid Apple Developer team via a generated Xcode project.
 
 **B0 — headless app shell. DONE.** A real iOS `.app` (not a bare binary
 under `simctl spawn`) that boots emu `-c0` and runs the Limbo test
@@ -129,17 +127,31 @@ runner, proving the app-target + libemu + bundled-root mechanics.
   resolves relative to the CWD). A future general fix would bump
   `MAXROOT` in `emu/port/dat.h`.
 
-**B1 — SDL3 GUI (Lucifer). Next.** GUI `libemu` linking the iOS SDL3
-static lib (`build-sdl3-ios.sh` → `~/sdks/SDL3-ios-sim-arm64`), with
-`emu/port/draw-sdl3.c` adapted to the iOS UIKit/Metal/SDL lifecycle
-(the desktop `SDL_PollEvent` loop vs iOS's `SDL_RunApp`/main-callbacks
-is the real work).
+**B1 — SDL3 GUI (Lucifer). DONE (simulator).** `./build-ios-app.sh --gui`
+builds a GUI `libemu` (GUIBACK=sdl3) linking the iOS SDL3 static lib
+(`build-sdl3-ios.sh` → `~/sdks/SDL3-ios-sim-arm64`), and `main_ios_gui.m`
+lets SDL3 bootstrap UIKit (`SDL_RunApp`); the desktop `sdl3_mainloop`
+coexists with the iOS run loop, so no callback rewrite was needed.
+Lucifer renders through SDL3/Metal. Key fixes: stage the boot's
+mountpoint dirs (`/n /tmp /usr /mnt` — `mount {mntgen} /n` fails without
+them); copy the read-only bundle root to the writable container at launch
+(`umask 0`, chmod writable); and the `wordsperline` texture-stride fix in
+`draw-sdl3.c` (odd 3x widths sheared the frame — see that commit).
 
 **B2 — `os.c`/`cmd.c` iOS forks.** Default `getuser()` past the
 `cannot getpwuid` warning; compile out host `fork`/`exec` (impossible
-under the app sandbox).
+under the app sandbox — the boot's `os sh` calls fail). Not yet done;
+the GUI runs without it (those calls fail non-fatally).
 
-**B3 — device build + code-signing. Blocked** on an iOS signing cert.
+**B3 — device build + code-signing. In progress.** We have a paid Apple
+Developer team (`TJ448C32Q3`), so iOS signing is available. Build the
+device slice (`IOSSDK=iphoneos` for `build-ios-arm64.sh` +
+`build-sdl3-ios.sh`, then the GUI `libemu`), generate a thin Xcode app
+project from `project.yml` (`xcodegen generate`), and let Xcode automatic
+signing mint the Apple Development cert + profile under the team. Build +
+install to the device with Xcode's Run, or `xcodebuild
+-allowProvisioningUpdates` + `xcrun devicectl device install`. Requires
+Developer Mode on the device and the iOS platform component in Xcode.
 
 ## Phase C — on-device `/n/llm`. Not started.
 

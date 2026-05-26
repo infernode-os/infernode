@@ -1000,6 +1000,9 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 		if(msg != nil) {
 			cv := msg.get("content");
 			if(cv != nil) pick c := cv { String => responsetext = c.s; }
+			# Filter harmony/reasoning-channel leakage from content
+			# (no-op when the backend already separated reasoning).
+			responsetext = stripthinking(responsetext);
 
 			tcv := msg.get("tool_calls");
 			if(tcv != nil) {
@@ -1191,6 +1194,9 @@ _ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
 # buffered fallback (parseopenaisseresponse).
 _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, string)
 {
+	# Strip harmony/reasoning-channel leakage before anything consumes
+	# the text (tool extraction, token estimate, response assembly).
+	st.fulltext = stripthinking(st.fulltext);
 	if(st.tokens == 0)
 		st.tokens = estimatetokens(st.fulltext);
 
@@ -2112,6 +2118,71 @@ replaceall(s, old, new: string): string
 		i++;
 	}
 	return result;
+}
+
+# Index of the first occurrence of `sub` in `s` at or after `from`,
+# or -1 if absent. (Limbo's String module has no plain index-of.)
+substrindex(s, sub: string, from: int): int
+{
+	if(sub == "")
+		return from;
+	i := from;
+	if(i < 0)
+		i = 0;
+	while(i <= len s - len sub) {
+		if(s[i:i+len sub] == sub)
+			return i;
+		i++;
+	}
+	return -1;
+}
+
+# Filter harmony / reasoning-channel artifacts out of model content so
+# the runtime works correctly with both reasoning and non-reasoning
+# models. gpt-oss (and other harmony-format models) structure output as
+# channel-tagged segments:
+#
+#   <|channel|>analysis<|message|>...scratchpad...<|end|>
+#   <|channel|>final<|message|>the actual answer
+#
+# Normally the backend (Ollama) parses these and returns `reasoning` and
+# `content` as SEPARATE fields, so `content` is already clean and this
+# is a no-op. But when the backend fails to separate them — raw harmony
+# lands in `content` — the analysis/commentary channel leaks into the
+# user-facing chat (the "hello → Tool not found… Are you ok? Yep all
+# good… [scratchpad]" meltdown). Keep only the LAST `final` channel; if
+# only non-final channels are present the model produced no clean answer
+# so return "" rather than leak its reasoning. Plain content with no
+# channel markers (every non-reasoning model, and properly-separated
+# output) passes through untouched — so this is always safe to apply.
+stripthinking(s: string): string
+{
+	CHAN := "<|channel|>";
+	# Fast path: no harmony markers at all (the overwhelmingly common
+	# case — non-reasoning models and already-separated content).
+	if(substrindex(s, CHAN, 0) < 0)
+		return s;
+
+	FINAL := "<|channel|>final<|message|>";
+	# Keep only what follows the LAST final-channel marker.
+	last := -1;
+	i := substrindex(s, FINAL, 0);
+	while(i >= 0) {
+		last = i;
+		i = substrindex(s, FINAL, i + len FINAL);
+	}
+	if(last >= 0) {
+		body := s[last + len FINAL:];
+		# Truncate at the next control token if the final segment is
+		# followed by more harmony framing.
+		ct := substrindex(body, "<|", 0);
+		if(ct >= 0)
+			body = body[0:ct];
+		return strip(body);
+	}
+	# Channel markers but no final channel: analysis/commentary only —
+	# no user-facing answer. Drop it rather than leak the scratchpad.
+	return "";
 }
 
 joinrev(l: list of string, sep: string): string

@@ -27,14 +27,17 @@
 #     to do.
 #
 # Usage (from repo root):
-#   ./build-android-apk.sh                 # debug APK
-#   ./build-android-apk.sh --release       # release variant (unsigned)
-#   ./build-android-apk.sh --skip-gradle   # stage artefacts only
+#   ./build-android-apk.sh                       # debug APK, arm64-v8a (phone hw)
+#   ./build-android-apk.sh --release             # release variant (unsigned)
+#   ./build-android-apk.sh --skip-gradle         # stage artefacts only
+#   ./build-android-apk.sh --abi=x86_64          # build for Android emulator on x86 host
+#   ./build-android-apk.sh --abi=both            # multi-arch APK (phone + emulator)
 #
 # See:
 #   docs/HELLAPHONE.md             user-facing setup
 #   emu/Android/README.md          target tree status
-#   build-android-ndk-arm64.sh     standalone-binary driver
+#   build-android-ndk-arm64.sh     standalone-binary driver (arm64-v8a)
+#   build-android-ndk-x86_64.sh    same, x86_64 (emulator iteration)
 #   INFR-110                       Phase 1c epic
 #
 
@@ -45,93 +48,138 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 GRADLE_TASK=assembleDebug
 SKIP_GRADLE=0
 GUIBACK=${GUIBACK:-headless}
+# ABI selection. Default arm64-v8a (matches phone hardware); --abi=x86_64
+# builds for the Android emulator on an x86 host; --abi=both stages both.
+# Internally each entry maps to an NDK build script + jniLibs subdir.
+ABI=arm64-v8a
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --release)     GRADLE_TASK=assembleRelease; shift ;;
         --skip-gradle) SKIP_GRADLE=1; shift ;;
         --gui)         GUIBACK="$2"; shift 2 ;;
         --gui=*)       GUIBACK="${1#--gui=}"; shift ;;
+        --abi)         ABI="$2"; shift 2 ;;
+        --abi=*)       ABI="${1#--abi=}"; shift ;;
         *)             echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
 
-# GUIBACK is exported so both the inner NDK cross-build (which runs
-# build-android-ndk-arm64.sh in a subshell) and the direct mk invocation
-# below pick it up. For sdl3, ensure SDL3 is built and stage libSDL3.so
-# into jniLibs alongside libemu.so so the APK has both at runtime.
+# Expand the ABI selector into the list of architectures we'll loop over.
+case "$ABI" in
+    arm64-v8a) ABIS="arm64-v8a" ;;
+    x86_64)    ABIS="x86_64" ;;
+    both)      ABIS="arm64-v8a x86_64" ;;
+    *)
+        echo "unknown --abi value '$ABI' (expected arm64-v8a, x86_64, or both)" >&2
+        exit 2
+        ;;
+esac
+
+# Internal helpers: ABI → NDK driver script + Inferno OBJTYPE + SDL3 prefix.
+ndk_script_for_abi() {
+    case "$1" in
+        arm64-v8a) echo "$ROOT/build-android-ndk-arm64.sh" ;;
+        x86_64)    echo "$ROOT/build-android-ndk-x86_64.sh" ;;
+    esac
+}
+objtype_for_abi() {
+    case "$1" in
+        arm64-v8a) echo arm64 ;;
+        x86_64)    echo amd64 ;;
+    esac
+}
+sdl3_prefix_for_abi() {
+    case "$1" in
+        arm64-v8a) echo "$HOME/sdks/SDL3-android-arm64" ;;
+        x86_64)    echo "$HOME/sdks/SDL3-android-x86_64" ;;
+    esac
+}
+
+# GUIBACK is exported so both the inner NDK cross-build (which runs the
+# ABI-specific NDK driver in a subshell) and the direct mk invocation
+# below pick it up. For sdl3, ensure SDL3 is built per-ABI and stage
+# libSDL3.so into the matching jniLibs subdir alongside libemu.so so
+# the APK has both at runtime.
 export GUIBACK
 if [ "$GUIBACK" = "sdl3" ]; then
-    : "${SDL3_PREFIX:=$HOME/sdks/SDL3-android-arm64}"
-    if [ ! -f "$SDL3_PREFIX/lib/libSDL3.so" ]; then
-        echo "::: SDL3 not at $SDL3_PREFIX — building via build-sdl3-android.sh"
-        "$ROOT/build-sdl3-android.sh" || {
-            echo "ERROR: SDL3 cross-build failed" >&2; exit 1; }
-    fi
-    export SDL3_PREFIX
+    for abi in $ABIS; do
+        sdl3_prefix=$(sdl3_prefix_for_abi "$abi")
+        if [ ! -f "$sdl3_prefix/lib/libSDL3.so" ]; then
+            echo "::: SDL3 not at $sdl3_prefix — building via build-sdl3-android.sh --abi=$abi"
+            "$ROOT/build-sdl3-android.sh" --abi="$abi" || {
+                echo "ERROR: SDL3 cross-build failed for $abi" >&2; exit 1; }
+        fi
+    done
 fi
 
-echo "=== InferNode APK build (Phase 1c) ==="
+echo "=== InferNode APK build (Phase 1c) — ABIs: $ABIS ==="
 echo ""
 
-# --- Step 1: NDK cross-build (libs + standalone o.emu) -------------------
-echo "::: 1/4  Cross-compile libs + emu via build-android-ndk-arm64.sh"
-"$ROOT/build-android-ndk-arm64.sh" > "$ROOT/build-android-apk.ndk.log" 2>&1 || {
-    echo "ERROR: NDK cross-build failed. See build-android-apk.ndk.log" >&2
-    tail -20 "$ROOT/build-android-apk.ndk.log" >&2
-    exit 1
-}
-echo "    -> emu/Android/o.emu produced"
-
-# --- Step 2: libemu.so (JNI shared library) ------------------------------
-echo "::: 2/4  Link libemu.so (shared variant for JNI)"
-export ROOT
-export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${HOME}/Android/Sdk/ndk/android-ndk-r29}"
-export PATH="$ROOT/Linux/amd64/bin:$PATH"
-MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK"
-if [ "$GUIBACK" = "sdl3" ]; then
-    MKARGS="$MKARGS SDL3_PREFIX=$SDL3_PREFIX"
-fi
-(
-    cd "$ROOT/emu/Android"
-    rm -f libemu.so jni-emu.o
-    "$ROOT/Linux/amd64/bin/mk" -f mkfile-g $MKARGS libemu
-)
-if [ ! -f "$ROOT/emu/Android/libemu.so" ]; then
-    echo "ERROR: libemu.so was not produced" >&2
-    exit 1
-fi
-echo "    -> emu/Android/libemu.so produced"
-
-# --- Step 3: Stage native lib + runtime assets into the APK tree ---------
-echo "::: 3/4  Stage libemu.so + dis/ runtime into android-app/"
-JNILIBS="$ROOT/android-app/app/src/main/jniLibs/arm64-v8a"
 ASSETS="$ROOT/android-app/app/src/main/assets/inferno-root"
-mkdir -p "$JNILIBS" "$ASSETS"
+mkdir -p "$ASSETS"
 
-cp "$ROOT/emu/Android/libemu.so" "$JNILIBS/libemu.so"
-echo "    -> $JNILIBS/libemu.so"
+# Per-ABI loop: NDK cross-build → libemu.so link → stage into jniLibs/$ABI/.
+step=1
+for abi in $ABIS; do
+    objtype=$(objtype_for_abi "$abi")
+    ndk_script=$(ndk_script_for_abi "$abi")
+    sdl3_prefix=$(sdl3_prefix_for_abi "$abi")
 
-# Stale libSDL3.so from a previous --gui sdl3 build would still be
-# packaged into a headless APK. Clear it out when not using SDL3.
-if [ "$GUIBACK" != "sdl3" ]; then
-    rm -f "$JNILIBS/libSDL3.so"
-fi
+    # --- Step 1.x: NDK cross-build for this ABI --------------------------
+    echo "::: ${step}/4  [$abi] Cross-compile libs + emu via $(basename "$ndk_script")"
+    log="$ROOT/build-android-apk.ndk-${abi}.log"
+    "$ndk_script" > "$log" 2>&1 || {
+        echo "ERROR: NDK cross-build failed for $abi. See $log" >&2
+        tail -20 "$log" >&2
+        exit 1
+    }
+    echo "    -> emu/Android/o.emu ($abi) produced"
 
-# SDL3 GUI: libSDL3.so also has to live in jniLibs/arm64-v8a/ so
-# Android's PackageManager loads it before libemu.so resolves
-# its symbols. Without this libemu.so loads but
-# `dlopen("libSDL3.so")` fails inside System.loadLibrary("emu").
-if [ "$GUIBACK" = "sdl3" ]; then
-    # The actual file may be libSDL3.so or libSDL3.so.0 or similar
-    # depending on SDL3's CMake install. Pick whichever is there.
-    SDL3_SO=$(ls -1 "$SDL3_PREFIX/lib/"libSDL3.so* 2>/dev/null | head -1)
-    if [ -z "$SDL3_SO" ] || [ ! -f "$SDL3_SO" ]; then
-        echo "ERROR: libSDL3.so missing at $SDL3_PREFIX/lib/" >&2
+    # --- Step 2.x: libemu.so for this ABI --------------------------------
+    echo "::: ${step}/4  [$abi] Link libemu.so (shared variant for JNI)"
+    export ROOT
+    export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${HOME}/Android/Sdk/ndk/android-ndk-r29}"
+    export PATH="$ROOT/Linux/amd64/bin:$PATH"
+    MKARGS="SYSTARG=Android OBJTYPE=$objtype GUIBACK=$GUIBACK"
+    if [ "$GUIBACK" = "sdl3" ]; then
+        MKARGS="$MKARGS SDL3_PREFIX=$sdl3_prefix"
+    fi
+    (
+        cd "$ROOT/emu/Android"
+        rm -f libemu.so jni-emu.o
+        "$ROOT/Linux/amd64/bin/mk" -f mkfile-g $MKARGS libemu
+    )
+    if [ ! -f "$ROOT/emu/Android/libemu.so" ]; then
+        echo "ERROR: libemu.so was not produced for $abi" >&2
         exit 1
     fi
-    cp "$SDL3_SO" "$JNILIBS/libSDL3.so"
-    echo "    -> $JNILIBS/libSDL3.so (from $SDL3_SO)"
-fi
+
+    # --- Step 3.x: Stage into jniLibs/$abi/ ------------------------------
+    JNILIBS="$ROOT/android-app/app/src/main/jniLibs/$abi"
+    mkdir -p "$JNILIBS"
+    cp "$ROOT/emu/Android/libemu.so" "$JNILIBS/libemu.so"
+    echo "    -> $JNILIBS/libemu.so"
+
+    # Stale libSDL3.so from a previous --gui sdl3 build would still be
+    # packaged into a headless APK. Clear it out when not using SDL3.
+    if [ "$GUIBACK" != "sdl3" ]; then
+        rm -f "$JNILIBS/libSDL3.so"
+    fi
+
+    # SDL3 GUI: stage libSDL3.so next to libemu.so so Android's
+    # PackageManager loads it before libemu.so resolves its symbols.
+    # Without this libemu.so loads but `dlopen("libSDL3.so")` fails
+    # inside System.loadLibrary("emu").
+    if [ "$GUIBACK" = "sdl3" ]; then
+        SDL3_SO=$(ls -1 "$sdl3_prefix/lib/"libSDL3.so* 2>/dev/null | head -1)
+        if [ -z "$SDL3_SO" ] || [ ! -f "$SDL3_SO" ]; then
+            echo "ERROR: libSDL3.so missing at $sdl3_prefix/lib/ for $abi" >&2
+            exit 1
+        fi
+        cp "$SDL3_SO" "$JNILIBS/libSDL3.so"
+        echo "    -> $JNILIBS/libSDL3.so (from $SDL3_SO)"
+    fi
+done
 
 # Runtime tree shipped as APK assets. dis/ is the compiled bytecode
 # (sh.dis, cat.dis, the veltro suite, etc.). lib/ has shell profile +

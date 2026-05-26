@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.core.app.ActivityCompat
@@ -84,11 +85,15 @@ class InfernodeSDLActivity : SDLActivity() {
         val infernoRoot = File(filesDir, "inferno-root")
         val args = mutableListOf(
             "-s",
-            // TEMPORARY x86_64-debug: dropped to -c0 (interpreter only) to
-            // isolate a GC crash on Android x86_64 emulator. JIT for amd64
-            // is comp-amd64.c, untested in our Bionic build. Flip back to
-            // -c1 once that path is validated (task #69).
-            "-c0",
+            // JIT compile mode is ABI-aware. arm64-v8a uses -c1 (the
+            // libinterp/comp-arm64.c JIT is the validated, shipped path
+            // and is what every phone runs). x86_64 falls back to -c0
+            // (interpreter only) because libinterp/comp-amd64.c hasn't
+            // been validated against Bionic yet — without the override
+            // the APK SIGSEGVs in rungc walking partially-compiled
+            // Modlinks on the emulator. Flip x86_64 to -c1 once the
+            // amd64 JIT is validated (INFR-67 follow-up).
+            jitFlagForRuntime(),
             "-pheap=1024m",
             "-pmain=1024m",
             "-pimage=1024m",
@@ -142,16 +147,30 @@ class InfernodeSDLActivity : SDLActivity() {
         val layout = mLayout
         if (layout != null) {
             ViewCompat.setOnApplyWindowInsetsListener(layout) { v, insets ->
+                // System bars + display cutout: permanent safe-area
+                // (status bar, notch, navigation bar).
                 val bars = insets.getInsets(
                     WindowInsetsCompat.Type.systemBars()
                             or WindowInsetsCompat.Type.displayCutout()
                 )
+                // IME (soft keyboard): transient inset that grows when
+                // the keyboard opens. Lucifer's text input row lives at
+                // the very bottom of the canvas; without this inset the
+                // keyboard hides it. iOS handles the same problem in
+                // shared draw-sdl3 via SDL_SetTextInputArea (see
+                // update_text_input_area, gated TARGET_OS_IOS) — this
+                // is the Android counterpart of that fix. Same behaviour
+                // visible to the user, mechanism differs because Android
+                // soft-keyboard avoidance goes through Insets, not SDL.
+                val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+                val bottom = if (ime.bottom > bars.bottom) ime.bottom else bars.bottom
                 Log.i(
                     TAG,
-                    "applying insets: top=${bars.top} bottom=${bars.bottom} " +
-                        "left=${bars.left} right=${bars.right}"
+                    "applying insets: top=${bars.top} bottom=$bottom " +
+                        "left=${bars.left} right=${bars.right} " +
+                        "(bars.bottom=${bars.bottom} ime.bottom=${ime.bottom})"
                 )
-                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                v.setPadding(bars.left, bars.top, bars.right, bottom)
                 WindowInsetsCompat.CONSUMED
             }
         } else {
@@ -171,6 +190,19 @@ class InfernodeSDLActivity : SDLActivity() {
                 /* requestCode = */ 1
             )
         }
+    }
+
+    /**
+     * Pick the JIT compile-mode flag (-c0 / -c1) based on the running
+     * ABI. Returns "-c1" on arm64-v8a (the validated JIT path), "-c0"
+     * everywhere else.  Build.SUPPORTED_ABIS[0] is the preferred ABI
+     * the loader chose for this process, which is what Android's
+     * dynamic loader picked when loading libemu.so out of jniLibs/
+     * — so it matches the architecture libemu.so was compiled for.
+     */
+    private fun jitFlagForRuntime(): String {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: ""
+        return if (abi == "arm64-v8a") "-c1" else "-c0"
     }
 
     private fun extractInfernoRootIfNeeded() {

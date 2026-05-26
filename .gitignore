@@ -141,6 +141,16 @@ emu/*/errstr.h
 emu/*/srv.h
 emu/*/srvm.h
 
+# Headless test-emu variant (built locally via `mk -f mkfile-g CONF=emut`):
+# config + generated sources, analogous to the emu.* entries above.
+emu/*/emut
+emu/*/emut.c
+emu/*/emut.root.c
+emu/*/emut.root.h
+
+# Local JIT/9P reproduction scratch (ad-hoc probes, not part of the build)
+/probe/
+
 # Generated interpreter headers
 libinterp/*.h
 

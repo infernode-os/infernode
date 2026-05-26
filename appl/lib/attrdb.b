@@ -387,38 +387,52 @@ isentry(l: string): int
 Dbf.readentry(dbf: self ref Dbf, offset: int, attr: string, value: string, useval: int): (ref Dbentry, int, int)
 {
 	lock(dbf);
-	fd := dbf.fd;
-	fd.seek(big offset, 0);
-	lines: list of ref Tuples;
-	match := attr == nil;
-	while((l := fd.gets('\n')) != nil){
-		while(isentry(l)){
-			lines = nil;
-			do{
-				offset = int fd.offset();
-				(t, nil) := parseline(l, 0);
-				if(t != nil){
-					lines = t :: lines;
-					if(!match){
-						if(useval)
-							match = t.haspair(attr, value);
-						else
-							match = t.hasattr(attr);
+	# The lock is a chan[1] mutex; if a fault unwinds through the
+	# locked region it would never be released and every subsequent
+	# db access (hence every cs translation) would deadlock forever.
+	# Release on exception and re-raise so callers can recover.
+	{
+		fd := dbf.fd;
+		if(fd == nil){
+			unlock(dbf);
+			return (nil, 0, offset);
+		}
+		fd.seek(big offset, 0);
+		lines: list of ref Tuples;
+		match := attr == nil;
+		while((l := fd.gets('\n')) != nil){
+			while(isentry(l)){
+				lines = nil;
+				do{
+					offset = int fd.offset();
+					(t, nil) := parseline(l, 0);
+					if(t != nil){
+						lines = t :: lines;
+						if(!match){
+							if(useval)
+								match = t.haspair(attr, value);
+							else
+								match = t.hasattr(attr);
+						}
 					}
+					l = fd.gets('\n');
+				}while(l != nil && !isentry(l));
+				if(match && lines != nil){
+					rl := lines;
+					for(lines = nil; rl != nil; rl = tl rl)
+						lines = hd rl :: lines;
+					unlock(dbf);
+					return (ref Dbentry(0, lines), 1, offset);
 				}
-				l = fd.gets('\n');
-			}while(l != nil && !isentry(l));
-			if(match && lines != nil){
-				rl := lines;
-				for(lines = nil; rl != nil; rl = tl rl)
-					lines = hd rl :: lines;
-				unlock(dbf);
-				return (ref Dbentry(0, lines), 1, offset);
 			}
 		}
+		unlock(dbf);
+		return (nil, 0, int fd.offset());
+	} exception {
+	"*" =>
+		unlock(dbf);
+		raise;
 	}
-	unlock(dbf);
-	return (nil, 0, int fd.offset());
 }
 
 nextentry(db: ref Db, ptr: ref Dbptr, attr: string, value: string, useval: int): (ref Dbentry, ref Dbptr)

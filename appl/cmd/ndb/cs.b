@@ -305,13 +305,25 @@ killgrp(pid: int)
 request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, string), pidc: chan of int, donec: chan of ref Reply)
 {
 	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
-	if(query != nil && query[0] == '!'){
-		# general query
-		(r.addrs, r.err) = genquery(query[1:]);
-	}else{
-		(r.addrs, r.err) = xlate(query, now);
-		if(r.addrs == nil && r.err == nil)
-			r.err = "cs: can't translate address";
+	# Run the translation under an exception handler.  A fault in the
+	# resolver (e.g. a nil dereference deep in the ndb/ip lookup path)
+	# must never kill this worker silently: if it dies before the
+	# wc reply below, the file2chan write never completes and the
+	# caller's sys->dial blocks forever with no timeout (INFR-134).
+	# Convert any fault into a normal dial error instead.
+	{
+		if(query != nil && query[0] == '!'){
+			# general query
+			(r.addrs, r.err) = genquery(query[1:]);
+		}else{
+			(r.addrs, r.err) = xlate(query, now);
+			if(r.addrs == nil && r.err == nil)
+				r.err = "cs: can't translate address";
+		}
+	} exception ex {
+	"*" =>
+		r.addrs = nil;
+		r.err = "cs: " + ex;
 	}
 	if(r.err != nil){
 		if(verbose)
@@ -515,6 +527,8 @@ querydns(name: string, rtype: string): (list of string, string)
 dblook(attr: string, val: string, rattr: string): list of string
 {
 	rl: list of string;
+	if(ndb == nil)
+		return nil;
 	ptr: ref Attrdb->Dbptr;
 	for(;;){
 		e: ref Dbentry;
@@ -624,6 +638,8 @@ time(): int
 #
 genquery(query: string): (list of string, string)
 {
+	if(ndb == nil)
+		return (nil, "cs: no database");
 	(tups, err) := attrdb->parseline(query, 0);
 	if(err != nil)
 		return (nil, "bad query: "+err);

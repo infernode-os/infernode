@@ -174,6 +174,8 @@ ntoolentryrects := 0;
 
 # Browse rect (inside user namespace)
 browserect: Rect;
+mobile := 0;		# /env/infmobile=1 — floor browser/list rows at a tap target
+TAPMIN: con 132;	# 44pt at a 3x device
 
 # File browser state (module-level to avoid stack allocation in inner loop)
 brow_dirrects:  array of Rect;
@@ -206,6 +208,19 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	mainfont = font;
 	mountpt_g = mountpt;
 	actid_g = actid;
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — floor browser/list rows at a 44pt
+	# finger tap target on mobile (same env var lucifer.b reads).
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				mobile = 1;
+		}
+	}
 	mousech_g = mouse;
 	ctxreqch_g = req;
 	rszch_g = rsz;
@@ -1139,6 +1154,8 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 	zone := mainwin.r;
 	pad := 8;
 	lineH := mainfont.height + 2;
+	if(mobile && lineH < TAPMIN)
+		lineH = TAPMIN;	# 44pt finger tap target for browser entries
 	y := zone.min.y + pad;
 
 	mainwin.draw(zone, bgcol, nil, (0, 0));

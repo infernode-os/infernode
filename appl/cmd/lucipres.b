@@ -1711,6 +1711,8 @@ drawtaskboard(contentr: Rect, pad: int)
 	totalcards := ncards + 1;
 	mincardw := 200;
 	cardh := 60;
+	if(mobile && cardh < 132)
+		cardh = 132;	# 44pt finger tap target for task cards
 	gap := 8;
 	avail := contentr.dx() - 2 * pad;
 	cols := (avail + gap) / (mincardw + gap);

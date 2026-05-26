@@ -816,9 +816,9 @@ drawchrome(r: Rect)
 		tilepad := 8;	# horizontal text padding per side
 		tilegap := 4;	# gap between tiles
 		if(mobile) {
-			# Aim for ~48dp-equivalent tap target — leave a small
-			# margin so the tile doesn't crowd the LUCI header edges.
-			tileh = MOBILE_HEADERH - 24;
+			# Fill most of the header so the tile is a ~44pt tap target
+			# (MOBILE_HEADERH is 132 = 44pt; leave a thin margin).
+			tileh = MOBILE_HEADERH - 12;
 			tilepad = 20;
 			tilegap = 12;
 		}

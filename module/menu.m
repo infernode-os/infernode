@@ -55,6 +55,22 @@ Menu: module
 			   win: ref Draw->Image,
 			   at:  Draw->Point,
 			   ptr: chan of ref Draw->Pointer): int;
+
+		# Like show(), but draws on a transient top-most window
+		# allocated on `screen` so the menu floats above any sibling
+		# windows on that screen (e.g. a presentation app window
+		# stacked above the caller's own zone window).  `bounds` (in
+		# screen coordinates) is the rectangle the menu must stay
+		# within — typically the caller's window rect.  The overlay
+		# is freed on return; with a Refbackup screen this restores
+		# whatever was beneath it.  Use this instead of show() when
+		# the caller's own window is NOT guaranteed to be the topmost
+		# window in the menu's area.
+		showtop: fn(m: self ref Popup,
+			   screen: ref Draw->Screen,
+			   bounds: Draw->Rect,
+			   at:  Draw->Point,
+			   ptr: chan of ref Draw->Pointer): int;
 	};
 
 	# Initialise module state.  Must be called once before new().

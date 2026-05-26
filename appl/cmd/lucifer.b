@@ -75,6 +75,10 @@ LuciPres: module {
 	PATH: con "/dis/lucipres.dis";
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 	deliverevent: fn(ev: string);
+	# Hand lucipres the current shared presscr so it can allocate
+	# top-most overlay windows (context menus) above the app windows.
+	# Re-sent on every resize because handleresize() rebuilds presscr.
+	setpresscr: fn(scr: ref Draw->Screen);
 };
 
 GuiApp: module {
@@ -584,6 +588,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(lucipres == nil)
 		nomod(LuciPres->PATH);
 	lucipres_g = lucipres;
+	# Give lucipres the shared presscr for top-most menu overlays.
+	lucipres_g->setpresscr(presscr);
 
 	# Spawn zone goroutines
 	spawn luciconv->init(convimg, display, mainfont, monofont,
@@ -1566,6 +1572,11 @@ handleresize()
 		return;
 	pressubimg.name("lucifer-pres", 1);
 
+	# presscr was just reallocated — refresh lucipres's handle so its
+	# context-menu overlays land on the live screen, not the stale one.
+	if(lucipres_g != nil)
+		lucipres_g->setpresscr(presscr);
+
 	# Redraw chrome after zone allocation so separators are visible
 	drawchrome(r);
 
@@ -2011,10 +2022,23 @@ eventproc()
 
 mouseproc()
 {
+	# Mobile touch (button-1) tile-strip gesture state: a press becomes a
+	# horizontal drag-scroll if it moves, or an activity switch on release
+	# if it does not — so a swipe never switches the activity under the
+	# finger.  Desktop keeps switch-on-press.
+	tiledragging := 0;
+	tiledragstartx := 0;
+	tiledragstartoff := 0;
+	tilependid := -1;	# activity id to switch to on release (mobile tap)
+	tilepressed := 0;	# a button-1 press is active in the tile strip
+	SLOP: con 20;
+	prevb := 0;
 	for(;;) {
 		p := <-win.ctxt.ptr;
 		lastmousex = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
+			wasdown := prevb;
+			prevb = p.buttons;
 			headerh := 40;
 			titleh  := 0;
 			if(mobile) {
@@ -2037,6 +2061,58 @@ mouseproc()
 				}
 				if(y >= mobile_ctx_title_y && y < mobile_ctx_title_y + titleh) {
 					setexpandedzone(2);
+					continue;
+				}
+			}
+			# Mobile: tile-strip (activity bar) touch gesture.  A press
+			# in the header arms; a horizontal drag scrolls the strip; a
+			# release without a drag switches the activity.  This defers
+			# the switch off button-1 down so a swipe never activates the
+			# tile under the finger.  Desktop keeps switch-on-press below.
+			if(mobile) {
+				inheader := p.xy.y < mainwin.r.min.y + headerh;
+				if((p.buttons & 1) && (wasdown & 1) == 0 && inheader) {
+					cid := -1;
+					<-tilelock;
+					for(i := 0; i < ntiles; i++) {
+						t := tiles[i];
+						if(p.xy.x >= t.x && p.xy.x < t.x + t.w) {
+							if(t.id != actid)
+								cid = t.id;
+							break;
+						}
+					}
+					tilelock <-= 1;
+					tilependid = cid;
+					tiledragstartx = p.xy.x;
+					tiledragstartoff = tilescrollx;
+					tiledragging = 0;
+					tilepressed = 1;
+					continue;
+				}
+				if(tilepressed && (p.buttons & 1)) {
+					ddx := tiledragstartx - p.xy.x;
+					addx := ddx;
+					if(addx < 0) addx = -addx;
+					if(addx > SLOP)
+						tiledragging = 1;
+					if(tiledragging) {
+						noff := tiledragstartoff + ddx;
+						if(noff < 0) noff = 0;
+						if(noff > tiletotalw) noff = tiletotalw;
+						if(noff != tilescrollx) {
+							tilescrollx = noff;
+							alt { uievent <-= 1 => ; * => ; }
+						}
+					}
+					continue;
+				}
+				if(tilepressed && (p.buttons & 1) == 0) {
+					if(!tiledragging && tilependid >= 0)
+						writefile(mountpt + "/activity/current", string tilependid);
+					tilepressed = 0;
+					tiledragging = 0;
+					tilependid = -1;
 					continue;
 				}
 			}

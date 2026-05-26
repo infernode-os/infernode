@@ -26,7 +26,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Font, Image, Point, Rect, Pointer: import draw;
+	Display, Font, Image, Screen, Point, Rect, Pointer: import draw;
 
 include "lucitheme.m";
 
@@ -192,6 +192,26 @@ hassub(m: ref Popup, absidx: int): int
 Popup.show(m: self ref Popup, win: ref Image, at: Point,
 	ptr: chan of ref Pointer): int
 {
+	# Draw on the caller's own window, clamped to its rect.
+	return showcore(m, win, win.r, at, ptr, nil);
+}
+
+Popup.showtop(m: self ref Popup, screen: ref Screen, bounds: Rect,
+	at: Point, ptr: chan of ref Pointer): int
+{
+	# Draw on a transient top-most window allocated on `screen`.
+	return showcore(m, nil, bounds, at, ptr, screen);
+}
+
+# Shared menu core.  When ovlscreen == nil the menu is drawn directly on
+# `win` (the caller's window) and the region beneath it is saved/restored
+# the old way.  When ovlscreen != nil a transient top-most window is
+# allocated on it, sized to the menu, drawn on, and freed on return — a
+# Refbackup screen then restores whatever was beneath.  `bounds` is the
+# clamp rectangle (the caller's window rect, or the zone for an overlay).
+showcore(m: ref Popup, win: ref Image, bounds: Rect, at: Point,
+	ptr: chan of ref Pointer, ovlscreen: ref Screen): int
+{
 	# Generator: rebuild items/subs from current app state before posting.
 	if(m.gen != nil)
 		m.gen(m);
@@ -209,7 +229,7 @@ Popup.show(m: self ref Popup, win: ref Image, at: Point,
 	menuw := menuwidth(m.items);
 
 	# Determine scroll mode
-	winr := win.r;
+	winr := bounds;
 	maxfit := (winr.dy() - 2) / itemh;	# max items that fit in window
 	if(maxfit < 3)
 		maxfit = 3;
@@ -249,13 +269,26 @@ Popup.show(m: self ref Popup, win: ref Image, at: Point,
 	if(mr.min.y < winr.min.y)
 		mr = mr.subpt((0, mr.min.y - winr.min.y));
 
-	# Save the screen region behind the menu for clean restore.
+	# Overlay mode: allocate a transient top-most window sized to the
+	# menu.  Screen.newwindow() places it at z-top, above any sibling
+	# window (e.g. a presentation app) that covers the caller's zone.
+	if(ovlscreen != nil) {
+		win = ovlscreen.newwindow(mr, Draw->Refbackup, Draw->Nofill);
+		if(win == nil)
+			return -1;
+	}
+
+	# Save the screen region behind the menu for clean restore.  Not
+	# needed in overlay mode: freeing the overlay window restores the
+	# Refbackup beneath it.
 	savebuf: ref Image = nil;
 	d := win.display;
-	if(d != nil)
-		savebuf = d.newimage(mr, win.chans, 0, Draw->Nofill);
-	if(savebuf != nil)
-		savebuf.draw(savebuf.r, win, nil, mr.min);
+	if(ovlscreen == nil) {
+		if(d != nil)
+			savebuf = d.newimage(mr, win.chans, 0, Draw->Nofill);
+		if(savebuf != nil)
+			savebuf.draw(savebuf.r, win, nil, mr.min);
+	}
 
 	# Vertical offset for item content (below top border + optional up indicator)
 	yoff := 0;
@@ -520,12 +553,24 @@ Popup.show(m: self ref Popup, win: ref Image, at: Point,
 	if(activesub >= 0 && subsave != nil)
 		win.draw(submr, subsave, nil, submr.min);
 
-	# Restore region behind menu.
-	if(savebuf != nil)
-		win.draw(mr, savebuf, nil, savebuf.r.min);
-	else
-		win.draw(mr, mbg, nil, (0, 0));
-	win.flush(Draw->Flushnow);
+	if(ovlscreen != nil) {
+		# Free the overlay window → the Refbackup screen restores
+		# whatever was beneath it (the live app, etc.).  Limbo
+		# reference-counts the image, so dropping the ref frees it
+		# promptly; flush the screen's backing image to propagate the
+		# restore to the display.
+		win = nil;
+		simg := ovlscreen.image;
+		if(simg != nil)
+			simg.flush(Draw->Flushnow);
+	} else {
+		# Restore region behind menu on the caller's own window.
+		if(savebuf != nil)
+			win.draw(mr, savebuf, nil, savebuf.r.min);
+		else
+			win.draw(mr, mbg, nil, (0, 0));
+		win.flush(Draw->Flushnow);
+	}
 
 	return result;
 }

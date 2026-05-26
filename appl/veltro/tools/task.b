@@ -156,13 +156,24 @@ exec(args: string): string
 
 # Parse key=value attributes from argument string
 # Handles quoted values: label="Write poetry" tools=read,list
+#
+# Separators between top-level keys are whitespace OR a comma that
+# immediately precedes a new `<ident>=` token. Small models (notably
+# gpt-oss:20b) frequently comma-join the whole arg string —
+# `label=x,paths=/p,tools=read,write,brief="..."` — instead of using
+# spaces. Without comma-as-separator the first value greedily swallows
+# every following key (the "Tool task: created activity with a garbled
+# label, no tools, no brief" failure surfaced in the eval harness; see
+# pdfinn/infernode-eval-harness FINDINGS §F9). A bare comma INSIDE a
+# value (CSV like tools=read,write) is preserved — only a comma whose
+# next token looks like `key=` is treated as a separator.
 parseattrs(s: string): list of (string, string)
 {
 	result: list of (string, string);
 	i := 0;
 	for(;;) {
-		# skip whitespace
-		while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		# skip separators: whitespace, and a comma that begins a new key
+		while(i < len s && (s[i] == ' ' || s[i] == '\t' || iskeysepcomma(s, i)))
 			i++;
 		if(i >= len s)
 			break;
@@ -190,14 +201,33 @@ parseattrs(s: string): list of (string, string)
 			if(i < len s)
 				i++;	# skip closing quote
 		} else {
+			# read until a space, or a comma that starts the next key=
+			# token. A CSV comma (tools=read,write) stays in the value.
 			vstart := i;
-			while(i < len s && s[i] != ' ')
+			while(i < len s && s[i] != ' ' && !iskeysepcomma(s, i))
 				i++;
 			val = s[vstart:i];
 		}
 		result = (key, val) :: result;
 	}
 	return result;
+}
+
+# True if s[i] is a comma that immediately precedes a `<ident>=` token,
+# i.e. it separates two top-level key=value pairs rather than being part
+# of a CSV value. See parseattrs.
+iskeysepcomma(s: string, i: int): int
+{
+	if(i >= len s || s[i] != ',')
+		return 0;
+	j := i + 1;
+	identstart := j;
+	while(j < len s && s[j] != '=' && s[j] != ' ' && s[j] != ',')
+		j++;
+	# at least one ident char, terminated by '='
+	if(j > identstart && j < len s && s[j] == '=')
+		return 1;
+	return 0;
 }
 
 getattr(attrs: list of (string, string), key: string): string

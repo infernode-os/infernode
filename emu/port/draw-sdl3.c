@@ -59,6 +59,14 @@ static SDL_Renderer *sdl_renderer = NULL;
 static SDL_Texture *sdl_texture = NULL;
 static int sdl_width = 0;
 static int sdl_height = 0;
+/* Byte stride of a screen_data row. NOT sdl_width*4: Inferno's memimage
+ * pads each scan line up to a whole number of ulong words (wordsperline),
+ * so for an odd pixel width (e.g. iPhone 15 at 3x = 1179px) the real
+ * stride is sdl_width*4 + 4. Using sdl_width*4 as the texture-upload pitch
+ * then drifts every row by a pixel — the diagonal shear seen on iOS. On
+ * even widths (macOS/Linux Retina 2x) this equals sdl_width*4, so it's a
+ * no-op there. */
+static int sdl_stride = 0;
 static int sdl_running = 0;
 static int sdl_initialized = 0;  /* Flag: SDL already initialized on main thread */
 
@@ -469,8 +477,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 
 	sdl_running = 1;
 
-	/* Allocate screen buffer */
-	screen_data = malloc(sdl_width * sdl_height * 4);
+	/* Row stride must match Inferno's memimage layout (wordsperline),
+	 * not sdl_width*4 — see the sdl_stride comment. */
+	sdl_stride = wordsperline(Rect(0, 0, sdl_width, sdl_height), 32) * sizeof(ulong);
+
+	/* Allocate screen buffer at the padded stride. */
+	screen_data = malloc(sdl_stride * sdl_height);
 	if (!screen_data) {
 		SDL_DestroyTexture(sdl_texture);
 		SDL_DestroyRenderer(sdl_renderer);
@@ -479,7 +491,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	}
 
 	/* Initialize buffer to white (Infernode default) */
-	memset(screen_data, 0xFF, sdl_width * sdl_height * 4);
+	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
 	/* Return screen parameters to Infernode */
 	*r = Rect(0, 0, sdl_width, sdl_height);
@@ -834,7 +846,7 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 		dirty.w = dirty_max_x - dirty_min_x;
 		dirty.h = dirty_max_y - dirty_min_y;
 
-		pitch = sdl_width * 4;
+		pitch = sdl_stride;
 		src = screen_data + (dirty_min_y * pitch) + (dirty_min_x * 4);
 
 		SDL_UpdateTexture(sdl_texture, &dirty, src, pitch);

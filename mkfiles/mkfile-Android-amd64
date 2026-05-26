@@ -1,0 +1,51 @@
+# Target flags for Android x86_64 (Bionic), cross-compiled via NDK r29+.
+# Counterpart to mkfile-Android-arm64 — same toolchain, x86_64 ABI.
+#
+# Motivation: modern Android emulator (36.x) dropped arm-translation on
+# x86_64 hosts, so to iterate visually on a Linux/x86_64 host with the
+# emulator AVDs we have to ship native x86_64 .so files alongside the
+# arm64-v8a ones. Same Bionic, same Inferno emu, just the other ABI.
+# Selected by `OBJTYPE=amd64 SYSTARG=Android`.
+
+TARGMODEL=	Posix
+TARGSHTYPE=	sh
+CPUS=		amd64
+
+O=		o
+OS=		o
+
+# NDK location: same scheme as mkfile-Android-arm64 — the driver script
+# sets ANDROID_NDK_HOME, with a fallback to $HOME/Android/Sdk/ndk/android-ndk-r29
+# at the shell level. mk has no `${VAR:-default}` expansion.
+NDK=		$ANDROID_NDK_HOME
+TOOLCHAIN=	$NDK/toolchains/llvm/prebuilt/linux-x86_64
+TARGET=		x86_64-linux-android
+# API floor matches arm64: getrandom() and friends, Android 9+ devices.
+API=		28
+
+AR=		$TOOLCHAIN/bin/llvm-ar
+ARFLAGS=	ruvs
+
+AS=		$TOOLCHAIN/bin/${TARGET}${API}-clang -c
+ASFLAGS=
+
+CC=		$TOOLCHAIN/bin/${TARGET}${API}-clang -c
+# -fPIC matches the arm64 mkfile and is required for the libemu.so target
+# (Phase 1c JNI / APK packaging). On x86_64 -fPIC has slight overhead but
+# it's free in practice and lets the same .o set link into both o.emu
+# (PIE exec) and libemu.so (shared library).
+CFLAGS=		-g\
+		-O\
+		-fno-strict-aliasing\
+		-fstack-protector-strong\
+		-fPIC\
+		-Wuninitialized -Wunused-variable -Wreturn-type -Wimplicit\
+		-Werror=return-type -Werror=implicit-function-declaration\
+		-I$ROOT/Android/amd64/include\
+		-I$ROOT/include\
+		-DANDROID_X86_64\
+		-fcommon
+
+ANSICPP=
+LD=		$TOOLCHAIN/bin/${TARGET}${API}-clang
+LDFLAGS=	-fcommon

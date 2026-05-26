@@ -87,7 +87,15 @@ window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
 	# that subscribe read ctxt.kbd as before.  No app-side change
 	# required and Window adt is not extended (keeps wmclient.m's
 	# interface signature stable for all callers).
-	ks := ref KbdState(w.ctxt, chan of int, 0);
+	# stop is buffered (chan[1]) so startinput()'s non-blocking signal
+	# can never be lost: under -c0 the spawned drainer may not have
+	# parked in its alt yet when startinput fires, and an unbuffered
+	# send would then hit the default branch and leave the drainer
+	# running — it would then split ctxt.kbd with the real reader, so
+	# each got every OTHER key ("two" typed as "w"). With a buffer the
+	# signal sticks until the drainer next reaches its alt and exits.
+	# (INFR-101.)
+	ks := ref KbdState(w.ctxt, chan[1] of int, 0);
 	kbdstates = ks :: kbdstates;
 	spawn kbddrainer(ks);
 

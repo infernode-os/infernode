@@ -40,6 +40,8 @@ SCROLLIND:  con 12;		# scroll indicator height (pixels)
 # --- Module-level state (set once by init, used by all Popup.show calls) ---
 
 mfont:		ref Font;
+mmobile:	int;		# /env/infmobile=1 — floor item rows at a 44pt tap target
+MOBILE_TAPMIN:	con 132;	# 44pt at a 3x device
 mbg:		ref Image;	# menu background
 mborder:	ref Image;	# 1px frame
 mhilit:		ref Image;	# highlighted item background
@@ -54,6 +56,19 @@ init(d: ref Display, f: ref Font)
 	if(d == nil || f == nil)
 		return;
 	loadcolors(d);
+
+	# Mobile (accordion / 44pt tap targets): floor menu item rows.
+	mmobile = 0;
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				mmobile = 1;
+		}
+	}
 }
 
 retheme(d: ref Display)
@@ -189,6 +204,8 @@ Popup.show(m: self ref Popup, win: ref Image, at: Point,
 	nitems := len m.items;
 	lpad := 4;	# top/bottom item padding
 	itemh := mfont.height + lpad * 2;
+	if(mmobile && itemh < MOBILE_TAPMIN)
+		itemh = MOBILE_TAPMIN;	# 44pt finger tap target
 	menuw := menuwidth(m.items);
 
 	# Determine scroll mode

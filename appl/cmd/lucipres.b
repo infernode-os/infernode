@@ -160,7 +160,17 @@ centeredart: string;
 artrendw := 0;
 maxpresscrollpx := 0;
 maxpanx := 0;
+mobile := 0;	# set from /env/infmobile in init() (accordion / 44pt tap targets)
 pres_viewport_h := 400;
+
+# Long-press → context menu (mobile).  Desktop uses button-3; touch has no
+# right-click, so a press-and-hold that doesn't move opens the same menu.
+LONGPRESS_MS:  con 500;	# hold duration
+LONGPRESS_SLOP: con 20;	# movement (px) that cancels the press
+lpch:      chan of int;	# timer fires the press sequence id back here
+lpseq      := 0;	# bumped on every new press; stale timers are ignored
+lppending  := 0;	# a press is being timed
+lppos:     Point;	# where the press started
 
 # Tab state
 tablayout: array of ref TabRect;
@@ -216,6 +226,19 @@ init(ctxt: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "lucipres: display is nil\n");
 		return;
 	}
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — same env var lucifer.b reads.
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				mobile = 1;
+		}
+	}
+	lpch = chan of int;	# long-press timer signal
 
 	# Load theme colours
 	lucitheme := load Lucitheme Lucitheme->PATH;
@@ -345,6 +368,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 			wasdown := prevbuttons;
 			prevbuttons = p.buttons;
 
+			# Cancel a pending long-press if the finger lifted or moved.
+			if(lppending) {
+				dx := p.xy.x - lppos.x;
+				if(dx < 0) dx = -dx;
+				dy := p.xy.y - lppos.y;
+				if(dy < 0) dy = -dy;
+				if((p.buttons & 1) == 0 ||
+						dx > LONGPRESS_SLOP || dy > LONGPRESS_SLOP)
+					lppending = 0;
+			}
+
 			# Scroll wheel
 			if(p.buttons & 8) {
 				intabstrip := (tabstrip_maxy > tabstrip_miny &&
@@ -368,6 +402,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 			# Button-1 just pressed
 			if(p.buttons == 1 && wasdown == 0) {
+				# Mobile: arm a long-press → context menu (no right-click).
+				if(mobile) {
+					lpseq++;
+					lppending = 1;
+					lppos = p.xy;
+					spawn lptimer(lpseq);
+				}
 				tabclicked := 0;
 				# Tab clicks
 				for(ti := 0; ti < ntabs; ti++) {
@@ -481,6 +522,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 					prevbuttons = 0;
 					redrawpres();
 				}
+			}
+		}
+	seq := <-lpch =>
+		# Long-press fired: if that press is still held (not lifted/moved)
+		# open the context menu at the press point, mimicking button-3.
+		if(mobile && lppending && seq == lpseq) {
+			lppending = 0;
+			if(menumod != nil) {
+				handlecontextmenu(ref Pointer(0, lppos, 0));
+				prevbuttons = 0;
+				redrawpres();
 			}
 		}
 	ev := <-preseventch =>
@@ -669,6 +721,8 @@ drawpresentation(zone: Rect)
 
 	# Tab strip at top
 	tabh := mainfont.height + 12;
+	if(mobile && tabh < 132)
+		tabh = 132;	# 44pt finger tap target for the tab strip
 	tabr := Rect((zone.min.x, zone.min.y), (zone.max.x, zone.min.y + tabh));
 	mainwin.draw(tabr, headercol, nil, (0, 0));
 
@@ -690,12 +744,15 @@ drawpresentation(zone: Rect)
 		if(art.id == centart.id)
 			active = 1;
 		tcol := text2col;
+		# Centre the label vertically within the (possibly tall, on mobile)
+		# tab strip; the active-tab accent stays a bottom border.
+		laby := tabr.min.y + (tabh - mainfont.height) / 2;
 		if(active) {
 			tcol = textcol;
 			mainwin.draw(Rect((tx, tabr.max.y - 3), (tx + tw, tabr.max.y - 1)),
 				accentcol, nil, (0, 0));
 		}
-		mainwin.text((tx, tabr.min.y + 6), tcol, (0, 0), mainfont, art.label);
+		mainwin.text((tx, laby), tcol, (0, 0), mainfont, art.label);
 		# Status dot for app tabs
 		if(art.atype == "app") {
 			dotcol: ref Image;
@@ -703,9 +760,15 @@ drawpresentation(zone: Rect)
 				dotcol = greencol_g;
 			else
 				dotcol = dimcol;
+			# Size the running-status dot relative to the font so it
+			# stays visible on Retina/mobile (a fixed 5px is microscopic
+			# at 3x) while remaining ~5px on desktop.
+			dotsz := mainfont.height / 3;
+			if(dotsz < 5)
+				dotsz = 5;
 			dotx := tx + tw + 4;
-			doty := tabr.min.y + (tabr.dy() - 5) / 2;
-			mainwin.draw(Rect((dotx, doty), (dotx + 5, doty + 5)), dotcol, nil, (0, 0));
+			doty := tabr.min.y + (tabr.dy() - dotsz) / 2;
+			mainwin.draw(Rect((dotx, doty), (dotx + dotsz, doty + dotsz)), dotcol, nil, (0, 0));
 		}
 		if(ntabs < len tablayout)
 			tablayout[ntabs++] = ref TabRect(
@@ -911,6 +974,14 @@ handledrag(art: ref Artifact, startpt: Point)
 }
 
 # --- Context menu ---
+
+# Long-press timer: after LONGPRESS_MS, signal the press sequence back to
+# the event loop, which opens the context menu if that press is still held.
+lptimer(seq: int)
+{
+	sys->sleep(LONGPRESS_MS);
+	lpch <-= seq;
+}
 
 handlecontextmenu(p: ref Pointer)
 {
@@ -1640,6 +1711,8 @@ drawtaskboard(contentr: Rect, pad: int)
 	totalcards := ncards + 1;
 	mincardw := 200;
 	cardh := 60;
+	if(mobile && cardh < 132)
+		cardh = 132;	# 44pt finger tap target for task cards
 	gap := 8;
 	avail := contentr.dx() - 2 * pad;
 	cols := (avail + gap) / (mincardw + gap);

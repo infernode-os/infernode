@@ -93,6 +93,8 @@ kf: ref Kbdfilter;
 sbar: ref Statusbar;
 catlist: ref Listbox;
 category: int;		# current category index
+mobile := 0;		# /env/infmobile=1 — floor row heights at a 44pt tap target
+TAPMIN: con 132;	# 44pt at a 3x device
 
 # Colours
 bgcolor:   ref Image;
@@ -188,6 +190,19 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	if(ctxt == nil) {
 		sys->fprint(stderr, "settings: no window context\n");
 		raise "fail:no context";
+	}
+
+	# KLUDGE-MOBILE-ACCORDION-INFR-119 — same env var lucifer.b reads;
+	# floors interactive row heights at a 44pt finger tap target.
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				mobile = 1;
+		}
 	}
 
 	# Parse -c <name> to choose initial category. Quietly ignore unknown
@@ -327,9 +342,18 @@ layoutcontent()
 	cw := wr.max.x - FORM_MARGIN;
 	cbottom := wr.max.y - sh - FORM_MARGIN;
 
-	fh := font.height + 8;
+	fh := font.height + 8;		# label/header height — NOT a tap target,
+					# kept compact so the form isn't stretched
 	bh := font.height + 10;
-	ch := font.height + 6;	# checkbox row height
+	ch := font.height + 6;		# checkbox/radio row height
+	fieldh := fh;			# interactive text-field height
+	if(mobile) {
+		# Floor only the INTERACTIVE rows at a 44pt tap target; labels
+		# and section headers stay compact (balanced mobile form).
+		if(fieldh < TAPMIN) fieldh = TAPMIN;
+		if(bh < TAPMIN) bh = TAPMIN;
+		if(ch < TAPMIN) ch = TAPMIN;
+	}
 
 	# Clear old panel state
 	theme_group = nil;
@@ -369,13 +393,13 @@ layoutcontent()
 	CatTheme =>
 		layouttheme(cx, cy, cw, ch);
 	CatLLM =>
-		layoutllm(cx, cy, cw, fh, bh, ch);
+		layoutllm(cx, cy, cw, fh, fieldh, bh, ch);
 	CatTools =>
 		layouttools(cx, cy, cw, cbottom, ch);
 	CatBudget =>
 		layoutbudget(cx, cy, cw, cbottom, ch);
 	CatPaths =>
-		layoutpaths(cx, cy, cw, cbottom, fh, bh);
+		layoutpaths(cx, cy, cw, cbottom, fieldh, bh);
 	CatPrompts =>
 		layoutprompts(cx, cy, cw, fh, bh);
 	CatProfile =>
@@ -398,7 +422,7 @@ layouttheme(cx, cy, cw, ch: int)
 	theme_group = RadioGroup.mk(Point(cx, cy), cw - cx, theme_names, sel, rowh);
 }
 
-layoutllm(cx, cy, cw, fh, bh, ch: int)
+layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 {
 	(curmode, curbackend, cururl, curmodel, curdial, haskey) := readllmconfig();
 	# On first entry, set mode from config; on re-layout after a radio
@@ -435,11 +459,11 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 			"Dial address (tcp!host!port):", 0, LEFT);
 		cy += fh;
 		llm_dial_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fh)),
+			Rect((cx, cy), (cw, cy + fieldh)),
 			"", 0);
 		llm_dial_tf.setval(curdial);
 		llm_dial_tf.focused = 1;
-		cy += fh + FORM_MARGIN;
+		cy += fieldh + FORM_MARGIN;
 	} else {
 		# Section header: Backend
 		llm_backend_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Backend", 1, LEFT);
@@ -482,10 +506,10 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 			"Endpoint URL:", 0, LEFT);
 		cy += fh;
 		llm_url_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fh)),
+			Rect((cx, cy), (cw, cy + fieldh)),
 			"", 0);
 		llm_url_tf.setval(cururl);
-		cy += fh + FORM_MARGIN;
+		cy += fieldh + FORM_MARGIN;
 
 		# Model
 		llm_model_label = Label.mk(
@@ -493,11 +517,11 @@ layoutllm(cx, cy, cw, fh, bh, ch: int)
 			"Model:", 0, LEFT);
 		cy += fh;
 		llm_model_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fh)),
+			Rect((cx, cy), (cw, cy + fieldh)),
 			"", 0);
 		llm_model_tf.setval(curmodel);
 		llm_model_tf.focused = 1;
-		cy += fh + FORM_MARGIN;
+		cy += fieldh + FORM_MARGIN;
 
 		# API key status
 		keystatus: string;
@@ -623,6 +647,7 @@ layoutprompts(cx, cy, cw, fh, bh: int)
 layoutprofile(cx, cy, cw, bh: int)
 {
 	fh := font.height + 8;
+	if(mobile && fh < TAPMIN) fh = TAPMIN;
 	profile_label = Label.mk(
 		Rect((cx, cy), (cw, cy + fh)),
 		"Startup profile: /lib/sh/profile", 0, LEFT);

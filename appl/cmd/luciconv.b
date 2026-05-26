@@ -665,8 +665,18 @@ drawconversation(zone: Rect)
 			}
 			if(marr[pi].progress != "")
 				h += PROGBAR_H + 6;
-			if(marr[pi].options != "")
-				h += BTNROW_H + 4;
+			if(marr[pi].options != "") {
+				if(mobile) {
+					# Mobile: each option is its own full-width,
+					# finger-sized row stacked vertically.
+					mbtnh := mainfont.height + 24;
+					if(mbtnh < 132) mbtnh = 132;	# 44pt finger tap target
+					(nil, mopts) := sys->tokenize(marr[pi].options, ",");
+					for(; mopts != nil; mopts = tl mopts)
+						h += mbtnh + 6;
+				} else
+					h += BTNROW_H + 4;
+			}
 			h += DLGPAD;
 			harr[pi] = h;
 			total_h += h + tilegap;
@@ -840,21 +850,41 @@ drawconversation(zone: Rect)
 			# Option buttons using widget toolkit
 			if(msg.options != "" && widgetmod != nil) {
 				(nil, opts) := sys->tokenize(msg.options, ",");
-				bx := dx;
-				for(; opts != nil; opts = tl opts) {
-					opt := hd opts;
-					bw := mainfont.width(opt) + 24;
-					if(bx + bw > dx + dw) break;
-					br := Rect((bx, dy), (bx + bw, dy + BTNROW_H));
-					if(br.min.y < msgy && br.max.y > zone.min.y) {
-						btn := Button.mk(br, opt);
-						btn.draw(mainwin);
-						if(ndlgbuttons < len dlgbuttons)
-							dlgbuttons[ndlgbuttons++] = ref DlgButton(btn, opt, i);
+				if(mobile) {
+					# Mobile: stack options vertically as full-width,
+					# finger-sized rows.  The old horizontal layout packed
+					# them onto one line (tiny tap targets) and silently
+					# dropped any that didn't fit the narrow width.
+					mbtnh := mainfont.height + 24;
+					if(mbtnh < 132) mbtnh = 132;	# 44pt finger tap target
+					for(; opts != nil; opts = tl opts) {
+						opt := hd opts;
+						br := Rect((dx, dy), (dx + dw, dy + mbtnh));
+						if(br.min.y < msgy && br.max.y > zone.min.y) {
+							btn := Button.mk(br, opt);
+							btn.draw(mainwin);
+							if(ndlgbuttons < len dlgbuttons)
+								dlgbuttons[ndlgbuttons++] = ref DlgButton(btn, opt, i);
+						}
+						dy += mbtnh + 6;
 					}
-					bx += bw + 8;
+				} else {
+					bx := dx;
+					for(; opts != nil; opts = tl opts) {
+						opt := hd opts;
+						bw := mainfont.width(opt) + 24;
+						if(bx + bw > dx + dw) break;
+						br := Rect((bx, dy), (bx + bw, dy + BTNROW_H));
+						if(br.min.y < msgy && br.max.y > zone.min.y) {
+							btn := Button.mk(br, opt);
+							btn.draw(mainwin);
+							if(ndlgbuttons < len dlgbuttons)
+								dlgbuttons[ndlgbuttons++] = ref DlgButton(btn, opt, i);
+						}
+						bx += bw + 8;
+					}
+					dy += BTNROW_H + 4;
 				}
-				dy += BTNROW_H + 4;
 			}
 
 			y = tiletop;

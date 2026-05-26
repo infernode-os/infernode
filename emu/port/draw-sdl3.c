@@ -48,6 +48,7 @@
 #ifdef __APPLE__
 #include <dispatch/dispatch.h>
 #include <pthread.h>
+#include <TargetConditionals.h>
 #endif
 
 /* External keyboard queue (from devcons.c) */
@@ -241,6 +242,8 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
  * Updates sdl_width/sdl_height to physical pixels for crisp HiDPI rendering.
  * Must be called after sdl_window is created and before texture creation.
  */
+static void update_text_input_area(void);
+
 static void
 init_hidpi(void)
 {
@@ -279,6 +282,37 @@ init_hidpi(void)
 	sdl_width = safe_w;
 	sdl_height = safe_h;
 	calc_dest_rect();
+	update_text_input_area();	/* window may have resized/rotated */
+}
+
+/*
+ * iOS soft-keyboard avoidance.  Lucifer's text input row lives at the
+ * very bottom of the screen, exactly where the on-screen keyboard appears,
+ * so without a hint iOS leaves the field hidden behind the keyboard.
+ * SDL_SetTextInputArea tells UIKit where the caret is (in window POINTS,
+ * not drawable pixels); SDL then slides the view up so that rect stays
+ * visible above the keyboard.  No-op on macOS/Linux (no soft keyboard).
+ */
+static void
+update_text_input_area(void)
+{
+#if defined(__APPLE__) && TARGET_OS_IOS
+	int win_w = 0, win_h = 0;
+	SDL_Rect r;
+	int ih;
+
+	if (!sdl_window)
+		return;
+	SDL_GetWindowSize(sdl_window, &win_w, &win_h);	/* points */
+	if (win_w <= 0 || win_h <= 0)
+		return;
+	ih = 56;					/* input row height, points */
+	r.x = 0;
+	r.w = win_w;
+	r.h = ih;
+	r.y = win_h - ih;				/* bottom input row */
+	SDL_SetTextInputArea(sdl_window, &r, 0);
+#endif
 }
 
 /*
@@ -313,6 +347,7 @@ create_renderer_and_texture(void)
 	SDL_SetTextureScaleMode(sdl_texture, SDL_SCALEMODE_NEAREST);
 	SDL_ShowWindow(sdl_window);
 	SDL_StartTextInput(sdl_window);
+	update_text_input_area();	/* iOS: keep the input row above the keyboard */
 	return 1;
 }
 

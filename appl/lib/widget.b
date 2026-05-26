@@ -29,6 +29,20 @@ LEFTPAD: con 4;		# left indent for labels, checkboxes, radios
 
 wfont:    ref Font;
 wdisplay: ref Display;	# cached for colour allocation
+wmobile:  int;		# 1 when /env/infmobile=1 — floor row heights at a 44pt tap target
+
+# MOBILE_TAPMIN: minimum finger tap-target height in mobile mode = 44pt at
+# a 3x device (iOS HIG; Android 48dp is comparable).
+MOBILE_TAPMIN: con 132;
+
+# taprowh: a list/selection row height, floored at one tap target on mobile.
+taprowh(): int
+{
+	rh := wfont.height + MARGIN;
+	if(wmobile && rh < MOBILE_TAPMIN)
+		rh = MOBILE_TAPMIN;
+	return rh;
+}
 
 # Cached colour images (created from theme in init/retheme)
 trackcolor:  ref Image;
@@ -75,6 +89,19 @@ init(display: ref Display, font: ref Font)
 	wdisplay = display;
 	activesb = nil;
 	loadcolors(display);
+
+	# Detect mobile (accordion / 44pt tap targets), same env var lucifer reads.
+	wmobile = 0;
+	(mok, mst) := sys->stat("/env/infmobile");
+	if(mok == 0 && mst.length > big 0) {
+		mfd := sys->open("/env/infmobile", Sys->OREAD);
+		if(mfd != nil) {
+			mbuf := array[16] of byte;
+			mn := sys->read(mfd, mbuf, len mbuf);
+			if(mn > 0 && mbuf[0] == byte '1')
+				wmobile = 1;
+		}
+	}
 }
 
 retheme(display: ref Display)
@@ -521,10 +548,17 @@ Checkbox.draw(cb: self ref Checkbox, dst: ref Image)
 	if(wfont == nil)
 		return;
 
+	# Size the box relative to the font so it stays legible/tappable on
+	# Retina/mobile (the fixed CHECKBOXSZ is tiny at 3x) while remaining
+	# the same on desktop (where 3/4 of the small font floors to CHECKBOXSZ).
+	cbsz := wfont.height * 3 / 4;
+	if(cbsz < CHECKBOXSZ)
+		cbsz = CHECKBOXSZ;
+
 	# Centre box vertically within row
-	boxy := cb.r.min.y + (cb.r.dy() - CHECKBOXSZ) / 2;
+	boxy := cb.r.min.y + (cb.r.dy() - cbsz) / 2;
 	boxx := cb.r.min.x + LEFTPAD;
-	boxr := Rect((boxx, boxy), (boxx + CHECKBOXSZ, boxy + CHECKBOXSZ));
+	boxr := Rect((boxx, boxy), (boxx + cbsz, boxy + cbsz));
 
 	# Box background and border
 	dst.draw(boxr, fieldbg, nil, Point(0, 0));
@@ -538,8 +572,8 @@ Checkbox.draw(cb: self ref Checkbox, dst: ref Image)
 		# Inner area for the check mark
 		ix := boxr.min.x + 3;
 		iy := boxr.min.y + 3;
-		iw := CHECKBOXSZ - 6;
-		ih := CHECKBOXSZ - 6;
+		iw := cbsz - 6;
+		ih := cbsz - 6;
 		# Descending stroke: top-left to mid-bottom
 		dst.line(Point(ix, iy + ih/2),
 			 Point(ix + iw/3, iy + ih),
@@ -551,7 +585,7 @@ Checkbox.draw(cb: self ref Checkbox, dst: ref Image)
 	}
 
 	# Label text
-	tx := boxx + CHECKBOXSZ + CHECKBOXGAP;
+	tx := boxx + cbsz + CHECKBOXGAP;
 	ty := cb.r.min.y + (cb.r.dy() - wfont.height) / 2;
 	dst.text(Point(tx, ty), fieldtext, Point(0, 0), wfont, cb.label);
 }
@@ -591,27 +625,33 @@ Radio.draw(rb: self ref Radio, dst: ref Image)
 	if(wfont == nil)
 		return;
 
+	# Font-relative radius: legible/tappable on Retina/mobile, unchanged
+	# on desktop (3/8 of the small font floors to RADIOR).
+	rr := wfont.height * 3 / 8;
+	if(rr < RADIOR)
+		rr = RADIOR;
+
 	# Centre circle vertically within row
 	cy := rb.r.min.y + rb.r.dy() / 2;
-	cx := rb.r.min.x + LEFTPAD + RADIOR + 1;
+	cx := rb.r.min.x + LEFTPAD + rr + 1;
 	c := Point(cx, cy);
 
 	# Outer circle (border)
-	dst.ellipse(c, RADIOR, RADIOR, 0, fieldborder, Point(0, 0));
+	dst.ellipse(c, rr, rr, 0, fieldborder, Point(0, 0));
 
 	# Fill with background
-	dst.fillellipse(c, RADIOR - 1, RADIOR - 1, fieldbg, Point(0, 0));
+	dst.fillellipse(c, rr - 1, rr - 1, fieldbg, Point(0, 0));
 
 	# Inner filled dot when selected
 	if(rb.selected) {
-		inner := RADIOR - 3;
+		inner := rr - 3;
 		if(inner < 2)
 			inner = 2;
 		dst.fillellipse(c, inner, inner, fieldfocus, Point(0, 0));
 	}
 
 	# Label text
-	tx := rb.r.min.x + LEFTPAD + RADIOR * 2 + RADIOGAP;
+	tx := rb.r.min.x + LEFTPAD + rr * 2 + RADIOGAP;
 	ty := rb.r.min.y + (rb.r.dy() - wfont.height) / 2;
 	dst.text(Point(tx, ty), fieldtext, Point(0, 0), wfont, rb.label);
 }
@@ -670,7 +710,7 @@ Dropdown.click(dd: self ref Dropdown, dst: ref Image,
 		return dd.selected;
 
 	# Calculate popup dimensions
-	rowh := wfont.height + MARGIN;
+	rowh := taprowh();
 	popw := dd.r.dx();
 	poph := rowh * len dd.items;
 
@@ -1107,7 +1147,7 @@ Listbox.draw(lb: self ref Listbox, dst: ref Image)
 	dst.draw(lb.r, listbg, nil, Point(0, 0));
 
 	# Draw items
-	rowh := wfont.height + MARGIN;
+	rowh := taprowh();
 	vis := lb.visible();
 	y := lb.r.min.y;
 	for(i := 0; i < vis && lb.top + i < len lb.items; i++) {
@@ -1156,7 +1196,7 @@ Listbox.click(lb: self ref Listbox, p: Point): int
 	if(!lb.r.contains(p))
 		return -1;
 
-	rowh := wfont.height + MARGIN;
+	rowh := taprowh();
 	row := (p.y - lb.r.min.y) / rowh;
 	idx := lb.top + row;
 	if(idx >= 0 && idx < len lb.items)
@@ -1193,7 +1233,7 @@ Listbox.visible(lb: self ref Listbox): int
 {
 	if(wfont == nil)
 		return 0;
-	rowh := wfont.height + MARGIN;
+	rowh := taprowh();
 	if(rowh <= 0)
 		return 0;
 	return lb.r.dy() / rowh;

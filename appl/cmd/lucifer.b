@@ -244,8 +244,12 @@ mobile_pres_title_y := 0;
 mobile_ctx_title_y := 0;
 
 # KLUDGE-MOBILE-ACCORDION-INFR-119
+# MOBILE_TAPMIN: minimum finger tap-target size = 44pt at this 3x device
+# (44 * 3 = 132px), per the iOS HIG (Android's 48dp is comparable).  Used
+# to floor interactive row/strip heights in mobile mode.
+MOBILE_TAPMIN:    con 132;
 MOBILE_HEADERH:   con 132;       # task bar height in mobile mode (room for a prominent logo)
-MOBILE_TITLEBARH: con 72;        # per-zone title bar height in mobile mode
+MOBILE_TITLEBARH: con MOBILE_TAPMIN;  # per-zone title bar = one tap target tall
 
 # nslistener process ID — killed and respawned on activity switch
 nslistenerpid := -1;
@@ -812,9 +816,9 @@ drawchrome(r: Rect)
 		tilepad := 8;	# horizontal text padding per side
 		tilegap := 4;	# gap between tiles
 		if(mobile) {
-			# Aim for ~48dp-equivalent tap target — leave a small
-			# margin so the tile doesn't crowd the LUCI header edges.
-			tileh = MOBILE_HEADERH - 24;
+			# Fill most of the header so the tile is a ~44pt tap target
+			# (MOBILE_HEADERH is 132 = 44pt; leave a thin margin).
+			tileh = MOBILE_HEADERH - 12;
 			tilepad = 20;
 			tilegap = 12;
 		}
@@ -1235,6 +1239,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					# First reshape for this app: allocate content-area window
 					tabh2 := 0;
 					if(mainfont != nil) tabh2 = mainfont.height + 13;
+					if(mobile && tabh2 < MOBILE_TAPMIN) tabh2 = MOBILE_TAPMIN;
 					appr := Rect((curzone.min.x, curzone.min.y + tabh2), curzone.max);
 					img := scr.newwindow(appr, Draw->Refbackup, Draw->Nofill);
 					if(img == nil) {
@@ -1317,6 +1322,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		# Resize ALL tasks' app windows (content area)
 		tabh3 := 0;
 		if(mainfont != nil) tabh3 = mainfont.height + 13;
+		if(mobile && tabh3 < MOBILE_TAPMIN) tabh3 = MOBILE_TAPMIN;
 		appr2 := Rect((curzone.min.x, curzone.min.y + tabh3), curzone.max);
 		for(rtpi := 0; rtpi < ntaskpres; rtpi++) {
 			rtp := taskpres[rtpi];
@@ -1358,6 +1364,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		# content area routes to active app or lucipres.
 		tabh_m := 0;
 		if(mainfont != nil) tabh_m = mainfont.height + 13;
+		if(mobile && tabh_m < MOBILE_TAPMIN) tabh_m = MOBILE_TAPMIN;
 		if(p.xy.y < curzone.min.y + tabh_m) {
 			# Tab strip: always deliver to lucipres
 			if(lucipresclient != nil)

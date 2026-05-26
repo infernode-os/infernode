@@ -186,6 +186,10 @@ tmp/*.pdfi*
 tmp/plumb.log
 tmp/.veltro/
 
+# Veltro runtime working dir (subagent trajectory logs etc. written when
+# running veltro tests under emu); not source.
+usr/inferno/veltro/
+
 # Stale build artifacts placed in wrong location (authoritative copies are in dis/)
 dis/cmd/luci*.dis
 dis/cmd/luci*.sbl

@@ -2,19 +2,19 @@
 
 # Core UI
 bg 080808
-border 131313
+border 242424
 windowborder 1A1A1A
 header 0A0A0A
 accent E8553A
 text CCCCCC
 text2 999999
-dim 444444
+dim 5A5A5A
 label 333333
 
 # Conversation zone
 human 1E2028
 veltro 0E1418
-input 101010
+input 1C1C1C
 cursor E8553A
 
 # Status / semantic

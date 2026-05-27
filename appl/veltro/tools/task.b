@@ -117,11 +117,11 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"task\"," +
-		"\"description\":\"Create and manage delegated AI tasks. Each task has its own conversation, tools, and filesystem overlay.\"," +
+		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, poll status until it reports done, then read its result. Never re-create a task that is already running.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, close.\"}," +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, close. These are the ONLY commands — there is no write/run/send. To make a task do work, describe it in args brief=/instructions= at create time.\"}," +
 				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes (label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [brief=<text>] [instructions=<text>] [category=<text>] [model=<name>] [agenttype=<type>]). For status/close: the task id. Omit for list.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +

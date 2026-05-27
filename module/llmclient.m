@@ -83,6 +83,12 @@ Llmclient: module
 	# Build JSON conversation history from message list
 	messagesjson:   fn(msgs: list of ref LlmMessage): string;
 
+	# Build the full OpenAI-shape chat request body for a request.
+	# Exposed for request-shape regression tests (INFR-132): the
+	# thinking-capability gating of options.think / reasoning_effort is
+	# only observable in this string.
+	buildopenairequestjson: fn(req: ref AskRequest): string;
+
 	# JSON escape helper
 	jsonescapestr:  fn(s: string): string;
 };

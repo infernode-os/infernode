@@ -450,6 +450,20 @@ findalltool(name: string): ref ToolInfo
 	return nil;
 }
 
+# A tool is delegatable to a child if it is loaded anywhere — the active
+# set (`tools`, what this agent exposes directly) OR the pre-loaded
+# inactive pool (`alltools`). The parent need NOT have the tool active to
+# delegate it: the meta-agent's own toolset is intentionally restricted,
+# but it holds a broader delegation budget (-b) of tools it may hand to
+# task agents, which each get their own tools9p with the tool activated.
+# Checking only the active set (the old `findtool` test) wrongly denied
+# every budget-only tool (write, edit, exec, websearch, ...), so the meta
+# could never delegate the very tools it is meant to delegate.
+toolavailable(name: string): int
+{
+	return findtool(name) != nil || findalltool(name) != nil;
+}
+
 # Move a tool from alltools to the active set; return nil on success or error string
 ctladd(name: string): string
 {
@@ -577,7 +591,7 @@ childbudget(): list of string
 {
 	ok: list of string;
 	for(bl := budget; bl != nil; bl = tl bl)
-		if(findtool(hd bl) != nil)
+		if(toolavailable(hd bl))
 			ok = hd bl :: ok;
 	return ok;
 }
@@ -921,14 +935,17 @@ provisiontask(args: string)
 			pathsarg = tok[6:];
 	}
 
-	# Build tool list: requested tools must stay within the active parent set
-	# and current delegation budget. Child tasks may narrow, never expand.
+	# Build tool list: requested tools must stay within the delegation
+	# budget and be loaded (active OR pre-loaded inactive). The budget,
+	# not the parent's active set, is the delegation boundary — a child
+	# may receive any budget tool even when the parent holds it inactive.
+	# Child tasks may narrow, never expand beyond the budget.
 	toollist: list of string;
 	if(toolsarg != "") {
 		(nil, ttoks) := sys->tokenize(toolsarg, ",");
 		for(; ttoks != nil; ttoks = tl ttoks) {
 			tname := hd ttoks;
-			if(!strlist_contains(childbudget(), tname) || findtool(tname) == nil) {
+			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname)) {
 				sys->fprint(stderr, "tools9p: provision: denied tool %s\n", tname);
 				continue;
 			}

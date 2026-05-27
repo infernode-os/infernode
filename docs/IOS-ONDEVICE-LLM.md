@@ -55,14 +55,16 @@ regardless of quality. Allowed families: **Llama (Meta), Mistral, GPT-OSS.**
   (SwiftLM on Metal, driven through `/n/llm`): to a plain "Hello" it
   emitted a raw tool-call JSON *example* instead of a reply — too weak for
   the tool template. Keep it only as a download-speed / plumbing smoke test.
-- **Floor for the agent harness: `mlx-community/Llama-3.2-3B-Instruct-4bit`**
-  (~1.8 GB; the Full Moon default, Meta). For more muscle where memory
-  allows (all verified present on HF `mlx-community`):
-  - Mistral: `Ministral-3-8B-Instruct-2512-4bit` (newest, ~4.5 GB),
-    `Mistral-7B-Instruct-v0.3-4bit` (~4 GB), or `Ministral-3-3B-Instruct-2512-4bit`
-    (on-device class).
-  - GPT-OSS (OpenAI): `gpt-oss-20b-MXFP4-Q4` (~12 GB, desktop/Mac, too large
-    for on-device); `gpt-oss-120b-4bit` exists but is server-class.
+- **On-device pick: `mlx-community/Llama-3.2-3B-Instruct-4bit`** (~1.8 GB,
+  Meta; the Full Moon default). Tested through `/n/llm` — coherent and
+  format-following. This is the working on-device model.
+- **Tried, not recommended on-device: `Ministral-3-8B-Instruct-2512-4bit`**
+  (Mistral, ~4.5 GB). Despite the size it dropped multi-step reasoning at
+  4-bit (narrated the right steps for `3-1+2` but answered "2"), so we stay
+  on Llama-3.2-3B for the device.
+- **Server-side muscle: GPT-OSS** — `gpt-oss-20b-MXFP4-Q4` (~12 GB, Mac/
+  desktop; too large for the phone, reached via remote `/n/llm`). The better
+  tool-user, and where the device defers over the seam.
 
 ## Decision (2026-05-27): open-weight basis; any engine stays behind the seam
 

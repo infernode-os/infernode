@@ -43,6 +43,22 @@ So the reusable asset is the **MLX-Swift-on-Metal inference path**, and
 the models are free and public. The exact models Full Moon uses, plus
 the whole MLX catalogue, are available to us.
 
+## Recommended models (tested against the agent harness)
+
+The whole MLX catalogue is open to us, but **not every size works with
+the Veltro agent stack** — its system prompt carries the full tool-calling
+template, and very small models can't follow it.
+
+- **Not recommended: `Llama-3.2-1B-Instruct-4bit`.** Observed 2026-05-27
+  (SwiftLM on Metal, driven through `/n/llm`): to a plain "Hello" it
+  emitted a raw tool-call JSON *example* instead of a reply — too weak for
+  the tool template. Keep it only as a download-speed / plumbing smoke test.
+- **Floor for the agent harness: a capable 3B-4bit.**
+  `mlx-community/Qwen2.5-3B-Instruct-4bit` (~1.7 GB) follows the tool-calling
+  template well; `Llama-3.2-3B-Instruct-4bit` (~1.8 GB) is the Full Moon
+  default. Step up to `Qwen2.5-7B-Instruct-4bit` (~4.3 GB) for stronger
+  harness evaluation where device memory allows.
+
 ## Decision (2026-05-27): open-weight basis; any engine stays behind the seam
 
 Settled with the project owner:

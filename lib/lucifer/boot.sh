@@ -54,12 +54,12 @@ if {! ~ $skiplogon 1} {
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
 		llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
 		if {~ $llmbackend openai} {
-			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
+			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /tmp/llmsrv.log
 		}{
 			if {! ~ $llmmodel ''} {
-				llmsrv -M $llmmodel >[2] /dev/null
+				llmsrv -M $llmmodel >[2] /tmp/llmsrv.log
 			}{
-				llmsrv >[2] /dev/null
+				llmsrv >[2] /tmp/llmsrv.log
 			}
 		}
 	}
@@ -74,7 +74,7 @@ luciuisrv
 echo activity create Main > /n/ui/ctl
 sleep 1
 /dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
-lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
+lucibridge -a 0 -v -s >[2=1] | tee /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
 lucifer

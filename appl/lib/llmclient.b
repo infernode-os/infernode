@@ -575,7 +575,7 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
             req: ref AskRequest): (ref AskResponse, string)
 {
-	st := ref _SseState("", 0, "", nil, nil, nil);
+	st := ref _SseState("", "", 0, "", nil, nil, nil);
 	headersbuf := array[0] of byte;
 	bodybuf := array[0] of byte;
 	in_body := 0;
@@ -984,6 +984,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 		return (nil, "openai: no choices in response");
 
 	responsetext := "";
+	reasoningtext := "";
 	finishreason := "";
 	toolcalls: list of (string, string, string);  # (id, name, args)
 
@@ -1001,6 +1002,9 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 			cv := msg.get("content");
 			if(cv != nil) pick c := cv { String => responsetext = c.s; }
 
+			rv := msg.get("reasoning");
+			if(rv != nil) pick r := rv { String => reasoningtext = r.s; }
+
 			tcv := msg.get("tool_calls");
 			if(tcv != nil) {
 				pick tca := tcv {
@@ -1016,7 +1020,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 						if(fnv != nil) {
 							nv := fnv.get("name");
 							av := fnv.get("arguments");
-							if(nv != nil) pick n := nv { String => name = n.s; }
+							if(nv != nil) pick n := nv { String => name = stripfunctionsprefix(n.s); }
 							if(av != nil) pick a := av { String => args = a.s; }
 						}
 						toolcalls = (id, name, args) :: toolcalls;
@@ -1029,6 +1033,14 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	if(tokens == 0)
 		tokens = estimatetokens(responsetext);
 
+	# Harmony leak defence — keep only the final answer if raw channel
+	# framing leaked into content. MUST precede the text tool-call fallback.
+	leaked := 0;
+	if(substrindex(responsetext, "<|channel|>", 0) >= 0) {
+		leaked = 1;
+		responsetext = stripthinking(responsetext);
+	}
+
 	# Fallback: parse tool calls from text content if model didn't use structured API
 	if(toolcalls == nil && responsetext != "" && req.tooldefs != nil) {
 		(remaining, extracted) := extracttexttoolcalls(responsetext, req.tooldefs);
@@ -1038,6 +1050,13 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 			finishreason = "tool_calls";
 		}
 	}
+
+	lognames: list of string;
+	for(tl0 := toolcalls; tl0 != nil; tl0 = tl tl0) {
+		(nil, lname, nil) := hd tl0;
+		lognames = lname :: lognames;
+	}
+	logresponse(req, "buffered", finishreason, responsetext, reasoningtext, lognames, leaked);
 
 	# Plain text mode
 	if(req.tooldefs == nil) {
@@ -1097,6 +1116,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 # can mutate via the helper without passing 6 separate by-ref params.
 _SseState: adt {
 	fulltext:     string;
+	reasoning:    string;	# accumulated delta.reasoning (harmony/think models)
 	tokens:       int;
 	finishreason: string;
 	# Tool-call delta accumulation. Parallel lists as maps
@@ -1156,6 +1176,18 @@ _ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
 			}
 		}
 
+		# Reasoning delta — harmony/thinking models stream their analysis
+		# channel here (Ollama separates it from content). Not forwarded to
+		# the live stream; accumulated for logging and fine-tuning capture.
+		rv := delta.get("reasoning");
+		if(rv != nil) {
+			pick r := rv {
+			String =>
+				if(r.s != "")
+					st.reasoning += r.s;
+			}
+		}
+
 		# Tool-call deltas
 		tcv := delta.get("tool_calls");
 		if(tcv != nil) {
@@ -1194,6 +1226,15 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 	if(st.tokens == 0)
 		st.tokens = estimatetokens(st.fulltext);
 
+	# Harmony leak defence — keep only the final answer if raw channel
+	# framing leaked into content. MUST precede the text tool-call
+	# fallback below.
+	leaked := 0;
+	if(substrindex(st.fulltext, "<|channel|>", 0) >= 0) {
+		leaked = 1;
+		st.fulltext = stripthinking(st.fulltext);
+	}
+
 	# Text tool-call fallback for models that emit tools as plain text
 	if(st.tcids == nil && st.fulltext != "" && req.tooldefs != nil) {
 		(remaining, extracted) := extracttexttoolcalls(st.fulltext, req.tooldefs);
@@ -1208,6 +1249,8 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 			st.finishreason = "tool_calls";
 		}
 	}
+
+	logresponse(req, "stream", st.finishreason, st.fulltext, st.reasoning, st.tcnames, leaked);
 
 	# Plain text mode
 	if(req.tooldefs == nil) {
@@ -1229,7 +1272,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 	n := listlen(st.tcids);
 	for(i := 0; i < n; i++) {
 		id := listget(st.tcids, i);
-		name := listget(st.tcnames, i);
+		name := stripfunctionsprefix(listget(st.tcnames, i));
 		rawargs := listget(st.tcargs, i);
 		args := extracttoolargs(rawargs);
 		safeargs := replaceall(args, "\n", "\\n");
@@ -1320,7 +1363,7 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	# in one go (askopenaistream's non-streaming peer, error fallback,
 	# or the existing fallback tests). For true incremental streaming,
 	# askopenaistream uses _ssehandle_event + _ssebuild_response directly.
-	st := ref _SseState("", 0, "", nil, nil, nil);
+	st := ref _SseState("", "", 0, "", nil, nil, nil);
 	lines := splitlines(body);
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
@@ -2072,6 +2115,117 @@ stripnl(s: string): string
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == '\r'))
 		s = s[:len s - 1];
 	return s;
+}
+
+# Index of `sub` in `s` at or after `from`, or -1. (string has no find.)
+substrindex(s, sub: string, from: int): int
+{
+	if(sub == "")
+		return from;
+	i := from;
+	if(i < 0)
+		i = 0;
+	while(i <= len s - len sub) {
+		if(s[i:i+len sub] == sub)
+			return i;
+		i++;
+	}
+	return -1;
+}
+
+# Defence against harmony/reasoning leaking into the content channel.
+# gpt-oss et al. emit "<|channel|>analysis<|message|>...<|channel|>final
+# <|message|>answer". Ollama normally separates these (reasoning vs
+# content) but some paths/backends leak the raw framing into content.
+# Keep only the text after the LAST final-channel marker; if there are
+# channel markers but no final channel, the model produced only an
+# analysis scratchpad with no user answer — return "" rather than leak
+# it. No-op (and cheap) for the common case of clean, already-separated
+# content. MUST run before extracttexttoolcalls so a leaked scratchpad
+# can't be mis-parsed into bogus tool calls.
+stripthinking(s: string): string
+{
+	CHAN := "<|channel|>";
+	if(substrindex(s, CHAN, 0) < 0)
+		return s;
+
+	FINAL := "<|channel|>final<|message|>";
+	last := -1;
+	i := substrindex(s, FINAL, 0);
+	while(i >= 0) {
+		last = i;
+		i = substrindex(s, FINAL, i + len FINAL);
+	}
+	if(last >= 0) {
+		body := s[last + len FINAL:];
+		ct := substrindex(body, "<|", 0);
+		if(ct >= 0)
+			body = body[0:ct];
+		return strip(body);
+	}
+	return "";
+}
+
+# gpt-oss harmony names tool recipients "functions.<tool>". Some backends
+# pass that through untranslated (or it leaks as text), yielding names
+# like "functions.read"/"functions/read" that don't match the bare tool
+# registered at /tool/<name> — manifesting as "Tool not found:
+# functions/read". Strip the namespace so the call resolves.
+stripfunctionsprefix(name: string): string
+{
+	while(hasprefix(name, "functions.") || hasprefix(name, "functions/"))
+		name = name[len "functions.":];
+	return name;
+}
+
+LLMLOG: con "/tmp/llmclient.log";
+
+# Append a line to the response log. Opens fresh each call so it works
+# regardless of inherited fds — llmsrv handles requests in a FORKNS|NEWFD
+# server proc where the module-global stderr does not route to the
+# operator log, so a fixed path is the reliable capture point.
+appendlog(line: string)
+{
+	fd := sys->open(LLMLOG, Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->create(LLMLOG, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	d := array of byte line;
+	sys->write(fd, d, len d);
+}
+
+# Concise per-response diagnostic (captured to /tmp/llmclient.log).
+# Records the content/reasoning split, tool calls, and whether a harmony
+# leak was stripped — the raw signal for debugging weird-but-consistent
+# responses and for fine-tuning data capture (the reasoning channel in
+# particular is otherwise dropped before the response reaches lucibridge).
+logresponse(req: ref AskRequest, src, finish, content, reasoning: string,
+		names: list of string, leaked: int)
+{
+	nt := 0;
+	nm := "";
+	for(l := names; l != nil; l = tl l) {
+		if(hd l != "") {
+			if(nm != "")
+				nm += ",";
+			nm += hd l;
+			nt++;
+		}
+	}
+	lk := "";
+	if(leaked)
+		lk = " HARMONY-LEAK-STRIPPED";
+	line := sys->sprint("resp[%s] model=%s finish=%s content=%dB reasoning=%dB tools=%d %s%s\n",
+		src, req.model, finish, len content, len reasoning, nt, nm, lk);
+	if(reasoning != "") {
+		r := reasoning;
+		if(len r > 600)
+			r = r[0:600] + "...";
+		line += "  reasoning: " + r + "\n";
+	}
+	appendlog(line);
 }
 
 splitlines(s: string): list of string

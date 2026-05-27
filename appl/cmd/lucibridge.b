@@ -1447,9 +1447,19 @@ agentturn(input: string)
 			break;
 		}
 
-		log("llm: " + agentlib->truncate(response, 200));
+		log("llm: " + agentlib->truncate(response, 1500));
 
 		(stopreason, tools, text) := agentlib->parsellmresponse(response);
+
+		# Chat breakdown for debugging weird responses: stop reason, how
+		# many tool calls the model emitted, and the conversational text.
+		ntools := 0;
+		for(tcl := tools; tcl != nil; tcl = tl tcl)
+			ntools++;
+		log(sys->sprint("parsed: stop=%s tools=%d text=%dB", stopreason, ntools,
+			len array of byte text));
+		if(text != "")
+			log("text: " + agentlib->truncate(text, 1500));
 
 		# Harness: 9P-native tool-call fallback. Models fine-tuned for
 		# coding (e.g. devstral-limbo-v2) emit tool invocations as plain

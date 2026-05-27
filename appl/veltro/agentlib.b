@@ -595,6 +595,12 @@ stripaction(response: string): string
 # Call tool via /tool filesystem
 calltool(tool, args: string): string
 {
+	# gpt-oss harmony names tools "functions.<name>"; strip the namespace
+	# so "functions.read"/"functions/read" resolves to /tool/read.
+	while((len tool >= 10 && tool[0:10] == "functions.") ||
+	      (len tool >= 10 && tool[0:10] == "functions/"))
+		tool = tool[10:];
+
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
 	# Open tool file

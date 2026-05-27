@@ -319,7 +319,7 @@ layoutall()
 		sbar.resize(sbr);
 
 	# Category list on left
-	catw := wr.dx() * CAT_WIDTH_FRAC / 100;
+	catw := catwidth(wr);
 	catr := Rect(wr.min, (wr.min.x + catw, wr.max.y - sh));
 	if(catlist == nil) {
 		catlist = Listbox.mk(catr);
@@ -332,12 +332,23 @@ layoutall()
 	layoutcontent();
 }
 
+# Width of the left category column. Wider on a phone so the (large-font)
+# category labels are readable instead of mostly truncated; the form on
+# the right still fits its single-column fields. INFR-155.
+catwidth(wr: Rect): int
+{
+	frac := CAT_WIDTH_FRAC;
+	if(mobile)
+		frac = 45;
+	return wr.dx() * frac / 100;
+}
+
 # Layout the right-hand content pane for the current category.
 layoutcontent()
 {
 	wr := w.imager(w.image.r);
 	sh := widgetmod->statusheight();
-	catw := wr.dx() * CAT_WIDTH_FRAC / 100;
+	catw := catwidth(wr);
 	# Content area starts after category list + divider
 	cx := wr.min.x + catw + 2 + FORM_MARGIN;
 	cy := wr.min.y + FORM_MARGIN;
@@ -789,7 +800,7 @@ redraw()
 		catlist.draw(w.image);
 
 	# Vertical divider
-	catw := wr.dx() * CAT_WIDTH_FRAC / 100;
+	catw := catwidth(wr);
 	dvx := wr.min.x + catw;
 	sh := widgetmod->statusheight();
 	w.image.draw(Rect((dvx, wr.min.y), (dvx + 2, wr.max.y - sh)),

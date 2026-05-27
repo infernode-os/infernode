@@ -49,7 +49,10 @@ init1(ctxt: ref Draw->Context)
 	p := <-w.ctxt.ptr =>
 		if(!w.pointer(*p) && p.buttons &1)
 			color(p.xy);
-		else if(p.buttons & 2){
+		# Button-2 (desktop middle-click) OR button-3 (touch long-press
+		# synthesised by the SDL3 gesture layer — see emu/port/draw-sdl3.c
+		# touch_lp_* and INFR-160/163) raises the exit menu.
+		else if(p.buttons & (2|4)){
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
 			n := menuhit->menuhit(p.buttons, mc, menu, nil);
 			if(n == 0)

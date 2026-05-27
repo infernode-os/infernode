@@ -100,7 +100,10 @@ wm(ctlio: ref Sys->FileIO,
 		c := findfid(clients, fid);
 		if(c == nil){
 			c = ref Client(
-				chan of int,
+				chan[32] of int,	# kbd: buffered so the compositor's
+							# non-blocking send doesn't drop keys
+							# while a -c0 app is mid-redraw (text
+							# input to workspace apps, e.g. settings)
 				chan of ref Draw->Pointer,
 				chan of string,
 				nil,

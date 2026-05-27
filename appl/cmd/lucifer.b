@@ -114,7 +114,6 @@ AppSlot: adt {
 	id:     string;
 	owneract: int;		# activity that created this app (immutable after alloc)
 	client: ref Client;
-	wantskbd: int;		# app subscribed to keyboard (startinput "kbd") → soft kbd
 };
 MAXAPPSLOTS: con 16;
 MAXTOKENPENDING: con 16;
@@ -1031,22 +1030,31 @@ reqkbd(on: int)
 }
 
 # 1 if the focused activity's active workspace app subscribed to the
-# keyboard (a text app), else 0. Used to restore the keyboard when the
-# Workspace zone is brought back on screen.
+# keyboard, else 0. Used to restore the keyboard when the Workspace zone
+# is brought back on screen.
 activeappwantskbd(): int
 {
-	tp := curtaskpres;
-	if(tp == nil || tp.activeappid == "")
+	if(curtaskpres == nil)
 		return 0;
-	wk := 0;
-	<-tp.applock;
-	for(ci := 0; ci < tp.nappslots; ci++)
-		if(tp.appslots[ci] != nil && tp.appslots[ci].id == tp.activeappid) {
-			wk = tp.appslots[ci].wantskbd;
-			break;
-		}
-	tp.applock <-= 1;
-	return wk;
+	return istextapp(curtaskpres.activeappid);
+}
+
+# Whether a workspace app should auto-raise the soft keyboard when it
+# becomes the active app. Many wm apps call startinput("kbd") as
+# boilerplate without actually being text editors (about, fractals, …),
+# so the kbd subscription is NOT a reliable signal — it popped the
+# keyboard over non-text apps. Gate on a small allowlist of apps that own
+# a full-window text area instead. (Form apps like settings use widget
+# Textfields, which raise the keyboard on field focus via widget.b, so
+# they are deliberately NOT here — otherwise the keyboard would pop on
+# open before any field is tapped.) The artifact id is the app basename.
+istextapp(id: string): int
+{
+	case id {
+	"editor" or "shell" or "sh" or "man" or "acme" or "xenith" =>
+		return 1;
+	}
+	return 0;
 }
 
 setexpandedzone(z: int)
@@ -1343,12 +1351,6 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			# Remove the tab immediately rather than waiting for the async fd close.
 			if(s == "embedded-exit")
 				cleanupappslot(c);
-			# An app subscribing to keyboard (startinput "kbd") declares it
-			# is a text context (shell, editor, man, settings, ...). Note it
-			# so the soft keyboard reveals when this app is the active one
-			# (INFR-155: text apps had no way to summon the keyboard).
-			if(len s >= 9 && s[0:9] == "start kbd")
-				markappwantskbd(c);
 			# All other req messages ("start ptr", "start kbd", "raise", etc.) — reply OK
 			alt { rc <-= (n, err) => ; * => ; }
 		}
@@ -2309,10 +2311,25 @@ kbdproc()
 			}
 		}
 
-		# Route decoded key to appropriate target
+		# Route decoded key to the focused target.
+		#
+		# Desktop: focus-follows-mouse over the presentation zone.
+		# Mobile (accordion): the EXPANDED zone decides focus — there is
+		# no mouse-follow, and pres_zone_minx is -1 there, so the desktop
+		# test could never fire and every key fell through to the chat
+		# zone (chat captured text even when collapsed; workspace text
+		# apps like settings got nothing). Route to the active workspace
+		# app when the Workspace zone is the one expanded.
 		ktp := curtaskpres;
-		if(pres_zone_minx > 0 && lastmousex >= pres_zone_minx &&
+		towkapp := 0;
+		if(mobile) {
+			if(expanded_zone == 1 && ktp != nil && ktp.activeappid != "")
+				towkapp = 1;
+		} else if(pres_zone_minx > 0 && lastmousex >= pres_zone_minx &&
 				lastmousex < pres_zone_maxx && ktp != nil && ktp.activeappid != "") {
+			towkapp = 1;
+		}
+		if(towkapp) {
 			routed := 0;
 			<-ktp.applock;
 			for(ksi := 0; ksi < ktp.nappslots; ksi++) {
@@ -2728,7 +2745,7 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		writeappstatus(id, "dead", targetact);
 		return;
 	}
-	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil, 0);
+	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil);
 	tp.nappslots++;
 	tp.applock <-= 1;
 	# Load the GUI app module
@@ -2996,47 +3013,21 @@ handleprescurrent()
 	# short-circuit, which left the z-order desynced whenever an app
 	# joined or was reallocated out of band — the wrong-window-visible
 	# bug.  Always enforcing is idempotent and race-proof.)
-	wk := 0;	# does the newly-focused app want the keyboard?
 	<-tp.applock;
-	if(atype == "app") {
+	if(atype == "app")
 		tp.activeappid = newid;
-		for(ci := 0; ci < tp.nappslots; ci++)
-			if(tp.appslots[ci] != nil && tp.appslots[ci].id == newid) {
-				wk = tp.appslots[ci].wantskbd;
-				break;
-			}
-	} else
+	else
 		tp.activeappid = "";
 	tp.applock <-= 1;
 	# Reveal/hide the soft keyboard to match the focused workspace app —
 	# but only while the Workspace zone is the one on screen, else the
-	# chat zone owns the keyboard. reqkbd no-ops off mobile.
-	if(!mobile || expanded_zone == 1)
-		reqkbd(wk);
-	enforcepreszorder();
-}
-
-# An app subscribed to keyboard input (startinput "kbd") → it's a text
-# context. Record it, and if it's the app currently in focus, raise the
-# soft keyboard now (apps subscribe after they're centred, so the
-# handleprescurrent reveal above can't see it yet). INFR-155.
-markappwantskbd(c: ref Client)
-{
-	for(tpi := 0; tpi < ntaskpres; tpi++) {
-		tp := taskpres[tpi];
-		if(tp == nil)
-			continue;
-		<-tp.applock;
-		for(ci := 0; ci < tp.nappslots; ci++) {
-			if(tp.appslots[ci] != nil && tp.appslots[ci].client == c) {
-				tp.appslots[ci].wantskbd = 1;
-				isactive := tp == curtaskpres && tp.activeappid == tp.appslots[ci].id;
-				tp.applock <-= 1;
-				if(isactive && (!mobile || expanded_zone == 1))
-					reqkbd(1);
-				return;
-			}
-		}
-		tp.applock <-= 1;
+	# chat zone owns the keyboard. Only genuine text apps raise it (not
+	# every kbd-subscribing app — see istextapp). reqkbd no-ops off mobile.
+	if(!mobile || expanded_zone == 1) {
+		if(atype == "app" && istextapp(newid))
+			reqkbd(1);
+		else
+			reqkbd(0);
 	}
+	enforcepreszorder();
 }

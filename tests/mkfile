@@ -36,6 +36,7 @@ TARG=\
 	imap_test.dis\
 	jit_test.dis\
 	json_test.dis\
+	llmclient_think_gating_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
 	lists_test.dis\

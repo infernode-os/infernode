@@ -379,8 +379,18 @@ runsetupwizard()
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
 				"dial address (`tcp!host!port`) of an InferNode exporting `/n/llm`. " +
 				"Then close InferNode and relaunch it.");
+		} else {
+			# A typed message (not one of the option buttons) before any
+			# LLM is configured. Echo it and explain, rather than silently
+			# eating it (the symptom: "my message just disappears").
+			writemsg("user", choice);
+			writemsg("veltro",
+				"I'm not connected to an LLM yet, so I can't reply. Choose an option above " +
+				"(Remote API / Local model / Remote 9P) to set one up — or, if you already " +
+				"configured it in Settings, close InferNode and relaunch so the change takes effect.");
+			continue;	# keep listening; don't park
 		}
-		# After click, park until the user quits and relaunches.
+		# A configurator was opened — park until the user quits and relaunches.
 		for(;;)
 			sys->sleep(60000);
 	}
@@ -1786,6 +1796,15 @@ init(nil: ref Draw->Context, args: list of string)
 					sys->sleep(500);
 					writefile(pctl, "center id=settings");
 					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
+				} else {
+					# A typed message while the LLM is unreachable: echo it
+					# and explain, instead of silently eating it.
+					writemsg("user", choice);
+					writemsg("veltro",
+						"I still can't reach the LLM, so I can't reply yet. Check the dial " +
+						"address and that the remote is running, then close InferNode and " +
+						"relaunch \u2014 or tap Open Settings above.");
+					continue;	# keep listening; don't park
 				}
 				for(;;) sys->sleep(60000);
 			}

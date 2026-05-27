@@ -70,7 +70,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		}
 	p := <-w.ctxt.ptr =>
 		ptrchan <-= *p;
-		if(!w.pointer(*p)  && (p.buttons & (1|2))){
+		# Any click (button-1, button-2, or button-3) raises the exit
+		# menu.  Button-3 is added for touch — the SDL3 gesture layer
+		# synthesises a long-press as button-3 (see emu/port/draw-sdl3.c
+		# touch_lp_* and INFR-160/163).
+		if(!w.pointer(*p)  && (p.buttons & (1|2|4))){
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
 			n := menuhit->menuhit(p.buttons, mc, menu, nil);
 			if(n == 0){

@@ -2311,10 +2311,25 @@ kbdproc()
 			}
 		}
 
-		# Route decoded key to appropriate target
+		# Route decoded key to the focused target.
+		#
+		# Desktop: focus-follows-mouse over the presentation zone.
+		# Mobile (accordion): the EXPANDED zone decides focus — there is
+		# no mouse-follow, and pres_zone_minx is -1 there, so the desktop
+		# test could never fire and every key fell through to the chat
+		# zone (chat captured text even when collapsed; workspace text
+		# apps like settings got nothing). Route to the active workspace
+		# app when the Workspace zone is the one expanded.
 		ktp := curtaskpres;
-		if(pres_zone_minx > 0 && lastmousex >= pres_zone_minx &&
+		towkapp := 0;
+		if(mobile) {
+			if(expanded_zone == 1 && ktp != nil && ktp.activeappid != "")
+				towkapp = 1;
+		} else if(pres_zone_minx > 0 && lastmousex >= pres_zone_minx &&
 				lastmousex < pres_zone_maxx && ktp != nil && ktp.activeappid != "") {
+			towkapp = 1;
+		}
+		if(towkapp) {
 			routed := 0;
 			<-ktp.applock;
 			for(ksi := 0; ksi < ktp.nappslots; ksi++) {

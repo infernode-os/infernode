@@ -70,6 +70,10 @@ Llmclient: module
 	# baseurl includes /v1 (e.g. "http://localhost:11434/v1")
 	askopenai:      fn(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string);
 
+	# List the backend's available models (OpenAI GET /v1/models).
+	# Returns a newline-separated list of model ids, or ("", err).
+	listmodels:     fn(baseurl, apikey: string): (string, string);
+
 	# Parse TOOL_RESULTS wire format into ToolResult list
 	parsetoolresults: fn(text: string): (list of ref ToolResult, string);
 

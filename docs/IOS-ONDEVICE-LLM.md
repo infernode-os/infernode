@@ -45,19 +45,24 @@ the whole MLX catalogue, are available to us.
 
 ## Recommended models (tested against the agent harness)
 
-The whole MLX catalogue is open to us, but **not every size works with
-the Veltro agent stack** — its system prompt carries the full tool-calling
-template, and very small models can't follow it.
+The MLX catalogue is open to us, with two hard constraints: **not every
+size works with the Veltro agent stack** (its system prompt carries the
+full tool-calling template, and very small models can't follow it), and
+**no Chinese-origin models** — Qwen and DeepSeek distills are excluded
+regardless of quality. Allowed families: **Llama (Meta), Mistral, GPT-OSS.**
 
 - **Not recommended: `Llama-3.2-1B-Instruct-4bit`.** Observed 2026-05-27
   (SwiftLM on Metal, driven through `/n/llm`): to a plain "Hello" it
   emitted a raw tool-call JSON *example* instead of a reply — too weak for
   the tool template. Keep it only as a download-speed / plumbing smoke test.
-- **Floor for the agent harness: a capable 3B-4bit.**
-  `mlx-community/Qwen2.5-3B-Instruct-4bit` (~1.7 GB) follows the tool-calling
-  template well; `Llama-3.2-3B-Instruct-4bit` (~1.8 GB) is the Full Moon
-  default. Step up to `Qwen2.5-7B-Instruct-4bit` (~4.3 GB) for stronger
-  harness evaluation where device memory allows.
+- **Floor for the agent harness: `mlx-community/Llama-3.2-3B-Instruct-4bit`**
+  (~1.8 GB; the Full Moon default, Meta). For more muscle where memory
+  allows (all verified present on HF `mlx-community`):
+  - Mistral: `Ministral-3-8B-Instruct-2512-4bit` (newest, ~4.5 GB),
+    `Mistral-7B-Instruct-v0.3-4bit` (~4 GB), or `Ministral-3-3B-Instruct-2512-4bit`
+    (on-device class).
+  - GPT-OSS (OpenAI): `gpt-oss-20b-MXFP4-Q4` (~12 GB, desktop/Mac, too large
+    for on-device); `gpt-oss-120b-4bit` exists but is server-class.
 
 ## Decision (2026-05-27): open-weight basis; any engine stays behind the seam
 

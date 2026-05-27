@@ -1159,6 +1159,21 @@ Listbox.mk(r: Rect): ref Listbox
 			   nil, -1, 0, sb);
 }
 
+# Truncate s with an ellipsis so it fits within maxw pixels. Keeps long
+# labels from spilling out of their box (e.g. the settings category column
+# overprinting the form to its right). Returns s unchanged if it fits.
+fittext(s: string, maxw: int): string
+{
+	if(wfont == nil || maxw <= 0 || wfont.width(s) <= maxw)
+		return s;
+	ell := "…";
+	ew := wfont.width(ell);
+	for(n := len s; n > 0; n--)
+		if(wfont.width(s[0:n]) + ew <= maxw)
+			return s[0:n] + ell;
+	return ell;
+}
+
 Listbox.draw(lb: self ref Listbox, dst: ref Image)
 {
 	if(wfont == nil)
@@ -1178,7 +1193,9 @@ Listbox.draw(lb: self ref Listbox, dst: ref Image)
 			dst.draw(rowr, listsel, nil, Point(0, 0));
 		tx := lb.r.min.x + MARGIN;
 		ty := y + MARGIN / 2;
-		dst.text(Point(tx, ty), listtext, Point(0, 0), wfont, lb.items[idx]);
+		# Clip the label to the row so it can't spill past the column edge.
+		dst.text(Point(tx, ty), listtext, Point(0, 0), wfont,
+			fittext(lb.items[idx], lb.r.max.x - tx - MARGIN));
 		y += rowh;
 	}
 
@@ -1264,6 +1281,15 @@ Listbox.visible(lb: self ref Listbox): int
 
 Button.mk(r: Rect, label: string): ref Button
 {
+	# Widen the button so the label has comfortable padding (≈ half the
+	# line height on each side). Fixed BTN_W values are too narrow for the
+	# large mobile fonts, so the label spilled out of (or filled) the box.
+	# Keep the left edge; grow to the right.
+	if(wfont != nil) {
+		minw := wfont.width(label) + wfont.height;
+		if(r.dx() < minw)
+			r.max.x = r.min.x + minw;
+	}
 	return ref Button(r, label, 0);
 }
 
@@ -1284,11 +1310,15 @@ Button.draw(b: self ref Button, dst: ref Image)
 	dst.draw(Rect(b.r.min, (b.r.min.x + 1, b.r.max.y)), btnborder, nil, Point(0, 0));
 	dst.draw(Rect((b.r.max.x - 1, b.r.min.y), b.r.max), btnborder, nil, Point(0, 0));
 
-	# Centered label
-	tw := wfont.width(b.label);
+	# Centered label, clipped to the button so it can't spill if the
+	# button was resized narrower than its text.
+	lbl := fittext(b.label, b.r.dx() - MARGIN);
+	tw := wfont.width(lbl);
 	tx := b.r.min.x + (b.r.dx() - tw) / 2;
+	if(tx < b.r.min.x + MARGIN/2)
+		tx = b.r.min.x + MARGIN/2;
 	ty := b.r.min.y + (b.r.dy() - wfont.height) / 2;
-	dst.text(Point(tx, ty), btntext, Point(0, 0), wfont, b.label);
+	dst.text(Point(tx, ty), btntext, Point(0, 0), wfont, lbl);
 }
 
 Button.resize(b: self ref Button, r: Rect)

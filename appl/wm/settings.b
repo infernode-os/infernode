@@ -58,8 +58,8 @@ Settings: module
 
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile: con iota;
-NCATS: con 7;
+CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatLocalModel: con iota;
+NCATS: con 8;
 
 catnames := array[] of {
 	"Theme",
@@ -69,6 +69,7 @@ catnames := array[] of {
 	"Namespace Paths",
 	"Agent Prompts",
 	"Startup Profile",
+	"Local Model",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
@@ -82,6 +83,7 @@ catshortnames := array[] of {
 	"paths",
 	"prompts",
 	"profile",
+	"localmodel",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -165,6 +167,17 @@ prompt_files := array[] of {
 # Profile panel
 profile_label: ref Label;
 profile_btn:   ref Button;
+
+# Local Model panel (on-device LLM, INFR-146). Driven by /n/localmodel,
+# a 9P surface the native MLX bridge serves; the panel degrades to a hint
+# when that bridge isn't mounted. lm_ids parallels the listbox rows so a
+# selection maps back to the model's repo-id for the ctl verbs.
+lm_status_label: ref Label;
+lm_hint_label:   ref Label;
+lm_list:         ref Listbox;
+lm_pull_btn:     ref Button;
+lm_use_btn:      ref Button;
+lm_ids:          array of string;
 
 dirty: int;
 stderr: ref Sys->FD;
@@ -401,6 +414,12 @@ layoutcontent()
 	prompt_btns = nil;
 	profile_label = nil;
 	profile_btn = nil;
+	lm_status_label = nil;
+	lm_hint_label = nil;
+	lm_list = nil;
+	lm_pull_btn = nil;
+	lm_use_btn = nil;
+	lm_ids = nil;
 
 	case category {
 	CatTheme =>
@@ -417,6 +436,8 @@ layoutcontent()
 		layoutprompts(cx, cy, cw, fh, bh);
 	CatProfile =>
 		layoutprofile(cx, cy, cw, bh);
+	CatLocalModel =>
+		layoutlocalmodel(cx, cy, cw, cbottom, fh, bh);
 	}
 }
 
@@ -823,6 +844,8 @@ redraw()
 		drawprompts();
 	CatProfile =>
 		drawprofile();
+	CatLocalModel =>
+		drawlocalmodel();
 	}
 
 	# Status bar
@@ -1032,6 +1055,11 @@ handleptr(ptr: ref Pointer)
 			dirty = 1;
 			return;
 		}
+		if(category == CatLocalModel && lm_list != nil && lm_list.contains(ptr.xy)) {
+			lm_list.wheel(ptr.buttons);
+			dirty = 1;
+			return;
+		}
 		return;
 	}
 
@@ -1065,6 +1093,8 @@ handleptr(ptr: ref Pointer)
 		clickprompts(ptr);
 	CatProfile =>
 		clickprofile(ptr);
+	CatLocalModel =>
+		clicklocalmodel(ptr);
 	}
 }
 
@@ -1241,6 +1271,206 @@ clickprofile(ptr: ref Pointer)
 	}
 }
 
+# ── Local Model panel (on-device LLM, INFR-146) ──────────────
+# Platform-agnostic frontend over /n/localmodel, the 9P surface the
+# native MLX inference/download bridge serves. We never run inference
+# here — "Use" just points the existing openai backend at the bridge's
+# localhost OpenAI endpoint (same seam as Ollama). When the bridge isn't
+# mounted the panel degrades to a one-line hint.
+
+layoutlocalmodel(cx, cy, cw, cbottom, fh, bh: int)
+{
+	if(!localmodel_present()) {
+		lm_hint_label = Label.mk(
+			Rect((cx, cy), (cw, cy + fh)),
+			"On-device model service not running on this device.", 0, LEFT);
+		return;
+	}
+
+	# Live status (active model / download state) from /n/localmodel/status.
+	lm_status_label = Label.mk(
+		Rect((cx, cy), (cw, cy + fh)),
+		lmstatusline(), 0, LEFT);
+	cy += fh + FORM_MARGIN;
+
+	# Model catalogue. lm_ids parallels the visible rows so a selection
+	# maps back to the model's repo-id for the ctl verbs.
+	listh := cbottom - cy - bh - FORM_MARGIN * 2;
+	if(listh < fh * 3)
+		listh = fh * 3;
+	lm_list = Listbox.mk(Rect((cx, cy), (cw, cy + listh)));
+	(disp, ids) := readlocalmodels();
+	lm_ids = ids;
+	if(disp != nil)
+		lm_list.setitems(disp);
+	cy += listh + FORM_MARGIN;
+
+	# Pull (download selected) | Use (select it + point llmsrv at it).
+	gap := FIELD_SPACING;
+	bw := (cw - cx - gap) / 2;
+	lm_pull_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Pull");
+	lm_use_btn  = Button.mk(Rect((cx + bw + gap, cy), (cw, cy + bh)), "Use");
+}
+
+drawlocalmodel()
+{
+	if(lm_hint_label != nil)
+		lm_hint_label.draw(w.image);
+	if(lm_status_label != nil)
+		lm_status_label.draw(w.image);
+	if(lm_list != nil)
+		lm_list.draw(w.image);
+	if(lm_pull_btn != nil)
+		lm_pull_btn.draw(w.image);
+	if(lm_use_btn != nil)
+		lm_use_btn.draw(w.image);
+}
+
+clicklocalmodel(ptr: ref Pointer)
+{
+	if(lm_list != nil && lm_list.contains(ptr.xy)) {
+		lm_list.click(ptr.xy);
+		dirty = 1;
+		return;
+	}
+	if(lm_pull_btn != nil && lm_pull_btn.contains(ptr.xy)) {
+		trackbutton(lm_pull_btn, ptr);
+		return;
+	}
+	if(lm_use_btn != nil && lm_use_btn.contains(ptr.xy)) {
+		trackbutton(lm_use_btn, ptr);
+		return;
+	}
+}
+
+# repo-id of the currently selected catalogue row, or "" if none.
+lmselectedid(): string
+{
+	if(lm_list == nil || lm_ids == nil)
+		return "";
+	i := lm_list.selected;
+	if(i < 0 || i >= len lm_ids)
+		return "";
+	return lm_ids[i];
+}
+
+dopulllocalmodel()
+{
+	id := lmselectedid();
+	if(id == "") {
+		flashstatus("select a model to pull");
+		return;
+	}
+	err := writelmctl("pull " + id);
+	if(err != "")
+		flashstatus(err);
+	else
+		flashstatus("pulling " + id + " ...");
+	layoutcontent();	# refresh catalogue + status
+	dirty = 1;
+}
+
+douselocalmodel()
+{
+	id := lmselectedid();
+	if(id == "") {
+		flashstatus("select a model to use");
+		return;
+	}
+	# Point the LLM backend at the bridge's local OpenAI endpoint and
+	# select the model — identical seam to the Ollama path.
+	writellmconfig("local", "openai", lmurl(), id, "");
+	err := writelmctl("select " + id);
+	if(err != "")
+		flashstatus(err);
+	else
+		flashstatus("using " + id);
+	dirty = 1;
+}
+
+# ── /n/localmodel helpers (native MLX bridge) ─────────────────
+# Mirror the /llm synthfs convention: status is `key  value` lines
+# (parsed by pickfield), the catalogue is one `id  size  state` row per
+# line, ctl takes verbs (pull/select/rm <id>).
+
+localmodel_present(): int
+{
+	(ok, nil) := sys->stat("/n/localmodel/ctl");
+	return ok >= 0;
+}
+
+readlocalmodels(): (array of string, array of string)
+{
+	lines := readlines("/n/localmodel/available");
+	if(lines == nil)
+		return (nil, nil);
+	disp := array[len lines] of string;
+	ids  := array[len lines] of string;
+	for(i := 0; i < len lines; i++) {
+		(n, flds) := sys->tokenize(lines[i], " \t");
+		if(n == 0) {
+			disp[i] = lines[i];
+			ids[i] = "";
+			continue;
+		}
+		ids[i] = hd flds;
+		size := ""; state := "";
+		if(tl flds != nil) {
+			size = hd tl flds;
+			if(tl tl flds != nil)
+				state = hd tl tl flds;
+		}
+		disp[i] = ids[i];
+		if(size != "")
+			disp[i] += " (" + size + ")";
+		if(state != "")
+			disp[i] += "  [" + state + "]";
+	}
+	return (disp, ids);
+}
+
+lmstatusline(): string
+{
+	raw := readfile("/n/localmodel/status");
+	if(raw == nil || raw == "")
+		return "Status: (no response)";
+	active := pickfield(raw, "active");
+	state := pickfield(raw, "state");
+	prog := pickfield(raw, "progress");
+	s := "Active: ";
+	if(active == "")
+		s += "(none)";
+	else
+		s += active;
+	if(state != "")
+		s += "   " + state;
+	if(prog != "" && prog != "0")
+		s += " " + prog + "%";
+	return s;
+}
+
+lmurl(): string
+{
+	raw := readfile("/n/localmodel/status");
+	u := "";
+	if(raw != nil)
+		u = pickfield(raw, "url");
+	if(u == "")
+		u = "http://127.0.0.1:8080/v1";	# bridge default endpoint
+	return u;
+}
+
+writelmctl(verb: string): string
+{
+	fd := sys->open("/n/localmodel/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("open /n/localmodel/ctl: %r");
+	b := array of byte verb;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("write /n/localmodel/ctl: %r");
+	return "";
+}
+
 # ── Button tracking (hold-to-confirm pattern) ────────────────
 
 trackbutton(btn: ref Button, nil: ref Pointer)
@@ -1257,6 +1487,10 @@ trackbutton(btn: ref Button, nil: ref Pointer)
 					dobindpath();
 				else if(btn == path_rm_btn)
 					dounbindpath();
+				else if(btn == lm_pull_btn)
+					dopulllocalmodel();
+				else if(btn == lm_use_btn)
+					douselocalmodel();
 			}
 			dirty = 1;
 			return;

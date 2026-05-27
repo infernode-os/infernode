@@ -1281,11 +1281,12 @@ Listbox.visible(lb: self ref Listbox): int
 
 Button.mk(r: Rect, label: string): ref Button
 {
-	# Widen the button if the caller's rect is too narrow for the label
-	# (mobile fonts are large, so fixed BTN_W values overflow — the label
-	# spilled out of the box). Keep the left edge; grow to the right.
+	# Widen the button so the label has comfortable padding (≈ half the
+	# line height on each side). Fixed BTN_W values are too narrow for the
+	# large mobile fonts, so the label spilled out of (or filled) the box.
+	# Keep the left edge; grow to the right.
 	if(wfont != nil) {
-		minw := wfont.width(label) + MARGIN * 2;
+		minw := wfont.width(label) + wfont.height;
 		if(r.dx() < minw)
 			r.max.x = r.min.x + minw;
 	}

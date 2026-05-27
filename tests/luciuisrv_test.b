@@ -201,6 +201,50 @@ startserver(done: chan of int, mountpt: string)
 	}
 }
 
+# Read every entry from directory `path` in a goroutine; report the result
+# on ch as "ok:<space-prefixed names>" or "error:...". Letting the caller
+# bound this with a timeout means an INFR-127-style readdir hang surfaces as
+# a clean test failure instead of wedging the whole runner.
+dirreader(path: string, ch: chan of string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		ch <-= "error:open:" + path;
+		return;
+	}
+	names := "";
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n < 0) {
+			ch <-= "error:dirread:" + path;
+			return;
+		}
+		if(n == 0)
+			break;
+		for(i := 0; i < n; i++)
+			names += " " + dirs[i].name;
+	}
+	ch <-= "ok:" + names;
+}
+
+# List directory `path` with a 3-second timeout. Returns dirreader's result,
+# or "error:timeout" if the readdir never completes.
+readdirto(path: string): string
+{
+	ch := chan[1] of string;
+	spawn dirreader(path, ch);
+	toch := chan[1] of int;
+	spawn timerwait(toch, 3000);
+	res := "";
+	alt {
+	res = <-ch =>
+		;
+	<-toch =>
+		res = "error:timeout";
+	}
+	return res;
+}
+
 # ============================================================================
 # Test 1: testSetup
 #
@@ -261,6 +305,38 @@ testSetup(t: ref T)
 	t.assert(st6 >= 0, "presentation/ctl should exist");
 	(st7, nil) := sys->stat(actbase() + "/context/ctl");
 	t.assert(st7 >= 0, "context/ctl should exist");
+}
+
+# ============================================================================
+# Test 1b: testRootDirread (INFR-127)
+#
+# `ls /n/ui` — a readdir on the synthetic root — must enumerate the root's
+# children and terminate. Regression (INFR-127): the root and per-activity
+# conversation directory listings hung forever, even though targeted file
+# reads and named walks worked. Each listing is timeout-bounded so a
+# recurrence fails the test instead of wedging the runner.
+# ============================================================================
+
+testRootDirread(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity (testSetup failed)");
+		return;
+	}
+
+	# ls /n/ui
+	root := readdirto(TESTMNT);
+	t.assertsne(root, "error:timeout", "root readdir must terminate (INFR-127)");
+	t.assert(hassubstr(root, " ctl"), "root listing includes ctl");
+	t.assert(hassubstr(root, " event"), "root listing includes event");
+	t.assert(hassubstr(root, " activity"), "root listing includes activity");
+	t.assert(hassubstr(root, " catalog"), "root listing includes catalog");
+
+	# ls /n/ui/activity/<id>/conversation/  (also reported hanging)
+	conv := readdirto(actbase() + "/conversation");
+	t.assertsne(conv, "error:timeout", "conversation readdir must terminate (INFR-127)");
+	t.assert(hassubstr(conv, " ctl"), "conversation listing includes ctl");
+	t.assert(hassubstr(conv, " input"), "conversation listing includes input");
 }
 
 # ============================================================================
@@ -1514,6 +1590,10 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Start server and create activity (must run first)
 	run("Setup", testSetup);
+
+	# INFR-127 regression: directory listing (ls/readdir) on the root and
+	# on a per-activity conversation dir must enumerate children and finish.
+	run("RootDirread", testRootDirread);
 
 	# Conversation tests
 	run("ConvMessageWrite", testConvMessageWrite);

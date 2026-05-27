@@ -14,6 +14,7 @@
 #include	<sys/un.h>
 #include	<utime.h>
 #include	<dirent.h>
+#include	<unistd.h>	/* getuid/getgid — INFR-174 iOS hostowner pin */
 #include	<stdio.h>
 #define	__EXTENSIONS__
 #undef	getwd
@@ -898,15 +899,29 @@ setid(char *name, int owner)
 	qlock(&idl);
 	u = name2user(uidmap, name, newuname);
 	if(u == nil){
-		qunlock(&idl);
 		up->env->uid = -1;
 		up->env->gid = -1;
-		return;
+	} else {
+		up->env->uid = u->id;
+		up->env->gid = u->gid;
 	}
-
-	up->env->uid = u->id;
-	up->env->gid = u->gid;
 	qunlock(&idl);
+
+#ifdef IOS_ARM64
+	/*
+	 * INFR-174: getpwuid/getpwnam fail in the iOS sandbox, so eve="inferno"
+	 * never resolves and the hostowner uid lands as -1 (or a synthetic id) —
+	 * never the real process uid that owns the files devfs-posix creates.
+	 * The Inferno permission check (FS(c)->uid == up->env->uid) then treats
+	 * every app-created file as "other", so 0700/0755 runtime dirs become
+	 * unwritable (e.g. Veltro's /usr/inferno/veltro/sessions → chat-history
+	 * save fails; the bundle-copied tree only works because it's chmod'd
+	 * 0777). iOS is single-user; pin the hostowner to the process uid that
+	 * actually owns everything we create so the owner bits apply.
+	 */
+	up->env->uid = getuid();
+	up->env->gid = getgid();
+#endif
 }
 
 static User**

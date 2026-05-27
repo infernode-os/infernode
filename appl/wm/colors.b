@@ -49,12 +49,10 @@ init1(ctxt: ref Draw->Context)
 	p := <-w.ctxt.ptr =>
 		if(!w.pointer(*p) && p.buttons &1)
 			color(p.xy);
-		# Open the exit menu on button-2 (chord/middle, traditional) OR
-		# button-3 (right-click).  INFR-163: long-press on touch
-		# synthesises button-3 (see emu/port/draw-sdl3.c), so accepting
-		# button-3 here is what gives this app a touch-reachable menu.
-		# Desktop button-2 behaviour is unchanged.
-		else if(p.buttons & 6){
+		# Button-2 (desktop middle-click) OR button-3 (touch long-press
+		# synthesised by the SDL3 gesture layer — see emu/port/draw-sdl3.c
+		# touch_lp_* and INFR-160/163) raises the exit menu.
+		else if(p.buttons & (2|4)){
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
 			n := menuhit->menuhit(p.buttons, mc, menu, nil);
 			if(n == 0)

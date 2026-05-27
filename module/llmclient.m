@@ -70,6 +70,10 @@ Llmclient: module
 	# baseurl includes /v1 (e.g. "http://localhost:11434/v1")
 	askopenai:      fn(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string);
 
+	# List the backend's available models (OpenAI GET /v1/models).
+	# Returns a newline-separated list of model ids, or ("", err).
+	listmodels:     fn(baseurl, apikey: string): (string, string);
+
 	# Parse TOOL_RESULTS wire format into ToolResult list
 	parsetoolresults: fn(text: string): (list of ref ToolResult, string);
 
@@ -78,6 +82,12 @@ Llmclient: module
 
 	# Build JSON conversation history from message list
 	messagesjson:   fn(msgs: list of ref LlmMessage): string;
+
+	# Build the full OpenAI-shape chat request body for a request.
+	# Exposed for request-shape regression tests (INFR-132): the
+	# thinking-capability gating of options.think / reasoning_effort is
+	# only observable in this string.
+	buildopenairequestjson: fn(req: ref AskRequest): string;
 
 	# JSON escape helper
 	jsonescapestr:  fn(s: string): string;

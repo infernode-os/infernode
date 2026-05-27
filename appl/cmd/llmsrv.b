@@ -100,6 +100,7 @@ Qreasoning: con 30;  # per-session reasoning_effort override:
                      # overrides its model to a non-reasoning model
                      # must also clear reasoning. (See
                      # /tool/limbo flow for canonical use.)
+Qmodels:  con 31;    # top-level, read-only — backend's available models
 
 NSESSFILES: con 13;  # number of files per session dir
 
@@ -402,6 +403,16 @@ callbackend(req: ref AskRequest): (ref AskResponse, string)
 	return llmclient->askanthropic(apikey, apiurl, req);
 }
 
+# Top-level /n/llm/models read: the backend's available models, one id
+# per line. OpenAI backends are queried live (GET /v1/models); the
+# Anthropic backend has no models endpoint, so report the known aliases.
+availablemodels(): (string, string)
+{
+	if(backend == "openai")
+		return llmclient->listmodels(apiurl, apikey);
+	return ("claude-opus-4-5-20251101\nclaude-sonnet-4-5-20250929\nclaude-haiku-4-5-20251001\n", nil);
+}
+
 # --- Error classification ---
 
 iscontentfiltererror(err: string): int
@@ -465,6 +476,14 @@ Serve:
 				sess := newsession();
 				data := array of byte (string sess.id + "\n");
 				srv.reply(styxservers->readbytes(m, data));
+
+			Qmodels =>
+				(mtext, merr) := availablemodels();
+				if(merr != nil) {
+					srv.reply(ref Rmsg.Error(m.tag, merr));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte mtext));
 
 			Qask =>
 				sess := findsession(sid);
@@ -1119,6 +1138,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTDIR), "/", big 0, 8r755), nil);
 	Qnew =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "new", big 0, 8r444), nil);
+	Qmodels =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "models", big 0, 8r444), nil);
 	Qsessdir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), string sid, big 0, 8r755), nil);
 	Qask =>
@@ -1174,6 +1195,8 @@ navigator(navops: chan of ref Navop)
 					;  # stay at root
 				"new" =>
 					n.path = MKPATH(0, Qnew);
+				"models" =>
+					n.path = MKPATH(0, Qmodels);
 				* =>
 					# Try as session ID
 					id := strtoint(n.name);
@@ -1246,6 +1269,7 @@ navigator(navops: chan of ref Navop)
 				# Root: new + session directories
 				entries: list of big;
 				entries = MKPATH(0, Qnew) :: entries;
+				entries = MKPATH(0, Qmodels) :: entries;
 				for(i := 0; i < nsessions; i++)
 					entries = MKPATH(sessions[i].id, Qsessdir) :: entries;
 

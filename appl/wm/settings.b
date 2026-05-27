@@ -119,6 +119,8 @@ llm_url_label: ref Label;
 llm_url_tf: ref Textfield;
 llm_model_label: ref Label;
 llm_model_tf: ref Textfield;
+llm_models_label: ref Label;	# "available models" picker header (LLM panel)
+llm_models_list: ref Listbox;	# populated from /n/llm/models
 llm_key_label: ref Label;
 llm_persist_label: ref Label;
 llm_dial_label: ref Label;
@@ -378,6 +380,8 @@ layoutcontent()
 	llm_url_tf = nil;
 	llm_model_label = nil;
 	llm_model_tf = nil;
+	llm_models_label = nil;
+	llm_models_list = nil;
 	llm_key_label = nil;
 	llm_persist_label = nil;
 	llm_dial_label = nil;
@@ -535,6 +539,23 @@ layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 		llm_model_tf.setval(curmodel);
 		llm_model_tf.focused = 1;
 		cy += fieldh + FORM_MARGIN;
+
+		# Available-models picker — the connected backend's catalogue,
+		# read from /n/llm/models (the location-transparent seam, so it
+		# works whether llmsrv is local or mounted from a remote node).
+		# Tapping a row fills the Model field above; the field stays for
+		# free-form entry. Shown only when the backend reports models.
+		models := readllmmodels();
+		if(models != nil) {
+			llm_models_label = Label.mk(
+				Rect((cx, cy), (cw, cy + fh)),
+				"Available models (tap to choose):", 0, LEFT);
+			cy += fh;
+			mlisth := fh * 3;
+			llm_models_list = Listbox.mk(Rect((cx, cy), (cw, cy + mlisth)));
+			llm_models_list.setitems(models);
+			cy += mlisth + FORM_MARGIN;
+		}
 
 		# API key status
 		keystatus: string;
@@ -883,6 +904,10 @@ drawllm()
 			llm_model_label.draw(w.image);
 		if(llm_model_tf != nil)
 			llm_model_tf.draw(w.image);
+		if(llm_models_label != nil)
+			llm_models_label.draw(w.image);
+		if(llm_models_list != nil)
+			llm_models_list.draw(w.image);
 		if(llm_key_label != nil)
 			llm_key_label.draw(w.image);
 		if(llm_persist_label != nil)
@@ -1032,6 +1057,11 @@ handleptr(ptr: ref Pointer)
 			dirty = 1;
 			return;
 		}
+		if(category == CatLLM && llm_models_list != nil && llm_models_list.contains(ptr.xy)) {
+			llm_models_list.wheel(ptr.buttons);
+			dirty = 1;
+			return;
+		}
 		return;
 	}
 
@@ -1160,6 +1190,13 @@ clickllm(ptr: ref Pointer)
 				llm_url_tf.focused = 0;
 			llm_model_tf.focused = 1;
 			llm_model_tf.click(ptr.xy);
+			dirty = 1;
+			return;
+		}
+		if(llm_models_list != nil && llm_models_list.contains(ptr.xy)) {
+			sel := llm_models_list.click(ptr.xy);
+			if(sel >= 0 && sel < len llm_models_list.items && llm_model_tf != nil)
+				llm_model_tf.setval(llm_models_list.items[sel]);
 			dirty = 1;
 			return;
 		}
@@ -1527,6 +1564,16 @@ readllmconfig(): (string, string, string, string, string, int)
 	}
 
 	return (mode, backend, url, model, dial, haskey);
+}
+
+# The connected backend's model catalogue, read from /n/llm/models
+# (served by llmsrv). nil when the file is absent/empty — no llmsrv
+# mounted, the backend is unreachable, or it lists nothing. The read is
+# fast in the common cases (a local GET, or an immediate dial-refused),
+# so calling it from layout is fine.
+readllmmodels(): array of string
+{
+	return readlines("/n/llm/models");
 }
 
 writellmconfig(mode, backend, url, model, dial: string)

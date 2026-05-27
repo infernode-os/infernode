@@ -1858,6 +1858,82 @@ httppost(host, port, path, headers, body: string): (string, string)
 	return (rbody, nil);
 }
 
+# Plain-HTTP GET — mirror of httppost with no body/Content-Length.
+httpget(host, port, path, headers: string): (string, string)
+{
+	addr := "tcp!" + host + "!" + port;
+	(ok, conn) := sys->dial(addr, nil);
+	if(ok < 0)
+		return (nil, sys->sprint("cannot connect to %s: %r", addr));
+
+	req := "GET " + path + " HTTP/1.0\r\n" +
+		"Host: " + host + "\r\n" +
+		headers +
+		"Connection: close\r\n" +
+		"\r\n";
+
+	data := array of byte req;
+	if(sys->write(conn.dfd, data, len data) < 0)
+		return (nil, sys->sprint("write failed: %r"));
+
+	(response, rerr) := _httpreadloop(conn);
+	if(rerr != nil)
+		return (nil, rerr);
+
+	(nil, nil, rbody) := parsehttpresponse(response);
+	return (rbody, nil);
+}
+
+# List the backend's available models via the OpenAI-compatible
+# GET /v1/models endpoint. Returns a newline-separated list of model
+# ids. Response shape: {"object":"list","data":[{"id":"name",...},...]}.
+listmodels(baseurl, apikey: string): (string, string)
+{
+	if(baseurl == nil || baseurl == "")
+		baseurl = "http://localhost:11434/v1";
+
+	(scheme, host, port, path, uerr) := parseurl(baseurl + "/models");
+	if(uerr != nil)
+		return ("", "models: " + uerr);
+
+	headers := "";
+	if(apikey != nil && apikey != "" && apikey != "not-needed")
+		headers = "Authorization: Bearer " + apikey + "\r\n";
+
+	respbody: string;
+	err: string;
+	if(scheme == "https")
+		(respbody, err) = httpsget(host, port, path, headers);
+	else
+		(respbody, err) = httpget(host, port, path, headers);
+	if(err != nil)
+		return ("", "models: " + err);
+
+	(jv, jerr) := readjsonstring(respbody);
+	if(jerr != nil)
+		return ("", "models: parse error: " + jerr);
+	if(jv == nil)
+		return ("", "models: empty response");
+
+	datav := jv.get("data");
+	if(datav == nil)
+		return ("", "models: no data field");
+
+	out := "";
+	pick da := datav {
+	Array =>
+		for(i := 0; i < len da.a; i++) {
+			idv := da.a[i].get("id");
+			if(idv != nil)
+				pick ids := idv {
+				String =>
+					out += ids.s + "\n";
+				}
+		}
+	}
+	return (out, nil);
+}
+
 # TLS variant of _httpread: reads through the TLS wrapper. Same
 # contract (buffered channel, deposits one tuple per chunk + a
 # terminator on EOF/err).
@@ -1954,6 +2030,55 @@ httpspost(host, port, path, headers, body: string): (string, string)
 		return (nil, "HTTP error: " + strip(status));
 	}
 
+	return (rbody, nil);
+}
+
+# TLS GET — mirror of httpsget's POST sibling with no body.
+httpsget(host, port, path, headers: string): (string, string)
+{
+	if(tlsmod == nil) {
+		tlsmod = load TLS TLS->PATH;
+		if(tlsmod == nil)
+			return (nil, "cannot load TLS module");
+		terr := tlsmod->init();
+		if(terr != nil)
+			return (nil, "TLS init: " + terr);
+	}
+
+	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	if(ok < 0)
+		return (nil, sys->sprint("cannot connect to %s: %r", host));
+
+	config := tlsmod->defaultconfig();
+	config.servername = host;
+
+	(tc, cerr) := tlsmod->client(conn.dfd, config);
+	if(cerr != nil)
+		return (nil, "TLS: " + cerr);
+
+	req := "GET " + path + " HTTP/1.0\r\n" +
+		"Host: " + host + "\r\n" +
+		headers +
+		"Connection: close\r\n" +
+		"\r\n";
+
+	data := array of byte req;
+	if(tc.write(data, len data) < 0) {
+		tc.close();
+		return (nil, "TLS write failed");
+	}
+
+	(response, rerr) := _httpsreadloop(conn, tc);
+	tc.close();
+	if(rerr != nil)
+		return (nil, rerr);
+
+	(status, nil, rbody) := parsehttpresponse(response);
+	if(status != "" && !hasprefix(status, "HTTP/1.1 200") && !hasprefix(status, "HTTP/1.0 200")) {
+		if(rbody != "")
+			return (nil, "HTTP error: " + strip(status) + ": " + rbody);
+		return (nil, "HTTP error: " + strip(status));
+	}
 	return (rbody, nil);
 }
 

@@ -165,7 +165,9 @@ stays put, the backend swaps from Ollama-over-HTTP to something
 on-device. iOS-native options are stronger than Android's here —
 MLX or CoreML alongside `llama.cpp`. App Store/TestFlight
 considerations (entitlements, no downloaded executable code) live in
-this phase.
+this phase. Full design — engine trade-offs (MLX vs llama.cpp), the two
+wiring options, and the Full Moon / MLX prior art — is in
+`docs/IOS-ONDEVICE-LLM.md`.
 
 ## Open questions
 

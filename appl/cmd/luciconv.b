@@ -536,13 +536,10 @@ drawconversation(zone: Rect)
 {
 	pad := 8;
 	inputh := mainfont.height + 2 * pad;
-	# KLUDGE-MOBILE-ACCORDION-INFR-119 — the desktop input bar is
-	# one font height + a tiny pad; that's too short to thumb-tap on
-	# a phone, and the mic button at its right is barely wider than
-	# the label. Roughly double both, and add a visible Send button.
 	if(mobile) {
 		pad = 16;
 		inputh = mainfont.height * 2 + 2 * pad;
+		if(inputh < 132) inputh = 132;	# 44pt finger tap target
 	}
 	msgy := zone.max.y - inputh - 2;
 
@@ -561,6 +558,7 @@ drawconversation(zone: Rect)
 	sendw := 0;
 	if(mobile) {
 		sendw = mainfont.width("Send") + 2 * pad;
+		if(sendw < 132) sendw = 132;	# 44pt finger tap target
 		sendx := inputr.max.x - sendw;
 		sendy := inputr.min.y;
 		sendrect = Rect((sendx, sendy), (inputr.max.x, inputr.max.y));
@@ -581,6 +579,7 @@ drawconversation(zone: Rect)
 		miccol = dimcol;
 	}
 	micw := mainfont.width(miclabel) + 2 * pad;
+	if(mobile && micw < 132) micw = 132;	# 44pt finger tap target
 	micx := inputr.max.x - micw - sendw;
 	if(mobile && sendw > 0)
 		micx -= 4;	# small gap between mic and Send

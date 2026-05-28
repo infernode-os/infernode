@@ -46,6 +46,24 @@ mk_writable(const char *p, const struct stat *sb, int typeflag, struct FTW *ftw)
 }
 
 /*
+ * Operator-pushed configuration that must survive an app rebuild. The
+ * bundle either ships a placeholder for these (lib/ndb/llm = mode=local)
+ * or nothing at all (lib/keyring/ is empty in the bundle); a deep_merge
+ * that blindly clobbers from the bundle wipes the user's remote-LLM
+ * configuration and keyring credentials on every rebuild, sending the
+ * device back to mode=local with no auth. Skip them.
+ *
+ * `rel` is the dst path relative to the writable inferno root.
+ */
+static BOOL
+is_preserved_path(NSString *rel)
+{
+	return [rel isEqualToString:@"lib/ndb/llm"]
+		|| [rel isEqualToString:@"lib/keyring"]
+		|| [rel hasPrefix:@"lib/keyring/"];
+}
+
+/*
  * Recursive merge of `src` into `dst`. For each leaf file in src, replace
  * the corresponding file in dst (best-effort — leave it alone if remove
  * fails, which happens to devicectl-pushed files whose perms the runtime
@@ -55,10 +73,15 @@ mk_writable(const char *p, const struct stat *sb, int typeflag, struct FTW *ftw)
  * "kept" as a unit and the bundle's full lib/ (with lucifer/, sh/, …)
  * never got merged in. Result: boot fails with "/lib/lucifer does not
  * exist" because lib/lucifer/ was never copied. Recurse.
+ *
+ * `rel` is the dst path relative to the writable inferno root; the
+ * top-level call passes @"". Used only for is_preserved_path checks.
  */
 static void
-deep_merge(NSFileManager *fm, NSString *src, NSString *dst)
+deep_merge(NSFileManager *fm, NSString *src, NSString *dst, NSString *rel)
 {
+	if ([rel length] > 0 && is_preserved_path(rel))
+		return;
 	BOOL srcIsDir = NO;
 	if (![fm fileExistsAtPath:src isDirectory:&srcIsDir])
 		return;
@@ -80,10 +103,15 @@ deep_merge(NSFileManager *fm, NSString *src, NSString *dst)
 				attributes:nil error:nil];
 	}
 	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
-	for (NSString *child in children)
+	for (NSString *child in children) {
+		NSString *crel = ([rel length] > 0)
+			? [rel stringByAppendingPathComponent:child]
+			: child;
 		deep_merge(fm,
 			[src stringByAppendingPathComponent:child],
-			[dst stringByAppendingPathComponent:child]);
+			[dst stringByAppendingPathComponent:child],
+			crel);
+	}
 }
 
 /*
@@ -167,7 +195,7 @@ prepare_writable_root(void)
 	 */
 	fprintf(stderr, "InferNode: top copy failed (%s); deep-merging from bundle\n",
 			err.localizedDescription.UTF8String);
-	deep_merge(fm, src, dst);
+	deep_merge(fm, src, dst, @"");
 	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
 	[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
 	return strdup([dst fileSystemRepresentation]);

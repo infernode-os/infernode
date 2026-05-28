@@ -165,6 +165,15 @@ TOOL_PATHS := array[] of {
 	# through a private /n/llm session). See appl/veltro/tools/limbo.b
 	# and docs/LLM-AS-TOOL.md.
 	("limbo",   "/dis/veltro/tools/limbo.dis"),
+	# Telephony tools — write to devphone at /phone. iOS opens the
+	# system compose/call sheet; Android sends directly; macOS logs.
+	# /phone is auto-granted to subagent namespaces (see
+	# emitmanifestnow / applynsrestriction). sms/dial source +
+	# devphone shipped in 055ed0ff / a6377134 but were never
+	# registered in TOOL_PATHS — the auto-grant looks them up via
+	# findtool(), which only succeeds once they're listed here.
+	("sms",     "/dis/veltro/tools/sms.dis"),
+	("dial",    "/dis/veltro/tools/dial.dis"),
 };
 
 usage()

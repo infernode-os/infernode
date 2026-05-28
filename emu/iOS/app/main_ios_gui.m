@@ -88,20 +88,39 @@ deep_merge(NSFileManager *fm, NSString *src, NSString *dst, NSString *rel)
 	if (!srcIsDir) {
 		/* file: replace in place — remove first so copy doesn't error */
 		[fm removeItemAtPath:dst error:nil];
-		[fm copyItemAtPath:src toPath:dst error:nil];
+		NSError *cerr = nil;
+		if (![fm copyItemAtPath:src toPath:dst error:&cerr])
+			fprintf(stderr, "deep_merge: copy %s -> %s failed: %s\n",
+				rel.UTF8String, dst.fileSystemRepresentation,
+				cerr.localizedDescription.UTF8String);
 		return;
 	}
 	/* dir: ensure dst dir exists, then recurse */
 	BOOL dstIsDir = NO;
 	if (![fm fileExistsAtPath:dst isDirectory:&dstIsDir]) {
-		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
-				attributes:nil error:nil];
+		NSError *derr = nil;
+		if (![fm createDirectoryAtPath:dst withIntermediateDirectories:YES
+				attributes:nil error:&derr])
+			fprintf(stderr, "deep_merge: mkdir %s failed: %s\n",
+				rel.UTF8String, derr.localizedDescription.UTF8String);
 	} else if (!dstIsDir) {
 		/* dst is a regular file where src is a dir — try to replace */
 		[fm removeItemAtPath:dst error:nil];
 		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
 				attributes:nil error:nil];
 	}
+	/*
+	 * Make the dst dir writable BEFORE recursing into it. Some dst
+	 * dirs were created by `devicectl device copy to` and arrive with
+	 * perms that, despite Apple's file-relay reporting "Writable",
+	 * block the app's runtime uid from adding subdirs. Result: lib/
+	 * stays at its devicectl-pushed shape (just keyring/+ndb/) and
+	 * deep_merge silently can't add lib/lucifer/, lib/sh/, etc.
+	 * chmod 0777 the dst dir (owner write at minimum); failures here
+	 * are not fatal — if we don't own the dir we'll see the per-child
+	 * errors below and the operator can react.
+	 */
+	chmod([dst fileSystemRepresentation], 0777);
 	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
 	for (NSString *child in children) {
 		NSString *crel = ([rel length] > 0)

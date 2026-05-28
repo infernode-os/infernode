@@ -121,9 +121,25 @@ prepare_writable_root(void)
 		NSString *got = [NSString stringWithContentsOfFile:marker
 				encoding:NSUTF8StringEncoding error:nil];
 		if (got != nil && [got isEqualToString:want]) {
-			/* Same build, just a relaunch — keep writable state so the
-			 * user's settings persist. */
-			return strdup([dst fileSystemRepresentation]);
+			/*
+			 * Marker matches — but only honour PRESERVE if the writable
+			 * root is actually complete. A previous broken merge could
+			 * have stamped the marker on a half-populated tree (e.g.
+			 * /lib with just keyring/+ndb/ from pushed creds, missing
+			 * /lib/lucifer/). PRESERVE would then short-circuit
+			 * deep_merge and the boot dies with `sh: cannot open
+			 * /lib/lucifer/boot-mobile.sh`. Canary: boot-mobile.sh
+			 * itself. If absent, distrust the marker and re-merge.
+			 */
+			NSString *canary = [dst stringByAppendingPathComponent:
+					@"lib/lucifer/boot-mobile.sh"];
+			if ([fm fileExistsAtPath:canary]) {
+				/* Same build, just a relaunch — keep writable state so
+				 * the user's settings persist. */
+				return strdup([dst fileSystemRepresentation]);
+			}
+			fprintf(stderr, "InferNode: marker matched but %s missing — re-merging\n",
+					canary.fileSystemRepresentation);
 		}
 	}
 

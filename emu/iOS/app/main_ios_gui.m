@@ -22,6 +22,10 @@
 #include <stdio.h>
 #include <ftw.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <errno.h>
+#include <string.h>
+#include <limits.h>
 
 extern int emu_run(int argc, char *argv[]);
 
@@ -46,21 +50,37 @@ mk_writable(const char *p, const struct stat *sb, int typeflag, struct FTW *ftw)
 }
 
 /*
- * Operator-pushed configuration that must survive an app rebuild. The
- * bundle either ships a placeholder for these (lib/ndb/llm = mode=local)
- * or nothing at all (lib/keyring/ is empty in the bundle); a deep_merge
- * that blindly clobbers from the bundle wipes the user's remote-LLM
- * configuration and keyring credentials on every rebuild, sending the
- * device back to mode=local with no auth. Skip them.
- *
- * `rel` is the dst path relative to the writable inferno root.
+ * POSIX-level recursive remove (rm -rf), used to dislodge legacy
+ * devicectl-pushed dirs in dst/lib/. NSFileManager refuses to remove
+ * those (Apple sandbox marks devicectl-created paths as
+ * app-write-restricted even though the app's runtime uid owns them),
+ * but the raw unlink/rmdir calls hit the BSD perm checks and usually
+ * succeed because we are in fact the owner.
  */
-static BOOL
-is_preserved_path(NSString *rel)
+static int
+posix_rm_rf(const char *path)
 {
-	return [rel isEqualToString:@"lib/ndb/llm"]
-		|| [rel isEqualToString:@"lib/keyring"]
-		|| [rel hasPrefix:@"lib/keyring/"];
+	struct stat sb;
+	if (lstat(path, &sb) != 0)
+		return 0;
+	if (S_ISDIR(sb.st_mode)) {
+		DIR *d = opendir(path);
+		if (d != NULL) {
+			struct dirent *ent;
+			char child[PATH_MAX];
+			while ((ent = readdir(d)) != NULL) {
+				if (strcmp(ent->d_name, ".") == 0 ||
+				    strcmp(ent->d_name, "..") == 0)
+					continue;
+				snprintf(child, sizeof(child), "%s/%s",
+					path, ent->d_name);
+				posix_rm_rf(child);
+			}
+			closedir(d);
+		}
+		return rmdir(path);
+	}
+	return unlink(path);
 }
 
 /*
@@ -80,8 +100,6 @@ is_preserved_path(NSString *rel)
 static void
 deep_merge(NSFileManager *fm, NSString *src, NSString *dst, NSString *rel)
 {
-	if ([rel length] > 0 && is_preserved_path(rel))
-		return;
 	BOOL srcIsDir = NO;
 	if (![fm fileExistsAtPath:src isDirectory:&srcIsDir])
 		return;
@@ -109,18 +127,6 @@ deep_merge(NSFileManager *fm, NSString *src, NSString *dst, NSString *rel)
 		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
 				attributes:nil error:nil];
 	}
-	/*
-	 * Make the dst dir writable BEFORE recursing into it. Some dst
-	 * dirs were created by `devicectl device copy to` and arrive with
-	 * perms that, despite Apple's file-relay reporting "Writable",
-	 * block the app's runtime uid from adding subdirs. Result: lib/
-	 * stays at its devicectl-pushed shape (just keyring/+ndb/) and
-	 * deep_merge silently can't add lib/lucifer/, lib/sh/, etc.
-	 * chmod 0777 the dst dir (owner write at minimum); failures here
-	 * are not fatal — if we don't own the dir we'll see the per-child
-	 * errors below and the operator can react.
-	 */
-	chmod([dst fileSystemRepresentation], 0777);
 	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
 	for (NSString *child in children) {
 		NSString *crel = ([rel length] > 0)
@@ -131,6 +137,46 @@ deep_merge(NSFileManager *fm, NSString *src, NSString *dst, NSString *rel)
 			[dst stringByAppendingPathComponent:child],
 			crel);
 	}
+}
+
+/*
+ * Overlay `src` (operator-pushed config at Documents/inferno-overlay/)
+ * onto `dst` (the app-owned writable root). For each leaf in src, read
+ * via NSData (works even on devicectl-pushed app-write-restricted
+ * sources because we only need READ) and write into dst via NSData
+ * writeToFile (always succeeds — dst was wiped + recreated by us).
+ * Skip leaves we can't read (logged once); never recurse into preserved
+ * directories — overlay is whatever the operator chose to push.
+ */
+static void
+overlay_walk(NSFileManager *fm, NSString *src, NSString *dst)
+{
+	BOOL srcIsDir = NO;
+	if (![fm fileExistsAtPath:src isDirectory:&srcIsDir])
+		return;
+	if (!srcIsDir) {
+		NSData *data = [NSData dataWithContentsOfFile:src];
+		if (data == nil) {
+			fprintf(stderr, "overlay: cannot read %s\n",
+				src.fileSystemRepresentation);
+			return;
+		}
+		NSString *parent = [dst stringByDeletingLastPathComponent];
+		[fm createDirectoryAtPath:parent withIntermediateDirectories:YES
+				attributes:nil error:nil];
+		[fm removeItemAtPath:dst error:nil];
+		if (![data writeToFile:dst atomically:YES])
+			fprintf(stderr, "overlay: cannot write %s\n",
+				dst.fileSystemRepresentation);
+		return;
+	}
+	[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
+			attributes:nil error:nil];
+	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
+	for (NSString *child in children)
+		overlay_walk(fm,
+			[src stringByAppendingPathComponent:child],
+			[dst stringByAppendingPathComponent:child]);
 }
 
 /*
@@ -191,34 +237,55 @@ prepare_writable_root(void)
 	}
 
 	/*
-	 * First launch or a new build: refresh from the bundle. Writable
-	 * state from an OLDER build is intentionally discarded.
+	 * First launch or a new build: refresh from the bundle.
 	 *
-	 * Always go via deep_merge — never wholesale [fm copyItemAtPath:src
-	 * toPath:dst]. Two reasons:
+	 * Two iOS-specific complications drive the shape below:
 	 *
-	 *  1. The wholesale copy needs dst gone first, so it would have to
-	 *     removeItemAtPath:dst. On iOS that fails because devicectl-
-	 *     pushed files (lib/keyring/serve-llm, lib/ndb/llm) have perms
-	 *     the runtime uid can't override — leaving us bailing back to
-	 *     the read-only bundle (no /tmp, no /usr, mode=local).
-	 *  2. Even on the sim where the wholesale copy succeeds, it wipes
-	 *     the operator-pushed config every rebuild — so the bundle's
-	 *     placeholder ndb/llm (mode=local) and empty keyring overwrite
-	 *     what the operator pushed. deep_merge's preserve list keeps
-	 *     them intact.
-	 *
-	 * One code path on both targets: deep_merge from bundle, leave
-	 * preserved paths alone, make everything writable, stamp marker.
+	 *  1. Anything pushed by `devicectl device copy to` arrives marked
+	 *     app-write-restricted: even though the app's runtime uid owns
+	 *     the file, NSFileManager refuses every removeItemAtPath,
+	 *     createDirectoryAtPath, and copyItemAtPath that touches the
+	 *     containing dir. Concrete symptom: if creds were pushed into
+	 *     Caches/inferno/lib/keyring/, deep_merge cannot add
+	 *     lib/lucifer/ next to them and boot dies. POSIX
+	 *     unlink/rmdir bypass that block (BSD perm check sees us as
+	 *     owner) — sledgehammer the whole dst tree via posix_rm_rf
+	 *     before deep_merge so we start from a clean, app-owned
+	 *     hierarchy.
+	 *  2. Wiping dst also wipes any user-pushed config. The correct
+	 *     push target for operators is Documents/inferno-overlay/...
+	 *     (Documents is app-writable end-to-end and survives Caches
+	 *     refresh): mirror lib/keyring/serve-llm at
+	 *     Documents/inferno-overlay/lib/keyring/serve-llm. After
+	 *     deep_merge, we overlay anything in Documents/inferno-overlay/
+	 *     onto Caches/inferno/ — operator-pushed leaf files replace
+	 *     bundle placeholders (so lib/ndb/llm = mode=remote wins over
+	 *     the bundle's mode=local default).
 	 */
 	if ([fm fileExistsAtPath:dst]) {
-		fprintf(stderr, "InferNode: refreshing writable root (deep_merge from bundle)\n");
-	} else {
-		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
-				attributes:nil error:nil];
-		fprintf(stderr, "InferNode: first-launch populate (deep_merge from bundle)\n");
+		fprintf(stderr, "InferNode: refreshing writable root (posix_rm_rf + deep_merge)\n");
+		if (posix_rm_rf([dst fileSystemRepresentation]) != 0)
+			fprintf(stderr, "InferNode: posix_rm_rf(%s) had errors: %s\n",
+				dst.fileSystemRepresentation, strerror(errno));
 	}
+	[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
+			attributes:nil error:nil];
 	deep_merge(fm, src, dst, @"");
+
+	/* Overlay Documents/inferno-overlay/ (operator-pushed config) onto
+	 * dst. NSData read+write here, not copyItemAtPath: the overlay
+	 * source may itself be app-write-restricted (operator pushed via
+	 * devicectl), but we can still READ it; the WRITE goes into the
+	 * app-owned deep_merged tree so it always succeeds. */
+	NSString *overlay = [[NSSearchPathForDirectoriesInDomains(
+			NSDocumentDirectory, NSUserDomainMask, YES) firstObject]
+			stringByAppendingPathComponent:@"inferno-overlay"];
+	if ([fm fileExistsAtPath:overlay]) {
+		fprintf(stderr, "InferNode: overlaying %s -> %s\n",
+			overlay.fileSystemRepresentation, dst.fileSystemRepresentation);
+		overlay_walk(fm, overlay, dst);
+	}
+
 	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
 	[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
 	return strdup([dst fileSystemRepresentation]);

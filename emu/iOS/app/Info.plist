@@ -41,6 +41,16 @@
 	<string>iphonesimulator</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- Required for UIKit to deliver indirect-input events (mouse,
+	     trackpad, simulator host clicks) to the app. Without it the
+	     Simulator silently drops every host mouse click — SDL3 logs
+	     `You need UIApplicationSupportsIndirectInputEvents in your
+	     Info.plist for mouse support` and programmatic taps via
+	     pyautogui / test harness never become SDL events. Touches on a
+	     real device are unaffected, but in-sim iteration is blocked
+	     without this. -->
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -413,7 +413,9 @@ inittools(args: list of string)
 		if(findtool(pnm) != nil)  # already in active set
 			continue;
 		ati := ref ToolInfo(pnm, ppath, nil, 0, nil);
-		loadtool(ati);  # ignore error (hardware tools may not load)
+		if((lerr := loadtool(ati)) != nil)
+			sys->fprint(stderr, "tools9p[%s]: pre-load %s failed: %s\n",
+				mountpt_g, pnm, lerr);
 		alltools = ati :: alltools;
 		nall++;
 	}

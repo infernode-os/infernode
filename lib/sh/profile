@@ -14,6 +14,15 @@ mount -ac {mntgen} /n >[2] /dev/null
 bind -a '#I' /net >[2] /dev/null
 ndb/cs
 
+# ── Telephony / SMS (devphone) ──────────────────────────────
+# #f is the cross-platform phone+SMS device (emu/port/devphone.c).
+# Mount it at /phone so Veltro tools (sms, dial) and the msg9p `sms`
+# MsgSrc find a stable path on every platform — the bridge underneath
+# is stubbed on desktops and wired to MessageUI/CallKit on iOS / to
+# SmsManager on Android. Mirrors the original Hellaphone /phone tree.
+mkdir /phone >[2] /dev/null
+bind -a '#f' /phone >[2] /dev/null
+
 # ── Host filesystem + home directory (early — needed for overlays) ──
 # /n/local is the user-visible root of the host filesystem on every
 # platform. Wiring to get there differs (POSIX has a single root;

@@ -619,33 +619,48 @@ init(ctxt: ref Draw->Context, args: list of string)
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
 	if(mobile) {
-		# KLUDGE-MOBILE-ACCORDION-INFR-119 / INFR-137 — accordion layout.
+		# KLUDGE-MOBILE-ACCORDION-INFR-119 / INFR-137 — true single-open
+		# accordion layout.
 		#
-		# All three title bars stack immediately under the LUCI header
-		# at fixed positions.  ALL THREE zones get the SAME full body
-		# rect below them — they overlap, and which one is visible is
-		# decided purely by z-order (topexpandedzone() raises the
-		# expanded zone's sub-image to the front).
+		# Three title bars (Chat, Workspace, Context) stack in fixed
+		# top-to-bottom order. The expanded zone's body fills the slot
+		# between its own title bar and the next title bar (or screen
+		# bottom). Collapsed title bars stack tight before/after the
+		# body — so the user sees all three section labels at once and
+		# the expanded section's content fills the available space.
 		#
-		# This replaces the old scheme where the collapsed zones got
-		# 1×1 sentinel sub-windows.  That shrank the presentation
-		# screen (presscr) to 1×1 on every collapse, which destroyed
-		# the child app windows living on it; re-expanding reallocated
-		# them blank (INFR-137).  Keeping presscr full-size across
-		# collapse/expand means app windows survive untouched — a zone
-		# toggle is just a z-order change, not a re-layout.
+		# Preserving app windows (INFR-137): pressubimg's rect MUST stay
+		# invariant across accordion toggles — presscr lives on it and
+		# child app windows live on presscr. We give pressubimg the slot
+		# Workspace occupies when expanded; that's the maximal visible
+		# region pressubimg ever needs and it never changes. When the
+		# user expands Chat or Context, the new convimg/ctximg sub-image
+		# is z-ordered above pressubimg and the title bars draw directly
+		# on mainwin, overdrawing the strips of pressubimg that would
+		# otherwise show through. convimg and ctximg don't host child
+		# windows, so they get freshly-sized rects on every toggle — a
+		# body-slot rect when expanded, a 1×1 placeholder when collapsed.
 		headerh := MOBILE_HEADERH;
 		titleh  := MOBILE_TITLEBARH;
-		zonety  := r.min.y + headerh + 1;
+		bodytop := r.min.y + headerh + 1;
+		bodybot := r.max.y;
 
-		convtitle_y := zonety;
-		prestitle_y := convtitle_y + titleh;
-		ctxtitle_y  := prestitle_y + titleh;
-		bodytop     := ctxtitle_y  + titleh;
-
-		mobile_conv_title_y = convtitle_y;
-		mobile_pres_title_y = prestitle_y;
-		mobile_ctx_title_y  = ctxtitle_y;
+		# Title-bar y positions depend on which zone is expanded. The
+		# order on screen is always Chat (0), Workspace (1), Context (2).
+		case expanded_zone {
+		0 =>		# Chat expanded
+			mobile_conv_title_y = bodytop;
+			mobile_pres_title_y = bodybot - 2 * titleh;
+			mobile_ctx_title_y  = bodybot - titleh;
+		1 =>		# Workspace expanded
+			mobile_conv_title_y = bodytop;
+			mobile_pres_title_y = bodytop + titleh;
+			mobile_ctx_title_y  = bodybot - titleh;
+		* =>		# 2: Context expanded
+			mobile_conv_title_y = bodytop;
+			mobile_pres_title_y = bodytop + titleh;
+			mobile_ctx_title_y  = bodytop + 2 * titleh;
+		}
 
 		# Mobile mode disables x-based mouse routing — mouseproc
 		# reads mobile_*_title_y to dispatch taps.
@@ -653,9 +668,29 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 		pres_zone_maxx = -1;
 		ctx_zone_minx  = -1;
 
-		# Full body rect below the title bars; all three zones share it.
-		bodyr := Rect((r.min.x, bodytop), (r.max.x, r.max.y));
-		return (bodyr, bodyr, bodyr);
+		# Invariant pressubimg rect = Workspace's body slot when
+		# expanded. Holds across toggles, preserving presscr's surface
+		# and the child app windows on it (INFR-137).
+		presmaxr := Rect((r.min.x, bodytop + 2 * titleh),
+				 (r.max.x, bodybot - titleh));
+
+		# 1×1 placeholder for collapsed conv/ctx — never visible.
+		# Safe to resize (no child windows live on these sub-images).
+		placerect := Rect((r.min.x, bodytop),
+				  (r.min.x + 1, bodytop + 1));
+
+		case expanded_zone {
+		0 =>
+			convr := Rect((r.min.x, bodytop + titleh),
+				      (r.max.x, mobile_pres_title_y));
+			return (convr, presmaxr, placerect);
+		1 =>
+			return (placerect, presmaxr, placerect);
+		* =>
+			ctxr := Rect((r.min.x, mobile_ctx_title_y + titleh),
+				     (r.max.x, bodybot));
+			return (placerect, presmaxr, ctxr);
+		}
 	}
 
 	# Desktop: classic three-column.
@@ -1576,23 +1611,33 @@ handleresize()
 {
 	r := mainwin.r;
 
-	# Mobile accordion: a zone toggle keeps mainwin geometry unchanged —
-	# only which zone is on top changes.  Recreating mainscr/presscr here
-	# would destroy the app windows that live on presscr (INFR-137), so
-	# take the cheap path: re-z-order the expanded zone and repaint chrome,
-	# leaving every sub-image (and presscr's app windows) intact.  The full
-	# recreate below only runs on a genuine geometry change (or first call).
+	# Mobile accordion toggle: mainwin geometry unchanged, only which
+	# zone is expanded. The pressubimg rect is invariant (presmaxr in
+	# zonerects) precisely so we can avoid touching pressubimg/presscr
+	# here — that's what would otherwise destroy the child app windows
+	# living on presscr (INFR-137). convimg and ctximg, however, are
+	# reallocated to match the new title-bar geometry; they host no
+	# child windows so a fresh newwindow is safe.
 	if(mobile && r.eq(lastlaidout) && mainscr != nil && pressubimg != nil) {
+		(convr_t, _, ctxr_t) := zonerects(r);
+		newconv := mainscr.newwindow(convr_t, Draw->Refbackup, Draw->Nofill);
+		newctx  := mainscr.newwindow(ctxr_t,  Draw->Refbackup, Draw->Nofill);
+		if(newconv == nil || newctx == nil) {
+			sys->fprint(sys->fildes(2),
+				"lucifer: handleresize cheap path: newwindow failed (expanded=%d convr=%s ctxr=%s)\n",
+				expanded_zone, r2s(convr_t), r2s(ctxr_t));
+			return;
+		}
+		convimg = newconv;
+		ctximg  = newctx;
 		topexpandedzone();
 		drawchrome(r);
-		# Refresh the conv/ctx zone content (its sub-image persisted but
-		# may have missed redraws while hidden).  Do NOT touch presRszCh:
-		# that would reshape/reallocate the app windows we are preserving;
-		# topexpandedzone() already revealed them with content intact.
-		if(expanded_zone == 0)
-			convRszCh <-= convimg;
-		else if(expanded_zone == 2)
-			ctxRszCh <-= ctximg;
+		# Hand the freshly-sized sub-images to the zone modules so
+		# they redraw at the new rect. Blocking sends — see comment
+		# on the full-path versions below; channels buffer upstream
+		# in wm so quick consecutive toggles aren't lost.
+		convRszCh <-= convimg;
+		ctxRszCh  <-= ctximg;
 		return;
 	}
 

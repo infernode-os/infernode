@@ -35,9 +35,11 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <MessageUI/MessageUI.h>
+#import <CallKit/CallKit.h>
 
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 #include <dispatch/dispatch.h>
 #include "phonebridge.h"
 
@@ -71,11 +73,115 @@
 /* Serialise concurrent send attempts: one modal compose sheet at a time. */
 static dispatch_semaphore_t send_serialiser;
 
+/*
+ * Call-event ring. CXCallObserver fires on the UIKit main thread when call
+ * state changes (incoming / outgoing connect / disconnect). We can't block
+ * the observer, so each event gets formatted into a single line and pushed
+ * into a bounded ring; phonebridge_recv_call_event drains one entry per
+ * call from the devphone kproc. The ring lock is held only across the push
+ * or pop — no UIKit calls happen under the lock.
+ *
+ * Format pushed: "<state> <handle> <iso-timestamp>\n"
+ *   state    one of "incoming" "dialing" "connected" "disconnected"
+ *   handle   the remote number, or "-" if not exposed by CallKit
+ *   ts       NSISO8601 UTC
+ */
+#define CALL_RING_SLOTS 32
+#define CALL_RING_LINEMAX 256
+static char       call_ring[CALL_RING_SLOTS][CALL_RING_LINEMAX];
+static int        call_ring_head;	/* next write slot */
+static int        call_ring_tail;	/* next read slot */
+static int        call_ring_count;
+static pthread_mutex_t call_ring_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void
+push_call_event(const char *line)
+{
+	pthread_mutex_lock(&call_ring_lock);
+	if(call_ring_count == CALL_RING_SLOTS){
+		/* Full — drop the oldest. Cellular call state changes are
+		 * already low-frequency; a backlog this large means nobody's
+		 * draining, in which case the freshest events are the useful ones. */
+		call_ring_tail = (call_ring_tail + 1) % CALL_RING_SLOTS;
+		call_ring_count--;
+	}
+	strncpy(call_ring[call_ring_head], line, CALL_RING_LINEMAX - 1);
+	call_ring[call_ring_head][CALL_RING_LINEMAX - 1] = 0;
+	call_ring_head = (call_ring_head + 1) % CALL_RING_SLOTS;
+	call_ring_count++;
+	pthread_mutex_unlock(&call_ring_lock);
+}
+
+static int
+pop_call_event(char *buf, int buflen)
+{
+	int n = 0;
+	pthread_mutex_lock(&call_ring_lock);
+	if(call_ring_count > 0){
+		n = snprintf(buf, buflen, "%s", call_ring[call_ring_tail]);
+		call_ring_tail = (call_ring_tail + 1) % CALL_RING_SLOTS;
+		call_ring_count--;
+	}
+	pthread_mutex_unlock(&call_ring_lock);
+	return n;
+}
+
+/*
+ * Observer that watches every cellular call state transition on the
+ * device. CallKit doesn't expose answer/hangup control to third-party
+ * apps for cellular calls (only VoIP), but observation is allowed and
+ * is enough for InferNode to surface "your call to X just hung up" to
+ * the agent stack via the msg9p phone-events MsgSrc.
+ */
+@interface InfernodeCallObserver : NSObject <CXCallObserverDelegate>
+@end
+
+@implementation InfernodeCallObserver
+- (void)callObserver:(CXCallObserver *)observer callChanged:(CXCall *)call
+{
+	const char *state;
+	if(call.hasEnded)             state = "disconnected";
+	else if(call.hasConnected)    state = "connected";
+	else if(call.isOutgoing)      state = "dialing";
+	else                          state = "incoming";
+
+	/* CallKit hides the remote number for cellular calls; we still
+	 * surface "-" so downstream parsers see a stable column layout. */
+	const char *handle = "-";
+
+	NSISO8601DateFormatter *fmt = [[NSISO8601DateFormatter alloc] init];
+	fmt.formatOptions = NSISO8601DateFormatWithInternetDateTime;
+	NSString *ts = [fmt stringFromDate:[NSDate date]];
+
+	char line[CALL_RING_LINEMAX];
+	snprintf(line, sizeof line, "%s %s %s\n",
+		state, handle, ts.UTF8String);
+	push_call_event(line);
+	fprintf(stderr, "phone: iOS call event %s", line);
+}
+@end
+
+/* Held strong by the static observer/delegate so they survive past init. */
+static CXCallObserver        *gCallObserver;
+static InfernodeCallObserver *gCallObserverDelegate;
+
 void
 phonebridge_init(void)
 {
 	send_serialiser = dispatch_semaphore_create(1);
-	fprintf(stderr, "phone: bridge=iOS (MessageUI wired; CallKit pending — INFR-181)\n");
+
+	/* CXCallObserver requires its delegate to be set on the UIKit main
+	 * thread. phonebridge_init runs early during emu boot — usually
+	 * before UIKit is fully alive — so dispatch to main and let it
+	 * fire when the runloop is ready. */
+	dispatch_async(dispatch_get_main_queue(), ^{
+		gCallObserverDelegate = [[InfernodeCallObserver alloc] init];
+		gCallObserver = [[CXCallObserver alloc] init];
+		[gCallObserver setDelegate:gCallObserverDelegate queue:nil];
+		fprintf(stderr, "phone: CXCallObserver installed\n");
+	});
+
+	fprintf(stderr, "phone: bridge=iOS (MessageUI + CallKit observation wired — INFR-181)\n");
 }
 
 /*
@@ -221,28 +327,68 @@ phonebridge_recv_sms(char *buf, int buflen)
 int
 phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
 {
-	/* TODO INFR-181:
-	 *   dial:    [UIApplication.sharedApplication openURL:[NSURL URLWithString:
-	 *              [@"tel:" stringByAppendingString:@(rest)]] options:@{} completionHandler:nil];
-	 *   answer / hangup: unsupported (iOS does not permit programmatic
-	 *                    control of cellular calls).
-	 *   CXCallObserver wired in init; delegate writes records into a
-	 *   ring drained by phonebridge_recv_call_event.
-	 */
-	fprintf(stderr, "phone: iOS phone_ctl %s%s%s (stub — INFR-181)\n",
-		verb ? verb : "", rest ? " " : "", rest ? rest : "");
-	if(verb && (strcmp(verb, "answer") == 0 || strcmp(verb, "hangup") == 0)){
-		snprintf(err, errlen, "iOS: programmatic %s of cellular calls is not permitted", verb);
+	if(verb == NULL){
+		snprintf(err, errlen, "phone_ctl: missing verb");
 		return -1;
 	}
-	return 0;
+
+	if(strcmp(verb, "dial") == 0){
+		if(rest == NULL || rest[0] == 0){
+			snprintf(err, errlen, "dial: missing number");
+			return -1;
+		}
+		/*
+		 * Hand the number to the OS via tel: URL — iOS shows its own
+		 * call-confirmation dialog and the user authorises the call.
+		 * That's the only path third-party apps get for cellular dial;
+		 * silent placement isn't permitted by the platform. CallKit's
+		 * CXCallController.requestTransaction with CXStartCallAction
+		 * is reserved for VoIP, not cellular, so it's not a workaround.
+		 *
+		 * openURL: must run on the UIKit main thread. We dispatch and
+		 * return immediately — the user will see the confirmation
+		 * dialog asynchronously, and the resulting call (if approved)
+		 * shows up on the CXCallObserver as an outgoing transition.
+		 */
+		NSString *num = [NSString stringWithUTF8String:rest];
+		/* Strip whitespace iOS won't tolerate inside the URL. */
+		NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+		num = [num stringByTrimmingCharactersInSet:ws];
+		NSString *urlstr = [@"tel:" stringByAppendingString:num];
+		NSURL *url = [NSURL URLWithString:urlstr];
+		if(url == nil){
+			snprintf(err, errlen, "dial: invalid number %s", rest);
+			return -1;
+		}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[UIApplication.sharedApplication openURL:url
+				options:@{}
+				completionHandler:^(BOOL success){
+					fprintf(stderr, "phone: iOS dial openURL %s %s\n",
+						urlstr.UTF8String,
+						success ? "ok" : "failed");
+				}];
+		});
+		return 0;
+	}
+
+	if(strcmp(verb, "answer") == 0 || strcmp(verb, "hangup") == 0){
+		snprintf(err, errlen,
+			"iOS: programmatic %s of cellular calls is not permitted "
+			"(see CallKit docs — only VoIP calls can be controlled)",
+			verb);
+		return -1;
+	}
+
+	fprintf(stderr, "phone: iOS phone_ctl unknown verb %s\n", verb);
+	snprintf(err, errlen, "phone_ctl: unknown verb %s", verb);
+	return -1;
 }
 
 int
 phonebridge_recv_call_event(char *buf, int buflen)
 {
-	(void)buf; (void)buflen;
-	return 0;
+	return pop_call_event(buf, buflen);
 }
 
 int
@@ -255,8 +401,9 @@ int
 phonebridge_status(char *buf, int buflen)
 {
 	BOOL can = [MFMessageComposeViewController canSendText];
-	return snprintf(buf, buflen, "iOS — sms %s; call observation TODO (INFR-181)\n",
-	                can ? "available" : "unavailable (no SIM / simulator)");
+	return snprintf(buf, buflen,
+		"iOS — sms %s; dial via tel: (user-confirmed); CallKit observing\n",
+		can ? "available" : "unavailable (no SIM / simulator)");
 }
 
 int

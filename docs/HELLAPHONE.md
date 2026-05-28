@@ -472,6 +472,127 @@ policy:
 adb shell cat /system/etc/seccomp_policy/app.policy 2>/dev/null
 ```
 
+## Testing iOS telephony on a real device (Ba'al recipe)
+
+The iOS simulator returns `canSendText == NO` and has no `tel:` handler,
+so the only place outbound SMS / dial / CallKit observation can be
+exercised end-to-end is a real iPhone with a SIM. Ba'al (the test
+device in the project memory entries — iPhone 17 Pro Max running iOS
+26.4.2 with Developer Mode ON) is the canonical target. The recipe
+below works against any iPhone that has been provisioned for the
+`os.infernode.ios` profile (cert `Apple Development: p.d.finn@gmail.com`,
+team `9Z8Z334UUU`).
+
+### Build + install on device
+
+```sh
+IOSSDK=iphoneos ./build-ios-app.sh --gui
+```
+
+The script signs with the auto-detected provisioning profile, installs
+via `devicectl`, and launches. First-run keyring / writable-root setup
+happens automatically. After a moment Lucifer comes up with the
+Context / Workspace / Chat accordion.
+
+### What you should see in stderr at boot
+
+`devicectl` captures stderr to the system log; mirror it locally with:
+
+```sh
+xcrun devicectl device process launch \
+    --device <UDID> os.infernode.ios --console
+```
+
+Expected lines, in order:
+
+```
+phone: bridge=iOS (MessageUI + CallKit observation wired — INFR-181)
+phone: CXCallObserver installed
+msg9p: registered source 'sms' from /dis/veltro/sources/sms.dis
+```
+
+If `CXCallObserver installed` is missing, the main-queue dispatch in
+`phonebridge_init` lost the race with UIKit init — open a console
+attach and trigger any UI redraw to give the runloop a tick.
+
+### Outbound SMS (`/phone/sms`)
+
+From the Inferno shell (open Workspace → shell, or via lucibridge if
+you have an LLM configured):
+
+```
+; echo 'send +447700900100 testing from inferno' > /phone/sms
+```
+
+Expected behaviour:
+
+1. `MFMessageComposeViewController` slides up over the app, pre-filled
+   with the recipient and body
+2. User taps Send (or Cancel)
+3. Stderr logs `phone: iOS sms compose sheet up for +447700900100`
+4. On Send tap, a real cellular SMS goes out via the carrier
+
+If `canSendText` returns false (no SIM, iPad without cellular), the
+write to `/phone/sms` fails with the error
+`device cannot send SMS (no cellular / simulator)` — `%r` from the
+shell will surface it.
+
+### Outbound dial (`/phone/phone`)
+
+```
+; echo 'dial +447700900100' > /phone/phone
+```
+
+Expected behaviour:
+
+1. Stderr logs `phone: iOS dial openURL tel:+447700900100 ok`
+2. iOS shows its own call-confirmation dialog ("Call +447700900100?")
+3. User taps Call
+4. Cellular call is placed; CallKit fires the observer
+
+### CallKit observation (`/phone/phone` reads)
+
+While the call is active or transitioning, every state change pushes
+a record into the bridge ring. A parallel reader drains them:
+
+```
+; cat /phone/phone
+dialing - 2026-05-28T14:30:00Z
+connected - 2026-05-28T14:30:05Z
+disconnected - 2026-05-28T14:31:12Z
+```
+
+The remote number ("-") is hidden by CallKit for cellular calls —
+this is an OS policy, not something we can route around.
+
+### msg9p plumbing
+
+Once `register sms` has fired in boot, the source is watching
+`/phone/sms` reads. iOS's `phonebridge_recv_sms` returns `-1` (no
+inbox API), so on iOS this watcher idles. To exercise it without
+inbound SMS:
+
+```
+; echo 'send sms +447700900100' > /n/msg/ctl
+< body line here
+```
+
+That routes through `msg9p`'s `send` verb to the sms MsgSrc's
+`send(Message)` and produces the same `/phone/sms` write as the
+direct test above.
+
+### What the simulator CAN test
+
+* `phonebridge_init` runs without crashing
+* `CXCallObserver installed` reaches the log
+* `msg9p: registered source 'sms'` reaches the log
+* A write to `/phone/sms` returns the `canSendText` error cleanly
+* A write to `dial` triggers an `openURL: tel:` log line (the call
+  confirmation dialog is suppressed by the simulator)
+* `cat /phone/status` returns the expected single-line bridge state
+
+Everything beyond that needs Ba'al.
+
 ## References
 
 * `emu/Android/README.md` — what eventually lives in that directory.
@@ -479,3 +600,5 @@ adb shell cat /system/etc/seccomp_policy/app.policy 2>/dev/null
 * `build-linux-arm64.sh` — the Linux ARM64 driver we piggyback on.
 * `INFR-107` — Phase 0 tracking epic.
 * `INFR-114` — APK boot speed (closed; setgid seccomp was the cause).
+* `INFR-181` — iOS phonebridge MessageUI + dial + CallKit observation.
+* `INFR-182` — Android telephony wiring (other session's scope).

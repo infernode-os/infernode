@@ -68,6 +68,9 @@ SYSLIBS=\
 	-lm\
 	-lpthread\
 	-framework CoreFoundation\
+	-framework Foundation\
+	-framework UIKit\
+	-framework MessageUI\
 
 default:V:	$O.$CONF
 

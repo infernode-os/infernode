@@ -770,6 +770,17 @@ drawcontext(zone: Rect)
 	indh := indw;
 	now := sys->millisec();
 
+	# Tap-target row heights. Section headers (which toggle expansion)
+	# and NS entries (which open paths / toggle ro/rw badges) are
+	# interactive — floor them at TAPMIN on mobile so every hit area
+	# clears the 44pt iOS HIG minimum. Desktop pattern unchanged.
+	hdrH := mainfont.height + 4;
+	entryH := mainfont.height + 2;
+	if(mobile) {
+		if(hdrH   < TAPMIN) hdrH   = TAPMIN;
+		if(entryH < TAPMIN) entryH = TAPMIN;
+	}
+
 	# Helper: test whether a row at y with given height is visible
 	# Draw commands to off-screen coordinates are clipped by the image,
 	# but we skip them explicitly to avoid wasted work.
@@ -835,11 +846,12 @@ drawcontext(zone: Rect)
 	{
 		nind := "▸";
 		if(agentns_expanded) nind = "▾";
-		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont,
+		hdrtexty := y + (hdrH - mainfont.height) / 2;
+		if(y + hdrH > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, hdrtexty), textcol, (0, 0), mainfont,
 				agentname + " Namespace " + nind);
-		agentnshdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-		y += mainfont.height + 4;
+		agentnshdrrect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+		y += hdrH;
 
 		if(agentns_expanded) {
 			nsentryrects = array[64] of Rect;
@@ -850,12 +862,13 @@ drawcontext(zone: Rect)
 			for(nse := nsmanifest; nse != nil; nse = tl nse) {
 				entry := hd nse;
 
-				visible := y + mainfont.height > vis_top && y < vis_bot;
+				visible := y + entryH > vis_top && y < vis_bot;
+				rowtexty := y + (entryH - mainfont.height) / 2;
 
 				# Store full row rect for hit-testing
 				if(nnsentryrects < len nsentryrects) {
 					nsentryrects[nnsentryrects] = Rect(
-						(zone.min.x, y), (zone.max.x, y + mainfont.height));
+						(zone.min.x, y), (zone.max.x, y + entryH));
 				}
 
 				# Glyph: ● mounted (green), ○ not mounted (dim)
@@ -866,24 +879,24 @@ drawcontext(zone: Rect)
 					gcol = dimcol;
 				}
 				if(visible)
-					mainwin.text((zone.min.x + pad, y), gcol, (0, 0), mainfont, glyph);
+					mainwin.text((zone.min.x + pad, rowtexty), gcol, (0, 0), mainfont, glyph);
 
 				# Label
 				labelx := zone.min.x + pad + glyphw;
 				if(visible)
-					mainwin.text((labelx, y), text2col, (0, 0), mainfont, entry.label);
+					mainwin.text((labelx, rowtexty), text2col, (0, 0), mainfont, entry.label);
 
 				# Path (dimmer, clickable) — right of label
 				labelw := mainfont.width(entry.label);
 				pathx := labelx + labelw + 8;
 				if(visible)
-					mainwin.text((pathx, y), dimcol, (0, 0), mainfont, entry.path);
+					mainwin.text((pathx, rowtexty), dimcol, (0, 0), mainfont, entry.path);
 
 				# Store path rect for click-to-open
 				pathw := mainfont.width(entry.path);
 				if(nnsentryrects < len nsentry_pathrects) {
 					nsentry_pathrects[nnsentryrects] = Rect(
-						(pathx, y), (pathx + pathw, y + mainfont.height));
+						(pathx, y), (pathx + pathw, y + entryH));
 				}
 
 				# Permission badge [ro]/[rw]/[cow] — right-aligned, clickable
@@ -893,20 +906,20 @@ drawcontext(zone: Rect)
 					badgex := zone.max.x - pad - badgew;
 					if(nnsentryrects < len nsentry_badgerects) {
 						nsentry_badgerects[nnsentryrects] = Rect(
-							(badgex, y), (badgex + badgew, y + mainfont.height));
+							(badgex, y), (badgex + badgew, y + entryH));
 					}
 					if(visible) {
 						badgecol := dimcol;
 						if(entry.perm == "rw" || entry.perm == "cow")
 							badgecol = yellowcol;
-						mainwin.text((badgex, y), badgecol, (0, 0), mainfont, badge);
+						mainwin.text((badgex, rowtexty), badgecol, (0, 0), mainfont, badge);
 					}
 				}
 
 				if(nnsentryrects < len nsentryrects)
 					nnsentryrects++;
 
-				y += mainfont.height + 2;
+				y += entryH;
 
 				# If not mounted, show hint on next line
 				if(!entry.mounted) {
@@ -936,10 +949,11 @@ drawcontext(zone: Rect)
 	{
 		ind := "▸";
 		if(toolsec_expanded) ind = "▾";
-		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont, toolseclabel + " " + ind);
-		toolsechdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-		y += mainfont.height + 4;
+		thdrtexty := y + (hdrH - mainfont.height) / 2;
+		if(y + hdrH > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, thdrtexty), textcol, (0, 0), mainfont, toolseclabel + " " + ind);
+		toolsechdrrect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+		y += hdrH;
 
 		if(toolsec_expanded) {
 			toolentryrects = array[64] of Rect;
@@ -1108,20 +1122,22 @@ drawcontext(zone: Rect)
 	{
 		uind := "▸";
 		if(userns_expanded) uind = "▾";
-		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont,
+		uhdrtexty := y + (hdrH - mainfont.height) / 2;
+		if(y + hdrH > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, uhdrtexty), textcol, (0, 0), mainfont,
 				username + " Namespace " + uind);
-		usernshdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-		y += mainfont.height + 4;
+		usernshdrrect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+		y += hdrH;
 
 		if(userns_expanded) {
 			# Browse button — clicking opens filebrowser
-			if(y + mainfont.height > vis_top && y < vis_bot) {
-				mainwin.text((zone.min.x + pad, y), text2col, (0, 0), mainfont,
+			brtexty := y + (hdrH - mainfont.height) / 2;
+			if(y + hdrH > vis_top && y < vis_bot) {
+				mainwin.text((zone.min.x + pad, brtexty), text2col, (0, 0), mainfont,
 					"Browse...");
 			}
-			browserect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-			y += mainfont.height + 4;
+			browserect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+			y += hdrH;
 
 			# Show pinned paths
 			if(pinnedpaths != nil) {

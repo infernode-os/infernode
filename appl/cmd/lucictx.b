@@ -311,8 +311,14 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			continue;
 		}
 
-		# Button-1 just pressed
-		if(p.buttons == 1 && wasdown == 0) {
+		# Button-1 just pressed.
+		# Bitmask test (& 1) rather than strict equality (== 1) — on
+		# mobile (iOS SDL3 touch synthesis), pointer events can carry
+		# additional state bits alongside the press bit, so `== 1`
+		# silently drops legitimate taps (tap-to-add/remove tools in
+		# the Context view stopped working). Scroll handlers above
+		# already use bitmask tests (& 8 / & 16) and work.
+		if((p.buttons & 1) && !(wasdown & 1)) {
 			tabclicked := 0;
 
 			# Agent Namespace header toggle
@@ -1424,7 +1430,7 @@ filebrowser(startpath: string): string
 		}
 
 		# Button-1 just pressed
-		if(p.buttons == 1 && wasdown2 == 0) {
+		if((p.buttons & 1) && !(wasdown2 & 1)) {
 			# Cancel button
 			if(brow_cancelrect.max.x > brow_cancelrect.min.x &&
 					brow_cancelrect.contains(p.xy)) {

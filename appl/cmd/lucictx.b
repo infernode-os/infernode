@@ -1199,16 +1199,36 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 	cancelw := mainfont.width(closeicon);
 	bindw   := mainfont.width(bindlbl);
 
+	# Mobile floors for the three header tap targets. The close glyph
+	# is a DESTRUCTIVE action so its rect must be (a) at least TAPMIN
+	# wide on its own, and (b) separated from the adjacent non-destructive
+	# Bind by a generous gap so a thumb that lands slightly off Bind
+	# can't close the browser by accident.
+	xhitw := cancelw;
+	bindhitw := bindw;
+	backhitw := backw;
+	destructive_gap := 8;
+	if(mobile) {
+		if(xhitw < TAPMIN)    xhitw    = TAPMIN;
+		if(bindhitw < TAPMIN) bindhitw = TAPMIN;
+		if(backhitw < TAPMIN) backhitw = TAPMIN;
+		destructive_gap = TAPMIN;	# ~44pt clear buffer
+	}
+
+	# Vertical baseline for header text — center inside lineH so taller
+	# tap rects don't leave the labels top-aligned in an empty strip.
+	htexty := y + (lineH - mainfont.height) / 2;
+
 	brow_backrect = Rect((zone.min.x + pad, y),
-		(zone.min.x + pad + backw, y + lineH));
+		(zone.min.x + pad + backhitw, y + lineH));
 	upcol := accentcol;
 	if(curpath == "/")
 		upcol = dimcol;
-	mainwin.text((zone.min.x + pad, y), upcol, (0, 0), mainfont, upicon);
+	mainwin.text((zone.min.x + pad, htexty), upcol, (0, 0), mainfont, upicon);
 
 	# Path — truncate at / boundary from left if too wide
-	pathx   := zone.min.x + pad + backw + 6;
-	pathend := zone.max.x - pad - cancelw - 6 - bindw - 4;
+	pathx   := zone.min.x + pad + backhitw + 6;
+	pathend := zone.max.x - pad - xhitw - destructive_gap - bindhitw - 4;
 	maxpathw := pathend - pathx;
 	disp    := curpath;
 	if(mainfont.width(disp) > maxpathw) {
@@ -1229,18 +1249,22 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 			disp = "\u2026" + disp[1:];
 		}
 	}
-	mainwin.text((pathx, y), text2col, (0, 0), mainfont, disp);
+	mainwin.text((pathx, htexty), text2col, (0, 0), mainfont, disp);
 
-	brow_bindrect = Rect(
-		(zone.max.x - pad - cancelw - 6 - bindw, y),
-		(zone.max.x - pad - cancelw - 6, y + lineH));
-	mainwin.text((zone.max.x - pad - cancelw - 6 - bindw, y),
-		greencol, (0, 0), mainfont, bindlbl);
+	# X (destructive) anchored to the right edge; Bind sits to the left
+	# with destructive_gap between them. Glyph and label centered inside
+	# their (mobile-floored) tap rects.
+	x_left  := zone.max.x - pad - xhitw;
+	x_right := zone.max.x - pad;
+	brow_cancelrect = Rect((x_left, y), (x_right, y + lineH));
+	x_glyph_x := x_left + (xhitw - cancelw) / 2;
+	mainwin.text((x_glyph_x, htexty), redcol, (0, 0), mainfont, closeicon);
 
-	brow_cancelrect = Rect(
-		(zone.max.x - pad - cancelw, y),
-		(zone.max.x - pad, y + lineH));
-	mainwin.text((zone.max.x - pad - cancelw, y), redcol, (0, 0), mainfont, closeicon);
+	bind_right := x_left - destructive_gap;
+	bind_left  := bind_right - bindhitw;
+	brow_bindrect = Rect((bind_left, y), (bind_right, y + lineH));
+	bind_label_x := bind_left + (bindhitw - bindw) / 2;
+	mainwin.text((bind_label_x, htexty), greencol, (0, 0), mainfont, bindlbl);
 
 	y += lineH + 2;
 	mainwin.draw(Rect((zone.min.x + pad, y), (zone.max.x - pad, y + 1)), dimcol, nil, (0, 0));

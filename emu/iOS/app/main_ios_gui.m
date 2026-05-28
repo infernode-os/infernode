@@ -171,30 +171,34 @@ prepare_writable_root(void)
 		}
 	}
 
-	/* First launch or a new build: refresh from the bundle. Writable
-	 * state from an OLDER build is intentionally discarded. */
-	[fm removeItemAtPath:dst error:nil];
-	NSError *err = nil;
-	if ([fm copyItemAtPath:src toPath:dst error:&err]) {
-		nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
-		[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
-		return strdup([dst fileSystemRepresentation]);
-	}
 	/*
-	 * Top-level remove or copy failed — almost always because pushed-in
-	 * files (e.g. /lib/keyring/serve-llm, /lib/ndb/llm via `devicectl
-	 * device copy to`) live in dst with permissions the app's runtime
-	 * uid can't override on iOS. removeItemAtPath leaves them, then
-	 * copyItemAtPath can't overwrite dst. Don't bail to bundle (that
-	 * sends Inferno back to a read-only root: no /tmp, no /usr, no
-	 * /lib/ndb/llm = mode=remote, so chat + tools + logs all silently
-	 * break). Merge child-by-child: walk the bundle's children, replace
-	 * each in dst where we can, leave the immovable ones alone. After
-	 * this, dst has a current bundle tree overlaid on whatever pushed
-	 * files survived — that's the operator-friendly outcome.
+	 * First launch or a new build: refresh from the bundle. Writable
+	 * state from an OLDER build is intentionally discarded.
+	 *
+	 * Always go via deep_merge — never wholesale [fm copyItemAtPath:src
+	 * toPath:dst]. Two reasons:
+	 *
+	 *  1. The wholesale copy needs dst gone first, so it would have to
+	 *     removeItemAtPath:dst. On iOS that fails because devicectl-
+	 *     pushed files (lib/keyring/serve-llm, lib/ndb/llm) have perms
+	 *     the runtime uid can't override — leaving us bailing back to
+	 *     the read-only bundle (no /tmp, no /usr, mode=local).
+	 *  2. Even on the sim where the wholesale copy succeeds, it wipes
+	 *     the operator-pushed config every rebuild — so the bundle's
+	 *     placeholder ndb/llm (mode=local) and empty keyring overwrite
+	 *     what the operator pushed. deep_merge's preserve list keeps
+	 *     them intact.
+	 *
+	 * One code path on both targets: deep_merge from bundle, leave
+	 * preserved paths alone, make everything writable, stamp marker.
 	 */
-	fprintf(stderr, "InferNode: top copy failed (%s); deep-merging from bundle\n",
-			err.localizedDescription.UTF8String);
+	if ([fm fileExistsAtPath:dst]) {
+		fprintf(stderr, "InferNode: refreshing writable root (deep_merge from bundle)\n");
+	} else {
+		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
+				attributes:nil error:nil];
+		fprintf(stderr, "InferNode: first-launch populate (deep_merge from bundle)\n");
+	}
 	deep_merge(fm, src, dst, @"");
 	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
 	[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];

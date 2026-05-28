@@ -90,10 +90,33 @@ prepare_writable_root(void)
 	 * state from an OLDER build is intentionally discarded. */
 	[fm removeItemAtPath:dst error:nil];
 	NSError *err = nil;
-	if (![fm copyItemAtPath:src toPath:dst error:&err]) {
-		fprintf(stderr, "InferNode: root copy failed (%s); falling back to read-only bundle\n",
-				err.localizedDescription.UTF8String);
-		return strdup([src fileSystemRepresentation]);
+	if ([fm copyItemAtPath:src toPath:dst error:&err]) {
+		nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
+		[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
+		return strdup([dst fileSystemRepresentation]);
+	}
+	/*
+	 * Top-level remove or copy failed — almost always because pushed-in
+	 * files (e.g. /lib/keyring/serve-llm, /lib/ndb/llm via `devicectl
+	 * device copy to`) live in dst with permissions the app's runtime
+	 * uid can't override on iOS. removeItemAtPath leaves them, then
+	 * copyItemAtPath can't overwrite dst. Don't bail to bundle (that
+	 * sends Inferno back to a read-only root: no /tmp, no /usr, no
+	 * /lib/ndb/llm = mode=remote, so chat + tools + logs all silently
+	 * break). Merge child-by-child: walk the bundle's children, replace
+	 * each in dst where we can, leave the immovable ones alone. After
+	 * this, dst has a current bundle tree overlaid on whatever pushed
+	 * files survived — that's the operator-friendly outcome.
+	 */
+	fprintf(stderr, "InferNode: top copy failed (%s); merging child-by-child\n",
+			err.localizedDescription.UTF8String);
+	[fm createDirectoryAtPath:dst withIntermediateDirectories:YES attributes:nil error:nil];
+	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
+	for (NSString *child in children) {
+		NSString *cs = [src stringByAppendingPathComponent:child];
+		NSString *cd = [dst stringByAppendingPathComponent:child];
+		[fm removeItemAtPath:cd error:nil];
+		[fm copyItemAtPath:cs toPath:cd error:nil];
 	}
 	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
 	[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];

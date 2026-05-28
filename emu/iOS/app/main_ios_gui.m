@@ -46,6 +46,47 @@ mk_writable(const char *p, const struct stat *sb, int typeflag, struct FTW *ftw)
 }
 
 /*
+ * Recursive merge of `src` into `dst`. For each leaf file in src, replace
+ * the corresponding file in dst (best-effort — leave it alone if remove
+ * fails, which happens to devicectl-pushed files whose perms the runtime
+ * uid can't override on iOS). Directories are entered, not blindly
+ * overwritten — that's the bug the earlier flat child-by-child merge had:
+ * a stale top-level dir (e.g. /lib with only keyring/ and ndb/ in it) was
+ * "kept" as a unit and the bundle's full lib/ (with lucifer/, sh/, …)
+ * never got merged in. Result: boot fails with "/lib/lucifer does not
+ * exist" because lib/lucifer/ was never copied. Recurse.
+ */
+static void
+deep_merge(NSFileManager *fm, NSString *src, NSString *dst)
+{
+	BOOL srcIsDir = NO;
+	if (![fm fileExistsAtPath:src isDirectory:&srcIsDir])
+		return;
+	if (!srcIsDir) {
+		/* file: replace in place — remove first so copy doesn't error */
+		[fm removeItemAtPath:dst error:nil];
+		[fm copyItemAtPath:src toPath:dst error:nil];
+		return;
+	}
+	/* dir: ensure dst dir exists, then recurse */
+	BOOL dstIsDir = NO;
+	if (![fm fileExistsAtPath:dst isDirectory:&dstIsDir]) {
+		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
+				attributes:nil error:nil];
+	} else if (!dstIsDir) {
+		/* dst is a regular file where src is a dir — try to replace */
+		[fm removeItemAtPath:dst error:nil];
+		[fm createDirectoryAtPath:dst withIntermediateDirectories:YES
+				attributes:nil error:nil];
+	}
+	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
+	for (NSString *child in children)
+		deep_merge(fm,
+			[src stringByAppendingPathComponent:child],
+			[dst stringByAppendingPathComponent:child]);
+}
+
+/*
  * The Inferno root is bundled read-only in the .app, but the boot (and the
  * user, via Settings) must write to it (/lib/ndb/llm, /lib/lucifer/theme,
  * keyring, /n, /tmp, ...). So run emu from a writable copy in the app's
@@ -108,16 +149,9 @@ prepare_writable_root(void)
 	 * this, dst has a current bundle tree overlaid on whatever pushed
 	 * files survived — that's the operator-friendly outcome.
 	 */
-	fprintf(stderr, "InferNode: top copy failed (%s); merging child-by-child\n",
+	fprintf(stderr, "InferNode: top copy failed (%s); deep-merging from bundle\n",
 			err.localizedDescription.UTF8String);
-	[fm createDirectoryAtPath:dst withIntermediateDirectories:YES attributes:nil error:nil];
-	NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:src error:nil];
-	for (NSString *child in children) {
-		NSString *cs = [src stringByAppendingPathComponent:child];
-		NSString *cd = [dst stringByAppendingPathComponent:child];
-		[fm removeItemAtPath:cd error:nil];
-		[fm copyItemAtPath:cs toPath:cd error:nil];
-	}
+	deep_merge(fm, src, dst);
 	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
 	[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
 	return strdup([dst fileSystemRepresentation]);

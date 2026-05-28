@@ -1020,10 +1020,15 @@ drawcontext(zone: Rect)
 			availtools = ravail;
 
 			# Render both columns in parallel, row by row
+			# Mobile floors row stride at TAPMIN (44pt) so tool taps
+			# don't need pixel precision (INFR-167). Desktop unchanged.
+			rowH := mainfont.height + 2;
+			if(mobile && rowH < TAPMIN) rowH = TAPMIN;
 			tp := drawtools;
 			avp := availtools;
 			while(tp != nil || avp != nil) {
-				visible := y + mainfont.height > vis_top && y < vis_bot;
+				visible := y + rowH > vis_top && y < vis_bot;
+				texty := y + (rowH - mainfont.height) / 2;
 
 				# Left column: enabled tool
 				if(tp != nil) {
@@ -1046,15 +1051,15 @@ drawcontext(zone: Rect)
 
 					if(ntoolentryrects < len toolentryrects)
 						toolentryrects[ntoolentryrects++] = Rect(
-							(lcol, y), (rcol, y + mainfont.height));
+							(lcol, y), (rcol, y + rowH));
 
 					if(visible) {
-						tindy := y + (mainfont.height - indh) / 2;
+						tindy := y + (rowH - indh) / 2;
 						mainwin.draw(Rect(
 							(lcol + pad, tindy),
 							(lcol + pad + indw, tindy + indh)),
 							indcol2, nil, (0, 0));
-						mainwin.text((lcol + pad + indw + 6, y),
+						mainwin.text((lcol + pad + indw + 6, texty),
 							text2col, (0, 0), mainfont, tname);
 					}
 
@@ -1066,17 +1071,17 @@ drawcontext(zone: Rect)
 					aname := hd avp;
 
 					if(visible)
-						mainwin.text((rcol + pad, y), text2col, (0, 0),
+						mainwin.text((rcol + pad, texty), text2col, (0, 0),
 							mainfont, "○ " + aname);
 					if(ntoolplusrects < len toolplusrects)
 						toolplusrects[ntoolplusrects++] = Rect(
 							(rcol, y),
-							(zone.max.x, y + mainfont.height));
+							(zone.max.x, y + rowH));
 
 					avp = tl avp;
 				}
 
-				y += mainfont.height + 2;
+				y += rowH;
 			}
 		}
 		y += secgap;

@@ -72,6 +72,7 @@ SYSLIBS=\
 	-framework UIKit\
 	-framework MessageUI\
 	-framework CallKit\
+	-framework Contacts\
 
 default:V:	$O.$CONF
 

@@ -40,6 +40,7 @@
 #import <UIKit/UIKit.h>
 #import <MessageUI/MessageUI.h>
 #import <CallKit/CallKit.h>
+#import <Contacts/Contacts.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -370,4 +371,127 @@ phonebridge_calls(char *buf, int buflen)
 {
 	(void)buf; (void)buflen;
 	return 0;
+}
+
+/*
+ * Address book → /phone/contacts.
+ *
+ * CNContactStore is the public API; permission is gated by
+ * NSContactsUsageDescription in Info.plist. Authorisation is one of
+ * notDetermined / restricted / denied / authorized; on notDetermined
+ * we requestAccess synchronously (semaphore wait — devphone runs us
+ * on an Inferno kproc, not the UIKit main thread, so blocking is
+ * fine). Other states surface as an error string in the read so the
+ * agent can tell access from emptiness.
+ *
+ * Format per Hellaphone /phone:  <display-name>\t<kind>\t<number>\n
+ * One line per phone-number; contacts with several numbers emit
+ * several lines. Records are written into the caller's buffer until
+ * the next record would overflow, then truncation is at the last
+ * newline so the consumer never sees a partial line.
+ */
+static int
+write_contact_line(char *buf, int buflen, int off,
+                   NSString *name, NSString *kind, NSString *number)
+{
+	const char *n = name.UTF8String   ?: "";
+	const char *k = kind.UTF8String   ?: "other";
+	const char *p = number.UTF8String ?: "";
+	int written = snprintf(buf + off, (size_t)(buflen - off),
+		"%s\t%s\t%s\n", n, k, p);
+	if(written < 0)
+		return off;
+	if(written >= buflen - off)
+		return off;	/* would overflow; caller stops here */
+	return off + written;
+}
+
+static NSString *
+normalise_phone_label(NSString *raw)
+{
+	if(raw == nil)
+		return @"other";
+	if([raw isEqualToString:CNLabelPhoneNumberMobile])         return @"mobile";
+	if([raw isEqualToString:CNLabelPhoneNumberiPhone])         return @"mobile";
+	if([raw isEqualToString:CNLabelPhoneNumberMain])           return @"main";
+	if([raw isEqualToString:CNLabelHome])                       return @"home";
+	if([raw isEqualToString:CNLabelWork])                       return @"work";
+	if([raw isEqualToString:CNLabelOther])                      return @"other";
+	NSString *clean = [CNLabeledValue localizedStringForLabel:raw];
+	if(clean == nil)
+		return @"other";
+	return clean.lowercaseString;
+}
+
+int
+phonebridge_contacts(char *buf, int buflen)
+{
+	if(buf == NULL || buflen <= 1)
+		return -1;
+
+	CNAuthorizationStatus st = [CNContactStore authorizationStatusForEntityType:CNEntityTypeContacts];
+	if(st == CNAuthorizationStatusNotDetermined){
+		dispatch_semaphore_t done = dispatch_semaphore_create(0);
+		__block BOOL ok = NO;
+		CNContactStore *probe = [[CNContactStore alloc] init];
+		[probe requestAccessForEntityType:CNEntityTypeContacts
+			completionHandler:^(BOOL granted, NSError *err){
+				ok = granted;
+				if(err != nil)
+					fprintf(stderr, "phone: contacts requestAccess error: %s\n",
+						err.localizedDescription.UTF8String);
+				dispatch_semaphore_signal(done);
+			}];
+		dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+		st = ok ? CNAuthorizationStatusAuthorized : CNAuthorizationStatusDenied;
+	}
+
+	if(st == CNAuthorizationStatusDenied){
+		return snprintf(buf, buflen,
+			"# contacts: permission denied — enable in Settings > InferNode > Contacts\n");
+	}
+	if(st == CNAuthorizationStatusRestricted){
+		return snprintf(buf, buflen,
+			"# contacts: restricted by device policy\n");
+	}
+	if(st != CNAuthorizationStatusAuthorized)
+		return 0;
+
+	CNContactStore *store = [[CNContactStore alloc] init];
+	NSArray *keys = @[
+		CNContactGivenNameKey,
+		CNContactFamilyNameKey,
+		CNContactOrganizationNameKey,
+		CNContactPhoneNumbersKey,
+	];
+	CNContactFetchRequest *req = [[CNContactFetchRequest alloc]
+		initWithKeysToFetch:keys];
+
+	__block int off = 0;
+	NSError *err = nil;
+	BOOL fetched = [store enumerateContactsWithFetchRequest:req
+		error:&err
+		usingBlock:^(CNContact *c, BOOL *stop){
+			if(c.phoneNumbers.count == 0) return;
+			NSString *name = [CNContactFormatter
+				stringFromContact:c style:CNContactFormatterStyleFullName];
+			if(name.length == 0) name = c.organizationName;
+			if(name.length == 0) name = @"(no name)";
+			for(CNLabeledValue<CNPhoneNumber *> *pn in c.phoneNumbers){
+				NSString *kind = normalise_phone_label(pn.label);
+				NSString *num  = pn.value.stringValue;
+				int nextoff = write_contact_line(buf, buflen, off,
+					name, kind, num);
+				if(nextoff == off){	/* no space; stop cleanly */
+					*stop = YES;
+					return;
+				}
+				off = nextoff;
+			}
+		}];
+	if(!fetched){
+		const char *msg = err.localizedDescription.UTF8String ?: "fetch failed";
+		return snprintf(buf, buflen, "# contacts: %s\n", msg);
+	}
+	return off;
 }

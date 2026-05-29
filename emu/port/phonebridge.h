@@ -56,6 +56,24 @@ int	phonebridge_status(char *buf, int buflen);
 int	phonebridge_calls(char *buf, int buflen);
 
 /*
+ * /phone/contacts — synchronous read of the platform address book.
+ * Format on success: one record per line, tab-separated columns:
+ *
+ *     <display-name>\t<kind>\t<number>\n
+ *
+ * `kind` is the platform label normalised to lower-case (mobile, work,
+ * home, main, other). Contacts with multiple numbers emit multiple
+ * lines. The bridge writes up to buflen bytes (truncating at a line
+ * boundary if it has to) and returns the byte count; -1 on error
+ * (permission denied, framework unavailable); 0 means "no contacts".
+ *
+ * devphone reads this once per open via phoneopen and caches the
+ * snapshot on the Chan, so successive reads paginate without
+ * re-querying the OS. close() drops the cache.
+ */
+int	phonebridge_contacts(char *buf, int buflen);
+
+/*
  * Bridge -> userspace push entry points (defined in emu/port/devphone.c).
  * Each call fans the record out to every currently-open reader of the
  * corresponding /phone file via qproduce. Non-blocking; safe from any

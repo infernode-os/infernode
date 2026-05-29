@@ -139,7 +139,7 @@ mkdir -p "$APPDIR"
 	-o "$APPDIR/InferNode" \
 	"$APPOBJ" $INFERNO_LIBS \
 	-framework UIKit -framework Foundation -framework CoreFoundation \
-	-framework MessageUI -framework CallKit \
+	-framework MessageUI -framework CallKit -framework Contacts \
 	$GUI_LINK -lpthread -lm || {
 		echo "ERROR: app link failed" >&2; exit 1; }
 

@@ -95,3 +95,11 @@ phonebridge_calls(char *buf, int buflen)
 	(void)buf; (void)buflen;
 	return 0;
 }
+
+int
+phonebridge_contacts(char *buf, int buflen)
+{
+	/* INFR-182 will wire ContactsContract via the JNI surface. Same
+	 * line format as the iOS bridge: <name>\t<kind>\t<number>\n. */
+	return snprintf(buf, buflen, "# contacts: Android bridge not wired (INFR-182)\n");
+}

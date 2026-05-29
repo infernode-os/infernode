@@ -56,8 +56,20 @@ include "smtp.m";
 
 include "factotum.m";
 
+include "webclient.m";
+	webclient: Webclient;
+
 include "mailparse.m";
 	mailparse: Mailparse;
+
+# Authentication mode for an account.
+AUTHPASS:  con 0;	# plain LOGIN / AUTH PLAIN via factotum password
+AUTHOAUTH: con 1;	# SASL XOAUTH2 via OAuth2 bearer token
+
+# factotum service name for OAuth email keys. The refresh token is the
+# key's !password; client_id/client_secret/token_uri are public attrs.
+OAUTHSVC:    con "imap-oauth";
+DEFTOKENURI: con "https://oauth2.googleapis.com/token";
 
 Mail9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
@@ -176,6 +188,7 @@ Account: adt {
 	server:    string;	# IMAP server hostname
 	smtpserver: string;	# SMTP server (defaults to server)
 	mode:      int;		# Imap->IMPLICIT_TLS | Imap->STARTTLS
+	auth:      int;		# AUTHPASS | AUTHOAUTH
 	imap:      Imap;	# loaded Imap module instance
 	connected: int;
 	# Append-only folder slots. Sync nils the .name of folders the
@@ -330,7 +343,7 @@ mkmsgdir(aidx, bidx: int, uid: big): big { return MKPATH(Qmsgdir, aidx, bidx, ui
 # Account management
 #
 
-newaccount(name, server, smtpserver: string, mode: int): (int, ref Account)
+newaccount(name, server, smtpserver: string, mode, auth: int): (int, ref Account)
 {
 	# Reject duplicates by name.
 	for(i := 0; i < naccounts; i++)
@@ -359,6 +372,7 @@ newaccount(name, server, smtpserver: string, mode: int): (int, ref Account)
 	a.server = server;
 	a.smtpserver = smtpserver;
 	a.mode = mode;
+	a.auth = auth;
 	a.imap = nil;
 	a.connected = 0;
 	a.folders = array[16] of ref Folder;
@@ -1064,9 +1078,10 @@ doconnect(rest: string): string
 		return "connect: server required";
 
 	mode := Imap->IMPLICIT_TLS;
+	auth := AUTHPASS;
 	smtpserver := "";
 
-	# Remaining tokens: mode flag and/or smtp=<host>, any order.
+	# Remaining tokens: mode flag, auth flag, and/or smtp=<host>, any order.
 	for(rem := r2; rem != ""; ) {
 		(tok, after) := splitfield(rem);
 		rem = after;
@@ -1076,6 +1091,8 @@ doconnect(rest: string): string
 			mode = Imap->IMPLICIT_TLS;
 		else if(tok == "starttls")
 			mode = Imap->STARTTLS;
+		else if(tok == "oauth")
+			auth = AUTHOAUTH;
 		else if(len tok > 5 && tok[0:5] == "smtp=")
 			smtpserver = tok[5:];
 		else
@@ -1084,7 +1101,7 @@ doconnect(rest: string): string
 	if(smtpserver == "")
 		smtpserver = defaultsmtp(server);
 
-	(idx, a) := newaccount(name, server, smtpserver, mode);
+	(idx, a) := newaccount(name, server, smtpserver, mode, auth);
 	if(idx < 0)
 		return "connect: account already exists";
 
@@ -1096,10 +1113,24 @@ doconnect(rest: string): string
 	}
 	a.imap = im;
 
-	# IMAP credentials come from factotum:
-	#   proto=pass service=imap dom=<server>
-	# Passing nil/nil tells the lib to query factotum itself.
-	err := im->open(nil, nil, server, mode);
+	err: string;
+	if(auth == AUTHOAUTH) {
+		# OAuth2: refresh an access token from the credentials held in
+		# factotum, then authenticate with SASL XOAUTH2.
+		(email, token, terr) := oauthaccesstoken(server);
+		if(terr != nil) {
+			a.imap = nil;
+			accounts[idx] = nil;
+			vers++;
+			return "connect: oauth: " + terr;
+		}
+		err = im->openoauth(email, token, server, mode);
+	} else {
+		# IMAP credentials come from factotum:
+		#   proto=pass service=imap dom=<server>
+		# Passing nil/nil tells the lib to query factotum itself.
+		err = im->open(nil, nil, server, mode);
+	}
 	if(err != nil) {
 		a.imap = nil;
 		accounts[idx] = nil;
@@ -1377,6 +1408,163 @@ include_smtp(): (Smtp, string)
 	return (smtp, nil);
 }
 
+# Obtain a fresh OAuth2 access token for an account's IMAP/SMTP login.
+# Reads the refresh token (the factotum key's !password) plus the public
+# client_id / client_secret / token_uri attributes, then POSTs the
+# refresh grant to the token endpoint. Returns (email, accesstoken, err).
+#
+# v1 mints a token per connect and per send; access tokens are cheap.
+# A future revision can cache it on the Account until expires_in lapses.
+oauthaccesstoken(server: string): (string, string, string)
+{
+	fac := load Factotum Factotum->PATH;
+	if(fac == nil)
+		return (nil, nil, "cannot load Factotum");
+	fac->init();
+	keyspec := "proto=pass service=" + OAUTHSVC + " dom=" + server;
+	(email, refresh) := fac->getuserpasswd(keyspec);
+	if(email == nil || refresh == nil)
+		return (nil, nil, "no oauth key in factotum (want " + keyspec + ")");
+
+	clientid := readfactotumattr(server, "client_id");
+	clientsecret := readfactotumattr(server, "client_secret");
+	tokenuri := readfactotumattr(server, "token_uri");
+	if(tokenuri == "")
+		tokenuri = DEFTOKENURI;
+	if(clientid == "" || clientsecret == "")
+		return (nil, nil, "oauth key missing client_id/client_secret attrs");
+
+	if(webclient == nil) {
+		webclient = load Webclient Webclient->PATH;
+		if(webclient == nil)
+			return (nil, nil, "cannot load Webclient");
+		werr := webclient->init();
+		if(werr != nil)
+			return (nil, nil, "webclient init: " + werr);
+	}
+
+	body := "client_id=" + formenc(clientid) +
+		"&client_secret=" + formenc(clientsecret) +
+		"&refresh_token=" + formenc(refresh) +
+		"&grant_type=refresh_token";
+	(resp, perr) := webclient->post(tokenuri,
+		"application/x-www-form-urlencoded", array of byte body);
+	if(perr != nil)
+		return (nil, nil, "token endpoint: " + perr);
+	if(resp == nil)
+		return (nil, nil, "token endpoint: no response");
+	rbody := string resp.body;
+	if(resp.statuscode != 200) {
+		errd := jsonstrval(rbody, "error");
+		if(errd == "")
+			errd = sys->sprint("HTTP %d", resp.statuscode);
+		return (nil, nil, "token refresh failed: " + errd);
+	}
+	token := jsonstrval(rbody, "access_token");
+	if(token == "")
+		return (nil, nil, "token refresh: no access_token in response");
+	return (email, token, nil);
+}
+
+# Read a public attribute from the OAuth factotum key for `server` by
+# scanning /mnt/factotum/ctl. Secret attrs (the refresh token) are
+# redacted there and fetched separately via getuserpasswd.
+readfactotumattr(server, attr: string): string
+{
+	fd := sys->open("/mnt/factotum/ctl", Sys->OREAD);
+	if(fd == nil)
+		return "";
+	data := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		data += string buf[0:n];
+	}
+	want := "service=" + OAUTHSVC;
+	domwant := "dom=" + server;
+	(nil, lines) := sys->tokenize(data, "\n");
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		if(strindex(line, want) < 0 || strindex(line, domwant) < 0)
+			continue;
+		return attrval(line, attr);
+	}
+	return "";
+}
+
+# Extract `attr=value` from a factotum ctl key line; value runs to the
+# next whitespace.
+attrval(line, attr: string): string
+{
+	key := attr + "=";
+	i := strindex(line, key);
+	if(i < 0)
+		return "";
+	rest := line[i + len key:];
+	j := 0;
+	while(j < len rest && rest[j] != ' ' && rest[j] != '\t')
+		j++;
+	return rest[0:j];
+}
+
+# Minimal extractor for a JSON string field "key":"value". Sufficient
+# for Google's well-formed token response; avoids a full JSON parse.
+jsonstrval(s, key: string): string
+{
+	pat := "\"" + key + "\"";
+	i := strindex(s, pat);
+	if(i < 0)
+		return "";
+	j := i + len pat;
+	while(j < len s && (s[j] == ' ' || s[j] == '\t' || s[j] == ':'))
+		j++;
+	if(j >= len s || s[j] != '"')
+		return "";
+	j++;
+	val := "";
+	while(j < len s && s[j] != '"') {
+		if(s[j] == '\\' && j + 1 < len s)
+			j++;	# tokens carry no escapes, but be safe
+		val[len val] = s[j];
+		j++;
+	}
+	return val;
+}
+
+# URL-encode a value for an application/x-www-form-urlencoded body.
+formenc(s: string): string
+{
+	hex := "0123456789ABCDEF";
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '.' ||
+		   c == '_' || c == '~')
+			out[len out] = c;
+		else {
+			out[len out] = '%';
+			out[len out] = hex[(c >> 4) & 16rF];
+			out[len out] = hex[c & 16rF];
+		}
+	}
+	return out;
+}
+
+# First index of substring sub in s, or -1.
+strindex(s, sub: string): int
+{
+	n := len sub;
+	if(n == 0)
+		return 0;
+	for(i := 0; i + n <= len s; i++)
+		if(s[i:i+n] == sub)
+			return i;
+	return -1;
+}
+
 # Lookup SMTP credentials in factotum. Tries the smtp-specific key
 # first, then falls back to the imap key (most providers share creds).
 smtpcreds(a: ref Account): (string, string, string)
@@ -1474,22 +1662,34 @@ smtpsend(a: ref Account, msg: string, recips: list of string): string
 	if(smtp == nil)
 		return lerr;
 
-	(u, p, cerr) := smtpcreds(a);
-	if(cerr != nil)
-		return cerr;
-
 	# Implicit-TLS port 465 if account uses IMAPS, otherwise plain port 25.
 	usessl := 0;
 	if(a.mode == Imap->IMPLICIT_TLS)
 		usessl = 1;
 
-	(ok, oerr) := smtp->authopen(u, p, a.smtpserver, usessl);
-	if(ok < 0)
-		return "smtp authopen: " + oerr;
-
-	from := mailparse->extractheader(msg, "From:");
-	if(from == "")
+	# Authenticate; `from` defaults to the credential's own address.
+	from: string;
+	if(a.auth == AUTHOAUTH) {
+		(email, token, terr) := oauthaccesstoken(a.server);
+		if(terr != nil)
+			return "smtp oauth: " + terr;
+		(ok, oerr) := smtp->authopenoauth(email, token, a.smtpserver, usessl);
+		if(ok < 0)
+			return "smtp authopenoauth: " + oerr;
+		from = email;
+	} else {
+		(u, p, cerr) := smtpcreds(a);
+		if(cerr != nil)
+			return cerr;
+		(ok, oerr) := smtp->authopen(u, p, a.smtpserver, usessl);
+		if(ok < 0)
+			return "smtp authopen: " + oerr;
 		from = u;
+	}
+
+	hdrfrom := mailparse->extractheader(msg, "From:");
+	if(hdrfrom != "")
+		from = hdrfrom;
 	if(recips == nil)
 		recips = mailparse->parseaddrlist(mailparse->extractheader(msg, "To:"));
 

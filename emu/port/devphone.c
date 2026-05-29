@@ -51,7 +51,13 @@ enum
 	Qsignal,
 	Qstatus,
 	Qcalls,
+	Qcontacts,
 };
+
+/* Max contacts snapshot we'll cache per open (single phoneopen / read /
+ * close cycle); ample for typical address books. Allocated lazily so
+ * a /phone/sms or /phone/ctl session doesn't pay for it. */
+#define	CONTACTS_BUFSZ	(64 * 1024)
 
 /*
  * Per-open-channel listener nodes. phoneopen of /phone/sms or
@@ -135,7 +141,8 @@ Dirtab phonetab[] =
 	"phone",  {Qphone,  0, 0},   0,  0666,
 	"signal", {Qsignal, 0, 0},   0,  0444,
 	"status", {Qstatus, 0, 0},   0,  0444,
-	"calls",  {Qcalls,  0, 0},   0,  0444,
+	"calls",    {Qcalls,    0, 0}, 0, 0444,
+	"contacts", {Qcontacts, 0, 0}, 0, 0444,
 };
 
 static void
@@ -177,6 +184,27 @@ phoneopen(Chan *c, int omode)
 		if(c->aux != nil)
 			add_listener(&phone_listeners, c->aux);
 		break;
+	case Qcontacts:
+		/* Snapshot the address book once per open. Bridge can be
+		 * expensive (CNContactStore on iOS prompts and walks); we
+		 * pay it on the open, then paginate from c->aux via
+		 * readstr with the caller's offset. */
+		{
+			char *buf = malloc(CONTACTS_BUFSZ);
+			int got;
+			if(buf == nil)
+				break;
+			got = phonebridge_contacts(buf, CONTACTS_BUFSZ);
+			if(got <= 0){
+				free(buf);
+				break;
+			}
+			if(got > CONTACTS_BUFSZ - 1)
+				got = CONTACTS_BUFSZ - 1;
+			buf[got] = 0;
+			c->aux = buf;
+		}
+		break;
 	}
 	return c;
 }
@@ -203,6 +231,12 @@ phoneclose(Chan *c)
 			del_listener(&phone_listeners, q);
 			qhangup(q, nil);
 			qfree(q);
+			c->aux = nil;
+		}
+		break;
+	case Qcontacts:
+		if(c->aux != nil){
+			free(c->aux);
 			c->aux = nil;
 		}
 		break;
@@ -255,6 +289,13 @@ phoneread(Chan *c, void *va, long n, vlong offset)
 		if(got < 0)
 			return 0;
 		return readstr(offset, va, n, buf);
+
+	case Qcontacts:
+		/* Cached snapshot allocated in phoneopen; nil on permission
+		 * deny / framework unavailable. EOF in that case. */
+		if(c->aux == nil)
+			return 0;
+		return readstr(offset, va, n, (char *)c->aux);
 	}
 	return 0;
 }

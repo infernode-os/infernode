@@ -35,6 +35,12 @@
 	     LAN 9P service) silently fails. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>InferNode connects to a remote InferNode on your local network to use its LLM and 9P services.</string>
+	<!-- /phone/contacts surfaces the address book to Veltro so the agent
+	     can resolve names ("text mom") to numbers. Read-only; the
+	     contacts file is exposed through Inferno's 9P namespace under
+	     /phone/contacts. Authorization status is checked on every read. -->
+	<key>NSContactsUsageDescription</key>
+	<string>InferNode reads your contacts so the Veltro agent can resolve names like "text mom" to phone numbers for SMS and dialling.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

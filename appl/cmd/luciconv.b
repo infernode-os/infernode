@@ -26,6 +26,9 @@ include "widget.m";
 	widgetmod: Widget;
 	Button, Label, LEFT: import widgetmod;
 
+include "softkbd.m";
+	softkbd: Softkbd;
+
 LuciConv: module
 {
 	PATH: con "/dis/luciconv.dis";
@@ -208,6 +211,13 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	else
 		sys->fprint(stderr, "luciconv: cannot load widget: %r\n");
 
+	# Soft-keyboard helper (INFR-166). The slide depends on knowing
+	# the focused widget's actual rect; null load is non-fatal — we
+	# fall back to the legacy "kbd on/off via /dev/consctl" path.
+	softkbd = load Softkbd Softkbd->PATH;
+	if(softkbd != nil)
+		softkbd->init();
+
 	inputbuf = "";
 	inputpos = 0;
 	username = readdevuser();
@@ -243,10 +253,23 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Mobile soft keyboard: raise it only when the input field
 			# is tapped; hide it on any other tap in the chat zone.
 			if(mobile) {
-				if(inputrect.dx() > 0 && inputrect.contains(p.xy))
+				if(inputrect.dx() > 0 && inputrect.contains(p.xy)) {
+					# INFR-166: tell SDL the actual focused
+					# widget rect (in window points) so it
+					# slides this widget — not a hard-coded
+					# 56pt strip — above the keyboard.
+					if(softkbd != nil)
+						softkbd->set_rect(
+							inputrect.min.x,
+							inputrect.min.y,
+							inputrect.dx(),
+							inputrect.dy());
 					reqkbd(1);
-				else
+				} else {
 					reqkbd(0);
+					if(softkbd != nil)
+						softkbd->clear_rect();
+				}
 			}
 			# KLUDGE-MOBILE-ACCORDION-INFR-119 — Send button hit
 			# test before any other handlers. Same effect as

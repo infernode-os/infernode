@@ -360,6 +360,19 @@ init_hidpi(void)
  * Written from the devcons worker thread, read on the main thread. */
 static volatile int softkbd_keeptop = 0;
 
+/* Explicit focused-widget rect in window POINTS, set by the GUI via
+ * /dev/consctl "kbd rect x y w h" (see setsoftkbd_rect). When w*h > 0
+ * this overrides the hard-coded top/bottom rect in
+ * update_text_input_area — SDL slides the view so the *actual* widget
+ * stays above the keyboard, regardless of where the cursor is or
+ * whether keeptop is set. Cleared with "kbd rect 0 0 0 0". Plain ints
+ * read by the main thread, written from the devcons worker thread;
+ * the one-frame race is harmless. */
+static volatile int softkbd_rect_x = 0;
+static volatile int softkbd_rect_y = 0;
+static volatile int softkbd_rect_w = 0;
+static volatile int softkbd_rect_h = 0;
+
 /*
  * iOS soft-keyboard avoidance via SDL_SetTextInputArea, which tells UIKit
  * where the caret is (window POINTS); SDL then slides the view up so that
@@ -388,14 +401,29 @@ update_text_input_area(void)
 	SDL_GetWindowSize(sdl_window, &win_w, &win_h);	/* points */
 	if (win_w <= 0 || win_h <= 0)
 		return;
-	ih = 56;					/* input row height, points */
-	r.x = 0;
-	r.w = win_w;
-	r.h = ih;
-	if (softkbd_keeptop)
-		r.y = 0;				/* top — SDL won't need to slide */
-	else
-		r.y = win_h - ih;			/* bottom input row — SDL slides it up */
+	if (softkbd_rect_w > 0 && softkbd_rect_h > 0) {
+		/* Explicit focused-widget rect from the GUI (INFR-166).
+		 * Clamp to the window so a slightly out-of-window value
+		 * (rotated layout caught mid-update) doesn't make SDL
+		 * round-trip a degenerate rect to UIKit. */
+		r.x = softkbd_rect_x < 0 ? 0 : softkbd_rect_x;
+		r.y = softkbd_rect_y < 0 ? 0 : softkbd_rect_y;
+		r.w = softkbd_rect_w;
+		r.h = softkbd_rect_h;
+		if (r.x + r.w > win_w) r.w = win_w - r.x;
+		if (r.y + r.h > win_h) r.h = win_h - r.y;
+		if (r.w <= 0 || r.h <= 0)
+			return;
+	} else {
+		ih = 56;				/* input row height, points */
+		r.x = 0;
+		r.w = win_w;
+		r.h = ih;
+		if (softkbd_keeptop)
+			r.y = 0;			/* top — SDL won't need to slide */
+		else
+			r.y = win_h - ih;		/* bottom input row — SDL slides it up */
+	}
 	SDL_SetTextInputArea(sdl_window, &r, 0);
 #endif
 }
@@ -435,6 +463,27 @@ setsoftkbd(int on)
 }
 
 /*
+ * Override the keyboard-avoidance rect with the focused widget's actual
+ * bounds (window POINTS). Called from /dev/consctl "kbd rect x y w h"
+ * (devcons.c) — Limbo helper is appl/lib/softkbd.b. When the rect is
+ * non-empty it wins over the legacy keeptop hint; (0,0,0,0) clears
+ * the override and the hard-coded top/bottom rect comes back into
+ * play. apply_softkbd will re-push the area on the main thread.
+ */
+void
+setsoftkbd_rect(int x, int y, int w, int h)
+{
+#if MOBILE_TOUCH
+	softkbd_rect_x = x;
+	softkbd_rect_y = y;
+	softkbd_rect_w = (w > 0) ? w : 0;
+	softkbd_rect_h = (h > 0) ? h : 0;
+#else
+	USED(x); USED(y); USED(w); USED(h);
+#endif
+}
+
+/*
  * Apply a pending soft-keyboard request. MUST be called on the main
  * (SDL/UIKit) thread — sdl3_mainloop calls it each iteration.
  */
@@ -443,6 +492,7 @@ apply_softkbd(void)
 {
 #if MOBILE_TOUCH
 	static int applied_keeptop = 0;
+	static int applied_rx = 0, applied_ry = 0, applied_rw = 0, applied_rh = 0;
 	if (!sdl_window)
 		return;
 	if (softkbd_want != softkbd_applied) {
@@ -453,12 +503,22 @@ apply_softkbd(void)
 		} else {
 			SDL_StopTextInput(sdl_window);
 		}
-	} else if (softkbd_want && softkbd_keeptop != applied_keeptop) {
-		/* keyboard already up but the top/bottom mode changed (e.g.
-		 * focus moved between chat and a workspace app) — re-apply. */
+	} else if (softkbd_want &&
+		   (softkbd_keeptop != applied_keeptop ||
+		    softkbd_rect_x != applied_rx ||
+		    softkbd_rect_y != applied_ry ||
+		    softkbd_rect_w != applied_rw ||
+		    softkbd_rect_h != applied_rh)) {
+		/* keyboard already up but the mode or the focused-widget
+		 * rect changed (focus moved between chat and a workspace
+		 * app, or the cursor moved within the same app — INFR-166). */
 		update_text_input_area();
 	}
 	applied_keeptop = softkbd_keeptop;
+	applied_rx = softkbd_rect_x;
+	applied_ry = softkbd_rect_y;
+	applied_rw = softkbd_rect_w;
+	applied_rh = softkbd_rect_h;
 #endif
 }
 

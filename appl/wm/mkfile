@@ -19,8 +19,14 @@ TARG=\
 	shell.dis\
 	view.dis\
 	wm.dis\
+	sam.dis\
+	samtk.dis\
+	samstub.dis\
 
 MODULES=\
+	samterm.m\
+	samtk.m\
+	samstub.m\
 
 SYSMODULES=\
 	arg.m\
@@ -45,10 +51,13 @@ SYSMODULES=\
 	styx.m\
 	styxservers.m\
 	sys.m\
+	tk.m\
+	tkclient.m\
 	webclient.m\
 	widget.m\
 	winplace.m\
 	wmclient.m\
+	wmlib.m\
 	wmsrv.m\
 
 DISBIN=$ROOT/dis/wm

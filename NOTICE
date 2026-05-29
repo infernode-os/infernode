@@ -1,52 +1,51 @@
-This Inferno® distribution includes software from various sources and
-different portions are therefore subject to different licence terms.
+InferNode is a distributed operating system derived from Inferno®.
 
-You may copy and redistribute the package as a whole,
-with or without modification, subject to the terms of the Vita Nuova
-Liberal Source Licence (see the file LICENCE), which applies to the
-package as a whole, and to individual components unless otherwise
-specified either in an individual source file or in a NOTICE file
-in a directory or directory tree.  If the terms of that licence are not acceptable,
-you must negotiate other terms with Vita Nuova (www.vitanuova.com).
+The entire InferNode tree is made available under the permissive MIT licence
+reproduced in the LICENSE file. InferNode carries NO GPL or LGPL terms. The
+copyleft NOTICE files that were inherited from a pre-2021 Inferno snapshot
+(GPL on the application tree, LGPL on the libraries and Limbo modules) have
+been removed and replaced with MIT terms. This matches upstream Inferno, which
+Vita Nuova relicensed under the MIT licence, and which therefore makes all of
+the inherited Inferno code available to InferNode under MIT.
 
-Individual components (eg, some of the libraries, Freetype, and the
-B&H fonts) might have their own NOTICE and licence files (LICENCE or
-COPYING) that cover their content.  Be sure to read them before
-considering redistribution of them on their own.
-With the exception of the B&H font licence, each is typically
-some variety of Free Software licence.
+Individual components may carry their own NOTICE/LICENCE file where their
+upstream terms differ. All licences used permit modification and
+redistribution. Specifically:
+  - FreeType is used under the FreeType licence.
+  - Bigelow & Holmes fonts may be redistributed only as part of an Inferno or
+    Plan 9 distribution (see fonts/LICENCE).
+  - libmp/ and libsec/ carry the Lucent Public Licence (permissive).
 
-Where a given section of source code is distributed elsewhere (as a separable component) under
-another licence or licences, and we include it here as well under ours, you can obviously
-regard it as subject to whichever licence you like.
+Inferno and Limbo are registered trademarks of Vita Nuova Holdings Limited in
+the USA and other countries. Plan 9 is a registered trademark of Southsuite
+Inc in the USA. Portions of this software were originally authored by employees
+of Bell Laboratories.
 
-When making non-trivial extracts, or your own modifications, you must
-retain the copyright of the original source file or files (either that
-present in the file or in a NOTICE file covering the directory or
-directories in which the file resides).
+The following copyright notice covers the contents of this distribution unless
+otherwise specified by a given file, directory, or directory tree:
 
-The following copyright notice covers the contents of this
-distribution unless otherwise specified by a given file, directory, or
-directory tree:
+InferNode Copyright © 2026 NERV Systems
+Inferno Copyright © 1996-1999 Lucent Technologies Inc
+Revisions Copyright © 1997-1999 Vita Nuova Limited
+Revisions Copyright © 2000-2015 Vita Nuova Holdings Limited
+Inferno Copyright © 2000-2015 Vita Nuova Holdings Limited
+Plan 9 Copyright © 2002 Lucent Technologies Inc
+Plan 9 Copyright © 2021 Plan 9 Foundation
 
-Inferno® Copyright © 1996-1999 Lucent Technologies Inc.  All rights reserved.
-Inferno revisions Copyright © 1997-1999 Vita Nuova Limited.  All rights reserved.
-Inferno revisions Copyright © 2000-2005 Vita Nuova Holdings Limited.  All rights reserved.
-Inferno new material Copyright © 2000-2005 Vita Nuova Holdings Limited.  All rights reserved.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-Inferno, Styx, Dis and Limbo are registered trademarks of Vita Nuova Holdings Limited in the USA and other countries.
-Plan 9 is a registered trademark of Lucent Technologies Inc.
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License (`LGPL') as published by
-the Free Software Foundation; either version 2 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

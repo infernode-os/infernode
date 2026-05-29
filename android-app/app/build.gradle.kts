@@ -73,4 +73,9 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
+    // BiometricPrompt (INFR-173): Face/Touch ID-equivalent unlock surface for
+    // the Inferno keyring/secstore credential plumbing. The Limbo side already
+    // has the keyring-auth control (shared appl/wm/settings.b); this is the
+    // platform-native bridge that gates secret retrieval on biometric.
+    implementation("androidx.biometric:biometric:1.1.0")
 }

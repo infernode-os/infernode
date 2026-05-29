@@ -57,6 +57,12 @@ SmsSrc: module {
 	send:    fn(msg: ref MsgSrc->Message): string;
 	reply:   fn(origid, body: string): string;
 	setflag: fn(id: string, flag, add: int): string;
+
+	# Exposed for tests/sms_msgsrc_test.b. Parses one devphone wire
+	# record into a Message; returns nil on a malformed record. Safe
+	# to call before init() so the test can load this module
+	# standalone and exercise the parser in isolation.
+	parserecord: fn(rec: string): ref MsgSrc->Message;
 };
 
 Message: import MsgSrc;

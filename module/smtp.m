@@ -11,6 +11,9 @@ Smtp : module
 	# returns (status, errror string)
          open: fn(server : string) : (int, string);
 	authopen: fn(user, password, server : string, usesslarg: int) : (int, string);
+	# authenticate via SASL XOAUTH2 with an OAuth2 bearer access token
+	# (Gmail etc.). Dials modern TLS (libsec) on port 465.
+	authopenoauth: fn(user, accesstoken, server : string, usesslarg: int) : (int, string);
 	# send mail - returns (status, error string)
 	sendmail: fn(fromwho: string, 
 		             towho: list of string, 

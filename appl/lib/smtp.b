@@ -21,6 +21,8 @@ include "sslsession.m";
 include "ssl3.m";
 	ssl3: SSL3;
 	Context: import ssl3;
+include "webclient.m";
+	webclient: Webclient;
 # Inferno supported cipher suites: RSA_EXPORT_RC4_40_MD5
 ssl_suites := array [] of {
 	byte 0, byte 16r03,	# RSA_EXPORT_WITH_RC4_40_MD5
@@ -196,7 +198,91 @@ authopen(user, password, server : string, usesslarg: int): (int, string)
 	conn = 1;
 	return (1, nil);
 }
- 
+
+# Open an SMTP connection authenticated via SASL XOAUTH2 (OAuth2
+# bearer token). Unlike authopen()'s legacy SSL3 path — which offers
+# only export-grade ciphers that Gmail rejects — this dials through
+# webclient->tlsdial(), the modern libsec TLS stack. Implicit TLS on
+# port 465. The caller (mail9p) supplies a fresh access token.
+authopenoauth(user, accesstoken, server: string, nil: int): (int, string)
+{
+	if (!init) {
+		sys = load Sys Sys->PATH;
+		bufio = load Bufio Bufio->PATH;
+		base64 = load Encoding Encoding->BASE64PATH;
+		init = 1;
+	}
+	if (base64 == nil)
+		base64 = load Encoding Encoding->BASE64PATH;
+	if (webclient == nil) {
+		webclient = load Webclient Webclient->PATH;
+		if (webclient == nil)
+			return (-1, "cannot load Webclient");
+		werr := webclient->init();
+		if (werr != nil)
+			return (-1, "webclient init: " + werr);
+	}
+	if (conn)
+		return (-1, "connection is already open");
+	if (server == nil)
+		return (-1, "no SMTP server");
+	if (user == nil || accesstoken == nil)
+		return (-1, "no oauth credentials");
+
+	addr := "tcp!" + server + "!465";
+	(tlsfd, terr) := webclient->tlsdial(addr, server);
+	if (terr != nil)
+		return (-1, "tlsdial: " + terr);
+
+	ibuf = bufio->fopen(tlsfd, Bufio->OREAD);
+	obuf = bufio->fopen(tlsfd, Bufio->OWRITE);
+	if (ibuf == nil || obuf == nil)
+		return (-1, "failed to open bufio");
+	usessl = 0;		# read/write via bufio over the TLS fd
+	cread = chan of (int, string);
+	spawn mreader(cread);
+	(rpid, nil) = <- cread;
+
+	(ok, s) := mread();			# 220 greeting
+	if (ok < 0)
+		return (-1, s);
+
+	hostname := readfile("/dev/sysname");
+	while (len hostname > 0 && (hostname[len hostname-1] == '\n' ||
+	    hostname[len hostname-1] == '\r' || hostname[len hostname-1] == ' '))
+		hostname = hostname[0:len hostname-1];
+	if (hostname == nil)
+		hostname = "localhost";
+	(ok, s) = mcmd("EHLO " + hostname);
+	if (ok < 0)
+		return (-1, "EHLO: " + s);
+
+	# AUTH XOAUTH2 with the bearer token as the SASL initial response.
+	# mcmd discards the reply line, so write + read directly: we need
+	# the status code to tell a 235 accept from a 334 error challenge.
+	sasl := "user=" + user + "\u0001auth=Bearer " + accesstoken + "\u0001\u0001";
+	if (mwrite("AUTH XOAUTH2 " + base64->enc(array of byte sasl)) < 0)
+		return (-1, "AUTH XOAUTH2 send failed");
+	(ok, s) = mread();
+	if (ok < 0)
+		return (-1, "AUTH XOAUTH2: " + s);
+	code := "";
+	if (len s >= 3)
+		code = s[0:3];
+	if (code == "334") {
+		# Challenge carries a base64 error; an empty line draws out
+		# the 535 failure detail.
+		mwrite("");
+		(nil, s) = mread();
+		return (-1, "AUTH XOAUTH2 rejected: " + s);
+	}
+	if (code != "235")
+		return (-1, "AUTH XOAUTH2 unexpected: " + s);
+
+	conn = 1;
+	return (1, nil);
+}
+
 sendmail (fromwho : string, towho : list of string, cc : list of string, mlist: list of string): (int, string)
 {
 	ok : int;
@@ -317,7 +403,10 @@ mreader(c : chan of (int, string))
 			continue;
 		}
 		if (l > 0 && (line[0] == '1' || line[0] == '2' || line[0] == '3')) {
-			c <- = (1, nil);
+			# Return the full status line on success so callers that
+			# need the reply code (e.g. AUTH XOAUTH2, which must tell
+			# a 235 accept from a 334 challenge) can inspect it.
+			c <- = (1, line[0:l]);
 			continue;
 		}
 		c <- = (-1, line[3:l]);

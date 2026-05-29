@@ -34,6 +34,9 @@ include "webclient.m";
 include "factotum.m";
 	factotum: Factotum;
 
+include "encoding.m";
+	base64: Encoding;
+
 include "imap.m";
 
 DEBUG: con 0;
@@ -54,7 +57,8 @@ ensureloaded()
 		str = load String String->PATH;
 }
 
-open(user, password, server: string, mode: int): string
+# Load the modules needed for any connection (shared by open/openoauth).
+ensureconn(): string
 {
 	if(sys == nil) {
 		sys = load Sys Sys->PATH;
@@ -71,43 +75,32 @@ open(user, password, server: string, mode: int): string
 		if(err != nil)
 			return "webclient init: " + err;
 	}
-
-	if(connected)
-		return "already connected";
-
-	# Try factotum first if no credentials given
-	if(user == nil || password == nil) {
-		factotum = load Factotum Factotum->PATH;
-		if(factotum != nil) {
-			factotum->init();
-			(u, p) := factotum->getuserpasswd(
-				"proto=pass service=imap dom=" + server);
-			if(u != nil && p != nil) {
-				user = u;
-				password = p;
-			}
-		}
-		if(user == nil || password == nil)
-			return "no credentials: supply user/password or configure factotum";
+	if(base64 == nil) {
+		base64 = load Encoding Encoding->BASE64PATH;
+		if(base64 == nil)
+			return "cannot load base64";
 	}
+	return nil;
+}
 
+# Dial the server over TLS and consume the greeting.
+# Sets fd / ibuf / connected on success.
+dialgreeting(server: string, mode: int): string
+{
 	port := "993";
 	if(mode == STARTTLS)
 		port = "143";
 
 	addr := "tcp!" + server + "!" + port;
 
-	if(mode == IMPLICIT_TLS) {
-		# TLS from the start (port 993)
-		(tlsfd, terr) := webclient->tlsdial(addr, server);
-		if(terr != nil)
-			return "tlsdial: " + terr;
-		fd = tlsfd;
-	} else {
-		# Plaintext connect, then STARTTLS
-		# For now, only IMPLICIT_TLS is supported
+	if(mode != IMPLICIT_TLS)
+		# Plaintext connect then STARTTLS not yet supported
 		return "STARTTLS not yet implemented";
-	}
+
+	(tlsfd, terr) := webclient->tlsdial(addr, server);
+	if(terr != nil)
+		return "tlsdial: " + terr;
+	fd = tlsfd;
 
 	ibuf = bufio->fopen(fd, Bufio->OREAD);
 	if(ibuf == nil)
@@ -131,8 +124,68 @@ open(user, password, server: string, mode: int): string
 		return "bad greeting: " + greeting;
 	}
 
+	return nil;
+}
+
+open(user, password, server: string, mode: int): string
+{
+	cerr := ensureconn();
+	if(cerr != nil)
+		return cerr;
+
+	if(connected)
+		return "already connected";
+
+	# Try factotum first if no credentials given
+	if(user == nil || password == nil) {
+		factotum = load Factotum Factotum->PATH;
+		if(factotum != nil) {
+			factotum->init();
+			(u, p) := factotum->getuserpasswd(
+				"proto=pass service=imap dom=" + server);
+			if(u != nil && p != nil) {
+				user = u;
+				password = p;
+			}
+		}
+		if(user == nil || password == nil)
+			return "no credentials: supply user/password or configure factotum";
+	}
+
+	derr := dialgreeting(server, mode);
+	if(derr != nil)
+		return derr;
+
 	# Authenticate
 	err := authenticate(user, password);
+	if(err != nil) {
+		disconnect();
+		return err;
+	}
+
+	return nil;
+}
+
+# Connect and authenticate via SASL XOAUTH2 (OAuth2 bearer token).
+# The caller supplies a fresh access token; mail9p refreshes it from
+# the OAuth refresh token held in factotum.
+openoauth(user, accesstoken, server: string, mode: int): string
+{
+	cerr := ensureconn();
+	if(cerr != nil)
+		return cerr;
+
+	if(connected)
+		return "already connected";
+
+	if(user == nil || accesstoken == nil)
+		return "no oauth credentials: supply user and access token";
+
+	derr := dialgreeting(server, mode);
+	if(derr != nil)
+		return derr;
+
+	err := authenticatexoauth2(user, accesstoken);
 	if(err != nil) {
 		disconnect();
 		return err;
@@ -158,6 +211,53 @@ authenticate(user, password: string): string
 		return "LOGIN failed: " + resp.statusline;
 
 	return nil;
+}
+
+# Authenticate with SASL XOAUTH2 (Google's IMAP XOAUTH2 / RFC 7628).
+# The initial client response carries the bearer token inline. On
+# success the server returns a tagged OK; on failure it sends a
+# "+ <base64-json-error>" continuation that must be answered with an
+# empty line before the tagged NO/BAD arrives — so we cannot reuse
+# readresponse (it would block waiting for the tag).
+authenticatexoauth2(user, accesstoken: string): string
+{
+	# SOH (U+0001) separators; UTF-8-encodes to single 0x01 bytes.
+	sasl := "user=" + user + "\u0001auth=Bearer " + accesstoken + "\u0001\u0001";
+	enc := base64->enc(array of byte sasl);
+
+	tag := nexttag();
+	err := writeline(tag + " AUTHENTICATE XOAUTH2 " + enc);
+	if(err != nil)
+		return "XOAUTH2 write: " + err;
+
+	for(;;) {
+		(line, rerr) := readline();
+		if(rerr != nil)
+			return "XOAUTH2: " + rerr;
+
+		# Failure challenge: answer with an empty line to elicit the
+		# tagged error, then keep reading for the tag.
+		if(hasprefix(line, "+")) {
+			werr := writeline("");
+			if(werr != nil)
+				return "XOAUTH2 challenge ack: " + werr;
+			continue;
+		}
+
+		# Tagged response for our tag.
+		if(hasprefix(line, tag + " ")) {
+			rest := line[len tag + 1:];
+			(nil, toks) := sys->tokenize(rest, " ");
+			status := "BAD";
+			if(toks != nil)
+				status = str->toupper(hd toks);
+			if(status != "OK")
+				return "XOAUTH2 failed: " + rest;
+			return nil;
+		}
+
+		# Untagged * lines (e.g. CAPABILITY) — ignore.
+	}
 }
 
 folders(): (list of string, string)

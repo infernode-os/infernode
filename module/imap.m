@@ -55,6 +55,11 @@ Imap: module
 	# Connect, authenticate, return error string or nil
 	open:		fn(user, password, server: string, mode: int): string;
 
+	# Connect and authenticate via SASL XOAUTH2 with an OAuth2 bearer
+	# access token (Gmail and other XOAUTH2 providers). Returns error
+	# string or nil.
+	openoauth:	fn(user, accesstoken, server: string, mode: int): string;
+
 	# List all mailbox names
 	folders:	fn(): (list of string, string);
 

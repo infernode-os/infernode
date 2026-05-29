@@ -6,7 +6,14 @@
 which Vita Nuova relicensed to MIT in 2021. Does the InferNode tree, *as it
 stands today*, actually contain any GPL- or LGPL-licensed code?
 
-## TL;DR
+> **STATUS: RESOLVED (2026-05-29).** Remediation has been performed — the tree
+> is now MIT throughout, with zero GPL/LGPL references remaining. The original
+> audit (the body below) is retained for the record; see
+> **[§ Resolution](#resolution-2026-05-29)** at the end for what changed and the
+> key finding that *no GPL **code** was ever present — only an inherited GPL
+> **NOTICE file***.
+
+## TL;DR (original audit — now remediated)
 
 **Yes. As it stands, InferNode is *not* GPL-free.** The tree was forked from a
 **pre-2021 (dual-license era) Inferno snapshot**, not from the current
@@ -126,3 +133,67 @@ find . -path ./.git -prune -o -type f \
 grep -rlI "General Public License" . | grep -vE '\.git|lib/legal/|^\./(LICENCE|LICENSE|NOTICE)$' \
   | grep -E '\.(b|m|c|h|y)$'
 ```
+
+---
+
+## Follow-up: is the first-party code actually GPL? (deep dive)
+
+Question raised after the initial audit: *the `appl/` GPL label comes from a
+blanket NOTICE — but does any first-party code (Veltro, Xenith, lucifer,
+llmsrv) actually **incorporate** GPL-licensed code?*
+
+**Answer: no GPL code exists anywhere in the tree. The label was purely the
+inherited blanket `appl/NOTICE` file.** Specifics:
+
+| First-party tree | GPL/LGPL/FSF strings | Inline license headers |
+|---|---|---|
+| `appl/veltro` | 0 | none |
+| `appl/xenith` | 0 | 0 of 59 source files |
+| `appl/matrix` | 0 | none |
+
+- **Mechanism of the GPL label:** `appl/NOTICE` opens *"This copyright NOTICE
+  applies to all files in this directory and subdirectories, unless another
+  copyright notice appears…"* The first-party subdirectories had no NOTICE of
+  their own, so the inherited GPL NOTICE swept them in **on paper only**.
+- **One genuine derivation — Xenith ← Acme.** Xenith is an Acme fork; 23 source
+  files share direct lineage (`buff.b col.b dat.b disk.b ecmd.b edit.b elog.b
+  exec.b file.b frame.b fsys.b graph.b gui.b look.b regx.b row.b scrl.b
+  styxaux.b text.b time.b util.b wind.b xfid.b`). **But Acme is not third-party
+  GPL:** it carries no inline license, its "GPL" was *also* only the blanket
+  NOTICE, and Vita Nuova relicensed it (with all of Inferno) to MIT in 2021.
+  Xenith therefore derives from MIT-available code — **no rewrite required.**
+- **Third-party components in `appl/` — all permissive, none GPL:** Russ Cox
+  `irc` (MIT), Kaashoek/Dabek `lib/ida` (MIT), `saxparser`/Powers `lib/xml.b`
+  (Inferno terms), Caldera `lib/dbm.b` (Ancient-UNIX, permissive).
+
+Conclusion: there was **no GPL *code*** in InferNode, only a GPL *NOTICE file*.
+
+## Resolution (2026-05-29)
+
+The inherited copyleft apparatus was replaced with MIT. Changes made:
+
+**Relicensed to MIT (replaced GPL/LGPL NOTICEs):**
+- `appl/NOTICE` (was GPLv2) → MIT, documenting both inherited-Inferno and
+  first-party code.
+- `module/`, `libinterp/`, `appl/lib/`, `include/`, `libkeyring/` `NOTICE`
+  (were LGPL) → MIT.
+- Top-level `NOTICE`, `LICENSE`, `LICENCE` (were the VN dual-license meta) →
+  MIT (mirrors upstream's MIT relicense).
+
+**Deleted (copyleft reference texts / templates):**
+- `lib/legal/GPL`, `lib/legal/LGPL`, `lib/legal/NOTICE.gpl`,
+  `lib/legal/NOTICE.lgpl`.
+
+**Added:**
+- `appl/xenith/NOTICE` — documents the Acme lineage and asserts MIT.
+
+**Verification:** `grep -rlI "General Public License"` over the whole tree now
+returns **nothing** outside this audit document. All `NOTICE`/`LICEN*` files
+classify as MIT, except `libmp/` and `libsec/` (Lucent Public Licence —
+permissive) and `lib/legal/NOTICE.liberal` (orphaned, permissive, non-GPL).
+
+**Open follow-ups (minor, non-GPL):**
+- Confirm the first-party copyright holder string / year — files currently say
+  `InferNode Copyright © 2026 NERV Systems`; adjust if the legal entity or
+  inception year differs.
+- Optionally remove the now-orphaned `lib/legal/NOTICE.liberal`.

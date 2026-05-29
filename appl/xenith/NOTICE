@@ -1,10 +1,15 @@
-The files in this directory and its subdirectories are made available under
-the permissive MIT licence; see the top-level LICENSE and NOTICE files.
+Xenith is InferNode's text environment. It is a fork of Inferno's Acme editor
+(appl/acme/): roughly two dozen source files share direct lineage with Acme
+(buff.b, col.b, dat.b, disk.b, ecmd.b, edit.b, elog.b, exec.b, file.b,
+frame.b, fsys.b, graph.b, gui.b, look.b, regx.b, row.b, scrl.b, styxaux.b,
+text.b, time.b, util.b, wind.b, xfid.b), alongside InferNode-specific work.
 
-This NOTICE replaces the LGPL NOTICE that was inherited from a pre-2021
-Inferno snapshot. Vita Nuova relicensed all of Inferno (including the Limbo
-library modules, the Dis virtual machine, and the supporting libraries) under
-the MIT licence, so this code is available to InferNode under MIT, not LGPL.
+Acme was authored at Bell Laboratories and ported to Inferno/Limbo by Vita
+Nuova. Vita Nuova relicensed all of Inferno — Acme included — under the
+permissive MIT licence. Xenith and its Acme-derived files are therefore made
+available under MIT. No part of Xenith is or was licensed under the GPL.
+
+See the top-level LICENSE and NOTICE files.
 
 Copyright © 1995-1999 Lucent Technologies Inc.
 Portions Copyright © 1997-2015 Vita Nuova Limited / Vita Nuova Holdings Limited

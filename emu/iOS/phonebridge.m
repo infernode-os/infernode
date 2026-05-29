@@ -98,6 +98,30 @@ static dispatch_semaphore_t send_serialiser;
  */
 #define CALL_LINEMAX 256
 
+/*
+ * Live calls table — one entry per CXCall the observer has seen, keyed
+ * by call.UUID. The callObserver delegate updates the entry on every
+ * state change; phonebridge_calls() walks the table on demand.
+ *
+ * Entries stick around for ENDED_RETAIN seconds after disconnect so an
+ * agent that reads /phone/calls right after `dial` has time to see the
+ * call landed (or failed). Older ended entries are reaped lazily on
+ * the next observer fire.
+ */
+#define ENDED_RETAIN_SECONDS 60
+@interface InfernodeCall : NSObject
+@property (nonatomic, copy) NSString  *uuidStr;
+@property (nonatomic, copy) NSString  *state;
+@property (nonatomic, copy) NSString  *handle;
+@property (nonatomic, copy) NSString  *startedTs;
+@property (nonatomic, assign) NSTimeInterval endedAt;	/* 0 until disconnected */
+@end
+@implementation InfernodeCall
+@end
+
+static NSMutableDictionary<NSString *, InfernodeCall *> *gLiveCalls;
+static pthread_mutex_t                                   gLiveCallsLock = PTHREAD_MUTEX_INITIALIZER;
+
 @interface InfernodeCallObserver : NSObject <CXCallObserverDelegate>
 @end
 
@@ -117,6 +141,36 @@ static dispatch_semaphore_t send_serialiser;
 	NSISO8601DateFormatter *fmt = [[NSISO8601DateFormatter alloc] init];
 	fmt.formatOptions = NSISO8601DateFormatWithInternetDateTime;
 	NSString *ts = [fmt stringFromDate:[NSDate date]];
+
+	/* Update the live-calls table. Lookup by UUID, insert on first
+	 * sighting (state, ts) or update on a transition. Disconnects
+	 * stamp endedAt so phonebridge_calls() can reap old rows. */
+	NSString *uuidStr = call.UUID.UUIDString;
+	pthread_mutex_lock(&gLiveCallsLock);
+	if(gLiveCalls == nil)
+		gLiveCalls = [NSMutableDictionary new];
+	/* Reap anything that's been disconnected long enough. */
+	NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+	NSMutableArray *expired = [NSMutableArray new];
+	[gLiveCalls enumerateKeysAndObjectsUsingBlock:^(NSString *k, InfernodeCall *v, BOOL *stop){
+		if(v.endedAt > 0 && (now - v.endedAt) > ENDED_RETAIN_SECONDS)
+			[expired addObject:k];
+	}];
+	for(NSString *k in expired)
+		[gLiveCalls removeObjectForKey:k];
+
+	InfernodeCall *entry = gLiveCalls[uuidStr];
+	if(entry == nil){
+		entry = [InfernodeCall new];
+		entry.uuidStr   = uuidStr;
+		entry.startedTs = ts;
+		gLiveCalls[uuidStr] = entry;
+	}
+	entry.state  = [NSString stringWithUTF8String:state];
+	entry.handle = [NSString stringWithUTF8String:handle];
+	if(call.hasEnded && entry.endedAt == 0)
+		entry.endedAt = now;
+	pthread_mutex_unlock(&gLiveCallsLock);
 
 	char line[CALL_LINEMAX];
 	int n = snprintf(line, sizeof line, "%s %s %s\n",
@@ -369,8 +423,37 @@ phonebridge_status(char *buf, int buflen)
 int
 phonebridge_calls(char *buf, int buflen)
 {
-	(void)buf; (void)buflen;
-	return 0;
+	if(buf == NULL || buflen <= 1)
+		return -1;
+
+	/*
+	 * One TSV line per live call (and recently-ended call within
+	 * ENDED_RETAIN_SECONDS):
+	 *
+	 *     <state>\t<remote>\t<started-iso-ts>\t<uuid>\n
+	 *
+	 * Matches the wire shape of /phone/contacts so the agent's parsing
+	 * code can split on \t uniformly. Bounded by buflen — entries that
+	 * would overflow are dropped cleanly at the last newline boundary.
+	 */
+	int off = 0;
+	pthread_mutex_lock(&gLiveCallsLock);
+	if(gLiveCalls != nil){
+		for(NSString *k in gLiveCalls.allKeys){
+			InfernodeCall *e = gLiveCalls[k];
+			const char *st = e.state.UTF8String  ?: "unknown";
+			const char *hd = e.handle.UTF8String ?: "-";
+			const char *ts = e.startedTs.UTF8String ?: "-";
+			const char *id = e.uuidStr.UTF8String ?: "-";
+			int written = snprintf(buf + off, (size_t)(buflen - off),
+				"%s\t%s\t%s\t%s\n", st, hd, ts, id);
+			if(written < 0 || written >= buflen - off)
+				break;	/* stop at last full newline */
+			off += written;
+		}
+	}
+	pthread_mutex_unlock(&gLiveCallsLock);
+	return off;
 }
 
 /*

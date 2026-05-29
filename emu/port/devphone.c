@@ -218,7 +218,17 @@ phonewrite(Chan *c, void *va, long n, vlong offset)
 
 	if(waserror()){
 		free(buf);
+		buf = nil;
 		nexterror();
+		/* nexterror() longjmps to the next-outer waserror handler and
+		 * never returns. fns.h declares it without _Noreturn /
+		 * __attribute__((noreturn)), so static analysers (CodeQL, in
+		 * particular) think the handler can fall through to the final
+		 * free(buf) at the bottom of the function and flag it as a
+		 * potential double free. The hint below is the local, no-op
+		 * way to tell them that path is dead — equivalent to changing
+		 * fns.h, without touching every other site in emu/. */
+		__builtin_unreachable();
 	}
 
 	switch((ulong)c->qid.path){

@@ -472,6 +472,47 @@ policy:
 adb shell cat /system/etc/seccomp_policy/app.policy 2>/dev/null
 ```
 
+## Using a phone's telephony from a desktop (mount recipe)
+
+`#f` is a real hardware device. It is registered in `emu/iOS` and
+`emu/Android` because those builds know they have a radio attached;
+it is **not** registered in `emu/MacOSX` or `emu/Linux` — a developer
+laptop has no SIM and no equivalent API. To use telephony from a
+desktop InferNode, mount a phone's exported `/phone` over 9P; the
+userspace API on the desktop is then identical to using it on the
+phone, but the bytes travel across the wire to the radio.
+
+On the **phone**, export `/phone` over a TCP port:
+
+```
+; listen -A 'tcp!*!17564' {export /phone} &
+```
+
+(Wrap in TLS + a keyring listener for anything beyond a private dev
+network. The token `17564` matches the Phase 0 daemon recipe at the
+top of this document; pick any free port.)
+
+On the **desktop** (Mac or Linux InferNode), mount it:
+
+```
+; mount -A 'tcp!<phone-ip>!17564' /phone
+; cat /phone/status
+; echo 'send +44... hello' > /phone/sms
+```
+
+Veltro's `sms` / `dial` tools and `msg9p`'s `sms` MsgSrc all reach
+`/phone/<file>`, so once the mount is up they work unmodified — the
+desktop sends an iPhone SMS via Hephaestus's wire, or has Ba'al ring
+a number on behalf of the agent. The phone's bridge (`MFMessageComposeViewController`
+on iOS, `SmsManager` on Android when INFR-182 lands) is what actually
+talks to the cell network.
+
+Why no desktop stub: a logging "stub bridge" on the developer Mac
+would let `echo 'send …' > /phone/sms` silently "succeed" with no SMS
+sent and no error surfaced. That is strictly worse than no `/phone`
+at all — the absence forces the operator to wire up the real mount
+deliberately instead of looking at green text and assuming it worked.
+
 ## Testing iOS telephony on a real device (Ba'al recipe)
 
 The iOS simulator returns `canSendText == NO` and has no `tel:` handler,

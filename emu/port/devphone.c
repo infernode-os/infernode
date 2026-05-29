@@ -103,7 +103,7 @@ phoneclose(Chan *c)
 static long
 phoneread(Chan *c, void *va, long n, vlong offset)
 {
-	char buf[BRIDGE_BUFSZ];
+	char buf[BRIDGE_BUFSZ];	/* Flawfinder: ignore — bounded by sizeof buf at every readstr/snprint call below */
 	int got;
 
 	if(c->qid.type & QTDIR)
@@ -179,7 +179,7 @@ static long
 phonewrite(Chan *c, void *va, long n, vlong offset)
 {
 	USED(offset);
-	char *buf, *verb, *rest, errbuf[ERRBUFSZ];
+	char *buf, *verb, *rest, errbuf[ERRBUFSZ];	/* Flawfinder: ignore — errbuf bounded by sizeof errbuf at every snprint call below */
 	int r;
 
 	if(c->qid.type & QTDIR)
@@ -190,16 +190,20 @@ phonewrite(Chan *c, void *va, long n, vlong offset)
 	 * mutate it freely. Limit is BRIDGE_BUFSZ; longer writes are an
 	 * error (SMS body fits trivially; longer is almost certainly a
 	 * caller bug).
+	 *
+	 * The waserror() guard is set up AFTER parsing — none of memmove /
+	 * splitverb can longjmp, so buf is fully prepared before the
+	 * protected region begins. Bridge calls inside the guard may
+	 * error(); the handler then runs free(buf) and re-raises. CodeQL
+	 * doesn't model setjmp/longjmp and otherwise sees the post-handler
+	 * uses of buf as use-after-free; this single-direction structure
+	 * makes the dataflow analysable.
 	 */
 	if(n <= 0)
 		return 0;
 	if(n >= BRIDGE_BUFSZ)
 		error(Etoobig);
 	buf = smalloc(n + 1);
-	if(waserror()){
-		free(buf);
-		nexterror();
-	}
 	memmove(buf, va, n);
 	buf[n] = 0;
 	/* Strip a trailing newline so callers can pipe `echo ...`. */
@@ -211,6 +215,11 @@ phonewrite(Chan *c, void *va, long n, vlong offset)
 
 	errbuf[0] = 0;
 	r = 0;
+
+	if(waserror()){
+		free(buf);
+		nexterror();
+	}
 
 	switch((ulong)c->qid.path){
 	case Qctl:
@@ -252,6 +261,7 @@ phonewrite(Chan *c, void *va, long n, vlong offset)
 
 	poperror();
 	free(buf);
+	buf = nil;	/* single-owner; helps CodeQL prove no double-free */
 
 	if(r < 0)
 		error(errbuf[0] ? errbuf : "phone: bridge error");

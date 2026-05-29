@@ -23,6 +23,15 @@
 # when the proper split-zones + pager refactor lands.
 infmobile = 1
 
+# ── Telephony / SMS (devphone) ──────────────────────────────
+# #f is the radio device — only registered in mobile emu builds
+# (emu/iOS, emu/Android) and only bound here, where we know we have
+# a radio. Desktops don't get this; if they want telephony they
+# mount a phone's exported /phone over 9P (see lib/sh/profile +
+# docs/HELLAPHONE.md).
+mkdir /phone >[2] /dev/null
+bind -a '#f' /phone >[2] /dev/null
+
 # Bigger fonts for phone screens.
 #
 # Lucifer and most UI elements (wm/shell, wm/editor, acme, xenith,

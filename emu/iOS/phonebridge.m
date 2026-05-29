@@ -24,12 +24,16 @@
  *     returns NO. We surface that as a clear error rather than trying
  *     to present a sheet that can't send.
  *
- * Out of scope here (returns -1, clean error):
- *   - phonebridge_recv_sms — no inbox API on iOS.
+ * Out of scope here:
+ *   - inbound SMS — no public inbox API on iOS, so we never call
+ *     phonebridge_post_sms(). Userspace readers of /phone/sms block
+ *     forever (devphone's qread). The hellaphone-style listener
+ *     registry handles the wire-format push when a platform CAN
+ *     produce records (Android, INFR-182).
  *   - phonebridge_phone_ctl answer/hangup — not permitted by the OS.
  *
- * Dial (tel:) + CXCallObserver wiring is the next chunk of INFR-181
- * (see TODO comments below).
+ * Inbound call events (CXCallObserver) ARE pushed via
+ * phonebridge_post_call_event() from the UIKit main queue.
  */
 
 #import <Foundation/Foundation.h>
@@ -74,65 +78,25 @@
 static dispatch_semaphore_t send_serialiser;
 
 /*
- * Call-event ring. CXCallObserver fires on the UIKit main thread when call
- * state changes (incoming / outgoing connect / disconnect). We can't block
- * the observer, so each event gets formatted into a single line and pushed
- * into a bounded ring; phonebridge_recv_call_event drains one entry per
- * call from the devphone kproc. The ring lock is held only across the push
- * or pop — no UIKit calls happen under the lock.
- *
- * Format pushed: "<state> <handle> <iso-timestamp>\n"
- *   state    one of "incoming" "dialing" "connected" "disconnected"
- *   handle   the remote number, or "-" if not exposed by CallKit
- *   ts       NSISO8601 UTC
- */
-#define CALL_RING_SLOTS 32
-#define CALL_RING_LINEMAX 256
-static char       call_ring[CALL_RING_SLOTS][CALL_RING_LINEMAX];
-static int        call_ring_head;	/* next write slot */
-static int        call_ring_tail;	/* next read slot */
-static int        call_ring_count;
-static pthread_mutex_t call_ring_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void
-push_call_event(const char *line)
-{
-	pthread_mutex_lock(&call_ring_lock);
-	if(call_ring_count == CALL_RING_SLOTS){
-		/* Full — drop the oldest. Cellular call state changes are
-		 * already low-frequency; a backlog this large means nobody's
-		 * draining, in which case the freshest events are the useful ones. */
-		call_ring_tail = (call_ring_tail + 1) % CALL_RING_SLOTS;
-		call_ring_count--;
-	}
-	strncpy(call_ring[call_ring_head], line, CALL_RING_LINEMAX - 1);
-	call_ring[call_ring_head][CALL_RING_LINEMAX - 1] = 0;
-	call_ring_head = (call_ring_head + 1) % CALL_RING_SLOTS;
-	call_ring_count++;
-	pthread_mutex_unlock(&call_ring_lock);
-}
-
-static int
-pop_call_event(char *buf, int buflen)
-{
-	int n = 0;
-	pthread_mutex_lock(&call_ring_lock);
-	if(call_ring_count > 0){
-		n = snprintf(buf, buflen, "%s", call_ring[call_ring_tail]);
-		call_ring_tail = (call_ring_tail + 1) % CALL_RING_SLOTS;
-		call_ring_count--;
-	}
-	pthread_mutex_unlock(&call_ring_lock);
-	return n;
-}
-
-/*
  * Observer that watches every cellular call state transition on the
  * device. CallKit doesn't expose answer/hangup control to third-party
  * apps for cellular calls (only VoIP), but observation is allowed and
  * is enough for InferNode to surface "your call to X just hung up" to
  * the agent stack via the msg9p phone-events MsgSrc.
+ *
+ * CXCallObserver fires on the UIKit main thread. We format the line
+ * and hand it to phonebridge_post_call_event(), which fans it out to
+ * every currently-open reader of /phone/phone (devphone's listener
+ * registry — see emu/port/devphone.c). Non-blocking; safe from main
+ * thread. No ring of our own; devphone owns the queueing now.
+ *
+ * Format: "<state> <handle> <iso-timestamp>\n"
+ *   state    one of "incoming" "dialing" "connected" "disconnected"
+ *   handle   the remote number, or "-" if not exposed by CallKit
+ *   ts       NSISO8601 UTC
  */
+#define CALL_LINEMAX 256
+
 @interface InfernodeCallObserver : NSObject <CXCallObserverDelegate>
 @end
 
@@ -153,10 +117,12 @@ pop_call_event(char *buf, int buflen)
 	fmt.formatOptions = NSISO8601DateFormatWithInternetDateTime;
 	NSString *ts = [fmt stringFromDate:[NSDate date]];
 
-	char line[CALL_RING_LINEMAX];
-	snprintf(line, sizeof line, "%s %s %s\n",
+	char line[CALL_LINEMAX];
+	int n = snprintf(line, sizeof line, "%s %s %s\n",
 		state, handle, ts.UTF8String);
-	push_call_event(line);
+	if(n < 0) return;
+	if(n > (int)sizeof line - 1) n = (int)sizeof line - 1;
+	phonebridge_post_call_event(line, n);
 	fprintf(stderr, "phone: iOS call event %s", line);
 }
 @end
@@ -316,13 +282,12 @@ phonebridge_ctl_status(char *buf, int buflen)
 	return snprintf(buf, buflen, "sms=%s call=stub\n", can ? "ready" : "unavailable");
 }
 
-int
-phonebridge_recv_sms(char *buf, int buflen)
-{
-	/* No system-inbox read API on iOS. Always EOF / unsupported. */
-	(void)buf; (void)buflen;
-	return -1;
-}
+/*
+ * Inbound SMS: iOS exposes no public inbox API to third-party apps, so
+ * there is no path to call phonebridge_post_sms() — readers of
+ * /phone/sms simply block forever. On Android the bridge will produce
+ * via phonebridge_post_sms() when SMS_RECEIVED arrives (INFR-182).
+ */
 
 int
 phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
@@ -383,12 +348,6 @@ phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
 	fprintf(stderr, "phone: iOS phone_ctl unknown verb %s\n", verb);
 	snprintf(err, errlen, "phone_ctl: unknown verb %s", verb);
 	return -1;
-}
-
-int
-phonebridge_recv_call_event(char *buf, int buflen)
-{
-	return pop_call_event(buf, buflen);
 }
 
 int

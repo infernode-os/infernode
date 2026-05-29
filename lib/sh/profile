@@ -15,13 +15,15 @@ bind -a '#I' /net >[2] /dev/null
 ndb/cs
 
 # ── Telephony / SMS (devphone) ──────────────────────────────
-# #f is the cross-platform phone+SMS device (emu/port/devphone.c).
-# Mount it at /phone so Veltro tools (sms, dial) and the msg9p `sms`
-# MsgSrc find a stable path on every platform — the bridge underneath
-# is stubbed on desktops and wired to MessageUI/CallKit on iOS / to
-# SmsManager on Android. Mirrors the original Hellaphone /phone tree.
-mkdir /phone >[2] /dev/null
-bind -a '#f' /phone >[2] /dev/null
+# /phone is the radio device tree (#f, emu/port/devphone.c). It only
+# binds on hosts that HAVE a radio — i.e. iOS and Android, set up by
+# lib/lucifer/boot-mobile.sh. Desktop hosts don't get an #f device
+# (no stub, no silently-swallowed sends); to use a phone's telephony
+# from a desktop, mount the phone's exported /phone over 9P:
+#   mount -A 'tcp!<phone-ip>!<port>' /phone
+# (the phone exports it via `listen -A 'tcp!*!<port>' {export /phone}`).
+# Same userspace API; bytes travel across the wire to the radio.
+# See docs/HELLAPHONE.md for the desktop-mount recipe.
 
 # ── Host filesystem + home directory (early — needed for overlays) ──
 # /n/local is the user-visible root of the host filesystem on every

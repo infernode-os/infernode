@@ -106,6 +106,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TrimAddr",             testTrimAddr);
 	run("ParseAddrList",        testParseAddrList);
 	run("StrtoBig",             testStrtoBig);
+	run("OauthFormEnc",         testOauthFormEnc);
+	run("JsonStrField",         testJsonStrField);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -233,6 +235,37 @@ testStrtoBig(t: ref T)
 	t.assertseq(string mailparse->strtobig("12x"), "-1", "non-digit → -1");
 	t.assertseq(string mailparse->strtobig("9999999999"), "9999999999",
 		"value larger than int but fits big");
+}
+
+testOauthFormEnc(t: ref T)
+{
+	# Unreserved chars pass through untouched.
+	t.assertseq(mailparse->oauthformenc("aZ09-._~"), "aZ09-._~",
+		"unreserved unchanged");
+	# Refresh tokens can contain '/' and '+'; both must be encoded so
+	# the form body parses correctly ('+' would otherwise mean space).
+	t.assertseq(mailparse->oauthformenc("a/b+c=d"), "a%2Fb%2Bc%3Dd",
+		"slash/plus/equals percent-encoded");
+	t.assertseq(mailparse->oauthformenc("x y"), "x%20y", "space encoded");
+	t.assertseq(mailparse->oauthformenc(""), "", "empty stays empty");
+}
+
+testJsonStrField(t: ref T)
+{
+	resp := "{\"access_token\":\"ya29.AbC-d_e/f\",\"expires_in\":3599,\"token_type\":\"Bearer\"}";
+	t.assertseq(mailparse->jsonstrfield(resp, "access_token"),
+		"ya29.AbC-d_e/f", "extract access_token verbatim");
+	t.assertseq(mailparse->jsonstrfield(resp, "token_type"), "Bearer",
+		"extract a later field");
+	t.assertseq(mailparse->jsonstrfield(resp, "missing"), "",
+		"absent field → empty");
+	# A numeric field is not a string value → empty (we only pull strings).
+	t.assertseq(mailparse->jsonstrfield(resp, "expires_in"), "",
+		"numeric field → empty");
+	# Error response shape.
+	errr := "{\"error\":\"invalid_grant\",\"error_description\":\"Bad Request\"}";
+	t.assertseq(mailparse->jsonstrfield(errr, "error"), "invalid_grant",
+		"extract error code");
 }
 
 # --- Helpers ---

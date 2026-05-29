@@ -30,8 +30,12 @@ flag enables Styx tracing on stderr.
 .TP
 .B ctl
 write-only:
-.BR "connect " "\fIname server\fP [\fBtls\fP|\fBstarttls\fP] [\fBsmtp=\fP\fIhost\fP]"
-opens an IMAP session and best-effort SELECTs INBOX;
+.BR "connect " "\fIname server\fP [\fBtls\fP|\fBstarttls\fP] [\fBoauth\fP] [\fBsmtp=\fP\fIhost\fP]"
+opens an IMAP session and best-effort SELECTs INBOX. The
+.B oauth
+flag selects SASL XOAUTH2 (OAuth2 bearer token) instead of password
+LOGIN \(em required for providers such as Gmail that no longer accept
+passwords;
 .BR "disconnect " \fIname\fP
 LOGOUTs and frees the slot;
 .BR "sync " \fIname\fP
@@ -169,6 +173,36 @@ key for the corresponding IMAP server, since most providers share
 credentials. SMTP transport mirrors the account's IMAP mode:
 implicit TLS over port 465 when IMAPS is in use, plaintext port 25
 otherwise. STARTTLS on SMTP is not yet supported.
+.PP
+For an
+.B oauth
+account, credentials are held in a single
+.IR factotum (4)
+key:
+.PP
+.EX
+proto=pass service=imap-oauth dom=\fIserver\fP user=\fIemail\fP \e
+    client_id=\fIid\fP client_secret=\fIsecret\fP \e
+    token_uri=\fIurl\fP !password=\fIrefresh-token\fP
+.EE
+.PP
+The refresh token is the key's
+.B !password
+(retrieved via
+.IR factotum 's
+getuserpasswd); the public
+.BR client_id ", " client_secret " and " token_uri
+attributes are read from
+.BR /mnt/factotum/ctl .
+At connect time and before each send,
+.I mail9p
+POSTs the refresh grant to
+.B token_uri
+.RB ( token_uri
+defaults to Google's endpoint if absent) and authenticates IMAP and
+SMTP with the resulting short-lived access token. The OAuth client and
+refresh token are obtained out of band; the OAuth authorisation flow
+itself is not implemented here.
 .SH EXAMPLES
 .PP
 Connect, list folders, read the latest message in INBOX, mark it

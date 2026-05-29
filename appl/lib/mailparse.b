@@ -207,3 +207,55 @@ strtobig(s: string): big
 	}
 	return v;
 }
+
+oauthformenc(s: string): string
+{
+	hex := "0123456789ABCDEF";
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '.' ||
+		   c == '_' || c == '~')
+			out[len out] = c;
+		else {
+			out[len out] = '%';
+			out[len out] = hex[(c >> 4) & 16rF];
+			out[len out] = hex[c & 16rF];
+		}
+	}
+	return out;
+}
+
+jsonstrfield(s, key: string): string
+{
+	pat := "\"" + key + "\"";
+	i := substrindex(s, pat);
+	if(i < 0)
+		return "";
+	j := i + len pat;
+	while(j < len s && (s[j] == ' ' || s[j] == '\t' || s[j] == ':'))
+		j++;
+	if(j >= len s || s[j] != '"')
+		return "";
+	j++;
+	val := "";
+	while(j < len s && s[j] != '"') {
+		if(s[j] == '\\' && j + 1 < len s)
+			j++;	# skip escape; tokens carry none, but be safe
+		val[len val] = s[j];
+		j++;
+	}
+	return val;
+}
+
+substrindex(s, sub: string): int
+{
+	n := len sub;
+	if(n == 0)
+		return 0;
+	for(i := 0; i + n <= len s; i++)
+		if(s[i:i+n] == sub)
+			return i;
+	return -1;
+}

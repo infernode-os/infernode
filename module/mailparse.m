@@ -43,4 +43,14 @@ Mailparse: module
 	# Parse a base-10 unsigned integer string into big. Returns
 	# big -1 on empty input or any non-digit character.
 	strtobig:	fn(s: string): big;
+
+	# URL-encode a value for an application/x-www-form-urlencoded body
+	# (used to build OAuth2 token-refresh requests). Percent-encodes
+	# everything outside the RFC 3986 unreserved set.
+	oauthformenc:	fn(s: string): string;
+
+	# Extract a JSON string field "key":"value" from a flat object.
+	# Minimal scanner sufficient for a well-formed OAuth2 token-endpoint
+	# response; returns "" if the field is absent or not a string.
+	jsonstrfield:	fn(s, key: string): string;
 };

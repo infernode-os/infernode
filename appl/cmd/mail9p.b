@@ -1443,9 +1443,9 @@ oauthaccesstoken(server: string): (string, string, string)
 			return (nil, nil, "webclient init: " + werr);
 	}
 
-	body := "client_id=" + formenc(clientid) +
-		"&client_secret=" + formenc(clientsecret) +
-		"&refresh_token=" + formenc(refresh) +
+	body := "client_id=" + mailparse->oauthformenc(clientid) +
+		"&client_secret=" + mailparse->oauthformenc(clientsecret) +
+		"&refresh_token=" + mailparse->oauthformenc(refresh) +
 		"&grant_type=refresh_token";
 	(resp, perr) := webclient->post(tokenuri,
 		"application/x-www-form-urlencoded", array of byte body);
@@ -1455,12 +1455,12 @@ oauthaccesstoken(server: string): (string, string, string)
 		return (nil, nil, "token endpoint: no response");
 	rbody := string resp.body;
 	if(resp.statuscode != 200) {
-		errd := jsonstrval(rbody, "error");
+		errd := mailparse->jsonstrfield(rbody, "error");
 		if(errd == "")
 			errd = sys->sprint("HTTP %d", resp.statuscode);
 		return (nil, nil, "token refresh failed: " + errd);
 	}
-	token := jsonstrval(rbody, "access_token");
+	token := mailparse->jsonstrfield(rbody, "access_token");
 	if(token == "")
 		return (nil, nil, "token refresh: no access_token in response");
 	return (email, token, nil);
@@ -1507,50 +1507,6 @@ attrval(line, attr: string): string
 	while(j < len rest && rest[j] != ' ' && rest[j] != '\t')
 		j++;
 	return rest[0:j];
-}
-
-# Minimal extractor for a JSON string field "key":"value". Sufficient
-# for Google's well-formed token response; avoids a full JSON parse.
-jsonstrval(s, key: string): string
-{
-	pat := "\"" + key + "\"";
-	i := strindex(s, pat);
-	if(i < 0)
-		return "";
-	j := i + len pat;
-	while(j < len s && (s[j] == ' ' || s[j] == '\t' || s[j] == ':'))
-		j++;
-	if(j >= len s || s[j] != '"')
-		return "";
-	j++;
-	val := "";
-	while(j < len s && s[j] != '"') {
-		if(s[j] == '\\' && j + 1 < len s)
-			j++;	# tokens carry no escapes, but be safe
-		val[len val] = s[j];
-		j++;
-	}
-	return val;
-}
-
-# URL-encode a value for an application/x-www-form-urlencoded body.
-formenc(s: string): string
-{
-	hex := "0123456789ABCDEF";
-	out := "";
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-		   (c >= '0' && c <= '9') || c == '-' || c == '.' ||
-		   c == '_' || c == '~')
-			out[len out] = c;
-		else {
-			out[len out] = '%';
-			out[len out] = hex[(c >> 4) & 16rF];
-			out[len out] = hex[c & 16rF];
-		}
-	}
-	return out;
 }
 
 # First index of substring sub in s, or -1.

@@ -299,12 +299,23 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 
 	# Event loop
 	prevbuttons := 0;
+	# Touch drag-scroll state. The wheel events above (button bits 8 / 16)
+	# are how desktop scrolling reaches us; iOS SDL3 touch synthesizes a
+	# button-1 press + drag, so we have to detect a sustained vertical
+	# motion under button-1 and convert it into ctx_scroll deltas
+	# ourselves. To keep tap-on-headers working we DEFER click handlers
+	# to button-1 release and skip them if the gesture committed to a
+	# drag (|delta| > DRAG_THRESHOLD).
+	press_xy: Draw->Point;
+	drag_lasty := 0;
+	dragstarted := 0;
+	DRAG_THRESHOLD := 10;	# px before a touch becomes a drag (not a tap)
 	for(;;) alt {
 	p := <-mouse =>
 		wasdown := prevbuttons;
 		prevbuttons = p.buttons;
 
-		# Mouse wheel: scroll context zone
+		# Mouse wheel: scroll context zone (desktop / external mouse)
 		if(p.buttons & 8) {
 			scrollstep := mainfont.height + 2;
 			if(ctx_scroll >= scrollstep)
@@ -326,13 +337,61 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			continue;
 		}
 
-		# Button-1 just pressed
-		if(p.buttons == 1 && wasdown == 0) {
+		# Button-1 PRESS: record position, defer the click decision
+		# until release. The bitmask test (& 1) rather than strict
+		# equality (== 1) — on mobile (iOS SDL3 touch synthesis),
+		# pointer events can carry additional state bits alongside
+		# the press bit, so `== 1` silently drops legitimate taps.
+		if((p.buttons & 1) && !(wasdown & 1)) {
+			press_xy = p.xy;
+			drag_lasty = p.xy.y;
+			dragstarted = 0;
+			continue;
+		}
+
+		# Button-1 HELD + MOVED: check whether the touch has
+		# committed to a drag, and if so apply ctx_scroll deltas.
+		# Standard touch scroll: drag DOWN moves content DOWN
+		# (ctx_scroll decreases); drag UP moves content UP
+		# (ctx_scroll increases). delta = p.xy.y - drag_lasty.
+		if((p.buttons & 1) && (wasdown & 1)) {
+			if(!dragstarted) {
+				total_dy := p.xy.y - press_xy.y;
+				if(total_dy < 0) total_dy = -total_dy;
+				if(total_dy > DRAG_THRESHOLD)
+					dragstarted = 1;
+			}
+			if(dragstarted) {
+				delta := p.xy.y - drag_lasty;
+				new_scroll := ctx_scroll - delta;
+				maxscroll := ctx_content_height - mainwin.r.dy();
+				if(maxscroll < 0) maxscroll = 0;
+				if(new_scroll < 0) new_scroll = 0;
+				if(new_scroll > maxscroll) new_scroll = maxscroll;
+				if(new_scroll != ctx_scroll) {
+					ctx_scroll = new_scroll;
+					redrawctx();
+				}
+				drag_lasty = p.xy.y;
+			}
+			continue;
+		}
+
+		# Button-1 RELEASE: if the gesture stayed within DRAG_THRESHOLD
+		# treat it as a tap and run the click handlers at the PRESS
+		# location (press_xy). If it dragged, just reset state — the
+		# scroll already happened on the held branch above.
+		if(!(p.buttons & 1) && (wasdown & 1)) {
+			if(dragstarted) {
+				dragstarted = 0;
+				continue;
+			}
+			clickpt := press_xy;
 			tabclicked := 0;
 
 			# Agent Namespace header toggle
 			if(agentnshdrrect.max.x > agentnshdrrect.min.x &&
-					agentnshdrrect.contains(p.xy)) {
+					agentnshdrrect.contains(clickpt)) {
 				if(agentns_expanded)
 					agentns_expanded = 0;
 				else
@@ -344,7 +403,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Tool section header toggle
 			if(!tabclicked &&
 					toolsechdrrect.max.x > toolsechdrrect.min.x &&
-					toolsechdrrect.contains(p.xy)) {
+					toolsechdrrect.contains(clickpt)) {
 				if(toolsec_expanded)
 					toolsec_expanded = 0;
 				else
@@ -356,7 +415,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Tool available sub-section header toggle
 			if(!tabclicked && toolsec_expanded &&
 					toolavailhdrrect.max.x > toolavailhdrrect.min.x &&
-					toolavailhdrrect.contains(p.xy)) {
+					toolavailhdrrect.contains(clickpt)) {
 				if(toolavail_expanded)
 					toolavail_expanded = 0;
 				else
@@ -368,7 +427,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Active tool click — remove on left-click anywhere on entry row
 			if(!tabclicked && toolsec_expanded) {
 				for(pi := 0; pi < ntoolentryrects; pi++) {
-					if(toolentryrects[pi].contains(p.xy)) {
+					if(toolentryrects[pi].contains(clickpt)) {
 						tidx := 0;
 						for(tp := activetoolset; tp != nil; tp = tl tp) {
 							if(tidx == pi) {
@@ -386,7 +445,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Available tool click — add on left-click anywhere on entry row
 			if(!tabclicked && toolsec_expanded) {
 				for(pi := 0; pi < ntoolplusrects; pi++) {
-					if(toolplusrects[pi].contains(p.xy)) {
+					if(toolplusrects[pi].contains(clickpt)) {
 						kidx := 0;
 						for(kp := knowntoolnames; kp != nil; kp = tl kp) {
 							kname := hd kp;
@@ -415,7 +474,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 					if(nsentry_badgerects != nil &&
 							bi < len nsentry_badgerects &&
 							nsentry_badgerects[bi].max.x > nsentry_badgerects[bi].min.x &&
-							nsentry_badgerects[bi].contains(p.xy)) {
+							nsentry_badgerects[bi].contains(clickpt)) {
 						bsi := 0;
 						for(bsl := nsmanifest; bsl != nil; bsl = tl bsl) {
 							if(bsi == bi) {
@@ -440,7 +499,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 					if(nsentry_pathrects != nil &&
 							pi < len nsentry_pathrects &&
 							nsentry_pathrects[pi].max.x > nsentry_pathrects[pi].min.x &&
-							nsentry_pathrects[pi].contains(p.xy)) {
+							nsentry_pathrects[pi].contains(clickpt)) {
 						# Find the NsEntry at index pi
 						nsi := 0;
 						for(nsl := nsmanifest; nsl != nil; nsl = tl nsl) {
@@ -460,7 +519,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# User Namespace header toggle
 			if(!tabclicked &&
 					usernshdrrect.max.x > usernshdrrect.min.x &&
-					usernshdrrect.contains(p.xy)) {
+					usernshdrrect.contains(clickpt)) {
 				if(userns_expanded)
 					userns_expanded = 0;
 				else
@@ -472,7 +531,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Browse button click (inside user namespace)
 			if(!tabclicked && userns_expanded &&
 					browserect.max.x > browserect.min.x &&
-					browserect.contains(p.xy)) {
+					browserect.contains(clickpt)) {
 				fpath := filebrowser("/");
 				if(fpath != nil && fpath != "")
 					bindpath(fpath);
@@ -764,6 +823,17 @@ drawcontext(zone: Rect)
 	indh := indw;
 	now := sys->millisec();
 
+	# Tap-target row heights. Section headers (which toggle expansion)
+	# and NS entries (which open paths / toggle ro/rw badges) are
+	# interactive — floor them at TAPMIN on mobile so every hit area
+	# clears the 44pt iOS HIG minimum. Desktop pattern unchanged.
+	hdrH := mainfont.height + 4;
+	entryH := mainfont.height + 2;
+	if(mobile) {
+		if(hdrH   < TAPMIN) hdrH   = TAPMIN;
+		if(entryH < TAPMIN) entryH = TAPMIN;
+	}
+
 	# Helper: test whether a row at y with given height is visible
 	# Draw commands to off-screen coordinates are clipped by the image,
 	# but we skip them explicitly to avoid wasted work.
@@ -829,11 +899,12 @@ drawcontext(zone: Rect)
 	{
 		nind := "▸";
 		if(agentns_expanded) nind = "▾";
-		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont,
+		hdrtexty := y + (hdrH - mainfont.height) / 2;
+		if(y + hdrH > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, hdrtexty), textcol, (0, 0), mainfont,
 				agentname + " Namespace " + nind);
-		agentnshdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-		y += mainfont.height + 4;
+		agentnshdrrect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+		y += hdrH;
 
 		if(agentns_expanded) {
 			nsentryrects = array[64] of Rect;
@@ -844,12 +915,13 @@ drawcontext(zone: Rect)
 			for(nse := nsmanifest; nse != nil; nse = tl nse) {
 				entry := hd nse;
 
-				visible := y + mainfont.height > vis_top && y < vis_bot;
+				visible := y + entryH > vis_top && y < vis_bot;
+				rowtexty := y + (entryH - mainfont.height) / 2;
 
 				# Store full row rect for hit-testing
 				if(nnsentryrects < len nsentryrects) {
 					nsentryrects[nnsentryrects] = Rect(
-						(zone.min.x, y), (zone.max.x, y + mainfont.height));
+						(zone.min.x, y), (zone.max.x, y + entryH));
 				}
 
 				# Glyph: ● mounted (green), ○ not mounted (dim)
@@ -860,24 +932,24 @@ drawcontext(zone: Rect)
 					gcol = dimcol;
 				}
 				if(visible)
-					mainwin.text((zone.min.x + pad, y), gcol, (0, 0), mainfont, glyph);
+					mainwin.text((zone.min.x + pad, rowtexty), gcol, (0, 0), mainfont, glyph);
 
 				# Label
 				labelx := zone.min.x + pad + glyphw;
 				if(visible)
-					mainwin.text((labelx, y), text2col, (0, 0), mainfont, entry.label);
+					mainwin.text((labelx, rowtexty), text2col, (0, 0), mainfont, entry.label);
 
 				# Path (dimmer, clickable) — right of label
 				labelw := mainfont.width(entry.label);
 				pathx := labelx + labelw + 8;
 				if(visible)
-					mainwin.text((pathx, y), dimcol, (0, 0), mainfont, entry.path);
+					mainwin.text((pathx, rowtexty), dimcol, (0, 0), mainfont, entry.path);
 
 				# Store path rect for click-to-open
 				pathw := mainfont.width(entry.path);
 				if(nnsentryrects < len nsentry_pathrects) {
 					nsentry_pathrects[nnsentryrects] = Rect(
-						(pathx, y), (pathx + pathw, y + mainfont.height));
+						(pathx, y), (pathx + pathw, y + entryH));
 				}
 
 				# Permission badge [ro]/[rw]/[cow] — right-aligned, clickable
@@ -887,20 +959,20 @@ drawcontext(zone: Rect)
 					badgex := zone.max.x - pad - badgew;
 					if(nnsentryrects < len nsentry_badgerects) {
 						nsentry_badgerects[nnsentryrects] = Rect(
-							(badgex, y), (badgex + badgew, y + mainfont.height));
+							(badgex, y), (badgex + badgew, y + entryH));
 					}
 					if(visible) {
 						badgecol := dimcol;
 						if(entry.perm == "rw" || entry.perm == "cow")
 							badgecol = yellowcol;
-						mainwin.text((badgex, y), badgecol, (0, 0), mainfont, badge);
+						mainwin.text((badgex, rowtexty), badgecol, (0, 0), mainfont, badge);
 					}
 				}
 
 				if(nnsentryrects < len nsentryrects)
 					nnsentryrects++;
 
-				y += mainfont.height + 2;
+				y += entryH;
 
 				# If not mounted, show hint on next line
 				if(!entry.mounted) {
@@ -930,10 +1002,11 @@ drawcontext(zone: Rect)
 	{
 		ind := "▸";
 		if(toolsec_expanded) ind = "▾";
-		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont, toolseclabel + " " + ind);
-		toolsechdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-		y += mainfont.height + 4;
+		thdrtexty := y + (hdrH - mainfont.height) / 2;
+		if(y + hdrH > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, thdrtexty), textcol, (0, 0), mainfont, toolseclabel + " " + ind);
+		toolsechdrrect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+		y += hdrH;
 
 		if(toolsec_expanded) {
 			toolentryrects = array[64] of Rect;
@@ -1014,10 +1087,15 @@ drawcontext(zone: Rect)
 			availtools = ravail;
 
 			# Render both columns in parallel, row by row
+			# Mobile floors row stride at TAPMIN (44pt) so tool taps
+			# don't need pixel precision (INFR-167). Desktop unchanged.
+			rowH := mainfont.height + 2;
+			if(mobile && rowH < TAPMIN) rowH = TAPMIN;
 			tp := drawtools;
 			avp := availtools;
 			while(tp != nil || avp != nil) {
-				visible := y + mainfont.height > vis_top && y < vis_bot;
+				visible := y + rowH > vis_top && y < vis_bot;
+				texty := y + (rowH - mainfont.height) / 2;
 
 				# Left column: enabled tool
 				if(tp != nil) {
@@ -1040,15 +1118,15 @@ drawcontext(zone: Rect)
 
 					if(ntoolentryrects < len toolentryrects)
 						toolentryrects[ntoolentryrects++] = Rect(
-							(lcol, y), (rcol, y + mainfont.height));
+							(lcol, y), (rcol, y + rowH));
 
 					if(visible) {
-						tindy := y + (mainfont.height - indh) / 2;
+						tindy := y + (rowH - indh) / 2;
 						mainwin.draw(Rect(
 							(lcol + pad, tindy),
 							(lcol + pad + indw, tindy + indh)),
 							indcol2, nil, (0, 0));
-						mainwin.text((lcol + pad + indw + 6, y),
+						mainwin.text((lcol + pad + indw + 6, texty),
 							text2col, (0, 0), mainfont, tname);
 					}
 
@@ -1060,17 +1138,17 @@ drawcontext(zone: Rect)
 					aname := hd avp;
 
 					if(visible)
-						mainwin.text((rcol + pad, y), text2col, (0, 0),
+						mainwin.text((rcol + pad, texty), text2col, (0, 0),
 							mainfont, "○ " + aname);
 					if(ntoolplusrects < len toolplusrects)
 						toolplusrects[ntoolplusrects++] = Rect(
 							(rcol, y),
-							(zone.max.x, y + mainfont.height));
+							(zone.max.x, y + rowH));
 
 					avp = tl avp;
 				}
 
-				y += mainfont.height + 2;
+				y += rowH;
 			}
 		}
 		y += secgap;
@@ -1097,20 +1175,22 @@ drawcontext(zone: Rect)
 	{
 		uind := "▸";
 		if(userns_expanded) uind = "▾";
-		if(y + mainfont.height > vis_top && y < vis_bot)
-			mainwin.text((zone.min.x + pad, y), textcol, (0, 0), mainfont,
+		uhdrtexty := y + (hdrH - mainfont.height) / 2;
+		if(y + hdrH > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, uhdrtexty), textcol, (0, 0), mainfont,
 				username + " Namespace " + uind);
-		usernshdrrect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-		y += mainfont.height + 4;
+		usernshdrrect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+		y += hdrH;
 
 		if(userns_expanded) {
 			# Browse button — clicking opens filebrowser
-			if(y + mainfont.height > vis_top && y < vis_bot) {
-				mainwin.text((zone.min.x + pad, y), text2col, (0, 0), mainfont,
+			brtexty := y + (hdrH - mainfont.height) / 2;
+			if(y + hdrH > vis_top && y < vis_bot) {
+				mainwin.text((zone.min.x + pad, brtexty), text2col, (0, 0), mainfont,
 					"Browse...");
 			}
-			browserect = Rect((zone.min.x, y), (zone.max.x, y + mainfont.height));
-			y += mainfont.height + 4;
+			browserect = Rect((zone.min.x, y), (zone.max.x, y + hdrH));
+			y += hdrH;
 
 			# Show pinned paths
 			if(pinnedpaths != nil) {
@@ -1172,16 +1252,36 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 	cancelw := mainfont.width(closeicon);
 	bindw   := mainfont.width(bindlbl);
 
+	# Mobile floors for the three header tap targets. The close glyph
+	# is a DESTRUCTIVE action so its rect must be (a) at least TAPMIN
+	# wide on its own, and (b) separated from the adjacent non-destructive
+	# Bind by a generous gap so a thumb that lands slightly off Bind
+	# can't close the browser by accident.
+	xhitw := cancelw;
+	bindhitw := bindw;
+	backhitw := backw;
+	destructive_gap := 8;
+	if(mobile) {
+		if(xhitw < TAPMIN)    xhitw    = TAPMIN;
+		if(bindhitw < TAPMIN) bindhitw = TAPMIN;
+		if(backhitw < TAPMIN) backhitw = TAPMIN;
+		destructive_gap = TAPMIN;	# ~44pt clear buffer
+	}
+
+	# Vertical baseline for header text — center inside lineH so taller
+	# tap rects don't leave the labels top-aligned in an empty strip.
+	htexty := y + (lineH - mainfont.height) / 2;
+
 	brow_backrect = Rect((zone.min.x + pad, y),
-		(zone.min.x + pad + backw, y + lineH));
+		(zone.min.x + pad + backhitw, y + lineH));
 	upcol := accentcol;
 	if(curpath == "/")
 		upcol = dimcol;
-	mainwin.text((zone.min.x + pad, y), upcol, (0, 0), mainfont, upicon);
+	mainwin.text((zone.min.x + pad, htexty), upcol, (0, 0), mainfont, upicon);
 
 	# Path — truncate at / boundary from left if too wide
-	pathx   := zone.min.x + pad + backw + 6;
-	pathend := zone.max.x - pad - cancelw - 6 - bindw - 4;
+	pathx   := zone.min.x + pad + backhitw + 6;
+	pathend := zone.max.x - pad - xhitw - destructive_gap - bindhitw - 4;
 	maxpathw := pathend - pathx;
 	disp    := curpath;
 	if(mainfont.width(disp) > maxpathw) {
@@ -1202,18 +1302,22 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 			disp = "\u2026" + disp[1:];
 		}
 	}
-	mainwin.text((pathx, y), text2col, (0, 0), mainfont, disp);
+	mainwin.text((pathx, htexty), text2col, (0, 0), mainfont, disp);
 
-	brow_bindrect = Rect(
-		(zone.max.x - pad - cancelw - 6 - bindw, y),
-		(zone.max.x - pad - cancelw - 6, y + lineH));
-	mainwin.text((zone.max.x - pad - cancelw - 6 - bindw, y),
-		greencol, (0, 0), mainfont, bindlbl);
+	# X (destructive) anchored to the right edge; Bind sits to the left
+	# with destructive_gap between them. Glyph and label centered inside
+	# their (mobile-floored) tap rects.
+	x_left  := zone.max.x - pad - xhitw;
+	x_right := zone.max.x - pad;
+	brow_cancelrect = Rect((x_left, y), (x_right, y + lineH));
+	x_glyph_x := x_left + (xhitw - cancelw) / 2;
+	mainwin.text((x_glyph_x, htexty), redcol, (0, 0), mainfont, closeicon);
 
-	brow_cancelrect = Rect(
-		(zone.max.x - pad - cancelw, y),
-		(zone.max.x - pad, y + lineH));
-	mainwin.text((zone.max.x - pad - cancelw, y), redcol, (0, 0), mainfont, closeicon);
+	bind_right := x_left - destructive_gap;
+	bind_left  := bind_right - bindhitw;
+	brow_bindrect = Rect((bind_left, y), (bind_right, y + lineH));
+	bind_label_x := bind_left + (bindhitw - bindw) / 2;
+	mainwin.text((bind_label_x, htexty), greencol, (0, 0), mainfont, bindlbl);
 
 	y += lineH + 2;
 	mainwin.draw(Rect((zone.min.x + pad, y), (zone.max.x - pad, y + 1)), dimcol, nil, (0, 0));
@@ -1445,7 +1549,7 @@ filebrowser(startpath: string): string
 		}
 
 		# Button-1 just pressed
-		if(p.buttons == 1 && wasdown2 == 0) {
+		if((p.buttons & 1) && !(wasdown2 & 1)) {
 			# Cancel button
 			if(brow_cancelrect.max.x > brow_cancelrect.min.x &&
 					brow_cancelrect.contains(p.xy)) {

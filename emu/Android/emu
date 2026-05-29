@@ -23,6 +23,7 @@ dev
 	eia
 	audio	audio-aaudio
 	mem
+	phone	phonebridge
 
 lib
 	interp

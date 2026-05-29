@@ -1098,6 +1098,13 @@ emitmanifestnow(mpath: string)
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
+	# Auto-grant /phone when sms or dial tool is registered. devphone
+	# (#f) is bound at /phone by /lib/sh/profile; child activity
+	# namespaces don't inherit that bind, so restrictns() hides /phone
+	# and the sms/dial tools fail with "/phone/sms does not exist".
+	if(findtool("sms") != nil || findtool("dial") != nil)
+		if(!strlist_contains(allpaths, "/phone"))
+			allpaths = "/phone" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	);
@@ -1151,6 +1158,11 @@ applynsrestriction()
 	if(findtool("say") != nil || findtool("hear") != nil)
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
+	# Auto-grant /phone when sms or dial tool is registered (see
+	# companion in emitmanifestnow above — same reason).
+	if(findtool("sms") != nil || findtool("dial") != nil)
+		if(!strlist_contains(allpaths, "/phone"))
+			allpaths = "/phone" :: allpaths;
 	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))

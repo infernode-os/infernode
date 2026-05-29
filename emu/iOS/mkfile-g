@@ -68,6 +68,10 @@ SYSLIBS=\
 	-lm\
 	-lpthread\
 	-framework CoreFoundation\
+	-framework Foundation\
+	-framework UIKit\
+	-framework MessageUI\
+	-framework CallKit\
 
 default:V:	$O.$CONF
 
@@ -92,6 +96,14 @@ $LIBEMU:	$OBJ $CONF.c $CONF.root.h
 	$AR $ARFLAGS $target $OBJ $CONF.$O
 
 <../port/portmkfile
+
+# Objective-C compile rule for iOS-specific bridges that wrap UIKit /
+# MessageUI / CallKit etc. portmkfile only covers .c / .s / .S; .m
+# files go through the same clang with the same CFLAGS (clang infers
+# Obj-C from the extension). Today's user: emu/iOS/phonebridge.m
+# (devphone). Add more as native iOS bridges land.
+%.$O: %.m
+	$CC $CFLAGS $stem.m
 
 # Phase A source reuse. iOS shares macOS's libc, so most platform
 # sources are reused unchanged via thin forwarding stubs in THIS

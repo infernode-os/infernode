@@ -69,6 +69,17 @@ if {! ~ $skiplogon 1} {
 /dis/veltro/wallet9p.dis >[2] /dev/null &
 sleep 1
 
+# Message layer — msg9p mounts /n/msg and aggregates Notifications from
+# every registered MsgSrc into /n/msg/notify, which lucibridge / agents
+# block-read for unified inbound alerts (mail, sms, …). Register the
+# sources we ship by default; failures here are non-fatal (the source's
+# own init() returns an error if the backing channel isn't available,
+# e.g. sms on a build without /phone bound). stderr stays attached so
+# mount/register failures surface in the console.
+/dis/veltro/msg9p.dis &
+sleep 1
+echo 'register sms /dis/veltro/sources/sms.dis' > /n/msg/ctl
+
 # GUI services
 luciuisrv
 echo activity create Main > /n/ui/ctl
@@ -77,4 +88,11 @@ sleep 1
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
+# Shell in the Workspace zone — dev affordance + the only way to drive
+# /phone/sms / /phone/phone end-to-end without a working LLM (until
+# INFR-169 lifts and Veltro can call the sms / dial tools from chat).
+# Keep this short-term; once the LLM path is robust on mobile, replace
+# with a dedicated Phone app or a Veltro-tool-driven flow.
+echo 'create id=shell type=app dis=/dis/wm/shell.dis label=Shell' > /n/ui/activity/0/presentation/ctl
+echo 'center id=shell' > /n/ui/activity/0/presentation/ctl
 lucifer

@@ -374,7 +374,18 @@ Serve:
 # unregister <name>
 handlectl(data: string): string
 {
-	(n, toks) := sys->tokenize(data, " \t");
+	# Send is multi-line — header on first line, body on the rest.
+	# Splitting on the first \n preserves bodies that contain whitespace.
+	cmdline := data;
+	body := "";
+	for(i := 0; i < len data; i++)
+		if(data[i] == '\n') {
+			cmdline = data[0:i];
+			body = data[i+1:];
+			break;
+		}
+
+	(n, toks) := sys->tokenize(cmdline, " \t");
 	if(n < 1)
 		return Ebadarg;
 
@@ -388,9 +399,35 @@ handlectl(data: string): string
 		if(toks == nil)
 			return "usage: unregister <name>";
 		return dounregister(hd toks);
+	"send" =>
+		# send <srcname> <recipient>
+		# <body...>
+		# Dispatches to MsgSrc.send on the named source. Generic (used
+		# by SMS now, TAK source planned in nerva3 — same verb).
+		if(toks == nil || tl toks == nil)
+			return "usage: send <srcname> <recipient>\\n<body>";
+		return dosend(hd toks, hd tl toks, body);
 	* =>
 		return "unknown command: " + cmd;
 	}
+}
+
+# Find a registered source by name and dispatch a Message through it.
+# Recipient + body are wrapped in a Message; sender/timestamp are
+# left for the source to fill in (it knows the protocol).
+dosend(srcname, recipient, body: string): string
+{
+	for(sl := sources; sl != nil; sl = tl sl) {
+		s := hd sl;
+		if(s.name == srcname) {
+			m := ref MsgSrc->Message;
+			m.source = srcname;
+			m.recipient = recipient;
+			m.body = body;
+			return s.mod->send(m);
+		}
+	}
+	return "source not registered: " + srcname;
 }
 
 doregister(args: list of string): string

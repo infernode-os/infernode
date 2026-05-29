@@ -634,6 +634,41 @@ direct test above.
 
 Everything beyond that needs Ba'al.
 
+## Wiring a remote LLM on the phone (INFR-169)
+
+InferNode on mobile needs `/n/llm` mounted before Veltro can call any
+tool — including the SMS / dial tools we just verified. Hephaestus's
+default `serve-llm` listener is keyring-authenticated; an anonymous
+`mount -A` is hung up by the server. The Settings → LLM Service panel
+now handles the full Remote 9P setup itself (no more `mode=remote` +
+`auth=keyring` mismatch):
+
+1. On the server, generate (or reuse) the signer key:
+   ```sh
+   ./serve-llm.sh --gen-key
+   # writes ~/.infernode/lib/keyring/serve-llm
+   ```
+2. Copy that file to the phone's clipboard. On macOS for an iPhone
+   over a continuity session: open the keyfile in TextEdit or `cat` it
+   in Terminal, select-all, copy. (The keyfile is ASCII-only; smart
+   punctuation does not apply.)
+3. On the phone, open InferNode → Settings → LLM Service, switch Mode
+   to **Remote (9P)**, enter the dial address (`tcp!10.x.x.x!5640`),
+   then tap **Install keyfile from clipboard**. Status flips to
+   `Keyfile: present at /lib/keyring/serve-llm`.
+4. Tap **Apply**. Settings writes `auth=keyring` and
+   `keyfile=/lib/keyring/serve-llm` into `/lib/ndb/llm` alongside the
+   dial address, so boot's `mount -k` takes the keyring path on the
+   next launch.
+5. Force-quit and relaunch. Stderr should show `boot: mount -k …`
+   followed by either silence (success) or a clear error.
+
+If a phone for some reason lacks a working clipboard hand-off, the
+fallback is `devicectl device copy to --domain-type appDataContainer
+--domain-identifier os.infernode.ios --source <keyfile>
+--destination Library/Caches/inferno/lib/keyring/serve-llm` — same end
+state, the in-app button is the user-facing path.
+
 ## References
 
 * `emu/Android/README.md` — what eventually lives in that directory.

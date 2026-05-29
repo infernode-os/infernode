@@ -125,6 +125,16 @@ llm_key_label: ref Label;
 llm_persist_label: ref Label;
 llm_dial_label: ref Label;
 llm_dial_tf: ref Textfield;
+# Remote-9P keyring auth (INFR-169). Hephaestus's serve-llm defaults to
+# the keyring-authenticated listener, so a remote mount needs `mount -k
+# <keyfile>` against /lib/keyring/serve-llm — which means Settings has
+# to (a) write auth=keyring + keyfile= when Remote 9P is picked, and
+# (b) give the user a way to plant the keyfile on disk. The "Install
+# keyfile from clipboard" button reads the system snarf and writes it
+# to /lib/keyring/serve-llm with 0600.
+llm_keyring_hdr: ref Label;
+llm_keyring_status_label: ref Label;
+llm_keyring_install_btn: ref Button;
 llm_apply_btn: ref Button;
 llm_is_remote: int;
 llm_mode_set: int;		# 1 after first layout or click — suppresses config re-read
@@ -470,7 +480,7 @@ layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 	cy += FORM_MARGIN;
 
 	if(llm_is_remote) {
-		# Remote mode: just a dial address
+		# Remote mode: dial address + keyring auth (INFR-169).
 		llm_dial_label = Label.mk(
 			Rect((cx, cy), (cw, cy + fh)),
 			"Dial address (tcp!host!port):", 0, LEFT);
@@ -481,6 +491,22 @@ layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 		llm_dial_tf.setval(curdial);
 		llm_dial_tf.focused = 1;
 		cy += fieldh + FORM_MARGIN;
+
+		# Keyring auth section.
+		llm_keyring_hdr = Label.mk(
+			Rect((cx, cy), (cw, cy + fh)),
+			"Keyring authentication", 1, LEFT);
+		cy += fh;
+		llm_keyring_status_label = Label.mk(
+			Rect((cx, cy), (cw, cy + fh)),
+			keyring_status_text(), 0, LEFT);
+		cy += fh;
+		btnh := fh + 8;
+		if(mobile && btnh < TAPMIN) btnh = TAPMIN;
+		llm_keyring_install_btn = Button.mk(
+			Rect((cx, cy), (cx + 280, cy + btnh)),
+			"Install keyfile from clipboard");
+		cy += btnh + FORM_MARGIN;
 	} else {
 		# Section header: Backend
 		llm_backend_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Backend", 1, LEFT);
@@ -885,6 +911,12 @@ drawllm()
 			llm_dial_label.draw(w.image);
 		if(llm_dial_tf != nil)
 			llm_dial_tf.draw(w.image);
+		if(llm_keyring_hdr != nil)
+			llm_keyring_hdr.draw(w.image);
+		if(llm_keyring_status_label != nil)
+			llm_keyring_status_label.draw(w.image);
+		if(llm_keyring_install_btn != nil)
+			llm_keyring_install_btn.draw(w.image);
 	} else {
 		if(llm_backend_hdr != nil)
 			llm_backend_hdr.draw(w.image);
@@ -1129,6 +1161,19 @@ clickllm(ptr: ref Pointer)
 		if(llm_dial_tf != nil && llm_dial_tf.contains(ptr.xy)) {
 			llm_dial_tf.focused = 1;
 			llm_dial_tf.click(ptr.xy);
+			dirty = 1;
+			return;
+		}
+		# Install keyfile from snarf → /lib/keyring/serve-llm
+		if(llm_keyring_install_btn != nil &&
+				llm_keyring_install_btn.contains(ptr.xy)) {
+			install_keyring_from_snarf();
+			# Refresh status label and redraw.
+			if(llm_keyring_status_label != nil) {
+				llm_keyring_status_label = Label.mk(
+					llm_keyring_status_label.r,
+					keyring_status_text(), 0, LEFT);
+			}
 			dirty = 1;
 			return;
 		}
@@ -1443,7 +1488,14 @@ trackllmapply(nil: ref Pointer)
 applyllm()
 {
 	if(llm_is_remote) {
-		# Remote mode: dial + mount at /n/llm
+		# Remote mode: dial + mount at /n/llm.
+		# Always writes auth=keyring + keyfile=/lib/keyring/serve-llm
+		# so the boot's mount path takes mount -k (not anonymous
+		# mount -A, which hephaestus's default keyring listener hangs
+		# up on — INFR-169). If the keyfile isn't on disk yet, the
+		# config still saves; the user has to install one via the
+		# "Install keyfile from clipboard" button (or push it through
+		# devicectl on a phone) before the next launch can authenticate.
 		addr := "";
 		if(llm_dial_tf != nil)
 			addr = strip(llm_dial_tf.value());
@@ -1458,8 +1510,12 @@ applyllm()
 		# namespace established by /lib/sh/profile at boot time, so
 		# mounting from this user-space process would not be visible
 		# to wm's children (Veltro etc). Tell the user to restart.
-		writellmconfig("remote", "", "", "", addr);
-		flashstatus("LLM dial saved — close InferNode and relaunch to apply");
+		writellmconfig_full("remote", "", "", "", addr,
+			"keyring", KEYRING_PATH);
+		if(keyring_present())
+			flashstatus("LLM dial + keyring saved — close InferNode and relaunch");
+		else
+			flashstatus("LLM dial saved — install keyfile, then relaunch");
 		return;
 	}
 
@@ -1576,11 +1632,23 @@ readllmmodels(): array of string
 	return readlines("/n/llm/models");
 }
 
+KEYRING_PATH: con "/lib/keyring/serve-llm";
+
 writellmconfig(mode, backend, url, model, dial: string)
 {
-	# Preserve unknown keys (e.g. auth=, keyfile=) that other consumers
-	# of /lib/ndb/llm rely on. Settings only manages the
-	# mode/backend/url/model/dial subset.
+	writellmconfig_full(mode, backend, url, model, dial, "", "");
+}
+
+# Extended form that also writes auth=/keyfile= when those are set.
+# Pass auth="" + keyfile="" to leave any existing entries untouched
+# (matches the old single-arg writellmconfig behaviour). Pass
+# non-empty values to overwrite them — Remote 9P (INFR-169) takes
+# auth="keyring" + keyfile=KEYRING_PATH so the boot path uses
+# mount -k instead of falling through to anonymous mount -A.
+writellmconfig_full(mode, backend, url, model, dial, auth, keyfile: string)
+{
+	# Preserve unknown keys we don't manage; auth=/keyfile= are
+	# rewritten only when the caller passes a value.
 	extra := "";
 	existing := readlines("/lib/ndb/llm");
 	for(i := 0; i < len existing; i++) {
@@ -1588,6 +1656,10 @@ writellmconfig(mode, backend, url, model, dial: string)
 		if(islinekey(line, "mode") || islinekey(line, "backend") ||
 		   islinekey(line, "url") || islinekey(line, "model") ||
 		   islinekey(line, "dial"))
+			continue;
+		if(auth != "" && islinekey(line, "auth"))
+			continue;
+		if(keyfile != "" && islinekey(line, "keyfile"))
 			continue;
 		extra += line + "\n";
 	}
@@ -1599,9 +1671,69 @@ writellmconfig(mode, backend, url, model, dial: string)
 	}
 	config := sys->sprint("mode=%s\nbackend=%s\nurl=%s\nmodel=%s\ndial=%s\n",
 		mode, backend, url, model, dial);
+	if(auth != "")
+		config += "auth=" + auth + "\n";
+	if(keyfile != "")
+		config += "keyfile=" + keyfile + "\n";
 	config += extra;
 	b := array of byte config;
 	sys->write(fd, b, len b);
+}
+
+# Keyring helpers (INFR-169).
+keyring_present(): int
+{
+	(ok, nil) := sys->stat(KEYRING_PATH);
+	return ok >= 0;
+}
+
+keyring_status_text(): string
+{
+	if(keyring_present())
+		return "Keyfile: present at " + KEYRING_PATH;
+	return "Keyfile: missing — install or push before relaunch";
+}
+
+# Read the system snarf and write it to KEYRING_PATH with mode 0600.
+# Permissions matter — factotum / mount -k will refuse a world-readable
+# signer key in production. Existing file is overwritten in place.
+install_keyring_from_snarf()
+{
+	buf := wmclient->snarfget();
+	if(buf == nil || len buf == 0) {
+		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
+		return;
+	}
+	# Best-effort: trim a trailing CR (Windows clipboards) so the
+	# stored file matches the canonical line-oriented format.
+	s := buf;
+	if(len s > 0 && s[len s - 1] == '\r')
+		s = s[:len s - 1];
+	# Ensure the keyring directory exists; create is idempotent.
+	d := KEYRING_PATH;
+	slash := -1;
+	for(i := 0; i < len d; i++)
+		if(d[i] == '/')
+			slash = i;
+	if(slash > 0) {
+		dir := d[:slash];
+		mkfd := sys->create(dir, Sys->OREAD, Sys->DMDIR | 8r755);
+		if(mkfd != nil)
+			mkfd = nil;
+	}
+	fd := sys->create(KEYRING_PATH, Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		flashstatus(sys->sprint("cannot write keyfile: %r"));
+		return;
+	}
+	b := array of byte s;
+	n := sys->write(fd, b, len b);
+	if(n != len b) {
+		flashstatus(sys->sprint("short write to keyfile: %r"));
+		return;
+	}
+	flashstatus(sys->sprint("keyfile installed (%d bytes) at %s",
+		len b, KEYRING_PATH));
 }
 
 islinekey(line, key: string): int

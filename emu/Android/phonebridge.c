@@ -11,14 +11,18 @@
  * Plan9-Archive/hellaphone is a structural reference, ~13 years old):
  *
  *   send_sms     → SmsManager.sendTextMessage (CALL_PHONE / SEND_SMS)
- *   recv_sms     → ContentResolver observer on content://sms/inbox
- *                  (READ_SMS + RECEIVE_SMS); push records into the
- *                  ring drained by recv_sms.
+ *   inbound SMS  → ContentResolver observer on content://sms/inbox
+ *                  (READ_SMS + RECEIVE_SMS). The observer callback
+ *                  formats the canonical wire record and calls
+ *                  phonebridge_post_sms(line, len) — devphone fans
+ *                  it out to every open reader of /phone/sms.
  *   dial         → TelecomManager.placeCall (CALL_PHONE)
  *   answer / hangup → TelecomManager.acceptRingingCall /
  *                  endCall (ANSWER_PHONE_CALLS, API 26+)
  *   call events  → TelephonyManager TelephonyCallback for
- *                  STATE_RINGING / STATE_OFFHOOK / STATE_IDLE.
+ *                  STATE_RINGING / STATE_OFFHOOK / STATE_IDLE;
+ *                  callback formats and calls
+ *                  phonebridge_post_call_event().
  *
  * Wiring lives in android-app/.../InfernodeService.kt (the existing
  * JNI surface — see the SDL Activity's JNI bridge for the pattern;
@@ -59,12 +63,10 @@ phonebridge_send_sms(const char *number, const char *body, char *err, int errlen
 	return 0;
 }
 
-int
-phonebridge_recv_sms(char *buf, int buflen)
-{
-	(void)buf; (void)buflen;
-	return 0;
-}
+/* Inbound paths land via phonebridge_post_sms / phonebridge_post_call_event
+ * once INFR-182 wires the ContentObserver + TelephonyCallback through the
+ * JNI surface. Stub does nothing — readers of /phone/sms and /phone/phone
+ * block forever, which is the correct behaviour. */
 
 int
 phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
@@ -72,13 +74,6 @@ phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
 	fprintf(stderr, "phone: Android phone_ctl %s%s%s (stub)\n",
 		verb ? verb : "", rest ? " " : "", rest ? rest : "");
 	(void)err; (void)errlen;
-	return 0;
-}
-
-int
-phonebridge_recv_call_event(char *buf, int buflen)
-{
-	(void)buf; (void)buflen;
 	return 0;
 }
 

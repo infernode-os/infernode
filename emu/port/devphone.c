@@ -40,6 +40,7 @@
 
 #define	BRIDGE_BUFSZ	4096
 #define	ERRBUFSZ	256
+#define	QLIMIT		16384	/* per-channel queue cap; 32 SMS records ≈ */
 
 enum
 {
@@ -51,6 +52,79 @@ enum
 	Qstatus,
 	Qcalls,
 };
+
+/*
+ * Per-open-channel listener nodes. phoneopen of /phone/sms or
+ * /phone/phone creates a Queue and links a Listener carrying it onto
+ * the global per-stream list. phonebridge_post_{sms,call_event} walks
+ * the list and qproduces the record onto every Queue — that unblocks
+ * every reader sitting in qread, each getting an independent copy.
+ *
+ * Lock is Inferno's port-style spin lock — safe to acquire from both
+ * Inferno kprocs (phoneopen, phoneclose, phoneread) and host threads
+ * the bridge calls back on (UIKit main queue, Android Binder, …).
+ */
+typedef struct Listener Listener;
+struct Listener
+{
+	Queue	*q;
+	Listener *next;
+};
+
+static Listener *sms_listeners;
+static Listener *phone_listeners;
+static Lock      listener_lock;
+
+static void
+add_listener(Listener **head, Queue *q)
+{
+	Listener *l = malloc(sizeof *l);
+	if(l == nil)
+		return;	/* leak: extremely unlikely, dropping new reader is the survivable behaviour */
+	l->q = q;
+	lock(&listener_lock);
+	l->next = *head;
+	*head = l;
+	unlock(&listener_lock);
+}
+
+static void
+del_listener(Listener **head, Queue *q)
+{
+	Listener **pp, *cur;
+	lock(&listener_lock);
+	for(pp = head; (cur = *pp) != nil; pp = &cur->next){
+		if(cur->q == q){
+			*pp = cur->next;
+			unlock(&listener_lock);
+			free(cur);
+			return;
+		}
+	}
+	unlock(&listener_lock);
+}
+
+static void
+listeners_produce(Listener **head, const void *buf, int n)
+{
+	Listener *cur;
+	lock(&listener_lock);
+	for(cur = *head; cur != nil; cur = cur->next)
+		qproduce(cur->q, (void*)buf, n);
+	unlock(&listener_lock);
+}
+
+void
+phonebridge_post_sms(const char *line, int n)
+{
+	listeners_produce(&sms_listeners, line, n);
+}
+
+void
+phonebridge_post_call_event(const char *line, int n)
+{
+	listeners_produce(&phone_listeners, line, n);
+}
 
 static
 Dirtab phonetab[] =
@@ -91,13 +165,48 @@ phonestat(Chan *c, uchar *db, int n)
 static Chan*
 phoneopen(Chan *c, int omode)
 {
-	return devopen(c, omode, phonetab, nelem(phonetab), devgen);
+	c = devopen(c, omode, phonetab, nelem(phonetab), devgen);
+	switch((ulong)c->qid.path){
+	case Qsms:
+		c->aux = qopen(QLIMIT, 0, nil, nil);
+		if(c->aux != nil)
+			add_listener(&sms_listeners, c->aux);
+		break;
+	case Qphone:
+		c->aux = qopen(QLIMIT, 0, nil, nil);
+		if(c->aux != nil)
+			add_listener(&phone_listeners, c->aux);
+		break;
+	}
+	return c;
 }
 
 static void
 phoneclose(Chan *c)
 {
-	USED(c);
+	Queue *q;
+	if((c->flag & COPEN) == 0)
+		return;
+	switch((ulong)c->qid.path){
+	case Qsms:
+		q = c->aux;
+		if(q != nil){
+			del_listener(&sms_listeners, q);
+			qhangup(q, nil);
+			qfree(q);
+			c->aux = nil;
+		}
+		break;
+	case Qphone:
+		q = c->aux;
+		if(q != nil){
+			del_listener(&phone_listeners, q);
+			qhangup(q, nil);
+			qfree(q);
+			c->aux = nil;
+		}
+		break;
+	}
 }
 
 static long
@@ -117,24 +226,19 @@ phoneread(Chan *c, void *va, long n, vlong offset)
 		return readstr(offset, va, n, buf);
 
 	case Qsms:
-		/*
-		 * Pull the next pending incoming SMS, if any. Bridge returns
-		 * 0 on no-traffic (we report EOF — readers can poll or use
-		 * /n/msg/notify via the sms MsgSrc). -1 = unsupported on
-		 * this platform (e.g. iOS has no inbox API) → empty read.
-		 * Format on a hit: "from <num> <iso-timestamp>\n<body>\n".
-		 */
-		got = phonebridge_recv_sms(buf, sizeof buf);
-		if(got <= 0)
-			return 0;
-		return readstr(offset, va, n, buf);
-
 	case Qphone:
-		/* Call-state event stream — see /phone/sms for the same shape. */
-		got = phonebridge_recv_call_event(buf, sizeof buf);
-		if(got <= 0)
+		/*
+		 * Block on the per-channel queue until the bridge produces an
+		 * incoming record (SMS from carrier, or call-state change).
+		 * Format: "from <num> <iso-ts>\n<body>\n" for sms,
+		 * "<state> <handle> <iso-ts>\n" for phone events. EOF on
+		 * platforms where the bridge can never produce (iOS sms,
+		 * macOS/Linux desktop with no #f registered — though those
+		 * builds shouldn't even have this device).
+		 */
+		if(c->aux == nil)
 			return 0;
-		return readstr(offset, va, n, buf);
+		return qread(c->aux, va, n);
 
 	case Qsignal:
 		snprint(buf, sizeof buf, "%d\n", phonebridge_signal());

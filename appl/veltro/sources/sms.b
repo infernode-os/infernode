@@ -22,14 +22,16 @@ implement SmsSrc;
 # Platform reality (informational only — this source loads on every
 # platform, it just produces no notifications when the bridge has no
 # inbox API):
-#   iOS:      phonebridge_recv_sms returns -1; watch() will idle forever.
-#   Android:  bridge will surface ContentResolver SMS_RECEIVED via the
-#             ring drained by phonebridge_recv_sms (INFR-182).
-#   macOS:    stub; like iOS, watch() idles.
+#   iOS:      no inbox API — bridge never calls phonebridge_post_sms,
+#             so devphone's queue stays empty and watch() blocks forever.
+#   Android:  bridge calls phonebridge_post_sms() from the
+#             ContentResolver SMS_RECEIVED observer (INFR-182).
+#   desktop:  no #f device registered; userspace mounts a phone's
+#             /phone over 9P. Reads block on the remote queue.
 #
-# Config format (key=value pairs, all optional):
-#   pollms=<ms>    polling interval in milliseconds (default 1000)
-#
+# No config keys — devphone owns the queueing now; the source is just a
+# blocking-read loop. (Earlier versions of this file took a `pollms`
+# argument; deleted with the hellaphone-style refactor.)
 
 include "sys.m";
 	sys: Sys;
@@ -62,12 +64,6 @@ Notification: import MsgSrc;
 
 PHONE_SMS: con "/phone/sms";
 
-# Polling interval. The /phone/sms file is a 9P event stream — a read
-# blocks platform-dependently. Some bridges (the iOS stub) return EOF
-# instantly; we sleep `pollms` between reads so msg9p doesn't spin a
-# CPU when there's nothing to deliver.
-pollms := 1000;
-
 # Tracks the last seen sender (number) per message ID so reply() can
 # pair an origid back to a number without round-tripping the bridge.
 # Bounded — see addseenpair below.
@@ -86,25 +82,9 @@ init(config: string): string
 	if(str == nil)
 		return "cannot load String";
 
-	# Parse key=value pairs. Order-independent; unknown keys ignored
-	# rather than rejected so the registration line stays forgiving.
-	(n, toks) := sys->tokenize(config, " \t");
-	for(t := toks; t != nil; t = tl t) {
-		kv := hd t;
-		eq := indexof(kv, '=');
-		if(eq < 0)
-			continue;
-		k := kv[0:eq];
-		v := kv[eq+1:];
-		case k {
-		"pollms" =>
-			pi := 0;
-			(pi, nil) = str->toint(v, 10);
-			if(pi > 0)
-				pollms = pi;
-		}
-	}
-	n = n;	# silence unused
+	# No config keys today — kept around so a future opt (e.g. a
+	# read buffer hint) doesn't need a signature change.
+	config = config;
 
 	closed = 0;
 	return nil;
@@ -134,53 +114,65 @@ close(): string
 
 watch(updates: chan of ref Notification, stop: chan of int): string
 {
-	tick := chan of int;
-	spawn poller(tick);
+	# devphone backs /phone/sms with a per-channel Queue (hellaphone-
+	# pattern, listener registry). One blocking read returns one full
+	# wire-format record when the bridge posts incoming SMS, or stays
+	# parked forever on platforms where the bridge can never push
+	# (iOS — no inbox API). No polling, no sleep, no tunable interval.
+	# A separate kproc drives the read so the stop channel is always
+	# responsive.
+	recs := chan of array of byte;
+	errs := chan of string;
+	spawn reader(recs, errs);
 
 	for(;;) alt {
 	<-stop =>
 		closed = 1;
 		return nil;
-	<-tick =>
+	rec := <-recs =>
 		if(closed)
 			return nil;
-		readonce(updates);
-	}
-}
-
-# Drive watch()'s alt with a periodic tick. A separate process so the
-# sleep doesn't block stop-channel responsiveness.
-poller(tick: chan of int)
-{
-	for(;;) {
+		handlerecord(updates, string rec);
+	emsg := <-errs =>
 		if(closed)
-			return;
-		sys->sleep(pollms);
-		# Watch may not be reading the tick channel right now — skip
-		# silently, we'll deliver whatever's pending on the next tick.
-		# Keeps CPU low even if nothing's draining.
+			return nil;
+		err := ref Notification;
+		err.kind = "error";
+		err.detail = emsg;
 		alt {
-		tick <-= 1 => ;
+		updates <-= err => ;
 		* => ;
 		}
 	}
 }
 
-# One non-blocking read of /phone/sms. devphone returns the canonical
-# Hellaphone wire format (see file header). Empty / negative reads mean
-# "no inbox traffic right now"; we just return.
-readonce(updates: chan of ref Notification)
+# Block on /phone/sms forever, deliver each record. If /phone is
+# unmounted the open fails; surface once and exit (the supervising
+# msg9p will not re-spawn until ctl re-registers).
+reader(recs: chan of array of byte, errs: chan of string)
 {
 	fd := sys->open(PHONE_SMS, Sys->OREAD);
 	if(fd == nil) {
-		# /phone unmounted — surface once, not every tick.
+		alt {
+		errs <-= sys->sprint("sms: cannot open %s: %r", PHONE_SMS) => ;
+		* => ;
+		}
 		return;
 	}
-	buf := array[4096] of byte;
-	rn := sys->read(fd, buf, len buf);
-	if(rn <= 0)
-		return;
-	rec := string buf[:rn];
+	for(;;) {
+		if(closed)
+			return;
+		buf := array[4096] of byte;
+		rn := sys->read(fd, buf, len buf);
+		if(rn <= 0)
+			return;	# EOF — bridge hung up the queue
+		recs <-= buf[:rn];
+	}
+}
+
+# Handle one wire-format record from /phone/sms.
+handlerecord(updates: chan of ref Notification, rec: string)
+{
 
 	m := parserecord(rec);
 	if(m == nil) {

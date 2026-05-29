@@ -165,6 +165,13 @@ TOOL_PATHS := array[] of {
 	# through a private /n/llm session). See appl/veltro/tools/limbo.b
 	# and docs/LLM-AS-TOOL.md.
 	("limbo",   "/dis/veltro/tools/limbo.dis"),
+	# Phone bridge tools (mobile builds + desktops mounting a phone).
+	# `findtool()` lookups in the auto-grant block below check
+	# TOOL_PATHS, so these must be listed here — without them the
+	# auto-grant of /phone to subagent namespaces silently no-ops.
+	("sms",      "/dis/veltro/tools/sms.dis"),
+	("dial",     "/dis/veltro/tools/dial.dis"),
+	("contacts", "/dis/veltro/tools/contacts.dis"),
 };
 
 usage()
@@ -1098,11 +1105,13 @@ emitmanifestnow(mpath: string)
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
-	# Auto-grant /phone when sms or dial tool is registered. devphone
-	# (#f) is bound at /phone by /lib/sh/profile; child activity
-	# namespaces don't inherit that bind, so restrictns() hides /phone
-	# and the sms/dial tools fail with "/phone/sms does not exist".
-	if(findtool("sms") != nil || findtool("dial") != nil)
+	# Auto-grant /phone when any phone-bridge tool is registered. devphone
+	# (#f) is bound at /phone by lib/lucifer/boot-mobile.sh (mobile) or
+	# is mounted from a paired phone (desktop). Child activity namespaces
+	# don't inherit that bind, so restrictns() would otherwise hide /phone
+	# and the sms / dial / contacts tools fail with "does not exist".
+	if(findtool("sms") != nil || findtool("dial") != nil ||
+	   findtool("contacts") != nil)
 		if(!strlist_contains(allpaths, "/phone"))
 			allpaths = "/phone" :: allpaths;
 	caps := ref NsConstruct->Capabilities(

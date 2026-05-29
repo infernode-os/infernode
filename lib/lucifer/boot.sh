@@ -69,6 +69,12 @@ if {! ~ $skiplogon 1} {
 /dis/veltro/wallet9p.dis >[2] /dev/null &
 sleep 1
 
+# Mail service: self-mounts /n/mail (shared namespace, so the agents
+# see it). Accounts are connected on demand once credentials exist:
+#   echo 'connect <name> imap.gmail.com oauth' > /n/mail/ctl
+mail9p >[2] /dev/null &
+sleep 1
+
 # GUI services
 luciuisrv
 echo activity create Main > /n/ui/ctl

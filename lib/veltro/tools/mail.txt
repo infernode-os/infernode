@@ -1,0 +1,32 @@
+mail - Read and send email via the user's mailbox (/n/mail)
+
+A thin client over the mail9p filesystem. It performs ordinary file
+operations on /n/mail; it holds no credentials and speaks no IMAP or
+SMTP itself — mail9p owns the protocol and the OAuth tokens. The
+capability split is the namespace: a triage-only task is bound the
+read-only field files; a task allowed to reply is additionally bound
+compose / draft-reply.
+
+Usage:
+  mail accounts                       List configured mail accounts
+  mail list [box]                     List recent messages (default INBOX)
+  mail unread [box]                   List only unread messages
+  mail read <uid> [box]               Show one message (and mark it read)
+  mail send <to> <subject> -- <body>  Compose and send a message
+  mail flag <uid> <+/-flag>...        Set message flags (e.g. flag 4412 seen)
+  mail reply <uid> <draft body>       Reply to a message (threaded automatically)
+
+Listings show one message per line: <uid>  <from>  <subject>  [unread]
+
+Examples:
+  mail unread
+  mail read 4412
+  mail send alice@example.com Lunch? -- Are you free at noon tomorrow?
+  mail flag 4412 seen
+  mail reply 4412 Sounds good, see you then.
+
+Notes:
+  - Operates on the first configured account.
+  - If "no mail accounts configured" is returned, the user must add a
+    mail account in the Keyring app and connect it, e.g.:
+        echo 'connect gmail imap.gmail.com oauth' > /n/mail/ctl

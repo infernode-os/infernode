@@ -40,6 +40,7 @@ TOOLS=\
     tools/diff.dis\
     tools/json.dis\
     tools/webfetch.dis\
+    tools/mail.dis\
     tools/git.dis\
     tools/grep.dis\
     tools/memory.dis\
@@ -159,6 +160,9 @@ tools/json.dis: tools/json.b tool.m
 
 tools/webfetch.dis: tools/webfetch.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/webfetch.dis tools/webfetch.b
+
+tools/mail.dis: tools/mail.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/mail.dis tools/mail.b
 
 tools/git.dis: tools/git.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/git.dis tools/git.b

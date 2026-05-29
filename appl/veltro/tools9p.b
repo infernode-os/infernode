@@ -134,7 +134,8 @@ TOOL_PATHS := array[] of {
 	("todo",    "/dis/veltro/tools/todo.dis"),
 	# Network tools
 	("websearch", "/dis/veltro/tools/websearch.dis"),
-	# Mail: superseded by mail9p (mounts /n/mail). See man/4/mail9p.
+	# Mail: thin client over mail9p's /n/mail filesystem. See man/4/mail9p.
+	("mail",    "/dis/veltro/tools/mail.dis"),
 	# Web browsing
 	("browse",    "/dis/veltro/tools/browse.dis"),
 	("charon",    "/dis/veltro/tools/charon.dis"),

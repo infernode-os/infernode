@@ -42,6 +42,9 @@ include "wmclient.m";
 include "keyringinst.m";
 	keyringinst: Keyringinst;
 
+include "bioauth.m";
+	bioauth: Bioauth;
+
 include "string.m";
 	str: String;
 
@@ -138,6 +141,7 @@ llm_dial_tf: ref Textfield;
 llm_keyring_hdr: ref Label;
 llm_keyring_status_label: ref Label;
 llm_keyring_install_btn: ref Button;
+llm_keyring_bio_btn: ref Button;
 llm_apply_btn: ref Button;
 llm_is_remote: int;
 llm_mode_set: int;		# 1 after first layout or click — suppresses config re-read
@@ -205,6 +209,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	keyringinst = load Keyringinst Keyringinst->PATH;
 	if(keyringinst != nil)
 		keyringinst->init();
+
+	bioauth = load Bioauth Bioauth->PATH;
+	if(bioauth != nil)
+		bioauth->init();
 	stderr = sys->fildes(2);
 
 	if(ctxt == nil) {
@@ -512,7 +520,23 @@ layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 		llm_keyring_install_btn = Button.mk(
 			Rect((cx, cy), (cx + 280, cy + btnh)),
 			"Install keyfile from clipboard");
-		cy += btnh + FORM_MARGIN;
+		cy += btnh + 4;
+
+		# Biometric-protected install (INFR-169 follow-up). Only
+		# shown when /phone/bio_status reports available — on
+		# desktop / Android stub / no-enrollment devices the row
+		# would just lie. The button stores the same clipboard
+		# payload under Keychain biometryCurrentSet ("serve-llm"
+		# slot) so the launcher can fetch it via FaceID/TouchID
+		# instead of leaving the plaintext key on /lib/keyring.
+		if(bioauth != nil && bioauth->available() == Bioauth->AVAIL_OK) {
+			llm_keyring_bio_btn = Button.mk(
+				Rect((cx, cy), (cx + 280, cy + btnh)),
+				"Install + protect with biometric");
+			cy += btnh + FORM_MARGIN;
+		} else {
+			cy += FORM_MARGIN;
+		}
 	} else {
 		# Section header: Backend
 		llm_backend_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Backend", 1, LEFT);
@@ -923,6 +947,8 @@ drawllm()
 			llm_keyring_status_label.draw(w.image);
 		if(llm_keyring_install_btn != nil)
 			llm_keyring_install_btn.draw(w.image);
+		if(llm_keyring_bio_btn != nil)
+			llm_keyring_bio_btn.draw(w.image);
 	} else {
 		if(llm_backend_hdr != nil)
 			llm_backend_hdr.draw(w.image);
@@ -1175,6 +1201,19 @@ clickllm(ptr: ref Pointer)
 				llm_keyring_install_btn.contains(ptr.xy)) {
 			install_keyring_from_snarf();
 			# Refresh status label and redraw.
+			if(llm_keyring_status_label != nil) {
+				llm_keyring_status_label = Label.mk(
+					llm_keyring_status_label.r,
+					keyring_status_text(), 0, LEFT);
+			}
+			dirty = 1;
+			return;
+		}
+		# Install keyfile from snarf → /phone/bio_store under
+		# "serve-llm" slot (FaceID/TouchID-gated Keychain item).
+		if(llm_keyring_bio_btn != nil &&
+				llm_keyring_bio_btn.contains(ptr.xy)) {
+			install_keyring_to_biometric();
 			if(llm_keyring_status_label != nil) {
 				llm_keyring_status_label = Label.mk(
 					llm_keyring_status_label.r,
@@ -1716,6 +1755,31 @@ install_keyring_from_snarf()
 	}
 	flashstatus(sys->sprint("keyfile installed (%d bytes) at %s",
 		len payload, Keyringinst->DEFAULT_PATH));
+}
+
+# Snarf → prepare_payload → bioauth->store. The slot name "serve-llm"
+# is what boot.sh asks for via /phone/bio_retrieve before falling back
+# to the plaintext file. Triggers the OS biometric prompt on the
+# device — caller blocks here until the user authenticates.
+install_keyring_to_biometric()
+{
+	if(bioauth == nil) {
+		flashstatus("biometric: module not loaded");
+		return;
+	}
+	buf := wmclient->snarfget();
+	if(buf == nil || len buf == 0) {
+		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
+		return;
+	}
+	payload := keyringinst->prepare_payload(buf);
+	err := bioauth->store("serve-llm", payload);
+	if(err != nil) {
+		flashstatus(err);
+		return;
+	}
+	flashstatus(sys->sprint("keyfile sealed in biometric store (%d bytes, slot serve-llm)",
+		len payload));
 }
 
 islinekey(line, key: string): int

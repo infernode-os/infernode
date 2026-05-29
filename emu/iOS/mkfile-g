@@ -73,6 +73,8 @@ SYSLIBS=\
 	-framework MessageUI\
 	-framework CallKit\
 	-framework Contacts\
+	-framework LocalAuthentication\
+	-framework Security\
 
 default:V:	$O.$CONF
 

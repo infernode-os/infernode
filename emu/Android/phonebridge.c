@@ -103,3 +103,35 @@ phonebridge_contacts(char *buf, int buflen)
 	 * line format as the iOS bridge: <name>\t<kind>\t<number>\n. */
 	return snprintf(buf, buflen, "# contacts: Android bridge not wired (INFR-182)\n");
 }
+
+/*
+ * Biometric-protected secret storage. INFR-182 will wire this against
+ * BiometricPrompt + EncryptedSharedPreferences keyed by
+ * setUserAuthenticationRequired(true) — same contract as iOS, same
+ * /phone/bio_* userspace surface, only the JNI shim differs.
+ */
+int
+phonebridge_bio_available(void)
+{
+	return -1;	/* "unsupported" — devphone surfaces this verbatim */
+}
+
+int
+phonebridge_bio_store(const char *name, const char *payload, int n,
+                      char *err, int errlen)
+{
+	(void)name; (void)payload; (void)n;
+	snprintf(err, errlen,
+		"bio_store: Android biometric bridge not wired (INFR-182)");
+	return -1;
+}
+
+int
+phonebridge_bio_retrieve(const char *name, char *buf, int buflen,
+                         char *err, int errlen)
+{
+	(void)name; (void)buf; (void)buflen;
+	snprintf(err, errlen,
+		"bio_retrieve: Android biometric bridge not wired (INFR-182)");
+	return -1;
+}

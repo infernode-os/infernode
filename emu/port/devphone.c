@@ -52,7 +52,30 @@ enum
 	Qstatus,
 	Qcalls,
 	Qcontacts,
+	/*
+	 * Biometric-protected secret storage. Flat layout (no subdir) so
+	 * the same dirtab works on every platform without nested walkers.
+	 *
+	 *   /phone/bio_status   r   read returns one of:
+	 *                              "available\n"   biometric is enrolled
+	 *                              "unavailable\n" no biometric / locked out
+	 *                              "unsupported\n" platform has no bridge
+	 *   /phone/bio_store    w   write payload bytes prefixed by
+	 *                            "<name>\n" — the bridge triggers a
+	 *                            biometric prompt then commits to the
+	 *                            platform keystore. Errors via error().
+	 *   /phone/bio_retrieve rw  write "<name>\n" to set the slot, then
+	 *                            read to get the stored payload (after
+	 *                            biometric prompt). Per-open state via
+	 *                            c->aux so concurrent readers don't
+	 *                            collide.
+	 */
+	Qbio_status,
+	Qbio_store,
+	Qbio_retrieve,
 };
+
+#define	BIO_NAME_MAX	64
 
 /* Max contacts snapshot we'll cache per open (single phoneopen / read /
  * close cycle); ample for typical address books. Allocated lazily so
@@ -143,6 +166,9 @@ Dirtab phonetab[] =
 	"status", {Qstatus, 0, 0},   0,  0444,
 	"calls",    {Qcalls,    0, 0}, 0, 0444,
 	"contacts", {Qcontacts, 0, 0}, 0, 0444,
+	"bio_status",   {Qbio_status,   0, 0}, 0, 0444,
+	"bio_store",    {Qbio_store,    0, 0}, 0, 0222,
+	"bio_retrieve", {Qbio_retrieve, 0, 0}, 0, 0666,
 };
 
 static void
@@ -205,6 +231,21 @@ phoneopen(Chan *c, int omode)
 			c->aux = buf;
 		}
 		break;
+	case Qbio_retrieve:
+		/* Two buffers in one allocation:
+		 *   [0..BIO_NAME_MAX)        — slot name (set by phonewrite)
+		 *   [BIO_NAME_MAX..CONTACTS_BUFSZ) — retrieved payload cache
+		 * The name starts empty; phoneread treats an empty name as
+		 * "no slot requested" and returns EOF rather than calling
+		 * the bridge with a stale or unset slot. */
+		{
+			char *aux = malloc(CONTACTS_BUFSZ);
+			if(aux != nil){
+				aux[0] = 0;
+				c->aux = aux;
+			}
+		}
+		break;
 	}
 	return c;
 }
@@ -235,6 +276,7 @@ phoneclose(Chan *c)
 		}
 		break;
 	case Qcontacts:
+	case Qbio_retrieve:
 		if(c->aux != nil){
 			free(c->aux);
 			c->aux = nil;
@@ -296,6 +338,42 @@ phoneread(Chan *c, void *va, long n, vlong offset)
 		if(c->aux == nil)
 			return 0;
 		return readstr(offset, va, n, (char *)c->aux);
+
+	case Qbio_status:
+		switch(phonebridge_bio_available()){
+		case 1:  return readstr(offset, va, n, "available\n");
+		case 0:  return readstr(offset, va, n, "unavailable\n");
+		default: return readstr(offset, va, n, "unsupported\n");
+		}
+
+	case Qbio_retrieve:
+		/* c->aux is the slot name set by a prior write.  Reading
+		 * without writing first returns EOF rather than blocking,
+		 * so a stat / mistaken `cat /phone/bio_retrieve` can't
+		 * trigger an unwanted biometric prompt. The snapshot is
+		 * fetched once on first read after the write (offset 0)
+		 * and cached on a second slot in c->aux as `name\0payload`. */
+		if(c->aux == nil)
+			return 0;
+		{
+			char *name = (char *)c->aux;
+			char *cached = name + BIO_NAME_MAX;
+			char errbuf[ERRBUFSZ];	/* Flawfinder: ignore */
+			int got;
+			if(offset == 0){
+				cached[0] = 0;
+				errbuf[0] = 0;
+				got = phonebridge_bio_retrieve(name,
+					cached, CONTACTS_BUFSZ - 1,
+					errbuf, sizeof errbuf);
+				if(got < 0)
+					error(errbuf[0] ? errbuf : "bio_retrieve failed");
+				if(got > CONTACTS_BUFSZ - 1)
+					got = CONTACTS_BUFSZ - 1;
+				cached[got] = 0;
+			}
+			return readstr(offset, va, n, cached);
+		}
 	}
 	return 0;
 }
@@ -407,6 +485,74 @@ phonewrite(Chan *c, void *va, long n, vlong offset)
 	case Qphone:
 		/* dial <num> / answer [id] / hangup [id] */
 		r = phonebridge_phone_ctl(verb, rest, errbuf, sizeof errbuf);
+		break;
+
+	case Qbio_store:
+		/*
+		 * Write payload is "<name>\n<payload-bytes...>". Parse the
+		 * name (which can't contain '/' or '\n'), pass the rest as
+		 * the payload. Bridge prompts for biometric synchronously
+		 * and either succeeds (returns 0) or surfaces a short error.
+		 */
+		{
+			char *body = nil;
+			int i;
+			for(i = 0; i < n; i++){
+				if(buf[i] == '\n'){
+					buf[i] = 0;
+					body = buf + i + 1;
+					break;
+				}
+			}
+			if(body == nil){
+				snprint(errbuf, sizeof errbuf,
+					"bio_store: missing payload (need '<name>\\n<bytes>')");
+				r = -1;
+				break;
+			}
+			if(buf[0] == 0 || strchr(buf, '/') != nil){
+				snprint(errbuf, sizeof errbuf,
+					"bio_store: invalid slot name");
+				r = -1;
+				break;
+			}
+			r = phonebridge_bio_store(buf, body, n - i - 1,
+				errbuf, sizeof errbuf);
+		}
+		break;
+
+	case Qbio_retrieve:
+		/*
+		 * Write sets the slot name for this open channel. The next
+		 * read returns the retrieved payload (bridge prompts and
+		 * returns bytes; phoneread caches the result for paging).
+		 * Slot name must fit in BIO_NAME_MAX and may not contain
+		 * '/' or '\n'.
+		 */
+		{
+			char *aux = c->aux;
+			if(aux == nil){
+				snprint(errbuf, sizeof errbuf,
+					"bio_retrieve: channel has no name slot");
+				r = -1;
+				break;
+			}
+			int slen = (int)strlen(buf);
+			if(slen >= BIO_NAME_MAX){
+				snprint(errbuf, sizeof errbuf,
+					"bio_retrieve: slot name too long (max %d)", BIO_NAME_MAX - 1);
+				r = -1;
+				break;
+			}
+			if(slen == 0 || strchr(buf, '/') != nil){
+				snprint(errbuf, sizeof errbuf,
+					"bio_retrieve: invalid slot name");
+				r = -1;
+				break;
+			}
+			memmove(aux, buf, slen + 1);
+			r = 0;
+		}
 		break;
 
 	default:

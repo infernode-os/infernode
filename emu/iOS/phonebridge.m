@@ -41,6 +41,8 @@
 #import <MessageUI/MessageUI.h>
 #import <CallKit/CallKit.h>
 #import <Contacts/Contacts.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#import <Security/Security.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -577,4 +579,163 @@ phonebridge_contacts(char *buf, int buflen)
 		return snprintf(buf, buflen, "# contacts: %s\n", msg);
 	}
 	return off;
+}
+
+/*
+ * Biometric-protected secret storage (/phone/bio_*) — iOS impl.
+ *
+ * Keys live in the Keychain under a synthetic service identifier
+ * derived from the slot name; kSecAttrAccessControl is set to
+ * biometryCurrentSet so re-enrolling Face/Touch invalidates the
+ * stored entry (a re-enrol could be an adversary stealing the
+ * device and adding their face — the secret must not survive it).
+ *
+ * Each bio_store / bio_retrieve hands the OS its own LAContext so
+ * the Face/Touch ID prompt only covers a single operation.
+ */
+
+static NSString *
+bio_service_for(const char *name)
+{
+	return [NSString stringWithFormat:@"os.infernode.ios.bio.%s",
+		name ?: ""];
+}
+
+int
+phonebridge_bio_available(void)
+{
+	LAContext *ctx = [[LAContext alloc] init];
+	NSError *err = nil;
+	BOOL can = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+		error:&err];
+	if(!can){
+		fprintf(stderr, "phone: bio_available=0 (%s)\n",
+			err.localizedDescription.UTF8String ?: "unknown");
+		return 0;
+	}
+	return 1;
+}
+
+int
+phonebridge_bio_store(const char *name, const char *payload, int n,
+                      char *err, int errlen)
+{
+	if(name == NULL || name[0] == 0){
+		snprintf(err, errlen, "bio_store: missing name");
+		return -1;
+	}
+	if(payload == NULL || n <= 0){
+		snprintf(err, errlen, "bio_store: missing payload");
+		return -1;
+	}
+
+	/* Synchronous biometric prompt — must run on the UIKit main
+	 * queue. devphone calls us on an Inferno kproc; bounce via a
+	 * semaphore. */
+	__block int rc = -1;
+	__block NSString *errMsg = nil;
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	NSData *data = [NSData dataWithBytes:payload length:(NSUInteger)n];
+	NSString *service = bio_service_for(name);
+
+	dispatch_async(dispatch_get_main_queue(), ^{
+		CFErrorRef cfErr = NULL;
+		SecAccessControlRef acl = SecAccessControlCreateWithFlags(
+			kCFAllocatorDefault,
+			kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+			kSecAccessControlBiometryCurrentSet,
+			&cfErr);
+		if(acl == NULL){
+			NSError *e = (__bridge_transfer NSError *)cfErr;
+			errMsg = [NSString stringWithFormat:@"acl: %@",
+				e.localizedDescription];
+			dispatch_semaphore_signal(done);
+			return;
+		}
+
+		/* Remove any pre-existing entry — SecItemAdd would otherwise
+		 * return errSecDuplicateItem.  Match by service only; we
+		 * only ever store one entry per slot. */
+		NSDictionary *delQuery = @{
+			(__bridge id)kSecClass:        (__bridge id)kSecClassGenericPassword,
+			(__bridge id)kSecAttrService:  service,
+		};
+		SecItemDelete((__bridge CFDictionaryRef)delQuery);
+
+		NSDictionary *addQuery = @{
+			(__bridge id)kSecClass:           (__bridge id)kSecClassGenericPassword,
+			(__bridge id)kSecAttrService:     service,
+			(__bridge id)kSecValueData:       data,
+			(__bridge id)kSecAttrAccessControl: (__bridge id)acl,
+			(__bridge id)kSecUseAuthenticationContext: [[LAContext alloc] init],
+		};
+		OSStatus st = SecItemAdd((__bridge CFDictionaryRef)addQuery, NULL);
+		CFRelease(acl);
+		if(st != errSecSuccess){
+			errMsg = [NSString stringWithFormat:@"SecItemAdd: %d", (int)st];
+		} else {
+			rc = 0;
+		}
+		dispatch_semaphore_signal(done);
+	});
+	dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+
+	if(rc != 0 && errMsg != nil)
+		snprintf(err, errlen, "%s", errMsg.UTF8String);
+	return rc;
+}
+
+int
+phonebridge_bio_retrieve(const char *name, char *buf, int buflen,
+                         char *err, int errlen)
+{
+	if(name == NULL || name[0] == 0){
+		snprintf(err, errlen, "bio_retrieve: missing name");
+		return -1;
+	}
+	if(buf == NULL || buflen <= 0){
+		snprintf(err, errlen, "bio_retrieve: no buffer");
+		return -1;
+	}
+
+	__block int rc = -1;
+	__block NSString *errMsg = nil;
+	__block NSData *result = nil;
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	NSString *service = bio_service_for(name);
+
+	dispatch_async(dispatch_get_main_queue(), ^{
+		LAContext *ctx = [[LAContext alloc] init];
+		ctx.localizedReason = [NSString stringWithFormat:
+			@"Authenticate to retrieve %s key", name];
+		NSDictionary *query = @{
+			(__bridge id)kSecClass:        (__bridge id)kSecClassGenericPassword,
+			(__bridge id)kSecAttrService:  service,
+			(__bridge id)kSecReturnData:   @YES,
+			(__bridge id)kSecMatchLimit:   (__bridge id)kSecMatchLimitOne,
+			(__bridge id)kSecUseAuthenticationContext: ctx,
+		};
+		CFTypeRef out = NULL;
+		OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)query, &out);
+		if(st == errSecSuccess){
+			result = (__bridge_transfer NSData *)out;
+		} else {
+			errMsg = [NSString stringWithFormat:@"SecItemCopyMatching: %d",
+				(int)st];
+		}
+		dispatch_semaphore_signal(done);
+	});
+	dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+
+	if(result == nil){
+		snprintf(err, errlen, "%s",
+			errMsg.UTF8String ?: "bio_retrieve: unknown failure");
+		return -1;
+	}
+	int n = (int)result.length;
+	if(n > buflen)
+		n = buflen;
+	memcpy(buf, result.bytes, (size_t)n);
+	rc = n;
+	return rc;
 }

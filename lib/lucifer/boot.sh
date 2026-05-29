@@ -41,6 +41,19 @@ if {! ~ $skiplogon 1} {
 		llmkey=`{sed -n 's/^keyfile=//p' /lib/ndb/llm >[2] /dev/null}
 		if {~ $llmkey ''} { llmkey=/lib/keyring/serve-llm }
 		if {~ $llmauth keyring} {
+			# Biometric secstore opportunistic unlock (INFR-169
+			# follow-up). If /phone/bio_status reports available
+			# and the on-disk keyfile is missing, ask the OS
+			# secure-element to release the slot. The user sees a
+			# FaceID/TouchID prompt. /tmp/serve-llm is tmpfs in
+			# the per-boot namespace, so it never hits flash.
+			if {! ftest -f $llmkey} {
+				if {~ `{cat /phone/bio_status >[2] /dev/null} available} {
+					if {bioget serve-llm /tmp/serve-llm >[2] /dev/null} {
+						llmkey=/tmp/serve-llm
+					}
+				}
+			}
 			if {ftest -f $llmkey} {
 				mount -k $llmkey $llmdial /n/llm >[2] /dev/null
 			}{

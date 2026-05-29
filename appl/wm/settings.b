@@ -39,6 +39,9 @@ include "wmclient.m";
 	wmclient: Wmclient;
 	Window: import wmclient;
 
+include "keyringinst.m";
+	keyringinst: Keyringinst;
+
 include "string.m";
 	str: String;
 
@@ -199,6 +202,9 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	wmclient = load Wmclient Wmclient->PATH;
 	str = load String String->PATH;
 	dialnorm = load Dialnorm Dialnorm->PATH;
+	keyringinst = load Keyringinst Keyringinst->PATH;
+	if(keyringinst != nil)
+		keyringinst->init();
 	stderr = sys->fildes(2);
 
 	if(ctxt == nil) {
@@ -1511,7 +1517,7 @@ applyllm()
 		# mounting from this user-space process would not be visible
 		# to wm's children (Veltro etc). Tell the user to restart.
 		writellmconfig_full("remote", "", "", "", addr,
-			"keyring", KEYRING_PATH);
+			"keyring", Keyringinst->DEFAULT_PATH);
 		if(keyring_present())
 			flashstatus("LLM dial + keyring saved — close InferNode and relaunch");
 		else
@@ -1632,8 +1638,6 @@ readllmmodels(): array of string
 	return readlines("/n/llm/models");
 }
 
-KEYRING_PATH: con "/lib/keyring/serve-llm";
-
 writellmconfig(mode, backend, url, model, dial: string)
 {
 	writellmconfig_full(mode, backend, url, model, dial, "", "");
@@ -1643,7 +1647,7 @@ writellmconfig(mode, backend, url, model, dial: string)
 # Pass auth="" + keyfile="" to leave any existing entries untouched
 # (matches the old single-arg writellmconfig behaviour). Pass
 # non-empty values to overwrite them — Remote 9P (INFR-169) takes
-# auth="keyring" + keyfile=KEYRING_PATH so the boot path uses
+# auth="keyring" + keyfile=Keyringinst->DEFAULT_PATH so the boot path uses
 # mount -k instead of falling through to anonymous mount -A.
 writellmconfig_full(mode, backend, url, model, dial, auth, keyfile: string)
 {
@@ -1680,23 +1684,23 @@ writellmconfig_full(mode, backend, url, model, dial, auth, keyfile: string)
 	sys->write(fd, b, len b);
 }
 
-# Keyring helpers (INFR-169).
+# Keyring helpers (INFR-169) — thin shims around keyringinst so the
+# install path can be unit-tested without dragging in wmclient or
+# the Settings UI. See appl/lib/keyringinst.b and
+# tests/keyringinst_test.b.
 keyring_present(): int
 {
-	(ok, nil) := sys->stat(KEYRING_PATH);
-	return ok >= 0;
+	return keyringinst->present();
 }
 
 keyring_status_text(): string
 {
-	if(keyring_present())
-		return "Keyfile: present at " + KEYRING_PATH;
-	return "Keyfile: missing — install or push before relaunch";
+	return keyringinst->status_text();
 }
 
-# Read the system snarf and write it to KEYRING_PATH with mode 0600.
-# Permissions matter — factotum / mount -k will refuse a world-readable
-# signer key in production. Existing file is overwritten in place.
+# Snarf → prepare_payload → install_payload. Settings owns the UI
+# (snarf read + flashstatus); keyringinst owns the file write so we
+# can exercise it from a test that targets /tmp.
 install_keyring_from_snarf()
 {
 	buf := wmclient->snarfget();
@@ -1704,36 +1708,14 @@ install_keyring_from_snarf()
 		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
 		return;
 	}
-	# Best-effort: trim a trailing CR (Windows clipboards) so the
-	# stored file matches the canonical line-oriented format.
-	s := buf;
-	if(len s > 0 && s[len s - 1] == '\r')
-		s = s[:len s - 1];
-	# Ensure the keyring directory exists; create is idempotent.
-	d := KEYRING_PATH;
-	slash := -1;
-	for(i := 0; i < len d; i++)
-		if(d[i] == '/')
-			slash = i;
-	if(slash > 0) {
-		dir := d[:slash];
-		mkfd := sys->create(dir, Sys->OREAD, Sys->DMDIR | 8r755);
-		if(mkfd != nil)
-			mkfd = nil;
-	}
-	fd := sys->create(KEYRING_PATH, Sys->OWRITE, 8r600);
-	if(fd == nil) {
-		flashstatus(sys->sprint("cannot write keyfile: %r"));
-		return;
-	}
-	b := array of byte s;
-	n := sys->write(fd, b, len b);
-	if(n != len b) {
-		flashstatus(sys->sprint("short write to keyfile: %r"));
+	payload := keyringinst->prepare_payload(buf);
+	err := keyringinst->install_payload(payload, Keyringinst->DEFAULT_PATH);
+	if(err != nil) {
+		flashstatus(err);
 		return;
 	}
 	flashstatus(sys->sprint("keyfile installed (%d bytes) at %s",
-		len b, KEYRING_PATH));
+		len payload, Keyringinst->DEFAULT_PATH));
 }
 
 islinekey(line, key: string): int

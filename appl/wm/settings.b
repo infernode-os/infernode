@@ -39,6 +39,12 @@ include "wmclient.m";
 	wmclient: Wmclient;
 	Window: import wmclient;
 
+include "keyringinst.m";
+	keyringinst: Keyringinst;
+
+include "bioauth.m";
+	bioauth: Bioauth;
+
 include "string.m";
 	str: String;
 
@@ -135,6 +141,7 @@ llm_dial_tf: ref Textfield;
 llm_keyring_hdr: ref Label;
 llm_keyring_status_label: ref Label;
 llm_keyring_install_btn: ref Button;
+llm_keyring_bio_btn: ref Button;
 llm_apply_btn: ref Button;
 llm_is_remote: int;
 llm_mode_set: int;		# 1 after first layout or click — suppresses config re-read
@@ -199,6 +206,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	wmclient = load Wmclient Wmclient->PATH;
 	str = load String String->PATH;
 	dialnorm = load Dialnorm Dialnorm->PATH;
+	keyringinst = load Keyringinst Keyringinst->PATH;
+	if(keyringinst != nil)
+		keyringinst->init();
+
+	bioauth = load Bioauth Bioauth->PATH;
+	if(bioauth != nil)
+		bioauth->init();
 	stderr = sys->fildes(2);
 
 	if(ctxt == nil) {
@@ -506,7 +520,23 @@ layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 		llm_keyring_install_btn = Button.mk(
 			Rect((cx, cy), (cx + 280, cy + btnh)),
 			"Install keyfile from clipboard");
-		cy += btnh + FORM_MARGIN;
+		cy += btnh + 4;
+
+		# Biometric-protected install (INFR-169 follow-up). Only
+		# shown when /phone/bio_status reports available — on
+		# desktop / Android stub / no-enrollment devices the row
+		# would just lie. The button stores the same clipboard
+		# payload under Keychain biometryCurrentSet ("serve-llm"
+		# slot) so the launcher can fetch it via FaceID/TouchID
+		# instead of leaving the plaintext key on /lib/keyring.
+		if(bioauth != nil && bioauth->available() == Bioauth->AVAIL_OK) {
+			llm_keyring_bio_btn = Button.mk(
+				Rect((cx, cy), (cx + 280, cy + btnh)),
+				"Install + protect with biometric");
+			cy += btnh + FORM_MARGIN;
+		} else {
+			cy += FORM_MARGIN;
+		}
 	} else {
 		# Section header: Backend
 		llm_backend_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Backend", 1, LEFT);
@@ -917,6 +947,8 @@ drawllm()
 			llm_keyring_status_label.draw(w.image);
 		if(llm_keyring_install_btn != nil)
 			llm_keyring_install_btn.draw(w.image);
+		if(llm_keyring_bio_btn != nil)
+			llm_keyring_bio_btn.draw(w.image);
 	} else {
 		if(llm_backend_hdr != nil)
 			llm_backend_hdr.draw(w.image);
@@ -1169,6 +1201,19 @@ clickllm(ptr: ref Pointer)
 				llm_keyring_install_btn.contains(ptr.xy)) {
 			install_keyring_from_snarf();
 			# Refresh status label and redraw.
+			if(llm_keyring_status_label != nil) {
+				llm_keyring_status_label = Label.mk(
+					llm_keyring_status_label.r,
+					keyring_status_text(), 0, LEFT);
+			}
+			dirty = 1;
+			return;
+		}
+		# Install keyfile from snarf → /phone/bio_store under
+		# "serve-llm" slot (FaceID/TouchID-gated Keychain item).
+		if(llm_keyring_bio_btn != nil &&
+				llm_keyring_bio_btn.contains(ptr.xy)) {
+			install_keyring_to_biometric();
 			if(llm_keyring_status_label != nil) {
 				llm_keyring_status_label = Label.mk(
 					llm_keyring_status_label.r,
@@ -1511,7 +1556,7 @@ applyllm()
 		# mounting from this user-space process would not be visible
 		# to wm's children (Veltro etc). Tell the user to restart.
 		writellmconfig_full("remote", "", "", "", addr,
-			"keyring", KEYRING_PATH);
+			"keyring", Keyringinst->DEFAULT_PATH);
 		if(keyring_present())
 			flashstatus("LLM dial + keyring saved — close InferNode and relaunch");
 		else
@@ -1632,8 +1677,6 @@ readllmmodels(): array of string
 	return readlines("/n/llm/models");
 }
 
-KEYRING_PATH: con "/lib/keyring/serve-llm";
-
 writellmconfig(mode, backend, url, model, dial: string)
 {
 	writellmconfig_full(mode, backend, url, model, dial, "", "");
@@ -1643,7 +1686,7 @@ writellmconfig(mode, backend, url, model, dial: string)
 # Pass auth="" + keyfile="" to leave any existing entries untouched
 # (matches the old single-arg writellmconfig behaviour). Pass
 # non-empty values to overwrite them — Remote 9P (INFR-169) takes
-# auth="keyring" + keyfile=KEYRING_PATH so the boot path uses
+# auth="keyring" + keyfile=Keyringinst->DEFAULT_PATH so the boot path uses
 # mount -k instead of falling through to anonymous mount -A.
 writellmconfig_full(mode, backend, url, model, dial, auth, keyfile: string)
 {
@@ -1680,23 +1723,23 @@ writellmconfig_full(mode, backend, url, model, dial, auth, keyfile: string)
 	sys->write(fd, b, len b);
 }
 
-# Keyring helpers (INFR-169).
+# Keyring helpers (INFR-169) — thin shims around keyringinst so the
+# install path can be unit-tested without dragging in wmclient or
+# the Settings UI. See appl/lib/keyringinst.b and
+# tests/keyringinst_test.b.
 keyring_present(): int
 {
-	(ok, nil) := sys->stat(KEYRING_PATH);
-	return ok >= 0;
+	return keyringinst->present();
 }
 
 keyring_status_text(): string
 {
-	if(keyring_present())
-		return "Keyfile: present at " + KEYRING_PATH;
-	return "Keyfile: missing — install or push before relaunch";
+	return keyringinst->status_text();
 }
 
-# Read the system snarf and write it to KEYRING_PATH with mode 0600.
-# Permissions matter — factotum / mount -k will refuse a world-readable
-# signer key in production. Existing file is overwritten in place.
+# Snarf → prepare_payload → install_payload. Settings owns the UI
+# (snarf read + flashstatus); keyringinst owns the file write so we
+# can exercise it from a test that targets /tmp.
 install_keyring_from_snarf()
 {
 	buf := wmclient->snarfget();
@@ -1704,36 +1747,39 @@ install_keyring_from_snarf()
 		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
 		return;
 	}
-	# Best-effort: trim a trailing CR (Windows clipboards) so the
-	# stored file matches the canonical line-oriented format.
-	s := buf;
-	if(len s > 0 && s[len s - 1] == '\r')
-		s = s[:len s - 1];
-	# Ensure the keyring directory exists; create is idempotent.
-	d := KEYRING_PATH;
-	slash := -1;
-	for(i := 0; i < len d; i++)
-		if(d[i] == '/')
-			slash = i;
-	if(slash > 0) {
-		dir := d[:slash];
-		mkfd := sys->create(dir, Sys->OREAD, Sys->DMDIR | 8r755);
-		if(mkfd != nil)
-			mkfd = nil;
-	}
-	fd := sys->create(KEYRING_PATH, Sys->OWRITE, 8r600);
-	if(fd == nil) {
-		flashstatus(sys->sprint("cannot write keyfile: %r"));
-		return;
-	}
-	b := array of byte s;
-	n := sys->write(fd, b, len b);
-	if(n != len b) {
-		flashstatus(sys->sprint("short write to keyfile: %r"));
+	payload := keyringinst->prepare_payload(buf);
+	err := keyringinst->install_payload(payload, Keyringinst->DEFAULT_PATH);
+	if(err != nil) {
+		flashstatus(err);
 		return;
 	}
 	flashstatus(sys->sprint("keyfile installed (%d bytes) at %s",
-		len b, KEYRING_PATH));
+		len payload, Keyringinst->DEFAULT_PATH));
+}
+
+# Snarf → prepare_payload → bioauth->store. The slot name "serve-llm"
+# is what boot.sh asks for via /phone/bio_retrieve before falling back
+# to the plaintext file. Triggers the OS biometric prompt on the
+# device — caller blocks here until the user authenticates.
+install_keyring_to_biometric()
+{
+	if(bioauth == nil) {
+		flashstatus("biometric: module not loaded");
+		return;
+	}
+	buf := wmclient->snarfget();
+	if(buf == nil || len buf == 0) {
+		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
+		return;
+	}
+	payload := keyringinst->prepare_payload(buf);
+	err := bioauth->store("serve-llm", payload);
+	if(err != nil) {
+		flashstatus(err);
+		return;
+	}
+	flashstatus(sys->sprint("keyfile sealed in biometric store (%d bytes, slot serve-llm)",
+		len payload));
 }
 
 islinekey(line, key: string): int

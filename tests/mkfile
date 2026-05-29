@@ -100,6 +100,10 @@ TARG=\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
 	matrix_perfdashboard_test.dis\
+	keyringinst_test.dis\
+	contacts_tool_test.dis\
+	sms_msgsrc_test.dis\
+	bioauth_test.dis\
 
 MODULES=
 

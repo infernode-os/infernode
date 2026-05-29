@@ -83,6 +83,39 @@ int	phonebridge_contacts(char *buf, int buflen);
 void	phonebridge_post_sms(const char *line, int n);
 void	phonebridge_post_call_event(const char *line, int n);
 
+/*
+ * Biometric-protected secret storage. Same contract on every platform;
+ * implementations branch on what the OS exposes:
+ *
+ *   iOS:     LAContext + Keychain (kSecAttrAccessControl
+ *            biometryCurrentSet — re-enrolling Face/Touch invalidates
+ *            the entry, which is the correct security posture).
+ *   Android: BiometricPrompt + KeyStore + EncryptedSharedPreferences
+ *            keyed by setUserAuthenticationRequired(true) — INFR-182
+ *            wires this once the JNI surface is in place.
+ *
+ * Names are short ASCII identifiers (no embedded NUL, no '/'); the
+ * canonical one is "serve-llm" for the remote-LLM keyring keyfile.
+ *
+ * bio_available — returns 1 if any biometric is enrolled and
+ * usable, 0 if not (no enrollment, lock-out from too many failures,
+ * device lacks the hardware). Never prompts. Cheap.
+ *
+ * bio_store — prompts for biometric, then writes payload[0..n] to the
+ * platform keystore under `name`. Returns 0 on success, -1 on error
+ * (canceled, no biometric, write failure). On -1, `err` carries a
+ * short human-readable string.
+ *
+ * bio_retrieve — prompts for biometric, then copies the stored
+ * payload into buf[0..buflen]. Returns bytes written on success, -1
+ * on error (no entry, canceled, etc).
+ */
+int	phonebridge_bio_available(void);
+int	phonebridge_bio_store(const char *name, const char *payload, int n,
+			     char *err, int errlen);
+int	phonebridge_bio_retrieve(const char *name, char *buf, int buflen,
+				char *err, int errlen);
+
 #ifdef __cplusplus
 }
 #endif

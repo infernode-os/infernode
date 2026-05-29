@@ -41,6 +41,11 @@
 	     /phone/contacts. Authorization status is checked on every read. -->
 	<key>NSContactsUsageDescription</key>
 	<string>InferNode reads your contacts so the Veltro agent can resolve names like "text mom" to phone numbers for SMS and dialling.</string>
+	<!-- /phone/bio_* uses LocalAuthentication + Keychain biometryCurrentSet
+	     to protect remote-LLM and secstore keys. iOS displays this string
+	     under the Face ID prompt. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>InferNode uses Face ID to unlock signed keys (LLM mount, secstore) without prompting for a password every launch.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

@@ -36,10 +36,6 @@ include "draw.m";
 include "string.m";
 	str: String;
 
-include "bufio.m";
-	bufio: Bufio;
-	Iobuf: import bufio;
-
 include "../tool.m";
 
 ToolContacts: module {
@@ -48,6 +44,13 @@ ToolContacts: module {
 	doc:    fn(): string;
 	exec:   fn(args: string): string;
 	schema: fn(): string;
+
+	# Pure helpers exposed for tests/contacts_tool_test.b. filter()
+	# takes the raw bytes of /phone/contacts and a query, returns
+	# what exec() would return, never touching disk. Test loads
+	# this module, calls init(), then filter() — same path exec()
+	# walks once the file open succeeds.
+	filter: fn(body: string, query: string): string;
 };
 
 PHONE_CONTACTS: con "/phone/contacts";
@@ -61,9 +64,6 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
-	bufio = load Bufio Bufio->PATH;
-	if(bufio == nil)
-		return "cannot load Bufio";
 	return nil;
 }
 
@@ -113,43 +113,65 @@ schema(): string
 
 exec(args: string): string
 {
-	q := args;
-	# Trim surrounding whitespace.
+	# Slurp the whole /phone/contacts (devphone caches the snapshot
+	# per-channel; for any phone-sized address book this is a few
+	# tens of KB) then defer all the parsing / matching to filter()
+	# so the test exercises the same code with crafted bodies.
+	fd := sys->open(PHONE_CONTACTS, Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("contacts: cannot open %s: %r (is /phone bound?)",
+			PHONE_CONTACTS);
+	body := "";
+	chunk := array[4096] of byte;
+	for(;;) {
+		n := sys->read(fd, chunk, len chunk);
+		if(n <= 0)
+			break;
+		body += string chunk[:n];
+	}
+	return filter(body, args);
+}
+
+# Pure-string filter shared by exec() and the test. body is the raw
+# bytes from /phone/contacts (TSV with optional "# …" status lines);
+# query is the (untrimmed) name substring. Returns the TSV header +
+# matching rows, or "contacts: no matches for '<q>'" if nothing matched.
+# Status lines from the bridge ("# permission denied …") are surfaced
+# verbatim so the agent can tell denied from empty.
+filter(body, query: string): string
+{
+	q := query;
 	while(len q > 0 && (q[0] == ' ' || q[0] == '\t'))
 		q = q[1:];
 	while(len q > 0 && (q[len q - 1] == ' ' || q[len q - 1] == '\t' || q[len q - 1] == '\n'))
 		q = q[0:len q - 1];
 	ql := str->tolower(q);
 
-	iob := bufio->open(PHONE_CONTACTS, Sys->OREAD);
-	if(iob == nil)
-		return sys->sprint("contacts: cannot open %s: %r (is /phone bound?)",
-			PHONE_CONTACTS);
-
 	out := "name\tkind\tnumber\n";
 	matched := 0;
-	for(;;) {
-		line := iob.gets('\n');
-		if(line == nil || len line == 0)
-			break;
-		# Strip trailing newline.
-		if(line[len line - 1] == '\n')
-			line = line[0:len line - 1];
+	# Track whether the bridge emitted any "# …" status line. If it
+	# did, the agent MUST see it — "no matches" is a misleading reply
+	# when the real story is "permission denied".
+	status_seen := 0;
+	# Walk body line-by-line on raw \n boundaries — no bufio because
+	# the test passes in a string, not a file descriptor.
+	i := 0;
+	while(i < len body) {
+		j := i;
+		while(j < len body && body[j] != '\n')
+			j++;
+		line := body[i:j];
+		i = j + 1;
 		if(len line == 0)
 			continue;
-		# Skip bridge status / error lines ("# …").
 		if(line[0] == '#') {
-			# Surface the bridge's status so the agent knows *why*
-			# results are missing rather than silently empty.
 			out += line + "\n";
+			status_seen = 1;
 			continue;
 		}
-		# TSV: name\tkind\tnumber
-		# Match against the name column (first field). tolower for
-		# case-insensitive substring; empty query matches everything.
 		tab := -1;
-		for(i := 0; i < len line; i++)
-			if(line[i] == '\t') { tab = i; break; }
+		for(k := 0; k < len line; k++)
+			if(line[k] == '\t') { tab = k; break; }
 		if(tab < 0)
 			continue;	# malformed row — drop
 		name := line[0:tab];
@@ -164,7 +186,7 @@ exec(args: string): string
 		}
 	}
 
-	if(matched == 0)
+	if(matched == 0 && !status_seen)
 		return sys->sprint("contacts: no matches for '%s'", q);
 	return out;
 }

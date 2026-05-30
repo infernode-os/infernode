@@ -46,6 +46,16 @@
 	     under the Face ID prompt. -->
 	<key>NSFaceIDUsageDescription</key>
 	<string>InferNode uses Face ID to unlock signed keys (LLM mount, secstore) without prompting for a password every launch.</string>
+	<!-- Voice over 9P (INFR-186). 'audio' keeps the AVAudioSession alive
+	     after the screen locks so an in-progress call survives lock; 'voip'
+	     gives iOS a hint to wake the app for incoming voice events without
+	     it being killed in the background. Without either, the SDL3 audio
+	     stream is torn down on lock and the call drops. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+	</array>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

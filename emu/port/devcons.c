@@ -481,7 +481,9 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 				/* text field lost focus — hide the soft keyboard. */
 				setsoftkbd(0);
 			} else if(strncmp(a, "kbd rect", 8) == 0){
-				/* Focused-widget rect in window points:
+				/* Focused-widget rect in Inferno screen pixels (the
+				 * backend maps them to window points; the GUI only
+				 * knows screen pixels):
 				 *   kbd rect <x> <y> <w> <h>
 				 * Replaces the hard-coded "top" / "bottom 56pt"
 				 * region in update_text_input_area, so SDL's

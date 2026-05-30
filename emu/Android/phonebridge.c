@@ -42,6 +42,51 @@
 JavaVM *g_vm = NULL;
 
 /*
+ * Cached references to io.infernode.InfernodePhoneBridge so android_dial
+ * can call into Kotlin from any (Inferno kproc) thread.
+ *
+ * FindClass from an AttachCurrentThread'd pthread uses the SYSTEM
+ * classloader, not the app classloader — so it cannot resolve
+ * `io/infernode/InfernodePhoneBridge`. Cache the jclass as a global ref
+ * here, populated from JNI_OnLoad in jni-emu.c (which runs under the
+ * app classloader because that's what loaded libemu.so).
+ *
+ * Populated by phonebridge_jni_init below, invoked from JNI_OnLoad.
+ * Stays NULL on builds without the JNI surface (headless o.emu) and
+ * android_dial fails cleanly in that case.
+ */
+jclass    g_bridge_class;    /* global ref, owned */
+jmethodID g_bridge_dial_mid; /* dial(Ljava/lang/String;)I */
+
+void
+phonebridge_jni_init(JNIEnv *env)
+{
+	jclass local;
+	jmethodID mid;
+
+	local = (*env)->FindClass(env, "io/infernode/InfernodePhoneBridge");
+	if(local == NULL){
+		(*env)->ExceptionClear(env);
+		fprintf(stderr,
+			"phone: JNI_OnLoad: FindClass(InfernodePhoneBridge) failed\n");
+		return;
+	}
+	mid = (*env)->GetStaticMethodID(env, local, "dial",
+		"(Ljava/lang/String;)I");
+	if(mid == NULL){
+		(*env)->ExceptionClear(env);
+		(*env)->DeleteLocalRef(env, local);
+		fprintf(stderr,
+			"phone: JNI_OnLoad: GetStaticMethodID(dial) failed\n");
+		return;
+	}
+	g_bridge_class = (*env)->NewGlobalRef(env, local);
+	(*env)->DeleteLocalRef(env, local);
+	g_bridge_dial_mid = mid;
+	fprintf(stderr, "phone: JNI_OnLoad: InfernodePhoneBridge.dial cached\n");
+}
+
+/*
  * INFR-201: fire Intent.ACTION_CALL via InfernodePhoneBridge.dial.
  *
  * Runs on whichever thread called phonebridge_phone_ctl (Inferno
@@ -82,21 +127,12 @@ android_dial(const char *number, char *err, int errlen)
 		return -1;
 	}
 
-	cls = (*env)->FindClass(env, "io/infernode/InfernodePhoneBridge");
-	if(cls == NULL){
-		(*env)->ExceptionClear(env);
+	cls = g_bridge_class;
+	mid = g_bridge_dial_mid;
+	if(cls == NULL || mid == NULL){
 		snprintf(err, errlen,
-			"phone: FindClass(InfernodePhoneBridge) failed");
-		if(attached) (*g_vm)->DetachCurrentThread(g_vm);
-		return -1;
-	}
-	mid = (*env)->GetStaticMethodID(env, cls, "dial",
-		"(Ljava/lang/String;)I");
-	if(mid == NULL){
-		(*env)->ExceptionClear(env);
-		(*env)->DeleteLocalRef(env, cls);
-		snprintf(err, errlen,
-			"phone: GetStaticMethodID(dial) failed");
+			"phone: bridge class/methodID not cached "
+			"(JNI_OnLoad lookup failed; check libemu.so loader)");
 		if(attached) (*g_vm)->DetachCurrentThread(g_vm);
 		return -1;
 	}
@@ -109,7 +145,6 @@ android_dial(const char *number, char *err, int errlen)
 	}
 
 	(*env)->DeleteLocalRef(env, jnum);
-	(*env)->DeleteLocalRef(env, cls);
 	if(attached)
 		(*g_vm)->DetachCurrentThread(g_vm);
 

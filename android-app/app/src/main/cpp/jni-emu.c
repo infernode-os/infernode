@@ -44,6 +44,12 @@ extern int emu_run(int argc, char **argv);
  * both the headless o.emu and libemu.so. We just read/write it from
  * JNI_OnLoad (INFR-201). */
 extern JavaVM *g_vm;
+
+/* Populated by phonebridge_jni_init below. Cached here so JNI_OnLoad —
+ * which runs under the app classloader — can resolve our Kotlin bridge
+ * class. FindClass from any other thread sees only the system loader
+ * and can't reach io.infernode.* classes. */
+extern void phonebridge_jni_init(JNIEnv *env);
 static jobject g_listener;          /* global ref */
 static jmethodID g_onLine_mid;
 static pthread_mutex_t g_listener_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -309,11 +315,18 @@ Java_io_infernode_Emu_setOutputListener(JNIEnv *env, jclass cls, jobject listene
 JNIEXPORT jint JNICALL
 JNI_OnLoad(JavaVM *vm, void *reserved)
 {
+	JNIEnv *env;
 	(void)reserved;
 	g_vm = vm;
 	capture_stdio();
 	__android_log_write(ANDROID_LOG_INFO, TAG,
 		"libemu.so JNI_OnLoad — stdin/stdout routed");
+	/* Cache InfernodePhoneBridge here while the app classloader is
+	 * the current loader. From an AttachCurrentThread'd pthread the
+	 * loader is the system one and our app classes are invisible. */
+	if((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) == JNI_OK){
+		phonebridge_jni_init(env);
+	}
 	return JNI_VERSION_1_6;
 }
 

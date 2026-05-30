@@ -220,6 +220,19 @@ cp -a "$ROOT/dis"    "$ASSETS/dis"
 [ -d "$ROOT/module" ] && cp -a "$ROOT/module" "$ASSETS/module" || true
 [ -d "$ROOT/fonts" ]  && cp -a "$ROOT/fonts"  "$ASSETS/fonts"  || true
 
+# Inferno expects /n to exist as the standard mount point root
+# (sh/profile mounts mntgen there). The asset-tree extractor only
+# creates directories that contain files, so we need /n to ship
+# with a placeholder file in it. Without this msg9p fails with
+# `mount failed: '/n' file does not exist` and Lucifer never starts.
+# IMPORTANT: dot-prefixed names (.keep, .gitkeep, etc.) get stripped
+# by aapt during APK packaging, so use a normal name. Same trick for
+# every other Inferno-side bind/mount root that ships empty.
+for d in n phone usr/inferno/secstore usr/inferno/tmp; do
+    mkdir -p "$ASSETS/$d"
+    touch    "$ASSETS/$d/KEEPDIR"
+done
+
 ASSET_SIZE=$(du -sh "$ASSETS" | cut -f1)
 echo "    -> $ASSETS ($ASSET_SIZE)"
 

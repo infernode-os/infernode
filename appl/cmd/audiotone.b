@@ -25,7 +25,8 @@ Audiotone: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-RATE: con 44100;
+DEFAULT_RATE: con 44100;
+DEFAULT_CHANS: con 2;
 ONMS: con 250;		# ms of tone per pulse
 OFFMS: con 250;		# ms of silence per pulse
 NPULSES: con 10;	# total pulses (so ~5 s end-to-end)
@@ -44,10 +45,36 @@ init(nil: ref Draw->Context, args: list of string)
 	# and play out the peer's speaker. Same audible result on
 	# loopback (peer == self over tcp!127.0.0.1!7070) but tests every
 	# 9P hop in between.
+	# Parse simple flags: -r RATE, -c CHANS, then optional positional
+	# target path (defaults to /dev/audio).
+	#
+	# audiotone /n/opus/enc -r 48000 -c 1   # match opus device's defaults
+	# audiotone /dev/audio                  # legacy: 44.1 kHz stereo to spk
+	#
+	# A target file that isn't audio-shaped (e.g. /n/opus/enc) should NOT
+	# get the audioctl side-effect — only paths ending in "audio".
+	RATE := DEFAULT_RATE;
+	CHANS := DEFAULT_CHANS;
 	target := "/dev/audio";
 	args = tl args;	# drop argv[0]
-	if(args != nil)
-		target = hd args;
+	while(args != nil) {
+		a := hd args;
+		args = tl args;
+		case a {
+		"-r" =>
+			if(args != nil) {
+				RATE = int hd args;
+				args = tl args;
+			}
+		"-c" =>
+			if(args != nil) {
+				CHANS = int hd args;
+				args = tl args;
+			}
+		* =>
+			target = a;
+		}
+	}
 
 	sys->bind("#A", "/dev", Sys->MAFTER);
 
@@ -62,15 +89,20 @@ init(nil: ref Draw->Context, args: list of string)
 	# so this works over a 9P mount too: /n/voice/audio ->
 	# /n/voice/audioctl. Best-effort: if the ctl write fails (path
 	# missing, etc.) we fall through and let the backend pick.
-	ctlpath := target;
-	if(len ctlpath >= 5 && ctlpath[len ctlpath - 5:] == "audio")
-		ctlpath = ctlpath[:len ctlpath - 5] + "audioctl";
-	cfd := sys->open(ctlpath, Sys->OWRITE);
-	if(cfd != nil) {
-		cmd := sys->sprint("rate %d\nchans 2\nbits 16\nenc pcm\n", RATE);
-		b := array of byte cmd;
-		sys->write(cfd, b, len b);
-		cfd = nil;
+	# Only derive an audioctl path for audio-shaped targets. /n/opus/enc
+	# isn't an audio device — it's a codec input — and writing PCM-format
+	# strings into it would be interpreted as PCM samples and encoded as
+	# noise.
+	if(len target >= 5 && target[len target - 5:] == "audio") {
+		ctlpath := target[:len target - 5] + "audioctl";
+		cfd := sys->open(ctlpath, Sys->OWRITE);
+		if(cfd != nil) {
+			cmd := sys->sprint("rate %d\nchans %d\nbits 16\nenc pcm\n",
+				RATE, CHANS);
+			b := array of byte cmd;
+			sys->write(cfd, b, len b);
+			cfd = nil;
+		}
 	}
 
 	fd := sys->open(target, Sys->OWRITE);
@@ -112,7 +144,9 @@ init(nil: ref Draw->Context, args: list of string)
 				v = 0;	# silence
 			}
 			phase++;
-			for(ch := 0; ch < 2; ch++) {
+			# Same value to every channel — a mono signal in
+			# CHANS-channel interleaved S16LE form.
+			for(ch := 0; ch < CHANS; ch++) {
 				buf[pos++] = byte (v & 16rFF);
 				buf[pos++] = byte ((v >> 8) & 16rFF);
 			}

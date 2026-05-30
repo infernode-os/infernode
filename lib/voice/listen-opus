@@ -1,0 +1,54 @@
+# voice/listen-opus — announce a 9P listener that exports our local
+# /n/opus device, so a dialer can stream Opus frames in and out and
+# the call runs at ~24 kbps instead of ~1.4 Mbps. INFR-187.
+#
+# Symmetric to voice/listen (which exports /dev for raw PCM); use one
+# or the other depending on whether the link is LAN/ZeroTier (PCM is
+# fine, simpler) or cellular (opus is necessary).
+#
+# Each side that wants to be reachable runs this. The local side also
+# wires its own audio device to the codec so its mic is encoded into
+# /n/opus/enc (drainable by the peer) and its decoded PCM from
+# /n/opus/dec is written back to /dev/audio (its speaker).
+#
+# Usage:
+#   sh /lib/voice/listen-opus           # port 7070
+#   sh /lib/voice/listen-opus 7071      # alt port
+
+load std
+
+port=$1
+if {~ $#port 0} {
+	port=7070
+}
+addr='tcp!*!'$port
+
+# Devaudio + devopus.
+bind -a '#A' /dev
+mkdir -p /n/opus
+bind '#Z' /n/opus
+
+# Match the codec and the audio device. Opus only supports
+# 8/12/16/24/48 kHz, so 48 kHz is the natural sample rate. Mono is
+# voice; bumping bitrate later is a ctl write away.
+echo 'rate 48000' > /n/opus/ctl
+echo 'chans 1' > /n/opus/ctl
+echo 'frame_ms 20' > /n/opus/ctl
+echo 'bitrate 24000' > /n/opus/ctl
+
+echo 'rate 48000' > /dev/audioctl
+echo 'chans 1' > /dev/audioctl
+echo 'bits 16' > /dev/audioctl
+
+# Local mic -> encoder; decoder -> local speaker. These run for the
+# lifetime of the listener so the peer's 9P reads of /n/opus/enc and
+# writes to /n/opus/dec see something to do.
+cat /dev/audio > /n/opus/enc &
+local_enc=$apid
+cat /n/opus/dec > /dev/audio &
+local_dec=$apid
+
+echo 'voice/listen-opus:' $addr 'exporting /n/opus (enc/dec/ctl/status)'
+echo '  local enc pid=' $local_enc '(mic -> encoder)'
+echo '  local dec pid=' $local_dec '(decoder -> speaker)'
+listen -A $addr { export /n/opus & }

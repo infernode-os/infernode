@@ -46,6 +46,12 @@
 	     under the Face ID prompt. -->
 	<key>NSFaceIDUsageDescription</key>
 	<string>InferNode uses Face ID to unlock signed keys (LLM mount, secstore) without prompting for a password every launch.</string>
+	<!-- Voice/dial audio (INFR-186, INFR-190). iOS hard-crashes the instant
+	     any microphone API is touched if this key is absent, so it is
+	     mandatory before /dev/audio can open the capture device. iOS shows
+	     this string in the microphone permission prompt. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>InferNode uses the microphone for voice and dial audio.</string>
 	<!-- Voice over 9P (INFR-186). 'audio' keeps the AVAudioSession alive
 	     after the screen locks so an in-progress call survives lock; 'voip'
 	     gives iOS a hint to wake the app for incoming voice events without

@@ -42,5 +42,10 @@ echo 'voice/test-tone: routing audiotone through' $addr
 audiotone /n/voice/audio
 
 # Done. Tear down the listener so a re-run doesn't fight for the port.
-echo kill >/prog/$listener_pid/ctl
+# The listener typically already exited on its own once the export
+# client (audiotone) closed the connection — guard the kill so a stale
+# pid doesn't blow up with "sh: cannot open /prog/N/ctl".
+if {ftest -e /prog/$listener_pid} {
+	echo kill >/prog/$listener_pid/ctl
+}
 echo 'voice/test-tone: done'

@@ -1,6 +1,7 @@
 # InferNode GUI boot sequence
 # Runs AFTER profile (invoked as: sh -l /lib/lucifer/boot.sh)
 
+
 # Warm trfs cache for the secstore overlay so logon and secstored can
 # find PAK/factotum files on second launch (trfs may not have read-ahead
 # the directory contents yet when the overlay bind was set up in profile).

@@ -37,7 +37,17 @@
 #include "error.h"
 #include "audio.h"
 
+/*
+ * GUI_SDL3 is defined by mkfile-gui-sdl3 (GUIFLAGS=-DGUI_SDL3 ...).
+ * Without it (the headless macOS build), SDL3 headers aren't on the
+ * include path, so we fall through to the no-op stubs at the bottom
+ * of this file. devaudio.c still gets the symbols it links against;
+ * /dev/audio just behaves like the legacy "device unavailable" stub
+ * (open succeeds, read returns 0, write is a sink).
+ */
+#ifdef GUI_SDL3
 #include <SDL3/SDL.h>
+#endif
 
 /*
  * Token values for audio-tbls.c's source/format string maps. The OSS
@@ -56,6 +66,8 @@
 #define Audio_Alaw_Val		3
 
 #include "audio-tbls.c"
+
+#ifdef GUI_SDL3
 
 static int sdl_audio_inited;		/* SDL_InitSubSystem(SDL_INIT_AUDIO) done? */
 static SDL_AudioStream *in_stream;	/* mic capture */
@@ -303,3 +315,68 @@ audio_file_close(Chan *c)
 		qunlock(&outlock);
 	}
 }
+
+#else  /* !GUI_SDL3 — headless build, no SDL3 in the link */
+
+/*
+ * Stub backend for headless builds. The emu config still lists `audio`
+ * (the device table is shared between GUI and headless mkfiles, and
+ * mkdevlist doesn't gate on GUIBACK), so devaudio links against these
+ * symbols. /dev/audio appears in the namespace; opening it succeeds,
+ * reads return EOF, writes are sinks. No noise from a headless CI
+ * runner, no missing-symbol link error.
+ */
+
+static Audio_t av;
+
+void
+audio_file_init(void)
+{
+	audio_info_init(&av);
+}
+
+void
+audio_ctl_init(void)
+{
+}
+
+Audio_t*
+getaudiodev(void)
+{
+	return &av;
+}
+
+void
+audio_file_open(Chan *c, int omode)
+{
+	USED(c); USED(omode);
+}
+
+long
+audio_file_read(Chan *c, void *va, long n, vlong off)
+{
+	USED(c); USED(va); USED(n); USED(off);
+	return 0;
+}
+
+long
+audio_file_write(Chan *c, void *va, long n, vlong off)
+{
+	USED(c); USED(va); USED(off);
+	return n;
+}
+
+long
+audio_ctl_write(Chan *c, void *va, long n, vlong off)
+{
+	USED(c); USED(va); USED(off);
+	return n;
+}
+
+void
+audio_file_close(Chan *c)
+{
+	USED(c);
+}
+
+#endif /* GUI_SDL3 */

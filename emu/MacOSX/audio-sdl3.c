@@ -145,6 +145,26 @@ open_stream(SDL_AudioDeviceID dev, Audio_d *fmt)
 
 	s = SDL_OpenAudioDeviceStream(dev, &spec, NULL, NULL);
 	if(s == NULL) {
+		/* Inferno's `listen { ... & }` builtin forks the parent
+		 * process to run the accept block; SDL3's audio subsystem
+		 * state doesn't survive across that fork on macOS (the
+		 * CoreAudio thread is in the parent address space only),
+		 * so the child sees "Audio subsystem is not initialized"
+		 * the first time it touches the device even though our
+		 * sdl_audio_inited static is still 1. Retry once after a
+		 * forced re-init — that brings the audio subsystem back up
+		 * in the child without disturbing the parent. */
+		const char *err = SDL_GetError();
+		if(err != nil && strstr(err, "not initialized") != nil) {
+			SDL_QuitSubSystem(SDL_INIT_AUDIO);
+			sdl_audio_inited = 0;
+			if(SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+				sdl_audio_inited = 1;
+				s = SDL_OpenAudioDeviceStream(dev, &spec, NULL, NULL);
+			}
+		}
+	}
+	if(s == NULL) {
 		fprint(2, "audio-sdl3: SDL_OpenAudioDeviceStream(%s) failed: %s\n",
 			dev == SDL_AUDIO_DEVICE_DEFAULT_RECORDING ? "rec" : "play",
 			SDL_GetError());

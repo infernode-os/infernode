@@ -480,6 +480,44 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			} else if(strncmp(a, "kbd off", 7) == 0){
 				/* text field lost focus — hide the soft keyboard. */
 				setsoftkbd(0);
+			} else if(strncmp(a, "kbd rect", 8) == 0){
+				/* Focused-widget rect in window points:
+				 *   kbd rect <x> <y> <w> <h>
+				 * Replaces the hard-coded "top" / "bottom 56pt"
+				 * region in update_text_input_area, so SDL's
+				 * iOS keyboard avoidance slides the *real*
+				 * focused widget above the keyboard. The Limbo
+				 * helper is /dis/lib/softkbd (see appl/lib/softkbd.b).
+				 * Inline integer scan — Inferno port doesn't
+				 * pull in stdio so sscanf isn't available, and
+				 * atoi gives us no consumed-length back.
+				 * Bad/missing fields zero the rect, which
+				 * setsoftkbd_rect treats as "clear override". */
+				int vals[4] = {0, 0, 0, 0};
+				int got = 0;
+				char *p = a + 8;
+				while(got < 4){
+					int sign = 1, digit = 0, val = 0;
+					while(*p == ' ' || *p == '\t')
+						p++;
+					if(*p == '\0' || *p == '\n')
+						break;
+					if(*p == '-'){ sign = -1; p++; }
+					else if(*p == '+') p++;
+					while(*p >= '0' && *p <= '9'){
+						val = val * 10 + (*p - '0');
+						p++;
+						digit = 1;
+					}
+					if(!digit)
+						break;
+					vals[got++] = sign * val;
+				}
+				if(got == 4)
+					setsoftkbd_rect(vals[0], vals[1],
+							vals[2], vals[3]);
+				else
+					setsoftkbd_rect(0, 0, 0, 0);
 			}
 			if((a = strchr(a, ' ')) != nil)
 				a++;

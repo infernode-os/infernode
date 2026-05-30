@@ -43,6 +43,9 @@ include "lucitheme.m";
 
 include "menu.m";
 
+include "softkbd.m";
+	softkbd: Softkbd;
+
 Lucifer: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
@@ -446,6 +449,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	menumod = load Menu Menu->PATH;
 	if(menumod != nil)
 		menumod->init(display, mainfont);
+
+	# Soft-keyboard helper (INFR-166). Non-fatal if absent on a
+	# stripped build — reqkbd's legacy "kbd ontop / off" path keeps
+	# working without the rect override.
+	softkbd = load Softkbd Softkbd->PATH;
+	if(softkbd != nil)
+		softkbd->init();
 
 	# Load logo (skip on Windows — readpng hangs due to inflate filter issue)
 	emuhost := readfile("/env/emuhost");
@@ -1082,10 +1092,24 @@ reqkbd(on: int)
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
-	if(on)
+	if(on) {
 		sys->fprint(fd, "kbd ontop");
-	else
+		# INFR-166: hand the workspace zone rect to SDL as the
+		# focused area. wm apps that know their cursor rect more
+		# precisely (editor / xenith) refine this with their own
+		# softkbd->set_rect call; for forms (settings) and shells
+		# where we can't see the cursor from here, the zone rect is
+		# a conservative fallback — SDL slides only as much as
+		# needed for the zone bottom to clear the keyboard.
+		if(softkbd != nil && preszone.dx() > 0 && preszone.dy() > 0)
+			softkbd->set_rect(
+				preszone.min.x, preszone.min.y,
+				preszone.dx(), preszone.dy());
+	} else {
 		sys->fprint(fd, "kbd off");
+		if(softkbd != nil)
+			softkbd->clear_rect();
+	}
 }
 
 # 1 if the focused activity's active workspace app subscribed to the

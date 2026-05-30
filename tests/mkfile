@@ -104,6 +104,7 @@ TARG=\
 	contacts_tool_test.dis\
 	sms_msgsrc_test.dis\
 	bioauth_test.dis\
+	softkbd_test.dis\
 
 MODULES=
 

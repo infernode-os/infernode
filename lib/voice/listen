@@ -34,9 +34,18 @@ bind -a '#A' /dev
 echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
 echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 
-# announce + accept loop. Each accepted connection gets its own
-# `export /dev` server (the `&` keeps the listen loop free for the
-# next dial). -A turns off TLS for v0 — the spike runs over ZeroTier
-# which already provides a private overlay; v1 will keyring-auth.
-echo 'voice/listen:' $addr 'exporting /dev'
-listen -A $addr { export /dev & }
+# announce + accept loop. The pre-warm sleepers inside the listen
+# block run in the same address space as the export server (INFR-195):
+# they open /dev/audio for read + write to force audio_file_init +
+# SDL3 device open before the export loop runs, then hold the fd
+# alive so the peer's OREAD / OWRITE opens just bump the refcount
+# instead of touching SDL again — that's the path that fails when
+# the export worker can't reach a usable SDL state on macOS even
+# with SDL_Init / SDL_QuitSubSystem / SDL_Init retry.
+echo 'voice/listen:' $addr 'exporting /dev (pre-warmed)'
+listen -A $addr {
+	{sleep 99999 > /dev/audio} &
+	{sleep 99999 < /dev/audio > /dev/null} &
+	sleep 1
+	export /dev
+}

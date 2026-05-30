@@ -119,3 +119,11 @@ install:V: $O.$CONF
 <../port/portmkfile
 
 devfs.$O:	../port/devfs-posix.c
+
+# Audio backend (INFR-188). audio-sdl3.c here is a one-line forwarder
+# around emu/MacOSX/audio-sdl3.c — same SDL3 implementation as iOS.
+# The :N: records the dep so the Android object rebuilds when the
+# upstream macOS source changes. Android doesn't need an
+# AUDIO_PLATFORM_INIT_EXTERN (no per-app audio-session setup; SDL3
+# drives AAudio internally). RECORD_AUDIO permission is the APK's job.
+audio-sdl3.c:N:	../MacOSX/audio-sdl3.c

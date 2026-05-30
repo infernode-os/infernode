@@ -1,6 +1,7 @@
 # InferNode GUI boot sequence
 # Runs AFTER profile (invoked as: sh -l /lib/lucifer/boot.sh)
 
+
 # Warm trfs cache for the secstore overlay so logon and secstored can
 # find PAK/factotum files on second launch (trfs may not have read-ahead
 # the directory contents yet when the overlay bind was set up in profile).
@@ -101,13 +102,11 @@ sleep 1
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
-# Shell in the Workspace zone — mobile-only dev affordance to drive
-# /phone/sms / /phone/phone end-to-end without a working LLM (until
-# INFR-169 lifts and Veltro can call the sms / dial tools from chat).
-# On desktop the Main agent has no shell authority, so the resulting
-# tab just sits empty — gate the spawn on the mobile boot.
-if {~ $infmobile 1} {
-	echo 'create id=shell type=app dis=/dis/wm/shell.dis label=Shell' > /n/ui/activity/0/presentation/ctl
-	echo 'center id=shell' > /n/ui/activity/0/presentation/ctl
-}
+# (No auto-spawn of /dis/wm/shell in Activity 0 — the Main agent
+#  doesn't have shell authority, so the tab either sits empty or, on
+#  mobile, slides a shell in front of a context that shouldn't have
+#  it. The old `mobile SMS test affordance` from c71663e8 became
+#  redundant once Veltro picked up the sms / dial tools (INFR-150 /
+#  INFR-151 / INFR-169). Users that genuinely want a shell open a
+#  fresh task activity for it.)
 lucifer

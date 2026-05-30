@@ -108,6 +108,7 @@ TARG=\
 	sms_msgsrc_test.dis\
 	bioauth_test.dis\
 	softkbd_test.dis\
+	voice_scripts_test.dis\
 
 MODULES=
 

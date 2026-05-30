@@ -104,6 +104,39 @@ static int in_refcnt;			/* opens still holding /dev/audio for read */
 static int out_refcnt;			/* opens still holding /dev/audio for write */
 static Audio_t av;			/* current format (in.rate / chan / bits, out.*) */
 
+/*
+ * Per-stream queue caps in milliseconds (INFR-194). Without these
+ * SDL_AudioStream queues are unbounded; on a sustained 9P voice flow
+ * the macOS playback side accumulates whatever the network feeds it
+ * and the audio drifts minutes behind the speaker.
+ *
+ * Defaults are 0 (no cap) so non-voice workloads — audiotone, music
+ * playback, anything that bulk-writes ahead of the device — keep
+ * smooth, unbounded queueing. Voice opts in by writing to the ctl:
+ *
+ *   echo 'play_buffer_ms 100' > /dev/audioctl
+ *   echo 'rec_buffer_ms  100' > /dev/audioctl
+ *
+ * voice/listen and voice/dial both set these as part of their setup,
+ * so end users don't have to think about it.
+ *
+ * Drop policy is HEAD-drop (clear the stale catch-up backlog, keep
+ * the freshest data). For voice that's always right.
+ */
+static int play_buffer_ms = 0;
+static int rec_buffer_ms  = 0;
+
+/* bytes-per-second for a given Audio_d — used to translate the
+ * per-direction buffer cap from ms to bytes against the live format. */
+static int
+audio_bytes_per_sec(Audio_d *fmt)
+{
+	int bytes_per_sample = fmt->bits / 8;
+	if(bytes_per_sample <= 0)
+		bytes_per_sample = 2;
+	return (int)fmt->rate * (int)fmt->chan * bytes_per_sample;
+}
+
 static SDL_AudioFormat
 sdlfmt(ulong bits)
 {
@@ -248,6 +281,31 @@ audio_file_read(Chan *c, void *va, long n, vlong off)
 	if(in_stream == NULL)
 		return 0;
 
+	/*
+	 * Capture queue cap (INFR-194). If SDL has held onto more than
+	 * `rec_buffer_ms` of audio (because nobody read from us fast
+	 * enough), discard the stale portion. For voice that's right —
+	 * the listener wants fresh mic, not minutes-old chatter. Set
+	 * rec_buffer_ms=0 via ctl to disable.
+	 */
+	if(rec_buffer_ms > 0) {
+		int cap = (int)((vlong)audio_bytes_per_sec(&av.in) *
+				rec_buffer_ms / 1000);
+		int queued = SDL_GetAudioStreamAvailable(in_stream);
+		if(queued > cap) {
+			char drop[4096];
+			int over = queued - cap;
+			while(over > 0) {
+				int take = over > (int)sizeof drop
+					? (int)sizeof drop : over;
+				int r2 = SDL_GetAudioStreamData(in_stream,
+					drop, take);
+				if(r2 <= 0) break;
+				over -= r2;
+			}
+		}
+	}
+
 	/* Block until at least one byte is available. Inferno read(2) is
 	 * blocking on devaudio; SDL3 returns 0 on empty so we poll with
 	 * a short delay. */
@@ -270,6 +328,25 @@ audio_file_write(Chan *c, void *va, long n, vlong off)
 	USED(c); USED(off);
 	if(out_stream == NULL)
 		return 0;
+
+	/*
+	 * Playback queue cap (INFR-194). Without this, SDL's stream
+	 * queue grows unboundedly when the producer (a 9P export over
+	 * the network, in voice's case) feeds data faster than the
+	 * device drains at real time. A sustained Mac<->Samsung voice
+	 * call drifted minutes behind the speaker because of this.
+	 * Drop the stale head before writing the new tail. Set
+	 * play_buffer_ms=0 via ctl to disable (audiotone, music, etc).
+	 */
+	if(play_buffer_ms > 0) {
+		int cap = (int)((vlong)audio_bytes_per_sec(&av.out) *
+				play_buffer_ms / 1000);
+		int queued = SDL_GetAudioStreamQueued(out_stream);
+		if(queued > cap) {
+			SDL_ClearAudioStream(out_stream);
+		}
+	}
+
 	if(!SDL_PutAudioStreamData(out_stream, va, (int)n))
 		error((char*)SDL_GetError());
 	return n;
@@ -282,6 +359,26 @@ audio_ctl_write(Chan *c, void *va, long n, vlong off)
 	int r;
 
 	USED(c); USED(off);
+
+	/*
+	 * Buffer-cap verbs (INFR-194). Parsed and stripped here before
+	 * audioparse sees the rest of the line so audioparse doesn't
+	 * have to learn about non-format verbs. Each verb is a key + int.
+	 * "play_buffer_ms N" — cap playback queue depth, 0 = unbounded
+	 * "rec_buffer_ms  N" — cap capture queue depth, 0 = unbounded
+	 */
+	{
+		char *s = (char*)va;
+		if(n > 16 && memcmp(s, "play_buffer_ms ", 15) == 0) {
+			play_buffer_ms = atoi(s + 15);
+			return n;
+		}
+		if(n > 15 && memcmp(s, "rec_buffer_ms ", 14) == 0) {
+			rec_buffer_ms = atoi(s + 14);
+			return n;
+		}
+	}
+
 	/* Parse the verb into a scratch struct first so a malformed line
 	 * leaves the live av untouched. audioparse mutates only the
 	 * fields the verb mentions, so we start from a copy of av. */

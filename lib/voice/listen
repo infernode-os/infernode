@@ -1,0 +1,35 @@
+# voice/listen — set up local audio and announce a 9P export listener
+#                so a peer can mount this InferNode's /dev and bridge
+#                audio over it. INFR-185 v0.
+#
+# Run on each side that wants to be reachable. Default port 7070.
+#
+# Headphones recommended — there is no echo cancellation in v0, so a
+# loopback (or two phones in the same room sharing a speaker) will
+# howl. The fix lives at the iOS bridge (AVAudioSession .voiceChat) in
+# v1; for the macOS spike just plug in headphones.
+#
+# Usage:
+#   sh /lib/voice/listen           # port 7070
+#   sh /lib/voice/listen 7071      # override port
+
+# Inferno sh is modular: `if`, `~`, etc. live in the `std` module.
+# Scripts invoked via plain `sh script` don't get -l (which would load
+# /lib/sh/profile and pull these in), so we load them here explicitly.
+load std
+
+port=$1
+if {~ $#port 0} {
+	port=7070
+}
+addr='tcp!*!'$port
+
+# devaudio onto /dev (idempotent — bind -a is a no-op if already there)
+bind -a '#A' /dev
+
+# announce + accept loop. Each accepted connection gets its own
+# `export /dev` server (the `&` keeps the listen loop free for the
+# next dial). -A turns off TLS for v0 — the spike runs over ZeroTier
+# which already provides a private overlay; v1 will keyring-auth.
+echo 'voice/listen:' $addr 'exporting /dev'
+listen -A $addr { export /dev & }

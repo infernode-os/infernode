@@ -47,6 +47,7 @@ OBJ=\
 	asm-$OBJTYPE.$O\
 	os.$O\
 	$GUISRC\
+	audiosession.$O\
 	$CONF.root.$O\
 	lock.$O\
 	$DEVS\
@@ -127,3 +128,10 @@ asm-arm64.s:N:		../MacOSX/asm-arm64.s
 stubs-headless.c:N:	../MacOSX/stubs-headless.c
 ipif.c:N:		../port/ipif6-posix.c
 devfs.c:N:		../MacOSX/devfs.c
+
+# Audio backend (INFR-186). audio-sdl3.c here is a forwarder around
+# emu/MacOSX/audio-sdl3.c that defines AUDIO_PLATFORM_INIT_EXTERN so
+# audio_platform_init is an external symbol satisfied by audiosession.m
+# (AVAudioSession configuration). Record the macOS dep so iOS picks up
+# upstream changes; the OBJ list above already has audiosession.$O.
+audio-sdl3.c:N:		../MacOSX/audio-sdl3.c

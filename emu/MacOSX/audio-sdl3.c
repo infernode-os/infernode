@@ -272,6 +272,30 @@ audio_file_close(Chan *c)
 		if(--out_refcnt <= 0) {
 			out_refcnt = 0;
 			if(out_stream) {
+				/*
+				 * Drain queued playback before destroying the
+				 * stream. SDL3 keeps a ring of un-played bytes;
+				 * SDL_DestroyAudioStream silently discards them.
+				 * audiotone hits this hard: writes 882 kB in
+				 * milliseconds, the device thread plays at
+				 * 176 kB/s, and the FD close arrives long
+				 * before the device has caught up. Result: the
+				 * caller hears the first ~500 ms and the rest
+				 * vanishes. INFR-185.
+				 *
+				 * Cap the wait so a stuck device can't pin a
+				 * close forever — DRAIN_MAX_MS is generous
+				 * enough for any reasonable foreground tone
+				 * (audiotone is 5 s, so 8 s gives headroom).
+				 */
+				int waited = 0;
+				int DRAIN_MAX_MS = 8000;
+				SDL_FlushAudioStream(out_stream);
+				while(SDL_GetAudioStreamQueued(out_stream) > 0
+				      && waited < DRAIN_MAX_MS) {
+					SDL_Delay(20);
+					waited += 20;
+				}
 				SDL_DestroyAudioStream(out_stream);
 				out_stream = NULL;
 			}

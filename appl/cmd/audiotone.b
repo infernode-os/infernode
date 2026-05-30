@@ -51,6 +51,28 @@ init(nil: ref Draw->Context, args: list of string)
 
 	sys->bind("#A", "/dev", Sys->MAFTER);
 
+	# Set the device format BEFORE opening the data file. Inferno's
+	# Default_Audio_Format is 8 kHz mono-ish (telephony default); if
+	# we don't override, the SDL3 backend opens the device at 8 kHz
+	# while we generate samples assuming 44.1 kHz — audio plays at
+	# ~18% rate (very low pitch, ~5x longer duration, all of which
+	# the FD-close drain then chops up). Writing to audioctl tells
+	# devaudio (and through it the SDL3 backend's open_stream) the
+	# real format we want. Derive the ctl path from the audio path
+	# so this works over a 9P mount too: /n/voice/audio ->
+	# /n/voice/audioctl. Best-effort: if the ctl write fails (path
+	# missing, etc.) we fall through and let the backend pick.
+	ctlpath := target;
+	if(len ctlpath >= 5 && ctlpath[len ctlpath - 5:] == "audio")
+		ctlpath = ctlpath[:len ctlpath - 5] + "audioctl";
+	cfd := sys->open(ctlpath, Sys->OWRITE);
+	if(cfd != nil) {
+		cmd := sys->sprint("rate %d\nchans 2\nbits 16\nenc pcm\n", RATE);
+		b := array of byte cmd;
+		sys->write(cfd, b, len b);
+		cfd = nil;
+	}
+
 	fd := sys->open(target, Sys->OWRITE);
 	if(fd == nil) {
 		sys->fprint(sys->fildes(2),

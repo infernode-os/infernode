@@ -99,7 +99,7 @@ fi
 # (Phase 2b.0+); that requires SDL3 cross-built for Android arm64,
 # which build-sdl3-android.sh produces.
 : "${GUIBACK:=headless}"
-MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK"
+MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK NDK_HOST_TAG=$NDK_HOST_TAG"
 
 if [ "$GUIBACK" = "sdl3" ]; then
     : "${SDL3_PREFIX:=$HOME/sdks/SDL3-android-arm64}"

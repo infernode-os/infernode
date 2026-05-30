@@ -76,6 +76,9 @@ SYSLIBS=\
 	-framework Contacts\
 	-framework LocalAuthentication\
 	-framework Security\
+	-framework AVFoundation\
+	-framework AudioToolbox\
+	-framework CoreAudio\
 
 default:V:	$O.$CONF
 

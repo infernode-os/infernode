@@ -139,15 +139,39 @@ for abi in $ABIS; do
     echo "::: ${step}/4  [$abi] Link libemu.so (shared variant for JNI)"
     export ROOT
     export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${HOME}/Android/Sdk/ndk/android-ndk-r29}"
-    export PATH="$ROOT/Linux/amd64/bin:$PATH"
-    MKARGS="SYSTARG=Android OBJTYPE=$objtype GUIBACK=$GUIBACK"
+    # Same host-mk autodetection as build-android-ndk-arm64.sh: Linux CI
+    # has Linux/amd64/bin/mk; a Mac dev box has MacOSX/arm64/bin/mk.
+    HOST_BIN=""
+    for cand in Linux/amd64 MacOSX/arm64 MacOSX/amd64; do
+        if [ -x "$ROOT/$cand/bin/mk" ]; then
+            HOST_BIN="$ROOT/$cand/bin"
+            break
+        fi
+    done
+    if [ -z "$HOST_BIN" ]; then
+        echo "ERROR: host mk not built under $ROOT/{Linux/amd64,MacOSX/arm64,MacOSX/amd64}/bin/." >&2
+        exit 1
+    fi
+    export PATH="$HOST_BIN:$PATH"
+    # NDK host tag for the mkfile-Android-arm64 TOOLCHAIN path.
+    case "$(uname -s)" in
+        Linux*)  NDK_HOST_TAG=linux-x86_64 ;;
+        Darwin*) NDK_HOST_TAG=darwin-x86_64 ;;
+        *) NDK_HOST_TAG=linux-x86_64 ;;
+    esac
+    MKARGS="SYSTARG=Android OBJTYPE=$objtype GUIBACK=$GUIBACK NDK_HOST_TAG=$NDK_HOST_TAG"
     if [ "$GUIBACK" = "sdl3" ]; then
         MKARGS="$MKARGS SDL3_PREFIX=$sdl3_prefix"
     fi
+    # Darwin: case-insensitive APFS, see comment in
+    # build-android-ndk-arm64.sh + mkfile-Android-arm64.
+    case "$(uname -s)" in
+        Darwin*) MKARGS="$MKARGS MACOSINF=caseinsensitive" ;;
+    esac
     (
         cd "$ROOT/emu/Android"
         rm -f libemu.so jni-emu.o
-        "$ROOT/Linux/amd64/bin/mk" -f mkfile-g $MKARGS libemu
+        "$HOST_BIN/mk" -f mkfile-g $MKARGS libemu
     )
     if [ ! -f "$ROOT/emu/Android/libemu.so" ]; then
         echo "ERROR: libemu.so was not produced for $abi" >&2

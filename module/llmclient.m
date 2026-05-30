@@ -89,6 +89,11 @@ Llmclient: module
 	# only observable in this string.
 	buildopenairequestjson: fn(req: ref AskRequest): string;
 
+	# Build the full Anthropic Messages API request body for a request.
+	# Exposed for byte-exact request-shape regression tests: the exact
+	# bytes matter for Anthropic prompt-cache prefix matching.
+	buildanthropicrequest: fn(req: ref AskRequest): string;
+
 	# JSON escape helper
 	jsonescapestr:  fn(s: string): string;
 };

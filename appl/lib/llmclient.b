@@ -184,9 +184,17 @@ buildanthropicmessage(m: ref LlmMessage): string
 {
 	role := m.role;
 
-	# If structured content exists, use it directly
+	# If structured content exists, use it directly — but only after
+	# verifying it parses as JSON. A malformed m.sc spliced in raw would
+	# corrupt the whole request body; the OpenAI path already parses sc via
+	# readjsonstring, so this mirrors that guard for the Anthropic path. On
+	# the happy path (valid sc) the emitted bytes are unchanged.
 	if(m.sc != "") {
-		return "{\"role\":" + jquote(role) + ",\"content\":" + m.sc + "}";
+		(jv, jerr) := readjsonstring(m.sc);
+		if(jv != nil && jerr == "")
+			return "{\"role\":" + jquote(role) + ",\"content\":" + m.sc + "}";
+		# Malformed sc: fall through to the plain-text representation rather
+		# than emit an invalid request.
 	}
 
 	# Plain text message — guard against empty text blocks

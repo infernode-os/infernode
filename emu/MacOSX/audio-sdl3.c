@@ -83,6 +83,14 @@
  */
 #ifdef AUDIO_PLATFORM_INIT_EXTERN
 extern void audio_platform_init(void);
+/*
+ * Foreground-gated microphone permission primer (INFR-190). Defined in
+ * emu/iOS/audiosession.m alongside audio_platform_init. App-delegate
+ * hooks (applicationDidBecomeActive:/sceneDidBecomeActive:) call this so
+ * the iOS permission prompt is forced from a real foreground context;
+ * audio_platform_init also invokes it on its own foreground branch.
+ */
+extern void audio_request_record_permission_foreground(void);
 #else
 static void audio_platform_init(void) { }
 #endif

@@ -34,14 +34,18 @@ bind -a '#A' /dev
 echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
 echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 
-# announce + accept loop. NOTE: no `&` after `export /dev` —
-# backgrounding (which fork(2)s the listener process) strands SDL3's
-# CoreAudio thread in the parent and the export child sees "Audio
-# subsystem is not initialized" the first time it touches playback
-# (INFR-195). The synchronous form keeps SDL state in the one
-# process where it works, at the cost of one accepted call at a
-# time. For the voice test rig that's the right trade — concurrency
-# returns in a later iteration once SDL audio is fork-safe (or a
-# different IPC model replaces it). -A turns off TLS for v0.
-echo 'voice/listen:' $addr 'exporting /dev'
-listen -A $addr { export /dev }
+# announce + accept loop. The pre-warm sleepers inside the listen
+# block run in the same address space as the export server (INFR-195):
+# they open /dev/audio for read + write to force audio_file_init +
+# SDL3 device open before the export loop runs, then hold the fd
+# alive so the peer's OREAD / OWRITE opens just bump the refcount
+# instead of touching SDL again — that's the path that fails when
+# the export worker can't reach a usable SDL state on macOS even
+# with SDL_Init / SDL_QuitSubSystem / SDL_Init retry.
+echo 'voice/listen:' $addr 'exporting /dev (pre-warmed)'
+listen -A $addr {
+	{sleep 99999 > /dev/audio} &
+	{sleep 99999 < /dev/audio > /dev/null} &
+	sleep 1
+	export /dev
+}

@@ -155,10 +155,25 @@ ensure_sdl_audio(void)
 	 * touches CoreAudio — no-op on macOS/Linux desktop, real impl on
 	 * iOS. INFR-186. */
 	audio_platform_init();
-	/* SDL_InitSubSystem is idempotent and safe to call after SDL_Init
-	 * (the GUI backend calls SDL_Init(SDL_INIT_VIDEO) at startup). */
-	if(!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-		fprint(2, "audio-sdl3: SDL_InitSubSystem failed: %s\n",
+	/*
+	 * Use SDL_Init, not SDL_InitSubSystem (INFR-195). The headless
+	 * macOS emu never calls SDL_Init(SDL_INIT_VIDEO) (only the GUI
+	 * build does), so SDL_InitSubSystem(SDL_INIT_AUDIO) ran without
+	 * a prior SDL_Init and silently produced an audio subsystem that
+	 * SDL_OpenAudioDeviceStream later rejected as "not initialized."
+	 * SDL_Init is the canonical entry point and works whether or not
+	 * a subsystem has already been brought up; it's a no-op past the
+	 * first invocation for the same flags.
+	 *
+	 * Force the CoreAudio driver explicitly via the hint — without
+	 * this, SDL3 sometimes silently falls back to a dummy driver
+	 * when run from a non-GUI process on macOS, which then surfaces
+	 * as "No default audio device available" instead of the more
+	 * obvious "no audio backend available."
+	 */
+	SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "coreaudio");
+	if(!SDL_Init(SDL_INIT_AUDIO)) {
+		fprint(2, "audio-sdl3: SDL_Init(SDL_INIT_AUDIO) failed: %s\n",
 			SDL_GetError());
 		return 0;
 	}
@@ -189,15 +204,17 @@ open_stream(SDL_AudioDeviceID dev, Audio_d *fmt)
 		 * in the child without disturbing the parent. */
 		const char *err = SDL_GetError();
 		if(err != nil && strstr(err, "not initialized") != nil) {
-			/* SDL_QuitSubSystem + SDL_InitSubSystem brings recording
-			 * back after fork but not playback (INFR-195). Try a
-			 * full SDL_Quit + SDL_Init instead — drops the dangling
-			 * parent-process state entirely so the child re-binds
-			 * to coreaudiod fresh. This is process-local; the
-			 * parent listener's audio state is untouched (it's a
-			 * different address space post-fork). */
-			SDL_Quit();
+			/*
+			 * Recovery path: the listener's export worker can run
+			 * in a kproc with stale SDL state. Quit just the audio
+			 * subsystem and re-init it via SDL_Init (not
+			 * SubSystem, see ensure_sdl_audio for why). Do NOT
+			 * call SDL_Quit — that's process-wide and would tear
+			 * down the parent's audio too.
+			 */
+			SDL_QuitSubSystem(SDL_INIT_AUDIO);
 			sdl_audio_inited = 0;
+			SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "coreaudio");
 			if(SDL_Init(SDL_INIT_AUDIO)) {
 				sdl_audio_inited = 1;
 				s = SDL_OpenAudioDeviceStream(dev, &spec, NULL, NULL);

@@ -27,6 +27,13 @@ addr='tcp!*!'$port
 # devaudio onto /dev (idempotent — bind -a is a no-op if already there)
 bind -a '#A' /dev
 
+# Cap the audio backend's queue depth so a sustained network feed
+# can't drift the speaker minutes behind real time (INFR-194).
+# 100 ms is the voice-grade default; bump if you want smoother under
+# packet loss, lower if you want tighter sync.
+echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
+echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
+
 # announce + accept loop. Each accepted connection gets its own
 # `export /dev` server (the `&` keeps the listen loop free for the
 # next dial). -A turns off TLS for v0 — the spike runs over ZeroTier

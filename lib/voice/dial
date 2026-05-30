@@ -24,6 +24,12 @@ if {~ $#peer 0} {
 # Local /dev/audio must exist before we route bytes to it.
 bind -a '#A' /dev
 
+# Cap the audio backend's queue depth so the network can't drift the
+# speaker minutes behind real time (INFR-194). 100 ms is the
+# voice-grade default.
+echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
+echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
+
 # Mount the peer's exported /dev tree at /n/voice. -A skips TLS — same
 # rationale as voice/listen.
 mkdir -p /n/voice

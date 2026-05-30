@@ -1,0 +1,47 @@
+# voice/dial — mount a peer InferNode's exported /dev and bridge
+#               audio across the 9P link. INFR-185 v0.
+#
+# After voice/listen is running on the peer, both sides can run this
+# to set up bidirectional audio. The two cats are the entire call:
+#
+#   peer mic  -> 9P     -> /dev/audio (this side's speaker)
+#   /dev/audio -> 9P    -> peer speaker (peer's /dev/audio write)
+#
+# Headphones recommended — no AEC in v0.
+#
+# Usage:
+#   sh /lib/voice/dial tcp!localhost!7070       # loopback test
+#   sh /lib/voice/dial tcp!10.243.169.7!7070    # over ZeroTier
+
+load std
+
+peer=$1
+if {~ $#peer 0} {
+	echo 'usage: voice/dial peer-addr  (e.g. tcp!localhost!7070)' >[1=2]
+	exit usage
+}
+
+# Local /dev/audio must exist before we route bytes to it.
+bind -a '#A' /dev
+
+# Mount the peer's exported /dev tree at /n/voice. -A skips TLS — same
+# rationale as voice/listen.
+mkdir -p /n/voice
+if {! mount -A $peer /n/voice} {
+	echo 'voice/dial: mount' $peer 'failed' >[1=2]
+	exit mount
+}
+
+# Two cats, one per direction. Background so we can return control to
+# the caller; the user kills these to hang up.
+cat /n/voice/audio > /dev/audio &
+in_pid=$apid
+cat /dev/audio > /n/voice/audio &
+out_pid=$apid
+
+echo 'voice/dial: connected to' $peer
+echo '  in  pid=' $in_pid '(peer mic  -> my speaker)'
+echo '  out pid=' $out_pid '(my  mic  -> peer speaker)'
+echo 'Hang up:'
+echo '  echo kill >/prog/'^$in_pid^'/ctl'
+echo '  echo kill >/prog/'^$out_pid^'/ctl'

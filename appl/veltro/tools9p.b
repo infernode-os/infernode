@@ -27,6 +27,8 @@ implement Tools9p;
 #   ├── paths        (r)   Bound namespace paths
 #   └── <tool>/      (dir) Per-tool directory
 #       ├── ctl      (rw)  Write args, read result
+#       ├── run      (rw)  Write args, read result (alias of ctl, per INFR-2)
+#       │                  e.g. /tool/limbo/run authors Limbo via limbo->exec()
 #       ├── doc      (r)   Tool documentation
 #       └── schema   (r)   OpenAI function-schema JSON (per INFR-126)
 #
@@ -62,11 +64,12 @@ Tools9p: module {
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
-TOOL_STRIDE: con 4;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema
+TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
 Qtool_ctl: con 1;         # Offset: ctl subfile (write args, read result)
 Qtool_doc: con 2;         # Offset: doc subfile (read-only documentation)
 Qtool_schema: con 3;      # Offset: schema subfile (OpenAI function-schema JSON)
+Qtool_run: con 4;         # Offset: run subfile (write args, read result — alias of ctl, INFR-2)
 
 # Tool info structure
 ToolInfo: adt {
@@ -1296,7 +1299,9 @@ Serve:
 					case suboff {
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
-					Qtool_ctl =>
+					Qtool_ctl or Qtool_run =>
+						# ctl and run share ti.result: write args to either,
+						# read either back. run is the INFR-2 alias.
 						if(ti.result == nil)
 							ti.result = array of byte "error: no result (write arguments first)";
 						srv.reply(styxservers->readbytes(m, ti.result));
@@ -1418,7 +1423,7 @@ Serve:
 				# remains free to service other fids.
 				if(qtype >= Qtoolbase) {
 					suboff := toolqtype(qtype).t1;
-					if(suboff != Qtool_ctl) {
+					if(suboff != Qtool_ctl && suboff != Qtool_run) {
 						srv.reply(ref Rmsg.Error(m.tag, Eperm));
 						break;
 					}
@@ -1507,6 +1512,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 				return (dir(Qid(p, vers, Sys->QTFILE), "doc", big 0, 8r444), nil);
 			Qtool_schema =>
 				return (dir(Qid(p, vers, Sys->QTFILE), "schema", big 0, 8r444), nil);
+			Qtool_run =>
+				return (dir(Qid(p, vers, Sys->QTFILE), "run", big 0, 8r644), nil);
 			}
 		}
 	}
@@ -1574,6 +1581,8 @@ navigator(navops: chan of ref Navop)
 					n.path = big(qtype + Qtool_doc);
 				"schema" =>
 					n.path = big(qtype + Qtool_schema);
+				"run" =>
+					n.path = big(qtype + Qtool_run);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1670,7 +1679,7 @@ navigator(navops: chan of ref Navop)
 					if(suboff != Qtool_dir) {
 						n.reply <-= (nil, "not a directory");
 					} else {
-						# Tool directory: list ctl, doc and schema subfiles
+						# Tool directory: list ctl, doc, schema and run subfiles
 						i := n.offset;
 						count := n.count;
 						if(i == 0 && count > 0) {
@@ -1685,6 +1694,11 @@ navigator(navops: chan of ref Navop)
 						}
 						if(i <= 2 && count > 0) {
 							n.reply <-= dirgen(big(qtype + Qtool_schema));
+							count--;
+							i++;
+						}
+						if(i <= 3 && count > 0) {
+							n.reply <-= dirgen(big(qtype + Qtool_run));
 							count--;
 						}
 						n.reply <-= (nil, nil);

@@ -163,6 +163,11 @@ for abi in $ABIS; do
     if [ "$GUIBACK" = "sdl3" ]; then
         MKARGS="$MKARGS SDL3_PREFIX=$sdl3_prefix"
     fi
+    # Darwin: case-insensitive APFS, see comment in
+    # build-android-ndk-arm64.sh + mkfile-Android-arm64.
+    case "$(uname -s)" in
+        Darwin*) MKARGS="$MKARGS MACOSINF=caseinsensitive" ;;
+    esac
     (
         cd "$ROOT/emu/Android"
         rm -f libemu.so jni-emu.o

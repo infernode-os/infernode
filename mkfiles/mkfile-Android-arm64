@@ -9,18 +9,14 @@ CPUS=		arm64
 O=		o
 OS=		o
 
-# Nobble the `.S` (preprocessed assembly) rule on macOS dev hosts.
-# APFS is case-insensitive, so mk's %.s and %.S patterns both
-# trigger for `getcallerpc-Android-arm64.S`, producing
-# `mk: ambiguous recipes for getcallerpc-Android-arm64.o`. The
-# MacOSX and iOS target files set the same to avoid the same trap
-# (see mkfiles/mkfile-MacOSX-arm64, mkfile-iOS-arm64). Linux CI
-# hosts have case-sensitive ext4/btrfs and don't need it; setting
-# it unconditionally is harmless there too — the matching `.s`
-# files we'd want to use are the same content on either FS, and
-# the empty stub `.S` files (only-a-comment placeholders for the
-# inline `getcallerpc` in lib9.h) work as `.s` files just as well.
-MACOSINF=	caseinsensitive
+# MACOSINF is intentionally NOT set here. On Linux CI (case-sensitive
+# ext4/btrfs) the `.S` rule is needed — getcallerpc-Android-arm64.S
+# is the only source file present, and nobbling the rule leaves mk
+# with no recipe to build it. On Apple Silicon macOS (case-insensitive
+# APFS) the same `.S` looks like a `.s` to the FS, so the `.s` and `.S`
+# rules collide with `mk: ambiguous recipes`. The build drivers
+# (build-android-ndk-arm64.sh / build-android-apk.sh) pass
+# `MACOSINF=caseinsensitive` on Darwin hosts only — see those scripts.
 
 # NDK location: required in environment. build-android-ndk-arm64.sh
 # sets it explicitly and falls back to $HOME/Android/Sdk/ndk/android-ndk-r29

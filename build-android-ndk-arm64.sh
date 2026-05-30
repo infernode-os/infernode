@@ -100,6 +100,12 @@ fi
 # which build-sdl3-android.sh produces.
 : "${GUIBACK:=headless}"
 MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK NDK_HOST_TAG=$NDK_HOST_TAG"
+# Darwin host: case-insensitive APFS makes mk's `.s` and `.S` rules
+# collide on getcallerpc-Android-arm64.S. Nobble the `.S` rule here
+# rather than in the mkfile, since Linux CI needs the rule alive.
+case "$(uname -s)" in
+    Darwin*) MKARGS="$MKARGS MACOSINF=caseinsensitive" ;;
+esac
 
 if [ "$GUIBACK" = "sdl3" ]; then
     : "${SDL3_PREFIX:=$HOME/sdks/SDL3-android-arm64}"

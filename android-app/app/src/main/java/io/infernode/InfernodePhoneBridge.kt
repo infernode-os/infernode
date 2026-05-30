@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 
@@ -57,9 +59,17 @@ object InfernodePhoneBridge {
      * devphone strips the verb and trailing newline, and the host OS
      * parses the `tel:` URI on its end.
      *
-     * Threading: invoked on a JVM-attached pthread from JNI. Intent
-     * dispatch is thread-safe via startActivity; we don't bounce to
-     * the main thread.
+     * Threading: invoked on an AttachCurrentThread'd Inferno kproc
+     * pthread whose stack is ~28 KB — far too small for the
+     * startActivity → ActivityManager binder roundtrip (StackOverflowError
+     * shows up in logcat tagged with our TAG if you try). We post the
+     * actual dispatch to the main thread, where the stack is the system
+     * default. Trade: we lose the in-band error result, so we report
+     * success/fail asynchronously via logcat and return 0 to the caller
+     * unconditionally once the post is scheduled. The pre-flight checks
+     * (context null, permission denied) still run synchronously and
+     * return -1 — those are the cases where the C side genuinely needs
+     * to know the dial won't happen.
      */
     @JvmStatic
     fun dial(number: String): Int {
@@ -74,22 +84,22 @@ object InfernodePhoneBridge {
             Log.w(TAG, "dial($number): CALL_PHONE not granted")
             return -1
         }
-        return try {
-            val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
-                // FLAG_ACTIVITY_NEW_TASK is mandatory when starting an
-                // Activity from a non-Activity Context (we hold an
-                // applicationContext, not an Activity ref — see attach()).
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
+                    // FLAG_ACTIVITY_NEW_TASK is mandatory when starting an
+                    // Activity from a non-Activity Context (we hold an
+                    // applicationContext, not an Activity ref — see attach()).
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(intent)
+                Log.i(TAG, "dial($number): ACTION_CALL dispatched on main thread")
+            } catch (se: SecurityException) {
+                Log.w(TAG, "dial($number): SecurityException — ${se.message}")
+            } catch (t: Throwable) {
+                Log.w(TAG, "dial($number): ${t.javaClass.simpleName} — ${t.message}")
             }
-            ctx.startActivity(intent)
-            Log.i(TAG, "dial($number): ACTION_CALL dispatched")
-            0
-        } catch (se: SecurityException) {
-            Log.w(TAG, "dial($number): SecurityException — ${se.message}")
-            -1
-        } catch (t: Throwable) {
-            Log.w(TAG, "dial($number): ${t.javaClass.simpleName} — ${t.message}")
-            -1
         }
+        return 0
     }
 }

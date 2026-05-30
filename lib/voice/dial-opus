@@ -1,0 +1,71 @@
+# voice/dial-opus — mount a peer InferNode's /n/opus and bridge audio
+# across the link with Opus encoding. INFR-187.
+#
+# Symmetric to voice/dial — same mount = call / kill = hangup model,
+# just with ~50x less bandwidth so the call survives a real cellular
+# link instead of just ZeroTier.
+#
+# Pipeline (each side identical — both run dial-opus in a bidirectional
+# call, with one side first running listen-opus to announce a port):
+#
+#   /dev/audio  ->  /n/opus/enc        (my mic into encoder)
+#   /n/opus/enc -> /n/peer/dec         (encoded mic over 9P to peer)
+#   /n/peer/enc -> /n/opus/dec         (peer's encoded mic into my decoder)
+#   /n/opus/dec ->  /dev/audio         (decoded out to my speaker)
+#
+# Headphones — there is no AEC at this layer; v1 (INFR-186) added
+# AVAudioSession .voiceChat for hardware AEC on iOS, but macOS still
+# loops back acoustically.
+#
+# Usage:
+#   sh /lib/voice/dial-opus tcp!127.0.0.1!7070        # loopback test
+#   sh /lib/voice/dial-opus tcp!10.243.169.7!7070     # over ZeroTier
+
+load std
+
+peer=$1
+if {~ $#peer 0} {
+	echo 'usage: voice/dial-opus peer-addr  (e.g. tcp!127.0.0.1!7070)' >[1=2]
+	exit usage
+}
+
+bind -a '#A' /dev
+mkdir -p /n/opus
+bind '#Z' /n/opus
+
+# Match the codec and the audio device to opus's natural baseline.
+echo 'rate 48000' > /n/opus/ctl
+echo 'chans 1' > /n/opus/ctl
+echo 'frame_ms 20' > /n/opus/ctl
+echo 'bitrate 24000' > /n/opus/ctl
+
+echo 'rate 48000' > /dev/audioctl
+echo 'chans 1' > /dev/audioctl
+echo 'bits 16' > /dev/audioctl
+
+mkdir -p /n/peer
+if {! mount -A $peer /n/peer} {
+	echo 'voice/dial-opus: mount' $peer 'failed' >[1=2]
+	exit mount
+}
+
+# Four cats: local mic/spk + the two network bridges.
+cat /dev/audio > /n/opus/enc &
+local_enc=$apid
+
+cat /n/opus/dec > /dev/audio &
+local_dec=$apid
+
+cat /n/opus/enc > /n/peer/dec &
+net_send=$apid
+
+cat /n/peer/enc > /n/opus/dec &
+net_recv=$apid
+
+echo 'voice/dial-opus: connected to' $peer
+echo '  local enc pid=' $local_enc '(mic -> encoder)'
+echo '  local dec pid=' $local_dec '(decoder -> speaker)'
+echo '  net  send pid=' $net_send '(my encoded -> peer dec)'
+echo '  net  recv pid=' $net_recv '(peer encoded -> my dec)'
+echo 'Hang up:'
+echo '  for p in' $local_enc $local_dec $net_send $net_recv {echo kill > /prog/^$p^/ctl}

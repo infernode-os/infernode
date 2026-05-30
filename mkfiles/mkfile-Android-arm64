@@ -9,12 +9,27 @@ CPUS=		arm64
 O=		o
 OS=		o
 
+# MACOSINF is intentionally NOT set here. On Linux CI (case-sensitive
+# ext4/btrfs) the `.S` rule is needed — getcallerpc-Android-arm64.S
+# is the only source file present, and nobbling the rule leaves mk
+# with no recipe to build it. On Apple Silicon macOS (case-insensitive
+# APFS) the same `.S` looks like a `.s` to the FS, so the `.s` and `.S`
+# rules collide with `mk: ambiguous recipes`. The build drivers
+# (build-android-ndk-arm64.sh / build-android-apk.sh) pass
+# `MACOSINF=caseinsensitive` on Darwin hosts only — see those scripts.
+
 # NDK location: required in environment. build-android-ndk-arm64.sh
 # sets it explicitly and falls back to $HOME/Android/Sdk/ndk/android-ndk-r29
 # at the shell level. mk has no `${VAR:-default}` expansion, so the
 # default has to live in the build driver, not here.
+#
+# Toolchain host tag: build-android-ndk-arm64.sh detects the build
+# host and passes NDK_HOST_TAG (linux-x86_64 on CI, darwin-x86_64 on a
+# Mac dev box). Default to linux-x86_64 to keep existing CI invocations
+# working without setting the env var.
 NDK=		$ANDROID_NDK_HOME
-TOOLCHAIN=	$NDK/toolchains/llvm/prebuilt/linux-x86_64
+NDK_HOST_TAG=	linux-x86_64
+TOOLCHAIN=	$NDK/toolchains/llvm/prebuilt/$NDK_HOST_TAG
 TARGET=		aarch64-linux-android
 # minSdk: API 28 (Android 9 Pie). Required by libc symbols we depend on
 # — getrandom() in particular is gated on >= 28 in Bionic. Android 9 covers

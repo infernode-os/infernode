@@ -13,15 +13,7 @@ include "bufio.m";
 
 include "imagefile.m";
 	imageremap: Imageremap;
-	readpng: RImagefile;
 	readjpg: RImagefile;
-
-include "filter.m";
-	inflate: Filter;
-
-include "crc.m";
-	crc: Crc;
-	CRCstate: import Crc;
 
 include "imgload.m";
 

@@ -37,12 +37,24 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 
+	# Optional target path — defaults to /dev/audio. INFR-185 v0 uses
+	# `audiotone /n/voice/audio` as the deterministic write-side test
+	# for the voice-mount spike: bytes go through the local 9P mount
+	# of the peer's exported /dev, land on the peer's audio_file_write,
+	# and play out the peer's speaker. Same audible result on
+	# loopback (peer == self over tcp!127.0.0.1!7070) but tests every
+	# 9P hop in between.
+	target := "/dev/audio";
+	args = tl args;	# drop argv[0]
+	if(args != nil)
+		target = hd args;
+
 	sys->bind("#A", "/dev", Sys->MAFTER);
 
-	fd := sys->open("/dev/audio", Sys->OWRITE);
+	fd := sys->open(target, Sys->OWRITE);
 	if(fd == nil) {
 		sys->fprint(sys->fildes(2),
-			"audiotone: cannot open /dev/audio: %r\n");
+			"audiotone: cannot open %s: %r\n", target);
 		raise "fail";
 	}
 

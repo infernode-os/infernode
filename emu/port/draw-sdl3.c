@@ -360,9 +360,11 @@ init_hidpi(void)
  * Written from the devcons worker thread, read on the main thread. */
 static volatile int softkbd_keeptop = 0;
 
-/* Explicit focused-widget rect in window POINTS, set by the GUI via
- * /dev/consctl "kbd rect x y w h" (see setsoftkbd_rect). When w*h > 0
- * this overrides the hard-coded top/bottom rect in
+/* Explicit focused-widget rect in INFERNO SCREEN PIXELS, set by the GUI
+ * via /dev/consctl "kbd rect x y w h" (see setsoftkbd_rect). Pixels are
+ * the only coordinate system Limbo has (see attachscreen); update_text_
+ * input_area maps them to window points before handing them to SDL.
+ * When w*h > 0 this overrides the hard-coded top/bottom rect in
  * update_text_input_area — SDL slides the view so the *actual* widget
  * stays above the keyboard, regardless of where the cursor is or
  * whether keeptop is set. Cleared with "kbd rect 0 0 0 0". Plain ints
@@ -386,6 +388,12 @@ static volatile int softkbd_rect_h = 0;
  *     pinned and a cursor near the top no longer scrolls off-screen. The
  *     keyboard simply overlays the lower part of the app.
  *
+ * When the GUI has supplied an explicit "kbd rect" (softkbd_rect_*, in
+ * Inferno screen pixels) it wins over both heuristics: we map it to
+ * window points and let SDL slide the real widget above the keyboard.
+ * This is what lets the workspace shell prompt — which sits at the
+ * bottom of the zone — stay visible so you can see what you're typing.
+ *
  * No-op on macOS/Linux (no soft keyboard).
  */
 static void
@@ -403,13 +411,37 @@ update_text_input_area(void)
 		return;
 	if (softkbd_rect_w > 0 && softkbd_rect_h > 0) {
 		/* Explicit focused-widget rect from the GUI (INFR-166).
-		 * Clamp to the window so a slightly out-of-window value
-		 * (rotated layout caught mid-update) doesn't make SDL
-		 * round-trip a degenerate rect to UIKit. */
-		r.x = softkbd_rect_x < 0 ? 0 : softkbd_rect_x;
-		r.y = softkbd_rect_y < 0 ? 0 : softkbd_rect_y;
-		r.w = softkbd_rect_w;
-		r.h = softkbd_rect_h;
+		 *
+		 * It arrives in Inferno SCREEN PIXELS — the only coordinate
+		 * system Limbo draws in. SDL_SetTextInputArea wants window
+		 * POINTS, so map it exactly the way the renderer maps the
+		 * texture: texture pixels -> window pixels through dest_rect
+		 * (which already carries the safe-area origin and any
+		 * letterbox scale), then -> points by dividing out
+		 * display_scale. This is the inverse of the mouse path's
+		 * window_to_texture_coords. Without it the rect was 2-3x
+		 * oversized on every HiDPI device, got clamped to a degenerate
+		 * strip, and SDL never slid the caret above the keyboard — so
+		 * the workspace shell prompt stayed covered and you couldn't
+		 * see what you typed.
+		 *
+		 * Clamp to the window afterwards so a transient out-of-window
+		 * value (e.g. a rotation caught mid-update) doesn't round-trip
+		 * a degenerate rect to UIKit. */
+		float sx, sy, fx, fy, fw, fh;
+		if (dest_rect.w <= 0 || dest_rect.h <= 0 ||
+		    sdl_width <= 0 || sdl_height <= 0 || display_scale <= 0.0f)
+			return;
+		sx = dest_rect.w / (float)sdl_width;	/* texture px -> window px */
+		sy = dest_rect.h / (float)sdl_height;
+		fx = (dest_rect.x + (float)softkbd_rect_x * sx) / display_scale;
+		fy = (dest_rect.y + (float)softkbd_rect_y * sy) / display_scale;
+		fw = ((float)softkbd_rect_w * sx) / display_scale;
+		fh = ((float)softkbd_rect_h * sy) / display_scale;
+		r.x = fx < 0.0f ? 0 : (int)fx;
+		r.y = fy < 0.0f ? 0 : (int)fy;
+		r.w = (int)(fw + 0.5f);
+		r.h = (int)(fh + 0.5f);
 		if (r.x + r.w > win_w) r.w = win_w - r.x;
 		if (r.y + r.h > win_h) r.h = win_h - r.y;
 		if (r.w <= 0 || r.h <= 0)

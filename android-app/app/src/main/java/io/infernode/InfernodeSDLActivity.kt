@@ -120,6 +120,8 @@ class InfernodeSDLActivity : SDLActivity() {
         // dialog off before SDL takes the surface; AAudio capture in
         // /dev/audio would silently return zeros otherwise.
         ensureRecordAudioPermission()
+        ensureCallPhonePermission()
+        InfernodePhoneBridge.attach(this)
         super.onCreate(savedInstanceState)
 
         // Phase 2b.2 / INFR-115 — keep Lucifer's SDL surface inside the
@@ -188,6 +190,22 @@ class InfernodeSDLActivity : SDLActivity() {
                 this,
                 arrayOf(Manifest.permission.RECORD_AUDIO),
                 /* requestCode = */ 1
+            )
+        }
+    }
+
+    private fun ensureCallPhonePermission() {
+        // INFR-201: required so InfernodePhoneBridge.dial can fire
+        // ACTION_CALL without bouncing through the system dialer.
+        // Distinct requestCode from RECORD_AUDIO so the result callback
+        // (if we add one later) can disambiguate.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.CALL_PHONE),
+                /* requestCode = */ 2
             )
         }
     }

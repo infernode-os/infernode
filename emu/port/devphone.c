@@ -42,6 +42,25 @@
 #define	ERRBUFSZ	256
 #define	QLIMIT		16384	/* per-channel queue cap; 32 SMS records ≈ */
 
+/*
+ * INFR-201 dial-rate guardrail. A misbehaving agent (looped tool call,
+ * bad prompt, anything) could otherwise dial-storm the radio. Cap is
+ * intentionally generous for human-paced use but tight enough to bound
+ * abuse: 10 dials per 60-second sliding window.
+ *
+ * The "window" is a single epoch — we don't keep a ring buffer of
+ * timestamps because the limit is small and a single-second-resolution
+ * counter is sufficient. When elapsed >= DIAL_WINDOW_SEC since the
+ * window's start, reset counter and start a new window. State is
+ * process-global; the namespace itself is process-global so this is
+ * the right scope.
+ */
+#define	DIAL_MAX_PER_WINDOW	10
+#define	DIAL_WINDOW_MS		(60 * 1000)
+
+static long	dial_window_start_ms;	/* osmillisec() at window start */
+static int	dial_window_count;
+
 enum
 {
 	Qdir,
@@ -484,6 +503,37 @@ phonewrite(Chan *c, void *va, long n, vlong offset)
 
 	case Qphone:
 		/* dial <num> / answer [id] / hangup [id] */
+		if(verb != nil && strcmp(verb, "dial") == 0){
+			/*
+			 * INFR-201 dial-rate guardrail. Sliding 60-second window,
+			 * 10-dial cap. Single epoch, no ring buffer — see
+			 * DIAL_MAX_PER_WINDOW comment above.
+			 *
+			 * Audit line goes to stderr on every dial attempt
+			 * regardless of accept/reject so a "where did this call
+			 * come from" question is answerable from the host log.
+			 */
+			long now = osmillisec();
+			if(now - dial_window_start_ms >= DIAL_WINDOW_MS){
+				dial_window_start_ms = now;
+				dial_window_count = 0;
+			}
+			if(dial_window_count >= DIAL_MAX_PER_WINDOW){
+				fprint(2,
+					"phone: dial %s REJECTED (rate limit %d/%dms)\n",
+					rest ? rest : "(nil)",
+					DIAL_MAX_PER_WINDOW, DIAL_WINDOW_MS);
+				snprint(errbuf, sizeof errbuf,
+					"phone: dial rate limit reached (%d per %d s)",
+					DIAL_MAX_PER_WINDOW, DIAL_WINDOW_MS / 1000);
+				r = -1;
+				break;
+			}
+			dial_window_count++;
+			fprint(2, "phone: dial %s (audit %d/%d in window)\n",
+				rest ? rest : "(nil)",
+				dial_window_count, DIAL_MAX_PER_WINDOW);
+		}
 		r = phonebridge_phone_ctl(verb, rest, errbuf, sizeof errbuf);
 		break;
 

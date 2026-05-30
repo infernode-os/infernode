@@ -40,7 +40,10 @@ extern int emu_run(int argc, char **argv);
  * Access to g_listener / g_onLine_mid is guarded by g_listener_lock
  * because the stdio reader pthread and Java callers both touch them.
  */
-static JavaVM *g_vm;
+/* Owned by emu/Android/phonebridge.c — that translation unit links into
+ * both the headless o.emu and libemu.so. We just read/write it from
+ * JNI_OnLoad (INFR-201). */
+extern JavaVM *g_vm;
 static jobject g_listener;          /* global ref */
 static jmethodID g_onLine_mid;
 static pthread_mutex_t g_listener_lock = PTHREAD_MUTEX_INITIALIZER;

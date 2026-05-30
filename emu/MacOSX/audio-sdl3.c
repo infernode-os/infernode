@@ -69,6 +69,24 @@
 
 #ifdef GUI_SDL3
 
+/*
+ * Platform-specific audio session setup, called once before
+ * SDL_InitSubSystem(SDL_INIT_AUDIO). Today this matters on iOS, where
+ * AVAudioSession must be configured to .playAndRecord with .voiceChat
+ * mode for the SDL3 audio device to (a) get the recording category
+ * (.soloAmbient is the default and silently disables capture) and
+ * (b) route through Apple's hardware AEC so two phones in the same
+ * room don't feed back. The iOS shim (emu/iOS/audio-sdl3.c) defines
+ * AUDIO_PLATFORM_INIT_EXTERN before including this file, so the
+ * external symbol below is linked in from emu/iOS/audiosession.m.
+ * macOS / Linux desktop builds get the no-op static stub. INFR-186.
+ */
+#ifdef AUDIO_PLATFORM_INIT_EXTERN
+extern void audio_platform_init(void);
+#else
+static void audio_platform_init(void) { }
+#endif
+
 static int sdl_audio_inited;		/* SDL_InitSubSystem(SDL_INIT_AUDIO) done? */
 static SDL_AudioStream *in_stream;	/* mic capture */
 static SDL_AudioStream *out_stream;	/* speaker playback */
@@ -92,6 +110,10 @@ ensure_sdl_audio(void)
 {
 	if(sdl_audio_inited)
 		return 1;
+	/* Configure AVAudioSession (or platform equivalent) before SDL
+	 * touches CoreAudio — no-op on macOS/Linux desktop, real impl on
+	 * iOS. INFR-186. */
+	audio_platform_init();
 	/* SDL_InitSubSystem is idempotent and safe to call after SDL_Init
 	 * (the GUI backend calls SDL_Init(SDL_INIT_VIDEO) at startup). */
 	if(!SDL_InitSubSystem(SDL_INIT_AUDIO)) {

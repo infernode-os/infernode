@@ -189,9 +189,16 @@ open_stream(SDL_AudioDeviceID dev, Audio_d *fmt)
 		 * in the child without disturbing the parent. */
 		const char *err = SDL_GetError();
 		if(err != nil && strstr(err, "not initialized") != nil) {
-			SDL_QuitSubSystem(SDL_INIT_AUDIO);
+			/* SDL_QuitSubSystem + SDL_InitSubSystem brings recording
+			 * back after fork but not playback (INFR-195). Try a
+			 * full SDL_Quit + SDL_Init instead — drops the dangling
+			 * parent-process state entirely so the child re-binds
+			 * to coreaudiod fresh. This is process-local; the
+			 * parent listener's audio state is untouched (it's a
+			 * different address space post-fork). */
+			SDL_Quit();
 			sdl_audio_inited = 0;
-			if(SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+			if(SDL_Init(SDL_INIT_AUDIO)) {
 				sdl_audio_inited = 1;
 				s = SDL_OpenAudioDeviceStream(dev, &spec, NULL, NULL);
 			}

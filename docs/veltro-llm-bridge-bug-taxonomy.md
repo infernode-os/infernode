@@ -113,6 +113,21 @@ Mined from history; listed so the characterization suite keeps them dead:
 - **D4 — SSE streaming fallbacks** (`llmclient_sse_fallback_test.b`).
   Buffered-vs-incremental and non-conforming OpenAI-shape backends.
 
+## Phase-1 fix — landed
+
+Classes A and B are fixed by a single shared codec, `module/wirefmt.m` +
+`appl/lib/wirefmt.b`, loaded by **both** the producer (`appl/lib/llmclient.b`,
+all four `encodetool` sites) and the consumer (`appl/veltro/agentlib.b`,
+`parsellmresponse` → `wirefmt->parsetoolline`). The duplicate `unescapenl` /
+`parsetoolline` were removed from `agentlib.b`, so there is now one definition
+that cannot drift. `escapefield`/`unescapefield` are exact inverses and escape
+`\` (`\\`), newline (`\n`) and `:` (`\:`) in every field, so `id`/`name`
+delimiters and backslash-bearing args all round-trip verbatim. Verified live on
+a Linux `emu`: `wireformat_test` 10/10, `agentlib_test` 27 passed / 8 skipped,
+`llmsrv_test` 53 passed. The former A1/A2/B1 defect tests are now identity
+regression guards. Class C (duplicated JSON assembly) is unaddressed — a
+separate, larger refactor.
+
 ## Phase-0 coverage delivered
 
 `tests/wireformat_test.b` — round-trip characterization of the Class A and

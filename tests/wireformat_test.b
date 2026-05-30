@@ -1,29 +1,26 @@
 implement WireformatTest;
 
 #
-# wireformat_test.b - Round-trip characterization of the LLM-bridge wire format.
-#
-# Phase 0 of the "systematically identify and fix" program for the
-# Anthropic<->OpenAI bridge. See docs/veltro-llm-bridge-bug-taxonomy.md.
+# wireformat_test.b - Round-trip tests for the LLM-bridge TOOL: wire format.
 #
 # Both provider paths in appl/lib/llmclient.b normalise tool calls into the
 # provider-agnostic wire format consumed by the agent stack:
 #
 #     STOP:<reason>
-#     TOOL:<id>:<name>:<args-with-newlines-escaped>
+#     TOOL:<id>:<name>:<args>
 #
-# The PRODUCER (llmclient.b:283 / :431 / :1067) escapes args with the recipe
-# replicated below in wireescape(). The CONSUMER (agentlib->parsellmresponse
-# -> parsetoolline -> unescapenl) reverses it. These tests drive the *real*
-# consumer with the real producer recipe and assert what round-trips.
+# As of the Phase 1 fix, encode and decode are the SAME shared codec
+# (module/wirefmt.m, appl/lib/wirefmt.b): the producer (llmclient.b) calls
+# wirefmt->encodetool and the consumer (agentlib->parsellmresponse) calls
+# wirefmt->parsetoolline. These tests exercise that real codec end to end:
+# encodetool -> parsellmresponse -> recovered (id, name, args).
 #
-# Two suites:
-#   - IDENTITY: cases that should (and currently do) round-trip. These are the
-#     spec and the safety net for the upcoming codec refactor.
-#   - KNOWN DEFECT: cases where unescape(escape(x)) != x today. We pin the
-#     CURRENT (corrupted) output so the suite stays green; when the codec is
-#     fixed to be a true inverse, these assertions go red and MUST be updated
-#     to the identity behaviour. Each is cross-referenced to the taxonomy.
+# History: before Phase 1 the escape (llmclient.b) and unescape (agentlib.b)
+# halves were separate, incomplete inverses, so any arg containing a backslash
+# was silently corrupted (taxonomy A1/A2) and a colon in id/name mis-split the
+# line (B1). The cases marked "regression guard" below pin those exact inputs
+# and now round-trip verbatim; they will fail if the codec ever regresses.
+# See docs/veltro-llm-bridge-bug-taxonomy.md.
 #
 # To run: emu -r. /tests/wireformat_test.dis [-v]
 #
@@ -36,6 +33,9 @@ include "draw.m";
 include "testing.m";
 	testing: Testing;
 	T: import testing;
+
+include "wirefmt.m";
+	wirefmt: WireFmt;
 
 include "../appl/veltro/agentlib.m";
 	agentlib: AgentLib;
@@ -73,35 +73,20 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
-# --- producer side, replicated verbatim from llmclient.b:283/:431/:1067 ---
-# safeargs := replaceall(args, "\n", "\\n");
-# Implemented inline (no escape of backslash) so the test exercises the EXACT
-# current producer contract. If llmclient.b's escaping changes, update here.
-wireescape(args: string): string
-{
-	out := "";
-	for(i := 0; i < len args; i++) {
-		if(args[i] == '\n')
-			out += "\\n";
-		else
-			out += args[i:i+1];
-	}
-	return out;
-}
-
-# Build the wire form exactly as the producer does, feed it through the real
-# consumer, and return the recovered (id, name, args) for the single tool call.
+# Encode a tool call with the REAL shared producer codec, wrap it in a tool_use
+# response exactly as llmsrv would, feed it through the REAL consumer, and
+# return the recovered (id, name, args). A correct codec makes this the
+# identity on every field.
 roundtrip(id, name, args: string): (string, string, string)
 {
-	resp := "STOP:tool_use\nTOOL:" + id + ":" + name + ":" + wireescape(args) + "\n";
+	resp := "STOP:tool_use\n" + wirefmt->encodetool(id, name, args) + "\n";
 	(nil, tools, nil) := agentlib->parsellmresponse(resp);
 	if(tools == nil)
 		return ("", "", "");
 	return hd tools;
 }
 
-# ============================ IDENTITY SUITE ============================
-# These document the contract that the codec MUST preserve. They pass today.
+# ===================== basic round-trip identity =====================
 
 testIdentityPlain(t: ref T)
 {
@@ -117,8 +102,7 @@ testIdentityEmptyArgs(t: ref T)
 	t.assertseq(args, "", "empty: args round-trip to empty");
 }
 
-# A real newline in args is escaped to \n by the producer and restored by the
-# consumer -> identity. (This is the case the escaping was designed for.)
+# A real newline in args is escaped and restored -> identity.
 testIdentityRealNewline(t: ref T)
 {
 	orig := "line1\nline2\nline3";
@@ -126,16 +110,15 @@ testIdentityRealNewline(t: ref T)
 	t.assertseq(args, orig, "real newline: multi-line args round-trip");
 }
 
-# Colons in ARGS are safe: args is the unparsed remainder after the 2nd colon.
+# Colons in args round-trip (escaped on the wire, restored on decode).
 testIdentityColonInArgs(t: ref T)
 {
 	orig := "http://host:8080/path:with:colons";
 	(nil, name, args) := roundtrip("tid", "webfetch", orig);
 	t.assertseq(name, "webfetch", "colon-in-args: name intact");
-	t.assertseq(args, orig, "colon-in-args: args round-trip (colons after field 2 are safe)");
+	t.assertseq(args, orig, "colon-in-args: args round-trip");
 }
 
-# A trailing lone backslash round-trips (unescapenl's i+1<len guard keeps it).
 testIdentityTrailingBackslash(t: ref T)
 {
 	orig := "ends-with-backslash\\";
@@ -143,8 +126,6 @@ testIdentityTrailingBackslash(t: ref T)
 	t.assertseq(args, orig, "trailing backslash: round-trips");
 }
 
-# A backslash followed by a non-n, non-backslash char round-trips (the '*'
-# branch of unescapenl keeps the backslash).
 testIdentityBackslashOther(t: ref T)
 {
 	orig := "a\\bc";          # backslash, b, c
@@ -152,51 +133,44 @@ testIdentityBackslashOther(t: ref T)
 	t.assertseq(args, orig, "backslash-other: round-trips");
 }
 
-# ========================== KNOWN DEFECT SUITE ==========================
-# These pin CURRENT (corrupted) behaviour. See
-# docs/veltro-llm-bridge-bug-taxonomy.md. When the escaping codec is fixed to
-# be a true inverse, each of these will start round-tripping to identity and
-# the assertion will FAIL -- that is the signal to replace it with the
-# commented-out identity assertion beneath it.
+# =============== regression guards (formerly KNOWN DEFECT) ===============
+# Taxonomy A1/A2/B1. Pre-Phase-1 these corrupted; the shared codec now makes
+# them round-trip verbatim. If any of these fails, the wire-format codec has
+# regressed — see docs/veltro-llm-bridge-bug-taxonomy.md.
 
-# Taxonomy A1: literal backslash-n in args (e.g. a regex "\n", or code written
-# via the write/edit tools) is corrupted into a real newline, because the
-# producer does not escape the backslash but the consumer unescapes "\n".
-testDefectA1_BackslashN(t: ref T)
+# A1: a literal backslash-n in args (regex "\n", code written via write/edit)
+# must survive as two characters, not collapse into a real newline.
+testGuardA1_BackslashN(t: ref T)
 {
 	orig := "\\n";           # two chars: backslash, n
 	(nil, nil, args) := roundtrip("tid", "grep", orig);
-	# KNOWN DEFECT: corrupted to a single real newline.
-	t.assertseq(args, "\n", "A1 KNOWN DEFECT: literal \\n corrupted to newline (see taxonomy A1)");
-	# When fixed, replace the line above with:
-	#   t.assertseq(args, orig, "A1: literal backslash-n round-trips");
+	t.assertseq(args, orig, "A1 guard: literal backslash-n round-trips (taxonomy A1)");
 }
 
-# Taxonomy A2: a doubled backslash (e.g. UNC path "\\server") collapses to a
-# single backslash, because the consumer unescapes "\\" -> "\" but the producer
-# emitted it unescaped.
-testDefectA2_DoubleBackslash(t: ref T)
+# A2: a doubled backslash (UNC path, escaped regex) must not collapse.
+testGuardA2_DoubleBackslash(t: ref T)
 {
-	orig := "\\\\server";    # four source backslashes == two actual, then "server"
+	orig := "\\\\server";    # two actual backslashes, then "server"
 	(nil, nil, args) := roundtrip("tid", "mount", orig);
-	# KNOWN DEFECT: leading "\\" collapses to "\".
-	t.assertseq(args, "\\server", "A2 KNOWN DEFECT: \\\\ collapses to \\ (see taxonomy A2)");
-	# When fixed, replace the line above with:
-	#   t.assertseq(args, orig, "A2: doubled backslash round-trips");
+	t.assertseq(args, orig, "A2 guard: doubled backslash round-trips (taxonomy A2)");
 }
 
-# Taxonomy B1: a colon in the tool NAME mis-splits the line, because id/name
-# are interpolated unescaped and split on the first two colons.
-testDefectB1_ColonInName(t: ref T)
+# B1: a colon in the tool name must not mis-split the line.
+testGuardB1_ColonInName(t: ref T)
 {
 	(id, name, args) := roundtrip("tid", "foo:bar", "X");
-	t.assertseq(id, "tid", "B1: id still correct");
-	# KNOWN DEFECT: name truncated at the colon, remainder leaks into args.
-	t.assertseq(name, "foo", "B1 KNOWN DEFECT: name truncated at colon (see taxonomy B1)");
-	t.assertseq(args, "bar:X", "B1 KNOWN DEFECT: name remainder leaks into args (see taxonomy B1)");
-	# When fixed, replace the two lines above with:
-	#   t.assertseq(name, "foo:bar", "B1: colon in name preserved");
-	#   t.assertseq(args, "X", "B1: args intact");
+	t.assertseq(id, "tid", "B1 guard: id correct");
+	t.assertseq(name, "foo:bar", "B1 guard: colon in name preserved (taxonomy B1)");
+	t.assertseq(args, "X", "B1 guard: args intact (taxonomy B1)");
+}
+
+# Belt-and-braces: a colon in the id too, plus a backslash in args.
+testGuardColonInId(t: ref T)
+{
+	(id, name, args) := roundtrip("ns:42", "edit", "a\\nb");   # args: a, backslash, n, b
+	t.assertseq(id, "ns:42", "colon-in-id: id preserved");
+	t.assertseq(name, "edit", "colon-in-id: name intact");
+	t.assertseq(args, "a\\nb", "colon-in-id: backslash arg intact");
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -208,6 +182,13 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");
 		raise "fail:cannot load testing";
 	}
+
+	wirefmt = load WireFmt WireFmt->PATH;
+	if(wirefmt == nil) {
+		sys->fprint(sys->fildes(2), "cannot load wirefmt module: %r\n");
+		raise "fail:cannot load wirefmt";
+	}
+	wirefmt->init();
 
 	agentlib = load AgentLib AgentLib->PATH;
 	if(agentlib == nil) {
@@ -223,7 +204,6 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 	}
 
-	# Identity suite — the contract the codec must preserve.
 	run("IdentityPlain", testIdentityPlain);
 	run("IdentityEmptyArgs", testIdentityEmptyArgs);
 	run("IdentityRealNewline", testIdentityRealNewline);
@@ -231,10 +211,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("IdentityTrailingBackslash", testIdentityTrailingBackslash);
 	run("IdentityBackslashOther", testIdentityBackslashOther);
 
-	# Known-defect suite — pins current corrupted behaviour (see taxonomy).
-	run("DefectA1_BackslashN", testDefectA1_BackslashN);
-	run("DefectA2_DoubleBackslash", testDefectA2_DoubleBackslash);
-	run("DefectB1_ColonInName", testDefectB1_ColonInName);
+	run("GuardA1_BackslashN", testGuardA1_BackslashN);
+	run("GuardA2_DoubleBackslash", testGuardA2_DoubleBackslash);
+	run("GuardB1_ColonInName", testGuardB1_ColonInName);
+	run("GuardColonInId", testGuardColonInId);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

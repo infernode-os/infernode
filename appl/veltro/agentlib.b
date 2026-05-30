@@ -14,6 +14,9 @@ include "sys.m";
 include "string.m";
 	str: String;
 
+include "wirefmt.m";
+	wirefmt: WireFmt;
+
 include "agentlib.m";
 
 verbose := 0;
@@ -29,6 +32,13 @@ init()
 		sys->fprint(stderr, "agentlib: cannot load String: %r\n");
 		raise "fail:agentlib: cannot load String module";
 	}
+
+	wirefmt = load WireFmt WireFmt->PATH;
+	if(wirefmt == nil){
+		sys->fprint(stderr, "agentlib: cannot load WireFmt: %r\n");
+		raise "fail:agentlib: cannot load WireFmt module";
+	}
+	wirefmt->init();
 }
 
 setverbose(v: int)
@@ -961,52 +971,10 @@ initsessiontools(id: string, toollist: list of string)
 	}
 }
 
-# Unescape \\n → newline and \\\\ → backslash in TOOL: line args.
-# llmsrv escapes newlines in args so each TOOL: fits on one line.
-unescapenl(s: string): string
-{
-	result := "";
-	i := 0;
-	while(i < len s) {
-		if(s[i] == '\\' && i + 1 < len s) {
-			case s[i+1] {
-			'n'  => result += "\n"; i += 2;
-			'\\' => result += "\\"; i += 2;
-			*    => result += s[i:i+1]; i++;
-			}
-		} else {
-			result += s[i:i+1];
-			i++;
-		}
-	}
-	return result;
-}
-
-# Parse a tool line component "id:name:args" into (id, name, args).
-# The id and name are split at the first two colons; args occupies the rest.
-# Newline escapes in args are resolved via unescapenl().
-parsetoolline(s: string): (string, string, string)
-{
-	# Find first colon → end of id
-	i := 0;
-	while(i < len s && s[i] != ':')
-		i++;
-	if(i >= len s)
-		return (s, "", "");
-	id := s[0:i];
-
-	# Find second colon → end of name
-	rest := s[i+1:];
-	j := 0;
-	while(j < len rest && rest[j] != ':')
-		j++;
-	if(j >= len rest)
-		return (id, rest, "");
-
-	name := rest[0:j];
-	args := unescapenl(rest[j+1:]);
-	return (id, name, args);
-}
+# Field (un)escaping and TOOL: line parsing now live in the shared wirefmt
+# module (module/wirefmt.m, appl/lib/wirefmt.b) so the producer (llmclient.b)
+# and this consumer share one definition and cannot drift. See
+# docs/veltro-llm-bridge-bug-taxonomy.md.
 
 # Parse an LLM response in STOP:/TOOL: format into its components.
 # Returns (stop_reason, tool_calls, text_content) where:
@@ -1047,7 +1015,7 @@ parsellmresponse(response: string): (string, list of (string, string, string), s
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
 		if(!intext && hasprefix(line, "TOOL:")) {
-			(id, name, args) := parsetoolline(line[5:]);
+			(id, name, args) := wirefmt->parsetoolline(line[5:]);
 			tools = (id, name, args) :: tools;
 		} else {
 			intext = 1;

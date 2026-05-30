@@ -37,23 +37,22 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">
 
+        <!--
+          Headless Phase 2a Activity — kept exported so harness scripts
+          and `adb shell am start -n io.infernode/.InfernodeActivity`
+          still work, but no longer LAUNCHER-listed: Lucifer is the
+          one icon on the home screen now. INFR-110 promotion noted in
+          a previous commit comment; landing it here.
+        -->
         <activity
             android:name=".InfernodeActivity"
             android:exported="true"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:label="@string/app_name" />
 
         <!--
-          Phase 2b.1 (INFR-110) — SDL3-hosted Activity for the Lucifer/wm
-          port. Lives alongside the headless InfernodeActivity, so the
-          user can pick "InferNode" (the Phase 2a interactive shell) or
-          "InferNode (Lucifer)" (this) from the launcher. Once Lucifer is
-          mature enough to be the default surface, the headless icon
-          can drop its LAUNCHER intent.
+          Phase 2b.1 (INFR-110) — SDL3-hosted Activity for the
+          Lucifer/wm port. Now the sole launcher icon (relabeled to
+          just "InferNode" since there's no longer two to disambiguate).
 
           Attributes copied from SDL3's android-project AndroidManifest:
             launchMode=singleInstance — SDL3 expects one instance.
@@ -63,7 +62,7 @@
         -->
         <activity
             android:name=".InfernodeSDLActivity"
-            android:label="InferNode (Lucifer)"
+            android:label="@string/app_name"
             android:exported="true"
             android:launchMode="singleInstance"
             android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">

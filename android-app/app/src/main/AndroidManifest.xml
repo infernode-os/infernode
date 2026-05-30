@@ -23,6 +23,18 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
+      CALL_PHONE — INFR-201. Lets `/phone/phone` dial verb fire
+      Intent.ACTION_CALL via InfernodePhoneBridge, originating a PSTN
+      call without bouncing through the system dialer. Granted at
+      runtime (API 23+) the same way RECORD_AUDIO is.
+
+      Companion is QUERY_ALL_PACKAGES — we don't take it; if the
+      handset has no app that can resolve `tel:` the dial silently
+      no-ops, which is the expected outcome on a tablet etc.
+    -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!--
       Launcher icons sourced from MacOSX/InferNode.icns (1024x1024
       master) and downsampled into res/mipmap-{m,h,xh,xxh,xxxh}dpi/
       at the standard Android density steps. ic_launcher.png is the

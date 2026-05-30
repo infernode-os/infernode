@@ -31,7 +31,97 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <jni.h>
 #include "phonebridge.h"
+
+/* Owns the JavaVM* used by both the JNI bridge and our dial path.
+ * jni-emu.c (built into libemu.so) extern-declares this and assigns
+ * to it in JNI_OnLoad; the headless o.emu links this translation unit
+ * with g_vm staying NULL, and android_dial() handles that as a clean
+ * "JNI not initialised" failure. */
+JavaVM *g_vm = NULL;
+
+/*
+ * INFR-201: fire Intent.ACTION_CALL via InfernodePhoneBridge.dial.
+ *
+ * Runs on whichever thread called phonebridge_phone_ctl (Inferno
+ * kproc), which the JVM doesn't know about. AttachCurrentThread is
+ * mandatory; we detach before returning so a long-lived Inferno
+ * thread doesn't accumulate JVM attachments.
+ *
+ * Returns 0 on success, -1 on any failure (no JVM, lookup miss,
+ * Kotlin reported failure, exception). Caller surfaces the error
+ * string the C side already populated.
+ */
+static int
+android_dial(const char *number, char *err, int errlen)
+{
+	JNIEnv *env;
+	jclass cls;
+	jmethodID mid;
+	jstring jnum;
+	jint rc;
+	int attached = 0;
+
+	if(g_vm == NULL){
+		snprintf(err, errlen, "phone: JNI not initialised (g_vm null)");
+		return -1;
+	}
+	switch((*g_vm)->GetEnv(g_vm, (void**)&env, JNI_VERSION_1_6)){
+	case JNI_OK:
+		break;
+	case JNI_EDETACHED:
+		if((*g_vm)->AttachCurrentThread(g_vm, &env, NULL) != JNI_OK){
+			snprintf(err, errlen, "phone: AttachCurrentThread failed");
+			return -1;
+		}
+		attached = 1;
+		break;
+	default:
+		snprintf(err, errlen, "phone: GetEnv failed");
+		return -1;
+	}
+
+	cls = (*env)->FindClass(env, "io/infernode/InfernodePhoneBridge");
+	if(cls == NULL){
+		(*env)->ExceptionClear(env);
+		snprintf(err, errlen,
+			"phone: FindClass(InfernodePhoneBridge) failed");
+		if(attached) (*g_vm)->DetachCurrentThread(g_vm);
+		return -1;
+	}
+	mid = (*env)->GetStaticMethodID(env, cls, "dial",
+		"(Ljava/lang/String;)I");
+	if(mid == NULL){
+		(*env)->ExceptionClear(env);
+		(*env)->DeleteLocalRef(env, cls);
+		snprintf(err, errlen,
+			"phone: GetStaticMethodID(dial) failed");
+		if(attached) (*g_vm)->DetachCurrentThread(g_vm);
+		return -1;
+	}
+	jnum = (*env)->NewStringUTF(env, number ? number : "");
+	rc = (*env)->CallStaticIntMethod(env, cls, mid, jnum);
+	if((*env)->ExceptionCheck(env)){
+		(*env)->ExceptionDescribe(env);
+		(*env)->ExceptionClear(env);
+		rc = -1;
+	}
+
+	(*env)->DeleteLocalRef(env, jnum);
+	(*env)->DeleteLocalRef(env, cls);
+	if(attached)
+		(*g_vm)->DetachCurrentThread(g_vm);
+
+	if(rc != 0){
+		snprintf(err, errlen,
+			"phone: Android dial returned %d "
+			"(no context attached, CALL_PHONE not granted, or no tel: resolver)",
+			(int)rc);
+		return -1;
+	}
+	return 0;
+}
 
 void
 phonebridge_init(void)
@@ -71,7 +161,18 @@ phonebridge_send_sms(const char *number, const char *body, char *err, int errlen
 int
 phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
 {
-	fprintf(stderr, "phone: Android phone_ctl %s%s%s (stub)\n",
+	/* INFR-201: dial is the only verb wired today. answer / hangup
+	 * need TelecomManager.acceptRingingCall + endCall (API 26+,
+	 * ANSWER_PHONE_CALLS perm) and live with the rest of INFR-182. */
+	if(verb != NULL && strcmp(verb, "dial") == 0){
+		if(rest == NULL || rest[0] == 0){
+			snprintf(err, errlen, "phone: dial: missing number");
+			return -1;
+		}
+		fprintf(stderr, "phone: Android dial %s\n", rest);
+		return android_dial(rest, err, errlen);
+	}
+	fprintf(stderr, "phone: Android phone_ctl %s%s%s (stub — INFR-182)\n",
 		verb ? verb : "", rest ? " " : "", rest ? rest : "");
 	(void)err; (void)errlen;
 	return 0;

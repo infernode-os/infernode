@@ -37,6 +37,7 @@ TARG=\
 	jit_test.dis\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
+	llmclient_reqshape_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
 	lists_test.dis\

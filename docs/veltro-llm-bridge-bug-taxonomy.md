@@ -95,6 +95,9 @@ other classes recur.
 Severity: **medium** (maintainability / latent). Not a single bug — a bug
 *incubator*.
 
+The one *correctness* defect within Class C (the raw `m.sc` splice) is fixed in
+Phase 2 below; the duplication itself remains, now under a byte-exact net.
+
 ### Class D — already-fixed regressions in this subsystem (regression-guard targets)
 
 Mined from history; listed so the characterization suite keeps them dead:
@@ -127,6 +130,30 @@ a Linux `emu`: `wireformat_test` 10/10, `agentlib_test` 27 passed / 8 skipped,
 `llmsrv_test` 53 passed. The former A1/A2/B1 defect tests are now identity
 regression guards. Class C (duplicated JSON assembly) is unaddressed — a
 separate, larger refactor.
+
+## Phase-2 fix — landed (Class C, partial)
+
+The single *correctness* defect in Class C is fixed: `buildanthropicmessage`
+(`appl/lib/llmclient.b`) no longer splices `m.sc` in raw. It now parses `m.sc`
+via `readjsonstring` first (mirroring the guard the OpenAI path already had) and
+falls back to the plain-text representation if the structured content is
+malformed, so a bad `sc` can no longer corrupt the request body. The happy-path
+bytes are unchanged.
+
+To make any *future* de-duplication of the two builders safe, Phase 2 also adds
+a byte-exact net: `buildanthropicrequest` is now exported, and
+`tests/llmclient_reqshape_test.b` locks the byte-for-byte output of both
+builders for a representative request — including the Anthropic
+`cache_control` prompt-cache markers, whose exact bytes matter for cache prefix
+matching — plus seam tests (valid `sc` splices and parses; malformed `sc` falls
+back and the body still parses). Verified live: `llmclient_reqshape_test` 4/4,
+`llmclient_think_gating_test` 5/5, `llmsrv_test` 53/53, with the Phase-1 suites
+still green.
+
+**Still open (Phase 3 candidate):** the actual duplication — the two
+near-identical builders and the ~6 repeated `tool_use` structblock-reconstruction
+sites — is unaddressed. The byte goldens here are the prerequisite net for that
+refactor (whether a shared JSON-emit helper or a full `JValue`-tree migration).
 
 ## Phase-0 coverage delivered
 

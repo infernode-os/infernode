@@ -87,8 +87,12 @@ init(nil: ref Draw->Context, args: list of string)
 		"audiotone: wrote %d bytes (%d ms @ %d Hz)\n",
 		written, DURMS, FREQ);
 
-	# Hold the FD until SDL3 drains; without a small grace period
-	# the close tears down the stream before the last buffered
-	# frames hit the device.
-	sys->sleep(200);
+	# Hold the FD open until SDL3 has drained the queue. The write()
+	# above just enqueues bytes in the SDL_AudioStream; the device
+	# thread pulls them out at real-time pace. If we close before
+	# the queue drains, audio_file_close destroys the stream and the
+	# unplayed tail is lost — that's why a 200 ms grace was silent.
+	# Sleep for the full audio duration plus a small device latency
+	# allowance, then exit (which closes the FD cleanly).
+	sys->sleep(DURMS + 500);
 }

@@ -622,6 +622,38 @@ That routes through `msg9p`'s `send` verb to the sms MsgSrc's
 `send(Message)` and produces the same `/phone/sms` write as the
 direct test above.
 
+### iOS SMS receive — there is none, and there cannot be
+
+Android grants the SMS round-trip both ways: a manifest-declared
+`BroadcastReceiver` for `android.provider.Telephony.SMS_RECEIVED` plus
+`RECEIVE_SMS` / `READ_SMS` runtime permissions (INFR-182, PR #188 —
+`emu/Android/phonebridge.c`'s `Java_io_infernode_InfernodePhoneBridge_postSms`
+feeds the wire record into `phonebridge_post_sms`).
+
+iOS does not. Apple's public SDK exposes **no API** for a third-party
+app to read inbound SMS. The closest surface is
+`ILMessageFilterExtension`, which is invoked **without** the message
+body for spam-classification of unknown senders — the body never
+reaches your app, and known senders skip the extension entirely. There
+is no notification, no inbox query, no observer. This is a deliberate
+platform restriction on Apple's part; no entitlement or capability
+unlocks it for third parties.
+
+Practically:
+
+* `/phone/sms` reads on iOS block forever. That is the correct
+  behaviour — there is nothing to deliver.
+* The msg9p `sms` MsgSrc on iOS only ever emits outbound writes (`send`
+  verb) and never produces a `from …` record. The source's `recv`
+  channel idles.
+* For development you can synthesise an inbound record by writing the
+  wire format directly to a test fixture — see `tests/sms_msgsrc_test.b`
+  for the format (`from <sender> <ts>\n<body>\n`).
+
+Do not file tickets to "wire iOS SMS receive." The gap is structural,
+not a TODO. If iMessage / iCloud sync ever becomes scriptable to third
+parties (it isn't), revisit then.
+
 ### What the simulator CAN test
 
 * `phonebridge_init` runs without crashing

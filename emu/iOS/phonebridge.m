@@ -340,10 +340,26 @@ phonebridge_ctl_status(char *buf, int buflen)
 }
 
 /*
- * Inbound SMS: iOS exposes no public inbox API to third-party apps, so
- * there is no path to call phonebridge_post_sms() — readers of
- * /phone/sms simply block forever. On Android the bridge will produce
- * via phonebridge_post_sms() when SMS_RECEIVED arrives (INFR-182).
+ * Inbound SMS — there is none, and there cannot be.
+ *
+ * Apple's public SDK exposes no API for a third-party app to read an
+ * incoming SMS. The closest surface, ILMessageFilterExtension, is
+ * invoked without the message body for spam-classification of unknown
+ * senders only — the body never reaches the app and known senders
+ * skip the extension entirely. No entitlement unlocks it for third
+ * parties. This is a deliberate platform restriction, not a TODO.
+ *
+ * Consequence: there is no path to call phonebridge_post_sms() from
+ * the iOS bridge, ever. Readers of /phone/sms block forever — which
+ * is the correct behaviour (no record to deliver). The msg9p `sms`
+ * MsgSrc on iOS only ever emits outbound writes.
+ *
+ * Android wires this in emu/Android/phonebridge.c via a manifest
+ * BroadcastReceiver on android.provider.Telephony.SMS_RECEIVED, with
+ * RECEIVE_SMS + READ_SMS runtime perms (INFR-182, PR #188).
+ *
+ * See docs/HELLAPHONE.md §"iOS SMS receive — there is none, and there
+ * cannot be" for the full rationale.
  */
 
 int

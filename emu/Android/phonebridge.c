@@ -273,6 +273,37 @@ phonebridge_send_sms(const char *number, const char *body, char *err, int errlen
 	return android_send_sms(number, body, err, errlen);
 }
 
+/*
+ * INFR-182 SMS-receive slice. Kotlin's InfernodeSmsReceiver formats
+ * the canonical devphone wire record ("from <num> <ts>\n<body>\n") and
+ * calls this entry point. We forward the UTF-8 bytes verbatim into
+ * phonebridge_post_sms, which fans them to every /phone/sms reader.
+ *
+ * Naming convention path — works without RegisterNatives.
+ */
+JNIEXPORT void JNICALL
+Java_io_infernode_InfernodePhoneBridge_postSms(JNIEnv *env, jclass cls,
+                                               jstring jrecord)
+{
+	const char *bytes;
+	jsize n;
+
+	(void)cls;
+	if(jrecord == NULL)
+		return;
+	n = (*env)->GetStringUTFLength(env, jrecord);
+	if(n <= 0)
+		return;
+	bytes = (*env)->GetStringUTFChars(env, jrecord, NULL);
+	if(bytes == NULL){
+		(*env)->ExceptionClear(env);
+		return;
+	}
+	phonebridge_post_sms(bytes, (int)n);
+	(*env)->ReleaseStringUTFChars(env, jrecord, bytes);
+	fprintf(stderr, "phone: Android postSms forwarded %d bytes\n", (int)n);
+}
+
 /* Inbound paths land via phonebridge_post_sms / phonebridge_post_call_event
  * once INFR-182 wires the ContentObserver + TelephonyCallback through the
  * JNI surface. Stub does nothing — readers of /phone/sms and /phone/phone

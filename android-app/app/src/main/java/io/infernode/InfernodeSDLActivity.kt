@@ -122,6 +122,7 @@ class InfernodeSDLActivity : SDLActivity() {
         ensureRecordAudioPermission()
         ensureCallPhonePermission()
         ensureSendSmsPermission()
+        ensureReceiveSmsPermission()
         InfernodePhoneBridge.attach(this)
         super.onCreate(savedInstanceState)
 
@@ -221,6 +222,29 @@ class InfernodeSDLActivity : SDLActivity() {
                 this,
                 arrayOf(Manifest.permission.SEND_SMS),
                 /* requestCode = */ 3
+            )
+        }
+    }
+
+    private fun ensureReceiveSmsPermission() {
+        // INFR-182 SMS receive slice: InfernodeSmsReceiver picks up
+        // android.provider.Telephony.SMS_RECEIVED. RECEIVE_SMS is the
+        // runtime perm that lets the broadcast actually reach our
+        // receiver; READ_SMS is in the same group and Android grants
+        // it together. Request both in one batch — the prompt will
+        // collapse since they share the SMS perm group.
+        val needs = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
+            != PackageManager.PERMISSION_GRANTED
+        ) needs += Manifest.permission.RECEIVE_SMS
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
+            != PackageManager.PERMISSION_GRANTED
+        ) needs += Manifest.permission.READ_SMS
+        if (needs.isNotEmpty()) {
+            ActivityCompat.requestPermissions(
+                this,
+                needs.toTypedArray(),
+                /* requestCode = */ 4
             )
         }
     }

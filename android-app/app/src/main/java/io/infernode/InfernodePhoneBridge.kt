@@ -167,4 +167,31 @@ object InfernodePhoneBridge {
         }
         return 0
     }
+
+    /**
+     * INFR-182 SMS-receive slice. Pushes a pre-formatted devphone wire
+     * record ("from <sender> <ts>\n<body>\n") into native, which calls
+     * `phonebridge_post_sms` and fans it out to every open reader of
+     * `/phone/sms`. Implementation lives in `emu/Android/phonebridge.c`
+     * (`Java_io_infernode_InfernodePhoneBridge_postSms`).
+     *
+     * Throws `UnsatisfiedLinkError` if libemu.so isn't loaded in the
+     * receiver's process — see InfernodeSmsReceiver for how that's
+     * handled.
+     */
+    @JvmStatic
+    external fun postSms(record: String)
+
+    init {
+        // libemu.so is loaded by SDLActivity.loadLibraries() during the
+        // Activity bring-up, before InfernodePhoneBridge.attach() runs.
+        // But the SMS receiver process may pre-empt that on a cold-start
+        // broadcast: ensure the native side is loaded so postSms resolves.
+        try {
+            System.loadLibrary("SDL3")
+            System.loadLibrary("emu")
+        } catch (ule: UnsatisfiedLinkError) {
+            // Already loaded by SDLActivity in the normal path — ignore.
+        }
+    }
 }

@@ -42,6 +42,17 @@
     <uses-permission android:name="android.permission.SEND_SMS" />
 
     <!--
+      RECEIVE_SMS + READ_SMS — INFR-182 SMS receive slice. Lets
+      InfernodeSmsReceiver pick up android.provider.Telephony.SMS_RECEIVED
+      and push the record into devphone's /phone/sms reader queue via
+      phonebridge_post_sms. SMS_RECEIVED is one of the exempt implicit
+      broadcasts on API 26+, so a manifest-declared receiver still
+      fires when the activity isn't in the foreground.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <!--
       Launcher icons sourced from MacOSX/InferNode.icns (1024x1024
       master) and downsampled into res/mipmap-{m,h,xh,xxh,xxxh}dpi/
       at the standard Android density steps. ic_launcher.png is the
@@ -98,6 +109,23 @@
             android:name=".InfernodeService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <!--
+          INFR-182 SMS-receive slice. SMS_RECEIVED is one of the
+          implicit-broadcast exemptions on API 26+, so a manifest
+          receiver still fires when the activity isn't foregrounded.
+          exported=true is required for system broadcasts; the
+          permission attribute restricts who can send it to BROADCAST_SMS
+          (system-only) so a third-party app can't spoof inbound SMS.
+        -->
+        <receiver
+            android:name=".InfernodeSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="100">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

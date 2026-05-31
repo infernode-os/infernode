@@ -1241,9 +1241,56 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 }
 
 /*
+ * iOS smart-punctuation map (INFR-211). The iOS soft keyboard runs
+ * `UITextInputTraits.smartQuotesType` / `smartDashesType` enabled by
+ * default; SDL3 doesn't expose those traits, so the bytes we receive
+ * via SDL_EVENT_TEXT_INPUT for a single quote are U+2019, not U+0027.
+ * Inferno sh's tokeniser treats only ASCII `'` as the literal-string
+ * delimiter, so a typed `'foo bar'` never delimits and parses wrong.
+ *
+ * We translate at our own boundary: just before the rune lands in
+ * gkbdq, swap the typographic punctuation iOS gives us back to the
+ * ASCII the user is trying to type. iOS-only — on desktop the user
+ * actually wanted U+2019 if they pressed Option-Shift-`]`.
+ *
+ * Returns the (possibly-substituted) primary rune. If the substitution
+ * expands to multiple ASCII bytes (only U+2026 → "..."), `extra` and
+ * `*extralen` carry the trailing bytes; otherwise *extralen is 0.
+ *
+ * Kept tiny on purpose — Inferno sh-relevant punctuation only. Other
+ * curly characters pass through untouched.
+ */
+#if defined(__APPLE__) && TARGET_OS_IOS
+static Rune
+ios_normalize_rune(Rune r, char *extra, int *extralen)
+{
+	*extralen = 0;
+	switch (r) {
+	case 0x2018:	/* LEFT SINGLE QUOTATION MARK */
+	case 0x2019:	/* RIGHT SINGLE QUOTATION MARK / APOSTROPHE */
+		return '\'';
+	case 0x201C:	/* LEFT DOUBLE QUOTATION MARK */
+	case 0x201D:	/* RIGHT DOUBLE QUOTATION MARK */
+		return '"';
+	case 0x2013:	/* EN DASH */
+	case 0x2014:	/* EM DASH */
+		return '-';
+	case 0x2026:	/* HORIZONTAL ELLIPSIS */
+		extra[0] = '.';
+		extra[1] = '.';
+		*extralen = 2;
+		return '.';
+	default:
+		return r;
+	}
+}
+#endif
+
+/*
  * Handle SDL_EVENT_TEXT_INPUT.
  * Decodes UTF-8 text to Unicode codepoints and sends to keyboard queue.
  * Skips control characters (handled by Ctrl+letter in KEY_DOWN).
+ * On iOS, also flattens smart-punctuation back to ASCII (INFR-211).
  */
 static void
 handle_text_input(const char *text)
@@ -1260,7 +1307,19 @@ handle_text_input(const char *text)
 			text++;
 			continue;
 		}
+#if defined(__APPLE__) && TARGET_OS_IOS
+		{
+			char extra[4];
+			int extralen = 0;
+			int i;
+			r = ios_normalize_rune(r, extra, &extralen);
+			gkbdputc(gkbdq, r);
+			for (i = 0; i < extralen; i++)
+				gkbdputc(gkbdq, (Rune)(uchar)extra[i]);
+		}
+#else
 		gkbdputc(gkbdq, r);
+#endif
 		text += n;
 	}
 }

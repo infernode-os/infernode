@@ -26,6 +26,9 @@ include "widget.m";
 	widgetmod: Widget;
 	Button, Label, LEFT: import widgetmod;
 
+include "softkbd.m";
+	softkbd: Softkbd;
+
 LuciConv: module
 {
 	PATH: con "/dis/luciconv.dis";
@@ -208,6 +211,13 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	else
 		sys->fprint(stderr, "luciconv: cannot load widget: %r\n");
 
+	# Soft-keyboard helper (INFR-166). The slide depends on knowing
+	# the focused widget's actual rect; null load is non-fatal — we
+	# fall back to the legacy "kbd on/off via /dev/consctl" path.
+	softkbd = load Softkbd Softkbd->PATH;
+	if(softkbd != nil)
+		softkbd->init();
+
 	inputbuf = "";
 	inputpos = 0;
 	username = readdevuser();
@@ -243,10 +253,23 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Mobile soft keyboard: raise it only when the input field
 			# is tapped; hide it on any other tap in the chat zone.
 			if(mobile) {
-				if(inputrect.dx() > 0 && inputrect.contains(p.xy))
+				if(inputrect.dx() > 0 && inputrect.contains(p.xy)) {
+					# INFR-166: tell SDL the actual focused
+					# widget rect (in window points) so it
+					# slides this widget — not a hard-coded
+					# 56pt strip — above the keyboard.
+					if(softkbd != nil)
+						softkbd->set_rect(
+							inputrect.min.x,
+							inputrect.min.y,
+							inputrect.dx(),
+							inputrect.dy());
 					reqkbd(1);
-				else
+				} else {
 					reqkbd(0);
+					if(softkbd != nil)
+						softkbd->clear_rect();
+				}
 			}
 			# KLUDGE-MOBILE-ACCORDION-INFR-119 — Send button hit
 			# test before any other handlers. Same effect as
@@ -536,13 +559,10 @@ drawconversation(zone: Rect)
 {
 	pad := 8;
 	inputh := mainfont.height + 2 * pad;
-	# KLUDGE-MOBILE-ACCORDION-INFR-119 — the desktop input bar is
-	# one font height + a tiny pad; that's too short to thumb-tap on
-	# a phone, and the mic button at its right is barely wider than
-	# the label. Roughly double both, and add a visible Send button.
 	if(mobile) {
 		pad = 16;
 		inputh = mainfont.height * 2 + 2 * pad;
+		if(inputh < 132) inputh = 132;	# 44pt finger tap target
 	}
 	msgy := zone.max.y - inputh - 2;
 
@@ -561,6 +581,7 @@ drawconversation(zone: Rect)
 	sendw := 0;
 	if(mobile) {
 		sendw = mainfont.width("Send") + 2 * pad;
+		if(sendw < 132) sendw = 132;	# 44pt finger tap target
 		sendx := inputr.max.x - sendw;
 		sendy := inputr.min.y;
 		sendrect = Rect((sendx, sendy), (inputr.max.x, inputr.max.y));
@@ -569,26 +590,40 @@ drawconversation(zone: Rect)
 		mainwin.text((sendx + pad, sty), bgcol, (0, 0), mainfont, "Send");
 	}
 
-	# Mic button at right edge of input (or left of Send on mobile)
+	# Mic button at right edge of input (or left of Send on mobile).
+	# Tap target floored to 44pt; visual chrome (background fill + label
+	# centered) matches the Send button's shape so the user can see
+	# what's tappable instead of guessing. REC state inverts to the
+	# accent fill so a recording session reads as the active action,
+	# matching how Send is drawn.
 	miclabel: string;
+	micfill: ref Image;
 	miccol: ref Image;
 	case voicestate {
 	VOICE_REC =>
 		miclabel = "REC";
-		miccol = accentcol;
+		micfill = accentcol;
+		miccol  = bgcol;
 	* =>
 		miclabel = "mic";
-		miccol = dimcol;
+		micfill = bordercol;	# muted chrome — clearly a button, not the primary action
+		miccol  = textcol;
 	}
-	micw := mainfont.width(miclabel) + 2 * pad;
+	miclabelw := mainfont.width(miclabel);
+	micw := miclabelw + 2 * pad;
+	if(mobile && micw < 132) micw = 132;	# 44pt finger tap target
 	micx := inputr.max.x - micw - sendw;
 	if(mobile && sendw > 0)
 		micx -= 4;	# small gap between mic and Send
 	micy := inputr.min.y;
 	micrect = Rect((micx, micy), (micx + micw, inputr.max.y));
+	mainwin.draw(micrect, micfill, nil, (0, 0));
+	# Shared vertical baseline for everything on the input row.
 	ity := inputr.min.y + (inputh - mainfont.height) / 2;
-	mainwin.text((micx + pad, ity), miccol, (0, 0), mainfont, miclabel);
-	# Separator line between input and mic
+	# Centre the mic label inside its filled rect (horizontal).
+	miclblx := micx + (micw - miclabelw) / 2;
+	mainwin.text((miclblx, ity), miccol, (0, 0), mainfont, miclabel);
+	# Hairline separator between the input area and the mic button.
 	mainwin.draw(Rect((micx - 1, micy + 4), (micx, inputr.max.y - 4)),
 		dimcol, nil, (0, 0));
 

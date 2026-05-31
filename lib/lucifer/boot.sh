@@ -1,6 +1,7 @@
 # InferNode GUI boot sequence
 # Runs AFTER profile (invoked as: sh -l /lib/lucifer/boot.sh)
 
+
 # Warm trfs cache for the secstore overlay so logon and secstored can
 # find PAK/factotum files on second launch (trfs may not have read-ahead
 # the directory contents yet when the overlay bind was set up in profile).
@@ -41,6 +42,19 @@ if {! ~ $skiplogon 1} {
 		llmkey=`{sed -n 's/^keyfile=//p' /lib/ndb/llm >[2] /dev/null}
 		if {~ $llmkey ''} { llmkey=/lib/keyring/serve-llm }
 		if {~ $llmauth keyring} {
+			# Biometric secstore opportunistic unlock (INFR-169
+			# follow-up). If /phone/bio_status reports available
+			# and the on-disk keyfile is missing, ask the OS
+			# secure-element to release the slot. The user sees a
+			# FaceID/TouchID prompt. /tmp/serve-llm is tmpfs in
+			# the per-boot namespace, so it never hits flash.
+			if {! ftest -f $llmkey} {
+				if {~ `{cat /phone/bio_status >[2] /dev/null} available} {
+					if {bioget serve-llm /tmp/serve-llm >[2] /dev/null} {
+						llmkey=/tmp/serve-llm
+					}
+				}
+			}
 			if {ftest -f $llmkey} {
 				mount -k $llmkey $llmdial /n/llm >[2] /dev/null
 			}{
@@ -75,12 +89,30 @@ sleep 1
 mail9p >[2] /dev/null &
 sleep 1
 
+# Message layer — msg9p mounts /n/msg and aggregates Notifications from
+# every registered MsgSrc into /n/msg/notify, which lucibridge / agents
+# block-read for unified inbound alerts (mail, sms, …). Register the
+# sources we ship by default; failures here are non-fatal (the source's
+# own init() returns an error if the backing channel isn't available,
+# e.g. sms on a build without /phone bound). stderr stays attached so
+# mount/register failures surface in the console.
+/dis/veltro/msg9p.dis &
+sleep 1
+echo 'register sms /dis/veltro/sources/sms.dis' > /n/msg/ctl
+
 # GUI services
 luciuisrv
 echo activity create Main > /n/ui/ctl
 sleep 1
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
+# (No auto-spawn of /dis/wm/shell in Activity 0 — the Main agent
+#  doesn't have shell authority, so the tab either sits empty or, on
+#  mobile, slides a shell in front of a context that shouldn't have
+#  it. The old `mobile SMS test affordance` from c71663e8 became
+#  redundant once Veltro picked up the sms / dial tools (INFR-150 /
+#  INFR-151 / INFR-169). Users that genuinely want a shell open a
+#  fresh task activity for it.)
 lucifer

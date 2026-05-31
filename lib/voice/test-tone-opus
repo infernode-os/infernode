@@ -1,0 +1,79 @@
+# voice/test-tone-opus — single-shell loopback acceptance for the
+# opus + 9P pipeline. INFR-187.
+#
+# Spins up a local opus listener, mounts it back at /n/peer, runs
+# audiotone through the encoder, drains the encoded frames over 9P
+# into the peer's decoder, and lets the listener's local drain cat
+# play the decoded PCM out the speaker. If you hear the ~5 s pulse
+# train (slightly grittier than the raw-PCM version because opus is
+# lossy), the entire codec + 9P + 4-cat bridge works.
+#
+# Headphones-only (or expect feedback once we add real mic capture
+# downstream).
+#
+# Usage:
+#   sh /lib/voice/test-tone-opus          # default port 7070
+#   sh /lib/voice/test-tone-opus 7071     # alt port if 7070 in use
+
+load std
+
+port=$1
+if {~ $#port 0} {
+	port=7070
+}
+addr='tcp!127.0.0.1!'$port
+
+bind -a '#A' /dev
+mkdir -p /n/opus
+bind '#Z' /n/opus
+
+echo 'rate 48000' > /n/opus/ctl
+echo 'chans 1' > /n/opus/ctl
+echo 'frame_ms 20' > /n/opus/ctl
+echo 'bitrate 24000' > /n/opus/ctl
+
+echo 'rate 48000' > /dev/audioctl
+echo 'chans 1' > /dev/audioctl
+echo 'bits 16' > /dev/audioctl
+
+# Listener-side cat: drain decoder to speaker. This is what makes the
+# tone audible — every Opus frame that arrives at /n/opus/dec is
+# decoded to PCM and pushed to /dev/audio.
+cat /n/opus/dec > /dev/audio &
+spk_pid=$apid
+
+# Announce + export. We export /n/opus so the dialer sees
+# /n/peer/{enc,dec,ctl,status} as the same files.
+listen -A 'tcp!*!'$port { export /n/opus & } &
+listen_pid=$apid
+sleep 1
+
+# Loopback mount
+mkdir -p /n/peer
+if {! mount -A $addr /n/peer} {
+	echo 'voice/test-tone-opus: mount' $addr 'failed' >[1=2]
+	if {ftest -e /prog/$spk_pid} { echo kill > /prog/$spk_pid/ctl }
+	if {ftest -e /prog/$listen_pid} { echo kill > /prog/$listen_pid/ctl }
+	exit mount
+}
+
+# Bridge: encoded frames from the local encoder go over 9P to the
+# (loopback) peer's decoder, which IS the same /n/opus/dec the spk_pid
+# cat is draining. Same emu, two paths through the device.
+cat /n/opus/enc > /n/peer/dec &
+net_pid=$apid
+
+echo 'voice/test-tone-opus: routing audiotone through opus over' $addr
+audiotone -r 48000 -c 1 /n/opus/enc
+
+# Give the pipeline a beat to finish playing what's still in the SDL
+# queue (audiotone already sleeps total_ms+500, but the 9P round trip
+# adds latency on top).
+sleep 1
+
+if {ftest -e /prog/$net_pid}    { echo kill > /prog/$net_pid/ctl }
+if {ftest -e /prog/$spk_pid}    { echo kill > /prog/$spk_pid/ctl }
+if {ftest -e /prog/$listen_pid} { echo kill > /prog/$listen_pid/ctl }
+
+echo 'voice/test-tone-opus: done'
+cat /n/opus/status

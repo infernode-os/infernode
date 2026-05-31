@@ -35,6 +35,33 @@
 	     LAN 9P service) silently fails. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>InferNode connects to a remote InferNode on your local network to use its LLM and 9P services.</string>
+	<!-- /phone/contacts surfaces the address book to Veltro so the agent
+	     can resolve names ("text mom") to numbers. Read-only; the
+	     contacts file is exposed through Inferno's 9P namespace under
+	     /phone/contacts. Authorization status is checked on every read. -->
+	<key>NSContactsUsageDescription</key>
+	<string>InferNode reads your contacts so the Veltro agent can resolve names like "text mom" to phone numbers for SMS and dialling.</string>
+	<!-- /phone/bio_* uses LocalAuthentication + Keychain biometryCurrentSet
+	     to protect remote-LLM and secstore keys. iOS displays this string
+	     under the Face ID prompt. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>InferNode uses Face ID to unlock signed keys (LLM mount, secstore) without prompting for a password every launch.</string>
+	<!-- Voice/dial audio (INFR-186, INFR-190). iOS hard-crashes the instant
+	     any microphone API is touched if this key is absent, so it is
+	     mandatory before /dev/audio can open the capture device. iOS shows
+	     this string in the microphone permission prompt. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>InferNode uses the microphone for voice and dial audio.</string>
+	<!-- Voice over 9P (INFR-186). 'audio' keeps the AVAudioSession alive
+	     after the screen locks so an in-progress call survives lock; 'voip'
+	     gives iOS a hint to wake the app for incoming voice events without
+	     it being killed in the background. Without either, the SDL3 audio
+	     stream is torn down on lock and the call drops. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+	</array>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

@@ -49,7 +49,16 @@ if [ ! -d "$ANDROID_NDK_HOME" ]; then
 fi
 export ANDROID_NDK_HOME
 
-CROSS_PREFIX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+# Pick the right NDK host tag for the build machine. linux-x86_64 covers
+# CI; darwin-x86_64 covers Apple Silicon Macs too (Apple's NDK ships
+# x86_64 binaries that run under Rosetta — there is no arm64 NDK host
+# slice yet as of r28).
+case "$(uname -s)" in
+    Linux*)  NDK_HOST_TAG=linux-x86_64 ;;
+    Darwin*) NDK_HOST_TAG=darwin-x86_64 ;;
+    *) echo "ERROR: unsupported build host $(uname -s)" >&2; exit 1 ;;
+esac
+CROSS_PREFIX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST_TAG/bin"
 if [ ! -x "$CROSS_PREFIX/aarch64-linux-android24-clang" ]; then
     echo "ERROR: NDK clang wrapper missing at $CROSS_PREFIX/aarch64-linux-android24-clang" >&2
     echo "  NDK install at $ANDROID_NDK_HOME may be incomplete." >&2
@@ -57,12 +66,26 @@ if [ ! -x "$CROSS_PREFIX/aarch64-linux-android24-clang" ]; then
 fi
 
 # --- Host mk + limbo ------------------------------------------------------
-if [ ! -x "$ROOT/Linux/amd64/bin/mk" ]; then
-    echo "ERROR: host mk not built. Run ./makemk.sh + build-linux-amd64.sh first." >&2
+# CI runs Linux; a Mac dev box has MacOSX/arm64/bin/ instead. Pick whichever
+# is present; bail with a useful message if neither is.
+HOST_BIN=""
+for cand in Linux/amd64 MacOSX/arm64 MacOSX/amd64; do
+    if [ -x "$ROOT/$cand/bin/mk" ]; then
+        HOST_BIN="$ROOT/$cand/bin"
+        break
+    fi
+done
+if [ -z "$HOST_BIN" ]; then
+    echo "ERROR: host mk not built." >&2
+    echo "  Tried Linux/amd64, MacOSX/arm64, MacOSX/amd64 under $ROOT." >&2
+    echo "  On Linux: run ./makemk.sh + build-linux-amd64.sh." >&2
+    echo "  On macOS: run ./makemk.sh (the rest of the host tools come" \
+         "with build-macos-sdl3.sh or build-macos-headless.sh)." >&2
     exit 1
 fi
-if [ ! -x "$ROOT/Linux/amd64/bin/limbo" ]; then
-    echo "WARNING: host limbo not at Linux/amd64/bin/limbo." >&2
+export PATH="$HOST_BIN:$PATH"
+if [ ! -x "$HOST_BIN/limbo" ]; then
+    echo "WARNING: host limbo not at $HOST_BIN/limbo." >&2
     echo "  Some appl/ builds compiling .b -> .dis may need it." >&2
 fi
 
@@ -76,7 +99,13 @@ fi
 # (Phase 2b.0+); that requires SDL3 cross-built for Android arm64,
 # which build-sdl3-android.sh produces.
 : "${GUIBACK:=headless}"
-MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK"
+MKARGS="SYSTARG=Android OBJTYPE=arm64 GUIBACK=$GUIBACK NDK_HOST_TAG=$NDK_HOST_TAG"
+# Darwin host: case-insensitive APFS makes mk's `.s` and `.S` rules
+# collide on getcallerpc-Android-arm64.S. Nobble the `.S` rule here
+# rather than in the mkfile, since Linux CI needs the rule alive.
+case "$(uname -s)" in
+    Darwin*) MKARGS="$MKARGS MACOSINF=caseinsensitive" ;;
+esac
 
 if [ "$GUIBACK" = "sdl3" ]; then
     : "${SDL3_PREFIX:=$HOME/sdks/SDL3-android-arm64}"
@@ -89,17 +118,15 @@ if [ "$GUIBACK" = "sdl3" ]; then
     MKARGS="$MKARGS SDL3_PREFIX=$SDL3_PREFIX"
 fi
 
-export PATH="$ROOT/Linux/amd64/bin:$PATH"
-
 mkdir -p "$ROOT/Android/arm64/bin" "$ROOT/Android/arm64/lib"
 
 echo "ROOT=$ROOT"
 echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-echo "host mk=$ROOT/Linux/amd64/bin/mk"
+echo "host mk=$HOST_BIN/mk"
 echo "cross CC=$CROSS_PREFIX/aarch64-linux-android24-clang"
 echo ""
 
-MK="$ROOT/Linux/amd64/bin/mk"
+MK="$HOST_BIN/mk"
 
 # --- Cross-compile core C libraries ---------------------------------------
 # Order matters: lib9 first (everything depends on it), then libs that

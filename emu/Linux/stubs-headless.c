@@ -15,6 +15,10 @@ void setsoftkbd(int on) {
 	USED(on);
 }
 
+void setsoftkbd_rect(int x, int y, int w, int h) {
+	USED(x); USED(y); USED(w); USED(h);
+}
+
 uchar* attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen) {
 	USED(r);
 	USED(chan);

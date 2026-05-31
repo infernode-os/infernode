@@ -37,6 +37,7 @@ TARG=\
 	jit_test.dis\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
+	llmclient_reqshape_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
 	lists_test.dis\
@@ -65,6 +66,7 @@ TARG=\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
 	webclient_test.dis\
+	wireformat_test.dis\
 	widget_kbdfilter_test.dis\
 	widget_scrollbar_test.dis\
 	veltro_concurrent_test.dis\
@@ -100,6 +102,13 @@ TARG=\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
 	matrix_perfdashboard_test.dis\
+	opus_test.dis\
+	keyringinst_test.dis\
+	contacts_tool_test.dis\
+	sms_msgsrc_test.dis\
+	bioauth_test.dis\
+	softkbd_test.dis\
+	voice_scripts_test.dis\
 
 MODULES=
 

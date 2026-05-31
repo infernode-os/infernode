@@ -1,0 +1,51 @@
+# voice/test-tone — single-shell v0 acceptance test for INFR-185.
+#
+# Spins up a local voice/listen, mounts its own 9P export at /n/voice,
+# pumps the audiotone pulse train through /n/voice/audio (i.e. through
+# every byte of the 9P export path), then hangs up. If you hear the
+# beeps, the voice-mount mechanism works end-to-end.
+#
+# This is the WRITE side of the voice spike — proves the 9P export
+# carries audio bytes correctly without needing TCC mic permission
+# (capture is exercised separately by a real dial against a peer that
+# has mic access granted via the .app bundle's Info.plist).
+#
+# Usage:
+#   sh /lib/voice/test-tone           # default port 7070
+#   sh /lib/voice/test-tone 7071      # alternate port if 7070 in use
+
+load std
+
+port=$1
+if {~ $#port 0} {
+	port=7070
+}
+addr='tcp!127.0.0.1!'$port
+
+# devaudio onto /dev for the local audiotone path.
+bind -a '#A' /dev
+
+# Launch the listener in the background and wait for it to bind the
+# port. listen forks an export server per accept, so it stays running.
+sh /lib/voice/listen $port &
+listener_pid=$apid
+sleep 1
+
+mkdir -p /n/voice
+if {! mount -A $addr /n/voice} {
+	echo 'voice/test-tone: mount' $addr 'failed' >[1=2]
+	echo kill >/prog/$listener_pid/ctl
+	exit mount
+}
+
+echo 'voice/test-tone: routing audiotone through' $addr
+audiotone /n/voice/audio
+
+# Done. Tear down the listener so a re-run doesn't fight for the port.
+# The listener typically already exited on its own once the export
+# client (audiotone) closed the connection — guard the kill so a stale
+# pid doesn't blow up with "sh: cannot open /prog/N/ctl".
+if {ftest -e /prog/$listener_pid} {
+	echo kill >/prog/$listener_pid/ctl
+}
+echo 'voice/test-tone: done'

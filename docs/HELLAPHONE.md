@@ -472,6 +472,235 @@ policy:
 adb shell cat /system/etc/seccomp_policy/app.policy 2>/dev/null
 ```
 
+## Using a phone's telephony from a desktop (mount recipe)
+
+`#f` is a real hardware device. It is registered in `emu/iOS` and
+`emu/Android` because those builds know they have a radio attached;
+it is **not** registered in `emu/MacOSX` or `emu/Linux` — a developer
+laptop has no SIM and no equivalent API. To use telephony from a
+desktop InferNode, mount a phone's exported `/phone` over 9P; the
+userspace API on the desktop is then identical to using it on the
+phone, but the bytes travel across the wire to the radio.
+
+On the **phone**, export `/phone` over a TCP port:
+
+```
+; listen -A 'tcp!*!17564' {export /phone} &
+```
+
+(Wrap in TLS + a keyring listener for anything beyond a private dev
+network. The token `17564` matches the Phase 0 daemon recipe at the
+top of this document; pick any free port.)
+
+On the **desktop** (Mac or Linux InferNode), mount it:
+
+```
+; mount -A 'tcp!<phone-ip>!17564' /phone
+; cat /phone/status
+; echo 'send +44... hello' > /phone/sms
+```
+
+Veltro's `sms` / `dial` tools and `msg9p`'s `sms` MsgSrc all reach
+`/phone/<file>`, so once the mount is up they work unmodified — the
+desktop sends an iPhone SMS via Hephaestus's wire, or has Ba'al ring
+a number on behalf of the agent. The phone's bridge (`MFMessageComposeViewController`
+on iOS, `SmsManager` on Android when INFR-182 lands) is what actually
+talks to the cell network.
+
+Why no desktop stub: a logging "stub bridge" on the developer Mac
+would let `echo 'send …' > /phone/sms` silently "succeed" with no SMS
+sent and no error surfaced. That is strictly worse than no `/phone`
+at all — the absence forces the operator to wire up the real mount
+deliberately instead of looking at green text and assuming it worked.
+
+## Testing iOS telephony on a real device (Ba'al recipe)
+
+The iOS simulator returns `canSendText == NO` and has no `tel:` handler,
+so the only place outbound SMS / dial / CallKit observation can be
+exercised end-to-end is a real iPhone with a SIM. Ba'al (the test
+device in the project memory entries — iPhone 17 Pro Max running iOS
+26.4.2 with Developer Mode ON) is the canonical target. The recipe
+below works against any iPhone that has been provisioned for the
+`os.infernode.ios` profile (cert `Apple Development: p.d.finn@gmail.com`,
+team `9Z8Z334UUU`).
+
+### Build + install on device
+
+```sh
+IOSSDK=iphoneos ./build-ios-app.sh --gui
+```
+
+The script signs with the auto-detected provisioning profile, installs
+via `devicectl`, and launches. First-run keyring / writable-root setup
+happens automatically. After a moment Lucifer comes up with the
+Context / Workspace / Chat accordion.
+
+### What you should see in stderr at boot
+
+`devicectl` captures stderr to the system log; mirror it locally with:
+
+```sh
+xcrun devicectl device process launch \
+    --device <UDID> os.infernode.ios --console
+```
+
+Expected lines, in order:
+
+```
+phone: bridge=iOS (MessageUI + CallKit observation wired — INFR-181)
+phone: CXCallObserver installed
+msg9p: registered source 'sms' from /dis/veltro/sources/sms.dis
+```
+
+If `CXCallObserver installed` is missing, the main-queue dispatch in
+`phonebridge_init` lost the race with UIKit init — open a console
+attach and trigger any UI redraw to give the runloop a tick.
+
+### Outbound SMS (`/phone/sms`)
+
+From the Inferno shell (open Workspace → shell, or via lucibridge if
+you have an LLM configured):
+
+```
+; echo 'send +447700900100 testing from inferno' > /phone/sms
+```
+
+Expected behaviour:
+
+1. `MFMessageComposeViewController` slides up over the app, pre-filled
+   with the recipient and body
+2. User taps Send (or Cancel)
+3. Stderr logs `phone: iOS sms compose sheet up for +447700900100`
+4. On Send tap, a real cellular SMS goes out via the carrier
+
+If `canSendText` returns false (no SIM, iPad without cellular), the
+write to `/phone/sms` fails with the error
+`device cannot send SMS (no cellular / simulator)` — `%r` from the
+shell will surface it.
+
+### Outbound dial (`/phone/phone`)
+
+```
+; echo 'dial +447700900100' > /phone/phone
+```
+
+Expected behaviour:
+
+1. Stderr logs `phone: iOS dial openURL tel:+447700900100 ok`
+2. iOS shows its own call-confirmation dialog ("Call +447700900100?")
+3. User taps Call
+4. Cellular call is placed; CallKit fires the observer
+
+### CallKit observation (`/phone/phone` reads)
+
+While the call is active or transitioning, every state change pushes
+a record into the bridge ring. A parallel reader drains them:
+
+```
+; cat /phone/phone
+dialing - 2026-05-28T14:30:00Z
+connected - 2026-05-28T14:30:05Z
+disconnected - 2026-05-28T14:31:12Z
+```
+
+The remote number ("-") is hidden by CallKit for cellular calls —
+this is an OS policy, not something we can route around.
+
+### msg9p plumbing
+
+Once `register sms` has fired in boot, the source is watching
+`/phone/sms` reads. iOS's `phonebridge_recv_sms` returns `-1` (no
+inbox API), so on iOS this watcher idles. To exercise it without
+inbound SMS:
+
+```
+; echo 'send sms +447700900100' > /n/msg/ctl
+< body line here
+```
+
+That routes through `msg9p`'s `send` verb to the sms MsgSrc's
+`send(Message)` and produces the same `/phone/sms` write as the
+direct test above.
+
+### iOS SMS receive — there is none, and there cannot be
+
+Android grants the SMS round-trip both ways: a manifest-declared
+`BroadcastReceiver` for `android.provider.Telephony.SMS_RECEIVED` plus
+`RECEIVE_SMS` / `READ_SMS` runtime permissions (INFR-182, PR #188 —
+`emu/Android/phonebridge.c`'s `Java_io_infernode_InfernodePhoneBridge_postSms`
+feeds the wire record into `phonebridge_post_sms`).
+
+iOS does not. Apple's public SDK exposes **no API** for a third-party
+app to read inbound SMS. The closest surface is
+`ILMessageFilterExtension`, which is invoked **without** the message
+body for spam-classification of unknown senders — the body never
+reaches your app, and known senders skip the extension entirely. There
+is no notification, no inbox query, no observer. This is a deliberate
+platform restriction on Apple's part; no entitlement or capability
+unlocks it for third parties.
+
+Practically:
+
+* `/phone/sms` reads on iOS block forever. That is the correct
+  behaviour — there is nothing to deliver.
+* The msg9p `sms` MsgSrc on iOS only ever emits outbound writes (`send`
+  verb) and never produces a `from …` record. The source's `recv`
+  channel idles.
+* For development you can synthesise an inbound record by writing the
+  wire format directly to a test fixture — see `tests/sms_msgsrc_test.b`
+  for the format (`from <sender> <ts>\n<body>\n`).
+
+Do not file tickets to "wire iOS SMS receive." The gap is structural,
+not a TODO. If iMessage / iCloud sync ever becomes scriptable to third
+parties (it isn't), revisit then.
+
+### What the simulator CAN test
+
+* `phonebridge_init` runs without crashing
+* `CXCallObserver installed` reaches the log
+* `msg9p: registered source 'sms'` reaches the log
+* A write to `/phone/sms` returns the `canSendText` error cleanly
+* A write to `dial` triggers an `openURL: tel:` log line (the call
+  confirmation dialog is suppressed by the simulator)
+* `cat /phone/status` returns the expected single-line bridge state
+
+Everything beyond that needs Ba'al.
+
+## Wiring a remote LLM on the phone (INFR-169)
+
+InferNode on mobile needs `/n/llm` mounted before Veltro can call any
+tool — including the SMS / dial tools we just verified. Hephaestus's
+default `serve-llm` listener is keyring-authenticated; an anonymous
+`mount -A` is hung up by the server. The Settings → LLM Service panel
+now handles the full Remote 9P setup itself (no more `mode=remote` +
+`auth=keyring` mismatch):
+
+1. On the server, generate (or reuse) the signer key:
+   ```sh
+   ./serve-llm.sh --gen-key
+   # writes ~/.infernode/lib/keyring/serve-llm
+   ```
+2. Copy that file to the phone's clipboard. On macOS for an iPhone
+   over a continuity session: open the keyfile in TextEdit or `cat` it
+   in Terminal, select-all, copy. (The keyfile is ASCII-only; smart
+   punctuation does not apply.)
+3. On the phone, open InferNode → Settings → LLM Service, switch Mode
+   to **Remote (9P)**, enter the dial address (`tcp!10.x.x.x!5640`),
+   then tap **Install keyfile from clipboard**. Status flips to
+   `Keyfile: present at /lib/keyring/serve-llm`.
+4. Tap **Apply**. Settings writes `auth=keyring` and
+   `keyfile=/lib/keyring/serve-llm` into `/lib/ndb/llm` alongside the
+   dial address, so boot's `mount -k` takes the keyring path on the
+   next launch.
+5. Force-quit and relaunch. Stderr should show `boot: mount -k …`
+   followed by either silence (success) or a clear error.
+
+If a phone for some reason lacks a working clipboard hand-off, the
+fallback is `devicectl device copy to --domain-type appDataContainer
+--domain-identifier os.infernode.ios --source <keyfile>
+--destination Library/Caches/inferno/lib/keyring/serve-llm` — same end
+state, the in-app button is the user-facing path.
+
 ## References
 
 * `emu/Android/README.md` — what eventually lives in that directory.
@@ -479,3 +708,5 @@ adb shell cat /system/etc/seccomp_policy/app.policy 2>/dev/null
 * `build-linux-arm64.sh` — the Linux ARM64 driver we piggyback on.
 * `INFR-107` — Phase 0 tracking epic.
 * `INFR-114` — APK boot speed (closed; setgid seccomp was the cause).
+* `INFR-181` — iOS phonebridge MessageUI + dial + CallKit observation.
+* `INFR-182` — Android telephony wiring (other session's scope).

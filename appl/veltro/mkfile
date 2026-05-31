@@ -47,6 +47,8 @@ TOOLS=\
     tools/todo.dis\
     tools/say.dis\
     tools/hear.dis\
+    tools/sms.dis\
+    tools/dial.dis\
     tools/websearch.dis\
     tools/browse.dis\
     tools/charon.dis\
@@ -182,6 +184,13 @@ tools/say.dis: tools/say.b tool.m
 
 tools/hear.dis: tools/hear.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/hear.dis tools/hear.b
+
+# Phone tools (devphone — /phone/sms and /phone/phone)
+tools/sms.dis: tools/sms.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/sms.dis tools/sms.b
+
+tools/dial.dis: tools/dial.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/dial.dis tools/dial.b
 
 tools/websearch.dis: tools/websearch.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/websearch.dis tools/websearch.b

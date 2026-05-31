@@ -21,8 +21,9 @@ dev
 
 	ip	ipif6-posix ipaux
 	eia
-	audio	audio-aaudio
+	audio	audio-sdl3
 	mem
+	phone	phonebridge
 
 lib
 	interp

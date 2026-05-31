@@ -360,6 +360,21 @@ init_hidpi(void)
  * Written from the devcons worker thread, read on the main thread. */
 static volatile int softkbd_keeptop = 0;
 
+/* Explicit focused-widget rect in INFERNO SCREEN PIXELS, set by the GUI
+ * via /dev/consctl "kbd rect x y w h" (see setsoftkbd_rect). Pixels are
+ * the only coordinate system Limbo has (see attachscreen); update_text_
+ * input_area maps them to window points before handing them to SDL.
+ * When w*h > 0 this overrides the hard-coded top/bottom rect in
+ * update_text_input_area — SDL slides the view so the *actual* widget
+ * stays above the keyboard, regardless of where the cursor is or
+ * whether keeptop is set. Cleared with "kbd rect 0 0 0 0". Plain ints
+ * read by the main thread, written from the devcons worker thread;
+ * the one-frame race is harmless. */
+static volatile int softkbd_rect_x = 0;
+static volatile int softkbd_rect_y = 0;
+static volatile int softkbd_rect_w = 0;
+static volatile int softkbd_rect_h = 0;
+
 /*
  * iOS soft-keyboard avoidance via SDL_SetTextInputArea, which tells UIKit
  * where the caret is (window POINTS); SDL then slides the view up so that
@@ -372,6 +387,12 @@ static volatile int softkbd_keeptop = 0;
  *     already above the keyboard, so SDL does NOT slide — the top stays
  *     pinned and a cursor near the top no longer scrolls off-screen. The
  *     keyboard simply overlays the lower part of the app.
+ *
+ * When the GUI has supplied an explicit "kbd rect" (softkbd_rect_*, in
+ * Inferno screen pixels) it wins over both heuristics: we map it to
+ * window points and let SDL slide the real widget above the keyboard.
+ * This is what lets the workspace shell prompt — which sits at the
+ * bottom of the zone — stay visible so you can see what you're typing.
  *
  * No-op on macOS/Linux (no soft keyboard).
  */
@@ -388,14 +409,53 @@ update_text_input_area(void)
 	SDL_GetWindowSize(sdl_window, &win_w, &win_h);	/* points */
 	if (win_w <= 0 || win_h <= 0)
 		return;
-	ih = 56;					/* input row height, points */
-	r.x = 0;
-	r.w = win_w;
-	r.h = ih;
-	if (softkbd_keeptop)
-		r.y = 0;				/* top — SDL won't need to slide */
-	else
-		r.y = win_h - ih;			/* bottom input row — SDL slides it up */
+	if (softkbd_rect_w > 0 && softkbd_rect_h > 0) {
+		/* Explicit focused-widget rect from the GUI (INFR-166).
+		 *
+		 * It arrives in Inferno SCREEN PIXELS — the only coordinate
+		 * system Limbo draws in. SDL_SetTextInputArea wants window
+		 * POINTS, so map it exactly the way the renderer maps the
+		 * texture: texture pixels -> window pixels through dest_rect
+		 * (which already carries the safe-area origin and any
+		 * letterbox scale), then -> points by dividing out
+		 * display_scale. This is the inverse of the mouse path's
+		 * window_to_texture_coords. Without it the rect was 2-3x
+		 * oversized on every HiDPI device, got clamped to a degenerate
+		 * strip, and SDL never slid the caret above the keyboard — so
+		 * the workspace shell prompt stayed covered and you couldn't
+		 * see what you typed.
+		 *
+		 * Clamp to the window afterwards so a transient out-of-window
+		 * value (e.g. a rotation caught mid-update) doesn't round-trip
+		 * a degenerate rect to UIKit. */
+		float sx, sy, fx, fy, fw, fh;
+		if (dest_rect.w <= 0 || dest_rect.h <= 0 ||
+		    sdl_width <= 0 || sdl_height <= 0 || display_scale <= 0.0f)
+			return;
+		sx = dest_rect.w / (float)sdl_width;	/* texture px -> window px */
+		sy = dest_rect.h / (float)sdl_height;
+		fx = (dest_rect.x + (float)softkbd_rect_x * sx) / display_scale;
+		fy = (dest_rect.y + (float)softkbd_rect_y * sy) / display_scale;
+		fw = ((float)softkbd_rect_w * sx) / display_scale;
+		fh = ((float)softkbd_rect_h * sy) / display_scale;
+		r.x = fx < 0.0f ? 0 : (int)fx;
+		r.y = fy < 0.0f ? 0 : (int)fy;
+		r.w = (int)(fw + 0.5f);
+		r.h = (int)(fh + 0.5f);
+		if (r.x + r.w > win_w) r.w = win_w - r.x;
+		if (r.y + r.h > win_h) r.h = win_h - r.y;
+		if (r.w <= 0 || r.h <= 0)
+			return;
+	} else {
+		ih = 56;				/* input row height, points */
+		r.x = 0;
+		r.w = win_w;
+		r.h = ih;
+		if (softkbd_keeptop)
+			r.y = 0;			/* top — SDL won't need to slide */
+		else
+			r.y = win_h - ih;		/* bottom input row — SDL slides it up */
+	}
 	SDL_SetTextInputArea(sdl_window, &r, 0);
 #endif
 }
@@ -435,6 +495,27 @@ setsoftkbd(int on)
 }
 
 /*
+ * Override the keyboard-avoidance rect with the focused widget's actual
+ * bounds (window POINTS). Called from /dev/consctl "kbd rect x y w h"
+ * (devcons.c) — Limbo helper is appl/lib/softkbd.b. When the rect is
+ * non-empty it wins over the legacy keeptop hint; (0,0,0,0) clears
+ * the override and the hard-coded top/bottom rect comes back into
+ * play. apply_softkbd will re-push the area on the main thread.
+ */
+void
+setsoftkbd_rect(int x, int y, int w, int h)
+{
+#if MOBILE_TOUCH
+	softkbd_rect_x = x;
+	softkbd_rect_y = y;
+	softkbd_rect_w = (w > 0) ? w : 0;
+	softkbd_rect_h = (h > 0) ? h : 0;
+#else
+	USED(x); USED(y); USED(w); USED(h);
+#endif
+}
+
+/*
  * Apply a pending soft-keyboard request. MUST be called on the main
  * (SDL/UIKit) thread — sdl3_mainloop calls it each iteration.
  */
@@ -443,6 +524,7 @@ apply_softkbd(void)
 {
 #if MOBILE_TOUCH
 	static int applied_keeptop = 0;
+	static int applied_rx = 0, applied_ry = 0, applied_rw = 0, applied_rh = 0;
 	if (!sdl_window)
 		return;
 	if (softkbd_want != softkbd_applied) {
@@ -453,12 +535,22 @@ apply_softkbd(void)
 		} else {
 			SDL_StopTextInput(sdl_window);
 		}
-	} else if (softkbd_want && softkbd_keeptop != applied_keeptop) {
-		/* keyboard already up but the top/bottom mode changed (e.g.
-		 * focus moved between chat and a workspace app) — re-apply. */
+	} else if (softkbd_want &&
+		   (softkbd_keeptop != applied_keeptop ||
+		    softkbd_rect_x != applied_rx ||
+		    softkbd_rect_y != applied_ry ||
+		    softkbd_rect_w != applied_rw ||
+		    softkbd_rect_h != applied_rh)) {
+		/* keyboard already up but the mode or the focused-widget
+		 * rect changed (focus moved between chat and a workspace
+		 * app, or the cursor moved within the same app — INFR-166). */
 		update_text_input_area();
 	}
 	applied_keeptop = softkbd_keeptop;
+	applied_rx = softkbd_rect_x;
+	applied_ry = softkbd_rect_y;
+	applied_rw = softkbd_rect_w;
+	applied_rh = softkbd_rect_h;
 #endif
 }
 
@@ -704,7 +796,17 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 			 * mobile fonts render ~3x too large (≈8 chars/line). With
 			 * it, GetWindowSizeInPixels reports real Retina pixels and
 			 * the UI is properly sized + crisp. */
-			SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
+			/* HIGH_PIXEL_DENSITY is iOS-only. On macOS/Linux it makes
+		 * the Inferno surface report physical Retina pixels, so
+		 * 14-pt fonts render at 14 physical pixels on a 2x display
+		 * (half-size). The mobile boot rebinds 14->32/48 to
+		 * compensate; desktop boots don't, so desktop UI ends up
+		 * tiny. Limiting the flag to iOS preserves the iOS fix
+		 * (a5f38e48) without bleeding small fonts to desktop. */
+		SDL_WINDOW_RESIZABLE
+#if defined(__APPLE__) && TARGET_OS_IOS
+		| SDL_WINDOW_HIGH_PIXEL_DENSITY
+#endif
 		);
 	});
 	if (!sdl_window)
@@ -1068,7 +1170,17 @@ handle_window_creation(void)
 	sdl_window = SDL_CreateWindow(
 		"InferNode",
 		sdl_width, sdl_height,
-		SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
+		/* HIGH_PIXEL_DENSITY is iOS-only. On macOS/Linux it makes
+		 * the Inferno surface report physical Retina pixels, so
+		 * 14-pt fonts render at 14 physical pixels on a 2x display
+		 * (half-size). The mobile boot rebinds 14->32/48 to
+		 * compensate; desktop boots don't, so desktop UI ends up
+		 * tiny. Limiting the flag to iOS preserves the iOS fix
+		 * (a5f38e48) without bleeding small fonts to desktop. */
+		SDL_WINDOW_RESIZABLE
+#if defined(__APPLE__) && TARGET_OS_IOS
+		| SDL_WINDOW_HIGH_PIXEL_DENSITY
+#endif
 	);
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -1129,9 +1241,56 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 }
 
 /*
+ * iOS smart-punctuation map (INFR-211). The iOS soft keyboard runs
+ * `UITextInputTraits.smartQuotesType` / `smartDashesType` enabled by
+ * default; SDL3 doesn't expose those traits, so the bytes we receive
+ * via SDL_EVENT_TEXT_INPUT for a single quote are U+2019, not U+0027.
+ * Inferno sh's tokeniser treats only ASCII `'` as the literal-string
+ * delimiter, so a typed `'foo bar'` never delimits and parses wrong.
+ *
+ * We translate at our own boundary: just before the rune lands in
+ * gkbdq, swap the typographic punctuation iOS gives us back to the
+ * ASCII the user is trying to type. iOS-only — on desktop the user
+ * actually wanted U+2019 if they pressed Option-Shift-`]`.
+ *
+ * Returns the (possibly-substituted) primary rune. If the substitution
+ * expands to multiple ASCII bytes (only U+2026 → "..."), `extra` and
+ * `*extralen` carry the trailing bytes; otherwise *extralen is 0.
+ *
+ * Kept tiny on purpose — Inferno sh-relevant punctuation only. Other
+ * curly characters pass through untouched.
+ */
+#if defined(__APPLE__) && TARGET_OS_IOS
+static Rune
+ios_normalize_rune(Rune r, char *extra, int *extralen)
+{
+	*extralen = 0;
+	switch (r) {
+	case 0x2018:	/* LEFT SINGLE QUOTATION MARK */
+	case 0x2019:	/* RIGHT SINGLE QUOTATION MARK / APOSTROPHE */
+		return '\'';
+	case 0x201C:	/* LEFT DOUBLE QUOTATION MARK */
+	case 0x201D:	/* RIGHT DOUBLE QUOTATION MARK */
+		return '"';
+	case 0x2013:	/* EN DASH */
+	case 0x2014:	/* EM DASH */
+		return '-';
+	case 0x2026:	/* HORIZONTAL ELLIPSIS */
+		extra[0] = '.';
+		extra[1] = '.';
+		*extralen = 2;
+		return '.';
+	default:
+		return r;
+	}
+}
+#endif
+
+/*
  * Handle SDL_EVENT_TEXT_INPUT.
  * Decodes UTF-8 text to Unicode codepoints and sends to keyboard queue.
  * Skips control characters (handled by Ctrl+letter in KEY_DOWN).
+ * On iOS, also flattens smart-punctuation back to ASCII (INFR-211).
  */
 static void
 handle_text_input(const char *text)
@@ -1148,7 +1307,19 @@ handle_text_input(const char *text)
 			text++;
 			continue;
 		}
+#if defined(__APPLE__) && TARGET_OS_IOS
+		{
+			char extra[4];
+			int extralen = 0;
+			int i;
+			r = ios_normalize_rune(r, extra, &extralen);
+			gkbdputc(gkbdq, r);
+			for (i = 0; i < extralen; i++)
+				gkbdputc(gkbdq, (Rune)(uchar)extra[i]);
+		}
+#else
 		gkbdputc(gkbdq, r);
+#endif
 		text += n;
 	}
 }

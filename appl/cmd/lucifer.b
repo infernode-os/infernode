@@ -43,6 +43,9 @@ include "lucitheme.m";
 
 include "menu.m";
 
+include "softkbd.m";
+	softkbd: Softkbd;
+
 Lucifer: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
@@ -302,6 +305,15 @@ pressubimg: ref Image;
 presscr: ref Screen;
 convimg: ref Image;
 ctximg: ref Image;
+# Title-bar sub-images for the mobile accordion. Allocated on mainscr
+# and raised above all three zone images so their content is never
+# occluded — pressubimg's invariant rect overlaps title positions in
+# some expansion states. Reallocated on every toggle since title y
+# positions vary with expanded_zone. Host no child windows so
+# reallocation is safe.
+titleconv_img: ref Image;	# Chat title
+titlepres_img: ref Image;	# Workspace title
+titlectx_img:  ref Image;	# Context title
 # mainwin.r at the last FULL layout (sub-image recreation).  In the mobile
 # accordion a zone toggle leaves geometry unchanged, so handleresize() can
 # skip the destructive recreate and just re-z-order — see INFR-137.
@@ -438,6 +450,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(menumod != nil)
 		menumod->init(display, mainfont);
 
+	# Soft-keyboard helper (INFR-166). Non-fatal if absent on a
+	# stripped build — reqkbd's legacy "kbd ontop / off" path keeps
+	# working without the rect override.
+	softkbd = load Softkbd Softkbd->PATH;
+	if(softkbd != nil)
+		softkbd->init();
+
 	# Load logo (skip on Windows — readpng hangs due to inflate filter issue)
 	emuhost := readfile("/env/emuhost");
 	if(emuhost != nil)
@@ -518,6 +537,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Sub-images for conv and ctx zones
 	convimg = mainscr.newwindow(convr, Draw->Refbackup, Draw->Nofill);
 	ctximg  = mainscr.newwindow(ctxr,  Draw->Refbackup, Draw->Nofill);
+
+	# Mobile accordion: allocate the three title-bar sub-images before
+	# the first drawchrome so they exist when drawchrome paints into them.
+	# handleresize() does the same in its full and cheap paths, but the
+	# initial boot path here calls drawchrome directly without going via
+	# handleresize, so the first frame would otherwise drop the titles.
+	if(mobile)
+		alloctitleimgs();
 
 	# Draw initial chrome (header, separators, background)
 	drawchrome(r);
@@ -619,33 +646,42 @@ init(ctxt: ref Draw->Context, args: list of string)
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
 	if(mobile) {
-		# KLUDGE-MOBILE-ACCORDION-INFR-119 / INFR-137 — accordion layout.
+		# True single-open accordion. Order top-to-bottom: Context,
+		# Workspace, Chat (the user confirmed this on 2026-05-28;
+		# Chat at the bottom anchors the input/mic/Send row to the
+		# thumb-natural edge). The expanded zone's body fills the
+		# slot between its own title bar and the next title bar (or
+		# the screen edge); collapsed titles stack tight.
 		#
-		# All three title bars stack immediately under the LUCI header
-		# at fixed positions.  ALL THREE zones get the SAME full body
-		# rect below them — they overlap, and which one is visible is
-		# decided purely by z-order (topexpandedzone() raises the
-		# expanded zone's sub-image to the front).
-		#
-		# This replaces the old scheme where the collapsed zones got
-		# 1×1 sentinel sub-windows.  That shrank the presentation
-		# screen (presscr) to 1×1 on every collapse, which destroyed
-		# the child app windows living on it; re-expanding reallocated
-		# them blank (INFR-137).  Keeping presscr full-size across
-		# collapse/expand means app windows survive untouched — a zone
-		# toggle is just a z-order change, not a re-layout.
+		# Preserving app windows (INFR-137): pressubimg's rect is
+		# INVARIANT — always presmaxr = Workspace's body slot when
+		# expanded. presscr lives on it; child app windows live on
+		# presscr; nothing gets reallocated when the accordion
+		# toggles. convimg and ctximg are reallocated freely since
+		# they host no child windows. Title bars draw to dedicated
+		# sub-images (titleconv_img / titlepres_img / titlectx_img)
+		# raised above all zone images by topexpandedzone so they're
+		# never occluded by the zone they overlap.
 		headerh := MOBILE_HEADERH;
 		titleh  := MOBILE_TITLEBARH;
-		zonety  := r.min.y + headerh + 1;
+		bodytop := r.min.y + headerh + 1;
+		bodybot := r.max.y;
 
-		convtitle_y := zonety;
-		prestitle_y := convtitle_y + titleh;
-		ctxtitle_y  := prestitle_y + titleh;
-		bodytop     := ctxtitle_y  + titleh;
-
-		mobile_conv_title_y = convtitle_y;
-		mobile_pres_title_y = prestitle_y;
-		mobile_ctx_title_y  = ctxtitle_y;
+		# Title-bar y positions by expansion state.
+		case expanded_zone {
+		0 =>		# Chat expanded — bottom slot
+			mobile_ctx_title_y  = bodytop;
+			mobile_pres_title_y = bodytop + titleh;
+			mobile_conv_title_y = bodytop + 2 * titleh;
+		1 =>		# Workspace expanded — middle slot
+			mobile_ctx_title_y  = bodytop;
+			mobile_pres_title_y = bodytop + titleh;
+			mobile_conv_title_y = bodybot - titleh;
+		* =>		# 2: Context expanded — top slot
+			mobile_ctx_title_y  = bodytop;
+			mobile_pres_title_y = bodybot - 2 * titleh;
+			mobile_conv_title_y = bodybot - titleh;
+		}
 
 		# Mobile mode disables x-based mouse routing — mouseproc
 		# reads mobile_*_title_y to dispatch taps.
@@ -653,9 +689,32 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 		pres_zone_maxx = -1;
 		ctx_zone_minx  = -1;
 
-		# Full body rect below the title bars; all three zones share it.
-		bodyr := Rect((r.min.x, bodytop), (r.max.x, r.max.y));
-		return (bodyr, bodyr, bodyr);
+		# Invariant pressubimg rect = Workspace's body slot when
+		# expanded (INFR-137).
+		presmaxr := Rect((r.min.x, bodytop + 2 * titleh),
+				 (r.max.x, bodybot - titleh));
+
+		# 1×1 placeholder for collapsed conv/ctx — never visible.
+		placerect := Rect((r.min.x, bodytop),
+				  (r.min.x + 1, bodytop + 1));
+
+		sys->fprint(sys->fildes(2),
+			"lucifer/accordion: zonerects expanded=%d bodytop=%d bodybot=%d titleh=%d ctx_y=%d pres_y=%d conv_y=%d\n",
+			expanded_zone, bodytop, bodybot, titleh,
+			mobile_ctx_title_y, mobile_pres_title_y, mobile_conv_title_y);
+
+		case expanded_zone {
+		0 =>
+			convr := Rect((r.min.x, mobile_conv_title_y + titleh),
+				      (r.max.x, bodybot));
+			return (convr, presmaxr, placerect);
+		1 =>
+			return (placerect, presmaxr, placerect);
+		* =>
+			ctxr := Rect((r.min.x, mobile_ctx_title_y + titleh),
+				     (r.max.x, mobile_pres_title_y));
+			return (placerect, presmaxr, ctxr);
+		}
 	}
 
 	# Desktop: classic three-column.
@@ -944,9 +1003,9 @@ drawchrome(r: Rect)
 		# chevron hints at tap-to-expand. The expanded zone's title
 		# bar uses accentcol for the chevron so the eye can find
 		# which view is open.
-		drawmobiletitle("Chat",      mobile_conv_title_y, expanded_zone == 0);
-		drawmobiletitle("Workspace", mobile_pres_title_y, expanded_zone == 1);
-		drawmobiletitle("Context",   mobile_ctx_title_y,  expanded_zone == 2);
+		drawmobiletitle(titlectx_img,  "Context",   expanded_zone == 2);
+		drawmobiletitle(titlepres_img, "Workspace", expanded_zone == 1);
+		drawmobiletitle(titleconv_img, "Chat",      expanded_zone == 0);
 	} else {
 		# Desktop: vertical separator lines at presx and ctxx.
 		w := r.dx();
@@ -968,21 +1027,28 @@ drawchrome(r: Rect)
 # chevron on the right ("v" when collapsed, "^" when expanded). The
 # expanded bar's chevron is drawn in accentcol so the eye can find
 # the currently open view at a glance.
-drawmobiletitle(label: string, y, expanded: int)
+drawmobiletitle(target: ref Image, label: string, expanded: int)
 {
-	if(mainwin == nil)
+	if(target == nil) {
+		sys->fprint(sys->fildes(2),
+			"lucifer/accordion: drawmobiletitle(%s) called with nil target — title invisible\n",
+			label);
 		return;
-	titler := Rect((mainwin.r.min.x, y),
-		(mainwin.r.max.x, y + MOBILE_TITLEBARH));
-	mainwin.draw(titler, headercol, nil, (0, 0));
+	}
+	titler := target.r;
+	sys->fprint(sys->fildes(2),
+		"lucifer/accordion: drawmobiletitle target.r=(%d,%d)-(%d,%d) label=%s expanded=%d\n",
+		titler.min.x, titler.min.y, titler.max.x, titler.max.y,
+		label, expanded);
+	target.draw(titler, headercol, nil, (0, 0));
 	# Bottom border separator
-	mainwin.draw(Rect((mainwin.r.min.x, y + MOBILE_TITLEBARH - 1),
-		(mainwin.r.max.x, y + MOBILE_TITLEBARH)),
+	target.draw(Rect((titler.min.x, titler.max.y - 1),
+		(titler.max.x, titler.max.y)),
 		bordercol, nil, (0, 0));
 	if(mainfont != nil) {
-		textx := mainwin.r.min.x + 24;
-		texty := y + (MOBILE_TITLEBARH - mainfont.height) / 2;
-		mainwin.text((textx, texty), textcol, (0, 0), mainfont, label);
+		textx := titler.min.x + 24;
+		texty := titler.min.y + (MOBILE_TITLEBARH - mainfont.height) / 2;
+		target.text((textx, texty), textcol, (0, 0), mainfont, label);
 
 		# Disclosure triangle ("twirl-down"): collapsed points right,
 		# expanded points down (in accent colour). Drawn as a filled
@@ -991,8 +1057,8 @@ drawmobiletitle(label: string, y, expanded: int)
 		# Mobile-only — this whole routine is the accordion path.
 		ts := 40;	# triangle bounding box, px
 		col := textcol;
-		ty := y + (MOBILE_TITLEBARH - ts) / 2;
-		tx := mainwin.r.max.x - ts - 28;
+		ty := titler.min.y + (MOBILE_TITLEBARH - ts) / 2;
+		tx := titler.max.x - ts - 28;
 		pts: array of Point;
 		if(expanded) {
 			col = accentcol;
@@ -1000,8 +1066,11 @@ drawmobiletitle(label: string, y, expanded: int)
 		} else {
 			pts = array[] of { (tx, ty), (tx, ty + ts), (tx + ts, ty + ts / 2) };
 		}
-		mainwin.fillpoly(pts, ~0, col, (0, 0));
+		target.fillpoly(pts, ~0, col, (0, 0));
 	}
+	# Sub-image draws are buffered locally; flush so the title appears
+	# at the same beat as the mainwin chrome flush.
+	target.flush(Draw->Flushnow);
 }
 
 # KLUDGE-MOBILE-ACCORDION-INFR-119
@@ -1023,10 +1092,24 @@ reqkbd(on: int)
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
-	if(on)
+	if(on) {
 		sys->fprint(fd, "kbd ontop");
-	else
+		# INFR-166: hand the workspace zone rect to SDL as the
+		# focused area. wm apps that know their cursor rect more
+		# precisely (editor / xenith) refine this with their own
+		# softkbd->set_rect call; for forms (settings) and shells
+		# where we can't see the cursor from here, the zone rect is
+		# a conservative fallback — SDL slides only as much as
+		# needed for the zone bottom to clear the keyboard.
+		if(softkbd != nil && preszone.dx() > 0 && preszone.dy() > 0)
+			softkbd->set_rect(
+				preszone.min.x, preszone.min.y,
+				preszone.dx(), preszone.dy());
+	} else {
 		sys->fprint(fd, "kbd off");
+		if(softkbd != nil)
+			softkbd->clear_rect();
+	}
 }
 
 # 1 if the focused activity's active workspace app subscribed to the
@@ -1557,10 +1640,48 @@ handlectxlayout(cp, pp: int)
 	handleresize();
 }
 
-# topexpandedzone: raise the expanded accordion zone's sub-image to the
-# front of mainscr.  All three mobile zones share the full body rect and
-# overlap, so visibility is pure z-order.  Raising pressubimg brings its
-# child app windows (on presscr) along with it.
+# Allocate (or reallocate) the three title-bar sub-images on mainscr at
+# the rects implied by mobile_*_title_y (set by zonerects). Must be
+# called AFTER zonerects has run for the current state and BEFORE
+# drawchrome paints into them. Returns 1 on success, 0 on failure.
+alloctitleimgs(): int
+{
+	if(!mobile || mainscr == nil) {
+		sys->fprint(sys->fildes(2),
+			"lucifer/accordion: alloctitleimgs skipped (mobile=%d mainscr nil=%d)\n",
+			mobile, mainscr == nil);
+		return 0;
+	}
+	titleh := MOBILE_TITLEBARH;
+	cr := Rect((mainwin.r.min.x, mobile_ctx_title_y),
+		   (mainwin.r.max.x, mobile_ctx_title_y + titleh));
+	pr := Rect((mainwin.r.min.x, mobile_pres_title_y),
+		   (mainwin.r.max.x, mobile_pres_title_y + titleh));
+	cnvr := Rect((mainwin.r.min.x, mobile_conv_title_y),
+		     (mainwin.r.max.x, mobile_conv_title_y + titleh));
+	sys->fprint(sys->fildes(2),
+		"lucifer/accordion: alloctitleimgs ctx=(%d,%d)-(%d,%d) pres=(%d,%d)-(%d,%d) conv=(%d,%d)-(%d,%d)\n",
+		cr.min.x, cr.min.y, cr.max.x, cr.max.y,
+		pr.min.x, pr.min.y, pr.max.x, pr.max.y,
+		cnvr.min.x, cnvr.min.y, cnvr.max.x, cnvr.max.y);
+	titlectx_img  = mainscr.newwindow(cr,   Draw->Refbackup, Draw->Nofill);
+	titlepres_img = mainscr.newwindow(pr,   Draw->Refbackup, Draw->Nofill);
+	titleconv_img = mainscr.newwindow(cnvr, Draw->Refbackup, Draw->Nofill);
+	if(titlectx_img == nil || titlepres_img == nil || titleconv_img == nil) {
+		sys->fprint(sys->fildes(2),
+			"lucifer/accordion: alloctitleimgs FAILED (ctx nil=%d pres nil=%d conv nil=%d)\n",
+			titlectx_img == nil, titlepres_img == nil, titleconv_img == nil);
+		return 0;
+	}
+	sys->fprint(sys->fildes(2),
+		"lucifer/accordion: alloctitleimgs allocated all three title images\n");
+	return 1;
+}
+
+# topexpandedzone: arrange mainscr's z-order so the expanded zone is
+# visible and the three title bars sit on top. Final bottom→top stack:
+# pressubimg (invariant, with presscr's child app windows on it), the
+# inactive zone images, the expanded zone, then the three title images.
 topexpandedzone()
 {
 	if(!mobile)
@@ -1570,29 +1691,54 @@ topexpandedzone()
 	1 => if(pressubimg != nil) pressubimg.top();
 	2 => if(ctximg != nil) ctximg.top();
 	}
+	# Titles on top, always. Their rects don't overlap each other so
+	# the order among them doesn't matter — only that they're above
+	# the zone images.
+	if(titlectx_img  != nil) titlectx_img.top();
+	if(titlepres_img != nil) titlepres_img.top();
+	if(titleconv_img != nil) titleconv_img.top();
+	sys->fprint(sys->fildes(2),
+		"lucifer/accordion: topexpandedzone expanded=%d (titles raised: ctx=%d pres=%d conv=%d)\n",
+		expanded_zone,
+		titlectx_img != nil, titlepres_img != nil, titleconv_img != nil);
 }
 
 handleresize()
 {
 	r := mainwin.r;
 
-	# Mobile accordion: a zone toggle keeps mainwin geometry unchanged —
-	# only which zone is on top changes.  Recreating mainscr/presscr here
-	# would destroy the app windows that live on presscr (INFR-137), so
-	# take the cheap path: re-z-order the expanded zone and repaint chrome,
-	# leaving every sub-image (and presscr's app windows) intact.  The full
-	# recreate below only runs on a genuine geometry change (or first call).
+	# Mobile accordion toggle: mainwin geometry unchanged, only which
+	# zone is expanded. pressubimg's rect is invariant (presmaxr in
+	# zonerects) so we do NOT touch it — that's what preserves child
+	# app windows on presscr (INFR-137). convimg / ctximg and the
+	# three title-bar sub-images DO get reallocated to match the new
+	# title positions; none of them host child windows so reallocation
+	# is safe.
 	if(mobile && r.eq(lastlaidout) && mainscr != nil && pressubimg != nil) {
+		sys->fprint(sys->fildes(2),
+			"lucifer/accordion: handleresize CHEAP path expanded=%d\n",
+			expanded_zone);
+		(convr_t, _, ctxr_t) := zonerects(r);
+		newconv := mainscr.newwindow(convr_t, Draw->Refbackup, Draw->Nofill);
+		newctx  := mainscr.newwindow(ctxr_t,  Draw->Refbackup, Draw->Nofill);
+		if(newconv == nil || newctx == nil) {
+			sys->fprint(sys->fildes(2),
+				"lucifer/accordion: cheap path newwindow FAILED (conv nil=%d ctx nil=%d)\n",
+				newconv == nil, newctx == nil);
+			return;
+		}
+		convimg = newconv;
+		ctximg  = newctx;
+		if(!alloctitleimgs())
+			return;
 		topexpandedzone();
 		drawchrome(r);
-		# Refresh the conv/ctx zone content (its sub-image persisted but
-		# may have missed redraws while hidden).  Do NOT touch presRszCh:
-		# that would reshape/reallocate the app windows we are preserving;
-		# topexpandedzone() already revealed them with content intact.
-		if(expanded_zone == 0)
-			convRszCh <-= convimg;
-		else if(expanded_zone == 2)
-			ctxRszCh <-= ctximg;
+		# Hand the freshly-sized sub-images to the zone modules so
+		# they redraw at the new rect. Blocking sends — see the
+		# full-path comment below; channels buffer upstream in wm
+		# so quick consecutive toggles aren't lost.
+		convRszCh <-= convimg;
+		ctxRszCh  <-= ctximg;
 		return;
 	}
 
@@ -1632,6 +1778,15 @@ handleresize()
 	# context-menu overlays land on the live screen, not the stale one.
 	if(lucipres_g != nil)
 		lucipres_g->setpresscr(presscr);
+
+	# Mobile accordion: allocate the title-bar sub-images on the fresh
+	# mainscr so drawchrome can paint into them. Desktop path leaves
+	# these nil — drawchrome's mobile branch is the only consumer.
+	sys->fprint(sys->fildes(2),
+		"lucifer/accordion: handleresize FULL path expanded=%d\n",
+		expanded_zone);
+	if(mobile && !alloctitleimgs())
+		return;
 
 	# Redraw chrome after zone allocation so separators are visible
 	drawchrome(r);

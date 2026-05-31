@@ -47,6 +47,7 @@ OBJ=\
 	asm-$OBJTYPE.$O\
 	os.$O\
 	$GUISRC\
+	audiosession.$O\
 	$CONF.root.$O\
 	lock.$O\
 	$DEVS\
@@ -68,6 +69,16 @@ SYSLIBS=\
 	-lm\
 	-lpthread\
 	-framework CoreFoundation\
+	-framework Foundation\
+	-framework UIKit\
+	-framework MessageUI\
+	-framework CallKit\
+	-framework Contacts\
+	-framework LocalAuthentication\
+	-framework Security\
+	-framework AVFoundation\
+	-framework AudioToolbox\
+	-framework CoreAudio\
 
 default:V:	$O.$CONF
 
@@ -93,6 +104,14 @@ $LIBEMU:	$OBJ $CONF.c $CONF.root.h
 
 <../port/portmkfile
 
+# Objective-C compile rule for iOS-specific bridges that wrap UIKit /
+# MessageUI / CallKit etc. portmkfile only covers .c / .s / .S; .m
+# files go through the same clang with the same CFLAGS (clang infers
+# Obj-C from the extension). Today's user: emu/iOS/phonebridge.m
+# (devphone). Add more as native iOS bridges land.
+%.$O: %.m
+	$CC $CFLAGS $stem.m
+
 # Phase A source reuse. iOS shares macOS's libc, so most platform
 # sources are reused unchanged via thin forwarding stubs in THIS
 # directory (each is a one-line #include of the macOS/port original —
@@ -112,3 +131,10 @@ asm-arm64.s:N:		../MacOSX/asm-arm64.s
 stubs-headless.c:N:	../MacOSX/stubs-headless.c
 ipif.c:N:		../port/ipif6-posix.c
 devfs.c:N:		../MacOSX/devfs.c
+
+# Audio backend (INFR-186). audio-sdl3.c here is a forwarder around
+# emu/MacOSX/audio-sdl3.c that defines AUDIO_PLATFORM_INIT_EXTERN so
+# audio_platform_init is an external symbol satisfied by audiosession.m
+# (AVAudioSession configuration). Record the macOS dep so iOS picks up
+# upstream changes; the OBJ list above already has audiosession.$O.
+audio-sdl3.c:N:		../MacOSX/audio-sdl3.c

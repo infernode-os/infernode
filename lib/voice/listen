@@ -1,0 +1,51 @@
+# voice/listen — set up local audio and announce a 9P export listener
+#                so a peer can mount this InferNode's /dev and bridge
+#                audio over it. INFR-185 v0.
+#
+# Run on each side that wants to be reachable. Default port 7070.
+#
+# Headphones recommended — there is no echo cancellation in v0, so a
+# loopback (or two phones in the same room sharing a speaker) will
+# howl. The fix lives at the iOS bridge (AVAudioSession .voiceChat) in
+# v1; for the macOS spike just plug in headphones.
+#
+# Usage:
+#   sh /lib/voice/listen           # port 7070
+#   sh /lib/voice/listen 7071      # override port
+
+# Inferno sh is modular: `if`, `~`, etc. live in the `std` module.
+# Scripts invoked via plain `sh script` don't get -l (which would load
+# /lib/sh/profile and pull these in), so we load them here explicitly.
+load std
+
+port=$1
+if {~ $#port 0} {
+	port=7070
+}
+addr='tcp!*!'$port
+
+# devaudio onto /dev (idempotent — bind -a is a no-op if already there)
+bind -a '#A' /dev
+
+# Cap the audio backend's queue depth so a sustained network feed
+# can't drift the speaker minutes behind real time (INFR-194).
+# 100 ms is the voice-grade default; bump if you want smoother under
+# packet loss, lower if you want tighter sync.
+echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
+echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
+
+# announce + accept loop. The pre-warm sleepers inside the listen
+# block run in the same address space as the export server (INFR-195):
+# they open /dev/audio for read + write to force audio_file_init +
+# SDL3 device open before the export loop runs, then hold the fd
+# alive so the peer's OREAD / OWRITE opens just bump the refcount
+# instead of touching SDL again — that's the path that fails when
+# the export worker can't reach a usable SDL state on macOS even
+# with SDL_Init / SDL_QuitSubSystem / SDL_Init retry.
+echo 'voice/listen:' $addr 'exporting /dev (pre-warmed)'
+listen -A $addr {
+	{sleep 99999 > /dev/audio} &
+	{sleep 99999 < /dev/audio > /dev/null} &
+	sleep 1
+	export /dev
+}

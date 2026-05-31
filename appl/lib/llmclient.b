@@ -29,6 +29,9 @@ include "json.m";
 	json: JSON;
 	JValue: import json;
 
+include "wirefmt.m";
+	wirefmt: WireFmt;
+
 include "llmclient.m";
 
 stderr: ref Sys->FD;
@@ -51,6 +54,11 @@ init()
 	if(json == nil)
 		raise "fail:llmclient: cannot load JSON";
 	json->init(bufio);
+
+	wirefmt = load WireFmt WireFmt->PATH;
+	if(wirefmt == nil)
+		raise "fail:llmclient: cannot load WireFmt";
+	wirefmt->init();
 }
 
 # ==================== Anthropic Messages API ====================
@@ -176,9 +184,17 @@ buildanthropicmessage(m: ref LlmMessage): string
 {
 	role := m.role;
 
-	# If structured content exists, use it directly
+	# If structured content exists, use it directly — but only after
+	# verifying it parses as JSON. A malformed m.sc spliced in raw would
+	# corrupt the whole request body; the OpenAI path already parses sc via
+	# readjsonstring, so this mirrors that guard for the Anthropic path. On
+	# the happy path (valid sc) the emitted bytes are unchanged.
 	if(m.sc != "") {
-		return "{\"role\":" + jquote(role) + ",\"content\":" + m.sc + "}";
+		(jv, jerr) := readjsonstring(m.sc);
+		if(jv != nil && jerr == "")
+			return "{\"role\":" + jquote(role) + ",\"content\":" + m.sc + "}";
+		# Malformed sc: fall through to the plain-text representation rather
+		# than emit an invalid request.
 	}
 
 	# Plain text message — guard against empty text blocks
@@ -280,8 +296,7 @@ parseanthropicresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 				if(inputv != nil)
 					inputjson = inputv.text();
 				args := extracttoolargs(inputjson);
-				safeargs := replaceall(args, "\n", "\\n");
-				toollines = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toollines;
+				toollines = wirefmt->encodetool(id, name, args) :: toollines;
 				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
 					",\"name\":" + jquote(name) +
 					",\"input\":" + inputjson + "}") :: structblocks;
@@ -428,8 +443,7 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 				if(inputjson == "")
 					inputjson = "{}";
 				args := extracttoolargs(inputjson);
-				safeargs := replaceall(args, "\n", "\\n");
-				toollines = sys->sprint("TOOL:%s:%s:%s", curtoolid, curtoolname, safeargs) :: toollines;
+				toollines = wirefmt->encodetool(curtoolid, curtoolname, args) :: toollines;
 				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(curtoolid) +
 					",\"name\":" + jquote(curtoolname) +
 					",\"input\":" + inputjson + "}") :: structblocks;
@@ -1064,8 +1078,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	for(; revtc != nil; revtc = tl revtc) {
 		(id, name, rawargs) := hd revtc;
 		args := extracttoolargs(rawargs);
-		safeargs := replaceall(args, "\n", "\\n");
-		toolentries = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toolentries;
+		toolentries = wirefmt->encodetool(id, name, args) :: toolentries;
 		inputjson := rawargs;
 		if(inputjson == "")
 			inputjson = "{}";
@@ -1232,8 +1245,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 		name := listget(st.tcnames, i);
 		rawargs := listget(st.tcargs, i);
 		args := extracttoolargs(rawargs);
-		safeargs := replaceall(args, "\n", "\\n");
-		toolentries = sys->sprint("TOOL:%s:%s:%s", id, name, safeargs) :: toolentries;
+		toolentries = wirefmt->encodetool(id, name, args) :: toolentries;
 		inputjson := rawargs;
 		if(inputjson == "")
 			inputjson = "{}";

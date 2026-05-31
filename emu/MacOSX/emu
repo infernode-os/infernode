@@ -21,7 +21,8 @@ dev
 
 	ip	ipif6-posix ipaux
 	eia
-#	audio	audio
+	audio	audio-sdl3
+	opus
 	mem
 
 lib

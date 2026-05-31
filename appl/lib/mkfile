@@ -63,6 +63,7 @@ TARG=\
 	ipattr.dis\
 	json.dis\
 	llmclient.dis\
+	wirefmt.dis\
 	keyset.dis\
 	libc.dis\
 	libc0.dis\
@@ -198,6 +199,7 @@ SYSMODULES=\
 	ipints.m\
 	json.m\
 	llmclient.m\
+	wirefmt.m\
 	keyring.m\
 	keyset.m\
 	libc.m\

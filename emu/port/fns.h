@@ -188,6 +188,7 @@ void		seterror(char*, ...);
 void		setid(char*, int);
 void	setpointer(int, int);
 void	setsoftkbd(int);	/* show/hide the on-screen keyboard (GUI backends) */
+void	setsoftkbd_rect(int x, int y, int w, int h);	/* focused-widget rect, window POINTS; SDL slides to keep it above the kbd */
 char*	skipslash(char*);
 void		srvrtinit(void);
 void		swiproc(Proc*, int);

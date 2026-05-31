@@ -5,8 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 
@@ -98,6 +100,69 @@ object InfernodePhoneBridge {
                 Log.w(TAG, "dial($number): SecurityException — ${se.message}")
             } catch (t: Throwable) {
                 Log.w(TAG, "dial($number): ${t.javaClass.simpleName} — ${t.message}")
+            }
+        }
+        return 0
+    }
+
+    /**
+     * INFR-182 SMS-send slice: ship one SMS via SmsManager.
+     *
+     * Called from emu/Android/phonebridge.c's `phonebridge_send_sms`
+     * when the agent writes `send <number> <body>` to `/phone/sms`.
+     *
+     * Returns 0 on success (SmsManager call dispatched), -1 on a
+     * synchronous failure (no context, permission denied, no
+     * SmsManager service). Delivery itself is asynchronous — the
+     * carrier outcome lands in logcat tagged InfernodePhoneBridge if
+     * you want to follow it; we don't propagate delivery success back
+     * to the C side because devphone's write semantics are
+     * fire-and-forget (matches the iOS path's compose-sheet model —
+     * see emu/iOS/phonebridge.m).
+     *
+     * Long messages (>160 GSM-7 / 70 UCS-2) are split via
+     * `divideMessage` + `sendMultipartTextMessage` so the receiver
+     * gets the whole thing.
+     */
+    @JvmStatic
+    fun sendSms(number: String, body: String): Int {
+        val ctx = appContext
+        if (ctx == null) {
+            Log.w(TAG, "sendSms($number): no context attached — call attach() first")
+            return -1
+        }
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.SEND_SMS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "sendSms($number): SEND_SMS not granted")
+            return -1
+        }
+        val sms: SmsManager? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ctx.getSystemService(SmsManager::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            SmsManager.getDefault()
+        }
+        if (sms == null) {
+            Log.w(TAG, "sendSms($number): SmsManager unavailable")
+            return -1
+        }
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val parts = sms.divideMessage(body)
+                if (parts.size <= 1) {
+                    sms.sendTextMessage(number, null, body, null, null)
+                    Log.i(TAG, "sendSms($number): single-part dispatched (${body.length} chars)")
+                } else {
+                    sms.sendMultipartTextMessage(number, null, parts, null, null)
+                    Log.i(TAG, "sendSms($number): ${parts.size}-part dispatched (${body.length} chars)")
+                }
+            } catch (se: SecurityException) {
+                Log.w(TAG, "sendSms($number): SecurityException — ${se.message}")
+            } catch (iae: IllegalArgumentException) {
+                Log.w(TAG, "sendSms($number): IllegalArgumentException — ${iae.message}")
+            } catch (t: Throwable) {
+                Log.w(TAG, "sendSms($number): ${t.javaClass.simpleName} — ${t.message}")
             }
         }
         return 0

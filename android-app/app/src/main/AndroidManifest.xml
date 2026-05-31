@@ -35,6 +35,13 @@
     <uses-permission android:name="android.permission.CALL_PHONE" />
 
     <!--
+      SEND_SMS — INFR-182 SMS send slice. Lets `/phone/sms` "send"
+      verb dispatch via SmsManager.sendTextMessage / sendMultipartTextMessage
+      through InfernodePhoneBridge.sendSms. Same runtime-grant flow.
+    -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+
+    <!--
       Launcher icons sourced from MacOSX/InferNode.icns (1024x1024
       master) and downsampled into res/mipmap-{m,h,xh,xxh,xxxh}dpi/
       at the standard Android density steps. ic_launcher.png is the

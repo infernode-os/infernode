@@ -121,6 +121,7 @@ class InfernodeSDLActivity : SDLActivity() {
         // /dev/audio would silently return zeros otherwise.
         ensureRecordAudioPermission()
         ensureCallPhonePermission()
+        ensureSendSmsPermission()
         InfernodePhoneBridge.attach(this)
         super.onCreate(savedInstanceState)
 
@@ -206,6 +207,20 @@ class InfernodeSDLActivity : SDLActivity() {
                 this,
                 arrayOf(Manifest.permission.CALL_PHONE),
                 /* requestCode = */ 2
+            )
+        }
+    }
+
+    private fun ensureSendSmsPermission() {
+        // INFR-182 SMS send slice: InfernodePhoneBridge.sendSms calls
+        // SmsManager.sendTextMessage which requires SEND_SMS at runtime.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.SEND_SMS),
+                /* requestCode = */ 3
             )
         }
     }

@@ -55,8 +55,9 @@ JavaVM *g_vm = NULL;
  * Stays NULL on builds without the JNI surface (headless o.emu) and
  * android_dial fails cleanly in that case.
  */
-jclass    g_bridge_class;    /* global ref, owned */
-jmethodID g_bridge_dial_mid; /* dial(Ljava/lang/String;)I */
+jclass    g_bridge_class;        /* global ref, owned */
+jmethodID g_bridge_dial_mid;     /* dial(Ljava/lang/String;)I */
+jmethodID g_bridge_sendsms_mid;  /* sendSms(Ljava/lang/String;Ljava/lang/String;)I */
 
 void
 phonebridge_jni_init(JNIEnv *env)
@@ -83,7 +84,17 @@ phonebridge_jni_init(JNIEnv *env)
 	g_bridge_class = (*env)->NewGlobalRef(env, local);
 	(*env)->DeleteLocalRef(env, local);
 	g_bridge_dial_mid = mid;
-	fprintf(stderr, "phone: JNI_OnLoad: InfernodePhoneBridge.dial cached\n");
+	g_bridge_sendsms_mid = (*env)->GetStaticMethodID(env, g_bridge_class,
+		"sendSms", "(Ljava/lang/String;Ljava/lang/String;)I");
+	if(g_bridge_sendsms_mid == NULL){
+		(*env)->ExceptionClear(env);
+		fprintf(stderr,
+			"phone: JNI_OnLoad: GetStaticMethodID(sendSms) failed\n");
+		/* Non-fatal — dial still works without it. */
+	}
+	fprintf(stderr,
+		"phone: JNI_OnLoad: InfernodePhoneBridge dial=%p sendSms=%p cached\n",
+		(void*)g_bridge_dial_mid, (void*)g_bridge_sendsms_mid);
 }
 
 /*
@@ -179,13 +190,87 @@ phonebridge_ctl_status(char *buf, int buflen)
 	return snprintf(buf, buflen, "stub (Telephony not wired)\n");
 }
 
+/*
+ * INFR-182 SMS-send slice: hop through the cached
+ * InfernodePhoneBridge.sendSms static. Same attach/cache pattern as
+ * android_dial — see that function's comment for why we cache in
+ * JNI_OnLoad and main-thread-post the SmsManager call.
+ */
+static int
+android_send_sms(const char *number, const char *body, char *err, int errlen)
+{
+	JNIEnv *env;
+	jclass cls;
+	jmethodID mid;
+	jstring jnum, jbody;
+	jint rc;
+	int attached = 0;
+
+	if(g_vm == NULL){
+		snprintf(err, errlen, "phone: JNI not initialised (g_vm null)");
+		return -1;
+	}
+	switch((*g_vm)->GetEnv(g_vm, (void**)&env, JNI_VERSION_1_6)){
+	case JNI_OK:
+		break;
+	case JNI_EDETACHED:
+		if((*g_vm)->AttachCurrentThread(g_vm, &env, NULL) != JNI_OK){
+			snprintf(err, errlen, "phone: AttachCurrentThread failed");
+			return -1;
+		}
+		attached = 1;
+		break;
+	default:
+		snprintf(err, errlen, "phone: GetEnv failed");
+		return -1;
+	}
+
+	cls = g_bridge_class;
+	mid = g_bridge_sendsms_mid;
+	if(cls == NULL || mid == NULL){
+		snprintf(err, errlen,
+			"phone: sendSms class/methodID not cached "
+			"(JNI_OnLoad lookup failed; check libemu.so loader)");
+		if(attached) (*g_vm)->DetachCurrentThread(g_vm);
+		return -1;
+	}
+	jnum  = (*env)->NewStringUTF(env, number ? number : "");
+	jbody = (*env)->NewStringUTF(env, body   ? body   : "");
+	rc = (*env)->CallStaticIntMethod(env, cls, mid, jnum, jbody);
+	if((*env)->ExceptionCheck(env)){
+		(*env)->ExceptionDescribe(env);
+		(*env)->ExceptionClear(env);
+		rc = -1;
+	}
+
+	(*env)->DeleteLocalRef(env, jnum);
+	(*env)->DeleteLocalRef(env, jbody);
+	if(attached)
+		(*g_vm)->DetachCurrentThread(g_vm);
+
+	if(rc != 0){
+		snprintf(err, errlen,
+			"phone: Android sendSms returned %d "
+			"(no context attached, SEND_SMS not granted, or SmsManager null)",
+			(int)rc);
+		return -1;
+	}
+	return 0;
+}
+
 int
 phonebridge_send_sms(const char *number, const char *body, char *err, int errlen)
 {
-	fprintf(stderr, "phone: Android send_sms to=%s body=%s (stub)\n",
-		number ? number : "(nil)", body ? body : "(nil)");
-	(void)err; (void)errlen;
-	return 0;
+	if(number == NULL || number[0] == 0){
+		snprintf(err, errlen, "send_sms: missing number");
+		return -1;
+	}
+	if(body == NULL || body[0] == 0){
+		snprintf(err, errlen, "send_sms: missing body");
+		return -1;
+	}
+	fprintf(stderr, "phone: Android send_sms to=%s body=%s\n", number, body);
+	return android_send_sms(number, body, err, errlen);
 }
 
 /* Inbound paths land via phonebridge_post_sms / phonebridge_post_call_event

@@ -23,13 +23,14 @@ Status as of 2026-06-01. Package: `io.infernode`. Owner decisions are marked
 
 ## Blockers — must resolve before first upload
 
-- [ ] **DECISION: restricted SMS permissions.** `SEND_SMS`/`RECEIVE_SMS`/
-      `READ_SMS` are barred by Play policy for non-default-SMS apps. See the
-      BLOCKER section in `listing.md`. Recommended: a `play` build flavor that
-      strips the three permissions + `InfernodeSmsReceiver`, keeping SMS in
-      sideload/APK builds only.
-- [ ] **DECISION: confirm `io.infernode` is the permanent package name** — it
-      is immutable once published.
+- [x] **Restricted SMS permissions — RESOLVED.** `SEND_SMS`/`RECEIVE_SMS`/
+      `READ_SMS` are barred by Play policy for non-default-SMS apps. Stripped
+      from the **release** build (the Play artifact) via the manifest overlay
+      `app/src/release/AndroidManifest.xml` (`tools:node="remove"` on the three
+      permissions and `InfernodeSmsReceiver`). The **debug/dev build keeps SMS**,
+      so the feature stays available for development and sideload. Verified in
+      the merged release manifest. `CALL_PHONE` is unrestricted and kept.
+- [x] **`io.infernode` confirmed as the permanent package name.**
 - [ ] **YOU: generate the upload keystore** (see `keystore.properties.example`)
       and create `android-app/keystore.properties`.
 - [ ] **YOU: Play Console account confirmed**, $25 registration done.

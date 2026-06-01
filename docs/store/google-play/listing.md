@@ -5,34 +5,21 @@ the Play Console. Character limits are Play's hard maximums.
 
 ---
 
-## ⚠️ BLOCKER: restricted SMS permissions
+## Restricted SMS permissions — RESOLVED
 
-The app's manifest declares `SEND_SMS`, `RECEIVE_SMS`, and `READ_SMS`. These
-are in Google Play's **restricted permission groups** (the "SMS and Call Log"
-policy). Google Play **only permits these for apps whose core, user-facing
-purpose is to be the device's default SMS handler** (or a short list of other
-eligible cases). An agent/OS environment that sends texts as a *feature* does
-not qualify, and uploads that request these permissions without an approved
-declaration are **rejected during review**.
+`SEND_SMS`, `RECEIVE_SMS`, and `READ_SMS` are in Google Play's restricted
+"SMS and Call Log" permission group, allowed only for apps whose core purpose
+is to be the device's default SMS handler. An agent/OS environment that texts
+as a *feature* does not qualify, so uploads requesting them are rejected.
 
-This must be resolved before the first Play upload. Options, roughly in order
-of least disruption:
+**Resolution:** these three permissions and `InfernodeSmsReceiver` are stripped
+from the **release** build (what goes to Play) via the manifest overlay
+`app/src/release/AndroidManifest.xml`. The **debug/dev build keeps SMS**, so the
+feature remains available for development and sideload. `CALL_PHONE` is not in
+a restricted group and is kept in all builds.
 
-1. **Ship the Play build without SMS.** Remove the three SMS permissions, the
-   `InfernodeSmsReceiver`, and gate the SMS feature off for the Play flavor
-   (e.g. a `play` product flavor that excludes them). The agent's SMS slice is
-   then unavailable on Play-distributed installs only. **Recommended** — keeps
-   the app shippable and the SMS feature available in sideloaded/APK builds.
-2. **Apply for a Play policy exception** via the Permissions Declaration Form.
-   Eligibility is narrow; an agent use case is unlikely to be approved.
-3. **Become the default SMS handler.** Requires implementing the full default-
-   SMS-app contract and reframing the app's primary purpose. Not appropriate
-   here.
-
-`CALL_PHONE` is **not** in the restricted Call Log group and is fine to keep
-(runtime permission). Only the SMS trio is the blocker.
-
-See `docs/store/google-play/READINESS.md` for the full checklist.
+This means the Play AAB (`bundleRelease`) carries no SMS permissions — nothing
+further to do for this policy. Just don't re-add SMS to the release variant.
 
 ---
 

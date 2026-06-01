@@ -79,8 +79,8 @@ operating system, developer tools, agent, terminal, 9P, Inferno
 
 ## Contact
 
-- Email: {{CONTACT_EMAIL}}
-- Privacy policy URL: {{PRIVACY_POLICY_URL}}  ← host docs/store/PRIVACY.md
+- Email: contact@nervsystems.com
+- Privacy policy URL: {{PRIVACY_POLICY_URL}}  ← host docs/store/PRIVACY.md (set up next)
 
 ---
 

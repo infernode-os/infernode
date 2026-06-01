@@ -1,12 +1,8 @@
 # InferNode — Support
 
-> **Draft for review.** Confirm the contact address and any issue-tracker URL
-> you want public before hosting. Google Play requires a support contact (email
-> at minimum); a public support URL is recommended.
-
 ## Getting help
 
-- **Email:** {{CONTACT_EMAIL}}
+- **Email:** contact@nervsystems.com
 - **Issues / bug reports:** https://github.com/infernode-os/infernode/issues
 - **Documentation:** https://github.com/infernode-os/infernode (see `README.md`,
   `QUICKSTART.md`, and `docs/`)
@@ -34,4 +30,4 @@ its storage in Android Settings.
 ## Reporting a security issue
 
 Please do not file public issues for security vulnerabilities. Email
-{{CONTACT_EMAIL}} with details and we will respond.
+security@nervsystems.com with details and we will respond.

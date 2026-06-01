@@ -1343,3 +1343,14 @@ jobs:
           ```
 
           See `SHA256SUMS.txt` for SHA-256 checksums of all archives.
+
+          ### Code signing
+
+          Windows code signing for this project is provided by the
+          [SignPath Foundation](https://signpath.org/), with certificates
+          issued by SSL.com. Signed Windows binaries carry verified
+          Publisher metadata and accumulate Microsoft SmartScreen
+          reputation; unsigned downloads are silently blocked by Windows
+          after browser delivery (the "Mark of the Web") and require the
+          manual right-click → Properties → Unblock step described in
+          the Windows download bullet above.

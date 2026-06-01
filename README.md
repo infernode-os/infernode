@@ -40,6 +40,8 @@ cd infernode-*-linux-*-gui
 
 Every release asset is published with a cosign bundle (`.pem` + `.sig`) and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 
+Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (see the Windows install bullet above for the manual Unblock workaround in the meantime).
+
 ### Build from source
 
 Prefer a release unless you need bleeding-edge `master` or a platform without a prebuilt binary.

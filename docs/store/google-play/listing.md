@@ -80,7 +80,8 @@ operating system, developer tools, agent, terminal, 9P, Inferno
 ## Contact
 
 - Email: contact@nervsystems.com
-- Privacy policy URL: {{PRIVACY_POLICY_URL}}  ← host docs/store/PRIVACY.md (set up next)
+- Privacy policy URL: https://infernode.io/privacy/
+- Support URL: https://infernode.io/support/
 
 ---
 

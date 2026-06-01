@@ -34,8 +34,11 @@ Status as of 2026-06-01. Package: `io.infernode`. Owner decisions are marked
 - [ ] **YOU: generate the upload keystore** (see `keystore.properties.example`)
       and create `android-app/keystore.properties`.
 - [ ] **YOU: Play Console account confirmed**, $25 registration done.
-- [ ] **Privacy policy hosted at a public URL** — Play requires the URL on the
-      listing. (GitHub Pages off this repo is the zero-cost route.)
+- [~] **Privacy policy hosted at a public URL** — `/privacy/` and `/support/`
+      pages built into the infernode.io site (Astro, repo `pdfinn/infernode.io`,
+      committed on `main`). URLs: https://infernode.io/privacy/ and
+      https://infernode.io/support/. **Goes live on push** (Cloudflare Pages
+      auto-deploys main) — awaiting the owner's push.
 
 ## Remaining before review submission
 

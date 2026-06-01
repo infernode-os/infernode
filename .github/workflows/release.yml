@@ -848,8 +848,8 @@ jobs:
         sed -i '' "s|InferNode 0.1|InferNode ${VERSION} build ${BUILD_DATE}-${SHORT_SHA}|" include/version.h
         echo "Version: $(cat include/version.h)"
 
-    - name: Install SDL3
-      run: brew install sdl3 sdl3_ttf
+    - name: Install SDL3 and opus
+      run: brew install sdl3 sdl3_ttf opus
 
     - name: Build mk
       run: |
@@ -1112,6 +1112,15 @@ jobs:
       run: |
         & .\build-windows-amd64.ps1
 
+    - name: Stash headless emu
+      shell: pwsh
+      run: |
+        # build-windows-amd64.ps1 and build-windows-sdl3.ps1 both link to
+        # emu\Nt\o.emu.exe, so the GUI build below overwrites the headless
+        # emu. Preserve the headless binary so we can ship both bundles.
+        Copy-Item "emu\Nt\o.emu.exe" "emu\Nt\o.emu.headless.exe" -Force
+        Write-Host "Stashed headless emu as emu\Nt\o.emu.headless.exe"
+
     - name: Build (SDL3 GUI emu)
       shell: pwsh
       run: |
@@ -1126,11 +1135,12 @@ jobs:
       shell: pwsh
       run: |
         $required = @(
-          "emu\Nt\o.emu.exe",       # SDL3 GUI emulator
-          "emu\Nt\InferNode.exe",   # Windows-subsystem launcher
-          "emu\Nt\SDL3.dll",        # SDL3 runtime
-          "Nt\amd64\bin\limbo.exe", # Limbo compiler
-          "Nt\amd64\bin\mk.exe"     # mk build tool
+          "emu\Nt\o.emu.exe",          # SDL3 GUI emulator
+          "emu\Nt\o.emu.headless.exe", # headless (console) emulator
+          "emu\Nt\InferNode.exe",      # Windows-subsystem launcher
+          "emu\Nt\SDL3.dll",           # SDL3 runtime
+          "Nt\amd64\bin\limbo.exe",    # Limbo compiler
+          "Nt\amd64\bin\mk.exe"        # mk build tool
         )
         foreach ($f in $required) {
           if (-not (Test-Path $f)) { Write-Error "Missing: $f"; exit 1 }
@@ -1138,56 +1148,69 @@ jobs:
           Write-Host "OK $f ($size KB)"
         }
 
-    - name: Package archive
+    - name: Package archives (GUI + headless)
       shell: pwsh
       run: |
         $VERSION = "${{ steps.version.outputs.version }}"
-        $STAGE = "infernode-$VERSION-windows-amd64"
 
-        # Flat layout matching the launcher's expectations: $STAGE\InferNode.exe
-        # invokes %dir%\o.emu.exe with -r ., so launcher + emu + SDL3.dll +
-        # runtime tree all live at the top level of the bundle.
-        New-Item -ItemType Directory -Force -Path "$STAGE\Nt\amd64\bin" | Out-Null
-
-        Copy-Item "emu\Nt\InferNode.exe" "$STAGE\"
-        Copy-Item "emu\Nt\o.emu.exe"     "$STAGE\"
-        Copy-Item "emu\Nt\SDL3.dll"      "$STAGE\"
-        Copy-Item "Nt\amd64\bin\limbo.exe" "$STAGE\Nt\amd64\bin\"
-        Copy-Item "Nt\amd64\bin\mk.exe"    "$STAGE\Nt\amd64\bin\"
-
-        foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale")) {
-          if (Test-Path $d) {
-            Copy-Item -Recurse $d "$STAGE\$d"
+        # Stage the shared payload (toolchain + runtime tree + docs) common to
+        # both bundles, then add the GUI- or headless-specific binaries.
+        function Stage-Common {
+          param([string]$Stage)
+          New-Item -ItemType Directory -Force -Path "$Stage\Nt\amd64\bin" | Out-Null
+          Copy-Item "Nt\amd64\bin\limbo.exe" "$Stage\Nt\amd64\bin\"
+          Copy-Item "Nt\amd64\bin\mk.exe"    "$Stage\Nt\amd64\bin\"
+          foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale")) {
+            if (Test-Path $d) { Copy-Item -Recurse $d "$Stage\$d" }
           }
-        }
-
-        New-Item -ItemType Directory -Force -Path "$STAGE\tmp" | Out-Null
-
-        foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
-          if (Test-Path $f) {
-            Copy-Item $f "$STAGE\"
+          New-Item -ItemType Directory -Force -Path "$Stage\tmp" | Out-Null
+          foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
+            if (Test-Path $f) { Copy-Item $f "$Stage\" }
           }
         }
 
         # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
         # ring-fence rule. Load-bearing — survives source-tree refactor.
-        $forbidden = Get-ChildItem -Path $STAGE -Recurse -ErrorAction SilentlyContinue | Where-Object {
-          $_.Name -like 'serve-agent*' -or $_.FullName -like '*agent-harness*'
-        }
-        if ($forbidden) {
-          Write-Host "FATAL: testing-only harness files found in release stage:"
-          $forbidden | ForEach-Object { Write-Host $_.FullName }
-          exit 1
+        function Assert-NoHarness {
+          param([string]$Stage)
+          $forbidden = Get-ChildItem -Path $Stage -Recurse -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like 'serve-agent*' -or $_.FullName -like '*agent-harness*'
+          }
+          if ($forbidden) {
+            Write-Host "FATAL: testing-only harness files found in release stage:"
+            $forbidden | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
         }
 
-        Compress-Archive -Path "$STAGE\*" -DestinationPath "$STAGE.zip" -CompressionLevel Optimal
-        Write-Host "Archive: $STAGE.zip"
-        Write-Host "Size: $([math]::Round((Get-Item "$STAGE.zip").Length / 1MB, 1)) MB"
+        function Write-Zip {
+          param([string]$Stage)
+          Assert-NoHarness $Stage
+          Compress-Archive -Path "$Stage\*" -DestinationPath "$Stage.zip" -CompressionLevel Optimal
+          Write-Host "Archive: $Stage.zip ($([math]::Round((Get-Item "$Stage.zip").Length / 1MB, 1)) MB)"
+        }
+
+        # GUI bundle: flat layout matching the launcher's expectations —
+        # $STAGE\InferNode.exe invokes %dir%\o.emu.exe with -r ., so launcher +
+        # GUI emu + SDL3.dll + runtime tree all live at the bundle's top level.
+        $GUI = "infernode-$VERSION-windows-amd64-gui"
+        Stage-Common $GUI
+        Copy-Item "emu\Nt\InferNode.exe" "$GUI\"
+        Copy-Item "emu\Nt\o.emu.exe"     "$GUI\"
+        Copy-Item "emu\Nt\SDL3.dll"      "$GUI\"
+        Write-Zip $GUI
+
+        # Headless bundle: console emulator only, no SDL3. Launch from a
+        # console with: o.emu.exe -c1 -r. sh -l
+        $HL = "infernode-$VERSION-windows-amd64"
+        Stage-Common $HL
+        Copy-Item "emu\Nt\o.emu.headless.exe" "$HL\o.emu.exe"
+        Write-Zip $HL
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: infernode-windows-amd64
-        path: infernode-*-windows-amd64.zip
+        path: infernode-*-windows-amd64*.zip
         retention-days: 3
 
   # ─────────────────────────────────────────────
@@ -1278,6 +1301,7 @@ jobs:
           | Linux | ARM64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-linux-arm64-gui.tar.gz` |
           | Linux | ARM64 (headless) | `infernode-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
           | macOS | ARM64 (Apple Silicon, SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
+          | Windows | AMD64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-windows-amd64-gui.zip` |
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
 
           ### Quick Start
@@ -1288,7 +1312,9 @@ jobs:
 
           **Linux (headless):** Extract, then `./infernode-headless`
 
-          **Windows:** Extract the zip, optionally run `setup-windows.ps1` (or `setup-windows.bat`) to configure an LLM backend, then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; SDL3 GUI ships in the same zip.
+          **Windows (GUI):** Extract the `-gui` zip, optionally run `setup-windows.ps1` (or `setup-windows.bat`) to configure an LLM backend, then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; the SDL3 GUI emulator and `SDL3.dll` ship in the same zip.
+
+          **Windows (headless):** Extract the zip, then from a console run `o.emu.exe -c1 -r. sh -l`.
 
           ### Verification
 

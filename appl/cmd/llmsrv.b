@@ -125,6 +125,8 @@ LlmSession: adt {
 	streamch:       chan of string;  # nil when idle
 	donech:         chan of int;     # signaled when gen completes
 	genactive:      int;            # 1 during generation
+	pendingwrite:   array of byte;   # /ask prompt reassembled across write-fragments,
+	                                 # consumed (-> generation) on the next read
 
 	# Session lifecycle
 	closed:         int;
@@ -319,6 +321,7 @@ newsession(): ref LlmSession
 		nil,           # streamch
 		nil,           # donech
 		0,             # genactive
+		nil,           # pendingwrite
 		0,             # closed
 		1              # refs (starts at 1)
 	);
@@ -454,6 +457,7 @@ Serve:
 
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
+			c.data = nil;	# fresh write-reassembly buffer for this open
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
 
 		Read =>
@@ -491,6 +495,10 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
+				# Write->read transition: a fully-written prompt is pending
+				# -> finalize it and start generation here (the /ask fid is a
+				# persistent ORDWR fd, never clunked between turns).
+				triggerpending(sess);
 				if(sess.genactive) {
 					# Block until generation completes, then reply
 					spawn asyncaskread(srv, m, sess);
@@ -507,6 +515,9 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
+				# Same write->read transition trigger as Qask, so the
+				# streaming interface (write /ask, read /stream) still works.
+				triggerpending(sess);
 				# Spawn async reader that blocks on stream channel
 				spawn asyncstreamread(srv, m, sess);
 
@@ -642,17 +653,12 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 					break;
 				}
-				prompt := strip(string m.data);
-				if(prompt == "") {
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-					break;
-				}
-				# Begin generation: allocate channels before spawning
-				sess.streamch = chan[256] of string;
-				sess.donech = chan of int;
-				sess.genactive = 1;
-				# Spawn async generation, reply to write immediately
-				spawn asyncgen(srv, m.tag, len m.data, sess, prompt);
+				# Accumulate the prompt across mnt write-fragments. The mnt
+				# device splits one client write() into multiple <=iounit
+				# Twrites; generation is deferred to the following read so the
+				# whole prompt is assembled first (see triggerpending).
+				sess.pendingwrite = appendbytes(sess.pendingwrite, m.data);
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qmodel =>
 				sess := findsession(sid);
@@ -686,7 +692,8 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				sess.systemprompt = strip(string m.data);
+				# Accumulate across write-fragments; committed on clunk.
+				c.data = appendbytes(c.data, m.data);
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qthinking =>
@@ -765,19 +772,10 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				content := strip(string m.data);
-				if(content == "") {
-					# Clear tools
-					sess.tools = nil;
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-					break;
-				}
-				(tools, terr) := parsetooldefs(content);
-				if(terr != nil) {
-					srv.reply(ref Rmsg.Error(m.tag, "tools: " + terr));
-					break;
-				}
-				sess.tools = tools;
+				# Accumulate the tool-defs JSON across write-fragments; parsed
+				# and committed on clunk (see finalizewrite). The whole array
+				# may exceed one iounit, so it cannot be parsed per-write.
+				c.data = appendbytes(c.data, m.data);
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qcompact =>
@@ -811,6 +809,7 @@ Serve:
 			}
 
 		Clunk =>
+			finalizewrite(srv, m.fid);
 			srv.clunk(m);
 
 		Remove =>
@@ -825,12 +824,83 @@ Serve:
 
 # --- Async generation goroutine ---
 
-asyncgen(srv: ref Styxserver, writetag: int, writelen: int,
-	sess: ref LlmSession, prompt: string)
+# Append a write-fragment to a reassembly buffer, returning the grown buffer.
+# The mnt device fragments one client write() into multiple <=iounit Twrites
+# delivered in order; appending in arrival order faithfully reconstructs the
+# document. We deliberately do NOT index by absolute offset: the persistent
+# ORDWR /ask fid's write offset climbs across turns (queryllmfd never seeks 0),
+# which would make absolute-offset placement grow without bound.
+appendbytes(buf, data: array of byte): array of byte
 {
-	# Reply to the write immediately
-	srv.reply(ref Rmsg.Write(writetag, writelen));
+	if(data == nil || len data == 0)
+		return buf;
+	if(buf == nil) {
+		nb := array[len data] of byte;
+		nb[0:] = data;
+		return nb;
+	}
+	nb := array[len buf + len data] of byte;
+	nb[0:] = buf;
+	nb[len buf:] = data;
+	return nb;
+}
 
+# Start a generation turn if a fully-written prompt is pending and none is
+# running. The trigger is the write->read transition (first read after the
+# prompt writes), since the /ask fid is never clunked between turns.
+triggerpending(sess: ref LlmSession)
+{
+	if(sess.pendingwrite == nil || sess.genactive)
+		return;
+	prompt := strip(string sess.pendingwrite);
+	sess.pendingwrite = nil;
+	if(prompt == "")
+		return;
+	# Allocate channels before spawning, then run generation async.
+	sess.streamch = chan[256] of string;
+	sess.donech = chan of int;
+	sess.genactive = 1;
+	spawn rungeneration(sess, prompt);
+}
+
+# Commit a reassembled /tools or /system document on clunk. Tool-defs validity
+# cannot be known until the whole array is assembled, so parse errors surface
+# in the server log here rather than as a write error (the write already
+# succeeded chunk-by-chunk). This is also the natural point for a future
+# content-hash + parsed-tooldef cache (INFR-214 follow-up).
+finalizewrite(srv: ref Styxserver, fid: int)
+{
+	c := srv.getfid(fid);
+	if(c == nil || c.data == nil)
+		return;
+	sess := findsession(SESSID(c.path));
+	if(sess == nil) {
+		c.data = nil;
+		return;
+	}
+	content := strip(string c.data);
+	c.data = nil;
+	case FTYPE(c.path) {
+	Qtools =>
+		if(content == "") {
+			sess.tools = nil;
+			return;
+		}
+		(tools, terr) := parsetooldefs(content);
+		if(terr != nil) {
+			sys->fprint(stderr, "llmsrv: tools parse on clunk: %s\n", terr);
+			return;
+		}
+		sess.tools = tools;
+	Qsystem =>
+		sess.systemprompt = content;
+	}
+}
+
+# Run one generation turn. Caller (triggerpending) has set genactive/streamch/
+# donech and the triggering write was already replied to.
+rungeneration(sess: ref LlmSession, prompt: string)
+{
 	# Check for TOOL_RESULTS
 	if(hasprefix(prompt, "TOOL_RESULTS\n") || hasprefix(prompt, "TOOL_RESULTS\r\n")) {
 		(results, perr) := llmclient->parsetoolresults(prompt);

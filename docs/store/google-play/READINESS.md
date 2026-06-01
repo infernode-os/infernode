@@ -39,8 +39,12 @@ Status as of 2026-06-01. Package: `io.infernode`. Owner decisions are marked
 
 ## Remaining before review submission
 
-- [ ] **Screenshots** — 2–8 phone screenshots (min 320 px short side). Needs the
-      app running on a device/emulator; capture Lucifer + the agent UI.
+- [~] **Screenshots** — 2 captured at 1080×2340 (portrait phone) in
+      `screenshots/`: `01-lucifer-home.png` (Veltro onboarding / accordion) and
+      `02-fractals.png` (Mandelbrot fractals app running). Play allows 2–8;
+      add a couple more (e.g. an agent task in the Workspace, Settings) before
+      submission. Captured from the Pixel_5_API_30 arm64 emulator running the
+      debug APK.
 - [ ] **DECISION: bump `versionName`** off the dev tag `0.1.0-phase1c` to a
       store-appropriate string (e.g. `0.1.0`). `versionCode` stays an integer
       you increment each upload.

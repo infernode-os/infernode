@@ -848,8 +848,8 @@ jobs:
         sed -i '' "s|InferNode 0.1|InferNode ${VERSION} build ${BUILD_DATE}-${SHORT_SHA}|" include/version.h
         echo "Version: $(cat include/version.h)"
 
-    - name: Install SDL3
-      run: brew install sdl3 sdl3_ttf
+    - name: Install SDL3 and opus
+      run: brew install sdl3 sdl3_ttf opus
 
     - name: Build mk
       run: |

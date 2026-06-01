@@ -43,8 +43,8 @@ android {
         applicationId = "io.infernode"
         minSdk = 28         // matches mkfiles/mkfile-Android-arm64 API floor
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-phase1c"
+        versionCode = 2
+        versionName = "0.1.0"
 
         ndk {
             // Ship every ABI for which we have a cross-built libemu.so

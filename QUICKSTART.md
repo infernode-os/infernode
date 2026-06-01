@@ -15,8 +15,16 @@ tar xzf infernode-*-linux-*.tar.gz
 cd infernode-*-linux-*
 ./infernode-headless
 
+# Optional desktop/PATH integration (Linux, either tarball):
+./setup-desktop.sh                # app-menu/dock icon (GUI) + `infernode` on $PATH
+#   ./setup-desktop.sh --no-path  # icon only
+#   ./setup-desktop.sh --no-icon  # PATH wrapper only (headless/server)
+#   ./setup-desktop.sh --uninstall
+
 # macOS ARM64 (Apple Silicon) — open DMG, drag to Applications, double-click
 ```
+
+> Match the tarball to your CPU: `amd64` (Intel/AMD) vs `arm64` (Jetson / Raspberry Pi / Apple-Silicon Linux). Running the wrong arch fails with a missing `ld-linux-aarch64.so.1` / loader error.
 
 ### From source
 

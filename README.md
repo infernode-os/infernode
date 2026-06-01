@@ -33,7 +33,10 @@ Every tagged release ships signed binaries for macOS, Linux, and Windows on the 
 tar xzf infernode-*-linux-*-gui.tar.gz
 cd infernode-*-linux-*-gui
 ./infernode                   # or ./infernode-headless in the non-GUI tarballs
+./setup-desktop.sh            # optional: app-menu/dock icon, or `infernode` on $PATH
 ```
+
+> Pick the tarball that matches your CPU: `amd64` for Intel/AMD, `arm64` for Jetson / Raspberry Pi / Apple-Silicon Linux. The wrong arch fails with `ld-linux-aarch64.so.1: No such file` (or similar).
 
 Every release asset is published with a cosign bundle (`.pem` + `.sig`) and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 

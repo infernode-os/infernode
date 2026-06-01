@@ -172,6 +172,10 @@ jobs:
         cp build-linux-amd64.sh "$STAGE/"
         cp install-sdl3.sh "$STAGE/"
 
+        # Desktop / PATH integration helper (icon + dock, or PATH wrapper)
+        cp setup-desktop.sh "$STAGE/"
+        chmod +x "$STAGE/setup-desktop.sh"
+
         # Docs and legal
         for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
           [ -f "$f" ] && cp "$f" "$STAGE/"
@@ -365,6 +369,10 @@ jobs:
 
         # Build scripts
         cp build-linux-amd64.sh install-sdl3.sh "$STAGE/"
+
+        # Desktop / PATH integration helper (icon + dock, or PATH wrapper)
+        cp setup-desktop.sh "$STAGE/"
+        chmod +x "$STAGE/setup-desktop.sh"
 
         # Docs and legal
         for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
@@ -577,6 +585,10 @@ jobs:
         cp build-linux-arm64.sh "$STAGE/"
         cp install-sdl3.sh "$STAGE/"
 
+        # Desktop / PATH integration helper (icon + dock, or PATH wrapper)
+        cp setup-desktop.sh "$STAGE/"
+        chmod +x "$STAGE/setup-desktop.sh"
+
         # Docs and legal
         for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
           [ -f "$f" ] && cp "$f" "$STAGE/"
@@ -770,6 +782,10 @@ jobs:
 
         # Build scripts
         cp build-linux-arm64.sh install-sdl3.sh "$STAGE/"
+
+        # Desktop / PATH integration helper (icon + dock, or PATH wrapper)
+        cp setup-desktop.sh "$STAGE/"
+        chmod +x "$STAGE/setup-desktop.sh"
 
         # Docs and legal
         for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md; do

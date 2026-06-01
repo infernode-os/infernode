@@ -5,4 +5,5 @@ Comment=64-bit Inferno OS for embedded systems, servers, and AI agents
 Exec=infernode
 Icon=infernode
 Terminal=false
-Categories=Development;System;
+Categories=Development;
+Keywords=inferno;limbo;dis;emu;

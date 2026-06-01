@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release-build manifest overlay (merged on top of src/main/AndroidManifest.xml
+  for the `release` build type ONLY; the debug/dev build is unaffected).
+
+  Google Play bars the restricted SMS permission group (SEND_SMS / RECEIVE_SMS
+  / READ_SMS) for apps that are not the device's default SMS handler. The
+  InferNode agent sends/reads SMS as a *feature*, which does not qualify, so an
+  upload requesting these would be rejected. We strip them — and the inbound
+  receiver — from the release artifact that goes to Play.
+
+  The SMS feature remains fully present in the debug build, so it can be
+  exercised in development and sideloaded for users who want it. CALL_PHONE is
+  NOT in a restricted group and is kept in all builds.
+
+  We also strip FOREGROUND_SERVICE / FOREGROUND_SERVICE_DATA_SYNC and the
+  InfernodeService declaration. That service is Phase-1c scaffolding for a
+  future always-on 9P daemon and is NOT started by the shipping app (no
+  startForegroundService call anywhere) — the 9P services run inside the
+  Activity's emu process, not this Android foreground service. Declaring an
+  unused FOREGROUND_SERVICE_DATA_SYNC triggers a Play permission-declaration +
+  demo-video requirement we cannot honestly satisfy, so it leaves the release.
+  The service + permissions stay in the debug build for when the daemon is
+  wired up for real.
+
+  See docs/store/google-play/listing.md and READINESS.md.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.SEND_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_SMS" tools:node="remove" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" tools:node="remove" />
+
+    <application>
+        <receiver
+            android:name=".InfernodeSmsReceiver"
+            tools:node="remove" />
+        <service
+            android:name=".InfernodeService"
+            tools:node="remove" />
+    </application>
+
+</manifest>

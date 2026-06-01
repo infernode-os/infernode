@@ -277,6 +277,13 @@ android-app/build/
 android-app/app/build/
 android-app/local.properties
 
+# Release signing secrets — NEVER commit. The upload keystore and the
+# properties file naming it stay on the signer's machine / in CI secrets.
+# keystore.properties.example is the tracked template.
+android-app/keystore.properties
+*.jks
+*.keystore
+
 # Multi-arch APK build artefacts (INFR-67 x86_64 NDK target).
 android-app/app/src/main/jniLibs/x86_64/libemu.so
 android-app/app/src/main/jniLibs/x86_64/libSDL3.so

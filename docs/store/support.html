@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>InferNode — Support</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+    :root { color-scheme: light dark; }
+    body { max-width: 760px; margin: 2.5rem auto; padding: 0 1.2rem;
+           font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+           color: #1a1a1a; background: #fff; }
+    h1 { font-size: 1.8rem; border-bottom: 2px solid #F06130; padding-bottom: .3rem; }
+    h2 { font-size: 1.25rem; margin-top: 2rem; color: #b8431d; }
+    a { color: #c0461f; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #ddd; padding: .5rem .6rem; text-align: left; vertical-align: top; font-size: .94rem; }
+    th { background: #faf0eb; }
+    code { background: #f3f3f3; padding: .1rem .3rem; border-radius: 3px; }
+    em { color: #666; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #e6e6e6; background: #141414; }
+      h2 { color: #f08a5d; } th { background: #2a1d17; }
+      th, td { border-color: #333; } code { background: #242424; }
+    }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">InferNode — Support</h1>
+</header>
+<h1 id="infernode-support">InferNode — Support</h1>
+<h2 id="getting-help">Getting help</h2>
+<ul>
+<li><strong>Email:</strong> contact@nervsystems.com</li>
+<li><strong>Issues / bug reports:</strong>
+https://github.com/infernode-os/infernode/issues</li>
+<li><strong>Documentation:</strong>
+https://github.com/infernode-os/infernode (see <code>README.md</code>,
+<code>QUICKSTART.md</code>, and <code>docs/</code>)</li>
+</ul>
+<h2 id="what-infernode-is">What InferNode is</h2>
+<p>InferNode is a 64-bit build of the Inferno® distributed operating
+system, packaged to run on your device. It hosts a namespace-based agent
+environment, a graphical shell (Lucifer), and tools for connecting to
+language-model and 9P services that you configure.</p>
+<h2 id="common-questions">Common questions</h2>
+<p><strong>The agent can’t reach my model.</strong> Check that the
+endpoint address and key are set correctly in Settings and that the
+device can reach the host (same network / VPN). Local-network features
+require granting the local-network permission.</p>
+<p><strong>Voice/dial/SMS does nothing.</strong> These features need
+their respective runtime permissions (microphone, phone, SMS). Grant
+them when prompted, or in Android Settings → Apps → InferNode →
+Permissions.</p>
+<p><strong>How do I remove my data?</strong> Everything is on-device.
+Uninstall the app or clear its storage in Android Settings.</p>
+<h2 id="reporting-a-security-issue">Reporting a security issue</h2>
+<p>Please do not file public issues for security vulnerabilities. Email
+security@nervsystems.com with details and we will respond.</p>
+</body>
+</html>

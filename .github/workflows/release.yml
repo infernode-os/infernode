@@ -1176,7 +1176,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$Stage\Nt\amd64\bin" | Out-Null
           Copy-Item "Nt\amd64\bin\limbo.exe" "$Stage\Nt\amd64\bin\"
           Copy-Item "Nt\amd64\bin\mk.exe"    "$Stage\Nt\amd64\bin\"
-          foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale")) {
+          foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale", "usr", "mnt")) {
             if (Test-Path $d) { Copy-Item -Recurse $d "$Stage\$d" }
           }
           New-Item -ItemType Directory -Force -Path "$Stage\tmp" | Out-Null

@@ -43,7 +43,7 @@ android {
         applicationId = "io.infernode"
         minSdk = 28         // matches mkfiles/mkfile-Android-arm64 API floor
         targetSdk = 35
-        versionCode = 2
+        versionCode = 3
         versionName = "0.1.0"
 
         ndk {

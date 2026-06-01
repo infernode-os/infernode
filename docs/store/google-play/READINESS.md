@@ -31,6 +31,11 @@ Status as of 2026-06-01. Package: `io.infernode`. Owner decisions are marked
       so the feature stays available for development and sideload. Verified in
       the merged release manifest. `CALL_PHONE` is unrestricted and kept.
 - [x] **`io.infernode` confirmed as the permanent package name.**
+- [x] **Unused FOREGROUND_SERVICE_DATA_SYNC removed from release.** `InfernodeService`
+      is Phase-1c scaffolding never started by the shipping app; declaring the
+      permission triggered a Play demo-video requirement we can't honestly meet.
+      Stripped from the release build (kept in debug) via `app/src/release/AndroidManifest.xml`.
+      Bundle is now versionCode 3.
 - [ ] **YOU: generate the upload keystore** (see `keystore.properties.example`)
       and create `android-app/keystore.properties`.
 - [ ] **YOU: Play Console account confirmed**, $25 registration done.

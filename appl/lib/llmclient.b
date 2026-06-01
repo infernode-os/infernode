@@ -295,8 +295,11 @@ parseanthropicresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 				if(namev != nil) pick nv := namev { String => name = nv.s; }
 				if(inputv != nil)
 					inputjson = inputv.text();
-				args := extracttoolargs(inputjson);
-				toollines = wirefmt->encodetool(id, name, args) :: toollines;
+				# Emit the model's JSON arguments verbatim; wirefmt->encodetool
+				# escapes them safely (colons/backslashes/newlines). MCP tools
+				# (mcp9p /call) consume JSON directly; the legacy /tool positional
+				# projection happens at agentlib calltool — do NOT flatten here.
+				toollines = wirefmt->encodetool(id, name, inputjson) :: toollines;
 				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
 					",\"name\":" + jquote(name) +
 					",\"input\":" + inputjson + "}") :: structblocks;
@@ -442,8 +445,9 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 				inputjson := curtoolinput;
 				if(inputjson == "")
 					inputjson = "{}";
-				args := extracttoolargs(inputjson);
-				toollines = wirefmt->encodetool(curtoolid, curtoolname, args) :: toollines;
+				# JSON arguments verbatim; wirefmt->encodetool escapes safely.
+				# Legacy /tool positional projection happens at agentlib calltool.
+				toollines = wirefmt->encodetool(curtoolid, curtoolname, inputjson) :: toollines;
 				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(curtoolid) +
 					",\"name\":" + jquote(curtoolname) +
 					",\"input\":" + inputjson + "}") :: structblocks;
@@ -1077,8 +1081,8 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 
 	for(; revtc != nil; revtc = tl revtc) {
 		(id, name, rawargs) := hd revtc;
-		args := extracttoolargs(rawargs);
-		toolentries = wirefmt->encodetool(id, name, args) :: toolentries;
+		# JSON verbatim; wirefmt escapes; flatten for legacy /tool is in calltool.
+		toolentries = wirefmt->encodetool(id, name, rawargs) :: toolentries;
 		inputjson := rawargs;
 		if(inputjson == "")
 			inputjson = "{}";
@@ -1244,8 +1248,8 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 		id := listget(st.tcids, i);
 		name := listget(st.tcnames, i);
 		rawargs := listget(st.tcargs, i);
-		args := extracttoolargs(rawargs);
-		toolentries = wirefmt->encodetool(id, name, args) :: toolentries;
+		# JSON verbatim; wirefmt escapes; flatten for legacy /tool is in calltool.
+		toolentries = wirefmt->encodetool(id, name, rawargs) :: toolentries;
 		inputjson := rawargs;
 		if(inputjson == "")
 			inputjson = "{}";
@@ -2277,84 +2281,10 @@ estimatetokens(s: string): int
 	return n / 4;
 }
 
-extracttoolargs(inputjson: string): string
-{
-	(jv, jerr) := readjsonstring(inputjson);
-	if(jerr != nil)
-		return inputjson;
-
-	pick obj := jv {
-	Object =>
-		# Assembly order is "command first, args second, then any
-		# remaining string properties in JSON order."
-		#
-		# Why: tools like task and memory use a `{command, args}`
-		# schema where the value of `args` is itself a key=value
-		# string. exec() splits on first whitespace to extract the
-		# command, so command must come first.
-		#
-		# Smaller models (notably gpt-oss:20b) frequently emit the
-		# object in args-first order despite the schema declaring
-		# command first. A naive JSON-encounter-order join would
-		# produce "args command" — wrong. Hence the special-case
-		# ordering here.
-		#
-		# Reproduced in the eval harness as the "Tool X has failed 3
-		# consecutive times" loop; see pdfinn/infernode-eval-harness
-		# FINDINGS.md §F3.
-		cmdval := "";
-		hascmd := 0;
-		argsval := "";
-		hasargs := 0;
-		nprops := 0;
-		# `others` collected in reverse — reversed back into JSON
-		# order below before joining.
-		others_rev: list of string;
-		for(ml := obj.mem; ml != nil; ml = tl ml) {
-			(name, val) := hd ml;
-			nprops++;
-			s := "";
-			pick sv := val {
-			String => s = sv.s;
-			* => s = val.text();
-			}
-			if(name == "command") {
-				cmdval = s;
-				hascmd = 1;
-			} else if(name == "args") {
-				argsval = s;
-				hasargs = 1;
-			} else {
-				others_rev = s :: others_rev;
-			}
-		}
-		# Legacy shortcut: tool's whole surface is a single `args`.
-		if(hasargs && nprops == 1)
-			return argsval;
-		# Reverse others_rev once so we can iterate in JSON-encounter
-		# order.
-		others: list of string;
-		for(orl := others_rev; orl != nil; orl = tl orl)
-			others = hd orl :: others;
-		# Forward-build the final result in canonical order:
-		#   command first, args second, remaining string props in JSON order.
-		result := "";
-		if(hascmd)
-			result = cmdval;
-		if(hasargs) {
-			if(result != "")
-				result += " ";
-			result += argsval;
-		}
-		for(ofl := others; ofl != nil; ofl = tl ofl) {
-			if(result != "")
-				result += " ";
-			result += hd ofl;
-		}
-		return result;
-	}
-	return inputjson;
-}
+# extracttoolargs moved to agentlib (INFR-214). The JSON arguments the model
+# emits now ride the TOOL: line verbatim; the JSON->positional Plan 9 flatten
+# for legacy /tool shell tools happens at the /tool boundary (agentlib calltool),
+# so MCP tools (mcp9p /call) receive JSON unmodified.
 
 # List helper functions (for tool call delta accumulation)
 

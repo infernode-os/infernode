@@ -1,0 +1,227 @@
+name: Android (Play internal release)
+
+# Tag -> signed AAB -> Google Play internal testing track.
+#
+# Closes the "Optional: CI" item in docs/store/google-play/READINESS.md.
+# Builds on the signing already wired in app/build.gradle.kts (the
+# INFERNODE_UPLOAD_* env convention) -- this workflow only supplies the
+# key material from secrets, stamps a monotonic versionCode, builds the
+# AAB, and uploads it.
+#
+#   git tag android-v0.1.1 && git push origin android-v0.1.1
+#
+# Runs on its OWN tag namespace (android-v*) so it stays independent of
+# the desktop/container release (release.yml / publish.yml fire on v*).
+# versionCode = repo commit count (always climbs; Play rejects an
+# equal-or-lower code, and the store is at 3). versionName = the tag
+# minus its android-v prefix.
+#
+# Builds the --gui sdl3 variant, arm64-v8a only -- every phone is arm64,
+# and the x86_64 emu path is interpreter-only / unvalidated, so it does
+# not belong in a shipped Play artifact.
+#
+# One-time setup (5 secrets) is documented in
+# docs/store/google-play/READINESS.md. Without them the preflight fails
+# fast.
+
+on:
+  push:
+    tags: ['android-v*']
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'versionName override (defaults to the tag, or a dev string)'
+        required: false
+        type: string
+      track:
+        description: 'Play track to publish to'
+        required: false
+        default: internal
+        type: choice
+        options: [internal, alpha, beta, production]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false   # never abort an in-flight Play upload
+
+jobs:
+  release:
+    name: Build signed AAB + upload to Play
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        fetch-depth: 0   # versionCode = commit count needs full history
+
+    # Fail fast if the release secrets aren't configured, before burning
+    # ~20 min of cross-build.
+    - name: Preflight — require release secrets
+      env:
+        KEYSTORE: ${{ secrets.INFERNODE_UPLOAD_KEYSTORE_BASE64 }}
+        KS_PASS: ${{ secrets.INFERNODE_UPLOAD_KEYSTORE_PASSWORD }}
+        KEY_PASS: ${{ secrets.INFERNODE_UPLOAD_KEY_PASSWORD }}
+        PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+      run: |
+        missing=
+        [ -n "$KEYSTORE" ] || missing="$missing INFERNODE_UPLOAD_KEYSTORE_BASE64"
+        [ -n "$KS_PASS" ]  || missing="$missing INFERNODE_UPLOAD_KEYSTORE_PASSWORD"
+        [ -n "$KEY_PASS" ] || missing="$missing INFERNODE_UPLOAD_KEY_PASSWORD"
+        [ -n "$PLAY_SA" ]  || missing="$missing PLAY_SERVICE_ACCOUNT_JSON"
+        if [ -n "$missing" ]; then
+          echo "::error::Missing release secrets:$missing — see docs/store/google-play/READINESS.md"
+          exit 1
+        fi
+        echo "All release secrets present."
+
+    - name: Lint emu/Android/*.c for seccomp-blocked syscalls
+      run: ./tools/check-android-syscalls.sh
+    - name: Lint safe-area handling in SDL Activity
+      run: ./tools/check-android-safearea.sh
+
+    - name: Install host build prerequisites
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Bootstrap host mk
+      env:
+        SYSTARG: Linux
+        OBJTYPE: amd64
+      run: |
+        chmod +x makemk.sh
+        ./makemk.sh
+
+    - name: Build host limbo (and the rest of Linux amd64)
+      run: |
+        chmod +x build-linux-amd64.sh
+        ./build-linux-amd64.sh
+
+    - name: Cache Android NDK r29
+      id: cache-ndk
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ~/Android/Sdk/ndk/android-ndk-r29
+        key: ndk-r29-linux-x86_64
+
+    - name: Download Android NDK r29
+      if: steps.cache-ndk.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ~/Android/Sdk/ndk
+        cd ~/Android/Sdk/ndk
+        curl -fL --proto '=https' --tlsv1.2 -o ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+        unzip -q ndk.zip
+        rm ndk.zip
+
+    - name: Cache SDL3 (android arm64)
+      id: cache-sdl3
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ~/sdks/SDL3-android-arm64
+        key: sdl3-android-arm64-3.2.16-ndk-r29
+
+    - name: Build SDL3 if not cached
+      if: steps.cache-sdl3.outputs.cache-hit != 'true'
+      run: |
+        export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/android-ndk-r29
+        chmod +x build-sdl3-android.sh
+        ./build-sdl3-android.sh --abi=arm64-v8a
+
+    - name: Stage release artefacts (SDL3, arm64-v8a)
+      run: |
+        export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/android-ndk-r29
+        ./build-android-apk.sh --gui sdl3 --abi=arm64-v8a --skip-gradle
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      with:
+        packages: 'platforms;android-35 build-tools;35.0.0'
+
+    - name: Cache Gradle
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ hashFiles('android-app/gradle/wrapper/gradle-wrapper.properties', 'android-app/**/*.gradle.kts') }}
+
+    # Decode the upload keystore from its base64 secret to a temp file
+    # outside the workspace (never archived/committed). Point the
+    # INFERNODE_UPLOAD_KEYSTORE env (read by app/build.gradle.kts) at it.
+    - name: Decode upload keystore
+      env:
+        KEYSTORE_BASE64: ${{ secrets.INFERNODE_UPLOAD_KEYSTORE_BASE64 }}
+      run: |
+        echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+        test -s "$RUNNER_TEMP/upload.jks" || { echo "::error::keystore decoded empty — is INFERNODE_UPLOAD_KEYSTORE_BASE64 valid base64?"; exit 1; }
+
+    - name: Compute version
+      id: ver
+      run: |
+        if [ -n "${{ github.event.inputs.version_name }}" ]; then
+          NAME="${{ github.event.inputs.version_name }}"
+        elif [ "${{ github.ref_type }}" = "tag" ]; then
+          NAME="${GITHUB_REF_NAME#android-v}"   # android-v0.1.1 -> 0.1.1
+          NAME="${NAME#v}"                       # tolerate a bare v0.1.1
+        else
+          NAME="0.0.0-dev-${GITHUB_SHA::7}"
+        fi
+        CODE=$(git rev-list --count HEAD)
+        echo "name=$NAME" >> "$GITHUB_OUTPUT"
+        echo "code=$CODE" >> "$GITHUB_OUTPUT"
+        echo "Building versionName=$NAME versionCode=$CODE"
+
+    - name: Build signed release bundle (AAB)
+      working-directory: android-app
+      env:
+        INFERNODE_VERSION_CODE: ${{ steps.ver.outputs.code }}
+        INFERNODE_VERSION_NAME: ${{ steps.ver.outputs.name }}
+        INFERNODE_UPLOAD_KEYSTORE: ${{ runner.temp }}/upload.jks
+        INFERNODE_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.INFERNODE_UPLOAD_KEYSTORE_PASSWORD }}
+        INFERNODE_UPLOAD_KEY_ALIAS: ${{ secrets.INFERNODE_UPLOAD_KEY_ALIAS }}
+        INFERNODE_UPLOAD_KEY_PASSWORD: ${{ secrets.INFERNODE_UPLOAD_KEY_PASSWORD }}
+      run: |
+        echo "sdk.dir=$ANDROID_HOME" > local.properties
+        chmod +x gradlew
+        ./gradlew --no-daemon bundleRelease
+
+    - name: Verify AAB is present and signed
+      run: |
+        set -e
+        AAB=android-app/app/build/outputs/bundle/release/app-release.aab
+        test -f "$AAB" || { echo "::error::AAB missing"; exit 1; }
+        head -c 4 "$AAB" | od -An -tx1 | tr -d ' \n' | grep -q '^504b0304' \
+          || { echo "::error::$AAB is not a valid zip/AAB"; exit 1; }
+        if ! jarsigner -verify "$AAB" 2>&1 | grep -q 'jar verified'; then
+          echo "::error::AAB is not signed — check the upload-key secrets"
+          exit 1
+        fi
+        ls -la "$AAB"
+        echo "AAB OK: present and signed."
+
+    - name: Upload AAB artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: infernode-release-aab-${{ steps.ver.outputs.name }}
+        path: android-app/app/build/outputs/bundle/release/app-release.aab
+        retention-days: 30
+
+    - name: Upload to Google Play
+      uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+      with:
+        serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        packageName: io.infernode
+        releaseFiles: android-app/app/build/outputs/bundle/release/app-release.aab
+        track: ${{ github.event.inputs.track || 'internal' }}
+        status: completed

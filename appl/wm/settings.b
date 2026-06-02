@@ -146,6 +146,16 @@ llm_apply_btn: ref Button;
 llm_is_remote: int;
 llm_mode_set: int;		# 1 after first layout or click — suppresses config re-read
 
+# Backend (api/openai) and the textfield contents share the same
+# layoutcontent-rebuild-clobbers-click problem the mode group dodges via
+# llm_mode_set. Clicking the Backend radio updates these in-memory so
+# the next layoutllm restores them instead of re-reading /lib/ndb/llm
+# (where the new selection won't land until Apply).
+llm_backend_set: int;
+llm_current_backend: string;
+llm_current_url: string;
+llm_current_model: string;
+
 # Local-stack selector (Ollama vs SGLang vs Custom URL) — surfaced only
 # when /llm/ctl is mounted (served by llmctl9p). The Stack radio gives
 # users a one-click switch between the local LLM backends; selecting
@@ -418,6 +428,10 @@ layoutcontent()
 	if(category != CatLLM) {
 		llm_is_remote = 0;
 		llm_mode_set = 0;
+		llm_backend_set = 0;
+		llm_current_backend = "";
+		llm_current_url = "";
+		llm_current_model = "";
 	}
 	tool_checks = nil;
 	budget_checks = nil;
@@ -475,6 +489,20 @@ layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
 		curmode = "remote";
 	else
 		curmode = "local";
+
+	# Same pattern for backend / url / model. Without this, clicking the
+	# Backend radio (api ↔ openai) re-runs layoutllm which would re-read
+	# /lib/ndb/llm and snap the radio back to the on-disk value — the
+	# user can't switch backends without an Apply round-trip.
+	if(!llm_backend_set) {
+		llm_current_backend = curbackend;
+		llm_current_url = cururl;
+		llm_current_model = curmodel;
+	}
+	llm_backend_set = 1;
+	curbackend = llm_current_backend;
+	cururl = llm_current_url;
+	curmodel = llm_current_model;
 
 	rowh := ch + FIELD_SPACING;
 
@@ -1227,23 +1255,34 @@ clickllm(ptr: ref Pointer)
 		if(llm_backend_group != nil && llm_backend_group.contains(ptr.xy)) {
 			i := llm_backend_group.click(ptr.xy);
 			if(i >= 0 && i < len llm_backend_names) {
+				# Persist the new selection in module-level state BEFORE
+				# layoutcontent() rebuilds the panel — otherwise the
+				# rebuild re-reads /lib/ndb/llm (still the old backend)
+				# and the radio snaps back. Mirrors the llm_mode_set
+				# pattern used by the Mode group above.
+				newbackend := llm_backend_names[i];
+				newurl := llm_current_url;
+				if(llm_url_tf != nil)
+					newurl = llm_url_tf.value();
 				# Update URL default when switching backend. Clear the
 				# model field — the previous model is almost certainly
 				# wrong for the new backend (claude-... isn't an Ollama
 				# tag; llama3.2:3b isn't an Anthropic id). Also
 				# re-layout so the Stack sub-section appears or hides
 				# in step with the openai/api radio.
-				if(llm_backend_names[i] == "openai" && llm_url_tf != nil) {
-					cur := strip(llm_url_tf.value());
+				if(newbackend == "openai") {
+					cur := strip(newurl);
 					if(cur == "" || cur == "https://api.anthropic.com")
-						llm_url_tf.setval("http://localhost:11434/v1");
-				} else if(llm_backend_names[i] == "api" && llm_url_tf != nil) {
-					cur := strip(llm_url_tf.value());
+						newurl = "http://localhost:11434/v1";
+				} else if(newbackend == "api") {
+					cur := strip(newurl);
 					if(cur == "" || cur == "http://localhost:11434/v1")
-						llm_url_tf.setval("https://api.anthropic.com");
+						newurl = "https://api.anthropic.com";
 				}
-				if(llm_model_tf != nil)
-					llm_model_tf.setval("");
+				llm_current_backend = newbackend;
+				llm_current_url = newurl;
+				llm_current_model = "";
+				llm_backend_set = 1;
 				layoutcontent();
 				dirty = 1;
 			}

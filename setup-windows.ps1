@@ -15,6 +15,69 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
+# Once the runtime has booted once, lib/sh/profile creates ~/.infernode/
+# and bind-mounts subtrees of it over /lib/ndb, /lib/veltro/keys, etc.
+# (commit 3879eba3 — read-only bundle root, writable user overlay).
+# Writes to the bundle's lib/* are invisible to the runtime once the
+# overlay exists. Write-Config below mirrors writes to both locations
+# so setup works whether it's run before OR after first launch, and
+# stays consistent if the user later deletes the overlay for a re-seed.
+$Infhome = Join-Path $env:USERPROFILE '.infernode'
+
+# Overlay path mapping per lib/sh/profile binds. Bundle path → overlay
+# subtree-relative path. Where the bind names diverge (the profile
+# avoids putting lib/veltro/keys under lib/veltro so the two binds
+# don't conflict), the mapping records both sides.
+$OverlayMap = @{
+    'lib\ndb'              = 'lib\ndb'
+    'lib\veltro\keys'      = 'lib\veltro-keys'
+    'lib\veltro'           = 'lib\veltro'
+    'lib\veltro\agents'    = 'lib\veltro-agents'
+    'lib\lucifer\theme'    = 'lib\lucifer\theme'
+    'lib\keyring'          = 'lib\keyring'
+}
+
+function Resolve-OverlayPath {
+    param([string]$BundleRel)
+    # Find the longest matching prefix in $OverlayMap.
+    $best = $null; $bestLen = -1
+    foreach ($k in $OverlayMap.Keys) {
+        $kSlash = "$k\"
+        if ($BundleRel -eq $k -or $BundleRel.StartsWith($kSlash, [StringComparison]::OrdinalIgnoreCase)) {
+            if ($k.Length -gt $bestLen) { $best = $k; $bestLen = $k.Length }
+        }
+    }
+    if (-not $best) { return $null }
+    $suffix = $BundleRel.Substring($best.Length)
+    return ($OverlayMap[$best] + $suffix)
+}
+
+function Write-Config {
+    param(
+        [Parameter(Mandatory)] [string]$BundleRel,
+        [Parameter(Mandatory)] [string]$Content
+    )
+    # Always seed the bundle so a fresh first-boot (no overlay yet) picks
+    # this up via the lib/sh/profile cp step.
+    $bundlePath = Join-Path $Root $BundleRel
+    $bundleDir = Split-Path -Parent $bundlePath
+    if (-not (Test-Path $bundleDir)) { New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null }
+    Set-Content -Path $bundlePath -Value $Content -NoNewline
+
+    # If the overlay already exists, write the live copy too. Without
+    # this, the runtime keeps reading the stale overlay value and the
+    # bundle write is invisible until the user deletes ~/.infernode.
+    if (Test-Path $Infhome) {
+        $overlayRel = Resolve-OverlayPath $BundleRel
+        if ($overlayRel) {
+            $overlayPath = Join-Path $Infhome $overlayRel
+            $overlayDir = Split-Path -Parent $overlayPath
+            if (-not (Test-Path $overlayDir)) { New-Item -ItemType Directory -Path $overlayDir -Force | Out-Null }
+            Set-Content -Path $overlayPath -Value $Content -NoNewline
+        }
+    }
+}
+
 # Mirror everything to a log file so right-click "Run with PowerShell" runs
 # have a post-mortem when the window closes too fast to read.
 $LogFile = Join-Path $env:TEMP "infernode-setup-windows.log"
@@ -44,10 +107,7 @@ function Write-Fail  { param($msg) Write-Host "  X " -ForegroundColor Red -NoNew
 
 function Write-Key {
     param([string]$Service, [string]$Key)
-    $dir = Join-Path $Root "lib\veltro\keys"
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $path = Join-Path $dir $Service
-    Set-Content -Path $path -Value $Key -NoNewline
+    Write-Config -BundleRel "lib\veltro\keys\$Service" -Content $Key
     Write-Ok "Key saved to lib\veltro\keys\$Service"
 }
 
@@ -58,6 +118,17 @@ Write-Host ""
 Write-Host "InferNode Setup" -ForegroundColor White -BackgroundColor DarkBlue
 Write-Host "Configure the LLM backend for Veltro" -ForegroundColor DarkGray
 Write-Host ""
+
+# Heads-up if a runtime is already loaded. llmsrv reads its backend
+# settings at start, so a running emu won't pick up the new config
+# until it's restarted.
+$running = Get-Process -Name 'o.emu','InferNode' -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Warn "InferNode is currently running (PID $($running.Id -join ', '))."
+    Write-Host "    Settings will be written to disk, but the live emulator" -ForegroundColor DarkGray
+    Write-Host "    won't see the new backend until you close and relaunch it." -ForegroundColor DarkGray
+    Write-Host ""
+}
 
 # ── Choose backend ─────────────────────────────────────────────────
 Write-Host "Veltro needs an LLM to work. Choose your backend:"
@@ -140,16 +211,13 @@ function Setup-Anthropic {
     # Write the runtime LLM config so profile/boot.sh starts llmsrv with
     # the right backend. We leave model= blank so Settings doesn't
     # pre-populate a model string; the user picks one from the UI.
-    $cfgDir = Join-Path $Root "lib\ndb"
-    if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
-    $cfgPath = Join-Path $cfgDir "llm"
-    @"
+    Write-Config -BundleRel "lib\ndb\llm" -Content @"
 mode=local
 backend=api
 url=https://api.anthropic.com
 model=
 dial=
-"@ | Set-Content -Path $cfgPath -NoNewline
+"@
     Write-Ok "Config saved to lib\ndb\llm"
 
     Write-Host ""
@@ -261,16 +329,13 @@ function Setup-Ollama {
     # Write the LLM config. The runtime reads /lib/ndb/llm (see
     # lib/sh/profile and lib/lucifer/boot.sh); the old
     # lib/veltro/llm.cfg path was a dead file - nothing read it.
-    $cfgDir = Join-Path $Root "lib\ndb"
-    if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
-    $cfgPath = Join-Path $cfgDir "llm"
-    @"
+    Write-Config -BundleRel "lib\ndb\llm" -Content @"
 mode=local
 backend=openai
 url=http://localhost:11434/v1
 model=$model
 dial=
-"@ | Set-Content -Path $cfgPath -NoNewline
+"@
     Write-Ok "Config saved to lib\ndb\llm"
 
     Write-Host ""

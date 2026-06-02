@@ -7,10 +7,32 @@
 // two build systems decoupled — Inferno's mk stays the source of truth
 // for the runtime, Gradle handles the Android-shell side only.
 
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// Release signing (Play upload key). Credentials resolve in this order:
+//   1. android-app/keystore.properties   — local dev, gitignored, never committed
+//   2. environment variables             — CI: INFERNODE_UPLOAD_*
+// If neither resolves, the release build is left UNSIGNED so that debug
+// builds and contributor checkouts without the key still assemble. Only a
+// machine holding the upload key produces a Play-uploadable signed artifact.
+//
+// With Play App Signing, this is the *upload* key, not the app key Google
+// serves to users — losing it is recoverable via Play Console.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) FileInputStream(keystorePropsFile).use { load(it) }
+}
+fun signingValue(propKey: String, envKey: String): String? =
+    keystoreProps.getProperty(propKey) ?: System.getenv(envKey)
+
+val uploadStorePath = signingValue("storeFile", "INFERNODE_UPLOAD_KEYSTORE")
+val haveUploadKey = uploadStorePath != null && file(uploadStorePath).exists()
 
 android {
     namespace = "io.infernode"
@@ -21,8 +43,8 @@ android {
         applicationId = "io.infernode"
         minSdk = 28         // matches mkfiles/mkfile-Android-arm64 API floor
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-phase1c"
+        versionCode = 3
+        versionName = "0.1.0"
 
         ndk {
             // Ship every ABI for which we have a cross-built libemu.so
@@ -54,6 +76,20 @@ android {
         jvmTarget = "17"
     }
 
+    signingConfigs {
+        // Created only when an upload key is available (see haveUploadKey
+        // above); otherwise the release build stays unsigned and assembles
+        // fine for contributors who don't hold the key.
+        if (haveUploadKey) {
+            create("release") {
+                storeFile = file(uploadStorePath!!)
+                storePassword = signingValue("storePassword", "INFERNODE_UPLOAD_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "INFERNODE_UPLOAD_KEY_ALIAS") ?: "upload"
+                keyPassword = signingValue("keyPassword", "INFERNODE_UPLOAD_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -61,6 +97,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Sign the release (AAB/APK) with the upload key when present.
+            // The Play-uploadable artifact is produced by `./gradlew bundleRelease`
+            // → app/build/outputs/bundle/release/app-release.aab
+            if (haveUploadKey) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             // Debug APKs are signed with the Android debug keystore by

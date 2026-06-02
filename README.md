@@ -20,7 +20,7 @@ InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×
 Every tagged release ships signed binaries for macOS, Linux, and Windows on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
 
 - **macOS (Apple Silicon)** — `infernode-*-macos-arm64.dmg`: open, drag to Applications, launch.
-- **Windows (x86_64)** — `infernode-*-windows-amd64.zip`: **before extracting**, right-click the downloaded zip → Properties → tick **Unblock** → OK. Then extract, optionally run `setup-windows.ps1` (or `setup-windows.bat`) to configure an LLM backend, double-click `InferNode.exe`. (Without the Unblock step Windows propagates the browser's Mark-of-the-Web to every extracted file; SmartScreen then silently refuses to launch the unsigned exe with no error dialog. Code-signing is on the roadmap.)
+- **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. (Until code-signing lands, the unsigned `InferNode.exe` would otherwise be silently blocked by SmartScreen after browser download — Windows propagates Mark-of-the-Web from the zip to every extracted file. `.bat` files are exempt from that gate, so `setup-windows.bat` runs anyway and its first job is to unblock the rest of the bundle.)
 - **Linux x86_64 (GUI)** — `infernode-*-linux-amd64-gui.tar.gz`: SDL3 is bundled.
 - **Linux ARM64 (GUI)** — `infernode-*-linux-arm64-gui.tar.gz`: for Jetson, Raspberry Pi, etc.
 - **Linux (headless)** — `infernode-*-linux-amd64.tar.gz` or `infernode-*-linux-arm64.tar.gz`.
@@ -40,7 +40,7 @@ cd infernode-*-linux-*-gui
 
 Every release asset is published with a cosign bundle (`.pem` + `.sig`) and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 
-Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (see the Windows install bullet above for the manual Unblock workaround in the meantime).
+Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (handled in the meantime by `setup-windows.bat`, which clears the tag from the bundle on first run — see the Windows install bullet above).
 
 ### Build from source
 

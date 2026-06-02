@@ -1328,9 +1328,9 @@ jobs:
 
           **Linux (headless):** Extract, then `./infernode-headless`
 
-          **Windows (GUI):** Extract the `-gui` zip, optionally run `setup-windows.ps1` (or `setup-windows.bat`) to configure an LLM backend, then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; the SDL3 GUI emulator and `SDL3.dll` ship in the same zip.
+          **Windows (GUI):** Extract the `-gui` zip, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; the SDL3 GUI emulator and `SDL3.dll` ship in the same zip. Without running `setup-windows.bat` first, Windows SmartScreen silently blocks the unsigned `InferNode.exe` after browser download — see the Code signing section below.
 
-          **Windows (headless):** Extract the zip, then from a console run `o.emu.exe -c1 -r. sh -l`.
+          **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
 
           ### Verification
 
@@ -1350,7 +1350,8 @@ jobs:
           [SignPath Foundation](https://signpath.org/), with certificates
           issued by SSL.com. Signed Windows binaries carry verified
           Publisher metadata and accumulate Microsoft SmartScreen
-          reputation; unsigned downloads are silently blocked by Windows
-          after browser delivery (the "Mark of the Web") and require the
-          manual right-click → Properties → Unblock step described in
-          the Windows download bullet above.
+          reputation. Until the signing path is live, unsigned downloads
+          are silently blocked by Windows after browser delivery (the
+          "Mark of the Web"); `setup-windows.bat` works around this by
+          clearing the tag from the bundle on first run — see the
+          Windows install bullet above.

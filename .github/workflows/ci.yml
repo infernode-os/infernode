@@ -74,7 +74,11 @@ jobs:
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
         chmod +x build-linux-amd64.sh
-        ./build-linux-amd64.sh
+        # Explicit headless: this job installs no SDL3, so the script's
+        # default sdl3 mode would fail the pkg-config check and fall back
+        # to headless anyway. Pass it outright so the "headless build"
+        # guarantee doesn't depend on that fallback (matches linux-arm64).
+        ./build-linux-amd64.sh headless
 
     - name: Verify emulator binary
       run: |
@@ -953,7 +957,7 @@ jobs:
         }
 
     - name: Setup MSVC environment
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       with:
         arch: amd64
 

@@ -945,7 +945,7 @@ jobs:
         RESOURCES="$CONTENTS/Resources"
 
         # Start from the checked-out .app bundle (has Info.plist, icon, launcher)
-        cp -a MacOSX/InferNode.app "$APP"
+        cp -a MacOSX/Infernode.app "$APP"
 
         # Emulator binary and SDL3 go in Contents/MacOS/ (stripped for release)
         cp emu/MacOSX/InferNode "$MACOS/emu"
@@ -1277,12 +1277,6 @@ jobs:
           cosign sign-blob --yes --bundle "${f}.sigstore" "$f"
         done
 
-    - name: Attest build provenance
-      run: |
-        cd artifacts
-        for f in infernode-*.tar.gz infernode-*.dmg infernode-*.zip; do
-          [ -f "$f" ] && echo "Attesting $f" || continue
-        done
     - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
       with:
         subject-path: artifacts/infernode-*.tar.gz

@@ -43,8 +43,13 @@ android {
         applicationId = "io.infernode"
         minSdk = 28         // matches mkfiles/mkfile-Android-arm64 API floor
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.0"
+        // CI release builds inject a monotonic versionCode via env (the
+        // repo commit count) so each Play upload climbs without a manual
+        // bump; local/debug builds keep the checked-in default. Play
+        // rejects an equal-or-lower versionCode, so automation must
+        // always exceed whatever last shipped (currently 3 on the store).
+        versionCode = System.getenv("INFERNODE_VERSION_CODE")?.toIntOrNull() ?: 3
+        versionName = System.getenv("INFERNODE_VERSION_NAME") ?: "0.1.0"
 
         ndk {
             // Ship every ABI for which we have a cross-built libemu.so

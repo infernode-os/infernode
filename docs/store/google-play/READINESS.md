@@ -62,10 +62,19 @@ Status as of 2026-06-01. Package: `io.infernode`. Owner decisions are marked
       closed/production after validation.
 - [ ] **Optional: support page hosted** (`../SUPPORT.md`) and a Play service
       account JSON if you want automated AAB uploads from CI.
-- [ ] **Optional: CI** — `.github/workflows/android-apk.yml` builds a *debug*
-      APK only. A signed-`bundleRelease` job (consuming the `INFERNODE_UPLOAD_*`
-      secrets) would close the release loop; not required for a manual first
-      submission.
+- [x] **CI release pipeline** — `.github/workflows/android-release.yml`
+      builds a signed AAB (arm64-v8a, `--gui sdl3`) and uploads it to the
+      Play internal track on an `android-v*` tag. Consumes these repo
+      secrets (the keystore as base64, the rest 1:1 with the
+      `INFERNODE_UPLOAD_*` env the gradle reads):
+        - `INFERNODE_UPLOAD_KEYSTORE_BASE64`  (`base64 -w0 infernode-upload.jks`)
+        - `INFERNODE_UPLOAD_KEYSTORE_PASSWORD`
+        - `INFERNODE_UPLOAD_KEY_ALIAS`        (optional; defaults to `upload`)
+        - `INFERNODE_UPLOAD_KEY_PASSWORD`
+        - `PLAY_SERVICE_ACCOUNT_JSON`         (Play Console service account,
+          "Release apps to testing tracks")
+      versionCode is the repo commit count (always climbs; the store is at
+      3). First upload still needs the manual one below so the track exists.
 
 ## Build command (once native libs + assets are staged)
 

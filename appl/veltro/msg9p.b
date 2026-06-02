@@ -51,7 +51,7 @@ Msg9p: module {
 };
 
 # Qid layout
-Qroot, Qctl, Qnotify, Qstatus, Qsrcdir: con iota;
+Qroot, Qctl, Qnotify, Qstatus, Qreply, Qsrcdir: con iota;
 
 # Registered source info
 SrcInfo: adt {
@@ -194,6 +194,9 @@ walkto(n: ref Navop.Walk)
 		"status" =>
 			n.path = big Qstatus;
 			n.reply <-= dirgen(int n.path);
+		"reply" =>
+			n.path = big Qreply;
+			n.reply <-= dirgen(int n.path);
 		"sources" =>
 			n.path = big Qsrcdir;
 			n.reply <-= dirgen(int n.path);
@@ -228,6 +231,9 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qstatus =>
 		d.name = "status";
 		d.mode = 8r444;
+	Qreply =>
+		d.name = "reply";
+		d.mode = 8r222;
 	Qsrcdir =>
 		d.name = "sources";
 		d.mode = Sys->DMDIR | 8r555;
@@ -244,7 +250,7 @@ doreaddir(n: ref Navop.Readdir, path: int)
 {
 	case path {
 	Qroot =>
-		entries := array[] of {Qctl, Qnotify, Qstatus, Qsrcdir};
+		entries := array[] of {Qctl, Qnotify, Qstatus, Qreply, Qsrcdir};
 		for(i := 0; i < len entries; i++) {
 			if(i >= n.offset) {
 				(d, err) := dirgen(entries[i]);
@@ -337,6 +343,10 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, cerr));
 				else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			Qreply =>
+				# Route a reply to a source's MsgSrc.reply(). Spawned so
+				# the serve loop is not blocked by the source's I/O.
+				spawn doreply(srv, m.tag, len m.data, data);
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
@@ -410,6 +420,57 @@ handlectl(data: string): string
 	* =>
 		return "unknown command: " + cmd;
 	}
+}
+
+# === reply: route a reply to a source's MsgSrc.reply() ===
+#
+# /n/msg/reply (write-only) format:  <srcname>\n<origid>\n<body...>
+# Generic, protocol-agnostic: the consumer replies to a message by its source
+# and original id; the source preserves threading. Spawned from the serve loop
+# so the source's I/O does not block other clients.
+
+doreply(srv: ref Styxserver, tag, datalen: int, data: string)
+{
+	rerr := handlereply(data);
+	if(rerr != nil)
+		srv.reply(ref Rmsg.Error(tag, rerr));
+	else
+		srv.reply(ref Rmsg.Write(tag, datalen));
+}
+
+handlereply(data: string): string
+{
+	(src, r1) := splitfirst(data, '\n');
+	(origid, body) := splitfirst(r1, '\n');
+	src = msgstrip(src);
+	origid = msgstrip(origid);
+	if(src == "" || origid == "")
+		return "reply: want <srcname>\\n<origid>\\n<body>";
+	for(sl := sources; sl != nil; sl = tl sl)
+		if((hd sl).name == src)
+			return (hd sl).mod->reply(origid, body);
+	return "reply: no source: " + src;
+}
+
+splitfirst(s: string, c: int): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == c)
+			return (s[0:i], s[i+1:]);
+	return (s, "");
+}
+
+msgstrip(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r' || s[j-1] == '\n'))
+		j--;
+	if(i >= j)
+		return "";
+	return s[i:j];
 }
 
 # Find a registered source by name and dispatch a Message through it.

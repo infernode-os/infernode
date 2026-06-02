@@ -14,6 +14,13 @@ include "sys.m";
 include "string.m";
 	str: String;
 
+include "bufio.m";
+	bufio: Bufio;
+
+include "json.m";
+	json: JSON;
+	JValue: import json;
+
 include "wirefmt.m";
 	wirefmt: WireFmt;
 
@@ -32,6 +39,17 @@ init()
 		sys->fprint(stderr, "agentlib: cannot load String: %r\n");
 		raise "fail:agentlib: cannot load String module";
 	}
+	bufio = load Bufio Bufio->PATH;
+	if(bufio == nil){
+		sys->fprint(stderr, "agentlib: cannot load Bufio: %r\n");
+		raise "fail:agentlib: cannot load Bufio module";
+	}
+	json = load JSON JSON->PATH;
+	if(json == nil){
+		sys->fprint(stderr, "agentlib: cannot load JSON: %r\n");
+		raise "fail:agentlib: cannot load JSON module";
+	}
+	json->init(bufio);
 
 	wirefmt = load WireFmt WireFmt->PATH;
 	if(wirefmt == nil){
@@ -603,8 +621,88 @@ stripaction(response: string): string
 #
 
 # Call tool via /tool filesystem
+readjsonstring(s: string): (ref JValue, string)
+{
+	bio := bufio->aopen(array of byte s);
+	if(bio == nil)
+		return (nil, "cannot create buffer");
+	return json->readjson(bio);
+}
+
+# Flatten a tool-call's JSON arguments object into the positional Plan 9 form
+# the legacy /tool shell tools expect. Moved here from llmclient (INFR-214) so
+# JSON rides the wire and only the /tool boundary projects to positional; MCP
+# tools (mcp9p /call) never call this. Non-JSON / empty input passes through.
+#
+# Assembly order is "command first, args second, then any remaining string
+# properties in JSON order" — because tools like task/memory use a
+# {command, args} schema and exec() splits on first whitespace; smaller models
+# (gpt-oss:20b) often emit args-first, which a naive join would corrupt.
+# (eval-harness FINDINGS.md §F3.)
+extracttoolargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+
+	pick obj := jv {
+	Object =>
+		cmdval := "";
+		hascmd := 0;
+		argsval := "";
+		hasargs := 0;
+		nprops := 0;
+		others_rev: list of string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			nprops++;
+			s := "";
+			pick sv := val {
+			String => s = sv.s;
+			* => s = val.text();
+			}
+			if(name == "command") {
+				cmdval = s;
+				hascmd = 1;
+			} else if(name == "args") {
+				argsval = s;
+				hasargs = 1;
+			} else {
+				others_rev = s :: others_rev;
+			}
+		}
+		# Legacy shortcut: tool's whole surface is a single `args`.
+		if(hasargs && nprops == 1)
+			return argsval;
+		others: list of string;
+		for(orl := others_rev; orl != nil; orl = tl orl)
+			others = hd orl :: others;
+		result := "";
+		if(hascmd)
+			result = cmdval;
+		if(hasargs) {
+			if(result != "")
+				result += " ";
+			result += argsval;
+		}
+		for(ofl := others; ofl != nil; ofl = tl ofl) {
+			if(result != "")
+				result += " ";
+			result += hd ofl;
+		}
+		return result;
+	}
+	return inputjson;
+}
+
 calltool(tool, args: string): string
 {
+	# Legacy /tool shell tools take positional Plan 9 args. The LLM now emits
+	# JSON arguments on the wire (INFR-214: MCP tools consume JSON directly via
+	# mcp9p /call), so the JSON->positional projection for /tool tools happens
+	# HERE, at the boundary. extracttoolargs passes already-positional or empty
+	# input through unchanged, so this is safe for any caller.
+	args = extracttoolargs(args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
 	# Open tool file

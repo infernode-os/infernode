@@ -9,10 +9,13 @@ GUISRC=\
 SDL3_CFLAGS=`pkg-config --cflags sdl3 2>/dev/null || echo "-I/opt/homebrew/include"`
 SDL3_LIBS=`pkg-config --libs sdl3 2>/dev/null || echo "-L/opt/homebrew/lib -lSDL3"`
 
-# Opus codec for /dev/opus (INFR-187). pkg-config search path needs the
-# Homebrew prefix so brew-installed opus is found on a stock zsh.
-OPUS_CFLAGS=`PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig pkg-config --cflags opus 2>/dev/null || echo "-I/opt/homebrew/include"`
-OPUS_LIBS=`PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig pkg-config --libs opus 2>/dev/null || echo "-L/opt/homebrew/lib -lopus"`
+# Opus codec for /dev/opus (INFR-187). Only enable -DHAVE_OPUS when the opus
+# headers are actually present (brew install opus), so a host without opus
+# degrades to a build without /dev/opus instead of failing to find
+# <opus/opus.h>. pkg-config search path needs the Homebrew prefix so
+# brew-installed opus is found on a stock zsh.
+OPUS_CFLAGS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists opus 2>/dev/null; then echo -DHAVE_OPUS; pkg-config --cflags opus; fi`
+OPUS_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists opus 2>/dev/null; then pkg-config --libs opus; fi`
 
-GUIFLAGS=-DGUI_SDL3 -DHAVE_OPUS $SDL3_CFLAGS $OPUS_CFLAGS
+GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $OPUS_CFLAGS
 GUILIBS=$SDL3_LIBS $OPUS_LIBS

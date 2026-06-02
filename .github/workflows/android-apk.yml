@@ -15,22 +15,26 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────
-  # Phase 1c (INFR-110) — cross-build libs + libemu.so + stage runtime
-  # assets into android-app/, the inputs to `./gradlew assembleDebug`.
+  # PR/master gate for the Android app. Builds the SAME `--gui sdl3`
+  # variant that ships — the InfernodeSDLActivity launcher users run —
+  # cross-building SDL3 + libemu.so, staging the runtime tree, and
+  # producing an installable debug APK via Gradle.
   #
   # This gate verifies:
   #   * the NDK toolchain still cross-compiles cleanly
-  #   * libemu.so links and exports the JNI entry point
-  #   * the runtime tree (dis/ + lib/ + module/) stages into the APK
-  #     assets dir.
+  #   * SDL3 cross-builds and libemu.so links the GUI variant
+  #     (libSDL3.so staged + SDL_main exported)
+  #   * the runtime tree (dis/ + lib/ + module/ + fonts/) stages into
+  #     the APK assets dir
+  #   * Gradle assembles a valid debug APK.
   #
-  # The Gradle assemble step that turns the staged tree into an
-  # installable APK is intentionally left out of this job for now —
-  # it needs JDK + Android SDK + Gradle wrapper bootstrap, ~5+ min
-  # additional CI time. Adding it is tracked in INFR-110.
+  # The runtime launch smoke test (install + launch + assert no startup
+  # crash) lives in the android-smoke job below, which consumes this
+  # job's multi-arch APK on a KVM x86_64 emulator. That is what catches
+  # startup crashes like the onCreate permission UnsatisfiedLinkError.
   # ─────────────────────────────────────────────
   android-apk-staging:
-    name: Cross-build + libemu.so + asset staging
+    name: Cross-build (SDL3) + asset staging + debug APK
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -91,35 +95,82 @@ jobs:
         unzip -q ndk.zip
         rm ndk.zip
 
-    - name: Stage APK artefacts (libemu.so + dis/ assets)
+    # ── SDL3 cross-build (cached), BOTH ABIs. The gate builds the
+    # `--gui sdl3` variant — the InfernodeSDLActivity launcher users
+    # actually run — so a PR that breaks the shipping app fails HERE,
+    # not at release time. We build arm64-v8a (the phone, what ships)
+    # AND x86_64, because the android-smoke job below launches the app
+    # on a KVM x86_64 emulator (no arm translation on hosted runners),
+    # and that needs x86_64 native libs in the APK. build-sdl3-android.sh
+    # is idempotent; caching both prefixes skips the rebuild on a hit.
+    # Keyed on the SDL3 version the script pins.
+    - name: Cache SDL3 (android arm64 + x86_64)
+      id: cache-sdl3
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: |
+          ~/sdks/SDL3-android-arm64
+          ~/sdks/SDL3-android-x86_64
+        key: sdl3-android-both-3.2.16-ndk-r29
+
+    - name: Build SDL3 if not cached
+      if: steps.cache-sdl3.outputs.cache-hit != 'true'
       run: |
         export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/android-ndk-r29
-        ./build-android-apk.sh --skip-gradle
+        chmod +x build-sdl3-android.sh
+        ./build-sdl3-android.sh --abi=arm64-v8a
+        ./build-sdl3-android.sh --abi=x86_64
 
-    - name: Verify libemu.so + JNI symbols
+    - name: Stage APK artefacts (SDL3 variant, both ABIs — libSDL3.so + libemu.so + assets)
+      run: |
+        export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/android-ndk-r29
+        ./build-android-apk.sh --gui sdl3 --abi=both --skip-gradle
+
+    - name: Verify libemu.so + libSDL3.so + JNI symbols
       run: |
         set -e
-        SO=android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
+        JNILIBS=android-app/app/src/main/jniLibs/arm64-v8a
+        SO=$JNILIBS/libemu.so
         test -f "$SO" || { echo "::error::libemu.so missing"; exit 1; }
+        # The SDL3 GUI variant must stage libSDL3.so alongside libemu.so —
+        # the launcher's getLibraries() loads SDL3 then emu. A missing
+        # libSDL3.so is the headless build sneaking through.
+        test -f "$JNILIBS/libSDL3.so" || { echo "::error::libSDL3.so missing — built headless, not --gui sdl3"; exit 1; }
         elfhex=$(head -c 19 "$SO" | od -An -tx1 | tr -d " \n")
         case "$elfhex" in
           7f454c46*b7) ;;
           *) echo "::error::libemu.so is not aarch64 ELF (hex=$elfhex)"; exit 1 ;;
         esac
         NM=$HOME/Android/Sdk/ndk/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
-        for sym in Java_io_infernode_Emu_run emu_run; do
+        # SDL_main is the entry InfernodeSDLActivity invokes (defined in
+        # jni-emu.c under -DGUI_SDL3); its presence proves this is the GUI
+        # build. emu_run / Java_io_infernode_Emu_run back the headless
+        # InfernodeActivity, which still coexists in the APK.
+        for sym in Java_io_infernode_Emu_run emu_run SDL_main; do
           if ! "$NM" -D --defined-only "$SO" | grep -q " T $sym\$"; then
             echo "::error::libemu.so missing exported symbol: $sym"
             exit 1
           fi
         done
-        echo "libemu.so OK: aarch64, JNI + emu_run exported"
+        echo "libemu.so OK: aarch64, SDL3 GUI build (emu_run + SDL_main), libSDL3.so staged"
+        # x86_64 variant (consumed by the android-smoke emulator job).
+        X=android-app/app/src/main/jniLibs/x86_64
+        test -f "$X/libemu.so"  || { echo "::error::x86_64 libemu.so missing — --abi=both didn't stage it"; exit 1; }
+        test -f "$X/libSDL3.so" || { echo "::error::x86_64 libSDL3.so missing"; exit 1; }
+        xhex=$(head -c 19 "$X/libemu.so" | od -An -tx1 | tr -d " \n")
+        case "$xhex" in
+          7f454c46*3e) ;;   # ELF, e_machine = 0x3e (x86-64)
+          *) echo "::error::x86_64 libemu.so is not x86-64 ELF (hex=$xhex)"; exit 1 ;;
+        esac
+        echo "x86_64 libs OK: libemu.so + libSDL3.so staged"
 
     - name: Verify staged runtime tree
       run: |
         set -e
         ASSETS=android-app/app/src/main/assets/inferno-root
-        for d in dis lib module; do
+        # fonts/ is load-bearing for the SDL3 GUI — without it Lucifer's
+        # font binds no-op (INFR-115). dis/lib/module are the runtime core.
+        for d in dis lib module fonts; do
           if [ ! -d "$ASSETS/$d" ]; then
             echo "::error::$ASSETS/$d missing"
             exit 1
@@ -193,4 +244,73 @@ jobs:
       with:
         name: infernode-debug-apk
         path: android-app/app/build/outputs/apk/debug/app-debug.apk
+        retention-days: 14
+
+  # ─────────────────────────────────────────────
+  # Runtime launch smoke test — closes the gap that let a startup crash
+  # reach the store. Boots a KVM-accelerated x86_64 emulator, installs
+  # the multi-arch debug APK from the staging job, REVOKES all runtime
+  # permissions (the fresh-install state a Play tester hits), launches
+  # InfernodeSDLActivity, and FAILS if the launch produces the
+  # UnsatisfiedLinkError / onCreate FATAL crash signature.
+  #
+  # Two things this design gets right, both learned by reproducing the
+  # real crash on an emulator:
+  #   * It revokes permissions first. A device with the perms already
+  #     granted never calls requestPermissions and never hits the bug —
+  #     which is exactly why it slipped past manual testing.
+  #   * It asserts on the LOGCAT SIGNATURE, not process liveness. When
+  #     the onCreate crash fires, Android instantly restarts the
+  #     activity, so `pidof` reports a live PID even on the broken build.
+  #     A liveness check would falsely pass; the signature is definitive.
+  # ─────────────────────────────────────────────
+  android-smoke:
+    name: Emulator launch smoke (x86_64, fresh-install perms)
+    needs: android-apk-staging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+    # Checkout so tools/android-smoke.sh is on disk for the emulator step.
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Download debug APK
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: infernode-debug-apk
+        path: apk
+
+    # KVM hardware acceleration — the emulator is unusably slow without
+    # it. GitHub's ubuntu runners expose /dev/kvm; this udev rule makes
+    # it accessible to the runner user (the standard incantation from the
+    # android-emulator-runner README).
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Launch smoke test on x86_64 emulator
+      uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
+      with:
+        api-level: 34
+        arch: x86_64
+        target: google_apis
+        force-avd-creation: false
+        emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot
+        disable-animations: true
+        # Single command — this action runs `script` line-by-line, which
+        # breaks multi-line shell constructs, so the real logic lives in
+        # tools/android-smoke.sh (bash reads the whole file at once).
+        script: bash tools/android-smoke.sh
+
+    - name: Upload launch log
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: android-smoke-launch-log
+        path: launch.log
         retention-days: 14

@@ -115,16 +115,29 @@ class InfernodeSDLActivity : SDLActivity() {
         // Asset extraction has to happen *before* SDLActivity.onCreate
         // calls SDL_main: emu's argv references the root directory.
         extractInfernoRootIfNeeded()
-        // Mic permission has to be requested at runtime — manifest
-        // declaration alone is not enough on API >= 23. Kick the
-        // dialog off before SDL takes the surface; AAudio capture in
-        // /dev/audio would silently return zeros otherwise.
-        ensureRecordAudioPermission()
-        ensureCallPhonePermission()
-        ensureSendSmsPermission()
-        ensureReceiveSmsPermission()
         InfernodePhoneBridge.attach(this)
         super.onCreate(savedInstanceState)
+
+        // Runtime permissions (mic, call, SMS) must be requested *after*
+        // super.onCreate() and in a single batched call. Two faults bit
+        // us before (crash on fresh install, INFR-211 follow-up):
+        //
+        //  1. super.onCreate() is where SDLActivity.loadLibraries()
+        //     loads libSDL3 / libemu. SDL overrides
+        //     onRequestPermissionsResult to call the *native*
+        //     nativePermissionResult(). Any permission result delivered
+        //     before the native lib is loaded throws UnsatisfiedLinkError
+        //     and kills the app.
+        //  2. Android serialises permission dialogs. Firing several
+        //     requestPermissions() calls back-to-back makes the framework
+        //     deliver a *synchronous* cancellation for the 2nd+ request —
+        //     which, pre-load, is exactly fault (1). One batched request
+        //     means one dialog sequence and one async callback.
+        //
+        // Dev devices never saw this: their permissions were already
+        // granted, so requestPermissions() was never called. A fresh
+        // Play Store install hits it on first launch.
+        ensureRuntimePermissions()
 
         // Phase 2b.2 / INFR-115 — keep Lucifer's SDL surface inside the
         // safe rectangle (no overlap with the status bar at top or
@@ -184,69 +197,64 @@ class InfernodeSDLActivity : SDLActivity() {
         Log.i(TAG, "InfernodeSDLActivity created; SDL_main will boot wm")
     }
 
-    private fun ensureRecordAudioPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+    /**
+     * Request every runtime permission the app needs in one batched
+     * call. Single dialog sequence, single request code — see the long
+     * note in [onCreate] for why batching + post-super ordering is
+     * load-bearing.
+     *
+     *   * RECORD_AUDIO — AAudio capture in /dev/audio (returns zeros
+     *     without it).
+     *   * CALL_PHONE   — INFR-201: InfernodePhoneBridge.dial fires
+     *     ACTION_CALL without bouncing through the system dialer.
+     *   * SEND_SMS     — INFR-182: InfernodePhoneBridge.sendSms calls
+     *     SmsManager.sendTextMessage.
+     *   * RECEIVE_SMS / READ_SMS — INFR-182: InfernodeSmsReceiver picks
+     *     up SMS_RECEIVED. Same perm group, granted together.
+     *
+     * Android collapses consecutive prompts within a group, so the user
+     * sees one dialog per group, not one per permission.
+     */
+    private fun ensureRuntimePermissions() {
+        val wanted = arrayOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.READ_SMS,
+        )
+        val missing = wanted.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(
                 this,
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                /* requestCode = */ 1
+                missing.toTypedArray(),
+                REQ_RUNTIME_PERMS
             )
         }
     }
 
-    private fun ensureCallPhonePermission() {
-        // INFR-201: required so InfernodePhoneBridge.dial can fire
-        // ACTION_CALL without bouncing through the system dialer.
-        // Distinct requestCode from RECORD_AUDIO so the result callback
-        // (if we add one later) can disambiguate.
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.CALL_PHONE),
-                /* requestCode = */ 2
-            )
+    /**
+     * Intercept the result for our batched runtime-permission request so
+     * it does *not* reach SDLActivity.onRequestPermissionsResult — that
+     * override calls the native nativePermissionResult() with the request
+     * code, but SDL never issued REQ_RUNTIME_PERMS and treating it as an
+     * SDL request is wrong. Our permissions are read via
+     * checkSelfPermission at point of use (audio capture, dialing, SMS),
+     * not through SDL's callback, so swallowing the result here is safe.
+     * SDL's own permission flow uses its own request codes and still
+     * forwards to super.
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        if (requestCode == REQ_RUNTIME_PERMS) {
+            return
         }
-    }
-
-    private fun ensureSendSmsPermission() {
-        // INFR-182 SMS send slice: InfernodePhoneBridge.sendSms calls
-        // SmsManager.sendTextMessage which requires SEND_SMS at runtime.
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.SEND_SMS),
-                /* requestCode = */ 3
-            )
-        }
-    }
-
-    private fun ensureReceiveSmsPermission() {
-        // INFR-182 SMS receive slice: InfernodeSmsReceiver picks up
-        // android.provider.Telephony.SMS_RECEIVED. RECEIVE_SMS is the
-        // runtime perm that lets the broadcast actually reach our
-        // receiver; READ_SMS is in the same group and Android grants
-        // it together. Request both in one batch — the prompt will
-        // collapse since they share the SMS perm group.
-        val needs = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
-            != PackageManager.PERMISSION_GRANTED
-        ) needs += Manifest.permission.RECEIVE_SMS
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
-            != PackageManager.PERMISSION_GRANTED
-        ) needs += Manifest.permission.READ_SMS
-        if (needs.isNotEmpty()) {
-            ActivityCompat.requestPermissions(
-                this,
-                needs.toTypedArray(),
-                /* requestCode = */ 4
-            )
-        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     /**
@@ -303,6 +311,14 @@ class InfernodeSDLActivity : SDLActivity() {
 
     companion object {
         private const val TAG = "InfernodeSDL"
+
+        /**
+         * Request code for our single batched runtime-permission request.
+         * Deliberately high and distinctive so it never collides with the
+         * codes SDL issues from its native side; [onRequestPermissionsResult]
+         * also intercepts it before it can reach SDL.
+         */
+        private const val REQ_RUNTIME_PERMS = 1001
 
         /**
          * TEMPORARY: skip wm/logon during mobile dev iteration.

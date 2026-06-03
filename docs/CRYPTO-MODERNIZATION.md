@@ -403,10 +403,23 @@ node; all nodes must be upgraded together.
   transcript binding, SHA3-512 combiner, secret scrubbing)
 
 **Files created:**
-- `tests/pqauth_test.b` — runs the handshake on both ends of a pipe and
-  asserts both peers mutually authenticate and derive the **same** 64-byte
-  hybrid secret; then drives the real `Auth->client`/`Auth->server` +
-  `ssl` path and round-trips a 9P-style payload over the encrypted channel.
+- `tests/pqauth_test.b` — covers the handshake end to end:
+  - *HybridAuthHandshake* — both peers mutually authenticate and derive the
+    **same** 64-byte hybrid secret (ed25519 signer).
+  - *HybridHandshakeMLDSA* — same, with an ML-DSA-65 signer: a **fully
+    post-quantum** handshake (PQ signatures + PQ KEM).
+  - *HybridEncryptedChannel* / *HybridTcpChannel* — drives the real
+    `Auth->client`/`Auth->server` + `ssl` path and round-trips a 9P-style
+    payload over the encrypted channel (over a pipe, and over a real TCP
+    socket; the TCP case skips where no IP stack is available).
+  - *DowngradeRejected* — a v1 (classical-only) peer is refused.
+  - *TamperedEkRejected* — flipping a byte in an ML-KEM public key fails the
+    handshake (`bad certificate`), proving the transcript binding defends
+    against an active KEM-substitution MITM.
+  - *MalformedEkRejected* — a wrong-length ML-KEM key is rejected.
+
+  The negative cases use a configurable man-in-the-middle relay between two
+  real `auth()` endpoints.
 
 ```sh
 ./emu/Linux/o.emu -r. /tests/pqauth_test.dis -v

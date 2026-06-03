@@ -1725,6 +1725,12 @@ Keyring_auth(void *fp)
 	uchar *cvb;
 	int n, fd, version;
 	long now;
+	/* hybrid post-quantum (ML-KEM-768) key agreement material */
+	uchar myek[MLKEM768_PKLEN], mydk[MLKEM768_SKLEN];
+	uchar hisek[MLKEM768_PKLEN], myct[MLKEM768_CTLEN], hisct[MLKEM768_CTLEN];
+	uchar ss_local[MLKEM_SSLEN], ss_remote[MLKEM_SSLEN];
+	uchar *kss_lo, *kss_hi, *ek_lo, *ek_hi;
+	int cmp;
 
 	hispk = H;
 	hiscert = H;
@@ -1752,8 +1758,8 @@ Keyring_auth(void *fp)
 		return;
 	}
 
-	/* send auth protocol version number */
-	if(sendmsg(fd, "1", 1) <= 0){
+	/* send auth protocol version number (2 = hybrid PQ; required) */
+	if(sendmsg(fd, "2", 1) <= 0){
 		err = MSG;
 		goto out;
 	}
@@ -1766,8 +1772,8 @@ Keyring_auth(void *fp)
 	}
 	buf[n] = 0;
 	version = atoi(buf);
-	if(version != 1 || n > 4){
-		err = "incompatible authentication protocol";
+	if(version != 2 || n > 4){
+		err = "incompatible authentication protocol (need hybrid PQ v2)";
 		goto out;
 	}
 
@@ -1826,6 +1832,11 @@ if(0)print("X");
 	acquire();
 if(0)print("Y");
 
+	/* generate ephemeral ML-KEM-768 keypair for hybrid PQ key agreement */
+	release();
+	mlkem768_keygen(myek, mydk);
+	acquire();
+
 	/* send alpha**r0 mod p, mycert, and mypk */
 	n = bigtobase64(alphar0, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
@@ -1841,6 +1852,12 @@ if(0)print("Y");
 
 	n = pktostr(mypk, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
+		err = MSG;
+		goto out;
+	}
+
+	/* send my ML-KEM-768 public key */
+	if(sendmsg(fd, (char*)myek, MLKEM768_PKLEN) <= 0){
 		err = MSG;
 		goto out;
 	}
@@ -1906,10 +1923,51 @@ if(0)print("Y");
 		goto out;
 	}
 
-	/* sign alpha**r0 and alpha**r1 and send */
+	/* get his ML-KEM-768 public key (sent right after his pk) */
+	n = getmsg(fd, buf, Maxbuf-1);
+	if(n < 0){
+		err = buf;
+		goto out;
+	}
+	if(n != MLKEM768_PKLEN){
+		err = "bad ml-kem public key length";
+		goto out;
+	}
+	memmove(hisek, buf, MLKEM768_PKLEN);
+
+	/* encapsulate to his ek, send the ciphertext */
+	release();
+	mlkem768_encaps(myct, ss_local, hisek);
+	acquire();
+	if(sendmsg(fd, (char*)myct, MLKEM768_CTLEN) <= 0){
+		err = MSG;
+		goto out;
+	}
+
+	/* get his ciphertext, decapsulate with my dk */
+	n = getmsg(fd, buf, Maxbuf-1);
+	if(n < 0){
+		err = buf;
+		goto out;
+	}
+	if(n != MLKEM768_CTLEN){
+		err = "bad ml-kem ciphertext length";
+		goto out;
+	}
+	memmove(hisct, buf, MLKEM768_CTLEN);
+	mlkem768_decaps(ss_remote, hisct, mydk);
+
+	/*
+	 * sign alpha**r0, alpha**r1 and both ML-KEM public keys, then send.
+	 * Binding the eks into the signed transcript authenticates the PQ
+	 * key agreement: an active attacker cannot substitute ML-KEM keys
+	 * without invalidating the signature.
+	 */
 	n = bigtobase64(alphar0, buf, Maxbuf);
 	n += bigtobase64(alphar1, buf+n, Maxbuf-n);
-	alphacert = sign(mysk, "sha1", 0, (uchar*)buf, n);
+	memmove(buf+n, myek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
+	memmove(buf+n, hisek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
+	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
 	n = certtostr(alphacert, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
 		err = MSG;
@@ -1934,12 +1992,24 @@ if(0)print("Y");
 	certimmutable(alphacert);		/* hide from the garbage collector */
 	n = bigtobase64(alphar1, buf, Maxbuf);
 	n += bigtobase64(alphar0, buf+n, Maxbuf-n);
+	memmove(buf+n, hisek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
+	memmove(buf+n, myek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
 	if(verify(hispk, alphacert, buf, n) == 0){
 		err = "bad certificate";
 		goto out;
 	}
 
-	/* we are now authenticated and have a common secret, alpha**(r0*r1) */
+	/*
+	 * We are now mutually authenticated.  Derive the session secret by
+	 * combining the classical Diffie-Hellman secret alpha**(r0*r1) with
+	 * both ML-KEM-768 shared secrets using SHA3-512.  ss_local is keyed
+	 * to his ek (we encapsulated to it); ss_remote is keyed to my ek (he
+	 * encapsulated to it).  Both peers order the two KEM secrets and eks
+	 * identically by comparing the two public keys, so they derive the
+	 * same 64-byte secret.  The result stays secret unless BOTH the DH
+	 * and the ML-KEM problem are broken (hybrid / harvest-now-safe).
+	 * 64 bytes gives the ssl device a full key + IV for any cipher.
+	 */
 	f->ret->t0 = stringdup(hispk->x.owner);
 	mpexp(alphar1, r0, p, alphar0r1);
 	n = mptobe(alphar0r1, nil, Maxbuf, &cvb);
@@ -1947,7 +2017,35 @@ if(0)print("Y");
 		err = "bad conversion";
 		goto out;
 	}
-	f->ret->t1 = mem2array(cvb, n);
+
+	cmp = memcmp(myek, hisek, MLKEM768_PKLEN);
+	if(cmp == 0){
+		free(cvb);
+		err = "ml-kem public key collision";
+		goto out;
+	}
+	if(cmp < 0){
+		kss_lo = ss_remote; ek_lo = myek;	/* my ek is the smaller */
+		kss_hi = ss_local;  ek_hi = hisek;
+	}else{
+		kss_lo = ss_local;  ek_lo = hisek;	/* his ek is the smaller */
+		kss_hi = ss_remote; ek_hi = myek;
+	}
+	{
+		uchar dig[SHA3_512dlen];
+		int m;
+
+		m = 0;
+		memmove(buf+m, "infernode-pq-sts-v2", 19); m += 19;
+		memmove(buf+m, cvb, n); m += n;
+		memmove(buf+m, kss_lo, MLKEM_SSLEN); m += MLKEM_SSLEN;
+		memmove(buf+m, kss_hi, MLKEM_SSLEN); m += MLKEM_SSLEN;
+		memmove(buf+m, ek_lo, MLKEM768_PKLEN); m += MLKEM768_PKLEN;
+		memmove(buf+m, ek_hi, MLKEM768_PKLEN); m += MLKEM768_PKLEN;
+		sha3_512((uchar*)buf, m, dig);
+		f->ret->t1 = mem2array(dig, SHA3_512dlen);
+		memset(dig, 0, sizeof(dig));
+	}
 	free(cvb);
 
 out:
@@ -2008,6 +2106,10 @@ out:
 		certmutable(alphacert);
 		destroy(alphacert);
 	}
+	/* scrub ML-KEM secret key and shared secrets from the stack */
+	memset(mydk, 0, sizeof(mydk));
+	memset(ss_local, 0, sizeof(ss_local));
+	memset(ss_remote, 0, sizeof(ss_remote));
 	free(buf);
 	if(r0 != nil){
 		mpfree(r0);

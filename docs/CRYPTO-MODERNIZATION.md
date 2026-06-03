@@ -348,6 +348,83 @@ auth/createsignerkey -a slhdsa256s signer_name
 ./emu/Linux/o.emu -r. /tests/sha3_test.dis
 ```
 
+### 10. Native Transport Hybrid Key Agreement (9P / Styx)
+
+The previous PQ work made the *TLS 1.3 client* (`appl/lib/crypt/tls.b`)
+hybrid, but InferNode nodes do not talk to each other over that path — they
+use the native Inferno authentication protocol (`Keyring->auth`, the
+Station-to-Station handshake in `libinterp/keyring.c`) followed by the `ssl`
+line-encryption device. That handshake derived its session key from
+**classical Diffie-Hellman only**, so node-to-node 9P traffic was *not*
+quantum-safe even with PQ certificates. This change closes that gap.
+
+The STS handshake is now **protocol version 2** and performs a hybrid key
+agreement. Because the protocol is symmetric (both peers run identical
+code), it uses a **mutual ML-KEM-768 exchange**:
+
+1. Each peer generates an ephemeral ML-KEM-768 keypair and sends its public
+   key (`ek`, 1184 bytes) alongside the existing `alpha**r0`, certificate
+   and public key.
+2. Each peer encapsulates to the other's `ek` (sending a 1088-byte
+   ciphertext) and decapsulates the ciphertext it receives.
+3. Both `ek`s are bound into the signed STS transcript, so an active
+   attacker cannot substitute ML-KEM keys without invalidating the
+   signature. (The transcript signature hash was also upgraded SHA-1 →
+   SHA-256.)
+4. The session secret is
+
+   ```
+   SHA3-512("infernode-pq-sts-v2" || dh || kem_lo || kem_hi || ek_lo || ek_hi)
+   ```
+
+   where the two KEM secrets and `ek`s are ordered canonically by comparing
+   the public keys, so both peers derive the identical 64-byte secret. That
+   secret feeds the `ssl` device unchanged (64 bytes supplies a full key +
+   IV for any cipher).
+
+The result is safe unless **both** the Diffie-Hellman and the ML-KEM problem
+are broken — directly addressing the harvest-now-decrypt-later threat on the
+native transport.
+
+| Aspect | v1 (classical) | v2 (hybrid) |
+|--------|----------------|-------------|
+| Key agreement | DH only | DH + mutual ML-KEM-768 |
+| Session secret | raw `alpha**(r0*r1)` | `SHA3-512(dh ‖ kem ‖ eks)`, 64 bytes |
+| Transcript signature hash | SHA-1 | SHA-256 |
+| PQ ek/ct on the wire | — | 1184 B ek + 1088 B ct each way |
+| Interop | — | **clean break**: v1 peers are rejected |
+
+**Breaking change:** This is a clean break (consistent with the rest of this
+document). A v2 node refuses to authenticate with a v1 (classical-only)
+node; all nodes must be upgraded together.
+
+**Files modified:**
+- `libinterp/keyring.c` — `Keyring_auth` hybrid handshake (ML-KEM exchange,
+  transcript binding, SHA3-512 combiner, secret scrubbing)
+
+**Files created:**
+- `tests/pqauth_test.b` — covers the handshake end to end:
+  - *HybridAuthHandshake* — both peers mutually authenticate and derive the
+    **same** 64-byte hybrid secret (ed25519 signer).
+  - *HybridHandshakeMLDSA* — same, with an ML-DSA-65 signer: a **fully
+    post-quantum** handshake (PQ signatures + PQ KEM).
+  - *HybridEncryptedChannel* / *HybridTcpChannel* — drives the real
+    `Auth->client`/`Auth->server` + `ssl` path and round-trips a 9P-style
+    payload over the encrypted channel (over a pipe, and over a real TCP
+    socket; the TCP case skips where no IP stack is available).
+  - *DowngradeRejected* — a v1 (classical-only) peer is refused.
+  - *TamperedEkRejected* — flipping a byte in an ML-KEM public key fails the
+    handshake (`bad certificate`), proving the transcript binding defends
+    against an active KEM-substitution MITM.
+  - *MalformedEkRejected* — a wrong-length ML-KEM key is rejected.
+
+  The negative cases use a configurable man-in-the-middle relay between two
+  real `auth()` endpoints.
+
+```sh
+./emu/Linux/o.emu -r. /tests/pqauth_test.dis -v
+```
+
 ## Security Properties (Updated)
 
 After all changes, the complete SigAlgVec registry:

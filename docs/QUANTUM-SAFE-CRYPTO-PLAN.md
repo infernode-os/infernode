@@ -20,8 +20,17 @@
 | 7 | SHA-3 Keyring builtins | **Complete** |
 | 7 | Comprehensive test hardening | **Complete** |
 | 7 | Documentation | **Complete** |
+| 8 | Hybrid DH+ML-KEM-768 native STS handshake (9P/Styx) | **Complete** |
 
 All 8 SigAlgVec slots filled: ed25519, elgamal, rsa, dsa, mldsa65, mldsa87, slhdsa192s, slhdsa256s.
+
+**Phase 8 (node-to-node transport):** The TLS 1.3 hybrid (Phase 3) only
+covers outbound TLS to external servers. InferNode↔InferNode traffic uses
+the native Inferno auth protocol (`Keyring->auth`) + the `ssl` device, which
+was classical-DH-only. Phase 8 makes that handshake hybrid (mutual ML-KEM-768
+combined with DH via SHA3-512), so native 9P/Styx sessions are now
+quantum-safe end-to-end. See
+[CRYPTO-MODERNIZATION.md §10](CRYPTO-MODERNIZATION.md#10-native-transport-hybrid-key-agreement-9p--styx).
 
 ## 1. Motivation
 

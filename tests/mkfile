@@ -50,6 +50,7 @@ TARG=\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
+	pqauth_test.dis\
 	regex_test.dis\
 	render_registry_test.dis\
 	runner.dis\

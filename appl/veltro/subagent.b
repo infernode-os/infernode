@@ -27,12 +27,17 @@ include "bufio.m";
 include "string.m";
 	str: String;
 
+include "agentlib.m";
+	agentlib: AgentLib;
+
 include "tool.m";
 include "subagent.m";
 
 # Configuration
 STREAM_THRESHOLD: con 4096;
-SCRATCH_PATH: con "/tmp/scratch";
+# Under /tmp/veltro — the subtree nsconstruct keeps writable post-restriction
+# (plain /tmp/scratch isn't creatable in the child's restricted namespace).
+SCRATCH_PATH: con "/tmp/veltro/scratch";
 
 # Per-step truncation length for trajectory log entries. Matches veltro.b's
 # LOG_PREVIEW so parent and subagent logs share one format.
@@ -67,6 +72,15 @@ init(): string
 	if(str == nil)
 		return sys->sprint("cannot load String: %r");
 
+	# Reasoning runs on the same agentlib loop the parent agent uses
+	# (harmony/JSON-aware, with retry) instead of the legacy line-parse/DONE
+	# protocol. Loaded here —
+	# spawn calls init() in the PARENT namespace, before restriction, so
+	# /dis/veltro is reachable; the module then runs fine in the restricted child.
+	agentlib = load AgentLib AgentLib->PATH;
+	if(agentlib != nil)
+		agentlib->init();
+
 	return nil;
 }
 
@@ -92,6 +106,9 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	# Store trajectory log fd (survives NEWNS). nil = no logging.
 	logfd = lfd;
 
+	if(agentlib == nil)
+		return "ERROR:agentlib unavailable in subagent";
+
 	# Build namespace description
 	ns := discovernamespace(toolnames);
 
@@ -100,51 +117,59 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 
 	logheader(task);
 
-	lastresult := "";
 	loopstart := sys->millisec();
 	for(step := 0; step < maxsteps; step++) {
-		# Query LLM
-		response := queryllm(prompt);
-		if(response == "")
+		# Query the LLM via agentlib (same harmony/JSON-aware path + retry as the
+		# parent agent), then parse with parsellmresponse — NOT the legacy
+		# line-parse/DONE protocol, which dropped gpt-oss's final-channel answer.
+		response := agentlib->queryllmfd(llmaskfd, prompt);
+		logllm(step + 1, len prompt, response);
+		if(response == "") {
+			logfooter("empty", step + 1, sys->millisec() - loopstart);
 			return "ERROR:LLM returned empty response";
-
-		# Parse action from response
-		(tool, toolargs) := parseaction(response);
-
-		# Check for completion
-		if(tool == "" || str->tolower(tool) == "done") {
-			totaltime := sys->millisec() - loopstart;
-			sys->fprint(stderr, "subagent: completed in %d steps, %dms total\n", step + 1, totaltime);
-			logfooter("done", step + 1, totaltime);
-			# Return final response (excluding the DONE marker)
-			final := stripaction(response);
-			if(final != "")
-				return final;
-			if(lastresult != "")
-				return lastresult;
-			return "Task completed.";
 		}
 
-		# Execute tool
-		result := calltool(tool, toolargs);
-		lastresult = result;
+		(stopreason, tcalls, text) := agentlib->parsellmresponse(response);
 
-		logstep(step + 1, tool, toolargs, result);
-
-		# Check for large result - write to scratch
-		if(len result > STREAM_THRESHOLD) {
-			scratchfile := writescratch(result, step);
-			result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+		# Turn complete: the model's text IS the subagent's result.
+		if(stopreason == "end_turn" || stopreason == "" || tcalls == nil) {
+			logfooter("done", step + 1, sys->millisec() - loopstart);
+			if(text != "")
+				return text;
+			return "ERROR:subagent produced no answer";
 		}
 
-		# Feed result back for next iteration
-		prompt = sys->sprint("Tool %s returned:\n%s\n\nContinue with the task.", tool, result);
+		# Intermediate step: dispatch the requested tool calls against the
+		# pre-loaded tool modules and feed results back. (A child whose session
+		# has no tools registered won't reach here — it just answers above.)
+		results: list of (string, string);
+		for(tc := tcalls; tc != nil; tc = tl tc) {
+			(id, name, targs) := hd tc;
+			result := calltool(name, targs);
+			logstep(step + 1, name, targs, result);
+			if(len result > STREAM_THRESHOLD) {
+				scratchfile := writescratch(result, step);
+				result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+			}
+			results = (id, result) :: results;
+		}
+		prompt = agentlib->buildtoolresults(revresults(results));
 	}
 
 	totaltime := sys->millisec() - loopstart;
 	sys->fprint(stderr, "subagent: max steps reached after %dms\n", totaltime);
 	logfooter("max-steps", maxsteps, totaltime);
 	return sys->sprint("ERROR:max steps (%d) reached without completion", maxsteps);
+}
+
+# Reverse a (id, result) list to restore call order (results are accumulated
+# head-first in the dispatch loop).
+revresults(l: list of (string, string)): list of (string, string)
+{
+	r: list of (string, string);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 # Replace newlines and tabs with spaces (single-line log entries).
@@ -155,9 +180,10 @@ collapsenl(s: string): string
 	for(i := 0; i < len s; i++) {
 		c := s[i];
 		if(c == '\n' || c == '\r' || c == '\t')
-			result += " ";
-		else
-			result += string c;
+			c = ' ';
+		# NB: `string c` on an int gives its DECIMAL text ("68"), not the char —
+		# use %c so log lines stay human-readable.
+		result += sys->sprint("%c", c);
 	}
 	return result;
 }
@@ -175,6 +201,18 @@ logheader(task: string)
 	if(logfd == nil)
 		return;
 	line := sys->sprint("# subagent task=%s\n", collapsenl(preview(task)));
+	data := array of byte line;
+	sys->write(logfd, data, len data);
+}
+
+# Log the raw LLM exchange (prompt size + response preview) so the empty/short
+# response failure mode is diagnosable from the trajectory log.
+logllm(step, promptlen: int, response: string)
+{
+	if(logfd == nil)
+		return;
+	line := sys->sprint("llm %d: prompt=%db resp=%db :: %s\n",
+		step, promptlen, len array of byte response, collapsenl(preview(response)));
 	data := array of byte line;
 	sys->write(logfd, data, len data);
 }
@@ -243,7 +281,7 @@ assembleprompt(task, ns, systemprompt: string): string
 	prompt := systemprompt + "\n\n== Your Namespace ==\n" + ns +
 		"\n\n== Tool Documentation ==\n" + tooldocs +
 		"\n\n== Task ==\n" + task +
-		"\n\nRespond with a tool invocation or DONE if complete.";
+		"\n\nComplete the task and provide your final answer directly.";
 
 	return prompt;
 }
@@ -251,31 +289,18 @@ assembleprompt(task, ns, systemprompt: string): string
 # Default system prompt
 defaultsystemprompt(): string
 {
-	return "You are a Veltro sub-agent in a sandboxed Inferno namespace.\n\n" +
-		"<identity_handling>\n" +
-		"If asked about identity, respond: \"I am a Veltro sub-agent.\"\n" +
-		"Then continue with the task.\n" +
-		"</identity_handling>\n\n" +
-		"<core_principle>\n" +
-		"Your namespace IS your capability set. Only tools listed below exist.\n" +
-		"</core_principle>\n\n" +
-		"<output_format>\n" +
-		"Your response is parsed by code. The parser reads the FIRST word as tool name.\n\n" +
-		"Output ONE tool invocation per response:\n" +
-		"    toolname arguments\n\n" +
-		"For multi-line content, use heredoc:\n" +
-		"    toolname arg <<EOF\n" +
-		"    Line one\n" +
-		"    Line two\n" +
-		"    EOF\n\n" +
-		"When finished:\n" +
-		"    Brief summary here\n" +
-		"    DONE\n" +
-		"</output_format>\n\n" +
-		"<completion_behavior>\n" +
-		"Do what was asked; nothing more, nothing less.\n" +
-		"Report results briefly, then DONE. No help menus or suggestions.\n" +
-		"</completion_behavior>";
+	# Reasoning now runs on the agentlib loop (harmony/JSON tool-use), NOT the old
+	# line-parse/DONE protocol. The prompt must NOT tell the model "first word =
+	# tool name / emit a tool invocation / say DONE" — under harmony that drove the
+	# model to emit a tool call into a discarded channel, leaving an empty final
+	# channel (empty /ask response). Just ask for the answer directly; tool calls,
+	# if the session has tools, happen via the native harmony tool format.
+	return "You are a focused sub-agent running in an isolated sandbox. You have " +
+		"one self-contained task. Work it through with your own reasoning (and any " +
+		"tools available to you), then respond with your result DIRECTLY as plain " +
+		"text — the complete work product the caller needs, concise and finished. " +
+		"Do not ask questions, do not narrate your process, do not emit status " +
+		"markers like 'DONE' — output only the answer itself.";
 }
 
 # Query LLM via passed ask file descriptor

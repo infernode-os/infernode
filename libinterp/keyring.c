@@ -2171,17 +2171,17 @@ Keyring_writeauthinfo(void *fp)
 		goto out;
 
 	/* signer's public key */
-	n = pktostr(spk, buf, Maxmsg);
+	n = pktostr(spk, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0)
 		goto out;
 
 	/* certificate for my public key */
-	n = certtostr(c, buf, Maxmsg);
+	n = certtostr(c, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0)
 		goto out;
 
 	/* my secret/public key */
-	n = sktostr(mysk, buf, Maxmsg);
+	n = sktostr(mysk, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0)
 		goto out;
 
@@ -2243,7 +2243,7 @@ Keyring_readauthinfo(void *fp)
 		goto out;
 
 	/* signer's public key */
-	n = getmsg(fd, buf, Maxmsg);
+	n = getmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 
@@ -2252,7 +2252,7 @@ Keyring_readauthinfo(void *fp)
 		goto out;
 
 	/* certificate for my public key */
-	n = getmsg(fd, buf, Maxmsg);
+	n = getmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	ai->cert = (Keyring_Certificate*)strtocert(buf);
@@ -2260,7 +2260,7 @@ Keyring_readauthinfo(void *fp)
 		goto out;
 
 	/* my secret/public key */
-	n = getmsg(fd, buf, Maxmsg);
+	n = getmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	mysk = strtosk(buf);
@@ -2273,14 +2273,14 @@ Keyring_readauthinfo(void *fp)
 	ai->mypk = (Keyring_PK*)mypk;
 
 	/* diffie hellman base */
-	n = getmsg(fd, buf, Maxmsg);
+	n = getmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	b = strtomp(buf, nil, 64, nil);
 	ai->alpha = newIPint(b);
 
 	/* diffie hellman modulus */
-	n = getmsg(fd, buf, Maxmsg);
+	n = getmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	b = strtomp(buf, nil, 64, nil);

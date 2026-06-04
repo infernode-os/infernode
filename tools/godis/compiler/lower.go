@@ -468,15 +468,39 @@ func (fl *funcLowerer) lowerAlloc(instr *ssa.Alloc) error {
 			baseSlot = fl.frame.AllocWord("alloc:" + instr.Name())
 		}
 	}
+	// End of the reserved region (before the pointer slot below).
+	endOff := fl.frame.nextOff
 
 	// Track the base offset for FieldAddr
 	fl.allocBase[instr] = baseSlot
+
+	// SSA Alloc yields zero-initialized space, but the Dis VM only clears
+	// GC-pointer frame slots (via the frame type descriptor's pointer map),
+	// not scalar slots — those carry garbage from whatever previously used
+	// this stack region. Zero the non-pointer slots so unwritten fields read
+	// as Go zero values. Pointer slots are already H from frame init.
+	fl.emitZeroStackSlots(baseSlot, endOff)
 
 	// Allocate the pointer slot as non-pointer (stack address, not heap pointer)
 	ptrSlot := fl.frame.AllocWord("ptr:" + instr.Name())
 	fl.valueMap[instr] = ptrSlot
 	fl.emit(dis.Inst2(dis.ILEA, dis.FP(baseSlot), dis.FP(ptrSlot)))
 	return nil
+}
+
+// emitZeroStackSlots zeroes the non-pointer words in the frame byte range
+// [startOff, endOff). Pointer slots are skipped because the VM already
+// initializes them to H from the frame's pointer bitmap. Word-granular
+// zeroing is safe for every scalar type: a 0 word is the correct zero value
+// for ints, and two 0 words give 0.0 / 0L for reals and longs.
+func (fl *funcLowerer) emitZeroStackSlots(startOff, endOff int32) {
+	wd := int32(dis.IBY2WD)
+	for off := startOff; off < endOff; off += wd {
+		if fl.frame.ptrSlots[off] {
+			continue
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(off)))
+	}
 }
 
 // lowerHeapAlloc emits INEW to heap-allocate a value.
@@ -492,7 +516,17 @@ func (fl *funcLowerer) lowerHeapAlloc(instr *ssa.Alloc) error {
 	fl.valueMap[instr] = ptrSlot
 
 	// Emit INEW $tdLocalIdx, dst(fp)
-	// The local index is patched by Phase 4 to a global TD ID
+	// The local index is patched by Phase 4 to a global TD ID.
+	//
+	// NB: INEW only initializes GC-pointer slots (to H) per the type
+	// descriptor; scalar fields keep whatever the reused heap block held.
+	// That violates SSA Alloc's zero-init guarantee for escaping aggregates
+	// with unwritten scalar fields. The zeroing variant (INEWZ) would fix
+	// it, but flipping to it currently segfaults the GC because godis's
+	// heap type descriptors don't mark every pointer slot accurately, so
+	// memset-to-0 leaves a slot the collector treats as a pointer holding 0
+	// instead of H ((void*)-1). Fixing that descriptor accuracy is tracked
+	// separately; see "Known Limitations" in the README.
 	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(tdLocalIdx)), dis.FP(ptrSlot)))
 
 	return nil

@@ -1360,11 +1360,15 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
    → `2.68`) the last digit can differ from Go's `strconv`, which uses
    round-half-to-even on an exact-decimal expansion. `%g`/`%e` still fall back
    to Dis `CVTFC` and do not yet honor an explicit precision.
-4. **No reflection.** `reflect` package is not supported.
-5. **No cgo.** Cannot call C functions.
-6. **Single-binary output.** All packages are inlined into one `.dis` file;
+4. **`math.Pow` integer exponents only.** `Pow` lowers to the Dis `EXPF`
+   opcode, which raises a real to an *integer* power. Integer exponents are
+   exact; a fractional exponent (e.g. `Pow(2, 0.5)`) is truncated toward zero
+   and therefore wrong. A general implementation would need `exp(y*ln(x))`.
+5. **No reflection.** `reflect` package is not supported.
+6. **No cgo.** Cannot call C functions.
+7. **Single-binary output.** All packages are inlined into one `.dis` file;
    no incremental/separate compilation.
-7. **Zero-initialization of aggregates** (fixed). SSA `Alloc` yields
+8. **Zero-initialization of aggregates** (fixed). SSA `Alloc` yields
    zero-initialized storage, and both allocation paths now honor it.
    Stack-allocated aggregates (e.g. a local `[N]T` whose address does not
    escape) zero their scalar slots explicitly (`emitZeroStackSlots`).
@@ -1373,6 +1377,6 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
    when the reused heap block held stale data. (The Phase-4 type-descriptor
    patcher had to learn `INEWZ` as well — otherwise its type index is left
    unrelocated and the VM reads a garbage `Type*`.)
-8. **Standard library is stub-only.** The 12+ intercepted stdlib packages
+9. **Standard library is stub-only.** The 12+ intercepted stdlib packages
    provide type signatures for compilation but implementations are inlined
    as Dis instruction sequences, not full Go stdlib implementations.

@@ -1204,8 +1204,18 @@ func (fl *funcLowerer) lowerMathPow(instr *ssa.Call) error {
 	yOp := fl.operandOf(instr.Call.Args[1])
 	dst := fl.slotOf(instr)
 
-	// EXPF src, mid, dst: dst = mid ^ src (mid raised to power src)
-	fl.emit(dis.NewInst(dis.IEXPF, yOp, xOp, dis.FP(dst)))
+	// EXPF computes mid ^ src where the EXPONENT (src) is an integer WORD:
+	// it reads x = F(mid) and n = W(src). math.Pow's exponent is a float64,
+	// so it must be converted to an integer first — passing the raw float
+	// bits as W(src) yields a garbage exponent (→ Infinity).
+	//
+	// NOTE: this supports integer exponents only. Fractional exponents (e.g.
+	// Pow(2, 0.5)) truncate toward zero and are therefore wrong — a true
+	// implementation would need exp(y*ln(x)). Documented in README.
+	nLong := fl.emitTruncToLong(yOp)
+	nWord := fl.frame.AllocWord("pow.exp")
+	fl.emit(dis.Inst2(dis.ICVTLW, nLong, dis.FP(nWord)))
+	fl.emit(dis.NewInst(dis.IEXPF, dis.FP(nWord), xOp, dis.FP(dst)))
 	return nil
 }
 
@@ -1216,15 +1226,12 @@ func (fl *funcLowerer) lowerMathMod(instr *ssa.Call) error {
 	dst := fl.slotOf(instr)
 
 	// mod = x - trunc(x/y) * y
-	quotient := fl.frame.AllocWord("")
-	truncQ := fl.frame.AllocWord("")
-	truncQf := fl.frame.AllocWord("")
-	prod := fl.frame.AllocWord("")
+	quotient := fl.frame.AllocReal("")
+	prod := fl.frame.AllocReal("")
 
 	fl.emit(dis.NewInst(dis.IDIVF, yOp, xOp, dis.FP(quotient)))
-	fl.emit(dis.Inst2(dis.ICVTFR, dis.FP(quotient), dis.FP(truncQ)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(truncQ), dis.FP(truncQf)))
-	fl.emit(dis.NewInst(dis.IMULF, yOp, dis.FP(truncQf), dis.FP(prod)))
+	truncQf := fl.emitFloatTrunc(dis.FP(quotient)) // truncate toward zero
+	fl.emit(dis.NewInst(dis.IMULF, yOp, truncQf, dis.FP(prod)))
 	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(prod), xOp, dis.FP(dst)))
 	return nil
 }

@@ -1996,6 +1996,21 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 	case "FormatFloat":
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		// FormatFloat(f, fmt, prec, bitSize): for the 'f' format with a
+		// compile-time-constant precision in [0,15], emit fixed-point text
+		// matching strconv. Everything else (other formats, prec == -1
+		// "shortest", non-constant args) falls back to the VM default.
+		if fmtConst, fok := instr.Call.Args[1].(*ssa.Const); fok {
+			if precConst, pok := instr.Call.Args[2].(*ssa.Const); pok {
+				fmtByte, _ := constant.Int64Val(fmtConst.Value)
+				prec, _ := constant.Int64Val(precConst.Value)
+				if fmtByte == 'f' && prec >= 0 && prec <= 15 {
+					res := fl.emitFloatFixed(src, int(prec))
+					fl.emit(dis.Inst2(dis.IMOVP, res, dis.FP(dst)))
+					return true, nil
+				}
+			}
+		}
 		fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(dst)))
 		return true, nil
 	case "FormatUint":

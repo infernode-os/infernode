@@ -2926,6 +2926,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"printf.go", "hello world\nnum=42\n3+4=7\n"},
 		{"sys_create.go", "5\n0\n"},
 		{"float_fmt.go", "3.14\n4\n1.500000\n-2.500\n1.00\n0.0001\n123456.79\n0.00\n1234.500000\n1000000.50\n[   -3.14]\n[00003.10]\n"},
+		{"strconv_float.go", "3.14\n1.5000\n123.5\n0.125\n-9.99\n"},
 		{"panic_int.go", "recovered\n"},
 		{"defer_args.go", "20\n10\n"},
 

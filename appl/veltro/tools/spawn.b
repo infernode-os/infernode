@@ -49,6 +49,13 @@ include "daytime.m";
 include "rfc3339.m";
 	rfc3339: Rfc3339;
 
+include "bufio.m";
+	bufio: Bufio;
+
+include "json.m";
+	json: JSON;
+	JValue: import json;
+
 include "../tool.m";
 include "../nsconstruct.m";
 	nsconstruct: NsConstruct;
@@ -105,7 +112,10 @@ UI_MOUNT:           con "/n/ui";
 # before FORKNS and passes the fd into subagent->runloop. /usr/inferno/...
 # is unreachable from inside the restricted namespace; opening before
 # restriction is the only way to give subagents an observable record.
-SUBAGENT_LOG_BASE:  con "/usr/inferno/veltro/subagents";
+# Under /tmp/veltro — the ONLY tmp subtree nsconstruct keeps writable after the
+# restriction (it allows just "veltro/" under /tmp and pre-creates it). The old
+# /usr/inferno path isn't creatable post-restriction, so logs were silently lost.
+SUBAGENT_LOG_BASE:  con "/tmp/veltro/subagents";
 
 inited := 0;
 
@@ -130,6 +140,13 @@ init(): string
 	rfc3339 = load Rfc3339 Rfc3339->PATH;
 	if(rfc3339 != nil)
 		rfc3339->init();
+	# bufio + json are optional — only needed to accept JSON tool-call args
+	# (the LLM-native form). If either fails to load, exec falls back to the
+	# DSL parser and a JSON arg returns a clear error.
+	bufio = load Bufio Bufio->PATH;
+	json = load JSON JSON->PATH;
+	if(json != nil)
+		json->init(bufio);
 	inited = 1;
 	return nil;
 }
@@ -182,13 +199,21 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"spawn\"," +
-		"\"description\":\"Create one or more subagents with isolated namespaces. Each section begins with -- and ends with :: <task>. Up to a small bounded number per call.\"," +
+		"\"description\":\"Delegate work to one or more subagents that run concurrently, each in an isolated namespace. Use for genuinely independent multi-step subtasks; collect their results and synthesize. Max 5 per call. Example: {\\\"agents\\\":[{\\\"task\\\":\\\"research topic A\\\"},{\\\"task\\\":\\\"research topic B\\\"}]}\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"spec\":{\"type\":\"string\",\"description\":\"Full spec string. Form: [timeout=N] -- tools=<csv> [paths=<csv>] [shellcmds=<csv>] [model=<name>] [temperature=<float>] [thinking=<budget>] [agenttype=<type>] [system=<prompt>] [at=<rfc3339>] [every=<int><s|m|h|d>] :: <task>  (repeat -- ... :: for additional subagents).\"}" +
+				"\"agents\":{\"type\":\"array\",\"description\":\"Subagents to spawn in parallel (1-5).\"," +
+					"\"items\":{\"type\":\"object\"," +
+						"\"properties\":{" +
+							"\"task\":{\"type\":\"string\",\"description\":\"What this subagent must do — a complete, self-contained instruction.\"}," +
+							"\"tools\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Tool names this subagent may use (optional; defaults to a reasoning-only grant).\"}" +
+						"}," +
+						"\"required\":[\"task\"]" +
+					"}" +
+				"}" +
 			"}," +
-			"\"required\":[\"spec\"]" +
+			"\"required\":[\"agents\"]" +
 		"}" +
 	"}";
 }
@@ -200,8 +225,18 @@ exec(args: string): string
 	if(nsconstruct == nil)
 		return "error: cannot load nsconstruct module";
 
-	# Parse all subagent specs
-	(specs, timeout_ms, perr) := parsespecs(strip(args));
+	# Parse all subagent specs. A JSON-tool-calling model (the common case now)
+	# emits a JSON object as the tool args rather than the legacy DSL string;
+	# accept both. parsejsonspecs builds SubSpecs directly (no DSL round-trip,
+	# so a task containing " :: " or " -- " can't mis-split). See parsejsonspecs.
+	a := strip(args);
+	specs: list of ref SubSpec;
+	timeout_ms: int;
+	perr: string;
+	if(a != "" && a[0] == '{')
+		(specs, timeout_ms, perr) = parsejsonspecs(a);
+	else
+		(specs, timeout_ms, perr) = parsespecs(a);
 	if(perr != "")
 		return "error: " + perr;
 	if(specs == nil)
@@ -408,6 +443,259 @@ preloadmulti(specs: list of ref SubSpec): string
 #   where spec = tools=<t> [paths=<p>] [model=M] ...
 #
 # Returns (specs, timeout_ms, error).  On error, specs is nil.
+# --- JSON tool-call args (LLM-native) -> SubSpecs ---------------------------
+# A JSON-tool-calling model emits a JSON object as the tool args, not the legacy
+# DSL string. Accept, in addition to the DSL:
+#   {"spec": "<dsl string>"}                          -> reuse the DSL parser
+#   {"agents"|"tasks"|"subagents": [ {agent}, ... ]}  -> one SubSpec per element
+#   [ {agent}, ... ]                                   -> bare array of agents
+#   {task|prompt|..., tools, ...}                      -> a single SubSpec
+# plus an optional top-level {"timeout": <seconds>}. Specs are built DIRECTLY
+# (no DSL round-trip) so a task containing " :: " or " -- " can't mis-split.
+
+# Extract a plain string from a JValue (String only; "" otherwise).
+jvstr(v: ref JValue): string
+{
+	if(v == nil)
+		return "";
+	pick s := v {
+	String =>
+		return s.s;
+	}
+	return "";
+}
+
+# Numeric JValue (or numeric string) as a real; dflt if absent/non-numeric.
+jvreal(v: ref JValue, dflt: real): real
+{
+	if(v == nil)
+		return dflt;
+	pick n := v {
+	Real =>		return n.value;
+	Int =>		return real n.value;
+	String =>	return real n.s;
+	}
+	return dflt;
+}
+
+# First non-empty string among the named keys of an object.
+jfirststr(o: ref JValue, keys: list of string): string
+{
+	for(; keys != nil; keys = tl keys) {
+		s := strip(jvstr(o.get(hd keys)));
+		if(s != "")
+			return s;
+	}
+	return "";
+}
+
+# A JValue that is an array of strings OR a comma-separated string -> lowercased,
+# stripped list. nil if absent.
+jvstrlist(v: ref JValue): list of string
+{
+	r: list of string;
+	if(v == nil)
+		return nil;
+	pick x := v {
+	Array =>
+		for(i := 0; i < len x.a; i++) {
+			e := strip(jvstr(x.a[i]));
+			if(e != "")
+				r = str->tolower(e) :: r;
+		}
+		return reverse(r);
+	String =>
+		(nil, toks) := sys->tokenize(x.s, ",");
+		for(; toks != nil; toks = tl toks)
+			r = str->tolower(strip(hd toks)) :: r;
+		return reverse(r);
+	}
+	return nil;
+}
+
+clampthink(t: int): int
+{
+	if(t < 0)
+		return 0;
+	if(t > 30000)
+		return 30000;
+	return t;
+}
+
+# Thinking budget from a JValue: "off"/"max"/"on"/number-string or a number.
+jthinking(v: ref JValue): int
+{
+	if(v == nil)
+		return 0;
+	s := str->tolower(strip(jvstr(v)));
+	if(s == "off" || s == "0")
+		return 0;
+	if(s == "max" || s == "on")
+		return -1;
+	if(s != "")
+		return clampthink(int s);
+	pick n := v {
+	Int =>		return clampthink(int n.value);
+	Real =>		return clampthink(int n.value);
+	}
+	return 0;
+}
+
+# Build one SubSpec from a JSON agent object.
+buildagent(o: ref JValue): (ref SubSpec, string)
+{
+	if(o == nil)
+		return (nil, "null subagent spec");
+	spec := ref SubSpec;
+	tkeys := "task" :: "prompt" :: "instruction" :: "description" :: "role" :: "goal" :: nil;
+	spec.task = jfirststr(o, tkeys);
+	if(spec.task == "") {
+		# Some models nest the real fields under "arguments"/"parameters".
+		inner := o.get("arguments");
+		if(inner == nil)
+			inner = o.get("parameters");
+		if(inner != nil)
+			spec.task = jfirststr(inner, tkeys);
+	}
+	if(spec.task == "")
+		return (nil, "each subagent needs a task (task/prompt/instruction)");
+
+	spec.tools = jvstrlist(o.get("tools"));
+	if(spec.tools == nil)
+		spec.tools = "plan" :: nil;   # a reasoning child still needs a grant; plan is safe
+	spec.paths = jvstrlist(o.get("paths"));
+	spec.shellcmds = jvstrlist(o.get("shellcmds"));
+
+	# Scheduling (optional) — same primitives as the DSL at=/every=. Track via
+	# locals (default 0) and assign explicitly, so an absent field is always 0
+	# regardless of struct-init details.
+	atms := 0;
+	evms := 0;
+	ats := strip(jvstr(o.get("at")));
+	if(ats != "") {
+		(dms, derr) := parserfc3339delta(ats);
+		if(derr != "")
+			return (nil, "at: " + derr);
+		atms = dms;
+	}
+	evs := strip(jvstr(o.get("every")));
+	if(evs != "") {
+		(pms, eerr) := parseduration(evs);
+		if(eerr != "")
+			return (nil, "every: " + eerr);
+		if(pms <= 0)
+			return (nil, "every: period must be positive");
+		evms = pms;
+	}
+	if(atms > 0 && evms > 0)
+		return (nil, "cannot combine at and every in one subagent");
+	spec.at_ms = atms;
+	spec.every_ms = evms;
+
+	# Default to the BACKEND's own model (empty => llmsrv default) rather than a
+	# hardcoded Claude-era "haiku" — a non-Anthropic backend (e.g. a local
+	# gpt-oss server) 404s on "haiku". An explicit "model" in the args still wins.
+	llmmodel := str->tolower(jfirststr(o, "model" :: nil));
+	llmtemp := jvreal(o.get("temperature"), 0.7);
+	if(llmtemp < 0.0)
+		llmtemp = 0.0;
+	if(llmtemp > 2.0)
+		llmtemp = 2.0;
+	llmthink := jthinking(o.get("thinking"));
+	llmsystem := jvstr(o.get("system"));
+	agenttype := str->tolower(jfirststr(o, "agenttype" :: "agent_type" :: nil));
+	if(llmsystem == "" && agenttype != "")
+		llmsystem = loadagentprompt(agenttype);
+	# No unconditional default.txt fallback for the JSON path: leave system empty
+	# so spawn skips /system and the subagent's own (agentlib-appropriate) default
+	# applies — the legacy default.txt carries the ReAct/DONE protocol that breaks
+	# harmony backends.
+	spec.llmconfig = ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem, llmthink);
+	return (spec, "");
+}
+
+# The first array-valued property of a JSON object (key-agnostic fallback so any
+# key a model picks — "spawns", "children", "workers", ... — still resolves).
+firstarrayvalue(o: ref JValue): ref JValue
+{
+	pick obj := o {
+	Object =>
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(nil, v) := hd ml;
+			if(v != nil && v.isarray())
+				return v;
+		}
+	}
+	return nil;
+}
+
+# Build the spec list from a JSON array value.
+buildfromarray(arr: ref JValue, timeout_ms: int): (list of ref SubSpec, int, string)
+{
+	specs: list of ref SubSpec;
+	pick x := arr {
+	Array =>
+		if(len x.a == 0)
+			return (nil, 0, "empty subagent array");
+		if(len x.a > MAX_SUBAGENTS)
+			return (nil, 0, sys->sprint("too many subagents (max %d)", MAX_SUBAGENTS));
+		for(i := 0; i < len x.a; i++) {
+			(sp, e) := buildagent(x.a[i]);
+			if(e != "")
+				return (nil, 0, e);
+			specs = sp :: specs;
+		}
+		return (reversespecs(specs), timeout_ms, "");
+	}
+	return (nil, 0, "expected a JSON array of subagents");
+}
+
+parsejsonspecs(s: string): (list of ref SubSpec, int, string)
+{
+	if(json == nil)
+		return (nil, 0, "JSON args unavailable; use the spec string form: -- tools=<csv> :: <task>");
+	buf := bufio->aopen(array of byte s);
+	if(buf == nil)
+		return (nil, 0, "cannot buffer JSON args");
+	(jv, jerr) := json->readjson(buf);
+	if(jv == nil)
+		return (nil, 0, "invalid JSON args: " + jerr);
+
+	# Bare array of agents.
+	if(jv.isarray())
+		return buildfromarray(jv, DEFAULT_TIMEOUT_MS);
+
+	timeout_ms := DEFAULT_TIMEOUT_MS;
+	tosecs := jvreal(jv.get("timeout"), 0.0);
+	if(tosecs > 0.0)
+		timeout_ms = (int tosecs) * 1000;
+
+	# {"spec": "<dsl>"} — the schema's documented contract; reuse the DSL parser.
+	specstr := strip(jvstr(jv.get("spec")));
+	if(specstr != "")
+		return parsespecs(specstr);
+
+	# {"agents"|"tasks"|"subagents"|"spawns": [ ... ]}, or — to be robust to
+	# whatever key a model invents — the first array-valued property of the object.
+	arr := jv.get("agents");
+	if(arr == nil)
+		arr = jv.get("tasks");
+	if(arr == nil)
+		arr = jv.get("subagents");
+	if(arr == nil)
+		arr = jv.get("spawns");
+	if(arr == nil)
+		arr = firstarrayvalue(jv);
+	if(arr != nil)
+		return buildfromarray(arr, timeout_ms);
+
+	# Otherwise treat the whole object as a single subagent.
+	(sp, e) := buildagent(jv);
+	if(e != "")
+		return (nil, 0, e);
+	return (sp :: nil, timeout_ms, "");
+}
+
 parsespecs(s: string): (list of ref SubSpec, int, string)
 {
 	timeout_ms := DEFAULT_TIMEOUT_MS;
@@ -673,21 +961,36 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 				if(len sessionid > 0 && sessionid[len sessionid - 1] == '\n')
 					sessionid = sessionid[0:len sessionid - 1];
 				if(sessionid != "") {
-					# Configure model
-					modelfd := sys->open("/n/llm/" + sessionid + "/model", Sys->OWRITE);
-					if(modelfd != nil) {
-						modeldata := array of byte caps.llmconfig.model;
-						sys->write(modelfd, modeldata, len modeldata);
-						modelfd = nil;
+					# Configure model — only if one was specified. An empty model
+					# leaves the session at the llmsrv default (what the backend
+					# actually serves), avoiding a 404 on backends that don't have
+					# the legacy "haiku" default.
+					if(caps.llmconfig.model != "") {
+						modelfd := sys->open("/n/llm/" + sessionid + "/model", Sys->OWRITE);
+						if(modelfd != nil) {
+							modeldata := array of byte caps.llmconfig.model;
+							sys->write(modelfd, modeldata, len modeldata);
+							modelfd = nil;
+						}
 					}
 
-					# Subagents always run with thinking disabled — reasoning
-					# overhead is the parent agent's responsibility.
-					thinkfd := sys->open("/n/llm/" + sessionid + "/thinking", Sys->OWRITE);
-					if(thinkfd != nil) {
-						offdata := array of byte "off";
-						sys->write(thinkfd, offdata, len offdata);
-						thinkfd = nil;
+					# Thinking: honor an explicit budget; leave the DEFAULT (0) at
+					# the backend default rather than forcing "off". Forcing off
+					# makes a reasoning backend (e.g. gpt-oss/harmony) emit an empty
+					# final channel — the child then returns nothing. The parent
+					# agent's session never disables thinking, and works; match that.
+					tval := "";
+					if(caps.llmconfig.thinking < 0)
+						tval = "on";
+					else if(caps.llmconfig.thinking > 0)
+						tval = string caps.llmconfig.thinking;
+					if(tval != "") {
+						thinkfd := sys->open("/n/llm/" + sessionid + "/thinking", Sys->OWRITE);
+						if(thinkfd != nil) {
+							tdata := array of byte tval;
+							sys->write(thinkfd, tdata, len tdata);
+							thinkfd = nil;
+						}
 					}
 
 					# Configure system prompt
@@ -1067,12 +1370,14 @@ stripquotes(s: string): string
 # into runchild before FORKNS; subagent.b writes step entries to it.
 opensubagentlog(batchms, idx: int): ref Sys->FD
 {
-	ensuredir("/usr/inferno");
-	ensuredir("/usr/inferno/veltro");
+	ensuredir("/tmp/veltro");
 	ensuredir(SUBAGENT_LOG_BASE);
 
 	path := sys->sprint("%s/%d.%d.log", SUBAGENT_LOG_BASE, batchms, idx);
-	return sys->create(path, Sys->OWRITE, 8r644);
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		sys->fprint(sys->fildes(2), "spawn: subagent log %s not created: %r\n", path);
+	return fd;
 }
 
 # Ensure a directory exists; no-op if already present.

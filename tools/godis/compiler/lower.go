@@ -30,17 +30,17 @@ func init() {
 type funcLowerer struct {
 	fn              *ssa.Function
 	frame           *Frame
-	comp            *Compiler  // parent compiler (for string allocation, etc.)
+	comp            *Compiler // parent compiler (for string allocation, etc.)
 	insts           []dis.Inst
 	valueMap        map[ssa.Value]int32 // SSA value → frame offset
 	allocBase       map[ssa.Value]int32 // *ssa.Alloc → base frame offset of data
 	blockPC         map[*ssa.BasicBlock]int32
-	patches         []branchPatch // deferred branch target patches
-	sysMPOff        int32         // offset of Sys module ref in MP
-	sysUsed         map[string]int // function name → LDT index
-	callTypeDescs   []dis.TypeDesc // type descriptors for call-site frames
-	funcCallPatches []funcCallPatch // deferred patches for local function calls
-	closurePtrSlot  int32           // frame offset of hidden closure pointer (for inner functions)
+	patches         []branchPatch    // deferred branch target patches
+	sysMPOff        int32            // offset of Sys module ref in MP
+	sysUsed         map[string]int   // function name → LDT index
+	callTypeDescs   []dis.TypeDesc   // type descriptors for call-site frames
+	funcCallPatches []funcCallPatch  // deferred patches for local function calls
+	closurePtrSlot  int32            // frame offset of hidden closure pointer (for inner functions)
 	deferStack      []ssa.CallCommon // LIFO stack of deferred calls
 	hasRecover      bool             // true if a deferred closure calls recover()
 	excSlotFP       int32            // frame pointer slot for exception data (pointer, for VM storage)
@@ -1080,10 +1080,10 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 		// Check for interface dereference (2-word copy)
 		if _, ok := instr.Type().Underlying().(*types.Interface); ok {
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, 0), dis.FP(dst)))          // tag
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, 0), dis.FP(dst)))             // tag
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, iby2wd), dis.FP(dst+iby2wd))) // value
 		} else if st, ok := instr.Type().Underlying().(*types.Struct); ok {
-		// Check for struct dereference (multi-word copy)
+			// Check for struct dereference (multi-word copy)
 			fieldOff := int32(0)
 			for i := 0; i < st.NumFields(); i++ {
 				fdt := GoTypeToDis(st.Field(i).Type())
@@ -1623,7 +1623,22 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 				tmp := fl.frame.AllocTemp(true)
 				fl.emit(dis.NewInst(dis.IINSC, valOp, dis.Imm(0), dis.FP(tmp)))
 				partSlot = dis.FP(tmp)
-			case 'f', 'g', 'e':
+			case 'f':
+				src := fl.operandOf(val)
+				p := seg.prec
+				if p < 0 {
+					p = 6 // Go's default precision for %f
+				}
+				if p > 15 {
+					// 10^p is no longer exactly representable as a float64,
+					// so fall back to the VM's default conversion.
+					tmp := fl.frame.AllocTemp(true)
+					fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
+					partSlot = dis.FP(tmp)
+				} else {
+					partSlot = fl.emitFloatFixed(src, p)
+				}
+			case 'g', 'e':
 				src := fl.operandOf(val)
 				tmp := fl.frame.AllocTemp(true)
 				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
@@ -3324,8 +3339,8 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		// Stub: return empty byte slice and nil error
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))         // nil slice
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))  // error tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))          // nil slice
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))   // error tag
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error val
 		return true, nil
 	case "WriteFile":
@@ -5038,6 +5053,81 @@ func (fl *funcLowerer) emitPadWidth(src dis.Operand, width int, padZero bool) di
 	return dis.FP(result)
 }
 
+// emitFloatFixed formats a float operand as fixed-point text with `prec`
+// fractional digits, matching Go's %.Nf verb. It returns a string operand.
+//
+// The conversion is done with Dis 64-bit longs so it stays exact well past
+// 2^31:
+//
+//	m      = |src|
+//	scaled = m * 10^prec            (real)
+//	L      = (long)scaled           (CVTFL rounds half-away-from-zero)
+//	int    = L / 10^prec            (long)
+//	frac   = L % 10^prec            (long, left-zero-padded to prec digits)
+//	result = sign ++ int [ ++ "." ++ frac ]
+//
+// prec must be in [0,15]; for larger prec, 10^prec is no longer exactly
+// representable as a float64, so callers fall back to CVTFC.
+func (fl *funcLowerer) emitFloatFixed(src dis.Operand, prec int) dis.Operand {
+	scaleVal := 1.0
+	for i := 0; i < prec; i++ {
+		scaleVal *= 10
+	}
+	scaleOff := fl.comp.AllocReal(scaleVal)
+	zeroOff := fl.comp.AllocReal(0.0)
+
+	// sign string, empty unless src is negative
+	signStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(fl.comp.AllocString("")), dis.FP(signStr)))
+
+	// m = src by default; flip to -src on the negative path
+	m := fl.frame.AllocReal("ff.mag")
+	fl.emit(dis.Inst2(dis.IMOVF, src, dis.FP(m)))
+	skipNegIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0))) // if src >= 0 skip
+	fl.emit(dis.NewInst(dis.ISUBF, src, dis.MP(zeroOff), dis.FP(m)))  // m = 0 - src = -src
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(fl.comp.AllocString("-")), dis.FP(signStr)))
+	fl.insts[skipNegIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// scaled = m * scale; L = round(scaled); scaleL = (long)scale
+	scaled := fl.frame.AllocReal("ff.scaled")
+	fl.emit(dis.NewInst(dis.IMULF, dis.MP(scaleOff), dis.FP(m), dis.FP(scaled)))
+	lval := fl.frame.AllocReal("ff.long")
+	fl.emit(dis.Inst2(dis.ICVTFL, dis.FP(scaled), dis.FP(lval)))
+	scaleL := fl.frame.AllocReal("ff.scaleL")
+	fl.emit(dis.Inst2(dis.ICVTFL, dis.MP(scaleOff), dis.FP(scaleL)))
+
+	// intpart = L / scaleL
+	intPart := fl.frame.AllocReal("ff.int")
+	fl.emit(dis.NewInst(dis.IDIVL, dis.FP(scaleL), dis.FP(lval), dis.FP(intPart)))
+	intStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTLC, dis.FP(intPart), dis.FP(intStr)))
+
+	// body = sign ++ intStr
+	body := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(intStr), dis.FP(signStr), dis.FP(body)))
+
+	if prec == 0 {
+		return dis.FP(body)
+	}
+
+	// frac = L % scaleL, rendered and left-zero-padded to prec digits
+	fracPart := fl.frame.AllocReal("ff.frac")
+	fl.emit(dis.NewInst(dis.IMODL, dis.FP(scaleL), dis.FP(lval), dis.FP(fracPart)))
+	fracStr := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.ICVTLC, dis.FP(fracPart), dis.FP(fracStr)))
+	fracPad := fl.emitPadWidth(dis.FP(fracStr), prec, true)
+
+	// result = body ++ "." ++ fracPad
+	dot := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(fl.comp.AllocString(".")), dis.FP(dot)))
+	withDot := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(dot), dis.FP(body), dis.FP(withDot)))
+	full := fl.frame.AllocTemp(true)
+	fl.emit(dis.NewInst(dis.IADDC, fracPad, dis.FP(withDot), dis.FP(full)))
+	return dis.FP(full)
+}
+
 func (fl *funcLowerer) lowerPrintln(instr *ssa.Call) error {
 	// println maps to sys->print with a format string
 	// For each argument, emit a sys->print call with the appropriate format
@@ -5151,7 +5241,7 @@ func (fl *funcLowerer) emitSysPrintFmt(format string, arg ssa.Value) error {
 	// Set up print frame and call with format + arg
 	fl.emitSysCall("print", []callSiteArg{
 		{fmtOff, true},                          // format string (always pointer)
-		{argOff, GoTypeToDis(arg.Type()).IsPtr},  // argument
+		{argOff, GoTypeToDis(arg.Type()).IsPtr}, // argument
 	})
 
 	return nil
@@ -5539,13 +5629,13 @@ func (fl *funcLowerer) lowerClose(instr *ssa.Call) error {
 	fl.frame.AllocPointer("close.alt.ch")
 	fl.frame.AllocWord("close.alt.ptr")
 
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase)))          // nsend = 1
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase+iby2wd)))   // nrecv = 0
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase)))        // nsend = 1
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase+iby2wd))) // nrecv = 0
 
 	// Extract raw channel from wrapper
 	tmpRaw := fl.allocPtrTemp("close.raw")
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(chanSlot, 0), dis.FP(tmpRaw)))
-	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpRaw), dis.FP(altBase+2*iby2wd))) // channel
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpRaw), dis.FP(altBase+2*iby2wd)))  // channel
 	fl.emit(dis.Inst2(dis.ILEA, dis.FP(zeroSlot), dis.FP(altBase+3*iby2wd))) // &zeroSlot
 
 	// NBALT: non-blocking send. If a receiver is waiting, it gets the zero value.
@@ -5622,10 +5712,10 @@ func (fl *funcLowerer) emitCloseAwareRecv(instr *ssa.UnOp, chanOff, dst int32) e
 	fl.frame.AllocPointer("recv.alt.ch")
 	fl.frame.AllocWord("recv.alt.ptr")
 
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase)))            // nsend = 0
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase+iby2wd)))     // nrecv = 1
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(altBase)))              // nsend = 0
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(altBase+iby2wd)))       // nrecv = 1
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tmpRaw), dis.FP(altBase+2*iby2wd))) // channel
-	fl.emit(dis.Inst2(dis.ILEA, dis.FP(dst), dis.FP(altBase+3*iby2wd)))   // &dst
+	fl.emit(dis.Inst2(dis.ILEA, dis.FP(dst), dis.FP(altBase+3*iby2wd)))     // &dst
 
 	// NBALT returns index: 0 = got value, 1 = nothing ready
 	nbaltIdx := fl.frame.AllocWord("recv.nbalt.idx")
@@ -5828,7 +5918,7 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 	type argInfo struct {
 		off     int32
 		isPtr   bool
-		isIface bool         // true if interface type (2 words)
+		isIface bool          // true if interface type (2 words)
 		st      *types.Struct // non-nil if this is a struct value argument
 	}
 	var args []argInfo
@@ -6241,7 +6331,7 @@ func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 	if _, ok := instr.Val.Type().Underlying().(*types.Interface); ok {
 		valBase := fl.slotOf(instr.Val)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase), dis.FPInd(addrOff, 0)))          // tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase), dis.FPInd(addrOff, 0)))             // tag
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+iby2wd), dis.FPInd(addrOff, iby2wd))) // value
 		return nil
 	}
@@ -6893,15 +6983,16 @@ func (fl *funcLowerer) lowerMakeMap(instr *ssa.MakeMap) error {
 	// Initialize pointer fields to H (-1) since NEW memsets to 0.
 	// SLICELA treats 0 as a valid pointer and crashes; it only skips H.
 	// Use MOVW (not MOVP) to avoid destroy(0) on the freshly zeroed slots.
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 0)))  // keys = H
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 8)))  // values = H
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 0))) // keys = H
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(dst, 8))) // values = H
 	// count stays at 0
 	return nil
 }
 
 // lowerMapUpdate inserts or updates a key-value pair in a map.
 // Flow: scan for existing key → found: update value, done
-//                              → not found: grow arrays, append, done
+//
+//	→ not found: grow arrays, append, done
 func (fl *funcLowerer) lowerMapUpdate(instr *ssa.MapUpdate) error {
 	mapSlot := fl.slotOf(instr.Map)
 	keySlot := fl.materialize(instr.Key)
@@ -7849,7 +7940,7 @@ func (fl *funcLowerer) lowerPanic(instr *ssa.Panic) error {
 
 // copyIface copies a 2-word interface value (tag + value) between frame slots.
 func (fl *funcLowerer) copyIface(src, dst int32) {
-	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(src), dis.FP(dst)))                          // tag
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(src), dis.FP(dst)))                                     // tag
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(src+int32(dis.IBY2WD)), dis.FP(dst+int32(dis.IBY2WD)))) // value
 }
 

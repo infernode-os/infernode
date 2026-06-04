@@ -1352,8 +1352,14 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
    when the channel is closed from another goroutine. Close injects a phantom
    zero to wake one blocked receiver, but this is best-effort.
 2. **No native maps.** Maps use sorted-array wrappers, not hash tables.
-3. **Limited float formatting.** `%f`/`%g` use Dis CVTFC without precision
-   control.
+3. **Float formatting rounding.** `%f`/`%.Nf` now honor precision (default 6),
+   width, and zero-padding via a fixed-point routine (`emitFloatFixed`). It
+   rounds half-away-from-zero by scaling through a Dis 64-bit long, so for
+   exact half-way values (e.g. `%.0f` of `2.5` → `3`) and values whose binary
+   representation already sits on a rounding boundary (e.g. `%.2f` of `2.675`
+   → `2.68`) the last digit can differ from Go's `strconv`, which uses
+   round-half-to-even on an exact-decimal expansion. `%g`/`%e` still fall back
+   to Dis `CVTFC` and do not yet honor an explicit precision.
 4. **No reflection.** `reflect` package is not supported.
 5. **No cgo.** Cannot call C functions.
 6. **Single-binary output.** All packages are inlined into one `.dis` file;

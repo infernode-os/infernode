@@ -1825,12 +1825,10 @@ Keyring_auth(void *fp)
 	alphar0r1 = mpnew(0);
 
 	/* generate alpha**r0 */
-if(0)print("X");
 	release();
 	mprand(mpsignif(p), genrandom, r0);
 	mpexp(alpha, r0, p, alphar0);
 	acquire();
-if(0)print("Y");
 
 	/* generate ephemeral ML-KEM-768 keypair for hybrid PQ key agreement */
 	release();
@@ -2020,6 +2018,7 @@ if(0)print("Y");
 
 	cmp = memcmp(myek, hisek, MLKEM768_PKLEN);
 	if(cmp == 0){
+		memset(cvb, 0, n);
 		free(cvb);
 		err = "ml-kem public key collision";
 		goto out;
@@ -2046,6 +2045,7 @@ if(0)print("Y");
 		f->ret->t1 = mem2array(dig, SHA3_512dlen);
 		memset(dig, 0, sizeof(dig));
 	}
+	memset(cvb, 0, n);
 	free(cvb);
 
 out:
@@ -2110,8 +2110,14 @@ out:
 	memset(mydk, 0, sizeof(mydk));
 	memset(ss_local, 0, sizeof(ss_local));
 	memset(ss_remote, 0, sizeof(ss_remote));
+	/* scrub the combiner buffer: it held the DH secret and both ML-KEM shared secrets */
+	memset(buf, 0, Maxbuf);
 	free(buf);
 	if(r0 != nil){
+		/* scrub the ephemeral DH private exponents and the DH shared secret */
+		memset(r0->p, 0, r0->size*sizeof(*r0->p));
+		memset(r1->p, 0, r1->size*sizeof(*r1->p));
+		memset(alphar0r1->p, 0, alphar0r1->size*sizeof(*alphar0r1->p));
 		mpfree(r0);
 		mpfree(r1);
 		mpfree(alphar0);

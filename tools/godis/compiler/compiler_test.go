@@ -2348,7 +2348,8 @@ func main() {
 	hasAddf := false
 	// Must have MULF for float multiplication
 	hasMulf := false
-	// Must have CVTFW for float→int
+	// Must have the float→int truncation path (CVTLW narrows the
+	// truncated long; see emitTruncToLong)
 	hasCvtfw := false
 	// Must have CVTWF for int→float
 	hasCvtwf := false
@@ -2360,7 +2361,7 @@ func main() {
 			hasAddf = true
 		case dis.IMULF:
 			hasMulf = true
-		case dis.ICVTFW:
+		case dis.ICVTLW:
 			hasCvtfw = true
 		case dis.ICVTWF:
 			hasCvtwf = true
@@ -2375,7 +2376,7 @@ func main() {
 		t.Error("missing MULF instruction for float multiplication")
 	}
 	if !hasCvtfw {
-		t.Error("missing CVTFW instruction for float→int conversion")
+		t.Error("missing CVTLW instruction for float→int conversion")
 	}
 	if !hasCvtwf {
 		t.Error("missing CVTWF instruction for int→float conversion")
@@ -2929,6 +2930,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"strconv_float.go", "3.14\n1.5000\n123.5\n0.125\n-9.99\n"},
 		{"stack_zero.go", "4\n10\n"},
 		{"heap_zero.go", "1 7 0\n"},
+		{"float_to_int.go", "3\n3\n3\n-3\n-3\n2\n5\n0\n0\n"},
 		{"panic_int.go", "recovered\n"},
 		{"defer_args.go", "20\n10\n"},
 

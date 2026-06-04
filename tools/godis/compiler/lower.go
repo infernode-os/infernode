@@ -5099,6 +5099,54 @@ func (fl *funcLowerer) emitPadWidth(src dis.Operand, width int, padZero bool) di
 	return dis.FP(result)
 }
 
+// emitTruncToLong converts a float operand to a 64-bit integer that is
+// truncated toward zero (Go's int(float) and math.Trunc semantics). There is
+// no truncating real->int Dis opcode — CVTFW/CVTFL both round half-away — so
+// this rounds with CVTFL and then steps the result one back toward zero when
+// rounding overshot:
+//
+//	n  = (long)round(f)
+//	nf = (real)n
+//	if f >= 0 && nf > f { n-- }   // overshot up   -> floor
+//	if f <  0 && nf < f { n++ }   // overshot down -> ceil
+//
+// The returned operand is a frame slot holding the long result.
+func (fl *funcLowerer) emitTruncToLong(src dis.Operand) dis.Operand {
+	zeroOff := fl.comp.AllocReal(0.0)
+	oneOff := fl.comp.AllocReal(1.0)
+
+	n := fl.frame.AllocReal("trunc.n")
+	fl.emit(dis.Inst2(dis.ICVTFL, src, dis.FP(n))) // n = round(f)
+	nf := fl.frame.AllocReal("trunc.nf")
+	fl.emit(dis.Inst2(dis.ICVTLF, dis.FP(n), dis.FP(nf))) // nf = (real)n
+	oneL := fl.frame.AllocReal("trunc.one")
+	fl.emit(dis.Inst2(dis.ICVTFL, dis.MP(oneOff), dis.FP(oneL))) // oneL = 1 (long)
+
+	// if f >= 0 take the floor-correction path, else the ceil-correction path
+	negIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTF, src, dis.MP(zeroOff), dis.Imm(0))) // if f < 0 -> neg
+
+	// f >= 0: if nf > f then n = n - 1
+	posSkipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLEF, dis.FP(nf), src, dis.Imm(0)))        // if nf <= f skip
+	fl.emit(dis.NewInst(dis.ISUBL, dis.FP(oneL), dis.FP(n), dis.FP(n))) // n = n - 1
+	posDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// f < 0: if nf < f then n = n + 1
+	negPC := int32(len(fl.insts))
+	fl.insts[negIdx].Dst = dis.Imm(negPC)
+	negSkipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, dis.FP(nf), src, dis.Imm(0)))        // if nf >= f skip
+	fl.emit(dis.NewInst(dis.IADDL, dis.FP(oneL), dis.FP(n), dis.FP(n))) // n = n + 1
+
+	donePC := int32(len(fl.insts))
+	fl.insts[posSkipIdx].Dst = dis.Imm(donePC)
+	fl.insts[posDoneIdx].Dst = dis.Imm(donePC)
+	fl.insts[negSkipIdx].Dst = dis.Imm(donePC)
+	return dis.FP(n)
+}
+
 // emitFloatFixed formats a float operand as fixed-point text with `prec`
 // fractional digits, matching Go's %.Nf verb. It returns a string operand.
 //
@@ -8164,9 +8212,12 @@ func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 		return nil
 	}
 
-	// float → int (CVTFW)
+	// float → int. Go truncates toward zero, but CVTFW/CVTFL both round
+	// (they add ±0.5 before the integer cast). Truncate explicitly, then
+	// narrow the 64-bit result to the destination word.
 	if isFloatType(srcType) && isIntegerType(dstType) {
-		fl.emit(dis.Inst2(dis.ICVTFW, src, dis.FP(dst)))
+		n := fl.emitTruncToLong(src)
+		fl.emit(dis.Inst2(dis.ICVTLW, n, dis.FP(dst)))
 		return nil
 	}
 

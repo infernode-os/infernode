@@ -2,7 +2,6 @@ package io.infernode
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.content.res.AssetManager
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
@@ -15,7 +14,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import org.libsdl.app.SDLActivity
 import java.io.File
-import java.io.FileOutputStream
 
 /**
  * Phase 2b.1 Activity — SDL3-hosted variant for the Lucifer / wm port.
@@ -112,9 +110,13 @@ class InfernodeSDLActivity : SDLActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Asset extraction has to happen *before* SDLActivity.onCreate
-        // calls SDL_main: emu's argv references the root directory.
-        extractInfernoRootIfNeeded()
+        // The asset tree must exist before SDLActivity.onCreate calls
+        // SDL_main (emu's argv references it). InfernodeSplashActivity
+        // normally extracts it off the main thread before we get here, so
+        // this is a fast no-op safety; it only does real (synchronous) work
+        // if the SDL activity was launched directly (harness / am start) on
+        // a fresh install.
+        AssetExtractor.extractInfernoRootIfNeeded(this)
         InfernodePhoneBridge.attach(this)
         super.onCreate(savedInstanceState)
 
@@ -268,45 +270,6 @@ class InfernodeSDLActivity : SDLActivity() {
     private fun jitFlagForRuntime(): String {
         val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: ""
         return if (abi == "arm64-v8a") "-c1" else "-c0"
-    }
-
-    private fun extractInfernoRootIfNeeded() {
-        val root = File(filesDir, "inferno-root").apply { mkdirs() }
-        // .extracted-v2 — bumped from v1 when fonts/ was added to the
-        // asset staging (INFR-115). Devices that already extracted at
-        // v1 won't have fonts/ unless they re-extract.
-        val marker = File(root, ".extracted-v2")
-        // Re-extract whenever the installed APK is newer than our last
-        // extraction. Without this, every `adb install -r` (and every
-        // user-side APK upgrade) would leave the previous .dis tree on
-        // disk and silently ignore the new APK's runtime — surfacing as
-        // "I rebuilt and reinstalled but my fix isn't there", and the
-        // only escape was `pm clear`. copyAssetTree overwrites in place,
-        // so user-added files outside the asset tree (e.g. anything
-        // under usr/inferno/) survive.
-        val installTime = try {
-            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
-        } catch (e: Exception) { 0L }
-        if (marker.exists() && marker.lastModified() >= installTime) return
-        copyAssetTree(assets, "inferno-root", root)
-        marker.createNewFile()
-        marker.setLastModified(System.currentTimeMillis())
-    }
-
-    private fun copyAssetTree(am: AssetManager, src: String, dst: File) {
-        val children = am.list(src) ?: emptyArray()
-        if (children.isEmpty()) {
-            dst.parentFile?.mkdirs()
-            am.open(src).use { input ->
-                FileOutputStream(dst).use { output -> input.copyTo(output) }
-            }
-            return
-        }
-        dst.mkdirs()
-        for (child in children) {
-            val childSrc = if (src.isEmpty()) child else "$src/$child"
-            copyAssetTree(am, childSrc, File(dst, child))
-        }
     }
 
     companion object {

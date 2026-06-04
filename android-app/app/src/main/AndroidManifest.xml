@@ -80,9 +80,30 @@
             android:label="@string/app_name" />
 
         <!--
-          Phase 2b.1 (INFR-110) — SDL3-hosted Activity for the
-          Lucifer/wm port. Now the sole launcher icon (relabeled to
-          just "InferNode" since there's no longer two to disambiguate).
+          Launcher splash (InfernodeSplashActivity). The home-screen icon
+          points here; it extracts the ~48 MB asset tree on a background
+          thread, then starts InfernodeSDLActivity. This keeps the heavy
+          first-launch / post-update extraction off the main thread (it used
+          to block InfernodeSDLActivity.onCreate ~2 s, an ANR risk on slower
+          devices). Theme.Black.NoTitleBar → instant black, no white flash.
+        -->
+        <activity
+            android:name=".InfernodeSplashActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@android:style/Theme.Black.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Phase 2b.1 (INFR-110) — SDL3-hosted Activity for the Lucifer/wm
+          port. No longer LAUNCHER-listed (the splash above is the icon), but
+          stays exported so InfernodeSplashActivity, the harness, and the CI
+          smoke test can `am start` it directly — it still calls
+          AssetExtractor itself (a fast no-op once extracted).
 
           Attributes copied from SDL3's android-project AndroidManifest:
             launchMode=singleInstance — SDL3 expects one instance.
@@ -96,10 +117,6 @@
             android:exported="true"
             android:launchMode="singleInstance"
             android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="emu" />

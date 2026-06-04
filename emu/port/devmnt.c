@@ -13,6 +13,16 @@
  * connection.
  */
 
+/*
+ * Max 9P RPC / negotiated msize ceiling. Historically 8K.
+ * INFR-214: a 64K bump was tried and REVERTED — the mnt negotiation handles it
+ * fine, but it BROKE keyring/SSL'd remote mounts (mount -k, e.g. /n/llm): the
+ * mount attaches but the first real RPC fails, because devssl below the mnt
+ * layer can't carry a 64K 9P message (TLS records cap ~16K). Local mcp9p mounts
+ * (no SSL) were unaffected. So raising this alone is NOT enough for SSL'd
+ * mounts — the devssl path needs addressing too. Kept at 8K. See INFR-214 (the
+ * surgical alternative is llmsrv chunk-and-reassemble, which sidesteps msize).
+ */
 #define MAXRPC (IOHDRSZ+8192)
 
 struct Mntrpc
@@ -183,14 +193,14 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	f.tag = NOTAG;
 	f.msize = msize;
 	f.version = v;
-	msg = malloc(8192+IOHDRSZ);
+	msg = malloc(MAXRPC);
 	if(msg == nil)
 		exhausted("version memory");
 	if(waserror()){
 		free(msg);
 		nexterror();
 	}
-	k = convS2M(&f, msg, 8192+IOHDRSZ);
+	k = convS2M(&f, msg, MAXRPC);
 	if(k == 0)
 		error("bad fversion conversion on send");
 
@@ -209,7 +219,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	}
 
 	/* message sent; receive and decode reply */
-	k = devtab[c->type]->read(c, msg, 8192+IOHDRSZ, c->offset);
+	k = devtab[c->type]->read(c, msg, MAXRPC, c->offset);
 	if(k <= 0)
 		error("EOF receiving fversion reply");
 

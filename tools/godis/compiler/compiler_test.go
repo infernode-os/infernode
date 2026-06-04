@@ -2708,6 +2708,19 @@ func findRoot() string {
 	return abs
 }
 
+// ensureInfernoTmp makes sure a writable /tmp exists inside the Inferno
+// namespace. emu is launched with -r<rootDir>, so the Inferno root "/" maps to
+// rootDir on the host and Inferno's "/tmp" is rootDir/tmp. A fresh clone has no
+// such directory, so file-creating programs (e.g. sys_create.go calling
+// sys.Create("/tmp/...")) fail with "'/tmp' file does not exist". Creating it
+// here keeps those tests environment-independent. The directory is .gitignored.
+func ensureInfernoTmp(t *testing.T, rootDir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(rootDir, "tmp"), 0777); err != nil {
+		t.Fatalf("ensure inferno /tmp: %v", err)
+	}
+}
+
 // compileGo compiles a .go file from testdata and returns the path to the .dis file.
 func compileGo(t *testing.T, goFile string) string {
 	t.Helper()
@@ -2813,6 +2826,7 @@ func TestE2EPrograms(t *testing.T) {
 	if rootDir == "" {
 		t.Skip("cannot find Inferno root")
 	}
+	ensureInfernoTmp(t, rootDir)
 
 	// Expected outputs verified by running on emu manually.
 	// Programs with non-deterministic output (goroutines, map iteration) are excluded.

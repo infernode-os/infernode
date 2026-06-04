@@ -129,6 +129,21 @@ go run ./cmd/debug/ hello.dis
 go run ./cmd/ssadump/ testdata/hello.go
 ```
 
+> **The E2E suite needs the emulator.** `TestE2EPrograms` /
+> `TestE2EMultiPackage` compile each `testdata/` program and execute it on
+> `emu/Linux/o.emu`. If that binary is absent (e.g. a fresh clone), those
+> tests **skip silently** and `go test ./...` only exercises the
+> compile/encode unit tests. Build the emulator first from the project root:
+>
+> ```sh
+> ./build-linux-amd64.sh headless    # produces emu/Linux/o.emu
+> ```
+>
+> CI runs the whole suite — including all E2E programs on the emulator — via
+> the `godis` job in `.github/workflows/ci.yml`, which reuses the `o.emu`
+> built by the `linux-amd64` job. A green `godis` job means every program in
+> `testdata/` actually ran on Dis and produced its expected output.
+
 ---
 
 ## Compilation Pipeline
@@ -1278,7 +1293,7 @@ go test ./dis/ -count=1                            # bytecode round-trip tests
 
 ## Status and Limitations
 
-### Supported Go Features (Tiers 1-6)
+### Supported Go Features (Tiers 1-7)
 
 **Tier 1 — Core Language:**
 Variables, constants (`const`/`iota`), arithmetic, comparisons, loops (`for`,

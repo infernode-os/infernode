@@ -8687,7 +8687,13 @@ func (fl *funcLowerer) materialize(v ssa.Value) int32 {
 		switch c.Value.Kind() {
 		case constant.Int:
 			val, _ := constant.Int64Val(c.Value)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(val)), dis.FP(off)))
+			if val >= -0x20000000 && val <= 0x1FFFFFFF {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(val)), dis.FP(off)))
+			} else {
+				// Too large for a 30-bit Dis immediate: load from module data.
+				mpOff := fl.comp.AllocIntWord(val)
+				fl.emit(dis.Inst2(dis.IMOVW, dis.MP(mpOff), dis.FP(off)))
+			}
 		case constant.Float:
 			val, _ := constant.Float64Val(c.Value)
 			mpOff := fl.comp.AllocReal(val)
@@ -8755,9 +8761,12 @@ func (fl *funcLowerer) constOperand(c *ssa.Const) dis.Operand {
 		if val >= -0x20000000 && val <= 0x1FFFFFFF {
 			return dis.Imm(int32(val))
 		}
-		// Large constant: must be stored in a frame slot
+		// Too large for a 30-bit Dis immediate: store the full word in the
+		// module data section and load it with MOVW from MP. (Encoding it as
+		// an immediate — even into a MOVW source — would truncate/corrupt it.)
+		mpOff := fl.comp.AllocIntWord(val)
 		off := fl.frame.AllocWord("")
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(val)), dis.FP(off)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.MP(mpOff), dis.FP(off)))
 		return dis.FP(off)
 	case constant.Float:
 		// Float constants must be materialized (no immediate form)

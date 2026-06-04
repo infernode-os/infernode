@@ -5147,6 +5147,15 @@ func (fl *funcLowerer) emitTruncToLong(src dis.Operand) dis.Operand {
 	return dis.FP(n)
 }
 
+// emitFloatTrunc returns a real operand holding src truncated toward zero
+// (the real-valued counterpart of emitTruncToLong; math.Trunc semantics).
+func (fl *funcLowerer) emitFloatTrunc(src dis.Operand) dis.Operand {
+	n := fl.emitTruncToLong(src)
+	tr := fl.frame.AllocReal("ftrunc")
+	fl.emit(dis.Inst2(dis.ICVTLF, n, dis.FP(tr)))
+	return dis.FP(tr)
+}
+
 // emitFloatFixed formats a float operand as fixed-point text with `prec`
 // fractional digits, matching Go's %.Nf verb. It returns a string operand.
 //

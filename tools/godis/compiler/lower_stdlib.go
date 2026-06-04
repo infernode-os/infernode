@@ -1148,109 +1148,43 @@ func (fl *funcLowerer) lowerMathFloor(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	trunc := fl.frame.AllocWord("")
-	frac := fl.frame.AllocWord("")
-	zeroOff := fl.comp.AllocReal(0.0)
 	oneOff := fl.comp.AllocReal(1.0)
-
-	// trunc = CVTFR(CVTRF(src))  — convert to int then back to float = truncation
-	intSlot := fl.frame.AllocWord("")
-	fl.emit(dis.Inst2(dis.ICVTFR, src, dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(trunc)))
-
-	// if src >= 0 → result = trunc
-	bgefIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
-
-	// src < 0: check if frac != 0
-	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(trunc), src, dis.FP(frac)))
-	beqfIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQF, dis.FP(frac), dis.MP(zeroOff), dis.Imm(0))) // frac==0 → trunc is exact
-
-	// frac != 0: floor = trunc - 1
-	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), dis.FP(trunc), dis.FP(dst)))
-	jmpDoneIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-
-	// positive or exact: dst = trunc
-	posPC := int32(len(fl.insts))
-	fl.insts[bgefIdx].Dst = dis.Imm(posPC)
-	fl.insts[beqfIdx].Dst = dis.Imm(posPC)
-	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(trunc), dis.FP(dst)))
-
-	donePC := int32(len(fl.insts))
-	fl.insts[jmpDoneIdx].Dst = dis.Imm(donePC)
+	// tr = trunc(src) (toward zero). floor == trunc except for negative
+	// non-integers, where trunc overshoots up by one (tr > src) → tr - 1.
+	tr := fl.emitFloatTrunc(src)
+	fl.emit(dis.Inst2(dis.IMOVF, tr, dis.FP(dst)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLEF, tr, src, dis.Imm(0))) // if tr <= src, done
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), tr, dis.FP(dst)))
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	return nil
 }
 
-// lowerMathCeil: ceil(x) = trunc(x) if x <= 0, else trunc(x)+1 if frac != 0.
+// lowerMathCeil: ceil(x) == trunc(x) except for positive non-integers, where
+// trunc undershoots (tr < x) → tr + 1.
 func (fl *funcLowerer) lowerMathCeil(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	trunc := fl.frame.AllocWord("")
-	frac := fl.frame.AllocWord("")
-	zeroOff := fl.comp.AllocReal(0.0)
 	oneOff := fl.comp.AllocReal(1.0)
-
-	intSlot := fl.frame.AllocWord("")
-	fl.emit(dis.Inst2(dis.ICVTFR, src, dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(trunc)))
-
-	// if src <= 0 → result = trunc
-	blefIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBLEF, src, dis.MP(zeroOff), dis.Imm(0)))
-
-	// src > 0: check frac
-	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(trunc), src, dis.FP(frac)))
-	beqfIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQF, dis.FP(frac), dis.MP(zeroOff), dis.Imm(0)))
-
-	// frac != 0: ceil = trunc + 1
-	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), dis.FP(trunc), dis.FP(dst)))
-	jmpDoneIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-
-	negPC := int32(len(fl.insts))
-	fl.insts[blefIdx].Dst = dis.Imm(negPC)
-	fl.insts[beqfIdx].Dst = dis.Imm(negPC)
-	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(trunc), dis.FP(dst)))
-
-	donePC := int32(len(fl.insts))
-	fl.insts[jmpDoneIdx].Dst = dis.Imm(donePC)
+	tr := fl.emitFloatTrunc(src)
+	fl.emit(dis.Inst2(dis.IMOVF, tr, dis.FP(dst)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, tr, src, dis.Imm(0))) // if tr >= src, done
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), tr, dis.FP(dst)))
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	return nil
 }
 
-// lowerMathRound: round to nearest, ties away from zero.
+// lowerMathRound: round to nearest, ties away from zero. CVTFL already rounds
+// half-away-from-zero, so Round(x) == (real)(long)x.
 func (fl *funcLowerer) lowerMathRound(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	halfOff := fl.comp.AllocReal(0.5)
-	zeroOff := fl.comp.AllocReal(0.0)
-	tmp := fl.frame.AllocWord("")
-	intSlot := fl.frame.AllocWord("")
-
-	// if src >= 0: round = floor(src + 0.5)
-	bgefIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
-
-	// src < 0: round = ceil(src - 0.5)
-	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(halfOff), src, dis.FP(tmp)))
-	fl.emit(dis.Inst2(dis.ICVTFR, dis.FP(tmp), dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(dst)))
-	jmpDoneIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-
-	// src >= 0
-	posPC := int32(len(fl.insts))
-	fl.insts[bgefIdx].Dst = dis.Imm(posPC)
-	fl.emit(dis.NewInst(dis.IADDF, dis.MP(halfOff), src, dis.FP(tmp)))
-	fl.emit(dis.Inst2(dis.ICVTFR, dis.FP(tmp), dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(dst)))
-
-	donePC := int32(len(fl.insts))
-	fl.insts[jmpDoneIdx].Dst = dis.Imm(donePC)
+	n := fl.frame.AllocReal("round.long")
+	fl.emit(dis.Inst2(dis.ICVTFL, src, dis.FP(n)))
+	fl.emit(dis.Inst2(dis.ICVTLF, dis.FP(n), dis.FP(dst)))
 	return nil
 }
 
@@ -1259,9 +1193,8 @@ func (fl *funcLowerer) lowerMathTrunc(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	intSlot := fl.frame.AllocWord("")
-	fl.emit(dis.Inst2(dis.ICVTFR, src, dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(dst)))
+	tr := fl.emitFloatTrunc(src)
+	fl.emit(dis.Inst2(dis.IMOVF, tr, dis.FP(dst)))
 	return nil
 }
 

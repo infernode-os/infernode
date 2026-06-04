@@ -2931,6 +2931,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"stack_zero.go", "4\n10\n"},
 		{"heap_zero.go", "1 7 0\n"},
 		{"float_to_int.go", "3\n3\n3\n-3\n-3\n2\n5\n0\n0\n"},
+		{"math_round.go", "3 4 3 4\n3 4 3 3\n-4 -3 -3 -4\n-4 -3 -3 -3\n5 5 5 5\n2 3 2 3\n-3 -2 -2 -3\n0 1 0 0\n"},
 		{"panic_int.go", "recovered\n"},
 		{"defer_args.go", "20\n10\n"},
 

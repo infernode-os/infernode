@@ -734,12 +734,12 @@ func main() {
 		t.Fatalf("compile: %v", err)
 	}
 
-	// Must have INEW for heap allocation
+	// Must have INEW/INEWZ for heap allocation
 	hasNew := false
 	// Must have CALL for newPoint
 	hasCall := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.INEW {
+		if inst.Op == dis.INEW || inst.Op == dis.INEWZ {
 			hasNew = true
 		}
 		if inst.Op == dis.ICALL {
@@ -936,10 +936,10 @@ func main() {
 		t.Errorf("CALL count = %d, want 4 (3x Inc + 1x Get)", callCount)
 	}
 
-	// Must have INEW for heap-allocated Counter
+	// Must have INEW/INEWZ for heap-allocated Counter
 	hasNew := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.INEW {
+		if inst.Op == dis.INEW || inst.Op == dis.INEWZ {
 			hasNew = true
 		}
 	}
@@ -2928,6 +2928,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"float_fmt.go", "3.14\n4\n1.500000\n-2.500\n1.00\n0.0001\n123456.79\n0.00\n1234.500000\n1000000.50\n[   -3.14]\n[00003.10]\n"},
 		{"strconv_float.go", "3.14\n1.5000\n123.5\n0.125\n-9.99\n"},
 		{"stack_zero.go", "4\n10\n"},
+		{"heap_zero.go", "1 7 0\n"},
 		{"panic_int.go", "recovered\n"},
 		{"defer_args.go", "20\n10\n"},
 

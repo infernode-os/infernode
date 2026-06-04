@@ -572,8 +572,8 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 			inst := &cf.result.insts[i]
 
 			// Patch call-site type descriptor IDs
-			// IFRAME/INEW: TD ID is in src operand
-			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW) && inst.Src.Mode == dis.AIMM {
+			// IFRAME/INEW/INEWZ: TD ID is in src operand
+			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW || inst.Op == dis.INEWZ) && inst.Src.Mode == dis.AIMM {
 				inst.Src.Val += int32(callTDOffset)
 			}
 			// NEWA: element TD ID is in mid operand

@@ -1364,18 +1364,15 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
 5. **No cgo.** Cannot call C functions.
 6. **Single-binary output.** All packages are inlined into one `.dis` file;
    no incremental/separate compilation.
-7. **Zero-initialization of aggregates.** SSA `Alloc` yields zero-initialized
-   storage. For **stack-allocated** aggregates (e.g. a local `[N]T` whose
-   address does not escape) the scalar slots are now explicitly zeroed
-   (`emitZeroStackSlots`), so unwritten elements/fields read back as 0.
-   **Heap-allocated** aggregates (escaping values, emitted as `INEW`) still
-   only get their GC-pointer slots initialized to `H`; unwritten *scalar*
-   fields retain whatever the reused heap block held. The zeroing `INEWZ`
-   opcode would fix this but currently destabilizes the collector because
-   godis's heap type descriptors do not mark every pointer slot accurately
-   (memset-to-0 then leaves a slot the GC treats as a pointer holding 0
-   instead of `H` = `(void*)-1`). Making heap type descriptors exact, then
-   switching to `INEWZ`, is tracked as future work.
+7. **Zero-initialization of aggregates** (fixed). SSA `Alloc` yields
+   zero-initialized storage, and both allocation paths now honor it.
+   Stack-allocated aggregates (e.g. a local `[N]T` whose address does not
+   escape) zero their scalar slots explicitly (`emitZeroStackSlots`).
+   Heap-allocated aggregates use the zeroing `INEWZ` opcode instead of `INEW`,
+   so unwritten scalar fields read back as 0 and pointer fields as nil even
+   when the reused heap block held stale data. (The Phase-4 type-descriptor
+   patcher had to learn `INEWZ` as well — otherwise its type index is left
+   unrelocated and the VM reads a garbage `Type*`.)
 8. **Standard library is stub-only.** The 12+ intercepted stdlib packages
    provide type signatures for compilation but implementations are inlined
    as Dis instruction sequences, not full Go stdlib implementations.

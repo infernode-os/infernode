@@ -515,19 +515,16 @@ func (fl *funcLowerer) lowerHeapAlloc(instr *ssa.Alloc) error {
 	ptrSlot := fl.frame.AllocPointer("heap:" + instr.Name())
 	fl.valueMap[instr] = ptrSlot
 
-	// Emit INEW $tdLocalIdx, dst(fp)
 	// The local index is patched by Phase 4 to a global TD ID.
 	//
-	// NB: INEW only initializes GC-pointer slots (to H) per the type
-	// descriptor; scalar fields keep whatever the reused heap block held.
-	// That violates SSA Alloc's zero-init guarantee for escaping aggregates
-	// with unwritten scalar fields. The zeroing variant (INEWZ) would fix
-	// it, but flipping to it currently segfaults the GC because godis's
-	// heap type descriptors don't mark every pointer slot accurately, so
-	// memset-to-0 leaves a slot the collector treats as a pointer holding 0
-	// instead of H ((void*)-1). Fixing that descriptor accuracy is tracked
-	// separately; see "Known Limitations" in the README.
-	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(tdLocalIdx)), dis.FP(ptrSlot)))
+	// Use INEWZ (zeroing new), not INEW. Plain INEW initializes only the
+	// GC-pointer slots (to H) per the type descriptor and leaves scalar
+	// fields holding whatever the reused heap block contained, which violates
+	// SSA Alloc's zero-initialization guarantee — e.g. `new(S)` where S has
+	// int fields that are never assigned would read garbage. INEWZ additionally
+	// memsets the object to 0 before the pointer slots are set to H, so scalar
+	// fields read as 0 and pointer fields as nil, matching Go's zero value.
+	fl.emit(dis.Inst2(dis.INEWZ, dis.Imm(int32(tdLocalIdx)), dis.FP(ptrSlot)))
 
 	return nil
 }

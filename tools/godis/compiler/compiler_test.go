@@ -3085,6 +3085,8 @@ func TestE2EPrograms(t *testing.T) {
 		// builtin print concatenates with no separator/newline; println spaces
 		// and newlines (print used to add a newline, masking fallthrough).
 		{"print_builtin.go", "123\nabc\n1x2true\n1 2 3\nx y\none two two \n"},
+		// strconv.Quote escapes control/quote/backslash chars.
+		{"strconv_quote.go", "\"hi\\there\"\n\"line1\\nline2\"\n\"a\\\"b\\\\c\"\n\"plain text\"\n\"tab\\tand\\rreturn\"\n"},
 	}
 
 	for _, tt := range tests {

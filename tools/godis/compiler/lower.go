@@ -2104,13 +2104,7 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Quote":
-		src := fl.operandOf(instr.Call.Args[0])
-		dst := fl.slotOf(instr)
-		quoteMP := fl.comp.AllocString("\"")
-		tmp := fl.frame.AllocTemp(true)
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(tmp), dis.FP(tmp)))
-		fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(tmp), dis.FP(dst)))
+		fl.emitQuoteString(fl.operandOf(instr.Call.Args[0]), fl.slotOf(instr))
 		return true, nil
 	case "Unquote":
 		src := fl.operandOf(instr.Call.Args[0])
@@ -8315,6 +8309,55 @@ func isFloatType(t types.Type) bool {
 func isStringType(t types.Type) bool {
 	b, ok := t.(*types.Basic)
 	return ok && b.Kind() == types.String
+}
+
+// emitQuoteString implements strconv.Quote: write to FP(dst) the input string
+// wrapped in double quotes with the common escapes applied (\\ \" \t \n \r).
+// Other characters pass through verbatim (Go additionally escapes
+// non-printable bytes as \x.., which is not reproduced here).
+func (fl *funcLowerer) emitQuoteString(sOp dis.Operand, dst int32) {
+	n := fl.frame.AllocWord("q.n")
+	i := fl.frame.AllocWord("q.i")
+	i1 := fl.frame.AllocWord("q.i1")
+	c := fl.frame.AllocWord("q.c")
+	piece := fl.frame.AllocTemp(true)
+	quoteMP := fl.comp.AllocString("\"")
+
+	specials := []struct {
+		ch  int32
+		esc string
+	}{
+		{'\\', "\\\\"}, {'"', "\\\""}, {'\t', "\\t"}, {'\n', "\\n"}, {'\r', "\\r"},
+	}
+
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(quoteMP), dis.FP(dst))) // result = "\""
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(n)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(c)))
+
+	for _, sp := range specials {
+		escMP := fl.comp.AllocString(sp.esc)
+		skip := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm(sp.ch), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IADDC, dis.MP(escMP), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		fl.insts[skip].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+	// default: copy the character verbatim
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i1)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(i1), dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(piece), dis.FP(dst), dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(quoteMP), dis.FP(dst), dis.FP(dst)))
 }
 
 func isByteSlice(t types.Type) bool {

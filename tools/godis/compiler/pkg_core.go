@@ -2871,16 +2871,19 @@ func buildIOPackage() *types.Package {
 			false)))
 
 	// func MultiReader(readers ...Reader) Reader
+	// A variadic parameter's type is a slice ([]Reader); passing the interface
+	// type directly makes go/types panic ("want variadic parameter with
+	// unnamed slice type ... as core type").
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MultiReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "readers", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "readers", types.NewSlice(readerType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
 			true)))
 
 	// func MultiWriter(writers ...Writer) Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MultiWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "writers", writerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "writers", types.NewSlice(writerType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerType)),
 			true)))
 

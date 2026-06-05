@@ -3055,6 +3055,9 @@ func TestE2EPrograms(t *testing.T) {
 		{"fmt_ext.go", "hello\nworld\n"},
 		// os.ReadFile no longer faults: its nil []byte result is H, not 0.
 		{"os_ext.go", "os ok\n"},
+		// Importing io no longer panics the compiler (MultiReader/MultiWriter
+		// variadic signatures were malformed).
+		{"io_pkg.go", "io ok\n"},
 	}
 
 	for _, tt := range tests {

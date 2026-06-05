@@ -3391,10 +3391,13 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return true, nil
 	case "ReadFile":
 		// os.ReadFile(name) → ([]byte, error)
-		// Stub: return empty byte slice and nil error
+		// Stub: return nil byte slice and nil error. The slice is a GC-traced
+		// pointer slot, so it must be H (-1) — writing 0 makes the frame's
+		// destroy decref a bogus pointer and fault. The error is a nil
+		// interface (tag/val both 0).
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))          // nil slice
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))         // nil slice (H)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))   // error tag
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd))) // error val
 		return true, nil
@@ -3449,9 +3452,9 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "Environ":
-		// os.Environ() → nil slice
+		// os.Environ() → nil slice (H, not 0, so destroy doesn't fault)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "IsNotExist", "IsExist", "IsPermission":
 		// os.IsNotExist(err) → false
@@ -3545,10 +3548,10 @@ func (fl *funcLowerer) lowerOsCall(instr *ssa.Call, callee *ssa.Function) (bool,
 		return true, nil
 	case "ReadDir":
 		// os.ReadDir(name) → ([]DirEntry, error)
-		// Stub: return nil slice and nil error
+		// Stub: return nil slice (H) and nil error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))        // nil slice (H)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil

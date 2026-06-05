@@ -2661,15 +2661,15 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		return true, nil
 
 	case "Join":
-		// bytes.Join(s [][]byte, sep []byte) []byte — stub returns nil
+		// bytes.Join(s [][]byte, sep []byte) []byte — stub returns nil (H)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 
 	case "Split":
-		// bytes.Split(s, sep []byte) [][]byte — stub returns nil slice
+		// bytes.Split(s, sep []byte) [][]byte — stub returns nil slice (H)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 
 	case "Replace", "ReplaceAll":
@@ -5403,10 +5403,10 @@ func (fl *funcLowerer) lowerOsSignalCall(instr *ssa.Call, callee *ssa.Function) 
 func (fl *funcLowerer) lowerIOUtilCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "ReadFile":
-		// Same as os.ReadFile stub
+		// Same as os.ReadFile stub: nil slice must be H (-1), not 0.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -5418,9 +5418,10 @@ func (fl *funcLowerer) lowerIOUtilCall(instr *ssa.Call, callee *ssa.Function) (b
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "ReadAll":
+		// (nil []byte, nil error): nil slice must be H (-1), not 0.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil

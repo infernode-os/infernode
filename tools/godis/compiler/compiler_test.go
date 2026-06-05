@@ -3053,6 +3053,8 @@ func TestE2EPrograms(t *testing.T) {
 		// fmt.Sprint/Print now unwrap the variadic []any slice (were printing
 		// the slice pointer as a number).
 		{"fmt_ext.go", "hello\nworld\n"},
+		// os.ReadFile no longer faults: its nil []byte result is H, not 0.
+		{"os_ext.go", "os ok\n"},
 	}
 
 	for _, tt := range tests {

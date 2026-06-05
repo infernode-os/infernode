@@ -6212,24 +6212,15 @@ func (fl *funcLowerer) lowerReturn(instr *ssa.Return) error {
 				off := fl.materialize(result)
 				fieldOff := int32(0)
 				for i := 0; i < st.NumFields(); i++ {
-					fdt := GoTypeToDis(st.Field(i).Type())
-					if fdt.IsPtr {
-						fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off+fieldOff), dis.FPInd(regretOff, retOff+fieldOff)))
-					} else {
-						fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off+fieldOff), dis.FPInd(regretOff, retOff+fieldOff)))
-					}
-					fieldOff += fdt.Size
+					ft := st.Field(i).Type()
+					fl.emitValueMove(dis.FP(off+fieldOff), dis.FPInd(regretOff, retOff+fieldOff), ft)
+					fieldOff += GoTypeToDis(ft).Size
 				}
 				retOff += GoTypeToDis(st).Size
 			} else {
 				off := fl.materialize(result)
-				dt := GoTypeToDis(result.Type())
-				if dt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(off), dis.FPInd(regretOff, retOff)))
-				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(off), dis.FPInd(regretOff, retOff)))
-				}
-				retOff += dt.Size
+				fl.emitValueMove(dis.FP(off), dis.FPInd(regretOff, retOff), result.Type())
+				retOff += GoTypeToDis(result.Type()).Size
 			}
 		}
 	}
@@ -6345,12 +6336,7 @@ func (fl *funcLowerer) emitPhiMoves(from, to *ssa.BasicBlock) {
 			}
 		} else {
 			src := fl.operandOf(phi.Edges[edgeIdx])
-			dt := GoTypeToDis(phi.Type())
-			if dt.IsPtr {
-				fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(dst)))
-			} else {
-				fl.emit(dis.Inst2(dis.IMOVW, src, dis.FP(dst)))
-			}
+			fl.emitValueMove(src, dis.FP(dst), phi.Type())
 		}
 	}
 }

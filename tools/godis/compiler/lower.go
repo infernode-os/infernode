@@ -5566,21 +5566,13 @@ func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
 
 	// Materialize all arguments
 	type goArgInfo struct {
-		off     int32
-		isPtr   bool
-		isIface bool
-		st      *types.Struct
+		off int32
+		typ types.Type
 	}
 	var args []goArgInfo
 	for _, arg := range call.Args {
 		off := fl.materialize(arg)
-		dt := GoTypeToDis(arg.Type())
-		var st *types.Struct
-		if s, ok := arg.Type().Underlying().(*types.Struct); ok {
-			st = s
-		}
-		_, isIface := arg.Type().Underlying().(*types.Interface)
-		args = append(args, goArgInfo{off, dt.IsPtr, isIface, st})
+		args = append(args, goArgInfo{off, arg.Type()})
 	}
 
 	// Allocate callee frame slot
@@ -5601,29 +5593,7 @@ func (fl *funcLowerer) lowerGo(instr *ssa.Go) error {
 	}
 
 	for _, arg := range args {
-		if arg.isIface {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
-			calleeOff += 2 * iby2wd
-		} else if arg.st != nil {
-			fieldOff := int32(0)
-			for i := 0; i < arg.st.NumFields(); i++ {
-				fdt := GoTypeToDis(arg.st.Field(i).Type())
-				if fdt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
-				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
-				}
-				fieldOff += fdt.Size
-			}
-			calleeOff += GoTypeToDis(arg.st).Size
-		} else if arg.isPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += iby2wd
-		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += iby2wd
-		}
+		calleeOff += fl.emitArgCopy(arg.typ, arg.off, callFrame, calleeOff)
 	}
 
 	// SPAWN callFrame(fp), $targetPC (instead of CALL)
@@ -6019,21 +5989,13 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 
 	// Materialize all arguments first (may emit instructions for constants)
 	type argInfo struct {
-		off     int32
-		isPtr   bool
-		isIface bool          // true if interface type (2 words)
-		st      *types.Struct // non-nil if this is a struct value argument
+		off int32
+		typ types.Type
 	}
 	var args []argInfo
 	for _, arg := range call.Args {
 		off := fl.materialize(arg)
-		dt := GoTypeToDis(arg.Type())
-		var st *types.Struct
-		if s, ok := arg.Type().Underlying().(*types.Struct); ok {
-			st = s
-		}
-		_, isIface := arg.Type().Underlying().(*types.Interface)
-		args = append(args, argInfo{off, dt.IsPtr, isIface, st})
+		args = append(args, argInfo{off, arg.Type()})
 	}
 
 	// Allocate callee frame slot (NOT a GC pointer - stack allocated, stale after return)
@@ -6044,34 +6006,9 @@ func (fl *funcLowerer) lowerDirectCall(instr *ssa.Call, callee *ssa.Function) er
 	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
 
 	// Set arguments in callee frame (args start at MaxTemp = 64)
-	iby2wd := int32(dis.IBY2WD)
 	calleeOff := int32(dis.MaxTemp)
 	for _, arg := range args {
-		if arg.isIface {
-			// Interface argument: copy 2 words (tag + value)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+iby2wd), dis.FPInd(callFrame, calleeOff+iby2wd)))
-			calleeOff += 2 * iby2wd
-		} else if arg.st != nil {
-			// Struct argument: multi-word copy
-			fieldOff := int32(0)
-			for i := 0; i < arg.st.NumFields(); i++ {
-				fdt := GoTypeToDis(arg.st.Field(i).Type())
-				if fdt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
-				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off+fieldOff), dis.FPInd(callFrame, calleeOff+fieldOff)))
-				}
-				fieldOff += fdt.Size
-			}
-			calleeOff += GoTypeToDis(arg.st).Size
-		} else if arg.isPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += iby2wd
-		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.off), dis.FPInd(callFrame, calleeOff)))
-			calleeOff += iby2wd
-		}
+		calleeOff += fl.emitArgCopy(arg.typ, arg.off, callFrame, calleeOff)
 	}
 
 	// Set up REGRET if function returns a value
@@ -8790,6 +8727,48 @@ func (fl *funcLowerer) constOperand(c *ssa.Const) dis.Operand {
 	default:
 		return dis.Imm(0)
 	}
+}
+
+// emitValueMove copies a single scalar/pointer value of Go type t from src to
+// dst. It is the single seam through which Phase 2 of the int64 plan will widen
+// 8-byte integer moves (see docs/int64-plan.md). Today it dispatches
+// pointer-vs-word exactly as the prior inline `if IsPtr {MOVP} else {MOVW}`
+// sites did, so routing those sites through it is a behavior-preserving
+// refactor that keeps the E2E suite byte-for-byte identical.
+func (fl *funcLowerer) emitValueMove(src, dst dis.Operand, t types.Type) {
+	if GoTypeToDis(t).IsPtr {
+		fl.emit(dis.Inst2(dis.IMOVP, src, dst))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, src, dst))
+	}
+}
+
+// emitArgCopy copies an argument value of Go type t from FP(srcOff) into a
+// callee frame at FPInd(frame, dstOff), returning the number of bytes the
+// destination offset advances. It centralizes the interface (2-word), struct
+// (per-field), and scalar dispatch that was duplicated across the call/spawn
+// marshaling loops; scalar and struct-field leaves go through emitValueMove so
+// the int64 widening only has to change one place. Behavior is identical to the
+// prior inline code.
+func (fl *funcLowerer) emitArgCopy(t types.Type, srcOff, frame, dstOff int32) int32 {
+	iby2wd := int32(dis.IBY2WD)
+	u := t.Underlying()
+	if _, isIface := u.(*types.Interface); isIface {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff), dis.FPInd(frame, dstOff)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcOff+iby2wd), dis.FPInd(frame, dstOff+iby2wd)))
+		return 2 * iby2wd
+	}
+	if st, ok := u.(*types.Struct); ok {
+		fieldOff := int32(0)
+		for i := 0; i < st.NumFields(); i++ {
+			ft := st.Field(i).Type()
+			fl.emitValueMove(dis.FP(srcOff+fieldOff), dis.FPInd(frame, dstOff+fieldOff), ft)
+			fieldOff += GoTypeToDis(ft).Size
+		}
+		return GoTypeToDis(st).Size
+	}
+	fl.emitValueMove(dis.FP(srcOff), dis.FPInd(frame, dstOff), t)
+	return iby2wd
 }
 
 func (fl *funcLowerer) arithOp(intOp, floatOp, stringOp dis.Op, basic *types.Basic) dis.Op {

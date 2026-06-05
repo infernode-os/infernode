@@ -3058,6 +3058,9 @@ func TestE2EPrograms(t *testing.T) {
 		// Importing io no longer panics the compiler (MultiReader/MultiWriter
 		// variadic signatures were malformed).
 		{"io_pkg.go", "io ok\n"},
+		// Generics: type-parameter funcs (Min/Max/Contains/Map), comparable,
+		// any, and generic structs all work. Floats print godis-style.
+		{"generics.go", "3\n1.5\nabc\n5\n2.5\nfound 3\nno 9\n2\n10\n"},
 	}
 
 	for _, tt := range tests {

@@ -6549,10 +6549,13 @@ func (fl *funcLowerer) lowerArrayToSlice(instr *ssa.Slice, arrType *types.Array)
 	_, isStack := fl.allocBase[instr.X]
 
 	if !isStack {
-		// Heap array: already a Dis Array, just copy the pointer
+		// Heap array: already a Dis Array, copy the pointer then apply the
+		// slice bounds. Skipping the bounds made make([]T, len, cap) — which
+		// go/ssa lowers to `alloc [cap]T; slice[:len]` — report cap as len.
 		srcSlot := fl.slotOf(instr.X)
 		dstSlot := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FP(dstSlot)))
+		fl.emitArraySliceBounds(instr, dstSlot)
 		return nil
 	}
 
@@ -6582,11 +6585,35 @@ func (fl *funcLowerer) lowerArrayToSlice(instr *ssa.Slice, arrType *types.Array)
 		}
 	}
 
+	fl.emitArraySliceBounds(instr, dstSlot)
 	return nil
 }
 
 // lowerSliceSubSlice handles s[low:high] on a slice type using SLICEA.
 // SLICEA: src=start, mid=end, dst=array (modifies dst in-place)
+// emitArraySliceBounds applies a slice expression's [low:high] bounds to the
+// Dis array already in dstSlot (via SLICEA), so the result's length is high-low
+// rather than the full backing-array size. A trivial full slice ([:]) is a
+// no-op.
+func (fl *funcLowerer) emitArraySliceBounds(instr *ssa.Slice, dstSlot int32) {
+	if instr.Low == nil && instr.High == nil {
+		return
+	}
+	lowOp := dis.Operand(dis.Imm(0))
+	if instr.Low != nil {
+		lowOp = fl.operandOf(instr.Low)
+	}
+	var highOp dis.Operand
+	if instr.High != nil {
+		highOp = fl.operandOf(instr.High)
+	} else {
+		lenSlot := fl.frame.AllocWord("aslice.len")
+		fl.emit(dis.Inst2(dis.ILENA, dis.FP(dstSlot), dis.FP(lenSlot)))
+		highOp = dis.FP(lenSlot)
+	}
+	fl.emit(dis.NewInst(dis.ISLICEA, lowOp, highOp, dis.FP(dstSlot)))
+}
+
 func (fl *funcLowerer) lowerSliceSubSlice(instr *ssa.Slice) error {
 	srcSlot := fl.materialize(instr.X)
 	dstSlot := fl.slotOf(instr)

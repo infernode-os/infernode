@@ -3069,6 +3069,9 @@ func TestE2EPrograms(t *testing.T) {
 		// path.Clean / filepath.Clean: lexical . and .. resolution.
 		{"path_clean.go", "/a/c\na/b/c\n.\n/\nc\n/a/b\n..\n../a\n/a\n/a/d\nx\nx\n/\n/\na/b/c\n"},
 		{"filepath_pkg.go", "baz.txt\n/foo/bar\n.txt\n/foo/baz\nfoo/bar/baz\nabs\nrel\n"},
+		// make([]T, len, cap) with len != cap honors the length, so append
+		// writes at the right position.
+		{"slice_make_cap.go", "3\n3 0\n0\n6 0 25\ntrue\n3 0 9\n"},
 	}
 
 	for _, tt := range tests {

@@ -3896,33 +3896,13 @@ func (fl *funcLowerer) lowerFilepathClean(instr *ssa.Call) (bool, error) {
 	return true, nil
 }
 
-// lowerFilepathJoin concatenates path elements with "/".
+// lowerFilepathJoin concatenates path elements with "/". On Inferno's
+// forward-slash paths this is identical to path.Join, so reuse that lowering —
+// it iterates the variadic []string slice at runtime. (The previous version
+// treated the single []string slice argument as a string, concatenating its
+// pointer and faulting when the result was used.)
 func (fl *funcLowerer) lowerFilepathJoin(instr *ssa.Call) (bool, error) {
-	// filepath.Join is variadic, but SSA passes a slice.
-	// For now, handle the common case of 2-3 literal string args.
-	args := instr.Call.Args
-	if len(args) == 0 {
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		return true, nil
-	}
-
-	dst := fl.slotOf(instr)
-	slashOff := fl.comp.AllocString("/")
-
-	// Start with first argument
-	first := fl.operandOf(args[0])
-	fl.emit(dis.Inst2(dis.IMOVP, first, dis.FP(dst)))
-
-	// Concatenate remaining with "/" separator
-	for idx := 1; idx < len(args); idx++ {
-		fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(dst), dis.FP(dst)))
-		argOp := fl.operandOf(args[idx])
-		fl.emit(dis.NewInst(dis.IADDC, argOp, dis.FP(dst), dis.FP(dst)))
-	}
-
-	return true, nil
+	return fl.lowerPathJoin(instr)
 }
 
 // lowerFilepathIsAbs returns whether path is absolute (starts with '/').

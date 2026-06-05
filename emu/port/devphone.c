@@ -29,7 +29,7 @@
  *     "hangup\n"        (where supported)
  *
  * msg9p's `sms` MsgSrc (separate module) reads /phone/sms and forwards
- * incoming messages into /n/msg/notify so Veltro gets unified alerts;
+ * incoming messages into /mnt/msg/notify so Veltro gets unified alerts;
  * this device only owns the device-level surface.
  */
 

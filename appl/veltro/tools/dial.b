@@ -11,7 +11,7 @@ implement ToolDial;
 #   macOS:    logging stub (no cellular radio)
 #
 # Call state notifications (connected / disconnected) arrive on
-# /phone/phone reads — surfaced unified to all agents via /n/msg/notify
+# /phone/phone reads — surfaced unified to all agents via /mnt/msg/notify
 # through the phone-events MsgSrc.
 #
 # Usage:

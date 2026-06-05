@@ -614,7 +614,7 @@ inbox API), so on iOS this watcher idles. To exercise it without
 inbound SMS:
 
 ```
-; echo 'send sms +447700900100' > /n/msg/ctl
+; echo 'send sms +447700900100' > /mnt/msg/ctl
 < body line here
 ```
 

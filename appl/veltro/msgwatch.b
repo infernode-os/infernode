@@ -3,10 +3,10 @@ implement Msgwatch;
 #
 # msgwatch - Message notification watcher daemon for Veltro
 #
-# Thin relay between /n/msg/notify and the Meta Agent.
+# Thin relay between /mnt/msg/notify and the Meta Agent.
 #
 # Lucifer mode (when /n/ui is mounted):
-#   Reads blocking notifications from /n/msg/notify.
+#   Reads blocking notifications from /mnt/msg/notify.
 #   Writes each notification to /n/ui/activity/0/conversation/input
 #   so the Meta Agent receives and classifies it.
 #
@@ -91,10 +91,10 @@ init(nil: ref Draw->Context, args: list of string)
 # Lucifer mode: relay notifications to Meta Agent conversation
 luciferloop(inputpath: string)
 {
-	notifypath := "/n/msg/notify";
+	notifypath := "/mnt/msg/notify";
 
 	for(;;) {
-		# Blocking read on /n/msg/notify
+		# Blocking read on /mnt/msg/notify
 		notifyfd := sys->open(notifypath, Sys->OREAD);
 		if(notifyfd == nil) {
 			log("cannot open " + notifypath + ", retrying in 5s");
@@ -168,7 +168,7 @@ headlessloop()
 		fatal("cannot open " + askpath);
 	}
 
-	notifypath := "/n/msg/notify";
+	notifypath := "/mnt/msg/notify";
 
 	for(;;) {
 		notifyfd := sys->open(notifypath, Sys->OREAD);

@@ -83,8 +83,8 @@ if {! ~ $skiplogon 1} {
 /dis/veltro/wallet9p.dis >[2] /dev/null &
 sleep 1
 
-# Message layer — msg9p mounts /n/msg and aggregates Notifications from
-# every registered MsgSrc into /n/msg/notify, which lucibridge / agents
+# Message layer — msg9p mounts /mnt/msg and aggregates Notifications from
+# every registered MsgSrc into /mnt/msg/notify, which lucibridge / agents
 # block-read for unified inbound alerts (mail, sms, …). Register the
 # sources we ship by default; failures here are non-fatal (the source's
 # own init() returns an error if the backing channel isn't available,
@@ -92,7 +92,7 @@ sleep 1
 # mount/register failures surface in the console.
 /dis/veltro/msg9p.dis &
 sleep 1
-echo 'register sms /dis/veltro/sources/sms.dis' > /n/msg/ctl
+echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
 # GUI services
 luciuisrv

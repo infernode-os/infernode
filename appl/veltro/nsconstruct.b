@@ -184,26 +184,24 @@ restrictns(caps: ref Capabilities): string
 	# 4-5. Restrict /n to explicitly granted entries only.
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
-	#   /n/llm    — always granted (core agent service; withheld = non-functional)
 	#   /n/speech — "/n/speech" in caps.paths
 	#   /n/git    — "/n/git" in caps.paths
 	#   /n/wallet — "/n/wallet" in caps.paths
 	#   /n/ui     — "present" in caps.tools
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
+	# NB: the LLM is no longer a /n entry. llm9p's schema is ours, so it lives at
+	# /mnt/llm (docs/NAMESPACE-LAYOUT.md, INFR-254); its always-grant moved into
+	# the uniform /mnt machinery (step 5b). /n no longer special-cases the agent's
+	# core service — it collapses to genuine foreign imports.
 	(nok, nil) := sys->stat("/n");
 	if(nok >= 0) {
 		nallow: list of string;
 		uiok := -1;
 
-		# /n/llm — always granted (core LLM access)
-		(llmok, nil) := sys->stat("/n/llm");
-		if(llmok >= 0)
-			nallow = "llm" :: nallow;
-
-		# NB: MCP providers (mc9p, mcp9p adapters) now mount under /mnt/mcp, not
-		# /n — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). The
-		# /mnt grant is handled in step 5b below, not here.
+		# MCP providers (mc9p, mcp9p adapters) and the LLM (llm9p) mount under
+		# /mnt — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). All
+		# /mnt grants are handled in step 5b below, not here.
 
 		# /n/speech — only if explicitly granted via caps.paths
 		if(inlist("/n/speech", caps.paths)) {
@@ -289,6 +287,17 @@ restrictns(caps: ref Capabilities): string
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && mntpaths == nil)
 		mntpaths = "mcp" :: nil;	# whole /mnt/mcp for generic mc9p
+	# /mnt/llm — the agent's core LLM service. Always granted if present, which
+	# preserves the old /mnt/llm always-grant semantics ("withheld = non-functional")
+	# but now inside the SAME /mnt capability machinery as /mnt/mcp/<server> — no
+	# /n special-case (INFR-254). restrictpath("/mnt", "llm"::…) exposes the whole
+	# /mnt/llm session tree (clone/ask/system/tools/model/usage/compact). Everything
+	# else under /mnt stays strictly caps-driven (least privilege). The agent's
+	# brain is local or a remote tree bound over /mnt/llm — placement is identical
+	# either way (docs/NAMESPACE-LAYOUT.md).
+	(mntllmok, nil) := sys->stat("/mnt/llm");
+	if(mntllmok >= 0 && !inlist("llm", mntpaths))
+		mntpaths = "llm" :: mntpaths;
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
 		if(mntok >= 0) {
@@ -561,12 +570,12 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
-		("/n/llm",    "LLM Service",      "rw"),
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
 		("/n/ui",     "UI Service",       "rw"),
-		# MCP providers live under /mnt/mcp now (application mount point,
-		# docs/NAMESPACE-LAYOUT.md), not /n.
+		# The LLM (llm9p) and MCP providers live under /mnt now — application
+		# mount points, schema is ours (docs/NAMESPACE-LAYOUT.md), not /n.
+		("/mnt/llm",  "LLM Service",      "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 	};
 

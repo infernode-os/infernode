@@ -1,7 +1,7 @@
 # perf-dashboard — InferNode LLM performance dashboard
 #
-# Live view of llmsrv (/n/llm) session activity.  The llm-recorder
-# service samples /n/llm/<id>/usage at 1 Hz into an in-memory ring
+# Live view of llmsrv (/mnt/llm) session activity.  The llm-recorder
+# service samples /mnt/llm/<id>/usage at 1 Hz into an in-memory ring
 # and exposes its snapshot via flat files under /tmp/matrix/llm-recorder
 # (Matrix's per-service outdir convention).  Two display modules
 # read those files:
@@ -9,11 +9,11 @@
 #   - llm-sessions: multi-track Gantt of token-count over time
 #   - llm-context : per-session context-window utilisation bar
 #
-# Requires llmsrv to be running and mounted at /n/llm.
+# Requires llmsrv to be running and mounted at /mnt/llm.
 
 layout vsplit 60 40
 
 top    llm-sessions /tmp/matrix/llm-recorder
 bottom llm-context  /tmp/matrix/llm-recorder
 
-service llm-recorder /n/llm
+service llm-recorder /mnt/llm

@@ -158,11 +158,11 @@ headlessloop()
 		"NOTIFY <brief reason> - for urgent messages needing attention\n\n" +
 		"Then on the next line, if DECLINE/DEFER/NOTIFY, include a suggested reply draft.";
 
-	systempath := "/n/llm/" + sessionid + "/system";
+	systempath := "/mnt/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, systemprompt);
 
 	# Open persistent ask fd
-	askpath := "/n/llm/" + sessionid + "/ask";
+	askpath := "/mnt/llm/" + sessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil) {
 		fatal("cannot open " + askpath);

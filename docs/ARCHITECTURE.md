@@ -17,7 +17,7 @@ Host OS (macOS / Linux / Windows)
 │     │
 │     └── Inferno namespace (rootfs = project root)
 │           │
-│           ├── /n/llm        ← llmsrv (LLM providers as 9P)
+│           ├── /mnt/llm        ← llmsrv (LLM providers as 9P)
 │           ├── /n/ui         ← luciuisrv (GUI state 9P server)
 │           ├── /n/wallet     ← wallet9p (crypto wallet 9P server)
 │           ├── /tool         ← tools9p (39 tool modules as 9P)
@@ -57,8 +57,8 @@ and threat model.
 
 - Source: `appl/cmd/llmsrv.b`; runs inside Inferno emulator
 - Presents LLM providers (Anthropic API or Ollama/OpenAI-compatible) as a 9P file server
-- Self-mounts at `/n/llm`; can also be accessed remotely via 9P dial+mount
-- Session lifecycle: clone from `/n/llm/new` → session directory `/n/llm/{id}/`
+- Self-mounts at `/mnt/llm`; can also be accessed remotely via 9P dial+mount
+- Session lifecycle: clone from `/mnt/llm/new` → session directory `/mnt/llm/{id}/`
 - Files per session: `ask` (write prompt → read response), `tools` (write tool schemas),
   `history` (full conversation history)
 - Response format: `STOP:tool_use\nTOOL:<id>:<name>:<args>` or `STOP:end_turn\n<text>`
@@ -143,7 +143,7 @@ CLI agent. One-shot or REPL mode.
 1. Reads `-p paths` and registers them in tools9p (`bindpath` ctl commands)
 2. Forks namespace (`sys->pctl(FORKNS)`)
 3. Calls `nsconstruct->restrictns()` — reduces namespace to only what the agent needs
-4. Creates an LLM session via `/n/llm/new`
+4. Creates an LLM session via `/mnt/llm/new`
 5. Runs `repl.b` loop: prompt → LLM → tool calls → results → repeat
 
 ### nsconstruct (`appl/veltro/nsconstruct.b`)
@@ -154,7 +154,7 @@ Policy applied after `FORKNS`:
 - `/dis` → reduced to `lib/`, `veltro/` (+ `sh.dis` if `exec` tool active)
 - `/dis/veltro/tools/` → only registered tool `.dis` files visible
 - `/dev` → reduced to `cons`, `null`, `time`
-- `/n` → capability-gated: `/n/llm` always; `/n/git`, `/n/speech` only if in `caps.paths`
+- `/n` → capability-gated: `/mnt/llm` always; `/n/git`, `/n/speech` only if in `caps.paths`
 - `/tmp` → writable only at `/tmp/veltro/scratch/`
 
 ### wallet9p (`appl/veltro/wallet9p.b`)
@@ -183,7 +183,7 @@ Key design properties:
   Keys survive emu restart.
 - **Budget enforcement** — server-side spending limits; agents cannot bypass.
 - **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access. Unlike
-  `/n/llm` (always granted), wallet access is explicitly opt-in.
+  `/mnt/llm` (always granted), wallet access is explicitly opt-in.
 - **Multi-network** — supports Ethereum Mainnet, Sepolia, Base, Base Sepolia with
   per-network RPC endpoints and USDC contract addresses.
 
@@ -234,7 +234,7 @@ User types in Conversation zone
   → lucifer re-renders conversation zone
   → lucibridge (blocking read on /conversation/input) receives message
   → lucibridge re-reads /tool/tools, /tool/paths
-  → lucibridge calls LLM via /n/llm/{id}/ask
+  → lucibridge calls LLM via /mnt/llm/{id}/ask
   → LLM returns tool_use or end_turn
   → lucibridge executes tools (writes to /tool/<name>, reads result)
   → lucibridge writes response back to /n/ui conversation/ctl
@@ -274,7 +274,7 @@ Full Inferno namespace (shell, GUI)
   │
   ├── tools9p runs in this namespace (shared)
   └── FORKNS ──► Agent namespace (restricted copy)
-                   ├── /n/llm          (always)
+                   ├── /mnt/llm          (always)
                    ├── /n/local/<base> (only granted paths)
                    ├── /tool           (inherited, read-only in practice)
                    ├── /dis/veltro/    (tool .dis files only)

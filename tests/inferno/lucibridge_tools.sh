@@ -2,8 +2,8 @@
 load std
 
 # Mount LLM service (llmsrv must be running)
-mkdir -p /n/llm
-mount -A tcp!127.0.0.1!5640 /n/llm
+mkdir -p /mnt/llm
+mount -A tcp!127.0.0.1!5640 /mnt/llm
 
 # Start tool server with basic tools
 /dis/veltro/tools9p.dis read list find search &

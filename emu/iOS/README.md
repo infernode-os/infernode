@@ -153,9 +153,9 @@ install to the device with Xcode's Run, or `xcodebuild
 -allowProvisioningUpdates` + `xcrun devicectl device install`. Requires
 Developer Mode on the device and the iOS platform component in Xcode.
 
-## Phase C — on-device `/n/llm`. Not started.
+## Phase C — on-device `/mnt/llm`. Not started.
 
-Same retarget Android Phase 1 plans: the 9P surface at `/n/llm` stays,
+Same retarget Android Phase 1 plans: the 9P surface at `/mnt/llm` stays,
 the backend swaps from Ollama-over-HTTP to on-device inference. iOS-native
 options (MLX, CoreML) are stronger here than Android's.
 

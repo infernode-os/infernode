@@ -13,10 +13,10 @@
 #
 # Agent-surface gateway for the external evaluation harness.
 #
-# Sits between serve-profile (which exports just /n/llm) and the
+# Sits between serve-profile (which exports just /mnt/llm) and the
 # full GUI boot (which starts lucifer and binds X/SDL3). This
 # profile starts the headless agent stack and exports both:
-#   tcp!127.0.0.1!5640 → /n/llm (LLM session gateway, llmsrv)
+#   tcp!127.0.0.1!5640 → /mnt/llm (LLM session gateway, llmsrv)
 #   tcp!127.0.0.1!5641 → /n/ui  (activity / conversation surface, luciuisrv)
 #
 # Localhost binding is intentional: the harness lives on the same
@@ -42,7 +42,7 @@ trfs '#U*' /n/local
 
 # ── Bind user config over /lib/ndb (LLM backend selection) and
 #    /lib/keyring (signer keys). Shared with serve-profile so the
-#    same keyfile authenticates both /n/llm and /n/ui mounts. ──
+#    same keyfile authenticates both /mnt/llm and /n/ui mounts. ──
 ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 infhome=$ghome^/.infernode
 if {ftest -d $infhome/lib/ndb} {
@@ -60,7 +60,7 @@ if {ftest -f /dis/llmctl9p.dis} {
 	mount {/dis/llmctl9p.dis -b $llmctlbin} /llm
 }
 
-# ── LLM service (mounts /n/llm) ─────
+# ── LLM service (mounts /mnt/llm) ─────
 llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm}
 llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm}
 llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm}
@@ -75,7 +75,7 @@ if {~ $llmbackend openai} {
 	}
 }
 
-# Wait for llmsrv to finish its self-mount of /n/llm
+# Wait for llmsrv to finish its self-mount of /mnt/llm
 sleep 2
 
 # ── Wallet service (needed by the keyring tool) ─────
@@ -100,7 +100,7 @@ lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
 
-# ── 9P export: /n/llm and /n/ui, both localhost-bound ─────
+# ── 9P export: /mnt/llm and /n/ui, both localhost-bound ─────
 # Auth mode is read from the host environment via `os sh`. serve-agent.sh
 # always exports both vars (defaults baked in there). Same as serve-profile.
 authmode=`{os sh -c 'printf %s "$SERVE_LLM_AUTH"'}
@@ -108,7 +108,7 @@ keyfile=`{os sh -c 'printf %s "$SERVE_LLM_KEY"'}
 
 if {~ $authmode anon} {
 	echo 'serve-agent: WARNING listen mode anon (--anon-lan) - no authentication'
-	listen -A 'tcp!127.0.0.1!5640' {export /n/llm &} &
+	listen -A 'tcp!127.0.0.1!5640' {export /mnt/llm &} &
 	listen -sA 'tcp!127.0.0.1!5641' {export /n/ui &}
 }{
 	if {! ftest -f $keyfile} {
@@ -118,6 +118,6 @@ if {~ $authmode anon} {
 		exit fail
 	}
 	echo 'serve-agent: listen mode keyring keyfile' $keyfile
-	listen -k $keyfile 'tcp!127.0.0.1!5640' {export /n/llm &} &
+	listen -k $keyfile 'tcp!127.0.0.1!5640' {export /mnt/llm &} &
 	listen -s -k $keyfile 'tcp!127.0.0.1!5641' {export /n/ui &}
 }

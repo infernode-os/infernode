@@ -1,7 +1,7 @@
 implement LuciBridge;
 
 #
-# lucibridge - Connects Lucifer UI to Veltro agent via /n/llm
+# lucibridge - Connects Lucifer UI to Veltro agent via /mnt/llm
 #
 # Reads human messages from /n/ui/activity/{id}/conversation/input
 # (blocking read), runs the Veltro agent loop (LLM + tools), and writes
@@ -16,7 +16,7 @@ implement LuciBridge;
 #
 # Prerequisites:
 #   - luciuisrv running (serves /n/ui/)
-#   - LLM service mounted at /n/llm/
+#   - LLM service mounted at /mnt/llm/
 #   - tools9p running (serves /tool/) — optional but enables tool use
 #
 
@@ -161,12 +161,12 @@ readndbfield(path, field: string): string
 }
 
 # Check if the LLM service is actually functional (not just a mntgen stub).
-# mntgen auto-creates /n/llm as an empty mount point on stat, so pathexists
-# always returns true.  Instead, try to open /n/llm/new which only exists
+# mntgen auto-creates /mnt/llm as an empty mount point on stat, so pathexists
+# always returns true.  Instead, try to open /mnt/llm/new which only exists
 # when llmsrv (or a remote llm9p) is actually serving.
 llmserviceok(): int
 {
-	fd := sys->open("/n/llm/new", Sys->OREAD);
+	fd := sys->open("/mnt/llm/new", Sys->OREAD);
 	if(fd == nil)
 		return 0;
 	fd = nil;
@@ -377,7 +377,7 @@ runsetupwizard()
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
-				"dial address (`tcp!host!port`) of an InferNode exporting `/n/llm`. " +
+				"dial address (`tcp!host!port`) of an InferNode exporting `/mnt/llm`. " +
 				"Then close InferNode and relaunch it.");
 		} else {
 			# A typed message (not one of the option buttons) before any
@@ -472,7 +472,7 @@ COMPACT_THRESHOLD: con 150000;
 
 checkandcompact_ui()
 {
-	usagepath := "/n/llm/" + sessionid + "/usage";
+	usagepath := "/mnt/llm/" + sessionid + "/usage";
 	s := agentlib->readfile(usagepath);
 	if(s == "")
 		return;
@@ -486,7 +486,7 @@ checkandcompact_ui()
 	didx := writedialogue("Compacting context",
 		sys->sprint("Context is %d%% full. Summarizing conversation history...", pct),
 		"50", "");
-	compactpath := "/n/llm/" + sessionid + "/compact";
+	compactpath := "/mnt/llm/" + sessionid + "/compact";
 	err := writefile(compactpath, "compact");
 	if(err < 0) {
 		if(didx >= 0)
@@ -566,7 +566,7 @@ initsession(): string
 		modelname := agentlib->strip(agentlib->readfile(
 			sys->sprint("/tmp/veltro/model.%d", actid)));
 		if(modelname != "") {
-			mfd := sys->open("/n/llm/" + sessionid + "/model", Sys->OWRITE);
+			mfd := sys->open("/mnt/llm/" + sessionid + "/model", Sys->OWRITE);
 			if(mfd != nil) {
 				mb := array of byte modelname;
 				sys->write(mfd, mb, len mb);
@@ -631,12 +631,12 @@ initsession(): string
 	# Open ask fd first so the session stays alive (refs >= 1) while we write
 	# system and tools.  Without this, Limbo's GC finalizes each setup fd
 	# concurrently and can drop refs to 0 between writes, deleting the session.
-	askpath := "/n/llm/" + sessionid + "/ask";
+	askpath := "/mnt/llm/" + sessionid + "/ask";
 	llmfd = sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil)
 		return sys->sprint("cannot open %s: %r", askpath);
 
-	systempath := "/n/llm/" + sessionid + "/system";
+	systempath := "/mnt/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, sysprompt);
 
 	# Anchor every response in Veltro identity by prefilling the assistant
@@ -645,7 +645,7 @@ initsession(): string
 	# clean text. The prefill is the strongest cheap defence against the
 	# model reflexively introducing itself as ChatGPT / Llama / etc.
 	# Wired only when agentlib has the API available — see INFR-130.
-	prefillpath := "/n/llm/" + sessionid + "/prefill";
+	prefillpath := "/mnt/llm/" + sessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro] ");
 
 	# Install tool definitions for native tool_use protocol.
@@ -1089,7 +1089,7 @@ applypathchanges()
 	# Bind newly added paths into lucibridge's namespace.
 	# Paths already under /n/local/ are accessible via the trfs OS mount —
 	# no rebind needed (and no writable target would exist anyway).
-	# Inferno-native paths (/dis/, /lib/, /n/llm/, etc.) are already in the
+	# Inferno-native paths (/dis/, /lib/, /mnt/llm/, etc.) are already in the
 	# namespace — binding them to /n/local/<base> would fail (no such dir).
 	ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
 	for(np := newpaths; np != nil; np = tl np) {
@@ -1153,7 +1153,7 @@ applypathchanges()
 		if(len array of byte sysprompt + len suffixbytes > MAXWRITE)
 			sysprompt = string (array of byte sysprompt)[0:MAXWRITE - len suffixbytes];
 		sysprompt += sfx;
-		systempath := "/n/llm/" + sessionid + "/system";
+		systempath := "/mnt/llm/" + sessionid + "/system";
 		agentlib->setsystemprompt(systempath, sysprompt);
 		log("system prompt updated with new paths");
 	}
@@ -1375,7 +1375,7 @@ agentturn(input: string)
 
 	setstatus("working");
 	prompt := input;
-	streambase := "/n/llm/" + sessionid;
+	streambase := "/mnt/llm/" + sessionid;
 
 	hitlimit := 1;
 	for(step := 0; step < maxsteps; step++) {
@@ -1753,7 +1753,7 @@ init(nil: ref Draw->Context, args: list of string)
 		# Nothing configured — show the wizard. It blocks until the
 		# user picks an option and then parks until quit-and-relaunch.
 		runsetupwizard();
-		fatal("/n/llm/ not mounted \u2014 configure an LLM and restart");
+		fatal("/mnt/llm/ not mounted \u2014 configure an LLM and restart");
 	} else if(!llmserviceok()) {
 		# Failure mode 2: Configured but LLM not ready yet.
 		# llmsrv may still be starting — retry a few times before giving up.
@@ -1808,7 +1808,7 @@ init(nil: ref Draw->Context, args: list of string)
 				}
 				for(;;) sys->sleep(60000);
 			}
-			fatal("/n/llm/ not mounted \u2014 LLM service unreachable");
+			fatal("/mnt/llm/ not mounted \u2014 LLM service unreachable");
 		}
 	}
 
@@ -1870,7 +1870,7 @@ init(nil: ref Draw->Context, args: list of string)
 			taskinstr = "";
 
 		if(taskbrief != "" || taskinstr != "") {
-			systempath := "/n/llm/" + sessionid + "/system";
+			systempath := "/mnt/llm/" + sessionid + "/system";
 			cursys := agentlib->readfile(systempath);
 			if(cursys == nil)
 				cursys = "";

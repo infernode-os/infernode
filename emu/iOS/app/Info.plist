@@ -31,7 +31,7 @@
 	<!-- iOS 14+ blocks connections to local-network (LAN) addresses, e.g. a
 	     remote InferNode at tcp!10.x!5640, unless the app declares this
 	     purpose string; iOS then prompts for Local Network access on the
-	     first such connection. Without it the dial+mount of /n/llm (and any
+	     first such connection. Without it the dial+mount of /mnt/llm (and any
 	     LAN 9P service) silently fails. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>InferNode connects to a remote InferNode on your local network to use its LLM and 9P services.</string>

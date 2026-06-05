@@ -20,16 +20,16 @@ sleep 1
 mkdir -p /tmp >[2] /dev/null
 
 # Create session and install a simple tool
-id=`{cat /n/llm/new}
+id=`{cat /mnt/llm/new}
 echo 'session:' $id
 
 # Install a simple test tool
-echo '[{"name":"greet","description":"Say hello to someone. Args: name","input_schema":{"type":"object","properties":{"args":{"type":"string"}},"required":["args"]}}]' > /n/llm/$id/tools
+echo '[{"name":"greet","description":"Say hello to someone. Args: name","input_schema":{"type":"object","properties":{"args":{"type":"string"}},"required":["args"]}}]' > /mnt/llm/$id/tools
 echo 'tools installed'
 
 # Ask the LLM to use the tool
-echo 'Use the greet tool to greet Alice.' > /n/llm/$id/ask
-response=`{cat /n/llm/$id/ask}
+echo 'Use the greet tool to greet Alice.' > /mnt/llm/$id/ask
+response=`{cat /mnt/llm/$id/ask}
 echo 'step 1 response:' $response
 
 # Check debug dump of step 1 request
@@ -67,8 +67,8 @@ echo 'parsed tool_use_id:' $toolid
 echo 'TOOL_RESULTS
 '^$toolid^'
 Hello, Alice! Welcome!
----' > /n/llm/$id/ask
-response2=`{cat /n/llm/$id/ask}
+---' > /mnt/llm/$id/ask
+response2=`{cat /mnt/llm/$id/ask}
 echo 'step 2 response:' $response2
 
 # Check debug dump of step 2 request

@@ -102,8 +102,8 @@ echo 'delete' > /mnt/xenith/1/ctl
 
 Want to query an AI? Write to a file, read the response:
 ```sh
-echo 'What is 2+2?' > /n/llm/ask
-cat /n/llm/ask
+echo 'What is 2+2?' > /mnt/llm/ask
+cat /mnt/llm/ask
 ```
 
 No SDKs. No libraries. No protocol buffers. Just files.
@@ -381,7 +381,7 @@ mount -ac {mntgen} /n             # Mount namespace generator
 bind -a '#I' /net                 # Initialize networking
 
 # Mount LLM if available
-mount -A 'tcp!127.0.0.1!5640' /n/llm >[2] /dev/null
+mount -A 'tcp!127.0.0.1!5640' /mnt/llm >[2] /dev/null
 
 # Setup home directory from host
 if {~ $emuhost MacOSX Linux}{
@@ -958,8 +958,8 @@ Check:
 ### Namespace Confusion
 
 ```sh
-; ls /n/llm
-ls: /n/llm: does not exist
+; ls /mnt/llm
+ls: /mnt/llm: does not exist
 ```
 
 The mount point doesn't exist in your namespace. Check what's mounted:
@@ -969,7 +969,7 @@ ns
 
 Mount it if needed:
 ```sh
-mount -A 'tcp!127.0.0.1!5640' /n/llm
+mount -A 'tcp!127.0.0.1!5640' /mnt/llm
 ```
 
 ---

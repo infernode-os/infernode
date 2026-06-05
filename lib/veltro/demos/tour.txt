@@ -85,7 +85,7 @@ SECTION 3: What Is 9P and Why Files?
 
     | Path | What it is |
     |------|-----------|
-    | `/n/llm` | The language model I think with |
+    | `/mnt/llm` | The language model I think with |
     | `/n/ui` | The GUI you are looking at |
     | `/n/speech` | My voice (text-to-speech and speech-to-text) |
     | `/tool` | My tools — each one is a directory with ctl and doc files |
@@ -311,7 +311,7 @@ SECTION 12: Where to Go from Here
     **Key namespace paths:**
     | Path | Service |
     |------|---------|
-    | `/n/llm` | The language model |
+    | `/mnt/llm` | The language model |
     | `/n/ui` | The GUI state server |
     | `/tool` | My tool filesystem |
     | `/n/speech` | Speech interface |

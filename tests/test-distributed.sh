@@ -162,11 +162,11 @@ echo -e "${BOLD}Phase 3: Start Instance B (LLM Proxy Server)${NC}"
 # The shell script inside emu:
 #   1. Mount LLM service via plain 9P (localhost, no auth)
 #   2. Listen on SERVER_PORT with Ed25519 auth
-#   3. For each authenticated connection, export /n/llm
+#   3. For each authenticated connection, export /mnt/llm
 
 SERVER_SCRIPT="
-	mount -A tcp!127.0.0.1!${LLM9P_PORT} /n/llm;
-	listen -v -k /usr/inferno/keyring/default tcp!*!${SERVER_PORT} {export /n/llm}
+	mount -A tcp!127.0.0.1!${LLM9P_PORT} /mnt/llm;
+	listen -v -k /usr/inferno/keyring/default tcp!*!${SERVER_PORT} {export /mnt/llm}
 "
 
 info "Starting Instance B with: $SERVER_SCRIPT"
@@ -233,15 +233,15 @@ echo ""
 echo "  Test 1: Auth-only mount (no encryption)"
 
 TEST1_CMDS="
-	mount -C none -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /n/llm;
-	cat /n/llm/new
+	mount -C none -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	cat /mnt/llm/new
 "
 
 if run_test "auth-only" 30 "$TEST1_CMDS"; then
 	LOGFILE="$ROOT/tests/.test-auth-only.log"
 	OUTPUT=$(cat "$LOGFILE" 2>/dev/null)
 	info "  Output: $OUTPUT"
-	# /n/llm/new should return a session ID (a number)
+	# /mnt/llm/new should return a session ID (a number)
 	if echo "$OUTPUT" | grep -qE '^[0-9]+$'; then
 		pass "Test 1: Auth-only mount — got session ID: $(echo "$OUTPUT" | grep -oE '^[0-9]+$' | head -1)"
 		passed=$((passed + 1))
@@ -262,8 +262,8 @@ echo ""
 echo "  Test 2: Auth + encrypted mount (rc4_256 sha1)"
 
 TEST2_CMDS="
-	mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /n/llm;
-	cat /n/llm/new
+	mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	cat /mnt/llm/new
 "
 
 if run_test "encrypted" 30 "$TEST2_CMDS"; then
@@ -290,15 +290,15 @@ echo ""
 echo "  Test 3: LLM query through encrypted channel"
 
 # Clone a session, write a prompt, read the response.
-# The LLM clone pattern: read /n/llm/new to get session ID,
-# then write prompt to /n/llm/<id>/ask and read response from /n/llm/<id>/ask.
+# The LLM clone pattern: read /mnt/llm/new to get session ID,
+# then write prompt to /mnt/llm/<id>/ask and read response from /mnt/llm/<id>/ask.
 #
 # We use a shell script that captures the session ID and uses it.
 TEST3_CMDS="
-	mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /n/llm;
-	id = \`{cat /n/llm/new};
-	echo 'Reply with just the word hello' > /n/llm/\$id/ask;
-	cat /n/llm/\$id/ask
+	mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	id = \`{cat /mnt/llm/new};
+	echo 'Reply with just the word hello' > /mnt/llm/\$id/ask;
+	cat /mnt/llm/\$id/ask
 "
 
 if run_test "llm-query" 60 "$TEST3_CMDS"; then
@@ -337,8 +337,8 @@ echo "  Test 4: Mount to non-existent server produces no session"
 # (no session ID) because mount failed.
 DEAD_PORT=9997
 TEST4_CMDS="
-	mount -A tcp!127.0.0.1!${DEAD_PORT} /n/llm;
-	cat /n/llm/new
+	mount -A tcp!127.0.0.1!${DEAD_PORT} /mnt/llm;
+	cat /mnt/llm/new
 "
 
 run_test "dead-port" 15 "$TEST4_CMDS" || true
@@ -372,16 +372,16 @@ echo ""
 if [[ "$INTERACTIVE" -eq 1 ]] && [[ "$failed" -eq 0 ]]; then
 	echo -e "${BOLD}Phase 5: Interactive Mode${NC}"
 	echo "Starting Instance A with authenticated + encrypted mount to Instance B..."
-	echo "Try: cat /n/llm/new"
-	echo "     echo 'your prompt' > /n/llm/<id>/ask"
-	echo "     cat /n/llm/<id>/ask"
+	echo "Try: cat /mnt/llm/new"
+	echo "     echo 'your prompt' > /mnt/llm/<id>/ask"
+	echo "     cat /mnt/llm/<id>/ask"
 	echo ""
 
 	# Instance B stays alive while the user interacts (cleanup trap runs on EXIT)
 	"$EMU" -r"$ROOT" /dis/sh.dis -c "
-		mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /n/llm;
+		mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 		echo 'Connected to Instance B (authenticated + encrypted)';
-		echo 'LLM service mounted at /n/llm';
+		echo 'LLM service mounted at /mnt/llm';
 		sh
 	" || true
 fi

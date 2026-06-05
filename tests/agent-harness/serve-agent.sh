@@ -12,7 +12,7 @@
 # ─────────────────────────────────────────────────────────────────
 #
 # serve-agent.sh — Launch the headless agent gateway for the external
-# evaluation harness. Exports /n/llm (port 5640) and /n/ui (port 5641),
+# evaluation harness. Exports /mnt/llm (port 5640) and /n/ui (port 5641),
 # both bound to 127.0.0.1, with Inferno Ed25519 keyring authentication.
 #
 # Reuses the serve-llm keyfile at ~/.infernode/lib/keyring/serve-llm,
@@ -86,7 +86,7 @@ serve-agent: $(date -Iseconds) starting
   root    = $ROOT
   profile = $PROFILE_INF
   listen  = $LISTEN_MODE (loopback only)
-  /n/llm  = tcp!127.0.0.1!5640
+  /mnt/llm  = tcp!127.0.0.1!5640
   /n/ui   = tcp!127.0.0.1!5641
   keyfile = $KEY_HOSTPATH (in-emu: $KEY_INFPATH)
 EOF

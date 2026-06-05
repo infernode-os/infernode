@@ -18,7 +18,7 @@ implement ToolSpawn;
 # Same as v3 (FORKNS + bind-replace), extended for parallel children.
 # Each child gets:
 #   - Its OWN SubAgent module instance (prevents data-race on subagent globals)
-#   - Its OWN LLM session (/n/llm/new clone pattern)
+#   - Its OWN LLM session (/mnt/llm/new clone pattern)
 #   - Its OWN tools= and paths= (no sharing between parallel agents)
 #   - Fresh NEWPGRP, FORKNS, NEWENV, NEWFD, NODEVS
 # Tool modules are shared (read-only after init — no mutable global state).
@@ -27,7 +27,7 @@ implement ToolSpawn;
 #   1. pctl(NEWPGRP)   - Empty srv registry
 #   2. pctl(FORKNS)    - Fork parent's restricted namespace
 #   3. pctl(NEWENV)    - Empty environment
-#   4. Open LLM FDs    - While /n/llm still accessible
+#   4. Open LLM FDs    - While /mnt/llm still accessible
 #   5. restrictns()    - Further bind-replace restrictions
 #   6. verifysafefds() - Verify FDs 0-2 are safe
 #   7. pctl(NEWFD)     - Prune all other FDs
@@ -956,12 +956,12 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# Step 3: Empty environment (no inherited secrets)
 	sys->pctl(Sys->NEWENV, nil);
 
-	# Step 4: Create LLM session using /n/llm/new clone pattern.
+	# Step 4: Create LLM session using /mnt/llm/new clone pattern.
 	# Each child gets its own session — fully isolated from parent and siblings.
 	llmaskfd: ref Sys->FD;
 	sessionid := "";  # hoisted so we can close the session after runloop
 	if(caps.llmconfig != nil) {
-		newfd := sys->open("/n/llm/new", Sys->OREAD);
+		newfd := sys->open("/mnt/llm/new", Sys->OREAD);
 		if(newfd != nil) {
 			buf := array[32] of byte;
 			n := sys->read(newfd, buf, len buf);
@@ -976,7 +976,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 					# actually serves), avoiding a 404 on backends that don't have
 					# the legacy "haiku" default.
 					if(caps.llmconfig.model != "") {
-						modelfd := sys->open("/n/llm/" + sessionid + "/model", Sys->OWRITE);
+						modelfd := sys->open("/mnt/llm/" + sessionid + "/model", Sys->OWRITE);
 						if(modelfd != nil) {
 							modeldata := array of byte caps.llmconfig.model;
 							sys->write(modelfd, modeldata, len modeldata);
@@ -995,7 +995,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 					else if(caps.llmconfig.thinking > 0)
 						tval = string caps.llmconfig.thinking;
 					if(tval != "") {
-						thinkfd := sys->open("/n/llm/" + sessionid + "/thinking", Sys->OWRITE);
+						thinkfd := sys->open("/mnt/llm/" + sessionid + "/thinking", Sys->OWRITE);
 						if(thinkfd != nil) {
 							tdata := array of byte tval;
 							sys->write(thinkfd, tdata, len tdata);
@@ -1005,7 +1005,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 
 					# Configure system prompt
 					if(caps.llmconfig.system != "") {
-						sysfd := sys->open("/n/llm/" + sessionid + "/system", Sys->OWRITE);
+						sysfd := sys->open("/mnt/llm/" + sessionid + "/system", Sys->OWRITE);
 						if(sysfd != nil) {
 							sysdata := array of byte caps.llmconfig.system;
 							sys->write(sysfd, sysdata, len sysdata);
@@ -1014,7 +1014,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 					}
 
 					# Open ask fd (used by runloop)
-					llmaskfd = sys->open("/n/llm/" + sessionid + "/ask", Sys->ORDWR);
+					llmaskfd = sys->open("/mnt/llm/" + sessionid + "/ask", Sys->ORDWR);
 				}
 			}
 		}
@@ -1040,7 +1040,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 			(mcpmounts, mcptools) := agentlib->mcpdiscover(mcppaths);
 			if(mcpmounts != nil) {
 				defs := agentlib->mcptooldefs(mcpmounts, 64, 60000);
-				tfd := sys->open("/n/llm/" + sessionid + "/tools", Sys->OWRITE);
+				tfd := sys->open("/mnt/llm/" + sessionid + "/tools", Sys->OWRITE);
 				if(tfd != nil) {
 					db := array of byte defs;
 					sys->write(tfd, db, len db);
@@ -1116,7 +1116,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# (refs 1→0), allowing the server to free the session immediately rather
 	# than waiting for a server restart.
 	if(sessionid != "") {
-		ctlfd := sys->open("/n/llm/" + sessionid + "/ctl", Sys->OWRITE);
+		ctlfd := sys->open("/mnt/llm/" + sessionid + "/ctl", Sys->OWRITE);
 		if(ctlfd != nil) {
 			data := array of byte "close";
 			sys->write(ctlfd, data, len data);

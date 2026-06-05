@@ -59,7 +59,7 @@ and factotum. Then `-c` runs the quoted command string:
 | Step | Command | Purpose |
 |------|---------|---------|
 | 1 | `wm/logon` | Login screen. Creates secstore account on first run, unlocks and loads keys on subsequent runs. Blocks until the user enters their password. |
-| 2 | `llmsrv &` | LLM 9P file server. Mounts at `/n/llm`. Reads config from `lib/ndb/llm` (via profile). The `&` backgrounds it. |
+| 2 | `llmsrv &` | LLM 9P file server. Mounts at `/mnt/llm`. Reads config from `lib/ndb/llm` (via profile). The `&` backgrounds it. |
 | 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Experimental. |
 | 4 | `luciuisrv` | UI 9P server. Creates the `/n/ui` namespace that lucifer, lucipres, luciconv, and lucibridge all communicate through. This is the hub. |
 | 5 | `echo activity create Main > /n/ui/ctl` | Creates the default "Main" activity (task/conversation). |

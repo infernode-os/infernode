@@ -23,7 +23,7 @@ SubAgent: module {
 	# tools: list of pre-loaded Tool modules
 	# toolnames: list of tool name strings (for namespace discovery)
 	# systemprompt: system prompt from parent (session already configured)
-	# llmaskfd: file descriptor for session's /n/llm/<id>/ask (opened before restriction)
+	# llmaskfd: file descriptor for session's /mnt/llm/<id>/ask (opened before restriction)
 	# logfd: file descriptor for per-subagent trajectory log (nil = no logging).
 	#        Same "open before FORKNS, kept across NEWFD" pattern as llmaskfd —
 	#        gives the harness an observable record of each step taken inside

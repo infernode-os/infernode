@@ -5,15 +5,15 @@ implement ToolUseTest;
 #
 # Tests the end-to-end plumbing of the new native tool_use code paths
 # added in agentlib.b and repl.b: session creation, tool registration
-# via /n/llm/{id}/tools, queryllmfd, parsellmresponse, and TOOL_RESULTS
+# via /mnt/llm/{id}/tools, queryllmfd, parsellmresponse, and TOOL_RESULTS
 # write path.
 #
-# All tests skip gracefully when /n/llm is not mounted.
+# All tests skip gracefully when /mnt/llm is not mounted.
 # Tests that invoke the LLM backend are slow (~10-60s each).
 #
-# To run manually (with llmsrv running or /n/llm mounted):
+# To run manually (with llmsrv running or /mnt/llm mounted):
 #   cd $ROOT
-#   mount -A tcp!127.0.0.1!5640 /n/llm        # inside Inferno shell
+#   mount -A tcp!127.0.0.1!5640 /mnt/llm        # inside Inferno shell
 #   /tests/tooluse_test.dis [-v]
 #
 # Or via the host runner:
@@ -65,21 +65,21 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
-# Return 1 if /n/llm is mounted.
-# /n/llm exists as a placeholder directory in the rootfs, so we must
-# check for /n/llm/new (the clone file that only exists when mounted).
+# Return 1 if /mnt/llm is mounted.
+# /mnt/llm exists as a placeholder directory in the rootfs, so we must
+# check for /mnt/llm/new (the clone file that only exists when mounted).
 hasllm(): int
 {
-	return agentlib->pathexists("/n/llm/new");
+	return agentlib->pathexists("/mnt/llm/new");
 }
 
 # ---- Test: session creation ----------------------------------------
 
-# Test that createsession() returns a numeric session ID via /n/llm/new.
+# Test that createsession() returns a numeric session ID via /mnt/llm/new.
 testSessionCreate(t: ref T)
 {
 	if(!hasllm()) {
-		t.skip("/n/llm not mounted — run tests/host/tooluse_protocol_test.sh");
+		t.skip("/mnt/llm not mounted — run tests/host/tooluse_protocol_test.sh");
 		return;
 	}
 
@@ -101,7 +101,7 @@ testSessionCreate(t: ref T)
 
 # ---- Test: tool registration ---------------------------------------
 
-# Test that initsessiontools() writes JSON tool defs to /n/llm/{id}/tools
+# Test that initsessiontools() writes JSON tool defs to /mnt/llm/{id}/tools
 # by calling it and verifying no exception is raised.
 # The write-only (0222) tools file cannot be read back to verify content,
 # so we verify indirectly: if the subsequent LLM session still works after
@@ -109,13 +109,13 @@ testSessionCreate(t: ref T)
 testToolsWrite(t: ref T)
 {
 	if(!hasllm()) {
-		t.skip("/n/llm not mounted");
+		t.skip("/mnt/llm not mounted");
 		return;
 	}
 
 	id := agentlib->createsession();
 	if(id == nil) {
-		t.fatal("cannot create session: /n/llm/new unreadable");
+		t.fatal("cannot create session: /mnt/llm/new unreadable");
 		return;
 	}
 
@@ -137,7 +137,7 @@ testToolsWrite(t: ref T)
 testToolsWriteEmpty(t: ref T)
 {
 	if(!hasllm()) {
-		t.skip("/n/llm not mounted");
+		t.skip("/mnt/llm not mounted");
 		return;
 	}
 
@@ -183,7 +183,7 @@ testBuildToolDefsAll(t: ref T)
 testQueryAndParse(t: ref T)
 {
 	if(!hasllm()) {
-		t.skip("/n/llm not mounted");
+		t.skip("/mnt/llm not mounted");
 		return;
 	}
 
@@ -194,7 +194,7 @@ testQueryAndParse(t: ref T)
 	}
 
 	# Open ask file for read/write
-	askpath := "/n/llm/" + id + "/ask";
+	askpath := "/mnt/llm/" + id + "/ask";
 	fd := sys->open(askpath, Sys->ORDWR);
 	if(fd == nil) {
 		t.fatal(sys->sprint("cannot open %s: %r", askpath));
@@ -231,7 +231,7 @@ testQueryAndParse(t: ref T)
 testToolResultsWrite(t: ref T)
 {
 	if(!hasllm()) {
-		t.skip("/n/llm not mounted");
+		t.skip("/mnt/llm not mounted");
 		return;
 	}
 
@@ -241,7 +241,7 @@ testToolResultsWrite(t: ref T)
 		return;
 	}
 
-	askpath := "/n/llm/" + id + "/ask";
+	askpath := "/mnt/llm/" + id + "/ask";
 	fd := sys->open(askpath, Sys->ORDWR);
 	if(fd == nil) {
 		t.fatal(sys->sprint("cannot open %s: %r", askpath));

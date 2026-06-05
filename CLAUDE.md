@@ -435,4 +435,4 @@ When closing a code change that resolves a Jira ticket, **reference the key in t
 Notable open INFR tasks at time of this writing:
 - `INFR-2` — implement `/tool/limbo/run` (LLM-as-tool routing pattern; see `docs/LLM-AS-TOOL.md` in the IOL repo for design)
 - `INFR-3` — wire lucibridge per-capability routing (likely superseded by INFR-2)
-- `INFR-4` — verify `/n/llm/$id/model` accepts writes (5-min spike; prerequisite for INFR-2)
+- `INFR-4` — verify `/mnt/llm/$id/model` accepts writes (5-min spike; prerequisite for INFR-2)

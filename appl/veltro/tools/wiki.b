@@ -23,7 +23,7 @@ implement ToolWiki;
 # Dependencies:
 #   /n/wikia   wiki9p must be mounted
 #   /mnt/wiki  wikifs must be mounted (wiki9p talks to it)
-#   /n/llm     LLM service must be available (wiki9p talks to it)
+#   /mnt/llm     LLM service must be available (wiki9p talks to it)
 #
 
 include "sys.m";
@@ -79,14 +79,14 @@ doc(): string
 		"Before ingesting, bind source data:\n" +
 		"  bind /n/local/docs /n/wikia/raw\n\n" +
 		"The wiki is browsable via Charon at the httpd wiki URL.\n" +
-		"Requires /n/wikia (run wiki9p), /mnt/wiki (run wikifs), /n/llm.\n";
+		"Requires /n/wikia (run wiki9p), /mnt/wiki (run wikifs), /mnt/llm.\n";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"wiki\"," +
-		"\"description\":\"LLM-maintained knowledge base. Requires /n/wikia (wiki9p), /mnt/wiki (wikifs), and /n/llm.\"," +
+		"\"description\":\"LLM-maintained knowledge base. Requires /n/wikia (wiki9p), /mnt/wiki (wikifs), and /mnt/llm.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +

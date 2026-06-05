@@ -115,7 +115,7 @@ Lucia stitches together several 9P services. Once the UI is up, you can `cat` an
 | Mount        | Server      | What lives there |
 |--------------|-------------|------------------|
 | `/n/ui`      | luciuisrv   | All UI state. `/n/ui/ctl` to create/delete activities; `/n/ui/activity/N/{conversation,presentation,context}` for each zone. |
-| `/n/llm`     | llmsrv      | LLM sessions. `/n/llm/new` clones a fresh session; each `/n/llm/N/` exposes `ask`, `stream`, `model`, `thinking`, `system`, `compact`, `context`. |
+| `/mnt/llm`     | llmsrv      | LLM sessions. `/mnt/llm/new` clones a fresh session; each `/mnt/llm/N/` exposes `ask`, `stream`, `model`, `thinking`, `system`, `compact`, `context`. |
 | `/n/speech`  | speech9p    | `say` (write text → TTS), `hear` (write `start`, then read transcription), `voices`, `ctl`. |
 | `/tool`      | tools9p     | Tool registry. `/tool/tools` lists tools; `/tool/paths` lists exposed host paths; `/tool/ctl` toggles state. |
 | `/n/local`   | (lucibridge)| Read-only host paths plus per-activity writable directories. |

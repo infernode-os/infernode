@@ -13,7 +13,7 @@ implement Repl;
 #
 # Requires:
 #   - /tool mounted (via tools9p)
-#   - /n/llm mounted (LLM interface)
+#   - /mnt/llm mounted (LLM interface)
 #
 
 include "sys.m";
@@ -71,7 +71,7 @@ usage()
 	sys->fprint(stderr, "  -n steps    Maximum steps per turn (default: %d, max: %d)\n",
 		DEFAULT_MAX_STEPS, MAX_MAX_STEPS);
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
-	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
+	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
 	raise "fail:usage";
 }
 
@@ -128,9 +128,9 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "repl: /tool not mounted (run tools9p first)\n");
 		raise "fail:no /tool";
 	}
-	if(!agentlib->pathexists("/n/llm")) {
-		sys->fprint(stderr, "repl: /n/llm not mounted\n");
-		raise "fail:no /n/llm";
+	if(!agentlib->pathexists("/mnt/llm")) {
+		sys->fprint(stderr, "repl: /mnt/llm not mounted\n");
+		raise "fail:no /mnt/llm";
 	}
 
 	# Detect Xenith and create window BEFORE namespace restriction.
@@ -240,7 +240,7 @@ newsession(): string
 		sys->fprint(stderr, "repl: namespace:\n%s\n", ns);
 	}
 
-	systempath := "/n/llm/" + sessionid + "/system";
+	systempath := "/mnt/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, sysprompt);
 
 	# Install tool definitions for native tool_use protocol.
@@ -248,7 +248,7 @@ newsession(): string
 	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
 	agentlib->initsessiontools(sessionid, toollist);
 
-	askpath := "/n/llm/" + sessionid + "/ask";
+	askpath := "/mnt/llm/" + sessionid + "/ask";
 	llmfd = sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil)
 		return sys->sprint("cannot open %s: %r", askpath);

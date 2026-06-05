@@ -30,7 +30,7 @@ if {! ~ $skiplogon 1} {
 #
 # Local boot must NEVER block on remote InferNode availability — see
 # docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md.
-# The previous version probed `ftest -f /n/llm/new`; that walk into a
+# The previous version probed `ftest -f /mnt/llm/new`; that walk into a
 # potentially-degraded 9P export blocks indefinitely (no protocol-level
 # timeout) and wedges the entire desktop boot. Run the whole LLM setup
 # in a backgrounded subshell so the desktop comes up regardless.
@@ -56,12 +56,12 @@ if {! ~ $skiplogon 1} {
 				}
 			}
 			if {ftest -f $llmkey} {
-				mount -k $llmkey $llmdial /n/llm >[2] /dev/null
+				mount -k $llmkey $llmdial /mnt/llm >[2] /dev/null
 			}{
 				echo 'boot: keyring auth requested but keyfile not found at' $llmkey
 			}
 		}{
-			mount -A $llmdial /n/llm >[2] /dev/null
+			mount -A $llmdial /mnt/llm >[2] /dev/null
 		}
 	}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}

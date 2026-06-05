@@ -92,8 +92,8 @@ istransient(err: string): int
 # Check if error is fatal (should stop agent)
 isfatal(err: string): int
 {
-	if(contains(err, "cannot open /n/llm") || contains(err, "not mounted") ||
-	   contains(err, "namespace") || contains(err, "permission denied on /n/llm") ||
+	if(contains(err, "cannot open /mnt/llm") || contains(err, "not mounted") ||
+	   contains(err, "namespace") || contains(err, "permission denied on /mnt/llm") ||
 	   contains(err, "authentication failed") || contains(err, "invalid API key"))
 		return 1;
 	return 0;
@@ -177,7 +177,7 @@ testIsTransientFalse(t: ref T)
 # Test isfatal - namespace errors
 testIsFatalNamespace(t: ref T)
 {
-	t.assert(isfatal("cannot open /n/llm/ask: file does not exist") == 1, "cannot open /n/llm");
+	t.assert(isfatal("cannot open /mnt/llm/ask: file does not exist") == 1, "cannot open /mnt/llm");
 	t.assert(isfatal("llm9p not mounted") == 1, "not mounted");
 	t.assert(isfatal("namespace error") == 1, "namespace");
 }
@@ -187,7 +187,7 @@ testIsFatalAuth(t: ref T)
 {
 	t.assert(isfatal("authentication failed") == 1, "authentication failed");
 	t.assert(isfatal("invalid API key") == 1, "invalid API key");
-	t.assert(isfatal("permission denied on /n/llm/ask") == 1, "permission denied on /n/llm");
+	t.assert(isfatal("permission denied on /mnt/llm/ask") == 1, "permission denied on /mnt/llm");
 }
 
 # Test isfatal - non-fatal errors
@@ -197,7 +197,7 @@ testIsFatalFalse(t: ref T)
 	t.assert(isfatal("timeout") == 0, "timeout is not fatal");
 	t.assert(isfatal("empty response") == 0, "empty response is not fatal");
 	t.assert(isfatal("") == 0, "empty string is not fatal");
-	# Note: generic "permission denied" without /n/llm is not fatal
+	# Note: generic "permission denied" without /mnt/llm is not fatal
 	t.assert(isfatal("permission denied on /tmp/foo") == 0, "permission denied elsewhere is not fatal");
 }
 
@@ -221,7 +221,7 @@ testErrorClassification(t: ref T)
 		"timeout is transient but not fatal");
 
 	# Fatal errors should not be transient
-	t.assert(isfatal("cannot open /n/llm") == 1 && istransient("cannot open /n/llm") == 0,
+	t.assert(isfatal("cannot open /mnt/llm") == 1 && istransient("cannot open /mnt/llm") == 0,
 		"namespace error is fatal but not transient");
 	t.assert(isfatal("invalid API key") == 1 && istransient("invalid API key") == 0,
 		"auth error is fatal but not transient");

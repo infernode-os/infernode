@@ -383,7 +383,7 @@ chmod +x ~/.termux/boot/0-wake-lock
 | `listen` + `exportfs` over TCP | ✓ |
 | Mounting host paths via `#U` | ✓ (confined to `-r` root) |
 | GUI (Lucia / Xenith / SDL3) | ✗ (Phase 1) |
-| On-device LLM via `/n/llm` | ✗ (Phase 1) |
+| On-device LLM via `/mnt/llm` | ✗ (Phase 1) |
 | Standalone APK (no Termux dependency) | ✗ (Phase 1) |
 | x86 / x86_64 Android emulator (AVD) | ✗ (would need a separate cross-build) |
 
@@ -426,7 +426,7 @@ still running.
 * It is not an Android app. There is no APK, no Activity, no
   notification — Termux just runs the binary in a terminal app. Phase
   1 produces an actual installable app.
-* It is not on-device inference. `/n/llm` is not wired to anything
+* It is not on-device inference. `/mnt/llm` is not wired to anything
   useful on the phone yet; that retarget happens in Phase 1.
 * It is not GUI. No Lucia, no Xenith on the phone yet. Headless only.
 
@@ -668,7 +668,7 @@ Everything beyond that needs Ba'al.
 
 ## Wiring a remote LLM on the phone (INFR-169)
 
-InferNode on mobile needs `/n/llm` mounted before Veltro can call any
+InferNode on mobile needs `/mnt/llm` mounted before Veltro can call any
 tool — including the SMS / dial tools we just verified. Hephaestus's
 default `serve-llm` listener is keyring-authenticated; an anonymous
 `mount -A` is hung up by the server. The Settings → LLM Service panel

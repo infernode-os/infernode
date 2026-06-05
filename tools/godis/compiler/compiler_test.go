@@ -3047,6 +3047,9 @@ func TestE2EPrograms(t *testing.T) {
 		{"unicode_pkg.go", "letter\ndigit\nupper\nlower\nspace\n65\n122\n"},
 		{"context_pkg.go", "context ok\n"},
 		{"path_pkg.go", "baz.txt\n/foo/bar\n.txt\n"},
+		// Complex arithmetic is correct; floats print in godis's plain style
+		// (same as float_basic.go), not Go's scientific println format.
+		{"complex_basic.go", "3\n4\n4\n6\n2\n2\n-5\n10\n3\n-1\nequal\nnot equal\n"},
 	}
 
 	for _, tt := range tests {

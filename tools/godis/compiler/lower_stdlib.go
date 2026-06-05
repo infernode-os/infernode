@@ -3444,7 +3444,7 @@ func (fl *funcLowerer) lowerFmtPrint(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3463,7 +3463,7 @@ func (fl *funcLowerer) lowerFmtFprintf(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3480,7 +3480,7 @@ func (fl *funcLowerer) lowerFmtFprintln(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3497,7 +3497,7 @@ func (fl *funcLowerer) lowerFmtFprint(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -5956,7 +5956,7 @@ func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emit(dis.Inst2(dis.IMOVP, msgOp, dis.FP(msgSlot)))
 			nlOff := fl.comp.AllocString("\n")
 			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlOff), dis.FP(msgSlot), dis.FP(msgSlot)))
-			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
+			fl.emitSysCall("print", []callSiteArg{{msgSlot, true, false}})
 		}
 		return true, nil
 	case "String", "Int", "Int64", "Float64", "Bool", "Any", "Duration", "Group":
@@ -5972,7 +5972,7 @@ func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emit(dis.Inst2(dis.IMOVP, msgOp, dis.FP(msgSlot)))
 			nlOff := fl.comp.AllocString("\n")
 			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlOff), dis.FP(msgSlot), dis.FP(msgSlot)))
-			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
+			fl.emitSysCall("print", []callSiteArg{{msgSlot, true, false}})
 		}
 		return true, nil
 	case "New", "Default", "With", "WithGroup":

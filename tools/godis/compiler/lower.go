@@ -1476,7 +1476,7 @@ func (fl *funcLowerer) lowerFmtPrintf(instr *ssa.Call) (bool, error) {
 		return false, nil
 	}
 	// Print the formatted string via sys->print
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 
 	// Printf returns (int, error). Set return values if used.
 	if len(*instr.Referrers()) > 0 {
@@ -1628,7 +1628,7 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 			case 'd':
 				src := fl.operandOf(val)
 				tmp := fl.frame.AllocTemp(true)
-				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				fl.emitIntToString(src, tmp, val.Type())
 				partSlot = dis.FP(tmp)
 			case 'v':
 				// %v: type-aware formatting
@@ -1644,7 +1644,7 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 				} else {
 					src := fl.operandOf(val)
 					tmp := fl.frame.AllocTemp(true)
-					fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+					fl.emitIntToString(src, tmp, val.Type())
 					partSlot = dis.FP(tmp)
 				}
 			case 's':
@@ -1953,7 +1953,7 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 			base, _ := constant.Int64Val(baseConst.Value)
 			switch base {
 			case 10:
-				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
+				fl.emitIntToString(src, dst, instr.Call.Args[0].Type())
 				return true, nil
 			case 16:
 				hexStr := fl.emitHexConversion(src)
@@ -5261,6 +5261,10 @@ func (fl *funcLowerer) emitPrintArg(arg ssa.Value) error {
 		case basic.Kind() == types.String:
 			return fl.emitSysPrintFmt("%s", arg)
 		case basic.Info()&types.IsInteger != 0:
+			// Inferno's print verb for a 64-bit `big` value is %bd.
+			if isWide64Int(arg.Type()) {
+				return fl.emitSysPrintFmt("%bd", arg)
+			}
 			return fl.emitSysPrintFmt("%d", arg)
 		case basic.Info()&types.IsFloat != 0:
 			return fl.emitSysPrintFmt("%g", arg)
@@ -5327,7 +5331,7 @@ func (fl *funcLowerer) emitSysPrint(s string) {
 	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(mpOff), dis.FP(fmtOff)))
 
 	// Set up print frame and call
-	fl.emitSysCall("print", []callSiteArg{{fmtOff, true}})
+	fl.emitSysCall("print", []callSiteArg{{fmtOff, true, false}})
 }
 
 // emitSysPrintFmt emits sys->print(fmt, arg).
@@ -5343,8 +5347,8 @@ func (fl *funcLowerer) emitSysPrintFmt(format string, arg ssa.Value) error {
 
 	// Set up print frame and call with format + arg
 	fl.emitSysCall("print", []callSiteArg{
-		{fmtOff, true},                          // format string (always pointer)
-		{argOff, GoTypeToDis(arg.Type()).IsPtr}, // argument
+		{fmtOff, true, false},                                        // format string (always pointer)
+		{argOff, GoTypeToDis(arg.Type()).IsPtr, isWide64Int(arg.Type())}, // argument
 	})
 
 	return nil
@@ -5366,8 +5370,8 @@ func (fl *funcLowerer) emitSysPrintFmtOp(format string, op dis.Operand, isPtr bo
 	}
 
 	fl.emitSysCall("print", []callSiteArg{
-		{fmtOff, true},
-		{argOff, isPtr},
+		{fmtOff, true, false},
+		{argOff, isPtr, false},
 	})
 	return nil
 }
@@ -5376,6 +5380,7 @@ func (fl *funcLowerer) emitSysPrintFmtOp(format string, op dis.Operand, isPtr bo
 type callSiteArg struct {
 	srcOff int32 // frame offset of the source value
 	isPtr  bool  // whether the argument is a pointer (for GC type map)
+	isLong bool  // whether the argument is a 64-bit value (copy 8 bytes via MOVL)
 }
 
 // emitSysCall emits a call to a Sys module function.
@@ -5407,9 +5412,12 @@ func (fl *funcLowerer) emitSysCall(funcName string, args []callSiteArg) {
 	// Set arguments in callee frame
 	for i, arg := range args {
 		calleeOff := int32(dis.MaxTemp) + int32(i)*int32(dis.IBY2WD)
-		if arg.isPtr {
+		switch {
+		case arg.isPtr:
 			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(arg.srcOff), dis.FPInd(callFrame, calleeOff)))
-		} else {
+		case arg.isLong:
+			fl.emit(dis.Inst2(dis.IMOVL, dis.FP(arg.srcOff), dis.FPInd(callFrame, calleeOff)))
+		default:
 			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arg.srcOff), dis.FPInd(callFrame, calleeOff)))
 		}
 	}
@@ -5508,7 +5516,7 @@ func (fl *funcLowerer) lowerSysModuleCall(instr *ssa.Call, callee *ssa.Function)
 		// Variadic function (fprint, print): use IFRAME with custom TD
 		var callArgs []callSiteArg
 		for _, a := range args {
-			callArgs = append(callArgs, callSiteArg{a.off, a.isPtr})
+			callArgs = append(callArgs, callSiteArg{a.off, a.isPtr, false})
 		}
 		tdID := fl.makeCallTypeDesc(callArgs)
 		fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(int32(tdID)), dis.FP(callFrame)))
@@ -8610,7 +8618,11 @@ func (fl *funcLowerer) materialize(v ssa.Value) int32 {
 		switch c.Value.Kind() {
 		case constant.Int:
 			val, _ := constant.Int64Val(c.Value)
-			if val >= -0x20000000 && val <= 0x1FFFFFFF {
+			if isWide64Int(v.Type()) {
+				// 64-bit constant: keep all bits via a DEFL module item.
+				mpOff := fl.comp.AllocLong(val)
+				fl.emit(dis.Inst2(dis.IMOVL, dis.MP(mpOff), dis.FP(off)))
+			} else if val >= -0x20000000 && val <= 0x1FFFFFFF {
 				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(val)), dis.FP(off)))
 			} else {
 				// Too large for a 30-bit Dis immediate: load from module data.
@@ -8682,7 +8694,17 @@ func (fl *funcLowerer) constOperand(c *ssa.Const) dis.Operand {
 	case constant.Int:
 		val, _ := constant.Int64Val(c.Value)
 		if val >= -0x20000000 && val <= 0x1FFFFFFF {
+			// Small enough for a 30-bit Dis immediate; immediates sign-extend
+			// to the operand width, so this is also correct as a LONG source.
 			return dis.Imm(int32(val))
+		}
+		if isWide64Int(c.Type()) {
+			// 64-bit constant too large for an immediate: keep all bits via a
+			// DEFL module item and load it with MOVL.
+			mpOff := fl.comp.AllocLong(val)
+			off := fl.frame.AllocWord("")
+			fl.emit(dis.Inst2(dis.IMOVL, dis.MP(mpOff), dis.FP(off)))
+			return dis.FP(off)
 		}
 		// Too large for a 30-bit Dis immediate: store the full word in the
 		// module data section and load it with MOVW from MP. (Encoding it as
@@ -8722,11 +8744,36 @@ func (fl *funcLowerer) constOperand(c *ssa.Const) dis.Operand {
 // sites did, so routing those sites through it is a behavior-preserving
 // refactor that keeps the E2E suite byte-for-byte identical.
 func (fl *funcLowerer) emitValueMove(src, dst dis.Operand, t types.Type) {
-	if GoTypeToDis(t).IsPtr {
+	switch {
+	case GoTypeToDis(t).IsPtr:
 		fl.emit(dis.Inst2(dis.IMOVP, src, dst))
-	} else {
+	case isWide64Int(t):
+		// int64/uint64 occupy a full 8-byte slot; copy all 64 bits.
+		fl.emit(dis.Inst2(dis.IMOVL, src, dst))
+	default:
 		fl.emit(dis.Inst2(dis.IMOVW, src, dst))
 	}
+}
+
+// emitIntToString converts an integer operand to its decimal string form in
+// FP(dst), selecting the 64-bit CVTLC for int64/uint64 and the 32-bit CVTWC
+// otherwise.
+func (fl *funcLowerer) emitIntToString(src dis.Operand, dst int32, t types.Type) {
+	if isWide64Int(t) {
+		fl.emit(dis.Inst2(dis.ICVTLC, src, dis.FP(dst)))
+	} else {
+		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
+	}
+}
+
+// isWide64Int reports whether t is a Go integer type that GoDis represents as a
+// true 64-bit Dis LONG (int64/uint64), as opposed to the still-32-bit int/uint
+// (which the int64 plan widens in a later phase).
+func isWide64Int(t types.Type) bool {
+	if b, ok := t.Underlying().(*types.Basic); ok {
+		return b.Kind() == types.Int64 || b.Kind() == types.Uint64
+	}
+	return false
 }
 
 // emitArgCopy copies an argument value of Go type t from FP(srcOff) into a
@@ -8767,10 +8814,72 @@ func (fl *funcLowerer) arithOp(intOp, floatOp, stringOp dis.Op, basic *types.Bas
 	if basic.Kind() == types.String && stringOp != 0 {
 		return stringOp
 	}
+	if basic.Kind() == types.Int64 || basic.Kind() == types.Uint64 {
+		return wordOpToLong(intOp)
+	}
 	return intOp
 }
 
+// wordOpToLong maps a 32-bit WORD arithmetic/logic opcode to its 64-bit LONG
+// counterpart, used when an operation is on int64/uint64 operands. Ops without
+// a meaningful long form are returned unchanged.
+func wordOpToLong(op dis.Op) dis.Op {
+	switch op {
+	case dis.IADDW:
+		return dis.IADDL
+	case dis.ISUBW:
+		return dis.ISUBL
+	case dis.IMULW:
+		return dis.IMULL
+	case dis.IDIVW:
+		return dis.IDIVL
+	case dis.IMODW:
+		return dis.IMODL
+	case dis.IANDW:
+		return dis.IANDL
+	case dis.IORW:
+		return dis.IORL
+	case dis.IXORW:
+		return dis.IXORL
+	case dis.ISHLW:
+		return dis.ISHLL
+	case dis.ISHRW:
+		return dis.ISHRL
+	}
+	return op
+}
+
 func (fl *funcLowerer) compBranchOp(op token.Token, basic *types.Basic) dis.Op {
+	wop := fl.compBranchOpWord(op, basic)
+	if basic != nil && (basic.Kind() == types.Int64 || basic.Kind() == types.Uint64) {
+		return wordBranchToLong(wop)
+	}
+	return wop
+}
+
+// wordBranchToLong maps a 32-bit WORD compare-branch opcode to its 64-bit LONG
+// counterpart for int64/uint64 comparisons. Like the existing word path, the
+// long branches are signed; unsigned 64-bit comparison correctness is a
+// separate pre-existing gap (uint has the same limitation today).
+func wordBranchToLong(op dis.Op) dis.Op {
+	switch op {
+	case dis.IBEQW:
+		return dis.IBEQL
+	case dis.IBNEW:
+		return dis.IBNEL
+	case dis.IBLTW:
+		return dis.IBLTL
+	case dis.IBLEW:
+		return dis.IBLEL
+	case dis.IBGTW:
+		return dis.IBGTL
+	case dis.IBGEW:
+		return dis.IBGEL
+	}
+	return op
+}
+
+func (fl *funcLowerer) compBranchOpWord(op token.Token, basic *types.Basic) dis.Op {
 	isF := basic != nil && isFloat(basic)
 	isC := basic != nil && basic.Kind() == types.String
 

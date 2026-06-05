@@ -3020,6 +3020,10 @@ func TestE2EPrograms(t *testing.T) {
 		{"struct_embed_basic.go", "10\n20\n"},
 		{"chan_recv_commaok.go", "42\ntrue\n0\nfalse\n"},
 		{"three_idx_slice.go", "2\n2\n3\n"},
+
+		// 64-bit int64/uint64: constants, arithmetic, comparison, call
+		// boundary, negatives, and bit ops above bit 31.
+		{"int64.go", "1099511627776\n5000000001\n4999999999\n10000000000\n1666666666\n2\n5000000000\nbig\n-3000000000\n12884901888\n4026531840\n"},
 	}
 
 	for _, tt := range tests {

@@ -182,9 +182,9 @@ restrictns(caps: ref Capabilities): string
 		return sys->sprint("restrict /dev: %s", err);
 
 	# 4-5. Restrict /n to explicitly granted entries only.
+	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
 	#   /n/llm    — always granted (core agent service; withheld = non-functional)
-	#   /n/mcp    — caps.mcproviders != nil
 	#   /n/speech — "/n/speech" in caps.paths
 	#   /n/git    — "/n/git" in caps.paths
 	#   /n/wallet — "/n/wallet" in caps.paths
@@ -201,12 +201,9 @@ restrictns(caps: ref Capabilities): string
 		if(llmok >= 0)
 			nallow = "llm" :: nallow;
 
-		# /n/mcp — only if mc9p providers configured
-		if(caps.mcproviders != nil) {
-			(mcpok, nil) := sys->stat("/n/mcp");
-			if(mcpok >= 0)
-				nallow = "mcp" :: nallow;
-		}
+		# NB: MCP providers (mc9p, mcp9p adapters) now mount under /mnt/mcp, not
+		# /n — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). The
+		# /mnt grant is handled in step 5b below, not here.
 
 		# /n/speech — only if explicitly granted via caps.paths
 		if(inlist("/n/speech", caps.paths)) {
@@ -279,6 +276,29 @@ restrictns(caps: ref Capabilities): string
 		}
 	}
 
+	# 5b. Restrict /mnt to explicitly granted application mount points.
+	keepmnt := 0;
+	# /mnt holds trees WE synthesize (the schema is ours) — MCP adapters at
+	# /mnt/mcp/<server>, webfs, etc. (docs/NAMESPACE-LAYOUT.md). Like /n, every
+	# entry is capability-driven, never auto-exposed by existence. restrictpath
+	# drills as deep as the caps specify, so a "/mnt/mcp/osm" grant exposes ONLY
+	# that subtree (least privilege for the sub-agent MCP bridge, INFR-247);
+	# caps.mcproviders (generic mc9p) grants the whole /mnt/mcp. "mnt" is added
+	# to the root safe-list (step 8) only when something here is granted —
+	# otherwise a confined agent sees no /mnt at all.
+	mntpaths := filterpaths(caps.paths, "/mnt/");
+	if(caps.mcproviders != nil && mntpaths == nil)
+		mntpaths = "mcp" :: nil;	# whole /mnt/mcp for generic mc9p
+	if(mntpaths != nil) {
+		(mntok, nil) := sys->stat("/mnt");
+		if(mntok >= 0) {
+			err = restrictpath("/mnt", mntpaths);
+			if(err != nil)
+				return sys->sprint("restrict /mnt: %s", err);
+			keepmnt = 1;
+		}
+	}
+
 	# 6. Restrict /lib to: veltro/, certs/
 	# certs/ is the TLS root CA store; required by x509->verify_certchain().
 	(libok, nil) := sys->stat("/lib");
@@ -305,6 +325,10 @@ restrictns(caps: ref Capabilities): string
 	safe := "dev" :: "dis" :: "env" :: "fd" ::
 		"lib" :: "n" :: "net" :: "net.alt" :: "nvfs" ::
 		"prog" :: "tmp" :: "tool" :: nil;
+	# /mnt — application mount points (MCP adapters etc.) — only if a /mnt subtree
+	# was granted in step 5b; otherwise a confined agent gets no /mnt at all.
+	if(keepmnt)
+		safe = "mnt" :: safe;
 	# Only include /chan (Xenith 9P filesystem) if explicitly granted.
 	# /chan exposes ALL window contents — without this gate, any agent
 	# could read every open Xenith window regardless of namespace restriction.
@@ -535,13 +559,15 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 			sys->fprint(fd, "path=%s label=%s perm=%s\n", path, label, perm);
 	}
 
-	# /n entries — capability-driven
+	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
 		("/n/llm",    "LLM Service",      "rw"),
-		("/n/mcp",    "MCP Providers",    "rw"),
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
 		("/n/ui",     "UI Service",       "rw"),
+		# MCP providers live under /mnt/mcp now (application mount point,
+		# docs/NAMESPACE-LAYOUT.md), not /n.
+		("/mnt/mcp",  "MCP Providers",    "rw"),
 	};
 
 	for(i = 0; i < len nentries; i++) {

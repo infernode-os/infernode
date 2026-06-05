@@ -862,6 +862,11 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 	t := instr.X.Type().Underlying()
 	basic, _ := t.(*types.Basic)
 
+	// The Dis middle operand ("reg") is only 16 bits wide, so an immediate
+	// outside int16 range placed there would be silently truncated. fl.fitMid
+	// wraps whichever operand lands in the middle (3rd) position below,
+	// materializing such immediates into a frame slot first.
+
 	// Dis three-operand arithmetic: dst = mid OP src
 	// For Go's X OP Y:
 	//   Commutative ops (ADD, MUL, AND, OR, XOR): order doesn't matter
@@ -873,39 +878,39 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 		if op == dis.IADDC {
 			// String concatenation is non-commutative: dst = mid + src
 			// We have src=X, mid=Y, want X+Y, so swap: mid=X, src=Y
-			fl.emit(dis.NewInst(op, mid, src, dis.FP(dst)))
+			fl.emit(dis.NewInst(op, mid, fl.fitMid(src, basic), dis.FP(dst)))
 		} else {
-			fl.emit(dis.NewInst(op, src, mid, dis.FP(dst)))
+			fl.emit(dis.NewInst(op, src, fl.fitMid(mid, basic), dis.FP(dst)))
 		}
 	case token.SUB:
-		fl.emit(dis.NewInst(fl.arithOp(dis.ISUBW, dis.ISUBF, 0, basic), mid, src, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.ISUBW, dis.ISUBF, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.MUL:
-		fl.emit(dis.NewInst(fl.arithOp(dis.IMULW, dis.IMULF, 0, basic), src, mid, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IMULW, dis.IMULF, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
 	case token.QUO:
 		op := fl.arithOp(dis.IDIVW, dis.IDIVF, 0, basic)
 		if op == dis.IDIVW {
 			fl.emitZeroDivCheck(mid) // ARM64 sdiv returns 0 on div-by-zero instead of trapping
 		}
-		fl.emit(dis.NewInst(op, mid, src, dis.FP(dst)))
+		fl.emit(dis.NewInst(op, mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.REM:
 		fl.emitZeroDivCheck(mid)
-		fl.emit(dis.NewInst(dis.IMODW, mid, src, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IMODW, 0, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.AND:
-		fl.emit(dis.NewInst(dis.IANDW, src, mid, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IANDW, 0, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
 	case token.OR:
-		fl.emit(dis.NewInst(dis.IORW, src, mid, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IORW, 0, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
 	case token.XOR:
-		fl.emit(dis.NewInst(dis.IXORW, src, mid, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IXORW, 0, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
 	case token.SHL:
-		fl.emit(dis.NewInst(dis.ISHLW, mid, src, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.ISHLW, 0, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.SHR:
-		fl.emit(dis.NewInst(dis.ISHRW, mid, src, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.ISHRW, 0, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.AND_NOT: // &^ (bit clear): x &^ y = x AND (NOT y)
 		// NOT y: XOR y, $-1 → temp
 		temp := fl.frame.AllocWord("andnot.tmp")
-		fl.emit(dis.NewInst(dis.IXORW, dis.Imm(-1), mid, dis.FP(temp)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IXORW, 0, 0, basic), dis.Imm(-1), fl.fitMid(mid, basic), dis.FP(temp)))
 		// AND x, temp → dst
-		fl.emit(dis.NewInst(dis.IANDW, dis.FP(temp), src, dis.FP(dst)))
+		fl.emit(dis.NewInst(fl.arithOp(dis.IANDW, 0, 0, basic), dis.FP(temp), fl.fitMid(src, basic), dis.FP(dst)))
 
 	// Comparisons: produce a boolean (0 or 1) in the destination
 	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
@@ -1064,11 +1069,15 @@ func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src
 		// XOR each operand with sign bit to transform unsigned→signed ordering
 		tmpSrc := fl.frame.AllocWord("ucmp.src")
 		tmpMid := fl.frame.AllocWord("ucmp.mid")
-		fl.emit(dis.NewInst(dis.IXORW, dis.FP(signSlot), src, dis.FP(tmpSrc)))
-		fl.emit(dis.NewInst(dis.IXORW, dis.FP(signSlot), mid, dis.FP(tmpMid)))
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(signSlot), fl.fitMid(src, basic), dis.FP(tmpSrc)))
+		fl.emit(dis.NewInst(dis.IXORW, dis.FP(signSlot), fl.fitMid(mid, basic), dis.FP(tmpMid)))
 		actualSrc = dis.FP(tmpSrc)
 		actualMid = dis.FP(tmpMid)
 	}
+
+	// A large immediate would be truncated in the branch's middle operand;
+	// materialize it first so it doesn't perturb the PC arithmetic below.
+	safeMid := fl.fitMid(actualMid, basic)
 
 	// Emit: movw $1, dst; bXX src, mid, PC+3; movw $0, dst
 	truePC := int32(len(fl.insts)) + 3 // after movw $1, branch, movw $0
@@ -1076,7 +1085,7 @@ func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
 
 	branchOp := fl.compBranchOp(instr.Op, basic)
-	fl.emit(dis.NewInst(branchOp, actualSrc, actualMid, dis.Imm(truePC)))
+	fl.emit(dis.NewInst(branchOp, actualSrc, safeMid, dis.Imm(truePC)))
 
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 
@@ -8146,6 +8155,41 @@ func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 		return nil
 	}
 
+	// Integer width conversions involving 64-bit int64/uint64.
+	if isIntegerType(srcType) && isIntegerType(dstType) {
+		srcWide := isWide64Int(srcType)
+		dstWide := isWide64Int(dstType)
+		switch {
+		case dstWide && !srcWide:
+			// Widen 32-bit int → 64-bit. CVTWL sign-extends; for an unsigned
+			// source clear the high half so the value zero-extends instead.
+			fl.emit(dis.Inst2(dis.ICVTWL, src, dis.FP(dst)))
+			if isUnsignedInt(srcType) {
+				maskOff := fl.comp.AllocLong(0xFFFFFFFF)
+				mslot := fl.frame.AllocWord("conv.mask")
+				fl.emit(dis.Inst2(dis.IMOVL, dis.MP(maskOff), dis.FP(mslot)))
+				fl.emit(dis.NewInst(dis.IANDL, dis.FP(mslot), dis.FP(dst), dis.FP(dst)))
+			}
+			return nil
+		case srcWide && !dstWide:
+			// Narrow 64-bit → 32-bit (and sub-word if needed).
+			fl.emit(dis.Inst2(dis.ICVTLW, src, dis.FP(dst)))
+			fl.emitSubWordTruncate(dst, dstType)
+			return nil
+		case srcWide && dstWide:
+			// int64 ↔ uint64: same 64-bit width.
+			fl.emit(dis.Inst2(dis.IMOVL, src, dis.FP(dst)))
+			return nil
+		}
+		// Both 32-bit: fall through to the default move/truncate below.
+	}
+
+	// int64 → float (CVTLF)
+	if isWide64Int(srcType) && isFloatType(dstType) {
+		fl.emit(dis.Inst2(dis.ICVTLF, src, dis.FP(dst)))
+		return nil
+	}
+
 	// int → float (CVTWF)
 	if isIntegerType(srcType) && isFloatType(dstType) {
 		fl.emit(dis.Inst2(dis.ICVTWF, src, dis.FP(dst)))
@@ -8154,10 +8198,14 @@ func (fl *funcLowerer) lowerConvert(instr *ssa.Convert) error {
 
 	// float → int. Go truncates toward zero, but CVTFW/CVTFL both round
 	// (they add ±0.5 before the integer cast). Truncate explicitly, then
-	// narrow the 64-bit result to the destination word.
+	// narrow the 64-bit result (or keep it for a 64-bit destination).
 	if isFloatType(srcType) && isIntegerType(dstType) {
 		n := fl.emitTruncToLong(src)
-		fl.emit(dis.Inst2(dis.ICVTLW, n, dis.FP(dst)))
+		if isWide64Int(dstType) {
+			fl.emit(dis.Inst2(dis.IMOVL, n, dis.FP(dst)))
+		} else {
+			fl.emit(dis.Inst2(dis.ICVTLW, n, dis.FP(dst)))
+		}
 		return nil
 	}
 
@@ -8178,6 +8226,11 @@ func isIntegerType(t types.Type) bool {
 		return true
 	}
 	return false
+}
+
+func isUnsignedInt(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsUnsigned != 0
 }
 
 func isFloatType(t types.Type) bool {
@@ -8802,6 +8855,25 @@ func (fl *funcLowerer) emitArgCopy(t types.Type, srcOff, frame, dstOff int32) in
 	}
 	fl.emitValueMove(dis.FP(srcOff), dis.FPInd(frame, dstOff), t)
 	return iby2wd
+}
+
+// fitMid returns op unchanged unless it is an immediate that does not fit the
+// Dis middle operand. That field (the instruction's "reg") is a 16-bit ushort
+// in the VM, so a wider immediate placed there is silently truncated; in that
+// case materialize the value into a frame slot and return that instead. For
+// int64/uint64 operands the slot is filled with a sign-extending word→long
+// conversion so the full 64-bit value is present.
+func (fl *funcLowerer) fitMid(op dis.Operand, basic *types.Basic) dis.Operand {
+	if op.Mode != dis.AIMM || (op.Val >= -32768 && op.Val <= 32767) {
+		return op
+	}
+	slot := fl.frame.AllocWord("mid.imm")
+	if basic != nil && (basic.Kind() == types.Int64 || basic.Kind() == types.Uint64) {
+		fl.emit(dis.Inst2(dis.ICVTWL, op, dis.FP(slot)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, op, dis.FP(slot)))
+	}
+	return dis.FP(slot)
 }
 
 func (fl *funcLowerer) arithOp(intOp, floatOp, stringOp dis.Op, basic *types.Basic) dis.Op {

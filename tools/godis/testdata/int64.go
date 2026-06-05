@@ -31,4 +31,17 @@ func main() {
 	var m int64 = 0xF00000000
 	println(m & 0x300000000)
 	println(m >> 4)
+
+	// A medium constant (> 16 bits) as a multiplier exercises the middle
+	// operand, which is only 16 bits wide and must be materialized.
+	var n int64 = 3000000
+	println(n * 4000)
+
+	// Conversions to/from int64.
+	var i int = 100
+	println(int64(i) * 50000000)
+	var f float64 = 3.0e9
+	println(int64(f))
+	var u uint = 4000000000
+	println(uint64(u))
 }

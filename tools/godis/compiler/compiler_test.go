@@ -3064,6 +3064,8 @@ func TestE2EPrograms(t *testing.T) {
 		// Stub packages whose nil pointer/slice results no longer fault.
 		{"json_pkg.go", "valid\njson ok\n"},
 		{"regexp_pkg.go", "regexp ok\n"},
+		// url.QueryEscape is now a real percent-encoder (ASCII-correct).
+		{"url_pkg.go", "hello+world\nurl ok\n"},
 	}
 
 	for _, tt := range tests {

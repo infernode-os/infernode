@@ -4565,6 +4565,122 @@ func (fl *funcLowerer) lowerBufioCall(instr *ssa.Call, callee *ssa.Function) (bo
 // ============================================================
 
 // lowerNetURLCall handles calls to the net/url package.
+// emitURLEscape implements url.QueryEscape / url.PathEscape: write to FP(dst)
+// the percent-encoding of the string at sOp. Characters in the unreserved set
+// (A-Za-z0-9 and -_.~) pass through; a space becomes '+' (plusForSpace) or
+// %20; everything else becomes %XX with uppercase hex.
+//
+// Iteration is by rune, so a non-ASCII codepoint is escaped as a single %XX of
+// its low byte rather than its multi-byte UTF-8 form (Go escapes the UTF-8
+// bytes). ASCII — the overwhelmingly common case — is byte-for-byte correct.
+func (fl *funcLowerer) emitURLEscape(sOp dis.Operand, dst int32, plusForSpace bool) {
+	lenS := fl.frame.AllocWord("esc.len")
+	i := fl.frame.AllocWord("esc.i")
+	i1 := fl.frame.AllocWord("esc.i1")
+	c := fl.frame.AllocWord("esc.c")
+	nib := fl.frame.AllocWord("esc.nib")
+	nib1 := fl.frame.AllocWord("esc.nib1")
+	piece := fl.frame.AllocTemp(true)
+
+	emptyOff := fl.comp.AllocString("")
+	hexOff := fl.comp.AllocString("0123456789ABCDEF")
+	pctOff := fl.comp.AllocString("%")
+	plusOff := fl.comp.AllocString("+")
+	sp20Off := fl.comp.AllocString("%20")
+
+	// result = ""
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	// appendPiece concatenates FP(piece) onto the result (dst = dst + piece).
+	appendPiece := func() {
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(piece), dis.FP(dst), dis.FP(dst)))
+	}
+	// appendNibble appends hex[nib:nib+1] for the low 4 bits in FP(nib).
+	appendNibble := func() {
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(nib), dis.FP(nib1)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(hexOff), dis.FP(piece)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(nib), dis.FP(nib1), dis.FP(piece)))
+		appendPiece()
+	}
+
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0))) // if i>=len goto done
+
+	// c = s[i]
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(c)))
+
+	// Unreserved-set checks: each branch jumps to the "append char" block.
+	var toChar []int
+	emitRange := func(lo, hi int32) {
+		// if c < lo: skip; else if c <= hi: goto char
+		skip := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(c), dis.Imm(lo), dis.Imm(0)))
+		toChar = append(toChar, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBLEW, dis.FP(c), dis.Imm(hi), dis.Imm(0)))
+		fl.insts[skip].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+	emitEq := func(v int32) {
+		toChar = append(toChar, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(c), dis.Imm(v), dis.Imm(0)))
+	}
+	emitRange('0', '9')
+	emitRange('A', 'Z')
+	emitRange('a', 'z')
+	emitEq('-')
+	emitEq('.')
+	emitEq('_')
+	emitEq('~')
+
+	// Not unreserved: space → '+'/%20, else %XX.
+	notSpaceIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm(' '), dis.Imm(0)))
+	// space branch
+	if plusForSpace {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(plusOff), dis.FP(piece)))
+		appendPiece()
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sp20Off), dis.FP(piece)))
+		appendPiece()
+	}
+	spaceDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // goto next
+
+	// %XX escape block
+	escapePC := int32(len(fl.insts))
+	fl.insts[notSpaceIdx].Dst = dis.Imm(escapePC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(pctOff), dis.FP(piece)))
+	appendPiece()
+	fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(4), dis.FP(c), dis.FP(nib)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.Imm(15), dis.FP(nib), dis.FP(nib)))
+	appendNibble()
+	fl.emit(dis.NewInst(dis.IANDW, dis.Imm(15), dis.FP(c), dis.FP(nib)))
+	appendNibble()
+	escDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // goto next
+
+	// append-char block: result += s[i:i+1]
+	charPC := int32(len(fl.insts))
+	for _, idx := range toChar {
+		fl.insts[idx].Dst = dis.Imm(charPC)
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i1)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(i1), dis.FP(piece)))
+	appendPiece()
+
+	// next: i++; loop
+	nextPC := int32(len(fl.insts))
+	fl.insts[spaceDoneIdx].Dst = dis.Imm(nextPC)
+	fl.insts[escDoneIdx].Dst = dis.Imm(nextPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
 func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Parse":
@@ -4577,10 +4693,10 @@ func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (b
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "QueryEscape", "PathEscape":
-		// url.QueryEscape(s) → return s (simplified stub)
+		// QueryEscape encodes a space as '+'; PathEscape as %20.
 		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		fl.emitURLEscape(sOp, dst, callee.Name() == "QueryEscape")
 		return true, nil
 	case "QueryUnescape", "PathUnescape":
 		// url.QueryUnescape(s) → (s, nil error)

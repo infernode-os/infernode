@@ -3079,6 +3079,9 @@ func TestE2EPrograms(t *testing.T) {
 		// the compiler (was makeHeapTypeDesc(nil)).
 		{"bytes_buffer.go", "hello world!\n12\nabc 3\n"},
 		{"strings_fields.go", "3\na b c\na-b-c\n1 single\n"},
+		// fmt.Errorf("%w", err) no longer double-frees the wrapped error's
+		// message (the %w temp now takes a reference via MOVP).
+		{"errorf_wrap.go", "operation failed: base failure\n[base failure] and more\ndone\n"},
 	}
 
 	for _, tt := range tests {

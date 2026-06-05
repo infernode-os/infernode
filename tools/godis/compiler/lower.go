@@ -1721,8 +1721,12 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 			case 'w':
 				valSlot := fl.materialize(val)
 				if _, ok := val.Type().Underlying().(*types.Interface); ok {
+					// The interface's value word holds the error's string. Copy
+					// it with MOVP (not MOVW) so the GC-traced temp takes a
+					// reference; MOVW skipped the incref and the shared string
+					// was double-freed at frame teardown.
 					tmp := fl.frame.AllocTemp(true)
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valSlot+int32(dis.IBY2WD)), dis.FP(tmp)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valSlot+int32(dis.IBY2WD)), dis.FP(tmp)))
 					partSlot = dis.FP(tmp)
 				} else {
 					partSlot = fl.operandOf(val)

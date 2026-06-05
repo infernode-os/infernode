@@ -3066,6 +3066,9 @@ func TestE2EPrograms(t *testing.T) {
 		{"regexp_pkg.go", "regexp ok\n"},
 		// url.QueryEscape is now a real percent-encoder (ASCII-correct).
 		{"url_pkg.go", "hello+world\nurl ok\n"},
+		// path.Clean / filepath.Clean: lexical . and .. resolution.
+		{"path_clean.go", "/a/c\na/b/c\n.\n/\nc\n/a/b\n..\n../a\n/a\n/a/d\nx\nx\n/\n/\na/b/c\n"},
+		{"filepath_pkg.go", "baz.txt\n/foo/bar\n.txt\n/foo/baz\nfoo/bar/baz\nabs\nrel\n"},
 	}
 
 	for _, tt := range tests {

@@ -1963,8 +1963,207 @@ func (fl *funcLowerer) lowerPathCall(instr *ssa.Call, callee *ssa.Function) (boo
 	case "Join":
 		// path.Join — delegate to strings.Join with "/"
 		return fl.lowerPathJoin(instr)
+	case "Clean":
+		fl.emitPathClean(fl.operandOf(instr.Call.Args[0]), fl.slotOf(instr))
+		return true, nil
 	}
 	return false, nil
+}
+
+// emitPathClean implements path.Clean / filepath.Clean (Go's lexical
+// lazybuf algorithm) as a runtime loop, writing the cleaned path to FP(dst).
+// It resolves "." and ".." elements and collapses repeated slashes. Iteration
+// and slicing are by rune, so non-ASCII path components are preserved verbatim
+// (only the ASCII '/' and '.' drive the logic).
+func (fl *funcLowerer) emitPathClean(sOp dis.Operand, dst int32) {
+	n := fl.frame.AllocWord("cl.n")
+	r := fl.frame.AllocWord("cl.r")
+	outlen := fl.frame.AllocWord("cl.outlen")
+	dotdot := fl.frame.AllocWord("cl.dotdot")
+	rooted := fl.frame.AllocWord("cl.rooted")
+	c := fl.frame.AllocWord("cl.c")
+	idx := fl.frame.AllocWord("cl.idx")
+	ch := fl.frame.AllocWord("cl.ch")
+	tmp := fl.frame.AllocWord("cl.tmp")
+	out := fl.frame.AllocTemp(true)
+	piece := fl.frame.AllocTemp(true)
+
+	slashOff := fl.comp.AllocString("/")
+	dotOff := fl.comp.AllocString(".")
+	dotdotStrOff := fl.comp.AllocString("..")
+	emptyOff := fl.comp.AllocString("")
+
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(out)))
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(n)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dotdot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(r)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(rooted)))
+
+	// if n == 0 { dst = "."; return }
+	bEmpty := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(n), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	bEmptyRet := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[bEmpty].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// rooted = s[0] == '/'
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.Imm(0), dis.FP(c)))
+	bNotRooted := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(slashOff), dis.FP(out)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(r)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dotdot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(rooted)))
+	fl.insts[bNotRooted].Dst = dis.Imm(int32(len(fl.insts)))
+
+	loopPC := int32(len(fl.insts))
+	bDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(r), dis.FP(n), dis.Imm(0))) // r >= n -> done
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(r), dis.FP(c)))
+
+	// '/' -> skip
+	bNotSlash := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(r), dis.FP(r)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.insts[bNotSlash].Dst = dis.Imm(int32(len(fl.insts)))
+
+	var toElement, toDot, toDotDot, toCopyel []int
+
+	// not '.' -> element
+	toElement = append(toElement, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm('.'), dis.Imm(0)))
+	// '.' : if r+1==n or s[r+1]=='/' -> dot element
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(r), dis.FP(idx)))
+	toDot = append(toDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(idx), dis.FP(ch)))
+	toDot = append(toDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	// s[r+1] != '.' -> element (".x")
+	toElement = append(toElement, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm('.'), dis.Imm(0)))
+	// ".." : if r+2==n or s[r+2]=='/' -> dotdot element
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(r), dis.FP(idx)))
+	toDotDot = append(toDotDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(idx), dis.FP(ch)))
+	toDotDot = append(toDotDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	// "..x" -> element
+	toElement = append(toElement, len(fl.insts))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// dot element: r++
+	dotPC := int32(len(fl.insts))
+	for _, i := range toDot {
+		fl.insts[i].Dst = dis.Imm(dotPC)
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(r), dis.FP(r)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// dotdot element: r += 2; backtrack or append ".."
+	dotdotPC := int32(len(fl.insts))
+	for _, i := range toDotDot {
+		fl.insts[i].Dst = dis.Imm(dotdotPC)
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(r), dis.FP(r)))
+	bBacktrack := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(outlen), dis.FP(dotdot), dis.Imm(0))) // outlen>dotdot -> backtrack
+	// else if rooted -> loop (drop the "..")
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(rooted), dis.Imm(0), dis.Imm(loopPC)))
+	// not rooted: append "/" if outlen>0, then ".."
+	bNoSep := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(outlen), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	fl.insts[bNoSep].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(dotdotStrOff), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(outlen), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(outlen), dis.FP(dotdot)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// backtrack: drop the last element from out
+	backtrackPC := int32(len(fl.insts))
+	fl.insts[bBacktrack].Dst = dis.Imm(backtrackPC)
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	bkloopPC := int32(len(fl.insts))
+	bBkTrunc1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLEW, dis.FP(outlen), dis.FP(dotdot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(out), dis.FP(outlen), dis.FP(ch)))
+	bBkTrunc2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(bkloopPC)))
+	bkTruncPC := int32(len(fl.insts))
+	fl.insts[bBkTrunc1].Dst = dis.Imm(bkTruncPC)
+	fl.insts[bBkTrunc2].Dst = dis.Imm(bkTruncPC)
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(outlen), dis.FP(out)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// element: add a separator if needed, then copy the element verbatim
+	elementPC := int32(len(fl.insts))
+	for _, i := range toElement {
+		fl.insts[i].Dst = dis.Imm(elementPC)
+	}
+	// skip separator when (rooted && outlen==1) || (!rooted && outlen==0)
+	bIsRooted := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(rooted), dis.Imm(0), dis.Imm(0))) // rooted -> rootedSep
+	toCopyel = append(toCopyel, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(outlen), dis.Imm(0), dis.Imm(0))) // !rooted && outlen==0 -> copyel
+	bAfterSep := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // -> addsep
+	rootedSepPC := int32(len(fl.insts))
+	fl.insts[bIsRooted].Dst = dis.Imm(rootedSepPC)
+	toCopyel = append(toCopyel, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(outlen), dis.Imm(1), dis.Imm(0))) // rooted && outlen==1 -> copyel
+	addsepPC := int32(len(fl.insts))
+	fl.insts[bAfterSep].Dst = dis.Imm(addsepPC)
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	// copyel: idx = r; scan to next '/'; copy s[r:idx]
+	copyelPC := int32(len(fl.insts))
+	for _, i := range toCopyel {
+		fl.insts[i].Dst = dis.Imm(copyelPC)
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(r), dis.FP(idx)))
+	elloopPC := int32(len(fl.insts))
+	bElCopy1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(idx), dis.FP(ch)))
+	bElCopy2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(elloopPC)))
+	elcopyPC := int32(len(fl.insts))
+	fl.insts[bElCopy1].Dst = dis.Imm(elcopyPC)
+	fl.insts[bElCopy2].Dst = dis.Imm(elcopyPC)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(r), dis.FP(idx), dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(piece), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(r), dis.FP(idx), dis.FP(tmp))) // tmp = idx - r
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(outlen), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(idx), dis.FP(r)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// done: dst = (outlen == 0) ? "." : out
+	donePC := int32(len(fl.insts))
+	fl.insts[bDone].Dst = dis.Imm(donePC)
+	bOutNonzero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(outlen), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	bDoneEnd := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	setoutPC := int32(len(fl.insts))
+	fl.insts[bOutNonzero].Dst = dis.Imm(setoutPC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(out), dis.FP(dst)))
+
+	endPC := int32(len(fl.insts))
+	fl.insts[bEmptyRet].Dst = dis.Imm(endPC)
+	fl.insts[bDoneEnd].Dst = dis.Imm(endPC)
 }
 
 // lowerPathJoin: join path segments with "/".
@@ -3888,11 +4087,9 @@ func (fl *funcLowerer) lowerFilepathExt(instr *ssa.Call) (bool, error) {
 	return true, nil
 }
 
-// lowerFilepathClean returns a cleaned path. Simplified: just returns the input.
+// lowerFilepathClean returns a cleaned path (lexical, resolving . and ..).
 func (fl *funcLowerer) lowerFilepathClean(instr *ssa.Call) (bool, error) {
-	pathOp := fl.operandOf(instr.Call.Args[0])
-	dst := fl.slotOf(instr)
-	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	fl.emitPathClean(fl.operandOf(instr.Call.Args[0]), fl.slotOf(instr))
 	return true, nil
 }
 

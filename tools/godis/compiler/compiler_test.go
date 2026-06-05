@@ -3030,6 +3030,23 @@ func TestE2EPrograms(t *testing.T) {
 
 		// Plain int/uint are 64-bit (Go word width).
 		{"int_wide.go", "6000000000\n9000000000\n428571428\n4\n1099511627776\n9000000000\n-5000000000\n-5000000\n44\n705032704\n9000000000\n8000000000\n9223372036854775808\n"},
+
+		// Previously-unvalidated programs that pass today: lock them in as
+		// regression coverage (verified identical under -c0 and -c1).
+		{"assign_commaok.go", "10 true\n0 false\n20\n"},
+		{"int_range.go", "45\n5\n"},
+		{"spread_println.go", "a\nb\nc\n"},
+		{"strings_cut.go", "hello\nworld\nworld\nfile\n"},
+		{"strings_ext.go", "3\nequal\nWorld\nHello\nxxbxx\nrune\nany\n2\n4\n"},
+		{"strconv_ext.go", "true\nfalse\nparsed true\n\"hello\"\nworld\n42\n"},
+		{"math_ext.go", "floor ok\nceil ok\ntrunc ok\npow ok\nnan ok\n"},
+		{"typeassert_assign.go", "42\nnot string\n10\n0\n"},
+		{"variadic_spread.go", "6\n60\n"},
+		{"errors_ext.go", "same\ndone\n"},
+		{"mathbits_pkg.go", "3\n8\n3\n"},
+		{"unicode_pkg.go", "letter\ndigit\nupper\nlower\nspace\n65\n122\n"},
+		{"context_pkg.go", "context ok\n"},
+		{"path_pkg.go", "baz.txt\n/foo/bar\n.txt\n"},
 	}
 
 	for _, tt := range tests {

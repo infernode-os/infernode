@@ -3050,6 +3050,9 @@ func TestE2EPrograms(t *testing.T) {
 		// Complex arithmetic is correct; floats print in godis's plain style
 		// (same as float_basic.go), not Go's scientific println format.
 		{"complex_basic.go", "3\n4\n4\n6\n2\n2\n-5\n10\n3\n-1\nequal\nnot equal\n"},
+		// fmt.Sprint/Print now unwrap the variadic []any slice (were printing
+		// the slice pointer as a number).
+		{"fmt_ext.go", "hello\nworld\n"},
 	}
 
 	for _, tt := range tests {

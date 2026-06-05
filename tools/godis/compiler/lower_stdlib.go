@@ -3517,25 +3517,36 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
 
 	args := instr.Call.Args
-	// Skip first arg if it's an io.Writer (Fprint/Fprintln/Fprintf)
-	startIdx := 0
-	if len(args) > 0 {
-		if _, ok := args[0].Type().Underlying().(*types.Interface); ok {
-			// Could be io.Writer — check if this is an F-variant
-			name := ""
-			if callee, ok := instr.Call.Value.(*ssa.Function); ok {
-				name = callee.Name()
-			}
-			if name == "Fprintf" || name == "Fprintln" || name == "Fprint" {
-				startIdx = 1
-			}
+	// The variadic operands arrive as a single []any slice. F-variants
+	// (Fprint/Fprintln/Fprintf) take an io.Writer first, so the slice is the
+	// second argument there.
+	sliceIdx := 0
+	if callee, ok := instr.Call.Value.(*ssa.Function); ok {
+		switch callee.Name() {
+		case "Fprintf", "Fprintln", "Fprint":
+			sliceIdx = 1
 		}
 	}
+	if sliceIdx >= len(args) {
+		// No operands (e.g. fmt.Sprintln()).
+		if addNewline {
+			nlMP := fl.comp.AllocString("\n")
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlMP), dis.FP(result), dis.FP(result)))
+		}
+		return result, true
+	}
 
-	for i := startIdx; i < len(args); i++ {
-		arg := args[i]
+	// Unwrap the []any slice to the concrete operand values (peeling off the
+	// MakeInterface boxing); without this the slice itself was being formatted.
+	elements := fl.traceAllVarargElements(args[sliceIdx])
+	if elements == nil {
+		return 0, false
+	}
 
-		// Try to trace through SliceToArrayPointer or other wrapping
+	for i, arg := range elements {
+		if arg == nil {
+			return 0, false
+		}
 		t := arg.Type().Underlying()
 		basic, isBasic := t.(*types.Basic)
 
@@ -3547,8 +3558,7 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 				src := fl.operandOf(arg)
 				fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(tmp)))
 			case basic.Info()&types.IsInteger != 0:
-				src := fl.operandOf(arg)
-				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				fl.emitIntToString(fl.operandOf(arg), tmp, arg.Type())
 			case basic.Info()&types.IsFloat != 0:
 				src := fl.operandOf(arg)
 				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
@@ -3562,19 +3572,23 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(tmp)))
 				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			default:
-				src := fl.operandOf(arg)
-				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				fl.emitIntToString(fl.operandOf(arg), tmp, arg.Type())
 			}
 		} else {
-			// Non-basic: try CVTWC
-			src := fl.operandOf(arg)
-			fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+			// Non-basic: best effort decimal rendering.
+			fl.emitIntToString(fl.operandOf(arg), tmp, arg.Type())
 		}
 
-		// Add space separator for Println (between args, not before first)
-		if addNewline && i > startIdx {
-			spaceMP := fl.comp.AllocString(" ")
-			fl.emit(dis.NewInst(dis.IADDC, dis.MP(spaceMP), dis.FP(result), dis.FP(result)))
+		// Separator rule (matching fmt): Sprintln always separates operands
+		// with a space; Sprint adds a space only between operands when neither
+		// is a string.
+		if i > 0 {
+			needSpace := addNewline ||
+				(!isStringType(elements[i-1].Type().Underlying()) && !isStringType(arg.Type().Underlying()))
+			if needSpace {
+				spaceMP := fl.comp.AllocString(" ")
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(spaceMP), dis.FP(result), dis.FP(result)))
+			}
 		}
 
 		fl.emit(dis.NewInst(dis.IADDC, dis.FP(tmp), dis.FP(result), dis.FP(result)))

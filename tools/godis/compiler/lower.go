@@ -1194,7 +1194,7 @@ func (fl *funcLowerer) lowerCall(instr *ssa.Call) error {
 func (fl *funcLowerer) lowerBuiltinCall(instr *ssa.Call, builtin *ssa.Builtin) error {
 	switch builtin.Name() {
 	case "println", "print":
-		return fl.lowerPrintln(instr)
+		return fl.lowerPrintln(instr, builtin.Name() == "println")
 	case "len":
 		return fl.lowerLen(instr)
 	case "cap":
@@ -5282,14 +5282,14 @@ func (fl *funcLowerer) emitFloatFixed(src dis.Operand, prec int) dis.Operand {
 	return dis.FP(full)
 }
 
-func (fl *funcLowerer) lowerPrintln(instr *ssa.Call) error {
-	// println maps to sys->print with a format string
-	// For each argument, emit a sys->print call with the appropriate format
+func (fl *funcLowerer) lowerPrintln(instr *ssa.Call, newline bool) error {
+	// The builtins map to sys->print. println separates every operand with a
+	// space and appends a newline; print concatenates operands with no
+	// separator and no newline (matching Go's gc builtins).
 	args := instr.Call.Args
 
 	for i, arg := range args {
-		if i > 0 {
-			// Print space separator
+		if newline && i > 0 {
 			fl.emitSysPrint(" ")
 		}
 		if err := fl.emitPrintArg(arg); err != nil {
@@ -5297,8 +5297,9 @@ func (fl *funcLowerer) lowerPrintln(instr *ssa.Call) error {
 		}
 	}
 
-	// Print newline
-	fl.emitSysPrint("\n")
+	if newline {
+		fl.emitSysPrint("\n")
+	}
 
 	return nil
 }

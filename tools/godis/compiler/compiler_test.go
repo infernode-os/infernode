@@ -3082,6 +3082,9 @@ func TestE2EPrograms(t *testing.T) {
 		// fmt.Errorf("%w", err) no longer double-frees the wrapped error's
 		// message (the %w temp now takes a reference via MOVP).
 		{"errorf_wrap.go", "operation failed: base failure\n[base failure] and more\ndone\n"},
+		// builtin print concatenates with no separator/newline; println spaces
+		// and newlines (print used to add a newline, masking fallthrough).
+		{"print_builtin.go", "123\nabc\n1x2true\n1 2 3\nx y\none two two \n"},
 	}
 
 	for _, tt := range tests {

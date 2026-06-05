@@ -4569,10 +4569,10 @@ func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (b
 	switch callee.Name() {
 	case "Parse":
 		// url.Parse(rawURL) → (*URL, error)
-		// Stub: return nil URL and nil error
+		// Stub: nil *URL (H, not 0) and nil error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -4773,10 +4773,10 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 	switch callee.Name() {
 	case "Marshal", "MarshalIndent":
 		// json.Marshal(v) → ([]byte, error)
-		// Stub: return empty bytes and nil error
+		// Stub: nil []byte (H, not 0) and nil error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -5529,17 +5529,17 @@ func (fl *funcLowerer) lowerIOFSCall(instr *ssa.Call, callee *ssa.Function) (boo
 func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Compile":
-		// regexp.Compile(expr) → (*Regexp, error) stub
+		// regexp.Compile(expr) → (*Regexp, error) stub: nil *Regexp is H.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "MustCompile":
-		// regexp.MustCompile(str) → *Regexp stub
+		// regexp.MustCompile(str) → *Regexp stub: nil pointer must be H, not 0.
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "MatchString":
 		// regexp.MatchString(pattern, s) → (bool, error) stub: return false, nil
@@ -5566,7 +5566,7 @@ func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "CompilePOSIX":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst))) // nil *Regexp = H
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil

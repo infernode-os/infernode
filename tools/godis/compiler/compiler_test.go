@@ -3061,6 +3061,9 @@ func TestE2EPrograms(t *testing.T) {
 		// Generics: type-parameter funcs (Min/Max/Contains/Map), comparable,
 		// any, and generic structs all work. Floats print godis-style.
 		{"generics.go", "3\n1.5\nabc\n5\n2.5\nfound 3\nno 9\n2\n10\n"},
+		// Stub packages whose nil pointer/slice results no longer fault.
+		{"json_pkg.go", "valid\njson ok\n"},
+		{"regexp_pkg.go", "regexp ok\n"},
 	}
 
 	for _, tt := range tests {

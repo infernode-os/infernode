@@ -124,13 +124,24 @@ emulator) green before moving on.
   WORD opcodes. Covered by `testdata/int_wide.go`.
 
   **JIT note.** Integer arithmetic deliberately uses the WORD opcodes, not the
-  LONG ones. The amd64 JIT's LONG-arithmetic codegen (`larith`/`cbral` in
-  `libinterp/comp-amd64.c`) is buggy — it corrupts state in longer-running
-  functions (e.g. quicksort hangs under `-c1`) — and the LONG ops are redundant
-  on a 64-bit-WORD host anyway. Routing int/int64 arithmetic through WORD ops
-  is both correct and JIT-safe; every testdata program produces identical
-  output under `-c0` and `-c1`. (The latent `larith` bug still affects Limbo
-  `big` arithmetic under the amd64 JIT and is worth a separate fix.)
+  LONG ones. This is the correct mapping on a 64-bit-WORD host (a Dis WORD is
+  machine-word width, so WORD ops already compute at 64 bits) and the LONG ops
+  are redundant. It also keeps the JIT happy: when godis emitted the LONG
+  arithmetic/compare opcodes, quicksort hung under `-c1` while the `-c0`
+  interpreter was fine. Every testdata program now produces identical output
+  under `-c0` and `-c1`.
+
+  Follow-up investigation showed this is **not** a general amd64-JIT LONG-op
+  bug: Limbo `big` exercises the same LONG opcodes and is correct under `-c1` —
+  `jittest` passes 181/181 (big add/sub/mul/div/mod, bitwise, shifts,
+  comparisons), and hand-written `big` programs (a quicksort and a
+  1M-iteration accumulate-and-compare loop) produce identical output under both
+  modes. The hang was specific to the instruction pattern godis emitted around
+  the LONG ops (operand modes / temp layout), not the JIT's LONG codegen in
+  general. Since the WORD-op path is both correct and simpler, the
+  godis-specific trigger was not pursued further — no code path emits it now.
+  (An earlier commit message overstated this as a Limbo `big` JIT bug; it is
+  not one.)
   `uint64` is handled: ordered compares use the existing sign-bit-flip in
   `lowerComparison`, and `println` uses the `%bud` verb so values above the
   int64 range print unsigned. Remaining int64 gaps are minor: unsigned 64-bit

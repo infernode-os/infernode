@@ -9,7 +9,7 @@
 #   5. Pipe mount - Explicit channel, not /srv registration.
 #
 # Filesystem Schema:
-#   /n/mcp/                     <- mount point
+#   /mnt/mcp/                     <- mount point
 #   ├── _meta/
 #   │   ├── name               -> provider name
 #   │   ├── version            -> version string
@@ -26,8 +26,8 @@
 #       └── web                -> write query, read results
 #
 # Usage:
-#   echo "https://example.com" > /n/mcp/http/get
-#   cat /n/mcp/http/get    -> response body
+#   echo "https://example.com" > /mnt/mcp/http/get
+#   cat /mnt/mcp/http/get    -> response body
 #
 
 Mc9p: module {

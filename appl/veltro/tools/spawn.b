@@ -60,6 +60,8 @@ include "../tool.m";
 include "../nsconstruct.m";
 	nsconstruct: NsConstruct;
 include "../subagent.m";
+include "agentlib.m";
+	agentlib: AgentLib;
 
 ToolSpawn: module {
 	init: fn(): string;
@@ -147,6 +149,13 @@ init(): string
 	json = load JSON JSON->PATH;
 	if(json != nil)
 		json->init(bufio);
+	# agentlib provides the shared MCP router (INFR-247) used to bridge MCP
+	# tools into children. Loaded here in the PARENT namespace (before any
+	# FORKNS/restriction); the loaded module survives FORKNS into runchild.
+	# Optional: if it fails to load, children simply get no MCP tools.
+	agentlib = load AgentLib AgentLib->PATH;
+	if(agentlib != nil)
+		agentlib->init();
 	inited = 1;
 	return nil;
 }
@@ -207,7 +216,8 @@ schema(): string
 					"\"items\":{\"type\":\"object\"," +
 						"\"properties\":{" +
 							"\"task\":{\"type\":\"string\",\"description\":\"What this subagent must do — a complete, self-contained instruction.\"}," +
-							"\"tools\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Tool names this subagent may use (optional; defaults to a reasoning-only grant).\"}" +
+							"\"tools\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Tool names this subagent may use (optional; defaults to a reasoning-only grant).\"}," +
+							"\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"MCP server mounts to grant this subagent, e.g. [\\\"/mnt/mcp/osm\\\",\\\"/mnt/mcp/terramcp\\\"]. The child then runs its OWN tool loop against those servers. Grant only the servers the subtask needs.\"}" +
 						"}," +
 						"\"required\":[\"task\"]" +
 					"}" +
@@ -1017,6 +1027,30 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 		return;
 	}
 
+	# Step 5b: Bridge MCP tools into the child (INFR-247). restrictns has just
+	# attenuated /mnt/mcp to ONLY the servers granted via caps.paths, so
+	# discovering here scopes the child to exactly what it is allowed to reach.
+	# Register their tool-defs on the child's fresh session (so the model emits
+	# native tool calls for them) and hand the routing maps to the sub-agent.
+	# Bounded by the same per-mount/byte caps NERVA uses. Best-effort: any failure
+	# just leaves the child without MCP tools, never breaks the run.
+	if(agentlib != nil && sessionid != "") {
+		mcppaths := filtermcp(caps.paths);
+		if(mcppaths != nil) {
+			(mcpmounts, mcptools) := agentlib->mcpdiscover(mcppaths);
+			if(mcpmounts != nil) {
+				defs := agentlib->mcptooldefs(mcpmounts, 64, 60000);
+				tfd := sys->open("/n/llm/" + sessionid + "/tools", Sys->OWRITE);
+				if(tfd != nil) {
+					db := array of byte defs;
+					sys->write(tfd, db, len db);
+					tfd = nil;
+				}
+				samod->setmcp(mcpmounts, mcptools);
+			}
+		}
+	}
+
 	# Step 6: Verify FDs 0-2 are safe endpoints
 	verifysafefds();
 
@@ -1234,6 +1268,20 @@ dropitem(item: string, l: list of string): list of string
 	for(; l != nil; l = tl l)
 		if(hd l != item)
 			result = hd l :: result;
+	return reverse(result);
+}
+
+# Select the granted MCP server mounts from a path list — entries under
+# /mnt/mcp/ (INFR-247). These are the per-server subtrees nsconstruct kept for
+# the child; each is a mount agentlib->mcpdiscover can probe.
+filtermcp(l: list of string): list of string
+{
+	result: list of string;
+	for(; l != nil; l = tl l) {
+		p := hd l;
+		if(len p > 9 && p[0:9] == "/mnt/mcp/")
+			result = p :: result;
+	}
 	return reverse(result);
 }
 

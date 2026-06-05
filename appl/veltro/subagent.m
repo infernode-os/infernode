@@ -40,4 +40,13 @@ SubAgent: module {
 	             llmaskfd: ref Sys->FD,
 	             logfd: ref Sys->FD,
 	             maxsteps: int): string;
+
+	# Bridge MCP tools into this child (INFR-247). Called by spawn.b AFTER
+	# restrictns — so the maps cover only the /mnt/mcp/<server> servers the
+	# child was granted — and BEFORE runloop. calltool() then routes a
+	# model-emitted MCP tool name (not a pre-loaded native module) to its
+	# owning mount via agentlib's shared router. mounts: (prefix,mount);
+	# tools: (bare-tool,mount). Empty maps leave the child native-tools-only.
+	setmcp: fn(mounts: list of (string, string),
+	            tools: list of (string, string));
 };

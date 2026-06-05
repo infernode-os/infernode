@@ -7,11 +7,11 @@ implement Mc9p;
 # Write request to file, read response from file.
 #
 # Example:
-#   echo "https://example.com" > /n/mcp/http/get
-#   cat /n/mcp/http/get  -> HTTP response body
+#   echo "https://example.com" > /mnt/mcp/http/get
+#   cat /mnt/mcp/http/get  -> HTTP response body
 #
 # Filesystem structure:
-#   /n/mcp/
+#   /mnt/mcp/
 #   ├── _meta/
 #   │   ├── name        -> provider name
 #   │   ├── version     -> version string
@@ -95,7 +95,7 @@ user: string;
 domains: list of ref DomainInfo;
 providername := "mc9p";
 providerversion := "1.0";
-mountpt := "/n/mcp";
+mountpt := "/mnt/mcp";	# application mount point — we author the schema (docs/NAMESPACE-LAYOUT.md)
 hasnet := 0;
 
 nomod(s: string)
@@ -108,7 +108,7 @@ usage()
 {
 	sys->fprint(stderr, "Usage: mc9p [-D] [-m mountpoint] [-n] domain [domain ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
-	sys->fprint(stderr, "  -m mountpoint Mount point (default: /n/mcp)\n");
+	sys->fprint(stderr, "  -m mountpoint Mount point (default: /mnt/mcp)\n");
 	sys->fprint(stderr, "  -n            Enable network access (for http domain)\n");
 	sys->fprint(stderr, "\n");
 	sys->fprint(stderr, "Available domains:\n");

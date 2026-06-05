@@ -322,6 +322,16 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
+	# Verify /mnt is NOT accessible when no /mnt subtree is granted.
+	# /mnt holds application mount points (MCP adapters at /mnt/mcp) and is
+	# capability-gated like /n — a child with no grant must see no /mnt at all
+	# (docs/NAMESPACE-LAYOUT.md, INFR-252).
+	(mok, nil) := sys->stat("/mnt");
+	if(mok >= 0) {
+		result <-= "/mnt should NOT be accessible without a /mnt grant";
+		return;
+	}
+
 	result <-= "";
 }
 
@@ -374,6 +384,65 @@ shellWorker(result: chan of string)
 	(catok, nil) := sys->stat("/dis/cat.dis");
 	if(catok < 0) {
 		result <-= "shellcmds should grant /dis/cat.dis";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 5b: RestrictNs - /mnt application mount points (MCP adapters)
+# Verifies that an explicit "/mnt/mcp" path grant exposes /mnt/mcp but NOT
+# sibling /mnt entries — the least-privilege gate behind the sub-agent MCP
+# bridge (INFR-252/INFR-247, docs/NAMESPACE-LAYOUT.md).
+# ============================================================================
+testRestrictNsMnt(t: ref T)
+{
+	result := chan of string;
+	spawn mntWorker(result);
+
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+mntWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Grant exactly the /mnt/mcp subtree via caps.paths.
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,            # tools
+		"/mnt/mcp" :: nil,        # paths — grants the /mnt/mcp application mount
+		nil,                      # shellcmds
+		nil,                      # llmconfig
+		0 :: 1 :: 2 :: nil,       # fds
+		nil,                      # mcproviders
+		0,                        # memory
+		0,                        # xenith
+		-1,                       # actid
+		nil
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (mnt) failed: %s", err);
+		return;
+	}
+
+	# Granted subtree must be visible.
+	(mcpok, nil) := sys->stat("/mnt/mcp");
+	if(mcpok < 0) {
+		result <-= "/mnt/mcp should be accessible when granted via caps.paths";
+		return;
+	}
+
+	# A sibling /mnt entry that was NOT granted must be restricted away.
+	# /mnt/acme ships as a real mount-point placeholder in the tree, so if the
+	# grant leaked the whole /mnt it would be visible here.
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "/mnt/acme must NOT be visible when only /mnt/mcp is granted (least-privilege leak)";
 		return;
 	}
 
@@ -997,6 +1066,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
 	run("RestrictNsShell", testRestrictNsShell);
+	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsRace", testRestrictNsRace);
 	run("VerifyNs", testVerifyNs);
 	run("AuditLog", testAuditLog);

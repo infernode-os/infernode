@@ -508,7 +508,7 @@ and enumerable. Adding a new axis is a deliberate act, not a derivation:
 | Secrets | `reads_env` | `NEWENV` unset |
 | Economic | `spends` | tool manifest (wallet, pay) |
 | Comms | `sends_llm` | tool manifest, `caps.llmconfig` |
-| Comms | `sends_ui` | `caps.xenith` ∨ `/n/ui` in writes_fs |
+| Comms | `sends_ui` | `caps.xenith` ∨ `/mnt/ui` in writes_fs |
 | Comms | `receives_input` | `/dev/cons` in reads_fs |
 | Windows | `reads_windows` | `caps.xenith` |
 | Windows | `modifies_windows` | `caps.xenith` |

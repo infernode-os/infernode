@@ -210,7 +210,7 @@ A parent agent issues a single tool call:
 
 ```
 Spawn -- tools=read,list,grep :: find every place that touches /mnt/llm
-       -- tools=read,list,grep :: find every place that touches /n/ui
+       -- tools=read,list,grep :: find every place that touches /mnt/ui
        -- tools=read,list,grep :: find every place that touches /tool
 ```
 

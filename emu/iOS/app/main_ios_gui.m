@@ -166,7 +166,7 @@ main(int argc, char *argv[])
 		/* Don't let the umask strip group/other bits off dirs the boot
 		 * creates: devfs-posix mkdir's at the requested mode minus umask,
 		 * so umask 022 turns /n (DMDIR|0777) into 0755, and services
-		 * running as a non-owner Inferno user then can't create /n/ui.
+		 * running as a non-owner Inferno user then can't create /mnt/ui.
 		 * umask 0 keeps created dirs fully writable. */
 		umask(0);
 

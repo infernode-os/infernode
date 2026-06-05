@@ -96,12 +96,12 @@ echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
 # GUI services
 luciuisrv
-echo activity create Main > /n/ui/ctl
+echo activity create Main > /mnt/ui/ctl
 sleep 1
 /dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
-echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
+echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 # (No auto-spawn of /dis/wm/shell in Activity 0 — the Main agent
 #  doesn't have shell authority, so the tab either sits empty or, on
 #  mobile, slides a shell in front of a context that shouldn't have

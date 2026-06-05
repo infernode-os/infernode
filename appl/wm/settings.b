@@ -302,7 +302,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	loadcategory();
 	dirty = 1;
 
-	# Listen for live theme changes from /n/ui/event
+	# Listen for live theme changes from /mnt/ui/event
 	themech = chan[1] of int;
 	spawn themelistener();
 
@@ -1473,10 +1473,10 @@ trackprofilebtn(nil: ref Pointer)
 
 applytheme(name: string)
 {
-	# Write to /n/ui/ctl for live theme switching across all zones.
+	# Write to /mnt/ui/ctl for live theme switching across all zones.
 	# luciuisrv persists the choice to /lib/lucifer/theme/current and
 	# broadcasts a "theme <name>" global event so every zone reloads.
-	fd := sys->open("/n/ui/ctl", Sys->OWRITE);
+	fd := sys->open("/mnt/ui/ctl", Sys->OWRITE);
 	if(fd != nil) {
 		cmd := "theme " + name;
 		b := array of byte cmd;
@@ -1962,15 +1962,15 @@ openineditor(path: string)
 
 	# Write to presentation ctl to launch editor with the file.
 	# /tool/activity exists only in agent namespaces; from a GUI app
-	# launched by lucifer we read /n/ui/activity/current instead.
-	actid := readfile("/n/ui/activity/current");
+	# launched by lucifer we read /mnt/ui/activity/current instead.
+	actid := readfile("/mnt/ui/activity/current");
 	if(actid == nil) {
 		flashstatus("cannot reach presentation zone — is luciuisrv running?");
-		sys->fprint(stderr, "settings: cannot read /n/ui/activity/current\n");
+		sys->fprint(stderr, "settings: cannot read /mnt/ui/activity/current\n");
 		return;
 	}
 	aid := strip(actid);
-	pctl := sys->sprint("/n/ui/activity/%s/presentation/ctl", aid);
+	pctl := sys->sprint("/mnt/ui/activity/%s/presentation/ctl", aid);
 	sys->fprint(stderr, "settings: openineditor %s → pctl=%s\n", path, pctl);
 
 	# Kill existing editor first (ignore error — may not exist)
@@ -2021,7 +2021,7 @@ openineditor(path: string)
 
 themelistener()
 {
-	fd := sys->open("/n/ui/event", Sys->OREAD);
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
 	if(fd == nil)
 		return;
 	buf := array[256] of byte;

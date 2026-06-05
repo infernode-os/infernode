@@ -3,7 +3,7 @@ implement LuciBridge;
 #
 # lucibridge - Connects Lucifer UI to Veltro agent via /mnt/llm
 #
-# Reads human messages from /n/ui/activity/{id}/conversation/input
+# Reads human messages from /mnt/ui/activity/{id}/conversation/input
 # (blocking read), runs the Veltro agent loop (LLM + tools), and writes
 # responses and tool activity back to the UI as role=veltro messages.
 #
@@ -15,7 +15,7 @@ implement LuciBridge;
 #   -p paths      comma-separated namespace paths to expose via /n/local/
 #
 # Prerequisites:
-#   - luciuisrv running (serves /n/ui/)
+#   - luciuisrv running (serves /mnt/ui/)
 #   - LLM service mounted at /mnt/llm/
 #   - tools9p running (serves /tool/) — optional but enables tool use
 #
@@ -187,7 +187,7 @@ registernamespace()
 	else
 		mpath = "/tmp/veltro/.ns/manifest." + string actid;
 
-	ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	nreg := 0;
 
 	mdata := agentlib->readfile(mpath);
@@ -249,7 +249,7 @@ registernamespace()
 speaktext(text: string)
 {
 	# Update context zone status
-	ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	writefile(ctxpath, "resource update path=speech status=active");
 
 	fd := sys->open("/n/speech/say", Sys->OWRITE);
@@ -280,7 +280,7 @@ blockread(fd: ref Sys->FD): string
 # Write a message to the activity conversation
 writemsg(role, text: string)
 {
-	path := sys->sprint("/n/ui/activity/%d/conversation/ctl", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "role=" + role + " text=" + text;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: write to %s failed: %r\n", path);
@@ -294,7 +294,7 @@ writemsg(role, text: string)
 # or other messages are injected externally.
 syncconvcount()
 {
-	base := sys->sprint("/n/ui/activity/%d/conversation", actid);
+	base := sys->sprint("/mnt/ui/activity/%d/conversation", actid);
 	for(convcount = 0; ; convcount++) {
 		(cok, nil) := sys->stat(sys->sprint("%s/%d", base, convcount));
 		if(cok < 0)
@@ -306,7 +306,7 @@ syncconvcount()
 # Returns the message index for later updates (e.g. progress).
 writedialogue(title, text, progress, options: string): int
 {
-	path := sys->sprint("/n/ui/activity/%d/conversation/ctl", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "role=veltro dtype=dialogue";
 	if(title != "")
 		msg += " title=" + title;
@@ -341,8 +341,8 @@ runsetupwizard()
 		"", "Remote API,Local model,Remote 9P");
 	log("displayed LLM setup dialogue");
 
-	pctl := sys->sprint("/n/ui/activity/%d/presentation/ctl", actid);
-	inputpath := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
+	pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
+	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
 	for(;;) {
 		inputfd := sys->open(inputpath, Sys->OREAD);
 		if(inputfd == nil)
@@ -399,7 +399,7 @@ runsetupwizard()
 # Update a dialogue tile in-place (e.g. progress bar update).
 updatedialogue(idx: int, progress, title, text: string)
 {
-	path := sys->sprint("/n/ui/activity/%d/conversation/ctl", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "update idx=" + string idx;
 	if(progress != "")
 		msg += " progress=" + progress;
@@ -413,7 +413,7 @@ updatedialogue(idx: int, progress, title, text: string)
 # Read a single user input from the conversation input file (blocking).
 readuserinput(): string
 {
-	path := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
@@ -540,13 +540,13 @@ updatefailstreak_ui(tools: list of (string, string, string), results: list of (s
 
 setstatus(status: string)
 {
-	path := sys->sprint("/n/ui/activity/%d/status", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/status", actid);
 	writefile(path, status);
 }
 
 seturgency(level: int)
 {
-	path := sys->sprint("/n/ui/activity/%d/urgency", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/urgency", actid);
 	writefile(path, string level);
 }
 
@@ -675,7 +675,7 @@ initsession(): string
 	nreg := 0;
 	for(t := toollist; t != nil; t = tl t) {
 		nm := str->tolower(hd t);
-		r := writefile(sys->sprint("/n/ui/activity/%d/context/ctl", actid),
+		r := writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
 			"resource add path=" + nm + " label=" + hd t + " type=tool status=idle");
 		if(r >= 0)
 			nreg++;
@@ -684,7 +684,7 @@ initsession(): string
 
 	# Register speech resource if speech9p is available
 	if(autospeak) {
-		ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+		ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 		writefile(ctxpath, "resource add path=speech label=Speech type=tool status=idle");
 		log("context: registered speech resource");
 	}
@@ -831,7 +831,7 @@ readllmfd(fd: ref Sys->FD): string
 # Update an existing conversation message in place (for streaming token display).
 updateliveconvmsg(idx: int, text: string)
 {
-	path := sys->sprint("/n/ui/activity/%d/conversation/ctl", actid);
+	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "update idx=" + string idx + " text=" + text;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: updateliveconvmsg failed: %r\n");
@@ -845,7 +845,7 @@ showwelcome(aid: int)
 {
 	# Idempotent: if the welcome artifact is already showing (e.g. lucibridge
 	# restarted inside the same running luciuisrv), do nothing.
-	typepath := sys->sprint("/n/ui/activity/%d/presentation/welcome/type", aid);
+	typepath := sys->sprint("/mnt/ui/activity/%d/presentation/welcome/type", aid);
 	(atok, nil) := sys->stat(typepath);
 	if(atok >= 0)
 		return;
@@ -868,9 +868,9 @@ showwelcome(aid: int)
 		return;
 	content := string buf[0:n];
 
-	pctl := sys->sprint("/n/ui/activity/%d/presentation/ctl", aid);
+	pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", aid);
 	writefile(pctl, "create id=welcome type=markdown label=Welcome");
-	datapath := sys->sprint("/n/ui/activity/%d/presentation/welcome/data", aid);
+	datapath := sys->sprint("/mnt/ui/activity/%d/presentation/welcome/data", aid);
 	writefile(datapath, content);
 	writefile(pctl, "center id=welcome");
 
@@ -1091,7 +1091,7 @@ applypathchanges()
 	# no rebind needed (and no writable target would exist anyway).
 	# Inferno-native paths (/dis/, /lib/, /mnt/llm/, etc.) are already in the
 	# namespace — binding them to /n/local/<base> would fail (no such dir).
-	ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	for(np := newpaths; np != nil; np = tl np) {
 		p := hd np;
 		if(p == "" || strcontains(oldpaths, p))
@@ -1176,7 +1176,7 @@ handleslash(cmd: string): int
 		} else {
 			writefile(toolctlmount(toolmount) + "/ctl", "bindpath " + cmdarg);
 			# Push context event so the namespace view updates immediately
-			ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+			ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 			base := pathbase(cmdarg);
 			if(base == nil || base == "")
 				base = cmdarg;
@@ -1190,7 +1190,7 @@ handleslash(cmd: string): int
 		} else {
 			writefile(toolctlmount(toolmount) + "/ctl", "unbindpath " + cmdarg);
 			# Push context event so the namespace view updates immediately
-			ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+			ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 			writefile(ctxpath, "resource remove " + cmdarg);
 			ack = "unbound: " + cmdarg;
 		}
@@ -1527,7 +1527,7 @@ agentturn(input: string)
 			} else {
 				# Mark the tool as active in the context zone for the full duration.
 				nm := str->tolower(name);
-				ctxpath := sys->sprint("/n/ui/activity/%d/context/ctl", actid);
+				ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 				writefile(ctxpath, "resource activity " + nm);
 				writefile(ctxpath, "resource update path=" + nm + " status=active");
 				log("context: active " + nm);
@@ -1713,8 +1713,8 @@ init(nil: ref Draw->Context, args: list of string)
 	agentlib->settoolmount(toolmount);
 
 	# Verify prerequisites
-	if(sys->open("/n/ui/ctl", Sys->OREAD) == nil)
-		fatal("/n/ui/ not mounted — start luciuisrv first");
+	if(sys->open("/mnt/ui/ctl", Sys->OREAD) == nil)
+		fatal("/mnt/ui/ not mounted — start luciuisrv first");
 	# Check LLM configuration — two distinct failure modes:
 	#   1. Nothing configured: no API key, no Ollama → prompt to configure
 	#   2. Configured but unreachable: key exists but service down → different message
@@ -1782,7 +1782,7 @@ init(nil: ref Draw->Context, args: list of string)
 			writedialogue("LLM Unreachable",
 				"The LLM service is configured but not responding.",
 				"", "Open Settings");
-			inputpath := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
+			inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
 			for(;;) {
 				inputfd := sys->open(inputpath, Sys->OREAD);
 				if(inputfd == nil) break;
@@ -1790,7 +1790,7 @@ init(nil: ref Draw->Context, args: list of string)
 				inputfd = nil;
 				if(choice == nil) break;
 				if(choice == "Open Settings") {
-					pctl := sys->sprint("/n/ui/activity/%d/presentation/ctl", actid);
+					pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
 					# Open directly on the LLM Service panel (INFR-100).
 					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
 					sys->sleep(500);
@@ -1886,7 +1886,7 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	}
 
-	inputpath := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
+	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
 
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sessionid, maxsteps, convcount));

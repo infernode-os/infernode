@@ -18,7 +18,7 @@ Host OS (macOS / Linux / Windows)
 │     └── Inferno namespace (rootfs = project root)
 │           │
 │           ├── /mnt/llm        ← llmsrv (LLM providers as 9P)
-│           ├── /n/ui         ← luciuisrv (GUI state 9P server)
+│           ├── /mnt/ui         ← luciuisrv (GUI state 9P server)
 │           ├── /n/wallet     ← wallet9p (crypto wallet 9P server)
 │           ├── /tool         ← tools9p (39 tool modules as 9P)
 │           ├── /mnt/factotum ← factotum (key agent, secstore-backed)
@@ -96,21 +96,21 @@ The GUI-side harness bridge: connects the GUI conversation UI to the LLM and run
 agent loop for that session.
 
 - Runs in background, started by Lucifer
-- Reads user input from `/n/ui/activity/{id}/conversation/input`
+- Reads user input from `/mnt/ui/activity/{id}/conversation/input`
 - On each turn: re-reads `/tool/tools` and `/tool/paths` to pick up GUI-side changes
 - If tool set changed: calls `initsessiontools()` to update the LLM's active tool list
 - If path set changed: calls `applypathchanges()` to bind/unmount paths in its namespace
-- Sends LLM responses and streaming tokens back via `/n/ui/activity/{id}/conversation/ctl`
+- Sends LLM responses and streaming tokens back via `/mnt/ui/activity/{id}/conversation/ctl`
 
 ### luciuisrv (`appl/cmd/luciuisrv.b`)
 
 GUI state server — a 9P file server for the three-zone Lucifer UI.
 
-Mounted at `/n/ui`. Presents conversation messages, presentation artifacts, and context
+Mounted at `/mnt/ui`. Presents conversation messages, presentation artifacts, and context
 zone state as a filesystem. No draw/display dependency — fully testable headless.
 
 ```
-/n/ui/
+/mnt/ui/
 ├── ctl                           Global control
 ├── event                         Global event stream
 ├── catalog/                      Resource catalog (from /lib/veltro/resources/*.resource)
@@ -210,7 +210,7 @@ documents without needing direct Draw access.
 Three-zone window: Conversation | Presentation | Context.
 
 Starts the following pipeline:
-1. `luciuisrv` — mounts at `/n/ui`
+1. `luciuisrv` — mounts at `/mnt/ui`
 2. `tools9p` — mounts at `/tool` (with full default tool set)
 3. `lucibridge` — connects conversation input → LLM → conversation output
 4. `lucictx` — renders the context zone (tool toggles, namespace browser)
@@ -229,7 +229,7 @@ Additional features:
 
 ```
 User types in Conversation zone
-  → lucifer writes to /n/ui/activity/{id}/conversation/ctl
+  → lucifer writes to /mnt/ui/activity/{id}/conversation/ctl
   → luciuisrv stores message, fires "conversation N" event
   → lucifer re-renders conversation zone
   → lucibridge (blocking read on /conversation/input) receives message
@@ -237,7 +237,7 @@ User types in Conversation zone
   → lucibridge calls LLM via /mnt/llm/{id}/ask
   → LLM returns tool_use or end_turn
   → lucibridge executes tools (writes to /tool/<name>, reads result)
-  → lucibridge writes response back to /n/ui conversation/ctl
+  → lucibridge writes response back to /mnt/ui conversation/ctl
   → lucifer renders response
 ```
 

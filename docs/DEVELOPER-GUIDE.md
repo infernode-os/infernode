@@ -25,12 +25,12 @@ cd infernode/emu/MacOSX
     llmsrv &; sleep 1; \
     /dis/veltro/wallet9p.dis &; sleep 1; \
     luciuisrv; \
-    echo activity create Main > /n/ui/ctl; sleep 1; \
+    echo activity create Main > /mnt/ui/ctl; sleep 1; \
     /dis/veltro/tools9p -v -m /tool \
       -b read,list,find,search,grep,write,edit,editor,exec,launch,spawn,diff,json,fractal,webfetch,git,say,memory,todo,plan,websearch,mail,keyring,present,gap \
       -p /dis/wm read list find present say hear task memory gap keyring editor shell; \
     lucibridge -a 0 -v -s &; sleep 1; \
-    echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl; \
+    echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl; \
     lucifer"
 ```
 
@@ -61,11 +61,11 @@ and factotum. Then `-c` runs the quoted command string:
 | 1 | `wm/logon` | Login screen. Creates secstore account on first run, unlocks and loads keys on subsequent runs. Blocks until the user enters their password. |
 | 2 | `llmsrv &` | LLM 9P file server. Mounts at `/mnt/llm`. Reads config from `lib/ndb/llm` (via profile). The `&` backgrounds it. |
 | 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Experimental. |
-| 4 | `luciuisrv` | UI 9P server. Creates the `/n/ui` namespace that lucifer, lucipres, luciconv, and lucibridge all communicate through. This is the hub. |
-| 5 | `echo activity create Main > /n/ui/ctl` | Creates the default "Main" activity (task/conversation). |
+| 4 | `luciuisrv` | UI 9P server. Creates the `/mnt/ui` namespace that lucifer, lucipres, luciconv, and lucibridge all communicate through. This is the hub. |
+| 5 | `echo activity create Main > /mnt/ui/ctl` | Creates the default "Main" activity (task/conversation). |
 | 6 | `tools9p -v -m /tool -b ... -p ...` | Veltro tool server. `-b` lists built-in tool modules. `-p` lists tools available to the agent as "passive" (invocable). Mounts at `/tool`. |
 | 7 | `lucibridge -a 0 -v -s &` | Agent bridge. Connects the conversation zone to the LLM. `-a 0` targets activity 0, `-v` verbose, `-s` enables speech. |
-| 8 | `echo 'create id=tasks ...' > /n/ui/...` | Creates the Tasks taskboard tab in the presentation zone. |
+| 8 | `echo 'create id=tasks ...' > /mnt/ui/...` | Creates the Tasks taskboard tab in the presentation zone. |
 | 9 | `lucifer` | Main GUI. Blocks until the user exits. When lucifer returns, emu shuts down. |
 
 **Important:** Commands are separated by `;` not `&&`. The Inferno shell
@@ -105,7 +105,7 @@ To test the GUI without Veltro/LLM (useful for UI work):
 ```sh
 cd infernode/emu/MacOSX
 ./o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r../.. \
-  sh -l -c "wm/logon; luciuisrv; echo activity create Main > /n/ui/ctl; sleep 1; lucifer"
+  sh -l -c "wm/logon; luciuisrv; echo activity create Main > /mnt/ui/ctl; sleep 1; lucifer"
 ```
 
 This starts logon, the UI server, and lucifer — but no llmsrv, no

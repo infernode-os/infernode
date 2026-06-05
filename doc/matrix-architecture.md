@@ -458,7 +458,7 @@ pinned compositions appear without restarting:
 | `Load <name>` | One entry per file under `/lib/matrix/compositions/`. Issues `load <name>`. |
 
 The `Edit` action is routed through Lucifer's artifact-ctl mechanism
-(`/n/ui/activity/<id>/presentation/ctl`) rather than spawning
+(`/mnt/ui/activity/<id>/presentation/ctl`) rather than spawning
 `wm/editor` directly. This is necessary because each presentation
 tab is a single-shot wmclient slot under Lucifer; routing through
 artifact-ctl gives `wm/editor` its own slot, its own `Draw->Context`,

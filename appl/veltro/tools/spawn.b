@@ -108,7 +108,7 @@ ResultMsg: adt {
 MAX_SUBAGENTS:      con 5;
 DEFAULT_TIMEOUT_MS: con 300000;   # 5 minutes
 RESULT_END:         con "\n<<EOF>>\n";
-UI_MOUNT:           con "/n/ui";
+UI_MOUNT:           con "/mnt/ui";
 
 # Per-subagent trajectory log directory. spawn.b opens one file per child
 # before FORKNS and passes the fd into subagent->runloop. /usr/inferno/...

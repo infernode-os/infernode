@@ -67,7 +67,7 @@ emu_c() {
 echo "── luciuisrv activity basics ──"
 
 # Smoke test: luciuisrv starts and creates an activity
-if ! emu_c "smoke" 8 "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; cat /n/ui/activity/0/label"; then
+if ! emu_c "smoke" 8 "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; cat /mnt/ui/activity/0/label"; then
     skip "luciuisrv failed to start (output: $OUTPUT)"
     echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     exit 0
@@ -84,7 +84,7 @@ echo "── multi-activity creation ──"
 
 # Create two activities and verify both exist
 if emu_c "multi_act" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'activity create TaskOne' > /n/ui/ctl; cat /n/ui/activity/0/label; cat /n/ui/activity/1/label"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'activity create TaskOne' > /mnt/ui/ctl; cat /mnt/ui/activity/0/label; cat /mnt/ui/activity/1/label"; then
     if echo "$OUTPUT" | grep -q "Main" && echo "$OUTPUT" | grep -q "TaskOne"; then
         pass "two activities created with correct labels"
     else
@@ -100,7 +100,7 @@ echo "── per-activity conversation isolation ──"
 
 # Write messages to different activities, verify they don't cross
 if emu_c "conv_isolate" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'activity create Task' > /n/ui/ctl; echo 'role=human text=hello main' > /n/ui/activity/0/conversation/ctl; echo 'role=veltro text=hello task' > /n/ui/activity/1/conversation/ctl; echo ACT0:; cat /n/ui/activity/0/conversation/0; echo ACT1:; cat /n/ui/activity/1/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'activity create Task' > /mnt/ui/ctl; echo 'role=human text=hello main' > /mnt/ui/activity/0/conversation/ctl; echo 'role=veltro text=hello task' > /mnt/ui/activity/1/conversation/ctl; echo ACT0:; cat /mnt/ui/activity/0/conversation/0; echo ACT1:; cat /mnt/ui/activity/1/conversation/0"; then
     if echo "$OUTPUT" | grep -q "hello main" && echo "$OUTPUT" | grep -q "hello task"; then
         pass "messages stored in correct per-activity conversations"
     else
@@ -118,7 +118,7 @@ echo "── per-activity event delivery ──"
 # receives a notification. This is the core regression: previously
 # lucifer's nslistener only read activity 0's event file.
 if emu_c "event_act1" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'activity create Task' > /n/ui/ctl; cat /n/ui/activity/1/event &sleep 1; echo 'role=veltro text=task reply' > /n/ui/activity/1/conversation/ctl; sleep 1; echo DONE"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'activity create Task' > /mnt/ui/ctl; cat /mnt/ui/activity/1/event &sleep 1; echo 'role=veltro text=task reply' > /mnt/ui/activity/1/conversation/ctl; sleep 1; echo DONE"; then
     if echo "$OUTPUT" | grep -q "conversation"; then
         pass "activity 1 event file delivers conversation events"
     else
@@ -138,7 +138,7 @@ echo ""
 echo "── activity switching ──"
 
 if emu_c "switch" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'activity create Task' > /n/ui/ctl; cat /n/ui/activity/current; echo 1 > /n/ui/activity/current; cat /n/ui/activity/current"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'activity create Task' > /mnt/ui/ctl; cat /mnt/ui/activity/current; echo 1 > /mnt/ui/activity/current; cat /mnt/ui/activity/current"; then
     if echo "$OUTPUT" | grep -q "1"; then
         pass "activity switch via /activity/current updates current id"
     else
@@ -155,7 +155,7 @@ echo "── conversation message roles ──"
 # Verify that role=system messages are stored with system role
 # (regression: task tool previously used role=human for context injection)
 if emu_c "role_system" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=system text=You are assigned to task X' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=system text=You are assigned to task X' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     if echo "$OUTPUT" | grep -q "role=system"; then
         pass "role=system preserved in conversation message"
     else
@@ -167,7 +167,7 @@ fi
 
 # Verify role=veltro for agent responses
 if emu_c "role_veltro" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=veltro text=I can help' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=veltro text=I can help' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     if echo "$OUTPUT" | grep -q "role=veltro"; then
         pass "role=veltro preserved in conversation message"
     else
@@ -182,7 +182,7 @@ echo ""
 echo "── global events ──"
 
 if emu_c "global_ev" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; cat /n/ui/event &sleep 1; echo 'activity create NewTask' > /n/ui/ctl; sleep 1; echo DONE"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; cat /mnt/ui/event &sleep 1; echo 'activity create NewTask' > /mnt/ui/ctl; sleep 1; echo DONE"; then
     if echo "$OUTPUT" | grep -q "activity new"; then
         pass "global event emitted on activity creation"
     else
@@ -209,7 +209,7 @@ echo "── message index integrity ──"
 # Verify that writing multiple messages with different roles preserves
 # each role correctly at its index — no cross-contamination.
 if emu_c "idx_roles" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Task' > /n/ui/ctl; echo 'role=system text=context injection' > /n/ui/activity/0/conversation/ctl; echo 'role=human text=user typed this' > /n/ui/activity/0/conversation/ctl; echo 'role=veltro text=agent response' > /n/ui/activity/0/conversation/ctl; echo IDX0:; cat /n/ui/activity/0/conversation/0; echo IDX1:; cat /n/ui/activity/0/conversation/1; echo IDX2:; cat /n/ui/activity/0/conversation/2"; then
+    "luciuisrv; sleep 1; echo 'activity create Task' > /mnt/ui/ctl; echo 'role=system text=context injection' > /mnt/ui/activity/0/conversation/ctl; echo 'role=human text=user typed this' > /mnt/ui/activity/0/conversation/ctl; echo 'role=veltro text=agent response' > /mnt/ui/activity/0/conversation/ctl; echo IDX0:; cat /mnt/ui/activity/0/conversation/0; echo IDX1:; cat /mnt/ui/activity/0/conversation/1; echo IDX2:; cat /mnt/ui/activity/0/conversation/2"; then
     if echo "$OUTPUT" | grep "IDX0:" -A1 | grep -q "role=system" &&
        echo "$OUTPUT" | grep "IDX1:" -A1 | grep -q "role=human" &&
        echo "$OUTPUT" | grep "IDX2:" -A1 | grep -q "role=veltro"; then
@@ -223,7 +223,7 @@ fi
 
 # Verify in-place update preserves original role (streaming update regression)
 if emu_c "update_role" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Task' > /n/ui/ctl; echo 'role=veltro text=placeholder' > /n/ui/activity/0/conversation/ctl; echo 'update idx=0 text=final response' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Task' > /mnt/ui/ctl; echo 'role=veltro text=placeholder' > /mnt/ui/activity/0/conversation/ctl; echo 'update idx=0 text=final response' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     if echo "$OUTPUT" | grep -q "role=veltro" && echo "$OUTPUT" | grep -q "final response"; then
         pass "in-place update preserves original role"
     else
@@ -238,7 +238,7 @@ echo ""
 echo "── presentation per-activity ──"
 
 if emu_c "pres_act1" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'activity create Task' > /n/ui/ctl; echo 'create id=editor type=app label=Editor' > /n/ui/activity/1/presentation/ctl; cat /n/ui/activity/1/presentation/editor/type"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'activity create Task' > /mnt/ui/ctl; echo 'create id=editor type=app label=Editor' > /mnt/ui/activity/1/presentation/ctl; cat /mnt/ui/activity/1/presentation/editor/type"; then
     if echo "$OUTPUT" | grep -q "app"; then
         pass "presentation artifact created in activity 1"
     else

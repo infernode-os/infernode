@@ -5,7 +5,7 @@ implement VeltroMoreToolsTest;
 #
 # These tools have no dedicated test file.  They share a pattern: the agent
 # calls exec(args), the tool dispatches on the first word, and most error
-# paths are reached without any external service running (no /n/ui, /n/wallet,
+# paths are reached without any external service running (no /mnt/ui, /n/wallet,
 # /n/wikia, /tmp/veltro/man/).  We exercise:
 #
 #   mount    — stub: must always refuse, never expand the namespace
@@ -389,11 +389,11 @@ testGapAddNoUI(t: ref T)
 	tool := loadtool(t, "gap");
 	if(tool == nil)
 		return;
-	# Without /n/ui mounted, currentactid() returns -1; the tool reports
+	# Without /mnt/ui mounted, currentactid() returns -1; the tool reports
 	# "no active activity" instead of crashing.
 	r := tool->exec("add \"some thoughtful gap\" high");
 	t.assert(hassubstr(r, "error"),
-		"gap add without /n/ui mounted returns error");
+		"gap add without /mnt/ui mounted returns error");
 	t.assert(hassubstr(r, "no active activity") || hassubstr(r, "luciuisrv"),
 		"error explains UI is not running");
 }

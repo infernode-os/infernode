@@ -4,7 +4,7 @@ implement LucibridgeTest;
 # Unit tests for lucibridge pure functions.
 #
 # lucibridge contains many string-processing helpers that are testable
-# without the full Inferno runtime (no /n/ui, /mnt/llm needed).
+# without the full Inferno runtime (no /mnt/ui, /mnt/llm needed).
 # These tests re-implement the functions locally (same pattern as
 # lucifer_flicker_test.b) to validate the logic in isolation.
 #

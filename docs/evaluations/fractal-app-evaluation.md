@@ -44,7 +44,7 @@ The fractal app is **production-ready** for its current scope: a Mandelbrot/Juli
 - Three-button mouse interaction: drag-zoom (B1), Julia-at-cursor (B2), context menu (B3)
 - Cascading popup menus via `menu.m` with generator pattern for dynamic items
 - Statusbar showing mode, Julia parameter, depth, and computation status
-- Live theme change listener (`/n/ui/event`)
+- Live theme change listener (`/mnt/ui/event`)
 - Window resize handled correctly with statusbar repositioning
 
 ### 4. Comprehensive Veltro integration

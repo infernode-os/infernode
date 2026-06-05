@@ -394,7 +394,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 	arg->init(args);
 
-	mountpt = "/n/ui";
+	mountpt = "/mnt/ui";
 	while((o := arg->opt()) != 0)
 		case o {
 		'm' =>	mountpt = arg->earg();
@@ -1577,7 +1577,7 @@ switchactivity(newid: int)
 
 	actid = newid;
 	# Tell luciuisrv which activity is focused so tools (e.g. launch)
-	# that read /n/ui/activity/current get the correct id.
+	# that read /mnt/ui/activity/current get the correct id.
 	writefile(sys->sprint("%s/activity/current", mountpt), string newid);
 	loadlabel();
 	loadstatus();
@@ -1849,7 +1849,7 @@ loadstatus()
 		actstatus = "";
 }
 
-# Read all activities from /n/ui/ and populate tile state
+# Read all activities from /mnt/ui/ and populate tile state
 loadtiles()
 {
 	<-tilelock;

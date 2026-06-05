@@ -38,7 +38,7 @@ ToolTask: module {
 	schema: fn(): string;
 };
 
-UI_MOUNT: con "/n/ui";
+UI_MOUNT: con "/mnt/ui";
 
 # Keys accepted by `task create`. Anything else is rejected; this is the
 # signal the LLM relies on to self-correct when it hallucinates fields.
@@ -258,7 +258,7 @@ docreate(args: string): string
 		}
 	}
 
-	# Create activity via /n/ui/ctl
+	# Create activity via /mnt/ui/ctl
 	ctlpath := UI_MOUNT + "/ctl";
 	err := writefile(ctlpath, "activity create " + label);
 	if(err != nil)
@@ -267,7 +267,7 @@ docreate(args: string): string
 	# Read back the new activity id (last activity in list)
 	info := readfile(UI_MOUNT + "/ctl");
 	if(info == nil)
-		return "error: cannot read /n/ui/ctl after create";
+		return "error: cannot read /mnt/ui/ctl after create";
 
 	# Parse "activities: id1 id2 ... idN" — idN is the newest
 	newid := -1;

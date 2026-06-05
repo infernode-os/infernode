@@ -394,7 +394,7 @@ headless agent stack) and `serve-agent.sh` (its host launcher). These
 files are **testing-only and must never ship in a release**:
 
 - The release tarballs / .app bundle / DMG / .zip would each expose
-  `/n/ui` over a 9P port if they included these files. That is not the
+  `/mnt/ui` over a 9P port if they included these files. That is not the
   posture a default install should ever land in.
 - The harness configuration assumes localhost binding and a single
   trusted operator — fine for a private evaluation rig, wrong for any

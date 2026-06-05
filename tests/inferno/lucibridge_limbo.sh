@@ -69,7 +69,7 @@ luciuisrv &
 sleep 1
 
 echo CREATE_ACTIVITY
-echo 'activity create OrchTest' > /n/ui/ctl
+echo 'activity create OrchTest' > /mnt/ui/ctl
 sleep 1
 
 echo START_LUCIBRIDGE
@@ -77,7 +77,7 @@ lucibridge -v -a 0 -s &
 sleep 3
 
 echo SEND_PROMPT
-echo 'Please write me a complete compileable Limbo hello-world program that prints hello, limbo and exits.' > /n/ui/activity/0/conversation/input
+echo 'Please write me a complete compileable Limbo hello-world program that prints hello, limbo and exits.' > /mnt/ui/activity/0/conversation/input
 
 echo WAIT_FOR_RESPONSE
 i=0
@@ -89,9 +89,9 @@ while {~ $i 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 
 
 echo CONVERSATION_DUMP
 for n in 0 1 2 3 4 5 6 7 8 9 10 {
-	if {ftest -e /n/ui/activity/0/conversation/$n} {
+	if {ftest -e /mnt/ui/activity/0/conversation/$n} {
 		echo --- msg $n ---
-		cat /n/ui/activity/0/conversation/$n
+		cat /mnt/ui/activity/0/conversation/$n
 	}
 }
 echo DONE_MARKER

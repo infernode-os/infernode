@@ -5,12 +5,12 @@ implement Msgwatch;
 #
 # Thin relay between /mnt/msg/notify and the Meta Agent.
 #
-# Lucifer mode (when /n/ui is mounted):
+# Lucifer mode (when /mnt/ui is mounted):
 #   Reads blocking notifications from /mnt/msg/notify.
-#   Writes each notification to /n/ui/activity/0/conversation/input
+#   Writes each notification to /mnt/ui/activity/0/conversation/input
 #   so the Meta Agent receives and classifies it.
 #
-# Headless mode (no /n/ui):
+# Headless mode (no /mnt/ui):
 #   Creates own LLM session, loads secretary policy,
 #   classifies and handles messages autonomously.
 #
@@ -75,8 +75,8 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	arg = nil;
 
-	# Determine mode: Lucifer (has /n/ui) or headless
-	uipath := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
+	# Determine mode: Lucifer (has /mnt/ui) or headless
+	uipath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
 	fd := sys->open(uipath, Sys->OWRITE);
 	if(fd != nil) {
 		fd = nil;

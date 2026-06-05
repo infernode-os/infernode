@@ -635,7 +635,7 @@ own configuration (`OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`).
   TensorRT linked in). On Jetson hardware, JetPack already provides the
   needed libraries.
 - **Server-side UI.** `appl/cmd/luciuisrv.b` serves the UI state of the
-  Lucifer interface as a 9P filesystem at `/n/ui/`. Combined with
+  Lucifer interface as a 9P filesystem at `/mnt/ui/`. Combined with
   `appl/cmd/lucibridge.b`, it allows the agent loop to run on the
   server while a Mac or other client acts as a thin renderer over the
   same 9P mount. Multiple renderers can attach to the same activity.

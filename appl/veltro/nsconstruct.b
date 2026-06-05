@@ -187,17 +187,16 @@ restrictns(caps: ref Capabilities): string
 	#   /n/speech — "/n/speech" in caps.paths
 	#   /n/git    — "/n/git" in caps.paths
 	#   /n/wallet — "/n/wallet" in caps.paths
-	#   /n/ui     — "present" in caps.tools
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
-	# NB: the LLM is no longer a /n entry. llm9p's schema is ours, so it lives at
-	# /mnt/llm (docs/NAMESPACE-LAYOUT.md, INFR-254); its always-grant moved into
-	# the uniform /mnt machinery (step 5b). /n no longer special-cases the agent's
-	# core service — it collapses to genuine foreign imports.
+	# NB: the LLM (llm9p) and the UI presentation surface (luciuisrv) are no longer
+	# /n entries — their schemas are ours, so they live at /mnt/llm and /mnt/ui
+	# (docs/NAMESPACE-LAYOUT.md, INFR-254). Both are handled by the uniform /mnt
+	# machinery (step 5b). /n no longer special-cases the agent's services — it
+	# collapses to genuine foreign imports.
 	(nok, nil) := sys->stat("/n");
 	if(nok >= 0) {
 		nallow: list of string;
-		uiok := -1;
 
 		# MCP providers (mc9p, mcp9p adapters) and the LLM (llm9p) mount under
 		# /mnt — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). All
@@ -224,15 +223,9 @@ restrictns(caps: ref Capabilities): string
 				nallow = "wallet" :: nallow;
 		}
 
-		# /n/ui — only if "present" tool is granted
-		# (present and gap tools write to /n/ui/activity/{id}/...)
-		if(inlist("present", caps.tools)) {
-			(s, nil) := sys->stat("/n/ui");
-			if(s >= 0) {
-				nallow = "ui" :: nallow;
-				uiok = s;
-			}
-		}
+		# (The UI presentation surface moved to /mnt/ui — granted + sub-restricted
+		# by the uniform /mnt machinery in step 5b, like /mnt/llm and /mnt/mcp.
+		# It is no longer a /n entry. INFR-254.)
 
 		# /n/pres-* — only if Xenith (GUI) access is granted
 		if(caps.xenith) {
@@ -254,17 +247,6 @@ restrictns(caps: ref Capabilities): string
 		err = restrictdir("/n", nallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
-
-		# Restrict /n/ui — allow activity/ always; allow ctl/info if task tool is granted
-		if(uiok >= 0) {
-			uiallow := "activity" :: nil;
-			if(inlist("task", caps.tools)) {
-				uiallow = "ctl" :: uiallow;
-			}
-			uerr := restrictdir("/n/ui", uiallow, 0);
-			if(uerr != nil)
-				return sys->sprint("restrict /n/ui: %s", uerr);
-		}
 
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
@@ -298,6 +280,19 @@ restrictns(caps: ref Capabilities): string
 	(mntllmok, nil) := sys->stat("/mnt/llm");
 	if(mntllmok >= 0 && !inlist("llm", mntpaths))
 		mntpaths = "llm" :: mntpaths;
+	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
+	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
+	# Capability-gated exactly as before, now under /mnt. The grant exposes the
+	# whole /mnt/ui; the subtree is then narrowed below (activity/ always; ctl if
+	# the task tool is granted), preserving the old /mnt/ui least-privilege.
+	uimnt := 0;
+	if(inlist("present", caps.tools)) {
+		(uimntok, nil) := sys->stat("/mnt/ui");
+		if(uimntok >= 0 && !inlist("ui", mntpaths)) {
+			mntpaths = "ui" :: mntpaths;
+			uimnt = 1;
+		}
+	}
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
 		if(mntok >= 0) {
@@ -305,6 +300,15 @@ restrictns(caps: ref Capabilities): string
 			if(err != nil)
 				return sys->sprint("restrict /mnt: %s", err);
 			keepmnt = 1;
+			# /mnt/ui sub-restriction: activity/ always; ctl only if task granted.
+			if(uimnt) {
+				uiallow := "activity" :: nil;
+				if(inlist("task", caps.tools))
+					uiallow = "ctl" :: uiallow;
+				uerr := restrictdir("/mnt/ui", uiallow, 0);
+				if(uerr != nil)
+					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
 		}
 	}
 
@@ -572,10 +576,11 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 	nentries := array[] of {
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
-		("/n/ui",     "UI Service",       "rw"),
-		# The LLM (llm9p) and MCP providers live under /mnt now — application
-		# mount points, schema is ours (docs/NAMESPACE-LAYOUT.md), not /n.
+		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
+		# /mnt now — application mount points, schema is ours, not /n imports
+		# (docs/NAMESPACE-LAYOUT.md).
 		("/mnt/llm",  "LLM Service",      "rw"),
+		("/mnt/ui",   "UI Service",       "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 	};
 

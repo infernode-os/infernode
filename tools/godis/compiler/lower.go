@@ -4674,6 +4674,124 @@ func (fl *funcLowerer) lowerSyncCall(instr *ssa.Call, callee *ssa.Function) (boo
 
 // lowerSortCall handles calls to the sort package.
 // sort.Ints is implemented as inline insertion sort on the Dis array.
+// emitCmpCall calls a resolved less(i, j) bool comparator, leaving the boolean
+// result in FP(dst). closureSlot >= 0 passes the closure pointer as the hidden
+// first parameter (for comparators that capture variables).
+func (fl *funcLowerer) emitCmpCall(cmpFn *ssa.Function, closureSlot int32, iOp, jOp dis.Operand, dst int32) {
+	iby2wd := int32(dis.IBY2WD)
+	callFrame := fl.frame.AllocWord("")
+	iframeIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
+	calleeOff := int32(dis.MaxTemp)
+	if closureSlot >= 0 {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(closureSlot), dis.FPInd(callFrame, calleeOff)))
+		calleeOff += iby2wd
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, iOp, dis.FPInd(callFrame, calleeOff)))
+	calleeOff += iby2wd
+	fl.emit(dis.Inst2(dis.IMOVW, jOp, dis.FPInd(callFrame, calleeOff)))
+	calleeOff += iby2wd
+	fl.emit(dis.Inst2(dis.ILEA, dis.FP(dst), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+	icallIdx := len(fl.insts)
+	fl.emit(dis.Inst2(dis.ICALL, dis.FP(callFrame), dis.Imm(0)))
+	fl.funcCallPatches = append(fl.funcCallPatches,
+		funcCallPatch{instIdx: iframeIdx, callee: cmpFn, patchKind: patchIFRAME},
+		funcCallPatch{instIdx: icallIdx, callee: cmpFn, patchKind: patchICALL},
+	)
+}
+
+// emitSortSlice implements sort.Slice / sort.SliceStable as an insertion sort
+// that calls the user's less(i, j) closure to order elements, swapping them in
+// place. Returns false (leaving the slice untouched) if the comparator can't be
+// resolved statically or the element width isn't a whole number of words.
+func (fl *funcLowerer) emitSortSlice(instr *ssa.Call) bool {
+	// sort.Slice(slice any, less func(i, j int) bool): the slice is passed as
+	// an interface, so unwrap the MakeInterface to reach the concrete []T.
+	sliceArg := instr.Call.Args[0]
+	if mi, ok := sliceArg.(*ssa.MakeInterface); ok {
+		sliceArg = mi.X
+	}
+	sliceT, ok := sliceArg.Type().Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+	iby2wd := int32(dis.IBY2WD)
+	elemSize := DisElementSize(sliceT.Elem())
+	if elemSize <= 0 || int32(elemSize)%iby2wd != 0 {
+		return false // sub-word (e.g. []byte) elements unsupported
+	}
+	elemWords := int32(elemSize) / iby2wd
+
+	cmpVal := instr.Call.Args[1]
+	var cmpFn *ssa.Function
+	closureSlot := int32(-1)
+	switch cv := cmpVal.(type) {
+	case *ssa.MakeClosure:
+		cmpFn, _ = cv.Fn.(*ssa.Function)
+		closureSlot = fl.slotOf(cmpVal)
+	case *ssa.Function:
+		cmpFn = cv
+	default:
+		cmpFn = fl.comp.resolveClosureTarget(cmpVal)
+	}
+	if cmpFn == nil {
+		return false
+	}
+
+	arrSlot := fl.materialize(sliceArg)
+	n := fl.frame.AllocWord("ss.n")
+	fl.emit(dis.Inst2(dis.ILENA, dis.FP(arrSlot), dis.FP(n)))
+	i := fl.frame.AllocWord("ss.i")
+	j := fl.frame.AllocWord("ss.j")
+	j1 := fl.frame.AllocWord("ss.j1")
+	addrJ := fl.frame.AllocWord("ss.aj")
+	addrJ1 := fl.frame.AllocWord("ss.aj1")
+	swp := fl.frame.AllocWord("ss.swp")
+	tmp := fl.frame.AllocWord("ss.tmp")
+
+	// for i := 1; i < n; i++
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(i)))
+	outerPC := int32(len(fl.insts))
+	outerDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(n), dis.Imm(0)))
+	// j := i
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(i), dis.FP(j)))
+	innerPC := int32(len(fl.insts))
+	// if j <= 0 -> inner done
+	innerDone1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLEW, dis.FP(j), dis.Imm(0), dis.Imm(0)))
+	// j1 = j - 1
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(j), dis.FP(j1)))
+	// swp = less(j, j-1)
+	fl.emitCmpCall(cmpFn, closureSlot, dis.FP(j), dis.FP(j1), swp)
+	// if !swp -> inner done
+	innerDone2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(swp), dis.Imm(0), dis.Imm(0)))
+	// swap arr[j] and arr[j-1], word by word (raw MOVW: a pure exchange keeps
+	// refcounts balanced for pointer elements)
+	fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(addrJ), dis.FP(j)))
+	fl.emit(dis.NewInst(dis.IINDX, dis.FP(arrSlot), dis.FP(addrJ1), dis.FP(j1)))
+	for w := int32(0); w < elemWords; w++ {
+		off := w * iby2wd
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrJ, off), dis.FP(tmp)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrJ1, off), dis.FPInd(addrJ, off)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tmp), dis.FPInd(addrJ1, off)))
+	}
+	// j--
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(j), dis.FP(j)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(innerPC)))
+	// inner done
+	innerDonePC := int32(len(fl.insts))
+	fl.insts[innerDone1].Dst = dis.Imm(innerDonePC)
+	fl.insts[innerDone2].Dst = dis.Imm(innerDonePC)
+	// i++
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(outerPC)))
+	// done
+	fl.insts[outerDone].Dst = dis.Imm(int32(len(fl.insts)))
+	return true
+}
+
 func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Ints":
@@ -4846,7 +4964,7 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		// sort.Float64s: no-op stub (would need float comparison)
 		return true, nil
 	case "Slice":
-		// sort.Slice: no-op stub (needs closure callback)
+		fl.emitSortSlice(instr)
 		return true, nil
 	case "Search", "SearchInts", "SearchStrings":
 		// sort.Search/SearchInts/SearchStrings: return 0 (stub)
@@ -4865,7 +4983,8 @@ func (fl *funcLowerer) lowerSortCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVP, dOp, dis.FP(dst)))
 		return true, nil
 	case "SliceStable":
-		// sort.SliceStable: no-op stub (needs closure callback)
+		// Insertion sort is already stable.
+		fl.emitSortSlice(instr)
 		return true, nil
 	case "Sort", "Stable":
 		// sort.Sort/Stable: no-op stub (needs interface)

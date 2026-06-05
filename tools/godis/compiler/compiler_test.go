@@ -3087,6 +3087,8 @@ func TestE2EPrograms(t *testing.T) {
 		{"print_builtin.go", "123\nabc\n1x2true\n1 2 3\nx y\none two two \n"},
 		// strconv.Quote escapes control/quote/backslash chars.
 		{"strconv_quote.go", "\"hi\\there\"\n\"line1\\nline2\"\n\"a\\\"b\\\\c\"\n\"plain text\"\n\"tab\\tand\\rreturn\"\n"},
+		// sort.Slice with a user comparator closure (ints, structs).
+		{"sort_slice.go", "1\n1\n2\n3\n4\n5\n6\n9\n9 1\namy 25\ncal 28\nbob 30\n"},
 	}
 
 	for _, tt := range tests {

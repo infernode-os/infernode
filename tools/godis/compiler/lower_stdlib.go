@@ -608,8 +608,8 @@ func (fl *funcLowerer) lowerStringsFields(instr *ssa.Call) error {
 	countDonePC := int32(len(fl.insts))
 	fl.insts[bgeCountDone].Dst = dis.Imm(countDonePC)
 
-	// Allocate array
-	elemTDIdx := fl.makeHeapTypeDesc(nil) // string type desc
+	// Allocate array of strings
+	elemTDIdx := fl.makeHeapTypeDesc(types.Typ[types.String])
 	fl.emit(dis.NewInst(dis.INEWA, dis.FP(count), dis.Imm(int32(elemTDIdx)), dis.FP(dst)))
 
 	// Second pass: fill array
@@ -3202,43 +3202,58 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		return true, nil
 
 	case "WriteString":
-		// (*Buffer).WriteString(s) → (len(s), nil)
+		// (*Buffer).WriteString(s): buf += s, return (len(s), nil).
+		recv := fl.materialize(instr.Call.Args[0])
+		sOp := fl.operandOf(instr.Call.Args[1])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.NewInst(dis.IADDC, sOp, dis.FP(cur), dis.FP(cur)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FPInd(recv, 0)))
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 
 	case "WriteByte":
-		// (*Buffer).WriteByte(c) → nil error
+		// (*Buffer).WriteByte(c): buf += string(c), return nil error.
+		recv := fl.materialize(instr.Call.Args[0])
+		cOp := fl.operandOf(instr.Call.Args[1])
+		ch := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(ch)))
+		fl.emit(dis.NewInst(dis.IINSC, cOp, dis.Imm(0), dis.FP(ch)))
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(ch), dis.FP(cur), dis.FP(cur)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FPInd(recv, 0)))
 		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 
 	case "String":
-		// (*Buffer).String() → empty string
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		// (*Buffer).String(): return buf.
+		recv := fl.materialize(instr.Call.Args[0])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FP(fl.slotOf(instr))))
 		return true, nil
 
 	case "Bytes":
-		// (*Buffer).Bytes() → nil slice
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// (*Buffer).Bytes(): []byte(buf).
+		recv := fl.materialize(instr.Call.Args[0])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(cur), dis.FP(fl.slotOf(instr))))
 		return true, nil
 
 	case "Len":
-		// (*Buffer).Len() → 0
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// (*Buffer).Len(): len(buf).
+		recv := fl.materialize(instr.Call.Args[0])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(cur), dis.FP(fl.slotOf(instr))))
 		return true, nil
 
 	case "Reset":
-		// (*Buffer).Reset() → no-op
+		// (*Buffer).Reset(): buf = "".
+		recv := fl.materialize(instr.Call.Args[0])
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FPInd(recv, 0)))
 		return true, nil
 
 	case "Read":

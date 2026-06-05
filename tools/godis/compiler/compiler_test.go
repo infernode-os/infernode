@@ -3075,6 +3075,10 @@ func TestE2EPrograms(t *testing.T) {
 		// strings.Builder accumulates into its buf field (was a no-op stub
 		// whose String() faulted).
 		{"strings_builder.go", "ababab!\n7\nxyz\n3\n"},
+		// bytes.Buffer accumulates likewise; strings.Fields no longer panics
+		// the compiler (was makeHeapTypeDesc(nil)).
+		{"bytes_buffer.go", "hello world!\n12\nabc 3\n"},
+		{"strings_fields.go", "3\na b c\na-b-c\n1 single\n"},
 	}
 
 	for _, tt := range tests {

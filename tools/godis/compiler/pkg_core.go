@@ -649,8 +649,12 @@ func buildBytesPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
 			false)))
 
-	// Buffer type
-	bufType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Buffer", nil), types.NewStruct(nil, nil), nil)
+	// Buffer type. The single string field holds the accumulated content
+	// (offset 0 of the receiver), so the methods can be implemented for real.
+	bufType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Buffer", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "buf", types.Typ[types.String], false),
+		}, nil), nil)
 	bufPtr := types.NewPointer(bufType)
 	scope.Insert(bufType.Obj())
 

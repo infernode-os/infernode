@@ -2234,6 +2234,20 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 }
 
 // lowerStringsCall handles calls to the strings package.
+// emitBuilderLoadBuf loads the strings.Builder buf field (offset 0 of the
+// struct pointed to by recv) into a fresh temp, normalizing a nil/H buffer to
+// the empty string so it can be concatenated or measured safely.
+func (fl *funcLowerer) emitBuilderLoadBuf(recv int32) int32 {
+	cur := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(recv, 0), dis.FP(cur)))
+	emptyOff := fl.comp.AllocString("")
+	skip := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(cur), dis.Imm(-1), dis.Imm(0))) // buf != H -> keep
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(cur)))
+	fl.insts[skip].Dst = dis.Imm(int32(len(fl.insts)))
+	return cur
+}
+
 func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Contains":
@@ -2369,12 +2383,18 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		dst := fl.slotOf(instr)
 		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
 		return true, nil
-	// Builder methods
+	// strings.Builder methods. The Builder is a struct whose only field, buf
+	// (a string), holds the accumulated content at offset 0 of the receiver.
 	case "WriteString":
 		if callee.Signature.Recv() != nil {
+			recv := fl.materialize(instr.Call.Args[0])
+			sOp := fl.operandOf(instr.Call.Args[1])
+			cur := fl.emitBuilderLoadBuf(recv)
+			fl.emit(dis.NewInst(dis.IADDC, sOp, dis.FP(cur), dis.FP(cur))) // buf += s
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FPInd(recv, 0)))
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst))) // n = len(s)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			return true, nil
 		}
@@ -2392,25 +2412,40 @@ func (fl *funcLowerer) lowerStringsCall(instr *ssa.Call, callee *ssa.Function) (
 		}
 	case "Cap", "Len":
 		if callee.Signature.Recv() != nil {
+			recv := fl.materialize(instr.Call.Args[0])
+			cur := fl.emitBuilderLoadBuf(recv)
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.ILENC, dis.FP(cur), dis.FP(dst)))
 			return true, nil
 		}
 	case "String":
 		if callee.Signature.Recv() != nil {
+			recv := fl.materialize(instr.Call.Args[0])
+			cur := fl.emitBuilderLoadBuf(recv)
 			dst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FP(dst)))
 			return true, nil
 		}
 	case "Reset":
 		if callee.Signature.Recv() != nil {
-			return true, nil // no-op
+			recv := fl.materialize(instr.Call.Args[0])
+			emptyOff := fl.comp.AllocString("")
+			fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FPInd(recv, 0)))
+			return true, nil
 		}
 	case "WriteByte", "WriteRune":
 		if callee.Signature.Recv() != nil {
+			recv := fl.materialize(instr.Call.Args[0])
+			cOp := fl.operandOf(instr.Call.Args[1])
+			ch := fl.frame.AllocTemp(true)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(ch)))
+			fl.emit(dis.NewInst(dis.IINSC, cOp, dis.Imm(0), dis.FP(ch))) // 1-char string
+			cur := fl.emitBuilderLoadBuf(recv)
+			fl.emit(dis.NewInst(dis.IADDC, dis.FP(ch), dis.FP(cur), dis.FP(cur)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FPInd(recv, 0)))
 			dst := fl.slotOf(instr)
 			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))         // error tag (WriteByte) / n (WriteRune)
 			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 			return true, nil
 		}

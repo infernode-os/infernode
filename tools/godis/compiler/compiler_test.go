@@ -3072,6 +3072,9 @@ func TestE2EPrograms(t *testing.T) {
 		// make([]T, len, cap) with len != cap honors the length, so append
 		// writes at the right position.
 		{"slice_make_cap.go", "3\n3 0\n0\n6 0 25\ntrue\n3 0 9\n"},
+		// strings.Builder accumulates into its buf field (was a no-op stub
+		// whose String() faulted).
+		{"strings_builder.go", "ababab!\n7\nxyz\n3\n"},
 	}
 
 	for _, tt := range tests {

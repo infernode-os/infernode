@@ -860,23 +860,23 @@ func main() {
 		t.Fatalf("compile: %v", err)
 	}
 
-	// divmod should write two values through REGRET.
-	// int is a 64-bit Dis LONG, so division/remainder use DIVL/MODL.
-	hasDivl := false
-	hasModl := false
+	// divmod should write two values through REGRET. int arithmetic uses the
+	// WORD opcodes (a Dis WORD is machine-word width), so DIVW/MODW.
+	hasDivw := false
+	hasModw := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.IDIVL {
-			hasDivl = true
+		if inst.Op == dis.IDIVW {
+			hasDivw = true
 		}
-		if inst.Op == dis.IMODL {
-			hasModl = true
+		if inst.Op == dis.IMODW {
+			hasModw = true
 		}
 	}
-	if !hasDivl {
-		t.Error("missing DIVL instruction")
+	if !hasDivw {
+		t.Error("missing DIVW instruction")
 	}
-	if !hasModl {
-		t.Error("missing MODL instruction")
+	if !hasModw {
+		t.Error("missing MODW instruction")
 	}
 
 	encoded, err := m.EncodeToBytes()

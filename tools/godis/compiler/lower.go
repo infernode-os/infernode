@@ -888,7 +888,7 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 		fl.emit(dis.NewInst(fl.arithOp(dis.IMULW, dis.IMULF, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
 	case token.QUO:
 		op := fl.arithOp(dis.IDIVW, dis.IDIVF, 0, basic)
-		if op == dis.IDIVW || op == dis.IDIVL {
+		if op == dis.IDIVW {
 			fl.emitZeroDivCheck(mid) // ARM64 sdiv returns 0 on div-by-zero instead of trapping
 		}
 		fl.emit(dis.NewInst(op, mid, fl.fitMid(src, basic), dis.FP(dst)))
@@ -8868,22 +8868,26 @@ func (fl *funcLowerer) emitArgCopy(t types.Type, srcOff, frame, dstOff int32) in
 // fitMid returns op unchanged unless it is an immediate that does not fit the
 // Dis middle operand. That field (the instruction's "reg") is a 16-bit ushort
 // in the VM, so a wider immediate placed there is silently truncated; in that
-// case materialize the value into a frame slot and return that instead. For
-// int64/uint64 operands the slot is filled with a sign-extending word→long
-// conversion so the full 64-bit value is present.
+// case materialize the value into a frame slot and return that instead. The
+// immediate fits a 30-bit operand, so a plain word move into the (machine-word
+// width) slot carries the full value for the WORD arithmetic that reads it.
 func (fl *funcLowerer) fitMid(op dis.Operand, basic *types.Basic) dis.Operand {
 	if op.Mode != dis.AIMM || (op.Val >= -32768 && op.Val <= 32767) {
 		return op
 	}
 	slot := fl.frame.AllocWord("mid.imm")
-	if basic != nil && isWide64Int(basic) {
-		fl.emit(dis.Inst2(dis.ICVTWL, op, dis.FP(slot)))
-	} else {
-		fl.emit(dis.Inst2(dis.IMOVW, op, dis.FP(slot)))
-	}
+	fl.emit(dis.Inst2(dis.IMOVW, op, dis.FP(slot)))
 	return dis.FP(slot)
 }
 
+// arithOp selects the opcode for an arithmetic operation by operand type.
+// Integer arithmetic uses the WORD opcodes: a Dis WORD is machine-word width
+// (intptr — 64-bit on the amd64/arm64 targets), so WORD ops already compute at
+// the full width of Go's int/int64. The narrower LONG opcodes are deliberately
+// avoided — they are redundant here and the amd64 JIT's LONG-arithmetic
+// codegen (larith/cbral) is buggy, corrupting state in long-running functions.
+// What makes 64-bit values correct is the *storage* path (MOVL moves and DEFL
+// constants establishing valid high words), not the arithmetic opcode.
 func (fl *funcLowerer) arithOp(intOp, floatOp, stringOp dis.Op, basic *types.Basic) dis.Op {
 	if basic == nil {
 		return intOp
@@ -8894,72 +8898,14 @@ func (fl *funcLowerer) arithOp(intOp, floatOp, stringOp dis.Op, basic *types.Bas
 	if basic.Kind() == types.String && stringOp != 0 {
 		return stringOp
 	}
-	if isWide64Int(basic) {
-		return wordOpToLong(intOp)
-	}
 	return intOp
 }
 
-// wordOpToLong maps a 32-bit WORD arithmetic/logic opcode to its 64-bit LONG
-// counterpart, used when an operation is on int64/uint64 operands. Ops without
-// a meaningful long form are returned unchanged.
-func wordOpToLong(op dis.Op) dis.Op {
-	switch op {
-	case dis.IADDW:
-		return dis.IADDL
-	case dis.ISUBW:
-		return dis.ISUBL
-	case dis.IMULW:
-		return dis.IMULL
-	case dis.IDIVW:
-		return dis.IDIVL
-	case dis.IMODW:
-		return dis.IMODL
-	case dis.IANDW:
-		return dis.IANDL
-	case dis.IORW:
-		return dis.IORL
-	case dis.IXORW:
-		return dis.IXORL
-	case dis.ISHLW:
-		return dis.ISHLL
-	case dis.ISHRW:
-		return dis.ISHRL
-	}
-	return op
-}
-
+// compBranchOp selects a compare-branch opcode. Like arithOp, integer
+// comparisons use the WORD branches: WORD is machine-word width, so they
+// compare full-width int/int64 values, and the LONG branches (buggy in the
+// amd64 JIT) are unnecessary.
 func (fl *funcLowerer) compBranchOp(op token.Token, basic *types.Basic) dis.Op {
-	wop := fl.compBranchOpWord(op, basic)
-	if basic != nil && isWide64Int(basic) {
-		return wordBranchToLong(wop)
-	}
-	return wop
-}
-
-// wordBranchToLong maps a 32-bit WORD compare-branch opcode to its 64-bit LONG
-// counterpart for int64/uint64 comparisons. Like the existing word path, the
-// long branches are signed; unsigned 64-bit comparison correctness is a
-// separate pre-existing gap (uint has the same limitation today).
-func wordBranchToLong(op dis.Op) dis.Op {
-	switch op {
-	case dis.IBEQW:
-		return dis.IBEQL
-	case dis.IBNEW:
-		return dis.IBNEL
-	case dis.IBLTW:
-		return dis.IBLTL
-	case dis.IBLEW:
-		return dis.IBLEL
-	case dis.IBGTW:
-		return dis.IBGTL
-	case dis.IBGEW:
-		return dis.IBGEL
-	}
-	return op
-}
-
-func (fl *funcLowerer) compBranchOpWord(op token.Token, basic *types.Basic) dis.Op {
 	isF := basic != nil && isFloat(basic)
 	isC := basic != nil && basic.Kind() == types.String
 

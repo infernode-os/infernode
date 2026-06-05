@@ -114,9 +114,23 @@ emulator) green before moving on.
     plain `int` too. Over-wide middle immediates are now materialized to a
     slot first.
 
-- **Phase 3 — not started.** Flip `int`/`uint` themselves to 64-bit through
-  the Phase-1 seam, narrowing at Dis boundaries (indexing, sys calls). This is
-  the large, pervasive step (~1880 `IMOVW` sites); see the analysis above.
+- **Phase 3 — done.** `int`/`uint`/`uintptr` are 64-bit. This turned out to be
+  small once phases 1–2 existed: a Dis WORD is machine-word width (`intptr`,
+  64-bit on amd64/arm64), so the WORD arithmetic/compare opcodes already compute
+  at 64 bits — what was truncating plain int was the *storage* (32-bit `DEFW`
+  constants and word moves leaving stale high bits), not the arithmetic. So
+  `isWide64Int` includes int/uint/uintptr and the value path (MOVL moves, DEFL
+  constants, `%bd`/`%bud`, conversions) widens; the arithmetic stays on the
+  WORD opcodes. Covered by `testdata/int_wide.go`.
+
+  **JIT note.** Integer arithmetic deliberately uses the WORD opcodes, not the
+  LONG ones. The amd64 JIT's LONG-arithmetic codegen (`larith`/`cbral` in
+  `libinterp/comp-amd64.c`) is buggy — it corrupts state in longer-running
+  functions (e.g. quicksort hangs under `-c1`) — and the LONG ops are redundant
+  on a 64-bit-WORD host anyway. Routing int/int64 arithmetic through WORD ops
+  is both correct and JIT-safe; every testdata program produces identical
+  output under `-c0` and `-c1`. (The latent `larith` bug still affects Limbo
+  `big` arithmetic under the amd64 JIT and is worth a separate fix.)
   `uint64` is handled: ordered compares use the existing sign-bit-flip in
   `lowerComparison`, and `println` uses the `%bud` verb so values above the
   int64 range print unsigned. Remaining int64 gaps are minor: unsigned 64-bit

@@ -7,6 +7,7 @@ TARG=\
 	9p_export_test.dis\
 	alpha_test.dis\
 	agentlib_test.dis\
+	agentlib_mcp_test.dis\
 	agent_test.dis\
 	tooldoc_test.dis\
 	tool_schema_test.dis\
@@ -161,6 +162,10 @@ DISBIN=$ROOT/dis/tests
 # agentlib_test needs -I for appl/veltro/agentlib.m
 agentlib_test.dis: agentlib_test.b $ROOT/appl/veltro/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_test.b
+
+# agentlib_mcp_test exercises the shared MCP router in agentlib.m (INFR-247)
+agentlib_mcp_test.dis: agentlib_mcp_test.b $ROOT/appl/veltro/agentlib.m
+	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_mcp_test.b
 
 # tooluse_test needs -I for appl/veltro/agentlib.m
 tooluse_test.dis: tooluse_test.b $ROOT/appl/veltro/agentlib.m

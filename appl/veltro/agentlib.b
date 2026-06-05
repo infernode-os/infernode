@@ -1152,3 +1152,298 @@ buildtoolresults(results: list of (string, string)): string
 	}
 	return text;
 }
+
+# ============================================================================
+# MCP router (INFR-247) — generic 9P-MCP discovery/routing shared by NERVA and
+# the sub-agent bridge. An MCP adapter (mcp9p / a Styx-mounted serve-<svc>)
+# presents /mnt/mcp/<server>/{_meta/name, tools/<tool>/{doc,schema,call}}.
+# ============================================================================
+
+MCPDOCTRUNC: con 256;	# per-tool description budget (selection-quality knob)
+
+# Discover MCP servers among the given mount paths. Returns ((prefix,mount)...)
+# and every (bare-tool,mount). A path with no _meta/name or no tools/ is skipped
+# (harmless — e.g. a mount whose backend isn't up).
+mcpdiscover(mountpaths: list of string): (list of (string, string), list of (string, string))
+{
+	if(sys == nil)
+		init();
+	mounts: list of (string, string);
+	tools: list of (string, string);
+	for(ml := mountpaths; ml != nil; ml = tl ml) {
+		mount := hd ml;
+		if(!pathexists(mount + "/_meta/name") || !pathexists(mount + "/tools"))
+			continue;
+		prefix := strip(readfile(mount + "/_meta/name"));
+		if(prefix == "")
+			prefix = mcpbasename(mount);
+		fd := sys->open(mount + "/tools", Sys->OREAD);
+		if(fd == nil)
+			continue;
+		found := 0;
+		for(;;) {
+			(n, dirs) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(k := 0; k < n; k++) {
+				if((dirs[k].mode & Sys->DMDIR) == 0)
+					continue;
+				tools = (dirs[k].name, mount) :: tools;
+				found++;
+			}
+		}
+		fd = nil;
+		if(found > 0)
+			mounts = (prefix, mount) :: mounts;
+	}
+	return (mounts, tools);
+}
+
+# Build the combined tool-defs JSON array for the discovered mounts. Mirrors
+# nerva.b's buildtoolentries: each tool -> {"name":"<prefix>_<tool>",
+# "description":<doc>,"parameters":<schema>}, name-sanitized, $schema stripped.
+mcptooldefs(mounts: list of (string, string), maxper, budget: int): string
+{
+	if(sys == nil)
+		init();
+	defs := "";
+	count := 0;
+	bytes := 2;	# "[]"
+	for(ml := mounts; ml != nil; ml = tl ml) {
+		(prefix, mount) := hd ml;
+		toolsdir := mount + "/tools";
+		fd := sys->open(toolsdir, Sys->OREAD);
+		if(fd == nil)
+			continue;
+		permount := 0;
+		for(;;) {
+			(n, dirs) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(k := 0; k < n; k++) {
+				d := dirs[k];
+				if((d.mode & Sys->DMDIR) == 0)
+					continue;
+				if(permount >= maxper)
+					continue;
+				toolname := d.name;
+				doc := strip(readfile(toolsdir + "/" + toolname + "/doc"));
+				schema := mcpstripschemafield(strip(readfile(toolsdir + "/" + toolname + "/schema")));
+				if(len schema < 2 || schema[0] != '{')
+					schema = "{\"type\":\"object\"}";
+				safe := mcpsafename(prefix + "_" + toolname);
+				entry := "{\"name\":\"" + safe + "\",\"description\":" +
+					mcpjsonstr(truncate(doc, MCPDOCTRUNC)) +
+					",\"parameters\":" + schema + "}";
+				addbytes := len entry + 1;
+				if(bytes + addbytes > budget)
+					continue;
+				if(count > 0)
+					defs += ",";
+				defs += entry;
+				bytes += addbytes;
+				count++;
+				permount++;
+			}
+		}
+		fd = nil;
+	}
+	return "[" + defs + "]";
+}
+
+# Resolve a model-emitted tool name to (mount, bare, corrected). Splits
+# "<claimed>_<bare>" on the first '_'; (1) if the claimed prefix's mount owns
+# <bare>, use it (corrected=0); (2) else if exactly one mount owns <bare>, route
+# there and flag corrected=1 (tolerant of a wrong/absent prefix — the INFR-224
+# failure mode); (3) else ("", bare, 0).
+mcpresolve(name: string, mounts, tools: list of (string, string)): (string, string, int)
+{
+	claimed := "";
+	bare := name;
+	for(i := 0; i < len name; i++)
+		if(name[i] == '_') {
+			claimed = name[:i];
+			bare = name[i+1:];
+			break;
+		}
+	for(ml := mounts; ml != nil; ml = tl ml) {
+		(pfx, mnt) := hd ml;
+		if(pfx == claimed && mcptoolat(bare, mnt, tools))
+			return (mnt, bare, 0);
+	}
+	owner := "";
+	cnt := 0;
+	for(t := tools; t != nil; t = tl t) {
+		(tn, mnt) := hd t;
+		if(tn == bare) {
+			owner = mnt;
+			cnt++;
+		}
+	}
+	if(cnt == 1)
+		return (owner, bare, 1);
+	return ("", bare, 0);
+}
+
+mcptoolat(bare, mount: string, tools: list of (string, string)): int
+{
+	for(t := tools; t != nil; t = tl t) {
+		(tn, mnt) := hd t;
+		if(tn == bare && mnt == mount)
+			return 1;
+	}
+	return 0;
+}
+
+# One MCP tool call, bounded by a timeout so a hung/slow backend degrades to a
+# tool-error (the reason loop treats it as a failure) instead of stalling.
+mcpcall(path, args: string, timeoutms: int): string
+{
+	resc := chan[1] of string;
+	spawn mcpcallproc(path, args, resc);
+	tmo := chan[1] of int;
+	spawn mcpcalltimer(tmo, timeoutms);
+	alt {
+	r := <-resc =>
+		return r;
+	<-tmo =>
+		return sys->sprint("error: tool call to %s timed out after %dms", path, timeoutms);
+	}
+}
+
+mcpcalltimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+mcpcallproc(path, args: string, resc: chan of string)
+{
+	fd := sys->open(path, Sys->ORDWR);
+	if(fd == nil) {
+		resc <-= sys->sprint("error: cannot open %s: %r", path);
+		return;
+	}
+	if(args == "")
+		args = "{}";
+	b := array of byte args;
+	if(sys->write(fd, b, len b) != len b) {
+		resc <-= sys->sprint("error: write %s: %r", path);
+		return;
+	}
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	result := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		nr := sys->read(fd, buf, len buf);
+		if(nr <= 0)
+			break;
+		result += string buf[0:nr];
+	}
+	resc <-= result;
+}
+
+mcpbasename(p: string): string
+{
+	for(i := len p - 1; i >= 0; i--)
+		if(p[i] == '/')
+			return p[i+1:];
+	return p;
+}
+
+# Sanitize a tool name to ^[a-zA-Z0-9_-]{1,64}$ (Anthropic's constraint).
+mcpsafename(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s && len r < 64; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-')
+			r[len r] = c;
+		else
+			r[len r] = '_';
+	}
+	return r;
+}
+
+# JSON string literal (with surrounding quotes).
+mcpjsonstr(s: string): string
+{
+	r := "\"";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		case c {
+		'"'  => r += "\\\"";
+		'\\' => r += "\\\\";
+		'\n' => r += "\\n";
+		'\r' => r += "\\r";
+		'\t' => r += "\\t";
+		* =>
+			if(c < 32)
+				r += sys->sprint("\\u%04x", c);
+			else
+				r[len r] = c;
+		}
+	}
+	r += "\"";
+	return r;
+}
+
+# Remove a top-level "$schema":"..." field (Anthropic rejects it). Crude but
+# adequate: splice out the key through its string value + a trailing comma.
+mcpstripschemafield(s: string): string
+{
+	idx := mcpindexof(s, "\"$schema\"");
+	if(idx < 0)
+		return s;
+	j := idx + 9;
+	while(j < len s && s[j] != ':')
+		j++;
+	if(j >= len s)
+		return s;
+	j++;
+	while(j < len s && (s[j] == ' ' || s[j] == '\t'))
+		j++;
+	if(j < len s && s[j] == '"') {
+		j++;
+		while(j < len s && s[j] != '"') {
+			if(s[j] == '\\' && j+1 < len s)
+				j++;
+			j++;
+		}
+		if(j < len s)
+			j++;
+	}
+	if(j < len s && s[j] == ',')
+		j++;
+	r := "";
+	if(idx > 0)
+		r = s[:idx];
+	if(j < len s)
+		r += s[j:];
+	return mcptidycommas(r);
+}
+
+mcpindexof(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return i;
+	return -1;
+}
+
+mcptidycommas(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == ',' && i+1 < len s && s[i+1] == '}')
+			continue;
+		if(c == ',' && len r > 0 && r[len r - 1] == '{')
+			continue;
+		if(c == ',' && len r > 0 && r[len r - 1] == ',')
+			continue;
+		r[len r] = c;
+	}
+	return r;
+}

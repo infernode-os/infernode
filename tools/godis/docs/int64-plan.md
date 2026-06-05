@@ -92,6 +92,33 @@ emulator) green before moving on.
 
 ## Status
 
-Not started. Constant materialization (`AllocIntWord`) and float↔int truncation
-(`emitTruncToLong`) already provide reusable 64-bit plumbing that Phases 2–3
-build on.
+- **Phase 1 — done.** `emitValueMove`/`emitArgCopy` are the typed-move seam;
+  call/spawn argument marshaling, returns, and phi moves route through it.
+  Pure refactor, suite stayed green.
+- **Phase 2 — done.** `int64`/`uint64` are now real 64-bit Dis LONGs:
+  - moves via `MOVL`; constants via a new `DEFL` module item
+    (`Compiler.AllocLong`);
+  - arithmetic/comparison via the LONG opcode variants (`arithOp`/
+    `compBranchOp` remaps, `wordOpToLong`/`wordBranchToLong`);
+  - printing via the `%bd` verb (8-byte vararg) and `CVTLC` for string
+    building;
+  - conversions int↔int64, int64↔float in `lowerConvert`.
+  Covered by `testdata/int64.go`.
+
+  Two bugs were found and fixed along the way:
+  - **emu `load.c` DEFL**: `(LONG)(ulong)lo` did not mask the low word on
+    LP64 (ulong is 64-bit), so longs with bit 31 set in the low word were
+    sign-corrupted. Fixed with `(u32int)lo`.
+  - **`fitMid`**: the Dis middle operand (`ushort reg`) is 16 bits, so a
+    wider immediate placed there was truncated — a pre-existing bug affecting
+    plain `int` too. Over-wide middle immediates are now materialized to a
+    slot first.
+
+- **Phase 3 — not started.** Flip `int`/`uint` themselves to 64-bit through
+  the Phase-1 seam, narrowing at Dis boundaries (indexing, sys calls). This is
+  the large, pervasive step (~1880 `IMOVW` sites); see the analysis above.
+  `uint64` is handled: ordered compares use the existing sign-bit-flip in
+  `lowerComparison`, and `println` uses the `%bud` verb so values above the
+  int64 range print unsigned. Remaining int64 gaps are minor: unsigned 64-bit
+  *string* formatting (`CVTLC` is signed) and `uint64` division/modulo
+  (`DIVL`/`MODL` are signed) for operands above the int64 range.

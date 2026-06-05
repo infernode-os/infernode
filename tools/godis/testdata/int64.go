@@ -44,4 +44,11 @@ func main() {
 	println(int64(f))
 	var u uint = 4000000000
 	println(uint64(u))
+
+	// uint64 above the int64 range: unsigned compare and unsigned print.
+	var big uint64 = 18000000000000000000
+	if big > 1 {
+		println("huge")
+	}
+	println(big)
 }

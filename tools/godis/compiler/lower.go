@@ -5270,8 +5270,12 @@ func (fl *funcLowerer) emitPrintArg(arg ssa.Value) error {
 		case basic.Kind() == types.String:
 			return fl.emitSysPrintFmt("%s", arg)
 		case basic.Info()&types.IsInteger != 0:
-			// Inferno's print verb for a 64-bit `big` value is %bd.
+			// Inferno's print verbs for 64-bit values are %bd (big) and
+			// %bud (unsigned big).
 			if isWide64Int(arg.Type()) {
+				if isUnsignedInt(arg.Type()) {
+					return fl.emitSysPrintFmt("%bud", arg)
+				}
 				return fl.emitSysPrintFmt("%bd", arg)
 			}
 			return fl.emitSysPrintFmt("%d", arg)

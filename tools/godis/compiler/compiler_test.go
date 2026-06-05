@@ -192,11 +192,12 @@ func main() {
 		t.Error("missing CALL instruction for local call")
 	}
 
-	// The add function must have a RET that writes through REGRET
-	// Look for movw ... 0(32(fp)) pattern (indirect write to REGRET)
+	// The add function must have a RET that writes through REGRET.
+	// Look for a move to 0(32(fp)) (indirect write to REGRET); int returns
+	// copy a 64-bit LONG, so MOVL is the expected opcode here.
 	hasReturnWrite := false
 	for _, inst := range m.Instructions {
-		if (inst.Op == dis.IMOVW || inst.Op == dis.IMOVP) && inst.Dst.IsIndirect() {
+		if (inst.Op == dis.IMOVW || inst.Op == dis.IMOVP || inst.Op == dis.IMOVL) && inst.Dst.IsIndirect() {
 			if inst.Dst.Val == 32 && inst.Dst.Ind == 0 {
 				hasReturnWrite = true
 			}
@@ -859,23 +860,23 @@ func main() {
 		t.Fatalf("compile: %v", err)
 	}
 
-	// divmod should write two values through REGRET
-	// Check that we have DIVW and MODW in divmod
-	hasDivw := false
-	hasModw := false
+	// divmod should write two values through REGRET.
+	// int is a 64-bit Dis LONG, so division/remainder use DIVL/MODL.
+	hasDivl := false
+	hasModl := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.IDIVW {
-			hasDivw = true
+		if inst.Op == dis.IDIVL {
+			hasDivl = true
 		}
-		if inst.Op == dis.IMODW {
-			hasModw = true
+		if inst.Op == dis.IMODL {
+			hasModl = true
 		}
 	}
-	if !hasDivw {
-		t.Error("missing DIVW instruction")
+	if !hasDivl {
+		t.Error("missing DIVL instruction")
 	}
-	if !hasModw {
-		t.Error("missing MODW instruction")
+	if !hasModl {
+		t.Error("missing MODL instruction")
 	}
 
 	encoded, err := m.EncodeToBytes()
@@ -2006,19 +2007,20 @@ func main() {
 	}
 
 	// Check for CVTWC (int→string)
-	hasCVTWC := false
+	// int is a 64-bit Dis LONG, so an int verb converts to string with CVTLC.
+	hasCVTLC := false
 	// Check for ADDC (string concat)
 	hasADDC := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.ICVTWC {
-			hasCVTWC = true
+		if inst.Op == dis.ICVTLC {
+			hasCVTLC = true
 		}
 		if inst.Op == dis.IADDC {
 			hasADDC = true
 		}
 	}
-	if !hasCVTWC {
-		t.Error("expected CVTWC instruction for Sprintf with int verb")
+	if !hasCVTLC {
+		t.Error("expected CVTLC instruction for Sprintf with int verb")
 	}
 	if !hasADDC {
 		t.Error("expected ADDC instruction for Sprintf with string concat")
@@ -2361,9 +2363,9 @@ func main() {
 			hasAddf = true
 		case dis.IMULF:
 			hasMulf = true
-		case dis.ICVTLW:
+		case dis.ICVTFL:
 			hasCvtfw = true
-		case dis.ICVTWF:
+		case dis.ICVTLF:
 			hasCvtwf = true
 		case dis.IMOVF:
 			hasMovf = true
@@ -2375,11 +2377,12 @@ func main() {
 	if !hasMulf {
 		t.Error("missing MULF instruction for float multiplication")
 	}
+	// int is 64-bit: float→int truncates via CVTFL, int→float widens via CVTLF.
 	if !hasCvtfw {
-		t.Error("missing CVTLW instruction for float→int conversion")
+		t.Error("missing CVTFL instruction for float→int conversion")
 	}
 	if !hasCvtwf {
-		t.Error("missing CVTWF instruction for int→float conversion")
+		t.Error("missing CVTLF instruction for int→float conversion")
 	}
 	if !hasMovf {
 		t.Error("missing MOVF instruction for float constants")
@@ -3024,6 +3027,9 @@ func TestE2EPrograms(t *testing.T) {
 		// 64-bit int64/uint64: constants, arithmetic, comparison, call
 		// boundary, negatives, and bit ops above bit 31.
 		{"int64.go", "1099511627776\n5000000001\n4999999999\n10000000000\n1666666666\n2\n5000000000\nbig\n-3000000000\n12884901888\n4026531840\n12000000000\n5000000000\n3000000000\n4000000000\nhuge\n18000000000000000000\n"},
+
+		// Plain int/uint are 64-bit (Go word width).
+		{"int_wide.go", "6000000000\n9000000000\n428571428\n4\n1099511627776\n9000000000\n-5000000000\n-5000000\n44\n705032704\n9000000000\n8000000000\n9223372036854775808\n"},
 	}
 
 	for _, tt := range tests {

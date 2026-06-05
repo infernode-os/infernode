@@ -888,7 +888,7 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 		fl.emit(dis.NewInst(fl.arithOp(dis.IMULW, dis.IMULF, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
 	case token.QUO:
 		op := fl.arithOp(dis.IDIVW, dis.IDIVF, 0, basic)
-		if op == dis.IDIVW {
+		if op == dis.IDIVW || op == dis.IDIVL {
 			fl.emitZeroDivCheck(mid) // ARM64 sdiv returns 0 on div-by-zero instead of trapping
 		}
 		fl.emit(dis.NewInst(op, mid, fl.fitMid(src, basic), dis.FP(dst)))
@@ -8824,11 +8824,15 @@ func (fl *funcLowerer) emitIntToString(src dis.Operand, dst int32, t types.Type)
 }
 
 // isWide64Int reports whether t is a Go integer type that GoDis represents as a
-// true 64-bit Dis LONG (int64/uint64), as opposed to the still-32-bit int/uint
-// (which the int64 plan widens in a later phase).
+// full 64-bit Dis LONG: int/uint/uintptr (Go word width is 64-bit) and the
+// explicit int64/uint64. The sub-word types (int8/16/32, uint8/16/32) are not
+// included — they live in a word slot but are masked to their declared width.
 func isWide64Int(t types.Type) bool {
 	if b, ok := t.Underlying().(*types.Basic); ok {
-		return b.Kind() == types.Int64 || b.Kind() == types.Uint64
+		switch b.Kind() {
+		case types.Int64, types.Uint64, types.Int, types.Uint, types.Uintptr:
+			return true
+		}
 	}
 	return false
 }
@@ -8872,7 +8876,7 @@ func (fl *funcLowerer) fitMid(op dis.Operand, basic *types.Basic) dis.Operand {
 		return op
 	}
 	slot := fl.frame.AllocWord("mid.imm")
-	if basic != nil && (basic.Kind() == types.Int64 || basic.Kind() == types.Uint64) {
+	if basic != nil && isWide64Int(basic) {
 		fl.emit(dis.Inst2(dis.ICVTWL, op, dis.FP(slot)))
 	} else {
 		fl.emit(dis.Inst2(dis.IMOVW, op, dis.FP(slot)))
@@ -8890,7 +8894,7 @@ func (fl *funcLowerer) arithOp(intOp, floatOp, stringOp dis.Op, basic *types.Bas
 	if basic.Kind() == types.String && stringOp != 0 {
 		return stringOp
 	}
-	if basic.Kind() == types.Int64 || basic.Kind() == types.Uint64 {
+	if isWide64Int(basic) {
 		return wordOpToLong(intOp)
 	}
 	return intOp
@@ -8927,7 +8931,7 @@ func wordOpToLong(op dis.Op) dis.Op {
 
 func (fl *funcLowerer) compBranchOp(op token.Token, basic *types.Basic) dis.Op {
 	wop := fl.compBranchOpWord(op, basic)
-	if basic != nil && (basic.Kind() == types.Int64 || basic.Kind() == types.Uint64) {
+	if basic != nil && isWide64Int(basic) {
 		return wordBranchToLong(wop)
 	}
 	return wop

@@ -342,7 +342,14 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			for(i = 0; i < n; i++) {
 				hi = disw(isp);
 				lo = disw(isp);
-				*(LONG*)si = (LONG)hi << 32 | (LONG)(ulong)lo;
+				/*
+				 * Mask the low word to 32 bits with u32int. ulong is 64-bit on
+				 * LP64 hosts, so (ulong)lo does not narrow lo, and disw() returns
+				 * the word sign-extended (its c[0]<<24 is a signed-int shift); a
+				 * low word with bit 31 set would otherwise leak 1s into the high
+				 * half of the assembled LONG.
+				 */
+				*(LONG*)si = (LONG)hi << 32 | (LONG)(u32int)lo;
 				si += sizeof(LONG);
 			}
 			break;

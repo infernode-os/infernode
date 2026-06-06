@@ -1,0 +1,45 @@
+# GoDis differential-test skip manifest.
+#
+# Programs listed here are excluded from the harness (classified "skipped")
+# because `go run` is not a faithful oracle for them. Format: one program name
+# per line (path relative to tools/godis), optional "# reason". This keeps the
+# upstream testdata files unmodified.
+#
+# NOTE: this is deliberately not where godis *bugs* go. Real divergences (e.g.
+# strconv.Atoi not reporting an error) are left unlisted so they keep showing up
+# in the report. See docs/DIFFTEST-FINDINGS.md for the live bug list.
+
+# --- No Go oracle: use Inferno's inferno/sys package ---
+testdata/sys_create.go      # inferno/sys is not importable by go run
+testdata/sysio.go           # inferno/sys
+testdata/sysprint.go        # inferno/sys
+testdata/systime.go         # inferno/sys
+testdata/syswrite.go        # inferno/sys
+testdata/close_unblock.go   # inferno/sys
+testdata/bench              # inferno/sys benchmark programs
+
+# --- No plain `go run <dir>` oracle: local-import multi-package programs ---
+# (these are exercised by compiler_test.go's TestE2EMultiPackage instead)
+testdata/chain              # imports local package "mid"
+testdata/multipkg           # imports local package "mathutil"
+testdata/sharedtype         # imports local package "geom"
+
+# --- Inherently nondeterministic output ---
+testdata/selectrecv.go      # select chooses a ready case nondeterministically
+testdata/map_range.go       # map iteration order is unspecified
+testdata/slog_pkg.go        # log lines embed wall-clock timestamps
+
+# --- Behavior Go leaves implementation-defined (unreliable oracle) ---
+# Go's spec says builtin print/println formatting "may change"; in particular
+# println prints floats in scientific notation (+5.000000e+000) while godis
+# prints them plainly. These programs print floats via the builtin.
+testdata/float_basic.go     # builtin println float format is implementation-defined
+testdata/math_pkg.go        # builtin println float format
+testdata/complex_basic.go   # builtin println float format
+testdata/generics.go        # builtin println float format (one line)
+testdata/tier6_1.go         # builtin println float format
+# Slice growth strategy (and thus cap() after append) is not specified by Go.
+testdata/copy_cap.go        # relies on Go's append growth: cap()==4
+# runtime.NumCPU()/GOMAXPROCS reflect the host under go run but the emulator's
+# single Dis scheduler under emu.
+testdata/runtime_pkg.go     # runtime.NumCPU differs between go run and emu

@@ -256,9 +256,36 @@ jobs:
       # root; the E2E tests skip gracefully if the emulator is absent, so an
       # explicit presence check keeps a missing artifact from silently
       # downgrading this job to compile-only.
+      #
+      # This also runs difftest's TestE2ELocked, the differential-testing
+      # regression gate: every program in _corpus/locked.txt must still produce
+      # identical output under godis -c0, godis -c1, AND `go run`. A locked
+      # program drifting in any mode (including a -c0/-c1 JIT-only divergence)
+      # fails the build.
       run: |
         test -x ../../emu/Linux/o.emu || { echo "emulator missing; E2E would be skipped"; exit 1; }
         go test ./... -v
+
+    - name: Differential report (godis -c0/-c1 vs go run)
+      working-directory: tools/godis
+      # Non-blocking: the locked-corpus gate above is what fails the build. This
+      # step publishes the full diff (matches, divergences, JIT mismatches,
+      # crashes) for the whole corpus to the job summary and uploads JSON, so
+      # new divergences are visible without breaking unrelated PRs.
+      if: always()
+      continue-on-error: true
+      run: |
+        go run ./cmd/difftest -quiet -timeout 5s \
+          -md "$GITHUB_STEP_SUMMARY" -json difftest-report.json \
+          testdata _corpus
+
+    - name: Upload differential report
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      if: always()
+      with:
+        name: godis-difftest-report
+        path: tools/godis/difftest-report.json
+        retention-days: 14
 
   # ─────────────────────────────────────────────
   # Linux AMD64 GUI: SDL3 build from source

@@ -20,7 +20,7 @@ implement Wiki9p;
 #
 # Dependencies:
 #   /mnt/wiki      wikifs must be mounted (storage layer)
-#   /n/llm         LLM service must be available (inference)
+#   /mnt/llm         LLM service must be available (inference)
 #
 # Sources are bound into the namespace by the caller before
 # issuing an ingest command.  They can be anything mountable:
@@ -98,10 +98,10 @@ curstate := IDLE;
 # Configuration
 mountpt := "/n/wikia";
 wikidir := "/mnt/wiki";    # Where wikifs is mounted
-llmdir := "/n/llm";        # Where llmsrv is mounted
+llmdir := "/mnt/llm";        # Where llmsrv is mounted
 
 # LLM session
-llmsession := -1;           # Session ID from /n/llm/new
+llmsession := -1;           # Session ID from /mnt/llm/new
 
 # Operation log (kept in memory, served via Qlog)
 logbuf := "";
@@ -204,7 +204,7 @@ init(nil: ref Draw->Context, args: list of string)
 }
 
 # ===================================================================
-# LLM interaction via /n/llm filesystem
+# LLM interaction via /mnt/llm filesystem
 # ===================================================================
 
 # Open (or reuse) an LLM session and send a prompt, return response
@@ -711,7 +711,7 @@ DOCTEXT: con
 	"DEPENDENCIES\n" +
 	"\n" +
 	"  /mnt/wiki   wikifs must be mounted (page storage)\n" +
-	"  /n/llm      LLM service must be available\n" +
+	"  /mnt/llm      LLM service must be available\n" +
 	"\n" +
 	"The wiki is browsable via Charon at the httpd URL\n" +
 	"serving wikifs.  wiki9p provides the intelligence;\n" +

@@ -16,7 +16,7 @@
 /*
  * Max 9P RPC / negotiated msize ceiling. Historically 8K.
  * INFR-214: a 64K bump was tried and REVERTED — the mnt negotiation handles it
- * fine, but it BROKE keyring/SSL'd remote mounts (mount -k, e.g. /n/llm): the
+ * fine, but it BROKE keyring/SSL'd remote mounts (mount -k, e.g. /mnt/llm): the
  * mount attaches but the first real RPC fails, because devssl below the mnt
  * layer can't carry a 64K 9P message (TLS records cap ~16K). Local mcp9p mounts
  * (no SSL) were unaffected. So raising this alone is NOT enough for SSL'd

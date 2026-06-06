@@ -3,7 +3,7 @@ implement Taskboard9p;
 #
 # taskboard9p - Dashboard 9P Server for task metadata
 #
-# Mounted at /n/dashboard.  Syncs task state from /n/ui/ and
+# Mounted at /n/dashboard.  Syncs task state from /mnt/ui/ and
 # exposes structured metadata (synopsis, category, instructions,
 # progress, ordering) that the meta-agent can read and write.
 #
@@ -16,9 +16,9 @@ implement Taskboard9p;
 #     summary          r:  auto-rendered markdown
 #     tasks/           dir
 #       {id}/          dir
-#         label        r: synced from /n/ui/
-#         status       r: synced from /n/ui/
-#         urgency      r: synced from /n/ui/
+#         label        r: synced from /mnt/ui/
+#         status       r: synced from /mnt/ui/
+#         urgency      r: synced from /mnt/ui/
 #         synopsis     rw
 #         category     rw
 #         instructions rw
@@ -112,7 +112,7 @@ pending: ref PendingRead;
 eventbuf: list of string;	# buffered events when no reader
 summarytext: string;		# cached rendered summary
 mountpt_g := "/n/dashboard";
-uimount := "/n/ui";
+uimount := "/mnt/ui";
 srv_g: ref Styxserver;
 
 nomod(s: string)
@@ -191,11 +191,11 @@ init(nil: ref Draw->Context, args: list of string)
 	# Initial sync: discover existing activities
 	initialsync();
 
-	# Start watching /n/ui/event for activity changes
+	# Start watching /mnt/ui/event for activity changes
 	spawn eventwatcher();
 }
 
-# Scan existing activities from /n/ui/ctl and populate task entries
+# Scan existing activities from /mnt/ui/ctl and populate task entries
 initialsync()
 {
 	info := readfile(uimount + "/ctl");
@@ -248,7 +248,7 @@ addtask(id: int): ref TaskEntry
 	return te;
 }
 
-# Sync label/status/urgency from /n/ui/ for a task
+# Sync label/status/urgency from /mnt/ui/ for a task
 synctask(te: ref TaskEntry)
 {
 	s := readfile(sys->sprint("%s/activity/%d/label", uimount, te.id));
@@ -371,7 +371,7 @@ listcontains(l: list of string, s: string): int
 }
 
 # --- Event watcher ---
-# Blocks on /n/ui/event and syncs task state
+# Blocks on /mnt/ui/event and syncs task state
 
 eventwatcher()
 {

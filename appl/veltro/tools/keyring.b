@@ -35,7 +35,7 @@ ToolKeyring: module {
 	schema: fn(): string;
 };
 
-UI_MOUNT: con "/n/ui";
+UI_MOUNT: con "/mnt/ui";
 
 init(): string
 {

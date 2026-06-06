@@ -500,11 +500,11 @@ createsecstoresentinel()
 # was only in secstore (not yet loaded at profile time).
 ensurellmsrv()
 {
-	(ok, nil) := sys->stat("/n/llm");
+	(ok, nil) := sys->stat("/mnt/llm");
 	if(ok >= 0)
 		return;	# already running
 
-	sys->fprint(stderr, "logon: /n/llm not mounted, starting llmsrv\n");
+	sys->fprint(stderr, "logon: /mnt/llm not mounted, starting llmsrv\n");
 	spawn startllmsrv();
 	sys->sleep(1000);	# give it time to mount
 }

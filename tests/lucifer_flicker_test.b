@@ -113,7 +113,7 @@ testIdleNoResources(t: ref T)
 testIdleNeverUsed(t: ref T)
 {
 	now := sys->millisec();
-	res := ref Resource("/n/llm", "llm", "tool", "idle", nil, 0) ::
+	res := ref Resource("/mnt/llm", "llm", "tool", "idle", nil, 0) ::
 	       ref Resource("read",   "read", "tool", "idle", nil, 0) ::
 	       nil;
 	t.assert(!needstick(res, now), "all idle lastused=0: no tick");
@@ -122,7 +122,7 @@ testIdleNeverUsed(t: ref T)
 # All resources idle, last used 5s ago (outside 4s window): no tick.
 testIdleLastusedLongAgo(t: ref T)
 {
-	res := ref Resource("/n/llm", "llm", "tool", "idle", nil, TESTNOW - 5000) :: nil;
+	res := ref Resource("/mnt/llm", "llm", "tool", "idle", nil, TESTNOW - 5000) :: nil;
 	t.assert(!needstick(res, TESTNOW), "idle lastused=5s ago: no tick");
 }
 
@@ -154,7 +154,7 @@ testFlashWindowBoundary(t: ref T)
 # Mixed list — one active resource triggers tick regardless of others.
 testMixedIdleAndActive(t: ref T)
 {
-	res := ref Resource("/n/llm", "llm",    "tool", "idle",   nil, 0) ::
+	res := ref Resource("/mnt/llm", "llm",    "tool", "idle",   nil, 0) ::
 	       ref Resource("read",   "read",   "tool", "active", nil, TESTNOW) ::
 	       ref Resource("memory", "memory", "tool", "idle",   nil, TESTNOW - 6000) ::
 	       nil;
@@ -186,7 +186,7 @@ testStreamingStatusNoRecentUse(t: ref T)
 	now := sys->millisec();
 	# "streaming" is not "active" — check falls through to lastused branch.
 	# lastused=0 means lastused > 0 is false → no tick.
-	res := ref Resource("/n/llm", "llm", "tool", "streaming", nil, 0) :: nil;
+	res := ref Resource("/mnt/llm", "llm", "tool", "streaming", nil, 0) :: nil;
 	t.assert(!needstick(res, now),
 		"status=streaming lastused=0: no tick (lastused branch requires > 0)");
 }

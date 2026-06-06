@@ -19,7 +19,7 @@ implement Veltro;
 #
 # Requires:
 #   - /tool mounted (via tools9p)
-#   - /n/llm mounted (LLM interface)
+#   - /mnt/llm mounted (LLM interface)
 #
 
 include "sys.m";
@@ -83,7 +83,7 @@ usage()
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
-	sys->fprint(stderr, "\nRequires /tool and /n/llm to be mounted.\n");
+	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
 	raise "fail:usage";
 }
 
@@ -130,8 +130,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# Check required mounts
 	if(!agentlib->pathexists("/tool"))
 		sys->fprint(stderr, "warning: /tool not mounted (run tools9p first)\n");
-	if(!agentlib->pathexists("/n/llm"))
-		sys->fprint(stderr, "warning: /n/llm not mounted (LLM unavailable)\n");
+	if(!agentlib->pathexists("/mnt/llm"))
+		sys->fprint(stderr, "warning: /mnt/llm not mounted (LLM unavailable)\n");
 
 	# Namespace restriction (v3): FORKNS + bind-replace
 	# Load nsconstruct module (must happen while /dis is unrestricted)
@@ -317,7 +317,7 @@ setthinking(llmsessionid: string, budget: int)
 {
 	if(budget <= 0)
 		return;
-	path := "/n/llm/" + llmsessionid + "/thinking";
+	path := "/mnt/llm/" + llmsessionid + "/thinking";
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
 		if(verbose)
@@ -538,12 +538,12 @@ doplanningturn(llmfd: ref Sys->FD, task: string): string
 # Threshold: compact when estimated context exceeds 75% of 200K limit
 COMPACT_THRESHOLD: con 150000;
 
-# checkandcompact reads /n/llm/N/usage and triggers compaction if needed.
+# checkandcompact reads /mnt/llm/N/usage and triggers compaction if needed.
 # The usage file returns "estimated_tokens/context_limit\n".
-# A write to /n/llm/N/compact triggers the summarisation LLM call.
+# A write to /mnt/llm/N/compact triggers the summarisation LLM call.
 checkandcompact(llmsessionid: string)
 {
-	usagepath := "/n/llm/" + llmsessionid + "/usage";
+	usagepath := "/mnt/llm/" + llmsessionid + "/usage";
 	s := readfile(usagepath);
 	if(s == "")
 		return;
@@ -555,7 +555,7 @@ checkandcompact(llmsessionid: string)
 		return;
 	if(verbose)
 		sys->fprint(stderr, "veltro: context at ~%d tokens, compacting session\n", n);
-	compactpath := "/n/llm/" + llmsessionid + "/compact";
+	compactpath := "/mnt/llm/" + llmsessionid + "/compact";
 	err := writefile(compactpath, "compact");
 	if(err != nil)
 		sys->fprint(stderr, "veltro: compaction failed: %s\n", err);
@@ -737,7 +737,7 @@ runagent(task: string)
 		sys->fprint(stderr, "veltro: session %s\n", slug);
 	}
 
-	# Create LLM session — clone pattern: read /n/llm/new returns session ID
+	# Create LLM session — clone pattern: read /mnt/llm/new returns session ID
 	llmsessionid := agentlib->createsession();
 	if(llmsessionid == "") {
 		sys->fprint(stderr, "veltro: cannot create LLM session\n");
@@ -747,7 +747,7 @@ runagent(task: string)
 		sys->fprint(stderr, "veltro: llm session %s\n", llmsessionid);
 
 	# Set prefill to keep model in character
-	prefillpath := "/n/llm/" + llmsessionid + "/prefill";
+	prefillpath := "/mnt/llm/" + llmsessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 	setthinking(llmsessionid, thinkbudget);
 
@@ -757,7 +757,7 @@ runagent(task: string)
 		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
 
 	# Set system prompt for native tool_use
-	systempath := "/n/llm/" + llmsessionid + "/system";
+	systempath := "/mnt/llm/" + llmsessionid + "/system";
 	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns));
 
 	# Install tool definitions for native tool_use protocol
@@ -765,7 +765,7 @@ runagent(task: string)
 	agentlib->initsessiontools(llmsessionid, toollist);
 
 	# Open session's ask file
-	askpath := "/n/llm/" + llmsessionid + "/ask";
+	askpath := "/mnt/llm/" + llmsessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil) {
 		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
@@ -837,7 +837,7 @@ runresume(name, extra: string)
 		return;
 	}
 
-	prefillpath := "/n/llm/" + llmsessionid + "/prefill";
+	prefillpath := "/mnt/llm/" + llmsessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
 	setthinking(llmsessionid, thinkbudget);
 
@@ -846,14 +846,14 @@ runresume(name, extra: string)
 	if(verbose)
 		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
 
-	systempath := "/n/llm/" + llmsessionid + "/system";
+	systempath := "/mnt/llm/" + llmsessionid + "/system";
 	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns));
 
 	# Install tool definitions for native tool_use protocol
 	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
 	agentlib->initsessiontools(llmsessionid, toollist);
 
-	askpath := "/n/llm/" + llmsessionid + "/ask";
+	askpath := "/mnt/llm/" + llmsessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil) {
 		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);

@@ -159,8 +159,8 @@ actually run under Apple's sandbox." It does.
   the container, dev-cert signing, run Lucia/Xenith on hardware.
 - Force `-c0` at launch; confirm W^X — no `PROT_EXEC` mappings.
 
-**Phase C — on-device `/n/llm` + polish.** Same retarget Android Phase
-1 plans (`emu/Android/README.md:62-65`): the 9P surface at `/n/llm`
+**Phase C — on-device `/mnt/llm` + polish.** Same retarget Android Phase
+1 plans (`emu/Android/README.md:62-65`): the 9P surface at `/mnt/llm`
 stays put, the backend swaps from Ollama-over-HTTP to something
 on-device. iOS-native options are stronger than Android's here —
 MLX or CoreML alongside `llama.cpp`. App Store/TestFlight
@@ -196,7 +196,7 @@ wiring options, and the Full Moon / MLX prior art — is in
 - Not an app you can install today — no Xcode project exists.
 - Not JIT-accelerated, and won't be on stock devices — `-c0` is the
   contract.
-- Not on-device inference — `/n/llm` retarget is Phase C.
+- Not on-device inference — `/mnt/llm` retarget is Phase C.
 
 ## References
 

@@ -3,7 +3,7 @@ implement ToolLimbo;
 #
 # limbo - Author Limbo source code via the dedicated Limbo-trained
 # model (devstral-limbo-v3:latest). Routes the request to that
-# model's /n/llm session, returns the fenced source.
+# model's /mnt/llm session, returns the fenced source.
 #
 # Why this exists: gpt-oss/low is the action-loop orchestrator
 # (fast, no chat-template leakage) but cannot author Limbo —
@@ -57,7 +57,7 @@ LIMBO_MODEL_DEFAULT: con "devstral-limbo-v3:latest";
 LIMBO_MODEL_FILE:    con "/lib/veltro/limbo-model";
 LIMBO_SYSTEM:   con "You are an expert Limbo programmer for the Inferno operating system. When given a description, respond with one complete, compilable Limbo source file inside a single ```limbo code fence. Do not add explanation outside the code fence.";
 
-LLMROOT: con "/n/llm";
+LLMROOT: con "/mnt/llm";
 MAX_RESPONSE: con 65536;
 
 init(): string
@@ -243,10 +243,10 @@ exec(args: string): string
 			"\"port this Python <description>: <source>\".";
 	}
 
-	# 1. Create a fresh session via /n/llm/new
+	# 1. Create a fresh session via /mnt/llm/new
 	(idstr, rerr) := readfile(LLMROOT + "/new");
 	if(rerr != nil)
-		return "error: cannot create session (is /n/llm mounted? is serve-llm running?): " + rerr;
+		return "error: cannot create session (is /mnt/llm mounted? is serve-llm running?): " + rerr;
 	# str->drop only strips LEADING chars; trim both ends manually so a
 	# trailing newline doesn't end up in the session-dir path.
 	while(len idstr > 0 && (idstr[0] == ' ' || idstr[0] == '\t' || idstr[0] == '\n' || idstr[0] == '\r'))
@@ -254,7 +254,7 @@ exec(args: string): string
 	while(len idstr > 0 && (idstr[len idstr - 1] == ' ' || idstr[len idstr - 1] == '\t' || idstr[len idstr - 1] == '\n' || idstr[len idstr - 1] == '\r'))
 		idstr = idstr[:len idstr - 1];
 	if(idstr == "")
-		return "error: /n/llm/new returned empty session id";
+		return "error: /mnt/llm/new returned empty session id";
 
 	sessdir := sys->sprint("%s/%s", LLMROOT, idstr);
 
@@ -311,7 +311,7 @@ exec(args: string): string
 	#    re-call /tool/limbo with a refined description that addresses
 	#    the error. v1 is single-shot per call; internal retry is a v2
 	#    follow-up (would require pushing failure context into the same
-	#    /n/llm/<sid> conversation rather than re-entering at the tool
+	#    /mnt/llm/<sid> conversation rather than re-entering at the tool
 	#    boundary).
 	gateerr := gate(resp, idstr);
 	if(gateerr == "")

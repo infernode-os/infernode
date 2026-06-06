@@ -16,7 +16,7 @@
 #   serve-llm.sh --help
 #
 # Default listener: tcp!*!5640 with Inferno Ed25519 keyring auth.
-# Clients dial with: mount -k <keyfile> tcp!host!5640 /n/llm
+# Clients dial with: mount -k <keyfile> tcp!host!5640 /mnt/llm
 #
 # Logs go to stderr; under systemd they land in the journal.
 # See docs/HEADLESS-LLM-DAEMON.md §Hardening for the full key-distribution
@@ -133,7 +133,7 @@ if [ "$GEN_KEY" -eq 1 ]; then
 	mv "$STAGE_HOSTPATH" "$KEY_HOSTPATH"
 	chmod 600 "$KEY_HOSTPATH"
 	echo "serve-llm: wrote $KEY_HOSTPATH ($(wc -c < "$KEY_HOSTPATH") bytes; mode 600)" >&2
-	echo "serve-llm: clients dial with: mount -k $KEY_HOSTPATH tcp!<host>!5640 /n/llm" >&2
+	echo "serve-llm: clients dial with: mount -k $KEY_HOSTPATH tcp!<host>!5640 /mnt/llm" >&2
 	exit 0
 fi
 
@@ -181,7 +181,7 @@ export SERVE_LLM_KEY="$KEY_INFPATH"
 
 case "$LISTEN_MODE" in
 	keyring) echo "serve-llm: $(date -Iseconds) listen=keyring keyfile=$KEY_HOSTPATH" >&2 ;;
-	anon)    echo "serve-llm: $(date -Iseconds) listen=ANONYMOUS (--anon-lan) anyone reaching :5640 can mount /n/llm" >&2 ;;
+	anon)    echo "serve-llm: $(date -Iseconds) listen=ANONYMOUS (--anon-lan) anyone reaching :5640 can mount /mnt/llm" >&2 ;;
 esac
 
 echo "serve-llm: emu=$EMU root=$ROOT profile=$PROFILE_INF" >&2

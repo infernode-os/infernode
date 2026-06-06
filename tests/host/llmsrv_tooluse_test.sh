@@ -176,14 +176,14 @@ sleep 1
 
 mkdir -p /tmp >[2] /dev/null
 
-id=`{cat /n/llm/new}
+id=`{cat /mnt/llm/new}
 
 # Install tool
-echo '[{"name":"greet","description":"Say hello to someone. Args: name","input_schema":{"type":"object","properties":{"args":{"type":"string"}},"required":["args"]}}]' > /n/llm/$id/tools
+echo '[{"name":"greet","description":"Say hello to someone. Args: name","input_schema":{"type":"object","properties":{"args":{"type":"string"}},"required":["args"]}}]' > /mnt/llm/$id/tools
 
 # Step 1: Ask LLM to use tool
-echo 'Use the greet tool to greet Alice. Just call the tool, nothing else.' > /n/llm/$id/ask
-response=`{cat /n/llm/$id/ask}
+echo 'Use the greet tool to greet Alice. Just call the tool, nothing else.' > /mnt/llm/$id/ask
+response=`{cat /mnt/llm/$id/ask}
 
 # Check for STOP:tool_use
 hasstop='no'
@@ -223,8 +223,8 @@ if {~ $toolid ''} {
 echo 'TOOL_RESULTS
 '^$toolid^'
 Hello, Alice! Welcome!
----' > /n/llm/$id/ask
-response2=`{cat /n/llm/$id/ask}
+---' > /mnt/llm/$id/ask
+response2=`{cat /mnt/llm/$id/ask}
 
 # Check step 2 response
 haserr='no'

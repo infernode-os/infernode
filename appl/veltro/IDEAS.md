@@ -5,7 +5,7 @@
 ### Phase 1a: Per-Agent LLM Isolation
 - LLMConfig type in nsconstruct.m
 - Session-specific model, temperature, system prompt, thinking budget
-- Each subagent gets its own LLM session via `/n/llm/new` clone pattern
+- Each subagent gets its own LLM session via `/mnt/llm/new` clone pattern
 - 33 automated tests + 5 manual tests passing
 
 ### Phase 1b: mc9p (9P-based MCP)

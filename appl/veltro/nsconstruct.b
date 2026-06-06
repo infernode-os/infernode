@@ -184,26 +184,23 @@ restrictns(caps: ref Capabilities): string
 	# 4-5. Restrict /n to explicitly granted entries only.
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
-	#   /n/llm    — always granted (core agent service; withheld = non-functional)
 	#   /n/speech — "/n/speech" in caps.paths
 	#   /n/git    — "/n/git" in caps.paths
 	#   /n/wallet — "/n/wallet" in caps.paths
-	#   /n/ui     — "present" in caps.tools
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
+	# NB: the LLM (llm9p) and the UI presentation surface (luciuisrv) are no longer
+	# /n entries — their schemas are ours, so they live at /mnt/llm and /mnt/ui
+	# (docs/NAMESPACE-LAYOUT.md, INFR-254). Both are handled by the uniform /mnt
+	# machinery (step 5b). /n no longer special-cases the agent's services — it
+	# collapses to genuine foreign imports.
 	(nok, nil) := sys->stat("/n");
 	if(nok >= 0) {
 		nallow: list of string;
-		uiok := -1;
 
-		# /n/llm — always granted (core LLM access)
-		(llmok, nil) := sys->stat("/n/llm");
-		if(llmok >= 0)
-			nallow = "llm" :: nallow;
-
-		# NB: MCP providers (mc9p, mcp9p adapters) now mount under /mnt/mcp, not
-		# /n — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). The
-		# /mnt grant is handled in step 5b below, not here.
+		# MCP providers (mc9p, mcp9p adapters) and the LLM (llm9p) mount under
+		# /mnt — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). All
+		# /mnt grants are handled in step 5b below, not here.
 
 		# /n/speech — only if explicitly granted via caps.paths
 		if(inlist("/n/speech", caps.paths)) {
@@ -226,15 +223,9 @@ restrictns(caps: ref Capabilities): string
 				nallow = "wallet" :: nallow;
 		}
 
-		# /n/ui — only if "present" tool is granted
-		# (present and gap tools write to /n/ui/activity/{id}/...)
-		if(inlist("present", caps.tools)) {
-			(s, nil) := sys->stat("/n/ui");
-			if(s >= 0) {
-				nallow = "ui" :: nallow;
-				uiok = s;
-			}
-		}
+		# (The UI presentation surface moved to /mnt/ui — granted + sub-restricted
+		# by the uniform /mnt machinery in step 5b, like /mnt/llm and /mnt/mcp.
+		# It is no longer a /n entry. INFR-254.)
 
 		# /n/pres-* — only if Xenith (GUI) access is granted
 		if(caps.xenith) {
@@ -257,17 +248,6 @@ restrictns(caps: ref Capabilities): string
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
 
-		# Restrict /n/ui — allow activity/ always; allow ctl/info if task tool is granted
-		if(uiok >= 0) {
-			uiallow := "activity" :: nil;
-			if(inlist("task", caps.tools)) {
-				uiallow = "ctl" :: uiallow;
-			}
-			uerr := restrictdir("/n/ui", uiallow, 0);
-			if(uerr != nil)
-				return sys->sprint("restrict /n/ui: %s", uerr);
-		}
-
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
 			lerr := restrictlocal(localpaths);
@@ -289,6 +269,30 @@ restrictns(caps: ref Capabilities): string
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && mntpaths == nil)
 		mntpaths = "mcp" :: nil;	# whole /mnt/mcp for generic mc9p
+	# /mnt/llm — the agent's core LLM service. Always granted if present, which
+	# preserves the old /mnt/llm always-grant semantics ("withheld = non-functional")
+	# but now inside the SAME /mnt capability machinery as /mnt/mcp/<server> — no
+	# /n special-case (INFR-254). restrictpath("/mnt", "llm"::…) exposes the whole
+	# /mnt/llm session tree (clone/ask/system/tools/model/usage/compact). Everything
+	# else under /mnt stays strictly caps-driven (least privilege). The agent's
+	# brain is local or a remote tree bound over /mnt/llm — placement is identical
+	# either way (docs/NAMESPACE-LAYOUT.md).
+	(mntllmok, nil) := sys->stat("/mnt/llm");
+	if(mntllmok >= 0 && !inlist("llm", mntpaths))
+		mntpaths = "llm" :: mntpaths;
+	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
+	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
+	# Capability-gated exactly as before, now under /mnt. The grant exposes the
+	# whole /mnt/ui; the subtree is then narrowed below (activity/ always; ctl if
+	# the task tool is granted), preserving the old /mnt/ui least-privilege.
+	uimnt := 0;
+	if(inlist("present", caps.tools)) {
+		(uimntok, nil) := sys->stat("/mnt/ui");
+		if(uimntok >= 0 && !inlist("ui", mntpaths)) {
+			mntpaths = "ui" :: mntpaths;
+			uimnt = 1;
+		}
+	}
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
 		if(mntok >= 0) {
@@ -296,6 +300,15 @@ restrictns(caps: ref Capabilities): string
 			if(err != nil)
 				return sys->sprint("restrict /mnt: %s", err);
 			keepmnt = 1;
+			# /mnt/ui sub-restriction: activity/ always; ctl only if task granted.
+			if(uimnt) {
+				uiallow := "activity" :: nil;
+				if(inlist("task", caps.tools))
+					uiallow = "ctl" :: uiallow;
+				uerr := restrictdir("/mnt/ui", uiallow, 0);
+				if(uerr != nil)
+					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
 		}
 	}
 
@@ -561,12 +574,13 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
-		("/n/llm",    "LLM Service",      "rw"),
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
-		("/n/ui",     "UI Service",       "rw"),
-		# MCP providers live under /mnt/mcp now (application mount point,
-		# docs/NAMESPACE-LAYOUT.md), not /n.
+		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
+		# /mnt now — application mount points, schema is ours, not /n imports
+		# (docs/NAMESPACE-LAYOUT.md).
+		("/mnt/llm",  "LLM Service",      "rw"),
+		("/mnt/ui",   "UI Service",       "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 	};
 

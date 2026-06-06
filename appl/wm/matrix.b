@@ -1162,7 +1162,7 @@ themelistener()
 	# Use the canonical UI event stream (matrix was opening a
 	# non-existent /lib/lucifer/theme/event path and silently
 	# exiting, so it never received any theme events at all).
-	fd := sys->open("/n/ui/event", Sys->OREAD);
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
 	if(fd == nil)
 		return;
 	buf := array[256] of byte;
@@ -1635,7 +1635,7 @@ domenuitem(action: string)
 		# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
 		# leave editor's wmclient->window blocked with no reader.
 		# Letting luciuisrv launch editor gives it its own slot + ctxt.
-		s := readfile("/n/ui/activity/current");
+		s := readfile("/mnt/ui/activity/current");
 		if(s == nil)
 			s = "0";
 		# Trim trailing whitespace from the activity id read.
@@ -1645,7 +1645,7 @@ domenuitem(action: string)
 				s = s[0:i+1];
 				break;
 			}
-		pctl := "/n/ui/activity/" + s + "/presentation/ctl";
+		pctl := "/mnt/ui/activity/" + s + "/presentation/ctl";
 		cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
 			"label=Edit data=" + comppath;
 		fd := sys->open(pctl, Sys->OWRITE);

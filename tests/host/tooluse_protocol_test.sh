@@ -5,7 +5,7 @@
 # Functional test for the native tool_use protocol (Phase 1 — CLI backend).
 #
 # Exercises the new 9P plumbing added for native tool_use support:
-#   - /n/llm/{id}/tools (SessionToolsFile in session_tools.go)
+#   - /mnt/llm/{id}/tools (SessionToolsFile in session_tools.go)
 #   - TOOL_RESULTS write path (parseToolResults in session_ask.go)
 #   - agentlib buildtooldefs / initsessiontools / parsellmresponse
 #
@@ -100,7 +100,7 @@ fi
 # actual anon mount + short timeout; if it doesn't complete, the listener
 # isn't accepting anonymous clients and this test can't run.
 if ! timeout 5 "$EMU" -r"$ROOT" -c0 /dis/sh.dis \
-		-c "mount -A tcp!127.0.0.1!${LLM9P_PORT} /n/llm" \
+		-c "mount -A tcp!127.0.0.1!${LLM9P_PORT} /mnt/llm" \
 		</dev/null >/dev/null 2>&1; then
 	skip "anonymous mount to llmsrv on port $LLM9P_PORT failed (keyring auth required?)"
 	echo ""
@@ -124,11 +124,11 @@ if [[ ! -f "$TESTDIS" ]] || [[ "$TESTB" -nt "$TESTDIS" ]]; then
 	}
 fi
 
-# ── Test 1: Session creation via /n/llm/new ────────────────────────
+# ── Test 1: Session creation via /mnt/llm/new ────────────────────────
 
-echo "  Test 1: session creation via /n/llm/new"
+echo "  Test 1: session creation via /mnt/llm/new"
 
-CMDS1="mount -A tcp!127.0.0.1!${LLM9P_PORT} /n/llm; id = \`{cat /n/llm/new}; echo \$id"
+CMDS1="mount -A tcp!127.0.0.1!${LLM9P_PORT} /mnt/llm; id = \`{cat /mnt/llm/new}; echo \$id"
 
 if run_emu "session-create" 15 "$CMDS1"; then
 	info "  Output: '$OUTPUT'"
@@ -136,10 +136,10 @@ if run_emu "session-create" 15 "$CMDS1"; then
 		pass "Test 1: session ID is numeric ($OUTPUT)"
 		PASSED=$((PASSED+1))
 	elif [[ -n "$OUTPUT" ]]; then
-		pass "Test 1: /n/llm/new returned: $OUTPUT"
+		pass "Test 1: /mnt/llm/new returned: $OUTPUT"
 		PASSED=$((PASSED+1))
 	else
-		fail "Test 1: /n/llm/new returned empty output"
+		fail "Test 1: /mnt/llm/new returned empty output"
 	fi
 else
 	fail "Test 1: session creation failed (emu exit non-zero)"
@@ -148,11 +148,11 @@ fi
 # ── Test 2: Tool definition write (session_tools.go) ───────────────
 
 echo ""
-echo "  Test 2: tool definition write to /n/llm/{id}/tools"
+echo "  Test 2: tool definition write to /mnt/llm/{id}/tools"
 
 # Use the Limbo test for this — it calls agentlib->initsessiontools() which
 # builds the JSON internally (avoids shell quoting issues with JSON)
-CMDS2="mount -A tcp!127.0.0.1!${LLM9P_PORT} /n/llm; /tests/tooluse_test.dis"
+CMDS2="mount -A tcp!127.0.0.1!${LLM9P_PORT} /mnt/llm; /tests/tooluse_test.dis"
 
 if run_emu "tools-write" 30 "$CMDS2"; then
 	info "  Output: $OUTPUT"
@@ -187,10 +187,10 @@ echo "  Test 3: TOOL_RESULTS write path (via Limbo test with /tool mounted)"
 if [[ "$VERBOSE" -eq 1 ]]; then
 	# Mount /tool as well to enable full toollist for BuildToolDefsAll
 	# /tool requires tools9p to be running — skip if not available
-	CMDS3="mount -A tcp!127.0.0.1!${LLM9P_PORT} /n/llm; /tests/tooluse_test.dis -v"
+	CMDS3="mount -A tcp!127.0.0.1!${LLM9P_PORT} /mnt/llm; /tests/tooluse_test.dis -v"
 	if run_emu "toolresults" 120 "$CMDS3"; then
 		info "  Output: $OUTPUT"
-		pass "Test 3: tooluse_test with /n/llm (verbose, LLM calls)"
+		pass "Test 3: tooluse_test with /mnt/llm (verbose, LLM calls)"
 		PASSED=$((PASSED+1))
 	else
 		fail "Test 3: tooluse_test exited non-zero with LLM calls"

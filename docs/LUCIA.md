@@ -24,7 +24,7 @@ Lucia is a fullscreen Limbo application that splits the display into three verti
 +------------------------------------------------------+
 ```
 
-The agent (Veltro, via `lucibridge`) drives the right- and centre-zones by writing to a synthetic 9P filesystem mounted at `/n/ui`. Everything you see is a file, and everything the agent does is a write.
+The agent (Veltro, via `lucibridge`) drives the right- and centre-zones by writing to a synthetic 9P filesystem mounted at `/mnt/ui`. Everything you see is a file, and everything the agent does is a write.
 
 ## Launching
 
@@ -44,7 +44,7 @@ The agent (Veltro, via `lucibridge`) drives the right- and centre-zones by writi
 Both scripts:
 
 1. Set memory limits: `-pheap=512m -pmain=512m -pimage=512m`.
-2. Start `luciuisrv` (the UI 9P filesystem at `/n/ui`).
+2. Start `luciuisrv` (the UI 9P filesystem at `/mnt/ui`).
 3. Create the `Main` activity.
 4. Start `speech9p` (TTS/STT, mounted at `/n/speech`).
 5. Start `tools9p` (tool registry at `/tool` with the default capability budget — see below).
@@ -104,8 +104,8 @@ The internal module names use the `luci-` prefix; this is an implementation deta
 | `luciconv.b`    | Conversation zone implementation. |
 | `lucictx.b`     | Context zone implementation; mounts `/tool` for tool discovery. |
 | `lucipres.b`    | Presentation zone implementation; renderer registry and app lifecycle. |
-| `luciuisrv.b`   | 9P server backing `/n/ui`. Activities, conversation, presentation, context — all UI state lives here. |
-| `lucibridge.b`  | Agent bridge. Reads user input from `/n/ui/activity/N/conversation/input`, runs the Veltro tool loop, writes responses back. |
+| `luciuisrv.b`   | 9P server backing `/mnt/ui`. Activities, conversation, presentation, context — all UI state lives here. |
+| `lucibridge.b`  | Agent bridge. Reads user input from `/mnt/ui/activity/N/conversation/input`, runs the Veltro tool loop, writes responses back. |
 | `lucitheme.b`   | Theme loader and colour lookup. |
 
 ## Filesystem map
@@ -114,8 +114,8 @@ Lucia stitches together several 9P services. Once the UI is up, you can `cat` an
 
 | Mount        | Server      | What lives there |
 |--------------|-------------|------------------|
-| `/n/ui`      | luciuisrv   | All UI state. `/n/ui/ctl` to create/delete activities; `/n/ui/activity/N/{conversation,presentation,context}` for each zone. |
-| `/n/llm`     | llmsrv      | LLM sessions. `/n/llm/new` clones a fresh session; each `/n/llm/N/` exposes `ask`, `stream`, `model`, `thinking`, `system`, `compact`, `context`. |
+| `/mnt/ui`      | luciuisrv   | All UI state. `/mnt/ui/ctl` to create/delete activities; `/mnt/ui/activity/N/{conversation,presentation,context}` for each zone. |
+| `/mnt/llm`     | llmsrv      | LLM sessions. `/mnt/llm/new` clones a fresh session; each `/mnt/llm/N/` exposes `ask`, `stream`, `model`, `thinking`, `system`, `compact`, `context`. |
 | `/n/speech`  | speech9p    | `say` (write text → TTS), `hear` (write `start`, then read transcription), `voices`, `ctl`. |
 | `/tool`      | tools9p     | Tool registry. `/tool/tools` lists tools; `/tool/paths` lists exposed host paths; `/tool/ctl` toggles state. |
 | `/n/local`   | (lucibridge)| Read-only host paths plus per-activity writable directories. |
@@ -125,19 +125,19 @@ Lucia stitches together several 9P services. Once the UI is up, you can `cat` an
 An **activity** is a conversation session. The launch script creates `Main` (id `0`); you can add more via:
 
 ```
-; echo activity create Sidebar > /n/ui/ctl
+; echo activity create Sidebar > /mnt/ui/ctl
 ```
 
-Each activity is rooted at `/n/ui/activity/N/` with three subtrees mirroring the zones. Multiple activities can run; the header bar shows the focused one.
+Each activity is rooted at `/mnt/ui/activity/N/` with three subtrees mirroring the zones. Multiple activities can run; the header bar shows the focused one.
 
 ### Driving the UI from the shell
 
-The presentation zone's control file is `/n/ui/activity/N/presentation/ctl`. Examples:
+The presentation zone's control file is `/mnt/ui/activity/N/presentation/ctl`. Examples:
 
 ```
-; echo 'create id=notes type=markdown label=Notes' > /n/ui/activity/0/presentation/ctl
-; echo 'create id=todo  type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
-; echo 'destroy id=notes'                          > /n/ui/activity/0/presentation/ctl
+; echo 'create id=notes type=markdown label=Notes' > /mnt/ui/activity/0/presentation/ctl
+; echo 'create id=todo  type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
+; echo 'destroy id=notes'                          > /mnt/ui/activity/0/presentation/ctl
 ```
 
 This is the same surface the agent uses — so anything Veltro does, you can do by hand.
@@ -148,7 +148,7 @@ Click **Voice** in the conversation zone:
 
 1. `luciconv` spawns a `voiceworker` goroutine.
 2. The worker writes `start` to `/n/speech/hear` (speech9p) and reads the transcription (30-second timeout).
-3. On success, the transcribed text is written to `/n/ui/activity/N/conversation/input` as a user message.
+3. On success, the transcribed text is written to `/mnt/ui/activity/N/conversation/input` as a user message.
 4. The agent's reply can optionally be read back by writing it to `/n/speech/say`.
 
 `speech9p` is started by the launch script; it ships with InferNode and runs entirely inside the emulator.
@@ -191,11 +191,11 @@ For details on what each tool does and how capability attenuation works, see [VE
 You can pre-populate Lucia at launch by appending commands to the launch command in `run-lucia*.sh`. Example: open the Veltro tour artifact and a fractal app on startup.
 
 ```
-echo 'create id=tour    type=markdown   label=Tour'   > /n/ui/activity/0/presentation/ctl
-echo 'create id=fractal type=app app=fractal label=Fractal' > /n/ui/activity/0/presentation/ctl
+echo 'create id=tour    type=markdown   label=Tour'   > /mnt/ui/activity/0/presentation/ctl
+echo 'create id=fractal type=app app=fractal label=Fractal' > /mnt/ui/activity/0/presentation/ctl
 ```
 
-Anything you can write through `/n/ui/...` from a normal shell works at startup too.
+Anything you can write through `/mnt/ui/...` from a normal shell works at startup too.
 
 ## Troubleshooting
 

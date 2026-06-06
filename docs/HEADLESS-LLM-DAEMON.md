@@ -29,12 +29,12 @@ machine as if it were local.
 This applies just as well to a language model. The InferNode component
 `llmsrv` (`appl/cmd/llmsrv.b`) translates 9P file operations into HTTP
 calls to an OpenAI-compatible chat-completions endpoint, and presents
-the model as a synthetic filesystem under `/n/llm`. The protocol is
+the model as a synthetic filesystem under `/mnt/llm`. The protocol is
 documented in [`doc/llm-mount.md`](../doc/llm-mount.md); the relevant
 shape is:
 
 ```
-/n/llm/
+/mnt/llm/
     new                    # read: allocate a session, returns its id
     {id}/
         ask                # write: prompt; read: response
@@ -57,10 +57,10 @@ This tutorial sets up exactly that.
    ┌──────────────────────────┐            ┌────────────────────────────┐
    │  emu (Mac, Linux, ...)   │            │  emu, headless             │
    │                          │            │   ├─ llmsrv ── HTTP ──┐    │
-   │  /n/llm  ◄─── 9P/TCP ────┼────────────┼─► /n/llm              │    │
+   │  /mnt/llm  ◄─── 9P/TCP ────┼────────────┼─► /mnt/llm              │    │
    │                          │            │   └─ listen :5640     │    │
    │  Veltro / shell / xenith │            │                       ▼    │
-   │  read/write /n/llm/*     │            │                ┌──────────┐│
+   │  read/write /mnt/llm/*     │            │                ┌──────────┐│
    └──────────────────────────┘            │                │  Ollama  ││
                                            │                │ :11434   ││
                                            │                │ (model)  ││
@@ -73,14 +73,14 @@ Three processes on the server, one network protocol on the wire:
 1. **Ollama** runs on the host (outside InferNode) and serves the model
    over HTTP at `127.0.0.1:11434`.
 2. **`llmsrv`** runs inside a headless InferNode emulator (`emu`),
-   self-mounts `/n/llm` in the InferNode namespace, and translates 9P
-   reads and writes against `/n/llm/*` into HTTP requests to Ollama.
+   self-mounts `/mnt/llm` in the InferNode namespace, and translates 9P
+   reads and writes against `/mnt/llm/*` into HTTP requests to Ollama.
 3. **`listen`** runs in the same emulator, accepts inbound TCP on
    port 5640, and exports the InferNode namespace (specifically the
-   subtree at `/n/llm`) over 9P.
+   subtree at `/mnt/llm`) over 9P.
 
 Clients on other machines mount that exported subtree with `mount -A
-'tcp!host!5640' /n/llm` (no auth) or via the `mount -k keyfile`
+'tcp!host!5640' /mnt/llm` (no auth) or via the `mount -k keyfile`
 authenticated form.
 
 ## Prerequisites
@@ -182,14 +182,14 @@ EOF
 The fields:
 
 - `mode` — `local` runs `llmsrv` against an HTTP endpoint on this host.
-  (`remote` would mount someone else's `/n/llm` instead, which is what
+  (`remote` would mount someone else's `/mnt/llm` instead, which is what
   the *client* machine in this tutorial will use.)
 - `backend` — `openai` selects the OpenAI-compatible chat-completions
   protocol. `api` would select Anthropic's native API.
 - `url` — the Ollama endpoint. `/v1` is required: it is the
   OpenAI-compatible prefix, not the native Ollama API.
 - `model` — the default model for new sessions. Clients can override
-  per-session by writing to `/n/llm/{id}/model`.
+  per-session by writing to `/mnt/llm/{id}/model`.
 - `dial` — only used when `mode=remote`. Leave empty here.
 
 ## Step 4: Run the daemon ad-hoc
@@ -237,7 +237,7 @@ fs: fsqid: top-bit dev: 0xb301
 -> Rmsg.Attach(1,Qid(16r0,0,16r80))
 ```
 
-Those last four lines are llmsrv's internal self-mount of `/n/llm`,
+Those last four lines are llmsrv's internal self-mount of `/mnt/llm`,
 debug-logged because the lean profile starts llmsrv with `-D`. The
 process is now waiting for inbound 9P connections on port 5640.
 
@@ -353,7 +353,7 @@ restarts (it will reconnect when Ollama returns).
 ## Step 6: Connect from a remote InferNode
 
 On the client machine — a Mac, another Linux box, anywhere InferNode
-runs — there are two ways to mount the server's `/n/llm`.
+runs — there are two ways to mount the server's `/mnt/llm`.
 
 ### Through the Settings application
 
@@ -379,13 +379,13 @@ server's keyfile (`~/.infernode/lib/keyring/serve-llm` on the server)
 to the client and mount with `-k`:
 
 ```sh
-mount -k /usr/$user/keyring/serve-llm 'tcp!server.example.net!5640' /n/llm
+mount -k /usr/$user/keyring/serve-llm 'tcp!server.example.net!5640' /mnt/llm
 ```
 
 If the server explicitly runs `--anon-lan`, mount with `-A`:
 
 ```sh
-mount -A 'tcp!server.example.net!5640' /n/llm
+mount -A 'tcp!server.example.net!5640' /mnt/llm
 ```
 
 `-A` is only safe on a trusted network. See **Hardening** §
@@ -396,16 +396,16 @@ mount -A 'tcp!server.example.net!5640' /n/llm
 From the InferNode shell on the client, run:
 
 ```sh
-ls /n/llm
+ls /mnt/llm
 ```
 
 You should see at minimum a `new` file. Open a session and chat:
 
 ```sh
-id=`{cat /n/llm/new}
+id=`{cat /mnt/llm/new}
 echo $id
-echo 'In one sentence, what is Plan 9 from Bell Labs?' > /n/llm/$id/ask
-cat /n/llm/$id/ask
+echo 'In one sentence, what is Plan 9 from Bell Labs?' > /mnt/llm/$id/ask
+cat /mnt/llm/$id/ask
 ```
 
 The first send is slow on a cold model (Ollama loads weights into
@@ -415,13 +415,13 @@ speed). Subsequent sends in the same session are fast.
 Switch model per-session without restarting the daemon:
 
 ```sh
-echo mistral-nemo > /n/llm/$id/model
-echo 'And in one sentence, what is Inferno?' > /n/llm/$id/ask
-cat /n/llm/$id/ask
+echo mistral-nemo > /mnt/llm/$id/model
+echo 'And in one sentence, what is Inferno?' > /mnt/llm/$id/ask
+cat /mnt/llm/$id/ask
 ```
 
 Veltro, xenith, and any other InferNode-native tool that consumes
-`/n/llm` will work transparently against the remote model.
+`/mnt/llm` will work transparently against the remote model.
 
 ## Operational reference
 
@@ -462,8 +462,8 @@ on apply (commit `6364113a`); older versions or direct `mount`
 commands need the dial form spelled out:
 
 ```sh
-mount -A 'tcp!10.0.0.5!5640' /n/llm     # correct
-mount -A 10.0.0.5:5640 /n/llm           # silently fails
+mount -A 'tcp!10.0.0.5!5640' /mnt/llm     # correct
+mount -A 10.0.0.5:5640 /mnt/llm           # silently fails
 ```
 
 ### "The first-run wizard only offers API key or local Ollama"
@@ -493,7 +493,7 @@ Two distinct failure modes have produced this symptom:
    KV cache for the full window when it loads the model. On a 24 GB
    GPU, a 14 B model at full Mistral 3 context can occupy 48 GB and
    start swapping mid-conversation. Pin the context window with a
-   smaller value via the model file (`/n/llm/{id}/ctl`) or by setting
+   smaller value via the model file (`/mnt/llm/{id}/ctl`) or by setting
    `OLLAMA_NUM_CTX` for the Ollama service.
 2. **Tool-call retry exhaustion.** When the consumer is Veltro, a
    model that emits malformed `tool_calls` blocks the agent loop after
@@ -535,7 +535,7 @@ keyfile:
 ```sh
 ./serve-llm.sh --gen-key
 # wrote /home/<you>/.infernode/lib/keyring/serve-llm (~690 bytes; mode 600)
-# clients dial with: mount -k <keyfile> tcp!<host>!5640 /n/llm
+# clients dial with: mount -k <keyfile> tcp!<host>!5640 /mnt/llm
 ```
 
 `--gen-key` invokes `auth/createsignerkey -a ed25519` inside emu and
@@ -548,7 +548,7 @@ Distribute the keyfile to each authorised client (scp, your password
 manager, etc.). Each client mounts with:
 
 ```sh
-mount -k /home/<you>/.infernode/lib/keyring/serve-llm 'tcp!server!5640' /n/llm
+mount -k /home/<you>/.infernode/lib/keyring/serve-llm 'tcp!server!5640' /mnt/llm
 ```
 
 Or, if you've configured `~/.infernode/lib/ndb/llm` with `mode=remote`
@@ -563,13 +563,13 @@ encrypted 9P.
 ### `--anon-lan`: opting out
 
 The pre-INFR-16 default was anonymous attach (`-A`) — anyone reaching
-the TCP port could mount `/n/llm` and use the user's local Ollama or
+the TCP port could mount `/mnt/llm` and use the user's local Ollama or
 API credentials. That mode is preserved behind an explicit flag:
 
 ```sh
 ./serve-llm.sh --anon-lan
 # WARNING: listen mode anon (--anon-lan) - no authentication
-# anyone reaching :5640 can mount /n/llm
+# anyone reaching :5640 can mount /mnt/llm
 ```
 
 Use only on a network where you've already established trust (LAN
@@ -595,7 +595,7 @@ restrict to a specific interface — for example, only the ZeroTier
 interface — change the listen address in `lib/sh/serve-profile`:
 
 ```
-listen -sA 'tcp!10.0.0.5!5640' {export /n/llm}
+listen -sA 'tcp!10.0.0.5!5640' {export /mnt/llm}
 ```
 
 Alternatively, leave the listener wide and rely on the host firewall
@@ -635,7 +635,7 @@ own configuration (`OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`).
   TensorRT linked in). On Jetson hardware, JetPack already provides the
   needed libraries.
 - **Server-side UI.** `appl/cmd/luciuisrv.b` serves the UI state of the
-  Lucifer interface as a 9P filesystem at `/n/ui/`. Combined with
+  Lucifer interface as a 9P filesystem at `/mnt/ui/`. Combined with
   `appl/cmd/lucibridge.b`, it allows the agent loop to run on the
   server while a Mac or other client acts as a thin renderer over the
   same 9P mount. Multiple renderers can attach to the same activity.
@@ -643,7 +643,7 @@ own configuration (`OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`).
   `/n/speech`. Useful for voice front-ends to a remote Veltro session.
 
 Each of these can be added as a peer service in the same lean
-`serve-profile`, exported either on `:5640` alongside `/n/llm` or on
+`serve-profile`, exported either on `:5640` alongside `/mnt/llm` or on
 its own listener for clean network-policy boundaries.
 
 ## References

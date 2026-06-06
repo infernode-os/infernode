@@ -77,16 +77,16 @@ settoolmount(path: string)
 # Returns session ID (e.g., "0") or empty string on error
 createsession(): string
 {
-	fd := sys->open("/n/llm/new", Sys->OREAD);
+	fd := sys->open("/mnt/llm/new", Sys->OREAD);
 	if(fd == nil) {
-		sys->fprint(stderr, "agentlib: cannot open /n/llm/new: %r\n");
-		sys->fprint(stderr, "agentlib: hint: is llm9p running and mounted at /n/llm?\n");
+		sys->fprint(stderr, "agentlib: cannot open /mnt/llm/new: %r\n");
+		sys->fprint(stderr, "agentlib: hint: is llm9p running and mounted at /mnt/llm?\n");
 		return "";
 	}
 	buf := array[32] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0) {
-		sys->fprint(stderr, "agentlib: read /n/llm/new returned %d: %r\n", n);
+		sys->fprint(stderr, "agentlib: read /mnt/llm/new returned %d: %r\n", n);
 		return "";
 	}
 	# Trim newline if present
@@ -101,7 +101,7 @@ createsession(): string
 # session immediately rather than waiting for a server restart.
 closesession(id: string)
 {
-	path := "/n/llm/" + id + "/ctl";
+	path := "/mnt/llm/" + id + "/ctl";
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
 		if(verbose)
@@ -236,7 +236,7 @@ discovernamespace(): string
 # (from repl.b — has MAXPROMPT 8KB guard against 9P write limit)
 buildsystemprompt(ns: string): string
 {
-	# NOTE: The system prompt may be written to /n/llm/{id}/system via a single
+	# NOTE: The system prompt may be written to /mnt/llm/{id}/system via a single
 	# 9P Twrite. llmsrv's MaxMessageSize is 8192 bytes, and each write
 	# REPLACES the content (offset is ignored). If the prompt exceeds the
 	# 9P msize, the kernel splits into multiple Twrites and only the LAST survives.
@@ -894,7 +894,7 @@ findheredoc(s: string): int
 # ==================== Native Tool_Use Protocol ====================
 #
 # These functions support the Anthropic tool_use JSON protocol via llmsrv.
-# Tool definitions are written to /n/llm/{id}/tools before the first Ask.
+# Tool definitions are written to /mnt/llm/{id}/tools before the first Ask.
 # Responses arrive as STOP:/TOOL: formatted text (parsed from structured JSON
 # by llmsrv). Results are submitted back via TOOL_RESULTS wire format.
 #
@@ -973,12 +973,12 @@ jsonstr(s: string): string
 #
 # Per INFR-126, each tool publishes its own OpenAI-format function schema
 # at /tool/<name>/schema. buildtooldefs reads each schema and concatenates
-# them into the array written to /n/llm/{id}/tools. Tools without a
+# them into the array written to /mnt/llm/{id}/tools. Tools without a
 # published schema (or that return "") fall back to a single-string "args"
 # parameter — the legacy contract — so partially-migrated toolsets stay
 # valid against an OpenAI tool-call client.
 #
-# Returns a JSON string suitable for writing to /n/llm/{id}/tools.
+# Returns a JSON string suitable for writing to /mnt/llm/{id}/tools.
 buildtooldefs(toollist: list of string): string
 {
 	parts := "";
@@ -1041,7 +1041,7 @@ defaulttoolschema(name: string): string
 		"\"required\":[\"args\"]}}";
 }
 
-# Install tool definitions on an LLM session by writing to /n/llm/{id}/tools.
+# Install tool definitions on an LLM session by writing to /mnt/llm/{id}/tools.
 # This enables the native tool_use protocol for subsequent Ask calls.
 # No-op if toollist is nil (leaves session in text-only mode).
 initsessiontools(id: string, toollist: list of string)
@@ -1049,7 +1049,7 @@ initsessiontools(id: string, toollist: list of string)
 	if(toollist == nil)
 		return;
 
-	path := "/n/llm/" + id + "/tools";
+	path := "/mnt/llm/" + id + "/tools";
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
 		if(verbose)
@@ -1142,7 +1142,7 @@ parsellmresponse(response: string): (string, list of (string, string, string), s
 
 # Build the TOOL_RESULTS wire format for submitting tool execution results.
 # results: list of (tool_use_id, content) pairs.
-# The returned string is written to /n/llm/{id}/ask to trigger AskWithToolResults.
+# The returned string is written to /mnt/llm/{id}/ask to trigger AskWithToolResults.
 buildtoolresults(results: list of (string, string)): string
 {
 	text := "TOOL_RESULTS\n";

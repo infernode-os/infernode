@@ -184,7 +184,7 @@ user="{cat /dev/user}
 mount -ac {mntgen} /n
 
 # Mount LLM filesystem if server is running (optional, non-blocking on failure)
-mount -A tcp!127.0.0.1!5641 /n/llm >[2] /dev/null
+mount -A tcp!127.0.0.1!5641 /mnt/llm >[2] /dev/null
 
 # Setup home directory based on platform
 if {~ $emuhost MacOSX Linux}{

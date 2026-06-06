@@ -3,7 +3,7 @@ implement LlmRecorder;
 #
 # llm-recorder - Matrix service module recording per-session LLM stats.
 #
-# Polls the llmsrv 9P tree at `mount` (typically /n/llm), enumerating
+# Polls the llmsrv 9P tree at `mount` (typically /mnt/llm), enumerating
 # numeric session directories.  For each session it reads `usage`
 # ("estimated/limit\n") and `model`, keeping an in-memory ring of the
 # last RING_N samples.  Each tick it rewrites flat files under

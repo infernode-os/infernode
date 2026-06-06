@@ -2,7 +2,7 @@
 # lucifer_presentation_test.rc
 #
 # Inject test presentation artifacts into a running Inferno session.
-# Assumes luciuisrv is mounted at /n/ui and activity 0 exists.
+# Assumes luciuisrv is mounted at /mnt/ui and activity 0 exists.
 #
 # Run from inside a second Inferno shell while lucifer is running:
 #   sh /tests/inferno/lucifer_presentation_test.rc
@@ -10,8 +10,8 @@
 load std
 
 ACTID = 0
-PCTL = /n/ui/activity/$ACTID/presentation/ctl
-PDIR = /n/ui/activity/$ACTID/presentation
+PCTL = /mnt/ui/activity/$ACTID/presentation/ctl
+PDIR = /mnt/ui/activity/$ACTID/presentation
 
 # Verify prerequisite
 if {! test -f $PCTL} {

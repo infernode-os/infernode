@@ -12,7 +12,7 @@ implement ToolSms;
 #
 # Inbound SMS — when the platform supports it (Android, gateways) — is
 # exposed by the sms MsgSrc on top of /phone/sms reads, surfaced to all
-# agents via /n/msg/notify. This tool only owns the send path.
+# agents via /mnt/msg/notify. This tool only owns the send path.
 #
 # Usage:
 #   sms <number> <body...>

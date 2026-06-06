@@ -221,7 +221,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	a := args;
 	if(a != nil) a = tl a;	# skip "lucipres"
 	if(a != nil) { mountpt_g = hd a; a = tl a; }
-	else mountpt_g = "/n/ui";
+	else mountpt_g = "/mnt/ui";
 	if(a != nil) { actid_g = strtoint(hd a); a = tl a; }
 
 	if(ctxt == nil)
@@ -1754,12 +1754,12 @@ drawtable(art: ref Artifact, contentr: Rect, pad: int, contentw: int, contenty: 
 	}
 }
 
-# Render task dashboard — grid of task cards reading from /n/ui/
+# Render task dashboard — grid of task cards reading from /mnt/ui/
 drawtaskboard(contentr: Rect, pad: int)
 {
 	ncardhits = 0;
 
-	# Always use interactive card grid — reads from /n/ui/ directly
+	# Always use interactive card grid — reads from /mnt/ui/ directly
 	info := readfile(mountpt_g + "/ctl");
 	if(info == nil) {
 		drawcentertext(contentr, "No tasks");

@@ -59,7 +59,7 @@ glibc-only syscall wrapper). Each is captured against INFR-107.
 * `build-android-ndk-arm64.sh` at the repo root, replacing the
   Termux-piggyback driver.
 
-**Phase 1 also retargets `/n/llm`.** Today `llmsrv.dis` proxies to
+**Phase 1 also retargets `/mnt/llm`.** Today `llmsrv.dis` proxies to
 Ollama-over-HTTP on the host. On a handset there is no host; the 9P
 surface stays the same and the backend swaps to `llama.cpp` (or MLC /
 MediaPipe) running on-device. Agents and tools see no change.

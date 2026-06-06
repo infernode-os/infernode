@@ -649,8 +649,12 @@ func buildBytesPackage() *types.Package {
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", byteSlice)),
 			false)))
 
-	// Buffer type
-	bufType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Buffer", nil), types.NewStruct(nil, nil), nil)
+	// Buffer type. The single string field holds the accumulated content
+	// (offset 0 of the receiver), so the methods can be implemented for real.
+	bufType := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Buffer", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "buf", types.Typ[types.String], false),
+		}, nil), nil)
 	bufPtr := types.NewPointer(bufType)
 	scope.Insert(bufType.Obj())
 
@@ -2871,16 +2875,19 @@ func buildIOPackage() *types.Package {
 			false)))
 
 	// func MultiReader(readers ...Reader) Reader
+	// A variadic parameter's type is a slice ([]Reader); passing the interface
+	// type directly makes go/types panic ("want variadic parameter with
+	// unnamed slice type ... as core type").
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MultiReader",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "readers", readerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "readers", types.NewSlice(readerType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", readerType)),
 			true)))
 
 	// func MultiWriter(writers ...Writer) Writer
 	scope.Insert(types.NewFunc(token.NoPos, pkg, "MultiWriter",
 		types.NewSignatureType(nil, nil, nil,
-			types.NewTuple(types.NewVar(token.NoPos, pkg, "writers", writerType)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "writers", types.NewSlice(writerType))),
 			types.NewTuple(types.NewVar(token.NoPos, pkg, "", writerType)),
 			true)))
 

@@ -192,11 +192,12 @@ func main() {
 		t.Error("missing CALL instruction for local call")
 	}
 
-	// The add function must have a RET that writes through REGRET
-	// Look for movw ... 0(32(fp)) pattern (indirect write to REGRET)
+	// The add function must have a RET that writes through REGRET.
+	// Look for a move to 0(32(fp)) (indirect write to REGRET); int returns
+	// copy a 64-bit LONG, so MOVL is the expected opcode here.
 	hasReturnWrite := false
 	for _, inst := range m.Instructions {
-		if (inst.Op == dis.IMOVW || inst.Op == dis.IMOVP) && inst.Dst.IsIndirect() {
+		if (inst.Op == dis.IMOVW || inst.Op == dis.IMOVP || inst.Op == dis.IMOVL) && inst.Dst.IsIndirect() {
 			if inst.Dst.Val == 32 && inst.Dst.Ind == 0 {
 				hasReturnWrite = true
 			}
@@ -734,12 +735,12 @@ func main() {
 		t.Fatalf("compile: %v", err)
 	}
 
-	// Must have INEW for heap allocation
+	// Must have INEW/INEWZ for heap allocation
 	hasNew := false
 	// Must have CALL for newPoint
 	hasCall := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.INEW {
+		if inst.Op == dis.INEW || inst.Op == dis.INEWZ {
 			hasNew = true
 		}
 		if inst.Op == dis.ICALL {
@@ -859,8 +860,8 @@ func main() {
 		t.Fatalf("compile: %v", err)
 	}
 
-	// divmod should write two values through REGRET
-	// Check that we have DIVW and MODW in divmod
+	// divmod should write two values through REGRET. int arithmetic uses the
+	// WORD opcodes (a Dis WORD is machine-word width), so DIVW/MODW.
 	hasDivw := false
 	hasModw := false
 	for _, inst := range m.Instructions {
@@ -936,10 +937,10 @@ func main() {
 		t.Errorf("CALL count = %d, want 4 (3x Inc + 1x Get)", callCount)
 	}
 
-	// Must have INEW for heap-allocated Counter
+	// Must have INEW/INEWZ for heap-allocated Counter
 	hasNew := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.INEW {
+		if inst.Op == dis.INEW || inst.Op == dis.INEWZ {
 			hasNew = true
 		}
 	}
@@ -2006,19 +2007,20 @@ func main() {
 	}
 
 	// Check for CVTWC (int→string)
-	hasCVTWC := false
+	// int is a 64-bit Dis LONG, so an int verb converts to string with CVTLC.
+	hasCVTLC := false
 	// Check for ADDC (string concat)
 	hasADDC := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.ICVTWC {
-			hasCVTWC = true
+		if inst.Op == dis.ICVTLC {
+			hasCVTLC = true
 		}
 		if inst.Op == dis.IADDC {
 			hasADDC = true
 		}
 	}
-	if !hasCVTWC {
-		t.Error("expected CVTWC instruction for Sprintf with int verb")
+	if !hasCVTLC {
+		t.Error("expected CVTLC instruction for Sprintf with int verb")
 	}
 	if !hasADDC {
 		t.Error("expected ADDC instruction for Sprintf with string concat")
@@ -2348,7 +2350,8 @@ func main() {
 	hasAddf := false
 	// Must have MULF for float multiplication
 	hasMulf := false
-	// Must have CVTFW for float→int
+	// Must have the float→int truncation path (CVTLW narrows the
+	// truncated long; see emitTruncToLong)
 	hasCvtfw := false
 	// Must have CVTWF for int→float
 	hasCvtwf := false
@@ -2360,9 +2363,9 @@ func main() {
 			hasAddf = true
 		case dis.IMULF:
 			hasMulf = true
-		case dis.ICVTFW:
+		case dis.ICVTFL:
 			hasCvtfw = true
-		case dis.ICVTWF:
+		case dis.ICVTLF:
 			hasCvtwf = true
 		case dis.IMOVF:
 			hasMovf = true
@@ -2374,11 +2377,12 @@ func main() {
 	if !hasMulf {
 		t.Error("missing MULF instruction for float multiplication")
 	}
+	// int is 64-bit: float→int truncates via CVTFL, int→float widens via CVTLF.
 	if !hasCvtfw {
-		t.Error("missing CVTFW instruction for float→int conversion")
+		t.Error("missing CVTFL instruction for float→int conversion")
 	}
 	if !hasCvtwf {
-		t.Error("missing CVTWF instruction for int→float conversion")
+		t.Error("missing CVTLF instruction for int→float conversion")
 	}
 	if !hasMovf {
 		t.Error("missing MOVF instruction for float constants")
@@ -2708,6 +2712,19 @@ func findRoot() string {
 	return abs
 }
 
+// ensureInfernoTmp makes sure a writable /tmp exists inside the Inferno
+// namespace. emu is launched with -r<rootDir>, so the Inferno root "/" maps to
+// rootDir on the host and Inferno's "/tmp" is rootDir/tmp. A fresh clone has no
+// such directory, so file-creating programs (e.g. sys_create.go calling
+// sys.Create("/tmp/...")) fail with "'/tmp' file does not exist". Creating it
+// here keeps those tests environment-independent. The directory is .gitignored.
+func ensureInfernoTmp(t *testing.T, rootDir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(rootDir, "tmp"), 0777); err != nil {
+		t.Fatalf("ensure inferno /tmp: %v", err)
+	}
+}
+
 // compileGo compiles a .go file from testdata and returns the path to the .dis file.
 func compileGo(t *testing.T, goFile string) string {
 	t.Helper()
@@ -2813,6 +2830,7 @@ func TestE2EPrograms(t *testing.T) {
 	if rootDir == "" {
 		t.Skip("cannot find Inferno root")
 	}
+	ensureInfernoTmp(t, rootDir)
 
 	// Expected outputs verified by running on emu manually.
 	// Programs with non-deterministic output (goroutines, map iteration) are excluded.
@@ -2911,6 +2929,14 @@ func TestE2EPrograms(t *testing.T) {
 		{"field_extract.go", "10\n20\n30\n"},
 		{"printf.go", "hello world\nnum=42\n3+4=7\n"},
 		{"sys_create.go", "5\n0\n"},
+		{"float_fmt.go", "3.14\n4\n1.500000\n-2.500\n1.00\n0.0001\n123456.79\n0.00\n1234.500000\n1000000.50\n[   -3.14]\n[00003.10]\n"},
+		{"strconv_float.go", "3.14\n1.5000\n123.5\n0.125\n-9.99\n"},
+		{"stack_zero.go", "4\n10\n"},
+		{"heap_zero.go", "1 7 0\n"},
+		{"float_to_int.go", "3\n3\n3\n-3\n-3\n2\n5\n0\n0\n"},
+		{"math_round.go", "3 4 3 4\n3 4 3 3\n-4 -3 -3 -4\n-4 -3 -3 -3\n5 5 5 5\n2 3 2 3\n-3 -2 -2 -3\n0 1 0 0\n"},
+		{"math_powmod.go", "1024 27 25 1 1000\n1 2 -1\n"},
+		{"bigint_const.go", "2147483647\n1000000000\n1073741824\n-2000000000\n2147483647 32767 -2147483648\n"},
 		{"panic_int.go", "recovered\n"},
 		{"defer_args.go", "20\n10\n"},
 
@@ -2997,6 +3023,72 @@ func TestE2EPrograms(t *testing.T) {
 		{"struct_embed_basic.go", "10\n20\n"},
 		{"chan_recv_commaok.go", "42\ntrue\n0\nfalse\n"},
 		{"three_idx_slice.go", "2\n2\n3\n"},
+
+		// 64-bit int64/uint64: constants, arithmetic, comparison, call
+		// boundary, negatives, and bit ops above bit 31.
+		{"int64.go", "1099511627776\n5000000001\n4999999999\n10000000000\n1666666666\n2\n5000000000\nbig\n-3000000000\n12884901888\n4026531840\n12000000000\n5000000000\n3000000000\n4000000000\nhuge\n18000000000000000000\n"},
+
+		// Plain int/uint are 64-bit (Go word width).
+		{"int_wide.go", "6000000000\n9000000000\n428571428\n4\n1099511627776\n9000000000\n-5000000000\n-5000000\n44\n705032704\n9000000000\n8000000000\n9223372036854775808\n"},
+
+		// Previously-unvalidated programs that pass today: lock them in as
+		// regression coverage (verified identical under -c0 and -c1).
+		{"assign_commaok.go", "10 true\n0 false\n20\n"},
+		{"int_range.go", "45\n5\n"},
+		{"spread_println.go", "a\nb\nc\n"},
+		{"strings_cut.go", "hello\nworld\nworld\nfile\n"},
+		{"strings_ext.go", "3\nequal\nWorld\nHello\nxxbxx\nrune\nany\n2\n4\n"},
+		{"strconv_ext.go", "true\nfalse\nparsed true\n\"hello\"\nworld\n42\n"},
+		{"math_ext.go", "floor ok\nceil ok\ntrunc ok\npow ok\nnan ok\n"},
+		{"typeassert_assign.go", "42\nnot string\n10\n0\n"},
+		{"variadic_spread.go", "6\n60\n"},
+		{"errors_ext.go", "same\ndone\n"},
+		{"mathbits_pkg.go", "3\n8\n3\n"},
+		{"unicode_pkg.go", "letter\ndigit\nupper\nlower\nspace\n65\n122\n"},
+		{"context_pkg.go", "context ok\n"},
+		{"path_pkg.go", "baz.txt\n/foo/bar\n.txt\n"},
+		// Complex arithmetic is correct; floats print in godis's plain style
+		// (same as float_basic.go), not Go's scientific println format.
+		{"complex_basic.go", "3\n4\n4\n6\n2\n2\n-5\n10\n3\n-1\nequal\nnot equal\n"},
+		// fmt.Sprint/Print now unwrap the variadic []any slice (were printing
+		// the slice pointer as a number).
+		{"fmt_ext.go", "hello\nworld\n"},
+		// os.ReadFile no longer faults: its nil []byte result is H, not 0.
+		{"os_ext.go", "os ok\n"},
+		// Importing io no longer panics the compiler (MultiReader/MultiWriter
+		// variadic signatures were malformed).
+		{"io_pkg.go", "io ok\n"},
+		// Generics: type-parameter funcs (Min/Max/Contains/Map), comparable,
+		// any, and generic structs all work. Floats print godis-style.
+		{"generics.go", "3\n1.5\nabc\n5\n2.5\nfound 3\nno 9\n2\n10\n"},
+		// Stub packages whose nil pointer/slice results no longer fault.
+		{"json_pkg.go", "valid\njson ok\n"},
+		{"regexp_pkg.go", "regexp ok\n"},
+		// url.QueryEscape is now a real percent-encoder (ASCII-correct).
+		{"url_pkg.go", "hello+world\nurl ok\n"},
+		// path.Clean / filepath.Clean: lexical . and .. resolution.
+		{"path_clean.go", "/a/c\na/b/c\n.\n/\nc\n/a/b\n..\n../a\n/a\n/a/d\nx\nx\n/\n/\na/b/c\n"},
+		{"filepath_pkg.go", "baz.txt\n/foo/bar\n.txt\n/foo/baz\nfoo/bar/baz\nabs\nrel\n"},
+		// make([]T, len, cap) with len != cap honors the length, so append
+		// writes at the right position.
+		{"slice_make_cap.go", "3\n3 0\n0\n6 0 25\ntrue\n3 0 9\n"},
+		// strings.Builder accumulates into its buf field (was a no-op stub
+		// whose String() faulted).
+		{"strings_builder.go", "ababab!\n7\nxyz\n3\n"},
+		// bytes.Buffer accumulates likewise; strings.Fields no longer panics
+		// the compiler (was makeHeapTypeDesc(nil)).
+		{"bytes_buffer.go", "hello world!\n12\nabc 3\n"},
+		{"strings_fields.go", "3\na b c\na-b-c\n1 single\n"},
+		// fmt.Errorf("%w", err) no longer double-frees the wrapped error's
+		// message (the %w temp now takes a reference via MOVP).
+		{"errorf_wrap.go", "operation failed: base failure\n[base failure] and more\ndone\n"},
+		// builtin print concatenates with no separator/newline; println spaces
+		// and newlines (print used to add a newline, masking fallthrough).
+		{"print_builtin.go", "123\nabc\n1x2true\n1 2 3\nx y\none two two \n"},
+		// strconv.Quote escapes control/quote/backslash chars.
+		{"strconv_quote.go", "\"hi\\there\"\n\"line1\\nline2\"\n\"a\\\"b\\\\c\"\n\"plain text\"\n\"tab\\tand\\rreturn\"\n"},
+		// sort.Slice with a user comparator closure (ints, structs).
+		{"sort_slice.go", "1\n1\n2\n3\n4\n5\n6\n9\n9 1\namy 25\ncal 28\nbob 30\n"},
 	}
 
 	for _, tt := range tests {

@@ -214,6 +214,53 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
+  # GoDis: Go-to-Dis compiler (tools/godis).
+  # Unit/encoding tests run anywhere; the E2E suite compiles the
+  # testdata Go programs to Dis and executes them on the emulator,
+  # reusing the o.emu artifact built by linux-amd64 (no rebuild).
+  # ─────────────────────────────────────────────
+  godis:
+    name: GoDis (Go → Dis) Build & Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: linux-amd64
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+    - name: Download prebuilt emulator
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: infernode-linux-amd64
+        path: .
+
+    - name: Restore emulator exec bit
+      # upload/download-artifact does not preserve the executable bit.
+      run: |
+        chmod +x emu/Linux/o.emu
+        test -x emu/Linux/o.emu || { echo "emulator not executable"; exit 1; }
+        file emu/Linux/o.emu
+
+    - name: Vet and build
+      working-directory: tools/godis
+      run: |
+        go version
+        go vet ./...
+        go build ./...
+
+    - name: Run GoDis test suite (unit + E2E on emu)
+      working-directory: tools/godis
+      # findEmu() resolves ../../../emu/Linux/o.emu and findRoot() the repo
+      # root; the E2E tests skip gracefully if the emulator is absent, so an
+      # explicit presence check keeps a missing artifact from silently
+      # downgrading this job to compile-only.
+      run: |
+        test -x ../../emu/Linux/o.emu || { echo "emulator missing; E2E would be skipped"; exit 1; }
+        go test ./... -v
+
+  # ─────────────────────────────────────────────
   # Linux AMD64 GUI: SDL3 build from source
   # ─────────────────────────────────────────────
   linux-amd64-gui:

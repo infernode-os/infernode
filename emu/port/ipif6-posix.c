@@ -25,6 +25,76 @@
 #include        "ip.h"
 #include        "error.h"
 
+/*
+ * Some kernels are built without IPv6 (CONFIG_IPV6=n), and some containers /
+ * CI sandboxes disable it entirely; on those, socket(AF_INET6, ...) fails with
+ * EAFNOSUPPORT and this device — which is otherwise dual-stack via v4-mapped
+ * addresses — would have no working transport at all (no 9P/Styx, no mounts,
+ * no node-to-node auth).  Detect that once and transparently fall back to a
+ * classic AF_INET socket, translating the v4-mapped plan9 addresses to/from
+ * sockaddr_in.  On a normal IPv6-capable host noipv6 stays 0 and every path
+ * below is byte-for-byte the original AF_INET6 code.
+ */
+static int noipv6 = 0;
+
+/*
+ * Build a host sockaddr from a 16-byte plan9 IP address (v6 form, possibly
+ * v4-mapped) plus a host-order port.  Returns the sockaddr length.  When
+ * running IPv4-only, a genuine (non-mapped, non-unspecified) IPv6 address
+ * cannot be represented and raises an error.
+ */
+static int
+sockaddrfromip(struct sockaddr_storage *sa, uchar *ip, ushort port)
+{
+	struct sockaddr_in *sin;
+	struct sockaddr_in6 *sin6;
+
+	memset(sa, 0, sizeof(*sa));
+	if(noipv6){
+		sin = (struct sockaddr_in*)sa;
+		sin->sin_family = AF_INET;
+		hnputs((uchar*)&sin->sin_port, port);
+		if(isv4(ip))
+			memmove(&sin->sin_addr, ip+IPv4off, IPv4addrlen);
+		else if(ipcmp(ip, v6Unspecified) == 0)
+			sin->sin_addr.s_addr = INADDR_ANY;
+		else
+			error("IPv6 address on an IPv4-only host");
+		return sizeof(*sin);
+	}
+	sin6 = (struct sockaddr_in6*)sa;
+	sin6->sin6_family = AF_INET6;
+	hnputs((uchar*)&sin6->sin6_port, port);
+	memmove(&sin6->sin6_addr, ip, IPaddrlen);
+	return sizeof(*sin6);
+}
+
+/*
+ * Inverse of sockaddrfromip: decode a host sockaddr (either family) into a
+ * 16-byte plan9 IP address (v4-mapped for AF_INET) and a host-order port.
+ */
+static void
+ipfromsockaddr(struct sockaddr_storage *sa, uchar *ip, ushort *port)
+{
+	struct sockaddr_in *sin;
+	struct sockaddr_in6 *sin6;
+
+	switch(sa->ss_family){
+	case AF_INET:
+		sin = (struct sockaddr_in*)sa;
+		v4tov6(ip, (uchar*)&sin->sin_addr);
+		*port = nhgets((uchar*)&sin->sin_port);
+		break;
+	case AF_INET6:
+		sin6 = (struct sockaddr_in6*)sa;
+		memmove(ip, &sin6->sin6_addr, IPaddrlen);
+		*port = nhgets((uchar*)&sin6->sin6_port);
+		break;
+	default:
+		error("unexpected socket address family");
+	}
+}
+
 int
 so_socket(int type)
 {
@@ -42,14 +112,23 @@ so_socket(int type)
 		break;
 	}
 
-	fd = socket(AF_INET6, type, 0);
+	fd = -1;
+	if(!noipv6){
+		fd = socket(AF_INET6, type, 0);
+		if(fd < 0 && (errno == EAFNOSUPPORT || errno == EPROTONOSUPPORT))
+			noipv6 = 1;	/* IPv4-only for the rest of this process */
+	}
+	if(fd < 0 && noipv6)
+		fd = socket(AF_INET, type, 0);
 	if(fd < 0)
 		oserror();
 
-	/* OpenBSD has v6only fixed to 1, so the following will fail */
-	v6only = 0;
-	if(setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (void*)&v6only, sizeof v6only) < 0)
-		oserror();
+	if(!noipv6){
+		/* OpenBSD has v6only fixed to 1, so the following will fail */
+		v6only = 0;
+		if(setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (void*)&v6only, sizeof v6only) < 0)
+			oserror();
+	}
 
 	if(type == SOCK_DGRAM){
 		one = 1;
@@ -72,6 +151,31 @@ so_send(int sock, void *va, int len, void *hdr, int hdrlen)
 	osenter();
 	if(hdr == 0)
 		r = write(sock, va, len);
+	else if(noipv6){
+		/* IPv4-only host: decode the header into a v4-mapped addr+port,
+		 * then let sockaddrfromip() emit a sockaddr_in. */
+		uchar rip[IPaddrlen];
+		ushort rport;
+		int sl;
+
+		memset(rip, 0, sizeof(rip));
+		switch(hdrlen){
+		case OUdphdrlenv4:
+			v4tov6(rip, (uchar*)h);
+			rport = nhgets((uchar*)h+2*IPv4addrlen);
+			break;
+		case OUdphdrlen:
+			memmove(rip, h, IPaddrlen);
+			rport = nhgets((uchar*)h+2*IPaddrlen);
+			break;
+		default:
+			memmove(rip, h, IPaddrlen);
+			rport = nhgets((uchar*)h+3*IPaddrlen);
+			break;
+		}
+		sl = sockaddrfromip(&sa, rip, rport);
+		r = sendto(sock, va, len, 0, (struct sockaddr*)&sa, sl);
+	}
 	else {
 		memset(&sa, 0, sizeof(sa));
 		sin6 = (struct sockaddr_in6*)&sa;
@@ -107,6 +211,46 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 	osenter();
 	if(hdr == 0)
 		r = read(sock, va, len);
+	else if(noipv6){
+		/* IPv4-only host: read into a sockaddr_in and rebuild the header
+		 * in the same layout the AF_INET6 path produces (v4-mapped). */
+		struct sockaddr_in rsin, lsin;
+		uchar rip[IPaddrlen], lip[IPaddrlen];
+
+		memset(&rsin, 0, sizeof(rsin));
+		l = sizeof(rsin);
+		r = recvfrom(sock, va, len, 0, (struct sockaddr*)&rsin, &l);
+		if(r >= 0){
+			memset(h, 0, sizeof(h));
+			v4tov6(rip, (uchar*)&rsin.sin_addr);
+			memset(&lsin, 0, sizeof(lsin));
+			l = sizeof(lsin);
+			getsockname(sock, (struct sockaddr*)&lsin, &l);
+			v4tov6(lip, (uchar*)&lsin.sin_addr);
+			switch(hdrlen){
+			case OUdphdrlenv4:
+				memmove(h, (uchar*)&rsin.sin_addr, IPv4addrlen);
+				memmove(h+2*IPv4addrlen, &rsin.sin_port, 2);
+				memmove(h+IPv4addrlen, (uchar*)&lsin.sin_addr, IPv4addrlen);
+				memmove(h+2*IPv4addrlen+2, &lsin.sin_port, 2);
+				break;
+			case OUdphdrlen:
+				memmove(h, rip, IPaddrlen);
+				memmove(h+2*IPaddrlen, &rsin.sin_port, 2);
+				memmove(h+IPaddrlen, lip, IPaddrlen);
+				memmove(h+2*IPaddrlen+2, &lsin.sin_port, 2);
+				break;
+			default:
+				memmove(h, rip, IPaddrlen);
+				memmove(h+3*IPaddrlen, &rsin.sin_port, 2);
+				memmove(h+IPaddrlen, lip, IPaddrlen);
+				memmove(h+2*IPaddrlen, lip, IPaddrlen);	/* ifcaddr */
+				memmove(h+3*IPaddrlen+2, &lsin.sin_port, 2);
+				break;
+			}
+			memmove(hdr, h, hdrlen);
+		}
+	}
 	else {
 		sin6 = (struct sockaddr_in6*)&sa;
 		l = sizeof(sa);
@@ -174,18 +318,13 @@ so_close(int sock)
 void
 so_connect(int fd, uchar *raddr, ushort rport)
 {
-	int r;
+	int r, len;
 	struct sockaddr_storage sa;
-	struct sockaddr_in6 *sin6;
 
-	memset(&sa, 0, sizeof(sa));
-	sin6 = (struct sockaddr_in6*)&sa;
-	sin6->sin6_family = AF_INET6;
-	hnputs(&sin6->sin6_port, rport);
-	memmove((uchar*)&sin6->sin6_addr, raddr, IPaddrlen);
+	len = sockaddrfromip(&sa, raddr, rport);
 
 	osenter();
-	r = connect(fd, (struct sockaddr*)sin6, sizeof(*sin6));
+	r = connect(fd, (struct sockaddr*)&sa, len);
 	osleave();
 	if(r < 0)
 		oserror();
@@ -196,18 +335,12 @@ so_getsockname(int fd, uchar *laddr, ushort *lport)
 {
 	int len;
 	struct sockaddr_storage sa;
-	struct sockaddr_in6 *sin6;
 
-	len = sizeof(*sin6);
+	len = sizeof(sa);
 	if(getsockname(fd, (struct sockaddr*)&sa, &len) < 0)
 		oserror();
 
-	sin6 = (struct sockaddr_in6*)&sa;
-	if(sin6->sin6_family != AF_INET6 || len != sizeof(*sin6))
-		error("not AF_INET6");
-
-	memmove(laddr, &sin6->sin6_addr, IPaddrlen);
-	*lport = nhgets(&sin6->sin6_port);
+	ipfromsockaddr(&sa, laddr, lport);
 }
 
 void
@@ -227,11 +360,8 @@ so_accept(int fd, uchar *raddr, ushort *rport)
 {
 	int nfd, len;
 	struct sockaddr_storage sa;
-	struct sockaddr_in6 *sin6;
 
-	sin6 = (struct sockaddr_in6*)&sa;
-
-	len = sizeof(*sin6);
+	len = sizeof(sa);
 	osenter();
 	do {
 		nfd = accept(fd, (struct sockaddr*)&sa, &len);
@@ -240,22 +370,15 @@ so_accept(int fd, uchar *raddr, ushort *rport)
 	if(nfd < 0)
 		oserror();
 
-	if(sin6->sin6_family != AF_INET6 || len != sizeof(*sin6))
-		error("not AF_INET6");
-
-	memmove(raddr, &sin6->sin6_addr, IPaddrlen);
-	*rport = nhgets(&sin6->sin6_port);
+	ipfromsockaddr(&sa, raddr, rport);
 	return nfd;
 }
 
 void
 so_bind(int fd, int su, uchar *addr, ushort port)
 {
-	int i, one;
+	int i, one, len;
 	struct sockaddr_storage sa;
-	struct sockaddr_in6 *sin6;
-
-	sin6 = (struct sockaddr_in6*)&sa;
 
 	one = 1;
 	if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&one, sizeof(one)) < 0) {
@@ -265,23 +388,15 @@ so_bind(int fd, int su, uchar *addr, ushort port)
 
 	if(su) {
 		for(i = 600; i < 1024; i++) {
-			memset(&sa, 0, sizeof(sa));
-			sin6->sin6_family = AF_INET6;
-			memmove(&sin6->sin6_addr, addr, IPaddrlen);
-			hnputs(&sin6->sin6_port, i);
-
-			if(bind(fd, (struct sockaddr*)sin6, sizeof(*sin6)) >= 0)	
+			len = sockaddrfromip(&sa, addr, i);
+			if(bind(fd, (struct sockaddr*)&sa, len) >= 0)
 				return;
 		}
 		oserror();
 	}
 
-	memset(&sa, 0, sizeof(sa));
-	sin6->sin6_family = AF_INET6;
-	memmove(&sin6->sin6_addr, addr, IPaddrlen);
-	hnputs(&sin6->sin6_port, port);
-
-	if(bind(fd, (struct sockaddr*)sin6, sizeof(*sin6)) < 0)
+	len = sockaddrfromip(&sa, addr, port);
+	if(bind(fd, (struct sockaddr*)&sa, len) < 0)
 		oserror();
 }
 

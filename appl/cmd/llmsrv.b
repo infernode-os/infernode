@@ -7,7 +7,7 @@ implement Llmsrv;
 # with clone-based multiplexing for concurrent sessions.
 #
 # Filesystem layout:
-#   /n/llm/
+#   /mnt/llm/
 #       new              read: allocates session N, returns "N\n"
 #       N/               per-session directory
 #           ask          rw: write prompt, read response (blocks until done)
@@ -24,15 +24,15 @@ implement Llmsrv;
 #           usage        r:  "estimated_tokens/context_limit\n"
 #
 # Usage:
-#   llmsrv                                    # mount at /n/llm (Anthropic API)
+#   llmsrv                                    # mount at /mnt/llm (Anthropic API)
 #   llmsrv -b openai -u http://host:11434/v1  # Ollama backend
 #   llmsrv -m /mnt/llm                        # custom mount point
 #   llmsrv -D                                 # debug tracing
 #
 # Example session:
-#   id=`{cat /n/llm/new}
-#   echo 'What is 2+2?' > /n/llm/$id/ask
-#   cat /n/llm/$id/ask
+#   id=`{cat /mnt/llm/new}
+#   echo 'What is 2+2?' > /mnt/llm/$id/ask
+#   cat /mnt/llm/$id/ask
 #
 
 include "sys.m";
@@ -206,7 +206,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(arg == nil) nomod(Arg->PATH);
 	arg->init(args);
 
-	mountpt := "/n/llm";
+	mountpt := "/mnt/llm";
 	backend = "api";
 	apiurl = "";
 	apikey = "";
@@ -309,11 +309,11 @@ newsession(): ref LlmSession
 		defaultmodel,  # model
 		0.7,           # temperature
 		1024,          # maxtokens (per-session; previously hardcoded 4096
-		               # in llmclient.b, now overridable via /n/llm/$id/maxtokens)
+		               # in llmclient.b, now overridable via /mnt/llm/$id/maxtokens)
 		"",            # systemprompt
 		0,             # thinkingtokens
 		defaultreasoning, # reasoningeffort — daemon default; per-session
-		                  # writable via /n/llm/$id/reasoning. Sessions
+		                  # writable via /mnt/llm/$id/reasoning. Sessions
 		                  # that override model to a non-reasoning model
 		                  # MUST also clear this or Ollama 500s.
 		"",            # prefill
@@ -406,7 +406,7 @@ callbackend(req: ref AskRequest): (ref AskResponse, string)
 	return llmclient->askanthropic(apikey, apiurl, req);
 }
 
-# Top-level /n/llm/models read: the backend's available models, one id
+# Top-level /mnt/llm/models read: the backend's available models, one id
 # per line. OpenAI backends are queried live (GET /v1/models); the
 # Anthropic backend has no models endpoint, so report the known aliases.
 availablemodels(): (string, string)

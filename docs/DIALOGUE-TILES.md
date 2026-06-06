@@ -16,7 +16,7 @@ Interactive tile with option buttons. Used for pre-tool approval (Allow/Deny). B
 
 ## Protocol
 
-Write to `/n/ui/activity/{id}/conversation/ctl`:
+Write to `/mnt/ui/activity/{id}/conversation/ctl`:
 
 ```
 role=veltro dtype=dialogue title=Compacting progress=50 text=Summarizing...

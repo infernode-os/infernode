@@ -8,7 +8,7 @@
 
 Veltro is a Limbo-native agent harness:
 
-- Talks to an LLM via the **`/n/llm`** 9P filesystem (Anthropic Claude or any OpenAI-compatible backend through `llmsrv`).
+- Talks to an LLM via the **`/mnt/llm`** 9P filesystem (Anthropic Claude or any OpenAI-compatible backend through `llmsrv`).
 - Calls **40 tools** via the **`/tool`** 9P filesystem, each tool a separate `.dis` module.
 - Runs inside a **restricted namespace** (FORKNS + bind-replace) so an agent only sees the files and capabilities its caller granted.
 - Can **spawn subagents** with strictly narrower namespaces (capability attenuation).
@@ -123,21 +123,21 @@ The Lucia launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical c
 
 ## LLM configuration
 
-LLM state lives at `/n/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
+LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
 
 ```
-/n/llm/new            # read it to allocate a fresh session id
-/n/llm/N/ask          # write a user message, read a full response
-/n/llm/N/stream       # streaming response
-/n/llm/N/model        # haiku | sonnet | opus  (or any backend-specific id)
-/n/llm/N/temperature  # 0.0 – 2.0
-/n/llm/N/thinking     # disabled | max | <integer token budget>
-/n/llm/N/system       # write-only system prompt
-/n/llm/N/context      # read current conversation as JSON
-/n/llm/N/compact      # summarise+truncate to free tokens
+/mnt/llm/new            # read it to allocate a fresh session id
+/mnt/llm/N/ask          # write a user message, read a full response
+/mnt/llm/N/stream       # streaming response
+/mnt/llm/N/model        # haiku | sonnet | opus  (or any backend-specific id)
+/mnt/llm/N/temperature  # 0.0 – 2.0
+/mnt/llm/N/thinking     # disabled | max | <integer token budget>
+/mnt/llm/N/system       # write-only system prompt
+/mnt/llm/N/context      # read current conversation as JSON
+/mnt/llm/N/compact      # summarise+truncate to free tokens
 ```
 
-Default model: **haiku**. Override with the `LLMConfig` field of `Capabilities`, or by writing to `/n/llm/N/model` directly.
+Default model: **haiku**. Override with the `LLMConfig` field of `Capabilities`, or by writing to `/mnt/llm/N/model` directly.
 
 ### Backends
 
@@ -209,8 +209,8 @@ Two distinct stores:
 A parent agent issues a single tool call:
 
 ```
-Spawn -- tools=read,list,grep :: find every place that touches /n/llm
-       -- tools=read,list,grep :: find every place that touches /n/ui
+Spawn -- tools=read,list,grep :: find every place that touches /mnt/llm
+       -- tools=read,list,grep :: find every place that touches /mnt/ui
        -- tools=read,list,grep :: find every place that touches /tool
 ```
 
@@ -236,7 +236,7 @@ For deployments where untrusted prompts may reach the agent:
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `cannot load module testing.dis` and friends | Stale `.dis` after `git pull` | `./hooks/install.sh` (once); `mk install` in `appl/cmd` and `appl/veltro` |
-| `/n/llm: file does not exist` | `llmsrv` not started | Run as `sh -l` so `lib/sh/profile` starts it; check `ANTHROPIC_API_KEY` |
+| `/mnt/llm: file does not exist` | `llmsrv` not started | Run as `sh -l` so `lib/sh/profile` starts it; check `ANTHROPIC_API_KEY` |
 | Agent says it has tool X but `/tool` doesn't list it | Tool not in the positional list of `tools9p` | Add it to the launch script, or rely on `spawn` (subject to `-b` budget) |
 | `tools9p` deadlock on the first tool call | Self-mount race during namespace restriction | Already mitigated; if it recurs, check `nsconstruct.b` hasn't been edited to add a `stat()` on the restricted root |
 | Subagent times out at 5 minutes | Default `spawn` timeout | Pass `timeout=N` (seconds) in the `spawn` call |

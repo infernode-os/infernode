@@ -310,7 +310,7 @@ testSetup(t: ref T)
 # ============================================================================
 # Test 1b: testRootDirread (INFR-127)
 #
-# `ls /n/ui` — a readdir on the synthetic root — must enumerate the root's
+# `ls /mnt/ui` — a readdir on the synthetic root — must enumerate the root's
 # children and terminate. Regression (INFR-127): the root and per-activity
 # conversation directory listings hung forever, even though targeted file
 # reads and named walks worked. Each listing is timeout-bounded so a
@@ -324,7 +324,7 @@ testRootDirread(t: ref T)
 		return;
 	}
 
-	# ls /n/ui
+	# ls /mnt/ui
 	root := readdirto(TESTMNT);
 	t.assertsne(root, "error:timeout", "root readdir must terminate (INFR-127)");
 	t.assert(hassubstr(root, " ctl"), "root listing includes ctl");
@@ -332,7 +332,7 @@ testRootDirread(t: ref T)
 	t.assert(hassubstr(root, " activity"), "root listing includes activity");
 	t.assert(hassubstr(root, " catalog"), "root listing includes catalog");
 
-	# ls /n/ui/activity/<id>/conversation/  (also reported hanging)
+	# ls /mnt/ui/activity/<id>/conversation/  (also reported hanging)
 	conv := readdirto(actbase() + "/conversation");
 	t.assertsne(conv, "error:timeout", "conversation readdir must terminate (INFR-127)");
 	t.assert(hassubstr(conv, " ctl"), "conversation listing includes ctl");
@@ -1211,7 +1211,7 @@ testCatalogRead(t: ref T)
 {
 	# Verify catalog/ directory exists in the 9P namespace
 	(st, nil) := sys->stat(TESTMNT + "/catalog");
-	t.assert(st >= 0, "catalog/ directory should exist in /n/ui namespace");
+	t.assert(st >= 0, "catalog/ directory should exist in /mnt/ui namespace");
 
 	# Try to read first catalog entry
 	s := readfile(TESTMNT + "/catalog/0");
@@ -1403,7 +1403,7 @@ teardown()
 # ============================================================================
 # Test: ThemeEventStreaming
 #
-# Regression: every wm app's themelistener opens /n/ui/event ONCE and
+# Regression: every wm app's themelistener opens /mnt/ui/event ONCE and
 # reads from that fd in a loop.  Before INFR-28 (commit 5f90faba) the
 # styx fid's client-side offset accumulated by each read's byte count;
 # the second read returned only the tail of the next event (data[offset:])
@@ -1439,7 +1439,7 @@ testThemeEventStreaming(t: ref T)
 	buf := array[256] of byte;
 
 	for(i := 0; i < len themes; i++) {
-		# Trigger a global "theme <name>" event via /n/ui/ctl.
+		# Trigger a global "theme <name>" event via /mnt/ui/ctl.
 		n := writefile(ctlpath, "theme " + themes[i]);
 		t.assert(n > 0,
 			sys->sprint("write 'theme %s' to ctl should succeed", themes[i]));

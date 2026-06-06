@@ -8,7 +8,7 @@ Three categories of AI-accessible capabilities exist:
 |----------|----------|-----------|-----------|----------|
 | **Headless tools** | exec, grep, read, write, git | `tool.m` (init/name/doc/exec) | `/tool/tools` listing | Namespace restriction on `/dis/veltro/tools/` |
 | **App-backed tools** | lucishell, edit, charon, fractal | Tool wraps 9P filesystem at `/tmp/veltro/{app}/` | Same `/tool/tools` listing | Tool registration + app must be running |
-| **Lucifer zone apps** | luciconv, lucipres, lucictx | 9P at `/n/ui/` | Implicit (always present) | Part of Lucifer lifecycle |
+| **Lucifer zone apps** | luciconv, lucipres, lucictx | 9P at `/mnt/ui/` | Implicit (always present) | Part of Lucifer lifecycle |
 
 ## What Works Well
 

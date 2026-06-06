@@ -3,7 +3,7 @@ implement ToolGap;
 #
 # gap - Context zone gap management tool for Veltro agent
 #
-# Manages knowledge gaps in the Lucifer context zone via /n/ui/.
+# Manages knowledge gaps in the Lucifer context zone via /mnt/ui/.
 # The AI uses this to surface blind spots and signal missing information.
 #
 # Commands:
@@ -36,7 +36,7 @@ ToolGap: module {
 	schema: fn(): string;
 };
 
-UI_MOUNT: con "/n/ui";
+UI_MOUNT: con "/mnt/ui";
 
 init(): string
 {

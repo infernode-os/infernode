@@ -8,7 +8,7 @@ implement MatrixPerfDashboardTest;
 #      llm-sessions) load with the right interface and at the
 #      paths matrix.b's runtime expects (/dis/matrix/<name>.dis).
 #   2. End-to-end recorder lifecycle against a hand-built fake
-#      /n/llm tree under /tmp: init → spawned run → samples
+#      /mnt/llm tree under /tmp: init → spawned run → samples
 #      land in outdir → shutdown is observed.
 #   3. The recorder's output file format is what the display
 #      modules parse: outdir/sessions, outdir/<id>/current,
@@ -104,7 +104,7 @@ testRecorderEndToEnd(t: ref T)
 	cleardir(FAKELLM);
 	cleardir(OUTDIR);
 
-	# Build the fake /n/llm tree the recorder will poll.
+	# Build the fake /mnt/llm tree the recorder will poll.
 	# Two sessions (0 and 7); a "new" file the recorder must skip.
 	mkdir(FAKELLM);
 	writefile(FAKELLM + "/new", "");

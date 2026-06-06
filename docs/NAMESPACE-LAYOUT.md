@@ -61,20 +61,54 @@ restrictns`): a child can only ever see a *subset* of its parent's namespace,
 and never modifies its own. Granting `/mnt/mcp/<server>` to a child is therefore
 safe by construction — it cannot reach a server the parent didn't mount.
 
+## Where the LLM goes: `/mnt/llm`
+
+The `llm9p` projection (`new`, `clone`, `ask`, `system`, `tools`, `model`,
+`usage`, `compact`, …) is a schema **InferNode authors** — `llmsrv` invents it;
+the backend (Ollama, SGLang, the Anthropic API, an on-device runtime) only
+supplies completions behind it. By the one principle, that makes it an
+application mount point, **`/mnt/llm`**, exactly the `webfs`/`/mnt/web` case
+(remote backend, our schema). It is *not* a `/n` import, despite the long habit
+of writing `/n/llm`.
+
+**Locality is not placement — it is just how the name gets populated.** The
+canonical consumer-facing name is always `/mnt/llm`; *who* serves the bytes
+behind it is a mount-time choice, invisible above the mount:
+
+| Mode       | How `/mnt/llm` is populated                                              |
+|------------|-------------------------------------------------------------------------|
+| **local**  | `llmsrv` runs on this host and self-mounts at `/mnt/llm`                 |
+| **remote** | `mount -k <keyfile> tcp!peer!5640 /mnt/llm` — a peer's exported `llm9p` tree **bound over** the canonical name |
+
+Because every process gets its **own** namespace, "local for some, remote for
+others" needs no structure at all: each process binds whichever backend it wants
+onto its *own* `/mnt/llm`, and they never collide. There is therefore no
+`/mnt/llm/<backend>` split to design — the single canonical name is correct even
+for a mixed fleet. (Were a *single* process ever to need two live backends at
+once — not today's design — that, and only that, would justify a structured
+layout.)
+
+The payoff is that `/mnt/llm` is gated by the **same** `restrictns`/`restrictpath`
+`/mnt` machinery as `/mnt/mcp/<server>` — no hardcoded "always-granted" `/n/llm`
+special case survives in any topology, local or distributed. One uniform
+`/mnt`-rooted capability surface; consumers reference one path and never probe
+for it.
+
 ## What stays on `/n`
 
-Genuine foreign imports — a remote peer's served tree or a device tree, mounted
-intact — correctly remain under `/n`. For example:
+Genuine foreign imports — a remote peer's *whole* served root or a device tree,
+mounted intact under its source's name — correctly remain under `/n`. For
+example:
 
 | Mount      | Source                                                        |
 |------------|---------------------------------------------------------------|
 | `/n/local` | the host filesystem (`trfs '#U*'`)                            |
-| `/n/llm`   | a remote InferNode's `llm9p`, imported over Styx              |
 
-(Borderline cases exist: a service whose 9P schema *you* author — even when
-served from a remote node — is by this test a `/mnt` candidate, not a `/n`
-import. Apply the "who invented the schema?" test rather than going by where the
-bytes live.)
+A remote LLM does **not** belong here even though it crosses the wire: you are
+not importing a peer's tree to live *as* `/n/<peer>`, you are populating *your*
+`/mnt/llm` from it (the remote-mode row above). The discriminator is always
+"who invented the schema?", never where the bytes live — so a service whose 9P
+schema *you* author is a `/mnt` candidate even when served from a remote node.
 
 ## The rest of the tree (reference)
 

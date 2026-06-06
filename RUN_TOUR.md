@@ -43,7 +43,7 @@ Or start the REPL and ask for the tour:
 The tour shows Veltro using its tools to demonstrate:
 
 1. **The three zones** — Conversation, Presentation, and Context
-2. **Everything is a file** — Namespace exploration (/tool, /n/llm, /n/ui)
+2. **Everything is a file** — Namespace exploration (/tool, /mnt/llm, /mnt/ui)
 3. **Launching apps** — Clock, editor, shell, fractal viewer in the presentation zone
 4. **The fractal viewer** — Mandelbrot/Julia exploration driven by AI
 5. **The text editor** — Edit for collaborative editing

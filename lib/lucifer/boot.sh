@@ -30,7 +30,7 @@ if {! ~ $skiplogon 1} {
 #
 # Local boot must NEVER block on remote InferNode availability — see
 # docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md.
-# The previous version probed `ftest -f /n/llm/new`; that walk into a
+# The previous version probed `ftest -f /mnt/llm/new`; that walk into a
 # potentially-degraded 9P export blocks indefinitely (no protocol-level
 # timeout) and wedges the entire desktop boot. Run the whole LLM setup
 # in a backgrounded subshell so the desktop comes up regardless.
@@ -56,12 +56,12 @@ if {! ~ $skiplogon 1} {
 				}
 			}
 			if {ftest -f $llmkey} {
-				mount -k $llmkey $llmdial /n/llm >[2] /dev/null
+				mount -k $llmkey $llmdial /mnt/llm >[2] /dev/null
 			}{
 				echo 'boot: keyring auth requested but keyfile not found at' $llmkey
 			}
 		}{
-			mount -A $llmdial /n/llm >[2] /dev/null
+			mount -A $llmdial /mnt/llm >[2] /dev/null
 		}
 	}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
@@ -83,8 +83,8 @@ if {! ~ $skiplogon 1} {
 /dis/veltro/wallet9p.dis >[2] /dev/null &
 sleep 1
 
-# Message layer — msg9p mounts /n/msg and aggregates Notifications from
-# every registered MsgSrc into /n/msg/notify, which lucibridge / agents
+# Message layer — msg9p mounts /mnt/msg and aggregates Notifications from
+# every registered MsgSrc into /mnt/msg/notify, which lucibridge / agents
 # block-read for unified inbound alerts (mail, sms, …). Register the
 # sources we ship by default; failures here are non-fatal (the source's
 # own init() returns an error if the backing channel isn't available,
@@ -92,16 +92,16 @@ sleep 1
 # mount/register failures surface in the console.
 /dis/veltro/msg9p.dis &
 sleep 1
-echo 'register sms /dis/veltro/sources/sms.dis' > /n/msg/ctl
+echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
 # GUI services
 luciuisrv
-echo activity create Main > /n/ui/ctl
+echo activity create Main > /mnt/ui/ctl
 sleep 1
 /dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
-echo 'create id=tasks type=taskboard label=Tasks' > /n/ui/activity/0/presentation/ctl
+echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 # (No auto-spawn of /dis/wm/shell in Activity 0 — the Main agent
 #  doesn't have shell authority, so the tab either sits empty or, on
 #  mobile, slides a shell in front of a context that shouldn't have

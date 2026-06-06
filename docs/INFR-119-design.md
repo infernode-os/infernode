@@ -192,7 +192,7 @@ standalone (any caller can `wm/luciconv` it).
 
 ## What this proposal explicitly does NOT do
 
-  * It does not change the Lucifer protocol (`/n/ui/activity/*` etc).
+  * It does not change the Lucifer protocol (`/mnt/ui/activity/*` etc).
     The agent surface to Lucifer is unchanged.
 
   * It does not introduce per-child window decorations on mobile.

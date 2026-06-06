@@ -21,18 +21,18 @@ llmsrv >[2] /dev/null &
 sleep 1
 
 echo '=== LLM Service ==='
-ls /n/llm
+ls /mnt/llm
 
 echo '=== Session Test ==='
-id=`{cat /n/llm/new}
+id=`{cat /mnt/llm/new}
 echo 'session id:' $id
-echo 'model:' `{cat /n/llm/$id/model}
+echo 'model:' `{cat /mnt/llm/$id/model}
 
 echo '=== LLM Query ==='
-echo 'Say hello in exactly 5 words.' > /n/llm/$id/ask
-cat /n/llm/$id/ask
+echo 'Say hello in exactly 5 words.' > /mnt/llm/$id/ask
+cat /mnt/llm/$id/ask
 
 echo '=== Usage ==='
-cat /n/llm/$id/usage
+cat /mnt/llm/$id/usage
 
 echo '=== ALL PASS ==='

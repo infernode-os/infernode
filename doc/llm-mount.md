@@ -5,12 +5,12 @@ This document describes how to use the LLM 9P filesystem with Inferno.
 ## Overview
 
 The `llmsrv` service presents LLM providers (Anthropic API or Ollama/OpenAI-compatible)
-as a 9P filesystem at `/n/llm`. Sessions are cloned from `/n/llm/new`, then prompts
-are written to `/n/llm/{id}/ask` and responses read back from the same file.
+as a 9P filesystem at `/mnt/llm`. Sessions are cloned from `/mnt/llm/new`, then prompts
+are written to `/mnt/llm/{id}/ask` and responses read back from the same file.
 
 ## Local Service
 
-llmsrv runs inside the Inferno emulator and self-mounts at `/n/llm`. The shell
+llmsrv runs inside the Inferno emulator and self-mounts at `/mnt/llm`. The shell
 profile (`lib/sh/profile`) starts it automatically:
 
 ```sh
@@ -34,7 +34,7 @@ The Settings app (`LLM Service` category) provides a GUI for this configuration.
 Mount a remote llmsrv (or any compatible 9P LLM server) via dial+mount:
 
 ```sh
-mount -A 'tcp!hephaestus!5640' /n/llm >[2] /dev/null
+mount -A 'tcp!hephaestus!5640' /mnt/llm >[2] /dev/null
 ```
 
 The Settings app can configure this as well — select "Remote (9P)" and enter
@@ -44,7 +44,7 @@ it for next startup.
 ## Filesystem Structure
 
 ```
-/n/llm/
+/mnt/llm/
 ├── new          # Read to clone a new session (returns session ID)
 └── {id}/
     ├── ask      # Write prompt, read response
@@ -58,14 +58,14 @@ it for next startup.
 
 ### Simple Query
 ```sh
-id=`{cat /n/llm/new}
-echo 'What is the capital of France' > /n/llm/$id/ask
-cat /n/llm/$id/ask
+id=`{cat /mnt/llm/new}
+echo 'What is the capital of France' > /mnt/llm/$id/ask
+cat /mnt/llm/$id/ask
 ```
 
 ## Troubleshooting
 
-### /n/llm doesn't exist
+### /mnt/llm doesn't exist
 
 1. Ensure you started emu through the shell: `sh -l -c 'xenith'`
 2. Check the profile has `llmsrv &` or `mount -A` in the LLM section

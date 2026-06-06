@@ -308,8 +308,8 @@ ls /n/local/
 ls /n/local/tmp
 
 # LLM interface
-ls /n/llm
-cat /n/llm/model
+ls /mnt/llm
+cat /mnt/llm/model
 
 # Speech interface
 ls /n/speech

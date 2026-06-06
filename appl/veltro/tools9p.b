@@ -165,7 +165,7 @@ TOOL_PATHS := array[] of {
 	# Paid web fetch (x402 payment-enabled HTTP client)
 	("payfetch", "/dis/veltro/tools/payfetch.dis"),
 	# Limbo authoring via LLM-as-tool (delegates to devstral-limbo-v3
-	# through a private /n/llm session). See appl/veltro/tools/limbo.b
+	# through a private /mnt/llm session). See appl/veltro/tools/limbo.b
 	# and docs/LLM-AS-TOOL.md.
 	("limbo",   "/dis/veltro/tools/limbo.dis"),
 	# Phone bridge tools (mobile builds + desktops mounting a phone).

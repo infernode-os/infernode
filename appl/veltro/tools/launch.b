@@ -32,7 +32,7 @@ ToolLaunch: module {
 	schema: fn(): string;
 };
 
-UI_MOUNT: con "/n/ui";
+UI_MOUNT: con "/mnt/ui";
 
 init(): string
 {
@@ -245,7 +245,7 @@ exec(args: string): string
 
 # Read this tool's own activity ID from tools9p.
 # /tool/activity is served by the tools9p instance this tool belongs to.
-# Falls back to /n/ui/activity/current for backward compatibility.
+# Falls back to /mnt/ui/activity/current for backward compatibility.
 currentactid(): int
 {
 	s := readfile("/tool/activity");

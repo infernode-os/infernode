@@ -1361,7 +1361,7 @@ cleanup()
 
 themelistener()
 {
-	fd := sys->open("/n/ui/event", Sys->OREAD);
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
 	if(fd == nil)
 		return;
 	buf := array[256] of byte;

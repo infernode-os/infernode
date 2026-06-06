@@ -4,11 +4,11 @@ implement Msg9p;
 # msg9p - 9P file server for the Veltro message layer
 #
 # Presents message sources (email, telegram, etc.) as a unified filesystem
-# at /n/msg/. Each source implements the MsgSrc interface and is loaded
+# at /mnt/msg/. Each source implements the MsgSrc interface and is loaded
 # dynamically via the ctl file.
 #
 # Filesystem:
-#   /n/msg/
+#   /mnt/msg/
 #   ├── ctl         (rw)  "register <name> <dispath> <config...>"
 #   ├── notify      (r)   Blocking read: returns next notification
 #   ├── status      (r)   Summary of all sources
@@ -19,8 +19,8 @@ implement Msg9p;
 # Inferno event-file pattern.
 #
 # Usage:
-#   msg9p                        Start, mount at /n/msg
-#   msg9p -m /n/msg              Custom mount point
+#   msg9p                        Start, mount at /mnt/msg
+#   msg9p -m /mnt/msg              Custom mount point
 #   msg9p -D                     9P debug tracing
 #
 
@@ -69,7 +69,7 @@ PendingRead: adt {
 
 stderr: ref Sys->FD;
 user: string;
-mountpt := "/n/msg";
+mountpt := "/mnt/msg";
 
 # Registered sources
 sources: list of ref SrcInfo;
@@ -77,7 +77,7 @@ sources: list of ref SrcInfo;
 # Notification aggregation channel (all sources feed into this)
 notifychan: chan of string;
 
-# Pending readers blocked on /n/msg/notify
+# Pending readers blocked on /mnt/msg/notify
 pendingReaders: list of ref PendingRead;
 
 # Queued notifications when no reader is waiting
@@ -424,7 +424,7 @@ handlectl(data: string): string
 
 # === reply: route a reply to a source's MsgSrc.reply() ===
 #
-# /n/msg/reply (write-only) format:  <srcname>\n<origid>\n<body...>
+# /mnt/msg/reply (write-only) format:  <srcname>\n<origid>\n<body...>
 # Generic, protocol-agnostic: the consumer replies to a message by its source
 # and original id; the source preserves threading. Spawned from the serve loop
 # so the source's I/O does not block other clients.

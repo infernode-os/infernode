@@ -150,12 +150,12 @@ if {~ $emuhost MacOSX Linux Nt}{
 		# See docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md
 		if {~ $llmauth keyring} {
 			if {ftest -f $llmkey} {
-				mount -k $llmkey $llmdial /n/llm >[2] /dev/null &
+				mount -k $llmkey $llmdial /mnt/llm >[2] /dev/null &
 			}{
 				echo 'profile: keyring auth requested but keyfile not found at' $llmkey
 			}
 		}{
-			mount -A $llmdial /n/llm >[2] /dev/null &
+			mount -A $llmdial /mnt/llm >[2] /dev/null &
 		}
 	}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
@@ -176,7 +176,7 @@ if {~ $emuhost MacOSX Linux Nt}{
 	/dis/veltro/speech9p.dis -e cmd &
 }{
 	# Non-desktop: mount remote llm9p
-	mount -A 'tcp!llmserver!5640' /n/llm >[2] /dev/null
+	mount -A 'tcp!llmserver!5640' /mnt/llm >[2] /dev/null
 }
 
 # ── tmp setup ─────────────────────────────────────────────

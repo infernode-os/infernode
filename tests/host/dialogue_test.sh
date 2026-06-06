@@ -66,7 +66,7 @@ emu_c() {
 # ── Smoke test ──
 echo "── luciuisrv smoke ──"
 
-if ! emu_c "smoke" 8 "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; cat /n/ui/activity/0/label"; then
+if ! emu_c "smoke" 8 "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; cat /mnt/ui/activity/0/label"; then
     skip "luciuisrv failed to start (output: $OUTPUT)"
     echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
     exit 0
@@ -82,7 +82,7 @@ echo ""
 echo "── create dialogue tile ──"
 
 if emu_c "create_form" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=veltro dtype=form title=Permission options=Allow,Deny text=Grant access?' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=veltro dtype=form title=Permission options=Allow,Deny text=Grant access?' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     GOT="$OUTPUT"
     ALL_OK=1
     if echo "$GOT" | grep -q "dtype=form"; then
@@ -114,7 +114,7 @@ echo ""
 echo "── dialogue tile with progress ──"
 
 if emu_c "create_progress" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=veltro dtype=dialogue title=Downloading progress=50 text=50% complete' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=veltro dtype=dialogue title=Downloading progress=50 text=50% complete' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     GOT="$OUTPUT"
     if echo "$GOT" | grep -q "dtype=dialogue"; then
         pass "dtype=dialogue present"
@@ -140,7 +140,7 @@ echo ""
 echo "── update progress in-place ──"
 
 if emu_c "update_progress" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=veltro dtype=dialogue title=Downloading progress=50 text=working' > /n/ui/activity/0/conversation/ctl; echo 'update idx=0 progress=100' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=veltro dtype=dialogue title=Downloading progress=50 text=working' > /mnt/ui/activity/0/conversation/ctl; echo 'update idx=0 progress=100' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     GOT="$OUTPUT"
     if echo "$GOT" | grep -q "progress=100"; then
         pass "progress updated to 100"
@@ -168,7 +168,7 @@ echo "── clear options via update ──"
 # The hasattr fix allows setting options="" to clear them.
 # When options is empty, it should NOT appear in the read output.
 if emu_c "clear_options" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=veltro dtype=form title=Permission options=Allow,Deny text=Grant access?' > /n/ui/activity/0/conversation/ctl; echo 'update idx=0 title=Allowed options=' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=veltro dtype=form title=Permission options=Allow,Deny text=Grant access?' > /mnt/ui/activity/0/conversation/ctl; echo 'update idx=0 title=Allowed options=' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     GOT="$OUTPUT"
     if echo "$GOT" | grep -q "title=Allowed"; then
         pass "title updated to Allowed"
@@ -194,7 +194,7 @@ echo ""
 echo "── update title ──"
 
 if emu_c "update_title" 8 \
-    "luciuisrv; sleep 1; echo 'activity create Main' > /n/ui/ctl; echo 'role=veltro dtype=dialogue title=Step1 progress=25 text=processing' > /n/ui/activity/0/conversation/ctl; echo 'update idx=0 title=Step2 progress=75' > /n/ui/activity/0/conversation/ctl; cat /n/ui/activity/0/conversation/0"; then
+    "luciuisrv; sleep 1; echo 'activity create Main' > /mnt/ui/ctl; echo 'role=veltro dtype=dialogue title=Step1 progress=25 text=processing' > /mnt/ui/activity/0/conversation/ctl; echo 'update idx=0 title=Step2 progress=75' > /mnt/ui/activity/0/conversation/ctl; cat /mnt/ui/activity/0/conversation/0"; then
     GOT="$OUTPUT"
     if echo "$GOT" | grep -q "title=Step2"; then
         pass "title updated to Step2"

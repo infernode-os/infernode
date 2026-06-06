@@ -3,14 +3,14 @@ implement Msgwatch;
 #
 # msgwatch - Message notification watcher daemon for Veltro
 #
-# Thin relay between /n/msg/notify and the Meta Agent.
+# Thin relay between /mnt/msg/notify and the Meta Agent.
 #
-# Lucifer mode (when /n/ui is mounted):
-#   Reads blocking notifications from /n/msg/notify.
-#   Writes each notification to /n/ui/activity/0/conversation/input
+# Lucifer mode (when /mnt/ui is mounted):
+#   Reads blocking notifications from /mnt/msg/notify.
+#   Writes each notification to /mnt/ui/activity/0/conversation/input
 #   so the Meta Agent receives and classifies it.
 #
-# Headless mode (no /n/ui):
+# Headless mode (no /mnt/ui):
 #   Creates own LLM session, loads secretary policy,
 #   classifies and handles messages autonomously.
 #
@@ -75,8 +75,8 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	arg = nil;
 
-	# Determine mode: Lucifer (has /n/ui) or headless
-	uipath := sys->sprint("/n/ui/activity/%d/conversation/input", actid);
+	# Determine mode: Lucifer (has /mnt/ui) or headless
+	uipath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
 	fd := sys->open(uipath, Sys->OWRITE);
 	if(fd != nil) {
 		fd = nil;
@@ -91,10 +91,10 @@ init(nil: ref Draw->Context, args: list of string)
 # Lucifer mode: relay notifications to Meta Agent conversation
 luciferloop(inputpath: string)
 {
-	notifypath := "/n/msg/notify";
+	notifypath := "/mnt/msg/notify";
 
 	for(;;) {
-		# Blocking read on /n/msg/notify
+		# Blocking read on /mnt/msg/notify
 		notifyfd := sys->open(notifypath, Sys->OREAD);
 		if(notifyfd == nil) {
 			log("cannot open " + notifypath + ", retrying in 5s");
@@ -158,17 +158,17 @@ headlessloop()
 		"NOTIFY <brief reason> - for urgent messages needing attention\n\n" +
 		"Then on the next line, if DECLINE/DEFER/NOTIFY, include a suggested reply draft.";
 
-	systempath := "/n/llm/" + sessionid + "/system";
+	systempath := "/mnt/llm/" + sessionid + "/system";
 	agentlib->setsystemprompt(systempath, systemprompt);
 
 	# Open persistent ask fd
-	askpath := "/n/llm/" + sessionid + "/ask";
+	askpath := "/mnt/llm/" + sessionid + "/ask";
 	llmfd := sys->open(askpath, Sys->ORDWR);
 	if(llmfd == nil) {
 		fatal("cannot open " + askpath);
 	}
 
-	notifypath := "/n/msg/notify";
+	notifypath := "/mnt/msg/notify";
 
 	for(;;) {
 		notifyfd := sys->open(notifypath, Sys->OREAD);

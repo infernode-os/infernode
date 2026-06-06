@@ -152,14 +152,14 @@ After restriction, all async tool execution threads (via `spawn asyncexec()`) in
 
 ### repl Restriction
 
-The REPL applies restriction after verifying `/tool` and `/n/llm` are mounted, but before creating the LLM session:
+The REPL applies restriction after verifying `/tool` and `/mnt/llm` are mounted, but before creating the LLM session:
 
 ```
 1. Load NsConstruct module (while /dis unrestricted)
 2. Read /tool/tools -- get live tool list before restriction
 3. pctl(FORKNS)
 4. restrictns(caps)   -- caps.tools = live tool list; caps.paths = -p flag paths
-5. Create LLM session -- /n/llm still accessible
+5. Create LLM session -- /mnt/llm still accessible
 6. Enter repl loop
 ```
 
@@ -171,7 +171,7 @@ The child process applies the full isolation sequence:
 1. pctl(NEWPGRP)         -- Fresh process group (empty srv registry)
 2. pctl(FORKNS)          -- Fork parent's restricted namespace
 3. pctl(NEWENV)          -- Empty environment (NOT FORKENV!)
-4. Open LLM FDs          -- While /n/llm still accessible from parent
+4. Open LLM FDs          -- While /mnt/llm still accessible from parent
 5. restrictns(caps)      -- Further bind-replace restrictions
 6. verifysafefds()       -- Redirect FDs 0-2 to /dev/null if nil
 7. pctl(NEWFD, keepfds)  -- Prune all other FDs
@@ -508,7 +508,7 @@ and enumerable. Adding a new axis is a deliberate act, not a derivation:
 | Secrets | `reads_env` | `NEWENV` unset |
 | Economic | `spends` | tool manifest (wallet, pay) |
 | Comms | `sends_llm` | tool manifest, `caps.llmconfig` |
-| Comms | `sends_ui` | `caps.xenith` ∨ `/n/ui` in writes_fs |
+| Comms | `sends_ui` | `caps.xenith` ∨ `/mnt/ui` in writes_fs |
 | Comms | `receives_input` | `/dev/cons` in reads_fs |
 | Windows | `reads_windows` | `caps.xenith` |
 | Windows | `modifies_windows` | `caps.xenith` |

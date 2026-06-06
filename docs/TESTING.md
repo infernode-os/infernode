@@ -51,8 +51,8 @@ Run inside the Inferno emulator. All compiled to `dis/tests/*.dis`.
 
 | Test | What it covers | Requires |
 |------|----------------|----------|
-| `agentlib_test` | `buildtooldefs`, `parsellmresponse`, `buildtoolresults`, session creation | `/n/llm` (skips without) |
-| `tooluse_test` | End-to-end native tool_use protocol with llmsrv | `/n/llm` (skips without) |
+| `agentlib_test` | `buildtooldefs`, `parsellmresponse`, `buildtoolresults`, session creation | `/mnt/llm` (skips without) |
+| `tooluse_test` | End-to-end native tool_use protocol with llmsrv | `/mnt/llm` (skips without) |
 | `veltro_test` | Tool module loading: name(), doc(), basic exec() | nothing |
 | `veltro_tools_test` | diff, json, memory, todo tool execution | nothing |
 | `veltro_security_test` | Namespace restriction: restrictdir, restrictns, verifyns | nothing |
@@ -114,8 +114,8 @@ The profile starts it automatically with `sh -l`. For manual testing:
 # Verify mount inside emu
 ./emu/MacOSX/o.emu -r. /dis/sh.dis
 # Inside Inferno:
-mount -A tcp!127.0.0.1!5640 /n/llm
-cat /n/llm/new  # Should print a session ID
+mount -A tcp!127.0.0.1!5640 /mnt/llm
+cat /mnt/llm/new  # Should print a session ID
 ```
 
 ---
@@ -191,8 +191,8 @@ Shell scripts run inside Inferno. Invoked by `tests/runner.b` or manually.
 | Test | What it covers | Requires |
 |------|----------------|----------|
 | `lucifer.sh` | luciuisrv ctl commands end-to-end | nothing |
-| `lucibridge.sh` | lucibridge startup and session init | `/n/llm` |
-| `lucibridge_tools.sh` | lucibridge tool_use round-trip | `/n/llm` |
+| `lucibridge.sh` | lucibridge startup and session init | `/mnt/llm` |
+| `lucibridge_tools.sh` | lucibridge tool_use round-trip | `/mnt/llm` |
 | `lucifer_presentation_test.rc` | Inject artifacts into running Lucifer session | running Lucifer |
 | `veltro_tool_test.rc` | Tool execution via Veltro (19 tool tests) | tools9p |
 
@@ -257,8 +257,8 @@ Tests go to `dis/tests/<name>_test.dis` (set by `DISBIN=$ROOT/dis/tests` in mkfi
 
 These tests always skip in standard CI (no required services available):
 
-- `agentlib_test`: 6 skipped (require `/n/llm`)
+- `agentlib_test`: 6 skipped (require `/mnt/llm`)
 - `veltro_test`: 2 skipped (require network/console)
 - `pathmanage_test`: 5 skipped (require `/tool` to be mounted)
 - `tools9p_test`: all skip (require `/tool` to be mounted)
-- `tooluse_test`: all skip (require `/n/llm`)
+- `tooluse_test`: all skip (require `/mnt/llm`)

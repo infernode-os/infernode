@@ -26,6 +26,8 @@ type ifaceImpl struct {
 type Compiler struct {
 	strings      map[string]int32        // string literal → MP offset (deduplicating)
 	reals        map[float64]int32       // float literal → MP offset (deduplicating)
+	intWords     map[int64]int32         // large int literal → MP offset (deduplicating)
+	longs        map[int64]int32         // 64-bit int64/uint64 literal → MP offset (DEFL)
 	globals      map[string]int32        // global variable name → MP offset
 	sysUsed      map[string]int          // Sys function name → LDT index
 	mod          *ModuleData
@@ -52,6 +54,8 @@ func New() *Compiler {
 	return &Compiler{
 		strings:       make(map[string]int32),
 		reals:         make(map[float64]int32),
+		intWords:      make(map[int64]int32),
+		longs:         make(map[int64]int32),
 		globals:       make(map[string]int32),
 		sysUsed:       make(map[string]int),
 		closureMap:    make(map[ssa.Value]*ssa.Function),
@@ -167,6 +171,31 @@ func (c *Compiler) AllocReal(val float64) int32 {
 	}
 	off := c.mod.AllocWord("real")
 	c.reals[val] = off
+	return off
+}
+
+// AllocIntWord reserves a module-data word holding an integer constant that is
+// too large to encode as a Dis immediate operand (which is limited to 30-bit
+// signed). The value is loaded at runtime with MOVW from MP. Deduplicating.
+func (c *Compiler) AllocIntWord(val int64) int32 {
+	if off, ok := c.intWords[val]; ok {
+		return off
+	}
+	off := c.mod.AllocWord("intw")
+	c.intWords[val] = off
+	return off
+}
+
+// AllocLong reserves a module-data slot holding a full 64-bit integer constant
+// for use by wide (int64/uint64) values. Unlike AllocIntWord, which stores only
+// the low 32 bits (DEFW) for 32-bit int constants, this emits a DEFL so the
+// whole value survives; it is loaded at runtime with MOVL. Deduplicating.
+func (c *Compiler) AllocLong(val int64) int32 {
+	if off, ok := c.longs[val]; ok {
+		return off
+	}
+	off := c.mod.AllocWord("long")
+	c.longs[val] = off
 	return off
 }
 
@@ -572,8 +601,8 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 			inst := &cf.result.insts[i]
 
 			// Patch call-site type descriptor IDs
-			// IFRAME/INEW: TD ID is in src operand
-			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW) && inst.Src.Mode == dis.AIMM {
+			// IFRAME/INEW/INEWZ: TD ID is in src operand
+			if (inst.Op == dis.IFRAME || inst.Op == dis.INEW || inst.Op == dis.INEWZ) && inst.Src.Mode == dis.AIMM {
 				inst.Src.Val += int32(callTDOffset)
 			}
 			// NEWA: element TD ID is in mid operand
@@ -823,6 +852,38 @@ func (c *Compiler) buildDataSection() []dis.DataItem {
 	})
 	for _, e := range realEntries {
 		items = append(items, dis.DefReal(e.off, e.val))
+	}
+
+	// Large integer constants (don't fit a 30-bit Dis immediate)
+	type intEntry struct {
+		val int64
+		off int32
+	}
+	var intEntries []intEntry
+	for val, off := range c.intWords {
+		intEntries = append(intEntries, intEntry{val, off})
+	}
+	sort.Slice(intEntries, func(i, j int) bool {
+		return intEntries[i].off < intEntries[j].off
+	})
+	for _, e := range intEntries {
+		items = append(items, dis.DefWord(e.off, uint32(e.val)))
+	}
+
+	// 64-bit integer constants (int64/uint64)
+	type longEntry struct {
+		val int64
+		off int32
+	}
+	var longEntries []longEntry
+	for val, off := range c.longs {
+		longEntries = append(longEntries, longEntry{val, off})
+	}
+	sort.Slice(longEntries, func(i, j int) bool {
+		return longEntries[i].off < longEntries[j].off
+	})
+	for _, e := range longEntries {
+		items = append(items, dis.DefLong(e.off, e.val))
 	}
 
 	return items

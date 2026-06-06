@@ -129,6 +129,21 @@ go run ./cmd/debug/ hello.dis
 go run ./cmd/ssadump/ testdata/hello.go
 ```
 
+> **The E2E suite needs the emulator.** `TestE2EPrograms` /
+> `TestE2EMultiPackage` compile each `testdata/` program and execute it on
+> `emu/Linux/o.emu`. If that binary is absent (e.g. a fresh clone), those
+> tests **skip silently** and `go test ./...` only exercises the
+> compile/encode unit tests. Build the emulator first from the project root:
+>
+> ```sh
+> ./build-linux-amd64.sh headless    # produces emu/Linux/o.emu
+> ```
+>
+> CI runs the whole suite — including all E2E programs on the emulator — via
+> the `godis` job in `.github/workflows/ci.yml`, which reuses the `o.emu`
+> built by the `linux-amd64` job. A green `godis` job means every program in
+> `testdata/` actually ran on Dis and produced its expected output.
+
 ---
 
 ## Compilation Pipeline
@@ -1278,7 +1293,7 @@ go test ./dis/ -count=1                            # bytecode round-trip tests
 
 ## Status and Limitations
 
-### Supported Go Features (Tiers 1-6)
+### Supported Go Features (Tiers 1-7)
 
 **Tier 1 — Core Language:**
 Variables, constants (`const`/`iota`), arithmetic, comparisons, loops (`for`,
@@ -1337,14 +1352,31 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
    when the channel is closed from another goroutine. Close injects a phantom
    zero to wake one blocked receiver, but this is best-effort.
 2. **No native maps.** Maps use sorted-array wrappers, not hash tables.
-3. **Limited float formatting.** `%f`/`%g` use Dis CVTFC without precision
-   control.
-4. **No reflection.** `reflect` package is not supported.
-5. **No cgo.** Cannot call C functions.
-6. **Single-binary output.** All packages are inlined into one `.dis` file;
+3. **Float formatting rounding.** `%f`/`%.Nf` now honor precision (default 6),
+   width, and zero-padding via a fixed-point routine (`emitFloatFixed`). It
+   rounds half-away-from-zero by scaling through a Dis 64-bit long, so for
+   exact half-way values (e.g. `%.0f` of `2.5` → `3`) and values whose binary
+   representation already sits on a rounding boundary (e.g. `%.2f` of `2.675`
+   → `2.68`) the last digit can differ from Go's `strconv`, which uses
+   round-half-to-even on an exact-decimal expansion. `%g`/`%e` still fall back
+   to Dis `CVTFC` and do not yet honor an explicit precision.
+4. **`math.Pow` integer exponents only.** `Pow` lowers to the Dis `EXPF`
+   opcode, which raises a real to an *integer* power. Integer exponents are
+   exact; a fractional exponent (e.g. `Pow(2, 0.5)`) is truncated toward zero
+   and therefore wrong. A general implementation would need `exp(y*ln(x))`.
+5. **No reflection.** `reflect` package is not supported.
+6. **No cgo.** Cannot call C functions.
+7. **Single-binary output.** All packages are inlined into one `.dis` file;
    no incremental/separate compilation.
-7. **No garbage on stack.** Relies on VM's frame initialization for pointer
-   slots; non-pointer slots may contain garbage from previous calls.
-8. **Standard library is stub-only.** The 12+ intercepted stdlib packages
+8. **Zero-initialization of aggregates** (fixed). SSA `Alloc` yields
+   zero-initialized storage, and both allocation paths now honor it.
+   Stack-allocated aggregates (e.g. a local `[N]T` whose address does not
+   escape) zero their scalar slots explicitly (`emitZeroStackSlots`).
+   Heap-allocated aggregates use the zeroing `INEWZ` opcode instead of `INEW`,
+   so unwritten scalar fields read back as 0 and pointer fields as nil even
+   when the reused heap block held stale data. (The Phase-4 type-descriptor
+   patcher had to learn `INEWZ` as well — otherwise its type index is left
+   unrelocated and the VM reads a garbage `Type*`.)
+9. **Standard library is stub-only.** The 12+ intercepted stdlib packages
    provide type signatures for compilation but implementations are inlined
    as Dis instruction sequences, not full Go stdlib implementations.

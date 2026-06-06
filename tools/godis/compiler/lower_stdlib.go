@@ -608,8 +608,8 @@ func (fl *funcLowerer) lowerStringsFields(instr *ssa.Call) error {
 	countDonePC := int32(len(fl.insts))
 	fl.insts[bgeCountDone].Dst = dis.Imm(countDonePC)
 
-	// Allocate array
-	elemTDIdx := fl.makeHeapTypeDesc(nil) // string type desc
+	// Allocate array of strings
+	elemTDIdx := fl.makeHeapTypeDesc(types.Typ[types.String])
 	fl.emit(dis.NewInst(dis.INEWA, dis.FP(count), dis.Imm(int32(elemTDIdx)), dis.FP(dst)))
 
 	// Second pass: fill array
@@ -1148,109 +1148,43 @@ func (fl *funcLowerer) lowerMathFloor(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	trunc := fl.frame.AllocWord("")
-	frac := fl.frame.AllocWord("")
-	zeroOff := fl.comp.AllocReal(0.0)
 	oneOff := fl.comp.AllocReal(1.0)
-
-	// trunc = CVTFR(CVTRF(src))  — convert to int then back to float = truncation
-	intSlot := fl.frame.AllocWord("")
-	fl.emit(dis.Inst2(dis.ICVTFR, src, dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(trunc)))
-
-	// if src >= 0 → result = trunc
-	bgefIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
-
-	// src < 0: check if frac != 0
-	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(trunc), src, dis.FP(frac)))
-	beqfIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQF, dis.FP(frac), dis.MP(zeroOff), dis.Imm(0))) // frac==0 → trunc is exact
-
-	// frac != 0: floor = trunc - 1
-	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), dis.FP(trunc), dis.FP(dst)))
-	jmpDoneIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-
-	// positive or exact: dst = trunc
-	posPC := int32(len(fl.insts))
-	fl.insts[bgefIdx].Dst = dis.Imm(posPC)
-	fl.insts[beqfIdx].Dst = dis.Imm(posPC)
-	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(trunc), dis.FP(dst)))
-
-	donePC := int32(len(fl.insts))
-	fl.insts[jmpDoneIdx].Dst = dis.Imm(donePC)
+	// tr = trunc(src) (toward zero). floor == trunc except for negative
+	// non-integers, where trunc overshoots up by one (tr > src) → tr - 1.
+	tr := fl.emitFloatTrunc(src)
+	fl.emit(dis.Inst2(dis.IMOVF, tr, dis.FP(dst)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLEF, tr, src, dis.Imm(0))) // if tr <= src, done
+	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(oneOff), tr, dis.FP(dst)))
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	return nil
 }
 
-// lowerMathCeil: ceil(x) = trunc(x) if x <= 0, else trunc(x)+1 if frac != 0.
+// lowerMathCeil: ceil(x) == trunc(x) except for positive non-integers, where
+// trunc undershoots (tr < x) → tr + 1.
 func (fl *funcLowerer) lowerMathCeil(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	trunc := fl.frame.AllocWord("")
-	frac := fl.frame.AllocWord("")
-	zeroOff := fl.comp.AllocReal(0.0)
 	oneOff := fl.comp.AllocReal(1.0)
-
-	intSlot := fl.frame.AllocWord("")
-	fl.emit(dis.Inst2(dis.ICVTFR, src, dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(trunc)))
-
-	// if src <= 0 → result = trunc
-	blefIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBLEF, src, dis.MP(zeroOff), dis.Imm(0)))
-
-	// src > 0: check frac
-	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(trunc), src, dis.FP(frac)))
-	beqfIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBEQF, dis.FP(frac), dis.MP(zeroOff), dis.Imm(0)))
-
-	// frac != 0: ceil = trunc + 1
-	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), dis.FP(trunc), dis.FP(dst)))
-	jmpDoneIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-
-	negPC := int32(len(fl.insts))
-	fl.insts[blefIdx].Dst = dis.Imm(negPC)
-	fl.insts[beqfIdx].Dst = dis.Imm(negPC)
-	fl.emit(dis.Inst2(dis.IMOVF, dis.FP(trunc), dis.FP(dst)))
-
-	donePC := int32(len(fl.insts))
-	fl.insts[jmpDoneIdx].Dst = dis.Imm(donePC)
+	tr := fl.emitFloatTrunc(src)
+	fl.emit(dis.Inst2(dis.IMOVF, tr, dis.FP(dst)))
+	skipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEF, tr, src, dis.Imm(0))) // if tr >= src, done
+	fl.emit(dis.NewInst(dis.IADDF, dis.MP(oneOff), tr, dis.FP(dst)))
+	fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	return nil
 }
 
-// lowerMathRound: round to nearest, ties away from zero.
+// lowerMathRound: round to nearest, ties away from zero. CVTFL already rounds
+// half-away-from-zero, so Round(x) == (real)(long)x.
 func (fl *funcLowerer) lowerMathRound(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	halfOff := fl.comp.AllocReal(0.5)
-	zeroOff := fl.comp.AllocReal(0.0)
-	tmp := fl.frame.AllocWord("")
-	intSlot := fl.frame.AllocWord("")
-
-	// if src >= 0: round = floor(src + 0.5)
-	bgefIdx := len(fl.insts)
-	fl.emit(dis.NewInst(dis.IBGEF, src, dis.MP(zeroOff), dis.Imm(0)))
-
-	// src < 0: round = ceil(src - 0.5)
-	fl.emit(dis.NewInst(dis.ISUBF, dis.MP(halfOff), src, dis.FP(tmp)))
-	fl.emit(dis.Inst2(dis.ICVTFR, dis.FP(tmp), dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(dst)))
-	jmpDoneIdx := len(fl.insts)
-	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-
-	// src >= 0
-	posPC := int32(len(fl.insts))
-	fl.insts[bgefIdx].Dst = dis.Imm(posPC)
-	fl.emit(dis.NewInst(dis.IADDF, dis.MP(halfOff), src, dis.FP(tmp)))
-	fl.emit(dis.Inst2(dis.ICVTFR, dis.FP(tmp), dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(dst)))
-
-	donePC := int32(len(fl.insts))
-	fl.insts[jmpDoneIdx].Dst = dis.Imm(donePC)
+	n := fl.frame.AllocReal("round.long")
+	fl.emit(dis.Inst2(dis.ICVTFL, src, dis.FP(n)))
+	fl.emit(dis.Inst2(dis.ICVTLF, dis.FP(n), dis.FP(dst)))
 	return nil
 }
 
@@ -1259,9 +1193,8 @@ func (fl *funcLowerer) lowerMathTrunc(instr *ssa.Call) error {
 	src := fl.operandOf(instr.Call.Args[0])
 	dst := fl.slotOf(instr)
 
-	intSlot := fl.frame.AllocWord("")
-	fl.emit(dis.Inst2(dis.ICVTFR, src, dis.FP(intSlot)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(intSlot), dis.FP(dst)))
+	tr := fl.emitFloatTrunc(src)
+	fl.emit(dis.Inst2(dis.IMOVF, tr, dis.FP(dst)))
 	return nil
 }
 
@@ -1271,8 +1204,18 @@ func (fl *funcLowerer) lowerMathPow(instr *ssa.Call) error {
 	yOp := fl.operandOf(instr.Call.Args[1])
 	dst := fl.slotOf(instr)
 
-	// EXPF src, mid, dst: dst = mid ^ src (mid raised to power src)
-	fl.emit(dis.NewInst(dis.IEXPF, yOp, xOp, dis.FP(dst)))
+	// EXPF computes mid ^ src where the EXPONENT (src) is an integer WORD:
+	// it reads x = F(mid) and n = W(src). math.Pow's exponent is a float64,
+	// so it must be converted to an integer first — passing the raw float
+	// bits as W(src) yields a garbage exponent (→ Infinity).
+	//
+	// NOTE: this supports integer exponents only. Fractional exponents (e.g.
+	// Pow(2, 0.5)) truncate toward zero and are therefore wrong — a true
+	// implementation would need exp(y*ln(x)). Documented in README.
+	nLong := fl.emitTruncToLong(yOp)
+	nWord := fl.frame.AllocWord("pow.exp")
+	fl.emit(dis.Inst2(dis.ICVTLW, nLong, dis.FP(nWord)))
+	fl.emit(dis.NewInst(dis.IEXPF, dis.FP(nWord), xOp, dis.FP(dst)))
 	return nil
 }
 
@@ -1283,15 +1226,12 @@ func (fl *funcLowerer) lowerMathMod(instr *ssa.Call) error {
 	dst := fl.slotOf(instr)
 
 	// mod = x - trunc(x/y) * y
-	quotient := fl.frame.AllocWord("")
-	truncQ := fl.frame.AllocWord("")
-	truncQf := fl.frame.AllocWord("")
-	prod := fl.frame.AllocWord("")
+	quotient := fl.frame.AllocReal("")
+	prod := fl.frame.AllocReal("")
 
 	fl.emit(dis.NewInst(dis.IDIVF, yOp, xOp, dis.FP(quotient)))
-	fl.emit(dis.Inst2(dis.ICVTFR, dis.FP(quotient), dis.FP(truncQ)))
-	fl.emit(dis.Inst2(dis.ICVTRF, dis.FP(truncQ), dis.FP(truncQf)))
-	fl.emit(dis.NewInst(dis.IMULF, yOp, dis.FP(truncQf), dis.FP(prod)))
+	truncQf := fl.emitFloatTrunc(dis.FP(quotient)) // truncate toward zero
+	fl.emit(dis.NewInst(dis.IMULF, yOp, truncQf, dis.FP(prod)))
 	fl.emit(dis.NewInst(dis.ISUBF, dis.FP(prod), xOp, dis.FP(dst)))
 	return nil
 }
@@ -2023,8 +1963,207 @@ func (fl *funcLowerer) lowerPathCall(instr *ssa.Call, callee *ssa.Function) (boo
 	case "Join":
 		// path.Join — delegate to strings.Join with "/"
 		return fl.lowerPathJoin(instr)
+	case "Clean":
+		fl.emitPathClean(fl.operandOf(instr.Call.Args[0]), fl.slotOf(instr))
+		return true, nil
 	}
 	return false, nil
+}
+
+// emitPathClean implements path.Clean / filepath.Clean (Go's lexical
+// lazybuf algorithm) as a runtime loop, writing the cleaned path to FP(dst).
+// It resolves "." and ".." elements and collapses repeated slashes. Iteration
+// and slicing are by rune, so non-ASCII path components are preserved verbatim
+// (only the ASCII '/' and '.' drive the logic).
+func (fl *funcLowerer) emitPathClean(sOp dis.Operand, dst int32) {
+	n := fl.frame.AllocWord("cl.n")
+	r := fl.frame.AllocWord("cl.r")
+	outlen := fl.frame.AllocWord("cl.outlen")
+	dotdot := fl.frame.AllocWord("cl.dotdot")
+	rooted := fl.frame.AllocWord("cl.rooted")
+	c := fl.frame.AllocWord("cl.c")
+	idx := fl.frame.AllocWord("cl.idx")
+	ch := fl.frame.AllocWord("cl.ch")
+	tmp := fl.frame.AllocWord("cl.tmp")
+	out := fl.frame.AllocTemp(true)
+	piece := fl.frame.AllocTemp(true)
+
+	slashOff := fl.comp.AllocString("/")
+	dotOff := fl.comp.AllocString(".")
+	dotdotStrOff := fl.comp.AllocString("..")
+	emptyOff := fl.comp.AllocString("")
+
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(out)))
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(n)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dotdot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(r)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(rooted)))
+
+	// if n == 0 { dst = "."; return }
+	bEmpty := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(n), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	bEmptyRet := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	fl.insts[bEmpty].Dst = dis.Imm(int32(len(fl.insts)))
+
+	// rooted = s[0] == '/'
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.Imm(0), dis.FP(c)))
+	bNotRooted := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(slashOff), dis.FP(out)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(r)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dotdot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(rooted)))
+	fl.insts[bNotRooted].Dst = dis.Imm(int32(len(fl.insts)))
+
+	loopPC := int32(len(fl.insts))
+	bDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(r), dis.FP(n), dis.Imm(0))) // r >= n -> done
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(r), dis.FP(c)))
+
+	// '/' -> skip
+	bNotSlash := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(r), dis.FP(r)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	fl.insts[bNotSlash].Dst = dis.Imm(int32(len(fl.insts)))
+
+	var toElement, toDot, toDotDot, toCopyel []int
+
+	// not '.' -> element
+	toElement = append(toElement, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm('.'), dis.Imm(0)))
+	// '.' : if r+1==n or s[r+1]=='/' -> dot element
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(r), dis.FP(idx)))
+	toDot = append(toDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(idx), dis.FP(ch)))
+	toDot = append(toDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	// s[r+1] != '.' -> element (".x")
+	toElement = append(toElement, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm('.'), dis.Imm(0)))
+	// ".." : if r+2==n or s[r+2]=='/' -> dotdot element
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(r), dis.FP(idx)))
+	toDotDot = append(toDotDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(idx), dis.FP(ch)))
+	toDotDot = append(toDotDot, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	// "..x" -> element
+	toElement = append(toElement, len(fl.insts))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// dot element: r++
+	dotPC := int32(len(fl.insts))
+	for _, i := range toDot {
+		fl.insts[i].Dst = dis.Imm(dotPC)
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(r), dis.FP(r)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// dotdot element: r += 2; backtrack or append ".."
+	dotdotPC := int32(len(fl.insts))
+	for _, i := range toDotDot {
+		fl.insts[i].Dst = dis.Imm(dotdotPC)
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(r), dis.FP(r)))
+	bBacktrack := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(outlen), dis.FP(dotdot), dis.Imm(0))) // outlen>dotdot -> backtrack
+	// else if rooted -> loop (drop the "..")
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(rooted), dis.Imm(0), dis.Imm(loopPC)))
+	// not rooted: append "/" if outlen>0, then ".."
+	bNoSep := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(outlen), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	fl.insts[bNoSep].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(dotdotStrOff), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(2), dis.FP(outlen), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(outlen), dis.FP(dotdot)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// backtrack: drop the last element from out
+	backtrackPC := int32(len(fl.insts))
+	fl.insts[bBacktrack].Dst = dis.Imm(backtrackPC)
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	bkloopPC := int32(len(fl.insts))
+	bBkTrunc1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLEW, dis.FP(outlen), dis.FP(dotdot), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, dis.FP(out), dis.FP(outlen), dis.FP(ch)))
+	bBkTrunc2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(bkloopPC)))
+	bkTruncPC := int32(len(fl.insts))
+	fl.insts[bBkTrunc1].Dst = dis.Imm(bkTruncPC)
+	fl.insts[bBkTrunc2].Dst = dis.Imm(bkTruncPC)
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.Imm(0), dis.FP(outlen), dis.FP(out)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// element: add a separator if needed, then copy the element verbatim
+	elementPC := int32(len(fl.insts))
+	for _, i := range toElement {
+		fl.insts[i].Dst = dis.Imm(elementPC)
+	}
+	// skip separator when (rooted && outlen==1) || (!rooted && outlen==0)
+	bIsRooted := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(rooted), dis.Imm(0), dis.Imm(0))) // rooted -> rootedSep
+	toCopyel = append(toCopyel, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(outlen), dis.Imm(0), dis.Imm(0))) // !rooted && outlen==0 -> copyel
+	bAfterSep := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // -> addsep
+	rootedSepPC := int32(len(fl.insts))
+	fl.insts[bIsRooted].Dst = dis.Imm(rootedSepPC)
+	toCopyel = append(toCopyel, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(outlen), dis.Imm(1), dis.Imm(0))) // rooted && outlen==1 -> copyel
+	addsepPC := int32(len(fl.insts))
+	fl.insts[bAfterSep].Dst = dis.Imm(addsepPC)
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(outlen), dis.FP(outlen)))
+	// copyel: idx = r; scan to next '/'; copy s[r:idx]
+	copyelPC := int32(len(fl.insts))
+	for _, i := range toCopyel {
+		fl.insts[i].Dst = dis.Imm(copyelPC)
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(r), dis.FP(idx)))
+	elloopPC := int32(len(fl.insts))
+	bElCopy1 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(n), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(idx), dis.FP(ch)))
+	bElCopy2 := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('/'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(elloopPC)))
+	elcopyPC := int32(len(fl.insts))
+	fl.insts[bElCopy1].Dst = dis.Imm(elcopyPC)
+	fl.insts[bElCopy2].Dst = dis.Imm(elcopyPC)
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(r), dis.FP(idx), dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.FP(piece), dis.FP(out), dis.FP(out)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(r), dis.FP(idx), dis.FP(tmp))) // tmp = idx - r
+	fl.emit(dis.NewInst(dis.IADDW, dis.FP(tmp), dis.FP(outlen), dis.FP(outlen)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(idx), dis.FP(r)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// done: dst = (outlen == 0) ? "." : out
+	donePC := int32(len(fl.insts))
+	fl.insts[bDone].Dst = dis.Imm(donePC)
+	bOutNonzero := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(outlen), dis.Imm(0), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(dotOff), dis.FP(dst)))
+	bDoneEnd := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+	setoutPC := int32(len(fl.insts))
+	fl.insts[bOutNonzero].Dst = dis.Imm(setoutPC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(out), dis.FP(dst)))
+
+	endPC := int32(len(fl.insts))
+	fl.insts[bEmptyRet].Dst = dis.Imm(endPC)
+	fl.insts[bDoneEnd].Dst = dis.Imm(endPC)
 }
 
 // lowerPathJoin: join path segments with "/".
@@ -2721,15 +2860,15 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		return true, nil
 
 	case "Join":
-		// bytes.Join(s [][]byte, sep []byte) []byte — stub returns nil
+		// bytes.Join(s [][]byte, sep []byte) []byte — stub returns nil (H)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 
 	case "Split":
-		// bytes.Split(s, sep []byte) [][]byte — stub returns nil slice
+		// bytes.Split(s, sep []byte) [][]byte — stub returns nil slice (H)
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 
 	case "Replace", "ReplaceAll":
@@ -3063,43 +3202,58 @@ func (fl *funcLowerer) lowerBytesCall(instr *ssa.Call, callee *ssa.Function) (bo
 		return true, nil
 
 	case "WriteString":
-		// (*Buffer).WriteString(s) → (len(s), nil)
+		// (*Buffer).WriteString(s): buf += s, return (len(s), nil).
+		recv := fl.materialize(instr.Call.Args[0])
+		sOp := fl.operandOf(instr.Call.Args[1])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.NewInst(dis.IADDC, sOp, dis.FP(cur), dis.FP(cur)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FPInd(recv, 0)))
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 
 	case "WriteByte":
-		// (*Buffer).WriteByte(c) → nil error
+		// (*Buffer).WriteByte(c): buf += string(c), return nil error.
+		recv := fl.materialize(instr.Call.Args[0])
+		cOp := fl.operandOf(instr.Call.Args[1])
+		ch := fl.frame.AllocTemp(true)
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(ch)))
+		fl.emit(dis.NewInst(dis.IINSC, cOp, dis.Imm(0), dis.FP(ch)))
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(ch), dis.FP(cur), dis.FP(cur)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FPInd(recv, 0)))
 		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 
 	case "String":
-		// (*Buffer).String() → empty string
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+		// (*Buffer).String(): return buf.
+		recv := fl.materialize(instr.Call.Args[0])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(cur), dis.FP(fl.slotOf(instr))))
 		return true, nil
 
 	case "Bytes":
-		// (*Buffer).Bytes() → nil slice
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// (*Buffer).Bytes(): []byte(buf).
+		recv := fl.materialize(instr.Call.Args[0])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.Inst2(dis.ICVTCA, dis.FP(cur), dis.FP(fl.slotOf(instr))))
 		return true, nil
 
 	case "Len":
-		// (*Buffer).Len() → 0
-		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		// (*Buffer).Len(): len(buf).
+		recv := fl.materialize(instr.Call.Args[0])
+		cur := fl.emitBuilderLoadBuf(recv)
+		fl.emit(dis.Inst2(dis.ILENC, dis.FP(cur), dis.FP(fl.slotOf(instr))))
 		return true, nil
 
 	case "Reset":
-		// (*Buffer).Reset() → no-op
+		// (*Buffer).Reset(): buf = "".
+		recv := fl.materialize(instr.Call.Args[0])
+		emptyOff := fl.comp.AllocString("")
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FPInd(recv, 0)))
 		return true, nil
 
 	case "Read":
@@ -3504,7 +3658,7 @@ func (fl *funcLowerer) lowerFmtPrint(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3523,7 +3677,7 @@ func (fl *funcLowerer) lowerFmtFprintf(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3540,7 +3694,7 @@ func (fl *funcLowerer) lowerFmtFprintln(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3557,7 +3711,7 @@ func (fl *funcLowerer) lowerFmtFprint(instr *ssa.Call) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	fl.emitSysCall("print", []callSiteArg{{strSlot, true}})
+	fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
 	if len(*instr.Referrers()) > 0 {
 		dstSlot := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
@@ -3577,25 +3731,36 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
 
 	args := instr.Call.Args
-	// Skip first arg if it's an io.Writer (Fprint/Fprintln/Fprintf)
-	startIdx := 0
-	if len(args) > 0 {
-		if _, ok := args[0].Type().Underlying().(*types.Interface); ok {
-			// Could be io.Writer — check if this is an F-variant
-			name := ""
-			if callee, ok := instr.Call.Value.(*ssa.Function); ok {
-				name = callee.Name()
-			}
-			if name == "Fprintf" || name == "Fprintln" || name == "Fprint" {
-				startIdx = 1
-			}
+	// The variadic operands arrive as a single []any slice. F-variants
+	// (Fprint/Fprintln/Fprintf) take an io.Writer first, so the slice is the
+	// second argument there.
+	sliceIdx := 0
+	if callee, ok := instr.Call.Value.(*ssa.Function); ok {
+		switch callee.Name() {
+		case "Fprintf", "Fprintln", "Fprint":
+			sliceIdx = 1
 		}
 	}
+	if sliceIdx >= len(args) {
+		// No operands (e.g. fmt.Sprintln()).
+		if addNewline {
+			nlMP := fl.comp.AllocString("\n")
+			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlMP), dis.FP(result), dis.FP(result)))
+		}
+		return result, true
+	}
 
-	for i := startIdx; i < len(args); i++ {
-		arg := args[i]
+	// Unwrap the []any slice to the concrete operand values (peeling off the
+	// MakeInterface boxing); without this the slice itself was being formatted.
+	elements := fl.traceAllVarargElements(args[sliceIdx])
+	if elements == nil {
+		return 0, false
+	}
 
-		// Try to trace through SliceToArrayPointer or other wrapping
+	for i, arg := range elements {
+		if arg == nil {
+			return 0, false
+		}
 		t := arg.Type().Underlying()
 		basic, isBasic := t.(*types.Basic)
 
@@ -3607,8 +3772,7 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 				src := fl.operandOf(arg)
 				fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(tmp)))
 			case basic.Info()&types.IsInteger != 0:
-				src := fl.operandOf(arg)
-				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				fl.emitIntToString(fl.operandOf(arg), tmp, arg.Type())
 			case basic.Info()&types.IsFloat != 0:
 				src := fl.operandOf(arg)
 				fl.emit(dis.Inst2(dis.ICVTFC, src, dis.FP(tmp)))
@@ -3622,19 +3786,23 @@ func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) 
 				fl.emit(dis.Inst2(dis.IMOVP, dis.MP(trueMP), dis.FP(tmp)))
 				fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 			default:
-				src := fl.operandOf(arg)
-				fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+				fl.emitIntToString(fl.operandOf(arg), tmp, arg.Type())
 			}
 		} else {
-			// Non-basic: try CVTWC
-			src := fl.operandOf(arg)
-			fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(tmp)))
+			// Non-basic: best effort decimal rendering.
+			fl.emitIntToString(fl.operandOf(arg), tmp, arg.Type())
 		}
 
-		// Add space separator for Println (between args, not before first)
-		if addNewline && i > startIdx {
-			spaceMP := fl.comp.AllocString(" ")
-			fl.emit(dis.NewInst(dis.IADDC, dis.MP(spaceMP), dis.FP(result), dis.FP(result)))
+		// Separator rule (matching fmt): Sprintln always separates operands
+		// with a space; Sprint adds a space only between operands when neither
+		// is a string.
+		if i > 0 {
+			needSpace := addNewline ||
+				(!isStringType(elements[i-1].Type().Underlying()) && !isStringType(arg.Type().Underlying()))
+			if needSpace {
+				spaceMP := fl.comp.AllocString(" ")
+				fl.emit(dis.NewInst(dis.IADDC, dis.MP(spaceMP), dis.FP(result), dis.FP(result)))
+			}
 		}
 
 		fl.emit(dis.NewInst(dis.IADDC, dis.FP(tmp), dis.FP(result), dis.FP(result)))
@@ -3934,41 +4102,19 @@ func (fl *funcLowerer) lowerFilepathExt(instr *ssa.Call) (bool, error) {
 	return true, nil
 }
 
-// lowerFilepathClean returns a cleaned path. Simplified: just returns the input.
+// lowerFilepathClean returns a cleaned path (lexical, resolving . and ..).
 func (fl *funcLowerer) lowerFilepathClean(instr *ssa.Call) (bool, error) {
-	pathOp := fl.operandOf(instr.Call.Args[0])
-	dst := fl.slotOf(instr)
-	fl.emit(dis.Inst2(dis.IMOVP, pathOp, dis.FP(dst)))
+	fl.emitPathClean(fl.operandOf(instr.Call.Args[0]), fl.slotOf(instr))
 	return true, nil
 }
 
-// lowerFilepathJoin concatenates path elements with "/".
+// lowerFilepathJoin concatenates path elements with "/". On Inferno's
+// forward-slash paths this is identical to path.Join, so reuse that lowering —
+// it iterates the variadic []string slice at runtime. (The previous version
+// treated the single []string slice argument as a string, concatenating its
+// pointer and faulting when the result was used.)
 func (fl *funcLowerer) lowerFilepathJoin(instr *ssa.Call) (bool, error) {
-	// filepath.Join is variadic, but SSA passes a slice.
-	// For now, handle the common case of 2-3 literal string args.
-	args := instr.Call.Args
-	if len(args) == 0 {
-		dst := fl.slotOf(instr)
-		emptyOff := fl.comp.AllocString("")
-		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
-		return true, nil
-	}
-
-	dst := fl.slotOf(instr)
-	slashOff := fl.comp.AllocString("/")
-
-	// Start with first argument
-	first := fl.operandOf(args[0])
-	fl.emit(dis.Inst2(dis.IMOVP, first, dis.FP(dst)))
-
-	// Concatenate remaining with "/" separator
-	for idx := 1; idx < len(args); idx++ {
-		fl.emit(dis.NewInst(dis.IADDC, dis.MP(slashOff), dis.FP(dst), dis.FP(dst)))
-		argOp := fl.operandOf(args[idx])
-		fl.emit(dis.NewInst(dis.IADDC, argOp, dis.FP(dst), dis.FP(dst)))
-	}
-
-	return true, nil
+	return fl.lowerPathJoin(instr)
 }
 
 // lowerFilepathIsAbs returns whether path is absolute (starts with '/').
@@ -4631,22 +4777,138 @@ func (fl *funcLowerer) lowerBufioCall(instr *ssa.Call, callee *ssa.Function) (bo
 // ============================================================
 
 // lowerNetURLCall handles calls to the net/url package.
+// emitURLEscape implements url.QueryEscape / url.PathEscape: write to FP(dst)
+// the percent-encoding of the string at sOp. Characters in the unreserved set
+// (A-Za-z0-9 and -_.~) pass through; a space becomes '+' (plusForSpace) or
+// %20; everything else becomes %XX with uppercase hex.
+//
+// Iteration is by rune, so a non-ASCII codepoint is escaped as a single %XX of
+// its low byte rather than its multi-byte UTF-8 form (Go escapes the UTF-8
+// bytes). ASCII — the overwhelmingly common case — is byte-for-byte correct.
+func (fl *funcLowerer) emitURLEscape(sOp dis.Operand, dst int32, plusForSpace bool) {
+	lenS := fl.frame.AllocWord("esc.len")
+	i := fl.frame.AllocWord("esc.i")
+	i1 := fl.frame.AllocWord("esc.i1")
+	c := fl.frame.AllocWord("esc.c")
+	nib := fl.frame.AllocWord("esc.nib")
+	nib1 := fl.frame.AllocWord("esc.nib1")
+	piece := fl.frame.AllocTemp(true)
+
+	emptyOff := fl.comp.AllocString("")
+	hexOff := fl.comp.AllocString("0123456789ABCDEF")
+	pctOff := fl.comp.AllocString("%")
+	plusOff := fl.comp.AllocString("+")
+	sp20Off := fl.comp.AllocString("%20")
+
+	// result = ""
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	// appendPiece concatenates FP(piece) onto the result (dst = dst + piece).
+	appendPiece := func() {
+		fl.emit(dis.NewInst(dis.IADDC, dis.FP(piece), dis.FP(dst), dis.FP(dst)))
+	}
+	// appendNibble appends hex[nib:nib+1] for the low 4 bits in FP(nib).
+	appendNibble := func() {
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(nib), dis.FP(nib1)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(hexOff), dis.FP(piece)))
+		fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(nib), dis.FP(nib1), dis.FP(piece)))
+		appendPiece()
+	}
+
+	loopPC := int32(len(fl.insts))
+	doneIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0))) // if i>=len goto done
+
+	// c = s[i]
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(c)))
+
+	// Unreserved-set checks: each branch jumps to the "append char" block.
+	var toChar []int
+	emitRange := func(lo, hi int32) {
+		// if c < lo: skip; else if c <= hi: goto char
+		skip := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBLTW, dis.FP(c), dis.Imm(lo), dis.Imm(0)))
+		toChar = append(toChar, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBLEW, dis.FP(c), dis.Imm(hi), dis.Imm(0)))
+		fl.insts[skip].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+	emitEq := func(v int32) {
+		toChar = append(toChar, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(c), dis.Imm(v), dis.Imm(0)))
+	}
+	emitRange('0', '9')
+	emitRange('A', 'Z')
+	emitRange('a', 'z')
+	emitEq('-')
+	emitEq('.')
+	emitEq('_')
+	emitEq('~')
+
+	// Not unreserved: space → '+'/%20, else %XX.
+	notSpaceIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(c), dis.Imm(' '), dis.Imm(0)))
+	// space branch
+	if plusForSpace {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(plusOff), dis.FP(piece)))
+		appendPiece()
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(sp20Off), dis.FP(piece)))
+		appendPiece()
+	}
+	spaceDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // goto next
+
+	// %XX escape block
+	escapePC := int32(len(fl.insts))
+	fl.insts[notSpaceIdx].Dst = dis.Imm(escapePC)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(pctOff), dis.FP(piece)))
+	appendPiece()
+	fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(4), dis.FP(c), dis.FP(nib)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.Imm(15), dis.FP(nib), dis.FP(nib)))
+	appendNibble()
+	fl.emit(dis.NewInst(dis.IANDW, dis.Imm(15), dis.FP(c), dis.FP(nib)))
+	appendNibble()
+	escDoneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0))) // goto next
+
+	// append-char block: result += s[i:i+1]
+	charPC := int32(len(fl.insts))
+	for _, idx := range toChar {
+		fl.insts[idx].Dst = dis.Imm(charPC)
+	}
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i1)))
+	fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(piece)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(i), dis.FP(i1), dis.FP(piece)))
+	appendPiece()
+
+	// next: i++; loop
+	nextPC := int32(len(fl.insts))
+	fl.insts[spaceDoneIdx].Dst = dis.Imm(nextPC)
+	fl.insts[escDoneIdx].Dst = dis.Imm(nextPC)
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
 func (fl *funcLowerer) lowerNetURLCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Parse":
 		// url.Parse(rawURL) → (*URL, error)
-		// Stub: return nil URL and nil error
+		// Stub: nil *URL (H, not 0) and nil error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "QueryEscape", "PathEscape":
-		// url.QueryEscape(s) → return s (simplified stub)
+		// QueryEscape encodes a space as '+'; PathEscape as %20.
 		sOp := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVP, sOp, dis.FP(dst)))
+		fl.emitURLEscape(sOp, dst, callee.Name() == "QueryEscape")
 		return true, nil
 	case "QueryUnescape", "PathUnescape":
 		// url.QueryUnescape(s) → (s, nil error)
@@ -4839,10 +5101,10 @@ func (fl *funcLowerer) lowerEncodingJSONCall(instr *ssa.Call, callee *ssa.Functi
 	switch callee.Name() {
 	case "Marshal", "MarshalIndent":
 		// json.Marshal(v) → ([]byte, error)
-		// Stub: return empty bytes and nil error
+		// Stub: nil []byte (H, not 0) and nil error.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -5469,10 +5731,10 @@ func (fl *funcLowerer) lowerOsSignalCall(instr *ssa.Call, callee *ssa.Function) 
 func (fl *funcLowerer) lowerIOUtilCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "ReadFile":
-		// Same as os.ReadFile stub
+		// Same as os.ReadFile stub: nil slice must be H (-1), not 0.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -5484,9 +5746,10 @@ func (fl *funcLowerer) lowerIOUtilCall(instr *ssa.Call, callee *ssa.Function) (b
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		return true, nil
 	case "ReadAll":
+		// (nil []byte, nil error): nil slice must be H (-1), not 0.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -5594,17 +5857,17 @@ func (fl *funcLowerer) lowerIOFSCall(instr *ssa.Call, callee *ssa.Function) (boo
 func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
 	switch callee.Name() {
 	case "Compile":
-		// regexp.Compile(expr) → (*Regexp, error) stub
+		// regexp.Compile(expr) → (*Regexp, error) stub: nil *Regexp is H.
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
 	case "MustCompile":
-		// regexp.MustCompile(str) → *Regexp stub
+		// regexp.MustCompile(str) → *Regexp stub: nil pointer must be H, not 0.
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst)))
 		return true, nil
 	case "MatchString":
 		// regexp.MatchString(pattern, s) → (bool, error) stub: return false, nil
@@ -5631,7 +5894,7 @@ func (fl *funcLowerer) lowerRegexpCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "CompilePOSIX":
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst))) // nil *Regexp = H
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
 		return true, nil
@@ -6016,7 +6279,7 @@ func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emit(dis.Inst2(dis.IMOVP, msgOp, dis.FP(msgSlot)))
 			nlOff := fl.comp.AllocString("\n")
 			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlOff), dis.FP(msgSlot), dis.FP(msgSlot)))
-			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
+			fl.emitSysCall("print", []callSiteArg{{msgSlot, true, false}})
 		}
 		return true, nil
 	case "String", "Int", "Int64", "Float64", "Bool", "Any", "Duration", "Group":
@@ -6032,7 +6295,7 @@ func (fl *funcLowerer) lowerLogSlogCall(instr *ssa.Call, callee *ssa.Function) (
 			fl.emit(dis.Inst2(dis.IMOVP, msgOp, dis.FP(msgSlot)))
 			nlOff := fl.comp.AllocString("\n")
 			fl.emit(dis.NewInst(dis.IADDC, dis.MP(nlOff), dis.FP(msgSlot), dis.FP(msgSlot)))
-			fl.emitSysCall("print", []callSiteArg{{msgSlot, true}})
+			fl.emitSysCall("print", []callSiteArg{{msgSlot, true, false}})
 		}
 		return true, nil
 	case "New", "Default", "With", "WithGroup":

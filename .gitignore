@@ -289,3 +289,7 @@ android-app/app/src/main/jniLibs/x86_64/libemu.so
 android-app/app/src/main/jniLibs/x86_64/libSDL3.so
 build-android-apk.ndk-arm64-v8a.log
 build-android-apk.ndk-x86_64.log
+
+# node interop harness artifacts (generated; never commit keys)
+usr/inferno/keyring/interop-*
+tmp/interop_pulled_*

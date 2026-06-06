@@ -1,3 +1,12 @@
-godis
-ssadump
+# Built command binaries (from `go build ./cmd/godis` etc. in this directory).
+# Anchored with a leading slash so they don't match anything in subdirectories.
+# (difftest/gencorpus are run via `go run`; a `go build` of them would collide
+# with the package directories of the same name, so they need no entry.)
+/godis
+/ssadump
+
+# Differential-test report artifact (cmd/difftest -json).
+/difftest-report.json
+
+# Compiled Dis bytecode.
 *.dis

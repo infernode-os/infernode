@@ -52,6 +52,24 @@ AgentLib: module {
 	parsellmresponse: fn(response: string): (string, list of (string, string, string), string);
 	buildtoolresults: fn(results: list of (string, string)): string;
 
+	# MCP router (INFR-247): generic 9P-MCP discovery, tool-def building, and
+	# tolerant tool-name routing — shared by NERVA and the sub-agent bridge. MCP
+	# adapters present /mnt/mcp/<server>/{_meta/name, tools/<tool>/{doc,schema,call}}.
+	#  mcpdiscover: among the given mount paths (e.g. "/mnt/mcp/osm"), find those
+	#   exposing _meta/name + tools/; returns ((prefix,mount)...) and every
+	#   (bare-tool,mount). prefix = _meta/name (fallback: path basename).
+	#  mcptooldefs: combined OpenAI/Anthropic tool-defs JSON array ("[{...},...]")
+	#   for the (prefix,mount) list; names are "<prefix>_<tool>" (sanitized);
+	#   maxper caps tools/mount, budget caps total bytes.
+	#  mcpresolve: resolve a model-emitted name to (mount,bare) — prefer the
+	#   claimed prefix's mount, else the unique owner of <bare> (tolerant of a
+	#   wrong prefix, the INFR-224 failure mode). ("","") if unresolved.
+	#  mcpcall: one tool call with a bounded timeout (path = <mount>/tools/<bare>/call).
+	mcpdiscover: fn(mountpaths: list of string): (list of (string, string), list of (string, string));
+	mcptooldefs: fn(mounts: list of (string, string), maxper, budget: int): string;
+	mcpresolve: fn(name: string, mounts, tools: list of (string, string)): (string, string, int);
+	mcpcall: fn(path, args: string, timeoutms: int): string;
+
 	# Utilities
 	readfile: fn(path: string): string;
 	pathexists: fn(path: string): int;

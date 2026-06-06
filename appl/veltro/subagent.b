@@ -43,11 +43,22 @@ SCRATCH_PATH: con "/tmp/veltro/scratch";
 # LOG_PREVIEW so parent and subagent logs share one format.
 LOG_PREVIEW: con 200;
 
+# Bound each MCP /call so a hung/slow backend degrades to a tool-error (the
+# reason loop treats it as a failure) instead of stalling the child. Matches
+# nerva.b's MCP_CALL_TIMEOUT_MS.
+MCP_CALL_TIMEOUT_MS: con 30000;
+
 stderr: ref Sys->FD;
 
 # Pre-loaded tool storage (set by runloop)
 loadedtools: list of Tool;
 loadedtoolnames: list of string;
+
+# MCP routing maps (INFR-247), set by spawn.b via setmcp() AFTER restrictns so
+# they cover only the /mnt/mcp/<server> servers this child was granted. Used by
+# calltool() to route a model-emitted MCP tool name to its owning mount.
+mcpmounts: list of (string, string);	# (prefix, mount)
+mcptools: list of (string, string);	# (bare-tool, mount)
 
 # LLM ask file descriptor (opened before FORKNS + bind-replace restriction)
 # Session is already created and configured - just use this fd
@@ -82,6 +93,14 @@ init(): string
 		agentlib->init();
 
 	return nil;
+}
+
+# Bridge MCP tools into this child (INFR-247). Set by spawn.b AFTER restrictns
+# (so the maps cover only granted /mnt/mcp/<server> servers) and before runloop.
+setmcp(mounts: list of (string, string), tools: list of (string, string))
+{
+	mcpmounts = mounts;
+	mcptools = tools;
 }
 
 # Main agent loop
@@ -497,6 +516,19 @@ calltool(tool, args: string): string
 			return (hd modlist)->exec(args);
 		namelist = tl namelist;
 		modlist = tl modlist;
+	}
+
+	# MCP fallback (INFR-247): not a pre-loaded native module — try the MCP
+	# servers granted to this child. The model emits the registered name
+	# (e.g. "osm_geocode_address"); route it (case-sensitive, prefix-tolerant)
+	# to its owning /mnt/mcp/<server>/tools/<bare>/call. Only if no MCP match
+	# do we fall through to the not-available error.
+	if(mcpmounts != nil) {
+		(mount, bare, nil) := agentlib->mcpresolve(tool, mcpmounts, mcptools);
+		if(mount != "") {
+			path := mount + "/tools/" + bare + "/call";
+			return agentlib->mcpcall(path, args, MCP_CALL_TIMEOUT_MS);
+		}
 	}
 
 	return sys->sprint("error: tool not available: %s", ltool);

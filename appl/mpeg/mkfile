@@ -1,0 +1,25 @@
+<$ROOT/mkconfig
+
+DIRS=\
+
+TARG=\
+	mpegio.dis\
+	decode.dis\
+	scidct.dis\
+	remap24.dis\
+	vidplay.dis\
+	mpegtest.dis\
+	mpegperf.dis\
+
+MODULES=\
+	mpegio.m\
+
+SYSMODULES=\
+	sys.m\
+	draw.m\
+	wmclient.m\
+
+DISBIN=$ROOT/dis/mpeg
+
+<$ROOT/mkfiles/mkdis
+<$ROOT/mkfiles/mksubdirs

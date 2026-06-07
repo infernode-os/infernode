@@ -363,8 +363,12 @@ deltablock(s: array of byte, r: array of int, d: array of byte, b, w, o: int)
 		dx := b;
 		sx := b + o;
 		j := 8;
-		do
-			d[dx++] = clamp[CLOFF + int s[sx++] + r[rx++]];
+		do {
+			ci := CLOFF + int s[sx++] + r[rx++];
+			if (ci < 0) ci = 0;
+			else if (ci >= len clamp) ci = len clamp - 1;
+			d[dx++] = clamp[ci];
+		}
 		while (--j > 0);
 		b += w;
 	} while (--i > 0);
@@ -379,8 +383,12 @@ deltainterpblock(s0, s1: array of byte, r: array of int, d: array of byte, b, w,
 		s0x := b + o0;
 		s1x := b + o1;
 		j := 8;
-		do
-			d[dx++] = clamp[CLOFF + ((int s0[s0x++] + int s1[s1x++] + 1) >> 1) + r[rx++]];
+		do {
+			ci := CLOFF + ((int s0[s0x++] + int s1[s1x++] + 1) >> 1) + r[rx++];
+			if (ci < 0) ci = 0;
+			else if (ci >= len clamp) ci = len clamp - 1;
+			d[dx++] = clamp[ci];
+		}
 		while (--j > 0);
 		b += w;
 	} while (--i > 0);

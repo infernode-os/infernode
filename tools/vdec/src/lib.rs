@@ -60,10 +60,22 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Open `path` and bind to its best video stream.
+    /// Open `path` (a file path, or an `rtsp://`/`http://`… URL) and bind to its
+    /// best video stream.
     pub fn open(path: &str) -> Result<Self, ffmpeg::Error> {
         ffmpeg::init()?;
-        let ictx = input(&Path::new(path))?;
+        // URLs (live sources) get RTSP-friendly options: force TCP interleaving
+        // (avoids UDP packet loss / NAT issues) and a socket timeout so a dead
+        // feed fails instead of hanging forever.
+        let ictx = if path.contains("://") {
+            let mut opts = ffmpeg::Dictionary::new();
+            opts.set("rtsp_transport", "tcp");
+            opts.set("rtsp_flags", "prefer_tcp");
+            opts.set("stimeout", "5000000"); // 5s, microseconds
+            ffmpeg::format::input_with_dictionary(&path, opts)?
+        } else {
+            input(&Path::new(path))?
+        };
 
         let stream = ictx
             .streams()

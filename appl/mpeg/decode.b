@@ -29,6 +29,9 @@ rflag := array[6] of int;
 rforw, dforw, rback, dback: int;
 rforw2, dforw2, rback2, dback2: int;
 ydb, ydf, cdb, cdf: int;
+# half-pel flags (horizontal/vertical) for forward/backward, luma/chroma
+yfh, yfv, cfh, cfv: int;
+ybh, ybv, cbh, cbv: int;
 vflags: int;
 past := array[3] of int;
 pinit := array[3] of { * => 128 * 8 };
@@ -329,18 +332,56 @@ copyblock(s, d: array of byte, b, n, w: int)
 	} while (--i > 0);
 }
 
-copyblockdisp(s, d: array of byte, b, n, w, p: int)
+# bounds-safe pixel read (edge-extend rather than fault on the half-pel
+# neighbour that can sit one row/col past the unpadded reference plane).
+gpix(s: array of byte, i, lim: int): int
+{
+	if (i < 0) i = 0;
+	else if (i >= lim) i = lim - 1;
+	return int s[i];
+}
+
+# Half-pel sample: integer (hh=hv=0), horizontal/vertical 2-tap, or 4-tap
+# bilinear, with MPEG-1 rounding ((a+b+1)>>1, (a+b+c+d+2)>>2).
+hpel(s: array of byte, sp, hh, hv, w: int): int
+{
+	lim := len s;
+	a := gpix(s, sp, lim);
+	if (hh != 0) {
+		if (hv != 0)
+			return (a + gpix(s, sp+1, lim) + gpix(s, sp+w, lim) + gpix(s, sp+w+1, lim) + 2) >> 2;
+		return (a + gpix(s, sp+1, lim) + 1) >> 1;
+	}
+	if (hv != 0)
+		return (a + gpix(s, sp+w, lim) + 1) >> 1;
+	return a;
+}
+
+copyblockdisp(s, d: array of byte, b, n, w, p, hh, hv: int)
 {
 	i := 8;
 	p += b;
+	if (hh == 0 && hv == 0) {
+		do {
+			d[b:] = s[p:p+n];
+			b += w;
+			p += w;
+		} while (--i > 0);
+		return;
+	}
 	do {
-		d[b:] = s[p:p+n];
+		dx := b;
+		sp := p;
+		j := n;
+		do
+			d[dx++] = byte hpel(s, sp++, hh, hv, w);
+		while (--j > 0);
 		b += w;
 		p += w;
 	} while (--i > 0);
 }
 
-interpblock(s0, s1, d: array of byte, b, n, w, p0, p1: int)
+interpblock(s0, s1, d: array of byte, b, n, w, p0, p1, hh0, hv0, hh1, hv1: int)
 {
 	i := 8;
 	do {
@@ -349,13 +390,13 @@ interpblock(s0, s1, d: array of byte, b, n, w, p0, p1: int)
 		s1x := b + p1;
 		j := n;
 		do
-			d[dx++] = byte ((int s0[s0x++] + int s1[s1x++] + 1) >> 1);
+			d[dx++] = byte ((hpel(s0, s0x++, hh0, hv0, w) + hpel(s1, s1x++, hh1, hv1, w) + 1) >> 1);
 		while (--j > 0);
 		b += w;
 	} while (--i > 0);
 }
 
-deltablock(s: array of byte, r: array of int, d: array of byte, b, w, o: int)
+deltablock(s: array of byte, r: array of int, d: array of byte, b, w, o, hh, hv: int)
 {
 	rx := 0;
 	i := 8;
@@ -364,7 +405,7 @@ deltablock(s: array of byte, r: array of int, d: array of byte, b, w, o: int)
 		sx := b + o;
 		j := 8;
 		do {
-			ci := CLOFF + int s[sx++] + r[rx++];
+			ci := CLOFF + hpel(s, sx++, hh, hv, w) + r[rx++];
 			if (ci < 0) ci = 0;
 			else if (ci >= len clamp) ci = len clamp - 1;
 			d[dx++] = clamp[ci];
@@ -374,7 +415,7 @@ deltablock(s: array of byte, r: array of int, d: array of byte, b, w, o: int)
 	} while (--i > 0);
 }
 
-deltainterpblock(s0, s1: array of byte, r: array of int, d: array of byte, b, w, o0, o1: int)
+deltainterpblock(s0, s1: array of byte, r: array of int, d: array of byte, b, w, o0, o1, hh0, hv0, hh1, hv1: int)
 {
 	rx := 0;
 	i := 8;
@@ -384,7 +425,7 @@ deltainterpblock(s0, s1: array of byte, r: array of int, d: array of byte, b, w,
 		s1x := b + o1;
 		j := 8;
 		do {
-			ci := CLOFF + ((int s0[s0x++] + int s1[s1x++] + 1) >> 1) + r[rx++];
+			ci := CLOFF + ((hpel(s0, s0x++, hh0, hv0, w) + hpel(s1, s1x++, hh1, hv1, w) + 1) >> 1) + r[rx++];
 			if (ci < 0) ci = 0;
 			else if (ci >= len clamp) ci = len clamp - 1;
 			d[dx++] = clamp[ci];
@@ -394,20 +435,20 @@ deltainterpblock(s0, s1: array of byte, r: array of int, d: array of byte, b, w,
 	} while (--i > 0);
 }
 
-dispblock(s, d: array of byte, n, b, w, o: int)
+dispblock(s, d: array of byte, n, b, w, o, hh, hv: int)
 {
 	if (rflag[n])
-		deltablock(s, rtmp[n], d, b, w, o);
+		deltablock(s, rtmp[n], d, b, w, o, hh, hv);
 	else
-		copyblockdisp(s, d, b, 8, w, o);
+		copyblockdisp(s, d, b, 8, w, o, hh, hv);
 }
 
-genblock(s0, s1, d: array of byte, n, b, w, o0, o1: int)
+genblock(s0, s1, d: array of byte, n, b, w, o0, o1, hh0, hv0, hh1, hv1: int)
 {
 	if (rflag[n])
-		deltainterpblock(s0, s1, rtmp[n], d, b, w, o0, o1);
+		deltainterpblock(s0, s1, rtmp[n], d, b, w, o0, o1, hh0, hv0, hh1, hv1);
 	else
-		interpblock(s0, s1, d, b, 8, w, o0, o1);
+		interpblock(s0, s1, d, b, 8, w, o0, o1, hh0, hv0, hh1, hv1);
 }
 
 copymb()
@@ -420,66 +461,66 @@ copymb()
 
 deltamb()
 {
-	dispblock(R.Y, P.Y, 0, ybase, width, 0);
-	dispblock(R.Y, P.Y, 1, ybase + 8, width, 0);
-	dispblock(R.Y, P.Y, 2, ybase + yskip, width, 0);
-	dispblock(R.Y, P.Y, 3, ybase + 8 + yskip, width, 0);
-	dispblock(R.Cb, P.Cb, 4, cbase, w2, 0);
-	dispblock(R.Cr, P.Cr, 5, cbase, w2, 0);
+	dispblock(R.Y, P.Y, 0, ybase, width, 0, 0, 0);
+	dispblock(R.Y, P.Y, 1, ybase + 8, width, 0, 0, 0);
+	dispblock(R.Y, P.Y, 2, ybase + yskip, width, 0, 0, 0);
+	dispblock(R.Y, P.Y, 3, ybase + 8 + yskip, width, 0, 0, 0);
+	dispblock(R.Cb, P.Cb, 4, cbase, w2, 0, 0, 0);
+	dispblock(R.Cr, P.Cr, 5, cbase, w2, 0, 0, 0);
 }
 
 copymbforw()
 {
-	copyblockdisp(N.Y, B.Y, ybase, 16, width, ydf);
-	copyblockdisp(N.Y, B.Y, ybase + yskip, 16, width, ydf);
-	copyblockdisp(N.Cb, B.Cb, cbase, 8, w2, cdf);
-	copyblockdisp(N.Cr, B.Cr, cbase, 8, w2, cdf);
+	copyblockdisp(N.Y, B.Y, ybase, 16, width, ydf, yfh, yfv);
+	copyblockdisp(N.Y, B.Y, ybase + yskip, 16, width, ydf, yfh, yfv);
+	copyblockdisp(N.Cb, B.Cb, cbase, 8, w2, cdf, cfh, cfv);
+	copyblockdisp(N.Cr, B.Cr, cbase, 8, w2, cdf, cfh, cfv);
 }
 
 copymbback()
 {
-	copyblockdisp(M.Y, B.Y, ybase, 16, width, ydb);
-	copyblockdisp(M.Y, B.Y, ybase + yskip, 16, width, ydb);
-	copyblockdisp(M.Cb, B.Cb, cbase, 8, w2, cdb);
-	copyblockdisp(M.Cr, B.Cr, cbase, 8, w2, cdb);
+	copyblockdisp(M.Y, B.Y, ybase, 16, width, ydb, ybh, ybv);
+	copyblockdisp(M.Y, B.Y, ybase + yskip, 16, width, ydb, ybh, ybv);
+	copyblockdisp(M.Cb, B.Cb, cbase, 8, w2, cdb, cbh, cbv);
+	copyblockdisp(M.Cr, B.Cr, cbase, 8, w2, cdb, cbh, cbv);
 }
 
 copymbbackforw()
 {
-	interpblock(M.Y, N.Y, B.Y, ybase, 16, width, ydb, ydf);
-	interpblock(M.Y, N.Y, B.Y, ybase + yskip, 16, width, ydb, ydf);
-	interpblock(M.Cb, N.Cb, B.Cb, cbase, 8, w2, cdb, cdf);
-	interpblock(M.Cr, N.Cr, B.Cr, cbase, 8, w2, cdb, cdf);
+	interpblock(M.Y, N.Y, B.Y, ybase, 16, width, ydb, ydf, ybh, ybv, yfh, yfv);
+	interpblock(M.Y, N.Y, B.Y, ybase + yskip, 16, width, ydb, ydf, ybh, ybv, yfh, yfv);
+	interpblock(M.Cb, N.Cb, B.Cb, cbase, 8, w2, cdb, cdf, cbh, cbv, cfh, cfv);
+	interpblock(M.Cr, N.Cr, B.Cr, cbase, 8, w2, cdb, cdf, cbh, cbv, cfh, cfv);
 }
 
 deltambforw()
 {
-	dispblock(N.Y, B.Y, 0, ybase, width, ydf);
-	dispblock(N.Y, B.Y, 1, ybase + 8, width, ydf);
-	dispblock(N.Y, B.Y, 2, ybase + yskip, width, ydf);
-	dispblock(N.Y, B.Y, 3, ybase + 8 + yskip, width, ydf);
-	dispblock(N.Cb, B.Cb, 4, cbase, w2, cdf);
-	dispblock(N.Cr, B.Cr, 5, cbase, w2, cdf);
+	dispblock(N.Y, B.Y, 0, ybase, width, ydf, yfh, yfv);
+	dispblock(N.Y, B.Y, 1, ybase + 8, width, ydf, yfh, yfv);
+	dispblock(N.Y, B.Y, 2, ybase + yskip, width, ydf, yfh, yfv);
+	dispblock(N.Y, B.Y, 3, ybase + 8 + yskip, width, ydf, yfh, yfv);
+	dispblock(N.Cb, B.Cb, 4, cbase, w2, cdf, cfh, cfv);
+	dispblock(N.Cr, B.Cr, 5, cbase, w2, cdf, cfh, cfv);
 }
 
 deltambback()
 {
-	dispblock(M.Y, B.Y, 0, ybase, width, ydb);
-	dispblock(M.Y, B.Y, 1, ybase + 8, width, ydb);
-	dispblock(M.Y, B.Y, 2, ybase + yskip, width, ydb);
-	dispblock(M.Y, B.Y, 3, ybase + 8 + yskip, width, ydb);
-	dispblock(M.Cb, B.Cb, 4, cbase, w2, cdb);
-	dispblock(M.Cr, B.Cr, 5, cbase, w2, cdb);
+	dispblock(M.Y, B.Y, 0, ybase, width, ydb, ybh, ybv);
+	dispblock(M.Y, B.Y, 1, ybase + 8, width, ydb, ybh, ybv);
+	dispblock(M.Y, B.Y, 2, ybase + yskip, width, ydb, ybh, ybv);
+	dispblock(M.Y, B.Y, 3, ybase + 8 + yskip, width, ydb, ybh, ybv);
+	dispblock(M.Cb, B.Cb, 4, cbase, w2, cdb, cbh, cbv);
+	dispblock(M.Cr, B.Cr, 5, cbase, w2, cdb, cbh, cbv);
 }
 
 deltambbackforw()
 {
-	genblock(M.Y, N.Y, B.Y, 0, ybase, width, ydb, ydf);
-	genblock(M.Y, N.Y, B.Y, 1, ybase + 8, width, ydb, ydf);
-	genblock(M.Y, N.Y, B.Y, 2, ybase + yskip, width, ydb, ydf);
-	genblock(M.Y, N.Y, B.Y, 3, ybase + 8 + yskip, width, ydb, ydf);
-	genblock(M.Cb, N.Cb, B.Cb, 4, cbase, w2, cdb, cdf);
-	genblock(M.Cr, N.Cr, B.Cr, 5, cbase, w2, cdb, cdf);
+	genblock(M.Y, N.Y, B.Y, 0, ybase, width, ydb, ydf, ybh, ybv, yfh, yfv);
+	genblock(M.Y, N.Y, B.Y, 1, ybase + 8, width, ydb, ydf, ybh, ybv, yfh, yfv);
+	genblock(M.Y, N.Y, B.Y, 2, ybase + yskip, width, ydb, ydf, ybh, ybv, yfh, yfv);
+	genblock(M.Y, N.Y, B.Y, 3, ybase + 8 + yskip, width, ydb, ydf, ybh, ybv, yfh, yfv);
+	genblock(M.Cb, N.Cb, B.Cb, 4, cbase, w2, cdb, cdf, cbh, cbv, cfh, cfv);
+	genblock(M.Cr, N.Cr, B.Cr, 5, cbase, w2, cdb, cdf, cbh, cbv, cfh, cfv);
 }
 
 deltambinterp()
@@ -621,6 +662,10 @@ Pdecode(p: ref Picture): ref YCbCr
 						ydf = (rforw >> 1) + (dforw >> 1) * width;
 						cdf = (rforw2 >> 1) + (dforw2 >> 1) * w2;
 					}
+					yfh = rforw & 1;
+					yfv = dforw & 1;
+					cfh = rforw2 & 1;
+					cfv = dforw2 & 1;
 					pred = 1;
 					if (mb.rls != nil) {
 						invQ_nintra_block(mb.rls, mb.qscale);
@@ -694,6 +739,14 @@ Bdecode2(p: ref Mpegio->Picture, f0, f1: ref Mpegio->YCbCr): ref Mpegio->YCbCr
 		ydf = 0;
 		cdb = 0;
 		cdf = 0;
+		yfh = 0;
+		yfv = 0;
+		cfh = 0;
+		cfv = 0;
+		ybh = 0;
+		ybv = 0;
+		cbh = 0;
+		cbv = 0;
 		ba := sa[i].blocks;
 		for (j := 0; j < len ba; j++) {
 			mb := ba[j];
@@ -722,6 +775,14 @@ Bdecode2(p: ref Mpegio->Picture, f0, f1: ref Mpegio->YCbCr): ref Mpegio->YCbCr
 				ydf = 0;
 				cdb = 0;
 				cdf = 0;
+				yfh = 0;
+				yfv = 0;
+				cfh = 0;
+				cfv = 0;
+				ybh = 0;
+				ybv = 0;
+				cbh = 0;
+				cbv = 0;
 			} else {
 				if (mb.flags & Mpegio->MB_MF) {
 					if (fs == 1 || mb.mhfc == 0)
@@ -771,6 +832,10 @@ Bdecode2(p: ref Mpegio->Picture, f0, f1: ref Mpegio->YCbCr): ref Mpegio->YCbCr
 						ydf = (rforw >> 1) + (dforw >> 1) * width;
 						cdf = (rforw2 >> 1) + (dforw2 >> 1) * w2;
 					}
+					yfh = rforw & 1;
+					yfv = dforw & 1;
+					cfh = rforw2 & 1;
+					cfv = dforw2 & 1;
 				}
 				if (mb.flags & Mpegio->MB_MB) {
 					if (bs == 1 || mb.mhbc == 0)
@@ -820,6 +885,10 @@ Bdecode2(p: ref Mpegio->Picture, f0, f1: ref Mpegio->YCbCr): ref Mpegio->YCbCr
 						ydb = (rback >> 1) + (dback >> 1) * width;
 						cdb = (rback2 >> 1) + (dback2 >> 1) * w2;
 					}
+					ybh = rback & 1;
+					ybv = dback & 1;
+					cbh = rback2 & 1;
+					cbv = dback2 & 1;
 				}
 				vflags = mb.flags;
 				if (mb.rls != nil) {

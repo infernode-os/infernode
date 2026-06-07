@@ -1855,6 +1855,102 @@ func (fl *funcLowerer) lowerErrorsNew(instr *ssa.Call) error {
 	return nil
 }
 
+// constIntEquals reports whether v is a compile-time integer constant equal to want.
+func constIntEquals(v ssa.Value, want int64) bool {
+	c, ok := v.(*ssa.Const)
+	if !ok {
+		return false
+	}
+	n, ok := constant.Int64Val(c.Value)
+	return ok && n == want
+}
+
+// emitIntParseError validates sOp as a base-10 integer and, on invalid input,
+// zeroes valSlot and writes a non-nil errorString interface into the two words
+// at errSlot..errSlot+IBY2WD; on valid input it writes a nil error.
+//
+// This makes strconv.Atoi/ParseInt/ParseUint report errors like Go. The Dis
+// CVTCW opcode parses leading digits and silently yields 0 for non-numeric input
+// (e.g. "abc" → 0, "12x" → 12), so without this check the error result was
+// always nil and the success path was wrongly taken. The error message is a
+// fixed strconv-style string; it is not byte-identical to Go's NumError text
+// (which quotes the input dynamically), but it is non-nil and meaningful — which
+// is what every err != nil / errors.Is check depends on.
+//
+// allowSign permits a single leading '+' or '-' (Atoi/ParseInt); ParseUint
+// passes false. The validated grammar is: [sign]? digit+ .
+func (fl *funcLowerer) emitIntParseError(sOp dis.Operand, valSlot, errSlot int32, allowSign bool, msg string) {
+	iby2wd := int32(dis.IBY2WD)
+	lenS := fl.frame.AllocWord("")
+	i := fl.frame.AllocWord("")
+	ch := fl.frame.AllocWord("")
+	errPtr := fl.frame.AllocTemp(true)
+
+	fl.emit(dis.Inst2(dis.ILENC, sOp, dis.FP(lenS)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(i)))
+
+	var invalidJmps []int
+	// Empty string → invalid.
+	invalidJmps = append(invalidJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenS), dis.Imm(0), dis.Imm(0)))
+
+	if allowSign {
+		// ch = s[0] (i is 0 here); if it is '+'(43) or '-'(45), advance i to 1.
+		fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+		notPlus := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm('+'), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(i)))
+		afterSign := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		fl.insts[notPlus].Dst = dis.Imm(int32(len(fl.insts)))
+		notMinus := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(ch), dis.Imm('-'), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(i)))
+		afterPC := int32(len(fl.insts))
+		fl.insts[afterSign].Dst = dis.Imm(afterPC)
+		fl.insts[notMinus].Dst = dis.Imm(afterPC)
+
+		// A lone sign with no digits → invalid.
+		invalidJmps = append(invalidJmps, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	}
+
+	// for ; i < lenS; i++ { if s[i] < '0' || s[i] > '9' → invalid }
+	loopPC := int32(len(fl.insts))
+	loopDone := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(i), dis.FP(lenS), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IINDC, sOp, dis.FP(i), dis.FP(ch)))
+	invalidJmps = append(invalidJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm('0'), dis.Imm(0)))
+	invalidJmps = append(invalidJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm('9'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(i), dis.FP(i)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// Valid: nil error, then jump to end.
+	validPC := int32(len(fl.insts))
+	fl.insts[loopDone].Dst = dis.Imm(validPC)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(errSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(errSlot+iby2wd)))
+	endJmp := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Invalid: value = 0, error = {errorString tag, msg}.
+	invalidPC := int32(len(fl.insts))
+	for _, idx := range invalidJmps {
+		fl.insts[idx].Dst = dis.Imm(invalidPC)
+	}
+	tag := fl.comp.AllocTypeTag("errorString")
+	msgOff := fl.comp.AllocString(msg)
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(valSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(errSlot)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(msgOff), dis.FP(errPtr)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errPtr), dis.FP(errSlot+iby2wd)))
+
+	// end:
+	fl.insts[endJmp].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
 // traceVarargElement traces back from a []any slice to find the original value
 // of element at the given index. Returns nil if it can't be resolved.
 func (fl *funcLowerer) traceVarargElement(sliceVal ssa.Value, idx int) ssa.Value {
@@ -1948,15 +2044,14 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 	case "Atoi":
 		// strconv.Atoi(s string) (int, error) → CVTCW src, dst
-		// We only support the value; error is always nil.
+		// Tuple result: (int, error). int at dst, error interface at dst+8..dst+16.
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		// Tuple result: (int, error). int at dst, error interface at dst+8..dst+16.
 		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
-		// Set error to nil interface (tag=0, val=0)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		// Validate input and report a non-nil error on bad syntax, like Go (CVTCW
+		// alone silently yields 0 for "abc"). Atoi is always base 10, signed.
+		fl.emitIntParseError(src, dst, dst+iby2wd, true, `strconv.Atoi: parsing: invalid syntax`)
 		return true, nil
 	case "FormatInt":
 		// strconv.FormatInt(i int64, base int) string
@@ -2080,20 +2175,33 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
 		return true, nil
 	case "ParseInt":
+		// strconv.ParseInt(s, base, bitSize) (int64, error).
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		// Only the base-10 digit grammar is validated here; for other (or
+		// non-constant) bases fall back to the previous always-nil-error
+		// behavior rather than risk false positives.
+		if constIntEquals(instr.Call.Args[1], 10) {
+			fl.emitIntParseError(src, dst, dst+iby2wd, true, `strconv.ParseInt: parsing: invalid syntax`)
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		}
 		return true, nil
 	case "ParseUint":
+		// strconv.ParseUint(s, base, bitSize) (uint64, error) — no sign allowed.
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		if constIntEquals(instr.Call.Args[1], 10) {
+			fl.emitIntParseError(src, dst, dst+iby2wd, false, `strconv.ParseUint: parsing: invalid syntax`)
+		} else {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		}
 		return true, nil
 	case "ParseFloat":
 		src := fl.operandOf(instr.Call.Args[0])

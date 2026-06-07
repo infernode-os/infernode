@@ -2878,7 +2878,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"slice_subslice.go", "2\n20\n30\n2\n10\n20\n2\n30\n40\n"},
 		{"maps.go", "10 20\n30\n0 false\n0\n"},
 		{"range.go", "60\n"},
-		{"strconv_err.go", "123\nno error\nno error 2\n"},
+		{"strconv_err.go", "123\nno error\nerror!\n"},
 		{"sprintf_verbs.go", "char: A\nhex: ff\nHi!\n"},
 		{"channel.go", "42\n"},
 		{"channel2.go", "60\n"},
@@ -2993,7 +2993,7 @@ func TestE2EPrograms(t *testing.T) {
 		{"tier6_5.go", "21\n"},
 		{"tier6_6.go", "hello world\n"},
 		{"tier6_7.go", "15\n"},
-		{"tier6_8.go", "42\n0\n"},
+		{"tier6_8.go", "42\nerror\n0\n"},
 		// tier6_9.go: uses WaitGroup + goroutine close pattern, hangs due to concurrency limitation
 		{"tier6_10.go", "15\n"},
 		{"tier6_11.go", "int\nstring\n"},

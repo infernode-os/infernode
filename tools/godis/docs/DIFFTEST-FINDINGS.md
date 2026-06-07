@@ -11,7 +11,8 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-As of the harness's introduction: **209 match, 20 skipped, 8 divergences** below.
+Current status: **211 match, 20 skipped, 6 divergences** below. (Resolved so
+far: `strconv.Atoi`/`ParseInt`/`ParseUint` error reporting — now locked.)
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -28,22 +29,16 @@ go run <prog.go>                                  # Go reference
 
 ---
 
-## 1. `strconv.Atoi`/`ParseInt` never report an error  ·  `diverge`
+## ~~1. `strconv.Atoi`/`ParseInt` never report an error~~  ·  FIXED
 
-`testdata/strconv_err.go`, `testdata/tier6_8.go`
+`strconv.Atoi("abc")` returned `err == nil` under godis (the Dis `CVTCW` opcode
+silently yields 0 for non-numeric input). Fixed in `lower.go` by emitting a
+runtime digit-grammar validation (`emitIntParseError`) that writes a non-nil
+`errorString` interface on bad input, for `Atoi`, base-10 `ParseInt`, and
+base-10 `ParseUint`. `testdata/strconv_err.go` and `testdata/tier6_8.go` now
+match `go run` and are locked.
 
-`strconv.Atoi("abc")` returns `err == nil` under godis; Go returns a non-nil
-error. The success path is taken on invalid input.
-
-```
-strconv_err.go   got "123\nno error\nno error 2\n"   want "123\nno error\nerror!\n"
-tier6_8.go       got "42\n0\n"                        want "42\nerror\n0\n"
-```
-
-Deterministic, isolated to the strconv interception in `lower_stdlib.go`, and
-the same behavior in both modes — the cleanest first fix.
-
-## 2. Map delete / repeated insert+lookup faults  ·  `c0!=c1` + `crash`
+## 1. Map delete / repeated insert+lookup faults  ·  `c0!=c1` + `crash`
 
 `_corpus/gen_map_commaok.go`, `_corpus/seed_fibmemo.go`
 
@@ -59,7 +54,7 @@ seed_fibmemo.go      faults after "0 1 "                      want full fib sequ
 
 A common real-world pattern (caches, counters); high impact.
 
-## 3. `defer` in a loop faults  ·  `c0!=c1` + `crash`
+## 2. `defer` in a loop faults  ·  `c0!=c1` + `crash`
 
 `_corpus/gen_defer_order.go`
 
@@ -77,7 +72,7 @@ Note `_corpus/gen_defer_in_loop.go` and `gen_defer_named_return.go` *do* pass �
 the trigger is specifically a deferred call whose arguments are evaluated per
 loop iteration.
 
-## 4. Fixed-size multidimensional arrays fault  ·  `c0!=c1`
+## 3. Fixed-size multidimensional arrays fault  ·  `c0!=c1`
 
 `_corpus/seed_matrix.go`
 
@@ -90,7 +85,7 @@ arrays-of-arrays.
 seed_matrix.go   c0 "array bounds error"  c1 "dereference of nil"  want 3 rows of products
 ```
 
-## 5. `errors.Unwrap(err).Error()` faults  ·  `crash`
+## 4. `errors.Unwrap(err).Error()` faults  ·  `crash`
 
 `_corpus/gen_error_wrap.go`
 
@@ -102,7 +97,7 @@ navigable.
 gen_error_wrap.go   faults after "operation failed: base failure\nis base\n"   want "...\nbase failure\n"
 ```
 
-## 6. Tail crash after correct output  ·  `c0!=c1`
+## 5. Tail crash after correct output  ·  `c0!=c1`
 
 `_corpus/seed_quicksort.go`
 

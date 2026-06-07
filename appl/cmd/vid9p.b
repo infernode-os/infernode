@@ -3,27 +3,32 @@ implement Vid9p;
 #
 # vid9p - present decoded video frames as a 9P service at /mnt/video/<id>/.
 #
-# Phase 1 of the multiplexed-video bridge (Jira INFR-266). Sources frames from
-# the host `vdec` decode core (tools/vdec) and serves them as a synthetic
-# filesystem:
+# Multiplexed-video bridge (Jira INFR-266/271). Sources frames from the host
+# `vdec` decode core (tools/vdec) and serves them as a synthetic filesystem:
 #
-#   /mnt/video/0/ctl      write "open <file>"  (a .y4m is read directly;
-#                               any other file is decoded by spawning vdec)
+#   /mnt/video/0/ctl      write "open <file|url>"
 #   /mnt/video/0/fmt      read  "<w> <h> i420 <fps>"
 #   /mnt/video/0/frame    read  the I420 stream: frame N is the framesize bytes
 #                               at offset N*framesize (framesize = w*h*3/2).
+#                               Reads past the live edge BLOCK until more frames
+#                               arrive (continuous streaming); EOF only when the
+#                               source ends.
 #   /mnt/video/0/status   read  human-readable state
 #
-# Live decode runs the host vdec binary via the Inferno cmd device (#C),
-# capturing its YUV4MPEG2 stdout (`vdec <file> --y4m - --quiet`). The decode
-# core is protocol-agnostic and lives on the host; this shim is the
-# (deliberately disposable) Limbo 9P front. See docs/H264-9P-BRIDGE.md.
+# A .y4m argument is read directly; anything else (a video file, or an rtsp://
+# URL) is decoded by exec'ing the host vdec via the Inferno cmd device (#C),
+# streaming its YUV4MPEG2 stdout (`vdec <src> --y4m - --quiet`). A background
+# `reader` proc parses frames and feeds them to the serve loop over a channel,
+# so a never-ending RTSP feed streams rather than buffering to EOF.
 #
-# Usage (in the Inferno shell):
+# Known limits (file slice / disposable Limbo shim, see docs/H264-9P-BRIDGE.md):
+# the frame buffer grows unbounded for very long live streams, and a single
+# logical consumer is assumed. The Rust-native server (INFR-267) addresses both.
+#
+# Usage (Inferno shell):
 #   mount {vid9p -d /host/path/to/vdec} /mnt/video
-#   echo 'open /clip.mp4' > /mnt/video/0/ctl
-#   # or a pre-decoded stream:
-#   mount {vid9p clip.y4m} /mnt/video
+#   echo 'open /clip.mp4' > /mnt/video/0/ctl          # or: open rtsp://host/s
+#   mount {vid9p clip.y4m} /mnt/video                 # pre-decoded stream
 #
 
 include "sys.m";
@@ -52,11 +57,25 @@ tc: chan of ref Tmsg;
 srv: ref Styxserver;
 stderr: ref Sys->FD;
 user := "inferno";
-vdecpath := "vdec";			# host path to the vdec binary (override with -d)
+vdecpath := "vdec";			# host path to vdec (override with -d)
 
-# loaded video state
-width, height, fps, framesize, nframes: int;
-i420: array of byte;
+# loaded video state (owned by the serve proc)
+width, height, fps, framesize: int;
+i420: array of byte;			# flat I420 stream, grows as frames arrive
+eof: int;
+pend: list of ref Tmsg.Read;		# frame reads parked at the live edge
+
+# reader -> serve channels
+metac: chan of (int, int, int);		# (w,h,fps) or (-1,-1,-1) on failure
+framec: chan of array of byte;		# one I420 frame each; nil = end of stream
+holdfd: ref Sys->FD;			# keeps the cmd-device control conn alive
+
+# incremental buffered reader over the source fd
+Rd: adt {
+	fd: ref Sys->FD;
+	buf: array of byte;
+	n, pos: int;
+};
 
 badmod(path: string)
 {
@@ -83,6 +102,8 @@ init(nil: ref Draw->Context, args: list of string)
 	nametree->init();
 
 	i420 = array[0] of byte;
+	metac = chan of (int, int, int);
+	framec = chan[64] of array of byte;
 
 	# args: [-d vdecpath] [source]
 	args = tl args;
@@ -117,49 +138,94 @@ init(nil: ref Draw->Context, args: list of string)
 
 serve(tree: ref Tree)
 {
-	while((tmsg := <-tc) != nil){
-		pick tm := tmsg {
-		Readerror =>
-			break;
-		Open =>
-			srv.open(tm);
-		Read =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-				continue;
+	done := 0;
+	while(!done){
+		alt {
+		tmsg := <-tc =>
+			if(tmsg == nil || handlestyx(tmsg))
+				done = 1;
+		fr := <-framec =>
+			if(fr == nil){
+				eof = 1;
+				wakepending();
+			}else{
+				appendframe(fr);
+				wakepending();
 			}
-			case int c.path {
-			Qroot or Qstream =>
-				srv.read(tm);
-			Qfmt =>
-				srv.reply(styxservers->readstr(tm, fmtstr()));
-			Qstatus =>
-				srv.reply(styxservers->readstr(tm, statusstr()));
-			Qctl =>
-				srv.reply(styxservers->readstr(tm, "open <file>\n"));
-			Qframe =>
-				srv.reply(styxservers->readbytes(tm, i420));
-			* =>
-				srv.reply(ref Rmsg.Error(tm.tag, "vid9p: bad path"));
-			}
-		Write =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-				continue;
-			}
-			if(int c.path != Qctl){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
-				continue;
-			}
-			doctl(string tm.data);
-			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
-		* =>
-			srv.default(tmsg);
 		}
 	}
 	tree.quit();
+}
+
+# returns 1 to stop serving
+handlestyx(tmsg: ref Tmsg): int
+{
+	pick tm := tmsg {
+	Readerror =>
+		return 1;
+	Open =>
+		srv.open(tm);
+	Read =>
+		c := srv.getfid(tm.fid);
+		if(c == nil || !c.isopen){
+			srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
+			return 0;
+		}
+		case int c.path {
+		Qroot or Qstream =>
+			srv.read(tm);
+		Qfmt =>
+			srv.reply(styxservers->readstr(tm, fmtstr()));
+		Qstatus =>
+			srv.reply(styxservers->readstr(tm, statusstr()));
+		Qctl =>
+			srv.reply(styxservers->readstr(tm, "open <file|url>\n"));
+		Qframe =>
+			if(int tm.offset < len i420 || eof)
+				srv.reply(styxservers->readbytes(tm, i420));
+			else
+				pend = tm :: pend;	# park at the live edge
+		* =>
+			srv.reply(ref Rmsg.Error(tm.tag, "vid9p: bad path"));
+		}
+	Write =>
+		c := srv.getfid(tm.fid);
+		if(c == nil || !c.isopen){
+			srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
+			return 0;
+		}
+		if(int c.path != Qctl){
+			srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
+			return 0;
+		}
+		doctl(string tm.data);
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+	* =>
+		srv.default(tmsg);
+	}
+	return 0;
+}
+
+appendframe(fr: array of byte)
+{
+	nb := array[len i420 + len fr] of byte;
+	nb[0:] = i420;
+	nb[len i420:] = fr;
+	i420 = nb;
+}
+
+# reply to any parked frame reads that the new data (or EOF) now satisfies
+wakepending()
+{
+	np: list of ref Tmsg.Read;
+	for(l := pend; l != nil; l = tl l){
+		tm := hd l;
+		if(int tm.offset < len i420 || eof)
+			srv.reply(styxservers->readbytes(tm, i420));
+		else
+			np = tm :: np;
+	}
+	pend = np;
 }
 
 fmtstr(): string
@@ -169,11 +235,13 @@ fmtstr(): string
 
 statusstr(): string
 {
-	src := "no source";
-	if(nframes > 0)
-		src = "ready";
-	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d\n",
-		src, width, height, framesize, nframes);
+	state := "no source";
+	if(eof)
+		state = "ended";
+	else if(width > 0)
+		state = "streaming";
+	return sys->sprint("%s w=%d h=%d framesize=%d bytes=%d\n",
+		state, width, height, framesize, len i420);
 }
 
 doctl(s: string)
@@ -186,32 +254,68 @@ doctl(s: string)
 	}
 }
 
-# Dispatch: .y4m is read directly; anything else is decoded by spawning vdec.
+# Start streaming a source. .y4m is read directly; anything else (video file or
+# rtsp:// URL) is decoded by spawning vdec. Blocks only until the header (fmt) is
+# known; frames then stream in the background.
 loadvideo(path: string): string
 {
+	fd: ref Sys->FD;
 	if(hassuffix(path, ".y4m")){
-		fd := sys->open(path, Sys->OREAD);
+		fd = sys->open(path, Sys->OREAD);
 		if(fd == nil)
 			return sys->sprint("open %s: %r", path);
-		return parsey4m(path, readall(fd));
+		holdfd = nil;
+	}else{
+		(dfd, cfd, err) := hostspawn(vdecpath :: hostpath(path) :: "--y4m" :: "-" :: "--quiet" :: nil);
+		if(err != nil)
+			return sys->sprint("decode %s: %s", path, err);
+		fd = dfd;
+		holdfd = cfd;
 	}
-	(out, err) := hostexec(vdecpath :: hostpath(path) :: "--y4m" :: "-" :: "--quiet" :: nil);
-	if(err != nil)
-		return sys->sprint("decode %s: %s", path, err);
-	if(len out == 0)
-		return sys->sprint("decode %s: vdec produced no output (is %q correct?)", path, vdecpath);
-	return parsey4m(path, out);
+
+	i420 = array[0] of byte;
+	eof = 0;
+	pend = nil;
+	spawn reader(fd);
+
+	(w, h, f) := <-metac;
+	if(w <= 0)
+		return sys->sprint("%s: no decodable video", path);
+	width = w; height = h; fps = f;
+	framesize = w*h + 2*(w/2)*(h/2);
+	return nil;
 }
 
-# Parse a YUV4MPEG2 buffer into the flat I420 frame buffer.
-parsey4m(name: string, data: array of byte): string
+# Background: parse the YUV4MPEG2 stream and feed frames to the serve loop.
+reader(fd: ref Sys->FD)
 {
-	if(len data < 10 || string data[0:9] != "YUV4MPEG2")
-		return sys->sprint("%s: not a YUV4MPEG2 stream", name);
+	r := ref Rd(fd, array[64*1024] of byte, 0, 0);
+	hdr := rdline(r);
+	(w, h, f) := (-1, -1, 25);
+	if(hdr != nil)
+		(w, h, f) = parsehdr(hdr);
+	metac <-= (w, h, f);
+	if(w <= 0)
+		return;
+	fsz := w*h + 2*(w/2)*(h/2);
+	for(;;){
+		line := rdline(r);
+		if(line == nil)
+			break;			# stream ended
+		fr := rdn(r, fsz);
+		if(fr == nil)
+			break;			# truncated final frame
+		framec <-= fr;			# backpressure when the buffer is full
+	}
+	framec <-= nil;				# end-of-stream sentinel
+}
 
-	nl := findnl(data, 0);
-	w := 0; h := 0; f := 25;
-	(nil, toks) := sys->tokenize(string data[0:nl], " \t");
+parsehdr(hdr: string): (int, int, int)
+{
+	if(len hdr < 9 || hdr[0:9] != "YUV4MPEG2")
+		return (-1, -1, -1);
+	w := -1; h := -1; f := 25;
+	(nil, toks) := sys->tokenize(hdr, " \t");
 	for(; toks != nil; toks = tl toks){
 		t := hd toks;
 		if(len t < 2)
@@ -219,62 +323,91 @@ parsey4m(name: string, data: array of byte): string
 		case t[0] {
 		'W' => w = int t[1:];
 		'H' => h = int t[1:];
-		'F' => f = int t[1:];	# "25:1" -> 25
+		'F' => f = int t[1:];		# "25:1" -> 25
 		}
 	}
-	if(w <= 0 || h <= 0)
-		return sys->sprint("%s: bad dimensions %dx%d", name, w, h);
-	fsz := w*h + 2*(w/2)*(h/2);
-
-	# pass 1: count whole frames present
-	p := nl+1; n := 0;
-	while(p < len data){
-		fl := findnl(data, p);
-		if(fl >= len data)
-			break;
-		ps := fl+1;
-		if(ps+fsz > len data)
-			break;
-		p = ps+fsz; n++;
-	}
-
-	# pass 2: copy the I420 payloads contiguously
-	nb := array[n*fsz] of byte;
-	p = nl+1;
-	for(k := 0; k < n; k++){
-		fl := findnl(data, p);
-		ps := fl+1;
-		nb[k*fsz:] = data[ps:ps+fsz];
-		p = ps+fsz;
-	}
-
-	width = w; height = h; fps = f; framesize = fsz; nframes = n; i420 = nb;
-	return nil;
+	return (w, h, f);
 }
 
-# Run a host command via the cmd device (#C) and return its stdout.
-hostexec(argv: list of string): (array of byte, string)
+fill(r: ref Rd): int
+{
+	m := sys->read(r.fd, r.buf, len r.buf);
+	if(m <= 0)
+		return 0;
+	r.n = m; r.pos = 0;
+	return 1;
+}
+
+rdbyte(r: ref Rd): int
+{
+	if(r.pos >= r.n)
+		if(!fill(r))
+			return -1;
+	c := int r.buf[r.pos];
+	r.pos++;
+	return c;
+}
+
+rdline(r: ref Rd): string
+{
+	tmp := array[256] of byte;
+	m := 0;
+	for(;;){
+		c := rdbyte(r);
+		if(c < 0){
+			if(m == 0)
+				return nil;
+			break;
+		}
+		if(c == '\n')
+			break;
+		if(m < len tmp){
+			tmp[m] = byte c;
+			m++;
+		}
+	}
+	return string tmp[0:m];
+}
+
+rdn(r: ref Rd, k: int): array of byte
+{
+	out := array[k] of byte;
+	got := 0;
+	while(got < k){
+		if(r.pos >= r.n)
+			if(!fill(r))
+				return nil;
+		avail := r.n - r.pos;
+		take := k - got;
+		if(take > avail)
+			take = avail;
+		out[got:] = r.buf[r.pos:r.pos+take];
+		r.pos += take;
+		got += take;
+	}
+	return out;
+}
+
+# Run a host command via the cmd device (#C); return (stdout-fd, ctl-fd).
+hostspawn(argv: list of string): (ref Sys->FD, ref Sys->FD, string)
 {
 	if(sys->stat("/cmd/clone").t0 == -1)
 		if(sys->bind("#C", "/", Sys->MBEFORE) < 0)
-			return (nil, sys->sprint("bind #C: %r"));
+			return (nil, nil, sys->sprint("bind #C: %r"));
 	cfd := sys->open("/cmd/clone", Sys->ORDWR);
 	if(cfd == nil)
-		return (nil, sys->sprint("open /cmd/clone: %r"));
+		return (nil, nil, sys->sprint("open /cmd/clone: %r"));
 	b := array[32] of byte;
 	n := sys->read(cfd, b, len b);
 	if(n <= 0)
-		return (nil, sys->sprint("read /cmd/clone: %r"));
+		return (nil, nil, sys->sprint("read /cmd/clone: %r"));
 	dir := "/cmd/" + string b[0:n];
 	if(sys->fprint(cfd, "exec %s", str->quoted(argv)) < 0)
-		return (nil, sys->sprint("exec: %r"));
+		return (nil, nil, sys->sprint("exec: %r"));
 	dfd := sys->open(dir + "/data", Sys->OREAD);
 	if(dfd == nil)
-		return (nil, sys->sprint("open %s/data: %r", dir));
-	out := readall(dfd);
-	# keep cfd open until the read completes, then let it close (no killonclose)
-	cfd = nil;
-	return (out, nil);
+		return (nil, nil, sys->sprint("open %s/data: %r", dir));
+	return (dfd, cfd, nil);
 }
 
 # Map an Inferno absolute path to its host path under $emuroot (emu -r<dir>).
@@ -285,29 +418,6 @@ hostpath(p: string): string
 		if(root != nil && root != "/")
 			return root + p;
 	}
-	return p;
-}
-
-readall(fd: ref Sys->FD): array of byte
-{
-	buf := array[0] of byte;
-	tmp := array[32*1024] of byte;
-	for(;;){
-		n := sys->read(fd, tmp, len tmp);
-		if(n <= 0)
-			break;
-		nbuf := array[len buf + n] of byte;
-		nbuf[0:] = buf;
-		nbuf[len buf:] = tmp[0:n];
-		buf = nbuf;
-	}
-	return buf;
-}
-
-findnl(d: array of byte, p: int): int
-{
-	while(p < len d && d[p] != byte '\n')
-		p++;
 	return p;
 }
 

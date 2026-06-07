@@ -455,6 +455,19 @@ OP(newa)
 	a->len = sz;
 	a->root = H;
 	a->data = (uchar*)a + sizeof(Array);
+	/*
+	 * Zero the element storage.  Limbo specifies that array elements are
+	 * created with their zero value, but nheap() returns recycled heap
+	 * memory that still holds whatever the previous owner left behind.
+	 * For pointer-element types initarray() rewrites every slot to H, but
+	 * for value types (byte, int, real, ...) it is a no-op (t->np==0), so
+	 * without this memset such arrays would expose stale bytes from freed
+	 * objects -- a correctness bug (e.g. an uninitialised cipher IV) and an
+	 * information-disclosure risk.  Fresh arena memory is zero, which is why
+	 * the gap only shows up once a block is reused.  This makes INEWA match
+	 * INEWAZ; the compiler's -z (arrayz) flag is now redundant for safety.
+	 */
+	memset(a->data, 0, t->size*sz);
 	initarray(t, a);
 
 	ap = R.d;

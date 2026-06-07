@@ -14,6 +14,7 @@ TARG=\
 	tooluse_test.dis\
 	awk_test.dis\
 	asyncio_test.dis\
+	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\
 	concurrency_test.dis\

@@ -212,40 +212,44 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 	if(hdr == 0)
 		r = read(sock, va, len);
 	else if(noipv6){
-		/* IPv4-only host: read into a sockaddr_in and rebuild the header
-		 * in the same layout the AF_INET6 path produces (v4-mapped). */
-		struct sockaddr_in rsin, lsin;
+		/* IPv4-only host: recvfrom into a sockaddr_storage (never hand the
+		 * kernel a smaller address buffer), then rebuild the header in the
+		 * same v4-mapped layout the AF_INET6 path produces. */
+		struct sockaddr_storage lsa;
 		uchar rip[IPaddrlen], lip[IPaddrlen];
+		ushort rport, lport;
 
-		memset(&rsin, 0, sizeof(rsin));
-		l = sizeof(rsin);
-		r = recvfrom(sock, va, len, 0, (struct sockaddr*)&rsin, &l);
+		l = sizeof(sa);
+		r = recvfrom(sock, va, len, 0, (struct sockaddr*)&sa, &l);
 		if(r >= 0){
 			memset(h, 0, sizeof(h));
-			v4tov6(rip, (uchar*)&rsin.sin_addr);
-			memset(&lsin, 0, sizeof(lsin));
-			l = sizeof(lsin);
-			getsockname(sock, (struct sockaddr*)&lsin, &l);
-			v4tov6(lip, (uchar*)&lsin.sin_addr);
+			ipfromsockaddr(&sa, rip, &rport);
+			memset(&lsa, 0, sizeof(lsa));
+			l = sizeof(lsa);
+			if(getsockname(sock, (struct sockaddr*)&lsa, &l) < 0){
+				memset(lip, 0, sizeof(lip));
+				lport = 0;
+			} else
+				ipfromsockaddr(&lsa, lip, &lport);
 			switch(hdrlen){
 			case OUdphdrlenv4:
-				memmove(h, (uchar*)&rsin.sin_addr, IPv4addrlen);
-				memmove(h+2*IPv4addrlen, &rsin.sin_port, 2);
-				memmove(h+IPv4addrlen, (uchar*)&lsin.sin_addr, IPv4addrlen);
-				memmove(h+2*IPv4addrlen+2, &lsin.sin_port, 2);
+				memmove(h, rip+IPv4off, IPv4addrlen);
+				hnputs((uchar*)h+2*IPv4addrlen, rport);
+				memmove(h+IPv4addrlen, lip+IPv4off, IPv4addrlen);
+				hnputs((uchar*)h+2*IPv4addrlen+2, lport);
 				break;
 			case OUdphdrlen:
 				memmove(h, rip, IPaddrlen);
-				memmove(h+2*IPaddrlen, &rsin.sin_port, 2);
+				hnputs((uchar*)h+2*IPaddrlen, rport);
 				memmove(h+IPaddrlen, lip, IPaddrlen);
-				memmove(h+2*IPaddrlen+2, &lsin.sin_port, 2);
+				hnputs((uchar*)h+2*IPaddrlen+2, lport);
 				break;
 			default:
 				memmove(h, rip, IPaddrlen);
-				memmove(h+3*IPaddrlen, &rsin.sin_port, 2);
+				hnputs((uchar*)h+3*IPaddrlen, rport);
 				memmove(h+IPaddrlen, lip, IPaddrlen);
 				memmove(h+2*IPaddrlen, lip, IPaddrlen);	/* ifcaddr */
-				memmove(h+3*IPaddrlen+2, &lsin.sin_port, 2);
+				hnputs((uchar*)h+3*IPaddrlen+2, lport);
 				break;
 			}
 			memmove(hdr, h, hdrlen);

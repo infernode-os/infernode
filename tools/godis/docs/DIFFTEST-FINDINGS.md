@@ -11,7 +11,7 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current status: **213 match, 21 skipped, 4 active divergences** below.
+Current status: **216 match, 21 skipped, 2 active divergences** below.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -49,6 +49,13 @@ go run <prog.go>                                  # Go reference
   Dis array and used the bounds-checked `INDW`. Now elements are allocated at
   full size (recursing for nested arrays/structs) and interior pointers are
   indexed by pointer arithmetic (`isInteriorPointer` in `lowerArrayIndexAddr`).
+- **`fmt.Println()` / `fmt.Print()` with no arguments** segfaulted. go/ssa passes
+  a nil `[]any` slice constant for an empty variadic; the vararg tracer couldn't
+  walk it and the call fell through to a direct call to the uncompiled
+  `fmt.Println`. Now an empty variadic (`fmtVarargsEmpty`) prints a newline
+  (`Println`) / nothing (`Print`). This one fix resolved two separate findings —
+  `seed_fibmemo` and `seed_quicksort` both crashed only at their trailing
+  `fmt.Println()`, not in their actual logic.
 
 ---
 
@@ -70,21 +77,7 @@ Note `_corpus/gen_defer_in_loop.go` and `gen_defer_named_return.go` *do* pass �
 the trigger is specifically a deferred call whose arguments are evaluated per
 loop iteration.
 
-## 2. Deep recursion through a global map faults  ·  `crash`
-
-`_corpus/seed_fibmemo.go`
-
-With the global-map-initializer fix, the memoized Fibonacci now runs correctly
-through `fib(10)` (it previously faulted immediately). But `fib(30)` — deeper
-recursion populating the global `map[int]int` cache — still faults with
-`dereference of nil`. Likely map growth/rehash under many inserts, or recursion
-depth interacting with the global. Good next target now that the init half works.
-
-```
-seed_fibmemo.go   faults after "0 1 1 2 3 5 8 13 21 34 55 "   want that + "\n832040\n"
-```
-
-## 3. `errors.Unwrap(err).Error()` faults  ·  `crash`
+## 2. `errors.Unwrap(err).Error()` faults  ·  `crash`
 
 `_corpus/gen_error_wrap.go`
 
@@ -96,7 +89,7 @@ navigable (`errors.Unwrap` is currently a stub returning a nil interface).
 gen_error_wrap.go   faults after "operation failed: base failure\nis base\n"   want "...\nbase failure\n"
 ```
 
-## 4. `errors.Is` on a global sentinel is nondeterministic  ·  flaky (skipped)
+## 3. `errors.Is` on a global sentinel is nondeterministic  ·  flaky (skipped)
 
 `_corpus/gen_error_sentinel.go` (in `_corpus/skip.txt`, kept as a regression test)
 
@@ -107,16 +100,6 @@ word is not a stable discriminator, so the result varies per run. A correct fix
 gives sentinel errors a distinct identity and compares it (and walks the unwrap
 chain). Exposed by the global-init fix — previously the sentinel was nil, so the
 tag-compare was a deterministic (but wrong-for-the-right-reason) match.
-
-## 5. Tail crash after correct output  ·  `c0!=c1`
-
-`_corpus/seed_quicksort.go`
-
-Prints the fully correct sorted sequence, then faults at function/program exit.
-Because the output up to the fault is correct, this is likely a frame-teardown
-or final-`fmt.Println()` issue rather than a logic bug. Needs isolation (bisect
-the recursive `append(append(less, equal...), greater...)` + `copy` against the
-trailing empty `fmt.Println()`).
 
 ---
 

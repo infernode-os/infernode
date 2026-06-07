@@ -1797,12 +1797,34 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 	return acc.Val, true
 }
 
+// fmtVarargsEmpty reports whether a fmt call's trailing variadic []any argument
+// is empty (e.g. fmt.Println() / fmt.Print()). go/ssa represents an empty
+// variadic as a nil slice constant rather than a Slice-of-Alloc, so the last
+// argument being an *ssa.Const means "no values".
+func fmtVarargsEmpty(args []ssa.Value) bool {
+	if len(args) == 0 {
+		return true
+	}
+	_, isConst := args[len(args)-1].(*ssa.Const)
+	return isConst
+}
+
 // lowerFmtPrintln handles fmt.Println by tracing varargs to print each value.
 func (fl *funcLowerer) lowerFmtPrintln(instr *ssa.Call) (bool, error) {
 	args := instr.Call.Args
-	if len(args) == 0 {
-		// fmt.Println() → just print newline
+	if len(args) == 0 || fmtVarargsEmpty(args) {
+		// fmt.Println() with no values → just print a newline. go/ssa passes a
+		// nil []any slice constant for an empty variadic, which the vararg tracer
+		// below can't walk; without this the call falls through to a direct call
+		// to the (uncompiled) fmt.Println and segfaults.
 		fl.emitSysPrint("\n")
+		if instr.Name() != "" {
+			dst := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		}
 		return true, nil
 	}
 

@@ -3654,6 +3654,19 @@ func (fl *funcLowerer) lowerFmtSprintln(instr *ssa.Call) (bool, error) {
 
 // lowerFmtPrint: fmt.Print(args...) → print without newline.
 func (fl *funcLowerer) lowerFmtPrint(instr *ssa.Call) (bool, error) {
+	if fmtVarargsEmpty(instr.Call.Args) {
+		// fmt.Print() with no values prints nothing (go/ssa passes a nil []any
+		// slice constant, which the concat tracer can't walk → would fall through
+		// to an uncompiled direct call).
+		if len(*instr.Referrers()) > 0 {
+			dstSlot := fl.slotOf(instr)
+			iby2wd := int32(dis.IBY2WD)
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+iby2wd)))
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dstSlot+2*iby2wd)))
+		}
+		return true, nil
+	}
 	strSlot, ok := fl.emitSprintConcatInline(instr, false)
 	if !ok {
 		return false, nil

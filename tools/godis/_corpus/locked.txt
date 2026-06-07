@@ -11,6 +11,7 @@ _corpus/gen_closure_loopvar.go
 _corpus/gen_defer_in_loop.go
 _corpus/gen_defer_named_return.go
 _corpus/gen_error_new.go
+_corpus/gen_error_wrap.go
 _corpus/gen_generic_mapfilter.go
 _corpus/gen_generic_minmax.go
 _corpus/gen_map_commaok.go

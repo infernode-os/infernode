@@ -16,10 +16,20 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
+// synthKind identifies a synthetic (inlined, fn==nil) interface method impl.
+type synthKind int
+
+const (
+	synthNone        synthKind = iota // not synthetic; call .fn
+	synthErrorString                  // errorString.Error(): value word IS the string
+	synthWrapError                    // wrapError.Error(): value word → struct, msg at offset 0
+)
+
 // ifaceImpl records one concrete implementation of an interface method.
 type ifaceImpl struct {
-	tag int32         // type tag ID for the concrete type
-	fn  *ssa.Function // the concrete method
+	tag   int32         // type tag ID for the concrete type
+	fn    *ssa.Function // the concrete method (nil for synthetic impls)
+	synth synthKind     // when fn==nil, which inline body to emit
 }
 
 // Compiler compiles Go source to Dis bytecode.
@@ -935,14 +945,17 @@ func (c *Compiler) buildLDT() [][]dis.Import {
 	}
 	return [][]dis.Import{imports}
 }
-// RegisterErrorString registers the synthetic errorString type in the
-// interface dispatch table. errorString.Error() is handled inline (fn=nil)
-// rather than calling a real function.
+// RegisterErrorString registers the synthetic error types in the interface
+// dispatch table. errorString.Error() returns its value word (the string)
+// directly; wrapError.Error() (produced by fmt.Errorf("%w", ...)) returns the
+// message field of its heap struct. Both are inlined (fn=nil) rather than
+// calling a real function.
 func (c *Compiler) RegisterErrorString() {
-	tag := c.AllocTypeTag("errorString")
 	c.ifaceDispatch["Error"] = append(
 		c.ifaceDispatch["Error"],
-		ifaceImpl{tag: tag, fn: nil})
+		ifaceImpl{tag: c.AllocTypeTag("errorString"), fn: nil, synth: synthErrorString},
+		ifaceImpl{tag: c.AllocTypeTag("wrapError"), fn: nil, synth: synthWrapError},
+	)
 }
 // embedInit records a //go:embed directive to initialize at module load.
 type embedInit struct {

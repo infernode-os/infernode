@@ -11,7 +11,8 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current status: **216 match, 21 skipped, 2 active divergences** below.
+Current status: **217 match, 21 skipped, 1 active divergence** below (plus one
+flaky program, skipped).
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -56,6 +57,15 @@ go run <prog.go>                                  # Go reference
   (`Println`) / nothing (`Print`). This one fix resolved two separate findings —
   `seed_fibmemo` and `seed_quicksort` both crashed only at their trailing
   `fmt.Println()`, not in their actual logic.
+- **`errors.Unwrap` / `errors.Is` chains.** `errors.Unwrap` was a stub returning
+  nil and `fmt.Errorf("%w", err)` discarded the wrapped error, so `Unwrap` and
+  `Is`-through-wrapping were broken. Added a `wrapError` representation: `%w`
+  builds a heap struct `{msg, innerTag, innerVal}` (GC-traced via a custom type
+  descriptor) tagged `wrapError`; `.Error()` returns its `msg`; `errors.Unwrap`
+  yields the inner error; and `errors.Is` now walks the unwrap chain comparing
+  the full interface (tag AND value), instead of comparing only the tag. (Holds
+  for errors used within their creating function — the same in-frame limitation
+  as any heap-backed interface value in godis.)
 
 ---
 
@@ -77,29 +87,21 @@ Note `_corpus/gen_defer_in_loop.go` and `gen_defer_named_return.go` *do* pass �
 the trigger is specifically a deferred call whose arguments are evaluated per
 loop iteration.
 
-## 2. `errors.Unwrap(err).Error()` faults  ·  `crash`
-
-`_corpus/gen_error_wrap.go`
-
-`fmt.Errorf("...: %w", base)` formats and `errors.Is` works, but
-`errors.Unwrap(wrapped).Error()` faults — the unwrapped error chain isn't
-navigable (`errors.Unwrap` is currently a stub returning a nil interface).
-
-```
-gen_error_wrap.go   faults after "operation failed: base failure\nis base\n"   want "...\nbase failure\n"
-```
-
-## 3. `errors.Is` on a global sentinel is nondeterministic  ·  flaky (skipped)
+## 2. Global / returned error interface has a nondeterministic value  ·  flaky (skipped)
 
 `_corpus/gen_error_sentinel.go` (in `_corpus/skip.txt`, kept as a regression test)
 
-`errors.Is(err, errNotFound)` where `var errNotFound = errors.New(...)` matches
-`go run` only intermittently (~7/8 runs). `errors.Is` compares just the first
-interface word (the errorString tag) via `IBNEW`; for a global sentinel that
-word is not a stable discriminator, so the result varies per run. A correct fix
-gives sentinel errors a distinct identity and compares it (and walks the unwrap
-chain). Exposed by the global-init fix — previously the sentinel was nil, so the
-tag-compare was a deterministic (but wrong-for-the-right-reason) match.
+`errors.Is(err, errNotFound)` — where `var errNotFound = errors.New(...)` is a
+package global returned from a helper — matches `go run` only intermittently
+(~8/10 runs). `errors.Is` now compares the full interface (tag AND value) and
+walks the unwrap chain, so the comparison itself is correct; the residual
+flakiness is upstream. The materialized global/returned error interface
+occasionally presents a garbage word, i.e. one of its two words is read before
+being initialized on some runs — a nondeterministic-materialization bug specific
+to a package-global error value flowing through a return. Locally-constructed
+sentinels (and the whole `gen_error_wrap` chain) are deterministic and pass.
+Next step: trace how a global interface value is loaded/returned (`lowerReturn` /
+global materialization) and find the uninitialized read.
 
 ---
 

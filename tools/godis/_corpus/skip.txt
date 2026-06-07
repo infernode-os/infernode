@@ -25,11 +25,12 @@ testdata/multipkg           # imports local package "mathutil"
 testdata/sharedtype         # imports local package "geom"
 
 # --- Inherently nondeterministic output ---
-# errors.Is(err, globalSentinel) is nondeterministic under godis once the global
-# sentinel actually holds a value (the comparison keys on data that varies per
-# run). Kept as a regression test; unskip when errors.Is on globals is fixed.
-# See DIFFTEST-FINDINGS.md.
-_corpus/gen_error_sentinel.go  # godis bug: errors.Is on a global sentinel is flaky
+# A package-global error sentinel returned through a helper presents a garbage
+# interface word on some runs (uninitialized-read in global/return materialization),
+# so errors.Is(err, sentinel) is flaky. errors.Is itself is correct now (full
+# tag+value compare with unwrap-chain walk). Kept as a regression test; unskip
+# when the materialization bug is fixed. See DIFFTEST-FINDINGS.md.
+_corpus/gen_error_sentinel.go  # godis bug: global/returned error value is nondeterministic
 testdata/selectrecv.go      # select chooses a ready case nondeterministically
 testdata/map_range.go       # map iteration order is unspecified
 testdata/slog_pkg.go        # log lines embed wall-clock timestamps

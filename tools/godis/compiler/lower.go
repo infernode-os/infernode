@@ -772,6 +772,24 @@ func (fl *funcLowerer) makeHeapTypeDesc(elemType types.Type) int {
 	return len(fl.callTypeDescs) - 1
 }
 
+// makeWrapErrorTD builds the type descriptor for a wrapError heap struct, the
+// backing object for fmt.Errorf("%w", ...). Layout (3 words):
+//
+//	[0] msg      string  (GC pointer)
+//	[1] innerTag word    (the wrapped error interface's tag)
+//	[2] innerVal word    (the wrapped error interface's value — a pointer)
+//
+// Words 0 and 2 are pointers (msg and the inner error's string/struct pointer);
+// word 1 is the scalar tag.
+func (fl *funcLowerer) makeWrapErrorTD() int {
+	iby2wd := dis.IBY2WD
+	td := dis.NewTypeDesc(0, 3*iby2wd)
+	td.SetPointer(0)
+	td.SetPointer(2 * iby2wd)
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	return len(fl.callTypeDescs) - 1
+}
+
 // allocStructFields allocates consecutive frame slots for each struct field.
 // Returns the base offset (first field's offset).
 // For embedded structs, recursively allocates sub-fields so that the total
@@ -1550,17 +1568,77 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 
 // lowerFmtErrorf handles fmt.Errorf(format, args...) by formatting the string
 // with Sprintf-style logic, then wrapping it as a tagged error interface.
+//
+// If the format contains a %w verb, the result is a wrapError that retains the
+// wrapped error so errors.Unwrap/errors.Is can navigate the chain; otherwise it
+// is a plain errorString (value word = formatted message). The wrapError heap
+// struct is held by a GC pointer temp for the frame's lifetime — correct as long
+// as the error is used within the creating function (the same in-frame
+// limitation as any heap-backed interface value in godis).
 func (fl *funcLowerer) lowerFmtErrorf(instr *ssa.Call) (bool, error) {
 	strSlot, ok := fl.emitSprintfInline(instr)
 	if !ok {
 		return false, nil
 	}
 	dst := fl.slotOf(instr)
-	tag := fl.comp.AllocTypeTag("errorString")
 	iby2wd := int32(dis.IBY2WD)
-	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
+
+	if wrapped := fl.findWrapArg(instr); wrapped != nil {
+		wrapSlot := fl.materialize(wrapped) // wrapped error: 2-word interface
+		td := fl.makeWrapErrorTD()
+		structPtr := fl.allocPtrTemp("errorf.wrap")
+		fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(td)), dis.FP(structPtr)))
+		// struct: msg@0, innerTag@8, innerVal@16. MOVP for the pointer fields so
+		// the struct takes references that its type descriptor will release.
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(strSlot), dis.FPInd(structPtr, 0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(wrapSlot), dis.FPInd(structPtr, iby2wd)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(wrapSlot+iby2wd), dis.FPInd(structPtr, 2*iby2wd)))
+		// result interface = {wrapError tag, structPtr}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(fl.comp.AllocTypeTag("wrapError")), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(structPtr), dis.FP(dst+iby2wd)))
+		return true, nil
+	}
+
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(fl.comp.AllocTypeTag("errorString")), dis.FP(dst)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
 	return true, nil
+}
+
+// findWrapArg returns the error value passed to the (first) %w verb in an
+// Errorf call, or nil if there is no %w. The variadic elements are traced back
+// through the SSA the same way emitSprintfInline resolves them.
+func (fl *funcLowerer) findWrapArg(instr *ssa.Call) ssa.Value {
+	args := instr.Call.Args
+	if len(args) < 2 {
+		return nil
+	}
+	fmtConst, ok := args[0].(*ssa.Const)
+	if !ok {
+		return nil
+	}
+	f := constant.StringVal(fmtConst.Value)
+	verbIdx := 0
+	for i := 0; i < len(f); i++ {
+		if f[i] != '%' {
+			continue
+		}
+		i++
+		if i >= len(f) || f[i] == '%' {
+			continue // literal %% (or trailing %)
+		}
+		// Skip flags, width and precision to reach the verb letter.
+		for i < len(f) && strings.IndexByte("+-# 0123456789.", f[i]) >= 0 {
+			i++
+		}
+		if i >= len(f) {
+			break
+		}
+		if f[i] == 'w' {
+			return fl.traceVarargElement(args[1], verbIdx)
+		}
+		verbIdx++
+	}
+	return nil
 }
 
 // emitSprintfInline emits the core Sprintf format-and-concatenate logic.
@@ -1863,22 +1941,67 @@ func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "New":
 		return true, fl.lowerErrorsNew(instr)
 	case "Is":
-		// errors.Is(err, target) → compare interface tags
+		// errors.Is(err, target): walk err's Unwrap chain, comparing the full
+		// interface (tag AND value) at each level. An errorString matches by
+		// identity (same tag + same — MP-deduplicated — string pointer); a
+		// wrapError unwraps to its inner error and the walk continues.
 		errSlot := fl.materialize(instr.Call.Args[0])
 		targetSlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		skipIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
-		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		iby2wd := int32(dis.IBY2WD)
+		wrapTag := fl.comp.AllocTypeTag("wrapError")
+
+		// cur = copy of err so we can advance it down the chain.
+		curTag := fl.frame.AllocWord("is.curtag")
+		curVal := fl.frame.AllocWord("is.curval")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errSlot), dis.FP(curTag)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errSlot+iby2wd), dis.FP(curVal)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst))) // result = false
+
+		loopPC := int32(len(fl.insts))
+		doneIfNil := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(curTag), dis.Imm(0), dis.Imm(0))) // cur==nil → done
+		notTag := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(curTag), dis.FP(targetSlot), dis.Imm(0)))
+		notVal := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(curVal), dis.FP(targetSlot+iby2wd), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst))) // match → true
+		matchJmp := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+		// No match at this level: unwrap if cur is a wrapError, else stop.
+		unwrapPC := int32(len(fl.insts))
+		fl.insts[notTag].Dst = dis.Imm(unwrapPC)
+		fl.insts[notVal].Dst = dis.Imm(unwrapPC)
+		cantUnwrap := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.Imm(wrapTag), dis.FP(curTag), dis.Imm(0)))
+		sp := fl.frame.AllocWord("is.sp")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(curVal), dis.FP(sp)))             // sp = struct ptr
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(sp, iby2wd), dis.FP(curTag)))  // cur.tag = inner.tag
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(sp, 2*iby2wd), dis.FP(curVal))) // cur.val = inner.val
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+		donePC := int32(len(fl.insts))
+		fl.insts[doneIfNil].Dst = dis.Imm(donePC)
+		fl.insts[cantUnwrap].Dst = dis.Imm(donePC)
+		fl.insts[matchJmp].Dst = dis.Imm(donePC)
 		return true, nil
 	case "Unwrap":
-		// errors.Unwrap(err) → return nil error (simplified)
+		// errors.Unwrap(err): a wrapError yields its inner error; anything else
+		// yields nil.
+		errSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		wrapTag := fl.comp.AllocTypeTag("wrapError")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))        // default nil
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		skip := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.Imm(wrapTag), dis.FP(errSlot), dis.Imm(0)))
+		sp := fl.frame.AllocWord("unwrap.sp")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errSlot+iby2wd), dis.FP(sp)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(sp, iby2wd), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(sp, 2*iby2wd), dis.FP(dst+iby2wd)))
+		fl.insts[skip].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "As":
 		// errors.As(err, target) → return false (simplified)
@@ -6466,11 +6589,21 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 		)
 	}
 
-	// emitSyntheticInline emits inline code for a synthetic method (fn==nil).
-	// Currently handles errorString.Error() — the value IS the string.
-	emitSyntheticInline := func() {
-		if instr.Name() != "" {
-			resultDst := fl.slotOf(instr)
+	// emitSyntheticInline emits inline code for a synthetic method (fn==nil):
+	// errorString.Error() returns the value word (the string) directly;
+	// wrapError.Error() returns the msg field (offset 0) of its heap struct,
+	// whose pointer is in the value word.
+	emitSyntheticInline := func(impl ifaceImpl) {
+		if instr.Name() == "" {
+			return
+		}
+		resultDst := fl.slotOf(instr)
+		switch impl.synth {
+		case synthWrapError:
+			sp := fl.frame.AllocWord("werr.sp")
+			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(ifaceSlot+iby2wd), dis.FP(sp)))
+			fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(sp, 0), dis.FP(resultDst)))
+		default: // synthErrorString
 			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(ifaceSlot+iby2wd), dis.FP(resultDst)))
 		}
 	}
@@ -6478,7 +6611,7 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 	if len(impls) == 1 {
 		// Single-implementation fast path: direct call or inline synthetic
 		if impls[0].fn == nil {
-			emitSyntheticInline()
+			emitSyntheticInline(impls[0])
 		} else {
 			emitCallForImpl(impls[0].fn)
 		}
@@ -6514,7 +6647,7 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 		fl.insts[beqwIdxs[i]].Dst = dis.Imm(int32(len(fl.insts)))
 
 		if impl.fn == nil {
-			emitSyntheticInline()
+			emitSyntheticInline(impl)
 		} else {
 			emitCallForImpl(impl.fn)
 		}

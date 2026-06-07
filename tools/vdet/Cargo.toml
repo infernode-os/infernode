@@ -1,0 +1,20 @@
+[package]
+name = "vdet"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "InferNode host-side video detector: frames -> detections-as-text"
+publish = false
+
+# Prototype of the /mnt/vision inference stage (INFR-277). Reuses the vdec
+# decode core as a library, runs a per-frame detector, and emits one
+# greppable detection record per frame to stdout. The detector is currently a
+# simple model-free luma-blob pass; a YOLO/ONNX backend swaps in behind the
+# `detect` function without changing the wire format. See docs/ML-VISION-9P.md.
+
+[[bin]]
+name = "vdet"
+path = "src/main.rs"
+
+[dependencies]
+vdec = { path = "../vdec" }

@@ -1,6 +1,9 @@
 # ML vision inference as composable 9P services
 
-**Status:** design exploration (INFR-277) — not committed work. Cross-refs:
+**Status:** design exploration (INFR-277). A **working prototype now exists** —
+`tools/vdet` (host detector, reuses the `vdec` decode core) + `appl/cmd/vision9p.b`
+(the `/mnt/vision` 9P service) — verified end-to-end with a model-free luma-blob
+detector; a YOLO/ONNX backend is the swap-in behind `vdet`'s `detect`. Cross-refs:
 `docs/H264-9P-BRIDGE.md` / INFR-263 (the video bridge), nerva3
 `appl/nerva/TAK-VIDEO.md` / INFR-272 (the NERVA closed loop), INFR-278
 (namespace convention).

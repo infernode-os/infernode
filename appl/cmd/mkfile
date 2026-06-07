@@ -183,6 +183,7 @@ TARG=\
 	vacget.dis\
 	vacput.dis\
 	vid9p.dis\
+	vision9p.dis\
 	wav2iaf.dis\
 	wc.dis\
 	webfs.dis\

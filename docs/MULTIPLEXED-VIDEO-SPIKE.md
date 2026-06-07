@@ -91,3 +91,26 @@ Make a test clip:  `ffmpeg -f lavfi -i testsrc=size=352x240:rate=25:duration=4 \
 
 Decoder ported from `github.com/inferno-os/inferno-2e` `appl/mpeg` (Inferno
 Second Edition, 1999; redistributed by Vita Nuova under MIT).
+
+## Update (2026-06-07): chroma/color decode fixed
+
+Initial macOS testing showed heavy horizontal color streaking. Root-caused by
+comparing our decoded planes against ffmpeg (ground truth) and bisecting:
+luma + chroma were exact in flat regions, but every block with detail rang.
+The cause was the **escape-coded DCT level sign-extension** in `mpegio.b`:
+
+    l = (l << 24) >> 24;   # does NOT sign-extend correctly in Limbo
+
+MPEG-1 escape levels are 8-bit signed (129..255 mean -127..-1). The shift idiom
+left them positive, so escape coefficients became huge spurious AC values
+(clamped), producing ringing in both luma and chroma. Luma garbage hid in busy
+content; chroma garbage showed as streaks over smooth areas. Fixed with an
+explicit:
+
+    if (l > 127) l -= 256;
+
+Verified against ffmpeg on a SIF testsrc clip: max per-pixel error dropped from
+255 to 21 (the remaining ~15 mean is chroma-upsampling/range rounding vs
+ffmpeg, not corruption). Latent in Inferno 2e because escape codes are rare on
+low-detail content and dithered 8-bit displays masked them; testsrc's sharp
+edges trigger escapes constantly and exposed it.

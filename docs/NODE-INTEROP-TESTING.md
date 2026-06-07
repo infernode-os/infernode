@@ -89,15 +89,22 @@ normal dual-stack host nothing changes — the `AF_INET6` path is byte-for-byte
 the original. After the fix, `pqauth_test`'s `HybridTcpChannel` runs for real
 (previously skipped) and the interop harness passes on this host.
 
-## Known issue (not a transport/crypto-correctness bug)
+## Resolved: Dis VM array zero-initialization (INFR-261)
 
-`keyring_test`'s `AES256` and `DESCBC` cases fail in the long test run because
-of a **Dis-runtime, allocation-layout-dependent heap corruption** that is
-exposed when an AES cipher builtin is followed by a DES cipher builtin (a
-minimal repro: `kr->aescbc(...)` then `kr->descbc(...)` roundtrip). The
-underlying libsec ciphers are correct in pure C (AES-128/192/256 and DES-CBC
-all round-trip), and the `ssl` line-encryption device calls libsec directly in
-C — **not** through these Dis builtins — so node-to-node encrypted comms are
-unaffected (consistent with `pqauth_test`'s encrypted-channel cases passing).
-The corruption is pre-existing and lives in the emu interpreter/heap layer;
-it needs a separate, dedicated investigation. Tracked for follow-up.
+`keyring_test`'s `AES256` and `DESCBC` cases used to fail in the long test run.
+Root cause was a **Dis VM array zero-initialization bug**: Limbo specifies that
+`array[n] of T` creates each element with its zero value, but the `newa` opcode
+allocated array storage from recycled heap memory and only initialised
+*pointer* element types — value-type arrays (`byte`/`int`/…) exposed stale
+bytes from freed objects. Fresh arena memory is zero, so it only appeared once
+a block was reused. `keyring_test` tripped it because a test passed an
+`array[8] of byte` straight in as a cipher IV, and that array had reused a
+freed AES-plaintext buffer. (The libsec ciphers were always correct; the `ssl`
+line-encryption device calls libsec directly in C, so node-to-node encrypted
+comms were never affected — consistent with the encrypted-channel cases
+passing throughout.)
+
+Fixed by zero-initializing value-type array storage in `OP(newa)`
+(`libinterp/xec.c`), which the interpreter and both JITs share. `keyring_test`
+is now 27 passed / 0 failed. See `tests/arrayinit_test.b` for the regression
+guard.

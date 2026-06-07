@@ -815,16 +815,33 @@ func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int3
 // allocArrayElements allocates N consecutive frame slots for a fixed-size array.
 // Returns the base offset (first element's offset).
 func (fl *funcLowerer) allocArrayElements(at *types.Array, baseName string) int32 {
-	elemDT := GoTypeToDis(at.Elem())
 	n := int(at.Len())
+	elem := at.Elem()
 	var baseSlot int32
 	for i := 0; i < n; i++ {
 		name := fmt.Sprintf("%s[%d]", baseName, i)
 		var slot int32
-		if elemDT.IsPtr {
-			slot = fl.frame.AllocPointer(name)
-		} else {
-			slot = fl.frame.AllocWord(name)
+		switch et := elem.Underlying().(type) {
+		case *types.Array:
+			// Nested array element: lay its elements out contiguously so the
+			// per-element stride (GoTypeToDis(elem).Size) matches the frame size.
+			// Previously every element got a single word, so multi-word elements
+			// (e.g. [2]int inside [N][2]int) were under-allocated and indexing
+			// overran into adjacent slots → "array bounds error" / garbage reads.
+			slot = fl.allocArrayElements(et, name)
+		case *types.Struct:
+			slot = fl.allocStructFields(et, name)
+		default:
+			dt := GoTypeToDis(elem)
+			if dt.IsPtr {
+				slot = fl.frame.AllocPointer(name)
+			} else {
+				// Reserve the full element size (≥1 word) as consecutive words.
+				slot = fl.frame.AllocWord(name)
+				for b := int32(dis.IBY2WD); b < dt.Size; b += int32(dis.IBY2WD) {
+					fl.frame.AllocWord(name + ".w")
+				}
+			}
 		}
 		if i == 0 {
 			baseSlot = slot
@@ -6996,6 +7013,29 @@ func (fl *funcLowerer) lowerArrayIndexAddr(instr *ssa.IndexAddr, arrType *types.
 			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(elemSize), dis.FP(idxSlot), dis.FP(offSlot)))
 			fl.emit(dis.NewInst(dis.IADDW, dis.FP(offSlot), dis.FP(baseAddr), dis.FP(ptrSlot)))
 		}
+	} else if fl.isInteriorPointer(instr.X) {
+		// instr.X is a raw interior pointer into a larger aggregate — e.g. an
+		// inner row of a multidimensional array reached via a prior IndexAddr,
+		// or an array-typed struct field via FieldAddr. A *[N]T into contiguous
+		// memory has no Dis array header, so INDW (below) would bounds-check
+		// against a bogus length ("array bounds error"). Index by plain pointer
+		// arithmetic: elem = base + index*elemSize.
+		elemSize := GoTypeToDis(arrType.Elem()).Size
+		arrSlot := fl.slotOf(instr.X) // holds the base address
+		if c, isConst := instr.Index.(*ssa.Const); isConst {
+			idx, _ := constant.Int64Val(c.Value)
+			off := int32(idx) * elemSize
+			if off == 0 {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(arrSlot), dis.FP(ptrSlot)))
+			} else {
+				fl.emit(dis.NewInst(dis.IADDW, dis.Imm(off), dis.FP(arrSlot), dis.FP(ptrSlot)))
+			}
+		} else {
+			idxSlot := fl.materialize(instr.Index)
+			offSlot := fl.frame.AllocWord("aidx.off")
+			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(elemSize), dis.FP(idxSlot), dis.FP(offSlot)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(offSlot), dis.FP(arrSlot), dis.FP(ptrSlot)))
+		}
 	} else {
 		// Heap Dis Array: use INDB for byte, INDX for multi-word structs, INDW otherwise
 		arrSlot := fl.slotOf(instr.X)
@@ -7004,6 +7044,18 @@ func (fl *funcLowerer) lowerArrayIndexAddr(instr *ssa.IndexAddr, arrType *types.
 		fl.emit(dis.NewInst(indOp, dis.FP(arrSlot), dis.FP(ptrSlot), idxOp))
 	}
 	return nil
+}
+
+// isInteriorPointer reports whether v is a raw pointer into the interior of a
+// larger aggregate (the address produced by IndexAddr/FieldAddr), as opposed to
+// a Dis Array reference (from NEWA) or a stack Alloc base. Such pointers have no
+// array header and must be indexed by pointer arithmetic, not INDW.
+func (fl *funcLowerer) isInteriorPointer(v ssa.Value) bool {
+	switch v.(type) {
+	case *ssa.IndexAddr, *ssa.FieldAddr:
+		return true
+	}
+	return false
 }
 
 func (fl *funcLowerer) lowerSliceIndexAddr(instr *ssa.IndexAddr, ptrSlot int32) error {

@@ -4,6 +4,7 @@
 # Regenerate/extend with: go run ./cmd/difftest -promote
 # One program name per line (path relative to its corpus root).
 
+_corpus/gen_array_fixed_2d.go
 _corpus/gen_closure_accumulate.go
 _corpus/gen_closure_counter.go
 _corpus/gen_closure_loopvar.go
@@ -18,6 +19,7 @@ _corpus/gen_slice_2d.go
 _corpus/gen_slice_append_len.go
 _corpus/gen_slice_copy.go
 _corpus/gen_slice_subslice.go
+_corpus/seed_matrix.go
 _corpus/seed_rpn.go
 _corpus/seed_stack.go
 _corpus/seed_wordfreq.go

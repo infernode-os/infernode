@@ -144,6 +144,23 @@ func sliceProgs() []prog {
 	fmt.Println(total)
 `)})
 
+	// Fixed-size value arrays, incl. nested [N][M]T (distinct from slices: laid
+	// out contiguously in the frame, indexed by pointer arithmetic).
+	ps = append(ps, prog{"array_fixed_2d", header([]string{"fmt"}, `	var a [3][3]int
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			a[i][j] = i*3 + j
+		}
+	}
+	sum := 0
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			sum += a[i][j]
+		}
+	}
+	fmt.Println(sum, a[2][2], a[0][0])
+`)})
+
 	return ps
 }
 

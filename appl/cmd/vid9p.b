@@ -3,29 +3,36 @@ implement Vid9p;
 #
 # vid9p - present decoded video frames as a 9P service at /mnt/video/<id>/.
 #
-# Phase 1 of the multiplexed-video bridge (Jira INFR-266). Reads a YUV4MPEG2
-# (.y4m) stream produced by the host `vdec` decode core (tools/vdec) and serves
-# its frames as a synthetic filesystem:
+# Phase 1 of the multiplexed-video bridge (Jira INFR-266). Sources frames from
+# the host `vdec` decode core (tools/vdec) and serves them as a synthetic
+# filesystem:
 #
-#   /mnt/video/0/ctl      write "open <file.y4m>" to (re)load a source
+#   /mnt/video/0/ctl      write "open <file>"  (a .y4m is read directly;
+#                               any other file is decoded by spawning vdec)
 #   /mnt/video/0/fmt      read  "<w> <h> i420 <fps>"
 #   /mnt/video/0/frame    read  the I420 stream: frame N is the framesize bytes
 #                               at offset N*framesize (framesize = w*h*3/2).
-#                               A player reads framesize-byte chunks in sequence.
 #   /mnt/video/0/status   read  human-readable state
 #
-# The decode core is protocol-agnostic and lives on the host; this shim is the
-# (deliberately disposable) Limbo 9P front. See docs/H264-9P-BRIDGE.md. A later
-# pass swaps the y4m-file source for a live `vdec` spawn and adds a Rust-native
-# 9P server (INFR-267).
+# Live decode runs the host vdec binary via the Inferno cmd device (#C),
+# capturing its YUV4MPEG2 stdout (`vdec <file> --y4m - --quiet`). The decode
+# core is protocol-agnostic and lives on the host; this shim is the
+# (deliberately disposable) Limbo 9P front. See docs/H264-9P-BRIDGE.md.
 #
 # Usage (in the Inferno shell):
+#   mount {vid9p -d /host/path/to/vdec} /mnt/video
+#   echo 'open /clip.mp4' > /mnt/video/0/ctl
+#   # or a pre-decoded stream:
 #   mount {vid9p clip.y4m} /mnt/video
 #
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
+include "string.m";
+	str: String;
+include "env.m";
+	env: Env;
 include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import Styx;
@@ -45,6 +52,7 @@ tc: chan of ref Tmsg;
 srv: ref Styxserver;
 stderr: ref Sys->FD;
 user := "inferno";
+vdecpath := "vdec";			# host path to the vdec binary (override with -d)
 
 # loaded video state
 width, height, fps, framesize, nframes: int;
@@ -60,6 +68,10 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
+	str = load String String->PATH;
+	if(str == nil) badmod(String->PATH);
+	env = load Env Env->PATH;
+	if(env == nil) badmod(Env->PATH);
 	styx = load Styx Styx->PATH;
 	if(styx == nil) badmod(Styx->PATH);
 	styxservers = load Styxservers Styxservers->PATH;
@@ -72,10 +84,21 @@ init(nil: ref Draw->Context, args: list of string)
 
 	i420 = array[0] of byte;
 
-	# optional source file as the sole argument
+	# args: [-d vdecpath] [source]
 	args = tl args;
-	if(args != nil){
-		e := loadvideo(hd args);
+	src := "";
+	while(args != nil){
+		case hd args {
+		"-d" =>
+			args = tl args;
+			if(args != nil) vdecpath = hd args;
+		* =>
+			src = hd args;
+		}
+		args = tl args;
+	}
+	if(src != ""){
+		e := loadvideo(src);
 		if(e != nil)
 			sys->fprint(stderr, "vid9p: %s\n", e);
 	}
@@ -114,7 +137,7 @@ serve(tree: ref Tree)
 			Qstatus =>
 				srv.reply(styxservers->readstr(tm, statusstr()));
 			Qctl =>
-				srv.reply(styxservers->readstr(tm, "open <file.y4m>\n"));
+				srv.reply(styxservers->readstr(tm, "open <file>\n"));
 			Qframe =>
 				srv.reply(styxservers->readbytes(tm, i420));
 			* =>
@@ -163,15 +186,28 @@ doctl(s: string)
 	}
 }
 
-# Parse a YUV4MPEG2 file into the flat I420 frame buffer.
+# Dispatch: .y4m is read directly; anything else is decoded by spawning vdec.
 loadvideo(path: string): string
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return sys->sprint("open %s: %r", path);
-	data := readall(fd);
+	if(hassuffix(path, ".y4m")){
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil)
+			return sys->sprint("open %s: %r", path);
+		return parsey4m(path, readall(fd));
+	}
+	(out, err) := hostexec(vdecpath :: hostpath(path) :: "--y4m" :: "-" :: "--quiet" :: nil);
+	if(err != nil)
+		return sys->sprint("decode %s: %s", path, err);
+	if(len out == 0)
+		return sys->sprint("decode %s: vdec produced no output (is %q correct?)", path, vdecpath);
+	return parsey4m(path, out);
+}
+
+# Parse a YUV4MPEG2 buffer into the flat I420 frame buffer.
+parsey4m(name: string, data: array of byte): string
+{
 	if(len data < 10 || string data[0:9] != "YUV4MPEG2")
-		return sys->sprint("%s: not a YUV4MPEG2 stream", path);
+		return sys->sprint("%s: not a YUV4MPEG2 stream", name);
 
 	nl := findnl(data, 0);
 	w := 0; h := 0; f := 25;
@@ -187,7 +223,7 @@ loadvideo(path: string): string
 		}
 	}
 	if(w <= 0 || h <= 0)
-		return sys->sprint("%s: bad dimensions %dx%d", path, w, h);
+		return sys->sprint("%s: bad dimensions %dx%d", name, w, h);
 	fsz := w*h + 2*(w/2)*(h/2);
 
 	# pass 1: count whole frames present
@@ -216,6 +252,42 @@ loadvideo(path: string): string
 	return nil;
 }
 
+# Run a host command via the cmd device (#C) and return its stdout.
+hostexec(argv: list of string): (array of byte, string)
+{
+	if(sys->stat("/cmd/clone").t0 == -1)
+		if(sys->bind("#C", "/", Sys->MBEFORE) < 0)
+			return (nil, sys->sprint("bind #C: %r"));
+	cfd := sys->open("/cmd/clone", Sys->ORDWR);
+	if(cfd == nil)
+		return (nil, sys->sprint("open /cmd/clone: %r"));
+	b := array[32] of byte;
+	n := sys->read(cfd, b, len b);
+	if(n <= 0)
+		return (nil, sys->sprint("read /cmd/clone: %r"));
+	dir := "/cmd/" + string b[0:n];
+	if(sys->fprint(cfd, "exec %s", str->quoted(argv)) < 0)
+		return (nil, sys->sprint("exec: %r"));
+	dfd := sys->open(dir + "/data", Sys->OREAD);
+	if(dfd == nil)
+		return (nil, sys->sprint("open %s/data: %r", dir));
+	out := readall(dfd);
+	# keep cfd open until the read completes, then let it close (no killonclose)
+	cfd = nil;
+	return (out, nil);
+}
+
+# Map an Inferno absolute path to its host path under $emuroot (emu -r<dir>).
+hostpath(p: string): string
+{
+	if(len p > 0 && p[0] == '/'){
+		root := env->getenv("emuroot");
+		if(root != nil && root != "/")
+			return root + p;
+	}
+	return p;
+}
+
 readall(fd: ref Sys->FD): array of byte
 {
 	buf := array[0] of byte;
@@ -237,6 +309,11 @@ findnl(d: array of byte, p: int): int
 	while(p < len d && d[p] != byte '\n')
 		p++;
 	return p;
+}
+
+hassuffix(s, suf: string): int
+{
+	return len s >= len suf && s[len s - len suf:] == suf;
 }
 
 dir(name: string, perm, path: int): Sys->Dir

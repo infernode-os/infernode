@@ -7,7 +7,7 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::process::exit;
 
 use vdec::{Decoder, Frame};
@@ -53,12 +53,18 @@ fn main() {
         eprintln!("vdec: {path}  {w}x{h}  -> I420");
     }
 
-    let mut writer = y4m.as_ref().map(|p| {
-        let f = File::create(p).unwrap_or_else(|e| {
-            eprintln!("vdec: create {p}: {e}");
-            exit(1);
-        });
-        let mut bw = BufWriter::new(f);
+    // "-" routes the YUV4MPEG2 stream to stdout (so vid9p can read it through the
+    // Inferno cmd-device pipe); any other value is a file path.
+    let mut writer: Option<BufWriter<Box<dyn Write>>> = y4m.as_ref().map(|p| {
+        let sink: Box<dyn Write> = if p == "-" {
+            Box::new(io::stdout())
+        } else {
+            Box::new(File::create(p).unwrap_or_else(|e| {
+                eprintln!("vdec: create {p}: {e}");
+                exit(1);
+            }))
+        };
+        let mut bw = BufWriter::new(sink);
         // Frame rate is cosmetic for validation; 25:1 keeps ffplay happy.
         writeln!(bw, "YUV4MPEG2 W{w} H{h} F25:1 Ip A1:1 C420mpeg2").unwrap();
         bw

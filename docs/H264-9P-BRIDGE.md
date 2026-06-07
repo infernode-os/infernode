@@ -37,7 +37,7 @@ frame is done").
 ```
                  host process (Rust)                    InferNode (emu)
   ┌─────────────────────────────────────┐        ┌───────────────────────────┐
-  file/RTSP ─▶ │ vdec core: libavcodec ─▶ I420 frames │ ──9P──▶ │ /n/video/<id>/{ctl,fmt,frame,status}      │
+  file/RTSP ─▶ │ vdec core: libavcodec ─▶ I420 frames │ ──9P──▶ │ /mnt/video/<id>/{ctl,fmt,frame,status}      │
                │ (sw now; NVDEC/VT later)             │        │   │                                       │
                └─────────────────────────────────────┘        │   ▼ read frame → YCbCr ADT                │
                                                                │   remap24 → masked-pane writepixels/draw  │
@@ -77,11 +77,11 @@ in the core *before the wire*, so the format is platform-independent (INFR-265).
 ### 2.3 The 9P interface (per stream) — designed, INFR-266
 
 ```
-/n/video/<id>/ctl      # write: "open <path>", "play", "seek <ms>", "stop"
-/n/video/<id>/fmt      # read:  "<w> <h> i420 <fps>"
-/n/video/<id>/frame    # read:  blocking; one frame per read:
+/mnt/video/<id>/ctl      # write: "open <path>", "play", "seek <ms>", "stop"
+/mnt/video/<id>/fmt      # read:  "<w> <h> i420 <fps>"
+/mnt/video/<id>/frame    # read:  blocking; one frame per read:
                        #        header {magic,w,h,fmt,pts,len} + I420 bytes
-/n/video/<id>/status   # read:  state / pts / eof
+/mnt/video/<id>/status   # read:  state / pts / eof
 ```
 
 Mirrors the InferNode `ctl`+data idiom (`appl/cmd/llmsrv.b`,
@@ -120,7 +120,7 @@ Threat model priority is adversarial input and protocol/emulator compromise
 - **Mount auth.** Dev uses loopback `mount -A` (anon). Any non-loopback listener
   MUST use keyring auth (`mount -k <keyfile>`), consistent with serve-llm
   (INFR-16) and the `lib/sh` profiles. The shipped/headless posture keeps auth
-  on — never expose `/n/video` anonymously off-box.
+  on — never expose `/mnt/video` anonymously off-box.
 - **Not ring-fenced.** This is a general capability and ships normally; it is not
   part of `tests/agent-harness/`.
 
@@ -134,7 +134,7 @@ is and what survives a Rust-kernel rewrite:
   low-risk — but adds a Limbo server to the VM surface, and that 9P layer is
   **rewritten, not lifted**, when the kernel goes Rust.
 - **Phase 2b — Rust-native 9P server (INFR-267).** The Rust service presents
-  `/n/video` directly; in-VM is only `mount` + the render loop (the thinnest VM
+  `/mnt/video` directly; in-VM is only `mount` + the render loop (the thinnest VM
   surface). This is the kernel-aligned endpoint; the Limbo shim is deleted.
 
 **Decision:** do 2a first as a *deliberately disposable* shim to land a visible
@@ -176,7 +176,7 @@ spike's limitations.)
 | 1 — decode core + headless macOS validation | INFR-264 | ✅ done |
 | 2 — hwaccel (VideoToolbox / NVDEC) | INFR-265 | to do |
 | 3a — Limbo `vid9p` styxserver shim | INFR-266 | to do |
-| 3b — render `/n/video` via mpeg path | INFR-268 | to do |
+| 3b — render `/mnt/video` via mpeg path | INFR-268 | to do |
 | 4 — Rust-native 9P server | INFR-267 | to do |
 | 5 — kernel fold-in (ABI TBD) | INFR-269 | blocked |
 | 6 — live RTSP ingest | INFR-271 | to do |

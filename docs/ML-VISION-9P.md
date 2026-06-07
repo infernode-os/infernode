@@ -23,8 +23,9 @@ the existing one.
 Synthetic **service** file servers live under `/mnt` (e.g. `/mnt/llm` — INFR #216,
 `/mnt/mcp` — #213). `/n` is reserved for fully-mounted **remote filesystem
 trees** (another machine's namespace). So vision uses `/mnt/video` and
-`/mnt/vision`. (Existing `/n/tak`, `/n/msg` are the same drift this corrects —
-reconciliation tracked in INFR-278.)
+`/mnt/vision`. (`/n/{tak,msg,llm}` were the same drift and have since been
+migrated to `/mnt` under INFR-254; `/n/mail`, `/n/cal` correctly stay on `/n`
+as genuinely remote resources.)
 
 ## Two shapes
 

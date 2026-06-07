@@ -8,6 +8,7 @@ TARG=\
 	scidct.dis\
 	remap24.dis\
 	vidplay.dis\
+	vidplay9p.dis\
 	mpegtest.dis\
 	mpegperf.dis\
 

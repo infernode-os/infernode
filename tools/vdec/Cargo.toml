@@ -1,0 +1,27 @@
+[package]
+name = "vdec"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "InferNode host-side video decode core: file/stream -> planar I420 frames"
+publish = false
+
+# Protocol-agnostic decode core. Knows nothing about 9P/Styx — the 9P boundary
+# is a separate, swappable layer (see docs/H264-9P-BRIDGE.md). This crate is the
+# durable artifact intended to fold into the Rust kernel later.
+
+[lib]
+name = "vdec"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vdec"
+path = "src/main.rs"
+
+[dependencies]
+# Bindings to system libavcodec/libavformat/libavutil/libswscale.
+# Pinned to the 6.1 series to match the FFmpeg shipped by Ubuntu noble (CI/dev
+# containers) and Homebrew's `ffmpeg@6` on macOS. Tracking FFmpeg 7 is a
+# follow-up (see INFR video epic). The crate version must match the installed
+# FFmpeg major/minor; ffmpeg-sys-next generates bindings against system headers.
+ffmpeg-next = "6.1"

@@ -849,7 +849,7 @@ Mpegi.sdct(m: self ref Mpegi, a: array of Triple, s: string): Pair
 				if (l > -128)
 					m.fmterr(s + " esc -7");
 			} else
-				l = (l << 24) >> 24;
+				if (l > 127) l -= 256;
 		C0 =>
 			(b, l, r) = c0_table[m.speekn(c0_bits)];
 			if (r == UNDEF)

@@ -1267,6 +1267,27 @@ go test ./compiler/ -run TestE2EMultiPackage       # multi-package tests
 go test ./dis/ -count=1                            # bytecode round-trip tests
 ```
 
+### Differential testing (godis vs `go run`, `-c0` vs `-c1`)
+
+`compiler_test.go` checks godis stdout against **hand-written** expected strings,
+under the interpreter only. The differential harness in
+[`difftest/`](difftest/README.md) instead diffs godis against `go run` itself,
+under **both** `-c0` (interpreter) and `-c1` (JIT), over the whole corpus
+(`testdata/` + `_corpus/`), auto-classifying each program as
+match / diverge / `c0!=c1` / crash / compile-fail.
+
+```sh
+cd tools/godis
+go run ./cmd/difftest                 # diff the whole corpus, print the worklist
+go run ./cmd/gencorpus                # (re)generate _corpus/gen_*.go coverage programs
+go test ./difftest/ -run TestE2ELocked  # the CI regression gate (locked corpus)
+```
+
+The `-c0`/`-c1` diff is the load-bearing invariant: the interpreter-only suite
+above cannot catch a JIT-only codegen regression, but a locked program drifting
+under `-c1` fails this gate. The current ranked list of real divergences lives in
+[`docs/DIFFTEST-FINDINGS.md`](docs/DIFFTEST-FINDINGS.md).
+
 ---
 
 ## Project Statistics

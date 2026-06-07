@@ -848,8 +848,8 @@ Mpegi.sdct(m: self ref Mpegi, a: array of Triple, s: string): Pair
 				l = m.sgetn(8) - 256;
 				if (l > -128)
 					m.fmterr(s + " esc -7");
-			} else
-				l = (l << 24) >> 24;
+			} else if (l > 128)
+				l -= 256;	# sign-extend 8-bit level; Limbo >> is logical, so (l<<24)>>24 does not
 		C0 =>
 			(b, l, r) = c0_table[m.speekn(c0_bits)];
 			if (r == UNDEF)

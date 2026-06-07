@@ -128,9 +128,19 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 		}
 	}
 
-	// If this is main, emit calls to user-defined init functions
-	if fl.fn.Name() == "main" && len(fl.comp.initFuncs) > 0 {
-		for _, initFn := range fl.comp.initFuncs {
+	// If this is main, call the package init before user code. The synthesized
+	// "init" runs global-variable initializers and itself chains to the user
+	// init#N funcs, so calling it alone is sufficient (and Go-faithful ordering).
+	// Fall back to calling init#N directly if no init function was recorded
+	// (older path / packages without a synthesized init).
+	if fl.fn.Name() == "main" {
+		initCallees := []*ssa.Function(nil)
+		if fl.comp.initFunc != nil {
+			initCallees = []*ssa.Function{fl.comp.initFunc}
+		} else {
+			initCallees = fl.comp.initFuncs
+		}
+		for _, initFn := range initCallees {
 			callFrame := fl.frame.AllocWord("init.frame")
 			iframeIdx := len(fl.insts)
 			fl.emit(dis.Inst2(dis.IFRAME, dis.Imm(0), dis.FP(callFrame)))
@@ -1169,6 +1179,14 @@ func (fl *funcLowerer) lowerCall(instr *ssa.Call) error {
 
 	// Check if this is a call to a function
 	if callee, ok := call.Value.(*ssa.Function); ok {
+		// Skip calls to a package init we don't compile. The synthesized main
+		// init chains to the init of every imported package, but intercepted
+		// stdlib packages and inferno/sys are not compiled, so their init is a
+		// no-op here. Compiled inits (main, local imports) stay in compiledFuncs
+		// and pass through; init#N are named "init#N", not "init".
+		if callee.Name() == "init" && !fl.comp.compiledFuncs[callee] {
+			return nil
+		}
 		// Check if it's from inferno/sys package → Sys module call
 		if callee.Package() != nil && callee.Package().Pkg.Path() == "inferno/sys" {
 			return fl.lowerSysModuleCall(instr, callee)
@@ -7600,7 +7618,10 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
 
 	// values[idx] = values[lastIdx]
-	tmpVal := fl.frame.AllocWord("dl.tmpv")
+	// Type-aware temp: a pointer-valued map (e.g. map[K]string) needs a GC
+	// pointer slot (H-initialized) so emitStoreThrough's MOVP doesn't decrement
+	// a garbage refcount → "dereference of nil". Mirrors tmpKey above.
+	tmpVal := fl.allocMapKeyTemp(valType, "dl.tmpv")
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
 	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
@@ -7665,7 +7686,7 @@ func (fl *funcLowerer) emitDeferredMapDelete(mapVal, keyVal ssa.Value) error {
 	fl.emitLoadThrough(tmpKey, tmpPtr2, keyType)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
-	tmpVal := fl.frame.AllocWord("ddl.tmpv")
+	tmpVal := fl.allocMapKeyTemp(valType, "ddl.tmpv") // pointer-aware (see lowerMapDelete)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
 	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))

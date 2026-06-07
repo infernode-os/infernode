@@ -537,15 +537,16 @@ func main() {
 		t.Errorf("type descs = %d, want >= 4", len(m.TypeDescs))
 	}
 
-	// Must have 2 CALL instructions (for double and square)
+	// 3 CALL instructions: double, square, and the package init that main now
+	// always calls in its prologue (Go-faithful: init runs before main).
 	callCount := 0
 	for _, inst := range m.Instructions {
 		if inst.Op == dis.ICALL {
 			callCount++
 		}
 	}
-	if callCount != 2 {
-		t.Errorf("CALL count = %d, want 2", callCount)
+	if callCount != 3 {
+		t.Errorf("CALL count = %d, want 3", callCount)
 	}
 
 	// Must round-trip
@@ -926,15 +927,16 @@ func main() {
 		t.Errorf("type descs = %d, want >= 4 (MP + main + Get + Inc)", len(m.TypeDescs))
 	}
 
-	// Must have 4 CALL instructions (3x Inc + 1x Get)
+	// 5 CALL instructions: 3x Inc + 1x Get + the package init that main now
+	// always calls in its prologue (Go-faithful: init runs before main).
 	callCount := 0
 	for _, inst := range m.Instructions {
 		if inst.Op == dis.ICALL {
 			callCount++
 		}
 	}
-	if callCount != 4 {
-		t.Errorf("CALL count = %d, want 4 (3x Inc + 1x Get)", callCount)
+	if callCount != 5 {
+		t.Errorf("CALL count = %d, want 5 (3x Inc + 1x Get + init)", callCount)
 	}
 
 	// Must have INEW/INEWZ for heap-allocated Counter

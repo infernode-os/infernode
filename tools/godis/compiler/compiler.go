@@ -44,6 +44,8 @@ type Compiler struct {
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
 	embedInits   []embedInit // go:embed entries to initialize at module load
 	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
+	initFunc     *ssa.Function   // main package's synthesized "init" (runs global initializers, chains to init#N)
+	compiledFuncs map[*ssa.Function]bool // every function we actually compile (for skipping uncompiled init calls)
 	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
 	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
 	BaseDir      string // directory containing main package (for resolving local imports)
@@ -543,6 +545,12 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		}
 	}
 
+	// Record the set of functions we actually compile. The synthesized package
+	// init chains to imported package inits, but intercepted stdlib / inferno/sys
+	// packages are not compiled — calls to their init must be skipped at lower
+	// time (see lowerCall). `seen` is exactly the compiled set at this point.
+	c.compiledFuncs = seen
+
 	// Phase 1: Compile all functions
 	var compiled []compiledFunc
 	for _, fn := range allFuncs {
@@ -720,10 +728,19 @@ func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package
 				seen[m] = true
 				break
 			}
-			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
+			if !seen[m] && len(m.Blocks) > 0 {
 				*allFuncs = append(*allFuncs, m)
 				seen[m] = true
-				if strings.HasPrefix(m.Name(), "init#") {
+				switch {
+				case m.Name() == "init":
+					// The synthesized package init runs global-variable
+					// initializers (e.g. `var m = map[...]{}` → MakeMap+Store)
+					// and chains to the user init#N funcs. main calls it in its
+					// prologue. Record the main package's init (collected first).
+					if c.initFunc == nil {
+						c.initFunc = m
+					}
+				case strings.HasPrefix(m.Name(), "init#"):
 					c.initFuncs = append(c.initFuncs, m)
 				}
 			}

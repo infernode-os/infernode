@@ -224,8 +224,12 @@ ydistr(a: array of int, v: array of byte, base: int)
 	do {
 		n := base;
 		j := 8;
-		do
-			v[n++] = clamp[a[x++] + CLOFF];
+		do {
+			ai := a[x++] + CLOFF;
+			if (ai < 0) ai = 0;
+			else if (ai >= len clamp) ai = len clamp - 1;
+			v[n++] = clamp[ai];
+		}
 		while (--j > 0);
 		base += width;
 	} while (--i > 0);
@@ -238,8 +242,12 @@ cdistr(a: array of int, v: array of byte, base: int)
 	do {
 		n := base;
 		j := 8;
-		do
-			v[n++] = clamp[a[x++] + CLOFF];
+		do {
+			ai := a[x++] + CLOFF;
+			if (ai < 0) ai = 0;
+			else if (ai >= len clamp) ai = len clamp - 1;
+			v[n++] = clamp[ai];
+		}
 		while (--j > 0);
 		base += w2;
 	} while (--i > 0);

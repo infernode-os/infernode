@@ -132,6 +132,14 @@ eg_sk2pk(void *vs)
 static void*
 eg_gen(int len)
 {
+	/*
+	 * eggen() does mprand(len-1, ...) and gensafeprime(..., len, ...);
+	 * a non-positive / tiny modulus size underflows into
+	 * "mpsetminbits: n < 0" (sysfatal) instead of failing cleanly.
+	 * Reject it here so genSK() returns nil per its contract.
+	 */
+	if(len < 2)
+		return nil;
 	return eggen(len, 0);
 }
 

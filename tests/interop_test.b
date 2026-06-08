@@ -13,11 +13,20 @@ implement InteropTest;
 # ssl device, sent over a real TCP socket, decrypted and de-marshalled on the
 # far side) is byte-identical to the file read directly.
 #
-# Coverage:
+# Coverage -- every certificate signature algorithm the keyring registers
+# (except the SLH-DSA pair, whose multi-second signing makes the full
+# export/mount exercise too slow for the auto-run suite; SLH-DSA-192s/256s
+# node auth is covered over TCP by the scratch harness and documented in
+# docs/NODE-INTEROP-TESTING.md):
 #   - InteropEd25519   classical ed25519 certificates over the PQ handshake
 #   - InteropMLDSA65   fully post-quantum: ML-DSA-65 certs + ML-KEM-768 KEM
+#   - InteropMLDSA87   fully post-quantum: ML-DSA-87 certs + ML-KEM-768 KEM
+#   - InteropRSA       classical RSA-2048 certificates
+#   - InteropDSA       classical DSA-1024 (regression guard for the key
+#                      (de)serialisation fix in libkeyring/dsaalg.c)
+#   - InteropElgamal   classical ElGamal-2048 certificates
 #
-# Both ride aes_256_cbc/sha256 line encryption -- the same default `mount -k`
+# All ride aes_256_cbc/sha256 line encryption -- the same default `mount -k`
 # and `styxlisten` negotiate between InferNode and NERVA3 nodes.
 #
 # Skips cleanly (not fails) where the host has no IP stack at all.
@@ -146,9 +155,9 @@ mkauthinfo(signersk: ref Keyring->SK, signerpk: ref Keyring->PK,
 }
 
 # Create a signer and a mutually-trusting (server, client) authinfo pair.
-setupPair(t: ref T, signeralg: string): (ref Keyring->Authinfo, ref Keyring->Authinfo)
+setupPair(t: ref T, signeralg: string, bits: int): (ref Keyring->Authinfo, ref Keyring->Authinfo)
 {
-	signersk := kr->genSK(signeralg, "interop-signer", 0);
+	signersk := kr->genSK(signeralg, "interop-signer", bits);
 	if(signersk == nil)
 		t.fatal("genSK signer (" + signeralg + ") failed");
 	signerpk := kr->sktopk(signersk);
@@ -204,7 +213,7 @@ servernode(ac: Sys->Connection, ai: ref Keyring->Authinfo, ready: chan of string
 	done <-= s;
 }
 
-testInterop(t: ref T, label, signeralg: string, port: int)
+testInterop(t: ref T, label, signeralg: string, bits, port: int)
 {
 	if(auth == nil)
 		t.fatal("auth module not loaded");
@@ -223,7 +232,7 @@ testInterop(t: ref T, label, signeralg: string, port: int)
 		return;
 	}
 
-	(srvai, cliai) := setupPair(t, signeralg);
+	(srvai, cliai) := setupPair(t, signeralg, bits);
 
 	ready := chan of string;
 	done := chan of ref Srv;
@@ -267,12 +276,36 @@ testInterop(t: ref T, label, signeralg: string, port: int)
 
 testEd25519(t: ref T)
 {
-	testInterop(t, "ed25519", "ed25519", 19811);
+	testInterop(t, "ed25519", "ed25519", 0, 19811);
 }
 
 testMLDSA65(t: ref T)
 {
-	testInterop(t, "mldsa65", "mldsa65", 19812);
+	testInterop(t, "mldsa65", "mldsa65", 0, 19812);
+}
+
+testMLDSA87(t: ref T)
+{
+	testInterop(t, "mldsa87", "mldsa87", 0, 19813);
+}
+
+testRSA(t: ref T)
+{
+	testInterop(t, "rsa", "rsa", 2048, 19814);
+}
+
+testDSA(t: ref T)
+{
+	# regression guard: the DSA key (de)serialiser used to re-read the
+	# first field as `q`, corrupting every wire-transmitted DSA key and
+	# failing cert auth with "bad certificate".
+	testInterop(t, "dsa", "dsa", 1024, 19815);
+}
+
+testElgamal(t: ref T)
+{
+	# 2048 selects precomputed RFC 3526 DH params (fast keygen)
+	testInterop(t, "elgamal", "elgamal", 2048, 19816);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -298,6 +331,10 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("InteropEd25519", testEd25519);
 	run("InteropMLDSA65", testMLDSA65);
+	run("InteropMLDSA87", testMLDSA87);
+	run("InteropRSA", testRSA);
+	run("InteropDSA", testDSA);
+	run("InteropElgamal", testElgamal);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -293,3 +293,5 @@ build-android-apk.ndk-x86_64.log
 # node interop harness artifacts (generated; never commit keys)
 usr/inferno/keyring/interop-*
 tmp/interop_pulled_*
+dis/interop_node_server.dis
+dis/interop_node_client.dis

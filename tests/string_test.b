@@ -275,9 +275,11 @@ testToint(t: ref T)
 	(v, rem) = str->toint("77", 8);
 	t.asserteq(v, 63, "toint octal 77");
 
-	# Base 0 auto-detect with 0x prefix
-	(v, rem) = str->toint("0xff", 0);
-	t.asserteq(v, 255, "toint auto hex");
+	# Base 0 auto-detect: Inferno uses Limbo-style radix (e.g. 16rff),
+	# NOT C-style 0x — see man/2/string ("the base can be specified as
+	# part of the string, in Limbo style (e.g. 16rffff)").
+	(v, rem) = str->toint("16rff", 0);
+	t.asserteq(v, 255, "toint auto hex (Limbo radix)");
 
 	# Negative
 	(v, rem) = str->toint("-10", 10);

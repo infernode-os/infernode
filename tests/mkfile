@@ -55,6 +55,7 @@ TARG=\
 	pqauth_test.dis\
 	interop_test.dis\
 	authneg_test.dis\
+	cipher_matrix_test.dis\
 	regex_test.dis\
 	render_registry_test.dis\
 	runner.dis\

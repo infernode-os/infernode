@@ -520,6 +520,7 @@ JValue.eq(a: self ref JValue, b: ref JValue): int
 						return 0;
 				}else if(!rv.eq(sv))
 					return 0;
+				ls = tl ls;
 			}
 			return ls == nil;
 		}

@@ -31,7 +31,7 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | Asset | Kind | What it proves |
 |-------|------|----------------|
 | `tests/pqauth_test.b` | in-emu unit (auto-discovered by the runner) | the hybrid handshake itself: happy path (ed25519 + ML-DSA-65 signers), real-TCP encrypted channel, and the negatives (downgrade, tampered/malformed ML-KEM key) |
-| `tests/interop_test.b` | in-emu unit (auto-discovered) | end-to-end: real TCP + cert auth + PQ handshake + `aes_256_cbc` ssl + a real `export`/`mount` **file transfer**, for both ed25519 and ML-DSA-65 certs |
+| `tests/interop_test.b` | in-emu unit (auto-discovered) | end-to-end: real TCP + cert auth + PQ handshake + `aes_256_cbc` ssl + a real `export`/`mount` **file transfer**, across the full fast certificate range: ed25519, ML-DSA-65, ML-DSA-87, RSA-2048, **DSA-1024**, ElGamal-2048 |
 | `tests/interop/run-interop.sh` | host harness | **cross-binary**: launches two *separate* emu processes (optionally from different InferNode/NERVA3 trees) and transfers a file between them, verifying it byte-for-byte |
 
 ### Running the in-emu tests
@@ -108,3 +108,67 @@ Fixed by zero-initializing value-type array storage in `OP(newa)`
 (`libinterp/xec.c`), which the interpreter and both JITs share. `keyring_test`
 is now 27 passed / 0 failed. See `tests/arrayinit_test.b` for the regression
 guard.
+
+## Certificate algorithm matrix (the "full range of approved methods")
+
+The keyring registers eight certificate signature algorithms
+(`libinterp/keyring.c:keyringmodinit`). Node-to-node STS auth was exercised
+with each, over a real TCP socket + `aes_256_cbc`/`sha256` ssl:
+
+| Signer cert | Class | Node-to-node auth | Notes |
+|-------------|-------|-------------------|-------|
+| `ed25519`    | classical | ✅ | default modern signer |
+| `rsa` (2048) | classical | ✅ | |
+| `dsa` (1024) | classical | ✅ | **fixed** — see below |
+| `elgamal` (2048) | classical | ✅ | 2048 selects precomputed RFC 3526 DH params |
+| `mldsa65`    | post-quantum (ML-DSA-65) | ✅ | |
+| `mldsa87`    | post-quantum (ML-DSA-87) | ✅ | |
+| `slhdsa192s` | post-quantum (SLH-DSA-SHAKE-192s) | ✅ | ~16 KB cert; ~9 s/sign |
+| `slhdsa256s` | post-quantum (SLH-DSA-SHAKE-256s) | ✅ over TCP | ~40 KB cert; ~8 s/sign; see deadlock note |
+
+`tests/interop_test.b` auto-runs the six fast algorithms end-to-end. The two
+SLH-DSA variants are validated separately because their multi-second signing
+makes the full export/mount exercise too slow for the routine suite; their
+node auth was confirmed over a real TCP socket.
+
+### Bug fixed: DSA certificates corrupted on (de)serialisation
+
+`libkeyring/dsaalg.c`'s `dsa_str2sk`/`dsa_str2pk` parsed the second field
+(`q`) from the *start* of the string again instead of from the advancing
+cursor:
+
+```c
+dsa->pub.p = base64tobig(str, &p);
+dsa->pub.q = base64tobig(str, &p);   /* BUG: re-reads field 0; should be (p, &p) */
+dsa->pub.alpha = base64tobig(p, &p);
+```
+
+Every DSA key that crossed a serialisation boundary (a keyfile, or the public
+key sent on the wire during `auth`) therefore had `q`, `alpha`, `key` and
+`secret` shifted by one field. DSA cert auth failed with `bad certificate`
+the moment a key was transmitted — i.e. DSA node-to-node auth never worked.
+Fixed by chaining both fields from the cursor `p` (matching `rsaalg.c` and
+`egalg.c`). `InteropDSA` in `tests/interop_test.b` guards it.
+
+### Bug fixed: keygen crash on a non-positive key size
+
+`genSK("rsa"|"elgamal", name, n)` with `n <= 1` did not fail cleanly:
+`eggen` ran `mprand(n-1, …)` and aborted with `mpsetminbits: n < 0`, and
+`rsagen` drove `genprime` to `p->top == 0` and an out-of-bounds `p->p[-1]`
+write. Both now reject the size in the `eg_gen`/`rsa_gen` wrappers and return
+nil, and `Keyring_genSK` propagates a nil key as a nil `SK` per its contract
+(size-agnostic signers such as ed25519/ML-DSA/SLH-DSA are unaffected — they
+legitimately accept `0`). The CLI (`auth/createsignerkey`) already validates
+`32..4096`, so this only hardens direct `genSK` callers.
+
+### Note: large SLH-DSA certs and the handshake's batch send
+
+`Keyring->auth` sends four messages — including the full identity certificate
+— before its first read. An SLH-DSA-256s certificate is ~40 KB, so two peers
+each block writing their cert until the other reads. Over **TCP** (the real
+node-to-node transport) the socket send buffer absorbs it and the handshake
+completes; over a small-buffer **pipe** the two writes can deadlock. This is
+a property of the transport buffer, not a wire-format incompatibility:
+ed25519/RSA/ML-DSA certs (≤5 KB) and SLH-DSA-192s (~16 KB) stay under typical
+buffers. If a future transport with a <40 KB send buffer must carry SLH-DSA-256s
+certs, the handshake's send/read interleaving would need revisiting.

@@ -19,7 +19,7 @@ dsa_str2sk(char *str, char **strp)
 
 	dsa = dsaprivalloc();
 	dsa->pub.p = base64tobig(str, &p);
-	dsa->pub.q = base64tobig(str, &p);
+	dsa->pub.q = base64tobig(p, &p);
 	dsa->pub.alpha = base64tobig(p, &p);
 	dsa->pub.key = base64tobig(p, &p);
 	dsa->secret = base64tobig(p, &p);
@@ -41,7 +41,7 @@ dsa_str2pk(char *str, char **strp)
 
 	dsa = dsapuballoc();
 	dsa->p = base64tobig(str, &p);
-	dsa->q = base64tobig(str, &p);
+	dsa->q = base64tobig(p, &p);
 	dsa->alpha = base64tobig(p, &p);
 	dsa->key = base64tobig(p, &p);
 	if(strp)

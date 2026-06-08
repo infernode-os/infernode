@@ -188,10 +188,16 @@ walk(r: refRex, succ: refRex, ar: ref Arena)
 
 compile(e: string, flag: int): (Re, string)
 {
-	if(e == nil)
-		return (nil, "missing expression");	
 	s := ref ReStr(e, 0, len e);
-	ar := ref Arena(array[2*s.n] of Rex, 0, 0, (flag&1)-1);
+	ar := ref Arena(array[2*s.n+1] of Rex, 0, 0, (flag&1)-1);
+	if(s.n == 0) {
+		# empty expression matches the empty string at any position
+		start := ar.start = newRe(NUL, NONE, NONE, nil, ar, 0);
+		walk(start, NIL, ar);
+		if(ar.pno < 0)
+			ar.pno = 0;
+		return (ar, nil);
+	}
 	start := ar.start = re(s, ar);
 	if(start==NIL || s.n!=0)
 		return (nil, "invalid regular expression");

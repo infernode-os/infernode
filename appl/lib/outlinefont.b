@@ -1841,6 +1841,14 @@ geti16be(data: array of byte, off: int): int
 	return v;
 }
 
+geti8(data: array of byte, off: int): int
+{
+	v := int data[off];
+	if(v >= 16r80)
+		v -= 16r100;
+	return v;
+}
+
 getu32be(data: array of byte, off: int): int
 {
 	return (int data[off] << 24) | (int data[off+1] << 16) |
@@ -2401,8 +2409,8 @@ parsecompositeglyph(fd: ref FaceData, data: array of byte,
 			pos += 4;
 		} else {
 			if(cflags & 16r02){
-				dx = real ((int data[pos] << 24) >> 24);
-				dy = real ((int data[pos+1] << 24) >> 24);
+				dx = real geti8(data, pos);
+				dy = real geti8(data, pos+1);
 			}
 			pos += 2;
 		}

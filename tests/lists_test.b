@@ -134,8 +134,9 @@ testAppendEmpty(t: ref T)
 
 testConcat(t: ref T)
 {
-	l1 := "b" :: "a" :: nil;
-	l2 := "d" :: "c" :: nil;
+	# `::` is cons (prepends), so "a"::"b"::nil is the list [a,b].
+	l1 := "a" :: "b" :: nil;
+	l2 := "c" :: "d" :: nil;
 	r := lists->concat(l1, l2);
 	t.asserteq(slen(r), 4, "concat length");
 	t.assertseq(snth(r, 0), "a", "concat first");
@@ -156,7 +157,7 @@ testConcatEmpty(t: ref T)
 
 testLast(t: ref T)
 {
-	l := "c" :: "b" :: "a" :: nil;
+	l := "a" :: "b" :: "c" :: nil;	# [a,b,c]
 	t.assertseq(lists->last(l), "c", "last of 3-element list");
 
 	l2 := "only" :: nil;
@@ -167,7 +168,7 @@ testLast(t: ref T)
 
 testMap(t: ref T)
 {
-	l := "c" :: "b" :: "a" :: nil;
+	l := "a" :: "b" :: "c" :: nil;	# [a,b,c]
 	r := lists->map(toupper, l);
 	t.asserteq(slen(r), 3, "map length");
 	t.assertseq(snth(r, 0), "A", "map first uppercased");
@@ -186,11 +187,13 @@ testMapEmpty(t: ref T)
 
 testFilter(t: ref T)
 {
+	# filter preserves input order; in [banana,avocado,cherry,apple,date]
+	# avocado precedes apple, so the matches come back [avocado, apple].
 	l := "banana" :: "avocado" :: "cherry" :: "apple" :: "date" :: nil;
 	r := lists->filter(startswitha, l);
 	t.asserteq(slen(r), 2, "filter starts-with-a count");
-	t.assertseq(snth(r, 0), "apple", "filter first match");
-	t.assertseq(snth(r, 1), "avocado", "filter second match");
+	t.assertseq(snth(r, 0), "avocado", "filter first match");
+	t.assertseq(snth(r, 1), "apple", "filter second match");
 }
 
 testFilterNone(t: ref T)
@@ -247,8 +250,8 @@ testAnysat(t: ref T)
 
 testPair(t: ref T)
 {
-	l1 := "b" :: "a" :: nil;
-	l2 := "y" :: "x" :: nil;
+	l1 := "a" :: "b" :: nil;	# [a,b]
+	l2 := "x" :: "y" :: nil;	# [x,y]
 	pairs := lists->pair(l1, l2);
 	count := 0;
 	for(p := pairs; p != nil; p = tl p) {

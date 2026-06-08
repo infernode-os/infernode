@@ -173,3 +173,27 @@ a property of the transport buffer, not a wire-format incompatibility:
 ed25519/RSA/ML-DSA certs (≤5 KB) and SLH-DSA-192s (~16 KB) stay under typical
 buffers. If a future transport with a <40 KB send buffer must carry SLH-DSA-256s
 certs, the handshake's send/read interleaving would need revisiting.
+
+## Stress / leak / DoS harness (hardware-run)
+
+`tests/stress/` holds a connection-churn leak/stability harness
+(`churn_node.b` + `run-churn.sh`) and a slowloris/handshake-stall DoS test
+(`dos_stall_test.b`). They are **not** wired into the auto-run suite — they
+churn many TCP connections for a long time and are meant to be driven by hand
+on real hardware. See `tests/stress/README.md`.
+
+**Why not in CI/sandbox.** In the cloud sandbox these were authored in, the
+host **SIGKILLs the emu process** once a per-session CPU/time budget is spent:
+a long churn dies with exit 137 partway through, and eventually even a trivial
+test is killed at exit. There was **no OOM** (`dmesg` clean, RAM free) and the
+emu's thread/process count stayed flat, so those deaths are a *host watchdog*,
+**not** an InferNode memory leak or crash. Host RSS introspection is also
+unreliable there (the emu forks a worker; the visible pid is a zombie stub).
+A trustworthy leak/stability verdict therefore needs a real host — tracked for
+hardware validation alongside the IPv6 task.
+
+One design observation surfaced by the DoS test: `node_server.b` spawns a
+per-connection handler, so a stalled handshake does **not** block the accept
+loop (good) — but `auth->server` has **no handshake-read deadline**, so a
+hostile peer that connects and never speaks pins a handler proc + fds for the
+life of the connection. A read timeout on the handshake would bound that.

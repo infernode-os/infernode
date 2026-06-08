@@ -138,6 +138,14 @@ rsa_gen(int len)
 {
 	RSApriv *key;
 
+	/*
+	 * rsagen() halves len for genprime(); a non-positive / tiny size
+	 * drives genprime() to p->top==0 and an out-of-bounds p->p[-1]
+	 * write.  Reject it so genSK() returns nil instead of corrupting
+	 * memory.
+	 */
+	if(len < 2)
+		return nil;
 	for(;;){
 		key = rsagen(len, 6, 0);
 		if(mpsignif(key->pub.n) == len)

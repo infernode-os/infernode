@@ -372,6 +372,14 @@ Keyring_genSK(void *fp)
 	release();
 	sk->key = (*sa->vec->gensk)(f->length);
 	acquire();
+	/*
+	 * gensk returns nil when key generation fails (e.g. an invalid key
+	 * size).  Honour genSK's contract by returning nil rather than an SK
+	 * with a nil internal key, which would otherwise trip exBadSK only on
+	 * later use.
+	 */
+	if(sk->key == nil)
+		*f->ret = H;
 }
 
 void

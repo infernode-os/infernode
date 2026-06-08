@@ -57,6 +57,12 @@ aopen(b: array of byte): ref Iobuf
 	return ref Iobuf(nil, b, 0, len b, 0, big 0, big 0, OREAD, OREAD);
 }
 
+cksys()
+{
+	if (sys == nil)
+		sys = load Sys Sys->PATH;
+}
+
 readchunk(b: ref Iobuf): int
 {
 	if (b.fd == nil){
@@ -114,6 +120,7 @@ writechunk(b: ref Iobuf): int
 
 Iobuf.close(b: self ref Iobuf)
 {
+	cksys();
 	if (b.fd == nil) {
 		nofill(b);
 		return;
@@ -126,6 +133,7 @@ Iobuf.close(b: self ref Iobuf)
 
 Iobuf.flush(b: self ref Iobuf): int
 {
+	cksys();
 	if (b.fd == nil)
 		return ERROR;
 	if (b.lastop == OREAD){
@@ -146,6 +154,7 @@ Iobuf.flush(b: self ref Iobuf): int
 
 Iobuf.seek(b: self ref Iobuf, off: big, start: int): big
 {
+	cksys();
 	npos: big;
 
 	if (b.fd == nil){
@@ -181,6 +190,7 @@ Iobuf.seek(b: self ref Iobuf, off: big, start: int): big
 
 Iobuf.offset(b: self ref Iobuf): big
 {
+	cksys();
 	return b.bufpos + big b.index;
 }
 
@@ -201,6 +211,7 @@ write2read(b: ref Iobuf): int
 
 Iobuf.read(b: self ref Iobuf, buf: array of byte, n: int): int
 {
+	cksys();
 	if (b.mode == OWRITE)
 		return ERROR;
 	if (b.lastop != OREAD){
@@ -229,6 +240,7 @@ Iobuf.read(b: self ref Iobuf, buf: array of byte, n: int): int
 
 Iobuf.getb(b: self ref Iobuf): int
 {
+	cksys();
 	if(b.lastop != OREAD){
 		if(b.mode == OWRITE)
 			return ERROR;
@@ -247,6 +259,7 @@ Iobuf.getb(b: self ref Iobuf): int
 
 Iobuf.ungetb(b: self ref Iobuf): int
 {
+	cksys();
 	if(b.mode == OWRITE || b.lastop != OREAD)
 		return ERROR;
 	b.index--;
@@ -255,6 +268,7 @@ Iobuf.ungetb(b: self ref Iobuf): int
 
 Iobuf.getc(b: self ref Iobuf): int
 {
+	cksys();
 	r, i, s:	int;
 
 	if(b.lastop != OREAD){
@@ -289,6 +303,7 @@ Iobuf.getc(b: self ref Iobuf): int
 
 Iobuf.ungetc(b: self ref Iobuf): int
 {
+	cksys();
 	if(b.index == 0 || b.mode == OWRITE || b.lastop != OREAD)
 		return ERROR;
 	stop := b.index - Sys->UTFmax;
@@ -341,6 +356,7 @@ tgets(b: ref Iobuf, t: int): string
 		
 Iobuf.gets(b: self ref Iobuf, term: int): string
 {
+	cksys();
 	i: int;
 
 	if(b.mode == OWRITE)
@@ -379,6 +395,7 @@ Iobuf.gets(b: self ref Iobuf, term: int): string
 
 Iobuf.gett(b: self ref Iobuf, s: string): string
 {
+	cksys();
 	r := "";
 	if (b.mode == OWRITE || (ch := b.getc()) < 0)
 		return nil;
@@ -402,6 +419,7 @@ read2write(b: ref Iobuf)
 
 Iobuf.write(b: self ref Iobuf, buf: array of byte, n: int): int
 {
+	cksys();
 	if(b.lastop != OWRITE) {
 		if(b.mode == OREAD)
 			return ERROR;
@@ -429,6 +447,7 @@ Iobuf.write(b: self ref Iobuf, buf: array of byte, n: int): int
 
 Iobuf.putb(b: self ref Iobuf, c: byte): int
 {
+	cksys();
 	if(b.lastop != OWRITE) {
 		if(b.mode == OREAD)
 			return ERROR;
@@ -449,6 +468,7 @@ Iobuf.putb(b: self ref Iobuf, c: byte): int
 
 Iobuf.putc(b: self ref Iobuf, c: int): int
 {
+	cksys();
 	if(b.lastop != OWRITE) {
 		if (b.mode == OREAD)
 			return ERROR;
@@ -470,6 +490,7 @@ Iobuf.putc(b: self ref Iobuf, c: int): int
 
 Iobuf.puts(b: self ref Iobuf, s: string): int
 {
+	cksys();
 	if(b.lastop != OWRITE) {
 		if (b.mode == OREAD)
 			return ERROR;
@@ -513,6 +534,7 @@ filler(b: ref Iobuf): ref Filler
 
 Iobuf.setfill(b: self ref Iobuf, fill: BufioFill)
 {
+	cksys();
 	if ((f := filler(b)) != nil)
 		f.fill = fill;
 	else

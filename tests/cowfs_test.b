@@ -142,7 +142,11 @@ mountcow(t: ref T, basedir, overlaydir, mntpoint: string)
 	if(err != nil)
 		t.fatal("cowfs start: " + err);
 
-	if(sys->mount(mntfd, nil, mntpoint, Sys->MREPL, nil) < 0)
+	# MCREATE is required for the kernel to allow Tcreate through the
+	# mount (new-file creation / copy-up); without it the overlay is
+	# effectively read-only and creation fails with "mounted directory
+	# forbids creation".
+	if(sys->mount(mntfd, nil, mntpoint, Sys->MREPL|Sys->MCREATE, nil) < 0)
 		t.fatal(sys->sprint("cowfs mount: %r"));
 }
 

@@ -129,7 +129,9 @@ start(basepath, overlaydir: string): (ref Sys->FD, string)
 		return (nil, sys->sprint("can't create pipe: %r"));
 
 	navops := chan of ref Navop;
-	spawn navigator(navops, state);
+	navready := chan of int;
+	spawn navigator(navops, state, navready);
+	<-navready;	# wait until navigator has forked its namespace
 
 	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big 0);
 	fds[0] = nil;
@@ -538,6 +540,26 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, Ebadarg));
 				break;
 			}
+			# Honor OTRUNC: materialise an empty overlay file shadowing
+			# the base. Otherwise a truncating open (e.g. sys->create over
+			# an existing base file) would copy the base up on the first
+			# write but never truncate, leaving stale trailing bytes.
+			if((m.mode & Sys->OTRUNC) && !(c.qtype & Sys->QTDIR)) {
+				tpe := lookuppath(state, c.path);
+				if(tpe != nil && tpe.relpath != "") {
+					topath := state.overlaydir + "/" + tpe.relpath;
+					ensureparent(topath);
+					tfd := sys->create(topath, Sys->OWRITE, FILE_PERM);
+					if(tfd == nil) {
+						srv.reply(ref Rmsg.Error(m.tag, sys->sprint("truncate: %r")));
+						break;
+					}
+					tfd = nil;
+					if(iswhiteout(state, tpe.relpath))
+						removewhiteout(state, tpe.relpath);
+					state.vers++;
+				}
+			}
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
@@ -710,8 +732,14 @@ Serve:
 
 # --- Navigator ---
 
-navigator(navops: chan of ref Navop, state: ref SrvState)
+navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 {
+	# Fork the namespace before serving so base reads resolve to the
+	# pre-mount base even after the caller mounts cowfs over basepath
+	# (mirrors serveloop's FORKNS). Without this the walk/stat path
+	# re-enters the cowfs mount and the single-threaded server deadlocks
+	# on the first read-through.
+	readyc <-= sys->pctl(Sys->FORKNS, nil);
 	while((m := <-navops) != nil) {
 		pick n := m {
 		Stat =>

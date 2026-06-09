@@ -37,6 +37,7 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | `tests/crypto_props_test.b` | in-emu unit (auto-discovered) | protocol crypto guarantees: two handshakes with the same certs derive **different** 64-byte secrets (ephemeral key agreement / forward-secrecy proxy), a reflected `alpha**r0` is caught by the replay check, and a one-byte-corrupted certificate signature is rejected |
 | `tests/interrupt_test.b` | in-emu unit (auto-discovered) | interruptibility: an abrupt TCP disconnect **mid-handshake** makes the peer error cleanly (`hungup`), and **mid-transfer** makes the reader hit EOF with the partial data — no crash, no hang (timeout-guarded) |
 | `tests/concurrent_auth_test.b` | in-emu unit (auto-discovered) | 12 clients authenticate to one spawn-per-connection server **simultaneously** (shared Authinfos both ends), each echoing a distinct 4 KiB payload; asserts every client gets its **own** bytes back — no cross-talk, no races, no hang |
+| `tests/interop/run-mount-auth.sh` | host harness | **real CLI path**: `auth/createsignerkey` -> on-disk keyfile -> `styxlisten -k ... export /lib` (server) <- `mount -k ... -C` (client), reading a file through the encrypted styx mount and verifying it; covers ed25519 + ML-DSA-65 and checks an anonymous `mount -A` is rejected |
 | `tests/interop/run-interop.sh` | host harness | **cross-binary**: launches two *separate* emu processes (optionally from different InferNode/NERVA3 trees) and transfers a file between them, verifying it byte-for-byte |
 
 ### Running the in-emu tests

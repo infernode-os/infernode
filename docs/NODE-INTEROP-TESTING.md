@@ -198,3 +198,14 @@ per-connection handler, so a stalled handshake does **not** block the accept
 loop (good) — but `auth->server` has **no handshake-read deadline**, so a
 hostile peer that connects and never speaks pins a handler proc + fds for the
 life of the connection. A read timeout on the handshake would bound that.
+
+## Performance baselines (hardware-run)
+
+`tests/bench/bench_node.b` measures keygen + STS-handshake latency per
+certificate algorithm and encrypted-channel throughput per `ssl` cipher
+(`sys->millisec()` timing, no host introspection). Not auto-run — slow and
+environment-dependent. See `tests/bench/README.md`. The shape it reveals: the
+handshake is dominated by the shared DH-2048 + ML-KEM-768 key agreement (so
+ed25519/ML-DSA/RSA/DSA land within ~10% of each other), ElGamal verify is ~3×
+heavier, and SLH-DSA signing is in a different league (~9 s+, a conservative
+backup not a default); line encryption costs ~7× vs plaintext with AES ≳ IDEA.

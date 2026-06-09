@@ -540,6 +540,26 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, Ebadarg));
 				break;
 			}
+			# Honor OTRUNC: materialise an empty overlay file shadowing
+			# the base. Otherwise a truncating open (e.g. sys->create over
+			# an existing base file) would copy the base up on the first
+			# write but never truncate, leaving stale trailing bytes.
+			if((m.mode & Sys->OTRUNC) && !(c.qtype & Sys->QTDIR)) {
+				tpe := lookuppath(state, c.path);
+				if(tpe != nil && tpe.relpath != "") {
+					topath := state.overlaydir + "/" + tpe.relpath;
+					ensureparent(topath);
+					tfd := sys->create(topath, Sys->OWRITE, FILE_PERM);
+					if(tfd == nil) {
+						srv.reply(ref Rmsg.Error(m.tag, sys->sprint("truncate: %r")));
+						break;
+					}
+					tfd = nil;
+					if(iswhiteout(state, tpe.relpath))
+						removewhiteout(state, tpe.relpath);
+					state.vers++;
+				}
+			}
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));

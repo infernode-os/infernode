@@ -129,7 +129,9 @@ start(basepath, overlaydir: string): (ref Sys->FD, string)
 		return (nil, sys->sprint("can't create pipe: %r"));
 
 	navops := chan of ref Navop;
-	spawn navigator(navops, state);
+	navready := chan of int;
+	spawn navigator(navops, state, navready);
+	<-navready;	# wait until navigator has forked its namespace
 
 	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big 0);
 	fds[0] = nil;
@@ -710,8 +712,14 @@ Serve:
 
 # --- Navigator ---
 
-navigator(navops: chan of ref Navop, state: ref SrvState)
+navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 {
+	# Fork the namespace before serving so base reads resolve to the
+	# pre-mount base even after the caller mounts cowfs over basepath
+	# (mirrors serveloop's FORKNS). Without this the walk/stat path
+	# re-enters the cowfs mount and the single-threaded server deadlocks
+	# on the first read-through.
+	readyc <-= sys->pctl(Sys->FORKNS, nil);
 	while((m := <-navops) != nil) {
 		pick n := m {
 		Stat =>

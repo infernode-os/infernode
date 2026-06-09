@@ -35,6 +35,7 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | `tests/cipher_matrix_test.b` | in-emu unit (auto-discovered) | every `ssl` line-encryption cipher (`aes_256_cbc`, `aes_128_cbc`, `ideacbc`, `ideaecb`) and MAC (`sha256`, `sha1`, `md5`, `md4`), plus the unencrypted `none` path, negotiated through a real `auth->server`/`auth->client` handshake and verified to round-trip a payload byte-for-byte |
 | `tests/authneg_test.b` | in-emu unit (auto-discovered) | the trust + integrity layer must **fail closed**: untrusted signer rejected, expired certificate rejected, a cipher the server did not offer refused, and a one-byte tamper on the encrypted channel caught by the ssl record MAC |
 | `tests/crypto_props_test.b` | in-emu unit (auto-discovered) | protocol crypto guarantees: two handshakes with the same certs derive **different** 64-byte secrets (ephemeral key agreement / forward-secrecy proxy), a reflected `alpha**r0` is caught by the replay check, and a one-byte-corrupted certificate signature is rejected |
+| `tests/interrupt_test.b` | in-emu unit (auto-discovered) | interruptibility: an abrupt TCP disconnect **mid-handshake** makes the peer error cleanly (`hungup`), and **mid-transfer** makes the reader hit EOF with the partial data — no crash, no hang (timeout-guarded) |
 | `tests/interop/run-interop.sh` | host harness | **cross-binary**: launches two *separate* emu processes (optionally from different InferNode/NERVA3 trees) and transfers a file between them, verifying it byte-for-byte |
 
 ### Running the in-emu tests

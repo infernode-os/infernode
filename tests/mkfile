@@ -57,6 +57,7 @@ TARG=\
 	authneg_test.dis\
 	cipher_matrix_test.dis\
 	crypto_props_test.dis\
+	interrupt_test.dis\
 	regex_test.dis\
 	render_registry_test.dis\
 	runner.dis\

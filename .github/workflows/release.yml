@@ -1340,12 +1340,13 @@ jobs:
 
           ### Code signing
 
-          Windows code signing for this project is provided by the
-          [SignPath Foundation](https://signpath.org/), with certificates
-          issued by SSL.com. Signed Windows binaries carry verified
-          Publisher metadata and accumulate Microsoft SmartScreen
-          reputation. Until the signing path is live, unsigned downloads
-          are silently blocked by Windows after browser delivery (the
-          "Mark of the Web"); `setup-windows.bat` works around this by
-          clearing the tag from the bundle on first run — see the
-          Windows install bullet above.
+          macOS builds are Developer ID–signed and notarized. Windows
+          builds are not yet code-signed, so browser-delivered downloads
+          are silently blocked by Windows after delivery (the
+          "Mark of the Web") until the tag is cleared; `setup-windows.bat`
+          does this by clearing the tag from the bundle on first run —
+          see the Windows install bullet above. A signing path that would
+          give Windows binaries verified Publisher metadata and accumulate
+          Microsoft SmartScreen reputation is being evaluated. (All
+          release artifacts also carry Sigstore cosign signatures — see
+          Verification above.)

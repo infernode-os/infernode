@@ -40,7 +40,7 @@ cd infernode-*-linux-*-gui
 
 Every release asset is published with a cosign bundle (`.pem` + `.sig`) and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 
-Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (handled in the meantime by `setup-windows.bat`, which clears the tag from the bundle on first run — see the Windows install bullet above).
+Windows builds are not yet code-signed. Browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file, and SmartScreen then silently blocks the unsigned `InferNode.exe`; `setup-windows.bat` works around this by clearing the tag from the bundle on first run (see the Windows install bullet above). A code-signing path — which would give the binaries verified Publisher metadata and accumulate Microsoft SmartScreen reputation — is being evaluated.
 
 ### Build from source
 

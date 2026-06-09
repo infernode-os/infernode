@@ -531,7 +531,17 @@ overlaywritepaths(paths: list of string, actid: int): string
 		if(cerr != nil)
 			return sys->sprint("cowfs %s: %s", fullpath, cerr);
 
-		if(sys->mount(mntfd, nil, fullpath, Sys->MREPL, nil) < 0)
+		# MCREATE here is safe in a way it is NOT for the plain MREPL
+		# binds above (which restrict MCREATE to /tmp): every mutation
+		# through a cowfs mount — create, write/copy-up, remove/whiteout —
+		# lands in the per-agent ephemeral overlay (overlaydir), never the
+		# real base. These are exactly caps.writepaths (write already
+		# granted), so creation of new files is intended; cowfs confines
+		# it to the overlay and validates create names (safename) so it
+		# cannot escape. Without MCREATE the granted overlay would be
+		# silently create-only-via-modify, breaking legitimate new-file
+		# writes the agent is entitled to.
+		if(sys->mount(mntfd, nil, fullpath, Sys->MREPL|Sys->MCREATE, nil) < 0)
 			return sys->sprint("cowfs mount %s: %r", fullpath);
 	}
 	return nil;

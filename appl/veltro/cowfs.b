@@ -432,6 +432,20 @@ joinrel(parent, name: string): string
 	return parent + "/" + name;
 }
 
+# A 9P create name must be a single, non-special path element. Reject
+# "", ".", ".." and any name containing '/'. Defence in depth: with
+# MCREATE on the mount the create path is reachable, and an unchecked
+# name could escape the per-agent overlay (e.g. "..", "a/../../etc").
+safename(name: string): int
+{
+	if(name == "" || name == "." || name == "..")
+		return 0;
+	for(i := 0; i < len name; i++)
+		if(name[i] == '/')
+			return 0;
+	return 1;
+}
+
 # --- Path validation ---
 
 # Canonicalize a relative path and reject traversal attempts.
@@ -576,6 +590,12 @@ Serve:
 				break;
 			}
 
+			# Reject unsafe create names before they reach the host fs.
+			if(!safename(m.name)) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
+
 			relpath := joinrel(pe.relpath, m.name);
 
 			# Remove whiteout if creating over a deleted file
@@ -700,6 +720,11 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, rerr));
 				break;
 			}
+			# Tremove always clunks the fid (success or failure). The
+			# default Styxserver.remove does this; our custom handler must
+			# too, or the leaked fid collides with the kernel's next reuse
+			# of that number ("fid already in use") and wedges the mount.
+			srv.delfid(c);
 			pe := lookuppath(state, c.path);
 			if(pe == nil || pe.relpath == "") {
 				# Can't remove root

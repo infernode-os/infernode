@@ -82,7 +82,10 @@ run(name: string, testfn: ref fn(t: ref T))
 
 hastoolfs(): int
 {
-	return agentlib->pathexists("/tool/tools");
+	# An existing but empty /tool/tools (e.g. leftover scratch files in
+	# the emu root instead of a live tools9p mount) must count as absent —
+	# parseactions needs the actual tool list to match anything.
+	return len agentlib->readfile("/tool/tools") > 0;
 }
 
 loadtool(name: string): Tool
@@ -423,10 +426,12 @@ testSystemTxtTodoMandate(t: ref T)
 		t.skip("system.txt not readable");
 		return;
 	}
-	t.assert(agentlib->contains(content, "non-trivial"),
-		"Fix1: system.txt uses 'non-trivial tasks' threshold");
-	t.assert(agentlib->contains(content, "EXTREMELY helpful"),
-		"Fix1: system.txt includes CC-style todo encouragement");
+	# The CC-style emphasis ("non-trivial", "EXTREMELY helpful") was
+	# deliberately dropped when the prompt was reworked for small-model
+	# reliability (5ce3fea0, b781e9f5). The surviving mandate is the
+	# planning-discipline line.
+	t.assert(agentlib->contains(content, "use plan or todo BEFORE acting"),
+		"Fix1: system.txt mandates plan/todo before acting");
 	t.assert(!agentlib->contains(content, "3+ steps"),
 		"Fix1: old '3+ steps' threshold removed");
 }

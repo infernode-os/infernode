@@ -398,7 +398,7 @@ struct Proc
 	int	swipend;	/* software interrupt pending for Prog */
 	int	syscall;	/* set true under sysio for interruptable syscalls */
 	int	intwait;	/* spin wait for note to turn up */
-	int	sigid;		/* handle used for signal/note/exception */
+	uintptr	sigid;		/* handle used for signal/note/exception: a pid, or a pthread_t on MacOSX, so it must be pointer-sized */
 	Lock	sysio;		/* note handler lock */
 	char	genbuf[128];	/* buffer used e.g. for last name element from namec */
 	int	nerr;		/* error stack SP */

@@ -25,7 +25,11 @@ SERVER_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 CLIENT_ROOT="${2:-$SERVER_ROOT}"
 ALG="${3:-ed25519}"
 PORT="${INTEROP_PORT:-19877}"
-ADDR="tcp!127.0.0.1!${PORT}"
+# Transport address for both nodes.  Defaults to IPv4 loopback; override with
+# INTEROP_ADDR to exercise IPv6 (e.g. INTEROP_ADDR='tcp!::1!19877') or a real
+# interface address.  INTEROP_HOST is a convenience that just substitutes the
+# host part while keeping the port.
+ADDR="${INTEROP_ADDR:-tcp!${INTEROP_HOST:-127.0.0.1}!${PORT}}"
 
 emu_bin() {
 	if   [ -x "$1/emu/Linux/o.emu" ];  then echo "$1/emu/Linux/o.emu"
@@ -113,7 +117,11 @@ clilog() { cat "$TMP/client.out" "$TMP/client.err" 2>/dev/null; }
 DONE=0
 for i in $(seq 1 100); do
 	clilog | grep -q "node_client: OK read" && { DONE=1; break; }
-	clilog | grep -qE "node_client: .*(:|failed)" && break   # an error line
+	# An error line is any node_client: line other than the benign progress
+	# lines.  Do NOT key off a bare colon — IPv6 addresses (tcp!::1!port) put
+	# colons in the benign "authenticated to <addr>" line and would otherwise
+	# be misread as an error, aborting the transfer before it completes.
+	clilog | grep "node_client:" | grep -vE "authenticated to|OK read" | grep -q . && break
 	kill -0 $CLI_PID 2>/dev/null || break
 	sleep 0.2
 done

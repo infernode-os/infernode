@@ -2368,22 +2368,13 @@ parse_exts(exts: list of ref Extension): (string, list of ref ExtClass)
 	l := exts;
 	while(l != nil) {
 		ext := hd l;
-		oid := asn1->oid_lookup(ext.oid, objIdTab);
-		if(oid == id_ce_subjectAltName) {
-			# SAN: always decode — required for hostname verification.
-			(err, et) := ExtClass.decode(ext);
-			if(err != "")
-				return (err, nil);
-			if(et != nil)
-				ets = et :: ets;
-		} else {
-			# For all other extensions: avoid calling ExtClass.decode —
-			# some decode paths trigger JIT SEGV in the current emu binary.
-			# RFC 5280 §4.2: only reject for unknown OIDs that are critical.
-			if(oid == -1 && ext.critical)
-				return ("unknown critical extension", nil);
-			# else: known non-SAN extension, or unknown non-critical — skip.
-		}
+		(err, et) := ExtClass.decode(ext);
+		if(err != "")
+			return (err, nil);
+		# Unknown non-critical extensions decode to nil — skip them
+		# (RFC 5280 §4.2); unknown critical ones return err above.
+		if(et != nil)
+			ets = et :: ets;
 		l = tl l;
 	}
 	lseq: list of ref ExtClass;

@@ -127,15 +127,42 @@ Result: adt {
 	secret:	array of byte;
 };
 
-authproc(fd: ref Sys->FD, ai: ref Keyring->Authinfo, c: chan of ref Result)
+# Every spawned proc self-reports its pid first, so the parent can kill
+# stragglers.  A proc left blocked (on a pipe read after a stalled handshake,
+# or in a long sleep) keeps the emu from ever exiting — every Dis proc must
+# terminate before cleanexit.  On CI that leak surfaced as a hang or a stray
+# "process dis faults" at teardown right after the suite PASSed (INFR-303).
+killpid(pid: int)
 {
+	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+authproc(fd: ref Sys->FD, ai: ref Keyring->Authinfo, pidc: chan of int, c: chan of ref Result)
+{
+	pidc <-= sys->pctl(0, nil);
 	(owner, secret) := kr->auth(fd, ai, 0);
 	c <-= ref Result(owner, secret);
 }
 
-timerproc(c: chan of int, ms: int)
+# Sleep in slices, polling a cancel channel: a "kill" via #p/n/ctl does not
+# interrupt a proc blocked in the host nanosleep on macOS (swiproc's
+# host-syscall interrupt path is a no-op there), so a plain sleep(ms) would
+# always run to completion and delay emu exit by the full timeout.
+timerproc(cancel: chan of int, c: chan of int, ms: int)
 {
-	sys->sleep(ms);
+	for(elapsed := 0; elapsed < ms; elapsed += 100){
+		sys->sleep(100);
+		alt {
+		<-cancel =>
+			return;
+		* =>
+			;
+		}
+	}
 	c <-= 1;
 }
 
@@ -145,23 +172,34 @@ runHandshake(t: ref T, a, b: ref Keyring->Authinfo, ms: int): (ref Result, ref R
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
 		t.fatal(sys->sprint("pipe failed: %r"));
-	ca := chan of ref Result;
-	cb := chan of ref Result;
-	# Buffered: once the handshake completes we stop reading tmo, so an
-	# unbuffered send here would block timerproc forever and keep the emu
-	# from ever exiting (every Dis proc must terminate before cleanexit).
+	pidc := chan[1] of int;
+	# Buffered result/timeout/cancel chans: a proc that finishes after we
+	# have stopped listening must not block forever on the send.
+	ca := chan[1] of ref Result;
+	cb := chan[1] of ref Result;
 	tmo := chan[1] of int;
-	spawn authproc(fds[0], a, ca);
-	spawn authproc(fds[1], b, cb);
-	spawn timerproc(tmo, ms);
+	cancel := chan[1] of int;
+	spawn authproc(fds[0], a, pidc, ca);
+	pida := <-pidc;
+	spawn authproc(fds[1], b, pidc, cb);
+	pidb := <-pidc;
+	spawn timerproc(cancel, tmo, ms);
+	fds = nil;	# only the authprocs hold the pipe ends now
 	ra, rb: ref Result;
 	for(got := 0; got < 2;){
 		alt {
 		r := <-ca => ra = r; got++;
 		r := <-cb => rb = r; got++;
-		<-tmo => return (nil, nil);
+		<-tmo =>
+			# Stalled handshake: kill the blocked authprocs so the
+			# leak doesn't pin the emu open; the caller reports the
+			# stall as a test failure.
+			killpid(pida);
+			killpid(pidb);
+			return (nil, nil);
 		}
 	}
+	cancel <-= 1;	# stop the timer so its sleep doesn't delay emu exit
 	return (ra, rb);
 }
 
@@ -222,17 +260,23 @@ testReplayRejected(t: ref T)
 	rdone := chan[1] of int;
 	spawn reflector(fds[1], rdone);
 
-	cr := chan of ref Result;
-	spawn authproc(fds[0], alice, cr);
-	tmo := chan[1] of int;	# buffered: see runHandshake — avoid blocking timerproc forever
-	spawn timerproc(tmo, 15000);
+	pidc := chan[1] of int;
+	cr := chan[1] of ref Result;
+	spawn authproc(fds[0], alice, pidc, cr);
+	pida := <-pidc;
+	tmo := chan[1] of int;
+	cancel := chan[1] of int;
+	spawn timerproc(cancel, tmo, 15000);
+	fds = nil;	# the reflector unblocks via pipe close when authproc goes away
 
 	alt {
 	r := <-cr =>
+		cancel <-= 1;
 		t.assert(r.secret == nil, "a reflected handshake must NOT yield a session secret");
 		t.assert(contains(r.owner, "replay"),
 			sys->sprint("reflection rejected as a replay (got %q)", r.owner));
 	<-tmo =>
+		killpid(pida);
 		t.fatal("peer hung on a reflected handshake");
 	}
 }

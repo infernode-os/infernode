@@ -7,10 +7,6 @@ implement BufioTest;
 #         putb, putc, puts, ungetb, ungetc, read, write,
 #         seek, offset, flush, close
 #
-# TODO: SopenGett fails — gett returns fields with delimiter still attached
-#       (e.g. "field1:" instead of "field1"). The delimiter is not being
-#       stripped from the returned token. Low priority — gett is rarely used.
-#
 
 include "sys.m";
 	sys: Sys;
@@ -115,17 +111,24 @@ testSopenGets(t: ref T)
 
 testSopenGett(t: ref T)
 {
-	b := bufio->sopen("field1::field2::field3");
+	# gett(sep) takes a SET of terminator characters (not a literal
+	# multi-char delimiter) and the returned token INCLUDES the
+	# terminator — same convention as gets. See man/2/bufio. The last
+	# field has no terminator, so it reads to EOF; a further gett at EOF
+	# returns nil.
+	b := bufio->sopen("field1:field2:field3");
 	if(b == nil) {
 		t.fatal("sopen returned nil");
 		return;
 	}
-	s := b.gett("::");
-	t.assertseq(s, "field1", "gett first field");
-	s = b.gett("::");
-	t.assertseq(s, "field2", "gett second field");
-	s = b.gett("::");
-	t.assertseq(s, "field3", "gett third field");
+	s := b.gett(":");
+	t.assertseq(s, "field1:", "gett first field includes separator");
+	s = b.gett(":");
+	t.assertseq(s, "field2:", "gett second field includes separator");
+	s = b.gett(":");
+	t.assertseq(s, "field3", "gett last field has no separator (EOF)");
+	s = b.gett(":");
+	t.assertnil(s, "gett at EOF returns nil");
 }
 
 testSopenEmpty(t: ref T)

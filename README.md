@@ -1,6 +1,6 @@
 # InferNode
 
-[![Latest release](https://img.shields.io/github/v/release/infernode-os/infernode?display_name=tag)](https://github.com/infernode-os/infernode/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/infernode-os/infernode?display_name=tag&cacheSeconds=3600)](https://github.com/infernode-os/infernode/releases/latest)
 [![Container image](https://img.shields.io/badge/ghcr.io-infernode--os%2Finfernode-blue?logo=docker)](https://github.com/infernode-os/infernode/pkgs/container/infernode)
 [![CI](https://github.com/infernode-os/infernode/actions/workflows/ci.yml/badge.svg)](https://github.com/infernode-os/infernode/actions/workflows/ci.yml)
 [![Security Analysis](https://github.com/infernode-os/infernode/actions/workflows/security.yml/badge.svg)](https://github.com/infernode-os/infernode/actions/workflows/security.yml)

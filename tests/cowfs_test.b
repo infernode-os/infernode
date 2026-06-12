@@ -105,6 +105,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Revert", testRevert);
 	run("DiffListing", testDiffListing);
 	run("PerFilePromote", testPerFilePromote);
+	run("SecurityBaseIsolation", testSecurityBaseIsolation);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -142,7 +143,11 @@ mountcow(t: ref T, basedir, overlaydir, mntpoint: string)
 	if(err != nil)
 		t.fatal("cowfs start: " + err);
 
-	if(sys->mount(mntfd, nil, mntpoint, Sys->MREPL, nil) < 0)
+	# MCREATE is required for the kernel to allow Tcreate through the
+	# mount (new-file creation / copy-up); without it the overlay is
+	# effectively read-only and creation fails with "mounted directory
+	# forbids creation".
+	if(sys->mount(mntfd, nil, mntpoint, Sys->MREPL|Sys->MCREATE, nil) < 0)
 		t.fatal(sys->sprint("cowfs mount: %r"));
 }
 
@@ -475,6 +480,61 @@ testPerFilePromote(t: ref T)
 	t.assert(!fileexists(overlaydir + "/b.txt"), "b.txt removed from overlay");
 	# b.txt base unchanged
 	t.assertseq(readfile(basedir + "/b.txt"), "b-original", "b.txt base unchanged");
+}
+
+# Security: with MCREATE on the mount (so the agent can create files in
+# its granted overlay), every mutation must stay confined to the overlay.
+# The real base directory must be byte-for-byte unchanged after a
+# create + modify + remove through the mount. This is the cow sandbox
+# guarantee that lets nsconstruct grant writepaths to an adversarial agent.
+testSecurityBaseIsolation(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup(t, "security");
+
+	writefile(basedir + "/keep.txt", "keepme");
+	writefile(basedir + "/mod.txt", "original");
+
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	# Mutate through the mount: create a new file, modify an existing one,
+	# and remove a base file.
+	fd := sys->create(mntpoint + "/intruder.txt", Sys->OWRITE, 8r644);
+	if(fd == nil) {
+		t.fatal(sys->sprint("create through mount: %r"));
+		return;
+	}
+	d := array of byte "payload";
+	sys->write(fd, d, len d);
+	fd = nil;
+
+	writefile(mntpoint + "/mod.txt", "tampered");
+
+	if(sys->remove(mntpoint + "/keep.txt") < 0)
+		t.log(sys->sprint("remove through mount: %r"));
+
+	# --- The base on disk must be completely unchanged ---
+	t.assert(fileexists(basedir + "/keep.txt"), "base keep.txt survives remove (whiteout only)");
+	t.assertseq(readfile(basedir + "/keep.txt"), "keepme", "base keep.txt content unchanged");
+	t.assertseq(readfile(basedir + "/mod.txt"), "original", "base mod.txt NOT modified (copy-up)");
+	t.assert(!fileexists(basedir + "/intruder.txt"), "created file did NOT leak into base");
+
+	# Base directory holds exactly the two original entries, nothing more.
+	(bdirs, bn) := readdir->init(basedir, Readdir->NAME);
+	bnames: list of string;
+	for(i := 0; i < bn; i++)
+		bnames = bdirs[i].name :: bnames;
+	t.asserteq(bn, 2, "base directory still has exactly 2 entries");
+	t.assert(inlist("keep.txt", bnames), "base still has keep.txt");
+	t.assert(inlist("mod.txt", bnames), "base still has mod.txt");
+
+	# --- The agent's overlay view reflects all mutations ---
+	t.assertseq(readfile(mntpoint + "/mod.txt"), "tampered", "agent sees its own modification");
+	t.assertseq(readfile(mntpoint + "/intruder.txt"), "payload", "agent sees its own new file");
+	t.assert(!fileexists(mntpoint + "/keep.txt"), "agent sees keep.txt as removed");
+
+	# The mutations live in the overlay, not the base.
+	t.assert(fileexists(overlaydir + "/intruder.txt"), "new file landed in overlay");
+	t.assert(fileexists(overlaydir + "/mod.txt"), "copy-up landed in overlay");
 }
 
 # --- Utility helpers ---

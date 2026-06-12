@@ -129,7 +129,9 @@ start(basepath, overlaydir: string): (ref Sys->FD, string)
 		return (nil, sys->sprint("can't create pipe: %r"));
 
 	navops := chan of ref Navop;
-	spawn navigator(navops, state);
+	navready := chan of int;
+	spawn navigator(navops, state, navready);
+	<-navready;	# wait until navigator has forked its namespace
 
 	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big 0);
 	fds[0] = nil;
@@ -430,6 +432,20 @@ joinrel(parent, name: string): string
 	return parent + "/" + name;
 }
 
+# A 9P create name must be a single, non-special path element. Reject
+# "", ".", ".." and any name containing '/'. Defence in depth: with
+# MCREATE on the mount the create path is reachable, and an unchecked
+# name could escape the per-agent overlay (e.g. "..", "a/../../etc").
+safename(name: string): int
+{
+	if(name == "" || name == "." || name == "..")
+		return 0;
+	for(i := 0; i < len name; i++)
+		if(name[i] == '/')
+			return 0;
+	return 1;
+}
+
 # --- Path validation ---
 
 # Canonicalize a relative path and reject traversal attempts.
@@ -538,6 +554,26 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, Ebadarg));
 				break;
 			}
+			# Honor OTRUNC: materialise an empty overlay file shadowing
+			# the base. Otherwise a truncating open (e.g. sys->create over
+			# an existing base file) would copy the base up on the first
+			# write but never truncate, leaving stale trailing bytes.
+			if((m.mode & Sys->OTRUNC) && !(c.qtype & Sys->QTDIR)) {
+				tpe := lookuppath(state, c.path);
+				if(tpe != nil && tpe.relpath != "") {
+					topath := state.overlaydir + "/" + tpe.relpath;
+					ensureparent(topath);
+					tfd := sys->create(topath, Sys->OWRITE, FILE_PERM);
+					if(tfd == nil) {
+						srv.reply(ref Rmsg.Error(m.tag, sys->sprint("truncate: %r")));
+						break;
+					}
+					tfd = nil;
+					if(iswhiteout(state, tpe.relpath))
+						removewhiteout(state, tpe.relpath);
+					state.vers++;
+				}
+			}
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
@@ -550,6 +586,12 @@ Serve:
 			}
 			pe := lookuppath(state, c.path);
 			if(pe == nil || !pe.isdir) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
+
+			# Reject unsafe create names before they reach the host fs.
+			if(!safename(m.name)) {
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				break;
 			}
@@ -678,6 +720,11 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, rerr));
 				break;
 			}
+			# Tremove always clunks the fid (success or failure). The
+			# default Styxserver.remove does this; our custom handler must
+			# too, or the leaked fid collides with the kernel's next reuse
+			# of that number ("fid already in use") and wedges the mount.
+			srv.delfid(c);
 			pe := lookuppath(state, c.path);
 			if(pe == nil || pe.relpath == "") {
 				# Can't remove root
@@ -710,8 +757,14 @@ Serve:
 
 # --- Navigator ---
 
-navigator(navops: chan of ref Navop, state: ref SrvState)
+navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 {
+	# Fork the namespace before serving so base reads resolve to the
+	# pre-mount base even after the caller mounts cowfs over basepath
+	# (mirrors serveloop's FORKNS). Without this the walk/stat path
+	# re-enters the cowfs mount and the single-threaded server deadlocks
+	# on the first read-through.
+	readyc <-= sys->pctl(Sys->FORKNS, nil);
 	while((m := <-navops) != nil) {
 		pick n := m {
 		Stat =>

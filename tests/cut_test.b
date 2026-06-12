@@ -23,12 +23,23 @@ include "testing.m";
 CutTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
+
+	# INFR-310 workaround: keep this module type structurally distinct
+	# from Cmd below. The compiler shares one LDT between structurally
+	# identical module types, and the ref-fn'd test functions pollute
+	# it -- making `load Cmd "/dis/cut.dis"` demand that cut implement
+	# the test functions ("link typecheck Cut->testChars()").
+	ldtworkaround: fn();
 };
 
 Cmd: module
 {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
+
+ldtworkaround()
+{
+}
 
 passed := 0;
 failed := 0;
@@ -137,7 +148,13 @@ runcut(args: list of string, input: string): string
 
 runcutproc(args: list of string, stdout: ref Sys->FD, done: chan of int)
 {
-	# Redirect stdout
+	# Save the real stdout, then redirect fd 1 at the pipe. The fd
+	# table is shared across spawn, so fd 1 MUST be restored before
+	# this proc exits: while the pipe's write end sits in slot 1 the
+	# parent's read loop can never see EOF (the original version of
+	# this test deadlocked here), and parking /dev/null there instead
+	# would swallow every later test-result line.
+	origout := sys->fildes(1);
 	sys->dup(stdout.fd, 1);
 	stdout = nil;
 
@@ -149,6 +166,7 @@ runcutproc(args: list of string, stdout: ref Sys->FD, done: chan of int)
 	"*" =>
 		;
 	}
+	sys->dup(origout.fd, 1);
 	done <-= 1;
 }
 

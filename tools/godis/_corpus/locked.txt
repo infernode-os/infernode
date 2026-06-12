@@ -162,6 +162,7 @@ testdata/str_build.go
 testdata/str_range.go
 testdata/strcat.go
 testdata/strconv.go
+testdata/strconv_err.go
 testdata/strconv_ext.go
 testdata/strconv_float.go
 testdata/strconv_quote.go
@@ -199,6 +200,7 @@ testdata/tier6_4.go
 testdata/tier6_5.go
 testdata/tier6_6.go
 testdata/tier6_7.go
+testdata/tier6_8.go
 testdata/tier6_9.go
 testdata/time_basic.go
 testdata/time_sub.go

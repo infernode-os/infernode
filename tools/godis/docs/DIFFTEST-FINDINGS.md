@@ -11,7 +11,7 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-As of the harness's introduction: **209 match, 20 skipped, 8 divergences** below.
+Current standing: **211 match, 20 skipped, 6 divergences** below.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -28,20 +28,13 @@ go run <prog.go>                                  # Go reference
 
 ---
 
-## 1. `strconv.Atoi`/`ParseInt` never report an error  ·  `diverge`
+## ~~1. `strconv.Atoi`/`ParseInt` never report an error~~  ·  FIXED
 
-`testdata/strconv_err.go`, `testdata/tier6_8.go`
-
-`strconv.Atoi("abc")` returns `err == nil` under godis; Go returns a non-nil
-error. The success path is taken on invalid input.
-
-```
-strconv_err.go   got "123\nno error\nno error 2\n"   want "123\nno error\nerror!\n"
-tier6_8.go       got "42\n0\n"                        want "42\nerror\n0\n"
-```
-
-Deterministic, isolated to the strconv interception in `lower_stdlib.go`, and
-the same behavior in both modes — the cleanest first fix.
+`Atoi`, `ParseInt`/`ParseUint` (base 10) now emit a decimal syntax-validation
+loop (`emitAtoiChecked` in `lower.go`) and return a Go-identical
+`strconv.<fn>: parsing "<s>": invalid syntax` errorString on bad input.
+`strconv_err.go` and `tier6_8.go` are promoted into the locked corpus.
+Overflow (`ErrRange`) is still not detected.
 
 ## 2. Map delete / repeated insert+lookup faults  ·  `c0!=c1` + `crash`
 

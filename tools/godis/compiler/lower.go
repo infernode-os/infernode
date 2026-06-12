@@ -1947,16 +1947,10 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		fl.emit(dis.Inst2(dis.ICVTWC, src, dis.FP(dst)))
 		return true, nil
 	case "Atoi":
-		// strconv.Atoi(s string) (int, error) → CVTCW src, dst
-		// We only support the value; error is always nil.
+		// strconv.Atoi(s string) (int, error) → validated CVTCW.
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
-		iby2wd := int32(dis.IBY2WD)
-		// Tuple result: (int, error). int at dst, error interface at dst+8..dst+16.
-		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
-		// Set error to nil interface (tag=0, val=0)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+		fl.emitAtoiChecked(src, dst, "Atoi", true)
 		return true, nil
 	case "FormatInt":
 		// strconv.FormatInt(i int64, base int) string
@@ -2082,6 +2076,14 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 	case "ParseInt":
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		// Decimal syntax validation only applies to base 10; other bases
+		// (or a dynamic base) keep the unvalidated CVTCW path.
+		if baseConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			if base, _ := constant.Int64Val(baseConst.Value); base == 10 {
+				fl.emitAtoiChecked(src, dst, "ParseInt", true)
+				return true, nil
+			}
+		}
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
@@ -2090,6 +2092,13 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 	case "ParseUint":
 		src := fl.operandOf(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
+		if baseConst, ok := instr.Call.Args[1].(*ssa.Const); ok {
+			if base, _ := constant.Int64Val(baseConst.Value); base == 10 {
+				// Go's ParseUint permits no sign prefix at all.
+				fl.emitAtoiChecked(src, dst, "ParseUint", false)
+				return true, nil
+			}
+		}
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
@@ -2229,6 +2238,81 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 		return true, nil
 	}
 	return false, nil
+}
+
+// emitAtoiChecked lowers a decimal string→int conversion with Go-style
+// syntax validation: an optional leading '+'/'-' (when allowSign), then one
+// or more ASCII digits, nothing else. dst is the base of an (int, error)
+// tuple. Valid input takes the CVTCW path with a nil error; anything else
+// yields 0 and an errorString tagged interface carrying Go's message
+// (`strconv.<fn>: parsing "<s>": invalid syntax`). Overflow (ErrRange) is
+// not detected.
+func (fl *funcLowerer) emitAtoiChecked(src dis.Operand, dst int32, fn string, allowSign bool) {
+	iby2wd := int32(dis.IBY2WD)
+	lenSlot := fl.frame.AllocWord("")
+	idx := fl.frame.AllocWord("")
+	ch := fl.frame.AllocWord("")
+	fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+
+	var errJmps []int
+	errJmps = append(errJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenSlot), dis.Imm(0), dis.Imm(0))) // "" → error
+
+	if allowSign {
+		fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(idx), dis.FP(ch)))
+		signJmps := []int{len(fl.insts)}
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('-'), dis.Imm(0)))
+		signJmps = append(signJmps, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('+'), dis.Imm(0)))
+		noSignJmp := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		signPC := dis.Imm(int32(len(fl.insts)))
+		for _, j := range signJmps {
+			fl.insts[j].Dst = signPC
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(idx)))
+		errJmps = append(errJmps, len(fl.insts))
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenSlot), dis.Imm(1), dis.Imm(0))) // bare sign → error
+		fl.insts[noSignJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+
+	loopPC := int32(len(fl.insts))
+	okJmp := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(lenSlot), dis.Imm(0))) // i >= len → ok
+	fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(idx), dis.FP(ch)))
+	errJmps = append(errJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm('0'), dis.Imm(0)))
+	errJmps = append(errJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm('9'), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+
+	// ok: valid decimal → convert, nil error
+	fl.insts[okJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
+	endJmp := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// error: zero value + errorString interface
+	errPC := dis.Imm(int32(len(fl.insts)))
+	for _, j := range errJmps {
+		fl.insts[j].Dst = errPC
+	}
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+	msg := fl.frame.AllocPointer("")
+	preMP := fl.comp.AllocString("strconv." + fn + ": parsing \"")
+	sufMP := fl.comp.AllocString("\": invalid syntax")
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(preMP), dis.FP(msg)))
+	fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(msg), dis.FP(msg)))
+	fl.emit(dis.NewInst(dis.IADDC, dis.MP(sufMP), dis.FP(msg), dis.FP(msg)))
+	tag := fl.comp.AllocTypeTag("errorString")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst+iby2wd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(msg), dis.FP(dst+2*iby2wd)))
+
+	fl.insts[endJmp].Dst = dis.Imm(int32(len(fl.insts)))
 }
 
 // lowerStringsCall handles calls to the strings package.

@@ -378,21 +378,60 @@ Push-Location "$ROOT\limbo"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 # Generate y.tab.c and y.tab.h from limbo.y if needed.
-# Locate win_bison.exe via PATH (choco/scoop installs) or WinGet packages dir.
-if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
-    $bisonCmd = Get-Command win_bison.exe -ErrorAction SilentlyContinue
-    if ($bisonCmd) {
-        $bisonPath = $bisonCmd.Source
-    } else {
-        $bison = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($bison) { $bisonPath = $bison.FullName }
+#
+# Locating win_bison.exe is a winget gotcha rodeo (INFR-305):
+#   - Get-Command misses it when winget installed in this same shell;
+#     PATH is only refreshed for NEW processes after the install.
+#   - winget executable shims live under %LOCALAPPDATA%\Microsoft\WinGet\Links,
+#     not (only) under ...\Packages.
+#   - choco and scoop have their own shim directories.
+# Find-WinBison probes registry-refreshed PATH, then known shim dirs, then
+# falls back to a recursive Packages scan. Cheapest first.
+function Find-WinBison {
+    $cmd = Get-Command win_bison.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
+    $refreshed   = "$machinePath;$userPath"
+    if ($refreshed -ne $env:Path) {
+        $env:Path = $refreshed
+        $cmd = Get-Command win_bison.exe -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
     }
+
+    $shimDirs = @(
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links",
+        "$env:ProgramData\chocolatey\bin",
+        "$env:USERPROFILE\scoop\shims"
+    )
+    foreach ($d in $shimDirs) {
+        $p = Join-Path $d "win_bison.exe"
+        if (Test-Path $p) { return $p }
+    }
+
+    $pkg = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" `
+        -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pkg) { return $pkg.FullName }
+
+    return $null
+}
+
+if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
+    $bisonPath = Find-WinBison
     if ($bisonPath) {
         Write-Host "  Generating y.tab.c/h from limbo.y using $bisonPath..."
         & $bisonPath -d -o y.tab.c limbo.y
     } else {
         Write-Host "ERROR: y.tab.c/h missing and win_bison not found." -ForegroundColor Red
-        Write-Host "Install via: 'winget install WinFlexBison.win_flex_bison' or 'choco install winflexbison3 -y'" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Install win_flex_bison via ONE of:" -ForegroundColor Red
+        Write-Host "  winget install WinFlexBison.win_flex_bison" -ForegroundColor Red
+        Write-Host "  choco install winflexbison3 -y" -ForegroundColor Red
+        Write-Host "  scoop install winflexbison" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "After installing, OPEN A NEW TERMINAL (winget/choco do not refresh" -ForegroundColor Red
+        Write-Host "PATH in the shell that ran the install), then re-run this script." -ForegroundColor Red
         exit 1
     }
 }

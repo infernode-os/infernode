@@ -371,6 +371,29 @@ switch ($choice) {
 
 Setup-BraveSearch
 
+# ── Preflight: POSIX host shell on PATH ────────────────────────────
+# Inferno's runtime exec's a host `sh` for a handful of integrations
+# (env passthrough, host-side glue). Without one on PATH, boot logs
+# `os: cannot exec ...` warnings and a few helpers degrade. Detect
+# this here and point the user at the standard fixes.
+function Test-HostShell {
+    Write-Host ""
+    $sh = Get-Command sh.exe -ErrorAction SilentlyContinue
+    if ($sh) {
+        Write-Ok "Host shell on PATH: $($sh.Source)"
+        return
+    }
+    Write-Warn "No POSIX 'sh.exe' on PATH."
+    Write-Host "    InferNode runs without one, but some host integrations" -ForegroundColor DarkGray
+    Write-Host "    will print 'os: cannot exec ...' warnings during boot." -ForegroundColor DarkGray
+    Write-Host "    Install ONE of:" -ForegroundColor DarkGray
+    Write-Host "      Git for Windows   winget install Git.Git" -ForegroundColor White
+    Write-Host "      MSYS2             winget install MSYS2.MSYS2" -ForegroundColor White
+    Write-Host "      Cygwin            https://cygwin.com/install.html" -ForegroundColor White
+    Write-Host "    Add its bin\ directory to PATH, then relaunch InferNode." -ForegroundColor DarkGray
+}
+Test-HostShell
+
 # ── Done ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray

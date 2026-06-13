@@ -997,6 +997,18 @@ func (c *Compiler) RegisterErrorString() {
 	c.ifaceDispatch["Error"] = append(
 		c.ifaceDispatch["Error"],
 		ifaceImpl{tag: tag, fn: nil})
+	// wrappedError is the fmt.Errorf("...%w...") result: the interface
+	// value is a heap struct {msg string; wrapped tag; wrapped value}.
+	// Its Error() is also synthetic — it loads msg through the pointer.
+	wtag := c.AllocTypeTag("wrappedError")
+	c.ifaceDispatch["Error"] = append(
+		c.ifaceDispatch["Error"],
+		ifaceImpl{tag: wtag, fn: nil})
+}
+
+// WrappedErrorTag returns the type tag of the synthetic wrappedError type.
+func (c *Compiler) WrappedErrorTag() int32 {
+	return c.AllocTypeTag("wrappedError")
 }
 // embedInit records a //go:embed directive to initialize at module load.
 type embedInit struct {

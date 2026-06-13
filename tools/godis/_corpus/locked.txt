@@ -11,6 +11,7 @@ _corpus/gen_defer_in_loop.go
 _corpus/gen_defer_named_return.go
 _corpus/gen_error_new.go
 _corpus/gen_error_sentinel.go
+_corpus/gen_error_wrap.go
 _corpus/gen_generic_mapfilter.go
 _corpus/gen_generic_minmax.go
 _corpus/gen_map_commaok.go
@@ -20,6 +21,7 @@ _corpus/gen_slice_append_len.go
 _corpus/gen_slice_copy.go
 _corpus/gen_slice_subslice.go
 _corpus/seed_fibmemo.go
+_corpus/seed_matrix.go
 _corpus/seed_quicksort.go
 _corpus/seed_rpn.go
 _corpus/seed_stack.go

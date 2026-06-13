@@ -11,7 +11,8 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current standing: **214 match, 20 skipped, 3 divergences** below.
+Current standing: **216 match, 20 skipped, 1 divergence** below — no
+crashes and no `c0!=c1` splits remain anywhere in the corpus.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -107,30 +108,36 @@ Note `_corpus/gen_defer_in_loop.go` and `gen_defer_named_return.go` *do* pass �
 the trigger is specifically a deferred call whose arguments are evaluated per
 loop iteration.
 
-## 4. Fixed-size multidimensional arrays fault  ·  `c0!=c1`
+## ~~4. Fixed-size multidimensional arrays fault~~  ·  FIXED
 
-`_corpus/seed_matrix.go`
+Two bugs (`seed_matrix.go` promoted):
 
-A `[3][3]int` matrix multiply faults immediately: `array bounds error` under
-`-c0`, `dereference of nil` under `-c1`. Slices of slices (`[][]int`) work
-(`testdata`/generated `gen_slice_2d.go` passes), so this is specific to value
-arrays-of-arrays.
+- `allocArrayElements` reserved one 8-byte frame slot per element regardless
+  of element size, so a `[3][3]int` got 24 bytes instead of 72 and rows ≥ 1
+  landed in (and were clobbered by) neighbouring locals. Aggregate elements
+  now allocate their full footprint recursively.
+- Chained `IndexAddr` (the inner index of `a[i][j]`) fell into the heap
+  Dis-array branch and ran INDW on a raw interior address. Interior-address
+  bases (parent IndexAddr/FieldAddr results) now use plain address
+  arithmetic (`ptr = base + idx*elemSize`).
 
-```
-seed_matrix.go   c0 "array bounds error"  c1 "dereference of nil"  want 3 rows of products
-```
+## ~~5. `errors.Unwrap(err).Error()` faults~~  ·  FIXED
 
-## 5. `errors.Unwrap(err).Error()` faults  ·  `crash`
+`gen_error_wrap.go` promoted. `fmt.Errorf` with `%w` now produces a
+synthetic `wrappedError` whose interface value is a heap struct
+`{msg string; wrapped tag; wrapped value}`:
 
-`_corpus/gen_error_wrap.go`
+- `Error()` dispatches on the tag (inline synthetic, like errorString).
+- `errors.Unwrap` returns the wrapped (tag, value) pair, nil otherwise.
+- `errors.Is` walks the unwrap chain and — fixing a separate latent bug —
+  compares **both** interface words instead of only the tag (tag-only made
+  any two errorString sentinels compare equal).
+- The `%w` Sprintf verb renders both error representations (multi-level
+  wrapping works).
 
-`fmt.Errorf("...: %w", base)` formats and `errors.Is` works, but
-`errors.Unwrap(wrapped).Error()` faults — the unwrapped error chain isn't
-navigable.
-
-```
-gen_error_wrap.go   faults after "operation failed: base failure\nis base\n"   want "...\nbase failure\n"
-```
+Known divergence from Go, accepted: two `errors.New("x")` calls with the
+same literal share the deduplicated MP string, so `errors.Is` between them
+reports true where Go reports false (distinct allocations).
 
 ## ~~6. Tail crash after correct output~~  ·  FIXED
 

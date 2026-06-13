@@ -807,18 +807,35 @@ func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int3
 func (fl *funcLowerer) allocArrayElements(at *types.Array, baseName string) int32 {
 	elemDT := GoTypeToDis(at.Elem())
 	n := int(at.Len())
-	var baseSlot int32
+	baseSlot := int32(-1)
 	for i := 0; i < n; i++ {
 		name := fmt.Sprintf("%s[%d]", baseName, i)
 		var slot int32
-		if elemDT.IsPtr {
-			slot = fl.frame.AllocPointer(name)
-		} else {
-			slot = fl.frame.AllocWord(name)
+		switch et := at.Elem().Underlying().(type) {
+		case *types.Array:
+			// Multi-word elements need their full footprint, not one word.
+			slot = fl.allocArrayElements(et, name)
+		case *types.Struct:
+			slot = fl.allocStructFields(et, name)
+		default:
+			if elemDT.IsPtr {
+				slot = fl.frame.AllocPointer(name)
+			} else {
+				slot = fl.frame.AllocWord(name)
+				// Interfaces and other plain multi-word scalars.
+				for w := int32(dis.IBY2WD); w < elemDT.Size; w += int32(dis.IBY2WD) {
+					fl.frame.AllocWord(fmt.Sprintf("%s+%d", name, w))
+				}
+			}
 		}
 		if i == 0 {
 			baseSlot = slot
 		}
+	}
+	if baseSlot < 0 {
+		// Zero-length array: reserve a slot so the base is never offset 0
+		// (REGLINK) — see B26.
+		baseSlot = fl.frame.AllocWord(baseName)
 	}
 	return baseSlot
 }
@@ -1522,17 +1539,80 @@ func (fl *funcLowerer) lowerFmtSprintf(instr *ssa.Call) (bool, error) {
 
 // lowerFmtErrorf handles fmt.Errorf(format, args...) by formatting the string
 // with Sprintf-style logic, then wrapping it as a tagged error interface.
+// With a %w verb the result is a wrappedError carrying the wrapped error,
+// so errors.Is and errors.Unwrap can navigate the chain.
 func (fl *funcLowerer) lowerFmtErrorf(instr *ssa.Call) (bool, error) {
 	strSlot, ok := fl.emitSprintfInline(instr)
 	if !ok {
 		return false, nil
 	}
 	dst := fl.slotOf(instr)
-	tag := fl.comp.AllocTypeTag("errorString")
 	iby2wd := int32(dis.IBY2WD)
+
+	if wIdx := errorfWrapArgIndex(instr); wIdx >= 0 && len(instr.Call.Args) > 1 {
+		if elem := fl.traceVarargElement(instr.Call.Args[1], wIdx); elem != nil {
+			if _, isIface := elem.Type().Underlying().(*types.Interface); isIface {
+				wrappedSlot := fl.materialize(elem)
+				tdIdx := fl.makeWrappedErrorTD()
+				structSlot := fl.allocPtrTemp("werr:" + instr.Name())
+				fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(tdIdx)), dis.FP(structSlot)))
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(strSlot), dis.FPInd(structSlot, 0)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(wrappedSlot), dis.FPInd(structSlot, iby2wd)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(wrappedSlot+iby2wd), dis.FPInd(structSlot, 2*iby2wd)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(fl.comp.WrappedErrorTag()), dis.FP(dst)))
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(structSlot), dis.FP(dst+iby2wd)))
+				return true, nil
+			}
+		}
+	}
+
+	tag := fl.comp.AllocTypeTag("errorString")
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(strSlot), dis.FP(dst+iby2wd)))
 	return true, nil
+}
+
+// errorfWrapArgIndex scans a constant Errorf format string and returns the
+// vararg index consumed by the first %w verb, or -1 if there is none.
+func errorfWrapArgIndex(instr *ssa.Call) int {
+	fmtConst, ok := instr.Call.Args[0].(*ssa.Const)
+	if !ok {
+		return -1
+	}
+	fmtStr := constant.StringVal(fmtConst.Value)
+	argIdx := 0
+	for i := 0; i < len(fmtStr); i++ {
+		if fmtStr[i] != '%' {
+			continue
+		}
+		i++
+		// Skip flags, width, precision.
+		for i < len(fmtStr) && (fmtStr[i] == '+' || fmtStr[i] == '-' || fmtStr[i] == '#' ||
+			fmtStr[i] == ' ' || fmtStr[i] == '.' || (fmtStr[i] >= '0' && fmtStr[i] <= '9')) {
+			i++
+		}
+		if i >= len(fmtStr) || fmtStr[i] == '%' {
+			continue // literal %%
+		}
+		if fmtStr[i] == 'w' {
+			return argIdx
+		}
+		argIdx++
+	}
+	return -1
+}
+
+// makeWrappedErrorTD creates the type descriptor for the wrappedError heap
+// struct:
+//
+//	offset 0:  PTR  msg string (GC-traced)
+//	offset 8:  WORD wrapped error tag
+//	offset 16: WORD wrapped error value
+func (fl *funcLowerer) makeWrappedErrorTD() int {
+	td := dis.NewTypeDesc(0, 24)
+	td.SetPointer(0)
+	fl.callTypeDescs = append(fl.callTypeDescs, td)
+	return len(fl.callTypeDescs) - 1
 }
 
 // emitSprintfInline emits the core Sprintf format-and-concatenate logic.
@@ -1728,12 +1808,21 @@ func (fl *funcLowerer) emitSprintfInline(instr *ssa.Call) (int32, bool) {
 			case 'w':
 				valSlot := fl.materialize(val)
 				if _, ok := val.Type().Underlying().(*types.Interface); ok {
-					// The interface's value word holds the error's string. Copy
-					// it with MOVP (not MOVW) so the GC-traced temp takes a
+					// errorString: the value word IS the message — copy it
+					// with MOVP (not MOVW) so the GC-traced temp takes a
 					// reference; MOVW skipped the incref and the shared string
-					// was double-freed at frame teardown.
+					// was double-freed at frame teardown. wrappedError: the
+					// value is a heap struct whose offset 0 holds the message.
+					iby2wd := int32(dis.IBY2WD)
 					tmp := fl.frame.AllocTemp(true)
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valSlot+int32(dis.IBY2WD)), dis.FP(tmp)))
+					wrapIdx := len(fl.insts)
+					fl.emit(dis.NewInst(dis.IBEQW, dis.FP(valSlot), dis.Imm(fl.comp.WrappedErrorTag()), dis.Imm(0)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valSlot+iby2wd), dis.FP(tmp)))
+					skipIdx := len(fl.insts)
+					fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+					fl.insts[wrapIdx].Dst = dis.Imm(int32(len(fl.insts)))
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(valSlot+iby2wd, 0), dis.FP(tmp)))
+					fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 					partSlot = dis.FP(tmp)
 				} else {
 					partSlot = fl.operandOf(val)
@@ -1813,22 +1902,54 @@ func (fl *funcLowerer) lowerErrorsCall(instr *ssa.Call, callee *ssa.Function) (b
 	case "New":
 		return true, fl.lowerErrorsNew(instr)
 	case "Is":
-		// errors.Is(err, target) → compare interface tags
+		// errors.Is(err, target): interface equality (tag AND value words),
+		// walking the wrappedError chain like Go's Unwrap loop.
 		errSlot := fl.materialize(instr.Call.Args[0])
 		targetSlot := fl.materialize(instr.Call.Args[1])
 		dst := fl.slotOf(instr)
+		iby2wd := int32(dis.IBY2WD)
+		wtag := fl.comp.WrappedErrorTag()
+
+		cur := fl.frame.AllocWord("is.cur")
+		curVal := fl.frame.AllocWord("is.curval")
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errSlot), dis.FP(cur)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(errSlot+iby2wd), dis.FP(curVal)))
+
+		loopPC := int32(len(fl.insts))
+		// cur == target → true
+		neIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(cur), dis.FP(targetSlot), dis.Imm(0)))
+		trueIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(curVal), dis.FP(targetSlot+iby2wd), dis.Imm(0)))
+		// not equal: unwrap if possible, else false
+		fl.insts[neIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		falseIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(cur), dis.Imm(wtag), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(curVal, iby2wd), dis.FP(cur)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(curVal, 2*iby2wd), dis.FP(curVal)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+		// false:
+		fl.insts[falseIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
-		skipIdx := len(fl.insts)
-		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.FP(targetSlot), dis.Imm(0)))
+		endIdx := len(fl.insts)
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+		// true:
+		fl.insts[trueIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
-		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.insts[endIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "Unwrap":
-		// errors.Unwrap(err) → return nil error (simplified)
+		// errors.Unwrap(err): the wrapped error for wrappedError, else nil.
+		errSlot := fl.materialize(instr.Call.Args[0])
 		dst := fl.slotOf(instr)
 		iby2wd := int32(dis.IBY2WD)
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(errSlot), dis.Imm(fl.comp.WrappedErrorTag()), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(errSlot+iby2wd, iby2wd), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(errSlot+iby2wd, 2*iby2wd), dis.FP(dst+iby2wd)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
 		return true, nil
 	case "As":
 		// errors.As(err, target) → return false (simplified)
@@ -6399,18 +6520,23 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 	}
 
 	// emitSyntheticInline emits inline code for a synthetic method (fn==nil).
-	// Currently handles errorString.Error() — the value IS the string.
-	emitSyntheticInline := func() {
+	// errorString.Error(): the value IS the string. wrappedError.Error():
+	// the value is a heap struct whose offset 0 holds the message.
+	emitSyntheticInline := func(tag int32) {
 		if instr.Name() != "" {
 			resultDst := fl.slotOf(instr)
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(ifaceSlot+iby2wd), dis.FP(resultDst)))
+			if tag == fl.comp.WrappedErrorTag() {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(ifaceSlot+iby2wd, 0), dis.FP(resultDst)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(ifaceSlot+iby2wd), dis.FP(resultDst)))
+			}
 		}
 	}
 
 	if len(impls) == 1 {
 		// Single-implementation fast path: direct call or inline synthetic
 		if impls[0].fn == nil {
-			emitSyntheticInline()
+			emitSyntheticInline(impls[0].tag)
 		} else {
 			emitCallForImpl(impls[0].fn)
 		}
@@ -6446,7 +6572,7 @@ func (fl *funcLowerer) lowerInvokeCall(instr *ssa.Call) error {
 		fl.insts[beqwIdxs[i]].Dst = dis.Imm(int32(len(fl.insts)))
 
 		if impl.fn == nil {
-			emitSyntheticInline()
+			emitSyntheticInline(impl.tag)
 		} else {
 			emitCallForImpl(impl.fn)
 		}
@@ -6967,6 +7093,21 @@ func (fl *funcLowerer) lowerArrayIndexAddr(instr *ssa.IndexAddr, arrType *types.
 			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(elemSize), dis.FP(idxSlot), dis.FP(offSlot)))
 			fl.emit(dis.NewInst(dis.IADDW, dis.FP(offSlot), dis.FP(baseAddr), dis.FP(ptrSlot)))
 		}
+	} else if isInteriorAddr(instr.X) {
+		// X's slot holds a raw element address (a parent IndexAddr/FieldAddr
+		// into a stack or heap aggregate), not a Dis array object — INDW on
+		// it would dereference garbage. Compute ptr = X + idx*elemSize.
+		elemSize := GoTypeToDis(arrType.Elem()).Size
+		baseSlot := fl.slotOf(instr.X)
+		if c, isConst := instr.Index.(*ssa.Const); isConst {
+			idx, _ := constant.Int64Val(c.Value)
+			fl.emit(dis.NewInst(dis.IADDW, dis.Imm(int32(idx)*elemSize), dis.FP(baseSlot), dis.FP(ptrSlot)))
+		} else {
+			idxSlot := fl.materialize(instr.Index)
+			offSlot := fl.frame.AllocWord("dynidx.off")
+			fl.emit(dis.NewInst(dis.IMULW, dis.Imm(elemSize), dis.FP(idxSlot), dis.FP(offSlot)))
+			fl.emit(dis.NewInst(dis.IADDW, dis.FP(offSlot), dis.FP(baseSlot), dis.FP(ptrSlot)))
+		}
 	} else {
 		// Heap Dis Array: use INDB for byte, INDX for multi-word structs, INDW otherwise
 		arrSlot := fl.slotOf(instr.X)
@@ -6975,6 +7116,16 @@ func (fl *funcLowerer) lowerArrayIndexAddr(instr *ssa.IndexAddr, arrType *types.
 		fl.emit(dis.NewInst(indOp, dis.FP(arrSlot), dis.FP(ptrSlot), idxOp))
 	}
 	return nil
+}
+
+// isInteriorAddr reports whether v's frame slot holds a raw interior
+// address (stack or heap) rather than a reference to a Dis heap object.
+func isInteriorAddr(v ssa.Value) bool {
+	switch v.(type) {
+	case *ssa.IndexAddr, *ssa.FieldAddr:
+		return true
+	}
+	return false
 }
 
 func (fl *funcLowerer) lowerSliceIndexAddr(instr *ssa.IndexAddr, ptrSlot int32) error {

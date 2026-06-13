@@ -36,6 +36,7 @@ _corpus/gen_loop_capture.go
 _corpus/gen_map_commaok.go
 _corpus/gen_map_count.go
 _corpus/gen_map_structval.go
+_corpus/gen_math_hyper.go
 _corpus/gen_math_libm.go
 _corpus/gen_matrix_dynamic.go
 _corpus/gen_select_default.go

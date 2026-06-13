@@ -3633,11 +3633,75 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathFloat64bits(instr)
 	case "Float64frombits":
 		return true, fl.lowerMathFloat64frombits(instr)
-	// Hyperbolic (f64 → f64 stub → 0.0)
-	case "Sinh", "Cosh", "Tanh", "Asinh", "Acosh", "Atanh":
+	// Hyperbolic functions composed over the exact module exp/log/sqrt.
+	case "Sinh", "Cosh":
+		// (e^x ∓ e^-x) / 2
 		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		x := fl.operandOf(instr.Call.Args[0])
+		ex := fl.frame.AllocWord("hb.ex")
+		nx := fl.frame.AllocWord("hb.nx")
+		fl.emitMathCall("exp", []dis.Operand{x}, ex)
+		fl.emit(dis.Inst2(dis.INEGF, x, dis.FP(nx)))
+		fl.emitMathCall("exp", []dis.Operand{dis.FP(nx)}, nx)
+		if callee.Name() == "Sinh" {
+			fl.emit(dis.NewInst(dis.ISUBF, dis.FP(nx), dis.FP(ex), dis.FP(ex))) // ex = ex - nx
+		} else {
+			fl.emit(dis.NewInst(dis.IADDF, dis.FP(nx), dis.FP(ex), dis.FP(ex)))
+		}
+		half := fl.comp.AllocReal(2.0)
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(half), dis.FP(ex), dis.FP(dst)))
+		return true, nil
+	case "Tanh":
+		// (e^2x - 1) / (e^2x + 1)
+		dst := fl.slotOf(instr)
+		x := fl.operandOf(instr.Call.Args[0])
+		x2 := fl.frame.AllocWord("th.x2")
+		fl.emit(dis.NewInst(dis.IADDF, x, x, dis.FP(x2)))
+		fl.emitMathCall("exp", []dis.Operand{dis.FP(x2)}, x2)
+		one := fl.comp.AllocReal(1.0)
+		num := fl.frame.AllocWord("th.num")
+		den := fl.frame.AllocWord("th.den")
+		fl.emit(dis.NewInst(dis.ISUBF, dis.MP(one), dis.FP(x2), dis.FP(num)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.MP(one), dis.FP(x2), dis.FP(den)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(den), dis.FP(num), dis.FP(dst)))
+		return true, nil
+	case "Asinh":
+		// ln(x + sqrt(x*x + 1))
+		dst := fl.slotOf(instr)
+		x := fl.operandOf(instr.Call.Args[0])
+		t := fl.frame.AllocWord("ash.t")
+		fl.emit(dis.NewInst(dis.IMULF, x, x, dis.FP(t)))
+		one := fl.comp.AllocReal(1.0)
+		fl.emit(dis.NewInst(dis.IADDF, dis.MP(one), dis.FP(t), dis.FP(t)))
+		fl.emitMathCall("sqrt", []dis.Operand{dis.FP(t)}, t)
+		fl.emit(dis.NewInst(dis.IADDF, x, dis.FP(t), dis.FP(t)))
+		fl.emitMathCall("log", []dis.Operand{dis.FP(t)}, dst)
+		return true, nil
+	case "Acosh":
+		// ln(x + sqrt(x*x - 1))
+		dst := fl.slotOf(instr)
+		x := fl.operandOf(instr.Call.Args[0])
+		t := fl.frame.AllocWord("ach.t")
+		fl.emit(dis.NewInst(dis.IMULF, x, x, dis.FP(t)))
+		one := fl.comp.AllocReal(1.0)
+		fl.emit(dis.NewInst(dis.ISUBF, dis.MP(one), dis.FP(t), dis.FP(t)))
+		fl.emitMathCall("sqrt", []dis.Operand{dis.FP(t)}, t)
+		fl.emit(dis.NewInst(dis.IADDF, x, dis.FP(t), dis.FP(t)))
+		fl.emitMathCall("log", []dis.Operand{dis.FP(t)}, dst)
+		return true, nil
+	case "Atanh":
+		// 0.5 * ln((1+x)/(1-x))
+		dst := fl.slotOf(instr)
+		x := fl.operandOf(instr.Call.Args[0])
+		one := fl.comp.AllocReal(1.0)
+		num := fl.frame.AllocWord("ath.num")
+		den := fl.frame.AllocWord("ath.den")
+		fl.emit(dis.NewInst(dis.IADDF, x, dis.MP(one), dis.FP(num)))
+		fl.emit(dis.NewInst(dis.ISUBF, x, dis.MP(one), dis.FP(den)))
+		fl.emit(dis.NewInst(dis.IDIVF, dis.FP(den), dis.FP(num), dis.FP(num)))
+		fl.emitMathCall("log", []dis.Operand{dis.FP(num)}, num)
+		half := fl.comp.AllocReal(0.5)
+		fl.emit(dis.NewInst(dis.IMULF, dis.MP(half), dis.FP(num), dis.FP(dst)))
 		return true, nil
 
 	case "Exp2":
@@ -3647,8 +3711,39 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emitMathCall("pow", []dis.Operand{dis.MP(two), fl.operandOf(instr.Call.Args[0])}, dst)
 		return true, nil
 
+	case "Expm1":
+		// exp(x) - 1 (loses sub-ulp precision near 0 vs Go's kernel)
+		dst := fl.slotOf(instr)
+		t := fl.frame.AllocWord("em1.t")
+		fl.emitMathCall("exp", []dis.Operand{fl.operandOf(instr.Call.Args[0])}, t)
+		one := fl.comp.AllocReal(1.0)
+		fl.emit(dis.NewInst(dis.ISUBF, dis.MP(one), dis.FP(t), dis.FP(dst)))
+		return true, nil
+	case "Log1p":
+		// log(1 + x)
+		dst := fl.slotOf(instr)
+		t := fl.frame.AllocWord("l1p.t")
+		one := fl.comp.AllocReal(1.0)
+		fl.emit(dis.NewInst(dis.IADDF, fl.operandOf(instr.Call.Args[0]), dis.MP(one), dis.FP(t)))
+		fl.emitMathCall("log", []dis.Operand{dis.FP(t)}, dst)
+		return true, nil
+	case "Cbrt":
+		// sign(x) * pow(|x|, 1/3)
+		dst := fl.slotOf(instr)
+		x := fl.operandOf(instr.Call.Args[0])
+		ax := fl.frame.AllocWord("cbrt.ax")
+		fl.emitMathCall("fabs", []dis.Operand{x}, ax)
+		third := fl.comp.AllocReal(1.0 / 3.0)
+		fl.emitMathCall("pow", []dis.Operand{dis.FP(ax), dis.MP(third)}, dst)
+		zero := fl.comp.AllocReal(0.0)
+		skipIdx := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEF, x, dis.MP(zero), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.INEGF, dis.FP(dst), dis.FP(dst)))
+		fl.insts[skipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+		return true, nil
+
 	// Exponential/log variants (f64 → f64 stub)
-	case "Expm1", "Log1p", "Logb", "Cbrt", "RoundToEven":
+	case "Logb", "RoundToEven":
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
@@ -3682,10 +3777,12 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Pow10":
-		// Pow10(n int) float64 → 0.0 stub
+		// pow(10, float64(n))
 		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		fn := fl.frame.AllocWord("p10.n")
+		fl.emit(dis.Inst2(dis.ICVTWF, fl.operandOf(instr.Call.Args[0]), dis.FP(fn)))
+		ten := fl.comp.AllocReal(10.0)
+		fl.emitMathCall("pow", []dis.Operand{dis.MP(ten), dis.FP(fn)}, dst)
 		return true, nil
 
 	case "Ilogb":
@@ -3695,10 +3792,13 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, nil
 
 	case "Ldexp":
-		// Ldexp(frac, exp) float64 → 0.0 stub
+		// frac * pow(2, float64(exp))
 		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
+		fe := fl.frame.AllocWord("ldx.e")
+		fl.emit(dis.Inst2(dis.ICVTWF, fl.operandOf(instr.Call.Args[1]), dis.FP(fe)))
+		two := fl.comp.AllocReal(2.0)
+		fl.emitMathCall("pow", []dis.Operand{dis.MP(two), dis.FP(fe)}, fe)
+		fl.emit(dis.NewInst(dis.IMULF, fl.operandOf(instr.Call.Args[0]), dis.FP(fe), dis.FP(dst)))
 		return true, nil
 
 	case "Frexp", "Modf", "Sincos":

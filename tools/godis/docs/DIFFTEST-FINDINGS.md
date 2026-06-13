@@ -11,8 +11,10 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current standing: **216 match, 20 skipped, 1 divergence** below — no
-crashes and no `c0!=c1` splits remain anywhere in the corpus.
+Current standing: **217 match, 20 skipped, 0 divergences** — the entire
+corpus matches `go run` byte-for-byte under both `-c0` and `-c1`. The
+worklist below is the historical record of the fix sprints; new findings
+go on top.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -87,26 +89,29 @@ was the actual cause of old finding #6 (seed_quicksort's tail crash after
 correct output) and the fib-loop crash in seed_fibmemo. The tracer now
 yields an empty element list for nil vararg slices.
 
-## 3. `defer` in a loop runs once with final values  ·  `diverge`
+## ~~3. `defer` in a loop runs once with final values~~  ·  FIXED
 
-`_corpus/gen_defer_order.go`
+`gen_defer_order.go` promoted. The compile-time defer model (static defer
+sites inlined once at RunDefers) was replaced with **runtime defer
+records**: each executed defer statement pushes a heap record
+`{next PTR, site id WORD, captured args…}` onto a per-frame LIFO list, and
+RunDefers / the exception handler drain the list with an emitted dispatch
+loop. Captured argument values are snapshotted at defer time (raw
+stack/interior addresses as plain words, heap pointers reference-counted,
+structs and interfaces flattened). This fixes, in one move:
 
-`for i := 1; i <= 3; i++ { defer fmt.Println("deferred", i) }` used to
-*fault*: deferred calls to stub fmt functions emitted a direct call to PC 0.
-Deferred `fmt.Print(ln)` is now inlined like the non-deferred form, so the
-program completes — but prints `deferred 4` once instead of
-`deferred 3/2/1`. This is the known compile-time defer model limitation
-(static defer sites expand once at RunDefers; loop-carried argument values
-are read after the loop). Fixing it properly is the "runtime defer/recover"
-task in the project handoff.
+- defer in a loop — one record per iteration, arguments evaluated at
+  defer time (`deferred 3/2/1`);
+- defer in a conditional — no record pushed means no call run (the old
+  model ran every static site unconditionally);
+- the exception path — the handler drains only what was actually
+  registered before the panic.
 
-```
-gen_defer_order.go   got "body done\ndeferred 4\n"   want "body done\ndeferred 3\ndeferred 2\ndeferred 1\n"
-```
-
-Note `_corpus/gen_defer_in_loop.go` and `gen_defer_named_return.go` *do* pass —
-the trigger is specifically a deferred call whose arguments are evaluated per
-loop iteration.
+The handler epilogue also now writes *typed* zeros to REGRET (H for
+pointer results — a raw 0 faulted the caller's frame teardown) and copies
+named-result cells to REGRET after the defers run, so
+`func f() (msg string)` + `defer func(){ msg = ... }()` + recover returns
+the assigned value.
 
 ## ~~4. Fixed-size multidimensional arrays fault~~  ·  FIXED
 

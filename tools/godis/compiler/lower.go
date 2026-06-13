@@ -41,8 +41,13 @@ type funcLowerer struct {
 	callTypeDescs   []dis.TypeDesc   // type descriptors for call-site frames
 	funcCallPatches []funcCallPatch  // deferred patches for local function calls
 	closurePtrSlot  int32            // frame offset of hidden closure pointer (for inner functions)
-	deferStack      []ssa.CallCommon // LIFO stack of deferred calls
-	hasRecover      bool             // true if a deferred closure calls recover()
+	deferSites      []deferSite      // static defer sites (runtime records dispatch on the index)
+	deferSiteID     map[*ssa.Defer]int
+	deferHead       int32 // frame slot of the runtime defer-record list head
+	deferBuild      int32 // shared pointer slot used to build records
+	deferNode       int32 // shared pointer slot used by the drain loop
+	deferID         int32 // shared word slot for the drained record's site id
+	hasRecover      bool  // true if a deferred closure calls recover()
 	excSlotFP       int32            // frame pointer slot for exception data (pointer, for VM storage)
 	handlers        []handlerInfo    // exception handler table entries
 }
@@ -103,8 +108,15 @@ func (fl *funcLowerer) lower() (*lowerResult, error) {
 	// Scan for recover() in deferred closures
 	fl.scanForRecover()
 
-	// Pre-allocate frame slots for all SSA values that need them
+	// Pre-allocate frame slots for all SSA values that need them.
+	// Must run before anything else allocates: parameters live at
+	// MaxTemp+0.. where callers write arguments.
 	fl.allocateSlots()
+
+	// Discover all defer sites up front: a RunDefers can drain records
+	// from any site reachable before it, so the dispatch chain must
+	// cover every site regardless of block lowering order.
+	fl.scanDefers()
 
 	// If this function has recover, allocate the exception frame slot
 	if fl.hasRecover {
@@ -217,20 +229,46 @@ func (fl *funcLowerer) emitExceptionHandler(bodyStartPC int32) {
 	// Copy exception string from frame slot to module-data bridge
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(fl.excSlotFP), dis.MP(excGlobalMP)))
 
-	// Emit deferred calls in LIFO order (same as normal RunDefers)
-	for i := len(fl.deferStack) - 1; i >= 0; i-- {
-		call := fl.deferStack[i]
-		fl.emitDeferredCall(call) //nolint: ignore error for handler path
-	}
-
-	// Zero return values (Go returns zero values when recovering from panic)
+	// Write typed zero values to REGRET first: 0 for scalars, H for
+	// pointer types (a 0 in a pointer-typed caller slot is destroyed at
+	// frame teardown and faults), two zero words for interfaces.
 	regretOff := int32(dis.REGRET * dis.IBY2WD)
 	results := fl.fn.Signature.Results()
 	retOff := int32(0)
 	for i := 0; i < results.Len(); i++ {
 		dt := GoTypeToDis(results.At(i).Type())
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(regretOff, retOff)))
+		if dt.IsPtr {
+			fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FPInd(regretOff, retOff)))
+		} else {
+			for w := int32(0); w < dt.Size; w += int32(dis.IBY2WD) {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FPInd(regretOff, retOff+w)))
+			}
+		}
 		retOff += dt.Size
+	}
+
+	// Drain the runtime defer list (LIFO), same as normal RunDefers —
+	// only records actually pushed before the panic are run. Deferred
+	// closures may assign named results through their cells.
+	fl.emitRunDeferLoop() //nolint: ignore error for handler path
+
+	// Copy named result cells to REGRET so values assigned before the
+	// panic or by deferred closures are returned (Go semantics for a
+	// recovered function with named results).
+	if cells := fl.namedResultCells(); cells != nil {
+		retOff = 0
+		for i, cell := range cells {
+			dt := GoTypeToDis(results.At(i).Type())
+			cellSlot := fl.slotOf(cell)
+			for w := int32(0); w < dt.Size; w += int32(dis.IBY2WD) {
+				op := dis.IMOVW
+				if dt.IsPtr && w == 0 {
+					op = dis.IMOVP
+				}
+				fl.emit(dis.Inst2(op, dis.FPInd(cellSlot, w), dis.FPInd(regretOff, retOff+w)))
+			}
+			retOff += dt.Size
+		}
 	}
 
 	fl.emit(dis.Inst0(dis.IRET))
@@ -242,6 +280,43 @@ func (fl *funcLowerer) emitExceptionHandler(bodyStartPC int32) {
 		pc2:    handlerPC, // exclusive: [pc1, pc2)
 		wildPC: handlerPC,
 	})
+}
+
+// namedResultCells locates the entry Allocs backing the function's named
+// results (matched by SSA alloc comment). Returns nil unless every result
+// is named and its cell is found.
+func (fl *funcLowerer) namedResultCells() []*ssa.Alloc {
+	results := fl.fn.Signature.Results()
+	if results.Len() == 0 {
+		return nil
+	}
+	names := make([]string, results.Len())
+	for i := 0; i < results.Len(); i++ {
+		if results.At(i).Name() == "" {
+			return nil
+		}
+		names[i] = results.At(i).Name()
+	}
+	cells := make([]*ssa.Alloc, results.Len())
+	for _, b := range fl.fn.Blocks {
+		for _, in := range b.Instrs {
+			a, ok := in.(*ssa.Alloc)
+			if !ok {
+				continue
+			}
+			for i, nm := range names {
+				if cells[i] == nil && a.Comment == nm {
+					cells[i] = a
+				}
+			}
+		}
+	}
+	for _, c := range cells {
+		if c == nil {
+			return nil
+		}
+	}
+	return cells
 }
 
 // allocateSlots pre-allocates frame slots for parameters and all SSA values.
@@ -8161,28 +8236,313 @@ func (fl *funcLowerer) emitStoreThrough(srcSlot, ptrSlot int32, t types.Type) {
 }
 
 // ============================================================
-// Defer operations
+// Defer operations — runtime defer records
 //
-// Static defers are inlined at RunDefers sites in LIFO order.
-// SSA values are immutable, so arguments captured at Defer time
-// remain valid at RunDefers time.
+// Each executed defer statement pushes a heap-allocated record onto a
+// per-frame LIFO list:
+//
+//	offset 0:  PTR  next record
+//	offset 8:  WORD defer-site id (index into deferSites)
+//	offset 16: captured argument values (site-specific layout)
+//
+// RunDefers (and the exception handler) drain the list with an emitted
+// loop, dispatching on the site id. Each dispatch arm unpacks the
+// captured values into frame slots and temporarily rebinds the SSA
+// values to those slots so the regular deferred-call emitters read the
+// captured snapshot. This gives correct Go semantics for defers in
+// loops (one record per iteration, arguments evaluated at defer time)
+// and in conditionals (no record pushed, no call run).
 // ============================================================
 
-// lowerDefer captures a deferred call onto the LIFO stack.
-// No instructions are emitted — the call is expanded at RunDefers time.
+type deferCapture struct {
+	val ssa.Value
+	off int32 // offset of the captured value within the record
+}
+
+type deferSite struct {
+	call      ssa.CallCommon
+	caps      []deferCapture
+	tdIdx     int     // record type descriptor (callTypeDescs index)
+	loadSlots []int32 // frame slots each capture is unpacked into (lazy)
+}
+
+// scanDefers discovers every defer site in the function before block
+// lowering, assigns site ids, computes each record's capture layout, and
+// allocates the shared frame slots used by the push/drain code.
+func (fl *funcLowerer) scanDefers() {
+	for _, b := range fl.fn.Blocks {
+		for _, in := range b.Instrs {
+			d, ok := in.(*ssa.Defer)
+			if !ok {
+				continue
+			}
+			site := deferSite{call: d.Call}
+			off := int32(16)
+			var ptrOffs []int32
+			seen := make(map[ssa.Value]bool)
+			for _, v := range fl.deferCaptureValues(d.Call) {
+				if seen[v] {
+					continue
+				}
+				seen[v] = true
+				start := off
+				words := captureWordsForValue(v)
+				for w, isPtr := range words {
+					if isPtr {
+						ptrOffs = append(ptrOffs, start+int32(w)*int32(dis.IBY2WD))
+					}
+				}
+				off += int32(len(words)) * int32(dis.IBY2WD)
+				site.caps = append(site.caps, deferCapture{v, start})
+			}
+			td := dis.NewTypeDesc(0, int(off))
+			td.SetPointer(0) // next link
+			for _, p := range ptrOffs {
+				td.SetPointer(int(p))
+			}
+			site.tdIdx = len(fl.callTypeDescs)
+			fl.callTypeDescs = append(fl.callTypeDescs, td)
+
+			if fl.deferSiteID == nil {
+				fl.deferSiteID = make(map[*ssa.Defer]int)
+			}
+			fl.deferSiteID[d] = len(fl.deferSites)
+			fl.deferSites = append(fl.deferSites, site)
+		}
+	}
+	if len(fl.deferSites) > 0 {
+		fl.deferHead = fl.frame.AllocPointer("defer.head")
+		fl.deferBuild = fl.frame.AllocPointer("defer.build")
+		fl.deferNode = fl.frame.AllocPointer("defer.node")
+		fl.deferID = fl.frame.AllocWord("defer.id")
+	}
+}
+
+// deferCaptureValues returns the SSA values whose current values a defer
+// site must snapshot into its record. Constants, function references, and
+// global addresses are static and re-materialize at run time.
+func (fl *funcLowerer) deferCaptureValues(call ssa.CallCommon) []ssa.Value {
+	var vals []ssa.Value
+	add := func(v ssa.Value) {
+		switch v.(type) {
+		case *ssa.Const, *ssa.Function, *ssa.Builtin, *ssa.Global:
+			return
+		}
+		vals = append(vals, v)
+	}
+	if call.IsInvoke() {
+		return nil // deferred interface invokes are currently no-ops
+	}
+	if fn, ok := call.Value.(*ssa.Function); ok {
+		// Deferred stub fmt prints are inlined from the traced vararg
+		// elements — capture those, not the (reused) vararg slice.
+		if len(fn.Blocks) == 0 && fn.Package() != nil && fn.Package().Pkg.Path() == "fmt" && len(call.Args) > 0 {
+			if elems := fl.traceAllVarargElements(call.Args[len(call.Args)-1]); elems != nil {
+				for _, e := range elems {
+					if e != nil {
+						add(e)
+					}
+				}
+				return vals
+			}
+		}
+	} else {
+		add(call.Value) // closure or function value
+	}
+	if b, ok := call.Value.(*ssa.Builtin); ok {
+		switch b.Name() {
+		case "len", "cap", "append", "copy", "min", "max", "recover":
+			return nil // no-op when deferred
+		}
+	}
+	for _, a := range call.Args {
+		add(a)
+	}
+	return vals
+}
+
+// isRawAddress reports whether v's frame slot holds a raw (uncounted)
+// address — a stack address or an interior pointer — rather than a
+// reference-counted heap pointer. Raw addresses must be captured as plain
+// words: MOVP through them would corrupt reference counts.
+func isRawAddress(v ssa.Value) bool {
+	switch a := v.(type) {
+	case *ssa.Alloc:
+		return !a.Heap
+	case *ssa.IndexAddr, *ssa.FieldAddr:
+		return true
+	}
+	return false
+}
+
+// captureWordsForValue returns one entry per 8-byte word of v's frame
+// representation; true marks a reference-counted pointer word.
+func captureWordsForValue(v ssa.Value) []bool {
+	if isRawAddress(v) {
+		return []bool{false}
+	}
+	return captureWordPtrs(v.Type())
+}
+
+func captureWordPtrs(t types.Type) []bool {
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		var words []bool
+		for i := 0; i < u.NumFields(); i++ {
+			words = append(words, captureWordPtrs(u.Field(i).Type())...)
+		}
+		if len(words) == 0 {
+			words = []bool{false} // empty struct placeholder word
+		}
+		return words
+	case *types.Array:
+		var words []bool
+		for i := int64(0); i < u.Len(); i++ {
+			words = append(words, captureWordPtrs(u.Elem())...)
+		}
+		if len(words) == 0 {
+			words = []bool{false}
+		}
+		return words
+	case *types.Interface:
+		return []bool{false, false} // tag + value, untraced like frame slots
+	default:
+		dt := GoTypeToDis(t)
+		n := dt.Size / int32(dis.IBY2WD)
+		if n < 1 {
+			n = 1
+		}
+		words := make([]bool, n)
+		if dt.IsPtr {
+			words[0] = true
+		}
+		return words
+	}
+}
+
+// lowerDefer pushes a runtime defer record: allocate, stamp the site id,
+// snapshot the captured values, and link it onto the frame's list head.
 func (fl *funcLowerer) lowerDefer(instr *ssa.Defer) error {
-	fl.deferStack = append(fl.deferStack, instr.Call)
+	id, ok := fl.deferSiteID[instr]
+	if !ok {
+		return fmt.Errorf("defer site not scanned")
+	}
+	site := fl.deferSites[id]
+	iby2wd := int32(dis.IBY2WD)
+	node := fl.deferBuild
+
+	fl.emit(dis.Inst2(dis.INEW, dis.Imm(int32(site.tdIdx)), dis.FP(node)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(int32(id)), dis.FPInd(node, iby2wd)))
+	for _, cap := range site.caps {
+		srcSlot := fl.materialize(cap.val)
+		for w, isPtr := range captureWordsForValue(cap.val) {
+			delta := int32(w) * iby2wd
+			if isPtr {
+				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot+delta), dis.FPInd(node, cap.off+delta)))
+			} else {
+				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot+delta), dis.FPInd(node, cap.off+delta)))
+			}
+		}
+	}
+	// Push: node.next = head; head = node.
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fl.deferHead), dis.FPInd(node, 0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(node), dis.FP(fl.deferHead)))
 	return nil
 }
 
-// lowerRunDefers emits all deferred calls in LIFO order (last defer = first call).
+// lowerRunDefers drains the runtime defer list in LIFO order.
 func (fl *funcLowerer) lowerRunDefers(instr *ssa.RunDefers) error {
-	for i := len(fl.deferStack) - 1; i >= 0; i-- {
-		call := fl.deferStack[i]
-		if err := fl.emitDeferredCall(call); err != nil {
-			return fmt.Errorf("deferred call %d: %w", i, err)
-		}
+	return fl.emitRunDeferLoop()
+}
+
+// emitRunDeferLoop emits the drain loop:
+//
+//	loop: if head == H goto end
+//	      node = head; head = node.next; id = node.id
+//	      dispatch on id → arm_i: unpack captures, run call, goto loop
+//	end:
+func (fl *funcLowerer) emitRunDeferLoop() error {
+	if len(fl.deferSites) == 0 {
+		return nil
 	}
+	iby2wd := int32(dis.IBY2WD)
+	node := fl.deferNode
+
+	loopPC := int32(len(fl.insts))
+	exitIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fl.deferHead), dis.Imm(-1), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(fl.deferHead), dis.FP(node)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(node, 0), dis.FP(fl.deferHead)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(node, iby2wd), dis.FP(fl.deferID)))
+
+	armIdxs := make([]int, len(fl.deferSites))
+	for id := range fl.deferSites {
+		armIdxs[id] = len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(fl.deferID), dis.Imm(int32(id)), dis.Imm(0)))
+	}
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC))) // unknown id: skip record
+
+	for id := range fl.deferSites {
+		site := &fl.deferSites[id]
+		fl.insts[armIdxs[id]].Dst = dis.Imm(int32(len(fl.insts)))
+
+		// Allocate the unpack slots once per site, mirroring the record
+		// layout (pointer words GC-traced so MOVP loads stay balanced).
+		if site.loadSlots == nil {
+			site.loadSlots = make([]int32, len(site.caps))
+			for ci, cap := range site.caps {
+				words := captureWordsForValue(cap.val)
+				for w, isPtr := range words {
+					var slot int32
+					if isPtr {
+						slot = fl.frame.AllocPointer(fmt.Sprintf("defer.cap%d.%d.%d", id, ci, w))
+					} else {
+						slot = fl.frame.AllocWord(fmt.Sprintf("defer.cap%d.%d.%d", id, ci, w))
+					}
+					if w == 0 {
+						site.loadSlots[ci] = slot
+					}
+				}
+			}
+		}
+
+		// Unpack captures and rebind the SSA values to the unpacked slots.
+		saved := make(map[ssa.Value]int32, len(site.caps))
+		savedHas := make(map[ssa.Value]bool, len(site.caps))
+		for ci, cap := range site.caps {
+			base := site.loadSlots[ci]
+			for w, isPtr := range captureWordsForValue(cap.val) {
+				delta := int32(w) * iby2wd
+				if isPtr {
+					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(node, cap.off+delta), dis.FP(base+delta)))
+				} else {
+					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(node, cap.off+delta), dis.FP(base+delta)))
+				}
+			}
+			if old, ok := fl.valueMap[cap.val]; ok {
+				saved[cap.val] = old
+				savedHas[cap.val] = true
+			}
+			fl.valueMap[cap.val] = base
+		}
+
+		err := fl.emitDeferredCall(site.call)
+
+		for _, cap := range site.caps {
+			if savedHas[cap.val] {
+				fl.valueMap[cap.val] = saved[cap.val]
+			} else {
+				delete(fl.valueMap, cap.val)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("deferred call %d: %w", id, err)
+		}
+
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
+	}
+
+	fl.insts[exitIdx].Dst = dis.Imm(int32(len(fl.insts)))
 	return nil
 }
 

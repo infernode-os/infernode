@@ -277,8 +277,11 @@ Go feature and generate code that uses it natively.
   arrays and binary search (future: native Dis table type).
 - **Closures** — Dis has no closures. We allocate heap structs containing free
   variables and a function tag, with dispatch chains at call sites.
-- **Defer** — Dis has no defer. We inline deferred calls at every return point
-  in LIFO order, with exception handlers for panic paths.
+- **Defer** — Dis has no defer. Each executed defer statement pushes a
+  heap-allocated record (site id + argument snapshot) onto a per-frame LIFO
+  list; RunDefers and the exception handler drain the list with a dispatch
+  loop. Defers in loops run once per iteration with defer-time argument
+  values, and defers in conditionals only run if registered.
 - **Recover** — Dis exception handlers + a module-data bridge pattern (handler
   writes exception to global, deferred closure reads it).
 - **Standard library** — Intercepted and inlined. `fmt.Sprintf` becomes a

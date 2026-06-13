@@ -386,14 +386,19 @@ growfields(n: int)
 splitrecord(rec: string)
 {
 	if(fs_var == " ") {
-		# default: split on whitespace, skip leading/trailing
-		(nfields, fl) := sys->tokenize(rec, " \t");
-		growfields(nfields);
+		# default: split on whitespace, skip leading/trailing.
+		# NB: `(nf, fl) :=` must use a fresh name — writing
+		# `(nfields, fl) :=` would DECLARE a local nfields, shadowing
+		# the module global, so the field count never escaped this
+		# function and every $N / NF read 0 (all fields looked empty).
+		(nf, fl) := sys->tokenize(rec, " \t");
+		growfields(nf);
 		i := 0;
 		for(; fl != nil; fl = tl fl) {
 			fields[i] = hd fl;
 			i++;
 		}
+		nfields = nf;
 	} else if(len fs_var == 1) {
 		# single-char delimiter, preserve empty fields
 		delim := fs_var[0];

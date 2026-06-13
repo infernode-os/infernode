@@ -116,14 +116,21 @@ parselist(s: string): list of ref Range
 	while(s != nil) {
 		# find next comma-separated element
 		elem: string;
+		found := 0;
 		for(i := 0; i < len s; i++) {
 			if(s[i] == ',') {
 				elem = s[:i];
 				s = s[i+1:];
+				found = 1;
 				break;
 			}
 		}
-		if(i == len s) {
+		if(!found) {
+			# No comma: the whole remaining string is the last element.
+			# Must NOT test `i == len s` here — the comma branch above
+			# already shortened s, so that check mis-fires whenever the
+			# break index equals the new length (e.g. "1,3" -> drops "1")
+			# and clobbers the element just parsed.
 			elem = s;
 			s = nil;
 		}
@@ -225,12 +232,15 @@ process(f: ref Iobuf, ob: ref Iobuf)
 			line = line[:len line - 1];
 		}
 
+		emitted := 1;
 		if(mode == CHARS)
 			cutchars(line, ob);
 		else
-			cutfields(line, ob);
+			emitted = cutfields(line, ob);
 
-		if(hasnl)
+		# A line suppressed by -s (no delimiter) emits nothing at all —
+		# not even its newline, which previously left a stray blank line.
+		if(hasnl && emitted)
 			ob.putc('\n');
 	}
 }
@@ -243,7 +253,10 @@ cutchars(line: string, ob: ref Iobuf)
 	}
 }
 
-cutfields(line: string, ob: ref Iobuf)
+# Returns 1 if the line was emitted, 0 if suppressed (-s on a line with no
+# delimiter). The caller uses this to decide whether to emit the trailing
+# newline.
+cutfields(line: string, ob: ref Iobuf): int
 {
 	# check if line contains delimiter
 	hasdelim := 0;
@@ -255,9 +268,11 @@ cutfields(line: string, ob: ref Iobuf)
 	}
 
 	if(!hasdelim) {
-		if(!sflag)
+		if(!sflag) {
 			ob.puts(line);
-		return;
+			return 1;
+		}
+		return 0;
 	}
 
 	# split into fields preserving empty fields
@@ -290,5 +305,6 @@ cutfields(line: string, ob: ref Iobuf)
 		n++;
 	}
 
-	# if any open-ended ranges extend past the line, we're done
+	# a line with a delimiter is always emitted (even if no field matched)
+	return 1;
 }

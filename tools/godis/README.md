@@ -1000,8 +1000,16 @@ always the tested value. Swapping operands silently inverts the condition.
 
 ## Bug Log
 
-Every bug encountered during development, in chronological order. Each entry
-describes the symptom, root cause, and fix.
+Every bug encountered during initial development, in chronological order.
+Each entry describes the symptom, root cause, and fix. Bugs found after
+the differential-testing harness landed are documented in
+[docs/DIFFTEST-FINDINGS.md](docs/DIFFTEST-FINDINGS.md) instead — among
+them: package-level var initializers never running, zero-arg
+`fmt.Println()` linking to PC 0, multi-word globals overlapping MP data,
+map delete corrupting the heap for pointer values, interface equality
+comparing only the tag word, unsigned 64-bit div/rem/shift using signed
+opcodes, nested value arrays under-allocated, the compile-time defer
+model (replaced by runtime defer records), and strconv range handling.
 
 ### B01: Operand Zero-Value Encodes as AMP
 
@@ -1303,13 +1311,15 @@ under `-c1` fails this gate. The current ranked list of real divergences lives i
 | Test code | ~3,500 |
 | Dis bytecode library | ~2,000 |
 | CLI tools | ~250 |
-| E2E test programs | 172+ |
+| E2E test programs | 209 (testdata) + 52 (difftest corpus) |
+| Locked differential corpus | 246 programs, byte-identical to `go run` under `-c0` and `-c1` |
 | Multi-package test scenarios | 4 |
 | Benchmark programs | 16 |
 | Supported Go features | Tiers 1-7 (see [Status](#status-and-limitations)) |
 | Supported Sys functions | 15 |
+| Linked builtin modules | Sys, Math (libm, loaded on demand) |
 | Intercepted stdlib packages | 14 (incl. embed, unsafe, math/cmplx) |
-| Bugs found and fixed | 28 |
+| Bugs found and fixed | 28 in the bug log + the difftest fix sprints ([docs/DIFFTEST-FINDINGS.md](docs/DIFFTEST-FINDINGS.md)) |
 | VM opcodes used | 62+ |
 | External dependencies | 1 (golang.org/x/tools) |
 

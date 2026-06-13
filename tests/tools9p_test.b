@@ -62,10 +62,13 @@ run(name: string, testfn: ref fn(t: ref T))
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
+# Non-emptiness, not mere existence: an unmounted tools9p still leaves a
+# stray empty /tool/tools (gitignored repo stub, or a file a prior test
+# wrote), which a bare stat mistakes for a live mount — turning these
+# skips into false failures (INFR-312).
 hastool(): int
 {
-	(ok, nil) := sys->stat(TOOLMNT + "/tools");
-	return ok >= 0;
+	return len readfile(TOOLMNT + "/tools") > 0;
 }
 
 hasctlalias(): int

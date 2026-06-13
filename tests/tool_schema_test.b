@@ -276,10 +276,13 @@ testPropertiesAreStringTyped(t: ref T)
 
 # ---------- Layer B: live 9P tests (skip if /tool not mounted) ----------
 
+# Non-emptiness, not mere existence: an unmounted tools9p still leaves a
+# stray empty /tool/_registry (gitignored repo stub, or a file a prior
+# test wrote), which a bare stat mistakes for a live mount — turning
+# these skips into false failures (INFR-312).
 hastools9p(): int
 {
-	(ok, nil) := sys->stat("/tool/_registry");
-	return ok >= 0;
+	return len readfile("/tool/_registry") > 0;
 }
 
 readfile(path: string): string

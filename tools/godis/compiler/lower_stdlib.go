@@ -3726,16 +3726,22 @@ func (fl *funcLowerer) lowerFmtFprint(instr *ssa.Call) (bool, error) {
 // into a single string. If addNewline is true, appends "\n" at the end (Println style).
 // Returns the frame slot of the result string and true on success.
 func (fl *funcLowerer) emitSprintConcatInline(instr *ssa.Call, addNewline bool) (int32, bool) {
+	return fl.emitSprintConcatCommon(instr.Call, addNewline)
+}
+
+// emitSprintConcatCommon is emitSprintConcatInline over a bare CallCommon,
+// usable for deferred calls where no *ssa.Call instruction exists.
+func (fl *funcLowerer) emitSprintConcatCommon(call ssa.CallCommon, addNewline bool) (int32, bool) {
 	result := fl.frame.AllocTemp(true)
 	emptyOff := fl.comp.AllocString("")
 	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(emptyOff), dis.FP(result)))
 
-	args := instr.Call.Args
+	args := call.Args
 	// The variadic operands arrive as a single []any slice. F-variants
 	// (Fprint/Fprintln/Fprintf) take an io.Writer first, so the slice is the
 	// second argument there.
 	sliceIdx := 0
-	if callee, ok := instr.Call.Value.(*ssa.Function); ok {
+	if callee, ok := call.Value.(*ssa.Function); ok {
 		switch callee.Name() {
 		case "Fprintf", "Fprintln", "Fprint":
 			sliceIdx = 1

@@ -1169,6 +1169,13 @@ func (fl *funcLowerer) lowerCall(instr *ssa.Call) error {
 
 	// Check if this is a call to a function
 	if callee, ok := call.Value.(*ssa.Function); ok {
+		// The synthesized package init calls the init of every imported
+		// package. Stub packages (fmt, strings, ...) have no SSA body, and
+		// trivial inits (guard plumbing only) are not compiled — both calls
+		// are no-ops.
+		if callee.Name() == "init" && (len(callee.Blocks) == 0 || isTrivialInit(callee)) {
+			return nil
+		}
 		// Check if it's from inferno/sys package → Sys module call
 		if callee.Package() != nil && callee.Package().Pkg.Path() == "inferno/sys" {
 			return fl.lowerSysModuleCall(instr, callee)
@@ -1908,7 +1915,13 @@ func (fl *funcLowerer) traceVarargElement(sliceVal ssa.Value, idx int) ssa.Value
 }
 
 // traceAllVarargElements traces all elements from a []any varargs slice.
+// A nil return means the slice could not be traced; a variadic call with
+// zero operands (e.g. fmt.Println()) passes nil:[]any and yields an empty
+// (non-nil) slice.
 func (fl *funcLowerer) traceAllVarargElements(sliceVal ssa.Value) []ssa.Value {
+	if c, ok := sliceVal.(*ssa.Const); ok && c.Value == nil {
+		return []ssa.Value{}
+	}
 	slice, ok := sliceVal.(*ssa.Slice)
 	if !ok {
 		return nil
@@ -8017,6 +8030,19 @@ func (fl *funcLowerer) emitDeferredCall(call ssa.CallCommon) error {
 	case *ssa.Builtin:
 		return fl.emitDeferredBuiltin(callee, call.Args)
 	case *ssa.Function:
+		// Stub stdlib functions have no SSA body and cannot be called —
+		// deferred fmt prints are inlined like their non-deferred forms.
+		if len(callee.Blocks) == 0 && callee.Package() != nil && callee.Package().Pkg.Path() == "fmt" {
+			switch callee.Name() {
+			case "Println", "Print", "Fprintln", "Fprint":
+				newline := callee.Name() == "Println" || callee.Name() == "Fprintln"
+				if strSlot, ok := fl.emitSprintConcatCommon(call, newline); ok {
+					fl.emitSysCall("print", []callSiteArg{{strSlot, true, false}})
+					return nil
+				}
+			}
+			return fmt.Errorf("unsupported deferred call: fmt.%s", callee.Name())
+		}
 		fl.emitDeferredDirectCall(callee, call.Args)
 		return nil
 	case *ssa.MakeClosure:

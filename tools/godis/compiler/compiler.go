@@ -43,7 +43,7 @@ type Compiler struct {
 	ifaceDispatch map[string][]ifaceImpl // method name → [{tag, fn}, ...]
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
 	embedInits   []embedInit // go:embed entries to initialize at module load
-	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
+	initFuncs    []*ssa.Function // synthesized package init functions to call before main
 	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
 	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
 	BaseDir      string // directory containing main package (for resolving local imports)
@@ -586,6 +586,12 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		for _, p := range cf.result.funcCallPatches {
 			patchedInsts[p.instIdx] = true
 			inst := &cf.result.insts[p.instIdx]
+			// A callee that was never compiled would silently patch to
+			// PC 0 / TD 0 — a call into main's entry that corrupts the
+			// heap at runtime. Fail at compile time instead.
+			if _, ok := funcStartPC[p.callee]; !ok {
+				return nil, fmt.Errorf("%s: call to uncompiled function %s", cf.fn.Name(), p.callee.String())
+			}
 			switch p.patchKind {
 			case patchIFRAME:
 				inst.Src = dis.Imm(int32(funcTDID[p.callee]))
@@ -709,6 +715,34 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	return m, nil
 }
 
+// isTrivialInit reports whether a synthesized package init does nothing
+// observable: only guard plumbing (load/store of init$guard, control flow)
+// and calls to blockless stub-package inits. Such inits are not compiled
+// and calls to them are skipped.
+func isTrivialInit(fn *ssa.Function) bool {
+	for _, b := range fn.Blocks {
+		for _, in := range b.Instrs {
+			switch v := in.(type) {
+			case *ssa.UnOp, *ssa.If, *ssa.Jump, *ssa.Return:
+				// guard check and control flow
+			case *ssa.Store:
+				if g, ok := v.Addr.(*ssa.Global); !ok || g.Name() != "init$guard" {
+					return false
+				}
+			case *ssa.Call:
+				callee, ok := v.Call.Value.(*ssa.Function)
+				if !ok || callee.Name() != "init" || len(callee.Blocks) > 0 {
+					return false
+				}
+				// call to a stub package's external init — a no-op
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // collectPackageFuncs collects functions, methods, and init funcs from an SSA package.
 func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package, allFuncs *[]*ssa.Function, seen map[*ssa.Function]bool) {
 	for _, mem := range ssaPkg.Members {
@@ -720,12 +754,21 @@ func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package
 				seen[m] = true
 				break
 			}
-			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
-				*allFuncs = append(*allFuncs, m)
-				seen[m] = true
-				if strings.HasPrefix(m.Name(), "init#") {
+			if !seen[m] && len(m.Blocks) > 0 {
+				// The synthesized package initializer runs package-level var
+				// initializers, then calls user init#N functions itself (all
+				// behind the init$guard). main's preamble invokes it. A
+				// trivial init (guard plumbing only) is dropped entirely;
+				// lowerCall skips calls to it.
+				if m.Name() == "init" {
+					if isTrivialInit(m) {
+						seen[m] = true
+						break
+					}
 					c.initFuncs = append(c.initFuncs, m)
 				}
+				*allFuncs = append(*allFuncs, m)
+				seen[m] = true
 			}
 		case *ssa.Type:
 			nt, ok := m.Type().(*types.Named)

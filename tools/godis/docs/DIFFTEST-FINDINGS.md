@@ -11,7 +11,7 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current standing: **211 match, 20 skipped, 6 divergences** below.
+Current standing: **213 match, 20 skipped, 4 divergences** below.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -36,34 +36,57 @@ loop (`emitAtoiChecked` in `lower.go`) and return a Go-identical
 `strconv_err.go` and `tier6_8.go` are promoted into the locked corpus.
 Overflow (`ErrRange`) is still not detected.
 
-## 2. Map delete / repeated insert+lookup faults  ·  `c0!=c1` + `crash`
+## 2. Map delete / `len(m)` after delete faults  ·  `c0!=c1`
 
-`_corpus/gen_map_commaok.go`, `_corpus/seed_fibmemo.go`
+`_corpus/gen_map_commaok.go`
 
-Map *reads* work, but `delete(m, k)` followed by `len(m)` faults, and a
-memoization pattern (`memo[n] = v` then `memo[n]`) faults on the first cached
-write/read. The fault differs between interpreter (`segmentation violation`) and
-JIT (`dereference of nil`), so it also trips the `c0!=c1` invariant.
+`delete(m, k)` followed by `len(m)` faults (`segmentation violation` under
+`-c0`, `dereference of nil` under `-c1`). The *other half* of the original
+finding — the memoization fault in `seed_fibmemo.go` — turned out to be the
+package-init bug below and is fixed; a minimal delete+len+println program
+also passes, so the remaining trigger involves `fmt.Println` interplay.
 
 ```
 gen_map_commaok.go   c0/c1 fault after "one true\nfalse\n"   want "...\n1\n"
-seed_fibmemo.go      faults after "0 1 "                      want full fib sequence
 ```
 
-A common real-world pattern (caches, counters); high impact.
+### Fixed en route: package-level var initializers never ran
 
-## 3. `defer` in a loop faults  ·  `c0!=c1` + `crash`
+`var memo = map[int]int{}` (and any `var x = <expr>`) silently never
+executed: the synthesized SSA `init` function was excluded from compilation
+and only user `init#N` funcs were called. Globals therefore held zero — for
+a map global, a nil wrapper, hence the faults on first use. main's preamble
+now calls each package's synthesized `init` (which runs var initializers and
+`init#N` behind `init$guard`); trivial guard-only inits are elided. Calls to
+blockless stub-package inits are no-ops, and the linker now *fails loudly*
+on any call to an uncompiled function instead of silently emitting a call to
+PC 0.
+
+### Fixed en route: zero-arg `fmt.Println()` corrupted the heap
+
+A variadic call with no operands passes `nil:[]any`; the vararg tracer
+returned "untraceable", so interception fell through to a direct call to the
+blockless `fmt.Println` stub — which linked to PC 0 and re-entered main,
+corrupting the heap (`alloc:D2B`, segfaults at H-offsets, or hangs). This
+was the actual cause of old finding #6 (seed_quicksort's tail crash after
+correct output) and the fib-loop crash in seed_fibmemo. The tracer now
+yields an empty element list for nil vararg slices.
+
+## 3. `defer` in a loop runs once with final values  ·  `diverge`
 
 `_corpus/gen_defer_order.go`
 
-`for i ... { defer fmt.Println("deferred", i) }` prints the body then faults
-instead of running the three deferred calls LIFO. This corroborates the known
-limitation of the compile-time defer model (defer in loops/conditionals is
-silently wrong); the harness reaches it independently. Fixing it is the
-"runtime defer/recover" task in the project handoff.
+`for i := 1; i <= 3; i++ { defer fmt.Println("deferred", i) }` used to
+*fault*: deferred calls to stub fmt functions emitted a direct call to PC 0.
+Deferred `fmt.Print(ln)` is now inlined like the non-deferred form, so the
+program completes — but prints `deferred 4` once instead of
+`deferred 3/2/1`. This is the known compile-time defer model limitation
+(static defer sites expand once at RunDefers; loop-carried argument values
+are read after the loop). Fixing it properly is the "runtime defer/recover"
+task in the project handoff.
 
 ```
-gen_defer_order.go   c0/c1 fault after "body done\n"   want "body done\ndeferred 3\ndeferred 2\ndeferred 1\n"
+gen_defer_order.go   got "body done\ndeferred 4\n"   want "body done\ndeferred 3\ndeferred 2\ndeferred 1\n"
 ```
 
 Note `_corpus/gen_defer_in_loop.go` and `gen_defer_named_return.go` *do* pass —
@@ -95,15 +118,11 @@ navigable.
 gen_error_wrap.go   faults after "operation failed: base failure\nis base\n"   want "...\nbase failure\n"
 ```
 
-## 6. Tail crash after correct output  ·  `c0!=c1`
+## ~~6. Tail crash after correct output~~  ·  FIXED
 
-`_corpus/seed_quicksort.go`
-
-Prints the fully correct sorted sequence, then faults at function/program exit.
-Because the output up to the fault is correct, this is likely a frame-teardown
-or final-`fmt.Println()` issue rather than a logic bug. Needs isolation (bisect
-the recursive `append(append(less, equal...), greater...)` + `copy` against the
-trailing empty `fmt.Println()`).
+`seed_quicksort.go`'s tail crash was the zero-arg `fmt.Println()` bug (see
+finding #2's "fixed en route" notes). Promoted into the locked corpus along
+with `seed_fibmemo.go`.
 
 ---
 

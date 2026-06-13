@@ -18,6 +18,8 @@ _corpus/gen_slice_2d.go
 _corpus/gen_slice_append_len.go
 _corpus/gen_slice_copy.go
 _corpus/gen_slice_subslice.go
+_corpus/seed_fibmemo.go
+_corpus/seed_quicksort.go
 _corpus/seed_rpn.go
 _corpus/seed_stack.go
 _corpus/seed_wordfreq.go

@@ -7588,8 +7588,10 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
 
-	// values[idx] = values[lastIdx]
-	tmpVal := fl.frame.AllocWord("dl.tmpv")
+	// values[idx] = values[lastIdx]. The temp must be type-aware: for
+	// pointer values emitLoadThrough emits MOVP, and MOVP into a raw
+	// uninitialized word slot decrefs stack garbage (heap corruption).
+	tmpVal := fl.allocMapKeyTemp(valType, "dl.tmpv")
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
 	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
@@ -7601,6 +7603,15 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 
 	// count--
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lastIdx), dis.FPInd(mapSlot, 16)))
+
+	// Shrink both arrays to [0:count]. The update grow path copies the
+	// whole stored array with SLICELA into a count+1-sized one; if the
+	// physical length exceeded count (two deletes, then an insert) that
+	// copy would fault with an array bounds error.
+	fl.emit(dis.NewInst(dis.ISLICEA, dis.Imm(0), dis.FP(lastIdx), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(keysArr), dis.FPInd(mapSlot, 0)))
+	fl.emit(dis.NewInst(dis.ISLICEA, dis.Imm(0), dis.FP(lastIdx), dis.FP(valsArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valsArr), dis.FPInd(mapSlot, 8)))
 
 	// === done ===
 	donePC := int32(len(fl.insts))
@@ -7654,7 +7665,8 @@ func (fl *funcLowerer) emitDeferredMapDelete(mapVal, keyVal ssa.Value) error {
 	fl.emitLoadThrough(tmpKey, tmpPtr2, keyType)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
-	tmpVal := fl.frame.AllocWord("ddl.tmpv")
+	// Type-aware temp: MOVP into a raw word slot decrefs stack garbage.
+	tmpVal := fl.allocMapKeyTemp(valType, "ddl.tmpv")
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
 	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
@@ -7663,6 +7675,12 @@ func (fl *funcLowerer) emitDeferredMapDelete(mapVal, keyVal ssa.Value) error {
 	skipSwapPC := int32(len(fl.insts))
 	fl.insts[skipSwapIdx].Dst = dis.Imm(skipSwapPC)
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(lastIdx), dis.FPInd(mapSlot, 16)))
+
+	// Shrink both arrays to [0:count] (see lowerMapDelete).
+	fl.emit(dis.NewInst(dis.ISLICEA, dis.Imm(0), dis.FP(lastIdx), dis.FP(keysArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(keysArr), dis.FPInd(mapSlot, 0)))
+	fl.emit(dis.NewInst(dis.ISLICEA, dis.Imm(0), dis.FP(lastIdx), dis.FP(valsArr)))
+	fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valsArr), dis.FPInd(mapSlot, 8)))
 
 	donePC := int32(len(fl.insts))
 	fl.insts[skipIdx].Dst = dis.Imm(donePC)
@@ -8954,9 +8972,7 @@ func (fl *funcLowerer) loadGlobalAddr(g *ssa.Global) int32 {
 	}
 	mpOff, ok := fl.comp.GlobalOffset(globalKey)
 	if !ok {
-		elemType := g.Type().(*types.Pointer).Elem()
-		dt := GoTypeToDis(elemType)
-		mpOff = fl.comp.AllocGlobal(globalKey, dt.IsPtr)
+		mpOff = fl.comp.AllocGlobal(globalKey, g.Type().(*types.Pointer).Elem())
 	}
 	slot := fl.frame.AllocWord("gaddr:" + globalKey) // NOT pointer: MP address, not heap
 	fl.emit(dis.Inst2(dis.ILEA, dis.MP(mpOff), dis.FP(slot)))

@@ -13,6 +13,7 @@ _corpus/gen_error_new.go
 _corpus/gen_error_sentinel.go
 _corpus/gen_generic_mapfilter.go
 _corpus/gen_generic_minmax.go
+_corpus/gen_map_commaok.go
 _corpus/gen_map_count.go
 _corpus/gen_slice_2d.go
 _corpus/gen_slice_append_len.go

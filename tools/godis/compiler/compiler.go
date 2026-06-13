@@ -130,20 +130,52 @@ func (c *Compiler) ResolveInterfaceMethods(methodName string) []ifaceImpl {
 	return nil
 }
 
-// AllocGlobal allocates storage for a global variable in the module data section.
-// Returns the MP offset. Pointer-typed globals are tracked for GC.
-func (c *Compiler) AllocGlobal(name string, isPtr bool) int32 {
+// AllocGlobal allocates storage for a global variable of type t in the module
+// data section and returns the MP offset. Multi-word globals (interfaces,
+// structs) get one consecutive MP word per data word — a single 8-byte slot
+// would let writes to the global clobber whatever the allocator placed next.
+// Pointer words are GC-tracked individually.
+func (c *Compiler) AllocGlobal(name string, t types.Type) int32 {
 	if off, ok := c.globals[name]; ok {
 		return off
 	}
-	var off int32
-	if isPtr {
-		off = c.mod.AllocPointer("global:" + name)
-	} else {
-		off = c.mod.AllocWord("global:" + name)
-	}
+	off := c.allocGlobalWords(name, t)
 	c.globals[name] = off
 	return off
+}
+
+func (c *Compiler) allocGlobalWords(name string, t types.Type) int32 {
+	dt := GoTypeToDis(t)
+	if dt.Size <= int32(dis.IBY2WD) {
+		if dt.IsPtr {
+			return c.mod.AllocPointer("global:" + name)
+		}
+		return c.mod.AllocWord("global:" + name)
+	}
+	// Struct: allocate per field so pointer fields stay GC-tracked.
+	if st, ok := t.Underlying().(*types.Struct); ok {
+		base := int32(-1)
+		for i := 0; i < st.NumFields(); i++ {
+			off := c.allocGlobalWords(fmt.Sprintf("%s.%d", name, i), st.Field(i).Type())
+			if base < 0 {
+				base = off
+			}
+		}
+		if base < 0 { // empty struct still needs an address
+			base = c.mod.AllocWord("global:" + name)
+		}
+		return base
+	}
+	// Interface (tag+value), complex, and other plain multi-word values:
+	// untracked words.
+	base := int32(-1)
+	for w := int32(0); w < dt.Size; w += int32(dis.IBY2WD) {
+		off := c.mod.AllocWord(fmt.Sprintf("global:%s+%d", name, w))
+		if base < 0 {
+			base = off
+		}
+	}
+	return base
 }
 
 // GlobalOffset returns the MP offset for a global variable, or -1 if not allocated.
@@ -450,9 +482,7 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	// Allocate storage for package-level global variables in MP (main package)
 	for _, mem := range ssaPkg.Members {
 		if g, ok := mem.(*ssa.Global); ok {
-			elemType := g.Type().(*types.Pointer).Elem()
-			dt := GoTypeToDis(elemType)
-			c.AllocGlobal(g.Name(), dt.IsPtr)
+			c.AllocGlobal(g.Name(), g.Type().(*types.Pointer).Elem())
 		}
 	}
 
@@ -464,10 +494,8 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		}
 		for _, mem := range ssaImpPkg.Members {
 			if g, ok := mem.(*ssa.Global); ok {
-				elemType := g.Type().(*types.Pointer).Elem()
-				dt := GoTypeToDis(elemType)
 				globalName := path + "." + g.Name()
-				c.AllocGlobal(globalName, dt.IsPtr)
+				c.AllocGlobal(globalName, g.Type().(*types.Pointer).Elem())
 			}
 		}
 	}

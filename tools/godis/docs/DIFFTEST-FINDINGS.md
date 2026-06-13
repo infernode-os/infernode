@@ -11,7 +11,7 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current standing: **213 match, 20 skipped, 4 divergences** below.
+Current standing: **214 match, 20 skipped, 3 divergences** below.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as
@@ -36,19 +36,22 @@ loop (`emitAtoiChecked` in `lower.go`) and return a Go-identical
 `strconv_err.go` and `tier6_8.go` are promoted into the locked corpus.
 Overflow (`ErrRange`) is still not detected.
 
-## 2. Map delete / `len(m)` after delete faults  ·  `c0!=c1`
+## ~~2. Map delete / repeated insert+lookup faults~~  ·  FIXED
 
-`_corpus/gen_map_commaok.go`
+Three distinct compiler bugs, all fixed and locked
+(`gen_map_commaok.go`, `seed_fibmemo.go` promoted):
 
-`delete(m, k)` followed by `len(m)` faults (`segmentation violation` under
-`-c0`, `dereference of nil` under `-c1`). The *other half* of the original
-finding — the memoization fault in `seed_fibmemo.go` — turned out to be the
-package-init bug below and is fixed; a minimal delete+len+println program
-also passes, so the remaining trigger involves `fmt.Println` interplay.
-
-```
-gen_map_commaok.go   c0/c1 fault after "one true\nfalse\n"   want "...\n1\n"
-```
+- **`delete` on pointer-valued maps corrupted the heap.** The swap-with-last
+  value temp was a raw `AllocWord`; for pointer value types (e.g.
+  `map[int]string`) the load emits MOVP, which decrefs the destination's
+  previous contents — uninitialized stack garbage. Now type-aware
+  (`allocMapKeyTemp`).
+- **Two deletes then an insert faulted with `array bounds error`.** delete
+  decremented `count` but left the physical arrays longer; the update grow
+  path SLICELAs the whole stored array into a `count+1`-sized one. delete
+  now shrinks the stored arrays to `[0:count]` views with SLICEA.
+- **Package-level var initializers never ran** (see below) — the actual
+  cause of the `seed_fibmemo` memoization fault.
 
 ### Fixed en route: package-level var initializers never ran
 
@@ -61,6 +64,17 @@ now calls each package's synthesized `init` (which runs var initializers and
 blockless stub-package inits are no-ops, and the linker now *fails loudly*
 on any call to an uncompiled function instead of silently emitting a call to
 PC 0.
+
+### Fixed en route: multi-word globals overlapped adjacent MP data
+
+`AllocGlobal` gave every global exactly one 8-byte MP word, but interface
+globals (`var errNotFound = errors.New(...)`, `var e error`) are 16 bytes
+and struct globals are larger still — writing one clobbered whatever the
+allocator placed next (string literals, other globals). Latent until the
+package-init fix made initializers actually write to globals;
+`gen_error_sentinel.go` lost its "not found" line and a neighbouring
+program printed garbage. Globals are now sized by type, one MP word per
+data word, with struct pointer fields GC-tracked individually.
 
 ### Fixed en route: zero-arg `fmt.Println()` corrupted the heap
 

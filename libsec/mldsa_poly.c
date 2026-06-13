@@ -54,8 +54,14 @@ mldsa_decompose(int32 *a1, int32 *a0, int32 a, int32 gamma2)
 		*a0 -= 2 * gamma2;
 
 	if(a - *a0 == MLDSA_Q - 1){
+		/* FIPS 204 Alg 36: r1 = 0, r0 = r0 - 1 (i.e. a - q).
+		 * Pinning r0 to -1 here understated |r0| for every a in the
+		 * top gamma2-sized window below q-1, so the signer's
+		 * ||r0|| < gamma2 - beta rejection check passed signatures
+		 * it must reject -- rare data-dependent verify failures
+		 * (INFR-108). */
 		*a1 = 0;
-		*a0 = -1;
+		*a0 -= 1;
 	} else {
 		t = a - *a0;
 		*a1 = t / (2 * gamma2);

@@ -23,12 +23,24 @@ include "testing.m";
 AwkTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
+
+	# INFR-310 workaround: keep this module type structurally distinct
+	# from Cmd below. The compiler shares one LDT between structurally
+	# identical module types, and the ref-fn'd test functions pollute
+	# it -- making `load Cmd "/dis/awk.dis"` demand that awk implement
+	# the test functions ("link typecheck Awk->testArithmetic()"),
+	# which silently skipped every test in this file.
+	ldtworkaround: fn();
 };
 
 Cmd: module
 {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
+
+ldtworkaround()
+{
+}
 
 passed := 0;
 failed := 0;
@@ -118,6 +130,10 @@ runawk(args: list of string, input: string): string
 
 runawkproc(args: list of string, stdout: ref Sys->FD, done: chan of int)
 {
+	# Save the real stdout: the fd table is shared across spawn, so
+	# parking /dev/null in slot 1 (the previous EOF fix here) silenced
+	# every test-result line printed after the first runawk call.
+	origout := sys->fildes(1);
 	sys->dup(stdout.fd, 1);
 	stdout = nil;
 
@@ -129,8 +145,8 @@ runawkproc(args: list of string, stdout: ref Sys->FD, done: chan of int)
 	"*" =>
 		;
 	}
-	# Close the dup'd write end so the parent's read gets EOF
-	sys->dup(sys->open("/dev/null", Sys->OWRITE).fd, 1);
+	# Restore fd 1 so the pipe's write end closes (parent's read EOFs)
+	sys->dup(origout.fd, 1);
 	done <-= 1;
 }
 

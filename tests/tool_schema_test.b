@@ -237,11 +237,27 @@ testRequiredKeysAreDeclared(t: ref T)
 	}
 }
 
-# String-only convention: V1 schemas use string-typed properties so the
-# bridge's insertion-order space-join produces a valid ctl-line. A
-# non-string property would be silently dropped by the current
-# extracttoolargs() collapse. Flag this so future contributors notice.
-testPropertiesAreStringTyped(t: ref T)
+# Every schema property must declare a valid JSON Schema type.
+#
+# This originally asserted "string" specifically — a V1 text-bridge
+# constraint from when a non-string property would be silently dropped by
+# extracttoolargs()'s space-join into a ctl-line. That no longer holds:
+# extracttoolargs() now stringifies non-string properties via .text(), and
+# JSON-native tools parse their raw JSON args directly (e.g. spawn detects a
+# leading '{' and runs parsejsonspecs() on its `agents` array). So a
+# structured type like array/object is legitimate; assert validity, not
+# string-ness.
+validjsontype(ty: string): int
+{
+	case ty {
+	"string" or "number" or "integer" or "boolean" or "array" or "object" or "null" =>
+		return 1;
+	* =>
+		return 0;
+	}
+}
+
+testPropertiesAreTyped(t: ref T)
 {
 	for(i := 0; i < len TOOLS; i++) {
 		name := TOOLS[i];
@@ -266,9 +282,9 @@ testPropertiesAreStringTyped(t: ref T)
 			for(ml := po.mem; ml != nil; ml = tl ml) {
 				(pname, pval) := hd ml;
 				ptype := getstring(pval, "type");
-				t.assertseq(ptype, "string",
-					sys->sprint("%s.%s: property type is 'string'",
-						name, pname));
+				t.assert(validjsontype(ptype),
+					sys->sprint("%s.%s: declares a valid JSON type (got %q)",
+						name, pname, ptype));
 			}
 		}
 	}
@@ -482,7 +498,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("SchemaShapeAllTools", testSchemaShapeAllTools);
 	run("RequiredKeysAreDeclared", testRequiredKeysAreDeclared);
-	run("PropertiesAreStringTyped", testPropertiesAreStringTyped);
+	run("PropertiesAreTyped", testPropertiesAreTyped);
 	run("SchemaEndpointMatchesToolSchema", testSchemaEndpointMatchesToolSchema);
 	run("BuildToolDefsUsesPerToolSchemas", testBuildToolDefsUsesPerToolSchemas);
 	run("CtlRoundtripStillWorks", testCtlRoundtripStillWorks);

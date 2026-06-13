@@ -57,10 +57,15 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
-# Check if tools9p is available (toollist non-empty)
+# Check if tools9p is available (toollist non-empty).
+# Must test non-emptiness, not mere existence: a bare `emu -r.` run with
+# no tools9p mounted leaves a stray empty /tool/tools (the repo's
+# gitignored tool/ stub, or a file a prior test created), which a
+# pathexists/stat check mistakes for a live mount — turning these skips
+# into false failures (INFR-312; same fix as veltro_cc_alignment_test).
 hastoolfs(): int
 {
-	return agentlib->pathexists("/tool/tools");
+	return len agentlib->readfile("/tool/tools") > 0;
 }
 
 # ---- parseaction tests (DONE handling — no toollist needed) ----

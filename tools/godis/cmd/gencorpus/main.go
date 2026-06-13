@@ -75,6 +75,279 @@ func generate() []prog {
 	ps = append(ps, genericProgs()...)
 	ps = append(ps, deferProgs()...)
 	ps = append(ps, errorProgs()...)
+	ps = append(ps, intProgs()...)
+	ps = append(ps, valueCopyProgs()...)
+	ps = append(ps, globalProgs()...)
+	ps = append(ps, deferRecoverProgs()...)
+	ps = append(ps, strconvProgs()...)
+	return ps
+}
+
+// intProgs exercises integer semantics edges: truncated division and
+// remainder with negative operands, sub-word truncation, unsigned
+// comparison and division, and shift behavior.
+func intProgs() []prog {
+	var ps []prog
+
+	ps = append(ps, prog{"int_negdiv", header([]string{"fmt"}, `	pairs := [][2]int{{7, 3}, {-7, 3}, {7, -3}, {-7, -3}}
+	for _, p := range pairs {
+		fmt.Println(p[0]/p[1], p[0]%p[1])
+	}
+`)})
+
+	ps = append(ps, prog{"int_subword", header([]string{"fmt"}, `	var a int8 = 127
+	a++
+	var b uint8 = 255
+	b++
+	var c int16 = 32767
+	c++
+	var d uint16 = 65535
+	d++
+	var e int32 = 2147483647
+	e++
+	fmt.Println(a, b, c, d, e)
+	p, q := uint8(200), uint8(100)
+	fmt.Println(p + q)
+`)})
+
+	ps = append(ps, prog{"int_unsigned", header([]string{"fmt"}, `	var big uint64 = 1 << 63
+	var small uint64 = 5
+	fmt.Println(big > small)
+	fmt.Println(big / 2)
+	fmt.Println(uint32(4000000000) > uint32(5))
+	var x uint = 3
+	x -= 5
+	fmt.Println(x > 1000)
+`)})
+
+	ps = append(ps, prog{"int_shift", header([]string{"fmt"}, `	fmt.Println(1<<10, 1024>>3)
+	var v int64 = -8
+	fmt.Println(v >> 1)
+	var u uint64 = 1 << 62
+	fmt.Println(u<<1, u>>61)
+	n := 4
+	fmt.Println(1<<n, 256>>n)
+`)})
+
+	ps = append(ps, prog{"int_bitops", header([]string{"fmt"}, `	a, b := 0xF0, 0x3C
+	fmt.Println(a&b, a|b, a^b, a&^b)
+	fmt.Println(^a)
+	count := 0
+	for x := 0x5A; x != 0; x &= x - 1 {
+		count++
+	}
+	fmt.Println(count)
+`)})
+
+	return ps
+}
+
+// valueCopyProgs exercises Go's by-value copy semantics for arrays and
+// structs (assignment, parameter passing, range copies).
+func valueCopyProgs() []prog {
+	var ps []prog
+
+	ps = append(ps, prog{"array_value_copy", header([]string{"fmt"}, `	a := [3]int{1, 2, 3}
+	b := a
+	b[0] = 99
+	fmt.Println(a[0], b[0])
+	mutate(a)
+	fmt.Println(a[1])
+}
+
+func mutate(arr [3]int) {
+	arr[1] = 42
+`)})
+
+	ps = append(ps, prog{"struct_value_copy", header([]string{"fmt"}, `	type point struct{ x, y int }
+	p := point{1, 2}
+	q := p
+	q.x = 9
+	fmt.Println(p.x, q.x)
+	pts := []point{{1, 1}, {2, 2}}
+	for _, v := range pts {
+		v.y = 0
+	}
+	fmt.Println(pts[0].y, pts[1].y)
+`)})
+
+	ps = append(ps, prog{"matrix_dynamic", header([]string{"fmt"}, `	var m [4][3]int
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 3; j++ {
+			m[i][j] = i*3 + j
+		}
+	}
+	total := 0
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 3; j++ {
+			total += m[i][j]
+		}
+	}
+	fmt.Println(total, m[3][2], m[0][0])
+`)})
+
+	ps = append(ps, prog{"array_in_struct", header([]string{"fmt"}, `	type buf struct {
+		n    int
+		data [4]int
+	}
+	var b buf
+	for i := 0; i < 4; i++ {
+		b.data[i] = i * i
+		b.n++
+	}
+	c := b
+	c.data[0] = 100
+	fmt.Println(b.n, b.data[0], b.data[3], c.data[0])
+`)})
+
+	return ps
+}
+
+// globalProgs exercises package-level variable initialization: literal
+// initializers, dependencies between globals, init() interplay, and
+// interface-typed globals.
+func globalProgs() []prog {
+	var ps []prog
+
+	ps = append(ps, prog{"global_init_order", header([]string{"fmt"}, `	fmt.Println(a, b, c)
+}
+
+var a = 10
+var b = a * 2
+var c = b + a
+
+func init() {
+	c += 100
+`)})
+
+	ps = append(ps, prog{"global_map_init", header([]string{"fmt"}, `	fmt.Println(scores["alice"], scores["bob"], len(scores))
+	scores["carol"] = 3
+	fmt.Println(len(scores))
+}
+
+var scores = map[string]int{"alice": 1, "bob": 2}
+
+func init() {
+	scores["alice"]++
+`)})
+
+	ps = append(ps, prog{"global_slice_init", header([]string{"fmt"}, `	total := 0
+	for _, v := range primes {
+		total += v
+	}
+	fmt.Println(total, len(primes), names[1])
+}
+
+var primes = []int{2, 3, 5, 7, 11}
+var names = []string{"zero", "one", "two"}
+
+func init() {
+	names = append(names, "three")
+`)})
+
+	ps = append(ps, prog{"global_iface", header([]string{"errors", "fmt"}, `	fmt.Println(errA.Error())
+	if errA != errB {
+		fmt.Println("distinct")
+	}
+	fmt.Println(counter())
+	fmt.Println(counter())
+}
+
+var errA = errors.New("alpha")
+var errB = errors.New("beta")
+var calls = 0
+
+func counter() int {
+	calls++
+	return calls
+`)})
+
+	return ps
+}
+
+// deferRecoverProgs exercises the runtime defer model: conditional defers,
+// defers in loops with recover, and named results assigned by deferred
+// closures on the panic path.
+func deferRecoverProgs() []prog {
+	var ps []prog
+
+	ps = append(ps, prog{"defer_conditional", header([]string{"fmt"}, `	report(true)
+	report(false)
+}
+
+func report(c bool) {
+	if c {
+		defer fmt.Println("cleanup")
+	}
+	fmt.Println("work", c)
+`)})
+
+	ps = append(ps, prog{"defer_recover_named", header([]string{"fmt"}, `	fmt.Println(safeDiv(10, 2))
+	fmt.Println(safeDiv(1, 0))
+}
+
+func safeDiv(a, b int) (q int, err string) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = "caught"
+		}
+	}()
+	q = a / b
+	return q, ""
+`)})
+
+	ps = append(ps, prog{"defer_loop_recover", header([]string{"fmt"}, `	fmt.Println(run())
+}
+
+func run() (out int) {
+	defer func() {
+		recover()
+		out = -1
+	}()
+	for i := 1; i <= 3; i++ {
+		defer func(v int) { fmt.Println("undo", v) }(i)
+	}
+	panic("stop")
+`)})
+
+	ps = append(ps, prog{"defer_mixed_args", header([]string{"fmt"}, `	x := 5
+	defer fmt.Println("captured", x)
+	x = 9
+	s := "hi"
+	defer fmt.Println(s, x)
+	s = "bye"
+	fmt.Println("body", s, x)
+`)})
+
+	return ps
+}
+
+// strconvProgs exercises strconv success and error paths.
+func strconvProgs() []prog {
+	var ps []prog
+
+	ps = append(ps, prog{"strconv_paths", header([]string{"fmt", "strconv"}, `	for _, s := range []string{"42", "-7", "+9", "007", "", "abc", "1x", " 3"} {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			fmt.Println("err:", err.Error())
+		} else {
+			fmt.Println("ok:", n)
+		}
+	}
+	fmt.Println(strconv.Itoa(-12345))
+	fmt.Println(strconv.FormatInt(255, 16), strconv.FormatInt(8, 2))
+`)})
+
+	ps = append(ps, prog{"strconv_parse", header([]string{"fmt", "strconv"}, `	v, err := strconv.ParseInt("-9000", 10, 64)
+	fmt.Println(v, err == nil)
+	u, uerr := strconv.ParseUint("123", 10, 64)
+	fmt.Println(u, uerr == nil)
+	_, bad := strconv.ParseUint("-1", 10, 64)
+	fmt.Println(bad != nil)
+	b, _ := strconv.ParseBool("true")
+	fmt.Println(b)
+`)})
+
 	return ps
 }
 

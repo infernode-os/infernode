@@ -858,6 +858,9 @@ func (fl *funcLowerer) allocStructFields(st *types.Struct, baseName string) int3
 		case *types.Struct:
 			// Embedded or nested struct: recursively allocate sub-fields
 			slot = fl.allocStructFields(ft, baseName+"."+field.Name())
+		case *types.Array:
+			// Fixed-size array field: full footprint, not one word
+			slot = fl.allocArrayElements(ft, baseName+"."+field.Name())
 		case *types.Interface:
 			// Interface field: 2 WORDs (tag + value)
 			slot = fl.frame.AllocWord(baseName + "." + field.Name() + ".tag")
@@ -982,10 +985,18 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 		op := fl.arithOp(dis.IDIVW, dis.IDIVF, 0, basic)
 		if op == dis.IDIVW {
 			fl.emitZeroDivCheck(mid) // ARM64 sdiv returns 0 on div-by-zero instead of trapping
+			if isUnsigned64(basic) {
+				fl.emitUnsignedDivMod(src, mid, dst, false)
+				break
+			}
 		}
 		fl.emit(dis.NewInst(op, mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.REM:
 		fl.emitZeroDivCheck(mid)
+		if isUnsigned64(basic) {
+			fl.emitUnsignedDivMod(src, mid, dst, true)
+			break
+		}
 		fl.emit(dis.NewInst(fl.arithOp(dis.IMODW, 0, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.AND:
 		fl.emit(dis.NewInst(fl.arithOp(dis.IANDW, 0, 0, basic), src, fl.fitMid(mid, basic), dis.FP(dst)))
@@ -996,6 +1007,12 @@ func (fl *funcLowerer) lowerBinOp(instr *ssa.BinOp) error {
 	case token.SHL:
 		fl.emit(dis.NewInst(fl.arithOp(dis.ISHLW, 0, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.SHR:
+		if isUnsigned64(basic) {
+			// Logical right shift: SHRW is arithmetic, which smears the
+			// sign bit when the top bit is set.
+			fl.emitLogicalShr(src, mid, dst)
+			break
+		}
 		fl.emit(dis.NewInst(fl.arithOp(dis.ISHRW, 0, 0, basic), mid, fl.fitMid(src, basic), dis.FP(dst)))
 	case token.AND_NOT: // &^ (bit clear): x &^ y = x AND (NOT y)
 		// NOT y: XOR y, $-1 → temp
@@ -1134,6 +1151,29 @@ func (fl *funcLowerer) lowerComplexBinOp(instr *ssa.BinOp) error {
 }
 
 func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src, mid dis.Operand, dst int32) error {
+	// Interface equality compares BOTH words (tag and value): tag-only
+	// comparison made any two values of the same concrete type — e.g. two
+	// distinct errorString sentinels — compare equal.
+	if _, isIface := instr.X.Type().Underlying().(*types.Interface); isIface {
+		iby2wd := int32(dis.IBY2WD)
+		x := fl.materialize(instr.X)
+		y := fl.materialize(instr.Y)
+		var onDiff, onSame int32 = 0, 1
+		if instr.Op == token.NEQ {
+			onDiff, onSame = 1, 0
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(onDiff), dis.FP(dst)))
+		diffIdx1 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(x), dis.FP(y), dis.Imm(0)))
+		diffIdx2 := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(x+iby2wd), dis.FP(y+iby2wd), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(onSame), dis.FP(dst)))
+		donePC := dis.Imm(int32(len(fl.insts)))
+		fl.insts[diffIdx1].Dst = donePC
+		fl.insts[diffIdx2].Dst = donePC
+		return nil
+	}
+
 	// For unsigned 64-bit ordered comparisons (< <= > >=), Dis only has signed
 	// branch opcodes. XOR both operands with 0x8000000000000000 (sign bit flip)
 	// to transform unsigned ordering into signed ordering.
@@ -1184,6 +1224,122 @@ func (fl *funcLowerer) lowerComparison(instr *ssa.BinOp, basic *types.Basic, src
 	return nil
 }
 
+// isUnsigned64 reports whether basic is a full-width unsigned integer type.
+// Sub-word unsigned types (uint8/16/32) are masked to N bits after every
+// operation, so they always fit the positive signed range and the signed
+// Dis opcodes are correct for them.
+func isUnsigned64(basic *types.Basic) bool {
+	if basic == nil {
+		return false
+	}
+	switch basic.Kind() {
+	case types.Uint, types.Uint64, types.Uintptr:
+		return true
+	}
+	return false
+}
+
+// emitSignBit materializes 0x8000000000000000 into a fresh word slot.
+func (fl *funcLowerer) emitSignBit() int32 {
+	s := fl.frame.AllocWord("u.sign")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(s)))
+	fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(63), dis.FP(s), dis.FP(s)))
+	return s
+}
+
+// emitUnsignedDivMod lowers x / y or x % y for 64-bit unsigned operands.
+// Dis only has signed DIVW/MODW, which give wrong answers when either
+// operand has the top bit set. Algorithm:
+//
+//	if (signed)d < 0:            // d >= 2^63 → quotient is 0 or 1
+//	    q = (n >=u d) ? 1 : 0; r = n - q*d
+//	else:
+//	    t = (n >> 1) & 0x7FF..F  // logical halve, now non-negative
+//	    q = (t / d) << 1         // within 1 of the true quotient
+//	    r = n - q*d
+//	    if r >=u d { q++; r -= d }
+func (fl *funcLowerer) emitUnsignedDivMod(xOp, yOp dis.Operand, dst int32, wantRem bool) {
+	iby2wd := int32(dis.IBY2WD)
+	_ = iby2wd
+	n := fl.frame.AllocWord("udiv.n")
+	d := fl.frame.AllocWord("udiv.d")
+	q := fl.frame.AllocWord("udiv.q")
+	r := fl.frame.AllocWord("udiv.r")
+	t := fl.frame.AllocWord("udiv.t")
+	fl.emit(dis.Inst2(dis.IMOVW, xOp, dis.FP(n)))
+	fl.emit(dis.Inst2(dis.IMOVW, yOp, dis.FP(d)))
+
+	sign := fl.emitSignBit()
+	// Unsigned-flipped copies for ordering comparisons.
+	fn := fl.frame.AllocWord("udiv.fn")
+	fd := fl.frame.AllocWord("udiv.fd")
+
+	smallIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBGEW, dis.FP(d), dis.Imm(0), dis.Imm(0))) // d < 2^63 → small path
+
+	// Big divisor: q = (n >=u d) ? 1 : 0
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(sign), dis.FP(n), dis.FP(fn)))
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(sign), dis.FP(d), dis.FP(fd)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(q)))
+	bigSkipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(fn), dis.FP(fd), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(q)))
+	fl.insts[bigSkipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.FP(q), dis.FP(d), dis.FP(t)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(t), dis.FP(n), dis.FP(r))) // r = n - t
+	doneIdx := len(fl.insts)
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// Small divisor path.
+	fl.insts[smallIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	maxPos := fl.frame.AllocWord("udiv.max")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(maxPos)))
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(sign), dis.FP(maxPos), dis.FP(maxPos))) // 0x7FF..F
+	fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(1), dis.FP(n), dis.FP(t)))             // t = n >> 1 (arith, but then masked)
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(maxPos), dis.FP(t), dis.FP(t)))
+	fl.emit(dis.NewInst(dis.IDIVW, dis.FP(d), dis.FP(t), dis.FP(q))) // q = t / d
+	fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(1), dis.FP(q), dis.FP(q)))
+	fl.emit(dis.NewInst(dis.IMULW, dis.FP(q), dis.FP(d), dis.FP(t)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(t), dis.FP(n), dis.FP(r))) // r = n - q*d
+	// if r >=u d { q++; r -= d }
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(sign), dis.FP(r), dis.FP(fn)))
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(sign), dis.FP(d), dis.FP(fd)))
+	fixSkipIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(fn), dis.FP(fd), dis.Imm(0)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(q), dis.FP(q)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.FP(d), dis.FP(r), dis.FP(r)))
+	fl.insts[fixSkipIdx].Dst = dis.Imm(int32(len(fl.insts)))
+
+	fl.insts[doneIdx].Dst = dis.Imm(int32(len(fl.insts)))
+	if wantRem {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(r), dis.FP(dst)))
+	} else {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(q), dis.FP(dst)))
+	}
+}
+
+// emitLogicalShr lowers x >> y for 64-bit unsigned x: shift in zeros
+// instead of sign bits. y == 0 returns x; otherwise halve logically once
+// (arith shift + mask) and arith-shift the now non-negative value by y-1.
+func (fl *funcLowerer) emitLogicalShr(xOp, yOp dis.Operand, dst int32) {
+	x := fl.frame.AllocWord("lshr.x")
+	y := fl.frame.AllocWord("lshr.y")
+	fl.emit(dis.Inst2(dis.IMOVW, xOp, dis.FP(x)))
+	fl.emit(dis.Inst2(dis.IMOVW, yOp, dis.FP(y)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(x), dis.FP(dst)))
+	zeroIdx := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(y), dis.Imm(0), dis.Imm(0))) // y == 0 → dst = x
+	sign := fl.emitSignBit()
+	maxPos := fl.frame.AllocWord("lshr.max")
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(maxPos)))
+	fl.emit(dis.NewInst(dis.IXORW, dis.FP(sign), dis.FP(maxPos), dis.FP(maxPos)))
+	fl.emit(dis.NewInst(dis.ISHRW, dis.Imm(1), dis.FP(x), dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.IANDW, dis.FP(maxPos), dis.FP(dst), dis.FP(dst)))
+	fl.emit(dis.NewInst(dis.ISUBW, dis.Imm(1), dis.FP(y), dis.FP(y)))
+	fl.emit(dis.NewInst(dis.ISHRW, dis.FP(y), dis.FP(dst), dis.FP(dst)))
+	fl.insts[zeroIdx].Dst = dis.Imm(int32(len(fl.insts)))
+}
+
 func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 	dst := fl.slotOf(instr)
 	src := fl.operandOf(instr.X)
@@ -1209,22 +1365,16 @@ func (fl *funcLowerer) lowerUnOp(instr *ssa.UnOp) error {
 		fl.emitSubWordTruncate(dst, instr.Type())
 	case token.MUL: // pointer dereference *ptr
 		addrOff := fl.slotOf(instr.X)
-		// Check for interface dereference (2-word copy)
-		if _, ok := instr.Type().Underlying().(*types.Interface); ok {
-			iby2wd := int32(dis.IBY2WD)
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, 0), dis.FP(dst)))             // tag
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, iby2wd), dis.FP(dst+iby2wd))) // value
-		} else if st, ok := instr.Type().Underlying().(*types.Struct); ok {
-			// Check for struct dereference (multi-word copy)
-			fieldOff := int32(0)
-			for i := 0; i < st.NumFields(); i++ {
-				fdt := GoTypeToDis(st.Field(i).Type())
-				if fdt.IsPtr {
-					fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(addrOff, fieldOff), dis.FP(dst+fieldOff)))
-				} else {
-					fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(addrOff, fieldOff), dis.FP(dst+fieldOff)))
+		// Multi-word dereference (interfaces, structs, fixed-size arrays —
+		// including nested multi-word fields): copy word by word.
+		if words := captureWordPtrs(instr.Type()); len(words) > 1 {
+			for w, isPtr := range words {
+				delta := int32(w) * int32(dis.IBY2WD)
+				op := dis.IMOVW
+				if isPtr {
+					op = dis.IMOVP
 				}
-				fieldOff += fdt.Size
+				fl.emit(dis.Inst2(op, dis.FPInd(addrOff, delta), dis.FP(dst+delta)))
 			}
 		} else if IsByteType(instr.Type()) {
 			// Byte dereference: zero-extend byte to word via CVTBW
@@ -6828,27 +6978,18 @@ func blockHasPhis(b *ssa.BasicBlock) bool {
 func (fl *funcLowerer) lowerStore(instr *ssa.Store) error {
 	addrOff := fl.slotOf(instr.Addr)
 
-	// Check if storing an interface value (2-word: tag + value)
-	if _, ok := instr.Val.Type().Underlying().(*types.Interface); ok {
-		valBase := fl.slotOf(instr.Val)
-		iby2wd := int32(dis.IBY2WD)
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase), dis.FPInd(addrOff, 0)))             // tag
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+iby2wd), dis.FPInd(addrOff, iby2wd))) // value
-		return nil
-	}
-
-	// Check if storing a struct value (multi-word)
-	if st, ok := instr.Val.Type().Underlying().(*types.Struct); ok {
-		valBase := fl.slotOf(instr.Val)
-		fieldOff := int32(0)
-		for i := 0; i < st.NumFields(); i++ {
-			fdt := GoTypeToDis(st.Field(i).Type())
-			if fdt.IsPtr {
-				fl.emit(dis.Inst2(dis.IMOVP, dis.FP(valBase+fieldOff), dis.FPInd(addrOff, fieldOff)))
-			} else {
-				fl.emit(dis.Inst2(dis.IMOVW, dis.FP(valBase+fieldOff), dis.FPInd(addrOff, fieldOff)))
+	// Multi-word values (interfaces, structs, fixed-size arrays — including
+	// nested multi-word fields) are copied word by word with the correct
+	// move op per word. Interfaces are two untraced words.
+	if words := captureWordPtrs(instr.Val.Type()); len(words) > 1 {
+		valBase := fl.materialize(instr.Val)
+		for w, isPtr := range words {
+			delta := int32(w) * int32(dis.IBY2WD)
+			op := dis.IMOVW
+			if isPtr {
+				op = dis.IMOVP
 			}
-			fieldOff += fdt.Size
+			fl.emit(dis.Inst2(op, dis.FP(valBase+delta), dis.FPInd(addrOff, delta)))
 		}
 		return nil
 	}
@@ -9838,11 +9979,11 @@ func (fl *funcLowerer) indOpForElem(elemType types.Type) dis.Op {
 	if IsByteType(elemType) {
 		return dis.IINDB
 	}
-	if _, ok := elemType.Underlying().(*types.Struct); ok {
-		dt := GoTypeToDis(elemType)
-		if dt.Size > int32(dis.IBY2WD) {
-			return dis.IINDX
-		}
+	// Any multi-word element (struct, fixed-size array, interface) needs
+	// INDX, which scales by the array's element size; INDW assumes an
+	// 8-byte stride.
+	if dt := GoTypeToDis(elemType); dt.Size > int32(dis.IBY2WD) {
+		return dis.IINDX
 	}
 	return dis.IINDW
 }

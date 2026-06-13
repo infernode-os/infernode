@@ -4,23 +4,42 @@
 # Regenerate/extend with: go run ./cmd/difftest -promote
 # One program name per line (path relative to its corpus root).
 
+_corpus/gen_array_in_struct.go
+_corpus/gen_array_value_copy.go
 _corpus/gen_closure_accumulate.go
 _corpus/gen_closure_counter.go
 _corpus/gen_closure_loopvar.go
+_corpus/gen_defer_conditional.go
 _corpus/gen_defer_in_loop.go
+_corpus/gen_defer_loop_recover.go
+_corpus/gen_defer_mixed_args.go
 _corpus/gen_defer_named_return.go
 _corpus/gen_defer_order.go
+_corpus/gen_defer_recover_named.go
 _corpus/gen_error_new.go
 _corpus/gen_error_sentinel.go
 _corpus/gen_error_wrap.go
 _corpus/gen_generic_mapfilter.go
 _corpus/gen_generic_minmax.go
+_corpus/gen_global_iface.go
+_corpus/gen_global_init_order.go
+_corpus/gen_global_map_init.go
+_corpus/gen_global_slice_init.go
+_corpus/gen_int_bitops.go
+_corpus/gen_int_negdiv.go
+_corpus/gen_int_shift.go
+_corpus/gen_int_subword.go
+_corpus/gen_int_unsigned.go
 _corpus/gen_map_commaok.go
 _corpus/gen_map_count.go
+_corpus/gen_matrix_dynamic.go
 _corpus/gen_slice_2d.go
 _corpus/gen_slice_append_len.go
 _corpus/gen_slice_copy.go
 _corpus/gen_slice_subslice.go
+_corpus/gen_strconv_parse.go
+_corpus/gen_strconv_paths.go
+_corpus/gen_struct_value_copy.go
 _corpus/seed_fibmemo.go
 _corpus/seed_matrix.go
 _corpus/seed_quicksort.go

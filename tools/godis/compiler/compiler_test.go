@@ -2166,16 +2166,17 @@ func main() {
 		t.Fatalf("compile: %v", err)
 	}
 
-	// Must have BEQW for comparing interface tag with 0 (nil check)
-	hasBeqw := false
+	// The nil check compares both interface words (tag and value); the
+	// lowering branches with BNEW to the not-equal result.
+	hasCmp := false
 	for _, inst := range m.Instructions {
-		if inst.Op == dis.IBEQW {
-			hasBeqw = true
+		if inst.Op == dis.IBNEW || inst.Op == dis.IBEQW {
+			hasCmp = true
 			break
 		}
 	}
-	if !hasBeqw {
-		t.Error("expected BEQW instruction for nil interface check")
+	if !hasCmp {
+		t.Error("expected interface comparison branch (BNEW/BEQW)")
 	}
 
 	// Must round-trip encode/decode

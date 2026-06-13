@@ -11,10 +11,39 @@ cd tools/godis
 go run ./cmd/difftest testdata _corpus      # summary + worklist
 ```
 
-Current standing: **217 match, 20 skipped, 0 divergences** — the entire
+Current standing: **236 match, 20 skipped, 0 divergences** — the entire
 corpus matches `go run` byte-for-byte under both `-c0` and `-c1`. The
 worklist below is the historical record of the fix sprints; new findings
 go on top.
+
+## Corpus expansion sprint (gencorpus +19 programs)
+
+Five new generator families (`intProgs`, `valueCopyProgs`, `globalProgs`,
+`deferRecoverProgs`, `strconvProgs`) targeting integer edge semantics,
+by-value copies, package initialization, the runtime defer model, and
+strconv error paths. They immediately flushed out and led to fixes for
+four compiler bugs:
+
+- **Interface equality compared only the tag word.** `errA != errB` for
+  two distinct `errors.New` sentinels evaluated false (same errorString
+  tag). Interface `==`/`!=` now compares both words.
+- **Unsigned 64-bit `/`, `%`, and `>>` used signed Dis opcodes.**
+  `uint64(1<<63) / 2` produced a sign-smeared result. QUO/REM now emit an
+  unsigned long-division sequence (halve-divide-correct, with a top-bit
+  divisor fast path); SHR emits a logical shift (halve+mask then
+  arithmetic shift). Sub-word unsigned types stay on the signed opcodes
+  (they are masked non-negative).
+- **Struct fields of array type got one frame word** instead of their
+  full footprint (`struct{n int; data [4]int}` overlapped neighbours) —
+  the struct-field mirror of the earlier `allocArrayElements` bug.
+- **Multi-word loads/stores through pointers and array indexing used the
+  wrong shape.** Dereference/store of interfaces/structs/arrays now copy
+  word-by-word via a shared layout walker (also fixing nested multi-word
+  fields, which previously copied only their first word), and `INDX` is
+  used for any multi-word array element (`[][2]int` was indexed with an
+  8-byte stride).
+
+All 256 programs (236 locked) match after the sprint.
 The `skipped` programs (see `_corpus/skip.txt`) are excluded because `go run` is
 not a faithful oracle (Inferno-only `inferno/sys`, nondeterministic
 goroutine/select/map order, or behavior Go leaves implementation-defined such as

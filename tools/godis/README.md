@@ -1384,10 +1384,13 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
    → `2.68`) the last digit can differ from Go's `strconv`, which uses
    round-half-to-even on an exact-decimal expansion. `%g`/`%e` still fall back
    to Dis `CVTFC` and do not yet honor an explicit precision.
-4. **`math.Pow` integer exponents only.** `Pow` lowers to the Dis `EXPF`
-   opcode, which raises a real to an *integer* power. Integer exponents are
-   exact; a fractional exponent (e.g. `Pow(2, 0.5)`) is truncated toward zero
-   and therefore wrong. A general implementation would need `exp(y*ln(x))`.
+4. **`math.Pow` integer exponents only** (fixed). `Pow`, `Sqrt`, `Exp`,
+   `Log`, `Log10`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2`
+   now link the Inferno `$Math` builtin module (libm in the VM) via a
+   second import list — exact results, byte-identical to Go through
+   `%.6f`. `Log2`, `Exp2`, and `Hypot` are compositions over the module
+   functions. The `$Math` LOAD and import list are emitted only when a
+   program uses them. Hyperbolics and special functions remain stubs.
 5. **No reflection.** `reflect` package is not supported.
 6. **No cgo.** Cannot call C functions.
 7. **Single-binary output.** All packages are inlined into one `.dis` file;

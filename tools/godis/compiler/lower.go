@@ -3549,12 +3549,48 @@ func (fl *funcLowerer) lowerStringsRepeat(instr *ssa.Call) error {
 }
 
 // lowerMathCall handles calls to the math package.
+// emitMathCall emits a call to a Math builtin-module function (import
+// list 1). All arguments and the result are Dis reals.
+func (fl *funcLowerer) emitMathCall(funcName string, args []dis.Operand, dst int32) {
+	ldtIdx, ok := fl.comp.mathUsed[funcName]
+	if !ok {
+		ldtIdx = len(fl.comp.mathUsed)
+		fl.comp.mathUsed[funcName] = ldtIdx
+	}
+	mathMP := fl.comp.MathModuleSlot()
+	// Callee frame slot: stack frame, not a GC pointer.
+	callFrame := fl.frame.AllocWord("")
+	fl.emit(dis.NewInst(dis.IMFRAME, dis.MP(mathMP), dis.Imm(int32(ldtIdx)), dis.FP(callFrame)))
+	for i, a := range args {
+		fl.emit(dis.Inst2(dis.IMOVF, a, dis.FPInd(callFrame, int32(dis.MaxTemp)+int32(i)*int32(dis.IBY2WD))))
+	}
+	fl.emit(dis.Inst2(dis.ILEA, dis.FP(dst), dis.FPInd(callFrame, int32(dis.REGRET*dis.IBY2WD))))
+	fl.emit(dis.NewInst(dis.IMCALL, dis.FP(callFrame), dis.Imm(int32(ldtIdx)), dis.MP(mathMP)))
+}
+
+// mathModFor maps Go math package functions to their Math builtin module
+// equivalents (unary and binary real functions).
+var mathModFor = map[string]string{
+	"Sqrt": "sqrt", "Pow": "pow", "Exp": "exp", "Log": "log",
+	"Log10": "log10", "Sin": "sin", "Cos": "cos", "Tan": "tan",
+	"Asin": "asin", "Acos": "acos", "Atan": "atan", "Atan2": "atan2",
+}
+
 func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (bool, error) {
+	// Functions with a direct Math builtin-module equivalent call libm in
+	// the VM — exact results instead of inline approximations or stubs.
+	if mfn, ok := mathModFor[callee.Name()]; ok {
+		dst := fl.slotOf(instr)
+		var args []dis.Operand
+		for _, a := range instr.Call.Args {
+			args = append(args, fl.operandOf(a))
+		}
+		fl.emitMathCall(mfn, args, dst)
+		return true, nil
+	}
 	switch callee.Name() {
 	case "Abs":
 		return true, fl.lowerMathAbs(instr)
-	case "Sqrt":
-		return true, fl.lowerMathSqrt(instr)
 	case "Min":
 		return true, fl.lowerMathMin(instr)
 	case "Max":
@@ -3567,18 +3603,16 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathRound(instr)
 	case "Trunc":
 		return true, fl.lowerMathTrunc(instr)
-	case "Pow":
-		return true, fl.lowerMathPow(instr)
 	case "Mod":
 		return true, fl.lowerMathMod(instr)
-	case "Log":
-		return true, fl.lowerMathLog(instr)
 	case "Log2":
-		return true, fl.lowerMathLog2(instr)
-	case "Log10":
-		return true, fl.lowerMathLog10(instr)
-	case "Exp":
-		return true, fl.lowerMathExp(instr)
+		// log(x) / ln(2) via the exact module log.
+		dst := fl.slotOf(instr)
+		t := fl.frame.AllocWord("log2.t")
+		fl.emitMathCall("log", []dis.Operand{fl.operandOf(instr.Call.Args[0])}, t)
+		ln2 := fl.comp.AllocReal(0.6931471805599453)
+		fl.emit(dis.NewInst(dis.IDIVF, dis.MP(ln2), dis.FP(t), dis.FP(dst)))
+		return true, nil
 	case "Inf":
 		return true, fl.lowerMathInf(instr)
 	case "NaN":
@@ -3599,16 +3633,6 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		return true, fl.lowerMathFloat64bits(instr)
 	case "Float64frombits":
 		return true, fl.lowerMathFloat64frombits(instr)
-	case "Sin", "Cos", "Tan":
-		return true, fl.lowerMathTrig(instr, callee.Name())
-
-	// Inverse trigonometric (f64 → f64 stub → 0.0)
-	case "Asin", "Acos", "Atan":
-		dst := fl.slotOf(instr)
-		zOff := fl.comp.AllocReal(0.0)
-		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
-		return true, nil
-
 	// Hyperbolic (f64 → f64 stub → 0.0)
 	case "Sinh", "Cosh", "Tanh", "Asinh", "Acosh", "Atanh":
 		dst := fl.slotOf(instr)
@@ -3616,8 +3640,15 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
 		return true, nil
 
+	case "Exp2":
+		// 2**x via the exact module pow.
+		dst := fl.slotOf(instr)
+		two := fl.comp.AllocReal(2.0)
+		fl.emitMathCall("pow", []dis.Operand{dis.MP(two), fl.operandOf(instr.Call.Args[0])}, dst)
+		return true, nil
+
 	// Exponential/log variants (f64 → f64 stub)
-	case "Exp2", "Expm1", "Log1p", "Logb", "Cbrt", "RoundToEven":
+	case "Expm1", "Log1p", "Logb", "Cbrt", "RoundToEven":
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
@@ -3630,8 +3661,21 @@ func (fl *funcLowerer) lowerMathCall(instr *ssa.Call, callee *ssa.Function) (boo
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))
 		return true, nil
 
+	case "Hypot":
+		// sqrt(x*x + y*y) via the exact module sqrt (no overflow guard).
+		dst := fl.slotOf(instr)
+		x := fl.operandOf(instr.Call.Args[0])
+		y := fl.operandOf(instr.Call.Args[1])
+		xx := fl.frame.AllocWord("hyp.xx")
+		yy := fl.frame.AllocWord("hyp.yy")
+		fl.emit(dis.NewInst(dis.IMULF, x, x, dis.FP(xx)))
+		fl.emit(dis.NewInst(dis.IMULF, y, y, dis.FP(yy)))
+		fl.emit(dis.NewInst(dis.IADDF, dis.FP(yy), dis.FP(xx), dis.FP(xx)))
+		fl.emitMathCall("sqrt", []dis.Operand{dis.FP(xx)}, dst)
+		return true, nil
+
 	// Binary float64 functions (f64, f64 → f64 stub)
-	case "Atan2", "Hypot", "Nextafter":
+	case "Nextafter":
 		dst := fl.slotOf(instr)
 		zOff := fl.comp.AllocReal(0.0)
 		fl.emit(dis.Inst2(dis.IMOVF, dis.MP(zOff), dis.FP(dst)))

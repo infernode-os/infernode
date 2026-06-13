@@ -30,6 +30,9 @@ type Compiler struct {
 	longs        map[int64]int32         // 64-bit int64/uint64 literal → MP offset (DEFL)
 	globals      map[string]int32        // global variable name → MP offset
 	sysUsed      map[string]int          // Sys function name → LDT index
+	mathUsed     map[string]int          // Math function name → LDT index (import list 1)
+	mathMPOff    int32                   // MP slot holding the Math module ref (-1 until used)
+	mathPathOff  int32                   // MP offset of the "$Math" path string
 	mod          *ModuleData
 	sysMPOff     int32
 	errors       []string
@@ -58,6 +61,8 @@ func New() *Compiler {
 		longs:         make(map[int64]int32),
 		globals:       make(map[string]int32),
 		sysUsed:       make(map[string]int),
+		mathUsed:      make(map[string]int),
+		mathMPOff:     -1,
 		closureMap:    make(map[ssa.Value]*ssa.Function),
 		closureRetFn:  make(map[*ssa.Function]*ssa.Function),
 		methodMap:     make(map[string]*ssa.Function),
@@ -596,7 +601,10 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 
 	// Phase 3: Compute function start PCs
 	// Layout: [LOAD preamble] [main insts] [func1 insts] [func2 insts] ...
-	entryLen := int32(1) // just the LOAD instruction
+	entryLen := int32(1) // LOAD $Sys
+	if len(c.mathUsed) > 0 {
+		entryLen = 2 // + LOAD $Math
+	}
 	funcStartPC := make(map[*ssa.Function]int32)
 	offset := entryLen
 	for _, cf := range compiled {
@@ -695,6 +703,11 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	allInsts = append(allInsts,
 		dis.NewInst(dis.ILOAD, dis.MP(sysPathOff), dis.Imm(0), dis.MP(c.sysMPOff)),
 	)
+	if len(c.mathUsed) > 0 {
+		allInsts = append(allInsts,
+			dis.NewInst(dis.ILOAD, dis.MP(c.mathPathOff), dis.Imm(1), dis.MP(c.mathMPOff)),
+		)
+	}
 	for _, cf := range compiled {
 		allInsts = append(allInsts, cf.result.insts...)
 	}
@@ -960,34 +973,47 @@ func (c *Compiler) buildDataSection() []dis.DataItem {
 	return items
 }
 
-func (c *Compiler) buildLDT() [][]dis.Import {
-	if len(c.sysUsed) == 0 {
-		return nil
+// MathModuleSlot returns the MP slot holding the loaded Math builtin
+// module ref, allocating it (and the "$Math" path string) on first use.
+func (c *Compiler) MathModuleSlot() int32 {
+	if c.mathMPOff < 0 {
+		c.mathMPOff = c.mod.AllocPointer("math")
+		c.mathPathOff = c.AllocString("$Math")
 	}
+	return c.mathMPOff
+}
 
+func sortedLDTList(used map[string]int, lookup func(string) *SysFunc) []dis.Import {
 	type entry struct {
 		name string
 		idx  int
 	}
 	var entries []entry
-	for name, idx := range c.sysUsed {
+	for name, idx := range used {
 		entries = append(entries, entry{name, idx})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].idx < entries[j].idx
 	})
-
 	var imports []dis.Import
 	for _, e := range entries {
-		sf := LookupSysFunc(e.name)
-		if sf != nil {
-			imports = append(imports, dis.Import{
-				Sig:  sf.Sig,
-				Name: sf.Name,
-			})
+		if sf := lookup(e.name); sf != nil {
+			imports = append(imports, dis.Import{Sig: sf.Sig, Name: sf.Name})
 		}
 	}
-	return [][]dis.Import{imports}
+	return imports
+}
+
+func (c *Compiler) buildLDT() [][]dis.Import {
+	if len(c.sysUsed) == 0 && len(c.mathUsed) == 0 {
+		return nil
+	}
+	ldt := [][]dis.Import{sortedLDTList(c.sysUsed, LookupSysFunc)}
+	if len(c.mathUsed) > 0 {
+		// Import list 1 belongs to the Math module (LOAD ..., $1, ...).
+		ldt = append(ldt, sortedLDTList(c.mathUsed, LookupMathFunc))
+	}
+	return ldt
 }
 // RegisterErrorString registers the synthetic errorString type in the
 // interface dispatch table. errorString.Error() is handled inline (fn=nil)

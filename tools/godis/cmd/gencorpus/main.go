@@ -191,6 +191,22 @@ func worker(in <-chan int, out chan<- int) {
 	fmt.Println(len(m), m[3].name)
 `)})
 
+	ps = append(ps, prog{"math_libm", header([]string{"fmt", "math"}, `	fmt.Printf("%.6f\n", math.Pow(2, 0.5))
+	fmt.Printf("%.6f\n", math.Pow(2.0, 10.0))
+	fmt.Printf("%.6f\n", math.Sqrt(2))
+	fmt.Printf("%.6f\n", math.Exp(1))
+	fmt.Printf("%.6f\n", math.Log(math.E))
+	fmt.Printf("%.6f\n", math.Log10(1000))
+	fmt.Printf("%.6f\n", math.Sin(1))
+	fmt.Printf("%.6f\n", math.Cos(1))
+	fmt.Printf("%.6f\n", math.Tan(1))
+	fmt.Printf("%.6f\n", math.Atan2(1, 1))
+	fmt.Printf("%.6f\n", math.Asin(0.5))
+	fmt.Printf("%.6f\n", math.Hypot(3, 4))
+	fmt.Printf("%.6f\n", math.Exp2(10))
+	fmt.Printf("%.6f\n", math.Log2(8))
+`)})
+
 	ps = append(ps, prog{"labeled_flow", header([]string{"fmt"}, `	a, b := 1, 2
 	a, b = b, a
 	fmt.Println(a, b)

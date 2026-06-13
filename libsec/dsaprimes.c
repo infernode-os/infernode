@@ -12,7 +12,10 @@
 static void
 Hrand(uchar *s)
 {
-	ulong *u = (ulong*)s;
+	/* s is the 20-byte (5 x 32-bit) seed buffer. ulong is 8 bytes on
+	 * LP64, so the original ulong* stores wrote 40 bytes -- a 20-byte
+	 * stack smash on every DSA keygen (caught by __stack_chk_fail). */
+	u32int *u = (u32int*)s;
 	*u++ = fastrand();
 	*u++ = fastrand();
 	*u++ = fastrand();

@@ -6,6 +6,7 @@
 
 _corpus/gen_array_in_struct.go
 _corpus/gen_array_value_copy.go
+_corpus/gen_chan_worker.go
 _corpus/gen_closure_accumulate.go
 _corpus/gen_closure_counter.go
 _corpus/gen_closure_loopvar.go
@@ -30,9 +31,13 @@ _corpus/gen_int_negdiv.go
 _corpus/gen_int_shift.go
 _corpus/gen_int_subword.go
 _corpus/gen_int_unsigned.go
+_corpus/gen_labeled_flow.go
+_corpus/gen_loop_capture.go
 _corpus/gen_map_commaok.go
 _corpus/gen_map_count.go
+_corpus/gen_map_structval.go
 _corpus/gen_matrix_dynamic.go
+_corpus/gen_select_default.go
 _corpus/gen_slice_2d.go
 _corpus/gen_slice_append_len.go
 _corpus/gen_slice_copy.go
@@ -40,6 +45,8 @@ _corpus/gen_slice_subslice.go
 _corpus/gen_strconv_parse.go
 _corpus/gen_strconv_paths.go
 _corpus/gen_struct_value_copy.go
+_corpus/gen_typeswitch_describe.go
+_corpus/gen_variadic_user.go
 _corpus/seed_fibmemo.go
 _corpus/seed_matrix.go
 _corpus/seed_quicksort.go

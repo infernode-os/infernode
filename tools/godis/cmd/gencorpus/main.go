@@ -80,6 +80,136 @@ func generate() []prog {
 	ps = append(ps, globalProgs()...)
 	ps = append(ps, deferRecoverProgs()...)
 	ps = append(ps, strconvProgs()...)
+	ps = append(ps, miscProgs()...)
+	return ps
+}
+
+// miscProgs covers user variadic functions, type switches, deterministic
+// channel pipelines, per-iteration loop captures, select-with-default,
+// and struct-valued maps.
+func miscProgs() []prog {
+	var ps []prog
+
+	ps = append(ps, prog{"variadic_user", header([]string{"fmt"}, `	fmt.Println(sum("three", 1, 2, 3))
+	fmt.Println(sum("none"))
+	s := []int{4, 5}
+	fmt.Println(sum("spread", s...))
+}
+
+func sum(label string, xs ...int) int {
+	t := 0
+	for _, x := range xs {
+		t += x
+	}
+	fmt.Println(label, len(xs))
+	return t
+`)})
+
+	ps = append(ps, prog{"typeswitch_describe", header([]string{"fmt"}, `	fmt.Println(describe(7), describe("hi"), describe(false), describe([]int{1, 2}), describe(3.5))
+}
+
+func describe(v interface{}) string {
+	switch x := v.(type) {
+	case int:
+		return fmt.Sprintf("int:%d", x)
+	case string:
+		return "str:" + x
+	case bool:
+		if x {
+			return "bool:t"
+		}
+		return "bool:f"
+	case []int:
+		return fmt.Sprintf("slice:%d", len(x))
+	default:
+		return "other"
+	}
+`)})
+
+	ps = append(ps, prog{"chan_worker", header([]string{"fmt"}, `	in := make(chan int, 8)
+	out := make(chan int, 8)
+	go worker(in, out)
+	for i := 1; i <= 5; i++ {
+		in <- i
+	}
+	close(in)
+	total := 0
+	for i := 0; i < 5; i++ {
+		total += <-out
+	}
+	fmt.Println(total)
+}
+
+func worker(in <-chan int, out chan<- int) {
+	for v := range in {
+		out <- v * v
+	}
+`)})
+
+	ps = append(ps, prog{"loop_capture", header([]string{"fmt"}, `	funcs := []func() int{}
+	for i := 0; i < 3; i++ {
+		funcs = append(funcs, func() int { return i })
+	}
+	for _, f := range funcs {
+		fmt.Println(f())
+	}
+`)})
+
+	ps = append(ps, prog{"select_default", header([]string{"fmt"}, `	ch := make(chan int, 1)
+	select {
+	case v := <-ch:
+		fmt.Println("got", v)
+	default:
+		fmt.Println("empty")
+	}
+	ch <- 9
+	select {
+	case v := <-ch:
+		fmt.Println("got", v)
+	default:
+		fmt.Println("empty")
+	}
+`)})
+
+	ps = append(ps, prog{"map_structval", header([]string{"fmt"}, `	type rec struct {
+		name string
+		hits int
+	}
+	m := map[int]rec{}
+	m[1] = rec{"a", 10}
+	m[2] = rec{"b", 20}
+	m[1] = rec{"a2", 11}
+	v, ok := m[1]
+	fmt.Println(v.name, v.hits, ok)
+	_, miss := m[9]
+	fmt.Println(miss)
+	delete(m, 1)
+	fmt.Println(len(m))
+	w := m[2]
+	fmt.Println(w.name, w.hits)
+	m[3] = rec{"c", 30}
+	fmt.Println(len(m), m[3].name)
+`)})
+
+	ps = append(ps, prog{"labeled_flow", header([]string{"fmt"}, `	a, b := 1, 2
+	a, b = b, a
+	fmt.Println(a, b)
+	steps := 0
+outer:
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			steps++
+			if i*j == 6 {
+				break outer
+			}
+			if j == 2 {
+				continue outer
+			}
+		}
+	}
+	fmt.Println(steps)
+`)})
+
 	return ps
 }
 

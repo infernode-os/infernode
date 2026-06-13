@@ -1404,3 +1404,11 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
 9. **Standard library is stub-only.** The 12+ intercepted stdlib packages
    provide type signatures for compilation but implementations are inlined
    as Dis instruction sequences, not full Go stdlib implementations.
+10. **Strings are rune-indexed, not byte-indexed.** Go strings are UTF-8
+    byte sequences (`len("héllo") == 6`, `s[i]` is a byte); Dis strings are
+    rune sequences (`LENC`/`INDC` count and index characters, so godis
+    gives `len("héllo") == 5`). For ASCII content the two agree exactly;
+    for non-ASCII content `len`, indexing, and byte-offset values in
+    `range` diverge from Go. This is a deliberate representation choice —
+    Dis strings interoperate with Limbo and the rest of Inferno — and is
+    unlikely to change.

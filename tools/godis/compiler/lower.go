@@ -924,19 +924,10 @@ func (fl *funcLowerer) allocTupleSlots(tup *types.Tuple, baseName string) int32 
 	var baseSlot int32
 	for i := 0; i < tup.Len(); i++ {
 		name := fmt.Sprintf("%s#%d", baseName, i)
-		var slot int32
-		if _, ok := tup.At(i).Type().Underlying().(*types.Interface); ok {
-			// Interface element: 2 WORDs (tag + value)
-			slot = fl.frame.AllocWord(name + ".tag")
-			fl.frame.AllocWord(name + ".val")
-		} else {
-			dt := GoTypeToDis(tup.At(i).Type())
-			if dt.IsPtr {
-				slot = fl.frame.AllocPointer(name)
-			} else {
-				slot = fl.frame.AllocWord(name)
-			}
-		}
+		// Full footprint per element (interfaces 2 words, structs and
+		// fixed-size arrays their flattened size), matching the offsets
+		// lowerExtract computes from type sizes.
+		slot := fl.allocValueSlots(tup.At(i).Type(), name)
 		if i == 0 {
 			baseSlot = slot
 		}
@@ -7741,7 +7732,7 @@ func (fl *funcLowerer) lowerMapUpdate(instr *ssa.MapUpdate) error {
 	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
 
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(valSlot, tmpPtr, valType)
 
 	doneJmp := len(fl.insts)
@@ -7766,7 +7757,7 @@ func (fl *funcLowerer) lowerMapUpdate(instr *ssa.MapUpdate) error {
 	valTDIdx := fl.makeHeapTypeDesc(valType)
 	fl.emit(dis.NewInst(dis.INEWA, dis.FP(newCnt), dis.Imm(int32(valTDIdx)), dis.FP(newVals)))
 	fl.emit(dis.NewInst(dis.ISLICELA, dis.FPInd(mapSlot, 8), dis.Imm(0), dis.FP(newVals)))
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(newVals), dis.FP(tmpPtr), dis.FP(cnt)))
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(newVals), dis.FP(tmpPtr), dis.FP(cnt)))
 	fl.emitStoreThrough(valSlot, tmpPtr, valType)
 
 	// Update map struct
@@ -7814,22 +7805,26 @@ func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
 	keyType := mapType.Key()
 	valType := mapType.Elem()
 
-	// Result slots
+	// Result slots. The comma-ok bool lives after the value's full
+	// footprint (Extract computes element offsets by type size).
+	valDT := GoTypeToDis(valType)
 	var valDst, okDst int32
 	if instr.CommaOk {
 		tupleBase := fl.slotOf(instr)
 		valDst = tupleBase
-		okDst = tupleBase + int32(dis.IBY2WD)
+		okDst = tupleBase + valDT.Size
 	} else {
 		valDst = fl.slotOf(instr)
 	}
 
-	// Initialize result: value = 0, ok = false
-	valDT := GoTypeToDis(valType)
-	if valDT.IsPtr {
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(valDst))) // H for pointer zero-val
-	} else {
-		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(valDst)))
+	// Initialize result to the zero value: 0 per scalar word, H per
+	// pointer word; ok = false.
+	for w, isPtr := range captureWordPtrs(valType) {
+		zero := int32(0)
+		if isPtr {
+			zero = -1
+		}
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(zero), dis.FP(valDst+int32(w)*int32(dis.IBY2WD))))
 	}
 	if instr.CommaOk {
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(okDst)))
@@ -7876,7 +7871,7 @@ func (fl *funcLowerer) lowerMapLookup(instr *ssa.Lookup) error {
 	fl.insts[foundIdx].Dst = dis.Imm(foundPC)
 
 	fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitLoadThrough(valDst, tmpPtr, valType)
 
 	if instr.CommaOk {
@@ -7958,10 +7953,11 @@ func (fl *funcLowerer) lowerMapDelete(instr *ssa.Call) error {
 	// values[idx] = values[lastIdx]. The temp must be type-aware: for
 	// pointer values emitLoadThrough emits MOVP, and MOVP into a raw
 	// uninitialized word slot decrefs stack garbage (heap corruption).
-	tmpVal := fl.allocMapKeyTemp(valType, "dl.tmpv")
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
+	// Multi-word values need their full footprint.
+	tmpVal := fl.allocValueSlots(valType, "dl.tmpv")
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
 	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
 
 	// skip swap target
@@ -8033,10 +8029,10 @@ func (fl *funcLowerer) emitDeferredMapDelete(mapVal, keyVal ssa.Value) error {
 	fl.emit(dis.NewInst(dis.IINDW, dis.FP(keysArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(tmpKey, tmpPtr, keyType)
 	// Type-aware temp: MOVP into a raw word slot decrefs stack garbage.
-	tmpVal := fl.allocMapKeyTemp(valType, "ddl.tmpv")
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
+	tmpVal := fl.allocValueSlots(valType, "ddl.tmpv")
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr2), dis.FP(lastIdx)))
 	fl.emitLoadThrough(tmpVal, tmpPtr2, valType)
-	fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
+	fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(idx)))
 	fl.emitStoreThrough(tmpVal, tmpPtr, valType)
 
 	skipSwapPC := int32(len(fl.insts))
@@ -8132,7 +8128,7 @@ func (fl *funcLowerer) lowerNext(instr *ssa.Next) error {
 	if tup.At(2).Type() != types.Typ[types.Invalid] {
 		valsArr := fl.frame.AllocWord("next.vals")
 		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(mapSlot, 8), dis.FP(valsArr)))
-		fl.emit(dis.NewInst(dis.IINDW, dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
+		fl.emit(dis.NewInst(fl.indOpForElem(valType), dis.FP(valsArr), dis.FP(tmpPtr), dis.FP(iterSlot)))
 		fl.emitLoadThrough(valSlot, tmpPtr, valType)
 	}
 
@@ -8357,23 +8353,47 @@ func (fl *funcLowerer) mapKeyBranchEq(keyType types.Type) dis.Op {
 }
 
 // emitLoadThrough loads a value from memory at *ptrSlot into dstSlot.
+// Multi-word values (structs, interfaces, fixed-size arrays) are copied
+// word by word with the correct move op per word.
 func (fl *funcLowerer) emitLoadThrough(dstSlot, ptrSlot int32, t types.Type) {
-	dt := GoTypeToDis(t)
-	if dt.IsPtr {
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FPInd(ptrSlot, 0), dis.FP(dstSlot)))
-	} else {
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FPInd(ptrSlot, 0), dis.FP(dstSlot)))
+	for w, isPtr := range captureWordPtrs(t) {
+		delta := int32(w) * int32(dis.IBY2WD)
+		op := dis.IMOVW
+		if isPtr {
+			op = dis.IMOVP
+		}
+		fl.emit(dis.Inst2(op, dis.FPInd(ptrSlot, delta), dis.FP(dstSlot+delta)))
 	}
 }
 
 // emitStoreThrough stores a value from srcSlot to memory at *ptrSlot.
 func (fl *funcLowerer) emitStoreThrough(srcSlot, ptrSlot int32, t types.Type) {
-	dt := GoTypeToDis(t)
-	if dt.IsPtr {
-		fl.emit(dis.Inst2(dis.IMOVP, dis.FP(srcSlot), dis.FPInd(ptrSlot, 0)))
-	} else {
-		fl.emit(dis.Inst2(dis.IMOVW, dis.FP(srcSlot), dis.FPInd(ptrSlot, 0)))
+	for w, isPtr := range captureWordPtrs(t) {
+		delta := int32(w) * int32(dis.IBY2WD)
+		op := dis.IMOVW
+		if isPtr {
+			op = dis.IMOVP
+		}
+		fl.emit(dis.Inst2(op, dis.FP(srcSlot+delta), dis.FPInd(ptrSlot, delta)))
 	}
+}
+
+// allocValueSlots allocates contiguous frame slots covering t's full
+// footprint, with pointer words GC-traced. Returns the base offset.
+func (fl *funcLowerer) allocValueSlots(t types.Type, name string) int32 {
+	base := int32(-1)
+	for w, isPtr := range captureWordPtrs(t) {
+		var s int32
+		if isPtr {
+			s = fl.frame.AllocPointer(fmt.Sprintf("%s+%d", name, w))
+		} else {
+			s = fl.frame.AllocWord(fmt.Sprintf("%s+%d", name, w))
+		}
+		if w == 0 {
+			base = s
+		}
+	}
+	return base
 }
 
 // ============================================================
@@ -9378,16 +9398,15 @@ func (fl *funcLowerer) lowerExtract(instr *ssa.Extract) error {
 	}
 
 	dst := fl.slotOf(instr)
-	if _, ok := instr.Type().Underlying().(*types.Interface); ok {
-		// Interface extract: copy 2 words (tag + value)
-		fl.copyIface(tupleSlot+elemOff, dst)
-	} else {
-		dt := GoTypeToDis(instr.Type())
-		if dt.IsPtr {
-			fl.emit(dis.Inst2(dis.IMOVP, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
-		} else {
-			fl.emit(dis.Inst2(dis.IMOVW, dis.FP(tupleSlot+elemOff), dis.FP(dst)))
+	// Copy the element's full footprint word by word (covers scalars,
+	// pointers, interfaces, structs, and fixed-size arrays).
+	for w, isPtr := range captureWordPtrs(instr.Type()) {
+		delta := int32(w) * int32(dis.IBY2WD)
+		op := dis.IMOVW
+		if isPtr {
+			op = dis.IMOVP
 		}
+		fl.emit(dis.Inst2(op, dis.FP(tupleSlot+elemOff+delta), dis.FP(dst+delta)))
 	}
 	return nil
 }

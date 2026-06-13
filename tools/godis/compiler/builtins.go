@@ -111,3 +111,34 @@ func SysLDTImports(names []string) []dis.Import {
 	}
 	return imports
 }
+
+// mathFuncs contains the Math builtin module signatures from
+// libinterp/mathmod.h. Unary real→real functions share one signature,
+// binary (real, real)→real functions another. These must match exactly
+// for module linking to work at runtime.
+var mathFuncs = map[string]SysFunc{
+	"acos":  {Name: "acos", Sig: 0xa1d1fe48, FrameSize: 72},
+	"asin":  {Name: "asin", Sig: 0xa1d1fe48, FrameSize: 72},
+	"atan":  {Name: "atan", Sig: 0xa1d1fe48, FrameSize: 72},
+	"atan2": {Name: "atan2", Sig: 0xf293f6cf, FrameSize: 80},
+	"ceil":  {Name: "ceil", Sig: 0xa1d1fe48, FrameSize: 72},
+	"cos":   {Name: "cos", Sig: 0xa1d1fe48, FrameSize: 72},
+	"exp":   {Name: "exp", Sig: 0xa1d1fe48, FrameSize: 72},
+	"fabs":  {Name: "fabs", Sig: 0xa1d1fe48, FrameSize: 72},
+	"floor": {Name: "floor", Sig: 0xa1d1fe48, FrameSize: 72},
+	"fmod":  {Name: "fmod", Sig: 0xf293f6cf, FrameSize: 80},
+	"log":   {Name: "log", Sig: 0xa1d1fe48, FrameSize: 72},
+	"log10": {Name: "log10", Sig: 0xa1d1fe48, FrameSize: 72},
+	"pow":   {Name: "pow", Sig: 0xf293f6cf, FrameSize: 80},
+	"sin":   {Name: "sin", Sig: 0xa1d1fe48, FrameSize: 72},
+	"sqrt":  {Name: "sqrt", Sig: 0xa1d1fe48, FrameSize: 72},
+	"tan":   {Name: "tan", Sig: 0xa1d1fe48, FrameSize: 72},
+}
+
+// LookupMathFunc returns the Math module function descriptor, or nil.
+func LookupMathFunc(name string) *SysFunc {
+	if f, ok := mathFuncs[name]; ok {
+		return &f
+	}
+	return nil
+}

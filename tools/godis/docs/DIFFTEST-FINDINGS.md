@@ -66,7 +66,11 @@ go run <prog.go>                                  # Go reference
 loop (`emitAtoiChecked` in `lower.go`) and return a Go-identical
 `strconv.<fn>: parsing "<s>": invalid syntax` errorString on bad input.
 `strconv_err.go` and `tier6_8.go` are promoted into the locked corpus.
-Overflow (`ErrRange`) is still not detected.
+Overflow (`ErrRange`) is now detected too: the validator counts
+significant digits and lexically compares boundary-length digit strings
+against the int64/uint64 bounds, returning Go's clamped value and
+`value out of range` message. ParseUint converts via manual accumulation
+(CVTCW is signed and saturates at MaxInt64).
 
 ## ~~2. Map delete / repeated insert+lookup faults~~  ·  FIXED
 

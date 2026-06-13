@@ -46,6 +46,7 @@ _corpus/gen_slice_copy.go
 _corpus/gen_slice_subslice.go
 _corpus/gen_strconv_parse.go
 _corpus/gen_strconv_paths.go
+_corpus/gen_strconv_range.go
 _corpus/gen_struct_value_copy.go
 _corpus/gen_typeswitch_describe.go
 _corpus/gen_variadic_user.go

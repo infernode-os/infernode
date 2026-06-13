@@ -2591,19 +2591,25 @@ func (fl *funcLowerer) lowerStrconvCall(instr *ssa.Call, callee *ssa.Function) (
 }
 
 // emitAtoiChecked lowers a decimal string→int conversion with Go-style
-// syntax validation: an optional leading '+'/'-' (when allowSign), then one
-// or more ASCII digits, nothing else. dst is the base of an (int, error)
-// tuple. Valid input takes the CVTCW path with a nil error; anything else
-// yields 0 and an errorString tagged interface carrying Go's message
-// (`strconv.<fn>: parsing "<s>": invalid syntax`). Overflow (ErrRange) is
-// not detected.
+// syntax and range validation: an optional leading '+'/'-' (when
+// allowSign), then one or more ASCII digits, nothing else. dst is the base
+// of an (int, error) tuple. Valid in-range input takes the CVTCW path with
+// a nil error; bad syntax yields 0 and `strconv.<fn>: parsing "<s>":
+// invalid syntax`; overflow yields the clamped bound and `... value out of
+// range`, both as errorString interfaces. allowSign=false means the
+// unsigned (ParseUint) rules and bound.
 func (fl *funcLowerer) emitAtoiChecked(src dis.Operand, dst int32, fn string, allowSign bool) {
 	iby2wd := int32(dis.IBY2WD)
 	lenSlot := fl.frame.AllocWord("")
 	idx := fl.frame.AllocWord("")
 	ch := fl.frame.AllocWord("")
+	sig := fl.frame.AllocWord("")      // significant digit count
+	firstSig := fl.frame.AllocWord("") // index of first significant digit
+	neg := fl.frame.AllocWord("")      // 1 if '-' sign
 	fl.emit(dis.Inst2(dis.ILENC, src, dis.FP(lenSlot)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(sig)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(neg)))
 
 	var errJmps []int
 	errJmps = append(errJmps, len(fl.insts))
@@ -2611,16 +2617,15 @@ func (fl *funcLowerer) emitAtoiChecked(src dis.Operand, dst int32, fn string, al
 
 	if allowSign {
 		fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(idx), dis.FP(ch)))
-		signJmps := []int{len(fl.insts)}
+		negJmp := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('-'), dis.Imm(0)))
-		signJmps = append(signJmps, len(fl.insts))
+		posJmp := len(fl.insts)
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('+'), dis.Imm(0)))
 		noSignJmp := len(fl.insts)
 		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
-		signPC := dis.Imm(int32(len(fl.insts)))
-		for _, j := range signJmps {
-			fl.insts[j].Dst = signPC
-		}
+		fl.insts[negJmp].Dst = dis.Imm(int32(len(fl.insts)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(neg)))
+		fl.insts[posJmp].Dst = dis.Imm(int32(len(fl.insts)))
 		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(idx)))
 		errJmps = append(errJmps, len(fl.insts))
 		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(lenSlot), dis.Imm(1), dis.Imm(0))) // bare sign → error
@@ -2635,34 +2640,122 @@ func (fl *funcLowerer) emitAtoiChecked(src dis.Operand, dst int32, fn string, al
 	fl.emit(dis.NewInst(dis.IBLTW, dis.FP(ch), dis.Imm('0'), dis.Imm(0)))
 	errJmps = append(errJmps, len(fl.insts))
 	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(ch), dis.Imm('9'), dis.Imm(0)))
+	// Count significant digits (skip leading zeros) and remember where
+	// they start for the range comparison.
+	countJmp := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(sig), dis.Imm(0), dis.Imm(0)))
+	noCountJmp := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBEQW, dis.FP(ch), dis.Imm('0'), dis.Imm(0)))
+	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(idx), dis.FP(firstSig)))
+	fl.insts[countJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(sig), dis.FP(sig)))
+	fl.insts[noCountJmp].Dst = dis.Imm(int32(len(fl.insts)))
 	fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(loopPC)))
 
-	// ok: valid decimal → convert, nil error
+	// ok: syntactically valid — check range before converting.
 	fl.insts[okJmp].Dst = dis.Imm(int32(len(fl.insts)))
-	fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+	maxDigits := int32(19) // int64: ±9223372036854775807/8
+	posLimit, negLimit := "9223372036854775807", "9223372036854775808"
+	if !allowSign {
+		maxDigits = 20 // uint64: 18446744073709551615
+		posLimit = "18446744073709551615"
+	}
+	var rangeJmps []int
+	rangeJmps = append(rangeJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGTW, dis.FP(sig), dis.Imm(maxDigits), dis.Imm(0)))
+	convJmp := len(fl.insts)
+	fl.emit(dis.NewInst(dis.IBNEW, dis.FP(sig), dis.Imm(maxDigits), dis.Imm(0)))
+	// Exactly maxDigits significant digits: compare them (equal-length
+	// decimal strings order lexicographically) against the bound.
+	digits := fl.frame.AllocTemp(true)
+	fl.emit(dis.Inst2(dis.IMOVP, src, dis.FP(digits)))
+	fl.emit(dis.NewInst(dis.ISLICEC, dis.FP(firstSig), dis.FP(lenSlot), dis.FP(digits)))
+	lim := fl.frame.AllocTemp(true)
+	posMP := fl.comp.AllocString(posLimit)
+	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(posMP), dis.FP(lim)))
+	if allowSign {
+		negMP := fl.comp.AllocString(negLimit)
+		posLimJmp := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBEQW, dis.FP(neg), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.Inst2(dis.IMOVP, dis.MP(negMP), dis.FP(lim)))
+		fl.insts[posLimJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+	rangeJmps = append(rangeJmps, len(fl.insts))
+	fl.emit(dis.NewInst(dis.IBGTC, dis.FP(digits), dis.FP(lim), dis.Imm(0)))
+
+	// In range: convert, nil error.
+	fl.insts[convJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	if allowSign {
+		fl.emit(dis.Inst2(dis.ICVTCW, src, dis.FP(dst)))
+	} else {
+		// CVTCW is signed and saturates at MaxInt64; accumulate manually
+		// for the full uint64 range (already range-checked above).
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(idx)))
+		accPC := int32(len(fl.insts))
+		accDone := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBGEW, dis.FP(idx), dis.FP(lenSlot), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IINDC, src, dis.FP(idx), dis.FP(ch)))
+		fl.emit(dis.NewInst(dis.IMULW, dis.Imm(10), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.ISUBW, dis.Imm('0'), dis.FP(ch), dis.FP(ch)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.FP(ch), dis.FP(dst), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.IADDW, dis.Imm(1), dis.FP(idx), dis.FP(idx)))
+		fl.emit(dis.Inst1(dis.IJMP, dis.Imm(accPC)))
+		fl.insts[accDone].Dst = dis.Imm(int32(len(fl.insts)))
+	}
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+iby2wd)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst+2*iby2wd)))
-	endJmp := len(fl.insts)
+	endJmps := []int{len(fl.insts)}
 	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
 
-	// error: zero value + errorString interface
+	// range error: clamped bound + "value out of range".
+	rangePC := dis.Imm(int32(len(fl.insts)))
+	for _, j := range rangeJmps {
+		fl.insts[j].Dst = rangePC
+	}
+	if !allowSign {
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(-1), dis.FP(dst))) // MaxUint64
+	} else {
+		// MinInt64 if negative, MaxInt64 otherwise.
+		fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(1), dis.FP(dst)))
+		fl.emit(dis.NewInst(dis.ISHLW, dis.Imm(63), dis.FP(dst), dis.FP(dst)))
+		minJmp := len(fl.insts)
+		fl.emit(dis.NewInst(dis.IBNEW, dis.FP(neg), dis.Imm(0), dis.Imm(0)))
+		fl.emit(dis.NewInst(dis.IXORW, dis.Imm(-1), dis.FP(dst), dis.FP(dst)))
+		fl.insts[minJmp].Dst = dis.Imm(int32(len(fl.insts)))
+	}
+	fl.emitAtoiError(src, dst, fn, "\": value out of range")
+	endJmps = append(endJmps, len(fl.insts))
+	fl.emit(dis.Inst1(dis.IJMP, dis.Imm(0)))
+
+	// syntax error: zero value + "invalid syntax".
 	errPC := dis.Imm(int32(len(fl.insts)))
 	for _, j := range errJmps {
 		fl.insts[j].Dst = errPC
 	}
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(0), dis.FP(dst)))
+	fl.emitAtoiError(src, dst, fn, "\": invalid syntax")
+
+	endPC := dis.Imm(int32(len(fl.insts)))
+	for _, j := range endJmps {
+		fl.insts[j].Dst = endPC
+	}
+}
+
+// emitAtoiError builds `strconv.<fn>: parsing "<s><suffix>` and stores it
+// as an errorString interface into the tuple's error words.
+func (fl *funcLowerer) emitAtoiError(src dis.Operand, dst int32, fn, suffix string) {
+	iby2wd := int32(dis.IBY2WD)
 	msg := fl.frame.AllocPointer("")
 	preMP := fl.comp.AllocString("strconv." + fn + ": parsing \"")
-	sufMP := fl.comp.AllocString("\": invalid syntax")
+	sufMP := fl.comp.AllocString(suffix)
 	fl.emit(dis.Inst2(dis.IMOVP, dis.MP(preMP), dis.FP(msg)))
 	fl.emit(dis.NewInst(dis.IADDC, src, dis.FP(msg), dis.FP(msg)))
 	fl.emit(dis.NewInst(dis.IADDC, dis.MP(sufMP), dis.FP(msg), dis.FP(msg)))
 	tag := fl.comp.AllocTypeTag("errorString")
 	fl.emit(dis.Inst2(dis.IMOVW, dis.Imm(tag), dis.FP(dst+iby2wd)))
 	fl.emit(dis.Inst2(dis.IMOVW, dis.FP(msg), dis.FP(dst+2*iby2wd)))
-
-	fl.insts[endJmp].Dst = dis.Imm(int32(len(fl.insts)))
 }
 
 // lowerStringsCall handles calls to the strings package.

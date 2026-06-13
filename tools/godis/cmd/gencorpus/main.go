@@ -491,6 +491,24 @@ func strconvProgs() []prog {
 	fmt.Println(strconv.FormatInt(255, 16), strconv.FormatInt(8, 2))
 `)})
 
+	ps = append(ps, prog{"strconv_range", header([]string{"fmt", "strconv"}, `	for _, s := range []string{
+		"9223372036854775807", "9223372036854775808",
+		"-9223372036854775808", "-9223372036854775809",
+		"99999999999999999999", "0009223372036854775807",
+	} {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			fmt.Println(n, "ERR", err.Error())
+		} else {
+			fmt.Println(n, "ok")
+		}
+	}
+	u, uerr := strconv.ParseUint("18446744073709551615", 10, 64)
+	fmt.Println(u, uerr == nil)
+	u2, uerr2 := strconv.ParseUint("18446744073709551616", 10, 64)
+	fmt.Println(u2, uerr2 != nil)
+`)})
+
 	ps = append(ps, prog{"strconv_parse", header([]string{"fmt", "strconv"}, `	v, err := strconv.ParseInt("-9000", 10, 64)
 	fmt.Println(v, err == nil)
 	u, uerr := strconv.ParseUint("123", 10, 64)

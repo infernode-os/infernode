@@ -1,0 +1,4 @@
+tool=say
+	description='Text-to-speech via /dev/audio and speech9p'
+	authorities='writes_fs'
+	notes='Emits audio to the user (an output channel). Requires /n/speech.'

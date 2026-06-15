@@ -1,0 +1,4 @@
+tool=todo
+	description='Ordered task list for agent working memory'
+	authorities='writes_fs'
+	notes='Stored in the session dir or /tmp/veltro/todo.txt.'

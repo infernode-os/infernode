@@ -1,0 +1,5 @@
+rule=NET_EGRESS_IMPLICIT
+	severity=medium
+	require='dials_net mcproviders_empty'
+	message='A tool dials the network with no caps.mcproviders allowlist constraining the peers it may reach.'
+	fix='set caps.mcproviders to the permitted endpoints, or remove the dialing tool'

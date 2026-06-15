@@ -40,6 +40,16 @@ fn assert_writefails {
 
 echo '=== mail9p integration smoke test ==='
 
+# Environmental skip-guard (INFR-312): mail9p mounts at /n/mail, which
+# needs an mntgen-backed /n. A bare runner has no /n mountpoint, so the
+# mount fails ("can't ensuredir /n/mail") and every assertion below
+# misses. Establish /n here — wrapped in `if {! ...}` so its failure is
+# caught as status — and skip cleanly when it can't be set up. In a full
+# runtime /n already exists and this exercises mail9p for real.
+if {! mount -ac {mntgen} /n} {
+	raise 'skip:cannot set up /n (mntgen) — needs a full runtime to mount /n/mail'
+}
+
 # Start mail9p; it mounts at /n/mail in this namespace before returning.
 mail9p
 sleep 1

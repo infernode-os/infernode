@@ -156,6 +156,13 @@ runlimbotest(dispath: string)
 		args = dispath :: "-v" :: nil;
 
 	# Run the test
+	#
+	# Suite-skip convention: a test whose environmental precondition is
+	# absent (no display, no GPU/codec built in, no live backend) should
+	# raise "skip:<reason>" from init() so the whole module is recorded as
+	# a clean SKIP, not a FAIL. A bare "fail:..." raise lands in the "fail:*"
+	# arm below and is counted as a failure — which is correct for genuine
+	# setup errors but wrong for "environment absent on this host" (INFR-312).
 	status := "PASS";
 	{
 		testmod->init(ctxt, args);

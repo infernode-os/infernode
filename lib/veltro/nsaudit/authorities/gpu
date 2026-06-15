@@ -1,0 +1,4 @@
+tool=gpu
+	description='GPU inference over /mnt/gpu'
+	authorities='reads_fs'
+	notes='Runs local inference on images via the GPU file server; on-device, no network egress.'

@@ -1,0 +1,5 @@
+tool=payfetch
+	description='Fetch a URL, paying via x402 when required'
+	authorities='dials_net spends reads_fs'
+	irreversible='spends'
+	notes='Like webfetch but signs an x402 payment via wallet9p on HTTP 402. Checks wallet budget at runtime; declare caps.walletbudget to bound spend.'

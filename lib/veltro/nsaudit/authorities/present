@@ -1,0 +1,4 @@
+tool=present
+	description='Manage artifacts in the Lucifer presentation zone'
+	authorities='sends_ui writes_fs'
+	notes='Writes documents/tables/code to the UI center zone via /mnt/ui.'

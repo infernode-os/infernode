@@ -1,0 +1,4 @@
+tool=memory
+	description='Persistent key-value store for agent context'
+	authorities='reads_fs writes_fs persists_memory'
+	notes='Persists across sessions under /tmp/veltro/memory/<agentid>.'

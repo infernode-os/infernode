@@ -1,0 +1,4 @@
+tool=browse
+	description='Fetch a URL and display it in a Xenith window'
+	authorities='dials_net sends_ui'
+	notes='Dials arbitrary hosts; renders fetched content to a UI window. Constrain peers with caps.mcproviders.'

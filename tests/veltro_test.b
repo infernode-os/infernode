@@ -60,6 +60,38 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
+# Load a single tool by name and verify its name()/doc() contract.
+# Tracks pass/fail/skip just like run().
+runtool(name: string)
+{
+	t := testing->newTsrc("tool/" + name, SRCFILE);
+	{
+		path := "/dis/veltro/tools/" + name + ".dis";
+		tool := load Tool path;
+		if(tool == nil) {
+			t.error(sys->sprint("cannot load %s: %r", path));
+		} else {
+			t.assertseq(tool->name(), name, "tool name matches module");
+			doc := tool->doc();
+			t.assert(len doc > 0, "tool has documentation");
+		}
+	} exception {
+	"fail:fatal" =>
+		;	# already marked as failed
+	"fail:skip" =>
+		;	# already marked as skipped
+	"*" =>
+		t.failed = 1;
+	}
+
+	if(testing->done(t))
+		passed++;
+	else if(t.skipped)
+		skipped++;
+	else
+		failed++;
+}
+
 # Test that Read tool loads and has correct name/doc
 testReadTool(t: ref T)
 {
@@ -370,6 +402,21 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 	}
+
+	# Broad coverage: every tool module installed under /dis/veltro/tools
+	# loads and honors the name()/doc() contract. name() and doc() are pure
+	# constant getters (no init(), no services, no LLM), so this is safe to
+	# run anywhere. Complements the detailed per-tool tests below.
+	alltools := array[] of {
+		"browse", "charon", "contacts", "dial", "diff", "edit", "editor",
+		"exec", "find", "fractal", "gap", "git", "gpu", "grep", "hear",
+		"http", "json", "keyring", "launch", "limbo", "list", "man",
+		"memory", "mount", "payfetch", "plan", "present", "read", "safeexec",
+		"say", "search", "shell", "sms", "spawn", "task", "todo", "vision",
+		"wallet", "webfetch", "websearch", "wiki", "write", "xenith",
+	};
+	for(i := 0; i < len alltools; i++)
+		runtool(alltools[i]);
 
 	# Test tool loading and documentation
 	run("ReadTool", testReadTool);

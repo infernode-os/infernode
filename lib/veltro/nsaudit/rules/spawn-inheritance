@@ -1,0 +1,5 @@
+rule=SPAWN_INHERITANCE
+	severity=medium
+	require='has_tool_spawn writes_fs_durable'
+	message='spawn is granted alongside durable host writes. Subagents inherit a namespace from which durable mutation is reachable.'
+	fix='restrict subagent paths in the spawn invocation, or stage writes through cowfs'

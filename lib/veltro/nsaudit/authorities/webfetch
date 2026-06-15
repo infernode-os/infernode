@@ -1,0 +1,4 @@
+tool=webfetch
+	description='Fetch a URL over HTTPS and return extracted readable text'
+	authorities='dials_net reads_fs'
+	notes='Dials arbitrary hosts over TLS. Fetched content returns into the agent context; constrain reachable peers with caps.mcproviders.'

@@ -1,0 +1,5 @@
+tool=task
+	description='Delegate work to a child AI task (its own activity + tools9p + lucibridge)'
+	authorities='sends_llm spawns_proc reads_fs writes_fs'
+	irreversible='spawns_proc'
+	notes='Creates delegated activities that drive an LLM. Child caps are set by the create tools=/paths= args; an over-broad child inherits broad authority. sends_llm because task content reaches the model.'

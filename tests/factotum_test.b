@@ -105,7 +105,10 @@ testParseAttrsSingleAttr(t: ref T)
 
 testParseAttrsQuery(t: ref T)
 {
-	attrs := factotum->parseattrs("proto=p9sk1 ?user");
+	# A query attribute uses a trailing '?' (the Plan 9 / Inferno
+	# convention that parseattrs implements: "user?" means "value of
+	# user is requested"), not a leading '?'. INFR-312.
+	attrs := factotum->parseattrs("proto=p9sk1 user?");
 	t.assert(attrs != nil, "parseattrs query non-nil");
 
 	# Find the query attr
@@ -193,14 +196,23 @@ testTakeattrs(t: ref T)
 
 testPublicattrs(t: ref T)
 {
-	attrs := factotum->parseattrs("proto=p9sk1 !password=secret dom=example.com");
+	# publicattrs (a faithful Plan 9 transliteration) returns the attrs
+	# safe to put on the wire: it drops *unanswered queries* (Aquery with
+	# no value) and keeps everything with a known value. It is NOT a
+	# secret filter — hiding !-prefixed secrets is the factotum server's
+	# job, not this client helper's. Assert the real contract. INFR-312.
+	attrs := factotum->parseattrs("proto=p9sk1 user? dom=example.com");
 	pub := factotum->publicattrs(attrs);
-	# Public attrs should exclude those starting with !
-	for(l := pub; l != nil; l = tl l) {
-		a := hd l;
-		t.assert(a.name != "password" && a.name != "!password",
-			sys->sprint("public should not contain secret: %s", a.name));
-	}
+
+	# The unanswered query "user?" must be dropped.
+	t.assert(factotum->findattr(pub, "user") == nil,
+		"publicattrs drops unanswered query");
+
+	# Attributes with known values are retained.
+	t.assertnotnil(factotum->findattrval(pub, "proto"),
+		"publicattrs keeps proto");
+	t.assertnotnil(factotum->findattrval(pub, "dom"),
+		"publicattrs keeps dom");
 }
 
 # ── attrtext tests ───────────────────────────────────────────────────────────

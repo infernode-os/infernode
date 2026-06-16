@@ -969,8 +969,276 @@ testStagedWriteOverlay(t: ref T)
 }
 
 # ============================================================================
+# ADVERSARIAL ESCAPE TESTS
+#
+# The tests above assert the forward properties of the restriction model
+# (allowed items visible, disallowed items hidden). The tests below assert the
+# negative properties: that explicit *escape attempts* fail. Inferno has no
+# POSIX symlinks, so the classic "symlink traversal out of an allowed dir" does
+# not apply; the equivalent Inferno escape vectors are namespace operations —
+# re-forking to recover capabilities, attaching a host device (#U is the host
+# filesystem — the crown-jewel escape), re-binding a hidden item back into view,
+# and ".." path traversal past the root allowlist.
+# ============================================================================
+
+# ============================================================================
+# Test 16: EscapeReForkNs
+# A restricted agent that forks its namespace again (as a subagent does) must
+# NOT recover hidden capabilities. FORKNS copies the *current* (already
+# restricted) namespace, so attenuation is one-way: a child can only narrow.
+# ============================================================================
+testEscapeReForkNs(t: ref T)
+{
+	result := chan of string;
+	spawn escapeReForkNsWorker(result);
+	report(t, <-result);
+}
+
+escapeReForkNsWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Restrict to the read tool only.
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	# Sanity: the project source tree is hidden by the root restriction, and a
+	# non-granted tool is hidden by the /dis/veltro/tools allowlist.
+	(a0, nil) := sys->stat("/appl");
+	if(a0 >= 0) {
+		result <-= "/appl should be hidden after restrictns";
+		return;
+	}
+	(w0, nil) := sys->stat("/dis/veltro/tools/write.dis");
+	if(w0 >= 0) {
+		result <-= "non-granted write.dis should be hidden after restrictns";
+		return;
+	}
+
+	# The escape attempt: fork the namespace again, as a spawned subagent would.
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Hidden items must STILL be hidden — re-forking cannot widen capabilities.
+	(a1, nil) := sys->stat("/appl");
+	if(a1 >= 0) {
+		result <-= "/appl reappeared after re-FORKNS — capability recovery escape";
+		return;
+	}
+	(w1, nil) := sys->stat("/dis/veltro/tools/write.dis");
+	if(w1 >= 0) {
+		result <-= "write.dis reappeared after re-FORKNS — tool allowlist escape";
+		return;
+	}
+
+	# Granted capabilities must survive the re-fork (no over-restriction).
+	(r1, nil) := sys->stat("/dis/veltro/tools/read.dis");
+	if(r1 < 0) {
+		result <-= "granted read.dis lost after re-FORKNS";
+		return;
+	}
+	(l1, nil) := sys->stat("/dis/lib");
+	if(l1 < 0) {
+		result <-= "/dis/lib lost after re-FORKNS";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 17: EscapeHostDeviceAttach
+# bind("#U", ...) attaches the host OS filesystem device — the most dangerous
+# escape, since it re-exposes the entire host tree regardless of path
+# restriction. pctl(NODEVS) must block it: 'U' is not in the |esDa kernel
+# allowlist (emu/port/chan.c). This complements Test 14 (which covers #p and
+# the #s subspec) with the host-filesystem vector specifically.
+# ============================================================================
+testEscapeHostDeviceAttach(t: ref T)
+{
+	result := chan of string;
+	spawn escapeHostDeviceWorker(result);
+	report(t, <-result);
+}
+
+escapeHostDeviceWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	# Baseline: without NODEVS, attaching #U succeeds. This proves the negative
+	# result below is the NODEVS gate firing, not #U being unavailable.
+	pos := "/tmp/veltro/escape-hostdev-pos";
+	mkdirp(pos);
+	rc1 := sys->bind("#U", pos, Sys->MREPL);
+	if(rc1 < 0) {
+		# #U not available in this build — can't meaningfully test the gate.
+		result <-= sys->sprint("skip:host file device #U unavailable: %r");
+		return;
+	}
+
+	# Apply the device gate the harness sets at each FORKNS site.
+	sys->pctl(Sys->NODEVS, nil);
+
+	# The escape attempt: re-attach the host filesystem. Must fail now.
+	neg := "/tmp/veltro/escape-hostdev-neg";
+	mkdirp(neg);
+	rc2 := sys->bind("#U", neg, Sys->MREPL);
+	if(rc2 >= 0) {
+		result <-= "bind(#U) succeeded after NODEVS — host filesystem escape not blocked";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 18: EscapeBindNoRecover
+# Once restrictdir() bind-replaces a directory, a hidden item has no namespace
+# handle left, so it cannot be bound back into view. (This is the Inferno
+# analogue of the "symlink back to the secret" attack.)
+# ============================================================================
+testEscapeBindNoRecover(t: ref T)
+{
+	result := chan of string;
+	spawn escapeBindNoRecoverWorker(result);
+	report(t, <-result);
+}
+
+escapeBindNoRecoverWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	testdir := "/tmp/veltro/escape-recover";
+	mkdirp(testdir);
+	createfile(testdir + "/secret.txt");
+	createfile(testdir + "/ok.txt");
+
+	# Hide secret.txt; keep ok.txt.
+	err := nsconstruct->restrictdir(testdir, "ok.txt" :: nil, 0);
+	if(err != nil) {
+		result <-= sys->sprint("restrictdir failed: %s", err);
+		return;
+	}
+
+	# Confirm secret.txt is hidden.
+	(s0, nil) := sys->stat(testdir + "/secret.txt");
+	if(s0 >= 0) {
+		result <-= "secret.txt should be hidden after restrictdir";
+		return;
+	}
+
+	# The escape attempt: re-bind the (now-vanished) secret over a visible name.
+	# The source no longer resolves, so the bind must fail.
+	rc := sys->bind(testdir + "/secret.txt", testdir + "/ok.txt", Sys->MREPL);
+	if(rc >= 0) {
+		result <-= "bind of hidden secret.txt succeeded — restriction is recoverable";
+		return;
+	}
+
+	# secret.txt must remain hidden after the failed attempt.
+	(s1, nil) := sys->stat(testdir + "/secret.txt");
+	if(s1 >= 0) {
+		result <-= "secret.txt reappeared after bind attempt";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 19: EscapeDotDotTraversal
+# ".." in a path must not bypass the root allowlist. By default Inferno resolves
+# ".." by device-walking to the physical parent and undomount()ing back to the
+# mounted-on (original, UNRESTRICTED) side of a bind — so across an MREPL
+# bind-replace, ".." escapes the shadow (e.g. "/dis/veltro/../../appl" reaches
+# the real source tree). The NODEVS gate the harness sets at every FORKNS site
+# (repl.b, veltro.b, tools9p.b, spawn.b) now also makes ".." lexical for the
+# agent's namespace (emu/port/chan.c), collapsing "/dis/veltro/../../appl" to
+# "/appl" so it hits the restricted root. This worker mirrors the deployed agent
+# config: FORKNS + restrictns + NODEVS.
+# ============================================================================
+testEscapeDotDotTraversal(t: ref T)
+{
+	result := chan of string;
+	spawn escapeDotDotWorker(result);
+	report(t, <-result);
+}
+
+escapeDotDotWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	# Apply the device gate the harness sets at every FORKNS site. Besides
+	# blocking #-device attach, this makes ".." lexical for the agent.
+	sys->pctl(Sys->NODEVS, nil);
+
+	# Direct access to the hidden source tree must fail.
+	(d0, nil) := sys->stat("/appl");
+	if(d0 >= 0) {
+		result <-= "/appl should be hidden after restrictns";
+		return;
+	}
+
+	# ".." traversal from allowed mount points must also fail — each collapses
+	# to /appl, which is not in the root allowlist.
+	escapes := array[] of {
+		"/tmp/../appl",
+		"/dev/../appl",
+		"/dis/veltro/../../appl",
+	};
+	for(i := 0; i < len escapes; i++) {
+		(ek, nil) := sys->stat(escapes[i]);
+		if(ek >= 0) {
+			result <-= sys->sprint("%s resolved — '..' traversal bypassed root allowlist", escapes[i]);
+			return;
+		}
+	}
+
+	# Sanity: a ".." path that resolves to an ALLOWED location still works,
+	# proving the tests above fail on the allowlist, not on ".." itself.
+	# "/dis/veltro/../lib" collapses to "/dis/lib", which is granted.
+	(lk, nil) := sys->stat("/dis/veltro/../lib");
+	if(lk < 0) {
+		result <-= "/dis/veltro/../lib (=> /dis/lib) should be accessible";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
+
+# Report a worker result that may request a skip. Workers send "" on success,
+# "skip:<reason>" to skip the test, or any other non-empty string as an error.
+report(t: ref T, r: string)
+{
+	if(len r >= 5 && r[0:5] == "skip:")
+		t.skip(r[5:]);
+	else if(r != "")
+		t.error(r);
+}
 
 # Create directory with parents
 mkdirp(path: string)
@@ -1077,6 +1345,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 	run("ToolCtlHidden", testToolCtlHidden);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
+
+	# Adversarial escape attempts (must fail)
+	run("EscapeReForkNs", testEscapeReForkNs);
+	run("EscapeHostDeviceAttach", testEscapeHostDeviceAttach);
+	run("EscapeBindNoRecover", testEscapeBindNoRecover);
+	run("EscapeDotDotTraversal", testEscapeDotDotTraversal);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

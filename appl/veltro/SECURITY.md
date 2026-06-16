@@ -203,6 +203,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 |----------|-----------|
 | No host filesystem access | `/n/local` hidden by `/n` restriction; `#U` blocked by NODEVS (child) |
 | No project file exposure | Root restriction hides `.env`, `.git`, `CLAUDE.md`, source tree |
+| No `..` escape | NODEVS makes `..` lexical (`emu/port/chan.c`), so `..` cannot walk out of a bind-replaced dir to the unrestricted original (e.g. `/dis/veltro/../../CLAUDE.md`) |
 | No env secrets | NEWENV creates empty environment (child) |
 | No FD leaks | NEWFD with explicit keep-list (child) |
 | Safe FD 0-2 | `verifysafefds()` redirects nil FDs to `/dev/null` |
@@ -318,6 +319,28 @@ If speech9p is mounted at `/n/speech`:
 ### Why restrict `/` (root)?
 
 When running `emu -r.`, the host project directory is bound onto `/` with MAFTER. This exposes `.env`, `.git`, `CLAUDE.md`, and the entire source tree. Individual bind-overs on entries don't affect `dirread()` -- Inferno's union mount returns entries from ALL union members. The only way to hide entries is to replace the entire root union with `restrictdir("/", safe)`.
+
+### Why `..` is made lexical under NODEVS
+
+Restricting `/` is necessary but not sufficient on its own. By default Inferno
+resolves `..` by device-walking to the *physical* parent and then
+`undomount()`ing back to the **mounted-on (original) side** of any mount point
+it crosses. Across an `MREPL` bind-replace that original side is the
+*unrestricted* directory, so `..` walks straight out of a shadow: a fully
+restricted agent could read `/dis/veltro/../../CLAUDE.md` even though `/appl`
+and `/CLAUDE.md` were hidden. (Confirmed: the adversarial test
+`EscapeDotDotTraversal` in `tests/veltro_security_test.b` read `CLAUDE.md`'s
+contents through this path before the fix.)
+
+The fix makes `..` **lexical** for any namespace with `nodevs` set (which the
+harness sets at every FORKNS site): `namec()` collapses `x/..` and `.` in
+absolute paths before the walk, so `/dis/veltro/../../appl` becomes `/appl` and
+hits the restricted root. It is scoped to `nodevs` so stock Inferno's
+union-directory `..` semantics are unchanged. See `emu/port/chan.c`
+(`namec()`), gated on `pg->nodevs`. Relative `..` is left to the default walk
+(a restricted agent operates on absolute paths; lexically dropping a leading
+relative `..` would wrongly *widen* access) — a known residual tracked for
+follow-up.
 
 ### Why skip stat() for root entries?
 

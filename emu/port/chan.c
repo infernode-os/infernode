@@ -1087,6 +1087,41 @@ namec(char *aname, int amode, int omode, ulong perm)
 	parsename(name, &e);
 
 	/*
+	 * Locked-down (nodevs) namespaces get lexical "..": collapse "x/.." and
+	 * "." in absolute paths before walking. Without this, ".." is resolved by
+	 * device-walking to the *physical* parent and then undomount()ing back to
+	 * the mounted-on side of any mount point -- which for an MREPL bind-replace
+	 * is the original, UNRESTRICTED directory. That lets a restricted agent
+	 * escape restrictns()'s root allowlist, e.g. "/dis/veltro/../../appl"
+	 * reaches the real source tree even though "/appl" is hidden. Collapsing
+	 * lexically keeps ".." inside the restricted namespace.
+	 *
+	 * Scoped to nodevs (set at every Veltro FORKNS site) so stock Inferno's
+	 * union-directory ".." semantics are unchanged. Absolute paths only:
+	 * relative ".." cannot be popped past the start without resolving against
+	 * dot, and dropping a leading ".." would wrongly widen access.
+	 */
+	if(pg->nodevs && aname[0] == '/' && !nomount){
+		int rdi, wri;
+
+		wri = 0;
+		for(rdi = 0; rdi < e.nelems; rdi++){
+			if(strcmp(e.elems[rdi], ".") == 0)
+				continue;		/* lexical no-op */
+			if(strcmp(e.elems[rdi], "..") == 0){
+				if(wri > 0)
+					wri--;		/* pop previous element */
+				continue;		/* clamp at root */
+			}
+			e.elems[wri] = e.elems[rdi];
+			e.off[wri] = e.off[rdi];
+			wri++;
+		}
+		e.off[wri] = e.off[e.nelems];	/* preserve terminating offset */
+		e.nelems = wri;
+	}
+
+	/*
 	 * On create, ....
 	 */
 	if(amode == Acreate){

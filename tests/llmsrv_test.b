@@ -184,6 +184,14 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CompactThresholdExact", testCompactThresholdExact);
 	run("CompactThresholdAbove", testCompactThresholdAbove);
 
+	# Server-side auto-compaction trigger tests (INFR-223)
+	run("AutoCompactDisabledZero", testAutoCompactDisabledZero);
+	run("AutoCompactDisabledNegative", testAutoCompactDisabledNegative);
+	run("AutoCompactBelow", testAutoCompactBelow);
+	run("AutoCompactExact", testAutoCompactExact);
+	run("AutoCompactAbove", testAutoCompactAbove);
+	run("AutoCompactCtlParse", testAutoCompactCtlParse);
+
 	# Float parser tests
 	run("ParseFloatInteger", testParseFloatInteger);
 	run("ParseFloatDecimal", testParseFloatDecimal);
@@ -735,6 +743,49 @@ testCompactThresholdAbove(t: ref T)
 	t.assert(shouldcompact(msgs), "6 messages: should compact");
 }
 
+# ============== Server-side Auto-Compaction Trigger Tests ==============
+# These exercise the maybeautocompact gate (INFR-223): a session auto-compacts
+# at end of turn iff its threshold is > 0 AND estimated tokens reach it.
+
+testAutoCompactDisabledZero(t: ref T)
+{
+	# threshold 0 = disabled: never auto-compact, even with huge context
+	t.assert(!shouldautocompact(999999, 0), "threshold 0 disables auto-compact");
+}
+
+testAutoCompactDisabledNegative(t: ref T)
+{
+	# negative threshold is treated as disabled (also clamped at parse time)
+	t.assert(!shouldautocompact(999999, -1), "negative threshold disables");
+}
+
+testAutoCompactBelow(t: ref T)
+{
+	# under threshold: no compaction
+	t.assert(!shouldautocompact(149999, 150000), "just below threshold: no compact");
+}
+
+testAutoCompactExact(t: ref T)
+{
+	# at the high-water mark: compact (>=, matching veltro's checkandcompact)
+	t.assert(shouldautocompact(150000, 150000), "at threshold: compact");
+}
+
+testAutoCompactAbove(t: ref T)
+{
+	t.assert(shouldautocompact(175000, 150000), "above threshold: compact");
+}
+
+testAutoCompactCtlParse(t: ref T)
+{
+	# `ctl autocompact <n>` parses the trailing integer; blank/garbage -> -1
+	# (rejected by the server), valid non-negative ints accepted.
+	t.asserteq(autocompactarg("autocompact 0"), 0, "parse 0 (disable)");
+	t.asserteq(autocompactarg("autocompact 150000"), 150000, "parse 150000");
+	t.asserteq(autocompactarg("autocompact"), -1, "bare command -> invalid");
+	t.asserteq(autocompactarg("autocompact xyz"), -1, "garbage arg -> invalid");
+}
+
 # ==================== Float Parser Tests ====================
 
 testParseFloatInteger(t: ref T)
@@ -859,13 +910,46 @@ usageformat(estimated, limit: int): string
 	return sys->sprint("%d/%d\n", estimated, limit);
 }
 
-# Compaction threshold check (replicates llmsrv.b asynccompact logic)
+# Compaction threshold check (replicates llmsrv.b compactnow's nmsg<4 guard)
 shouldcompact(msgs: list of ref LlmMessage): int
 {
 	nmsg := 0;
 	for(ml := msgs; ml != nil; ml = tl ml)
 		nmsg++;
 	return nmsg >= 4;
+}
+
+# Server-side auto-compact gate (replicates llmsrv.b maybeautocompact):
+# fire iff a positive threshold is set and estimated tokens reach it.
+shouldautocompact(estimated, threshold: int): int
+{
+	return threshold > 0 && estimated >= threshold;
+}
+
+# Parse the integer argument of a `ctl autocompact <n>` command
+# (replicates the llmsrv.b Qctl handler): returns -1 for blank/garbage,
+# which the server rejects; non-negative on success.
+autocompactarg(cmd: string): int
+{
+	prefix := "autocompact";
+	if(len cmd < len prefix || cmd[0:len prefix] != prefix)
+		return -1;
+	return strtoint(strip(cmd[len prefix:]));
+}
+
+# Integer parser (replicates llmsrv.b strtoint: -1 on empty/non-digit)
+strtoint(s: string): int
+{
+	if(len s == 0)
+		return -1;
+	n := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < '0' || c > '9')
+			return -1;
+		n = n * 10 + (c - '0');
+	}
+	return n;
 }
 
 # Float parser (replicates llmsrv.b parsefloat)

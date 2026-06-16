@@ -538,6 +538,21 @@ doplanningturn(llmfd: ref Sys->FD, task: string): string
 # Threshold: compact when estimated context exceeds 75% of 200K limit
 COMPACT_THRESHOLD: con 150000;
 
+# selfmanagecompaction tells llmsrv that this client drives compaction itself
+# (via checkandcompact, below) by disabling the server-side auto-compaction
+# safety net for this session (INFR-223). Without this, both the server's
+# high-water trigger and veltro's checkandcompact would fire near the same
+# threshold; opting out keeps exactly one authority — the client — for veltro
+# sessions, while the server net stays on by default for clients that don't
+# self-manage (nerva, repl, sub-agents).
+selfmanagecompaction(llmsessionid: string)
+{
+	ctlpath := "/mnt/llm/" + llmsessionid + "/ctl";
+	err := writefile(ctlpath, "autocompact 0");
+	if(err != nil && verbose)
+		sys->fprint(stderr, "veltro: could not disable server auto-compact: %s\n", err);
+}
+
 # checkandcompact reads /mnt/llm/N/usage and triggers compaction if needed.
 # The usage file returns "estimated_tokens/context_limit\n".
 # A write to /mnt/llm/N/compact triggers the summarisation LLM call.
@@ -746,6 +761,10 @@ runagent(task: string)
 	if(verbose)
 		sys->fprint(stderr, "veltro: llm session %s\n", llmsessionid);
 
+	# Veltro owns its own compaction policy (checkandcompact) — opt out of the
+	# server-side auto-compaction net so the two don't both trigger.
+	selfmanagecompaction(llmsessionid);
+
 	# Set prefill to keep model in character
 	prefillpath := "/mnt/llm/" + llmsessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
@@ -836,6 +855,10 @@ runresume(name, extra: string)
 		sys->fprint(stderr, "veltro: cannot create LLM session\n");
 		return;
 	}
+
+	# Veltro owns its own compaction policy (checkandcompact) — opt out of the
+	# server-side auto-compaction net so the two don't both trigger.
+	selfmanagecompaction(llmsessionid);
 
 	prefillpath := "/mnt/llm/" + llmsessionid + "/prefill";
 	agentlib->setprefillpath(prefillpath, "[Veltro]\n");

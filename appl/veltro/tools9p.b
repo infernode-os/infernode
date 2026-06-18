@@ -62,7 +62,8 @@ Tools9p: module {
 };
 
 # Qid types for synthetic files
-Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision: con iota;
+Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
+	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -98,6 +99,12 @@ budget: list of string;    # Tools delegatable to child tasks (-b flag)
 activityid := 0;           # Activity ID this tools9p serves (-a flag)
 mountpt_g := "/tool";      # This instance's mount point (set from -m flag)
 verbose := 0;              # Verbose logging (-v flag); forwarded to child lucibridge
+# Agent metadata exposed read-only at /tool/meta/ for nsaudit (INFR-18).
+# Declared by whoever launches this tools9p — tools9p cannot observe the
+# agent process's own pgrp. Defaults are the honest top-level state; the
+# provisioning path passes the child values (see provisionchild).
+agentrole := "toplevel";   # "toplevel" | "child" (-r flag)
+agentnodevs := "unset";    # "set" | "unset" (-N flag sets it)
 vers: int;
 
 # Shadow directories for per-invocation namespace restriction
@@ -179,9 +186,11 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-Dv] [-a activityid] [-m mountpoint] [-p path] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-p path] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
+	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
+	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
 	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable)\n");
 	sys->fprint(stderr, "                e.g. -p /dis/wm exposes /dis/wm/ for GUI app discovery\n");
@@ -241,6 +250,14 @@ init(nil: ref Draw->Context, args: list of string)
 		case o {
 		'D' =>	styxservers->traceset(1);
 		'v' =>	verbose = 1;
+		'r' =>
+			rarg := arg->earg();
+			if(rarg != "toplevel" && rarg != "child") {
+				sys->fprint(stderr, "tools9p: -r role must be toplevel or child\n");
+				raise "fail:usage";
+			}
+			agentrole = rarg;
+		'N' =>	agentnodevs = "set";
 		'm' =>	mountpt = arg->earg();
 		'p' =>
 			parg := arg->earg();
@@ -1020,6 +1037,12 @@ provisiontask(args: string)
 	rargs = "-m" :: rargs;
 	rargs = string id :: rargs;
 	rargs = "-a" :: rargs;
+	# Child agents run with NODEVS applied in the spawn/child path, so the
+	# provisioned tools9p declares role=child, nodevs=set at /tool/meta for
+	# nsaudit (INFR-18).
+	rargs = "child" :: rargs;
+	rargs = "-r" :: rargs;
+	rargs = "-N" :: rargs;
 	if(verbose)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;
@@ -1287,6 +1310,21 @@ Serve:
 			Qactivity =>
 				srv.reply(styxservers->readbytes(m, array of byte string activityid));
 
+			Qmetarole =>
+				srv.reply(styxservers->readbytes(m, array of byte (agentrole + "\n")));
+
+			Qmetaxenith =>
+				xv := "0";
+				if(findtool("xenith") != nil)
+					xv = "1";
+				srv.reply(styxservers->readbytes(m, array of byte (xv + "\n")));
+
+			Qmetaactid =>
+				srv.reply(styxservers->readbytes(m, array of byte (string activityid + "\n")));
+
+			Qmetanodevs =>
+				srv.reply(styxservers->readbytes(m, array of byte (agentnodevs + "\n")));
+
 			* =>
 				# Tool directory/subfile reads
 				if(qtype >= Qtoolbase) {
@@ -1496,6 +1534,17 @@ dirgen(p: big): (ref Sys->Dir, string)
 
 	Qprovision =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "provision", big 0, 8r644), nil);
+
+	Qmeta =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "meta", big 0, 8r555), nil);
+	Qmetarole =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "role", big 0, 8r444), nil);
+	Qmetaxenith =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "xenith", big 0, 8r444), nil);
+	Qmetaactid =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "actid", big 0, 8r444), nil);
+	Qmetanodevs =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "nodevs", big 0, 8r444), nil);
 	}
 
 	# Check if it's a tool directory or subfile
@@ -1549,6 +1598,8 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qbudget;
 				"activity" =>
 					n.path = big Qactivity;
+				"meta" =>
+					n.path = big Qmeta;
 				"provision" =>
 					if(findtool("task") == nil) {
 						n.reply <-= (nil, Enotfound);
@@ -1563,6 +1614,24 @@ navigator(navops: chan of ref Navop)
 						continue;
 					}
 					n.path = big ti.qid;  # tool directory qid
+				}
+				n.reply <-= dirgen(n.path);
+			} else if(qtype == Qmeta) {
+				# Walk within the meta directory.
+				case n.name {
+				".." =>
+					n.path = big Qroot;
+				"role" =>
+					n.path = big Qmetarole;
+				"xenith" =>
+					n.path = big Qmetaxenith;
+				"actid" =>
+					n.path = big Qmetaactid;
+				"nodevs" =>
+					n.path = big Qmetanodevs;
+				* =>
+					n.reply <-= (nil, Enotfound);
+					continue;
 				}
 				n.reply <-= dirgen(n.path);
 			} else if(qtype >= Qtoolbase) {
@@ -1651,16 +1720,23 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
-				if(findtool("task") != nil && i <= 7 && count > 0) {
+				# Entry 7: meta (always present)
+				if(i <= 7 && count > 0) {
+					n.reply <-= dirgen(big Qmeta);
+					count--;
+					i++;
+				}
+
+				if(findtool("task") != nil && i <= 8 && count > 0) {
 					n.reply <-= dirgen(big Qprovision);
 					count--;
 					i++;
 				}
 
 				# Remaining entries: registered tool directories
-				baseoff := 7;
+				baseoff := 8;
 				if(findtool("task") != nil)
-					baseoff = 8;
+					baseoff = 9;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;
@@ -1671,6 +1747,31 @@ navigator(navops: chan of ref Navop)
 					idx++;
 				}
 
+				n.reply <-= (nil, nil);
+
+			Qmeta =>
+				# meta directory: role, xenith, actid, nodevs
+				i := n.offset;
+				count := n.count;
+				if(i == 0 && count > 0) {
+					n.reply <-= dirgen(big Qmetarole);
+					count--;
+					i++;
+				}
+				if(i <= 1 && count > 0) {
+					n.reply <-= dirgen(big Qmetaxenith);
+					count--;
+					i++;
+				}
+				if(i <= 2 && count > 0) {
+					n.reply <-= dirgen(big Qmetaactid);
+					count--;
+					i++;
+				}
+				if(i <= 3 && count > 0) {
+					n.reply <-= dirgen(big Qmetanodevs);
+					count--;
+				}
 				n.reply <-= (nil, nil);
 
 			* =>

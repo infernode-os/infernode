@@ -1,0 +1,4 @@
+tool=contacts
+	description='Look up phone numbers in the device address book'
+	authorities='reads_fs'
+	notes='Reads /phone/contacts (PII: names and numbers).'

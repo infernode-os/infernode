@@ -1,0 +1,4 @@
+tool=hear
+	description='Speech-to-text via /dev/audio and speech9p'
+	authorities='reads_fs receives_input'
+	notes='Captures microphone audio and transcribes it. Requires /n/speech.'

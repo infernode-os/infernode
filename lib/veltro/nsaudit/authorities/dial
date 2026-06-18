@@ -1,0 +1,5 @@
+tool=dial
+	description='Place a phone call via /phone/phone'
+	authorities='writes_fs'
+	irreversible='writes_fs'
+	notes='Writes to the phone device, causing a real outbound call (an egress channel not modeled by a network axis). User confirmation occurs on-device.'

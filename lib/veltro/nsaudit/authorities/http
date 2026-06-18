@@ -1,0 +1,4 @@
+tool=http
+	description='HTTP/HTTPS client'
+	authorities='dials_net'
+	notes='Dials arbitrary hosts and methods (GET/POST/PUT/DELETE). Constrain peers with caps.mcproviders.'

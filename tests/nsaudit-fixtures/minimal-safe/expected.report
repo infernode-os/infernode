@@ -1,0 +1,20 @@
+nsaudit: /tests/nsaudit-fixtures/minimal-safe (role=toplevel, nodevs=set, actid=-1, xenith=0)
+
+authorities
+  reads_fs
+
+reads_fs
+  /n/local/Users/pdfinn/sample
+  /tmp/veltro
+  /lib/certs
+  /dev/time
+  /dev/null
+  /dev/cons
+  /dis/veltro
+  /dis/lib
+
+writes_fs
+  /tmp/veltro [ephemeral]
+
+violations
+  (none)

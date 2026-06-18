@@ -1,0 +1,5 @@
+tool=sms
+	description='Send an SMS via /phone/sms'
+	authorities='writes_fs'
+	irreversible='writes_fs'
+	notes='Writes to the phone device, sending a real cellular SMS (an egress channel not modeled by a network axis).'

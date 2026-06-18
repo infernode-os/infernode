@@ -1,0 +1,4 @@
+tool=keyring
+	description='Launch the Keyring GUI for credential management'
+	authorities='sends_ui'
+	notes='Launches a GUI so the USER manages factotum keys. The tool itself cannot read /mnt/factotum — namespace isolation keeps secrets from the agent.'

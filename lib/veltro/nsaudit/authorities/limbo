@@ -1,0 +1,4 @@
+tool=limbo
+	description='Author Limbo source via the Limbo-trained model'
+	authorities='sends_llm'
+	notes='Routes the prompt to a dedicated model /mnt/llm session and returns source. Content reaches the model.'

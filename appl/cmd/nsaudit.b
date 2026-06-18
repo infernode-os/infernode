@@ -77,6 +77,13 @@ Caps: adt {
 	xenith:    int;
 	actid:     int;
 	nodevs:    string;    # "set" | "unset"
+	# Optional caps-level constraints. These are not part of the /tool
+	# shape tools9p exposes today; when a caps dir provides them they
+	# narrow the corresponding rule. Absent => unconstrained (rules that
+	# key off them fire). Sources named in SECURITY.md "Authority axes".
+	shellcmds:    list of string;  # caps.shellcmds — exec allowlist
+	mcproviders:  list of string;  # caps.mcproviders — permitted net peers
+	walletbudget: string;          # per-call spend bound; "" => ungated
 };
 
 # Per-tool manifest entry loaded from the authorities dir.
@@ -211,6 +218,12 @@ parseCaps(dir: string): ref Caps
 	n := readScalar(dir + "/meta/nodevs");
 	if(n != "")
 		c.nodevs = n;
+
+	# Optional caps-level constraints (see Caps adt). Missing files leave
+	# the lists nil / the scalar "", which the rules read as unconstrained.
+	c.shellcmds = readLines(dir + "/shellcmds");
+	c.mcproviders = readLines(dir + "/mcproviders");
+	c.walletbudget = readScalar(dir + "/walletbudget");
 
 	return c;
 }
@@ -397,6 +410,22 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		inv.sources = ("sends_ui", "caps.xenith=1") :: inv.sources;
 	}
 
+	# A factotum mount in reads_fs means the agent can read live secrets.
+	for(rl2 := inv.reads_fs; rl2 != nil; rl2 = tl rl2) {
+		if(prefix(hd rl2, "/mnt/factotum")) {
+			if(!contains(inv.auths, "reads_secrets_factotum"))
+				inv.auths = "reads_secrets_factotum" :: inv.auths;
+			inv.sources = ("reads_secrets_factotum", "via " + hd rl2) :: inv.sources;
+			break;
+		}
+	}
+
+	# A spend authority with no caps-level budget is ungated spend.
+	if(contains(inv.auths, "spends") && caps.walletbudget == "") {
+		inv.auths = "spend_ungated" :: inv.auths;
+		inv.sources = ("spend_ungated", "spends granted, no caps.walletbudget") :: inv.sources;
+	}
+
 	return inv;
 }
 
@@ -516,6 +545,12 @@ conditionTrue(inv: ref Inventory, cond: string): int
 		want := cond[9:];
 		return contains(inv.caps.tools, want);
 	}
+	# Caps-level "constraint is absent" predicates. An empty/missing
+	# allowlist means the corresponding authority is unconstrained.
+	if(cond == "shellcmds_empty")
+		return inv.caps.shellcmds == nil;
+	if(cond == "mcproviders_empty")
+		return inv.caps.mcproviders == nil;
 	return contains(inv.auths, cond);
 }
 

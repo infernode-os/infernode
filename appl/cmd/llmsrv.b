@@ -120,6 +120,10 @@ LlmSession: adt {
 	reasoningeffort: string; # "" | "low" | "medium" | "high"
 	prefill:        string;
 	tools:          list of ref ToolDef;
+	autocompact:    int;     # auto-compact high-water mark in estimated
+	                         # tokens; 0 = disabled (client owns its own
+	                         # compaction policy). Defaults to the daemon
+	                         # -c value. See rungeneration (INFR-223).
 
 	# Streaming state
 	streamch:       chan of string;  # nil when idle
@@ -147,6 +151,8 @@ backend: string;      # "api" or "openai"
 apikey: string;
 apiurl: string;       # Anthropic: hostname; OpenAI: base URL
 defaultmodel: string;
+autocompactdefault: int;   # default session auto-compact high-water mark
+                           # (estimated tokens); -c flag, 0 = disabled.
 defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
                            # daemon launch. Threaded into AskRequest so
                            # gpt-oss-style reasoning models default to a
@@ -160,7 +166,7 @@ defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
 
 usage()
 {
-	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model] [-r low|medium|high]\n");
+	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model] [-r low|medium|high] [-c autocompact-tokens]\n");
 	raise "fail:usage";
 }
 
@@ -212,6 +218,7 @@ init(nil: ref Draw->Context, args: list of string)
 	apikey = "";
 	defaultmodel = "claude-sonnet-4-5-20250929";
 	defaultreasoning = "";
+	autocompactdefault = DEFAULTAUTOCOMPACT;
 
 	while((o := arg->opt()) != 0)
 		case o {
@@ -222,8 +229,11 @@ init(nil: ref Draw->Context, args: list of string)
 		'k' => apikey = arg->earg();
 		'M' => defaultmodel = arg->earg();
 		'r' => defaultreasoning = arg->earg();
+		'c' => autocompactdefault = strtoint(arg->earg());
 		* =>   usage();
 		}
+	if(autocompactdefault < 0)
+		autocompactdefault = 0;
 	arg = nil;
 
 	# Read API key: try factotum first, then environment
@@ -318,6 +328,7 @@ newsession(): ref LlmSession
 		                  # MUST also clear this or Ollama 500s.
 		"",            # prefill
 		nil,           # tools
+		autocompactdefault, # autocompact high-water mark (daemon -c default)
 		nil,           # streamch
 		nil,           # donech
 		0,             # genactive
@@ -396,6 +407,14 @@ estimatedtokens(sess: ref LlmSession): int
 }
 
 CONTEXTLIMIT: con 200000;
+
+# Default auto-compact high-water mark (estimated tokens) for new sessions,
+# overridable per-daemon with -c and per-session via `ctl autocompact <n>`.
+# 150000 ≈ 75% of CONTEXTLIMIT, matching veltro's COMPACT_THRESHOLD. This is
+# a server-side safety net (INFR-223) so long-lived clients that don't drive
+# /compact themselves (nerva, repl, sub-agents) can't grow context unbounded.
+# Clients that own their own compaction policy set the session value to 0.
+DEFAULTAUTOCOMPACT: con 150000;
 
 # --- Backend call ---
 
@@ -801,7 +820,19 @@ Serve:
 					closesession(sess);
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				* =>
-					srv.reply(ref Rmsg.Error(m.tag, "unknown command: " + cmd));
+					# autocompact <n>: per-session auto-compact high-water
+					# mark in estimated tokens; 0 disables (caller owns its
+					# own compaction policy). See rungeneration (INFR-223).
+					if(hasprefix(cmd, "autocompact")) {
+						n := strtoint(strip(cmd[len "autocompact":]));
+						if(n < 0)
+							srv.reply(ref Rmsg.Error(m.tag, "autocompact needs a non-negative integer (0 disables)"));
+						else {
+							sess.autocompact = n;
+							srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						}
+					} else
+						srv.reply(ref Rmsg.Error(m.tag, "unknown command: " + cmd));
 				}
 
 			* =>
@@ -910,13 +941,36 @@ rungeneration(sess: ref LlmSession, prompt: string)
 			return;
 		}
 		askwithtoolresults(sess, results);
-		endgeneration(sess);
-		return;
+	} else {
+		# Normal prompt
+		askprompt(sess, prompt);
 	}
 
-	# Normal prompt
-	askprompt(sess, prompt);
+	maybeautocompact(sess);
 	endgeneration(sess);
+}
+
+# Server-side automatic compaction (INFR-223). Runs at the end of a turn, in
+# the generation proc, while genactive==1 still blocks any new turn from
+# starting (triggerpending) — so it cannot race a concurrent generation
+# rewriting sess.messages. This is the safety net that makes every client safe
+# by default: clients that don't poll /usage and drive /compact themselves
+# (nerva, repl, sub-agents) are still bounded. Clients that own their own
+# compaction policy disable it per-session with `ctl autocompact 0`; the
+# explicit /compact write keeps working regardless. The crossing turn pays one
+# extra summarization round-trip before its reply is released — acceptable
+# since the high-water mark is reached rarely.
+maybeautocompact(sess: ref LlmSession)
+{
+	before := estimatedtokens(sess);
+	if(sess.autocompact <= 0 || before < sess.autocompact)
+		return;
+	err := compactnow(sess);
+	if(err != nil)
+		sys->fprint(stderr, "llmsrv: auto-compact (session %d) failed: %s\n", sess.id, err);
+	else
+		sys->fprint(stderr, "llmsrv: auto-compacted session %d (~%d -> ~%d tokens, threshold %d)\n",
+			sess.id, before, estimatedtokens(sess), sess.autocompact);
 }
 
 askprompt(sess: ref LlmSession, prompt: string)
@@ -1069,19 +1123,25 @@ asyncstreamread(srv: ref Styxserver, m: ref Tmsg.Read, sess: ref LlmSession)
 	srv.reply(styxservers->readbytes(m, array of byte chunk));
 }
 
-# --- Async compaction ---
+# --- Compaction ---
 
-asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
+# Summarize the session history in place, replacing it with a compact summary.
+# Synchronous and self-contained so both the manual /compact path
+# (asynccompact) and the server-side automatic trigger (maybeautocompact) share
+# one implementation. Returns "" on success or when there is too little history
+# to bother (< 4 messages); otherwise an error string. Callers are responsible
+# for serializing against generation, since this rewrites sess.messages: the
+# auto path runs inside the generation proc; the manual path rejects writes
+# while a turn is in flight (see asynccompact).
+compactnow(sess: ref LlmSession): string
 {
 	# Count messages
 	nmsg := 0;
 	for(ml := sess.messages; ml != nil; ml = tl ml)
 		nmsg++;
 
-	if(nmsg < 4) {
-		srv.reply(ref Rmsg.Write(tag, count));
-		return;
-	}
+	if(nmsg < 4)
+		return "";
 
 	# Build conversation text for summarization
 	convtext := "";
@@ -1108,10 +1168,8 @@ asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
 	);
 
 	(resp, err) := callbackend(req);
-	if(err != nil) {
-		srv.reply(ref Rmsg.Error(tag, "compact: " + err));
-		return;
-	}
+	if(err != nil)
+		return err;
 
 	# Replace history with compact summary
 	sess.messages = nil;
@@ -1120,6 +1178,27 @@ asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
 	sess.messages = addmessage(sess.messages, "assistant",
 		"Understood. I have the context from our previous work and will continue from there.", "");
 	sess.totaltokens = resp.tokens;
+
+	return "";
+}
+
+# Manual /compact trigger. Compaction rewrites sess.messages, which the
+# generation proc actively appends to, so reject while a turn is in flight
+# (serialize per session, INFR-223) rather than race it. Clients drive
+# /compact between turns (e.g. veltro's checkandcompact, after queryllmfd
+# returns), so this guard does not impede normal use.
+asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
+{
+	if(sess.genactive) {
+		srv.reply(ref Rmsg.Error(tag, "compact: generation in progress, retry"));
+		return;
+	}
+
+	err := compactnow(sess);
+	if(err != nil) {
+		srv.reply(ref Rmsg.Error(tag, "compact: " + err));
+		return;
+	}
 
 	srv.reply(ref Rmsg.Write(tag, count));
 }

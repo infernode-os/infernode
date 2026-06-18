@@ -1,0 +1,4 @@
+tool=json
+	description='Query JSON data with path expressions'
+	authorities='reads_fs'
+	notes='Reads a file or inline data; pure Limbo.'

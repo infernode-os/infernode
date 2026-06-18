@@ -1,0 +1,5 @@
+tool=safeexec
+	description='Run whitelisted .dis tools directly, without a shell'
+	authorities='execs_code spawns_proc reads_fs writes_fs'
+	irreversible='spawns_proc'
+	notes='Loads and runs whitelisted /dis/veltro/tools/*.dis directly. Narrower than exec (no shell interpretation) but still executes code.'

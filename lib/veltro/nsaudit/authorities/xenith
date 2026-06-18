@@ -1,0 +1,4 @@
+tool=xenith
+	description='Control Xenith Acme-style windows via /chan/'
+	authorities='reads_windows modifies_windows sends_ui'
+	notes='Window access bounded by the process namespace; can read and modify window bodies.'

@@ -1,0 +1,44 @@
+nsaudit: /tests/nsaudit-fixtures/minimal (role=toplevel, nodevs=unset, actid=-1, xenith=0)
+
+authorities
+  attaches_device
+  writes_fs_durable
+  dials_net
+  execs_code
+  spawns_proc
+  writes_fs
+  reads_fs
+
+reads_fs
+  /n/local/Users/pdfinn/sample
+  /tmp/veltro
+  /lib/certs
+  /dev/time
+  /dev/null
+  /dev/cons
+  /dis/veltro
+  /dis/lib
+
+writes_fs
+  /tmp/veltro [ephemeral]
+  /n/local/Users/pdfinn/sample [DURABLE]
+
+violations
+  [high] DEVICE_GATE_BYPASS
+    top-level caps grants kernel device attach without NODEVS. Any sys->bind on an #x device will succeed, reaching #sfactotum, #U (host fs), or other kernel services regardless of path-based restriction.
+    fix: add sys->pctl(Sys->NODEVS, nil) after the FORKNS site
+  [high] UNCONSTRAINED_SHELL
+    exec is granted with no caps.shellcmds allowlist. The spawned shell can run any command reachable in the agent namespace; nothing narrows it.
+    fix: set caps.shellcmds to the minimal command set, or remove exec
+  [medium] DURABLE_HOST_MUTATION
+    Caps grant writes to durable host paths (not /tmp/veltro, not cowfs-staged). Changes persist on the host with no revert path.
+    fix: enable cowfs (actid >= 0) for these paths, or narrow caps.paths to /tmp/veltro
+  [info] EXEC_FORCE_MULTIPLIER
+    exec in caps.tools. All other authority limits are soft because the spawned shell can re-invoke anything in the agent namespace. Pair with caps.shellcmds to narrow.
+    fix: remove exec if not needed, or constrain via caps.shellcmds
+  [high] EXFIL_RISK_EGRESS
+    Any file the agent can read can leave the machine via the egress path listed. Reads plus egress is exfiltration risk.
+    fix: remove egress, narrow reads_fs to a non-sensitive set, or narrow caps.shellcmds
+  [medium] NET_EGRESS_IMPLICIT
+    A tool dials the network with no caps.mcproviders allowlist constraining the peers it may reach.
+    fix: set caps.mcproviders to the permitted endpoints, or remove the dialing tool

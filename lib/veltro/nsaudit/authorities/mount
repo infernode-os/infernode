@@ -1,0 +1,4 @@
+tool=mount
+	description='Stub: namespace mounting is user-only'
+	authorities=''
+	notes='No authority. The agent cannot expand its own namespace; the user mounts resources via the Lucifer [+] button.'

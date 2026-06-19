@@ -62,4 +62,11 @@ extern char Ecmdargs[];		/* wrong #args in control message */
 extern char	Enofd[];	/* no free file descriptors */
 extern char Enoctl[];	/* unknown control request */
 
-extern void	error(char*);
+#ifndef INF_NORETURN
+#  if defined(__GNUC__) || defined(__clang__)
+#    define INF_NORETURN __attribute__((noreturn))
+#  else
+#    define INF_NORETURN	/* kencc and other compilers: no-op */
+#  endif
+#endif
+extern void	error(char*) INF_NORETURN;

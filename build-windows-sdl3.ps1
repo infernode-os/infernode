@@ -383,9 +383,10 @@ if (Test-Path $emuPath) {
     Write-Host ""
     Write-Host "  stdout/stderr stream to the terminal; Ctrl-C exits."
     Write-Host ""
-    Write-Host "Or double-click emu\Nt\InferNode.exe (Windows-subsystem launcher)."
+    Write-Host "For the Windows-subsystem launcher (InferNode.exe), run:" -ForegroundColor Yellow
+    Write-Host "  .\emu\Nt\build-launcher.ps1"
     Write-Host ""
-    Write-Host "To assemble a dev bundle for testing the packaging path:" -ForegroundColor Yellow
+    Write-Host "To assemble a dev bundle (runs the three build scripts in sequence):" -ForegroundColor Yellow
     Write-Host "  .\build-dev-bundle.ps1"
     Write-Host ""
     if (-not (Test-Path "$ROOT\emu\Nt\SDL3.dll")) {

@@ -333,14 +333,17 @@ and `/CLAUDE.md` were hidden. (Confirmed: the adversarial test
 contents through this path before the fix.)
 
 The fix makes `..` **lexical** for any namespace with `nodevs` set (which the
-harness sets at every FORKNS site): `namec()` collapses `x/..` and `.` in
-absolute paths before the walk, so `/dis/veltro/../../appl` becomes `/appl` and
-hits the restricted root. It is scoped to `nodevs` so stock Inferno's
-union-directory `..` semantics are unchanged. See `emu/port/chan.c`
-(`namec()`), gated on `pg->nodevs`. Relative `..` is left to the default walk
-(a restricted agent operates on absolute paths; lexically dropping a leading
-relative `..` would wrongly *widen* access) — a known residual tracked for
-follow-up.
+harness sets at every FORKNS site): `namec()` collapses `x/..` and `.` before
+the walk, so `/dis/veltro/../../appl` becomes `/appl` and hits the restricted
+root. Relative paths are first canonicalized to absolute against the current
+directory's cname, so the relative form of the same attack
+(`cd /dis/veltro; cat ../../CLAUDE.md`, reachable via a granted shell) is
+clamped identically — while legitimate in-namespace relative access, including
+`..` to an allowed sibling, still works. It is scoped to `nodevs` so stock
+Inferno's union-directory `..` semantics are unchanged; `#` device paths are
+exempt. See `emu/port/chan.c` (`namec()`), gated on `pg->nodevs`. Both vectors
+are covered by `EscapeDotDotTraversal` and `EscapeRelDotDotTraversal` in
+`tests/veltro_security_test.b`.
 
 ### Why skip stat() for root entries?
 

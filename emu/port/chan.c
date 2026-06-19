@@ -1000,19 +1000,67 @@ Chan*
 namec(char *aname, int amode, int omode, ulong perm)
 {
 	int n, prefix, len, t, nomount, npath;
-	Chan *c, *cnew;
-	Cname *cname;
+	Chan *c, *cnew, *dot;
+	Cname *cname, *dname;
 	Elemlist e;
 	Rune r;
 	Mhead *m;
 	Pgrp *pg;
 	char *createerr, tmperrbuf[ERRMAX];
-	char *name;
+	char *name, *canon;
 
+	canon = nil;
 	name = aname;
 	if(name[0] == '\0')
 		error("empty file name");
 	validname(name, 1);
+
+	pg = up->env->pgrp;
+
+	/*
+	 * Locked-down (nodevs) namespaces get lexical ".." for relative paths too:
+	 * canonicalize "name" to an absolute path against the current directory's
+	 * cname, so the absolute-path collapse below also clamps relative escapes
+	 * like (cd /dis/veltro; cat ../../CLAUDE.md). Without this, ".." is resolved
+	 * by walk() device-walking then undomount()ing to the mounted-on
+	 * (unrestricted) side of a bind-replace -- the same escape closed for
+	 * absolute paths, reachable relatively via a granted shell. Scoped to
+	 * nodevs; '#' device paths and absolute paths are left untouched here.
+	 * If dot has no usable absolute cname we fall back to "/" + name, which is
+	 * conservative (collapses into the restricted root) rather than leaky.
+	 */
+	if(pg->nodevs && name[0] != '/' && name[0] != '#'){
+		int dnl, nl;
+		char *dn;
+
+		rlock(&pg->ns);
+		dot = pg->dot;
+		incref(&dot->r);
+		runlock(&pg->ns);
+		dname = dot->name;
+		incref(&dname->r);
+
+		if(waserror()){
+			cnameclose(dname);
+			cclose(dot);
+			nexterror();
+		}
+		dn = "/";
+		if(dname->s != nil && dname->s[0] == '/')
+			dn = dname->s;
+		dnl = strlen(dn);
+		nl = strlen(name);
+		canon = smalloc(dnl + 1 + nl + 1);
+		if(dnl > 0 && dn[dnl-1] == '/')
+			snprint(canon, dnl + 1 + nl + 1, "%s%s", dn, name);
+		else
+			snprint(canon, dnl + 1 + nl + 1, "%s/%s", dn, name);
+		poperror();
+
+		cnameclose(dname);
+		cclose(dot);
+		name = aname = canon;
+	}
 
 	/*
 	 * Find the starting off point (the current slash, the root of
@@ -1020,7 +1068,6 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * evaluate starting there.
 	 */
 	nomount = 0;
-	pg = up->env->pgrp;
 	switch(name[0]){
 	case '/':
 		rlock(&pg->ns);
@@ -1077,6 +1124,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		free(e.name);
 		free(e.elems);
 		free(e.off);
+		free(canon);
 //dumpmount();
 		nexterror();
 	}
@@ -1097,9 +1145,9 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * lexically keeps ".." inside the restricted namespace.
 	 *
 	 * Scoped to nodevs (set at every Veltro FORKNS site) so stock Inferno's
-	 * union-directory ".." semantics are unchanged. Absolute paths only:
-	 * relative ".." cannot be popped past the start without resolving against
-	 * dot, and dropping a leading ".." would wrongly widen access.
+	 * union-directory ".." semantics are unchanged. Relative paths reach here
+	 * already canonicalized to absolute (against dot, above), so this single
+	 * absolute collapse covers both; '#' device paths (nomount) are exempt.
 	 */
 	if(pg->nodevs && aname[0] == '/' && !nomount){
 		int rdi, wri;
@@ -1370,6 +1418,7 @@ if(c->umh != nil){
 	free(e.name);
 	free(e.elems);
 	free(e.off);
+	free(canon);
 
 	return c;
 }

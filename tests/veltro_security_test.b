@@ -1227,6 +1227,75 @@ escapeDotDotWorker(result: chan of string)
 }
 
 # ============================================================================
+# Test 20: EscapeRelDotDotTraversal
+# The relative counterpart of Test 19: a granted shell could chdir into an
+# allowed directory and use a *relative* ".." to escape, e.g.
+# (cd /dis/veltro; cat ../../CLAUDE.md). Under nodevs, namec canonicalizes
+# relative paths against the current directory before the lexical ".." collapse,
+# so relative escapes are clamped too — while legitimate in-namespace relative
+# access (including ".." to an allowed sibling) still works.
+# ============================================================================
+testEscapeRelDotDotTraversal(t: ref T)
+{
+	result := chan of string;
+	spawn escapeRelDotDotWorker(result);
+	report(t, <-result);
+}
+
+escapeRelDotDotWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	# Mirror a real agent: NODEVS is applied at every harness FORKNS site.
+	sys->pctl(Sys->NODEVS, nil);
+
+	# chdir into an allowed directory, as a shell would.
+	if(sys->chdir("/dis/veltro") < 0) {
+		result <-= sys->sprint("chdir /dis/veltro failed: %r");
+		return;
+	}
+
+	# The escape attempt: relative ".." back to the hidden source tree.
+	(e0, nil) := sys->stat("../../appl");
+	if(e0 >= 0) {
+		result <-= "relative ../../appl resolved — relative '..' escaped root allowlist";
+		return;
+	}
+	fd := sys->open("../../CLAUDE.md", Sys->OREAD);
+	if(fd != nil) {
+		result <-= "relative ../../CLAUDE.md opened — relative '..' escape not blocked";
+		return;
+	}
+
+	# Legitimate relative access must still work (no over-restriction):
+	# a sibling reachable via "..", a child dir, and a file in cwd.
+	(p1, nil) := sys->stat("../lib");
+	if(p1 < 0) {
+		result <-= "../lib (=> /dis/lib) should be accessible — fix over-restricted";
+		return;
+	}
+	(p2, nil) := sys->stat("nsconstruct.dis");
+	if(p2 < 0) {
+		result <-= "relative nsconstruct.dis should be accessible in cwd";
+		return;
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -1351,6 +1420,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("EscapeHostDeviceAttach", testEscapeHostDeviceAttach);
 	run("EscapeBindNoRecover", testEscapeBindNoRecover);
 	run("EscapeDotDotTraversal", testEscapeDotDotTraversal);
+	run("EscapeRelDotDotTraversal", testEscapeRelDotDotTraversal);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

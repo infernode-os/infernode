@@ -312,7 +312,11 @@ testStateFileJulia(t: ref T)
 	state += sys->sprint("zoomdepth %d\n", stackdepth);
 
 	t.assert(hassubstr(state, "type julia"), "julia state has julia type");
-	t.assert(hassubstr(state, "julia -0.4 0.6"), "julia state has julia params");
+	# Inferno's %g follows the Plan 9 convention and omits the leading
+	# zero (-0.4 -> "-.4", 0.6 -> ".6"), so the state line reads
+	# "julia -.4 .6". (StateFileMandelbrot's values all have integer
+	# parts, which is why only this case surfaced the mismatch — INFR-312.)
+	t.assert(hassubstr(state, "julia -.4 .6"), "julia state has julia params");
 	t.assert(hassubstr(state, "depth 3"), "julia state has depth 3");
 	t.assert(hassubstr(state, "fill 0"), "julia state has fill off");
 	t.assert(hassubstr(state, "computing 1"), "julia state has computing on");

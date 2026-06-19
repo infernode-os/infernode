@@ -284,8 +284,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Initialize display for renderer modules
 	display = Display.allocate(nil);
 	if(display == nil) {
+		# Headless host: no display device. Environmental, not a product
+		# failure — "skip:" gives the runner a clean SKIP (INFR-312).
 		sys->fprint(sys->fildes(2), "render_registry_test: cannot allocate display: %r\n");
-		raise "fail:no display";
+		raise "skip:no display";
 	}
 
 	# Load render registry

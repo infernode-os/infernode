@@ -1,7 +1,13 @@
 #!/dis/sh.dis
 load std
-luciuisrv
-sleep 1
+# luciuisrv serves /mnt/ui in the foreground, so background it (a bare
+# `luciuisrv` would block the script forever). Give it a moment to mount,
+# then skip cleanly if /mnt/ui never appears (INFR-312).
+luciuisrv &
+sleep 2
+if {! ftest -d /mnt/ui} {
+	raise 'skip:/mnt/ui not available (luciuisrv did not start)'
+}
 echo 'activity create Test' > /mnt/ui/ctl
 cat /mnt/ui/activity/current
 cat /mnt/ui/activity/0/label

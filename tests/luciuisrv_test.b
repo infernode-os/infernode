@@ -996,6 +996,73 @@ testConvInput(t: ref T)
 }
 
 # ============================================================================
+# testConvClear (INFR-131)
+#
+# `echo clear > conversation/ctl` must non-destructively wipe an activity's
+# accumulated messages while leaving the activity itself intact, and the
+# conversation must accept fresh messages starting at index 0 again. The
+# meta-agent (A0) can't be deleted, so this is the only way to reset its
+# conversation between eval-harness scenarios.
+# ============================================================================
+
+testConvClear(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	convctl := actbase() + "/conversation/ctl";
+
+	# Seed a couple of messages so there is something to clear.
+	writefile(convctl, "role=human text=ClearTest-one");
+	writefile(convctl, "role=veltro text=ClearTest-two");
+	(okpre, nil) := sys->stat(actbase() + "/conversation/0");
+	t.assert(okpre >= 0, "conversation/0 should exist before clear");
+
+	# Non-destructive clear.
+	n := writefile(convctl, "clear");
+	t.assert(n > 0, "write 'clear' to conversation/ctl should succeed");
+
+	# All messages gone: conversation/0 must no longer stat.
+	(okpost, nil) := sys->stat(actbase() + "/conversation/0");
+	t.assert(okpost < 0, "conversation/0 should be gone after clear");
+
+	# The activity itself survives (clear != delete).
+	(okact, nil) := sys->stat(actbase());
+	t.assert(okact >= 0, "activity should still exist after clear");
+
+	# Indices reset: a new message lands back at conversation/0.
+	n2 := writefile(convctl, "role=human text=AfterClear");
+	t.assert(n2 > 0, "write after clear should succeed");
+	msg := readfile(actbase() + "/conversation/0");
+	t.assert(msg != nil && hassubstr(msg, "AfterClear"),
+		"new message should start at index 0 after clear");
+}
+
+# ============================================================================
+# testConvCtlBadWrite (INFR-131)
+#
+# A rejected conversation/ctl write must fail at the 9P level (write returns
+# < 0). The original bug was not that the write succeeded, but that sh's `>`
+# redirect swallowed the real error so callers assumed success. This pins the
+# protocol-level contract that a malformed ctl write is a genuine failure.
+# ============================================================================
+
+testConvCtlBadWrite(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	convctl := actbase() + "/conversation/ctl";
+	# A message with no role is rejected by convctl ("missing role").
+	n := writefile(convctl, "text=message with no role");
+	t.assert(n < 0, "ctl write with missing role should fail at the 9P level");
+}
+
+# ============================================================================
 # Test 20: testContextResourceUpdate
 #
 # Update a resource's status and verify the change persists.
@@ -1603,6 +1670,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ConvUpdateEvent", testConvUpdateEvent);
 	run("ConvMultipleMessages", testMultipleMessages);
 	run("ConvInput", testConvInput);
+	run("ConvCtlBadWrite", testConvCtlBadWrite);
+	run("ConvClear", testConvClear);
 
 	# Presentation tests
 	run("PresCreate", testPresentationCreate);

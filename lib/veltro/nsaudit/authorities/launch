@@ -1,0 +1,5 @@
+tool=launch
+	description='Launch a /dis/wm GUI app in the presentation zone'
+	authorities='spawns_proc execs_code sends_ui'
+	irreversible='spawns_proc'
+	notes='Starts GUI programs; executes code in a new process.'

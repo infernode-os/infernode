@@ -1,0 +1,4 @@
+tool=diff
+	description='Unified diff between two files'
+	authorities='reads_fs'
+	notes='Pure Limbo; reads two files, no external dependency.'

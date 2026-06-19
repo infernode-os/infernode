@@ -13,6 +13,13 @@ cat /mnt/factotum/proto
 
 # Provision API key (host-side conditional logic)
 factotumkey=`{os sh -c 'k=${ANTHROPIC_API_KEY:-$(plutil -extract EnvironmentVariables.ANTHROPIC_API_KEY raw ~/Library/LaunchAgents/com.nervsystems.llm9p.plist 2>/dev/null)}; if [ -n "$k" ]; then echo "key proto=pass service=anthropic user=apikey !password=$k"; fi'}
+# Environmental skip-guard (INFR-312): this is a live integration test —
+# without an API key there is no backend for llmsrv to serve, so the
+# session/ask reads below fail. Skip cleanly rather than report a false
+# failure on a bare host / CI without secrets.
+if {~ $#factotumkey 0} {
+	raise 'skip:no ANTHROPIC_API_KEY in environment (live llmsrv backend unavailable)'
+}
 echo $factotumkey > /mnt/factotum/ctl >[2] /dev/null
 echo 'PASS: API key provisioned'
 

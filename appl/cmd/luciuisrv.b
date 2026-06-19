@@ -471,8 +471,16 @@ addmessage(a: ref Activity, role, text, using, dtype, title, progress, options: 
 	if(a.nmsg >= MAX_MESSAGES)
 		return -1;
 	if(a.nmsg >= len a.messages) {
-		nm := array[len a.messages * 2] of ref ConvMsg;
-		nm[0:] = a.messages[0:a.nmsg];
+		# Double, but seed from empty when the array was cleared to nil
+		# (conversation/ctl "clear", INFR-131) — otherwise len*2 stays 0
+		# and the index below runs off a zero-length array. Skip the copy
+		# when there is nothing to carry over (nil array can't be sliced).
+		newcap := len a.messages * 2;
+		if(newcap == 0)
+			newcap = 32;	# initial capacity, matches activity creation
+		nm := array[newcap] of ref ConvMsg;
+		if(a.nmsg > 0)
+			nm[0:] = a.messages[0:a.nmsg];
 		a.messages = nm;
 	}
 	idx := a.nmsg;
@@ -1154,6 +1162,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		}
 		err := convctl(a, data);
 		if(err != nil) {
+			# Log rejected ctl writes: a 9P write error here is otherwise
+			# easy to miss because sh's `> ` redirect swallows it, so a bad
+			# write parses as a no-op and the caller assumes success
+			# (INFR-131). The operator at least sees the cause in the log.
+			sys->fprint(stderr, "luciuisrv: convctl rejected %q: %s\n", data, err);
 			srv.reply(ref Rmsg.Error(m.tag, err));
 			break;
 		}
@@ -1347,6 +1360,21 @@ globalctl(data: string): string
 
 convctl(a: ref Activity, data: string): string
 {
+	# Non-destructive reset: clear an activity's accumulated conversation
+	# messages without deleting the activity itself. Needed so the meta-agent
+	# (A0, which can't be deleted) can be reset between scenarios — e.g. the
+	# eval harness's cross-scenario state isolation (INFR-131). Mirrors the
+	# `activity delete` reset (messages = nil; nmsg = 0), minus the deletion.
+	# The "conversation clear" event lets watchers (lucibridge, taskboard)
+	# reset their message indices.
+	if(data == "clear") {
+		a.messages = nil;
+		a.nmsg = 0;
+		vers++;
+		pushevent(a.id, "conversation clear");
+		return nil;
+	}
+
 	# In-place update of an existing message (for streaming token updates
 	# and dialogue tile field changes like progress or clearing options).
 	# Format: "update idx=N text=..." or "update idx=N progress=50"

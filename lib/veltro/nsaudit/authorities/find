@@ -1,0 +1,4 @@
+tool=find
+	description='Find files by glob pattern'
+	authorities='reads_fs'
+	notes='Recursive directory walk, read-only.'

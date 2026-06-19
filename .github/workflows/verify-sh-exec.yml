@@ -1,0 +1,27 @@
+name: Verify sh-exec
+
+# Universal backstop for the "non-executable shell test" bug class
+# (INFR-312 history): the in-emu test runner execs each shell test via
+# sh->system(), so a tests/**/*.sh committed 100644 fails instantly as
+# "file does not exist" and never runs — silently dropping coverage.
+#
+# This job runs in well under a second and blocks merge. It catches
+# contributors who add a shell test without the executable bit (the most
+# common way the bug slips in, since `git add` of a 0644 file keeps it
+# non-exec).
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Verify shell tests are executable
+        run: ./tools/verify-sh-exec.sh

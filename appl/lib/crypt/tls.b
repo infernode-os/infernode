@@ -1603,6 +1603,45 @@ verifycertverify(cs: ref ConnState, data: array of byte, certs: list of array of
 	return verifycertverify_hash(cs, data, certs, hashcurrent(cs));
 }
 
+# certverify_fail_context — wrap a CertificateVerify failure with the
+# context users actually need to diagnose it: the negotiated version /
+# suite, the expected hostname, and the leaf cert's subject CN. When a
+# TLS-intercepting middlebox (corporate proxy, antivirus, captive portal)
+# replaces the cert chain, the subject CN here will differ from the
+# servername we asked for — that's the smoking gun. Returning a generic
+# "ECDSA verification failed" without this context was the GH #230
+# experience: identical message regardless of root cause.
+certverify_fail_context(cs: ref ConnState, certs: list of array of byte,
+	what: string): string
+{
+	leaf_cn := "<no leaf cert>";
+	if(certs != nil) {
+		(serr, signed) := x509->Signed.decode(hd certs);
+		if(serr == nil) {
+			(cerr, cert) := x509->Certificate.decode(signed.tobe_signed);
+			if(cerr == nil && cert.subject != nil) {
+				# Mirror of verifyhostname's CN extraction (see CN
+				# fallback there); fields are cert.subject.rd_names ->
+				# RDName.avas -> AVA.{oid,value}.
+				cn_oid := ref x509->objIdTab[x509->id_at_commonName];
+				for(rdl := cert.subject.rd_names; rdl != nil; rdl = tl rdl) {
+					rdn := hd rdl;
+					for(al := rdn.avas; al != nil; al = tl al) {
+						ava := hd al;
+						if(ava.oid != nil && oideq(ava.oid, cn_oid))
+							leaf_cn = ava.value;
+					}
+				}
+			}
+		}
+	}
+	hint := "";
+	if(cs.servername != "" && leaf_cn != "<no leaf cert>" && leaf_cn != cs.servername)
+		hint = " (CN mismatch suggests TLS-intercepting proxy)";
+	return sys->sprint("tls: CertificateVerify: %s [host=%s leaf-cn=%s version=0x%04x suite=0x%04x]%s",
+		what, cs.servername, leaf_cn, cs.version, cs.suite, hint);
+}
+
 verifycertverify_hash(cs: ref ConnState, data: array of byte, certs: list of array of byte,
 	transcript_hash: array of byte): string
 {
@@ -1671,7 +1710,13 @@ verifycertverify_hash(cs: ref ConnState, data: array of byte, certs: list of arr
 		if(rawsig == nil)
 			return "tls: CertificateVerify: invalid ECDSA signature";
 		if(!keyring->p256_ecdsa_verify(ecpt, digest, rawsig))
-			return "tls: CertificateVerify: ECDSA verification failed";
+			# Include diagnostic context. When this fails on a network
+			# where openssl s_client succeeds (test directly in /tests/),
+			# the most likely cause is a TLS-intercepting middlebox
+			# (corporate proxy, antivirus, captive portal) presenting a
+			# substitute cert chain. See INFR-309 thread for analysis.
+			return certverify_fail_context(cs, certs,
+				"ECDSA-P256 verification failed");
 
 	ECDSA_SECP384R1_SHA384 =>
 		# ECDSA with P-384 and SHA-384 (common for Let's Encrypt/DigiCert ECDSA certs)
@@ -1687,7 +1732,8 @@ verifycertverify_hash(cs: ref ConnState, data: array of byte, certs: list of arr
 		if(rawsig384 == nil)
 			return "tls: CertificateVerify: invalid ECDSA P-384 signature";
 		if(!keyring->p384_ecdsa_verify(ecbytes384, digest, rawsig384))
-			return "tls: CertificateVerify: ECDSA P-384 verification failed";
+			return certverify_fail_context(cs, certs,
+				"ECDSA-P384 verification failed");
 
 	* =>
 		return sys->sprint("tls: unsupported CertificateVerify sig_alg 0x%04x", sig_alg);

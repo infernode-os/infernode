@@ -265,9 +265,12 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->bind("#Z", "/n/opus", Sys->MREPL|Sys->MCREATE);
 	if(!opus_mounted()) {
 		# Some builds don't compile /dev/opus (no -DHAVE_OPUS); skip.
+		# "skip:" is the runner's recognized suite-skip token; the old
+		# "fail:skip-suite" matched the runner's "fail:*" arm and was
+		# miscounted as a FAIL on hosts without libopus (INFR-312).
 		sys->fprint(sys->fildes(2),
 			"opus_test: /n/opus not mounted — devopus not built with libopus, skipping\n");
-		raise "fail:skip-suite";
+		raise "skip:devopus not built (no /n/opus)";
 	}
 
 	for(a := args; a != nil; a = tl a) {

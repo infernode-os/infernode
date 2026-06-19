@@ -247,8 +247,11 @@ init(nil: ref Draw->Context, args: list of string)
 
 	display = draw->Display.allocate(nil);
 	if(display == nil) {
+		# Headless host: no display device. This is environmental, not a
+		# product failure — raise a "skip:" token so the runner records a
+		# clean SKIP rather than a FAIL (INFR-312).
 		sys->fprint(sys->fildes(2), "cannot open display: %r\n");
-		raise "fail:no display";
+		raise "skip:no display";
 	}
 
 	remap->init(display);

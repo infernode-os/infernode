@@ -1,0 +1,4 @@
+tool=search
+	description='Search file contents by regex'
+	authorities='reads_fs'
+	notes='Recursive content search, read-only.'

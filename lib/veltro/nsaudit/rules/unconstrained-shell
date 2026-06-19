@@ -1,0 +1,5 @@
+rule=UNCONSTRAINED_SHELL
+	severity=high
+	require='has_tool_exec shellcmds_empty'
+	message='exec is granted with no caps.shellcmds allowlist. The spawned shell can run any command reachable in the agent namespace; nothing narrows it.'
+	fix='set caps.shellcmds to the minimal command set, or remove exec'

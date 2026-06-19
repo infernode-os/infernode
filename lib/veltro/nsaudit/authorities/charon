@@ -1,0 +1,4 @@
+tool=charon
+	description='Control the Charon web browser via /tmp/veltro/browser/'
+	authorities='dials_net reads_fs writes_fs'
+	notes='Drives a full browser that navigates to arbitrary URLs (dials_net). Control files live under /tmp/veltro.'

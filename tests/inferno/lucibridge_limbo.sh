@@ -28,7 +28,15 @@
 #       → assistant returned Limbo source to user
 
 load std
-mount -ac {mntgen} /n
+# Environmental skip-guard (INFR-312): this end-to-end test needs a full
+# InferNode runtime — an mntgen-backed /n, a trfs host overlay, and a
+# live serve-llm. On a bare host there is no /n mountpoint, so this first
+# mntgen mount fails and the trfs/overlay setup below would abort. Wrap
+# it in `if {! ...}` so the failure is caught as status and we skip
+# cleanly instead of reporting a false failure.
+if {! mount -ac {mntgen} /n} {
+	raise 'skip:no /n namespace (mntgen) — needs a full InferNode runtime/dev-bundle'
+}
 bind -a '#I' /net
 ndb/cs
 
@@ -56,7 +64,14 @@ if {~ $llmdial ''} {
 	llmdial=tcp!10.243.169.78!5640
 }
 echo MOUNTING $llmdial
-mount -A $llmdial /mnt/llm
+# Environmental skip-guard (INFR-312): this end-to-end test needs a live
+# serve-llm reachable at $llmdial. On a bare host the dial is refused;
+# the mount runs inside `if {! ...}` so its failure is caught as status
+# rather than aborting the script, and the orchestrator→/tool/limbo→
+# devstral flow below is skipped cleanly instead of reported as a failure.
+if {! mount -A $llmdial /mnt/llm} {
+	raise 'skip:no serve-llm reachable at '^$llmdial^' (configure .infernode overlay / start serve-llm)'
+}
 
 echo START_TOOLS9P
 /dis/veltro/tools9p.dis -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo &

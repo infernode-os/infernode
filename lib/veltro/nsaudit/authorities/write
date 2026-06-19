@@ -1,0 +1,5 @@
+tool=write
+	description='Create or overwrite a file'
+	authorities='writes_fs'
+	irreversible='writes_fs'
+	notes='Writes file content; durable on the host unless cowfs is active or the path is under /tmp/veltro.'

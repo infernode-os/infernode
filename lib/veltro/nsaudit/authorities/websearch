@@ -1,0 +1,4 @@
+tool=websearch
+	description='Web search via the Brave Search API'
+	authorities='dials_net'
+	notes='Dials the Brave API over TLS; retrieves its API key from factotum (proto=pass service=brave).'

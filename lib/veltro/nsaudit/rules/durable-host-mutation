@@ -1,0 +1,5 @@
+rule=DURABLE_HOST_MUTATION
+	severity=medium
+	require='writes_fs_durable'
+	message='Caps grant writes to durable host paths (not /tmp/veltro, not cowfs-staged). Changes persist on the host with no revert path.'
+	fix='enable cowfs (actid >= 0) for these paths, or narrow caps.paths to /tmp/veltro'

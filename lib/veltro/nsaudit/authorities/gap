@@ -1,0 +1,4 @@
+tool=gap
+	description='Manage context-zone knowledge gaps via /mnt/ui'
+	authorities='sends_ui writes_fs'
+	notes='Writes gap entries to the Lucifer context zone.'

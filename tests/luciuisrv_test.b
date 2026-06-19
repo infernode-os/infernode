@@ -43,6 +43,12 @@ SRCFILE:	con "/tests/luciuisrv_test.b";
 TESTMNT:	con "/tmp/luciuisrv_test";
 SRVPATH:	con "/dis/luciuisrv.dis";
 
+# Number of simulated app subscribers for the fan-out test. In the real
+# desktop, settings / matrix / editor / shell / keyring / wallet / about /
+# fractals / ftree each hold an open fd on /mnt/ui/event; one theme switch
+# must reach all of them. NSUBS picks a representative handful.
+NSUBS:		con 5;
+
 passed := 0;
 failed := 0;
 skipped := 0;
@@ -996,6 +1002,73 @@ testConvInput(t: ref T)
 }
 
 # ============================================================================
+# testConvClear (INFR-131)
+#
+# `echo clear > conversation/ctl` must non-destructively wipe an activity's
+# accumulated messages while leaving the activity itself intact, and the
+# conversation must accept fresh messages starting at index 0 again. The
+# meta-agent (A0) can't be deleted, so this is the only way to reset its
+# conversation between eval-harness scenarios.
+# ============================================================================
+
+testConvClear(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	convctl := actbase() + "/conversation/ctl";
+
+	# Seed a couple of messages so there is something to clear.
+	writefile(convctl, "role=human text=ClearTest-one");
+	writefile(convctl, "role=veltro text=ClearTest-two");
+	(okpre, nil) := sys->stat(actbase() + "/conversation/0");
+	t.assert(okpre >= 0, "conversation/0 should exist before clear");
+
+	# Non-destructive clear.
+	n := writefile(convctl, "clear");
+	t.assert(n > 0, "write 'clear' to conversation/ctl should succeed");
+
+	# All messages gone: conversation/0 must no longer stat.
+	(okpost, nil) := sys->stat(actbase() + "/conversation/0");
+	t.assert(okpost < 0, "conversation/0 should be gone after clear");
+
+	# The activity itself survives (clear != delete).
+	(okact, nil) := sys->stat(actbase());
+	t.assert(okact >= 0, "activity should still exist after clear");
+
+	# Indices reset: a new message lands back at conversation/0.
+	n2 := writefile(convctl, "role=human text=AfterClear");
+	t.assert(n2 > 0, "write after clear should succeed");
+	msg := readfile(actbase() + "/conversation/0");
+	t.assert(msg != nil && hassubstr(msg, "AfterClear"),
+		"new message should start at index 0 after clear");
+}
+
+# ============================================================================
+# testConvCtlBadWrite (INFR-131)
+#
+# A rejected conversation/ctl write must fail at the 9P level (write returns
+# < 0). The original bug was not that the write succeeded, but that sh's `>`
+# redirect swallowed the real error so callers assumed success. This pins the
+# protocol-level contract that a malformed ctl write is a genuine failure.
+# ============================================================================
+
+testConvCtlBadWrite(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	convctl := actbase() + "/conversation/ctl";
+	# A message with no role is rejected by convctl ("missing role").
+	n := writefile(convctl, "text=message with no role");
+	t.assert(n < 0, "ctl write with missing role should fail at the 9P level");
+}
+
+# ============================================================================
 # Test 20: testContextResourceUpdate
 #
 # Update a resource's status and verify the change persists.
@@ -1568,6 +1641,105 @@ fdreader(fd: ref Sys->FD, buf: array of byte, ch: chan of (int, string))
 }
 
 # ============================================================================
+# Test: ThemeBroadcastAllSubs
+#
+# Regression: a single theme switch must reach EVERY subscribed app at once.
+#
+# In the running desktop, every wm app's themelistener holds its own open fd
+# on /mnt/ui/event and blocks reading it. A theme change in Settings writes
+# ONE "theme <name>" to /mnt/ui/ctl; luciuisrv's pushglobalevent must fan it
+# out to ALL of those subscribers so the whole UI re-themes together.
+#
+# The rest of the suite only ever drives a SINGLE subscriber (ThemeEventStreaming,
+# BufferedEventOrder), so a fan-out break — one app updates, the rest don't,
+# i.e. the user-visible "theme stopped switching across all apps" — would sail
+# through green. This stands up NSUBS concurrent long-lived subscribers, each
+# pending on a blocking read exactly like a real app, then asserts one ctl
+# write is delivered in full to every one of them.
+#
+# (This guards the client-fan-out contract. The companion class of theme bug —
+# apps compiled against a stale mount path so they never open the right event
+# file at all — is caught by the dis-freshness verifier, not here: a test that
+# controls the mount point via -m cannot observe an app's hardcoded path.)
+# ============================================================================
+
+# One simulated app themelistener: open the global event file, announce it is
+# registered, then block on a single read and report what arrives.
+themeSubReader(idx: int, evpath: string, readyc: chan of int,
+		resultc: chan of (int, string))
+{
+	fd := sys->open(evpath, Sys->OREAD);
+	if(fd == nil) {
+		readyc <-= idx;
+		resultc <-= (idx, "error:open");
+		return;
+	}
+	readyc <-= idx;			# fd open + EventSub registered
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);	# blocks until a global event fires
+	if(n <= 0)
+		resultc <-= (idx, "error:eof");
+	else
+		resultc <-= (idx, string buf[0:n]);
+	fd = nil;
+}
+
+testThemeBroadcastAllSubs(t: ref T)
+{
+	evpath := TESTMNT + "/event";
+	ctlpath := TESTMNT + "/ctl";
+
+	drainall(evpath);
+
+	readyc := chan of int;
+	resultc := chan of (int, string);
+
+	# Stand up NSUBS subscribers, each blocking on a read — the steady
+	# state of NSUBS running apps with live themelisteners.
+	for(i := 0; i < NSUBS; i++)
+		spawn themeSubReader(i, evpath, readyc, resultc);
+
+	# Wait until every subscriber has opened and registered its fd.
+	for(i = 0; i < NSUBS; i++)
+		<-readyc;
+
+	# Let the readers reach the blocking read so the write below finds
+	# NSUBS pending readers rather than racing ahead of them.
+	sys->sleep(300);
+
+	# ONE theme switch, exactly as Settings' applytheme does.
+	n := writefile(ctlpath, "theme halo");
+	t.assert(n > 0, "single 'theme halo' write to ctl should succeed");
+
+	# Gather every subscriber's result under one overall timeout.
+	expected := "theme halo\n";
+	got := array[NSUBS] of { * => "(none)" };
+	toch := chan[1] of int;
+	spawn timerwait(toch, 5000);
+	ndone := 0;
+	timedout := 0;
+	while(ndone < NSUBS && !timedout) {
+		alt {
+		(idx, ev) := <-resultc =>
+			if(idx >= 0 && idx < NSUBS)
+				got[idx] = ev;
+			ndone++;
+		<-toch =>
+			timedout = 1;
+		}
+	}
+
+	t.asserteq(ndone, NSUBS,
+		sys->sprint("all %d subscribers must receive the theme event (got %d) — "+
+			"a shortfall is the 'theme stops switching across apps' regression",
+			NSUBS, ndone));
+	for(i = 0; i < NSUBS; i++)
+		t.assertseq(got[i], expected,
+			sys->sprint("subscriber %d should receive %#q in full, got %#q",
+				i, expected, got[i]));
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -1603,6 +1775,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ConvUpdateEvent", testConvUpdateEvent);
 	run("ConvMultipleMessages", testMultipleMessages);
 	run("ConvInput", testConvInput);
+	run("ConvCtlBadWrite", testConvCtlBadWrite);
+	run("ConvClear", testConvClear);
 
 	# Presentation tests
 	run("PresCreate", testPresentationCreate);
@@ -1639,6 +1813,12 @@ init(nil: ref Draw->Context, args: list of string)
 	# FIFO order (earlier qrev-on-every-read corrupted order from
 	# the second event onward).
 	run("BufferedEventOrder", testBufferedEventOrder);
+
+	# Multi-subscriber fan-out: one theme switch must reach EVERY subscribed
+	# app at once. The single-subscriber theme tests above can't see an
+	# "all apps" fan-out break — the exact shape of the post-/mnt/ui-move
+	# regression where the desktop stopped re-theming.
+	run("ThemeBroadcastAllSubs", testThemeBroadcastAllSubs);
 
 	teardown();
 

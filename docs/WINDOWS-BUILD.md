@@ -185,6 +185,23 @@ The GUI build script can't locate SDL3. Make sure you either:
 
 The SDL3 GUI build depends on libraries built by the headless build script. Run `build-windows-amd64.ps1` before `build-windows-sdl3.ps1`.
 
+## Known limitations
+
+### Anthropic API requires ECDSA-capable TLS (not yet supported)
+
+The InferNode TLS stack (`appl/lib/crypt/ssl3.b`) implements only the RSA and DHE/DSS cipher-suite families. Modern endpoints like `api.anthropic.com` present **ECDSA certificates** signed with ECDSA, served from cipher suites such as `ECDHE-ECDSA-AES128-GCM-SHA256`. The handshake fails with:
+
+```
+Error: anthropic: TLS: tls: CertificateVerify: ECDSA verification failed
+```
+
+Until ECDSA support is added (it requires both the named-curve primitives in `libsec` and the ECDHE/ECDSA handshake paths in `ssl3.b`), the Anthropic API backend is **not usable on InferNode-only TLS**. Workarounds:
+
+- **Use the Ollama backend.** Run a local model. Lucibridge talks to `http://localhost:11434` over plain HTTP — no TLS needed.
+- Configure another LLM provider that still serves RSA cipher suites (rare and shrinking).
+
+This affects every platform, not just Windows.
+
 ## Technical Notes
 
 - Windows supports the AMD64 **JIT compiler** (`-c1`). JIT achieves 5.7x overall speedup and passes all 181 correctness tests.

@@ -35,6 +35,7 @@ include "msgsrc.m";
 EmailSrc: module {
 	init:    fn(config: string): string;
 	name:    fn(): string;
+	capabilities: fn(): int;
 	status:  fn(): string;
 	close:   fn(): string;
 	watch:   fn(updates: chan of ref MsgSrc->Notification, stop: chan of int): string;
@@ -110,6 +111,13 @@ init(config: string): string
 name(): string
 {
 	return "email";
+}
+
+# Email is a full conversational channel: history, fetch, send, reply, flags.
+capabilities(): int
+{
+	return MsgSrc->CAP_WATCH | MsgSrc->CAP_ENUMERATE | MsgSrc->CAP_FETCH |
+		MsgSrc->CAP_SEND | MsgSrc->CAP_REPLY | MsgSrc->CAP_SETFLAG;
 }
 
 status(): string

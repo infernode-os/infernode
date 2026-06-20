@@ -417,6 +417,12 @@ handlectl(data: string): string
 		if(toks == nil || tl toks == nil)
 			return "usage: send <srcname> <recipient>\\n<body>";
 		return dosend(hd toks, hd tl toks, body);
+	"flag" =>
+		# flag <srcname> <origid> <word>
+		# Generic flag/setflag across sources. Protocol-agnostic: sources
+		# with no flag semantics (SMS) treat it as a no-op rather than
+		# erroring. See docs/MESSAGE-INTEGRATION.md.
+		return doflag(toks);
 	* =>
 		return "unknown command: " + cmd;
 	}
@@ -489,6 +495,38 @@ dosend(srcname, recipient, body: string): string
 		}
 	}
 	return "source not registered: " + srcname;
+}
+
+# flag <srcname> <origid> <word> — map a friendly flag word onto
+# MsgSrc.setflag. "seen" marks read (clears the unread bit). Sources with no
+# flag semantics (SMS) implement setflag as an idempotent no-op.
+doflag(args: list of string): string
+{
+	if(args == nil || tl args == nil || tl tl args == nil)
+		return "usage: flag <src> <origid> <seen|unseen|flagged|unflagged|urgent|draft>";
+	srcname := hd args;
+	origid := hd tl args;
+	word := str->tolower(hd tl tl args);
+
+	flag := 0;
+	add := 0;
+	case word {
+	"seen" =>      flag = MsgSrc->FUNREAD;  add = 0;	# read = clear unread
+	"unseen" =>    flag = MsgSrc->FUNREAD;  add = 1;
+	"flagged" =>   flag = MsgSrc->FFLAGGED; add = 1;
+	"unflagged" => flag = MsgSrc->FFLAGGED; add = 0;
+	"urgent" =>    flag = MsgSrc->FURGENT;  add = 1;
+	"unurgent" =>  flag = MsgSrc->FURGENT;  add = 0;
+	"draft" =>     flag = MsgSrc->FDRAFT;   add = 1;
+	"undraft" =>   flag = MsgSrc->FDRAFT;   add = 0;
+	* =>
+		return "flag: unknown word '" + word + "' (want seen|unseen|flagged|unflagged|urgent|draft)";
+	}
+
+	for(sl := sources; sl != nil; sl = tl sl)
+		if((hd sl).name == srcname)
+			return (hd sl).mod->setflag(origid, flag, add);
+	return "flag: no source: " + srcname;
 }
 
 doregister(args: list of string): string
@@ -709,9 +747,25 @@ genstatus(): string
 		if(result != "")
 			result += "\n";
 		st := src.mod->status();
-		result += src.name + ": " + st;
+		result += src.name + ": " + st + " [caps: " + capwords(src.mod->capabilities()) + "]";
 	}
 	return result;
+}
+
+# Render a MsgSrc capability bitmask as a space-separated word list, for
+# /mnt/msg/status (and the Settings Messaging panel) to display.
+capwords(caps: int): string
+{
+	w := "";
+	if(caps & MsgSrc->CAP_WATCH)     w += "watch ";
+	if(caps & MsgSrc->CAP_ENUMERATE) w += "enumerate ";
+	if(caps & MsgSrc->CAP_FETCH)     w += "fetch ";
+	if(caps & MsgSrc->CAP_SEND)      w += "send ";
+	if(caps & MsgSrc->CAP_REPLY)     w += "reply ";
+	if(caps & MsgSrc->CAP_SETFLAG)   w += "setflag ";
+	if(w == "")
+		return "none";
+	return w[:len w - 1];	# trim trailing space
 }
 
 # === Helpers ===

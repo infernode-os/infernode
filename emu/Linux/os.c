@@ -143,8 +143,26 @@ cleanexit(int x)
 	if(dflag == 0)
 		termrestore();
 
-	kill(0, SIGKILL);
-	exit(0);
+	/*
+	 * Terminate with a clean exit status.
+	 *
+	 * Do NOT kill(0, SIGKILL): libinit() makes emu its own process-group
+	 * leader (setsid), so a group-wide SIGKILL also kills this thread,
+	 * and the host then sees exit status 137 instead of a clean exit.
+	 * That broke any caller checking emu's exit code (e.g. the host test
+	 * harness).  kill(0, SIGKILL) is only needed for the clone-based proc
+	 * model (os-clone.c), where procs are separate processes.
+	 *
+	 * Use _exit(), not exit(): emu's Inferno procs are pthreads, and
+	 * cleanexit() runs both from a signal handler (SIGINT/SIGTERM) and
+	 * from arbitrary interp threads (dis.c).  exit() is neither
+	 * async-signal-safe nor safe to call while other pthreads hold the
+	 * locks it needs to flush stdio / run atexit handlers, and it
+	 * deadlocks at shutdown.  emu prints via raw write(2), so there are
+	 * no buffered streams to lose.  _exit() ends the whole process (all
+	 * pthreads) immediately with status 0.
+	 */
+	_exit(0);
 }
 
 void

@@ -150,7 +150,8 @@ msgfieldfromname(s: string): int
 # Folders that disappear on sync get the .name cleared but their slot
 # is never reused, keeping qid paths stable for the process lifetime.
 Folder: adt {
-	name:     string;	# empty if folder no longer exists
+	name:     string;	# IMAP name; empty if folder no longer exists
+	dispname: string;	# 9P-safe entry name (IMAP '/' delimiter shown as ':')
 };
 
 # Per-message wrapper. Envelope + flags + sequence come from the
@@ -380,6 +381,32 @@ findfolder(a: ref Account, name: string): (int, ref Folder)
 	return (-1, nil);
 }
 
+# Look up a folder by its 9P-safe display name (what boxes/ exposes). Walk
+# and the select ctl resolve client-supplied names this way; the real IMAP
+# name (Folder.name) is then used for every IMAP operation.
+findfolderbydisp(a: ref Account, dispname: string): (int, ref Folder)
+{
+	for(i := 0; i < a.nfolders; i++)
+		if(a.folders[i] != nil && a.folders[i].dispname == dispname)
+			return (i, a.folders[i]);
+	return (-1, nil);
+}
+
+# Map an IMAP folder name to a 9P-safe directory-entry name. 9P forbids '/'
+# in a name; Gmail uses '/' as its hierarchy delimiter (e.g.
+# "[Gmail]/All Mail"), which made `ls boxes` fail with "bad character in
+# file name". We show '/' as ':'. The mapping need not be reversible — the
+# real IMAP name is kept in Folder.name and lookups match the stored
+# dispname.
+safename(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] == '/')
+			r[i] = ':';
+	return r;
+}
+
 # Append a folder slot, growing the array if needed.
 appendfolder(a: ref Account, name: string)
 {
@@ -388,7 +415,7 @@ appendfolder(a: ref Account, name: string)
 		ns[0:] = a.folders[0:a.nfolders];
 		a.folders = ns;
 	}
-	a.folders[a.nfolders++] = ref Folder(name);
+	a.folders[a.nfolders++] = ref Folder(name, safename(name));
 }
 
 # Reconcile cached folder list against a fresh server list. Names not
@@ -396,12 +423,18 @@ appendfolder(a: ref Account, name: string)
 # names are appended.
 mergefolders(a: ref Account, fresh: list of string)
 {
-	# Mark which existing slots are still present.
-	seen := array[a.nfolders] of int;
+	# Snapshot the slot count BEFORE appending. appendfolder() grows
+	# a.nfolders, and both the match scan and the stale-removal pass must
+	# only consider folders that existed prior to this merge — newly
+	# appended ones are present by definition. Indexing `seen` (length
+	# orign) by the grown a.nfolders was an array-bounds crash on the first
+	# connect, where orign is 0 but a server like Gmail adds ~13 folders.
+	orign := a.nfolders;
+	seen := array[orign] of int;
 	for(l := fresh; l != nil; l = tl l) {
 		name := hd l;
 		found := 0;
-		for(i := 0; i < a.nfolders; i++) {
+		for(i := 0; i < orign; i++) {
 			if(a.folders[i] != nil && a.folders[i].name == name) {
 				seen[i] = 1;
 				found = 1;
@@ -411,7 +444,7 @@ mergefolders(a: ref Account, fresh: list of string)
 		if(!found)
 			appendfolder(a, name);
 	}
-	for(i := 0; i < a.nfolders; i++)
+	for(i := 0; i < orign; i++)
 		if(a.folders[i] != nil && !seen[i])
 			a.folders[i] = nil;
 }
@@ -531,7 +564,7 @@ navigator(navops: chan of ref Navop)
 						n.reply <-= (nil, Enotfound);
 						continue;
 					}
-					(bidx, f) := findfolder(accounts[aidx], n.name);
+					(bidx, f) := findfolderbydisp(accounts[aidx], n.name);
 					if(f == nil) {
 						n.reply <-= (nil, Enotfound);
 						continue;
@@ -787,7 +820,7 @@ dirgen(path: big): (ref Sys->Dir, string)
 		if(bidx >= a.nfolders || a.folders[bidx] == nil)
 			return (nil, Enotfound);
 		return (mkdir(Sys->Qid(path, vers, Sys->QTDIR),
-			a.folders[bidx].name, 8r555), nil);
+			a.folders[bidx].dispname, 8r555), nil);
 
 	Qboxctl =>
 		aidx := ACCT(path);
@@ -1539,6 +1572,12 @@ handleacctctl(a: ref Account, cmd: string): string
 		box := stripnl(rest);
 		if(box == "")
 			return "select: mailbox required";
+		# Accept the 9P display name (what boxes/ shows, with ':' for the
+		# IMAP '/' delimiter) or the raw IMAP name. Map the former back to
+		# the real IMAP name before issuing SELECT.
+		(nil, bf) := findfolderbydisp(a, box);
+		if(bf != nil)
+			box = bf.name;
 		return doselect(a, box);
 	"sync" =>
 		return dosync(a);

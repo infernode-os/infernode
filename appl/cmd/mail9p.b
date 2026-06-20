@@ -1088,47 +1088,82 @@ doconnect(rest: string): string
 	if(idx < 0)
 		return "connect: account already exists";
 
-	(im, lerr) := loadimap();
-	if(im == nil) {
-		accounts[idx] = nil;
-		vers++;
-		return "connect: " + lerr;
+	# `connect` registers the account; bringing it online is a separate,
+	# best-effort step. A missing credential or an unreachable server is
+	# NOT a connect error — the account stays registered and `disconnected`
+	# so it appears under /accounts immediately and can be brought online
+	# later via `sync` (or automatically once factotum has the key). This
+	# is the register/connect split; see tryonline().
+	tryonline(a);
+	vers++;
+	return nil;
+}
+
+# Bring an account online (best effort): load the Imap module if needed,
+# open the IMAP connection (credentials come from factotum), then populate
+# the folder list and SELECT INBOX so the account is immediately usable.
+#
+# Returns nil if the account is online (or already was). Returns an error
+# string if it could not be brought online — e.g. "no credentials" before
+# any key is loaded, or an unreachable server. On failure the account is
+# left registered but disconnected, and the Imap instance is dropped so a
+# later retry starts clean. Callers wanting graceful degradation simply
+# ignore the returned error.
+tryonline(a: ref Account): string
+{
+	if(a.connected && a.imap != nil)
+		return nil;
+
+	if(a.imap == nil) {
+		(im, lerr) := loadimap();
+		if(im == nil)
+			return lerr;
+		a.imap = im;
 	}
-	a.imap = im;
 
 	# IMAP credentials come from factotum:
 	#   proto=pass service=imap dom=<server>
 	# Passing nil/nil tells the lib to query factotum itself.
-	err := im->open(nil, nil, server, mode);
+	err := a.imap->open(nil, nil, a.server, a.mode);
 	if(err != nil) {
 		a.imap = nil;
-		accounts[idx] = nil;
-		vers++;
-		return "connect: " + err;
+		a.connected = 0;
+		return err;
 	}
 	a.connected = 1;
 
 	# Populate folder list first so doselect can deduplicate against it.
-	# Soft-fail: connection is still usable without a folder list, but
-	# the user gets fewer signals.
-	(fl, ferr) := im->folders();
+	# Soft-fail: the connection is still usable without a folder list.
+	(fl, ferr) := a.imap->folders();
 	if(ferr == nil)
 		mergefolders(a, fl);
 
 	# Best-effort INBOX SELECT so the account is usable immediately. A
 	# server that returns a different error here still counts as
-	# connected — the caller can SELECT a different folder via
-	# /accounts/<n>/ctl.
+	# connected — the caller can SELECT a different folder later.
 	doselect(a, "INBOX");
 
 	vers++;
 	return nil;
 }
 
+# True if the account has a live session, bringing it online on demand.
+ensureonline(a: ref Account): int
+{
+	if(a.connected && a.imap != nil)
+		return 1;
+	return tryonline(a) == nil;
+}
+
 dosync(a: ref Account): string
 {
-	if(!a.connected || a.imap == nil)
-		return "sync: not connected";
+	# Lazily bring the account online. If it still cannot connect (no
+	# credentials yet, server unreachable), sync is a no-op success —
+	# there is nothing to refresh until the session exists.
+	if(!a.connected || a.imap == nil) {
+		if(tryonline(a) != nil)
+			return nil;
+	}
 	(fl, ferr) := a.imap->folders();
 	if(ferr != nil)
 		return "sync: folders: " + ferr;
@@ -1254,20 +1289,7 @@ handleboxctl(path: big, cmd: string): string
 		criteria := stripnl(rest);
 		if(criteria == "")
 			return "search: criteria required";
-		(seqs, serr) := a.imap->search(criteria);
-		if(serr != nil)
-			return "search: " + serr;
-		# Map seq → uid via the cached message list. Sequences not
-		# present in cache are skipped (the cache predates a possible
-		# server-side change since SELECT).
-		s := "";
-		for(l := seqs; l != nil; l = tl l) {
-			seq := hd l;
-			if(seq >= 1 && seq <= len a.msgs && a.msgs[seq - 1] != nil)
-				s += string a.msgs[seq - 1].msg.uid + "\n";
-		}
-		a.lastsearch = s;
-		return nil;
+		return searchcurrent(a, criteria);
 
 	"archive" =>
 		uid := mailparse->strtobig(stripnl(rest));
@@ -1520,10 +1542,18 @@ acctstatus(a: ref Account): string
 # /accounts/<name>/ctl write commands.
 #
 #   select <mailbox>        SELECT a mailbox; updates currentbox/mbox/msgs.
-#   sync                    Re-SELECT currentbox to refresh counts.
+#   search <criteria>       SEARCH the selected mailbox (results in lastsearch).
+#   sync                    Refresh folders / re-SELECT currentbox.
 #
-# Search and per-message operations live on the box-level ctl (next
-# pass).
+# These do not require the account to already be online: a disconnected
+# account is brought online on demand (credentials permitting). If it
+# cannot come online yet (no credentials, server unreachable), the verb is
+# accepted as a deferred no-op rather than an error — the account stays
+# registered and the intent can be retried once a session exists. This
+# mirrors the register/connect split in doconnect()/tryonline().
+#
+# Per-message operations (archive/move, flag writes) still live on the
+# box-level ctl, where a live, box-selected session is required.
 #
 
 handleacctctl(a: ref Account, cmd: string): string
@@ -1531,20 +1561,57 @@ handleacctctl(a: ref Account, cmd: string): string
 	cmd = stripnl(cmd);
 	(verb, rest) := splitfield(cmd);
 
-	if(!a.connected || a.imap == nil)
-		return "not connected";
-
 	case verb {
 	"select" =>
 		box := stripnl(rest);
 		if(box == "")
 			return "select: mailbox required";
+		# Offline: remember the desired mailbox so the account selects it
+		# once it comes online. Online: SELECT it now.
+		if(!ensureonline(a)) {
+			a.currentbox = box;
+			return nil;
+		}
 		return doselect(a, box);
+	"search" =>
+		criteria := stripnl(rest);
+		if(criteria == "")
+			return "search: criteria required";
+		# Offline: accepted but deferred (no live mailbox to search yet).
+		# Online: search the currently-selected mailbox.
+		if(!ensureonline(a))
+			return nil;
+		return searchcurrent(a, criteria);
 	"sync" =>
 		return dosync(a);
 	* =>
-		return "unknown account-ctl verb (want: select|sync)";
+		return "unknown account-ctl verb (want: select|search|sync)";
 	}
+}
+
+# Run an IMAP SEARCH against the currently-selected mailbox and cache the
+# matching UIDs in a.lastsearch (one per line). Requires a live session
+# with a mailbox selected. Shared by the account- and box-level ctl.
+searchcurrent(a: ref Account, criteria: string): string
+{
+	if(!a.connected || a.imap == nil)
+		return "search: not connected";
+	if(a.currentbox == "")
+		return "search: no mailbox selected";
+	(seqs, serr) := a.imap->search(criteria);
+	if(serr != nil)
+		return "search: " + serr;
+	# Map seq -> uid via the cached message list. Sequences not present in
+	# cache are skipped (the cache predates a possible server-side change
+	# since SELECT).
+	s := "";
+	for(l := seqs; l != nil; l = tl l) {
+		seq := hd l;
+		if(seq >= 1 && seq <= len a.msgs && a.msgs[seq - 1] != nil)
+			s += string a.msgs[seq - 1].msg.uid + "\n";
+	}
+	a.lastsearch = s;
+	return nil;
 }
 
 # Select a mailbox and populate the cached msg list. Folder slots are

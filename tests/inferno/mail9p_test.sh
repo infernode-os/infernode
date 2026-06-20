@@ -38,6 +38,15 @@ fn assert_writefails {
 	}
 }
 
+fn assert_writeok {
+	# echo $1 to $2 should succeed (mail9p accepts it).
+	if {echo $1 > $2 >[2] /dev/null} {
+		passlog 'accepted write `'^$1^'` to' $2
+	} {
+		fail 'write `'^$1^'` to' $2 'unexpectedly failed'
+	}
+}
+
 echo '=== mail9p integration smoke test ==='
 
 # Environmental skip-guard (INFR-312): mail9p mounts at /n/mail, which
@@ -80,16 +89,40 @@ assert_writefails bogus /n/mail/ctl
 assert_writefails 'disconnect ghost' /n/mail/ctl
 assert_writefails 'sync ghost' /n/mail/ctl
 
-# A valid-looking connect to an unresolvable host should error out
-# cleanly (factotum lookup or DNS resolution failure).
-assert_writefails 'connect testacct mail.invalid' /n/mail/ctl
+# `connect` registers the account; bringing it online is a separate,
+# best-effort step (see doconnect/tryonline in appl/cmd/mail9p.b). A
+# connect to an unresolvable host with no credentials therefore SUCCEEDS:
+# the account is registered and left `disconnected`, ready to be brought
+# online later via `sync` once credentials/network exist.
+assert_writeok 'connect testacct mail.invalid' /n/mail/ctl
 
-# Account slot should NOT linger after the failed connect.
+# The registered account now appears under /accounts...
+acctlist=`{ls /n/mail/accounts >[2] /dev/null}
+if {~ $acctlist *testacct} {
+	passlog 'accounts/testacct registered after connect (deferred online)'
+} {
+	fail 'accounts/' $acctlist 'missing testacct after connect'
+}
+
+# ...and reads back as disconnected (no live session without credentials).
+# (Avoid the variable name `status`; it is reserved in the Inferno shell.)
+acctstat=`{cat /n/mail/accounts/testacct/ctl >[2] /dev/null}
+if {~ $"acctstat 'disconnected mail.invalid'} {
+	passlog 'testacct reads as `disconnected mail.invalid`'
+} {
+	fail 'testacct ctl unexpected status:' $acctstat
+}
+
+# sync on a credential-less account is an accepted no-op (deferred).
+assert_writeok 'sync testacct' /n/mail/ctl
+
+# disconnect removes the registered account, returning /accounts to empty.
+assert_writeok 'disconnect testacct' /n/mail/ctl
 acctlist=`{ls /n/mail/accounts >[2] /dev/null}
 if {~ $#acctlist 0} {
-	passlog 'accounts/ still empty after failed connect (slot rolled back)'
+	passlog 'accounts/ empty again after disconnect'
 } {
-	fail 'accounts/' $acctlist 'lingered after failed connect'
+	fail 'accounts/' $acctlist 'lingered after disconnect'
 }
 
 echo ''

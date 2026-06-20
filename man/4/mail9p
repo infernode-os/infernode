@@ -31,22 +31,36 @@ flag enables Styx tracing on stderr.
 .B ctl
 write-only:
 .BR "connect " "\fIname server\fP [\fBtls\fP|\fBstarttls\fP] [\fBsmtp=\fP\fIhost\fP]"
-opens an IMAP session and best-effort SELECTs INBOX;
+registers an account and best-effort brings it online (opens an IMAP
+session and SELECTs INBOX). Registration always succeeds; if the account
+cannot be brought online yet \(em no
+.IR factotum (4)
+credentials, or an unreachable server \(em it stays registered and
+.BR disconnected ,
+and can be brought online later with
+.BR sync ;
 .BR "disconnect " \fIname\fP
 LOGOUTs and frees the slot;
 .BR "sync " \fIname\fP
-re-fetches the folder list and re-SELECTs the current mailbox.
+brings a registered-but-offline account online if it can, then re-fetches
+the folder list and re-SELECTs the current mailbox. On an account that is
+still offline (no credentials),
+.B sync
+is an accepted no-op.
 .TP
 .B accounts/
-one entry per connected account.
+one entry per registered account (connected or not).
 .TP
 .BI accounts/ name /ctl
 read: status line
 .RB ( connected | disconnected ", " "box=" "\fIname\fP, " "exists=" "N, " "unseen=" "N" );
 write:
-.BR "select " \fImailbox\fP
+.BR "select " \fImailbox\fP ,
+.BR "search " \fIcriteria\fP ,
 or
 .BR sync .
+While the account is offline these are accepted as deferred no-ops
+(\fBselect\fP records the desired mailbox for when it comes online).
 .TP
 .BI accounts/ name /compose
 write-only. Writes a full RFC822 message; it is sent via SMTP using
@@ -157,9 +171,21 @@ There is no permission system inside
 .SH AUTHENTICATION
 IMAP credentials are read from
 .IR factotum (4)
-at connect time using
+when an account is brought online (at
+.B connect
+time, or later at
+.BR sync )
+using
 .PP
 .B proto=pass service=imap dom=\fIserver\fP
+.PP
+If no matching key is present, the account is still registered but stays
+.BR disconnected ;
+add the key to
+.IR factotum (4)
+and
+.B sync
+the account to bring it online.
 .PP
 SMTP send tries the
 .BR service=smtp

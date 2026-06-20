@@ -669,6 +669,24 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 			}
 		}
 	}
+
+	# Fallback: the server ignored `stream: true` and returned a complete
+	# chat.completion JSON body instead of `data:` SSE events. _ssedrain_lines
+	# consumed nothing, so the JSON object sits unconsumed in bodybuf and
+	# _ssebuild_response would yield an empty response — the model's content
+	# silently dropped. Detect the buffered JSON (leading '{' after optional
+	# whitespace) and parse it directly. Mirror of the buffered
+	# parseopenaisseresponse fallback. See tests/llmclient_sse_fallback_test.b.
+	if(st.fulltext == "" && st.tcids == nil && len bodybuf > 0) {
+		bs := string bodybuf;
+		wsi := 0;
+		for(; wsi < len bs; wsi++)
+			if(bs[wsi] != ' ' && bs[wsi] != '\t' && bs[wsi] != '\r' && bs[wsi] != '\n')
+				break;
+		if(wsi < len bs && bs[wsi] == '{')
+			return parseopenairesponse(bs[wsi:], req);
+	}
+
 	return _ssebuild_response(st, req);
 }
 
@@ -1637,7 +1655,7 @@ trytoolcallsarray(s: string, pos: int): (int, int, list of (string, string))
 			argsv := entry.get("arguments");
 			args := "{}";
 			if(argsv != nil)
-				args = argsv.text();
+				args = unescslashes(argsv.text());
 			calls = (name, args) :: calls;
 		}
 	* =>
@@ -1746,6 +1764,37 @@ messagesjson(msgs: list of ref LlmMessage): string
 	}
 	s += "]";
 	return s;
+}
+
+# json.b's serializer escapes '/' as '\/' (a deliberate XSS mitigation
+# for JSON embedded in HTML — see needesc() in appl/lib/json.b). Tool-call
+# arguments are dispatched to tools and matched as paths (e.g.
+# "/tool/editor/doc"), never embedded in HTML, so the escaping corrupts
+# them. Undo it in an escape-aware way: collapse '\/' -> '/' while leaving
+# every other escape pair (notably '\\') intact. Restores the "emit the
+# model's JSON arguments verbatim" contract the tool-call sites document.
+unescslashes(s: string): string
+{
+	out := "";
+	n := len s;
+	for(i := 0; i < n; i++) {
+		c := s[i];
+		if(c == '\\' && i+1 < n) {
+			d := s[i+1];
+			if(d == '/') {
+				out[len out] = '/';
+				i++;
+				continue;
+			}
+			# Preserve the escape pair verbatim (e.g. '\\', '\"', '\n').
+			out[len out] = c;
+			out[len out] = d;
+			i++;
+			continue;
+		}
+		out[len out] = c;
+	}
+	return out;
 }
 
 jsonescapestr(s: string): string

@@ -653,7 +653,8 @@ formatnotification(srcname: string, n: ref MsgSrc->Notification): string
 
 	text += "Message ID: " + m.id + "\n";
 	text += "---\n";
-	text += "Handle this per your message policy. Use \"mail read " + m.id + "\" for the full message.";
+	text += "Handle this per your message policy. Reply via /mnt/msg/reply, " +
+		"flag via /mnt/msg/ctl; the full body (when needed) is in the depth mount.";
 
 	return text;
 }

@@ -13,6 +13,8 @@ include "ip.m";
 	ip: IP;
 include "ipattr.m";
 	ipattr: IPattr;
+include "webclient.m";
+	webclient: Webclient;
 
 include "keyring.m";
 include "asn1.m";
@@ -63,6 +65,7 @@ FD, Connection: import sys;
 Iobuf : import bufio;
 
 ibuf, obuf : ref Bufio->Iobuf;
+sfd : ref Sys->FD;	# connection fd; writes go here directly (like imap.b)
 conn : int = 0;
 init : int = 0;
  
@@ -91,14 +94,14 @@ open(server : string): (int, string)
 	if (ok < 0)
 		return (-1, "dialup failed");
  
+	sfd = c.dfd;
 	ibuf = bufio->fopen(c.dfd, Bufio->OREAD);
-	obuf = bufio->fopen(c.dfd, Bufio->OWRITE);
-	if (ibuf == nil || obuf == nil)
+	if (ibuf == nil)
 		return (-1, "failed to open bufio");
 	cread = chan of (int, string);
 	spawn mreader(cread);
 	(rpid, nil) = <- cread;
-	
+
  	(ok, s) = mread();
 	if (ok < 0)
 		return (-1, s);
@@ -109,7 +112,8 @@ open(server : string): (int, string)
 authopen(user, password, server : string, usesslarg: int): (int, string)
 {
 	s : string;
- 
+	ok: int;
+
  	usessl = usesslarg;
 	if (!init) {
 		sys = load Sys Sys->PATH;
@@ -135,41 +139,40 @@ authopen(user, password, server : string, usesslarg: int): (int, string)
 	if (server == nil)
 		server = "$smtp";
 	addr: string;
-	if(usessl)
-		addr = "tcp!" + server + "!465";
-	else
-		addr = "tcp!" + server + "!25";
-	(ok, c) := sys->dial (addr, nil);
-	if (ok < 0)
-		return (-1, "dialup failed");
-	if(DEBUG)
-		sys->print("usessl\n");
+	fd: ref Sys->FD;
 	if(usessl){
-		ssl3 = load SSL3 SSL3->PATH;
-		ssl3->init();
-		sslx = ssl3->Context.new();
-#		sslx.use_devssl();
-		vers := 3;
-		e: string;
-		info := ref SSL3->Authinfo(ssl_suites, ssl_comprs, nil, 0, nil, nil, nil);
-		(e, vers) = sslx.client(c.dfd, addr, vers, info);
-		if(e != "") {
-			return (-1, s);
+		# Implicit TLS (port 465) via the modern tls stack — the same path
+		# imap.b uses. The legacy SSL3 ciphers in this file (RC4_40, DES,
+		# FORTEZZA, …) are rejected by every current server: Gmail returns
+		# "Must issue a STARTTLS command first" on plaintext 25 and fails
+		# the SSL3 handshake on 465 (empty read).
+		if(webclient == nil){
+			webclient = load Webclient Webclient->PATH;
+			if(webclient == nil)
+				return (-1, "cannot load Webclient");
+			werr := webclient->init();
+			if(werr != nil)
+				return (-1, "webclient init: " + werr);
 		}
-		if(DEBUG)
-			sys->print("SSL HANDSHAKE completed\n");
-		cread = chan of (int, string);
-		spawn tlsreader(cread);
-		(rpid, nil) = <- cread;
+		addr = "tcp!" + server + "!465";
+		(tlsfd, terr) := webclient->tlsdial(addr, server);
+		if(terr != nil)
+			return (-1, "tlsdial: " + terr);
+		fd = tlsfd;
 	}else{
-		ibuf = bufio->fopen(c.dfd, Bufio->OREAD);
-		obuf = bufio->fopen(c.dfd, Bufio->OWRITE);
-		if (ibuf == nil || obuf == nil)
-			return (-1, "failed to open bufio");
-		cread = chan of (int, string);
-		spawn mreader(cread);
-		(rpid, nil) = <- cread;
+		addr = "tcp!" + server + "!25";
+		(dok, c) := sys->dial(addr, nil);
+		if(dok < 0)
+			return (-1, "dialup failed");
+		fd = c.dfd;
 	}
+	sfd = fd;
+	ibuf = bufio->fopen(fd, Bufio->OREAD);
+	if(ibuf == nil)
+		return (-1, "failed to open bufio");
+	cread = chan of (int, string);
+	spawn mreader(cread);
+	(rpid, nil) = <- cread;
 	
  	(ok, s) = mread();
 	if (ok < 0)
@@ -332,12 +335,9 @@ mwrite(s : string): int
 	b := array of byte s;
 	l := len b;
 	nb: int;
-	if(!usessl){
-		nb = obuf.write(b, l);
-		obuf.flush();
-	}else{
-		nb = sslx.write(b,l);
-	}
+	# Write straight to the connection fd (TLS is transparent via tlsdial),
+	# mirroring imap.b — a second OWRITE bufio on the same fd breaks reads.
+	nb = sys->write(sfd, b, len b);
 	if (nb != l)
 		return -1;
 	return 1;

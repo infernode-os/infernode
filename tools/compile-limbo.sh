@@ -36,6 +36,8 @@ case "$(uname -s)-$(uname -m)" in
 	Darwin-x86_64)   LIMBO_BIN="$ROOT/MacOSX/amd64/bin/limbo" ;;
 	Linux-aarch64)   LIMBO_BIN="$ROOT/Linux/arm64/bin/limbo" ;;
 	Linux-x86_64)    LIMBO_BIN="$ROOT/Linux/amd64/bin/limbo" ;;
+	MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
+	                 LIMBO_BIN="$ROOT/Nt/amd64/bin/limbo.exe" ;;
 esac
 
 if [[ -z "$LIMBO_BIN" || ! -x "$LIMBO_BIN" ]]; then

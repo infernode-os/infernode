@@ -1,7 +1,7 @@
 implement Mail9p;
 
 #
-# mail9p - IMAP/JMAP as a 9P filesystem at /n/mail
+# mail9p - IMAP/JMAP as a 9P filesystem at /mnt/mail
 #
 # Plan-9-style Styx server exposing one or more mail accounts so an
 # agent can triage, classify, archive, flag, and (separately) reply to
@@ -13,7 +13,7 @@ implement Mail9p;
 # See INFR-8 for the design ticket. man/4/mail9p documents the
 # user-facing shape.
 #
-#   /n/mail/
+#   /mnt/mail/
 #       ctl                          connect / disconnect / sync
 #       accounts/<name>/
 #           ctl                      status / select / sync
@@ -246,7 +246,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(arg == nil) nomod(Arg->PATH);
 	arg->init(args);
 
-	mountpt := "/n/mail";
+	mountpt := "/mnt/mail";
 	while((o := arg->opt()) != 0)
 		case o {
 		'D' => styxservers->traceset(1);
@@ -1363,8 +1363,8 @@ handleflagswrite(path: big, body: string): string
 #
 # SMTP send paths.
 #
-#   /n/mail/<acct>/compose                — write RFC822 message.
-#   /n/mail/<acct>/boxes/<box>/<uid>/draft-reply
+#   /mnt/mail/<acct>/compose                — write RFC822 message.
+#   /mnt/mail/<acct>/boxes/<box>/<uid>/draft-reply
 #     — write a reply body; threading headers (In-Reply-To,
 #       References, Subject Re:) are added from the original message.
 #

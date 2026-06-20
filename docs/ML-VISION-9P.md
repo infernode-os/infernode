@@ -24,8 +24,11 @@ Synthetic **service** file servers live under `/mnt` (e.g. `/mnt/llm` — INFR #
 `/mnt/mcp` — #213). `/n` is reserved for fully-mounted **remote filesystem
 trees** (another machine's namespace). So vision uses `/mnt/video` and
 `/mnt/vision`. (`/n/{tak,msg,llm}` were the same drift and have since been
-migrated to `/mnt` under INFR-254; `/n/mail`, `/n/cal` correctly stay on `/n`
-as genuinely remote resources.)
+migrated to `/mnt` under INFR-254; `mail9p`, `calendar9p` were the same drift and
+are now `/mnt/mail`, `/mnt/cal` — they synthesize their own schema (`ctl`,
+`compose`, `draft-reply`, per-field `<uid>/…`) rather than importing a remote
+tree intact, so by the schema-provenance rule they are application mount points,
+not `/n` imports. See `docs/NAMESPACE-LAYOUT.md`.)
 
 ## Two shapes
 

@@ -1,7 +1,7 @@
 implement Calendar9p;
 
 #
-# calendar9p - CalDAV as a 9P filesystem at /n/cal
+# calendar9p - CalDAV as a 9P filesystem at /mnt/cal
 #
 # Plan-9-style Styx server exposing one or more CalDAV accounts so an
 # agent can read schedules, find free/busy windows, and (separately)
@@ -18,7 +18,7 @@ implement Calendar9p;
 # paths; per-event field files and free/busy query files come in the
 # next implementation pass):
 #
-#   /n/cal/
+#   /mnt/cal/
 #       ctl                    write: connect <name> <url> [http|https]
 #                              write: disconnect <name>
 #                              write: sync <name>
@@ -135,7 +135,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(arg == nil) nomod(Arg->PATH);
 	arg->init(args);
 
-	mountpt := "/n/cal";
+	mountpt := "/mnt/cal";
 	while((o := arg->opt()) != 0)
 		case o {
 		'D' => styxservers->traceset(1);

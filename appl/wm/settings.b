@@ -64,7 +64,7 @@ Settings: module
 
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile: con iota;
+CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging: con iota;
 NCATS: con 7;
 
 catnames := array[] of {
@@ -75,6 +75,7 @@ catnames := array[] of {
 	"Namespace Paths",
 	"Agent Prompts",
 	"Startup Profile",
+	"Messaging",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
@@ -88,6 +89,7 @@ catshortnames := array[] of {
 	"paths",
 	"prompts",
 	"profile",
+	"messaging",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -194,6 +196,13 @@ prompt_files := array[] of {
 # Profile panel
 profile_label: ref Label;
 profile_btn:   ref Button;
+
+# Messaging panel (msg9p sources)
+msg_status_label: ref Label;
+msg_conf_label:   ref Label;
+msg_edit_btn:     ref Button;
+msg_register_btn: ref Button;
+msg_cred_label:   ref Label;
 
 dirty: int;
 stderr: ref Sys->FD;
@@ -443,6 +452,11 @@ layoutcontent()
 	prompt_btns = nil;
 	profile_label = nil;
 	profile_btn = nil;
+	msg_status_label = nil;
+	msg_conf_label = nil;
+	msg_edit_btn = nil;
+	msg_register_btn = nil;
+	msg_cred_label = nil;
 
 	case category {
 	CatTheme =>
@@ -459,6 +473,8 @@ layoutcontent()
 		layoutprompts(cx, cy, cw, fh, bh);
 	CatProfile =>
 		layoutprofile(cx, cy, cw, bh);
+	CatMessaging =>
+		layoutmessaging(cx, cy, cw, fh, bh);
 	}
 }
 
@@ -775,6 +791,39 @@ layoutprofile(cx, cy, cw, bh: int)
 		"Open in Editor");
 }
 
+# Messaging panel: the msg9p notification plane. Show the live source registry
+# (read-only) and give one-click access to the email account config + live
+# registration. Credentials are set separately in the Keyring app. This is the
+# Settings side of docs/MESSAGE-INTEGRATION.md's setup convention.
+layoutmessaging(cx, cy, cw, fh, bh: int)
+{
+	if(mobile && fh < TAPMIN) fh = TAPMIN;
+
+	hdr := Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"Registered sources:", 1, LEFT);
+	msg_status_label = hdr;	# header doubles as the first drawn label
+	cy += fh;
+
+	# Live registry from /mnt/msg/status (multi-line; best effort).
+	status := readmsgstatus();
+	msg_conf_label = Label.mk(Rect((cx, cy), (cw, cy + fh * 3)),
+		status, 0, LEFT);
+	cy += fh * 3 + FIELD_SPACING;
+
+	msg_edit_btn = Button.mk(
+		Rect((cx, cy), (cx + BTN_W + 80, cy + bh)),
+		"Edit Email Account");
+	cy += bh + FORM_MARGIN;
+
+	msg_register_btn = Button.mk(
+		Rect((cx, cy), (cx + BTN_W + 80, cy + bh)),
+		"Register Email Now");
+	cy += bh + FORM_MARGIN;
+
+	msg_cred_label = Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"Credentials: add an Email Account in the Keyring app.", 0, LEFT);
+}
+
 # ── Data loading ──────────────────────────────────────────────
 
 loadcategory()
@@ -928,6 +977,8 @@ redraw()
 		drawprompts();
 	CatProfile =>
 		drawprofile();
+	CatMessaging =>
+		drawmessaging();
 	}
 
 	# Status bar
@@ -951,6 +1002,8 @@ redraw()
 			sbar.right = "takes effect next session";
 		CatProfile =>
 			sbar.right = "restart required";
+		CatMessaging =>
+			sbar.right = "register applies immediately";
 		}
 		sbar.draw(w.image);
 	}
@@ -1048,6 +1101,20 @@ drawprofile()
 		profile_label.draw(w.image);
 	if(profile_btn != nil)
 		profile_btn.draw(w.image);
+}
+
+drawmessaging()
+{
+	if(msg_status_label != nil)
+		msg_status_label.draw(w.image);
+	if(msg_conf_label != nil)
+		msg_conf_label.draw(w.image);
+	if(msg_edit_btn != nil)
+		msg_edit_btn.draw(w.image);
+	if(msg_register_btn != nil)
+		msg_register_btn.draw(w.image);
+	if(msg_cred_label != nil)
+		msg_cred_label.draw(w.image);
 }
 
 # ── Keyboard handling ─────────────────────────────────────────
@@ -1187,6 +1254,8 @@ handleptr(ptr: ref Pointer)
 		clickprompts(ptr);
 	CatProfile =>
 		clickprofile(ptr);
+	CatMessaging =>
+		clickmessaging(ptr);
 	}
 }
 
@@ -1404,6 +1473,39 @@ clickprofile(ptr: ref Pointer)
 	if(profile_btn != nil && profile_btn.contains(ptr.xy)) {
 		trackprofilebtn(ptr);
 		return;
+	}
+}
+
+clickmessaging(ptr: ref Pointer)
+{
+	if(msg_edit_btn != nil && msg_edit_btn.contains(ptr.xy)) {
+		trackmessagingbtn(msg_edit_btn, ptr);
+		return;
+	}
+	if(msg_register_btn != nil && msg_register_btn.contains(ptr.xy)) {
+		trackmessagingbtn(msg_register_btn, ptr);
+		return;
+	}
+}
+
+trackmessagingbtn(btn: ref Button, nil: ref Pointer)
+{
+	btn.pressed = 1;
+	dirty = 1;
+	redraw();
+	for(;;) {
+		p := <-w.ctxt.ptr;
+		if(p == nil || !(p.buttons & 1)) {
+			btn.pressed = 0;
+			if(p != nil && btn.contains(p.xy)) {
+				if(btn == msg_edit_btn)
+					openineditor("/lib/veltro/sources/email.conf");
+				else if(btn == msg_register_btn)
+					doregisteremail();
+			}
+			dirty = 1;
+			return;
+		}
 	}
 }
 
@@ -1948,6 +2050,58 @@ hassubstr(s, sub: string): int
 			return 1;
 	}
 	return 0;
+}
+
+# Read the live source registry from /mnt/msg/status (best-effort display).
+readmsgstatus(): string
+{
+	fd := sys->open("/mnt/msg/status", Sys->OREAD);
+	if(fd == nil)
+		return "(msg9p not mounted at /mnt/msg)";
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "(no sources registered)";
+	return string buf[:n];
+}
+
+# Register the email source live from /lib/veltro/sources/email.conf — the same
+# line boot replays at startup. Credentials come from the keyring Email Account;
+# a missing-creds register fails softly and is reported in the status bar.
+doregisteremail()
+{
+	cfd := sys->open("/lib/veltro/sources/email.conf", Sys->OREAD);
+	if(cfd == nil) {
+		flashstatus("no email.conf — use Edit Email Account first");
+		return;
+	}
+	cbuf := array[1024] of byte;
+	cn := sys->read(cfd, cbuf, len cbuf);
+	if(cn <= 0) {
+		flashstatus("email.conf is empty");
+		return;
+	}
+	conf := string cbuf[:cn];
+	while(len conf > 0 && (conf[len conf-1]=='\n' || conf[len conf-1]==' ' || conf[len conf-1]=='\t' || conf[len conf-1]=='\r'))
+		conf = conf[:len conf-1];
+
+	cmd := "register email /dis/veltro/sources/email.dis " + conf;
+	wfd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
+	if(wfd == nil) {
+		flashstatus("cannot open /mnt/msg/ctl");
+		return;
+	}
+	b := array of byte cmd;
+	if(sys->write(wfd, b, len b) != len b)
+		flashstatus(sys->sprint("register failed: %r"));
+	else
+		flashstatus("email source registered");
+
+	# Refresh the live registry display.
+	if(category == CatMessaging) {
+		layoutcontent();
+		redraw();
+	}
 }
 
 openineditor(path: string)

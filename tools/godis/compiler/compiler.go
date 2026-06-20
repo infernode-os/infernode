@@ -30,6 +30,9 @@ type Compiler struct {
 	longs        map[int64]int32         // 64-bit int64/uint64 literal → MP offset (DEFL)
 	globals      map[string]int32        // global variable name → MP offset
 	sysUsed      map[string]int          // Sys function name → LDT index
+	mathUsed     map[string]int          // Math function name → LDT index (import list 1)
+	mathMPOff    int32                   // MP slot holding the Math module ref (-1 until used)
+	mathPathOff  int32                   // MP offset of the "$Math" path string
 	mod          *ModuleData
 	sysMPOff     int32
 	errors       []string
@@ -43,7 +46,7 @@ type Compiler struct {
 	ifaceDispatch map[string][]ifaceImpl // method name → [{tag, fn}, ...]
 	excGlobalOff int32 // MP offset for exception bridge slot (lazy-allocated, 0 = not allocated)
 	embedInits   []embedInit // go:embed entries to initialize at module load
-	initFuncs    []*ssa.Function // user-defined init functions (init#1, init#2, ...) to call before main
+	initFuncs    []*ssa.Function // synthesized package init functions to call before main
 	closureFuncTags    map[*ssa.Function]int32 // inner function → unique tag for dynamic dispatch
 	closureFuncTagNext int32                   // next tag to allocate (starts at 1)
 	BaseDir      string // directory containing main package (for resolving local imports)
@@ -58,6 +61,8 @@ func New() *Compiler {
 		longs:         make(map[int64]int32),
 		globals:       make(map[string]int32),
 		sysUsed:       make(map[string]int),
+		mathUsed:      make(map[string]int),
+		mathMPOff:     -1,
 		closureMap:    make(map[ssa.Value]*ssa.Function),
 		closureRetFn:  make(map[*ssa.Function]*ssa.Function),
 		methodMap:     make(map[string]*ssa.Function),
@@ -130,20 +135,52 @@ func (c *Compiler) ResolveInterfaceMethods(methodName string) []ifaceImpl {
 	return nil
 }
 
-// AllocGlobal allocates storage for a global variable in the module data section.
-// Returns the MP offset. Pointer-typed globals are tracked for GC.
-func (c *Compiler) AllocGlobal(name string, isPtr bool) int32 {
+// AllocGlobal allocates storage for a global variable of type t in the module
+// data section and returns the MP offset. Multi-word globals (interfaces,
+// structs) get one consecutive MP word per data word — a single 8-byte slot
+// would let writes to the global clobber whatever the allocator placed next.
+// Pointer words are GC-tracked individually.
+func (c *Compiler) AllocGlobal(name string, t types.Type) int32 {
 	if off, ok := c.globals[name]; ok {
 		return off
 	}
-	var off int32
-	if isPtr {
-		off = c.mod.AllocPointer("global:" + name)
-	} else {
-		off = c.mod.AllocWord("global:" + name)
-	}
+	off := c.allocGlobalWords(name, t)
 	c.globals[name] = off
 	return off
+}
+
+func (c *Compiler) allocGlobalWords(name string, t types.Type) int32 {
+	dt := GoTypeToDis(t)
+	if dt.Size <= int32(dis.IBY2WD) {
+		if dt.IsPtr {
+			return c.mod.AllocPointer("global:" + name)
+		}
+		return c.mod.AllocWord("global:" + name)
+	}
+	// Struct: allocate per field so pointer fields stay GC-tracked.
+	if st, ok := t.Underlying().(*types.Struct); ok {
+		base := int32(-1)
+		for i := 0; i < st.NumFields(); i++ {
+			off := c.allocGlobalWords(fmt.Sprintf("%s.%d", name, i), st.Field(i).Type())
+			if base < 0 {
+				base = off
+			}
+		}
+		if base < 0 { // empty struct still needs an address
+			base = c.mod.AllocWord("global:" + name)
+		}
+		return base
+	}
+	// Interface (tag+value), complex, and other plain multi-word values:
+	// untracked words.
+	base := int32(-1)
+	for w := int32(0); w < dt.Size; w += int32(dis.IBY2WD) {
+		off := c.mod.AllocWord(fmt.Sprintf("global:%s+%d", name, w))
+		if base < 0 {
+			base = off
+		}
+	}
+	return base
 }
 
 // GlobalOffset returns the MP offset for a global variable, or -1 if not allocated.
@@ -450,9 +487,7 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	// Allocate storage for package-level global variables in MP (main package)
 	for _, mem := range ssaPkg.Members {
 		if g, ok := mem.(*ssa.Global); ok {
-			elemType := g.Type().(*types.Pointer).Elem()
-			dt := GoTypeToDis(elemType)
-			c.AllocGlobal(g.Name(), dt.IsPtr)
+			c.AllocGlobal(g.Name(), g.Type().(*types.Pointer).Elem())
 		}
 	}
 
@@ -464,10 +499,8 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		}
 		for _, mem := range ssaImpPkg.Members {
 			if g, ok := mem.(*ssa.Global); ok {
-				elemType := g.Type().(*types.Pointer).Elem()
-				dt := GoTypeToDis(elemType)
 				globalName := path + "." + g.Name()
-				c.AllocGlobal(globalName, dt.IsPtr)
+				c.AllocGlobal(globalName, g.Type().(*types.Pointer).Elem())
 			}
 		}
 	}
@@ -568,7 +601,10 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 
 	// Phase 3: Compute function start PCs
 	// Layout: [LOAD preamble] [main insts] [func1 insts] [func2 insts] ...
-	entryLen := int32(1) // just the LOAD instruction
+	entryLen := int32(1) // LOAD $Sys
+	if len(c.mathUsed) > 0 {
+		entryLen = 2 // + LOAD $Math
+	}
 	funcStartPC := make(map[*ssa.Function]int32)
 	offset := entryLen
 	for _, cf := range compiled {
@@ -586,6 +622,12 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 		for _, p := range cf.result.funcCallPatches {
 			patchedInsts[p.instIdx] = true
 			inst := &cf.result.insts[p.instIdx]
+			// A callee that was never compiled would silently patch to
+			// PC 0 / TD 0 — a call into main's entry that corrupts the
+			// heap at runtime. Fail at compile time instead.
+			if _, ok := funcStartPC[p.callee]; !ok {
+				return nil, fmt.Errorf("%s: call to uncompiled function %s", cf.fn.Name(), p.callee.String())
+			}
 			switch p.patchKind {
 			case patchIFRAME:
 				inst.Src = dis.Imm(int32(funcTDID[p.callee]))
@@ -661,6 +703,11 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	allInsts = append(allInsts,
 		dis.NewInst(dis.ILOAD, dis.MP(sysPathOff), dis.Imm(0), dis.MP(c.sysMPOff)),
 	)
+	if len(c.mathUsed) > 0 {
+		allInsts = append(allInsts,
+			dis.NewInst(dis.ILOAD, dis.MP(c.mathPathOff), dis.Imm(1), dis.MP(c.mathMPOff)),
+		)
+	}
 	for _, cf := range compiled {
 		allInsts = append(allInsts, cf.result.insts...)
 	}
@@ -709,6 +756,34 @@ func (c *Compiler) CompileFiles(filenames []string, sources [][]byte) (*dis.Modu
 	return m, nil
 }
 
+// isTrivialInit reports whether a synthesized package init does nothing
+// observable: only guard plumbing (load/store of init$guard, control flow)
+// and calls to blockless stub-package inits. Such inits are not compiled
+// and calls to them are skipped.
+func isTrivialInit(fn *ssa.Function) bool {
+	for _, b := range fn.Blocks {
+		for _, in := range b.Instrs {
+			switch v := in.(type) {
+			case *ssa.UnOp, *ssa.If, *ssa.Jump, *ssa.Return:
+				// guard check and control flow
+			case *ssa.Store:
+				if g, ok := v.Addr.(*ssa.Global); !ok || g.Name() != "init$guard" {
+					return false
+				}
+			case *ssa.Call:
+				callee, ok := v.Call.Value.(*ssa.Function)
+				if !ok || callee.Name() != "init" || len(callee.Blocks) > 0 {
+					return false
+				}
+				// call to a stub package's external init — a no-op
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // collectPackageFuncs collects functions, methods, and init funcs from an SSA package.
 func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package, allFuncs *[]*ssa.Function, seen map[*ssa.Function]bool) {
 	for _, mem := range ssaPkg.Members {
@@ -720,12 +795,21 @@ func (c *Compiler) collectPackageFuncs(ssaProg *ssa.Program, ssaPkg *ssa.Package
 				seen[m] = true
 				break
 			}
-			if !seen[m] && m.Name() != "init" && len(m.Blocks) > 0 {
-				*allFuncs = append(*allFuncs, m)
-				seen[m] = true
-				if strings.HasPrefix(m.Name(), "init#") {
+			if !seen[m] && len(m.Blocks) > 0 {
+				// The synthesized package initializer runs package-level var
+				// initializers, then calls user init#N functions itself (all
+				// behind the init$guard). main's preamble invokes it. A
+				// trivial init (guard plumbing only) is dropped entirely;
+				// lowerCall skips calls to it.
+				if m.Name() == "init" {
+					if isTrivialInit(m) {
+						seen[m] = true
+						break
+					}
 					c.initFuncs = append(c.initFuncs, m)
 				}
+				*allFuncs = append(*allFuncs, m)
+				seen[m] = true
 			}
 		case *ssa.Type:
 			nt, ok := m.Type().(*types.Named)
@@ -889,34 +973,47 @@ func (c *Compiler) buildDataSection() []dis.DataItem {
 	return items
 }
 
-func (c *Compiler) buildLDT() [][]dis.Import {
-	if len(c.sysUsed) == 0 {
-		return nil
+// MathModuleSlot returns the MP slot holding the loaded Math builtin
+// module ref, allocating it (and the "$Math" path string) on first use.
+func (c *Compiler) MathModuleSlot() int32 {
+	if c.mathMPOff < 0 {
+		c.mathMPOff = c.mod.AllocPointer("math")
+		c.mathPathOff = c.AllocString("$Math")
 	}
+	return c.mathMPOff
+}
 
+func sortedLDTList(used map[string]int, lookup func(string) *SysFunc) []dis.Import {
 	type entry struct {
 		name string
 		idx  int
 	}
 	var entries []entry
-	for name, idx := range c.sysUsed {
+	for name, idx := range used {
 		entries = append(entries, entry{name, idx})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].idx < entries[j].idx
 	})
-
 	var imports []dis.Import
 	for _, e := range entries {
-		sf := LookupSysFunc(e.name)
-		if sf != nil {
-			imports = append(imports, dis.Import{
-				Sig:  sf.Sig,
-				Name: sf.Name,
-			})
+		if sf := lookup(e.name); sf != nil {
+			imports = append(imports, dis.Import{Sig: sf.Sig, Name: sf.Name})
 		}
 	}
-	return [][]dis.Import{imports}
+	return imports
+}
+
+func (c *Compiler) buildLDT() [][]dis.Import {
+	if len(c.sysUsed) == 0 && len(c.mathUsed) == 0 {
+		return nil
+	}
+	ldt := [][]dis.Import{sortedLDTList(c.sysUsed, LookupSysFunc)}
+	if len(c.mathUsed) > 0 {
+		// Import list 1 belongs to the Math module (LOAD ..., $1, ...).
+		ldt = append(ldt, sortedLDTList(c.mathUsed, LookupMathFunc))
+	}
+	return ldt
 }
 // RegisterErrorString registers the synthetic errorString type in the
 // interface dispatch table. errorString.Error() is handled inline (fn=nil)
@@ -926,6 +1023,18 @@ func (c *Compiler) RegisterErrorString() {
 	c.ifaceDispatch["Error"] = append(
 		c.ifaceDispatch["Error"],
 		ifaceImpl{tag: tag, fn: nil})
+	// wrappedError is the fmt.Errorf("...%w...") result: the interface
+	// value is a heap struct {msg string; wrapped tag; wrapped value}.
+	// Its Error() is also synthetic — it loads msg through the pointer.
+	wtag := c.AllocTypeTag("wrappedError")
+	c.ifaceDispatch["Error"] = append(
+		c.ifaceDispatch["Error"],
+		ifaceImpl{tag: wtag, fn: nil})
+}
+
+// WrappedErrorTag returns the type tag of the synthetic wrappedError type.
+func (c *Compiler) WrappedErrorTag() int32 {
+	return c.AllocTypeTag("wrappedError")
 }
 // embedInit records a //go:embed directive to initialize at module load.
 type embedInit struct {

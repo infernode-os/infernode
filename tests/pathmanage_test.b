@@ -66,6 +66,15 @@ readfile(path: string): string
 	return string buf[0:n];
 }
 
+# Non-emptiness, not mere existence: an unmounted tools9p still leaves a
+# stray empty /tool/tools (gitignored repo stub, or a file a prior test
+# wrote), which a bare stat mistakes for a live mount — turning these
+# skips into false failures (INFR-312).
+hastoolfs(): int
+{
+	return len readfile("/tool/tools") > 0;
+}
+
 strcontains(s, sub: string): int
 {
 	if(len sub == 0)
@@ -80,7 +89,7 @@ strcontains(s, sub: string): int
 
 testBindpathCtl(t: ref T)
 {
-	if(sys->stat("/tool/tools").t0 < 0) {
+	if(!hastoolfs()) {
 		t.skip("tools9p not mounted at /tool");
 		return;
 	}
@@ -111,7 +120,7 @@ testBindpathCtl(t: ref T)
 
 testUnbindpathCtl(t: ref T)
 {
-	if(sys->stat("/tool/tools").t0 < 0) {
+	if(!hastoolfs()) {
 		t.skip("tools9p not mounted at /tool");
 		return;
 	}
@@ -131,7 +140,7 @@ testUnbindpathCtl(t: ref T)
 
 testUnbindpathNonexistent(t: ref T)
 {
-	if(sys->stat("/tool/tools").t0 < 0) {
+	if(!hastoolfs()) {
 		t.skip("tools9p not mounted at /tool");
 		return;
 	}
@@ -146,7 +155,7 @@ testUnbindpathNonexistent(t: ref T)
 
 testMultiplePaths(t: ref T)
 {
-	if(sys->stat("/tool/tools").t0 < 0) {
+	if(!hastoolfs()) {
 		t.skip("tools9p not mounted at /tool");
 		return;
 	}

@@ -1,17 +1,31 @@
 implement MLDSAStressTest;
 
 #
-# ML-DSA (FIPS 204) Production Stress Tests
+# ML-DSA (FIPS 204) / SLH-DSA (FIPS 205) Production Stress Tests
 #
-# Heavy-duty stress testing of ML-DSA-65 and ML-DSA-87:
-#   - 100 keygen+sign+verify cycles for ML-DSA-65
-#   - 50 keygen+sign+verify cycles for ML-DSA-87
+# Heavy-duty stress testing of ML-DSA-65/87 and SLH-DSA-192s/256s:
+#   - keygen+sign+verify mass cycles
 #   - Multiple messages per key (signature reuse testing)
 #   - Empty message signing
 #   - Large message signing (64KB)
 #   - Binary message signing (all byte values)
 #   - Signature malleability testing
 #   - Serialization stress (round-trip through sktostr/strtosk)
+#
+# Iteration count gating (INFR-313)
+# ---------------------------------
+# SLH-DSA keygen+sign+verify is orders of magnitude slower than ML-DSA.
+# At the heavy iteration counts the SLH-DSA mass-cycle loops alone exceed a
+# 5-minute wall clock under both the interpreter (-c0) and the JIT (-c1),
+# which wedges the full /tests/runner.dis run before it reaches the sh tests.
+#
+# So the heavy "throughput" counts are now opt-in. By default each loop runs
+# a small number of iterations — enough to exercise correctness (keygen,
+# sign, verify, serialization round-trips, message reuse) — and the full
+# throughput counts run only in stress mode. Enable stress mode with either:
+#   - the "-full" command-line argument, or
+#   - a non-empty /env/PQC_STRESS_FULL environment variable
+# (intended for a nightly/stress CI job, not the default per-PR suite).
 #
 
 include "sys.m";
@@ -36,7 +50,48 @@ passed := 0;
 failed := 0;
 skipped := 0;
 
+# Stress mode: when 0 (default) the mass/throughput loops run a small number
+# of iterations; when 1 they run the full heavy counts. Set via "-full" arg or
+# a non-empty /env/PQC_STRESS_FULL. See header comment (INFR-313).
+fullmode := 0;
+
 SRCFILE: con "/tests/mldsa_stress_test.b";
+
+# iters: pick the iteration count for a loop based on stress mode.
+# deflt is used in the default (fast) suite, full in stress mode.
+iters(deflt, full: int): int
+{
+	if(fullmode)
+		return full;
+	return deflt;
+}
+
+# readfile: read a whole file, returning nil if absent or empty.
+readfile(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	result := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		result += string buf[0:n];
+	}
+	if(result == "")
+		return nil;
+	return result;
+}
+
+# strip: remove trailing whitespace.
+strip(s: string): string
+{
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
+		s = s[0:len s - 1];
+	return s;
+}
 
 run(name: string, testfn: ref fn(t: ref T))
 {
@@ -86,7 +141,7 @@ signverify(t: ref T, algname: string, sk: ref Keyring->SK, pk: ref Keyring->PK,
 #
 testMLDSA65MassCycles(t: ref T)
 {
-	ITERS : con 100;
+	ITERS := iters(10, 100);
 	t.log(sys->sprint("ML-DSA-65 mass cycles: %d iterations", ITERS));
 
 	failures := 0;
@@ -121,7 +176,7 @@ testMLDSA65MassCycles(t: ref T)
 #
 testMLDSA87MassCycles(t: ref T)
 {
-	ITERS : con 50;
+	ITERS := iters(5, 50);
 	t.log(sys->sprint("ML-DSA-87 mass cycles: %d iterations", ITERS));
 
 	failures := 0;
@@ -152,7 +207,7 @@ testMLDSA87MassCycles(t: ref T)
 #
 testMLDSA65MultiMessage(t: ref T)
 {
-	MSGS : con 200;
+	MSGS := iters(20, 200);
 	t.log(sys->sprint("ML-DSA-65 multi-message: %d messages per key", MSGS));
 
 	sk := kr->genSK("mldsa65", "multi", 0);
@@ -284,7 +339,7 @@ testMLDSA65TamperDetection(t: ref T)
 #
 testMLDSA65SerializationStress(t: ref T)
 {
-	ITERS : con 50;
+	ITERS := iters(10, 50);
 	t.log(sys->sprint("ML-DSA-65 serialization stress: %d round-trips", ITERS));
 
 	failures := 0;
@@ -335,7 +390,7 @@ testMLDSA65SerializationStress(t: ref T)
 
 testSLHDSA192sMassCycles(t: ref T)
 {
-	ITERS : con 20;
+	ITERS := iters(2, 20);
 	t.log(sys->sprint("SLH-DSA-192s mass cycles: %d iterations", ITERS));
 
 	failures := 0;
@@ -362,7 +417,7 @@ testSLHDSA192sMassCycles(t: ref T)
 
 testSLHDSA256sMassCycles(t: ref T)
 {
-	ITERS : con 10;
+	ITERS := iters(1, 10);
 	t.log(sys->sprint("SLH-DSA-256s mass cycles: %d iterations", ITERS));
 
 	failures := 0;
@@ -476,9 +531,20 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := args; a != nil; a = tl a) {
 		if(hd a == "-v")
 			testing->verbose(1);
+		if(hd a == "-full")
+			fullmode = 1;
 	}
 
+	# Stress mode can also be enabled via the environment, for a nightly
+	# CI job that opts into the heavy throughput counts (INFR-313).
+	if(strip(readfile("/env/PQC_STRESS_FULL")) != "")
+		fullmode = 1;
+
 	sys->fprint(sys->fildes(2), "\n=== PQ Signature Production Stress Tests ===\n\n");
+	if(fullmode)
+		sys->fprint(sys->fildes(2), "(stress mode: full iteration counts)\n\n");
+	else
+		sys->fprint(sys->fildes(2), "(default mode: reduced iteration counts; -full or /env/PQC_STRESS_FULL for the heavy run)\n\n");
 
 	# ML-DSA tests
 	run("MLDSA65/MassCycles", testMLDSA65MassCycles);

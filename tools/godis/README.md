@@ -277,8 +277,11 @@ Go feature and generate code that uses it natively.
   arrays and binary search (future: native Dis table type).
 - **Closures** — Dis has no closures. We allocate heap structs containing free
   variables and a function tag, with dispatch chains at call sites.
-- **Defer** — Dis has no defer. We inline deferred calls at every return point
-  in LIFO order, with exception handlers for panic paths.
+- **Defer** — Dis has no defer. Each executed defer statement pushes a
+  heap-allocated record (site id + argument snapshot) onto a per-frame LIFO
+  list; RunDefers and the exception handler drain the list with a dispatch
+  loop. Defers in loops run once per iteration with defer-time argument
+  values, and defers in conditionals only run if registered.
 - **Recover** — Dis exception handlers + a module-data bridge pattern (handler
   writes exception to global, deferred closure reads it).
 - **Standard library** — Intercepted and inlined. `fmt.Sprintf` becomes a
@@ -997,8 +1000,16 @@ always the tested value. Swapping operands silently inverts the condition.
 
 ## Bug Log
 
-Every bug encountered during development, in chronological order. Each entry
-describes the symptom, root cause, and fix.
+Every bug encountered during initial development, in chronological order.
+Each entry describes the symptom, root cause, and fix. Bugs found after
+the differential-testing harness landed are documented in
+[docs/DIFFTEST-FINDINGS.md](docs/DIFFTEST-FINDINGS.md) instead — among
+them: package-level var initializers never running, zero-arg
+`fmt.Println()` linking to PC 0, multi-word globals overlapping MP data,
+map delete corrupting the heap for pointer values, interface equality
+comparing only the tag word, unsigned 64-bit div/rem/shift using signed
+opcodes, nested value arrays under-allocated, the compile-time defer
+model (replaced by runtime defer records), and strconv range handling.
 
 ### B01: Operand Zero-Value Encodes as AMP
 
@@ -1300,13 +1311,15 @@ under `-c1` fails this gate. The current ranked list of real divergences lives i
 | Test code | ~3,500 |
 | Dis bytecode library | ~2,000 |
 | CLI tools | ~250 |
-| E2E test programs | 172+ |
+| E2E test programs | 209 (testdata) + 52 (difftest corpus) |
+| Locked differential corpus | 246 programs, byte-identical to `go run` under `-c0` and `-c1` |
 | Multi-package test scenarios | 4 |
 | Benchmark programs | 16 |
 | Supported Go features | Tiers 1-7 (see [Status](#status-and-limitations)) |
 | Supported Sys functions | 15 |
+| Linked builtin modules | Sys, Math (libm, loaded on demand) |
 | Intercepted stdlib packages | 14 (incl. embed, unsafe, math/cmplx) |
-| Bugs found and fixed | 28 |
+| Bugs found and fixed | 28 in the bug log + the difftest fix sprints ([docs/DIFFTEST-FINDINGS.md](docs/DIFFTEST-FINDINGS.md)) |
 | VM opcodes used | 62+ |
 | External dependencies | 1 (golang.org/x/tools) |
 
@@ -1381,10 +1394,13 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
    → `2.68`) the last digit can differ from Go's `strconv`, which uses
    round-half-to-even on an exact-decimal expansion. `%g`/`%e` still fall back
    to Dis `CVTFC` and do not yet honor an explicit precision.
-4. **`math.Pow` integer exponents only.** `Pow` lowers to the Dis `EXPF`
-   opcode, which raises a real to an *integer* power. Integer exponents are
-   exact; a fractional exponent (e.g. `Pow(2, 0.5)`) is truncated toward zero
-   and therefore wrong. A general implementation would need `exp(y*ln(x))`.
+4. **`math.Pow` integer exponents only** (fixed). `Pow`, `Sqrt`, `Exp`,
+   `Log`, `Log10`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Atan2`
+   now link the Inferno `$Math` builtin module (libm in the VM) via a
+   second import list — exact results, byte-identical to Go through
+   `%.6f`. `Log2`, `Exp2`, and `Hypot` are compositions over the module
+   functions. The `$Math` LOAD and import list are emitted only when a
+   program uses them. Hyperbolics and special functions remain stubs.
 5. **No reflection.** `reflect` package is not supported.
 6. **No cgo.** Cannot call C functions.
 7. **Single-binary output.** All packages are inlined into one `.dis` file;
@@ -1401,3 +1417,11 @@ compiler implementation: `&^` operator, complex numbers, generics, `go:embed`,
 9. **Standard library is stub-only.** The 12+ intercepted stdlib packages
    provide type signatures for compilation but implementations are inlined
    as Dis instruction sequences, not full Go stdlib implementations.
+10. **Strings are rune-indexed, not byte-indexed.** Go strings are UTF-8
+    byte sequences (`len("héllo") == 6`, `s[i]` is a byte); Dis strings are
+    rune sequences (`LENC`/`INDC` count and index characters, so godis
+    gives `len("héllo") == 5`). For ASCII content the two agree exactly;
+    for non-ASCII content `len`, indexing, and byte-offset values in
+    `range` diverge from Go. This is a deliberate representation choice —
+    Dis strings interoperate with Limbo and the rest of Inferno — and is
+    unlikely to change.

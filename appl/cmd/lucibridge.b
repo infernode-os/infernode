@@ -1776,7 +1776,7 @@ init(nil: ref Draw->Context, args: list of string)
 					"Your API key is configured, but llmsrv didn't come up. " +
 					"Common causes: an invalid key, blocked network access to api.anthropic.com, " +
 					"or a startup error logged at /tmp/lucibridge.log. " +
-					"Open Settings → LLM Service, then close InferNode and relaunch.");
+					"Open Settings → LLM Service, then close InferNode and relaunch it.");
 			else
 				writemsg("veltro",
 					"Your Ollama server is configured, but I can't reach it. " +

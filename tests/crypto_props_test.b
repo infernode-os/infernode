@@ -127,15 +127,42 @@ Result: adt {
 	secret:	array of byte;
 };
 
-authproc(fd: ref Sys->FD, ai: ref Keyring->Authinfo, c: chan of ref Result)
+# Every spawned proc self-reports its pid first, so the parent can kill
+# stragglers.  A proc left blocked (on a pipe read after a stalled handshake,
+# or in a long sleep) keeps the emu from ever exiting — every Dis proc must
+# terminate before cleanexit.  On CI that leak surfaced as a hang or a stray
+# "process dis faults" at teardown right after the suite PASSed (INFR-303).
+killpid(pid: int)
 {
+	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+authproc(fd: ref Sys->FD, ai: ref Keyring->Authinfo, pidc: chan of int, c: chan of ref Result)
+{
+	pidc <-= sys->pctl(0, nil);
 	(owner, secret) := kr->auth(fd, ai, 0);
 	c <-= ref Result(owner, secret);
 }
 
-timerproc(c: chan of int, ms: int)
+# Sleep in slices, polling a cancel channel: a "kill" via #p/n/ctl does not
+# interrupt a proc blocked in the host nanosleep on macOS (swiproc's
+# host-syscall interrupt path is a no-op there), so a plain sleep(ms) would
+# always run to completion and delay emu exit by the full timeout.
+timerproc(cancel: chan of int, c: chan of int, ms: int)
 {
-	sys->sleep(ms);
+	for(elapsed := 0; elapsed < ms; elapsed += 100){
+		sys->sleep(100);
+		alt {
+		<-cancel =>
+			return;
+		* =>
+			;
+		}
+	}
 	c <-= 1;
 }
 
@@ -145,20 +172,34 @@ runHandshake(t: ref T, a, b: ref Keyring->Authinfo, ms: int): (ref Result, ref R
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
 		t.fatal(sys->sprint("pipe failed: %r"));
-	ca := chan of ref Result;
-	cb := chan of ref Result;
-	tmo := chan of int;
-	spawn authproc(fds[0], a, ca);
-	spawn authproc(fds[1], b, cb);
-	spawn timerproc(tmo, ms);
+	pidc := chan[1] of int;
+	# Buffered result/timeout/cancel chans: a proc that finishes after we
+	# have stopped listening must not block forever on the send.
+	ca := chan[1] of ref Result;
+	cb := chan[1] of ref Result;
+	tmo := chan[1] of int;
+	cancel := chan[1] of int;
+	spawn authproc(fds[0], a, pidc, ca);
+	pida := <-pidc;
+	spawn authproc(fds[1], b, pidc, cb);
+	pidb := <-pidc;
+	spawn timerproc(cancel, tmo, ms);
+	fds = nil;	# only the authprocs hold the pipe ends now
 	ra, rb: ref Result;
 	for(got := 0; got < 2;){
 		alt {
 		r := <-ca => ra = r; got++;
 		r := <-cb => rb = r; got++;
-		<-tmo => return (nil, nil);
+		<-tmo =>
+			# Stalled handshake: kill the blocked authprocs so the
+			# leak doesn't pin the emu open; the caller reports the
+			# stall as a test failure.
+			killpid(pida);
+			killpid(pidb);
+			return (nil, nil);
 		}
 	}
+	cancel <-= 1;	# stop the timer so its sleep doesn't delay emu exit
 	return (ra, rb);
 }
 
@@ -219,39 +260,55 @@ testReplayRejected(t: ref T)
 	rdone := chan[1] of int;
 	spawn reflector(fds[1], rdone);
 
-	cr := chan of ref Result;
-	spawn authproc(fds[0], alice, cr);
-	tmo := chan of int;
-	spawn timerproc(tmo, 15000);
+	pidc := chan[1] of int;
+	cr := chan[1] of ref Result;
+	spawn authproc(fds[0], alice, pidc, cr);
+	pida := <-pidc;
+	tmo := chan[1] of int;
+	cancel := chan[1] of int;
+	spawn timerproc(cancel, tmo, 15000);
+	fds = nil;	# the reflector unblocks via pipe close when authproc goes away
 
 	alt {
 	r := <-cr =>
+		cancel <-= 1;
 		t.assert(r.secret == nil, "a reflected handshake must NOT yield a session secret");
 		t.assert(contains(r.owner, "replay"),
 			sys->sprint("reflection rejected as a replay (got %q)", r.owner));
 	<-tmo =>
+		killpid(pida);
 		t.fatal("peer hung on a reflected handshake");
 	}
 }
 
 # ---- CorruptedCert -------------------------------------------------------
 
-# Flip the last base64 character of a serialised certificate to a different
-# valid base64 character: keeps the structure parseable but changes the
-# decoded signature bytes, so verification must fail.
+# Corrupt a serialised certificate so its signature no longer verifies, while
+# keeping it parseable.  Flip the last TWO base64 characters, to a character
+# that differs in its high bits.
+#
+# Flipping a *single* trailing character (e.g. A<->B, which differ only in
+# bit 0) is not reliable: the final 6-bit base64 group is only partially
+# significant when the signature's byte length is not a multiple of 3, so the
+# flipped bit can decode to nothing.  The signature bytes are then unchanged,
+# the certificate stays valid, and the test sees a false negative for ~20-25%
+# of random signing keys (the rate at which the final group lands on padding
+# bits).  Corrupting two adjacent significant characters guarantees the
+# decoded signature changes regardless of the final group's byte alignment.
 corruptB64(s: string): string
 {
 	a := array of byte s;
-	for(i := len a - 1; i >= 0; i--){
+	flipped := 0;
+	for(i := len a - 1; i >= 0 && flipped < 2; i--){
 		c := int a[i];
 		isb64 := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
 			 (c >= '0' && c <= '9') || c == '+' || c == '/';
 		if(isb64){
 			if(c == 'A')
-				a[i] = byte 'B';
+				a[i] = byte 'V';
 			else
 				a[i] = byte 'A';
-			return string a;
+			flipped++;
 		}
 	}
 	return string a;

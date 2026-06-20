@@ -1,0 +1,4 @@
+tool=shell
+	description='Read-only observation of the shell terminal'
+	authorities='reads_fs'
+	notes='Reads the shell transcript and input line via /tmp/veltro/shell. Cannot send commands.'

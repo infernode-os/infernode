@@ -1,0 +1,4 @@
+tool=man
+	description='Control the wm/man page viewer'
+	authorities='reads_fs sends_ui'
+	notes='UI control via /tmp/veltro/man IPC; reads man pages.'

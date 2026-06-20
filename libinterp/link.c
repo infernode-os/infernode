@@ -42,7 +42,8 @@ linkm(Module *m, Modlink *ml, int i, Import *ldt)
 		if(strcmp(ldt->name, l->name) == 0)
 			break;
 
-	if(l == nil) {
+	/* the loop ends on the nil-name terminator, never a nil l */
+	if(l->name == nil) {
 		snprint(e, sizeof(e), "link failed fn %s->%s() not implemented", m->name, ldt->name);
 		goto bad;
 	}

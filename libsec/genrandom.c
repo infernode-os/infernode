@@ -41,10 +41,13 @@ X917init(void)
 	int n;
 	uchar mix[128];
 	uchar key3[3][8];
-	ulong *ulp;
+	u32int *ulp;
 
-	ulp = (ulong*)key3;
-	for(n = 0; n < sizeof(key3)/sizeof(ulong); n++)
+	/* truerand() yields 32 bits. Filling ulong-sized (8-byte on LP64)
+	 * slots left the high half of every slot zero -- 12 of the 24 key
+	 * bytes -- halving the X9.17 PRNG's 3DES key entropy. */
+	ulp = (u32int*)key3;
+	for(n = 0; n < sizeof(key3)/sizeof(u32int); n++)
 		ulp[n] = truerand();
 	setupDES3state(&x917state.des3, key3, nil);
 	X917(mix, sizeof mix);

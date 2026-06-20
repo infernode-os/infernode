@@ -245,7 +245,7 @@ void *
 tramp(void *arg)
 {
     Proc *p = arg;
-    p->sigid = (int)pthread_self();
+    p->sigid = (uintptr)pthread_self();
     if(pthread_setspecific(prdakey, arg)) {
         print("set specific data failed in tramp\n");
         pthread_exit(0);

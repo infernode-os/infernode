@@ -1,0 +1,4 @@
+tool=plan
+	description='Structured planning for multi-step work'
+	authorities='writes_fs'
+	notes='Persists a plan to the session dir or /tmp/veltro/plans.'

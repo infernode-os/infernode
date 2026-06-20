@@ -66,11 +66,18 @@ int		emptystr(char*);
 void		emuinit(void*);
 int		eqchan(Chan*, Chan*, int);
 int		eqqid(Qid, Qid);
-void		error(char*);
-void		errorf(char*, ...);
+#ifndef INF_NORETURN
+#  if defined(__GNUC__) || defined(__clang__)
+#    define INF_NORETURN __attribute__((noreturn))
+#  else
+#    define INF_NORETURN	/* kencc and other compilers: no-op */
+#  endif
+#endif
+void		error(char*) INF_NORETURN;
+void		errorf(char*, ...) INF_NORETURN;
 #pragma varargck argpos errorf 1
 void		excinit(void);
-void		exhausted(char*);
+void		exhausted(char*) INF_NORETURN;
 int		export(int, char*, int);
 Chan*	fdtochan(Fgrp*, int, int, int, int);
 int		findmount(Chan**, Mhead**, int, int, Qid);
@@ -118,7 +125,7 @@ Fgrp*	newfgrp(Fgrp*);
 Mount*	newmount(Mhead*, Chan*, int, char*);
 Pgrp*	newpgrp(void);
 Proc*	newproc(void);
-void		nexterror(void);
+void		nexterror(void) INF_NORETURN;
 void		notkilled(void);
 int		openmode(ulong);
 void		osblock(void);

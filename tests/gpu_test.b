@@ -320,8 +320,11 @@ init(nil: ref Draw->Context, args: list of string)
 	# Load GPU module
 	gpu = load GPU GPU->PATH;
 	if(gpu == nil) {
+		# $GPU isn't compiled into this emu build (the common case on a
+		# bare host / headless CI). Environmental, not a regression —
+		# raise a "skip:" token for a clean runner SKIP (INFR-312).
 		sys->fprint(sys->fildes(2), "cannot load GPU module: %r\n");
-		raise "fail:cannot load GPU";
+		raise "skip:GPU module not built into emu";
 	}
 
 	# Run tests

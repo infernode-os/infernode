@@ -297,3 +297,11 @@ dis/interop_node_server.dis
 dis/interop_node_client.dis
 /dis/tests/stress/
 /dis/tests/bench/
+
+# Local video/image capture from codec testing (kept on disk, never committed)
+*.m1v
+*.y4m
+scratchrun/
+
+# 2FA POC scratch — belongs with the YubiKey workstream, not the main tree
+tools/2fa-poc/

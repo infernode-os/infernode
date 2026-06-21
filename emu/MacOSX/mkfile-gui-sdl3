@@ -17,11 +17,5 @@ SDL3_LIBS=`pkg-config --libs sdl3 2>/dev/null || echo "-L/opt/homebrew/lib -lSDL
 OPUS_CFLAGS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists opus 2>/dev/null; then echo -DHAVE_OPUS; pkg-config --cflags opus; fi`
 OPUS_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists opus 2>/dev/null; then pkg-config --libs opus; fi`
 
-# libfido2 for /dev/2fa (second-factor auth). Same conditional pattern as opus:
-# only define -DHAVE_FIDO2 when libfido2 is present, so a host without it
-# degrades to an emu without /dev/2fa rather than failing to find <fido.h>.
-FIDO2_CFLAGS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
-FIDO2_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
-
-GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $OPUS_CFLAGS $FIDO2_CFLAGS
-GUILIBS=$SDL3_LIBS $OPUS_LIBS $FIDO2_LIBS
+GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $OPUS_CFLAGS
+GUILIBS=$SDL3_LIBS $OPUS_LIBS

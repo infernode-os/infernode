@@ -17,7 +17,6 @@ DIRS=\
 	dbm\
 
 TARG=\
-	2fa.dis\
 	9660srv.dis\
 	9cpu.dis\
 	9export.dis\

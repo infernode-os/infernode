@@ -125,6 +125,8 @@ TARG=\
 	timers.dis\
 	titlebar.dis\
 	translate.dis\
+	twofa.dis\
+	twofaslot.dis\
 	ubfa.dis\
 	url.dis\
 	vac.dis\
@@ -260,6 +262,8 @@ SYSMODULES=\
 	titlebar.m\
 	tk.m\
 	translate.m\
+	twofa.m\
+	twofaslot.m\
 	ubfa.m\
 	url.m\
 	vac.m\

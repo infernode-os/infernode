@@ -32,6 +32,9 @@ Secstore: module
 	# Modern crypto (AES-256-GCM, HMAC-SHA256 key derivation)
 	mkfilekey2:	fn(pass: string): array of byte;
 	mkfilekey3:	fn(user, pass: string): array of byte;
+	# Mix a hardware second-factor secret R into an already-stretched root key
+	# to form a key-encryption key for a 2FA slot (see doc/second-factor-auth.md).
+	mkkek2fa:	fn(rootkey, R: array of byte): array of byte;
 	encrypt2:	fn(a: array of byte, key: array of byte): array of byte;
 	decrypt2:	fn(a: array of byte, key: array of byte, legacykey: array of byte): array of byte;
 	encrypt3:	fn(a: array of byte, rootkey: array of byte): array of byte;

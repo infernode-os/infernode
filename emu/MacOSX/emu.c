@@ -6,7 +6,7 @@
 
 #include "emu.root.h"
 
-ulong ndevs = 31;
+ulong ndevs = 32;
 
 extern Dev rootdevtab;
 extern Dev consdevtab;
@@ -31,6 +31,7 @@ extern Dev eiadevtab;
 extern Dev audiodevtab;
 extern Dev opusdevtab;
 extern Dev memdevtab;
+extern Dev tfadevtab;
 Dev* devtab[]={
 	&rootdevtab,
 	&consdevtab,
@@ -55,6 +56,7 @@ Dev* devtab[]={
 	&audiodevtab,
 	&opusdevtab,
 	&memdevtab,
+	&tfadevtab,
 	nil,
 	nil,
 	nil,

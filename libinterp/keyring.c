@@ -1725,13 +1725,13 @@ void
 Keyring_auth(void *fp)
 {
 	F_Keyring_auth *f;
-	mpint *r0, *r1, *p, *alpha, *alphar0, *alphar1, *alphar0r1;
+	mpint *r0, *r1, *p, *alpha, *alphar0, *alphar1, *alphar0r1, *pm1;
 	SK *mysk;
 	PK *mypk, *spk, *hispk;
 	Certificate *cert, *hiscert, *alphacert;
 	char *buf, *err;
 	uchar *cvb;
-	int n, fd, version;
+	int n, fd;
 	long now;
 	/* hybrid post-quantum (ML-KEM-768) key agreement material */
 	uchar myek[MLKEM768_PKLEN], mydk[MLKEM768_SKLEN];
@@ -1751,7 +1751,7 @@ Keyring_auth(void *fp)
 	f->ret->t0 = H;
 	destroy(f->ret->t1);
 	f->ret->t1 = H;
-	r0 = r1 = alphar0 = alphar1 = alphar0r1 = nil;
+	r0 = r1 = alphar0 = alphar1 = alphar0r1 = pm1 = nil;
 
 	/* check args */
 	if(f->fd == H || f->fd->fd < 0){
@@ -1779,8 +1779,12 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 	buf[n] = 0;
-	version = atoi(buf);
-	if(version != 2 || n > 4){
+	/*
+	 * Require the version token to be exactly "2".  atoi() would accept
+	 * non-canonical encodings such as "2abc", "0002", "+2" or " 2",
+	 * widening the pre-auth attack surface; demand a single canonical byte.
+	 */
+	if(n != 1 || buf[0] != '2'){
 		err = "incompatible authentication protocol (need hybrid PQ v2)";
 		goto out;
 	}
@@ -1877,8 +1881,31 @@ Keyring_auth(void *fp)
 	buf[n] = 0;
 	alphar1 = strtomp(buf, nil, 64, nil);
 
-	/* trying a fast one */
-	if(mpcmp(p, alphar1) <= 0){
+	/*
+	 * strtomp() returns nil when the peer sends a value with no valid
+	 * base64/mpint digits (e.g. a non-base64 DH share).  mpcmp()
+	 * dereferences its arguments unconditionally, so passing nil here is
+	 * a pre-auth remote crash (INFR-322).  Reject it before any compare.
+	 */
+	if(alphar1 == nil){
+		err = "malformed diffie hellman share";
+		goto out;
+	}
+
+	/*
+	 * Validate the peer's DH share before doing any further work:
+	 * require 1 < alphar1 < p-1 (INFR-323).  Rejecting <= 1 also rejects
+	 * zero and negative values because mpcmp() is sign-aware; rejecting
+	 * >= p-1 also rejects >= p.  The weak shares 0, 1, p-1 (and p) force
+	 * the shared secret into a tiny subgroup and must never be accepted.
+	 */
+	if(mpcmp(alphar1, mpone) <= 0){
+		err = "implausible parameter value";
+		goto out;
+	}
+	pm1 = mpnew(0);
+	mpsub(p, mpone, pm1);
+	if(mpcmp(alphar1, pm1) >= 0){
 		err = "implausible parameter value";
 		goto out;
 	}
@@ -2132,6 +2159,7 @@ out:
 		mpfree(alphar1);
 		mpfree(alphar0r1);
 	}
+	mpfree(pm1);
 }
 
 static Keyring_Authinfo*

@@ -83,7 +83,9 @@ createsession(): string
 		sys->fprint(stderr, "agentlib: hint: is llm9p running and mounted at /mnt/llm?\n");
 		return "";
 	}
-	buf := array[32] of byte;
+	# Session names are now 32-char capability tokens (INFR-321); 64 bytes
+	# holds the token plus its trailing newline with room to spare.
+	buf := array[64] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0) {
 		sys->fprint(stderr, "agentlib: read /mnt/llm/new returned %d: %r\n", n);

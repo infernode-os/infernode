@@ -30,6 +30,7 @@ include "draw.m";
 
 include "keyring.m";
 	kr: Keyring;
+	IPint: import kr;
 
 include "security.m";
 	auth: Auth;
@@ -46,11 +47,16 @@ PQAuthTest: module
 SRCFILE: con "/tests/pqauth_test.b";
 
 # man-in-the-middle relay corruption modes
-Clean, FlipByte, Truncate: con iota;
+Clean, FlipByte, Truncate, Replace: con iota;
 
-# ML-KEM public key is frame index 4 in the client->server direction
+# frame indices in the client->server direction
 # (0=version, 1=alpha**r0, 2=cert, 3=pubkey, 4=ml-kem ek)
+VERFRAME: con 0;
+DHFRAME: con 1;		# the peer's DH public value (validated in keyring.c)
 EKFRAME: con 4;
+
+# payload substituted into the corrupted frame in Replace mode
+replacement: array of byte;
 
 passed := 0;
 failed := 0;
@@ -384,6 +390,15 @@ pump(src, dst: ref Sys->FD, mode, target: int, done: chan of int)
 			idx++;
 			continue;
 		}
+		if(!neg && idx == target && mode == Replace){
+			# substitute the whole frame payload with an attacker-chosen value
+			nh := array of byte sys->sprint("%4.4d\n", len replacement);
+			sys->write(dst, nh, len nh);
+			if(len replacement > 0)
+				sys->write(dst, replacement, len replacement);
+			idx++;
+			continue;
+		}
 		if(!neg && idx == target && mode == FlipByte && n > 0)
 			payload[0] = byte (int payload[0] ^ 16r01);
 
@@ -497,6 +512,90 @@ testDowngradeRejected(t: ref T)
 		sys->sprint("downgrade rejected with protocol error (got %q)", owner));
 }
 
+# ---- pre-auth DH-share / version validation (INFR-322, INFR-323) ---------
+
+# Substitute the client->server frame `target` with `repl` and return the
+# victim (server-side) result. Both peers run in spawned procs collected with
+# a timeout, so a regression that crashes the VM or wedges the handshake is
+# caught rather than silently passing. target is VERFRAME or DHFRAME.
+frameAttack(t: ref T, target: int, repl: array of byte): ref Result
+{
+	(alice, bob) := setupPair(t, "ed25519", 0);
+
+	pa := array[2] of ref Sys->FD;	# alice <-> relay
+	pb := array[2] of ref Sys->FD;	# relay <-> bob
+	if(sys->pipe(pa) < 0 || sys->pipe(pb) < 0)
+		t.fatal(sys->sprint("pipe failed: %r"));
+
+	replacement = repl;
+
+	ca := chan of ref Result;
+	cb := chan of ref Result;
+	d := chan[2] of int;	# buffered: pumps signal without a reader
+
+	spawn authproc(pa[0], alice, ca);		# alice (attacker-relayed client)
+	spawn authproc(pb[0], bob, cb);			# bob (victim / server side)
+	spawn pump(pa[1], pb[1], Replace, target, d);	# alice -> bob, corrupt `target`
+	spawn pump(pb[1], pa[1], Clean, -1, d);		# bob -> alice, clean
+
+	(rb, ok) := collect(cb, 20000);
+	if(!ok){
+		rb = ref Result;
+		rb.err = "victim hung";
+	}
+	collect(ca, 5000);	# best-effort drain of the client proc
+	return rb;
+}
+
+# INFR-322: a DH share with no valid base64 digits makes strtomp() return
+# nil; pre-fix, mpcmp() then dereferenced nil -> an unauthenticated remote
+# crash. The victim must instead reject it cleanly and stay alive.
+testMalformedDHShare(t: ref T)
+{
+	rb := frameAttack(t, DHFRAME, array of byte "!!!!!!!!!!!!!!!!");
+	t.assertsne(rb.err, "victim hung",
+		"malformed DH share must not crash or hang the server (INFR-322)");
+	t.assert(rb.secret == nil, "victim must derive no secret from a malformed DH share");
+	t.assert(contains(rb.err, "malformed") || contains(rb.err, "diffie"),
+		sys->sprint("server rejects malformed DH share cleanly (got %q)", rb.err));
+}
+
+# INFR-323: the weak share 1 lies in [.. <= 1 ..]; pre-fix the validation
+# only rejected alphar1 >= p, so 1 slipped through. Must now be "implausible".
+testWeakDHShareOne(t: ref T)
+{
+	one := array of byte IPint.inttoip(1).iptob64();
+	rb := frameAttack(t, DHFRAME, one);
+	t.assertsne(rb.err, "victim hung", "weak DH share 1 must not hang the server");
+	t.assert(rb.secret == nil, "victim must reject DH share 1 (INFR-323)");
+	t.assert(contains(rb.err, "implausible"),
+		sys->sprint("server rejects weak DH share 1 (got %q)", rb.err));
+}
+
+# INFR-323: the share 0 encodes to an empty mpint payload, so it is caught by
+# the nil guard rather than the range guard -- either way it must be refused.
+testWeakDHShareZero(t: ref T)
+{
+	zero := array of byte IPint.inttoip(0).iptob64();
+	rb := frameAttack(t, DHFRAME, zero);
+	t.assertsne(rb.err, "victim hung", "weak DH share 0 must not hang the server");
+	t.assert(rb.secret == nil, "victim must reject DH share 0 (INFR-323)");
+	t.assert(contains(rb.err, "implausible") || contains(rb.err, "malformed") || contains(rb.err, "diffie"),
+		sys->sprint("server rejects weak DH share 0 (got %q)", rb.err));
+}
+
+# INFR-322 (additional finding): "2abc" gave atoi()==2 with length 4, which
+# slipped past the old `n > 4` length check. The strict parser must require
+# exactly "2".
+testNonCanonicalVersion(t: ref T)
+{
+	rb := frameAttack(t, VERFRAME, array of byte "2abc");
+	t.assertsne(rb.err, "victim hung", "non-canonical version must not hang the server");
+	t.assert(rb.secret == nil, "victim must reject a non-canonical version token");
+	t.assert(contains(rb.err, "incompatible") || contains(rb.err, "protocol"),
+		sys->sprint("server rejects non-canonical version (got %q)", rb.err));
+}
+
 # ---- entry point ---------------------------------------------------------
 
 init(nil: ref Draw->Context, args: list of string)
@@ -529,6 +628,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DowngradeRejected", testDowngradeRejected);
 	run("TamperedEkRejected", testTamperedEk);
 	run("MalformedEkRejected", testMalformedEk);
+	run("MalformedDHShareRejected", testMalformedDHShare);
+	run("WeakDHShareOneRejected", testWeakDHShareOne);
+	run("WeakDHShareZeroRejected", testWeakDHShareZero);
+	run("NonCanonicalVersionRejected", testNonCanonicalVersion);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

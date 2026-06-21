@@ -41,6 +41,8 @@ include "keyring.m";
 include "factotum.m";
 	factotum: Factotum;
 
+include "twofaslot.m";
+
 include "sh.m";
 
 WmLogon: module
@@ -60,6 +62,8 @@ STATE_LOGIN:		con 0;
 STATE_SETUP_PASS:	con 1;
 STATE_SETUP_CONFIRM:	con 2;
 STATE_LOGIN_FAILED:	con 3;
+STATE_RECOVERY:		con 4;
+STATE_FIDOPIN:		con 5;
 
 display_g: ref Display;
 screen: ref Image;
@@ -71,6 +75,7 @@ logo_g: ref Image;	# cached brand image
 passbuf: string;
 confirmbuf: string;
 savedpass: string;
+savedloginpass: string;	# secstore password held while prompting for the recovery passphrase
 cursor: int;
 statusmsg: string;
 state: int;
@@ -209,8 +214,13 @@ handleenter(): int
 		return 1;
 
 	STATE_LOGIN =>
-		if(dounlock())
+		r := dounlock();
+		if(r == 1)
 			return 1;
+		if(r == 2){	# moved to the recovery-passphrase prompt
+			redraw();
+			return 0;
+		}
 		# Unlock failed — let user retry or skip
 		state = STATE_LOGIN_FAILED;
 		statusmsg += "\nEnter: try again  |  Escape: continue without secstore";
@@ -222,6 +232,60 @@ handleenter(): int
 		passbuf = "";
 		state = STATE_LOGIN;
 		statusmsg = "Enter password to unlock";
+		redraw();
+		return 0;
+
+	STATE_RECOVERY =>
+		if(passbuf == nil || passbuf == "") {
+			statusmsg = "Recovery passphrase required";
+			redraw();
+			return 0;
+		}
+		statusmsg = "Unlocking with recovery passphrase...";
+		redraw();
+		rerr := connectfactotum(savedloginpass, passbuf, "");
+		passbuf = "";
+		if(rerr == nil) {
+			enablesecstoresave(savedloginpass);
+			createsecstoresentinel();
+			savedloginpass = "";
+			statusmsg = "Unlocked";
+			redraw();
+			ensurellmsrv();
+			sys->sleep(500);
+			return 1;
+		}
+		savedloginpass = "";
+		state = STATE_LOGIN_FAILED;
+		statusmsg = "Recovery failed\nEnter: try again  |  Escape: continue without secstore";
+		redraw();
+		return 0;
+
+	STATE_FIDOPIN =>
+		fidopin := passbuf;		# blank allowed (touch-only keys)
+		passbuf = "";
+		statusmsg = "Unlocking with your security key (touch it)...";
+		redraw();
+		ferr := connectfactotum(savedloginpass, "", fidopin);
+		if(ferr == nil) {
+			enablesecstoresave(savedloginpass);
+			createsecstoresentinel();
+			savedloginpass = "";
+			statusmsg = "Unlocked";
+			redraw();
+			ensurellmsrv();
+			sys->sleep(500);
+			return 1;
+		}
+		if(ferr == "NEEDRECOVERY") {
+			state = STATE_RECOVERY;
+			statusmsg = "Security key didn't unlock — enter recovery passphrase";
+			redraw();
+			return 0;
+		}
+		savedloginpass = "";
+		state = STATE_LOGIN_FAILED;
+		statusmsg = "Unlock failed: " + ferr + "\nEnter: try again  |  Escape: continue without secstore";
 		redraw();
 		return 0;
 	}
@@ -371,6 +435,10 @@ redraw()
 			prompt = "New password:";
 		STATE_SETUP_CONFIRM =>
 			prompt = "Confirm password:";
+		STATE_RECOVERY =>
+			prompt = "Recovery passphrase:";
+		STATE_FIDOPIN =>
+			prompt = "Security key PIN:";
 		}
 		pw := bodyfont.width(prompt);
 		screen.text(Point(cx - pw / 2, y), dimgrey, ZP, bodyfont, prompt);
@@ -430,7 +498,7 @@ dosetupandunlock(pass: string)
 	statusmsg = "Unlocking (this may take a moment)...";
 	redraw();
 
-	err = connectfactotum(pass);
+	err = connectfactotum(pass, "", "");
 	if(err == nil) {
 		enablesecstoresave(pass);
 		createsecstoresentinel();
@@ -453,6 +521,19 @@ dosetupandunlock(pass: string)
 
 # Normal boot: unlock secstore and load keys.
 # Returns 1 on success, 0 on failure.
+# 1 if this account has 2FA key-slots (checked locally, before secstore).
+accountis2fa(): int
+{
+	ts := load Twofaslot Twofaslot->PATH;
+	if(ts == nil)
+		return 0;
+	ts->init();
+	u := rf("/dev/user");
+	if(u == nil)
+		u = "inferno";
+	return ts->is2fa(u);
+}
+
 dounlock(): int
 {
 	if(passbuf == nil || passbuf == "") {
@@ -461,10 +542,20 @@ dounlock(): int
 		return 0;
 	}
 
+	# 2FA accounts: collect the security-key PIN (UV / AAL3) before unlocking.
+	# Blank PIN is fine for touch-only keys; legacy accounts unlock directly.
+	if(accountis2fa()){
+		savedloginpass = passbuf;
+		passbuf = "";
+		state = STATE_FIDOPIN;
+		statusmsg = "Enter your security key PIN (blank if none)";
+		return 2;
+	}
+
 	statusmsg = "Unlocking (this may take a moment)...";
 	redraw();
 
-	err := connectfactotum(passbuf);
+	err := connectfactotum(passbuf, "", "");
 
 	# Establish secstore save-back path so future keys persist
 	if(err == nil) {
@@ -519,7 +610,7 @@ startllmsrv()
 	mod->init(nil, "llmsrv" :: nil);
 }
 
-connectfactotum(pass: string): string
+connectfactotum(pass, recoverypass, fidopin: string): string
 {
 	if(secstore == nil)
 		return "secstore module not loaded";
@@ -553,9 +644,38 @@ connectfactotum(pass: string): string
 		return nil;
 	}
 
-	plaintext := secstore->decrypt3(file, rootkey, filekey, legacykey);
-	if(plaintext == nil)
-		return "wrong password";
+	# 2FA accounts encrypt the factotum blob under a data key wrapped in
+	# YubiKey/recovery key-slots; legacy password-only accounts have no slots
+	# and take the unchanged path below. Strictly additive — no slots, no change.
+	plaintext: array of byte;
+	twofaslot := load Twofaslot Twofaslot->PATH;
+	is2fa := 0;
+	if(twofaslot != nil){
+		twofaslot->init();
+		is2fa = twofaslot->is2fa(user);
+	}
+	if(is2fa){
+		# Try the present YubiKey (touch); if recoverypass is given, unlock()
+		# also tries the recovery slot.
+		(dk, nil) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
+		if(dk != nil)
+			plaintext = secstore->decrypt3(file, dk, nil, nil);
+		# Fall back to the password path if the blob is still password-encrypted
+		# — a legacy/un-migrated blob during an incomplete enroll/disable. A
+		# fully migrated 2FA blob will NOT decrypt under the password, so strong
+		# mode is preserved when the key is simply absent.
+		if(plaintext == nil)
+			plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
+		if(plaintext == nil){
+			if(recoverypass == "")
+				return "NEEDRECOVERY";	# signal logon to prompt for the recovery passphrase
+			return "recovery passphrase did not unlock";
+		}
+	}else{
+		plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
+		if(plaintext == nil)
+			return "wrong password";
+	}
 
 	# Parse key lines and add to running factotum
 	lines := string plaintext;

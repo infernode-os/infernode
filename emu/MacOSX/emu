@@ -24,6 +24,7 @@ dev
 	audio	audio-sdl3
 	opus
 	mem
+	tfa	fido2bridge
 
 lib
 	interp

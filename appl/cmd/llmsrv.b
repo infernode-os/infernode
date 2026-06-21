@@ -107,6 +107,14 @@ NSESSFILES: con 13;  # number of files per session dir
 # Session state
 LlmSession: adt {
 	id:             int;
+	name:           string;  # unguessable capability token (INFR-321). The
+	                         # session's directory name in the namespace is
+	                         # this token, returned to its creator by reading
+	                         # /new. Root readdir does not list sessions and
+	                         # walk resolves only by exact token match, so a
+	                         # client cannot enumerate or guess another
+	                         # client's session. The numeric id stays the
+	                         # internal array/QID key only.
 	messages:       list of ref LlmMessage;
 	lastresponse:   string;
 	totaltokens:    int;
@@ -308,11 +316,42 @@ FTYPE(path: big): int
 
 # --- Session management ---
 
+# Generate an unguessable 128-bit capability token (32 hex chars) from the
+# kernel CSPRNG. Returns nil if /dev/random is unavailable, in which case we
+# refuse to mint a session rather than fall back to a guessable name (INFR-321).
+gentoken(): string
+{
+	fd := sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[16] of byte;
+	if(sys->readn(fd, buf, len buf) != len buf)
+		return nil;
+	tok := "";
+	for(i := 0; i < len buf; i++)
+		tok += sys->sprint("%.2x", int buf[i]);
+	return tok;
+}
+
+findsessionbyname(name: string): ref LlmSession
+{
+	if(name == "")
+		return nil;
+	for(i := 0; i < nsessions; i++)
+		if(sessions[i].name == name)
+			return sessions[i];
+	return nil;
+}
+
 newsession(): ref LlmSession
 {
+	tok := gentoken();
+	if(tok == nil)
+		return nil;
 	id := nextsid++;
 	s := ref LlmSession(
 		id,
+		tok,           # name: capability token
 		nil,           # messages
 		"",            # lastresponse
 		0,             # totaltokens
@@ -497,7 +536,13 @@ Serve:
 			case ft {
 			Qnew =>
 				sess := newsession();
-				data := array of byte (string sess.id + "\n");
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, "cannot allocate session"));
+					break;
+				}
+				# Return the capability token, not the numeric id: it is the
+				# only handle by which the creator can reach this session.
+				data := array of byte (sess.name + "\n");
 				srv.reply(styxservers->readbytes(m, data));
 
 			Qmodels =>
@@ -1290,7 +1335,13 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qmodels =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "models", big 0, 8r444), nil);
 	Qsessdir =>
-		return (dir(Qid(p, vers, Sys->QTDIR), string sid, big 0, 8r755), nil);
+		# Present the session's capability token as its directory name, not
+		# the numeric id, so a stat never discloses a guessable id (INFR-321).
+		nm := string sid;
+		s := findsession(sid);
+		if(s != nil)
+			nm = s.name;
+		return (dir(Qid(p, vers, Sys->QTDIR), nm, big 0, 8r755), nil);
 	Qask =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "ask", big 0, 8r666), nil);
 	Qstream =>
@@ -1347,10 +1398,12 @@ navigator(navops: chan of ref Navop)
 				"models" =>
 					n.path = MKPATH(0, Qmodels);
 				* =>
-					# Try as session ID
-					id := strtoint(n.name);
-					if(id >= 0 && findsession(id) != nil)
-						n.path = MKPATH(id, Qsessdir);
+					# Resolve a session only by exact capability-token
+					# match (INFR-321). Numeric ids are no longer walkable,
+					# so a client cannot reach a session it did not create.
+					sess := findsessionbyname(n.name);
+					if(sess != nil)
+						n.path = MKPATH(sess.id, Qsessdir);
 					else {
 						n.reply <-= (nil, Enotfound);
 						continue;
@@ -1415,12 +1468,13 @@ navigator(navops: chan of ref Navop)
 
 			case ft {
 			Qroot =>
-				# Root: new + session directories
+				# Root: new + models only. Session directories are
+				# deliberately NOT listed (INFR-321): they are reachable
+				# only via their unguessable capability token, so a client
+				# cannot enumerate sessions it does not own.
 				entries: list of big;
 				entries = MKPATH(0, Qnew) :: entries;
 				entries = MKPATH(0, Qmodels) :: entries;
-				for(i := 0; i < nsessions; i++)
-					entries = MKPATH(sessions[i].id, Qsessdir) :: entries;
 
 				# Reverse to preserve order
 				rev: list of big;
@@ -1428,7 +1482,7 @@ navigator(navops: chan of ref Navop)
 					rev = hd entries :: rev;
 				entries = rev;
 
-				i = 0;
+				i := 0;
 				for(e := entries; e != nil; e = tl e) {
 					if(i >= n.offset && n.count > 0) {
 						n.reply <-= dirgen(hd e);

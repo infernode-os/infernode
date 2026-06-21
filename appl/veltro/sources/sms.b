@@ -48,6 +48,7 @@ SmsSrc: module {
 
 	init:    fn(config: string): string;
 	name:    fn(): string;
+	capabilities: fn(): int;
 	status:  fn(): string;
 	close:   fn(): string;
 	watch:   fn(updates: chan of ref MsgSrc->Notification, stop: chan of int): string;
@@ -97,6 +98,13 @@ init(config: string): string
 }
 
 name(): string { return "sms"; }
+
+# SMS is conversational but stream-only: no inbox history (enumerate/fetch
+# unsupported) and no read/flag state surfaced through /phone (setflag no-op).
+capabilities(): int
+{
+	return MsgSrc->CAP_WATCH | MsgSrc->CAP_SEND | MsgSrc->CAP_REPLY;
+}
 
 status(): string
 {

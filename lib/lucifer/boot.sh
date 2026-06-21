@@ -94,6 +94,16 @@ sleep 1
 sleep 1
 echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
+# Email source — registered only when an account is configured, so we never
+# hardcode a provider. The Settings "Messaging" panel writes the config line
+# (server=/smtpserver=/folder=) to /lib/veltro/sources/email.conf; the
+# credentials live in factotum via the keyring "Email Account" entry. Both the
+# register here and the source's init() soft-fail if the server or creds are
+# absent (same posture as sms above). See docs/MESSAGE-INTEGRATION.md.
+if {ftest -f /lib/veltro/sources/email.conf} {
+	echo register email /dis/veltro/sources/email.dis `{cat /lib/veltro/sources/email.conf} > /mnt/msg/ctl
+}
+
 # GUI services
 luciuisrv
 echo activity create Main > /mnt/ui/ctl

@@ -6,7 +6,7 @@ implement Mail9pTest;
 # expected namespace shape.
 #
 # Pure parser tests: no network required.
-# Mount test: spawns mail9p in a separate process and stats /n/mail.
+# Mount test: spawns mail9p in a separate process and stats /mnt/mail.
 #
 # Run: emu -r. /tests/mail9p_test.dis [-v]
 #

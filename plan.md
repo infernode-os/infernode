@@ -1,5 +1,14 @@
 # Veltro Message Layer — Implementation Plan
 
+> **SUPERSEDED — historical planning doc.** The message layer shipped as
+> `msg9p` (`appl/veltro/msg9p.b`) + the `MsgSrc` interface
+> (`module/msgsrc.m`), mounted at **`/mnt/msg`** (not `/n/msg`). The shipped
+> surface is `ctl` / `notify` / `status` / `reply` / `sources` (see
+> `docs/MESSAGE-INTEGRATION.md`) — **not** the per-message `/<source>/<id>/body`
+> directory trees sketched below. The depth-mount paths here also predate the
+> `/mnt` namespace decision. Read this only for design rationale; treat
+> `docs/MESSAGE-INTEGRATION.md` and `docs/NAMESPACE-LAYOUT.md` as authoritative.
+
 ## Architecture Overview
 
 The message layer gives Veltro a **sensory nervous system**: the ability to receive

@@ -40,9 +40,22 @@ MsgSrc: module
 	FURGENT:  con 4;
 	FDRAFT:   con 8;
 
+	# Capability bits — a source declares what it actually supports via
+	# capabilities(), so an event-only source (doorbell, alarm) need not
+	# pretend to be a conversational channel. msg9p / agents check the bit
+	# instead of calling a method that returns "not supported".
+	# See docs/MESSAGE-INTEGRATION.md.
+	CAP_WATCH:     con 1;	# pushes notifications (watch) — every source has this
+	CAP_ENUMERATE: con 2;	# history listing (enumerate)
+	CAP_FETCH:     con 4;	# fetch a full message by id (fetch)
+	CAP_SEND:      con 8;	# originate a new message (send)
+	CAP_REPLY:     con 16;	# threaded reply (reply)
+	CAP_SETFLAG:   con 32;	# read/flag state (setflag)
+
 	# Lifecycle
 	init:    fn(config: string): string;	# configure source; return error or nil
 	name:    fn(): string;			# source name ("email", "telegram")
+	capabilities: fn(): int;		# bitmask of CAP_* — what this source supports
 	status:  fn(): string;			# human-readable status text
 	close:   fn(): string;			# clean disconnect
 

@@ -901,6 +901,12 @@ handshake13(cs: ref ConnState, config: ref Config,
 	# Read encrypted handshake messages
 	server_certs: list of array of byte;
 	hs_done := 0;
+	# Some peers (e.g. Gmail's SMTP submission frontend) send CertificateRequest
+	# during the handshake even when the cert is optional. RFC 8446 §4.4.2
+	# requires the client to respond with a Certificate message (empty is OK)
+	# before its Finished, echoing the certificate_request_context.
+	cert_requested := 0;
+	cert_request_context: array of byte;	# nil = empty context
 
 	while(!hs_done) {
 		# Save transcript hash (as finalized bytes) before reading next message.
@@ -918,8 +924,18 @@ handshake13(cs: ref ConnState, config: ref Config,
 			;
 
 		HT_CERTIFICATE_REQUEST =>
-			# Client cert requested - not supported yet
-			;
+			# RFC 8446 §4.3.2: body =
+			#   opaque certificate_request_context<0..2^8-1>;
+			#   Extension extensions<2..2^16-1>;
+			# We don't have a client cert, but we still MUST send an
+			# empty Certificate response (with the echoed context) or
+			# the server will respond with unexpected_message(10).
+			cert_requested = 1;
+			if(len mdata >= 1) {
+				ctxlen := int mdata[0];
+				if(1 + ctxlen <= len mdata && ctxlen > 0)
+					cert_request_context = mdata[1:1+ctxlen];
+			}
 
 		HT_CERTIFICATE =>
 			(certs, cerr) := parsecertificatemsg13(mdata);
@@ -962,6 +978,24 @@ handshake13(cs: ref ConnState, config: ref Config,
 	app_hash := hashcurrent(cs);	# includes Server Finished, not Client Finished
 	cs.cts = hkdf_expand_label(cs.suite, master_secret, "c ap traffic", app_hash, hashlen);
 	cs.sts = hkdf_expand_label(cs.suite, master_secret, "s ap traffic", app_hash, hashlen);
+
+	# If the server requested a client certificate, RFC 8446 §4.4.2 requires
+	# us to send a Certificate message before our Finished — even when we
+	# have no certificate to present. The body is:
+	#   opaque certificate_request_context<0..2^8-1>;	(echoed from request)
+	#   CertificateEntry certificate_list<0..2^24-1>;	(empty list)
+	# When the list is empty we MUST NOT send CertificateVerify (§4.4.3).
+	if(cert_requested) {
+		ctxlen := len cert_request_context;
+		cmsg := array [1 + ctxlen + 3] of byte;
+		cmsg[0] = byte ctxlen;
+		if(ctxlen > 0)
+			cmsg[1:] = cert_request_context;
+		put24(cmsg, 1 + ctxlen, 0);	# empty certificate_list
+		cerr := sendhsmsg(cs, HT_CERTIFICATE, cmsg);
+		if(cerr != nil)
+			return cerr;
+	}
 
 	# Send client Finished
 	finished_key := hkdf_expand_label(cs.suite, c_hs_traffic, "finished", nil, hashlen);

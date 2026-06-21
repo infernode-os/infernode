@@ -425,8 +425,15 @@ extern	int		dynldable(int);
 extern	void		iqlock(ILock*);
 extern	void		iqunlock(ILock*);
 extern	void		loadermodinit(void);
-extern	void		error(char*);
-extern	void		errorf(char*, ...);
+#ifndef INF_NORETURN
+#  if defined(__GNUC__) || defined(__clang__)
+#    define INF_NORETURN __attribute__((noreturn))
+#  else
+#    define INF_NORETURN	/* kencc and other compilers: no-op */
+#  endif
+#endif
+extern	void		error(char*) INF_NORETURN;
+extern	void		errorf(char*, ...) INF_NORETURN;
 extern	void		extend(void);
 extern	void		freedyncode(Module*);
 extern	void		freedyndata(Modlink*);

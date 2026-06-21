@@ -5,7 +5,7 @@
 # Integration tests for calendar9p (INFR-9) — the 9P-shape scaffold.
 #
 # Covers what the scaffold actually does without CalDAV wiring:
-#   - mount /n/cal succeeds
+#   - mount /mnt/cal succeeds
 #   - root listing contains ctl + accounts
 #   - connect <name> <url> adds an account
 #   - duplicate connect is rejected
@@ -76,80 +76,80 @@ emu_c() {
 # steps. Each test below is a grep on a single combined transcript.
 TRANSCRIPT_LOG="/tmp/.calendar9p-test-transcript.log"
 emu_c transcript 30 "
-mount -ac {mntgen} /n
+mount -ac {mntgen} /mnt
 calendar9p &
 sleep 1
 
 echo '<<< 01 root-listing >>>'
-ls /n/cal
+ls /mnt/cal
 
 echo '<<< 02 ctl-read-empty >>>'
-cat /n/cal/ctl
+cat /mnt/cal/ctl
 
 echo '<<< 03 connect >>>'
-echo connect alice https://caldav.example.com > /n/cal/ctl
+echo connect alice https://caldav.example.com > /mnt/cal/ctl
 
 echo '<<< 04 accounts-after-connect >>>'
-ls /n/cal/accounts
+ls /mnt/cal/accounts
 
 echo '<<< 05 account-dir >>>'
-ls /n/cal/accounts/alice
+ls /mnt/cal/accounts/alice
 
 echo '<<< 06 account-ctl-read >>>'
-cat /n/cal/accounts/alice/ctl
+cat /mnt/cal/accounts/alice/ctl
 
 echo '<<< 07 calendars-empty >>>'
-ls /n/cal/accounts/alice/calendars
+ls /mnt/cal/accounts/alice/calendars
 
 echo '<<< 08 connect-duplicate-state >>>'
 # Attempt duplicate connect; then read acct ctl to verify the original
 # url string still wins (the second connect was rejected so alice
 # still points at caldav.example.com, not caldav2.example.com).
-echo connect alice https://caldav2.example.com > /n/cal/ctl >[2] /dev/null
-cat /n/cal/accounts/alice/ctl
+echo connect alice https://caldav2.example.com > /mnt/cal/ctl >[2] /dev/null
+cat /mnt/cal/accounts/alice/ctl
 
 echo '<<< 09 connect-missing-url-state >>>'
 # echo without url arg; account 'bob' must NOT appear under /accounts.
-echo connect bob > /n/cal/ctl >[2] /dev/null
-ls /n/cal/accounts
+echo connect bob > /mnt/cal/ctl >[2] /dev/null
+ls /mnt/cal/accounts
 
 echo '<<< 10 unknown-verb-state >>>'
 # Unknown verb; account list must be unchanged (still just alice).
-echo nonsense > /n/cal/ctl >[2] /dev/null
-ls /n/cal/accounts
+echo nonsense > /mnt/cal/ctl >[2] /dev/null
+ls /mnt/cal/accounts
 
 echo '<<< 11 acctctl-select >>>'
-echo select default > /n/cal/accounts/alice/ctl
+echo select default > /mnt/cal/accounts/alice/ctl
 
 echo '<<< 12 acctctl-search >>>'
-echo search 2026-01-01/2026-12-31 > /n/cal/accounts/alice/ctl
+echo search 2026-01-01/2026-12-31 > /mnt/cal/accounts/alice/ctl
 
 echo '<<< 13 acctctl-unknown-state >>>'
 # Acct-ctl unknown verb; following acct ctl read must still succeed
 # (server didn't crash) and report alice's original url.
-echo nonsense > /n/cal/accounts/alice/ctl >[2] /dev/null
-cat /n/cal/accounts/alice/ctl
+echo nonsense > /mnt/cal/accounts/alice/ctl >[2] /dev/null
+cat /mnt/cal/accounts/alice/ctl
 
 echo '<<< 14 second-account >>>'
-echo connect bob https://caldav.bob.com > /n/cal/ctl
-ls /n/cal/accounts
+echo connect bob https://caldav.bob.com > /mnt/cal/ctl
+ls /mnt/cal/accounts
 
 echo '<<< 15 disconnect-first >>>'
-echo disconnect alice > /n/cal/ctl
-ls /n/cal/accounts
+echo disconnect alice > /mnt/cal/ctl
+ls /mnt/cal/accounts
 
 echo '<<< 16 disconnect-missing-state >>>'
 # Disconnect nonexistent; remaining accounts must be unchanged (still bob).
-echo disconnect nosuch > /n/cal/ctl >[2] /dev/null
-ls /n/cal/accounts
+echo disconnect nosuch > /mnt/cal/ctl >[2] /dev/null
+ls /mnt/cal/accounts
 
 echo '<<< 17 sync-existing >>>'
-echo sync bob > /n/cal/ctl
+echo sync bob > /mnt/cal/ctl
 
 echo '<<< 18 sync-missing-state >>>'
 # Sync nonexistent; bob's account must remain readable (server alive).
-echo sync nosuch > /n/cal/ctl >[2] /dev/null
-cat /n/cal/accounts/bob/ctl
+echo sync nosuch > /mnt/cal/ctl >[2] /dev/null
+cat /mnt/cal/accounts/bob/ctl
 
 echo '<<< end >>>'
 " || true

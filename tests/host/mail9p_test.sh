@@ -5,7 +5,7 @@
 # Integration tests for mail9p (INFR-8) — the 9P-shape scaffold.
 #
 # Covers what the scaffold actually does without IMAP wiring:
-#   - mount /n/mail succeeds
+#   - mount /mnt/mail succeeds
 #   - root listing contains ctl + accounts
 #   - connect <name> <server> adds an account
 #   - duplicate connect is rejected
@@ -77,80 +77,80 @@ emu_c() {
 # steps. Each test below is a grep on a single combined transcript.
 TRANSCRIPT_LOG="/tmp/.mail9p-test-transcript.log"
 emu_c transcript 30 "
-mount -ac {mntgen} /n
+mount -ac {mntgen} /mnt
 mail9p &
 sleep 1
 
 echo '<<< 01 root-listing >>>'
-ls /n/mail
+ls /mnt/mail
 
 echo '<<< 02 ctl-read-empty >>>'
-cat /n/mail/ctl
+cat /mnt/mail/ctl
 
 echo '<<< 03 connect >>>'
-echo connect alice imap.example.com > /n/mail/ctl
+echo connect alice imap.example.com > /mnt/mail/ctl
 
 echo '<<< 04 accounts-after-connect >>>'
-ls /n/mail/accounts
+ls /mnt/mail/accounts
 
 echo '<<< 05 account-dir >>>'
-ls /n/mail/accounts/alice
+ls /mnt/mail/accounts/alice
 
 echo '<<< 06 account-ctl-read >>>'
-cat /n/mail/accounts/alice/ctl
+cat /mnt/mail/accounts/alice/ctl
 
 echo '<<< 07 boxes-empty >>>'
-ls /n/mail/accounts/alice/boxes
+ls /mnt/mail/accounts/alice/boxes
 
 echo '<<< 08 connect-duplicate-state >>>'
 # Attempt duplicate connect; then read acct ctl to verify the original
 # server string still wins (the second connect was rejected so alice
 # still points at imap.example.com, not imap2.example.com).
-echo connect alice imap2.example.com > /n/mail/ctl >[2] /dev/null
-cat /n/mail/accounts/alice/ctl
+echo connect alice imap2.example.com > /mnt/mail/ctl >[2] /dev/null
+cat /mnt/mail/accounts/alice/ctl
 
 echo '<<< 09 connect-missing-server-state >>>'
 # echo without server arg; account 'bob' must NOT appear under /accounts.
-echo connect bob > /n/mail/ctl >[2] /dev/null
-ls /n/mail/accounts
+echo connect bob > /mnt/mail/ctl >[2] /dev/null
+ls /mnt/mail/accounts
 
 echo '<<< 10 unknown-verb-state >>>'
 # Unknown verb; account list must be unchanged (still just alice).
-echo nonsense > /n/mail/ctl >[2] /dev/null
-ls /n/mail/accounts
+echo nonsense > /mnt/mail/ctl >[2] /dev/null
+ls /mnt/mail/accounts
 
 echo '<<< 11 acctctl-select >>>'
-echo select INBOX > /n/mail/accounts/alice/ctl
+echo select INBOX > /mnt/mail/accounts/alice/ctl
 
 echo '<<< 12 acctctl-search >>>'
-echo search FROM alice > /n/mail/accounts/alice/ctl
+echo search FROM alice > /mnt/mail/accounts/alice/ctl
 
 echo '<<< 13 acctctl-unknown-state >>>'
 # Acct-ctl unknown verb; following acct ctl read must still succeed
 # (server didn't crash) and report alice's original server.
-echo nonsense > /n/mail/accounts/alice/ctl >[2] /dev/null
-cat /n/mail/accounts/alice/ctl
+echo nonsense > /mnt/mail/accounts/alice/ctl >[2] /dev/null
+cat /mnt/mail/accounts/alice/ctl
 
 echo '<<< 14 second-account >>>'
-echo connect bob imap.bob.com > /n/mail/ctl
-ls /n/mail/accounts
+echo connect bob imap.bob.com > /mnt/mail/ctl
+ls /mnt/mail/accounts
 
 echo '<<< 15 disconnect-first >>>'
-echo disconnect alice > /n/mail/ctl
-ls /n/mail/accounts
+echo disconnect alice > /mnt/mail/ctl
+ls /mnt/mail/accounts
 
 echo '<<< 16 disconnect-missing-state >>>'
 # Disconnect nonexistent; remaining accounts must be unchanged (still bob).
-echo disconnect nosuch > /n/mail/ctl >[2] /dev/null
-ls /n/mail/accounts
+echo disconnect nosuch > /mnt/mail/ctl >[2] /dev/null
+ls /mnt/mail/accounts
 
 echo '<<< 17 sync-existing >>>'
-echo sync bob > /n/mail/ctl
+echo sync bob > /mnt/mail/ctl
 
 echo '<<< 18 sync-missing-state >>>'
 # Sync nonexistent; bob's account must remain readable (server alive).
-echo sync nosuch > /n/mail/ctl >[2] /dev/null
-cat /n/mail/accounts/bob/ctl
+echo sync nosuch > /mnt/mail/ctl >[2] /dev/null
+cat /mnt/mail/accounts/bob/ctl
 
 echo '<<< end >>>'
 " || true

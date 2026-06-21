@@ -19,7 +19,7 @@ reply to mail using ordinary file operations. Credentials live in
 never sees them on its own command line.
 .PP
 By default it mounts at
-.BR /n/mail .
+.BR /mnt/mail .
 The
 .B -m
 flag relocates the mount; the
@@ -176,27 +176,27 @@ read:
 .IP
 .EX
 mail9p
-echo connect work imap.fastmail.com > /n/mail/ctl
-ls /n/mail/accounts/work/boxes
-last=`{ls /n/mail/accounts/work/boxes/INBOX | grep -v ctl | tail -1}
-cat /n/mail/accounts/work/boxes/INBOX/$last/subject
-cat /n/mail/accounts/work/boxes/INBOX/$last/body
-echo '\eSeen' > /n/mail/accounts/work/boxes/INBOX/$last/flags
+echo connect work imap.fastmail.com > /mnt/mail/ctl
+ls /mnt/mail/accounts/work/boxes
+last=`{ls /mnt/mail/accounts/work/boxes/INBOX | grep -v ctl | tail -1}
+cat /mnt/mail/accounts/work/boxes/INBOX/$last/subject
+cat /mnt/mail/accounts/work/boxes/INBOX/$last/body
+echo '\eSeen' > /mnt/mail/accounts/work/boxes/INBOX/$last/flags
 .EE
 .PP
 Search and archive:
 .IP
 .EX
-echo 'search FROM noreply@example.com' > /n/mail/accounts/work/boxes/INBOX/ctl
-for u in `{cat /n/mail/accounts/work/boxes/INBOX/ctl} {
-    echo 'archive '^$u > /n/mail/accounts/work/boxes/INBOX/ctl
+echo 'search FROM noreply@example.com' > /mnt/mail/accounts/work/boxes/INBOX/ctl
+for u in `{cat /mnt/mail/accounts/work/boxes/INBOX/ctl} {
+    echo 'archive '^$u > /mnt/mail/accounts/work/boxes/INBOX/ctl
 }
 .EE
 .PP
 Reply with threading headers auto-injected:
 .IP
 .EX
-echo 'Got it, thanks.' > /n/mail/accounts/work/boxes/INBOX/$last/draft-reply
+echo 'Got it, thanks.' > /mnt/mail/accounts/work/boxes/INBOX/$last/draft-reply
 .EE
 .SH FILES
 .TF /dis/mail9p.dis

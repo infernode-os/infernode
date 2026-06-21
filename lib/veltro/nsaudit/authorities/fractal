@@ -1,0 +1,4 @@
+tool=fractal
+	description='Control the Mandelbrot/Julia viewer'
+	authorities='sends_ui'
+	notes='UI-control only via /tmp/veltro/fractal IPC; the viewer must already be running.'

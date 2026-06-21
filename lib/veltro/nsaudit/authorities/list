@@ -1,0 +1,4 @@
+tool=list
+	description='List directory contents'
+	authorities='reads_fs'
+	notes='Read-only directory listing.'

@@ -371,6 +371,72 @@ switch ($choice) {
 
 Setup-BraveSearch
 
+# ── Preflight: POSIX host shell on PATH ────────────────────────────
+# Inferno's runtime exec's a host `sh` for a handful of integrations
+# (env passthrough, host-side glue). Without one on PATH, boot logs
+# `os: cannot exec ...` warnings and a few helpers degrade.
+#
+# Three distinct states we need to tell apart:
+#   1. sh on PATH and works -> nothing to do
+#   2. sh installed at a known location but not on PATH -> tell the
+#      user which directory to add; do NOT tell them to install again
+#   3. sh not installed anywhere we can see -> install hints
+# Picking (2) vs (3) is the difference between "fix your PATH in one
+# line" and "install Git for Windows" -- worth getting right.
+function Test-HostShell {
+    Write-Host ""
+    # State 1: on PATH and actually works as a POSIX shell.
+    $sh = Get-Command sh.exe -ErrorAction SilentlyContinue
+    if ($sh) {
+        $probe = & $sh.Source -c "echo ok" 2>&1
+        if ($LASTEXITCODE -eq 0 -and "$probe".Trim() -eq "ok") {
+            Write-Ok "Host shell on PATH: $($sh.Source)"
+            return
+        }
+        # On PATH but does not behave like a POSIX sh. Treat as missing.
+        Write-Warn "sh.exe is on PATH at $($sh.Source) but does not behave as a POSIX shell."
+    }
+
+    # State 2: installed somewhere standard but not on PATH.
+    $knownLocations = @(
+        "C:\Program Files\Git\usr\bin\sh.exe",
+        "C:\Program Files (x86)\Git\usr\bin\sh.exe",
+        "C:\msys64\usr\bin\sh.exe",
+        "C:\cygwin64\bin\sh.exe",
+        "C:\cygwin\bin\sh.exe"
+    )
+    $foundAt = $null
+    foreach ($p in $knownLocations) {
+        if (Test-Path $p) {
+            $probe = & $p -c "echo ok" 2>&1
+            if ($LASTEXITCODE -eq 0 -and "$probe".Trim() -eq "ok") {
+                $foundAt = $p
+                break
+            }
+        }
+    }
+    if ($foundAt) {
+        $binDir = Split-Path -Parent $foundAt
+        Write-Warn "POSIX sh found at $foundAt but its directory is NOT on PATH."
+        Write-Host "    Add this to your user PATH so InferNode can exec it:" -ForegroundColor DarkGray
+        Write-Host "      $binDir" -ForegroundColor White
+        Write-Host "    One-line setter (run in a new terminal afterwards):" -ForegroundColor DarkGray
+        Write-Host "      setx PATH `"%PATH%;$binDir`"" -ForegroundColor White
+        return
+    }
+
+    # State 3: not found anywhere we look.
+    Write-Warn "No POSIX 'sh.exe' on PATH or at any standard install location."
+    Write-Host "    InferNode runs without one, but some host integrations" -ForegroundColor DarkGray
+    Write-Host "    will print 'os: cannot exec ...' warnings during boot." -ForegroundColor DarkGray
+    Write-Host "    Install ONE of:" -ForegroundColor DarkGray
+    Write-Host "      Git for Windows   winget install Git.Git" -ForegroundColor White
+    Write-Host "      MSYS2             winget install MSYS2.MSYS2" -ForegroundColor White
+    Write-Host "      Cygwin            https://cygwin.com/install.html" -ForegroundColor White
+    Write-Host "    Then add its bin\ directory to PATH and relaunch InferNode." -ForegroundColor DarkGray
+}
+Test-HostShell
+
 # ── Done ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray

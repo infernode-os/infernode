@@ -86,7 +86,7 @@ Forty tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a
 | **Execution**  | `exec`, `shell`, `launch`, `spawn`, `safeexec` |
 | **Code**       | `git`, `json`, `vision`, `editor` |
 | **Web**        | `webfetch`, `websearch`, `browse`, `charon`, `http` |
-| **Comms**      | `mail`, `say`, `hear` |
+| **Comms**      | `say`, `hear` |
 | **Persistence**| `memory`, `todo`, `task`, `wiki`, `keyring`, `wallet`, `payfetch` |
 | **UI**         | `xenith`, `present`, `gap`, `man`, `fractal`, `plan` |
 | **System**     | `mount`, `gpu` |
@@ -163,7 +163,7 @@ System prompts and per-type prompts live in `lib/veltro/`:
 | `lib/veltro/agents/explore.txt`  | Read-only codebase analysis. No speculation; report file paths and dependencies. |
 | `lib/veltro/agents/plan.txt`     | Architecture/design only. Never implements. |
 | `lib/veltro/agents/task.txt`     | Autonomous task execution; uses `plan`/`todo` for multi-step work. |
-| `lib/veltro/agents/secretary.txt`| Mail-handling agent for the `mail` tool. |
+| `lib/veltro/agents/secretary.txt`| Message-handling agent; acts on the msg9p notification plane (`/mnt/msg`). See `docs/MESSAGE-INTEGRATION.md`. |
 
 Custom agents: drop a `.txt` file into `lib/veltro/agents/` and pick it via `agenttype=` in a `spawn` call.
 
@@ -224,7 +224,7 @@ The Lucia launch scripts wire everything up: `tools9p` with the default budget, 
 
 For deployments where untrusted prompts may reach the agent:
 
-1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `mail`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in your launch script.
+1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in your launch script.
 2. **Restrict `-p` paths** — only mount what the agent legitimately needs.
 3. **Disable `xenith` and `memory`** in the `Capabilities` you construct.
 4. **Pin `llmconfig.model`** so prompt-injected attempts to switch to a more permissive model can't take effect.

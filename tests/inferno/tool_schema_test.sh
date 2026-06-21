@@ -20,9 +20,13 @@ mkdir -p /tmp/veltro/.ns/shadow >[2] /dev/null
 sleep 2
 
 # Smoke: /tool/_registry must exist and contain at least one name.
+# Environmental skip-guard (INFR-312): if tools9p didn't mount /tool in
+# this namespace (no agent stack on a bare host), there is no registry to
+# validate — skip cleanly rather than report a false failure. Mirrors the
+# non-empty-/tool guards hardened for the Limbo tests in PR #239.
 if {! ftest -f /tool/_registry} {
-	echo FAIL: /tool/_registry not present
-	exit 'fail:no registry'
+	echo 'SKIP: tools9p did not mount /tool/_registry'
+	raise 'skip:tools9p /tool registry not mounted (no agent stack)'
 }
 
 echo registry:

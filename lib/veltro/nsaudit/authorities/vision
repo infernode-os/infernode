@@ -1,0 +1,4 @@
+tool=vision
+	description='AI vision over local GPU or the Anthropic API'
+	authorities='reads_fs dials_net sends_llm'
+	notes='Local GPU backend stays on-device; the cloud backend sends the image to the Anthropic Messages API (dials_net + sends_llm egress).'

@@ -1,0 +1,5 @@
+tool=wallet
+	description='Cryptocurrency and fiat payment operations via wallet9p'
+	authorities='spends reads_fs'
+	irreversible='spends'
+	notes='Signing happens inside wallet9p, which holds keys via factotum; the agent never sees private keys. wallet9p enforces per-transaction budget gating at runtime. Declare caps.walletbudget to bound spend at the configuration level.'

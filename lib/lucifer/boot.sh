@@ -94,11 +94,29 @@ sleep 1
 sleep 1
 echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
+# Email source — registered only when an account is configured, so we never
+# hardcode a provider. The Settings "Messaging" panel writes the config line
+# (server=/smtpserver=/folder=) to /lib/veltro/sources/email.conf; the
+# credentials live in factotum via the keyring "Email Account" entry. Both the
+# register here and the source's init() soft-fail if the server or creds are
+# absent (same posture as sms above). See docs/MESSAGE-INTEGRATION.md.
+if {ftest -f /lib/veltro/sources/email.conf} {
+	echo register email /dis/veltro/sources/email.dis `{cat /lib/veltro/sources/email.conf} > /mnt/msg/ctl
+}
+
 # GUI services
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
 sleep 1
 /dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
+# /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
+# cases where it silently failed and the redirect below produced no log
+# file (GH #230 sphynkx report). Force /tmp into existence and pre-create
+# the log so the background redirect always has a writable target. If
+# /tmp truly doesn't exist after this, the mkdir will print to stderr
+# instead of being silenced.
+mkdir -p /tmp
+> /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl

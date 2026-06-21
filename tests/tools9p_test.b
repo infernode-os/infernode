@@ -501,6 +501,34 @@ testPathsReadable(t: ref T)
 	# May be empty if no paths are registered — that's valid
 }
 
+# Test 9b: /tool/meta/ scalar files expose the agent's role/xenith/actid/
+# nodevs for nsaudit (INFR-18). Values vary by how this tools9p was
+# launched; here we assert the files exist and carry well-formed values.
+testMetaReadable(t: ref T)
+{
+	if(!hastool()) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+
+	role := trimnl(readfile(TOOLMNT + "/meta/role"));
+	t.assert(role == "toplevel" || role == "child",
+		"/tool/meta/role is toplevel|child (got '" + role + "')");
+
+	xenith := trimnl(readfile(TOOLMNT + "/meta/xenith"));
+	t.assert(xenith == "0" || xenith == "1",
+		"/tool/meta/xenith is 0|1 (got '" + xenith + "')");
+
+	nodevs := trimnl(readfile(TOOLMNT + "/meta/nodevs"));
+	t.assert(nodevs == "set" || nodevs == "unset",
+		"/tool/meta/nodevs is set|unset (got '" + nodevs + "')");
+
+	actid := trimnl(readfile(TOOLMNT + "/meta/actid"));
+	t.assertnotnil(actid, "/tool/meta/actid is readable");
+	t.log(sys->sprint("/tool/meta: role=%s xenith=%s actid=%s nodevs=%s",
+		role, xenith, actid, nodevs));
+}
+
 # Test 10: Verify tool file not present for inactive (removed) tool
 testInactiveToolNotPresent(t: ref T)
 {
@@ -533,6 +561,14 @@ min(a, b: int): int
 	return b;
 }
 
+# Strip a single trailing newline (scalar meta files end with one).
+trimnl(s: string): string
+{
+	if(len s > 0 && s[len s - 1] == '\n')
+		return s[0:len s - 1];
+	return s;
+}
+
 # ─── main ─────────────────────────────────────────────────────────────────────
 
 init(nil: ref Draw->Context, args: list of string)
@@ -559,6 +595,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ListToolExec",          testListToolExec);
 	run("NoResultBeforeWrite",   testNoResultBeforeWrite);
 	run("PathsReadable",         testPathsReadable);
+	run("MetaReadable",          testMetaReadable);
 	run("InactiveToolNotPresent",testInactiveToolNotPresent);
 
 	if(testing->summary(passed, failed, skipped) > 0)

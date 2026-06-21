@@ -1,0 +1,4 @@
+tool=grep
+	description='Regex search within files'
+	authorities='reads_fs'
+	notes='Returns matching lines as file:line:content; read-only, optionally recursive.'

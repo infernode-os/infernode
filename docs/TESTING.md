@@ -262,3 +262,23 @@ These tests always skip in standard CI (no required services available):
 - `pathmanage_test`: 5 skipped (require `/tool` to be mounted)
 - `tools9p_test`: all skip (require `/tool` to be mounted)
 - `tooluse_test`: all skip (require `/mnt/llm`)
+
+## Stress mode (heavy iteration counts)
+
+`mldsa_stress_test` (ML-DSA / SLH-DSA mass cycles) runs **reduced** iteration
+counts by default so the full suite finishes well inside the CI time budget —
+the heavy SLH-DSA mass-cycle loops otherwise exceed a 5-minute wall clock under
+both `-c0` and `-c1` and wedge `runner.dis` (INFR-313). The full throughput
+counts are opt-in, for a nightly/stress job:
+
+```sh
+# Heavy counts via command-line flag
+./emu/Linux/o.emu -r. /tests/mldsa_stress_test.dis -full
+
+# ...or via the environment (e.g. set before launching the runner)
+# echo -n 1 > /env/PQC_STRESS_FULL
+```
+
+Correctness coverage (keygen, sign, verify, serialization round-trips, message
+reuse, tamper detection, edge-case messages, cross-algorithm isolation) runs in
+both modes; only the repeat count of the throughput loops changes.

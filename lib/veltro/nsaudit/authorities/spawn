@@ -1,0 +1,5 @@
+tool=spawn
+	description='Create isolated subagent(s) with a restricted namespace'
+	authorities='spawns_proc execs_code reads_fs writes_fs'
+	irreversible='spawns_proc'
+	notes='Each child runs in its own FORKNS namespace with pctl(NODEVS) applied (spawn.b). Child authority is bounded by the per-section tools=/paths= it is given, but spawn itself is a process-creation force multiplier.'

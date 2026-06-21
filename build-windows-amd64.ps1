@@ -378,21 +378,148 @@ Push-Location "$ROOT\limbo"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 # Generate y.tab.c and y.tab.h from limbo.y if needed.
-# Locate win_bison.exe via PATH (choco/scoop installs) or WinGet packages dir.
-if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
-    $bisonCmd = Get-Command win_bison.exe -ErrorAction SilentlyContinue
-    if ($bisonCmd) {
-        $bisonPath = $bisonCmd.Source
-    } else {
-        $bison = Get-ChildItem -Recurse -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "win_bison.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($bison) { $bisonPath = $bison.FullName }
+#
+# Bison discovery is harder than it looks (INFR-305 round 2). The naive
+# "use whatever Get-Command finds" approach broke on real users because
+# win_bison.exe resolves its m4 data files (m4sugar.m4, bison.m4, etc.)
+# relative to the executable path. Package managers like WinGet ship a
+# thin SHIM in %LOCALAPPDATA%\Microsoft\WinGet\Links\ that proxies the
+# real binary. The shim has no `data\` directory alongside, so bison
+# invoked through it dies with:
+#   win_bison.exe: ...\Links\data/m4sugar/m4sugar.m4: cannot open
+# Same trap with choco's shimgen-based shims. Result: an install that
+# `where.exe` is happy with, but a build that fails opaquely.
+#
+# Robust discovery here means: enumerate INSTALL directories (not shim
+# dirs), then probe each candidate by actually running it against a
+# minimal grammar and checking outputs. The first candidate that
+# successfully generates both .c and .h wins. Only fall back to PATH
+# lookup as a last resort. See INFR-305 GH #230 comment thread for the
+# field reports this replaces.
+
+# Probe a single bison binary. Returns $true iff it can compile a
+# minimal grammar AND emit both .tab.c and .tab.h. This catches the
+# shim-without-data-dir failure mode and any other binary that exists
+# but can't actually generate parsers.
+function Test-BisonWorks {
+    param([string]$BisonPath)
+    if (-not (Test-Path $BisonPath)) { return $false }
+    $probeDir = Join-Path $env:TEMP ("infernode-bison-probe-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+    try {
+        $grammar = "%token NUM`n%%`nexpr: NUM ;`n"
+        $gpath = Join-Path $probeDir "probe.y"
+        Set-Content -Path $gpath -Value $grammar -Encoding ASCII
+        Push-Location $probeDir
+        try {
+            $out = & $BisonPath -d -o probe.tab.c probe.y 2>&1
+            $ok = ($LASTEXITCODE -eq 0) -and (Test-Path "probe.tab.c") -and (Test-Path "probe.tab.h")
+            if (-not $ok) {
+                # Stash the reason for the caller to log if they want.
+                $script:LastBisonProbeError = "$BisonPath -> exit $LASTEXITCODE; out: $out"
+            }
+            return $ok
+        } finally {
+            Pop-Location
+        }
+    } finally {
+        Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
     }
-    if ($bisonPath) {
-        Write-Host "  Generating y.tab.c/h from limbo.y using $bisonPath..."
-        & $bisonPath -d -o y.tab.c limbo.y
-    } else {
-        Write-Host "ERROR: y.tab.c/h missing and win_bison not found." -ForegroundColor Red
-        Write-Host "Install via: 'winget install WinFlexBison.win_flex_bison' or 'choco install winflexbison3 -y'" -ForegroundColor Red
+}
+
+# Enumerate every plausible install location of bison on Windows and
+# return the first candidate that Test-BisonWorks accepts. Search order
+# is INSTALL DIRS FIRST (where the binary lives next to its data\), and
+# PATH lookup only at the end (shim paths land here and usually fail).
+function Find-WinBison {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $rejected   = New-Object System.Collections.Generic.List[string]
+
+    # 1. Recursive scan of known install roots. Both win_bison.exe (the
+    #    WinFlexBison naming) and bison.exe (msys2, cygwin, GnuWin32).
+    $installRoots = @(
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Packages",
+        "$env:ProgramData\chocolatey\lib",
+        "$env:USERPROFILE\scoop\apps",
+        "C:\Program Files",
+        "C:\Program Files (x86)",
+        "C:\msys64\usr\bin",
+        "C:\cygwin64\bin",
+        "C:\cygwin\bin",
+        "C:\GnuWin32\bin"
+    )
+    foreach ($root in $installRoots) {
+        if (-not (Test-Path $root)) { continue }
+        foreach ($name in @("win_bison.exe", "bison.exe")) {
+            Get-ChildItem -Recurse -Path $root -Filter $name -ErrorAction SilentlyContinue |
+                ForEach-Object { [void]$candidates.Add($_.FullName) }
+        }
+    }
+
+    # 2. PATH lookup last — Get-Command may return a shim that won't
+    #    work, but it may also be the only thing a user-built install
+    #    surfaces. APPEND the registry PATH to the current $env:Path
+    #    (don't replace) so we pick up winget's just-installed entries
+    #    AND keep any session-local additions (vcvars64's cl.exe, etc.)
+    #    intact. Replacing $env:Path here breaks the rest of the build
+    #    when called from a Developer Command Prompt.
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path    = "$env:Path;$machinePath;$userPath"
+    foreach ($name in @("win_bison.exe", "bison.exe")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) { [void]$candidates.Add($cmd.Source) }
+    }
+
+    # 3. Test each candidate. First that works, wins.
+    $seen = @{}
+    foreach ($c in $candidates) {
+        if ($seen.ContainsKey($c)) { continue }
+        $seen[$c] = $true
+        if (Test-BisonWorks $c) { return $c }
+        [void]$rejected.Add($script:LastBisonProbeError)
+    }
+
+    # 4. Stash rejection log so the caller's error message can include
+    #    it — useful when a user's only install is broken.
+    $script:BisonRejectionLog = $rejected
+    return $null
+}
+
+if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
+    Write-Host "  Searching for a working bison..."
+    $bisonPath = Find-WinBison
+    if (-not $bisonPath) {
+        Write-Host "ERROR: no working bison found." -ForegroundColor Red
+        if ($script:BisonRejectionLog -and $script:BisonRejectionLog.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Probed candidates that did NOT work:" -ForegroundColor Red
+            foreach ($r in $script:BisonRejectionLog) { Write-Host "  $r" -ForegroundColor DarkRed }
+        }
+        Write-Host ""
+        Write-Host "Install win_flex_bison via ONE of:" -ForegroundColor Red
+        Write-Host "  winget install WinFlexBison.win_flex_bison" -ForegroundColor Red
+        Write-Host "  choco install winflexbison3 -y" -ForegroundColor Red
+        Write-Host "  scoop install winflexbison" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "If you installed already and still see this, your install may have" -ForegroundColor Red
+        Write-Host "been damaged or the m4 data dir is missing. Reinstall and retry." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Found working bison: $bisonPath"
+    Write-Host "  Generating y.tab.c/h from limbo.y..."
+    $bisonOut = & $bisonPath -d -o y.tab.c limbo.y 2>&1
+    $bisonExit = $LASTEXITCODE
+    if ($bisonExit -ne 0) {
+        Write-Host "ERROR: bison failed with exit code $bisonExit" -ForegroundColor Red
+        Write-Host "Bison stderr:" -ForegroundColor Red
+        $bisonOut | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkRed }
+        exit 1
+    }
+    if (-not (Test-Path "y.tab.c") -or -not (Test-Path "y.tab.h")) {
+        Write-Host "ERROR: bison reported success but y.tab.c/h were not produced." -ForegroundColor Red
+        Write-Host "Bison output was:" -ForegroundColor Red
+        $bisonOut | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkRed }
         exit 1
     }
 }

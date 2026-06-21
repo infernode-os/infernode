@@ -2,7 +2,7 @@
 #
 # mail9p — integration smoke test
 #
-# Verifies that mail9p mounts at /n/mail, exposes the documented
+# Verifies that mail9p mounts at /mnt/mail, exposes the documented
 # namespace shape, and rejects bad ctl writes. Live IMAP/SMTP
 # coverage requires factotum credentials and a reachable mail
 # server; that's out of scope for this offline test.
@@ -40,25 +40,35 @@ fn assert_writefails {
 
 echo '=== mail9p integration smoke test ==='
 
-# Start mail9p; it mounts at /n/mail in this namespace before returning.
+# Environmental skip-guard (INFR-312): mail9p mounts at /mnt/mail, which
+# needs an mntgen-backed /mnt. A bare runner has no /mnt mntgen, so the
+# mount fails ("can't ensuredir /mnt/mail") and every assertion below
+# misses. Establish /mnt here — wrapped in `if {! ...}` so its failure is
+# caught as status — and skip cleanly when it can't be set up. In a full
+# runtime /mnt already exists and this exercises mail9p for real.
+if {! mount -ac {mntgen} /mnt} {
+	raise 'skip:cannot set up /mnt (mntgen) — needs a full runtime to mount /mnt/mail'
+}
+
+# Start mail9p; it mounts at /mnt/mail in this namespace before returning.
 mail9p
 sleep 1
 
 # Namespace shape
-assert_exists /n/mail
-assert_exists /n/mail/ctl
-assert_exists /n/mail/accounts
+assert_exists /mnt/mail
+assert_exists /mnt/mail/ctl
+assert_exists /mnt/mail/accounts
 
 # /ctl is write-only-style; reads return empty.
-ctlbytes=`{cat /n/mail/ctl >[2] /dev/null}
+ctlbytes=`{cat /mnt/mail/ctl >[2] /dev/null}
 if {~ $#ctlbytes 0} {
-	passlog '/n/mail/ctl reads as empty'
+	passlog '/mnt/mail/ctl reads as empty'
 } {
-	fail '/n/mail/ctl returned data:' $ctlbytes
+	fail '/mnt/mail/ctl returned data:' $ctlbytes
 }
 
 # Empty accounts dir.
-acctlist=`{ls /n/mail/accounts >[2] /dev/null}
+acctlist=`{ls /mnt/mail/accounts >[2] /dev/null}
 if {~ $#acctlist 0} {
 	passlog 'accounts/ is empty'
 } {
@@ -66,16 +76,16 @@ if {~ $#acctlist 0} {
 }
 
 # Reject bad ctl verbs.
-assert_writefails bogus /n/mail/ctl
-assert_writefails 'disconnect ghost' /n/mail/ctl
-assert_writefails 'sync ghost' /n/mail/ctl
+assert_writefails bogus /mnt/mail/ctl
+assert_writefails 'disconnect ghost' /mnt/mail/ctl
+assert_writefails 'sync ghost' /mnt/mail/ctl
 
 # A valid-looking connect to an unresolvable host should error out
 # cleanly (factotum lookup or DNS resolution failure).
-assert_writefails 'connect testacct mail.invalid' /n/mail/ctl
+assert_writefails 'connect testacct mail.invalid' /mnt/mail/ctl
 
 # Account slot should NOT linger after the failed connect.
-acctlist=`{ls /n/mail/accounts >[2] /dev/null}
+acctlist=`{ls /mnt/mail/accounts >[2] /dev/null}
 if {~ $#acctlist 0} {
 	passlog 'accounts/ still empty after failed connect (slot rolled back)'
 } {

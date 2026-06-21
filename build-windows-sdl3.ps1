@@ -378,14 +378,44 @@ if (Test-Path $emuPath) {
     Write-Host "SUCCESS: SDL3 GUI Emulator built at $emuPath" -ForegroundColor Green
     Write-Host "  Size: $([math]::Round($size, 1)) KB"
     Write-Host ""
+
+    # Chain the launcher build. The 3-script Windows chain is:
+    #   build-windows-amd64.ps1 -> build-windows-sdl3.ps1 -> emu\Nt\build-launcher.ps1
+    # build-dev-bundle.ps1 / package-windows-zip.ps1 / release.yml all
+    # assume InferNode.exe exists by the time the SDL3 emu is built.
+    # Running each script manually and forgetting the launcher step is
+    # the GH #230 round-2 trap; chain it here when cl.exe is available.
+    $launcherScript = "$ROOT\emu\Nt\build-launcher.ps1"
+    if ((Get-Command cl.exe -ErrorAction SilentlyContinue) -and (Test-Path $launcherScript)) {
+        Write-Host "=== Building InferNode.exe launcher ===" -ForegroundColor Cyan
+        & $launcherScript
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: launcher build failed (exit $LASTEXITCODE)." -ForegroundColor Yellow
+            Write-Host "         The SDL3 emu is still usable directly; re-run" -ForegroundColor Yellow
+            Write-Host "         emu\Nt\build-launcher.ps1 to retry the launcher." -ForegroundColor Yellow
+        }
+        Write-Host ""
+    } else {
+        Write-Host "InferNode.exe launcher not chained:" -ForegroundColor Yellow
+        if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+            Write-Host "  cl.exe not on PATH. Open the x64 Native Tools Command Prompt" -ForegroundColor Yellow
+            Write-Host "  for VS 2022, then run: .\emu\Nt\build-launcher.ps1" -ForegroundColor Yellow
+        } else {
+            Write-Host "  $launcherScript not found." -ForegroundColor Yellow
+        }
+        Write-Host ""
+    }
+
     Write-Host "Run from terminal (standard dev path):" -ForegroundColor Yellow
     Write-Host "  $ROOT\emu\Nt\o.emu.exe -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r $ROOT sh -l /lib/lucifer/boot.sh"
     Write-Host ""
     Write-Host "  stdout/stderr stream to the terminal; Ctrl-C exits."
     Write-Host ""
-    Write-Host "Or double-click emu\Nt\InferNode.exe (Windows-subsystem launcher)."
-    Write-Host ""
-    Write-Host "To assemble a dev bundle for testing the packaging path:" -ForegroundColor Yellow
+    if (Test-Path "$ROOT\emu\Nt\InferNode.exe") {
+        Write-Host "Or double-click emu\Nt\InferNode.exe (Windows-subsystem launcher)." -ForegroundColor Yellow
+        Write-Host ""
+    }
+    Write-Host "To assemble a dev bundle (runs the three build scripts in sequence):" -ForegroundColor Yellow
     Write-Host "  .\build-dev-bundle.ps1"
     Write-Host ""
     if (-not (Test-Path "$ROOT\emu\Nt\SDL3.dll")) {

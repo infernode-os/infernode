@@ -189,6 +189,17 @@ headlessloop()
 
 		log("notification: " + truncate(notification, 80));
 
+		# Deterministic routing seam (docs/MESSAGE-INTEGRATION.md): not every
+		# notification should pay for an LLM round-trip, and safety-critical
+		# sources must not wait on a model. Error notifications are logged, not
+		# classified. Rule-based routing for urgent sources (e.g. an alarm →
+		# immediate escalation) belongs here, ahead of LLM triage of the
+		# ambiguous middle.
+		if(agentlib->hasprefix(notification, "[Message error")) {
+			log("source error (not classified): " + truncate(notification, 80));
+			continue;
+		}
+
 		# Classify via LLM
 		response := agentlib->queryllmfd(llmfd, notification);
 		if(response == nil || response == "") {
@@ -209,37 +220,46 @@ handleclassification(response, notification: string)
 	line := firstline(response);
 	lline := str->tolower(line);
 
+	# Act through the protocol-agnostic msg9p notification plane: flag via
+	# /mnt/msg/ctl, reply via /mnt/msg/reply. Both need the source name (from
+	# the notification header) and the source-unique id.
+	src := extractsource(notification);
+	msgid := extractmsgid(notification);
+
 	if(agentlib->hasprefix(lline, "ignore")) {
-		# Extract message ID and mark as seen
-		msgid := extractmsgid(notification);
-		if(msgid != nil) {
-			result := agentlib->calltool("mail", "flag " + msgid + " seen");
-			log("IGNORE: archived " + msgid + ": " + truncate(result, 60));
+		# Mark read in place (no task needed).
+		if(src != nil && msgid != nil) {
+			err := msgctl("flag " + src + " " + msgid + " seen");
+			if(err == nil)
+				log("IGNORE: marked seen " + src + "/" + msgid);
+			else
+				log("IGNORE: flag failed for " + src + "/" + msgid + ": " + truncate(err, 60));
 		} else {
-			log("IGNORE: no message ID found");
+			log("IGNORE: no source/message ID found");
 		}
 
 	} else if(agentlib->hasprefix(lline, "decline")) {
-		msgid := extractmsgid(notification);
-		if(msgid != nil) {
-			# Read the full message, draft refusal, send it
+		if(src != nil && msgid != nil) {
 			draft := extractdraft(response);
 			if(draft != nil) {
-				result := agentlib->calltool("mail", "reply " + msgid + " " + draft);
-				log("DECLINE: " + truncate(result, 80));
+				err := msgreply(src, msgid, draft);
+				if(err == nil)
+					log("DECLINE: replied to " + src + "/" + msgid);
+				else
+					log("DECLINE: reply failed for " + src + "/" + msgid + ": " + truncate(err, 60));
 			} else {
-				log("DECLINE: no draft in LLM response for " + msgid);
+				log("DECLINE: no draft in LLM response for " + src + "/" + msgid);
 			}
+		} else {
+			log("DECLINE: no source/message ID found");
 		}
 
 	} else if(agentlib->hasprefix(lline, "defer")) {
-		msgid := extractmsgid(notification);
-		log("DEFER: " + msgid + " — draft saved for user review");
+		log("DEFER: " + src + "/" + msgid + " — draft saved for user review");
 		# In headless mode, just log it. The draft is in the LLM response.
 
 	} else if(agentlib->hasprefix(lline, "notify")) {
-		msgid := extractmsgid(notification);
-		log("NOTIFY: urgent message " + msgid);
+		log("NOTIFY: urgent message " + src + "/" + msgid);
 		# In headless mode, log urgently. Could write to a file for monitoring.
 
 	} else {
@@ -279,6 +299,58 @@ extractmsgid(notification: string): string
 			return id;
 		}
 	}
+	return nil;
+}
+
+# Extract the source name from the notification header line, e.g.
+# "[Message notification — email]" -> "email". The em dash (U+2014) is the
+# delimiter msg9p's formatnotification uses. Returns nil if not found.
+extractsource(notification: string): string
+{
+	line := firstline(notification);
+	dash := -1;
+	for(i := 0; i < len line; i++)
+		if(line[i] == 16r2014) {	# em dash
+			dash = i;
+			break;
+		}
+	if(dash < 0)
+		return nil;
+	start := dash + 1;
+	while(start < len line && line[start] == ' ')
+		start++;
+	end := start;
+	while(end < len line && line[end] != ']')
+		end++;
+	if(end <= start)
+		return nil;
+	return line[start:end];
+}
+
+# Write a command to /mnt/msg/ctl (e.g. "flag email 42 seen"). Returns nil on
+# success, or the server's error string (e.g. "flag: no source: email").
+msgctl(cmd: string): string
+{
+	fd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("open /mnt/msg/ctl: %r");
+	b := array of byte cmd;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("write /mnt/msg/ctl: %r");
+	return nil;
+}
+
+# Send a threaded reply through /mnt/msg/reply (format: <src>\n<id>\n<body>).
+# Returns nil on success or the source's error string.
+msgreply(src, id, body: string): string
+{
+	data := src + "\n" + id + "\n" + body;
+	fd := sys->open("/mnt/msg/reply", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("open /mnt/msg/reply: %r");
+	b := array of byte data;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("write /mnt/msg/reply: %r");
 	return nil;
 }
 

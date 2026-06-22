@@ -39,7 +39,9 @@ evidence has been reviewed.
 | **NIST SP 800-63B AAL3** | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | 1 | Partial — AAL3 verifier shipped & hardware-verified; EPIC 1 remainder open |
 | NIST SP 800-92 tamper-evident audit log | *(planned)* | 1 | Planned |
 | **NIST SP 800-53 / 800-171** control mapping | [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) | 1 | Partial — first pass complete; 6 families strong; CMMC L2 subset identified |
-| FIPS 140-3 readiness | *(planned)* | 2 | Planned |
+| **FIPS 140-3** readiness | [`FIPS-140-3-readiness.md`](FIPS-140-3-readiness.md) | 2 | Readiness/gap analysis — favorable architecture; 7 gaps (F1–F7) backlogged; not validated |
+| FIDO2 / CTAP2 / WebAuthn | *(covered in `SP800-63B-AAL3.md`)* | 0→1 | Substantially met |
+| X.509 / mTLS transport | *(covered in `CNSA-2.0.md` §4 + SC mapping)* | 0 | Met |
 
 New artifacts are added a row at a time as each standard is worked. The index never
 claims a status the artifact itself does not support.

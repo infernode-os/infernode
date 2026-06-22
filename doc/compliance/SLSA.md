@@ -35,20 +35,30 @@ isolated CI build that emits **non-forgeable provenance** and are **signed**. Bu
 
 | Item | Standard | Tracking |
 |------|----------|----------|
-| **SBOM** (SPDX or CycloneDX) per release | roadmap "SBOM (SPDX/CycloneDX)" | INFR-340 |
+| **SBOM** (SPDX) generated + validated in CI | roadmap "SBOM (SPDX/CycloneDX)" | ✅ `.github/workflows/sbom.yml` (syft → SPDX-JSON, validated, uploaded, on every PR/push) |
+| **SBOM attached to releases** + provenance attestation | roadmap "SBOM" / SLSA L4 | ☐ release.yml wiring — INFR-340 |
 | **in-toto** attestation beyond build-provenance | roadmap "in-toto" | INFR-340 |
 | **Hermetic + reproducible** build (SLSA L4) | SLSA L4 | INFR-340 |
 
 These are CI-config / documentation additions (no runtime code); any workflow change is
 flagged for review.
 
+**SBOM scope note (honest):** InferNode's core is first-party C and Limbo with no
+package-manager manifests, so the generated SPDX SBOM principally captures the
+third-party components that *do* carry external provenance (e.g. the Go modules under
+`tools/godis`, Android/Gradle deps) plus detected binaries — which is the set an SBOM
+exists to track for vulnerability management. The validation step fails CI if generation
+yields zero packages, so an empty/broken SBOM is caught.
+
 ## 4. Disposition
 
 **Met at SLSA Build L3.** The provenance + signing + checksum + pinning + scorecard evidence
-above substantiates the roadmap's "at SLSA 3" claim. L4 (hermetic/reproducible) and SBOM are
-the documented next push, tracked under INFR-340.
+above substantiates the roadmap's "at SLSA 3" claim. **SBOM generation is now exercised by
+CI on every PR/push** (`sbom.yml`); the remaining SR push is attaching the SBOM to release
+artifacts with an attestation (release.yml), plus hermetic/reproducible builds for L4 —
+tracked under INFR-340.
 
 ## 5. References
 
 - SLSA v1.0 (slsa.dev); OpenSSF Scorecard; Sigstore/cosign; SPDX / CycloneDX; in-toto.
-- `.github/workflows/release.yml`, `scorecard.yml`, `verify-dis-paths.yml`.
+- `.github/workflows/release.yml`, `sbom.yml`, `scorecard.yml`, `verify-dis-paths.yml`.

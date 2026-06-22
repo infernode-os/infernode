@@ -3,7 +3,7 @@
 **Standard:** NSA CNSA 2.0 (announced Sept 2022; quantum-resistant suite for National
 Security Systems).
 **Roadmap row:** Cryptographic foundation — CNSA 2.0, Tier 0→1.
-**Tracking epic:** EPIC 3 — Complete CNSA 2.0 ([`../security-epics.md`](../security-epics.md)).
+**Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`../security-epics.md`](../security-epics.md)).
 **Artifact date:** 2026-06-22.
 **Overall status:** **Substantially met.** Every CNSA 2.0 algorithm is implemented
 natively at the required (or higher) security category, with passing regression tests.
@@ -132,9 +132,9 @@ stricter, transition-safe posture.
 
 | ID | Gap | CNSA 2.0 requirement | Effort | Tracking |
 |----|-----|----------------------|--------|----------|
-| **G1** | Negotiated key exchange uses ML-KEM-768 (Cat 3); CNSA 2.0 mandates **ML-KEM-1024** (Cat 5). The -1024 primitive already exists — this is a parameter/negotiation selection, not new crypto. | ML-KEM-1024 | Small (wire a hybrid group / native-STS option using the existing `mlkem1024_*` calls) | INFR — *CNSA-strict ML-KEM-1024* |
-| **G2** | Default/recommended signer is ML-DSA-65 (Cat 3); CNSA 2.0 mandates **ML-DSA-87** (Cat 5). The -87 algorithm is implemented and selectable. | ML-DSA-87 default in CNSA mode | Small (default selection / "CNSA mode" flag) | INFR — *CNSA-strict ML-DSA-87 default* |
-| **G3** | No LMS/XMSS (SP 800-208) for software/firmware signing. SLH-DSA is present as a hash-based substitute. | LMS or XMSS | Medium (new primitive) — or a documented accreditor waiver accepting SLH-DSA | INFR — *LMS/XMSS firmware signing (or SLH-DSA waiver)* |
+| **G1** | Negotiated key exchange uses ML-KEM-768 (Cat 3); CNSA 2.0 mandates **ML-KEM-1024** (Cat 5). The -1024 primitive already exists — this is a parameter/negotiation selection, not new crypto. | ML-KEM-1024 | Small (wire a hybrid group / native-STS option using the existing `mlkem1024_*` calls) | INFR-329 |
+| **G2** | Default/recommended signer is ML-DSA-65 (Cat 3); CNSA 2.0 mandates **ML-DSA-87** (Cat 5). The -87 algorithm is implemented and selectable. | ML-DSA-87 default in CNSA mode | Small (default selection / "CNSA mode" flag) | INFR-330 |
+| **G3** | No LMS/XMSS (SP 800-208) for software/firmware signing. SLH-DSA is present as a hash-based substitute. | LMS or XMSS | Medium (new primitive) — or a documented accreditor waiver accepting SLH-DSA | INFR-331 |
 
 None of G1–G3 require architectural change; G1/G2 are selection of already-implemented
 Category-5 parameters. Per project policy these are scoped and reviewed as their own

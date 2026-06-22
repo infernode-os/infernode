@@ -1,7 +1,7 @@
 # Compliance Evidence Register — InferNode / NERVA
 
 **Status:** Living document — started 2026-06-22
-**Owner:** Security & Compliance program (roadmap: [`../security-standards-roadmap.md`](../security-standards-roadmap.md))
+**Owner:** Security & Compliance program — Jira epic **INFR-328** (roadmap: [`../security-standards-roadmap.md`](../security-standards-roadmap.md))
 **Audience:** CISO / accreditor / procurement (evidence), and engineering (backlog).
 
 This directory holds **per-standard evidence artifacts**. Each artifact is written to

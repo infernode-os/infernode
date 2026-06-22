@@ -89,9 +89,9 @@ implementation and the regression test.
 | Implementation | `libsec/mldsa.c`, `mldsa_ntt.c`, `mldsa_poly.c`; **both** ML-DSA-65 and ML-DSA-87 present |
 | Keyring binding | `libkeyring/mldsaalg.c` — registered as `SigAlgVec` slots `mldsa65`, `mldsa87` (`libinterp/keyring.c:2403`–`:2406`) |
 | X.509 | OIDs `id-ML-DSA-65` 2.16.840.1.101.3.4.3.18, `id-ML-DSA-87` …3.19 (`appl/lib/crypt/pkcs.b`, `appl/lib/crypt/x509.b`) |
-| Key generation | `auth/createsignerkey -a mldsa87 <name>` (`appl/cmd/auth/createsignerkey.b`) |
+| Key generation | `auth/createsignerkey -a mldsa87 <name>`, or the **`-c` CNSA flag** (selects ML-DSA-87 in one option) (`appl/cmd/auth/createsignerkey.b`) |
 | Evidence | `tests/mldsa_test.b` (KAT, sign/verify, wrong-key rejection, cert verify), `tests/mldsa_stress_test.b`, `tests/pqauth_test.b` *HybridHandshakeMLDSA* (fully-PQ handshake) |
-| Status | **Substantially met** — ML-DSA-87 implemented, tested, and selectable; the *recommended/default* signer parameter is ML-DSA-65 (Category 3). See Gap G2. |
+| Status | **Substantially met** — ML-DSA-87 implemented, tested, and now a one-flag CNSA selection (`createsignerkey -c`). The *system-wide* default signer remains ed25519 (non-CNSA deployments unchanged); a global "CNSA mode" across all signing surfaces is the remainder of Gap G2. |
 
 ### 3.5 Software/firmware signing — LMS/XMSS ⚠ substitute present
 
@@ -133,7 +133,7 @@ stricter, transition-safe posture.
 | ID | Gap | CNSA 2.0 requirement | Effort | Tracking |
 |----|-----|----------------------|--------|----------|
 | **G1** | Negotiated key exchange uses ML-KEM-768 (Cat 3); CNSA 2.0 mandates **ML-KEM-1024** (Cat 5). The -1024 primitive already exists — this is a parameter/negotiation selection, not new crypto. | ML-KEM-1024 | Small (wire a hybrid group / native-STS option using the existing `mlkem1024_*` calls) | INFR-329 |
-| **G2** | Default/recommended signer is ML-DSA-65 (Cat 3); CNSA 2.0 mandates **ML-DSA-87** (Cat 5). The -87 algorithm is implemented and selectable. | ML-DSA-87 default in CNSA mode | Small (default selection / "CNSA mode" flag) | INFR-330 |
+| **G2** | CNSA 2.0 mandates **ML-DSA-87** (Cat 5). *Partially closed:* `createsignerkey -c` now selects ML-DSA-87 in one flag. Remainder: a system-wide "CNSA mode" making Cat-5 the default across all signing surfaces. | ML-DSA-87 across all surfaces | Small | INFR-330 |
 | **G3** | No LMS/XMSS (SP 800-208) for software/firmware signing. SLH-DSA is present as a hash-based substitute. | LMS or XMSS | Medium (new primitive) — or a documented accreditor waiver accepting SLH-DSA | INFR-331 |
 
 None of G1–G3 require architectural change; G1/G2 are selection of already-implemented

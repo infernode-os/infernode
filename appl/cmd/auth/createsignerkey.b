@@ -41,7 +41,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		loaderr(Arg->PATH);
 
 	arg->init(argv);
-	arg->setusage("createsignerkey [-a algorithm] [-f keyfile] [-e ddmmyyyy] [-b size-in-bits] name-of-owner");
+	arg->setusage("createsignerkey [-a algorithm] [-c] [-f keyfile] [-e ddmmyyyy] [-b size-in-bits] name-of-owner");
 	alg := algs[0];
 	filename := "/keydb/signerkey";
 	expire := SKexpire;
@@ -58,6 +58,9 @@ init(nil: ref Draw->Context, argv: list of string)
 				else if(alg == algs[i])
 					break;
 			}
+		'c' =>
+			# CNSA 2.0 mode: ML-DSA-87 signer (FIPS 204, NIST Category 5).
+			alg = "mldsa87";
 		'f' or 'k' =>
 			filename = arg->earg();
 		'e' =>

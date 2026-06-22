@@ -608,26 +608,28 @@ This is where `nswalk` lives: not as a user-facing tool, but as a
 subroutine of the ground-truth check. Once it exists as a subroutine,
 exposing it as a user tool is cheap.
 
-### NODEVS short-term fix, independent of nsaudit
+### NODEVS device-attach gate (RESOLVED)
 
-`pctl(NODEVS)` is applied only in the spawned-child path
-(`spawn.b:576`). Top-level agents (`veltro.b:168`, `repl.b:169`,
-`tools9p.b:644`) call `pctl(FORKNS)` and `restrictns()` but leave
-`pgrp->nodevs == 0`. The kernel device gate is at
-`emu/port/chan.c:1041-1051`; with `nodevs` unset, `sys->bind("#sfactotum",
-"/tmp/veltro/x", MREPL)` succeeds and reaches factotum regardless of
-path-based restriction.
+`pctl(NODEVS)` is now applied at **every** agent FORKNS site — the spawned
+child (`spawn.b:1071`) **and** all three top-level entry points:
+`veltro.b:169`, `repl.b:170`, `tools9p.b:798`, each immediately after
+`pctl(FORKNS)`. The kernel device gate is at `emu/port/chan.c:1046-1053`;
+with `nodevs` set, `sys->bind("#sfactotum", "/tmp/veltro/x", MREPL)` (and any
+`#x` attach outside the `|esDa` allowlist) fails, so device-attach cannot
+bypass the path-based restriction.
 
-Today this is latent — top-level agents do not invoke `bind` on `#x`
-paths from model-driven code. It becomes exploitable the moment any tool
-or exec invocation does.
+This property is locked in by a regression test —
+`testNodevsBlocksDeviceAttach` in `tests/veltro_security_test.b` — which
+asserts that after `NODEVS`, `bind("#p", …)` and `bind("#sfactotum", …)`
+both fail (and that `#p` *succeeds* before `NODEVS`, so the test proves the
+gate, not an unrelated error).
 
-Fix: add `sys->pctl(Sys->NODEVS, nil)` to the three top-level FORKNS
-sites. The kernel gate is strictly stronger than the path gate for
-device-attach, and none of the top-level agents has a documented need for
-`#x` devices outside the `nodevs` allowlist (`|esDa`). Once fixed,
-`SUBAGENT_MISSING_NODEVS` plus an analogous `TOPLEVEL_MISSING_NODEVS`
-rule keep it fixed.
+The one remaining `FORKNS` without `NODEVS` is the throwaway introspection
+fork in `tools9p.b`'s `emitmanifestnow()`: it forks only to compute a
+namespace manifest for the UI and **discards** that namespace immediately —
+it runs no model-driven code and never execs, so it is not an agent
+sandbox and does not need the gate. The planned `nsaudit` rule
+`TOPLEVEL_MISSING_NODEVS` keeps the agent sites covered going forward.
 
 ### Sequencing
 

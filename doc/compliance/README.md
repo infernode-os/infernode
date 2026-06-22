@@ -37,7 +37,7 @@ evidence has been reviewed.
 | **CNSA 2.0** (NSA quantum-resistant suite) | [`CNSA-2.0.md`](CNSA-2.0.md) | 1 | Substantially met — primitives complete; parameter-selection gaps tracked |
 | **NIST SP 800-207** Zero Trust | [`SP800-207-zero-trust.md`](SP800-207-zero-trust.md) | 0 | **Met** (architectural posture; formally verified) |
 | **NIST SP 800-63B AAL3** | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | 1 | Partial — AAL3 verifier shipped & hardware-verified; EPIC 1 remainder open |
-| NIST SP 800-92 tamper-evident audit log | *(planned)* | 1 | Planned |
+| **NIST SP 800-92** tamper-evident audit log (AU) | [`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md) | 1 | **Design — awaiting owner approval** (new 9P service; highest-leverage control) |
 | **NIST SP 800-53 / 800-171** control mapping | [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) | 1 | Partial — first pass complete; 6 families strong; CMMC L2 subset identified |
 | **FIPS 140-3** readiness | [`FIPS-140-3-readiness.md`](FIPS-140-3-readiness.md) | 2 | Readiness/gap analysis — favorable architecture; 7 gaps (F1–F7) backlogged; not validated |
 | FIDO2 / CTAP2 / WebAuthn | *(covered in `SP800-63B-AAL3.md`)* | 0→1 | Substantially met |

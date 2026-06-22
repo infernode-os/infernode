@@ -40,8 +40,10 @@ evidence has been reviewed.
 | **NIST SP 800-92** tamper-evident audit log (AU) | [`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md) | 1 | **Design — awaiting owner approval** (new 9P service; highest-leverage control) |
 | **NIST SP 800-53 / 800-171** control mapping | [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) | 1 | Partial — first pass complete; 6 families strong; CMMC L2 subset identified |
 | **FIPS 140-3** readiness | [`FIPS-140-3-readiness.md`](FIPS-140-3-readiness.md) | 2 | Readiness/gap analysis — favorable architecture; 7 gaps (F1–F7) backlogged; not validated |
-| FIDO2 / CTAP2 / WebAuthn | *(covered in `SP800-63B-AAL3.md`)* | 0→1 | Substantially met |
-| X.509 / mTLS transport | *(covered in `CNSA-2.0.md` §4 + SC mapping)* | 0 | Met |
+| **NIST PQC migration** (hybrid) | [`NIST-PQC-migration.md`](NIST-PQC-migration.md) | 1 | **Met** — hybrid on TLS + native transport, adversarially tested |
+| **FIDO2 / CTAP2** | [`FIDO2-CTAP2.md`](FIDO2-CTAP2.md) | 0→1 | **Met** (authenticator; WebAuthn web-flow is a documented non-goal) |
+| **SLSA** | [`SLSA.md`](SLSA.md) | 0→1 | **Met at Build L3**; L4 + SBOM open (INFR-340) |
+| **X.509 / mTLS** transport | [`X509-mTLS.md`](X509-mTLS.md) | 0 | Substantially met — server-auth TLS + CRL + native mutual auth; **mutual *TLS* client-cert open (INFR-344)** |
 
 New artifacts are added a row at a time as each standard is worked. The index never
 claims a status the artifact itself does not support.

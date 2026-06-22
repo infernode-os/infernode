@@ -154,6 +154,13 @@ sessions: array of ref LlmSession;
 nsessions: int;
 nextsid: int;
 
+MAXSESSIONS: con 128;
+MAXPROMPT: con 1048576;
+MAXSYSTEM: con 262144;
+MAXTOOLS: con 1048576;
+MAXPREFILL: con 65536;
+MAXSETTING: con 4096;
+
 # Backend configuration
 backend: string;      # "api" or "openai"
 apikey: string;
@@ -345,6 +352,8 @@ findsessionbyname(name: string): ref LlmSession
 
 newsession(): ref LlmSession
 {
+	if(nsessions >= MAXSESSIONS)
+		return nil;
 	tok := gentoken();
 	if(tok == nil)
 		return nil;
@@ -721,13 +730,23 @@ Serve:
 				# device splits one client write() into multiple <=iounit
 				# Twrites; generation is deferred to the following read so the
 				# whole prompt is assembled first (see triggerpending).
-				sess.pendingwrite = appendbytes(sess.pendingwrite, m.data);
+				(nb, aerr) := appendbyteslimit(sess.pendingwrite, m.data, MAXPROMPT);
+				if(aerr != nil) {
+					sess.pendingwrite = nil;
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+					break;
+				}
+				sess.pendingwrite = nb;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qmodel =>
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "model setting too large"));
 					break;
 				}
 				model := resolvemodel(strip(string m.data));
@@ -739,6 +758,10 @@ Serve:
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "temperature setting too large"));
 					break;
 				}
 				tstr := strip(string m.data);
@@ -757,13 +780,23 @@ Serve:
 					break;
 				}
 				# Accumulate across write-fragments; committed on clunk.
-				c.data = appendbytes(c.data, m.data);
+				(nb, aerr) := appendbyteslimit(c.data, m.data, MAXSYSTEM);
+				if(aerr != nil) {
+					c.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+					break;
+				}
+				c.data = nb;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qthinking =>
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "thinking setting too large"));
 					break;
 				}
 				value := strip(string m.data);
@@ -790,6 +823,10 @@ Serve:
 				}
 				# Don't strip — prefill may have intentional trailing space
 				# But remove trailing newline since shell adds it
+				if(len m.data > MAXPREFILL) {
+					srv.reply(ref Rmsg.Error(m.tag, "prefill too large"));
+					break;
+				}
 				pf := string m.data;
 				if(len pf > 0 && pf[len pf - 1] == '\n')
 					pf = pf[:len pf - 1];
@@ -800,6 +837,10 @@ Serve:
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "maxtokens setting too large"));
 					break;
 				}
 				value := strip(string m.data);
@@ -817,6 +858,10 @@ Serve:
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "reasoning setting too large"));
 					break;
 				}
 				value := strip(string m.data);
@@ -839,7 +884,13 @@ Serve:
 				# Accumulate the tool-defs JSON across write-fragments; parsed
 				# and committed on clunk (see finalizewrite). The whole array
 				# may exceed one iounit, so it cannot be parsed per-write.
-				c.data = appendbytes(c.data, m.data);
+				(nb, aerr) := appendbyteslimit(c.data, m.data, MAXTOOLS);
+				if(aerr != nil) {
+					c.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+					break;
+				}
+				c.data = nb;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qcompact =>
@@ -906,19 +957,24 @@ Serve:
 # document. We deliberately do NOT index by absolute offset: the persistent
 # ORDWR /ask fid's write offset climbs across turns (queryllmfd never seeks 0),
 # which would make absolute-offset placement grow without bound.
-appendbytes(buf, data: array of byte): array of byte
+appendbyteslimit(buf, data: array of byte, limit: int): (array of byte, string)
 {
 	if(data == nil || len data == 0)
-		return buf;
+		return (buf, nil);
+	blen := 0;
+	if(buf != nil)
+		blen = len buf;
+	if(blen + len data > limit)
+		return (nil, sys->sprint("write too large: limit %d bytes", limit));
 	if(buf == nil) {
 		nb := array[len data] of byte;
 		nb[0:] = data;
-		return nb;
+		return (nb, nil);
 	}
 	nb := array[len buf + len data] of byte;
 	nb[0:] = buf;
 	nb[len buf:] = data;
-	return nb;
+	return (nb, nil);
 }
 
 # Start a generation turn if a fully-written prompt is pending and none is

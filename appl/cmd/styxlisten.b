@@ -45,7 +45,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	doauth := 1;
 	synchronous := 0;
 	trusted := 0;
-	keyfile := "";
+	keyfile: string;
 
 	while ((opt := arg->opt()) != 0) {
 		case opt {
@@ -76,6 +76,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	arg = nil;
 	if (doauth && algs == nil)
 		algs = getalgs();
+	if (doauth && algs == nil)
+		error("authentication requested, but no SSL algorithms are available");
 	addr := netmkaddr(hd argv, "tcp", "styx");
 	cmd := tl argv;
 

@@ -30,6 +30,28 @@ This register is the *evidence* side of those two; the roadmap is the *intent* s
 A standard is only "closed" (cookie earned) when its artifact is **Met** *and* the
 evidence has been reviewed.
 
+## Scorecard (roll-up — as of 2026-06-22)
+
+| | Standard | Next step to advance |
+|---|----------|----------------------|
+| ✅ **Met** | SP 800-207 Zero Trust | — (formally verified) |
+| ✅ **Met** | NIST PQC migration (hybrid) | — |
+| ✅ **Met** | FIDO2 / CTAP2 (authenticator) | — |
+| ✅ **Met** | SLSA Build L3 | L4 + SBOM (INFR-340) |
+| ◐ **Substantially met** | CNSA 2.0 | ML-KEM-1024 + ML-DSA-87 (INFR-329/330); LMS/XMSS (INFR-331) |
+| ◐ **Substantially met** | X.509 / mTLS | client-cert over TLS (INFR-344) |
+| ◐ **Partial** | SP 800-63B AAL3 | DK save-back + dual-key (EPIC 1) |
+| ◐ **Partial** | SP 800-53 / 800-171 | per-control itemization (INFR-340) + AU service |
+| ○ **Readiness** | FIPS 140-3 | F1–F7 self-tests/approved-mode (INFR-342) |
+| ▷ **Design** | SP 800-92 audit log | approve design → build (INFR-343) |
+
+**Tally:** 4 Met · 2 Substantially met · 2 Partial · 1 Readiness · 1 Design.
+**Evidence-only close-outs are exhausted** — every remaining advance needs code (tracked
+under epic [INFR-328]) or an external assessor (Common Criteria evaluation; SOC 2 / CMMC
+audits). Standards still purely on the roadmap (no artifact yet): MLS, CDS guard,
+PCI-DSS, HSM/PKCS#11/KMIP, FIPS 201 PIV, measured boot/TPM-DICE, ISO 20022/SWIFT, SOC 2,
+Common Criteria — all code- or assessor-gated.
+
 ## Evidence index
 
 | Standard | Artifact | Tier | Status |

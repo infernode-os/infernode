@@ -82,15 +82,17 @@ functions verified map directly to the namespace syscalls (`pgrpcpy`, `cmount`,
 | `tests/veltro_security_test.b` | allowlist visibility, exclusion of non-granted items, `restrictns()` full policy, `verifyns()` violation detection, audit logging, negative assertions on `/.env`/`/.git`/`/CLAUDE.md`/`/n/local` |
 | `tests/veltro_concurrent_test.b` | concurrent init / restrictdir / restrictns (race safety) |
 
-## 5. Residual notes (not gaps in posture; hardening / observability)
+## 5. Residual notes (observability / future hardening)
 
-- **Top-level `NODEVS`.** `pctl(NODEVS)` is unconditional in spawned children; for
-  top-level agents the device-attach gate is currently latent rather than set (no
-  top-level agent invokes `#x` binds from model-driven code today). Hardening item and a
-  proposed `nsaudit` rule (`TOPLEVEL_MISSING_NODEVS`) are described in
-  `appl/veltro/SECURITY.md` §"NODEVS short-term fix". *Does not weaken the Zero Trust
-  claim* (path-based restriction already hides host resources), but closing it makes the
-  kernel gate strictly enforce it. Recommend tracking as its own task.
+- **`NODEVS` device-attach gate — applied.** `pctl(NODEVS)` is set at every agent
+  FORKNS site: the spawned child (`spawn.b:1071`) and all three top-level entry points
+  (`veltro.b:169`, `repl.b:170`, `tools9p.b:798`), each right after `FORKNS`. The kernel
+  gate (`emu/port/chan.c:1046-1053`) then blocks any `#x` attach outside the `|esDa`
+  allowlist, so device-attach cannot bypass path restriction. Locked in by
+  `testNodevsBlocksDeviceAttach` in `tests/veltro_security_test.b` (asserts `#p` /
+  `#sfactotum` bind fails after `NODEVS`). The only un-gated `FORKNS` is the throwaway
+  manifest fork in `tools9p.b`'s `emitmanifestnow()`, whose namespace is discarded and
+  which runs no agent code — not a sandbox. (INFR-341 — verified already implemented.)
 - **`nsaudit`** (config-time authority linter) is in progress (`appl/cmd/nsaudit.b`) — a
   *pre-flight* check that a shipped capability set grants only intended authority. It
   strengthens tenet 7 evidence; the namespace remains the enforcer regardless.
@@ -99,8 +101,9 @@ functions verified map directly to the namespace syscalls (`pgrpcpy`, `cmount`,
 
 SP 800-207's tenets are satisfied by the default runtime posture, the mechanism is
 documented and tested, and the underlying kernel isolation is formally verified. **Met**
-for the architectural posture. The two residual items above are hardening/observability,
-not posture defects; recommend a tracking task for top-level `NODEVS`.
+for the architectural posture. The `NODEVS` device-attach gate is applied at all agent
+sites and test-locked; `nsaudit` (pre-flight config linter) is the remaining
+observability enhancement, not a posture defect.
 
 ## 7. References
 

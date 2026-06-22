@@ -35,10 +35,10 @@ evidence has been reviewed.
 | Standard | Artifact | Tier | Status |
 |----------|----------|------|--------|
 | **CNSA 2.0** (NSA quantum-resistant suite) | [`CNSA-2.0.md`](CNSA-2.0.md) | 1 | Substantially met — primitives complete; parameter-selection gaps tracked |
-| NIST SP 800-63B AAL3 | *(planned — see `../second-factor-auth.md`, `../yubikey-2fa-operations.md`)* | 1 | Partial |
+| **NIST SP 800-207** Zero Trust | [`SP800-207-zero-trust.md`](SP800-207-zero-trust.md) | 0 | **Met** (architectural posture; formally verified) |
+| **NIST SP 800-63B AAL3** | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | 1 | Partial — AAL3 verifier shipped & hardware-verified; EPIC 1 remainder open |
 | NIST SP 800-92 tamper-evident audit log | *(planned)* | 1 | Planned |
 | NIST SP 800-53 / 800-171 control mapping | *(planned — stub in roadmap)* | 1 | Partial |
-| NIST SP 800-207 Zero Trust | *(planned)* | 0 | Substantially met (document-only) |
 | FIPS 140-3 readiness | *(planned)* | 2 | Planned |
 
 New artifacts are added a row at a time as each standard is worked. The index never

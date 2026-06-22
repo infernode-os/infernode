@@ -97,9 +97,9 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
 
 | Family | Control theme | Inferno-native mechanism | Evidence | Status |
 |--------|---------------|--------------------------|----------|--------|
-| **AC** Access Control | Least privilege, separation | Per-process namespaces; capability (no ambient authority) | namespace policy + bind logs | partial |
-| **IA** Identification & Auth | MFA, PKI, AAL3 | Factotum + FIDO2/PIV; **UV/AAL3 verifier shipped & hardware-verified** (FIDO PIN load-bearing) | enrollment records, factotum protos, `t2uv` UV test | partial — AAL3 verifier ✅; DK save-back + dual-key open |
-| **SC** System & Comms Protection | Crypto, boundary, TLS | `libsec` (AES-256-GCM, PQC), `devssl`, namespace boundaries | algorithm inventory | partial |
+| **AC** Access Control | Least privilege, separation | Per-process namespaces; capability (no ambient authority) | [`compliance/SP800-207-zero-trust.md`](compliance/SP800-207-zero-trust.md) — namespace mechanism, `verifyns`, formally verified isolation | strong — Zero Trust posture **Met**; AC family mapping to be itemized |
+| **IA** Identification & Auth | MFA, PKI, AAL3 | Factotum + FIDO2/PIV; **UV/AAL3 verifier shipped & hardware-verified** (FIDO PIN load-bearing) | [`compliance/SP800-63B-AAL3.md`](compliance/SP800-63B-AAL3.md) — enrollment records, factotum protos, `t2uv` UV test | partial — AAL3 verifier ✅; DK save-back + dual-key open |
+| **SC** System & Comms Protection | Crypto, boundary, TLS | `libsec` (AES-256-GCM, PQC), `devssl`, namespace boundaries | [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md) — algorithm inventory (source-cited) | partial — PQC suite complete; CNSA-strict params (G1/G2) tracked |
 | **AU** Audit & Accountability | Logging, integrity, retention | Hash-chained 9P audit-log service | log chain + verifier | planned |
 | **SI** System & Information Integrity | Memory safety, malware | Dis VM type/memory safety; signed modules | CWE class elimination, signatures | partial |
 | **CM** Configuration Management | Baselines, integrity | Reproducible builds, SLSA 3, signed `.dis` | provenance attestations | partial |
@@ -115,6 +115,6 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
    (login FIDO-PIN prompt + key-derived vault + recovery slot); ☐ DK-only keyring save-back,
    ☐ dual-key default. See `doc/second-factor-auth.md`, `doc/yubikey-2fa-operations.md`. *First.*
 2. **Tamper-evident audit-log service** — single highest-leverage control (AU + SOC 2 + PCI-10).
-3. **ML-KEM** to complete CNSA 2.0.
+3. **CNSA 2.0 strict params** — ML-KEM/ML-DSA primitives done; negotiate ML-KEM-1024 (INFR-329) + ML-DSA-87 default (INFR-330). See [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md).
 4. **SP 800-53 / 800-171 control-mapping** — unlocks federal & finance conversations.
 5. **CDS-guard reference demo** — the differentiator nobody else can show cleanly.

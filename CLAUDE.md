@@ -432,6 +432,30 @@ A helper script lives in the sibling repo at `pdfinn/infernode-os-llm/tools/jira
 
 When closing a code change that resolves a Jira ticket, **reference the key in the commit message** (e.g. `Refs: INFR-2`) — Jira links them automatically.
 
+### Ticket linkage is enforced and auto-closed (don't strand finished work)
+
+Finished work used to get merged while its Jira ticket sat in To Do / In
+Review for weeks because nobody flipped the status. Two pieces of
+automation close that gap, and they depend on the `Refs:` convention
+above:
+
+1. **`verify-commit-refs`** (`.github/workflows/verify-commit-refs.yml` →
+   `tools/verify-commit-refs.sh`) — a PR check that fails unless at least
+   one commit in the PR references an `INFR-<n>` key. Genuinely ticketless
+   changes opt out with `[no-jira]` in a commit message.
+2. **`jira-transition-on-merge`**
+   (`.github/workflows/jira-transition-on-merge.yml` →
+   `tools/jira-transition-on-merge.py`) — on push to `master`, every
+   referenced `INFR-<n>` issue that isn't already Done is transitioned to
+   Done with an audit comment. Idempotent and fail-soft (skips silently
+   when credentials are absent, e.g. on forks).
+
+   Requires three repo secrets: `JIRA_BASE_URL`
+   (`https://nervsystems-team.atlassian.net`), `JIRA_EMAIL`, and
+   `JIRA_API_TOKEN` (an Atlassian API token). Until those are set the
+   workflow is a no-op. A manual `workflow_dispatch` with a `keys` input
+   can transition specific issues on demand.
+
 Notable open INFR tasks at time of this writing:
 - `INFR-2` — implement `/tool/limbo/run` (LLM-as-tool routing pattern; see `docs/LLM-AS-TOOL.md` in the IOL repo for design)
 - `INFR-3` — wire lucibridge per-capability routing (likely superseded by INFR-2)

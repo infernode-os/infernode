@@ -1,0 +1,33 @@
+name: Verify commit refs
+
+# Ensure every PR is linked to a Jira issue (INFR-<n>), so the companion
+# "Jira transition on merge" workflow can auto-close the ticket when this
+# PR lands on master.  This closes the recurring gap where finished work
+# was merged but the Jira status was never moved to Done.
+#
+# Lenient by design: requires at least ONE INFR-<n> reference across the
+# PR's commits, with a [no-jira] opt-out for genuinely ticketless changes.
+# See tools/verify-commit-refs.sh and CLAUDE.md ("Project tracking — Jira").
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: PR references a Jira issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Need full history to diff the PR branch against its base.
+          fetch-depth: 0
+      - name: Verify commit references
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
+        run: ./tools/verify-commit-refs.sh

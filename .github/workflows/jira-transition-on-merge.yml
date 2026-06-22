@@ -1,0 +1,84 @@
+name: Jira transition on merge
+
+# When commits land on master, move any referenced INFR-<n> issues to Done.
+# This closes the recurring gap where finished work was merged but the Jira
+# ticket was never transitioned (it sat in To Do / In Review for weeks).
+#
+# Pairs with the "Verify commit refs" PR check, which guarantees the
+# INFR-<n> linkage exists in the first place.  Idempotent and fail-soft:
+# already-Done issues are skipped, and a missing-credentials environment
+# logs and exits cleanly (see tools/jira-transition-on-merge.py).
+#
+# Required repository secrets:
+#   JIRA_BASE_URL    e.g. https://nervsystems-team.atlassian.net
+#   JIRA_EMAIL       Atlassian account email
+#   JIRA_API_TOKEN   Atlassian API token
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      keys:
+        description: "Space-separated issue keys to transition (manual run)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jira-transition-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  transition:
+    name: Transition referenced issues → Done
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Collect commit messages for this push
+        id: msgs
+        run: |
+          before='${{ github.event.before }}'
+          after='${{ github.sha }}'
+          # New-branch or unknown base (all-zeroes SHA): just use the tip commit.
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
+              || ! git cat-file -e "$before" 2>/dev/null; then
+            range="$after -n 1"
+          else
+            range="$before..$after"
+          fi
+          {
+            echo 'text<<JIRA_EOF'
+            git log --format='%B' $range
+            echo 'JIRA_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Transition issues
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          # Pass untrusted commit-message text and user input via env, never
+          # inline into the shell — avoids script injection from a crafted
+          # commit message or dispatch input.
+          COMMIT_TEXT: ${{ steps.msgs.outputs.text }}
+          MANUAL_KEYS: ${{ github.event.inputs.keys }}
+          MERGE_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$MANUAL_KEYS" ]; then
+            # shellcheck disable=SC2086  # keys are intentionally word-split
+            printf '%s' "$COMMIT_TEXT" \
+              | python3 tools/jira-transition-on-merge.py \
+                  --context "merge $MERGE_SHA" --keys $MANUAL_KEYS
+          else
+            printf '%s' "$COMMIT_TEXT" \
+              | python3 tools/jira-transition-on-merge.py \
+                  --context "merge $MERGE_SHA ($REPO)"
+          fi

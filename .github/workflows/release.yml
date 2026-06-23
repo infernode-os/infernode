@@ -1254,6 +1254,17 @@ jobs:
         path: artifacts
         merge-multiple: true
 
+    - name: Generate SBOM (SPDX)
+      # Named infernode-*-sbom.spdx.json so the checksum, cosign-signing and
+      # release-upload steps below cover it automatically (no extra wiring).
+      # Same pinned action proven CI-verifiable in sbom.yml.
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        path: .
+        format: spdx-json
+        output-file: artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json
+        upload-artifact: false
+
     - name: Generate checksums
       run: |
         cd artifacts

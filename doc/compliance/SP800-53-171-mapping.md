@@ -121,11 +121,12 @@ The release pipeline (`.github/workflows/release.yml`) produces, for every artif
   for the tarball, DMG, and zip — the SLSA-3 provenance the roadmap claims.
 - **OpenSSF Scorecard** (`scorecard.yml`) continuous supply-chain posture scoring.
 - **SBOM (SPDX)** generated + validated on every PR/push (`.github/workflows/sbom.yml`,
-  syft) — see [`SLSA.md`](SLSA.md) §3.
+  syft) **and shipped with every release** — checksummed + cosign-signed (`release.yml`).
+  See [`SLSA.md`](SLSA.md) §3.
 
-*Residual / next:* attaching the SBOM to release artifacts with an attestation, in-toto
-attestation, and hermetic/reproducible builds are the documented push to SLSA L4 (roadmap
-"Supply chain & integrity"). Tracked under INFR-340.
+*Residual / next:* an explicit `attest-sbom` provenance link, in-toto attestation, and
+hermetic/reproducible builds are the documented push to SLSA L4 (roadmap "Supply chain &
+integrity"). Tracked under INFR-340.
 
 ### 5.AU — Audit & Accountability (the gap)
 Today auditing is **per-subsystem**: `emitauditlog()` records namespace operations and the
@@ -141,6 +142,9 @@ underwrites AU-9 integrity-of-audit, SOC 2, and PCI-10 simultaneously). Honest s
 - **First pass complete:** every 800-53 family mapped with mechanism + evidence + honest
   type/status; six families (AC, IA, SC, SI, CM, SR) are technically strong and CA is strong
   on the technical side.
+- **Per-control itemization** for the four load-bearing families (AC / IA / SC / AU) is in
+  [`SP800-53-controls.md`](SP800-53-controls.md) — the control-level granularity an SSP /
+  CMMC L2 assessor works from.
 - **CMMC L2 framing:** scope the SSP around the six strong families; they are the
   hard-to-fake controls.
 - **Biggest single lever:** the AU hash-chained audit service (EPIC 2) — turns AU from

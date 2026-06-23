@@ -36,7 +36,8 @@ isolated CI build that emits **non-forgeable provenance** and are **signed**. Bu
 | Item | Standard | Tracking |
 |------|----------|----------|
 | **SBOM** (SPDX) generated + validated in CI | roadmap "SBOM (SPDX/CycloneDX)" | ✅ `.github/workflows/sbom.yml` (syft → SPDX-JSON, validated, uploaded, on every PR/push) |
-| **SBOM attached to releases** + provenance attestation | roadmap "SBOM" / SLSA L4 | ☐ release.yml wiring — INFR-340 |
+| **SBOM shipped with releases** (checksummed + cosign-signed) | roadmap "SBOM" | ✅ `release.yml` emits `infernode-<ver>-sbom.spdx.json`, covered by `SHA256SUMS.txt` + a `.sigstore` signature + published with the release |
+| **SBOM provenance attestation** (`attest-sbom`) | roadmap "in-toto" / attestation | ☐ optional next — INFR-340 |
 | **in-toto** attestation beyond build-provenance | roadmap "in-toto" | INFR-340 |
 | **Hermetic + reproducible** build (SLSA L4) | SLSA L4 | INFR-340 |
 
@@ -53,10 +54,10 @@ yields zero packages, so an empty/broken SBOM is caught.
 ## 4. Disposition
 
 **Met at SLSA Build L3.** The provenance + signing + checksum + pinning + scorecard evidence
-above substantiates the roadmap's "at SLSA 3" claim. **SBOM generation is now exercised by
-CI on every PR/push** (`sbom.yml`); the remaining SR push is attaching the SBOM to release
-artifacts with an attestation (release.yml), plus hermetic/reproducible builds for L4 —
-tracked under INFR-340.
+above substantiates the roadmap's "at SLSA 3" claim. **SBOM is generated + validated by CI on
+every PR/push** (`sbom.yml`) **and shipped with every release**, checksummed and cosign-signed
+(`release.yml`). Remaining SR/L4 push: an explicit `attest-sbom` provenance link and
+hermetic/reproducible builds — tracked under INFR-340.
 
 ## 5. References
 

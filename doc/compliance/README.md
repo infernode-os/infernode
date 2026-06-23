@@ -60,7 +60,7 @@ Common Criteria — all code- or assessor-gated.
 | **NIST SP 800-207** Zero Trust | [`SP800-207-zero-trust.md`](SP800-207-zero-trust.md) | 0 | **Met** (architectural posture; formally verified) |
 | **NIST SP 800-63B AAL3** | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | 1 | Partial — AAL3 verifier shipped & hardware-verified; EPIC 1 remainder open |
 | **NIST SP 800-92** tamper-evident audit log (AU) | [`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md) | 1 | **Design — awaiting owner approval** (new 9P service; highest-leverage control) |
-| **NIST SP 800-53 / 800-171** control mapping | [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) | 1 | Partial — first pass complete; 6 families strong; CMMC L2 subset identified |
+| **NIST SP 800-53 / 800-171** control mapping | [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) + [per-control AC/IA/SC/AU](SP800-53-controls.md) | 1 | Partial — family map + AC/IA/SC/AU itemized; 6 families strong; CMMC L2 subset identified |
 | **FIPS 140-3** readiness | [`FIPS-140-3-readiness.md`](FIPS-140-3-readiness.md) | 2 | Readiness/gap analysis — favorable architecture; 7 gaps (F1–F7) backlogged; not validated |
 | **NIST PQC migration** (hybrid) | [`NIST-PQC-migration.md`](NIST-PQC-migration.md) | 1 | **Met** — hybrid on TLS + native transport, adversarially tested |
 | **FIDO2 / CTAP2** | [`FIDO2-CTAP2.md`](FIDO2-CTAP2.md) | 0→1 | **Met** (authenticator; WebAuthn web-flow is a documented non-goal) |

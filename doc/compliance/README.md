@@ -37,7 +37,7 @@ evidence has been reviewed.
 | ✅ **Met** | SP 800-207 Zero Trust | — (formally verified) |
 | ✅ **Met** | NIST PQC migration (hybrid) | — |
 | ✅ **Met** | FIDO2 / CTAP2 (authenticator) | — |
-| ✅ **Met** | SLSA Build L3 | L4 + SBOM (INFR-340) |
+| ✅ **Met** | SLSA Build L3 | SBOM now generated+validated in CI; release-attached SBOM + L4 (INFR-340) |
 | ◐ **Substantially met** | CNSA 2.0 | ML-KEM-1024 + ML-DSA-87 (INFR-329/330); LMS/XMSS (INFR-331) |
 | ◐ **Substantially met** | X.509 / mTLS | client-cert over TLS (INFR-344) |
 | ◐ **Partial** | SP 800-63B AAL3 | DK save-back + dual-key (EPIC 1) |

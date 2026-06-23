@@ -120,9 +120,12 @@ The release pipeline (`.github/workflows/release.yml`) produces, for every artif
 - **SLSA build provenance attestations** (`actions/attest-build-provenance`, `:1280-1288`)
   for the tarball, DMG, and zip — the SLSA-3 provenance the roadmap claims.
 - **OpenSSF Scorecard** (`scorecard.yml`) continuous supply-chain posture scoring.
+- **SBOM (SPDX)** generated + validated on every PR/push (`.github/workflows/sbom.yml`,
+  syft) — see [`SLSA.md`](SLSA.md) §3.
 
-*Residual / next:* SBOM (SPDX/CycloneDX) generation and in-toto attestation are the
-documented push to SLSA L4 (roadmap "Supply chain & integrity"). Tracked under EPIC 4/SR.
+*Residual / next:* attaching the SBOM to release artifacts with an attestation, in-toto
+attestation, and hermetic/reproducible builds are the documented push to SLSA L4 (roadmap
+"Supply chain & integrity"). Tracked under INFR-340.
 
 ### 5.AU — Audit & Accountability (the gap)
 Today auditing is **per-subsystem**: `emitauditlog()` records namespace operations and the

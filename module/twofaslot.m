@@ -40,6 +40,12 @@ Twofaslot: module
 	# VERIFIES every slot unwraps DK before writing anything. Returns nil or error.
 	writeslots:	fn(user: string, rootkey, DK: array of byte, keys: list of (string, string, string), recoverypass, pin: string): string;
 
+	# Add a backup/second key-slot wrapping the SAME DK, without disturbing the
+	# existing slots or the factotum (no single point of failure). Unlocks DK via
+	# the recovery passphrase, then writes one new key slot for cred (derives R,
+	# touch). newpin is the backup key's FIDO2 PIN ("" for touch-only).
+	addkey:	fn(user, pass, recoverypass: string, cred, salthex, newpin: string): string;
+
 	# Revert account to password-only: re-encrypt the factotum back under the
 	# password (needs a present key or the recovery passphrase to recover DK),
 	# then remove the slots. Returns nil or error.

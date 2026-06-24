@@ -134,6 +134,27 @@ Password-only (legacy) accounts are unaffected — no PIN prompt, no change.
 
 ---
 
+## 4a. Add a backup key (no single point of failure)
+
+Enroll a **second** key so losing or breaking one never locks you out. The backup
+wraps the *same* data key as your primary — in its own slot — so your vault is not
+re-encrypted and your other slots are untouched.
+
+Insert the **backup** key, then (after logging in) run:
+```
+2fa addkey
+```
+Prompts: **secstore password**, **recovery passphrase** (this authorizes the add —
+no key-swap dance needed), and the backup's **FIDO2 PIN** (blank for touch-only).
+Touch the backup twice. On success, either key (+ password) unlocks login.
+
+The new slot appears as `2fa/key-<cred>` next to `key` and `recovery`, and is
+verified to unwrap the data key *before* it is written. Repeat with more keys for
+more backups — each gets its own uniquely-named slot.
+
+> The backup must be a key libfido2 can enumerate (USB; NFC needs a reader). The
+> recovery passphrase is required, so keep it in your vault.
+
 ## 5. Convert touch-only → UV (add a PIN)
 
 There is no in-place upgrade; disable then re-enroll with a PIN:

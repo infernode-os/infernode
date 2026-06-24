@@ -311,6 +311,26 @@ enroll(user, pass, recoverypass: string, keys: list of (string, string, string),
 	return nil;
 }
 
+addkey(user, pass, recoverypass: string, cred, salthex, newpin: string): string
+{
+	if(recoverypass == nil || recoverypass == "")
+		return "addkey needs the recovery passphrase";
+	rootkey := secstore->mkfilekey3(user, pass);
+	(DK, e) := unlock(user, rootkey, recoverypass, "");	# recovery slot (no primary key needed)
+	if(DK == nil)
+		return "cannot unlock with the recovery passphrase: " + e;
+	# Unique slot name per credential so a backup never overwrites the primary
+	# (or another backup); re-adding the same key is idempotent.
+	name := "key-";
+	if(len cred >= 16)
+		name += cred[0:16];
+	else
+		name += cred;
+	# recoverypass "" => writeslots does not rewrite the recovery slot, and it
+	# never deletes existing slots — it only adds this one.
+	return writeslots(user, rootkey, DK, (name, cred, salthex) :: nil, "", newpin);
+}
+
 removeslots(user: string): string
 {
 	dir := slotdir(user);

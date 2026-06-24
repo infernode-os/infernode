@@ -23,6 +23,35 @@ return different `hmac-secret` outputs).
 
 ---
 
+## ⚠ Compatibility & migration — this is a BREAKING upgrade
+
+Enrolling an account in 2FA **changes the on-disk format of its secstore vault**
+in a way older InferNode builds cannot read. Read this before deploying.
+
+- **A 2FA-enrolled account's `factotum` blob is encrypted under a random data key
+  (DK), not the password.** An InferNode build *without* the 2FA support (no
+  `twofaslot`/`#F` device, no DK-aware `secstore`/`factotum`) **cannot decrypt it**
+  and that user **cannot log in** there. The per-account `2fa/` slot files are also
+  unrecognized by older builds.
+- **One-way until disabled.** To move an account back to an InferNode without 2FA,
+  run **`2fa disable` first** — it re-encrypts the vault under the password and
+  removes the slots. After that the old format is restored.
+- **The recovery passphrase is the only escape hatch** on a 2FA account, and old
+  builds have no recovery-slot logic — so a 2FA vault opened on an un-upgraded build
+  is effectively locked until you return to a 2FA-capable build (or had run
+  `2fa disable`). **Keep the recovery passphrase in your vault.**
+- **The secstore *server* is unaffected** — it stores opaque bytes. Only the
+  *client* (logon + factotum) needs the 2FA code. Mixed fleets are fine as long as
+  every host a 2FA user logs into runs a 2FA-capable build.
+- **Password-only (legacy) accounts are 100% unchanged** — no slot dir, no DK, same
+  bytes as before. The break only affects accounts you explicitly `2fa enroll`.
+
+**Upgrade order:** roll the 2FA-capable build to *all* hosts a user touches → then
+`2fa enroll`. **Downgrade order:** `2fa disable` on every 2FA account → then roll
+back. Always back up `~/.infernode/usr/inferno/secstore` first.
+
+---
+
 ## 0. Prerequisites
 
 - A YubiKey with **FIDO2** support.
@@ -133,6 +162,27 @@ If the key is **absent or fails**, login automatically falls through to:
 Password-only (legacy) accounts are unaffected — no PIN prompt, no change.
 
 ---
+
+## 4a. Add a backup key (no single point of failure)
+
+Enroll a **second** key so losing or breaking one never locks you out. The backup
+wraps the *same* data key as your primary — in its own slot — so your vault is not
+re-encrypted and your other slots are untouched.
+
+Insert the **backup** key, then (after logging in) run:
+```
+2fa addkey
+```
+Prompts: **secstore password**, **recovery passphrase** (this authorizes the add —
+no key-swap dance needed), and the backup's **FIDO2 PIN** (blank for touch-only).
+Touch the backup twice. On success, either key (+ password) unlocks login.
+
+The new slot appears as `2fa/key-<cred>` next to `key` and `recovery`, and is
+verified to unwrap the data key *before* it is written. Repeat with more keys for
+more backups — each gets its own uniquely-named slot.
+
+> The backup must be a key libfido2 can enumerate (USB; NFC needs a reader). The
+> recovery passphrase is required, so keep it in your vault.
 
 ## 5. Convert touch-only → UV (add a PIN)
 

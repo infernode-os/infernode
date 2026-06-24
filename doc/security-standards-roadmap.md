@@ -51,6 +51,7 @@ namespace policy*, not as bolted-on subsystems.
 |----------|----------|--------------------------|------|
 | **NIST SP 800-63B AAL3** | Hardware authenticator + verifier-impersonation resistance | FIDO2 key + **UV (PIN)** + touch via factotum (the PIV/CAC model) | 1 |
 | **FIDO2 / CTAP2 / WebAuthn** | Origin-bound, phishing-resistant | `#F`/`/dev/2fa` device + `twofa` (built); generalize to auth surfaces | 0→1 |
+| **OMB M-22-09 / EO 14028 — phishing-resistant MFA** | FIDO2/WebAuthn or PIV; no replayable shared secret | **Shipped**: hardware-key login (UV + touch) is phishing-resistant by construction — credential-bound `hmac-secret`, nothing replayable ever leaves the key | 1 |
 | **FIPS 201 PIV / SP 800-157 Derived PIV** | Smartcard identity; mobile derived creds | PIV applet via factotum; derived PIV on the NFC key + `/phone` bridge | 1 |
 | **X.509 / mTLS** | Authenticated encrypted transport | `devssl` + 9P-over-TLS, uniform | 0 |
 
@@ -87,6 +88,7 @@ namespace policy*, not as bolted-on subsystems.
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **NIST SP 800-92 + tamper-evident logs** | Complete, integrity-protected audit | One hash-chained append-only 9P log service (`#`-device); Merkle-verifiable. Underwrites SOC 2, FISMA AU, PCI-10 at once | 1 |
+| **SP 800-53 AU-10 — non-repudiation (human authorization of agent actions)** | Bind a human's authority to high-risk/agent-initiated actions; prove who authorized what | YubiKey UV **signature over the canonical action** + hash-chained record; enforced by **namespace construction** so the on-device AI agent can't reach the capability or forge approval — see EPIC 7 (`doc/security-epics.md`). A differentiator for *safe autonomous agents*. | 1 |
 
 ---
 
@@ -98,7 +100,7 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
 | Family | Control theme | Inferno-native mechanism | Evidence | Status |
 |--------|---------------|--------------------------|----------|--------|
 | **AC** Access Control | Least privilege, separation | Per-process namespaces; capability (no ambient authority) | [`compliance/SP800-207-zero-trust.md`](compliance/SP800-207-zero-trust.md) — namespace mechanism, `verifyns`, formally verified isolation | strong — Zero Trust posture **Met**; AC family mapping to be itemized |
-| **IA** Identification & Auth | MFA, PKI, AAL3 | Factotum + FIDO2/PIV; **UV/AAL3 verifier shipped & hardware-verified** (FIDO PIN load-bearing) | [`compliance/SP800-63B-AAL3.md`](compliance/SP800-63B-AAL3.md) — enrollment records, factotum protos, `t2uv` UV test | partial — AAL3 verifier ✅; DK save-back + dual-key open |
+| **IA** Identification & Auth | MFA, PKI, AAL3, phishing-resistant | Factotum + FIDO2/PIV; **UV/AAL3 + DK-encrypted vault + dual/backup key shipped & hardware-verified** (FIDO PIN load-bearing) | [`compliance/SP800-63B-AAL3.md`](compliance/SP800-63B-AAL3.md); `t2uv` UV test + `tests/twofaslot_test.b` regression suite (no-downgrade, recovery round-trip, additive slots) | substantial — AAL3 verifier, DK save-back, backup-key ✅; passwordless + GUI open |
 | **SC** System & Comms Protection | Crypto, boundary, TLS | `libsec` (AES-256-GCM, PQC), `devssl`, namespace boundaries | [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md) — algorithm inventory (source-cited) | partial — PQC suite complete; CNSA-strict params (G1/G2) tracked |
 | **AU** Audit & Accountability | Logging, integrity, retention | Hash-chained 9P audit-log service | log chain + verifier | planned |
 | **SI** System & Information Integrity | Memory safety, malware | Dis VM type/memory safety; signed modules | CWE class elimination, signatures | partial |
@@ -111,9 +113,10 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
 
 ## Near-term priorities (Tier 1, ordered)
 
-1. **AAL3-harden the YubiKey login** — ✅ **UV-required (FIDO PIN) shipped & hardware-verified**
-   (login FIDO-PIN prompt + key-derived vault + recovery slot); ☐ DK-only keyring save-back,
-   ☐ dual-key default. See `doc/second-factor-auth.md`, `doc/yubikey-2fa-operations.md`. *First.*
+1. **AAL3-harden the YubiKey login** — ✅ **UV-required + DK-encrypted save-back + dual/backup key,
+   shipped & hardware-verified** (FIDO-PIN login prompt, key-derived vault, recovery slot,
+   `2fa addkey`), with a CI regression suite (`tests/twofaslot_test.b`). ☐ passwordless mode,
+   ☐ Settings GUI. See `doc/yubikey-2fa-operations.md`. *Largely done.*
 2. **Tamper-evident audit-log service** — single highest-leverage control (AU + SOC 2 + PCI-10).
 3. **CNSA 2.0 strict params** — ML-KEM/ML-DSA primitives done; negotiate ML-KEM-1024 (INFR-329) + ML-DSA-87 default (INFR-330). See [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md).
 4. **SP 800-53 / 800-171 control-mapping** — unlocks federal & finance conversations.

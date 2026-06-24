@@ -88,6 +88,7 @@ namespace policy*, not as bolted-on subsystems.
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **NIST SP 800-92 + tamper-evident logs** | Complete, integrity-protected audit | One hash-chained append-only 9P log service (`#`-device); Merkle-verifiable. Underwrites SOC 2, FISMA AU, PCI-10 at once | 1 |
+| **SP 800-53 AU-10 — non-repudiation (human authorization of agent actions)** | Bind a human's authority to high-risk/agent-initiated actions; prove who authorized what | YubiKey UV **signature over the canonical action** + hash-chained record; enforced by **namespace construction** so the on-device AI agent can't reach the capability or forge approval — see EPIC 7 (`doc/security-epics.md`). A differentiator for *safe autonomous agents*. | 1 |
 
 ---
 

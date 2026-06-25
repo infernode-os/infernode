@@ -130,7 +130,7 @@ int	p256_ecdsa_sign(uchar sig[64], uchar priv[32], uchar *hash, int hashlen);
 int	p256_ecdsa_verify(uchar sig[64], ECpoint *pub, uchar *hash, int hashlen);
 
 /* ===================================================== */
-/* P-384 (secp384r1) ECDSA verify only */
+/* P-384 (secp384r1) ECDH + ECDSA verify */
 /* ===================================================== */
 typedef struct ECpoint384 ECpoint384;
 struct ECpoint384 {
@@ -139,6 +139,8 @@ struct ECpoint384 {
 };
 
 int	p384_ecdsa_verify(uchar sig[96], ECpoint384 *pub, uchar *hash, int hashlen);
+int	p384_keygen(uchar priv[48], ECpoint384 *pub);
+int	p384_ecdh(uchar shared[48], uchar priv[48], ECpoint384 *peerpub);
 
 /* ===================================================== */
 /* secp256k1 ECDSA (Ethereum/Bitcoin) */

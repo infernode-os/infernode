@@ -90,6 +90,12 @@ mkhsmsg(hstype: int, body: array of byte): array of byte
 	return msg;
 }
 
+put16(buf: array of byte, off, v: int)
+{
+	buf[off] = byte (v >> 8);
+	buf[off+1] = byte v;
+}
+
 # Build a minimal valid TLS 1.2 ServerHello:
 # version=0x0303, random=32 zeros, session_id_len=0,
 # cipher_suite=0xC02F (TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256), compression=0
@@ -103,6 +109,43 @@ mkserverhello(): array of byte
 	body[35] = byte 16rC0;
 	body[36] = byte 16r2F;
 	# compression: byte 37 already zero
+	return body;
+}
+
+# Build a TLS 1.3 CNSA hybrid ServerHello whose key share has a valid length
+# but an invalid P-384 point.
+mkbadcnsa13serverhello(): array of byte
+{
+	sharelen := 97 + 1568;
+	svextlen := 2;
+	ksextlen := 4 + sharelen;
+	extlen := 4 + svextlen + 4 + ksextlen;
+	body := array [40 + extlen] of {* => byte 0};
+
+	body[0] = byte 16r03;
+	body[1] = byte 16r03;
+	for(i := 2; i < 34; i++)
+		body[i] = byte 16r5A;
+	body[34] = byte 0;			# empty session id
+	body[35] = byte 16r13;
+	body[36] = byte 16r02;		# TLS_AES_256_GCM_SHA384
+	body[37] = byte 0;			# null compression
+
+	put16(body, 38, extlen);
+	off := 40;
+	put16(body, off, 16r002B);	# supported_versions
+	put16(body, off+2, svextlen);
+	body[off+4] = byte 16r03;
+	body[off+5] = byte 16r04;	# TLS 1.3
+	off += 4 + svextlen;
+
+	put16(body, off, 16r0033);	# key_share
+	put16(body, off+2, ksextlen);
+	put16(body, off+4, 16r11ED);	# SecP384r1MLKEM1024
+	put16(body, off+6, sharelen);
+	off += 8;
+	body[off] = byte 16r04;		# uncompressed P-384 point marker
+	# Remaining P-384 coordinates and ML-KEM ciphertext are zero.
 	return body;
 }
 
@@ -129,6 +172,13 @@ contains(s, sub: string): int
 			return 1;
 	}
 	return 0;
+}
+
+setcnsamode(v: string)
+{
+	fd := sys->create("/env/cnsamode", Sys->OWRITE, 8r644);
+	if(fd != nil)
+		sys->fprint(fd, "%s", v);
 }
 
 # Fake server: drain ClientHello, write response, close pipe end
@@ -182,6 +232,19 @@ expecterr(t: ref T, response: array of byte, want: string)
 	}
 
 	t.log("got expected error: " + err);
+}
+
+expecterrcnsa(t: ref T, response: array of byte, want: string)
+{
+	setcnsamode("1");
+	{
+		expecterr(t, response, want);
+	} exception e {
+	* =>
+		setcnsamode("0");
+		raise e;
+	}
+	setcnsamode("0");
 }
 
 # ================================================================
@@ -312,6 +375,14 @@ testServerHelloBadSuite(t: ref T)
 	expecterr(t, response, "unsupported suite");
 }
 
+testCNSABadHybridP384Point(t: ref T)
+{
+	body := mkbadcnsa13serverhello();
+	hsmsg := mkhsmsg(2, body);
+	response := mkrecord(22, hsmsg);
+	expecterrcnsa(t, response, "CNSA hybrid key agreement failed");
+}
+
 # ================================================================
 # Alert Handling Tests
 # ================================================================
@@ -434,6 +505,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ServerHelloUnsupportedVersion", testServerHelloUnsupportedVersion);
 	run("ServerHelloNonNullCompression", testServerHelloNonNullCompression);
 	run("ServerHelloBadSuite", testServerHelloBadSuite);
+	run("CNSABadHybridP384Point", testCNSABadHybridP384Point);
 
 	# Alert handling
 	run("AlertReceived", testAlertReceived);

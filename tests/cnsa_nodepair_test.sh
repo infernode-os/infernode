@@ -84,15 +84,15 @@ make_signer() {  # make_signer <path> <alg>
 	local out="$TMPHOST/gen-$alg.out"
 	local pid
 	pid="$(start_node "$out" plain gen "$path" "$alg")"
-	if ! wait_pid "$pid" 20 || [ ! -s "$ROOT$path" ] && [ ! -s "$path" ]; then
+	if ! wait_pid "$pid" 20 || { [ ! -s "$ROOT$path" ] && [ ! -s "$path" ]; }; then
 		echo "FAIL: signer generation failed for $alg"
 		cat "$out" 2>/dev/null
 		exit 1
 	fi
 }
 
-pair() {  # pair <name> <listener-mode> <dialer-mode> <signer> <expect: OK|FAIL>
-	local name="$1" lmode="$2" dmode="$3" signer="$4" expect="$5"
+pair() {  # pair <name> <listener-mode> <dialer-mode> <signer> <expect: OK|FAIL> [reason-regex]
+	local name="$1" lmode="$2" dmode="$3" signer="$4" expect="$5" reason="${6:-}"
 	local port=$((PORT_BASE++))
 	local lout="$TMPHOST/$name.listener" dout="$TMPHOST/$name.dialer"
 	local lpid dpid lr dr want
@@ -114,6 +114,13 @@ pair() {  # pair <name> <listener-mode> <dialer-mode> <signer> <expect: OK|FAIL>
 	dr="$(grep -Eo 'AUTH-OK|AUTH-FAIL' "$dout" | head -1)"
 	want="AUTH-$expect"  # OK -> AUTH-OK, FAIL -> AUTH-FAIL
 	if [ "$lr" = "$want" ] && [ "$dr" = "$want" ]; then
+		if [ -n "$reason" ] && ! grep -Eq "$reason" "$lout" "$dout"; then
+			echo "FAIL: $name (got $want but not for expected reason /$reason/)"
+			echo "-- listener output --"; cat "$lout" 2>/dev/null
+			echo "-- dialer output --"; cat "$dout" 2>/dev/null
+			fails=$((fails+1))
+			return
+		fi
 		echo "PASS: $name (listener=$lr dialer=$dr)"
 	else
 		echo "FAIL: $name (want $want; listener=$lr dialer=$dr)"
@@ -131,7 +138,7 @@ make_signer "$SIGNER_ML" mldsa87
 pair "both-default-768-ed25519"   plain plain "$SIGNER_ED" OK
 pair "both-cnsa-1024-ed25519"     cnsa  cnsa  "$SIGNER_ED" OK
 pair "both-cnsa-1024-mldsa87"     cnsa  cnsa  "$SIGNER_ML" OK
-pair "mixed-1024-vs-768-mldsa87"  cnsa  plain "$SIGNER_ML" FAIL
+pair "mixed-1024-vs-768-mldsa87"  cnsa  plain "$SIGNER_ML" FAIL "bad ml-kem public key length"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then

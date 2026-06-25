@@ -4,5 +4,15 @@
 GUISRC=\
 	stubs-headless.$O\
 
-GUIFLAGS=
-GUILIBS=
+# libfido2 for /dev/2fa (second-factor auth). Conditional like the sdl3 backend:
+# only -DHAVE_FIDO2 when libfido2 is present, else /dev/2fa degrades to stubs.
+FIDO2_CFLAGS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
+FIDO2_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
+
+# Device objects shared with the sdl3 config (audio-sdl3, devopus) reference SDL
+# and opus even in headless builds, so provide both to the linker; the display
+# still uses the no-op stubs above.
+SDL3_LIBS=`pkg-config --libs sdl3 2>/dev/null || echo "-L/opt/homebrew/lib -lSDL3"`
+OPUS_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; pkg-config --libs opus 2>/dev/null`
+GUIFLAGS=$FIDO2_CFLAGS
+GUILIBS=$FIDO2_LIBS $SDL3_LIBS $OPUS_LIBS

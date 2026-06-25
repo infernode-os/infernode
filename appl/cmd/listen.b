@@ -71,6 +71,10 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	}
 	if (doauth && algs == nil)
 		algs = getalgs();
+	if (doauth && algs == nil) {
+		sys->fprint(stderr(), "listen: authentication requested, but no SSL algorithms are available\n");
+		raise "fail:no auth algorithms";
+	}
 	if (algs != nil) {
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";

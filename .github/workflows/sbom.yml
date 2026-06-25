@@ -1,0 +1,58 @@
+name: SBOM
+
+# Generates and validates a Software Bill of Materials (SPDX) for the source
+# tree on every PR and push, so the SBOM tooling is exercised by CI (not only
+# at release time). Shipping the SBOM attached to releases + provenance
+# attestation is wired separately in release.yml (see INFR-340).
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sbom:
+    name: Generate & validate SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+    - name: Generate SPDX SBOM (syft)
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        path: .
+        format: spdx-json
+        output-file: infernode.spdx.json
+        upload-artifact: false
+
+    - name: Validate SBOM
+      run: |
+        set -eu
+        f=infernode.spdx.json
+        test -s "$f" || { echo "SBOM not generated"; exit 1; }
+        ver=$(jq -r '.spdxVersion // empty' "$f")
+        n=$(jq -r '.packages | length' "$f")
+        echo "SBOM: ${ver:-<none>}, ${n} packages"
+        case "$ver" in
+          SPDX-*) ;;
+          *) echo "missing/invalid spdxVersion"; exit 1 ;;
+        esac
+        [ "$n" -ge 1 ] || { echo "SBOM has no packages — generation produced nothing"; exit 1; }
+
+    - name: Upload SBOM artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+      with:
+        name: sbom-spdx
+        path: infernode.spdx.json
+        if-no-files-found: error

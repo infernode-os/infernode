@@ -107,6 +107,14 @@ NSESSFILES: con 13;  # number of files per session dir
 # Session state
 LlmSession: adt {
 	id:             int;
+	name:           string;  # unguessable capability token (INFR-321). The
+	                         # session's directory name in the namespace is
+	                         # this token, returned to its creator by reading
+	                         # /new. Root readdir does not list sessions and
+	                         # walk resolves only by exact token match, so a
+	                         # client cannot enumerate or guess another
+	                         # client's session. The numeric id stays the
+	                         # internal array/QID key only.
 	messages:       list of ref LlmMessage;
 	lastresponse:   string;
 	totaltokens:    int;
@@ -145,6 +153,13 @@ vers: int;
 sessions: array of ref LlmSession;
 nsessions: int;
 nextsid: int;
+
+MAXSESSIONS: con 128;
+MAXPROMPT: con 1048576;
+MAXSYSTEM: con 262144;
+MAXTOOLS: con 1048576;
+MAXPREFILL: con 65536;
+MAXSETTING: con 4096;
 
 # Backend configuration
 backend: string;      # "api" or "openai"
@@ -308,11 +323,44 @@ FTYPE(path: big): int
 
 # --- Session management ---
 
+# Generate an unguessable 128-bit capability token (32 hex chars) from the
+# kernel CSPRNG. Returns nil if /dev/random is unavailable, in which case we
+# refuse to mint a session rather than fall back to a guessable name (INFR-321).
+gentoken(): string
+{
+	fd := sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[16] of byte;
+	if(sys->readn(fd, buf, len buf) != len buf)
+		return nil;
+	tok := "";
+	for(i := 0; i < len buf; i++)
+		tok += sys->sprint("%.2x", int buf[i]);
+	return tok;
+}
+
+findsessionbyname(name: string): ref LlmSession
+{
+	if(name == "")
+		return nil;
+	for(i := 0; i < nsessions; i++)
+		if(sessions[i].name == name)
+			return sessions[i];
+	return nil;
+}
+
 newsession(): ref LlmSession
 {
+	if(nsessions >= MAXSESSIONS)
+		return nil;
+	tok := gentoken();
+	if(tok == nil)
+		return nil;
 	id := nextsid++;
 	s := ref LlmSession(
 		id,
+		tok,           # name: capability token
 		nil,           # messages
 		"",            # lastresponse
 		0,             # totaltokens
@@ -497,7 +545,13 @@ Serve:
 			case ft {
 			Qnew =>
 				sess := newsession();
-				data := array of byte (string sess.id + "\n");
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, "cannot allocate session"));
+					break;
+				}
+				# Return the capability token, not the numeric id: it is the
+				# only handle by which the creator can reach this session.
+				data := array of byte (sess.name + "\n");
 				srv.reply(styxservers->readbytes(m, data));
 
 			Qmodels =>
@@ -676,13 +730,23 @@ Serve:
 				# device splits one client write() into multiple <=iounit
 				# Twrites; generation is deferred to the following read so the
 				# whole prompt is assembled first (see triggerpending).
-				sess.pendingwrite = appendbytes(sess.pendingwrite, m.data);
+				(nb, aerr) := appendbyteslimit(sess.pendingwrite, m.data, MAXPROMPT);
+				if(aerr != nil) {
+					sess.pendingwrite = nil;
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+					break;
+				}
+				sess.pendingwrite = nb;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qmodel =>
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "model setting too large"));
 					break;
 				}
 				model := resolvemodel(strip(string m.data));
@@ -694,6 +758,10 @@ Serve:
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "temperature setting too large"));
 					break;
 				}
 				tstr := strip(string m.data);
@@ -712,13 +780,23 @@ Serve:
 					break;
 				}
 				# Accumulate across write-fragments; committed on clunk.
-				c.data = appendbytes(c.data, m.data);
+				(nb, aerr) := appendbyteslimit(c.data, m.data, MAXSYSTEM);
+				if(aerr != nil) {
+					c.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+					break;
+				}
+				c.data = nb;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qthinking =>
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "thinking setting too large"));
 					break;
 				}
 				value := strip(string m.data);
@@ -745,6 +823,10 @@ Serve:
 				}
 				# Don't strip — prefill may have intentional trailing space
 				# But remove trailing newline since shell adds it
+				if(len m.data > MAXPREFILL) {
+					srv.reply(ref Rmsg.Error(m.tag, "prefill too large"));
+					break;
+				}
 				pf := string m.data;
 				if(len pf > 0 && pf[len pf - 1] == '\n')
 					pf = pf[:len pf - 1];
@@ -755,6 +837,10 @@ Serve:
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "maxtokens setting too large"));
 					break;
 				}
 				value := strip(string m.data);
@@ -772,6 +858,10 @@ Serve:
 				sess := findsession(sid);
 				if(sess == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(len m.data > MAXSETTING) {
+					srv.reply(ref Rmsg.Error(m.tag, "reasoning setting too large"));
 					break;
 				}
 				value := strip(string m.data);
@@ -794,7 +884,13 @@ Serve:
 				# Accumulate the tool-defs JSON across write-fragments; parsed
 				# and committed on clunk (see finalizewrite). The whole array
 				# may exceed one iounit, so it cannot be parsed per-write.
-				c.data = appendbytes(c.data, m.data);
+				(nb, aerr) := appendbyteslimit(c.data, m.data, MAXTOOLS);
+				if(aerr != nil) {
+					c.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+					break;
+				}
+				c.data = nb;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qcompact =>
@@ -861,19 +957,24 @@ Serve:
 # document. We deliberately do NOT index by absolute offset: the persistent
 # ORDWR /ask fid's write offset climbs across turns (queryllmfd never seeks 0),
 # which would make absolute-offset placement grow without bound.
-appendbytes(buf, data: array of byte): array of byte
+appendbyteslimit(buf, data: array of byte, limit: int): (array of byte, string)
 {
 	if(data == nil || len data == 0)
-		return buf;
+		return (buf, nil);
+	blen := 0;
+	if(buf != nil)
+		blen = len buf;
+	if(blen + len data > limit)
+		return (nil, sys->sprint("write too large: limit %d bytes", limit));
 	if(buf == nil) {
 		nb := array[len data] of byte;
 		nb[0:] = data;
-		return nb;
+		return (nb, nil);
 	}
 	nb := array[len buf + len data] of byte;
 	nb[0:] = buf;
 	nb[len buf:] = data;
-	return nb;
+	return (nb, nil);
 }
 
 # Start a generation turn if a fully-written prompt is pending and none is
@@ -1290,7 +1391,13 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qmodels =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "models", big 0, 8r444), nil);
 	Qsessdir =>
-		return (dir(Qid(p, vers, Sys->QTDIR), string sid, big 0, 8r755), nil);
+		# Present the session's capability token as its directory name, not
+		# the numeric id, so a stat never discloses a guessable id (INFR-321).
+		nm := string sid;
+		s := findsession(sid);
+		if(s != nil)
+			nm = s.name;
+		return (dir(Qid(p, vers, Sys->QTDIR), nm, big 0, 8r755), nil);
 	Qask =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "ask", big 0, 8r666), nil);
 	Qstream =>
@@ -1347,10 +1454,12 @@ navigator(navops: chan of ref Navop)
 				"models" =>
 					n.path = MKPATH(0, Qmodels);
 				* =>
-					# Try as session ID
-					id := strtoint(n.name);
-					if(id >= 0 && findsession(id) != nil)
-						n.path = MKPATH(id, Qsessdir);
+					# Resolve a session only by exact capability-token
+					# match (INFR-321). Numeric ids are no longer walkable,
+					# so a client cannot reach a session it did not create.
+					sess := findsessionbyname(n.name);
+					if(sess != nil)
+						n.path = MKPATH(sess.id, Qsessdir);
 					else {
 						n.reply <-= (nil, Enotfound);
 						continue;
@@ -1415,12 +1524,13 @@ navigator(navops: chan of ref Navop)
 
 			case ft {
 			Qroot =>
-				# Root: new + session directories
+				# Root: new + models only. Session directories are
+				# deliberately NOT listed (INFR-321): they are reachable
+				# only via their unguessable capability token, so a client
+				# cannot enumerate sessions it does not own.
 				entries: list of big;
 				entries = MKPATH(0, Qnew) :: entries;
 				entries = MKPATH(0, Qmodels) :: entries;
-				for(i := 0; i < nsessions; i++)
-					entries = MKPATH(sessions[i].id, Qsessdir) :: entries;
 
 				# Reverse to preserve order
 				rev: list of big;
@@ -1428,7 +1538,7 @@ navigator(navops: chan of ref Navop)
 					rev = hd entries :: rev;
 				entries = rev;
 
-				i = 0;
+				i := 0;
 				for(e := entries; e != nil; e = tl e) {
 					if(i >= n.offset && n.count > 0) {
 						n.reply <-= dirgen(hd e);

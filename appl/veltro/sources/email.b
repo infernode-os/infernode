@@ -30,11 +30,15 @@ include "imap.m";
 include "smtp.m";
 	smtp: Smtp;
 
+include "factotum.m";
+	factotum: Factotum;
+
 include "msgsrc.m";
 
 EmailSrc: module {
 	init:    fn(config: string): string;
 	name:    fn(): string;
+	capabilities: fn(): int;
 	status:  fn(): string;
 	close:   fn(): string;
 	watch:   fn(updates: chan of ref MsgSrc->Notification, stop: chan of int): string;
@@ -52,6 +56,7 @@ Notification: import MsgSrc;
 # Configuration
 imapserver: string;
 smtpserver: string;
+fromaddr: string;	# account address (From:) — the factotum key's user=
 folder := "INBOX";
 imapconnected := 0;
 currentmbox: ref Mailbox;
@@ -90,6 +95,18 @@ init(config: string): string
 	if(f != nil)
 		folder = f;
 
+	# The account's own address is the From: for sends/replies. It is the
+	# factotum key's user=; Gmail requires From to be the authenticated user,
+	# and SMTP needs an @domain to derive HELO (otherwise "no domain name").
+	# Best-effort — a send without it falls back to /dev/user.
+	factotum = load Factotum Factotum->PATH;
+	if(factotum != nil) {
+		factotum->init();
+		(u, nil) := factotum->getuserpasswd("proto=pass service=imap dom=" + imapserver);
+		if(u != nil)
+			fromaddr = u;
+	}
+
 	# Connect
 	err := imap->open(nil, nil, imapserver, Imap->IMPLICIT_TLS);
 	if(err != nil)
@@ -110,6 +127,13 @@ init(config: string): string
 name(): string
 {
 	return "email";
+}
+
+# Email is a full conversational channel: history, fetch, send, reply, flags.
+capabilities(): int
+{
+	return MsgSrc->CAP_WATCH | MsgSrc->CAP_ENUMERATE | MsgSrc->CAP_FETCH |
+		MsgSrc->CAP_SEND | MsgSrc->CAP_REPLY | MsgSrc->CAP_SETFLAG;
 }
 
 status(): string
@@ -185,8 +209,19 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 				imapconnected = 0;
 				break idleloop;
 			}
-			# Parse IDLE response line
-			# Format: "* N EXISTS" or "* N EXPUNGE" etc.
+			# New mail must be fetched OUTSIDE the IDLE: IMAP forbids other
+			# commands while IDLE is active, and idlereader shares this
+			# connection's read buffer (fetching inline corrupts both). Leave
+			# IDLE, fetch the new envelopes, then re-enter via the outer loop.
+			(isnew, lo, hi) := newmailrange(line);
+			if(isnew) {
+				imapstop <-= 1;
+				<-idledone;
+				for(seq := lo; seq <= hi; seq++)
+					fetchandnotify(seq, updates);
+				prevexists = hi;
+				break idleloop;
+			}
 			handleidleline(line, updates);
 
 		<-timer =>
@@ -218,6 +253,24 @@ idletimer(ch: chan of int, ms: int)
 {
 	sys->sleep(ms);
 	ch <-= 1;
+}
+
+# If an IDLE line is a "* N EXISTS" announcing more messages than we last
+# knew about, return (1, firstnew, lastnew) so watch() can leave IDLE and
+# fetch them. Otherwise (0, 0, 0).
+newmailrange(line: string): (int, int, int)
+{
+	if(!hasprefix(line, "* "))
+		return (0, 0, 0);
+	(n, toks) := sys->tokenize(line[2:], " ");
+	if(n < 2)
+		return (0, 0, 0);
+	if(str->toupper(hd tl toks) != "EXISTS")
+		return (0, 0, 0);
+	newcount := int hd toks;
+	if(newcount > prevexists)
+		return (1, prevexists + 1, newcount);
+	return (0, 0, 0);
 }
 
 # Parse an IDLE untagged response and push Notifications for new messages
@@ -423,6 +476,8 @@ send(msg: ref Message): string
 
 	sender := msg.sender;
 	if(sender == nil || sender == "")
+		sender = fromaddr;
+	if(sender == nil || sender == "")
 		sender = readfile("/dev/user");
 	if(sender == nil)
 		sender = "inferno";
@@ -446,11 +501,24 @@ send(msg: ref Message): string
 	for(; lines != nil; lines = tl lines)
 		rlines = hd lines :: rlines;
 
-	(ok, serr) := smtp->open(smtpserver);
+	# Authenticated submission over implicit TLS (port 465). Gmail rejects
+	# plaintext 25 with "Must issue a STARTTLS command first" and requires
+	# AUTH. Credentials come from factotum (service=smtp); usessl=1 selects
+	# the TLS:465 path in smtp.b.
+	smtpuser := sender;
+	smtppass := "";
+	if(factotum != nil) {
+		(su, sp) := factotum->getuserpasswd("proto=pass service=smtp dom=" + smtpserver);
+		if(su != nil) {
+			smtpuser = su;
+			smtppass = sp;
+		}
+	}
+	(ok, serr) := smtp->authopen(smtpuser, smtppass, smtpserver, 1);
 	if(ok < 0)
 		return "SMTP connect: " + serr;
 
-	(ok, serr) = smtp->sendmail(sender, msg.recipient :: nil, nil, rlines);
+	(ok, serr) = smtp->sendmail(smtpuser, msg.recipient :: nil, nil, rlines);
 	smtp->close();
 
 	if(ok < 0)

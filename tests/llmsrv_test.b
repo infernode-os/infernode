@@ -192,6 +192,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AutoCompactAbove", testAutoCompactAbove);
 	run("AutoCompactCtlParse", testAutoCompactCtlParse);
 
+	# Bounded write-reassembly tests
+	run("AppendBytesLimitEmpty", testAppendBytesLimitEmpty);
+	run("AppendBytesLimitAppend", testAppendBytesLimitAppend);
+	run("AppendBytesLimitReject", testAppendBytesLimitReject);
+
 	# Float parser tests
 	run("ParseFloatInteger", testParseFloatInteger);
 	run("ParseFloatDecimal", testParseFloatDecimal);
@@ -786,6 +791,31 @@ testAutoCompactCtlParse(t: ref T)
 	t.asserteq(autocompactarg("autocompact xyz"), -1, "garbage arg -> invalid");
 }
 
+# ==================== Bounded Write Reassembly Tests ====================
+
+testAppendBytesLimitEmpty(t: ref T)
+{
+	(nb, err) := appendbyteslimit(nil, nil, 4);
+	t.assertnil(err, "empty append succeeds");
+	t.assert(nb == nil, "empty append stays nil");
+}
+
+testAppendBytesLimitAppend(t: ref T)
+{
+	(nb, err) := appendbyteslimit(nil, array of byte "ab", 4);
+	t.assertnil(err, "initial append succeeds");
+	(nb, err) = appendbyteslimit(nb, array of byte "cd", 4);
+	t.assertnil(err, "second append at limit succeeds");
+	t.assertseq(string nb, "abcd", "buffer content");
+}
+
+testAppendBytesLimitReject(t: ref T)
+{
+	(nb, err) := appendbyteslimit(array of byte "abc", array of byte "de", 4);
+	t.assertnotnil(err, "append beyond limit rejected");
+	t.assert(nb == nil, "rejected append returns nil buffer");
+}
+
 # ==================== Float Parser Tests ====================
 
 testParseFloatInteger(t: ref T)
@@ -935,6 +965,27 @@ autocompactarg(cmd: string): int
 	if(len cmd < len prefix || cmd[0:len prefix] != prefix)
 		return -1;
 	return strtoint(strip(cmd[len prefix:]));
+}
+
+# Bounded write reassembly (replicates llmsrv.b appendbyteslimit).
+appendbyteslimit(buf, data: array of byte, limit: int): (array of byte, string)
+{
+	if(data == nil || len data == 0)
+		return (buf, nil);
+	blen := 0;
+	if(buf != nil)
+		blen = len buf;
+	if(blen + len data > limit)
+		return (nil, "write too large");
+	if(buf == nil) {
+		nb := array[len data] of byte;
+		nb[0:] = data;
+		return (nb, nil);
+	}
+	nb := array[len buf + len data] of byte;
+	nb[0:] = buf;
+	nb[len buf:] = data;
+	return (nb, nil);
 }
 
 # Integer parser (replicates llmsrv.b strtoint: -1 on empty/non-digit)

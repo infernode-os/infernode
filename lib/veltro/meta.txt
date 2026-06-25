@@ -98,9 +98,9 @@ These appear as structured messages in your conversation with source, sender, su
 
 When you receive one:
 1. Classify it per the message policy below
-2. For IGNORE: use the mail tool to archive. No task needed.
+2. For IGNORE: mark it read — write `flag <source> <id> seen` to /mnt/msg/ctl. No task needed.
 3. For DECLINE/DEFER/NOTIFY: create a Task Agent via the task tool.
-   Grant it tools=mail,read and set urgency per the policy.
+   Grant it tools=read,write (to act on the /mnt/msg notification plane) and set urgency per the policy.
    Write a clear brief with the message ID, sender, subject, and action to take.
 4. Do not read the full message body yourself — delegate that to the Task Agent.
 

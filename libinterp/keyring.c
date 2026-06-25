@@ -1721,24 +1721,50 @@ Keyring_getmsg(void *fp)
 	free(buf);
 }
 
+/*
+ * CNSA 2.0 strict mode — fleet-wide policy via the host CNSAMODE env var
+ * (the emu also reflects it into Inferno /env/cnsamode for Limbo tools).
+ * When on, the native STS handshake uses ML-KEM-1024 (FIPS 203, NIST
+ * Category 5) instead of ML-KEM-768. Every node in a CNSA-mode fleet must
+ * agree; a mixed 768/1024 pair fails the public-key length check, by design
+ * (no silent downgrade). Cached: the policy is fixed at node launch.
+ */
+static int
+cnsamode(void)
+{
+	static int m = -1;
+	char *e;
+
+	if(m < 0){
+		e = getenv("CNSAMODE");
+		m = (e != nil && e[0] != 0 && e[0] != '0' && e[0] != 'n' && e[0] != 'N');
+	}
+	return m;
+}
+
 void
 Keyring_auth(void *fp)
 {
 	F_Keyring_auth *f;
-	mpint *r0, *r1, *p, *alpha, *alphar0, *alphar1, *alphar0r1;
+	mpint *r0, *r1, *p, *alpha, *alphar0, *alphar1, *alphar0r1, *pm1;
 	SK *mysk;
 	PK *mypk, *spk, *hispk;
 	Certificate *cert, *hiscert, *alphacert;
 	char *buf, *err;
 	uchar *cvb;
-	int n, fd, version;
+	int n, fd;
 	long now;
-	/* hybrid post-quantum (ML-KEM-768) key agreement material */
-	uchar myek[MLKEM768_PKLEN], mydk[MLKEM768_SKLEN];
-	uchar hisek[MLKEM768_PKLEN], myct[MLKEM768_CTLEN], hisct[MLKEM768_CTLEN];
+	/* hybrid post-quantum key agreement material. Buffers are sized for the
+	 * larger ML-KEM-1024 (CNSA 2.0 strict); pklen/ctlen select the in-use
+	 * parameter set at runtime. */
+	uchar myek[MLKEM1024_PKLEN], mydk[MLKEM1024_SKLEN];
+	uchar hisek[MLKEM1024_PKLEN], myct[MLKEM1024_CTLEN], hisct[MLKEM1024_CTLEN];
 	uchar ss_local[MLKEM_SSLEN], ss_remote[MLKEM_SSLEN];
 	uchar *kss_lo, *kss_hi, *ek_lo, *ek_hi;
 	int cmp;
+	int cnsa = cnsamode();
+	int pklen = cnsa ? MLKEM1024_PKLEN : MLKEM768_PKLEN;
+	int ctlen = cnsa ? MLKEM1024_CTLEN : MLKEM768_CTLEN;
 
 	hispk = H;
 	hiscert = H;
@@ -1751,7 +1777,7 @@ Keyring_auth(void *fp)
 	f->ret->t0 = H;
 	destroy(f->ret->t1);
 	f->ret->t1 = H;
-	r0 = r1 = alphar0 = alphar1 = alphar0r1 = nil;
+	r0 = r1 = alphar0 = alphar1 = alphar0r1 = pm1 = nil;
 
 	/* check args */
 	if(f->fd == H || f->fd->fd < 0){
@@ -1779,8 +1805,12 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 	buf[n] = 0;
-	version = atoi(buf);
-	if(version != 2 || n > 4){
+	/*
+	 * Require the version token to be exactly "2".  atoi() would accept
+	 * non-canonical encodings such as "2abc", "0002", "+2" or " 2",
+	 * widening the pre-auth attack surface; demand a single canonical byte.
+	 */
+	if(n != 1 || buf[0] != '2'){
 		err = "incompatible authentication protocol (need hybrid PQ v2)";
 		goto out;
 	}
@@ -1838,9 +1868,12 @@ Keyring_auth(void *fp)
 	mpexp(alpha, r0, p, alphar0);
 	acquire();
 
-	/* generate ephemeral ML-KEM-768 keypair for hybrid PQ key agreement */
+	/* generate ephemeral ML-KEM keypair for hybrid PQ key agreement */
 	release();
-	mlkem768_keygen(myek, mydk);
+	if(cnsa)
+		mlkem1024_keygen(myek, mydk);
+	else
+		mlkem768_keygen(myek, mydk);
 	acquire();
 
 	/* send alpha**r0 mod p, mycert, and mypk */
@@ -1862,8 +1895,8 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
-	/* send my ML-KEM-768 public key */
-	if(sendmsg(fd, (char*)myek, MLKEM768_PKLEN) <= 0){
+	/* send my ML-KEM public key */
+	if(sendmsg(fd, (char*)myek, pklen) <= 0){
 		err = MSG;
 		goto out;
 	}
@@ -1877,8 +1910,31 @@ Keyring_auth(void *fp)
 	buf[n] = 0;
 	alphar1 = strtomp(buf, nil, 64, nil);
 
-	/* trying a fast one */
-	if(mpcmp(p, alphar1) <= 0){
+	/*
+	 * strtomp() returns nil when the peer sends a value with no valid
+	 * base64/mpint digits (e.g. a non-base64 DH share).  mpcmp()
+	 * dereferences its arguments unconditionally, so passing nil here is
+	 * a pre-auth remote crash (INFR-322).  Reject it before any compare.
+	 */
+	if(alphar1 == nil){
+		err = "malformed diffie hellman share";
+		goto out;
+	}
+
+	/*
+	 * Validate the peer's DH share before doing any further work:
+	 * require 1 < alphar1 < p-1 (INFR-323).  Rejecting <= 1 also rejects
+	 * zero and negative values because mpcmp() is sign-aware; rejecting
+	 * >= p-1 also rejects >= p.  The weak shares 0, 1, p-1 (and p) force
+	 * the shared secret into a tiny subgroup and must never be accepted.
+	 */
+	if(mpcmp(alphar1, mpone) <= 0){
+		err = "implausible parameter value";
+		goto out;
+	}
+	pm1 = mpnew(0);
+	mpsub(p, mpone, pm1);
+	if(mpcmp(alphar1, pm1) >= 0){
 		err = "implausible parameter value";
 		goto out;
 	}
@@ -1929,23 +1985,26 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
-	/* get his ML-KEM-768 public key (sent right after his pk) */
+	/* get his ML-KEM public key (sent right after his pk) */
 	n = getmsg(fd, buf, Maxbuf-1);
 	if(n < 0){
 		err = buf;
 		goto out;
 	}
-	if(n != MLKEM768_PKLEN){
+	if(n != pklen){
 		err = "bad ml-kem public key length";
 		goto out;
 	}
-	memmove(hisek, buf, MLKEM768_PKLEN);
+	memmove(hisek, buf, pklen);
 
 	/* encapsulate to his ek, send the ciphertext */
 	release();
-	mlkem768_encaps(myct, ss_local, hisek);
+	if(cnsa)
+		mlkem1024_encaps(myct, ss_local, hisek);
+	else
+		mlkem768_encaps(myct, ss_local, hisek);
 	acquire();
-	if(sendmsg(fd, (char*)myct, MLKEM768_CTLEN) <= 0){
+	if(sendmsg(fd, (char*)myct, ctlen) <= 0){
 		err = MSG;
 		goto out;
 	}
@@ -1956,12 +2015,15 @@ Keyring_auth(void *fp)
 		err = buf;
 		goto out;
 	}
-	if(n != MLKEM768_CTLEN){
+	if(n != ctlen){
 		err = "bad ml-kem ciphertext length";
 		goto out;
 	}
-	memmove(hisct, buf, MLKEM768_CTLEN);
-	mlkem768_decaps(ss_remote, hisct, mydk);
+	memmove(hisct, buf, ctlen);
+	if(cnsa)
+		mlkem1024_decaps(ss_remote, hisct, mydk);
+	else
+		mlkem768_decaps(ss_remote, hisct, mydk);
 
 	/*
 	 * sign alpha**r0, alpha**r1 and both ML-KEM public keys, then send.
@@ -1971,8 +2033,8 @@ Keyring_auth(void *fp)
 	 */
 	n = bigtobase64(alphar0, buf, Maxbuf);
 	n += bigtobase64(alphar1, buf+n, Maxbuf-n);
-	memmove(buf+n, myek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
-	memmove(buf+n, hisek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
+	memmove(buf+n, myek, pklen); n += pklen;
+	memmove(buf+n, hisek, pklen); n += pklen;
 	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
 	n = certtostr(alphacert, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
@@ -1998,8 +2060,8 @@ Keyring_auth(void *fp)
 	certimmutable(alphacert);		/* hide from the garbage collector */
 	n = bigtobase64(alphar1, buf, Maxbuf);
 	n += bigtobase64(alphar0, buf+n, Maxbuf-n);
-	memmove(buf+n, hisek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
-	memmove(buf+n, myek, MLKEM768_PKLEN); n += MLKEM768_PKLEN;
+	memmove(buf+n, hisek, pklen); n += pklen;
+	memmove(buf+n, myek, pklen); n += pklen;
 	if(verify(hispk, alphacert, buf, n) == 0){
 		err = "bad certificate";
 		goto out;
@@ -2024,7 +2086,7 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
-	cmp = memcmp(myek, hisek, MLKEM768_PKLEN);
+	cmp = memcmp(myek, hisek, pklen);
 	if(cmp == 0){
 		memset(cvb, 0, n);
 		free(cvb);
@@ -2047,8 +2109,8 @@ Keyring_auth(void *fp)
 		memmove(buf+m, cvb, n); m += n;
 		memmove(buf+m, kss_lo, MLKEM_SSLEN); m += MLKEM_SSLEN;
 		memmove(buf+m, kss_hi, MLKEM_SSLEN); m += MLKEM_SSLEN;
-		memmove(buf+m, ek_lo, MLKEM768_PKLEN); m += MLKEM768_PKLEN;
-		memmove(buf+m, ek_hi, MLKEM768_PKLEN); m += MLKEM768_PKLEN;
+		memmove(buf+m, ek_lo, pklen); m += pklen;
+		memmove(buf+m, ek_hi, pklen); m += pklen;
 		sha3_512((uchar*)buf, m, dig);
 		f->ret->t1 = mem2array(dig, SHA3_512dlen);
 		memset(dig, 0, sizeof(dig));
@@ -2132,6 +2194,7 @@ out:
 		mpfree(alphar1);
 		mpfree(alphar0r1);
 	}
+	mpfree(pm1);
 }
 
 static Keyring_Authinfo*

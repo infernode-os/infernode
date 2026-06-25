@@ -25,7 +25,7 @@ jobs:
       ROOT: ${{ github.workspace }}
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -211,7 +211,7 @@ jobs:
       ROOT: ${{ github.workspace }}
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -439,7 +439,7 @@ jobs:
       ROOT: ${{ github.workspace }}
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -624,7 +624,7 @@ jobs:
       ROOT: ${{ github.workspace }}
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -850,7 +850,7 @@ jobs:
       ROOT: ${{ github.workspace }}
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -1070,7 +1070,7 @@ jobs:
       SDL3_VERSION: "3.2.20"
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -1082,16 +1082,24 @@ jobs:
     - name: Install build dependencies (win_bison via choco)
       shell: pwsh
       run: |
+        # Verify the package actually landed, not just choco's exit code.
+        # The Chocolatey community feed intermittently returns an HTML
+        # error page instead of XML ("not valid XML" -> "0/0 packages")
+        # yet still exits 0, so an exit-code-only check goes green with no
+        # bison installed and the build hangs scanning for it later. Probe
+        # for win_bison.exe after each attempt and retry until it appears.
         $attempts = 3
         for ($attempt = 1; $attempt -le $attempts; $attempt++) {
           choco install winflexbison3 -y --no-progress
-          if ($LASTEXITCODE -eq 0) {
+          $bin = Get-ChildItem -Path "$env:ProgramData\chocolatey\lib\winflexbison3" -Filter win_bison.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($bin) {
+            Write-Host "win_bison.exe installed at $($bin.FullName)"
             break
           }
           if ($attempt -eq $attempts) {
-            throw "Failed to install winflexbison3 after $attempts attempts"
+            throw "Failed to install winflexbison3 after $attempts attempts (win_bison.exe not found; likely a Chocolatey feed outage)"
           }
-          Write-Warning "winflexbison3 install attempt $attempt failed with exit code $LASTEXITCODE; retrying..."
+          Write-Warning "winflexbison3 not installed on attempt $attempt (choco exit $LASTEXITCODE, win_bison.exe missing); retrying..."
           Start-Sleep -Seconds (15 * $attempt)
         }
 
@@ -1243,7 +1251,7 @@ jobs:
       attestations: write   # SLSA build provenance
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
     - name: Extract version from tag
       id: version
@@ -1253,6 +1261,17 @@ jobs:
       with:
         path: artifacts
         merge-multiple: true
+
+    - name: Generate SBOM (SPDX)
+      # Named infernode-*-sbom.spdx.json so the checksum, cosign-signing and
+      # release-upload steps below cover it automatically (no extra wiring).
+      # Same pinned action proven CI-verifiable in sbom.yml.
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        path: .
+        format: spdx-json
+        output-file: artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json
+        upload-artifact: false
 
     - name: Generate checksums
       run: |
@@ -1288,7 +1307,7 @@ jobs:
         subject-path: artifacts/infernode-*.zip
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+      uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
       with:
         tag_name: ${{ github.ref_name }}
         name: InferNode ${{ steps.version.outputs.version }}

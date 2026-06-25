@@ -45,6 +45,17 @@ include "keyringinst.m";
 include "bioauth.m";
 	bioauth: Bioauth;
 
+include "twofaslot.m";
+	twofaslot: Twofaslot;
+
+include "twofa.m";
+	twofa: Twofa;
+
+include "keyring.m";
+
+include "security.m";
+	random: Random;
+
 include "string.m";
 	str: String;
 
@@ -64,8 +75,8 @@ Settings: module
 
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile: con iota;
-NCATS: con 7;
+CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity: con iota;
+NCATS: con 9;
 
 catnames := array[] of {
 	"Theme",
@@ -75,6 +86,8 @@ catnames := array[] of {
 	"Namespace Paths",
 	"Agent Prompts",
 	"Startup Profile",
+	"Messaging",
+	"Security",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
@@ -88,6 +101,8 @@ catshortnames := array[] of {
 	"paths",
 	"prompts",
 	"profile",
+	"messaging",
+	"security",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -195,6 +210,13 @@ prompt_files := array[] of {
 profile_label: ref Label;
 profile_btn:   ref Button;
 
+# Messaging panel (msg9p sources)
+msg_status_label: ref Label;
+msg_conf_label:   ref Label;
+msg_edit_btn:     ref Button;
+msg_register_btn: ref Button;
+msg_cred_label:   ref Label;
+
 dirty: int;
 stderr: ref Sys->FD;
 themech: chan of int;
@@ -223,6 +245,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	bioauth = load Bioauth Bioauth->PATH;
 	if(bioauth != nil)
 		bioauth->init();
+	twofaslot = load Twofaslot Twofaslot->PATH;
+	if(twofaslot != nil)
+		twofaslot->init();
+	twofa = load Twofa Twofa->PATH;
+	if(twofa != nil) {
+		twofa->init();
+		twofa->mount();
+	}
+	random = load Random Random->PATH;
 	stderr = sys->fildes(2);
 
 	if(ctxt == nil) {
@@ -443,6 +474,21 @@ layoutcontent()
 	prompt_btns = nil;
 	profile_label = nil;
 	profile_btn = nil;
+	msg_status_label = nil;
+	msg_conf_label = nil;
+	msg_edit_btn = nil;
+	msg_register_btn = nil;
+	msg_cred_label = nil;
+	sec_hdr_label = nil;
+	sec_status_label = nil;
+	sec_hint_labels = nil;
+	sec_pass_tf = nil;
+	sec_rec_tf = nil;
+	sec_pin_tf = nil;
+	sec_enroll_btn = nil;
+	sec_addkey_btn = nil;
+	sec_disable_btn = nil;
+	sec_result_label = nil;
 
 	case category {
 	CatTheme =>
@@ -459,6 +505,10 @@ layoutcontent()
 		layoutprompts(cx, cy, cw, fh, bh);
 	CatProfile =>
 		layoutprofile(cx, cy, cw, bh);
+	CatMessaging =>
+		layoutmessaging(cx, cy, cw, fh, bh);
+	CatSecurity =>
+		layoutsecurity(cx, cy, cw, fh, fieldh, bh);
 	}
 }
 
@@ -775,6 +825,320 @@ layoutprofile(cx, cy, cw, bh: int)
 		"Open in Editor");
 }
 
+# Messaging panel: the msg9p notification plane. Show the live source registry
+# (read-only) and give one-click access to the email account config + live
+# registration. Credentials are set separately in the Keyring app. This is the
+# Settings side of docs/MESSAGE-INTEGRATION.md's setup convention.
+layoutmessaging(cx, cy, cw, fh, bh: int)
+{
+	if(mobile && fh < TAPMIN) fh = TAPMIN;
+
+	hdr := Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"Registered sources:", 1, LEFT);
+	msg_status_label = hdr;	# header doubles as the first drawn label
+	cy += fh;
+
+	# Live registry from /mnt/msg/status (multi-line; best effort).
+	status := readmsgstatus();
+	msg_conf_label = Label.mk(Rect((cx, cy), (cw, cy + fh * 3)),
+		status, 0, LEFT);
+	cy += fh * 3 + FIELD_SPACING;
+
+	msg_edit_btn = Button.mk(
+		Rect((cx, cy), (cx + BTN_W + 80, cy + bh)),
+		"Edit Email Account");
+	cy += bh + FORM_MARGIN;
+
+	msg_register_btn = Button.mk(
+		Rect((cx, cy), (cx + BTN_W + 80, cy + bh)),
+		"Register Email Now");
+	cy += bh + FORM_MARGIN;
+
+	msg_cred_label = Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"Credentials: add an Email Account in the Keyring app.", 0, LEFT);
+}
+
+# ── Security (YubiKey 2FA) ────────────────────────────────────
+
+sec_hdr_label: ref Label;
+sec_status_label: ref Label;
+sec_hint_labels: array of ref Label;
+sec_pass_tf, sec_rec_tf, sec_pin_tf: ref Textfield;
+sec_enroll_btn, sec_addkey_btn, sec_disable_btn: ref Button;
+sec_result_label: ref Label;
+sec_result_rect: Rect;
+
+getuser2fa(): string
+{
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return "inferno";
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "inferno";
+	return string buf[0:n];
+}
+
+securitystatus(): string
+{
+	if(twofaslot == nil)
+		return "2FA module unavailable";
+	user := getuser2fa();
+	enrolled := "NOT enrolled (password-only)";
+	if(twofaslot->is2fa(user))
+		enrolled = "ENROLLED (key-slot protected)";
+	return sys->sprint("Account \"%s\": %s", user, enrolled);
+}
+
+sec_status_rect: Rect;
+
+layoutsecurity(cx, cy, cw, fh, fieldh, bh: int)
+{
+	if(mobile && fh < TAPMIN) fh = TAPMIN;
+	if(mobile && fieldh < TAPMIN) fieldh = TAPMIN;
+	if(mobile && bh < TAPMIN) bh = TAPMIN;
+
+	sec_hdr_label = Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"YubiKey 2FA — secstore key-slots (AAL3)", 1, LEFT);
+	cy += fh + FIELD_SPACING;
+
+	sec_status_rect = Rect((cx, cy), (cw, cy + fh));
+	sec_status_label = Label.mk(sec_status_rect, securitystatus(), 0, LEFT);
+	cy += fh + FIELD_SPACING;
+
+	sec_hint_labels = array[2] of ref Label;
+	sec_hint_labels[0] = Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"Fill what an action needs, then click it. The key blinks for a touch.", 0, LEFT);
+	cy += fh;
+	sec_hint_labels[1] = Label.mk(Rect((cx, cy), (cw, cy + fh)),
+		"Enroll / backup: insert ONLY the key being enrolled (unplug the others).", 0, LEFT);
+	cy += fh + fh;
+
+	# Secret fields (shown as dots).
+	sec_pass_tf = Textfield.mk(Rect((cx, cy), (cw, cy + fieldh)), "secstore password", 1);
+	cy += fieldh + FIELD_SPACING;
+	sec_rec_tf = Textfield.mk(Rect((cx, cy), (cw, cy + fieldh)), "recovery passphrase", 1);
+	cy += fieldh + FIELD_SPACING;
+	sec_pin_tf = Textfield.mk(Rect((cx, cy), (cw, cy + fieldh)), "FIDO2 PIN (blank = touch-only)", 1);
+	cy += fieldh + fh;
+
+	# Context-aware: offer enroll only for a password-only account; offer
+	# backup + disable only for an account that is already 2FA.
+	bw := BTN_W + 140;
+	if(twofaslot != nil && twofaslot->is2fa(getuser2fa())) {
+		sec_addkey_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Add a backup key");
+		cy += bh + FORM_MARGIN;
+		sec_disable_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Disable 2FA (back to password)");
+		cy += bh + fh;
+	} else {
+		sec_enroll_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Enroll this security key");
+		cy += bh + fh;
+	}
+
+	sec_result_rect = Rect((cx, cy), (cw, cy + fh));
+	sec_result_label = Label.mk(sec_result_rect, "", 0, LEFT);
+}
+
+drawsecurity()
+{
+	if(sec_hdr_label != nil)
+		sec_hdr_label.draw(w.image);
+	if(sec_status_label != nil)
+		sec_status_label.draw(w.image);
+	if(sec_hint_labels != nil)
+		for(i := 0; i < len sec_hint_labels; i++)
+			if(sec_hint_labels[i] != nil)
+				sec_hint_labels[i].draw(w.image);
+	if(sec_pass_tf != nil)
+		sec_pass_tf.draw(w.image);
+	if(sec_rec_tf != nil)
+		sec_rec_tf.draw(w.image);
+	if(sec_pin_tf != nil)
+		sec_pin_tf.draw(w.image);
+	if(sec_enroll_btn != nil)
+		sec_enroll_btn.draw(w.image);
+	if(sec_addkey_btn != nil)
+		sec_addkey_btn.draw(w.image);
+	if(sec_disable_btn != nil)
+		sec_disable_btn.draw(w.image);
+	if(sec_result_label != nil)
+		sec_result_label.draw(w.image);
+}
+
+secfocus(tf: ref Textfield)
+{
+	if(sec_pass_tf != nil)
+		sec_pass_tf.focused = (tf == sec_pass_tf);
+	if(sec_rec_tf != nil)
+		sec_rec_tf.focused = (tf == sec_rec_tf);
+	if(sec_pin_tf != nil)
+		sec_pin_tf.focused = (tf == sec_pin_tf);
+}
+
+secfocusedfield(): ref Textfield
+{
+	if(sec_pass_tf != nil && sec_pass_tf.focused)
+		return sec_pass_tf;
+	if(sec_rec_tf != nil && sec_rec_tf.focused)
+		return sec_rec_tf;
+	if(sec_pin_tf != nil && sec_pin_tf.focused)
+		return sec_pin_tf;
+	return nil;
+}
+
+seccyclefocus()
+{
+	if(sec_pass_tf == nil)
+		return;
+	if(sec_rec_tf != nil && sec_pass_tf.focused)
+		secfocus(sec_rec_tf);
+	else if(sec_pin_tf != nil && sec_rec_tf != nil && sec_rec_tf.focused)
+		secfocus(sec_pin_tf);
+	else
+		secfocus(sec_pass_tf);
+}
+
+clicksecurity(ptr: ref Pointer)
+{
+	if(sec_pass_tf != nil && sec_pass_tf.contains(ptr.xy)) {
+		secfocus(sec_pass_tf); sec_pass_tf.click(ptr.xy); dirty = 1; return;
+	}
+	if(sec_rec_tf != nil && sec_rec_tf.contains(ptr.xy)) {
+		secfocus(sec_rec_tf); sec_rec_tf.click(ptr.xy); dirty = 1; return;
+	}
+	if(sec_pin_tf != nil && sec_pin_tf.contains(ptr.xy)) {
+		secfocus(sec_pin_tf); sec_pin_tf.click(ptr.xy); dirty = 1; return;
+	}
+	if(sec_enroll_btn != nil && sec_enroll_btn.contains(ptr.xy)) {
+		tracksecuritybtn(sec_enroll_btn); return;
+	}
+	if(sec_addkey_btn != nil && sec_addkey_btn.contains(ptr.xy)) {
+		tracksecuritybtn(sec_addkey_btn); return;
+	}
+	if(sec_disable_btn != nil && sec_disable_btn.contains(ptr.xy)) {
+		tracksecuritybtn(sec_disable_btn); return;
+	}
+}
+
+tracksecuritybtn(btn: ref Button)
+{
+	btn.pressed = 1;
+	dirty = 1;
+	redraw();
+	for(;;) {
+		p := <-w.ctxt.ptr;
+		if(p == nil || !(p.buttons & 1)) {
+			btn.pressed = 0;
+			act := p != nil && btn.contains(p.xy);
+			if(act) {
+				if(btn == sec_enroll_btn)
+					doenroll2fa();
+				else if(btn == sec_addkey_btn)
+					doaddkey2fa();
+				else if(btn == sec_disable_btn)
+					dodisable2fa();
+			}
+			dirty = 1;
+			redraw();
+			return;
+		}
+	}
+}
+
+setsecresult(s: string)
+{
+	sec_result_label = Label.mk(sec_result_rect, s, 0, LEFT);
+	dirty = 1;
+	redraw();
+}
+
+tohex2fa(a: array of byte): string
+{
+	h := "0123456789abcdef";
+	s := "";
+	for(i := 0; i < len a; i++) {
+		s[len s] = h[(int a[i] >> 4) & 16rf];
+		s[len s] = h[int a[i] & 16rf];
+	}
+	return s;
+}
+
+doenroll2fa()
+{
+	if(twofa == nil || twofaslot == nil || random == nil) {
+		setsecresult("2FA modules unavailable."); return;
+	}
+	pass := sec_pass_tf.value();
+	rec := sec_rec_tf.value();
+	pin := sec_pin_tf.value();
+	if(pass == "" || rec == "") {
+		setsecresult("Need the secstore password AND a recovery passphrase."); return;
+	}
+	if(!twofa->available()) {
+		setsecresult("Insert your security key first."); return;
+	}
+	setsecresult("Creating credential — TOUCH your security key now…");
+	(cred, ce) := twofa->enroll(pin);
+	if(ce != nil) { setsecresult("Enroll failed: " + ce); return; }
+	salt := random->randombuf(Random->ReallyRandom, 32);
+	if(salt == nil || len salt != 32) { setsecresult("Could not generate a salt."); return; }
+	setsecresult("Binding key — TOUCH again…");
+	keys := ("key", cred, tohex2fa(salt)) :: nil;
+	err := twofaslot->enroll(getuser2fa(), pass, rec, keys, pin);
+	if(err != nil) { setsecresult("Enroll failed: " + err); return; }
+	layoutcontent();
+	setsecresult("Enrolled. Login now needs this key (or the recovery passphrase).");
+}
+
+doaddkey2fa()
+{
+	if(twofa == nil || twofaslot == nil || random == nil) {
+		setsecresult("2FA modules unavailable."); return;
+	}
+	if(!twofaslot->is2fa(getuser2fa())) {
+		setsecresult("Not 2FA yet — use Enroll first."); return;
+	}
+	pass := sec_pass_tf.value();
+	rec := sec_rec_tf.value();
+	pin := sec_pin_tf.value();
+	if(pass == "" || rec == "") {
+		setsecresult("A backup needs the password AND the recovery passphrase."); return;
+	}
+	if(!twofa->available()) {
+		setsecresult("Insert the BACKUP key first."); return;
+	}
+	setsecresult("Creating backup credential — TOUCH the backup key…");
+	(cred, ce) := twofa->enroll(pin);
+	if(ce != nil) { setsecresult("Backup failed: " + ce); return; }
+	salt := random->randombuf(Random->ReallyRandom, 32);
+	if(salt == nil || len salt != 32) { setsecresult("Could not generate a salt."); return; }
+	setsecresult("Binding backup key — TOUCH again…");
+	err := twofaslot->addkey(getuser2fa(), pass, rec, cred, tohex2fa(salt), pin);
+	if(err != nil) { setsecresult("Backup failed: " + err); return; }
+	layoutcontent();
+	setsecresult("Backup key added. Either key (+ password) now unlocks login.");
+}
+
+dodisable2fa()
+{
+	if(twofaslot == nil) {
+		setsecresult("2FA module unavailable."); return;
+	}
+	if(!twofaslot->is2fa(getuser2fa())) {
+		setsecresult("Account is already password-only."); return;
+	}
+	pass := sec_pass_tf.value();
+	rec := sec_rec_tf.value();
+	pin := sec_pin_tf.value();
+	if(pass == "") { setsecresult("Need the secstore password."); return; }
+	setsecresult("Disabling 2FA — TOUCH your key if it's present…");
+	err := twofaslot->disable(getuser2fa(), pass, rec, pin);
+	if(err != nil) { setsecresult("Disable failed: " + err); return; }
+	layoutcontent();
+	setsecresult("2FA disabled. Login is now password-only.");
+}
+
 # ── Data loading ──────────────────────────────────────────────
 
 loadcategory()
@@ -928,6 +1292,10 @@ redraw()
 		drawprompts();
 	CatProfile =>
 		drawprofile();
+	CatMessaging =>
+		drawmessaging();
+	CatSecurity =>
+		drawsecurity();
 	}
 
 	# Status bar
@@ -951,6 +1319,10 @@ redraw()
 			sbar.right = "takes effect next session";
 		CatProfile =>
 			sbar.right = "restart required";
+		CatMessaging =>
+			sbar.right = "register applies immediately";
+		CatSecurity =>
+			sbar.right = "manage YubiKey 2FA";
 		}
 		sbar.draw(w.image);
 	}
@@ -1050,6 +1422,20 @@ drawprofile()
 		profile_btn.draw(w.image);
 }
 
+drawmessaging()
+{
+	if(msg_status_label != nil)
+		msg_status_label.draw(w.image);
+	if(msg_conf_label != nil)
+		msg_conf_label.draw(w.image);
+	if(msg_edit_btn != nil)
+		msg_edit_btn.draw(w.image);
+	if(msg_register_btn != nil)
+		msg_register_btn.draw(w.image);
+	if(msg_cred_label != nil)
+		msg_cred_label.draw(w.image);
+}
+
 # ── Keyboard handling ─────────────────────────────────────────
 
 handlekey(rawkey: int)
@@ -1067,6 +1453,21 @@ handlekey(rawkey: int)
 	# Escape: deselect
 	if(k == 27)
 		return;
+
+	# Route to Security textfields
+	if(category == CatSecurity) {
+		if(k == '\t') {
+			seccyclefocus();
+			dirty = 1;
+			return;
+		}
+		f := secfocusedfield();
+		if(f != nil) {
+			f.key(k);
+			dirty = 1;
+		}
+		return;
+	}
 
 	# Route to LLM textfields
 	if(category == CatLLM) {
@@ -1187,6 +1588,10 @@ handleptr(ptr: ref Pointer)
 		clickprompts(ptr);
 	CatProfile =>
 		clickprofile(ptr);
+	CatMessaging =>
+		clickmessaging(ptr);
+	CatSecurity =>
+		clicksecurity(ptr);
 	}
 }
 
@@ -1404,6 +1809,39 @@ clickprofile(ptr: ref Pointer)
 	if(profile_btn != nil && profile_btn.contains(ptr.xy)) {
 		trackprofilebtn(ptr);
 		return;
+	}
+}
+
+clickmessaging(ptr: ref Pointer)
+{
+	if(msg_edit_btn != nil && msg_edit_btn.contains(ptr.xy)) {
+		trackmessagingbtn(msg_edit_btn, ptr);
+		return;
+	}
+	if(msg_register_btn != nil && msg_register_btn.contains(ptr.xy)) {
+		trackmessagingbtn(msg_register_btn, ptr);
+		return;
+	}
+}
+
+trackmessagingbtn(btn: ref Button, nil: ref Pointer)
+{
+	btn.pressed = 1;
+	dirty = 1;
+	redraw();
+	for(;;) {
+		p := <-w.ctxt.ptr;
+		if(p == nil || !(p.buttons & 1)) {
+			btn.pressed = 0;
+			if(p != nil && btn.contains(p.xy)) {
+				if(btn == msg_edit_btn)
+					openineditor("/lib/veltro/sources/email.conf");
+				else if(btn == msg_register_btn)
+					doregisteremail();
+			}
+			dirty = 1;
+			return;
+		}
 	}
 }
 
@@ -1948,6 +2386,58 @@ hassubstr(s, sub: string): int
 			return 1;
 	}
 	return 0;
+}
+
+# Read the live source registry from /mnt/msg/status (best-effort display).
+readmsgstatus(): string
+{
+	fd := sys->open("/mnt/msg/status", Sys->OREAD);
+	if(fd == nil)
+		return "(msg9p not mounted at /mnt/msg)";
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "(no sources registered)";
+	return string buf[:n];
+}
+
+# Register the email source live from /lib/veltro/sources/email.conf — the same
+# line boot replays at startup. Credentials come from the keyring Email Account;
+# a missing-creds register fails softly and is reported in the status bar.
+doregisteremail()
+{
+	cfd := sys->open("/lib/veltro/sources/email.conf", Sys->OREAD);
+	if(cfd == nil) {
+		flashstatus("no email.conf — use Edit Email Account first");
+		return;
+	}
+	cbuf := array[1024] of byte;
+	cn := sys->read(cfd, cbuf, len cbuf);
+	if(cn <= 0) {
+		flashstatus("email.conf is empty");
+		return;
+	}
+	conf := string cbuf[:cn];
+	while(len conf > 0 && (conf[len conf-1]=='\n' || conf[len conf-1]==' ' || conf[len conf-1]=='\t' || conf[len conf-1]=='\r'))
+		conf = conf[:len conf-1];
+
+	cmd := "register email /dis/veltro/sources/email.dis " + conf;
+	wfd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
+	if(wfd == nil) {
+		flashstatus("cannot open /mnt/msg/ctl");
+		return;
+	}
+	b := array of byte cmd;
+	if(sys->write(wfd, b, len b) != len b)
+		flashstatus(sys->sprint("register failed: %r"));
+	else
+		flashstatus("email source registered");
+
+	# Refresh the live registry display.
+	if(category == CatMessaging) {
+		layoutcontent();
+		redraw();
+	}
 }
 
 openineditor(path: string)

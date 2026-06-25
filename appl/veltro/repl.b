@@ -217,7 +217,7 @@ newsession(): string
 		return "cannot create LLM session";
 
 	ns := agentlib->discovernamespace();
-	sysprompt := agentlib->buildsystemprompt(ns);
+	sysprompt := agentlib->buildsystemprompt(ns, "");
 
 	# Append REPL suffix. If total exceeds 9P write limit, truncate
 	# the base prompt to make room — the suffix is essential.

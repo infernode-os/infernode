@@ -243,7 +243,13 @@ exec(args: string): string
 	specs: list of ref SubSpec;
 	timeout_ms: int;
 	perr: string;
-	if(a != "" && a[0] == '{')
+	# A JSON tool-calling model emits {"agents":[...]}; agentlib's
+	# extracttoolargs unwraps the single object property, so what reaches us
+	# is the bare array "[...]". Route BOTH '{' and '[' to the JSON parser
+	# (parsejsonspecs handles a bare array via jv.isarray()) — otherwise the
+	# schema-correct structured call falls through to the DSL parser and is
+	# rejected, defeating fan-out.
+	if(a != "" && (a[0] == '{' || a[0] == '['))
 		(specs, timeout_ms, perr) = parsejsonspecs(a);
 	else
 		(specs, timeout_ms, perr) = parsespecs(a);

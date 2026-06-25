@@ -581,7 +581,7 @@ initsession(): string
 	# Build system prompt from namespace discovery
 	ns := agentlib->discovernamespace();
 	log("initsession: namespace discovered");
-	sysprompt := agentlib->buildsystemprompt(ns);
+	sysprompt := agentlib->buildsystemprompt(ns, "");
 	log(sys->sprint("initsession: system prompt %d bytes", len array of byte sysprompt));
 
 	# Append role-specific suffix: meta prompt for activity 0 (main agent),
@@ -1141,7 +1141,7 @@ applypathchanges()
 	# (Mirrors the initsessiontools() call that fires when the tool set changes.)
 	if(sessionid != "") {
 		ns := agentlib->discovernamespace();
-		sysprompt := agentlib->buildsystemprompt(ns);
+		sysprompt := agentlib->buildsystemprompt(ns, "");
 		sfx := BRIDGE_SUFFIX;
 		if(actid == 0) {
 			meta := agentlib->readfile(META_PROMPT_PATH);

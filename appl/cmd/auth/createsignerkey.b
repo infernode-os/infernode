@@ -28,6 +28,22 @@ Createsignerkey: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
+# CNSA 2.0 strict mode: read the /env/cnsamode policy flag (off by default).
+# When set, CNSA-strict parameters (here, ML-DSA-87) become the defaults.
+# Non-CNSA deployments leave the flag unset and are unchanged.
+cnsamode(): int
+{
+	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	c := buf[0];
+	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
+}
+
 init(nil: ref Draw->Context, argv: list of string)
 {
 	err: string;
@@ -43,6 +59,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	arg->init(argv);
 	arg->setusage("createsignerkey [-a algorithm] [-c] [-f keyfile] [-e ddmmyyyy] [-b size-in-bits] name-of-owner");
 	alg := algs[0];
+	if(cnsamode())
+		alg = "mldsa87";	# CNSA 2.0 strict: ML-DSA-87 default (FIPS 204, Cat 5)
 	filename := "/keydb/signerkey";
 	expire := SKexpire;
 	bits := PKmodlen;

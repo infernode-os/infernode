@@ -5,10 +5,12 @@ Security Systems).
 **Roadmap row:** Cryptographic foundation — CNSA 2.0, Tier 0→1.
 **Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`../security-epics.md`](../security-epics.md)).
 **Artifact date:** 2026-06-22.
-**Overall status:** **Substantially met.** Every CNSA 2.0 algorithm is implemented
-natively at the required (or higher) security category, with passing regression tests.
-Two parameter-selection items and one signing-scheme item remain for *strict-mode*
-CNSA 2.0 and are tracked as gaps below.
+**Overall status:** **Met (symmetric / hash / KEM / signature) under CNSA-strict mode.**
+Every CNSA 2.0 algorithm is implemented natively at the required security category. The
+two parameter-selection gaps are now closed under a fleet-wide **CNSA mode** (the host
+`CNSAMODE` env var, reflected by the emu into Inferno `/env/cnsamode`, off by default):
+**ML-KEM-1024** is negotiated end-to-end (G1 — multi-node verified) and **ML-DSA-87** is
+the signing default (G2). Only the LMS/XMSS firmware-signing decision (G3) remains.
 
 ---
 
@@ -79,9 +81,9 @@ implementation and the regression test.
 | Keyring binding | `libinterp/keyring.c` builtins (`Keyring_mlkem768_keygen` at `:3944`, ML-KEM-1024 counterparts) |
 | In use | Hybrid X25519+ML-KEM-768 in TLS 1.3 (`GROUP_X25519MLKEM768 = 0x4588`, `appl/lib/crypt/tls.b:74`); mutual ML-KEM-768 in the native 9P/Styx STS handshake (`libinterp/keyring.c` `Keyring_auth`, `mlkem768_keygen` at `:1847`, SHA3-512 combiner) |
 | Evidence | `tests/mlkem_test.b` (KAT + round-trip), `tests/mlkem_stress_test.b`, `tests/pqauth_test.b` (hybrid handshake, downgrade-rejected, tamper-rejected), `tests/handshake_fuzz_test.b` |
-| Status | **Substantially met** — Category-5 primitive (ML-KEM-1024) implemented and tested; **negotiated key exchange uses ML-KEM-768 (Category 3)**. See Gap G1. |
+| Status | **Met (CNSA-strict mode)** — with CNSA mode on, the native STS handshake (`libinterp/keyring.c` `Keyring_auth`) negotiates **ML-KEM-1024** end-to-end via the existing `mlkem1024_*` calls. **Multi-node verified** (`tests/cnsa_nodepair_test.sh`): two CNSA emu nodes complete the 1024 handshake over TCP; a mixed 1024/768 pair is rejected at the public-key length check (no silent downgrade). Default deployments stay at ML-KEM-768; `tests/pqauth_test.b` passes 11/11 in both modes. |
 
-### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅ primitive / ⚠ default
+### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅
 
 | Item | Detail |
 |------|--------|
@@ -91,7 +93,7 @@ implementation and the regression test.
 | X.509 | OIDs `id-ML-DSA-65` 2.16.840.1.101.3.4.3.18, `id-ML-DSA-87` …3.19 (`appl/lib/crypt/pkcs.b`, `appl/lib/crypt/x509.b`) |
 | Key generation | `auth/createsignerkey -a mldsa87 <name>`, or the **`-c` CNSA flag** (selects ML-DSA-87 in one option) (`appl/cmd/auth/createsignerkey.b`) |
 | Evidence | `tests/mldsa_test.b` (KAT, sign/verify, wrong-key rejection, cert verify), `tests/mldsa_stress_test.b`, `tests/pqauth_test.b` *HybridHandshakeMLDSA* (fully-PQ handshake) |
-| Status | **Substantially met** — ML-DSA-87 implemented, tested, and now a one-flag CNSA selection (`createsignerkey -c`). The *system-wide* default signer remains ed25519 (non-CNSA deployments unchanged); a global "CNSA mode" across all signing surfaces is the remainder of Gap G2. |
+| Status | **Met (CNSA-strict mode)** — with CNSA mode on (`/env/cnsamode`), `createsignerkey` defaults to **ML-DSA-87** (verified: the generated key matches the `-c` mldsa87 key size, ~20 KB, vs the 651 B ed25519 default); the `-c` flag and `-a` override are unchanged. Default deployments stay on ed25519. |
 
 ### 3.5 Software/firmware signing — LMS/XMSS ⚠ substitute present
 

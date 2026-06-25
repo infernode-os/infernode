@@ -5,7 +5,7 @@ implement Authnode;
 # Run as separate emu processes that connect over real TCP, to exercise
 # CNSA-strict ML-KEM-1024 across nodes and prove cross-mode rejection.
 #
-#   authnode gen    <skfile>                 # generate a shared signer key
+#   authnode gen    <skfile> [alg]           # generate a shared signer key
 #   authnode listen <addr> <skfile> <name>   # accept + auth
 #   authnode dial   <addr> <skfile> <name>   # connect + auth
 #
@@ -68,16 +68,20 @@ init(nil: ref Draw->Context, argv: list of string)
 	role := hd argv; argv = tl argv;
 
 	if(role == "gen"){
-		if(argv == nil){ sys->print("usage: authnode gen <skfile>\n"); return; }
+		if(argv == nil){ sys->print("usage: authnode gen <skfile> [alg]\n"); return; }
 		skfile := hd argv;
-		sk := kr->genSK("ed25519", "test-signer", 0);
+		argv = tl argv;
+		alg := "ed25519";
+		if(argv != nil)
+			alg = hd argv;
+		sk := kr->genSK(alg, "test-signer", 0);
 		if(sk == nil){ sys->print("FAIL: genSK\n"); return; }
 		s := kr->sktostr(sk);
 		fd := sys->create(skfile, Sys->OWRITE, 8r600);
 		if(fd == nil){ sys->print("FAIL: create %s: %r\n", skfile); return; }
 		b := array of byte s;
 		sys->write(fd, b, len b);
-		sys->print("gen: signer written to %s\n", skfile);
+		sys->print("gen: %s signer written to %s\n", alg, skfile);
 		return;
 	}
 

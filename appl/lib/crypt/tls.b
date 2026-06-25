@@ -966,8 +966,15 @@ handshake13(cs: ref ConnState, config: ref Config,
 			return "tls: server chose a hybrid group we did not offer";
 		srv_p384 := key_share_data[0:P384_POINTLEN];
 		srv_ct := key_share_data[P384_POINTLEN:];
-		ecdh_ss := keyring->p384_ecdh(cs.eph_p384_priv, srv_p384);
-		mlkem_ss := keyring->mlkem1024_decaps(cs.eph_mlkem_sk, srv_ct);
+		ecdh_ss: array of byte;
+		mlkem_ss: array of byte;
+		{
+			ecdh_ss = keyring->p384_ecdh(cs.eph_p384_priv, srv_p384);
+			mlkem_ss = keyring->mlkem1024_decaps(cs.eph_mlkem_sk, srv_ct);
+		} exception {
+		* =>
+			return "tls: CNSA hybrid key agreement failed";
+		}
 		if(ecdh_ss == nil || mlkem_ss == nil)
 			return "tls: CNSA hybrid key agreement failed";
 		# combiner: ECDH secret first, then ML-KEM (SecP-prefixed codepoint order)

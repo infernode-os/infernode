@@ -72,6 +72,10 @@ EXT_KEY_SHARE:			con 51;
 GROUP_SECP256R1:	con 16r0017;
 GROUP_X25519:		con 16r001D;
 GROUP_X25519MLKEM768:	con 16r4588;
+GROUP_SECP384R1MLKEM1024: con 16r11ED;	# CNSA 2.0 hybrid: P-384 ECDH + ML-KEM-1024
+P384_POINTLEN:		con 97;		# SEC1 uncompressed point (0x04||x||y)
+MLKEM1024_EKLEN:	con 1568;	# ML-KEM-1024 encapsulation key
+MLKEM1024_CTLEN:	con 1568;	# ML-KEM-1024 ciphertext
 
 # Max record size
 MAXRECORD:	con 16384;
@@ -120,6 +124,10 @@ ConnState: adt {
 	# Handshake message buffer (multiple msgs may arrive in one record)
 	hsbuf:		array of byte;
 	hsoff:		int;
+
+	# Ephemeral CNSA hybrid (SecP384r1MLKEM1024) private material; nil otherwise
+	eph_p384_priv:	array of byte;
+	eph_mlkem_sk:	array of byte;
 };
 
 # Entropy source fd, opened once in init() and reused for all randombuf() calls.
@@ -611,6 +619,22 @@ isccpoly(suite: int): int
 # Handshake
 # ================================================================
 
+# CNSA 2.0 strict mode: read the /env/cnsamode policy flag (off by default).
+# When set, the TLS client offers the SecP384r1MLKEM1024 hybrid (P-384 is the
+# CNSA-approved curve; X25519 is not). Mirrors the native STS handshake gating.
+cnsamode(): int
+{
+	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	c := int buf[0];
+	return c != '0' && c != 'n' && c != 'N' && c != '\n';
+}
+
 handshake(cs: ref ConnState, config: ref Config): string
 {
 	# Initialize handshake hash (SHA-256 for most suites)
@@ -620,12 +644,27 @@ handshake(cs: ref ConnState, config: ref Config): string
 	# Generate client random
 	client_random := randombytes(32);
 
-	# Generate X25519 key pair for key exchange
-	x25519_priv := randombytes(32);
-	x25519_pub := keyring->x25519_base(x25519_priv);
+	# Key exchange: CNSA hybrid (SecP384r1MLKEM1024) when /env/cnsamode is set,
+	# else classical X25519.
+	x25519_priv: array of byte;
+	x25519_pub: array of byte;
+	hybridshare: array of byte;
+	if(cnsamode()){
+		(p384priv, p384pub) := keyring->p384_keygen();
+		(mlkem_ek, mlkem_sk) := keyring->mlkem1024_keygen();
+		if(p384priv == nil || mlkem_ek == nil)
+			return "tls: CNSA hybrid keygen failed";
+		cs.eph_p384_priv = p384priv;
+		cs.eph_mlkem_sk = mlkem_sk;
+		# key_share entry: P-384 point (97) || ML-KEM-1024 ek (1568)
+		hybridshare = catbytes(p384pub, mlkem_ek);
+	}else{
+		x25519_priv = randombytes(32);
+		x25519_pub = keyring->x25519_base(x25519_priv);
+	}
 
 	# Build and send ClientHello
-	hello := buildclienthello(config, client_random, x25519_pub);
+	hello := buildclienthello(config, client_random, x25519_pub, hybridshare);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
 	if(err != nil)
 		return err;
@@ -865,15 +904,28 @@ handshake13(cs: ref ConnState, config: ref Config,
 {
 	shared_secret: array of byte;
 
-	# Plain X25519 key exchange
-	if(key_share_group != GROUP_X25519)
+	if(key_share_group == GROUP_SECP384R1MLKEM1024){
+		# CNSA hybrid: server share = P-384 point (97) || ML-KEM-1024 ct (1568)
+		if(key_share_data == nil || len key_share_data != P384_POINTLEN + MLKEM1024_CTLEN)
+			return "tls: invalid server hybrid key share";
+		if(cs.eph_p384_priv == nil || cs.eph_mlkem_sk == nil)
+			return "tls: server chose a hybrid group we did not offer";
+		srv_p384 := key_share_data[0:P384_POINTLEN];
+		srv_ct := key_share_data[P384_POINTLEN:];
+		ecdh_ss := keyring->p384_ecdh(cs.eph_p384_priv, srv_p384);
+		mlkem_ss := keyring->mlkem1024_decaps(cs.eph_mlkem_sk, srv_ct);
+		if(ecdh_ss == nil || mlkem_ss == nil)
+			return "tls: CNSA hybrid key agreement failed";
+		# combiner: ECDH secret first, then ML-KEM (SecP-prefixed codepoint order)
+		shared_secret = catbytes(ecdh_ss, mlkem_ss);
+	}else if(key_share_group == GROUP_X25519){
+		if(key_share_data == nil || len key_share_data != 32)
+			return "tls: invalid server key share";
+		shared_secret = keyring->x25519(x25519_priv, key_share_data);
+		if(shared_secret == nil)
+			return "tls: X25519 computation failed";
+	}else
 		return "tls: unsupported key share group";
-	if(key_share_data == nil || len key_share_data != 32)
-		return "tls: invalid server key share";
-
-	shared_secret = keyring->x25519(x25519_priv, key_share_data);
-	if(shared_secret == nil)
-		return "tls: X25519 computation failed";
 
 	hashlen := hashlength(cs.suite);
 
@@ -1019,7 +1071,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 # ================================================================
 
 buildclienthello(config: ref Config, random: array of byte,
-	x25519_pub: array of byte): array of byte
+	x25519_pub: array of byte, hybridshare: array of byte): array of byte
 {
 	# Build extensions
 	exts: array of byte;
@@ -1031,8 +1083,16 @@ buildclienthello(config: ref Config, random: array of byte,
 	else
 		sni = nil;
 
-	# Supported groups extension
-	groups := buildsupportedgroups();
+	# Supported groups + key share: CNSA hybrid or classical X25519.
+	groups: array of byte;
+	keyshare: array of byte;
+	if(hybridshare != nil){
+		groups = buildsupportedgroups_cnsa();
+		keyshare = buildkeyshare_group(GROUP_SECP384R1MLKEM1024, hybridshare);
+	}else{
+		groups = buildsupportedgroups();
+		keyshare = buildkeyshare(x25519_pub);
+	}
 
 	# Signature algorithms extension
 	sigalgs := buildsigalgsext();
@@ -1043,9 +1103,6 @@ buildclienthello(config: ref Config, random: array of byte,
 		suppver = buildsupportedversions(config);
 	else
 		suppver = nil;
-
-	# Key share extension (x25519 only)
-	keyshare := buildkeyshare(x25519_pub);
 
 	# Concatenate extensions
 	extlist := catbytes(sni, catbytes(groups, catbytes(sigalgs,
@@ -1124,6 +1181,31 @@ buildsupportedgroups(): array of byte
 	put16(ext, 4, 4);
 	put16(ext, 6, GROUP_X25519);
 	put16(ext, 8, GROUP_SECP256R1);
+	return ext;
+}
+
+buildsupportedgroups_cnsa(): array of byte
+{
+	# CNSA strict: offer only SecP384r1MLKEM1024 (no classical downgrade)
+	ext := array [4 + 2 + 2] of byte;
+	put16(ext, 0, EXT_SUPPORTED_GROUPS);
+	put16(ext, 2, 2 + 2);
+	put16(ext, 4, 2);
+	put16(ext, 6, GROUP_SECP384R1MLKEM1024);
+	return ext;
+}
+
+buildkeyshare_group(group: int, share: array of byte): array of byte
+{
+	# one key_share entry: group(2) + key_len(2) + key
+	listlen := 2 + 2 + len share;
+	ext := array [4 + 2 + listlen] of byte;
+	put16(ext, 0, EXT_KEY_SHARE);
+	put16(ext, 2, 2 + listlen);
+	put16(ext, 4, listlen);
+	put16(ext, 6, group);
+	put16(ext, 8, len share);
+	ext[10:] = share;
 	return ext;
 }
 

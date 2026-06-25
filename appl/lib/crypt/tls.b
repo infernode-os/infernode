@@ -635,6 +635,29 @@ cnsamode(): int
 	return c != '0' && c != 'n' && c != 'N' && c != '\n';
 }
 
+wipebytes(a: array of byte)
+{
+	if(a == nil)
+		return;
+	for(i := 0; i < len a; i++)
+		a[i] = byte 0;
+}
+
+strictcnsaconfig(config: ref Config)
+{
+	config.suites = TLS_AES_256_GCM_SHA384 :: nil;
+	config.minver = TLS13;
+	config.maxver = TLS13;
+}
+
+clearcnsa(cs: ref ConnState)
+{
+	wipebytes(cs.eph_p384_priv);
+	wipebytes(cs.eph_mlkem_sk);
+	cs.eph_p384_priv = nil;
+	cs.eph_mlkem_sk = nil;
+}
+
 handshake(cs: ref ConnState, config: ref Config): string
 {
 	# Initialize handshake hash (SHA-256 for most suites)
@@ -649,10 +672,12 @@ handshake(cs: ref ConnState, config: ref Config): string
 	x25519_priv: array of byte;
 	x25519_pub: array of byte;
 	hybridshare: array of byte;
-	if(cnsamode()){
+	cnsa := cnsamode();
+	if(cnsa){
+		strictcnsaconfig(config);
 		(p384priv, p384pub) := keyring->p384_keygen();
 		(mlkem_ek, mlkem_sk) := keyring->mlkem1024_keygen();
-		if(p384priv == nil || mlkem_ek == nil)
+		if(p384priv == nil || p384pub == nil || mlkem_ek == nil || mlkem_sk == nil)
 			return "tls: CNSA hybrid keygen failed";
 		cs.eph_p384_priv = p384priv;
 		cs.eph_mlkem_sk = mlkem_sk;
@@ -666,23 +691,50 @@ handshake(cs: ref ConnState, config: ref Config): string
 	# Build and send ClientHello
 	hello := buildclienthello(config, client_random, x25519_pub, hybridshare);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
-	if(err != nil)
+	if(err != nil) {
+		if(cnsa)
+			clearcnsa(cs);
 		return err;
+	}
 
 	# Read ServerHello
 	(shtype, shdata, sherr) := readhsmsg(cs);
-	if(sherr != nil)
+	if(sherr != nil) {
+		if(cnsa)
+			clearcnsa(cs);
 		return sherr;
-	if(shtype != HT_SERVER_HELLO)
+	}
+	if(shtype != HT_SERVER_HELLO) {
+		if(cnsa)
+			clearcnsa(cs);
 		return "tls: expected ServerHello";
+	}
 
 	# Parse ServerHello
 	(server_random, server_suite, server_version, key_share_group, key_share_data, pherr) := parseserverhello(shdata, config);
-	if(pherr != nil)
+	if(pherr != nil) {
+		if(cnsa)
+			clearcnsa(cs);
 		return pherr;
+	}
 
 	cs.version = server_version;
 	cs.suite = server_suite;
+
+	if(cnsa) {
+		if(cs.version != TLS13) {
+			clearcnsa(cs);
+			return "tls: CNSA mode requires TLS 1.3";
+		}
+		if(cs.suite != TLS_AES_256_GCM_SHA384) {
+			clearcnsa(cs);
+			return "tls: CNSA mode requires TLS_AES_256_GCM_SHA384";
+		}
+		if(key_share_group != GROUP_SECP384R1MLKEM1024) {
+			clearcnsa(cs);
+			return "tls: CNSA mode requires SecP384r1MLKEM1024";
+		}
+	}
 
 	e: string;
 	if(cs.version == TLS13)
@@ -691,6 +743,8 @@ handshake(cs: ref ConnState, config: ref Config): string
 	else
 		e = handshake12(cs, config, client_random, server_random,
 			x25519_priv);
+	if(cnsa)
+		clearcnsa(cs);
 	return e;
 }
 
@@ -912,8 +966,15 @@ handshake13(cs: ref ConnState, config: ref Config,
 			return "tls: server chose a hybrid group we did not offer";
 		srv_p384 := key_share_data[0:P384_POINTLEN];
 		srv_ct := key_share_data[P384_POINTLEN:];
-		ecdh_ss := keyring->p384_ecdh(cs.eph_p384_priv, srv_p384);
-		mlkem_ss := keyring->mlkem1024_decaps(cs.eph_mlkem_sk, srv_ct);
+		ecdh_ss: array of byte;
+		mlkem_ss: array of byte;
+		{
+			ecdh_ss = keyring->p384_ecdh(cs.eph_p384_priv, srv_p384);
+			mlkem_ss = keyring->mlkem1024_decaps(cs.eph_mlkem_sk, srv_ct);
+		} exception {
+		* =>
+			return "tls: CNSA hybrid key agreement failed";
+		}
 		if(ecdh_ss == nil || mlkem_ss == nil)
 			return "tls: CNSA hybrid key agreement failed";
 		# combiner: ECDH secret first, then ML-KEM (SecP-prefixed codepoint order)
@@ -2530,4 +2591,3 @@ randombuf(buf: array of byte, n: int)
 	for(i := 0; i < n; i++)
 		buf[i] = byte (sys->millisec() ^ (i * 37));
 }
-

@@ -1153,16 +1153,24 @@ jobs:
     - name: Install build dependencies
       shell: powershell
       run: |
+        # Verify the package actually landed, not just choco's exit code.
+        # The Chocolatey community feed intermittently returns an HTML
+        # error page instead of XML ("not valid XML" -> "0/0 packages")
+        # yet still exits 0, so an exit-code-only check goes green with no
+        # bison installed and the build hangs scanning for it later. Probe
+        # for win_bison.exe after each attempt and retry until it appears.
         $attempts = 3
         for ($attempt = 1; $attempt -le $attempts; $attempt++) {
           choco install winflexbison3 -y --no-progress
-          if ($LASTEXITCODE -eq 0) {
+          $bin = Get-ChildItem -Path "$env:ProgramData\chocolatey\lib\winflexbison3" -Filter win_bison.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($bin) {
+            Write-Host "win_bison.exe installed at $($bin.FullName)"
             break
           }
           if ($attempt -eq $attempts) {
-            throw "Failed to install winflexbison3 after $attempts attempts"
+            throw "Failed to install winflexbison3 after $attempts attempts (win_bison.exe not found; likely a Chocolatey feed outage)"
           }
-          Write-Warning "winflexbison3 install attempt $attempt failed with exit code $LASTEXITCODE; retrying..."
+          Write-Warning "winflexbison3 not installed on attempt $attempt (choco exit $LASTEXITCODE, win_bison.exe missing); retrying..."
           Start-Sleep -Seconds (15 * $attempt)
         }
 

@@ -121,7 +121,8 @@ present, e.g. `account pdfinn: 2fa-enrolled=1  key-present=1`.
 
 ## 3. Enroll — turn a password account into a 2FA account
 
-Run **after a normal login** (so secstored is up). Insert your key first.
+Run **after a normal login** (so secstored is up). Insert **only** the key you are
+enrolling — unplug any other security keys first, or enrollment fails (see below).
 
 ```
 2fa enroll
@@ -169,7 +170,8 @@ Enroll a **second** key so losing or breaking one never locks you out. The backu
 wraps the *same* data key as your primary — in its own slot — so your vault is not
 re-encrypted and your other slots are untouched.
 
-Insert the **backup** key, then (after logging in) run:
+Insert **only** the backup key — **unplug the primary** (enroll needs exactly one
+key present, or it fails) — then (after logging in) run:
 ```
 2fa addkey
 ```
@@ -258,6 +260,7 @@ at UV it is the **WithUV** CredRandom (a different value than touch-only). Becau
 | New launch falls to console after a crash | a **zombie `o.emu`** still holds the display | `pkill -9 -f o.emu` then relaunch |
 | `secstore connect: ... invalid IP address` | running a 2fa command in a **bare emu** (no boot/secstored) | run it inside a normal desktop session |
 | `get_assert: FIDO_ERR_UNSUPPORTED_OPTION` | setting the `uv` option *and* supplying a PIN | fixed — passing the PIN *is* the UV; don't also set `uv` |
+| `multiple security keys present …` (enroll/backup) | two keys plugged — make-cred and the derive can land on different keys | unplug all but the one being enrolled; login itself tolerates several keys |
 | PIN prompt on a touch-only account | login prompts for a PIN whenever slots exist | leave it **blank** + Enter + touch |
 | Wrong FIDO2 PIN repeatedly | **8-try hardware lockout** decrements | use the recovery passphrase; reset the FIDO app only as a last resort |
 | `2fa enroll` on an already-2FA account fails to decrypt | the factotum is already DK-encrypted, not password-encrypted | `2fa disable` first, then `2fa enroll` |

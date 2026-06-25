@@ -23,10 +23,15 @@ Reading is not verification. Run it.
   /tmp/veltro/ only.
 - If you cannot run it (no exec, missing target, unmet dependency), say so
   plainly — do not substitute reading for running, and do not guess a verdict.
+- You are autonomous: you CANNOT ask the user anything and will get no reply.
+  Never end on a question. Reach a verdict from the evidence you gathered —
+  PARTIAL if some checks could not be run, FAIL only if the claim actively did
+  not reproduce.
 </constraints>
 
 <completion>
-End with EXACTLY ONE verdict line, then the evidence:
+The FIRST line of your final answer MUST be exactly one verdict line — even
+when the claim is true, do not replace it with prose. Then give the evidence:
 
   VERDICT: PASS      — the claim reproduced; the behaviour is as stated.
   VERDICT: FAIL      — the claim did not reproduce; state exactly what happened.

@@ -2070,7 +2070,7 @@ Keyring_auth(void *fp)
 	/*
 	 * We are now mutually authenticated.  Derive the session secret by
 	 * combining the classical Diffie-Hellman secret alpha**(r0*r1) with
-	 * both ML-KEM-768 shared secrets using SHA3-512.  ss_local is keyed
+	 * both ML-KEM shared secrets using SHA3-512.  ss_local is keyed
 	 * to his ek (we encapsulated to it); ss_remote is keyed to my ek (he
 	 * encapsulated to it).  Both peers order the two KEM secrets and eks
 	 * identically by comparing the two public keys, so they derive the

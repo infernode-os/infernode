@@ -653,6 +653,48 @@ provenance(name, args: string): string
 	return sys->sprint("SOURCE: %s %s\n\n", name, args);
 }
 
+# Read-cache: short-circuits identical read-only tool calls so the model
+# cannot burn the step budget re-reading content already in its context (a
+# measured failure mode — up to 21 identical reads of one file). Keyed on
+# "name args"; invalidated whenever a mutating tool runs, so read→edit→read
+# still re-reads the changed file. Reset per run in agentloop.
+readcache: list of (string, int);   # (name+args key, step first served)
+
+isreadonly(name: string): int
+{
+	case name {
+	"read" or "list" or "find" or "search" or "grep" =>	return 1;
+	* =>	return 0;
+	}
+}
+
+ismutating(name: string): int
+{
+	case name {
+	"write" or "edit" or "exec" or "limbo" or "shell" or "safeexec" =>	return 1;
+	* =>	return 0;
+	}
+}
+
+cachefind(key: string): int
+{
+	for(c := readcache; c != nil; c = tl c) {
+		(k, s) := hd c;
+		if(k == key)
+			return s;
+	}
+	return -1;
+}
+
+# Record a successful read-only result so an identical later call is skipped.
+# Errors are not cached (a retry may succeed); "no matches" is a real result.
+cacherecord(name, args, r: string, step: int)
+{
+	if(!isreadonly(name) || (len r >= 6 && r[0:6] == "error:"))
+		return;
+	readcache = (name + " " + args, step) :: readcache;
+}
+
 # Returns list of (tool_use_id, content) for buildtoolresults.
 exectools(calls: list of (string, string, string), step: int): list of (string, string)
 {
@@ -664,7 +706,19 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 	# Single tool: execute with timeout
 	if(n == 1) {
 		(id, name, args) := hd calls;
+		if(ismutating(name))
+			readcache = nil;	# world may have changed — invalidate
+		if(isreadonly(name)) {
+			seen := cachefind(name + " " + args);
+			if(seen >= 0) {
+				if(verbose)
+					sys->fprint(stderr, "veltro: dedup skip %s (identical call first ran at step %d)\n", name, seen);
+				return (id, sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
+					name, agentlib->truncate(args, 120), seen)) :: nil;
+			}
+		}
 		r := exectool1(name, args);
+		cacherecord(name, args, r, step);
 		if(len r > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(provenance(name, args) + r, step);
 			r = sys->sprint("(output from %s %s written to %s, %d bytes; its first line records the source — cite that, not the scratch path)",
@@ -687,10 +741,13 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 
 	# Collect results in original order, with per-tool timeout
 	results: list of (string, string);
+	mutated := 0;
 	cl3 := calls;
 	for(i = 0; cl3 != nil; i++) {
 		(id, name, args) := hd cl3;
 		cl3 = tl cl3;
+		if(ismutating(name))
+			mutated = 1;
 		timeoutch := chan of int;
 		spawn tooltimer(timeoutch, TOOL_TIMEOUT);
 		r := "";
@@ -700,6 +757,7 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 		<-timeoutch =>
 			r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
 		}
+		cacherecord(name, args, r, step);
 		if(len r > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(provenance(name, args) + r, step * 10 + i);
 			r = sys->sprint("(output from %s %s written to %s, %d bytes; its first line records the source — cite that, not the scratch path)",
@@ -707,6 +765,9 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 		}
 		results = (id, r) :: results;
 	}
+	# A mutation anywhere in the batch invalidates the read-cache.
+	if(mutated)
+		readcache = nil;
 
 	# Reverse to restore original order
 	rev: list of (string, string);
@@ -719,6 +780,7 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 
 agentloop(fd: ref Sys->FD, id, initialprompt: string)
 {
+	readcache = nil;	# fresh read-cache per run
 	if(verbose)
 		sys->fprint(stderr, "veltro: agentloop start\n");
 

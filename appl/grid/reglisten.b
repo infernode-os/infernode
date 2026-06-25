@@ -31,6 +31,7 @@ badmodule(p: string)
 
 serverkey: ref Keyring->Authinfo;
 verbose := 0;
+authtimeout := 30000;
 
 registered: ref Registries->Registered;
 
@@ -56,7 +57,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	synchronous := 0;
 	trusted := 0;
 	regattrs: list of (string, string);
-	arg->setusage("listen [-i {initscript}] [-Ast] [-f keyfile] [-a alg]... addr command [arg...]");
+	arg->setusage("listen [-i {initscript}] [-Ast] [-T ms] [-f keyfile] [-a alg]... addr command [arg...]");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
 		'a' =>
@@ -75,6 +76,10 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 			synchronous = 1;
 		't' =>
 			trusted = 1;
+		'T' =>
+			authtimeout = int arg->earg();
+			if(authtimeout < 1000)
+				authtimeout = 1000;
 		'r' =>
 			a := arg->earg();
 			v := arg->earg();
@@ -259,7 +264,7 @@ authenticator(authch: chan of (string, Sys->Connection),
 		c: Sys->Connection, algs: list of string, addr: string)
 {
 	err: string;
-	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 0);
+	(c.dfd, err) = authserver(algs, serverkey, c.dfd, c.cfd, 0);
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
 		return;
@@ -267,6 +272,53 @@ authenticator(authch: chan of (string, Sys->Connection),
 	if (verbose)
 		sys->fprint(stderr(), "listen: authenticated on %s as %s\n", addr, err);
 	authch <-= (err, c);
+}
+
+authworker(pidc: chan of int, rc: chan of (ref Sys->FD, string),
+		algs: list of string, ai: ref Keyring->Authinfo, dfd: ref Sys->FD, setid: int)
+{
+	pidc <-= sys->pctl(0, nil);
+	rc <-= auth->server(algs, ai, dfd, setid);
+}
+
+timerproc(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+nethangup(cfd: ref Sys->FD)
+{
+	if(cfd != nil)
+		sys->fprint(cfd, "hangup");
+}
+
+kill(pid: int, how: string)
+{
+	if(pid <= 0)
+		return;
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "%s", how);
+}
+
+authserver(algs: list of string, ai: ref Keyring->Authinfo,
+		dfd, cfd: ref Sys->FD, setid: int): (ref Sys->FD, string)
+{
+	pidc := chan[1] of int;
+	rc := chan[1] of (ref Sys->FD, string);
+	tmo := chan[1] of int;
+	spawn authworker(pidc, rc, algs, ai, dfd, setid);
+	pid := <-pidc;
+	spawn timerproc(tmo, authtimeout);
+	alt {
+	(fd, err) := <-rc =>
+		return (fd, err);
+	<-tmo =>
+		nethangup(cfd);
+		kill(pid, "kill");
+		return (nil, "authentication timeout");
+	}
 }
 
 stderr(): ref Sys->FD

@@ -18,10 +18,11 @@ epic linked here.
 **Description:** Move the working 2FA login to a true AAL3 / PIV-CAC posture: hardware
 user-verification, vault keyed to the key, no password-keyed blob ever on disk, no single
 point of failure.
-**Status (2026-06-21):** Story (a) ✅ **DONE & hardware-verified** — UV-required login shipped
-(FIDO-PIN prompt in `logon`; PIN is load-bearing per the `t2uv` test: touch-only derive yields a
-different secret). Recovery slot (part of d) wired. (b) DK save-back, (c) dual-key, (e) Settings
-GUI, (f) passwordless, (g) accreditation test remain open.
+**Status (2026-06-25): SUBSTANTIALLY COMPLETE — EPIC 1 closed.** Shipped & hardware-verified:
+(a) UV-required login, (b) DK-encrypted save-back, (c) dual/backup key (`2fa addkey` + GUI),
+recovery slot, (e) Settings GUI Security panel, (g) accreditation evidence
+(`doc/compliance/SP800-63B-AAL3.md` + `tests/twofaslot_test.b`, 6/6 PASS). (f) passwordless
+**declined** (defense-in-depth — keep an independent password factor; still AAL3 either way).
 **Acceptance Criteria:**
 - ✅ hmac-secret credential **requires UV (FIDO2 PIN)**, not touch-only. *(shipped, hardware-verified)*
 - Factotum **save-back uses the data key (DK)** for 2FA accounts — no password-keyed

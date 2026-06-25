@@ -100,6 +100,16 @@ schema(): string
 	"}";
 }
 
+# True if s contains a glob metacharacter (* ? [). Used to decide whether a
+# bare pattern should be treated as a literal substring (wrapped in *...*).
+hasglobmeta(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '*' || s[i] == '?' || s[i] == '[')
+			return 1;
+	return 0;
+}
+
 exec(args: string): string
 {
 	if(sys == nil)
@@ -152,6 +162,13 @@ exec(args: string): string
 	   ((pattern[0] == '"' && pattern[len pattern - 1] == '"') ||
 	    (pattern[0] == '\'' && pattern[len pattern - 1] == '\'')))
 		pattern = pattern[1:len pattern - 1];
+
+	# Substring tolerance: a bare pattern with no glob metacharacters (e.g.
+	# "spawn") globs only a file named exactly "spawn", never "spawn.b" — a
+	# common LLM mistake that returns "no matches" on an obvious hit. When the
+	# pattern has no *, ? or [, treat it as a substring by wrapping in *...*.
+	if(pattern != "" && !hasglobmeta(pattern))
+		pattern = "*" + pattern + "*";
 
 	# dirc[0] tracks directories opened across the entire recursive search.
 	# Passed by reference (array) so all recursive calls share one counter.

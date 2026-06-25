@@ -69,6 +69,11 @@ verbose := 0;
 thinkbudget := 0;
 maxsteps := DEFAULT_MAX_STEPS;
 
+# Agent persona: -a <type> layers /lib/veltro/agents/<type>.txt onto the
+# base system prompt, running this top-level loop as that agent (e.g.
+# research, explore, plan). Empty = the default Veltro behaviour.
+agenttype := "";
+
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
 
@@ -76,11 +81,12 @@ stderr: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-p paths] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] [-t] [-p paths] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-a type] [-p paths] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] [-a type] [-p paths] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output\n");
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
+	sys->fprint(stderr, "  -a type     Run as agent persona /lib/veltro/agents/<type>.txt (e.g. research)\n");
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
@@ -91,6 +97,24 @@ nomod(s: string)
 {
 	sys->fprint(stderr, "veltro: can't load %s: %r\n", s);
 	raise "fail:load";
+}
+
+# Load the persona prompt named by -a from /lib/veltro/agents/<type>.txt.
+# Returns "" when no persona was requested or the file is unreadable; the
+# traversal guard mirrors spawn.b's loadagentprompt.
+loadpersona(): string
+{
+	if(agenttype == "")
+		return "";
+	for(i := 0; i < len agenttype; i++)
+		if(agenttype[i] == '/' || agenttype[i] == '\\')
+			return "";
+	if(agenttype == ".." || agenttype == ".")
+		return "";
+	p := agentlib->readfile("/lib/veltro/agents/" + agenttype + ".txt");
+	if(p == "")
+		sys->fprint(stderr, "veltro: warning: persona '%s' empty or unreadable\n", agenttype);
+	return p;
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -119,6 +143,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'v' =>	verbose = 1;
 		't' =>	thinkbudget = THINK_DEFAULT;
 		'r' =>	resumename = arg->earg();
+		'a' =>	agenttype = arg->earg();
 		'p' =>
 			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
@@ -502,9 +527,15 @@ shouldplan(task: string): int
 # Returns the plan text, or "" if the turn fails or produces nothing useful.
 doplanningturn(llmfd: ref Sys->FD, task: string): string
 {
+	# Ask for the plan as plain text rather than via a specific tool: the
+	# `say` tool is not always provisioned (headless runs, restricted
+	# subagent toolsets, persona agents). Mandating a missing tool left the
+	# model unable to comply — it returned an empty turn that then poisoned
+	# the agentloop conversation. Plain text works for every toolset; the
+	# say fast-path below still fires when say happens to be available.
 	planprompt := "== Task ==\n" + task +
-		"\n\nBefore taking any action, use the say tool to state your plan in 3-5 numbered steps.\n" +
-		"Do not invoke any other tool yet.";
+		"\n\nBefore taking any action, state your plan as 3-5 numbered steps in plain text.\n" +
+		"Do not call any tools yet.";
 
 	if(verbose)
 		sys->fprint(stderr, "veltro: planning turn\n");
@@ -614,6 +645,14 @@ exectool1(name, args: string): string
 
 # Execute a list of native tool_use calls in parallel.
 # calls: list of (tool_use_id, name, args) from parsellmresponse.
+# Provenance header stamped at the top of a scratch-spilled tool result so
+# the model can attribute facts to their real source (e.g. the webfetch URL
+# or the file path) instead of citing the opaque scratch path it reads from.
+provenance(name, args: string): string
+{
+	return sys->sprint("SOURCE: %s %s\n\n", name, args);
+}
+
 # Returns list of (tool_use_id, content) for buildtoolresults.
 exectools(calls: list of (string, string, string), step: int): list of (string, string)
 {
@@ -627,8 +666,9 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 		(id, name, args) := hd calls;
 		r := exectool1(name, args);
 		if(len r > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(r, step);
-			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+			scratchfile := agentlib->writescratch(provenance(name, args) + r, step);
+			r = sys->sprint("(output from %s %s written to %s, %d bytes; its first line records the source — cite that, not the scratch path)",
+				name, agentlib->truncate(args, 120), scratchfile, len r);
 		}
 		return (id, r) :: nil;
 	}
@@ -649,7 +689,7 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 	results: list of (string, string);
 	cl3 := calls;
 	for(i = 0; cl3 != nil; i++) {
-		(id, name, nil) := hd cl3;
+		(id, name, args) := hd cl3;
 		cl3 = tl cl3;
 		timeoutch := chan of int;
 		spawn tooltimer(timeoutch, TOOL_TIMEOUT);
@@ -661,8 +701,9 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 			r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
 		}
 		if(len r > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(r, step * 10 + i);
-			r = sys->sprint("(output written to %s, %d bytes)", scratchfile, len r);
+			scratchfile := agentlib->writescratch(provenance(name, args) + r, step * 10 + i);
+			r = sys->sprint("(output from %s %s written to %s, %d bytes; its first line records the source — cite that, not the scratch path)",
+				name, agentlib->truncate(args, 120), scratchfile, len r);
 		}
 		results = (id, r) :: results;
 	}
@@ -777,7 +818,7 @@ runagent(task: string)
 
 	# Set system prompt for native tool_use
 	systempath := "/mnt/llm/" + llmsessionid + "/system";
-	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns));
+	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns, loadpersona()));
 
 	# Install tool definitions for native tool_use protocol
 	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
@@ -870,7 +911,7 @@ runresume(name, extra: string)
 		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
 
 	systempath := "/mnt/llm/" + llmsessionid + "/system";
-	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns));
+	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns, loadpersona()));
 
 	# Install tool definitions for native tool_use protocol
 	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");

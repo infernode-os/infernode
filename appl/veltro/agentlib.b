@@ -236,7 +236,7 @@ discovernamespace(): string
 # Build system prompt with namespace, reminders, and modular tool docs.
 # Does NOT append mode-specific suffix — callers add their own.
 # (from repl.b — has MAXPROMPT 8KB guard against 9P write limit)
-buildsystemprompt(ns: string): string
+buildsystemprompt(ns, persona: string): string
 {
 	# NOTE: The system prompt may be written to /mnt/llm/{id}/system via a single
 	# 9P Twrite. llmsrv's MaxMessageSize is 8192 bytes, and each write
@@ -248,6 +248,12 @@ buildsystemprompt(ns: string): string
 	base := readfile("/lib/veltro/system.txt");
 	if(base == "")
 		base = defaultsystemprompt();
+
+	# A persona (loaded from /lib/veltro/agents/<type>.txt by the caller)
+	# layers a specialised role ON TOP of the base policies, keeping the
+	# environment/grounding sections the base provides.
+	if(persona != "")
+		base += "\n\n== Agent Role ==\n" + persona;
 
 	(nil, toollist) := sys->tokenize(readfile(toolmount_g + "/tools"), "\n");
 

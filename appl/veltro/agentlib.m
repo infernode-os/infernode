@@ -27,7 +27,7 @@ AgentLib: module {
 
 	# Prompt building
 	discovernamespace: fn(): string;
-	buildsystemprompt: fn(ns: string): string;
+	buildsystemprompt: fn(ns, persona: string): string;
 	loadreminders: fn(toollist: list of string): string;
 	loadtooldocs: fn(toollist: list of string): string;
 	defaultsystemprompt: fn(): string;

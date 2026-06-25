@@ -134,6 +134,13 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
+	err := validatepaths(caps.paths, "path");
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.writepaths, "write path");
+	if(err != nil)
+		return err;
+
 	# Set up infrastructure directories first (before any restrictdir calls).
 	# These must exist because: (1) restrictdir creates shadow dirs under
 	# SHADOW_BASE, and (2) after bind-replace on /tmp, the MREPL mount
@@ -161,7 +168,7 @@ restrictns(caps: ref Capabilities): string
 		if(first != "" && !inlist(first, disallow))
 			disallow = first :: disallow;
 	}
-	err := restrictdir("/dis", disallow, 0);
+	err = restrictdir("/dis", disallow, 0);
 	if(err != nil)
 		return sys->sprint("restrict /dis: %s", err);
 
@@ -507,6 +514,39 @@ pathwithin(grant, want: string): int
 	if(len want > len grant && want[0:len grant] == grant && want[len grant] == '/')
 		return 1;
 	return 0;
+}
+
+validatepaths(paths: list of string, what: string): string
+{
+	for(; paths != nil; paths = tl paths) {
+		err := validatepath(hd paths);
+		if(err != nil)
+			return sys->sprint("invalid %s %s: %s", what, hd paths, err);
+	}
+	return nil;
+}
+
+validatepath(p: string): string
+{
+	if(p == nil || len p == 0)
+		return "empty path";
+	if(p[0] != '/')
+		return "path must be absolute";
+	if(p == "/")
+		return "root path is not grantable";
+
+	start := 1;
+	for(i := 1; i <= len p; i++) {
+		if(i == len p || p[i] == '/') {
+			comp := p[start:i];
+			if(comp == "")
+				return "empty path component";
+			if(comp == "." || comp == "..")
+				return "dot path component";
+			start = i + 1;
+		}
+	}
+	return nil;
 }
 
 overlaywritepaths(paths: list of string, actid: int): string

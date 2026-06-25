@@ -265,6 +265,11 @@ init(nil: ref Draw->Context, args: list of string)
 			if(len parg > 3 && (parg[len parg - 3:] == ":ro" || parg[len parg - 3:] == ":rw"))
 				explicitperm = parg[len parg - 2:];
 			(ppath, pperm) := splitpathperm(parg);
+			perr := validatepath(ppath);
+			if(perr != nil) {
+				sys->fprint(stderr, "tools9p: invalid -p path %s: %s\n", ppath, perr);
+				raise "fail:usage";
+			}
 			extpaths = ppath :: extpaths;
 			if(explicitperm != "" && findboundpath(ppath) == nil)
 				boundpaths = ref BoundPath(ppath, pperm) :: boundpaths;
@@ -614,6 +619,29 @@ pathwithin(grant, want: string): int
 	return 0;
 }
 
+validatepath(p: string): string
+{
+	if(p == nil || len p == 0)
+		return "empty path";
+	if(p[0] != '/')
+		return "path must be absolute";
+	if(p == "/")
+		return "root path is not grantable";
+
+	start := 1;
+	for(i := 1; i <= len p; i++) {
+		if(i == len p || p[i] == '/') {
+			comp := p[start:i];
+			if(comp == "")
+				return "empty path component";
+			if(comp == "." || comp == "..")
+				return "dot path component";
+			start = i + 1;
+		}
+	}
+	return nil;
+}
+
 childbudget(): list of string
 {
 	ok: list of string;
@@ -805,7 +833,16 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	# /tool pointing to the parent instance (wrong activity ID).
 	if(mountpt_g != "/tool")
 		sys->bind(mountpt_g, "/tool", Sys->MREPL);
-	applynsrestriction();
+	nserr := applynsrestriction();
+	if(nserr != nil) {
+		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
+		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
+		alt {
+		cleanupchan <-= mypid => ;
+		* => ;
+		}
+		return;
+	}
 	result := exectool(ti.name, data);
 	# Assign result before replying so it's visible for subsequent reads.
 	# NOTE: concurrent writes to the same tool will overwrite each other's
@@ -1000,6 +1037,11 @@ provisiontask(args: string)
 			if(raw == "")
 				continue;
 			(ppath, pperm) := splitpathperm(raw);
+			perr := validatepath(ppath);
+			if(perr != nil) {
+				sys->fprint(stderr, "tools9p: provision: denied invalid path %s: %s\n", ppath, perr);
+				continue;
+			}
 			if(!childpathallowed(ppath)) {
 				sys->fprint(stderr, "tools9p: provision: denied path %s\n", ppath);
 				continue;
@@ -1160,11 +1202,11 @@ emitmanifestnow(mpath: string)
 # Apply namespace restriction to the current (already-forked) namespace.
 # Caller (asyncexec) is responsible for FORKNS and the /tool bind
 # BEFORE calling this — that ordering ensures /tool.N survives restriction.
-applynsrestriction()
+applynsrestriction(): string
 {
 	nsconstruct := load NsConstruct NsConstruct->PATH;
 	if(nsconstruct == nil)
-		return;
+		return sys->sprint("cannot load nsconstruct: %r");
 	nsconstruct->init();
 	# Grant /chan access only if the xenith tool was registered.
 	# Without this, the restricted namespace hides /chan entirely,
@@ -1207,16 +1249,19 @@ applynsrestriction()
 	);
 	{
 		nserr := nsconstruct->restrictns(caps);
-		if(nserr != nil)
+		if(nserr != nil) {
 			sys->fprint(stderr, "tools9p: restrictns failed: %s\n", nserr);
-		else if(!manifest_written) {
+			return nserr;
+		} else if(!manifest_written) {
 			nsconstruct->emitmanifest(caps, manifestpath(mountpt_g));
 			manifest_written = 1;
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: restrictns exception: %s\n", e);
+		return e;
 	}
+	return nil;
 }
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop, mounted: chan of int)
@@ -1397,6 +1442,11 @@ Serve:
 					# "bindpath <path> [ro|rw]" — default perm is "rw"
 					rest := data[9:];
 					(bpath, bperm) := splitpathperm(rest);
+					perr := validatepath(bpath);
+					if(perr != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, "invalid path: " + perr));
+						break;
+					}
 					existing := findboundpath(bpath);
 					if(existing != nil)
 						existing.perm = bperm;  # update perm on re-bind
@@ -1415,6 +1465,11 @@ Serve:
 					# "setperm <path> <ro|rw>" — change perm on existing bound path
 					rest := data[8:];
 					(spath, sperm) := splitpathperm(rest);
+					perr := validatepath(spath);
+					if(perr != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, "invalid path: " + perr));
+						break;
+					}
 					existing2 := findboundpath(spath);
 					if(existing2 != nil) {
 						existing2.perm = sperm;

@@ -3808,6 +3808,59 @@ Keyring_p384_ecdsa_verify(void *fp)
 	*f->ret = p384_ecdsa_verify(f->sig->data, &pt, f->hash->data, f->hash->len);
 }
 
+void
+Keyring_p384_keygen(void *fp)
+{
+	F_Keyring_p384_keygen *f;
+	uchar priv[48], pubbuf[97];
+	ECpoint384 pub;
+
+	f = fp;
+	destroy(f->ret->t0);
+	destroy(f->ret->t1);
+	f->ret->t0 = H;
+	f->ret->t1 = H;
+
+	if(p384_keygen(priv, &pub) != 0)
+		error(exBadKey);
+
+	pubbuf[0] = 0x04;	/* SEC1 uncompressed point */
+	memmove(pubbuf + 1, pub.x, 48);
+	memmove(pubbuf + 49, pub.y, 48);
+	f->ret->t0 = mem2array(priv, 48);
+	f->ret->t1 = mem2array(pubbuf, 97);
+	secureZero(priv, 48);
+}
+
+void
+Keyring_p384_ecdh(void *fp)
+{
+	F_Keyring_p384_ecdh *f;
+	ECpoint384 peer;
+	uchar shared[48];
+	void *r;
+
+	f = fp;
+	r = *f->ret;
+	*f->ret = H;
+	destroy(r);
+
+	if(f->priv == H || f->priv->len != 48)
+		error(exBadKey);
+	if(f->pub == H || f->pub->len != 97 || f->pub->data[0] != 0x04)
+		error(exBadPK);
+
+	memmove(peer.x, f->pub->data + 1, 48);
+	memmove(peer.y, f->pub->data + 49, 48);
+
+	/* p384_ecdh validates the peer point (on-curve, non-identity) */
+	if(p384_ecdh(shared, f->priv->data, &peer) != 0)
+		error(exBadPK);
+
+	*f->ret = mem2array(shared, 48);
+	secureZero(shared, 48);
+}
+
 /*
  *  secp256k1 ECDSA (Ethereum/Bitcoin)
  *  Uses raw byte arrays: priv[32], pub[65], sig[65]

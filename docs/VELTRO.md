@@ -40,6 +40,9 @@ Flags:
 - `-t` — enable extended thinking (8000-token budget).
 - `-r name` — resume a persisted session (`last` = most recent).
 - `-p paths` — comma-separated host paths to expose under `/n/local/`.
+- `-a type` — run as a specialist persona from `lib/veltro/agents/<type>.txt`
+  (e.g. `-a research`, `-a verify`), layered on top of the base system prompt.
+  See [Agent prompts](#agent-prompts).
 
 Sessions persist to `/usr/inferno/veltro/sessions/`. The hard step cap is 200 (the LLM's `end_turn` is the primary stop condition).
 
@@ -121,6 +124,38 @@ When `tools9p` is started, two flags shape what agents see:
 
 The Lucia launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical configuration. Edit them to lock down a deployment.
 
+## Agentic behaviour
+
+For multi-step or open-ended work the agent follows a complexity-gated discipline
+(`<complex_tasks>` in `system.txt`). Greetings, small talk, and single-action
+requests stay light — plain text, no tools, no plan. When a task needs several
+steps or covers independent parts, the agent:
+
+1. **Plans first** — records steps with `plan`/`todo` (exactly one in progress).
+2. **Decomposes** into the smallest independent sub-tasks.
+3. **Delegates** genuinely independent, multi-step sub-tasks in parallel via
+   `spawn` (one child each) — fan-out is reserved for work that warrants it, not
+   cheap reads.
+4. **Synthesizes the result itself** — reads every child's output and writes the
+   conclusion; it never just relays "the subagent's findings."
+
+### Intent routing
+
+`system.txt` recognizes the shape of a request and applies the matching
+discipline inline: a **research** request (investigate / compare / find out)
+gathers from real sources — web (`websearch`+`webfetch`) or codebase
+(`find`+`read`) — and cites them; a **verify** request ("does X actually work",
+"confirm X") runs the thing and ends with a `VERDICT`. Substantial parallel
+research can instead be delegated to `task agenttype=research`.
+
+### Read-cache
+
+To stop the agent burning its step budget re-reading the same file, identical
+read-only calls (`read`/`list`/`find`/`search`/`grep` with the same arguments)
+are short-circuited within a turn with an "already ran at step N" note instead of
+re-executing. A mutating tool (`write`/`edit`/`exec`/…) invalidates the cache, so
+`read → edit → read` still re-reads the changed file.
+
 ## LLM configuration
 
 LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
@@ -164,8 +199,20 @@ System prompts and per-type prompts live in `lib/veltro/`:
 | `lib/veltro/agents/plan.txt`     | Architecture/design only. Never implements. |
 | `lib/veltro/agents/task.txt`     | Autonomous task execution; uses `plan`/`todo` for multi-step work. |
 | `lib/veltro/agents/secretary.txt`| Message-handling agent; acts on the msg9p notification plane (`/mnt/msg`). See `docs/MESSAGE-INTEGRATION.md`. |
+| `lib/veltro/agents/research.txt` | Research agent: decompose → gather sources (web or codebase) → synthesize → cite. Adds source/citation discipline on top of `<complex_tasks>`. |
+| `lib/veltro/agents/verify.txt`   | Verification agent: *"reading is not verification — run it."* Reproduces the claim, probes edge cases, emits one `VERDICT: PASS/FAIL/PARTIAL` backed by captured output. |
 
-Custom agents: drop a `.txt` file into `lib/veltro/agents/` and pick it via `agenttype=` in a `spawn` call.
+A persona is **layered on top of `system.txt`**, not a replacement — it keeps the
+base policies and environment grounding and adds its specialist discipline. Pick
+one three ways:
+
+- `veltro -a <type>` — run the top-level agent as that persona.
+- `task create agenttype=<type> brief="…"` — delegate to a child agent of that type.
+- `spawn -- agenttype=<type> tools=… :: …` — a parallel subagent of that type.
+
+Custom agents: drop a `.txt` file into `lib/veltro/agents/` and reference it by
+name via any of the three. `research` and `verify` are also registered in the
+`task` tool with sensible default tool budgets.
 
 ## Reminders
 
@@ -215,6 +262,24 @@ Spawn -- tools=read,list,grep :: find every place that touches /mnt/llm
 ```
 
 The three children run in parallel, each in its own restricted namespace. Results stream back to the parent's conversation.
+
+### Research with citations
+
+```sh
+; veltro -a research "compare how the find, spawn and task tools parse their arguments"
+```
+
+The research persona decomposes the question, reads each source, synthesizes the
+answer, and ends with a `SOURCES` list of the `file:line`/URLs it actually read.
+
+### Verify a claim (run it, don't read it)
+
+```sh
+; veltro -a verify "confirm that find returns spawn.b when searching /appl/veltro/tools for spawn"
+```
+
+The verify persona *runs* the check, probes edge cases, and ends with a single
+`VERDICT: PASS` / `FAIL` / `PARTIAL` backed by the captured output.
 
 ### Embedded in Lucia
 

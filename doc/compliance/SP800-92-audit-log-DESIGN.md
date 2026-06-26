@@ -1,9 +1,10 @@
-# DESIGN (for review) — Tamper-Evident Audit-Log Service
+# DESIGN (historical) — Tamper-Evident Audit-Log Service
 
-> **STATUS: DESIGN — NOT IMPLEMENTED. Awaiting owner approval before any code.**
-> This introduces a new 9P service (architectural). Per project policy it is brought
-> as a design first. No code has been written. When approved, implementation will be
-> flagged for review, honor Plan 9/Inferno minimalism, use 9P, and **use no JSON**.
+> **STATUS: APPROVED → BUILT.** This design was approved and implemented; it is
+> retained as the design rationale of record. For the as-built evidence (per-control
+> status, `file:line` citations, tests), see the companion evidence artifact
+> [`SP800-92-audit-log.md`](SP800-92-audit-log.md). The service is a Limbo Styx server
+> (no new C device), honors Plan 9/Inferno minimalism, uses 9P, and uses **no JSON**.
 
 **Standard:** NIST SP 800-92 (Log Management) + SP 800-53 **AU** family (esp. AU-9
 protection of audit information); underwrites **SOC 2** and **PCI-DSS Req 10**.

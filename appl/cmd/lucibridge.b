@@ -1347,49 +1347,12 @@ cowrevert(arg: string): string
 # blocking write), the response is displayed directly — no placeholder needed,
 # avoiding the event-delivery race where pushevent("conversation update N")
 # fires before nslistener re-issues its pending read.
-# Read-cache: short-circuits identical read-only tool calls within a turn so
-# the model cannot burn the step budget re-reading content already in its
-# context. Invalidated by any mutating tool. Mirrors veltro.b's read-cache;
-# kept as a small local copy to avoid an agentlib interface change (consolidate
-# into agentlib if a third agent loop needs it).
-dcache: list of (string, int);   # (name+args key, step first served)
-
-dcreadonly(nm: string): int
-{
-	case nm {
-	"read" or "list" or "find" or "search" or "grep" =>	return 1;
-	* =>	return 0;
-	}
-}
-
-dcmutating(nm: string): int
-{
-	case nm {
-	"write" or "edit" or "exec" or "limbo" or "shell" or "safeexec" =>	return 1;
-	* =>	return 0;
-	}
-}
-
-dcfind(key: string): int
-{
-	for(c := dcache; c != nil; c = tl c) {
-		(k, s) := hd c;
-		if(k == key)
-			return s;
-	}
-	return -1;
-}
-
-dcrecord(nm, args, r: string, step: int)
-{
-	if(!dcreadonly(nm) || (len r >= 6 && r[0:6] == "error:"))
-		return;
-	dcache = (nm + " " + args, step) :: dcache;
-}
+# Read-cache (dedup of identical read-only tool calls) lives in agentlib —
+# agentlib->dedup{reset,check,record}; shared with veltro.b.
 
 agentturn(input: string)
 {
-	dcache = nil;	# fresh read-cache per turn
+	agentlib->dedupreset();	# fresh read-cache per turn
 
 	# Sync convcount with actual server message count before streaming.
 	syncconvcount();
@@ -1599,24 +1562,20 @@ agentturn(input: string)
 					continue;
 				}
 
-				# Read-cache: skip identical read-only repeats; a mutating tool
-				# invalidates the cache (so read->edit->read re-reads).
-				if(dcmutating(nm))
-					dcache = nil;
-				if(dcreadonly(nm)) {
-					seen := dcfind(nm + " " + eargs);
-					if(seen >= 0) {
-						results = (id, sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)", nm, agentlib->truncate(eargs, 120), seen)) :: results;
-						writefile(ctxpath, "resource update path=" + nm + " status=idle");
-						if(fpath != nil)
-							writefile(ctxpath, "resource update path=" + fpath + " status=idle");
-						continue;
-					}
+				# Read-cache: skip identical read-only repeats (agentlib);
+				# a mutating tool invalidates it (so read->edit->read re-reads).
+				dcskip := agentlib->dedupcheck(nm, eargs);
+				if(dcskip != "") {
+					results = (id, dcskip) :: results;
+					writefile(ctxpath, "resource update path=" + nm + " status=idle");
+					if(fpath != nil)
+						writefile(ctxpath, "resource update path=" + fpath + " status=idle");
+					continue;
 				}
 				setstatus(nm);
 				log("tool " + name + ": calling with " + string len eargs + " bytes");
 				result := agentlib->calltool(name, eargs);
-				dcrecord(nm, eargs, result, step);
+				agentlib->deduprecord(nm, eargs, result, step);
 				setstatus("working");
 				writefile(ctxpath, "resource update path=" + nm + " status=idle");
 				if(fpath != nil)

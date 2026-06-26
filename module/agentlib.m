@@ -46,6 +46,11 @@ AgentLib: module {
 	calltool: fn(tool, args: string): string;
 	writescratch: fn(content: string, step: int): string;
 
+	# Read-cache (dedup): short-circuit identical read-only tool calls in a turn.
+	dedupreset: fn();
+	dedupcheck: fn(name, args: string): string;
+	deduprecord: fn(name, args, result: string, step: int);
+
 	# Native tool_use protocol (Anthropic JSON API)
 	buildtooldefs: fn(toollist: list of string): string;
 	initsessiontools: fn(id: string, toollist: list of string);

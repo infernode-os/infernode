@@ -375,6 +375,37 @@ testServerHelloBadSuite(t: ref T)
 	expecterr(t, response, "unsupported suite");
 }
 
+testServerHelloExtensionLengthTooLong(t: ref T)
+{
+	body := array [40] of {* => byte 0};
+	body[0] = byte 16r03;
+	body[1] = byte 16r03;
+	body[35] = byte 16rC0;
+	body[36] = byte 16r2F;
+	body[37] = byte 0;
+	put16(body, 38, 16rFFFF);
+	hsmsg := mkhsmsg(2, body);
+	response := mkrecord(22, hsmsg);
+	expecterr(t, response, "ServerHello extensions truncated");
+}
+
+testServerHelloExtensionHeaderTruncated(t: ref T)
+{
+	body := array [43] of {* => byte 0};
+	body[0] = byte 16r03;
+	body[1] = byte 16r03;
+	body[35] = byte 16rC0;
+	body[36] = byte 16r2F;
+	body[37] = byte 0;
+	put16(body, 38, 3);
+	body[40] = byte 0;
+	body[41] = byte 16r2B;
+	body[42] = byte 0;
+	hsmsg := mkhsmsg(2, body);
+	response := mkrecord(22, hsmsg);
+	expecterr(t, response, "ServerHello extension truncated");
+}
+
 testCNSABadHybridP384Point(t: ref T)
 {
 	body := mkbadcnsa13serverhello();
@@ -505,6 +536,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ServerHelloUnsupportedVersion", testServerHelloUnsupportedVersion);
 	run("ServerHelloNonNullCompression", testServerHelloNonNullCompression);
 	run("ServerHelloBadSuite", testServerHelloBadSuite);
+	run("ServerHelloExtensionLengthTooLong", testServerHelloExtensionLengthTooLong);
+	run("ServerHelloExtensionHeaderTruncated", testServerHelloExtensionHeaderTruncated);
 	run("CNSABadHybridP384Point", testCNSABadHybridP384Point);
 
 	# Alert handling

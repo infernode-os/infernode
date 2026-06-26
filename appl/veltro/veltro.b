@@ -142,6 +142,34 @@ setmodel(id: string)
 		sys->fprint(stderr, "veltro: model set to %s\n", model);
 }
 
+# Deterministic intent classifier: map a task to a specialist persona by its
+# leading verb / strong opening phrase. Conservative — only an unambiguous
+# signal routes; anything else stays the general agent. Unlike the prompt-cue
+# routing (which gpt-oss/Mistral follow unreliably), this engages the persona
+# for the run regardless of the model. Explicit -a always overrides it.
+classifyintent(task: string): string
+{
+	t := str->tolower(agentlib->strip(task));
+	if(t == "")
+		return "";
+	(n, toks) := sys->tokenize(t, " \t\n");
+	first := "";
+	if(n > 0)
+		first = hd toks;
+	case first {
+	"verify" or "confirm" =>
+		return "verify";
+	"research" or "investigate" or "compare" =>
+		return "research";
+	}
+	if(agentlib->hasprefix(t, "check that ") || agentlib->hasprefix(t, "check whether ") ||
+	   agentlib->hasprefix(t, "check if ") || agentlib->hasprefix(t, "make sure "))
+		return "verify";
+	if(agentlib->hasprefix(t, "find out "))
+		return "research";
+	return "";
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -253,6 +281,13 @@ init(nil: ref Draw->Context, args: list of string)
 			if(task != "")
 				task += " ";
 			task += hd args;
+		}
+		# Deterministic intent routing: auto-engage a specialist persona when the
+		# request unambiguously signals one and no -a was given explicitly.
+		if(agenttype == "") {
+			agenttype = classifyintent(task);
+			if(verbose && agenttype != "")
+				sys->fprint(stderr, "veltro: intent routing -> %s agent\n", agenttype);
 		}
 		runagent(task);
 	}

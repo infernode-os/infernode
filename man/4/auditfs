@@ -5,8 +5,6 @@ auditfs \- tamper-evident audit-log file server
 .B auditfs
 .RB [ \-f
 .IR backing-file ]
-.RB [ \-k
-.IR signer-keyfile ]
 .PP
 .B auditverify
 .RB [ \-k
@@ -43,19 +41,25 @@ or
 .RB `` broken\ at\ seq\  \fIn\fP ''.
 .TP
 .B pubkey
-Read-only. The audit public key (when a signer key is configured
-with
-.BR \-k ),
-for distribution to verifiers.
+Read-only. The audit public key (when an audit signer key has been
+provisioned in
+.IR factotum (4)),
+fetched from factotum for distribution to verifiers.
 .TP
 .B ctl
 Write-only. Writing
 .B checkpoint
-appends a checkpoint record naming the current head. When a signer
-key is configured the checkpoint is signed (the certificate is
-verifiable with the
+appends a checkpoint record naming the current head. When an audit
+signer key is present,
+.I auditfs
+asks
+.IR factotum (4)
+to sign it \(em the private key stays in factotum and is never seen
+by
+.IR auditfs .
+The certificate is verifiable with the
 .B pubkey
-above, giving non-repudiation without sharing any secret).
+above, giving non-repudiation without sharing any secret.
 .PP
 Integrity is a linear hash chain:
 .IR H [0]
@@ -81,11 +85,29 @@ The backing file defaults to
 .BR /usr/inferno/audit/log ;
 its containing directory must already exist. With
 .B \-f
-a different path may be given. With
-.B \-k
-a signer keyfile (as produced by
-.IR createsignerkey (8))
-is loaded; checkpoints are then signed.
+a different path may be given.
+.PP
+Auditing is
+.B off by default
+(most installs do not need it): the boot profile mounts
+.I auditfs
+only when the opt-in marker
+.B /usr/inferno/audit/on
+exists. Enable chain-only auditing with
+.B touch /usr/inferno/audit/on ;
+disable by removing it. Compliance deployments that require AU-2
+logging must enable it.
+.PP
+Checkpoint signing is provided by
+.IR factotum (4),
+which holds the audit signer key;
+.I auditfs
+never holds it. Enable auditing and provision signing in one step with
+.B sh /lib/sh/audit-setup
+(it sets the marker and has factotum generate an ML-DSA-87 key
+in-process, sealed into secstore). Until a key is provisioned the
+chain is unsigned but still tamper-evident; checkpoints become
+signed automatically thereafter.
 .PP
 .I Auditverify
 is the standalone offline verifier. It recomputes the hash chain
@@ -99,8 +121,7 @@ it also checks every checkpoint signature against the audit public
 key.
 .SH EXAMPLE
 .EX
-auth/createsignerkey -a ed25519 -f /keydb/auditkey audit
-mount {auditfs -k /keydb/auditkey} /mnt/audit
+sh /lib/sh/audit-setup              # enable + factotum mints the signer key
 echo 'login unlock user=alice aal=3' >/mnt/audit/log
 echo checkpoint >/mnt/audit/ctl
 cat /mnt/audit/pubkey >/tmp/auditpub
@@ -112,20 +133,21 @@ cat /mnt/audit/chain | auditverify -k /tmp/auditpub
 .B /appl/cmd/auditverify.b
 .br
 .B /appl/lib/auditchain.b
+.br
+.B /appl/cmd/auth/factotum/proto/sign.b
+.br
+.B /lib/sh/audit-setup
 .SH SEE ALSO
 .IR keyring (2),
-.IR createsignerkey (8)
+.IR factotum (4)
 .br
 .B doc/compliance/audit-log-design.md
+.br
+.B doc/compliance/audit-log-factotum-signing-DESIGN.md
 .SH BUGS
 Records since the last signed
 .B ctl
 checkpoint are protected by the hash chain but are not yet covered
 by a signature; checkpoint frequently (and on high-value events) to
-bound that window. The signer key is held by
-.I auditfs
-itself; moving it into
-.IR factotum (4),
-so the server never holds the private key, is a hardening step. A
-content-addressed store for high-volume agent-provenance payloads is
-a planned extension.
+bound that window. A content-addressed store for high-volume
+agent-provenance payloads is a planned extension.

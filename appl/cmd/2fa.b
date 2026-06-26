@@ -25,10 +25,20 @@ include "twofa.m";
 	twofa: Twofa;
 include "twofaslot.m";
 	ts: Twofaslot;
+include "audit.m";
+	audit: Audit;
 
 Cmd2fa: module { init: fn(ctxt: ref Draw->Context, argv: list of string); };
 
 stderr: ref Sys->FD;
+
+# auditlog seals one identity-lifecycle event to the tamper-evident
+# audit log (AU-2). Loosely coupled: a no-op if auditfs is not mounted.
+auditlog(event, msg: string)
+{
+	if(audit != nil)
+		audit->log("2fa", event, msg);
+}
 
 prompt(msg: string): string
 {
@@ -81,6 +91,10 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 	twofa->init();
 	ts->init();
+	# Optional: emit identity-lifecycle events to the audit log when present.
+	audit = load Audit Audit->PATH;
+	if(audit != nil)
+		audit->init();
 
 	user := rf("/dev/user");
 	if(user == nil)
@@ -99,9 +113,10 @@ init(nil: ref Draw->Context, argv: list of string)
 		drec := prompt("recovery passphrase (blank if the key is present): ");
 		dpin := prompt("FIDO2 PIN (blank for touch-only): ");
 		e := ts->disable(user, dpass, drec, dpin);
-		if(e == nil)
+		if(e == nil){
+			auditlog("disable", "user="+user);
 			sys->print("2fa disabled for %s (password-only)\n", user);
-		else
+		}else
 			sys->fprint(stderr, "2fa disable: %s\n", e);
 	"enroll" =>
 		doenroll(user);
@@ -151,6 +166,7 @@ doenroll(user: string)
 		sys->fprint(stderr, "2fa: enroll failed: %s\n", err);
 		return;
 	}
+	auditlog("enroll", "user="+user);
 	sys->print("2FA enrolled for %s. Login now requires this key (or the recovery passphrase).\n", user);
 }
 

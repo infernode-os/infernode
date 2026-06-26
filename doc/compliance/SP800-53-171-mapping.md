@@ -53,7 +53,7 @@ first; they are the controls a generic Linux/Windows host cannot evidence as cle
 | Family | Theme | Type | Inferno-native mechanism | Evidence | Status |
 |--------|-------|------|--------------------------|----------|--------|
 | **AC** Access Control | Least privilege, separation, flow | Technical | Per-process namespaces = capability; default-deny bind-replace; `NODEVS` device gate; capability attenuation (child ≤ parent) | [`SP800-207-zero-trust.md`](SP800-207-zero-trust.md); `appl/veltro/SECURITY.md`; `formal-verification/` | **Strong** |
-| **AU** Audit & Accountability | Logging, integrity, retention | Technical | Today: `emitauditlog()` (namespace ops), subagent trajectory logging. Planned: hash-chained append-only 9P audit-log service | `appl/veltro/SECURITY.md`; EPIC 2 (planned) | **Partial → planned** (see §5.AU) |
+| **AU** Audit & Accountability | Logging, integrity, retention | Technical | Built: hash-chained append-only 9P audit service (`auditfs`) with signed checkpoints + offline verifier + auth/identity/credential emitters. AU-4/5/6/7 tooling open | [`SP800-92-audit-log.md`](SP800-92-audit-log.md); §5.AU | **Substantially met** (see §5.AU) |
 | **IA** Identification & Auth | MFA, PKI, AAL3 | Technical | Factotum credential agent; FIDO2 UV (AAL3) login; PQ-capable X.509 / mTLS | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md); `docs/AUTHENTICATION.md`, `docs/DISTRIBUTED-AUTH.md` | **Strong** (AAL3 verifier shipped) |
 | **SC** System & Comms Protection | Crypto, boundary, transport | Technical | `libsec` (AES-256-GCM, SHA-384/512, full PQC); hybrid TLS + hybrid native STS; namespace boundaries | [`CNSA-2.0.md`](CNSA-2.0.md); `docs/CRYPTO-MODERNIZATION.md` | **Strong** (CNSA-strict params tracked) |
 | **SI** System & Information Integrity | Memory safety, malware, flaws | Technical | Dis VM: type-safe, memory-safe, sandboxed bytecode → eliminates whole CWE classes (no raw pointers, bounds-checked); CodeQL + fuzzing in CI | `doc/dis.ms`; `.github/workflows/security.yml` (CodeQL), `fuzz.yml`; `tests/handshake_fuzz_test.b` | **Strong** (see §5.SI) |
@@ -128,12 +128,15 @@ The release pipeline (`.github/workflows/release.yml`) produces, for every artif
 hermetic/reproducible builds are the documented push to SLSA L4 (roadmap "Supply chain &
 integrity"). Tracked under INFR-340.
 
-### 5.AU — Audit & Accountability (the gap)
-Today auditing is **per-subsystem**: `emitauditlog()` records namespace operations and the
-agent stack logs subagent trajectories. There is **no single, tamper-evident, hash-chained
-audit service yet** — that is EPIC 2 (planned), the single highest-leverage control (it
-underwrites AU-9 integrity-of-audit, SOC 2, and PCI-10 simultaneously). Honest status:
-**partial today, with the high-value piece planned.**
+### 5.AU — Audit & Accountability (now built)
+The single, tamper-evident, hash-chained audit service is **built** (`auditfs` at
+`/mnt/audit`): a SHA-256 hash chain with namespace access control, signed checkpoints,
+an offline verifier, and emitters on the auth/identity/credential path. This lands the
+high-leverage integrity controls — **AU-3/8/9/9(3)/10 Met**, AU-2/12 substantially met —
+which underwrite AU-9 integrity-of-audit, SOC 2, and PCI-10 simultaneously. Evidence:
+[`SP800-92-audit-log.md`](SP800-92-audit-log.md). Honest status: **substantially met** —
+AU-4/5/6/7 operational tooling and the unsigned-tail / factotum-held-key hardening remain
+tracked (INFR-343/355/356).
 
 ---
 

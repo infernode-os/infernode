@@ -11,8 +11,9 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 
 > Honesty notes carried forward: **SC-13** is *partial* because the algorithms are approved
 > but the module is not yet FIPS-validated (Tier 2 — [`FIPS-140-3-readiness.md`](FIPS-140-3-readiness.md)).
-> **AU** is largely *planned/partial* pending the audit-log service
-> ([`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md)).
+> **AU** core is now *substantially met* — the tamper-evident audit-log service is built,
+> evidenced, and tested ([`SP800-92-audit-log.md`](SP800-92-audit-log.md)); AU-4/5/6/7
+> operational tooling remains partial.
 
 ---
 
@@ -25,7 +26,7 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 | **AC-4** Information Flow Enforcement | Control information flows between domains | Namespace boundaries mediate flow today; cross-domain *guarded* transfer is the CDS guard (roadmap EPIC 5, planned) | Partial |
 | **AC-5** Separation of Duties | Separate duties via access | Capability sets per agent; distinct factotum identities | Partial |
 | **AC-6** Least Privilege | Grant least privilege | **Capability attenuation** (child caps ≤ parent, structural); default-deny bind-replace; `NODEVS` device gate. [`SP800-207-zero-trust.md`](SP800-207-zero-trust.md) §2; `tests/veltro_security_test.b` | **Met** |
-| **AC-6(9)** Audit of Privileged Functions | Log privileged use | Ties to AU — `emitauditlog()` today; full coverage needs the audit-log service | Partial |
+| **AC-6(9)** Audit of Privileged Functions | Log privileged use | Tamper-evident audit log now records privileged credential ops (`factotum` keyadd/keydel, `2fa` enroll/disable, `secstored` auth); broader privileged-op coverage pending. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) | Substantially met |
 | **AC-25** Reference Monitor | Tamper-proof, small, verifiable mediator | 9P/Styx is the single mediation chokepoint; namespace isolation **formally verified** (TLA+ 3.17B states, SPIN, CBMC on real C). `formal-verification/` | **Met** (assurance-backed) |
 
 ## IA — Identification & Authentication
@@ -57,10 +58,13 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 
 | Control | Requirement | Mechanism / evidence | Status |
 |---------|-------------|----------------------|--------|
-| **AU-2** Event Logging | Log defined events | Per-subsystem today (`emitauditlog()`, subagent trajectory logs); central event set pending the audit service | Partial |
-| **AU-3** Content of Audit Records | Sufficient record content | Defined by the audit-log record format (seq/time/source/event). [`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md) §4 | Planned |
-| **AU-9** Protection of Audit Information | Protect logs from tampering | **Designed**: hash-chained append-only 9P service, externally anchorable. [`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md) | Planned (design ready; INFR-343) |
-| **AU-12** Audit Record Generation | Generate records across components | Subsystem wiring to the audit service (login/factotum/CDS/veltro) | Planned |
+| **AU-2** Event Logging | Log defined events | `auditfs` + emitters: `secstored` auth, `2fa` enroll/disable, `factotum` keyadd/keydel. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) §2 | Substantially met |
+| **AU-3** Content of Audit Records | Sufficient record content | Record format `seq time source event hash msg`, server-assigned seq+time. [`appl/cmd/auditfs.b:303` `appendrec`](../../appl/cmd/auditfs.b) | **Met** |
+| **AU-8** Time Stamps | Trustworthy, unforgeable timestamps | Server assigns `daytime->now()` at seal time; writer cannot backdate. [`appl/cmd/auditfs.b:309`](../../appl/cmd/auditfs.b) | **Met** (AU-8(1) time-source authority open) |
+| **AU-9** Protection of Audit Information | Protect logs from tampering | SHA-256 hash chain (tamper-evident) + namespace access control + external anchor. [`SP800-92-audit-log.md`](SP800-92-audit-log.md); `tests/auditchain_test.b` (tamper/reorder/deletion) | **Met** |
+| **AU-9(3)** Cryptographic Protection | Cryptographic integrity | Hash chain + signed checkpoints. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) | **Met** |
+| **AU-10** Non-Repudiation | Verifiable origin binding | `keyring`-signed checkpoints; `auditverify -k pubkey` verifies offline with no secret. [`appl/cmd/auditverify.b`](../../appl/cmd/auditverify.b) | Substantially met (unsigned-tail; INFR-356) |
+| **AU-12** Audit Record Generation | Generate records across components | Emitters at auth/identity/credential chokepoints; one `load Audit` per subsystem. CDS/veltro pending (INFR-355) | Substantially met |
 
 ---
 
@@ -72,8 +76,10 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
   AAL3 hardware auth; AES-256 at rest).
 - **Honest partials:** SC-13 (validated module — Tier 2 FIPS work), IA-5 (dual-key/DK
   save-back — EPIC 1), SC-8 (client-cert mTLS — INFR-344), AC-4 (CDS guard — EPIC 5).
-- **Planned cluster:** the AU family resolves together once the audit-log service lands
-  (the single highest-leverage control — carries AU-2/3/9/12 + SOC 2 + PCI-10).
+- **AU core now built:** the tamper-evident audit-log service lands AU-3/8/9/9(3)/10 as
+  **Met** and AU-2/12 as substantially met (carries SOC 2 + PCI-10); AU-4/5/6/7 operational
+  tooling and the unsigned-tail / factotum-held-key hardening remain tracked
+  ([`SP800-92-audit-log.md`](SP800-92-audit-log.md); INFR-343/355/356).
 - **CMMC L2 framing:** an assessor can stand up the SSP on the "Met" rows immediately and
   schedule the partials/planned against the named tickets.
 

@@ -31,6 +31,9 @@ include "arg.m";
 
 include "readdir.m";
 
+include "audit.m";
+	audit: Audit;
+
 Factotum: module
 {
 	init:	fn(nil: ref Draw->Context, nil: list of string);
@@ -84,6 +87,13 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
 	authio = load Authio "$self";
+
+	# Optional: emit credential-lifecycle events to the tamper-evident
+	# audit log (AU-2). Loosely coupled — a no-op if auditfs is not
+	# mounted, and never holds or logs key material (see auditkey()).
+	audit = load Audit Audit->PATH;
+	if(audit != nil)
+		audit->init();
 
 	svcname := "#sfactotum";
 	mntpt := "/mnt/factotum";
@@ -285,6 +295,49 @@ factotumsrv()
 				break;
 			}
 			allkeys = addkey(allkeys, k);
+			auditkey("keyadd", k.safetext());
+			wc <-= (len data, nil);
+			if(dirtyc != nil)
+				alt { dirtyc <-= 1 => ; * => ; }
+		"genkey" =>
+			# Generate a key inside factotum (e.g. the audit signer).
+			# The private key is born here and never crosses the wire,
+			# which is how a large PQC signing key is provisioned: an
+			# mldsa87 key line is ~10KB, over the ctl write frame. The
+			# generation directives alg= (default mldsa87) and owner=
+			# (default audit) are consumed; the remaining attrs (e.g.
+			# proto=sign service=audit) become the stored key, with the
+			# secret key added as a single-line, '='-free !sk.
+			gattrs := parseline(s);
+			if(lookattrval(gattrs, "proto") == nil){
+				wc <-= (0, "genkey without proto");
+				break;
+			}
+			if(kr == nil)
+				kr = load Keyring Keyring->PATH;
+			if(kr == nil){
+				wc <-= (0, "genkey: cannot load keyring");
+				break;
+			}
+			galg := lookattrval(gattrs, "alg");
+			if(galg == nil)
+				galg = "mldsa87";
+			gowner := lookattrval(gattrs, "owner");
+			if(gowner == nil)
+				gowner = "audit";
+			gsk := kr->genSK(galg, gowner, 0);
+			if(gsk == nil){
+				wc <-= (0, "genkey: cannot generate key (algorithm configured?)");
+				break;
+			}
+			gka: list of ref Attr;
+			for(gl := gattrs; gl != nil; gl = tl gl)
+				if((hd gl).name != "alg")
+					gka = hd gl :: gka;
+			gka = ref Attr(Aval, "!sk", encodesk(kr->sktostr(gsk))) :: gka;
+			gk := Key.mk(gka);
+			allkeys = addkey(allkeys, gk);
+			auditkey("keygen", gk.safetext());
 			wc <-= (len data, nil);
 			if(dirtyc != nil)
 				alt { dirtyc <-= 1 => ; * => ; }
@@ -300,6 +353,7 @@ factotumsrv()
 			if(delkey(allkeys, attrs) == 0)
 				wc <-= (0, "no matching keys");
 			else{
+				auditkey("keydel", attrtext(attrs));
 				wc <-= (len data, nil);
 				if(dirtyc != nil)
 					alt { dirtyc <-= 1 => ; * => ; }
@@ -858,6 +912,34 @@ attrtext(attrs: list of ref Attr): string
 		s += (hd attrs).text();
 	}
 	return s;
+}
+
+# auditkey seals one credential-lifecycle event (AU-2). The descriptor
+# must carry only public attributes — never a secret value. Key.safetext
+# redacts secrets to "name?", and delkey patterns reject private fields,
+# so both call sites are safe. A no-op when auditfs is not mounted.
+auditkey(event, descr: string)
+{
+	if(audit != nil)
+		audit->log("factotum", event, descr);
+}
+
+# encodesk maps sktostr's newlines to '@' and base64 padding '=' to '~',
+# so a generated secret key stores as a single-line, '='-free value (the
+# sign proto reverses it). Neither '@' nor '~' occurs in base64 or the
+# alg/owner names. Must match proto/sign.b decode and mkauditkey/test.
+encodesk(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		case c {
+		'\n' =>	c = '@';
+		'=' =>	c = '~';
+		}
+		r[len r] = c;
+	}
+	return r;
 }
 
 lookattr(attrs: list of ref Attr, n: string): ref Attr

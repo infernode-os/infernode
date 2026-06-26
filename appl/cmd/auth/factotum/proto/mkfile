@@ -3,6 +3,7 @@
 TARG=\
 	p9any.dis\
 	pass.dis\
+	sign.dis\
 
 SYSMODULES=\
 	factotum.m\

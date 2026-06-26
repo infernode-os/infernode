@@ -1,0 +1,34 @@
+#!/dis/sh
+
+# audit-setup - provision the audit checkpoint-signing key into factotum.
+#
+# Asks factotum to GENERATE an ML-DSA-87 (CNSA 2.0 Category 5) signer key
+# internally: the private key is born inside factotum and never crosses the
+# wire or touches disk in plaintext. factotum persists it (encrypted) to
+# secstore. auditfs then asks factotum to sign checkpoints and to hand out
+# the public key, and never sees the private key (AU-10).
+#
+# Run once, after login, with factotum and secstore up. Re-running mints a
+# NEW key (old public key stops verifying old checkpoints), so run it
+# deliberately. See doc/compliance/audit-log-factotum-signing-DESIGN.md.
+
+if {! ftest -e /mnt/factotum/ctl} {
+	echo 'audit-setup: factotum is not running; mount it first' >[1=2]
+	exit 'no factotum'
+}
+
+# Auditing is OFF by default; this opt-in marker enables it at every boot.
+mkdir -p /usr/inferno/audit
+touch /usr/inferno/audit/on
+
+# One short ctl line — factotum does the (large) key generation in-process.
+echo 'genkey proto=sign service=audit alg=mldsa87 owner=audit' > /mnt/factotum/ctl
+
+# Start the service now (so signing takes effect this session, not just
+# after the next boot) if it is not already mounted.
+if {! ftest -e /mnt/audit/ctl} {
+	mkdir -p /mnt/audit
+	mount {auditfs} /mnt/audit
+}
+
+echo 'audit-setup: auditing enabled; ML-DSA-87 signer key generated inside factotum/secstore'

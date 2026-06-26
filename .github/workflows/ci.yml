@@ -212,6 +212,19 @@ jobs:
           fi
         fi
 
+        # audit checkpoint signing (factotum-held key, ML-DSA-87)
+        if [ -f tests/host/audit_signing_test.sh ]; then
+          echo "--- audit signing test ---"
+          chmod +x tests/host/audit_signing_test.sh
+          ROOT=. bash tests/host/audit_signing_test.sh > audit-signing-test.txt 2>&1 || true
+          cat audit-signing-test.txt
+          if grep -q "=== PASS ===" audit-signing-test.txt; then
+            echo "audit signing test: PASS"
+          else
+            echo "audit signing test: SKIP (requires full Inferno namespace)"
+          fi
+        fi
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -489,6 +502,19 @@ jobs:
             echo "wallet persistence test: PASS"
           else
             echo "wallet persistence test: FAIL (non-fatal in CI)"
+          fi
+        fi
+
+        # audit checkpoint signing (factotum-held key, ML-DSA-87)
+        if [ -f tests/host/audit_signing_test.sh ]; then
+          echo "--- audit signing test ---"
+          chmod +x tests/host/audit_signing_test.sh
+          ROOT=. bash tests/host/audit_signing_test.sh > audit-signing-test.txt 2>&1 || true
+          cat audit-signing-test.txt
+          if grep -q "=== PASS ===" audit-signing-test.txt; then
+            echo "audit signing test: PASS"
+          else
+            echo "audit signing test: SKIP (requires full Inferno namespace)"
           fi
         fi
 

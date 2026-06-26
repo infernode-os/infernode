@@ -4,21 +4,48 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="${EMU:-$ROOT/emu/MacOSX/o.emu}"
 [ -x "$EMU" ] || EMU="$ROOT/emu/Linux/o.emu"
+EMU_ARGS="${EMU_ARGS:-}"
 LIMBO="${LIMBO:-$ROOT/MacOSX/arm64/bin/limbo}"
 [ -x "$LIMBO" ] || LIMBO="$ROOT/Linux/amd64/bin/limbo"
 
 [ -x "$EMU" ] || { echo "SKIP: no emulator found"; exit 0; }
-[ -x "$LIMBO" ] || { echo "FAIL: no Limbo compiler found"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 needed"; exit 0; }
 
 PORT="${PORT:-19694}"
 fails=0
 
-"$LIMBO" -gw -I"$ROOT/module" -o "$ROOT/dis/tests/tlsclient.dis" "$ROOT/tests/tlsclient.b" >/tmp/tlsclient-limbo.$$ 2>&1 || {
-	cat /tmp/tlsclient-limbo.$$
-	rm -f /tmp/tlsclient-limbo.$$
-	exit 1
+run_emu() {
+	"$EMU" ${EMU_ARGS:+$EMU_ARGS} "$@"
 }
+
+compile_client() {
+	local out="$ROOT/dis/tests/tlsclient.dis"
+
+	if [ -x "$LIMBO" ]; then
+		"$LIMBO" -gw -I"$ROOT/module" -o "$out" "$ROOT/tests/tlsclient.b" >/tmp/tlsclient-limbo.$$ 2>&1 || {
+			cat /tmp/tlsclient-limbo.$$
+			rm -f /tmp/tlsclient-limbo.$$
+			exit 1
+		}
+		rm -f /tmp/tlsclient-limbo.$$
+		return
+	fi
+
+	[ -f "$ROOT/dis/limbo.dis" ] || { echo "FAIL: no Limbo compiler found"; exit 1; }
+	rm -f "$out"
+	run_emu -r"$ROOT" /dis/limbo.dis -I/module -o /dis/tests/tlsclient.dis /tests/tlsclient.b >/tmp/tlsclient-limbo.$$ 2>&1 || {
+		if [ -f "$out" ]; then
+			rm -f /tmp/tlsclient-limbo.$$
+			return
+		fi
+		cat /tmp/tlsclient-limbo.$$
+		rm -f /tmp/tlsclient-limbo.$$
+		exit 1
+	}
+	rm -f /tmp/tlsclient-limbo.$$
+}
+
+compile_client
 rm -f /tmp/tlsclient-limbo.$$
 
 run_case() {
@@ -117,9 +144,9 @@ PY
 	sleep 1
 
 	if [ "$mode" = "cnsa" ]; then
-		( CNSAMODE=1 "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
+		( export CNSAMODE=1; run_emu -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
 	else
-		( "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
+		( run_emu -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
 	fi
 	local cp=$!
 	local waited=0

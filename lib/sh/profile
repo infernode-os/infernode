@@ -83,6 +83,21 @@ if {~ $emuhost MacOSX Linux Nt}{
 	if {! ftest -d $home} { mkdir -p $home }
 }
 
+# ── Audit log (tamper-evident security log) ───────────────
+# Start the append-only, SHA-256 hash-chained audit service BEFORE the
+# auth services, so their authentication events are recorded (AU-2/AU-9).
+# Signed checkpoints when /usr/inferno/audit/key exists (a createsignerkey
+# keyfile), otherwise chain-only — anchor the head externally. Access is by
+# namespace placement; a restricted subject is given only /mnt/audit/log.
+# Non-fatal: a failure here must never block boot.
+mkdir -p /usr/inferno/audit >[2] /dev/null
+mkdir -p /mnt/audit >[2] /dev/null
+if {ftest -f /usr/inferno/audit/key} {
+	mount {auditfs -k /usr/inferno/audit/key} /mnt/audit >[2] /dev/null
+}{
+	mount {auditfs} /mnt/audit >[2] /dev/null
+}
+
 # ── Secstored (persistent encrypted key storage) ──────────
 # Kill stale secstored from a previous emu session — a stale
 # instance with different PAK data causes login to hang indefinitely.

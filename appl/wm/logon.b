@@ -76,6 +76,7 @@ passbuf: string;
 confirmbuf: string;
 savedpass: string;
 savedloginpass: string;	# secstore password held while prompting for the recovery passphrase
+current2fadkhex: string;	# 2FA data key (hex) for this session — for DK-encrypted secstore save-back
 cursor: int;
 statusmsg: string;
 state: int;
@@ -612,6 +613,7 @@ startllmsrv()
 
 connectfactotum(pass, recoverypass, fidopin: string): string
 {
+	current2fadkhex = "";	# set below only if a 2FA slot unlock yields the DK
 	if(secstore == nil)
 		return "secstore module not loaded";
 	secstore->init();
@@ -658,8 +660,10 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 		# Try the present YubiKey (touch); if recoverypass is given, unlock()
 		# also tries the recovery slot.
 		(dk, nil) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
-		if(dk != nil)
+		if(dk != nil){
 			plaintext = secstore->decrypt3(file, dk, nil, nil);
+			current2fadkhex = tohex(dk);	# retain DK so save-back stays DK-encrypted (no downgrade)
+		}
 		# Fall back to the password path if the blob is still password-encrypted
 		# — a legacy/un-migrated blob during an incomplete enroll/disable. A
 		# fully migrated 2FA blob will NOT decrypt under the password, so strong
@@ -746,19 +750,38 @@ createsecstoreacct(pass: string): string
 # Tell running factotum to use secstore for persistence.
 # This enables the save-back path so new keys are persisted.
 #
+tohex(a: array of byte): string
+{
+	h := "0123456789abcdef";
+	s := "";
+	for(i := 0; i < len a; i++){
+		s[len s] = h[(int a[i] >> 4) & 16rf];
+		s[len s] = h[int a[i] & 16rf];
+	}
+	return s;
+}
+
 enablesecstoresave(pass: string)
 {
 	user := rf("/dev/user");
 	if(user == nil)
 		user = "inferno";
 
+	# For a 2FA account, hand factotum the data key so its save-back stays
+	# DK-encrypted (auth still uses the password). Ordinary accounts pass no
+	# DK and factotum encrypts under the password-derived root key as before.
 	cmd := "secstore tcp!localhost!5356 " + user + " " + pass;
+	if(current2fadkhex != "")
+		cmd += " " + current2fadkhex;
 	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
 	b := array of byte cmd;
 	sys->write(fd, b, len b);
-	sys->fprint(stderr, "logon: secstore save-back enabled\n");
+	if(current2fadkhex != "")
+		sys->fprint(stderr, "logon: secstore save-back enabled (DK-encrypted)\n");
+	else
+		sys->fprint(stderr, "logon: secstore save-back enabled\n");
 }
 
 # Check if factotum already has keys (e.g. loaded via -S -P in profile)

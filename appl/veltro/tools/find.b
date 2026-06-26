@@ -100,6 +100,23 @@ schema(): string
 	"}";
 }
 
+# True if s looks like an absolute filesystem path (leading /). Used to tell
+# the path argument from the pattern argument regardless of their order.
+ispathlike(s: string): int
+{
+	return len s > 0 && s[0] == '/';
+}
+
+# True if s contains a glob metacharacter (* ? [). Used to decide whether a
+# bare pattern should be treated as a literal substring (wrapped in *...*).
+hasglobmeta(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '*' || s[i] == '?' || s[i] == '[')
+			return 1;
+	return 0;
+}
+
 exec(args: string): string
 {
 	if(sys == nil)
@@ -139,11 +156,24 @@ exec(args: string): string
 		if(patharg != "")
 			basepath = patharg;
 	} else {
-		# Tool-native: pattern first, optional path second
-		pattern = hd argv;
-		argv = tl argv;
-		if(argv != nil)
-			basepath = hd argv;
+		# Tool-native: two bare tokens whose order varies — a JSON tool call
+		# commonly emits {path, pattern} (path first) while the native form is
+		# pattern-first. Disambiguate by shape: the token that looks like an
+		# absolute path (leading /) is the path; the other is the pattern. This
+		# makes find order-agnostic for either emission. Fall back to
+		# pattern-first when neither token looks like a path.
+		a0 := hd argv;
+		a1 := "";
+		if(tl argv != nil)
+			a1 = hd (tl argv);
+		if(a1 != "" && ispathlike(a0) && !ispathlike(a1)) {
+			basepath = a0;
+			pattern = a1;
+		} else {
+			pattern = a0;
+			if(a1 != "")
+				basepath = a1;
+		}
 	}
 
 	# Strip shell-style quotes that LLMs sometimes add around patterns.
@@ -152,6 +182,13 @@ exec(args: string): string
 	   ((pattern[0] == '"' && pattern[len pattern - 1] == '"') ||
 	    (pattern[0] == '\'' && pattern[len pattern - 1] == '\'')))
 		pattern = pattern[1:len pattern - 1];
+
+	# Substring tolerance: a bare pattern with no glob metacharacters (e.g.
+	# "spawn") globs only a file named exactly "spawn", never "spawn.b" — a
+	# common LLM mistake that returns "no matches" on an obvious hit. When the
+	# pattern has no *, ? or [, treat it as a substring by wrapping in *...*.
+	if(pattern != "" && !hasglobmeta(pattern))
+		pattern = "*" + pattern + "*";
 
 	# dirc[0] tracks directories opened across the entire recursive search.
 	# Passed by reference (array) so all recursive calls share one counter.

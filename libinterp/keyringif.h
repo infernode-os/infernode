@@ -1518,6 +1518,16 @@ struct F_Keyring_p256_point_bytes
 	uchar	temps[24];
 	Keyring_ECpoint*	pub;
 };
+void Keyring_p384_ecdh(void*);
+typedef struct F_Keyring_p384_ecdh F_Keyring_p384_ecdh;
+struct F_Keyring_p384_ecdh
+{
+	WORD	regs[NREG-1];
+	Array**	ret;
+	uchar	temps[24];
+	Array*	priv;
+	Array*	pub;
+};
 void Keyring_p384_ecdsa_verify(void*);
 typedef struct F_Keyring_p384_ecdsa_verify F_Keyring_p384_ecdsa_verify;
 struct F_Keyring_p384_ecdsa_verify
@@ -1528,6 +1538,14 @@ struct F_Keyring_p384_ecdsa_verify
 	Array*	pubkey;
 	Array*	hash;
 	Array*	sig;
+};
+void Keyring_p384_keygen(void*);
+typedef struct F_Keyring_p384_keygen F_Keyring_p384_keygen;
+struct F_Keyring_p384_keygen
+{
+	WORD	regs[NREG-1];
+	struct{ Array* t0; Array* t1; }*	ret;
+	uchar	temps[24];
 };
 void Keyring_pktoattr(void*);
 typedef struct F_Keyring_pktoattr F_Keyring_pktoattr;

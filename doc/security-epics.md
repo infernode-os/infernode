@@ -18,10 +18,11 @@ epic linked here.
 **Description:** Move the working 2FA login to a true AAL3 / PIV-CAC posture: hardware
 user-verification, vault keyed to the key, no password-keyed blob ever on disk, no single
 point of failure.
-**Status (2026-06-21):** Story (a) ✅ **DONE & hardware-verified** — UV-required login shipped
-(FIDO-PIN prompt in `logon`; PIN is load-bearing per the `t2uv` test: touch-only derive yields a
-different secret). Recovery slot (part of d) wired. (b) DK save-back, (c) dual-key, (e) Settings
-GUI, (f) passwordless, (g) accreditation test remain open.
+**Status (2026-06-25): SUBSTANTIALLY COMPLETE — EPIC 1 closed.** Shipped & hardware-verified:
+(a) UV-required login, (b) DK-encrypted save-back, (c) dual/backup key (`2fa addkey` + GUI),
+recovery slot, (e) Settings GUI Security panel, (g) accreditation evidence
+(`doc/compliance/SP800-63B-AAL3.md` + `tests/twofaslot_test.b`, 6/6 PASS). (f) passwordless
+**declined** (defense-in-depth — keep an independent password factor; still AAL3 either way).
 **Acceptance Criteria:**
 - ✅ hmac-secret credential **requires UV (FIDO2 PIN)**, not touch-only. *(shipped, hardware-verified)*
 - Factotum **save-back uses the data key (DK)** for 2FA accounts — no password-keyed
@@ -69,3 +70,15 @@ messages between security domains. The differentiator no incumbent shows cleanly
 validation surface; self-tests, approved-mode.
 **Acceptance:** single boundary; power-on self-tests; approved algorithm enforcement; gap analysis.
 **Stories:** crypto-call inventory/consolidation; self-tests; approved-mode flag; pre-validation gap report.
+
+## EPIC 7 — Hardware-backed human authorization for agent actions (non-repudiable)
+**Tier:** 1 · **Refs:** SP 800-53 **AU-10 (non-repudiation)**, AC-3/AC-5 (access enforcement / separation of duties), AC-6, IA-2; NIST AI RMF (human oversight / meaningful human control); FIDO2 assertion signatures; builds on EPIC 1 (`#F`/`twofa`) + EPIC 2 (audit log).
+**Description:** Gate high-risk actions — especially those initiated by the on-device LLM agent (`lucibridge`/`agentlib`) — behind a YubiKey touch+UV that yields a **non-repudiable, action-bound signature** and a tamper-evident record of *who authorized what*. **Threat model: the adversary is the agent itself.** The design must hold when the code requesting approval is the thing being blocked — so enforcement is by namespace construction, never an in-process check the agent could patch.
+**Enforcement (why a wily agent can't circumvent):**
+- The gated capability exists ONLY behind a **guard 9P service** in a namespace the agent does not possess. The agent cannot *name* the raw action (no `/dev/exec`, no write to the real FS, no payment channel) — only the guarded path. Plan 9 enforcement by construction: remove the capability from the agent's namespace; the guard runs in a separate pgrp the agent can't bind into or escape.
+- The YubiKey signs `H(canonical-action ‖ nonce ‖ time)` via a **UV FIDO2 assertion** — authorizing THIS action only. The nonce + the authenticator's monotonic **signature counter** defeat replay and detect cloning; the asymmetric signature gives true non-repudiation (verifiable later without any shared secret).
+- The approval prompt is rendered by the **guard** from the canonical action bytes (not agent-supplied text) on a surface the agent has no draw access to — no bait-and-switch between "what the human saw" and "what runs".
+- Every authorize/deny is appended to the **hash-chained audit log** (EPIC 2) with action, credential id, counter, UV flag, and time — offline-verifiable.
+- **Default per-action** (no blanket "approve all"); scoped batch approvals only with explicit, signed scope.
+**Acceptance:** a gated action cannot proceed without a fresh UV signature over its exact bytes; an adversarial test suite where the agent *tries* to bypass (forge, replay, namespace-escape, prompt-spoof, race another approval) all fail; the audit log verifies offline; non-repudiation holds (a third party can prove which key authorized which action).
+**Stories:** (a) `#F` "assert/sign over an arbitrary challenge with UV" op + a verifier; (b) guard 9P service + the namespace policy that strips the raw capability from agent pgrps; (c) trusted approval UI (guard-drawn); (d) audit-log integration; (e) route gated agent tools (`write`/`exec`/`spawn`/`git`/`launch`/payments) through the guard; (f) adversarial "agent tries to escape" test suite.

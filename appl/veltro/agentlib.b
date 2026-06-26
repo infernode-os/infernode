@@ -70,6 +70,77 @@ settoolmount(path: string)
 }
 
 #
+# ==================== Read-cache (dedup) ====================
+#
+# Short-circuits identical read-only tool calls within a turn so the model
+# cannot burn its step budget re-reading content already in its context (a
+# measured failure mode — up to 21 identical reads of one file). Keyed on
+# "name args"; a mutating tool invalidates it, so read->edit->read still
+# re-reads the changed file. State is per agentlib instance (one per agent
+# process), so each loop has its own cache. Shared by veltro.b and
+# lucibridge.b — call dedupreset() at the start of each run/turn.
+readcache: list of (string, int);   # (name+args key, step first served)
+
+dedupisreadonly(name: string): int
+{
+	case name {
+	"read" or "list" or "find" or "search" or "grep" =>	return 1;
+	* =>	return 0;
+	}
+}
+
+dedupismutating(name: string): int
+{
+	case name {
+	"write" or "edit" or "exec" or "limbo" or "shell" or "safeexec" =>	return 1;
+	* =>	return 0;
+	}
+}
+
+# Clear the cache (call at the start of each agent run/turn).
+dedupreset()
+{
+	readcache = nil;
+}
+
+# Pre-execution check. A mutating tool invalidates the cache and returns "".
+# A read-only call whose identical args already ran returns a skip annotation
+# (caller should short-circuit with it instead of re-executing). Otherwise "".
+dedupcheck(name, args: string): string
+{
+	if(dedupismutating(name)) {
+		readcache = nil;
+		return "";
+	}
+	if(!dedupisreadonly(name))
+		return "";
+	for(c := readcache; c != nil; c = tl c) {
+		(k, s) := hd c;
+		if(k == name + " " + args) {
+			if(verbose)
+				sys->fprint(stderr, "agentlib: dedup skip %s (identical call first ran at step %d)\n", name, s);
+			return sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
+				name, truncate(args, 120), s);
+		}
+	}
+	return "";
+}
+
+# Post-execution record. A mutating tool invalidates the cache (covers callers
+# that did not pre-check, e.g. parallel batches). A successful read-only result
+# is remembered; errors are not cached (a retry may succeed).
+deduprecord(name, args, result: string, step: int)
+{
+	if(dedupismutating(name)) {
+		readcache = nil;
+		return;
+	}
+	if(!dedupisreadonly(name) || (len result >= 6 && result[0:6] == "error:"))
+		return;
+	readcache = (name + " " + args, step) :: readcache;
+}
+
+#
 # ==================== LLM Session Management ====================
 #
 
@@ -236,7 +307,7 @@ discovernamespace(): string
 # Build system prompt with namespace, reminders, and modular tool docs.
 # Does NOT append mode-specific suffix — callers add their own.
 # (from repl.b — has MAXPROMPT 8KB guard against 9P write limit)
-buildsystemprompt(ns: string): string
+buildsystemprompt(ns, persona: string): string
 {
 	# NOTE: The system prompt may be written to /mnt/llm/{id}/system via a single
 	# 9P Twrite. llmsrv's MaxMessageSize is 8192 bytes, and each write
@@ -248,6 +319,12 @@ buildsystemprompt(ns: string): string
 	base := readfile("/lib/veltro/system.txt");
 	if(base == "")
 		base = defaultsystemprompt();
+
+	# A persona (loaded from /lib/veltro/agents/<type>.txt by the caller)
+	# layers a specialised role ON TOP of the base policies, keeping the
+	# environment/grounding sections the base provides.
+	if(persona != "")
+		base += "\n\n== Agent Role ==\n" + persona;
 
 	(nil, toollist) := sys->tokenize(readfile(toolmount_g + "/tools"), "\n");
 

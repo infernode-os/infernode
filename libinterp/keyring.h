@@ -77,7 +77,9 @@ Runtab Keyringmodtab[]={
 	"p256_keygen",0xffffffffcae8d70e,Keyring_p256_keygen,64,0,{0},
 	"p256_make_point",0x6fa90725,Keyring_p256_make_point,72,2,{0x0,0x80,},
 	"p256_point_bytes",0x131763e3,Keyring_p256_point_bytes,72,2,{0x0,0x80,},
+	"p384_ecdh",0xffffffffb21f0c63,Keyring_p384_ecdh,80,2,{0x0,0xc0,},
 	"p384_ecdsa_verify",0x62e080aa,Keyring_p384_ecdsa_verify,88,2,{0x0,0xe0,},
+	"p384_keygen",0xffffffffe94519d8,Keyring_p384_keygen,64,0,{0},
 	"pktoattr",0xfffffffffb4e61ba,Keyring_pktoattr,72,2,{0x0,0x80,},
 	"pktostr",0xfffffffffb4e61ba,Keyring_pktostr,72,2,{0x0,0x80,},
 	"putbytearray",0x7cfef557,Keyring_putbytearray,88,2,{0x0,0xc0,},
@@ -128,4 +130,4 @@ Runtab Keyringmodtab[]={
 	"IPint.xor",0xffffffffa47c1b24,IPint_xor,80,2,{0x0,0xc0,},
 	0
 };
-#define Keyringmodlen	126
+#define Keyringmodlen	128

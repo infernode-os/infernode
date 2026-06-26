@@ -564,6 +564,60 @@ testP256ECDH(t: ref T)
 	t.assert(byteseq(shared1, shared2), "P-256 ECDH shared secrets match");
 }
 
+# ── P-384 ECDH (CNSA-approved curve; for the SecP384r1MLKEM1024 TLS hybrid) ──
+
+p384hexv(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return 0;
+}
+
+p384fromhex(s: string): array of byte
+{
+	a := array[len s / 2] of byte;
+	for(i := 0; i < len a; i++)
+		a[i] = byte((p384hexv(s[2*i]) << 4) | p384hexv(s[2*i+1]));
+	return a;
+}
+
+testP384ECDH(t: ref T)
+{
+	# round-trip: ecdh(a, B.pub) == ecdh(b, A.pub)
+	(sk1, pk1) := kr->p384_keygen();
+	(sk2, pk2) := kr->p384_keygen();
+	if(sk1 == nil || sk2 == nil) {
+		t.skip("p384_keygen not supported");
+		return;
+	}
+	t.assert(len sk1 == 48, "P-384 private key is 48 bytes");
+	t.assert(len pk1 == 97 && int pk1[0] == 16r04, "P-384 public key is 97-byte SEC1 uncompressed");
+
+	shared1 := kr->p384_ecdh(sk1, pk2);
+	shared2 := kr->p384_ecdh(sk2, pk1);
+	if(shared1 == nil || shared2 == nil) {
+		t.fatal("p384_ecdh returned nil");
+		return;
+	}
+	t.assert(len shared1 == 48, "P-384 shared secret is 48 bytes");
+	t.assert(byteseq(shared1, shared2), "P-384 ECDH shared secrets match");
+
+	# known-answer, cross-validated against OpenSSL: ecdh(d, Q) == Z
+	d  := p384fromhex("37baf696b92be4f4ff790f36617b716b718572daa46841040554962f36f9222800cc27002487f7d3df62a9519c4e7970");
+	qb := p384fromhex("041b447b404cd7baf8a96453ef52de61229256ccf504d454c19f23556bd7f15d7ba16c5451f10c68bd2ce5ab8a06685a31f75b8518f44b14f55d151230d4f1074d5059767500b8216f1ca31ec3e90d2c024a04d56e730d127439995fc14b23d956");
+	z  := p384fromhex("341483532711a09d2256c7cca37067c162ef819e4811a6dc2da9197bc057fef9fe7320ff99687e6ab0f7590a5c364ace");
+	got := kr->p384_ecdh(d, qb);
+	if(got == nil) {
+		t.fatal("p384_ecdh known-answer returned nil");
+		return;
+	}
+	t.assert(byteseq(got, z), "P-384 ECDH matches OpenSSL known-answer");
+}
+
 # ── P-256 ECDSA ─────────────────────────────────────────────────────────────
 
 testP256ECDSA(t: ref T)
@@ -709,6 +763,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Key exchange tests
 	run("X25519", testX25519);
 	run("P256ECDH", testP256ECDH);
+	run("P384ECDH", testP384ECDH);
 	run("P256ECDSA", testP256ECDSA);
 
 	if(testing->summary(passed, failed, skipped) > 0)

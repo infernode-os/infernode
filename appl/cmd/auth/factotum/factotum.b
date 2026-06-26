@@ -168,6 +168,34 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn factotumsrv();
 }
 
+hexdig(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+# Decode a 64-hex-char (32-byte) data key, or nil if malformed. Lets a 2FA
+# account encrypt its secstore save-back under the data key (see logon.b).
+unhexkey(s: string): array of byte
+{
+	if(len s != 64)
+		return nil;
+	a := array[32] of byte;
+	for(i := 0; i < 32; i++){
+		hi := hexdig(s[2*i]);
+		lo := hexdig(s[2*i+1]);
+		if(hi < 0 || lo < 0)
+			return nil;
+		a[i] = byte((hi << 4) | lo);
+	}
+	return a;
+}
+
 user(): string
 {
 	fd := sys->open("/dev/user", Sys->OREAD);
@@ -342,12 +370,15 @@ factotumsrv()
 			# verb "secstore" already stripped; s = "addr user password"
 			(nil, stoks) := sys->tokenize(s, " \t");
 			if(len stoks < 3){
-				wc <-= (0, "usage: secstore addr user password");
+				wc <-= (0, "usage: secstore addr user password [datakey]");
 				break;
 			}
 			saddr := hd stoks; stoks = tl stoks;
 			suser := hd stoks; stoks = tl stoks;
-			spass := hd stoks;
+			spass := hd stoks; stoks = tl stoks;
+			sdk := "";			# optional data key (hex): 2FA save-back encryption
+			if(stoks != nil)
+				sdk = hd stoks;
 			secstoreaddr = saddr;
 			secstoreuser = suser;
 			if(secstore == nil){
@@ -368,11 +399,18 @@ factotumsrv()
 			if(secstore != nil){
 				secstorepwhash = secstore->mkseckey(spass);
 				secstorepwhash2 = secstore->mkseckey2(spass);
-				secstorerootkey = secstore->mkfilekey3(secstoreuser, spass);
+				# 2FA: encrypt save-back under the data key (auth still uses the
+				# password); ordinary accounts use the password-derived root key.
+				dk2fa := unhexkey(sdk);
+				if(dk2fa != nil)
+					secstorerootkey = dk2fa;
+				else
+					secstorerootkey = secstore->mkfilekey3(secstoreuser, spass);
 				secstorefilekey = secstore->mkfilekey2(spass);
 				secstorelkey = secstore->mkfilekey(spass);
 			}
 			spass = nil;
+			sdk = nil;
 			# Start persist thread if not already running
 			if(dirtyc == nil){
 				dirtyc = chan of int;

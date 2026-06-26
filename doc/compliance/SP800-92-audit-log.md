@@ -14,6 +14,15 @@ regression-tested (AU-3, AU-8, AU-9, AU-9(3), AU-10). Operational tooling
 and is tracked. No claim below is asserted without a `file:line`, test, or commit
 pointer.
 
+> **Deployment default (accreditor note).** Auditing is **off by default** in the
+> general build — most installs do not need it, and the facility is loosely coupled
+> (emitters are no-ops when `/mnt/audit` is unmounted). The boot profile
+> (`lib/sh/profile`) mounts `auditfs` only when the opt-in marker
+> `/usr/inferno/audit/on` exists. **A compliant deployment MUST enable it** — either
+> `touch /usr/inferno/audit/on` (chain-only) or `sh /lib/sh/audit-setup` (enable +
+> factotum-signed checkpoints). This is a deliberate general-vs-hardened split; an
+> on-by-default hardened/compliance profile is tracked as **INFR-357**, not yet built.
+
 ---
 
 ## 1. What was built

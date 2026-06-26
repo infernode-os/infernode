@@ -87,15 +87,27 @@ its containing directory must already exist. With
 .B \-f
 a different path may be given.
 .PP
+Auditing is
+.B off by default
+(most installs do not need it): the boot profile mounts
+.I auditfs
+only when the opt-in marker
+.B /usr/inferno/audit/on
+exists. Enable chain-only auditing with
+.B touch /usr/inferno/audit/on ;
+disable by removing it. Compliance deployments that require AU-2
+logging must enable it.
+.PP
 Checkpoint signing is provided by
 .IR factotum (4),
 which holds the audit signer key;
 .I auditfs
-never holds it. Provision the key once after login with
+never holds it. Enable auditing and provision signing in one step with
 .B sh /lib/sh/audit-setup
-(it has factotum generate an ML-DSA-87 key in-process and seal it
-into secstore). Until then the chain is unsigned but still
-tamper-evident; checkpoints become signed automatically thereafter.
+(it sets the marker and has factotum generate an ML-DSA-87 key
+in-process, sealed into secstore). Until a key is provisioned the
+chain is unsigned but still tamper-evident; checkpoints become
+signed automatically thereafter.
 .PP
 .I Auditverify
 is the standalone offline verifier. It recomputes the hash chain
@@ -109,8 +121,7 @@ it also checks every checkpoint signature against the audit public
 key.
 .SH EXAMPLE
 .EX
-mount {auditfs} /mnt/audit          # normally done at boot
-sh /lib/sh/audit-setup              # once: factotum mints the signer key
+sh /lib/sh/audit-setup              # enable + factotum mints the signer key
 echo 'login unlock user=alice aal=3' >/mnt/audit/log
 echo checkpoint >/mnt/audit/ctl
 cat /mnt/audit/pubkey >/tmp/auditpub

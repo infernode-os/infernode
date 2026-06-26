@@ -17,7 +17,18 @@ if {! ftest -e /mnt/factotum/ctl} {
 	exit 'no factotum'
 }
 
+# Auditing is OFF by default; this opt-in marker enables it at every boot.
+mkdir -p /usr/inferno/audit
+touch /usr/inferno/audit/on
+
 # One short ctl line — factotum does the (large) key generation in-process.
 echo 'genkey proto=sign service=audit alg=mldsa87 owner=audit' > /mnt/factotum/ctl
 
-echo 'audit-setup: ML-DSA-87 audit signer key generated inside factotum/secstore'
+# Start the service now (so signing takes effect this session, not just
+# after the next boot) if it is not already mounted.
+if {! ftest -e /mnt/audit/ctl} {
+	mkdir -p /mnt/audit
+	mount {auditfs} /mnt/audit
+}
+
+echo 'audit-setup: auditing enabled; ML-DSA-87 signer key generated inside factotum/secstore'

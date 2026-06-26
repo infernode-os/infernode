@@ -942,11 +942,49 @@ Serve:
 		Remove =>
 			srv.remove(m);
 
+		Attach =>
+			# Robustness (INFR-349): every export connection to /mnt/llm is
+			# multiplexed by the kernel mnt device through this one styx link,
+			# and the mnt device never reuses a fid number it still considers
+			# live. So an attach for a fid we already hold can only be a stale
+			# orphan left behind when a client disconnected abruptly (emu
+			# kill -9, dropped TCP) before its fids were clunked. Reap it here
+			# so the new attach succeeds immediately, instead of replying
+			# "fid already in use" until TCP keepalive eventually tears down
+			# the dead export connection (the observed minutes-long stall).
+			reapstale(srv, m.fid);
+			srv.attach(m);
+
+		Walk =>
+			# Same orphan-reuse reasoning as Attach: a Twalk that clones onto
+			# a newfid we still hold is a recycled-after-disconnect number, so
+			# reap the stale entry rather than fail the clone with Einuse
+			# (surfaces to the client as "clone failed"/"mount rpc error").
+			# A same-fid walk (newfid == fid) allocates nothing — leave it be.
+			if(m.newfid != m.fid)
+				reapstale(srv, m.newfid);
+			srv.walk(m);
+
 		* =>
 			srv.default(gm);
 		}
 	}
 	navops <-= nil;
+}
+
+# Reap a stale fid before an attach/walk reuses its number (INFR-349). A
+# collision can only be an orphan from an abruptly-disconnected client (see
+# the Attach case for why), so dropping it from the fid table is always safe:
+# per-session state lives in the `sessions` array keyed by SESSID, not on the
+# Fid, so nothing is lost. Any async reader that already captured this Fid ref
+# keeps its copy — delfid only unlinks the hash entry.
+reapstale(srv: ref Styxserver, fid: int)
+{
+	c := srv.getfid(fid);
+	if(c != nil) {
+		finalizewrite(srv, fid);  # drop any half-written reassembly buffer
+		srv.delfid(c);
+	}
 }
 
 # --- Async generation goroutine ---

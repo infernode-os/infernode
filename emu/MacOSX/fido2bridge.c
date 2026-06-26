@@ -52,6 +52,16 @@ static char *first_device(void) {
     return path;
 }
 
+/* Number of connected FIDO authenticators. */
+static int device_count(void) {
+    fido_dev_info_t *dl = fido_dev_info_new(8);
+    size_t found = 0;
+    if (dl)
+        fido_dev_info_manifest(dl, 8, &found);
+    fido_dev_info_free(&dl, 8);
+    return (int)found;
+}
+
 int fido2bridge_available(void) {
     ensure_init();
     fido_dev_info_t *dl = fido_dev_info_new(8);
@@ -67,6 +77,13 @@ int fido2bridge_enroll(const char *pin, char *cred_hex, int cred_hexlen, char *e
     int rc = -1, e;
     int uv = (pin != NULL && pin[0] != 0);
     ensure_init();
+    /* make_cred and the immediate derive must hit the SAME key; with several
+     * keys plugged the host picks one arbitrarily and they can diverge. Force a
+     * single key for enrollment so the failure is a clear instruction. */
+    if (device_count() > 1) {
+        snprintf(err, errlen, "multiple security keys present — unplug the others and insert only the key you are enrolling");
+        return -1;
+    }
     char *path = first_device();
     if (!path) { snprintf(err, errlen, "no FIDO device present"); return -1; }
 

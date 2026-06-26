@@ -60,8 +60,9 @@ limbo -I module -o dis/tests/stress/dos_stall_test.dis tests/stress/dos_stall_te
 ./emu/Linux/o.emu -c1 -r$PWD /dis/tests/stress/dos_stall_test.dis -v
 ```
 
-Note: the server's per-connection handler has **no handshake timeout**, so
-stalled peers accumulate blocked handlers and fds for the life of the
-connection. The accept loop is not blocked (good), but a handshake-read
-deadline on `auth->server` would bound the resource a hostile peer can pin —
-worth considering if these nodes are exposed to untrusted networks.
+Production listeners now wrap `auth->server` with a pre-auth deadline
+(`listen -T ms` / `styxlisten -T ms`, default 30000 ms).  A stalled peer is
+hung up and its auth worker is killed after the deadline, bounding the handler
+proc and fd lifetime.  `tests/interop/run-auth-timeout.sh` verifies the real
+CLI path: a stalled TCP client is disconnected while a legitimate `mount -k`
+still succeeds against the same listener.

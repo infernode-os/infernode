@@ -275,8 +275,11 @@ Keyring: module
 	p256_make_point:   fn(pubkey: array of byte): ref ECpoint;
 	p256_point_bytes:  fn(pub: ref ECpoint): array of byte;
 
-	# P-384 ECDSA verify (raw byte arrays, no ADT)
+	# P-384 ECDSA verify + ECDH (raw byte arrays, no ADT).
+	# pub is SEC1 uncompressed: 0x04 || x || y (97 bytes).
 	p384_ecdsa_verify: fn(pubkey: array of byte, hash: array of byte, sig: array of byte): int;
+	p384_keygen: fn(): (array of byte, array of byte);	# => (priv[48], pub[97]=04||x||y)
+	p384_ecdh:   fn(priv: array of byte, pub: array of byte): array of byte;	# => shared[48]
 
 	# secp256k1 ECDSA (Ethereum/Bitcoin)
 	secp256k1_keygen:  fn(): (array of byte, array of byte);	# => (priv[32], pub[65])

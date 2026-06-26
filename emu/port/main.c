@@ -358,6 +358,14 @@ emuinit(void *imod)
 
 	if(cputype != nil)
 		ksetenv("cputype", cputype, 1);
+	{
+		/* CNSA 2.0 strict policy: reflect the host CNSAMODE into Inferno
+		 * /env/cnsamode so Limbo tools (createsignerkey, tls) honour the
+		 * same fleet-wide flag the native STS handshake reads via getenv. */
+		char *cnsa = getenv("CNSAMODE");
+		if(cnsa != nil && cnsa[0] != 0)
+			ksetenv("cnsamode", cnsa, 1);
+	}
 	putenvqv("emuargs", rebootargv, rebootargc, 1);
 	putenvq("emuroot", rootdir, 1);
 	ksetenv("emuhost", hosttype, 1);

@@ -7,11 +7,11 @@ implement Cmd2fa;
 #   2fa status     show whether this account is 2FA + whether a key is present
 #   2fa enroll     bind the present security key + a recovery passphrase (strong:
 #                  login then needs the key, or the recovery passphrase)
+#   2fa addkey     add a backup/second key (insert it; authorize with the
+#                  recovery passphrase) so losing one key doesn't lock you out
 #   2fa disable    revert this account to password-only
 #
-# Single key + recovery for now; a second (backup) key and a Settings GUI are
-# thin wrappers over twofaslot->enroll. The recovery passphrase is the
-# anti-lockout net — store it in your vault.
+# The recovery passphrase is the anti-lockout net — store it in your vault.
 #
 include "sys.m";
 	sys: Sys;
@@ -105,8 +105,10 @@ init(nil: ref Draw->Context, argv: list of string)
 			sys->fprint(stderr, "2fa disable: %s\n", e);
 	"enroll" =>
 		doenroll(user);
+	"addkey" =>
+		doaddkey(user);
 	* =>
-		sys->fprint(stderr, "usage: 2fa [status|enroll|disable]\n");
+		sys->fprint(stderr, "usage: 2fa [status|enroll|addkey|disable]\n");
 	}
 }
 
@@ -116,6 +118,7 @@ doenroll(user: string)
 		sys->fprint(stderr, "2fa: no security key present — insert your YubiKey first\n");
 		return;
 	}
+	sys->print("Insert ONLY the key to enroll (unplug any others, or enrollment fails).\n");
 	pass := prompt("secstore password: ");
 	if(pass == ""){
 		sys->fprint(stderr, "2fa: password required\n");
@@ -149,4 +152,47 @@ doenroll(user: string)
 		return;
 	}
 	sys->print("2FA enrolled for %s. Login now requires this key (or the recovery passphrase).\n", user);
+}
+
+doaddkey(user: string)
+{
+	if(!ts->is2fa(user)){
+		sys->fprint(stderr, "2fa: account is not 2FA — run '2fa enroll' first\n");
+		return;
+	}
+	if(!twofa->available()){
+		sys->fprint(stderr, "2fa: insert the BACKUP security key first\n");
+		return;
+	}
+	sys->print("Insert ONLY the backup key (unplug the others, or it fails).\n");
+	pass := prompt("secstore password: ");
+	if(pass == ""){
+		sys->fprint(stderr, "2fa: password required\n");
+		return;
+	}
+	recpass := prompt("recovery passphrase (authorizes adding a key): ");
+	if(recpass == ""){
+		sys->fprint(stderr, "2fa: recovery passphrase required\n");
+		return;
+	}
+	newpin := prompt("FIDO2 PIN for the BACKUP key (UV / AAL3; blank = touch-only): ");
+
+	sys->print("Creating a credential on the BACKUP key — touch it when it blinks...\n");
+	(cred, ce) := twofa->enroll(newpin);
+	if(ce != nil){
+		sys->fprint(stderr, "2fa: backup credential failed: %s\n", ce);
+		return;
+	}
+	salt := random->randombuf(Random->ReallyRandom, 32);
+	if(salt == nil || len salt != 32){
+		sys->fprint(stderr, "2fa: cannot generate salt\n");
+		return;
+	}
+	sys->print("Binding the backup key — touch it again...\n");
+	err := ts->addkey(user, pass, recpass, cred, tohex(salt), newpin);
+	if(err != nil){
+		sys->fprint(stderr, "2fa: addkey failed: %s\n", err);
+		return;
+	}
+	sys->print("Backup key added for %s. Either key (+ password) now unlocks login.\n", user);
 }

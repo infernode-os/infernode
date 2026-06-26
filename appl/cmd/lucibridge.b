@@ -581,7 +581,7 @@ initsession(): string
 	# Build system prompt from namespace discovery
 	ns := agentlib->discovernamespace();
 	log("initsession: namespace discovered");
-	sysprompt := agentlib->buildsystemprompt(ns);
+	sysprompt := agentlib->buildsystemprompt(ns, "");
 	log(sys->sprint("initsession: system prompt %d bytes", len array of byte sysprompt));
 
 	# Append role-specific suffix: meta prompt for activity 0 (main agent),
@@ -1141,7 +1141,7 @@ applypathchanges()
 	# (Mirrors the initsessiontools() call that fires when the tool set changes.)
 	if(sessionid != "") {
 		ns := agentlib->discovernamespace();
-		sysprompt := agentlib->buildsystemprompt(ns);
+		sysprompt := agentlib->buildsystemprompt(ns, "");
 		sfx := BRIDGE_SUFFIX;
 		if(actid == 0) {
 			meta := agentlib->readfile(META_PROMPT_PATH);
@@ -1347,8 +1347,13 @@ cowrevert(arg: string): string
 # blocking write), the response is displayed directly — no placeholder needed,
 # avoiding the event-delivery race where pushevent("conversation update N")
 # fires before nslistener re-issues its pending read.
+# Read-cache (dedup of identical read-only tool calls) lives in agentlib —
+# agentlib->dedup{reset,check,record}; shared with veltro.b.
+
 agentturn(input: string)
 {
+	agentlib->dedupreset();	# fresh read-cache per turn
+
 	# Sync convcount with actual server message count before streaming.
 	syncconvcount();
 
@@ -1557,9 +1562,20 @@ agentturn(input: string)
 					continue;
 				}
 
+				# Read-cache: skip identical read-only repeats (agentlib);
+				# a mutating tool invalidates it (so read->edit->read re-reads).
+				dcskip := agentlib->dedupcheck(nm, eargs);
+				if(dcskip != "") {
+					results = (id, dcskip) :: results;
+					writefile(ctxpath, "resource update path=" + nm + " status=idle");
+					if(fpath != nil)
+						writefile(ctxpath, "resource update path=" + fpath + " status=idle");
+					continue;
+				}
 				setstatus(nm);
 				log("tool " + name + ": calling with " + string len eargs + " bytes");
 				result := agentlib->calltool(name, eargs);
+				agentlib->deduprecord(nm, eargs, result, step);
 				setstatus("working");
 				writefile(ctxpath, "resource update path=" + nm + " status=idle");
 				if(fpath != nil)

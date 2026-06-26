@@ -1976,6 +1976,8 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 
 	# Step 4: separate maskedDB and H
 	dblen := emlen - hashlen - 1;
+	if(dblen <= saltlen)
+		return "PSS: encoded message too short";
 	maskeddb := em[0:dblen];
 	h := em[dblen:dblen + hashlen];
 

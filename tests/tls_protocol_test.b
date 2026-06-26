@@ -375,6 +375,37 @@ testServerHelloBadSuite(t: ref T)
 	expecterr(t, response, "unsupported suite");
 }
 
+testServerHelloExtensionLengthTooLong(t: ref T)
+{
+	body := array [40] of {* => byte 0};
+	body[0] = byte 16r03;
+	body[1] = byte 16r03;
+	body[35] = byte 16rC0;
+	body[36] = byte 16r2F;
+	body[37] = byte 0;
+	put16(body, 38, 16rFFFF);
+	hsmsg := mkhsmsg(2, body);
+	response := mkrecord(22, hsmsg);
+	expecterr(t, response, "ServerHello extensions truncated");
+}
+
+testServerHelloExtensionHeaderTruncated(t: ref T)
+{
+	body := array [43] of {* => byte 0};
+	body[0] = byte 16r03;
+	body[1] = byte 16r03;
+	body[35] = byte 16rC0;
+	body[36] = byte 16r2F;
+	body[37] = byte 0;
+	put16(body, 38, 3);
+	body[40] = byte 0;
+	body[41] = byte 16r2B;
+	body[42] = byte 0;
+	hsmsg := mkhsmsg(2, body);
+	response := mkrecord(22, hsmsg);
+	expecterr(t, response, "ServerHello extension truncated");
+}
+
 testCNSABadHybridP384Point(t: ref T)
 {
 	body := mkbadcnsa13serverhello();
@@ -449,7 +480,21 @@ testCertMsgTruncated(t: ref T)
 	certrec := mkrecord(22, certmsg);
 
 	response := catbytes(shrec, certrec);
-	expecterr(t, response, "certificate truncated");
+	expecterr(t, response, "Certificate msg truncated");
+}
+
+testCertListLengthTooLong(t: ref T)
+{
+	sh := mkhsmsg(2, mkserverhello());
+	shrec := mkrecord(22, sh);
+
+	certbody := array [3] of {* => byte 0};
+	certbody[2] = byte 1;
+	certmsg := mkhsmsg(11, certbody);
+	certrec := mkrecord(22, certmsg);
+
+	response := catbytes(shrec, certrec);
+	expecterr(t, response, "Certificate msg truncated");
 }
 
 # ================================================================
@@ -505,6 +550,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ServerHelloUnsupportedVersion", testServerHelloUnsupportedVersion);
 	run("ServerHelloNonNullCompression", testServerHelloNonNullCompression);
 	run("ServerHelloBadSuite", testServerHelloBadSuite);
+	run("ServerHelloExtensionLengthTooLong", testServerHelloExtensionLengthTooLong);
+	run("ServerHelloExtensionHeaderTruncated", testServerHelloExtensionHeaderTruncated);
 	run("CNSABadHybridP384Point", testCNSABadHybridP384Point);
 
 	# Alert handling
@@ -516,6 +563,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Certificate message tests
 	run("CertMsgTooShort", testCertMsgTooShort);
 	run("CertMsgTruncated", testCertMsgTruncated);
+	run("CertListLengthTooLong", testCertListLengthTooLong);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

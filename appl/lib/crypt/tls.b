@@ -1411,6 +1411,8 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 		ext_len := get16(data, off);
 		off += 2;
 		ext_end := off + ext_len;
+		if(ext_end > len data)
+			return (nil, 0, 0, 0, nil, "tls: ServerHello extensions truncated");
 
 		while(off + 4 <= ext_end) {
 			etype := get16(data, off);
@@ -1418,7 +1420,7 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 			off += 4;
 
 			if(off + elen > ext_end)
-				break;
+				return (nil, 0, 0, 0, nil, "tls: ServerHello extension truncated");
 
 			case etype {
 			EXT_SUPPORTED_VERSIONS =>
@@ -1436,6 +1438,8 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 			}
 			off += elen;
 		}
+		if(off != ext_end)
+			return (nil, 0, 0, 0, nil, "tls: ServerHello extension truncated");
 	}
 
 	# Validate suite
@@ -1463,16 +1467,21 @@ parsecertificatemsg(data: array of byte): (list of array of byte, string)
 
 	total_len := get24(data, 0);
 	off := 3;
+	end := off + total_len;
+	if(end > len data)
+		return (nil, "tls: Certificate msg truncated");
 	certs: list of array of byte;
 
-	while(off + 3 <= len data && off - 3 < total_len) {
+	while(off + 3 <= end) {
 		cert_len := get24(data, off);
 		off += 3;
-		if(off + cert_len > len data)
+		if(off + cert_len > end)
 			return (nil, "tls: certificate truncated");
 		certs = data[off:off+cert_len] :: certs;
 		off += cert_len;
 	}
+	if(off != end)
+		return (nil, "tls: certificate truncated");
 
 	# Reverse to get original order (leaf first)
 	result: list of array of byte;
@@ -1499,6 +1508,8 @@ parsecertificatemsg13(data: array of byte): (list of array of byte, string)
 	certs: list of array of byte;
 
 	end := off + total_len;
+	if(end > len data)
+		return (nil, "tls: Certificate msg truncated");
 	while(off + 3 <= end) {
 		cert_len := get24(data, off);
 		off += 3;
@@ -1510,9 +1521,13 @@ parsecertificatemsg13(data: array of byte): (list of array of byte, string)
 		# TLS 1.3: extensions per certificate entry
 		if(off + 2 <= end) {
 			ext_len := get16(data, off);
+			if(off + 2 + ext_len > end)
+				return (nil, "tls: certificate extensions truncated");
 			off += 2 + ext_len;
 		}
 	}
+	if(off != end)
+		return (nil, "tls: certificate truncated");
 
 	# Reverse
 	result: list of array of byte;
@@ -1961,6 +1976,8 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 
 	# Step 4: separate maskedDB and H
 	dblen := emlen - hashlen - 1;
+	if(dblen <= saltlen)
+		return "PSS: encoded message too short";
 	maskeddb := em[0:dblen];
 	h := em[dblen:dblen + hashlen];
 

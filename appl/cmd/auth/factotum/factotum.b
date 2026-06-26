@@ -31,6 +31,9 @@ include "arg.m";
 
 include "readdir.m";
 
+include "audit.m";
+	audit: Audit;
+
 Factotum: module
 {
 	init:	fn(nil: ref Draw->Context, nil: list of string);
@@ -84,6 +87,13 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
 	authio = load Authio "$self";
+
+	# Optional: emit credential-lifecycle events to the tamper-evident
+	# audit log (AU-2). Loosely coupled — a no-op if auditfs is not
+	# mounted, and never holds or logs key material (see auditkey()).
+	audit = load Audit Audit->PATH;
+	if(audit != nil)
+		audit->init();
 
 	svcname := "#sfactotum";
 	mntpt := "/mnt/factotum";
@@ -257,6 +267,7 @@ factotumsrv()
 				break;
 			}
 			allkeys = addkey(allkeys, k);
+			auditkey("keyadd", k.safetext());
 			wc <-= (len data, nil);
 			if(dirtyc != nil)
 				alt { dirtyc <-= 1 => ; * => ; }
@@ -272,6 +283,7 @@ factotumsrv()
 			if(delkey(allkeys, attrs) == 0)
 				wc <-= (0, "no matching keys");
 			else{
+				auditkey("keydel", attrtext(attrs));
 				wc <-= (len data, nil);
 				if(dirtyc != nil)
 					alt { dirtyc <-= 1 => ; * => ; }
@@ -820,6 +832,16 @@ attrtext(attrs: list of ref Attr): string
 		s += (hd attrs).text();
 	}
 	return s;
+}
+
+# auditkey seals one credential-lifecycle event (AU-2). The descriptor
+# must carry only public attributes — never a secret value. Key.safetext
+# redacts secrets to "name?", and delkey patterns reject private fields,
+# so both call sites are safe. A no-op when auditfs is not mounted.
+auditkey(event, descr: string)
+{
+	if(audit != nil)
+		audit->log("factotum", event, descr);
 }
 
 lookattr(attrs: list of ref Attr, n: string): ref Attr

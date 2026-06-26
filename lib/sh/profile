@@ -90,9 +90,15 @@ if {~ $emuhost MacOSX Linux Nt}{
 # Enable + signing:      sh /lib/sh/audit-setup         (factotum-held key)
 # Disable:               rm /usr/inferno/audit/on; unmount /mnt/audit
 # Mounted BEFORE the auth services so their events are captured (AU-2/AU-9).
-# Compliance deployments require AU-2 logging and MUST enable this — see
+# Compliance deployments require AU-2 logging — a hardened deployment sets
+# the host env AUDITMODE=on (like CNSAMODE) to default it on without an
+# operator step; the general build leaves it unset. See INFR-357 and
 # doc/compliance/SP800-92-audit-log.md. Non-fatal: never blocks boot.
 mkdir -p /usr/inferno/audit >[2] /dev/null
+if {~ $emuhost MacOSX Linux}{
+	auditmode=`{os sh -c 'if [ -n "$AUDITMODE" ]; then echo on; fi' >[2] /dev/null}
+	if {~ $auditmode on} { touch /usr/inferno/audit/on >[2] /dev/null }
+}
 if {ftest -f /usr/inferno/audit/on} {
 	mkdir -p /mnt/audit >[2] /dev/null
 	mount {auditfs} /mnt/audit >[2] /dev/null

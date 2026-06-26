@@ -1411,6 +1411,8 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 		ext_len := get16(data, off);
 		off += 2;
 		ext_end := off + ext_len;
+		if(ext_end > len data)
+			return (nil, 0, 0, 0, nil, "tls: ServerHello extensions truncated");
 
 		while(off + 4 <= ext_end) {
 			etype := get16(data, off);
@@ -1418,7 +1420,7 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 			off += 4;
 
 			if(off + elen > ext_end)
-				break;
+				return (nil, 0, 0, 0, nil, "tls: ServerHello extension truncated");
 
 			case etype {
 			EXT_SUPPORTED_VERSIONS =>
@@ -1436,6 +1438,8 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 			}
 			off += elen;
 		}
+		if(off != ext_end)
+			return (nil, 0, 0, 0, nil, "tls: ServerHello extension truncated");
 	}
 
 	# Validate suite

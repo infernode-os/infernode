@@ -22,6 +22,13 @@ badmodule(p: string)
 verbose := 0;
 passhostnames := 0;
 
+# Upper bound (ms) on the pre-authentication handshake. Without it a
+# half-open / slowloris client that never completes keyring auth pins
+# the authenticator proc (and its host kproc thread) forever, since
+# auth->server reads the socket with no timeout — an unbounded pre-auth
+# thread leak. Legitimate auth completes in well under a second. INFR-353.
+AUTHTIMEOUT: con 30*1000;
+
 init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -130,17 +137,24 @@ listener(c: Sys->Connection, mfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, 
 				spawn exportproc(sync, mfd, nil, hostname, dfd);
 				<-sync;
 			} else
-				spawn authenticator(dfd, authinfo, mfd, algs, hostname);
+				spawn authenticator(dfd, nc.cfd, authinfo, mfd, algs, hostname);
 		}
 	}
 }
 
 # authenticate a connection and set the user id.
-authenticator(dfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref Sys->FD,
+authenticator(dfd: ref Sys->FD, cfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref Sys->FD,
 		algs: list of string, hostname: string)
 {
+	# Bound the handshake with a watchdog: cancel is buffered so the
+	# post-handshake send never blocks whether or not the watchdog has
+	# already woken. INFR-353.
+	cancel := chan[1] of int;
+	spawn authtimeout(cfd, cancel, hostname);
+
 	# authenticate and change user id appropriately
 	(fd, err) := auth->server(algs, authinfo, dfd, 1);
+	cancel <-= 1;
 	if (fd == nil) {
 		if (verbose)
 			sys->fprint(stderr(), "styxlisten: authentication failed: %s\n", err);
@@ -151,6 +165,22 @@ authenticator(dfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref Sys->F
 	sync := chan of int;
 	spawn exportproc(sync, mfd, err, hostname, fd);
 	<-sync;
+}
+
+# Hang up the connection if the auth handshake has not completed within
+# AUTHTIMEOUT, unblocking the auth read so the authenticator proc exits.
+authtimeout(cfd: ref Sys->FD, cancel: chan of int, hostname: string)
+{
+	sys->sleep(AUTHTIMEOUT);
+	alt {
+	<-cancel =>
+		;	# handshake finished in time
+	* =>
+		if (verbose)
+			sys->fprint(stderr(), "styxlisten: pre-auth timeout from %s; hanging up\n", hostname);
+		if (cfd != nil)
+			sys->fprint(cfd, "hangup");
+	}
 }
 
 exportproc(sync: chan of int, fd: ref Sys->FD, uname, hostname: string, dfd: ref Sys->FD)

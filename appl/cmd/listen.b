@@ -24,6 +24,16 @@ badmodule(p: string)
 serverkey: ref Keyring->Authinfo;
 verbose := 0;
 
+# Upper bound (ms) on the pre-authentication handshake. A client that
+# connects but never completes keyring auth (half-open / slowloris)
+# would otherwise pin the authenticator proc — and its host kproc
+# thread — indefinitely, because auth->server reads the socket with no
+# timeout of its own. Left unbounded, a stream of such connections grows
+# the emu's kproc thread pool without limit (a pre-auth DoS). Legitimate
+# keyring auth completes in well under a second even over a slow remote
+# link, so 30s is generous. See INFR-353.
+AUTHTIMEOUT: con 30*1000;
+
 init(drawctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -101,6 +111,12 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	if(e != nil)
 		raise "fail:" + e;
 	if(synchronous){
+		# Positive, fail-loud serving indication: in synchronous
+		# (daemon) mode the announce has succeeded by now, so emit a
+		# line a supervisor/journal can latch onto. Without this the
+		# only post-startup evidence is the absence of a crash, which
+		# is indistinguishable from a silent wedge (INFR-353).
+		sys->fprint(stderr(), "listen: listening on %s\n", hd argv);
 		e = <-sync;
 		if(e != nil)
 			raise "fail:" + e;
@@ -212,8 +228,15 @@ listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: str
 authenticator(authch: chan of (string, Sys->Connection),
 		c: Sys->Connection, algs: list of string, addr: string)
 {
+	# Arm a watchdog before the (potentially blocking, un-timed) auth
+	# handshake. cancel is buffered so the post-handshake send never
+	# blocks, whether or not the watchdog has already woken. INFR-353.
+	cancel := chan[1] of int;
+	spawn authtimeout(c.cfd, cancel, addr);
+
 	err: string;
 	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 1);
+	cancel <-= 1;
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
 		return;
@@ -221,6 +244,24 @@ authenticator(authch: chan of (string, Sys->Connection),
 	if (verbose)
 		sys->fprint(stderr(), "listen: authenticated on %s as %s\n", addr, err);
 	authch <-= (err, c);
+}
+
+# Hang up the connection if the authentication handshake has not
+# completed within AUTHTIMEOUT. Writing "hangup" to the connection's
+# control fd tears down the transport, which unblocks the auth read in
+# auth->server so the authenticator proc (and its kproc thread) exits.
+authtimeout(cfd: ref Sys->FD, cancel: chan of int, addr: string)
+{
+	sys->sleep(AUTHTIMEOUT);
+	alt {
+	<-cancel =>
+		;	# handshake finished in time; nothing to do
+	* =>
+		if (verbose)
+			sys->fprint(stderr(), "listen: pre-auth timeout on %s; hanging up\n", addr);
+		if (cfd != nil)
+			sys->fprint(cfd, "hangup");
+	}
 }
 
 stderr(): ref Sys->FD

@@ -51,6 +51,9 @@ include "arg.m";
 include "string.m";
 	str: String;
 
+include "audit.m";
+	audit: Audit;
+
 Secstored: module
 {
 	init: fn(nil: ref Draw->Context, nil: list of string);
@@ -77,6 +80,16 @@ PAKparams: adt {
 paklegacy: ref PAKparams;
 pak3: ref PAKparams;
 
+# auditlog emits a security event to the tamper-evident audit log if the
+# service is bound into the namespace. Loosely coupled: a nil module or an
+# absent /mnt/audit is silently ignored (fail-open). Authentication events
+# are AU-2 / AU-3 records.
+auditlog(source, event, msg: string)
+{
+	if(audit != nil)
+		audit->log(source, event, msg);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -85,6 +98,9 @@ init(nil: ref Draw->Context, args: list of string)
 	base64 = load Encoding Encoding->BASE64PATH;
 	dialler = load Dial Dial->PATH;
 	str = load String String->PATH;
+	audit = load Audit Audit->PATH;	# optional: audit log emitter
+	if(audit != nil)
+		audit->init();
 
 	if(kr == nil || ssl == nil || base64 == nil || dialler == nil || str == nil)
 		fatal("cannot load required modules");
@@ -173,10 +189,12 @@ serve(lconn: ref Dial->Connection)
 	(user, hexHi) := pakserver(sslconn);
 	if(user == nil){
 		log("PAK auth failed");
+		auditlog("secstore", "authfail", "");
 		return;
 	}
 
 	log("authenticated: " + user);
+	auditlog("secstore", "authok", "user=" + user);
 
 	# Send OK
 	sys->fprint(sslconn.dfd, "OK");

@@ -1467,16 +1467,21 @@ parsecertificatemsg(data: array of byte): (list of array of byte, string)
 
 	total_len := get24(data, 0);
 	off := 3;
+	end := off + total_len;
+	if(end > len data)
+		return (nil, "tls: Certificate msg truncated");
 	certs: list of array of byte;
 
-	while(off + 3 <= len data && off - 3 < total_len) {
+	while(off + 3 <= end) {
 		cert_len := get24(data, off);
 		off += 3;
-		if(off + cert_len > len data)
+		if(off + cert_len > end)
 			return (nil, "tls: certificate truncated");
 		certs = data[off:off+cert_len] :: certs;
 		off += cert_len;
 	}
+	if(off != end)
+		return (nil, "tls: certificate truncated");
 
 	# Reverse to get original order (leaf first)
 	result: list of array of byte;
@@ -1503,6 +1508,8 @@ parsecertificatemsg13(data: array of byte): (list of array of byte, string)
 	certs: list of array of byte;
 
 	end := off + total_len;
+	if(end > len data)
+		return (nil, "tls: Certificate msg truncated");
 	while(off + 3 <= end) {
 		cert_len := get24(data, off);
 		off += 3;
@@ -1514,9 +1521,13 @@ parsecertificatemsg13(data: array of byte): (list of array of byte, string)
 		# TLS 1.3: extensions per certificate entry
 		if(off + 2 <= end) {
 			ext_len := get16(data, off);
+			if(off + 2 + ext_len > end)
+				return (nil, "tls: certificate extensions truncated");
 			off += 2 + ext_len;
 		}
 	}
+	if(off != end)
+		return (nil, "tls: certificate truncated");
 
 	# Reverse
 	result: list of array of byte;

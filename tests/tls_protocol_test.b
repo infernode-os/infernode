@@ -480,7 +480,21 @@ testCertMsgTruncated(t: ref T)
 	certrec := mkrecord(22, certmsg);
 
 	response := catbytes(shrec, certrec);
-	expecterr(t, response, "certificate truncated");
+	expecterr(t, response, "Certificate msg truncated");
+}
+
+testCertListLengthTooLong(t: ref T)
+{
+	sh := mkhsmsg(2, mkserverhello());
+	shrec := mkrecord(22, sh);
+
+	certbody := array [3] of {* => byte 0};
+	certbody[2] = byte 1;
+	certmsg := mkhsmsg(11, certbody);
+	certrec := mkrecord(22, certmsg);
+
+	response := catbytes(shrec, certrec);
+	expecterr(t, response, "Certificate msg truncated");
 }
 
 # ================================================================
@@ -549,6 +563,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Certificate message tests
 	run("CertMsgTooShort", testCertMsgTooShort);
 	run("CertMsgTruncated", testCertMsgTruncated);
+	run("CertListLengthTooLong", testCertListLengthTooLong);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

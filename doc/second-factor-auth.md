@@ -1,8 +1,17 @@
 # Second-Factor Authentication for InferNode
 
-**Status:** Draft — 2026-06-15
-**Scope:** Add hardware/external second-factor unlock to InferNode login, with a
+**Status:** As-built — 2026-06-25. Phases 0-2 shipped: YubiKey-gated login with
+UV/AAL3 (FIDO PIN), a backup key, a recovery passphrase, and a Settings GUI are
+live (**EPIC 1 closed**). Phases 3-4 (mobile-biometric provider, factotum proto)
+remain future.
+**Scope:** Hardware/external second-factor unlock for InferNode login, with a
 provider-agnostic design (YubiKey first, mobile biometrics second, others later).
+
+> This file began as the design draft and has been updated to describe the
+> **as-built** system. Where the shipped design diverged from the original
+> proposal — the device name, the file layout, and the key-slot crypto — the
+> as-built form is documented here and the original intent kept as a *design
+> note* for context.
 
 ---
 
@@ -79,26 +88,34 @@ Refs: Security in Plan 9 (9p.io/sys/doc/auth.html), `factotum(4)`,
 
 ## 5. Architecture: the pluggable authenticator
 
-### 5.1 A provider-agnostic 9P service: `/mnt/2fa`
+### 5.1 A provider-agnostic device: `#F` → `/dev/2fa`
 
 Expose second factors the Inferno way — as a file server — so callers
-(`logon`, factotum, wallet) never link a device library. Proposed interface:
+(`logon`, factotum, wallet) never link a device library. As built this is the
+**`#F` device** (`emu/port/devtfa.c`), bound into the namespace at `/dev/2fa`
+(`bind "#F" /dev/2fa`, see `appl/lib/twofa.b`). Its synthetic file tree:
 
 ```
-/mnt/2fa/
-    providers          # read: list available providers, one per line:
-                       #   yubikey-fido2  present  "YubiKey 5C Nano 37602882"
-                       #   phone-bio      present  "Face ID"
-    ctl                # write: select/enroll, e.g. "enroll provider=yubikey-fido2 name=login"
-    challenge          # write a 32-byte challenge, then read the response:
-                       #   write -> provider does presence/biometric + compute
-                       #   read  -> high-entropy response bytes (or error)
-    status             # read: last op result / presence state
+/dev/2fa/
+    providers   # read: available backends, e.g. "yubikey-fido2 available=1"
+    ctl         # write "enroll" (touch-only) or "enroll <pin>" (UV/AAL3) to bind
+                #   a credential; write "clear" to forget. read: status line.
+    cred        # read: the enrolled credential id (hex)
+    derive      # write "<cred-hex> <salt-hex> [pin]" -> the key proves presence
+                #   (touch, +PIN under UV) and computes a device-bound 32-byte
+                #   secret; read it back as hex.
 ```
 
-`challenge`/response is the universal primitive: every provider reduces to
-"given this challenge, return a stable secret, after proving presence." That
-secret is mixed into the secstore file key (§6).
+`derive` is the universal challenge→response primitive expressed as file I/O:
+**write the salt (challenge), read the secret (response)**. The write *blocks*
+on the physical touch/PIN ceremony, exactly as a slow read blocks. Every provider
+reduces to "given this salt, return a stable device-bound secret after proving
+presence." That secret (`R`) is wrapped into the secstore key-slots (§6).
+
+> *Design note:* the original draft proposed `/mnt/2fa` with `challenge` +
+> `status` files and a `#²` device. The shipped form uses `#F` → `/dev/2fa` and
+> folds challenge/response into the read-write `derive` file (plus a `cred` file
+> for the enrolled credential id). The semantics are identical; the names differ.
 
 ### 5.2 Providers
 
@@ -109,61 +126,105 @@ secret is mixed into the secstore file key (§6).
 | `phone-bio` | existing `/phone/bio_*` bridge | Secure Enclave / StrongBox key | Face/Touch ID |
 | `totp` (later) | pure Limbo | RFC 6238 (weak, fallback only) | none |
 
-The point of the abstraction: `logon.b` asks `/mnt/2fa` for a response to a
+The point of the abstraction: a caller asks `/dev/2fa` for a response to a
 challenge and does **not care** whether a YubiKey was touched or a thumb was
-scanned. Desktop and mobile share one code path.
+scanned. Desktop and mobile share one code path. (As built, `yubikey-fido2` is
+live; `yubikey-hmac`, `phone-bio`, and `totp` are provider slots the file
+interface already accommodates.)
 
 ### 5.3 The emu host bridge
 
-Inferno runs inside the `emu` host emulator, which today has **no** USB/PCSC/HID
-access. We add a host-side device that mirrors the existing mobile bridge:
+Inferno runs inside the `emu` host emulator, which has **no** native USB/HID
+access. The `#F` device is a deliberately thin **text relay**: `devtfa.c` parses
+one line and calls the host-side bridge — it does no crypto and no USB itself.
 
-- Pattern to copy: `/phone/bio_store` ↔ `/phone/bio_retrieve`
-  (`emu/port/devphone.c`, `emu/iOS/phonebridge.m`, `emu/Android/phonebridge.c`).
-- New: `emu/port/dev2fa.c` exposing `#²/2fa/...` (bound to `/mnt/2fa`), calling
-  **host libfido2 / PC-SC** — which the host already has installed. The bridge
-  does no crypto of its own; it relays challenge→response.
+- The bridge: `emu/MacOSX/fido2bridge.c`, pure C against **libfido2** with *no
+  Inferno headers* (to avoid name clashes). It does the real work —
+  `fido_dev_make_cred` with the `FIDO_EXT_HMAC_SECRET` extension, `fido_dev_open`
+  over USB HID. Registered into the device table in `emu/MacOSX/emu.c`.
+- When libfido2 is absent at build time (`-DHAVE_FIDO2` unset), the entry points
+  compile as stubs so the emu still builds without `/dev/2fa` support.
+- Same idiom as the mobile biometric bridge (`/phone/bio_*`,
+  `emu/port/devphone.c`); a blocking bridge call runs in the writing kproc,
+  exactly as `devphone` blocks on a biometric prompt.
 
 So: same Plan 9 device idiom, libfido2 lives on the host side of the emu
-boundary, Inferno sees only files.
+boundary, **Inferno sees only files**. On a native Inferno kernel the device
+would speak USB directly; the file interface above it is identical either way.
 
-## 6. Crypto: mixing the factor into the file key
+### 5.4 The namespace bind *is* the capability
 
-Enrollment binds a factor to the account; unlock requires it.
+Because `/dev/2fa` is a **per-process namespace bind**, access to the second
+factor is governed by the namespace, not a separate permission system. A
+sandboxed agent whose restricted namespace simply *omits* `/dev/2fa` cannot
+`open` the key at all — there is nothing to ask permission for; the file is not
+there. This is the most "Plan 9" property of the design: capability-gating
+reduces to namespace construction. See the veltro agent-sandbox hardening
+(`appl/veltro/nsconstruct.b`; `NodevsBlocksDeviceAttach` in
+`tests/veltro_security_test.b`) and EPIC 7 (hardware-backed authorization of
+agent actions).
 
-**Enroll** (once, after password is set):
-1. `logon` writes `enroll provider=… name=login` to `/mnt/2fa/ctl`.
-   - FIDO2: create a credential with the `hmac-secret` extension; store the
-     non-secret `credential_id` + RP info in `/usr/inferno/secstore/<user>/2fa/`.
-   - phone-bio: generate a Secure-Enclave key; store its public handle.
-2. Generate a random 32-byte `salt`, persist it next to the credential id.
+## 6. Crypto: per-account key-slots (the LUKS model)
 
-**Unlock** (every login):
-1. `logon` reads `salt`, writes `challenge = salt` to `/mnt/2fa/challenge`.
-2. Provider proves presence and returns `R` (FIDO2 hmac-secret output, or an
-   Enclave signature/HMAC over the challenge).
-3. Derive the effective file key:
-   `filekey = HKDF-SHA256( mkfilekey3(user,pass) || R, info="secstore 2fa" )`.
-4. Proceed exactly as today (PAK, fetch blob, `decrypt3`).
+> *Design note:* the original draft mixed `R` straight into the secstore file
+> key via HKDF. The shipped design is stronger — a **key-slot / LUKS envelope**
+> (`module/twofaslot.m`, `appl/lib/twofaslot.b`) — so one vault can hold several
+> independent unlock paths (primary key, backup key, recovery passphrase). The
+> way `R` is obtained from the device is unchanged.
 
-Properties: the blob needs **both** password and physical factor. `R` is stable
-(same challenge → same secret), so the same vault decrypts every time, but only
-with the device present. No private key from the device ever enters Inferno.
+A 2FA account's factotum blob is encrypted under a single random **data key DK**.
+DK is then wrapped once per *slot*, each slot a file under
+`/usr/inferno/secstore/<user>/2fa/`. Each slot is `encrypt3(DK, KEK)`
+(AES-256-GCM, SGCM2):
 
-**FIDO2 `hmac-secret`** is preferred (reuses the FIDO2 PIN we already set;
-presence via touch). **HMAC-SHA1 chal-resp** is the simpler LUKS-style fallback.
+- **key slot:** `KEK = mkkek2fa(rootkey, R)` — needs the password
+  (`rootkey = mkfilekey3(user,pass)`) **and** the device-bound `R` (a YubiKey
+  `hmac-secret` output, gated by touch, +PIN under UV/AAL3).
+- **recovery slot:** `KEK = mkfilekey3(user, recoverypass)` — a recovery
+  passphrase only, the dev / lost-key safety net.
+
+**Enroll** (`twofaslot->writeslots`, verify-before-commit): re-encrypt the
+factotum blob under a fresh random DK; derive `R` per key (touch); wrap DK into
+each key slot + the recovery slot; **verify every slot unwraps DK** and the new
+blob round-trips; *then* replace the live blob. Abort and keep the legacy form on
+any mismatch.
+
+**Unlock** (`twofaslot->unlock`, every login): try each key slot first — derive
+`R` from the present YubiKey (touch), `KEK = mkkek2fa(rootkey,R)`,
+`DK = decrypt3(slot, KEK)`; fall back to the recovery slot if a recovery
+passphrase is supplied. Then `decrypt3` the factotum blob under DK and proceed as
+today (PAK, fetch, write `/mnt/factotum/ctl`).
+
+**Backup key** (`twofaslot->addkey`): wraps the *same* DK into a new key slot
+(unlocked via the recovery passphrase) so a second YubiKey is no single point of
+failure — the NERV "pairs only" rule (Nano + NFC).
+
+Properties:
+- A 2FA account has **no password-only slot**, so the blob needs *both* the
+  password and a physical factor — that is the real at-rest strength. A legacy
+  (no-slot) account is byte-for-byte the old format, so no-key users are
+  unaffected.
+- `R` is stable (same salt → same secret), so the vault decrypts every time, but
+  only with the device present. No private key from the device ever enters
+  Inferno; the FIDO2 PIN supplies the "who" (AAL3).
+- The presence of the `2fa/` slot dir is the sole marker that an account is in
+  2FA mode (`twofaslot->is2fa`).
 
 ## 7. Integration points (file-by-file)
 
-| File | Change |
-|------|--------|
-| `emu/port/dev2fa.c` (new) | host bridge → libfido2/PCSC; serves `/mnt/2fa` |
-| `emu/port/portdat.h`, device table | register `dev2fa` |
-| `module/twofa.m` (new) | Limbo interface to `/mnt/2fa` |
-| `appl/lib/twofa.b` (new) | challenge/response + enroll helpers |
-| `appl/lib/secstore.b` | add `mkfilekey3_2fa(user,pass,R)` HKDF mixing (§6) |
-| `appl/wm/logon.b` | enroll flow + "Unlock with security key / biometrics" path; call into 2fa before `connectfactotum` |
-| `appl/cmd/auth/factotum/proto/2fa.b` (new, later) | optional `proto=2fa` so factotum can challenge on demand |
+| File | As-built role |
+|------|---------------|
+| `emu/port/devtfa.c` | the `#F` device; serves `/dev/2fa` (text relay) |
+| `emu/MacOSX/fido2bridge.c` | host bridge → libfido2 (hmac-secret, USB HID) |
+| `emu/MacOSX/emu.c` | registers `tfadevtab` in the device table |
+| `module/twofa.m`, `appl/lib/twofa.b` | Limbo file interface to `/dev/2fa` |
+| `module/twofaslot.m`, `appl/lib/twofaslot.b` | key-slot envelope: `is2fa`/`unlock`/`writeslots`/`addkey`/`disable` (§6) |
+| `appl/lib/secstore.b` | `mkkek2fa(rootkey,R)` + `encrypt3`/`decrypt3` for DK wrapping |
+| `appl/cmd/2fa.b` | CLI: `enroll` / `addkey` / `disable` |
+| `appl/wm/logon.b` | `STATE_FIDOPIN` prompt; `connectfactotum(pass,recoverypass,fidopin)`; DK-aware secstore save-back |
+| `appl/wm/settings.b` | Settings "Security" panel — enroll / backup / disable GUI |
+| `appl/cmd/auth/factotum/factotum.b` | secstore `ctl` accepts an optional data-key (DK) |
+| `appl/cmd/auth/factotum/proto/2fa.b` (future) | optional `proto=2fa` so factotum can challenge on demand |
 
 ## 8. Threat model, recovery, caveats
 
@@ -181,21 +242,27 @@ presence via touch). **HMAC-SHA1 chal-resp** is the simpler LUKS-style fallback.
 
 ## 9. Phasing
 
-- **Phase 0 — Host PoC (no Inferno):** prove FIDO2 `hmac-secret` (and/or
-  HMAC-SHA1) round-trips deterministically with the real YubiKey via host
-  libfido2. De-risks the whole foundation. *Testable now.*
-- **Phase 1 — emu bridge + 9P service:** `dev2fa.c`, `/mnt/2fa`, `providers` +
-  `challenge` working against one real YubiKey. Limbo `twofa` module.
-- **Phase 2 — secstore mixing + logon UI:** `mkfilekey3_2fa`, enroll/unlock in
-  `logon.b`. End-to-end YubiKey-gated login.
-- **Phase 3 — second provider:** wire `phone-bio` through the existing
+- **Phase 0 — Host PoC (no Inferno):** ✅ done. FIDO2 `hmac-secret` round-trips
+  deterministically with the real YubiKey via host libfido2.
+- **Phase 1 — emu bridge + device:** ✅ done. `devtfa.c` (`#F` → `/dev/2fa`),
+  `fido2bridge.c`, `providers` + `derive` against a real YubiKey; Limbo `twofa`.
+- **Phase 2 — secstore key-slots + logon:** ✅ done. `twofaslot` key-slots;
+  enroll / unlock / backup / recovery in `logon.b`; **UV/AAL3** (FIDO PIN); and a
+  Settings GUI. End-to-end YubiKey-gated login. **EPIC 1 closed** — see
+  `doc/compliance/SP800-63B-AAL3.md` and `doc/compliance/FIDO2-CTAP2.md`.
+- **Phase 3 — second provider (future):** wire `phone-bio` through the existing
   `/phone/bio_*` bridge → mobile biometric unlock, same code path.
-- **Phase 4 — factotum proto + wallet:** `proto=2fa`; gate wallet-key access.
+- **Phase 4 — factotum proto + wallet (future):** `proto=2fa`; gate wallet-key
+  access.
 
 ## 10. Open questions
 
-- Two-factor-mandatory vs. password-recovery-allowed as the default policy?
-- Where to persist per-account 2fa metadata — extend the secstore blob, or a
-  sibling `2fa/` dir (chosen above for bootstrap-before-unlock)?
-- Should `hmac-secret` salt rotate, and how to re-key the vault if it does?
-- NFC path for `yubikey-fido2` on mobile (the 5C NFC) — reuse `phone` bridge?
+- ~~Two-factor-mandatory vs. password-recovery-allowed?~~ **Resolved:** a 2FA
+  account has no password-only slot, but a **recovery passphrase** slot is the
+  safety net (high-security deployments can omit it).
+- ~~Where to persist per-account 2fa metadata?~~ **Resolved:** a sibling
+  `/usr/inferno/secstore/<user>/2fa/` slot dir (bootstrap-before-unlock).
+- Should the `hmac-secret` salt rotate, and how to re-key the vault if it does?
+  (Backup-key add already re-wraps DK via `writeslots`/`addkey` verify-before-
+  commit; full salt rotation remains open.)
+- NFC path for `yubikey-fido2` on mobile (the 5C NFC) — reuse the `phone` bridge?

@@ -21,6 +21,7 @@ badmodule(p: string)
 
 verbose := 0;
 passhostnames := 0;
+authtimeout := 30000;
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
@@ -39,7 +40,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		badmodule(Arg->PATH);
 
 	arg->init(argv);
-	arg->setusage("styxlisten [-a alg]... [-Atsv] [-k keyfile] address cmd [arg...]");
+	arg->setusage("styxlisten [-a alg]... [-Atsv] [-T ms] [-k keyfile] address cmd [arg...]");
 
 	algs: list of string;
 	doauth := 1;
@@ -62,6 +63,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			passhostnames = 1;
 		't' =>
 			trusted = 1;
+		'T' =>
+			authtimeout = int arg->earg();
+			if(authtimeout < 1000)
+				authtimeout = 1000;
 		's' =>
 			synchronous = 1;
 		'A' =>
@@ -130,17 +135,17 @@ listener(c: Sys->Connection, mfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, 
 				spawn exportproc(sync, mfd, nil, hostname, dfd);
 				<-sync;
 			} else
-				spawn authenticator(dfd, authinfo, mfd, algs, hostname);
+				spawn authenticator(dfd, nc.cfd, authinfo, mfd, algs, hostname);
 		}
 	}
 }
 
 # authenticate a connection and set the user id.
-authenticator(dfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref Sys->FD,
+authenticator(dfd, cfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref Sys->FD,
 		algs: list of string, hostname: string)
 {
 	# authenticate and change user id appropriately
-	(fd, err) := auth->server(algs, authinfo, dfd, 1);
+	(fd, err) := authserver(algs, authinfo, dfd, cfd, 1);
 	if (fd == nil) {
 		if (verbose)
 			sys->fprint(stderr(), "styxlisten: authentication failed: %s\n", err);
@@ -151,6 +156,44 @@ authenticator(dfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref Sys->F
 	sync := chan of int;
 	spawn exportproc(sync, mfd, err, hostname, fd);
 	<-sync;
+}
+
+authworker(pidc: chan of int, rc: chan of (ref Sys->FD, string),
+		algs: list of string, ai: ref Keyring->Authinfo, dfd: ref Sys->FD, setid: int)
+{
+	pidc <-= sys->pctl(0, nil);
+	rc <-= auth->server(algs, ai, dfd, setid);
+}
+
+timerproc(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+nethangup(cfd: ref Sys->FD)
+{
+	if(cfd != nil)
+		sys->fprint(cfd, "hangup");
+}
+
+authserver(algs: list of string, ai: ref Keyring->Authinfo,
+		dfd, cfd: ref Sys->FD, setid: int): (ref Sys->FD, string)
+{
+	pidc := chan[1] of int;
+	rc := chan[1] of (ref Sys->FD, string);
+	tmo := chan[1] of int;
+	spawn authworker(pidc, rc, algs, ai, dfd, setid);
+	pid := <-pidc;
+	spawn timerproc(tmo, authtimeout);
+	alt {
+	(fd, err) := <-rc =>
+		return (fd, err);
+	<-tmo =>
+		nethangup(cfd);
+		kill(pid, "kill");
+		return (nil, "authentication timeout");
+	}
 }
 
 exportproc(sync: chan of int, fd: ref Sys->FD, uname, hostname: string, dfd: ref Sys->FD)

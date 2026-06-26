@@ -5,10 +5,16 @@ Security Systems).
 **Roadmap row:** Cryptographic foundation — CNSA 2.0, Tier 0→1.
 **Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`../security-epics.md`](../security-epics.md)).
 **Artifact date:** 2026-06-22.
-**Overall status:** **Substantially met.** Every CNSA 2.0 algorithm is implemented
-natively at the required (or higher) security category, with passing regression tests.
-Two parameter-selection items and one signing-scheme item remain for *strict-mode*
-CNSA 2.0 and are tracked as gaps below.
+**Overall status:** **All in-scope CNSA 2.0 algorithm requirements Met under CNSA-strict mode.**
+Every applicable CNSA 2.0 algorithm is implemented natively at the required security
+category. The two parameter-selection gaps are closed under a fleet-wide **CNSA mode**
+(the host `CNSAMODE` env var, reflected by the emu into Inferno `/env/cnsamode`, off by
+default): **ML-KEM-1024** is negotiated end-to-end on both transports (G1 — native STS
+multi-node-verified + TLS interop-verified vs OpenSSL) and **ML-DSA-87** is the signing
+default (G2). The **LMS/XMSS firmware-signing** item (G3) is determined **Not Applicable**
+— InferNode has no firmware and no in-system signed-image verification; distribution
+releases are signed by a hardware YubiKey (with ML-DSA-87 available should a PQ release
+signature be required). See §3.5.
 
 ---
 
@@ -77,11 +83,11 @@ implementation and the regression test.
 | Requirement | ML-KEM-1024 (Category 5) |
 | Implementation | `libsec/mlkem.c`, `libsec/mlkem_ntt.c`, `libsec/mlkem_poly.c`. **Both** ML-KEM-768 *and* ML-KEM-1024 keygen/encaps/decaps present (`mlkem1024_*`) — sizes per FIPS 203 (`docs/CRYPTO-MODERNIZATION.md` §8) |
 | Keyring binding | `libinterp/keyring.c` builtins (`Keyring_mlkem768_keygen` at `:3944`, ML-KEM-1024 counterparts) |
-| In use | Hybrid X25519+ML-KEM-768 in TLS 1.3 (`GROUP_X25519MLKEM768 = 0x4588`, `appl/lib/crypt/tls.b:74`); mutual ML-KEM-768 in the native 9P/Styx STS handshake (`libinterp/keyring.c` `Keyring_auth`, `mlkem768_keygen` at `:1847`, SHA3-512 combiner) |
+| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`, SHA3-512 combiner). **TLS 1.3** — classical X25519 by default; under CNSA mode the client offers the **SecP384r1MLKEM1024** hybrid (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Note: the older `GROUP_X25519MLKEM768 = 0x4588` constant existed but was never wired into the TLS key_share; the CNSA path supersedes it.)* |
 | Evidence | `tests/mlkem_test.b` (KAT + round-trip), `tests/mlkem_stress_test.b`, `tests/pqauth_test.b` (hybrid handshake, downgrade-rejected, tamper-rejected), `tests/handshake_fuzz_test.b` |
-| Status | **Substantially met** — Category-5 primitive (ML-KEM-1024) implemented and tested; **negotiated key exchange uses ML-KEM-768 (Category 3)**. See Gap G1. |
+| Status | **Met (CNSA-strict mode)** — both transports negotiate **ML-KEM-1024** under CNSA mode. *Native STS:* `Keyring_auth` uses `mlkem1024_*`; **multi-node verified** (`tests/cnsa_nodepair_test.sh`) — two CNSA nodes complete the 1024 handshake over TCP, a mixed 1024/768 pair is rejected (no silent downgrade); `tests/pqauth_test.b` passes 11/11 in both modes. *TLS 1.3:* the client offers **SecP384r1MLKEM1024** (P-384 ECDH + ML-KEM-1024, ECDH-first combiner) — **interop-verified against OpenSSL 3.6** (`tests/tls_cnsa_hybrid_test.sh`): the hybrid handshake + application data succeed, the classical path still works, and a CNSA client refuses an X25519-only server. Default deployments stay classical (ML-KEM-768 native / X25519 TLS). |
 
-### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅ primitive / ⚠ default
+### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅
 
 | Item | Detail |
 |------|--------|
@@ -91,16 +97,17 @@ implementation and the regression test.
 | X.509 | OIDs `id-ML-DSA-65` 2.16.840.1.101.3.4.3.18, `id-ML-DSA-87` …3.19 (`appl/lib/crypt/pkcs.b`, `appl/lib/crypt/x509.b`) |
 | Key generation | `auth/createsignerkey -a mldsa87 <name>`, or the **`-c` CNSA flag** (selects ML-DSA-87 in one option) (`appl/cmd/auth/createsignerkey.b`) |
 | Evidence | `tests/mldsa_test.b` (KAT, sign/verify, wrong-key rejection, cert verify), `tests/mldsa_stress_test.b`, `tests/pqauth_test.b` *HybridHandshakeMLDSA* (fully-PQ handshake) |
-| Status | **Substantially met** — ML-DSA-87 implemented, tested, and now a one-flag CNSA selection (`createsignerkey -c`). The *system-wide* default signer remains ed25519 (non-CNSA deployments unchanged); a global "CNSA mode" across all signing surfaces is the remainder of Gap G2. |
+| Status | **Met (CNSA-strict mode)** — with CNSA mode on (`/env/cnsamode`), `createsignerkey` defaults to **ML-DSA-87** (verified: the generated key matches the `-c` mldsa87 key size, ~20 KB, vs the 651 B ed25519 default); the `-c` flag and `-a` override are unchanged. Default deployments stay on ed25519. |
 
-### 3.5 Software/firmware signing — LMS/XMSS ⚠ substitute present
+### 3.5 Software/firmware signing — LMS/XMSS — Not Applicable (no firmware in scope)
 
 | Item | Detail |
 |------|--------|
-| Requirement | LMS or XMSS stateful hash-based signatures (NIST SP 800-208) for software/firmware signing |
-| Present instead | **SLH-DSA** (FIPS 205, *stateless* hash-based): `libsec/slhdsa*.c` (WOTS+ / FORS / hypertree), registered `slhdsa192s`/`slhdsa256s` (`libinterp/keyring.c:2407`–`:2410`); X.509 OIDs …3.22 / …3.26 |
-| Evidence | `tests/slhdsa_test.b`, `tests/mldsa_stress_test.b` (SLH-DSA stress) |
-| Status | **Gap.** SLH-DSA is a conservative, hash-based, FIPS-approved signature scheme and a strong substitute, but it is **not** the LMS/XMSS that CNSA 2.0 names for the software/firmware-signing role. See Gap G3. |
+| Requirement | LMS or XMSS stateful hash-based signatures (NIST SP 800-208) for **firmware/software image** signing — i.e. offline-signed boot/update images that a system verifies at load. |
+| Applicability | **Not applicable to the current architecture.** InferNode ships **no firmware**, and the runtime performs **no in-system verification of signed firmware/software images** that would invoke a stateful hash-based scheme. (Signer keys sign *authentication certificates* for the 9P/Styx STS handshake — `appl/cmd/auth/`, `proto=infauth` — not code. In-system signed `.dis` modules are a *future* supply-chain roadmap item, `doc/security-standards-roadmap.md`, not a current mechanism.) The LMS/XMSS mandate targets the absent offline-image-signing role. |
+| Actual control | Distribution **releases are signed out-of-band by a hardware YubiKey at release time** (human-gated, hardware-bound key — `yubikey/` git/PIV signing). This is a supply-chain authenticity control on the release artifact, not an in-system signing key. |
+| PQ posture / forward path | The release signature is presently ECDSA (`ecdsa-sk`, P-256) — classical, transition-era. If a *quantum-resistant* software/release signature is later required (e.g. when "signed `.dis` modules" lands), the system already provides **ML-DSA-87** (FIPS 204, §3.4) via `createsignerkey` — usable with no new crypto. Implementing **LMS/XMSS is not warranted**: there is no offline image-signing use case for it, and its stateful one-time-key management would add catastrophic-reuse risk for no benefit. SLH-DSA (FIPS 205) also remains available (`libsec/slhdsa*.c`, `slhdsa192s`/`slhdsa256s`) as a *stateless* hash-based option. |
+| Status | **Resolved — Not Applicable.** The LMS/XMSS firmware-signing mandate has no applicable artifact (no firmware / no in-system signed-image verification); the compensating control is hardware (YubiKey) release signing, with ML-DSA-87 available as the PQ option. *Accreditor to confirm the applicability determination.* (G3 closed.) |
 
 ### 3.6 Supporting primitive — SHA-3 / SHAKE (FIPS 202) ✅
 

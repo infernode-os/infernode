@@ -54,8 +54,14 @@ models: list of string;
 # (name, default-model, default-tools-csv).
 #
 # coder: backed by the Daedalus fine-tune (Limbo-capable), with the tool
-# surface a coding loop typically needs. Tools must still be in the
-# delegation budget; missing ones are dropped at provision time.
+# surface a coding loop typically needs.
+# research: a web-research loop (decompose -> fan out -> synthesize -> cite),
+# backed by gpt-oss with search/fetch and spawn for parallel sub-questions.
+# verify: an adversarial "run it, don't read it" checker (exec + read tools,
+# no write/edit — read-only on the project) that emits a PASS/FAIL/PARTIAL
+# verdict backed by captured output.
+# Tools must still be in the delegation budget; missing ones are dropped at
+# provision time.
 agentdefs: list of (string, string, string);
 
 init(): string
@@ -72,7 +78,11 @@ init(): string
 
 	models = "gpt-oss" :: "daedalus" :: "haiku" :: "sonnet" :: "opus" :: nil;
 
-	agentdefs = ("coder", "daedalus", "read,write,edit,find,grep,list,limbo") :: nil;
+	agentdefs =
+		("coder", "daedalus", "read,write,edit,find,grep,list,limbo") ::
+		("research", "gpt-oss", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
+		("verify", "gpt-oss", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
+		nil;
 
 	return nil;
 }

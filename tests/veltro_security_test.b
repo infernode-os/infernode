@@ -322,13 +322,17 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
-	# Verify /mnt is NOT accessible when no /mnt subtree is granted.
-	# /mnt holds application mount points (MCP adapters at /mnt/mcp) and is
-	# capability-gated like /n — a child with no grant must see no /mnt at all
-	# (docs/NAMESPACE-LAYOUT.md, INFR-252).
-	(mok, nil) := sys->stat("/mnt");
-	if(mok >= 0) {
-		result <-= "/mnt should NOT be accessible without a /mnt grant";
+	# /mnt/llm is the agent's brain and is auto-granted when present. Sibling
+	# application mount points remain capability-gated.
+	(llmok, nil) := sys->stat("/mnt/llm");
+	if(llmok < 0) {
+		result <-= "/mnt/llm should be accessible after restrictns when present";
+		return;
+	}
+
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "/mnt/acme must NOT be visible when only /mnt/llm is auto-granted";
 		return;
 	}
 
@@ -934,7 +938,53 @@ toolCtlHiddenWorker(result: chan of string)
 }
 
 # ============================================================================
-# Test 15: StagedWriteManifest
+# Test 15: InvalidGrantPathsRejected
+# Verifies traversal-shaped capability paths fail before namespace mutation.
+# A tools9p caller must not be able to force restrictns() to abort midway,
+# because tools execute after restrictns() and a partial namespace can leave
+# root-level project paths visible.
+# ============================================================================
+testInvalidGrantPathsRejected(t: ref T)
+{
+	result := chan of string;
+	spawn invalidGrantPathsWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+invalidGrantPathsWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	bad := array[] of {
+		"/",
+		"/n/local/project/../secret",
+		"/n/local/project/./secret",
+		"/n/local/project//secret",
+		"n/local/project",
+	};
+
+	for(i := 0; i < len bad; i++) {
+		caps := ref NsConstruct->Capabilities(
+			"read" :: nil,
+			bad[i] :: nil,
+			nil, nil,
+			0 :: 1 :: 2 :: nil,
+			nil, 0, 0, -1, nil
+		);
+		err := nsconstruct->restrictns(caps);
+		if(err == nil) {
+			result <-= "restrictns accepted invalid grant path: " + bad[i];
+			return;
+		}
+	}
+
+	result <-= "";
+}
+
+# ============================================================================
+# Test 16: StagedWriteManifest
 # Verifies the staged-write backend contract that writable granted paths are
 # surfaced as perm=cow in the namespace manifest when writepaths + actid are
 # present. Full cowfs lifecycle tests still live separately because mounted
@@ -1076,6 +1126,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PathsExposure", testPathsExposure);
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 	run("ToolCtlHidden", testToolCtlHidden);
+	run("InvalidGrantPathsRejected", testInvalidGrantPathsRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
 
 	# Print summary

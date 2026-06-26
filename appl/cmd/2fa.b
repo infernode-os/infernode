@@ -118,6 +118,7 @@ doenroll(user: string)
 		sys->fprint(stderr, "2fa: no security key present — insert your YubiKey first\n");
 		return;
 	}
+	sys->print("Insert ONLY the key to enroll (unplug any others, or enrollment fails).\n");
 	pass := prompt("secstore password: ");
 	if(pass == ""){
 		sys->fprint(stderr, "2fa: password required\n");
@@ -163,6 +164,7 @@ doaddkey(user: string)
 		sys->fprint(stderr, "2fa: insert the BACKUP security key first\n");
 		return;
 	}
+	sys->print("Insert ONLY the backup key (unplug the others, or it fails).\n");
 	pass := prompt("secstore password: ");
 	if(pass == ""){
 		sys->fprint(stderr, "2fa: password required\n");

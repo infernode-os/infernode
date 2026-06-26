@@ -200,9 +200,12 @@ hardware validation alongside the IPv6 task.
 
 One design observation surfaced by the DoS test: `node_server.b` spawns a
 per-connection handler, so a stalled handshake does **not** block the accept
-loop (good) — but `auth->server` has **no handshake-read deadline**, so a
-hostile peer that connects and never speaks pins a handler proc + fds for the
-life of the connection. A read timeout on the handshake would bound that.
+loop.  Production listeners now also bound the resource a hostile peer can pin:
+`listen` and `styxlisten` accept `-T ms` and default to a 30000 ms pre-auth
+deadline.  On timeout the listener hangs up the network connection and kills
+the auth worker.  `tests/interop/run-auth-timeout.sh` verifies the real
+production path: a stalled TCP client is disconnected while a legitimate
+`mount -k` still succeeds against the same listener.
 
 ## Performance baselines (hardware-run)
 

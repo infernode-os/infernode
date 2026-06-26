@@ -1424,3 +1424,73 @@ p384_ecdsa_verify(uchar sig[96], ECpoint384 *pub, uchar *hash, int hashlen)
 	mpfree(w); mpfree(u1m); mpfree(u2m);
 	return ok;
 }
+
+/*
+ * P-384 (secp384r1) ECDH key agreement.  Mirrors the P-256 path, reusing the
+ * constant-time Montgomery ladder (point384_mul), the on-curve check, and the
+ * Jacobian->affine helper.  Added for CNSA 2.0 strict-mode TLS
+ * (SecP384r1MLKEM1024 hybrid).  Scalars are 48-byte big-endian; the shared
+ * secret is the 48-byte big-endian x-coordinate of priv*peerpub.
+ */
+int
+p384_keygen(uchar priv[48], ECpoint384 *pub)
+{
+	fe384 RX, RY, RZ, chkx, chky, one;
+	uchar kbuf[48], nbuf[48];
+	mpint *k, *n;
+
+	/* random scalar reduced into 1 <= k < n */
+	genrandom(kbuf, 48);
+	fe384_to_bytes(nbuf, P384_N);
+	k = betomp(kbuf, 48, nil);
+	n = betomp(nbuf, 48, nil);
+	mpmod(k, n, k);
+	if(mpcmp(k, mpzero) == 0)
+		mpassign(mpone, k);
+	mp384_to_bytes(priv, k);
+	mpfree(k);
+	mpfree(n);
+
+	/* public key Q = k * G */
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0; one[4] = 0; one[5] = 0;
+	point384_mul(RX, RY, RZ, priv, P384_Gx, P384_Gy, one);
+	if(fe384_is_zero(RZ))
+		return -1;
+	point384_to_affine(pub->x, pub->y, RX, RY, RZ);
+
+	/* sanity: the generated point must be on the curve */
+	bytes384_to_fe(chkx, pub->x);
+	bytes384_to_fe(chky, pub->y);
+	if(!point384_on_curve(chkx, chky))
+		return -1;
+	return 0;
+}
+
+int
+p384_ecdh(uchar shared[48], uchar priv[48], ECpoint384 *peerpub)
+{
+	fe384 px, py, one;
+	fe384 RX, RY, RZ;
+	fe384 zinv, zinv2, ax;
+
+	bytes384_to_fe(px, peerpub->x);
+	bytes384_to_fe(py, peerpub->y);
+
+	/* reject the identity and any off-curve point (invalid-curve attack) */
+	if(fe384_is_zero(px) && fe384_is_zero(py))
+		return -1;
+	if(!point384_on_curve(px, py))
+		return -1;
+
+	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0; one[4] = 0; one[5] = 0;
+	point384_mul(RX, RY, RZ, priv, px, py, one);
+	if(fe384_is_zero(RZ))
+		return -1;
+
+	/* shared secret = x-coordinate of priv * peerpub */
+	fe384_inv(zinv, RZ);
+	fe384_sqr(zinv2, zinv);
+	fe384_mul(ax, RX, zinv2, P384_P);
+	fe384_to_bytes(shared, ax);
+	return 0;
+}

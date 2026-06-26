@@ -15,7 +15,6 @@ TARG=\
 	mkauthinfo.dis\
 	passwd.dis\
 	signer.dis\
-	mkauditkey.dis\
 	verify.dis\
 	secstore.dis\
 	secstored.dis\

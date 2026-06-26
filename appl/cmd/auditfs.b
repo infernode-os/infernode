@@ -77,9 +77,9 @@ seq := 0;			# sequence number of the last record (0 = none)
 # which holds the signer key — auditfs never sees the private key. When
 # factotum is unreachable or holds no audit signer key, checkpoints are
 # unsigned chain markers and the head must be anchored externally. The
-# public key (not a secret) is published as a plain file and served at
+# public key (not a secret) is fetched from factotum and served at
 # /mnt/audit/pubkey. See doc/compliance/audit-log-factotum-signing-DESIGN.md.
-pubpath := "/usr/inferno/audit/pub";
+pubkey := "";			# audit public key, fetched from factotum and cached
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -210,9 +210,14 @@ serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 					s = sys->sprint("ok %d\n", seq);
 				srv.reply(styxservers->readstr(tm, s));
 			Qpubkey =>
-				# The audit public key is published as a plain file
-				# (it is not a secret); empty if not provisioned.
-				srv.reply(styxservers->readstr(tm, readfile(pubpath)));
+				# Fetch the audit public key from factotum once, then
+				# cache it; empty if not provisioned / factotum absent.
+				if(pubkey == ""){
+					pk := factotumpubkey();
+					if(pk != nil && len pk > 0)
+						pubkey = string pk + "\n";
+				}
+				srv.reply(styxservers->readstr(tm, pubkey));
 			* =>
 				srv.reply(ref Rmsg.Error(tm.tag, "phase error -- bad path"));
 			}
@@ -281,33 +286,48 @@ writectl(s: string): string
 }
 
 # factotumsign asks factotum to sign `content` with the audit signer key
-# it holds, and returns the certificate string as raw bytes (the caller
-# hex-encodes it for the record). Returns nil if factotum is unreachable
-# or holds no audit key, so the caller degrades to an unsigned marker.
-# auditfs never sees the private key (AU-10). The certificate can exceed
-# the factotum RPC frame, so it arrives in chunks until "done".
+# it holds, returning the certificate string as raw bytes (the caller
+# hex-encodes it for the record). nil if factotum is unreachable or holds
+# no audit key, so the caller degrades to an unsigned marker. auditfs
+# never sees the private key (AU-10).
 factotumsign(content: array of byte): array of byte
+{
+	return factotumcall("proto=sign service=audit role=client", content);
+}
+
+# factotumpubkey fetches the audit public key (not a secret) from factotum.
+factotumpubkey(): array of byte
+{
+	return factotumcall("proto=sign service=audit role=client op=pubkey", nil);
+}
+
+# factotumcall drives factotum's sign proto over the rpc file: start, an
+# optional content write (nil for pubkey), then read the (possibly chunked)
+# result until "done". Returns nil on any failure. The result can exceed
+# the RPC frame (an mldsa87 cert is ~6KB), hence the read loop.
+factotumcall(params: string, content: array of byte): array of byte
 {
 	if(fac == nil)
 		return nil;
 	afd := fac->open();
 	if(afd == nil)
 		return nil;
-	(o, nil) := fac->rpc(afd, "start",
-		array of byte "proto=sign service=audit role=client");
+	(o, nil) := fac->rpc(afd, "start", array of byte params);
 	if(o != "ok")
 		return nil;
-	(o, nil) = fac->rpc(afd, "write", content);
-	if(o != "ok")
-		return nil;
-	cert := array[0] of byte;
+	if(content != nil){
+		(o, nil) = fac->rpc(afd, "write", content);
+		if(o != "ok")
+			return nil;
+	}
+	out := array[0] of byte;
 	for(;;){
 		(st, chunk) := fac->rpc(afd, "read", nil);
 		case st {
 		"ok" =>
-			cert = concat(cert, chunk);
+			out = concat(out, chunk);
 		"done" =>
-			return cert;
+			return out;
 		* =>
 			return nil;
 		}

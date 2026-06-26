@@ -2,27 +2,22 @@
 
 # audit-setup - provision the audit checkpoint-signing key into factotum.
 #
-# Generates an ML-DSA-87 (CNSA 2.0 Category 5) signer key in memory,
-# publishes its public key to /usr/inferno/audit/pub, and seals the
-# private key into factotum, which persists it (encrypted) to secstore.
-# The private key is never written to disk in plaintext. auditfs then asks
-# factotum to sign checkpoints and never sees the private key (AU-10).
+# Asks factotum to GENERATE an ML-DSA-87 (CNSA 2.0 Category 5) signer key
+# internally: the private key is born inside factotum and never crosses the
+# wire or touches disk in plaintext. factotum persists it (encrypted) to
+# secstore. auditfs then asks factotum to sign checkpoints and to hand out
+# the public key, and never sees the private key (AU-10).
 #
-# Run once, after login, with factotum and secstore up. Idempotent only in
-# that re-running mints a NEW key (the old public key stops verifying old
-# checkpoints) — so run it deliberately. See
-# doc/compliance/audit-log-factotum-signing-DESIGN.md.
+# Run once, after login, with factotum and secstore up. Re-running mints a
+# NEW key (old public key stops verifying old checkpoints), so run it
+# deliberately. See doc/compliance/audit-log-factotum-signing-DESIGN.md.
 
 if {! ftest -e /mnt/factotum/ctl} {
 	echo 'audit-setup: factotum is not running; mount it first' >[1=2]
 	exit 'no factotum'
 }
 
-mkdir -p /usr/inferno/audit
+# One short ctl line — factotum does the (large) key generation in-process.
+echo 'genkey proto=sign service=audit alg=mldsa87 owner=audit' > /mnt/factotum/ctl
 
-# mkauditkey writes the public key to the file argument and prints the
-# single-line factotum key (bearing the private key) to stdout, which we
-# pipe straight into factotum. Nothing touches disk in plaintext.
-auth/mkauditkey /usr/inferno/audit/pub > /mnt/factotum/ctl
-
-echo 'audit-setup: ML-DSA-87 audit signer key sealed into factotum/secstore'
+echo 'audit-setup: ML-DSA-87 audit signer key generated inside factotum/secstore'

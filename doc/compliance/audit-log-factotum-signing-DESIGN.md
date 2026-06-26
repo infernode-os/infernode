@@ -40,24 +40,27 @@ disk" forces a holder, and that holder is factotum.
   that calls `kr->sign` is PQC-capable with no crypto code of our own. (The SHA-256
   hash chain already gives quantum-resistant tamper-*evidence*; ML-DSA protects the
   *non-repudiation* — "provably signed by the audit authority a decade later".)
-- **No factotum *core* change.** Protos are auto-discovered: `readprotos()` lists
-  `/dis/auth/proto/*.dis` and `startproto()` loads `"/dis/auth/proto/"+p+".dis"`
-  ([`factotum.b:525,602`](../../appl/cmd/auth/factotum/factotum.b)). A new
-  `sign.dis` is picked up automatically. The key arrives via the existing secstore
-  persistence path. **`factotum.b` itself is untouched.**
+- **Minimal factotum core surface.** The signing logic is an auto-discovered proto
+  (`readprotos()`/`startproto()` load `/dis/auth/proto/*.dis`,
+  [`factotum.b:525,602`](../../appl/cmd/auth/factotum/factotum.b)). The only core change is
+  a small `genkey` ctl verb so factotum can *mint* the (10 KB) PQC key in-process — see
+  §7a; without it the key cannot be injected over the 8192-byte ctl frame, and minting it
+  inside factotum is also the strongest P2 (the SK never exists anywhere else).
 
 ## 3. Architecture
 
 ```
 provisioning (once, after login):           runtime (every checkpoint):
-  createsignerkey -a mldsa87  -> SK,PK         auditfs writectl("checkpoint"):
-  PK  -> /usr/inferno/audit/pub (public)         open /mnt/factotum/rpc
-  SK  -> hex(sktostr(SK))                        start proto=sign service=audit role=client
-       -> echo "key proto=sign service=audit \   write  <content bytes>
-                !sk=<hex>" > /mnt/factotum/ctl    read   <- certtostr(cert)
-       -> factotum persist thread seals it        append "head=.. seq=.. sig=hex(cert)"
-          into secstore (encrypted at rest)
-  (at boot, factotum loads it from secstore)
+  echo 'genkey proto=sign service=audit \      auditfs writectl("checkpoint"):
+        alg=mldsa87 owner=audit' \               open /mnt/factotum/rpc
+       > /mnt/factotum/ctl                       start proto=sign service=audit role=client
+   -> factotum genSK in-process (SK never        write  <content bytes>
+      leaves factotum); stores it as a key       read   <- certtostr(cert), chunked
+      with secret !sk=<enc(sktostr)>;            append "head=.. seq=.. sig=hex(cert)"
+      persist thread seals to secstore.
+  pubkey: auditfs fetches via the sign         (auditverify recomputes the same content
+      proto's op=pubkey, serves /mnt/audit/pubkey  and verifies the cert with the pubkey)
+  (at boot, factotum loads the key from secstore)
 ```
 
 `content` is the existing signed string: `audit-checkpoint <hex(tiphash)> <seq>`
@@ -69,11 +72,11 @@ record exactly as today. **`auditverify` is unchanged** — same keyring `Certif
 
 | # | File | Change | New code? |
 |---|------|--------|-----------|
-| 1 | **`appl/cmd/auth/factotum/proto/sign.b`** (new) | New `Authproto`. Modeled on `rsa.b` structure. `interaction()`: `io.findkeys(proto=sign …)`, reconstruct SK via `kr->strtosk(unhex(lookattrval(k.secrets,"!sk")))`, `io.read()` the content, `state=kr->sha256(...)`, `cert=kr->sign(sk,0,state,"sha256")`, `io.write(certtostr(cert))`, `io.done(nil)`. ~80 lines. | yes (proto, ~80 ln) |
+| 1 | **`appl/cmd/auth/factotum/proto/sign.b`** (new) | New `Authproto`. `interaction()`: `io.findkey(proto=sign … !sk?)`, reconstruct SK via `kr->strtosk(decode(!sk))`; `op=pubkey` returns `pktostr(sktopk(sk))`, else `io.read()` content, `kr->sign(...)`, return `certtostr` in ≤4000-byte chunks, `io.done(nil)`. | yes (proto) |
 | 2 | **`appl/cmd/auth/factotum/proto/mkfile`** | Add `sign.dis` to `TARG`. | 1 line |
-| 3 | **`appl/cmd/auditfs.b`** | Replace in-process `signhead()`/`signsk` with a factotum driver: `Factotum->open()` + `genproxy` with channels that feed the head string and accumulate the chunked cert. **Remove `-k` entirely** (no keyfile fallback). Serve `Qpubkey` by reading `/usr/inferno/audit/pub`. | moderate edit |
-| 4a | **`lib/sh/audit-setup`** (new shell script) | Provisioning, Plan 9 idiom: run `createsignerkey -a mldsa87`, write PK to `/usr/inferno/audit/pub`, emit the `key proto=sign service=audit !sk=<hex>` line to `/mnt/factotum/ctl`, shred the temp keyfile. | shell (~25 ln) |
-| 4b | **`appl/cmd/auth/sk2line.b`** (new, tiny) | The one bit shell can't do: read a `createsignerkey` keyfile and print `hex(sktostr(mysk))` (no existing tool exports an SK as a string, by design). ~15 lines. | yes (~15 ln) |
+| 3 | **`appl/cmd/auth/factotum/factotum.b`** (core) | New `genkey` ctl verb: `genSK(alg,owner)` in-process, store key with secret `!sk=encodesk(sktostr)`; `encodesk` helper (`\n`→`@`, `=`→`~`). | small core edit |
+| 4 | **`appl/cmd/auditfs.b`** | Replace in-process `signhead()`/`signsk` with a factotum driver (`Factotum->open()`+`rpc` start/write/read, chunk-reassembling). **Remove `-k` entirely.** Serve `Qpubkey` by fetching from factotum (`op=pubkey`) and caching. | moderate edit |
+| 5 | **`lib/sh/audit-setup`** (new shell script) | Provisioning, Plan 9 idiom — one line: `echo 'genkey proto=sign service=audit alg=mldsa87 owner=audit' > /mnt/factotum/ctl`. No key material on disk; `mkauditkey`/`sk2line` no longer needed. | shell (~15 ln) |
 | 5 | **`lib/sh/profile`** | `auditfs` already mounts before auth services; ensure it can reach `/mnt/factotum` (it runs in the boot namespace, which has it). No new mount. Possibly reorder so factotum is up before the first checkpoint. | small |
 | 6 | **`man/4/auditfs`** + **`module`/mkfiles** | Update man page (signing now via factotum); wire any new module. | docs/build |
 | 7 | **`tests/`** | (a) keyring-level test: `mldsa87` `sktostr→hex→unhex→strtosk` roundtrip then `sign`/`verify` — proves crypto + serialization. (b) integration checklist for the full factotum path (full e2e in CI is hard — see §8). | yes (tests) |
@@ -121,49 +124,50 @@ chain) never depends on signing. Signing failures must never break the log or bo
    secstore unlock secret to a second service).
 3. **Algorithm → `mldsa87`** (ML-DSA, CNSA 2.0 Category 5).
 
-## 7a. BLOCKER found in implementation — key-injection size (awaiting decision)
+## 7a. Key-injection size — RESOLVED by factotum self-generation (owner: option 1)
 
 Empirically (build + emu): an **ML-DSA-87 key line is ~10 KB**, because `sktostr`
 serializes the secret key **and** the public key (4896 + 2592 = 7488 bytes → ~10 KB
-base64; the encoding is already single-pass, not the earlier hex double-encoding). But
-the emu mount iounit is **8192 bytes** (`emu/port/devmnt.c` `MAXRPC = IOHDRSZ+8192`), so
-writing that line to `/mnt/factotum/ctl` is split into two Twrites, and factotum's ctl
-handler treats each write independently — the oversized injection **hangs/corrupts**.
-The deterministic crypto + encode/decode path is proven (`tests/auditsign_test.b`, 3/3);
-only the *provisioning injection* is blocked.
+base64). The emu mount iounit is **8192 bytes** (`emu/port/devmnt.c` `MAXRPC =
+IOHDRSZ+8192`), so writing that line to `/mnt/factotum/ctl` would split into two Twrites
+and corrupt — *injecting* a PQC key over the wire is not viable.
 
-Resolutions (all but #4 settle the same way the rest of the design did — minimal, P2):
+**Resolution (owner decision): factotum self-generates the key** via a new `genkey` ctl
+verb. The operator writes one short line — `genkey proto=sign service=audit alg=mldsa87
+owner=audit` — and factotum runs `genSK` **in-process**: the secret key is born inside
+factotum and never crosses the mount or exists in any other process — the **strongest**
+form of P2. No size problem (the directive is tiny; the 10 KB never traverses 9P). The
+public key is fetched on demand via the sign proto's `op=pubkey` mode. `mkauditkey` is
+removed. The only cost is a small, contained `factotum.b` core change (the `genkey` verb
++ an `encodesk` helper), which the owner approved.
 
-1. **Factotum self-generates the key** via a new ctl verb (e.g. `genkey proto=sign
-   service=audit alg=mldsa87`). The SK is born inside factotum and never crosses the
-   mount or any other process — the **strongest** P2. Tiny ctl write. Cost: a small,
-   contained `factotum.b` *core* change (and a way to publish the public key). Makes
-   `mkauditkey` unnecessary. **Recommended.**
-2. **Provision into secstore directly**; factotum loads it at startup (no 9P framing on
-   the startup blob). No factotum core change, but needs the secstore filekey and is
-   more moving parts; SK still transits provisioning memory.
-3. **Raise the emu mount `MAXRPC`** (exportfs already allows 64 KB). One emu C change but
-   affects *all* mounts — broad blast radius.
-4. **Downgrade to `mldsa65`** (~8 KB line, fits) — rejected: violates the CNSA 2.0
-   Category 5 / `mldsa87` decision.
+(Rejected alternatives: provision into secstore directly — needs the secstore filekey,
+more moving parts, SK transits provisioning memory; raise emu `MAXRPC` — emu-wide blast
+radius; downgrade to `mldsa65` — violates the CNSA 2.0 Category 5 decision.)
 
-This is an architectural fork (options 1 and 3 touch a *core*), so it is brought for an
-explicit decision before proceeding — consistent with the no-core-change-without-consult
-rule. Sections 4–7 describe the ctl-injection design as built so far; it stands except for
-how the key first enters factotum, which #1–#3 resolve.
+## 8. Testing status (honest)
 
-## 8. Honest risks / unknowns
-
-- **Full e2e in the emu is hard.** Driving a live factotum proto inside CI needs
-  secstore + factotum up; my earlier headless factotum smoke runs hung on environment
-  setup. Mitigation: unit-test the crypto+serialization deterministically (§4.7a); gate
-  the integration test behind the boot harness; document a manual verification recipe.
+- **Proven (deterministic):** `tests/auditsign_test.b` (3/3) exercises the exact path
+  `genSK(mldsa87)` → `encodesk` → proto `decode` → `strtosk` → `sign` → `verify`, asserts
+  the stored value is `=`-free / newline-free / whitespace-free, and that a signature does
+  not verify over different content. This covers the crypto and the single-line encoding —
+  the parts most likely to be subtly wrong.
+- **Not yet verified live:** the running wire path (`genkey` → sign proto → `auditfs`
+  driver) end-to-end. The ad-hoc `auth/factotum &` shell harness in the dev sandbox
+  **hangs on any factotum `ctl` I/O** — and this was confirmed to affect the **unmodified**
+  factotum too (reading `/mnt/factotum/ctl` hangs on stock factotum; reading `proto`
+  works). So it is a harness/environment limitation, not a code regression: the bare shell
+  does not bring factotum's ctl serving fully up the way the real boot / CI host-tests do
+  (which write keys to ctl successfully). **Next step:** an integration test under the
+  proper boot harness (à la `tests/host/wallet9p_test.sh`) or validation on a booted
+  system. Manual recipe: after login, `sh /lib/sh/audit-setup`; `echo checkpoint
+  >/mnt/audit/ctl`; `cat /mnt/audit/chain | auditverify -k /mnt/audit/pubkey`.
 - **`auditfs` serveloop blocks during signing.** The checkpoint write drives factotum
-  synchronously (as `kr->sign` does today). Infrequent + local, so acceptable; note it.
-- **Proto framework is heavier than a one-shot sign.** The `Authproto` client/server
-  model is built for handshakes; our use is a degenerate one-round exchange. Acceptable
-  (it's the sanctioned extension point and avoids touching factotum core), but it is
-  more machinery than the operation strictly needs.
+  synchronously (as `kr->sign` did before). Infrequent + local, so acceptable; noted.
+- **Missing-key edge in a GUI session.** If the audit key is absent *and* a needkey prompt
+  agent is reading `/mnt/factotum/needkey`, a checkpoint could prompt/block; headless it
+  degrades to unsigned immediately (`needfid == -1`). Provisioning makes this a
+  misconfiguration case only.
 
 ## 9. Scope boundary
 

@@ -66,6 +66,15 @@ interaction(attrs: list of ref Attr, io: ref IO): string
 	if(sk == nil)
 		return "audit signer key !sk does not parse";
 
+	# op=pubkey returns the public key (not a secret); the default op
+	# signs caller-supplied content. The private key is used either way
+	# but never leaves factotum.
+	if(authio->lookattrval(attrs, "op") == "pubkey"){
+		send(io, array of byte kr->pktostr(kr->sktopk(sk)));
+		io.done(nil);
+		return nil;
+	}
+
 	# the caller writes the bytes to sign
 	content := io.read();
 	if(content == nil || len content == 0)
@@ -75,17 +84,21 @@ interaction(attrs: list of ref Attr, io: ref IO): string
 	cert := kr->sign(sk, 0, state, "sha256");
 	if(cert == nil)
 		return "sign failed";
-	cs := array of byte kr->certtostr(cert);
-
-	# return the certificate, chunked under the RPC frame limit
-	for(off := 0; off < len cs; off += CHUNK){
-		end := off + CHUNK;
-		if(end > len cs)
-			end = len cs;
-		io.write(cs[off:end], end-off);
-	}
+	send(io, array of byte kr->certtostr(cert));
 	io.done(nil);
 	return nil;
+}
+
+# send writes a (possibly large) result to the caller in <=CHUNK pieces,
+# since a result can exceed the RPC frame (an mldsa87 cert is ~6KB).
+send(io: ref IO, b: array of byte)
+{
+	for(off := 0; off < len b; off += CHUNK){
+		end := off + CHUNK;
+		if(end > len b)
+			end = len b;
+		io.write(b[off:end], end-off);
+	}
 }
 
 keycheck(nil: ref Key): string

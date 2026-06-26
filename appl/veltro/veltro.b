@@ -74,6 +74,12 @@ maxsteps := DEFAULT_MAX_STEPS;
 # research, explore, plan). Empty = the default Veltro behaviour.
 agenttype := "";
 
+# -m <model>: override the LLM model for this run by writing it to the
+# session's /mnt/llm/<id>/model file (llmsrv routes per-session). Empty = the
+# server's default. Used for multi-model evaluation (gpt-oss vs mistral) without
+# reconfiguring the server.
+model := "";
+
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
 
@@ -81,12 +87,13 @@ stderr: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-a type] [-p paths] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] [-t] [-a type] [-p paths] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-a type] [-m model] [-p paths] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] [-a type] [-m model] [-p paths] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output\n");
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -a type     Run as agent persona /lib/veltro/agents/<type>.txt (e.g. research)\n");
+	sys->fprint(stderr, "  -m model    Override the LLM model for this run (e.g. mistral-small3.2:24b)\n");
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
@@ -117,6 +124,24 @@ loadpersona(): string
 	return p;
 }
 
+# Apply the -m model override to a freshly created session by writing the model
+# name to /mnt/llm/<id>/model (llmsrv stores it per-session). No-op when -m was
+# not given.
+setmodel(id: string)
+{
+	if(model == "")
+		return;
+	path := "/mnt/llm/" + id + "/model";
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		sys->fprint(stderr, "veltro: warning: cannot set model %s: %r\n", model);
+		return;
+	}
+	sys->fprint(fd, "%s", model);
+	if(verbose)
+		sys->fprint(stderr, "veltro: model set to %s\n", model);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -144,6 +169,7 @@ init(nil: ref Draw->Context, args: list of string)
 		't' =>	thinkbudget = THINK_DEFAULT;
 		'r' =>	resumename = arg->earg();
 		'a' =>	agenttype = arg->earg();
+		'm' =>	model = arg->earg();
 		'p' =>
 			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
@@ -861,6 +887,7 @@ runagent(task: string)
 		sys->fprint(stderr, "veltro: cannot create LLM session\n");
 		return;
 	}
+	setmodel(llmsessionid);
 	if(verbose)
 		sys->fprint(stderr, "veltro: llm session %s\n", llmsessionid);
 
@@ -958,6 +985,7 @@ runresume(name, extra: string)
 		sys->fprint(stderr, "veltro: cannot create LLM session\n");
 		return;
 	}
+	setmodel(llmsessionid);
 
 	# Veltro owns its own compaction policy (checkandcompact) — opt out of the
 	# server-side auto-compaction net so the two don't both trigger.

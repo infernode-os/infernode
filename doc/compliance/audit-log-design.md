@@ -12,6 +12,11 @@ server never holds the private key is the documented hardening step (AU-9/10 cry
 identical either way). Access control is namespace placement, as designed (the write files are
 mode-open so any subject with `log` bound can append; restriction is by *what is bound*, not by
 mode bits).
+**Integration:** `lib/sh/profile` mounts `auditfs` at `/mnt/audit` *before* `auth/secstored`,
+and `secstored` emits the first events — `secstore authok user=<u>` / `secstore authfail`
+(AU-2/AU-3) — via the loosely-coupled `audit` client lib (no-op if `/mnt/audit` is absent).
+Validated in the headless Linux emu. Further emitters (login UI, 2FA enroll/disable, factotum
+key ops, CDS guard) and the vac content-store layer for agent provenance are the next phases.
 **Tracking:** EPIC 2 / [INFR-343]. **Date:** 2026-06-22.
 **Grounding:** read [`plan9-logging-rationale.md`](plan9-logging-rationale.md) (why Plan 9 has no
 logging subsystem) and [`audit-log-prior-art.md`](audit-log-prior-art.md) (the prior-art survey)

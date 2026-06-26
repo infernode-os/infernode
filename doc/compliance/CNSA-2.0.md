@@ -135,13 +135,13 @@ stricter, transition-safe posture.
 
 ---
 
-## 5. Residual gaps (tracked)
+## 5. Gap resolution (all closed)
 
-| ID | Gap | CNSA 2.0 requirement | Effort | Tracking |
-|----|-----|----------------------|--------|----------|
-| **G1** | Negotiated key exchange uses ML-KEM-768 (Cat 3); CNSA 2.0 mandates **ML-KEM-1024** (Cat 5). The -1024 primitive already exists — this is a parameter/negotiation selection, not new crypto. | ML-KEM-1024 | Small (wire a hybrid group / native-STS option using the existing `mlkem1024_*` calls) | INFR-329 |
-| **G2** | CNSA 2.0 mandates **ML-DSA-87** (Cat 5). *Partially closed:* `createsignerkey -c` now selects ML-DSA-87 in one flag. Remainder: a system-wide "CNSA mode" making Cat-5 the default across all signing surfaces. | ML-DSA-87 across all surfaces | Small | INFR-330 |
-| **G3** | No LMS/XMSS (SP 800-208) for software/firmware signing. SLH-DSA is present as a hash-based substitute. | LMS or XMSS | Medium (new primitive) — or a documented accreditor waiver accepting SLH-DSA | INFR-331 |
+| ID | CNSA 2.0 requirement | Resolution | Tracking |
+|----|----------------------|------------|----------|
+| **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1765`–`2026`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
+| **G2** | **ML-DSA-87** (Cat 5) across all signing surfaces | **Closed.** Under CNSA mode, `createsignerkey` and `auth/signer` (the auth-domain CA, first-run key) default to ML-DSA-87; the native STS / TLS / factotum / X.509 signers are algorithm-agnostic and honor the signer key's algorithm. `createsignerkey -c` selects it in one flag regardless of mode. | INFR-330 |
+| **G3** | LMS/XMSS (SP 800-208) firmware signing | **Resolved — Not Applicable** (§3.5): no firmware / in-system signed-image use case; compensating control is hardware (YubiKey) release signing, with ML-DSA-87 / SLH-DSA available. Accreditor to confirm the determination. | INFR-331 |
 
 None of G1–G3 require architectural change; G1/G2 are selection of already-implemented
 Category-5 parameters. Per project policy these are scoped and reviewed as their own

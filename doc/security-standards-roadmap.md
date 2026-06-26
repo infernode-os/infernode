@@ -101,7 +101,7 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
 |--------|---------------|--------------------------|----------|--------|
 | **AC** Access Control | Least privilege, separation | Per-process namespaces; capability (no ambient authority) | [`compliance/SP800-207-zero-trust.md`](compliance/SP800-207-zero-trust.md) — namespace mechanism, `verifyns`, formally verified isolation | strong — Zero Trust posture **Met**; AC family mapping to be itemized |
 | **IA** Identification & Auth | MFA, PKI, AAL3, phishing-resistant | Factotum + FIDO2/PIV; **UV/AAL3 + DK-encrypted vault + dual/backup key shipped & hardware-verified** (FIDO PIN load-bearing) | [`compliance/SP800-63B-AAL3.md`](compliance/SP800-63B-AAL3.md); `t2uv` UV test + `tests/twofaslot_test.b` regression suite (no-downgrade, recovery round-trip, additive slots) | **Met — EPIC 1 closed**: AAL3 verifier, DK save-back, backup-key, Settings GUI ✅; passwordless declined |
-| **SC** System & Comms Protection | Crypto, boundary, TLS | `libsec` (AES-256-GCM, PQC), `devssl`, namespace boundaries | [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md) — algorithm inventory (source-cited) | partial — PQC suite complete; CNSA-strict params (G1/G2) tracked |
+| **SC** System & Comms Protection | Crypto, boundary, TLS | `libsec` (AES-256-GCM, PQC), `devssl`, namespace boundaries | [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md) — algorithm inventory (source-cited) | strong — PQC suite complete; CNSA-strict params (ML-KEM-1024/ML-DSA-87) **Met under CNSA mode** (G1/G2 closed) |
 | **AU** Audit & Accountability | Logging, integrity, retention | Hash-chained 9P audit-log service (`/mnt/audit`) + factotum-signed checkpoints | [`compliance/SP800-92-audit-log.md`](compliance/SP800-92-audit-log.md) — per-control + residual-gap table | **Substantially met** — AU-3/8/9/9(3)/10 built & evidenced (INFR-343/356); AU-4/5/6/7 + retention tracked |
 | **SI** System & Information Integrity | Memory safety, malware | Dis VM type/memory safety; signed modules | CWE class elimination, signatures | partial |
 | **CM** Configuration Management | Baselines, integrity | Reproducible builds, SLSA 3, signed `.dis` | provenance attestations | partial |
@@ -121,6 +121,6 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
    checkpoints, offline verifier, lifecycle emitters; INFR-343/356). Remaining: AU-4/5/6/7
    operational tooling + retention, and the agent-provenance content store (INFR-355) — see the
    residual-gap table in [`compliance/SP800-92-audit-log.md`](compliance/SP800-92-audit-log.md).
-3. **CNSA 2.0 strict params** — ML-KEM/ML-DSA primitives done; negotiate ML-KEM-1024 (INFR-329) + ML-DSA-87 default (INFR-330). See [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md).
+3. **CNSA 2.0 strict params** — ✅ **DONE**: ML-KEM-1024 negotiated end-to-end on both transports (INFR-329) and ML-DSA-87 the default signer under CNSA mode across `createsignerkey` + the auth-domain CA (INFR-330); G3 (LMS/XMSS) Not Applicable. Met under CNSA-strict mode; default deployments stay classical by design. See [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md).
 4. **SP 800-53 / 800-171 control-mapping** — unlocks federal & finance conversations.
 5. **CDS-guard reference demo** — the differentiator nobody else can show cleanly.

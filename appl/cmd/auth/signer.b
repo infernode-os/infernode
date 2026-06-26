@@ -107,15 +107,36 @@ sign(): string
 	return nil;
 }
 
+# CNSA 2.0 strict mode: read the /env/cnsamode policy flag (off by default).
+# When set, a freshly-generated auth-domain CA key uses ML-DSA-87 (FIPS 204,
+# Category 5) instead of ed25519. Mirrors createsignerkey(8) and the TLS/STS
+# gating. Existing keyfiles are read unchanged — this affects only first-run
+# key generation.
+cnsamode(): int
+{
+	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	c := buf[0];
+	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
+}
+
 signerkey(filename: string): ref Keyring->Authinfo
 {
 	info := kr->readauthinfo(filename);
 	if(info != nil)
 		return info;
 
-	# generate a local key
+	# generate a local key (ed25519 by default; ML-DSA-87 under CNSA mode)
+	alg := "ed25519";
+	if(cnsamode())
+		alg = "mldsa87";
 	info = ref Keyring->Authinfo;
-	info.mysk = kr->genSK("ed25519", "*", PKmodlen);	# Ed25519 for modern security
+	info.mysk = kr->genSK(alg, "*", PKmodlen);
 	info.mypk = kr->sktopk(info.mysk);
 	info.spk = kr->sktopk(info.mysk);
 	myPKbuf := array of byte kr->pktostr(info.mypk);

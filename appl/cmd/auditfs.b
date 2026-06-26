@@ -19,9 +19,11 @@ implement Auditfs;
 # cannot read or rewrite history. The chain gives tamper-evidence; an
 # externally-anchored head catches a full rewrite.
 #
-# This is the security-log core. Factotum-signed checkpoints (AU-10) and
-# the vac content-store layer for AI-agent provenance are designed-in
-# follow-ons; see doc/compliance/audit-log-design.md.
+# This is the security-log core. Checkpoint signing (AU-10) is performed
+# by factotum, which holds the signer key — auditfs never sees the private
+# key (see doc/compliance/audit-log-factotum-signing-DESIGN.md). The vac
+# content-store layer for AI-agent provenance is a designed-in follow-on;
+# see doc/compliance/audit-log-design.md.
 #
 # Usage:   auditfs [-f backing-file]
 # Mount:   mount {auditfs} /mnt/audit
@@ -49,8 +51,8 @@ include "styxservers.m";
 	nametree: Nametree;
 	Tree: import nametree;
 
-include "keyring.m";
-	kr: Keyring;
+include "factotum.m";
+	fac: Factotum;
 
 include "auditchain.m";
 	ac: Auditchain;
@@ -71,12 +73,13 @@ logfd: ref Sys->FD;		# append handle to the backing file
 tiphash: array of byte;		# current chain tip
 seq := 0;			# sequence number of the last record (0 = none)
 
-# Optional signer key for checkpoint signatures (AU-10 non-repudiation).
-# When unset, checkpoints are unsigned chain markers and the head must be
-# anchored externally. The public key is served at /mnt/audit/pubkey.
-keyfile := "";
-signsk: ref Keyring->SK;
-signpk: ref Keyring->PK;
+# Checkpoint signatures (AU-10 non-repudiation) are produced by factotum,
+# which holds the signer key — auditfs never sees the private key. When
+# factotum is unreachable or holds no audit signer key, checkpoints are
+# unsigned chain markers and the head must be anchored externally. The
+# public key (not a secret) is published as a plain file and served at
+# /mnt/audit/pubkey. See doc/compliance/audit-log-factotum-signing-DESIGN.md.
+pubpath := "/usr/inferno/audit/pub";
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -98,34 +101,26 @@ init(nil: ref Draw->Context, args: list of string)
 	nametree = load Nametree Nametree->PATH;
 	if(nametree == nil)
 		fail("cannot load nametree");
-	kr = load Keyring Keyring->PATH;
-	if(kr == nil)
-		fail("cannot load keyring");
 	ac = load Auditchain Auditchain->PATH;
 	if(ac == nil)
 		fail("cannot load auditchain");
 	ac->init();
 
+	# Optional: factotum performs checkpoint signing. Loosely coupled —
+	# if it is absent, checkpoints fall back to unsigned chain markers.
+	fac = load Factotum Factotum->PATH;
+	if(fac != nil)
+		fac->init();
+
 	arg->init(args);
-	arg->setusage("auditfs [-f backing-file] [-k signer-keyfile]");
+	arg->setusage("auditfs [-f backing-file]");
 	while((c := arg->opt()) != 0) {
 		case c {
 		'f' =>
 			logpath = arg->earg();
-		'k' =>
-			keyfile = arg->earg();
 		* =>
 			arg->usage();
 		}
-	}
-
-	# Load the optional checkpoint-signing key.
-	if(keyfile != "") {
-		info := kr->readauthinfo(keyfile);
-		if(info == nil)
-			fail(sys->sprint("cannot read signer key %s: %r", keyfile));
-		signsk = info.mysk;
-		signpk = info.mypk;
 	}
 
 	# Recompute the chain from any existing backing file; fail loud (to
@@ -215,10 +210,9 @@ serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 					s = sys->sprint("ok %d\n", seq);
 				srv.reply(styxservers->readstr(tm, s));
 			Qpubkey =>
-				pk := "";
-				if(signpk != nil)
-					pk = kr->pktostr(signpk) + "\n";
-				srv.reply(styxservers->readstr(tm, pk));
+				# The audit public key is published as a plain file
+				# (it is not a secret); empty if not provisioned.
+				srv.reply(styxservers->readstr(tm, readfile(pubpath)));
 			* =>
 				srv.reply(ref Rmsg.Error(tm.tag, "phase error -- bad path"));
 			}
@@ -272,29 +266,64 @@ writectl(s: string): string
 {
 	if(s != "checkpoint")
 		return "auditfs: ctl accepts only 'checkpoint'";
+	# The signed content commits to the whole history (the tip
+	# transitively covers every record). It must match exactly what
+	# auditverify recomputes.
+	content := sys->sprint("audit-checkpoint %s %d", ac->hex(tiphash), seq);
+	cert := factotumsign(array of byte content);
 	msg: string;
-	if(signsk != nil)
+	if(cert != nil)
 		msg = sys->sprint("head=%s seq=%d sig=%s",
-			ac->hex(tiphash), seq, signhead());
+			ac->hex(tiphash), seq, ac->hex(cert));
 	else
 		msg = sys->sprint("head=%s seq=%d", ac->hex(tiphash), seq);
 	return appendrec("-", "checkpoint", msg);
 }
 
-# signhead signs the current chain tip with the audit key and returns the
-# certificate, hex-encoded so it is a single whitespace-free token. The
-# signed content commits to the whole history (the tip transitively covers
-# every record). Verified with the audit public key — no secret needed by
-# the auditor (AU-10).
-signhead(): string
+# factotumsign asks factotum to sign `content` with the audit signer key
+# it holds, and returns the certificate string as raw bytes (the caller
+# hex-encodes it for the record). Returns nil if factotum is unreachable
+# or holds no audit key, so the caller degrades to an unsigned marker.
+# auditfs never sees the private key (AU-10). The certificate can exceed
+# the factotum RPC frame, so it arrives in chunks until "done".
+factotumsign(content: array of byte): array of byte
 {
-	content := sys->sprint("audit-checkpoint %s %d", ac->hex(tiphash), seq);
-	cb := array of byte content;
-	state := kr->sha256(cb, len cb, nil, nil);
-	cert := kr->sign(signsk, 0, state, "sha256");
-	if(cert == nil)
-		return "nosig";
-	return ac->hex(array of byte kr->certtostr(cert));
+	if(fac == nil)
+		return nil;
+	afd := fac->open();
+	if(afd == nil)
+		return nil;
+	(o, nil) := fac->rpc(afd, "start",
+		array of byte "proto=sign service=audit role=client");
+	if(o != "ok")
+		return nil;
+	(o, nil) = fac->rpc(afd, "write", content);
+	if(o != "ok")
+		return nil;
+	cert := array[0] of byte;
+	for(;;){
+		(st, chunk) := fac->rpc(afd, "read", nil);
+		case st {
+		"ok" =>
+			cert = concat(cert, chunk);
+		"done" =>
+			return cert;
+		* =>
+			return nil;
+		}
+	}
+}
+
+# concat returns a ++ b (slice-assignment to a[i:j] is rejected by the
+# compiler, so copy element-wise).
+concat(a, b: array of byte): array of byte
+{
+	r := array[len a + len b] of byte;
+	for(i := 0; i < len a; i++)
+		r[i] = a[i];
+	for(i = 0; i < len b; i++)
+		r[len a + i] = b[i];
+	return r;
 }
 
 # appendrec seals one record: server-assigned seq + time, chain extend,

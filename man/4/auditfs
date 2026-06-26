@@ -5,6 +5,13 @@ auditfs \- tamper-evident audit-log file server
 .B auditfs
 .RB [ \-f
 .IR backing-file ]
+.RB [ \-k
+.IR signer-keyfile ]
+.PP
+.B auditverify
+.RB [ \-k
+.IR pubkeyfile ]
+.RI [ chainfile ]
 .SH DESCRIPTION
 .I Auditfs
 is a Styx file server, normally mounted at
@@ -35,10 +42,20 @@ Read-only. Recomputes the chain and returns
 or
 .RB `` broken\ at\ seq\  \fIn\fP ''.
 .TP
+.B pubkey
+Read-only. The audit public key (when a signer key is configured
+with
+.BR \-k ),
+for distribution to verifiers.
+.TP
 .B ctl
 Write-only. Writing
 .B checkpoint
-appends a checkpoint marker record naming the current head.
+appends a checkpoint record naming the current head. When a signer
+key is configured the checkpoint is signed (the certificate is
+verifiable with the
+.B pubkey
+above, giving non-repudiation without sharing any secret).
 .PP
 Integrity is a linear hash chain:
 .IR H [0]
@@ -64,25 +81,51 @@ The backing file defaults to
 .BR /usr/inferno/audit/log ;
 its containing directory must already exist. With
 .B \-f
-a different path may be given.
+a different path may be given. With
+.B \-k
+a signer keyfile (as produced by
+.IR createsignerkey (8))
+is loaded; checkpoints are then signed.
+.PP
+.I Auditverify
+is the standalone offline verifier. It recomputes the hash chain
+over a
+.I chainfile
+(default standard input) and reports
+.RB `` ok ''
+or the first break; with
+.B \-k
+it also checks every checkpoint signature against the audit public
+key.
 .SH EXAMPLE
 .EX
-mount {auditfs} /mnt/audit
+auth/createsignerkey -a ed25519 -f /keydb/auditkey audit
+mount {auditfs -k /keydb/auditkey} /mnt/audit
 echo 'login unlock user=alice aal=3' >/mnt/audit/log
-cat /mnt/audit/verify
+echo checkpoint >/mnt/audit/ctl
+cat /mnt/audit/pubkey >/tmp/auditpub
+cat /mnt/audit/chain | auditverify -k /tmp/auditpub
 .EE
 .SH SOURCE
 .B /appl/cmd/auditfs.b
 .br
+.B /appl/cmd/auditverify.b
+.br
 .B /appl/lib/auditchain.b
 .SH SEE ALSO
-.IR keyring (2)
+.IR keyring (2),
+.IR createsignerkey (8)
 .br
 .B doc/compliance/audit-log-design.md
 .SH BUGS
-Records since the last
+Records since the last signed
 .B ctl
-checkpoint are protected by the hash chain but are not yet
-covered by a signed anchor. Factotum-signed checkpoints
-(for non-repudiation) and a content-addressed store for
-high-volume agent-provenance payloads are planned extensions.
+checkpoint are protected by the hash chain but are not yet covered
+by a signature; checkpoint frequently (and on high-value events) to
+bound that window. The signer key is held by
+.I auditfs
+itself; moving it into
+.IR factotum (4),
+so the server never holds the private key, is a hardening step. A
+content-addressed store for high-volume agent-provenance payloads is
+a planned extension.

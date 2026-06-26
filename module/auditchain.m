@@ -25,6 +25,11 @@ Auditchain: module
 	# the event and the message; canon omits the hash.
 	canon:		fn(seq, t: int, source, event, msg: string): string;
 
-	# hex renders a hash as lowercase hex (2 chars per byte).
+	# hex renders bytes as lowercase hex (2 chars per byte).
 	hex:		fn(h: array of byte): string;
+
+	# unhex is the inverse of hex (even-length lowercase/uppercase hex).
+	# Used to carry a checkpoint signature as a single whitespace-free
+	# token inside a record line.
+	unhex:		fn(s: string): array of byte;
 };

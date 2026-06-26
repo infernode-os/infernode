@@ -70,3 +70,23 @@ hex(h: array of byte): string
 	}
 	return s;
 }
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return 0;
+}
+
+unhex(s: string): array of byte
+{
+	n := len s / 2;
+	b := array[n] of byte;
+	for(i := 0; i < n; i++)
+		b[i] = byte ((hexval(s[2*i]) << 4) | hexval(s[2*i+1]));
+	return b;
+}

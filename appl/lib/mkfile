@@ -13,6 +13,7 @@ DIRS=\
 TARG=\
 	acmewin.dis\
 	arg.dis\
+	audit.dis\
 	auditchain.dis\
 	testing.dis\
 	textwidget.dis\

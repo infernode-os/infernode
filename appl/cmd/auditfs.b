@@ -49,6 +49,9 @@ include "styxservers.m";
 	nametree: Nametree;
 	Tree: import nametree;
 
+include "keyring.m";
+	kr: Keyring;
+
 include "auditchain.m";
 	ac: Auditchain;
 
@@ -57,7 +60,7 @@ Auditfs: module {
 };
 
 # Qid path numbers.
-Qdir, Qlog, Qchain, Qhead, Qverify, Qctl: con iota;
+Qdir, Qlog, Qchain, Qhead, Qverify, Qctl, Qpubkey: con iota;
 
 stderr: ref Sys->FD;
 user := "inferno";
@@ -67,6 +70,13 @@ logfd: ref Sys->FD;		# append handle to the backing file
 
 tiphash: array of byte;		# current chain tip
 seq := 0;			# sequence number of the last record (0 = none)
+
+# Optional signer key for checkpoint signatures (AU-10 non-repudiation).
+# When unset, checkpoints are unsigned chain markers and the head must be
+# anchored externally. The public key is served at /mnt/audit/pubkey.
+keyfile := "";
+signsk: ref Keyring->SK;
+signpk: ref Keyring->PK;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -88,20 +98,34 @@ init(nil: ref Draw->Context, args: list of string)
 	nametree = load Nametree Nametree->PATH;
 	if(nametree == nil)
 		fail("cannot load nametree");
+	kr = load Keyring Keyring->PATH;
+	if(kr == nil)
+		fail("cannot load keyring");
 	ac = load Auditchain Auditchain->PATH;
 	if(ac == nil)
 		fail("cannot load auditchain");
 	ac->init();
 
 	arg->init(args);
-	arg->setusage("auditfs [-f backing-file]");
+	arg->setusage("auditfs [-f backing-file] [-k signer-keyfile]");
 	while((c := arg->opt()) != 0) {
 		case c {
 		'f' =>
 			logpath = arg->earg();
+		'k' =>
+			keyfile = arg->earg();
 		* =>
 			arg->usage();
 		}
+	}
+
+	# Load the optional checkpoint-signing key.
+	if(keyfile != "") {
+		info := kr->readauthinfo(keyfile);
+		if(info == nil)
+			fail(sys->sprint("cannot read signer key %s: %r", keyfile));
+		signsk = info.mysk;
+		signpk = info.mypk;
 	}
 
 	# Recompute the chain from any existing backing file; fail loud (to
@@ -133,7 +157,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qdir, dir("chain",  8r444, Qchain));  # read-only
 	tree.create(big Qdir, dir("head",   8r444, Qhead));   # read-only
 	tree.create(big Qdir, dir("verify", 8r444, Qverify)); # read-only
-	tree.create(big Qdir, dir("ctl",    8r200, Qctl));    # write-only
+	tree.create(big Qdir, dir("pubkey", 8r444, Qpubkey)); # read-only
+	tree.create(big Qdir, dir("ctl",    8r222, Qctl));    # write-only
 
 	(tc, srv) := Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qdir);
 	serveloop(tc, srv, tree);
@@ -189,6 +214,11 @@ serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 				else
 					s = sys->sprint("ok %d\n", seq);
 				srv.reply(styxservers->readstr(tm, s));
+			Qpubkey =>
+				pk := "";
+				if(signpk != nil)
+					pk = kr->pktostr(signpk) + "\n";
+				srv.reply(styxservers->readstr(tm, pk));
 			* =>
 				srv.reply(ref Rmsg.Error(tm.tag, "phase error -- bad path"));
 			}
@@ -242,8 +272,29 @@ writectl(s: string): string
 {
 	if(s != "checkpoint")
 		return "auditfs: ctl accepts only 'checkpoint'";
-	return appendrec("-", "checkpoint",
-		sys->sprint("head=%s seq=%d", ac->hex(tiphash), seq));
+	msg: string;
+	if(signsk != nil)
+		msg = sys->sprint("head=%s seq=%d sig=%s",
+			ac->hex(tiphash), seq, signhead());
+	else
+		msg = sys->sprint("head=%s seq=%d", ac->hex(tiphash), seq);
+	return appendrec("-", "checkpoint", msg);
+}
+
+# signhead signs the current chain tip with the audit key and returns the
+# certificate, hex-encoded so it is a single whitespace-free token. The
+# signed content commits to the whole history (the tip transitively covers
+# every record). Verified with the audit public key — no secret needed by
+# the auditor (AU-10).
+signhead(): string
+{
+	content := sys->sprint("audit-checkpoint %s %d", ac->hex(tiphash), seq);
+	cb := array of byte content;
+	state := kr->sha256(cb, len cb, nil, nil);
+	cert := kr->sign(signsk, 0, state, "sha256");
+	if(cert == nil)
+		return "nosig";
+	return ac->hex(array of byte kr->certtostr(cert));
 }
 
 # appendrec seals one record: server-assigned seq + time, chain extend,

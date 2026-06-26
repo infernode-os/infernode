@@ -1,6 +1,17 @@
 # Design — InferNode Tamper-Evident Audit Log (`/mnt/audit`)
 
 **Status:** Authoritative design (supersedes the `SP800-92-audit-log-DESIGN.md` proposal stub).
+**Implementation:** v1 security log **built and tested** — `auditfs` server (`log`/`chain`/
+`head`/`verify`/`pubkey`/`ctl`), the `auditchain` hash-chain module (unit-tested), the
+`auditverify` offline verifier, and the `audit` client lib. Validated in the headless Linux
+emu: chain tamper/reorder/deletion detection, server round-trip, **keyring-signed checkpoints
+(AU-10)** and offline signature verification with the public key, and rejection of a bad
+signature. One honest deviation from the prose below: v1 loads the signer key from a *keyfile*
+(`createsignerkey` output) and `auditfs` holds it; moving the key into **factotum** so the
+server never holds the private key is the documented hardening step (AU-9/10 crypto is
+identical either way). Access control is namespace placement, as designed (the write files are
+mode-open so any subject with `log` bound can append; restriction is by *what is bound*, not by
+mode bits).
 **Tracking:** EPIC 2 / [INFR-343]. **Date:** 2026-06-22.
 **Grounding:** read [`plan9-logging-rationale.md`](plan9-logging-rationale.md) (why Plan 9 has no
 logging subsystem) and [`audit-log-prior-art.md`](audit-log-prior-art.md) (the prior-art survey)

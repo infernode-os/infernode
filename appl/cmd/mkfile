@@ -18,6 +18,8 @@ DIRS=\
 
 TARG=\
 	2fa.dis\
+	auditfs.dis\
+	auditverify.dis\
 	9660srv.dis\
 	9cpu.dis\
 	9export.dis\

@@ -1,0 +1,131 @@
+.TH AUDITFS 4
+.SH NAME
+auditfs \- tamper-evident audit-log file server
+.SH SYNOPSIS
+.B auditfs
+.RB [ \-f
+.IR backing-file ]
+.RB [ \-k
+.IR signer-keyfile ]
+.PP
+.B auditverify
+.RB [ \-k
+.IR pubkeyfile ]
+.RI [ chainfile ]
+.SH DESCRIPTION
+.I Auditfs
+is a Styx file server, normally mounted at
+.BR /mnt/audit ,
+that records security-relevant events as an append-only,
+tamper-evident log. It serves these files:
+.TP
+.B log
+Write-only. A write of the form
+.RI `` source\  event\  message ''
+is sealed into one record: the server assigns the sequence
+number and timestamp (so a writer cannot forge ordering or
+backdate an entry) and extends a SHA-256 hash chain over the
+record. Reads return empty.
+.TP
+.B chain
+Read-only. The sealed records, oldest first, one per line:
+.IR seq \  timestamp \  source \  event \  hash \  message .
+.TP
+.B head
+Read-only. The current chain tip and last sequence number,
+.RI `` hash\  seq '',
+suitable for publishing or shipping off-host as an anchor.
+.TP
+.B verify
+Read-only. Recomputes the chain and returns
+.RB `` ok\  \fIn\fP ''
+or
+.RB `` broken\ at\ seq\  \fIn\fP ''.
+.TP
+.B pubkey
+Read-only. The audit public key (when a signer key is configured
+with
+.BR \-k ),
+for distribution to verifiers.
+.TP
+.B ctl
+Write-only. Writing
+.B checkpoint
+appends a checkpoint record naming the current head. When a signer
+key is configured the checkpoint is signed (the certificate is
+verifiable with the
+.B pubkey
+above, giving non-repudiation without sharing any secret).
+.PP
+Integrity is a linear hash chain:
+.IR H [0]
+= SHA-256(genesis), and
+.IR H [ n ]
+= SHA-256(\fIH\fP[\fIn\fP\-1] \(em record). Editing, reordering,
+or deleting any record changes that hash and every later one,
+so a recomputation that disagrees with the stored chain proves
+tampering. The chain is tamper-\fIevident\fP: an externally
+anchored
+.B head
+detects even a full rewrite of the backing file. At startup the
+chain is recomputed from the backing file and a break is reported
+on standard error.
+.PP
+Access control is by namespace placement. Bind only the
+.B log
+file (write-only) into a subject's name space and it can append
+to its own audit trail but cannot read or rewrite history; an
+agent thus cannot cover its tracks.
+.PP
+The backing file defaults to
+.BR /usr/inferno/audit/log ;
+its containing directory must already exist. With
+.B \-f
+a different path may be given. With
+.B \-k
+a signer keyfile (as produced by
+.IR createsignerkey (8))
+is loaded; checkpoints are then signed.
+.PP
+.I Auditverify
+is the standalone offline verifier. It recomputes the hash chain
+over a
+.I chainfile
+(default standard input) and reports
+.RB `` ok ''
+or the first break; with
+.B \-k
+it also checks every checkpoint signature against the audit public
+key.
+.SH EXAMPLE
+.EX
+auth/createsignerkey -a ed25519 -f /keydb/auditkey audit
+mount {auditfs -k /keydb/auditkey} /mnt/audit
+echo 'login unlock user=alice aal=3' >/mnt/audit/log
+echo checkpoint >/mnt/audit/ctl
+cat /mnt/audit/pubkey >/tmp/auditpub
+cat /mnt/audit/chain | auditverify -k /tmp/auditpub
+.EE
+.SH SOURCE
+.B /appl/cmd/auditfs.b
+.br
+.B /appl/cmd/auditverify.b
+.br
+.B /appl/lib/auditchain.b
+.SH SEE ALSO
+.IR keyring (2),
+.IR createsignerkey (8)
+.br
+.B doc/compliance/audit-log-design.md
+.SH BUGS
+Records since the last signed
+.B ctl
+checkpoint are protected by the hash chain but are not yet covered
+by a signature; checkpoint frequently (and on high-value events) to
+bound that window. The signer key is held by
+.I auditfs
+itself; moving it into
+.IR factotum (4),
+so the server never holds the private key, is a hardening step. A
+content-addressed store for high-volume agent-provenance payloads is
+a planned extension.

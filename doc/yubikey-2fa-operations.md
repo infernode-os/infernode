@@ -3,6 +3,15 @@
 This is the **hands-on guide** for InferNode's YubiKey-gated secstore login. For
 the design and threat model, see [`second-factor-auth.md`](second-factor-auth.md).
 
+> **Platforms.** The `#F` device and its libfido2 host bridge
+> (`emu/port/fido2bridge.c`) build on **macOS, Linux, and Windows**. Each GUI
+> build links libfido2 when it is present (`apt install libfido2-dev` on Linux,
+> `vcpkg install fido2:x64-windows` on Windows, `brew install libfido2` on
+> macOS) and otherwise degrades to a stub whose `/dev/2fa` reports
+> `available=0`. The build examples below use the macOS paths; substitute
+> `emu/Linux` (via `build-linux-*.sh`) or `emu/Nt` (via `build-windows-sdl3.ps1`)
+> as appropriate.
+
 InferNode binds login to a hardware security key the way a CAC/PIV card gates a
 government workstation: your factotum (key vault) is encrypted under a random
 **data key (DK)**, and the DK is wrapped in per-account **key-slots**. A slot can

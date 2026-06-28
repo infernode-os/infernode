@@ -1,13 +1,16 @@
 /*
  * fido2bridge.c — host-side libfido2 implementation for the InferNode #F
- * (2fa) device. Compiled into the macOS emu (see mkfile-gui-sdl3). Includes
- * ONLY libfido2 + libc headers — no Inferno headers — to avoid name clashes.
+ * (2fa) device. Shared across all host platforms (macOS, Linux, Windows): each
+ * platform's mkfile-gui-sdl3 / build script defines -DHAVE_FIDO2 and links
+ * libfido2 when it is present (see the FIDO2_CFLAGS / FIDO2_LIBS wiring there).
+ * Includes ONLY libfido2 + libc headers — no Inferno headers — to avoid name
+ * clashes, so this single source compiles unchanged on every host.
  *
  * Refactored from tools/2fa-poc/yk-hmac-secret.c (the validated Phase 0 PoC).
  * When libfido2 is absent at build time (-DHAVE_FIDO2 unset), the entry points
  * compile as stubs so the emu still builds without /dev/2fa support.
  */
-#include "../port/fido2bridge.h"
+#include "fido2bridge.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

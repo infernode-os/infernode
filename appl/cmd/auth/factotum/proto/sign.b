@@ -54,6 +54,27 @@ init(f: Authio): string
 	return nil;
 }
 
+# CNSA 2.0: bind the certificate hash to the signing key's strength.
+# ML-DSA / SLH-DSA (FIPS 204/205, NIST Cat >=3) keys pair with SHA-384;
+# classical keys keep SHA-256 so pre-existing certs verify unchanged. The
+# chosen name is stored in the certificate, so any verifier re-hashes to match.
+certhash(sk: ref Keyring->SK): string
+{
+	if(sk != nil && sk.sa != nil)
+		case sk.sa.name {
+		"mldsa65" or "mldsa87" or "slhdsa192s" or "slhdsa256s" =>
+			return "sha384";
+		}
+	return "sha256";
+}
+
+certdigest(sk: ref Keyring->SK, buf: array of byte): ref Keyring->DigestState
+{
+	if(certhash(sk) == "sha384")
+		return kr->sha384(buf, len buf, nil, nil);
+	return kr->sha256(buf, len buf, nil, nil);
+}
+
 interaction(attrs: list of ref Attr, io: ref IO): string
 {
 	(key, err) := io.findkey(attrs, "!sk?");
@@ -80,8 +101,8 @@ interaction(attrs: list of ref Attr, io: ref IO): string
 	if(content == nil || len content == 0)
 		return "no content to sign";
 
-	state := kr->sha256(content, len content, nil, nil);
-	cert := kr->sign(sk, 0, state, "sha256");
+	state := certdigest(sk, content);
+	cert := kr->sign(sk, 0, state, certhash(sk));
 	if(cert == nil)
 		return "sign failed";
 	send(io, array of byte kr->certtostr(cert));

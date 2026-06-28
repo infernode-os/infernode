@@ -272,6 +272,12 @@ hashalg(ha: string): Hashfn
 	"sha" or
 	"sha1" =>
 		return keyring->sha1;
+	"sha256" =>
+		return keyring->sha256;
+	"sha384" =>		# CNSA 2.0 (ML-DSA-87)
+		return keyring->sha384;
+	"sha512" =>
+		return keyring->sha512;
 	"md4" =>
 		return keyring->md4;
 	"md5" =>

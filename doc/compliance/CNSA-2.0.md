@@ -72,9 +72,9 @@ implementation and the regression test.
 |------|--------|
 | Requirement | SHA-384 or SHA-512 |
 | Implementation | `libsec/sha2.c` + `libsec/sha512block.c`; decls `include/libsec.h:306` (`sha384`), `:307` (`sha512`), HMAC at `:311`–`:312` |
-| In use | TLS 1.3 `TLS_AES_256_GCM_SHA384`, transcript & signature hashing via SHA-384 — `appl/lib/crypt/tls.b:1441`, `:1755` |
-| Evidence | `tests/tls_crypto_test.b` |
-| Status | **Met** |
+| In use | TLS 1.3 `TLS_AES_256_GCM_SHA384`, transcript & signature hashing via SHA-384 — `appl/lib/crypt/tls.b:1441`, `:1755`. **Auth-certificate hashing** binds the digest to the signing key's strength: ML-DSA-87 / SLH-DSA certificates are hashed with **SHA-384**, classical (ed25519) certificates keep SHA-256 (`Keyring->sign`/`verify` now carry SHA-384/512 branches — `libinterp/keyring.c`; selection in `createsignerkey.b`, `signer.b`, `logind.b`, `mkauthinfo.b`, `factotum/proto/sign.b`; verifier side keys off `cert.ha` in `auditverify.b` and `infauth.b`) |
+| Evidence | `tests/tls_crypto_test.b`; `tests/cnsa_nodepair_test.sh` (two CNSA nodes complete the STS handshake exchanging **SHA-384 ML-DSA-87 certificates** over TCP); `tests/auditsign_test.b` |
+| Status | **Met** — SHA-384 now reaches the auth-certificate path, not just TLS. The hash name is stored in each certificate, so verifiers re-hash to match and pre-existing SHA-256 certificates still verify (backward compatible). |
 
 ### 3.3 Key establishment — ML-KEM (FIPS 203) ✅ primitive / ⚠ parameter
 
@@ -97,6 +97,7 @@ implementation and the regression test.
 | X.509 | OIDs `id-ML-DSA-65` 2.16.840.1.101.3.4.3.18, `id-ML-DSA-87` …3.19 (`appl/lib/crypt/pkcs.b`, `appl/lib/crypt/x509.b`) |
 | Key generation | `auth/createsignerkey -a mldsa87 <name>`, or the **`-c` CNSA flag** (selects ML-DSA-87 in one option) (`appl/cmd/auth/createsignerkey.b`) |
 | Evidence | `tests/mldsa_test.b` (KAT, sign/verify, wrong-key rejection, cert verify), `tests/mldsa_stress_test.b`, `tests/pqauth_test.b` *HybridHandshakeMLDSA* (fully-PQ handshake) |
+| Cert hash | An ML-DSA-87 signer self-cert is hashed with **SHA-384** (FIPS 204 Cat-5 pairing), not SHA-256 — verified end-to-end: `createsignerkey -c` emits `cert.ha=sha384`, and two CNSA nodes mutually authenticate over TCP exchanging SHA-384 ML-DSA-87 certs (`tests/cnsa_nodepair_test.sh`, `both-cnsa-1024-mldsa87` PASS) |
 | Status | **Met (CNSA-strict mode)** — with CNSA mode on (`/env/cnsamode`), `createsignerkey` defaults to **ML-DSA-87** (verified: the generated key matches the `-c` mldsa87 key size, ~20 KB, vs the 651 B ed25519 default); the `-c` flag and `-a` override are unchanged. Default deployments stay on ed25519. |
 
 ### 3.5 Software/firmware signing — LMS/XMSS — Not Applicable (no firmware in scope)

@@ -916,8 +916,8 @@ jobs:
         sed -i '' "s|InferNode 0.1|InferNode ${VERSION} build ${BUILD_DATE}-${SHORT_SHA}|" include/version.h
         echo "Version: $(cat include/version.h)"
 
-    - name: Install SDL3 and opus
-      run: brew install sdl3 sdl3_ttf opus
+    - name: Install SDL3, opus and libfido2
+      run: brew install sdl3 sdl3_ttf opus libfido2
 
     - name: Build mk
       run: |
@@ -969,9 +969,39 @@ jobs:
         install_name_tool -change "$SDL3_DYLIB" \
           @executable_path/libSDL3.0.dylib emu/MacOSX/InferNode
 
-        # Verify
+        # Bundle libfido2 (YubiKey/FIDO2 support for /dev/2fa) and its
+        # transitive deps — libcbor, libcrypto. Unlike SDL3 these reference
+        # each other, so walk the tree with otool and rewrite every Homebrew
+        # load command to @executable_path. Versioned names (libcbor.0.13,
+        # libcrypto.3) drift with Homebrew, so discover them rather than
+        # hardcode. Without this the release links against /opt/homebrew paths
+        # absent on an end user's Mac and FIDO2 enrollment silently no-ops.
+        bundle_homebrew_deps() {
+          # $1 = mach-o file in emu/MacOSX/ to rewrite in place.
+          otool -L "$1" | awk '/\/opt\/homebrew\// {print $1}' | while read -r dep; do
+            base=$(basename "$dep")
+            if [ ! -f "emu/MacOSX/$base" ]; then
+              cp "$dep" "emu/MacOSX/$base"
+              chmod u+w "emu/MacOSX/$base"
+              install_name_tool -id "@executable_path/$base" "emu/MacOSX/$base"
+              bundle_homebrew_deps "emu/MacOSX/$base"   # recurse into the copy
+            fi
+            install_name_tool -change "$dep" "@executable_path/$base" "$1"
+          done
+        }
+        bundle_homebrew_deps emu/MacOSX/InferNode
+
+        # Verify: every dep now self-contained, no /opt/homebrew left, and
+        # libfido2 actually got compiled in and bundled (guards the silent
+        # HAVE_FIDO2-off regression that shipped 2fa as a dead stub).
         echo "Updated load paths:"
-        otool -L emu/MacOSX/InferNode | grep -i sdl
+        otool -L emu/MacOSX/InferNode | grep -iE "sdl|fido|cbor|crypto|opus"
+        if otool -L emu/MacOSX/InferNode | grep -q "/opt/homebrew"; then
+          echo "ERROR: InferNode still references absolute /opt/homebrew paths"; exit 1
+        fi
+        if ! otool -L emu/MacOSX/InferNode | grep -q "@executable_path/libfido2"; then
+          echo "ERROR: libfido2 not linked — FIDO2/YubiKey 2fa would ship as a stub"; exit 1
+        fi
 
     - name: Import signing certificate
       env:
@@ -999,9 +1029,11 @@ jobs:
         # Start from the checked-out .app bundle (has Info.plist, icon, launcher)
         cp -a MacOSX/Infernode.app "$APP"
 
-        # Emulator binary and SDL3 go in Contents/MacOS/ (stripped for release)
+        # Emulator binary and bundled dylibs (SDL3, opus, libfido2 + its
+        # cbor/crypto deps) go in Contents/MacOS/ alongside the @executable_path
+        # references rewritten in the Prepare step. Stripped for release.
         cp emu/MacOSX/InferNode "$MACOS/emu"
-        cp emu/MacOSX/libSDL3.0.dylib "$MACOS/"
+        cp emu/MacOSX/*.dylib "$MACOS/"
 
         # Native tools
         mkdir -p "$MACOS/tools"
@@ -1062,9 +1094,12 @@ jobs:
         </plist>
         PLIST
 
-        # Sign innermost binaries first
-        codesign --force --options runtime --timestamp \
-          --sign "$IDENTITY" "$APP/Contents/MacOS/libSDL3.0.dylib"
+        # Sign innermost binaries first — every bundled dylib (SDL3, opus,
+        # libfido2 + cbor/crypto), or notarization rejects the unsigned ones.
+        for dylib in "$APP/Contents/MacOS/"*.dylib; do
+          [ -f "$dylib" ] && codesign --force --options runtime --timestamp \
+            --sign "$IDENTITY" "$dylib"
+        done
         codesign --force --options runtime --timestamp \
           --entitlements /tmp/emu-entitlements.plist \
           --sign "$IDENTITY" "$APP/Contents/MacOS/emu"

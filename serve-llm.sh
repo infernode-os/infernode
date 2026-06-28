@@ -13,10 +13,22 @@
 #   serve-llm.sh --anon-lan       # listen with no authentication
 #                                 # (the pre-INFR-16 default; trusted nets only)
 #   serve-llm.sh --gen-key        # generate the signer keyfile, then exit
+#   serve-llm.sh --cnsa           # force CNSA 2.0 strict crypto (see below)
+#   serve-llm.sh --classical      # force classical crypto (see below)
 #   serve-llm.sh --help
 #
-# Default listener: tcp!*!5640 with Inferno Ed25519 keyring auth.
+# Default listener: tcp!*!5640 with Inferno keyring auth.
 # Clients dial with: mount -k <keyfile> tcp!host!5640 /mnt/llm
+#
+# CNSA 2.0 strict mode upgrades both crypto layers in lockstep:
+#   - session key agreement: ML-KEM-1024  (FIPS 203, instead of ML-KEM-768)
+#   - signer keyfile:        ML-DSA-87    (FIPS 204, instead of Ed25519)
+# It is read from the host CNSAMODE env var (on unless unset/0/n/N — the same
+# rule the emu's keyring.c applies) and overridden by --cnsa / --classical.
+# Both ends of a mount MUST agree: a strict listener will not complete a
+# handshake with a classical client, and a CNSA-strict listener cannot use an
+# Ed25519 keyfile. Regenerate the keyfile with --gen-key whenever you switch
+# modes; the alg is chosen by the mode in force at generation time.
 #
 # Logs go to stderr; under systemd they land in the journal.
 # See docs/HEADLESS-LLM-DAEMON.md §Hardening for the full key-distribution
@@ -45,20 +57,48 @@ KEY_HOSTPATH="${HOME}/.infernode/lib/keyring/serve-llm"
 KEY_INFPATH="/lib/keyring/serve-llm"
 
 print_help() {
-	sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+	# Print the comment header (from line 2 up to, but not including, the
+	# first `set -euo pipefail`), stripping leading "# ". Range-free so the
+	# header can grow without a hard-coded end line drifting out of sync.
+	sed -n '2,/^set -euo pipefail/{/^set -euo pipefail/!p;}' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ── Argument parsing ───────────────────────────────────────────
 LISTEN_MODE="keyring"
 GEN_KEY=0
+
+# CNSA 2.0 strict mode (ML-KEM-1024 key agreement + ML-DSA-87 signer key).
+# Default follows the host CNSAMODE env var using the SAME "on unless
+# unset/0/n/N" rule the emu's keyring.c cnsamode() applies, so a fleet-wide
+# `Environment=CNSAMODE=1` in the systemd unit Just Works. --cnsa/--classical
+# override it explicitly.
+cnsa_truthy() {  # mirror keyring.c: set, non-empty, first char not 0/n/N
+	case "${1:-}" in
+		""|0*|n*|N*) return 1 ;;
+		*)           return 0 ;;
+	esac
+}
+if cnsa_truthy "${CNSAMODE:-}"; then CNSA=1; else CNSA=0; fi
+
 for arg in "$@"; do
 	case "$arg" in
-		--anon-lan) LISTEN_MODE="anon" ;;
-		--gen-key)  GEN_KEY=1 ;;
-		-h|--help)  print_help; exit 0 ;;
+		--anon-lan)  LISTEN_MODE="anon" ;;
+		--gen-key)   GEN_KEY=1 ;;
+		--cnsa)      CNSA=1 ;;
+		--classical) CNSA=0 ;;
+		-h|--help)   print_help; exit 0 ;;
 		*) echo "serve-llm: unknown arg: $arg (try --help)" >&2; exit 2 ;;
 	esac
 done
+
+# Re-pin CNSAMODE to the resolved decision so EVERY emu we spawn (key
+# generation below and the listener at the end) reads exactly the policy we
+# settled on — regardless of how, or whether, the caller's environment set it.
+# emu reflects this into Inferno /env/cnsamode for the Limbo tools
+# (createsignerkey, tls); keyring.c reads it via getenv for the native STS
+# handshake. "1"/"0" both reflect cleanly and are read consistently at both
+# layers.
+export CNSAMODE="$CNSA"
 
 # ── Sanity checks (always) ─────────────────────────────────────
 [ -x "$EMU" ]          || { echo "serve-llm: emu missing at $EMU" >&2; exit 1; }
@@ -84,7 +124,20 @@ if [ "$GEN_KEY" -eq 1 ]; then
 	STAGE_INFPATH="/usr/inferno/keyring/serve-llm.staging.$$"
 	mkdir -p "$(dirname "$STAGE_HOSTPATH")"
 
-	echo "serve-llm: generating Ed25519 signer key for $OWNER -> $KEY_HOSTPATH" >&2
+	# Signer algorithm follows the resolved CNSA decision. Pass it
+	# explicitly rather than leaning on createsignerkey's /env/cnsamode
+	# default so the keyfile alg is unambiguous from the command alone and
+	# never silently inherits a stray host CNSAMODE: -c forces ML-DSA-87,
+	# -a ed25519 forces classical.
+	if [ "$CNSA" -eq 1 ]; then
+		GEN_ALG_ARGS=(-c)            # ML-DSA-87, FIPS 204, NIST Category 5
+		GEN_ALG_LABEL="ML-DSA-87 (CNSA 2.0 strict)"
+	else
+		GEN_ALG_ARGS=(-a ed25519)
+		GEN_ALG_LABEL="Ed25519 (classical)"
+	fi
+
+	echo "serve-llm: generating $GEN_ALG_LABEL signer key for $OWNER -> $KEY_HOSTPATH" >&2
 
 	# emu may not exit cleanly after the key is written; cap with timeout.
 	# Direct invocation of createsignerkey.dis (no sh -c indirection).
@@ -104,7 +157,7 @@ if [ "$GEN_KEY" -eq 1 ]; then
 	exec 2>/dev/null
 	timeout 30 "$EMU" -c1 "-r$ROOT" \
 		/dis/auth/createsignerkey.dis \
-		-a ed25519 -f "$STAGE_INFPATH" "$OWNER" \
+		"${GEN_ALG_ARGS[@]}" -f "$STAGE_INFPATH" "$OWNER" \
 		</dev/null >&9 2>&9 &
 	gen_pid=$!
 	set +e
@@ -121,7 +174,7 @@ if [ "$GEN_KEY" -eq 1 ]; then
 	if [ ! -s "$STAGE_HOSTPATH" ]; then
 		echo "serve-llm: key generation failed (staging file missing or empty; createsignerkey exit=$gen_ec)" >&2
 		echo "serve-llm: try running by hand:" >&2
-		echo "  $EMU -r$ROOT /dis/auth/createsignerkey.dis -a ed25519 -f $STAGE_INFPATH $OWNER" >&2
+		echo "  CNSAMODE=$CNSAMODE $EMU -r$ROOT /dis/auth/createsignerkey.dis ${GEN_ALG_ARGS[*]} -f $STAGE_INFPATH $OWNER" >&2
 		rm -f "$STAGE_HOSTPATH"
 		exit 1
 	fi
@@ -132,8 +185,11 @@ if [ "$GEN_KEY" -eq 1 ]; then
 
 	mv "$STAGE_HOSTPATH" "$KEY_HOSTPATH"
 	chmod 600 "$KEY_HOSTPATH"
-	echo "serve-llm: wrote $KEY_HOSTPATH ($(wc -c < "$KEY_HOSTPATH") bytes; mode 600)" >&2
+	echo "serve-llm: wrote $KEY_HOSTPATH ($(wc -c < "$KEY_HOSTPATH") bytes; mode 600; alg=$GEN_ALG_LABEL)" >&2
 	echo "serve-llm: clients dial with: mount -k $KEY_HOSTPATH tcp!<host>!5640 /mnt/llm" >&2
+	if [ "$CNSA" -eq 1 ]; then
+		echo "serve-llm: NOTE this is a CNSA-strict keyfile — the client node must also run in CNSA mode (CNSAMODE=1) or the handshake will fail." >&2
+	fi
 	exit 0
 fi
 
@@ -179,8 +235,12 @@ fi
 export SERVE_LLM_AUTH="$LISTEN_MODE"
 export SERVE_LLM_KEY="$KEY_INFPATH"
 
+# Crypto mode only governs the keyring handshake; --anon-lan attaches with
+# -A and never runs it, so CNSA is meaningless there.
+if [ "$CNSA" -eq 1 ]; then CRYPTO="CNSA-strict (ML-KEM-1024 + ML-DSA-87)"; else CRYPTO="classical (ML-KEM-768 + Ed25519)"; fi
+
 case "$LISTEN_MODE" in
-	keyring) echo "serve-llm: $(date -Iseconds) listen=keyring keyfile=$KEY_HOSTPATH" >&2 ;;
+	keyring) echo "serve-llm: $(date -Iseconds) listen=keyring crypto=$CRYPTO keyfile=$KEY_HOSTPATH" >&2 ;;
 	anon)    echo "serve-llm: $(date -Iseconds) listen=ANONYMOUS (--anon-lan) anyone reaching :5640 can mount /mnt/llm" >&2 ;;
 esac
 

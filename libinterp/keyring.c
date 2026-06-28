@@ -974,7 +974,7 @@ Keyring_sign(void *fp)
 	SigAlg *sa;
 	SK *sk;
 	XDigestState *ds;
-	uchar digest[SHA256dlen];
+	uchar digest[SHA512dlen];
 	char *buf;
 	void *v;
 
@@ -997,6 +997,12 @@ Keyring_sign(void *fp)
 	if(strcmp(string2c(f->ha), "sha256") == 0){
 		sha256((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_SHA256dlen;
+	} else if(strcmp(string2c(f->ha), "sha384") == 0){
+		sha384((uchar*)buf, n, digest, &ds->state);
+		n = Keyring_SHA384dlen;
+	} else if(strcmp(string2c(f->ha), "sha512") == 0){
+		sha512((uchar*)buf, n, digest, &ds->state);
+		n = Keyring_SHA512dlen;
 	} else if(strcmp(string2c(f->ha), "sha") == 0 || strcmp(string2c(f->ha), "sha1") == 0){
 		sha1((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_SHA1dlen;
@@ -1063,7 +1069,7 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	int n;
 	SigAlg *sa, *pksa;
 	DigestState *ds;
-	uchar digest[SHA256dlen];
+	uchar digest[SHA512dlen];
 	char *buf;
 
 	sa = checkSigAlg(c->x.sa);
@@ -1080,6 +1086,14 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		ds = sha256((uchar*)a, len, 0, 0);
 		sha256((uchar*)buf, n, digest, ds);
 		n = Keyring_SHA256dlen;
+	} else if(strcmp(string2c(c->x.ha), "sha384") == 0){
+		ds = sha384((uchar*)a, len, 0, 0);
+		sha384((uchar*)buf, n, digest, ds);
+		n = Keyring_SHA384dlen;
+	} else if(strcmp(string2c(c->x.ha), "sha512") == 0){
+		ds = sha512((uchar*)a, len, 0, 0);
+		sha512((uchar*)buf, n, digest, ds);
+		n = Keyring_SHA512dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
 		ds = sha1((uchar*)a, len, 0, 0);
 		sha1((uchar*)buf, n, digest, ds);
@@ -1121,7 +1135,7 @@ Keyring_verify(void *fp)
 	SigAlg *sa, *pksa;
 	PK *pk;
 	XDigestState *ds;
-	uchar digest[SHA256dlen];
+	uchar digest[SHA512dlen];
 	char *buf;
 
 	f = fp;
@@ -1146,6 +1160,12 @@ Keyring_verify(void *fp)
 	if(strcmp(string2c(c->x.ha), "sha256") == 0){
 		sha256((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_SHA256dlen;
+	} else if(strcmp(string2c(c->x.ha), "sha384") == 0){
+		sha384((uchar*)buf, n, digest, &ds->state);
+		n = Keyring_SHA384dlen;
+	} else if(strcmp(string2c(c->x.ha), "sha512") == 0){
+		sha512((uchar*)buf, n, digest, &ds->state);
+		n = Keyring_SHA512dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
 		sha1((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_SHA1dlen;

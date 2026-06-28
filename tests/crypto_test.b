@@ -409,26 +409,22 @@ testRC4Disabled(t: ref T)
 #
 testDESDisabled(t: ref T)
 {
-	t.log("Testing that DES is disabled...");
-
-	# DES setup should still work at the low level (keyring)
-	# but SSL3 should reject it at the protocol level
-
 	key := array[8] of byte;
 	for(i := 0; i < 8; i++)
 		key[i] = byte i;
 
-	state := kr->dessetup(key, nil);
-
-	if(state != nil) {
-		t.log("DES is available at keyring level (expected)");
-		t.log("SSL3 protocol-level rejection tested separately");
-	} else {
-		t.log("DES setup returned nil - may be completely removed");
+	rejected := 0;
+	{
+		state := kr->dessetup(key, nil);
+		if(state != nil)
+			t.error("DES setup unexpectedly succeeded");
+	} exception {
+	"DES is disabled" =>
+		rejected = 1;
+	"*" =>
+		t.error("DES setup failed with an unexpected exception");
 	}
-
-	# This test passes because we've verified the code change.
-	t.assert(1, "DES disabled verification (code review confirmed)");
+	t.assert(rejected, "DES setup rejected");
 }
 
 #

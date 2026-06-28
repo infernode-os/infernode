@@ -21,6 +21,7 @@
 #include	<unistd.h>
 #include	<pwd.h>
 #include	<grp.h>
+#include	<errno.h>
 
 typedef struct Fsinfo Fsinfo;
 struct Fsinfo
@@ -84,6 +85,34 @@ static	long	fsdirread(Chan*, uchar*, int, vlong);
 static	int	fsomode(int);
 static	void	fsremove(Chan*);
 static	vlong osdisksize(int);	/* defined by including file */
+
+static int
+fsattrfd(Chan *c, struct stat *expected)
+{
+	struct stat actual;
+	int fd, oerrno;
+
+#ifndef O_NOFOLLOW
+	errno = ENOTSUP;
+	return -1;
+#else
+	fd = open(FS(c)->name->s, O_RDONLY|O_NONBLOCK|O_NOFOLLOW);
+	if(fd < 0)
+		return -1;
+	if(fstat(fd, &actual) < 0){
+		oerrno = errno;
+		close(fd);
+		errno = oerrno;
+		return -1;
+	}
+	if(actual.st_dev != expected->st_dev || actual.st_ino != expected->st_ino){
+		close(fd);
+		errno = ESTALE;
+		return -1;
+	}
+	return fd;
+#endif
+}
 
 /*
  * make invalid symbolic links visible; less confusing, and at least you can then delete them.
@@ -540,7 +569,7 @@ fswstat(Chan *c, uchar *buf, int nb)
 	Cname *volatile ph;
 	struct stat st;
 	struct utimbuf utbuf;
-	int tsync;
+	int tsync, fd, rv, oerrno;
 
 	if(FS(c)->fd >= 0){
 		if(fstat(FS(c)->fd, &st) < 0)
@@ -585,7 +614,14 @@ fswstat(Chan *c, uchar *buf, int nb)
 			if(fchmod(FS(c)->fd, d->mode&0777) < 0)
 				oserror();
 		}else{
-			if(chmod(FS(c)->name->s, d->mode&0777) < 0)
+			fd = fsattrfd(c, &st);
+			if(fd < 0)
+				oserror();
+			rv = fchmod(fd, d->mode&0777);
+			oerrno = errno;
+			close(fd);
+			errno = oerrno;
+			if(rv < 0)
 				oserror();
 		}
 		FS(c)->mode &= ~0777;
@@ -626,7 +662,14 @@ fswstat(Chan *c, uchar *buf, int nb)
 				if(fchown(FS(c)->fd, st.st_uid, p->id) < 0)
 					oserror();
 			}else{
-				if(chown(FS(c)->name->s, st.st_uid, p->id) < 0)
+				fd = fsattrfd(c, &st);
+				if(fd < 0)
+					oserror();
+				rv = fchown(fd, st.st_uid, p->id);
+				oerrno = errno;
+				close(fd);
+				errno = oerrno;
+				if(rv < 0)
 					oserror();
 			}
 			FS(c)->gid = p->id;

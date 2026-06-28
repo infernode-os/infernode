@@ -23,9 +23,81 @@ havebytes(ParseState *ps, uchar *p, ulong n)
 }
 
 static int
+aligned(uchar *p, ulong n)
+{
+	return n == 0 || (uintptr)p%n == 0;
+}
+
+static int
+pointerslot(Type *t, ulong offset)
+{
+	ulong word, map;
+
+	if(t == nil || t->size <= 0 || offset%sizeof(WORD) != 0)
+		return 0;
+	offset %= t->size;
+	word = offset/sizeof(WORD);
+	map = word/8;
+	return map < (ulong)t->np && (t->map[map] & (1 << (7-(word%8)))) != 0;
+}
+
+static int
+haspointers(Type *t, uchar *base, uchar *p, ulong n)
+{
+	ulong first, last, offset;
+
+	if(t == nil || t->np == 0 || n == 0)
+		return 0;
+	first = p-base;
+	last = first+n;
+	offset = first-(first%sizeof(WORD));
+	for(; offset < last; offset += sizeof(WORD))
+		if(pointerslot(t, offset))
+			return 1;
+	return 0;
+}
+
+static int
+ismanagedpointer(Type *t, uchar *base, uchar *p)
+{
+	return p >= base && pointerslot(t, p-base);
+}
+
+static int
+validtypemap(int size, uchar *map, int mapsize)
+{
+	ulong maxwords, word;
+	int bit, i;
+
+	maxwords = (ulong)size/sizeof(WORD);
+	if(mapsize != 0 && size%sizeof(WORD) != 0)
+		return 0;
+	if((ulong)mapsize > (maxwords+7)/8)
+		return 0;
+	for(i = 0; i < mapsize; i++)
+		for(bit = 0; bit < 8; bit++){
+			word = (ulong)i*8+bit;
+			if((map[i] & (1 << (7-bit))) != 0 && word >= maxwords)
+				return 0;
+		}
+	return 1;
+}
+
+static int
+validarraysize(int elementsize, int count)
+{
+	uint maxalloc;
+
+	maxalloc = 128*1024*1024;
+	return elementsize >= 0 && count >= 0 &&
+		(elementsize == 0 || (uint)count <= (maxalloc-sizeof(Array))/(uint)elementsize);
+}
+
+static int
 operand(ParseState *ps, uchar **p)
 {
 	int c;
+	u32int v;
 	uchar *cp;
 
 	cp = *p;
@@ -47,22 +119,21 @@ operand(ParseState *ps, uchar **p)
 			return -1;
 		}
 		*p = cp+2;
+		v = ((u32int)(c&0x3F)<<8)|cp[1];
 		if(c & 0x20)
-			c |= ~0x3F;
-		else
-			c &= 0x3F;
-		return (c<<8)|cp[1];
+			return (int)((vlong)v-(1LL<<14));
+		return (int)v;
 	case 0xC0:
 		if(!havebytes(ps, cp, 4)){
 			ps->error = 1;
 			return -1;
 		}
 		*p = cp+4;
+		v = ((u32int)(c&0x3F)<<24)|((u32int)cp[1]<<16)|
+			((u32int)cp[2]<<8)|cp[3];
 		if(c & 0x20)
-			c |= ~0x3F;
-		else
-			c &= 0x3F;
-		return (c<<24)|(cp[1]<<16)|(cp[2]<<8)|cp[3];
+			return (int)((vlong)v-(1LL<<30));
+		return (int)v;
 	}
 	return 0;
 }
@@ -78,9 +149,9 @@ disw(ParseState *ps, uchar **p)
 		ps->error = 1;
 		return 0;
 	}
-	v  = c[0] << 24;
-	v |= c[1] << 16;
-	v |= c[2] << 8;
+	v  = (ulong)c[0] << 24;
+	v |= (ulong)c[1] << 16;
+	v |= (ulong)c[2] << 8;
 	v |= c[3];
 	*p = c + 4;
 	return v;
@@ -158,7 +229,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 {
 	Heap *h;
 	Inst *ip;
-	Type *pt;
+	Type *pt, *datatype;
 	String *s;
 	Module *m;
 	Array *ary;
@@ -166,8 +237,9 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	WORD lo, hi;
 	int lsize, id, v, entry, entryt, tnp, tsz, siglen;
 	int de, pc, i, n, nbytes, isize, dsize, hsize, dasp;
-	uchar *mod, sm, *istream, **isp, *si, *addr, *addrend;
-	uchar *dastack[DADEPTH], *endstack[DADEPTH];
+	uchar *mod, sm, *istream, **isp, *si, *addr, *addrend, *database;
+	uchar *dastack[DADEPTH], *endstack[DADEPTH], *basestack[DADEPTH];
+	Type *typestack[DADEPTH];
 	Link *l;
 	ParseState ps;
 
@@ -310,7 +382,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 		}
 		tsz = operand(&ps, isp);
 		tnp = operand(&ps, isp);
-		if(ps.error || tsz < 0 || tsz > 128*1024*1024 || tnp < 0 || tnp > 128*1024 || !havebytes(&ps, istream, tnp)){
+		if(ps.error || tsz < 0 || tsz > 128*1024*1024 || tnp < 0 || tnp > 128*1024 ||
+		   !havebytes(&ps, istream, tnp) || !validtypemap(tsz, istream, tnp)){
 			kwerrstr("implausible Dis file");
 			goto bad;
 		}
@@ -324,6 +397,10 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	}
 
 	if(dsize != 0) {
+		if(hsize == 0 || m->type == nil){
+			kwerrstr("missing desc for mp");
+			goto bad;
+		}
 		pt = m->type[0];
 		if(pt == 0 || pt->size != dsize) {
 			kwerrstr("bad desc for mp");
@@ -334,6 +411,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	}
 	addr = m->origmp;
 	addrend = addr == H ? H : addr+dsize;
+	database = addr;
+	datatype = dsize == 0 ? nil : m->type[0];
 	dasp = 0;
 	for(;;) {
 		if(istream >= ps.end) {
@@ -357,7 +436,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			kwerrstr("bad data item");
 			goto bad;
 		case DEFS:
-			if(!havebytes(&ps, istream, n) || (ulong)(addrend-si) < sizeof(String*)){
+			if(!havebytes(&ps, istream, n) || (ulong)(addrend-si) < sizeof(String*) ||
+			   !aligned(si, sizeof(String*)) || !ismanagedpointer(datatype, database, si) || *(String**)si != H){
 				kwerrstr("bad string data range");
 				goto bad;
 			}
@@ -366,7 +446,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			*(String**)si = s;
 			break;
 		case DEFB:
-			if(!havebytes(&ps, istream, n) || n > addrend-si){
+			if(!havebytes(&ps, istream, n) || n > addrend-si || haspointers(datatype, database, si, n)){
 				kwerrstr("bad byte data range");
 				goto bad;
 			}
@@ -374,7 +454,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 				*si++ = *istream++;
 			break;
 		case DEFW:
-			if(n > (addrend-si)/sizeof(WORD) || !havebytes(&ps, istream, (ulong)n*4)){
+			if(n > (addrend-si)/sizeof(WORD) || !havebytes(&ps, istream, (ulong)n*4) ||
+			   !aligned(si, sizeof(WORD)) || haspointers(datatype, database, si, (ulong)n*sizeof(WORD))){
 				kwerrstr("bad word data range");
 				goto bad;
 			}
@@ -384,26 +465,21 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			}
 			break;
 		case DEFL:
-			if(n > (addrend-si)/sizeof(LONG) || !havebytes(&ps, istream, (ulong)n*8)){
+			if(n > (addrend-si)/sizeof(LONG) || !havebytes(&ps, istream, (ulong)n*8) ||
+			   !aligned(si, sizeof(LONG)) || haspointers(datatype, database, si, (ulong)n*sizeof(LONG))){
 				kwerrstr("bad long data range");
 				goto bad;
 			}
 			for(i = 0; i < n; i++) {
 				hi = disw(&ps, isp);
 				lo = disw(&ps, isp);
-				/*
-				 * Mask the low word to 32 bits with u32int. ulong is 64-bit on
-				 * LP64 hosts, so (ulong)lo does not narrow lo, and disw() returns
-				 * the word sign-extended (its c[0]<<24 is a signed-int shift); a
-				 * low word with bit 31 set would otherwise leak 1s into the high
-				 * half of the assembled LONG.
-				 */
-				*(LONG*)si = (LONG)hi << 32 | (LONG)(u32int)lo;
+				*(ULONG*)si = ((ULONG)(u32int)hi << 32) | (u32int)lo;
 				si += sizeof(LONG);
 			}
 			break;
 		case DEFF:
-			if(n > (addrend-si)/sizeof(REAL) || !havebytes(&ps, istream, (ulong)n*8)){
+			if(n > (addrend-si)/sizeof(REAL) || !havebytes(&ps, istream, (ulong)n*8) ||
+			   !aligned(si, sizeof(REAL)) || haspointers(datatype, database, si, (ulong)n*sizeof(REAL))){
 				kwerrstr("bad real data range");
 				goto bad;
 			}
@@ -415,7 +491,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			}
 			break;
 		case DEFA:			/* Array */
-			if((ulong)(addrend-si) < sizeof(Array*) || !havebytes(&ps, istream, 8)){
+			if((ulong)(addrend-si) < sizeof(Array*) || !havebytes(&ps, istream, 8) ||
+			   !aligned(si, sizeof(Array*)) || !ismanagedpointer(datatype, database, si) || A(si) != H){
 				kwerrstr("bad array data range");
 				goto bad;
 			}
@@ -426,11 +503,10 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			}
 			pt = m->type[v];
 			v = disw(&ps, isp);
-			if(ps.error){
-				kwerrstr("truncated array data");
+			if(ps.error || !validarraysize(pt->size, v)){
+				kwerrstr("bad array size");
 				goto bad;
 			}
-			acheck(pt->size, v);
 			nbytes = pt->size * v;
 			h = nheap(sizeof(Array)+nbytes);
 			h->t = &Tarray;
@@ -445,7 +521,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			A(si) = ary;
 			break;			
 		case DIND:			/* Set index */
-			if((ulong)(addrend-si) < sizeof(Array*)){
+			if((ulong)(addrend-si) < sizeof(Array*) || !aligned(si, sizeof(Array*)) ||
+			   !ismanagedpointer(datatype, database, si)){
 				kwerrstr("bad array index data range");
 				goto bad;
 			}
@@ -461,8 +538,12 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			}
 			dastack[dasp++] = addr;
 			endstack[dasp-1] = addrend;
+			basestack[dasp-1] = database;
+			typestack[dasp-1] = datatype;
 			addr = ary->data+v*ary->t->size;
 			addrend = ary->data+ary->len*ary->t->size;
+			database = ary->data;
+			datatype = ary->t;
 			break;
 		case DAPOP:
 			if(dasp == 0) {
@@ -471,6 +552,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			}
 			addr = dastack[--dasp];
 			addrend = endstack[dasp];
+			database = basestack[dasp];
+			datatype = typestack[dasp];
 			break;
 		}
 	}

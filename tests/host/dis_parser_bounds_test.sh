@@ -35,6 +35,38 @@ header = b"".join(operand(v) for v in (819248, 0, 0, 0, 0, 1, 0, -1, -1))
 (out / "type-map-truncated.dis").write_bytes(
     header + operand(0) + operand(0) + operand(1)
 )
+
+# Module data requires type descriptor zero.
+(out / "missing-data-type.dis").write_bytes(
+    b"".join(operand(v) for v in (819248, 0, 0, 0, 8, 0, 0, -1, -1))
+)
+
+data_header = b"".join(operand(v) for v in (819248, 0, 0, 0, 8, 1, 0, -1, -1))
+
+# A type bitmap must not mark pointer words beyond the object allocation.
+(out / "type-map-oob.dis").write_bytes(
+    data_header + operand(0) + operand(8) + operand(1) + b"\x40"
+)
+
+pointer_type = data_header + operand(0) + operand(8) + operand(1) + b"\x80"
+
+# Scalar initializers must not replace managed pointers with attacker data.
+(out / "scalar-pointer.dis").write_bytes(
+    pointer_type + b"\x21" + operand(0) + b"\x70\xc0\x14\x68"
+)
+
+# Reinitializing a managed pointer used to leak the first allocation.
+(out / "duplicate-pointer.dis").write_bytes(
+    pointer_type + b"\x31" + operand(0) + b"a" + b"\x31" + operand(0) + b"b"
+)
+
+scalar_header = b"".join(operand(v) for v in (819248, 0, 0, 0, 16, 1, 0, -1, -1))
+scalar_type = scalar_header + operand(0) + operand(16) + operand(0)
+
+# Typed stores at attacker-selected offsets must be naturally aligned.
+(out / "unaligned-word.dis").write_bytes(
+    scalar_type + b"\x21" + operand(1) + b"\x00\x00\x00\x01"
+)
 PY
 
 run_bad() {
@@ -55,6 +87,11 @@ run_bad() {
 
 run_bad type-id-oob.dis "heap id range"
 run_bad type-map-truncated.dis "implausible Dis file"
+run_bad missing-data-type.dis "missing desc for mp"
+run_bad type-map-oob.dis "implausible Dis file"
+run_bad scalar-pointer.dis "bad word data range"
+run_bad duplicate-pointer.dis "bad string data range"
+run_bad unaligned-word.dis "bad word data range"
 
 for size in 0 1 2 4 8 16 32 64 128 256 512 1024 2048 4096; do
 	cp "$ROOT/dis/sh.dis" "$PROBEDIR/truncated.dis"

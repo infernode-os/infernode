@@ -1,256 +1,352 @@
 /*
- * Fuzz harness for Dis bytecode parser.
+ * Runtime adapter for fuzzing the production Dis parser in libinterp/load.c.
  *
- * Exercises the operand encoding, instruction decoding, and type
- * descriptor parsing from libinterp/load.c using arbitrary byte
- * streams.  Self-contained: the parsing primitives are extracted
- * here so we don't need the full Inferno kernel to link.
+ * This supplies the allocator, heap, link, and kernel services parsemod needs
+ * while retaining the production parser and runtime data layouts unchanged.
  */
+#include "lib9.h"
+#include "isa.h"
+#include "interp.h"
+#include "raise.h"
+#include "kernel.h"
 
+#include <setjmp.h>
 #include <stdint.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
+#include <stdio.h>
 
-/* Dis bytecode constants (from include/isa.h) */
-enum {
-	XMAGIC	= 819248,
-	SMAGIC	= 923426,
+static jmp_buf parseerror;
+static int parsing;
+#ifdef STANDALONE_FUZZ_TARGET
+static int parsedmodule;
+#endif
 
-	AMP	= 0x00,
-	AFP	= 0x01,
-	AIMM	= 0x02,
-	AIND	= 0x04,
-	AMASK	= 0x07,
+char exNomem[] = "out of memory";
+int cflag;
+Type Tarray = { 1, nil, nil, sizeof(Array) };
 
-	ARM	= 0xC0,
-	AXIMM	= 0x40,
-	AXINF	= 0x80,
-	AXINM	= 0xC0,
-};
-
-#define SRC(x)		((x)<<3)
-#define DST(x)		((x)<<0)
-#define UXSRC(x)	((x)&(AMASK<<3))
-#define UXDST(x)	((x)&(AMASK<<0))
-
-typedef unsigned char uchar;
-typedef unsigned long ulong;
-
-static uchar *codeend;
-
-/*
- * Variable-length operand decoder (from libinterp/load.c).
- * This is the core parsing primitive for the Dis bytecode format.
- */
-static int
-operand(uchar **p)
+void*
+mallocz(ulong n, int clear)
 {
-	int c;
-	uchar *cp;
+	void *p;
 
-	cp = *p;
-	if(cp >= codeend)
-		return -1;
-	c = cp[0];
-	switch(c & 0xC0) {
-	case 0x00:
-		*p = cp+1;
-		return c;
-	case 0x40:
-		*p = cp+1;
-		return c|~0x7F;
-	case 0x80:
-		if(cp+2 > codeend)
-			return -1;
-		*p = cp+2;
-		if(c & 0x20)
-			c |= ~0x3F;
-		else
-			c &= 0x3F;
-		return (c<<8)|cp[1];
-	case 0xC0:
-		if(cp+4 > codeend)
-			return -1;
-		*p = cp+4;
-		if(c & 0x20)
-			c |= ~0x3F;
-		else
-			c &= 0x3F;
-		return (c<<24)|(cp[1]<<16)|(cp[2]<<8)|cp[3];
+	p = malloc(n);
+	if(p != nil && clear)
+		memset(p, 0, n);
+	return p;
+}
+
+void
+kwerrstr(char *fmt, ...)
+{
+	USED(fmt);
+}
+
+void
+error(char *message)
+{
+	USED(message);
+	if(parsing)
+		longjmp(parseerror, 1);
+	abort();
+}
+
+void
+errorf(char *fmt, ...)
+{
+	USED(fmt);
+	error("runtime error");
+}
+
+void
+freeheap(Heap *h, int swept)
+{
+	USED(h);
+	USED(swept);
+}
+
+Type*
+dtype(void (*destroyfn)(Heap*, int), int size, uchar *map, int mapsize)
+{
+	Type *t;
+
+	if(size < 0 || mapsize < 0)
+		return nil;
+	t = malloc(sizeof(Type)+mapsize);
+	if(t == nil)
+		return nil;
+	memset(t, 0, sizeof(Type)+mapsize);
+	t->ref = 1;
+	t->free = destroyfn;
+	t->size = size;
+	t->np = mapsize;
+	if(mapsize != 0)
+		memmove(t->map, map, mapsize);
+	return t;
+}
+
+void
+freetype(Type *t)
+{
+	if(t != nil && --t->ref == 0)
+		free(t);
+}
+
+void
+initmem(Type *t, void *data)
+{
+	uchar *map;
+	WORD **words;
+	int bit, i;
+
+	map = t->map;
+	words = data;
+	for(i = 0; i < t->np; i++){
+		for(bit = 0; bit < 8; bit++)
+			if(map[i] & (1 << (7-bit)))
+				words[bit] = H;
+		words += 8;
 	}
+}
+
+Heap*
+nheap(int n)
+{
+	Heap *h;
+
+	if(n < 0 || n > 128*1024*1024)
+		error("implausible heap allocation");
+	h = calloc(1, sizeof(Heap)+(size_t)n);
+	if(h == nil)
+		error(exNomem);
+	h->ref = 1;
+	return h;
+}
+
+Heap*
+heapz(Type *t)
+{
+	Heap *h;
+
+	h = nheap(t->size);
+	h->t = t;
+	t->ref++;
+	if(t->np != 0)
+		initmem(t, H2D(void*, h));
+	return h;
+}
+
+void
+initarray(Type *t, Array *a)
+{
+	uchar *p;
+	int i;
+
+	t->ref++;
+	if(t->np == 0)
+		return;
+	p = a->data;
+	for(i = 0; i < a->len; i++){
+		initmem(t, p);
+		p += t->size;
+	}
+}
+
+void
+destroy(void *data)
+{
+	Heap *h;
+	Array *a;
+	Type *t;
+	uchar *p;
+	WORD **words;
+	int bit, i, j;
+
+	if(data == H || data == nil)
+		return;
+	h = D2H(data);
+	if(--h->ref != 0)
+		return;
+	t = h->t;
+	if(t == &Tarray){
+		a = data;
+		if(a->root != H)
+			destroy(a->root);
+		else if(a->t->np != 0){
+			p = a->data;
+			for(i = 0; i < a->len; i++){
+				words = (WORD**)p;
+				for(j = 0; j < a->t->np; j++){
+					for(bit = 0; bit < 8; bit++)
+						if((a->t->map[j] & (1 << (7-bit))) && words[bit] != H)
+							destroy(words[bit]);
+					words += 8;
+				}
+				p += a->t->size;
+			}
+		}
+		freetype(a->t);
+		Tarray.ref--;
+	}else if(t != nil){
+		words = data;
+		for(i = 0; i < t->np; i++){
+			for(bit = 0; bit < 8; bit++)
+				if((t->map[i] & (1 << (7-bit))) && words[bit] != H)
+					destroy(words[bit]);
+			words += 8;
+		}
+		freetype(t);
+	}
+	free(h);
+}
+
+String*
+c2string(char *bytes, int len)
+{
+	Heap *h;
+	String *s;
+
+	if(len < 0)
+		return H;
+	h = nheap(sizeof(String)+(size_t)len+1);
+	s = H2D(String*, h);
+	s->len = len;
+	s->max = len+1;
+	memmove(s->Sascii, bytes, len);
+	((char*)&s->data)[len] = 0;
+	return s;
+}
+
+void
+acheck(int elementsize, int count)
+{
+	if(elementsize < 0 || count < 0 ||
+	   (elementsize != 0 && (uint)count >
+	    ((~0U >> 1)-sizeof(Array)-sizeof(Heap))/(uint)elementsize))
+		error("invalid array size");
+}
+
+void
+mlink(Module *m, Link *l, uchar *name, int sig, int pc, Type *frame)
+{
+	l->name = strdup((char*)name);
+	if(l->name == nil)
+		error(exNomem);
+	l->sig = sig;
+	l->frame = frame;
+	l->u.pc = m->prog+pc;
+}
+
+void
+destroylinks(Module *m)
+{
+	Link *l;
+
+	for(l = m->ext; l->name != nil; l++)
+		free(l->name);
+	free(m->ext);
+	m->ext = nil;
+}
+
+int
+verifysigner(uchar *signature, int siglen, uchar *data, ulong datalen)
+{
+	USED(signature);
+	USED(siglen);
+	USED(data);
+	USED(datalen);
+	return 1;
+}
+
+int
+mustbesigned(char *path, uchar *code, ulong length, Dir *dir)
+{
+	USED(path);
+	USED(code);
+	USED(length);
+	USED(dir);
 	return 0;
 }
 
-static ulong
-disw(uchar **p)
+int
+compile(Module *m, int size, Modlink *ml)
 {
-	ulong v;
-	uchar *c;
-
-	c = *p;
-	if(c+4 > codeend)
-		return 0;
-	v  = c[0] << 24;
-	v |= c[1] << 16;
-	v |= c[2] << 8;
-	v |= c[3];
-	*p = c + 4;
-	return v;
+	USED(m);
+	USED(size);
+	USED(ml);
+	return 1;
 }
 
-/*
- * Parse a Dis module header and instruction stream.
- * Mirrors the structure of parsemod() in libinterp/load.c
- * but without allocating kernel structures.
- */
-static int
-parse_dis(uchar *code, size_t length)
+Module*
+readmod(char *path, Module *m, int sync)
 {
-	uchar *istream, **isp;
-	int magic, isize, dsize, hsize, lsize, entry, entryt;
-	int i, op, add, siglen, n;
-
-	if(length < 4)
-		return -1;
-
-	istream = code;
-	isp = &istream;
-	codeend = code + length;
-
-	/* Magic number */
-	magic = operand(isp);
-	switch(magic) {
-	default:
-		return -1;
-	case SMAGIC:
-		siglen = operand(isp);
-		n = length - (*isp - code);
-		if(siglen < 0 || n < 0 || siglen > n)
-			return -1;
-		/* Skip signature */
-		*isp += siglen;
-		break;
-	case XMAGIC:
-		break;
-	}
-
-	/* Module header */
-	int rt = operand(isp);
-	int ss = operand(isp);
-	isize = operand(isp);
-	dsize = operand(isp);
-	hsize = operand(isp);
-	lsize = operand(isp);
-	entry = operand(isp);
-	entryt = operand(isp);
-
-	(void)rt;
-	(void)ss;
-	(void)entry;
-	(void)entryt;
-
-	if(isize < 0 || dsize < 0 || hsize < 0 || lsize < 0)
-		return -1;
-	if(isize > 1024*1024 || hsize > 1024*1024 || lsize > 1024*1024)
-		return -1;
-
-	/* Parse instruction stream */
-	for(i = 0; i < isize && istream < codeend; i++) {
-		if(istream + 2 > codeend)
-			return -1;
-		op = *istream++;
-		add = *istream++;
-
-		/* Middle operand */
-		switch(add & ARM) {
-		case AXIMM:
-		case AXINF:
-		case AXINM:
-			operand(isp);
-			break;
-		}
-
-		/* Source operand */
-		switch(UXSRC(add)) {
-		case SRC(AFP):
-		case SRC(AMP):
-		case SRC(AIMM):
-			operand(isp);
-			break;
-		case SRC(AIND|AFP):
-		case SRC(AIND|AMP):
-			operand(isp);
-			operand(isp);
-			break;
-		}
-
-		/* Destination operand */
-		switch(UXDST(add)) {
-		case DST(AFP):
-		case DST(AMP):
-		case DST(AIMM):
-			operand(isp);
-			break;
-		case DST(AIND|AFP):
-		case DST(AIND|AMP):
-			operand(isp);
-			operand(isp);
-			break;
-		}
-
-		(void)op;
-	}
-
-	/* Parse type descriptors */
-	for(i = 0; i < hsize && istream < codeend; i++) {
-		int id = operand(isp);
-		int tsz = operand(isp);
-		int tnp = operand(isp);
-		if(id < 0 || tsz < 0 || tnp < 0)
-			return -1;
-		if(tnp > 128*1024)
-			return -1;
-		/* Skip type bitmap */
-		if(istream + tnp > codeend)
-			return -1;
-		istream += tnp;
-	}
-
-	/* Parse link section */
-	for(i = 0; i < lsize && istream < codeend; i++) {
-		int pc = operand(isp);
-		int nargs = operand(isp);
-		int frame = operand(isp);
-		int nret = operand(isp);
-		(void)pc;
-		(void)nargs;
-		(void)frame;
-		(void)nret;
-
-		/* Skip function signature */
-		disw(isp);
-		/* Skip name (null-terminated string) */
-		while(istream < codeend && *istream != '\0')
-			istream++;
-		if(istream < codeend)
-			istream++;  /* skip null terminator */
-	}
-
-	return 0;
+	USED(path);
+	USED(m);
+	USED(sync);
+	return nil;
 }
 
 int
 LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-	/* Make a mutable copy since the parser advances pointers */
-	uchar *buf = malloc(size);
-	if(buf == NULL)
+	uchar *copy;
+	Module *m;
+	Dir dir;
+
+	if(size == 0 || size >= 8*1024*1024)
 		return 0;
-	memcpy(buf, data, size);
+	copy = malloc(size);
+	if(copy == nil)
+		return 0;
+	memmove(copy, data, size);
+	memset(&dir, 0, sizeof(dir));
 
-	parse_dis(buf, size);
-
-	free(buf);
+	parsing = 1;
+#ifdef STANDALONE_FUZZ_TARGET
+	parsedmodule = 0;
+#endif
+	if(setjmp(parseerror) == 0){
+		m = parsemod("/fuzz.dis", copy, size, &dir);
+		if(m != nil){
+#ifdef STANDALONE_FUZZ_TARGET
+			parsedmodule = 1;
+#endif
+			unload(m);
+		}
+	}
+	parsing = 0;
+	free(copy);
 	return 0;
 }
+
+#ifdef STANDALONE_FUZZ_TARGET
+int
+main(int argc, char **argv)
+{
+	FILE *fp;
+	uchar *data;
+	long size;
+	int i;
+	int failed;
+
+	failed = 0;
+	for(i = 1; i < argc; i++){
+		fp = fopen(argv[i], "rb");
+		if(fp == nil)
+			continue;
+		fseek(fp, 0, SEEK_END);
+		size = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+		data = malloc(size > 0 ? (size_t)size : 1);
+		if(size > 0 && fread(data, 1, size, fp) == (size_t)size){
+			LLVMFuzzerTestOneInput(data, size);
+			if(!parsedmodule){
+				fprintf(stderr, "rejected valid module: %s\n", argv[i]);
+				failed = 1;
+			}
+		}
+		free(data);
+		fclose(fp);
+	}
+	return failed;
+}
+#endif

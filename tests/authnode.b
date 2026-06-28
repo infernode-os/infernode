@@ -26,8 +26,11 @@ mkauthinfo(signersk: ref Keyring->SK, signerpk: ref Keyring->PK,
 	sk := kr->genSKfromPK(signerpk, name);
 	pk := kr->sktopk(sk);
 	pkbuf := array of byte kr->pktostr(pk);
-	state := kr->sha256(pkbuf, len pkbuf, nil, nil);
-	cert := kr->sign(signersk, 0, state, "sha256");
+	# CNSA 2.0: hash strength follows the signing key (ML-DSA-87 -> SHA-384),
+	# mirroring createsignerkey/logind so this exercises the real wire cert.
+	ha := certhash(signersk);
+	state := certdigest(signersk, pkbuf);
+	cert := kr->sign(signersk, 0, state, ha);
 
 	ai := ref Keyring->Authinfo;
 	ai.mysk = sk;
@@ -37,6 +40,23 @@ mkauthinfo(signersk: ref Keyring->SK, signerpk: ref Keyring->PK,
 	ai.alpha = alpha;
 	ai.p = p;
 	return ai;
+}
+
+certhash(sk: ref Keyring->SK): string
+{
+	if(sk != nil && sk.sa != nil)
+		case sk.sa.name {
+		"mldsa65" or "mldsa87" or "slhdsa192s" or "slhdsa256s" =>
+			return "sha384";
+		}
+	return "sha256";
+}
+
+certdigest(sk: ref Keyring->SK, buf: array of byte): ref Keyring->DigestState
+{
+	if(certhash(sk) == "sha384")
+		return kr->sha384(buf, len buf, nil, nil);
+	return kr->sha256(buf, len buf, nil, nil);
 }
 
 readfile(f: string): string

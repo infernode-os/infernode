@@ -81,12 +81,33 @@ init(nil: ref Draw->Context, args: list of string)
 	info.mypk = kr->sktopk(info.mysk);
 	info.spk = sai.mypk;
 	pkbuf := array of byte kr->pktostr(info.mypk);
-	state := kr->sha256(pkbuf, len pkbuf, nil, nil);
-	info.cert = kr->sign(sai.mysk, expiry, state, "sha256");
+	state := certdigest(sai.mysk, pkbuf);
+	info.cert = kr->sign(sai.mysk, expiry, state, certhash(sai.mysk));
 	if(kr->writeauthinfo("/fd/1", info) < 0){
 		sys->fprint(stderr, "sign: error writing certificate: %r\n");
 		raise "fail:write error";
 	}
+}
+
+# CNSA 2.0: bind the certificate hash to the signing key's strength.
+# ML-DSA / SLH-DSA (FIPS 204/205, NIST Cat >=3) keys pair with SHA-384;
+# classical keys keep SHA-256 so pre-existing certs verify unchanged. The
+# chosen name is stored in the certificate, so any verifier re-hashes to match.
+certhash(sk: ref Keyring->SK): string
+{
+	if(sk != nil && sk.sa != nil)
+		case sk.sa.name {
+		"mldsa65" or "mldsa87" or "slhdsa192s" or "slhdsa256s" =>
+			return "sha384";
+		}
+	return "sha256";
+}
+
+certdigest(sk: ref Keyring->SK, buf: array of byte): ref Keyring->DigestState
+{
+	if(certhash(sk) == "sha384")
+		return kr->sha384(buf, len buf, nil, nil);
+	return kr->sha256(buf, len buf, nil, nil);
 }
 
 parsedate(s: string): int

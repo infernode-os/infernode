@@ -71,11 +71,11 @@ sign(): string
 		return "illegal caller PK";
 
 	# hash, sign, and blind
-	state := kr->sha256(hisPKbuf, len hisPKbuf, nil, nil);
-	cert := kr->sign(info.mysk, 0, state, "sha256");
+	state := certdigest(info.mysk, hisPKbuf);
+	cert := kr->sign(info.mysk, 0, state, certhash(info.mysk));
 
 	# sanity clause
-	state = kr->sha256(hisPKbuf, len hisPKbuf, nil, nil);
+	state = certdigest(info.mysk, hisPKbuf);
 	if(kr->verify(info.mypk, cert, state) == 0)
 		return "bad signer certificate";
 
@@ -125,6 +125,27 @@ cnsamode(): int
 	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
 }
 
+# CNSA 2.0: bind the certificate hash to the signing key's strength.
+# ML-DSA / SLH-DSA (FIPS 204/205, NIST Cat >=3) keys pair with SHA-384;
+# classical keys keep SHA-256 so pre-existing certs verify unchanged. The
+# chosen name is stored in the certificate, so any verifier re-hashes to match.
+certhash(sk: ref Keyring->SK): string
+{
+	if(sk != nil && sk.sa != nil)
+		case sk.sa.name {
+		"mldsa65" or "mldsa87" or "slhdsa192s" or "slhdsa256s" =>
+			return "sha384";
+		}
+	return "sha256";
+}
+
+certdigest(sk: ref Keyring->SK, buf: array of byte): ref Keyring->DigestState
+{
+	if(certhash(sk) == "sha384")
+		return kr->sha384(buf, len buf, nil, nil);
+	return kr->sha256(buf, len buf, nil, nil);
+}
+
 signerkey(filename: string): ref Keyring->Authinfo
 {
 	info := kr->readauthinfo(filename);
@@ -140,8 +161,8 @@ signerkey(filename: string): ref Keyring->Authinfo
 	info.mypk = kr->sktopk(info.mysk);
 	info.spk = kr->sktopk(info.mysk);
 	myPKbuf := array of byte kr->pktostr(info.mypk);
-	state := kr->sha256(myPKbuf, len myPKbuf, nil, nil);
-	info.cert = kr->sign(info.mysk, 0, state, "sha256");
+	state := certdigest(info.mysk, myPKbuf);
+	info.cert = kr->sign(info.mysk, 0, state, certhash(info.mysk));
 	(info.alpha, info.p) = kr->dhparams(DHmodlen);
 
 	if(kr->writeauthinfo(filename, info) < 0){

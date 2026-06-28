@@ -116,8 +116,11 @@ verifychain(data: string, pk: ref Keyring->PK): (int, int, int, int, string)
 			if(sig != "" && pk != nil) {
 				content := sys->sprint("audit-checkpoint %s %s", head, cseq);
 				cb := array of byte content;
-				st := kr->sha256(cb, len cb, nil, nil);
 				cert := kr->strtocert(string ac->unhex(sig));
+				# Re-hash with the algorithm named in the certificate so
+				# SHA-384 (CNSA 2.0, ML-DSA-87) checkpoints verify alongside
+				# legacy SHA-256 ones.
+				st := digestfor(cert, cb);
 				if(cert == nil || kr->verify(pk, cert, st) == 0)
 					return (0, nrec, ncheck, nsig,
 						sys->sprint("bad checkpoint signature at seq %d", seqf));
@@ -128,6 +131,18 @@ verifychain(data: string, pk: ref Keyring->PK): (int, int, int, int, string)
 		nrec = seqf;
 	}
 	return (1, nrec, ncheck, nsig, "");
+}
+
+# Compute the verify-side digest using the hash named in the certificate.
+# A nil cert falls back to SHA-256; the caller rejects it before using the
+# result, so the choice is immaterial in that case.
+digestfor(cert: ref Keyring->Certificate, buf: array of byte): ref Keyring->DigestState
+{
+	if(cert != nil && cert.ha == "sha384")
+		return kr->sha384(buf, len buf, nil, nil);
+	if(cert != nil && cert.ha == "sha512")
+		return kr->sha512(buf, len buf, nil, nil);
+	return kr->sha256(buf, len buf, nil, nil);
 }
 
 parsecheck(msg: string): (string, string, string)

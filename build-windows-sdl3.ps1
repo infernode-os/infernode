@@ -13,7 +13,8 @@
 #
 
 param(
-    [string]$SDL3Dir = ""
+    [string]$SDL3Dir = "",
+    [string]$Fido2Dir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -121,6 +122,54 @@ if (-not $sdl3Found) {
     exit 1
 }
 
+# =============================================
+# Find libfido2 (optional — for /dev/2fa, YubiKey/FIDO2)
+# =============================================
+# Mirrors the SDL3 discovery above but is OPTIONAL: when libfido2 is not found
+# the emu still builds, with the #F (2fa) device degraded to its stub bridge
+# (available=0). vcpkg's fido2:x64-windows lays out lib/fido2.lib + bin/fido2.dll;
+# the Yubico binary release uses the same include/lib/bin shape.
+$fido2Found = $false
+$fido2Include = ""
+$fido2Lib = ""
+$fido2DllDir = ""
+
+function Resolve-Fido2Paths {
+    param([string]$Dir)
+    $inc = "$Dir\include"
+    $lib = ""; $dll = ""
+    if (Test-Path "$Dir\lib\fido2.lib") {
+        $lib = "$Dir\lib\fido2.lib"
+        if (Test-Path "$Dir\bin\fido2.dll") { $dll = "$Dir\bin" }
+        elseif (Test-Path "$Dir\lib\fido2.dll") { $dll = "$Dir\lib" }
+    }
+    return @{ Include=$inc; Lib=$lib; DllDir=$dll }
+}
+
+# Candidate prefixes: -Fido2Dir parameter, FIDO2DIR env, then the usual vcpkg trees.
+$fido2Candidates = @()
+if ($Fido2Dir -ne "") { $fido2Candidates += $Fido2Dir }
+if ($env:FIDO2DIR)    { $fido2Candidates += $env:FIDO2DIR }
+$fido2Candidates += @(
+    "C:\vcpkg\installed\x64-windows",
+    "$env:VCPKG_ROOT\installed\x64-windows",
+    "$env:USERPROFILE\vcpkg\installed\x64-windows"
+)
+foreach ($cand in $fido2Candidates) {
+    if ($cand -and (Test-Path "$cand\include\fido.h") -and (Test-Path "$cand\lib\fido2.lib")) {
+        $paths = Resolve-Fido2Paths $cand
+        $fido2Include = $paths.Include; $fido2Lib = $paths.Lib; $fido2DllDir = $paths.DllDir
+        $fido2Found = $true
+        Write-Host "libfido2 found at: $cand (/dev/2fa enabled)" -ForegroundColor Green
+        break
+    }
+}
+if (-not $fido2Found) {
+    Write-Host "libfido2 not found — building /dev/2fa as a stub (available=0)." -ForegroundColor Yellow
+    Write-Host "  Install with: vcpkg install fido2:x64-windows  (then re-run, or pass -Fido2Dir)" -ForegroundColor Yellow
+}
+Write-Host ""
+
 # Check for MSVC tools
 $tools = @("cl.exe", "ml64.exe", "link.exe")
 foreach ($tool in $tools) {
@@ -165,6 +214,10 @@ $emuCFlags = @(
     "/I$ROOT\libinterp",
     "/I$sdl3Include"
 )
+if ($fido2Found) {
+    $emuCFlags += "/DHAVE_FIDO2"
+    $emuCFlags += "/I$fido2Include"
+}
 
 # Platform-specific source files (from emu/Nt/)
 Write-Host "  Compiling platform sources..."
@@ -213,6 +266,7 @@ $portSources = @(
     "devcons.c", "devdraw.c", "devdup.c", "devenv.c", "devip.c",
     "devmnt.c", "devpipe.c", "devpointer.c", "devprog.c", "devroot.c",
     "devsnarf.c", "devsrv.c", "devssl.c", "devcmd.c", "devwmsz.c",
+    "devtfa.c", "fido2bridge.c",
     "ipaux.c", "srv.c"
 )
 foreach ($src in $portSources) {
@@ -283,6 +337,7 @@ extern Dev ipdevtab;
 extern Dev pointerdevtab;
 extern Dev snarfdevtab;
 extern Dev wmszdevtab;
+extern Dev tfadevtab;
 
 Dev* devtab[]={
 	&rootdevtab,
@@ -301,6 +356,7 @@ Dev* devtab[]={
 	&pointerdevtab,
 	&snarfdevtab,
 	&wmszdevtab,
+	&tfadevtab,
 	nil,
 };
 
@@ -338,19 +394,27 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "  Linking o.emu.exe (SDL3 GUI)..."
 $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
 
+# Assemble the static library list. $fido2Lib is empty when libfido2 was not
+# found (stub bridge build); only pass it to the linker when it resolves, so an
+# empty token never reaches link.exe as a bogus "''" input file.
+$linkLibs = @(
+    "$LibDir\libinterp.lib",
+    "$LibDir\libkeyring.lib",
+    "$LibDir\libsec.lib",
+    "$LibDir\libmp.lib",
+    "$LibDir\libmath.lib",
+    "$LibDir\libdraw.lib",
+    "$LibDir\libmemlayer.lib",
+    "$LibDir\libmemdraw.lib",
+    "$LibDir\lib9.lib",
+    $sdl3Lib
+)
+if ($fido2Found -and $fido2Lib -ne "") { $linkLibs += $fido2Lib }
+
 & link.exe /nologo /subsystem:console /MAP `
     "/OUT:o.emu.exe" `
     @allObjs `
-    "$LibDir\libinterp.lib" `
-    "$LibDir\libkeyring.lib" `
-    "$LibDir\libsec.lib" `
-    "$LibDir\libmp.lib" `
-    "$LibDir\libmath.lib" `
-    "$LibDir\libdraw.lib" `
-    "$LibDir\libmemlayer.lib" `
-    "$LibDir\libmemdraw.lib" `
-    "$LibDir\lib9.lib" `
-    $sdl3Lib `
+    @linkLibs `
     ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib bcrypt.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
@@ -363,6 +427,19 @@ Pop-Location
 if ($sdl3DllDir -ne "" -and (Test-Path "$sdl3DllDir\SDL3.dll")) {
     Copy-Item "$sdl3DllDir\SDL3.dll" "$ROOT\emu\Nt\SDL3.dll" -Force
     Write-Host "  Copied SDL3.dll to emu\Nt\" -ForegroundColor Green
+}
+
+# Copy fido2.dll (+ its runtime deps) next to the executable if libfido2 was
+# linked. vcpkg lays the dependency DLLs (cbor, crypto/zlib1) alongside
+# fido2.dll in the same bin/ dir, so copy whatever runtime DLLs are present
+# there. The release packaging step bundles these next to o.emu.exe.
+if ($fido2Found -and $fido2DllDir -ne "") {
+    foreach ($dll in @("fido2.dll", "cbor.dll", "libcrypto-3-x64.dll", "zlib1.dll")) {
+        if (Test-Path "$fido2DllDir\$dll") {
+            Copy-Item "$fido2DllDir\$dll" "$ROOT\emu\Nt\$dll" -Force
+            Write-Host "  Copied $dll to emu\Nt\" -ForegroundColor Green
+        }
+    }
 }
 
 # =============================================

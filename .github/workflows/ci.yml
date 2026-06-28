@@ -356,6 +356,7 @@ jobs:
           libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
           libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
           libxtst-dev libdrm-dev libgbm-dev \
+          libfido2-dev libudev-dev \
           patchelf
 
     - name: Build SDL3 from source
@@ -376,6 +377,14 @@ jobs:
     - name: Verify SDL3 linkage
       run: |
         ldd emu/Linux/o.emu | grep libSDL3 || { echo "Emulator not linked against SDL3"; exit 1; }
+
+    - name: Verify libfido2 linkage (/dev/2fa)
+      run: |
+        # libfido2-dev was installed above, so the GUI emu must link libfido2 —
+        # otherwise the #F (2fa) device degraded to its stub and YubiKey enroll
+        # would dead-end with "insert your security key first". This guard is the
+        # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
+        ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
     - name: Compile test suite
       run: |
@@ -752,6 +761,7 @@ jobs:
           libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
           libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
           libxtst-dev libdrm-dev libgbm-dev \
+          libfido2-dev libudev-dev \
           patchelf
 
     - name: Build SDL3 from source
@@ -772,6 +782,14 @@ jobs:
     - name: Verify SDL3 linkage
       run: |
         ldd emu/Linux/o.emu | grep libSDL3 || { echo "Emulator not linked against SDL3"; exit 1; }
+
+    - name: Verify libfido2 linkage (/dev/2fa)
+      run: |
+        # libfido2-dev was installed above, so the GUI emu must link libfido2 —
+        # otherwise the #F (2fa) device degraded to its stub and YubiKey enroll
+        # would dead-end with "insert your security key first". This guard is the
+        # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
+        ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
     - name: Compile test suite
       run: |

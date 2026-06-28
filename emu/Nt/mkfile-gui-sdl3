@@ -11,8 +11,20 @@ SDL3DIR=C:\vcpkg\installed\x64-windows
 SDL3_CFLAGS=/DGUI_SDL3 /I$SDL3DIR\include
 SDL3_LIBS=$SDL3DIR\lib\SDL3.lib
 
-GUIFLAGS=$SDL3_CFLAGS
-GUILIBS=$SDL3_LIBS
+# libfido2 for /dev/2fa (second-factor auth — YubiKey/FIDO2). Mirrors the macOS
+# and Linux backends. vcpkg (vcpkg install fido2:x64-windows) or the Yubico
+# binary release provides fido2.lib + fido2.dll. Define FIDO2DIR to its prefix
+# and -DHAVE_FIDO2 to compile the real bridge; leave both empty (the default)
+# to degrade to the stub bridge whose #F device reports available=0. Set these
+# from the command line, e.g. mk FIDO2DIR=C:\vcpkg\installed\x64-windows
+# FIDO2_CFLAGS='/DHAVE_FIDO2 /IC:\vcpkg\installed\x64-windows\include'
+# FIDO2_LIBS=C:\vcpkg\installed\x64-windows\lib\fido2.lib
+FIDO2DIR=
+FIDO2_CFLAGS=
+FIDO2_LIBS=
+
+GUIFLAGS=$SDL3_CFLAGS $FIDO2_CFLAGS
+GUILIBS=$SDL3_LIBS $FIDO2_LIBS
 
 # Compile SDL3 backend from port/ directory
 draw-sdl3.$O: ../port/draw-sdl3.c

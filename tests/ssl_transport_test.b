@@ -104,22 +104,30 @@ testAlgorithmAdvertised(t: ref T)
 	# Check for aes_128_cbc and aes_256_cbc
 	found128 := 0;
 	found256 := 0;
+	foundweak := 0;
 	for(el := encalgs; el != nil; el = tl el) {
 		if(hd el == "aes_128_cbc")
 			found128 = 1;
 		if(hd el == "aes_256_cbc")
 			found256 = 1;
+		if(hd el == "ideacbc" || hd el == "ideaecb" || hd el == "rc4")
+			foundweak = 1;
 	}
 	t.assert(found128, "aes_128_cbc in encalgs");
 	t.assert(found256, "aes_256_cbc in encalgs");
+	t.assert(!foundweak, "weak ciphers absent from encalgs");
 
 	# Check for sha256
 	foundsha := 0;
+	foundweakhash := 0;
 	for(hl := hashalgs; hl != nil; hl = tl hl) {
 		if(hd hl == "sha256")
 			foundsha = 1;
+		if(hd hl == "sha1" || hd hl == "sha" || hd hl == "md5" || hd hl == "md4")
+			foundweakhash = 1;
 	}
 	t.assert(foundsha, "sha256 in hashalgs");
+	t.assert(!foundweakhash, "weak hashes absent from hashalgs");
 }
 
 # Set up two SSL connections over a pipe, configure algorithm, return (side_a, side_b)

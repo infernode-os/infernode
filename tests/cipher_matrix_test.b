@@ -9,8 +9,8 @@ implement CipherMatrixTest;
 # a real auth->server / auth->client handshake and a data round-trip, and
 # asserting the payload survives byte-for-byte.
 #
-#   ciphers: aes_256_cbc, aes_128_cbc, ideacbc, ideaecb
-#   MACs:    sha256, sha1, md5, md4
+#   ciphers: aes_256_cbc, aes_128_cbc
+#   MACs:    sha256
 #   plus:    none (auth succeeds, no ssl pushed)
 #
 # Runs over a pipe (no TCP ports needed); each case has a timeout safety net.
@@ -179,13 +179,6 @@ roundtrip(t: ref T, label: string, serverAlgs: list of string, clientAlg: string
 # ---- cipher sweep (sha256 MAC) ----
 testAes256(t: ref T)  { roundtrip(t, "aes_256_cbc/sha256", "aes_256_cbc"::"sha256"::nil, "aes_256_cbc sha256"); }
 testAes128(t: ref T)  { roundtrip(t, "aes_128_cbc/sha256", "aes_128_cbc"::"sha256"::nil, "aes_128_cbc sha256"); }
-testIdeaCbc(t: ref T) { roundtrip(t, "ideacbc/sha256", "ideacbc"::"sha256"::nil, "ideacbc sha256"); }
-testIdeaEcb(t: ref T) { roundtrip(t, "ideaecb/sha256", "ideaecb"::"sha256"::nil, "ideaecb sha256"); }
-
-# ---- MAC sweep (aes_256_cbc cipher) ----
-testSha1(t: ref T) { roundtrip(t, "aes_256_cbc/sha1", "aes_256_cbc"::"sha1"::nil, "aes_256_cbc sha1"); }
-testMd5(t: ref T)  { roundtrip(t, "aes_256_cbc/md5", "aes_256_cbc"::"md5"::nil, "aes_256_cbc md5"); }
-testMd4(t: ref T)  { roundtrip(t, "aes_256_cbc/md4", "aes_256_cbc"::"md4"::nil, "aes_256_cbc md4"); }
 
 # ---- unencrypted path ----
 testNone(t: ref T) { roundtrip(t, "none", nil, "none"); }
@@ -223,11 +216,6 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Aes256Sha256", testAes256);
 	run("Aes128Sha256", testAes128);
-	run("IdeaCbcSha256", testIdeaCbc);
-	run("IdeaEcbSha256", testIdeaEcb);
-	run("Aes256Sha1", testSha1);
-	run("Aes256Md5", testMd5);
-	run("Aes256Md4", testMd4);
 	run("NoEncryption", testNone);
 
 	if(testing->summary(passed, failed, skipped) > 0)

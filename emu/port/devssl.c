@@ -31,9 +31,6 @@ enum
 
 	/* encryption algorithms */
 	Noencryption=	0,
-	RC4=		3,
-	IDEACBC=	4,
-	IDEAECB=		5,
 	AESCBC=		6
 };
 
@@ -742,70 +739,6 @@ setsecret(OneWay *w, uchar *secret, int n)
 }
 
 static void
-initIDEAkey(OneWay *w)
-{
-
-	free(w->state);
-	w->state = malloc(sizeof(IDEAstate));
-	if(w->state == nil)
-		error(Enomem);
-	if(w->slen >= 24)
-		setupIDEAstate(w->state, w->secret, w->secret+16);
-	else if(w->slen >= 16)
-		setupIDEAstate(w->state, w->secret, 0);
-	else
-		error("secret too short");
-}
-
-static void
-initRC4key(OneWay *w)
-{
-	free(w->state);
-	w->state = malloc(sizeof(RC4state));
-	if (!w->state)
-		error(Enomem);
-	setupRC4state(w->state, w->secret, w->slen);
-}
-
-/*
- *  40 bit RC4 is the same as n-bit RC4.  However,
- *  we ignore all but the first 40 bits of the key.
- */
-static void
-initRC4key_40(OneWay *w)
-{
-	int slen = w->slen;
-
-	if(slen > 5)
-		slen = 5;
-
-	free(w->state);
-	w->state = malloc(sizeof(RC4state));
-	if (!w->state)
-		error(Enomem);
-	setupRC4state(w->state, w->secret, slen);
-}
-
-/*
- *  128 bit RC4 is the same as n-bit RC4.  However,
- *  we ignore all but the first 128 bits of the key.
- */
-static void
-initRC4key_128(OneWay *w)
-{
-	int slen = w->slen;
-
-	if(slen > 16)
-		slen = 16;
-
-	free(w->state);
-	w->state = malloc(sizeof(RC4state));
-	if (!w->state)
-		error(Enomem);
-	setupRC4state(w->state, w->secret, slen);
-}
-
-static void
 initAES128key(OneWay *w)
 {
 	free(w->state);
@@ -846,10 +779,6 @@ struct Hashalg
 Hashalg hashtab[] =
 {
 	{ "sha256", SHA256dlen, sha256, },
-	{ "sha1", SHA1dlen, sha1, },
-	{ "sha", SHA1dlen, sha1, },
-	{ "md5", MD5dlen, md5, },
-	{ "md4", MD4dlen, md4, },
 	{ 0 }
 };
 
@@ -883,10 +812,6 @@ Encalg encrypttab[] =
 {
 	{ "aes_256_cbc", 16, AESCBC, initAES256key, },
 	{ "aes_128_cbc", 16, AESCBC, initAES128key, },
-	{ "ideacbc", 8, IDEACBC, initIDEAkey, },
-	{ "ideaecb", 8, IDEAECB, initIDEAkey, },
-	/* Deprecated weak ciphers removed: rc4_256, rc4_128, rc4_40, rc4,
-	   des_56_cbc, des_56_ecb, des_40_cbc, des_40_ecb, descbc, desecb */
 	{ 0 }
 };
 
@@ -1117,31 +1042,7 @@ out:
 static Block*
 encryptb(Dstate *s, Block *b, int offset)
 {
-	uchar *p, *ep, *p2, *ip, *eip;
-	IDEAstate *is;
-
 	switch(s->encryptalg){
-	case IDEAECB:
-		is = s->out.state;
-		ep = b->rp + BLEN(b);
-		for(p = b->rp + offset; p < ep; p += 8)
-			idea_cipher(is->edkey, p, 0);
-		break;
-	case IDEACBC:
-		is = s->out.state;
-		ep = b->rp + BLEN(b);
-		for(p = b->rp + offset; p < ep; p += 8){
-			p2 = p;
-			ip = is->ivec;
-			for(eip = ip+8; ip < eip; )
-				*p2++ ^= *ip++;
-			idea_cipher(is->edkey, p, 0);
-			memmove(is->ivec, p, 8);
-		}
-		break;
-	case RC4:
-		rc4(s->out.state, b->rp + offset, BLEN(b) - offset);
-		break;
 	case AESCBC:
 		aesCBCencrypt(b->rp + offset, BLEN(b) - offset, s->out.state);
 		break;
@@ -1153,9 +1054,6 @@ static Block*
 decryptb(Dstate *s, Block *inb)
 {
 	Block *b, **l;
-	uchar *p, *ep, *tp, *ip, *eip;
-	IDEAstate *is;
-	uchar tmp[8];
 	int i;
 
 	l = &inb;
@@ -1173,29 +1071,6 @@ decryptb(Dstate *s, Block *inb)
 
 		/* decrypt */
 		switch(s->encryptalg){
-		case IDEAECB:
-			is = s->in.state;
-			ep = b->rp + BLEN(b);
-			for(p = b->rp; p < ep; p += 8)
-				idea_cipher(is->edkey, p, 1);
-			break;
-		case IDEACBC:
-			is = s->in.state;
-			ep = b->rp + BLEN(b);
-			for(p = b->rp; p < ep;){
-				memmove(tmp, p, 8);
-				idea_cipher(is->edkey, p, 1);
-				tp = tmp;
-				ip = is->ivec;
-				for(eip = ip+8; ip < eip; ){
-					*p++ ^= *ip;
-					*ip++ = *tp++;
-				}
-			}
-			break;
-		case RC4:
-			rc4(s->in.state, b->rp, BLEN(b));
-			break;
 		case AESCBC:
 			aesCBCdecrypt(b->rp, BLEN(b), s->in.state);
 			break;

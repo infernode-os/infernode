@@ -69,11 +69,17 @@ validtypemap(int size, uchar *map, int mapsize)
 	ulong maxwords, word;
 	int bit, i;
 
+	/*
+	 * The unsafe case is a map whose set bits mark a managed pointer at a
+	 * word offset that does not fit within the object: initmem()/destroy()
+	 * would then write or follow a pointer past the allocation.  Reject
+	 * only on that — a byte size that is not a multiple of the word size,
+	 * or trailing all-zero map bytes, is harmless and is emitted by the
+	 * limbo compiler for valid modules (e.g. a 1-byte type with an empty
+	 * pointer map), so checking map length or size alignment alone would
+	 * reject legitimate bytecode.
+	 */
 	maxwords = (ulong)size/sizeof(WORD);
-	if(mapsize != 0 && size%sizeof(WORD) != 0)
-		return 0;
-	if((ulong)mapsize > (maxwords+7)/8)
-		return 0;
 	for(i = 0; i < mapsize; i++)
 		for(bit = 0; bit < 8; bit++){
 			word = (ulong)i*8+bit;
@@ -141,7 +147,7 @@ operand(ParseState *ps, uchar **p)
 static ulong
 disw(ParseState *ps, uchar **p)
 {
-	ulong v;
+	u32int v;
 	uchar *c;
 
 	c = *p;
@@ -149,12 +155,20 @@ disw(ParseState *ps, uchar **p)
 		ps->error = 1;
 		return 0;
 	}
-	v  = (ulong)c[0] << 24;
-	v |= (ulong)c[1] << 16;
-	v |= (ulong)c[2] << 8;
+	v  = (u32int)c[0] << 24;
+	v |= (u32int)c[1] << 16;
+	v |= (u32int)c[2] << 8;
 	v |= c[3];
 	*p = c + 4;
-	return v;
+	/*
+	 * A Dis word is a 32-bit signed quantity.  WORD slots are pointer-sized
+	 * (64-bit on LP64 hosts), so DEFW must sign-extend the word; otherwise a
+	 * negative constant (e.g. -1) loads as a large positive value, corrupting
+	 * loop bounds and sentinels.  Assemble in u32int to avoid the signed-shift
+	 * UB the old code had, then sign-extend explicitly.  DEFL re-masks the low
+	 * and high halves with u32int, so the extension is harmless there.
+	 */
+	return (ulong)(vlong)(int32)v;
 }
 
 double

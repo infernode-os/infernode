@@ -15,6 +15,7 @@ dev
 	cmd	cmd
 
 	ip	ipif ipaux
+	tfa	fido2bridge
 
 lib
 	interp

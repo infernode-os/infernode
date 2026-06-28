@@ -172,7 +172,8 @@ $ntSources = @(
     "os.c", "cmd.c", "no_win.c", "fp.c",
     "devfs.c",
     "ipif6.c",
-    "jit-unwind.c"
+    "jit-unwind.c",
+    "fido2bridge.c"
 )
 foreach ($src in $ntSources) {
     if (Test-Path $src) {
@@ -212,7 +213,7 @@ $portSources = @(
     "lock.c",
     "devcons.c", "devdraw.c", "devdup.c", "devenv.c", "devip.c",
     "devmnt.c", "devpipe.c", "devpointer.c", "devprog.c", "devroot.c",
-    "devsnarf.c", "devsrv.c", "devssl.c", "devcmd.c", "devwmsz.c",
+    "devsnarf.c", "devsrv.c", "devssl.c", "devcmd.c", "devtfa.c", "devwmsz.c",
     "ipaux.c", "srv.c"
 )
 foreach ($src in $portSources) {
@@ -283,6 +284,7 @@ extern Dev ipdevtab;
 extern Dev pointerdevtab;
 extern Dev snarfdevtab;
 extern Dev wmszdevtab;
+extern Dev tfadevtab;
 
 Dev* devtab[]={
 	&rootdevtab,
@@ -301,6 +303,7 @@ Dev* devtab[]={
 	&pointerdevtab,
 	&snarfdevtab,
 	&wmszdevtab,
+	&tfadevtab,
 	nil,
 };
 

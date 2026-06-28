@@ -645,7 +645,8 @@ $ntSources = @(
     "stubs-headless.c",
     "devfs.c",
     "ipif6.c",
-    "jit-unwind.c"
+    "jit-unwind.c",
+    "fido2bridge.c"
 )
 foreach ($src in $ntSources) {
     if (Test-Path $src) {
@@ -676,7 +677,7 @@ $portSources = @(
     "lock.c",
     "devcons.c", "devdup.c", "devenv.c", "devip.c",
     "devmnt.c", "devpipe.c", "devprog.c", "devroot.c",
-    "devsrv.c", "devssl.c", "devcmd.c",
+    "devsrv.c", "devssl.c", "devcmd.c", "devtfa.c",
     "ipaux.c", "srv.c"
 )
 foreach ($src in $portSources) {
@@ -747,6 +748,7 @@ extern Dev ssldevtab;
 extern Dev fsdevtab;
 extern Dev cmddevtab;
 extern Dev ipdevtab;
+extern Dev tfadevtab;
 
 Dev* devtab[]={
 	&rootdevtab,
@@ -761,6 +763,7 @@ Dev* devtab[]={
 	&fsdevtab,
 	&cmddevtab,
 	&ipdevtab,
+	&tfadevtab,
 	nil,
 };
 

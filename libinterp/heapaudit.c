@@ -147,7 +147,7 @@ heapaudit(void)
 			}else
 				a->n++;
 			if(t != nil && t != &Tmodlink && t != &Tstring)
-				a->size += t->size*n;
+				a->size += (ulong)t->size * (ulong)n;
 			else
 				a->size += b->size;
 		}

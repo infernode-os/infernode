@@ -732,11 +732,14 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 static void
 setsecret(OneWay *w, uchar *secret, int n)
 {
-	free(w->secret);
-	w->secret = mallocz(n, 0);
-	if(w->secret == nil)
+	uchar *newsecret;
+
+	newsecret = mallocz(n, 0);
+	if(newsecret == nil)
 		error(Enomem);
-	memmove(w->secret, secret, n);
+	memmove(newsecret, secret, n);
+	free(w->secret);
+	w->secret = newsecret;
 	w->slen = n;
 }
 

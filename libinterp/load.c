@@ -146,7 +146,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	ulong ul[2];
 	WORD lo, hi;
 	int lsize, id, v, entry, entryt, tnp, tsz, siglen;
-	int de, pc, i, n, isize, dsize, hsize, dasp;
+	int de, pc, i, n, nbytes, isize, dsize, hsize, dasp;
 	uchar *mod, sm, *istream, **isp, *si, *addr, *dastack[DADEPTH];
 	Link *l;
 
@@ -370,7 +370,8 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			pt = m->type[v];
 			v = disw(isp);
 			acheck(pt->size, v);
-			h = nheap(sizeof(Array)+(pt->size*v));
+			nbytes = pt->size * v;
+			h = nheap(sizeof(Array)+nbytes);
 			h->t = &Tarray;
 			h->t->ref++;
 			ary = H2D(Array*, h);
@@ -378,7 +379,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			ary->len = v;
 			ary->root = H;
 			ary->data = (uchar*)ary+sizeof(Array);
-			memset((void*)ary->data, 0, pt->size*v);
+			memset((void*)ary->data, 0, nbytes);
 			initarray(pt, ary);
 			A(si) = ary;
 			break;			

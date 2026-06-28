@@ -6,8 +6,11 @@
 
 # Dis bytecode parser fuzz target
 $CC $CFLAGS \
+    -I"$SRC/infernode/include" \
+    -I"$SRC/infernode/Linux/amd64/include" \
     -o "$OUT/fuzz_dis_parser" \
     "$SRC/infernode/.clusterfuzzlite/fuzz_dis_parser.c" \
+    "$SRC/infernode/libinterp/load.c" \
     $LIB_FUZZING_ENGINE
 
 # Seed corpus: existing .dis bytecode files from the runtime tree

@@ -37,6 +37,13 @@ INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is instal
 # Included here for variable definitions only; build rules are below default target.
 <mkfile-gui-$GUIBACK
 
+# libfido2 for the #F (/dev/2fa) device. Conditional, same pattern as macOS and
+# opus: define -DHAVE_FIDO2 and link -lfido2 only when libfido2 is present
+# (apt install libfido2-dev), otherwise fido2bridge.c compiles its stub path so
+# the emu still builds — /dev/2fa just reports "not built in".
+FIDO2_CFLAGS=`{if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi}
+FIDO2_LIBS=`{if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi}
+
 OBJ=\
 	asm-$OBJTYPE.$O\
 	$ARCHFILES\
@@ -60,7 +67,7 @@ CFLAGS=\
 	-I$ROOT/$SYSTARG/$OBJTYPE/include\
 	-I$ROOT/include\
 	-I$ROOT/libinterp\
-	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS $GPUFLAGS\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS $GPUFLAGS $FIDO2_CFLAGS\
 
 KERNDATE=0
 
@@ -73,7 +80,7 @@ default:V:	$O.$CONF
 
 $O.$CONF:	$OBJ $CONF.c $CONF.root.h # $LIBNAMES
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
-	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $GUILIBS
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $GUILIBS $FIDO2_LIBS
 
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF

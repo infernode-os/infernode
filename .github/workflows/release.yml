@@ -40,7 +40,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev patchelf
 
     - name: Build (headless)
       run: |
@@ -152,6 +152,12 @@ jobs:
         cp Linux/amd64/bin/limbo Linux/amd64/bin/mk "$STAGE/Linux/amd64/bin/"
         strip "$STAGE/emu/Linux/o.emu" "$STAGE/Linux/amd64/bin/limbo" "$STAGE/Linux/amd64/bin/mk"
 
+        # Bundle libfido2 (+ cbor/crypto) next to the emu so the #F /dev/2fa
+        # device works out of the box (headless is meant to "just work"). Sets
+        # rpath $ORIGIN on the emu and the bundled libfido2; fails if 2fa was
+        # compiled as a stub. udev/z/cap stay on the host (baseline).
+        bash tools/bundle-linux-fido2.sh "$STAGE/emu/Linux/o.emu" "$STAGE/emu/Linux"
+
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
@@ -232,6 +238,7 @@ jobs:
           libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
           libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
           libxtst-dev libdrm-dev libgbm-dev \
+          libfido2-dev \
           patchelf
 
     - name: Build SDL3 from source
@@ -386,6 +393,14 @@ jobs:
         SDL3_LIB=$(ldd emu/Linux/o.emu | grep libSDL3 | awk '{print $3}')
         cp "$SDL3_LIB" "$STAGE/bin/libSDL3.so.0"
 
+        # Bundle libfido2 (+ cbor/crypto) next to the emu so the #F /dev/2fa
+        # device works without the user running `apt install libfido2`. Sets
+        # rpath $ORIGIN on the staged emu and on the bundled libfido2 (so its
+        # transitive deps resolve), and fails the build if 2fa was compiled as
+        # a stub. udev/z/cap stay on the host (baseline). See the macOS bundling
+        # below for the equivalent @executable_path treatment.
+        bash tools/bundle-linux-fido2.sh "$STAGE/bin/emu" "$STAGE/bin"
+
         # Native tools
         cp Linux/amd64/bin/limbo Linux/amd64/bin/mk "$STAGE/bin/"
         strip "$STAGE/bin/emu" "$STAGE/bin/limbo" "$STAGE/bin/mk"
@@ -454,7 +469,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev patchelf
 
     - name: Build (headless)
       run: |
@@ -565,6 +580,12 @@ jobs:
         cp emu/Linux/o.emu "$STAGE/emu/Linux/"
         cp Linux/arm64/bin/limbo Linux/arm64/bin/mk "$STAGE/Linux/arm64/bin/"
 
+        # Bundle libfido2 (+ cbor/crypto) next to the emu so the #F /dev/2fa
+        # device works out of the box (headless is meant to "just work"). Sets
+        # rpath $ORIGIN on the emu and the bundled libfido2; fails if 2fa was
+        # compiled as a stub. udev/z/cap stay on the host (baseline).
+        bash tools/bundle-linux-fido2.sh "$STAGE/emu/Linux/o.emu" "$STAGE/emu/Linux"
+
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
@@ -645,6 +666,7 @@ jobs:
           libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
           libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
           libxtst-dev libdrm-dev libgbm-dev \
+          libfido2-dev \
           patchelf
 
     - name: Build SDL3 from source
@@ -797,6 +819,14 @@ jobs:
         # Find and bundle libSDL3.so.0
         SDL3_LIB=$(ldd emu/Linux/o.emu | grep libSDL3 | awk '{print $3}')
         cp "$SDL3_LIB" "$STAGE/bin/libSDL3.so.0"
+
+        # Bundle libfido2 (+ cbor/crypto) next to the emu so the #F /dev/2fa
+        # device works without the user running `apt install libfido2`. Sets
+        # rpath $ORIGIN on the staged emu and on the bundled libfido2 (so its
+        # transitive deps resolve), and fails the build if 2fa was compiled as
+        # a stub. udev/z/cap stay on the host (baseline). See the macOS bundling
+        # below for the equivalent @executable_path treatment.
+        bash tools/bundle-linux-fido2.sh "$STAGE/bin/emu" "$STAGE/bin"
 
         # Native tools
         cp Linux/arm64/bin/limbo Linux/arm64/bin/mk "$STAGE/bin/"

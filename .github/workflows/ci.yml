@@ -69,7 +69,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -356,6 +356,7 @@ jobs:
           libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
           libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
           libxtst-dev libdrm-dev libgbm-dev \
+          libfido2-dev \
           patchelf
 
     - name: Build SDL3 from source
@@ -573,7 +574,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -752,6 +753,7 @@ jobs:
           libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
           libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
           libxtst-dev libdrm-dev libgbm-dev \
+          libfido2-dev \
           patchelf
 
     - name: Build SDL3 from source

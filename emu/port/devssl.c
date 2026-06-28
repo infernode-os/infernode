@@ -31,8 +31,6 @@ enum
 
 	/* encryption algorithms */
 	Noencryption=	0,
-	DESCBC=		1,
-	DESECB=		2,
 	RC4=		3,
 	IDEACBC=	4,
 	IDEAECB=		5,
@@ -760,52 +758,6 @@ initIDEAkey(OneWay *w)
 }
 
 static void
-initDESkey(OneWay *w)
-{
-
-	free(w->state);
-	w->state = malloc(sizeof(DESstate));
-	if (!w->state)
-		error(Enomem);
-	if(w->slen >= 16)
-		setupDESstate(w->state, w->secret, w->secret+8);
-	else if(w->slen >= 8)
-		setupDESstate(w->state, w->secret, 0);
-	else
-		error("secret too short");
-}
-
-/*
- *  40 bit DES is the same as 56 bit DES.  However,
- *  16 bits of the key are masked to zero.
- */
-static void
-initDESkey_40(OneWay *w)
-{
-	uchar key[8];
-
-
-	if(w->slen >= 8) {
-		memmove(key, w->secret, 8);
-		key[0] &= 0x0f;
-		key[2] &= 0x0f;
-		key[4] &= 0x0f;
-		key[6] &= 0x0f;
-	}
-
-	free(w->state);
-	w->state = malloc(sizeof(DESstate));
-	if (!w->state)
-		error(Enomem);
-	if(w->slen >= 16)
-		setupDESstate(w->state, key, w->secret+8);
-	else if(w->slen >= 8)
-		setupDESstate(w->state, key, 0);
-	else
-		error("secret too short");
-}
-
-static void
 initRC4key(OneWay *w)
 {
 	free(w->state);
@@ -1166,28 +1118,9 @@ static Block*
 encryptb(Dstate *s, Block *b, int offset)
 {
 	uchar *p, *ep, *p2, *ip, *eip;
-	DESstate *ds;
 	IDEAstate *is;
 
 	switch(s->encryptalg){
-	case DESECB:
-		ds = s->out.state;
-		ep = b->rp + BLEN(b);
-		for(p = b->rp + offset; p < ep; p += 8)
-			block_cipher(ds->expanded, p, 0);
-		break;
-	case DESCBC:
-		ds = s->out.state;
-		ep = b->rp + BLEN(b);
-		for(p = b->rp + offset; p < ep; p += 8){
-			p2 = p;
-			ip = ds->ivec;
-			for(eip = ip+8; ip < eip; )
-				*p2++ ^= *ip++;
-			block_cipher(ds->expanded, p, 0);
-			memmove(ds->ivec, p, 8);
-		}
-		break;
 	case IDEAECB:
 		is = s->out.state;
 		ep = b->rp + BLEN(b);
@@ -1221,7 +1154,6 @@ decryptb(Dstate *s, Block *inb)
 {
 	Block *b, **l;
 	uchar *p, *ep, *tp, *ip, *eip;
-	DESstate *ds;
 	IDEAstate *is;
 	uchar tmp[8];
 	int i;
@@ -1241,26 +1173,6 @@ decryptb(Dstate *s, Block *inb)
 
 		/* decrypt */
 		switch(s->encryptalg){
-		case DESECB:
-			ds = s->in.state;
-			ep = b->rp + BLEN(b);
-			for(p = b->rp; p < ep; p += 8)
-				block_cipher(ds->expanded, p, 1);
-			break;
-		case DESCBC:
-			ds = s->in.state;
-			ep = b->rp + BLEN(b);
-			for(p = b->rp; p < ep;){
-				memmove(tmp, p, 8);
-				block_cipher(ds->expanded, p, 1);
-				tp = tmp;
-				ip = ds->ivec;
-				for(eip = ip+8; ip < eip; ){
-					*p++ ^= *ip;
-					*ip++ = *tp++;
-				}
-			}
-			break;
 		case IDEAECB:
 			is = s->in.state;
 			ep = b->rp + BLEN(b);

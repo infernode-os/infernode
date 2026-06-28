@@ -431,10 +431,13 @@ OP(mframe)
 void
 acheck(int tsz, int sz)
 {
-	if(sz < 0)
+	uint maxalloc;
+
+	if(tsz < 0 || sz < 0)
 		error(exNegsize);
-	/* check for overflow in tsz*sz using division */
-	if(tsz != 0 && (ulong)sz > ((ulong)~0 - sizeof(Array) - sizeof(Heap)) / (ulong)tsz)
+	/* nheap takes int, so bound the product to its actual input domain. */
+	maxalloc = ~0U >> 1;
+	if(tsz != 0 && (uint)sz > (maxalloc - sizeof(Array) - sizeof(Heap)) / (uint)tsz)
 		error(exHeap);
 }
 OP(newa)
@@ -480,7 +483,7 @@ OP(newa)
 }
 OP(newaz)
 {
-	int sz;
+	int sz, nbytes;
 	Type *t;
 	Heap *h;
 	Array *a, *at, **ap;
@@ -488,7 +491,8 @@ OP(newaz)
 	t = R.M->type[W(m)];
 	sz = W(s);
 	acheck(t->size, sz);
-	h = nheap(sizeof(Array) + (t->size*sz));
+	nbytes = t->size * sz;
+	h = nheap(sizeof(Array) + nbytes);
 	h->t = &Tarray;
 	Tarray.ref++;
 	a = H2D(Array*, h);
@@ -496,7 +500,7 @@ OP(newaz)
 	a->len = sz;
 	a->root = H;
 	a->data = (uchar*)a + sizeof(Array);
-	memset(a->data, 0, t->size*sz);
+	memset(a->data, 0, nbytes);
 	initarray(t, a);
 
 	ap = R.d;

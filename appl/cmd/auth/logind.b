@@ -161,8 +161,8 @@ dologin(c: ref Sys->Connection): string
 		return "pk name doesn't match user name";
 
 	# sign and return
-	state := kr->sha256(hisPKbuf, len hisPKbuf, nil, nil);
-	cert := kr->sign(info.mysk, userexp, state, "sha256");
+	state := certdigest(info.mysk, hisPKbuf);
+	cert := kr->sign(info.mysk, userexp, state, certhash(info.mysk));
 
 	if(kr->putstring(c.dfd, kr->certtostr(cert)) < 0)
 		return sys->sprint("can't send certificate: %r");
@@ -173,6 +173,27 @@ dologin(c: ref Sys->Connection): string
 nomod(mod: string)
 {
 	fatal(sys->sprint("can't load %s: %r",mod));
+}
+
+# CNSA 2.0: bind the certificate hash to the signing key's strength.
+# ML-DSA / SLH-DSA (FIPS 204/205, NIST Cat >=3) keys pair with SHA-384;
+# classical keys keep SHA-256 so pre-existing certs verify unchanged. The
+# chosen name is stored in the certificate, so any verifier re-hashes to match.
+certhash(sk: ref Keyring->SK): string
+{
+	if(sk != nil && sk.sa != nil)
+		case sk.sa.name {
+		"mldsa65" or "mldsa87" or "slhdsa192s" or "slhdsa256s" =>
+			return "sha384";
+		}
+	return "sha256";
+}
+
+certdigest(sk: ref Keyring->SK, buf: array of byte): ref Keyring->DigestState
+{
+	if(certhash(sk) == "sha384")
+		return kr->sha384(buf, len buf, nil, nil);
+	return kr->sha256(buf, len buf, nil, nil);
 }
 
 fatal(msg: string)

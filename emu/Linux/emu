@@ -23,6 +23,7 @@ dev
 	eia
 	audio	audio-oss
 	mem
+	tfa	fido2bridge
 
 lib
 	interp

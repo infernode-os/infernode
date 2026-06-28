@@ -12,5 +12,13 @@ GUISRC=\
 SDL3_CFLAGS=-I/usr/local/include
 SDL3_LIBS=-L/usr/local/lib -lSDL3
 
-GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS
-GUILIBS=$SDL3_LIBS
+# libfido2 for /dev/2fa (second-factor auth — YubiKey/FIDO2). Same conditional
+# pattern as the macOS backend: only define -DHAVE_FIDO2 when libfido2 is
+# present (apt install libfido2-dev), so a host without it degrades to an emu
+# whose #F device reports available=0 rather than failing to find <fido.h>.
+# pkg-config --libs pulls in the libudev/libcbor/libcrypto deps libfido2 needs.
+FIDO2_CFLAGS=`if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
+FIDO2_LIBS=`if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
+
+GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $FIDO2_CFLAGS
+GUILIBS=$SDL3_LIBS $FIDO2_LIBS

@@ -138,10 +138,13 @@ Inferno runs inside the `emu` host emulator, which has **no** native USB/HID
 access. The `#F` device is a deliberately thin **text relay**: `devtfa.c` parses
 one line and calls the host-side bridge — it does no crypto and no USB itself.
 
-- The bridge: `emu/MacOSX/fido2bridge.c`, pure C against **libfido2** with *no
+- The bridge: `emu/port/fido2bridge.c`, pure C against **libfido2** with *no
   Inferno headers* (to avoid name clashes). It does the real work —
   `fido_dev_make_cred` with the `FIDO_EXT_HMAC_SECRET` extension, `fido_dev_open`
-  over USB HID. Registered into the device table in `emu/MacOSX/emu.c`.
+  over USB HID. Shared across all three host platforms (macOS, Linux, Windows):
+  each platform's `mkfile-gui-sdl3` / build script defines `-DHAVE_FIDO2` and
+  links libfido2 when present, and adds `tfa fido2bridge` to its `emu`/`emu-gui`
+  device list so `devtfa.c` is compiled in.
 - When libfido2 is absent at build time (`-DHAVE_FIDO2` unset), the entry points
   compile as stubs so the emu still builds without `/dev/2fa` support.
 - Same idiom as the mobile biometric bridge (`/phone/bio_*`,
@@ -215,8 +218,8 @@ Properties:
 | File | As-built role |
 |------|---------------|
 | `emu/port/devtfa.c` | the `#F` device; serves `/dev/2fa` (text relay) |
-| `emu/MacOSX/fido2bridge.c` | host bridge → libfido2 (hmac-secret, USB HID) |
-| `emu/MacOSX/emu.c` | registers `tfadevtab` in the device table |
+| `emu/port/fido2bridge.c` | host bridge → libfido2 (hmac-secret, USB HID); shared by macOS/Linux/Windows |
+| `emu/{MacOSX,Linux}/emu`, `emu/Nt/emu-gui` | `tfa fido2bridge` device line → registers `tfadevtab` |
 | `module/twofa.m`, `appl/lib/twofa.b` | Limbo file interface to `/dev/2fa` |
 | `module/twofaslot.m`, `appl/lib/twofaslot.b` | key-slot envelope: `is2fa`/`unlock`/`writeslots`/`addkey`/`disable` (§6) |
 | `appl/lib/secstore.b` | `mkkek2fa(rootkey,R)` + `encrypt3`/`decrypt3` for DK wrapping |

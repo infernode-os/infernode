@@ -10,7 +10,7 @@
  *                              (touch) a device-bound 32-byte secret; read it back as hex
  *
  * Phase 1 of doc/second-factor-auth.md. The actual hardware work is done by the
- * host-side bridge (emu/MacOSX/fido2bridge.c via libfido2); this kernel device
+ * host-side bridge (emu/port/fido2bridge.c via libfido2); this kernel device
  * only relays text. Phase 2 will mix `derive`'s output into the secstore file
  * key in appl/wm/logon.b. Blocking bridge calls run in the writing kproc (a
  * pthread on this build), exactly as devphone blocks on a biometric prompt.

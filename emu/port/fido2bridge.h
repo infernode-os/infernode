@@ -3,7 +3,7 @@
  *
  * Plain C contract between the kernel-side device (emu/port/devtfa.c, which
  * includes only Inferno headers) and the host-side implementation
- * (emu/MacOSX/fido2bridge.c, which includes <fido.h>). All values cross the
+ * (emu/port/fido2bridge.c, which includes <fido.h>). All values cross the
  * boundary as NUL-terminated hex strings so neither side needs the other's
  * types. Functions return 0 on success, -1 on error (with a short message in
  * `err`). The enroll/derive calls BLOCK on a YubiKey touch — safe, because the

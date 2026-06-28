@@ -4,8 +4,8 @@
 # Provider-agnostic second-factor challenge-response. Callers (logon, factotum,
 # wallet) use this instead of poking the device files directly. See
 # doc/second-factor-auth.md. The hardware work happens in the emu host bridge
-# (emu/MacOSX/fido2bridge.c via libfido2); enroll() and derive() BLOCK on a
-# physical touch.
+# (emu/port/fido2bridge.c via libfido2, shared across macOS/Linux/Windows);
+# enroll() and derive() BLOCK on a physical touch.
 #
 Twofa: module
 {

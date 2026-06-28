@@ -443,100 +443,22 @@ cryptmodinit(void)
 void
 Crypt_dessetup(void *fp)
 {
-	F_Crypt_dessetup *f;
-	Heap *h;
-	XDESstate *ds;
-	uchar *ivec;
-	void *v;
-
-	f = fp;
-	v = *f->ret;
-	*f->ret = H;
-	destroy(v);
-
-	if(f->key == H)
-		error(exNilref);
-	if(f->key->len < 8)
-		error(exBadKey);
-	if(f->ivec != H){
-		if(f->ivec->len < 8)
-			error(exBadIvec);
-		ivec = f->ivec->data;
-	}else
-		ivec = nil;
-
-	h = heap(TDESstate);
-	ds = H2D(XDESstate*, h);
-	setupDESstate(&ds->state, f->key->data, ivec);
-
-	*f->ret = (Crypt_DESstate*)ds;
+	USED(fp);
+	error("DES is disabled");
 }
 
 void
 Crypt_desecb(void *fp)
 {
-	F_Crypt_desecb *f;
-	XDESstate *ds;
-	int i;
-	uchar *p;
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	ds = checktype(f->state, TDESstate, exBadState, 0);
-	p = f->buf->data;
-
-	for(i = 8; i <= f->n; i += 8, p += 8)
-		block_cipher(ds->state.expanded, p, f->direction);
+	USED(fp);
+	error("DES is disabled");
 }
 
 void
 Crypt_descbc(void *fp)
 {
-	F_Crypt_descbc *f;
-	XDESstate *ds;
-	uchar *p, *ep, *ip, *p2, *eip;
-	uchar tmp[8];
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	ds = checktype(f->state, TDESstate, exBadState, 0);
-	p = f->buf->data;
-
-	if(f->direction == 0){
-		for(ep = p + f->n; p < ep; p += 8){
-			p2 = p;
-			ip = ds->state.ivec;
-			for(eip = ip+8; ip < eip; )
-				*p2++ ^= *ip++;
-			block_cipher(ds->state.expanded, p, 0);
-			memmove(ds->state.ivec, p, 8);
-		}
-	} else {
-		for(ep = p + f->n; p < ep; ){
-			memmove(tmp, p, 8);
-			block_cipher(ds->state.expanded, p, 1);
-			p2 = tmp;
-			ip = ds->state.ivec;
-			for(eip = ip+8; ip < eip; ){
-				*p++ ^= *ip;
-				*ip++ = *p2++;
-			}
-		}
-	}
+	USED(fp);
+	error("DES is disabled");
 }
 
 void

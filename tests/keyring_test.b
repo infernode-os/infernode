@@ -679,29 +679,19 @@ testDESCBC(t: ref T)
 	key := array[8] of byte;
 	for(i := 0; i < len key; i++)
 		key[i] = byte (i + 1);
-	iv := array[8] of byte;
 
-	estate := kr->dessetup(key, iv);
-	if(estate == nil) {
-		t.fatal("dessetup failed");
-		return;
+	rejected := 0;
+	{
+		state := kr->dessetup(key, nil);
+		if(state != nil)
+			t.error("DES setup unexpectedly succeeded");
+	} exception {
+	"DES is disabled" =>
+		rejected = 1;
+	"*" =>
+		t.error("DES setup failed with an unexpected exception");
 	}
-
-	# DES-CBC needs blocks of 8
-	plain := array[16] of byte;
-	for(i = 0; i < len plain; i++)
-		plain[i] = byte (i * 5);
-	cipher := array[16] of byte;
-	cipher[:] = plain;
-	kr->descbc(estate, cipher, len cipher, Keyring->Encrypt);
-
-	t.assert(!byteseq(cipher, plain), "DES-CBC ciphertext differs");
-
-	# Decrypt
-	iv2 := array[8] of byte;
-	dstate := kr->dessetup(key, iv2);
-	kr->descbc(dstate, cipher, len cipher, Keyring->Decrypt);
-	t.assert(byteseq(cipher, plain), "DES-CBC roundtrip");
+	t.assert(rejected, "DES setup rejected");
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -753,7 +743,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AESCBC", testAESCBC);
 	run("AES256", testAES256);
 	run("RC4", testRC4);
-	run("DESCBC", testDESCBC);
+	run("DESDisabled", testDESCBC);
 
 	# Asymmetric key tests
 	run("RSA", testRSA);

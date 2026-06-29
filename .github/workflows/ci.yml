@@ -69,7 +69,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -85,6 +85,12 @@ jobs:
         test -x emu/Linux/o.emu || { echo "Emulator not built"; exit 1; }
         file emu/Linux/o.emu
         test -x Linux/amd64/bin/limbo || { echo "Limbo compiler not built"; exit 1; }
+
+    - name: Verify libfido2 linkage (/dev/2fa)
+      run: |
+        # libfido2-dev is installed, so the headless emu must link libfido2 or
+        # the #F device would ship as a stub. Same guard as the GUI jobs.
+        ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
     - name: Compile test suite
       run: |
@@ -582,7 +588,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -594,6 +600,12 @@ jobs:
         test -x emu/Linux/o.emu || { echo "Emulator not built"; exit 1; }
         file emu/Linux/o.emu
         test -x Linux/arm64/bin/limbo || { echo "Limbo compiler not built"; exit 1; }
+
+    - name: Verify libfido2 linkage (/dev/2fa)
+      run: |
+        # libfido2-dev is installed, so the headless emu must link libfido2 or
+        # the #F device would ship as a stub. Same guard as the GUI jobs.
+        ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
     - name: Compile test suite
       run: |

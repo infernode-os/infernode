@@ -16,6 +16,13 @@ INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is instal
 <| $SHELLNAME ../port/mkdevlist  $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 <mkfile-$OBJTYPE	# sets $ARCHFILES
 
+# libfido2 for /dev/2fa (YubiKey/FIDO2). This is the build the headless release
+# and `build-linux-*.sh headless` use, so it gets the same conditional FIDO2
+# wiring as the sdl3 backend: -DHAVE_FIDO2 + link libfido2 only when present
+# (apt install libfido2-dev), else fido2bridge.c compiles its stub path.
+FIDO2_CFLAGS=`if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
+FIDO2_LIBS=`if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
+
 OBJ=\
 	asm-$OBJTYPE.$O\
 	$ARCHFILES\
@@ -39,7 +46,7 @@ CFLAGS=\
 	-I$ROOT/$SYSTARG/$OBJTYPE/include\
 	-I$ROOT/include\
 	-I$ROOT/libinterp\
-	$CTHREADFLAGS $CFLAGS $EMUOPTIONS\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $FIDO2_CFLAGS\
 
 KERNDATE=`{$NDATE}
 
@@ -52,7 +59,7 @@ default:V:	$O.$CONF
 
 $O.$CONF:	$OBJ $CONF.c $CONF.root.h # $LIBNAMES
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
-	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS
+	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $FIDO2_LIBS
 
 install:V: $O.$CONF
 	cp $O.$CONF $INSTALLDIR/$CONF

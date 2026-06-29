@@ -40,7 +40,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev patchelf
 
     - name: Build (headless)
       run: |
@@ -151,6 +151,25 @@ jobs:
         cp emu/Linux/o.emu "$STAGE/emu/Linux/"
         cp Linux/amd64/bin/limbo Linux/amd64/bin/mk "$STAGE/Linux/amd64/bin/"
         strip "$STAGE/emu/Linux/o.emu" "$STAGE/Linux/amd64/bin/limbo" "$STAGE/Linux/amd64/bin/mk"
+
+        # Bundle libfido2 (+ its non-system dep libcbor) next to the headless
+        # emu so /dev/2fa works without the user installing libfido2-dev —
+        # mirrors the GUI job. libudev/libcrypto are near-universal and stay as
+        # system deps; libcbor is bundled. The headless binary has no RUNPATH by
+        # default, so set $ORIGIN here (and on libfido2, so it finds libcbor).
+        patchelf --set-rpath '$ORIGIN' "$STAGE/emu/Linux/o.emu" || true
+        FIDO2_LIB=$(ldd emu/Linux/o.emu | grep -i libfido2 | awk '{print $3}')
+        if [ -n "$FIDO2_LIB" ] && [ -f "$FIDO2_LIB" ]; then
+          cp -L "$FIDO2_LIB" "$STAGE/emu/Linux/$(basename "$FIDO2_LIB")"
+          patchelf --set-rpath '$ORIGIN' "$STAGE/emu/Linux/$(basename "$FIDO2_LIB")" || true
+          CBOR_LIB=$(ldd "$FIDO2_LIB" | grep -i libcbor | awk '{print $3}')
+          if [ -n "$CBOR_LIB" ] && [ -f "$CBOR_LIB" ]; then
+            cp -L "$CBOR_LIB" "$STAGE/emu/Linux/$(basename "$CBOR_LIB")"
+          fi
+          echo "Bundled FIDO2 runtime: $(ls "$STAGE"/emu/Linux/libfido2* "$STAGE"/emu/Linux/libcbor* 2>/dev/null)"
+        else
+          echo "WARNING: libfido2 not linked — /dev/2fa will be a stub in this artifact" >&2
+        fi
 
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do
@@ -480,7 +499,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev patchelf
 
     - name: Build (headless)
       run: |
@@ -590,6 +609,25 @@ jobs:
         # Platform binaries
         cp emu/Linux/o.emu "$STAGE/emu/Linux/"
         cp Linux/arm64/bin/limbo Linux/arm64/bin/mk "$STAGE/Linux/arm64/bin/"
+
+        # Bundle libfido2 (+ its non-system dep libcbor) next to the headless
+        # emu so /dev/2fa works without the user installing libfido2-dev —
+        # mirrors the GUI job. libudev/libcrypto are near-universal and stay as
+        # system deps; libcbor is bundled. The headless binary has no RUNPATH by
+        # default, so set $ORIGIN here (and on libfido2, so it finds libcbor).
+        patchelf --set-rpath '$ORIGIN' "$STAGE/emu/Linux/o.emu" || true
+        FIDO2_LIB=$(ldd emu/Linux/o.emu | grep -i libfido2 | awk '{print $3}')
+        if [ -n "$FIDO2_LIB" ] && [ -f "$FIDO2_LIB" ]; then
+          cp -L "$FIDO2_LIB" "$STAGE/emu/Linux/$(basename "$FIDO2_LIB")"
+          patchelf --set-rpath '$ORIGIN' "$STAGE/emu/Linux/$(basename "$FIDO2_LIB")" || true
+          CBOR_LIB=$(ldd "$FIDO2_LIB" | grep -i libcbor | awk '{print $3}')
+          if [ -n "$CBOR_LIB" ] && [ -f "$CBOR_LIB" ]; then
+            cp -L "$CBOR_LIB" "$STAGE/emu/Linux/$(basename "$CBOR_LIB")"
+          fi
+          echo "Bundled FIDO2 runtime: $(ls "$STAGE"/emu/Linux/libfido2* "$STAGE"/emu/Linux/libcbor* 2>/dev/null)"
+        else
+          echo "WARNING: libfido2 not linked — /dev/2fa will be a stub in this artifact" >&2
+        fi
 
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do

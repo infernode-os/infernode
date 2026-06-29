@@ -626,16 +626,35 @@ Write-Host "  Regenerating Srv runtime headers..."
 & $LIMBO -a -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srv.h" -Encoding ASCII
 & $LIMBO -t Srv -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srvm.h" -Encoding ASCII
 
+# Vendored libfido2 (third-party/libfido2/win-amd64). Mandatory: the #F
+# (2fa) device wires through emu/port/fido2bridge.c, which needs
+# HAVE_FIDO2 + fido.h to be useful. Without it the build still succeeds
+# but ships /dev/2fa as a stub — exactly the silent regression the
+# macOS guard at release.yml catches.
+$Fido2Root = "$ROOT\third-party\libfido2\win-amd64"
+if (-not (Test-Path "$Fido2Root\include\fido.h")) {
+    Write-Host "ERROR: vendored libfido2 missing at $Fido2Root" -ForegroundColor Red
+    Write-Host "  Run third-party/libfido2/refresh.sh to fetch the upstream Yubico release."
+    exit 1
+}
+$Fido2Libs = @(
+    "$Fido2Root\lib\fido2.lib",
+    "$Fido2Root\lib\cbor.lib",
+    "$Fido2Root\lib\crypto.lib",
+    "$Fido2Root\lib\zlib1.lib"
+)
+
 $emuCFlags = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
     "/W3", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
     "/wd4090", "/wd4554", "/wd4146", "/wd4996", "/wd4305",
     "/wd4102", "/wd4761",
-    "/DEMU", "/D_AMD64_", "/DWINDOWS_AMD64",
+    "/DEMU", "/D_AMD64_", "/DWINDOWS_AMD64", "/DHAVE_FIDO2",
     "/I.", "/I..\port",
     "/I$ROOT\Nt\amd64\include",
     "/I$ROOT\include",
-    "/I$ROOT\libinterp"
+    "/I$ROOT\libinterp",
+    "/I$Fido2Root\include"
 )
 
 # Platform-specific source files (from emu/Nt/)
@@ -645,8 +664,7 @@ $ntSources = @(
     "stubs-headless.c",
     "devfs.c",
     "ipif6.c",
-    "jit-unwind.c",
-    "fido2bridge.c"
+    "jit-unwind.c"
 )
 foreach ($src in $ntSources) {
     if (Test-Path $src) {
@@ -678,6 +696,7 @@ $portSources = @(
     "devcons.c", "devdup.c", "devenv.c", "devip.c",
     "devmnt.c", "devpipe.c", "devprog.c", "devroot.c",
     "devsrv.c", "devssl.c", "devcmd.c", "devtfa.c",
+    "fido2bridge.c",
     "ipaux.c", "srv.c"
 )
 foreach ($src in $portSources) {
@@ -807,12 +826,21 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "$LibDir\libmemlayer.lib" `
     "$LibDir\libmemdraw.lib" `
     "$LibDir\lib9.lib" `
-    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib bcrypt.lib
+    @Fido2Libs `
+    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib bcrypt.lib hid.lib setupapi.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
     exit 1
 }
 Write-Host "  o.emu.exe built" -ForegroundColor Green
+
+# Copy vendored libfido2 DLLs next to the emu so it can find them at runtime.
+# Parallels the SDL3.dll copy in build-windows-sdl3.ps1 — emu/Nt is also the
+# release staging dir for these binaries.
+foreach ($dll in @("fido2.dll","cbor.dll","crypto-56.dll","zlib1.dll")) {
+    Copy-Item "$Fido2Root\bin\$dll" "$ROOT\emu\Nt\$dll" -Force
+}
+Write-Host "  Bundled libfido2 + deps (fido2/cbor/crypto-56/zlib1.dll)" -ForegroundColor Green
 Pop-Location
 
 # =============================================

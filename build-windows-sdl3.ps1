@@ -153,16 +153,32 @@ if (Test-Path $LIMBO) {
     & $LIMBO -t Srv -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srvm.h" -Encoding ASCII
 }
 
+# Vendored libfido2 (third-party/libfido2/win-amd64). Same guard as
+# build-windows-amd64.ps1 — refuse to build a fido2-less binary.
+$Fido2Root = "$ROOT\third-party\libfido2\win-amd64"
+if (-not (Test-Path "$Fido2Root\include\fido.h")) {
+    Write-Host "ERROR: vendored libfido2 missing at $Fido2Root" -ForegroundColor Red
+    Write-Host "  Run third-party/libfido2/refresh.sh to fetch the upstream Yubico release."
+    exit 1
+}
+$Fido2Libs = @(
+    "$Fido2Root\lib\fido2.lib",
+    "$Fido2Root\lib\cbor.lib",
+    "$Fido2Root\lib\crypto.lib",
+    "$Fido2Root\lib\zlib1.lib"
+)
+
 $emuCFlags = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
     "/W3", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
     "/wd4090", "/wd4554", "/wd4146", "/wd4996", "/wd4305",
     "/wd4102", "/wd4761",
-    "/DEMU", "/D_AMD64_", "/DWINDOWS_AMD64", "/DGUI_SDL3",
+    "/DEMU", "/D_AMD64_", "/DWINDOWS_AMD64", "/DGUI_SDL3", "/DHAVE_FIDO2",
     "/I.", "/I..\port",
     "/I$ROOT\Nt\amd64\include",
     "/I$ROOT\include",
     "/I$ROOT\libinterp",
+    "/I$Fido2Root\include",
     "/I$sdl3Include"
 )
 
@@ -172,8 +188,7 @@ $ntSources = @(
     "os.c", "cmd.c", "no_win.c", "fp.c",
     "devfs.c",
     "ipif6.c",
-    "jit-unwind.c",
-    "fido2bridge.c"
+    "jit-unwind.c"
 )
 foreach ($src in $ntSources) {
     if (Test-Path $src) {
@@ -214,6 +229,7 @@ $portSources = @(
     "devcons.c", "devdraw.c", "devdup.c", "devenv.c", "devip.c",
     "devmnt.c", "devpipe.c", "devpointer.c", "devprog.c", "devroot.c",
     "devsnarf.c", "devsrv.c", "devssl.c", "devcmd.c", "devtfa.c", "devwmsz.c",
+    "fido2bridge.c",
     "ipaux.c", "srv.c"
 )
 foreach ($src in $portSources) {
@@ -354,7 +370,8 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "$LibDir\libmemdraw.lib" `
     "$LibDir\lib9.lib" `
     $sdl3Lib `
-    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib bcrypt.lib
+    @Fido2Libs `
+    ws2_32.lib user32.lib gdi32.lib advapi32.lib winmm.lib mpr.lib kernel32.lib shell32.lib bcrypt.lib hid.lib setupapi.lib
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to link o.emu.exe" -ForegroundColor Red
     exit 1
@@ -367,6 +384,12 @@ if ($sdl3DllDir -ne "" -and (Test-Path "$sdl3DllDir\SDL3.dll")) {
     Copy-Item "$sdl3DllDir\SDL3.dll" "$ROOT\emu\Nt\SDL3.dll" -Force
     Write-Host "  Copied SDL3.dll to emu\Nt\" -ForegroundColor Green
 }
+
+# Copy vendored libfido2 DLLs next to the emu (mirrors SDL3.dll handling).
+foreach ($dll in @("fido2.dll","cbor.dll","crypto-56.dll","zlib1.dll")) {
+    Copy-Item "$Fido2Root\bin\$dll" "$ROOT\emu\Nt\$dll" -Force
+}
+Write-Host "  Bundled libfido2 + deps (fido2/cbor/crypto-56/zlib1.dll)" -ForegroundColor Green
 
 # =============================================
 # Build Summary

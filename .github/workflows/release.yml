@@ -1198,6 +1198,10 @@ jobs:
           "emu\Nt\o.emu.headless.exe", # headless (console) emulator
           "emu\Nt\InferNode.exe",      # Windows-subsystem launcher
           "emu\Nt\SDL3.dll",           # SDL3 runtime
+          "emu\Nt\fido2.dll",          # libfido2 (FIDO2 / YubiKey)
+          "emu\Nt\cbor.dll",           # libcbor (libfido2 dep)
+          "emu\Nt\crypto-56.dll",      # OpenSSL crypto (libfido2 dep)
+          "emu\Nt\zlib1.dll",          # zlib (libfido2 dep)
           "Nt\amd64\bin\limbo.exe",    # Limbo compiler
           "Nt\amd64\bin\mk.exe"        # mk build tool
         )
@@ -1206,6 +1210,15 @@ jobs:
           $size = [math]::Round((Get-Item $f).Length / 1KB, 1)
           Write-Host "OK $f ($size KB)"
         }
+        # Guard against a silent HAVE_FIDO2-off regression — same intent as
+        # the macOS otool check at release.yml:950. dumpbin /imports lists
+        # the DLLs the linker recorded as dependencies of o.emu.exe.
+        $imports = & dumpbin /imports emu\Nt\o.emu.exe 2>&1 | Out-String
+        if ($imports -notmatch 'fido2\.dll') {
+          Write-Error "FATAL: o.emu.exe was not linked against fido2.dll — 2fa/YubiKey would ship as a stub"
+          exit 1
+        }
+        Write-Host "OK o.emu.exe imports fido2.dll (FIDO2 / YubiKey wired up)"
 
     - name: Package archives (GUI + headless)
       shell: pwsh
@@ -1249,6 +1262,12 @@ jobs:
           Write-Host "Archive: $Stage.zip ($([math]::Round((Get-Item "$Stage.zip").Length / 1MB, 1)) MB)"
         }
 
+        # Vendored libfido2 DLLs that have to ship next to o.emu.exe so the
+        # #F (2fa / YubiKey) device works on end-user machines. Mirrors the
+        # macOS bundle_homebrew_deps step. The build scripts have already
+        # copied these into emu\Nt\ alongside SDL3.dll; we just stage them.
+        $Fido2Dlls = @("fido2.dll", "cbor.dll", "crypto-56.dll", "zlib1.dll")
+
         # GUI bundle: flat layout matching the launcher's expectations —
         # $STAGE\InferNode.exe invokes %dir%\o.emu.exe with -r ., so launcher +
         # GUI emu + SDL3.dll + runtime tree all live at the bundle's top level.
@@ -1257,6 +1276,7 @@ jobs:
         Copy-Item "emu\Nt\InferNode.exe" "$GUI\"
         Copy-Item "emu\Nt\o.emu.exe"     "$GUI\"
         Copy-Item "emu\Nt\SDL3.dll"      "$GUI\"
+        foreach ($dll in $Fido2Dlls) { Copy-Item "emu\Nt\$dll" "$GUI\" }
         Write-Zip $GUI
 
         # Headless bundle: console emulator only, no SDL3. Launch from a
@@ -1264,6 +1284,7 @@ jobs:
         $HL = "infernode-$VERSION-windows-amd64"
         Stage-Common $HL
         Copy-Item "emu\Nt\o.emu.headless.exe" "$HL\o.emu.exe"
+        foreach ($dll in $Fido2Dlls) { Copy-Item "emu\Nt\$dll" "$HL\" }
         Write-Zip $HL
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

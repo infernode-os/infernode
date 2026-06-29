@@ -1872,6 +1872,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# written by the task tool.  Append them to the LLM system prompt inside
 	# <task> and <instructions> tags so the TA knows its assignment.
 	taskbrief := "";
+	taskinstr := "";
 	if(actid > 0) {
 		briefpath := sys->sprint("/tmp/veltro/brief.%d", actid);
 		taskbrief = agentlib->readfile(briefpath);
@@ -1881,7 +1882,7 @@ init(nil: ref Draw->Context, args: list of string)
 			taskbrief = "";
 
 		instrpath := sys->sprint("/tmp/veltro/instructions.%d", actid);
-		taskinstr := agentlib->readfile(instrpath);
+		taskinstr = agentlib->readfile(instrpath);
 		if(taskinstr != nil)
 			taskinstr = agentlib->strip(taskinstr);
 		else
@@ -1909,10 +1910,28 @@ init(nil: ref Draw->Context, args: list of string)
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sessionid, maxsteps, convcount));
 
-	# Autonomous first turn for TAs: the task brief is in the system prompt,
-	# now send a short trigger so the LLM responds based on its assignment.
-	if(taskbrief != "")
-		agentturn("Begin.");
+	# Autonomous first turn for TAs. The brief/instructions are already in the
+	# system prompt inside <task>/<instructions> tags, but a content-free
+	# trigger ("Begin.") leaves the actual assignment buried in the system
+	# message — weaker models then reply conversationally ("what should I do?")
+	# instead of acting. So we restate the assignment as the first user turn:
+	# the model sees its concrete task as the latest message and starts work.
+	# This turn is NOT recorded with writemsg(), so it is invisible in the UI;
+	# only the agent's response is shown. Fires on brief OR instructions so an
+	# instructions-only task still auto-starts.
+	if(taskbrief != "" || taskinstr != "") {
+		kickoff := "You have been started automatically to carry out an assigned task.";
+		if(taskbrief != "")
+			kickoff += "\n\nYour assignment:\n" + taskbrief;
+		if(taskinstr != "")
+			kickoff += "\n\nSpecific instructions:\n" + taskinstr;
+		kickoff += "\n\nBegin now. Work autonomously with your tools. Do not greet " +
+			"or ask what to do — you already have your assignment above. If you " +
+			"genuinely cannot proceed without a specific missing detail, ask one " +
+			"concise clarifying question; otherwise make a reasonable assumption " +
+			"and proceed.";
+		agentturn(kickoff);
+	}
 
 	# Main loop: re-open input fd each iteration because 9P offset
 	# advances after read, causing subsequent reads to return EOF.

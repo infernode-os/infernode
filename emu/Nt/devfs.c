@@ -2041,8 +2041,17 @@ secmksd(char *sdrock, Stat *st, ACL *dacl, int isdir)
 		return nil;
 	if(!SetSecurityDescriptorDacl(sd, 1, dacl, 0))
 		return nil;
-//	if(isserver && !SetSecurityDescriptorOwner(sd, st->owner->sid, 0))
-//		return nil;
+	/*
+	 * Set the file's owner SID explicitly to the Inferno hostowner (st->owner).
+	 * Without this, Windows defaults the SD owner to the process token's
+	 * default owner — which is BUILTIN\Administrators when emu runs UAC-
+	 * elevated. The resulting file ends up owned by Administrators with the
+	 * owner-perm ACE granted to st->owner (pdfinn) instead, so the file
+	 * "ownership" and "owner ACE" disagree and the file is unreadable from
+	 * a normal (non-admin) emu run. Force them to match.
+	 */
+	if(!SetSecurityDescriptorOwner(sd, st->owner->sid, 0))
+		return nil;
 	return sd;
 }
 

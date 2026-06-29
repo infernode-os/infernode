@@ -4,5 +4,14 @@
 GUISRC=\
 	stubs-headless.$O\
 
-GUIFLAGS=
-GUILIBS=
+# libfido2 for /dev/2fa (YubiKey/FIDO2). Same conditional pattern as the sdl3
+# backend: only -DHAVE_FIDO2 + link libfido2 when it is present (apt install
+# libfido2-dev), so a headless host without it still builds — the #F device
+# reports available=0 instead of failing to find <fido.h>. There is no display
+# here, but the 2fa device is display-independent and headless installs are a
+# supported target, so it ships with FIDO2 too.
+FIDO2_CFLAGS=`if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
+FIDO2_LIBS=`if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
+
+GUIFLAGS=$FIDO2_CFLAGS
+GUILIBS=$FIDO2_LIBS

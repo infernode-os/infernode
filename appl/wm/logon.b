@@ -278,9 +278,11 @@ handleenter(): int
 			sys->sleep(500);
 			return 1;
 		}
-		if(ferr == "NEEDRECOVERY") {
+		if(ferr == "NEEDRECOVERY" || (len ferr >= 13 && ferr[:13] == "NEEDRECOVERY:")) {
 			state = STATE_RECOVERY;
 			statusmsg = "Security key didn't unlock — enter recovery passphrase";
+			if(len ferr > 13)
+				statusmsg = "Security key failed (" + ferr[13:] + ") — enter recovery passphrase";
 			redraw();
 			return 0;
 		}
@@ -659,7 +661,7 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	if(is2fa){
 		# Try the present YubiKey (touch); if recoverypass is given, unlock()
 		# also tries the recovery slot.
-		(dk, nil) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
+		(dk, unlockerr) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
 		if(dk != nil){
 			plaintext = secstore->decrypt3(file, dk, nil, nil);
 			current2fadkhex = tohex(dk);	# retain DK so save-back stays DK-encrypted (no downgrade)
@@ -671,8 +673,14 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 		if(plaintext == nil)
 			plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
 		if(plaintext == nil){
-			if(recoverypass == "")
-				return "NEEDRECOVERY";	# signal logon to prompt for the recovery passphrase
+			if(recoverypass == ""){
+				# NEEDRECOVERY tells logon to prompt for the recovery passphrase.
+				# Suffix the actual derive error so the screen can show "PIN
+				# invalid" / "PIN blocked" instead of leaving the user guessing.
+				if(unlockerr != nil && unlockerr != "")
+					return "NEEDRECOVERY:" + unlockerr;
+				return "NEEDRECOVERY";
+			}
 			return "recovery passphrase did not unlock";
 		}
 	}else{

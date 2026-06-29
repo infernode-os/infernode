@@ -221,7 +221,6 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 
 	sync <-= nil;
 	listench := chan of (int, Sys->Connection);
-	authch := chan of (string, Sys->Connection);
 	spawn listener(listench, acon, addr);
 	for (;;) {
 		user := "";
@@ -238,7 +237,7 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 				}
 				alt {
 				authslots <-= 1 =>
-					spawn authenticator(authch, c, algs, addr);
+					spawn authenticatedcommand(c, algs, addr, ctxt.copy(1), cmd);
 				* =>
 					nethangup(c.cfd);
 					c.dfd = c.cfd = nil;
@@ -246,8 +245,6 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 				continue;
 			}
 			ccon = c;
-		(user, ccon) = <-authch =>
-			;
 		}
 		if (user != nil)
 			ctxt.set("user", sh->stringlist2list(user :: nil));
@@ -298,26 +295,26 @@ listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: str
 	}
 }
 
-authenticator(authch: chan of (string, Sys->Connection),
-		c: Sys->Connection, algs: list of string, addr: string)
+authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
+		ctxt: ref Context, cmd: list of ref Sh->Listnode)
 {
 	err: string;
-	(c.dfd, err) = authserver(algs, serverkey, c.dfd, c.cfd, 0);
-	<-authslots;
+	cancel := chan[1] of int;
+	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout);
+	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 1);
+	cancel <-= 1;
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
 		return;
 	}
 	if (verbose)
 		sys->fprint(stderr(), "listen: authenticated on %s as %s\n", addr, err);
-	authch <-= (err, c);
-}
-
-authworker(pidc: chan of int, rc: chan of (ref Sys->FD, string),
-		algs: list of string, ai: ref Keyring->Authinfo, dfd: ref Sys->FD, setid: int)
-{
-	pidc <-= sys->pctl(0, nil);
-	rc <-= auth->server(algs, ai, dfd, setid);
+	ctxt.set("user", sh->stringlist2list(err :: nil));
+	ctxt.set("net", ref Sh->Listnode(nil, c.dir) :: nil);
+	sys->dup(c.dfd.fd, 0);
+	sys->dup(c.dfd.fd, 1);
+	c.dfd = c.cfd = nil;
+	ctxt.run(cmd, 0);
 }
 
 timerproc(c: chan of int, ms: int)
@@ -341,22 +338,18 @@ kill(pid: int, how: string)
 		sys->fprint(fd, "%s", how);
 }
 
-authserver(algs: list of string, ai: ref Keyring->Authinfo,
-		dfd, cfd: ref Sys->FD, setid: int): (ref Sys->FD, string)
+authwatchdog(cancel: chan of int, pid: int, cfd: ref Sys->FD, ms: int)
 {
-	pidc := chan[1] of int;
-	rc := chan[1] of (ref Sys->FD, string);
 	tmo := chan[1] of int;
-	spawn authworker(pidc, rc, algs, ai, dfd, setid);
-	pid := <-pidc;
-	spawn timerproc(tmo, authtimeout);
+	spawn timerproc(tmo, ms);
 	alt {
-	(fd, err) := <-rc =>
-		return (fd, err);
+	<-cancel =>
+		<-authslots;
+		return;
 	<-tmo =>
+		<-authslots;
 		nethangup(cfd);
 		kill(pid, "kill");
-		return (nil, "authentication timeout");
 	}
 }
 

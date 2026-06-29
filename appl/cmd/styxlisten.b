@@ -188,8 +188,10 @@ authenticator(dfd, cfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref S
 		algs: list of string, hostname: string)
 {
 	# authenticate and change user id appropriately
-	(fd, err) := authserver(algs, authinfo, dfd, cfd, 1);
-	<-authslots;
+	cancel := chan[1] of int;
+	spawn authwatchdog(cancel, sys->pctl(0, nil), cfd, authtimeout);
+	(fd, err) := auth->server(algs, authinfo, dfd, 1);
+	cancel <-= 1;
 	if (fd == nil) {
 		if (verbose)
 			sys->fprint(stderr(), "styxlisten: authentication failed: %s\n", err);
@@ -200,13 +202,6 @@ authenticator(dfd, cfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref S
 	sync := chan of int;
 	spawn exportproc(sync, mfd, err, hostname, fd);
 	<-sync;
-}
-
-authworker(pidc: chan of int, rc: chan of (ref Sys->FD, string),
-		algs: list of string, ai: ref Keyring->Authinfo, dfd: ref Sys->FD, setid: int)
-{
-	pidc <-= sys->pctl(0, nil);
-	rc <-= auth->server(algs, ai, dfd, setid);
 }
 
 timerproc(c: chan of int, ms: int)
@@ -221,22 +216,18 @@ nethangup(cfd: ref Sys->FD)
 		sys->fprint(cfd, "hangup");
 }
 
-authserver(algs: list of string, ai: ref Keyring->Authinfo,
-		dfd, cfd: ref Sys->FD, setid: int): (ref Sys->FD, string)
+authwatchdog(cancel: chan of int, pid: int, cfd: ref Sys->FD, ms: int)
 {
-	pidc := chan[1] of int;
-	rc := chan[1] of (ref Sys->FD, string);
 	tmo := chan[1] of int;
-	spawn authworker(pidc, rc, algs, ai, dfd, setid);
-	pid := <-pidc;
-	spawn timerproc(tmo, authtimeout);
+	spawn timerproc(tmo, ms);
 	alt {
-	(fd, err) := <-rc =>
-		return (fd, err);
+	<-cancel =>
+		<-authslots;
+		return;
 	<-tmo =>
+		<-authslots;
 		nethangup(cfd);
 		kill(pid, "kill");
-		return (nil, "authentication timeout");
 	}
 }
 

@@ -22,6 +22,11 @@ badmodule(p: string)
 verbose := 0;
 passhostnames := 0;
 authtimeout := 30000;
+authlimit := 32;
+authslots: chan of int;
+authrate := 8;
+ratewindow := 0;
+ratecount := 0;
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
@@ -40,7 +45,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		badmodule(Arg->PATH);
 
 	arg->init(argv);
-	arg->setusage("styxlisten [-a alg]... [-Atsv] [-T ms] [-k keyfile] address cmd [arg...]");
+	arg->setusage("styxlisten [-a alg]... [-Atsv] [-L maxauth] [-R authrate] [-T ms] [-k keyfile] address cmd [arg...]");
 
 	algs: list of string;
 	doauth := 1;
@@ -67,6 +72,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			authtimeout = int arg->earg();
 			if(authtimeout < 1000)
 				authtimeout = 1000;
+		'L' =>
+			authlimit = int arg->earg();
+			if(authlimit < 1)
+				arg->usage();
+		'R' =>
+			authrate = int arg->earg();
+			if(authrate < 1)
+				arg->usage();
 		's' =>
 			synchronous = 1;
 		'A' =>
@@ -88,6 +101,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	authinfo: ref Keyring->Authinfo;
 	if (doauth) {
+		authslots = chan[authlimit] of int;
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";
 		authinfo = keyring->readauthinfo(keyfile);
@@ -135,9 +149,38 @@ listener(c: Sys->Connection, mfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, 
 				spawn exportproc(sync, mfd, nil, hostname, dfd);
 				<-sync;
 			} else
-				spawn authenticator(dfd, nc.cfd, authinfo, mfd, algs, hostname);
+				if(!rateallow()) {
+					if(verbose)
+						sys->fprint(stderr(), "styxlisten: pre-auth rate limit reached\n");
+					nethangup(nc.cfd);
+					dfd = nil;
+					nc.cfd = nil;
+				} else
+				alt {
+				authslots <-= 1 =>
+					spawn authenticator(dfd, nc.cfd, authinfo, mfd, algs, hostname);
+				* =>
+					if(verbose)
+						sys->fprint(stderr(), "styxlisten: pre-auth limit reached\n");
+					nethangup(nc.cfd);
+					dfd = nil;
+					nc.cfd = nil;
+				}
 		}
 	}
+}
+
+rateallow(): int
+{
+	now := sys->millisec();
+	if(ratecount == 0 || now < ratewindow || now-ratewindow >= 1000) {
+		ratewindow = now;
+		ratecount = 0;
+	}
+	if(ratecount >= authrate)
+		return 0;
+	ratecount++;
+	return 1;
 }
 
 # authenticate a connection and set the user id.
@@ -146,6 +189,7 @@ authenticator(dfd, cfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref S
 {
 	# authenticate and change user id appropriately
 	(fd, err) := authserver(algs, authinfo, dfd, cfd, 1);
+	<-authslots;
 	if (fd == nil) {
 		if (verbose)
 			sys->fprint(stderr(), "styxlisten: authentication failed: %s\n", err);

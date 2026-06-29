@@ -11,6 +11,11 @@ FIX="$ROOT/tmp/security-check-fixture"
 rm -rf "$FIX"
 mkdir -p "$FIX/env" "$FIX/lib/ndb" "$FIX/lib/keyring" "$FIX/mnt/audit"
 printf '1\n' > "$FIX/env/cnsamode"
+printf 'keyring\n' > "$FIX/env/serve_llm_auth"
+printf '/lib/keyring/serve-llm\n' > "$FIX/env/serve_llm_key"
+printf '32\n' > "$FIX/env/serve_llm_auth_limit"
+printf '8\n' > "$FIX/env/serve_llm_auth_rate"
+printf '30000\n' > "$FIX/env/serve_llm_auth_timeout"
 printf 'mode=remote\nauth=keyring\nkeyfile=/lib/keyring/serve-llm\n' > "$FIX/lib/ndb/llm"
 printf 'test-public-key-placeholder\n' > "$FIX/lib/keyring/serve-llm"
 touch "$FIX/mnt/audit/ctl"
@@ -47,7 +52,7 @@ grep -q 'security-check result=FAIL' <<<"$out" || {
 
 # A headless export must never select the anonymous listener branch.
 printf 'mode=local\n' > "$FIX/lib/ndb/llm"
-printf 'anon\n' > "$FIX/env/SERVE_LLM_AUTH"
+printf 'anon\n' > "$FIX/env/serve_llm_auth"
 out="$(run_check)"
 grep -q 'FAIL EXPORT-AUTH LLM export authentication is not keyring' <<<"$out" || {
     echo "FAIL: anonymous LLM export was not rejected"
@@ -56,8 +61,18 @@ grep -q 'FAIL EXPORT-AUTH LLM export authentication is not keyring' <<<"$out" ||
     exit 1
 }
 
+printf 'keyring\n' > "$FIX/env/serve_llm_auth"
+printf '0\n' > "$FIX/env/serve_llm_auth_rate"
+out="$(run_check)"
+grep -q 'FAIL EXPORT-AUTH-RATE pre-auth rate does not match production policy' <<<"$out" || {
+    echo "FAIL: unsafe pre-auth rate was not rejected"
+    echo "$out"
+    rm -rf "$FIX"
+    exit 1
+}
+
 # An agent namespace must not expose host command authority.
-rm -f "$FIX/env/SERVE_LLM_AUTH"
+rm -f "$FIX/env/SERVE_LLM_AUTH" "$FIX/env/serve_llm_auth"
 touch "$FIX/cmd"
 out="$(run_check agent)"
 grep -q 'FAIL AGENT-AUTHORITY /cmd is visible' <<<"$out" || {

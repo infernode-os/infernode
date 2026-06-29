@@ -60,9 +60,11 @@ limbo -I module -o dis/tests/stress/dos_stall_test.dis tests/stress/dos_stall_te
 ./emu/Linux/o.emu -c1 -r$PWD /dis/tests/stress/dos_stall_test.dis -v
 ```
 
-Production listeners now wrap `auth->server` with a pre-auth deadline
-(`listen -T ms` / `styxlisten -T ms`, default 30000 ms).  A stalled peer is
-hung up and its auth worker is killed after the deadline, bounding the handler
-proc and fd lifetime.  `tests/interop/run-auth-timeout.sh` verifies the real
-CLI path: a stalled TCP client is disconnected while a legitimate `mount -k`
-still succeeds against the same listener.
+Production listeners bound pre-authentication work with a concurrent exchange
+limit (`-L`, default 32), a new-exchange rate limit (`-R`, default 8/second),
+and a deadline (`-T`, default 30000 ms). Excess connections are closed before
+authentication output or cryptographic work. A stalled peer is hung up and its
+auth worker is killed after the deadline. `tests/interop/run-auth-timeout.sh`
+verifies the real CLI paths for both `listen` and `styxlisten`: excess clients
+are rejected, released capacity is reused, stalled clients are disconnected,
+and a legitimate `mount -k` still succeeds.

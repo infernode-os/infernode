@@ -84,14 +84,16 @@ if {ftest -f $llmcfg} {
 
 # Headless serve-profile reflects these host settings into /env. Check them
 # when present, without requiring desktop or agent runtimes to define them.
-serveauth=`{readscalar $root^/env/SERVE_LLM_AUTH}
+serveauth=`{readscalar $root^/env/serve_llm_auth}
+if {~ $#serveauth 0} { serveauth=`{readscalar $root^/env/SERVE_LLM_AUTH} }
 if {! ~ $#serveauth 0} {
 	if {~ $serveauth keyring} {
 		pass EXPORT-AUTH 'LLM export requires keyring authentication'
 	} {
 		fail EXPORT-AUTH 'LLM export authentication is not keyring'
 	}
-	servekey=`{readscalar $root^/env/SERVE_LLM_KEY}
+	servekey=`{readscalar $root^/env/serve_llm_key}
+	if {~ $#servekey 0} { servekey=`{readscalar $root^/env/SERVE_LLM_KEY} }
 	if {~ $#servekey 0} {
 		fail EXPORT-KEY 'LLM export key path is unset'
 	} {
@@ -100,6 +102,24 @@ if {! ~ $#serveauth 0} {
 		} {
 			fail EXPORT-KEY 'LLM export keyfile is missing'
 		}
+	}
+	serveauthlimit=`{readscalar $root^/env/serve_llm_auth_limit}
+	serveauthrate=`{readscalar $root^/env/serve_llm_auth_rate}
+	serveauthtimeout=`{readscalar $root^/env/serve_llm_auth_timeout}
+	if {~ $serveauthlimit 32} {
+		pass EXPORT-AUTH-LIMIT 'pre-auth concurrency is bounded at 32'
+	} {
+		fail EXPORT-AUTH-LIMIT 'pre-auth concurrency does not match production policy'
+	}
+	if {~ $serveauthrate 8} {
+		pass EXPORT-AUTH-RATE 'pre-auth starts are bounded at 8 per second'
+	} {
+		fail EXPORT-AUTH-RATE 'pre-auth rate does not match production policy'
+	}
+	if {~ $serveauthtimeout 30000} {
+		pass EXPORT-AUTH-TIMEOUT 'pre-auth deadline is 30000 ms'
+	} {
+		fail EXPORT-AUTH-TIMEOUT 'pre-auth deadline does not match production policy'
 	}
 }
 

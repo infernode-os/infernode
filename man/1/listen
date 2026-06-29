@@ -9,6 +9,15 @@ listen, styxlisten, dial \- network connections
 .B -a
 .I alg
 ]... [
+.B -L
+.I maxauth
+] [
+.B -R
+.I authrate
+] [
+.B -T
+.I milliseconds
+] [
 .B -k
 .I keyfile
 ] [
@@ -28,6 +37,15 @@ listen, styxlisten, dial \- network connections
 .B -a
 .I alg
 ]... [
+.B -L
+.I maxauth
+] [
+.B -R
+.I authrate
+] [
+.B -T
+.I milliseconds
+] [
 .B -k
 .I keyfile
 ]
@@ -88,6 +106,24 @@ is specified, then that will be used as the server's certificate;
 otherwise
 .BI /usr/ user /keyring/default
 will be used.
+.PP
+Authenticated listeners bound pre-authentication resource use before starting
+expensive key exchange.  At most
+.I maxauth
+authentication exchanges may be active at once (32 by default), and at most
+.I authrate
+new exchanges may start in each one-second window (8 by default).  Connections
+over either limit are closed before authentication output or cryptographic work.
+The
+.B -L
+and
+.B -R
+options set these limits; values below one are rejected.  The
+.B -T
+option sets the authentication deadline in milliseconds (30000 by default and
+1000 minimum).  These controls do not apply with
+.BR -A ,
+where the invoked service is responsible for its own admission policy.
 .PP
 If an
 .I initscript

@@ -32,6 +32,11 @@ badmodule(p: string)
 serverkey: ref Keyring->Authinfo;
 verbose := 0;
 authtimeout := 30000;
+authlimit := 32;
+authslots: chan of int;
+authrate := 8;
+ratewindow := 0;
+ratecount := 0;
 
 registered: ref Registries->Registered;
 
@@ -57,7 +62,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	synchronous := 0;
 	trusted := 0;
 	regattrs: list of (string, string);
-	arg->setusage("listen [-i {initscript}] [-Ast] [-T ms] [-f keyfile] [-a alg]... addr command [arg...]");
+	arg->setusage("listen [-i {initscript}] [-Ast] [-L maxauth] [-R authrate] [-T ms] [-f keyfile] [-a alg]... addr command [arg...]");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
 		'a' =>
@@ -80,6 +85,14 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 			authtimeout = int arg->earg();
 			if(authtimeout < 1000)
 				authtimeout = 1000;
+		'L' =>
+			authlimit = int arg->earg();
+			if(authlimit < 1)
+				arg->usage();
+		'R' =>
+			authrate = int arg->earg();
+			if(authrate < 1)
+				arg->usage();
 		'r' =>
 			a := arg->earg();
 			v := arg->earg();
@@ -98,6 +111,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	if (doauth && algs == nil)
 		algs = getalgs();
 	if (algs != nil) {
+		authslots = chan[authlimit] of int;
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";
 		serverkey = keyring->readauthinfo(keyfile);
@@ -217,7 +231,18 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 			if (lok == -1)
 				sync <-= "listen";
 			if (algs != nil) {
-				spawn authenticator(authch, c, algs, addr);
+				if(!rateallow()) {
+					nethangup(c.cfd);
+					c.dfd = c.cfd = nil;
+					continue;
+				}
+				alt {
+				authslots <-= 1 =>
+					spawn authenticator(authch, c, algs, addr);
+				* =>
+					nethangup(c.cfd);
+					c.dfd = c.cfd = nil;
+				}
 				continue;
 			}
 			ccon = c;
@@ -238,6 +263,19 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 		sys->dup(2, 0);
 		sys->dup(2, 1);
 	}
+}
+
+rateallow(): int
+{
+	now := sys->millisec();
+	if(ratecount == 0 || now < ratewindow || now-ratewindow >= 1000) {
+		ratewindow = now;
+		ratecount = 0;
+	}
+	if(ratecount >= authrate)
+		return 0;
+	ratecount++;
+	return 1;
 }
 
 listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: string)
@@ -265,6 +303,7 @@ authenticator(authch: chan of (string, Sys->Connection),
 {
 	err: string;
 	(c.dfd, err) = authserver(algs, serverkey, c.dfd, c.cfd, 0);
+	<-authslots;
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
 		return;

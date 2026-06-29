@@ -142,6 +142,7 @@ static ulong
 disw(ParseState *ps, uchar **p)
 {
 	ulong v;
+	u32int bits;
 	uchar *c;
 
 	c = *p;
@@ -149,11 +150,15 @@ disw(ParseState *ps, uchar **p)
 		ps->error = 1;
 		return 0;
 	}
-	v  = (ulong)c[0] << 24;
-	v |= (ulong)c[1] << 16;
-	v |= (ulong)c[2] << 8;
-	v |= c[3];
+	bits  = (u32int)c[0] << 24;
+	bits |= (u32int)c[1] << 16;
+	bits |= (u32int)c[2] << 8;
+	bits |= c[3];
 	*p = c + 4;
+	if(bits & (1U<<31))
+		v = (ulong)((vlong)bits-(1LL<<32));
+	else
+		v = bits;
 	return v;
 }
 

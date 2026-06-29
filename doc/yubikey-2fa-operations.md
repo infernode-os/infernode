@@ -128,6 +128,53 @@ cd $ROOT
 ./emu/MacOSX/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh
 ```
 
+### Linux: use the standard build scripts
+
+The preferred way to build on Linux is the platform build script — **not** a
+hand-run `mk`. It rebuilds the host-native libraries and the emu together, so it
+also sidesteps the static-lib clobber described below:
+
+```sh
+sudo apt install libfido2-dev fido2-tools   # prereq (once) — see "Stub vs real" below
+
+./build-linux-amd64.sh            # SDL3 GUI (default) — graphical login window
+./build-linux-amd64.sh headless   # headless — console only, single-command use
+# (./build-linux-arm64.sh on aarch64, e.g. Jetson)
+
+ldd emu/Linux/o.emu | grep fido   # confirm: libfido2.so.1 ...
+```
+
+> **Stub vs real.** All three Linux mkfiles gate `-DHAVE_FIDO2` on
+> `pkg-config --exists libfido2`. With only the runtime `libfido2.so.1` and no
+> `-dev` package, `pkg-config` fails, the bridge compiles its stub, and
+> `/dev/2fa` reports `available=0`. Install `libfido2-dev` and rebuild.
+
+#### Fast iteration: relinking the emu alone
+
+When you are only touching emu C (`fido2bridge.c`, `devtfa.c`, …) you can skip
+the full script and relink just the emu:
+
+```sh
+export ROOT=$PWD SYSHOST=Linux OBJTYPE=amd64 SYSTARG=Linux
+export PATH=$ROOT/Linux/amd64/bin:$PATH
+cd $ROOT/emu/Linux && rm -f *.o *.emu emu.root.* emu.c errstr.h && mk
+```
+
+**If this fails with `undefined reference to __errno`:** an Android x86_64 NDK
+build has clobbered the shared host static libs in `Linux/amd64/lib/` with
+bionic objects (bionic spells `errno` as `__errno`; glibc as
+`__errno_location`), so the host link can't resolve `__errno`. The full build
+script avoids this by rebuilding those libs; to fix it for a targeted relink, do
+the same loop yourself, then relink:
+
+```sh
+for lib in lib9 libbio libmp libsec libmath libmemdraw libmemlayer libdraw; do
+    (cd $ROOT/$lib && rm -f *.o && mk install)
+done
+nm $ROOT/Linux/amd64/lib/lib9.a | grep 'U __errno'   # must be __errno_location
+cd $ROOT/emu/Linux && mk                              # relink
+```
+
 ---
 
 ## 2. Check status

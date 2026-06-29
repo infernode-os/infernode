@@ -168,22 +168,37 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		return (nil, "account has no 2fa slots");
 
 	# Try key slots first (needs a present YubiKey + touch).
+	# Track the last derive failure so the caller can surface it; silently
+	# swallowing here makes a wrong PIN look identical to "no working slot"
+	# and the user always ends up at the recovery prompt with no diagnosis.
+	lastderr := "";
 	for(l := slots; l != nil; l = tl l){
 		s := hd l;
 		if(s.kind != "key" || s.wrap == nil)
 			continue;
-		if(!twofa->available())
+		if(!twofa->available()){
+			lastderr = "no security key present";
 			continue;
+		}
 		salt := fromhex(s.salt);
-		if(salt == nil || len salt != 32)
+		if(salt == nil || len salt != 32){
+			lastderr = "bad salt in slot";
 			continue;
+		}
 		(R, e) := twofa->derive(s.cred, salt, pin);	# touch (+PIN if UV)
-		if(e != nil || R == nil)
+		if(e != nil){
+			lastderr = e;
 			continue;
+		}
+		if(R == nil){
+			lastderr = "empty derive result";
+			continue;
+		}
 		kek := secstore->mkkek2fa(rootkey, R);
 		DK := secstore->decrypt3(s.wrap, kek, nil, nil);
 		if(DK != nil)
 			return (DK, nil);
+		lastderr = "slot wrap did not decrypt with derived key";
 	}
 
 	# Recovery passphrase slot (no hardware).
@@ -198,6 +213,8 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 				return (DK, nil);
 		}
 	}
+	if(lastderr != "")
+		return (nil, "security key: " + lastderr);
 	return (nil, "no slot could unlock (key absent or wrong recovery passphrase)");
 }
 

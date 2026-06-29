@@ -70,6 +70,18 @@ back. Always back up `~/.infernode/usr/inferno/secstore` first.
 - A **recovery passphrase** you store in your password vault. This is your
   anti-lockout net; without it, a lost key means a lost account.
 
+### Windows: run InferNode as administrator
+
+On Windows the YubiKey path **requires running InferNode elevated** (right-click
+`InferNode.exe` → "Run as administrator", or launch from an elevated console).
+Without elevation libfido2 cannot access the YubiKey's HID interface directly —
+Windows reserves it for the WebAuthN platform service — and the kernel `#F`
+device reports `available=0`. macOS and Linux do not need elevation.
+
+The whole 2FA flow must run elevated: **enroll, every login, `2fa addkey`,
+`2fa disable`.** If you enroll elevated then try to log in non-elevated, login
+falls back to the recovery passphrase because the key isn't visible.
+
 ---
 
 ## 1. Build the emu — GUI vs headless (read this first)

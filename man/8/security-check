@@ -1,0 +1,58 @@
+.TH SECURITY-CHECK 8
+.SH NAME
+security-check \- audit an InferNode configuration from inside Inferno
+.SH SYNOPSIS
+.B sh /lib/sh/security-check
+[
+.B desktop
+|
+.B server
+|
+.B agent
+]
+.SH DESCRIPTION
+.I Security-check
+examines the effective Inferno namespace and security configuration.  It reports
+one record per check beginning with
+.BR PASS ,
+.BR WARN ,
+or
+.BR FAIL ,
+followed by a stable check identifier.
+.PP
+The server and agent profiles require CNSA strict mode.  All profiles reject an
+anonymous remote LLM configuration, missing configured key files, an anonymous
+LLM export mode, and a visible
+.BR /mnt/keys .
+The agent profile additionally rejects host command, host filesystem, factotum,
+key database, and raw network namespace exposure, and invokes
+.IR nsaudit (1)
+when a live
+.B /tool
+manifest is mounted.
+.PP
+The final line is suitable for machine parsing and is the authoritative result;
+Inferno shell wrappers do not reliably propagate the status of a nested script:
+.IP
+security-check result=PASS warnings=0
+.PP
+The command reports configuration; it does not modify it and does not print key
+or credential contents.
+.SH FILES
+.TF /lib/sh/security-check
+.TP
+.B /lib/sh/security-check
+Inferno shell implementation.
+.TP
+.B /lib/ndb/llm
+LLM backend and remote-mount authentication configuration.
+.TP
+.B /env/cnsamode
+CNSA strict-mode policy.
+.TP
+.B /env/SERVE_LLM_AUTH
+Headless LLM export authentication policy, when applicable.
+.SH SEE ALSO
+.IR nsaudit (1),
+.IR listen (1),
+.IR mount (1)

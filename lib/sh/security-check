@@ -1,0 +1,168 @@
+#!/dis/sh.dis
+# security-check - audit an InferNode configuration from inside Inferno.
+#
+# Usage: sh /lib/sh/security-check [desktop|server|agent] [root]
+#
+# The optional root is for auditing an offline tree and for regression tests.
+# Runtime namespace checks are only meaningful with the default root (/).
+# Consumers should parse the final result record: nested Inferno shell scripts
+# do not reliably propagate an exit status to their caller.
+
+load std
+
+profile=$1
+root=$2
+if {~ $#profile 0} { profile=desktop }
+if {~ $#root 0} { root='' }
+if {! ~ $profile desktop server agent} {
+	echo 'usage: security-check [desktop|server|agent] [root]' >[1=2]
+	exit usage
+}
+
+failed=0
+warned=0
+
+fn pass {
+	echo 'PASS' $1 $2
+}
+
+fn warn {
+	warned=1
+	echo 'WARN' $1 $2
+}
+
+fn fail {
+	failed=1
+	echo 'FAIL' $1 $2
+}
+
+fn readscalar {
+	cat $1 >[2] /dev/null
+}
+
+echo 'security-check profile='^$profile 'root='^$root
+
+# Strict crypto policy. An explicitly disabled or missing policy is unsafe for
+# a network server; desktops may legitimately operate in classical mode.
+cnsafile=$root^/env/cnsamode
+cnsa=`{readscalar $cnsafile}
+if {~ $cnsa 1 y Y yes YES on ON true TRUE} {
+	pass CRYPTO-CNSA 'strict mode enabled'
+} {
+	if {~ $profile server agent} {
+		fail CRYPTO-CNSA 'strict mode is not enabled'
+	} {
+		warn CRYPTO-CNSA 'strict mode is not enabled'
+	}
+}
+
+# Remote LLM mounts must authenticate. Absence of the optional configuration
+# is informational: local llmsrv and dedicated profiles need not use it.
+llmcfg=$root^/lib/ndb/llm
+if {ftest -f $llmcfg} {
+	llmmode=`{sed -n 's/^mode=//p' $llmcfg >[2] /dev/null}
+	if {~ $llmmode remote} {
+		llmauth=`{sed -n 's/^auth=//p' $llmcfg >[2] /dev/null}
+		if {~ $llmauth keyring} {
+			pass LLM-AUTH 'remote mount requires keyring authentication'
+			llmkey=`{sed -n 's/^keyfile=//p' $llmcfg >[2] /dev/null}
+			if {~ $#llmkey 0} { llmkey=/lib/keyring/serve-llm }
+			if {ftest -f $root^$llmkey} {
+				pass LLM-KEY 'configured keyfile exists'
+			} {
+				fail LLM-KEY 'configured keyfile is missing'
+			}
+		} {
+			fail LLM-AUTH 'remote mount permits anonymous authentication'
+		}
+	} {
+		pass LLM-AUTH 'LLM service is not configured as a remote mount'
+	}
+} {
+	warn LLM-CONFIG 'no /lib/ndb/llm configuration found'
+}
+
+# Headless serve-profile reflects these host settings into /env. Check them
+# when present, without requiring desktop or agent runtimes to define them.
+serveauth=`{readscalar $root^/env/SERVE_LLM_AUTH}
+if {! ~ $#serveauth 0} {
+	if {~ $serveauth keyring} {
+		pass EXPORT-AUTH 'LLM export requires keyring authentication'
+	} {
+		fail EXPORT-AUTH 'LLM export authentication is not keyring'
+	}
+	servekey=`{readscalar $root^/env/SERVE_LLM_KEY}
+	if {~ $#servekey 0} {
+		fail EXPORT-KEY 'LLM export key path is unset'
+	} {
+		if {ftest -f $root^$servekey} {
+			pass EXPORT-KEY 'LLM export keyfile exists'
+		} {
+			fail EXPORT-KEY 'LLM export keyfile is missing'
+		}
+	}
+}
+
+# Authentication databases should not remain mounted in ordinary service or
+# agent namespaces. Factotum is an intentional desktop capability but is too
+# powerful for an agent namespace.
+if {~ $root ''} {
+	# A mntgen directory can exist without a server mounted on it. Inspect the
+	# namespace operations rather than treating the directory as authority.
+	if {ns | grep ' /mnt/keys' > /dev/null} {
+		fail KEYDB-EXPOSURE '/mnt/keys is mounted'
+	} {
+		pass KEYDB-EXPOSURE '/mnt/keys is not mounted'
+	}
+} {
+	if {ftest -e $root^/mnt/keys} {
+		fail KEYDB-EXPOSURE '/mnt/keys exists in offline tree'
+	} {
+		pass KEYDB-EXPOSURE '/mnt/keys is absent from offline tree'
+	}
+}
+
+if {~ $profile agent} {
+	for p in /cmd /n/local /mnt/factotum/ctl /mnt/keys /net {
+		if {ftest -e $root^$p} {
+			fail AGENT-AUTHORITY $p^' is visible'
+		} {
+			pass AGENT-AUTHORITY $p^' is absent'
+		}
+	}
+	if {ftest -d $root^/tool} {
+		if {~ $root ''} {
+			if {nsaudit -m /tool > /dev/null} {
+				pass AGENT-NSAUDIT 'capability policy accepted'
+			} {
+				fail AGENT-NSAUDIT 'capability policy violation'
+			}
+		} {
+			warn AGENT-NSAUDIT 'offline roots require a separate nsaudit run'
+		}
+	} {
+		warn AGENT-NSAUDIT '/tool capability manifest is not mounted'
+	}
+}
+
+# Auditing is recommended for servers and agents. It is not yet mandatory for
+# general desktop installations.
+if {ftest -e $root^/mnt/audit/ctl} {
+	pass AUDIT 'audit service is mounted'
+} {
+	if {~ $profile server agent} {
+		warn AUDIT 'audit service is not mounted'
+	} {
+		pass AUDIT 'audit service is optional for desktop profile'
+	}
+}
+
+if {! ~ $failed 0} {
+	echo 'security-check result=FAIL warnings='^$warned
+	exit 'unsafe InferNode configuration'
+}
+if {! ~ $warned 0} {
+	echo 'security-check result=WARN warnings=1'
+} {
+	echo 'security-check result=PASS warnings=0'
+}

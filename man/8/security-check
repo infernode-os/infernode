@@ -24,6 +24,8 @@ The server and agent profiles require CNSA strict mode.  All profiles reject an
 anonymous remote LLM configuration, missing configured key files, an anonymous
 LLM export mode, and a visible
 .BR /mnt/keys .
+For a headless LLM export it also verifies the published pre-authentication
+concurrency, start-rate, and timeout policy.
 The agent profile additionally rejects host command, host filesystem, factotum,
 key database, and raw network namespace exposure, and invokes
 .IR nsaudit (1)

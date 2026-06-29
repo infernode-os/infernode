@@ -98,6 +98,14 @@ sleep 2
 # parsing make that fragile.
 authmode=`{os sh -c 'printf %s "$SERVE_LLM_AUTH"'}
 keyfile=`{os sh -c 'printf %s "$SERVE_LLM_KEY"'}
+authlimit=32
+authrate=8
+authtimeout=30000
+echo $authmode > /env/serve_llm_auth
+echo $keyfile > /env/serve_llm_key
+echo $authlimit > /env/serve_llm_auth_limit
+echo $authrate > /env/serve_llm_auth_rate
+echo $authtimeout > /env/serve_llm_auth_timeout
 if {~ $authmode anon} {
 	echo 'serve-profile: WARNING listen mode anon (--anon-lan) - no authentication'
 	listen -sA 'tcp!*!5640' {export /mnt/llm &}
@@ -109,5 +117,7 @@ if {~ $authmode anon} {
 		exit fail
 	}
 	echo 'serve-profile: listen mode keyring keyfile' $keyfile
-	listen -s -k $keyfile 'tcp!*!5640' {export /mnt/llm &}
+	# Keep the production policy explicit even though these equal listen's
+	# defaults, so security-check and deployment review can audit intent.
+	listen -s -L $authlimit -R $authrate -T $authtimeout -k $keyfile 'tcp!*!5640' {export /mnt/llm &}
 }

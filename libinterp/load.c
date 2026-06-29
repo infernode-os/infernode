@@ -600,7 +600,13 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 		pc = operand(&ps, isp);
 		de = operand(&ps, isp);
 		v  = disw(&ps, isp);
-		if(ps.error || pc < 0 || pc >= isize || (de != -1 && (de < 0 || de >= hsize || m->type[de] == nil)) || memchr(istream, 0, ps.end-istream) == nil){
+		/*
+		 * pc == -1 is a legitimate sentinel for a Dglobal link entry
+		 * (limbo/dis.c emits "discon(-1); discon(-1); disword(sig); .mp"
+		 * for a module's exported global / .mp reference). Allow it; only
+		 * reject pc values that are out-of-range positive offsets.
+		 */
+		if(ps.error || pc < -1 || pc >= isize || (de != -1 && (de < 0 || de >= hsize || m->type[de] == nil)) || memchr(istream, 0, ps.end-istream) == nil){
 			kwerrstr("bad module link");
 			goto bad;
 		}

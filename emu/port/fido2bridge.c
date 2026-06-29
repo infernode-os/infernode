@@ -42,38 +42,50 @@ static void bin2hex(const unsigned char *b, int n, char *out) {
     out[2 * n] = 0;
 }
 
-/* Path of the first connected FIDO authenticator; caller frees. */
+/*
+ * is_winhello — true if this device entry is the Windows Hello virtual
+ * authenticator that libfido2 always adds on Windows (path "windows://hello").
+ * We talk directly to the hardware key — winhello goes through the platform
+ * WebAuthN service, which rejects our custom rp_id ("infernode.local") with
+ * a generic FIDO_ERR_INTERNAL. Filter it out of every enumeration. On
+ * non-Windows the path never matches so this is a no-op.
+ */
+static int is_winhello(const fido_dev_info_t *di) {
+    const char *p = di ? fido_dev_info_path(di) : NULL;
+    return p != NULL && strncmp(p, "windows://", 10) == 0;
+}
+
+/* Path of the first connected physical FIDO authenticator; caller frees. */
 static char *first_device(void) {
     fido_dev_info_t *dl = fido_dev_info_new(8);
     size_t found = 0;
     char *path = NULL;
-    if (dl && fido_dev_info_manifest(dl, 8, &found) == FIDO_OK && found > 0) {
-        const fido_dev_info_t *di = fido_dev_info_ptr(dl, 0);
-        if (di) path = strdup(fido_dev_info_path(di));
+    if (dl && fido_dev_info_manifest(dl, 8, &found) == FIDO_OK) {
+        for (size_t i = 0; i < found; i++) {
+            const fido_dev_info_t *di = fido_dev_info_ptr(dl, i);
+            if (!is_winhello(di)) { path = strdup(fido_dev_info_path(di)); break; }
+        }
     }
     fido_dev_info_free(&dl, 8);
     return path;
 }
 
-/* Number of connected FIDO authenticators. */
+/* Number of connected physical FIDO authenticators (excludes winhello). */
 static int device_count(void) {
     fido_dev_info_t *dl = fido_dev_info_new(8);
     size_t found = 0;
-    if (dl)
-        fido_dev_info_manifest(dl, 8, &found);
+    int n = 0;
+    if (dl && fido_dev_info_manifest(dl, 8, &found) == FIDO_OK) {
+        for (size_t i = 0; i < found; i++)
+            if (!is_winhello(fido_dev_info_ptr(dl, i))) n++;
+    }
     fido_dev_info_free(&dl, 8);
-    return (int)found;
+    return n;
 }
 
 int fido2bridge_available(void) {
     ensure_init();
-    fido_dev_info_t *dl = fido_dev_info_new(8);
-    size_t found = 0;
-    int r = 0;
-    if (dl && fido_dev_info_manifest(dl, 8, &found) == FIDO_OK)
-        r = (found > 0);
-    fido_dev_info_free(&dl, 8);
-    return r;
+    return device_count() > 0;
 }
 
 int fido2bridge_enroll(const char *pin, char *cred_hex, int cred_hexlen, char *err, int errlen) {

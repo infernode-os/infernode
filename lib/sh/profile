@@ -34,9 +34,11 @@ if {~ $emuhost MacOSX Linux Nt}{
 		# Windows: mount C:\ at /n/local. Profiles live at C:\Users\<name>,
 		# so /n/local/Users/$user matches macOS's /n/local/Users/$user.
 		trfs '#UC:/' /n/local >[2] /dev/null
+		ls /n/local >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
 		ghome=/n/local/Users/^$user
 	}{
 		trfs '#U*' /n/local >[2] /dev/null
+		ls /n/local >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
 		ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 	}
 	home=$ghome
@@ -47,19 +49,24 @@ if {~ $emuhost MacOSX Linux Nt}{
 	# The emu root stays clean — no user data mixed with system files.
 	infhome=$ghome^/.infernode
 
-	# First-run: create overlay and seed defaults through Inferno's
-	# filesystem. This keeps trfs cache consistent so binds work.
-	if {! ftest -d $infhome/lib} {
-		mkdir -p $infhome/usr/inferno/secstore
-		mkdir -p $infhome/usr/inferno/tmp
-		mkdir -p $infhome/lib/ndb
-		mkdir -p $infhome/lib/lucifer/theme
-		mkdir -p $infhome/lib/veltro
-		mkdir -p $infhome/lib/veltro-agents
-		mkdir -p $infhome/lib/veltro-keys
-		mkdir -p $infhome/lib/keyring
-		mkdir -p $infhome/tmp
-		# Seed writable defaults from the emu root
+	# Ensure every overlay SOURCE dir exists BEFORE the binds below. This runs
+	# unconditionally (not gated on first-run): `bind -bc` of a missing source
+	# silently falls back to the emu-root dir, so a deleted (or never-created)
+	# ~/.infernode/usr/inferno/secstore would route secstore into the emu root /
+	# bundle instead of the user's home — and 2FA enrollment would not persist.
+	mkdir -p $infhome/usr/inferno/secstore
+	mkdir -p $infhome/usr/inferno/tmp
+	mkdir -p $infhome/lib/ndb
+	mkdir -p $infhome/lib/lucifer/theme
+	mkdir -p $infhome/lib/veltro
+	mkdir -p $infhome/lib/veltro-agents
+	mkdir -p $infhome/lib/veltro-keys
+	mkdir -p $infhome/lib/keyring
+	mkdir -p $infhome/tmp
+
+	# First-run only: seed writable defaults from the emu root (don't clobber
+	# a user's existing config on later boots).
+	if {! ftest -f $infhome/lib/ndb/llm} {
 		cp /lib/ndb/llm $infhome/lib/ndb/llm >[2] /dev/null
 		cp /lib/lucifer/theme/current $infhome/lib/lucifer/theme/current >[2] /dev/null
 		cp /lib/veltro/meta.txt $infhome/lib/veltro/meta.txt >[2] /dev/null

@@ -1,0 +1,202 @@
+implement TkTest;
+
+#
+# tk_test.b — regression tests for the reintegrated Tk engine.
+#
+# Tk was disabled on the shipping platforms while the native widget
+# toolkit was in use; these tests guard the bring-up:
+#   - the $Tk builtin loads and a toplevel can be created off-screen
+#     (no window manager) on the in-memory headless display;
+#   - top.screenr reports the real display rectangle (the C<->Limbo
+#     Toplevel ABI, which an earlier attempt had papered over with a
+#     coordinate band-aid);
+#   - every widget type the apps rely on can be created;
+#   - the brutalist default palette resolves to the Brimstone colours
+#     and colour values round-trip cleanly through cget (no 64-bit
+#     sign-extension, no <<-vs-& macro mangling);
+#   - explicit per-widget colours are honoured.
+#
+
+include "sys.m";
+	sys: Sys;
+
+include "draw.m";
+	draw: Draw;
+	Display, Rect: import draw;
+
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
+
+include "testing.m";
+	testing: Testing;
+	T: import testing;
+
+TkTest: module
+{
+	init: fn(nil: ref Draw->Context, args: list of string);
+};
+
+SRCFILE: con "/tests/tk_test.b";
+
+passed := 0;
+failed := 0;
+skipped := 0;
+
+display: ref Display;
+
+run(name: string, testfn: ref fn(t: ref T))
+{
+	t := testing->newTsrc(name, SRCFILE);
+	{
+		testfn(t);
+	} exception {
+	"fail:fatal" =>	;
+	"fail:skip" =>	;
+	* =>		t.failed = 1;
+	}
+	if(testing->done(t))
+		passed++;
+	else if(t.skipped)
+		skipped++;
+	else
+		failed++;
+}
+
+# A fresh off-screen toplevel for a test, or nil with the test skipped
+# if no display is available (e.g. a build without devdraw).
+newtop(t: ref T): ref Toplevel
+{
+	if(display == nil){
+		t.skip("no display available");
+		return nil;
+	}
+	top := tk->toplevel(display, "");
+	if(top == nil)
+		t.fatal(sys->sprint("tk->toplevel failed: %r"));
+	return top;
+}
+
+# ── Tests ──────────────────────────────────────────────────────
+
+testToplevel(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	# screenr must mirror the display image rectangle — this is the
+	# field the screenr band-aid used to fake.
+	r := top.screenr;
+	di := display.image.r;
+	t.asserteq(r.min.x, di.min.x, "screenr.min.x");
+	t.asserteq(r.min.y, di.min.y, "screenr.min.y");
+	t.asserteq(r.max.x, di.max.x, "screenr.max.x");
+	t.asserteq(r.max.y, di.max.y, "screenr.max.y");
+	t.assert(r.dx() > 0 && r.dy() > 0, "screenr is non-empty");
+}
+
+testWidgetTypes(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	# Every widget type the apps need must create without error.  Tk
+	# returns the widget path on success and a "!..." message on error.
+	specs := array[] of {
+		"frame .f",
+		"label .f.l -text Hi",
+		"button .f.b -text Go",
+		"entry .f.e",
+		"checkbutton .f.c -text On",
+		"radiobutton .f.r -text A",
+		"scrollbar .f.s",
+		"listbox .f.lb",
+		"menu .m",
+	};
+	for(i := 0; i < len specs; i++){
+		e := tk->cmd(top, specs[i]);
+		t.assert(e != nil && len e > 0 && e[0] != '!',
+			sys->sprint("create %q -> %q", specs[i], e));
+	}
+}
+
+testDefaultPalette(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "label .l -text Hi");
+	# Bare widgets inherit the brutalist Brimstone defaults.  cget must
+	# return clean 8-hex-digit colours (regression for both the macro
+	# precedence bug and the 64-bit sign-extension).
+	t.assertseq(tk->cmd(top, ".l cget -background"), "#080808ff",
+		"default background is Brimstone bg");
+	t.assertseq(tk->cmd(top, ".l cget -foreground"), "#ccccccff",
+		"default foreground is Brimstone text");
+}
+
+testExplicitColour(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	# An explicit colour with the red byte's top bit set used to
+	# sign-extend; it must now round-trip cleanly.
+	tk->cmd(top, "label .l -text Hi -foreground #E8553A -background #12ABCD");
+	t.assertseq(tk->cmd(top, ".l cget -foreground"), "#e8553aff",
+		"explicit accent foreground round-trips");
+	t.assertseq(tk->cmd(top, ".l cget -background"), "#12abcdff",
+		"explicit background round-trips");
+}
+
+testGeometry(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "frame .f");
+	tk->cmd(top, "button .f.b -text {Click me}");
+	tk->cmd(top, "pack .f.b");
+	tk->cmd(top, "pack .f");
+	tk->cmd(top, "update");
+	aw := int tk->cmd(top, ".f.b cget -actwidth");
+	ah := int tk->cmd(top, ".f.b cget -actheight");
+	t.assert(aw > 0, sys->sprint("button actwidth > 0 (got %d)", aw));
+	t.assert(ah > 0, sys->sprint("button actheight > 0 (got %d)", ah));
+}
+
+init(nil: ref Draw->Context, args: list of string)
+{
+	sys = load Sys Sys->PATH;
+	draw = load Draw Draw->PATH;
+	tk = load Tk Tk->PATH;
+	testing = load Testing Testing->PATH;
+
+	if(testing == nil){
+		sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");
+		raise "fail:cannot load testing";
+	}
+	testing->init();
+
+	for(a := args; a != nil; a = tl a)
+		if(hd a == "-v")
+			testing->verbose(1);
+
+	if(tk == nil){
+		sys->fprint(sys->fildes(2), "cannot load Tk ($Tk not built in?): %r\n");
+		raise "fail:cannot load Tk";
+	}
+
+	# An off-screen display backed by the in-memory headless screen.
+	# If devdraw is unavailable the per-test newtop() skips cleanly.
+	display = Display.allocate("");
+
+	run("Toplevel",        testToplevel);
+	run("WidgetTypes",     testWidgetTypes);
+	run("DefaultPalette",  testDefaultPalette);
+	run("ExplicitColour",  testExplicitColour);
+	run("Geometry",        testGeometry);
+
+	if(testing->summary(passed, failed, skipped) > 0)
+		raise "fail:tests failed";
+}

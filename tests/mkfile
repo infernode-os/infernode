@@ -74,6 +74,7 @@ TARG=\
 	tcp_test.dis\
 	tempfile_test.dis\
 	textwidget_test.dis\
+	tk_test.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
@@ -159,6 +160,7 @@ SYSMODULES=\
 	sys.m\
 	testing.m\
 	textwidget.m\
+	tk.m\
 	tls.m\
 	webclient.m\
 	widget.m\

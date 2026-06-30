@@ -88,10 +88,23 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 }
 
-# Lucifer mode: relay notifications to Meta Agent conversation
+# Lucifer mode: relay notifications to Meta Agent conversation.
+# The message-handling policy is loaded here (fire-time) and injected with each
+# incoming message, rather than baked into activity 0's system prompt — this
+# keeps the base prompt lean, and instructions in the triggering turn drive
+# action more reliably than system-prompt text (cf. the autonomous-kickoff
+# finding). This is the general fire-time "skill" pattern: a named instruction
+# file pulled in only when its event occurs.
 luciferloop(inputpath: string)
 {
 	notifypath := "/mnt/msg/notify";
+
+	policy := agentlib->readfile(policyfile);
+	if(policy == nil)
+		policy = "";
+	policy = agentlib->strip(policy);
+	if(policy == "")
+		log("warning: empty/unreadable policy " + policyfile + " — relaying raw");
 
 	for(;;) {
 		# Blocking read on /mnt/msg/notify
@@ -113,21 +126,30 @@ luciferloop(inputpath: string)
 
 		log("notification: " + truncate(notification, 80));
 
-		# Write notification to Meta Agent's conversation input
+		# Inject the policy + the message as a single turn so activity 0 triages
+		# per the policy. NEVER auto-send: any drafted reply is saved for review.
+		turn := notification;
+		if(policy != "")
+			turn = policy +
+				"\n\n--- An incoming message just arrived. Triage it per the Message Policy " +
+				"above. For actionable messages, create a Task Agent with a clear brief; " +
+				"draft any reply but NEVER auto-send it — save it for the user to review. ---\n\n" +
+				notification;
+
 		inputfd := sys->open(inputpath, Sys->OWRITE);
 		if(inputfd == nil) {
 			log("cannot open " + inputpath + ": " + sys->sprint("%r"));
 			continue;
 		}
 
-		data := array of byte notification;
+		data := array of byte turn;
 		n := sys->write(inputfd, data, len data);
 		inputfd = nil;
 
 		if(n != len data)
 			log("short write to input: " + sys->sprint("%r"));
 		else
-			log("relayed to Meta Agent");
+			log("relayed to Meta Agent (policy injected)");
 	}
 }
 

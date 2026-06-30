@@ -265,6 +265,15 @@ init(nil: ref Draw->Context, args: list of string)
 			raise "fail:namespace";
 		}
 
+		# This loop opens its LLM session by path after restriction. Keep this
+		# internal grant out of the user-supplied bindpath registration above:
+		# /mnt is capability-driven, but /mnt/llm is required for this launcher.
+		for(pl := pathlist; pl != nil; pl = tl pl)
+			if(hd pl == "/mnt/llm")
+				break;
+		if(pl == nil)
+			pathlist = "/mnt/llm" :: pathlist;
+
 		parent_caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
 		);

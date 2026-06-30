@@ -289,8 +289,8 @@ restrictns(caps: ref Capabilities): string
 	# /mnt/msg/status by path, so it is granted "/mnt/msg" explicitly via
 	# caps.paths (the message policy adds paths=/mnt/msg).
 	mntpaths := filterpaths(caps.paths, "/mnt/");
-	if(caps.mcproviders != nil && mntpaths == nil)
-		mntpaths = "mcp" :: nil;	# whole /mnt/mcp for generic mc9p
+	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
+		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
 	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
 	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
@@ -449,7 +449,7 @@ restrictns(caps: ref Capabilities): string
 		if(subpaths != nil) {
 			ederr := restrictpath(topdir, subpaths);
 			if(ederr != nil)
-				sys->fprint(sys->fildes(2), "nsconstruct: restrict %s: %s\n", topdir, ederr);
+				return sys->sprint("restrict %s: %s", topdir, ederr);
 		}
 	}
 

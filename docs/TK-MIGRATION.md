@@ -17,6 +17,16 @@ widgets established. The Tk **engine defaults** now carry that look (see
 - Tk (`$Tk` builtin + `libtk`) is re-enabled in the emu (`emu/*/emu`,
   `lib tk` + `mod tk`). The headless emu has an in-memory screen so
   `/dev/draw` — and therefore Tk — works without a display.
+- **Dynamic images update in place.** libtk now carries a
+  Tk_ImageChanged-style notification (`tkimgchanged`, `libtk/label.c`,
+  called from `Tk_putimage`): when `tk->putimage` replaces the content
+  of a named bitmap image, every label-family widget already bound to
+  that image (`-image NAME`) re-runs its geometry and redraws. Before
+  this, a `label -image frac` created against an empty `image create
+  bitmap frac` kept its zero size and rendered blank when the image was
+  filled later, so apps had to re-issue `configure -image` after each
+  `putimage`. They no longer do. This is what makes the canvas-style
+  apps (`wm/fractals`) display.
 - `libtk/colrs.c` seeds every `TkEnv` with the Brimstone palette: surface
   `#080808`, text `#cccccc`, accent `#e8553a`, dim `#444444`, flat 1px
   borders (relief light/dark pinned to one border colour). Default font
@@ -85,7 +95,13 @@ and passed as `-foreground #rrggbbff`.
    renderer and eyeball the PNG —
    `tools/tk-snapshot.sh layout.cmds out.png W H`
    (`tests/tkrender.b` builds a no-wm toplevel from a command list; no
-   event loop, so no busy-wait.)
+   event loop, so no busy-wait.) For a **dynamic image** app (off-screen
+   `Draw` image fed in with `putimage`, which a static command list can't
+   exercise), use `tests/tkimgrender.b`: it allocates an image, draws
+   solid-colour bands into it the way a compute proc does, composites it
+   with `putimage`, and snapshots — isolating the new display surface
+   from the unchanged compute core.
+   `emu -c1 -r$PWD sh -c '/tests/tkimgrender.dis out.p9 W H'`
 4. **Interaction / regression**: `tests/tk_test.b` covers the input
    paths (typed keys reach a focused entry, `.b invoke` fires commands,
    listbox/checkbutton/radiobutton state). Extend it for app-specific
@@ -99,9 +115,10 @@ and passed as `-foreground #rrggbbff`.
 | `wm/keyring` | migrated | form (entry/listbox/button/menu) |
 | `wm/wallet` | migrated | form + dropdown + two-pane |
 | `wm/man` | migrated | text viewer (text widget + tags) |
+| `wm/fractals` | migrated | dynamic image (off-screen draw + putimage) |
 | `wm/settings` | pending | form (largest; theme switcher) |
 | `wm/editor`, `wm/shell` | pending | editable text widget |
-| `wm/fractals`, `wm/matrix`, `wm/ftree` | pending | canvas / custom draw |
+| `wm/matrix`, `wm/ftree` | pending | canvas / custom draw |
 | `charon/gui`, `matrix/*`, Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
 
 Verified empirically and reusable:

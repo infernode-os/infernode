@@ -25,17 +25,12 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Image, Point, Rect: import draw;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
 
-include "menu.m";
-	menumod: Menu;
-	Popup, Generator: import menumod;
-
-include "widget.m";
-	widget: Widget;
-	Statusbar: import widget;
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "lucitheme.m";
 
@@ -45,14 +40,19 @@ Fractals: module
 };
 
 stderr: ref Sys->FD;
-w: ref Window;
+top: ref Toplevel;
+wmctl: chan of string;
+actch: chan of string;
+themech: chan of int;
+ticks: chan of int;
 display: ref Display;
 font: ref Font;
 colours: array of ref Image;
-canvasbg: ref Image;	# theme-driven canvas clear color (was display.white)
-sbar: ref Statusbar;
-mainmenu: ref Popup;
-juliamenu: ref Popup;
+canvasbg: ref Image;	# theme-driven canvas clear color
+fracimg: ref Image;	# off-screen image the compute proc draws into
+canvw, canvh: int;	# fractal canvas size in pixels
+statusleft := "";
+statusright := "";
 
 # Current fractal state (global for Veltro IPC)
 g_specr: Fracrect;
@@ -165,17 +165,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	wmclient = load Wmclient Wmclient->PATH;
-	menumod = load Menu Menu->PATH;
+	tk = load Tk Tk->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
 	stderr = sys->fildes(2);
-
-	if(ctxt == nil) {
-		sys->fprint(stderr, "fractals: no window context\n");
-		raise "fail:no context";
+	if(tkclient == nil){
+		sys->fprint(stderr, "fractals: cannot load tkclient: %r\n");
+		raise "fail:load tkclient";
 	}
-
-	sys->pctl(Sys->NEWPGRP, nil);
-	wmclient->init();
 
 	# Parse colour cube args
 	R = G = B = 6;
@@ -184,9 +180,18 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	if(argv != nil) { G = int hd argv; argv = tl argv; if(G <= 0) G = 1; }
 	if(argv != nil) { B = int hd argv; argv = tl argv; if(B <= 0) B = 1; }
 
-	sys->sleep(100);
-	w = wmclient->window(ctxt, "Fractals", Wmclient->Appl);
-	display = w.display;
+	sys->pctl(Sys->NEWPGRP, nil);
+	tkclient->init();
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
+	if(ctxt == nil){
+		sys->fprint(stderr, "fractals: no window context\n");
+		raise "fail:no context";
+	}
+
+	(top, wmctl) = tkclient->toplevel(ctxt,
+		sys->sprint("-width %d -height %d", WIDTH, HEIGHT), "Fractals", Tkclient->Appl);
+	display = top.display;
 
 	font = Font.open(display, "/fonts/combined/unicode.sans.14.font");
 	if(font == nil)
@@ -201,32 +206,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	loadcanvasbg();
 
-	w.reshape(Rect((0, 0), (WIDTH, HEIGHT)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
+	actch = chan[8] of string;
+	tk->namechan(top, actch, "act");
+	themech = chan[1] of int;
 
-	if(menumod != nil) {
-		menumod->init(display, font);
-		mainmenu = menumod->newgen(mainmenuitems);
-		juliamenu = menumod->newgen(juliamenuitems);
-	}
-
-	widget = load Widget Widget->PATH;
-	if(widget != nil)
-		widget->init(display, font);
-
-	# Initialize Veltro IPC
+	buildui();
 	initfractdir();
-
-	# Create statusbar at bottom of window
-	if(widget != nil) {
-		wr := w.imager(w.image.r);
-		sh := widget->statusheight();
-		sbr := Rect((wr.min.x, wr.max.y - sh), wr.max);
-		sbar = Statusbar.new(sbr);
-		sbar.left = "Mandelbrot";
-		sbar.right = "depth 1";
-	}
+	allocfracimg();
 
 	canvr := canvposn();
 	specr := Fracrect((-2.0, -1.5), (1.0, 1.5));
@@ -252,26 +238,22 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		fill
 	);
 
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
+	spawn themelistener();
+	spawn timer();
+
 	pid := -1;
 	sync := chan of int;
 	imgch := chan of (ref Image, Rect);
 	if(!isempty(canvr)) {
 		spawn docalculate(sync, p, imgch);
 		pid = <-sync;
-		imgch <-= (w.image, canvr);
+		imgch <-= (fracimg, canvr);
 	}
 
 	stack: list of (Fracrect, Params);
-	b1down := 0;
-	b1start := Point(0, 0);
-
-	# Listen for live theme changes
-	themech := chan[1] of int;
-	spawn themelistener(themech);
-
-	# Tick timer for Veltro IPC polling
-	ticks := chan of int;
-	spawn timer(ticks, 500);
+	b1start := Point(-1, -1);
 
 	writefractstate();
 	updatesbar();
@@ -279,138 +261,120 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	for(;;) {
 		restart := 0;
 		alt {
-		ctl := <-w.ctl or
-		ctl = <-w.ctxt.ctl =>
-			if(ctl == nil)
-				;	# ignore nil ctl (wmsrv disconnect)
-			else if(ctl[0] == '!') {
-				if(pid != -1)
-					restart = winreq(ctl, imgch, sync);
-				else {
-					w.wmctl(ctl);
+		c := <-wmctl or
+		c = <-top.ctxt.ctl =>
+			if(c != nil) {
+				resized := len c > 0 && c[0] == '!';
+				tkclient->wmctl(top, c);
+				if(resized) {
+					allocfracimg();
 					restart = 1;
 				}
-			} else
-				w.wmctl(ctl);
-		<-w.ctxt.kbd =>
+			}
+		<-top.ctxt.kbd =>
 			;	# ignore keyboard
-		ptr := <-w.ctxt.ptr =>
-			if(ptr == nil)
-				;	# ignore nil ptr (wmsrv disconnect)
-			else if(w.pointer(*ptr))
-				;
-			else if(ptr.buttons & 1) {
-				# Button 1: start zoom drag
-				if(!b1down) {
-					b1down = 1;
-					b1start = ptr.xy;
-				}
-			} else if(b1down && !(ptr.buttons & 1)) {
-				# Button 1 release: zoom in
-				b1down = 0;
-				r := Rect(b1start, ptr.xy).canon();
-				cr := canvposn();
-				r = cliprect(r, cr);
-				# Make relative to canvas
-				r = r.subpt(cr.min);
-				if(r.dx() > 4 && r.dy() > 4) {
-					stack = (specr, p) :: stack;
-					specr.min = pt2real(r.min, p.r);
-					specr.max = pt2real(r.max, p.r);
-					(specr.min.y, specr.max.y) = (specr.max.y, specr.min.y);
-					restart = 1;
-				}
-			} else if(ptr.buttons & 2) {
-				# Button 2: Julia set at cursor point (Mandelbrot mode only)
-				if(p.m) {
-					cr := canvposn();
-					rp := ptr.xy.sub(cr.min);
-					stack = (specr, p) :: stack;
-					julp = pt2real(rp, p.r);
-					specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
-					morj = 0;
-					restart = 1;
-				}
-			} else if(ptr.buttons & 4) {
-				# Button 3: context menu
-				ucmd := showmenu(ptr);
-				if(ucmd != nil)
-				pick u := ucmd {
-				Zoomout =>
-					if(stack != nil) {
-						((specr, p), stack) = (hd stack, tl stack);
-						fill = p.fill;
-						kdivisor = p.kdivisor;
-						morj = p.m;
-						julp = p.p;
+		pp := <-top.ctxt.ptr =>
+			tk->pointer(top, *pp);
+		a := <-actch =>
+			(na, toks) := sys->tokenize(a, " ");
+			tok := "";
+			if(toks != nil)
+				tok = hd toks;
+			case tok {
+			"b1down" =>
+				b1start = actpt(toks);
+			"b1up" =>
+				if(b1start.x >= 0) {
+					r := Rect(b1start, actpt(toks)).canon();
+					b1start = Point(-1, -1);
+					r = cliprect(r, canvposn());
+					if(r.dx() > 4 && r.dy() > 4) {
+						stack = (specr, p) :: stack;
+						specr.min = pt2real(r.min, p.r);
+						specr.max = pt2real(r.max, p.r);
+						(specr.min.y, specr.max.y) = (specr.max.y, specr.min.y);
 						restart = 1;
 					}
-				Depth =>
-					kdivisor = u.d;
-					restart = 1;
-				Fill =>
-					fill = u.on;
-					restart = 1;
-				Julia =>
+				}
+			"b2" =>
+				if(p.m) {
 					stack = (specr, p) :: stack;
-					julp = u.fp;
+					julp = pt2real(actpt(toks), p.r);
 					specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
 					morj = 0;
 					restart = 1;
-				Mandelbrot =>
-					stack = (specr, p) :: stack;
-					specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
-					morj = 1;
-					julp = Fracpoint(0.0, 0.0);
-					kdivisor = 1;
-					restart = 1;
-				Restart =>
-					specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
-					stack = nil;
-					morj = 1;
-					julp = Fracpoint(0.0, 0.0);
-					kdivisor = 1;
-					fill = 1;
-					restart = 1;
-				* =>
-					;
 				}
+			"menu" =>
+				buildmenu();
+				tk->cmd(top, ".ctx post " + menuxyt(toks));
+			"zoomout" =>
+				if(stack != nil) {
+					((specr, p), stack) = (hd stack, tl stack);
+					fill = p.fill; kdivisor = p.kdivisor; morj = p.m; julp = p.p;
+					restart = 1;
+				}
+			"depthup" =>
+				kdivisor++; if(kdivisor > MAXDEPTH) kdivisor = MAXDEPTH;
+				restart = 1;
+			"depthdown" =>
+				kdivisor--; if(kdivisor < 1) kdivisor = 1;
+				restart = 1;
+			"fill" =>
+				fill = !fill;
+				restart = 1;
+			"mandelbrot" =>
+				stack = (specr, p) :: stack;
+				specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
+				morj = 1; julp = Fracpoint(0.0, 0.0); kdivisor = 1;
+				restart = 1;
+			"reset" =>
+				specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
+				stack = nil; morj = 1; julp = Fracpoint(0.0, 0.0); kdivisor = 1; fill = 1;
+				restart = 1;
+			"julia" =>
+				ji := 0;
+				if(na >= 2)
+					ji = int hd tl toks;
+				if(ji >= 0 && ji < len juliapresets) {
+					stack = (specr, p) :: stack;
+					julp = juliapresets[ji].c;
+					specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
+					morj = 0;
+					restart = 1;
+				}
+			"quit" =>
+				exit;
 			}
 		<-ticks =>
 			changed := checkctlfile(specr, p, stack, morj, julp, kdivisor, fill);
 			if(changed != nil)
-			pick c := changed {
+			pick cc := changed {
 			Zoomin =>
 				stack = (specr, p) :: stack;
-				specr = c.fr;
+				specr = cc.fr;
 				restart = 1;
 			Zoomout =>
 				if(stack != nil) {
 					((specr, p), stack) = (hd stack, tl stack);
-					fill = p.fill;
-					kdivisor = p.kdivisor;
-					morj = p.m;
-					julp = p.p;
+					fill = p.fill; kdivisor = p.kdivisor; morj = p.m; julp = p.p;
 					restart = 1;
 				}
 			Julia =>
 				stack = (specr, p) :: stack;
-				julp = c.fp;
+				julp = cc.fp;
 				specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
 				morj = 0;
 				restart = 1;
 			Mandelbrot =>
 				stack = (specr, p) :: stack;
 				specr = Fracrect((-2.0, -1.5), (1.0, 1.5));
-				morj = 1;
-				julp = Fracpoint(0.0, 0.0);
-				kdivisor = 1;
+				morj = 1; julp = Fracpoint(0.0, 0.0); kdivisor = 1;
 				restart = 1;
 			Depth =>
-				kdivisor = c.d;
+				kdivisor = cc.d;
 				restart = 1;
 			Fill =>
-				fill = c.on;
+				fill = cc.on;
 				restart = 1;
 			Restart =>
 				restart = 1;
@@ -418,46 +382,29 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			writefractstate();
 			updatesbar();
 		<-sync =>
-			w.image.flush(Draw->Flushon);
+			blit();
 			pid = -1;
 			g_computing = 0;
 			writefractstate();
 			updatesbar();
 		<-themech =>
 			loadcanvasbg();
-			if(widget != nil)
-				widget->retheme(display);
-			wmclient->retheme(w);
-			if(menumod != nil)
-				menumod->retheme(display);
 			updatesbar();
 		}
 		if(restart) {
 			if(pid != -1)
 				kill(pid);
-			w.image.flush(Draw->Flushoff);
-			# Reposition statusbar on resize
-			if(sbar != nil && widget != nil) {
-				wr := w.imager(w.image.r);
-				sh := widget->statusheight();
-				sbar.resize(Rect((wr.min.x, wr.max.y - sh), wr.max));
-			}
 			wr := canvposn();
 			if(!isempty(wr)) {
 				p = Params(correctratio(specr, wr), julp, morj, kdivisor, fill);
-				# Update globals
-				g_specr = specr;
-				g_morj = morj;
-				g_julp = julp;
-				g_kdivisor = kdivisor;
-				g_fill = fill;
-				g_computing = 1;
-				g_stackdepth = len stack;
+				g_specr = specr; g_morj = morj; g_julp = julp;
+				g_kdivisor = kdivisor; g_fill = fill;
+				g_computing = 1; g_stackdepth = len stack;
 				sync = chan of int;
 				imgch = chan of (ref Image, Rect);
 				spawn docalculate(sync, p, imgch);
 				pid = <-sync;
-				imgch <-= (w.image, wr);
+				imgch <-= (fracimg, wr);
 				writefractstate();
 				updatesbar();
 			}
@@ -465,113 +412,128 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	}
 }
 
-# Generator for main menu: rebuilds items and subs from current state.
-mainmenuitems(m: ref Popup)
+# Point from "tok X Y" action tokens.
+actpt(toks: list of string): Point
 {
-	fillstr := "fill on";
+	if(toks == nil || tl toks == nil || tl tl toks == nil)
+		return Point(0, 0);
+	return Point(int hd tl toks, int hd tl tl toks);
+}
+
+menuxyt(toks: list of string): string
+{
+	if(toks != nil && tl toks != nil && tl tl toks != nil){
+		x := hd tl toks;
+		if(x != "" && x[0] >= '0' && x[0] <= '9')
+			return x + " " + hd tl tl toks;
+	}
+	return "40 40";
+}
+
+# Composite the off-screen fractal image into the Tk display.
+blit()
+{
+	if(fracimg != nil)
+		tk->putimage(top, "frac", fracimg, nil);
+	tk->cmd(top, "update");
+}
+
+STH: con 24;	# status strip height allowance
+
+buildui()
+{
+	cmds := array[] of {
+		". configure -background #080808",
+		"frame .top",
+		"image create bitmap frac",
+		"label .top.frac -image frac -borderwidth 0",
+		"pack .top.frac -side top",
+		"label .status -anchor w -background #0a0a0a -foreground #999999",
+		"pack .top -side top -fill both -expand 1",
+		"pack .status -side bottom -fill x",
+		"pack propagate . 0",
+		"bind .top.frac <Button-1> {send act b1down %x %y}",
+		"bind .top.frac <ButtonRelease-1> {send act b1up %x %y}",
+		"bind .top.frac <Button-2> {send act b2 %x %y}",
+		"bind .top.frac <Button-3> {send act menu %X %Y}",
+	};
+	tkcmds(cmds);
+}
+
+# Rebuild the B3 context menu for the current mode / fill state.
+buildmenu()
+{
+	tk->cmd(top, "destroy .ctx");
+	tk->cmd(top, "menu .ctx");
+	additem("zoom out", "zoomout");
+	additem("depth +", "depthup");
+	additem("depth -", "depthdown");
 	if(g_fill)
-		fillstr = "fill off";
-	if(g_morj) {
-		m.items = array[] of {
-			"zoom out", "depth+", "depth-", fillstr,
-			"julia >", "reset", "exit"
-		};
-		m.subs = array[len m.items] of ref Popup;
-		m.subs[4] = juliamenu;	# cascade for "julia >"
-	} else {
-		m.items = array[] of {
-			"zoom out", "depth+", "depth-", fillstr,
-			"mandelbrot", "reset", "exit"
-		};
-		m.subs = nil;
-	}
+		additem("fill off", "fill");
+	else
+		additem("fill on", "fill");
+	if(g_morj){
+		tk->cmd(top, "menu .ctx.julia");
+		for(i := 0; i < len juliapresets; i++)
+			tk->cmd(top, sys->sprint(".ctx.julia add command -label {%s} -command {send act julia %d}",
+				juliapresets[i].label, i));
+		tk->cmd(top, ".ctx add cascade -label {julia >} -menu .ctx.julia");
+	} else
+		additem("mandelbrot", "mandelbrot");
+	additem("reset", "reset");
+	tk->cmd(top, ".ctx add separator");
+	additem("quit", "quit");
 }
 
-# Generator for Julia preset submenu.
-juliamenuitems(m: ref Popup)
+additem(label, tok: string)
 {
-	items := array[len juliapresets] of string;
-	for(i := 0; i < len juliapresets; i++)
-		items[i] = juliapresets[i].label;
-	m.items = items;
+	tk->cmd(top, sys->sprint(".ctx add command -label {%s} -command {send act %s}", label, tok));
 }
 
-showmenu(ptr: ref Draw->Pointer): ref Usercmd
+# Allocate the off-screen fractal image at the current canvas size.
+allocfracimg()
 {
-	if(mainmenu == nil)
-		return nil;
-
-	n := mainmenu.show(w.image, ptr.xy, w.ctxt.ptr);
-	if(n < 0 || n >= len mainmenu.items)
-		return nil;
-
-	sel := mainmenu.items[n];
-
-	case sel {
-	"zoom out" =>
-		return ref Usercmd.Zoomout;
-	"depth+" =>
-		d := g_kdivisor + 1;
-		if(d > MAXDEPTH) d = MAXDEPTH;
-		return ref Usercmd.Depth(d);
-	"depth-" =>
-		d := g_kdivisor - 1;
-		if(d < 1) d = 1;
-		return ref Usercmd.Depth(d);
-	"fill on" or "fill off" =>
-		return ref Usercmd.Fill(!g_fill);
-	"julia >" =>
-		# Submenu was handled by the widget; read selection from lastsub
-		si := mainmenu.lastsub;
-		if(si < 0 || si >= len juliapresets)
-			return nil;
-		return ref Usercmd.Julia(juliapresets[si].c);
-	"mandelbrot" =>
-		return ref Usercmd.Mandelbrot;
-	"reset" =>
-		return ref Usercmd.Restart;
-	"exit" =>
-		postnote(1, sys->pctl(0, nil), "kill");
-		exit;
-	}
-	return nil;
+	aw := int tk->cmd(top, ". cget -actwidth");
+	ah := int tk->cmd(top, ". cget -actheight");
+	canvw = WIDTH;
+	canvh = HEIGHT - STH;
+	if(aw > 0)
+		canvw = aw;
+	if(ah > STH)
+		canvh = ah - STH;
+	if(canvw < 1) canvw = 1;
+	if(canvh < 1) canvh = 1;
+	wr: Rect;
+	wr.min = (0, 0);
+	wr.max = (canvw, canvh);
+	fracimg = display.newimage(wr, display.image.chans, 0, Draw->Nofill);
+	if(canvasbg != nil && fracimg != nil)
+		fracimg.draw(fracimg.r, canvasbg, nil, (0, 0));
+	blit();
 }
 
 
 updatesbar()
 {
-	if(sbar == nil)
+	if(top == nil)
 		return;
 	ftype := "Mandelbrot";
-	if(!g_morj) {
-		ftype = "Julia";
-		# Show Julia parameter in statusbar
-		ftype += sys->sprint(" c=(%.3g, %.3g)", g_julp.x, g_julp.y);
-	}
-	sbar.left = ftype;
+	if(!g_morj)
+		ftype = sys->sprint("Julia c=(%.3g, %.3g)", g_julp.x, g_julp.y);
 	status := "ready";
 	if(g_computing)
 		status = "computing...";
-	sbar.right = sys->sprint("depth %d | %s", g_kdivisor, status);
-	sbar.draw(w.image);
+	tk->cmd(top, sys->sprint(".status configure -text {%s    -    depth %d | %s}",
+		ftype, g_kdivisor, status));
 }
 
-winreq(ctl: string, imgch: chan of (ref Image, Rect), terminated: chan of int): int
+tkcmds(cmds: array of string)
 {
-	oldimage := w.image;
-	if(imgch != nil) {
-		alt {
-		imgch <-= (nil, ((0, 0), (0, 0))) =>;
-		<-terminated =>
-			imgch = nil;
-		}
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "fractals: tk error %s on %s\n", e, cmds[i]);
 	}
-	w.wmctl(ctl);
-	if(w.image != oldimage)
-		return 1;
-	if(imgch != nil)
-		imgch <-= (w.image, canvposn());
-	return 0;
 }
 
 correctratio(r: Fracrect, wr: Rect): Fracrect
@@ -603,13 +565,9 @@ pt2real(pt: Point, r: Fracrect): Fracpoint
 
 canvposn(): Rect
 {
-	r := w.imager(w.image.r);
-	if(sbar != nil && widget != nil) {
-		sh := widget->statusheight();
-		r.max.y -= sh;
-		if(r.max.y < r.min.y)
-			r.max.y = r.min.y;
-	}
+	r: Rect;
+	r.min = (0, 0);
+	r.max = (canvw, canvh);
 	return r;
 }
 
@@ -631,8 +589,7 @@ loadcanvasbg()
 
 canvsize(): Point
 {
-	r := canvposn();
-	return Point(r.dx(), r.dy());
+	return Point(canvw, canvh);
 }
 
 cliprect(r, bounds: Rect): Rect
@@ -649,7 +606,7 @@ isempty(r: Rect): int
 	return r.dx() <= 0 || r.dy() <= 0;
 }
 
-themelistener(ch: chan of int)
+themelistener()
 {
 	fd := sys->open("/mnt/ui/event", Sys->OREAD);
 	if(fd == nil)
@@ -660,21 +617,17 @@ themelistener(ch: chan of int)
 		if(n <= 0)
 			break;
 		ev := string buf[0:n];
-		# INFR-28: reset client-side fid offset so the next read on
-		# this streaming queue starts at 0 (otherwise the kernel
-		# applies the accumulated offset to the server reply and
-		# truncates / EOFs on the third read onward).
 		sys->seek(fd, big 0, Sys->SEEKSTART);
 		if(len ev >= 6 && ev[0:6] == "theme ")
-			ch <-= 1;
+			themech <-= 1;
 	}
 }
 
-timer(c: chan of int, ms: int)
+timer()
 {
 	for(;;) {
-		sys->sleep(ms);
-		c <-= 1;
+		sys->sleep(500);
+		ticks <-= 1;
 	}
 }
 

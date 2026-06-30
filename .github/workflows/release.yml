@@ -1260,13 +1260,19 @@ jobs:
       shell: pwsh
       run: |
         # windows-2022 ships a bootstrapped vcpkg at $env:VCPKG_INSTALLATION_ROOT.
-        # fido2:x64-windows pulls in libcbor + openssl. Best-effort: if the build
-        # fails we still ship a working emu with /dev/2fa as a stub rather than
-        # failing the whole release, and the verify step below records which.
+        # The vcpkg port is named "libfido2" (not "fido2") and pulls in libcbor +
+        # openssl. Best-effort: if the install fails we still ship a working emu
+        # with /dev/2fa as a stub rather than failing the whole release, and the
+        # verify step below records which. A failed `vcpkg install` leaves a
+        # non-zero $LASTEXITCODE that GitHub's pwsh wrapper would otherwise turn
+        # into a step failure, so this step ends with `exit 0` to stay non-fatal.
         $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe"
         if (-not (Test-Path $vcpkg)) { $vcpkg = "C:\vcpkg\vcpkg.exe" }
         if (Test-Path $vcpkg) {
-          & $vcpkg install fido2:x64-windows
+          & $vcpkg install libfido2:x64-windows
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "vcpkg install libfido2 failed (exit $LASTEXITCODE); /dev/2fa will be a stub"
+          }
           $prefix = (Split-Path $vcpkg) + "\installed\x64-windows"
           if (Test-Path "$prefix\include\fido.h") {
             echo "FIDO2DIR=$prefix" >> $env:GITHUB_ENV
@@ -1277,6 +1283,8 @@ jobs:
         } else {
           Write-Warning "vcpkg not found; /dev/2fa will be a stub in this artifact"
         }
+        # Best-effort step: a stub build is still shippable, so never fail here.
+        exit 0
 
     - name: Build (libs, headless emu, .dis tree)
       shell: pwsh

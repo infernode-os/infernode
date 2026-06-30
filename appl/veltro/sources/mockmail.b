@@ -52,23 +52,36 @@ capabilities(): int
 }
 
 # Canned unread inbox.
+# Canned inbox spanning every triage verdict (set via structured flags/headers,
+# not body text): wake, wake, ignore, preempt, context.
 msgs(): list of ref Message
 {
+	# context: already-read FYI (no unread flag) → folded in, not dispatched
+	m5 := ref Message("5", "email", "inbox", "team@example.com", "you",
+		"Notes from standup", "FYI — minutes attached, no action needed.",
+		"2026-06-30T06:00:00Z", "", "", 0, "");
+	# preempt: urgent flag set by the source
+	m4 := ref Message("4", "email", "inbox", "boss@example.com", "you",
+		"URGENT: sign-off needed now", "The release is blocked on your approval — please reply ASAP.",
+		"2026-06-30T09:30:00Z", "", "", MsgSrc->FUNREAD | MsgSrc->FURGENT, "");
+	# ignore: bulk newsletter (List-Unsubscribe header + newsletter@ sender)
 	m3 := ref Message("3", "email", "inbox", "newsletter@inferno.news", "you",
 		"Weekly digest", "Top stories: Dis VM gains a new JIT; 9P turns 30; community call Thursday.",
-		"2026-06-30T07:15:00Z", "", "", MsgSrc->FUNREAD, "");
+		"2026-06-30T07:15:00Z", "", "", MsgSrc->FUNREAD, "List-Unsubscribe: <https://inferno.news/u>");
+	# wake: ordinary unread mail
 	m2 := ref Message("2", "email", "inbox", "accounts@vendor.example", "you",
 		"Invoice #4471 due", "Your May invoice ($420) is attached and due in 14 days. Reply with any questions.",
 		"2026-06-30T08:40:00Z", "", "", MsgSrc->FUNREAD, "");
+	# wake: flagged personal mail needing a reply
 	m1 := ref Message("1", "email", "inbox", "alice@example.com", "you",
 		"Launch date?", "Hi — can we move the launch to Friday? I need your sign-off by end of day.",
-		"2026-06-30T09:05:00Z", "", "", MsgSrc->FUNREAD, "");
-	return m1 :: m2 :: m3 :: nil;
+		"2026-06-30T09:05:00Z", "", "", MsgSrc->FUNREAD | MsgSrc->FFLAGGED, "");
+	return m1 :: m2 :: m3 :: m4 :: m5 :: nil;
 }
 
 status(): string
 {
-	s := "3 unread (mock):";
+	s := "unread inbox (mock):";
 	for(ml := msgs(); ml != nil; ml = tl ml) {
 		m := hd ml;
 		s += sys->sprint("\n  [%s] %s — %s: %s", m.id, m.sender, m.subject, m.body);

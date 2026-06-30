@@ -126,14 +126,37 @@ luciferloop(inputpath: string)
 
 		log("notification: " + truncate(notification, 80));
 
-		# Inject the policy + the message as a single turn so activity 0 triages
-		# per the policy. NEVER auto-send: any drafted reply is saved for review.
+		# Route on the deterministic verdict stamped by msg9p (from the message's
+		# structured fields). ignore/context never wake the LLM — the whole point
+		# of triage. Only wake/preempt are injected into activity 0.
+		verdict := nfield(notification, "Triage: ");
+		if(verdict == "")
+			verdict = "wake";	# unstamped → be safe, wake
+		src := nsource(notification);
+		id := nfield(notification, "Message ID: ");
+
+		case verdict {
+		"ignore" =>
+			markseen(src, id);
+			log("[triage ignore] flagged seen, NOT dispatched: " + truncate(notification, 50));
+			continue;
+		"context" =>
+			log("[triage context] noted, NOT dispatched: " + truncate(notification, 50));
+			continue;
+		}
+
+		# wake / preempt: inject the policy + the message as a single turn so
+		# activity 0 triages per the policy. NEVER auto-send: drafts are reviewed.
+		urgency := "";
+		if(verdict == "preempt")
+			urgency = "This message is URGENT — handle it before other pending work. ";
 		turn := notification;
 		if(policy != "")
 			turn = policy +
-				"\n\n--- An incoming message just arrived. Triage it per the Message Policy " +
-				"above. For actionable messages, create a Task Agent with a clear brief; " +
-				"draft any reply but NEVER auto-send it — save it for the user to review. ---\n\n" +
+				"\n\n--- An incoming message just arrived. " + urgency +
+				"Triage it per the Message Policy above. For actionable messages, create a " +
+				"Task Agent with a clear brief; draft any reply but NEVER auto-send it — " +
+				"save it for the user to review. ---\n\n" +
 				notification;
 
 		inputfd := sys->open(inputpath, Sys->OWRITE);
@@ -149,8 +172,64 @@ luciferloop(inputpath: string)
 		if(n != len data)
 			log("short write to input: " + sys->sprint("%r"));
 		else
-			log("relayed to Meta Agent (policy injected)");
+			log("[triage " + verdict + "] relayed to Meta Agent (policy injected)");
 	}
+}
+
+# Extract the value after a "Prefix" line in a notification ("" if absent).
+nfield(notif, prefix: string): string
+{
+	i := 0;
+	n := len notif;
+	while(i < n) {
+		j := i;
+		while(j < n && notif[j] != '\n')
+			j++;
+		line := notif[i:j];
+		if(len line >= len prefix && line[0:len prefix] == prefix)
+			return line[len prefix:];
+		i = j + 1;
+	}
+	return "";
+}
+
+# Source name from the first line: "[Message notification — <src>]".
+nsource(notif: string): string
+{
+	p := strindex(notif, "— ");
+	if(p < 0)
+		return "";
+	rest := notif[p+2:];
+	e := strindex(rest, "]");
+	if(e < 0)
+		return "";
+	return rest[0:e];
+}
+
+strindex(hay, needle: string): int
+{
+	if(needle == "" || len needle > len hay)
+		return -1;
+	for(i := 0; i <= len hay - len needle; i++)
+		if(hay[i:i+len needle] == needle)
+			return i;
+	return -1;
+}
+
+# Mark a message seen via msg9p ctl, so an ignored message is not re-delivered.
+markseen(src, id: string)
+{
+	if(src == "" || id == "")
+		return;
+	fd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
+	if(fd == nil) {
+		log("markseen: cannot open /mnt/msg/ctl: " + sys->sprint("%r"));
+		return;
+	}
+	cmd := "flag " + src + " " + id + " seen";
+	b := array of byte cmd;
+	sys->write(fd, b, len b);
+	fd = nil;
 }
 
 # Headless mode: classify and handle autonomously

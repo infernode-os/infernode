@@ -221,6 +221,27 @@ tkmkbutton(TkTop *t, int btype)
 }
 
 /*
+ * Draw the "on" indicator for a check/radio button: a crisp filled accent
+ * square, centred inside the bevel box drawn at o.  tkbevel's box has an
+ * outer size of CheckButton + 2*CheckButtonBW, so its interior starts at
+ * o + CheckButtonBW and spans CheckButton pixels; inset the fill
+ * symmetrically inside that interior so it is exactly centred (the old
+ * math measured from o + CheckButton, which sat 1px up-left of centre).
+ */
+static void
+tkfillindicator(Image *i, TkEnv *e, Point o)
+{
+	Rectangle cr;
+	int inset = 2;
+
+	cr.min.x = o.x + CheckButtonBW + inset;
+	cr.min.y = o.y + CheckButtonBW + inset;
+	cr.max.x = o.x + CheckButtonBW + CheckButton - inset;
+	cr.max.y = o.y + CheckButtonBW + CheckButton - inset;
+	draw(i, cr, tkgc(e, TkCselect), nil, ZP);
+}
+
+/*
  * draw TKbutton, TKcheckbutton, TKradiobutton
  */
 char*
@@ -296,20 +317,8 @@ tkdrawbutton(Tk *tk, Point orig)
 		cl = tkgc(e, bgnd+TkLightshade);
 		cd = tkgc(e, bgnd+TkDarkshade);
 		tkbevel(i, u, CheckButton, CheckButton, CheckButtonBW, cd, cl);
-		if(tkl->check) {
-			/*
-			 * Brutalist 2D: a crisp filled accent square, not a
-			 * bezier checkmark.  The spline rasterised jagged at
-			 * indicator size (no antialiasing); a filled rect is
-			 * exact and reads as a deliberate flat mark.
-			 */
-			Rectangle cr;
-			cr.min.x = u.x + CheckButtonBW + 2;
-			cr.min.y = u.y + CheckButtonBW + 2;
-			cr.max.x = u.x + CheckButton - CheckButtonBW - 2;
-			cr.max.y = u.y + CheckButton - CheckButtonBW - 2;
-			draw(i, cr, tkgc(e, TkCselect), nil, ZP);
-		}
+		if(tkl->check)
+			tkfillindicator(i, e, u);
 		break;
 	case TKradiobutton:
 		if(tkl->indicator == BoolF) {
@@ -318,10 +327,11 @@ tkdrawbutton(Tk *tk, Point orig)
 		}
 		u.x = p.x + ButtonBorder;
 		u.y = p.y + ButtonBorder + (h - CheckSpace) / 2;
-		v = Pt(u.x+CheckButton/2,u.y+CheckButton/2);
-		ellipse(i, v, CheckButton/2, CheckButton/2, CheckButtonBW-1, tkgc(e, bgnd+TkDarkshade), ZP);
+		cl = tkgc(e, bgnd+TkLightshade);
+		cd = tkgc(e, bgnd+TkDarkshade);
+		tkbevel(i, u, CheckButton, CheckButton, CheckButtonBW, cd, cl);
 		if(tkl->check)
-			fillellipse(i, v, CheckButton/2-2, CheckButton/2-2, tkgc(e, TkCforegnd), ZP);	/* could be TkCselect */
+			tkfillindicator(i, e, u);
 		break;
 	case TKbutton:
 		if ((tk->flag & (Tkactivated|Tkactive)) == (Tkactivated|Tkactive))

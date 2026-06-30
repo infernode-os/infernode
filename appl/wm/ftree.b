@@ -1167,12 +1167,15 @@ rowtext(n: ref Node): string
 	indent := "";
 	for(j := 0; j < n.depth; j++)
 		indent += "  ";
+	# Filled disclosure triangles (▸ collapsed, ▾ expanded), matching the
+	# original tree's drawn arrows — not ASCII '>' / 'V'.  Built via %c so
+	# the codepoint is explicit rather than relying on source UTF-8.
 	marker := "  ";
 	if(n.isdir) {
 		if(n.expanded)
-			marker = "v ";
+			marker = sys->sprint("%c ", 16r25BE);	# ▾
 		else
-			marker = "> ";
+			marker = sys->sprint("%c ", 16r25B8);	# ▸
 	}
 	name := n.name;
 	if(n.isdir)

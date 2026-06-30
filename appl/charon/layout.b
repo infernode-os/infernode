@@ -21,8 +21,6 @@ E: Events;
 	Event: import E;
 G: Gui;
 B: Build;
-W: Widget;
-	Scrollbar: import W;
 
 # B : Build, declared in layout.m so main program can use it
 	Item, ItemSource,
@@ -244,7 +242,6 @@ init(cu: CharonUtils)
 	J = cu->J;
 	B = cu->B;
 	display = G->display;
-	W = load Widget Widget->PATH;
 
 	if(display == nil) {
 		# Headless mode: no display, use fixed fallback metrics.
@@ -277,8 +274,6 @@ init(cu: CharonUtils)
 	ctllineascent = fnt.ascent;
 	ctlcharspace = fnt.width("a");
 	ctlspspace = fonts[CtlFnt].spw;
-	if(W != nil)
-		W->init(display, fonts[DefFnt].f);
 }
 
 stringwidth(s: string): int
@@ -580,12 +575,6 @@ createvscroll(f: ref Frame)
 	f.cr.max.x -= breadth;
 	if(f.cr.dx() <= 2*f.marginw)
 		CU->raisex("EXInternal: frame too small for layout");
-	if(W != nil) {
-		pick sc := f.vscr {
-		Cscrollbar =>
-			sc.wsb = Scrollbar.new(f.vscr.r, 1);
-		}
-	}
 	f.vscr.draw(1);
 }
 
@@ -601,12 +590,6 @@ createhscroll(f: ref Frame)
 	f.cr.max.y -= breadth;
 	if(f.cr.dy() <= 2*f.marginh)
 		CU->raisex("EXInternal: frame too small for layout");
-	if(W != nil) {
-		pick sc := f.hscr {
-		Cscrollbar =>
-			sc.wsb = Scrollbar.new(f.hscr.r, 0);
-		}
-	}
 	f.hscr.draw(1);
 }
 
@@ -3705,7 +3688,7 @@ Control.newscroll(f: ref Frame, isvert, length, breadth: int) : ref Control
 	}
 	else
 		maxpt = Point(length, breadth);
-	return ref Control.Cscrollbar(f, nil, Rect(zp,maxpt), flags, nil, 0, 0, 1, 0, nil, (0, 0), nil);
+	return ref Control.Cscrollbar(f, nil, Rect(zp,maxpt), flags, nil, 0, 0, 1, 0, nil, (0, 0));
 }
 
 Control.newentry(f: ref Frame, nh, nv, linewrap: int) : ref Control
@@ -3952,12 +3935,6 @@ Control.scrollset(c: self ref Control, v1, v2, vmax, nsteps, draw: int)
 			v2 = vmax;
 		if(v1 > v2)
 			v1 = v2;
-		# Update widget.m scrollbar if present
-		if(sc.wsb != nil) {
-			sc.wsb.total = vmax;
-			sc.wsb.visible = v2 - v1;
-			sc.wsb.origin = v1;
-		}
 		if(v1 == 0 && v2 == vmax) {
 			sc.mindelta = 1;
 			sc.deltaval = 0;
@@ -4297,41 +4274,8 @@ Control.domouse(ctl: self ref Control, p: Point, mtype: int, oldgrab : ref Contr
 			}
 		}
 	Cscrollbar =>
-		# Widget.m scrollbar for frame-level scrollbars
-		if(c.wsb != nil && c.ctl == nil) {
-			# Decode B2 events alongside B1
-			b2down := (mtype == E->Mmbuttondown);
-			b2drag := (mtype == E->Mmdrag);
-			# Synthesize a Pointer with correct button mask
-			buttons := 0;
-			if(down || drag)
-				buttons = 1;
-			else if(b2down || b2drag)
-				buttons = 2;
-			ptr := ref Pointer(buttons, p, 0);
-			newo := -1;
-			if(c.wsb.isactive()) {
-				newo = c.wsb.track(ptr);
-				if(newo >= 0) {
-					newgrab = c;
-					changed = 1;
-				}
-			} else if(down || b2down) {
-				newo = c.wsb.event(ptr);
-				if(newo >= 0) {
-					newgrab = c;
-					changed = 1;
-				}
-			}
-			if(newo >= 0) {
-				if(c.flags&CFscrvert)
-					c.f.yscroll(CAscrollabs, newo);
-				else
-					c.f.xscroll(CAscrollabs, newo);
-				changed = 1;
-			}
-		} else {
-		# Legacy scrollbar logic for form controls
+		# Native flat scrollbar (frame scrollbars + form controls).
+		{
 		val := 0;
 		v, vmin, vmax: int;
 		if(c.flags&CFscrvert) {
@@ -4868,13 +4812,10 @@ Control.draw(ctl: self ref Control, flush: int)
 		drawrelief(win, insetr, ReliefSunk);
 
 	Cscrollbar =>
-		if(c.wsb != nil) {
-			# Delegate to widget.m scrollbar
-			c.wsb.draw(win);
-		} else {
-			# Flat scrollbar fallback for form controls
-			SCRTRACK: con 16rE8E8E8;
-			SCRTHUMB: con 16rBBBBBB;
+		# Flat 2D brutalist scrollbar: a plain thumb on a flat trough.
+		{
+			SCRTRACK: con 16r131313;
+			SCRTHUMB: con 16r444444;
 			x := c.r.min.x;
 			y := c.r.min.y;
 			rs: Rect;

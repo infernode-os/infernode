@@ -6,10 +6,8 @@ include "wmclient.m";
 	wmclient: Wmclient;
 	Window: import wmclient;
 
-	widgetmod: Widget;
-	Scrollbar, Statusbar: import widgetmod;
-
 include "lucitheme.m";
+	lucitheme: Lucitheme;
 
 sys: Sys;
 
@@ -39,13 +37,17 @@ menu: ref Menu->Popup;
 realwin: ref Draw->Image;
 mask: ref Draw->Image;
 
-# Statusbar state
-statbar: ref Statusbar;
+# Statusbar state (drawn inline — no widget toolkit)
 guifont: ref Font;
 curinputmode := MNONE;
 inputbuf := "";
+promptstr := "";	# label shown while in input mode ("URL: " / "Link #: ")
 cururl := "";		# last URL set via seturl
 curstatus := "";	# last status set via setstatus
+
+# Status-strip colours (resolved from the live theme)
+barbg, barfg, baraccent: ref Image;
+STATUSH: con 22;	# status strip height
 
 # Keyboard escape sequence state (for filterkbd)
 kbdescstate := 0;
@@ -112,12 +114,8 @@ init(ctxt: ref Draw->Context, cu: CharonUtils): ref Draw->Context
 		menu = menumod->new(array[] of {"back", "forward", "reload", "stop", "copy URL", "paste URL", "go to URL", "home"});
 	}
 
-	# Initialise widget toolkit for statusbar
-	widgetmod = load Widget Widget->PATH;
-	if(widgetmod != nil) {
-		widgetmod->init(display, guifont);
-		statbar = Statusbar.new(Rect((0, 0), (0, 0)));
-	}
+	lucitheme = load Lucitheme Lucitheme->PATH;
+	loadbarcolors();
 
 	gctl = chan of string;
 	win.reshape(Rect((0, 0), (display.image.r.dx(), display.image.r.dy())));
@@ -332,10 +330,10 @@ evhandle(w: ref Window, evchan: chan of ref Event)
 			if(k == -1)
 				continue;	# consumed mid-sequence
 
-			# If in input mode, route to statusbar
+			# If in input mode, route to the inline status-bar input
 			if(curinputmode != MNONE) {
-				if(statbar != nil) {
-					(done, val) := statbar.key(k);
+				{
+					(done, val) := inputkey(k);
 					if(done == 1) {
 						mode := curinputmode;
 						curinputmode = MNONE;
@@ -357,8 +355,6 @@ evhandle(w: ref Window, evchan: chan of ref Event)
 					} else if(done < 0) {
 						curinputmode = MNONE;
 						inputbuf = "";
-					} else {
-						inputbuf = statbar.buf;
 					}
 					# Redraw statusbar on any input key
 					if(mainwin != nil)
@@ -410,8 +406,7 @@ themelistener()
 
 reloadcolors()
 {
-	if(widgetmod != nil)
-		widgetmod->retheme(display);
+	loadbarcolors();
 	if(wmclient != nil)
 		wmclient->retheme(window);
 	if(menumod != nil)
@@ -563,65 +558,100 @@ cancelpopup(): int
 
 # ── Statusbar functions ──────────────────────────────────────
 
-statusbarheight(): int
+# Resolve the status-strip colours from the live theme (brutalist).
+loadbarcolors()
 {
-	if(statbar == nil || widgetmod == nil)
-		return 0;
-	return widgetmod->statusheight();
+	if(display == nil)
+		return;
+	if(lucitheme != nil) {
+		th := lucitheme->gettheme();
+		barbg = display.color(th.bg);
+		barfg = display.color(th.dim);
+		baraccent = display.color(th.accent);
+	} else {
+		barbg = display.color(int 16r0A0A0AFF);
+		barfg = display.color(int 16r999999FF);
+		baraccent = display.color(int 16rE8553AFF);
+	}
 }
 
+statusbarheight(): int
+{
+	if(guifont == nil)
+		return 0;
+	h := guifont.height + 6;
+	if(h < STATUSH)
+		h = STATUSH;
+	return h;
+}
+
+# Flat brutalist status strip: a dark bar with left/right text, or the
+# input prompt + buffer while a URL/link entry is in progress.
 drawstatusbar(dst: ref Image)
 {
-	if(statbar == nil || dst == nil)
+	if(dst == nil || guifont == nil)
 		return;
+	if(barbg == nil)
+		loadbarcolors();
 	r := dst.r;
 	sth := statusbarheight();
 	if(sth <= 0)
 		return;
 	sbr := Rect((r.min.x, r.max.y - sth), r.max);
-	statbar.resize(sbr);
-	if(curinputmode != MNONE) {
-		# Input mode — prompt is already set
-		;
-	} else {
-		statbar.prompt = nil;
-		if(cururl != nil && cururl != "")
-			statbar.left = cururl;
-		else if(curstatus != nil && curstatus != "")
-			statbar.left = curstatus;
-		else
-			statbar.left = "";
-		if(linkcount > 0)
-			statbar.right = sys->sprint("%d links", linkcount);
-		else
-			statbar.right = "";
-		statbar.leftcolor = nil;
-	}
-	# The HTML renderer (layout.b) may leave dst.clipr set to f.cr, which
-	# ends exactly at the top of the status bar region.  Save and reset the
-	# clip so the status bar always draws into its own area.
 	oclipr := dst.clipr;
 	dst.clipr = dst.r;
-	statbar.draw(dst);
+	dst.draw(sbr, barbg, nil, ZP);
+	ty := sbr.min.y + (sth - guifont.height) / 2;
+	tx := sbr.min.x + 4;
+	if(curinputmode != MNONE) {
+		dst.text((tx, ty), baraccent, ZP, guifont, promptstr);
+		tx += guifont.width(promptstr);
+		dst.text((tx, ty), barfg, ZP, guifont, inputbuf);
+	} else {
+		left := "";
+		if(cururl != nil && cururl != "")
+			left = cururl;
+		else if(curstatus != nil && curstatus != "")
+			left = curstatus;
+		dst.text((tx, ty), barfg, ZP, guifont, left);
+		if(linkcount > 0) {
+			right := sys->sprint("%d links", linkcount);
+			rx := sbr.max.x - guifont.width(right) - 4;
+			dst.text((rx, ty), barfg, ZP, guifont, right);
+		}
+	}
 	dst.clipr = oclipr;
+}
+
+# Handle one key while in URL/link input mode.
+# Returns (1, value) on Enter, (-1, "") on Escape, (0, "") while typing.
+inputkey(k: int): (int, string)
+{
+	case k {
+	'\n' or '\r' =>
+		return (1, inputbuf);
+	16r1b =>		# Escape
+		return (-1, "");
+	8 or 16r7f =>		# Backspace / Delete
+		if(len inputbuf > 0)
+			inputbuf = inputbuf[0:len inputbuf - 1];
+	* =>
+		if(k >= 16r20)
+			inputbuf[len inputbuf] = k;
+	}
+	return (0, "");
 }
 
 startinput(mode: int)
 {
 	curinputmode = mode;
 	inputbuf = "";
-	if(statbar == nil)
-		return;
 	if(mode == MURL) {
-		statbar.prompt = "URL: ";
-		statbar.buf = "";
-		if(cururl != nil && cururl != "") {
+		promptstr = "URL: ";
+		if(cururl != nil && cururl != "")
 			inputbuf = cururl;
-			statbar.buf = cururl;
-		}
 	} else if(mode == MLINK) {
-		statbar.prompt = "Link #: ";
-		statbar.buf = "";
+		promptstr = "Link #: ";
 	}
 	if(mainwin != nil) {
 		drawstatusbar(mainwin);

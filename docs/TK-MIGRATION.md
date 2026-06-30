@@ -132,7 +132,7 @@ and passed as `-foreground #rrggbbff`.
 | `wm/ftree` | migrated | tree as listbox (flattened visible nodes) |
 | `wm/editor` | migrated | text widget as a view of the doc model |
 | `wm/shell` | migrated | terminal: text-widget view of transcript+input |
-| `wm/settings` | pending | form (largest; theme switcher) |
+| `wm/settings` | migrated | master-detail form (9 panels; theme switcher) |
 | `wm/matrix` + `matrix/*` | pending (design) | composition engine |
 | `charon/gui` (+`layout`/`common`) | pending | HTML render + chrome |
 | Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |

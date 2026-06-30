@@ -5,8 +5,7 @@ implement ToolWebsearch;
 #
 # Searches the web using Brave Search API via native HTTPS.
 # Uses Webclient module for TLS 1.3 with certificate verification.
-# API key is retrieved from factotum (proto=pass service=brave),
-# falling back to /lib/veltro/keys/brave for migration.
+# API key is read from factotum (proto=pass service=brave).
 #
 # Usage:
 #   websearch <query>
@@ -40,7 +39,6 @@ ToolWebsearch: module {
 	schema: fn(): string;
 };
 
-APIKEY_PATH: con "/lib/veltro/keys/brave";
 REQUEST_TIMEOUT: con 30000;	# 30 seconds
 
 init(): string
@@ -76,7 +74,7 @@ doc(): string
 		"  websearch Inferno OS distributed system\n" +
 		"  websearch Plan 9 from Bell Labs\n\n" +
 		"Returns titles, URLs, and descriptions of up to 15 results.\n" +
-		"Requires API key in /lib/veltro/keys/brave.";
+		"Requires a brave key in factotum (proto=pass service=brave).";
 }
 
 schema(): string
@@ -106,7 +104,7 @@ exec(args: string): string
 	# Read API key
 	apikey := readapikey();
 	if(apikey == "")
-		return "error: Brave Search API key not configured. Place key in " + APIKEY_PATH;
+		return "error: Brave Search API key not configured (factotum proto=pass service=brave)";
 
 	# URL-encode query
 	encoded := urlencode(query);
@@ -144,28 +142,20 @@ exec(args: string): string
 	return formatresults(output);
 }
 
-# Read API key from factotum, falling back to file
+# Read the Brave API key from factotum (proto=pass service=brave). nsconstruct
+# grants /mnt/factotum to a child only when it holds this tool, so getuserpasswd
+# resolves here directly — the standard Inferno pattern, no plaintext key file.
 readapikey(): string
 {
-	# Try factotum first
 	if(factotum == nil)
 		factotum = load Factotum Factotum->PATH;
-	if(factotum != nil){
-		factotum->init();
-		(nil, password) := factotum->getuserpasswd("proto=pass service=brave");
-		if(password != nil && password != "")
-			return password;
-	}
-
-	# Fall back to file (migration)
-	fd := sys->open(APIKEY_PATH, Sys->OREAD);
-	if(fd == nil)
+	if(factotum == nil)
 		return "";
-	buf := array[256] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	factotum->init();
+	(nil, password) := factotum->getuserpasswd("proto=pass service=brave");
+	if(password == nil)
 		return "";
-	return strip(string buf[0:n]);
+	return password;
 }
 
 # URL-encode a string (spaces → +, special chars → %XX)

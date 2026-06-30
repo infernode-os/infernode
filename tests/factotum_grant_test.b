@@ -3,8 +3,8 @@ implement FacGrant;
 # Deterministic security test for INFR-363 credential access.
 # Applies nsconstruct->restrictns() in a forked namespace and checks that
 # /mnt/factotum is visible (and the key readable) IFF the agent holds a tool
-# that authenticates via factotum (websearch). Run twice: "with" and "without".
-# Expected: with => VISIBLE + keylen>0 ; without => HIDDEN.
+# that authenticates via factotum (websearch), and cannot execute arbitrary
+# code. Expected: with => VISIBLE; without and withexec => HIDDEN.
 
 include "sys.m";
 	sys: Sys;
@@ -35,6 +35,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tools: list of string;
 	if(mode == "with")
 		tools = "websearch" :: "read" :: nil;
+	else if(mode == "withexec")
+		tools = "websearch" :: "exec" :: "read" :: nil;
 	else
 		tools = "read" :: nil;
 

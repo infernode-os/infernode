@@ -185,10 +185,10 @@ buildbase()
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 
-		# select a key with B1, raise the menu with B3
+		# select a key with B1, raise the menu with B3 (at the pointer)
 		"bind .top.lb <Button-1> {%C}",
-		"bind .top.lb <Button-3> {send act menu}",
-		"bind . <Button-3> {send act menu}",
+		"bind .top.lb <Button-3> {send act menu %X %Y}",
+		"bind . <Button-3> {send act menu %X %Y}",
 	};
 	tkcmds(cmds);
 	buildmenu();
@@ -335,11 +335,16 @@ updatehint()
 
 handleaction(a: string)
 {
+	# the B3 bind sends "menu <X> <Y>" (screen coords)
+	(n, toks) := sys->tokenize(a, " ");
+	if(n >= 1 && hd toks == "menu"){
+		xy := "20 40";
+		if(n >= 3 && (hd tl toks)[0] >= '0' && (hd tl toks)[0] <= '9')
+			xy = hd tl toks + " " + hd tl tl toks;
+		tk->cmd(top, ".ctx post " + xy);
+		return;
+	}
 	case a {
-	"menu" =>
-		# post the context menu near the pointer
-		tk->cmd(top, "update");
-		tk->cmd(top, ".ctx post " + ptrxy());
 	"email" =>    setmode(ModeEmail);
 	"api" =>      setmode(ModeAPI);
 	"login" =>    setmode(ModeLogin);
@@ -352,14 +357,6 @@ handleaction(a: string)
 	"save" =>     savekey();
 	"cancel" =>   setmode(ModeList);
 	}
-}
-
-ptrxy(): string
-{
-	# Posting at the pointer needs screen coords; fall back to a fixed
-	# spot if unavailable. The wm feeds pointer events to tk->pointer,
-	# so Tk already knows the last pointer position.
-	return "20 40";
 }
 
 # ── Save: build the factotum command(s) per mode ──────────────

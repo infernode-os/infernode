@@ -93,14 +93,24 @@ and passed as `-foreground #rrggbbff`.
 
 ## Status
 
-| App | State |
-|-----|-------|
-| `wm/about` | migrated |
-| `wm/keyring` | migrated |
-| `wm/wallet`, `wm/settings` | form apps — same pattern as keyring |
-| `wm/man`, `wm/editor`, `wm/shell` | text-widget apps |
-| `wm/fractals`, `wm/matrix`, `wm/ftree` | canvas / custom draw |
-| `charon/gui`, `matrix/*`, Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending |
+| App | State | Pattern |
+|-----|-------|---------|
+| `wm/about` | migrated | label + image |
+| `wm/keyring` | migrated | form (entry/listbox/button/menu) |
+| `wm/wallet` | migrated | form + dropdown + two-pane |
+| `wm/man` | migrated | text viewer (text widget + tags) |
+| `wm/settings` | pending | form (largest; theme switcher) |
+| `wm/editor`, `wm/shell` | pending | editable text widget |
+| `wm/fractals`, `wm/matrix`, `wm/ftree` | pending | canvas / custom draw |
+| `charon/gui`, `matrix/*`, Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
+
+Verified empirically and reusable:
+- forms: entry (`-show *` for secrets), listbox+scrollbar, button, menu
+  (`post`, `add command -command {send act X}`), choicebutton dropdown
+  (read with `getvalue`), `.b invoke`, typed keys into focused entry;
+- text viewer: `text` widget tags (heading/bold/italic/link), `-wrap
+  none`, `search -nocase`, `tag add a a+Nc`, `see`, `yview scroll/moveto`;
+- menus post at the pointer via `bind <Button-3> {send act menu %X %Y}`.
 
 When no app uses `widget.m` / `lucitheme`-via-widget anymore, delete
 `module/widget.m`, `appl/lib/widget.b`, and their tests, and drop them

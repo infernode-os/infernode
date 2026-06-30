@@ -978,6 +978,13 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 			}
 		}
 		if(newurl != nil) {
+			# A network peer must not redirect the browser into a local
+			# transport such as file:.  Agent control can read rendered body.
+			if((ri.url.scheme == "http" || ri.url.scheme == "https") &&
+			   !networkurl(newurl)) {
+				CU->freebs(bsmain);
+				return "unsafe redirect scheme";
+			}
 			ri.url = newurl;
 			# some sites (e.g., amazon.com) assume that POST turns into
 			# GET on redirect (maybe this is just http 1.0?)
@@ -2488,6 +2495,11 @@ followlink(n: int): ref Event
 	return nil;
 }
 
+networkurl(url: ref Parsedurl): int
+{
+	return url != nil && (url.scheme == "http" || url.scheme == "https");
+}
+
 ctlproc()
 {
 	sys->pctl(Sys->NEWPGRP, nil);
@@ -2504,7 +2516,7 @@ ctlproc()
 			rest = browserstrip(rest);
 			if(rest != "") {
 				url := CU->makeabsurl(rest);
-				if(url != nil)
+				if(networkurl(url))
 					ev = ref Event.Ego(rest, "_top", 0, E->EGnormal);
 			}
 		"back" =>
@@ -2517,8 +2529,16 @@ ctlproc()
 			ev = ref Event.Estop(0);
 		"follow" =>
 			n := browseratoi(rest);
-			if(n > 0)
-				ev = followlink(n);
+			if(n > 0) {
+				candidate := followlink(n);
+				if(candidate != nil) {
+					pick ego := candidate {
+					Ego =>
+						if(networkurl(CU->makeabsurl(ego.url)))
+							ev = candidate;
+					}
+				}
+			}
 		}
 		if(ev != nil)
 			E->evchan <-= ev;
@@ -2968,4 +2988,3 @@ skip(s, cmd: string): string
 		s = s[1:];
 	return s;
 }
-

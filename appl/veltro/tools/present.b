@@ -370,6 +370,10 @@ donavigate(args: string): string
 		return "error: app id required";
 	if(url == "")
 		return sys->sprint("error: url required — e.g. navigate %s http://example.com", id);
+	if(id != "charon")
+		return "error: URL navigation is only supported for charon";
+	if(!isallowedurl(url))
+		return "error: charon only accepts http:// and https:// URLs";
 
 	actid := currentactid();
 	if(actid < 0)
@@ -404,6 +408,16 @@ donavigate(args: string): string
 	writefile(pctl, "center id=" + id);
 
 	return sys->sprint("navigated '%s' to %s", id, url);
+}
+
+isallowedurl(url: string): int
+{
+	lurl := url;
+	for(i := 0; i < len lurl; i++)
+		if(lurl[i] >= 'A' && lurl[i] <= 'Z')
+			lurl[i] += 'a' - 'A';
+	return len lurl >= 7 && lurl[0:7] == "http://" ||
+		len lurl >= 8 && lurl[0:8] == "https://";
 }
 
 # Delete an artifact by id

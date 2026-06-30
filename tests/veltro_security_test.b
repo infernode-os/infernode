@@ -322,17 +322,21 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
-	# /mnt/llm is the agent's brain and is auto-granted when present. Sibling
-	# application mount points remain capability-gated.
+	# Least privilege: with NO /mnt grant in caps.paths, a confined child sees no
+	# /mnt at all — not even /mnt/llm. The model service is NOT granted by mere
+	# existence; an agent that needs it lists /mnt/llm in caps.paths (repl), and a
+	# spawned sub-agent drives the LLM through a pre-opened FD that survives the
+	# restriction. (mntgen would make /mnt/llm *stat* as present in the parent ns;
+	# the root-level restriction is what hides /mnt here.)
 	(llmok, nil) := sys->stat("/mnt/llm");
-	if(llmok < 0) {
-		result <-= "/mnt/llm should be accessible after restrictns when present";
+	if(llmok >= 0) {
+		result <-= "/mnt/llm must NOT be visible without an explicit /mnt grant (least privilege)";
 		return;
 	}
 
 	(acmeok, nil) := sys->stat("/mnt/acme");
 	if(acmeok >= 0) {
-		result <-= "/mnt/acme must NOT be visible when only /mnt/llm is auto-granted";
+		result <-= "/mnt/acme must NOT be visible without a grant";
 		return;
 	}
 

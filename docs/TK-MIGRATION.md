@@ -126,26 +126,30 @@ and passed as `-foreground #rrggbbff`.
 | `wm/man` | migrated | text viewer (text widget + tags) |
 | `wm/fractals` | migrated | dynamic image (off-screen draw + putimage) |
 | `wm/ftree` | migrated | tree as listbox (flattened visible nodes) |
+| `wm/editor` | migrated | text widget as a view of the doc model |
 | `wm/settings` | pending | form (largest; theme switcher) |
-| `wm/editor`, `wm/shell` | pending | editable text widget |
+| `wm/shell` | pending | editable text widget (follow editor) |
 | `wm/matrix` + `matrix/*` | pending (design) | composition engine |
 | `charon/gui` (+`layout`/`common`) | pending | HTML render + chrome |
 | Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
 
 ### Notes for the pending migrations (learned while scoping)
 
-- **editor / shell — let Tk own the editing.** The `text` widget is a
-  full editing surface here: `tk->keyboard` inserts at the `insert`
-  mark, `.t get a b` / `.t delete a b` / `.t index insert` / `.t mark
-  set insert L.C` / `.t tag add sel …` all work (verified in the
-  headless harness). So both apps can drop their bespoke line-buffer +
-  cursor + selection code and keep only a thin bridge: editor's 9P
-  server is already decoupled from the UI through the `editreq` channel
-  (`Rgetbody`/`Rsetbody`/`Rdoctl`/…), so point `getbodytext`/`setbodytext`
-  at `.t get 1.0 {end - 1 chars}` / `.t delete 1.0 end; .t insert end`,
-  and re-express the doc-ctl verbs (goto/find/replace/save) as text-widget
-  index ops. Undo is the one piece with no native equivalent — keep the
-  existing undo stack or gate it behind the widget.
+- **editor — view-of-model (done).** The `text` widget *can* own editing
+  (`tk->keyboard` inserts at `insert`; `get`/`delete`/`index`/`mark
+  set`/`tag add sel` all work), but it has **no native undo**. To keep
+  undo, find, and the agent-facing 9P body/addr/ctl bytewise-identical,
+  editor keeps its `Doc` line-buffer model as the single source of truth
+  and uses the text widget purely as a view: keys route to `handlekey`
+  (which edits `Doc`), then `rendertext()` rebuilds the widget from
+  `getbodytext()` and re-applies the cursor (`mark set insert`) and
+  selection (`sel` tag). The mouse is the exception — Tk handles it
+  natively (click/drag/double/triple), and `syncfromwidget()` mirrors the
+  resulting `insert`/`sel` back into `Doc`. The 9P server and every
+  `editreq` handler are untouched. **shell** can follow the same shape.
+  Note: the line-number gutter and cursor-blink were dropped (the widget
+  draws its own insert cursor); re-add a gutter via a second text widget
+  if wanted.
 - **settings — pure form, but big.** Nine category panels, each a column
   of the form widgets already proven (radio groups, entries, listboxes,
   checkbuttons, buttons). The only non-mechanical part is the dynamic

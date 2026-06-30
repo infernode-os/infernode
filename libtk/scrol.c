@@ -6,7 +6,7 @@
 
 /* Layout constants */
 enum {
-	Triangle	= 10,	/* bar thickness (was triangle height; no arrows now) */
+	Triangle	= 8,	/* bar thickness (was triangle height; no arrows now) */
 	Elembw	= 1,		/* border around elements */
 	Scrollbw	= 1,		/* bevel border on scrollbar */
 	Tribw=	1,	/* shadow border on triangle */

@@ -230,7 +230,7 @@ tkdrawbutton(Tk *tk, Point orig)
 	TkLabel *tkl;
 	Rectangle r, s, mainr, focusr;
 	int dx, dy, h;
-	Point p, u, v, pp[4];
+	Point p, u, v;
 	Image *i, *dst, *cd, *cl, *ct, *img;
 	int relief, bgnd, fgnd;
 
@@ -297,20 +297,18 @@ tkdrawbutton(Tk *tk, Point orig)
 		cd = tkgc(e, bgnd+TkDarkshade);
 		tkbevel(i, u, CheckButton, CheckButton, CheckButtonBW, cd, cl);
 		if(tkl->check) {
-			u.x += CheckButtonBW+1;
-			u.y += CheckButtonBW+1;
-			pp[0] = u;
-			pp[0].y += CheckButton/2-1;
-			pp[1] = pp[0];
-			pp[1].x += 2;
-			pp[1].y += 2;
-			pp[2] = u;
-			pp[2].x += CheckButton/4;
-			pp[2].y += CheckButton-2;
-			pp[3] = u;
-			pp[3].x += CheckButton-2;
-			pp[3].y++;
-			bezspline(i, pp, 4, Enddisc, Enddisc, 1, tkgc(e, TkCforegnd), ZP);
+			/*
+			 * Brutalist 2D: a crisp filled accent square, not a
+			 * bezier checkmark.  The spline rasterised jagged at
+			 * indicator size (no antialiasing); a filled rect is
+			 * exact and reads as a deliberate flat mark.
+			 */
+			Rectangle cr;
+			cr.min.x = u.x + CheckButtonBW + 2;
+			cr.min.y = u.y + CheckButtonBW + 2;
+			cr.max.x = u.x + CheckButton - CheckButtonBW - 2;
+			cr.max.y = u.y + CheckButton - CheckButtonBW - 2;
+			draw(i, cr, tkgc(e, TkCselect), nil, ZP);
 		}
 		break;
 	case TKradiobutton:

@@ -95,7 +95,7 @@ tkrgba(int r, int g, int b, int a)
 		b = 0;
 	else if(b > 255)
 		b = 255;
-	p = (r<<24)|(g<<16)|(b<<8)|0xFF;
+	p = ((ulong)r<<24)|(g<<16)|(b<<8)|0xFF;
 	if(a == 255)
 		return p;
 	return setalpha(p, a);

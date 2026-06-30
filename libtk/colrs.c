@@ -2,7 +2,7 @@
 #include "draw.h"
 #include "tk.h"
 
-#define RGB(R,G,B) (((R)<<24)|((G)<<16)|((B)<<8)|(0xff))
+#define RGB(R,G,B) (((ulong)(R)<<24)|((G)<<16)|((B)<<8)|(0xff))
 
 /*
  * Default Tk colour palette.

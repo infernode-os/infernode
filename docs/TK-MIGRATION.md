@@ -93,6 +93,10 @@ and passed as `-foreground #rrggbbff`.
   list instead (below). Under a real wm the channels block normally.
 - Colours round-trip cleanly now (`cget -background` → `#080808ff`); if
   you see 16-hex-digit colours, the engine sign-extension fix regressed.
+- **The `text` widget does not append an implicit trailing newline**
+  (unlike Tcl/Tk). `.t get 1.0 end` returns exactly what was inserted, so
+  don't subtract a trailing `{end - 1 chars}` expecting to strip one — you
+  will drop a real character. `tests/tk_test.b:testTextEdit` pins this.
 
 ## Verifying a migration (do all of these)
 

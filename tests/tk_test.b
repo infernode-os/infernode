@@ -227,6 +227,46 @@ testToggles(t: ref T)
 	t.assertseq(tk->cmd(top, "variable rgv"), "b", "radiobutton sets group variable");
 }
 
+# The text widget is the editing surface the editor and shell migrations
+# rely on as a view of their document/transcript model: typed keys insert
+# at the insert mark, content round-trips through get, the cursor is
+# addressable by index, ranges delete, and the sel tag drives selection.
+# This guards that path (libtk text widget editing) against regression.
+testTextEdit(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "text .t -wrap none");
+	tk->cmd(top, "pack .t");
+	tk->cmd(top, ".t insert end " + tk->quote("alpha\nbeta"));
+	# whole-buffer round-trip. Note: unlike Tcl/Tk, this text widget does
+	# not append an implicit trailing newline, so "1.0 end" is exact.
+	t.assertseq(tk->cmd(top, ".t get 1.0 end"), "alpha\nbeta",
+		"text round-trips through get");
+
+	# typed keys reach the focused widget at the insert mark
+	tk->cmd(top, ".t mark set insert {1.0 lineend}");
+	tk->cmd(top, "focus .t");
+	tk->cmd(top, "update");
+	s := "XY";
+	for(i := 0; i < len s; i++)
+		tk->keyboard(top, s[i]);
+	t.assertseq(tk->cmd(top, ".t get 1.0 {1.0 lineend}"), "alphaXY",
+		"typed keys insert at the cursor");
+	t.assertseq(tk->cmd(top, ".t index insert"), "1.7", "insert mark advances");
+
+	# delete a range by index
+	tk->cmd(top, ".t delete {1.0 + 5 chars} {1.0 + 7 chars}");
+	t.assertseq(tk->cmd(top, ".t get 1.0 {1.0 lineend}"), "alpha",
+		"range delete removes the typed chars");
+
+	# selection via the sel tag
+	tk->cmd(top, ".t tag add sel 2.0 {2.0 + 4 chars}");
+	t.assertseq(tk->cmd(top, ".t get sel.first sel.last"), "beta",
+		"sel tag selects the range");
+}
+
 # A label bound to a named bitmap image that is later filled with
 # tk->putimage must pick up the new image's size and contents.  libtk
 # had no Tk_ImageChanged-style notification, so the label kept its
@@ -306,6 +346,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ButtonInvoke",    testButtonInvoke);
 	run("Listbox",         testListbox);
 	run("Toggles",         testToggles);
+	run("TextEdit",        testTextEdit);
 	run("DynamicImage",    testDynamicImage);
 
 	if(testing->summary(passed, failed, skipped) > 0)

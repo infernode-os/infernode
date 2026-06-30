@@ -246,24 +246,29 @@ ensuredir(path: string)
 	sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
 }
 
-# Check if a path falls under a read-only bound namespace path.
-# Reads /tool/paths to find bound paths and their permissions.
-# Returns error string if path is read-only, nil if writable.
+# Permit the private workspace or the most-specific explicit rw grant.
 checkreadonly(path: string): string
 {
+	tmp := "/tmp/veltro";
+	if(len path >= len tmp && path[0:len tmp] == tmp &&
+	   (len path == len tmp || path[len tmp] == '/'))
+		return nil;
+
 	fd := sys->open("/tool/paths", Sys->OREAD);
 	if(fd == nil)
-		return nil;  # can't check — allow (fail-open)
-	buf := array[4096] of byte;
+		return "error: cannot verify writable path grants";
+	buf := array[65536] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
+	if(n < 0)
+		return "error: cannot read writable path grants";
+	if(n == len buf)
+		return "error: writable path grants exceed limit";
 	raw := string buf[0:n];
 
-	# Parse "path perm" lines; check if target is under any ro path
+	bestlen := -1;
+	bestperm := "";
 	i := 0;
 	while(i < len raw) {
-		# Find end of line
 		j := i;
 		while(j < len raw && raw[j] != '\n')
 			j++;
@@ -272,7 +277,6 @@ checkreadonly(path: string): string
 		if(line == "")
 			continue;
 
-		# Parse "boundpath perm" — find last space
 		sp := -1;
 		for(k := len line - 1; k > 0; k--)
 			if(line[k] == ' ') { sp = k; break; }
@@ -280,14 +284,16 @@ checkreadonly(path: string): string
 			continue;
 		bpath := line[0:sp];
 		perm := line[sp+1:];
-		if(perm != "ro")
-			continue;
-
-		# Check if target path is under this read-only bound path
-		if(len path >= len bpath && path[0:len bpath] == bpath) {
-			if(len path == len bpath || path[len bpath] == '/')
-				return sys->sprint("error: %s is read-only (bound with [ro] permission)", bpath);
+		if((perm == "ro" || perm == "rw") && len bpath > bestlen &&
+		   len path >= len bpath && path[0:len bpath] == bpath &&
+		   (len path == len bpath || path[len bpath] == '/')) {
+			bestlen = len bpath;
+			bestperm = perm;
 		}
 	}
-	return nil;
+	if(bestperm == "rw")
+		return nil;
+	if(bestperm == "ro")
+		return sys->sprint("error: %s is read-only", path);
+	return sys->sprint("error: %s is not covered by an rw path grant", path);
 }

@@ -1196,7 +1196,7 @@ emitmanifestnow(mpath: string)
 			allpaths = "/phone" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
-	);
+	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil)
@@ -1258,7 +1258,7 @@ applynsrestriction(): string
 			allpaths = "/n/wallet" :: allpaths;
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
-	);
+	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil) {

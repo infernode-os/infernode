@@ -165,6 +165,68 @@ testGeometry(t: ref T)
 	t.assert(ah > 0, sys->sprint("button actheight > 0 (got %d)", ah));
 }
 
+# Forms are driven headlessly in the migrated apps' tests, so make sure
+# the input path works: typed keys reach the focused entry.
+testEntryInput(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "entry .e -width 20");
+	tk->cmd(top, "pack .e");
+	tk->cmd(top, "focus .e");
+	tk->cmd(top, "update");
+	s := "hello";
+	for(i := 0; i < len s; i++)
+		tk->keyboard(top, s[i]);
+	tk->cmd(top, "update");
+	t.assertseq(tk->cmd(top, ".e get"), "hello", "typed text reaches entry");
+}
+
+# A button's -command fires on invoke (how the app tests click actions).
+testButtonInvoke(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "entry .e");
+	tk->cmd(top, ".e insert end {x}");
+	tk->cmd(top, "button .b -text Go -command {.e delete 0 end}");
+	tk->cmd(top, ".b invoke");
+	t.assertseq(tk->cmd(top, ".e get"), "", "button command cleared the entry");
+}
+
+testListbox(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "listbox .lb");
+	tk->cmd(top, ".lb insert end {alpha} {beta} {gamma}");
+	t.assertseq(tk->cmd(top, ".lb size"), "3", "listbox size");
+	tk->cmd(top, ".lb selection set 1");
+	t.assertseq(tk->cmd(top, ".lb curselection"), "1", "listbox selection");
+	t.assertseq(tk->cmd(top, ".lb get 1"), "beta", "listbox get selected");
+}
+
+testToggles(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	# checkbutton drives its -variable
+	tk->cmd(top, "variable ckv 0");
+	tk->cmd(top, "checkbutton .ck -text On -variable ckv");
+	tk->cmd(top, ".ck invoke");
+	t.assertseq(tk->cmd(top, "variable ckv"), "1", "checkbutton sets variable");
+	# radiobutton group shares one -variable, set to the chosen -value
+	tk->cmd(top, "variable rgv {}");
+	tk->cmd(top, "radiobutton .r1 -text A -variable rgv -value a");
+	tk->cmd(top, "radiobutton .r2 -text B -variable rgv -value b");
+	tk->cmd(top, ".r2 invoke");
+	t.assertseq(tk->cmd(top, "variable rgv"), "b", "radiobutton sets group variable");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -196,6 +258,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DefaultPalette",  testDefaultPalette);
 	run("ExplicitColour",  testExplicitColour);
 	run("Geometry",        testGeometry);
+	run("EntryInput",      testEntryInput);
+	run("ButtonInvoke",    testButtonInvoke);
+	run("Listbox",         testListbox);
+	run("Toggles",         testToggles);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

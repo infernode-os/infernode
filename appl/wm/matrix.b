@@ -40,19 +40,14 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
+
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "lucitheme.m";
-
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar, Label, Statusbar, Kbdfilter: import widgetmod;
-
-include "menu.m";
-	menumod: Menu;
-	Popup: import menumod;
 
 include "readdir.m";
 	readdir: Readdir;
@@ -140,10 +135,13 @@ comp: ref Composition;
 complock: chan of int;	# mutex for comp access
 
 # GUI state
-w: ref Window;
+top: ref Toplevel;
+wmctl: chan of string;
+actch: chan of string;
+mtximg: ref Image;	# off-screen composited frame, shown via a Tk label
+winr: Rect;		# current composited-frame rectangle
 display_g: ref Display;
 font_g: ref Font;
-kf: ref Kbdfilter;
 bgcolor: ref Image;
 divcolor: ref Image;
 textcolor: ref Image;
@@ -168,8 +166,7 @@ comppath: string;	# full path passed at startup or set by reload-from-disk
 compname: string;	# basename of comppath, or "" for unnamed/empty
 
 # Right-click menu state.  ctxmenuactions is a parallel array to
-# ctxmenu.items: action[i] is a verb consumed by domenuitem(i).
-ctxmenu: ref Popup;
+# the Tk .ctx menu items: action[i] is a verb consumed by domenuitem(i).
 ctxmenuactions: array of string;
 
 # Picker state.  When comp.layout is nil and we're in GUI mode, the
@@ -1076,49 +1073,70 @@ initgui(ctxt: ref Draw->Context)
 	if(draw == nil)
 		nomod(Draw->PATH);
 
-	wmclient = load Wmclient Wmclient->PATH;
-	if(wmclient == nil)
-		nomod(Wmclient->PATH);
-	wmclient->init();
+	tk = load Tk Tk->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
+	if(tk == nil || tkclient == nil)
+		nomod(Tk->PATH);
+	tkclient->init();
 
-	w = wmclient->window(ctxt, "Matrix", Wmclient->Appl);
-	display_g = w.display;
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
+	(top, wmctl) = tkclient->toplevel(ctxt, "-width 800 -height 600", "Matrix", Tkclient->Appl);
+	display_g = top.display;
 
 	font_g = Font.open(display_g, "/fonts/combined/unicode.sans.14.font");
 	if(font_g == nil)
 		font_g = Font.open(display_g, "*default*");
 
-	widgetmod = load Widget Widget->PATH;
-	if(widgetmod != nil)
-		widgetmod->init(display_g, font_g);
-
-	menumod = load Menu Menu->PATH;
-	if(menumod != nil) {
-		menumod->init(display_g, font_g);
-		ctxmenu = menumod->new(array[] of {"(menu)"});
-	}
-
 	if(readdir == nil)
 		readdir = load Readdir Readdir->PATH;
 
-	kf = Kbdfilter.new();
-
 	loadcolors();
 
-	w.reshape(Rect((0, 0), (800, 600)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
+	actch = chan[16] of string;
+	tk->namechan(top, actch, "act");
+
+	# The whole composited frame is a single Tk bitmap image in a label.
+	tkcmds(array[] of {
+		". configure -background #080808",
+		"image create bitmap mtx",
+		"label .l -image mtx -borderwidth 0",
+		"pack .l -fill both -expand 1",
+		"pack propagate . 0",
+		"bind .l <Button-3> {send act menu %X %Y}",
+	});
+	allocframe(800, 600);
+
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
 	updatech = chan of int;
 	themech = chan[1] of int;
 
-	# Compute initial layout
 	if(comp.layout != nil)
-		computelayout(comp.layout, w.image.r);
+		computelayout(comp.layout, winr);
 
 	dirty = 1;
 	spawn updatetimer();
 	spawn themelistener();
+}
+
+tkcmds(cmds: array of string)
+{
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "matrix: tk error %s on %s\n", e, cmds[i]);
+	}
+}
+
+# Allocate the off-screen composited frame at the given size.
+allocframe(wd, ht: int)
+{
+	if(wd < 1) wd = 1;
+	if(ht < 1) ht = 1;
+	winr = Rect((0,0), (wd, ht));
+	mtximg = display_g.newimage(winr, display_g.image.chans, 0, Draw->Nofill);
 }
 
 loadcolors()
@@ -1189,46 +1207,41 @@ guiloop()
 			dirty = 0;
 		}
 		alt {
-		ctl := <-w.ctl or
-		ctl = <-w.ctxt.ctl =>
-			if(ctl == nil)
-				;
-			else if(ctl[0] == '!') {
-				w.wmctl(ctl);
+		c := <-wmctl or
+		c = <-top.ctxt.ctl =>
+			tkclient->wmctl(top, c);
+			if(c != nil && len c > 0 && c[0] == '!') {
+				aw := int tk->cmd(top, ". cget -actwidth");
+				ah := int tk->cmd(top, ". cget -actheight");
+				if(aw > 0 && ah > 0)
+					allocframe(aw, ah);
 				if(comp.layout != nil)
-					computelayout(comp.layout, w.image.r);
+					computelayout(comp.layout, winr);
 				resizedisplaymodules(comp.layout);
 				dirty = 1;
-			} else
-				w.wmctl(ctl);
+			}
 
-		k := <-w.ctxt.kbd =>
+		k := <-top.ctxt.kbd =>
 			handlekey(k);
 
-		ptr := <-w.ctxt.ptr =>
-			if(ptr == nil)
-				;
-			else if(w.pointer(*ptr))
+		ptr := <-top.ctxt.ptr =>
+			if(ptr.buttons & 4) {
+				# B3: let the Tk binding fire and post the context menu.
+				tk->pointer(top, *ptr);
 				lastbtn1 = 0;
-			else if(ptr.buttons & 4 && menumod != nil && ctxmenu != nil) {
-				rebuildctxmenu();
-				n := ctxmenu.show(w.image, ptr.xy, w.ctxt.ptr);
-				if(n >= 0 && n < len ctxmenuactions)
-					domenuitem(ctxmenuactions[n]);
-				lastbtn1 = 0;
-				dirty = 1;
-			}
-			else if(comp == nil || comp.layout == nil) {
+			} else if(comp == nil || comp.layout == nil) {
 				# Empty-state picker: edge-triggered button-1 click.
 				cur := ptr.buttons & 1;
 				if(cur && !lastbtn1)
 					pickerclick(ptr.xy);
 				lastbtn1 = cur;
-			}
-			else {
+			} else {
 				lastbtn1 = ptr.buttons & 1;
 				handleptr(ptr);
 			}
+
+		a := <-actch =>
+			handleaction(a);
 
 		<-updatech =>
 			if(updatedisplaymodules(comp.layout))
@@ -1240,13 +1253,33 @@ guiloop()
 
 		<-themech =>
 			loadcolors();
-			if(widgetmod != nil)
-				widgetmod->retheme(display_g);
-			if(menumod != nil)
-				menumod->retheme(display_g);
-			if(wmclient != nil)
-				wmclient->retheme(w);
+			tkclient->wmctl(top, "retheme");
 			rethemedisplaymodules(comp.layout);
+			dirty = 1;
+		}
+	}
+}
+
+# Context-menu items (and any future bindings) post tokens here.
+handleaction(a: string)
+{
+	(nil, toks) := sys->tokenize(a, " ");
+	if(toks == nil)
+		return;
+	case hd toks {
+	"menu" =>
+		rebuildctxmenu();
+		x := "40"; y := "40";
+		if(tl toks != nil && tl tl toks != nil){
+			x = hd tl toks;
+			y = hd tl tl toks;
+		}
+		tk->cmd(top, sys->sprint(".ctx post %s %s", x, y));
+	"m" =>
+		if(tl toks != nil){
+			i := int hd tl toks;
+			if(i >= 0 && i < len ctxmenuactions)
+				domenuitem(ctxmenuactions[i]);
 			dirty = 1;
 		}
 	}
@@ -1283,10 +1316,10 @@ computelayout(node: ref LayoutNode, r: Rect)
 
 redraw()
 {
-	if(w == nil || w.image == nil)
+	if(top == nil || mtximg == nil)
 		return;
 
-	img := w.image;
+	img := mtximg;
 	img.draw(img.r, bgcolor, nil, (0, 0));
 
 	if(comp != nil && comp.layout != nil)
@@ -1294,10 +1327,9 @@ redraw()
 	else
 		drawpicker(img);
 
-	# INFR-27: window border is the wmclient frame (th.windowborder).
-	# Don't draw widget.contentborder here — it would paint th.accent
-	# over the wmclient frame and break border consistency across apps.
-	img.flush(Draw->Flushnow);
+	# Composite the off-screen frame into the Tk label.
+	tk->putimage(top, "mtx", img, nil);
+	tk->cmd(top, "update");
 }
 
 # drawpicker — empty-state body.  Lists every composition in
@@ -1577,8 +1609,6 @@ shutdownservicemodules()
 
 rebuildctxmenu()
 {
-	if(menumod == nil)
-		return;
 	labels: list of string;
 	actions: list of string;
 	# "Load ..." entries, one per pinned composition.
@@ -1605,14 +1635,19 @@ rebuildctxmenu()
 	# Convert to arrays.
 	nl := 0;
 	for(p := labels; p != nil; p = tl p) nl++;
-	larr := array[nl] of string;
 	aarr := array[nl] of string;
+	larr := array[nl] of string;
 	i := 0;
 	for(p = labels; p != nil; p = tl p) { larr[i] = hd p; i++; }
 	i = 0;
 	for(p = actions; p != nil; p = tl p) { aarr[i] = hd p; i++; }
-	ctxmenu = menumod->new(larr);
 	ctxmenuactions = aarr;
+	# Build the Tk menu: item i posts "act m i".
+	tk->cmd(top, "destroy .ctx");
+	tk->cmd(top, "menu .ctx");
+	for(i = 0; i < nl; i++)
+		tk->cmd(top, sys->sprint(".ctx add command -label %s -command {send act m %d}",
+			tk->quote(larr[i]), i));
 }
 
 domenuitem(action: string)
@@ -1703,8 +1738,6 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 
 handlekey(k: int)
 {
-	if(kf != nil)
-		k = kf.filter(k);
 	if(k < 0)
 		return;
 	if(focusmod != nil)
@@ -1732,7 +1765,7 @@ reloadcomposition(text: string)
 
 	# Reload
 	if(guimode && comp.layout != nil) {
-		computelayout(comp.layout, w.image.r);
+		computelayout(comp.layout, winr);
 		loaddisplaymodules();
 	}
 	loadservicemodules();

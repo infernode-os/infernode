@@ -133,9 +133,9 @@ and passed as `-foreground #rrggbbff`.
 | `wm/editor` | migrated | text widget as a view of the doc model |
 | `wm/shell` | migrated | terminal: text-widget view of transcript+input |
 | `wm/settings` | migrated | master-detail form (9 panels; theme switcher) |
-| `wm/matrix` + `matrix/*` | pending (design) | composition engine |
+| `wm/matrix` + `matrix/*` | migrated | composited frame via label+putimage |
 | `charon/gui` (+`layout`/`common`) | pending | HTML render + chrome |
-| Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
+| `cmd/luciconv` | pending | dialogue tiles |
 
 ### Notes for the pending migrations (learned while scoping)
 

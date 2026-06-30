@@ -38,13 +38,12 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Image, Point, Rect: import draw;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
 
-include "menu.m";
-	menumod: Menu;
-	Popup: import menumod;
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "string.m";
 	str: String;
@@ -52,10 +51,6 @@ include "string.m";
 include "sh.m";
 
 include "lucitheme.m";
-
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar, Statusbar, Kbdfilter: import widgetmod;
 
 include "arg.m";
 	arg: Arg;
@@ -111,24 +106,24 @@ MAXHIST: con 100;
 MAXBUTTONS: con 20;
 
 # --- Module-level state ---
+top: ref Toplevel;
+wmctl: chan of string;
+actch: chan of string;
 display_g: ref Display;
-font: ref Font;
-bgcolor: ref Image;
-fgcolor: ref Image;
-fgcolor_normal: ref Image;		# text color when focused, no hold
-fgcolor_dim: ref Image;		# text color when unfocused
-fgcolor_hold: ref Image;		# text color when holding
-cursorcolor: ref Image;
-selcolor: ref Image;
-promptcolor: ref Image;
-promptaccentcolor: ref Image;
-scrollbar: ref Scrollbar;
-statbar: ref Statusbar;
-
-w: ref Window;
 vislines: int;
 stderr: ref Sys->FD;
 themech: chan of int;
+prompting: int;			# unused placeholder (shell has no modal prompt)
+
+# Theme colours resolved to #rrggbbff strings for Tk
+c_bg:	string;
+c_fg:	string;
+c_dim:	string;
+c_hold:	string;
+c_sel:	string;
+c_prompt: string;
+
+SHFONT: con "/fonts/combined/unicode.14.font";
 
 # Transcript buffer of output lines
 lines: array of string;
@@ -163,9 +158,6 @@ snarfbuf: string;
 history: array of string;
 nhist: int;
 histpos: int;
-
-# ANSI escape decode state
-kbdfilter: ref Kbdfilter;
 
 # Channels
 outputch: chan of string;	# shell output arrives here
@@ -213,19 +205,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	wmclient = load Wmclient Wmclient->PATH;
-	menumod = load Menu Menu->PATH;
+	tk = load Tk Tk->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
 	str = load String String->PATH;
-	widgetmod = load Widget Widget->PATH;
 	stderr = sys->fildes(2);
-	if(widgetmod == nil) {
-		sys->fprint(stderr, "shell: cannot load Widget: %r\n");
-		raise "fail:cannot load Widget";
-	}
-
-	if(ctxt == nil) {
-		sys->fprint(stderr, "shell: no window context\n");
-		raise "fail:no context";
+	if(tk == nil || tkclient == nil) {
+		sys->fprint(stderr, "shell: cannot load Tk: %r\n");
+		raise "fail:cannot load Tk";
 	}
 
 	# Parse command-line arguments
@@ -266,7 +252,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	}
 
 	sys->pctl(Sys->NEWPGRP, nil);
-	wmclient->init();
+	tkclient->init();
 
 	# Get working directory
 	workdir = load Workdir Workdir->PATH;
@@ -311,60 +297,23 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# Start shell process (uses file2chan, must happen before window)
 	spawn startshell(ctxt);
 
-	# Create window
+	# Create the Tk toplevel
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
 	title := "Shell " + cwd;
-	w = wmclient->window(ctxt, title, Wmclient->Appl);
-	display_g = w.display;
+	(top, wmctl) = tkclient->toplevel(ctxt,
+		sys->sprint("-width %d -height %d", initwidth, initheight), title, Tkclient->Appl);
+	display_g = top.display;
 
-	# Load font
-	if(fontpath != "")
-		font = Font.open(display_g, fontpath);
-	if(font == nil)
-		font = Font.open(display_g, "/fonts/combined/unicode.14.font");
-	if(font == nil)
-		font = Font.open(display_g, "*default*");
-	if(font == nil) {
-		sys->fprint(stderr, "shell: cannot load any font\n");
-		raise "fail:no font";
-	}
+	loadcolors();
 
-	# Create color images from theme
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor = display_g.color(th.editbg);
-		fgcolor_normal = display_g.color(th.edittext);
-		fgcolor_dim = display_g.color(th.dim);
-		fgcolor_hold = display_g.color(th.yellow);
-		cursorcolor = display_g.color(th.editcursor);
-		selcolor = display_g.color(th.accent);
-		promptcolor = display_g.color(th.dim);
-		promptaccentcolor = display_g.color(th.accent);
-	} else {
-		bgcolor = display_g.color(BG);
-		fgcolor_normal = display_g.color(FG);
-		fgcolor_dim = display_g.color(PROMPTCOL);
-		fgcolor_hold = display_g.color(HOLDCOL);
-		cursorcolor = display_g.color(CURSORCOL);
-		selcolor = display_g.color(SELCOL);
-		promptcolor = display_g.color(PROMPTCOL);
-		promptaccentcolor = display_g.color(PROMPTCOL);
-	}
-	fgcolor = fgcolor_normal;
+	actch = chan[16] of string;
+	tk->namechan(top, actch, "act");
 
-	widgetmod->init(display_g, font);
-	kbdfilter = Kbdfilter.new();
-	scrollbar = Scrollbar.new(Rect((0,0),(0,0)), 1);
-	statbar = Statusbar.new(Rect((0,0),(0,0)));
+	buildui();
 
-	# Set up window
-	w.reshape(Rect((0, 0), (initwidth, initheight)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
-
-	if(menumod != nil)
-		menumod->init(display_g, font);
-	menu := makemenu();
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
 	# Initialize plumbing
 	plumbmod = load Plumbmsg Plumbmsg->PATH;
@@ -373,156 +322,33 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			plumbed = 1;
 	}
 
-	redraw();
+	rendertext();
 
-	# Cursor blink timer
+	# Periodic state writer
 	ticks := chan of int;
 	spawn timer(ticks, 500);
-	cursorvis := 1;
-	mousedown := 0;
 
 	# Listen for live theme changes
 	themech = chan[1] of int;
 	spawn themelistener();
 
 	for(;;) alt {
-	ctl := <-w.ctl or
-	ctl = <-w.ctxt.ctl =>
-		w.wmctl(ctl);
-		if(ctl != nil && ctl[0] == '!') {
-			redraw();
-		} else if(ctl != nil) {
-			handlectl(ctl);
-		}
-	rawkey := <-w.ctxt.kbd =>
-		key := kbdfilter.filter(rawkey);
-		if(key >= 0) {
-			cursorvis = 1;
-			handlekey(key);
-			shellstatedirty = 1;
-			redraw();
-		}
-	p := <-w.ctxt.ptr =>
-		if(!w.pointer(*p)) {
-			if(p.buttons & 4 && menumod != nil && menu != nil) {
-				n := menu.show(w.image, p.xy, w.ctxt.ptr);
-				domenu(n);
-				menu = makemenu();
-				redraw();
-			} else if(p.buttons & 2) {
-				buf := wmclient->snarfget();
-				if(buf != "")
-					snarfbuf = buf;
-				if(snarfbuf != "")
-					insertinput(snarfbuf);
-				redraw();
-			} else if(p.buttons & 24) {
-				# Mouse wheel scroll
-				scrollbar.total = nlines;
-				scrollbar.visible = vislines;
-				scrollbar.origin = topline;
-				topline = scrollbar.wheel(p.buttons, 3);
-				atbottom = (topline >= nlines - vislines);
-				redraw();
-			} else if(scrollbar.isactive()) {
-				# Continue scrollbar drag
-				scrollbar.total = nlines;
-				scrollbar.visible = vislines;
-				newo := scrollbar.track(p);
-				if(newo >= 0) {
-					topline = newo;
-					atbottom = (topline >= nlines - vislines);
-				}
-				redraw();
-			} else if(p.buttons & 3) {
-				# B1 or B2 in scrollbar area or button bar
-				pr := w.image.r;
-				sth := widgetmod->statusheight();
-				sw := widgetmod->scrollwidth();
-				scrollr := Rect((pr.min.x, pr.min.y),
-					(pr.min.x + sw, pr.max.y - sth));
-				if(scrollr.contains(p.xy)) {
-					scrollbar.total = nlines;
-					scrollbar.visible = vislines;
-					scrollbar.origin = topline;
-					newo := scrollbar.event(p);
-					if(newo >= 0) {
-						topline = newo;
-						atbottom = (topline >= nlines - vislines);
-					}
-					redraw();
-				} else if(p.buttons & 1 && nbuttons > 0 && buttonhit(p.xy)) {
-					redraw();
-				} else if(p.buttons & 1 && mousedown) {
-					# Selection drag — batch pending pointer events
-					done := 0;
-					while(!done) alt {
-					p2 := <-w.ctxt.ptr =>
-						if(p2.buttons & 1)
-							p = p2;
-						else {
-							p = p2;
-							done = 1;
-						}
-					* =>
-						done = 1;
-					}
-					(ml, mc) := pos2cursor(p.xy);
-					if(!(p.buttons & 1)) {
-						# Button released inside batch — finalize selection
-						if(ml != selstartline || mc != selstartcol) {
-							selactive = 1;
-							selendline = ml;
-							selendcol = mc;
-						}
-						curline = ml;
-						curcol = mc;
-						mousedown = 0;
-						redraw();
-					} else if(ml != selendline || mc != selendcol) {
-						selendline = ml;
-						selendcol = mc;
-						curline = ml;
-						curcol = mc;
-						selactive = (ml != selstartline || mc != selstartcol);
-						redraw();
-					}
-				} else {
-					(ml, mc) := pos2cursor(p.xy);
-					curline = ml;
-					curcol = mc;
-					selstartline = ml;
-					selstartcol = mc;
-					selendline = ml;
-					selendcol = mc;
-					selactive = 0;
-					mousedown = 1;
-					redraw();
-				}
-			} else if(mousedown) {
-				(ml, mc) := pos2cursor(p.xy);
-				if(ml != selstartline || mc != selstartcol) {
-					selactive = 1;
-					selendline = ml;
-					selendcol = mc;
-					curline = ml;
-					curcol = mc;
-				}
-				mousedown = 0;
-				redraw();
-			}
-		}
+	c := <-wmctl or
+	c = <-top.ctxt.ctl =>
+		tkclient->wmctl(top, c);
+		if(c != nil && len c > 0 && c[0] == '!')
+			rendertext();
+	key := <-top.ctxt.kbd =>
+		handlekey(key);
+		shellstatedirty = 1;
+		rendertext();
+	p := <-top.ctxt.ptr =>
+		# Tk owns mouse positioning / selection; mirror it back.
+		tk->pointer(top, *p);
+		syncfromwidget();
+	a := <-actch =>
+		handleaction(a);
 	<-ticks =>
-		cursorvis = !cursorvis;
-		drawcursor(cursorvis);
-		# Bare ESC timeout: if kbdfilter saw ESC but no [ within
-		# one tick, treat it as a genuine ESC (hold mode toggle).
-		if(kbdfilter.state == 1) {
-			kbdfilter.state = 0;
-			handlekey(Kesc);
-			shellstatedirty = 1;
-			redraw();
-		}
 		writeshellstate();
 	output := <-outputch =>
 		if(holding) {
@@ -537,37 +363,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			if(atbottom && scrolling)
 				scrolltobottom();
 			shellstatedirty = 1;
-			redraw();
+			rendertext();
 		}
 	cmd := <-shctlch =>
 		handleshctl(cmd);
-		redraw();
+		rendertext();
 	<-themech =>
 		reloadcolors();
-		redraw();
+		rendertext();
 	}
-}
-
-# ---------- Window control messages ----------
-
-handlectl(ctl: string)
-{
-	# Parse "haskbdfocus N"
-	if(len ctl > 13 && ctl[0:13] == "haskbdfocus ") {
-		haskbdfocus = int ctl[13:];
-		updatefgcolor();
-		redraw();
-	}
-}
-
-updatefgcolor()
-{
-	if(holding)
-		fgcolor = fgcolor_hold;
-	else if(haskbdfocus)
-		fgcolor = fgcolor_normal;
-	else
-		fgcolor = fgcolor_dim;
 }
 
 updatetitle()
@@ -575,55 +379,307 @@ updatetitle()
 	title := "Shell " + cwd;
 	if(holding)
 		title += " (holding)";
-	w.settitle(title);
+	tkclient->settitle(top, title);
 }
 
-# ---------- Context menu ----------
+# ---------- Context menu (B3) ----------
 
-makemenu(): ref Popup
+buildmenu()
 {
-	scrolllabel := "noscroll";
-	if(!scrolling)
-		scrolllabel = "scroll";
+	tk->cmd(top, "destroy .ctx");
+	tk->cmd(top, "menu .ctx");
+	mitem("cut", "cut");
+	mitem("snarf", "snarf");
+	mitem("paste", "paste");
+	mitem("send", "send");
 	if(plumbed)
-		return menumod->new(array[] of {
-			"cut", "snarf", "paste", "send",
-			"plumb", scrolllabel, "clear", "exit"});
-	return menumod->new(array[] of {
-		"cut", "snarf", "paste", "send",
-		scrolllabel, "clear", "exit"});
+		mitem("plumb", "plumb");
+	if(scrolling)
+		mitem("noscroll", "scroll");
+	else
+		mitem("scroll", "scroll");
+	mitem("clear", "clear");
+	tk->cmd(top, ".ctx add separator");
+	mitem("exit", "exit");
 }
 
-domenu(n: int)
+mitem(label, verb: string)
 {
-	if(plumbed) {
-		# Menu: cut snarf paste send plumb scroll clear exit
-		case n {
-		0 => docut();
-		1 => dosnarf();
-		2 => dopaste();
-		3 => dosend();
-		4 => doplumb();
-		5 => scrolling = !scrolling;
-		6 => clearscreen();
-		7 =>
-			postnote(1, sys->pctl(0, nil), "kill");
-			exit;
-		}
-	} else {
-		# Menu: cut snarf paste send scroll clear exit
-		case n {
-		0 => docut();
-		1 => dosnarf();
-		2 => dopaste();
-		3 => dosend();
-		4 => scrolling = !scrolling;
-		5 => clearscreen();
-		6 =>
-			postnote(1, sys->pctl(0, nil), "kill");
-			exit;
+	tk->cmd(top, sys->sprint(".ctx add command -label {%s} -command {send act %s}", label, verb));
+}
+
+menuxyt(toks: list of string): string
+{
+	if(toks != nil && tl toks != nil && tl tl toks != nil){
+		x := hd tl toks;
+		if(x != "" && x[0] >= '0' && x[0] <= '9')
+			return x + " " + hd tl tl toks;
+	}
+	return "40 40";
+}
+
+# Menu items and the dynamic button bar post tokens here.
+handleaction(a: string)
+{
+	(nil, toks) := sys->tokenize(a, " ");
+	if(toks == nil)
+		return;
+	tok := hd toks;
+	case tok {
+	"menu" =>
+		buildmenu();
+		tk->cmd(top, ".ctx post " + menuxyt(toks));
+	"cut" =>	docut(); rendertext();
+	"snarf" =>	dosnarf();
+	"paste" =>	dopaste(); rendertext();
+	"send" =>	dosend(); rendertext();
+	"plumb" =>	doplumb();
+	"scroll" =>	scrolling = !scrolling; rendertext();
+	"clear" =>	clearscreen(); rendertext();
+	"exit" =>
+		postnote(1, sys->pctl(0, nil), "kill");
+		exit;
+	"btn" =>
+		if(tl toks != nil){
+			i := int hd tl toks;
+			if(i >= 0 && i < nbuttons){
+				s := buttons[i].cmd;
+				if(len s > 0 && s[len s-1] != '\n')
+					s += "\n";
+				insertinput(s);
+				rendertext();
+			}
 		}
 	}
+}
+
+# ---------- UI construction ----------
+
+buildui()
+{
+	cmds := array[] of {
+		". configure -background " + c_bg,
+		"frame .main",
+		"scrollbar .main.sb -command {.main.t yview}",
+		"text .main.t -wrap char -yscrollcommand {.main.sb set}" +
+			" -font " + SHFONT +
+			" -background " + c_bg +
+			" -foreground " + c_fg +
+			" -selectbackground " + c_sel +
+			" -selectforeground " + c_bg,
+		"pack .main.sb -side left -fill y",
+		"pack .main.t -side left -fill both -expand 1",
+		"pack .main -side top -fill both -expand 1",
+		"frame .btns -background " + c_bg,
+		"label .status -anchor w -background " + c_bg + " -foreground " + c_dim,
+		"pack .status -side bottom -fill x",
+		"pack propagate . 0",
+		".main.t tag configure prompt -foreground " + c_prompt,
+		"bind .main.t <Button-3> {send act menu %X %Y}",
+	};
+	tkcmds(cmds);
+	tk->cmd(top, "focus .main.t");
+	tk->cmd(top, "update");
+}
+
+tkcmds(cmds: array of string)
+{
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "shell: tk error %s on %s\n", e, cmds[i]);
+	}
+}
+
+# ---------- Rendering: the text widget is a view of the transcript ----------
+
+# The full visible text is the transcript plus the live input line
+# (promptstr + inputbuf) standing in for the empty last buffer line.
+displaytext(): string
+{
+	s := "";
+	for(i := 0; i < nlines; i++){
+		if(i > 0)
+			s += "\n";
+		if(i == nlines - 1)
+			s += promptstr + inputbuf;
+		else
+			s += lines[i];
+	}
+	return s;
+}
+
+rendertext()
+{
+	if(top == nil)
+		return;
+	tk->cmd(top, ".main.t delete 1.0 end");
+	tk->cmd(top, ".main.t insert end " + tk->quote(displaytext()));
+	# tag the prompt portion of the input (last) line
+	if(promptstr != "")
+		tk->cmd(top, sys->sprint(".main.t tag add prompt %d.0 %d.%d",
+			nlines, nlines, len promptstr));
+	# selection
+	tk->cmd(top, ".main.t tag remove sel 1.0 end");
+	if(selactive)
+		tk->cmd(top, sys->sprint(".main.t tag add sel %d.%d %d.%d",
+			selstartline+1, selstartcol, selendline+1, selendcol));
+	tk->cmd(top, sys->sprint(".main.t mark set insert %d.%d", curline+1, curcol));
+	if(atbottom)
+		tk->cmd(top, ".main.t see end");
+	else
+		tk->cmd(top, ".main.t see insert");
+	recalcvis();
+	rebuildbuttons();
+	updatestatus();
+	tk->cmd(top, "update");
+}
+
+# After native mouse handling, copy the widget cursor and selection back.
+syncfromwidget()
+{
+	(l, c) := parseindex(tk->cmd(top, ".main.t index insert"));
+	if(l >= 0){
+		curline = l;
+		curcol = c;
+	}
+	sf := tk->cmd(top, ".main.t index sel.first");
+	if(sf != nil && len sf > 0 && sf[0] >= '0' && sf[0] <= '9'){
+		(a, b) := parseindex(sf);
+		(d, e) := parseindex(tk->cmd(top, ".main.t index sel.last"));
+		if(a >= 0 && d >= 0){
+			selactive = 1;
+			selstartline = a; selstartcol = b;
+			selendline = d; selendcol = e;
+		}
+	} else
+		selactive = 0;
+	updatestatus();
+}
+
+parseindex(s: string): (int, int)
+{
+	if(s == nil || len s == 0 || s[0] < '0' || s[0] > '9')
+		return (-1, 0);
+	(ls, cs) := splitdot(s);
+	(l, nil) := str->toint(ls, 10);
+	(c, nil) := str->toint(cs, 10);
+	return (l - 1, c);
+}
+
+splitdot(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '.')
+			return (s[:i], s[i+1:]);
+	return (s, "0");
+}
+
+recalcvis()
+{
+	ah := int tk->cmd(top, ".main.t cget -actheight");
+	rowpx := 16;
+	if(ah > 0)
+		vislines = ah / rowpx;
+	if(vislines < 1)
+		vislines = 1;
+}
+
+# Rebuild the dynamic button bar (shell ctl can add labelled buttons).
+nbuttons_drawn := -1;
+rebuildbuttons()
+{
+	if(nbuttons == nbuttons_drawn)
+		return;
+	nbuttons_drawn = nbuttons;
+	tk->cmd(top, "destroy .btns");
+	tk->cmd(top, "frame .btns -background " + c_bg);
+	if(nbuttons > 0){
+		for(i := 0; i < nbuttons; i++)
+			tk->cmd(top, sys->sprint("button .btns.b%d -text %s -command {send act btn %d}; pack .btns.b%d -side left -padx 2",
+				i, tk->quote(buttons[i].label), i, i));
+		tk->cmd(top, "pack .btns -side bottom -fill x -before .status");
+	}
+}
+
+updatestatus()
+{
+	if(top == nil)
+		return;
+	<-rawlock;
+	israw := rawon;
+	rawlock <-= 1;
+	mode := "cooked";
+	if(israw)
+		mode = "raw";
+	status := sys->sprint("Shell (%s)  %d lines", mode, nlines);
+	if(holding)
+		status += "  HOLD";
+	if(!scrolling)
+		status += "  noscroll";
+	fg := c_dim;
+	if(holding)
+		fg = c_hold;
+	tk->cmd(top, ".status configure -foreground " + fg + " -text " + tk->quote(status));
+}
+
+# ---------- Colour management ----------
+
+col(v: int): string
+{
+	return sys->sprint("#%06xff", v & 16rFFFFFF);
+}
+
+loadcolors()
+{
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme != nil){
+		th := lucitheme->gettheme();
+		c_bg = col(th.editbg);
+		c_fg = col(th.edittext);
+		c_dim = col(th.dim);
+		c_hold = col(th.yellow);
+		c_sel = col(th.accent);
+		c_prompt = col(th.dim);
+	} else {
+		c_bg = col(BG >> 8);
+		c_fg = col(FG >> 8);
+		c_dim = col(PROMPTCOL >> 8);
+		c_hold = col(HOLDCOL >> 8);
+		c_sel = col(SELCOL >> 8);
+		c_prompt = col(PROMPTCOL >> 8);
+	}
+}
+
+# ---------- System clipboard via /chan/snarf ----------
+
+snarfput(s: string)
+{
+	fd := sys->create("/chan/snarf", Sys->OWRITE, 8r666);
+	if(fd == nil)
+		fd = sys->open("/chan/snarf", Sys->OWRITE);
+	if(fd != nil){
+		b := array of byte s;
+		sys->write(fd, b, len b);
+	}
+}
+
+snarfget(): string
+{
+	fd := sys->open("/chan/snarf", Sys->OREAD);
+	if(fd == nil)
+		return snarfbuf;
+	s := "";
+	buf := array[4096] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s += string buf[:n];
+	}
+	if(s == "")
+		return snarfbuf;
+	return s;
 }
 
 docut()
@@ -639,13 +695,13 @@ dosnarf()
 	s := getseltext();
 	if(s != "") {
 		snarfbuf = s;
-		wmclient->snarfput(s);
+		snarfput(s);
 	}
 }
 
 dopaste()
 {
-	buf := wmclient->snarfget();
+	buf := snarfget();
 	if(buf != "")
 		snarfbuf = buf;
 	if(snarfbuf != "")
@@ -670,7 +726,7 @@ dosend()
 	# If there's no selection, fall back to snarf buffer.
 	s := getseltext();
 	if(s == "") {
-		buf := wmclient->snarfget();
+		buf := snarfget();
 		if(buf != "")
 			snarfbuf = buf;
 		s = snarfbuf;
@@ -1207,7 +1263,6 @@ handlekey(key: int)
 			# Flush queued output
 			flushholdqueue();
 		}
-		updatefgcolor();
 		updatetitle();
 	* =>
 		if(key >= 16r20) {
@@ -1395,36 +1450,10 @@ clearscreen()
 	curcol = len promptstr;
 }
 
+# The Tk text widget owns scrolling; rendertext() does ".main.t see end"
+# whenever atbottom is set, so this just records the intent.
 scrolltobottom()
 {
-	if(vislines <= 0) {
-		topline = 0;
-		return;
-	}
-	textr := textrect();
-	maxpx := textr.dx();
-
-	# Work backwards from the last line, counting visual rows,
-	# to find the topline that shows the bottom of the transcript.
-	vrows := 0;
-	topline = 0;
-	for(i := nlines - 1; i >= 0; i--) {
-		line: string;
-		if(i == nlines - 1)
-			line = promptstr + inputbuf;
-		else
-			line = lines[i];
-		lrows := linevisrows(line, maxpx);
-		if(vrows + lrows > vislines) {
-			topline = i + 1;
-			if(topline >= nlines)
-				topline = nlines - 1;
-			atbottom = 1;
-			return;
-		}
-		vrows += lrows;
-	}
-	topline = 0;
 	atbottom = 1;
 }
 
@@ -1476,59 +1505,6 @@ getlineat(row: int): string
 	return promptstr + inputbuf;
 }
 
-pos2cursor(p: Point): (int, int)
-{
-	if(w.image == nil)
-		return (0, 0);
-
-	textr := textrect();
-	maxpx := textr.dx();
-	vy := p.y - textr.min.y;
-	if(vy < 0)
-		vy = 0;
-	targetvrow := 0;
-	if(font.height > 0)
-		targetvrow = vy / font.height;
-
-	# Walk logical lines from topline, counting visual rows with wrapping
-	vrow := 0;
-	total := nlines;
-	for(i := topline; i < total; i++) {
-		if(i < 0) continue;
-		line := getlineat(i);
-		if(len line == 0) {
-			if(vrow == targetvrow)
-				return (i, 0);
-			vrow++;
-		} else {
-			start := 0;
-			while(start < len line) {
-				end := wrapend(line, start, maxpx);
-				if(vrow == targetvrow) {
-					x := p.x - textr.min.x;
-					if(x < 0) x = 0;
-					col := start;
-					w2 := 0;
-					for(j := start; j < end; j++) {
-						cw := font.width(line[j:j+1]);
-						if(w2 + cw/2 > x)
-							break;
-						w2 += cw;
-						col++;
-					}
-					return (i, col);
-				}
-				vrow++;
-				start = end;
-			}
-		}
-	}
-	# Past end
-	if(total > 0)
-		return (total - 1, len getlineat(total - 1));
-	return (0, 0);
-}
-
 getsel(): (int, int, int, int)
 {
 	if(!selactive)
@@ -1569,313 +1545,9 @@ getseltext(): string
 
 # ---------- Drawing ----------
 
-textrect(): Rect
-{
-	if(w.image == nil)
-		return Rect((0,0),(0,0));
-	r := w.image.r;
-	statusheight := font.height + MARGIN * 2;
-	sw := widgetmod->scrollwidth();
-	bbarh := buttonbarheight();
-	return Rect((r.min.x + sw + MARGIN, r.min.y + MARGIN),
-		    (r.max.x - MARGIN, r.max.y - statusheight - bbarh));
-}
-
-buttonbarheight(): int
-{
-	if(nbuttons <= 0)
-		return 0;
-	return font.height + MARGIN * 2;
-}
-
-redraw()
-{
-	if(w.image == nil)
-		return;
-
-	screen := w.image;
-	r := screen.r;
-	statusheight := font.height + MARGIN * 2;
-	bbarh := buttonbarheight();
-
-	screen.draw(r, bgcolor, nil, Point(0, 0));
-
-	textr := textrect();
-	maxvrows := 1;
-	if(font.height > 0)
-		maxvrows = textr.dy() / font.height;
-
-	sw := widgetmod->scrollwidth();
-	scrollbar.resize(Rect((r.min.x, r.min.y),
-		(r.min.x + sw, r.max.y - statusheight - bbarh)));
-	scrollbar.total = nlines;
-	scrollbar.visible = vislines;
-	scrollbar.origin = topline;
-	scrollbar.draw(screen);
-
-	y := textr.min.y;
-	vrow := 0;
-	maxpx := textr.dx();
-
-	# Draw transcript lines with wrapping
-	for(i := topline; i < nlines - 1 && vrow < maxvrows; i++) {
-		if(i < 0) continue;
-		line := lines[i];
-		if(len line == 0) {
-			if(selactive)
-				drawselwrap(screen, i, 0, 0, textr.min.x, y);
-			y += font.height;
-			vrow++;
-		} else {
-			start := 0;
-			while(start < len line && vrow < maxvrows) {
-				end := wrapend(line, start, maxpx);
-				if(selactive)
-					drawselwrap(screen, i, start, end, textr.min.x, y);
-				screen.text(Point(textr.min.x, y), fgcolor,
-					Point(0, 0), font, line[start:end]);
-				y += font.height;
-				vrow++;
-				start = end;
-			}
-		}
-	}
-
-	# Draw input line (prompt + inputbuf) with wrapping
-	if(vrow < maxvrows) {
-		inputline := promptstr + inputbuf;
-		if(len inputline == 0) {
-			if(selactive)
-				drawselwrap(screen, nlines - 1, 0, 0, textr.min.x, y);
-			y += font.height;
-			vrow++;
-		} else {
-			plen := len promptstr;
-			start := 0;
-			while(start < len inputline && vrow < maxvrows) {
-				end := wrapend(inputline, start, maxpx);
-				if(selactive)
-					drawselwrap(screen, nlines - 1, start, end, textr.min.x, y);
-				# Color prompt portion differently from user input
-				if(start < plen) {
-					pend := plen;
-					if(pend > end) pend = end;
-					drawpromptchunk(screen, textr.min.x, y, inputline[start:pend]);
-					if(pend < end) {
-						px := textr.min.x + font.width(inputline[start:pend]);
-						screen.text(Point(px, y), fgcolor,
-							Point(0, 0), font, inputline[pend:end]);
-					}
-				} else {
-					screen.text(Point(textr.min.x, y), fgcolor,
-						Point(0, 0), font, inputline[start:end]);
-				}
-				y += font.height;
-				vrow++;
-				start = end;
-			}
-		}
-	}
-
-	vislines = maxvrows;
-
-	drawcursor(1);
-
-	# Button bar
-	if(nbuttons > 0)
-		drawbuttonbar(screen, r, statusheight);
-
-	# Status bar
-	statbar.resize(Rect((r.min.x, r.max.y - statusheight), r.max));
-	<-rawlock;
-	israw_s := rawon;
-	rawlock <-= 1;
-	mode := "cooked";
-	if(israw_s)
-		mode = "raw";
-	statbar.prompt = nil;
-	status := sys->sprint("Shell (%s)  %d lines", mode, nlines);
-	if(holding)
-		status += "  HOLD";
-	if(!scrolling)
-		status += "  noscroll";
-	statbar.left = status;
-	statbar.right = sys->sprint("Ln %d", nlines);
-	if(holding)
-		statbar.leftcolor = fgcolor_hold;
-	else
-		statbar.leftcolor = nil;
-	statbar.draw(screen);
-	screen.flush(Draw->Flushnow);
-}
-
-drawbuttonbar(screen: ref Image, r: Rect, statusheight: int)
-{
-	bbarh := buttonbarheight();
-	bbary := r.max.y - statusheight - bbarh;
-	x := r.min.x + MARGIN;
-	for(i := 0; i < nbuttons; i++) {
-		b := buttons[i];
-		tw := font.width(b.label);
-		bw := tw + MARGIN * 4;
-		br := Rect((x, bbary + 1), (x + bw, bbary + bbarh - 1));
-		# Button border
-		screen.line(br.min, Point(br.max.x, br.min.y), 0, 0, 0, fgcolor_dim, Point(0, 0));
-		screen.line(Point(br.max.x, br.min.y), br.max, 0, 0, 0, fgcolor_dim, Point(0, 0));
-		screen.line(br.max, Point(br.min.x, br.max.y), 0, 0, 0, fgcolor_dim, Point(0, 0));
-		screen.line(Point(br.min.x, br.max.y), br.min, 0, 0, 0, fgcolor_dim, Point(0, 0));
-		# Button label
-		screen.text(Point(x + MARGIN * 2, bbary + MARGIN), fgcolor_normal,
-			Point(0, 0), font, b.label);
-		x += bw + MARGIN;
-	}
-}
-
-buttonhit(p: Point): int
-{
-	if(nbuttons <= 0 || w.image == nil)
-		return 0;
-	r := w.image.r;
-	statusheight := font.height + MARGIN * 2;
-	bbarh := buttonbarheight();
-	bbary := r.max.y - statusheight - bbarh;
-	if(p.y < bbary || p.y >= bbary + bbarh)
-		return 0;
-	x := r.min.x + MARGIN;
-	for(i := 0; i < nbuttons; i++) {
-		b := buttons[i];
-		tw := font.width(b.label);
-		bw := tw + MARGIN * 4;
-		if(p.x >= x && p.x < x + bw) {
-			# Button hit — send its command as input
-			s := b.cmd;
-			if(len s > 0 && s[len s - 1] != '\n')
-				s += "\n";
-			insertinput(s);
-			return 1;
-		}
-		x += bw + MARGIN;
-	}
-	return 0;
-}
-
 # Draw selection highlight for one wrapped chunk of a logical line.
 # chunkstart..chunkend is the character range of this visual chunk.
-drawselwrap(screen: ref Image, linenum, chunkstart, chunkend, textx, y: int)
-{
-	(sl, sc, el, ec) := getsel();
-	if(linenum < sl || linenum > el)
-		return;
-
-	line := getlineat(linenum);
-
-	# Selection range for this logical line
-	selstart := 0;
-	selend := len line;
-	if(linenum == sl) selstart = sc;
-	if(linenum == el) selend = ec;
-
-	# Clip to this chunk
-	if(selstart < chunkstart) selstart = chunkstart;
-	if(selend > chunkend) selend = chunkend;
-	if(selstart >= selend)
-		return;
-
-	# Pixel positions relative to chunk start
-	startx := textx + font.width(line[chunkstart:selstart]);
-	endx := textx + font.width(line[chunkstart:selend]);
-	selr := Rect((startx, y), (endx, y + font.height));
-	screen.draw(selr, selcolor, nil, Point(0, 0));
-}
-
 # Draw a prompt chunk with the ';' character in accent color.
-drawpromptchunk(screen: ref Image, x, y: int, chunk: string)
-{
-	# Find last semicolon for accent coloring
-	semi := -1;
-	for(i := len chunk - 1; i >= 0; i--)
-		if(chunk[i] == ';') {
-			semi = i;
-			break;
-		}
-	if(semi < 0) {
-		# No semicolon — all in promptcolor
-		screen.text(Point(x, y), promptcolor, Point(0, 0), font, chunk);
-		return;
-	}
-	# Text before semicolon
-	if(semi > 0) {
-		screen.text(Point(x, y), promptcolor, Point(0, 0), font, chunk[0:semi]);
-		x += font.width(chunk[0:semi]);
-	}
-	# The semicolon in accent
-	screen.text(Point(x, y), promptaccentcolor, Point(0, 0), font, chunk[semi:semi+1]);
-	x += font.width(chunk[semi:semi+1]);
-	# Text after semicolon
-	if(semi + 1 < len chunk)
-		screen.text(Point(x, y), promptcolor, Point(0, 0), font, chunk[semi+1:]);
-}
-
-drawcursor(vis: int)
-{
-	if(w.image == nil)
-		return;
-	if(curline < topline)
-		return;
-
-	textr := textrect();
-	maxpx := textr.dx();
-	maxvrows := 1;
-	if(font.height > 0)
-		maxvrows = textr.dy() / font.height;
-
-	# Walk from topline counting visual rows to find cursor line
-	vrow := 0;
-	for(i := topline; i < curline && vrow < maxvrows; i++) {
-		if(i < 0) continue;
-		line := getlineat(i);
-		vrow += linevisrows(line, maxpx);
-	}
-	if(vrow >= maxvrows)
-		return;
-
-	# Find which visual chunk of curline contains curcol
-	line := getlineat(curline);
-	cpos := curcol;
-
-	if(len line == 0) {
-		y := textr.min.y + vrow * font.height;
-		x := textr.min.x;
-		c := cursorcolor;
-		if(!vis)
-			c = bgcolor;
-		w.image.line(Point(x, y), Point(x, y + font.height - 1),
-			0, 0, 0, c, Point(0, 0));
-		w.image.flush(Draw->Flushnow);
-		return;
-	}
-
-	start := 0;
-	while(start < len line && vrow < maxvrows) {
-		end := wrapend(line, start, maxpx);
-		if(cpos >= start && (cpos < end || end >= len line)) {
-			y := textr.min.y + vrow * font.height;
-			x := textr.min.x;
-			if(cpos > start)
-				x += font.width(line[start:cpos]);
-			c := cursorcolor;
-			if(!vis)
-				c = bgcolor;
-			w.image.line(Point(x, y), Point(x, y + font.height - 1),
-				0, 0, 0, c, Point(0, 0));
-			w.image.flush(Draw->Flushnow);
-			return;
-		}
-		vrow++;
-		start = end;
-	}
-}
-
 # ---------- Real-file IPC ----------
 
 initshelldirs()
@@ -1930,40 +1602,6 @@ writestatefile(path, data: string)
 
 # ---------- Text wrapping ----------
 
-# Compute end index (exclusive) of next visual chunk of s starting at
-# position start, fitting within maxpx pixels.  Guarantees >= 1 char.
-wrapend(s: string, start, maxpx: int): int
-{
-	if(start >= len s)
-		return len s;
-	w := 0;
-	k := start;
-	while(k < len s) {
-		cw := font.width(s[k:k+1]);
-		if(w + cw > maxpx)
-			break;
-		w += cw;
-		k++;
-	}
-	if(k == start)
-		k++;		# at least one char per chunk
-	return k;
-}
-
-# Count visual rows a logical line occupies at a given pixel width.
-linevisrows(line: string, maxpx: int): int
-{
-	if(maxpx <= 0 || len line == 0)
-		return 1;
-	rows := 0;
-	start := 0;
-	while(start < len line) {
-		start = wrapend(line, start, maxpx);
-		rows++;
-	}
-	return rows;
-}
-
 # ---------- Helpers ----------
 
 themelistener()
@@ -1989,23 +1627,17 @@ themelistener()
 
 reloadcolors()
 {
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor = display_g.color(th.editbg);
-		fgcolor_normal = display_g.color(th.edittext);
-		fgcolor_dim = display_g.color(th.dim);
-		fgcolor_hold = display_g.color(th.yellow);
-		cursorcolor = display_g.color(th.editcursor);
-		selcolor = display_g.color(th.accent);
-		promptcolor = display_g.color(th.dim);
-		promptaccentcolor = display_g.color(th.accent);
-	}
-	updatefgcolor();
-	widgetmod->retheme(display_g);
-	wmclient->retheme(w);
-	if(menumod != nil)
-		menumod->retheme(display_g);
+	loadcolors();
+	if(top == nil)
+		return;
+	tkclient->wmctl(top, "retheme");
+	tkcmds(array[] of {
+		". configure -background " + c_bg,
+		".main.t configure -background " + c_bg + " -foreground " + c_fg +
+			" -selectbackground " + c_sel + " -selectforeground " + c_bg,
+		".main.t tag configure prompt -foreground " + c_prompt,
+		".status configure -background " + c_bg,
+	});
 }
 
 timer(c: chan of int, ms: int)

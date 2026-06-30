@@ -162,7 +162,7 @@ roundtrip(t: ref T, label: string, serverAlgs: list of string, clientAlg: string
 	if(sys->write(wrapped, msg, len msg) != len msg)
 		t.fatal(sys->sprint("%s: encrypted write failed: %r", label));
 
-	tmo := chan of int;
+	tmo := chan[1] of int;
 	spawn timerproc(tmo, 15000);
 	ok: int;
 	serr: string;
@@ -176,12 +176,32 @@ roundtrip(t: ref T, label: string, serverAlgs: list of string, clientAlg: string
 	t.log(sys->sprint("%s: 256 bytes round-tripped", label));
 }
 
+rejectsubset(t: ref T, label, clientAlg: string)
+{
+	(srv, cli) := setup();
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.fatal(sys->sprint("pipe failed: %r"));
+	rc := chan of (int, string);
+	spawn serverside(fds[0], srv, "aes_256_cbc"::"sha256"::nil, 0, rc);
+	auth->client(clientAlg, cli, fds[1]);
+	(ok, err) := <-rc;
+	t.asserteq(ok, 0, label + ": incomplete policy rejected");
+	t.assert(err != nil, label + ": server reports policy error");
+}
+
 # ---- cipher sweep (sha256 MAC) ----
 testAes256(t: ref T)  { roundtrip(t, "aes_256_cbc/sha256", "aes_256_cbc"::"sha256"::nil, "aes_256_cbc sha256"); }
 testAes128(t: ref T)  { roundtrip(t, "aes_128_cbc/sha256", "aes_128_cbc"::"sha256"::nil, "aes_128_cbc sha256"); }
+testCipherAlternative(t: ref T) { roundtrip(t, "aes alternative with sha256", "aes_256_cbc"::"aes_128_cbc"::"sha256"::nil, "aes_128_cbc sha256"); }
+testHashOnlySubset(t: ref T) { rejectsubset(t, "sha256-only subset", "sha256"); }
+testCipherOnlySubset(t: ref T) { rejectsubset(t, "aes-only subset", "aes_256_cbc"); }
+testEmptySubset(t: ref T) { rejectsubset(t, "empty subset", ""); }
+testHashOnlyPolicy(t: ref T) { roundtrip(t, "intentional sha256-only policy", "sha256"::nil, "sha256"); }
 
 # ---- unencrypted path ----
 testNone(t: ref T) { roundtrip(t, "none", nil, "none"); }
+testExplicitNone(t: ref T) { roundtrip(t, "explicit none", "none"::"aes_256_cbc"::"sha256"::nil, "none"); }
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -216,7 +236,13 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Aes256Sha256", testAes256);
 	run("Aes128Sha256", testAes128);
+	run("CipherAlternative", testCipherAlternative);
+	run("HashOnlyPolicySubset", testHashOnlySubset);
+	run("CipherOnlyPolicySubset", testCipherOnlySubset);
+	run("EmptyPolicySubset", testEmptySubset);
+	run("IntentionalHashOnlyPolicy", testHashOnlyPolicy);
 	run("NoEncryption", testNone);
+	run("ExplicitNoEncryption", testExplicitNone);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

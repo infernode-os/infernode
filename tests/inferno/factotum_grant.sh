@@ -12,4 +12,6 @@ echo '--- websearch granted: expect VISIBLE + keylen=15 ---'
 /tests/factotum_grant_test.dis with
 echo '--- no websearch: expect HIDDEN ---'
 /tests/factotum_grant_test.dis without
+echo '--- websearch plus exec: expect HIDDEN ---'
+/tests/factotum_grant_test.dis withexec
 echo FACGRANT DONE

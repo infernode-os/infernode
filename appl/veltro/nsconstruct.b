@@ -306,15 +306,13 @@ restrictns(caps: ref Capabilities): string
 			uimnt = 1;
 		}
 	}
-	# /mnt/factotum — the credential agent. Granted ONLY to a child that holds a
-	# tool which authenticates via factotum (e.g. websearch → Brave). The tool
-	# then resolves its own key with getuserpasswd (the standard Inferno
-	# pattern) — no plaintext key file. SECURITY NOTE: a child granted
-	# /mnt/factotum that ALSO holds exec/shell could read other credentials via
-	# arbitrary commands. That is an accepted, documented exposure (exec/shell is
-	# a known-dangerous tool); revisit with per-credential scoping if it matters
-	# (INFR-363). Children without a credentialed tool never see factotum.
-	if(inlist("websearch", caps.tools)) {
+	# /mnt/factotum — the credential agent. A fixed-function tool can receive it
+	# only when the same agent cannot execute arbitrary code. Otherwise exec or
+	# shell could query unrelated credentials stored in the shared factotum.
+	# Mixed grants fail closed: websearch reports its key unavailable. A future
+	# per-credential broker may safely remove this incompatibility (INFR-363).
+	if(inlist("websearch", caps.tools) &&
+	   !inlist("exec", caps.tools) && !inlist("shell", caps.tools)) {
 		(facok, nil) := sys->stat("/mnt/factotum");
 		if(facok >= 0 && !inlist("factotum", mntpaths))
 			mntpaths = "factotum" :: mntpaths;

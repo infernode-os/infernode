@@ -215,7 +215,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Namespace restriction (v3): FORKNS + bind-replace
 	# Load nsconstruct module (must happen while /dis is unrestricted)
 	nsconstruct = load NsConstruct NsConstruct->PATH;
-	if(nsconstruct != nil) {
+	if(nsconstruct == nil) {
+		sys->fprint(stderr, "veltro: cannot load namespace confinement: %r\n");
+		raise "fail:namespace";
+	} else {
 		nsconstruct->init();
 
 		# Read tools list before restriction to grant correct capabilities.
@@ -244,8 +247,14 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 
 		# Fork namespace so caller is unaffected
-		sys->pctl(Sys->FORKNS, nil);
-		sys->pctl(Sys->NODEVS, nil);
+		if(sys->pctl(Sys->FORKNS, nil) < 0) {
+			sys->fprint(stderr, "veltro: cannot fork namespace: %r\n");
+			raise "fail:namespace";
+		}
+		if(sys->pctl(Sys->NODEVS, nil) < 0) {
+			sys->fprint(stderr, "veltro: cannot disable device attachment: %r\n");
+			raise "fail:namespace";
+		}
 
 		parent_caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
@@ -253,9 +262,10 @@ init(nil: ref Draw->Context, args: list of string)
 
 		# Apply namespace restrictions
 		nserr := nsconstruct->restrictns(parent_caps);
-		if(nserr != nil)
+		if(nserr != nil) {
 			sys->fprint(stderr, "veltro: namespace restriction failed: %s\n", nserr);
-		else {
+			raise "fail:namespace";
+		} else {
 			if(verbose)
 				sys->fprint(stderr, "veltro: namespace restricted\n");
 			# Emit namespace manifest from the restricted namespace

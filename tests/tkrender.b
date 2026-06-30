@@ -20,6 +20,20 @@ include "tk.m"; tk: Tk;
 	Toplevel: import tk;
 Tkrender: module { init: fn(ctxt: ref Draw->Context, argv: list of string); };
 
+# turn the two-char sequence \n into a real newline
+unescape(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++){
+		if(i + 1 < len s && s[i] == '\\' && s[i+1] == 'n'){
+			out[len out] = '\n';
+			i++;
+		} else
+			out[len out] = s[i];
+	}
+	return out;
+}
+
 init(nil: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -62,6 +76,9 @@ init(nil: ref Draw->Context, argv: list of string)
 			line = line[:len line-1];
 		if(len line == 0 || line[0] == '#')
 			continue;
+		# allow \n in the command file to stand for a real newline,
+		# so multi-line text content (e.g. a man page) can be tested
+		line = unescape(line);
 		e := tk->cmd(top, line);
 		if(e != nil && len e > 0 && e[0] == '!')
 			sys->fprint(stderr, "tkrender: %s -> %s\n", line, e);

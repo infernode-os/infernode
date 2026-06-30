@@ -791,8 +791,6 @@ tkdelpanelimage(TkTop *t, Image *i)
 	free(pi);
 }
 
-static int putimage_entry_count = 0;
-
 void
 Tk_putimage(void *a)
 {
@@ -808,9 +806,6 @@ Tk_putimage(void *a)
 	Tk *tk;
 
 	f = a;
-	putimage_entry_count++;
-	fprint(2, "TK_PUTIMAGE[%d]: entry, f->t=%p f->i=%p f->name='%s'\n",
-		putimage_entry_count, f->t, f->i, f->name != H ? string2c(f->name) : "<nil>");
 
 	r = *f->ret;
 	*f->ret = H;
@@ -818,13 +813,11 @@ Tk_putimage(void *a)
 
 	t = (TkTop*)f->t;
 	if(t == H || D2H(t)->t != fakeTkTop) {
-		fprint(2, "  -> FAILED: not a toplevel\n");
 		retstr(TkNotop, f->ret);
 		return;
 	}
 
 	if(f->i == H) {
-		fprint(2, "  -> FAILED: image is H (nil)\n");
 		retstr(TkBadvl, f->ret);
 		return;
 	}
@@ -1163,8 +1156,6 @@ tkdestroywinimage(Tk *tk)
 	tkwreq(top, "delete %s", name);
 }
 
-static int putimage_count = 0;
-
 static char*
 tkputwinimage(Tk *tk, Draw_Image *di, int reqid)
 {
@@ -1174,19 +1165,11 @@ tkputwinimage(Tk *tk, Draw_Image *di, int reqid)
 	int bw2, prop, resize;
 	Rectangle req;
 
-	putimage_count++;
-	fprint(2, "TKPUTWINIMAGE[%d]: window '%s' di=%p reqid=%d\n",
-		putimage_count, tk->name ? tk->name->name : "?", di, reqid);
-
 	top = tk->env->top;
 	tkw = TKobj(TkWin, tk);
 	i = lookupimage(di);
-	if (i == nil || i->display != top->display) {
-		fprint(2, "  -> FAILED: i=%p (nil=%d, display mismatch=%d)\n",
-			i, i == nil, i != nil && i->display != top->display);
+	if (i == nil || i->display != top->display)
 		return TkNotwm;
-	}
-	fprint(2, "  -> image rect=(%d,%d)-(%d,%d)\n", i->r.min.x, i->r.min.y, i->r.max.x, i->r.max.y);
 
 	if(reqid != -1 && reqid < tkw->reqid)
 		return "!request out of date";

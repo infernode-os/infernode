@@ -1182,6 +1182,162 @@ jobs:
         retention-days: 3
 
   # ─────────────────────────────────────────────
+  # macOS ARM64 headless: emulator + toolchain tarball (no GUI)
+  # ─────────────────────────────────────────────
+  macos-arm64-headless:
+    name: macOS ARM64 headless
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+    - name: Stamp build version
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        BUILD_DATE=$(date +%Y%m%d)
+        SHORT_SHA=${GITHUB_SHA::8}
+        sed -i '' "s|InferNode 0.1|InferNode ${VERSION} build ${BUILD_DATE}-${SHORT_SHA}|" include/version.h
+        echo "Version: $(cat include/version.h)"
+
+    - name: Install build dependencies
+      # libfido2 for /dev/2fa. sdl3/opus are referenced by shared device
+      # objects at link time even though the headless backend carries no SDL
+      # runtime dependency. openssl@3 keg-only pkgconfig fix lives in the mkfile.
+      run: brew install sdl3 sdl3_ttf opus libfido2
+
+    - name: Build mk
+      run: |
+        chmod +x makemk.sh
+        ./makemk.sh
+        test -x MacOSX/arm64/bin/mk || { echo "mk build failed"; exit 1; }
+
+    - name: Build system libraries
+      run: |
+        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        for dir in lib9 libbio libmp libsec libmath; do
+          echo "Building $dir..."
+          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        done
+
+    - name: Build limbo compiler
+      run: |
+        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        (cd limbo && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        test -x MacOSX/arm64/bin/limbo || { echo "limbo not found"; exit 1; }
+
+    - name: Build libinterp and remaining libraries
+      run: |
+        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        (cd libinterp && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        for dir in libfreetype libkeyring libdraw libmemdraw libmemlayer; do
+          echo "Building $dir..."
+          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || true
+        done
+
+    - name: Build headless emulator
+      run: |
+        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        cd emu/MacOSX
+        mk clean 2>/dev/null || true
+        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=headless
+        test -f o.emu || { echo "Headless emulator build failed"; exit 1; }
+        otool -L o.emu | grep -qi libSDL \
+          && echo "note: headless emu links libSDL (will be bundled)" \
+          || echo "no SDL runtime dependency (correct for headless)"
+
+    - name: Bundle libfido2 for /dev/2fa
+      run: |
+        # Self-contain libfido2 and its cbor/crypto/opus deps next to o.emu so
+        # /dev/2fa works without Homebrew on an end user's Mac. Mirrors the GUI
+        # job; guards the silent HAVE_FIDO2-off regression that shipped 2fa as
+        # a dead stub. bundle_homebrew_deps pulls in any /opt/homebrew dep
+        # (including SDL if the headless link references it).
+        bundle_homebrew_deps() {
+          otool -L "$1" | awk '/\/opt\/homebrew\// {print $1}' | while read -r dep; do
+            base=$(basename "$dep")
+            if [ ! -f "emu/MacOSX/$base" ]; then
+              cp "$dep" "emu/MacOSX/$base"
+              chmod u+w "emu/MacOSX/$base"
+              install_name_tool -id "@executable_path/$base" "emu/MacOSX/$base"
+              bundle_homebrew_deps "emu/MacOSX/$base"
+            fi
+            install_name_tool -change "$dep" "@executable_path/$base" "$1"
+          done
+        }
+        bundle_homebrew_deps emu/MacOSX/o.emu
+        echo "Load paths:"; otool -L emu/MacOSX/o.emu | grep -iE "fido|cbor|crypto|opus" || true
+        if otool -L emu/MacOSX/o.emu | grep -q "/opt/homebrew"; then
+          echo "ERROR: o.emu still references absolute /opt/homebrew paths"; exit 1
+        fi
+        if ! otool -L emu/MacOSX/o.emu | grep -q "@executable_path/libfido2"; then
+          echo "ERROR: libfido2 not linked — /dev/2fa would ship as a stub"; exit 1
+        fi
+
+    - name: Package archive
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        STAGE="infernode-${VERSION}-macos-arm64"
+        mkdir -p "$STAGE/emu/MacOSX" "$STAGE/MacOSX/arm64/bin"
+
+        # Headless emulator + bundled dylibs (libfido2 + cbor/crypto/opus)
+        cp emu/MacOSX/o.emu "$STAGE/emu/MacOSX/"
+        cp emu/MacOSX/*.dylib "$STAGE/emu/MacOSX/" 2>/dev/null || true
+        cp MacOSX/arm64/bin/limbo MacOSX/arm64/bin/mk "$STAGE/MacOSX/arm64/bin/"
+        strip "$STAGE/emu/MacOSX/o.emu" "$STAGE/MacOSX/arm64/bin/limbo" "$STAGE/MacOSX/arm64/bin/mk" 2>/dev/null || true
+
+        # Shared runtime tree
+        for d in dis lib fonts module services locale usr mnt; do
+          [ -d "$d" ] && cp -a "$d" "$STAGE/"
+        done
+
+        # tmp directory (needed by profile)
+        mkdir -p "$STAGE/tmp"
+
+        # mkconfig and mkfiles (needed for building from source)
+        cp mkconfig "$STAGE/"
+        [ -d mkfiles ] && cp -a mkfiles "$STAGE/"
+
+        # Headless launcher (drops to the Inferno ';' shell)
+        printf '#!/bin/sh\nDIR=$(cd "$(dirname "$0")" && pwd)\nexec "$DIR/emu/MacOSX/o.emu" -c1 -r"$DIR" sh -l "$@"\n' > "$STAGE/infernode-headless"
+        chmod +x "$STAGE/infernode-headless"
+
+        # Build scripts (so users can rebuild, incl. the SDL3 GUI)
+        for s in build-macos-headless.sh build-macos-sdl3.sh makemk.sh; do
+          [ -f "$s" ] && cp "$s" "$STAGE/" && chmod +x "$STAGE/$s"
+        done
+
+        # Docs and legal
+        for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
+          [ -f "$f" ] && cp "$f" "$STAGE/"
+        done
+
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Load-bearing — survives source-tree refactor.
+        if find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in release stage:" >&2
+          find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
+
+        tar czf "${STAGE}.tar.gz" -C "$STAGE" .
+        echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
+
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: infernode-macos-arm64-headless-archive
+        path: infernode-*-macos-arm64.tar.gz
+        retention-days: 3
+
+  # ─────────────────────────────────────────────
   # Windows AMD64: SDL3 GUI emulator + launcher
   # ─────────────────────────────────────────────
   windows-amd64:
@@ -1416,7 +1572,7 @@ jobs:
   # ─────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos-arm64, windows-amd64]
+    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos-arm64, macos-arm64-headless, windows-amd64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -1504,12 +1660,15 @@ jobs:
           | Linux | ARM64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-linux-arm64-gui.tar.gz` |
           | Linux | ARM64 (headless) | `infernode-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
           | macOS | ARM64 (Apple Silicon, SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
+          | macOS | ARM64 (Apple Silicon, headless) | `infernode-${{ steps.version.outputs.version }}-macos-arm64.tar.gz` |
           | Windows | AMD64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-windows-amd64-gui.zip` |
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
 
           ### Quick Start
 
-          **macOS:** Open the DMG, drag InferNode.app to Applications, double-click to launch
+          **macOS (GUI):** Open the DMG, drag InferNode.app to Applications, double-click to launch
+
+          **macOS (headless):** Extract the tarball, clear the Gatekeeper quarantine on the bundle (`xattr -dr com.apple.quarantine <extracted-dir>`), then `./infernode-headless`. The headless tarball is signed with Sigstore cosign but not Apple-notarized (same posture as the Linux/Windows headless artifacts).
 
           **Linux (GUI):** Extract, then `./infernode`
 

@@ -116,9 +116,10 @@ and passed as `-foreground #rrggbbff`.
 | `wm/wallet` | migrated | form + dropdown + two-pane |
 | `wm/man` | migrated | text viewer (text widget + tags) |
 | `wm/fractals` | migrated | dynamic image (off-screen draw + putimage) |
+| `wm/ftree` | migrated | tree as listbox (flattened visible nodes) |
 | `wm/settings` | pending | form (largest; theme switcher) |
 | `wm/editor`, `wm/shell` | pending | editable text widget |
-| `wm/matrix`, `wm/ftree` | pending | canvas / custom draw |
+| `wm/matrix` | pending | canvas / custom draw |
 | `charon/gui`, `matrix/*`, Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
 
 Verified empirically and reusable:
@@ -127,7 +128,17 @@ Verified empirically and reusable:
   (read with `getvalue`), `.b invoke`, typed keys into focused entry;
 - text viewer: `text` widget tags (heading/bold/italic/link), `-wrap
   none`, `search -nocase`, `tag add a a+Nc`, `see`, `yview scroll/moveto`;
-- menus post at the pointer via `bind <Button-3> {send act menu %X %Y}`.
+- tree view: flatten the visible nodes and render them as `listbox`
+  rows (indent with spaces, prefix an expand/collapse marker); drive
+  selection with `.lb curselection` / `selection set` / `see`, expand on
+  `<Double-Button-1>`, and reuse the row text for the AI-context dump;
+- menus post at the pointer via `bind <Button-3> {send act menu %X %Y}`,
+  with each item carrying its own action verb (`-command {send act foo}`)
+  so there is no positional index to keep in sync;
+- a status strip that doubles as a prompt: pack a hidden `entry` into the
+  status row on demand, `focus` it, and read it back on `<Key-\n>` (embed
+  the Escape rune via `sprint "<Key-%c>" 16r1b` — `\x1b` isn't a Limbo
+  string escape).
 
 When no app uses `widget.m` / `lucitheme`-via-widget anymore, delete
 `module/widget.m`, `appl/lib/widget.b`, and their tests, and drop them

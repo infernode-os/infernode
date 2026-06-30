@@ -1,14 +1,17 @@
 implement Ftree;
 
 #
-# wm/ftree - Draw-based namespace browser and file tree viewer
+# wm/ftree - namespace browser and file tree viewer
 #
 # Browse the Inferno namespace as an expandable tree with live
 # namespace metadata.  Shows bind sources, mount points, union
 # directory layers, and permission flags inline.  Supports
 # interactive namespace manipulation (bind, unmount).
 #
-# Uses the native widget toolkit — no Tk.
+# Tk UI: the flattened visible tree is a listbox (one row per node,
+# indented with an expand/collapse marker), a scrollbar, and a status
+# strip that doubles as the goto/bind prompt.  All non-UI logic (tree
+# model, namespace parse, plumb, IPC) is toolkit-independent.
 #
 # Usage:
 #   wm/ftree [-n] [root]
@@ -41,13 +44,12 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Image, Point, Rect: import draw;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
 
-include "menu.m";
-	menumod: Menu;
-	Popup: import menumod;
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "readdir.m";
 	readdir: Readdir;
@@ -56,10 +58,6 @@ include "string.m";
 	str: String;
 
 include "lucitheme.m";
-
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar, Statusbar, Kbdfilter: import widgetmod;
 
 include "arg.m";
 	arg: Arg;
@@ -153,25 +151,29 @@ nsops:		list of ref NsOp;	# parsed /dev/ns entries
 nsmode:		int;			# 1 = show namespace annotations
 nssnapshot:	string;			# snapshot of /dev/ns for change detection
 
-# Display resources
+# Tk host
+top:		ref Toplevel;
+wmctl:		chan of string;
+actch:		chan of string;
+themech:	chan of int;
 display:	ref Display;
-font:		ref Font;
-bfont:		ref Font;
-bgcolor:	ref Image;
-fgcolor:	ref Image;
-dircol:		ref Image;
-selcolor:	ref Image;
-dimcolor:	ref Image;
-mntcolor:	ref Image;
-devcolor:	ref Image;
-accentcol:	ref Image;
-
-scrollbar:	ref Scrollbar;
-statbar:	ref Statusbar;
-kbdfilter:	ref Kbdfilter;
-
-w:		ref Window;
 stderr:		ref Sys->FD;
+
+# Theme colours (resolved to #rrggbbff strings for Tk)
+c_bg:		string;
+c_fg:		string;
+c_dir:		string;
+c_accent:	string;
+c_dim:		string;
+c_mnt:		string;
+c_dev:		string;
+
+# Listbox row font (pixels are derived by Tk)
+LISTFONT:	con "/fonts/combined/unicode.sans.14.font";
+
+# Status / prompt state
+prompting:	int;		# 1 while the status entry is shown
+statusmsg:	string;		# transient right-hand status message
 
 rootpath:	string;
 
@@ -189,14 +191,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	wmclient = load Wmclient Wmclient->PATH;
-	menumod = load Menu Menu->PATH;
+	tk = load Tk Tk->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
 	readdir = load Readdir Readdir->PATH;
 	str = load String String->PATH;
 	stderr = sys->fildes(2);
 
-	if(wmclient == nil) {
-		sys->fprint(stderr, "wm/ftree: cannot load Wmclient: %r\n");
+	if(tk == nil || tkclient == nil) {
+		sys->fprint(stderr, "wm/ftree: cannot load Tk: %r\n");
 		raise "fail:init";
 	}
 	if(readdir == nil) {
@@ -204,20 +206,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		raise "fail:init";
 	}
 
-	widgetmod = load Widget Widget->PATH;
-	if(widgetmod == nil) {
-		sys->fprint(stderr, "wm/ftree: cannot load Widget: %r\n");
-		raise "fail:init";
-	}
-	kbdfilter = Kbdfilter.new();
-
-	if(ctxt == nil) {
-		sys->fprint(stderr, "wm/ftree: no window context\n");
-		raise "fail:no context";
-	}
-
 	sys->pctl(Sys->NEWPGRP, nil);
-	wmclient->init();
+	tkclient->init();
 
 	# Parse arguments
 	rootpath = "/";
@@ -236,23 +226,19 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	if(argv != nil)
 		rootpath = hd argv;
 
-	# Create window
-	w = wmclient->window(ctxt, "ftree", Wmclient->Appl);
-	display = w.display;
+	# Create the Tk toplevel
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
+	(top, wmctl) = tkclient->toplevel(ctxt, "-width 480 -height 560", "ftree", Tkclient->Appl);
+	display = top.display;
 
-	# Load fonts
-	font = Font.open(display, "/fonts/combined/unicode.sans.14.font");
-	if(font == nil)
-		font = Font.open(display, "*default*");
-	bfont = Font.open(display, "/fonts/combined/unicode.sans.bold.14.font");
-	if(bfont == nil)
-		bfont = font;
-
-	# Load theme colours
 	loadcolors();
-	widgetmod->init(display, font);
-	scrollbar = Scrollbar.new(Rect((0,0),(0,0)), 1);
-	statbar = Statusbar.new(Rect((0,0),(0,0)));
+
+	# Action channel: widgets and bindings post tokens here.
+	actch = chan[16] of string;
+	tk->namechan(top, actch, "act");
+
+	buildui();
 
 	# Parse namespace
 	nsops = nil;
@@ -274,13 +260,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		rebuildvisible();
 	}
 
-	w.reshape(Rect((0, 0), (480, 560)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
-
-	if(menumod != nil)
-		menumod->init(display, bfont);
-	menu := menumod->newgen(menugenfn);
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
 	# Veltro IPC
 	initftreedir();
@@ -293,7 +274,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	spawn nswatcher(nsch);
 
 	# Theme listener
-	themech := chan[1] of int;
+	themech = chan[1] of int;
 	spawn themelistener(themech);
 
 	redraw();
@@ -309,110 +290,161 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	<-ticks =>
 		if(checkctlfile())
 			redraw();
-	ctl := <-w.ctl or
-	ctl = <-w.ctxt.ctl =>
-		w.wmctl(ctl);
-		if(ctl != nil && ctl[0] == '!')
+	c := <-wmctl or
+	c = <-top.ctxt.ctl =>
+		tkclient->wmctl(top, c);
+		if(c != nil && len c > 0 && c[0] == '!')
 			redraw();
-
-	rawkey := <-w.ctxt.kbd =>
-		key := kbdfilter.filter(rawkey);
-		if(key >= 0) {
-			if(statbar.prompt != nil) {
-				(done, val) := statbar.key(key);
-				if(done == 1) {
-					statbar.prompt = nil;
-					handleprompt(val);
-					promptmode = PROMPT_NONE;
-				} else if(done < 0) {
-					statbar.prompt = nil;
-					promptmode = PROMPT_NONE;
-				}
-				redraw();
-			} else
-				handlekey(key);
-		}
-
-	p := <-w.ctxt.ptr =>
-		if(p.buttons == 0 && scrollbar.isactive()) {
-			newo := scrollbar.track(p);
-			if(newo >= 0) {
-				topline = newo;
-				redraw();
-			}
-		} else if(scrollbar.isactive()) {
-			newo := scrollbar.track(p);
-			if(newo >= 0) {
-				topline = newo;
-				redraw();
-			}
-		} else if(p.buttons & 16r18) {
-			scrollbar.total = nvisible;
-			scrollbar.visible = vislines;
-			scrollbar.origin = topline;
-			topline = scrollbar.wheel(p.buttons, 3);
-			redraw();
-		} else if(p.buttons & 4) {
-			# Button 3 — context menu
-			if(menu != nil) {
-				n := menu.show(w.image, p.xy, w.ctxt.ptr);
-				handlemenu(n);
-			}
-		} else if(p.buttons & 2) {
-			# Button 2 — plumb
-			plumbselected();
-		} else if(p.buttons & 1) {
-			sr := scrollrect();
-			if(sr.contains(p.xy)) {
-				scrollbar.total = nvisible;
-				scrollbar.visible = vislines;
-				scrollbar.origin = topline;
-				newo := scrollbar.event(p);
-				if(newo >= 0) {
-					topline = newo;
-					redraw();
-				}
-			} else {
-				clicktree(p.xy);
-			}
-		} else
-			w.pointer(*p);
+	key := <-top.ctxt.kbd =>
+		if(prompting)
+			tk->keyboard(top, key);
+		else
+			handlekey(key);
+	p := <-top.ctxt.ptr =>
+		tk->pointer(top, *p);
+	a := <-actch =>
+		handleaction(a);
 	}
+}
+
+# ---------- UI construction ----------
+
+buildui()
+{
+	cmds := array[] of {
+		". configure -background " + c_bg,
+		"frame .main",
+		"scrollbar .main.sb -command {.main.lb yview}",
+		"listbox .main.lb -yscrollcommand {.main.sb set} -selectmode browse" +
+			" -font " + LISTFONT +
+			" -background " + c_bg +
+			" -foreground " + c_fg +
+			" -selectbackground " + c_accent +
+			" -selectforeground " + c_bg,
+		"pack .main.sb -side left -fill y",
+		"pack .main.lb -side left -fill both -expand 1",
+		"pack .main -side top -fill both -expand 1",
+		"label .status -anchor w -background " + c_bg + " -foreground " + c_dim,
+		"entry .prompt -background " + c_bg + " -foreground " + c_fg,
+		"pack .status -side bottom -fill x",
+		"pack propagate . 0",
+		# selection / activation / context bindings on the listbox
+		"bind .main.lb <ButtonRelease-1> {send act sel}",
+		"bind .main.lb <Double-Button-1> {send act activate}",
+		"bind .main.lb <Button-2> {send act plumb}",
+		"bind .main.lb <Button-3> {send act menu %X %Y}",
+		# prompt entry posts its contents back to us on Return
+		"bind .prompt <Key-\n> {send act promptdone}",
+	};
+	tkcmds(cmds);
+	# Escape cancels the prompt; the ESC rune (0x1b) can't be written as a
+	# Limbo string escape, so embed it with sprint.
+	tk->cmd(top, sys->sprint("bind .prompt <Key-%c> {send act promptcancel}", 16r1b));
+	tk->cmd(top, "update");
+}
+
+tkcmds(cmds: array of string)
+{
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "wm/ftree: tk error %s on %s\n", e, cmds[i]);
+	}
+}
+
+# ---------- Action dispatch ----------
+
+handleaction(a: string)
+{
+	(nil, toks) := sys->tokenize(a, " ");
+	if(toks == nil)
+		return;
+	tok := hd toks;
+	case tok {
+	"sel" =>
+		syncselection();
+		statusmsg = "";
+		writeftreestate();
+		updatestatus();
+	"activate" =>
+		syncselection();
+		activateselected();
+		redraw();
+	"plumb" =>
+		syncselection();
+		plumbselected();
+	"menu" =>
+		syncselection();
+		buildmenu();
+		tk->cmd(top, ".ctx post " + menuxyt(toks));
+	"promptdone" =>
+		val := tk->cmd(top, ".prompt get");
+		endprompt();
+		handleprompt(val);
+		promptmode = PROMPT_NONE;
+		redraw();
+	"promptcancel" =>
+		endprompt();
+		promptmode = PROMPT_NONE;
+		redraw();
+	* =>
+		# context-menu items send their verb directly (mopen, mbind, ...)
+		if(len tok > 0 && tok[0] == 'm')
+			handlemenu(tok);
+	}
+}
+
+# Pull the listbox's current selection back into `selected`.
+syncselection()
+{
+	s := tk->cmd(top, ".main.lb curselection");
+	if(s != nil && len s > 0 && s[0] >= '0' && s[0] <= '9')
+		selected = int s;
+}
+
+menuxyt(toks: list of string): string
+{
+	if(toks != nil && tl toks != nil && tl tl toks != nil){
+		x := hd tl toks;
+		if(x != "" && x[0] >= '0' && x[0] <= '9')
+			return x + " " + hd tl tl toks;
+	}
+	return "40 40";
 }
 
 # ---------- Context menu ----------
 
-menugenfn(m: ref Popup)
+# Rebuild the B3 context menu for the current selection.  Items carry an
+# explicit action verb (-command {send act <verb>}), so there is no
+# positional index to keep in sync.
+buildmenu()
 {
+	tk->cmd(top, "destroy .ctx");
+	tk->cmd(top, "menu .ctx");
 	if(selected >= 0 && selected < nvisible) {
-		ni := visible[selected];
-		n := nodes[ni];
-		if(n.isdir) {
-			if(n.bindsrc != nil)
-				m.items = array[] of {
-					"open", "bind here...",
-					"unmount", "expand all",
-					"collapse all", "refresh",
-					"ns mode " + nsmodetoggle(),
-					"goto", "exit"};
-			else
-				m.items = array[] of {
-					"open", "bind here...",
-					"expand all", "collapse all",
-					"refresh",
-					"ns mode " + nsmodetoggle(),
-					"goto", "exit"};
-		} else
-			m.items = array[] of {
-				"plumb", "bind here...",
-				"refresh",
-				"ns mode " + nsmodetoggle(),
-				"goto", "exit"};
-	} else
-		m.items = array[] of {
-			"refresh",
-			"ns mode " + nsmodetoggle(),
-			"goto", "exit"};
+		nd := nodes[visible[selected]];
+		if(nd.isdir) {
+			mitem("open", "mopen");
+			mitem("bind here...", "mbind");
+			if(nd.bindsrc != nil)
+				mitem("unmount", "munmount");
+			mitem("expand all", "mexpandall");
+			mitem("collapse all", "mcollapseall");
+		} else {
+			mitem("plumb", "mplumb");
+			mitem("bind here...", "mbind");
+		}
+	}
+	mitem("refresh", "mrefresh");
+	mitem("ns mode " + nsmodetoggle(), "mnsmode");
+	mitem("goto", "mgoto");
+	tk->cmd(top, ".ctx add separator");
+	mitem("exit", "mexit");
+}
+
+mitem(label, verb: string)
+{
+	tk->cmd(top, sys->sprint(".ctx add command -label {%s} -command {send act %s}", label, verb));
 }
 
 nsmodetoggle(): string
@@ -422,55 +454,22 @@ nsmodetoggle(): string
 	return "on";
 }
 
-handlemenu(n: int)
+# Context-menu actions arrive on the action channel as bare verbs.
+handlemenu(verb: string)
 {
-	if(n < 0)
-		return;
-	if(selected < 0 || selected >= nvisible) {
-		# No selection — limited menu
-		case n {
-		0 =>	refreshtree();
-		1 =>	togglensmode();
-		2 =>	startgoto();
-		3 =>	exit;
-		}
-		return;
-	}
-
-	ni := visible[selected];
-	nd := nodes[ni];
-	if(nd.isdir && nd.bindsrc != nil) {
-		case n {
-		0 =>	activateselected();
-		1 =>	startbind();
-		2 =>	dounmount(nd.path);
-		3 =>	expandall();
-		4 =>	collapseall();
-		5 =>	refreshtree();
-		6 =>	togglensmode();
-		7 =>	startgoto();
-		8 =>	exit;
-		}
-	} else if(nd.isdir) {
-		case n {
-		0 =>	activateselected();
-		1 =>	startbind();
-		2 =>	expandall();
-		3 =>	collapseall();
-		4 =>	refreshtree();
-		5 =>	togglensmode();
-		6 =>	startgoto();
-		7 =>	exit;
-		}
-	} else {
-		case n {
-		0 =>	plumbselected();
-		1 =>	startbind();
-		2 =>	refreshtree();
-		3 =>	togglensmode();
-		4 =>	startgoto();
-		5 =>	exit;
-		}
+	case verb {
+	"mopen" =>	activateselected(); redraw();
+	"mplumb" =>	plumbselected();
+	"mbind" =>	startbind();
+	"munmount" =>
+		if(selected >= 0 && selected < nvisible)
+			dounmount(nodes[visible[selected]].path);
+	"mexpandall" =>	expandall();
+	"mcollapseall" =>	collapseall();
+	"mrefresh" =>	refreshtree();
+	"mnsmode" =>	togglensmode();
+	"mgoto" =>	startgoto();
+	"mexit" =>	exit;
 	}
 }
 
@@ -534,13 +533,32 @@ handleprompt(val: string)
 		if(val != nil && len val > 0) {
 			bindsrc_pending = val;
 			promptmode = PROMPT_BIND_FLAGS;
-			statbar.prompt = "Flags [-b|-a|-bc]: ";
-			statbar.buf = "";
+			beginprompt("Flags [-b|-a|-bc]:");
 		}
 	PROMPT_BIND_FLAGS =>
 		dobind(bindsrc_pending, val);
 		bindsrc_pending = "";
 	}
+}
+
+# Swap the status label for the prompt entry, label it, and focus it.
+beginprompt(label: string)
+{
+	prompting = 1;
+	tk->cmd(top, sys->sprint(".status configure -text {%s}", label));
+	tk->cmd(top, ".prompt delete 0 end");
+	tk->cmd(top, "pack .prompt -side bottom -fill x");
+	tk->cmd(top, "focus .prompt");
+	tk->cmd(top, "update");
+}
+
+# Hide the prompt entry and return focus to the tree.
+endprompt()
+{
+	prompting = 0;
+	tk->cmd(top, "pack forget .prompt");
+	tk->cmd(top, "focus .main.lb");
+	tk->cmd(top, "update");
 }
 
 togglensmode()
@@ -602,33 +620,6 @@ collapseselected()
 	}
 }
 
-# ---------- Mouse ----------
-
-clicktree(p: Point)
-{
-	tr := textrect();
-	if(!tr.contains(p))
-		return;
-	fh := font.height;
-	row := (p.y - tr.min.y) / fh;
-	idx := topline + row;
-	if(idx < 0 || idx >= nvisible)
-		return;
-	selected = idx;
-
-	ni := visible[idx];
-	n := nodes[ni];
-	ix := tr.min.x + n.depth * INDENT;
-	if(n.isdir && p.x >= ix && p.x < ix + ICON_W) {
-		if(n.expanded)
-			collapse(ni);
-		else
-			expand(ni);
-		rebuildvisible();
-	}
-	redraw();
-}
-
 # ---------- Plumbing ----------
 
 plumbselected()
@@ -651,7 +642,7 @@ plumbfile(path: string)
 			plumbmod->init(0, nil, 0);
 	}
 	if(plumbmod == nil) {
-		statbar.right = "no plumber";
+		setstatus("no plumber");
 		redraw();
 		return;
 	}
@@ -684,9 +675,9 @@ plumbfile(path: string)
 		array of byte path
 	);
 	if(msg.send() < 0)
-		statbar.right = "plumb failed";
+		setstatus("plumb failed");
 	else
-		statbar.right = "plumbed " + basename(path);
+		setstatus("plumbed " + basename(path));
 	redraw();
 }
 
@@ -855,17 +846,13 @@ startbind()
 	if(!n.isdir)
 		target = dirof(n.path);
 	promptmode = PROMPT_BIND_SRC;
-	statbar.prompt = "Bind src (onto " + target + "): ";
-	statbar.buf = "";
-	redraw();
+	beginprompt("Bind src (onto " + target + "):");
 }
 
 startgoto()
 {
 	promptmode = PROMPT_GOTO;
-	statbar.prompt = "Path: ";
-	statbar.buf = "";
-	redraw();
+	beginprompt("Path:");
 }
 
 dobind(src, flagstr: string)
@@ -888,9 +875,9 @@ dobind(src, flagstr: string)
 	}
 	rc := sys->bind(src, target, flags);
 	if(rc < 0) {
-		statbar.right = sys->sprint("bind failed: %r");
+		setstatus(sys->sprint("bind failed: %r"));
 	} else {
-		statbar.right = sys->sprint("bound %s on %s", src, target);
+		setstatus(sys->sprint("bound %s on %s", src, target));
 		# Refresh namespace and tree
 		loadnamespace();
 		refreshsubtree(ni);
@@ -906,7 +893,7 @@ unmountselected()
 	ni := visible[selected];
 	n := nodes[ni];
 	if(!n.isdir || n.bindsrc == nil) {
-		statbar.right = "no mount to remove";
+		setstatus("no mount to remove");
 		redraw();
 		return;
 	}
@@ -917,9 +904,9 @@ dounmount(path: string)
 {
 	rc := sys->unmount(nil, path);
 	if(rc < 0) {
-		statbar.right = sys->sprint("unmount %s: %r", path);
+		setstatus(sys->sprint("unmount %s: %r", path));
 	} else {
-		statbar.right = "unmounted " + path;
+		setstatus("unmounted " + path);
 		loadnamespace();
 		refreshtree();
 		annotatenodes();
@@ -1172,140 +1159,90 @@ rebuildvisible()
 
 # ---------- Rendering ----------
 
-textrect(): Rect
+# A tree row rendered as listbox text: depth indent, an expand/collapse
+# marker for directories, the name (with a trailing "/" for dirs), and a
+# right-padded annotation (namespace source or file size).
+rowtext(n: ref Node): string
 {
-	r := w.image.r;
-	sth := widgetmod->statusheight();
-	sw := widgetmod->scrollwidth();
-	return Rect((r.min.x + sw + MARGIN, r.min.y + MARGIN),
-		    (r.max.x - MARGIN, r.max.y - sth));
+	indent := "";
+	for(j := 0; j < n.depth; j++)
+		indent += "  ";
+	marker := "  ";
+	if(n.isdir) {
+		if(n.expanded)
+			marker = "v ";
+		else
+			marker = "> ";
+	}
+	name := n.name;
+	if(n.isdir)
+		name += "/";
+	row := indent + marker + name;
+	annot := "";
+	if(nsmode && n.bindsrc != nil)
+		annot = nsannotation(n);
+	else if(!n.isdir && n.length >= big 0)
+		annot = fmtsize(n.length);
+	if(annot != "")
+		row += "    " + annot;
+	return row;
 }
 
-scrollrect(): Rect
+# Recompute vislines (a screenful) from the listbox's pixel height, for
+# PgUp/PgDn paging and the IPC state file.
+recalcvislines()
 {
-	r := w.image.r;
-	sth := widgetmod->statusheight();
-	return Rect((r.min.x, r.min.y), (r.min.x + widgetmod->scrollwidth(), r.max.y - sth));
+	ah := int tk->cmd(top, ".main.lb cget -actheight");
+	rowpx := 16;		# approximate row height for the 14pt font
+	if(ah > 0)
+		vislines = ah / rowpx;
+	if(vislines < 1)
+		vislines = 1;
 }
 
+# Rebuild the listbox contents from the visible[] list and reflect the
+# current selection and status.  Cheap enough to run on every change.
 redraw()
 {
-	screen := w.image;
-	if(screen == nil)
+	if(top == nil)
 		return;
-
-	r := screen.r;
-	ZP := Point(0, 0);
-
-	screen.draw(r, bgcolor, nil, ZP);
-
-	tr := textrect();
-	fh := font.height;
-	maxvrows := tr.dy() / fh;
-	if(maxvrows < 1)
-		maxvrows = 1;
-	vislines = maxvrows;
-
-	y := tr.min.y;
-	for(i := topline; i < nvisible && (y + fh) <= tr.max.y; i++) {
-		ni := visible[i];
-		n := nodes[ni];
-
-		# Selection highlight
-		if(i == selected) {
-			hr := Rect((tr.min.x - 2, y), (tr.max.x, y + fh));
-			screen.draw(hr, selcolor, nil, ZP);
-		}
-
-		x := tr.min.x + n.depth * INDENT;
-
-		# Expand/collapse indicator
-		if(n.isdir)
-			drawexpander(screen, Point(x, y), fh, n.expanded);
-		x += ICON_W;
-
-		# Name
-		f := font;
-		col := fgcolor;
-		if(n.isdir) {
-			f = bfont;
-			col = dircol;
-		}
-		if(n.isdevice)
-			col = devcolor;
-
-		name := n.name;
-		if(n.isdir)
-			name += "/";
-
-		# Calculate available width for name + annotation
-		rightx := tr.max.x;
-		annot := "";
-		annotw := 0;
-		if(nsmode && n.bindsrc != nil) {
-			annot = nsannotation(n);
-			annotw = font.width(annot) + 8;
-		} else if(!n.isdir && n.length >= big 0) {
-			annot = fmtsize(n.length);
-			annotw = font.width(annot) + 8;
-		}
-
-		maxw := rightx - x - annotw;
-		if(maxw > 0) {
-			tw := f.width(name);
-			if(tw > maxw) {
-				for(k := len name; k > 0; k--) {
-					if(f.width(name[:k]) <= maxw - font.width("..")) {
-						name = name[:k] + "..";
-						break;
-					}
-				}
-			}
-			screen.text(Point(x, y), col, ZP, f, name);
-
-			# Right-aligned annotation
-			if(annotw > 0 && len annot > 0) {
-				ax := rightx - font.width(annot);
-				acol := dimcolor;
-				if(nsmode && n.bindsrc != nil)
-					acol = mntcolor;
-				screen.text(Point(ax, y), acol, ZP, font, annot);
-			}
-		}
-
-		y += fh;
+	tk->cmd(top, ".main.lb delete 0 end");
+	for(i := 0; i < nvisible; i++)
+		tk->cmd(top, sys->sprint(".main.lb insert end {%s}", rowtext(nodes[visible[i]])));
+	recalcvislines();
+	if(selected >= 0 && selected < nvisible) {
+		tk->cmd(top, ".main.lb selection clear 0 end");
+		tk->cmd(top, sys->sprint(".main.lb selection set %d", selected));
+		tk->cmd(top, sys->sprint(".main.lb see %d", selected));
 	}
+	updatestatus();
+	tk->cmd(top, "update");
+}
 
-	# Scrollbar
-	sr := scrollrect();
-	scrollbar.resize(sr);
-	scrollbar.total = nvisible;
-	scrollbar.visible = vislines;
-	scrollbar.origin = topline;
-	scrollbar.draw(screen);
-
-	# Status bar
-	sth := widgetmod->statusheight();
-	statbar.resize(Rect((r.min.x, r.max.y - sth), (r.max.x, r.max.y)));
-	if(statbar.prompt == nil) {
-		if(selected >= 0 && selected < nvisible) {
-			nd := nodes[visible[selected]];
-			statbar.left = nd.path;
-			if(nsmode && nd.bindsrc != nil)
-				statbar.right = nd.bindcmd + " " + nd.bindflags + " " + nd.bindsrc;
-			else
-				statbar.right = sys->sprint("%d items", nvisible);
-		} else {
-			statbar.left = rootpath;
-			statbar.right = sys->sprint("%d items", nvisible);
-		}
+# Status strip: selected path on the left, item count / bind info / a
+# transient message on the right.
+updatestatus()
+{
+	if(prompting)
+		return;
+	left := rootpath;
+	right := sys->sprint("%d items", nvisible);
+	if(selected >= 0 && selected < nvisible) {
+		nd := nodes[visible[selected]];
+		left = nd.path;
+		if(nsmode && nd.bindsrc != nil)
+			right = nd.bindcmd + " " + nd.bindflags + " " + nd.bindsrc;
 	}
-	statbar.draw(screen);
-	# INFR-27: window border is the wmclient frame (th.windowborder).
-	# Don't draw widget.contentborder here — it would paint th.accent
-	# over the wmclient frame and break border consistency across apps.
+	if(statusmsg != "")
+		right = statusmsg;
+	tk->cmd(top, sys->sprint(".status configure -text {%s    -    %s}", left, right));
+}
 
-	screen.flush(Draw->Flushnow);
+# Set a transient right-hand status message.
+setstatus(s: string)
+{
+	statusmsg = s;
+	updatestatus();
 }
 
 nsannotation(n: ref Node): string
@@ -1324,30 +1261,6 @@ nsannotation(n: ref Node): string
 		flags = n.bindflags + " ";
 	s += flags + src;
 	return s;
-}
-
-drawexpander(screen: ref Image, p: Point, fh: int, expanded: int)
-{
-	ZP := Point(0, 0);
-	cx := p.x + ICON_W / 2;
-	cy := p.y + fh / 2;
-	sz := 4;
-
-	if(expanded) {
-		for(i := 0; i <= sz; i++) {
-			x0 := cx - sz + i;
-			x1 := cx + sz - i;
-			screen.line(Point(x0, cy - sz/2 + i), Point(x1, cy - sz/2 + i),
-				0, 0, 0, dimcolor, ZP);
-		}
-	} else {
-		for(i := 0; i <= sz; i++) {
-			y0 := cy - sz + i;
-			y1 := cy + sz - i;
-			screen.line(Point(cx - sz/2 + i, y0), Point(cx - sz/2 + i, y1),
-				0, 0, 0, dimcolor, ZP);
-		}
-	}
 }
 
 fmtsize(n: big): string
@@ -1369,7 +1282,7 @@ gotopath(path: string)
 		return;
 	(ok, d) := sys->stat(path);
 	if(ok < 0) {
-		statbar.right = path + ": not found";
+		setstatus(path + ": not found");
 		return;
 	}
 	if(!(d.mode & Sys->DMDIR)) {
@@ -1388,7 +1301,7 @@ gotopath(path: string)
 	annotatenodes();
 	selected = 0;
 	topline = 0;
-	w.settitle("ftree — " + rootpath);
+	tkclient->settitle(top, "ftree — " + rootpath);
 }
 
 # ---------- Helpers ----------
@@ -1419,38 +1332,49 @@ basename(path: string): string
 
 # ---------- Colour management ----------
 
+col(v: int): string
+{
+	return sys->sprint("#%06xff", v & 16rFFFFFF);
+}
+
 loadcolors()
 {
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
-		bgcolor = display.color(th.editbg);
-		fgcolor = display.color(th.edittext);
-		dircol = display.color(th.text);
-		selcolor = display.color(th.accent);
-		dimcolor = display.color(th.dim);
-		mntcolor = display.color(th.yellow);
-		devcolor = display.color(th.green);
-		accentcol = display.color(th.accent);
+		c_bg = col(th.editbg);
+		c_fg = col(th.edittext);
+		c_dir = col(th.text);
+		c_accent = col(th.accent);
+		c_dim = col(th.dim);
+		c_mnt = col(th.yellow);
+		c_dev = col(th.green);
 	} else {
-		bgcolor = display.color(BG);
-		fgcolor = display.color(FG);
-		dircol = display.color(DIRCOL);
-		selcolor = display.color(SELCOL);
-		dimcolor = display.color(DIMCOL);
-		mntcolor = display.color(MNTCOL);
-		devcolor = display.color(DEVCOL);
-		accentcol = display.color(SELCOL);
+		# fallback cons are 0xRRGGBBAA; col() wants 0x00RRGGBB
+		c_bg = col(BG >> 8);
+		c_fg = col(FG >> 8);
+		c_dir = col(DIRCOL >> 8);
+		c_accent = col(SELCOL >> 8);
+		c_dim = col(DIMCOL >> 8);
+		c_mnt = col(MNTCOL >> 8);
+		c_dev = col(DEVCOL >> 8);
 	}
 }
 
+# Re-resolve theme colours and re-apply them to the live widgets.
 reloadcolors()
 {
 	loadcolors();
-	widgetmod->retheme(display);
-	wmclient->retheme(w);
-	if(menumod != nil)
-		menumod->retheme(display);
+	if(top == nil)
+		return;
+	tkclient->wmctl(top, "retheme");
+	tkcmds(array[] of {
+		". configure -background " + c_bg,
+		".main.lb configure -background " + c_bg + " -foreground " + c_fg +
+			" -selectbackground " + c_accent + " -selectforeground " + c_bg,
+		".status configure -background " + c_bg + " -foreground " + c_dim,
+		".prompt configure -background " + c_bg + " -foreground " + c_fg,
+	});
 }
 
 # ---------- Namespace change watcher ----------

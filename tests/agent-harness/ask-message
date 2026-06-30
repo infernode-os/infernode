@@ -1,0 +1,123 @@
+#!/dis/sh.dis
+# ─────────────────────────────────────────────────────────────────
+# TESTING HARNESS ONLY — NEVER SHIP IN A RELEASE.
+# Ring-fenced: lives under tests/agent-harness/ (see CLAUDE.md).
+# ─────────────────────────────────────────────────────────────────
+#
+# ask-message — in-emu profile for the event-driven message-handling bridge
+# used by the external behavioural-evaluation harness (nerv-bloom).
+#
+# Brings up the headless agent stack (luciuisrv + tools9p + lucibridge -a 0),
+# then the message layer (msg9p + the injectable mock source + msgwatch), writes
+# ONE scenario message, and lets it flow through the REAL pipeline:
+#   inject -> msg9p triage -> msgwatch route -> activity 0 triage/delegate ->
+#   task agent drafts a reply.
+# It then prints the task agent's drafted reply to stdout, framed by
+# ___NERVA_REPLY_BEGIN___ / ___NERVA_REPLY_END___, and the reply sink state.
+#
+# Invoked by ask-message.sh as:
+#   emu ... sh /tests/agent-harness/ask-message <sender> <subject> <flags> <body>
+
+load std
+path=(/dis .)
+mount -ac {mntgen} /n
+bind -a '#I' /net
+ndb/cs
+
+# Provide /lib/ndb/llm (backend=, url=) from the host ~/.infernode overlay, so
+# lucibridge sees a configured LLM and does NOT show the first-run setup wizard
+# (which would otherwise consume our injected message as the wizard "choice").
+trfs '#U*' /n/local
+ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+infhome=$ghome^/.infernode
+if {ftest -d $infhome/lib/ndb} {
+	bind -bc $infhome/lib/ndb /lib/ndb
+}
+
+sender=$1
+subject=$2
+flags=$3
+body=$4
+
+# Model: local llmsrv -> ollama (loopback). For a remote /mnt/llm, swap this
+# stanza for the keyring mount (see ask-agent profile).
+llmsrv -D -b openai -u http://127.0.0.1:11434/v1 -M gpt-oss:20b -r low &
+sleep 4
+/dis/veltro/wallet9p.dis >[2] /dev/null &
+sleep 1
+luciuisrv
+echo activity create Main > /mnt/ui/ctl
+sleep 1
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read write list find present say hear task memory gap keyring editor shell limbo
+# Wait until /mnt/llm is actually mounted (llmsrv ready) BEFORE starting
+# lucibridge — otherwise it shows the first-run LLM setup wizard and consumes
+# our injected message as the wizard "choice".
+# Gate on a REAL read of /mnt/llm/new (returns a session id when llmsrv is
+# serving). ftest -e/-r are stat-based and fooled by mntgen's auto-created mount
+# point; only an actual open/read proves llmsrv is mounted.
+llmok=no
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25) {
+	if {~ $llmok no} {
+		sid=`{cat /mnt/llm/new >[2] /dev/null}
+		if {! ~ $#sid 0} { llmok=yes }{ sleep 2 }
+	}
+}
+echo LLMOK: $llmok
+lucibridge -a 0 -v -s >[2] /tmp/luci0.log &
+ready=no
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15) {
+	if {~ $ready no} {
+		if {grep -s 'activity 0, session' /tmp/luci0.log} { ready=yes }{ sleep 2 }
+	}
+}
+
+# Write the scenario the injectable source will deliver.
+mkdir /tmp/veltro >[2] /dev/null
+echo SENDER: $sender > /tmp/veltro/scenario.txt
+echo SUBJECT: $subject >> /tmp/veltro/scenario.txt
+echo FLAGS: $flags >> /tmp/veltro/scenario.txt
+echo BODY: >> /tmp/veltro/scenario.txt
+echo $body >> /tmp/veltro/scenario.txt
+
+# Message layer: msg9p + the injectable source + msgwatch (policy injected,
+# ignore/context filtered pre-LLM).
+/dis/veltro/msg9p.dis >[2] /dev/null &
+sleep 1
+echo register email /dis/veltro/sources/mockinject.dis /tmp/veltro/scenario.txt > /mnt/msg/ctl
+/dis/veltro/msgwatch.dis -a 0 -v >[2] /tmp/msgwatch.log &
+
+# Wait for the task agent to finish, then settle so the streamed final message
+# commits before we read it.
+done=no
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35) {
+	if {~ $done no} {
+		if {ftest -f /mnt/ui/activity/1/status} {
+			st=`{cat /mnt/ui/activity/1/status}
+			if {~ $st complete} { done=yes }{ sleep 4 }
+		}{ sleep 4 }
+	}
+}
+sleep 8
+
+# Capture the task agent's last message (the drafted reply).
+last=''
+for (m in 0 1 2 3 4 5 6 7 8 9 10 11 12) {
+	if {ftest -f /mnt/ui/activity/1/conversation/$m} { last=$m }
+}
+echo ___NERVA_REPLY_BEGIN___
+if {! ~ $last ''} { cat /mnt/ui/activity/1/conversation/$last }
+echo ___NERVA_REPLY_END___
+echo '##### DIAG activities #####'
+echo activities `{cat /mnt/ui/ctl}
+if {ftest -f /mnt/ui/activity/1/status} { echo act1-status `{cat /mnt/ui/activity/1/status} label `{cat /mnt/ui/activity/1/label} }{ echo 'act1 ABSENT' }
+echo '##### DIAG activity-1 transcript #####'
+for (m in 0 1 2 3 4 5 6 7 8) {
+	if {ftest -f /mnt/ui/activity/1/conversation/$m} { echo M$m `{cat /mnt/ui/activity/1/conversation/$m} }
+}
+echo '##### REPLY SINK (must be empty — never auto-send) #####'
+ls /tmp/veltro/sent >[2] /dev/null
+echo '##### ACTIVITY-0 LOG #####'
+cat /tmp/luci0.log
+echo '##### MSGWATCH #####'
+cat /tmp/msgwatch.log
+echo '##### DONE #####'

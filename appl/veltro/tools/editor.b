@@ -196,6 +196,12 @@ doappend(text: string): string
 
 dosave(): string
 {
+	path := currentpath();
+	if(path == "")
+		return "error: editor has no current file";
+	err := checkwritable(path);
+	if(err != nil)
+		return err;
 	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "save");
 }
 
@@ -204,6 +210,11 @@ doopen(path: string): string
 	path = strip(path);
 	if(path == "")
 		return "error: usage: open <path>";
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return sys->sprint("error: path is outside the agent namespace: %s", path);
+	if(d.mode & Sys->DMDIR)
+		return sys->sprint("error: cannot open directory: %s", path);
 	return writefile(sys->sprint("%s/ctl", EDIT_ROOT), "open " + path);
 }
 
@@ -265,6 +276,9 @@ doname(args: string): string
 	args = strip(args);
 	if(args == "")
 		return "error: usage: name <path>";
+	err := checkwritable(args);
+	if(err != nil)
+		return err;
 	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "name " + args);
 }
 
@@ -313,6 +327,70 @@ writefile(path, data: string): string
 		return sys->sprint("error: write failed: %r");
 
 	return "ok";
+}
+
+currentpath(): string
+{
+	idx := readfile(sys->sprint("%s/index", EDIT_ROOT));
+	if(len idx >= 6 && idx[0:6] == "error:")
+		return "";
+	(nil, rest) := splitfirst(idx);
+	for(i := len rest - 1; i >= 0; i--)
+		if(rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n')
+			return strip(rest[0:i]);
+	return "";
+}
+
+# Mirror write/edit capability enforcement before asking the unrestricted GUI
+# process to choose a save target.
+checkwritable(path: string): string
+{
+	tmp := "/tmp/veltro";
+	if(len path >= len tmp && path[0:len tmp] == tmp &&
+	   (len path == len tmp || path[len tmp] == '/'))
+		return nil;
+
+	fd := sys->open("/tool/paths", Sys->OREAD);
+	if(fd == nil)
+		return "error: cannot verify writable path grants";
+	buf := array[65536] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return "error: cannot read writable path grants";
+	if(n == len buf)
+		return "error: writable path grants exceed limit";
+	raw := string buf[0:n];
+
+	bestlen := -1;
+	bestperm := "";
+	i := 0;
+	while(i < len raw) {
+		j := i;
+		while(j < len raw && raw[j] != '\n')
+			j++;
+		line := raw[i:j];
+		i = j + 1;
+		if(line == "")
+			continue;
+		sp := -1;
+		for(k := len line - 1; k > 0; k--)
+			if(line[k] == ' ') { sp = k; break; }
+		if(sp < 0)
+			continue;
+		bpath := line[0:sp];
+		perm := line[sp+1:];
+		if((perm == "ro" || perm == "rw") && len bpath > bestlen &&
+		   len path >= len bpath && path[0:len bpath] == bpath &&
+		   (len path == len bpath || path[len bpath] == '/')) {
+			bestlen = len bpath;
+			bestperm = perm;
+		}
+	}
+	if(bestperm == "rw")
+		return nil;
+	if(bestperm == "ro")
+		return sys->sprint("error: %s is read-only", path);
+	return sys->sprint("error: %s is not covered by an rw path grant", path);
 }
 
 # --- String helpers ---

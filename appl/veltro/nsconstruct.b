@@ -348,14 +348,37 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("restrict /lib: %s", err);
 	}
 
-	# 7. Restrict /tmp to: veltro/ (shadow dirs are under here).
+	# 7. Restrict /env to the one application-owned session pointer. Environment
+	# groups are commonly inherited from the launching shell and may contain
+	# credentials. Launchers pre-create VELTRO_SESSION before FORKNS so the bind
+	# captures the shared slot that plan/todo legitimately require.
+	(envok, nil) := sys->stat("/env");
+	if(envok >= 0) {
+		err = restrictdir("/env", "VELTRO_SESSION" :: nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict /env: %s", err);
+	}
+	# 8. Restrict /prog to this process. The process device otherwise exposes
+	# sibling namespaces, descriptors, status, stacks and writable control files.
+	# Non-shell tools only need the current process. Inferno sh creates another
+	# process and opens /prog/<child>/wait after restriction, so an explicit shell
+	# capability temporarily retains full /prog.
+	(progok, nil) := sys->stat("/prog");
+	if(progok >= 0 && !inlist("exec", caps.tools) && caps.shellcmds == nil) {
+		pid := sys->pctl(0, nil);
+		err = restrictdir("/prog", string pid :: nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict /prog: %s", err);
+	}
+
+	# 9. Restrict /tmp to: veltro/ (shadow dirs are under here).
 	# writable=1 so agents can create files under /tmp/veltro/.
 	# MCREATE is applied only to /tmp — not to /dis, /lib, /dev, /n, /.
 	err = restrictdir("/tmp", "veltro" :: nil, 1);
 	if(err != nil)
 		return sys->sprint("restrict /tmp: %s", err);
 
-	# 8. Restrict / to only Inferno system directories.
+	# 10. Restrict / to only Inferno system directories.
 	# The emu's -r. binds #U (project root) onto / with MAFTER,
 	# exposing project files (.env, .git, appl/, emu/, ...).
 	# restrictdir("/", safe) replaces the root union with a shadow

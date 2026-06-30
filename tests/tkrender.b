@@ -20,6 +20,22 @@ include "tk.m"; tk: Tk;
 	Toplevel: import tk;
 Tkrender: module { init: fn(ctxt: ref Draw->Context, argv: list of string); };
 
+# parse a run of hex digits (e.g. "ffffeaff") into an int
+parsehex(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		d := -1;
+		if(c >= '0' && c <= '9') d = c - '0';
+		else if(c >= 'a' && c <= 'f') d = c - 'a' + 10;
+		else if(c >= 'A' && c <= 'F') d = c - 'A' + 10;
+		else break;
+		v = (v << 4) | d;
+	}
+	return v;
+}
+
 # turn the two-char sequence \n into a real newline
 unescape(s: string): string
 {
@@ -86,10 +102,19 @@ init(nil: ref Draw->Context, argv: list of string)
 	tk->cmd(top, sys->sprint(". configure -width %d -height %d", w, h));
 	tk->cmd(top, "update");
 
-	# no-wm: own screen on the display image, give the toplevel an image
+	# no-wm: own screen on the display image, give the toplevel an image.
+	# Back the window with the toplevel's *own* background (whatever the
+	# active theme seeded it with) and fill it, so any region a widget
+	# does not paint shows the theme surface — not a hardcoded colour that
+	# only happens to be invisible under one theme.
+	bg := 16r080808FF;
+	bgs := tk->cmd(top, ". cget -background");
+	if(len bgs > 0 && bgs[0] == '#')
+		bg = parsehex(bgs[1:]);
 	wr: Rect; wr.min = (0, 0); wr.max = (w, h);
-	screen := Screen.allocate(disp.image, disp.color(int 16r080808FF), 0);
-	winimg := screen.newwindow(wr, Draw->Refbackup, Draw->Nofill);
+	bgcolor := disp.color(bg);
+	winimg := disp.newimage(wr, disp.image.chans, 0, bg);
+	winimg.draw(wr, bgcolor, nil, (0,0));
 	tk->putimage(top, ". -1", winimg, nil);
 	tk->cmd(top, "update");
 

@@ -8,9 +8,12 @@ This is the working guide for that migration.
 ## Why / what
 
 The native toolkit was the *replacement* for Tk. We are reverting to Tk
-but keeping the flat, near-black, single-accent aesthetic the native
-widgets established. The Tk **engine defaults** now carry that look (see
-`libtk/colrs.c`), so migrated apps inherit it with no per-widget colours.
+but keeping the flat, single-accent, brutalist aesthetic the native
+widgets established — **for whichever theme is active**. The Tk engine
+palette is seeded from the live `lucitheme` (see `libtk/colrs.c`), so a
+migrated app is dark Brimstone or light Halo (or any user theme) to match
+`/lib/lucifer/theme/current`, with no per-widget colours. The *flatness*
+(no bevels) is theme-independent and always on.
 
 ## The engine (already done)
 
@@ -27,10 +30,28 @@ widgets established. The Tk **engine defaults** now carry that look (see
   filled later, so apps had to re-issue `configure -image` after each
   `putimage`. They no longer do. This is what makes the canvas-style
   apps (`wm/fractals`) display.
-- `libtk/colrs.c` seeds every `TkEnv` with the Brimstone palette: surface
-  `#080808`, text `#cccccc`, accent `#e8553a`, dim `#444444`, flat 1px
-  borders (relief light/dark pinned to one border colour). Default font
-  is `/fonts/combined/unicode.sans.14.font`.
+- `libtk/colrs.c` seeds every `TkEnv` from the **active lucitheme**. It
+  reads `/lib/lucifer/theme/current` for the theme name and
+  `/lib/lucifer/theme/<name>` for the palette (the same flat key/value
+  files `lucitheme` reads), mapping `bg`/`border`/`menuhilit`/`text`/
+  `accent`/`dim` onto the Tk colour slots. Brimstone (dark: surface
+  `#080808`, text `#cccccc`, accent `#e8553a`) and Halo (light: surface
+  `#ffffea`, text `#333333`, accent `#2266cc`) both work; an unreadable
+  theme falls back to the built-in Brimstone constants. The result is
+  cached on the contents of `current`, so a theme switch re-seeds the
+  palette for toplevels created afterward. Flat 1px borders (relief
+  light/dark pinned to the one border colour) are applied for *every*
+  theme. Default font is `/fonts/combined/unicode.sans.14.font`.
+- **64-bit fill bug (fixed).** `libmemdraw/memfillcolor` built a 32-bit
+  pixel pattern but filled with `memsetl`, which writes native 8-byte
+  words on a 64-bit host — zeroing the high half of every word, i.e.
+  every other 32-bit pixel. On Brimstone's near-black surface the zeroed
+  pixels are invisible; on any light theme (Halo) every label/button/entry
+  background became a black checkerboard. `allocimage` with a colour fill
+  is the affected path (a frame fills via a replicated brush and was
+  fine). Fixed by using the existing `memset32` (4-byte elements) with a
+  count scaled by `sizeof(ulong)/sizeof(u32int)`. This is why Halo only
+  looked right after the engine *and* the binary were rebuilt.
 - Window chrome (`appl/lib/titlebar.b`, `appl/lib/tkclient.b`) is
   brutalist: subdued frame, accent on focus, dark title strip.
 - **No bevels — brutalism is 2D.** The palette pins every background
@@ -108,7 +129,12 @@ and passed as `-foreground #rrggbbff`.
    renderer and eyeball the PNG —
    `tools/tk-snapshot.sh layout.cmds out.png W H`
    (`tests/tkrender.b` builds a no-wm toplevel from a command list; no
-   event loop, so no busy-wait.) For a **dynamic image** app (off-screen
+   event loop, so no busy-wait.) The harness backs the window with the
+   toplevel's *own* theme background, so render under each theme by
+   setting `/lib/lucifer/theme/current` to `brimstone` or `halo` first —
+   a region a widget does not paint shows the theme surface, not a
+   hardcoded colour that only looks right under one theme. For a
+   **dynamic image** app (off-screen
    `Draw` image fed in with `putimage`, which a static command list can't
    exercise), use `tests/tkimgrender.b`: it allocates an image, draws
    solid-colour bands into it the way a compute proc does, composites it

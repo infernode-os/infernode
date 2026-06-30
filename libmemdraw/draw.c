@@ -2524,7 +2524,17 @@ memfillcolor(Memimage *i, ulong val)
 		p[2] = bits>>16;
 		p[3] = bits>>24;
 		bits = *(u32int*)p;
-		memsetl(wordaddr(i, i->r.min), bits, i->width*Dy(i->r));
+		/*
+		 * memsetl writes native ulong (8-byte on 64-bit) elements, but
+		 * bits is only a 32-bit pixel pattern, so on a 64-bit host that
+		 * would leave the high half of every word zero — i.e. zero every
+		 * other 32-bit pixel (a black/colour checkerboard, invisible on a
+		 * near-black surface but glaring on a light one).  memset32 always
+		 * writes 4-byte elements; the buffer is i->width native words, so
+		 * sizeof(ulong)/4 32-bit words per native word.
+		 */
+		memset32(wordaddr(i, i->r.min), bits,
+			i->width*Dy(i->r)*(int)(sizeof(ulong)/sizeof(u32int)));
 		break;
 	}
 }

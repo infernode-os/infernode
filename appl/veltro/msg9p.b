@@ -620,6 +620,52 @@ sourcewatcher(src: ref SrcInfo, updates: chan of ref MsgSrc->Notification,
 	src.mod->watch(updates, stop);
 }
 
+# Deterministic triage from the structured message fields (flags, headers,
+# sender) — NO LLM and no body-keyword guessing. This is the cheap pre-filter
+# that decides whether a message is worth waking the agent at all. Verdicts:
+#   ignore  — routine/bulk (newsletters, automated, no-reply): never wake
+#   context — low-signal/FYI (already-read mail): fold in silently, no wake
+#   wake    — directed/unread mail: wake the agent to triage/respond
+#   preempt — urgent (FURGENT flag): wake and jump the queue
+# The verdict rides in the notification ("Triage: <verdict>"); msgwatch routes
+# on it so ignore/context never reach the LLM.
+triageverdict(m: ref MsgSrc->Message): string
+{
+	if(m.flags & MsgSrc->FURGENT)
+		return "preempt";
+	if(isbulk(m))
+		return "ignore";
+	if(m.flags & MsgSrc->FFLAGGED)
+		return "wake";
+	if((m.flags & MsgSrc->FUNREAD) && m.sender != nil && m.sender != "")
+		return "wake";
+	return "context";
+}
+
+# Bulk/automated detection from structured fields (headers + sender), not body.
+isbulk(m: ref MsgSrc->Message): int
+{
+	h := str->tolower(m.headers);
+	if(hassub(h, "list-unsubscribe") || hassub(h, "precedence: bulk") ||
+	   hassub(h, "precedence:bulk") || hassub(h, "auto-submitted"))
+		return 1;
+	s := str->tolower(m.sender);
+	if(hassub(s, "no-reply") || hassub(s, "noreply") || hassub(s, "donotreply") ||
+	   hassub(s, "newsletter") || hassub(s, "notifications@") || hassub(s, "mailer-daemon"))
+		return 1;
+	return 0;
+}
+
+hassub(hay, needle: string): int
+{
+	if(needle == "" || len needle > len hay)
+		return 0;
+	for(i := 0; i <= len hay - len needle; i++)
+		if(hay[i:i+len needle] == needle)
+			return 1;
+	return 0;
+}
+
 # Format a notification as a structured text message suitable for
 # injection into the Meta Agent's conversation.
 formatnotification(srcname: string, n: ref MsgSrc->Notification): string
@@ -633,6 +679,7 @@ formatnotification(srcname: string, n: ref MsgSrc->Notification): string
 	m := n.msg;
 
 	text := "[Message notification — " + srcname + "]\n";
+	text += "Triage: " + triageverdict(m) + "\n";
 
 	if(m.sender != nil)
 		text += "From: " + m.sender + "\n";

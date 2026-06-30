@@ -485,8 +485,14 @@ tkdefaultenv(TkTop *t)
 	env->ref = 1;
 	env->top = t;
 
+	/*
+	 * Default font for Tk widgets: the proportional sans face the rest
+	 * of the UI uses (the brutalist house style), not the tiny pelm
+	 * bitmap face.  If it can't be opened the fallback below drops to
+	 * the built-in *default* font.
+	 */
 	if(tkfont == nil)
-		tkfont = "/fonts/pelm/unicode.8.font";
+		tkfont = "/fonts/combined/unicode.sans.14.font";
 
 	d = t->display;
 	env->font = font_open(d, tkfont);

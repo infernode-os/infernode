@@ -1133,6 +1133,47 @@ environmentAllowlistWorker(result: chan of string)
 	result <-= "";
 }
 
+
+# ============================================================================
+# Process namespace allowlist
+# Verifies a confined process can inspect itself but not its parent.
+# ============================================================================
+testProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn progAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+progAllowlistWorker(result: chan of string, parentpid: int)
+{
+	selfpid := sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	(selfok, nil) := sys->stat(sys->sprint("/prog/%d/status", selfpid));
+	if(selfok < 0) {
+		result <-= "current process should remain visible";
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ns", parentpid));
+	if(parentok >= 0) {
+		result <-= "parent process remains visible";
+		return;
+	}
+	result <-= "";
+}
+
 # ============================================================================
 # Main entry point
 # ============================================================================
@@ -1167,6 +1208,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
+	run("ProgAllowlist", testProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsRace", testRestrictNsRace);

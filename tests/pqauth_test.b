@@ -198,13 +198,25 @@ timerproc(c: chan of int, ms: int)
 # returns (result, ok); ok=0 means it timed out (the peer hung).
 collect(cb: chan of ref Result, ms: int): (ref Result, int)
 {
-	tmo := chan of int;
+	tmo := chan[1] of int;
 	spawn timerproc(tmo, ms);
 	alt {
 	r := <-cb =>
 		return (r, 1);
 	<-tmo =>
 		return (nil, 0);
+	}
+}
+
+joinpump(done: chan of int, ms: int): int
+{
+	tmo := chan[1] of int;
+	spawn timerproc(tmo, ms);
+	alt {
+	<-done =>
+		return 1;
+	<-tmo =>
+		return 0;
 	}
 }
 
@@ -425,8 +437,10 @@ relayedHandshake(t: ref T, alice, bob: ref Keyring->Authinfo, mode: int): (ref R
 	spawn authproc(pb[0], bob, cb);			# bob on pb[0]
 	spawn pump(pa[1], pb[1], mode, EKFRAME, d);	# alice -> bob (corrupting)
 	spawn pump(pb[1], pa[1], Clean, -1, d);		# bob -> alice (clean)
+	pb[0] = pa[1] = pb[1] = nil;	# ownership transferred to spawned procs
 
 	(aowner, asecret) := kr->auth(pa[0], alice, 0);	# alice runs in main
+	pa[0] = nil;
 	ra := ref Result;
 	if(asecret == nil)
 		ra.err = aowner;
@@ -440,19 +454,26 @@ relayedHandshake(t: ref T, alice, bob: ref Keyring->Authinfo, mode: int): (ref R
 		rb = ref Result;
 		rb.err = "bob hung";
 	}
+	if(!joinpump(d, 5000) || !joinpump(d, 5000)){
+		rb.secret = nil;
+		rb.err = "relay pump hung";
+	}
 	return (ra, rb);
 }
 
 testTamperedEk(t: ref T)
 {
-	(alice, bob) := setupPair(t, "ed25519", 0);
-	(ra, rb) := relayedHandshake(t, alice, bob, FlipByte);
+	for(iter := 0; iter < 32; iter++){
+		(alice, bob) := setupPair(t, "ed25519", 0);
+		(ra, rb) := relayedHandshake(t, alice, bob, FlipByte);
 
-	# the EK is bound into the signed transcript, so flipping a byte must
-	# break signature verification; neither side may derive a secret.
-	t.assert(ra.secret == nil, "alice must NOT derive a secret when ek is tampered");
-	t.assert(rb.secret == nil, "bob must NOT derive a secret when ek is tampered");
-	t.assert(ra.secret == nil && rb.secret == nil, "tampered ML-KEM key fails the handshake closed");
+		# The EK is bound into the signed transcript, so flipping a byte must
+		# break signature verification; neither side may derive a secret.
+		t.assert(ra.secret == nil,
+			sys->sprint("round %d: alice derives no secret from tampered ek", iter));
+		t.assert(rb.secret == nil,
+			sys->sprint("round %d: bob derives no secret from tampered ek", iter));
+	}
 }
 
 testMalformedEk(t: ref T)
@@ -537,6 +558,7 @@ frameAttack(t: ref T, target: int, repl: array of byte): ref Result
 	spawn authproc(pb[0], bob, cb);			# bob (victim / server side)
 	spawn pump(pa[1], pb[1], Replace, target, d);	# alice -> bob, corrupt `target`
 	spawn pump(pb[1], pa[1], Clean, -1, d);		# bob -> alice, clean
+	pa[0] = pb[0] = pa[1] = pb[1] = nil;	# ownership transferred
 
 	(rb, ok) := collect(cb, 20000);
 	if(!ok){
@@ -544,6 +566,10 @@ frameAttack(t: ref T, target: int, repl: array of byte): ref Result
 		rb.err = "victim hung";
 	}
 	collect(ca, 5000);	# best-effort drain of the client proc
+	if(!joinpump(d, 5000) || !joinpump(d, 5000)){
+		rb.secret = nil;
+		rb.err = "relay pump hung";
+	}
 	return rb;
 }
 

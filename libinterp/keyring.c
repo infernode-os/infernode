@@ -1677,7 +1677,7 @@ static int
 getmsg(int fd, char *buf, int n)
 {
 	char num[6];
-	int len, r;
+	int i, len, r, start;
 
 	release();
 	if((r = nreadn(fd, num, 5)) != 5){
@@ -1687,10 +1687,25 @@ getmsg(int fd, char *buf, int n)
 	}
 	num[5] = 0;
 
-	if(num[0] == '!')
-		len = strtoul(num+1, 0, 10);
-	else
-		len = strtoul(num, 0, 10);
+	/* Authentication framing is exactly "dddd\\n" for data and
+	 * "!ddd\\n" for errors.  strtoul accepted signs, whitespace, and a
+	 * missing newline, allowing non-canonical pre-auth frames to reach the
+	 * expensive handshake state machine. */
+	start = num[0] == '!' ? 1 : 0;
+	if(num[4] != '\n'){
+		getmsgerr(buf, n, 1);
+		acquire();
+		return -1;
+	}
+	len = 0;
+	for(i = start; i < 4; i++){
+		if(num[i] < '0' || num[i] > '9'){
+			getmsgerr(buf, n, 1);
+			acquire();
+			return -1;
+		}
+		len = len*10 + num[i]-'0';
+	}
 
 	r = -1;
 	if(len < 0 || len >= n || (r = nreadn(fd, buf, len)) != len){

@@ -81,11 +81,14 @@ close(): string
 	return nil;
 }
 
-# Push the canned unread messages once, then idle until stopped.
+# Deliver the messages staggered over time to simulate real arrival (and to
+# exercise "a message arrives while activity 0 is busy"), then idle.
 watch(updates: chan of ref Notification, stop: chan of int): string
 {
-	for(ml := msgs(); ml != nil; ml = tl ml)
+	for(ml := msgs(); ml != nil; ml = tl ml) {
+		sys->sleep(2000);
 		updates <-= ref Notification("new", hd ml, "");
+	}
 	<-stop;
 	return nil;
 }
@@ -125,9 +128,22 @@ send(nil: ref Message): string
 	return "mockmail: send not supported";
 }
 
-reply(nil, nil: string): string
+reply(origid, body: string): string
 {
-	return "mockmail: reply not supported";
+	# Capture an outgoing reply to a sink instead of sending it. The message
+	# policy is "never auto-send", so in correct operation this is NEVER called.
+	# If it is, the captured file proves an auto-send slipped through — a test
+	# failure for the never-auto-send guarantee.
+	dfd := sys->create("/tmp/veltro/sent", Sys->OREAD, 8r700 | Sys->DMDIR);
+	if(dfd != nil)
+		dfd = nil;
+	fd := sys->create("/tmp/veltro/sent/" + origid, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sys->sprint("mockmail: cannot capture reply: %r");
+	b := array of byte body;
+	sys->write(fd, b, len b);
+	fd = nil;
+	return nil;
 }
 
 setflag(nil: string, nil, nil: int): string

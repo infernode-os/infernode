@@ -22,10 +22,6 @@ include "lucitheme.m";
 
 include "menu.m";
 
-include "widget.m";
-	widgetmod: Widget;
-	Button, Label, LEFT: import widgetmod;
-
 include "softkbd.m";
 	softkbd: Softkbd;
 
@@ -61,7 +57,7 @@ TileRect: adt {
 
 # Clickable button in a dialogue tile
 DlgButton: adt {
-	btn:   ref Button;
+	rect:  Rect;		# hit-test rectangle of the drawn button
 	label: string;		# option text to send as input on click
 	msgidx: int;		# index into msgstore of the parent dialogue tile
 };
@@ -204,12 +200,6 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	else
 		menumod->init(display_g, mainfont);
 
-	# Load widget toolkit for dialogue tile buttons
-	widgetmod = load Widget Widget->PATH;
-	if(widgetmod != nil)
-		widgetmod->init(display_g, mainfont);
-	else
-		sys->fprint(stderr, "luciconv: cannot load widget: %r\n");
 
 	# Soft-keyboard helper (INFR-166). The slide depends on knowing
 	# the focused widget's actual rect; null load is non-fatal — we
@@ -292,7 +282,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 				dlghandled := 0;
 				for(di := 0; di < ndlgbuttons; di++) {
 					db := dlgbuttons[di];
-					if(db != nil && db.btn.contains(p.xy)) {
+					if(db != nil && db.rect.contains(p.xy)) {
 						dlgbuttonclick(db.label, db.msgidx);
 						dlghandled = 1;
 						redrawconv();
@@ -517,14 +507,9 @@ reloadcolors()
 	progbgcol = display_g.color(th.progbg);
 	progfgcol = display_g.color(th.progfg);
 	bordercol = display_g.color(th.border);
-	# INFR-28: widget + menu modules cache theme colours at init()
-	# time; widget.b has retheme() but menu.b does not (INFR-35), so
-	# we re-init the menu module here.  Dialogue buttons in the chat
-	# zone (LLM setup wizard etc.) use widgetmod's button colours and
-	# would otherwise stay on the previous theme's palette across
-	# live theme switches.
-	if(widgetmod != nil)
-		widgetmod->retheme(display_g);
+	# INFR-35: menu.b caches theme colours at init() and has no retheme,
+	# so re-init it here. Dialogue-tile buttons are now drawn inline from
+	# the live palette, so they pick up theme switches for free.
 	if(menumod != nil)
 		menumod->retheme(display_g);
 	# Invalidate rendered message caches so they redraw with new colours
@@ -842,15 +827,10 @@ drawconversation(zone: Rect)
 			dw := tilew - 2 * DLGPAD;
 			dy := tiletop + DLGPAD;
 
-			# Title via widget Label
+			# Title
 			if(msg.title != "") {
-				if(dy >= zone.min.y && dy + mainfont.height <= msgy) {
-					if(widgetmod != nil) {
-						lbl := Label.mk(Rect((dx, dy), (dx + dw, dy + mainfont.height)), msg.title, 0, LEFT);
-						lbl.draw(mainwin);
-					} else
-						mainwin.text((dx, dy), accentcol, (0, 0), mainfont, msg.title);
-				}
+				if(dy >= zone.min.y && dy + mainfont.height <= msgy)
+					mainwin.text((dx, dy), accentcol, (0, 0), mainfont, msg.title);
 				dy += mainfont.height + 4;
 			}
 
@@ -890,8 +870,8 @@ drawconversation(zone: Rect)
 				dy += PROGBAR_H + 6;
 			}
 
-			# Option buttons using widget toolkit
-			if(msg.options != "" && widgetmod != nil) {
+			# Option buttons — drawn inline (flat 2D brutalist), no toolkit
+			if(msg.options != "") {
 				(nil, opts) := sys->tokenize(msg.options, ",");
 				if(mobile) {
 					# Mobile: stack options vertically as full-width,
@@ -904,10 +884,9 @@ drawconversation(zone: Rect)
 						opt := hd opts;
 						br := Rect((dx, dy), (dx + dw, dy + mbtnh));
 						if(br.min.y < msgy && br.max.y > zone.min.y) {
-							btn := Button.mk(br, opt);
-							btn.draw(mainwin);
+							drawdlgbutton(br, opt);
 							if(ndlgbuttons < len dlgbuttons)
-								dlgbuttons[ndlgbuttons++] = ref DlgButton(btn, opt, i);
+								dlgbuttons[ndlgbuttons++] = ref DlgButton(br, opt, i);
 						}
 						dy += mbtnh + 6;
 					}
@@ -919,10 +898,9 @@ drawconversation(zone: Rect)
 						if(bx + bw > dx + dw) break;
 						br := Rect((bx, dy), (bx + bw, dy + BTNROW_H));
 						if(br.min.y < msgy && br.max.y > zone.min.y) {
-							btn := Button.mk(br, opt);
-							btn.draw(mainwin);
+							drawdlgbutton(br, opt);
 							if(ndlgbuttons < len dlgbuttons)
-								dlgbuttons[ndlgbuttons++] = ref DlgButton(btn, opt, i);
+								dlgbuttons[ndlgbuttons++] = ref DlgButton(br, opt, i);
 						}
 						bx += bw + 8;
 					}
@@ -1036,6 +1014,21 @@ drawcentertext(r: Rect, text: string)
 	tx := r.min.x + (r.dx() - tw) / 2;
 	ty := r.min.y + (r.dy() - mainfont.height) / 2;
 	mainwin.text((tx, ty), dimcol, (0, 0), mainfont, text);
+}
+
+# A flat 2D brutalist dialogue-option button: a filled rect with a 1px
+# border and a centred accent label.  No bevel — brutalism is 2D.
+drawdlgbutton(r: Rect, label: string)
+{
+	mainwin.draw(r, inputcol, nil, (0, 0));
+	mainwin.draw(Rect(r.min, (r.max.x, r.min.y + 1)), bordercol, nil, (0, 0));
+	mainwin.draw(Rect((r.min.x, r.max.y - 1), r.max), bordercol, nil, (0, 0));
+	mainwin.draw(Rect(r.min, (r.min.x + 1, r.max.y)), bordercol, nil, (0, 0));
+	mainwin.draw(Rect((r.max.x - 1, r.min.y), r.max), bordercol, nil, (0, 0));
+	tw := mainfont.width(label);
+	tx := r.min.x + (r.dx() - tw) / 2;
+	ty := r.min.y + (r.dy() - mainfont.height) / 2;
+	mainwin.text((tx, ty), accentcol, (0, 0), mainfont, label);
 }
 
 # --- Namespace loading ---

@@ -119,8 +119,38 @@ and passed as `-foreground #rrggbbff`.
 | `wm/ftree` | migrated | tree as listbox (flattened visible nodes) |
 | `wm/settings` | pending | form (largest; theme switcher) |
 | `wm/editor`, `wm/shell` | pending | editable text widget |
-| `wm/matrix` | pending | canvas / custom draw |
-| `charon/gui`, `matrix/*`, Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
+| `wm/matrix` + `matrix/*` | pending (design) | composition engine |
+| `charon/gui` (+`layout`/`common`) | pending | HTML render + chrome |
+| Lucifer core (`luciconv`/`lucipres`/`lucictx`) | pending | mixed |
+
+### Notes for the pending migrations (learned while scoping)
+
+- **editor / shell — let Tk own the editing.** The `text` widget is a
+  full editing surface here: `tk->keyboard` inserts at the `insert`
+  mark, `.t get a b` / `.t delete a b` / `.t index insert` / `.t mark
+  set insert L.C` / `.t tag add sel …` all work (verified in the
+  headless harness). So both apps can drop their bespoke line-buffer +
+  cursor + selection code and keep only a thin bridge: editor's 9P
+  server is already decoupled from the UI through the `editreq` channel
+  (`Rgetbody`/`Rsetbody`/`Rdoctl`/…), so point `getbodytext`/`setbodytext`
+  at `.t get 1.0 {end - 1 chars}` / `.t delete 1.0 end; .t insert end`,
+  and re-express the doc-ctl verbs (goto/find/replace/save) as text-widget
+  index ops. Undo is the one piece with no native equivalent — keep the
+  existing undo stack or gate it behind the widget.
+- **settings — pure form, but big.** Nine category panels, each a column
+  of the form widgets already proven (radio groups, entries, listboxes,
+  checkbuttons, buttons). The only non-mechanical part is the dynamic
+  relayout that today re-reads config on every click; with Tk holding
+  widget state that whole `*_set`/click-preservation dance disappears.
+  Build the live theme switch on `lucitheme` → re-emit each toplevel's
+  palette (the `retheme` wmctl other migrated apps already send).
+- **matrix — needs design, not a mechanical port.** Its display modules
+  (`matrix/position-table`, `signal-feed`, …) implement a fixed
+  `draw(dst: ref Image)` contract and are composited into Lucifer's
+  presentation zone; they are not standalone widget apps. Moving them to
+  Tk means changing the composition contract (host hands each module a
+  Tk frame/subwindow instead of an image). Decide that before touching
+  the modules; until then their only `widget.m` use is `Scrollbar`.
 
 Verified empirically and reusable:
 - forms: entry (`-show *` for secrets), listbox+scrollbar, button, menu

@@ -792,8 +792,21 @@ mkdirp(path: string): string
 		return err;
 
 	fd := sys->create(path, Sys->OREAD, DIR_MODE);
-	if(fd == nil)
+	if(fd == nil) {
+		# TOCTOU race: a concurrent restrictns (e.g. a tool-call asyncexec
+		# overlapping a child tools9p's emitmanifest, both spawned by
+		# back-to-back `task` calls) may have created this shared ancestor
+		# between our stat() above and this create(). Directory creation is
+		# idempotent: if it now exists as a directory, that is success.
+		# Without this, the loser of the race returned "cannot create … file
+		# exists", which surfaced to the agent as "namespace restriction
+		# failed" and dropped a delegated task (more likely with models that
+		# batch multiple task tool-calls in one turn).
+		(ok2, d2) := sys->stat(path);
+		if(ok2 >= 0 && (d2.mode & Sys->DMDIR))
+			return nil;
 		return sys->sprint("cannot create %s: %r", path);
+	}
 	fd = nil;
 	return nil;
 }

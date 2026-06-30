@@ -407,9 +407,25 @@ docreate(args: string): string
 		provcmd += " tools=" + toolsarg;
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
+
+	# INFR-362: serialize provisioning. Provisioning runs asynchronously in the
+	# parent namespace; a sibling `task create` issued in the SAME turn (parallel
+	# tool calls — e.g. Mistral emits all at once) would otherwise overlap this
+	# child's namespace setup and find /mnt/ui transiently hidden, silently
+	# dropping the task. Wait for this child's manifest, which is written only
+	# AFTER its restrictns completes — by then the racy bind-replace window is
+	# closed. Remove any stale manifest first (/tmp persists across runs).
+	manifestp := sys->sprint("/tmp/veltro/.ns/manifest.%d", newid);
+	sys->remove(manifestp);
 	perr := writefile("/tool/provision", provcmd[10:]);
 	if(perr != nil)
 		sys->fprint(sys->fildes(2), "task: provision warning: %s\n", perr);
+	for(w := 0; w < 120; w++) {		# bounded ~6s
+		(mok, nil) := sys->stat(manifestp);
+		if(mok >= 0)
+			break;
+		sys->sleep(50);
+	}
 
 	return sys->sprint("created activity %d: %s", newid, label);
 }

@@ -200,14 +200,43 @@ parseattrs(s: string): list of (string, string)
 			if(i < len s)
 				i++;	# skip closing quote
 		} else {
+			# Unquoted value. Extend it across spaces until the next token
+			# that is itself a known key=… . LLMs routinely omit quotes around
+			# multi-word brief=/instructions= values; without this, the value
+			# would truncate at the first space (brief=research ponies → just
+			# "research") and the rest would be silently dropped as bare words.
 			vstart := i;
-			while(i < len s && s[i] != ' ')
-				i++;
+			for(;;) {
+				# consume the current word
+				while(i < len s && s[i] != ' ' && s[i] != '\t')
+					i++;
+				# peek past whitespace to the start of the next token
+				j := i;
+				while(j < len s && (s[j] == ' ' || s[j] == '\t'))
+					j++;
+				if(j >= len s || iskeyat(s, j))
+					break;
+				i = j;	# next token is not a known key — fold it into the value
+			}
 			val = s[vstart:i];
+			while(len val > 0 && (val[len val - 1] == ' ' || val[len val - 1] == '\t'))
+				val = val[0:len val - 1];
 		}
 		result = (key, val) :: result;
 	}
 	return result;
+}
+
+# Does a known "key=" token begin at position i (the first non-space char of
+# a token)? Used by parseattrs to decide where an unquoted value ends.
+iskeyat(s: string, i: int): int
+{
+	j := i;
+	while(j < len s && s[j] != '=' && s[j] != ' ' && s[j] != '\t')
+		j++;
+	if(j >= len s || s[j] != '=')
+		return 0;
+	return strlistcontains(createkeys, s[i:j]);
 }
 
 getattr(attrs: list of (string, string), key: string): string
@@ -307,7 +336,12 @@ docreate(args: string): string
 	# This goes into the LLM system prompt only — no visible chat message.
 	brief := getattr(attrs, "brief");
 	if(brief == "")
-		brief = "You have been assigned to: " + label + ". Greet the user and ask how you can help with this task.";
+		brief = "Your assignment: " + label + ". Begin working on this now, " +
+			"using your tools. Work out the concrete steps yourself and carry " +
+			"them out autonomously. Do not greet or ask what to do — the label " +
+			"above is your task. If you genuinely cannot proceed without a " +
+			"specific missing detail, ask one concise question; otherwise make " +
+			"a reasonable assumption and proceed.";
 	briefpath := sys->sprint("/tmp/veltro/brief.%d", newid);
 	bfd := sys->create(briefpath, Sys->OWRITE, 8r644);
 	if(bfd != nil) {

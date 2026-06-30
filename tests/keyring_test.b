@@ -694,6 +694,37 @@ testDESCBC(t: ref T)
 	t.assert(rejected, "DES setup rejected");
 }
 
+# ── Authentication message framing ─────────────────────────────────────────
+
+getframed(raw: string): array of byte
+{
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		return nil;
+	b := array of byte raw;
+	if(sys->write(fds[1], b, len b) != len b)
+		return nil;
+	fds[1] = nil;
+	return kr->getmsg(fds[0]);
+}
+
+testMessageFraming(t: ref T)
+{
+	msg := getframed("0001\n2");
+	t.assert(msg != nil && string msg == "2", "canonical data frame accepted");
+
+	msg = getframed("0001X2");
+	t.assert(msg == nil, "missing frame-header newline rejected");
+	msg = getframed("+001\n2");
+	t.assert(msg == nil, "signed frame length rejected");
+	msg = getframed("   1\n2");
+	t.assert(msg == nil, "whitespace-padded frame length rejected");
+	msg = getframed("0a01\n2");
+	t.assert(msg == nil, "nondigit frame length rejected");
+	msg = getframed("!01x\ne");
+	t.assert(msg == nil, "malformed error-frame length rejected");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -744,6 +775,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AES256", testAES256);
 	run("RC4", testRC4);
 	run("DESDisabled", testDESCBC);
+	run("MessageFraming", testMessageFraming);
 
 	# Asymmetric key tests
 	run("RSA", testRSA);

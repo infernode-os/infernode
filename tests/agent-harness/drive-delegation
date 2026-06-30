@@ -43,7 +43,22 @@ sleep 1
 
 # lucibridge for activity 0
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
-sleep 3
+
+# Readiness wait: don't inject the request until activity-0 lucibridge has
+# logged that it is ready (its session is up and it is about to read input).
+# A fixed sleep races LLM-session init under load and the request can be sent
+# before the read loop exists; poll the log instead. Bounded ~40s.
+ready=no
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
+	if {~ $ready no} {
+		if {grep -s 'activity 0, session' /tmp/lucibridge.log} {
+			ready=yes
+		}{
+			sleep 2
+		}
+	}
+}
+echo readiness: $ready
 
 fn dumpstate {
 	echo '== activities =='

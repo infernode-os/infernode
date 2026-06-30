@@ -9,19 +9,29 @@ GUISRC=\
 SDL3_CFLAGS=`pkg-config --cflags sdl3 2>/dev/null || echo "-I/opt/homebrew/include"`
 SDL3_LIBS=`pkg-config --libs sdl3 2>/dev/null || echo "-L/opt/homebrew/lib -lSDL3"`
 
-# Opus codec for /dev/opus (INFR-187). Only enable -DHAVE_OPUS when the opus
-# headers are actually present (brew install opus), so a host without opus
-# degrades to a build without /dev/opus instead of failing to find
-# <opus/opus.h>. pkg-config search path needs the Homebrew prefix so
-# brew-installed opus is found on a stock zsh.
-OPUS_CFLAGS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists opus 2>/dev/null; then echo -DHAVE_OPUS; pkg-config --cflags opus; fi`
-OPUS_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists opus 2>/dev/null; then pkg-config --libs opus; fi`
+# pkg-config search path: the Homebrew prefix plus openssl@3's keg-only
+# pkgconfig dir. openssl@3 is keg-only on Homebrew, so libcrypto.pc is NOT
+# symlinked into /opt/homebrew/lib/pkgconfig. libfido2.pc carries
+# `Requires.private: libcrypto`, so without openssl@3 on the path
+# `pkg-config --exists libfido2` fails to resolve and silently drops
+# -DHAVE_FIDO2 — which shipped /dev/2fa as a dead stub (the CI verify step
+# in release.yml now catches this). Add the keg dir so resolution succeeds.
+PKGCONFIG_PATH=/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/openssl@3/lib/pkgconfig
 
-# libfido2 for /dev/2fa (second-factor auth). Same conditional pattern as opus:
-# only define -DHAVE_FIDO2 when libfido2 is present, so a host without it
-# degrades to an emu without /dev/2fa rather than failing to find <fido.h>.
-FIDO2_CFLAGS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
-FIDO2_LIBS=`export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
+# Opus codec for /dev/opus (INFR-187). Only enable -DHAVE_OPUS when opus is
+# actually present (brew install opus), so a host without it degrades to a
+# build without /dev/opus instead of failing to find <opus/opus.h>. Prefer
+# pkg-config, but fall back to a direct header probe under the Homebrew prefix
+# so a runner where pkg-config can't resolve the package still links opus.
+OPUS_CFLAGS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists opus 2>/dev/null; then echo -DHAVE_OPUS; pkg-config --cflags opus; elif test -f /opt/homebrew/include/opus/opus.h; then echo "-DHAVE_OPUS -I/opt/homebrew/include"; fi`
+OPUS_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists opus 2>/dev/null; then pkg-config --libs opus; elif test -f /opt/homebrew/include/opus/opus.h; then echo "-L/opt/homebrew/lib -lopus"; fi`
+
+# libfido2 for /dev/2fa (second-factor auth). Same conditional pattern as opus,
+# with the same header-probe fallback: only define -DHAVE_FIDO2 when libfido2
+# is present, so a host without it degrades to an emu without /dev/2fa rather
+# than failing to find <fido.h>.
+FIDO2_CFLAGS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; elif test -f /opt/homebrew/include/fido.h; then echo "-DHAVE_FIDO2 -I/opt/homebrew/include"; fi`
+FIDO2_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; elif test -f /opt/homebrew/include/fido.h; then echo "-L/opt/homebrew/lib -lfido2"; fi`
 
 GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $OPUS_CFLAGS $FIDO2_CFLAGS
 GUILIBS=$SDL3_LIBS $OPUS_LIBS $FIDO2_LIBS

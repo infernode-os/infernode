@@ -23,7 +23,6 @@ MAIN=\
 SOURCES=\
     sources/email.dis\
     sources/mockmail.dis\
-    sources/mockinject.dis\
 
 TOOLS=\
     tools/read.dis\
@@ -116,8 +115,6 @@ sources/email.dis: sources/email.b
 	limbo $LIMBOFLAGS -gw -o sources/email.dis sources/email.b
 sources/mockmail.dis: sources/mockmail.b
 	limbo $LIMBOFLAGS -gw -o sources/mockmail.dis sources/mockmail.b
-sources/mockinject.dis: sources/mockinject.b
-	limbo $LIMBOFLAGS -gw -o sources/mockinject.dis sources/mockinject.b
 
 # Tools
 tools/read.dis: tools/read.b tool.m

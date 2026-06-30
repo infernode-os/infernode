@@ -287,6 +287,13 @@ restrictns(caps: ref Capabilities): string
 	(mntllmok, nil) := sys->stat("/mnt/llm");
 	if(mntllmok >= 0 && !inlist("llm", mntpaths))
 		mntpaths = "llm" :: mntpaths;
+	# /mnt/msg — the unified message plane (msg9p): the agent's own message
+	# notifications (email, etc.). Granted if present, like /mnt/llm — it is the
+	# user's own data, not a host/secret surface. Sub-restriction can narrow it
+	# later if needed.
+	(mntmsgok, nil) := sys->stat("/mnt/msg");
+	if(mntmsgok >= 0 && !inlist("msg", mntpaths))
+		mntpaths = "msg" :: mntpaths;
 	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
 	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the

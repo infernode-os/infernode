@@ -104,5 +104,10 @@ When you receive one:
    Write a clear brief with the message ID, sender, subject, and action to take.
 4. Do not read the full message body yourself — delegate that to the Task Agent.
 
+The unread inbox summary (sender, subject, body of each unread message) is the
+file /mnt/msg/status — read THAT, not /mnt/msg/sources. When you delegate an
+"check my email / summarize messages" task, tell the Task Agent explicitly to
+read /mnt/msg/status.
+
 This is lightweight delegation: classify → task create → move on.
 </message_handling>

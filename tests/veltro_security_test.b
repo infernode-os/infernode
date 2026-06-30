@@ -457,6 +457,64 @@ mntWorker(result: chan of string)
 	result <-= "";
 }
 
+# An explicit LLM grant must expose only that service. This is the positive
+# counterpart to restrictNsWorker's assertion that /mnt/llm is hidden by
+# default, and pins the path-based contract used by the top-level agent loop.
+testRestrictNsMntLlm(t: ref T)
+{
+	created := 0;
+	(ok, nil) := sys->stat("/mnt/llm");
+	if(ok < 0) {
+		fd := sys->create("/mnt/llm", Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil) {
+			t.skip("cannot create /mnt/llm test fixture");
+			return;
+		}
+		fd = nil;
+		created = 1;
+	}
+	result := chan of string;
+	spawn mntLlmWorker(result);
+	r := <-result;
+	if(created)
+		sys->remove("/mnt/llm");
+	if(r != "")
+		t.error(r);
+}
+
+mntLlmWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/mnt/llm" :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (llm grant) failed: %s", err);
+		return;
+	}
+	(llmok, nil) := sys->stat("/mnt/llm");
+	if(llmok < 0) {
+		result <-= "/mnt/llm missing with explicit grant";
+		return;
+	}
+	(mcpok, nil) := sys->stat("/mnt/mcp");
+	if(mcpok >= 0) {
+		result <-= "ungranted /mnt/mcp visible with only /mnt/llm granted";
+		return;
+	}
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "ungranted /mnt/acme visible with only /mnt/llm granted";
+		return;
+	}
+	result <-= "";
+}
+
 
 # Combined /mnt grants must compose rather than replace one another.
 testRestrictNsMntCombined(t: ref T)
@@ -1303,6 +1361,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ProgAllowlist", testProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
+	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);
 	run("RestrictNsRace", testRestrictNsRace);
 	run("VerifyNs", testVerifyNs);

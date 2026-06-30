@@ -288,6 +288,8 @@ restrictns(caps: ref Capabilities): string
 	# /mnt/msg (msg9p) is likewise caps-driven: a message task agent reads
 	# /mnt/msg/status by path, so it is granted "/mnt/msg" explicitly via
 	# caps.paths (the message policy adds paths=/mnt/msg).
+	# SECURITY INVARIANT: changes here must keep the negative, positive, and
+	# composition cases in tests/veltro_security_test.b in sync.
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p

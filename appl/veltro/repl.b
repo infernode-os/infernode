@@ -156,7 +156,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Must happen after mount checks and Xenith window creation,
 	# but before session creation
 	nsconstruct = load NsConstruct NsConstruct->PATH;
-	if(nsconstruct != nil) {
+	if(nsconstruct == nil) {
+		sys->fprint(stderr, "repl: cannot load namespace confinement: %r\n");
+		raise "fail:namespace";
+	} else {
 		nsconstruct->init();
 
 		# Read tools list before restriction to grant correct capabilities.
@@ -166,17 +169,24 @@ init(nil: ref Draw->Context, args: list of string)
 		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
 			if(hd tl2 == "xenith") { xgrant = 1; break; }
 
-		sys->pctl(Sys->FORKNS, nil);
-		sys->pctl(Sys->NODEVS, nil);
+		if(sys->pctl(Sys->FORKNS, nil) < 0) {
+			sys->fprint(stderr, "repl: cannot fork namespace: %r\n");
+			raise "fail:namespace";
+		}
+		if(sys->pctl(Sys->NODEVS, nil) < 0) {
+			sys->fprint(stderr, "repl: cannot disable device attachment: %r\n");
+			raise "fail:namespace";
+		}
 
 		caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
 		);
 
 		nserr := nsconstruct->restrictns(caps);
-		if(nserr != nil)
+		if(nserr != nil) {
 			sys->fprint(stderr, "repl: namespace restriction failed: %s\n", nserr);
-		else if(verbose)
+			raise "fail:namespace";
+		} else if(verbose)
 			sys->fprint(stderr, "repl: namespace restricted\n");
 	}
 

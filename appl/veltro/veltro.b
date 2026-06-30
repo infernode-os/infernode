@@ -246,6 +246,15 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 		}
 
+		# Preserve only the shared session pointer when restrictns allowlists /env.
+		(envsessionok, nil) := sys->stat("/env/VELTRO_SESSION");
+		if(envsessionok < 0) {
+			efd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
+			if(efd == nil) {
+				sys->fprint(stderr, "veltro: cannot create session environment slot: %r\n");
+				raise "fail:namespace";
+			}
+		}
 		# Fork namespace so caller is unaffected
 		if(sys->pctl(Sys->FORKNS, nil) < 0) {
 			sys->fprint(stderr, "veltro: cannot fork namespace: %r\n");

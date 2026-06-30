@@ -322,17 +322,21 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
-	# /mnt/llm is the agent's brain and is auto-granted when present. Sibling
-	# application mount points remain capability-gated.
+	# Least privilege: with NO /mnt grant in caps.paths, a confined child sees no
+	# /mnt at all — not even /mnt/llm. The model service is NOT granted by mere
+	# existence; an agent that needs it lists /mnt/llm in caps.paths (repl), and a
+	# spawned sub-agent drives the LLM through a pre-opened FD that survives the
+	# restriction. (mntgen would make /mnt/llm *stat* as present in the parent ns;
+	# the root-level restriction is what hides /mnt here.)
 	(llmok, nil) := sys->stat("/mnt/llm");
-	if(llmok < 0) {
-		result <-= "/mnt/llm should be accessible after restrictns when present";
+	if(llmok >= 0) {
+		result <-= "/mnt/llm must NOT be visible without an explicit /mnt grant (least privilege)";
 		return;
 	}
 
 	(acmeok, nil) := sys->stat("/mnt/acme");
 	if(acmeok >= 0) {
-		result <-= "/mnt/acme must NOT be visible when only /mnt/llm is auto-granted";
+		result <-= "/mnt/acme must NOT be visible without a grant";
 		return;
 	}
 
@@ -1082,6 +1086,98 @@ contains(s, sub: string): int
 	return 0;
 }
 
+
+# ============================================================================
+# Environment allowlist
+# Verifies inherited secrets are hidden while VELTRO_SESSION remains available.
+# ============================================================================
+testEnvironmentAllowlist(t: ref T)
+{
+	(oldok, nil) := sys->stat("/env/VELTRO_SESSION");
+	oldsession := readfilecontent("/env/VELTRO_SESSION");
+	writefilecontent("/env/VELTRO_SESSION", "/tmp/veltro/test-session");
+	writefilecontent("/env/INFERNODE_NS_CANARY", "synthetic-secret-canary");
+
+	result := chan of string;
+	spawn environmentAllowlistWorker(result);
+	r := <-result;
+
+	sys->remove("/env/INFERNODE_NS_CANARY");
+	if(oldok >= 0)
+		writefilecontent("/env/VELTRO_SESSION", oldsession);
+	else
+		sys->remove("/env/VELTRO_SESSION");
+
+	if(r != "")
+		t.error(r);
+}
+
+environmentAllowlistWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	if(readfilecontent("/env/VELTRO_SESSION") != "/tmp/veltro/test-session") {
+		result <-= "VELTRO_SESSION should remain visible after restriction";
+		return;
+	}
+	(secretok, nil) := sys->stat("/env/INFERNODE_NS_CANARY");
+	if(secretok >= 0) {
+		result <-= "inherited environment secret remains visible";
+		return;
+	}
+	result <-= "";
+}
+
+
+# ============================================================================
+# Process namespace allowlist
+# Verifies a confined process can inspect itself but not its parent.
+# ============================================================================
+testProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn progAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+progAllowlistWorker(result: chan of string, parentpid: int)
+{
+	selfpid := sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	(selfok, nil) := sys->stat(sys->sprint("/prog/%d/status", selfpid));
+	if(selfok < 0) {
+		result <-= "current process should remain visible";
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ns", parentpid));
+	if(parentok >= 0) {
+		result <-= "parent process remains visible";
+		return;
+	}
+	result <-= "";
+}
+
 # ============================================================================
 # Main entry point
 # ============================================================================
@@ -1115,6 +1211,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictDirExclusion", testRestrictDirExclusion);
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
+	run("EnvironmentAllowlist", testEnvironmentAllowlist);
+	run("ProgAllowlist", testProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsRace", testRestrictNsRace);

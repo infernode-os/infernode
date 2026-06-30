@@ -823,7 +823,16 @@ exectool(name, args: string): string
 asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
 	mypid := sys->pctl(Sys->FORKNS, nil);
-	sys->pctl(Sys->NODEVS, nil);
+	if(mypid < 0) {
+		ti.result = array of byte "error: cannot fork namespace";
+		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
+		return;
+	}
+	if(sys->pctl(Sys->NODEVS, nil) < 0) {
+		ti.result = array of byte "error: cannot disable device attachment";
+		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
+		return;
+	}
 	# Bind our mount point over /tool BEFORE namespace restriction.
 	# /tool.N is still visible in the inherited namespace at this point.
 	# restrictdir("/", safe) preserves "tool" and captures the current
@@ -831,8 +840,11 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	# If this bind were AFTER restriction, /tool.N would already be hidden
 	# (not in the safe list) and the bind would fail silently, leaving
 	# /tool pointing to the parent instance (wrong activity ID).
-	if(mountpt_g != "/tool")
-		sys->bind(mountpt_g, "/tool", Sys->MREPL);
+	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
+		ti.result = array of byte "error: cannot bind activity tool service";
+		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
+		return;
+	}
 	nserr := applynsrestriction();
 	if(nserr != nil) {
 		ti.result = array of byte ("error: namespace restriction failed: " + nserr);

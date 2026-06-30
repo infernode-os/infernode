@@ -273,20 +273,24 @@ restrictns(caps: ref Capabilities): string
 	# caps.mcproviders (generic mc9p) grants the whole /mnt/mcp. "mnt" is added
 	# to the root safe-list (step 8) only when something here is granted —
 	# otherwise a confined agent sees no /mnt at all.
+	# Every /mnt mount is capability-driven (least privilege): a child sees a
+	# /mnt subtree ONLY when its capabilities name it. Nothing is granted merely
+	# because the directory exists — otherwise a confined child would see /mnt
+	# (and the model service under it) regardless of what it was granted.
+	#
+	# /mnt/llm is NOT granted here by existence. An agent that drives its own LLM
+	# session opens it BY PATH after restriction, so it lists "/mnt/llm" in
+	# caps.paths (repl does this for its loop) and it is picked up by filterpaths
+	# above. A spawned sub-agent instead inherits a pre-opened session FD from its
+	# parent (subagent.b llmaskfd) — an open FD survives namespace restriction —
+	# so it needs no /mnt/llm mount and must not be handed the whole service tree.
+	#
+	# /mnt/msg (msg9p) is likewise caps-driven: a message task agent reads
+	# /mnt/msg/status by path, so it is granted "/mnt/msg" explicitly via
+	# caps.paths (the message policy adds paths=/mnt/msg).
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && mntpaths == nil)
 		mntpaths = "mcp" :: nil;	# whole /mnt/mcp for generic mc9p
-	# /mnt/llm — the agent's core LLM service. Always granted if present, which
-	# preserves the old /mnt/llm always-grant semantics ("withheld = non-functional")
-	# but now inside the SAME /mnt capability machinery as /mnt/mcp/<server> — no
-	# /n special-case (INFR-254). restrictpath("/mnt", "llm"::…) exposes the whole
-	# /mnt/llm session tree (clone/ask/system/tools/model/usage/compact). Everything
-	# else under /mnt stays strictly caps-driven (least privilege). The agent's
-	# brain is local or a remote tree bound over /mnt/llm — placement is identical
-	# either way (docs/NAMESPACE-LAYOUT.md).
-	(mntllmok, nil) := sys->stat("/mnt/llm");
-	if(mntllmok >= 0 && !inlist("llm", mntpaths))
-		mntpaths = "llm" :: mntpaths;
 	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
 	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
@@ -341,14 +345,37 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("restrict /lib: %s", err);
 	}
 
-	# 7. Restrict /tmp to: veltro/ (shadow dirs are under here).
+	# 7. Restrict /env to the one application-owned session pointer. Environment
+	# groups are commonly inherited from the launching shell and may contain
+	# credentials. Launchers pre-create VELTRO_SESSION before FORKNS so the bind
+	# captures the shared slot that plan/todo legitimately require.
+	(envok, nil) := sys->stat("/env");
+	if(envok >= 0) {
+		err = restrictdir("/env", "VELTRO_SESSION" :: nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict /env: %s", err);
+	}
+	# 8. Restrict /prog to this process. The process device otherwise exposes
+	# sibling namespaces, descriptors, status, stacks and writable control files.
+	# Non-shell tools only need the current process. Inferno sh creates another
+	# process and opens /prog/<child>/wait after restriction, so an explicit shell
+	# capability temporarily retains full /prog.
+	(progok, nil) := sys->stat("/prog");
+	if(progok >= 0 && !inlist("exec", caps.tools) && caps.shellcmds == nil) {
+		pid := sys->pctl(0, nil);
+		err = restrictdir("/prog", string pid :: nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict /prog: %s", err);
+	}
+
+	# 9. Restrict /tmp to: veltro/ (shadow dirs are under here).
 	# writable=1 so agents can create files under /tmp/veltro/.
 	# MCREATE is applied only to /tmp — not to /dis, /lib, /dev, /n, /.
 	err = restrictdir("/tmp", "veltro" :: nil, 1);
 	if(err != nil)
 		return sys->sprint("restrict /tmp: %s", err);
 
-	# 8. Restrict / to only Inferno system directories.
+	# 10. Restrict / to only Inferno system directories.
 	# The emu's -r. binds #U (project root) onto / with MAFTER,
 	# exposing project files (.env, .git, appl/, emu/, ...).
 	# restrictdir("/", safe) replaces the root union with a shadow

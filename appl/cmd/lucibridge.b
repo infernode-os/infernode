@@ -80,6 +80,9 @@ BRIDGE_SUFFIX: con "\n\nYou are Veltro, the AI agent in a Lucifer activity. " +
 	"Use tools only when the user asks you to perform a specific task.";
 
 META_PROMPT_PATH: con "/lib/veltro/meta.txt";
+# Default agentic sampling temperature (low = reliable tool-calling). Override
+# per-deployment with `temperature=` in /lib/ndb/llm. See initsession().
+AGENT_TEMP: con "0.2";
 
 log(msg: string)
 {
@@ -558,6 +561,29 @@ initsession(): string
 	if(sessionid == "")
 		return "cannot create LLM session";
 	log("initsession: session " + sessionid);
+
+	# Sampling temperature for the agentic loop. A low temperature sharply
+	# improves tool-call reliability: at the llmsrv default (0.7) the model
+	# intermittently samples a "I've started the tasks…" narration instead of
+	# emitting the task/write tool call (measured ~22% delegation-miss on
+	# gpt-oss); at 0.2 that collapses to ~0 and children also reliably call
+	# write/limbo instead of pasting. Precedence: /tmp/veltro/agent_temp (test
+	# override) > /lib/ndb/llm `temperature=` (deployment config) > AGENT_TEMP
+	# default. Applies to activity 0 and all child activities.
+	tval := agentlib->strip(agentlib->readfile("/tmp/veltro/agent_temp"));
+	if(tval == "")
+		tval = agentlib->strip(readndbfield("/lib/ndb/llm", "temperature"));
+	if(tval == "")
+		tval = AGENT_TEMP;
+	if(tval != "") {
+		tfd := sys->open("/mnt/llm/" + sessionid + "/temperature", Sys->OWRITE);
+		if(tfd != nil) {
+			tb := array of byte tval;
+			sys->write(tfd, tb, len tb);
+			tfd = nil;
+			log("initsession: set temperature to " + tval);
+		}
+	}
 
 	# Apply model override from the task tool (INFR-55). Activity 0 inherits
 	# the system default; child activities may carry a /tmp/veltro/model.<id>

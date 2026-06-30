@@ -188,6 +188,16 @@ init(nil: ref Draw->Context, args: list of string)
 			raise "fail:namespace";
 		}
 
+		# This loop opens its LLM session BY PATH after restriction (newsession
+		# opens /mnt/llm/<id>/ask), so it must grant itself /mnt/llm explicitly —
+		# nsconstruct no longer grants /mnt by existence (least privilege). A
+		# spawned sub-agent uses a pre-opened FD instead and is NOT given this.
+		for(pl := pathlist; pl != nil; pl = tl pl)
+			if(hd pl == "/mnt/llm")
+				break;
+		if(pl == nil)
+			pathlist = "/mnt/llm" :: pathlist;
+
 		caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
 		);

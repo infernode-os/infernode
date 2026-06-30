@@ -161,6 +161,10 @@ exec(args: string): string
 
 	# disname is the .dis filename — normally same as appname.
 	disname := appname;
+	if(extradata != "" && disname != "charon" && disname != "xenith")
+		return "error: launch data is only supported for charon";
+	if(disname == "charon" && extradata != "" && !isallowedurl(extradata))
+		return "error: charon only accepts http:// and https:// URLs";
 
 	# Reject names containing path separators — belt-and-suspenders guard
 	# against any normalization gaps that could reach outside /dis/wm/.
@@ -241,6 +245,25 @@ exec(args: string): string
 	if(extradata != "")
 		return "launched " + label + " with url " + extradata + " in presentation zone";
 	return "launched " + label + " in presentation zone";
+}
+
+isallowedurl(url: string): int
+{
+	url = tolower(url);
+	return hasprefix(url, "http://") || hasprefix(url, "https://");
+}
+
+tolower(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] >= 'A' && s[i] <= 'Z')
+			s[i] += 'a' - 'A';
+	return s;
+}
+
+hasprefix(s, prefix: string): int
+{
+	return len s >= len prefix && s[0:len prefix] == prefix;
 }
 
 # Read this tool's own activity ID from tools9p.

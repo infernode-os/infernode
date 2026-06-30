@@ -22,6 +22,7 @@ MAIN=\
 
 SOURCES=\
     sources/email.dis\
+    sources/mockmail.dis\
 
 TOOLS=\
     tools/read.dis\
@@ -112,6 +113,8 @@ wiki9p.dis: wiki9p.b
 # Sources
 sources/email.dis: sources/email.b
 	limbo $LIMBOFLAGS -gw -o sources/email.dis sources/email.b
+sources/mockmail.dis: sources/mockmail.b
+	limbo $LIMBOFLAGS -gw -o sources/mockmail.dis sources/mockmail.b
 
 # Tools
 tools/read.dis: tools/read.b tool.m

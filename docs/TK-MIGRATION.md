@@ -33,6 +33,15 @@ widgets established. The Tk **engine defaults** now carry that look (see
   is `/fonts/combined/unicode.sans.14.font`.
 - Window chrome (`appl/lib/titlebar.b`, `appl/lib/tkclient.b`) is
   brutalist: subdued frame, accent on focus, dark title strip.
+- **No bevels — brutalism is 2D.** The palette pins every background
+  group's light/dark shades to the one border colour, so the generic
+  relief/`tkbevel` paths render as a flat 1px border, not a 3D edge.
+  The two widgets that drew their own relief were rewritten flat: the
+  **scrollbar** (`libtk/scrol.c`) is a flat thumb on a flat trough with
+  no arrow buttons (mid-grey at rest, accent while hovered/dragged), and
+  the **scale** thumb (`libtk/scale.c`) is a flat filled block. If you
+  add or restyle a widget, fill flat and never call `tkbevel` with
+  distinct light/dark colours.
 
 ## The app recipe
 

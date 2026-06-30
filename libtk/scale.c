@@ -351,21 +351,16 @@ tkscalehoriz(Tk *tk, Image *i)
 		q.y++;
 	} else
 		gh = sh-1;
-	if(tk->flag & Tkactivated) {
+	USED(gh);
+	{
+		/* flat 2D thumb: a solid block, accent while active */
+		int tcol = TkCdisablefgnd;
+		if(tk->flag & Tkactivated)
+			tcol = TkCselectbgnd;
 		r2.min = p;
-		r2.max.x = p.x+sl;
-		r2.max.y = sr.max.y;
-		draw(i, r2, tkgc(e, TkCactivebgnd), nil, ZP);
-	}
-	switch(tks->relief) {
-	case TKsunken:
-		tkbevel(i, p, tks->sl, sh, ScaleBW, d, l);
-		tkbevel(i, q, 0, gh, 1, l, d);
-		break;
-	case TKraised:
-		tkbevel(i, p, tks->sl, sh, ScaleBW, l, d);
-		tkbevel(i, q, 0, gh, 1, d, l);
-		break;
+		r2.max.x = p.x + sl;
+		r2.max.y = p.y + sh;
+		draw(i, r2, tkgc(e, tcol), nil, ZP);
 	}
 	tks->pixpos = p.x;
 	tks->center = p.y + sh/2 + ScaleBW;
@@ -473,21 +468,16 @@ tkscalevert(Tk *tk, Image *i)
 	} else
 		gw = sw-1;
 	q.y += tks->sl/2 + 1;
-	if(tk->flag & Tkactivated) {
+	USED(gw);
+	{
+		/* flat 2D thumb: a solid block, accent while active */
+		int tcol = TkCdisablefgnd;
+		if(tk->flag & Tkactivated)
+			tcol = TkCselectbgnd;
 		r2.min = p;
-		r2.max.x = sr.max.x;
-		r2.max.y = p.y+sl;
-		draw(i, r2, tkgc(e, TkCactivebgnd), nil, ZP);
-	}
-	switch(tks->relief) {
-	case TKsunken:
-		tkbevel(i, p, sw, tks->sl, ScaleBW, d, l);
-		tkbevel(i, q, gw, 0, 1, l, d);
-		break;
-	case TKraised:
-		tkbevel(i, p, sw, tks->sl, ScaleBW, l, d);
-		tkbevel(i, q, gw, 0, 1, d, l);
-		break;
+		r2.max.x = p.x + sw;
+		r2.max.y = p.y + sl;
+		draw(i, r2, tkgc(e, tcol), nil, ZP);
 	}
 	tks->pixpos = p.y;
 	tks->center = p.x + sw/2 + ScaleBW;

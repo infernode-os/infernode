@@ -75,6 +75,7 @@ TARG=\
 	tempfile_test.dis\
 	textwidget_test.dis\
 	tk_test.dis\
+	tkrender.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\

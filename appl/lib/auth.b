@@ -9,10 +9,14 @@ include "keyring.m";
 include "security.m";
 	ssl: SSL;
 
+encalgs, hashalgs: list of string;
+
 init(): string
 {
 	if(sys == nil)
 		sys = load Sys Sys->PATH;
+	if(encalgs == nil && hashalgs == nil)
+		(encalgs, hashalgs) = sslalgs();
 	return nil;	
 }
 
@@ -44,6 +48,7 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 		return (nil, sys->sprint("can't read client ssl algorithm: %r"));
 	alg := "";
 	(nil, calgs) := sys->tokenize(algbuf, " /");
+	clientenc := clienthash := 0;
 	for(; calgs != nil; calgs = tl calgs){
 		calg := hd calgs;
 		if(algs != nil){	# otherwise we suck it and see
@@ -53,7 +58,22 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 			if(sl == nil)
 				return (nil, "unsupported client algorithm: " + calg);
 		}
+		clientenc |= member(calg, encalgs);
+		clienthash |= member(calg, hashalgs);
 		alg += calg + " ";
+	}
+	if(algs != nil && !member("none", algs)){
+		if(encalgs == nil && hashalgs == nil)
+			return (nil, "cannot enforce ssl algorithm policy");
+		requireenc := requirehash := 0;
+		for(sl := algs; sl != nil; sl = tl sl){
+			requireenc |= member(hd sl, encalgs);
+			requirehash |= member(hd sl, hashalgs);
+		}
+		if(requireenc && !clientenc)
+			return (nil, "client omitted required encryption algorithm");
+		if(requirehash && !clienthash)
+			return (nil, "client omitted required integrity algorithm");
 	}
 	if(alg != nil)
 		alg = alg[0:len alg - 1];
@@ -70,6 +90,45 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	if(c == nil)
 		return (nil, "push ssl: " + err);
 	return (c, id_or_err);
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+sslalgs(): (list of string, list of string)
+{
+	clone := readfile("#D/clone");
+	base := "#D/";
+	if(clone == nil){
+		clone = readfile("#D/ssl/clone");
+		base = "#D/ssl/";
+	}
+	if(clone == nil)
+		return (nil, nil);
+	(nil, ids) := sys->tokenize(clone, " \t\n");
+	if(ids == nil)
+		return (nil, nil);
+	base += hd ids;
+	(nil, enc) := sys->tokenize(readfile(base+"/encalgs"), " \t\n");
+	(nil, hash) := sys->tokenize(readfile(base+"/hashalgs"), " \t\n");
+	return (enc, hash);
+}
+
+readfile(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[256] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return nil;
+	return string b[0:n];
 }
 
 client(alg: string, ai: ref Keyring->Authinfo, fd: ref Sys->FD): (ref Sys->FD, string)

@@ -19,7 +19,7 @@ include "titlebar.m";
 	titlebar: Titlebar;
 include "tkclient.m";
 
-Background: con int 16r777777FF;		# should be drawn over immediately, but just in case...
+Background: con int 16r080808FF;		# brutalist surface; should be drawn over immediately anyway
 
 init()
 {

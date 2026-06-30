@@ -126,6 +126,7 @@ TARG=\
 	tftp.dis\
 	timers.dis\
 	titlebar.dis\
+	tkclient.dis\
 	translate.dis\
 	twofa.dis\
 	twofaslot.dis\

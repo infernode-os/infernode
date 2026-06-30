@@ -882,8 +882,9 @@ Tk_putimage(void *a)
 		tkreplimg(t, f->i, f->m, &tki->img);
 		if(locked)
 			unlockdisplay(d);
-	
+
 		tksizeimage(t->root, tki);
+		tkimgchanged(t, tki);
 	}
 Error:
 	unlockctxt(t->ctxt);

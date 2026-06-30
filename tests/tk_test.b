@@ -22,7 +22,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Rect: import draw;
+	Display, Image, Rect: import draw;
 
 include "tk.m";
 	tk: Tk;
@@ -227,6 +227,50 @@ testToggles(t: ref T)
 	t.assertseq(tk->cmd(top, "variable rgv"), "b", "radiobutton sets group variable");
 }
 
+# A label bound to a named bitmap image that is later filled with
+# tk->putimage must pick up the new image's size and contents.  libtk
+# had no Tk_ImageChanged-style notification, so the label kept its
+# zero-size geometry from when the image was empty and rendered blank.
+# This is the display path the dynamic-image apps (wm/fractals) rely on.
+testDynamicImage(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	# bitmap image created empty, label bound to it before any content,
+	# exactly as wm/fractals buildui() does.
+	tk->cmd(top, "image create bitmap dyn");
+	tk->cmd(top, "label .l -image dyn -borderwidth 0");
+	tk->cmd(top, "pack .l");
+	tk->cmd(top, "update");
+	# while the image is empty the label has no image extent
+	t.asserteq(int tk->cmd(top, ".l cget -actwidth"), 0,
+		"label is zero-width before putimage");
+
+	# build a 64x48 off-screen image and composite it in
+	IW: con 64;
+	IH: con 48;
+	ir: Rect;
+	ir.min = (0, 0);
+	ir.max = (IW, IH);
+	img := display.newimage(ir, display.image.chans, 0, Draw->Nofill);
+	if(img == nil){
+		t.fatal(sys->sprint("newimage failed: %r"));
+		return;
+	}
+	img.draw(img.r, display.color(int 16rE8553AFF), nil, (0, 0));
+	e := tk->putimage(top, "dyn", img, nil);
+	t.assertnil(e, sys->sprint("putimage error: %q", e));
+	tk->cmd(top, "update");
+
+	# the label must now have grown to the image's size (plus the small
+	# bitmap padding libtk adds), proving the change notification fired.
+	aw := int tk->cmd(top, ".l cget -actwidth");
+	ah := int tk->cmd(top, ".l cget -actheight");
+	t.assert(aw >= IW, sys->sprint("label actwidth tracks image (got %d, want >= %d)", aw, IW));
+	t.assert(ah >= IH, sys->sprint("label actheight tracks image (got %d, want >= %d)", ah, IH));
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -262,6 +306,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ButtonInvoke",    testButtonInvoke);
 	run("Listbox",         testListbox);
 	run("Toggles",         testToggles);
+	run("DynamicImage",    testDynamicImage);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

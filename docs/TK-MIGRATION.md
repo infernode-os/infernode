@@ -134,8 +134,23 @@ and passed as `-foreground #rrggbbff`.
 | `wm/shell` | migrated | terminal: text-widget view of transcript+input |
 | `wm/settings` | migrated | master-detail form (9 panels; theme switcher) |
 | `wm/matrix` + `matrix/*` | migrated | composited frame via label+putimage |
-| `charon/gui` (+`layout`/`common`) | pending | HTML render + chrome |
-| `cmd/luciconv` | pending | dialogue tiles |
+| `charon/gui` (+`layout`/`common`) | migrated | inline flat status strip + scrollbars |
+| `cmd/luciconv` | migrated | inline flat dialogue-tile buttons |
+
+**The native toolkit is retired.** No app, service, or library imports
+`widget.m` any more, so `module/widget.m`, `appl/lib/widget.b`, their
+compiled `dis/lib/widget.dis`, and the toolkit unit tests
+(`widget_kbdfilter_test`, `widget_scrollbar_test`) are deleted, and
+`widget.dis` / `widget.m` are dropped from the lib, wm, matrix, and tests
+mkfiles. (The separate `textwidget` text-wrapping helper is now also
+unused but left in place — it is not part of the widget toolkit.)
+
+Note on the non-Tk consumers: `wm/matrix`, `cmd/luciconv`, `charon`, and
+the two `matrix/*` display modules are not Tk toplevels — they render
+into an Image handed to them by a host (the Lucifer tiler / the matrix
+compositor / charon's own window). They dropped `widget.m` by drawing
+their chrome (scrollbars, buttons, status strips) inline in the flat 2D
+brutalist style rather than by adopting Tk widgets.
 
 ### Notes for the pending migrations (learned while scoping)
 
@@ -187,6 +202,6 @@ Verified empirically and reusable:
   the Escape rune via `sprint "<Key-%c>" 16r1b` — `\x1b` isn't a Limbo
   string escape).
 
-When no app uses `widget.m` / `lucitheme`-via-widget anymore, delete
-`module/widget.m`, `appl/lib/widget.b`, and their tests, and drop them
-from the build + CI.
+**Done.** No app uses `widget.m` any more; `module/widget.m`,
+`appl/lib/widget.b`, `dis/lib/widget.dis`, and the toolkit tests are
+deleted and dropped from the build. The Tk reintegration is complete.

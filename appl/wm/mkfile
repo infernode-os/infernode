@@ -54,7 +54,6 @@ SYSMODULES=\
 	tk.m\
 	tkclient.m\
 	webclient.m\
-	widget.m\
 	winplace.m\
 	wmclient.m\
 	wmlib.m\

@@ -82,8 +82,6 @@ TARG=\
 	tls_protocol_test.dis\
 	webclient_test.dis\
 	wireformat_test.dis\
-	widget_kbdfilter_test.dis\
-	widget_scrollbar_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_launch_test.dis\
 	veltro_more_tools_test.dis\
@@ -165,7 +163,6 @@ SYSMODULES=\
 	tk.m\
 	tls.m\
 	webclient.m\
-	widget.m\
 	x509.m\
 	xml.m\
 

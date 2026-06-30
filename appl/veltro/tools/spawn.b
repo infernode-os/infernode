@@ -954,13 +954,22 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
          samod: SubAgent, at_ms: int, every_ms: int)
 {
 	# Step 1: Fresh process group (empty service registry)
-	sys->pctl(Sys->NEWPGRP, nil);
+	if(sys->pctl(Sys->NEWPGRP, nil) < 0) {
+		writeresult(pipefd, "ERROR:cannot create process group");
+		return;
+	}
 
 	# Step 2: Fork namespace (inherits already-restricted parent namespace)
-	sys->pctl(Sys->FORKNS, nil);
+	if(sys->pctl(Sys->FORKNS, nil) < 0) {
+		writeresult(pipefd, "ERROR:cannot fork namespace");
+		return;
+	}
 
 	# Step 3: Empty environment (no inherited secrets)
-	sys->pctl(Sys->NEWENV, nil);
+	if(sys->pctl(Sys->NEWENV, nil) < 0) {
+		writeresult(pipefd, "ERROR:cannot clear environment");
+		return;
+	}
 
 	# Step 4: Create LLM session using /mnt/llm/new clone pattern.
 	# Each child gets its own session — fully isolated from parent and siblings.
@@ -1071,10 +1080,16 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 		keepfds = llmaskfd.fd :: keepfds;
 	if(logfd != nil)
 		keepfds = logfd.fd :: keepfds;
-	sys->pctl(Sys->NEWFD, keepfds);
+	if(sys->pctl(Sys->NEWFD, keepfds) < 0) {
+		writeresult(pipefd, "ERROR:cannot restrict file descriptors");
+		return;
+	}
 
 	# Step 8: Block device naming (after all bind operations)
-	sys->pctl(Sys->NODEVS, nil);
+	if(sys->pctl(Sys->NODEVS, nil) < 0) {
+		writeresult(pipefd, "ERROR:cannot disable device attachment");
+		return;
+	}
 
 	# Step 9: Build tool list for this child (filter preloadedtools to this spec)
 	toolmods: list of Tool;

@@ -1082,6 +1082,57 @@ contains(s, sub: string): int
 	return 0;
 }
 
+
+# ============================================================================
+# Environment allowlist
+# Verifies inherited secrets are hidden while VELTRO_SESSION remains available.
+# ============================================================================
+testEnvironmentAllowlist(t: ref T)
+{
+	(oldok, nil) := sys->stat("/env/VELTRO_SESSION");
+	oldsession := readfilecontent("/env/VELTRO_SESSION");
+	writefilecontent("/env/VELTRO_SESSION", "/tmp/veltro/test-session");
+	writefilecontent("/env/INFERNODE_NS_CANARY", "synthetic-secret-canary");
+
+	result := chan of string;
+	spawn environmentAllowlistWorker(result);
+	r := <-result;
+
+	sys->remove("/env/INFERNODE_NS_CANARY");
+	if(oldok >= 0)
+		writefilecontent("/env/VELTRO_SESSION", oldsession);
+	else
+		sys->remove("/env/VELTRO_SESSION");
+
+	if(r != "")
+		t.error(r);
+}
+
+environmentAllowlistWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	if(readfilecontent("/env/VELTRO_SESSION") != "/tmp/veltro/test-session") {
+		result <-= "VELTRO_SESSION should remain visible after restriction";
+		return;
+	}
+	(secretok, nil) := sys->stat("/env/INFERNODE_NS_CANARY");
+	if(secretok >= 0) {
+		result <-= "inherited environment secret remains visible";
+		return;
+	}
+	result <-= "";
+}
+
 # ============================================================================
 # Main entry point
 # ============================================================================
@@ -1115,6 +1166,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictDirExclusion", testRestrictDirExclusion);
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
+	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsRace", testRestrictNsRace);

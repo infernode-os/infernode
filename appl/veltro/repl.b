@@ -151,6 +151,16 @@ init(nil: ref Draw->Context, args: list of string)
 		w.data = w.openfile("data");
 		xmode = 1;
 	}
+	# Preserve only the shared session pointer when restrictns allowlists /env.
+	(envsessionok, nil) := sys->stat("/env/VELTRO_SESSION");
+	if(envsessionok < 0) {
+		efd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
+		if(efd == nil) {
+			sys->fprint(stderr, "repl: cannot create session environment slot: %r\n");
+			raise "fail:namespace";
+		}
+	}
+
 
 	# Namespace restriction (v3): FORKNS + bind-replace
 	# Must happen after mount checks and Xenith window creation,

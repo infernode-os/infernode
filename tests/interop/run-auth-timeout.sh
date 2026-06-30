@@ -18,17 +18,19 @@ PORT="${1:-19680}"
 MODE="${2:-concurrency}"
 KIND="${3:-listen}"
 KEY="/tmp/auth-timeout-key-$PORT"
+IDENTITY="/tmp/auth-timeout-identity-$PORT"
 case "$MODE" in
 	concurrency) LIMIT_ARGS="-L 2 -R 100"; LIMIT_LOG='pre-auth limit reached'; ADMITTED=2 ;;
 	rate)        LIMIT_ARGS="-L 4 -R 1";   LIMIT_LOG='pre-auth rate limit reached'; ADMITTED=1 ;;
 	*) echo "usage: run-auth-timeout.sh [port] [concurrency|rate]" >&2; exit 2 ;;
 esac
 case "$KIND" in
-	listen)     LISTEN_CMD="listen -sv $LIMIT_ARGS -T 5000 -a aes_256_cbc -a sha256 -k $KEY tcp!*!$PORT {export /lib &}" ;;
+	listen)     LISTEN_CMD="listen -sv $LIMIT_ARGS -T 5000 -a aes_256_cbc -a sha256 -k $KEY tcp!*!$PORT {cat /dev/user > $IDENTITY; export /lib &}" ;;
 	styxlisten) LISTEN_CMD="styxlisten -sv $LIMIT_ARGS -T 5000 -a aes_256_cbc -a sha256 -k $KEY tcp!*!$PORT export /lib" ;;
 	*) echo "usage: run-auth-timeout.sh [port] [concurrency|rate] [listen|styxlisten]" >&2; exit 2 ;;
 esac
 KEY_HOST="$ROOT$KEY"
+IDENTITY_HOST="$ROOT$IDENTITY"
 MNT="/n/auth-timeout-$PORT"
 OUT="$ROOT/tmp/auth-timeout-$PORT.out"
 SERVER_RC="$ROOT/tmp/auth-timeout-server-$PORT.rc"
@@ -42,13 +44,13 @@ done
 
 cleanup() {
 	[ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
-	rm -f "$SERVER_RC" "$CLIENT_RC" "$KEY_HOST"
+	rm -f "$SERVER_RC" "$CLIENT_RC" "$KEY_HOST" "$IDENTITY_HOST"
 	rm -rf "$ROOT$MNT"
 }
 trap cleanup EXIT
 
 mkdir -p "$ROOT/tmp" "$ROOT$MNT"
-rm -f "$KEY_HOST" "$OUT"
+rm -f "$KEY_HOST" "$IDENTITY_HOST" "$OUT"
 
 cat >"$SERVER_RC" <<EOF
 load std
@@ -136,7 +138,13 @@ EOF
 
 CLIENT_OUT="$("$EMU" -c1 -r"$ROOT" /dis/sh.dis "/tmp/$(basename "$CLIENT_RC")" 2>&1)"
 if echo "$CLIENT_OUT" | grep -q AUTH-TIMEOUT-PASS; then
+	if [ "$KIND" = listen ] && [ "$(cat "$IDENTITY_HOST" 2>/dev/null)" != timeoutowner ]; then
+		echo "FAIL: post-auth command did not run as authenticated identity"
+		echo "    expected=timeoutowner observed=$(cat "$IDENTITY_HOST" 2>/dev/null)"
+		exit 1
+	fi
 	echo "PASS: legitimate mount -k succeeds after stalled peer timeout"
+	[ "$KIND" != listen ] || echo "PASS: post-auth command runs as authenticated identity"
 	echo "ALL AUTH-TIMEOUT CHECKS PASSED ($KIND $MODE)"
 	exit 0
 fi

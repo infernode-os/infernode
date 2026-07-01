@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 timeout 15 "$EMU" -r"$ROOT" /dis/sh.dis -c \
-	'path=(/dis/veltro /dis/cmd /dis .); tools9p read exec webfetch &sleep 2; echo /net/tcp > /tool/read/run; sleep 1; echo READNET; cat /tool/read/run; echo /dis/veltro/tools/webfetch.dis > /tool/read/run; sleep 1; echo READOTHER; cat /tool/read/run; echo ls /net > /tool/exec/run; sleep 1; echo EXECNET; cat /tool/exec/run; echo DONE' \
+	'path=(/dis/veltro /dis/cmd /dis .); tools9p read exec webfetch browse &sleep 2; echo /net/tcp > /tool/read/run; sleep 1; echo READNET; cat /tool/read/run; echo /dis/veltro/tools/webfetch.dis > /tool/read/run; sleep 1; echo READOTHER; cat /tool/read/run; echo ls /net > /tool/exec/run; sleep 1; echo EXECNET; cat /tool/exec/run; echo http://127.0.0.1:1/ > /tool/browse/run; sleep 1; echo BROWSEPRIVATE; cat /tool/browse/run; echo DONE' \
 	</dev/null >"$log" 2>&1
 rc=$?
 output=$(cat "$log")
@@ -20,6 +20,12 @@ if grep -Eq 'cannot open.*/net|/net.*does not exist' <<<"$output"; then
 	echo "PASS: read and exec invocations cannot reach raw network devices"
 else
 	echo "FAIL: a non-network invocation may have reached /net"; echo "$output"; exit 1
+fi
+
+if grep -q 'private or reserved destination denied' <<<"$output"; then
+	echo "PASS: browser transport rejects private destinations"
+else
+	echo "FAIL: browser did not enforce public destination policy"; echo "$output"; exit 1
 fi
 
 if grep -Eq 'cannot open.*webfetch.dis|webfetch.dis.*does not exist' <<<"$output"; then

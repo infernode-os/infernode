@@ -291,7 +291,7 @@ dofetch(method, url: string, hdrs: list of Header, body: array of byte): (ref Re
 asyncfetch(method, url: string, hdrs: list of Header, body: array of byte,
 	result: chan of (ref Response, string))
 {
-	(resp, err) := webclient->request(method, url, hdrs, body);
+	(resp, err) := webclient->requestpublic(method, url, hdrs, body);
 	result <-= (resp, err);
 }
 

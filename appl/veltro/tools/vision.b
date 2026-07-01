@@ -554,7 +554,7 @@ writebytes(path: string, data: array of byte): string
 dorequest(hdrs: list of Webclient->Header, reqbody: array of byte,
 	result: chan of (ref Webclient->Response, string))
 {
-	(resp, err) := webclient->request("POST", API_URL, hdrs, reqbody);
+	(resp, err) := webclient->requestpublic("POST", API_URL, hdrs, reqbody);
 	result <-= (resp, err);
 }
 

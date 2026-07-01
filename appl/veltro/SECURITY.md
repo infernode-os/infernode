@@ -21,11 +21,46 @@ This document distinguishes:
 The security model applies to **agents**: the harness restricts what each
 running instance sees. The harness itself is trusted code.
 
+### Untrusted Content And Prompt Injection
+
+Email, SMS, webpages, MCP results, and retrieved documents are hostile input.
+The security model assumes a model that interprets such content may follow an
+attacker's instructions. Prompt text is not an authorization boundary.
+
+Apply these invariants:
+
+- **Quarantine ingestion.** Process raw external content in a separate agent
+  namespace with no credentials, raw network, send/payment endpoints, arbitrary
+  execution, broad filesystem paths, or capability-provisioning control.
+- **Never combine sensitive reads with egress.** A worker may receive exact,
+  read-only file snapshots needed to draft a result, or a constrained egress
+  capability, but not both. Otherwise prompt injection becomes exfiltration.
+- **Grant paths, not ambient services.** Prefer exact files and exact 9P service
+  subtrees over directories, `/net`, `/mnt/factotum`, or whole service roots.
+- **Separate drafting from effects.** Message sending, file mutation, payment,
+  and further delegation require a fresh capability issued by trusted code
+  outside the model's namespace. User approval should produce a narrow,
+  operation-bound, preferably one-shot capability; the model cannot mint it.
+- **Declassify typed results only.** Raw hostile content does not flow into an
+  authority-bearing coordinator's context. Cross-boundary output is bounded and
+  parsed into an expected result type before trusted code uses it.
+
+When a workflow appears to require user files and the web simultaneously, split
+it into stages with a trusted mediator. There is no safe prompt that compensates
+for granting a compromised model both confidential data and unrestricted egress.
+
+Headless service launchers may receive API keys through their host environment
+when interactive factotum/secstore unlock is unavailable. Trusted bootstrap code
+should provision those values into factotum when possible. Agent namespaces
+allowlist only `VELTRO_SESSION` under `/env`, so host credential variables never
+become agent capabilities. Runtime agent tools consume credentials through
+factotum only; plaintext key files under `/lib/veltro` are prohibited.
+
 Three harness entry points apply namespace restriction:
 
 | Entry Point | Where | When |
 |-------------|-------|------|
-| `tools9p` serveloop | `appl/veltro/tools9p.b` | After mount(), before first tool exec |
+| `tools9p` invocation | `appl/veltro/tools9p.b` | Per tool call, after `FORKNS`, attenuated to the invoked tool |
 | `repl` init | `appl/veltro/repl.b` | After mount checks, before LLM session |
 | `spawn` child | `appl/veltro/tools/spawn.b` | In runchild(), before subagent->runloop() |
 
@@ -75,7 +110,7 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 | 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
 | 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
 | 7 | `/tmp` | `veltro/` | **1** | Shadow dirs + scratch space — writable so agents can create files |
-| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `net`, `net.alt`, `nvfs`, `prog`, `tmp`, `tool` (+ `chan` only if `caps.xenith`) | 0 | Hide project files (.env, .git, CLAUDE.md, etc.) |
+| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `nvfs`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files and ambient network access |
 
 **Order matters**: Steps 1-7 create shadow dirs under `/tmp/veltro/.ns/shadow/`. Step 7 restricts `/tmp` but preserves the `veltro/` subtree. Step 8 restricts `/` last, after all subdirectory restrictions are in place.
 
@@ -101,7 +136,7 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 +-- n/
 |   +-- llm/      LLM access (if mounted)
 |   +-- speech/   speech synthesis/recognition (if mounted)
-+-- net/          TCP/IP networking
++-- net/          TCP/IP networking (fixed-function network invocation only)
 +-- nvfs/         name-value filesystem
 +-- prog/         process information
 +-- tmp/
@@ -127,25 +162,23 @@ Inherits parent's already-restricted namespace, then further restricts:
 
 ## Entry Point Details
 
-### tools9p Serveloop Restriction
+### tools9p Per-Invocation Restriction
 
-The tools9p server must restrict its own thread's namespace, but faces a chicken-and-egg problem: the serveloop must be running before `mount()` can succeed (mount sends 9P messages), but FORKNS must happen after mount so `/tool` is captured.
+The tools9p server remains in its service namespace. Each tool call forks a
+namespace, binds the activity's `/tool.N` over `/tool`, and restricts with only
+the invoked tool in `caps.tools`. The agent's complete tool menu is therefore
+not ambient authority inside each operation. A `read` or `exec` call does not
+inherit `/net`, factotum, `/chan`, UI, or sibling tool modules merely because a
+network/UI tool is also registered.
 
-**Solution**: Buffered channel synchronization with non-blocking alt.
+The ordering remains security-critical:
 
 ```
-init():
-  1. Create buffered channel: mounted := chan[1] of int
-  2. spawn serveloop(... mounted)
-  3. mount(fds[1], "/tool", MREPL)    -- 9P traffic flows to serveloop
-  4. mounted <-= 1                     -- signal serveloop
-
-serveloop():
-  On each 9P message, non-blocking check:
-    alt {
-    <-mounted => applynsrestriction(); restricted = 1;
-    * => ;  // mount not ready yet
-    }
+asyncexec(tool):
+  1. pctl(FORKNS | NODEVS)
+  2. bind /tool.N over /tool
+  3. restrictns(Capabilities(tools = [tool], ...))
+  4. load and execute only that tool module
 ```
 
 After restriction, all async tool execution threads (via `spawn asyncexec()`) inherit the restricted namespace.

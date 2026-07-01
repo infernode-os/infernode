@@ -23,7 +23,7 @@ Examples:
 
 Notes:
   - Maximum image size: 5MB
-  - Cloud requires API key in /lib/veltro/keys/anthropic
+  - Cloud requires a factotum key: proto=pass service=anthropic
   - Cloud requires /net access (HTTPS to Anthropic API)
   - Local requires /mnt/gpu mounted with a vision model loaded
   - Local GPU can be on a remote Jetson via encrypted 9P mount

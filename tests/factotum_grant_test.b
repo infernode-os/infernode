@@ -35,6 +35,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tools: list of string;
 	if(mode == "with")
 		tools = "websearch" :: "read" :: nil;
+	else if(mode == "vision")
+		tools = "vision" :: nil;
 	else if(mode == "withexec")
 		tools = "websearch" :: "exec" :: "read" :: nil;
 	else

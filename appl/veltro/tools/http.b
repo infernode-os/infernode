@@ -156,7 +156,7 @@ exec(args: string): string
 		reqbody = array of byte body;
 
 	# Execute request
-	(resp, err) := webclient->request(method, url, hdrs, reqbody);
+	(resp, err) := webclient->requestpublic(method, url, hdrs, reqbody);
 	if(err != nil)
 		return "error: " + err;
 

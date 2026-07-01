@@ -151,8 +151,20 @@ tlswritepump(conn: ref Conn, fd: ref Sys->FD)
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
+	return request0(method, requrl, hdrs, body, 0);
+}
+
+requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
+{
+	return request0(method, requrl, hdrs, body, 1);
+}
+
+# Revalidates every redirect target. Public mode resolves first and dials the
+# exact validated address, preventing redirect and DNS-rebinding SSRF.
+request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
+{
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
-		(resp, err) := dorequest(method, requrl, hdrs, body);
+		(resp, err) := dorequest(method, requrl, hdrs, body, public);
 		if(err != nil)
 			return (nil, err);
 
@@ -162,11 +174,16 @@ request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref
 			loc := resp.hdrval("Location");
 			if(loc == nil)
 				return (resp, nil);
+			oldorigin := schemehost(requrl);
 			# Resolve relative URL
 			if(len loc > 0 && loc[0] == '/')
 				requrl = schemehost(requrl) + loc;
 			else
 				requrl = loc;
+			# Credentials are scoped to the origin selected by the caller. Never
+			# forward them when a redirect changes scheme, host, or port.
+			if(schemehost(requrl) != oldorigin)
+				hdrs = redirectheaders(hdrs);
 			# 303 always changes to GET
 			if(resp.statuscode == 303) {
 				method = "GET";
@@ -177,6 +194,26 @@ request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref
 		}
 	}
 	return (nil, "too many redirects");
+}
+
+redirectheaders(hdrs: list of Header): list of Header
+{
+	kept: list of Header;
+	for(; hdrs != nil; hdrs = tl hdrs) {
+		h := hd hdrs;
+		name := str->tolower(h.name);
+		# Generic callers can use arbitrary credential header names, so preserve
+		# only representation metadata rather than trying to enumerate secrets.
+		if(name != "accept" && name != "accept-encoding" &&
+		   name != "accept-language" && name != "content-type" &&
+		   name != "user-agent")
+			continue;
+		kept = h :: kept;
+	}
+	result: list of Header;
+	for(; kept != nil; kept = tl kept)
+		result = hd kept :: result;
+	return result;
 }
 
 # [private]
@@ -199,7 +236,7 @@ schemehost(requrl: string): string
 }
 
 # [private]
-dorequest(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
+dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
 {
 	u := url->makeurl(requrl);
 	if(u == nil)
@@ -217,6 +254,12 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte): (r
 	}
 
 	addr := "tcp!" + host + "!" + port;
+	if(public) {
+		(paddr, err) := publicaddr(host, port);
+		if(err != nil)
+			return (nil, err);
+		addr = paddr;
+	}
 
 	fd: ref Sys->FD;
 	if(ishttps) {
@@ -241,6 +284,89 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte): (r
 	}
 
 	return dofdrequest(fd, method, u, host, hdrs, body);
+}
+
+publicaddr(host, port: string): (string, string)
+{
+	naddr := resolveaddr(host, port);
+	if(naddr == nil || naddr == "")
+		return (nil, "public web: cannot resolve destination");
+	naddr = str->drop(naddr, " \t\r\n");
+	resolved := naddr;
+	for(i := len naddr - 1; i >= 0; i--)
+		if(naddr[i] == '!') {
+			resolved = naddr[0:i];
+			break;
+		}
+	if(publicipv4(resolved) < 0)
+		return (nil, "public web: resolver returned a non-IPv4 destination");
+	if(publicipv4(resolved) == 0)
+		return (nil, "public web: private or reserved destination denied");
+	return ("tcp!" + resolved + "!" + port, nil);
+}
+
+resolveaddr(host, port: string): string
+{
+	fd := sys->open("/net/cs", Sys->ORDWR);
+	if(fd == nil) {
+		# Without a connection server, accept only an already numeric address.
+		if(publicipv4(host) < 0)
+			return nil;
+		return host + "!" + port;
+	}
+	if(sys->fprint(fd, "tcp!%s!%s", host, port) < 0)
+		return nil;
+	sys->seek(fd, big 0, 0);
+	buf := array[Sys->NAMEMAX] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	line := string buf[0:n];
+	for(i := 0; i < len line; i++)
+		if(line[i] == ' ')
+			return line[i + 1:];
+	return nil;
+}
+
+publicipv4(s: string): int
+{
+	oct := array[4] of int;
+	start := 0;
+	part := 0;
+	for(i := 0; i <= len s; i++) {
+		if(i < len s && s[i] != '.')
+			continue;
+		if(part >= 4 || i == start)
+			return -1;
+		v := 0;
+		for(j := start; j < i; j++) {
+			if(s[j] < '0' || s[j] > '9')
+				return -1;
+			v = v * 10 + s[j] - '0';
+			if(v > 255)
+				return -1;
+		}
+		oct[part++] = v;
+		start = i + 1;
+	}
+	if(part != 4)
+		return -1;
+	x0 := oct[0]; x1 := oct[1]; x2 := oct[2];
+	if(x0 == 0 || x0 == 10 || x0 == 127 || x0 >= 224)
+		return 0;
+	if(x0 == 100 && x1 >= 64 && x1 <= 127)
+		return 0;
+	if(x0 == 169 && x1 == 254)
+		return 0;
+	if(x0 == 172 && x1 >= 16 && x1 <= 31)
+		return 0;
+	if(x0 == 192 && (x1 == 168 || (x1 == 0 && (x2 == 0 || x2 == 2))))
+		return 0;
+	if(x0 == 198 && (x1 == 18 || x1 == 19 || (x1 == 51 && x2 == 100)))
+		return 0;
+	if(x0 == 203 && x1 == 0 && x2 == 113)
+		return 0;
+	return 1;
 }
 
 # [private]

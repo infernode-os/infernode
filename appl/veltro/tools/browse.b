@@ -136,7 +136,7 @@ exec(args: string): string
 	# Fetch URL
 	hdrs: list of Header;
 	hdrs = Header("User-Agent", "Veltro/1.0 (Infernode)") :: hdrs;
-	(resp, err) := webclient->request("GET", url, hdrs, nil);
+	(resp, err) := webclient->requestpublic("GET", url, hdrs, nil);
 	if(err != nil)
 		return "error: fetch failed: " + err;
 

@@ -293,13 +293,13 @@ restrictns(caps: ref Capabilities): string
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
-	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
-	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
+	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
+	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
 	# whole /mnt/ui; the subtree is then narrowed below (activity/ always; ctl if
 	# the task tool is granted), preserving the old /mnt/ui least-privilege.
 	uimnt := 0;
-	if(inlist("present", caps.tools)) {
+	if(needsui(caps.tools)) {
 		(uimntok, nil) := sys->stat("/mnt/ui");
 		if(uimntok >= 0 && !inlist("ui", mntpaths)) {
 			mntpaths = "ui" :: mntpaths;
@@ -311,7 +311,8 @@ restrictns(caps: ref Capabilities): string
 	# shell could query unrelated credentials stored in the shared factotum.
 	# Mixed grants fail closed: websearch reports its key unavailable. A future
 	# per-credential broker may safely remove this incompatibility (INFR-363).
-	if(inlist("websearch", caps.tools) &&
+	if((inlist("git", caps.tools) || inlist("websearch", caps.tools) ||
+	    inlist("vision", caps.tools)) &&
 	   !inlist("exec", caps.tools) && !inlist("shell", caps.tools)) {
 		(facok, nil) := sys->stat("/mnt/factotum");
 		if(facok >= 0 && !inlist("factotum", mntpaths))
@@ -363,6 +364,14 @@ restrictns(caps: ref Capabilities): string
 		err = restrictdir("/lib", "veltro" :: "certs" :: nil, 0);
 		if(err != nil)
 			return sys->sprint("restrict /lib: %s", err);
+		# Legacy setup instructions stored API keys here. Keep the application
+		# tree but replace its credential directory with an empty namespace.
+		(keyok, nil) := sys->stat("/lib/veltro/keys");
+		if(keyok >= 0) {
+			err = restrictdir("/lib/veltro/keys", nil, 0);
+			if(err != nil)
+				return sys->sprint("restrict /lib/veltro/keys: %s", err);
+		}
 	}
 
 	# 7. Restrict /env to the one application-owned session pointer. Environment
@@ -403,8 +412,17 @@ restrictns(caps: ref Capabilities): string
 	# so kernel device bindings (#c→/dev, #p→/prog) are preserved
 	# through the shadow binds.
 	safe := "dev" :: "dis" :: "env" :: "fd" ::
-		"lib" :: "n" :: "net" :: "net.alt" :: "nvfs" ::
-		"prog" :: "tmp" :: "tool" :: nil;
+		"lib" :: "n" :: "nvfs" :: "prog" :: "tmp" :: "tool" :: nil;
+	# Raw IP devices are a capability, not ambient process state. Only
+	# fixed-function tools that dial directly receive them. In particular, an
+	# exec/shell invocation remains networkless even when the same agent also
+	# has a web tool available; tools9p passes only the invoked tool in caps.
+	if(needsnet(caps.tools)) {
+		safe = "net" :: safe;
+		(netaltok, nil) := sys->stat("/net.alt");
+		if(netaltok >= 0)
+			safe = "net.alt" :: safe;
+	}
 	# /mnt — application mount points (MCP adapters etc.) — only if a /mnt subtree
 	# was granted in step 5b; otherwise a confined agent gets no /mnt at all.
 	if(keepmnt)
@@ -427,7 +445,7 @@ restrictns(caps: ref Capabilities): string
 		if(first == "")
 			continue;
 		# Skip top-level dirs already in safe or handled by steps 1–7
-		if(inlist(first, safe))
+		if(inlist(first, safe) || first == "net" || first == "net.alt")
 			continue;
 		if(!inlist(first, extradirs))
 			extradirs = first :: extradirs;
@@ -551,6 +569,26 @@ inlist(s: string, l: list of string): int
 {
 	for(; l != nil; l = tl l)
 		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+needsnet(tools: list of string): int
+{
+	networktools := "browse" :: "git" :: "http" :: "payfetch" ::
+		"vision" :: "webfetch" :: "websearch" :: nil;
+	for(; tools != nil; tools = tl tools)
+		if(inlist(hd tools, networktools))
+			return 1;
+	return 0;
+}
+
+needsui(tools: list of string): int
+{
+	uitools := "gap" :: "keyring" :: "launch" :: "present" ::
+		"spawn" :: "task" :: nil;
+	for(; tools != nil; tools = tl tools)
+		if(inlist(hd tools, uitools))
 			return 1;
 	return 0;
 }

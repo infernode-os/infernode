@@ -392,9 +392,15 @@ restrictns(caps: ref Capabilities): string
 	# process and opens /prog/<child>/wait after restriction, so an explicit shell
 	# capability temporarily retains full /prog.
 	(progok, nil) := sys->stat("/prog");
-	if(progok >= 0 && !inlist("exec", caps.tools) && caps.shellcmds == nil) {
-		pid := sys->pctl(0, nil);
-		err = restrictdir("/prog", string pid :: nil, 0);
+	if(progok >= 0 && caps.shellcmds == nil) {
+		progallow: list of string;
+		# The exec wrapper supplies sh with a pre-opened wait FD. Its command
+		# process therefore needs no /prog entry, including the wrapper's ctl.
+		if(!inlist("exec", caps.tools)) {
+			pid := sys->pctl(0, nil);
+			progallow = string pid :: nil;
+		}
+		err = restrictdir("/prog", progallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /prog: %s", err);
 	}

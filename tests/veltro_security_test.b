@@ -1443,6 +1443,46 @@ testProgAllowlist(t: ref T)
 		t.error(r);
 }
 
+testExecProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn execProgAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+execProgAllowlistWorker(result: chan of string, parentpid: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"exec" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (exec) failed: %s", err);
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ctl", parentpid));
+	if(parentok >= 0) {
+		result <-= "exec can control a sibling process";
+		return;
+	}
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil) {
+		result <-= "exec restricted process directory is unavailable";
+		return;
+	}
+	(n, nil) := sys->dirread(fd);
+	if(n != 0) {
+		result <-= "exec process directory is not empty";
+		return;
+	}
+	result <-= "";
+}
+
 progAllowlistWorker(result: chan of string, parentpid: int)
 {
 	selfpid := sys->pctl(Sys->FORKNS, nil);
@@ -1506,6 +1546,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);
+	run("ExecProgAllowlist", testExecProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);

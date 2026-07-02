@@ -849,7 +849,9 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
 		return;
 	}
-	if(sys->pctl(Sys->NODEVS, nil) < 0) {
+	# Exec opens only its own wait descriptor inside the trusted wrapper, then
+	# applies NODEVS before parsing or running model-supplied shell text.
+	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
 		ti.result = array of byte "error: cannot disable device attachment";
 		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
 		return;

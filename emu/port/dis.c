@@ -1060,6 +1060,16 @@ disfault(void *reg, char *msg)
 		print("SYS: process %s faults: %s\n", up->text, msg);
 		cleanexit(0);
 	}
+	if(up->nlocks > 0) {
+		/*
+		 * Fault taken while holding a spin lock (allocator, scheduler,
+		 * …).  The longjmp below cannot release it; continuing leaves
+		 * the lock — and usually the VM run token — stranded, freezing
+		 * the whole emulator with no diagnostic.  Fail stop instead.
+		 */
+		panic("fault while holding %d lock(s): %s (proc %s)",
+			up->nlocks, msg, up->text);
+	}
 
 	if(up->iprog != nil)
 		acquire();

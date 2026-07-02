@@ -395,6 +395,7 @@ struct Proc
 	Rendez*	r;		/* rendezvous point slept on */
 	Rendez	sleep;		/* place to sleep */
 	int		killed;		/* by swiproc */
+	int	nlocks;		/* spin locks held (fault fail-stop diagnostic) */
 	int	swipend;	/* software interrupt pending for Prog */
 	int	syscall;	/* set true under sysio for interruptable syscalls */
 	int	intwait;	/* spin wait for note to turn up */

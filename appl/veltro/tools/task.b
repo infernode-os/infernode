@@ -342,7 +342,7 @@ docreate(args: string): string
 			"above is your task. If you genuinely cannot proceed without a " +
 			"specific missing detail, ask one concise question; otherwise make " +
 			"a reasonable assumption and proceed.";
-	briefpath := sys->sprint("/tmp/veltro/brief.%d", newid);
+	briefpath := sys->sprint("/tmp/veltro/tasks/brief.%d", newid);
 	bfd := sys->create(briefpath, Sys->OWRITE, 8r644);
 	if(bfd != nil) {
 		bb := array of byte brief;
@@ -353,7 +353,7 @@ docreate(args: string): string
 	# Write structured instructions if provided
 	instructions := getattr(attrs, "instructions");
 	if(instructions != "") {
-		instrpath := sys->sprint("/tmp/veltro/instructions.%d", newid);
+		instrpath := sys->sprint("/tmp/veltro/tasks/instructions.%d", newid);
 		ifd := sys->create(instrpath, Sys->OWRITE, 8r644);
 		if(ifd != nil) {
 			ib := array of byte instructions;
@@ -363,12 +363,12 @@ docreate(args: string): string
 	}
 
 	# Model and agenttype are propagated to the child lucibridge via the
-	# same /tmp/veltro/<key>.<id> pattern as brief/instructions. lucibridge
+	# same /tmp/veltro/tasks/<key>.<id> pattern as brief/instructions. lucibridge
 	# reads these files at startup (before opening the LLM session). Files
 	# are only written when explicitly set so the absence still means
 	# "inherit parent session's model" / "use default task prompt".
 	if(model != "") {
-		mpath := sys->sprint("/tmp/veltro/model.%d", newid);
+		mpath := sys->sprint("/tmp/veltro/tasks/model.%d", newid);
 		mfd := sys->create(mpath, Sys->OWRITE, 8r644);
 		if(mfd != nil) {
 			mb := array of byte model;
@@ -377,7 +377,7 @@ docreate(args: string): string
 		}
 	}
 	if(agenttype != "") {
-		apath := sys->sprint("/tmp/veltro/agenttype.%d", newid);
+		apath := sys->sprint("/tmp/veltro/tasks/agenttype.%d", newid);
 		afd := sys->create(apath, Sys->OWRITE, 8r644);
 		if(afd != nil) {
 			ab := array of byte agenttype;

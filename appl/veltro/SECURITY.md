@@ -97,6 +97,12 @@ subagent spawn: FORKNS + restrictns()   -- inherit + further restrict
 
 Both levels use the same `restrictdir()` primitive. Capability attenuation is natural: children fork an already-restricted namespace and can only narrow further.
 
+Task briefs, instructions, model choices, and agent-role selections are exchanged
+under `/tmp/veltro/tasks`. `restrictns()` replaces that directory with an empty
+view for every invocation except the fixed-function `task` tool. The trusted
+taskboard and lucibridge processes consume the files outside the tool namespace;
+message-reading and general file tools cannot inspect another activity's prompt.
+
 ## Namespace Restriction Policy
 
 `restrictns(caps)` applies these restrictions in order:

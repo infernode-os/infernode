@@ -150,6 +150,7 @@ restrictns(caps: ref Capabilities): string
 	mkdirp("/tmp/veltro/scratch");
 	mkdirp("/tmp/veltro/memory");
 	mkdirp("/tmp/veltro/cow");
+	mkdirp("/tmp/veltro/tasks");
 	mkdirp("/tmp/.veltro-ns");
 	mkdirp(SHADOW_BASE);
 	mkdirp(AUDIT_DIR);
@@ -492,6 +493,15 @@ restrictns(caps: ref Capabilities): string
 		werr := overlaywritepaths(caps.writepaths, caps.actid);
 		if(werr != nil)
 			return sys->sprint("overlay writes: %s", werr);
+	}
+
+	# Task briefs contain untrusted message bodies and user instructions. They
+	# are exchanged by trusted taskboard/lucibridge processes; ordinary tools
+	# must not read another activity's prompt or model selection.
+	if(!inlist("task", caps.tools)) {
+		err = restrictdir("/tmp/veltro/tasks", nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict task metadata: %s", err);
 	}
 
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be

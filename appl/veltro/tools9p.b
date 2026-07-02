@@ -109,7 +109,7 @@ vers: int;
 
 # Shadow directories for per-invocation namespace restriction
 # Must match SHADOW_BASE in nsconstruct.b
-SHADOW_BASE: con "/tmp/veltro/.ns/shadow";
+SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
 
 # Buffered channel for async shadow dir cleanup; asyncexec sends PID when done
 cleanupchan: chan of int;

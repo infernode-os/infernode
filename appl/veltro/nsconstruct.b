@@ -26,10 +26,10 @@ include "nsconstruct.m";
 
 include "cowfs.m";
 
-# Shadow directories live under /tmp/veltro/.ns/ so they survive
-# the /tmp restriction (which allows only "veltro/")
-SHADOW_BASE: con "/tmp/veltro/.ns/shadow";
-AUDIT_DIR: con "/tmp/veltro/.ns/audit";
+# Trusted namespace construction state lives outside the agent workspace.
+# /tmp is narrowed only after all shadow-backed binds have been installed.
+SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
+AUDIT_DIR: con "/tmp/.veltro-ns/audit";
 
 # Directory/file permissions
 DIR_MODE: con 8r700 | Sys->DMDIR;  # rwx------ directory
@@ -150,6 +150,7 @@ restrictns(caps: ref Capabilities): string
 	mkdirp("/tmp/veltro/scratch");
 	mkdirp("/tmp/veltro/memory");
 	mkdirp("/tmp/veltro/cow");
+	mkdirp("/tmp/.veltro-ns");
 	mkdirp(SHADOW_BASE);
 	mkdirp(AUDIT_DIR);
 
@@ -397,14 +398,7 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("restrict /prog: %s", err);
 	}
 
-	# 9. Restrict /tmp to: veltro/ (shadow dirs are under here).
-	# writable=1 so agents can create files under /tmp/veltro/.
-	# MCREATE is applied only to /tmp — not to /dis, /lib, /dev, /n, /.
-	err = restrictdir("/tmp", "veltro" :: nil, 1);
-	if(err != nil)
-		return sys->sprint("restrict /tmp: %s", err);
-
-	# 10. Restrict / to only Inferno system directories.
+	# 9. Restrict / to only Inferno system directories.
 	# The emu's -r. binds #U (project root) onto / with MAFTER,
 	# exposing project files (.env, .git, appl/, emu/, ...).
 	# restrictdir("/", safe) replaces the root union with a shadow
@@ -499,6 +493,13 @@ restrictns(caps: ref Capabilities): string
 		if(werr != nil)
 			return sys->sprint("overlay writes: %s", werr);
 	}
+
+	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
+	# constructed first; their backing channels remain valid after the trusted
+	# /tmp/.veltro-ns tree is hidden. Agents retain only their workspace.
+	err = restrictdir("/tmp", "veltro" :: nil, 1);
+	if(err != nil)
+		return sys->sprint("restrict /tmp: %s", err);
 
 	return nil;
 }

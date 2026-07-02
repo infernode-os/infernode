@@ -379,6 +379,11 @@ restrictNsWorker(result: chan of string)
 		result <-= "/nvfs must NOT expose node identity state";
 		return;
 	}
+	(nsstateok, nil) := sys->stat("/tmp/.veltro-ns");
+	if(nsstateok >= 0) {
+		result <-= "trusted namespace construction state remains visible";
+		return;
+	}
 
 	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
 	if(keyok >= 0) {
@@ -762,7 +767,7 @@ testAuditLog(t: ref T)
 	nsconstruct->emitauditlog("test-audit", "restrictdir /dis" :: "restrictdir /dev" :: nil);
 
 	# Read audit log
-	auditpath := "/tmp/veltro/.ns/audit/test-audit.ns";
+	auditpath := "/tmp/.veltro-ns/audit/test-audit.ns";
 	fd := sys->open(auditpath, Sys->OREAD);
 	if(fd == nil) {
 		t.error("cannot open audit log");

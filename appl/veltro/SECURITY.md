@@ -71,7 +71,7 @@ All three call `nsconstruct->restrictns(caps)` after `pctl(FORKNS)`.
 ### Core Primitive: `restrictdir(target, allowed, writable)`
 
 ```
-1. Create unique shadow dir: /tmp/veltro/.ns/shadow/{pid}-{seq}/
+1. Create unique trusted shadow dir: /tmp/.veltro-ns/shadow/{pid}-{seq}/
 2. For each item in allowed:
    - Create mount point in shadow (dir or file matching source type)
    - bind(target/item, shadow/item, MREPL)
@@ -109,10 +109,13 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 | 4 | `/n` | `llm/` (if mounted), `mcp/` (if mc9p), `speech/` (if speech9p), `git/` (if git9p), `local/` (only if caps.paths grants subpaths) | 0 | Network/service mounts |
 | 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
 | 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
-| 7 | `/tmp` | `veltro/` | **1** | Shadow dirs + scratch space — writable so agents can create files |
-| 8 | `/` | `dev`, `dis`, `env`, `lib`, `n`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files, descriptors, node identity state, and ambient network access |
+| 7 | `/` | `dev`, `dis`, `env`, `lib`, `n`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files, descriptors, node identity state, and ambient network access |
+| 8 | `/tmp` | `veltro/` | **1** | Hide trusted shadow/audit backing while retaining writable agent workspace |
 
-**Order matters**: Steps 1-7 create shadow dirs under `/tmp/veltro/.ns/shadow/`. Step 7 restricts `/tmp` but preserves the `veltro/` subtree. Step 8 restricts `/` last, after all subdirectory restrictions are in place.
+**Order matters**: all bind replacements and COW mounts are created from trusted
+backing under `/tmp/.veltro-ns/`; `/tmp` is restricted last. Existing mount
+channels remain valid, but agents can see only `/tmp/veltro` and cannot modify
+the shadow directories or namespace audit snapshots.
 
 **`/chan` access control**: The Xenith 9P filesystem at `/chan` exposes ALL window contents. Without the `xenith` capability flag, `/chan` is excluded from the root allowlist — the agent cannot see or read any Xenith windows. When `caps.xenith` is set (e.g., tools9p detects the xenith tool was granted), `/chan` is included. The REPL opens its own window FDs before restriction, so it works without `/chan` in the namespace.
 
@@ -356,7 +359,9 @@ When running `emu -r.`, the host project directory is bound onto `/` with MAFTER
 
 ### Shadow Directory Management
 
-Shadow directories are created under `/tmp/veltro/.ns/shadow/` with `{pid}-{seq}` names. PID prefix avoids collisions between parent and child. After `/tmp` is restricted to only `veltro/`, the shadow dirs remain accessible.
+Shadow directories are created under `/tmp/.veltro-ns/shadow/` with `{pid}-{seq}`
+names. PID prefix avoids collisions between parent and child. The unrestricted
+tools9p cleanup process can access this tree; restricted agents cannot.
 
 ## Files
 

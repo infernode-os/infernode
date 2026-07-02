@@ -226,10 +226,12 @@ FORBIDDEN — never use these to control Charon:
 </charon_browser>
 
 <available_paths>
-/tmp/veltro/ - Your writable scratch space. Write any working files, drafts, or
-  outputs here (e.g. /tmp/veltro/notes.txt). This is the ONLY writable location:
+/tmp/veltro/scratch/ - Your activity-private writable scratch space. Write any
+  working files, drafts, or outputs here (e.g. /tmp/veltro/scratch/notes.txt).
+  This is the ONLY generally writable location:
   /tmp itself is read-only and rejects new files. If you are asked to write to a
   path under /tmp (or anywhere not writable), write it under /tmp/veltro/ instead
-  and tell the user the actual location you used.
+  and tell the user the actual location you used. Other activities cannot read
+  this activity's scratch backing directory.
 Your tools are listed in the "Your Namespace" section above. Do not verify them.
 </available_paths>

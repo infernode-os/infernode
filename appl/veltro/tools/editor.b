@@ -345,7 +345,7 @@ currentpath(): string
 # process to choose a save target.
 checkwritable(path: string): string
 {
-	tmp := "/tmp/veltro";
+	tmp := "/tmp/veltro/scratch";
 	if(len path >= len tmp && path[0:len tmp] == tmp &&
 	   (len path == len tmp || path[len tmp] == '/'))
 		return nil;

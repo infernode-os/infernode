@@ -1056,10 +1056,10 @@ provisiontask(args: string)
 			toollist = hd b :: toollist;
 	}
 
-	# Ensure basic tools are always included — every child agent needs these
-	# for fundamental capability (navigation, memory, presentation, planning,
-	# search, and delegation via spawn)
-	basics := "read" :: "list" :: "find" :: "search" :: "grep" :: "memory" :: "todo" :: "plan" :: "spawn" :: "present" :: "gap" :: nil;
+	# Baseline tools are read-only namespace navigation. Persistence, recursive
+	# delegation, planning state, and UI effects are explicit capabilities and
+	# must never appear merely because the subject is a child agent.
+	basics := "read" :: "list" :: "find" :: "search" :: "grep" :: nil;
 	for(bl := basics; bl != nil; bl = tl bl)
 		if(findtool(hd bl) != nil && !strlist_contains(toollist, hd bl))
 			toollist = hd bl :: toollist;

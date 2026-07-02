@@ -49,9 +49,9 @@ When creating a task, you construct its entire world:
 - paths= grants filesystem visibility (/n/local/Users/pdfinn, /n/git, etc.)
 - instructions= provides procedural guidance for the task agent
 
-Every task agent automatically gets: read, list, find, search, grep, memory, todo, plan, spawn, present, gap. You do NOT need to specify these.
+Every task agent automatically gets only: read, list, find, search, grep.
 
-Use tools= only for capabilities beyond the base set:
+Use tools= for every capability beyond that read-only base set:
 A research task needs: tools=websearch,webfetch
 A code change task needs: tools=write,edit,exec
 A task that reads local files needs paths= pointing to the relevant directory.

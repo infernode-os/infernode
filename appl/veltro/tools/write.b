@@ -249,7 +249,7 @@ ensuredir(path: string)
 # Permit the private workspace or the most-specific explicit rw grant.
 checkreadonly(path: string): string
 {
-	tmp := "/tmp/veltro";
+	tmp := "/tmp/veltro/scratch";
 	if(len path >= len tmp && path[0:len tmp] == tmp &&
 	   (len path == len tmp || path[len tmp] == '/'))
 		return nil;

@@ -3,6 +3,8 @@ implement Transport;
 include "common.m";
 include "transport.m";
 include "date.m";
+include "publicnet.m";
+	publicnet: Publicnet;
 
 tls: TLS;
 Conn: import tls;
@@ -221,6 +223,9 @@ init(cu: CharonUtils)
 	agent = (CU->config).agentname;
 	dbg = int (CU->config).dbg['n'];
 	warn = dbg || int (CU->config).dbg['w'];
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet != nil)
+		publicnet->init();
 }
 
 connect(nc: ref Netconn, bs: ref ByteSource)
@@ -232,12 +237,23 @@ connect(nc: ref Netconn, bs: ref ByteSource)
 	dialhost := nc.host;
 	dialport := string nc.port;
 	if(nc.scheme != "https" && config.httpproxy != nil && need_proxy(nc.host)) {
-		nc.tstate |= TProxy;
-		dialhost = config.httpproxy.host;
-		if(config.httpproxy.port != "")
-			dialport = config.httpproxy.port;
+		# A forward proxy resolves the target outside this process, defeating
+		# resolve-validate-pin and permitting proxy-assisted SSRF.
+		bs.err = "http proxy disabled by public destination policy";
+		closeconn(nc);
+		return;
 	}
-	addr := "tcp!" + dialhost + "!" + dialport;
+	if(publicnet == nil) {
+		bs.err = "public destination validator unavailable";
+		closeconn(nc);
+		return;
+	}
+	(addr, aerr) := publicnet->dialaddr(dialhost, dialport);
+	if(aerr != nil) {
+		bs.err = aerr;
+		closeconn(nc);
+		return;
+	}
 	err := "";
 	if(dbg)
 		sys->print("http %d: dialing %s\n", nc.id, addr);
@@ -1051,4 +1067,3 @@ realloc(a: array of byte, incr: int) : array of byte
  		newa[0:] = a;
  	return newa;
 }
-

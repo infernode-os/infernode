@@ -98,6 +98,7 @@ History: adt {
 # Authentication strings
 AuthInfo: adt {
 	realm: string;
+	origin: string;
 	credentials: string;
 };
 
@@ -956,7 +957,7 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 				use = 1;
 			}
 			else {
-				(realm, auth) = getauth(challenge);
+				(realm, auth) = getauth(challenge, urlorigin(ri.url));
 				if(auth != "") {
 					ri.auth = auth;
 					authtried = 1;
@@ -974,7 +975,7 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 				error = CU->hcphrase(hdr.code);
 			if(authtried) {
 				# it succeeded; add to auths list so don't have to ask again
-				auths = ref AuthInfo(realm, auth) :: auths;
+				auths = ref AuthInfo(realm, urlorigin(ri.url), auth) :: auths;
 			}
 		}
 		if(newurl != nil) {
@@ -984,6 +985,14 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 			   !networkurl(newurl)) {
 				CU->freebs(bsmain);
 				return "unsafe redirect scheme";
+			}
+			if(urlorigin(ri.url) != urlorigin(newurl)) {
+				# Basic credentials are authority-scoped. Never carry them to a
+				# redirect-selected host, scheme, or port.
+				ri.auth = "";
+				auth = "";
+				realm = "";
+				authtried = 0;
 			}
 			ri.url = newurl;
 			# some sites (e.g., amazon.com) assume that POST turns into
@@ -2029,7 +2038,7 @@ dumphistory()
 
 # getauth returns the (realm, credentials), with "" for the credentials
 # if we fail in getting authorization for some reason
-getauth(chal: string) : (string, string)
+getauth(chal, origin: string) : (string, string)
 {
 	if(len chal < 12 || S->tolower(chal[0:12]) != "basic realm=") {
 		if(dbg || warn)
@@ -2041,7 +2050,7 @@ getauth(chal: string) : (string, string)
 		realm = realm[1:len realm - 1];
 	for(al := auths; al != nil; al = tl al) {
 		a := hd al;
-		if(realm == a.realm)
+		if(realm == a.realm && origin == a.origin)
 			return (realm, a.credentials);
 	}
 	uname, pword: string;
@@ -2498,6 +2507,20 @@ followlink(n: int): ref Event
 networkurl(url: ref Parsedurl): int
 {
 	return url != nil && (url.scheme == "http" || url.scheme == "https");
+}
+
+urlorigin(url: ref Parsedurl): string
+{
+	if(url == nil)
+		return "";
+	port := url.port;
+	if(port == "") {
+		if(url.scheme == "https")
+			port = "443";
+		else if(url.scheme == "http")
+			port = "80";
+	}
+	return S->tolower(url.scheme) + "://" + S->tolower(url.host) + ":" + port;
 }
 
 ctlproc()

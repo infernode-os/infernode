@@ -474,6 +474,16 @@ shellWorker(result: chan of string)
 		result <-= "shellcmds should grant /dis/cat.dis";
 		return;
 	}
+	(netok, nil) := sys->stat("/net");
+	if(netok >= 0) {
+		result <-= "exec shell capability exposes raw network devices";
+		return;
+	}
+	(fdok, nil) := sys->stat("/fd");
+	if(fdok >= 0) {
+		result <-= "exec shell capability exposes inherited descriptors";
+		return;
+	}
 
 	result <-= "";
 }

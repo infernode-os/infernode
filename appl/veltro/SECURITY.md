@@ -45,6 +45,12 @@ Apply these invariants:
   authority-bearing coordinator's context. Cross-boundary output is bounded and
   parsed into an expected result type before trusted code uses it.
 
+Message replies use two separate authorities. An agent with an exact
+`/mnt/msg/reply` grant can only queue immutable content. The trusted controller
+alone can inspect `/mnt/msg/pending` and consume a request once through
+`/mnt/msg/approve` (or discard it through `/mnt/msg/deny`). Never bind those
+controller endpoints into an agent namespace.
+
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
 for granting a compromised model both confidential data and unrestricted egress.

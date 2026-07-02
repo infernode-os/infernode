@@ -257,6 +257,11 @@ system(ctxt: ref Draw->Context, cmd: string): string
 	return sh->system(ctxt, cmd);
 }
 
+systemfd(ctxt: ref Draw->Context, cmd: string, waitfd: ref Sys->FD): string
+{
+	return sh->systemfd(ctxt, cmd, waitfd);
+}
+
 run(ctxt: ref Draw->Context, argv: list of string): string
 {
 	return sh->run(ctxt, argv);

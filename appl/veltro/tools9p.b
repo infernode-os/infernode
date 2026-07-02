@@ -656,7 +656,7 @@ childpathallowed(path: string): int
 	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
 	# status surface. It must not act as a lexical parent capability for hidden
 	# send/control endpoints when an agent provisions a child task.
-	if(path == "/mnt/msg/reply" || path == "/mnt/msg/ctl") {
+	if(path == "/mnt/msg/reply" || path == "/mnt/msg/flag") {
 		for(ep0 := extpaths; ep0 != nil; ep0 = tl ep0)
 			if(hd ep0 == path)
 				return 1;

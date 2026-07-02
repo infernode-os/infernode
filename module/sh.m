@@ -11,6 +11,9 @@ Sh: module
 	initialise:		fn();
 	init:			fn(ctxt: ref Draw->Context, argv: list of string);
 	system:		fn(drawctxt: ref Draw->Context, cmd: string): string;
+	# Run with a caller-opened /prog/<pid>/wait descriptor. Security wrappers
+	# use this to disable device attachment and hide the process filesystem.
+	systemfd:	fn(drawctxt: ref Draw->Context, cmd: string, waitfd: ref Sys->FD): string;
 	run:			fn(drawctxt: ref Draw->Context, argv: list of string): string;
 	parse:		fn(s: string): (ref Cmd, string);
 	cmd2string:	fn(c: ref Cmd): string;

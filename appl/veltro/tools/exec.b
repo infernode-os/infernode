@@ -280,15 +280,31 @@ exec(args: string): string
 # NEWFD prevents dup from affecting other goroutines' stdout/stderr.
 runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string)
 {
+	# Open this worker's wait channel before NODEVS. The shell normally reaches
+	# it through #p or ambient /prog; retaining this one FD lets the namespace
+	# hide every process directory, including writable sibling ctl files.
+	pid := sys->pctl(0, nil);
+	waitfd := sys->open("#p/" + string pid + "/wait", Sys->OREAD);
+	if(waitfd == nil) {
+		result <-= sys->sprint("cannot open private wait channel: %r");
+		return;
+	}
 	# Isolate fd group so dup only affects this goroutine
-	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: outfd.fd :: nil);
+	if(sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: outfd.fd :: waitfd.fd :: nil) < 0) {
+		result <-= sys->sprint("cannot isolate descriptors: %r");
+		return;
+	}
+	if(sys->pctl(Sys->NODEVS, nil) < 0) {
+		result <-= sys->sprint("cannot disable device attachment: %r");
+		return;
+	}
 
 	# Redirect stdout/stderr to pipe
 	sys->dup(outfd.fd, 1);
 	sys->dup(outfd.fd, 2);
 	outfd = nil;
 
-	err := sh->system(nil, cmd);
+	err := sh->systemfd(nil, cmd, waitfd);
 	result <-= err;
 }
 

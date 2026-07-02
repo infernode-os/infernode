@@ -369,6 +369,11 @@ restrictNsWorker(result: chan of string)
 		result <-= "/net must NOT be visible without a network tool capability";
 		return;
 	}
+	(fdok, nil) := sys->stat("/fd");
+	if(fdok >= 0) {
+		result <-= "/fd must NOT expose inherited descriptors";
+		return;
+	}
 
 	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
 	if(keyok >= 0) {

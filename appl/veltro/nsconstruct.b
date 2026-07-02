@@ -411,7 +411,10 @@ restrictns(caps: ref Capabilities): string
 	# containing only safe entries. Channels are captured at bind time,
 	# so kernel device bindings (#c→/dev, #p→/prog) are preserved
 	# through the shadow binds.
-	safe := "dev" :: "dis" :: "env" :: "fd" ::
+	# Do not expose /fd. Tool workers retain the descriptors needed internally,
+	# including the tools9p reply channel, but agent code must not enumerate or
+	# reopen those inherited capabilities by descriptor number.
+	safe := "dev" :: "dis" :: "env" ::
 		"lib" :: "n" :: "nvfs" :: "prog" :: "tmp" :: "tool" :: nil;
 	# Raw IP devices are a capability, not ambient process state. Only
 	# fixed-function tools that dial directly receive them. In particular, an

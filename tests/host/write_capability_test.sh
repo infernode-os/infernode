@@ -5,7 +5,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$(dirname "$0")/common.sh"
 CANARY="$ROOT/lib/veltro/write-capability-canary"
-trap 'rm -f "$CANARY"' EXIT
+trap 'rm -f "$CANARY" "$ROOT/tmp/veltro/scratch/77/private"' EXIT
 
 [[ -x "$EMU" ]] || { echo "ERROR: emu not found at $EMU" >&2; exit 1; }
 
@@ -34,3 +34,8 @@ runemu "tools9p -p /lib/veltro:ro write & sleep 2; echo /lib/veltro/write-capabi
 grep -q "is read-only" <<<"$OUTPUT" || { echo "FAIL: ro write was not denied"; exit 1; }
 grep -q '^original$' <<<"$OUTPUT" || { echo "FAIL: ro write changed parent file"; exit 1; }
 echo "PASS: explicit ro grant is enforced"
+
+runemu "tools9p -a 77 write & sleep 2; echo /tmp/veltro/shared-root denied > /tool/write/run; sleep 2; cat /tool/write/run; echo /tmp/veltro/scratch/private allowed > /tool/write/run; sleep 2; cat /tool/write/run; echo SCRATCH; cat /tmp/veltro/scratch/77/private"
+grep -q "not covered by an rw path grant" <<<"$OUTPUT" || { echo "FAIL: shared workspace root write was not denied"; exit 1; }
+grep -q '^allowed$' <<<"$OUTPUT" || { echo "FAIL: activity scratch write did not succeed"; exit 1; }
+echo "PASS: generic writes are confined to activity scratch"

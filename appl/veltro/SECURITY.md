@@ -103,6 +103,16 @@ view for every invocation except the fixed-function `task` tool. The trusted
 taskboard and lucibridge processes consume the files outside the tool namespace;
 message-reading and general file tools cannot inspect another activity's prompt.
 
+`/tmp/veltro/scratch` is rebound to `/tmp/veltro/scratch/<activity-id>` in each
+restricted namespace. Generic write/edit operations accept only this scratch
+path (or an explicit `rw` capability), preventing files at the shared workspace
+root from bypassing activity isolation.
+
+Provisioned children receive only read-only navigation tools by default:
+`read`, `list`, `find`, `search`, and `grep`. Persistence (`memory`), recursive
+delegation (`spawn`), planning state, and UI effects require explicit budgeted
+tool grants.
+
 ## Namespace Restriction Policy
 
 `restrictns(caps)` applies these restrictions in order:

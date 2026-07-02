@@ -25,7 +25,7 @@ For tests: locate the relevant *_test.b and recompile + run if possible.
 Do not declare a fix complete without verifying it builds.
 </verification>
 
-You always have: read, list, find, search, grep, memory, todo, plan, spawn, present, gap.
+You always have only: read, list, find, search, grep.
 Coding tasks typically also have: write, edit, limbo.
 
 <completion>

@@ -329,6 +329,21 @@ else
     fail "specific read-only delegation test failed"
 fi
 
+if emu_c "provision_readonly_baseline" 14 \
+    "tools9p -b memory,spawn,present,gap,todo,plan read memory spawn present gap todo plan task & sleep 3; echo '13 tools=read' > /tool/provision; sleep 5; cat /tool.13/tools"; then
+    inflated=""
+    for t in memory spawn present gap todo plan; do
+        if echo "$OUTPUT" | grep -q "^${t}$"; then inflated="$inflated $t"; fi
+    done
+    if [[ -n "$inflated" ]]; then
+        fail "child baseline gained unrequested capabilities:$inflated"
+    else
+        pass "child baseline contains no persistence, delegation, planning, or UI capabilities"
+    fi
+else
+    fail "read-only child baseline test failed"
+fi
+
 # ── summary ──────────────────────────────────────────────────────────────────
 
 echo ""

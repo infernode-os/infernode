@@ -449,6 +449,71 @@ taskMetadataCapabilityWorker(result: chan of string)
 	result <-= "";
 }
 
+testActivityScratchIsolation(t: ref T)
+{
+	sys->remove("/tmp/veltro/scratch/41001/canary");
+	sys->remove("/tmp/veltro/scratch/41001");
+	sys->remove("/tmp/veltro/scratch/41002/canary");
+	sys->remove("/tmp/veltro/scratch/41002");
+	result := chan of string;
+	spawn activityScratchWriter(result, 41001);
+	r := <-result;
+	if(r == "") {
+		spawn activityScratchReader(result, 41002);
+		r = <-result;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/scratch/41001/canary");
+	if(r == "" && ok < 0)
+		r = "activity scratch write did not reach its backing directory";
+	sys->remove("/tmp/veltro/scratch/41001/canary");
+	sys->remove("/tmp/veltro/scratch/41001");
+	sys->remove("/tmp/veltro/scratch/41002/canary");
+	sys->remove("/tmp/veltro/scratch/41002");
+	if(r != "")
+		t.error(r);
+}
+
+activityScratchWriter(result: chan of string, id: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, id, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict writer scratch: %s", err);
+		return;
+	}
+	fd := sys->create("/tmp/veltro/scratch/canary", Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		result <-= sys->sprint("create activity scratch canary: %r");
+		return;
+	}
+	sys->fprint(fd, "activity-secret");
+	result <-= "";
+}
+
+activityScratchReader(result: chan of string, id: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, id, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict reader scratch: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/scratch/canary");
+	if(ok >= 0) {
+		result <-= "activity can read another activity's scratch file";
+		return;
+	}
+	result <-= "";
+}
+
 testNetworkCapability(t: ref T)
 {
 	result := chan of string;
@@ -1543,6 +1608,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
 	run("TaskMetadataCapability", testTaskMetadataCapability);
+	run("ActivityScratchIsolation", testActivityScratchIsolation);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);

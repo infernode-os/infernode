@@ -501,6 +501,19 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("overlay writes: %s", werr);
 	}
 
+	# Preserve the public scratch path while giving every activity disjoint
+	# backing storage. A compromised task cannot read or overwrite another
+	# activity's spilled tool results, drafts, or temporary files.
+	workspaceid := caps.actid;
+	if(workspaceid < 0)
+		workspaceid = sys->pctl(0, nil);
+	scratchdir := sys->sprint("/tmp/veltro/scratch/%d", workspaceid);
+	err = mkdirp(scratchdir);
+	if(err != nil)
+		return sys->sprint("create activity scratch: %s", err);
+	if(sys->bind(scratchdir, "/tmp/veltro/scratch", Sys->MREPL|Sys->MCREATE) < 0)
+		return sys->sprint("isolate activity scratch: %r");
+
 	# Task briefs contain untrusted message bodies and user instructions. They
 	# are exchanged by trusted taskboard/lucibridge processes; ordinary tools
 	# must not read another activity's prompt or model selection.

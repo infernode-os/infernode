@@ -1345,13 +1345,13 @@ loadcolors()
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
-		c_bg = col(th.editbg);
-		c_fg = col(th.edittext);
-		c_dir = col(th.text);
-		c_accent = col(th.accent);
-		c_dim = col(th.dim);
-		c_mnt = col(th.yellow);
-		c_dev = col(th.green);
+		c_bg = col(th.editbg >> 8);
+		c_fg = col(th.edittext >> 8);
+		c_dir = col(th.text >> 8);
+		c_accent = col(th.accent >> 8);
+		c_dim = col(th.dim >> 8);
+		c_mnt = col(th.yellow >> 8);
+		c_dev = col(th.green >> 8);
 	} else {
 		# fallback cons are 0xRRGGBBAA; col() wants 0x00RRGGBB
 		c_bg = col(BG >> 8);

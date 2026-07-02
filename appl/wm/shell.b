@@ -635,12 +635,12 @@ loadcolors()
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil){
 		th := lucitheme->gettheme();
-		c_bg = col(th.editbg);
-		c_fg = col(th.edittext);
-		c_dim = col(th.dim);
-		c_hold = col(th.yellow);
-		c_sel = col(th.accent);
-		c_prompt = col(th.dim);
+		c_bg = col(th.editbg >> 8);
+		c_fg = col(th.edittext >> 8);
+		c_dim = col(th.dim >> 8);
+		c_hold = col(th.yellow >> 8);
+		c_sel = col(th.accent >> 8);
+		c_prompt = col(th.dim >> 8);
 	} else {
 		c_bg = col(BG >> 8);
 		c_fg = col(FG >> 8);

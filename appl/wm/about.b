@@ -124,8 +124,8 @@ loadtheme()
 		th = lucitheme->gettheme();
 	if(th == nil)
 		th = ref Theme;
-	accentcol = col(th.accent);
-	dimcol = col(th.dim);
+	accentcol = col(th.accent >> 8);
+	dimcol = col(th.dim >> 8);
 }
 
 # lucitheme stores 0xRRGGBB ints; Tk wants "#rrggbbff".

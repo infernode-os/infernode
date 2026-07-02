@@ -241,6 +241,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 	spawn themelistener();
+	# ticks must exist before timer() sends and the main alt receives —
+	# a nil channel breaks both procs ("dereference of nil"), freezing
+	# the app.  (Dropped in the Tk migration when ticks became a global.)
+	ticks = chan of int;
 	spawn timer();
 
 	pid := -1;

@@ -1424,11 +1424,11 @@ loadcolors()
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
-		c_bg = col(th.editbg);
-		c_fg = col(th.edittext);
-		c_dim = col(th.dim);
-		c_accent = col(th.accent);
-		c_border = col(th.editlineno);
+		c_bg = col(th.editbg >> 8);
+		c_fg = col(th.edittext >> 8);
+		c_dim = col(th.dim >> 8);
+		c_accent = col(th.accent >> 8);
+		c_border = col(th.editlineno >> 8);
 	} else {
 		c_bg = col(16r080808);
 		c_fg = col(16rcccccc);

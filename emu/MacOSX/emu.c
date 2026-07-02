@@ -73,12 +73,14 @@ void links(void){
 
 extern void sysmodinit(void);
 extern void drawmodinit(void);
+extern void tkmodinit(void);
 extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
 void modinit(void){
 	sysmodinit();
 	drawmodinit();
+	tkmodinit();
 	mathmodinit();
 	srvmodinit();
 	keyringmodinit();

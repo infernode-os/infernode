@@ -211,12 +211,12 @@ buildui()
 configtags()
 {
 	th := gettheme();
-	tk->cmd(top, sys->sprint(".top.t tag configure heading -foreground %s -font /fonts/combined/unicode.sans.bold.14.font", col(th.text)));
+	tk->cmd(top, sys->sprint(".top.t tag configure heading -foreground %s -font /fonts/combined/unicode.sans.bold.14.font", col(th.text >> 8)));
 	tk->cmd(top, sys->sprint(".top.t tag configure bold -font /fonts/combined/unicode.sans.bold.14.font"));
-	tk->cmd(top, sys->sprint(".top.t tag configure italic -foreground %s", col(th.dim)));
-	tk->cmd(top, sys->sprint(".top.t tag configure link -foreground %s", col(th.accent)));
-	tk->cmd(top, sys->sprint(".top.t tag configure match -background %s -foreground #080808", col(th.accent)));
-	tk->cmd(top, sys->sprint(".top.t configure -foreground %s", col(th.edittext)));
+	tk->cmd(top, sys->sprint(".top.t tag configure italic -foreground %s", col(th.dim >> 8)));
+	tk->cmd(top, sys->sprint(".top.t tag configure link -foreground %s", col(th.accent >> 8)));
+	tk->cmd(top, sys->sprint(".top.t tag configure match -background %s -foreground #080808", col(th.accent >> 8)));
+	tk->cmd(top, sys->sprint(".top.t configure -foreground %s", col(th.edittext >> 8)));
 }
 
 # ── Page loading / rendering ──────────────────────────────────

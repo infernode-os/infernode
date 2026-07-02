@@ -658,11 +658,11 @@ loadcolors()
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil){
 		th := lucitheme->gettheme();
-		c_bg = col(th.editbg);
-		c_fg = col(th.edittext);
-		c_sel = col(th.accent);
-		c_dim = col(th.editlineno);
-		c_cursor = col(th.editcursor);
+		c_bg = col(th.editbg >> 8);
+		c_fg = col(th.edittext >> 8);
+		c_sel = col(th.accent >> 8);
+		c_dim = col(th.editlineno >> 8);
+		c_cursor = col(th.editcursor >> 8);
 	} else {
 		c_bg = col(BG >> 8);
 		c_fg = col(FG >> 8);

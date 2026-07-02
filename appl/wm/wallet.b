@@ -756,8 +756,8 @@ loadtheme()
 		th = lucitheme->gettheme();
 	if(th == nil)
 		th = ref Theme;
-	accent = col(th.accent);
-	dim = col(th.dim);
+	accent = col(th.accent >> 8);
+	dim = col(th.dim >> 8);
 }
 
 col(v: int): string

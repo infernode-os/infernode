@@ -254,10 +254,34 @@ idempotentWorker(result: chan of string)
 # ============================================================================
 testRestrictNs(t: ref T)
 {
+	createdkeys := 0;
+	(ok, nil) := sys->stat("/lib/veltro/keys");
+	if(ok < 0) {
+		fd := sys->create("/lib/veltro/keys", Sys->OREAD, Sys->DMDIR | 8r700);
+		if(fd == nil) {
+			t.skip("cannot create legacy key-directory fixture");
+			return;
+		}
+		fd = nil;
+		createdkeys = 1;
+	}
+	canary := "/lib/veltro/keys/ns-secret-canary";
+	fd := sys->create(canary, Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		if(createdkeys)
+			sys->remove("/lib/veltro/keys");
+		t.skip("cannot create legacy key fixture");
+		return;
+	}
+	sys->fprint(fd, "synthetic-secret");
+	fd = nil;
 	result := chan of string;
 	spawn restrictNsWorker(result);
 
 	r := <-result;
+	sys->remove(canary);
+	if(createdkeys)
+		sys->remove("/lib/veltro/keys");
 	if(r != "")
 		t.error(r);
 }
@@ -340,6 +364,62 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
+	(netok, nil) := sys->stat("/net");
+	if(netok >= 0) {
+		result <-= "/net must NOT be visible without a network tool capability";
+		return;
+	}
+	(fdok, nil) := sys->stat("/fd");
+	if(fdok >= 0) {
+		result <-= "/fd must NOT expose inherited descriptors";
+		return;
+	}
+	(nvok, nil) := sys->stat("/nvfs");
+	if(nvok >= 0) {
+		result <-= "/nvfs must NOT expose node identity state";
+		return;
+	}
+	(nsstateok, nil) := sys->stat("/tmp/.veltro-ns");
+	if(nsstateok >= 0) {
+		result <-= "trusted namespace construction state remains visible";
+		return;
+	}
+
+	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
+	if(keyok >= 0) {
+		result <-= "legacy plaintext credential remained visible";
+		return;
+	}
+
+	result <-= "";
+}
+
+testNetworkCapability(t: ref T)
+{
+	result := chan of string;
+	spawn networkCapabilityWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+networkCapabilityWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"webfetch" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (network tool) failed: %s", err);
+		return;
+	}
+	(netok, nil) := sys->stat("/net");
+	if(netok < 0) {
+		result <-= "/net missing with explicit webfetch capability";
+		return;
+	}
 	result <-= "";
 }
 
@@ -392,6 +472,16 @@ shellWorker(result: chan of string)
 	(catok, nil) := sys->stat("/dis/cat.dis");
 	if(catok < 0) {
 		result <-= "shellcmds should grant /dis/cat.dis";
+		return;
+	}
+	(netok, nil) := sys->stat("/net");
+	if(netok >= 0) {
+		result <-= "exec shell capability exposes raw network devices";
+		return;
+	}
+	(fdok, nil) := sys->stat("/fd");
+	if(fdok >= 0) {
+		result <-= "exec shell capability exposes inherited descriptors";
 		return;
 	}
 
@@ -687,7 +777,7 @@ testAuditLog(t: ref T)
 	nsconstruct->emitauditlog("test-audit", "restrictdir /dis" :: "restrictdir /dev" :: nil);
 
 	# Read audit log
-	auditpath := "/tmp/veltro/.ns/audit/test-audit.ns";
+	auditpath := "/tmp/.veltro-ns/audit/test-audit.ns";
 	fd := sys->open(auditpath, Sys->OREAD);
 	if(fd == nil) {
 		t.error("cannot open audit log");
@@ -1357,6 +1447,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictDirExclusion", testRestrictDirExclusion);
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
+	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);

@@ -109,7 +109,7 @@ vers: int;
 
 # Shadow directories for per-invocation namespace restriction
 # Must match SHADOW_BASE in nsconstruct.b
-SHADOW_BASE: con "/tmp/veltro/.ns/shadow";
+SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
 
 # Buffered channel for async shadow dir cleanup; asyncexec sends PID when done
 cleanupchan: chan of int;
@@ -653,6 +653,18 @@ childbudget(): list of string
 
 childpathallowed(path: string): int
 {
+	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
+	# status surface. It must not act as a lexical parent capability for hidden
+	# send/control endpoints when an agent provisions a child task.
+	if(path == "/mnt/msg/reply" || path == "/mnt/msg/ctl") {
+		for(ep0 := extpaths; ep0 != nil; ep0 = tl ep0)
+			if(hd ep0 == path)
+				return 1;
+		for(bp0 := boundpaths; bp0 != nil; bp0 = tl bp0)
+			if((hd bp0).path == path)
+				return 1;
+		return 0;
+	}
 	for(ep := extpaths; ep != nil; ep = tl ep)
 		if(pathwithin(hd ep, path))
 			return 1;
@@ -664,10 +676,19 @@ childpathallowed(path: string): int
 
 pathperm(path: string): string
 {
-	for(bp := boundpaths; bp != nil; bp = tl bp)
-		if(pathwithin((hd bp).path, path))
-			return (hd bp).perm;
-	return "ro";
+	# The narrowest grant controls. Otherwise a broad rw grant can override a
+	# more specific ro grant solely because of command-line/list ordering.
+	best := "";
+	perm := "ro";
+	for(bp := boundpaths; bp != nil; bp = tl bp) {
+		b := hd bp;
+		if(pathwithin(b.path, path) &&
+		   (len b.path > len best || (len b.path == len best && b.perm == "ro"))) {
+			best = b.path;
+			perm = b.perm;
+		}
+	}
+	return perm;
 }
 
 genwritepaths(): list of string
@@ -845,7 +866,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
 		return;
 	}
-	nserr := applynsrestriction();
+	nserr := applynsrestriction(ti.name);
 	if(nserr != nil) {
 		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
 		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
@@ -1214,26 +1235,22 @@ emitmanifestnow(mpath: string)
 # Apply namespace restriction to the current (already-forked) namespace.
 # Caller (asyncexec) is responsible for FORKNS and the /tool bind
 # BEFORE calling this — that ordering ensures /tool.N survives restriction.
-applynsrestriction(): string
+applynsrestriction(invokedtool: string): string
 {
 	nsconstruct := load NsConstruct NsConstruct->PATH;
 	if(nsconstruct == nil)
 		return sys->sprint("cannot load nsconstruct: %r");
 	nsconstruct->init();
-	# Grant /chan access only if the xenith tool was registered.
-	# Without this, the restricted namespace hides /chan entirely,
-	# so even the xenith tool can't read other windows.
-	hasxenith := 0;
-	if(findtool("xenith") != nil)
-		hasxenith = 1;
-	# Build registered tool name list for namespace restriction.
+	# /chan is an explicit per-operation capability. Browse creates a Xenith
+	# window; xenith controls windows. No other invocation sees window contents.
+	hasxenith := invokedtool == "xenith" || invokedtool == "browse";
+	# Attenuate to the current operation. The agent may have many tools in its
+	# menu, but this child namespace receives only the invoked tool's authority.
 	# Passing caps.tools lets restrictns() apply the security model:
 	#   - sh.dis bound to /dis when exec is in the list (step 1)
 	#   - /dis/veltro/tools restricted to registered .dis files (step 2)
 	# sh.dis appears ONLY if exec was explicitly passed by the caller.
-	toolnames: list of string = nil;
-	for(t := tools; t != nil; t = tl t)
-		toolnames = (hd t).name :: toolnames;
+	toolnames := invokedtool :: nil;
 	# Merge extpaths (from -p flags) and boundpaths (from runtime bindpath ctl).
 	# Called per-invocation from asyncexec(), so boundpaths always reflects
 	# the current state — paths bound via the GUI after startup are captured.
@@ -1244,16 +1261,16 @@ applynsrestriction(): string
 	# Auto-grant /n/speech when say or hear tool is registered.
 	# speech9p mounts /n/speech in the shared namespace; without this,
 	# restrictns() hides it entirely and say/hear tools fail silently.
-	if(findtool("say") != nil || findtool("hear") != nil)
+	if(invokedtool == "say" || invokedtool == "hear")
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
 	# Auto-grant /phone when sms or dial tool is registered (see
 	# companion in emitmanifestnow above — same reason).
-	if(findtool("sms") != nil || findtool("dial") != nil)
+	if(invokedtool == "sms" || invokedtool == "dial")
 		if(!strlist_contains(allpaths, "/phone"))
 			allpaths = "/phone" :: allpaths;
 	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
-	if(findtool("wallet") != nil || findtool("payfetch") != nil)
+	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
 	caps := ref NsConstruct->Capabilities(

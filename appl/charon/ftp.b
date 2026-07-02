@@ -2,6 +2,8 @@ implement Transport;
 
 include "common.m";
 include "transport.m";
+include "publicnet.m";
+	publicnet: Publicnet;
 
 # local copies from CU
 sys: Sys;
@@ -28,6 +30,9 @@ init(c: CharonUtils)
 	if (U != nil)
 		U->init();
 	dbg = int (CU->config).dbg['n'];
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet != nil)
+		publicnet->init();
 }
 
 connect(nc: ref Netconn, bs: ref ByteSource)
@@ -35,7 +40,17 @@ connect(nc: ref Netconn, bs: ref ByteSource)
 	port := nc.port;
 	if(port == 0)
 		port = FTPPORT;
-	addr := "tcp!" + nc.host + "!" + string port;
+	if(publicnet == nil) {
+		bs.err = "public destination validator unavailable";
+		closeconn(nc);
+		return;
+	}
+	(addr, aerr) := publicnet->dialaddr(nc.host, string port);
+	if(aerr != nil) {
+		bs.err = aerr;
+		closeconn(nc);
+		return;
+	}
 	if(dbg)
 		sys->print("ftp %d: dialing %s\n", nc.id, addr);
 	err := "";
@@ -113,7 +128,11 @@ dialdata(nc: ref Netconn, ctlfd: ref sys->FD) : string
 	if(paddr == "")
 		return "passive mode protocol botch: " + msg;
 	# dial data port
-	daddr := "tcp!" + paddr + "!" + pport;
+	if(publicnet == nil)
+		return "public destination validator unavailable";
+	(daddr, derr) := publicnet->dialaddr(paddr, pport);
+	if(derr != nil)
+		return derr;
 	if(dbg)
 		sys->print("ftp %d: dialing data %s", nc.id, daddr);
 	(ok, dnet) := sys->dial(daddr, nil);

@@ -110,7 +110,7 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 | 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
 | 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
 | 7 | `/tmp` | `veltro/` | **1** | Shadow dirs + scratch space — writable so agents can create files |
-| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `nvfs`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files and ambient network access |
+| 8 | `/` | `dev`, `dis`, `env`, `lib`, `n`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files, descriptors, node identity state, and ambient network access |
 
 **Order matters**: Steps 1-7 create shadow dirs under `/tmp/veltro/.ns/shadow/`. Step 7 restricts `/tmp` but preserves the `veltro/` subtree. Step 8 restricts `/` last, after all subdirectory restrictions are in place.
 
@@ -130,14 +130,12 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 |   +-- lib/      Limbo runtime libraries
 |   +-- veltro/   agent modules + tools
 +-- env/          environment variables
-+-- fd/           file descriptor device
 +-- lib/
 |   +-- veltro/   agents/, reminders/, tools/, system.txt
 +-- n/
 |   +-- llm/      LLM access (if mounted)
 |   +-- speech/   speech synthesis/recognition (if mounted)
 +-- net/          TCP/IP networking (fixed-function network invocation only)
-+-- nvfs/         name-value filesystem
 +-- prog/         process information
 +-- tmp/
 |   +-- veltro/

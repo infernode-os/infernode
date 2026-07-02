@@ -374,6 +374,11 @@ restrictNsWorker(result: chan of string)
 		result <-= "/fd must NOT expose inherited descriptors";
 		return;
 	}
+	(nvok, nil) := sys->stat("/nvfs");
+	if(nvok >= 0) {
+		result <-= "/nvfs must NOT expose node identity state";
+		return;
+	}
 
 	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
 	if(keyok >= 0) {

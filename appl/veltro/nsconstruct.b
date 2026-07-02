@@ -415,7 +415,7 @@ restrictns(caps: ref Capabilities): string
 	# including the tools9p reply channel, but agent code must not enumerate or
 	# reopen those inherited capabilities by descriptor number.
 	safe := "dev" :: "dis" :: "env" ::
-		"lib" :: "n" :: "nvfs" :: "prog" :: "tmp" :: "tool" :: nil;
+		"lib" :: "n" :: "prog" :: "tmp" :: "tool" :: nil;
 	# Raw IP devices are a capability, not ambient process state. Only
 	# fixed-function tools that dial directly receive them. In particular, an
 	# exec/shell invocation remains networkless even when the same agent also

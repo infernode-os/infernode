@@ -285,6 +285,9 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			if(toks != nil)
 				tok = hd toks;
 			case tok {
+			"resized" =>
+				allocfracimg();
+				restart = 1;
 			"b1down" =>
 				b1start = actpt(toks);
 			"b1up" =>
@@ -460,6 +463,13 @@ buildui()
 		"bind .top.frac <ButtonRelease-1> {send act b1up %x %y}",
 		"bind .top.frac <Button-2> {send act b2 %x %y}",
 		"bind .top.frac <Button-3> {send act menu %X %Y}",
+		# The wm reshape is absorbed by Tk itself (pure-Tk apps just
+		# repack); an app with a manually sized backing image needs the
+		# geometry change delivered explicitly.  Tk only delivers
+		# <Configure> to pack SLAVES on repack (packr.c), never to the
+		# toplevel itself, so bind the fill-both frame: it is repacked
+		# whenever the window image attaches or changes size.
+		"bind .top <Configure> {send act resized}",
 	};
 	tkcmds(cmds);
 }

@@ -12,6 +12,11 @@ implement Msg9p;
 #   ├── ctl         (rw)  "register <name> <dispath> <config...>"
 #   ├── notify      (r)   Blocking read: returns next notification
 #   ├── status      (r)   Summary of all sources
+#   ├── reply       (w)   Create an immutable pending send request
+#   ├── flag        (w)   "<src> <origid> <flag>" (separate capability)
+#   ├── pending     (r)   Trusted controller view of pending request IDs
+#   ├── approve     (w)   Trusted one-shot approval: "approve <id>"
+#   ├── deny        (w)   Trusted one-shot denial: "deny <id>"
 #   └── sources/    (dir) Per-source directories (future expansion)
 #
 # The notify file is the key mechanism: reading it BLOCKS until a
@@ -51,7 +56,7 @@ Msg9p: module {
 };
 
 # Qid layout
-Qroot, Qctl, Qnotify, Qstatus, Qreply, Qsrcdir: con iota;
+Qroot, Qctl, Qnotify, Qstatus, Qreply, Qflag, Qpending, Qapprove, Qdeny, Qsrcdir: con iota;
 
 # Registered source info
 SrcInfo: adt {
@@ -65,6 +70,11 @@ SrcInfo: adt {
 PendingRead: adt {
 	tag:  int;
 	fid:  int;
+};
+
+PendingSend: adt {
+	id: int;
+	data: string;
 };
 
 stderr: ref Sys->FD;
@@ -83,6 +93,9 @@ pendingReaders: list of ref PendingRead;
 # Queued notifications when no reader is waiting
 notifyq: list of string;
 MAXQ: con 64;
+MAXPENDING: con 16;
+pendingSends: list of ref PendingSend;
+nextSendID := 1;
 
 # Global reference to the styx server for deferred replies
 gsrv: ref Styxserver;
@@ -197,6 +210,18 @@ walkto(n: ref Navop.Walk)
 		"reply" =>
 			n.path = big Qreply;
 			n.reply <-= dirgen(int n.path);
+		"flag" =>
+			n.path = big Qflag;
+			n.reply <-= dirgen(int n.path);
+		"pending" =>
+			n.path = big Qpending;
+			n.reply <-= dirgen(int n.path);
+		"approve" =>
+			n.path = big Qapprove;
+			n.reply <-= dirgen(int n.path);
+		"deny" =>
+			n.path = big Qdeny;
+			n.reply <-= dirgen(int n.path);
 		"sources" =>
 			n.path = big Qsrcdir;
 			n.reply <-= dirgen(int n.path);
@@ -234,6 +259,18 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qreply =>
 		d.name = "reply";
 		d.mode = 8r222;
+	Qflag =>
+		d.name = "flag";
+		d.mode = 8r222;
+	Qpending =>
+		d.name = "pending";
+		d.mode = 8r444;
+	Qapprove =>
+		d.name = "approve";
+		d.mode = 8r222;
+	Qdeny =>
+		d.name = "deny";
+		d.mode = 8r222;
 	Qsrcdir =>
 		d.name = "sources";
 		d.mode = Sys->DMDIR | 8r555;
@@ -250,7 +287,7 @@ doreaddir(n: ref Navop.Readdir, path: int)
 {
 	case path {
 	Qroot =>
-		entries := array[] of {Qctl, Qnotify, Qstatus, Qreply, Qsrcdir};
+		entries := array[] of {Qctl, Qnotify, Qstatus, Qreply, Qflag, Qpending, Qapprove, Qdeny, Qsrcdir};
 		for(i := 0; i < len entries; i++) {
 			if(i >= n.offset) {
 				(d, err) := dirgen(entries[i]);
@@ -306,6 +343,10 @@ Serve:
 				data := array of byte genstatus();
 				srv.reply(styxservers->readbytes(m, data));
 
+			Qpending =>
+				data := array of byte genpending();
+				srv.reply(styxservers->readbytes(m, data));
+
 			Qnotify =>
 				# Blocking read: if we have queued notifications,
 				# reply immediately. Otherwise, park the reader.
@@ -344,9 +385,34 @@ Serve:
 				else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qreply =>
-				# Route a reply to a source's MsgSrc.reply(). Spawned so
-				# the serve loop is not blocked by the source's I/O.
-				spawn doreply(srv, m.tag, len m.data, data);
+				perr := queuereply(data);
+				srv.reply(ref Rmsg.Error(m.tag, perr));
+			Qflag =>
+				(nil, fargs) := sys->tokenize(data, " \t\r\n");
+				ferr := doflag(fargs);
+				if(ferr != nil)
+					srv.reply(ref Rmsg.Error(m.tag, ferr));
+				else
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			Qapprove =>
+				(id, aerr) := approvalid(data, "approve");
+				if(aerr != nil)
+					srv.reply(ref Rmsg.Error(m.tag, aerr));
+				else {
+					ps := takepending(id);
+					if(ps == nil)
+						srv.reply(ref Rmsg.Error(m.tag, "approve: unknown or consumed request"));
+					else
+						spawn doapproved(srv, m.tag, len m.data, ps);
+				}
+			Qdeny =>
+				(id, derr) := approvalid(data, "deny");
+				if(derr != nil)
+					srv.reply(ref Rmsg.Error(m.tag, derr));
+				else if(takepending(id) == nil)
+					srv.reply(ref Rmsg.Error(m.tag, "deny: unknown or consumed request"));
+				else
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
@@ -428,16 +494,90 @@ handlectl(data: string): string
 	}
 }
 
-# === reply: route a reply to a source's MsgSrc.reply() ===
+# === reply approval: queue immutable action; trusted endpoint consumes once ===
 #
 # /mnt/msg/reply (write-only) format:  <srcname>\n<origid>\n<body...>
 # Generic, protocol-agnostic: the consumer replies to a message by its source
 # and original id; the source preserves threading. Spawned from the serve loop
 # so the source's I/O does not block other clients.
 
-doreply(srv: ref Styxserver, tag, datalen: int, data: string)
+queuereply(data: string): string
 {
-	rerr := handlereply(data);
+	verr := validreply(data);
+	if(verr != nil)
+		return verr;
+	count := 0;
+	for(p := pendingSends; p != nil; p = tl p) {
+		count++;
+		if((hd p).data == data)
+			return sys->sprint("reply: approval required request %d", (hd p).id);
+	}
+	if(count >= MAXPENDING)
+		return "reply: approval queue full";
+	id := nextSendID++;
+	pendingSends = ref PendingSend(id, data) :: pendingSends;
+	return sys->sprint("reply: approval required request %d", id);
+}
+
+validreply(data: string): string
+{
+	(src, r1) := splitfirst(data, '\n');
+	(origid, nil) := splitfirst(r1, '\n');
+	src = msgstrip(src);
+	origid = msgstrip(origid);
+	if(src == "" || origid == "")
+		return "reply: want <srcname>\\n<origid>\\n<body>";
+	for(sl := sources; sl != nil; sl = tl sl)
+		if((hd sl).name == src)
+			return nil;
+	return "reply: no source: " + src;
+}
+
+genpending(): string
+{
+	result := "";
+	for(p := pendingSends; p != nil; p = tl p) {
+		ps := hd p;
+		(src, r1) := splitfirst(ps.data, '\n');
+		(origid, body) := splitfirst(r1, '\n');
+		result += sys->sprint("%d %s %s %d\n", ps.id, msgstrip(src), msgstrip(origid), len body);
+	}
+	return result;
+}
+
+approvalid(data, verb: string): (int, string)
+{
+	(nil, toks) := sys->tokenize(data, " \t");
+	if(toks == nil)
+		return (-1, verb + ": want " + verb + " <id>");
+	if(hd toks == verb)
+		toks = tl toks;
+	if(toks == nil || tl toks != nil)
+		return (-1, verb + ": want " + verb + " <id>");
+	(id, rest) := str->toint(hd toks, 10);
+	if(id <= 0 || rest != "")
+		return (-1, verb + ": invalid id");
+	return (id, nil);
+}
+
+takepending(id: int): ref PendingSend
+{
+	found: ref PendingSend;
+	kept: list of ref PendingSend;
+	for(p := pendingSends; p != nil; p = tl p) {
+		ps := hd p;
+		if(ps.id == id && found == nil)
+			found = ps;
+		else
+			kept = ref PendingSend(ps.id, ps.data) :: kept;
+	}
+	pendingSends = kept;
+	return found;
+}
+
+doapproved(srv: ref Styxserver, tag, datalen: int, ps: ref PendingSend)
+{
+	rerr := handlereply(ps.data);
 	if(rerr != nil)
 		srv.reply(ref Rmsg.Error(tag, rerr));
 	else

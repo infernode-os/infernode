@@ -338,7 +338,7 @@ restrictns(caps: ref Capabilities): string
 			}
 			# /mnt/msg sub-restriction: granting "/mnt/msg" exposes only the READ
 			# surface (status — the inbox). The SEND endpoint (reply) and the
-			# control file (ctl) are NEVER exposed by the bare grant — they are
+			# trusted control file (ctl) and flag endpoint are NEVER exposed by the bare grant — they are
 			# separate capabilities, named explicitly in caps.paths. So a drafting
 			# agent literally cannot see the send path (it does not try to send and
 			# cannot); an authorised send action is granted "/mnt/msg/reply"
@@ -350,8 +350,10 @@ restrictns(caps: ref Capabilities): string
 					msgallow = "reply" :: msgallow;
 					msgwrite = 1;	# the send endpoint must be writable
 				}
-				if(inlist("/mnt/msg/ctl", caps.paths))
-					msgallow = "ctl" :: msgallow;
+				if(inlist("/mnt/msg/flag", caps.paths)) {
+					msgallow = "flag" :: msgallow;
+					msgwrite = 1;
+				}
 				merr := restrictdir("/mnt/msg", msgallow, msgwrite);
 				if(merr != nil)
 					return sys->sprint("restrict /mnt/msg: %s", merr);

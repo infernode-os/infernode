@@ -11,4 +11,5 @@ sleep 1
 echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
 /tests/msg_capability_test.dis draft
 /tests/msg_capability_test.dis send
+/tests/msg_capability_test.dis flag
 echo MSGCAP DONE

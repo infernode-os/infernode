@@ -49,6 +49,7 @@ display: ref Display;
 font: ref Font;
 colours: array of ref Image;
 canvasbg: ref Image;	# theme-driven canvas clear color
+zoomboxcol := "#E8553A";	# zoom rubber-band outline (theme accent)
 fracimg: ref Image;	# off-screen image the compute proc draws into
 canvw, canvh: int;	# fractal canvas size in pixels
 statusleft := "";
@@ -266,7 +267,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		restart := 0;
 		alt {
 		c := <-wmctl or
-		c = <-top.ctxt.ctl =>
+		c = <-top.ctxt.ctl or
+		# top.wreq carries Tk window requests (menu posts create their
+		# window through here); a loop that never drains it leaves every
+		# posted menu mapped-and-grabbing but windowless — invisible.
+		c = <-top.wreq =>
 			if(c != nil) {
 				resized := len c > 0 && c[0] == '!';
 				tkclient->wmctl(top, c);
@@ -290,7 +295,18 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				restart = 1;
 			"b1down" =>
 				b1start = actpt(toks);
+				tk->cmd(top, ".top.frac delete zoombox");
+			"b1drag" =>
+				if(b1start.x >= 0) {
+					q := actpt(toks);
+					tk->cmd(top, ".top.frac delete zoombox");
+					tk->cmd(top, sys->sprint(
+						".top.frac create rectangle %d %d %d %d -outline %s -tags zoombox",
+						b1start.x, b1start.y, q.x, q.y, zoomboxcol));
+					tk->cmd(top, "update");
+				}
 			"b1up" =>
+				tk->cmd(top, ".top.frac delete zoombox");
 				if(b1start.x >= 0) {
 					r := Rect(b1start, actpt(toks)).canon();
 					b1start = Point(-1, -1);
@@ -453,13 +469,20 @@ buildui()
 		". configure -background #080808",
 		"frame .top",
 		"image create bitmap frac",
-		"label .top.frac -image frac -borderwidth 0",
+		# A canvas (not a label) displays the fractal: canvas items give
+		# us a live zoom rubber-band (a rectangle item whose coords are
+		# updated during the B1 drag) without copying the image.
+		"canvas .top.frac -borderwidth 0 -background #080808",
+		".top.frac create image 0 0 -anchor nw -image frac",
 		"pack .top.frac -side top",
 		"label .status -anchor w -background #0a0a0a -foreground #999999",
 		"pack .top -side top -fill both -expand 1",
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 		"bind .top.frac <Button-1> {send act b1down %x %y}",
+		# Inferno Tk has no <B1-Motion>; bind plain <Motion> — the
+		# handler only draws while a B1 drag is in progress (b1start set).
+		"bind .top.frac <Motion> {send act b1drag %x %y}",
 		"bind .top.frac <ButtonRelease-1> {send act b1up %x %y}",
 		"bind .top.frac <Button-2> {send act b2 %x %y}",
 		"bind .top.frac <Button-3> {send act menu %X %Y}",
@@ -599,6 +622,9 @@ loadcanvasbg()
 	}
 	th := lucitheme->gettheme();
 	canvasbg = display.color(th.bg);
+	# Zoom rubber-band follows the theme accent (gettheme() returns
+	# 0xRRGGBBAA; Tk colour strings want #rrggbbff — drop the alpha).
+	zoomboxcol = sys->sprint("#%06xff", (th.accent >> 8) & 16rFFFFFF);
 }
 
 canvsize(): Point

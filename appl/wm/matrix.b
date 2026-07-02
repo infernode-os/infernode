@@ -1208,7 +1208,11 @@ guiloop()
 		}
 		alt {
 		c := <-wmctl or
-		c = <-top.ctxt.ctl =>
+		c = <-top.ctxt.ctl or
+		# top.wreq carries Tk window requests (menu posts create their
+		# window through here); a loop that never drains it leaves every
+		# posted menu mapped-and-grabbing but windowless — invisible.
+		c = <-top.wreq =>
 			tkclient->wmctl(top, c);
 			if(c != nil && len c > 0 && c[0] == '!') {
 				aw := int tk->cmd(top, ". cget -actwidth");

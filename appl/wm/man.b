@@ -153,7 +153,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	for(;;) alt {
 	c := <-wmctl or
-	c = <-top.ctxt.ctl =>
+	c = <-top.ctxt.ctl or
+	# top.wreq carries Tk window requests (menu posts create their
+	# window through here); a loop that never drains it leaves every
+	# posted menu mapped-and-grabbing but windowless — invisible.
+	c = <-top.wreq =>
 		tkclient->wmctl(top, c);
 	k := <-top.ctxt.kbd =>
 		handlekey(k);

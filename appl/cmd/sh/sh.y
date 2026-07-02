@@ -290,6 +290,22 @@ system(drawctxt: ref Draw->Context, cmd: string): string
 	}
 }
 
+systemfd(drawctxt: ref Draw->Context, cmd: string, wfd: ref Sys->FD): string
+{
+	initialise();
+	{
+		(n, err) := parse(cmd);
+		if (err != nil)
+			return err;
+		if (n == nil)
+			return nil;
+		return contextwithwait(drawctxt, wfd).run(ref Listnode(n, nil) :: nil, 0);
+	} exception e {
+	"fail:*" =>
+		return failurestatus(e);
+	}
+}
+
 run(drawctxt: ref Draw->Context, argv: list of string): string
 {
 	initialise();
@@ -1191,6 +1207,11 @@ diagnostic(ctxt: ref Context, s: string)
 
 Context.new(drawcontext: ref Draw->Context): ref Context
 {
+	return contextwithwait(drawcontext, waitfd());
+}
+
+contextwithwait(drawcontext: ref Draw->Context, wfd: ref Sys->FD): ref Context
+{
 	initialise();
 	if (env != nil)
 		env->clone();
@@ -1201,7 +1222,7 @@ Context.new(drawcontext: ref Draw->Context): ref Context
 			nil,
 			newlocalenv(nil)
 		),
-		waitfd(),
+		wfd,
 		drawcontext,
 		0 :: 1 :: 2 :: nil
 	);

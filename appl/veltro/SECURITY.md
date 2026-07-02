@@ -97,6 +97,12 @@ subagent spawn: FORKNS + restrictns()   -- inherit + further restrict
 
 Both levels use the same `restrictdir()` primitive. Capability attenuation is natural: children fork an already-restricted namespace and can only narrow further.
 
+Task briefs, instructions, model choices, and agent-role selections are exchanged
+under `/tmp/veltro/tasks`. `restrictns()` replaces that directory with an empty
+view for every invocation except the fixed-function `task` tool. The trusted
+taskboard and lucibridge processes consume the files outside the tool namespace;
+message-reading and general file tools cannot inspect another activity's prompt.
+
 ## Namespace Restriction Policy
 
 `restrictns(caps)` applies these restrictions in order:
@@ -176,11 +182,18 @@ The ordering remains security-critical:
 
 ```
 asyncexec(tool):
-  1. pctl(FORKNS | NODEVS)
+  1. pctl(FORKNS)
   2. bind /tool.N over /tool
   3. restrictns(Capabilities(tools = [tool], ...))
-  4. load and execute only that tool module
+  4. pctl(NODEVS), then execute only that tool module
 ```
+
+`exec` has one constrained variation: its trusted wrapper opens the current
+worker's `#p/<pid>/wait` before `NODEVS`, retains that single FD across
+`NEWFD`, applies `NODEVS`, and passes the FD to sh through `systemfd`. Its
+`/prog` directory is empty. Model-supplied command text is parsed only after
+device attachment is disabled, so shell child waiting does not require ambient
+process control authority.
 
 After restriction, all async tool execution threads (via `spawn asyncexec()`) inherit the restricted namespace.
 
@@ -646,10 +659,10 @@ exposing it as a user tool is cheap.
 
 ### NODEVS device-attach gate (RESOLVED)
 
-`pctl(NODEVS)` is now applied at **every** agent FORKNS site — the spawned
+`pctl(NODEVS)` is applied before model-controlled code at **every** agent FORKNS site — the spawned
 child (`spawn.b:1071`) **and** all three top-level entry points:
 `veltro.b:169`, `repl.b:170`, `tools9p.b:798`, each immediately after
-`pctl(FORKNS)`. The kernel device gate is at `emu/port/chan.c:1046-1053`;
+`pctl(FORKNS)` (except for exec's trusted wait-FD setup described above). The kernel device gate is at `emu/port/chan.c:1046-1053`;
 with `nodevs` set, `sys->bind("#sfactotum", "/tmp/veltro/x", MREPL)` (and any
 `#x` attach outside the `|esDa` allowlist) fails, so device-attach cannot
 bypass the path-based restriction.

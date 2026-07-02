@@ -150,6 +150,7 @@ restrictns(caps: ref Capabilities): string
 	mkdirp("/tmp/veltro/scratch");
 	mkdirp("/tmp/veltro/memory");
 	mkdirp("/tmp/veltro/cow");
+	mkdirp("/tmp/veltro/tasks");
 	mkdirp("/tmp/.veltro-ns");
 	mkdirp(SHADOW_BASE);
 	mkdirp(AUDIT_DIR);
@@ -391,9 +392,15 @@ restrictns(caps: ref Capabilities): string
 	# process and opens /prog/<child>/wait after restriction, so an explicit shell
 	# capability temporarily retains full /prog.
 	(progok, nil) := sys->stat("/prog");
-	if(progok >= 0 && !inlist("exec", caps.tools) && caps.shellcmds == nil) {
-		pid := sys->pctl(0, nil);
-		err = restrictdir("/prog", string pid :: nil, 0);
+	if(progok >= 0 && caps.shellcmds == nil) {
+		progallow: list of string;
+		# The exec wrapper supplies sh with a pre-opened wait FD. Its command
+		# process therefore needs no /prog entry, including the wrapper's ctl.
+		if(!inlist("exec", caps.tools)) {
+			pid := sys->pctl(0, nil);
+			progallow = string pid :: nil;
+		}
+		err = restrictdir("/prog", progallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /prog: %s", err);
 	}
@@ -492,6 +499,15 @@ restrictns(caps: ref Capabilities): string
 		werr := overlaywritepaths(caps.writepaths, caps.actid);
 		if(werr != nil)
 			return sys->sprint("overlay writes: %s", werr);
+	}
+
+	# Task briefs contain untrusted message bodies and user instructions. They
+	# are exchanged by trusted taskboard/lucibridge processes; ordinary tools
+	# must not read another activity's prompt or model selection.
+	if(!inlist("task", caps.tools)) {
+		err = restrictdir("/tmp/veltro/tasks", nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict task metadata: %s", err);
 	}
 
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be

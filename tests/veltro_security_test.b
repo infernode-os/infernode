@@ -275,10 +275,23 @@ testRestrictNs(t: ref T)
 	}
 	sys->fprint(fd, "synthetic-secret");
 	fd = nil;
+	sys->create("/tmp/veltro/tasks", Sys->OREAD, Sys->DMDIR | 8r700);
+	taskcanary := "/tmp/veltro/tasks/instructions.99999";
+	fd = sys->create(taskcanary, Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		sys->remove(canary);
+		if(createdkeys)
+			sys->remove("/lib/veltro/keys");
+		t.skip("cannot create task metadata fixture");
+		return;
+	}
+	sys->fprint(fd, "hostile-message-body");
+	fd = nil;
 	result := chan of string;
 	spawn restrictNsWorker(result);
 
 	r := <-result;
+	sys->remove(taskcanary);
 	sys->remove(canary);
 	if(createdkeys)
 		sys->remove("/lib/veltro/keys");
@@ -384,6 +397,11 @@ restrictNsWorker(result: chan of string)
 		result <-= "trusted namespace construction state remains visible";
 		return;
 	}
+	(taskok, nil) := sys->stat("/tmp/veltro/tasks/instructions.99999");
+	if(taskok >= 0) {
+		result <-= "ordinary tool can read another activity task prompt";
+		return;
+	}
 
 	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
 	if(keyok >= 0) {
@@ -391,6 +409,43 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
+	result <-= "";
+}
+
+testTaskMetadataCapability(t: ref T)
+{
+	fd := sys->create("/tmp/veltro/tasks/instructions.99998", Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		t.skip("cannot create task metadata capability fixture");
+		return;
+	}
+	sys->fprint(fd, "task-only");
+	fd = nil;
+	result := chan of string;
+	spawn taskMetadataCapabilityWorker(result);
+	r := <-result;
+	sys->remove("/tmp/veltro/tasks/instructions.99998");
+	if(r != "")
+		t.error(r);
+}
+
+taskMetadataCapabilityWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"task" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (task tool) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/tasks/instructions.99998");
+	if(ok < 0) {
+		result <-= "task tool cannot access task metadata exchange";
+		return;
+	}
 	result <-= "";
 }
 
@@ -1388,6 +1443,46 @@ testProgAllowlist(t: ref T)
 		t.error(r);
 }
 
+testExecProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn execProgAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+execProgAllowlistWorker(result: chan of string, parentpid: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"exec" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (exec) failed: %s", err);
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ctl", parentpid));
+	if(parentok >= 0) {
+		result <-= "exec can control a sibling process";
+		return;
+	}
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil) {
+		result <-= "exec restricted process directory is unavailable";
+		return;
+	}
+	(n, nil) := sys->dirread(fd);
+	if(n != 0) {
+		result <-= "exec process directory is not empty";
+		return;
+	}
+	result <-= "";
+}
+
 progAllowlistWorker(result: chan of string, parentpid: int)
 {
 	selfpid := sys->pctl(Sys->FORKNS, nil);
@@ -1447,9 +1542,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictDirExclusion", testRestrictDirExclusion);
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
+	run("TaskMetadataCapability", testTaskMetadataCapability);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);
+	run("ExecProgAllowlist", testExecProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);

@@ -296,6 +296,39 @@ else
     fail "child provision narrowing test failed"
 fi
 
+if emu_c "provision_msg_reply_denied" 14 \
+    "tools9p -p /mnt/msg:rw read task & sleep 3; echo '10 paths=/mnt/msg/reply:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.10/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/reply"; then
+        fail "bare /mnt/msg grant must not mint the hidden reply capability"
+    else
+        pass "child cannot derive /mnt/msg/reply from bare /mnt/msg"
+    fi
+else
+    fail "message reply delegation-denial test failed"
+fi
+
+if emu_c "provision_msg_reply_exact" 14 \
+    "tools9p -p /mnt/msg/reply:rw read task & sleep 3; echo '11 paths=/mnt/msg/reply:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.11/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/reply rw"; then
+        pass "child may delegate an exact trusted /mnt/msg/reply grant"
+    else
+        fail "exact /mnt/msg/reply grant was not delegated (output: $OUTPUT)"
+    fi
+else
+    fail "exact message reply delegation test failed"
+fi
+
+if emu_c "provision_specific_ro" 14 \
+    "tools9p -p /tmp:rw -p /tmp/readonly:ro read task & sleep 3; echo '12 paths=/tmp/readonly/file:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.12/paths"; then
+    if echo "$OUTPUT" | grep -q "^/tmp/readonly/file ro"; then
+        pass "narrow ro grant overrides a broad rw ancestor during delegation"
+    else
+        fail "broad rw grant overrode narrower ro grant (output: $OUTPUT)"
+    fi
+else
+    fail "specific read-only delegation test failed"
+fi
+
 # ── summary ──────────────────────────────────────────────────────────────────
 
 echo ""

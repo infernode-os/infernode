@@ -653,6 +653,18 @@ childbudget(): list of string
 
 childpathallowed(path: string): int
 {
+	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
+	# status surface. It must not act as a lexical parent capability for hidden
+	# send/control endpoints when an agent provisions a child task.
+	if(path == "/mnt/msg/reply" || path == "/mnt/msg/ctl") {
+		for(ep0 := extpaths; ep0 != nil; ep0 = tl ep0)
+			if(hd ep0 == path)
+				return 1;
+		for(bp0 := boundpaths; bp0 != nil; bp0 = tl bp0)
+			if((hd bp0).path == path)
+				return 1;
+		return 0;
+	}
 	for(ep := extpaths; ep != nil; ep = tl ep)
 		if(pathwithin(hd ep, path))
 			return 1;
@@ -664,10 +676,19 @@ childpathallowed(path: string): int
 
 pathperm(path: string): string
 {
-	for(bp := boundpaths; bp != nil; bp = tl bp)
-		if(pathwithin((hd bp).path, path))
-			return (hd bp).perm;
-	return "ro";
+	# The narrowest grant controls. Otherwise a broad rw grant can override a
+	# more specific ro grant solely because of command-line/list ordering.
+	best := "";
+	perm := "ro";
+	for(bp := boundpaths; bp != nil; bp = tl bp) {
+		b := hd bp;
+		if(pathwithin(b.path, path) &&
+		   (len b.path > len best || (len b.path == len best && b.perm == "ro"))) {
+			best = b.path;
+			perm = b.perm;
+		}
+	}
+	return perm;
 }
 
 genwritepaths(): list of string

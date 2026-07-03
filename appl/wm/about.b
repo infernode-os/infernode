@@ -179,7 +179,7 @@ build(display: ref Display)
 	version := rf("/dev/sysctl");
 	if(version != nil)
 		tkcmds(array[] of {
-			"label .c.ver -text '" + version + " -font " + bodyf,
+			"label .c.ver -text {" + version + "} -font " + bodyf,
 			"pack .c.ver -side top",
 		});
 
@@ -197,7 +197,7 @@ build(display: ref Display)
 			fg = " -foreground " + dimcol;
 		w := sys->sprint(".c.l%d", i);
 		tkcmds(array[] of {
-			"label " + w + " -text '" + text + " -font " + bodyf + fg,
+			"label " + w + " -text {" + text + "} -font " + bodyf + fg,
 			"pack " + w + " -side top",
 		});
 	}

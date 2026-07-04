@@ -349,7 +349,8 @@ tkentrytext(Image *i, Rectangle s, Tk *tk, TkEnv *env)
 			tke->xicursor - tke->x0, 0, 
 			tke->xicursor - tke->x0 + Inswidth, env->font->height
 		);
-		draw(i, rectaddpt(r, s.min), tkgc(env, TkCforegnd), nil, ZP);
+		/* accent-coloured insertion caret (theme signature colour) */
+		draw(i, rectaddpt(r, s.min), tkgc(env, TkCselect), nil, ZP);
 	}
 	if (tke->show)
 		free(text);

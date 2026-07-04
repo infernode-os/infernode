@@ -3336,6 +3336,29 @@ killapp(id: string)
 # Critical: MUST iterate all appslots, not just activeappid.  Before this was
 # fixed, centering mermaid called hideapp("") which is a no-op, leaving whichever
 # app was last-top still floating over the presentation content.
+# Deliver keyboard focus to the active presentation app.  Sends
+# "haskbdfocus 0" to the previously focused app and "haskbdfocus 1" to the
+# new one over its client ctl; the stock tkclient loop turns that into
+# "focus -global", which sets TkTop->focused so text widgets show their
+# caret.  A no-op id ("") is skipped.  Safe to send to any app: a widget
+# with nothing focusable just ignores it.
+setappkbdfocus(tp: ref TaskPres, oldid, newid: string)
+{
+	if(tp == nil)
+		return;
+	<-tp.applock;
+	for(i := 0; i < tp.nappslots; i++) {
+		as := tp.appslots[i];
+		if(as == nil || as.client == nil)
+			continue;
+		if(oldid != "" && as.id == oldid)
+			alt { as.client.ctl <-= "haskbdfocus 0" => ; * => ; }
+		if(newid != "" && as.id == newid)
+			alt { as.client.ctl <-= "haskbdfocus 1" => ; * => ; }
+	}
+	tp.applock <-= 1;
+}
+
 handleprescurrent()
 {
 	if(actid < 0 || curtaskpres == nil) return;
@@ -3353,12 +3376,21 @@ handleprescurrent()
 	# short-circuit, which left the z-order desynced whenever an app
 	# joined or was reallocated out of band — the wrong-window-visible
 	# bug.  Always enforcing is idempotent and race-proof.)
+	oldactive := tp.activeappid;
 	<-tp.applock;
 	if(atype == "app")
 		tp.activeappid = newid;
 	else
 		tp.activeappid = "";
+	newactive := tp.activeappid;
 	tp.applock <-= 1;
+	# Hand keyboard focus to the newly active app (and drop it from the old
+	# one) the way a real wmsrv does on focus change (wm.b sends the same
+	# "haskbdfocus" ctl).  Without this an app's TkTop->focused stays 0, so
+	# tkhaskeyfocus() is false and text widgets never light their insertion
+	# caret or focus highlight — the "no visible cursor" symptom.
+	if(oldactive != newactive)
+		setappkbdfocus(tp, oldactive, newactive);
 	# presrender renders every non-app, non-taskboard artifact; raise its
 	# window (in enforcepreszorder) whenever such content is centered.
 	showpresrender = (newid != "" && atype != "app" && atype != "taskboard");

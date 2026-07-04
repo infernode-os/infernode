@@ -20,6 +20,9 @@ TARG=\
 	coffee.dis\
 	memory.dis\
 	rt.dis\
+	deb.dis\
+	debdata.dis\
+	debsrc.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\

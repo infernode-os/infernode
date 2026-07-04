@@ -39,6 +39,9 @@ TARG=\
 	devpointer.dis\
 	dial.dis\
 	dialnorm.dis\
+	dialog.dis\
+	selectfile.dis\
+	tabs.dis\
 	dict.dis\
 	dis.dis\
 	diskblocks.dis\

@@ -45,6 +45,7 @@ WINH: con 590;
 top: ref Toplevel;
 accentcol: string;	# "#rrggbbff" title accent (from theme)
 dimcol:    string;	# "#rrggbbff" URL/footnote colour (from theme)
+bgc:       string;	# "#rrggbbff" background (from theme)
 
 # (text, dim) pairs — dim=1 lines use the muted colour (URLs).
 lines := array[] of {
@@ -126,6 +127,7 @@ loadtheme()
 		th = ref Theme;
 	accentcol = col(th.accent >> 8);
 	dimcol = col(th.dim >> 8);
+	bgc = col(th.bg >> 8);
 }
 
 # lucitheme stores 0xRRGGBB ints; Tk wants "#rrggbbff".
@@ -159,7 +161,7 @@ build(display: ref Display)
 	(bodyf, titlef) := fonts(ww);
 
 	cmds := array[] of {
-		". configure -background #080808",
+		". configure -background " + bgc,
 		"frame .c -borderwidth 0",
 	};
 	tkcmds(cmds);
@@ -209,6 +211,10 @@ build(display: ref Display)
 # Re-apply theme-dependent colours after a live theme change.
 retheme()
 {
+	# Re-theme env-derived widget colours (the frame/label backgrounds have
+	# no explicit colour) and reconfigure the hardcoded toplevel background.
+	tkclient->wmctl(top, "retheme");
+	tk->cmd(top, ". configure -background " + bgc);
 	tk->cmd(top, ".c.title configure -foreground " + accentcol);
 	tk->cmd(top, ".c.sep configure -background " + accentcol);
 	for(i := 0; i < len lines; i++){

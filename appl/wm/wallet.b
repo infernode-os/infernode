@@ -87,6 +87,9 @@ pendingcount: int;
 historyraw: list of string;
 accent: string;
 dim:    string;
+bgc:      string;	# theme background
+statusbg: string;	# status-strip background
+statusfg: string;	# status-strip foreground
 
 WALLET: con "/n/wallet";
 LBLW:   con 96;		# pixel width of the aligned label column
@@ -168,6 +171,13 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	<-themech =>
 		loadtheme();
+		# Re-theme env-derived widget colours, then reconfigure the widgets
+		# carrying explicit theme colours (were hardcoded brimstone and never
+		# updated, so the whole pane stayed dark after a switch).
+		tkclient->wmctl(top, "retheme");
+		tk->cmd(top, ". configure -background " + bgc);
+		tk->cmd(top, ".main.div configure -background " + accent);
+		tk->cmd(top, ".status configure -background " + statusbg + " -foreground " + statusfg);
 		setmode(mode);
 	}
 }
@@ -177,7 +187,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 buildbase()
 {
 	cmds := array[] of {
-		". configure -background #080808",
+		". configure -background " + bgc,
 		"frame .main",
 		"frame .main.list",
 		"scrollbar .main.list.sb -command {.main.list.lb yview}",
@@ -189,7 +199,7 @@ buildbase()
 		"pack .main.list -side left -fill y",
 		"pack .main.div -side left -fill y",
 		"pack .main.right -side left -fill both -expand 1",
-		"label .status -anchor w -background #0a0a0a -foreground #999999",
+		"label .status -anchor w -background " + statusbg + " -foreground " + statusfg,
 		"pack .main -side top -fill both -expand 1",
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
@@ -762,6 +772,9 @@ loadtheme()
 		th = ref Theme;
 	accent = col(th.accent >> 8);
 	dim = col(th.dim >> 8);
+	bgc = col(th.bg >> 8);
+	statusbg = col(th.editstatus >> 8);
+	statusfg = col(th.editstattext >> 8);
 }
 
 col(v: int): string

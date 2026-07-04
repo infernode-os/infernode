@@ -143,6 +143,7 @@ winr: Rect;		# current composited-frame rectangle
 display_g: ref Display;
 font_g: ref Font;
 bgcolor: ref Image;
+bgcolstr: string;	# theme bg as a Tk colour string
 divcolor: ref Image;
 textcolor: ref Image;
 dimcolor: ref Image;
@@ -1098,7 +1099,7 @@ initgui(ctxt: ref Draw->Context)
 
 	# The whole composited frame is a single Tk bitmap image in a label.
 	tkcmds(array[] of {
-		". configure -background #080808",
+		". configure -background " + bgcolstr,
 		"image create bitmap mtx",
 		"label .l -image mtx -borderwidth 0",
 		"pack .l -fill both -expand 1",
@@ -1145,6 +1146,7 @@ loadcolors()
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
 		bgcolor   = display_g.color(th.bg);
+		bgcolstr  = sys->sprint("#%06xff", (th.bg >> 8) & 16rFFFFFF);
 		divcolor  = display_g.color(th.border);
 		textcolor = display_g.color(th.text);
 		dimcolor  = display_g.color(th.dim);
@@ -1153,6 +1155,7 @@ loadcolors()
 		yellowcolor= display_g.color(th.yellow);
 	} else {
 		bgcolor   = display_g.color(int 16r1A1A2EFF);
+		bgcolstr  = "#1a1a2eff";
 		divcolor  = display_g.color(int 16r333355FF);
 		textcolor = display_g.color(int 16rDDDDDDFF);
 		dimcolor  = display_g.color(int 16r888888FF);
@@ -1258,6 +1261,7 @@ guiloop()
 		<-themech =>
 			loadcolors();
 			tkclient->wmctl(top, "retheme");
+			tk->cmd(top, ". configure -background " + bgcolstr);
 			rethemedisplaymodules(comp.layout);
 			dirty = 1;
 		}

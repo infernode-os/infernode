@@ -49,6 +49,7 @@ display: ref Display;
 font: ref Font;
 colours: array of ref Image;
 canvasbg: ref Image;	# theme-driven canvas clear color
+bgs, statusbgs, statusfgs: string;	# theme colour strings for widgets
 zoomboxcol := "#E8553A";	# zoom rubber-band outline (theme accent)
 fracimg: ref Image;	# off-screen image the compute proc draws into
 canvw, canvh: int;	# fractal canvas size in pixels
@@ -412,6 +413,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			updatesbar();
 		<-themech =>
 			loadcanvasbg();
+			# Re-theme env-derived widgets, reconfigure the widgets carrying
+			# explicit theme colours, and repaint the fractal on the new bg.
+			tkclient->wmctl(top, "retheme");
+			tk->cmd(top, ". configure -background " + bgs);
+			tk->cmd(top, ".top.frac configure -background " + bgs);
+			tk->cmd(top, ".status configure -background " + statusbgs + " -foreground " + statusfgs);
 			updatesbar();
 		}
 		if(restart) {
@@ -466,16 +473,16 @@ STH: con 24;	# status strip height allowance
 buildui()
 {
 	cmds := array[] of {
-		". configure -background #080808",
+		". configure -background " + bgs,
 		"frame .top",
 		"image create bitmap frac",
 		# A canvas (not a label) displays the fractal: canvas items give
 		# us a live zoom rubber-band (a rectangle item whose coords are
 		# updated during the B1 drag) without copying the image.
-		"canvas .top.frac -borderwidth 0 -background #080808",
+		"canvas .top.frac -borderwidth 0 -background " + bgs,
 		".top.frac create image 0 0 -anchor nw -image frac",
 		"pack .top.frac -side top",
-		"label .status -anchor w -background #0a0a0a -foreground #999999",
+		"label .status -anchor w -background " + statusbgs + " -foreground " + statusfgs,
 		"pack .top -side top -fill both -expand 1",
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
@@ -625,6 +632,9 @@ loadcanvasbg()
 	# Zoom rubber-band follows the theme accent (gettheme() returns
 	# 0xRRGGBBAA; Tk colour strings want #rrggbbff — drop the alpha).
 	zoomboxcol = sys->sprint("#%06xff", (th.accent >> 8) & 16rFFFFFF);
+	bgs = sys->sprint("#%06xff", (th.bg >> 8) & 16rFFFFFF);
+	statusbgs = sys->sprint("#%06xff", (th.editstatus >> 8) & 16rFFFFFF);
+	statusfgs = sys->sprint("#%06xff", (th.editstattext >> 8) & 16rFFFFFF);
 }
 
 canvsize(): Point

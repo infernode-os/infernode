@@ -184,15 +184,16 @@ openfont(path: string): ref Font
 
 buildui()
 {
+	th := gettheme();
 	cmds := array[] of {
-		". configure -background #080808",
+		". configure -background " + col(th.bg >> 8),
 		"frame .top",
 		"scrollbar .top.sb -command {.top.t yview}",
 		"text .top.t -yscrollcommand {.top.sb set} -wrap none -width 640 -height 480 " +
-			"-background #080808 -foreground #cccccc -font /fonts/combined/unicode.sans.14.font",
+			"-background " + col(th.editbg >> 8) + " -foreground " + col(th.edittext >> 8) + " -font /fonts/combined/unicode.sans.14.font",
 		"pack .top.sb -side right -fill y",
 		"pack .top.t -side left -fill both -expand 1",
-		"label .status -anchor w -background #0a0a0a -foreground #999999",
+		"label .status -anchor w -background " + col(th.editstatus >> 8) + " -foreground " + col(th.editstattext >> 8),
 		"pack .top -side top -fill both -expand 1",
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
@@ -219,7 +220,7 @@ configtags()
 	tk->cmd(top, sys->sprint(".top.t tag configure bold -font /fonts/combined/unicode.sans.bold.14.font"));
 	tk->cmd(top, sys->sprint(".top.t tag configure italic -foreground %s", col(th.dim >> 8)));
 	tk->cmd(top, sys->sprint(".top.t tag configure link -foreground %s", col(th.accent >> 8)));
-	tk->cmd(top, sys->sprint(".top.t tag configure match -background %s -foreground #080808", col(th.accent >> 8)));
+	tk->cmd(top, sys->sprint(".top.t tag configure match -background %s -foreground %s", col(th.accent >> 8), col(th.bg >> 8)));
 	tk->cmd(top, sys->sprint(".top.t configure -foreground %s", col(th.edittext >> 8)));
 }
 
@@ -659,6 +660,14 @@ themelistener()
 
 retheme()
 {
+	th := gettheme();
+	# Re-theme env-derived widget colours, then reconfigure the widgets that
+	# carry explicit theme colours (toplevel, the text body, the status
+	# strip) — these were hardcoded brimstone and stayed dark after a switch.
+	tkclient->wmctl(top, "retheme");
+	tk->cmd(top, ". configure -background " + col(th.bg >> 8));
+	tk->cmd(top, ".top.t configure -background " + col(th.editbg >> 8) + " -foreground " + col(th.edittext >> 8));
+	tk->cmd(top, ".status configure -background " + col(th.editstatus >> 8) + " -foreground " + col(th.editstattext >> 8));
 	configtags();
 }
 

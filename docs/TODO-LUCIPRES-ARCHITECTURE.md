@@ -48,15 +48,13 @@ slide, and ghost windows.
 
 ## Remaining follow-up
 
-- **Dead-code deletion in lucipres.**  The content render pipeline is now
-  unused in lucipres (`renderart`, `renderartasync`/`renderdonech`,
-  `drawrendimg`/`drawpdfnav`/`drawtable`/`drawdiff`/`drawfallbacktext`,
-  `renderpdfpage`, `prescroll`/`handledrag`, the render-state Artifact
-  fields, `backbuf`, and the `pdf`/`rlayout`/`renderer`/`render` includes
-  + their init-time loads).  It compiles but is dead; deleting it shrinks
-  lucipres and stops it loading a second copy of the render registry.
-  Do this carefully — some text helpers (`splitlines`, `wraptext`, …) may
-  still be shared with the taskboard/export paths.
+- **Dead-code deletion in lucipres.**  DONE (commit 011672a6): removed
+  ~770 lines — the render pipeline, draw helpers, table/wrap text helpers,
+  the pdf/rlayout/renderer/render/viewport includes + loads (lucipres no
+  longer loads a second render registry), and the dead scroll/drag/PDF-nav
+  event handling.  `splitlines` kept (taskboard uses it); the Artifact
+  ADT's unused render fields and codebgcol_g/monofont_g left as harmless
+  dead members to avoid churning constructors.  lucipres.b 2290 -> 1501.
 - **Visual resize test.**  The resize path (`rszch`) reallocates
   presrender's window; it mirrors the app-resize handling but has only
   been exercised in fixed-geometry headless runs.  Verify on a real

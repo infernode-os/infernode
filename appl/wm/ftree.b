@@ -158,6 +158,7 @@ actch:		chan of string;
 themech:	chan of int;
 display:	ref Display;
 stderr:		ref Sys->FD;
+listfont:	ref Font;		# for indicator-hit measurement (see onindicator)
 
 # Theme colours (resolved to #rrggbbff strings for Tk)
 c_bg:		string;
@@ -333,7 +334,7 @@ buildui()
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 		# selection / activation / context bindings on the listbox
-		"bind .main.lb <ButtonRelease-1> {send act sel}",
+		"bind .main.lb <ButtonRelease-1> {send act sel %x}",
 		"bind .main.lb <Double-Button-1> {send act activate}",
 		"bind .main.lb <Button-2> {send act plumb}",
 		"bind .main.lb <Button-3> {send act menu %X %Y}",
@@ -367,6 +368,13 @@ handleaction(a: string)
 	case tok {
 	"sel" =>
 		syncselection();
+		# A click on the expand/collapse indicator (the leading triangle
+		# column) toggles the directory, matching the documented behaviour;
+		# clicks on the label just select.  toks = "sel <x>".
+		if(tl toks != nil && onindicator(int hd tl toks)) {
+			activateselected();
+			redraw();
+		}
 		statusmsg = "";
 		writeftreestate();
 		updatestatus();
@@ -1162,6 +1170,30 @@ rebuildvisible()
 }
 
 # ---------- Rendering ----------
+
+# True when pixel x (relative to the listbox) falls on the leading
+# expand/collapse indicator column of the currently selected directory row.
+# The row is `indent (2 spaces/depth) + marker (triangle + space) + name`
+# in a proportional font, so measure the indent+marker width with the same
+# font.  Non-directories and out-of-range selections never match.
+onindicator(x: int): int
+{
+	if(selected < 0 || selected >= nvisible)
+		return 0;
+	n := nodes[visible[selected]];
+	if(!n.isdir)
+		return 0;
+	if(listfont == nil && top != nil)
+		listfont = Font.open(top.display, LISTFONT);
+	if(listfont == nil)
+		return 0;
+	indent := "";
+	for(j := 0; j < n.depth; j++)
+		indent += "  ";
+	w := listfont.width(indent) + listfont.width(sys->sprint("%c ", 16r25B8));
+	# +4px tolerance for the listbox border/inset ahead of the text origin.
+	return x <= w + 4;
+}
 
 # A tree row rendered as listbox text: depth indent, an expand/collapse
 # marker for directories, the name (with a trailing "/" for dirs), and a

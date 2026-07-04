@@ -99,7 +99,7 @@ init(c: ref Context)
 	requested = nil;
 }
 
-start(): (ref Samio, chan of ref Sammsg)
+start(args: list of string): (ref Samio, chan of ref Sammsg)
 {
 	sys = load Sys Sys->PATH;
 
@@ -119,7 +119,7 @@ start(): (ref Samio, chan of ref Sammsg)
 	}
 
 	# fds[0] stays with the terminal; the engine owns fds[1].
-	spawn engine->run(fds[1], nil);
+	spawn engine->run(fds[1], args);
 	fds[1] = nil;
 
 	sendsam = chan of ref Sammsg;

@@ -38,7 +38,7 @@ Samstub: module
 
 	init:		fn(ctxt: ref Context);
 
-	start:		fn(): (ref Samio, chan of ref Sammsg);
+	start:		fn(args: list of string): (ref Samio, chan of ref Sammsg);
 	sender:		fn(s: ref Samio, c: chan of ref Sammsg);
 	receiver:	fn(s: ref Samio, c: chan of ref Sammsg);
 

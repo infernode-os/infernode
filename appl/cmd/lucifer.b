@@ -1435,6 +1435,28 @@ preswmloop(scr: ref Screen, zoner: Rect,
 							enforcepreszorder();	# place per current artifact
 						}
 					}
+				} else if(menutag(s) != ".") {
+					# Secondary window on an app client: a Tk menu post requests
+					# its OWN window via "!reshape <tag> <reqid> <rect>" with tag
+					# != ".".  Give it a real window at that rect.  Without this
+					# the request fell through to the re-send branch below and
+					# handed back the app's OWN image, so Tk mapped the "menu" as
+					# a copy of the app at the menu's tiny rect — the app appeared
+					# to jump to the top-left and clip, with no visible menu.
+					mtag := menutag(s);
+					mr := clamptozone(menurect(s), curzone);
+					# Secondary window: give the menu its own window on the
+					# presentation screen at the requested rect.
+					mimg := scr.newwindow(mr, Draw->Refbackup, Draw->Nofill);
+					if(mimg == nil) {
+						err = "window creation failed";
+						n = -1;
+					} else {
+						c.setimage(mtag, mimg);
+						# Raise the app client so its menu window is visible
+						# above lucipres (Client.top tops all its windows).
+						c.top();
+					}
 				} else if(c.image("app") == nil) {
 					# First reshape for this app: allocate content-area window
 					tabh2 := 0;
@@ -1484,6 +1506,17 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					if(existimg != nil)
 						c.setimage("app", existimg);
 				}
+			}
+			# "delete <tag>": a client drops a secondary window — a Tk menu
+			# being dismissed removes its window this way.  Free it (setimage
+			# nil drops it from the client's window list; the Refbackup image
+			# is GC'd and the screen recomposites, revealing the app beneath).
+			# Guard tag != "." so a stray "delete ." can never nuke the app's
+			# main window.
+			if(len s >= 7 && s[0:7] == "delete " && c != lucipresclient && c != presrenderclient) {
+				(dn, dtoks) := sys->tokenize(s, " ");
+				if(dn >= 2 && hd tl dtoks != "." && hd tl dtoks != "app")
+					c.setimage(hd tl dtoks, nil);
 			}
 			# "embedded-exit": app signals clean exit before GC closes its wmclient fd.
 			# Remove the tab immediately rather than waiting for the async fd close.
@@ -2630,6 +2663,51 @@ bytes2rect(b: array of byte): ref Rect
 r2s(r: Rect): string
 {
 	return sys->sprint("%d %d %d %d", r.min.x, r.min.y, r.max.x, r.max.y);
+}
+
+# menutag: the window tag in a wmclient "!reshape <tag> <reqid> <rect>"
+# request.  "." is the app's own toplevel; any other tag is a secondary
+# window (a Tk menu post).  Non-reshape or malformed input reads as "."
+# (the caller then takes the main-window path).
+menutag(s: string): string
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt < 2 || hd toks != "!reshape")
+		return ".";
+	return hd tl toks;
+}
+
+# menurect: the requested rect from "!reshape <tag> <reqid> <minx> <miny>
+# <maxx> <maxy> [how]".  Zero rect if malformed.
+menurect(s: string): Rect
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt < 7)
+		return Rect((0, 0), (0, 0));
+	toks = tl tl tl toks;		# skip "!reshape", tag, reqid
+	x0 := int hd toks; toks = tl toks;
+	y0 := int hd toks; toks = tl toks;
+	x1 := int hd toks; toks = tl toks;
+	y1 := int hd toks;
+	return Rect((x0, y0), (x1, y1));
+}
+
+# clamptozone: keep a menu rect inside the presentation zone — clip its
+# size to the zone and shift its origin so it never spills off-zone (a menu
+# posted near the right/bottom edge would otherwise be created off-screen).
+clamptozone(r: Rect, zone: Rect): Rect
+{
+	w := r.dx();
+	h := r.dy();
+	if(w > zone.dx()) w = zone.dx();
+	if(h > zone.dy()) h = zone.dy();
+	x := r.min.x;
+	y := r.min.y;
+	if(x + w > zone.max.x) x = zone.max.x - w;
+	if(y + h > zone.max.y) y = zone.max.y - h;
+	if(x < zone.min.x) x = zone.min.x;
+	if(y < zone.min.y) y = zone.min.y;
+	return Rect((x, y), (x + w, y + h));
 }
 
 readfile(path: string): string

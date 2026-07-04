@@ -84,6 +84,17 @@ LuciPres: module {
 	setpresscr: fn(scr: ref Draw->Screen);
 };
 
+# presrender is the content renderer factored out of lucipres: a peer
+# wmclient window that draws the currently-centered CONTENT artifact
+# (markdown/mermaid/image/pdf/code/table/diff).  lucifer spawns one per
+# activity and z-orders its window like an app — shown when the current
+# artifact is content, hidden when it's an app or the taskboard.
+Presrender: module {
+	PATH: con "/dis/wm/presrender.dis";
+	init: fn(ctxt: ref Draw->Context, args: list of string);
+	deliverevent: fn(ev: string);
+};
+
 GuiApp: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
@@ -152,6 +163,9 @@ taskpres: array of ref TaskPres;
 ntaskpres := 0;
 curtaskpres: ref TaskPres;		# currently active task's presentation state
 lucipresclient: ref Client;		# lucipres wmclient (set by preswmloop on first join)
+presrenderclient: ref Client;		# presrender wmclient (2nd infra join; content renderer)
+presrender_g: Presrender;		# loaded presrender module ref
+showpresrender := 0;			# 1 when the current artifact is presrender content
 
 # Legacy aliases — these point into curtaskpres for code that hasn't
 # been migrated yet.  Will be removed once all functions use TaskPres.
@@ -627,6 +641,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	spawn lucipres->init(presCtxt,
 		"lucipres" :: mountpt :: string actid :: nil);
+
+	# Presrender: the content renderer, a peer wmclient window that draws
+	# the currently-centered CONTENT artifact.  Spawned right after
+	# lucipres so its wmsrv join is the second (infrastructure) join; no
+	# artid arg means it follows "current".  Its z-order is managed by
+	# enforcepreszorder() like an app window.
+	presrender_g = load Presrender Presrender->PATH;
+	if(presrender_g == nil)
+		nomod(Presrender->PATH);
+	spawn presrender_g->init(presCtxt,
+		"presrender" :: mountpt :: string actid :: nil);
 
 	# Spawn event handlers
 	spawn eventproc();
@@ -1331,6 +1356,11 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					}
 				}
 				foundtp.applock <-= 1;
+			} else if(presrenderclient == nil) {
+				# No app token matched and presrender not yet identified:
+				# this is the presrender infrastructure client (spawned
+				# right after lucipres, before any app can launch).
+				presrenderclient = c;
 			}
 		}
 		rc <-= nil;
@@ -1342,6 +1372,12 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			if(c == lucipresclient) {
 				lucipresclient = nil;
 				break;	# lucipres gone — presentation zone dead, exit loop
+			}
+			if(c == presrenderclient) {
+				# presrender died; clear it so content falls back to
+				# lucipres's inline draw.  Keep the loop alive.
+				presrenderclient = nil;
+				continue;
 			}
 			cleanupappslot(c);
 			# App disconnected: keep preswmloop running for remaining apps
@@ -1378,6 +1414,25 @@ preswmloop(scr: ref Screen, zoner: Rect,
 								}
 							}
 							ctp.applock <-= 1;
+						}
+					}
+				} else if(c == presrenderclient) {
+					# presrender: content-area window (below the tab strip),
+					# z-ordered by enforcepreszorder() like an app.
+					if(c.image("app") == nil) {
+						ptabh := 0;
+						if(mainfont != nil) ptabh = mainfont.height + 13;
+						if(mobile && ptabh < MOBILE_TAPMIN) ptabh = MOBILE_TAPMIN;
+						pr := Rect((curzone.min.x, curzone.min.y + ptabh), curzone.max);
+						pimg := scr.newwindow(pr, Draw->Refbackup, Draw->Nofill);
+						if(pimg == nil) {
+							err = "window creation failed";
+							n = -1;
+						} else {
+							pimg.draw(pimg.r, bgcol, nil, (0, 0));
+							c.setimage("app", pimg);
+							c.top();		# register in z-list (enables bottom())
+							enforcepreszorder();	# place per current artifact
 						}
 					}
 				} else if(c.image("app") == nil) {
@@ -1627,6 +1682,8 @@ switchactivity(newid: int)
 	ctxEvCh <-= ev;
 	if(lucipres_g != nil)
 		lucipres_g->deliverevent(ev);
+		if(presrender_g != nil)
+			presrender_g->deliverevent(ev);
 
 	# Reload tiles and redraw header
 	loadtiles();
@@ -2094,6 +2151,8 @@ globallistener()
 			# Notify lucipres so taskboard redraws with updated activities
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
+		if(presrender_g != nil)
+			presrender_g->deliverevent(ev);
 			# Any activity event: signal main loop to reload tiles and redraw
 			alt { uievent <-= 1 => ; * => ; }
 		}
@@ -2104,6 +2163,8 @@ globallistener()
 			ctxEvCh <-= ev;
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
+		if(presrender_g != nil)
+			presrender_g->deliverevent(ev);
 			alt { uievent <-= 1 => ; * => ; }
 		}
 	}
@@ -2185,6 +2246,8 @@ nslistener()
 			# Always deliver to lucipres for tab/artifact updates
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
+			if(presrender_g != nil)
+				presrender_g->deliverevent(ev);
 			# App launches are handled by globallistener via "applaunch"
 			# events — never via nslistener — so apps always target the
 			# correct activity regardless of which activity is focused.
@@ -3084,10 +3147,15 @@ enforcepreszorder()
 				etp.appslots[ai].client.bottom();
 		etp.applock <-= 1;
 	}
+	# 1b. Bottom the presrender window by default; it's raised in step 3
+	# only when the current artifact is content.
+	if(presrenderclient != nil)
+		presrenderclient.bottom();
 	# 2. lucipres above all bottomed app windows.
 	if(lucipresclient != nil)
 		lucipresclient.top();
-	# 3. Focused activity's active app above lucipres (if it has joined).
+	# 3. Focused activity's active app above lucipres (if it has joined),
+	# OR the presrender content window when the current artifact is content.
 	if(curtaskpres != nil && curtaskpres.activeappid != "") {
 		ctp := curtaskpres;
 		<-ctp.applock;
@@ -3096,6 +3164,8 @@ enforcepreszorder()
 					ctp.appslots[ai].id == ctp.activeappid)
 				ctp.appslots[ai].client.top();
 		ctp.applock <-= 1;
+	} else if(showpresrender && presrenderclient != nil) {
+		presrenderclient.top();
 	}
 }
 
@@ -3174,6 +3244,9 @@ handleprescurrent()
 	else
 		tp.activeappid = "";
 	tp.applock <-= 1;
+	# presrender renders every non-app, non-taskboard artifact; raise its
+	# window (in enforcepreszorder) whenever such content is centered.
+	showpresrender = (newid != "" && atype != "app" && atype != "taskboard");
 	# Reveal/hide the soft keyboard to match the focused workspace app —
 	# but only while the Workspace zone is the one on screen, else the
 	# chat zone owns the keyboard. Only genuine text apps raise it (not

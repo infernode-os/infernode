@@ -47,6 +47,10 @@ Presrender: module
 {
 	PATH: con "/dis/wm/presrender.dis";
 	init: fn(ctxt: ref Draw->Context, args: list of string);
+	# lucifer (which spawns presrender in-process) pushes presentation
+	# events here rather than presrender racing lucifer's nslistener for
+	# the shared per-activity 9P event file.
+	deliverevent: fn(ev: string);
 };
 
 # --- ADTs ---
@@ -130,6 +134,7 @@ pdfnavprev: Rect;
 pdfnavnext: Rect;
 
 renderdonech: chan of ref RenderResult;
+eventch: chan of string;	# presentation events, fed by deliverevent()
 
 # --- init (standard wmclient app interface) ---
 
@@ -139,9 +144,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 	draw = load Draw Draw->PATH;
 	stderr = sys->fildes(2);
 
-	# Initialize the render channel FIRST — spawned renders and the
-	# event loop both use it; an alt send on a nil channel is fatal.
+	# Initialize channels FIRST — spawned renders and lucifer's
+	# deliverevent() both use these; an alt send on a nil channel is
+	# fatal, and lucifer can call deliverevent() before init finishes.
 	renderdonech = chan[32] of ref RenderResult;
+	eventch = chan[8] of string;
 
 	wmclient = load Wmclient Wmclient->PATH;
 	if(wmclient == nil) {
@@ -254,9 +261,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 	loadcurrent();
 	redraw();
 
-	# Spawn the 9P event-file reader; events arrive on eventch.
-	eventch := chan[8] of string;
-	spawn eventreader(eventch);
+	# Events arrive on eventch via deliverevent(), called in-process by
+	# lucifer's nslistener.  (presrender no longer reads the per-activity
+	# 9P event file itself — that would steal events from lucifer.)
 
 	# Event loop
 	prevbuttons := 0;
@@ -361,37 +368,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 # Blocking-read the per-activity event file over 9P and forward each
 # event line to the main loop.  Mirrors lucifer.b's nslistener: one
 # long-lived fid, seek-to-0 after each read, exponential reopen backoff.
-eventreader(ch: chan of string)
+# lucifer's nslistener calls this in-process for every presentation
+# event.  Non-blocking + nil-guarded: deliverevent() may fire before
+# init() has created eventch, and must never block lucifer's listener.
+deliverevent(ev: string)
 {
-	if(actid_g < 0)
-		return;
-	evpath := sys->sprint("%s/activity/%d/event", mountpt_g, actid_g);
-	fd: ref Sys->FD;
-	backoff := 500;
-	for(;;) {
-		if(fd == nil) {
-			fd = sys->open(evpath, Sys->OREAD);
-			if(fd == nil) {
-				sys->sleep(backoff);
-				if(backoff < 8000)
-					backoff *= 2;
-				continue;
-			}
-		}
-		buf := array[4096] of byte;
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0) {
-			fd = nil;
-			sys->sleep(backoff);
-			if(backoff < 8000)
-				backoff *= 2;
-			continue;
-		}
-		backoff = 500;	# reset on successful read
-		ev := strip(string buf[0:n]);
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		ch <-= ev;
-	}
+	if(eventch != nil)
+		alt { eventch <-= ev => ; * => ; }
 }
 
 # --- Current-artifact loading ---

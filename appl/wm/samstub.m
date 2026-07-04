@@ -1,7 +1,6 @@
 Samstub: module
 {
 	PATH:		con "/dis/wm/samstub.dis";
-	SAM:		con "sam -R";
 
 	VERSION:	con 0;
 	UTFmax:		con 3;

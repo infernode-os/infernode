@@ -19,6 +19,7 @@ TARG=\
 	tetris.dis\
 	coffee.dis\
 	memory.dis\
+	rt.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\
@@ -26,11 +27,13 @@ TARG=\
 	sam.dis\
 	samtk.dis\
 	samstub.dis\
+	samengine.dis\
 
 MODULES=\
 	samterm.m\
 	samtk.m\
 	samstub.m\
+	samengine.m\
 
 SYSMODULES=\
 	arg.m\

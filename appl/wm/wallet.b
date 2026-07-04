@@ -294,7 +294,7 @@ buildview()
 		fgopt := "";
 		if(fg != "")
 			fgopt = " -foreground " + fg;
-		tk->cmd(top, sys->sprint("label %s.%s -text '%s -anchor w%s", r, id, txt, fgopt));
+		tk->cmd(top, sys->sprint("label %s.%s -text {%s} -anchor w%s", r, id, txt, fgopt));
 		tk->cmd(top, sys->sprint("pack %s.%s -side top -anchor w -padx 12", r, id));
 	}
 	tk->cmd(top, "label " + r + ".bal1 -text {loading...} -anchor w");
@@ -323,27 +323,27 @@ buildview()
 buildform(title: string, flds: array of ref Field, oklabel, oktok: string)
 {
 	r := ".main.right";
-	tk->cmd(top, sys->sprint("label %s.title -text '%s -foreground %s -anchor w", r, title, accent));
+	tk->cmd(top, sys->sprint("label %s.title -text {%s} -foreground %s -anchor w", r, title, accent));
 	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {12 6}");
 	fields = flds;
 	for(i := 0; i < len flds; i++){
 		f := flds[i];
 		row := sys->sprint("%s.r%d", r, i);
 		tk->cmd(top, "frame " + row);
-		tk->cmd(top, sys->sprint("label %s.l -text '%s -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
 		show := "";
 		if(f.secret)
 			show = " -show *";
 		tk->cmd(top, sys->sprint("entry %s.e -width 220%s", row, show));
 		if(f.prefill != "")
-			tk->cmd(top, sys->sprint("%s.e insert 0 '%s", row, f.prefill));
+			tk->cmd(top, sys->sprint("%s.e insert 0 {%s}", row, f.prefill));
 		tk->cmd(top, sys->sprint("pack %s.l -side left -padx {12 4}", row));
 		tk->cmd(top, sys->sprint("pack %s.e -side left -fill x -expand 1 -padx {0 12}", row));
 		tk->cmd(top, "pack " + row + " -side top -fill x -pady 2");
 		f.path = row + ".e";
 	}
 	tk->cmd(top, "frame " + r + ".btns");
-	tk->cmd(top, sys->sprint("button %s.btns.ok -text '%s -command {send act %s}", r, oklabel, oktok));
+	tk->cmd(top, sys->sprint("button %s.btns.ok -text {%s} -command {send act %s}", r, oklabel, oktok));
 	tk->cmd(top, "button " + r + ".btns.cancel -text {Cancel} -command {send act cancel}");
 	tk->cmd(top, "pack " + r + ".btns.ok -side left -padx {12 4} -pady 8");
 	tk->cmd(top, "pack " + r + ".btns.cancel -side left -pady 8");
@@ -357,7 +357,7 @@ buildpay()
 	from := "";
 	if(selacct >= 0 && selacct < len accts)
 		from = accts[selacct].name;
-	tk->cmd(top, sys->sprint("label %s.title -text 'Send from: %s -foreground %s -anchor w", r, from, accent));
+	tk->cmd(top, sys->sprint("label %s.title -text {Send from: %s} -foreground %s -anchor w", r, from, accent));
 	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {12 6}");
 	fields = array[] of {
 		ref Field("", "Recipient:", 0, ""),
@@ -367,7 +367,7 @@ buildpay()
 		f := fields[i];
 		row := sys->sprint("%s.r%d", r, i);
 		tk->cmd(top, "frame " + row);
-		tk->cmd(top, sys->sprint("label %s.l -text '%s -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
 		tk->cmd(top, sys->sprint("entry %s.e -width 220", row));
 		tk->cmd(top, sys->sprint("pack %s.l -side left -padx {12 4}", row));
 		tk->cmd(top, sys->sprint("pack %s.e -side left -fill x -expand 1 -padx {0 12}", row));
@@ -605,7 +605,7 @@ refreshaccounts()
 		s := accts[j].name;
 		if(accts[j].chain != "")
 			s += "  " + accts[j].chain;
-		tk->cmd(top, sys->sprint(".main.list.lb insert end '%s", s));
+		tk->cmd(top, sys->sprint(".main.list.lb insert end {%s}", s));
 	}
 	if(selacct >= len accts)
 		selacct = -1;
@@ -625,8 +625,8 @@ showbalance()
 	if(tk->cmd(top, ".main.right.bal1 cget -text")[0] == '!')
 		return;
 	(usdc, eth) := splitbalance(cachedbalance);
-	tk->cmd(top, sys->sprint(".main.right.bal1 configure -text '%s", usdc));
-	tk->cmd(top, sys->sprint(".main.right.bal2 configure -text '%s", eth));
+	tk->cmd(top, sys->sprint(".main.right.bal1 configure -text {%s}", usdc));
+	tk->cmd(top, sys->sprint(".main.right.bal2 configure -text {%s}", eth));
 }
 
 splitbalance(bal: string): (string, string)
@@ -655,7 +655,7 @@ loadhistory(acctname: string)
 		return;
 	}
 	for(; hl != nil; hl = tl hl)
-		tk->cmd(top, sys->sprint("%s insert end '%s", r, fmthistory(hd hl)));
+		tk->cmd(top, sys->sprint("%s insert end {%s}", r, fmthistory(hd hl)));
 }
 
 fmthistory(line: string): string
@@ -752,7 +752,7 @@ handlekey(k: int)
 
 setstatus(s: string)
 {
-	tk->cmd(top, sys->sprint(".status configure -text '%s", s));
+	tk->cmd(top, sys->sprint(".status configure -text {%s}", s));
 }
 
 errmsg(deflt: string): string

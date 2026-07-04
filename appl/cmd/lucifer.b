@@ -1559,6 +1559,19 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			}
 			rtp.applock <-= 1;
 		}
+		# Resize the presrender content window to match, then re-assert
+		# the whole z-stack (newwindow tops each reallocated window).
+		if(presrenderclient != nil) {
+			oldpr := presrenderclient.image("app");
+			if(oldpr != nil)
+				oldpr.draw(oldpr.r, bgcol, nil, (0, 0));
+			primg := presscr.newwindow(appr2, Draw->Refbackup, Draw->Nofill);
+			if(primg != nil) {
+				presrenderclient.setimage("app", primg);
+				presrenderclient.ctl <-= sys->sprint("!reshape . -1 %s", r2s(appr2));
+			}
+		}
+		enforcepreszorder();
 	p := <-presMouseCh =>
 		# Tab strip (top N px) always routes to lucipres;
 		# content area routes to active app or lucipres.

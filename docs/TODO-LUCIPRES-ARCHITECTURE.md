@@ -1,79 +1,65 @@
-# TODO: Lucipres Presentation Rendering Architecture
+# Lucipres Presentation Rendering Architecture
 
-## Problem
+## Status (2026-07-04): implemented
 
-lucipres has two rendering paths for tab content:
+The refactor described below has landed (branch `claude/tk-reintegration-gwrqjx`):
 
-1. **App tabs** (editor, shell, fractal, etc.) — each app gets its own
-   wmclient window in lucifer's preswmloop.  Visibility is managed via
-   z-order: `showapp()` calls `Client.top()`, `hideapp()` calls
-   `Client.bottom()`.
+- **Phase 0** — `appl/wm/presrender.b`: a standalone wmclient app that
+  renders one presentation artifact (markdown/mermaid/image/pdf/code/
+  text/table/diff) into its own window, lifted from lucipres.
+- **Phase 1** — lucifer spawns a presrender peer per activity, feeds it
+  presentation events in-process via `deliverevent()`, and z-orders its
+  window like an app: raised when the current artifact is content
+  (`showpresrender`), bottomed for apps/taskboard.  Single z-order
+  authority is `enforcepreszorder()`.
+- **Phase 2** — lucipres no longer draws content inline; it owns only the
+  tab strip and the taskboard.  Content-area pointer input routes to
+  presrender when content is centred.  Its window resizes with the zone.
 
-2. **Presentation tabs** (markdown, mermaid, images, PDF, code, etc.) —
-   content is drawn directly into lucipres's own window image by
-   `drawpresentation()`.
+Net effect: the presentation view is a **single-app view manager**.  The
+content area always shows exactly one wmclient window — a real app
+(editor/shell/fractal/wm), or the presrender content window — stacked by
+one authority.  The dual-render (`lucipres draws inline` vs `lucifer
+z-orders app windows`) path that caused the tab-switch z-order races is
+gone.
 
-Switching between these two paths requires cross-process synchronization:
-lucipres must redraw its content AND lucifer must adjust the app window's
-z-order.  A race condition exists because both processes receive the
-`"presentation current"` event independently with no ordering guarantee.
+### The old problem (for context)
 
-A workaround is in place (skip immediate redraw when leaving an app tab,
-rely on the event-loop redraw), but the fundamental issue is architectural.
+lucipres had two rendering paths for tab content: app tabs got their own
+wmclient windows (z-ordered by lucifer's preswmloop), while presentation
+tabs were drawn directly into lucipres's own window image.  Switching
+between the two required cross-process synchronisation with no ordering
+guarantee — a race that showed as blank tabs, an app bleeding over a
+slide, and ghost windows.
 
-## Proposed Fix
+### Key implementation notes / gotchas
 
-Factor presentation rendering out of lucipres into its own wmclient app
-("presrender" or similar).  This app would:
+- **Event delivery must be in-process.**  presrender must NOT read the
+  per-activity 9P event file itself: that event wakes only one reader, so
+  it would steal `presentation current` from lucifer's nslistener.
+  lucifer mirrors presentation events to presrender via
+  `presrender_g->deliverevent(ev)` (guarded, non-blocking).
+- **presrender join identity.**  preswmloop identifies presrender as the
+  first non-lucipres join with no app-token mapping (`presrenderclient`).
+- **z-order.**  `enforcepreszorder()` bottoms all apps + presrender, tops
+  lucipres, then tops either the active app or (if `showpresrender`)
+  presrender.  Called from handleprescurrent, the reshape allocation, and
+  after resize.
 
-- Own the render registry (xenith/render.b) and all renderer modules
-- Handle scroll, zoom, pan, PDF page navigation
-- Receive artifact data via 9P (same as apps receive reshape/ctl)
-- Participate in the z-stack as a peer to editor/shell/fractal
+## Remaining follow-up
 
-lucipres would become a thin coordinator: tab bar, event routing, ctl
-writes.  All tab switches would use uniform z-order management.
-
-## Scope and Risks
-
-This is a significant refactor.  The following are tightly coupled to the
-current architecture and must be carefully migrated:
-
-### Rendering Pipeline
-- `drawpresentation()` (~160 lines) — dispatches by artifact type
-- Render registry (`appl/xenith/render.b`) — loaded once in lucipres
-- Individual renderers: imgrender, mdrender, htmlrender, pdfrender,
-  mermaidrender — each with canrender()/render() interface
-- `renderartasync()` / `renderdonech` — async render with channel callback
-- Back-buffer double buffering (`backbuf` in `redrawpres()`)
-
-### State Management
-- Per-artifact state in `Artifact` adt: rendimg, pdfpage, numpages,
-  zoom, panx, pany, rendering flag
-- Scroll position (prescroll, scrolloff)
-- Tab layout and hit testing (tablayout, tabscrolloff)
-- PDF page navigation controls (pdfnavprev, pdfnavnext)
-
-### AI Agent Integration
-- Veltro creates artifacts via luciuisrv 9P writes
-- Artifact types: markdown (most common), mermaid, code, image, PDF,
-  table, taskboard, diff, doc
-- Apps are launched via `"launch"` ctl command — luciuisrv allocates an
-  AppSlot and lucifer's preswmloop manages the window
-- The presentation space is the primary output surface for agent work;
-  any latency or visual regression will be immediately visible
-
-### Modules Involved
-- `appl/cmd/lucipres.b` — current monolith
-- `appl/cmd/lucifer.b` — preswmloop, showapp/hideapp, handleprescurrent
-- `appl/cmd/luciuisrv.b` — 9P server for presentation artifacts
-- `appl/xenith/render.b` — render registry
-- `appl/xenith/render/*.b` — individual renderers
-- `module/luciui.m` — shared types (Artifact may need changes)
-
-## Workaround in Place
-
-The tab click handler in lucipres.b skips the immediate `redrawpres()`
-call when switching away from an app tab, deferring to the event-loop
-redraw.  This gives lucifer time to process `hideapp()` before lucipres
-redraws.  See the comment in the tab click handler.
+- **Dead-code deletion in lucipres.**  The content render pipeline is now
+  unused in lucipres (`renderart`, `renderartasync`/`renderdonech`,
+  `drawrendimg`/`drawpdfnav`/`drawtable`/`drawdiff`/`drawfallbacktext`,
+  `renderpdfpage`, `prescroll`/`handledrag`, the render-state Artifact
+  fields, `backbuf`, and the `pdf`/`rlayout`/`renderer`/`render` includes
+  + their init-time loads).  It compiles but is dead; deleting it shrinks
+  lucipres and stops it loading a second copy of the render registry.
+  Do this carefully — some text helpers (`splitlines`, `wraptext`, …) may
+  still be shared with the taskboard/export paths.
+- **Visual resize test.**  The resize path (`rszch`) reallocates
+  presrender's window; it mirrors the app-resize handling but has only
+  been exercised in fixed-geometry headless runs.  Verify on a real
+  window resize / mobile accordion expand.
+- **Scroll verification.**  Content-area input routes to presrender;
+  verify scroll/pan/PDF-nav interactively on a long document.

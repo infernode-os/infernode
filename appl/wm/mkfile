@@ -12,6 +12,7 @@ TARG=\
 	wallet.dis\
 	lens.dis\
 	man.dis\
+	presrender.dis\
 	settings.dis\
 	editor.dis\
 	fractals.dis\

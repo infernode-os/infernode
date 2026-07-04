@@ -872,86 +872,20 @@ drawpresentation(zone: Rect)
 		artrendw = contentw;
 	}
 
-	contenty := contentr.min.y + pad;
-	pres_viewport_h = contentr.dy() - 2 * pad;
-
 	case centart.atype {
-	"text" or "code" =>
-		if(centart.atype == "code") {
-			codebg2 := codebgcol_g;
-			mainwin.draw(contentr, codebg2, nil, (0, 0));
-		}
-		ls := splitlines(centart.data);
-		total_h := listlen(ls) * monofont_g.height;
-		newmax2 := total_h - pres_viewport_h;
-		if(newmax2 < 0) newmax2 = 0;
-		maxpresscrollpx = newmax2;
-		if(centart.pany > maxpresscrollpx)
-			centart.pany = maxpresscrollpx;
-		maxlinew := 0;
-		for(wlm := ls; wlm != nil; wlm = tl wlm) {
-			lw := monofont_g.width(hd wlm);
-			if(lw > maxlinew) maxlinew = lw;
-		}
-		newmaxx2 := maxlinew - contentw;
-		if(newmaxx2 < 0) newmaxx2 = 0;
-		maxpanx = newmaxx2;
-		if(centart.panx > maxpanx)
-			centart.panx = maxpanx;
-		y2 := contenty - centart.pany;
-		wl: list of string;
-		for(wl = ls; wl != nil; wl = tl wl) {
-			if(y2 + monofont_g.height > contentr.max.y)
-				break;
-			if(y2 >= contentr.min.y)
-				mainwin.text((contentr.min.x + pad - centart.panx, y2),
-					textcol, (0, 0), monofont_g, hd wl);
-			y2 += monofont_g.height;
-		}
-		if(centart.data == "")
-			drawcentertext(contentr, "(empty)");
-	"pdf" =>
-		# PDF needs special nav UI; rendering delegated to registry
-		navh := mainfont.height + 8;
-		pdfcontent := Rect(contentr.min, (contentr.max.x, contentr.max.y - navh));
-		pdfnav := Rect((contentr.min.x, contentr.max.y - navh), contentr.max);
-		drawpdfnav(pdfnav, centart);
-		pres_viewport_h = pdfcontent.dy() - 2 * pad;
-		if(centart.rendimg == nil)
-			centart.rendimg = renderart(centart, contentw);
-		drawrendimg(centart, pdfcontent, pad, contentw, "cannot render PDF");
-	"table" =>
-		drawtable(centart, contentr, pad, contentw, contenty);
 	"app" =>
-		# Always draw the placeholder — the app's own window covers it
-		# once the app connects and is topped in the z-stack.  Without
-		# this, there's a black flash between appstatus="running" and
-		# the app's first frame (the window hasn't been allocated yet).
+		# The app's own window covers this once it connects and is topped;
+		# the placeholder avoids a black flash before its first frame.
 		drawcentertext(contentr, "Launching " + centart.label + "...");
 	"taskboard" =>
 		drawtaskboard(contentr, pad);
-	"diff" =>
-		drawdiff(centart, contentr, pad, contentw, contenty);
 	* =>
-		# All other renderable types: markdown, doc, image, mermaid, etc.
-		if(centart.rendimg == nil && centart.data != "") {
-			if(centart.rendering == 0) {
-				centart.rendering = 1;
-				spawn renderartasync(centart.id, centart.atype, centart.data, contentw);
-			}
-		}
-		if(centart.rendimg != nil) {
-			centart.rendering = 0;
-			drawrendimg(centart, contentr, pad, contentw, nil);
-		} else if(centart.rendering == 1)
-			drawcentertext(contentr, "Rendering...");
-		else if(centart.rendering == 2) {
-			# Render failed — show fallback text
-			drawfallbacktext(centart, contentr, pad, contentw, contenty);
-		} else if(centart.data == "")
-			drawcentertext(contentr, "(empty)");
-		else
-			drawfallbacktext(centart, contentr, pad, contentw, contenty);
+		# All content types (markdown, doc, image, mermaid, pdf, code,
+		# text, table, diff) are rendered by presrender's own wmclient
+		# window, which lucifer z-orders above this one — see
+		# lucifer.b enforcepreszorder and docs/TODO-LUCIPRES-ARCHITECTURE.md.
+		# lucipres now owns only the tab strip and the taskboard.
+		;
 	}
 }
 

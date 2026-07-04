@@ -1586,8 +1586,15 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			}
 			if(actclient != nil && actclient != lucipresclient)
 				actclient.top();	# ensure active app z-order on every pointer event
-			if(actclient == nil)
-				actclient = lucipresclient;
+			if(actclient == nil) {
+				# No active app: content-area input goes to presrender
+				# when it's showing content (scroll/pan/PDF-nav), else to
+				# lucipres (taskboard, empty).
+				if(showpresrender && presrenderclient != nil)
+					actclient = presrenderclient;
+				else
+					actclient = lucipresclient;
+			}
 			if(actclient != nil)
 				alt { actclient.ptr <-= p => ; * => ; }
 		}

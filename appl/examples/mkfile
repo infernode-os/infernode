@@ -1,6 +1,0 @@
-<../../mkconfig
-
-DIRS=\
-	minitel\
-
-<$ROOT/mkfiles/mksubdirs

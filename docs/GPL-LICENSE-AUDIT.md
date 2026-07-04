@@ -116,9 +116,10 @@ is bounded and mechanical.
    needs an explicit decision + the new NOTICE).
 4. **Verify no genuinely third-party GPL code was added** post-fork (the scan
    found none; re-run on each release).
-5. **Watch legacy per-file headers** such as the 1997 Lucent restrictive notice
-   in `appl/examples/minitel/swkeyb.b` (superseded by the MIT relicense, but the
-   text should be cleaned up when that code lands).
+5. **Watch legacy per-file headers.** The 1997 Lucent restrictive notice that
+   was carried by `appl/examples/minitel/swkeyb.b` is no longer a concern: the
+   obsolete minitel tree (`appl/wm/minitel`, `appl/examples/minitel`) was
+   removed wholesale. Re-scan for restrictive per-file headers on each release.
 
 ## Method / reproducibility
 ```sh

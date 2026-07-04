@@ -1352,6 +1352,13 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				for(asi := 0; asi < foundtp.nappslots; asi++) {
 					if(foundtp.appslots[asi] != nil && foundtp.appslots[asi].id == appid2) {
 						foundtp.appslots[asi].client = c;
+							# If this app is already the active one, hand it
+							# keyboard focus now its client exists: the
+							# handleprescurrent() delivery may have fired before
+							# the client joined (client nil, send skipped),
+							# leaving the caret dark (intermittent cursor).
+							if(foundtp.activeappid == appid2)
+								spawn sendctlmsg(c.ctl, "haskbdfocus 1");
 						break;
 					}
 				}
@@ -3351,12 +3358,23 @@ setappkbdfocus(tp: ref TaskPres, oldid, newid: string)
 		as := tp.appslots[i];
 		if(as == nil || as.client == nil)
 			continue;
+		# Spawn a BLOCKING send rather than a non-blocking alt: at app
+		# creation the client may not be reading its ctl yet, and a dropped
+		# "haskbdfocus 1" left the app with focused==0 and no caret — the
+		# intermittent-cursor race. A spawned send lands as soon as the app
+		# starts servicing ctl.
 		if(oldid != "" && as.id == oldid)
-			alt { as.client.ctl <-= "haskbdfocus 0" => ; * => ; }
+			spawn sendctlmsg(as.client.ctl, "haskbdfocus 0");
 		if(newid != "" && as.id == newid)
-			alt { as.client.ctl <-= "haskbdfocus 1" => ; * => ; }
+			spawn sendctlmsg(as.client.ctl, "haskbdfocus 1");
 	}
 	tp.applock <-= 1;
+}
+
+# Blocking ctl send, spawned so a not-yet-ready app doesn't drop the message.
+sendctlmsg(ctl: chan of string, msg: string)
+{
+	ctl <-= msg;
 }
 
 handleprescurrent()

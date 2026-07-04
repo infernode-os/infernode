@@ -72,8 +72,13 @@ TkEbind b[] =
 	{TkButton2P|TkMotion,	"%W xview scroll %x scr"},
 	{TkFocusin,		"%W tkEntryFocus in"},
 	{TkFocusout,		"%W tkEntryFocus out"},
-	{TkKey|APP|'\t',	""},
-	{TkKey|BackTab,		""},
+	/* Tab / Shift-Tab traverse to the next/previous focusable widget
+	 * (focus next|previous exists via tknextfocus) instead of inserting a
+	 * literal tab or being a no-op — so forms with several entry fields are
+	 * keyboard-navigable. More specific than the catch-all {TkKey} insert. */
+	{TkKey|'\t',		"focus next"},
+	{TkKey|APP|'\t',	"focus next"},
+	{TkKey|BackTab,		"focus previous"},
 };
 
 typedef struct TkEntry TkEntry;

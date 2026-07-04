@@ -463,8 +463,14 @@ menuxyt(toks: list of string): string
 # Composite the off-screen fractal image into the Tk display.
 blit()
 {
-	if(fracimg != nil)
+	if(fracimg != nil) {
 		tk->putimage(top, "frac", fracimg, nil);
+		# putimage replaces the "frac" image bits but does not mark the
+		# canvas image-item's region dirty, so a plain "update" leaves the
+		# canvas showing the stale (empty) backing.  Re-set the item coords
+		# to force the canvas to recompute its bbox and repaint.
+		tk->cmd(top, ".top.frac coords fracitem 0 0");
+	}
 	tk->cmd(top, "update");
 }
 
@@ -480,8 +486,8 @@ buildui()
 		# us a live zoom rubber-band (a rectangle item whose coords are
 		# updated during the B1 drag) without copying the image.
 		"canvas .top.frac -borderwidth 0 -background " + bgs,
-		".top.frac create image 0 0 -anchor nw -image frac",
-		"pack .top.frac -side top",
+		".top.frac create image 0 0 -anchor nw -image frac -tags fracitem",
+		"pack .top.frac -side top -fill both -expand 1",
 		"label .status -anchor w -background " + statusbgs + " -foreground " + statusfgs,
 		"pack .top -side top -fill both -expand 1",
 		"pack .status -side bottom -fill x",
@@ -521,7 +527,7 @@ buildmenu()
 		for(i := 0; i < len juliapresets; i++)
 			tk->cmd(top, sys->sprint(".ctx.julia add command -label {%s} -command {send act julia %d}",
 				juliapresets[i].label, i));
-		tk->cmd(top, ".ctx add cascade -label {julia >} -menu .ctx.julia");
+		tk->cmd(top, ".ctx add cascade -label {julia ▸} -menu .ctx.julia");
 	} else
 		additem("mandelbrot", "mandelbrot");
 	additem("reset", "reset");

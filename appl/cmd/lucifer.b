@@ -129,7 +129,7 @@ AppSlot: adt {
 	owneract: int;		# activity that created this app (immutable after alloc)
 	client: ref Client;
 };
-MAXAPPSLOTS: con 16;
+MAXAPPSLOTS: con 48;
 MAXTOKENPENDING: con 16;
 
 # Per-task presentation state.  Each task/activity gets its own wmsrv

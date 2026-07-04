@@ -19,6 +19,7 @@ struct Cmd
 	char*	name;
 	char*	(*fn)(TkTop*, char*, char**);
 };
+static char*	tkretheme(TkTop*, char*, char**);
 static struct Cmd cmdmain[] =
 {
 	"bind",		tkbind,
@@ -44,6 +45,7 @@ static struct Cmd cmdmain[] =
 	"puts",		tkputs,
 	"radiobutton",	tkradiobutton,
 	"raise",	tkraise,
+	"retheme",	tkretheme,
 	"scale",	tkscale,
 	"scrollbar",	tkscrollbar,
 	"see",	tkseecmd,
@@ -572,6 +574,33 @@ tkdupenv(TkEnv **env)
 	e->ref--;
 	*env = ne;
 	return ne;
+}
+
+/*
+ * "retheme": reload the active lucitheme palette into this toplevel's
+ * shared colour environment and repaint every widget.  Widgets that draw
+ * from env colours (no explicit -background/-foreground) pick up the new
+ * theme immediately; those carrying their own cloned env (explicit colours)
+ * refresh when the app rebuilds them from this now-fresh env.  Without this
+ * a live theme switch only reached toplevels created AFTER the switch —
+ * existing windows kept their frozen palette (stale button faces, check /
+ * radio indicators, select colours, ...).
+ */
+static char*
+tkretheme(TkTop *t, char *arg, char **ret)
+{
+	Tk *tk;
+
+	USED(arg);
+	USED(ret);
+	if(t->env != nil)
+		tksetenvcolours(t->env);
+	for(tk = t->root; tk != nil; tk = tk->siblings) {
+		tk->dirty = tkrect(tk, 1);
+		tkdirty(tk);
+	}
+	tkupdate(t);
+	return nil;
 }
 
 Tk*

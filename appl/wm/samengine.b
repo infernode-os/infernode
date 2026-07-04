@@ -29,6 +29,9 @@ include "sys.m";
 
 include "draw.m";
 
+include "regex.m";
+	regex: Regex;
+
 include "samengine.m";
 
 # samterm.m declares the Context/Text/Flayer/Section types referenced by
@@ -42,8 +45,8 @@ include "samstub.m";
 	Trequest, Torigin, Tworkfile, Ttype, Tcut, Tpaste, Tsnarf,
 	Twrite, Tclose, Tlook, Tsearch, Tsend, Tdclick, Tcheck,
 	Tstartsnarf, Tsetsnarf, Tack, Texit,
-	Hversion, Hnewname, Hmovname, Hcurrent, Hgrow, Hdata,
-	Horigin, Hunlock, Hdirty, Hclean, Hexit,
+	Hversion, Hnewname, Hmovname, Hcurrent, Hgrow, Hdata, Hgrowdata,
+	Hcut, Hsetdot, Hmoveto, Horigin, Hunlock, Hdirty, Hclean, Hexit,
 	VERSION, DATASIZE, TBLOCKSIZE: import Samstub;
 
 # A file held by the host: the authoritative text (a rune string) plus
@@ -54,6 +57,8 @@ File: adt {
 	text:	string;		# rune-indexed; len == nrunes
 	inmenu:	int;		# listed in the terminal's file menu
 	dirty:	int;		# modified since last write
+	dot0:	int;		# current selection (dot), rune offsets
+	dot1:	int;
 };
 
 io:		ref FD;
@@ -63,6 +68,13 @@ files:		list of ref File;	# command-line / opened files
 cmdfile:	ref File;		# the command window's file
 curfile:	ref File;		# file that commands apply to (Tworkfile)
 nexttag:	int;			# next host-assigned file tag
+cmdptr:		int;			# runes of the command file already consumed
+
+# command-line parser state
+cs:		string;			# command text being parsed
+ci:		int;			# parse cursor
+cl:		int;			# len cs
+depth:		int;			# command nesting (x/g/v)
 
 filenames:	list of string;		# files named on the command line
 
@@ -71,6 +83,7 @@ LOG:	con "samengine.log";
 run(fd: ref FD, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	regex = load Regex Regex->PATH;
 
 	io = fd;
 	nexttag = 1;
@@ -162,10 +175,23 @@ dispatch(mtype: int, data: array of byte): int
 
 	Tworkfile =>
 		tag := gshort(data, 0);
+		d0 := glong(data, 2);
+		d1 := glong(data, 6);
 		curfile = findfile(tag);
-		sys->fprint(logfd, "Tworkfile tag=%d\n", tag);
-		# A command line was entered in the command window; command
-		# execution is Phase 3b.  Release the lock the terminal took.
+		if(curfile != nil){
+			curfile.dot0 = d0;
+			curfile.dot1 = d1;
+		}
+		sys->fprint(logfd, "Tworkfile tag=%d dot=%d,%d\n", tag, d0, d1);
+		# The user entered a command line in the command window; run
+		# everything typed since we last consumed the command file.
+		cmd := "";
+		if(cmdptr < len cmdfile.text)
+			cmd = cmdfile.text[cmdptr:];
+		cmdptr = len cmdfile.text;
+		if(curfile != nil && cmd != "")
+			runcmd(curfile, cmd);
+		cmdptr = len cmdfile.text;	# include any output we appended
 		sendmsg(Hunlock, nil);
 
 	Tpaste or Tsnarf or Tclose or
@@ -185,7 +211,7 @@ dispatch(mtype: int, data: array of byte): int
 # add each to the menu (Hnewname + Hmovname) and open the first one.
 startup(cmdtag: int)
 {
-	cmdfile = ref File(cmdtag, "", "", 0, 0);
+	cmdfile = ref File(cmdtag, "", "", 0, 0, 0, 0);
 
 	first: ref File;
 	for(nl := filenames; nl != nil; nl = tl nl){
@@ -193,7 +219,7 @@ startup(cmdtag: int)
 		(text, ok) := loadfile(name);
 		if(!ok)
 			sys->fprint(logfd, "sam: %s: new file\n", name);
-		f := ref File(nexttag++, name, text, 1, 0);
+		f := ref File(nexttag++, name, text, 1, 0, 0, 0);
 		files = f :: files;
 		addtomenu(f);
 		if(first == nil)
@@ -387,6 +413,579 @@ loadfile(name: string): (string, int)
 		data = nd;
 	}
 	return (string data, 1);
+}
+
+# ---- sam command language ----
+#
+# A command line entered in the command window is parsed as
+#	[address] command [args]
+# and executed against the current work file, emitting rasp updates
+# (Hcut / Hgrowdata / Hsetdot / Hmoveto) so the terminal reflects the
+# change.  Supported: addresses . $ #n N N,M , /re/ ; commands
+# p d a i c s x g v = w q.  Errors are reported in the command window.
+
+runcmd(f: ref File, s: string)
+{
+	savecs := cs; saveci := ci; savecl := cl;
+	cs = s; ci = 0; cl = len s;
+	{
+		while(ci < cl){
+			skipblank();
+			if(ci >= cl)
+				break;
+			if(cs[ci] == '\n'){
+				ci++;
+				continue;
+			}
+			docmd(f);
+		}
+	} exception e {
+	"sam:*" =>
+		warn(e[len "sam:":] + "\n");
+	}
+	cs = savecs; ci = saveci; cl = savecl;
+}
+
+docmd(f: ref File)
+{
+	(have, a0, a1) := address(f, f.dot0, f.dot1);
+	skipblank();
+	c := '\n';
+	if(ci < cl)
+		c = cs[ci];
+
+	# helper defaults: fall back to dot when no address given
+	if(!have){
+		a0 = f.dot0;
+		a1 = f.dot1;
+	}
+
+	case c {
+	'\n' or ' ' or '\t' =>
+		if(ci < cl)
+			ci++;
+		if(have){
+			f.dot0 = a0; f.dot1 = a1;
+			show(f);
+		}
+	'p' =>
+		ci++;
+		f.dot0 = a0; f.dot1 = a1;
+		warn(f.text[a0:a1]);
+		show(f);
+	'd' =>
+		ci++;
+		edit(f, a0, a1, "");
+		show(f);
+	'a' =>
+		ci++;
+		edit(f, a1, a1, readtext());
+		show(f);
+	'i' =>
+		ci++;
+		edit(f, a0, a0, readtext());
+		show(f);
+	'c' =>
+		ci++;
+		edit(f, a0, a1, readtext());
+		show(f);
+	's' =>
+		ci++;
+		subst(f, a0, a1);
+		show(f);
+	'x' =>
+		ci++;
+		if(!have){ a0 = 0; a1 = len f.text; }
+		loopcmd(f, a0, a1, 1);
+	'y' =>
+		ci++;
+		if(!have){ a0 = 0; a1 = len f.text; }
+		loopcmd(f, a0, a1, 0);
+	'g' =>
+		ci++;
+		cond(f, a0, a1, 1);
+	'v' =>
+		ci++;
+		cond(f, a0, a1, 0);
+	'=' =>
+		ci++;
+		eqcmd(f, a0, a1);
+	'w' =>
+		ci++;
+		skipblank();
+		nm := readrest();
+		if(nm != "")
+			f.name = nm;
+		writefile(f);
+	'q' =>
+		ci++;
+		sendmsg(Hexit, nil);
+	* =>
+		raise "sam:unknown command";
+	}
+}
+
+# ---- address evaluation ----
+
+address(f: ref File, d0, d1: int): (int, int, int)
+{
+	(has, q0, q1) := simpleaddr(f, d0, d1);
+	for(;;){
+		skipblank();
+		if(ci >= cl)
+			break;
+		sep := cs[ci];
+		if(sep != ',' && sep != ';')
+			break;
+		ci++;
+		lo := q0;
+		if(!has)
+			lo = 0;
+		base := q1;
+		(has2, s0, s1) := simpleaddr(f, base, base);
+		s0 = s0;		# unused; a2 supplies the high end
+		hi := s1;
+		if(!has2)
+			hi = len f.text;
+		q0 = lo; q1 = hi; has = 1;
+	}
+	return (has, q0, q1);
+}
+
+simpleaddr(f: ref File, b0, b1: int): (int, int, int)
+{
+	skipblank();
+	if(ci >= cl)
+		return (0, b0, b1);
+	c := cs[ci];
+	case c {
+	'.' =>
+		ci++;
+		return (1, f.dot0, f.dot1);
+	'$' =>
+		ci++;
+		n := len f.text;
+		return (1, n, n);
+	'#' =>
+		ci++;
+		n := number();
+		return (1, n, n);
+	'/' =>
+		ci++;
+		re := readdelim('/');
+		return search(f, b1, re);
+	* =>
+		if(c >= '0' && c <= '9')
+			return lineaddr(f, number());
+		return (0, b0, b1);
+	}
+}
+
+number(): int
+{
+	n := 0;
+	while(ci < cl && cs[ci] >= '0' && cs[ci] <= '9'){
+		n = n*10 + (cs[ci] - '0');
+		ci++;
+	}
+	return n;
+}
+
+# line n -> (start of line n, start of line n+1); line 0 -> (0,0)
+lineaddr(f: ref File, n: int): (int, int, int)
+{
+	t := f.text;
+	L := len t;
+	if(n <= 0)
+		return (1, 0, 0);
+	i := 0;
+	nl := 1;
+	while(nl < n && i < L){
+		if(t[i] == '\n')
+			nl++;
+		i++;
+	}
+	q0 := i;
+	while(i < L && t[i] != '\n')
+		i++;
+	if(i < L)
+		i++;
+	return (1, q0, i);
+}
+
+# forward regexp search from `from`, wrapping to the start.
+search(f: ref File, from: int, re: string): (int, int, int)
+{
+	(prog, err) := regex->compile(re, 0);
+	if(err != nil)
+		raise "sam:bad regexp";
+	L := len f.text;
+	m := regex->executese(prog, f.text, (from, L), 1, 1);
+	if(len m == 0 || (m[0]).t0 < 0)
+		m = regex->executese(prog, f.text, (0, from), 1, 1);
+	if(len m == 0 || (m[0]).t0 < 0)
+		raise "sam:no match";
+	return (1, (m[0]).t0, (m[0]).t1);
+}
+
+# ---- editing commands ----
+
+# replace f.text[p0:p1] with s, updating the terminal rasp and dot.
+edit(f: ref File, p0, p1: int, s: string)
+{
+	L := len f.text;
+	if(p0 < 0)
+		p0 = 0;
+	if(p1 > L)
+		p1 = L;
+	if(p1 < p0)
+		p1 = p0;
+	f.text = f.text[0:p0] + s + f.text[p1:];
+	if(p1 > p0)
+		hcut(f.tag, p0, p1 - p0);
+	if(s != "")
+		hinsert(f.tag, p0, s);
+	markdirty(f);
+	f.dot0 = p0;
+	f.dot1 = p0 + len s;
+}
+
+subst(f: ref File, a0, a1: int)
+{
+	if(ci >= cl)
+		raise "sam:missing delimiter";
+	delim := cs[ci];
+	ci++;
+	re := readdelim(delim);
+	repl := readdelim(delim);
+	global := 0;
+	while(ci < cl && cs[ci] == 'g'){
+		global = 1;
+		ci++;
+	}
+	(prog, err) := regex->compile(re, 0);
+	if(err != nil)
+		raise "sam:bad regexp in s";
+
+	# collect matches within [a0,a1] over the current text
+	ms := array[64] of (int, int, string);
+	nm := 0;
+	p := a0;
+	while(p <= a1){
+		m := regex->executese(prog, f.text, (p, a1), 1, 1);
+		if(len m == 0 || (m[0]).t0 < 0)
+			break;
+		(t0, t1) := ((m[0]).t0, (m[0]).t1);
+		if(t0 > a1)
+			break;
+		rep := expand(repl, f.text, m);
+		if(nm >= len ms){
+			nn := array[2*len ms] of (int, int, string);
+			nn[0:] = ms[0:nm];
+			ms = nn;
+		}
+		ms[nm++] = (t0, t1, rep);
+		if(!global)
+			break;
+		if(t1 == t0)
+			p = t1 + 1;
+		else
+			p = t1;
+	}
+	if(nm == 0)
+		raise "sam:no match";
+	# apply right-to-left so earlier offsets stay valid
+	for(i := nm - 1; i >= 0; i--){
+		(t0, t1, rep) := ms[i];
+		edit(f, t0, t1, rep);
+	}
+}
+
+# expand a substitution template: & = whole match, \1..\9 = submatches,
+# \n = newline, \c = literal c.
+expand(repl: string, text: string, m: array of (int, int)): string
+{
+	out := "";
+	n := len repl;
+	i := 0;
+	while(i < n){
+		j := i;
+		while(j < n && repl[j] != '&' && repl[j] != '\\')
+			j++;
+		if(j > i)
+			out += repl[i:j];
+		i = j;
+		if(i >= n)
+			break;
+		c := repl[i];
+		i++;
+		if(c == '&'){
+			out += text[(m[0]).t0:(m[0]).t1];
+		} else if(i < n){		# backslash escape
+			d := repl[i];
+			i++;
+			if(d >= '1' && d <= '9'){
+				k := d - '0';
+				if(k < len m && (m[k]).t0 >= 0)
+					out += text[(m[k]).t0:(m[k]).t1];
+			} else if(d == 'n')
+				out += "\n";
+			else
+				out += repl[i-1:i];
+		}
+	}
+	return out;
+}
+
+# x/y: for each match of re in [a0,a1], set dot and run the rest of the
+# line as a command (sense=1 for x, 0 for y = between matches).
+loopcmd(f: ref File, a0, a1, sense: int)
+{
+	if(ci >= cl)
+		raise "sam:missing delimiter";
+	delim := cs[ci];
+	ci++;
+	re := readdelim(delim);
+	sub := "";
+	if(ci < cl)
+		sub = cs[ci:];
+	ci = cl;
+	(prog, err) := regex->compile(re, 0);
+	if(err != nil)
+		raise "sam:bad regexp in x";
+
+	# collect match ranges over the original text
+	ms := array[64] of (int, int);
+	nm := 0;
+	p := a0;
+	while(p <= a1){
+		m := regex->executese(prog, f.text, (p, a1), 1, 1);
+		if(len m == 0 || (m[0]).t0 < 0)
+			break;
+		(t0, t1) := ((m[0]).t0, (m[0]).t1);
+		if(t0 > a1)
+			break;
+		if(nm >= len ms){
+			nn := array[2*len ms] of (int, int);
+			nn[0:] = ms[0:nm];
+			ms = nn;
+		}
+		if(sense)
+			ms[nm++] = (t0, t1);
+		if(t1 == t0)
+			p = t1 + 1;
+		else
+			p = t1;
+	}
+
+	depth++;
+	origlen := len f.text;
+	for(i := 0; i < nm; i++){
+		(t0, t1) := ms[i];
+		shift := len f.text - origlen;
+		f.dot0 = t0 + shift;
+		f.dot1 = t1 + shift;
+		runcmd(f, sub);
+	}
+	depth--;
+	show(f);
+}
+
+# g/v: run the rest of the line iff [a0,a1] contains (g) / lacks (v) re.
+cond(f: ref File, a0, a1, sense: int)
+{
+	if(ci >= cl)
+		raise "sam:missing delimiter";
+	delim := cs[ci];
+	ci++;
+	re := readdelim(delim);
+	sub := "";
+	if(ci < cl)
+		sub = cs[ci:];
+	ci = cl;
+	(prog, err) := regex->compile(re, 0);
+	if(err != nil)
+		raise "sam:bad regexp in g";
+	m := regex->executese(prog, f.text, (a0, a1), 1, 1);
+	matched := len m > 0 && (m[0]).t0 >= 0 && (m[0]).t0 <= a1;
+	if((matched && sense) || (!matched && !sense)){
+		f.dot0 = a0; f.dot1 = a1;
+		depth++;
+		runcmd(f, sub);
+		depth--;
+		show(f);
+	}
+}
+
+# = : report the line range (or char range) of dot in the command window.
+eqcmd(f: ref File, a0, a1: int)
+{
+	l0 := lineof(f, a0);
+	l1 := lineof(f, a1);
+	if(l0 == l1)
+		warn(sys->sprint("%d\n", l0));
+	else
+		warn(sys->sprint("%d,%d\n", l0, l1));
+}
+
+lineof(f: ref File, pos: int): int
+{
+	n := 1;
+	for(i := 0; i < pos && i < len f.text; i++)
+		if(f.text[i] == '\n')
+			n++;
+	return n;
+}
+
+# ---- command-window output ----
+
+warn(s: string)
+{
+	if(cmdfile == nil || s == "")
+		return;
+	pos := len cmdfile.text;
+	cmdfile.text += s;
+	hinsert(cmdfile.tag, pos, s);
+	moveto(cmdfile.tag, len cmdfile.text);
+}
+
+# reflect dot to the terminal and scroll it into view.
+show(f: ref File)
+{
+	if(depth > 0)
+		return;
+	setdot(f.tag, f.dot0, f.dot1);
+	moveto(f.tag, f.dot0);
+}
+
+# ---- parser lexical helpers ----
+
+skipblank()
+{
+	while(ci < cl && (cs[ci] == ' ' || cs[ci] == '\t'))
+		ci++;
+}
+
+# read up to (and consume) an unescaped delimiter; \<delim> -> <delim>,
+# other backslashes are preserved (they belong to the regexp / template).
+readdelim(delim: int): string
+{
+	out := "";
+	while(ci < cl){
+		c := cs[ci];
+		if(c == delim){
+			ci++;
+			break;
+		}
+		if(c == '\n')
+			break;
+		if(c == '\\' && ci+1 < cl && cs[ci+1] == delim){
+			out += cs[ci+1:ci+2];
+			ci += 2;
+			continue;
+		}
+		out += cs[ci:ci+1];
+		ci++;
+	}
+	return out;
+}
+
+# read the /text/ argument of a/i/c: like readdelim but translating the
+# usual C-style escapes into their characters.
+readtext(): string
+{
+	skipblank();
+	if(ci >= cl || cs[ci] == '\n')
+		return "";
+	delim := cs[ci];
+	ci++;
+	out := "";
+	while(ci < cl){
+		c := cs[ci];
+		if(c == delim){
+			ci++;
+			break;
+		}
+		if(c == '\\' && ci+1 < cl){
+			d := cs[ci+1];
+			ci += 2;
+			case d {
+			'n' =>	out += "\n";
+			't' =>	out += "\t";
+			* =>	out += sys->sprint("%c", d);
+			}
+			continue;
+		}
+		out += cs[ci:ci+1];
+		ci++;
+	}
+	return out;
+}
+
+readrest(): string
+{
+	s := "";
+	while(ci < cl && cs[ci] != '\n'){
+		s += cs[ci:ci+1];
+		ci++;
+	}
+	return s;
+}
+
+# ---- rasp-update emitters ----
+
+hcut(tag, where, n: int)
+{
+	b := array[10] of byte;
+	pshortat(b, 0, tag);
+	plongat(b, 2, where);
+	plongat(b, 6, n);
+	sendmsg(Hcut, b);
+}
+
+# insert s at pos in the terminal's rasp: Hgrowdata when it fits in one
+# message, otherwise grow a hole and fill it in TBLOCKSIZE chunks.
+hinsert(tag, pos: int, s: string)
+{
+	L := len s;
+	if(L == 0)
+		return;
+	if(L <= TBLOCKSIZE){
+		sb := array of byte s;
+		b := array[10 + len sb] of byte;
+		pshortat(b, 0, tag);
+		plongat(b, 2, pos);
+		plongat(b, 6, L);
+		b[10:] = sb;
+		sendmsg(Hgrowdata, b);
+		return;
+	}
+	grow(tag, pos, L);
+	off := 0;
+	while(off < L){
+		cnt := L - off;
+		if(cnt > TBLOCKSIZE)
+			cnt = TBLOCKSIZE;
+		data(tag, pos + off, s[off:off+cnt]);
+		off += cnt;
+	}
+}
+
+setdot(tag, l0, l1: int)
+{
+	b := array[10] of byte;
+	pshortat(b, 0, tag);
+	plongat(b, 2, l0);
+	plongat(b, 6, l1);
+	sendmsg(Hsetdot, b);
+}
+
+moveto(tag, pos: int)
+{
+	b := array[6] of byte;
+	pshortat(b, 0, tag);
+	plongat(b, 2, pos);
+	sendmsg(Hmoveto, b);
 }
 
 # ---- wire I/O ----

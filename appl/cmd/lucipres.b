@@ -339,17 +339,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(actid_g >= 0)
 		loadpresentation();
 
-	# Auto-create taskboard artifact for meta-agent if none exist
-	if(actid_g == 0 && artifacts == nil) {
-		pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-		pfd := sys->open(pctl, Sys->OWRITE);
-		if(pfd != nil) {
-			cmd := array of byte "create id=tasks type=taskboard label=Tasks";
-			sys->write(pfd, cmd, len cmd);
-			pfd = nil;
-		}
-		loadpresentation();
-	}
+	# Give this activity its persistent "Tasks" taskboard tab so the
+	# presentation tab strip is always present.
+	ensuretaskboard();
 
 	# Auto-center on first artifact if nothing is centered
 	# (handles external creation, e.g., shell launch scripts)
@@ -657,6 +649,9 @@ handleevent(ev: string)
 		if(newid >= 0) {
 			actid_g = newid;
 			loadpresentation();
+			# Ensure the newly focused activity has its Tasks tab so its
+			# tab strip is present even when it holds no other artifacts.
+			ensuretaskboard();
 		}
 		return;
 	}
@@ -1112,6 +1107,24 @@ handlecontextmenu(p: ref Pointer)
 }
 
 # --- Namespace loading ---
+
+# ensuretaskboard: give the current activity a "Tasks" taskboard artifact if
+# it has none, so the presentation tab strip is always present.  Previously
+# only activity 0 got this, leaving every other activity with an empty
+# presentation ("No artifacts", no tab strip) until an app was launched.
+ensuretaskboard()
+{
+	if(actid_g < 0 || artifacts != nil)
+		return;
+	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	pfd := sys->open(pctl, Sys->OWRITE);
+	if(pfd != nil) {
+		cmd := array of byte "create id=tasks type=taskboard label=Tasks";
+		sys->write(pfd, cmd, len cmd);
+		pfd = nil;
+	}
+	loadpresentation();
+}
 
 loadpresentation()
 {

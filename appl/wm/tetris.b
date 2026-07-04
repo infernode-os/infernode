@@ -186,7 +186,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			return;
 		}
 		cmd(win, "bind .f.c <ButtonRelease-1> {send user m %x %y}");
-		cmd(win, "pack .f -side top");
+		# -expand 1 with no -fill gives the board the whole window as its
+		# parcel and centres it both horizontally and vertically (was
+		# -side top, which pinned the board to the top edge).
+		cmd(win, "pack .f -expand 1");
 		cmd(win, "update");
 		g := Game.new(bd);
 		(finished, rank) := rungame(g, win, fromuser, winctl, scorech);

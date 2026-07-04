@@ -17,6 +17,7 @@ TARG=\
 	editor.dis\
 	fractals.dis\
 	tetris.dis\
+	coffee.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\

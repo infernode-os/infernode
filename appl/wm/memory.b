@@ -65,8 +65,18 @@ realinit(ctxt: ref Draw->Context)
 	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 
+	# Request a full-size window (bounded by the display) instead of
+	# shrink-wrapping to the 240px stats canvas: in the presentation zone a
+	# tiny window neither composited its content nor got a tab.  A normal
+	# zone-filling window (propagation off, below) does both.
+	dr := ctxt.display.image.r;
+	iw := dr.dx() - 40;
+	ih := dr.dy() - 40;
+	if(iw < 260) iw = 260;
+	if(ih < 120) ih = 120;
 	menubut := chan of string;
-	(t, menubut) = tkclient->toplevel(ctxt, "", "Memory", 0);
+	(t, menubut) = tkclient->toplevel(ctxt, sys->sprint("-width %d -height %d", iw, ih), "Memory", 0);
+	cmd(t, "pack propagate . 0");
 	for(j := 0; j < len mem_cfg; j++)
 		cmd(t, mem_cfg[j]);
 	tkclient->startinput(t, "ptr"::nil);

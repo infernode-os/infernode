@@ -16,6 +16,7 @@ TARG=\
 	settings.dis\
 	editor.dis\
 	fractals.dis\
+	tetris.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\
@@ -47,6 +48,7 @@ SYSMODULES=\
 	menu.m\
 	menuhit.m\
 	plumbmsg.m\
+	scoretable.m\
 	sh.m\
 	string.m\
 	styx.m\

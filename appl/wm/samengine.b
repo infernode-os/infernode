@@ -43,7 +43,7 @@ include "samstub.m";
 	Twrite, Tclose, Tlook, Tsearch, Tsend, Tdclick, Tcheck,
 	Tstartsnarf, Tsetsnarf, Tack, Texit,
 	Hversion, Hnewname, Hmovname, Hcurrent, Hgrow, Hdata,
-	Horigin, Hunlock, Hexit,
+	Horigin, Hunlock, Hdirty, Hclean, Hexit,
 	VERSION, DATASIZE, TBLOCKSIZE: import Samstub;
 
 # A file held by the host: the authoritative text (a rune string) plus
@@ -53,6 +53,7 @@ File: adt {
 	name:	string;
 	text:	string;		# rune-indexed; len == nrunes
 	inmenu:	int;		# listed in the terminal's file menu
+	dirty:	int;		# modified since last write
 };
 
 io:		ref FD;
@@ -60,6 +61,7 @@ logfd:		ref FD;
 
 files:		list of ref File;	# command-line / opened files
 cmdfile:	ref File;		# the command window's file
+curfile:	ref File;		# file that commands apply to (Tworkfile)
 nexttag:	int;			# next host-assigned file tag
 
 filenames:	list of string;		# files named on the command line
@@ -137,16 +139,40 @@ dispatch(mtype: int, data: array of byte): int
 		sys->fprint(logfd, "Texit -> engine exit\n");
 		return 1;
 
+	Ttype =>
+		# The user typed into a window; keep our authoritative copy in
+		# sync with what the terminal already echoed locally.
+		tag := gshort(data, 0);
+		pos := glong(data, 2);
+		s := string data[6:];
+		sys->fprint(logfd, "Ttype tag=%d pos=%d n=%d\n", tag, pos, len s);
+		insert(findfile(tag), pos, s);
+
+	Tcut =>
+		tag := gshort(data, 0);
+		p1 := glong(data, 2);
+		p2 := glong(data, 6);
+		sys->fprint(logfd, "Tcut tag=%d %d,%d\n", tag, p1, p2);
+		delete(findfile(tag), p1, p2);
+
+	Twrite =>
+		tag := gshort(data, 0);
+		sys->fprint(logfd, "Twrite tag=%d\n", tag);
+		writefile(findfile(tag));
+
 	Tworkfile =>
 		tag := gshort(data, 0);
-		sys->fprint(logfd, "Tworkfile tag=%d (noted)\n", tag);
+		curfile = findfile(tag);
+		sys->fprint(logfd, "Tworkfile tag=%d\n", tag);
+		# A command line was entered in the command window; command
+		# execution is Phase 3b.  Release the lock the terminal took.
+		sendmsg(Hunlock, nil);
 
-	Ttype or Tcut or Tpaste or Tsnarf or Twrite or Tclose or
+	Tpaste or Tsnarf or Tclose or
 	Tlook or Tsearch or Tsend or Tdclick or Tstartnewfile or
 	Tstartsnarf or Tsetsnarf or Tack or Tcheck =>
-		# Editing / command-language messages: Phase 3.  Logged so the
-		# read loop stays in sync; the terminal echoes typing locally.
-		sys->fprint(logfd, "T msg type=%d (phase 3, ignored)\n", mtype);
+		# Remaining command-language / clipboard messages: Phase 3b.
+		sys->fprint(logfd, "T msg type=%d (phase 3b, ignored)\n", mtype);
 
 	* =>
 		sys->fprint(logfd, "T msg type=%d (unknown)\n", mtype);
@@ -159,7 +185,7 @@ dispatch(mtype: int, data: array of byte): int
 # add each to the menu (Hnewname + Hmovname) and open the first one.
 startup(cmdtag: int)
 {
-	cmdfile = ref File(cmdtag, "", "", 0);
+	cmdfile = ref File(cmdtag, "", "", 0, 0);
 
 	first: ref File;
 	for(nl := filenames; nl != nil; nl = tl nl){
@@ -167,7 +193,7 @@ startup(cmdtag: int)
 		(text, ok) := loadfile(name);
 		if(!ok)
 			sys->fprint(logfd, "sam: %s: new file\n", name);
-		f := ref File(nexttag++, name, text, 1);
+		f := ref File(nexttag++, name, text, 1, 0);
 		files = f :: files;
 		addtomenu(f);
 		if(first == nil)
@@ -270,6 +296,66 @@ data(tag, pos: int, s: string)
 	plongat(b, 2, pos);
 	b[6:] = sb;
 	sendmsg(Hdata, b);
+}
+
+# ---- editing (host authoritative copy) ----
+
+insert(f: ref File, pos: int, s: string)
+{
+	if(f == nil || s == "")
+		return;
+	n := len f.text;
+	if(pos < 0)
+		pos = 0;
+	if(pos > n)
+		pos = n;
+	f.text = f.text[0:pos] + s + f.text[pos:];
+	markdirty(f);
+}
+
+delete(f: ref File, p1, p2: int)
+{
+	if(f == nil)
+		return;
+	n := len f.text;
+	if(p1 < 0)
+		p1 = 0;
+	if(p2 > n)
+		p2 = n;
+	if(p1 >= p2)
+		return;
+	f.text = f.text[0:p1] + f.text[p2:];
+	markdirty(f);
+}
+
+markdirty(f: ref File)
+{
+	if(f == nil || f.dirty)
+		return;
+	f.dirty = 1;
+	if(f.inmenu)
+		sendmsg(Hdirty, pshort(f.tag));
+}
+
+writefile(f: ref File)
+{
+	if(f == nil)
+		return;
+	if(f.name == ""){
+		sys->fprint(logfd, "write: no file name\n");
+		return;
+	}
+	fd := sys->create(f.name, Sys->OWRITE, 8r664);
+	if(fd == nil){
+		sys->fprint(logfd, "write: can't create %s: %r\n", f.name);
+		return;
+	}
+	b := array of byte f.text;
+	if(sys->write(fd, b, len b) != len b)
+		sys->fprint(logfd, "write: %s: %r\n", f.name);
+	f.dirty = 0;
+	if(f.inmenu)
+		sendmsg(Hclean, pshort(f.tag));
 }
 
 # ---- file helpers ----

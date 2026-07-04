@@ -770,9 +770,14 @@ drawpresentation(zone: Rect)
 
 	case centart.atype {
 	"app" =>
-		# The app's own window covers this once it connects and is topped;
-		# the placeholder avoids a black flash before its first frame.
-		drawcentertext(contentr, "Launching " + centart.label + "...");
+		# Show "Launching…" ONLY while the app is still starting.  Once it
+		# is running, its own window owns the content area — apps that only
+		# paint part of their window (tetris, matrix, the classic Tk games)
+		# would otherwise show this placeholder through the unpainted area,
+		# which reads as a broken/half-rendered app.  Leaving the content
+		# area as plain background lets the app's window show cleanly.
+		if(centart.appstatus != "running")
+			drawcentertext(contentr, "Launching " + centart.label + "...");
 	"taskboard" =>
 		drawtaskboard(contentr, pad);
 	* =>

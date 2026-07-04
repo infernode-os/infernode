@@ -2216,8 +2216,25 @@ globallistener()
 			ctxEvCh <-= ev;
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
-		if(presrender_g != nil)
-			presrender_g->deliverevent(ev);
+			if(presrender_g != nil)
+				presrender_g->deliverevent(ev);
+			# Push "retheme" down every embedded app's ctl channel.  The
+			# stock tkclient loop routes it (<-top.ctxt.ctl => wmctl) to the
+			# libtk "retheme" command, so ANY Tk app — including ones with no
+			# theme listener of their own (tetris, task, …) and .dis-only apps
+			# (they load the current tkclient at runtime) — refreshes its
+			# colour environment.  Apps that also self-handle theme events are
+			# unaffected (retheme is idempotent).
+			for(tti := 0; tti < ntaskpres; tti++) {
+				ttp := taskpres[tti];
+				if(ttp == nil)
+					continue;
+				<-ttp.applock;
+				for(tai := 0; tai < ttp.nappslots; tai++)
+					if(ttp.appslots[tai] != nil && ttp.appslots[tai].client != nil)
+						alt { ttp.appslots[tai].client.ctl <-= "retheme" => ; * => ; }
+				ttp.applock <-= 1;
+			}
 			alt { uievent <-= 1 => ; * => ; }
 		}
 	}

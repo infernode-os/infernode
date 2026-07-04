@@ -296,14 +296,24 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				restart = 1;
 			"b1down" =>
 				b1start = actpt(toks);
+				# Create the rubber-band rectangle ONCE, in the theme accent
+				# colour; b1drag then only moves it with `coords`.  The old
+				# code deleted and re-created the item on every motion event
+				# and did a full `update` each time, which churned the canvas
+				# and left the box flickering instead of tracking cleanly.
 				tk->cmd(top, ".top.frac delete zoombox");
+				tk->cmd(top, sys->sprint(
+					".top.frac create rectangle %d %d %d %d -outline %s -width 2 -tags zoombox",
+					b1start.x, b1start.y, b1start.x, b1start.y, zoomboxcol));
 			"b1drag" =>
 				if(b1start.x >= 0) {
 					q := actpt(toks);
-					tk->cmd(top, ".top.frac delete zoombox");
-					tk->cmd(top, sys->sprint(
-						".top.frac create rectangle %d %d %d %d -outline %s -tags zoombox",
-						b1start.x, b1start.y, q.x, q.y, zoomboxcol));
+					# Move the existing rectangle (no delete/create) and keep
+					# it above the fractal image so a canvas repaint can't
+					# bury it.
+					tk->cmd(top, sys->sprint(".top.frac coords zoombox %d %d %d %d",
+						b1start.x, b1start.y, q.x, q.y));
+					tk->cmd(top, ".top.frac raise zoombox");
 					tk->cmd(top, "update");
 				}
 			"b1up" =>

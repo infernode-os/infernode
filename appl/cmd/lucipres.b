@@ -339,9 +339,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(actid_g >= 0)
 		loadpresentation();
 
-	# Give this activity its persistent "Tasks" taskboard tab so the
-	# presentation tab strip is always present.
-	ensuretaskboard();
+	# Auto-create taskboard artifact for meta-agent if none exist
+	if(actid_g == 0 && artifacts == nil) {
+		pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+		pfd := sys->open(pctl, Sys->OWRITE);
+		if(pfd != nil) {
+			cmd := array of byte "create id=tasks type=taskboard label=Tasks";
+			sys->write(pfd, cmd, len cmd);
+			pfd = nil;
+		}
+		loadpresentation();
+	}
 
 	# Auto-center on first artifact if nothing is centered
 	# (handles external creation, e.g., shell launch scripts)
@@ -649,9 +657,6 @@ handleevent(ev: string)
 		if(newid >= 0) {
 			actid_g = newid;
 			loadpresentation();
-			# Ensure the newly focused activity has its Tasks tab so its
-			# tab strip is present even when it holds no other artifacts.
-			ensuretaskboard();
 		}
 		return;
 	}
@@ -789,12 +794,9 @@ drawpresentation(zone: Rect)
 	if(centart == nil && artifacts != nil)
 		centart = hd artifacts;
 
-	if(centart == nil) {
-		drawcentertext(zone, "No artifacts");
-		return;
-	}
-
-	# Tab strip at top
+	# Tab strip at top — always drawn so every activity shows its tab
+	# display, even one holding no artifacts.  (The task browser / taskboard
+	# stays exclusive to activity 0; this only guarantees the strip itself.)
 	tabh := mainfont.height + 12;
 	if(mobile && tabh < 132)
 		tabh = 132;	# 44pt finger tap target for the tab strip
@@ -858,6 +860,12 @@ drawpresentation(zone: Rect)
 	# Content area
 	contentr := Rect((zone.min.x, tabr.max.y + 1), (zone.max.x, zone.max.y));
 	prescontentr = contentr;
+	# No artifacts (e.g. an empty non-zero activity): the tab strip is drawn
+	# above; show the placeholder in the body rather than skipping the strip.
+	if(centart == nil) {
+		drawcentertext(contentr, "No artifacts");
+		return;
+	}
 	contentw := contentr.dx() - 2 * pad;
 
 	# Invalidate render caches on width change
@@ -1107,24 +1115,6 @@ handlecontextmenu(p: ref Pointer)
 }
 
 # --- Namespace loading ---
-
-# ensuretaskboard: give the current activity a "Tasks" taskboard artifact if
-# it has none, so the presentation tab strip is always present.  Previously
-# only activity 0 got this, leaving every other activity with an empty
-# presentation ("No artifacts", no tab strip) until an app was launched.
-ensuretaskboard()
-{
-	if(actid_g < 0 || artifacts != nil)
-		return;
-	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-	pfd := sys->open(pctl, Sys->OWRITE);
-	if(pfd != nil) {
-		cmd := array of byte "create id=tasks type=taskboard label=Tasks";
-		sys->write(pfd, cmd, len cmd);
-		pfd = nil;
-	}
-	loadpresentation();
-}
 
 loadpresentation()
 {

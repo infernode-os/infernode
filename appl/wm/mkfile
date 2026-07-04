@@ -18,6 +18,7 @@ TARG=\
 	fractals.dis\
 	tetris.dis\
 	coffee.dis\
+	memory.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\

@@ -856,11 +856,15 @@ drawrendimg(art: ref Artifact, clipr: Rect, pad: int, contentw: int, errmsg: str
 	dsty := clipr.min.y + pad;
 	enddsty := dsty + (imgh - srcy);
 	if(enddsty > clipr.max.y) enddsty = clipr.max.y;
-	if(dsty < enddsty)
-		mainwin.draw(
-			Rect((clipr.min.x + pad, dsty),
-			     (clipr.min.x + pad + contentw, enddsty)),
-			art.rendimg, nil, (srcx, srcy));
+	if(dsty < enddsty) {
+		dstr := Rect((clipr.min.x + pad, dsty),
+			     (clipr.min.x + pad + contentw, enddsty));
+		# PDF pages are rendered on a transparent background; paint white
+		# behind so black text is visible (a page is white, not the zone bg).
+		if(art.atype == "pdf")
+			mainwin.draw(dstr, display_g.white, nil, (0, 0));
+		mainwin.draw(dstr, art.rendimg, nil, (srcx, srcy));
+	}
 }
 
 # Draw the PDF page navigation bar.

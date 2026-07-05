@@ -321,30 +321,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Load viewport
 	vpmod = load Viewport Viewport->PATH;
 
-	# Load plumbmsg and open the 'presentation' plumb port.  This is how
-	# every picker path — the ftree file tree, the context panel, an
-	# agent, or the `plumb` command — opens a file into the presentation
-	# view: it sends a plumb message, the stock plumber (started in
-	# boot.sh) matches /lib/lucifer/plumbing and forwards it here, and
-	# plumbreceiver() turns it into the right artifact.  The plumber comes
-	# up before us in the boot, but retry briefly in case it is still
-	# starting; if it never appears we simply run without the consumer
-	# (ftree falls back to writing /mnt/ui directly).
-	plumbmod = load Plumbmsg Plumbmsg->PATH;
-	if(plumbmod != nil) {
-		tries := 0;
-		while(plumbmod->init(1, "presentation", 8192) < 0 && tries < 25) {
-			sys->sleep(200);
-			tries++;
-		}
-		if(tries >= 25) {
-			sys->fprint(sys->fildes(2), "lucipres: plumb consumer unavailable (no plumber?); pickers use the /mnt/ui fallback\n");
-			plumbmod = nil;
-		} else {
-			sys->fprint(sys->fildes(2), "lucipres: plumb consumer listening on 'presentation'\n");
-			spawn plumbreceiver();
-		}
-	}
+	# Start the plumb consumer in ITS OWN PROC.  It opens the
+	# 'presentation' plumb port (served by the plumber from boot.sh) and
+	# turns file-opens into artifacts — see plumbreceiver().
+	#
+	# CRUCIAL: this must NOT run inline in init().  The port open can block
+	# on the plumber (a 9P open waits for the server), and blocking here
+	# would stop init ever reaching loadpresentation()/redrawpres() below —
+	# i.e. the tab strip and the taskboard would never draw at all (the
+	# "Tasks panel gone" regression).  The consumer is optional: every
+	# picker falls back to writing /mnt/ui directly if it never comes up.
+	spawn plumbreceiver();
 
 	# Load bufio + GIF writer for image export
 	bufio = load Bufio Bufio->PATH;
@@ -1455,6 +1442,19 @@ plumbseq := 0;
 
 plumbreceiver()
 {
+	# Runs off the init path so a slow/absent plumber never stalls the UI.
+	plumbmod = load Plumbmsg Plumbmsg->PATH;
+	if(plumbmod == nil)
+		return;
+	for(tries := 0; plumbmod->init(1, "presentation", 8192) < 0; tries++) {
+		if(tries >= 50) {	# ~10s — give up; pickers use the /mnt/ui fallback
+			sys->fprint(sys->fildes(2), "lucipres: plumb consumer unavailable (no plumber?)\n");
+			plumbmod = nil;
+			return;
+		}
+		sys->sleep(200);
+	}
+	sys->fprint(sys->fildes(2), "lucipres: plumb consumer listening on 'presentation'\n");
 	for(;;) {
 		m := Msg.recv();
 		if(m == nil)

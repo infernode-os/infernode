@@ -224,14 +224,30 @@ ensuredir(path: string)
 		fd = nil;
 }
 
+# Replace via tmp + rename so readers never see a torn write: they
+# get the old content, the complete new content, or (briefly) no
+# file — and every reader here already treats open-failure as empty.
 writefile(path, text: string)
 {
-	fd := sys->create(path, Sys->OWRITE, 8r644);
+	tmp := path + ".tmp";
+	fd := sys->create(tmp, Sys->OWRITE, 8r644);
 	if(fd == nil)
 		return;
 	b := array of byte text;
 	sys->write(fd, b, len b);
 	fd = nil;
+	sys->remove(path);
+	nd := sys->nulldir;
+	nd.name = basename(path);
+	sys->wstat(tmp, nd);
+}
+
+basename(p: string): string
+{
+	for(i := len p - 1; i >= 0; i--)
+		if(p[i] == '/')
+			return p[i+1:];
+	return p;
 }
 
 readf(path: string): string

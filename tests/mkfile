@@ -119,7 +119,10 @@ TARG=\
 	lucibridge_approval_test.dis\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
+	geomap_test.dis\
 	matrix_perfdashboard_test.dis\
+	matrix_sysmon_test.dis\
+	matrix_test.dis\
 	opus_test.dis\
 	keyringinst_test.dis\
 	contacts_tool_test.dis\
@@ -146,7 +149,10 @@ SYSMODULES=\
 	json.m\
 	llmclient.m\
 	keyring.m\
+	geoproj.m\
 	matrix.m\
+	matrixlib.m\
+	matrixtk.m\
 	lists.m\
 	math.m\
 	menu.m\

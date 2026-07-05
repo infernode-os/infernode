@@ -1,14 +1,16 @@
 #
 # matrix.m — Matrix compositional module runtime interfaces
 #
-# Defines the module interfaces for Matrix display and service
-# modules, plus the composition data types used by the parser
-# and runtime.
+# Defines the two module interfaces Matrix loads: display and
+# service.  The composition data types and parser live in
+# matrixlib.m / lib/matrixlib, not here — this file is included
+# by every module implementation and stays minimal.
 #
 # Display modules render live content into a region of the
-# Matrix pane using widget.m and Draw primitives.  Service
-# modules run headless, reading from their mount namespace
-# and writing outputs to their assigned directory.
+# Matrix pane with Draw primitives; they run in-process and are
+# trusted (loaded from the local library only).  Service modules
+# run headless in their own process, confined by namespace to
+# their mount (read-only) and output directory (read-write).
 #
 # See doc/matrix-architecture.md for the full specification.
 #

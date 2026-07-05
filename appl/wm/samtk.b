@@ -122,6 +122,12 @@ newflayer(tag, tp: int): ref Flayer
 	mkmenu3(t);
 	tkcmds(t, tkcmdlist);
 
+	# Appl-mode toplevels are created hidden; reveal it and wire up
+	# keyboard/mouse, or the window never appears and takes no input.
+	tkclient->onscreen(t, nil);
+	tkclient->startinput(t, "kbd" :: "ptr" :: nil);
+	sys->fprint(ctxt.logfd, "newflayer: onscreen+startinput done\n");
+
 	f := ref Flayer(
 		tag,		# tag
 		t,		# t

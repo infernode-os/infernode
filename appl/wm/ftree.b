@@ -20,7 +20,7 @@ implement Ftree;
 # Keyboard:
 #   Up/Down      move selection
 #   Left         collapse directory / move to parent
-#   Right/Enter  expand directory / plumb file
+#   Right/Enter  expand directory / open file in presentation view
 #   Page Up/Down scroll one screenful
 #   Home/End     go to top/bottom
 #   Ctrl-B       bind prompt
@@ -32,7 +32,7 @@ implement Ftree;
 #
 # Mouse:
 #   Button 1     select; click indicator to expand/collapse
-#   Button 2     plumb selected file
+#   Button 2     open selected file in presentation view
 #   Button 3     context menu
 #   Scroll wheel scroll up/down
 #
@@ -61,10 +61,6 @@ include "lucitheme.m";
 
 include "arg.m";
 	arg: Arg;
-
-include "plumbmsg.m";
-	plumbmod: Plumbmsg;
-	Msg: import plumbmod;
 
 Ftree: module
 {
@@ -443,7 +439,7 @@ buildmenu()
 			mitem("expand all", "mexpandall");
 			mitem("collapse all", "mcollapseall");
 		} else {
-			mitem("plumb", "mplumb");
+			mitem("open", "mplumb");
 			mitem("bind here...", "mbind");
 		}
 	}
@@ -608,7 +604,7 @@ activateselected()
 			expand(ni);
 		rebuildvisible();
 	} else
-		plumbfile(n.path);
+		openfile(n.path);
 }
 
 collapseselected()
@@ -632,7 +628,11 @@ collapseselected()
 	}
 }
 
-# ---------- Plumbing ----------
+# ---------- Opening files ----------
+
+UIMOUNT: con "/mnt/ui";
+
+openseq := 0;
 
 plumbselected()
 {
@@ -643,54 +643,127 @@ plumbselected()
 	if(n.isdir)
 		activateselected();
 	else
-		plumbfile(n.path);
+		openfile(n.path);
 }
 
-plumbfile(path: string)
+# Open a file by presenting it in the Lucifer presentation view.  Media and
+# document types (pdf, images, markdown) become content artifacts drawn by
+# presrender; everything else opens in the editor, launched as a
+# presentation-zone app.  We talk to /mnt/ui directly rather than plumbing:
+# the Lucifer session runs no plumber, so a plumb message goes nowhere.
+openfile(path: string)
 {
-	if(plumbmod == nil) {
-		plumbmod = load Plumbmsg Plumbmsg->PATH;
-		if(plumbmod != nil)
-			plumbmod->init(0, nil, 0);
-	}
-	if(plumbmod == nil) {
-		setstatus("no plumber");
+	actid := curactid();
+	if(actid < 0) {
+		setstatus("no presentation activity");
 		redraw();
 		return;
 	}
 
-	# Detect file type for smarter plumbing
-	kind := "text";
-	attrs := "";
-	ext := fileext(path);
+	name := basename(path);
+	ext := str->tolower(fileext(path));
+
+	openseq++;
+	id := sys->sprint("ftree-%d", openseq);
+
+	# atype selects the artifact renderer; readcontent=1 means the data
+	# field carries the file's contents rather than its path.
+	atype := "";
+	readcontent := 0;
 	case ext {
-	"b" or "m" or "sh" =>
-		attrs = "action=showfile";
-	"dis" =>
-		kind = "text";
-		attrs = "action=showdata";
-	"bit" or "jpg" or "jpeg" or "png" or "gif" =>
-		kind = "image";
-	"html" or "htm" =>
-		kind = "text";
-		attrs = "action=showurl";
+	"pdf" =>
+		atype = "pdf";
+	"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
+		atype = "image";
+	"md" or "markdown" =>
+		atype = "markdown";
+		readcontent = 1;
 	* =>
-		attrs = "action=showfile";
+		atype = "app";		# text/source/unknown -> editor
 	}
 
-	msg := ref Plumbmsg->Msg(
-		"ftree",
-		nil,
-		dirof(path),
-		kind,
-		attrs,
-		array of byte path
-	);
-	if(msg.send() < 0)
-		setstatus("plumb failed");
-	else
-		setstatus("plumbed " + basename(path));
+	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", UIMOUNT, actid);
+	if(atype == "app") {
+		# The editor launches immediately when the artifact is created,
+		# reading its argv from the data field at that instant.  The file
+		# path must therefore ride in the create command itself (data= is a
+		# terminal attribute, so it goes last); a later data-file write would
+		# race the launch and the editor would open empty.
+		cmd := sys->sprint("create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s", id, name, path);
+		if(writestr(ctlpath, cmd) < 0) {
+			setstatus(sys->sprint("open failed: %r"));
+			redraw();
+			return;
+		}
+	} else {
+		cmd := sys->sprint("create id=%s type=%s label=%s", id, atype, name);
+		if(writestr(ctlpath, cmd) < 0) {
+			setstatus(sys->sprint("present failed: %r"));
+			redraw();
+			return;
+		}
+		# Content artifacts read their data field when rendered (after
+		# center), so a separate data-file write is safe.  It carries the
+		# file path (pdf/image) or, for text-rendered types, the contents.
+		data := path;
+		if(readcontent) {
+			c := readfilestr(path);
+			if(c != nil)
+				data = c;
+		}
+		datapath := sys->sprint("%s/activity/%d/presentation/%s/data", UIMOUNT, actid, id);
+		writestr(datapath, data);
+	}
+
+	# Make it the active view; the presentation view opens if not already.
+	writestr(ctlpath, "center id=" + id);
+
+	setstatus("opened " + name);
 	redraw();
+}
+
+# Currently-focused presentation activity id, or -1 if unavailable.
+curactid(): int
+{
+	s := readfilestr(UIMOUNT + "/activity/current");
+	if(s == nil)
+		return -1;
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
+		s = s[0:len s - 1];
+	if(s == "")
+		return -1;
+	(n, nil) := str->toint(s, 10);
+	return n;
+}
+
+# Write a string to a file (truncating implicitly at offset 0).  Returns -1
+# on any failure, 0 on success.
+writestr(path, s: string): int
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return 0;
+}
+
+# Read an entire file into a string, or nil on failure.
+readfilestr(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	s := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s += string buf[0:n];
+	}
+	return s;
 }
 
 fileext(path: string): string
@@ -1325,7 +1398,7 @@ gotopath(path: string)
 		return;
 	}
 	if(!(d.mode & Sys->DMDIR)) {
-		plumbfile(path);
+		openfile(path);
 		return;
 	}
 	rootpath = path;

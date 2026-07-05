@@ -291,8 +291,8 @@ start9p()
 	spawn matrixserve(tchan, srv, pidc);
 	<-pidc;
 
-	ensuredir("/n/matrix");
-	if(sys->mount(fds[1], nil, "/n/matrix", Sys->MREPL|Sys->MCREATE, nil) < 0) {
+	ensuredir("/mnt/matrix");
+	if(sys->mount(fds[1], nil, "/mnt/matrix", Sys->MREPL|Sys->MCREATE, nil) < 0) {
 		sys->fprint(stderr, "matrix: mount failed: %r\n");
 		raise "fail:mount";
 	}

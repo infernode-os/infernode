@@ -95,7 +95,7 @@ Lucifer
 
 ```
 InferNode namespace
-  +-- /n/matrix/         # Matrix 9P filesystem (always present)
+  +-- /mnt/matrix/         # Matrix 9P filesystem (always present)
   |     +-- ctl
   |     +-- composition
   |     +-- modules/
@@ -105,9 +105,16 @@ InferNode namespace
 ```
 
 No Lucifer required. Veltro (or any process) controls Matrix through
-`/n/matrix/ctl`. Another agent on another machine mounts `/n/matrix/`
+`/mnt/matrix/ctl`. Another agent on another machine mounts `/mnt/matrix/`
 and interacts with the composition's service modules through the
 filesystem.
+
+Mount-point convention (see `docs/NAMESPACE-LAYOUT.md`): a tree lives
+under `/mnt` when InferNode authors its schema, under `/n` when the
+schema is a foreign import. Matrix authors its own control filesystem,
+so it mounts at `/mnt/matrix`. A remote data source like `/n/tbl4`
+stays under `/n` — its schema belongs to the serving system, Matrix
+merely consumes it.
 
 ### Relationship to Existing Infrastructure
 
@@ -270,7 +277,7 @@ MatrixService: module {
 ```
 
 A service module's `outdir` is a directory in the Matrix namespace
-(e.g., `/n/matrix/modules/signal-watcher/`). The module creates files
+(e.g., `/mnt/matrix/modules/signal-watcher/`). The module creates files
 there as needed. Other modules, Veltro, or remote agents read them.
 
 
@@ -389,7 +396,7 @@ is how Veltro and any other tool controls Matrix -- in GUI mode,
 headless mode, locally, or remotely.
 
 ```
-/n/matrix/
+/mnt/matrix/
     ctl                         # Write commands, read status
     composition                 # Current composition (text, rw)
     modules/
@@ -405,17 +412,17 @@ headless mode, locally, or remotely.
             <name>              # Pinned composition files
 ```
 
-### Control commands (write to `/n/matrix/ctl`)
+### Control commands (write to `/mnt/matrix/ctl`)
 
 ```
 load <composition-name>         # Load a pinned composition by name
-load -                          # Load composition from /n/matrix/composition
+load -                          # Load composition from /mnt/matrix/composition
 unload                          # Unload all modules, clear layout
 pin <name>                      # Save current composition to library
 unpin <name>                    # Remove a pinned composition
 ```
 
-### Composition editing (write to `/n/matrix/composition`)
+### Composition editing (write to `/mnt/matrix/composition`)
 
 The current composition is always readable as a text file. Writing a new
 composition triggers a reload: the Matrix runtime diffs against the
@@ -429,7 +436,7 @@ write it back.
 In GUI mode under Lucifer, Matrix exposes the same `load` / `unload` /
 composition-editing operations through direct manipulation. The GUI is
 a thin shortcut over the 9P control surface above -- every click ends
-up writing the same verbs to `/n/matrix/ctl`.
+up writing the same verbs to `/mnt/matrix/ctl`.
 
 ### Empty-state picker
 
@@ -469,7 +476,7 @@ Lucifer Apps menu.
 
 The GUI surface adds no new operations: the picker is `load`, the
 right-click menu is `load` / `unload` / artifact-tab spawn. A headless
-process driving `/n/matrix/ctl` and `/n/matrix/composition` directly
+process driving `/mnt/matrix/ctl` and `/mnt/matrix/composition` directly
 has the same reach as a user clicking through the menu. This matters
 for agents: Veltro can drive Matrix end-to-end without ever rendering
 the GUI surface, and what it does is observable in the same namespace
@@ -538,7 +545,7 @@ service alert-watcher /n/tbl4
 3. Three display modules show live data that updates without manual
    refresh.
 4. Service module detects a high-confidence signal and writes an alert.
-5. Veltro reads `/n/matrix/composition`, modifies it (e.g., changes
+5. Veltro reads `/mnt/matrix/composition`, modifies it (e.g., changes
    the layout split ratio or swaps a module), writes it back, and the
    Matrix reconfigures live.
 6. User pins the composition. Unloads. Reloads by name. Same result.
@@ -727,8 +734,8 @@ can reach at runtime.
 Everything in InferNode is a file. Matrix exposes its state as a 9P
 filesystem so that Veltro, shell scripts, remote agents, and any other
 tool can inspect and control it using standard file operations. No
-custom IPC, no API client library. `cat /n/matrix/composition` shows
-the current state. `echo 'load trading-desk' > /n/matrix/ctl` changes
+custom IPC, no API client library. `cat /mnt/matrix/composition` shows
+the current state. `echo 'load trading-desk' > /mnt/matrix/ctl` changes
 it. This works identically whether Matrix is running with a GUI or
 headless, locally or remotely.
 

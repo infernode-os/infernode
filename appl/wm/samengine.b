@@ -160,6 +160,11 @@ dispatch(mtype: int, data: array of byte): int
 		s := string data[6:];
 		sys->fprint(logfd, "Ttype tag=%d pos=%d n=%d\n", tag, pos, len s);
 		insert(findfile(tag), pos, s);
+		# Typing in the command window: run any complete command line(s).
+		# The terminal locks (setlock) just before delivering the text,
+		# so each completed command answers with one Hunlock.
+		if(cmdfile != nil && tag == cmdfile.tag)
+			runpending();
 
 	Tcut =>
 		tag := gshort(data, 0);
@@ -174,6 +179,9 @@ dispatch(mtype: int, data: array of byte): int
 		writefile(findfile(tag));
 
 	Tworkfile =>
+		# Sets which file subsequent commands apply to, and its dot.
+		# Sent (when a file is open) just before the command text; the
+		# command itself runs when that text arrives via Ttype.
 		tag := gshort(data, 0);
 		d0 := glong(data, 2);
 		d1 := glong(data, 6);
@@ -183,16 +191,6 @@ dispatch(mtype: int, data: array of byte): int
 			curfile.dot1 = d1;
 		}
 		sys->fprint(logfd, "Tworkfile tag=%d dot=%d,%d\n", tag, d0, d1);
-		# The user entered a command line in the command window; run
-		# everything typed since we last consumed the command file.
-		cmd := "";
-		if(cmdptr < len cmdfile.text)
-			cmd = cmdfile.text[cmdptr:];
-		cmdptr = len cmdfile.text;
-		if(curfile != nil && cmd != "")
-			runcmd(curfile, cmd);
-		cmdptr = len cmdfile.text;	# include any output we appended
-		sendmsg(Hunlock, nil);
 
 	Tpaste or Tsnarf or Tclose or
 	Tlook or Tsearch or Tsend or Tdclick or Tstartnewfile or
@@ -215,22 +213,79 @@ startup(cmdtag: int)
 
 	first: ref File;
 	for(nl := filenames; nl != nil; nl = tl nl){
-		name := hd nl;
-		(text, ok) := loadfile(name);
-		if(!ok)
-			sys->fprint(logfd, "sam: %s: new file\n", name);
-		f := ref File(nexttag++, name, text, 1, 0, 0, 0);
-		files = f :: files;
-		addtomenu(f);
+		f := openfile(hd nl);
 		if(first == nil)
 			first = f;
 	}
 
-	if(first != nil)
+	if(first != nil){
+		curfile = first;
 		sendmsg(Hcurrent, pshort(first.tag));	# opens its window
+	}
 
 	# Release the lock the terminal took after Tstartcmdfile.
 	sendmsg(Hunlock, nil);
+}
+
+# load a named file into the menu (creating an empty one if it does not
+# exist) and return its File.
+openfile(name: string): ref File
+{
+	(text, ok) := loadfile(name);
+	if(!ok)
+		sys->fprint(logfd, "sam: %s: new file\n", name);
+	f := ref File(nexttag++, name, text, 1, 0, 0, 0);
+	files = f :: files;
+	addtomenu(f);
+	return f;
+}
+
+byname(name: string): ref File
+{
+	for(l := files; l != nil; l = tl l)
+		if((hd l).name == name)
+			return hd l;
+	return nil;
+}
+
+# B files... : add each file to the menu and open the first.
+openlist(names: string)
+{
+	(nil, words) := sys->tokenize(names, " \t");
+	first: ref File;
+	for(; words != nil; words = tl words){
+		f := openfile(hd words);
+		if(first == nil)
+			first = f;
+	}
+	if(first != nil){
+		curfile = first;
+		sendmsg(Hcurrent, pshort(first.tag));
+	}
+}
+
+# b file : make an already-open file current (opening it if need be).
+switchfile(name: string)
+{
+	if(name == "")
+		return;
+	f := byname(name);
+	if(f == nil)
+		f = openfile(name);
+	curfile = f;
+	sendmsg(Hcurrent, pshort(f.tag));
+}
+
+# n : list the open files in the command window.
+listfiles()
+{
+	for(l := files; l != nil; l = tl l){
+		f := hd l;
+		mark := " ";
+		if(f.dirty)
+			mark = "'";
+		warn(mark + f.name + "\n");
+	}
 }
 
 addtomenu(f: ref File)
@@ -424,6 +479,26 @@ loadfile(name: string): (string, int)
 # change.  Supported: addresses . $ #n N N,M , /re/ ; commands
 # p d a i c s x g v = w q.  Errors are reported in the command window.
 
+# Execute any complete command line(s) sitting unconsumed in the command
+# file, then release the lock the terminal took when the line was entered.
+runpending()
+{
+	if(cmdfile == nil || cmdptr >= len cmdfile.text)
+		return;
+	pending := cmdfile.text[cmdptr:];
+	last := -1;
+	for(i := 0; i < len pending; i++)
+		if(pending[i] == '\n')
+			last = i;
+	if(last < 0)
+		return;				# command not terminated yet
+	line := pending[0:last+1];
+	cmdptr += last + 1;
+	runcmd(curfile, line);
+	cmdptr = len cmdfile.text;		# skip past any output we appended
+	sendmsg(Hunlock, nil);
+}
+
 runcmd(f: ref File, s: string)
 {
 	savecs := cs; saveci := ci; savecl := cl;
@@ -448,6 +523,25 @@ runcmd(f: ref File, s: string)
 
 docmd(f: ref File)
 {
+	# With no file open yet, only the file-management commands are valid
+	# (this is how you open the first document from an empty window).
+	if(f == nil){
+		skipblank();
+		c0 := '\n';
+		if(ci < cl)
+			c0 = cs[ci];
+		case c0 {
+		'B' =>	ci++; skipblank(); openlist(readrest());
+		'b' =>	ci++; skipblank(); switchfile(readrest());
+		'n' =>	ci++; listfiles();
+		'q' =>	ci++; sendmsg(Hexit, nil);
+		'\n' or ' ' or '\t' =>
+			if(ci < cl) ci++;
+		* =>	raise "sam:no file — use B file to open one";
+		}
+		return;
+	}
+
 	(have, a0, a1) := address(f, f.dot0, f.dot1);
 	skipblank();
 	c := '\n';
@@ -517,6 +611,17 @@ docmd(f: ref File)
 		if(nm != "")
 			f.name = nm;
 		writefile(f);
+	'B' =>
+		ci++;
+		skipblank();
+		openlist(readrest());
+	'b' =>
+		ci++;
+		skipblank();
+		switchfile(readrest());
+	'n' =>
+		ci++;
+		listfiles();
 	'q' =>
 		ci++;
 		sendmsg(Hexit, nil);

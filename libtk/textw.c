@@ -650,7 +650,7 @@ tktdrawline(Image *i, Tk *tk, TkTline *l, Point deltait)
 			blinkreset(tk);
 		tkt->cur_rec = r;
 		if(tkt->cur_flag)
-			tktextcursordraw(tk, TkCforegnd);
+			tktextcursordraw(tk, TkCselect);	/* accent caret */
 	}
 
 	free(opts);
@@ -715,7 +715,7 @@ showcaret(Tk *tk, int on)
 			if (it->kind == TkTmark && it->imark != nil &&
 				    strcmp(it->imark->name, "insert") == 0) {
 				if (on) {
-					tktextcursordraw(tk, TkCforegnd);
+					tktextcursordraw(tk, TkCselect);	/* accent caret */
 					tk->dirty = tkrect(tk, 1);
 				} else
 					tktnotdrawn(tk, l->orig.y, l->orig.y+l->height, 0);

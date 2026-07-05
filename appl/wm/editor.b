@@ -56,13 +56,12 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Image, Point, Rect: import draw;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
 
-include "menu.m";
-	menumod: Menu;
-	Popup: import menumod;
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "string.m";
 	str: String;
@@ -77,15 +76,19 @@ include "styxservers.m";
 
 include "lucitheme.m";
 
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar, Statusbar, Kbdfilter,
-	Khome, Kend, Kup, Kdown, Kleft, Kright, Kpgup, Kpgdown,
-	Kdel, Kins, Kbs, Kesc: import widgetmod;
-
-include "textwidget.m";
-	textwidget: Textwidget;
-	Tabulator: import textwidget;
+# Key codes (formerly imported from widget.m)
+Khome:	con 16rFF61;
+Kend:	con 16rFF57;
+Kup:	con 16rFF52;
+Kdown:	con 16rFF54;
+Kleft:	con 16rFF51;
+Kright:	con 16rFF53;
+Kpgup:	con 16rFF55;
+Kpgdown:	con 16rFF56;
+Kdel:	con 16rFF9F;
+Kins:	con 16rFF63;
+Kbs:	con 8;
+Kesc:	con 27;
 
 Editor: module
 {
@@ -246,69 +249,47 @@ EditReq: adt {
 editreq: chan of ref EditReq;
 eventch: chan of string;
 
-# ---------- Display resources (global) ----------
+# ---------- Tk host (global) ----------
+top: ref Toplevel;
+wmctl: chan of string;
+actch: chan of string;
 display: ref Display;
-font: ref Font;
-bgcolor: ref Image;
-fgcolor: ref Image;
-cursorcolor: ref Image;
-selcolor: ref Image;
-lncolor: ref Image;
-dirtycolor: ref Image;
-scrollbar: ref Scrollbar;
-statbar: ref Statusbar;
-
-w: ref Window;
-vislines: int;
-kbdfilter: ref Kbdfilter;
-tabs: ref Tabulator;
 doc: ref Doc;
 stderr: ref Sys->FD;
 themech: chan of int;
 statedirty: int;	# set when doc changes, cleared after writing state files
+vislines: int;		# visible rows in the text widget (for paging)
+prompting: int;		# 1 while the status entry is shown
+
+# Theme colours, resolved to #rrggbbff strings for Tk
+c_bg:	string;
+c_fg:	string;
+c_sel:	string;
+c_dim:	string;
+c_cursor: string;
+
+EDFONT: con "/fonts/combined/unicode.14.font";
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	wmclient = load Wmclient Wmclient->PATH;
-	menumod = load Menu Menu->PATH;
+	tk = load Tk Tk->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
 	str = load String String->PATH;
 	stderr = sys->fildes(2);
 
-	if(wmclient == nil) {
-		sys->fprint(stderr, "edit: cannot load Wmclient: %r\n");
-		raise "fail:cannot load Wmclient";
-	}
-	if(menumod == nil) {
-		sys->fprint(stderr, "edit: cannot load Menu: %r\n");
-		raise "fail:cannot load Menu";
+	if(tk == nil || tkclient == nil) {
+		sys->fprint(stderr, "edit: cannot load Tk: %r\n");
+		raise "fail:cannot load Tk";
 	}
 	if(str == nil) {
 		sys->fprint(stderr, "edit: cannot load String: %r\n");
 		raise "fail:cannot load String";
 	}
-	widgetmod = load Widget Widget->PATH;
-	if(widgetmod == nil) {
-		sys->fprint(stderr, "edit: cannot load Widget: %r\n");
-		raise "fail:cannot load Widget";
-	}
-	textwidget = load Textwidget Textwidget->PATH;
-	if(textwidget == nil) {
-		sys->fprint(stderr, "edit: cannot load Textwidget: %r\n");
-		raise "fail:cannot load Textwidget";
-	}
-	textwidget->init();
-	kbdfilter = Kbdfilter.new();
-	tabs = Tabulator.new(TABSTOP);
-
-	if(ctxt == nil) {
-		sys->fprint(stderr, "edit: no window context\n");
-		raise "fail:no context";
-	}
 
 	sys->pctl(Sys->NEWPGRP, nil);
-	wmclient->init();
+	tkclient->init();
 
 	# Initialize document
 	doc = newdoc(1);
@@ -323,56 +304,29 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	eventch = chan of string;
 	spawn startfsys();
 
-	# Create window
+	# Create the Tk toplevel
 	sys->sleep(100);
-	w = wmclient->window(ctxt, titlestr(), Wmclient->Appl);
-	display = w.display;
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
+	(top, wmctl) = tkclient->toplevel(ctxt, "-width 640 -height 480", titlestr(), Tkclient->Appl);
+	display = top.display;
 
-	# Load font
-	font = Font.open(display, "/fonts/combined/unicode.14.font");
-	if(font == nil)
-		font = Font.open(display, "*default*");
-	if(font == nil) {
-		sys->fprint(stderr, "edit: cannot load any font\n");
-		raise "fail:no font";
-	}
+	loadcolors();
 
-	# Create color images from theme (fall back to built-in constants)
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor = display.color(th.editbg);
-		fgcolor = display.color(th.edittext);
-		cursorcolor = display.color(th.editcursor);
-		selcolor = display.color(th.accent);
-		lncolor = display.color(th.editlineno);
-		dirtycolor = display.color(th.red);
-	} else {
-		bgcolor = display.color(BG);
-		fgcolor = display.color(FG);
-		cursorcolor = display.color(CURSORCOL);
-		selcolor = display.color(SELCOL);
-		lncolor = display.color(LNCOL);
-		dirtycolor = display.color(DIRTYCOL);
-	}
-	widgetmod->init(display, font);
-	scrollbar = Scrollbar.new(Rect((0,0),(0,0)), 1);
-	statbar = Statusbar.new(Rect((0,0),(0,0)));
+	# Action channel for menu / prompt tokens
+	actch = chan[16] of string;
+	tk->namechan(top, actch, "act");
+
+	buildui();
 
 	# Load file if specified
 	if(doc.filepath != "")
 		loadfile(doc.filepath);
 
-	# Set up window
-	w.reshape(Rect((0, 0), (640, 480)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
-	if(menumod != nil)
-		menumod->init(display, font);
-	menu := menumod->new(array[] of {"undo", "redo", "save", "save as", "find", "replace", "goto line", "select all", "cut", "copy", "paste", "exit"});
-
-	redraw();
+	rendertext();
 
 	# Write initial state so Veltro tool can read immediately after launch.
 	# Without this, body/addr/index files don't exist until the first user
@@ -380,268 +334,345 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	statedirty = 1;
 	writeeditstate();
 
-	# Cursor blink timer
+	# Periodic state writer / ctl-file poll
 	ticks := chan of int;
 	spawn timer(ticks, 500);
-	cursorvis := 1;
+
+	statedirty = 1;
+	writeeditstate();
 
 	# Listen for live theme changes
 	themech = chan[1] of int;
 	spawn themelistener();
 
-	# Track mouse for selection and multi-click
-	mousedown := 0;
-	lastclicktime := 0;
-	clickcount := 0;
-	lastclickline := -1;
-	lastclickcol := -1;
-	DBLCLICKMS: con 400;	# max ms between clicks for multi-click
-
 	for(;;) alt {
-	ctl := <-w.ctl or
-	ctl = <-w.ctxt.ctl =>
-		w.wmctl(ctl);
-		if(ctl != nil && ctl[0] == '!')
-			redraw();
-	rawkey := <-w.ctxt.kbd =>
-		key := kbdfilter.filter(rawkey);
-		if(key >= 0) {
-			cursorvis = 1;
-			if(doc.findmode) {
-				(done, val) := statbar.key(key);
-				if(done == 1) {
-					doc.findmode = 0;
-					doc.searchstr = val;
-					findnext();
-				} else if(done < 0)
-					doc.findmode = 0;
-				else
-					doc.findbuf = statbar.buf;
-			} else if(doc.gotomode) {
-				(done, val) := statbar.key(key);
-				if(done == 1) {
-					doc.gotomode = 0;
-					if(val != "") {
-						(ln, nil) := str->toint(val, 10);
-						if(ln > 0) {
-							doc.curline = ln - 1;
-							if(doc.curline >= doc.nlines)
-								doc.curline = doc.nlines - 1;
-							doc.curcol = 0;
-							scrolltocursor();
-						}
-					}
-				} else if(done < 0)
-					doc.gotomode = 0;
-				else
-					doc.gotobuf = statbar.buf;
-			} else if(doc.replacemode == 1) {
-				(done, val) := statbar.key(key);
-				if(done == 1) {
-					doc.replacefind = val;
-					doc.replacemode = 2;
-					doc.replacebuf = doc.replacewith;
-					statbar.prompt = "Replace with: ";
-					statbar.buf = doc.replacebuf;
-				} else if(done < 0)
-					doc.replacemode = 0;
-				else
-					doc.replacebuf = statbar.buf;
-			} else if(doc.replacemode == 2) {
-				(done, val) := statbar.key(key);
-				if(done == 1) {
-					doc.replacewith = val;
-					doc.replacemode = 0;
-					doreplace(doc.replacefind, doc.replacewith);
-				} else if(done < 0)
-					doc.replacemode = 0;
-				else
-					doc.replacebuf = statbar.buf;
-			} else if(doc.saveasmode) {
-				(done, val) := statbar.key(key);
-				if(done == 1) {
-					doc.saveasmode = 0;
-					if(val != "")
-						dosaveas(val);
-				} else if(done < 0)
-					doc.saveasmode = 0;
-				else
-					doc.saveasbuf = statbar.buf;
-			} else
-				handlekey(key);
+	c := <-wmctl or
+	c = <-top.ctxt.ctl or
+	# top.wreq carries Tk window requests (menu posts create their
+	# window through here); a loop that never drains it leaves every
+	# posted menu mapped-and-grabbing but windowless — invisible.
+	c = <-top.wreq =>
+		tkclient->wmctl(top, c);
+		if(c != nil && len c > 0 && c[0] == '!')
+			rendertext();
+	key := <-top.ctxt.kbd =>
+		if(prompting)
+			tk->keyboard(top, key);
+		else {
+			handlekey(key);
 			statedirty = 1;
-			redraw();
+			rendertext();
 		}
-	p := <-w.ctxt.ptr =>
-		if(!w.pointer(*p)) {
-			if(p.buttons & 4 && menumod != nil && menu != nil) {
-				n := menu.show(w.image, p.xy, w.ctxt.ptr);
-				case n {
-				0 => doundo();
-				1 => doredo();
-				2 => dosave();
-				3 => startsaveas();
-				4 => startfind();
-				5 => startreplace();
-				6 => startgoto();
-				7 => selectall();
-				8 => docut();
-				9 => docopy();
-				10 => dopaste();
-				11 =>
-					if(!checkdirty())
-						break;
-					postnote(1, sys->pctl(0, nil), "kill");
-					exit;
-				}
-				redraw();
-			} else if(p.buttons & 2) {
-				buf := wmclient->snarfget();
-				if(buf != "")
-					doc.snarf = buf;
-				if(doc.snarf != "") {
-					insertstring(doc.snarf);
-					doc.dirty = 1;
-				}
-				redraw();
-			} else if(p.buttons & 24) {
-				# Mouse wheel scroll
-				scrollbar.total = doc.nlines;
-				scrollbar.visible = vislines;
-				scrollbar.origin = doc.topline;
-				doc.topline = scrollbar.wheel(p.buttons, 3);
-				redraw();
-			} else if(scrollbar.isactive()) {
-				# Continue scrollbar drag
-				scrollbar.total = doc.nlines;
-				scrollbar.visible = vislines;
-				newo := scrollbar.track(p);
-				if(newo >= 0)
-					doc.topline = newo;
-				redraw();
-			} else if(p.buttons & 3) {
-				# B1 or B2 in scrollbar area
-				pr := w.image.r;
-				sth := widgetmod->statusheight();
-				sw := widgetmod->scrollwidth();
-				scrollr := Rect((pr.min.x, pr.min.y), (pr.min.x + sw, pr.max.y - sth));
-				if(scrollr.contains(p.xy)) {
-					scrollbar.total = doc.nlines;
-					scrollbar.visible = vislines;
-					scrollbar.origin = doc.topline;
-					newo := scrollbar.event(p);
-					if(newo >= 0)
-						doc.topline = newo;
-					redraw();
-				} else if(p.buttons & 1 && mousedown) {
-					# Drag: batch pending pointer events
-					done := 0;
-					while(!done) alt {
-					p2 := <-w.ctxt.ptr =>
-						if(p2.buttons & 1)
-							p = p2;
-						else {
-							p = p2;
-							done = 1;
-						}
-					* =>
-						done = 1;
-					}
-					(ml, mc2) := pos2cursor(p.xy);
-					if(!(p.buttons & 1)) {
-						# Button released inside batch — finalize
-						if(ml != doc.selstartline || mc2 != doc.selstartcol) {
-							doc.selactive = 1;
-							doc.selendline = ml;
-							doc.selendcol = mc2;
-						}
-						doc.curline = ml;
-						doc.curcol = mc2;
-						mousedown = 0;
-						redraw();
-					} else if(ml != doc.selendline || mc2 != doc.selendcol) {
-						doc.curline = ml;
-						doc.curcol = mc2;
-						doc.selactive = (ml != doc.selstartline || mc2 != doc.selstartcol);
-						if(doc.selactive) {
-							doc.selendline = ml;
-							doc.selendcol = mc2;
-						}
-						redraw();
-					}
-				} else {
-					# New click: detect single/double/triple
-					(ml, mc2) := pos2cursor(p.xy);
-					now := sys->millisec();
-					if(now - lastclicktime < DBLCLICKMS && ml == lastclickline && mc2 == lastclickcol)
-						clickcount++;
-					else
-						clickcount = 1;
-					lastclicktime = now;
-					lastclickline = ml;
-					lastclickcol = mc2;
-					if(clickcount >= 3) {
-						# Triple-click: select entire line
-						doc.curline = ml;
-						doc.curcol = 0;
-						doc.selactive = 1;
-						doc.selstartline = ml;
-						doc.selstartcol = 0;
-						doc.selendline = ml;
-						doc.selendcol = len doc.lines[ml];
-						doc.curcol = doc.selendcol;
-						clickcount = 0;
-					} else if(clickcount == 2) {
-						# Double-click: select word
-						(ws, we) := wordbound(ml, mc2);
-						doc.curline = ml;
-						doc.selactive = 1;
-						doc.selstartline = ml;
-						doc.selstartcol = ws;
-						doc.selendline = ml;
-						doc.selendcol = we;
-						doc.curcol = we;
-					} else {
-						# Single click: set anchor
-						doc.curline = ml;
-						doc.curcol = mc2;
-						doc.selactive = 0;
-						doc.selstartline = ml;
-						doc.selstartcol = mc2;
-					}
-					mousedown = 1;
-					redraw();
-				}
-			} else if(mousedown) {
-				# Button released: finalise selection
-				(ml, mc2) := pos2cursor(p.xy);
-				if(ml != doc.selstartline || mc2 != doc.selstartcol) {
-					doc.selactive = 1;
-					doc.selendline = ml;
-					doc.selendcol = mc2;
-					doc.curline = ml;
-					doc.curcol = mc2;
-				}
-				mousedown = 0;
-				redraw();
-			}
-		}
+	p := <-top.ctxt.ptr =>
+		# Tk owns mouse positioning / selection natively; mirror the
+		# resulting cursor and selection back into the document model.
+		tk->pointer(top, *p);
+		syncfromwidget();
+		updatestatus();
+	a := <-actch =>
+		handleaction(a);
 	<-ticks =>
-		cursorvis = !cursorvis;
-		drawcursor(cursorvis);
 		changed := checkctlfile();
-		if(changed)
+		if(changed) {
 			statedirty = 1;
+			rendertext();
+		}
 		writeeditstate();
-		if(changed)
-			redraw();
 	req := <-editreq =>
 		handleeditreq(req);
 		statedirty = 1;
-		redraw();
+		rendertext();
 	<-themech =>
 		reloadcolors();
-		redraw();
+		rendertext();
+	}
+}
+
+# ---------- UI construction ----------
+
+buildui()
+{
+	cmds := array[] of {
+		". configure -background " + c_bg,
+		"frame .main",
+		"scrollbar .main.sb -command {.main.t yview}",
+		"text .main.t -wrap none -yscrollcommand {.main.sb set}" +
+			" -font " + EDFONT +
+			" -background " + c_bg +
+			" -foreground " + c_fg +
+			" -selectbackground " + c_sel +
+			" -selectforeground " + c_bg,
+		"pack .main.sb -side left -fill y",
+		"pack .main.t -side left -fill both -expand 1",
+		"pack .main -side top -fill both -expand 1",
+		"label .status -anchor w -background " + c_bg + " -foreground " + c_dim,
+		"entry .prompt -background " + c_bg + " -foreground " + c_fg,
+		"pack .status -side bottom -fill x",
+		"pack propagate . 0",
+		# B3 context menu on the text body
+		"bind .main.t <Button-3> {send act menu %X %Y}",
+		"bind .prompt <Key-\n> {send act promptdone}",
+	};
+	tkcmds(cmds);
+	tk->cmd(top, sys->sprint("bind .prompt <Key-%c> {send act promptcancel}", 16r1b));
+	tk->cmd(top, "focus .main.t");
+	tk->cmd(top, "update");
+}
+
+tkcmds(cmds: array of string)
+{
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "edit: tk error %s on %s\n", e, cmds[i]);
+	}
+}
+
+# ---------- Action dispatch (menu items + prompt completion) ----------
+
+handleaction(a: string)
+{
+	(nil, toks) := sys->tokenize(a, " ");
+	if(toks == nil)
+		return;
+	tok := hd toks;
+	case tok {
+	"menu" =>
+		buildmenu();
+		tk->cmd(top, ".ctx post " + menuxyt(toks));
+	"promptdone" =>
+		val := tk->cmd(top, ".prompt get");
+		endprompt();
+		finishprompt(val);
+		rendertext();
+	"promptcancel" =>
+		endprompt();
+		promptkind = PNONE;
+		rendertext();
+	"undo" =>	doundo(); rendertext();
+	"redo" =>	doredo(); rendertext();
+	"save" =>	dosave(); rendertext();
+	"saveas" =>	startsaveas();
+	"find" =>	startfind();
+	"replace" =>	startreplace();
+	"goto" =>	startgoto();
+	"selall" =>	selectall(); rendertext();
+	"cut" =>	docut(); rendertext();
+	"copy" =>	docopy();
+	"paste" =>	dopaste(); rendertext();
+	"exit" =>
+		if(checkdirty()){
+			postnote(1, sys->pctl(0, nil), "kill");
+			exit;
+		}
+	}
+}
+
+buildmenu()
+{
+	tk->cmd(top, "destroy .ctx");
+	tk->cmd(top, "menu .ctx");
+	mitem("undo", "undo");
+	mitem("redo", "redo");
+	tk->cmd(top, ".ctx add separator");
+	mitem("cut", "cut");
+	mitem("copy", "copy");
+	mitem("paste", "paste");
+	mitem("select all", "selall");
+	tk->cmd(top, ".ctx add separator");
+	mitem("find", "find");
+	mitem("replace", "replace");
+	mitem("goto line", "goto");
+	tk->cmd(top, ".ctx add separator");
+	mitem("save", "save");
+	mitem("save as", "saveas");
+	mitem("exit", "exit");
+}
+
+mitem(label, verb: string)
+{
+	tk->cmd(top, sys->sprint(".ctx add command -label {%s} -command {send act %s}", label, verb));
+}
+
+menuxyt(toks: list of string): string
+{
+	if(toks != nil && tl toks != nil && tl tl toks != nil){
+		x := hd tl toks;
+		if(x != "" && x[0] >= '0' && x[0] <= '9')
+			return x + " " + hd tl tl toks;
+	}
+	return "40 40";
+}
+
+# ---------- Rendering: the text widget is a view of the document ----------
+
+# Rebuild the text widget from the document model, then reflect the
+# cursor and selection.  The document model stays the single source of
+# truth (so undo / find / the 9P body all keep working unchanged); the
+# widget is a pure renderer that also gives us native mouse + scrolling.
+rendertext()
+{
+	if(top == nil)
+		return;
+	tk->cmd(top, ".main.t delete 1.0 end");
+	tk->cmd(top, ".main.t insert end " + tk->quote(getbodytext()));
+	tk->cmd(top, ".main.t tag remove sel 1.0 end");
+	if(doc.selactive)
+		tk->cmd(top, sys->sprint(".main.t tag add sel %d.%d %d.%d",
+			doc.selstartline+1, doc.selstartcol, doc.selendline+1, doc.selendcol));
+	tk->cmd(top, sys->sprint(".main.t mark set insert %d.%d", doc.curline+1, doc.curcol));
+	tk->cmd(top, ".main.t see insert");
+	recalcvis();
+	updatestatus();
+	tk->cmd(top, "update");
+}
+
+# After native mouse handling, copy the widget's cursor and selection
+# back into the document model.
+syncfromwidget()
+{
+	(l, c) := parseindex(tk->cmd(top, ".main.t index insert"));
+	if(l >= 0){
+		doc.curline = l;
+		doc.curcol = c;
+	}
+	sf := tk->cmd(top, ".main.t index sel.first");
+	if(sf != nil && len sf > 0 && sf[0] >= '0' && sf[0] <= '9'){
+		sl := tk->cmd(top, ".main.t index sel.last");
+		(a, b) := parseindex(sf);
+		(d, e) := parseindex(sl);
+		if(a >= 0 && d >= 0){
+			doc.selactive = 1;
+			doc.selstartline = a; doc.selstartcol = b;
+			doc.selendline = d; doc.selendcol = e;
+		}
+	} else
+		doc.selactive = 0;
+}
+
+# "L.C" -> (L-1, C); (-1, 0) if unparseable.
+parseindex(s: string): (int, int)
+{
+	if(s == nil || len s == 0 || s[0] < '0' || s[0] > '9')
+		return (-1, 0);
+	(ls, cs) := splitdot(s);
+	(l, nil) := str->toint(ls, 10);
+	(c, nil) := str->toint(cs, 10);
+	return (l - 1, c);
+}
+
+splitdot(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '.')
+			return (s[:i], s[i+1:]);
+	return (s, "0");
+}
+
+recalcvis()
+{
+	ah := int tk->cmd(top, ".main.t cget -actheight");
+	rowpx := 16;
+	if(ah > 0)
+		vislines = ah / rowpx;
+	if(vislines < 1)
+		vislines = 1;
+}
+
+updatestatus()
+{
+	if(prompting || top == nil)
+		return;
+	name := doc.filepath;
+	if(name == "")
+		name = "(new)";
+	dq := "";
+	if(doc.dirty)
+		dq = " *";
+	s := sys->sprint("%s%s    -    Ln %d, Col %d", name, dq, doc.curline+1, doc.curcol+1);
+	tk->cmd(top, ".status configure -text " + tk->quote(s));
+}
+
+# ---------- Status-bar prompt (find / goto / replace / save-as) ----------
+
+PNONE, PFIND, PGOTO, PREPLACEFIND, PREPLACEWITH, PSAVEAS: con iota;
+promptkind := PNONE;
+preplacefind := "";
+
+beginprompt(kind: int, label: string)
+{
+	promptkind = kind;
+	prompting = 1;
+	tk->cmd(top, ".status configure -text " + tk->quote(label));
+	tk->cmd(top, ".prompt delete 0 end");
+	tk->cmd(top, "pack .prompt -side bottom -fill x");
+	tk->cmd(top, "focus .prompt");
+	tk->cmd(top, "update");
+}
+
+endprompt()
+{
+	prompting = 0;
+	tk->cmd(top, "pack forget .prompt");
+	tk->cmd(top, "focus .main.t");
+	tk->cmd(top, "update");
+}
+
+finishprompt(val: string)
+{
+	case promptkind {
+	PFIND =>
+		if(val != ""){
+			doc.searchstr = val;
+			findnext();
+		}
+	PGOTO =>
+		if(val != ""){
+			(ln, nil) := str->toint(val, 10);
+			if(ln > 0){
+				doc.curline = ln - 1;
+				if(doc.curline >= doc.nlines)
+					doc.curline = doc.nlines - 1;
+				doc.curcol = 0;
+				scrolltocursor();
+			}
+		}
+	PREPLACEFIND =>
+		preplacefind = val;
+		beginprompt(PREPLACEWITH, "Replace with:");
+		return;		# chained — keep prompting
+	PREPLACEWITH =>
+		doreplace(preplacefind, val);
+	PSAVEAS =>
+		if(val != "")
+			dosaveas(val);
+	}
+	promptkind = PNONE;
+}
+
+# ---------- Colour management ----------
+
+col(v: int): string
+{
+	return sys->sprint("#%06xff", v & 16rFFFFFF);
+}
+
+loadcolors()
+{
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme != nil){
+		th := lucitheme->gettheme();
+		c_bg = col(th.editbg >> 8);
+		c_fg = col(th.edittext >> 8);
+		c_sel = col(th.accent >> 8);
+		c_dim = col(th.editlineno >> 8);
+		c_cursor = col(th.editcursor >> 8);
+	} else {
+		c_bg = col(BG >> 8);
+		c_fg = col(FG >> 8);
+		c_sel = col(SELCOL >> 8);
+		c_dim = col(LNCOL >> 8);
+		c_cursor = col(CURSORCOL >> 8);
 	}
 }
 
@@ -754,7 +785,7 @@ handledocctl(cmd: string): string
 	"name" =>
 		if(rest != "") {
 			doc.filepath = rest;
-			w.settitle(titlestr());
+			tkclient->settitle(top, titlestr());
 		}
 		return "ok";
 	"clean" =>
@@ -834,7 +865,7 @@ handlegctl(cmd: string): string
 			doc.filepath = rest;
 			loadfile(doc.filepath);
 			sys->fprint(stderr, "edit: handlegctl open: loaded %d lines\n", doc.nlines);
-			w.settitle(titlestr());
+			tkclient->settitle(top, titlestr());
 			postevent("opened " + doc.filepath);
 		}
 		return "ok";
@@ -850,7 +881,7 @@ handlegctl(cmd: string): string
 		doc.selactive = 0;
 		doc.undocount = 0;
 		doc.redocount = 0;
-		w.settitle(titlestr());
+		tkclient->settitle(top, titlestr());
 		postevent("new");
 		return "ok";
 	"quit" =>
@@ -1313,60 +1344,6 @@ titlestr(): string
 	return s;
 }
 
-# ---------- Cursor position from screen coords ----------
-
-pos2cursor(p: Point): (int, int)
-{
-	if(w.image == nil)
-		return (doc.curline, doc.curcol);
-
-	textr := textrect();
-	maxw := textr.dx();
-
-	vy := p.y - textr.min.y;
-	if(vy < 0)
-		vy = 0;
-	clickvrow := vy / font.height;
-
-	vrow := 0;
-	for(i := doc.topline; i < doc.nlines; i++) {
-		expanded := tabs.expand(doc.lines[i]);
-		start := 0;
-		first := 1;
-		while(start < len expanded || first) {
-			first = 0;
-			k := textwidget->wrapend(font, expanded, start, maxw);
-			if(vrow == clickvrow) {
-				x := p.x - textr.min.x;
-				w2 := 0;
-				ek := start;
-				while(ek < k) {
-					cw := font.width(expanded[ek:ek+1]);
-					if(w2 + cw/2 > x)
-						break;
-					w2 += cw;
-					ek++;
-				}
-				return (i, tabs.unexpandcol(doc.lines[i], ek));
-			}
-			vrow++;
-			start = k;
-		}
-	}
-	return (doc.nlines - 1, len doc.lines[doc.nlines - 1]);
-}
-
-textrect(): Rect
-{
-	if(w.image == nil)
-		return Rect((0,0),(0,0));
-	r := w.image.r;
-	sth := widgetmod->statusheight();
-	sw := widgetmod->scrollwidth();
-	return Rect((r.min.x + sw + LNWIDTH, r.min.y + MARGIN),
-		    (r.max.x - MARGIN, r.max.y - sth));
-}
-
 # ---------- Keyboard handling ----------
 
 handlekey(key: int)
@@ -1517,25 +1494,19 @@ handlekey(key: int)
 
 startgoto()
 {
-	doc.gotomode = 1;
-	doc.gotobuf = "";
-	statbar.prompt = "Go to line: ";
-	statbar.buf = "";
+	beginprompt(PGOTO, "Go to line:");
 }
 
 startsaveas()
 {
-	doc.saveasmode = 1;
-	doc.saveasbuf = doc.filepath;
-	statbar.prompt = "Save as: ";
-	statbar.buf = doc.saveasbuf;
+	beginprompt(PSAVEAS, "Save as:");
 }
 
 dosaveas(path: string)
 {
 	doc.filepath = path;
 	if(savefile(doc.filepath))
-		w.settitle(titlestr());
+		tkclient->settitle(top, titlestr());
 }
 
 # ---------- Buffer manipulation ----------
@@ -1715,7 +1686,7 @@ docopy()
 	s := getseltext();
 	if(s != "") {
 		doc.snarf = s;
-		wmclient->snarfput(s);
+		snarfput(s);
 	}
 }
 
@@ -1727,7 +1698,7 @@ docut()
 
 dopaste()
 {
-	buf := wmclient->snarfget();
+	buf := snarfget();
 	if(buf != "")
 		doc.snarf = buf;
 	if(doc.snarf != "") {
@@ -1735,6 +1706,36 @@ dopaste()
 		insertstring(doc.snarf);
 		doc.dirty = 1;
 	}
+}
+
+# System clipboard via /chan/snarf, with an in-process fallback.
+snarfput(s: string)
+{
+	fd := sys->create("/chan/snarf", Sys->OWRITE, 8r666);
+	if(fd == nil)
+		fd = sys->open("/chan/snarf", Sys->OWRITE);
+	if(fd != nil){
+		b := array of byte s;
+		sys->write(fd, b, len b);
+	}
+}
+
+snarfget(): string
+{
+	fd := sys->open("/chan/snarf", Sys->OREAD);
+	if(fd == nil)
+		return doc.snarf;
+	s := "";
+	buf := array[4096] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s += string buf[:n];
+	}
+	if(s == "")
+		return doc.snarf;
+	return s;
 }
 
 # ---------- Undo ----------
@@ -1883,10 +1884,7 @@ doredo()
 
 startfind()
 {
-	doc.findmode = 1;
-	doc.findbuf = doc.searchstr;
-	statbar.prompt = "Find: ";
-	statbar.buf = doc.findbuf;
+	beginprompt(PFIND, "Find:");
 }
 
 findnext()
@@ -1941,10 +1939,7 @@ strindex(s, sub: string, start: int): int
 
 startreplace()
 {
-	doc.replacemode = 1;
-	doc.replacebuf = doc.replacefind;
-	statbar.prompt = "Replace: ";
-	statbar.buf = doc.replacebuf;
+	beginprompt(PREPLACEFIND, "Replace:");
 }
 
 doreplace(find, repl: string)
@@ -2100,7 +2095,7 @@ savefile(path: string): int
 		return 0;
 
 	doc.dirty = 0;
-	w.settitle(titlestr());
+	tkclient->settitle(top, titlestr());
 	postevent("save " + doc.filepath);
 	return 1;
 }
@@ -2113,159 +2108,6 @@ checkdirty(): int
 		return savefile(doc.filepath);
 	# Dirty unnamed file: refuse to quit (user must save or discard)
 	return 0;
-}
-
-# ---------- Drawing ----------
-
-redraw()
-{
-	if(w.image == nil)
-		return;
-
-	screen := w.image;
-	r := screen.r;
-	statusheight := widgetmod->statusheight();
-
-	screen.draw(r, bgcolor, nil, Point(0, 0));
-
-	textr := textrect();
-	maxvrows := 1;
-	if(font.height > 0)
-		maxvrows = textr.dy() / font.height;
-
-	sw := widgetmod->scrollwidth();
-	scrollbar.resize(Rect((r.min.x, r.min.y), (r.min.x + sw, r.max.y - statusheight)));
-	scrollbar.total = doc.nlines;
-	scrollbar.visible = vislines;
-	scrollbar.origin = doc.topline;
-	scrollbar.draw(screen);
-
-	y := textr.min.y;
-	vrow := 0;
-	(sl, sc, el, ec) := getsel();
-	for(i := doc.topline; i < doc.nlines && vrow < maxvrows; i++) {
-		lns := string (i + 1);
-		lnw := font.width(lns);
-		screen.text(Point(r.min.x + sw + LNWIDTH - MARGIN - lnw, y), lncolor, Point(0, 0), font, lns);
-
-		expanded := tabs.expand(doc.lines[i]);
-		start := 0;
-		first := 1;
-		while((start < len expanded || first) && vrow < maxvrows) {
-			first = 0;
-			k := textwidget->wrapend(font, expanded, start, textr.dx());
-			chunk := expanded[start:k];
-			if(doc.selactive && i >= sl && i <= el) {
-				selstart_ex := 0;
-				if(i == sl)
-					selstart_ex = tabs.expandedcol(doc.lines[i], sc);
-				selend_ex := len expanded;
-				if(i == el)
-					selend_ex = tabs.expandedcol(doc.lines[i], ec);
-				textwidget->drawselection(screen, font, selcolor,
-					expanded, start, k,
-					selstart_ex, selend_ex,
-					textr.min.x, y, font.height);
-			}
-			screen.text(Point(textr.min.x, y), fgcolor, Point(0, 0), font, chunk);
-			y += font.height;
-			vrow++;
-			start = k;
-		}
-	}
-	vislines = maxvrows;
-
-	drawcursor(1);
-	# Status bar
-	statbar.resize(Rect((r.min.x, r.max.y - statusheight), r.max));
-	if(doc.findmode) {
-		statbar.prompt = "Find: ";
-		statbar.buf = doc.findbuf;
-		statbar.leftcolor = nil;
-	} else if(doc.gotomode) {
-		statbar.prompt = "Go to line: ";
-		statbar.buf = doc.gotobuf;
-		statbar.leftcolor = nil;
-	} else if(doc.replacemode == 1) {
-		statbar.prompt = "Replace: ";
-		statbar.buf = doc.replacebuf;
-		statbar.leftcolor = nil;
-	} else if(doc.replacemode == 2) {
-		statbar.prompt = "Replace with: ";
-		statbar.buf = doc.replacebuf;
-		statbar.leftcolor = nil;
-	} else if(doc.saveasmode) {
-		statbar.prompt = "Save as: ";
-		statbar.buf = doc.saveasbuf;
-		statbar.leftcolor = nil;
-	} else {
-		statbar.prompt = nil;
-		info := doc.filepath;
-		if(info == "")
-			info = "(new file)";
-		if(doc.dirty) {
-			statbar.left = info + " [modified]";
-			statbar.leftcolor = dirtycolor;
-		} else {
-			statbar.left = info;
-			statbar.leftcolor = nil;
-		}
-		statbar.right = sys->sprint("Ln %d, Col %d  (%d lines)", doc.curline + 1, doc.curcol + 1, doc.nlines);
-	}
-	statbar.draw(screen);
-	screen.flush(Draw->Flushnow);
-}
-
-drawcursor(vis: int)
-{
-	if(w.image == nil)
-		return;
-	if(doc.curline < doc.topline)
-		return;
-
-	textr := textrect();
-	maxw := textr.dx();
-
-	# Walk visual rows from topline to find y for curline
-	y := textr.min.y;
-	for(i := doc.topline; i < doc.curline; i++) {
-		expanded := tabs.expand(doc.lines[i]);
-		start := 0;
-		first := 1;
-		while(start < len expanded || first) {
-			first = 0;
-			k := textwidget->wrapend(font, expanded, start, maxw);
-			y += font.height;
-			if(y >= textr.max.y)
-				return;
-			start = k;
-		}
-	}
-	if(y >= textr.max.y)
-		return;
-
-	# Find which wrapped chunk of curline contains the cursor
-	expanded := tabs.expand(doc.lines[doc.curline]);
-	ecol := tabs.expandedcol(doc.lines[doc.curline], doc.curcol);
-	start := 0;
-	first := 1;
-	while(start < len expanded || first) {
-		first = 0;
-		k := textwidget->wrapend(font, expanded, start, maxw);
-		if(ecol >= start && (ecol < k || k >= len expanded)) {
-			x := textr.min.x + font.width(expanded[start:ecol]);
-			col := cursorcolor;
-			if(!vis)
-				col = bgcolor;
-			w.image.line(Point(x, y), Point(x, y + font.height - 1), 0, 0, 0, col, Point(0, 0));
-			w.image.flush(Draw->Flushnow);
-			return;
-		}
-		y += font.height;
-		if(y >= textr.max.y)
-			return;
-		start = k;
-	}
 }
 
 # ---------- Helpers ----------
@@ -2293,20 +2135,17 @@ themelistener()
 
 reloadcolors()
 {
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor = display.color(th.editbg);
-		fgcolor = display.color(th.edittext);
-		cursorcolor = display.color(th.editcursor);
-		selcolor = display.color(th.accent);
-		lncolor = display.color(th.editlineno);
-		dirtycolor = display.color(th.red);
-	}
-	widgetmod->retheme(display);
-	wmclient->retheme(w);
-	if(menumod != nil)
-		menumod->retheme(display);
+	loadcolors();
+	if(top == nil)
+		return;
+	tkclient->wmctl(top, "retheme");
+	tkcmds(array[] of {
+		". configure -background " + c_bg,
+		".main.t configure -background " + c_bg + " -foreground " + c_fg +
+			" -selectbackground " + c_sel + " -selectforeground " + c_bg,
+		".status configure -background " + c_bg + " -foreground " + c_dim,
+		".prompt configure -background " + c_bg + " -foreground " + c_fg,
+	});
 }
 
 timer(c: chan of int, ms: int)

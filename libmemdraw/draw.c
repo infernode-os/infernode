@@ -373,7 +373,7 @@ struct Buffer {
 	uchar	*blu;
 	uchar	*alpha;
 	uchar	*grey;
-	ulong	*rgba;
+	u32int	*rgba;
 	int	delta;	/* number of bytes to add to pointer to get next pixel to the right */
 
 	/* used by boolcalc* for mask data */
@@ -1276,7 +1276,7 @@ readnbit(Param *p, uchar *buf, int y)
 	uchar *repl, *r, *w, *ow, bits;
 	int i, n, sh, depth, x, dx, npack, nbits;
 
-	b.rgba = (ulong*)buf;
+	b.rgba = (u32int*)buf;
 	b.grey = w = buf;
 	b.red = b.blu = b.grn = w;
 	b.alpha = &ones;
@@ -1454,7 +1454,7 @@ readcmap(Param *p, uchar *buf, int y)
 		}
 	}
 
-	b.rgba = (ulong*)(buf-copyalpha);
+	b.rgba = (u32int*)(buf-copyalpha);
 
 	if(convgrey){
 		b.grey = buf;
@@ -1521,7 +1521,7 @@ DBG print("copyalpha %d alphaonly %d convgrey %d isgrey %d\n", copyalpha, alphao
 			memmove(buf, r, dx*nb);
 			r = buf;
 		}
-		b.rgba = (ulong*)r;
+		b.rgba = (u32int*)r;
 		if(copyalpha)
 			b.alpha = r+img->shift[CAlpha]/8;
 		else
@@ -1574,7 +1574,7 @@ DBG print("%x\n", w[-1]);
 	}
 	
 	b.alpha = copyalpha ? buf : &ones;
-	b.rgba = (ulong*)buf;
+	b.rgba = (u32int*)buf;
 	if(alphaonly){
 		b.red = b.grn = b.blu = b.grey = nil;
 		if(!copyalpha)
@@ -1707,7 +1707,7 @@ readptr(Param *p, uchar *s, int y)
 	q = p->bytermin + y*p->bwidth;
 	b.red = q;	/* ptr to data */
 	b.grn = b.blu = b.grey = b.alpha = nil;
-	b.rgba = (ulong*)q;
+	b.rgba = (u32int*)q;
 	b.delta = p->img->depth/8;
 	return b;
 }
@@ -1824,7 +1824,7 @@ genconv(Param *p, uchar *buf, int y)
 
 	b.red = buf;
 	b.blu = b.grn = b.grey = b.alpha = nil;
-	b.rgba = (ulong*)buf;
+	b.rgba = (u32int*)buf;
 	b.delta = 0;
 	
 	return b;
@@ -2524,7 +2524,17 @@ memfillcolor(Memimage *i, ulong val)
 		p[2] = bits>>16;
 		p[3] = bits>>24;
 		bits = *(u32int*)p;
-		memsetl(wordaddr(i, i->r.min), bits, i->width*Dy(i->r));
+		/*
+		 * memsetl writes native ulong (8-byte on 64-bit) elements, but
+		 * bits is only a 32-bit pixel pattern, so on a 64-bit host that
+		 * would leave the high half of every word zero — i.e. zero every
+		 * other 32-bit pixel (a black/colour checkerboard, invisible on a
+		 * near-black surface but glaring on a light one).  memset32 always
+		 * writes 4-byte elements; the buffer is i->width native words, so
+		 * sizeof(ulong)/4 32-bit words per native word.
+		 */
+		memset32(wordaddr(i, i->r.min), bits,
+			i->width*Dy(i->r)*(int)(sizeof(ulong)/sizeof(u32int)));
 		break;
 	}
 }

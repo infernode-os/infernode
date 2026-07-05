@@ -348,6 +348,42 @@ tklabelgetimgs(Tk *tk, Image **image, Image **mask)
 		*image = tkl->bitmap;
 }
 
+/*
+ * A named image's contents (and possibly its size) have just been
+ * replaced - e.g. by tk->putimage into a bitmap image bound to a label.
+ * libtk has no Tk_ImageChanged-style notification, so any widget already
+ * displaying the image keeps its stale requested geometry and is never
+ * redrawn.  Walk the toplevel's flat widget list and re-run the label
+ * relayout (same sequence as tklabelconf) for every label-family widget
+ * showing this image, so dynamic images (fractals, etc.) appear without
+ * the app having to re-issue "configure -image".
+ */
+void
+tkimgchanged(TkTop *t, TkImg *tki)
+{
+	Tk *tk;
+	Image *im, *mask;
+	TkGeom g;
+	int bd;
+
+	if(tki == nil || tki->img == nil)
+		return;
+	for(tk = t->root; tk != nil; tk = tk->siblings){
+		if(tkmethod[tk->type]->getimgs != tklabelgetimgs)
+			continue;
+		im = mask = nil;
+		tklabelgetimgs(tk, &im, &mask);
+		if(im != tki->img && mask != tki->img)
+			continue;
+		g = tk->req;
+		bd = tk->borderwidth;
+		tksizelabel(tk);
+		tksettransparent(tk, tkhasalpha(tk->env, TkCbackgnd));
+		tkgeomchg(tk, &g, bd);
+		tk->dirty = tkrect(tk, 1);
+	}
+}
+
 static
 TkCmdtab tklabelcmd[] =
 {

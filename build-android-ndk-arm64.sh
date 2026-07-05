@@ -132,7 +132,7 @@ MK="$HOST_BIN/mk"
 # Order matters: lib9 first (everything depends on it), then libs that
 # only need libc + lib9, then libs that need other libs.
 echo "=== Cross-compiling C libraries ==="
-for lib in lib9 libbio libmp libsec libmath libmemdraw libmemlayer libdraw libfreetype; do
+for lib in lib9 libbio libmp libsec libmath libmemdraw libmemlayer libdraw libtk libfreetype; do
     if [ ! -d "$ROOT/$lib" ]; then
         continue
     fi

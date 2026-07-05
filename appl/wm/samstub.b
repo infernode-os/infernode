@@ -19,6 +19,8 @@ panic, whichtext, whichmenu: import samtk;
 
 include "samstub.m";
 
+include "samengine.m";
+
 sendsam:	chan of ref Sammsg;
 recvsam:	chan of ref Sammsg;
 
@@ -97,46 +99,33 @@ init(c: ref Context)
 	requested = nil;
 }
 
-start(): (ref Samio, chan of ref Sammsg)
+start(args: list of string): (ref Samio, chan of ref Sammsg)
 {
 	sys = load Sys Sys->PATH;
 
-	sys->bind("#C", "/", sys->MAFTER);
-
-	# Allocate a cmd device
-	ctl := sys->open("/cmd/clone", sys->ORDWR);
-	if(ctl == nil) {
-		fprint(stderr, "can't open /cmd/clone\n");
+	# The engine used to be a host binary reached over the #C command
+	# device (`exec sam -R`).  It is now a native Dis module spawned
+	# in-process and connected by a byte pipe; no host dependency.
+	engine := load Samengine Samengine->PATH;
+	if(engine == nil) {
+		fprint(stderr, "can't load sam engine %s: %r\n", Samengine->PATH);
 		return (nil, nil);
 	}
 
-	# Find out which one
-	buf := array[32] of byte;
-	n := sys->read(ctl, buf, len buf);
-	if(n <= 0) {
-		fprint(stderr, "can't read cmd device\n");
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0) {
+		fprint(stderr, "can't create sam pipe: %r\n");
 		return (nil, nil);
 	}
 
-	dir := "/cmd/"+string buf[0:n];
-
-	# Start the Command
-	n = sys->fprint(ctl, "exec "+ SAM);
-	if(n <= 0) {
-		fprint(stderr, "can't exec %s\n", SAM);
-		return (nil, nil);
-	}
-
-	data := sys->open(dir+"/data", sys->ORDWR);
-	if(data == nil) {
-		fprint(stderr, "can't open cmd data file\n");
-		return (nil, nil);
-	}
+	# fds[0] stays with the terminal; the engine owns fds[1].
+	spawn engine->run(fds[1], args);
+	fds[1] = nil;
 
 	sendsam = chan of ref Sammsg;
 	recvsam = chan of ref Sammsg;
 
-	samio := ref Samio(ctl, data, array[1] of byte, 0, 0);
+	samio := ref Samio(nil, fds[0], array[1] of byte, 0, 0);
 
 	spawn sender(samio, sendsam);
 	spawn receiver(samio, recvsam);

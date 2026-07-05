@@ -21,13 +21,17 @@ samio: ref Samio;
 
 ctxt: ref Context;
 
-init(context: ref draw->Context, nil: list of string)
+init(context: ref draw->Context, argv: list of string)
 {
 	recvsam: chan of ref Sammsg;
 
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	stderr = sys->fildes(2);
+
+	# drop the program name; the rest are files to open.
+	if(argv != nil)
+		argv = tl argv;
 
 	logfd = sys->create("samterm.log", sys->OWRITE, 8r666);
 	if (logfd == nil) {
@@ -36,6 +40,10 @@ init(context: ref draw->Context, nil: list of string)
 	}
 
 	fprint(logfd, "Samterm started\n");
+	fprint(logfd, "ctxt: nonnil=%d display=%d wm=%d\n",
+		context != nil,
+		context != nil && context.display != nil,
+		context != nil && context.wm != nil);
 
 	pgrp := sys->pctl(sys->NEWPGRP, nil);
 
@@ -77,7 +85,7 @@ init(context: ref draw->Context, nil: list of string)
 	}
 	samstub->init(ctxt);
 
-	(samio, recvsam) = samstub->start();
+	(samio, recvsam) = samstub->start(argv);
 	if (samio == nil) {
 		fprint(stderr, "couldn't start samstub\n");
 		return;

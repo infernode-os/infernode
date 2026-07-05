@@ -12,9 +12,15 @@ TARG=\
 	wallet.dis\
 	lens.dis\
 	man.dis\
+	presrender.dis\
 	settings.dis\
 	editor.dis\
 	fractals.dis\
+	tetris.dis\
+	coffee.dis\
+	memory.dis\
+	rt.dis\
+	deb.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\
@@ -22,11 +28,13 @@ TARG=\
 	sam.dis\
 	samtk.dis\
 	samstub.dis\
+	samengine.dis\
 
 MODULES=\
 	samterm.m\
 	samtk.m\
 	samstub.m\
+	samengine.m\
 
 SYSMODULES=\
 	arg.m\
@@ -46,6 +54,7 @@ SYSMODULES=\
 	menu.m\
 	menuhit.m\
 	plumbmsg.m\
+	scoretable.m\
 	sh.m\
 	string.m\
 	styx.m\
@@ -54,7 +63,6 @@ SYSMODULES=\
 	tk.m\
 	tkclient.m\
 	webclient.m\
-	widget.m\
 	winplace.m\
 	wmclient.m\
 	wmlib.m\

@@ -1123,6 +1123,18 @@ Display_newimage(void *fp)
 	locked = lockdisplay(d);
 	*f->ret = allocdrawimage((DDisplay*)f->d, f->r, f->chans.desc,
 				nil, f->repl, f->color);
+	if(*f->ret == H){
+		char err[ERRMAX];
+		Memimage *si;
+
+		err[0] = 0;
+		kgerrstr(err, sizeof err);
+		si = ((DDisplay*)f->d)->display->image;
+		print("Display_newimage FAIL: r=(%d,%d)-(%d,%d) chan=%.8lux repl=%d color=%#ux screenchan=%.8lux: %s\n",
+			f->r.min.x, f->r.min.y, f->r.max.x, f->r.max.y,
+			f->chans.desc, f->repl, f->color,
+			si != nil ? si->chan : 0, err);
+	}
 	if(locked)
 		unlockdisplay(d);
 }

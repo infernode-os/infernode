@@ -6,10 +6,11 @@
 
 /* Layout constants */
 enum {
-	Triangle	= 10,	/* Height of scroll bar triangle */
-	Elembw	= 1,		/* border around elements (triangles etc.) */
+	Triangle	= 10,	/* bar thickness → width 12 (Triangle+2), matching the old toolkit's SCROLLW */
+	Elembw	= 1,		/* border around elements */
 	Scrollbw	= 1,		/* bevel border on scrollbar */
 	Tribw=	1,	/* shadow border on triangle */
+	Slidermin	= 8,	/* minimum thumb length so it stays grabbable */
 };
 
 typedef struct TkScroll TkScroll;
@@ -165,142 +166,95 @@ tkfreescrlb(Tk *tk)
 		free(tks->cmd);
 }
 
+/*
+ * Brutalism is 2D: the thumb is a flat filled rectangle, no bevel, no
+ * arrows.  It sits on the flat trough (the toplevel background) and turns
+ * accent while hovered or dragged.
+ */
 static void
-drawarrow(TkScroll *tks, Image *i, Point p[3], TkEnv *e, int activef, int buttonf)
+drawslider(TkScroll *tks, Image *i, Rectangle r, TkEnv *e)
 {
-	Image *l, *d, *t;
-	int bgnd;
+	int col;
 
-	bgnd = TkCbackgnd;
-	if(tks->flag & (activef|buttonf)) {
-		bgnd = TkCactivebgnd;
-		fillpoly(i, p, 3, ~0, tkgc(e, bgnd), p[0]);
-	}
-
-	l = tkgc(e, bgnd+TkLightshade);
-	d = tkgc(e, bgnd+TkDarkshade);
-	if(tks->flag & buttonf) {
-		t = d;
-		d = l;
-		l = t;
-	}
-	line(i, p[1], p[2], 0, 0, Tribw-1, d, p[1]);
-	line(i, p[2], p[0], 0, 0, Tribw-1, d, p[2]);
-	line(i, p[0], p[1], 0, 0, Tribw-1, l, p[0]);
-}
-
-static void
-drawslider(TkScroll *tks, Image *i, Point o, int w, int h, TkEnv *e)
-{
-	Image *l, *d;
-	Rectangle r;
-	int bgnd;
-
-	bgnd = TkCbackgnd;
-	if(tks->flag & (ActiveB1|ButtonB1)) {
-		r.min = o;
-		r.max.x = o.x + w + Elembw*2;
-		r.max.y = o.y + h + Elembw*2;
-		bgnd = TkCactivebgnd;
-		draw(i, r, tkgc(e, bgnd), nil, ZP);
-	}
-
-	l = tkgc(e, bgnd+TkLightshade);
-	d = tkgc(e, bgnd+TkDarkshade);
-	if(tks->flag & ButtonB1)
-		tkbevel(i, o, w, h, Scrollbw, d, l);
-	else
-		tkbevel(i, o, w, h, Scrollbw, l, d);
+	col = TkCdisablefgnd;			/* resting: a flat mid-grey thumb */
+	if(tks->flag & (ActiveB1|ButtonB1))
+		col = TkCselectbgnd;		/* hovered / dragged: accent */
+	draw(i, r, tkgc(e, col), nil, ZP);
 }
 
 static void
 tkvscroll(Tk *tk, TkScroll *tks, Image *i, Point size)
 {
 	TkEnv *e;
-	Point p[3], o;
-	int bo, w, h, triangle;
+	Rectangle r;
+	int bo, top, len, sl, sh;
 
 	e = tk->env;
-
-	triangle = tk->act.width - Elembw;
-
 	bo = tk->borderwidth + Elembw;
-	p[0].x = size.x/2;
-	p[0].y = bo;
-	p[1].x = p[0].x - triangle/2;
-	p[1].y = p[0].y + triangle;
-	p[2].x = p[0].x + triangle/2;
-	p[2].y = p[0].y + triangle;
-	drawarrow(tks, i, p, e, ActiveA1, ButtonA1);
 
-	tks->a1 = p[2].y;
-	h = p[2].y + Elembw;
+	/* no arrows: the trough runs the full length of the bar */
+	tks->a1 = bo;
+	tks->a2 = size.y - bo;
 
-	p[0].y = size.y - bo - 1;
-	p[1].y = p[0].y - triangle;
-	p[2].y = p[0].y - triangle;
-	drawarrow(tks, i, p, e, ActiveA2, ButtonA2);
+	top = bo;
+	len = size.y - 2*bo;
+	if(len < 1)
+		len = 1;
 
-	tks->a2 = p[2].y;
+	sl = top + TKF2I(tks->top*len);			/* thumb top */
+	sh = TKF2I((tks->bot - tks->top)*len);		/* thumb height */
+	if(sh < Slidermin)
+		sh = Slidermin;
+	if(sl + sh > top + len)
+		sl = top + len - sh;
+	if(sl < top)
+		sl = top;
 
-	o.x = tk->borderwidth ;
-	o.y = bo + triangle + 2*Elembw;
-	w = size.x - 2*bo;
-	h = p[2].y - 2*Elembw - h - 2*tk->borderwidth;
+	tks->t1 = sl - Elembw;
+	tks->t2 = sl + sh + Elembw;
 
-	o.y += TKF2I(tks->top*h);
-	h *= tks->bot - tks->top;
-	h = TKF2I(h);
-
-	tks->t1 = o.y - Elembw;
-	tks->t2 = o.y + h + Elembw;
-
-	drawslider(tks, i, o, w, h, e);
+	r.min.x = tk->borderwidth;
+	r.min.y = sl;
+	r.max.x = size.x - tk->borderwidth;
+	r.max.y = sl + sh;
+	drawslider(tks, i, r, e);
 }
 
 static void
 tkhscroll(Tk *tk, TkScroll *tks, Image *i, Point size)
 {
 	TkEnv *e;
-	Point p[3], o;
-	int bo, w, h, triangle;
+	Rectangle r;
+	int bo, left, len, sl, sw;
 
 	e = tk->env;
-
-	triangle = tk->act.height - Elembw;
-
 	bo = tk->borderwidth + Elembw;
-	p[0].x = bo;
-	p[0].y = size.y/2;
-	p[1].x = p[0].x + triangle;
-	p[1].y = p[0].y - triangle/2 + 1;
-	p[2].x = p[0].x + triangle;
-	p[2].y = p[0].y + triangle/2 - 2;
-	drawarrow(tks, i, p, e, ActiveA1, ButtonA1);
 
-	tks->a1 = p[2].x;
-	w = p[2].x + Elembw;
+	tks->a1 = bo;
+	tks->a2 = size.x - bo;
 
-	p[0].x = size.x - bo - 1;
-	p[1].x = p[0].x - triangle;
-	p[2].x = p[0].x - triangle;
-	drawarrow(tks, i, p, e, ActiveA2, ButtonA2);
+	left = bo;
+	len = size.x - 2*bo;
+	if(len < 1)
+		len = 1;
 
-	tks->a2 = p[2].x;
+	sl = left + TKF2I(tks->top*len);		/* thumb left */
+	sw = TKF2I((tks->bot - tks->top)*len);		/* thumb width */
+	if(sw < Slidermin)
+		sw = Slidermin;
+	if(sl + sw > left + len)
+		sl = left + len - sw;
+	if(sl < left)
+		sl = left;
 
-	o.x = bo + triangle + 2*Elembw;
-	o.y = tk->borderwidth;
-	w = p[2].x - 2*Elembw - w - 2*tk->borderwidth;
-	h = size.y - 2*bo;
+	tks->t1 = sl - Elembw;
+	tks->t2 = sl + sw + Elembw;
 
-	o.x += TKF2I(tks->top*w);
-	w *= tks->bot - tks->top;
-	w = TKF2I(w);
-
-	tks->t1 = o.x - Elembw;
-	tks->t2 = o.x + w + Elembw;
-
-	drawslider(tks, i, o, w, h, e);
+	r.min.x = sl;
+	r.min.y = tk->borderwidth;
+	r.max.x = sl + sw;
+	r.max.y = size.y - tk->borderwidth;
+	drawslider(tks, i, r, e);
 }
 
 char*

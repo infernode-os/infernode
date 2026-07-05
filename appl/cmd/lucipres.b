@@ -321,12 +321,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Load viewport
 	vpmod = load Viewport Viewport->PATH;
 
-	# Load plumbmsg (send-only: no input port needed)
-	plumbmod = load Plumbmsg Plumbmsg->PATH;
-	if(plumbmod != nil) {
-		if(plumbmod->init(0, nil, 0) < 0)
-			plumbmod = nil;
-	}
+	# Start the plumb consumer in ITS OWN PROC.  It opens the
+	# 'presentation' plumb port (served by the plumber from boot.sh) and
+	# turns file-opens into artifacts — see plumbreceiver().
+	#
+	# CRUCIAL: this must NOT run inline in init().  The port open can block
+	# on the plumber (a 9P open waits for the server), and blocking here
+	# would stop init ever reaching loadpresentation()/redrawpres() below —
+	# i.e. the tab strip and the taskboard would never draw at all (the
+	# "Tasks panel gone" regression).  The consumer is optional: every
+	# picker falls back to writing /mnt/ui directly if it never comes up.
+	spawn plumbreceiver();
 
 	# Load bufio + GIF writer for image export
 	bufio = load Bufio Bufio->PATH;
@@ -794,12 +799,9 @@ drawpresentation(zone: Rect)
 	if(centart == nil && artifacts != nil)
 		centart = hd artifacts;
 
-	if(centart == nil) {
-		drawcentertext(zone, "No artifacts");
-		return;
-	}
-
-	# Tab strip at top
+	# Tab strip at top — always drawn so every activity shows its tab
+	# display, even one holding no artifacts.  (The task browser / taskboard
+	# stays exclusive to activity 0; this only guarantees the strip itself.)
 	tabh := mainfont.height + 12;
 	if(mobile && tabh < 132)
 		tabh = 132;	# 44pt finger tap target for the tab strip
@@ -863,7 +865,15 @@ drawpresentation(zone: Rect)
 	# Content area
 	contentr := Rect((zone.min.x, tabr.max.y + 1), (zone.max.x, zone.max.y));
 	prescontentr = contentr;
+	# No artifacts (e.g. an empty non-zero activity): the tab strip is drawn
+	# above; show the placeholder in the body rather than skipping the strip.
+	if(centart == nil) {
+		drawcentertext(contentr, "No artifacts");
+		return;
+	}
 	contentw := contentr.dx() - 2 * pad;
+	contenty := contentr.min.y + pad;
+	pres_viewport_h = contentr.dy() - 2 * pad;
 
 	# Invalidate render caches on width change
 	if(contentw != artrendw) {
@@ -872,15 +882,20 @@ drawpresentation(zone: Rect)
 		artrendw = contentw;
 	}
 
-	contenty := contentr.min.y + pad;
-	pres_viewport_h = contentr.dy() - 2 * pad;
-
+	# Draw the centered artifact's content INLINE, in this same window.
+	#
+	# Restored from the pre-2026-07-04 design.  The presrender split drew
+	# content in a SEPARATE window that lucifer revealed via z-order
+	# (top()) but loaded via a droppable non-blocking event — the two
+	# desynced on real displays, leaving presrender shown-but-empty ("No
+	# content").  Owning the tab strip AND the content in one window makes
+	# "shown" and "loaded" the same act, so they can't desync.  The async
+	# render path (renderartasync → renderdonech → handlerenderdone) is
+	# unchanged; only the draw dispatch below came back.
 	case centart.atype {
 	"text" or "code" =>
-		if(centart.atype == "code") {
-			codebg2 := codebgcol_g;
-			mainwin.draw(contentr, codebg2, nil, (0, 0));
-		}
+		if(centart.atype == "code")
+			mainwin.draw(contentr, codebgcol_g, nil, (0, 0));
 		ls := splitlines(centart.data);
 		total_h := listlen(ls) * monofont_g.height;
 		newmax2 := total_h - pres_viewport_h;
@@ -911,7 +926,6 @@ drawpresentation(zone: Rect)
 		if(centart.data == "")
 			drawcentertext(contentr, "(empty)");
 	"pdf" =>
-		# PDF needs special nav UI; rendering delegated to registry
 		navh := mainfont.height + 8;
 		pdfcontent := Rect(contentr.min, (contentr.max.x, contentr.max.y - navh));
 		pdfnav := Rect((contentr.min.x, contentr.max.y - navh), contentr.max);
@@ -923,17 +937,17 @@ drawpresentation(zone: Rect)
 	"table" =>
 		drawtable(centart, contentr, pad, contentw, contenty);
 	"app" =>
-		# Always draw the placeholder — the app's own window covers it
-		# once the app connects and is topped in the z-stack.  Without
-		# this, there's a black flash between appstatus="running" and
-		# the app's first frame (the window hasn't been allocated yet).
-		drawcentertext(contentr, "Launching " + centart.label + "...");
+		# Only while the app is still starting; a running app's own window
+		# owns this area (a placeholder would bleed through partial-paint
+		# apps like tetris/matrix).
+		if(centart.appstatus != "running")
+			drawcentertext(contentr, "Launching " + centart.label + "...");
 	"taskboard" =>
 		drawtaskboard(contentr, pad);
 	"diff" =>
 		drawdiff(centart, contentr, pad, contentw, contenty);
 	* =>
-		# All other renderable types: markdown, doc, image, mermaid, etc.
+		# markdown, doc, image, mermaid, … — rendered off the event loop.
 		if(centart.rendimg == nil && centart.data != "") {
 			if(centart.rendering == 0) {
 				centart.rendering = 1;
@@ -945,10 +959,9 @@ drawpresentation(zone: Rect)
 			drawrendimg(centart, contentr, pad, contentw, nil);
 		} else if(centart.rendering == 1)
 			drawcentertext(contentr, "Rendering...");
-		else if(centart.rendering == 2) {
-			# Render failed — show fallback text
+		else if(centart.rendering == 2)
 			drawfallbacktext(centart, contentr, pad, contentw, contenty);
-		} else if(centart.data == "")
+		else if(centart.data == "")
 			drawcentertext(contentr, "(empty)");
 		else
 			drawfallbacktext(centart, contentr, pad, contentw, contenty);
@@ -1415,6 +1428,123 @@ launchexport(label, filepath: string)
 		sys->write(fd, b, len b);
 		fd = nil;
 	}
+}
+
+# --- Plumb consumer: open files into the presentation view ---
+#
+# Runs in its own proc, blocking on the 'presentation' plumb port.  It
+# only writes /mnt/ui (the luciuisrv authority) — it never touches this
+# module's own artifact/centeredart state, so there is no race with the
+# event loop: luciuisrv's "presentation new/current" events drive the UI
+# update the normal way.
+
+plumbseq := 0;
+
+plumbreceiver()
+{
+	# Runs off the init path so a slow/absent plumber never stalls the UI.
+	plumbmod = load Plumbmsg Plumbmsg->PATH;
+	if(plumbmod == nil)
+		return;
+	for(tries := 0; plumbmod->init(1, "presentation", 8192) < 0; tries++) {
+		if(tries >= 50) {	# ~10s — give up; pickers use the /mnt/ui fallback
+			sys->fprint(sys->fildes(2), "lucipres: plumb consumer unavailable (no plumber?)\n");
+			plumbmod = nil;
+			return;
+		}
+		sys->sleep(200);
+	}
+	sys->fprint(sys->fildes(2), "lucipres: plumb consumer listening on 'presentation'\n");
+	for(;;) {
+		m := Msg.recv();
+		if(m == nil)
+			break;
+		if(m.data != nil)
+			openintopres(string m.data);
+	}
+}
+
+# Open a file path into the presentation view, choosing the renderer by
+# type: pdf/image/markdown become content artifacts, everything else opens
+# in the editor.  Mirrors ftree's direct path so both routes behave the
+# same.
+openintopres(path: string)
+{
+	path = strip(path);
+	if(path == "" || actid_g < 0)
+		return;
+	name := plumbbasename(path);
+	ext := plumblower(plumbext(path));
+
+	plumbseq++;
+	id := sys->sprint("plumb-%d", plumbseq);
+
+	atype := "";
+	readcontent := 0;
+	case ext {
+	"pdf" =>
+		atype = "pdf";
+	"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
+		atype = "image";
+	"md" or "markdown" =>
+		atype = "markdown";
+		readcontent = 1;
+	* =>
+		atype = "app";		# text/source/unknown -> editor
+	}
+
+	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	if(atype == "app") {
+		# The editor reads its argv from the data field the instant the
+		# artifact is created, so the path must ride in the create command
+		# (data= is terminal, hence last).
+		writetofile(ctlpath, sys->sprint(
+			"create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s",
+			id, name, path));
+	} else {
+		writetofile(ctlpath, sys->sprint("create id=%s type=%s label=%s",
+			id, atype, name));
+		data := path;
+		if(readcontent) {
+			c := readfile(path);
+			if(c != nil)
+				data = c;
+		}
+		writetofile(sys->sprint("%s/activity/%d/presentation/%s/data",
+			mountpt_g, actid_g, id), data);
+	}
+	writetofile(ctlpath, "center id=" + id);
+}
+
+plumbbasename(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return path[i+1:];
+	return path;
+}
+
+plumbext(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--) {
+		if(path[i] == '.')
+			return path[i+1:];
+		if(path[i] == '/')
+			break;
+	}
+	return "";
+}
+
+plumblower(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		r[len r] = c;
+	}
+	return r;
 }
 
 findartifact(id: string): ref Artifact

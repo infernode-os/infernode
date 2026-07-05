@@ -1,27 +1,17 @@
 implement WmWallet;
 
 #
-# wallet - Cryptocurrency & fiat wallet manager for Lucifer
+# wallet - Crypto/fiat wallet manager for Lucifer (Tk version)
 #
-# GUI front-end to wallet9p (/n/wallet/) for managing accounts,
-# viewing addresses and balances, and setting budgets.
+# A GUI front-end to wallet9p (/n/wallet). Lists accounts, shows address
+# and balance, transaction history, and sends payments. Private keys live
+# in factotum behind wallet9p; this app only drives the ctl interface.
 #
-# The app does NOT handle private keys directly — all key operations
-# go through wallet9p which uses factotum for secure key storage.
+# Two panes: account list (left), details / forms (right). Styled by the
+# brutalist Tk defaults.
 #
-# Layout:
-#   Left pane (35%)   account list
-#   Right pane (65%)  account details or import form
-#
-# Mouse:
-#   Button 1     select account / interact with fields
-#   Button 3     context menu (new, import, delete, refresh)
-#
-# Keyboard:
-#   Tab          cycle focus between fields
-#   Enter        confirm / import
-#   Escape       cancel form
-#   Ctrl-Q       quit
+# Mouse:  B1 select / interact   B3 context menu
+# Keys:   Tab next field, Enter submit, Escape cancel, Ctrl-Q quit
 #
 
 include "sys.m";
@@ -29,33 +19,33 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Font, Image, Point, Rect, Pointer: import draw;
+	Display: import draw;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
 
-include "menu.m";
-	menumod: Menu;
-	Popup: import menumod;
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "string.m";
 	str: String;
 
 include "lucitheme.m";
-
-include "sh.m";
-
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar, Statusbar, Textfield, Listbox, Button, Label, Dropdown, Kbdfilter: import widgetmod;
+	lucitheme: Lucitheme;
+	Theme: import lucitheme;
 
 WmWallet: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-# ── Account representation ───────────────────────────────────
+Command: module
+{
+	init: fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+# ── Account ───────────────────────────────────────────────────
 
 AcctInfo: adt {
 	name:    string;
@@ -63,1079 +53,797 @@ AcctInfo: adt {
 	address: string;
 };
 
-# ── View modes ───────────────────────────────────────────────
+# ── Modes ─────────────────────────────────────────────────────
 
 ModeView, ModeNewETH, ModeImport, ModePay: con iota;
 
-# ── State ────────────────────────────────────────────────────
+Field: adt {
+	path:    string;
+	label:   string;
+	secret:  int;
+	prefill: string;
+};
 
-w: ref Window;
-display_g: ref Display;
-font: ref Font;
-kf: ref Kbdfilter;
-sbar: ref Statusbar;
-acctlist: ref Listbox;
-mainmenu: ref Popup;
-detailmenu: ref Popup;
+# Networks offered by the View-pane dropdown.
+networks := array[] of { "Ethereum Sepolia", "Base Sepolia", "Ethereum Mainnet", "Base" };
 
-# Detail pane labels
-lbl_name:    ref Label;
-lbl_addr:    ref Label;
-lbl_chain:   ref Label;
-lbl_balance: ref Label;
-lbl_addrval: ref Label;
-lbl_chainval:ref Label;
-lbl_balval:  ref Label;
-lbl_balval2: ref Label;
+# ── State ─────────────────────────────────────────────────────
 
-# Transaction history
-lbl_history: ref Label;
-historylist: ref Listbox;
-historyraw:  list of string;	# raw history lines for txhash extraction
-
-# Network selector
-dd_network: ref Dropdown;
-networknames: array of string;
-
-# Balance cache (avoid blocking GUI on RPC calls)
-cachedbalance: string;
-balancefetchactive: int;
-
-# Balance refresh
+top:    ref Toplevel;
+wmctl:  chan of string;
+actch:  chan of string;
 balancech: chan of int;
-
-# Form fields (import mode)
-f_name:   ref Textfield;
-f_key:    ref Textfield;
-
-# Pay form fields
-btn_send:     ref Button;	# Send Payment button in detail view
-f_recipient:  ref Textfield;
-f_amount:     ref Textfield;
-dd_token:     ref Dropdown;
-btn_pay:      ref Button;
-btn_paycancel: ref Button;
-
-# Pending payment approval
-pendingcount: int;
 pendingch: chan of int;
-
-f_chain:  ref Textfield;
-btn_ok:   ref Button;
-btn_cancel: ref Button;
-
-# Colours
-bgcolor:   ref Image;
-panebg:    ref Image;
-divcolor:  ref Image;
-
-# App state
-accounts:   array of ref AcctInfo;
-mode:       int;
-formfields: array of ref Textfield;
-focusidx:   int;
-dirty:      int;
-
+themech:   chan of int;
 stderr: ref Sys->FD;
-themech: chan of int;
 
-# ── Layout constants ─────────────────────────────────────────
+accts:  array of ref AcctInfo;
+selacct: int;		# index into accts, -1 = none
+mode:   int;
+fields: array of ref Field;	# fields of the current form
+focusi: int;
+cachedbalance: string;
+pendingcount: int;
+historyraw: list of string;
+accent: string;
+dim:    string;
+bgc:      string;	# theme background
+statusbg: string;	# status-strip background
+statusfg: string;	# status-strip foreground
 
-CAT_WIDTH_FRAC: con 35;
-FIELD_SPACING: con 4;
-FORM_MARGIN: con Widget->FORM_MARGIN;
-BTN_W: con 90;
-LEFT: con 0;
+WALLET: con "/n/wallet";
+LBLW:   con 96;		# pixel width of the aligned label column
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	wmclient = load Wmclient Wmclient->PATH;
-	menumod = load Menu Menu->PATH;
+	tk = load Tk Tk->PATH;
 	str = load String String->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
 	stderr = sys->fildes(2);
+	if(tkclient == nil){
+		sys->fprint(stderr, "wallet: cannot load tkclient: %r\n");
+		raise "fail:load tkclient";
+	}
+	lucitheme = load Lucitheme Lucitheme->PATH;
 
-	if(ctxt == nil) {
+	sys->pctl(Sys->NEWPGRP, nil);
+	tkclient->init();
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
+	if(ctxt == nil){
 		sys->fprint(stderr, "wallet: no window context\n");
 		raise "fail:no context";
 	}
 
-	sys->pctl(Sys->NEWPGRP, nil);
-
-	# Ensure wallet9p is running
+	loadtheme();
 	ensurewallet9p();
 
-	wmclient->init();
-	sys->sleep(100);
+	(top, wmctl) = tkclient->toplevel(ctxt, "-width 520 -height 400",
+		"Wallet", Tkclient->Appl);
 
-	w = wmclient->window(ctxt, "Wallet", Wmclient->Appl);
-	display_g = w.display;
-
-	font = Font.open(display_g, "/fonts/combined/unicode.sans.14.font");
-	if(font == nil)
-		font = Font.open(display_g, "*default*");
-
-	loadcolors();
-
-	if(widgetmod == nil)
-		widgetmod = load Widget Widget->PATH;
-	widgetmod->init(display_g, font);
-
-	if(menumod != nil) {
-		menumod->init(display_g, font);
-		mainmenu = menumod->new(array[] of {
-			"New Ethereum Account",
-			"Import Private Key",
-			"",
-			"Refresh",
-		});
-		detailmenu = menumod->new(array[] of {
-			"Send Payment",
-			"Copy Address",
-			"Copy Account Name",
-			"Copy Tx Hash",
-			"Refresh Balance",
-		});
-	}
-
-	kf = Kbdfilter.new();
-
-	w.reshape(Rect((0, 0), (520, 400)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
-
-	mode = ModeView;
-	focusidx = -1;
-	sys->sleep(500);	# let wallet9p finish restoring
-	layoutall();
-	refreshaccounts();
-	dirty = 1;
-
+	actch = chan[8] of string;
+	tk->namechan(top, actch, "act");
+	balancech = chan[1] of int;
+	pendingch = chan[1] of int;
 	themech = chan[1] of int;
+
+	selacct = -1;
+	mode = ModeView;
+	buildbase();
+	refreshaccounts();
+	setmode(ModeView);
+
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
+
 	spawn themelistener();
-
-	balancech = chan of int;
 	spawn balancetimer();
-
-	pendingch = chan of int;
 	spawn pendingwatcher();
 
-	# Main event loop
-	for(;;) {
-		if(dirty) {
-			redraw();
-			dirty = 0;
-		}
-		alt {
-		ctl := <-w.ctl or
-		ctl = <-w.ctxt.ctl =>
-			if(ctl == nil)
-				;
-			else if(ctl[0] == '!') {
-				w.wmctl(ctl);
-				layoutall();
-				dirty = 1;
-			} else
-				w.wmctl(ctl);
-		k := <-w.ctxt.kbd =>
-			handlekey(k);
-		ptr := <-w.ctxt.ptr =>
-			if(ptr == nil)
-				;
-			else if(w.pointer(*ptr))
-				;
-			else
-				handleptr(ptr);
-		<-themech =>
-			loadcolors();
-			widgetmod->retheme(display_g);
-			wmclient->retheme(w);
-			if(menumod != nil)
-				menumod->retheme(display_g);
-			layoutall();
-			dirty = 1;
-		<-balancech =>
-			if(mode == ModeView) {
-				layoutall();
-				dirty = 1;
-			}
-		n := <-pendingch =>
-			pendingcount = n;
-			if(n > 0)
-				setstatus(sys->sprint("%d pending payment%s — B3 menu to review", n, plural(n)));
-			dirty = 1;
-		}
-	}
-}
-
-# ── Colours ──────────────────────────────────────────────────
-
-loadcolors()
-{
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor  = display_g.color(th.editbg);
-		panebg   = display_g.color(th.bg);
-		divcolor = display_g.color(th.editlineno);
-	} else {
-		bgcolor  = display_g.color(int 16rFFFDF6FF);
-		panebg   = display_g.color(int 16rF5F5F0FF);
-		divcolor = display_g.color(int 16rBBBBBBFF);
-	}
-}
-
-# ── Layout ───────────────────────────────────────────────────
-
-layoutall()
-{
-	wr := w.imager(w.image.r);
-	sh := widgetmod->statusheight();
-	fh := font.height + 8;
-	bh := font.height + 10;
-
-	# Status bar at bottom
-	sbr := Rect((wr.min.x, wr.max.y - sh), wr.max);
-	if(sbar == nil)
-		sbar = Statusbar.new(sbr);
-	else
-		sbar.resize(sbr);
-
-	# Left pane: account list
-	catw := wr.dx() * CAT_WIDTH_FRAC / 100;
-	listr := Rect(wr.min, (wr.min.x + catw, wr.max.y - sh));
-	if(acctlist == nil)
-		acctlist = Listbox.mk(listr);
-	else
-		acctlist.resize(listr);
-
-	# Right pane: details or form
-	rx := wr.min.x + catw + 1;	# +1 for divider
-	ry := wr.min.y + FORM_MARGIN;
-	rw := wr.max.x - FORM_MARGIN;
-	rbottom := wr.max.y - sh - FORM_MARGIN;
-
-	# Network selector at top of right pane
-	if(networknames == nil)
-		networknames = array[] of {
-			"Ethereum Sepolia",
-			"Base Sepolia",
-			"Ethereum Mainnet",
-			"Base",
-		};
-	ddsel := 0;
-	if(dd_network != nil)
-		ddsel = dd_network.selected;
-	dd_network = Dropdown.mk(Rect((rx + FORM_MARGIN, ry), (rw, ry + fh)),
-		networknames, ddsel);
-	dd_network.label = "Network:";
-	ry += fh + FIELD_SPACING + 4;
-
-	case mode {
-	ModeView =>
-		layoutdetail(rx + FORM_MARGIN, ry, rw, rbottom, fh);
-	ModeNewETH or ModeImport =>
-		layoutform(rx + FORM_MARGIN, ry, rw, rbottom, fh, bh);
-	ModePay =>
-		layoutpay(rx + FORM_MARGIN, ry, rw, rbottom, fh, bh);
-	}
-}
-
-layoutdetail(cx, cy, cw, cbottom, fh: int)
-{
-	if(cy > cbottom) return;
-	# Show account details if one is selected
-	sel := -1;
-	if(acctlist != nil)
-		sel = acctlist.selected;
-
-	if(sel < 0 || sel >= len accounts) {
-		lbl_name = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Select an account", 1, LEFT);
-		lbl_addr = nil;
-		lbl_chain = nil;
-		lbl_balance = nil;
-		lbl_addrval = nil;
-		lbl_chainval = nil;
-		lbl_balval = nil;
-		lbl_balval2 = nil;
-		formfields = nil;
-		return;
-	}
-
-	acct := accounts[sel];
-
-	lbl_name = Label.mk(Rect((cx, cy), (cw, cy + fh)), acct.name, 0, LEFT);
-	cy += fh + FIELD_SPACING + 4;
-
-	lbl_chain = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Chain:", 1, LEFT);
-	cy += fh;
-	lbl_chainval = Label.mk(Rect((cx, cy), (cw, cy + fh)), acct.chain, 0, LEFT);
-	cy += fh + FIELD_SPACING + 4;
-
-	lbl_addr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Address:", 1, LEFT);
-	cy += fh;
-	addr := acct.address;
-	if(addr == "" || addr == nil)
-		addr = "(not available)";
-	lbl_addrval = Label.mk(Rect((cx, cy), (cw, cy + fh)), addr, 0, LEFT);
-	cy += fh + FIELD_SPACING + 4;
-
-	lbl_balance = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Balance:", 1, LEFT);
-	cy += fh;
-
-	# Show cached balance immediately, fetch in background
-	bal := cachedbalance;
-	if(bal == nil || bal == "")
-		bal = "loading...";
-	(usdcbal, ethbal) := splitbalance(bal);
-	lbl_balval = Label.mk(Rect((cx, cy), (cw, cy + fh)), usdcbal, 0, LEFT);
-	cy += fh;
-	lbl_balval2 = Label.mk(Rect((cx, cy), (cw, cy + fh)), ethbal, 0, LEFT);
-	cy += fh + FIELD_SPACING + 4;
-
-	# Send Payment button
-	bh := fh + 2;
-	btn_send = Button.mk(Rect((cx, cy), (cx + BTN_W + 20, cy + bh)), "Send Payment");
-	cy += bh + FIELD_SPACING + 4;
-
-	# Transaction history section
-	lbl_history = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Recent Transactions:", 1, LEFT);
-	cy += fh + FIELD_SPACING;
-
-	# Fill remaining space with history listbox
-	histbottom := cbottom;
-	if(histbottom - cy < fh * 2)
-		histbottom = cy + fh * 2;	# minimum 2 rows
-	histr := Rect((cx, cy), (cw, histbottom));
-	if(historylist == nil)
-		historylist = Listbox.mk(histr);
-	else
-		historylist.resize(histr);
-
-	# Load history items
-	hraw := readwalletfile(acct.name, "history");
-	items: list of string;
-	historyraw = nil;
-	if(hraw != nil && hraw != "") {
-		(nil, lines) := sys->tokenize(hraw, "\n");
-		for(; lines != nil; lines = tl lines) {
-			line := hd lines;
-			if(line != "") {
-				historyraw = line :: historyraw;
-				items = fmthistory(line) :: items;
-			}
-		}
-	}
-	# Reverse to show newest first (history appends)
-	ritems: list of string;
-	rraw: list of string;
-	for(; items != nil; items = tl items)
-		ritems = hd items :: ritems;
-	for(; historyraw != nil; historyraw = tl historyraw)
-		rraw = hd historyraw :: rraw;
-	historyraw = rraw;
-
-	if(ritems != nil) {
-		n := 0;
-		for(l := ritems; l != nil; l = tl l)
-			n++;
-		arr := array[n] of string;
-		i := 0;
-		for(l = ritems; l != nil; l = tl l)
-			arr[i++] = hd l;
-		historylist.setitems(arr);
-	} else
-		historylist.setitems(array[] of {"(no transactions)"});
-
-	# Fetch balance in background
-	spawn fetchbalance(acct.name);
-
-	formfields = nil;
-}
-
-layoutform(cx, cy, cw, cbottom, fh, bh: int)
-{
-	if(cy > cbottom) return;
-	title := "Import Private Key";
-	if(mode == ModeNewETH)
-		title = "New Ethereum Account";
-
-	lbl_name = Label.mk(Rect((cx, cy), (cw, cy + fh)), title, 0, LEFT);
-	cy += fh + FIELD_SPACING + 4;
-
-	lw := widgetmod->labelwidth(array[] of {"Name:", "Chain:", "Key:"});
-	f_name = Textfield.mk(Rect((cx, cy), (cw, cy + fh)), "Name:", 0);
-	f_name.labelw = lw;
-	cy += fh + FIELD_SPACING;
-
-	if(mode == ModeImport) {
-		f_chain = Textfield.mk(Rect((cx, cy), (cw, cy + fh)), "Chain:", 0);
-		f_chain.labelw = lw;
-		f_chain.setval("ethereum");
-		cy += fh + FIELD_SPACING;
-		f_key = Textfield.mk(Rect((cx, cy), (cw, cy + fh)), "Key:", 1);
-		f_key.labelw = lw;
-		cy += fh + FIELD_SPACING;
-		formfields = array[] of { f_name, f_chain, f_key };
-	} else {
-		f_chain = Textfield.mk(Rect((cx, cy), (cw, cy + fh)), "Chain:", 0);
-		f_chain.labelw = lw;
-		f_chain.setval("ethereum");
-		cy += fh + FIELD_SPACING;
-		f_key = nil;
-		formfields = array[] of { f_name, f_chain };
-	}
-
-	cy += FIELD_SPACING;
-
-	# Buttons
-	btnx := cx;
-	btn_ok = Button.mk(Rect((btnx, cy), (btnx + BTN_W, cy + bh)),
-		"Create");
-	if(mode == ModeImport)
-		btn_ok = Button.mk(Rect((btnx, cy), (btnx + BTN_W, cy + bh)),
-			"Import");
-	btnx += BTN_W + 8;
-	btn_cancel = Button.mk(Rect((btnx, cy), (btnx + BTN_W, cy + bh)),
-		"Cancel");
-
-	focusidx = 0;
-}
-
-layoutpay(cx, cy, cw, cbottom, fh, bh: int)
-{
-	if(cy > cbottom) return;
-
-	sel := -1;
-	if(acctlist != nil)
-		sel = acctlist.selected;
-	if(sel < 0 || sel >= len accounts) {
-		lbl_name = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Select an account first", 1, LEFT);
-		formfields = nil;
-		return;
-	}
-
-	acct := accounts[sel];
-	lbl_name = Label.mk(Rect((cx, cy), (cw, cy + fh)),
-		"Send from: " + acct.name, 0, LEFT);
-	cy += fh + FIELD_SPACING + 4;
-
-	lw := widgetmod->labelwidth(array[] of {"Recipient:", "Amount:", "Token:"});
-
-	f_recipient = Textfield.mk(Rect((cx, cy), (cw, cy + fh)), "Recipient:", 0);
-	f_recipient.labelw = lw;
-	cy += fh + FIELD_SPACING;
-
-	f_amount = Textfield.mk(Rect((cx, cy), (cw, cy + fh)), "Amount:", 0);
-	f_amount.labelw = lw;
-	cy += fh + FIELD_SPACING;
-
-	# Token selector
-	tokennames := array[] of { "ETH (wei)", "USDC (base units)" };
-	toksel := 0;
-	if(dd_token != nil)
-		toksel = dd_token.selected;
-	dd_token = Dropdown.mk(Rect((cx, cy), (cw, cy + fh)), tokennames, toksel);
-	dd_token.label = "Token:";
-	cy += fh + FIELD_SPACING + 4;
-
-	formfields = array[] of { f_recipient, f_amount };
-
-	# Buttons
-	btnx := cx;
-	btn_pay = Button.mk(Rect((btnx, cy), (btnx + BTN_W, cy + bh)), "Send");
-	btnx += BTN_W + 8;
-	btn_paycancel = Button.mk(Rect((btnx, cy), (btnx + BTN_W, cy + bh)), "Cancel");
-
-	focusidx = 0;
-}
-
-# ── Drawing ──────────────────────────────────────────────────
-
-redraw()
-{
-	wr := w.imager(w.image.r);
-	sh := widgetmod->statusheight();
-	catw := wr.dx() * CAT_WIDTH_FRAC / 100;
-
-	# Clear right pane background
-	rpane := Rect((wr.min.x + catw + 1, wr.min.y), (wr.max.x, wr.max.y - sh));
-	w.image.draw(rpane, panebg, nil, Point(0, 0));
-
-	# Draw account list
-	acctlist.draw(w.image);
-
-	# Draw divider
-	divr := Rect((wr.min.x + catw, wr.min.y), (wr.min.x + catw + 1, wr.max.y - sh));
-	w.image.draw(divr, divcolor, nil, Point(0, 0));
-
-	# Draw network selector
-	if(dd_network != nil)
-		dd_network.draw(w.image);
-
-	# Draw detail pane
-	case mode {
-	ModeView =>
-		drawdetail();
-	ModeNewETH or ModeImport =>
-		drawform();
-	ModePay =>
-		drawform();
-	}
-
-	# Status bar
-	naccts := len accounts;
-	sbar.left = sys->sprint("%d account%s", naccts, plural(naccts));
-	sbar.right = "B3: menu";
-	sbar.draw(w.image);
-
-	w.image.flush(Draw->Flushnow);
-}
-
-drawdetail()
-{
-	if(lbl_name != nil)
-		lbl_name.draw(w.image);
-	if(lbl_chain != nil)
-		lbl_chain.draw(w.image);
-	if(lbl_chainval != nil)
-		lbl_chainval.draw(w.image);
-	if(lbl_addr != nil)
-		lbl_addr.draw(w.image);
-	if(lbl_addrval != nil)
-		lbl_addrval.draw(w.image);
-	if(lbl_balance != nil)
-		lbl_balance.draw(w.image);
-	if(lbl_balval != nil)
-		lbl_balval.draw(w.image);
-	if(lbl_balval2 != nil)
-		lbl_balval2.draw(w.image);
-	if(btn_send != nil)
-		btn_send.draw(w.image);
-	if(lbl_history != nil)
-		lbl_history.draw(w.image);
-	if(historylist != nil)
-		historylist.draw(w.image);
-}
-
-drawform()
-{
-	if(lbl_name != nil)
-		lbl_name.draw(w.image);
-	if(formfields != nil) {
-		for(i := 0; i < len formfields; i++) {
-			formfields[i].focused = (i == focusidx);
-			formfields[i].draw(w.image);
-		}
-	}
-	if(mode == ModePay) {
-		if(dd_token != nil)
-			dd_token.draw(w.image);
-		if(btn_pay != nil)
-			btn_pay.draw(w.image);
-		if(btn_paycancel != nil)
-			btn_paycancel.draw(w.image);
-	} else {
-		if(btn_ok != nil)
-			btn_ok.draw(w.image);
-		if(btn_cancel != nil)
-			btn_cancel.draw(w.image);
-	}
-}
-
-# ── Keyboard handling ────────────────────────────────────────
-
-handlekey(raw: int)
-{
-	k := kf.filter(raw);
-	if(k == 0)
-		return;
-
-	case k {
-	'q' - 'a' + 1 =>	# Ctrl-Q
-		cleanup();
-	27 =>			# Escape
-		if(mode != ModeView) {
-			mode = ModeView;
-			focusidx = -1;
-			layoutall();
-		}
-		dirty = 1;
-	'\t' =>
-		if(formfields != nil && len formfields > 0) {
-			focusidx = (focusidx + 1) % len formfields;
-			dirty = 1;
-		}
-	'\n' =>
-		if(mode == ModeNewETH)
-			donewaccount();
-		else if(mode == ModeImport)
-			doimport();
-		else if(mode == ModePay)
-			dosendpayment();
-	* =>
-		if(formfields != nil && focusidx >= 0 && focusidx < len formfields) {
-			formfields[focusidx].key(k);
-			dirty = 1;
-		}
-	}
-}
-
-# ── Pointer handling ─────────────────────────────────────────
-
-handleptr(ptr: ref Pointer)
-{
-	if(ptr.buttons == 0)
-		return;
-
-	# Button 3: context menu
-	if(ptr.buttons & 4) {
-		# Detail pane right-click: show detail menu if account selected
-		if(mode == ModeView && acctlist != nil && acctlist.selected >= 0 &&
-		   !acctlist.contains(ptr.xy)) {
-			if(detailmenu != nil) {
-				sel := detailmenu.show(w.image, ptr.xy, w.ctxt.ptr);
-				handledetailmenu(sel);
-				dirty = 1;
-				return;
-			}
-		}
-		# Otherwise: main menu
-		if(mainmenu == nil)
-			return;
-		sel := mainmenu.show(w.image, ptr.xy, w.ctxt.ptr);
-		handlemenu(sel);
-		dirty = 1;
-		return;
-	}
-
-	if(!(ptr.buttons & 1))
-		return;
-
-	# Scrollbar tracking (continuous drag)
-	if(acctlist != nil && acctlist.scroll.isactive()) {
-		newo := acctlist.scroll.track(ptr);
-		if(newo >= 0) {
-			acctlist.top = newo;
-			dirty = 1;
-		}
-		return;
-	}
-
-	# Account list click (Listbox.click handles scrollbar internally)
-	if(acctlist != nil && acctlist.contains(ptr.xy)) {
-		if(ptr.buttons & 8 || ptr.buttons & 16) {
-			acctlist.wheel(ptr.buttons);
-			dirty = 1;
-			return;
-		}
-		sel := acctlist.click(ptr.xy);
-		if(sel >= 0) {
-			mode = ModeView;
-			layoutall();
-			dirty = 1;
-		}
-		return;
-	}
-
-	# History list click/scroll
-	if(historylist != nil && historylist.contains(ptr.xy)) {
-		if(ptr.buttons & 8 || ptr.buttons & 16) {
-			historylist.wheel(ptr.buttons);
-			dirty = 1;
-			return;
-		}
-		historylist.click(ptr.xy);
-		dirty = 1;
-		return;
-	}
-
-	# Network dropdown click
-	if(dd_network != nil && dd_network.contains(ptr.xy)) {
-		oldnet := dd_network.selected;
-		dd_network.click(w.image, w.ctxt.ptr);
-		if(dd_network.selected != oldnet) {
-			# Write network change to wallet9p
-			writewalletctl("ctl", "network " + dd_network.value());
-			# Clear cached balance and force re-fetch on new network
-			cachedbalance = "loading...";
-			balancefetchactive = 0;
-			layoutall();
-			setstatus("Network: " + dd_network.value());
-		}
-		dirty = 1;
-		return;
-	}
-
-	# Form field clicks
-	if(formfields != nil) {
-		for(i := 0; i < len formfields; i++) {
-			if(formfields[i].contains(ptr.xy)) {
-				focusidx = i;
-				formfields[i].click(ptr.xy);
-				dirty = 1;
-				return;
-			}
-		}
-	}
-
-	# Button clicks
-	if(btn_ok != nil && btn_ok.contains(ptr.xy)) {
-		btn_ok.pressed = 1;
-		dirty = 1;
-		# Wait for release
-		for(;;) {
-			p := <-w.ctxt.ptr;
-			if(p == nil || !(p.buttons & 1)) {
-				btn_ok.pressed = 0;
-				if(p != nil && btn_ok.contains(p.xy)) {
-					if(mode == ModeNewETH)
-						donewaccount();
-					else if(mode == ModeImport)
-						doimport();
-				}
-				dirty = 1;
-				return;
-			}
-		}
-	}
-
-	if(btn_cancel != nil && btn_cancel.contains(ptr.xy)) {
-		btn_cancel.pressed = 1;
-		dirty = 1;
-		for(;;) {
-			p := <-w.ctxt.ptr;
-			if(p == nil || !(p.buttons & 1)) {
-				btn_cancel.pressed = 0;
-				if(p != nil && btn_cancel.contains(p.xy)) {
-					mode = ModeView;
-					focusidx = -1;
-					layoutall();
-				}
-				dirty = 1;
-				return;
-			}
-		}
-	}
-
-	# Send Payment button (detail view)
-	if(btn_send != nil && btn_send.contains(ptr.xy) && mode == ModeView) {
-		btn_send.pressed = 1;
-		dirty = 1;
-		for(;;) {
-			p := <-w.ctxt.ptr;
-			if(p == nil || !(p.buttons & 1)) {
-				btn_send.pressed = 0;
-				if(p != nil && btn_send.contains(p.xy)) {
-					mode = ModePay;
-					layoutall();
-				}
-				dirty = 1;
-				return;
-			}
-		}
-	}
-
-	# Pay form: Send button
-	if(btn_pay != nil && btn_pay.contains(ptr.xy) && mode == ModePay) {
-		btn_pay.pressed = 1;
-		dirty = 1;
-		for(;;) {
-			p := <-w.ctxt.ptr;
-			if(p == nil || !(p.buttons & 1)) {
-				btn_pay.pressed = 0;
-				if(p != nil && btn_pay.contains(p.xy))
-					dosendpayment();
-				dirty = 1;
-				return;
-			}
-		}
-	}
-
-	# Pay form: Cancel button
-	if(btn_paycancel != nil && btn_paycancel.contains(ptr.xy) && mode == ModePay) {
-		btn_paycancel.pressed = 1;
-		dirty = 1;
-		for(;;) {
-			p := <-w.ctxt.ptr;
-			if(p == nil || !(p.buttons & 1)) {
-				btn_paycancel.pressed = 0;
-				if(p != nil && btn_paycancel.contains(p.xy)) {
-					mode = ModeView;
-					focusidx = -1;
-					layoutall();
-				}
-				dirty = 1;
-				return;
-			}
-		}
-	}
-
-	# Pay form: Token dropdown
-	if(dd_token != nil && dd_token.contains(ptr.xy) && mode == ModePay) {
-		dd_token.click(w.image, w.ctxt.ptr);
-		dirty = 1;
-		return;
-	}
-}
-
-handlemenu(sel: int)
-{
-	case sel {
-	0 =>	# New Ethereum Account
-		mode = ModeNewETH;
-		layoutall();
-	1 =>	# Import Private Key
-		mode = ModeImport;
-		layoutall();
-	3 =>	# Refresh
-		refreshaccounts();
+	for(;;) alt {
+	c := <-wmctl or
+	c = <-top.ctxt.ctl or
+	# top.wreq carries Tk window requests (menu posts create their
+	# window through here); a loop that never drains it leaves every
+	# posted menu mapped-and-grabbing but windowless — invisible.
+	c = <-top.wreq =>
+		tkclient->wmctl(top, c);
+
+	k := <-top.ctxt.kbd =>
+		handlekey(k);
+
+	p := <-top.ctxt.ptr =>
+		tk->pointer(top, *p);
+
+	a := <-actch =>
+		handleaction(a);
+
+	<-balancech =>
 		if(mode == ModeView)
-			layoutall();
+			showbalance();
+
+	n := <-pendingch =>
+		pendingcount = n;
+		if(n > 0)
+			setstatus(sys->sprint("%d pending payment%s — B3 menu to review", n, plural(n)));
+
+	<-themech =>
+		loadtheme();
+		# Re-theme env-derived widget colours, then reconfigure the widgets
+		# carrying explicit theme colours (were hardcoded brimstone and never
+		# updated, so the whole pane stayed dark after a switch).
+		tkclient->wmctl(top, "retheme");
+		tk->cmd(top, ". configure -background " + bgc);
+		tk->cmd(top, ".main.div configure -background " + accent);
+		tk->cmd(top, ".status configure -background " + statusbg + " -foreground " + statusfg);
+		setmode(mode);
 	}
 }
 
-# ── Account operations ───────────────────────────────────────
+# ── Base two-pane layout ──────────────────────────────────────
 
-donewaccount()
+buildbase()
 {
-	name := f_name.value();
-	if(name == "") {
-		setstatus("Name is required");
+	cmds := array[] of {
+		". configure -background " + bgc,
+		"frame .main",
+		"frame .main.list",
+		"scrollbar .main.list.sb -command {.main.list.lb yview}",
+		"listbox .main.list.lb -yscrollcommand {.main.list.sb set} -width 160 -selectmode single",
+		"pack .main.list.sb -side right -fill y",
+		"pack .main.list.lb -side left -fill both -expand 1",
+		"frame .main.div -width 1 -background " + accent,
+		"frame .main.right",
+		"pack .main.list -side left -fill y",
+		"pack .main.div -side left -fill y",
+		"pack .main.right -side left -fill both -expand 1",
+		"label .status -anchor w -background " + statusbg + " -foreground " + statusfg,
+		"pack .main -side top -fill both -expand 1",
+		"pack .status -side bottom -fill x",
+		"pack propagate . 0",
+		"bind .main.list.lb <ButtonRelease-1> {send act selectacct}",
+		"bind .main.list.lb <Button-3> {send act mainmenu %X %Y}",
+	};
+	tkcmds(cmds);
+	buildmenus();
+}
+
+buildmenus()
+{
+	tk->cmd(top, "menu .mainmenu");
+	tk->cmd(top, ".mainmenu add command -label {New Ethereum Account} -command {send act new}");
+	tk->cmd(top, ".mainmenu add command -label {Import Private Key} -command {send act import}");
+	tk->cmd(top, ".mainmenu add separator");
+	tk->cmd(top, ".mainmenu add command -label {Refresh} -command {send act refresh}");
+	tk->cmd(top, "menu .detailmenu");
+	tk->cmd(top, ".detailmenu add command -label {Send Payment} -command {send act pay}");
+	tk->cmd(top, ".detailmenu add command -label {Copy Address} -command {send act copyaddr}");
+	tk->cmd(top, ".detailmenu add command -label {Copy Account Name} -command {send act copyname}");
+	tk->cmd(top, ".detailmenu add command -label {Copy Tx Hash} -command {send act copytx}");
+	tk->cmd(top, ".detailmenu add command -label {Refresh Balance} -command {send act refreshbal}");
+}
+
+# ── Right pane per mode ───────────────────────────────────────
+
+setmode(m: int)
+{
+	mode = m;
+	focusi = 0;
+	fields = array[0] of ref Field;
+	tk->cmd(top, "destroy .main.right");
+	tk->cmd(top, "frame .main.right");
+	tk->cmd(top, "pack .main.right -side left -fill both -expand 1");
+	tk->cmd(top, "bind .main.right <Button-3> {send act detailmenu %X %Y}");
+
+	case m {
+	ModeView =>
+		buildview();
+	ModeNewETH =>
+		buildform("New Ethereum Account",
+			array[] of {
+				ref Field("", "Name:",  0, ""),
+				ref Field("", "Chain:", 0, "ethereum"),
+			}, "Create", "create");
+	ModeImport =>
+		buildform("Import Private Key",
+			array[] of {
+				ref Field("", "Name:",  0, ""),
+				ref Field("", "Chain:", 0, "ethereum"),
+				ref Field("", "Key:",   1, ""),
+			}, "Import", "doimport");
+	ModePay =>
+		buildpay();
+	}
+	tk->cmd(top, "update");
+}
+
+buildview()
+{
+	r := ".main.right";
+	tk->cmd(top, "frame " + r + ".net");
+	tk->cmd(top, sys->sprint("label %s.net.l -text {Network:} -width %d -anchor w", r, LBLW));
+	vals := "";
+	for(i := 0; i < len networks; i++)
+		vals += "{" + networks[i] + "} ";
+	tk->cmd(top, "choicebutton " + r + ".net.cb -values {" + vals + "} -command {send act netchange}");
+	tk->cmd(top, "pack " + r + ".net.l -side left -padx {12 4} -pady {8 2}");
+	tk->cmd(top, "pack " + r + ".net.cb -side left -pady {8 2}");
+	tk->cmd(top, "pack " + r + ".net -side top -fill x -anchor w");
+
+	if(selacct < 0 || selacct >= len accts){
+		tk->cmd(top, "label " + r + ".sel -text {Select an account} -foreground " + dim);
+		tk->cmd(top, "pack " + r + ".sel -side top -anchor w -padx 12 -pady 12");
 		return;
 	}
-
-	chain := "ethereum";
-	if(f_chain != nil) {
-		v := f_chain.value();
-		if(v != "")
-			chain = v;
+	a := accts[selacct];
+	addr := a.address;
+	if(addr == "")
+		addr = "(not available)";
+	rows := array[] of {
+		("name",   a.name,     accent),
+		("chainl", "Chain:",   dim),
+		("chain",  a.chain,    ""),
+		("addrl",  "Address:", dim),
+		("addr",   addr,       ""),
+		("ball",   "Balance:", dim),
+	};
+	for(i = 0; i < len rows; i++){
+		(id, txt, fg) := rows[i];
+		fgopt := "";
+		if(fg != "")
+			fgopt = " -foreground " + fg;
+		tk->cmd(top, sys->sprint("label %s.%s -text {%s} -anchor w%s", r, id, txt, fgopt));
+		tk->cmd(top, sys->sprint("pack %s.%s -side top -anchor w -padx 12", r, id));
 	}
+	tk->cmd(top, "label " + r + ".bal1 -text {loading...} -anchor w");
+	tk->cmd(top, "label " + r + ".bal2 -text {} -anchor w");
+	tk->cmd(top, "pack " + r + ".bal1 -side top -anchor w -padx 24");
+	tk->cmd(top, "pack " + r + ".bal2 -side top -anchor w -padx 24");
 
-	cmd := "eth " + chain + " " + name;
-	n := writewalletctl("new", cmd);
-	if(n <= 0) {
-		errmsg := sys->sprint("%r");
-		if(errmsg == "" || errmsg == "no error")
-			errmsg = "create failed";
-		setstatus(errmsg);
-		# Stay in form mode so user sees the error
-		dirty = 1;
+	tk->cmd(top, "button " + r + ".send -text {Send Payment} -command {send act pay}");
+	tk->cmd(top, "pack " + r + ".send -side top -anchor w -padx 12 -pady 8");
+
+	tk->cmd(top, "label " + r + ".histl -text {Recent Transactions:} -foreground " + dim + " -anchor w");
+	tk->cmd(top, "pack " + r + ".histl -side top -anchor w -padx 12");
+	tk->cmd(top, "frame " + r + ".hist");
+	tk->cmd(top, "scrollbar " + r + ".hist.sb -command {" + r + ".hist.lb yview}");
+	tk->cmd(top, "listbox " + r + ".hist.lb -yscrollcommand {" + r + ".hist.sb set}");
+	tk->cmd(top, "pack " + r + ".hist.sb -side right -fill y");
+	tk->cmd(top, "pack " + r + ".hist.lb -side left -fill both -expand 1");
+	tk->cmd(top, "pack " + r + ".hist -side top -fill both -expand 1 -padx 12 -pady {0 8}");
+	loadhistory(a.name);
+
+	cachedbalance = "loading...";
+	showbalance();
+	spawn fetchbalance(a.name);
+}
+
+buildform(title: string, flds: array of ref Field, oklabel, oktok: string)
+{
+	r := ".main.right";
+	tk->cmd(top, sys->sprint("label %s.title -text {%s} -foreground %s -anchor w", r, title, accent));
+	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {12 6}");
+	fields = flds;
+	for(i := 0; i < len flds; i++){
+		f := flds[i];
+		row := sys->sprint("%s.r%d", r, i);
+		tk->cmd(top, "frame " + row);
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
+		show := "";
+		if(f.secret)
+			show = " -show *";
+		tk->cmd(top, sys->sprint("entry %s.e -width 220%s", row, show));
+		if(f.prefill != "")
+			tk->cmd(top, sys->sprint("%s.e insert 0 {%s}", row, f.prefill));
+		tk->cmd(top, sys->sprint("pack %s.l -side left -padx {12 4}", row));
+		tk->cmd(top, sys->sprint("pack %s.e -side left -fill x -expand 1 -padx {0 12}", row));
+		tk->cmd(top, "pack " + row + " -side top -fill x -pady 2");
+		f.path = row + ".e";
+	}
+	tk->cmd(top, "frame " + r + ".btns");
+	tk->cmd(top, sys->sprint("button %s.btns.ok -text {%s} -command {send act %s}", r, oklabel, oktok));
+	tk->cmd(top, "button " + r + ".btns.cancel -text {Cancel} -command {send act cancel}");
+	tk->cmd(top, "pack " + r + ".btns.ok -side left -padx {12 4} -pady 8");
+	tk->cmd(top, "pack " + r + ".btns.cancel -side left -pady 8");
+	tk->cmd(top, "pack " + r + ".btns -side top -fill x");
+	setfocus(0);
+}
+
+buildpay()
+{
+	r := ".main.right";
+	from := "";
+	if(selacct >= 0 && selacct < len accts)
+		from = accts[selacct].name;
+	tk->cmd(top, sys->sprint("label %s.title -text {Send from: %s} -foreground %s -anchor w", r, from, accent));
+	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {12 6}");
+	fields = array[] of {
+		ref Field("", "Recipient:", 0, ""),
+		ref Field("", "Amount:",    0, ""),
+	};
+	for(i := 0; i < len fields; i++){
+		f := fields[i];
+		row := sys->sprint("%s.r%d", r, i);
+		tk->cmd(top, "frame " + row);
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("entry %s.e -width 220", row));
+		tk->cmd(top, sys->sprint("pack %s.l -side left -padx {12 4}", row));
+		tk->cmd(top, sys->sprint("pack %s.e -side left -fill x -expand 1 -padx {0 12}", row));
+		tk->cmd(top, "pack " + row + " -side top -fill x -pady 2");
+		f.path = row + ".e";
+	}
+	tk->cmd(top, "frame " + r + ".tok");
+	tk->cmd(top, sys->sprint("label %s.tok.l -text {Token:} -width %d -anchor w", r, LBLW));
+	tk->cmd(top, "choicebutton " + r + ".tok.cb -values {{ETH (wei)} {USDC (base units)}}");
+	tk->cmd(top, "pack " + r + ".tok.l -side left -padx {12 4}");
+	tk->cmd(top, "pack " + r + ".tok.cb -side left");
+	tk->cmd(top, "pack " + r + ".tok -side top -fill x -pady 2");
+
+	tk->cmd(top, "frame " + r + ".btns");
+	tk->cmd(top, "button " + r + ".btns.ok -text {Send} -command {send act send}");
+	tk->cmd(top, "button " + r + ".btns.cancel -text {Cancel} -command {send act cancel}");
+	tk->cmd(top, "pack " + r + ".btns.ok -side left -padx {12 4} -pady 8");
+	tk->cmd(top, "pack " + r + ".btns.cancel -side left -pady 8");
+	tk->cmd(top, "pack " + r + ".btns -side top -fill x");
+	setfocus(0);
+}
+
+setfocus(i: int)
+{
+	if(i < 0 || i >= len fields)
+		return;
+	focusi = i;
+	tk->cmd(top, "focus " + fields[i].path);
+}
+
+fieldval(i: int): string
+{
+	if(i < 0 || i >= len fields)
+		return "";
+	return tk->cmd(top, fields[i].path + " get");
+}
+
+# ── Actions ───────────────────────────────────────────────────
+
+handleaction(a: string)
+{
+	(n, toks) := sys->tokenize(a, " ");
+	if(n == 0)
+		return;
+	cmd := hd toks;
+	case cmd {
+	"mainmenu" =>
+		tk->cmd(top, ".mainmenu post " + menuxy(toks, n));
+	"detailmenu" =>
+		if(mode == ModeView && selacct >= 0)
+			tk->cmd(top, ".detailmenu post " + menuxy(toks, n));
+		else
+			tk->cmd(top, ".mainmenu post " + menuxy(toks, n));
+	"selectacct" =>
+		sel := tk->cmd(top, ".main.list.lb curselection");
+		if(sel != nil && sel != ""){
+			selacct = int sel;
+			setmode(ModeView);
+		}
+	"new" =>     setmode(ModeNewETH);
+	"import" =>  setmode(ModeImport);
+	"pay" =>     if(selacct >= 0) setmode(ModePay);
+	"refresh" =>
+		refreshaccounts();
+		setmode(ModeView);
+	"cancel" =>  setmode(ModeView);
+	"create" =>  donew();
+	"doimport" => doimport();
+	"send" =>    dosend();
+	"netchange" => netchange();
+	"refreshbal" =>
+		cachedbalance = "loading...";
+		if(selacct >= 0){
+			showbalance();
+			spawn fetchbalance(accts[selacct].name);
+		}
+		setstatus("Balance refreshed");
+	"copyaddr" =>
+		if(selacct >= 0){ copytoclip(accts[selacct].address); setstatus("Address copied"); }
+	"copyname" =>
+		if(selacct >= 0){ copytoclip(accts[selacct].name); setstatus("Account name copied"); }
+	"copytx" =>
+		txh := selectedtxhash();
+		if(txh != ""){ copytoclip(txh); setstatus("Tx hash copied"); }
+		else setstatus("No transaction selected");
+	}
+}
+
+# Enter in a form submits the current mode.
+submit()
+{
+	case mode {
+	ModeNewETH => donew();
+	ModeImport => doimport();
+	ModePay =>    dosend();
+	}
+}
+
+# ── Account create / import / pay ─────────────────────────────
+
+donew()
+{
+	name := fieldval(0);
+	if(name == ""){ setstatus("Name is required"); return; }
+	chain := fieldval(1);
+	if(chain == "")
+		chain = "ethereum";
+	if(writewalletctl("new", "eth " + chain + " " + name) <= 0){
+		setstatus(errmsg("create failed"));
 		return;
 	}
-
-	mode = ModeView;
-	focusidx = -1;
-	refreshaccounts();
-	# Select the new account
-	for(i := 0; i < len accounts; i++)
-		if(accounts[i].name == name)
-			acctlist.selected = i;
-	layoutall();
-	setstatus("Account created: " + name);
-	dirty = 1;
+	finishaccount(name, "Account created: " + name);
 }
 
 doimport()
 {
-	name := f_name.value();
-	if(name == "") {
-		setstatus("Name is required");
+	name := fieldval(0);
+	if(name == ""){ setstatus("Name is required"); return; }
+	chain := fieldval(1);
+	if(chain == "")
+		chain = "ethereum";
+	hexkey := fieldval(2);
+	if(hexkey == ""){ setstatus("Private key is required"); return; }
+	if(writewalletctl("new", "import eth " + chain + " " + name + " " + hexkey) <= 0){
+		setstatus(errmsg("import failed"));
 		return;
 	}
-
-	chain := "ethereum";
-	if(f_chain != nil) {
-		v := f_chain.value();
-		if(v != "")
-			chain = v;
-	}
-
-	hexkey := "";
-	if(f_key != nil)
-		hexkey = f_key.value();
-	if(hexkey == "") {
-		setstatus("Private key is required");
-		return;
-	}
-
-	cmd := "import eth " + chain + " " + name + " " + hexkey;
-	n := writewalletctl("new", cmd);
-	if(n <= 0) {
-		setstatus(sys->sprint("import failed: %r"));
-		return;
-	}
-
-	mode = ModeView;
-	focusidx = -1;
-	refreshaccounts();
-	for(i := 0; i < len accounts; i++)
-		if(accounts[i].name == name)
-			acctlist.selected = i;
-	layoutall();
-	setstatus("Account imported: " + name);
-	dirty = 1;
+	finishaccount(name, "Account imported: " + name);
 }
 
-dosendpayment()
+finishaccount(name, msg: string)
 {
-	if(acctlist == nil || acctlist.selected < 0 || acctlist.selected >= len accounts) {
-		setstatus("No account selected");
+	refreshaccounts();
+	for(i := 0; i < len accts; i++)
+		if(accts[i].name == name)
+			selacct = i;
+	setmode(ModeView);
+	setstatus(msg);
+}
+
+dosend()
+{
+	if(selacct < 0){ setstatus("No account selected"); return; }
+	acct := accts[selacct];
+	recipient := fieldval(0);
+	if(recipient == ""){ setstatus("Recipient address is required"); return; }
+	amount := fieldval(1);
+	if(amount == ""){ setstatus("Amount is required"); return; }
+	tokv := tk->cmd(top, ".main.right.tok.cb getvalue");
+	cmd := amount + " " + recipient;
+	if(len tokv >= 4 && tokv[0:4] == "USDC")
+		cmd = "usdc " + amount + " " + recipient;
+	if(writewalletctl(acct.name + "/pay", cmd) <= 0){
+		setstatus(errmsg("payment failed"));
 		return;
 	}
-
-	acct := accounts[acctlist.selected];
-	recipient := "";
-	if(f_recipient != nil)
-		recipient = f_recipient.value();
-	if(recipient == "") {
-		setstatus("Recipient address is required");
-		return;
-	}
-
-	amount := "";
-	if(f_amount != nil)
-		amount = f_amount.value();
-	if(amount == "") {
-		setstatus("Amount is required");
-		return;
-	}
-
-	# Build pay command based on token selection
-	cmd := "";
-	if(dd_token != nil && dd_token.selected == 1)
-		cmd = "usdc " + amount + " " + recipient;	# USDC
-	else
-		cmd = amount + " " + recipient;			# ETH
-
-	path := acct.name + "/pay";
-	n := writewalletctl(path, cmd);
-	if(n <= 0) {
-		errmsg := sys->sprint("%r");
-		if(errmsg == "" || errmsg == "no error")
-			errmsg = "payment failed";
-		setstatus(errmsg);
-		dirty = 1;
-		return;
-	}
-
-	# Read back txhash
-	txhash := readwalletfile(acct.name, "pay");
-	if(txhash != nil && txhash != "")
-		setstatus("Sent! tx:" + strip(txhash)[0:20] + "...");
-	else
+	txhash := strip(readwalletfile(acct.name, "pay"));
+	if(txhash != ""){
+		shown := txhash;
+		if(len shown > 20)
+			shown = shown[0:20];
+		setstatus("Sent! tx:" + shown + "...");
+	} else
 		setstatus("Payment submitted");
+	cachedbalance = "";
+	setmode(ModeView);
+}
 
-	# Return to view mode and refresh
-	mode = ModeView;
-	focusidx = -1;
-	cachedbalance = nil;
-	balancefetchactive = 0;
-	layoutall();
-	dirty = 1;
+netchange()
+{
+	v := tk->cmd(top, ".main.right.net.cb getvalue");
+	if(v == "")
+		return;
+	writewalletctl("ctl", "network " + v);
+	cachedbalance = "loading...";
+	if(selacct >= 0){
+		showbalance();
+		spawn fetchbalance(accts[selacct].name);
+	}
+	setstatus("Network: " + v);
+}
+
+# ── wallet9p I/O ──────────────────────────────────────────────
+
+readwalletfile(acct, file: string): string
+{
+	path := WALLET + "/";
+	if(acct != "")
+		path += acct + "/";
+	path += file;
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	all := "";
+	buf := array[8192] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		all += string buf[0:n];
+	}
+	return all;
+}
+
+writewalletctl(file, cmd: string): int
+{
+	fd := sys->open(WALLET + "/" + file, Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte cmd;
+	return sys->write(fd, b, len b);
 }
 
 refreshaccounts()
 {
-	# Read account list from wallet9p
-	s := readwalletfile(nil, "accounts");
-	if(s == nil || s == "") {
-		accounts = array[0] of ref AcctInfo;
-		if(acctlist != nil)
-			acctlist.setitems(nil);
+	raw := readwalletfile("", "accounts");
+	(nil, lines) := sys->tokenize(raw, "\n");
+	al: list of ref AcctInfo;
+	for(; lines != nil; lines = tl lines){
+		name := strip(hd lines);
+		if(name == "")
+			continue;
+		chain := strip(readwalletfile(name, "chain"));
+		addr := strip(readwalletfile(name, "address"));
+		al = ref AcctInfo(name, chain, addr) :: al;
+	}
+	n := len al;
+	accts = array[n] of ref AcctInfo;
+	for(i := n - 1; i >= 0; i--){
+		accts[i] = hd al;
+		al = tl al;
+	}
+	tk->cmd(top, ".main.list.lb delete 0 end");
+	for(j := 0; j < len accts; j++){
+		s := accts[j].name;
+		if(accts[j].chain != "")
+			s += "  " + accts[j].chain;
+		tk->cmd(top, sys->sprint(".main.list.lb insert end {%s}", s));
+	}
+	if(selacct >= len accts)
+		selacct = -1;
+	setstatus(sys->sprint("%d account%s", len accts, plural(len accts)));
+}
+
+fetchbalance(acctname: string)
+{
+	bal := strip(readwalletfile(acctname, "balance"));
+	if(bal != "")
+		cachedbalance = bal;
+	alt { balancech <-= 1 => ; * => ; }
+}
+
+showbalance()
+{
+	if(tk->cmd(top, ".main.right.bal1 cget -text")[0] == '!')
+		return;
+	(usdc, eth) := splitbalance(cachedbalance);
+	tk->cmd(top, sys->sprint(".main.right.bal1 configure -text {%s}", usdc));
+	tk->cmd(top, sys->sprint(".main.right.bal2 configure -text {%s}", eth));
+}
+
+splitbalance(bal: string): (string, string)
+{
+	for(i := 0; i < len bal; i++)
+		if(bal[i] == ',')
+			return (strip(bal[0:i]), strip(bal[i+1:]));
+	return (bal, "");
+}
+
+loadhistory(acctname: string)
+{
+	raw := readwalletfile(acctname, "history");
+	(nil, lines) := sys->tokenize(raw, "\n");
+	hl: list of string;
+	for(; lines != nil; lines = tl lines){
+		ln := strip(hd lines);
+		if(ln != "")
+			hl = ln :: hl;	# reversed → newest first
+	}
+	historyraw = hl;
+	r := ".main.right.hist.lb";
+	tk->cmd(top, r + " delete 0 end");
+	if(hl == nil){
+		tk->cmd(top, r + " insert end {(no transactions)}");
 		return;
 	}
+	for(; hl != nil; hl = tl hl)
+		tk->cmd(top, sys->sprint("%s insert end {%s}", r, fmthistory(hd hl)));
+}
 
-	# Parse newline-separated names
-	names: list of string;
-	(nil, toks) := sys->tokenize(s, "\n");
-	for(; toks != nil; toks = tl toks) {
-		n := hd toks;
-		if(n != "")
-			names = n :: names;
-	}
+fmthistory(line: string): string
+{
+	(nil, toks) := sys->tokenize(line, " \t");
+	if(toks != nil && hd toks == "pay")
+		toks = tl toks;
+	amount := ""; recip := ""; txhash := "";
+	if(toks != nil){ amount = hd toks; toks = tl toks; }
+	if(toks != nil){ recip = hd toks; toks = tl toks; }
+	if(toks != nil){ txhash = hd toks; }
+	if(len recip > 12)
+		recip = recip[0:6] + ".." + recip[len recip - 4:];
+	out := amount + " -> " + recip;
+	if(len txhash > 10)
+		out += "  tx:" + txhash[0:10] + "..";
+	return out;
+}
 
-	# Reverse to preserve order
-	rnames: list of string;
-	for(; names != nil; names = tl names)
-		rnames = hd names :: rnames;
-
-	# Build account info array
-	n := 0;
-	for(l := rnames; l != nil; l = tl l)
-		n++;
-
-	accounts = array[n] of ref AcctInfo;
-	items := array[n] of string;
+selectedtxhash(): string
+{
+	sel := tk->cmd(top, ".main.right.hist.lb curselection");
+	if(sel == nil || sel == "")
+		return "";
+	idx := int sel;
 	i := 0;
-	for(l = rnames; l != nil; l = tl l) {
-		name := hd l;
-		chain := stripnl(readwalletfile(name, "chain"));
-		addr := stripnl(readwalletfile(name, "address"));
-		accounts[i] = ref AcctInfo(name, chain, addr);
-		# List display: "name (chain)"
-		items[i] = name;
-		if(chain != nil && chain != "")
-			items[i] += "  " + chain;
+	for(l := historyraw; l != nil; l = tl l){
+		if(i == idx){
+			(nil, toks) := sys->tokenize(hd l, " \t");
+			if(toks != nil && hd toks == "pay")
+				toks = tl toks;
+			if(toks != nil) toks = tl toks;	# amount
+			if(toks != nil) toks = tl toks;	# recipient
+			if(toks != nil)
+				return hd toks;
+			return "";
+		}
 		i++;
 	}
-
-	if(acctlist != nil)
-		acctlist.setitems(items);
+	return "";
 }
 
-# ── Wallet9p file helpers ────────────────────────────────────
-
-readwalletfile(acct: string, file: string): string
+copytoclip(s: string)
 {
-	path: string;
-	if(acct == nil || acct == "")
-		path = "/n/wallet/" + file;
-	else
-		path = "/n/wallet/" + acct + "/" + file;
-
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array[8192] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
-	return string buf[0:n];
-}
-
-writewalletctl(file: string, data: string): int
-{
-	path := "/n/wallet/" + file;
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil) {
-		sys->fprint(stderr, "wallet: cannot open %s: %r\n", path);
-		return -1;
+	fd := sys->open("/dev/snarf", Sys->OWRITE);
+	if(fd != nil){
+		b := array of byte s;
+		sys->write(fd, b, len b);
 	}
-	b := array of byte data;
-	n := sys->write(fd, b, len b);
-	if(n < 0)
-		sys->fprint(stderr, "wallet: write %s failed: %r\n", path);
-	return n;
 }
 
-# ── Utilities ────────────────────────────────────────────────
-
-setstatus(msg: string)
+ensurewallet9p()
 {
-	if(sbar != nil)
-		sbar.left = msg;
-	dirty = 1;
+	(ok, nil) := sys->stat(WALLET + "/accounts");
+	if(ok >= 0)
+		return;
+	mod := load Command "/dis/veltro/wallet9p.dis";
+	if(mod == nil)
+		return;
+	spawn mod->init(nil, "wallet9p" :: nil);
+	for(i := 0; i < 50; i++){
+		(ok2, nil) := sys->stat(WALLET + "/accounts");
+		if(ok2 >= 0)
+			break;
+		sys->sleep(100);
+	}
+	sys->sleep(200);
 }
 
-stripnl(s: string): string
+# ── Keyboard ──────────────────────────────────────────────────
+
+handlekey(k: int)
 {
-	if(s == nil)
-		return "";
-	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == '\r'))
-		s = s[0:len s - 1];
-	return s;
+	if(k == 'q' - 16r60)
+		exit;
+	if(k == 27){
+		if(mode != ModeView)
+			setmode(ModeView);
+		return;
+	}
+	if(k == '\t'){
+		if(len fields > 0)
+			setfocus((focusi + 1) % len fields);
+		return;
+	}
+	if((k == '\n' || k == '\r') && mode != ModeView){
+		submit();
+		return;
+	}
+	tk->keyboard(top, k);
+}
+
+# ── Status / theme / helpers ──────────────────────────────────
+
+setstatus(s: string)
+{
+	tk->cmd(top, sys->sprint(".status configure -text {%s}", s));
+}
+
+errmsg(deflt: string): string
+{
+	m := sys->sprint("%r");
+	if(m == "" || m == "unknown")
+		return deflt;
+	return m;
+}
+
+loadtheme()
+{
+	th: ref Theme;
+	if(lucitheme != nil)
+		th = lucitheme->gettheme();
+	if(th == nil)
+		th = ref Theme;
+	accent = col(th.accent >> 8);
+	dim = col(th.dim >> 8);
+	bgc = col(th.bg >> 8);
+	statusbg = col(th.editstatus >> 8);
+	statusfg = col(th.editstattext >> 8);
+}
+
+col(v: int): string
+{
+	return sys->sprint("#%06xff", v & 16rFFFFFF);
+}
+
+menuxy(toks: list of string, n: int): string
+{
+	if(n >= 3){
+		x := hd tl toks;
+		y := hd tl tl toks;
+		if(x != "" && x[0] >= '0' && x[0] <= '9')
+			return x + " " + y;
+	}
+	return "40 40";
+}
+
+themelistener()
+{
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[256] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		ev := string buf[0:n];
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+		if(len ev >= 6 && ev[0:6] == "theme ")
+			themech <-= 1;
+	}
+}
+
+balancetimer()
+{
+	for(;;){
+		sys->sleep(30000);
+		alt { balancech <-= 1 => ; * => ; }
+	}
+}
+
+pendingwatcher()
+{
+	for(;;){
+		sys->sleep(2000);
+		raw := readwalletfile("", "pending");
+		(nil, lines) := sys->tokenize(raw, "\n");
+		n := 0;
+		for(; lines != nil; lines = tl lines){
+			ln := strip(hd lines);
+			if(ln != "" && ln != "(none)")
+				n++;
+		}
+		if(n != pendingcount)
+			alt { pendingch <-= n => ; * => ; }
+	}
+}
+
+strip(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n' || s[j-1] == '\r'))
+		j--;
+	return s[i:j];
 }
 
 plural(n: int): string
@@ -1145,237 +853,11 @@ plural(n: int): string
 	return "s";
 }
 
-# Split "X USDC, Y ETH" into two lines
-splitbalance(bal: string): (string, string)
+tkcmds(cmds: array of string)
 {
-	# Find comma separator
-	for(i := 0; i < len bal; i++) {
-		if(bal[i] == ',') {
-			usdcpart := strip(bal[0:i]);
-			ethpart := strip(bal[i+1:]);
-			return (usdcpart, ethpart);
-		}
-	}
-	# No comma — single value
-	return (bal, "");
-}
-
-handledetailmenu(sel: int)
-{
-	if(acctlist == nil || acctlist.selected < 0 || acctlist.selected >= len accounts)
-		return;
-	acct := accounts[acctlist.selected];
-
-	case sel {
-	0 =>	# Send Payment
-		mode = ModePay;
-		layoutall();
-		dirty = 1;
-	1 =>	# Copy Address
-		copytoclip(acct.address);
-		setstatus("Address copied");
-	2 =>	# Copy Account Name
-		copytoclip(acct.name);
-		setstatus("Account name copied");
-	3 =>	# Copy Tx Hash
-		txh := getselectedtxhash();
-		if(txh != nil) {
-			copytoclip(txh);
-			setstatus("Tx hash copied");
-		} else
-			setstatus("No transaction selected");
-	4 =>	# Refresh Balance
-		cachedbalance = nil;
-		balancefetchactive = 0;
-		layoutall();
-		setstatus("Balance refreshed");
-	}
-}
-
-copytoclip(s: string)
-{
-	fd := sys->open("/dev/snarf", Sys->OWRITE);
-	if(fd == nil)
-		return;
-	b := array of byte s;
-	sys->write(fd, b, len b);
-}
-
-fetchbalance(acctname: string)
-{
-	if(balancefetchactive)
-		return;
-	balancefetchactive = 1;
-	bal := stripnl(readwalletfile(acctname, "balance"));
-	if(bal != nil && bal != "")
-		cachedbalance = bal;
-	balancefetchactive = 0;
-	alt {
-	balancech <-= 1 => ;
-	* => ;
-	}
-}
-
-balancetimer()
-{
-	for(;;) {
-		sys->sleep(30000);	# refresh every 30 seconds
-		alt {
-		balancech <-= 1 => ;
-		* => ;
-		}
-	}
-}
-
-pendingwatcher()
-{
-	for(;;) {
-		sys->sleep(2000);	# check every 2 seconds
-		s := readwalletfile(nil, "pending");
-		n := 0;
-		if(s != nil && s != "" && s != "(none)\n") {
-			(nil, lines) := sys->tokenize(s, "\n");
-			for(; lines != nil; lines = tl lines) {
-				if(hd lines != "" && hd lines != "(none)")
-					n++;
-			}
-		}
-		if(n != pendingcount) {
-			alt {
-			pendingch <-= n => ;
-			* => ;
-			}
-		}
-	}
-}
-
-# strip leading/trailing whitespace
-strip(s: string): string
-{
-	if(s == nil)
-		return "";
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n' || s[j-1] == '\r'))
-		j--;
-	if(i >= j)
-		return "";
-	return s[i:j];
-}
-
-# Format a history line "pay <amount> <recipient> <txhash>" for display
-fmthistory(line: string): string
-{
-	(nil, toks) := sys->tokenize(line, " \t");
-	if(toks == nil)
-		return line;
-	# Skip "pay" prefix
-	if(hd toks == "pay")
-		toks = tl toks;
-	if(toks == nil)
-		return line;
-	amount := hd toks;
-	toks = tl toks;
-	recip := "?";
-	if(toks != nil) {
-		recip = hd toks;
-		toks = tl toks;
-	}
-	txhash := "";
-	if(toks != nil)
-		txhash = hd toks;
-
-	# Truncate address and hash for display
-	if(len recip > 12)
-		recip = recip[0:6] + ".." + recip[len recip - 4:];
-	txsuffix := "";
-	if(txhash != "" && len txhash > 10)
-		txsuffix = "  tx:" + txhash[0:10] + "..";
-
-	return amount + " → " + recip + txsuffix;
-}
-
-# Get txhash from selected history item
-getselectedtxhash(): string
-{
-	if(historylist == nil || historylist.selected < 0)
-		return nil;
-	# Walk historyraw to get the nth item
-	idx := historylist.selected;
-	for(h := historyraw; h != nil; h = tl h) {
-		if(idx == 0) {
-			line := hd h;
-			(nil, toks) := sys->tokenize(line, " \t");
-			if(toks == nil)
-				return nil;
-			# "pay amount recipient txhash"
-			if(hd toks == "pay")
-				toks = tl toks;
-			if(toks != nil) toks = tl toks;	# skip amount
-			if(toks != nil) toks = tl toks;	# skip recipient
-			if(toks != nil)
-				return hd toks;
-			return nil;
-		}
-		idx--;
-	}
-	return nil;
-}
-
-ensurewallet9p()
-{
-	# Check if wallet9p is already mounted
-	(ok, nil) := sys->stat("/n/wallet/accounts");
-	if(ok >= 0)
-		return;
-
-	sys->fprint(stderr, "wallet: starting wallet9p...\n");
-
-	# Start wallet9p in background
-	mod := load Command "/dis/veltro/wallet9p.dis";
-	if(mod == nil) {
-		sys->fprint(stderr, "wallet: cannot load wallet9p: %r\n");
-		return;
-	}
-	spawn mod->init(nil, "wallet9p" :: nil);
-
-	# Wait for mount (poll up to 5 seconds)
-	for(i := 0; i < 50; i++) {
-		sys->sleep(100);
-		(ok2, nil) := sys->stat("/n/wallet/accounts");
-		if(ok2 >= 0) {
-			sys->sleep(200);	# let serveloop start processing
-			sys->fprint(stderr, "wallet: wallet9p ready\n");
-			return;
-		}
-	}
-	sys->fprint(stderr, "wallet: wallet9p failed to start\n");
-}
-
-cleanup()
-{
-	raise "fail:exit";
-}
-
-themelistener()
-{
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
-		return;
-	buf := array[256] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		# INFR-28: reset client-side fid offset so the next read on
-		# this streaming queue starts at 0 (otherwise the kernel
-		# applies the accumulated offset to the server reply and
-		# truncates / EOFs on the third read onward).
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "wallet: tk error %s on %s\n", e, cmds[i]);
 	}
 }

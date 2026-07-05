@@ -2,21 +2,42 @@
 #include	"fns.h"
 #include	"error.h"
 
+/*
+ * Track per-kproc held-lock count (up may be nil on non-kproc threads
+ * such as the SDL mainloop — skip those).  disfault() uses it to
+ * fail-stop on a fault taken while a spin lock is held: longjmp
+ * recovery cannot release the lock, so continuing manufactures a
+ * silent deadlock (pool lock + VM token stranding — the zombie-freeze
+ * class of failure) instead of a diagnosable panic.
+ */
+static void
+locktaken(void)
+{
+	if(up != nil)
+		up->nlocks++;
+}
+
 void
 lock(Lock *l)
 {
 	int i;
 
-	if(_tas(&l->val) == 0)
+	if(_tas(&l->val) == 0){
+		locktaken();
 		return;
+	}
 	for(i=0; i<100; i++){
-		if(_tas(&l->val) == 0)
+		if(_tas(&l->val) == 0){
+			locktaken();
 			return;
+		}
 		osyield();
 	}
 	for(i=1;; i++){
-		if(_tas(&l->val) == 0)
+		if(_tas(&l->val) == 0){
+			locktaken();
 			return;
+		}
 		osmillisleep(i*10);
 		if(i > 100){
 			osyield();
@@ -28,12 +49,18 @@ lock(Lock *l)
 int
 canlock(Lock *l)
 {
-	return _tas(&l->val) == 0;
+	if(_tas(&l->val) == 0){
+		locktaken();
+		return 1;
+	}
+	return 0;
 }
 
 void
 unlock(Lock *l)
 {
+	if(up != nil && up->nlocks > 0)
+		up->nlocks--;
 #ifdef _MSC_VER
 	_InterlockedExchange(&l->val, 0);
 #else

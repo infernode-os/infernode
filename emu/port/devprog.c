@@ -431,7 +431,16 @@ progsize(Prog *p)
 	size = 0;
 	if(m->MP != H)
 		size += hmsize(D2H(m->MP));
-	if(m->prog != nil)
+	/*
+	 * For JIT-compiled modules m->prog points into the executable
+	 * code arena, not pool memory (freemod has the matching guard).
+	 * msize() on it faults the allocator ("alloc:D2B") under the
+	 * pool lock, and the fault audit then spins on that same lock
+	 * while this kproc holds the VM token — wedging the whole
+	 * emulator on the first /prog status read of a compiled prog.
+	 * Skip the native-code size term instead.
+	 */
+	if(m->prog != nil && !m->compiled)
 		size += msize(m->prog);
 
 	fp = p->R.FP;
@@ -441,7 +450,7 @@ progsize(Prog *p)
 		if(f->mr != nil) {
 			if(f->mr->MP != H)
 				size += hmsize(D2H(f->mr->MP));
-			if(f->mr->prog != nil)
+			if(f->mr->prog != nil && !f->mr->compiled)
 				size += msize(f->mr->prog);
 		}
 		if(f->t == nil)

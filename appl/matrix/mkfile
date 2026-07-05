@@ -17,7 +17,6 @@ SYSMODULES=\
 	sys.m\
 	draw.m\
 	lucitheme.m\
-	widget.m\
 	matrix.m\
 
 DISBIN=$ROOT/dis/matrix

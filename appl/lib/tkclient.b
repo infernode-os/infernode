@@ -19,7 +19,7 @@ include "titlebar.m";
 	titlebar: Titlebar;
 include "tkclient.m";
 
-Background: con int 16r777777FF;		# should be drawn over immediately, but just in case...
+Background: con int 16r080808FF;		# brutalist surface; should be drawn over immediately anyway
 
 init()
 {
@@ -102,6 +102,12 @@ wmctl(top: ref Tk->Toplevel, req: string): string
 	"exit" =>
 		sys->fprint(sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE), "killgrp");
 		exit;
+	"retheme" =>
+		# Live theme switch: reload the active lucitheme palette into this
+		# toplevel's colour environment and repaint.  Without this the Tk
+		# engine only re-themes windows created after the switch, so an open
+		# app kept its old button faces / check-radio indicators / selects.
+		tk->cmd(top, "retheme");
 	# old-style requests: pass them back around in proper form.
 	"move" =>
 		# move x y

@@ -441,11 +441,20 @@ tkdrawcanv(Tk *tk, Point orig)
 			bufr.max.y = c->view.y + tk->act.height;
 		}
 		alpha = (tk->env->colors[TkCbackgnd] & 0xff) != 0xff;
-		if(c->image == nil || eqrect(bufr, c->image->r) == 0) {
+		if(c->image == nil || eqrect(bufr, c->image->r) == 0
+		   || c->bgcolor != tk->env->colors[TkCbackgnd]) {
+			/*
+			 * Re-allocate the backing image on a size change OR when the
+			 * background colour changed (a live theme switch): the cached
+			 * buffer was filled with the old bg and is only partially
+			 * repainted per-frame, so without this a re-themed canvas keeps
+			 * its old background (e.g. a black board under a light theme).
+			 */
 			if(c->image != nil && c->ialloc)
 				freeimage(c->image);
 			c->image = allocimage(d, bufr, alpha?RGBA32:d->image->chan, 0, tk->env->colors[TkCbackgnd]);
 			c->ialloc = 1;
+			c->bgcolor = tk->env->colors[TkCbackgnd];
 			c->update = bufr;
 			tkcvssetdirty(tk);		/* unnecessary? */
 		}

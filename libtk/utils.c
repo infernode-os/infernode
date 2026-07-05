@@ -19,6 +19,7 @@ struct Cmd
 	char*	name;
 	char*	(*fn)(TkTop*, char*, char**);
 };
+static char*	tkretheme(TkTop*, char*, char**);
 static struct Cmd cmdmain[] =
 {
 	"bind",		tkbind,
@@ -44,6 +45,7 @@ static struct Cmd cmdmain[] =
 	"puts",		tkputs,
 	"radiobutton",	tkradiobutton,
 	"raise",	tkraise,
+	"retheme",	tkretheme,
 	"scale",	tkscale,
 	"scrollbar",	tkscrollbar,
 	"see",	tkseecmd,
@@ -95,7 +97,7 @@ tkrgba(int r, int g, int b, int a)
 		b = 0;
 	else if(b > 255)
 		b = 255;
-	p = (r<<24)|(g<<16)|(b<<8)|0xFF;
+	p = ((ulong)r<<24)|(g<<16)|(b<<8)|0xFF;
 	if(a == 255)
 		return p;
 	return setalpha(p, a);
@@ -118,11 +120,11 @@ tkrgbavals(ulong rgba, int *R, int *G, int *B, int *A)
 	a = rgba & 0xff;
 	*A = a;
 	if (a != 0xff) {
-		*R = revalpha(rgba>>24, a);
+		*R = revalpha((rgba>>24) & 0xFF, a);
 		*G = revalpha((rgba>>16) & 0xFF, a);
 		*B = revalpha((rgba >> 8) & 0xFF, a);
 	} else {
-		*R = (rgba>>24);
+		*R = ((rgba>>24) & 0xFF);
 		*G = ((rgba>>16) & 0xFF);
 		*B = ((rgba >> 8) & 0xFF);
 	}
@@ -485,8 +487,14 @@ tkdefaultenv(TkTop *t)
 	env->ref = 1;
 	env->top = t;
 
+	/*
+	 * Default font for Tk widgets: the proportional sans face the rest
+	 * of the UI uses (the brutalist house style), not the tiny pelm
+	 * bitmap face.  If it can't be opened the fallback below drops to
+	 * the built-in *default* font.
+	 */
 	if(tkfont == nil)
-		tkfont = "/fonts/pelm/unicode.8.font";
+		tkfont = "/fonts/combined/unicode.sans.14.font";
 
 	d = t->display;
 	env->font = font_open(d, tkfont);
@@ -566,6 +574,33 @@ tkdupenv(TkEnv **env)
 	e->ref--;
 	*env = ne;
 	return ne;
+}
+
+/*
+ * "retheme": reload the active lucitheme palette into this toplevel's
+ * shared colour environment and repaint every widget.  Widgets that draw
+ * from env colours (no explicit -background/-foreground) pick up the new
+ * theme immediately; those carrying their own cloned env (explicit colours)
+ * refresh when the app rebuilds them from this now-fresh env.  Without this
+ * a live theme switch only reached toplevels created AFTER the switch —
+ * existing windows kept their frozen palette (stale button faces, check /
+ * radio indicators, select colours, ...).
+ */
+static char*
+tkretheme(TkTop *t, char *arg, char **ret)
+{
+	Tk *tk;
+
+	USED(arg);
+	USED(ret);
+	if(t->env != nil)
+		tksetenvcolours(t->env);
+	for(tk = t->root; tk != nil; tk = tk->siblings) {
+		tk->dirty = tkrect(tk, 1);
+		tkdirty(tk);
+	}
+	tkupdate(t);
+	return nil;
 }
 
 Tk*

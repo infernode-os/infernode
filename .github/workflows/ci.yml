@@ -231,6 +231,24 @@ jobs:
           fi
         fi
 
+    - name: Run presentation file-open regression test
+      run: |
+        # Boots the Lucifer GUI headless and asserts the file-open contract:
+        # Tasks tab present (with the plumber both up and absent), and files
+        # route by type (pdf/image/markdown -> presentation, else editor).
+        # Non-fatal in CI (full GUI boot can be timing-sensitive).
+        if [ -f tests/host/presentation_fileopen_test.sh ]; then
+          echo "--- presentation file-open regression test ---"
+          chmod +x tests/host/presentation_fileopen_test.sh
+          ROOT=. bash tests/host/presentation_fileopen_test.sh > pres-fileopen-test.txt 2>&1 || true
+          cat pres-fileopen-test.txt
+          if grep -q ", 0 failed," pres-fileopen-test.txt; then
+            echo "presentation file-open test: PASS"
+          else
+            echo "presentation file-open test: SKIP/FAIL (GUI boot timing-sensitive in CI)"
+          fi
+        fi
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -957,6 +975,13 @@ jobs:
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+    - name: Install emulator dependencies (SDL3, opus, libfido2)
+      run: |
+        # The emu links SDL3 + opus even in the headless build (audio-sdl3.o /
+        # devopus.o are shared with the sdl3 backend and reference them; the
+        # display still uses no-op stubs).  libfido2 enables /dev/2fa.
+        brew install sdl3 opus libfido2 || brew install sdl3 opus libfido2
+
     - name: Stamp build version
       run: |
         BUILD_DATE=$(date +%Y%m%d)
@@ -989,18 +1014,26 @@ jobs:
       run: |
         export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
         (cd libinterp && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
-        for dir in libkeyring libdraw libmemdraw libmemlayer; do
+        for dir in libkeyring libmemdraw libmemlayer libdraw; do
           echo "Building $dir..."
           if ! (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install); then
             echo "WARNING: $dir build failed (non-fatal for headless build)"
           fi
         done
+        # libtk is REQUIRED: the emu links libtk.a (Tk reintegration), even in
+        # the headless build.  Build it after libdraw, and fail hard if it does
+        # not build (the emu link would fail with 'libtk.a not found').
+        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
 
     - name: Build headless emulator
       run: |
         export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
         cd emu/MacOSX
-        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh "$ROOT/MacOSX/arm64/bin/mk" -f mkfile-g
+        # GUIBACK=headless (mkfile-gui-headless) is the maintained headless
+        # build — no-op display stubs, but it still links SDL3/opus/fido2 that
+        # the shared device objects reference.  The old mkfile-g predates the
+        # SDL3 reintegration (SYSLIBS lacked SDL) and no longer links.
+        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh "$ROOT/MacOSX/arm64/bin/mk" GUIBACK=headless
         test -f o.emu || { echo "Headless emulator build failed"; exit 1; }
 
     - name: Compile essential dis files

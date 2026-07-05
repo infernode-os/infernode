@@ -161,7 +161,14 @@ static Chan*
 pointeropen(Chan* c, int omode)
 {
 	c = devopen(c, omode, pointertab, nelem(pointertab), devgen);
-	if((ulong)c->qid.path == Qpointer){
+	/*
+	 * The read side is single-owner: exactly one reader drains the mouse
+	 * event queue (the window system).  A write-only open does not touch
+	 * that queue's ownership — it only injects events via pointerwrite —
+	 * so let OWRITE opens coexist with the reader.  This lets a headless
+	 * driver synthesise clicks while the window system is running.
+	 */
+	if((ulong)c->qid.path == Qpointer && (omode & 3) != OWRITE){
 		if(waserror()){
 			c->flag &= ~COPEN;
 			nexterror();
@@ -186,6 +193,10 @@ pointerclose(Chan* c)
 		return;
 	switch((ulong)c->qid.path){
 	case Qpointer:
+		/* Write-only injectors never took the read-owner ref (see
+		 * pointeropen), so don't drop it here. */
+		if((c->mode & 3) == OWRITE)
+			break;
 		qlock(&mouse.q);
 		if(decref(&mouse.ref) == 0){
 			cursordisable();
@@ -250,9 +261,17 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 			b = strtoul(a, 0, 0);
 		else
 			b = mouse.v.b;
-		/*mousetrack(b, x, y, msec);*/
+		/*
+		 * Inject a full pointer event (button + position), not just a
+		 * cursor move.  A write of "m<x> <y> <b>" now delivers button
+		 * state through mousetrack() so tests (and any headless driver)
+		 * can synthesise clicks — e.g. a Button-3 press to post a Tk
+		 * context menu — with no host mouse.  Omitting the button field
+		 * keeps the previous move-only behaviour (b defaults to the
+		 * current button state, so mousetrack enqueues nothing).
+		 */
+		mousetrack(b, x, y, 0);
 		setpointer(x, y);
-		USED(b);
 		break;
 	case Qcursor:
 		/* TO DO: perhaps interpret data as an Image */

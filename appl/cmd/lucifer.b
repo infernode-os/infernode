@@ -3409,9 +3409,14 @@ handleprescurrent()
 	# caret or focus highlight — the "no visible cursor" symptom.
 	if(oldactive != newactive)
 		setappkbdfocus(tp, oldactive, newactive);
-	# presrender renders every non-app, non-taskboard artifact; raise its
-	# window (in enforcepreszorder) whenever such content is centered.
-	showpresrender = (newid != "" && atype != "app" && atype != "taskboard");
+	# Content now renders INLINE in lucipres again (restored 2026-07-05):
+	# the presrender split revealed its window via z-order but loaded it via
+	# a droppable event, and the two desynced on real displays ("No
+	# content").  So the presrender content window is never raised — lucipres
+	# stays topped and both draws the content and receives its pointer input.
+	# presrender is left spawned but inert; removing its spawn/join is a
+	# follow-up cleanup.
+	showpresrender = 0;
 	# Reveal/hide the soft keyboard to match the focused workspace app —
 	# but only while the Workspace zone is the one on screen, else the
 	# chat zone owns the keyboard. Only genuine text apps raise it (not

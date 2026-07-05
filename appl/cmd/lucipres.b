@@ -885,6 +885,8 @@ drawpresentation(zone: Rect)
 		return;
 	}
 	contentw := contentr.dx() - 2 * pad;
+	contenty := contentr.min.y + pad;
+	pres_viewport_h = contentr.dy() - 2 * pad;
 
 	# Invalidate render caches on width change
 	if(contentw != artrendw) {
@@ -893,23 +895,89 @@ drawpresentation(zone: Rect)
 		artrendw = contentw;
 	}
 
+	# Draw the centered artifact's content INLINE, in this same window.
+	#
+	# Restored from the pre-2026-07-04 design.  The presrender split drew
+	# content in a SEPARATE window that lucifer revealed via z-order
+	# (top()) but loaded via a droppable non-blocking event — the two
+	# desynced on real displays, leaving presrender shown-but-empty ("No
+	# content").  Owning the tab strip AND the content in one window makes
+	# "shown" and "loaded" the same act, so they can't desync.  The async
+	# render path (renderartasync → renderdonech → handlerenderdone) is
+	# unchanged; only the draw dispatch below came back.
 	case centart.atype {
+	"text" or "code" =>
+		if(centart.atype == "code")
+			mainwin.draw(contentr, codebgcol_g, nil, (0, 0));
+		ls := splitlines(centart.data);
+		total_h := listlen(ls) * monofont_g.height;
+		newmax2 := total_h - pres_viewport_h;
+		if(newmax2 < 0) newmax2 = 0;
+		maxpresscrollpx = newmax2;
+		if(centart.pany > maxpresscrollpx)
+			centart.pany = maxpresscrollpx;
+		maxlinew := 0;
+		for(wlm := ls; wlm != nil; wlm = tl wlm) {
+			lw := monofont_g.width(hd wlm);
+			if(lw > maxlinew) maxlinew = lw;
+		}
+		newmaxx2 := maxlinew - contentw;
+		if(newmaxx2 < 0) newmaxx2 = 0;
+		maxpanx = newmaxx2;
+		if(centart.panx > maxpanx)
+			centart.panx = maxpanx;
+		y2 := contenty - centart.pany;
+		wl: list of string;
+		for(wl = ls; wl != nil; wl = tl wl) {
+			if(y2 + monofont_g.height > contentr.max.y)
+				break;
+			if(y2 >= contentr.min.y)
+				mainwin.text((contentr.min.x + pad - centart.panx, y2),
+					textcol, (0, 0), monofont_g, hd wl);
+			y2 += monofont_g.height;
+		}
+		if(centart.data == "")
+			drawcentertext(contentr, "(empty)");
+	"pdf" =>
+		navh := mainfont.height + 8;
+		pdfcontent := Rect(contentr.min, (contentr.max.x, contentr.max.y - navh));
+		pdfnav := Rect((contentr.min.x, contentr.max.y - navh), contentr.max);
+		drawpdfnav(pdfnav, centart);
+		pres_viewport_h = pdfcontent.dy() - 2 * pad;
+		if(centart.rendimg == nil)
+			centart.rendimg = renderart(centart, contentw);
+		drawrendimg(centart, pdfcontent, pad, contentw, "cannot render PDF");
+	"table" =>
+		drawtable(centart, contentr, pad, contentw, contenty);
 	"app" =>
-		# Show "Launching…" ONLY while the app is still starting.  Once it
-		# is running, its own window owns the content area — apps that only
-		# paint part of their window (tetris, matrix, the classic Tk games)
-		# would otherwise show this placeholder through the unpainted area.
+		# Only while the app is still starting; a running app's own window
+		# owns this area (a placeholder would bleed through partial-paint
+		# apps like tetris/matrix).
 		if(centart.appstatus != "running")
 			drawcentertext(contentr, "Launching " + centart.label + "...");
 	"taskboard" =>
 		drawtaskboard(contentr, pad);
+	"diff" =>
+		drawdiff(centart, contentr, pad, contentw, contenty);
 	* =>
-		# All content types (markdown, doc, image, mermaid, pdf, code,
-		# text, table, diff) are rendered by presrender's own wmclient
-		# window, which lucifer z-orders above this one — see
-		# lucifer.b enforcepreszorder and docs/TODO-LUCIPRES-ARCHITECTURE.md.
-		# lucipres now owns only the tab strip and the taskboard.
-		;
+		# markdown, doc, image, mermaid, … — rendered off the event loop.
+		if(centart.rendimg == nil && centart.data != "") {
+			if(centart.rendering == 0) {
+				centart.rendering = 1;
+				spawn renderartasync(centart.id, centart.atype, centart.data, contentw);
+			}
+		}
+		if(centart.rendimg != nil) {
+			centart.rendering = 0;
+			drawrendimg(centart, contentr, pad, contentw, nil);
+		} else if(centart.rendering == 1)
+			drawcentertext(contentr, "Rendering...");
+		else if(centart.rendering == 2)
+			drawfallbacktext(centart, contentr, pad, contentw, contenty);
+		else if(centart.data == "")
+			drawcentertext(contentr, "(empty)");
+		else
+			drawfallbacktext(centart, contentr, pad, contentw, contenty);
 	}
 }
 

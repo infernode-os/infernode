@@ -736,11 +736,20 @@ testControlFSStart(t: ref T)
 	if(sh == nil)
 		t.fatal(sys->sprint("cannot load sh: %r"));
 	sh->system(nil, "/dis/wm/matrix.dis -h /lib/matrix/compositions/sysmon &");
-	if(!waitfor("/mnt/matrix/ctl", 5000))
-		t.fatal("/mnt/matrix/ctl never appeared");
+	# Poll on content, not existence: a stale real file under a
+	# mnt/matrix directory (host-tree pollution from an unmounted
+	# namespace) would satisfy a bare stat before the mount lands.
+	up := 0;
+	for(w := 0; w < 5000 && !up; w += 250) {
+		if(trim(readfile("/mnt/matrix/ctl")) == "running")
+			up = 1;
+		else
+			sys->sleep(250);
+	}
+	if(!up)
+		t.fatal("/mnt/matrix/ctl never reported running");
 	matrixpid = pidofmodule("Matrix");
 	t.assert(matrixpid > 0, "matrix pid found in /prog");
-	t.assertseq(trim(readfile("/mnt/matrix/ctl")), "running", "status running");
 }
 
 testControlFSComposition(t: ref T)

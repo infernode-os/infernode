@@ -253,9 +253,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 		initgui(ctxt);
 		loaddisplaymodules();
 		loadservicemodules();
+		startwatchers();
 		guiloop();
 	} else {
 		loadservicemodules();
+		startwatchers();
 		headlessloop();
 	}
 }
@@ -1752,6 +1754,117 @@ handlekey(k: int)
 		focusmod->key(k);
 }
 
+# ── Watch rules ─────────────────────────────────────────────
+
+WATCH_MS: con 1000;
+WATCH_LOAD_COOLDOWN_MS: con 2000;
+
+watchstopc: chan of int;
+watchlastload := 0;	# millisec of the last load/unload fire (cooldown)
+
+startwatchers()
+{
+	<-complock;
+	rules: list of ref WatchRule;
+	if(comp != nil)
+		rules = comp.watches;
+	complock <-= 1;
+	if(rules == nil)
+		return;
+	watchstopc = chan[1] of int;
+	spawn watcher(rules, watchstopc);
+}
+
+stopwatchers()
+{
+	if(watchstopc == nil)
+		return;
+	alt {
+	watchstopc <-= 1 =>
+		;
+	* =>
+		;	# stop already pending
+	}
+	watchstopc = nil;
+}
+
+# One poller for all rules.  Transition-edge semantics: an action
+# fires only when the watched value changes to a matching pattern.
+# The first observation never fires — a freshly loaded composition
+# cannot immediately fire its own rules, which is the structural
+# guard against load loops (each reload rebuilds the watcher with
+# all-unseen state).  An unreadable path never fires.  load/unload
+# fires are additionally rate-limited by a cooldown as belt and
+# braces against composition ping-pong.
+watcher(rules: list of ref WatchRule, stopc: chan of int)
+{
+	n := 0;
+	for(rl := rules; rl != nil; rl = tl rl)
+		n++;
+	seen := array[n] of {* => 0};
+	last := array[n] of string;
+	watchlastload = -WATCH_LOAD_COOLDOWN_MS;
+	for(;;) {
+		alt {
+		<-stopc =>
+			return;
+		* =>
+			;
+		}
+		i := 0;
+		for(rl = rules; rl != nil; rl = tl rl) {
+			r := hd rl;
+			v := readfile(r.path);
+			if(v != nil) {
+				v = trimws(v);
+				if(seen[i] && v != last[i])
+					firewatch(r, v);
+				last[i] = v;
+				seen[i] = 1;
+			}
+			i++;
+		}
+		sys->sleep(WATCH_MS);
+	}
+}
+
+firewatch(r: ref WatchRule, v: string)
+{
+	for(al := r.arms; al != nil; al = tl al) {
+		(pat, act) := hd al;
+		if(pat != v)
+			continue;
+		(nil, atoks) := sys->tokenize(act, " \t");
+		case hd atoks {
+		"notify" =>
+			notifappend(sys->sprint("%d %s %s %s",
+				sys->millisec(), r.path, v, trimws(act[7:])));
+		"load" or "unload" =>
+			now := sys->millisec();
+			if(now - watchlastload >= WATCH_LOAD_COOLDOWN_MS) {
+				watchlastload = now;
+				handlectl(act);
+			}
+		* =>
+			handlectl(act);	# pin
+		}
+		return;
+	}
+}
+
+trimws(s: string): string
+{
+	start := 0;
+	end := len s;
+	while(start < end && (s[start] == ' ' || s[start] == '\t' ||
+			s[start] == '\n' || s[start] == '\r'))
+		start++;
+	while(end > start && (s[end-1] == ' ' || s[end-1] == '\t' ||
+			s[end-1] == '\n' || s[end-1] == '\r'))
+		end--;
+	return s[start:end];
+}
+
 # ── Composition reload ──────────────────────────────────────
 
 reloadcomposition(text: string)
@@ -1761,6 +1874,11 @@ reloadcomposition(text: string)
 		sys->fprint(stderr, "matrix: reload parse error: %s\n", err);
 		return;
 	}
+
+	# The old composition's watch rules must not observe the swap;
+	# the new composition's watcher starts with all-unseen state, so
+	# a just-loaded composition can never fire immediately.
+	stopwatchers();
 
 	# Incremental: entries unchanged between old and new keep their
 	# live module instance (and, for services, their running proc).
@@ -1789,6 +1907,7 @@ reloadcomposition(text: string)
 	loadservicemodules();				# starts only new services
 	syncmodslots();
 	vers++;
+	startwatchers();
 }
 
 # ── Headless mode ───────────────────────────────────────────

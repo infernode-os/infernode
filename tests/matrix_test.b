@@ -886,6 +886,75 @@ testControlFSAlertE2E(t: ref T)
 	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
 }
 
+# INFR-12 acceptance: a watch rule loads a pinned composition when
+# the watched value transitions to a matching pattern, never on the
+# first observation; notify lands in /mnt/matrix/notifications.
+testControlFSWatch(t: ref T)
+{
+	mkfixture();
+	statuspath := FIXMOUNT + "/portfolio/defense/status";
+	createstr(statuspath, "normal\n");
+
+	# The defensive composition watches for recovery and notifies.
+	defensivetext := "# mtest-defensive\n" +
+		"watch " + statuspath + "\n" +
+		"normal -> notify defense back to normal\n" +
+		"service alert-watcher " + FIXMOUNT + "\n";
+	createstr("/lib/matrix/compositions/mtest-defensive", defensivetext);
+
+	watchtext := "# watch-e2e\n" +
+		"watch " + statuspath + "\n" +
+		"crisis -> load mtest-defensive\n" +
+		"service alert-watcher " + FIXMOUNT + "\n";
+	t.assert(writestr("/mnt/matrix/composition", watchtext) > 0, "composition write accepted");
+	applied := 0;
+	for(w := 0; w < 3000 && !applied; w += 250) {
+		if(readfile("/mnt/matrix/composition") == watchtext)
+			applied = 1;
+		else
+			sys->sleep(250);
+	}
+	t.assert(applied, "watch composition loaded");
+
+	# The current value already reads "normal"; two-plus watch
+	# cycles must pass without anything firing.
+	sys->sleep(2500);
+	t.assertseq(readfile("/mnt/matrix/composition"), watchtext, "no fire on first observation");
+
+	# Transition to crisis: the defensive composition must load.
+	createstr(statuspath, "crisis\n");
+	loaded := 0;
+	for(w = 0; w < 10000 && !loaded; w += 500) {
+		if(readfile("/mnt/matrix/composition") == defensivetext)
+			loaded = 1;
+		else
+			sys->sleep(500);
+	}
+	t.assert(loaded, "crisis transition loaded the defensive composition");
+
+	# Recovery: the defensive composition's watcher baselined on
+	# "crisis", so flipping back is a transition and must notify.
+	sys->sleep(1500);	# let the fresh watcher take its baseline
+	createstr(statuspath, "normal\n");
+	notified := 0;
+	for(w = 0; w < 8000 && !notified; w += 500) {
+		notifs := readfile("/mnt/matrix/notifications");
+		for(i := 0; i + 22 < len notifs; i++)
+			if(notifs[i:i+22] == "defense back to normal") {
+				notified = 1;
+				break;
+			}
+		if(!notified)
+			sys->sleep(500);
+	}
+	t.assert(notified, "recovery transition notified");
+
+	# Cleanup: unpin the fixture composition, restore sysmon.
+	writestr("/mnt/matrix/ctl", "unpin mtest-defensive");
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+}
+
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
@@ -989,6 +1058,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSNotifications", testControlFSNotifications);
 		run("ControlFSReload", testControlFSReload);
 		run("ControlFSAlertE2E", testControlFSAlertE2E);
+		run("ControlFSWatch", testControlFSWatch);
 		run("ControlFSCtlVerbs", testControlFSCtlVerbs);
 		run("ControlFSUnload", testControlFSUnload);
 	}

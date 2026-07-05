@@ -592,10 +592,9 @@ service alert-watcher /n/tbl4
   modules and layout lines -- the service module works identically.
 
 
-## Future: Watch Rules (v1.1)
+## Watch Rules
 
-After the POC validates the static composition model, watch rules add
-reactive behaviour directly in the composition file:
+Watch rules add reactive behaviour directly in the composition file:
 
 ```
 watch <path>
@@ -609,12 +608,34 @@ watch /n/tbl4/portfolio/defense/status
   normal -> load trading-desk
 ```
 
-Actions are limited to operations Matrix already supports: `load`,
-`unload`, `pin`, `notify`. The watch language is declarative. If a use
-case exceeds what watch rules can express, the escape hatch is a service
-module written in Limbo that implements arbitrary logic.
+`watch <path>` opens a block. Every following line containing `->` is
+an arm; the first non-arm line closes the block (blank lines and
+comments inside it are skipped without closing — the format trims
+lines, so blocks are content-delimited, not indented). Patterns are
+exact-match against the watched file's whitespace-trimmed content.
+Actions are validated at parse time and limited to operations Matrix
+already supports:
 
-Watch rules are deferred from the POC to validate the static model first.
+- `load <name>` — load a pinned composition
+- `unload` — unload to the empty composition
+- `pin <name>` — save the current composition to the library
+- `notify <text>` — append `<millisec> <path> <value> <text>` to
+  `/mnt/matrix/notifications`
+
+Semantics: one poller (1 s cadence) covers all rules. An action fires
+only when the watched value *changes to* a matching pattern — the
+first observation never fires, and an unreadable path never fires.
+Every composition reload tears the watcher down and starts the new
+composition's rules with fresh (all-unseen) state, so a just-loaded
+composition can never fire immediately; a load loop would need the
+watched value to genuinely change once per hop. As belt and braces,
+consecutive `load`/`unload` fires are rate-limited by a short
+cooldown. No new daemon, no policy engine — the watcher writes the
+same ctl verbs any agent would.
+
+The watch language is deliberately declarative and minimal (no regex,
+no compound conditions). If a use case exceeds it, the escape hatch is
+a service module written in Limbo that implements arbitrary logic.
 
 
 ## Future: Marketplace (h402)

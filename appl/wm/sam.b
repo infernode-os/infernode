@@ -40,6 +40,10 @@ init(context: ref draw->Context, argv: list of string)
 	}
 
 	fprint(logfd, "Samterm started\n");
+	fprint(logfd, "ctxt: nonnil=%d display=%d wm=%d\n",
+		context != nil,
+		context != nil && context.display != nil,
+		context != nil && context.wm != nil);
 
 	pgrp := sys->pctl(sys->NEWPGRP, nil);
 

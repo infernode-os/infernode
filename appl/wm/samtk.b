@@ -87,7 +87,10 @@ newflayer(tag, tp: int): ref Flayer
 		tk->cmd(ctxt.which.t,
 			".Wm_t.title configure -background blue; update");
 	}
+	sys->fprint(ctxt.logfd, "newflayer: creating toplevel (wm=%d)...\n",
+		ctxt.ctxt != nil && ctxt.ctxt.wm != nil);
 	(t, cmdc) := tkclient->toplevel(ctxt.ctxt, "-borderwidth 1 -relief raised", "SamTerm", Tkclient->Appl);
+	sys->fprint(ctxt.logfd, "newflayer: toplevel returned (t=%d)\n", t != nil);
 	tk->cmd(t, ". configure -x "+string x+" -y "+string y+"; update");
 
 	if (x == 10 && y == 10) {

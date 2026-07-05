@@ -120,6 +120,7 @@ TARG=\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
 	matrix_perfdashboard_test.dis\
+	matrix_sysmon_test.dis\
 	matrix_test.dis\
 	opus_test.dis\
 	keyringinst_test.dis\

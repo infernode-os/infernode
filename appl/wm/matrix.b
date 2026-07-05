@@ -128,7 +128,7 @@ complock: chan of int;	# mutex for comp access
 top: ref Toplevel;
 wmctl: chan of string;
 actch: chan of string;
-mtximg: ref Image;	# off-screen composited frame, shown via a Tk label
+mtximg: ref Image;	# off-screen composited frame, shown as a canvas image item
 winr: Rect;		# current composited-frame rectangle
 display_g: ref Display;
 font_g: ref Font;
@@ -1067,14 +1067,18 @@ initgui(ctxt: ref Draw->Context)
 	actch = chan[16] of string;
 	tk->namechan(top, actch, "act");
 
-	# The whole composited frame is a single Tk bitmap image in a label.
+	# The compositor is a single Tk canvas.  The whole composited
+	# frame is one canvas image item at the origin; Tk-hosted
+	# regions overlay it as canvas window items (the only absolute-
+	# positioning primitive Inferno Tk has — there is no `place`).
 	tkcmds(array[] of {
 		". configure -background " + bgcolstr,
+		"canvas .c -borderwidth 0 -background " + bgcolstr,
 		"image create bitmap mtx",
-		"label .l -image mtx -borderwidth 0",
-		"pack .l -fill both -expand 1",
+		".c create image 0 0 -image mtx -anchor nw",
+		"pack .c -fill both -expand 1",
 		"pack propagate . 0",
-		"bind .l <Button-3> {send act menu %X %Y}",
+		"bind .c <Button-3> {send act menu %X %Y}",
 	});
 	allocframe(800, 600);
 
@@ -1243,6 +1247,7 @@ guiloop()
 			loadcolors();
 			tkclient->wmctl(top, "retheme");
 			tk->cmd(top, ". configure -background " + bgcolstr);
+			tk->cmd(top, ".c configure -background " + bgcolstr);
 			rethemedisplaymodules(comp.layout);
 			dirty = 1;
 		}
@@ -1316,7 +1321,7 @@ redraw()
 	else
 		drawpicker(img);
 
-	# Composite the off-screen frame into the Tk label.
+	# Composite the off-screen frame into the canvas image item.
 	tk->putimage(top, "mtx", img, nil);
 	tk->cmd(top, "update");
 }

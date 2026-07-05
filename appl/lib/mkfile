@@ -42,6 +42,8 @@ TARG=\
 	dialog.dis\
 	selectfile.dis\
 	tabs.dis\
+	debdata.dis\
+	debsrc.dis\
 	dict.dis\
 	dis.dis\
 	diskblocks.dis\

@@ -2,7 +2,7 @@ Diss: module {};
 
 DebSrc: module
 {
-	PATH:	con "/dis/wm/debsrc.dis";
+	PATH:	con "/dis/lib/debsrc.dis";
 
 	Mod: adt
 	{
@@ -36,7 +36,7 @@ DebSrc: module
 
 DebData: module
 {
-	PATH:	con "/dis/wm/debdata.dis";
+	PATH:	con "/dis/lib/debdata.dis";
 
 	Datum: adt
 	{

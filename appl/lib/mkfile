@@ -60,6 +60,7 @@ TARG=\
 	fsfilter.dis\
 	fslib.dis\
 	fsproto.dis\
+	geoproj.dis\
 	hash.dis\
 	html.dis\
 	imap.dis\
@@ -199,6 +200,7 @@ SYSMODULES=\
 	filepat.m\
 	filter.m\
 	format.m\
+	geoproj.m\
 	fslib.m\
 	fsproto.m\
 	hash.m\

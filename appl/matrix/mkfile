@@ -5,6 +5,8 @@ TARG=\
 	signal-feed.dis\
 	risk-gauge.dis\
 	alert-watcher.dis\
+	geo-fixture.dis\
+	geo-map.dis\
 	llm-recorder.dis\
 	llm-context.dis\
 	llm-sessions.dis\
@@ -17,7 +19,9 @@ TARG=\
 SYSMODULES=\
 	sys.m\
 	draw.m\
+	geoproj.m\
 	lucitheme.m\
+	math.m\
 	matrix.m\
 
 DISBIN=$ROOT/dis/matrix

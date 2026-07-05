@@ -19,11 +19,23 @@ implement SysmonSvc;
 #                          live process (PID GRP USER TIME STATE
 #                          SIZE_K MODULE) — fixed-width fields per
 #                          devprog.c
+#   <outdir>/proc/cpurates one "pid pct" line per live process:
+#                          tick delta since the previous poll,
+#                          normalised to percent (new pids read 0)
+#   <outdir>/net/current   connection census: "tcp total connected
+#                          announced" and "udp ..." lines derived
+#                          from /net/<proto>/<conv>/status
+#   <outdir>/net/history   60-sample ring: ts tcp_total tcp_conn
+#                          udp_total
+#   <outdir>/net/stats     verbatim /net/tcp/stats when the platform
+#                          implements it (emu does not; native ports
+#                          do) — absent otherwise
 #
 # Sources (no /dev/sysstat in emu — derive CPU from /prog tick
 # totals; /dev/memory replaces /dev/swap):
 #   /dev/memory            emu pool stats (main / heap / image)
 #   /prog/<pid>/status     per-process state and tick count
+#   /net/{tcp,udp}         per-connection status files
 #
 # No external mount required: the service inherits the host
 # namespace.  Compositions assign `service sysmon-svc /` for
@@ -63,6 +75,14 @@ hist_w:		int;			# next write index
 last_total_ticks:	big;
 last_poll_ms:		int;
 
+# Per-pid tick counts from the previous poll, for proc/cpurates.
+lastticks:	list of (string, big);
+
+# Net census rings (share ts_hist/hist_n/hist_w with the others).
+tcp_tot_hist:	array of int;
+tcp_conn_hist:	array of int;
+udp_tot_hist:	array of int;
+
 init(nil: string, outdir: string): string
 {
 	sys = load Sys Sys->PATH;
@@ -73,6 +93,11 @@ init(nil: string, outdir: string): string
 	hist_w = 0;
 	last_total_ticks = big 0;
 	last_poll_ms = 0;
+
+	lastticks = nil;
+	tcp_tot_hist = array[HISTLEN] of int;
+	tcp_conn_hist = array[HISTLEN] of int;
+	udp_tot_hist = array[HISTLEN] of int;
 
 	cpu_hist = array[HISTLEN] of int;
 	heap_cur_hist = array[HISTLEN] of big;
@@ -87,6 +112,7 @@ init(nil: string, outdir: string): string
 	mkdir(outdir_g + "/mem");
 	mkdir(outdir_g + "/cpu");
 	mkdir(outdir_g + "/proc");
+	mkdir(outdir_g + "/net");
 	return nil;
 }
 
@@ -117,12 +143,13 @@ poll()
 		parsemem(mem);
 
 	# CPU: aggregate ticks across /prog and divide by elapsed real time.
-	(proc_snapshot, total_ticks, busy_count, proc_count) := scanprog();
+	(proc_snapshot, total_ticks, busy_count, proc_count, perproc) := scanprog();
 	writefile(outdir_g + "/proc/list", proc_snapshot);
 
 	pct := 0;
+	dt_ms := 0;
 	if(last_poll_ms != 0 && last_total_ticks != big 0) {
-		dt_ms := now - last_poll_ms;
+		dt_ms = now - last_poll_ms;
 		dt_ticks := total_ticks - last_total_ticks;
 		# Inferno tick is roughly 1ms; for portability, normalise:
 		# 1 tick per ms means pct = dt_ticks * 100 / dt_ms.  If
@@ -137,7 +164,23 @@ poll()
 	last_total_ticks = total_ticks;
 	last_poll_ms = now;
 
+	# Per-process rates from tick deltas against the previous poll.
+	writecpurates(perproc, dt_ms);
+
+	# Net census (+ verbatim stats where the platform provides them).
+	(tcp_tot, tcp_conn, tcp_ann) := censusproto("tcp");
+	(udp_tot, udp_conn, udp_ann) := censusproto("udp");
+	writefile(outdir_g + "/net/current",
+		sys->sprint("tcp %d %d %d\nudp %d %d %d\n",
+			tcp_tot, tcp_conn, tcp_ann, udp_tot, udp_conn, udp_ann));
+	stats := readfile("/net/tcp/stats");
+	if(stats != "")
+		writefile(outdir_g + "/net/stats", stats);
+
 	# Push into history.
+	tcp_tot_hist[hist_w] = tcp_tot;
+	tcp_conn_hist[hist_w] = tcp_conn;
+	udp_tot_hist[hist_w] = udp_tot;
 	cpu_hist[hist_w] = pct;
 	heap_cur_hist[hist_w] = heap_cur;
 	heap_max_hist[hist_w] = heap_max;
@@ -155,8 +198,77 @@ poll()
 		sys->sprint("%d %d %d\n", pct, busy_count, proc_count));
 	writehistory();
 
-	# Emit mem/history.
+	# Emit mem/history and net/history.
 	writememhistory();
+	writenethistory();
+}
+
+# ─── Per-process CPU rates ─────────────────────────────────
+
+writecpurates(perproc: list of (string, big), dt_ms: int)
+{
+	out := "";
+	newlast: list of (string, big);
+	for(pl := perproc; pl != nil; pl = tl pl) {
+		(pid, ticks) := hd pl;
+		pct := 0;
+		if(dt_ms > 0) {
+			for(ol := lastticks; ol != nil; ol = tl ol) {
+				(opid, oticks) := hd ol;
+				if(opid == pid) {
+					p := int ((ticks - oticks) * big 100 / big dt_ms);
+					if(p < 0) p = 0;
+					if(p > 100) p = 100;
+					pct = p;
+					break;
+				}
+			}
+		}
+		out += sys->sprint("%s %d\n", pid, pct);
+		newlast = (pid, ticks) :: newlast;
+	}
+	lastticks = newlast;
+	writefile(outdir_g + "/proc/cpurates", out);
+}
+
+# ─── Net census ────────────────────────────────────────────
+
+# Count conversations by state under /net/<proto>: total,
+# Connected, Announced.  Each numeric directory's status file
+# leads with the state word (see devip.c ipstates).
+censusproto(proto: string): (int, int, int)
+{
+	total := 0;
+	connected := 0;
+	announced := 0;
+	fd := sys->open("/net/" + proto, Sys->OREAD);
+	if(fd == nil)
+		return (0, 0, 0);
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			name := dirs[i].name;
+			if(name == "" || name[0] < '0' || name[0] > '9')
+				continue;
+			status := readfile("/net/" + proto + "/" + name + "/status");
+			if(status == "")
+				continue;
+			total++;
+			(ntoks, toks) := sys->tokenize(status, " \t\n");
+			if(ntoks < 1)
+				continue;
+			case hd toks {
+			"Connected" or "Established" =>
+				connected++;
+			"Announced" or "Listen" =>
+				announced++;
+			}
+		}
+	}
+	fd = nil;
+	return (total, connected, announced);
 }
 
 # ─── /dev/memory parsing ───────────────────────────────────
@@ -199,16 +311,17 @@ parsemem(content: string): (big, big, big, big, big, big)
 
 # ─── /prog scanning ────────────────────────────────────────
 
-scanprog(): (string, big, int, int)
+scanprog(): (string, big, int, int, list of (string, big))
 {
 	snapshot := "";
 	total_ticks := big 0;
 	busy := 0;
 	count := 0;
+	perproc: list of (string, big);
 
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
-		return ("", big 0, 0, 0);
+		return ("", big 0, 0, 0, nil);
 
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
@@ -230,6 +343,7 @@ scanprog(): (string, big, int, int)
 				toks = tl toks; toks = tl toks; toks = tl toks;
 				ticks := big hd toks;
 				total_ticks += ticks;
+				perproc = (pid, ticks) :: perproc;
 				toks = tl toks;
 				state := hd toks;
 				if(state != "Sleep" && state != "Wait" &&
@@ -241,7 +355,7 @@ scanprog(): (string, big, int, int)
 		}
 	}
 	fd = nil;
-	return (snapshot, total_ticks, busy, count);
+	return (snapshot, total_ticks, busy, count, perproc);
 }
 
 # ─── History writers ───────────────────────────────────────
@@ -277,6 +391,21 @@ writememhistory()
 	writefile(outdir_g + "/mem/history", out);
 }
 
+writenethistory()
+{
+	out := "";
+	start := 0;
+	if(hist_n == HISTLEN)
+		start = hist_w;
+	for(i := 0; i < hist_n; i++) {
+		idx := (start + i) % HISTLEN;
+		out += sys->sprint("%d %d %d %d\n",
+			ts_hist[idx], tcp_tot_hist[idx],
+			tcp_conn_hist[idx], udp_tot_hist[idx]);
+	}
+	writefile(outdir_g + "/net/history", out);
+}
+
 # ─── File I/O ──────────────────────────────────────────────
 
 readfile(path: string): string
@@ -296,14 +425,30 @@ readfile(path: string): string
 	return out;
 }
 
+# Replace via tmp + rename so readers never see a torn write: they
+# get the old content, the complete new content, or (briefly) no
+# file — and every reader here already treats open-failure as empty.
 writefile(path, content: string)
 {
-	fd := sys->create(path, Sys->OWRITE, 8r644);
+	tmp := path + ".tmp";
+	fd := sys->create(tmp, Sys->OWRITE, 8r644);
 	if(fd == nil)
 		return;
 	data := array of byte content;
 	sys->write(fd, data, len data);
 	fd = nil;
+	sys->remove(path);
+	nd := sys->nulldir;
+	nd.name = basename(path);
+	sys->wstat(tmp, nd);
+}
+
+basename(p: string): string
+{
+	for(i := len p - 1; i >= 0; i--)
+		if(p[i] == '/')
+			return p[i+1:];
+	return p;
 }
 
 mkdir(path: string)

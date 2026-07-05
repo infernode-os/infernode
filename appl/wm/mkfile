@@ -51,6 +51,8 @@ SYSMODULES=\
 	lucitheme.m\
 	math.m\
 	matrix.m\
+	matrixlib.m\
+	matrixtk.m\
 	menu.m\
 	menuhit.m\
 	plumbmsg.m\

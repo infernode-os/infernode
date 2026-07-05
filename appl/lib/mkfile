@@ -60,6 +60,7 @@ TARG=\
 	fsfilter.dis\
 	fslib.dis\
 	fsproto.dis\
+	geoproj.dis\
 	hash.dis\
 	html.dis\
 	imap.dis\
@@ -78,6 +79,7 @@ TARG=\
 	lock.dis\
 	login.dis\
 	lucitheme.dis\
+	matrixlib.dis\
 	memfs.dis\
 	menu.dis\
 	menuhit.dis\
@@ -198,6 +200,7 @@ SYSMODULES=\
 	filepat.m\
 	filter.m\
 	format.m\
+	geoproj.m\
 	fslib.m\
 	fsproto.m\
 	hash.m\
@@ -219,6 +222,9 @@ SYSMODULES=\
 	lucitheme.m\
 	man.m\
 	math.m\
+	matrix.m\
+	matrixlib.m\
+	matrixtk.m\
 	memfs.m\
 	menu.m\
 	outlinefont.m\

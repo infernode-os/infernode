@@ -24,7 +24,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Font, Image, Point, Rect, Pointer: import draw;
+	Display, Font, Image, Point, Rect, Pointer, Screen: import draw;
 
 include "arg.m";
 
@@ -37,15 +37,18 @@ include "styxservers.m";
 	Fid, Styxserver, Navigator, Navop: import styxservers;
 	Enotfound, Eperm, Ebadarg: import styxservers;
 
-include "string.m";
-	str: String;
-
 include "tk.m";
 	tk: Tk;
 	Toplevel: import tk;
 
 include "tkclient.m";
 	tkclient: Tkclient;
+
+include "sh.m";
+
+include "wmsrv.m";
+	appwm: Wmsrv;
+	Client: import appwm;
 
 include "lucitheme.m";
 
@@ -54,77 +57,72 @@ include "readdir.m";
 
 include "matrix.m";
 
+include "matrixtk.m";
+
+include "matrixlib.m";
+	matrixlib: MatrixLib;
+
 Matrix: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-# ── Layout constants ────────────────────────────────────────
-
-HSPLIT: con 0;
-VSPLIT: con 1;
-MAX_DEPTH: con 4;
 UPDATE_MS: con 2000;
 
-# ── Layout tree ─────────────────────────────────────────────
-
-LayoutNode: adt
-{
-	pick {
-	Split =>
-		orient: int;
-		ratio1: int;
-		ratio2: int;
-		child1: cyclic ref LayoutNode;
-		child2: cyclic ref LayoutNode;
-		r: Rect;
-	Leaf =>
-		name: string;
-		modname: string;
-		mount: string;
-		mod: MatrixDisplay;
-		r: Rect;
-	}
-};
-
-# ── Module entries ──────────────────────────────────────────
-
-ModuleAssign: adt
-{
-	region: string;
-	modname: string;
-	mount: string;
-};
-
-ServiceEntry: adt
-{
-	name: string;
-	mount: string;
-	outdir: string;
-	mod: MatrixService;
-	pid: int;
-};
-
-# ── Composition ─────────────────────────────────────────────
-
-Composition: adt
-{
-	name: string;
-	layout: ref LayoutNode;
-	assigns: list of ref ModuleAssign;
-	services: list of ref ServiceEntry;
-	text: string;
-};
-
 # ── 9P qid space ───────────────────────────────────────────
+#
+# 64-bit qid path: bits 0..7 node type; 8..19 module slot (4096);
+# 20..43 passthrough slot (16M).  Module slots are append-only and
+# never renumbered (mail9p idiom), so a fid opened before a
+# composition reload keeps resolving to the same module afterwards.
 
-Qroot, Qctl, Qcomposition, Qmoddir: con iota;
-Qmodbase:  con 100;
-MOD_STRIDE: con 8;
-Qmod_dir:  con 0;
-Qmod_ctl:  con 1;
-Qmod_type: con 2;
-Qmod_mount: con 3;
+# Fixed nodes.
+Qroot, Qctl, Qcomposition, Qmoddir, Qlibdir,
+Qlibcompsdir, Qlibmodsdir, Qnotifications: con iota;
+
+# Per-module nodes (module slot packed into bits 8..19).
+Qmoddirent:	con 16;	# modules/<name>/
+Qmodctl:	con 17;
+Qmodtype:	con 18;
+Qmodmount:	con 19;
+Qmodout:	con 20;	# modules/<name>/out/ (service modules only)
+
+# Passthrough node backed by a real file or directory; the real
+# path lives in passtab (slot packed into bits 20..43).
+Qpass:	con 32;
+
+LIBCOMPS: con "/lib/matrix/compositions";
+LIBMODS:  con "/dis/matrix";
+OUTBASE:  con "/tmp/matrix";
+
+# Stable module registry.  Index == the slot packed into qid paths.
+# Slots are appended on first sight of a (name) and revived on
+# reload; a slot whose module left the composition goes !live and
+# walks/stats on it fail, but the slot is never reused.
+ModSlot: adt
+{
+	name:	string;
+	mtype:	string;	# display|service
+	mount:	string;
+	live:	int;
+};
+modslots: array of ref ModSlot;
+nmodslots: int;
+
+# Passthrough registry: synthetic qid → real path.  Append-only for
+# the server lifetime; parentq lets ".." walk back out.
+PassEnt: adt
+{
+	rpath:	string;
+	parentq:	big;
+};
+passtab: array of ref PassEnt;
+npass: int;
+
+# notifications file: bounded in-memory ring appended by watch-rule
+# notify actions (and anything else runtime-worthy).
+NOTIFMAX: con 32*1024;
+notifbuf: string;
 
 # ── Globals ─────────────────────────────────────────────────
 
@@ -138,7 +136,7 @@ complock: chan of int;	# mutex for comp access
 top: ref Toplevel;
 wmctl: chan of string;
 actch: chan of string;
-mtximg: ref Image;	# off-screen composited frame, shown via a Tk label
+mtximg: ref Image;	# off-screen composited frame, shown as a canvas image item
 winr: Rect;		# current composited-frame rectangle
 display_g: ref Display;
 font_g: ref Font;
@@ -153,6 +151,23 @@ yellowcolor: ref Image;
 guimode: int;
 dirty: int;
 focusmod: MatrixDisplay;	# module with keyboard focus
+tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
+tkregionseq: int;	# widget-path allocator for hosted regions (.r<seq>)
+mtxitem: string;	# canvas item id of the composited-frame image
+
+# App hosting: matrix acts as a mini window manager (the lucifer
+# presentation-zone pattern) so unmodified /dis programs run inside
+# regions.  One wmsrv instance serves /chan/wmctl.matrix; each app is
+# launched in a FORKNS'd proc that binds it over /chan/wmctl, so
+# wmclient/tkclient connect to us instead of the outer wm.  Windows
+# are carved from a Screen allocated over matrix's own window image.
+appbase: ref Image;	# offscreen base the app screen lives on
+appscreen: ref Screen;
+appwmchan: chan of (string, chan of (string, ref Draw->Wmcontext));
+applk: chan of int;	# guards apppendq/apprecs
+apppendq: list of ref LayoutNode.Leaf;	# launches awaiting their join
+apprecs: list of (ref LayoutNode.Leaf, ref Wmsrv->Client);
+appkbd: ref Wmsrv->Client;	# app with keyboard focus (pointer-follows)
 
 # Channels
 updatech: chan of int;
@@ -203,9 +218,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 		nomod(Styxservers->PATH);
 	styxservers->init(styx);
 
-	str = load String String->PATH;
-	if(str == nil)
-		nomod(String->PATH);
+	matrixlib = load MatrixLib MatrixLib->PATH;
+	if(matrixlib == nil)
+		nomod(MatrixLib->PATH);
+	matrixlib->init();
 
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
@@ -239,12 +255,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(comptext == nil || comptext == "")
 		comptext = "# empty\n";
 
-	(c, err) := parsecomposition(comptext);
+	(c, err) := matrixlib->parsecomposition(comptext);
 	if(err != nil) {
 		sys->fprint(stderr, "matrix: parse error: %s\n", err);
 		raise "fail:parse";
 	}
 	comp = c;
+	syncmodslots();
 
 	# Start 9P server (always, both modes)
 	start9p();
@@ -261,9 +278,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 		initgui(ctxt);
 		loaddisplaymodules();
 		loadservicemodules();
+		startwatchers();
 		guiloop();
 	} else {
 		loadservicemodules();
+		startwatchers();
 		headlessloop();
 	}
 }
@@ -280,278 +299,7 @@ nomod(path: string)
 	raise "fail:load";
 }
 
-# ── Composition Parser ──────────────────────────────────────
-
-parsecomposition(text: string): (ref Composition, string)
-{
-	c := ref Composition;
-	c.text = text;
-	c.name = "";
-	c.layout = nil;
-	c.assigns = nil;
-	c.services = nil;
-
-	# Leaf name → LayoutNode map (for resolving nested splits)
-	leafnames: list of (string, ref LayoutNode);
-
-	lines := splitlines(text);
-
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		line = trim(line);
-		if(len line == 0)
-			continue;
-
-		# Comment
-		if(line[0] == '#') {
-			if(c.name == "" && len line > 2)
-				c.name = trim(line[2:]);
-			continue;
-		}
-
-		(nil, toks) := sys->tokenize(line, " \t");
-		if(toks == nil)
-			continue;
-		first := hd toks;
-		rest := tl toks;
-
-		# "layout hsplit|vsplit N M" — root split
-		if(first == "layout") {
-			if(c.layout != nil)
-				return (nil, "duplicate layout declaration");
-			if(len rest < 3)
-				return (nil, "layout needs: hsplit|vsplit ratio1 ratio2");
-			orient := parseorient(hd rest);
-			if(orient < 0)
-				return (nil, "layout: expected hsplit or vsplit");
-			rest = tl rest;
-			(r1, r1err) := parseint(hd rest);
-			if(r1err != nil)
-				return (nil, "layout: bad ratio1");
-			rest = tl rest;
-			(r2, r2err) := parseint(hd rest);
-			if(r2err != nil)
-				return (nil, "layout: bad ratio2");
-
-			(n1, n2) := childnames("", orient);
-			leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, Rect((0,0),(0,0)));
-			leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, Rect((0,0),(0,0)));
-			c.layout = ref LayoutNode.Split(
-				orient, r1, r2, leaf1, leaf2,
-				Rect((0,0),(0,0)));
-			leafnames = (n1, leaf1) :: (n2, leaf2) :: nil;
-			continue;
-		}
-
-		# "service name mount"
-		if(first == "service") {
-			if(len rest < 2)
-				return (nil, "service needs: name mount");
-			sname := hd rest;
-			smount := hd tl rest;
-			se := ref ServiceEntry(sname, smount, "", nil, 0);
-			c.services = se :: c.services;
-			continue;
-		}
-
-		# Region split: "left vsplit N M" or "right hsplit N M"
-		# Region assign: "left/top module-name /mount/path"
-		if(len rest >= 3) {
-			# Is the second token an orientation?
-			orient := parseorient(hd rest);
-			if(orient >= 0) {
-				# Region split
-				rest = tl rest;
-				(r1, r1e) := parseint(hd rest);
-				if(r1e != nil)
-					return (nil, first + ": bad ratio1");
-				rest = tl rest;
-				(r2, r2e) := parseint(hd rest);
-				if(r2e != nil)
-					return (nil, first + ": bad ratio2");
-
-				# Find the leaf with this name
-				found := 0;
-				for(ln := leafnames; ln != nil; ln = tl ln) {
-					(lname, nil) := hd ln;
-					if(lname == first) {
-						# Check depth
-						if(depth(first) >= MAX_DEPTH - 1)
-							return (nil, first + ": max layout depth exceeded");
-
-						(n1, n2) := childnames(first, orient);
-						leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, Rect((0,0),(0,0)));
-						leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, Rect((0,0),(0,0)));
-						split := ref LayoutNode.Split(
-							orient, r1, r2, leaf1, leaf2,
-							Rect((0,0),(0,0)));
-
-						# Replace the leaf in its parent
-						replaceleaf(c.layout, lname, split);
-
-						# Update leaf names: remove old, add new
-						newnames: list of (string, ref LayoutNode);
-						for(ln2 := leafnames; ln2 != nil; ln2 = tl ln2)
-							if((hd ln2).t0 != first)
-								newnames = hd ln2 :: newnames;
-						leafnames = (n1, leaf1) :: (n2, leaf2) :: newnames;
-						found = 1;
-						break;
-					}
-				}
-				if(!found)
-					return (nil, first + ": unknown region for split");
-				continue;
-			}
-		}
-
-		# Module assignment: "region modname mount"
-		if(len rest >= 2) {
-			modname := hd rest;
-			mount := hd tl rest;
-			ma := ref ModuleAssign(first, modname, mount);
-			c.assigns = ma :: c.assigns;
-			continue;
-		}
-
-		return (nil, "unrecognized line: " + line);
-	}
-
-	# Apply module assignments to layout leaves
-	for(al := c.assigns; al != nil; al = tl al) {
-		a := hd al;
-		if(c.layout != nil) {
-			if(!assignleaf(c.layout, a.region, a.modname, a.mount))
-				return (nil, a.region + ": region not found in layout");
-		}
-	}
-
-	return (c, nil);
-}
-
-# Parse "hsplit" or "vsplit"
-parseorient(s: string): int
-{
-	if(s == "hsplit")
-		return HSPLIT;
-	if(s == "vsplit")
-		return VSPLIT;
-	return -1;
-}
-
-# Parse integer
-parseint(s: string): (int, string)
-{
-	(v, rest) := str->toint(s, 10);
-	if(rest != nil && rest != "")
-		return (0, "not an integer");
-	return (v, nil);
-}
-
-# Compute child names for a split
-childnames(parent: string, orient: int): (string, string)
-{
-	prefix := "";
-	if(parent != "")
-		prefix = parent + "/";
-	if(orient == HSPLIT)
-		return (prefix + "left", prefix + "right");
-	return (prefix + "top", prefix + "bottom");
-}
-
-# Count slashes to determine depth
-depth(name: string): int
-{
-	d := 0;
-	for(i := 0; i < len name; i++)
-		if(name[i] == '/')
-			d++;
-	return d;
-}
-
-# Replace a named leaf in the layout tree with a new node
-replaceleaf(node: ref LayoutNode, name: string, replacement: ref LayoutNode): int
-{
-	pick n := node {
-	Split =>
-		pick c1 := n.child1 {
-		Leaf =>
-			if(c1.name == name) {
-				n.child1 = replacement;
-				return 1;
-			}
-		Split =>
-			if(replaceleaf(n.child1, name, replacement))
-				return 1;
-		}
-		pick c2 := n.child2 {
-		Leaf =>
-			if(c2.name == name) {
-				n.child2 = replacement;
-				return 1;
-			}
-		Split =>
-			if(replaceleaf(n.child2, name, replacement))
-				return 1;
-		}
-	Leaf =>
-		;  # can't recurse into a leaf
-	}
-	return 0;
-}
-
-# Assign a module to a named leaf
-assignleaf(node: ref LayoutNode, name, modname, mount: string): int
-{
-	pick n := node {
-	Split =>
-		if(assignleaf(n.child1, name, modname, mount))
-			return 1;
-		return assignleaf(n.child2, name, modname, mount);
-	Leaf =>
-		if(n.name == name) {
-			n.modname = modname;
-			n.mount = mount;
-			return 1;
-		}
-	}
-	return 0;
-}
-
-# ── String utilities ────────────────────────────────────────
-
-splitlines(s: string): list of string
-{
-	lines: list of string;
-	start := 0;
-	for(i := 0; i < len s; i++) {
-		if(s[i] == '\n') {
-			lines = s[start:i] :: lines;
-			start = i + 1;
-		}
-	}
-	if(start < len s)
-		lines = s[start:] :: lines;
-
-	# Reverse
-	rev: list of string;
-	for(; lines != nil; lines = tl lines)
-		rev = hd lines :: rev;
-	return rev;
-}
-
-trim(s: string): string
-{
-	start := 0;
-	end := len s;
-	while(start < end && (s[start] == ' ' || s[start] == '\t'))
-		start++;
-	while(end > start && (s[end-1] == ' ' || s[end-1] == '\t'))
-		end--;
-	if(start == 0 && end == len s)
-		return s;
-	return s[start:end];
-}
+# ── File utilities ──────────────────────────────────────────
 
 readfile(path: string): string
 {
@@ -600,6 +348,13 @@ ensuredir(path: string)
 
 start9p()
 {
+	# The navigator serves real directories (library/, out/) and
+	# needs readdir in every mode, not just GUI.
+	if(readdir == nil)
+		readdir = load Readdir Readdir->PATH;
+	if(readdir == nil)
+		nomod(Readdir->PATH);
+
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0) {
 		sys->fprint(stderr, "matrix: can't create pipe: %r\n");
@@ -616,8 +371,8 @@ start9p()
 	spawn matrixserve(tchan, srv, pidc);
 	<-pidc;
 
-	ensuredir("/n/matrix");
-	if(sys->mount(fds[1], nil, "/n/matrix", Sys->MREPL|Sys->MCREATE, nil) < 0) {
+	ensuredir("/mnt/matrix");
+	if(sys->mount(fds[1], nil, "/mnt/matrix", Sys->MREPL|Sys->MCREATE, nil) < 0) {
 		sys->fprint(stderr, "matrix: mount failed: %r\n");
 		raise "fail:mount";
 	}
@@ -660,8 +415,7 @@ Serve:
 				break;
 			}
 
-			qtype := TYPE(c.path);
-			case qtype {
+			case TYPE(c.path) {
 			Qctl =>
 				status := "idle";
 				<-complock;
@@ -678,27 +432,56 @@ Serve:
 				complock <-= 1;
 				srv.reply(styxservers->readbytes(m, array of byte text));
 
-			* =>
-				if(qtype >= Qmodbase) {
-					off := modqoffset(qtype);
-					mi := findmodbyqid(qtype);
-					if(mi == nil) {
-						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-						break;
-					}
-					case off {
-					Qmod_ctl =>
-						srv.reply(styxservers->readbytes(m, array of byte (mi.status + "\n")));
-					Qmod_type =>
-						srv.reply(styxservers->readbytes(m, array of byte (mi.mtype + "\n")));
-					Qmod_mount =>
-						srv.reply(styxservers->readbytes(m, array of byte (mi.mount + "\n")));
-					* =>
-						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-					}
-				} else {
-					srv.reply(ref Rmsg.Error(m.tag, Eperm));
+			Qnotifications =>
+				srv.reply(styxservers->readbytes(m, array of byte notifbuf));
+
+			Qmodctl =>
+				ms := liveslot(c.path);
+				if(ms == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
 				}
+				srv.reply(styxservers->readbytes(m, array of byte (modstatus(ms.name, ms.mtype) + "\n")));
+
+			Qmodtype =>
+				ms := liveslot(c.path);
+				if(ms == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte (ms.mtype + "\n")));
+
+			Qmodmount =>
+				ms := liveslot(c.path);
+				if(ms == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte (ms.mount + "\n")));
+
+			Qpass =>
+				# Raw byte passthrough: .dis binaries and live service
+				# outputs must not round-trip through string.
+				i := PASSIDX(c.path);
+				if(i < 0 || i >= npass) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				fd := sys->open(passtab[i].rpath, Sys->OREAD);
+				if(fd == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				buf := array[m.count] of byte;
+				nr := sys->pread(fd, buf, len buf, m.offset);
+				if(nr < 0) {
+					srv.reply(ref Rmsg.Error(m.tag, sys->sprint("%r")));
+					break;
+				}
+				srv.reply(ref Rmsg.Read(m.tag, buf[0:nr]));
+
+			* =>
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
 
 		Write =>
@@ -812,77 +595,179 @@ handlectl(data: string): string
 	return "usage: load <name>|load -|unload|pin <name>|unpin <name>";
 }
 
-# Module info for 9P
-ModInfo: adt
-{
-	name: string;
-	mtype: string;
-	mount: string;
-	status: string;
-};
+# ── Qid packing ─────────────────────────────────────────────
 
-buildmodlist(): list of ref ModInfo
+TYPE(path: big): int
 {
-	mods: list of ref ModInfo;
-	<-complock;
-	if(comp != nil) {
-		# Display modules
-		if(comp.layout != nil)
-			mods = leafmodlist(comp.layout, mods);
-		# Service modules
-		for(sl := comp.services; sl != nil; sl = tl sl) {
-			se := hd sl;
-			status := "stopped";
-			if(se.mod != nil)
-				status = "running";
-			mods = ref ModInfo(se.name, "service", se.mount, status) :: mods;
-		}
+	return int path & 16rFF;
+}
+
+MODSLOT(path: big): int
+{
+	return (int (path >> 8)) & 16rFFF;
+}
+
+PASSIDX(path: big): int
+{
+	return int ((path >> 20) & big 16rFFFFFF);
+}
+
+QPATH(t, slot, pass: int): big
+{
+	return big t | (big slot << 8) | (big pass << 20);
+}
+
+# ── Module slot registry ────────────────────────────────────
+
+# Current (name, mtype, mount, running) tuples from the composition.
+# Caller holds complock.
+collectmods(): list of (string, string, string, int)
+{
+	mods: list of (string, string, string, int);
+	if(comp == nil)
+		return nil;
+	if(comp.layout != nil)
+		mods = collectleaves(comp.layout, mods);
+	for(sl := comp.services; sl != nil; sl = tl sl) {
+		se := hd sl;
+		mods = (se.name, "service", se.mount, se.mod != nil) :: mods;
 	}
-	complock <-= 1;
 	return mods;
 }
 
-leafmodlist(node: ref LayoutNode, acc: list of ref ModInfo): list of ref ModInfo
+collectleaves(node: ref LayoutNode, acc: list of (string, string, string, int)): list of (string, string, string, int)
 {
 	pick n := node {
 	Split =>
-		acc = leafmodlist(n.child1, acc);
-		acc = leafmodlist(n.child2, acc);
+		acc = collectleaves(n.child1, acc);
+		acc = collectleaves(n.child2, acc);
 	Leaf =>
-		if(n.modname != "") {
-			status := "stopped";
-			if(n.mod != nil)
-				status = "running";
-			acc = ref ModInfo(n.modname, "display", n.mount, status) :: acc;
-		}
+		if(n.modname == "app")
+			acc = (appname(n), "app", n.mount, n.apppid > 0) :: acc;
+		else if(n.modname != "")
+			acc = (n.modname, "display", n.mount, n.mod != nil) :: acc;
 	}
 	return acc;
 }
 
-findmodbyqid(qtype: int): ref ModInfo
+# Re-sync the slot registry with the live composition.  Existing
+# names keep their slot (revived if dead); new names append; names
+# absent from the new composition go !live.  Never renumbers.
+syncmodslots()
 {
-	if(qtype < Qmodbase)
-		return nil;
-	base := Qmodbase + ((qtype - Qmodbase) / MOD_STRIDE) * MOD_STRIDE;
-	idx := (base - Qmodbase) / MOD_STRIDE;
-	mods := buildmodlist();
-	i := 0;
+	<-complock;
+	mods := collectmods();
+	complock <-= 1;
+
+	for(i := 0; i < nmodslots; i++)
+		modslots[i].live = 0;
 	for(ml := mods; ml != nil; ml = tl ml) {
-		if(i == idx)
-			return hd ml;
-		i++;
+		(name, mtype, mount, nil) := hd ml;
+		slot := -1;
+		for(i = 0; i < nmodslots; i++)
+			if(modslots[i].name == name) {
+				slot = i;
+				break;
+			}
+		if(slot < 0) {
+			if(modslots == nil || nmodslots == len modslots) {
+				grown := array[nmodslots + 16] of ref ModSlot;
+				grown[0:] = modslots[0:nmodslots];
+				modslots = grown;
+			}
+			slot = nmodslots++;
+			modslots[slot] = ref ModSlot(name, mtype, mount, 1);
+		} else {
+			modslots[slot].mtype = mtype;
+			modslots[slot].mount = mount;
+			modslots[slot].live = 1;
+		}
+	}
+}
+
+liveslot(path: big): ref ModSlot
+{
+	slot := MODSLOT(path);
+	if(slot < 0 || slot >= nmodslots)
+		return nil;
+	ms := modslots[slot];
+	if(ms == nil || !ms.live)
+		return nil;
+	return ms;
+}
+
+# Module status computed from the live composition at read time.
+modstatus(name, mtype: string): string
+{
+	status := "stopped";
+	<-complock;
+	for(ml := collectmods(); ml != nil; ml = tl ml) {
+		(mname, mmtype, nil, running) := hd ml;
+		if(mname == name && mmtype == mtype) {
+			if(running)
+				status = "running";
+			break;
+		}
+	}
+	complock <-= 1;
+	return status;
+}
+
+# ── Passthrough registry ────────────────────────────────────
+
+passfor(parentq: big, rpath: string): int
+{
+	for(i := 0; i < npass; i++)
+		if(passtab[i].rpath == rpath)
+			return i;
+	if(passtab == nil || npass == len passtab) {
+		grown := array[npass + 32] of ref PassEnt;
+		grown[0:] = passtab[0:npass];
+		passtab = grown;
+	}
+	passtab[npass] = ref PassEnt(rpath, parentq);
+	return npass++;
+}
+
+# Real directory behind a passthrough-capable dir qid, or nil.
+realdirof(path: big): string
+{
+	case TYPE(path) {
+	Qlibcompsdir =>
+		return LIBCOMPS;
+	Qlibmodsdir =>
+		return LIBMODS;
+	Qmodout =>
+		ms := liveslot(path);
+		if(ms == nil || ms.mtype != "service")
+			return nil;
+		return OUTBASE + "/" + ms.name;
+	Qpass =>
+		i := PASSIDX(path);
+		if(i < 0 || i >= npass)
+			return nil;
+		return passtab[i].rpath;
 	}
 	return nil;
 }
 
-modqoffset(qtype: int): int
-{
-	return (qtype - Qmodbase) % MOD_STRIDE;
-}
+# ── notifications ───────────────────────────────────────────
 
-TYPE(path: big): int
+notifappend(line: string)
 {
-	return int path & 16rFFFF;
+	notifbuf += line + "\n";
+	# Drop oldest whole lines once over budget.
+	for(guard := 0; len notifbuf > NOTIFMAX && guard < 1000; guard++) {
+		cut := 0;
+		for(i := 0; i < len notifbuf; i++)
+			if(notifbuf[i] == '\n') {
+				cut = i + 1;
+				break;
+			}
+		if(cut == 0)
+			break;
+		notifbuf = notifbuf[cut:];
+	}
 }
 
 dir(qid: Sys->Qid, name: string, length: big, perm: int): ref Sys->Dir
@@ -901,8 +786,7 @@ dir(qid: Sys->Qid, name: string, length: big, perm: int): ref Sys->Dir
 
 dirgen(p: big): (ref Sys->Dir, string)
 {
-	qtype := TYPE(p);
-	case qtype {
+	case TYPE(p) {
 	Qroot =>
 		return (dir(Qid(p, vers, Sys->QTDIR), ".", big 0, 8r755), nil);
 	Qctl =>
@@ -911,26 +795,89 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "composition", big 0, 8r644), nil);
 	Qmoddir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), "modules", big 0, 8r755), nil);
-	}
-
-	if(qtype >= Qmodbase) {
-		off := modqoffset(qtype);
-		mi := findmodbyqid(qtype);
-		if(mi != nil) {
-			case off {
-			Qmod_dir =>
-				return (dir(Qid(p, vers, Sys->QTDIR), mi.name, big 0, 8r755), nil);
-			Qmod_ctl =>
-				return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r444), nil);
-			Qmod_type =>
-				return (dir(Qid(p, vers, Sys->QTFILE), "type", big 0, 8r444), nil);
-			Qmod_mount =>
-				return (dir(Qid(p, vers, Sys->QTFILE), "mount", big 0, 8r444), nil);
-			}
+	Qlibdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "library", big 0, 8r555), nil);
+	Qlibcompsdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "compositions", big 0, 8r555), nil);
+	Qlibmodsdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "modules", big 0, 8r555), nil);
+	Qnotifications =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "notifications", big len array of byte notifbuf, 8r444), nil);
+	Qmoddirent =>
+		ms := liveslot(p);
+		if(ms == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTDIR), ms.name, big 0, 8r555), nil);
+	Qmodctl =>
+		if(liveslot(p) == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r444), nil);
+	Qmodtype =>
+		if(liveslot(p) == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), "type", big 0, 8r444), nil);
+	Qmodmount =>
+		if(liveslot(p) == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), "mount", big 0, 8r444), nil);
+	Qmodout =>
+		rpath := realdirof(p);
+		if(rpath == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTDIR), "out", big 0, 8r555), nil);
+	Qpass =>
+		i := PASSIDX(p);
+		if(i < 0 || i >= npass)
+			return (nil, Enotfound);
+		(ok, sd) := sys->stat(passtab[i].rpath);
+		if(ok < 0)
+			return (nil, Enotfound);
+		d := ref sys->zerodir;
+		d.name = sd.name;
+		d.uid = user;
+		d.gid = user;
+		d.length = sd.length;
+		d.atime = sd.atime;
+		d.mtime = sd.mtime;
+		if(sd.mode & Sys->DMDIR) {
+			d.qid = Qid(p, vers, Sys->QTDIR);
+			d.mode = Sys->DMDIR | 8r555;
+		} else {
+			d.qid = Qid(p, vers, Sys->QTFILE);
+			d.mode = 8r444;
 		}
+		return (d, nil);
 	}
 
 	return (nil, Enotfound);
+}
+
+# Emit the fixed children of a static dir for Readdir, honouring
+# offset/count.  ents are qid paths in listing order.
+replyfixed(n: ref Navop.Readdir, ents: array of big)
+{
+	i := n.offset;
+	count := n.count;
+	for(; i < len ents && count > 0; i++) {
+		n.reply <-= dirgen(ents[i]);
+		count--;
+	}
+	n.reply <-= (nil, nil);
+}
+
+# Readdir a passthrough-backed directory: enumerate the real dir,
+# registering each child in passtab so its synthetic qid is stable.
+replypassdir(n: ref Navop.Readdir, dirq: big, rpath: string)
+{
+	(entries, nent) := readdir->init(rpath, Readdir->NAME);
+	i := n.offset;
+	count := n.count;
+	for(; i < nent && count > 0; i++) {
+		idx := passfor(dirq, rpath + "/" + entries[i].name);
+		n.reply <-= dirgen(QPATH(Qpass, 0, idx));
+		count--;
+	}
+	n.reply <-= (nil, nil);
 }
 
 matrixnavigator(navops: chan of ref Navop)
@@ -943,7 +890,8 @@ matrixnavigator(navops: chan of ref Navop)
 		Walk =>
 			qtype := TYPE(n.path);
 
-			if(qtype == Qroot) {
+			case qtype {
+			Qroot =>
 				case n.name {
 				".." =>
 					;
@@ -953,52 +901,107 @@ matrixnavigator(navops: chan of ref Navop)
 					n.path = big Qcomposition;
 				"modules" =>
 					n.path = big Qmoddir;
+				"library" =>
+					n.path = big Qlibdir;
+				"notifications" =>
+					n.path = big Qnotifications;
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
 				}
 				n.reply <-= dirgen(n.path);
-			} else if(qtype == Qmoddir) {
-				# Walk to a module by name
-				mods := buildmodlist();
-				idx := 0;
+
+			Qmoddir =>
+				if(n.name == "..") {
+					n.path = big Qroot;
+					n.reply <-= dirgen(n.path);
+					continue;
+				}
 				found := 0;
-				for(ml := mods; ml != nil; ml = tl ml) {
-					mi := hd ml;
-					if(mi.name == n.name) {
-						n.path = big(Qmodbase + idx * MOD_STRIDE + Qmod_dir);
+				for(slot := 0; slot < nmodslots; slot++) {
+					ms := modslots[slot];
+					if(ms != nil && ms.live && ms.name == n.name) {
+						n.path = QPATH(Qmoddirent, slot, 0);
 						n.reply <-= dirgen(n.path);
 						found = 1;
 						break;
 					}
-					idx++;
 				}
-				if(!found) {
-					case n.name {
-					".." =>
-						n.path = big Qroot;
-						n.reply <-= dirgen(n.path);
-					* =>
-						n.reply <-= (nil, Enotfound);
-					}
-				}
-			} else if(qtype >= Qmodbase && modqoffset(qtype) == Qmod_dir) {
-				# Walk within a module directory
+				if(!found)
+					n.reply <-= (nil, Enotfound);
+
+			Qmoddirent =>
+				slot := MODSLOT(n.path);
 				case n.name {
 				".." =>
 					n.path = big Qmoddir;
 				"ctl" =>
-					n.path = big(qtype + Qmod_ctl);
+					n.path = QPATH(Qmodctl, slot, 0);
 				"type" =>
-					n.path = big(qtype + Qmod_type);
+					n.path = QPATH(Qmodtype, slot, 0);
 				"mount" =>
-					n.path = big(qtype + Qmod_mount);
+					n.path = QPATH(Qmodmount, slot, 0);
+				"out" =>
+					ms := liveslot(n.path);
+					if(ms == nil || ms.mtype != "service") {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = QPATH(Qmodout, slot, 0);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
 				}
 				n.reply <-= dirgen(n.path);
-			} else {
+
+			Qlibdir =>
+				case n.name {
+				".." =>
+					n.path = big Qroot;
+				"compositions" =>
+					n.path = big Qlibcompsdir;
+				"modules" =>
+					n.path = big Qlibmodsdir;
+				* =>
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				n.reply <-= dirgen(n.path);
+
+			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+				if(n.name == "..") {
+					case qtype {
+					Qlibcompsdir or Qlibmodsdir =>
+						n.path = big Qlibdir;
+					Qmodout =>
+						n.path = QPATH(Qmoddirent, MODSLOT(n.path), 0);
+					Qpass =>
+						i := PASSIDX(n.path);
+						if(i < 0 || i >= npass) {
+							n.reply <-= (nil, Enotfound);
+							continue;
+						}
+						n.path = passtab[i].parentq;
+					}
+					n.reply <-= dirgen(n.path);
+					continue;
+				}
+				rpath := realdirof(n.path);
+				if(rpath == nil) {
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				child := rpath + "/" + n.name;
+				(ok, nil) := sys->stat(child);
+				if(ok < 0) {
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				idx := passfor(n.path, child);
+				n.path = QPATH(Qpass, 0, idx);
+				n.reply <-= dirgen(n.path);
+
+			* =>
 				n.reply <-= (nil, "not a directory");
 			}
 
@@ -1006,67 +1009,55 @@ matrixnavigator(navops: chan of ref Navop)
 			qtype := TYPE(m.path);
 			case qtype {
 			Qroot =>
-				i := n.offset;
-				count := n.count;
-				# Entry 0: ctl
-				if(i == 0 && count > 0) {
-					n.reply <-= dirgen(big Qctl);
-					count--;
-					i++;
-				}
-				# Entry 1: composition
-				if(i <= 1 && count > 0) {
-					n.reply <-= dirgen(big Qcomposition);
-					count--;
-					i++;
-				}
-				# Entry 2: modules
-				if(i <= 2 && count > 0) {
-					n.reply <-= dirgen(big Qmoddir);
-					count--;
-					i++;
-				}
-				n.reply <-= (nil, nil);
+				replyfixed(n, array[] of {
+					big Qctl, big Qcomposition, big Qmoddir,
+					big Qlibdir, big Qnotifications});
 
 			Qmoddir =>
 				i := n.offset;
 				count := n.count;
-				mods := buildmodlist();
-				idx := 0;
-				for(ml := mods; ml != nil && count > 0; ml = tl ml) {
-					if(i <= idx) {
-						qid := Qmodbase + idx * MOD_STRIDE + Qmod_dir;
-						n.reply <-= dirgen(big qid);
+				seen := 0;
+				for(slot := 0; slot < nmodslots && count > 0; slot++) {
+					ms := modslots[slot];
+					if(ms == nil || !ms.live)
+						continue;
+					if(seen >= i) {
+						n.reply <-= dirgen(QPATH(Qmoddirent, slot, 0));
 						count--;
 					}
-					idx++;
+					seen++;
 				}
 				n.reply <-= (nil, nil);
 
-			* =>
-				if(qtype >= Qmodbase && modqoffset(qtype) == Qmod_dir) {
-					# Module directory: ctl, type, mount
-					i := n.offset;
-					count := n.count;
-					base := qtype;
-					if(i == 0 && count > 0) {
-						n.reply <-= dirgen(big(base + Qmod_ctl));
-						count--;
-						i++;
-					}
-					if(i <= 1 && count > 0) {
-						n.reply <-= dirgen(big(base + Qmod_type));
-						count--;
-						i++;
-					}
-					if(i <= 2 && count > 0) {
-						n.reply <-= dirgen(big(base + Qmod_mount));
-						count--;
-					}
-					n.reply <-= (nil, nil);
-				} else {
-					n.reply <-= (nil, "not a directory");
+			Qmoddirent =>
+				slot := MODSLOT(m.path);
+				ms := liveslot(m.path);
+				if(ms == nil) {
+					n.reply <-= (nil, Enotfound);
+					continue;
 				}
+				if(ms.mtype == "service")
+					replyfixed(n, array[] of {
+						QPATH(Qmodctl, slot, 0), QPATH(Qmodtype, slot, 0),
+						QPATH(Qmodmount, slot, 0), QPATH(Qmodout, slot, 0)});
+				else
+					replyfixed(n, array[] of {
+						QPATH(Qmodctl, slot, 0), QPATH(Qmodtype, slot, 0),
+						QPATH(Qmodmount, slot, 0)});
+
+			Qlibdir =>
+				replyfixed(n, array[] of {big Qlibcompsdir, big Qlibmodsdir});
+
+			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+				rpath := realdirof(m.path);
+				if(rpath == nil) {
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				replypassdir(n, m.path, rpath);
+
+			* =>
+				n.reply <-= (nil, "not a directory");
 			}
 		}
 	}
@@ -1103,19 +1094,33 @@ initgui(ctxt: ref Draw->Context)
 	actch = chan[16] of string;
 	tk->namechan(top, actch, "act");
 
-	# The whole composited frame is a single Tk bitmap image in a label.
+	# The compositor is a single Tk canvas.  The whole composited
+	# frame is one canvas image item at the origin; Tk-hosted
+	# regions overlay it as canvas window items (the only absolute-
+	# positioning primitive Inferno Tk has — there is no `place`).
 	tkcmds(array[] of {
 		". configure -background " + bgcolstr,
+		"canvas .c -borderwidth 0 -background " + bgcolstr,
 		"image create bitmap mtx",
-		"label .l -image mtx -borderwidth 0",
-		"pack .l -fill both -expand 1",
+		"pack .c -fill both -expand 1",
 		"pack propagate . 0",
-		"bind .l <Button-3> {send act menu %X %Y}",
+		"bind .c <Button-3> {send act menu %X %Y}",
 	});
+	mtxitem = tk->cmd(top, ".c create image 0 0 -image mtx -anchor nw");
 	allocframe(800, 600);
 
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
+
+	# The wm may have reshaped the window during onscreen (a
+	# presentation-zone host hands out its content rect, not our
+	# requested 800x600).  Adopt the actual size now, before the
+	# first layout pass — module rects and hosted-app windows are
+	# computed from winr, and a stale frame puts them off-window.
+	aw0 := int tk->cmd(top, ". cget -actwidth");
+	ah0 := int tk->cmd(top, ". cget -actheight");
+	if(aw0 > 0 && ah0 > 0 && (aw0 != winr.dx() || ah0 != winr.dy()))
+		allocframe(aw0, ah0);
 
 	updatech = chan of int;
 	themech = chan[1] of int;
@@ -1144,6 +1149,11 @@ allocframe(wd, ht: int)
 	if(ht < 1) ht = 1;
 	winr = Rect((0,0), (wd, ht));
 	mtximg = display_g.newimage(winr, display_g.image.chans, 0, Draw->Nofill);
+	# Hosted-app windows live in frame coordinates; a new frame
+	# needs a new base (the resize walker then pushes reshapes so
+	# each app re-acquires a window on it).
+	if(appwm != nil)
+		rebuildappscreen();
 }
 
 loadcolors()
@@ -1279,6 +1289,7 @@ guiloop()
 			loadcolors();
 			tkclient->wmctl(top, "retheme");
 			tk->cmd(top, ". configure -background " + bgcolstr);
+			tk->cmd(top, ".c configure -background " + bgcolstr);
 			rethemedisplaymodules(comp.layout);
 			dirty = 1;
 		}
@@ -1352,8 +1363,13 @@ redraw()
 	else
 		drawpicker(img);
 
-	# Composite the off-screen frame into the Tk label.
+	# Composite the off-screen frame into the canvas image item.
+	# The item's bounding box is computed from the image's size, so
+	# re-set its coords after every put — the size method reruns and
+	# picks up the current dimensions (it would otherwise stay at
+	# the empty size the item was created with).
 	tk->putimage(top, "mtx", img, nil);
+	tk->cmd(top, ".c coords " + mtxitem + " 0 0");
 	tk->cmd(top, "update");
 }
 
@@ -1464,6 +1480,16 @@ drawlayout(dst: ref Image, node: ref LayoutNode)
 	Leaf =>
 		if(n.mod != nil) {
 			n.mod->draw(dst);
+		} else if(n.tkmod != nil) {
+			;	# a live Tk frame overlays this rect
+		} else if(n.modname == "app" && n.apppid > 0) {
+			# Blit the app's offscreen window into the frame.
+			c := clientofleaf(n);
+			if(c != nil) {
+				aimg := c.image("app");
+				if(aimg != nil)
+					dst.draw(n.r, aimg, nil, aimg.r.min);
+			}
 		} else if(n.modname != "") {
 			# Module not loaded — show placeholder
 			label := n.modname + " @ " + n.mount;
@@ -1501,12 +1527,18 @@ loadleafmodules(node: ref LayoutNode)
 		loadleafmodules(n.child1);
 		loadleafmodules(n.child2);
 	Leaf =>
-		if(n.modname == "" || n.mod != nil)
+		if(n.modname == "" || n.mod != nil || n.tkmod != nil)
 			return;
+		if(n.modname == "app") {
+			loadappleaf(n);
+			return;
+		}
 		path := "/dis/matrix/" + n.modname + ".dis";
 		mod := load MatrixDisplay path;
 		if(mod == nil) {
-			sys->fprint(stderr, "matrix: cannot load display module %s: %r\n", path);
+			# Not an image module: probe the Tk-hosted interface
+			# (the Dis VM's load typecheck is the discriminator).
+			loadtkleaf(n, path);
 			return;
 		}
 		err := mod->init(display_g, font_g, n.mount);
@@ -1517,6 +1549,341 @@ loadleafmodules(node: ref LayoutNode)
 		mod->resize(n.r);
 		n.mod = mod;
 	}
+}
+
+# Host a Tk display module: a frame in a canvas window item at the
+# leaf's rect.  The runtime owns item geometry; the module owns the
+# frame's children.
+loadtkleaf(n: ref LayoutNode.Leaf, path: string)
+{
+	tkm := load MatrixTkDisplay path;
+	if(tkm == nil) {
+		sys->fprint(stderr, "matrix: cannot load display module %s: %r\n", path);
+		return;
+	}
+	w := sys->sprint(".r%d", tkregionseq++);
+	tk->cmd(top, sys->sprint("frame %s", w));
+	itm := tk->cmd(top, sys->sprint(
+		".c create window %d %d -window %s -anchor nw",
+		n.r.min.x, n.r.min.y, w));
+	if(len itm > 0 && itm[0] == '!') {
+		sys->fprint(stderr, "matrix: %s: cannot host frame: %s\n", n.modname, itm);
+		tk->cmd(top, "destroy " + w);
+		return;
+	}
+	# Geometry via itemconfigure (the same path resize uses): the
+	# explicit size pins the region against the frame's natural
+	# pack size.
+	tk->cmd(top, sys->sprint(".c itemconfigure %s -width %d -height %d",
+		itm, n.r.dx(), n.r.dy()));
+	err := tkm->init(top, w, n.mount);
+	if(err != nil) {
+		sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
+		tk->cmd(top, ".c delete " + itm);
+		tk->cmd(top, "destroy " + w);
+		return;
+	}
+	n.tkmod = tkm;
+	n.tkwin = w;
+	n.tkitem = itm;
+	tkm->resize(n.r);
+	tk->cmd(top, "update");
+}
+
+# ── App hosting ─────────────────────────────────────────────
+
+# Region name flattened for the control fs (9P names cannot hold /).
+appname(n: ref LayoutNode.Leaf): string
+{
+	nm := "app-";
+	for(i := 0; i < len n.name; i++)
+		if(n.name[i] == '/')
+			nm[len nm] = '-';
+		else
+			nm[len nm] = n.name[i];
+	return nm;
+}
+
+ensureappwm(): string
+{
+	if(appwm != nil)
+		return nil;
+	if(top == nil)
+		return "no window";
+	m := load Wmsrv Wmsrv->PATH;
+	if(m == nil)
+		return sys->sprint("cannot load wmsrv: %r");
+	(wmchan, join, req) := m->init("wmctl.matrix");
+	if(join == nil)
+		return "wmsrv init failed";
+	appwmchan = wmchan;
+	# App windows live on a Screen over an OFFSCREEN base image in
+	# frame coordinates, and drawlayout blits each app's window into
+	# the composite every frame.  Hosting them directly over
+	# top.image does not work: Tk's full-frame flushes and the
+	# memlayer composition fight over the same pixels, and whichever
+	# painted last wins (the app went black).  Offscreen hosting
+	# also makes every rect and pointer coordinate identical to the
+	# frame's own space.
+	err := rebuildappscreen();
+	if(err != nil)
+		return err;
+	appwm = m;
+	applk = chan[1] of int;
+	applk <-= 1;
+	spawn appwmloop(join, req);
+	return nil;
+}
+
+rebuildappscreen(): string
+{
+	base := display_g.newimage(winr, display_g.image.chans, 0, Draw->Black);
+	if(base == nil)
+		return sys->sprint("cannot allocate app base: %r");
+	scr := Screen.allocate(base, bgcolor, 0);
+	if(scr == nil)
+		return sys->sprint("cannot allocate app screen: %r");
+	appbase = base;
+	appscreen = scr;
+	return nil;
+}
+
+loadappleaf(n: ref LayoutNode.Leaf)
+{
+	if(!guimode) {
+		sys->fprint(stderr, "matrix: %s: app regions need GUI mode\n", n.mount);
+		return;
+	}
+	# Never hand an app a collapsed rect (Screen.newwindow on a
+	# degenerate rect has bitten the presentation zone before).
+	if(n.r.dx() < 32 || n.r.dy() < 32) {
+		sys->fprint(stderr, "matrix: %s: region too small for an app\n", n.mount);
+		return;
+	}
+	err := ensureappwm();
+	if(err != nil) {
+		sys->fprint(stderr, "matrix: app hosting unavailable: %s\n", err);
+		return;
+	}
+	<-applk;
+	apppendq = append2q(apppendq, n);
+	applk <-= 1;
+	spawn runapp(n);
+}
+
+append2q(q: list of ref LayoutNode.Leaf, n: ref LayoutNode.Leaf): list of ref LayoutNode.Leaf
+{
+	if(q == nil)
+		return n :: nil;
+	return hd q :: append2q(tl q, n);
+}
+
+# The app's proc: fresh pgrp (so unload can killgrp it), private
+# namespace with our wm endpoint bound over the default name, then
+# the program runs as if launched by any window manager.  Apps are
+# trusted in-process peers — no namespace restriction (doc states
+# the posture).
+runapp(n: ref LayoutNode.Leaf)
+{
+	n.apppid = sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
+	# Belt and braces: the app receives our wm channel directly in
+	# its Context, and our endpoint is also bound over the default
+	# name for anything that reconnects via /chan/wmctl.
+	sys->bind("/chan/wmctl.matrix", "/chan/wmctl", Sys->MREPL);
+	mod := load Command n.mount;
+	if(mod == nil) {
+		sys->fprint(stderr, "matrix: cannot load app %s: %r\n", n.mount);
+		n.apppid = 0;
+		return;
+	}
+	argv := n.mount :: nil;
+	if(n.appargs != "") {
+		(nil, atoks) := sys->tokenize(n.appargs, " \t");
+		argv = n.mount :: atoks;
+	}
+	actxt := ref Draw->Context(display_g, nil, appwmchan);
+	{
+		mod->init(actxt, argv);
+	} exception {
+	* =>
+		sys->fprint(stderr, "matrix: app %s raised\n", n.mount);
+	}
+	n.apppid = 0;
+}
+
+leafofclient(c: ref Wmsrv->Client): ref LayoutNode.Leaf
+{
+	<-applk;
+	n: ref LayoutNode.Leaf;
+	for(al := apprecs; al != nil; al = tl al) {
+		(ln, lc) := hd al;
+		if(lc == c) {
+			n = ln;
+			break;
+		}
+	}
+	applk <-= 1;
+	return n;
+}
+
+dropapprec(c: ref Wmsrv->Client)
+{
+	<-applk;
+	keep: list of (ref LayoutNode.Leaf, ref Wmsrv->Client);
+	for(al := apprecs; al != nil; al = tl al) {
+		(nil, lc) := hd al;
+		if(lc != c)
+			keep = hd al :: keep;
+	}
+	apprecs = keep;
+	applk <-= 1;
+	if(appkbd == c)
+		appkbd = nil;
+}
+
+# App windows are allocated in frame coordinates directly.
+appabsrect(r: Rect): Rect
+{
+	return r;
+}
+
+# "!reshape <tag> <reqid> <rect>": tag "." is the app's main window;
+# any other tag is a secondary window (a posted Tk menu).
+reshapetag(s: string): string
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt >= 2)
+		return hd tl toks;
+	return ".";
+}
+
+reshaperect(s: string): Rect
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt < 7)
+		return Rect((0,0),(0,0));
+	toks = tl tl tl toks;
+	minx := int hd toks; toks = tl toks;
+	miny := int hd toks; toks = tl toks;
+	maxx := int hd toks; toks = tl toks;
+	maxy := int hd toks;
+	return Rect((minx, miny), (maxx, maxy));
+}
+
+appwmloop(join: chan of (ref Wmsrv->Client, chan of string),
+	  req: chan of (ref Wmsrv->Client, array of byte, Sys->Rwrite))
+{
+	for(;;) alt {
+	(c, rc) := <-join =>
+		# Launches are serialised through apppendq; joins arrive in
+		# launch order.
+		<-applk;
+		if(apppendq != nil) {
+			apprecs = (hd apppendq, c) :: apprecs;
+			apppendq = tl apppendq;
+		}
+		applk <-= 1;
+		rc <-= nil;
+
+	(c, data, rc) := <-req =>
+		if(rc == nil) {
+			# client disconnected (app exited)
+			dropapprec(c);
+			continue;
+		}
+		s := string data;
+		nlen := len data;
+		err: string;
+		if(len s >= 8 && s[0:8] == "!reshape" ||
+		   len s >= 9 && s[0:9] == "!onscreen") {
+			n := leafofclient(c);
+			if(n == nil) {
+				err = "unknown client";
+				nlen = -1;
+			} else {
+				tag := reshapetag(s);
+				want := appabsrect(n.r);
+				cur := c.image("app");
+				if(cur == nil) {
+					img := appscreen.newwindow(want, Draw->Refbackup, Draw->Nofill);
+					if(img == nil) {
+						err = "window creation failed";
+						nlen = -1;
+					} else {
+						img.draw(img.r, bgcolor, nil, (0, 0));
+						c.setimage("app", img);
+						c.top();
+					}
+				} else if(tag != ".") {
+					# Secondary window: a Tk menu wants its own
+					# window at its requested rect.
+					mr := reshaperect(s);
+					mimg := appscreen.newwindow(mr, Draw->Refbackup, Draw->Nofill);
+					if(mimg == nil) {
+						err = "window creation failed";
+						nlen = -1;
+					} else {
+						c.setimage(tag, mimg);
+						c.top();
+					}
+				} else if(!cur.r.eq(want)) {
+					# Region moved/resized under the app: give it a
+					# window at the new rect.
+					cur.draw(cur.r, bgcolor, nil, (0, 0));
+					img := appscreen.newwindow(want, Draw->Refbackup, Draw->Nofill);
+					if(img == nil) {
+						err = "window creation failed";
+						nlen = -1;
+					} else {
+						img.draw(img.r, bgcolor, nil, (0, 0));
+						c.setimage("app", img);
+						c.top();
+					}
+				} else
+					c.setimage("app", cur);
+			}
+		}
+		if(len s >= 7 && s[0:7] == "delete ") {
+			(dn, dtoks) := sys->tokenize(s, " ");
+			if(dn >= 2 && hd tl dtoks != "." && hd tl dtoks != "app")
+				c.setimage(hd tl dtoks, nil);
+		}
+		if(s == "embedded-exit")
+			dropapprec(c);
+		alt {
+		rc <-= (nlen, err) =>
+			;
+		* =>
+			;
+		}
+	}
+}
+
+killapp(n: ref LayoutNode.Leaf)
+{
+	if(n.apppid > 0) {
+		fd := sys->open("/prog/" + string n.apppid + "/ctl", Sys->OWRITE);
+		if(fd != nil) {
+			b := array of byte "killgrp";
+			sys->write(fd, b, len b);
+		}
+		n.apppid = 0;
+	}
+	# Drop the client record and its windows.
+	<-applk;
+	keep: list of (ref LayoutNode.Leaf, ref Wmsrv->Client);
+	for(al := apprecs; al != nil; al = tl al) {
+		(ln, lc) := hd al;
+		if(ln != n)
+			keep = hd al :: keep;
+		else {
+			if(appkbd == lc)
+				appkbd = nil;
+			lc.remove();
+		}
+	}
+	apprecs = keep;
+	applk <-= 1;
 }
 
 loadservicemodules()
@@ -1545,9 +1912,32 @@ loadservicemodules()
 	}
 }
 
+# Run a service confined to its grant.  The module was loaded and
+# init'd in matrix's full namespace (the trusted setup phase); only
+# run() executes restricted.  Order per the canonical child recipe:
+# fresh pgrp, private ns copy, clean env, bind-replace restriction,
+# pruned fds, and NODEVS last (after all binds — the bound channels
+# are captured, NODEVS only blocks fresh device attaches).
+# mount == "/" is the composition author's explicit whole-namespace
+# grant, so the bind-replace step is skipped; everything else still
+# applies.  Fail closed: if restriction fails, the service never runs.
 runservice(se: ref ServiceEntry)
 {
-	se.pid = sys->pctl(0, nil);
+	se.pid = sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKNS, nil);
+	sys->pctl(Sys->NEWENV, nil);
+	if(se.mount != "/") {
+		err := matrixlib->restrictsvcns(se.mount, se.outdir);
+		if(err != nil) {
+			sys->fprint(stderr, "matrix: %s: namespace restriction failed: %s — service not started\n",
+				se.name, err);
+			se.mod = nil;	# status must read stopped, not running
+			se.pid = 0;
+			return;
+		}
+	}
+	sys->pctl(Sys->NEWFD, 2 :: nil);
+	sys->pctl(Sys->NODEVS, nil);
 	se.mod->run();
 	se.pid = 0;
 }
@@ -1565,6 +1955,8 @@ updatedisplaymodules(node: ref LayoutNode): int
 	Leaf =>
 		if(n.mod != nil)
 			return n.mod->update();
+		if(n.tkmod != nil)
+			return n.tkmod->update();
 	}
 	return 0;
 }
@@ -1580,6 +1972,30 @@ resizedisplaymodules(node: ref LayoutNode)
 	Leaf =>
 		if(n.mod != nil)
 			n.mod->resize(n.r);
+		if(n.tkmod != nil) {
+			tk->cmd(top, sys->sprint(".c coords %s %d %d",
+				n.tkitem, n.r.min.x, n.r.min.y));
+			tk->cmd(top, sys->sprint(".c itemconfigure %s -width %d -height %d",
+				n.tkitem, n.r.dx(), n.r.dy()));
+			n.tkmod->resize(n.r);
+		}
+		if(n.modname == "app") {
+			# Push a name-"." reshape so the app re-initiates
+			# through the normal client path; the wm loop hands it
+			# a window at the leaf's new rect (a pushed reshape
+			# with any other name is rejected client-side).
+			c := clientofleaf(n);
+			if(c != nil) {
+				nr := appabsrect(n.r);
+				alt {
+				c.ctl <-= sys->sprint("!reshape . -1 %d %d %d %d",
+					nr.min.x, nr.min.y, nr.max.x, nr.max.y) =>
+					;
+				* =>
+					;
+				}
+			}
+		}
 	}
 }
 
@@ -1594,6 +2010,8 @@ rethemedisplaymodules(node: ref LayoutNode)
 	Leaf =>
 		if(n.mod != nil)
 			n.mod->retheme(display_g);
+		if(n.tkmod != nil)
+			n.tkmod->retheme();
 	}
 }
 
@@ -1610,14 +2028,24 @@ shutdowndisplaymodules(node: ref LayoutNode)
 			n.mod->shutdown();
 			n.mod = nil;
 		}
+		if(n.tkmod != nil) {
+			n.tkmod->shutdown();
+			if(n.tkitem != "")
+				tk->cmd(top, ".c delete " + n.tkitem);
+			if(n.tkwin != "")
+				tk->cmd(top, "destroy " + n.tkwin);
+			n.tkmod = nil;
+			n.tkwin = "";
+			n.tkitem = "";
+		}
+		if(n.modname == "app")
+			killapp(n);
 	}
 }
 
-shutdownservicemodules()
+shutdownservices(services: list of ref ServiceEntry)
 {
-	if(comp == nil)
-		return;
-	for(sl := comp.services; sl != nil; sl = tl sl) {
+	for(sl := services; sl != nil; sl = tl sl) {
 		se := hd sl;
 		if(se.mod != nil)
 			se.mod->shutdown();
@@ -1755,46 +2183,232 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 	Leaf =>
 		if(n.mod != nil && n.r.contains(p.xy)) {
 			focusmod = n.mod;
+			tkfocus = 0;
 			return n.mod->pointer(p);
+		}
+		if(n.tkmod != nil && n.r.contains(p.xy)) {
+			# Tk hit-tests, fires bindings, and manages widget
+			# focus itself; keys follow while the pointer stays
+			# in a hosted region.
+			focusmod = nil;
+			tkfocus = 1;
+			appkbd = nil;
+			tk->pointer(top, *p);
+			return 1;
+		}
+		if(n.modname == "app" && n.r.contains(p.xy)) {
+			c := clientofleaf(n);
+			if(c != nil) {
+				focusmod = nil;
+				tkfocus = 0;
+				appkbd = c;
+				np := ref Pointer(p.buttons, p.xy, p.msec);
+				alt {
+				c.ptr <-= np =>
+					;
+				* =>
+					;	# app not draining; drop rather than wedge
+				}
+				return 1;
+			}
 		}
 	}
 	return 0;
+}
+
+clientofleaf(n: ref LayoutNode.Leaf): ref Wmsrv->Client
+{
+	if(applk == nil)
+		return nil;
+	<-applk;
+	c: ref Wmsrv->Client;
+	for(al := apprecs; al != nil; al = tl al) {
+		(ln, lc) := hd al;
+		if(ln == n) {
+			c = lc;
+			break;
+		}
+	}
+	applk <-= 1;
+	return c;
 }
 
 handlekey(k: int)
 {
 	if(k < 0)
 		return;
+	if(tkfocus) {
+		tk->keyboard(top, k);
+		tk->cmd(top, "update");
+		return;
+	}
+	if(appkbd != nil) {
+		alt {
+		appkbd.kbd <-= k =>
+			;
+		* =>
+			;
+		}
+		return;
+	}
 	if(focusmod != nil)
 		focusmod->key(k);
+}
+
+# ── Watch rules ─────────────────────────────────────────────
+
+WATCH_MS: con 1000;
+WATCH_LOAD_COOLDOWN_MS: con 2000;
+
+watchstopc: chan of int;
+watchlastload := 0;	# millisec of the last load/unload fire (cooldown)
+
+startwatchers()
+{
+	<-complock;
+	rules: list of ref WatchRule;
+	if(comp != nil)
+		rules = comp.watches;
+	complock <-= 1;
+	if(rules == nil)
+		return;
+	watchstopc = chan[1] of int;
+	spawn watcher(rules, watchstopc);
+}
+
+stopwatchers()
+{
+	if(watchstopc == nil)
+		return;
+	alt {
+	watchstopc <-= 1 =>
+		;
+	* =>
+		;	# stop already pending
+	}
+	watchstopc = nil;
+}
+
+# One poller for all rules.  Transition-edge semantics: an action
+# fires only when the watched value changes to a matching pattern.
+# The first observation never fires — a freshly loaded composition
+# cannot immediately fire its own rules, which is the structural
+# guard against load loops (each reload rebuilds the watcher with
+# all-unseen state).  An unreadable path never fires.  load/unload
+# fires are additionally rate-limited by a cooldown as belt and
+# braces against composition ping-pong.
+watcher(rules: list of ref WatchRule, stopc: chan of int)
+{
+	n := 0;
+	for(rl := rules; rl != nil; rl = tl rl)
+		n++;
+	seen := array[n] of {* => 0};
+	last := array[n] of string;
+	watchlastload = -WATCH_LOAD_COOLDOWN_MS;
+	for(;;) {
+		alt {
+		<-stopc =>
+			return;
+		* =>
+			;
+		}
+		i := 0;
+		for(rl = rules; rl != nil; rl = tl rl) {
+			r := hd rl;
+			v := readfile(r.path);
+			if(v != nil) {
+				v = trimws(v);
+				if(seen[i] && v != last[i])
+					firewatch(r, v);
+				last[i] = v;
+				seen[i] = 1;
+			}
+			i++;
+		}
+		sys->sleep(WATCH_MS);
+	}
+}
+
+firewatch(r: ref WatchRule, v: string)
+{
+	for(al := r.arms; al != nil; al = tl al) {
+		(pat, act) := hd al;
+		if(pat != v)
+			continue;
+		(nil, atoks) := sys->tokenize(act, " \t");
+		case hd atoks {
+		"notify" =>
+			notifappend(sys->sprint("%d %s %s %s",
+				sys->millisec(), r.path, v, trimws(act[7:])));
+		"load" or "unload" =>
+			now := sys->millisec();
+			if(now - watchlastload >= WATCH_LOAD_COOLDOWN_MS) {
+				watchlastload = now;
+				handlectl(act);
+			}
+		* =>
+			handlectl(act);	# pin
+		}
+		return;
+	}
+}
+
+trimws(s: string): string
+{
+	start := 0;
+	end := len s;
+	while(start < end && (s[start] == ' ' || s[start] == '\t' ||
+			s[start] == '\n' || s[start] == '\r'))
+		start++;
+	while(end > start && (s[end-1] == ' ' || s[end-1] == '\t' ||
+			s[end-1] == '\n' || s[end-1] == '\r'))
+		end--;
+	return s[start:end];
 }
 
 # ── Composition reload ──────────────────────────────────────
 
 reloadcomposition(text: string)
 {
-	(newcomp, err) := parsecomposition(text);
+	(newcomp, err) := matrixlib->parsecomposition(text);
 	if(err != nil) {
 		sys->fprint(stderr, "matrix: reload parse error: %s\n", err);
 		return;
 	}
 
-	# Shutdown old modules
+	# The old composition's watch rules must not observe the swap;
+	# the new composition's watcher starts with all-unseen state, so
+	# a just-loaded composition can never fire immediately.
+	stopwatchers();
+
+	# Incremental: entries unchanged between old and new keep their
+	# live module instance (and, for services, their running proc).
+	# transplant moves those handles into newcomp and nils them in
+	# old; whatever old still holds is what actually shuts down.
 	<-complock;
-	if(comp != nil) {
-		shutdowndisplaymodules(comp.layout);
-		shutdownservicemodules();
-	}
+	old := comp;
+	matrixlib->transplant(old, newcomp);
 	comp = newcomp;
 	complock <-= 1;
 
-	# Reload
+	# The focused module may just have been shut down; don't route
+	# keys into a dead instance.
+	focusmod = nil;
+
+	if(old != nil) {
+		shutdowndisplaymodules(old.layout);
+		shutdownservices(old.services);
+	}
+
 	if(guimode && comp.layout != nil) {
 		computelayout(comp.layout, winr);
-		loaddisplaymodules();
+		resizedisplaymodules(comp.layout);	# kept modules get new rects
+		loaddisplaymodules();			# fills only empty leaves
 	}
-	loadservicemodules();
+	loadservicemodules();				# starts only new services
+	syncmodslots();
 	vers++;
+	startwatchers();
 }
 
 # ── Headless mode ───────────────────────────────────────────

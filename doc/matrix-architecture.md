@@ -98,6 +98,7 @@ InferNode namespace
   +-- /mnt/matrix/         # Matrix 9P filesystem (always present)
   |     +-- ctl
   |     +-- composition
+  |     +-- notifications
   |     +-- modules/
   |     +-- library/
   +-- /n/tbl4/           # Mounted data source (example)
@@ -120,9 +121,11 @@ merely consumes it.
 
 Matrix builds on, not beside, what InferNode already provides:
 
-- **widget.m** -- The standard widget toolkit (Scrollbar, Textfield,
-  Listbox, Button, Label, Checkbox, Radio, Dropdown, Statusbar). Display
-  modules use these to build their UI. No parallel widget system.
+- **Tk** -- InferNode's one widget toolkit (the native widget.m
+  library was retired in the Tk reintegration). Matrix's own window is
+  a Tk client; display modules today render with raw Draw primitives,
+  and Tk widgets are the substrate for any richer module UI. No
+  parallel widget system.
 
 - **Renderer / Render** -- The dynamic module loading pattern (register,
   probe, load, call). Matrix follows the same idiom: modules are `.dis`
@@ -149,18 +152,31 @@ A module is a Limbo `.dis` file that implements one of two interfaces:
 
 **Display modules** receive a rectangle within the Matrix pane, a mount
 point in the namespace, and access to the Draw display. They render live
-content using the widget.m toolkit and the standard Draw primitives. They
-update when the Matrix runtime calls their `update` function.
+content with the standard Draw primitives. They update when the Matrix
+runtime calls their `update` function.
 
 **Service modules** receive a mount point but no rectangle. They run in
-the background, reading from their mount and writing results to their own
-directory in the Matrix namespace (e.g., alerts, transformed data,
-computed state). Other modules, Veltro, or remote agents read these
-outputs.
+the background, reading from their mount and writing results to their
+output directory (e.g., alerts, transformed data, computed state).
+Other modules, Veltro, or remote agents read these outputs through
+`modules/<name>/out/` in the control filesystem.
 
-Both types are loaded and unloaded by the Matrix runtime. Both are
-sandboxed by namespace: a module sees its mount point and the Matrix
-control namespace, nothing else unless explicitly bound.
+Both types are loaded and unloaded by the Matrix runtime, and the two
+kinds sit in different trust domains:
+
+- **Service modules are confined by construction.** A service's `run()`
+  executes in its own process group with a private namespace in which
+  only its mount (read-only) and its output directory (read-write)
+  resolve — no `/dis`, no `/lib`, no control filesystem, no fresh
+  device attaches, no environment. The mount named in the composition
+  IS the capability grant; `service foo /` is an explicit
+  whole-namespace grant. If the grant cannot be constructed (e.g. the
+  mount does not exist), the service fails closed and never runs.
+- **Display modules are trusted.** They draw into a shared image and
+  handle events synchronously inside the Matrix process, so per-process
+  namespace confinement cannot apply. Matrix loads them from the local
+  library (`/dis/matrix/`) only; a display module is code you install,
+  not code you fetch.
 
 A composition can contain any mix of display and service modules,
 including none of one type.
@@ -215,8 +231,8 @@ way compositions do.
 
 ## Module Interface
 
-Matrix defines two module interfaces, following the idioms established
-by `widget.m` and `Renderer`.
+Matrix defines two module interfaces, following the dynamic-loading
+idiom established by `Renderer`.
 
 ### Display Module
 
@@ -254,9 +270,8 @@ MatrixDisplay: module {
 };
 ```
 
-Display modules use `widget.m` components internally. A position table
-module might use `Label` for headers, `Scrollbar` for overflow, and
-direct `Draw->Image.text()` calls for cell values. The interface
+Display modules render with Draw primitives — `Draw->Image.text()`
+for cell values, filled rects for gauges and scrollbars. The interface
 mirrors patterns already present in Lucifer's zone modules.
 
 ### Service Module
@@ -276,9 +291,11 @@ MatrixService: module {
 };
 ```
 
-A service module's `outdir` is a directory in the Matrix namespace
-(e.g., `/mnt/matrix/modules/signal-watcher/`). The module creates files
-there as needed. Other modules, Veltro, or remote agents read them.
+A service module's `outdir` is a real directory under `/tmp/matrix/`
+(one per service), which the control filesystem serves read-only as
+`/mnt/matrix/modules/<name>/out/`. The module creates files there as
+needed — local readers may use the real path directly; Veltro and
+remote agents read the served view.
 
 
 ## Composition File Format
@@ -399,18 +416,28 @@ headless mode, locally, or remotely.
 /mnt/matrix/
     ctl                         # Write commands, read status
     composition                 # Current composition (text, rw)
+    notifications               # Runtime event log (read-only ring)
     modules/
         <name>/
-            ctl                 # Module status: running|stopped|error
+            ctl                 # Module status: running|stopped
             type                # display|service
             mount               # Mount path this module reads from
-            out/                # Output directory (service modules)
+            out/                # Service output (read-only view of
+                                #   /tmp/matrix/<name>; services only)
     library/
         modules/
-            <name>.dis          # Available module binaries
+            <name>.dis          # Available module binaries (read-only)
         compositions/
-            <name>              # Pinned composition files
+            <name>              # Pinned composition files (read-only;
+                                #   written via the pin/unpin verbs)
 ```
+
+Module directories keep a stable qid identity for the lifetime of the
+Matrix process: a fid opened on `modules/<name>/...` before a
+composition reload still refers to the same module afterwards. A
+module removed by a reload disappears from walks and listings; if a
+later composition brings the name back, it returns with its old
+identity.
 
 ### Control commands (write to `/mnt/matrix/ctl`)
 
@@ -424,11 +451,14 @@ unpin <name>                    # Remove a pinned composition
 
 ### Composition editing (write to `/mnt/matrix/composition`)
 
-The current composition is always readable as a text file. Writing a new
-composition triggers a reload: the Matrix runtime diffs against the
-running state, unloads removed modules, loads added ones, and adjusts
-the layout. Veltro's workflow: read the current composition, modify it,
-write it back.
+The current composition is always readable as a text file. Writing a
+new composition triggers an incremental reload: entries unchanged
+between old and new — a display leaf with the same region, module,
+and mount; a service with the same name and mount — keep their live
+module instance (a kept service keeps its running process and
+in-module state), removed entries are shut down, added ones are
+loaded, and the layout is recomputed. Veltro's workflow: read the
+current composition, modify it, write it back.
 
 
 ## GUI Control Surface
@@ -454,7 +484,7 @@ menu closes still registers.
 ### Right-click composition menu
 
 Right-click anywhere in the Matrix pane to open a contextual menu
-(Plan 9 hold-and-release style, via `module/menu.m`). The menu is
+(a Tk menu posted from the runtime's `.ctx` widget). The menu is
 rebuilt on every show by listing `/lib/matrix/compositions/`, so newly
 pinned compositions appear without restarting:
 
@@ -502,7 +532,7 @@ through filesystem operations.
 
 1. **position-table** -- Reads `/n/tbl4/portfolio/positions/`. Scrollable
    table: ticker, quantity, average cost, current value, unrealised P&L,
-   portfolio weight. Built with widget.m Scrollbar and direct text
+   portfolio weight. Built with an inline scrollbar and direct text
    rendering. Updates by re-reading position files.
 
 2. **signal-feed** -- Reads `/n/tbl4/signals`. Scrollable list of recent
@@ -557,7 +587,7 @@ service alert-watcher /n/tbl4
 - Veltro controls Matrix through filesystem operations alone.
 - Live 9P data flows through modules to the screen (or to service
   outputs) without custom plumbing.
-- The existing widget.m toolkit is adequate for display modules.
+- Raw Draw rendering is adequate for display modules.
 - The same composition could run headless by removing the display
   modules and layout lines -- the service module works identically.
 
@@ -704,13 +734,14 @@ not need. Separate interfaces make intent clear. The composition file
 distinguishes them syntactically (region assignment vs `service` keyword)
 so the runtime knows which interface to expect at load time.
 
-### Modules build on widget.m
+### One widget toolkit: Tk
 
-InferNode already has a tested, themed widget toolkit. Building a second
-one would fragment the ecosystem, create maintenance burden, and produce
-visual inconsistency. Matrix display modules are first-class consumers
-of widget.m. If a widget is missing, it gets added to widget.m, not to
-a Matrix-specific library.
+InferNode standardised on Tk (the native widget.m toolkit is retired).
+Building a Matrix-specific widget layer would fragment the ecosystem,
+create maintenance burden, and produce visual inconsistency. Display
+modules that need more than raw Draw build on Tk — which also keeps
+them drivable from Inferno sh, so agents can exercise a composed GUI
+for testing and control.
 
 ### Layout is a tree of splits
 
@@ -722,12 +753,18 @@ Layout is only relevant when display modules are present.
 
 ### Module namespace isolation
 
-A module sees its mount point and the Matrix control namespace. It does
-not inherit the full InferNode namespace. This is structural security:
-a module loaded from the network cannot access the user's files, other
-mounted services, or the system namespace. The Dis VM enforces the
-module interface at load time; the namespace restricts what the module
-can reach at runtime.
+The mount named in the composition is the capability grant. A service
+module's `run()` executes in its own process group with a private
+namespace holding exactly two things: its mount, read-only, and its
+output directory, read-write. Nothing else resolves — not `/dis`, not
+the control filesystem, not fresh device attaches. `service foo /` is
+an explicit whole-namespace grant, the composition author's call. If
+the grant cannot be constructed, the service fails closed.
+
+Display modules are the other trust domain: they draw into a shared
+image inside the Matrix process, where per-process namespace
+confinement cannot apply. They are trusted code, loaded from the
+local library only. The Dis VM enforces both interfaces at load time.
 
 ### Matrix is a 9P server
 

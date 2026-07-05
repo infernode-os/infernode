@@ -20,6 +20,12 @@ MatrixLib: module
 	# success or (nil, diagnostic) on the first error.
 	parsecomposition:	fn(text: string): (ref Composition, string);
 
+	# Confine the calling proc's namespace (which must already be
+	# FORKNS'd) so that only mount (read-only) and outdir
+	# (read-write) resolve; every sibling path vanishes.  nil on
+	# success.  The caller applies NODEVS afterwards.
+	restrictsvcns:	fn(mount, outdir: string): string;
+
 	# Move live module handles from old to new for entries that are
 	# unchanged: display leaves match on (region name, modname,
 	# mount), services on (name, mount).  Matched handles are nil'd

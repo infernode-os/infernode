@@ -177,6 +177,90 @@ parsecomposition(text: string): (ref Composition, string)
 	return (c, nil);
 }
 
+# Shadow-root sequence counter; racing callers are distinct procs,
+# and pid+millisec keep the names unique regardless.
+shadowseq := 0;
+
+# Namespace confinement for service modules (the nsconstruct
+# shadow-dir idiom, matrix-local so Matrix stays decoupled from
+# Veltro's shadow paths).  Builds a fresh root containing only the
+# spines of mount and outdir, binds the real trees at the leaves —
+# mount read-only, outdir with MCREATE — then replaces / with the
+# shadow.  Channels captured by the binds keep working after the
+# root swap; nothing else resolves.
+restrictsvcns(mount, outdir: string): string
+{
+	if(mount == nil || len mount == 0 || mount[0] != '/')
+		return "mount must be an absolute path";
+	if(outdir == nil || len outdir == 0 || outdir[0] != '/')
+		return "outdir must be an absolute path";
+
+	pid := sys->pctl(0, nil);
+	shadow := sys->sprint("/tmp/matrix/.ns/%d-%d-%d",
+		pid, shadowseq++, sys->millisec());
+
+	# Build both spines fully while everything is still writable.
+	err := mkdirp(shadow + mount);
+	if(err != nil)
+		return err;
+	err = mkdirp(shadow + outdir);
+	if(err != nil)
+		return err;
+
+	# The absence of MCREATE only guards the mount point itself;
+	# spine directories are real dirs whose fs permissions govern
+	# creation below the root bind.  Make every spine dir (but not
+	# the bind-covered leaves) read-only so the confined proc
+	# cannot drop files outside its grant.
+	mkrospine(shadow, mount);
+	mkrospine(shadow, outdir);
+
+	# Read-only grant first, writable grant second: on exact
+	# overlap the MCREATE bind wins.
+	if(sys->bind(mount, shadow + mount, Sys->MREPL) < 0)
+		return sys->sprint("cannot bind %s: %r", mount);
+	if(sys->bind(outdir, shadow + outdir, Sys->MREPL|Sys->MCREATE) < 0)
+		return sys->sprint("cannot bind %s: %r", outdir);
+
+	if(sys->bind(shadow, "/", Sys->MREPL) < 0)
+		return sys->sprint("cannot replace /: %r");
+	return nil;
+}
+
+# Set shadow itself and every intermediate spine dir of
+# shadow+path to dr-xr-xr-x, leaving the leaf (a bind target)
+# alone — after binding, a wstat there would hit the mounted tree.
+mkrospine(shadow, path: string)
+{
+	mkro(shadow);
+	for(i := 1; i < len path; i++)
+		if(path[i] == '/')
+			mkro(shadow + path[0:i]);
+}
+
+mkro(path: string)
+{
+	nd := sys->nulldir;
+	nd.mode = Sys->DMDIR | 8r555;
+	sys->wstat(path, nd);
+}
+
+mkdirp(path: string): string
+{
+	for(i := 1; i <= len path; i++) {
+		if(i < len path && path[i] != '/')
+			continue;
+		p := path[0:i];
+		(ok, nil) := sys->stat(p);
+		if(ok >= 0)
+			continue;
+		fd := sys->create(p, Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil)
+			return sys->sprint("cannot create %s: %r", p);
+	}
+	return nil;
+}
+
 transplant(old, new: ref Composition)
 {
 	if(old == nil || new == nil)

@@ -518,6 +518,99 @@ testTransplant(t: ref T)
 	t.assert(os2.mod != nil, "dropped service left in old for shutdown");
 }
 
+# ── Service namespace isolation ─────────────────────────────
+
+mkfixdir(path: string)
+{
+	for(i := 1; i <= len path; i++) {
+		if(i < len path && path[i] != '/')
+			continue;
+		p := path[0:i];
+		(ok, nil) := sys->stat(p);
+		if(ok < 0)
+			sys->create(p, Sys->OREAD, Sys->DMDIR | 8r755);
+	}
+}
+
+createstr(path, s: string): int
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return -1;
+	b := array of byte s;
+	return sys->write(fd, b, len b);
+}
+
+FIXMOUNT: con "/tmp/mtest/tbl4";
+
+mkfixture()
+{
+	mkfixdir(FIXMOUNT + "/portfolio/defense");
+	createstr(FIXMOUNT + "/signals", "1 BTC long 0.95 breakout 1234\n");
+	createstr(FIXMOUNT + "/portfolio/defense/status", "normal\n");
+	createstr(FIXMOUNT + "/risk", "var 0.02\n");
+}
+
+# Replicates runservice's confinement sequence, then reports every
+# violation it can find as a token; an empty report is a pass.
+probe(mount, outdir: string, resc: chan of string)
+{
+	sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKNS, nil);
+	err := matrixlib->restrictsvcns(mount, outdir);
+	if(err != nil) {
+		resc <-= "restrict-failed: " + err;
+		return;
+	}
+	sys->pctl(Sys->NODEVS, nil);
+
+	r := "";
+	(ok, nil) := sys->stat("/dis");
+	if(ok >= 0)
+		r += "dis-visible;";
+	(ok, nil) = sys->stat("/lib");
+	if(ok >= 0)
+		r += "lib-visible;";
+	(ok, nil) = sys->stat("/usr");
+	if(ok >= 0)
+		r += "usr-visible;";
+	(ok, nil) = sys->stat("/mnt/matrix");
+	if(ok >= 0)
+		r += "controlfs-visible;";
+	fd := sys->open(mount + "/signals", Sys->OREAD);
+	if(fd == nil)
+		r += "mount-unreadable;";
+	cfd := sys->create(outdir + "/probe-file", Sys->OWRITE, 8r644);
+	if(cfd == nil)
+		r += "outdir-unwritable;";
+	efd := sys->create("/tmp/escape-probe", Sys->OWRITE, 8r644);
+	if(efd != nil)
+		r += "escape-write;";
+	dfd := sys->open("#U*/", Sys->OREAD);
+	if(dfd != nil)
+		r += "devattach-open;";
+	resc <-= r;
+}
+
+testIsolation(t: ref T)
+{
+	mkfixture();
+	mkfixdir("/tmp/matrix/mtest-probe");
+	resc := chan of string;
+	spawn probe(FIXMOUNT, "/tmp/matrix/mtest-probe", resc);
+	r := <-resc;
+	t.assertseq(r, "", "restricted proc sees only its grant");
+	# The restriction was private to the probe's forked namespace.
+	(ok, nil) := sys->stat("/dis");
+	t.assert(ok >= 0, "parent namespace unaffected");
+
+	# A grant that cannot be bound must fail closed.
+	resc2 := chan of string;
+	spawn probe("/mtest-no-such-mount", "/tmp/matrix/mtest-probe", resc2);
+	r2 := <-resc2;
+	t.assert(hasprefix(r2, "restrict-failed"), "missing mount fails closed: " + r2);
+}
+
 # ── Control filesystem surface (/mnt/matrix) ────────────────
 #
 # Spawns the real runtime headless with the shipped sysmon
@@ -690,6 +783,35 @@ testControlFSReload(t: ref T)
 	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
 }
 
+# End-to-end proof that a confined service works against its
+# grant: alert-watcher runs against the fixture mount inside the
+# restricted namespace and its alert lands in out/ through the
+# control fs.
+testControlFSAlertE2E(t: ref T)
+{
+	mkfixture();
+	# Stale alerts from earlier runs of this suite would satisfy
+	# the poll below; clear them.
+	for(i := 0; i < 10; i++)
+		sys->remove(sys->sprint("/tmp/matrix/alert-watcher/alert-%04d", i));
+
+	newtext := "# alert-e2e\nservice alert-watcher " + FIXMOUNT + "\n";
+	t.assert(writestr("/mnt/matrix/composition", newtext) > 0, "composition write accepted");
+	alertpath := "/mnt/matrix/modules/alert-watcher/out/alert-0000";
+	if(!waitfor(alertpath, 8000))
+		t.fatal("confined alert-watcher never produced an alert");
+	msg := readfile(alertpath);
+	t.assert(hasprefix(msg, "high-confidence signal: BTC"), "alert content correct: " + msg);
+	t.assertseq(readfile("/tmp/matrix/alert-watcher/alert-0000"), msg,
+		"control-fs view matches the real outdir");
+	t.assertseq(trim(readfile("/mnt/matrix/modules/alert-watcher/ctl")), "running",
+		"confined service reports running");
+
+	# Restore the shipped composition for the tests that follow.
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+}
+
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
@@ -779,6 +901,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CommentsAndBlanks", testCommentsAndBlanks);
 	run("TextRoundTrip", testTextRoundTrip);
 	run("Transplant", testTransplant);
+	run("Isolation", testIsolation);
 
 	run("ControlFSStart", testControlFSStart);
 	if(matrixpid > 0) {
@@ -788,6 +911,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSLibrary", testControlFSLibrary);
 		run("ControlFSNotifications", testControlFSNotifications);
 		run("ControlFSReload", testControlFSReload);
+		run("ControlFSAlertE2E", testControlFSAlertE2E);
 		run("ControlFSCtlVerbs", testControlFSCtlVerbs);
 		run("ControlFSUnload", testControlFSUnload);
 	}

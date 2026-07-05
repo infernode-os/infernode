@@ -1507,9 +1507,32 @@ loadservicemodules()
 	}
 }
 
+# Run a service confined to its grant.  The module was loaded and
+# init'd in matrix's full namespace (the trusted setup phase); only
+# run() executes restricted.  Order per the canonical child recipe:
+# fresh pgrp, private ns copy, clean env, bind-replace restriction,
+# pruned fds, and NODEVS last (after all binds — the bound channels
+# are captured, NODEVS only blocks fresh device attaches).
+# mount == "/" is the composition author's explicit whole-namespace
+# grant, so the bind-replace step is skipped; everything else still
+# applies.  Fail closed: if restriction fails, the service never runs.
 runservice(se: ref ServiceEntry)
 {
-	se.pid = sys->pctl(0, nil);
+	se.pid = sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKNS, nil);
+	sys->pctl(Sys->NEWENV, nil);
+	if(se.mount != "/") {
+		err := matrixlib->restrictsvcns(se.mount, se.outdir);
+		if(err != nil) {
+			sys->fprint(stderr, "matrix: %s: namespace restriction failed: %s — service not started\n",
+				se.name, err);
+			se.mod = nil;	# status must read stopped, not running
+			se.pid = 0;
+			return;
+		}
+	}
+	sys->pctl(Sys->NEWFD, 2 :: nil);
+	sys->pctl(Sys->NODEVS, nil);
 	se.mod->run();
 	se.pid = 0;
 }

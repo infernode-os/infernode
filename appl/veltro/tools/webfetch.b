@@ -705,7 +705,7 @@ isblocked(host: string): int
 
 dofetch(url: string, hdrs: list of Webclient->Header, result: chan of (ref Webclient->Response, string))
 {
-	(resp, err) := webclient->request("GET", url, hdrs, nil);
+	(resp, err) := webclient->requestpublic("GET", url, hdrs, nil);
 	result <-= (resp, err);
 }
 

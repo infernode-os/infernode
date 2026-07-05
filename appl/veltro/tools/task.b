@@ -200,14 +200,43 @@ parseattrs(s: string): list of (string, string)
 			if(i < len s)
 				i++;	# skip closing quote
 		} else {
+			# Unquoted value. Extend it across spaces until the next token
+			# that is itself a known key=… . LLMs routinely omit quotes around
+			# multi-word brief=/instructions= values; without this, the value
+			# would truncate at the first space (brief=research ponies → just
+			# "research") and the rest would be silently dropped as bare words.
 			vstart := i;
-			while(i < len s && s[i] != ' ')
-				i++;
+			for(;;) {
+				# consume the current word
+				while(i < len s && s[i] != ' ' && s[i] != '\t')
+					i++;
+				# peek past whitespace to the start of the next token
+				j := i;
+				while(j < len s && (s[j] == ' ' || s[j] == '\t'))
+					j++;
+				if(j >= len s || iskeyat(s, j))
+					break;
+				i = j;	# next token is not a known key — fold it into the value
+			}
 			val = s[vstart:i];
+			while(len val > 0 && (val[len val - 1] == ' ' || val[len val - 1] == '\t'))
+				val = val[0:len val - 1];
 		}
 		result = (key, val) :: result;
 	}
 	return result;
+}
+
+# Does a known "key=" token begin at position i (the first non-space char of
+# a token)? Used by parseattrs to decide where an unquoted value ends.
+iskeyat(s: string, i: int): int
+{
+	j := i;
+	while(j < len s && s[j] != '=' && s[j] != ' ' && s[j] != '\t')
+		j++;
+	if(j >= len s || s[j] != '=')
+		return 0;
+	return strlistcontains(createkeys, s[i:j]);
 }
 
 getattr(attrs: list of (string, string), key: string): string
@@ -307,8 +336,13 @@ docreate(args: string): string
 	# This goes into the LLM system prompt only — no visible chat message.
 	brief := getattr(attrs, "brief");
 	if(brief == "")
-		brief = "You have been assigned to: " + label + ". Greet the user and ask how you can help with this task.";
-	briefpath := sys->sprint("/tmp/veltro/brief.%d", newid);
+		brief = "Your assignment: " + label + ". Begin working on this now, " +
+			"using your tools. Work out the concrete steps yourself and carry " +
+			"them out autonomously. Do not greet or ask what to do — the label " +
+			"above is your task. If you genuinely cannot proceed without a " +
+			"specific missing detail, ask one concise question; otherwise make " +
+			"a reasonable assumption and proceed.";
+	briefpath := sys->sprint("/tmp/veltro/tasks/brief.%d", newid);
 	bfd := sys->create(briefpath, Sys->OWRITE, 8r644);
 	if(bfd != nil) {
 		bb := array of byte brief;
@@ -319,7 +353,7 @@ docreate(args: string): string
 	# Write structured instructions if provided
 	instructions := getattr(attrs, "instructions");
 	if(instructions != "") {
-		instrpath := sys->sprint("/tmp/veltro/instructions.%d", newid);
+		instrpath := sys->sprint("/tmp/veltro/tasks/instructions.%d", newid);
 		ifd := sys->create(instrpath, Sys->OWRITE, 8r644);
 		if(ifd != nil) {
 			ib := array of byte instructions;
@@ -329,12 +363,12 @@ docreate(args: string): string
 	}
 
 	# Model and agenttype are propagated to the child lucibridge via the
-	# same /tmp/veltro/<key>.<id> pattern as brief/instructions. lucibridge
+	# same /tmp/veltro/tasks/<key>.<id> pattern as brief/instructions. lucibridge
 	# reads these files at startup (before opening the LLM session). Files
 	# are only written when explicitly set so the absence still means
 	# "inherit parent session's model" / "use default task prompt".
 	if(model != "") {
-		mpath := sys->sprint("/tmp/veltro/model.%d", newid);
+		mpath := sys->sprint("/tmp/veltro/tasks/model.%d", newid);
 		mfd := sys->create(mpath, Sys->OWRITE, 8r644);
 		if(mfd != nil) {
 			mb := array of byte model;
@@ -343,7 +377,7 @@ docreate(args: string): string
 		}
 	}
 	if(agenttype != "") {
-		apath := sys->sprint("/tmp/veltro/agenttype.%d", newid);
+		apath := sys->sprint("/tmp/veltro/tasks/agenttype.%d", newid);
 		afd := sys->create(apath, Sys->OWRITE, 8r644);
 		if(afd != nil) {
 			ab := array of byte agenttype;
@@ -373,9 +407,25 @@ docreate(args: string): string
 		provcmd += " tools=" + toolsarg;
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
+
+	# INFR-362: serialize provisioning. Provisioning runs asynchronously in the
+	# parent namespace; a sibling `task create` issued in the SAME turn (parallel
+	# tool calls — e.g. Mistral emits all at once) would otherwise overlap this
+	# child's namespace setup and find /mnt/ui transiently hidden, silently
+	# dropping the task. Wait for this child's manifest, which is written only
+	# AFTER its restrictns completes — by then the racy bind-replace window is
+	# closed. Remove any stale manifest first (/tmp persists across runs).
+	manifestp := sys->sprint("/tmp/veltro/.ns/manifest.%d", newid);
+	sys->remove(manifestp);
 	perr := writefile("/tool/provision", provcmd[10:]);
 	if(perr != nil)
 		sys->fprint(sys->fildes(2), "task: provision warning: %s\n", perr);
+	for(w := 0; w < 120; w++) {		# bounded ~6s
+		(mok, nil) := sys->stat(manifestp);
+		if(mok >= 0)
+			break;
+		sys->sleep(50);
+	}
 
 	return sys->sprint("created activity %d: %s", newid, label);
 }

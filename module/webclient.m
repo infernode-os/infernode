@@ -24,6 +24,10 @@ Webclient: module {
 
 	request:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte): (ref Response, string);
+	# Resolve and dial only validated public IPv4 destinations. Revalidates every
+	# redirect and strips credential headers when the origin changes.
+	requestpublic: fn(method, url: string, hdrs: list of Header,
+			   body: array of byte): (ref Response, string);
 	get:		fn(url: string): (ref Response, string);
 	post:		fn(url, contenttype: string,
 			   body: array of byte): (ref Response, string);

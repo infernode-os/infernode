@@ -21,11 +21,52 @@ This document distinguishes:
 The security model applies to **agents**: the harness restricts what each
 running instance sees. The harness itself is trusted code.
 
+### Untrusted Content And Prompt Injection
+
+Email, SMS, webpages, MCP results, and retrieved documents are hostile input.
+The security model assumes a model that interprets such content may follow an
+attacker's instructions. Prompt text is not an authorization boundary.
+
+Apply these invariants:
+
+- **Quarantine ingestion.** Process raw external content in a separate agent
+  namespace with no credentials, raw network, send/payment endpoints, arbitrary
+  execution, broad filesystem paths, or capability-provisioning control.
+- **Never combine sensitive reads with egress.** A worker may receive exact,
+  read-only file snapshots needed to draft a result, or a constrained egress
+  capability, but not both. Otherwise prompt injection becomes exfiltration.
+- **Grant paths, not ambient services.** Prefer exact files and exact 9P service
+  subtrees over directories, `/net`, `/mnt/factotum`, or whole service roots.
+- **Separate drafting from effects.** Message sending, file mutation, payment,
+  and further delegation require a fresh capability issued by trusted code
+  outside the model's namespace. User approval should produce a narrow,
+  operation-bound, preferably one-shot capability; the model cannot mint it.
+- **Declassify typed results only.** Raw hostile content does not flow into an
+  authority-bearing coordinator's context. Cross-boundary output is bounded and
+  parsed into an expected result type before trusted code uses it.
+
+Message replies use two separate authorities. An agent with an exact
+`/mnt/msg/reply` grant can only queue immutable content. The trusted controller
+alone can inspect `/mnt/msg/pending` and consume a request once through
+`/mnt/msg/approve` (or discard it through `/mnt/msg/deny`). Never bind those
+controller endpoints into an agent namespace.
+
+When a workflow appears to require user files and the web simultaneously, split
+it into stages with a trusted mediator. There is no safe prompt that compensates
+for granting a compromised model both confidential data and unrestricted egress.
+
+Headless service launchers may receive API keys through their host environment
+when interactive factotum/secstore unlock is unavailable. Trusted bootstrap code
+should provision those values into factotum when possible. Agent namespaces
+allowlist only `VELTRO_SESSION` under `/env`, so host credential variables never
+become agent capabilities. Runtime agent tools consume credentials through
+factotum only; plaintext key files under `/lib/veltro` are prohibited.
+
 Three harness entry points apply namespace restriction:
 
 | Entry Point | Where | When |
 |-------------|-------|------|
-| `tools9p` serveloop | `appl/veltro/tools9p.b` | After mount(), before first tool exec |
+| `tools9p` invocation | `appl/veltro/tools9p.b` | Per tool call, after `FORKNS`, attenuated to the invoked tool |
 | `repl` init | `appl/veltro/repl.b` | After mount checks, before LLM session |
 | `spawn` child | `appl/veltro/tools/spawn.b` | In runchild(), before subagent->runloop() |
 
@@ -36,7 +77,7 @@ All three call `nsconstruct->restrictns(caps)` after `pctl(FORKNS)`.
 ### Core Primitive: `restrictdir(target, allowed, writable)`
 
 ```
-1. Create unique shadow dir: /tmp/veltro/.ns/shadow/{pid}-{seq}/
+1. Create unique trusted shadow dir: /tmp/.veltro-ns/shadow/{pid}-{seq}/
 2. For each item in allowed:
    - Create mount point in shadow (dir or file matching source type)
    - bind(target/item, shadow/item, MREPL)
@@ -62,6 +103,22 @@ subagent spawn: FORKNS + restrictns()   -- inherit + further restrict
 
 Both levels use the same `restrictdir()` primitive. Capability attenuation is natural: children fork an already-restricted namespace and can only narrow further.
 
+Task briefs, instructions, model choices, and agent-role selections are exchanged
+under `/tmp/veltro/tasks`. `restrictns()` replaces that directory with an empty
+view for every invocation except the fixed-function `task` tool. The trusted
+taskboard and lucibridge processes consume the files outside the tool namespace;
+message-reading and general file tools cannot inspect another activity's prompt.
+
+`/tmp/veltro/scratch` is rebound to `/tmp/veltro/scratch/<activity-id>` in each
+restricted namespace. Generic write/edit operations accept only this scratch
+path (or an explicit `rw` capability), preventing files at the shared workspace
+root from bypassing activity isolation.
+
+Provisioned children receive only read-only navigation tools by default:
+`read`, `list`, `find`, `search`, and `grep`. Persistence (`memory`), recursive
+delegation (`spawn`), planning state, and UI effects require explicit budgeted
+tool grants.
+
 ## Namespace Restriction Policy
 
 `restrictns(caps)` applies these restrictions in order:
@@ -74,10 +131,13 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 | 4 | `/n` | `llm/` (if mounted), `mcp/` (if mc9p), `speech/` (if speech9p), `git/` (if git9p), `local/` (only if caps.paths grants subpaths) | 0 | Network/service mounts |
 | 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
 | 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
-| 7 | `/tmp` | `veltro/` | **1** | Shadow dirs + scratch space — writable so agents can create files |
-| 8 | `/` | `dev`, `dis`, `env`, `fd`, `lib`, `n`, `net`, `net.alt`, `nvfs`, `prog`, `tmp`, `tool` (+ `chan` only if `caps.xenith`) | 0 | Hide project files (.env, .git, CLAUDE.md, etc.) |
+| 7 | `/` | `dev`, `dis`, `env`, `lib`, `n`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files, descriptors, node identity state, and ambient network access |
+| 8 | `/tmp` | `veltro/` | **1** | Hide trusted shadow/audit backing while retaining writable agent workspace |
 
-**Order matters**: Steps 1-7 create shadow dirs under `/tmp/veltro/.ns/shadow/`. Step 7 restricts `/tmp` but preserves the `veltro/` subtree. Step 8 restricts `/` last, after all subdirectory restrictions are in place.
+**Order matters**: all bind replacements and COW mounts are created from trusted
+backing under `/tmp/.veltro-ns/`; `/tmp` is restricted last. Existing mount
+channels remain valid, but agents can see only `/tmp/veltro` and cannot modify
+the shadow directories or namespace audit snapshots.
 
 **`/chan` access control**: The Xenith 9P filesystem at `/chan` exposes ALL window contents. Without the `xenith` capability flag, `/chan` is excluded from the root allowlist — the agent cannot see or read any Xenith windows. When `caps.xenith` is set (e.g., tools9p detects the xenith tool was granted), `/chan` is included. The REPL opens its own window FDs before restriction, so it works without `/chan` in the namespace.
 
@@ -95,14 +155,12 @@ Both levels use the same `restrictdir()` primitive. Capability attenuation is na
 |   +-- lib/      Limbo runtime libraries
 |   +-- veltro/   agent modules + tools
 +-- env/          environment variables
-+-- fd/           file descriptor device
 +-- lib/
 |   +-- veltro/   agents/, reminders/, tools/, system.txt
 +-- n/
 |   +-- llm/      LLM access (if mounted)
 |   +-- speech/   speech synthesis/recognition (if mounted)
-+-- net/          TCP/IP networking
-+-- nvfs/         name-value filesystem
++-- net/          TCP/IP networking (fixed-function network invocation only)
 +-- prog/         process information
 +-- tmp/
 |   +-- veltro/
@@ -127,26 +185,31 @@ Inherits parent's already-restricted namespace, then further restricts:
 
 ## Entry Point Details
 
-### tools9p Serveloop Restriction
+### tools9p Per-Invocation Restriction
 
-The tools9p server must restrict its own thread's namespace, but faces a chicken-and-egg problem: the serveloop must be running before `mount()` can succeed (mount sends 9P messages), but FORKNS must happen after mount so `/tool` is captured.
+The tools9p server remains in its service namespace. Each tool call forks a
+namespace, binds the activity's `/tool.N` over `/tool`, and restricts with only
+the invoked tool in `caps.tools`. The agent's complete tool menu is therefore
+not ambient authority inside each operation. A `read` or `exec` call does not
+inherit `/net`, factotum, `/chan`, UI, or sibling tool modules merely because a
+network/UI tool is also registered.
 
-**Solution**: Buffered channel synchronization with non-blocking alt.
+The ordering remains security-critical:
 
 ```
-init():
-  1. Create buffered channel: mounted := chan[1] of int
-  2. spawn serveloop(... mounted)
-  3. mount(fds[1], "/tool", MREPL)    -- 9P traffic flows to serveloop
-  4. mounted <-= 1                     -- signal serveloop
-
-serveloop():
-  On each 9P message, non-blocking check:
-    alt {
-    <-mounted => applynsrestriction(); restricted = 1;
-    * => ;  // mount not ready yet
-    }
+asyncexec(tool):
+  1. pctl(FORKNS)
+  2. bind /tool.N over /tool
+  3. restrictns(Capabilities(tools = [tool], ...))
+  4. pctl(NODEVS), then execute only that tool module
 ```
+
+`exec` has one constrained variation: its trusted wrapper opens the current
+worker's `#p/<pid>/wait` before `NODEVS`, retains that single FD across
+`NEWFD`, applies `NODEVS`, and passes the FD to sh through `systemfd`. Its
+`/prog` directory is empty. Model-supplied command text is parsed only after
+device attachment is disabled, so shell child waiting does not require ambient
+process control authority.
 
 After restriction, all async tool execution threads (via `spawn asyncexec()`) inherit the restricted namespace.
 
@@ -325,7 +388,9 @@ When running `emu -r.`, the host project directory is bound onto `/` with MAFTER
 
 ### Shadow Directory Management
 
-Shadow directories are created under `/tmp/veltro/.ns/shadow/` with `{pid}-{seq}` names. PID prefix avoids collisions between parent and child. After `/tmp` is restricted to only `veltro/`, the shadow dirs remain accessible.
+Shadow directories are created under `/tmp/.veltro-ns/shadow/` with `{pid}-{seq}`
+names. PID prefix avoids collisions between parent and child. The unrestricted
+tools9p cleanup process can access this tree; restricted agents cannot.
 
 ## Files
 
@@ -610,10 +675,10 @@ exposing it as a user tool is cheap.
 
 ### NODEVS device-attach gate (RESOLVED)
 
-`pctl(NODEVS)` is now applied at **every** agent FORKNS site — the spawned
+`pctl(NODEVS)` is applied before model-controlled code at **every** agent FORKNS site — the spawned
 child (`spawn.b:1071`) **and** all three top-level entry points:
 `veltro.b:169`, `repl.b:170`, `tools9p.b:798`, each immediately after
-`pctl(FORKNS)`. The kernel device gate is at `emu/port/chan.c:1046-1053`;
+`pctl(FORKNS)` (except for exec's trusted wait-FD setup described above). The kernel device gate is at `emu/port/chan.c:1046-1053`;
 with `nodevs` set, `sys->bind("#sfactotum", "/tmp/veltro/x", MREPL)` (and any
 `#x` attach outside the `|esDa` allowlist) fails, so device-attach cannot
 bypass the path-based restriction.

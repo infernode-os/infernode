@@ -2727,16 +2727,3 @@ sendpack(remoteurl: string, updates: list of ref RefUpdate,
 
 	return nil;
 }
-
-readcredentials(gitdir: string): string
-{
-	fd := sys->open(gitdir + "/credentials", Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array [1024] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
-	s := string buf[:n];
-	return strtrim(s);
-}

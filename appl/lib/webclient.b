@@ -22,6 +22,8 @@ include "string.m";
 	str: String;
 
 include "webclient.m";
+include "publicnet.m";
+	publicnet: Publicnet;
 
 MAXREDIRECTS: con 10;
 
@@ -41,6 +43,10 @@ init(): string
 	if(url == nil)
 		return sys->sprint("load Url: %r");
 	url->init();
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet == nil)
+		return sys->sprint("load Publicnet: %r");
+	publicnet->init();
 
 	# TLS loaded lazily on first HTTPS use
 	return nil;
@@ -151,8 +157,20 @@ tlswritepump(conn: ref Conn, fd: ref Sys->FD)
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
+	return request0(method, requrl, hdrs, body, 0);
+}
+
+requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
+{
+	return request0(method, requrl, hdrs, body, 1);
+}
+
+# Revalidates every redirect target. Public mode resolves first and dials the
+# exact validated address, preventing redirect and DNS-rebinding SSRF.
+request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
+{
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
-		(resp, err) := dorequest(method, requrl, hdrs, body);
+		(resp, err) := dorequest(method, requrl, hdrs, body, public);
 		if(err != nil)
 			return (nil, err);
 
@@ -162,11 +180,16 @@ request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref
 			loc := resp.hdrval("Location");
 			if(loc == nil)
 				return (resp, nil);
+			oldorigin := schemehost(requrl);
 			# Resolve relative URL
 			if(len loc > 0 && loc[0] == '/')
 				requrl = schemehost(requrl) + loc;
 			else
 				requrl = loc;
+			# Credentials are scoped to the origin selected by the caller. Never
+			# forward them when a redirect changes scheme, host, or port.
+			if(schemehost(requrl) != oldorigin)
+				hdrs = redirectheaders(hdrs);
 			# 303 always changes to GET
 			if(resp.statuscode == 303) {
 				method = "GET";
@@ -177,6 +200,26 @@ request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref
 		}
 	}
 	return (nil, "too many redirects");
+}
+
+redirectheaders(hdrs: list of Header): list of Header
+{
+	kept: list of Header;
+	for(; hdrs != nil; hdrs = tl hdrs) {
+		h := hd hdrs;
+		name := str->tolower(h.name);
+		# Generic callers can use arbitrary credential header names, so preserve
+		# only representation metadata rather than trying to enumerate secrets.
+		if(name != "accept" && name != "accept-encoding" &&
+		   name != "accept-language" && name != "content-type" &&
+		   name != "user-agent")
+			continue;
+		kept = h :: kept;
+	}
+	result: list of Header;
+	for(; kept != nil; kept = tl kept)
+		result = hd kept :: result;
+	return result;
 }
 
 # [private]
@@ -199,7 +242,7 @@ schemehost(requrl: string): string
 }
 
 # [private]
-dorequest(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
+dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
 {
 	u := url->makeurl(requrl);
 	if(u == nil)
@@ -217,6 +260,12 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte): (r
 	}
 
 	addr := "tcp!" + host + "!" + port;
+	if(public) {
+		(paddr, err) := publicaddr(host, port);
+		if(err != nil)
+			return (nil, err);
+		addr = paddr;
+	}
 
 	fd: ref Sys->FD;
 	if(ishttps) {
@@ -241,6 +290,11 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte): (r
 	}
 
 	return dofdrequest(fd, method, u, host, hdrs, body);
+}
+
+publicaddr(host, port: string): (string, string)
+{
+	return publicnet->dialaddr(host, port);
 }
 
 # [private]

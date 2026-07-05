@@ -1,0 +1,105 @@
+#!/dis/sh.dis
+# Headless delegation auto-start driver — runs entirely on hephaestus.
+# llmsrv connects to local ollama (gpt-oss:20b) and self-mounts /mnt/llm in
+# this same namespace: no 9P export, no keyring auth. Then brings up the
+# agent UI + tools + lucibridge(activity 0), hands it a 3-task request, and
+# polls activity statuses + child conversations to confirm children auto-start.
+
+load std
+path=(/dis .)
+
+mount -ac {mntgen} /n
+bind -a '#I' /net
+ndb/cs
+
+# Bind host ~/.infernode/lib/ndb over /lib/ndb so lucibridge's LLM-config
+# gate sees backend=openai + url (else it runs the setup wizard and parks).
+trfs '#U*' /n/local
+ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+infhome=$ghome^/.infernode
+if {ftest -d $infhome/lib/ndb} {
+	bind -bc $infhome/lib/ndb /lib/ndb
+}
+echo '### /lib/ndb/llm backend:'
+cat /lib/ndb/llm
+
+# LLM service: openai backend -> local ollama; self-mounts /mnt/llm here.
+llmsrv -D -b openai -u http://127.0.0.1:11434/v1 -M gpt-oss:20b -r low &
+sleep 4
+echo '### /mnt/llm contents:'
+ls /mnt/llm
+
+# Wallet (keyring tool dependency in the budget)
+/dis/veltro/wallet9p.dis >[2] /dev/null &
+sleep 1
+
+# UI service + seed activity 0
+luciuisrv
+echo activity create Main > /mnt/ui/ctl
+sleep 1
+
+# tools9p: full delegation budget + activity-0 tool slice (mirrors serve-agent)
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
+
+# lucibridge for activity 0
+lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
+
+# Readiness wait: don't inject the request until activity-0 lucibridge has
+# logged that it is ready (its session is up and it is about to read input).
+# A fixed sleep races LLM-session init under load and the request can be sent
+# before the read loop exists; poll the log instead. Bounded ~40s.
+ready=no
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
+	if {~ $ready no} {
+		if {grep -s 'activity 0, session' /tmp/lucibridge.log} {
+			ready=yes
+		}{
+			sleep 2
+		}
+	}
+}
+echo readiness: $ready
+
+fn dumpstate {
+	echo '== activities =='
+	cat /mnt/ui/ctl
+	for (a in 0 1 2 3 4 5 6 7) {
+		if {ftest -f /mnt/ui/activity/$a/label} {
+			echo activity $a status '['`{cat /mnt/ui/activity/$a/status}']' urgency '['`{cat /mnt/ui/activity/$a/urgency}']' label '['`{cat /mnt/ui/activity/$a/label}']'
+		}
+	}
+}
+
+fn dumpconv {
+	for (a in 0 1 2 3 4 5 6 7) {
+		if {ftest -f /mnt/ui/activity/$a/label} {
+			echo '=== activity' $a '['`{cat /mnt/ui/activity/$a/label}'] conversation ==='
+			for (m in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
+				if {ftest -f /mnt/ui/activity/$a/conversation/$m} {
+					echo '  ['$m']' `{cat /mnt/ui/activity/$a/conversation/$m}
+				}
+			}
+		}
+	}
+}
+
+echo '##### BEFORE REQUEST #####'
+dumpstate
+
+req='I need you to do three things for me: (1) check my email and summarize the unread messages, (2) research ponies for a book I am writing, and (3) code a small app. Please get each one started.'
+echo '##### SENDING REQUEST TO ACTIVITY 0 #####'
+echo $req > /mnt/ui/activity/0/conversation/input
+
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24) {
+	sleep 10
+	echo '##### POLL' $i '#####'
+	dumpstate
+}
+
+echo '##### FINAL CONVERSATIONS #####'
+dumpconv
+
+echo '##### lucibridge activity-0 log (tail) #####'
+cat /tmp/lucibridge.log
+
+echo '##### DONE #####'

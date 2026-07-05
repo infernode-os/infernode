@@ -151,12 +151,25 @@ init(nil: ref Draw->Context, args: list of string)
 		w.data = w.openfile("data");
 		xmode = 1;
 	}
+	# Preserve only the shared session pointer when restrictns allowlists /env.
+	(envsessionok, nil) := sys->stat("/env/VELTRO_SESSION");
+	if(envsessionok < 0) {
+		efd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
+		if(efd == nil) {
+			sys->fprint(stderr, "repl: cannot create session environment slot: %r\n");
+			raise "fail:namespace";
+		}
+	}
+
 
 	# Namespace restriction (v3): FORKNS + bind-replace
 	# Must happen after mount checks and Xenith window creation,
 	# but before session creation
 	nsconstruct = load NsConstruct NsConstruct->PATH;
-	if(nsconstruct != nil) {
+	if(nsconstruct == nil) {
+		sys->fprint(stderr, "repl: cannot load namespace confinement: %r\n");
+		raise "fail:namespace";
+	} else {
 		nsconstruct->init();
 
 		# Read tools list before restriction to grant correct capabilities.
@@ -166,17 +179,34 @@ init(nil: ref Draw->Context, args: list of string)
 		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
 			if(hd tl2 == "xenith") { xgrant = 1; break; }
 
-		sys->pctl(Sys->FORKNS, nil);
-		sys->pctl(Sys->NODEVS, nil);
+		if(sys->pctl(Sys->FORKNS, nil) < 0) {
+			sys->fprint(stderr, "repl: cannot fork namespace: %r\n");
+			raise "fail:namespace";
+		}
+		if(sys->pctl(Sys->NODEVS, nil) < 0) {
+			sys->fprint(stderr, "repl: cannot disable device attachment: %r\n");
+			raise "fail:namespace";
+		}
+
+		# This loop opens its LLM session BY PATH after restriction (newsession
+		# opens /mnt/llm/<id>/ask), so it must grant itself /mnt/llm explicitly —
+		# nsconstruct no longer grants /mnt by existence (least privilege). A
+		# spawned sub-agent uses a pre-opened FD instead and is NOT given this.
+		for(pl := pathlist; pl != nil; pl = tl pl)
+			if(hd pl == "/mnt/llm")
+				break;
+		if(pl == nil)
+			pathlist = "/mnt/llm" :: pathlist;
 
 		caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
 		);
 
 		nserr := nsconstruct->restrictns(caps);
-		if(nserr != nil)
+		if(nserr != nil) {
 			sys->fprint(stderr, "repl: namespace restriction failed: %s\n", nserr);
-		else if(verbose)
+			raise "fail:namespace";
+		} else if(verbose)
 			sys->fprint(stderr, "repl: namespace restricted\n");
 	}
 

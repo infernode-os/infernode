@@ -181,7 +181,7 @@ defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
 
 usage()
 {
-	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-k key] [-M model] [-r low|medium|high] [-c autocompact-tokens]\n");
+	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-M model] [-r low|medium|high] [-c autocompact-tokens]\n");
 	raise "fail:usage";
 }
 
@@ -241,7 +241,6 @@ init(nil: ref Draw->Context, args: list of string)
 		'm' => mountpt = arg->earg();
 		'b' => backend = arg->earg();
 		'u' => apiurl = arg->earg();
-		'k' => apikey = arg->earg();
 		'M' => defaultmodel = arg->earg();
 		'r' => defaultreasoning = arg->earg();
 		'c' => autocompactdefault = strtoint(arg->earg());
@@ -251,7 +250,9 @@ init(nil: ref Draw->Context, args: list of string)
 		autocompactdefault = 0;
 	arg = nil;
 
-	# Read API key: try factotum first, then environment
+	# Factotum is preferred. Environment fallback supports direct headless
+	# daemon startup where no interactive factotum/secstore unlock is possible;
+	# agent namespaces never inherit these environment variables.
 	if(apikey == "" && backend == "api") {
 		apikey = getfactotumkey("anthropic");
 		if(apikey == "")

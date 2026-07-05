@@ -98,6 +98,7 @@ History: adt {
 # Authentication strings
 AuthInfo: adt {
 	realm: string;
+	origin: string;
 	credentials: string;
 };
 
@@ -956,7 +957,7 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 				use = 1;
 			}
 			else {
-				(realm, auth) = getauth(challenge);
+				(realm, auth) = getauth(challenge, urlorigin(ri.url));
 				if(auth != "") {
 					ri.auth = auth;
 					authtried = 1;
@@ -974,10 +975,25 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
 				error = CU->hcphrase(hdr.code);
 			if(authtried) {
 				# it succeeded; add to auths list so don't have to ask again
-				auths = ref AuthInfo(realm, auth) :: auths;
+				auths = ref AuthInfo(realm, urlorigin(ri.url), auth) :: auths;
 			}
 		}
 		if(newurl != nil) {
+			# A network peer must not redirect the browser into a local
+			# transport such as file:.  Agent control can read rendered body.
+			if((ri.url.scheme == "http" || ri.url.scheme == "https") &&
+			   !networkurl(newurl)) {
+				CU->freebs(bsmain);
+				return "unsafe redirect scheme";
+			}
+			if(urlorigin(ri.url) != urlorigin(newurl)) {
+				# Basic credentials are authority-scoped. Never carry them to a
+				# redirect-selected host, scheme, or port.
+				ri.auth = "";
+				auth = "";
+				realm = "";
+				authtried = 0;
+			}
 			ri.url = newurl;
 			# some sites (e.g., amazon.com) assume that POST turns into
 			# GET on redirect (maybe this is just http 1.0?)
@@ -2022,7 +2038,7 @@ dumphistory()
 
 # getauth returns the (realm, credentials), with "" for the credentials
 # if we fail in getting authorization for some reason
-getauth(chal: string) : (string, string)
+getauth(chal, origin: string) : (string, string)
 {
 	if(len chal < 12 || S->tolower(chal[0:12]) != "basic realm=") {
 		if(dbg || warn)
@@ -2034,7 +2050,7 @@ getauth(chal: string) : (string, string)
 		realm = realm[1:len realm - 1];
 	for(al := auths; al != nil; al = tl al) {
 		a := hd al;
-		if(realm == a.realm)
+		if(realm == a.realm && origin == a.origin)
 			return (realm, a.credentials);
 	}
 	uname, pword: string;
@@ -2488,6 +2504,25 @@ followlink(n: int): ref Event
 	return nil;
 }
 
+networkurl(url: ref Parsedurl): int
+{
+	return url != nil && (url.scheme == "http" || url.scheme == "https");
+}
+
+urlorigin(url: ref Parsedurl): string
+{
+	if(url == nil)
+		return "";
+	port := url.port;
+	if(port == "") {
+		if(url.scheme == "https")
+			port = "443";
+		else if(url.scheme == "http")
+			port = "80";
+	}
+	return S->tolower(url.scheme) + "://" + S->tolower(url.host) + ":" + port;
+}
+
 ctlproc()
 {
 	sys->pctl(Sys->NEWPGRP, nil);
@@ -2504,7 +2539,7 @@ ctlproc()
 			rest = browserstrip(rest);
 			if(rest != "") {
 				url := CU->makeabsurl(rest);
-				if(url != nil)
+				if(networkurl(url))
 					ev = ref Event.Ego(rest, "_top", 0, E->EGnormal);
 			}
 		"back" =>
@@ -2517,8 +2552,16 @@ ctlproc()
 			ev = ref Event.Estop(0);
 		"follow" =>
 			n := browseratoi(rest);
-			if(n > 0)
-				ev = followlink(n);
+			if(n > 0) {
+				candidate := followlink(n);
+				if(candidate != nil) {
+					pick ego := candidate {
+					Ego =>
+						if(networkurl(CU->makeabsurl(ego.url)))
+							ev = candidate;
+					}
+				}
+			}
 		}
 		if(ev != nil)
 			E->evchan <-= ev;
@@ -2968,4 +3011,3 @@ skip(s, cmd: string): string
 		s = s[1:];
 	return s;
 }
-

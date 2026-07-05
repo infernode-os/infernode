@@ -26,10 +26,10 @@ include "nsconstruct.m";
 
 include "cowfs.m";
 
-# Shadow directories live under /tmp/veltro/.ns/ so they survive
-# the /tmp restriction (which allows only "veltro/")
-SHADOW_BASE: con "/tmp/veltro/.ns/shadow";
-AUDIT_DIR: con "/tmp/veltro/.ns/audit";
+# Trusted namespace construction state lives outside the agent workspace.
+# /tmp is narrowed only after all shadow-backed binds have been installed.
+SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
+AUDIT_DIR: con "/tmp/.veltro-ns/audit";
 
 # Directory/file permissions
 DIR_MODE: con 8r700 | Sys->DMDIR;  # rwx------ directory
@@ -150,6 +150,8 @@ restrictns(caps: ref Capabilities): string
 	mkdirp("/tmp/veltro/scratch");
 	mkdirp("/tmp/veltro/memory");
 	mkdirp("/tmp/veltro/cow");
+	mkdirp("/tmp/veltro/tasks");
+	mkdirp("/tmp/.veltro-ns");
 	mkdirp(SHADOW_BASE);
 	mkdirp(AUDIT_DIR);
 
@@ -273,32 +275,50 @@ restrictns(caps: ref Capabilities): string
 	# caps.mcproviders (generic mc9p) grants the whole /mnt/mcp. "mnt" is added
 	# to the root safe-list (step 8) only when something here is granted —
 	# otherwise a confined agent sees no /mnt at all.
+	# Every /mnt mount is capability-driven (least privilege): a child sees a
+	# /mnt subtree ONLY when its capabilities name it. Nothing is granted merely
+	# because the directory exists — otherwise a confined child would see /mnt
+	# (and the model service under it) regardless of what it was granted.
+	#
+	# /mnt/llm is NOT granted here by existence. An agent that drives its own LLM
+	# session opens it BY PATH after restriction, so it lists "/mnt/llm" in
+	# caps.paths (repl does this for its loop) and it is picked up by filterpaths
+	# above. A spawned sub-agent instead inherits a pre-opened session FD from its
+	# parent (subagent.b llmaskfd) — an open FD survives namespace restriction —
+	# so it needs no /mnt/llm mount and must not be handed the whole service tree.
+	#
+	# /mnt/msg (msg9p) is likewise caps-driven: a message task agent reads
+	# /mnt/msg/status by path, so it is granted "/mnt/msg" explicitly via
+	# caps.paths (the message policy adds paths=/mnt/msg).
+	# SECURITY INVARIANT: changes here must keep the negative, positive, and
+	# composition cases in tests/veltro_security_test.b in sync.
 	mntpaths := filterpaths(caps.paths, "/mnt/");
-	if(caps.mcproviders != nil && mntpaths == nil)
-		mntpaths = "mcp" :: nil;	# whole /mnt/mcp for generic mc9p
-	# /mnt/llm — the agent's core LLM service. Always granted if present, which
-	# preserves the old /mnt/llm always-grant semantics ("withheld = non-functional")
-	# but now inside the SAME /mnt capability machinery as /mnt/mcp/<server> — no
-	# /n special-case (INFR-254). restrictpath("/mnt", "llm"::…) exposes the whole
-	# /mnt/llm session tree (clone/ask/system/tools/model/usage/compact). Everything
-	# else under /mnt stays strictly caps-driven (least privilege). The agent's
-	# brain is local or a remote tree bound over /mnt/llm — placement is identical
-	# either way (docs/NAMESPACE-LAYOUT.md).
-	(mntllmok, nil) := sys->stat("/mnt/llm");
-	if(mntllmok >= 0 && !inlist("llm", mntpaths))
-		mntpaths = "llm" :: mntpaths;
-	# /mnt/ui — presentation surface (luciuisrv), granted ONLY if the "present"
-	# tool is in caps (was /mnt/ui; present/gap tools write /mnt/ui/activity/{id}/…).
+	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
+		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
+	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
+	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
 	# whole /mnt/ui; the subtree is then narrowed below (activity/ always; ctl if
 	# the task tool is granted), preserving the old /mnt/ui least-privilege.
 	uimnt := 0;
-	if(inlist("present", caps.tools)) {
+	if(needsui(caps.tools)) {
 		(uimntok, nil) := sys->stat("/mnt/ui");
 		if(uimntok >= 0 && !inlist("ui", mntpaths)) {
 			mntpaths = "ui" :: mntpaths;
 			uimnt = 1;
 		}
+	}
+	# /mnt/factotum — the credential agent. A fixed-function tool can receive it
+	# only when the same agent cannot execute arbitrary code. Otherwise exec or
+	# shell could query unrelated credentials stored in the shared factotum.
+	# Mixed grants fail closed: websearch reports its key unavailable. A future
+	# per-credential broker may safely remove this incompatibility (INFR-363).
+	if((inlist("git", caps.tools) || inlist("websearch", caps.tools) ||
+	    inlist("vision", caps.tools)) &&
+	   !inlist("exec", caps.tools) && !inlist("shell", caps.tools)) {
+		(facok, nil) := sys->stat("/mnt/factotum");
+		if(facok >= 0 && !inlist("factotum", mntpaths))
+			mntpaths = "factotum" :: mntpaths;
 	}
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
@@ -316,6 +336,28 @@ restrictns(caps: ref Capabilities): string
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
 			}
+			# /mnt/msg sub-restriction: granting "/mnt/msg" exposes only the READ
+			# surface (status — the inbox). The SEND endpoint (reply) and the
+			# trusted control file (ctl) and flag endpoint are NEVER exposed by the bare grant — they are
+			# separate capabilities, named explicitly in caps.paths. So a drafting
+			# agent literally cannot see the send path (it does not try to send and
+			# cannot); an authorised send action is granted "/mnt/msg/reply"
+			# separately and gets a writable reply. Pure least-privilege, no gate.
+			if(inlist("msg", mntpaths)) {
+				msgallow := "status" :: nil;
+				msgwrite := 0;
+				if(inlist("/mnt/msg/reply", caps.paths)) {
+					msgallow = "reply" :: msgallow;
+					msgwrite = 1;	# the send endpoint must be writable
+				}
+				if(inlist("/mnt/msg/flag", caps.paths)) {
+					msgallow = "flag" :: msgallow;
+					msgwrite = 1;
+				}
+				merr := restrictdir("/mnt/msg", msgallow, msgwrite);
+				if(merr != nil)
+					return sys->sprint("restrict /mnt/msg: %s", merr);
+			}
 		}
 	}
 
@@ -326,25 +368,67 @@ restrictns(caps: ref Capabilities): string
 		err = restrictdir("/lib", "veltro" :: "certs" :: nil, 0);
 		if(err != nil)
 			return sys->sprint("restrict /lib: %s", err);
+		# Legacy setup instructions stored API keys here. Keep the application
+		# tree but replace its credential directory with an empty namespace.
+		(keyok, nil) := sys->stat("/lib/veltro/keys");
+		if(keyok >= 0) {
+			err = restrictdir("/lib/veltro/keys", nil, 0);
+			if(err != nil)
+				return sys->sprint("restrict /lib/veltro/keys: %s", err);
+		}
 	}
 
-	# 7. Restrict /tmp to: veltro/ (shadow dirs are under here).
-	# writable=1 so agents can create files under /tmp/veltro/.
-	# MCREATE is applied only to /tmp — not to /dis, /lib, /dev, /n, /.
-	err = restrictdir("/tmp", "veltro" :: nil, 1);
-	if(err != nil)
-		return sys->sprint("restrict /tmp: %s", err);
+	# 7. Restrict /env to the one application-owned session pointer. Environment
+	# groups are commonly inherited from the launching shell and may contain
+	# credentials. Launchers pre-create VELTRO_SESSION before FORKNS so the bind
+	# captures the shared slot that plan/todo legitimately require.
+	(envok, nil) := sys->stat("/env");
+	if(envok >= 0) {
+		err = restrictdir("/env", "VELTRO_SESSION" :: nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict /env: %s", err);
+	}
+	# 8. Restrict /prog to this process. The process device otherwise exposes
+	# sibling namespaces, descriptors, status, stacks and writable control files.
+	# Non-shell tools only need the current process. Inferno sh creates another
+	# process and opens /prog/<child>/wait after restriction, so an explicit shell
+	# capability temporarily retains full /prog.
+	(progok, nil) := sys->stat("/prog");
+	if(progok >= 0 && caps.shellcmds == nil) {
+		progallow: list of string;
+		# The exec wrapper supplies sh with a pre-opened wait FD. Its command
+		# process therefore needs no /prog entry, including the wrapper's ctl.
+		if(!inlist("exec", caps.tools)) {
+			pid := sys->pctl(0, nil);
+			progallow = string pid :: nil;
+		}
+		err = restrictdir("/prog", progallow, 0);
+		if(err != nil)
+			return sys->sprint("restrict /prog: %s", err);
+	}
 
-	# 8. Restrict / to only Inferno system directories.
+	# 9. Restrict / to only Inferno system directories.
 	# The emu's -r. binds #U (project root) onto / with MAFTER,
 	# exposing project files (.env, .git, appl/, emu/, ...).
 	# restrictdir("/", safe) replaces the root union with a shadow
 	# containing only safe entries. Channels are captured at bind time,
 	# so kernel device bindings (#c→/dev, #p→/prog) are preserved
 	# through the shadow binds.
-	safe := "dev" :: "dis" :: "env" :: "fd" ::
-		"lib" :: "n" :: "net" :: "net.alt" :: "nvfs" ::
-		"prog" :: "tmp" :: "tool" :: nil;
+	# Do not expose /fd. Tool workers retain the descriptors needed internally,
+	# including the tools9p reply channel, but agent code must not enumerate or
+	# reopen those inherited capabilities by descriptor number.
+	safe := "dev" :: "dis" :: "env" ::
+		"lib" :: "n" :: "prog" :: "tmp" :: "tool" :: nil;
+	# Raw IP devices are a capability, not ambient process state. Only
+	# fixed-function tools that dial directly receive them. In particular, an
+	# exec/shell invocation remains networkless even when the same agent also
+	# has a web tool available; tools9p passes only the invoked tool in caps.
+	if(needsnet(caps.tools)) {
+		safe = "net" :: safe;
+		(netaltok, nil) := sys->stat("/net.alt");
+		if(netaltok >= 0)
+			safe = "net.alt" :: safe;
+	}
 	# /mnt — application mount points (MCP adapters etc.) — only if a /mnt subtree
 	# was granted in step 5b; otherwise a confined agent gets no /mnt at all.
 	if(keepmnt)
@@ -367,7 +451,7 @@ restrictns(caps: ref Capabilities): string
 		if(first == "")
 			continue;
 		# Skip top-level dirs already in safe or handled by steps 1–7
-		if(inlist(first, safe))
+		if(inlist(first, safe) || first == "net" || first == "net.alt")
 			continue;
 		if(!inlist(first, extradirs))
 			extradirs = first :: extradirs;
@@ -409,7 +493,7 @@ restrictns(caps: ref Capabilities): string
 		if(subpaths != nil) {
 			ederr := restrictpath(topdir, subpaths);
 			if(ederr != nil)
-				sys->fprint(sys->fildes(2), "nsconstruct: restrict %s: %s\n", topdir, ederr);
+				return sys->sprint("restrict %s: %s", topdir, ederr);
 		}
 	}
 
@@ -418,6 +502,35 @@ restrictns(caps: ref Capabilities): string
 		if(werr != nil)
 			return sys->sprint("overlay writes: %s", werr);
 	}
+
+	# Preserve the public scratch path while giving every activity disjoint
+	# backing storage. A compromised task cannot read or overwrite another
+	# activity's spilled tool results, drafts, or temporary files.
+	workspaceid := caps.actid;
+	if(workspaceid < 0)
+		workspaceid = sys->pctl(0, nil);
+	scratchdir := sys->sprint("/tmp/veltro/scratch/%d", workspaceid);
+	err = mkdirp(scratchdir);
+	if(err != nil)
+		return sys->sprint("create activity scratch: %s", err);
+	if(sys->bind(scratchdir, "/tmp/veltro/scratch", Sys->MREPL|Sys->MCREATE) < 0)
+		return sys->sprint("isolate activity scratch: %r");
+
+	# Task briefs contain untrusted message bodies and user instructions. They
+	# are exchanged by trusted taskboard/lucibridge processes; ordinary tools
+	# must not read another activity's prompt or model selection.
+	if(!inlist("task", caps.tools)) {
+		err = restrictdir("/tmp/veltro/tasks", nil, 0);
+		if(err != nil)
+			return sys->sprint("restrict task metadata: %s", err);
+	}
+
+	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
+	# constructed first; their backing channels remain valid after the trusted
+	# /tmp/.veltro-ns tree is hidden. Agents retain only their workspace.
+	err = restrictdir("/tmp", "veltro" :: nil, 1);
+	if(err != nil)
+		return sys->sprint("restrict /tmp: %s", err);
 
 	return nil;
 }
@@ -491,6 +604,26 @@ inlist(s: string, l: list of string): int
 {
 	for(; l != nil; l = tl l)
 		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+needsnet(tools: list of string): int
+{
+	networktools := "browse" :: "git" :: "http" :: "payfetch" ::
+		"vision" :: "webfetch" :: "websearch" :: nil;
+	for(; tools != nil; tools = tl tools)
+		if(inlist(hd tools, networktools))
+			return 1;
+	return 0;
+}
+
+needsui(tools: list of string): int
+{
+	uitools := "gap" :: "keyring" :: "launch" :: "present" ::
+		"spawn" :: "task" :: nil;
+	for(; tools != nil; tools = tl tools)
+		if(inlist(hd tools, uitools))
 			return 1;
 	return 0;
 }
@@ -792,8 +925,21 @@ mkdirp(path: string): string
 		return err;
 
 	fd := sys->create(path, Sys->OREAD, DIR_MODE);
-	if(fd == nil)
+	if(fd == nil) {
+		# TOCTOU race: a concurrent restrictns (e.g. a tool-call asyncexec
+		# overlapping a child tools9p's emitmanifest, both spawned by
+		# back-to-back `task` calls) may have created this shared ancestor
+		# between our stat() above and this create(). Directory creation is
+		# idempotent: if it now exists as a directory, that is success.
+		# Without this, the loser of the race returned "cannot create … file
+		# exists", which surfaced to the agent as "namespace restriction
+		# failed" and dropped a delegated task (more likely with models that
+		# batch multiple task tool-calls in one turn).
+		(ok2, d2) := sys->stat(path);
+		if(ok2 >= 0 && (d2.mode & Sys->DMDIR))
+			return nil;
 		return sys->sprint("cannot create %s: %r", path);
+	}
 	fd = nil;
 	return nil;
 }

@@ -93,6 +93,7 @@ TARG=\
 	plumbmsg.dis\
 	pop3.dis\
 	profile.dis\
+	publicnet.dis\
 	pslib.dis\
 	rabin.dis\
 	rand.dis\

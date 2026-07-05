@@ -126,7 +126,6 @@ Git: module
 	writepack: fn(objects: list of ref ObjRef): (array of byte, string);
 	sendpack: fn(url: string, updates: list of ref RefUpdate,
 		     packdata: array of byte, creds: string): string;
-	readcredentials: fn(gitdir: string): string;
 
 	# --- Delta ---
 

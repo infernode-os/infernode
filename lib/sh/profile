@@ -152,17 +152,36 @@ if {! ftest -f /mnt/factotum/proto}{
 	}
 }
 
-# Provision API key from host env (fallback for CLI users without secstore)
-if {~ $emuhost Nt} {
-	# Windows: read API key from key file (written by setup-windows.ps1)
-	_apikey=`{cat /lib/veltro/keys/anthropic >[2] /dev/null}
-	if {! ~ $_apikey ''} {
-		factotumkey='key proto=pass service=anthropic user=apikey !password='^$_apikey
+# Provision API keys into factotum (secstore is the persistent home; these are
+# the CLI/CI fallbacks). Each service is sourced from its host env var
+# <SERVICE>_API_KEY first, then the legacy plaintext file /lib/veltro/keys/<svc>.
+# Add a service to the lists below to provision it the same way.
+fn provisionkey {
+	# $1 = service name, $2 = host env var
+	_pk=`{os sh -c 'printf %s "${'^$2^'}"' >[2] /dev/null}
+	if {~ $#_pk 0} {
+		_pk=`{cat /lib/veltro/keys/$1 >[2] /dev/null}
 	}
-}{
-	factotumkey=`{os sh -c 'if [ -n "$ANTHROPIC_API_KEY" ]; then echo "key proto=pass service=anthropic user=apikey !password=$ANTHROPIC_API_KEY"; fi'}
+	if {! ~ $#_pk 0} {
+		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
+	}
 }
-echo $factotumkey > /mnt/factotum/ctl >[2] /dev/null
+fn provisionkeyfile {
+	# Windows: os sh in backticks hangs, so file-only. $1 = service name.
+	_pk=`{cat /lib/veltro/keys/$1 >[2] /dev/null}
+	if {! ~ $#_pk 0} {
+		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
+	}
+}
+if {~ $emuhost Nt} {
+	provisionkeyfile anthropic
+	provisionkeyfile brave
+	provisionkeyfile openai
+}{
+	provisionkey anthropic ANTHROPIC_API_KEY
+	provisionkey brave BRAVE_API_KEY
+	provisionkey openai OPENAI_API_KEY
+}
 
 # ── LLM + Speech (desktop platforms) ──────────────────────
 if {~ $emuhost MacOSX Linux Nt}{

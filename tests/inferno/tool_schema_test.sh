@@ -10,7 +10,7 @@
 
 load std
 
-mkdir -p /tmp/veltro/.ns/shadow >[2] /dev/null
+mkdir -p /tmp/.veltro-ns/shadow >[2] /dev/null
 
 # Start tools9p with the canonical stock toolset (mirrors what
 # lucibridge typically launches with). Single line — Inferno rc

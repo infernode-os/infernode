@@ -47,7 +47,6 @@ ToolVision: module {
 };
 
 # Cloud backend constants
-APIKEY_PATH: con "/lib/veltro/keys/anthropic";
 API_URL: con "https://api.anthropic.com/v1/messages";
 API_VERSION: con "2023-06-01";
 MODEL: con "claude-sonnet-4-20250514";
@@ -113,7 +112,7 @@ doc(): string
 		"  vision --cloud /tmp/screenshot.png Extract all visible text\n\n" +
 		"Notes:\n" +
 		"  Maximum image size: 5MB\n" +
-		"  Cloud requires API key in " + APIKEY_PATH + "\n" +
+		"  Cloud requires a factotum key (proto=pass service=anthropic)\n" +
 		"  Local requires /mnt/gpu mounted with a vision model loaded";
 }
 
@@ -282,7 +281,7 @@ cloudvision(imagepath, prompt: string): string
 	# Read API key
 	apikey := readapikey();
 	if(apikey == "")
-		return "error: Anthropic API key not configured. Place key in " + APIKEY_PATH;
+		return "error: Anthropic API key not configured in factotum";
 
 	# Detect media type
 	mtype := mediatype(imagepath);
@@ -466,28 +465,19 @@ extracterror(json: string): string
 
 # ==================== I/O Helpers ====================
 
-# Read API key from factotum, falling back to file
+# Read API key from factotum. nsconstruct grants the service only to this
+# fixed-function invocation; plaintext key files are intentionally unsupported.
 readapikey(): string
 {
-	# Try factotum first
 	if(factotum == nil)
 		factotum = load Factotum Factotum->PATH;
-	if(factotum != nil){
-		factotum->init();
-		(nil, password) := factotum->getuserpasswd("proto=pass service=anthropic");
-		if(password != nil && password != "")
-			return password;
-	}
-
-	# Fall back to file (migration)
-	fd := sys->open(APIKEY_PATH, Sys->OREAD);
-	if(fd == nil)
+	if(factotum == nil)
 		return "";
-	buf := array[256] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	factotum->init();
+	(nil, password) := factotum->getuserpasswd("proto=pass service=anthropic");
+	if(password == nil)
 		return "";
-	return strip(string buf[0:n]);
+	return password;
 }
 
 # Read entire file as text
@@ -564,7 +554,7 @@ writebytes(path: string, data: array of byte): string
 dorequest(hdrs: list of Webclient->Header, reqbody: array of byte,
 	result: chan of (ref Webclient->Response, string))
 {
-	(resp, err) := webclient->request("POST", API_URL, hdrs, reqbody);
+	(resp, err) := webclient->requestpublic("POST", API_URL, hdrs, reqbody);
 	result <-= (resp, err);
 }
 

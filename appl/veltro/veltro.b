@@ -215,7 +215,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Namespace restriction (v3): FORKNS + bind-replace
 	# Load nsconstruct module (must happen while /dis is unrestricted)
 	nsconstruct = load NsConstruct NsConstruct->PATH;
-	if(nsconstruct != nil) {
+	if(nsconstruct == nil) {
+		sys->fprint(stderr, "veltro: cannot load namespace confinement: %r\n");
+		raise "fail:namespace";
+	} else {
 		nsconstruct->init();
 
 		# Read tools list before restriction to grant correct capabilities.
@@ -243,9 +246,33 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 		}
 
+		# Preserve only the shared session pointer when restrictns allowlists /env.
+		(envsessionok, nil) := sys->stat("/env/VELTRO_SESSION");
+		if(envsessionok < 0) {
+			efd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
+			if(efd == nil) {
+				sys->fprint(stderr, "veltro: cannot create session environment slot: %r\n");
+				raise "fail:namespace";
+			}
+		}
 		# Fork namespace so caller is unaffected
-		sys->pctl(Sys->FORKNS, nil);
-		sys->pctl(Sys->NODEVS, nil);
+		if(sys->pctl(Sys->FORKNS, nil) < 0) {
+			sys->fprint(stderr, "veltro: cannot fork namespace: %r\n");
+			raise "fail:namespace";
+		}
+		if(sys->pctl(Sys->NODEVS, nil) < 0) {
+			sys->fprint(stderr, "veltro: cannot disable device attachment: %r\n");
+			raise "fail:namespace";
+		}
+
+		# This loop opens its LLM session by path after restriction. Keep this
+		# internal grant out of the user-supplied bindpath registration above:
+		# /mnt is capability-driven, but /mnt/llm is required for this launcher.
+		for(pl := pathlist; pl != nil; pl = tl pl)
+			if(hd pl == "/mnt/llm")
+				break;
+		if(pl == nil)
+			pathlist = "/mnt/llm" :: pathlist;
 
 		parent_caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
@@ -253,9 +280,10 @@ init(nil: ref Draw->Context, args: list of string)
 
 		# Apply namespace restrictions
 		nserr := nsconstruct->restrictns(parent_caps);
-		if(nserr != nil)
+		if(nserr != nil) {
 			sys->fprint(stderr, "veltro: namespace restriction failed: %s\n", nserr);
-		else {
+			raise "fail:namespace";
+		} else {
 			if(verbose)
 				sys->fprint(stderr, "veltro: namespace restricted\n");
 			# Emit namespace manifest from the restricted namespace

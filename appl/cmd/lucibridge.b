@@ -80,6 +80,9 @@ BRIDGE_SUFFIX: con "\n\nYou are Veltro, the AI agent in a Lucifer activity. " +
 	"Use tools only when the user asks you to perform a specific task.";
 
 META_PROMPT_PATH: con "/lib/veltro/meta.txt";
+# Default agentic sampling temperature (low = reliable tool-calling). Override
+# per-deployment with `temperature=` in /lib/ndb/llm. See initsession().
+AGENT_TEMP: con "0.2";
 
 log(msg: string)
 {
@@ -559,12 +562,35 @@ initsession(): string
 		return "cannot create LLM session";
 	log("initsession: session " + sessionid);
 
+	# Sampling temperature for the agentic loop. A low temperature sharply
+	# improves tool-call reliability: at the llmsrv default (0.7) the model
+	# intermittently samples a "I've started the tasks…" narration instead of
+	# emitting the task/write tool call (measured ~22% delegation-miss on
+	# gpt-oss); at 0.2 that collapses to ~0 and children also reliably call
+	# write/limbo instead of pasting. Precedence: /tmp/veltro/agent_temp (test
+	# override) > /lib/ndb/llm `temperature=` (deployment config) > AGENT_TEMP
+	# default. Applies to activity 0 and all child activities.
+	tval := agentlib->strip(agentlib->readfile("/tmp/veltro/agent_temp"));
+	if(tval == "")
+		tval = agentlib->strip(readndbfield("/lib/ndb/llm", "temperature"));
+	if(tval == "")
+		tval = AGENT_TEMP;
+	if(tval != "") {
+		tfd := sys->open("/mnt/llm/" + sessionid + "/temperature", Sys->OWRITE);
+		if(tfd != nil) {
+			tb := array of byte tval;
+			sys->write(tfd, tb, len tb);
+			tfd = nil;
+			log("initsession: set temperature to " + tval);
+		}
+	}
+
 	# Apply model override from the task tool (INFR-55). Activity 0 inherits
-	# the system default; child activities may carry a /tmp/veltro/model.<id>
+	# the system default; child activities may carry a /tmp/veltro/tasks/model.<id>
 	# file selecting a specific backend (e.g. daedalus for coder tasks).
 	if(actid > 0) {
 		modelname := agentlib->strip(agentlib->readfile(
-			sys->sprint("/tmp/veltro/model.%d", actid)));
+			sys->sprint("/tmp/veltro/tasks/model.%d", actid)));
 		if(modelname != "") {
 			mfd := sys->open("/mnt/llm/" + sessionid + "/model", Sys->OWRITE);
 			if(mfd != nil) {
@@ -586,7 +612,7 @@ initsession(): string
 
 	# Append role-specific suffix: meta prompt for activity 0 (main agent),
 	# task agent prompt for child activities (actid > 0). The task tool may
-	# override the default task prompt by writing /tmp/veltro/agenttype.<id>
+	# override the default task prompt by writing /tmp/veltro/tasks/agenttype.<id>
 	# (e.g. "coder" -> /lib/veltro/agents/coder.txt) — see INFR-55.
 	suffix := BRIDGE_SUFFIX;
 	if(actid == 0) {
@@ -595,7 +621,7 @@ initsession(): string
 			suffix = "\n\n" + agentlib->strip(meta);
 	} else {
 		atype := agentlib->strip(agentlib->readfile(
-			sys->sprint("/tmp/veltro/agenttype.%d", actid)));
+			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
 		promptpath := "/lib/veltro/agents/task.txt";
 		if(atype != "" && safeagenttype(atype))
 			promptpath = "/lib/veltro/agents/" + atype + ".txt";
@@ -1872,16 +1898,17 @@ init(nil: ref Draw->Context, args: list of string)
 	# written by the task tool.  Append them to the LLM system prompt inside
 	# <task> and <instructions> tags so the TA knows its assignment.
 	taskbrief := "";
+	taskinstr := "";
 	if(actid > 0) {
-		briefpath := sys->sprint("/tmp/veltro/brief.%d", actid);
+		briefpath := sys->sprint("/tmp/veltro/tasks/brief.%d", actid);
 		taskbrief = agentlib->readfile(briefpath);
 		if(taskbrief != nil)
 			taskbrief = agentlib->strip(taskbrief);
 		else
 			taskbrief = "";
 
-		instrpath := sys->sprint("/tmp/veltro/instructions.%d", actid);
-		taskinstr := agentlib->readfile(instrpath);
+		instrpath := sys->sprint("/tmp/veltro/tasks/instructions.%d", actid);
+		taskinstr = agentlib->readfile(instrpath);
 		if(taskinstr != nil)
 			taskinstr = agentlib->strip(taskinstr);
 		else
@@ -1909,10 +1936,28 @@ init(nil: ref Draw->Context, args: list of string)
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sessionid, maxsteps, convcount));
 
-	# Autonomous first turn for TAs: the task brief is in the system prompt,
-	# now send a short trigger so the LLM responds based on its assignment.
-	if(taskbrief != "")
-		agentturn("Begin.");
+	# Autonomous first turn for TAs. The brief/instructions are already in the
+	# system prompt inside <task>/<instructions> tags, but a content-free
+	# trigger ("Begin.") leaves the actual assignment buried in the system
+	# message — weaker models then reply conversationally ("what should I do?")
+	# instead of acting. So we restate the assignment as the first user turn:
+	# the model sees its concrete task as the latest message and starts work.
+	# This turn is NOT recorded with writemsg(), so it is invisible in the UI;
+	# only the agent's response is shown. Fires on brief OR instructions so an
+	# instructions-only task still auto-starts.
+	if(taskbrief != "" || taskinstr != "") {
+		kickoff := "You have been started automatically to carry out an assigned task.";
+		if(taskbrief != "")
+			kickoff += "\n\nYour assignment:\n" + taskbrief;
+		if(taskinstr != "")
+			kickoff += "\n\nSpecific instructions:\n" + taskinstr;
+		kickoff += "\n\nBegin now. Work autonomously with your tools. Do not greet " +
+			"or ask what to do — you already have your assignment above. If you " +
+			"genuinely cannot proceed without a specific missing detail, ask one " +
+			"concise clarifying question; otherwise make a reasonable assumption " +
+			"and proceed.";
+		agentturn(kickoff);
+	}
 
 	# Main loop: re-open input fd each iteration because 9P offset
 	# advances after read, causing subsequent reads to return EOF.
@@ -1949,7 +1994,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 }
 
-# Guard against path traversal in /tmp/veltro/agenttype.<id> contents. The
+# Guard against path traversal in /tmp/veltro/tasks/agenttype.<id> contents. The
 # agenttype is used unsanitised as a path component when opening the prompt
 # file, so we restrict it to bare lowercase identifiers.
 safeagenttype(t: string): int

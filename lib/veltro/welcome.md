@@ -52,19 +52,9 @@ the cheat sheet.
 
 ### API key
 
-The LLM service (`llmsrv`) is configured in the shell profile and
-starts automatically. To set your Anthropic API key:
-
-```
-mkdir -p /lib/veltro/keys
-echo 'sk-ant-...' > /lib/veltro/keys/anthropic
-```
-
-For web search, add a Brave Search API key:
-
-```
-echo 'your-brave-key' > /lib/veltro/keys/brave
-```
+The LLM service (`llmsrv`) is configured in the shell profile and starts
+automatically. Configure Anthropic and Brave API keys through Keyring; keys are
+stored in factotum and are not written under `/lib/veltro`.
 
 ### Themes
 

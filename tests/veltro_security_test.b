@@ -254,10 +254,47 @@ idempotentWorker(result: chan of string)
 # ============================================================================
 testRestrictNs(t: ref T)
 {
+	createdkeys := 0;
+	(ok, nil) := sys->stat("/lib/veltro/keys");
+	if(ok < 0) {
+		fd := sys->create("/lib/veltro/keys", Sys->OREAD, Sys->DMDIR | 8r700);
+		if(fd == nil) {
+			t.skip("cannot create legacy key-directory fixture");
+			return;
+		}
+		fd = nil;
+		createdkeys = 1;
+	}
+	canary := "/lib/veltro/keys/ns-secret-canary";
+	fd := sys->create(canary, Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		if(createdkeys)
+			sys->remove("/lib/veltro/keys");
+		t.skip("cannot create legacy key fixture");
+		return;
+	}
+	sys->fprint(fd, "synthetic-secret");
+	fd = nil;
+	sys->create("/tmp/veltro/tasks", Sys->OREAD, Sys->DMDIR | 8r700);
+	taskcanary := "/tmp/veltro/tasks/instructions.99999";
+	fd = sys->create(taskcanary, Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		sys->remove(canary);
+		if(createdkeys)
+			sys->remove("/lib/veltro/keys");
+		t.skip("cannot create task metadata fixture");
+		return;
+	}
+	sys->fprint(fd, "hostile-message-body");
+	fd = nil;
 	result := chan of string;
 	spawn restrictNsWorker(result);
 
 	r := <-result;
+	sys->remove(taskcanary);
+	sys->remove(canary);
+	if(createdkeys)
+		sys->remove("/lib/veltro/keys");
 	if(r != "")
 		t.error(r);
 }
@@ -322,20 +359,187 @@ restrictNsWorker(result: chan of string)
 		return;
 	}
 
-	# /mnt/llm is the agent's brain and is auto-granted when present. Sibling
-	# application mount points remain capability-gated.
+	# Least privilege: with NO /mnt grant in caps.paths, a confined child sees no
+	# /mnt at all — not even /mnt/llm. The model service is NOT granted by mere
+	# existence; an agent that needs it lists /mnt/llm in caps.paths (repl), and a
+	# spawned sub-agent drives the LLM through a pre-opened FD that survives the
+	# restriction. (mntgen would make /mnt/llm *stat* as present in the parent ns;
+	# the root-level restriction is what hides /mnt here.)
 	(llmok, nil) := sys->stat("/mnt/llm");
-	if(llmok < 0) {
-		result <-= "/mnt/llm should be accessible after restrictns when present";
+	if(llmok >= 0) {
+		result <-= "/mnt/llm must NOT be visible without an explicit /mnt grant (least privilege)";
 		return;
 	}
 
 	(acmeok, nil) := sys->stat("/mnt/acme");
 	if(acmeok >= 0) {
-		result <-= "/mnt/acme must NOT be visible when only /mnt/llm is auto-granted";
+		result <-= "/mnt/acme must NOT be visible without a grant";
 		return;
 	}
 
+	(netok, nil) := sys->stat("/net");
+	if(netok >= 0) {
+		result <-= "/net must NOT be visible without a network tool capability";
+		return;
+	}
+	(fdok, nil) := sys->stat("/fd");
+	if(fdok >= 0) {
+		result <-= "/fd must NOT expose inherited descriptors";
+		return;
+	}
+	(nvok, nil) := sys->stat("/nvfs");
+	if(nvok >= 0) {
+		result <-= "/nvfs must NOT expose node identity state";
+		return;
+	}
+	(nsstateok, nil) := sys->stat("/tmp/.veltro-ns");
+	if(nsstateok >= 0) {
+		result <-= "trusted namespace construction state remains visible";
+		return;
+	}
+	(taskok, nil) := sys->stat("/tmp/veltro/tasks/instructions.99999");
+	if(taskok >= 0) {
+		result <-= "ordinary tool can read another activity task prompt";
+		return;
+	}
+
+	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
+	if(keyok >= 0) {
+		result <-= "legacy plaintext credential remained visible";
+		return;
+	}
+
+	result <-= "";
+}
+
+testTaskMetadataCapability(t: ref T)
+{
+	fd := sys->create("/tmp/veltro/tasks/instructions.99998", Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		t.skip("cannot create task metadata capability fixture");
+		return;
+	}
+	sys->fprint(fd, "task-only");
+	fd = nil;
+	result := chan of string;
+	spawn taskMetadataCapabilityWorker(result);
+	r := <-result;
+	sys->remove("/tmp/veltro/tasks/instructions.99998");
+	if(r != "")
+		t.error(r);
+}
+
+taskMetadataCapabilityWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"task" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (task tool) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/tasks/instructions.99998");
+	if(ok < 0) {
+		result <-= "task tool cannot access task metadata exchange";
+		return;
+	}
+	result <-= "";
+}
+
+testActivityScratchIsolation(t: ref T)
+{
+	sys->remove("/tmp/veltro/scratch/41001/canary");
+	sys->remove("/tmp/veltro/scratch/41001");
+	sys->remove("/tmp/veltro/scratch/41002/canary");
+	sys->remove("/tmp/veltro/scratch/41002");
+	result := chan of string;
+	spawn activityScratchWriter(result, 41001);
+	r := <-result;
+	if(r == "") {
+		spawn activityScratchReader(result, 41002);
+		r = <-result;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/scratch/41001/canary");
+	if(r == "" && ok < 0)
+		r = "activity scratch write did not reach its backing directory";
+	sys->remove("/tmp/veltro/scratch/41001/canary");
+	sys->remove("/tmp/veltro/scratch/41001");
+	sys->remove("/tmp/veltro/scratch/41002/canary");
+	sys->remove("/tmp/veltro/scratch/41002");
+	if(r != "")
+		t.error(r);
+}
+
+activityScratchWriter(result: chan of string, id: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, id, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict writer scratch: %s", err);
+		return;
+	}
+	fd := sys->create("/tmp/veltro/scratch/canary", Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		result <-= sys->sprint("create activity scratch canary: %r");
+		return;
+	}
+	sys->fprint(fd, "activity-secret");
+	result <-= "";
+}
+
+activityScratchReader(result: chan of string, id: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, id, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict reader scratch: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/scratch/canary");
+	if(ok >= 0) {
+		result <-= "activity can read another activity's scratch file";
+		return;
+	}
+	result <-= "";
+}
+
+testNetworkCapability(t: ref T)
+{
+	result := chan of string;
+	spawn networkCapabilityWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+networkCapabilityWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"webfetch" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (network tool) failed: %s", err);
+		return;
+	}
+	(netok, nil) := sys->stat("/net");
+	if(netok < 0) {
+		result <-= "/net missing with explicit webfetch capability";
+		return;
+	}
 	result <-= "";
 }
 
@@ -388,6 +592,16 @@ shellWorker(result: chan of string)
 	(catok, nil) := sys->stat("/dis/cat.dis");
 	if(catok < 0) {
 		result <-= "shellcmds should grant /dis/cat.dis";
+		return;
+	}
+	(netok, nil) := sys->stat("/net");
+	if(netok >= 0) {
+		result <-= "exec shell capability exposes raw network devices";
+		return;
+	}
+	(fdok, nil) := sys->stat("/fd");
+	if(fdok >= 0) {
+		result <-= "exec shell capability exposes inherited descriptors";
 		return;
 	}
 
@@ -450,6 +664,122 @@ mntWorker(result: chan of string)
 		return;
 	}
 
+	result <-= "";
+}
+
+# An explicit LLM grant must expose only that service. This is the positive
+# counterpart to restrictNsWorker's assertion that /mnt/llm is hidden by
+# default, and pins the path-based contract used by the top-level agent loop.
+testRestrictNsMntLlm(t: ref T)
+{
+	created := 0;
+	(ok, nil) := sys->stat("/mnt/llm");
+	if(ok < 0) {
+		fd := sys->create("/mnt/llm", Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil) {
+			t.skip("cannot create /mnt/llm test fixture");
+			return;
+		}
+		fd = nil;
+		created = 1;
+	}
+	result := chan of string;
+	spawn mntLlmWorker(result);
+	r := <-result;
+	if(created)
+		sys->remove("/mnt/llm");
+	if(r != "")
+		t.error(r);
+}
+
+mntLlmWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/mnt/llm" :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (llm grant) failed: %s", err);
+		return;
+	}
+	(llmok, nil) := sys->stat("/mnt/llm");
+	if(llmok < 0) {
+		result <-= "/mnt/llm missing with explicit grant";
+		return;
+	}
+	(mcpok, nil) := sys->stat("/mnt/mcp");
+	if(mcpok >= 0) {
+		result <-= "ungranted /mnt/mcp visible with only /mnt/llm granted";
+		return;
+	}
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "ungranted /mnt/acme visible with only /mnt/llm granted";
+		return;
+	}
+	result <-= "";
+}
+
+
+# Combined /mnt grants must compose rather than replace one another.
+testRestrictNsMntCombined(t: ref T)
+{
+	fd := sys->create("/mnt/combined", Sys->OREAD, Sys->DMDIR | 8r755);
+	if(fd == nil) {
+		t.skip("cannot create combined /mnt test fixture");
+		return;
+	}
+	fd = nil;
+	result := chan of string;
+	spawn mntCombinedWorker(result);
+	r := <-result;
+	sys->remove("/mnt/combined");
+	if(r != "")
+		t.error(r);
+}
+
+mntCombinedWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	provider := ref NsConstruct->MCProvider("test-provider", nil, 0);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/mnt/combined" :: nil,
+		nil,
+		nil,
+		0 :: 1 :: 2 :: nil,
+		provider :: nil,
+		0,
+		0,
+		-1,
+		nil
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (combined mnt) failed: %s", err);
+		return;
+	}
+	(combinedok, nil) := sys->stat("/mnt/combined");
+	if(combinedok < 0) {
+		result <-= "/mnt/combined missing from combined grant";
+		return;
+	}
+	(mcpok, nil) := sys->stat("/mnt/mcp");
+	if(mcpok < 0) {
+		result <-= "/mnt/mcp missing when mcproviders is combined with another /mnt grant";
+		return;
+	}
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "ungranted /mnt sibling visible in combined grant";
+		return;
+	}
 	result <-= "";
 }
 
@@ -567,7 +897,7 @@ testAuditLog(t: ref T)
 	nsconstruct->emitauditlog("test-audit", "restrictdir /dis" :: "restrictdir /dev" :: nil);
 
 	# Read audit log
-	auditpath := "/tmp/veltro/.ns/audit/test-audit.ns";
+	auditpath := "/tmp/.veltro-ns/audit/test-audit.ns";
 	fd := sys->open(auditpath, Sys->OREAD);
 	if(fd == nil) {
 		t.error("cannot open audit log");
@@ -983,6 +1313,36 @@ invalidGrantPathsWorker(result: chan of string)
 	result <-= "";
 }
 
+# A path that treats an existing file as a directory must fail closed. Otherwise
+# recursive restriction can expose the parent file after the deeper bind fails.
+testInvalidGrantTypeRejected(t: ref T)
+{
+	result := chan of string;
+	spawn invalidGrantTypeWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+invalidGrantTypeWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/appl/veltro/veltro.b/subpath" :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err == nil) {
+		result <-= "restrictns accepted a grant below a regular file";
+		return;
+	}
+	result <-= "";
+}
+
+
 # ============================================================================
 # Test 16: StagedWriteManifest
 # Verifies the staged-write backend contract that writable granted paths are
@@ -1082,6 +1442,138 @@ contains(s, sub: string): int
 	return 0;
 }
 
+
+# ============================================================================
+# Environment allowlist
+# Verifies inherited secrets are hidden while VELTRO_SESSION remains available.
+# ============================================================================
+testEnvironmentAllowlist(t: ref T)
+{
+	(oldok, nil) := sys->stat("/env/VELTRO_SESSION");
+	oldsession := readfilecontent("/env/VELTRO_SESSION");
+	writefilecontent("/env/VELTRO_SESSION", "/tmp/veltro/test-session");
+	writefilecontent("/env/INFERNODE_NS_CANARY", "synthetic-secret-canary");
+
+	result := chan of string;
+	spawn environmentAllowlistWorker(result);
+	r := <-result;
+
+	sys->remove("/env/INFERNODE_NS_CANARY");
+	if(oldok >= 0)
+		writefilecontent("/env/VELTRO_SESSION", oldsession);
+	else
+		sys->remove("/env/VELTRO_SESSION");
+
+	if(r != "")
+		t.error(r);
+}
+
+environmentAllowlistWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	if(readfilecontent("/env/VELTRO_SESSION") != "/tmp/veltro/test-session") {
+		result <-= "VELTRO_SESSION should remain visible after restriction";
+		return;
+	}
+	(secretok, nil) := sys->stat("/env/INFERNODE_NS_CANARY");
+	if(secretok >= 0) {
+		result <-= "inherited environment secret remains visible";
+		return;
+	}
+	result <-= "";
+}
+
+
+# ============================================================================
+# Process namespace allowlist
+# Verifies a confined process can inspect itself but not its parent.
+# ============================================================================
+testProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn progAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+testExecProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn execProgAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+execProgAllowlistWorker(result: chan of string, parentpid: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"exec" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (exec) failed: %s", err);
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ctl", parentpid));
+	if(parentok >= 0) {
+		result <-= "exec can control a sibling process";
+		return;
+	}
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil) {
+		result <-= "exec restricted process directory is unavailable";
+		return;
+	}
+	(n, nil) := sys->dirread(fd);
+	if(n != 0) {
+		result <-= "exec process directory is not empty";
+		return;
+	}
+	result <-= "";
+}
+
+progAllowlistWorker(result: chan of string, parentpid: int)
+{
+	selfpid := sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	(selfok, nil) := sys->stat(sys->sprint("/prog/%d/status", selfpid));
+	if(selfok < 0) {
+		result <-= "current process should remain visible";
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ns", parentpid));
+	if(parentok >= 0) {
+		result <-= "parent process remains visible";
+		return;
+	}
+	result <-= "";
+}
+
 # ============================================================================
 # Main entry point
 # ============================================================================
@@ -1115,8 +1607,16 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictDirExclusion", testRestrictDirExclusion);
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
+	run("TaskMetadataCapability", testTaskMetadataCapability);
+	run("ActivityScratchIsolation", testActivityScratchIsolation);
+	run("NetworkCapability", testNetworkCapability);
+	run("EnvironmentAllowlist", testEnvironmentAllowlist);
+	run("ProgAllowlist", testProgAllowlist);
+	run("ExecProgAllowlist", testExecProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
+	run("RestrictNsMntLlm", testRestrictNsMntLlm);
+	run("RestrictNsMntCombined", testRestrictNsMntCombined);
 	run("RestrictNsRace", testRestrictNsRace);
 	run("VerifyNs", testVerifyNs);
 	run("AuditLog", testAuditLog);
@@ -1127,6 +1627,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 	run("ToolCtlHidden", testToolCtlHidden);
 	run("InvalidGrantPathsRejected", testInvalidGrantPathsRejected);
+	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
 
 	# Print summary

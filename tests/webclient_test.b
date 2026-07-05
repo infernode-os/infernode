@@ -62,7 +62,7 @@ testHttpsGet(t: ref T)
 testRedirect(t: ref T)
 {
 	# HTTP to HTTPS redirect
-	(resp, err) := webclient->get("http://example.com");
+	(resp, err) := webclient->requestpublic("GET", "http://example.com", nil, nil);
 	if(err != nil) {
 		t.skip("network: " + err);
 		return;
@@ -120,6 +120,38 @@ testHeaderLookup(t: ref T)
 	t.assertnil(resp.hdrval("Missing"), "missing header is nil");
 }
 
+testPublicRequestRejectsPrivate(t: ref T)
+{
+	urls := array[] of {
+		"http://127.0.0.1:1/",
+		"http://10.1.2.3:1/",
+		"http://100.64.0.1:1/",
+		"http://169.254.169.254:1/",
+		"http://172.16.0.1:1/",
+		"http://192.168.1.1:1/",
+		"http://192.0.2.1:1/",
+		"http://198.51.100.1:1/",
+		"http://203.0.113.1:1/",
+		"http://2130706433:1/"
+	};
+	for(i := 0; i < len urls; i++) {
+		(resp, err) := webclient->requestpublic("GET", urls[i], nil, nil);
+		t.assert(resp == nil, "private destination returned no response: " + urls[i]);
+		t.assert(err != nil && contains(err, "destination denied"),
+			"private destination rejected by policy: " + urls[i] + " (" + err + ")");
+	}
+}
+
+contains(s, needle: string): int
+{
+	if(needle == nil || len needle == 0)
+		return 1;
+	for(i := 0; i + len needle <= len s; i++)
+		if(s[i:i + len needle] == needle)
+			return 1;
+	return 0;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -150,6 +182,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Non-network tests first
 	run("HeaderLookup", testHeaderLookup);
+	run("PublicRequestRejectsPrivate", testPublicRequestRejectsPrivate);
 
 	# Network tests (may skip if no connectivity)
 	run("HttpsGet", testHttpsGet);

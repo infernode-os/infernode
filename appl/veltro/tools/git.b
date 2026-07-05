@@ -24,6 +24,12 @@ include "git.m";
 	git: Git;
 	Hash, Repo, Commit, TreeEntry, IndexEntry, Ref, RefUpdate: import git;
 
+include "url.m";
+	url: Url;
+
+include "factotum.m";
+	factotum: Factotum;
+
 include "../tool.m";
 
 ToolGit: module {
@@ -50,6 +56,13 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	url = load Url Url->PATH;
+	if(url == nil)
+		return "cannot load Url";
+	factotum = load Factotum Factotum->PATH;
+	if(factotum == nil)
+		return "cannot load Factotum";
+	factotum->init();
 
 	# Check for git repo
 	(ok, nil) := sys->stat("/.git");
@@ -692,9 +705,9 @@ workpush(wgit: Git, repo: ref Repo, gitdir, args: string): string
 	if(perr != nil)
 		return "error: writepack: " + perr;
 
-	creds := wgit->readcredentials(gitdir);
+	creds := gitcredentials(remoteurl);
 	if(creds == nil)
-		return "error: no credentials found; create .git/credentials with user:token";
+		return "error: no factotum credentials for git remote";
 
 	upd := ref RefUpdate(oldhash, localhash, dstrefname);
 	updates := upd :: nil;
@@ -705,6 +718,22 @@ workpush(wgit: Git, repo: ref Repo, gitdir, args: string): string
 
 	return sprint("To %s\n   %s..%s  %s -> %s",
 		remoteurl, oldhash.hex()[:7], localhash.hex()[:7], branch, branch);
+}
+
+gitcredentials(remoteurl: string): string
+{
+	if(factotum == nil || url == nil)
+		return nil;
+	u := url->makeurl(remoteurl);
+	keyspec := "proto=pass service=git";
+	if(u != nil && u.host != nil && u.host != "")
+		keyspec += " dom=" + u.host;
+	(user, password) := factotum->getuserpasswd(keyspec);
+	if(password == nil || password == "")
+		return nil;
+	if(user == nil || user == "")
+		user = "git";
+	return user + ":" + password;
 }
 
 workfetch(wgit: Git, repo: ref Repo, gitdir, args: string): string

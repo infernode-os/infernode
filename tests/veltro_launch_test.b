@@ -294,6 +294,35 @@ testWhitelistOnlyWm(t: ref T)
 		"non-wm app cat rejected by whitelist");
 }
 
+testRejectsLocalCharonUrls(t: ref T)
+{
+	tool := loadlaunch(t);
+	if(tool == nil)
+		return;
+
+	bad := array[] of {
+		"file:/lib/veltro/system.txt",
+		"FILE:///env/secret",
+		"ftp://localhost/private"
+	};
+	for(i := 0; i < len bad; i++) {
+		r := tool->exec("charon " + bad[i]);
+		t.assert(hassubstr(r, "only accepts http:// and https://"),
+			"charon rejects non-network URL " + bad[i]);
+	}
+}
+
+testRejectsDataForOtherApps(t: ref T)
+{
+	tool := loadlaunch(t);
+	if(tool == nil)
+		return;
+
+	r := tool->exec("editor /lib/veltro/system.txt");
+	t.assert(hassubstr(r, "launch data is only supported for charon"),
+		"launch does not pass attacker-controlled data to arbitrary GUI apps");
+}
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -346,6 +375,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Whitelist
 	run("WhitelistOnlyWm", testWhitelistOnlyWm);
+	run("RejectsLocalCharonUrls", testRejectsLocalCharonUrls);
+	run("RejectsDataForOtherApps", testRejectsDataForOtherApps);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

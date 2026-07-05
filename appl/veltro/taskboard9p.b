@@ -264,7 +264,7 @@ synctask(te: ref TaskEntry)
 	}
 	# Read instructions from brief file if not yet set
 	if(te.instructions == "") {
-		s = readfile(sys->sprint("/tmp/veltro/instructions.%d", te.id));
+		s = readfile(sys->sprint("/tmp/veltro/tasks/instructions.%d", te.id));
 		if(s != nil)
 			te.instructions = strip(s);
 	}
@@ -275,25 +275,20 @@ synctask(te: ref TaskEntry)
 pushevent(msg: string)
 {
 	# Fan-out: deliver to ALL pending Qevent readers
-	prev: ref PendingRead;
 	p := pending;
+	kept: ref PendingRead;
 	delivered := 0;
 	while(p != nil) {
 		next := p.next;
 		if(p.ft == Qevent) {
 			data := array of byte (msg + "\n");
 			srv_g.reply(styxservers->readbytes(p.m, data));
-			if(prev == nil)
-				pending = next;
-			else
-				prev.next = next;
 			delivered = 1;
-			p = next;
-			continue;
-		}
-		prev = p;
+		} else
+			kept = ref PendingRead(p.fid, p.tag, p.m, p.ft, kept);
 		p = next;
 	}
+	pending = kept;
 	if(!delivered)
 		eventbuf = msg :: eventbuf;
 }

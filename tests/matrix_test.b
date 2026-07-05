@@ -465,6 +465,59 @@ testTextRoundTrip(t: ref T)
 	t.assertseq(c.text, text, "original text preserved verbatim");
 }
 
+# ── Transplant units ────────────────────────────────────────
+#
+# transplant moves live module handles old→new for unchanged
+# entries.  Real instances are fabricated by loading shipped
+# modules; identity is asserted through the nil'd-in-old contract.
+
+testTransplant(t: ref T)
+{
+	oldtext := "layout hsplit 1 1\nleft cpu-gauge /m/a\nright mem-gauge /m/b\n" +
+		"service sysmon-svc /\nservice llm-recorder /mnt/llm\n";
+	newtext := "layout hsplit 2 1\nleft cpu-gauge /m/a\nright mem-gauge /m/CHANGED\n" +
+		"service sysmon-svc /\n";
+	(old, e1) := matrixlib->parsecomposition(oldtext);
+	(new, e2) := matrixlib->parsecomposition(newtext);
+	t.assertnil(e1, "old parses");
+	t.assertnil(e2, "new parses");
+
+	dm := load MatrixDisplay "/dis/matrix/cpu-gauge.dis";
+	dm2 := load MatrixDisplay "/dis/matrix/mem-gauge.dis";
+	sm := load MatrixService "/dis/matrix/sysmon-svc.dis";
+	sm2 := load MatrixService "/dis/matrix/llm-recorder.dis";
+	if(dm == nil || dm2 == nil || sm == nil || sm2 == nil)
+		t.fatal(sys->sprint("cannot load matrix modules: %r"));
+
+	oldleft := leafbyname(old.layout, "left");
+	oldright := leafbyname(old.layout, "right");
+	oldleft.mod = dm;
+	oldright.mod = dm2;
+	os1 := servicebyname(old, "sysmon-svc");
+	os2 := servicebyname(old, "llm-recorder");
+	os1.mod = sm;
+	os1.outdir = "/tmp/matrix/sysmon-svc";
+	os1.pid = 42;
+	os2.mod = sm2;
+
+	matrixlib->transplant(old, new);
+
+	# Unchanged leaf: handle moved.
+	t.assert(leafbyname(new.layout, "left").mod != nil, "kept leaf adopted the instance");
+	t.assert(oldleft.mod == nil, "kept leaf nil'd in old");
+	# Changed mount: handle stays in old for shutdown.
+	t.assert(leafbyname(new.layout, "right").mod == nil, "changed-mount leaf not adopted");
+	t.assert(oldright.mod != nil, "changed-mount instance left in old");
+	# Unchanged service: handle + runtime state moved.
+	ns1 := servicebyname(new, "sysmon-svc");
+	t.assert(ns1.mod != nil, "kept service adopted");
+	t.assertseq(ns1.outdir, "/tmp/matrix/sysmon-svc", "outdir carried");
+	t.asserteq(ns1.pid, 42, "pid carried");
+	t.assert(os1.mod == nil, "kept service nil'd in old");
+	# Dropped service: left in old.
+	t.assert(os2.mod != nil, "dropped service left in old for shutdown");
+}
+
 # ── Control filesystem surface (/mnt/matrix) ────────────────
 #
 # Spawns the real runtime headless with the shipped sysmon
@@ -573,6 +626,70 @@ testControlFSNotifications(t: ref T)
 	t.assertseq(readfile("/mnt/matrix/notifications"), "", "notifications empty at start");
 }
 
+countlines(s: string): int
+{
+	n := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			n++;
+	return n;
+}
+
+# Incremental reload: writing a new composition keeps unchanged
+# modules running (qid identity + service state continuity) and
+# drops removed ones.
+testControlFSReload(t: ref T)
+{
+	histpath := "/mnt/matrix/modules/sysmon-svc/out/cpu/history";
+	h1 := 0;
+	for(w := 0; w < 8000 && h1 < 3; w += 500) {
+		h1 = countlines(readfile(histpath));
+		if(h1 < 3)
+			sys->sleep(500);
+	}
+	t.assert(h1 >= 3, "service history warmed up");
+	(ok1, d1) := sys->stat("/mnt/matrix/modules/sysmon-svc");
+	t.assert(ok1 >= 0, "sysmon-svc stats before reload");
+
+	# Same service, same cpu-gauge/proc-list leaves; mem-gauge
+	# dropped; ratios changed.
+	newtext := "# sysmon-lite\n" +
+		"layout hsplit 60 40\n" +
+		"left vsplit 50 50\n" +
+		"left/top cpu-gauge /tmp/matrix/sysmon\n" +
+		"right proc-list /tmp/matrix/sysmon\n" +
+		"service sysmon-svc /\n";
+	t.assert(writestr("/mnt/matrix/composition", newtext) > 0, "composition write accepted");
+	applied := 0;
+	for(w = 0; w < 3000 && !applied; w += 250) {
+		if(readfile("/mnt/matrix/composition") == newtext)
+			applied = 1;
+		else
+			sys->sleep(250);
+	}
+	t.assert(applied, "reload applied");
+
+	# Dropped module gone from the tree.
+	(gone, nil) := sys->stat("/mnt/matrix/modules/mem-gauge");
+	t.assert(gone < 0, "dropped module unwalkable after reload");
+
+	# Kept module: same qid, still running.
+	(ok2, d2) := sys->stat("/mnt/matrix/modules/sysmon-svc");
+	t.assert(ok2 >= 0, "sysmon-svc stats after reload");
+	t.assert(d1.qid.path == d2.qid.path, "kept module qid stable across reload");
+	t.assertseq(trim(readfile("/mnt/matrix/modules/sysmon-svc/ctl")), "running", "kept service still running");
+
+	# Continuity: a restarted service would have reset its history
+	# ring to a couple of entries; a kept one only grows.
+	sys->sleep(1200);
+	h2 := countlines(readfile(histpath));
+	t.assert(h2 >= h1, sys->sprint("history continuity (%d -> %d)", h1, h2));
+
+	# Restore the shipped composition for the tests that follow.
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+}
+
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
@@ -661,6 +778,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("UnrecognizedLine", testUnrecognizedLine);
 	run("CommentsAndBlanks", testCommentsAndBlanks);
 	run("TextRoundTrip", testTextRoundTrip);
+	run("Transplant", testTransplant);
 
 	run("ControlFSStart", testControlFSStart);
 	if(matrixpid > 0) {
@@ -669,6 +787,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSOutPassthrough", testControlFSOutPassthrough);
 		run("ControlFSLibrary", testControlFSLibrary);
 		run("ControlFSNotifications", testControlFSNotifications);
+		run("ControlFSReload", testControlFSReload);
 		run("ControlFSCtlVerbs", testControlFSCtlVerbs);
 		run("ControlFSUnload", testControlFSUnload);
 	}

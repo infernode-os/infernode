@@ -177,6 +177,67 @@ parsecomposition(text: string): (ref Composition, string)
 	return (c, nil);
 }
 
+transplant(old, new: ref Composition)
+{
+	if(old == nil || new == nil)
+		return;
+	if(old.layout != nil && new.layout != nil)
+		transplantleaves(old.layout, new.layout);
+	for(nl := new.services; nl != nil; nl = tl nl) {
+		ns := hd nl;
+		for(ol := old.services; ol != nil; ol = tl ol) {
+			os := hd ol;
+			if(os.mod != nil && os.name == ns.name && os.mount == ns.mount) {
+				ns.mod = os.mod;
+				ns.outdir = os.outdir;
+				ns.pid = os.pid;
+				os.mod = nil;
+				os.pid = 0;
+				break;
+			}
+		}
+	}
+}
+
+# Walk the new layout's leaves; adopt the old module when the same
+# region name carries the same module against the same mount.
+# Region-name-first matching prevents two regions running the same
+# module from cross-stealing each other's instance.
+transplantleaves(oldroot, node: ref LayoutNode)
+{
+	pick n := node {
+	Split =>
+		transplantleaves(oldroot, n.child1);
+		transplantleaves(oldroot, n.child2);
+	Leaf =>
+		if(n.modname == "")
+			return;
+		o := findleaf(oldroot, n.name);
+		if(o != nil && o.mod != nil &&
+		   o.modname == n.modname && o.mount == n.mount) {
+			n.mod = o.mod;
+			o.mod = nil;
+		}
+	}
+}
+
+findleaf(node: ref LayoutNode, name: string): ref LayoutNode.Leaf
+{
+	if(node == nil)
+		return nil;
+	pick n := node {
+	Split =>
+		l := findleaf(n.child1, name);
+		if(l != nil)
+			return l;
+		return findleaf(n.child2, name);
+	Leaf =>
+		if(n.name == name)
+			return n;
+	}
+	return nil;
+}
+
 # Parse "hsplit" or "vsplit"
 parseorient(s: string): int
 {

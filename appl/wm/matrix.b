@@ -1575,11 +1575,9 @@ shutdowndisplaymodules(node: ref LayoutNode)
 	}
 }
 
-shutdownservicemodules()
+shutdownservices(services: list of ref ServiceEntry)
 {
-	if(comp == nil)
-		return;
-	for(sl := comp.services; sl != nil; sl = tl sl) {
+	for(sl := services; sl != nil; sl = tl sl) {
 		se := hd sl;
 		if(se.mod != nil)
 			se.mod->shutdown();
@@ -1741,21 +1739,31 @@ reloadcomposition(text: string)
 		return;
 	}
 
-	# Shutdown old modules
+	# Incremental: entries unchanged between old and new keep their
+	# live module instance (and, for services, their running proc).
+	# transplant moves those handles into newcomp and nils them in
+	# old; whatever old still holds is what actually shuts down.
 	<-complock;
-	if(comp != nil) {
-		shutdowndisplaymodules(comp.layout);
-		shutdownservicemodules();
-	}
+	old := comp;
+	matrixlib->transplant(old, newcomp);
 	comp = newcomp;
 	complock <-= 1;
 
-	# Reload
+	# The focused module may just have been shut down; don't route
+	# keys into a dead instance.
+	focusmod = nil;
+
+	if(old != nil) {
+		shutdowndisplaymodules(old.layout);
+		shutdownservices(old.services);
+	}
+
 	if(guimode && comp.layout != nil) {
 		computelayout(comp.layout, winr);
-		loaddisplaymodules();
+		resizedisplaymodules(comp.layout);	# kept modules get new rects
+		loaddisplaymodules();			# fills only empty leaves
 	}
-	loadservicemodules();
+	loadservicemodules();				# starts only new services
 	syncmodslots();
 	vers++;
 }

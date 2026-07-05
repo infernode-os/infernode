@@ -19,6 +19,15 @@ MatrixLib: module
 	# Parse a composition file.  Returns (composition, nil) on
 	# success or (nil, diagnostic) on the first error.
 	parsecomposition:	fn(text: string): (ref Composition, string);
+
+	# Move live module handles from old to new for entries that are
+	# unchanged: display leaves match on (region name, modname,
+	# mount), services on (name, mount).  Matched handles are nil'd
+	# in old — whatever old still holds afterwards is what the
+	# caller must shut down.  Kept modules never see a shutdown or
+	# re-init, so their in-module state (rings, counters, open
+	# fds) survives a composition reload.
+	transplant:	fn(old, new: ref Composition);
 };
 
 # Layout split orientations and the nesting cap (~16 leaf regions).

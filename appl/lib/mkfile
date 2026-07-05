@@ -39,6 +39,11 @@ TARG=\
 	devpointer.dis\
 	dial.dis\
 	dialnorm.dis\
+	dialog.dis\
+	selectfile.dis\
+	tabs.dis\
+	debdata.dis\
+	debsrc.dis\
 	dict.dis\
 	dis.dis\
 	diskblocks.dis\
@@ -127,6 +132,7 @@ TARG=\
 	tftp.dis\
 	timers.dis\
 	titlebar.dis\
+	tkclient.dis\
 	translate.dis\
 	twofa.dis\
 	twofaslot.dis\
@@ -142,7 +148,6 @@ TARG=\
 	outlinefont.dis\
 	pdf.dis\
 	webclient.dis\
-	widget.dis\
 	winplace.dis\
 	wmclient.dis\
 	wmlib.dis\
@@ -276,7 +281,6 @@ SYSMODULES=\
 	watchvars.m\
 	web.m\
 	webclient.m\
-	widget.m\
 	webget.m\
 	winplace.m\
 	wmclient.m\

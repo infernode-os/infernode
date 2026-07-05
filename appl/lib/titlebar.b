@@ -8,7 +8,13 @@ include "tk.m";
 	tk: Tk;
 include "titlebar.m";
 
-COLOR: con "#cccc88ff";
+# Brutalist window chrome (Brimstone palette; tracks lucitheme).
+# The frame is a 1px border that turns to the accent when focused.
+COLOR:    con "#1a1a1aff";	# default/unfocused window frame
+FOCUSED:  con "#e8553aff";	# accent frame on the focused window
+UNFOCUS:  con "#1a1a1aff";	# subdued frame otherwise
+TITLEBG:  con "#0a0a0aff";	# title strip background
+TITLEFG:  con "#ccccccff";	# title text
 
 title_cfg := array[] of {
 	"button .Wm_br -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -width 1",
@@ -36,7 +42,7 @@ title_cfg := array[] of {
 	"bind .Wm_bb <Double-Button-1> {send wm_title task}",
 	"bind .Wm_bt <Double-Button-1> {send wm_title task}",
 	"frame .Wm_t",
-	"label .Wm_t.title -anchor w -bg #aaaaaa -fg white",
+	"label .Wm_t.title -anchor w -bg "+TITLEBG+" -fg "+TITLEFG,
 };
 
 init()
@@ -79,9 +85,9 @@ setfocus(top: ref Tk->Toplevel, focus: int)
 	color : string;
 	but := array[] of {".Wm_br", ".Wm_bl", ".Wm_bt", ".Wm_bb"};
 	if(focus)
-		color = "#777700";
+		color = FOCUSED;
 	else
-		color = "#dddd93";
+		color = UNFOCUS;
 	for(i:=0; i < len but; i++)
 		cmd(top, sys->sprint("%s configure  -fg %s -bg %s -activebackground %s -activeforeground %s -highlightcolor %s", but[i], color, color, color, color, color));
 }

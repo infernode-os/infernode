@@ -62,4 +62,11 @@ char Ecmdargs[] = "wrong #args in control message";
 char	Enofd[] = "no free file descriptors";
 char Enoctl[] = "unknown control request";
 
-void	error(char*);
+#ifndef INF_NORETURN
+#  if defined(__GNUC__) || defined(__clang__)
+#    define INF_NORETURN __attribute__((noreturn))
+#  else
+#    define INF_NORETURN	/* kencc and other compilers: no-op";
+#  endif
+#endif
+void	error(char*) INF_NORETURN;

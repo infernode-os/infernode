@@ -18,6 +18,7 @@
 #include	<time.h>
 #include	<termios.h>
 #include	<signal.h>
+#include	<dlfcn.h>	/* dladdr: symbolicate fault PC/LR in trapSEGV */
 #include	<pwd.h>
 #include	<sys/resource.h>
 #include	<sys/time.h>
@@ -127,6 +128,23 @@ trapBUS(int signo, siginfo_t *info, void *context)
                 (void*)uc->uc_mcontext->__ss.__x[21],
                 (void*)uc->uc_mcontext->__ss.__x[22],
                 (void*)uc->uc_mcontext->__ss.__sp);
+            {
+                /* Name the faulting code so a crash log is
+                 * post-mortem symbolicated without an lldb attach.
+                 * An unresolvable PC (dladdr miss) is itself
+                 * informative: the fault was in JIT-generated code. */
+                Dl_info di;
+                void *pc = (void*)uc->uc_mcontext->__ss.__pc;
+                void *lr = (void*)uc->uc_mcontext->__ss.__lr;
+                if(dladdr(pc, &di) && di.dli_sname != nil)
+                    fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
+                        (ulong)((uintptr)pc - (uintptr)di.dli_saddr));
+                else
+                    fprint(2, "  PC not in any image (JIT-generated code?)\n");
+                if(dladdr(lr, &di) && di.dli_sname != nil)
+                    fprint(2, "  LR in %s+%#lx\n", di.dli_sname,
+                        (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
+            }
         }
 #endif
         if(R.M != nil && R.M->m != nil && R.M->m->name != nil)
@@ -188,6 +206,19 @@ trapSEGV(int signo, siginfo_t *info, void *context)
                 (void*)uc->uc_mcontext->__ss.__x[21],
                 (void*)uc->uc_mcontext->__ss.__x[22],
                 (void*)uc->uc_mcontext->__ss.__sp);
+            {
+                Dl_info di;
+                void *pc = (void*)uc->uc_mcontext->__ss.__pc;
+                void *lr = (void*)uc->uc_mcontext->__ss.__lr;
+                if(dladdr(pc, &di) && di.dli_sname != nil)
+                    fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
+                        (ulong)((uintptr)pc - (uintptr)di.dli_saddr));
+                else
+                    fprint(2, "  PC not in any image (JIT-generated code?)\n");
+                if(dladdr(lr, &di) && di.dli_sname != nil)
+                    fprint(2, "  LR in %s+%#lx\n", di.dli_sname,
+                        (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
+            }
         }
 #endif
     }

@@ -120,6 +120,32 @@ mkdir -p /tmp
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
+
+# Plumbing — route file-opens to the presentation view.  The stock Inferno
+# plumber matches /lib/lucifer/plumbing and forwards to the 'presentation'
+# port; lucipres consumes it (plumbreceiver) and opens each file as the
+# right artifact.  This is the shared path for every picker: the ftree file
+# tree, the context panel, an agent, or the `plumb` command.
+#
+# The plumber publishes /chan/plumb.* via file2chan, which needs /chan on
+# the srv device (#s); emu leaves /chan as the snarf device (#^).  Bind a
+# named srv instance first, exactly as acme/xenith do (bind -bc
+# '#splumber' /chan).  This runs in the boot namespace, so lucifer,
+# lucipres (the consumer) and ftree (a client) — all forked after this —
+# inherit the same /chan and see the same ports.  Start the plumber before
+# lucifer so the 'presentation' port exists when lucipres opens it.
+# $noplumber=1 skips the plumber (regression-test hook, like $skiplogon):
+# tests/host/presentation_fileopen_test.sh uses it to verify the UI still
+# comes up — Tasks tab and all — when no plumber is present, since the plumb
+# consumer must never gate lucipres's init (see lucipres plumbreceiver).
+if {! ~ $noplumber 1} {
+	bind -bc '#splumber' /chan
+	plumber /lib/lucifer/plumbing &
+	sleep 1
+}{
+	echo 'boot: noplumber=1 — plumber not started (pickers use the /mnt/ui fallback)'
+}
+
 # (No auto-spawn of /dis/wm/shell in Activity 0 — the Main agent
 #  doesn't have shell authority, so the tab either sits empty or, on
 #  mobile, slides a shell in front of a context that shouldn't have

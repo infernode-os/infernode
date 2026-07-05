@@ -189,7 +189,7 @@ echo ""
 
 # Build order matters - dependencies first
 # Core libraries that don't need limbo
-for lib in lib9 libbio libmp libsec libmath libfreetype libmemdraw libmemlayer libdraw; do
+for lib in lib9 libbio libmp libsec libmath libfreetype libmemdraw libmemlayer libdraw libtk; do
     if [[ -d "$ROOT/$lib" ]]; then
         echo "Building $lib..."
         cd "$ROOT/$lib"

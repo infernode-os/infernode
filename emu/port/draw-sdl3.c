@@ -49,6 +49,17 @@
 #include <dispatch/dispatch.h>
 #include <pthread.h>
 #include <TargetConditionals.h>
+/*
+ * CFRunLoopRunInMode, declared by hand: every CoreFoundation header
+ * path (CFRunLoop.h → CFBase.h) drags in MacTypes.h, whose Point and
+ * Rect definitions collide with Inferno's draw.h types included above.
+ * The CFRunLoop ABI has been stable since 10.0; declare exactly what
+ * the mainloop drain needs.  (deveia.c can use real CF headers only
+ * because it never includes draw.h.)
+ */
+typedef const struct __CFString *CFStringRef;
+extern CFStringRef kCFRunLoopDefaultMode;
+extern int CFRunLoopRunInMode(CFStringRef mode, double seconds, unsigned char returnAfterSourceHandled);
 #endif
 
 /*
@@ -564,8 +575,21 @@ static int
 create_renderer_and_texture(void)
 {
 	sdl_renderer = SDL_CreateRenderer(sdl_window, NULL);
-	if (!sdl_renderer)
+	if (!sdl_renderer) {
+		/*
+		 * Default renderer selection can fail where no GPU surface is
+		 * available — notably under the offscreen/dummy video drivers
+		 * (headless GUI testing, CI) and on GPU-less systems.  The
+		 * software renderer works over any window; fall back to it
+		 * rather than reporting "no frame buffer" for the whole GUI.
+		 */
+		fprint(2, "draw-sdl3: SDL_CreateRenderer(default) failed: %s; trying software\n", SDL_GetError());
+		sdl_renderer = SDL_CreateRenderer(sdl_window, SDL_SOFTWARE_RENDERER);
+	}
+	if (!sdl_renderer) {
+		fprint(2, "draw-sdl3: SDL_CreateRenderer(software) failed: %s\n", SDL_GetError());
 		return 0;
+	}
 
 	SDL_SetRenderVSync(sdl_renderer, 0);
 	SDL_SetRenderLogicalPresentation(sdl_renderer, sdl_width, sdl_height,
@@ -787,6 +811,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	 * On Linux/Windows, we signal the main thread which does it all.
 	 */
 #ifdef __APPLE__
+	{
+	/* SDL_GetError is per-thread: the create runs on the main thread via
+	 * dispatch_sync, so its error text must be captured inside the block
+	 * or the worker thread reads an empty string. */
+	static char attacherr[256];
+	attacherr[0] = 0;
 	dispatch_sync(dispatch_get_main_queue(), ^{
 		sdl_window = SDL_CreateWindow(
 			"InferNode",
@@ -808,9 +838,15 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		| SDL_WINDOW_HIGH_PIXEL_DENSITY
 #endif
 		);
+		if (!sdl_window)
+			snprint(attacherr, sizeof attacherr, "%s", SDL_GetError());
 	});
-	if (!sdl_window)
+	if (!sdl_window) {
+		fprint(2, "draw-sdl3: attachscreen: SDL_CreateWindow failed (driver=%s): %s\n",
+			SDL_GetCurrentVideoDriver(), attacherr);
 		return nil;
+	}
+	}
 
 	init_hidpi();
 
@@ -818,6 +854,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		create_renderer_and_texture();
 	});
 	if (!sdl_renderer || !sdl_texture) {
+		fprint(2, "draw-sdl3: attachscreen: renderer/texture creation failed: %s\n", SDL_GetError());
 		dispatch_sync(dispatch_get_main_queue(), ^{
 			if (sdl_renderer) SDL_DestroyRenderer(sdl_renderer);
 			SDL_DestroyWindow(sdl_window);
@@ -1397,6 +1434,21 @@ sdl3_mainloop(void)
 	for(;;) {
 #ifndef __APPLE__
 		handle_window_creation();
+#endif
+#ifdef __APPLE__
+		/*
+		 * Drain the main GCD queue.  Under the cocoa video driver SDL's
+		 * event pump runs the NSRunLoop, which services main-queue
+		 * dispatch blocks as a side effect, so this is a no-op there.
+		 * Under a windowless driver (SDL_VIDEO_DRIVER=offscreen/dummy —
+		 * headless GUI testing) nothing pumps the runloop, and worker
+		 * threads deadlock in dispatch_sync(main queue) — attachscreen's
+		 * window creation being the first casualty: the whole GUI boot
+		 * wedges on the first window attach.  Running the runloop for
+		 * one non-blocking beat guarantees queued blocks execute no
+		 * matter which video driver is active.
+		 */
+		CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
 #endif
 
 		now = SDL_GetTicks();

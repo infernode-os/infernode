@@ -5,7 +5,6 @@ DIRS=\
 	cmd\
 	acme\
 	xenith\
-	examples\
 	grid\
 	lib\
 	math\

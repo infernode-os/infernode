@@ -706,6 +706,7 @@ extern	void		tksetglobalfocus(TkTop*, int);
 extern	TkImg*		tkname2img(TkTop*, char*);
 extern	void		tkimgput(TkImg*);
 extern	void		tksizeimage(Tk*, TkImg*);
+extern	void		tkimgchanged(TkTop*, TkImg*);
 extern	TkImg*		tkauximage(TkTop*, char*, TkMemimage*, int);
 
 /* choicebuttons - menus.c */

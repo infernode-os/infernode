@@ -797,6 +797,56 @@ m(Prog *p)
 }
 */
 
+/*
+ * VM-token owner tracking (diagnostic).  The scheduler hands one
+ * "token" between kprocs via acquire/release/iyield; a kproc that
+ * dies or longjmps while holding it strands every other Dis proc in
+ * acquire() forever, with no crash and nothing in the logs — the
+ * whole emulator just freezes.  Track the owner at each handoff so
+ * the watchdog (vmwatchdog, spawned from vmachine) can name the
+ * culprit when starvation is detected.
+ */
+Proc*	vmowner;
+char	vmownertext[KNAMELEN];
+ulong	vmownerms;
+
+static void
+vmsetowner(void)
+{
+	vmowner = up;
+	strncpy(vmownertext, up->text, KNAMELEN-1);
+	vmownerms = osmillisec();
+}
+
+static void
+vmclearowner(void)
+{
+	vmowner = nil;
+	vmownerms = osmillisec();
+}
+
+void
+vmwatchdog(void *a)
+{
+	ulong ms;
+
+	USED(a);
+	for(;;){
+		osmillisleep(10000);
+		if(isched.idle || isched.vmq == nil)
+			continue;
+		ms = osmillisec();
+		if(ms - vmownerms < 30000)
+			continue;
+		if(vmowner == nil)
+			print("vmwatchdog: VM token LOST %ludms ago (no owner, waiters queued) — last owner text=%s\n",
+				ms - vmownerms, vmownertext);
+		else
+			print("vmwatchdog: VM token STUCK for %ludms: owner=%#p text=%s now=%s (waiters queued)\n",
+				ms - vmownerms, vmowner, vmownertext, vmowner->text);
+	}
+}
+
 void
 acquire(void)
 {
@@ -826,6 +876,8 @@ acquire(void)
 		osblock();
 	}
 
+	vmsetowner();
+
 	if(up->type == Interp) {
 		p = up->iprog;
 		up->iprog = nil;
@@ -848,6 +900,8 @@ release(void)
 {
 	Proc *p, **pq;
 	int f;
+
+	vmclearowner();
 
 	if(up->type == Interp)
 		up->iprog = isave();
@@ -896,6 +950,7 @@ iyield(void)
 	up->qnext = isched.idlevmq;
 	isched.idlevmq = up;
 
+	vmclearowner();
 	unlock(&isched.l);
 	osready(p);		/* wake up acquiring kproc */
 	strcpy(up->text, "yield");
@@ -906,7 +961,12 @@ iyield(void)
 void
 startup(void)
 {
+	static int watchdogged;
 
+	if(!watchdogged){
+		watchdogged = 1;
+		kproc("vmwatchdog", vmwatchdog, nil, 0);
+	}
 	up->type = Interp;
 	up->iprog = nil;
 
@@ -1000,6 +1060,16 @@ disfault(void *reg, char *msg)
 		print("SYS: process %s faults: %s\n", up->text, msg);
 		cleanexit(0);
 	}
+	if(up->nlocks > 0) {
+		/*
+		 * Fault taken while holding a spin lock (allocator, scheduler,
+		 * …).  The longjmp below cannot release it; continuing leaves
+		 * the lock — and usually the VM run token — stranded, freezing
+		 * the whole emulator with no diagnostic.  Fail stop instead.
+		 */
+		panic("fault while holding %d lock(s): %s (proc %s)",
+			up->nlocks, msg, up->text);
+	}
 
 	if(up->iprog != nil)
 		acquire();
@@ -1051,6 +1121,7 @@ vmachine(void *a)
 
 		r = isched.runhd;
 		if(r != nil) {
+			vmsetowner();
 			o = r->osenv;
 			up->env = o;
 

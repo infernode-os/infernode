@@ -17,9 +17,8 @@ include "draw.m";
 
 include "lucitheme.m";
 
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar: import widgetmod;
+# Flat 2D brutalist scrollbar drawn inline — no widget toolkit.
+SCROLLW: con 12;
 
 include "matrix.m";
 
@@ -49,7 +48,6 @@ font_g: ref Font;
 mountpath: string;
 r_g: Rect;
 positions: array of ref Position;
-scroll: ref Scrollbar;
 scrolltop: int;
 
 # Colours
@@ -69,12 +67,6 @@ init(display: ref Display, font: ref Font, mount: string): string
 {
 	sys = load Sys Sys->PATH;
 	drawm = load Draw Draw->PATH;
-
-	if(widgetmod == nil) {
-		widgetmod = load Widget Widget->PATH;
-		if(widgetmod != nil)
-			widgetmod->init(display, font);
-	}
 
 	display_g = display;
 	font_g = font;
@@ -111,14 +103,36 @@ loadcolors()
 resize(r: Rect)
 {
 	r_g = r;
-	sw := 0;
-	if(widgetmod != nil)
-		sw = widgetmod->scrollwidth();
-	scrollr := Rect((r.max.x - sw, r.min.y + HDRH), r.max);
-	if(scroll == nil)
-		scroll = Scrollbar.new(scrollr, 1);
-	else
-		scroll.resize(scrollr);
+}
+
+# Visible row count for the current rect.
+visrowsof(): int
+{
+	v := (r_g.max.y - (r_g.min.y + HDRH)) / ROWH;
+	if(v < 1)
+		v = 1;
+	return v;
+}
+
+# Draw a flat 2D scrollbar (track + proportional thumb) in the right
+# gutter when the content overflows.
+drawscroll(dst: ref Image, total, visrows: int)
+{
+	if(total <= visrows)
+		return;
+	sx := r_g.max.x - SCROLLW;
+	track := Rect((sx, r_g.min.y + HDRH), (r_g.max.x, r_g.max.y));
+	dst.draw(track, bgcolor, nil, (0, 0));
+	trough := track.dy();
+	th := trough * visrows / total;
+	if(th < 8)
+		th = 8;
+	ty := track.min.y + trough * scrolltop / total;
+	if(ty + th > track.max.y)
+		ty = track.max.y - th;
+	if(ty < track.min.y)
+		ty = track.min.y;
+	dst.draw(Rect((sx, ty), (r_g.max.x, ty + th)), dimcol, nil, (0, 0));
 }
 
 update(): int
@@ -203,13 +217,7 @@ draw(dst: ref Image)
 		y += ROWH;
 	}
 
-	# Scrollbar
-	if(scroll != nil) {
-		scroll.total = len positions;
-		scroll.visible = visrows;
-		scroll.origin = scrolltop;
-		scroll.draw(dst);
-	}
+	drawscroll(dst, len positions, visrows);
 }
 
 columnx(): array of int
@@ -227,32 +235,30 @@ pointer(p: ref Draw->Pointer): int
 {
 	if(!r_g.contains(p.xy))
 		return 0;
-	# Scroll wheel
-	if(scroll != nil) {
-		if(p.buttons & 8) {
-			scrolltop = scroll.wheel(8, 1);
-			return 1;
+	total := len positions;
+	visrows := visrowsof();
+	maxtop := total - visrows;
+	if(maxtop < 0)
+		maxtop = 0;
+	# Scroll wheel (buttons 8/16 = up/down)
+	if(p.buttons & 8) {
+		if(scrolltop > 0) scrolltop--;
+		return 1;
+	}
+	if(p.buttons & 16) {
+		if(scrolltop < maxtop) scrolltop++;
+		return 1;
+	}
+	# Click/drag in the scrollbar gutter → jump proportionally.
+	sx := r_g.max.x - SCROLLW;
+	if(p.xy.x >= sx && (p.buttons & 7)) {
+		trough := r_g.max.y - (r_g.min.y + HDRH);
+		if(trough > 0) {
+			scrolltop = (p.xy.y - (r_g.min.y + HDRH)) * total / trough;
+			if(scrolltop > maxtop) scrolltop = maxtop;
+			if(scrolltop < 0) scrolltop = 0;
 		}
-		if(p.buttons & 16) {
-			scrolltop = scroll.wheel(16, 1);
-			return 1;
-		}
-		if(scroll.isactive()) {
-			newo := scroll.track(p);
-			if(newo >= 0)
-				scrolltop = newo;
-			return 1;
-		}
-		sw := 0;
-		if(widgetmod != nil)
-			sw = widgetmod->scrollwidth();
-		scrollr := Rect((r_g.max.x - sw, r_g.min.y + HDRH), r_g.max);
-		if(scrollr.contains(p.xy) && (p.buttons & 7)) {
-			newo := scroll.event(p);
-			if(newo >= 0)
-				scrolltop = newo;
-			return 1;
-		}
+		return 1;
 	}
 	return 0;
 }

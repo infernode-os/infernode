@@ -1255,8 +1255,6 @@ appl
 		mand.b
 		mash.b
 		memory.b
-		minitel
-			*
 		mkfile
 		mpeg.b
 		mpeg
@@ -1745,8 +1743,6 @@ dis
 		mand.dis
 		mash.dis
 		memory.dis
-		minitel
-			*
 		mpeg.dis
 		mprof.dis
 		pen.dis
@@ -1806,8 +1802,6 @@ fonts
 	lucidasans
 		+
 	lucm
-		+
-	minitel
 		+
 	misc
 		+

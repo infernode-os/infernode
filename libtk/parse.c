@@ -860,20 +860,20 @@ tkparsecolor(char *buf, ulong *rgba)
 			R = hex(buf[1]);
 			G = hex(buf[2]);
 			B = hex(buf[3]);
-			*rgba = (R<<28) | (G<<20) | (B<<12) | 0xff;
+			*rgba = ((ulong)R<<28) | (G<<20) | (B<<12) | 0xff;
 			break;
 		case 7:			/* #RRGGBB */
 			R = (hex(buf[1])<<4)|(hex(buf[2]));
 			G = (hex(buf[3])<<4)|(hex(buf[4]));
 			B = (hex(buf[5])<<4)|(hex(buf[6]));
-			*rgba = (R<<24) | (G<<16) | (B<<8) | 0xff;
+			*rgba = ((ulong)R<<24) | (G<<16) | (B<<8) | 0xff;
 			break;
 		case 9:			/* #RRGGBBAA */
 			R = (hex(buf[1])<<4)|(hex(buf[2]));
 			G = (hex(buf[3])<<4)|(hex(buf[4]));
 			B = (hex(buf[5])<<4)|(hex(buf[6]));
 			A = (hex(buf[7])<<4)|(hex(buf[8]));
-			*rgba = (R<<24) | (G<<16) | (B<<8) | A;
+			*rgba = ((ulong)R<<24) | (G<<16) | (B<<8) | A;
 			break;
 		default:
 			return TkBadvl;

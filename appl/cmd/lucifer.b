@@ -84,6 +84,17 @@ LuciPres: module {
 	setpresscr: fn(scr: ref Draw->Screen);
 };
 
+# presrender is the content renderer factored out of lucipres: a peer
+# wmclient window that draws the currently-centered CONTENT artifact
+# (markdown/mermaid/image/pdf/code/table/diff).  lucifer spawns one per
+# activity and z-orders its window like an app — shown when the current
+# artifact is content, hidden when it's an app or the taskboard.
+Presrender: module {
+	PATH: con "/dis/wm/presrender.dis";
+	init: fn(ctxt: ref Draw->Context, args: list of string);
+	deliverevent: fn(ev: string);
+};
+
 GuiApp: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
@@ -118,7 +129,7 @@ AppSlot: adt {
 	owneract: int;		# activity that created this app (immutable after alloc)
 	client: ref Client;
 };
-MAXAPPSLOTS: con 16;
+MAXAPPSLOTS: con 48;
 MAXTOKENPENDING: con 16;
 
 # Per-task presentation state.  Each task/activity gets its own wmsrv
@@ -152,6 +163,9 @@ taskpres: array of ref TaskPres;
 ntaskpres := 0;
 curtaskpres: ref TaskPres;		# currently active task's presentation state
 lucipresclient: ref Client;		# lucipres wmclient (set by preswmloop on first join)
+presrenderclient: ref Client;		# presrender wmclient (2nd infra join; content renderer)
+presrender_g: Presrender;		# loaded presrender module ref
+showpresrender := 0;			# 1 when the current artifact is presrender content
 
 # Legacy aliases — these point into curtaskpres for code that hasn't
 # been migrated yet.  Will be removed once all functions use TaskPres.
@@ -627,6 +641,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	spawn lucipres->init(presCtxt,
 		"lucipres" :: mountpt :: string actid :: nil);
+
+	# Presrender: the content renderer, a peer wmclient window that draws
+	# the currently-centered CONTENT artifact.  Spawned right after
+	# lucipres so its wmsrv join is the second (infrastructure) join; no
+	# artid arg means it follows "current".  Its z-order is managed by
+	# enforcepreszorder() like an app window.
+	presrender_g = load Presrender Presrender->PATH;
+	if(presrender_g == nil)
+		nomod(Presrender->PATH);
+	spawn presrender_g->init(presCtxt,
+		"presrender" :: mountpt :: string actid :: nil);
 
 	# Spawn event handlers
 	spawn eventproc();
@@ -1327,10 +1352,22 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				for(asi := 0; asi < foundtp.nappslots; asi++) {
 					if(foundtp.appslots[asi] != nil && foundtp.appslots[asi].id == appid2) {
 						foundtp.appslots[asi].client = c;
+							# If this app is already the active one, hand it
+							# keyboard focus now its client exists: the
+							# handleprescurrent() delivery may have fired before
+							# the client joined (client nil, send skipped),
+							# leaving the caret dark (intermittent cursor).
+							if(foundtp.activeappid == appid2)
+								spawn sendctlmsg(c.ctl, "haskbdfocus 1");
 						break;
 					}
 				}
 				foundtp.applock <-= 1;
+			} else if(presrenderclient == nil) {
+				# No app token matched and presrender not yet identified:
+				# this is the presrender infrastructure client (spawned
+				# right after lucipres, before any app can launch).
+				presrenderclient = c;
 			}
 		}
 		rc <-= nil;
@@ -1342,6 +1379,12 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			if(c == lucipresclient) {
 				lucipresclient = nil;
 				break;	# lucipres gone — presentation zone dead, exit loop
+			}
+			if(c == presrenderclient) {
+				# presrender died; clear it so content falls back to
+				# lucipres's inline draw.  Keep the loop alive.
+				presrenderclient = nil;
+				continue;
 			}
 			cleanupappslot(c);
 			# App disconnected: keep preswmloop running for remaining apps
@@ -1379,6 +1422,47 @@ preswmloop(scr: ref Screen, zoner: Rect,
 							}
 							ctp.applock <-= 1;
 						}
+					}
+				} else if(c == presrenderclient) {
+					# presrender: content-area window (below the tab strip),
+					# z-ordered by enforcepreszorder() like an app.
+					if(c.image("app") == nil) {
+						ptabh := 0;
+						if(mainfont != nil) ptabh = mainfont.height + 13;
+						if(mobile && ptabh < MOBILE_TAPMIN) ptabh = MOBILE_TAPMIN;
+						pr := Rect((curzone.min.x, curzone.min.y + ptabh), curzone.max);
+						pimg := scr.newwindow(pr, Draw->Refbackup, Draw->Nofill);
+						if(pimg == nil) {
+							err = "window creation failed";
+							n = -1;
+						} else {
+							pimg.draw(pimg.r, bgcol, nil, (0, 0));
+							c.setimage("app", pimg);
+							c.top();		# register in z-list (enables bottom())
+							enforcepreszorder();	# place per current artifact
+						}
+					}
+				} else if(menutag(s) != ".") {
+					# Secondary window on an app client: a Tk menu post requests
+					# its OWN window via "!reshape <tag> <reqid> <rect>" with tag
+					# != ".".  Give it a real window at that rect.  Without this
+					# the request fell through to the re-send branch below and
+					# handed back the app's OWN image, so Tk mapped the "menu" as
+					# a copy of the app at the menu's tiny rect — the app appeared
+					# to jump to the top-left and clip, with no visible menu.
+					mtag := menutag(s);
+					mr := clamptozone(menurect(s), curzone);
+					# Secondary window: give the menu its own window on the
+					# presentation screen at the requested rect.
+					mimg := scr.newwindow(mr, Draw->Refbackup, Draw->Nofill);
+					if(mimg == nil) {
+						err = "window creation failed";
+						n = -1;
+					} else {
+						c.setimage(mtag, mimg);
+						# Raise the app client so its menu window is visible
+						# above lucipres (Client.top tops all its windows).
+						c.top();
 					}
 				} else if(c.image("app") == nil) {
 					# First reshape for this app: allocate content-area window
@@ -1429,6 +1513,17 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					if(existimg != nil)
 						c.setimage("app", existimg);
 				}
+			}
+			# "delete <tag>": a client drops a secondary window — a Tk menu
+			# being dismissed removes its window this way.  Free it (setimage
+			# nil drops it from the client's window list; the Refbackup image
+			# is GC'd and the screen recomposites, revealing the app beneath).
+			# Guard tag != "." so a stray "delete ." can never nuke the app's
+			# main window.
+			if(len s >= 7 && s[0:7] == "delete " && c != lucipresclient && c != presrenderclient) {
+				(dn, dtoks) := sys->tokenize(s, " ");
+				if(dn >= 2 && hd tl dtoks != "." && hd tl dtoks != "app")
+					c.setimage(hd tl dtoks, nil);
 			}
 			# "embedded-exit": app signals clean exit before GC closes its wmclient fd.
 			# Remove the tab immediately rather than waiting for the async fd close.
@@ -1504,6 +1599,19 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			}
 			rtp.applock <-= 1;
 		}
+		# Resize the presrender content window to match, then re-assert
+		# the whole z-stack (newwindow tops each reallocated window).
+		if(presrenderclient != nil) {
+			oldpr := presrenderclient.image("app");
+			if(oldpr != nil)
+				oldpr.draw(oldpr.r, bgcol, nil, (0, 0));
+			primg := presscr.newwindow(appr2, Draw->Refbackup, Draw->Nofill);
+			if(primg != nil) {
+				presrenderclient.setimage("app", primg);
+				presrenderclient.ctl <-= sys->sprint("!reshape . -1 %s", r2s(appr2));
+			}
+		}
+		enforcepreszorder();
 	p := <-presMouseCh =>
 		# Tab strip (top N px) always routes to lucipres;
 		# content area routes to active app or lucipres.
@@ -1531,8 +1639,15 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			}
 			if(actclient != nil && actclient != lucipresclient)
 				actclient.top();	# ensure active app z-order on every pointer event
-			if(actclient == nil)
-				actclient = lucipresclient;
+			if(actclient == nil) {
+				# No active app: content-area input goes to presrender
+				# when it's showing content (scroll/pan/PDF-nav), else to
+				# lucipres (taskboard, empty).
+				if(showpresrender && presrenderclient != nil)
+					actclient = presrenderclient;
+				else
+					actclient = lucipresclient;
+			}
 			if(actclient != nil)
 				alt { actclient.ptr <-= p => ; * => ; }
 		}
@@ -1627,6 +1742,8 @@ switchactivity(newid: int)
 	ctxEvCh <-= ev;
 	if(lucipres_g != nil)
 		lucipres_g->deliverevent(ev);
+		if(presrender_g != nil)
+			presrender_g->deliverevent(ev);
 
 	# Reload tiles and redraw header
 	loadtiles();
@@ -2094,6 +2211,8 @@ globallistener()
 			# Notify lucipres so taskboard redraws with updated activities
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
+		if(presrender_g != nil)
+			presrender_g->deliverevent(ev);
 			# Any activity event: signal main loop to reload tiles and redraw
 			alt { uievent <-= 1 => ; * => ; }
 		}
@@ -2104,6 +2223,25 @@ globallistener()
 			ctxEvCh <-= ev;
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
+			if(presrender_g != nil)
+				presrender_g->deliverevent(ev);
+			# Push "retheme" down every embedded app's ctl channel.  The
+			# stock tkclient loop routes it (<-top.ctxt.ctl => wmctl) to the
+			# libtk "retheme" command, so ANY Tk app — including ones with no
+			# theme listener of their own (tetris, task, …) and .dis-only apps
+			# (they load the current tkclient at runtime) — refreshes its
+			# colour environment.  Apps that also self-handle theme events are
+			# unaffected (retheme is idempotent).
+			for(tti := 0; tti < ntaskpres; tti++) {
+				ttp := taskpres[tti];
+				if(ttp == nil)
+					continue;
+				<-ttp.applock;
+				for(tai := 0; tai < ttp.nappslots; tai++)
+					if(ttp.appslots[tai] != nil && ttp.appslots[tai].client != nil)
+						alt { ttp.appslots[tai].client.ctl <-= "retheme" => ; * => ; }
+				ttp.applock <-= 1;
+			}
 			alt { uievent <-= 1 => ; * => ; }
 		}
 	}
@@ -2185,6 +2323,8 @@ nslistener()
 			# Always deliver to lucipres for tab/artifact updates
 			if(lucipres_g != nil)
 				lucipres_g->deliverevent(ev);
+			if(presrender_g != nil)
+				presrender_g->deliverevent(ev);
 			# App launches are handled by globallistener via "applaunch"
 			# events — never via nslistener — so apps always target the
 			# correct activity regardless of which activity is focused.
@@ -2547,6 +2687,51 @@ bytes2rect(b: array of byte): ref Rect
 r2s(r: Rect): string
 {
 	return sys->sprint("%d %d %d %d", r.min.x, r.min.y, r.max.x, r.max.y);
+}
+
+# menutag: the window tag in a wmclient "!reshape <tag> <reqid> <rect>"
+# request.  "." is the app's own toplevel; any other tag is a secondary
+# window (a Tk menu post).  Non-reshape or malformed input reads as "."
+# (the caller then takes the main-window path).
+menutag(s: string): string
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt < 2 || hd toks != "!reshape")
+		return ".";
+	return hd tl toks;
+}
+
+# menurect: the requested rect from "!reshape <tag> <reqid> <minx> <miny>
+# <maxx> <maxy> [how]".  Zero rect if malformed.
+menurect(s: string): Rect
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt < 7)
+		return Rect((0, 0), (0, 0));
+	toks = tl tl tl toks;		# skip "!reshape", tag, reqid
+	x0 := int hd toks; toks = tl toks;
+	y0 := int hd toks; toks = tl toks;
+	x1 := int hd toks; toks = tl toks;
+	y1 := int hd toks;
+	return Rect((x0, y0), (x1, y1));
+}
+
+# clamptozone: keep a menu rect inside the presentation zone — clip its
+# size to the zone and shift its origin so it never spills off-zone (a menu
+# posted near the right/bottom edge would otherwise be created off-screen).
+clamptozone(r: Rect, zone: Rect): Rect
+{
+	w := r.dx();
+	h := r.dy();
+	if(w > zone.dx()) w = zone.dx();
+	if(h > zone.dy()) h = zone.dy();
+	x := r.min.x;
+	y := r.min.y;
+	if(x + w > zone.max.x) x = zone.max.x - w;
+	if(y + h > zone.max.y) y = zone.max.y - h;
+	if(x < zone.min.x) x = zone.min.x;
+	if(y < zone.min.y) y = zone.min.y;
+	return Rect((x, y), (x + w, y + h));
 }
 
 readfile(path: string): string
@@ -3084,10 +3269,15 @@ enforcepreszorder()
 				etp.appslots[ai].client.bottom();
 		etp.applock <-= 1;
 	}
+	# 1b. Bottom the presrender window by default; it's raised in step 3
+	# only when the current artifact is content.
+	if(presrenderclient != nil)
+		presrenderclient.bottom();
 	# 2. lucipres above all bottomed app windows.
 	if(lucipresclient != nil)
 		lucipresclient.top();
-	# 3. Focused activity's active app above lucipres (if it has joined).
+	# 3. Focused activity's active app above lucipres (if it has joined),
+	# OR the presrender content window when the current artifact is content.
 	if(curtaskpres != nil && curtaskpres.activeappid != "") {
 		ctp := curtaskpres;
 		<-ctp.applock;
@@ -3096,6 +3286,8 @@ enforcepreszorder()
 					ctp.appslots[ai].id == ctp.activeappid)
 				ctp.appslots[ai].client.top();
 		ctp.applock <-= 1;
+	} else if(showpresrender && presrenderclient != nil) {
+		presrenderclient.top();
 	}
 }
 
@@ -3151,6 +3343,40 @@ killapp(id: string)
 # Critical: MUST iterate all appslots, not just activeappid.  Before this was
 # fixed, centering mermaid called hideapp("") which is a no-op, leaving whichever
 # app was last-top still floating over the presentation content.
+# Deliver keyboard focus to the active presentation app.  Sends
+# "haskbdfocus 0" to the previously focused app and "haskbdfocus 1" to the
+# new one over its client ctl; the stock tkclient loop turns that into
+# "focus -global", which sets TkTop->focused so text widgets show their
+# caret.  A no-op id ("") is skipped.  Safe to send to any app: a widget
+# with nothing focusable just ignores it.
+setappkbdfocus(tp: ref TaskPres, oldid, newid: string)
+{
+	if(tp == nil)
+		return;
+	<-tp.applock;
+	for(i := 0; i < tp.nappslots; i++) {
+		as := tp.appslots[i];
+		if(as == nil || as.client == nil)
+			continue;
+		# Spawn a BLOCKING send rather than a non-blocking alt: at app
+		# creation the client may not be reading its ctl yet, and a dropped
+		# "haskbdfocus 1" left the app with focused==0 and no caret — the
+		# intermittent-cursor race. A spawned send lands as soon as the app
+		# starts servicing ctl.
+		if(oldid != "" && as.id == oldid)
+			spawn sendctlmsg(as.client.ctl, "haskbdfocus 0");
+		if(newid != "" && as.id == newid)
+			spawn sendctlmsg(as.client.ctl, "haskbdfocus 1");
+	}
+	tp.applock <-= 1;
+}
+
+# Blocking ctl send, spawned so a not-yet-ready app doesn't drop the message.
+sendctlmsg(ctl: chan of string, msg: string)
+{
+	ctl <-= msg;
+}
+
 handleprescurrent()
 {
 	if(actid < 0 || curtaskpres == nil) return;
@@ -3168,12 +3394,29 @@ handleprescurrent()
 	# short-circuit, which left the z-order desynced whenever an app
 	# joined or was reallocated out of band — the wrong-window-visible
 	# bug.  Always enforcing is idempotent and race-proof.)
+	oldactive := tp.activeappid;
 	<-tp.applock;
 	if(atype == "app")
 		tp.activeappid = newid;
 	else
 		tp.activeappid = "";
+	newactive := tp.activeappid;
 	tp.applock <-= 1;
+	# Hand keyboard focus to the newly active app (and drop it from the old
+	# one) the way a real wmsrv does on focus change (wm.b sends the same
+	# "haskbdfocus" ctl).  Without this an app's TkTop->focused stays 0, so
+	# tkhaskeyfocus() is false and text widgets never light their insertion
+	# caret or focus highlight — the "no visible cursor" symptom.
+	if(oldactive != newactive)
+		setappkbdfocus(tp, oldactive, newactive);
+	# Content now renders INLINE in lucipres again (restored 2026-07-05):
+	# the presrender split revealed its window via z-order but loaded it via
+	# a droppable event, and the two desynced on real displays ("No
+	# content").  So the presrender content window is never raised — lucipres
+	# stays topped and both draws the content and receives its pointer input.
+	# presrender is left spawned but inert; removing its spawn/join is a
+	# follow-up cleanup.
+	showpresrender = 0;
 	# Reveal/hide the soft keyboard to match the focused workspace app —
 	# but only while the Workspace zone is the one on screen, else the
 	# chat zone owns the keyboard. Only genuine text apps raise it (not

@@ -116,6 +116,7 @@ struct TkCanvas
 	TkCtag		curtag;
 	Image*		image;		/* Drawing space */
 	int			ialloc;		/* image was allocated by us? */
+	ulong		bgcolor;	/* env bg the image was filled with (theme tracking) */
 	Image*		mask;		/* mask space (for stippling) */
 	TkName*		thash[TkChash];	/* Tag hash */
 	int		actions;

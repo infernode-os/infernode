@@ -184,7 +184,7 @@ echo ""
 MK="$ROOT/Linux/arm64/bin/mk"
 
 # --- Core libs -------------------------------------------------------------
-for lib in lib9 libbio libmp libsec libmath libfreetype libmemdraw libmemlayer libdraw; do
+for lib in lib9 libbio libmp libsec libmath libfreetype libmemdraw libmemlayer libdraw libtk; do
     if [ -d "$ROOT/$lib" ]; then
         echo "Building $lib..."
         cd "$ROOT/$lib"

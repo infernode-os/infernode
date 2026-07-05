@@ -1722,6 +1722,73 @@ getmsg(int fd, char *buf, int n)
 	return len;
 }
 
+/*
+ * Keyfile framing (readauthinfo / writeauthinfo only).
+ *
+ * The on-disk signer keyfile carries whole keys: an ML-DSA-87 secret+public
+ * message is ~13KB and larger CNSA keys (SLH-DSA) bigger still, exceeding the
+ * fixed 4-digit ("dddd\n", <=9999) frame that getmsg/sendmsg use for the STS
+ * wire handshake.  A keyfile is a trusted local file, not adversarial pre-auth
+ * input, so it uses a variable-width decimal header "d+\n" bounded by Maxbuf.
+ * The strict wire frame is left unchanged (see #315).  The variable reader
+ * also still parses legacy 4-digit keyfiles, so old keyfiles keep working.
+ */
+static int
+sendkfmsg(int fd, void *buf, int n)
+{
+	char num[16];
+	int hn;
+
+	release();
+	hn = snprint(num, sizeof(num), "%d\n", n);
+	if(kwrite(fd, num, hn) != hn){
+		acquire();
+		return -1;
+	}
+	n = kwrite(fd, buf, n);
+	acquire();
+	return n;
+}
+
+static int
+getkfmsg(int fd, char *buf, int n)
+{
+	int i, len, r;
+	char c;
+
+	release();
+	len = 0;
+	for(i = 0;; i++){
+		if((r = nreadn(fd, &c, 1)) != 1){
+			getmsgerr(buf, n, r);
+			acquire();
+			return -1;
+		}
+		if(c == '\n')
+			break;
+		if(i >= 8 || c < '0' || c > '9'){	/* digits only, bounded */
+			getmsgerr(buf, n, 1);
+			acquire();
+			return -1;
+		}
+		len = len*10 + (c - '0');
+	}
+	if(i == 0){				/* empty header */
+		getmsgerr(buf, n, 1);
+		acquire();
+		return -1;
+	}
+	r = -1;
+	if(len < 0 || len >= n || (r = nreadn(fd, buf, len)) != len){
+		getmsgerr(buf, n, r);
+		acquire();
+		return -1;
+	}
+	buf[len] = 0;
+	acquire();
+	return len;
+}
+
 void
 Keyring_getmsg(void *fp)
 {
@@ -2284,27 +2351,27 @@ Keyring_writeauthinfo(void *fp)
 
 	/* signer's public key */
 	n = pktostr(spk, buf, Maxbuf);
-	if(sendmsg(fd, buf, n) <= 0)
+	if(sendkfmsg(fd, buf, n) <= 0)
 		goto out;
 
 	/* certificate for my public key */
 	n = certtostr(c, buf, Maxbuf);
-	if(sendmsg(fd, buf, n) <= 0)
+	if(sendkfmsg(fd, buf, n) <= 0)
 		goto out;
 
 	/* my secret/public key */
 	n = sktostr(mysk, buf, Maxbuf);
-	if(sendmsg(fd, buf, n) <= 0)
+	if(sendkfmsg(fd, buf, n) <= 0)
 		goto out;
 
 	/* diffie hellman base */
 	n = bigtobase64(alpha, buf, Maxbuf);
-	if(sendmsg(fd, buf, n) <= 0)
+	if(sendkfmsg(fd, buf, n) <= 0)
 		goto out;
 
 	/* diffie hellman modulus */
 	n = bigtobase64(p, buf, Maxbuf);
-	if(sendmsg(fd, buf, n) <= 0)
+	if(sendkfmsg(fd, buf, n) <= 0)
 		goto out;
 
 	*f->ret = 0;
@@ -2355,7 +2422,7 @@ Keyring_readauthinfo(void *fp)
 		goto out;
 
 	/* signer's public key */
-	n = getmsg(fd, buf, Maxbuf);
+	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 
@@ -2364,7 +2431,7 @@ Keyring_readauthinfo(void *fp)
 		goto out;
 
 	/* certificate for my public key */
-	n = getmsg(fd, buf, Maxbuf);
+	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	ai->cert = (Keyring_Certificate*)strtocert(buf);
@@ -2372,7 +2439,7 @@ Keyring_readauthinfo(void *fp)
 		goto out;
 
 	/* my secret/public key */
-	n = getmsg(fd, buf, Maxbuf);
+	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	mysk = strtosk(buf);
@@ -2385,14 +2452,14 @@ Keyring_readauthinfo(void *fp)
 	ai->mypk = (Keyring_PK*)mypk;
 
 	/* diffie hellman base */
-	n = getmsg(fd, buf, Maxbuf);
+	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	b = strtomp(buf, nil, 64, nil);
 	ai->alpha = newIPint(b);
 
 	/* diffie hellman modulus */
-	n = getmsg(fd, buf, Maxbuf);
+	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
 	b = strtomp(buf, nil, 64, nil);

@@ -35,9 +35,12 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Image, Point, Rect, Pointer: import draw;
 
-include "wmclient.m";
-	wmclient: Wmclient;
-	Window: import wmclient;
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
+
+include "tkclient.m";
+	tkclient: Tkclient;
 
 include "keyringinst.m";
 	keyringinst: Keyringinst;
@@ -63,10 +66,6 @@ include "dialnorm.m";
 	dialnorm: Dialnorm;
 
 include "lucitheme.m";
-
-include "widget.m";
-	widgetmod: Widget;
-	Scrollbar, Statusbar, Textfield, Listbox, Button, Label, Checkbox, Radio, RadioGroup, Kbdfilter, LEFT, CENTER: import widgetmod;
 
 Settings: module
 {
@@ -107,136 +106,58 @@ catshortnames := array[] of {
 
 # ── State ──────────────────────────────────────────────────────
 
-w: ref Window;
+# Tk host
+top: ref Toplevel;
+wmctl: chan of string;
+actch: chan of string;
 display_g: ref Display;
-font: ref Font;
-kf: ref Kbdfilter;
-sbar: ref Statusbar;
-catlist: ref Listbox;
 category: int;		# current category index
-mobile := 0;		# /env/infmobile=1 — floor row heights at a 44pt tap target
-TAPMIN: con 132;	# 44pt at a 3x device
+mobile := 0;		# /env/infmobile=1 (kept for parity; Tk sizes itself)
+TAPMIN: con 132;
 
-# Colours
-bgcolor:   ref Image;
-divcolor:  ref Image;
+# Theme colours resolved to #rrggbbff strings for Tk
+c_bg:	string;
+c_fg:	string;
+c_dim:	string;
+c_accent: string;
+c_border: string;
 
-# Theme panel
-theme_group: ref RadioGroup;
+SFONT: con "/fonts/combined/unicode.sans.14.font";
+
+# Panel data (names/labels — the dispatch tables, kept verbatim)
 theme_names: array of string;
-
-# LLM panel — local or remote
-llm_mode_group: ref RadioGroup;
 llm_mode_names := array[] of { "local", "remote" };
 llm_mode_labels := array[] of { "Local", "Remote (9P)" };
-llm_conn_hdr: ref Label;
-llm_backend_group: ref RadioGroup;
 llm_backend_names := array[] of { "api", "openai" };
-# Display labels only — dispatch uses llm_backend_names above, so these
-# are safe to reword (aligned with the onboarding buttons, INFR-156).
 llm_backend_labels := array[] of { "Remote API", "Local model" };
-llm_backend_hdr: ref Label;
-llm_url_label: ref Label;
-llm_url_tf: ref Textfield;
-llm_model_label: ref Label;
-llm_model_tf: ref Textfield;
-llm_models_label: ref Label;	# "available models" picker header (LLM panel)
-llm_models_list: ref Listbox;	# populated from /mnt/llm/models
-llm_key_label: ref Label;
-llm_persist_label: ref Label;
-llm_dial_label: ref Label;
-llm_dial_tf: ref Textfield;
-# Remote-9P keyring auth (INFR-169). Hephaestus's serve-llm defaults to
-# the keyring-authenticated listener, so a remote mount needs `mount -k
-# <keyfile>` against /lib/keyring/serve-llm — which means Settings has
-# to (a) write auth=keyring + keyfile= when Remote 9P is picked, and
-# (b) give the user a way to plant the keyfile on disk. The "Install
-# keyfile from clipboard" button reads the system snarf and writes it
-# to /lib/keyring/serve-llm with 0600.
-llm_keyring_hdr: ref Label;
-llm_keyring_status_label: ref Label;
-llm_keyring_install_btn: ref Button;
-llm_keyring_bio_btn: ref Button;
-llm_apply_btn: ref Button;
-llm_is_remote: int;
-llm_mode_set: int;		# 1 after first layout or click — suppresses config re-read
-
-# Backend (api/openai) and the textfield contents share the same
-# layoutcontent-rebuild-clobbers-click problem the mode group dodges via
-# llm_mode_set. Clicking the Backend radio updates these in-memory so
-# the next layoutllm restores them instead of re-reading /lib/ndb/llm
-# (where the new selection won't land until Apply).
-llm_backend_set: int;
-llm_current_backend: string;
-llm_current_url: string;
-llm_current_model: string;
-
-# Local-stack selector (Ollama vs SGLang vs Custom URL) — surfaced only
-# when /llm/ctl is mounted (served by llmctl9p). The Stack radio gives
-# users a one-click switch between the local LLM backends; selecting
-# Ollama or SGLang writes "set <name>" to /llm/ctl, which the daemon
-# hands off to the host `llmctl` tool. Custom keeps the legacy
-# free-form URL path (write straight to /lib/ndb/llm).
-llm_stack_group: ref RadioGroup;
-llm_stack_hdr: ref Label;
-llm_status_label: ref Label;	# multi-line live state from /llm/status
 llm_stack_names  := array[] of { "ollama", "sglang", "custom" };
 llm_stack_labels := array[] of { "Ollama (:11434)", "SGLang (:30000)", "Custom URL" };
+llm_is_remote: int;		# reflects the mode radio
 llm_have_synthfs: int;		# 1 when /llm/ctl is mountable
+llm_models: array of string;	# current model catalogue (for tap-to-fill)
 
-# Tools panel
-tool_checks:  array of ref Checkbox;
 tool_names:   array of string;
-
-# Budget panel
-budget_checks: array of ref Checkbox;
 budget_names:  array of string;
-
-# Paths panel
-path_list: ref Listbox;
-path_add_tf: ref Textfield;
-path_add_btn: ref Button;
-path_rm_btn:  ref Button;
-
-# Prompts panel
-prompt_labels: array of ref Label;
-prompt_btns:   array of ref Button;
+path_items:   array of string;	# current /tool/paths listing
 prompt_files := array[] of {
 	("/lib/veltro/meta.txt", "Meta Agent Prompt"),
 	("/lib/veltro/agents/task.txt", "Task Agent Prompt"),
 };
 
-# Profile panel
-profile_label: ref Label;
-profile_btn:   ref Button;
-
-# Messaging panel (msg9p sources)
-msg_status_label: ref Label;
-msg_conf_label:   ref Label;
-msg_edit_btn:     ref Button;
-msg_register_btn: ref Button;
-msg_cred_label:   ref Label;
-
-dirty: int;
 stderr: ref Sys->FD;
 themech: chan of int;
-
-# ── Layout constants ─────────────────────────────────────────
-
-CAT_WIDTH_FRAC: con 30;	# category list takes 30% of width
-FORM_MARGIN: con Widget->FORM_MARGIN;
-FIELD_H: con 0;		# computed from font
-FIELD_SPACING: con 4;
-CHECK_H: con 0;		# computed from font
-BTN_W: con 100;
-BTN_H: con 0;
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
-	wmclient = load Wmclient Wmclient->PATH;
+	tk = load Tk Tk->PATH;
+	tkclient = load Tkclient Tkclient->PATH;
 	str = load String String->PATH;
+	if(tk == nil || tkclient == nil){
+		sys->fprint(sys->fildes(2), "settings: cannot load Tk: %r\n");
+		raise "fail:cannot load Tk";
+	}
 	dialnorm = load Dialnorm Dialnorm->PATH;
 	keyringinst = load Keyringinst Keyringinst->PATH;
 	if(keyringinst != nil)
@@ -296,42 +217,24 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	}
 
 	sys->pctl(Sys->NEWPGRP, nil);
-	wmclient->init();
+	tkclient->init();
 	sys->sleep(100);
 
-	w = wmclient->window(ctxt, "Settings", Wmclient->Appl);
-	display_g = w.display;
+	if(ctxt == nil)
+		ctxt = tkclient->makedrawcontext();
+	(top, wmctl) = tkclient->toplevel(ctxt, "-width 560 -height 440", "Settings", Tkclient->Appl);
+	display_g = top.display;
 
-	font = Font.open(display_g, "/fonts/combined/unicode.sans.14.font");
-	if(font == nil)
-		font = Font.open(display_g, "*default*");
+	loadcolors();
 
-	# Load theme colours
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor  = display_g.color(th.editbg);
-		divcolor = display_g.color(th.editlineno);
-	} else {
-		bgcolor  = display_g.color(int 16rFFFDF6FF);
-		divcolor = display_g.color(int 16rBBBBBBFF);
-	}
-
-	# Init widget toolkit
-	if(widgetmod == nil)
-		widgetmod = load Widget Widget->PATH;
-	widgetmod->init(display_g, font);
-
-	kf = Kbdfilter.new();
-
-	w.reshape(Rect((0, 0), (520, 420)));
-	w.startinput("kbd" :: "ptr" :: nil);
-	w.onscreen(nil);
+	actch = chan[16] of string;
+	tk->namechan(top, actch, "act");
 
 	category = startcat;
-	layoutall();
-	loadcategory();
-	dirty = 1;
+	buildui();
+
+	tkclient->onscreen(top, nil);
+	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
 	# Listen for live theme changes from /mnt/ui/event
 	themech = chan[1] of int;
@@ -339,534 +242,366 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# Main event loop
 	for(;;) {
-		if(dirty) {
-			redraw();
-			dirty = 0;
-		}
 		alt {
-		ctl := <-w.ctl or
-		ctl = <-w.ctxt.ctl =>
-			if(ctl == nil)
-				;
-			else if(ctl[0] == '!') {
-				w.wmctl(ctl);
-				layoutall();
-				dirty = 1;
-			} else
-				w.wmctl(ctl);
-		k := <-w.ctxt.kbd =>
-			handlekey(k);
-		ptr := <-w.ctxt.ptr =>
-			if(ptr == nil)
-				;
-			else if(w.pointer(*ptr))
-				;
-			else
-				handleptr(ptr);
+		c := <-wmctl or
+		c = <-top.ctxt.ctl or
+		# top.wreq carries Tk window requests (menu posts create their
+		# window through here); a loop that never drains it leaves every
+		# posted menu mapped-and-grabbing but windowless — invisible.
+		c = <-top.wreq =>
+			tkclient->wmctl(top, c);
+		k := <-top.ctxt.kbd =>
+			tk->keyboard(top, k);
+		ptr := <-top.ctxt.ptr =>
+			tk->pointer(top, *ptr);
+		a := <-actch =>
+			handleaction(a);
 		<-themech =>
 			reloadcolors();
-			layoutcontent();
-			dirty = 1;
 		}
 	}
 }
 
-# ── Layout ────────────────────────────────────────────────────
+# ── Tk UI ──────────────────────────────────────────────────────
 
-layoutall()
+tkcmds(cmds: array of string)
 {
-	wr := w.imager(w.image.r);
-	sh := widgetmod->statusheight();
-
-	# Status bar at bottom
-	sbr := Rect((wr.min.x, wr.max.y - sh), wr.max);
-	if(sbar == nil)
-		sbar = Statusbar.new(sbr);
-	else
-		sbar.resize(sbr);
-
-	# Category list on left
-	catw := catwidth(wr);
-	catr := Rect(wr.min, (wr.min.x + catw, wr.max.y - sh));
-	if(catlist == nil) {
-		catlist = Listbox.mk(catr);
-		catlist.setitems(catnames);
-		catlist.selected = category;
-	} else
-		catlist.resize(catr);
-
-	# Content area: right of divider, above status bar
-	layoutcontent();
-}
-
-# Width of the left category column. Wider on a phone so the (large-font)
-# category labels are readable instead of mostly truncated; the form on
-# the right still fits its single-column fields. INFR-155.
-catwidth(wr: Rect): int
-{
-	frac := CAT_WIDTH_FRAC;
-	if(mobile)
-		frac = 45;
-	return wr.dx() * frac / 100;
-}
-
-# Layout the right-hand content pane for the current category.
-layoutcontent()
-{
-	wr := w.imager(w.image.r);
-	sh := widgetmod->statusheight();
-	catw := catwidth(wr);
-	# Content area starts after category list + divider
-	cx := wr.min.x + catw + 2 + FORM_MARGIN;
-	cy := wr.min.y + FORM_MARGIN;
-	cw := wr.max.x - FORM_MARGIN;
-	cbottom := wr.max.y - sh - FORM_MARGIN;
-
-	fh := font.height + 8;		# label/header height — NOT a tap target,
-					# kept compact so the form isn't stretched
-	bh := font.height + 10;
-	ch := font.height + 6;		# checkbox/radio row height
-	fieldh := fh;			# interactive text-field height
-	if(mobile) {
-		# Floor only the INTERACTIVE rows at a 44pt tap target; labels
-		# and section headers stay compact (balanced mobile form).
-		if(fieldh < TAPMIN) fieldh = TAPMIN;
-		if(bh < TAPMIN) bh = TAPMIN;
-		if(ch < TAPMIN) ch = TAPMIN;
-	}
-
-	# Clear old panel state
-	theme_group = nil;
-	llm_mode_group = nil;
-	llm_conn_hdr = nil;
-	llm_backend_group = nil;
-	llm_backend_hdr = nil;
-	llm_url_label = nil;
-	llm_url_tf = nil;
-	llm_model_label = nil;
-	llm_model_tf = nil;
-	llm_models_label = nil;
-	llm_models_list = nil;
-	llm_key_label = nil;
-	llm_persist_label = nil;
-	llm_dial_label = nil;
-	llm_dial_tf = nil;
-	llm_apply_btn = nil;
-	llm_stack_group = nil;
-	llm_stack_hdr = nil;
-	llm_status_label = nil;
-	# Reset mode tracking when leaving LLM category
-	if(category != CatLLM) {
-		llm_is_remote = 0;
-		llm_mode_set = 0;
-		llm_backend_set = 0;
-		llm_current_backend = "";
-		llm_current_url = "";
-		llm_current_model = "";
-	}
-	tool_checks = nil;
-	budget_checks = nil;
-	path_list = nil;
-	path_add_tf = nil;
-	path_add_btn = nil;
-	path_rm_btn = nil;
-	prompt_labels = nil;
-	prompt_btns = nil;
-	profile_label = nil;
-	profile_btn = nil;
-	msg_status_label = nil;
-	msg_conf_label = nil;
-	msg_edit_btn = nil;
-	msg_register_btn = nil;
-	msg_cred_label = nil;
-	sec_hdr_label = nil;
-	sec_status_label = nil;
-	sec_hint_labels = nil;
-	sec_pass_tf = nil;
-	sec_rec_tf = nil;
-	sec_pin_tf = nil;
-	sec_enroll_btn = nil;
-	sec_addkey_btn = nil;
-	sec_disable_btn = nil;
-	sec_result_label = nil;
-
-	case category {
-	CatTheme =>
-		layouttheme(cx, cy, cw, ch);
-	CatLLM =>
-		layoutllm(cx, cy, cw, fh, fieldh, bh, ch);
-	CatTools =>
-		layouttools(cx, cy, cw, cbottom, ch);
-	CatBudget =>
-		layoutbudget(cx, cy, cw, cbottom, ch);
-	CatPaths =>
-		layoutpaths(cx, cy, cw, cbottom, fieldh, bh);
-	CatPrompts =>
-		layoutprompts(cx, cy, cw, fh, bh);
-	CatProfile =>
-		layoutprofile(cx, cy, cw, bh);
-	CatMessaging =>
-		layoutmessaging(cx, cy, cw, fh, bh);
-	CatSecurity =>
-		layoutsecurity(cx, cy, cw, fh, fieldh, bh);
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			sys->fprint(stderr, "settings: tk error %s on %s\n", e, cmds[i]);
 	}
 }
 
-layouttheme(cx, cy, cw, ch: int)
+# Read a Tk -variable (radio/check state).
+tkv(name: string): string
+{
+	return tk->cmd(top, "variable " + name);
+}
+
+# Read an entry's contents.
+eget(path: string): string
+{
+	return tk->cmd(top, path + " get");
+}
+
+buildui()
+{
+	tkcmds(array[] of {
+		". configure -background " + c_bg,
+		"frame .cats -background " + c_bg,
+		"listbox .cats.lb -font " + SFONT + " -selectmode browse" +
+			" -background " + c_bg + " -foreground " + c_fg +
+			" -selectbackground " + c_accent + " -selectforeground " + c_bg,
+		"pack .cats.lb -side top -fill both -expand 1",
+		"pack .cats -side left -fill y",
+		"label .status -anchor w -background " + c_bg + " -foreground " + c_dim,
+		"pack .status -side bottom -fill x",
+		"frame .content -background " + c_bg,
+		"pack .content -side left -fill both -expand 1",
+		"pack propagate . 0",
+		"bind .cats.lb <ButtonRelease-1> {send act cat}",
+	});
+	for(i := 0; i < len catnames; i++)
+		tk->cmd(top, sys->sprint(".cats.lb insert end {%s}", catnames[i]));
+	tk->cmd(top, sys->sprint(".cats.lb selection set %d", category));
+	buildpanel(category);
+	tk->cmd(top, "update");
+}
+
+# Rebuild the right-hand content pane for the current category.
+buildpanel(cat: int)
+{
+	category = cat;
+	tk->cmd(top, "destroy .content");
+	tk->cmd(top, "frame .content -background " + c_bg);
+	tk->cmd(top, "pack .content -side left -fill both -expand 1 -padx 8 -pady 6");
+	case cat {
+	CatTheme =>	paneltheme();
+	CatLLM =>	panelllm();
+	CatTools =>	panelchecks("tool", readtokensor("/tool/_registry", "/tool/tools"), readlines("/tool/tools"));
+	CatBudget =>	panelchecks("budget", readtokensor("/tool/_registry", "/tool/budget"), readlines("/tool/budget"));
+	CatPaths =>	panelpaths();
+	CatPrompts =>	panelprompts();
+	CatProfile =>	panelprofile();
+	CatMessaging =>	panelmessaging();
+	CatSecurity =>	panelsecurity();
+	}
+	tk->cmd(top, "update");
+}
+
+# header label helper
+hdr(name, text: string)
+{
+	tk->cmd(top, sys->sprint("label .content.%s -anchor w -background %s -foreground %s -text %s",
+		name, c_bg, c_fg, tk->quote(text)));
+	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -pady 2", name));
+}
+
+lbl(name, text: string)
+{
+	tk->cmd(top, sys->sprint("label .content.%s -anchor w -background %s -foreground %s -text %s",
+		name, c_bg, c_dim, tk->quote(text)));
+	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w", name));
+}
+
+btn(name, text, verb: string)
+{
+	tk->cmd(top, sys->sprint("button .content.%s -text %s -command {send act %s}",
+		name, tk->quote(text), verb));
+	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -pady 3", name));
+}
+
+# ── Panels ─────────────────────────────────────────────────────
+
+paneltheme()
 {
 	theme_names = readthemes();
 	current := readcurrenttheme();
-
-	sel := -1;
+	tk->cmd(top, "variable thm " + tk->quote(current));
 	for(i := 0; i < len theme_names; i++)
-		if(theme_names[i] == current) {
-			sel = i;
-			break;
-		}
-	rowh := ch + FIELD_SPACING;
-	theme_group = RadioGroup.mk(Point(cx, cy), cw - cx, theme_names, sel, rowh);
+		tk->cmd(top, sys->sprint(
+			"radiobutton .content.t%d -text %s -value %s -variable thm" +
+			" -background %s -foreground %s -command {send act theme}; " +
+			"pack .content.t%d -side top -anchor w",
+			i, tk->quote(theme_names[i]), tk->quote(theme_names[i]),
+			c_bg, c_fg, i));
 }
 
-layoutllm(cx, cy, cw, fh, fieldh, bh, ch: int)
+panelllm()
 {
 	(curmode, curbackend, cururl, curmodel, curdial, haskey) := readllmconfig();
-	# On first entry, set mode from config; on re-layout after a radio
-	# click, llm_is_remote was already set by clickllm — preserve it.
-	if(!llm_mode_set)
-		llm_is_remote = curmode == "remote";
-	llm_mode_set = 1;
 	if(llm_is_remote)
 		curmode = "remote";
-	else
-		curmode = "local";
-
-	# Same pattern for backend / url / model. Without this, clicking the
-	# Backend radio (api ↔ openai) re-runs layoutllm which would re-read
-	# /lib/ndb/llm and snap the radio back to the on-disk value — the
-	# user can't switch backends without an Apply round-trip.
-	if(!llm_backend_set) {
-		llm_current_backend = curbackend;
-		llm_current_url = cururl;
-		llm_current_model = curmodel;
-	}
-	llm_backend_set = 1;
-	curbackend = llm_current_backend;
-	cururl = llm_current_url;
-	curmodel = llm_current_model;
-
-	rowh := ch + FIELD_SPACING;
-
-	# Section header: Connection
-	llm_conn_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Connection", 1, LEFT);
-	cy += fh;
-
-	# Mode group: Local vs Remote
-	msel := 0;
+	hdr("connh", "Connection");
+	tk->cmd(top, "variable llmmode " + curmode);
 	for(i := 0; i < len llm_mode_names; i++)
-		if(llm_mode_names[i] == curmode) {
-			msel = i;
-			break;
-		}
-	llm_mode_group = RadioGroup.mk(Point(cx, cy), cw - cx, llm_mode_labels, msel, rowh);
-	cy += len llm_mode_names * rowh;
-	cy += FORM_MARGIN;
+		tk->cmd(top, sys->sprint(
+			"radiobutton .content.m%d -text %s -value %s -variable llmmode" +
+			" -background %s -foreground %s -command {send act llmmode}; pack .content.m%d -side top -anchor w",
+			i, tk->quote(llm_mode_labels[i]), llm_mode_names[i], c_bg, c_fg, i));
 
-	if(llm_is_remote) {
-		# Remote mode: dial address + keyring auth (INFR-169).
-		llm_dial_label = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			"Dial address (tcp!host!port):", 0, LEFT);
-		cy += fh;
-		llm_dial_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fieldh)),
-			"", 0);
-		llm_dial_tf.setval(curdial);
-		llm_dial_tf.focused = 1;
-		cy += fieldh + FORM_MARGIN;
-
-		# Keyring auth section.
-		llm_keyring_hdr = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			"Keyring authentication", 1, LEFT);
-		cy += fh;
-		llm_keyring_status_label = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			keyring_status_text(), 0, LEFT);
-		cy += fh;
-		btnh := fh + 8;
-		if(mobile && btnh < TAPMIN) btnh = TAPMIN;
-		llm_keyring_install_btn = Button.mk(
-			Rect((cx, cy), (cx + 280, cy + btnh)),
-			"Install keyfile from clipboard");
-		cy += btnh + 4;
-
-		# Biometric-protected install (INFR-169 follow-up). Only
-		# shown when /phone/bio_status reports available — on
-		# desktop / Android stub / no-enrollment devices the row
-		# would just lie. The button stores the same clipboard
-		# payload under Keychain biometryCurrentSet ("serve-llm"
-		# slot) so the launcher can fetch it via FaceID/TouchID
-		# instead of leaving the plaintext key on /lib/keyring.
-		if(bioauth != nil && bioauth->available() == Bioauth->AVAIL_OK) {
-			llm_keyring_bio_btn = Button.mk(
-				Rect((cx, cy), (cx + 280, cy + btnh)),
-				"Install + protect with biometric");
-			cy += btnh + FORM_MARGIN;
-		} else {
-			cy += FORM_MARGIN;
-		}
+	if(llm_is_remote){
+		lbl("diall", "Dial address (tcp!host!port):");
+		entryrow("dial", curdial);
+		hdr("krh", "Keyring authentication");
+		lbl("krs", keyring_status_text());
+		btn("krinstall", "Install keyfile from clipboard", "keyinstall");
+		if(bioauth != nil && bioauth->available() == Bioauth->AVAIL_OK)
+			btn("krbio", "Install + protect with biometric", "keybio");
 	} else {
-		# Section header: Backend
-		llm_backend_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Backend", 1, LEFT);
-		cy += fh;
+		hdr("bh", "Backend");
+		bsel := curbackend;
+		tk->cmd(top, "variable llmbackend " + tk->quote(bsel));
+		for(i := 0; i < len llm_backend_names; i++)
+			tk->cmd(top, sys->sprint(
+				"radiobutton .content.b%d -text %s -value %s -variable llmbackend" +
+				" -background %s -foreground %s -command {send act llmbackend}; pack .content.b%d -side top -anchor w",
+				i, tk->quote(llm_backend_labels[i]), llm_backend_names[i], c_bg, c_fg, i));
 
-		# Backend group: Anthropic API vs Ollama/OpenAI
-		bsel := 0;
-		for(i = 0; i < len llm_backend_names; i++)
-			if(llm_backend_names[i] == curbackend) {
-				bsel = i;
-				break;
-			}
-		llm_backend_group = RadioGroup.mk(Point(cx, cy), cw - cx, llm_backend_labels, bsel, rowh);
-		cy += len llm_backend_names * rowh;
-		cy += FORM_MARGIN;
-
-		# Local-stack selector — appears only when the openai backend
-		# is selected AND the /llm synthetic FS is mounted (served by
-		# llmctl9p). Falls back to the legacy URL-only path otherwise.
 		llm_have_synthfs = synthfs_present();
-		if(curbackend == "openai" && llm_have_synthfs) {
-			llm_status_label = Label.mk(
-				Rect((cx, cy), (cw, cy + fh)),
-				readllmstatus_summary(), 0, LEFT);
-			cy += fh + FORM_MARGIN;
-
-			llm_stack_hdr = Label.mk(Rect((cx, cy), (cw, cy + fh)), "Local stack", 1, LEFT);
-			cy += fh;
-
+		if(curbackend == "openai" && llm_have_synthfs){
+			lbl("lstat", readllmstatus_summary());
+			hdr("sh", "Local stack");
 			ssel := llm_stack_index_from_status();
-			llm_stack_group = RadioGroup.mk(Point(cx, cy), cw - cx,
-				llm_stack_labels, ssel, rowh);
-			cy += len llm_stack_names * rowh;
-			cy += FORM_MARGIN;
+			tk->cmd(top, "variable llmstack " + llm_stack_names[ssel]);
+			for(i := 0; i < len llm_stack_names; i++)
+				tk->cmd(top, sys->sprint(
+					"radiobutton .content.s%d -text %s -value %s -variable llmstack" +
+					" -background %s -foreground %s; pack .content.s%d -side top -anchor w",
+					i, tk->quote(llm_stack_labels[i]), llm_stack_names[i], c_bg, c_fg, i));
 		}
+		lbl("urll", "Endpoint URL:");
+		entryrow("url", cururl);
+		lbl("modell", "Model:");
+		entryrow("model", curmodel);
 
-		# URL
-		llm_url_label = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			"Endpoint URL:", 0, LEFT);
-		cy += fh;
-		llm_url_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fieldh)),
-			"", 0);
-		llm_url_tf.setval(cururl);
-		cy += fieldh + FORM_MARGIN;
-
-		# Model
-		llm_model_label = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			"Model:", 0, LEFT);
-		cy += fh;
-		llm_model_tf = Textfield.mk(
-			Rect((cx, cy), (cw, cy + fieldh)),
-			"", 0);
-		llm_model_tf.setval(curmodel);
-		llm_model_tf.focused = 1;
-		cy += fieldh + FORM_MARGIN;
-
-		# Available-models picker — the connected backend's catalogue,
-		# read from /mnt/llm/models (the location-transparent seam, so it
-		# works whether llmsrv is local or mounted from a remote node).
-		# Tapping a row fills the Model field above; the field stays for
-		# free-form entry. Shown only when the backend reports models.
-		models := readllmmodels();
-		if(models != nil) {
-			llm_models_label = Label.mk(
-				Rect((cx, cy), (cw, cy + fh)),
-				"Available models (tap to choose):", 0, LEFT);
-			cy += fh;
-			mlisth := fh * 3;
-			llm_models_list = Listbox.mk(Rect((cx, cy), (cw, cy + mlisth)));
-			llm_models_list.setitems(models);
-			cy += mlisth + FORM_MARGIN;
+		llm_models = readllmmodels();
+		if(llm_models != nil){
+			lbl("modlsl", "Available models (tap to choose):");
+			tk->cmd(top, sys->sprint("listbox .content.modls -height 3 -font %s -selectmode browse" +
+				" -background %s -foreground %s -selectbackground %s -selectforeground %s",
+				SFONT, c_bg, c_fg, c_accent, c_bg));
+			for(i := 0; i < len llm_models; i++)
+				tk->cmd(top, sys->sprint(".content.modls insert end {%s}", llm_models[i]));
+			tk->cmd(top, "pack .content.modls -side top -anchor w -fill x");
+			tk->cmd(top, "bind .content.modls <ButtonRelease-1> {send act llmmodel}");
 		}
-
-		# API key status
-		keystatus: string;
+		ks := "API key: not set (add via Keyring app)";
 		if(haskey)
-			keystatus = "API key: configured";
-		else
-			keystatus = "API key: not set (add via Keyring app)";
-		llm_key_label = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			keystatus, 0, LEFT);
-		cy += fh;
-
-		# Key persistence status
-		persiststatus: string;
+			ks = "API key: configured";
+		lbl("keyl", ks);
+		ps := "Key persistence: inactive (login skipped)";
 		if(secstoreunlocked())
-			persiststatus = "Key persistence: active";
-		else
-			persiststatus = "Key persistence: inactive (login skipped)";
-		llm_persist_label = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			persiststatus, 0, LEFT);
-		cy += fh + FORM_MARGIN;
+			ps = "Key persistence: active";
+		lbl("perl", ps);
 	}
-
-	# Buttons
-	llm_apply_btn = Button.mk(
-		Rect((cx, cy), (cx + BTN_W, cy + bh)),
-		"Apply");
+	btn("llmapply", "Apply", "llmapply");
 }
 
-layouttools(cx, cy, cw, cbottom, ch: int)
+# An entry with the standard styling, packed full-width.
+entryrow(name, val: string)
 {
-	# Read all known tools from registry (space-separated)
-	# and active tools from /tool/tools (newline-separated)
-	active := readlines("/tool/tools");
-	all := readtokens("/tool/_registry");
+	tk->cmd(top, sys->sprint("entry .content.%s -background %s -foreground %s",
+		name, c_bg, c_fg));
+	tk->cmd(top, sys->sprint(".content.%s insert end %s", name, tk->quote(val)));
+	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -fill x -pady 2", name));
+}
+
+# Tools / Budget panels: a checkbutton per known item.
+panelchecks(kind: string, all, on: array of string)
+{
 	if(all == nil || len all == 0)
-		all = active;
-
-	tool_names = all;
-	n := len all;
-	tool_checks = array[n] of ref Checkbox;
-	for(i := 0; i < n; i++) {
-		if(cy + ch > cbottom)
-			break;
-		checked := inlist(all[i], active);
-		tool_checks[i] = Checkbox.mk(
-			Rect((cx, cy), (cw, cy + ch)),
-			all[i], checked);
-		cy += ch + FIELD_SPACING;
+		all = on;
+	if(kind == "tool")
+		tool_names = all;
+	else
+		budget_names = all;
+	for(i := 0; i < len all; i++){
+		v := sys->sprint("%sv%d", kind, i);
+		val := "0";
+		if(inlist(all[i], on))
+			val = "1";
+		tk->cmd(top, sys->sprint("variable %s %s", v, val));
+		tk->cmd(top, sys->sprint(
+			"checkbutton .content.c%d -text %s -variable %s" +
+			" -background %s -foreground %s -command {send act %s %d}; pack .content.c%d -side top -anchor w",
+			i, tk->quote(all[i]), v, c_bg, c_fg, kind, i, i));
 	}
 }
 
-layoutbudget(cx, cy, cw, cbottom, ch: int)
+panelpaths()
 {
-	# Read current budget (newline-separated) and all known tools (space-separated)
-	budgeted := readlines("/tool/budget");
-	all := readtokens("/tool/_registry");
-	if(all == nil || len all == 0)
-		all = budgeted;
-
-	budget_names = all;
-	n := len all;
-	budget_checks = array[n] of ref Checkbox;
-	for(i := 0; i < n; i++) {
-		if(cy + ch > cbottom)
-			break;
-		checked := inlist(all[i], budgeted);
-		budget_checks[i] = Checkbox.mk(
-			Rect((cx, cy), (cw, cy + ch)),
-			all[i], checked);
-		cy += ch + FIELD_SPACING;
-	}
+	path_items = readlines("/tool/paths");
+	tk->cmd(top, sys->sprint("listbox .content.lb -height 8 -font %s -selectmode browse" +
+		" -background %s -foreground %s -selectbackground %s -selectforeground %s",
+		SFONT, c_bg, c_fg, c_accent, c_bg));
+	for(i := 0; i < len path_items; i++)
+		tk->cmd(top, sys->sprint(".content.lb insert end {%s}", path_items[i]));
+	tk->cmd(top, "pack .content.lb -side top -fill both -expand 1 -pady 2");
+	entryrow("padd", "");
+	btn("pbind", "Bind", "bind");
+	btn("punbind", "Unbind selected", "unbind");
 }
 
-layoutpaths(cx, cy, cw, cbottom, fh, bh: int)
+panelprompts()
 {
-	# Path list (takes most of the space)
-	listh := cbottom - cy - fh - bh - FORM_MARGIN * 2;
-	if(listh < fh * 3)
-		listh = fh * 3;
-	listr := Rect((cx, cy), (cw, cy + listh));
-	path_list = Listbox.mk(listr);
-	paths := readlines("/tool/paths");
-	if(paths != nil)
-		path_list.setitems(paths);
-	cy += listh + FORM_MARGIN;
-
-	# Add path textfield + button
-	btnw := 60;
-	path_add_tf = Textfield.mk(
-		Rect((cx, cy), (cw - btnw - FIELD_SPACING, cy + fh)),
-		"Path: ", 0);
-	path_add_tf.focused = 1;
-	path_add_btn = Button.mk(
-		Rect((cw - btnw, cy), (cw, cy + bh)),
-		"Bind");
-	cy += fh + FIELD_SPACING;
-
-	path_rm_btn = Button.mk(
-		Rect((cx, cy), (cx + btnw, cy + bh)),
-		"Unbind");
-}
-
-layoutprompts(cx, cy, cw, fh, bh: int)
-{
-	n := len prompt_files;
-	prompt_labels = array[n] of ref Label;
-	prompt_btns = array[n] of ref Button;
-	for(i := 0; i < n; i++) {
+	for(i := 0; i < len prompt_files; i++){
 		(nil, label) := prompt_files[i];
-		prompt_labels[i] = Label.mk(
-			Rect((cx, cy), (cw, cy + fh)),
-			label, 0, LEFT);
-		cy += fh;
-		prompt_btns[i] = Button.mk(
-			Rect((cx, cy), (cx + BTN_W + 20, cy + bh)),
-			"Open in Editor");
-		cy += bh + FORM_MARGIN;
+		lbl(sys->sprint("pl%d", i), label);
+		tk->cmd(top, sys->sprint("button .content.pb%d -text {Open in Editor} -command {send act prompt %d};" +
+			" pack .content.pb%d -side top -anchor w -pady 3", i, i, i));
 	}
 }
 
-layoutprofile(cx, cy, cw, bh: int)
+panelprofile()
 {
-	fh := font.height + 8;
-	if(mobile && fh < TAPMIN) fh = TAPMIN;
-	profile_label = Label.mk(
-		Rect((cx, cy), (cw, cy + fh)),
-		"Startup profile: /lib/sh/profile", 0, LEFT);
-	cy += fh + FIELD_SPACING;
-	profile_btn = Button.mk(
-		Rect((cx, cy), (cx + BTN_W + 20, cy + bh)),
-		"Open in Editor");
+	lbl("profl", "Startup profile: /lib/sh/profile");
+	btn("profb", "Open in Editor", "profile");
 }
 
-# Messaging panel: the msg9p notification plane. Show the live source registry
-# (read-only) and give one-click access to the email account config + live
-# registration. Credentials are set separately in the Keyring app. This is the
-# Settings side of docs/MESSAGE-INTEGRATION.md's setup convention.
-layoutmessaging(cx, cy, cw, fh, bh: int)
+panelmessaging()
 {
-	if(mobile && fh < TAPMIN) fh = TAPMIN;
+	hdr("msgh", "Registered sources:");
+	lbl("msgs", readmsgstatus());
+	btn("msge", "Edit Email Account", "msgedit");
+	btn("msgr", "Register Email Now", "msgregister");
+	lbl("msgc", "Credentials: add an Email Account in the Keyring app.");
+}
 
-	hdr := Label.mk(Rect((cx, cy), (cw, cy + fh)),
-		"Registered sources:", 1, LEFT);
-	msg_status_label = hdr;	# header doubles as the first drawn label
-	cy += fh;
+panelsecurity()
+{
+	hdr("sech", "YubiKey 2FA — secstore key-slots (AAL3)");
+	lbl("secstat", securitystatus());
+	lbl("sech1", "Fill what an action needs, then click it. The key blinks for a touch.");
+	lbl("sech2", "Enroll/backup: insert ONLY the key being enrolled (unplug the others).");
+	secentry("secpass", "secstore password");
+	secentry("secrec", "recovery passphrase");
+	secentry("secpin", "FIDO2 PIN (blank = touch-only)");
+	if(twofaslot != nil && twofaslot->is2fa(getuser2fa())){
+		btn("secadd", "Add a backup key", "secaddkey");
+		btn("secdis", "Disable 2FA (back to password)", "secdisable");
+	} else
+		btn("secenr", "Enroll this security key", "secenroll");
+	lbl("secres", "");
+}
 
-	# Live registry from /mnt/msg/status (multi-line; best effort).
-	status := readmsgstatus();
-	msg_conf_label = Label.mk(Rect((cx, cy), (cw, cy + fh * 3)),
-		status, 0, LEFT);
-	cy += fh * 3 + FIELD_SPACING;
+# A masked secret entry with a dim label prefix.
+secentry(name, prompt: string)
+{
+	lbl(name + "l", prompt + ":");
+	tk->cmd(top, sys->sprint("entry .content.%s -show * -background %s -foreground %s",
+		name, c_bg, c_fg));
+	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -fill x -pady 2", name));
+}
 
-	msg_edit_btn = Button.mk(
-		Rect((cx, cy), (cx + BTN_W + 80, cy + bh)),
-		"Edit Email Account");
-	cy += bh + FORM_MARGIN;
+# ── Action dispatch ────────────────────────────────────────────
 
-	msg_register_btn = Button.mk(
-		Rect((cx, cy), (cx + BTN_W + 80, cy + bh)),
-		"Register Email Now");
-	cy += bh + FORM_MARGIN;
+handleaction(a: string)
+{
+	(nil, toks) := sys->tokenize(a, " ");
+	if(toks == nil)
+		return;
+	tok := hd toks;
+	arg := -1;
+	if(tl toks != nil)
+		arg = int hd tl toks;
+	case tok {
+	"cat" =>
+		s := tk->cmd(top, ".cats.lb curselection");
+		if(s != nil && len s > 0 && s[0] >= '0' && s[0] <= '9')
+			buildpanel(int s);
+	"theme" =>	applytheme(tkv("thm"));
+	"llmmode" =>
+		llm_is_remote = tkv("llmmode") == "remote";
+		buildpanel(CatLLM);
+	"llmbackend" =>	buildpanel(CatLLM);
+	"llmmodel" =>
+		s := tk->cmd(top, ".content.modls curselection");
+		if(s != nil && len s > 0 && s[0] >= '0' && s[0] <= '9' && llm_models != nil){
+			i := int s;
+			if(i >= 0 && i < len llm_models){
+				tk->cmd(top, ".content.model delete 0 end");
+				tk->cmd(top, ".content.model insert end " + tk->quote(llm_models[i]));
+			}
+		}
+	"llmapply" =>	applyllm();
+	"keyinstall" =>	install_keyring_from_snarf();
+	"keybio" =>	install_keyring_to_biometric();
+	"tool" =>
+		if(arg >= 0 && arg < len tool_names)
+			applytool(tool_names[arg], int tkv(sys->sprint("toolv%d", arg)));
+	"budget" =>
+		if(arg >= 0 && arg < len budget_names)
+			applybudget(budget_names[arg], int tkv(sys->sprint("budgetv%d", arg)));
+	"bind" =>	dobindpath();
+	"unbind" =>	dounbindpath();
+	"prompt" =>
+		if(arg >= 0 && arg < len prompt_files){
+			(path, nil) := prompt_files[arg];
+			openineditor(path);
+		}
+	"profile" =>
+		openineditor("/lib/sh/profile");
+		flashstatus("restart required for profile changes");
+	"msgedit" =>	openineditor("/lib/veltro/sources/email.conf");
+	"msgregister" =>	doregisteremail();
+	"secenroll" =>	doenroll2fa();
+	"secaddkey" =>	doaddkey2fa();
+	"secdisable" =>	dodisable2fa();
+	}
+}
 
-	msg_cred_label = Label.mk(Rect((cx, cy), (cw, cy + fh)),
-		"Credentials: add an Email Account in the Keyring app.", 0, LEFT);
+# read tokens from `prim`, falling back to the lines of `fallback`.
+readtokensor(prim, fallback: string): array of string
+{
+	a := readtokens(prim);
+	if(a == nil || len a == 0)
+		a = readlines(fallback);
+	return a;
 }
 
 # ── Security (YubiKey 2FA) ────────────────────────────────────
-
-sec_hdr_label: ref Label;
-sec_status_label: ref Label;
-sec_hint_labels: array of ref Label;
-sec_pass_tf, sec_rec_tf, sec_pin_tf: ref Textfield;
-sec_enroll_btn, sec_addkey_btn, sec_disable_btn: ref Button;
-sec_result_label: ref Label;
-sec_result_rect: Rect;
 
 getuser2fa(): string
 {
@@ -891,166 +626,10 @@ securitystatus(): string
 	return sys->sprint("Account \"%s\": %s", user, enrolled);
 }
 
-sec_status_rect: Rect;
-
-layoutsecurity(cx, cy, cw, fh, fieldh, bh: int)
-{
-	if(mobile && fh < TAPMIN) fh = TAPMIN;
-	if(mobile && fieldh < TAPMIN) fieldh = TAPMIN;
-	if(mobile && bh < TAPMIN) bh = TAPMIN;
-
-	sec_hdr_label = Label.mk(Rect((cx, cy), (cw, cy + fh)),
-		"YubiKey 2FA — secstore key-slots (AAL3)", 1, LEFT);
-	cy += fh + FIELD_SPACING;
-
-	sec_status_rect = Rect((cx, cy), (cw, cy + fh));
-	sec_status_label = Label.mk(sec_status_rect, securitystatus(), 0, LEFT);
-	cy += fh + FIELD_SPACING;
-
-	sec_hint_labels = array[2] of ref Label;
-	sec_hint_labels[0] = Label.mk(Rect((cx, cy), (cw, cy + fh)),
-		"Fill what an action needs, then click it. The key blinks for a touch.", 0, LEFT);
-	cy += fh;
-	sec_hint_labels[1] = Label.mk(Rect((cx, cy), (cw, cy + fh)),
-		"Enroll / backup: insert ONLY the key being enrolled (unplug the others).", 0, LEFT);
-	cy += fh + fh;
-
-	# Secret fields (shown as dots).
-	sec_pass_tf = Textfield.mk(Rect((cx, cy), (cw, cy + fieldh)), "secstore password", 1);
-	cy += fieldh + FIELD_SPACING;
-	sec_rec_tf = Textfield.mk(Rect((cx, cy), (cw, cy + fieldh)), "recovery passphrase", 1);
-	cy += fieldh + FIELD_SPACING;
-	sec_pin_tf = Textfield.mk(Rect((cx, cy), (cw, cy + fieldh)), "FIDO2 PIN (blank = touch-only)", 1);
-	cy += fieldh + fh;
-
-	# Context-aware: offer enroll only for a password-only account; offer
-	# backup + disable only for an account that is already 2FA.
-	bw := BTN_W + 140;
-	if(twofaslot != nil && twofaslot->is2fa(getuser2fa())) {
-		sec_addkey_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Add a backup key");
-		cy += bh + FORM_MARGIN;
-		sec_disable_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Disable 2FA (back to password)");
-		cy += bh + fh;
-	} else {
-		sec_enroll_btn = Button.mk(Rect((cx, cy), (cx + bw, cy + bh)), "Enroll this security key");
-		cy += bh + fh;
-	}
-
-	sec_result_rect = Rect((cx, cy), (cw, cy + fh));
-	sec_result_label = Label.mk(sec_result_rect, "", 0, LEFT);
-}
-
-drawsecurity()
-{
-	if(sec_hdr_label != nil)
-		sec_hdr_label.draw(w.image);
-	if(sec_status_label != nil)
-		sec_status_label.draw(w.image);
-	if(sec_hint_labels != nil)
-		for(i := 0; i < len sec_hint_labels; i++)
-			if(sec_hint_labels[i] != nil)
-				sec_hint_labels[i].draw(w.image);
-	if(sec_pass_tf != nil)
-		sec_pass_tf.draw(w.image);
-	if(sec_rec_tf != nil)
-		sec_rec_tf.draw(w.image);
-	if(sec_pin_tf != nil)
-		sec_pin_tf.draw(w.image);
-	if(sec_enroll_btn != nil)
-		sec_enroll_btn.draw(w.image);
-	if(sec_addkey_btn != nil)
-		sec_addkey_btn.draw(w.image);
-	if(sec_disable_btn != nil)
-		sec_disable_btn.draw(w.image);
-	if(sec_result_label != nil)
-		sec_result_label.draw(w.image);
-}
-
-secfocus(tf: ref Textfield)
-{
-	if(sec_pass_tf != nil)
-		sec_pass_tf.focused = (tf == sec_pass_tf);
-	if(sec_rec_tf != nil)
-		sec_rec_tf.focused = (tf == sec_rec_tf);
-	if(sec_pin_tf != nil)
-		sec_pin_tf.focused = (tf == sec_pin_tf);
-}
-
-secfocusedfield(): ref Textfield
-{
-	if(sec_pass_tf != nil && sec_pass_tf.focused)
-		return sec_pass_tf;
-	if(sec_rec_tf != nil && sec_rec_tf.focused)
-		return sec_rec_tf;
-	if(sec_pin_tf != nil && sec_pin_tf.focused)
-		return sec_pin_tf;
-	return nil;
-}
-
-seccyclefocus()
-{
-	if(sec_pass_tf == nil)
-		return;
-	if(sec_rec_tf != nil && sec_pass_tf.focused)
-		secfocus(sec_rec_tf);
-	else if(sec_pin_tf != nil && sec_rec_tf != nil && sec_rec_tf.focused)
-		secfocus(sec_pin_tf);
-	else
-		secfocus(sec_pass_tf);
-}
-
-clicksecurity(ptr: ref Pointer)
-{
-	if(sec_pass_tf != nil && sec_pass_tf.contains(ptr.xy)) {
-		secfocus(sec_pass_tf); sec_pass_tf.click(ptr.xy); dirty = 1; return;
-	}
-	if(sec_rec_tf != nil && sec_rec_tf.contains(ptr.xy)) {
-		secfocus(sec_rec_tf); sec_rec_tf.click(ptr.xy); dirty = 1; return;
-	}
-	if(sec_pin_tf != nil && sec_pin_tf.contains(ptr.xy)) {
-		secfocus(sec_pin_tf); sec_pin_tf.click(ptr.xy); dirty = 1; return;
-	}
-	if(sec_enroll_btn != nil && sec_enroll_btn.contains(ptr.xy)) {
-		tracksecuritybtn(sec_enroll_btn); return;
-	}
-	if(sec_addkey_btn != nil && sec_addkey_btn.contains(ptr.xy)) {
-		tracksecuritybtn(sec_addkey_btn); return;
-	}
-	if(sec_disable_btn != nil && sec_disable_btn.contains(ptr.xy)) {
-		tracksecuritybtn(sec_disable_btn); return;
-	}
-}
-
-tracksecuritybtn(btn: ref Button)
-{
-	btn.pressed = 1;
-	dirty = 1;
-	redraw();
-	for(;;) {
-		p := <-w.ctxt.ptr;
-		if(p == nil || !(p.buttons & 1)) {
-			btn.pressed = 0;
-			act := p != nil && btn.contains(p.xy);
-			if(act) {
-				if(btn == sec_enroll_btn)
-					doenroll2fa();
-				else if(btn == sec_addkey_btn)
-					doaddkey2fa();
-				else if(btn == sec_disable_btn)
-					dodisable2fa();
-			}
-			dirty = 1;
-			redraw();
-			return;
-		}
-	}
-}
-
 setsecresult(s: string)
 {
-	sec_result_label = Label.mk(sec_result_rect, s, 0, LEFT);
-	dirty = 1;
-	redraw();
+	tk->cmd(top, ".content.secres configure -text " + tk->quote(s));
+	tk->cmd(top, "update");
 }
 
 tohex2fa(a: array of byte): string
@@ -1069,9 +648,9 @@ doenroll2fa()
 	if(twofa == nil || twofaslot == nil || random == nil) {
 		setsecresult("2FA modules unavailable."); return;
 	}
-	pass := sec_pass_tf.value();
-	rec := sec_rec_tf.value();
-	pin := sec_pin_tf.value();
+	pass := eget(".content.secpass");
+	rec := eget(".content.secrec");
+	pin := eget(".content.secpin");
 	if(pass == "" || rec == "") {
 		setsecresult("Need the secstore password AND a recovery passphrase."); return;
 	}
@@ -1087,7 +666,7 @@ doenroll2fa()
 	keys := ("key", cred, tohex2fa(salt)) :: nil;
 	err := twofaslot->enroll(getuser2fa(), pass, rec, keys, pin);
 	if(err != nil) { setsecresult("Enroll failed: " + err); return; }
-	layoutcontent();
+	buildpanel(CatSecurity);
 	setsecresult("Enrolled. Login now needs this key (or the recovery passphrase).");
 }
 
@@ -1099,9 +678,9 @@ doaddkey2fa()
 	if(!twofaslot->is2fa(getuser2fa())) {
 		setsecresult("Not 2FA yet — use Enroll first."); return;
 	}
-	pass := sec_pass_tf.value();
-	rec := sec_rec_tf.value();
-	pin := sec_pin_tf.value();
+	pass := eget(".content.secpass");
+	rec := eget(".content.secrec");
+	pin := eget(".content.secpin");
 	if(pass == "" || rec == "") {
 		setsecresult("A backup needs the password AND the recovery passphrase."); return;
 	}
@@ -1116,7 +695,7 @@ doaddkey2fa()
 	setsecresult("Binding backup key — TOUCH again…");
 	err := twofaslot->addkey(getuser2fa(), pass, rec, cred, tohex2fa(salt), pin);
 	if(err != nil) { setsecresult("Backup failed: " + err); return; }
-	layoutcontent();
+	buildpanel(CatSecurity);
 	setsecresult("Backup key added. Either key (+ password) now unlocks login.");
 }
 
@@ -1128,22 +707,15 @@ dodisable2fa()
 	if(!twofaslot->is2fa(getuser2fa())) {
 		setsecresult("Account is already password-only."); return;
 	}
-	pass := sec_pass_tf.value();
-	rec := sec_rec_tf.value();
-	pin := sec_pin_tf.value();
+	pass := eget(".content.secpass");
+	rec := eget(".content.secrec");
+	pin := eget(".content.secpin");
 	if(pass == "") { setsecresult("Need the secstore password."); return; }
 	setsecresult("Disabling 2FA — TOUCH your key if it's present…");
 	err := twofaslot->disable(getuser2fa(), pass, rec, pin);
 	if(err != nil) { setsecresult("Disable failed: " + err); return; }
-	layoutcontent();
+	buildpanel(CatSecurity);
 	setsecresult("2FA disabled. Login is now password-only.");
-}
-
-# ── Data loading ──────────────────────────────────────────────
-
-loadcategory()
-{
-	# Category-specific data load (layout already done)
 }
 
 readthemes(): array of string
@@ -1253,660 +825,6 @@ inlist(s: string, arr: array of string): int
 	return 0;
 }
 
-# ── Drawing ───────────────────────────────────────────────────
-
-redraw()
-{
-	if(w.image == nil)
-		return;
-	wr := w.imager(w.image.r);
-
-	# Clear
-	w.image.draw(wr, bgcolor, nil, Point(0, 0));
-
-	# Category list
-	if(catlist != nil)
-		catlist.draw(w.image);
-
-	# Vertical divider
-	catw := catwidth(wr);
-	dvx := wr.min.x + catw;
-	sh := widgetmod->statusheight();
-	w.image.draw(Rect((dvx, wr.min.y), (dvx + 2, wr.max.y - sh)),
-		     divcolor, nil, Point(0, 0));
-
-	# Content
-	case category {
-	CatTheme =>
-		if(theme_group != nil)
-			theme_group.draw(w.image);
-	CatLLM =>
-		drawllm();
-	CatTools =>
-		drawchecks(tool_checks);
-	CatBudget =>
-		drawchecks(budget_checks);
-	CatPaths =>
-		drawpaths();
-	CatPrompts =>
-		drawprompts();
-	CatProfile =>
-		drawprofile();
-	CatMessaging =>
-		drawmessaging();
-	CatSecurity =>
-		drawsecurity();
-	}
-
-	# Status bar
-	if(sbar != nil) {
-		sbar.left = catnames[category];
-		case category {
-		CatTheme =>
-			sbar.right = "applied immediately";
-		CatLLM =>
-			if(llm_is_remote)
-				sbar.right = "dial + mount on apply";
-			else
-				sbar.right = "restart required";
-		CatTools =>
-			sbar.right = "applied immediately";
-		CatBudget =>
-			sbar.right = "applied immediately";
-		CatPaths =>
-			sbar.right = "applied immediately";
-		CatPrompts =>
-			sbar.right = "takes effect next session";
-		CatProfile =>
-			sbar.right = "restart required";
-		CatMessaging =>
-			sbar.right = "register applies immediately";
-		CatSecurity =>
-			sbar.right = "manage YubiKey 2FA";
-		}
-		sbar.draw(w.image);
-	}
-
-	w.image.flush(Draw->Flushnow);
-}
-
-drawllm()
-{
-	if(llm_conn_hdr != nil)
-		llm_conn_hdr.draw(w.image);
-	if(llm_mode_group != nil)
-		llm_mode_group.draw(w.image);
-	if(llm_is_remote) {
-		if(llm_dial_label != nil)
-			llm_dial_label.draw(w.image);
-		if(llm_dial_tf != nil)
-			llm_dial_tf.draw(w.image);
-		if(llm_keyring_hdr != nil)
-			llm_keyring_hdr.draw(w.image);
-		if(llm_keyring_status_label != nil)
-			llm_keyring_status_label.draw(w.image);
-		if(llm_keyring_install_btn != nil)
-			llm_keyring_install_btn.draw(w.image);
-		if(llm_keyring_bio_btn != nil)
-			llm_keyring_bio_btn.draw(w.image);
-	} else {
-		if(llm_backend_hdr != nil)
-			llm_backend_hdr.draw(w.image);
-		if(llm_backend_group != nil)
-			llm_backend_group.draw(w.image);
-		if(llm_status_label != nil)
-			llm_status_label.draw(w.image);
-		if(llm_stack_hdr != nil)
-			llm_stack_hdr.draw(w.image);
-		if(llm_stack_group != nil)
-			llm_stack_group.draw(w.image);
-		if(llm_url_label != nil)
-			llm_url_label.draw(w.image);
-		if(llm_url_tf != nil)
-			llm_url_tf.draw(w.image);
-		if(llm_model_label != nil)
-			llm_model_label.draw(w.image);
-		if(llm_model_tf != nil)
-			llm_model_tf.draw(w.image);
-		if(llm_models_label != nil)
-			llm_models_label.draw(w.image);
-		if(llm_models_list != nil)
-			llm_models_list.draw(w.image);
-		if(llm_key_label != nil)
-			llm_key_label.draw(w.image);
-		if(llm_persist_label != nil)
-			llm_persist_label.draw(w.image);
-	}
-	if(llm_apply_btn != nil)
-		llm_apply_btn.draw(w.image);
-}
-
-drawchecks(checks: array of ref Checkbox)
-{
-	if(checks == nil)
-		return;
-	for(i := 0; i < len checks; i++)
-		if(checks[i] != nil)
-			checks[i].draw(w.image);
-}
-
-drawpaths()
-{
-	if(path_list != nil)
-		path_list.draw(w.image);
-	if(path_add_tf != nil)
-		path_add_tf.draw(w.image);
-	if(path_add_btn != nil)
-		path_add_btn.draw(w.image);
-	if(path_rm_btn != nil)
-		path_rm_btn.draw(w.image);
-}
-
-drawprompts()
-{
-	if(prompt_labels != nil)
-		for(i := 0; i < len prompt_labels; i++)
-			if(prompt_labels[i] != nil)
-				prompt_labels[i].draw(w.image);
-	if(prompt_btns != nil)
-		for(j := 0; j < len prompt_btns; j++)
-			if(prompt_btns[j] != nil)
-				prompt_btns[j].draw(w.image);
-}
-
-drawprofile()
-{
-	if(profile_label != nil)
-		profile_label.draw(w.image);
-	if(profile_btn != nil)
-		profile_btn.draw(w.image);
-}
-
-drawmessaging()
-{
-	if(msg_status_label != nil)
-		msg_status_label.draw(w.image);
-	if(msg_conf_label != nil)
-		msg_conf_label.draw(w.image);
-	if(msg_edit_btn != nil)
-		msg_edit_btn.draw(w.image);
-	if(msg_register_btn != nil)
-		msg_register_btn.draw(w.image);
-	if(msg_cred_label != nil)
-		msg_cred_label.draw(w.image);
-}
-
-# ── Keyboard handling ─────────────────────────────────────────
-
-handlekey(rawkey: int)
-{
-	k := kf.filter(rawkey);
-	if(k < 0)
-		return;
-
-	# Ctrl-Q: quit
-	if(k == 'q' - 'a' + 1) {
-		exit;
-		return;
-	}
-
-	# Escape: deselect
-	if(k == 27)
-		return;
-
-	# Route to Security textfields
-	if(category == CatSecurity) {
-		if(k == '\t') {
-			seccyclefocus();
-			dirty = 1;
-			return;
-		}
-		f := secfocusedfield();
-		if(f != nil) {
-			f.key(k);
-			dirty = 1;
-		}
-		return;
-	}
-
-	# Route to LLM textfields
-	if(category == CatLLM) {
-		if(k == '\n') {
-			applyllm();
-			return;
-		}
-		if(llm_is_remote) {
-			if(llm_dial_tf != nil) {
-				llm_dial_tf.key(k);
-				dirty = 1;
-			}
-		} else {
-			if(k == '\t') {
-				# Toggle focus between URL and model fields
-				if(llm_url_tf != nil && llm_model_tf != nil) {
-					if(llm_url_tf.focused) {
-						llm_url_tf.focused = 0;
-						llm_model_tf.focused = 1;
-					} else {
-						llm_model_tf.focused = 0;
-						llm_url_tf.focused = 1;
-					}
-					dirty = 1;
-				}
-				return;
-			}
-			if(llm_url_tf != nil && llm_url_tf.focused) {
-				llm_url_tf.key(k);
-				dirty = 1;
-			} else if(llm_model_tf != nil && llm_model_tf.focused) {
-				llm_model_tf.key(k);
-				dirty = 1;
-			}
-		}
-		return;
-	}
-
-	# Route to paths textfield if active
-	if(category == CatPaths && path_add_tf != nil) {
-		if(k == '\n') {
-			dobindpath();
-			return;
-		}
-		path_add_tf.key(k);
-		dirty = 1;
-	}
-}
-
-# ── Pointer handling ──────────────────────────────────────────
-
-handleptr(ptr: ref Pointer)
-{
-	# Scrollbar tracking must be checked FIRST — before the button filter.
-	# track() needs to see button-release events (buttons==0) to clear
-	# the active drag state.  Without this, a scrollbar drag that starts
-	# inside Listbox.click() can never be cancelled, permanently stealing
-	# all subsequent B1 clicks.
-	if(catlist != nil && catlist.scroll != nil && catlist.scroll.isactive()) {
-		newo := catlist.scroll.track(ptr);
-		if(newo >= 0) {
-			catlist.top = newo;
-			dirty = 1;
-		}
-		return;
-	}
-
-	if(!(ptr.buttons & 1) && !(ptr.buttons & (8|16)))
-		return;
-
-	# Scroll wheel anywhere
-	if(ptr.buttons & (8|16)) {
-		if(catlist != nil && catlist.contains(ptr.xy)) {
-			catlist.wheel(ptr.buttons);
-			dirty = 1;
-			return;
-		}
-		if(category == CatPaths && path_list != nil && path_list.contains(ptr.xy)) {
-			path_list.wheel(ptr.buttons);
-			dirty = 1;
-			return;
-		}
-		if(category == CatLLM && llm_models_list != nil && llm_models_list.contains(ptr.xy)) {
-			llm_models_list.wheel(ptr.buttons);
-			dirty = 1;
-			return;
-		}
-		return;
-	}
-
-	if(!(ptr.buttons & 1))
-		return;
-
-	# Category list click
-	if(catlist != nil && catlist.contains(ptr.xy)) {
-		sel := catlist.click(ptr.xy);
-		if(sel >= 0 && sel != category) {
-			category = sel;
-			layoutcontent();
-			dirty = 1;
-		}
-		return;
-	}
-
-	# Content area clicks
-	case category {
-	CatTheme =>
-		clicktheme(ptr);
-	CatLLM =>
-		clickllm(ptr);
-	CatTools =>
-		clicktools(ptr);
-	CatBudget =>
-		clickbudget(ptr);
-	CatPaths =>
-		clickpaths(ptr);
-	CatPrompts =>
-		clickprompts(ptr);
-	CatProfile =>
-		clickprofile(ptr);
-	CatMessaging =>
-		clickmessaging(ptr);
-	CatSecurity =>
-		clicksecurity(ptr);
-	}
-}
-
-clicktheme(ptr: ref Pointer)
-{
-	if(theme_group == nil)
-		return;
-	i := theme_group.click(ptr.xy);
-	if(i >= 0 && i < len theme_names) {
-		applytheme(theme_names[i]);
-		dirty = 1;
-	}
-}
-
-clickllm(ptr: ref Pointer)
-{
-	# Mode group: Local / Remote
-	if(llm_mode_group != nil && llm_mode_group.contains(ptr.xy)) {
-		i := llm_mode_group.click(ptr.xy);
-		if(i >= 0) {
-			wasremote := llm_is_remote;
-			llm_is_remote = i < len llm_mode_names && llm_mode_names[i] == "remote";
-			if(wasremote != llm_is_remote)
-				layoutcontent();
-			dirty = 1;
-		}
-		return;
-	}
-
-	if(llm_is_remote) {
-		# Remote mode: dial textfield
-		if(llm_dial_tf != nil && llm_dial_tf.contains(ptr.xy)) {
-			llm_dial_tf.focused = 1;
-			llm_dial_tf.click(ptr.xy);
-			dirty = 1;
-			return;
-		}
-		# Install keyfile from snarf → /lib/keyring/serve-llm
-		if(llm_keyring_install_btn != nil &&
-				llm_keyring_install_btn.contains(ptr.xy)) {
-			install_keyring_from_snarf();
-			# Refresh status label and redraw.
-			if(llm_keyring_status_label != nil) {
-				llm_keyring_status_label = Label.mk(
-					llm_keyring_status_label.r,
-					keyring_status_text(), 0, LEFT);
-			}
-			dirty = 1;
-			return;
-		}
-		# Install keyfile from snarf → /phone/bio_store under
-		# "serve-llm" slot (FaceID/TouchID-gated Keychain item).
-		if(llm_keyring_bio_btn != nil &&
-				llm_keyring_bio_btn.contains(ptr.xy)) {
-			install_keyring_to_biometric();
-			if(llm_keyring_status_label != nil) {
-				llm_keyring_status_label = Label.mk(
-					llm_keyring_status_label.r,
-					keyring_status_text(), 0, LEFT);
-			}
-			dirty = 1;
-			return;
-		}
-	} else {
-		# Local mode: backend group, URL, model
-		if(llm_backend_group != nil && llm_backend_group.contains(ptr.xy)) {
-			i := llm_backend_group.click(ptr.xy);
-			if(i >= 0 && i < len llm_backend_names) {
-				# Persist the new selection in module-level state BEFORE
-				# layoutcontent() rebuilds the panel — otherwise the
-				# rebuild re-reads /lib/ndb/llm (still the old backend)
-				# and the radio snaps back. Mirrors the llm_mode_set
-				# pattern used by the Mode group above.
-				newbackend := llm_backend_names[i];
-				newurl := llm_current_url;
-				if(llm_url_tf != nil)
-					newurl = llm_url_tf.value();
-				# Update URL default when switching backend. Clear the
-				# model field — the previous model is almost certainly
-				# wrong for the new backend (claude-... isn't an Ollama
-				# tag; llama3.2:3b isn't an Anthropic id). Also
-				# re-layout so the Stack sub-section appears or hides
-				# in step with the openai/api radio.
-				if(newbackend == "openai") {
-					cur := strip(newurl);
-					if(cur == "" || cur == "https://api.anthropic.com")
-						newurl = "http://localhost:11434/v1";
-				} else if(newbackend == "api") {
-					cur := strip(newurl);
-					if(cur == "" || cur == "http://localhost:11434/v1")
-						newurl = "https://api.anthropic.com";
-				}
-				llm_current_backend = newbackend;
-				llm_current_url = newurl;
-				llm_current_model = "";
-				llm_backend_set = 1;
-				layoutcontent();
-				dirty = 1;
-			}
-			return;
-		}
-
-		# Local stack group: Ollama / SGLang / Custom. Selecting one
-		# only updates the radio state; the actual /llm/ctl write
-		# happens on Apply so a misclick is recoverable. We pre-fill
-		# the URL textfield to match the picked preset so the user
-		# sees what'll be persisted.
-		if(llm_stack_group != nil && llm_stack_group.contains(ptr.xy)) {
-			i := llm_stack_group.click(ptr.xy);
-			if(i >= 0 && i < len llm_stack_names && llm_url_tf != nil) {
-				if(llm_stack_names[i] == "ollama")
-					llm_url_tf.setval("http://127.0.0.1:11434/v1");
-				else if(llm_stack_names[i] == "sglang")
-					llm_url_tf.setval("http://127.0.0.1:30000/v1");
-				# "custom" leaves the URL field untouched
-				dirty = 1;
-			}
-			return;
-		}
-		if(llm_url_tf != nil && llm_url_tf.contains(ptr.xy)) {
-			if(llm_model_tf != nil)
-				llm_model_tf.focused = 0;
-			llm_url_tf.focused = 1;
-			llm_url_tf.click(ptr.xy);
-			dirty = 1;
-			return;
-		}
-		if(llm_model_tf != nil && llm_model_tf.contains(ptr.xy)) {
-			if(llm_url_tf != nil)
-				llm_url_tf.focused = 0;
-			llm_model_tf.focused = 1;
-			llm_model_tf.click(ptr.xy);
-			dirty = 1;
-			return;
-		}
-		if(llm_models_list != nil && llm_models_list.contains(ptr.xy)) {
-			sel := llm_models_list.click(ptr.xy);
-			if(sel >= 0 && sel < len llm_models_list.items && llm_model_tf != nil)
-				llm_model_tf.setval(llm_models_list.items[sel]);
-			dirty = 1;
-			return;
-		}
-	}
-
-	if(llm_apply_btn != nil && llm_apply_btn.contains(ptr.xy)) {
-		trackllmapply(ptr);
-		return;
-	}
-}
-
-clicktools(ptr: ref Pointer)
-{
-	if(tool_checks == nil)
-		return;
-	for(i := 0; i < len tool_checks; i++) {
-		if(tool_checks[i] != nil && tool_checks[i].contains(ptr.xy)) {
-			tool_checks[i].toggle();
-			applytool(tool_names[i], tool_checks[i].value());
-			dirty = 1;
-			return;
-		}
-	}
-}
-
-clickbudget(ptr: ref Pointer)
-{
-	if(budget_checks == nil)
-		return;
-	for(i := 0; i < len budget_checks; i++) {
-		if(budget_checks[i] != nil && budget_checks[i].contains(ptr.xy)) {
-			budget_checks[i].toggle();
-			applybudget(budget_names[i], budget_checks[i].value());
-			dirty = 1;
-			return;
-		}
-	}
-}
-
-clickpaths(ptr: ref Pointer)
-{
-	if(path_list != nil && path_list.contains(ptr.xy)) {
-		path_list.click(ptr.xy);
-		dirty = 1;
-		return;
-	}
-	if(path_add_btn != nil && path_add_btn.contains(ptr.xy)) {
-		trackbutton(path_add_btn, ptr);
-		return;
-	}
-	if(path_rm_btn != nil && path_rm_btn.contains(ptr.xy)) {
-		trackbutton(path_rm_btn, ptr);
-		return;
-	}
-	if(path_add_tf != nil && path_add_tf.contains(ptr.xy)) {
-		path_add_tf.click(ptr.xy);
-		dirty = 1;
-		return;
-	}
-}
-
-clickprompts(ptr: ref Pointer)
-{
-	if(prompt_btns == nil)
-		return;
-	for(i := 0; i < len prompt_btns; i++) {
-		if(prompt_btns[i] != nil && prompt_btns[i].contains(ptr.xy)) {
-			trackpromptbtn(i, ptr);
-			return;
-		}
-	}
-}
-
-clickprofile(ptr: ref Pointer)
-{
-	if(profile_btn != nil && profile_btn.contains(ptr.xy)) {
-		trackprofilebtn(ptr);
-		return;
-	}
-}
-
-clickmessaging(ptr: ref Pointer)
-{
-	if(msg_edit_btn != nil && msg_edit_btn.contains(ptr.xy)) {
-		trackmessagingbtn(msg_edit_btn, ptr);
-		return;
-	}
-	if(msg_register_btn != nil && msg_register_btn.contains(ptr.xy)) {
-		trackmessagingbtn(msg_register_btn, ptr);
-		return;
-	}
-}
-
-trackmessagingbtn(btn: ref Button, nil: ref Pointer)
-{
-	btn.pressed = 1;
-	dirty = 1;
-	redraw();
-	for(;;) {
-		p := <-w.ctxt.ptr;
-		if(p == nil || !(p.buttons & 1)) {
-			btn.pressed = 0;
-			if(p != nil && btn.contains(p.xy)) {
-				if(btn == msg_edit_btn)
-					openineditor("/lib/veltro/sources/email.conf");
-				else if(btn == msg_register_btn)
-					doregisteremail();
-			}
-			dirty = 1;
-			return;
-		}
-	}
-}
-
-# ── Button tracking (hold-to-confirm pattern) ────────────────
-
-trackbutton(btn: ref Button, nil: ref Pointer)
-{
-	btn.pressed = 1;
-	dirty = 1;
-	redraw();
-	for(;;) {
-		p := <-w.ctxt.ptr;
-		if(p == nil || !(p.buttons & 1)) {
-			btn.pressed = 0;
-			if(p != nil && btn.contains(p.xy)) {
-				if(btn == path_add_btn)
-					dobindpath();
-				else if(btn == path_rm_btn)
-					dounbindpath();
-			}
-			dirty = 1;
-			return;
-		}
-	}
-}
-
-trackpromptbtn(idx: int, nil: ref Pointer)
-{
-	btn := prompt_btns[idx];
-	btn.pressed = 1;
-	dirty = 1;
-	redraw();
-	for(;;) {
-		p := <-w.ctxt.ptr;
-		if(p == nil || !(p.buttons & 1)) {
-			btn.pressed = 0;
-			if(p != nil && btn.contains(p.xy)) {
-				(path, nil) := prompt_files[idx];
-				openineditor(path);
-			}
-			dirty = 1;
-			return;
-		}
-	}
-}
-
-trackprofilebtn(nil: ref Pointer)
-{
-	profile_btn.pressed = 1;
-	dirty = 1;
-	redraw();
-	for(;;) {
-		p := <-w.ctxt.ptr;
-		if(p == nil || !(p.buttons & 1)) {
-			profile_btn.pressed = 0;
-			if(p != nil && profile_btn.contains(p.xy)) {
-				openineditor("/lib/sh/profile");
-				flashstatus("restart required for profile changes");
-			}
-			dirty = 1;
-			return;
-		}
-	}
-}
-
 # ── Actions ───────────────────────────────────────────────────
 
 applytheme(name: string)
@@ -1955,56 +873,38 @@ applybudget(name: string, enabled: int)
 
 dobindpath()
 {
-	if(path_add_tf == nil)
-		return;
-	path := strip(path_add_tf.value());
+	path := strip(eget(".content.padd"));
 	if(len path == 0)
 		return;
 	writectl("/tool/ctl", "bindpath " + path);
-	path_add_tf.setval("");
-	# Refresh path list
-	paths := readlines("/tool/paths");
-	if(path_list != nil && paths != nil)
-		path_list.setitems(paths);
-	dirty = 1;
+	tk->cmd(top, ".content.padd delete 0 end");
+	refreshpaths();
 }
 
 dounbindpath()
 {
-	if(path_list == nil || path_list.selected < 0)
+	s := tk->cmd(top, ".content.lb curselection");
+	if(s == nil || len s == 0 || s[0] < '0' || s[0] > '9')
 		return;
-	if(path_list.items == nil || path_list.selected >= len path_list.items)
+	idx := int s;
+	if(path_items == nil || idx < 0 || idx >= len path_items)
 		return;
 	# Path entries may have " ro"/" rw" suffix — extract just the path
-	entry := path_list.items[path_list.selected];
-	(path, nil) := str->splitl(entry, " \t");
+	(path, nil) := str->splitl(path_items[idx], " \t");
 	if(path == nil || len path == 0)
-		path = entry;
+		path = path_items[idx];
 	writectl("/tool/ctl", "unbindpath " + path);
-	# Refresh
-	paths := readlines("/tool/paths");
-	if(paths != nil)
-		path_list.setitems(paths);
-	else
-		path_list.setitems(array[0] of string);
-	dirty = 1;
+	refreshpaths();
 }
 
-trackllmapply(nil: ref Pointer)
+# Reload the /tool/paths listing into the paths listbox.
+refreshpaths()
 {
-	llm_apply_btn.pressed = 1;
-	dirty = 1;
-	redraw();
-	for(;;) {
-		p := <-w.ctxt.ptr;
-		if(p == nil || !(p.buttons & 1)) {
-			llm_apply_btn.pressed = 0;
-			if(p != nil && llm_apply_btn.contains(p.xy))
-				applyllm();
-			dirty = 1;
-			return;
-		}
-	}
+	path_items = readlines("/tool/paths");
+	tk->cmd(top, ".content.lb delete 0 end");
+	for(i := 0; i < len path_items; i++)
+		tk->cmd(top, sys->sprint(".content.lb insert end {%s}", path_items[i]));
+	tk->cmd(top, "update");
 }
 
 applyllm()
@@ -2018,16 +918,14 @@ applyllm()
 		# config still saves; the user has to install one via the
 		# "Install keyfile from clipboard" button (or push it through
 		# devicectl on a phone) before the next launch can authenticate.
-		addr := "";
-		if(llm_dial_tf != nil)
-			addr = strip(llm_dial_tf.value());
+		addr := strip(eget(".content.dial"));
 		if(len addr == 0) {
 			flashstatus("enter a dial address (e.g. tcp!host!5640)");
 			return;
 		}
 		addr = dialnorm->normalize(addr);
-		if(llm_dial_tf != nil)
-			llm_dial_tf.setval(addr);
+		tk->cmd(top, ".content.dial delete 0 end");
+		tk->cmd(top, ".content.dial insert end " + tk->quote(addr));
 		# Persist only — the actual mount lives in the root
 		# namespace established by /lib/sh/profile at boot time, so
 		# mounting from this user-space process would not be visible
@@ -2042,19 +940,12 @@ applyllm()
 	}
 
 	# Local mode: determine selected backend
-	backend := "api";
-	if(llm_backend_group != nil) {
-		bi := llm_backend_group.selected();
-		if(bi >= 0 && bi < len llm_backend_names)
-			backend = llm_backend_names[bi];
-	}
+	backend := tkv("llmbackend");
+	if(backend != "api" && backend != "openai")
+		backend = "api";
 
-	url := "";
-	if(llm_url_tf != nil)
-		url = strip(llm_url_tf.value());
-	model := "";
-	if(llm_model_tf != nil)
-		model = strip(llm_model_tf.value());
+	url := strip(eget(".content.url"));
+	model := strip(eget(".content.model"));
 
 	# If the user picked Ollama or SGLang via the stack radio (only
 	# offered when backend=openai and /llm/ctl is mounted), hand off
@@ -2062,14 +953,13 @@ applyllm()
 	# starts the chosen one, waits for health, and updates ndb. We
 	# still call writellmconfig afterwards to capture the user's
 	# `model=` choice (llmctl only touches `url=`).
-	if(backend == "openai" && llm_have_synthfs && llm_stack_group != nil) {
-		si := llm_stack_group.selected();
-		if(si >= 0 && si < len llm_stack_names &&
-		   llm_stack_names[si] != "custom") {
+	if(backend == "openai" && llm_have_synthfs) {
+		stack := tkv("llmstack");
+		if(stack != "" && stack != "custom") {
 			flashstatus(sys->sprint(
 				"switching to %s (may take up to 60s for cold sglang start)…",
-				llm_stack_names[si]));
-			err := writellmctl("set " + llm_stack_names[si]);
+				stack));
+			err := writellmctl("set " + stack);
 			if(err != "") {
 				flashstatus("llmctl error: " + err);
 				return;
@@ -2078,7 +968,7 @@ applyllm()
 			writellmconfig("local", backend, url, model, "");
 			flashstatus(sys->sprint(
 				"switched to %s — restart llmsrv for the new URL to be dialed",
-				llm_stack_names[si]));
+				stack));
 			return;
 		}
 	}
@@ -2219,7 +1109,7 @@ keyring_status_text(): string
 # can exercise it from a test that targets /tmp.
 install_keyring_from_snarf()
 {
-	buf := wmclient->snarfget();
+	buf := snarfget();
 	if(buf == nil || len buf == 0) {
 		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
 		return;
@@ -2244,7 +1134,7 @@ install_keyring_to_biometric()
 		flashstatus("biometric: module not loaded");
 		return;
 	}
-	buf := wmclient->snarfget();
+	buf := snarfget();
 	if(buf == nil || len buf == 0) {
 		flashstatus("clipboard is empty — copy the serve-llm keyfile first");
 		return;
@@ -2434,10 +1324,8 @@ doregisteremail()
 		flashstatus("email source registered");
 
 	# Refresh the live registry display.
-	if(category == CatMessaging) {
-		layoutcontent();
-		redraw();
-	}
+	if(category == CatMessaging)
+		buildpanel(CatMessaging);
 }
 
 openineditor(path: string)
@@ -2530,16 +1418,42 @@ themelistener()
 	}
 }
 
-reloadcolors()
+col(v: int): string
+{
+	return sys->sprint("#%06xff", v & 16rFFFFFF);
+}
+
+loadcolors()
 {
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil) {
 		th := lucitheme->gettheme();
-		bgcolor  = display_g.color(th.editbg);
-		divcolor = display_g.color(th.editlineno);
+		c_bg = col(th.editbg >> 8);
+		c_fg = col(th.edittext >> 8);
+		c_dim = col(th.dim >> 8);
+		c_accent = col(th.accent >> 8);
+		c_border = col(th.editlineno >> 8);
+	} else {
+		c_bg = col(16r080808);
+		c_fg = col(16rcccccc);
+		c_dim = col(16r999999);
+		c_accent = col(16re8553a);
+		c_border = col(16r131313);
 	}
-	widgetmod->retheme(display_g);
-	wmclient->retheme(w);
+}
+
+reloadcolors()
+{
+	loadcolors();
+	if(top == nil)
+		return;
+	tkclient->wmctl(top, "retheme");
+	cat := category;
+	tk->cmd(top, "destroy .cats");
+	tk->cmd(top, "destroy .content");
+	tk->cmd(top, "destroy .status");
+	buildui();
+	buildpanel(cat);
 }
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -2582,10 +1496,25 @@ strip(s: string): string
 	return s[i:j];
 }
 
+snarfget(): string
+{
+	fd := sys->open("/chan/snarf", Sys->OREAD);
+	if(fd == nil)
+		return "";
+	s := "";
+	buf := array[4096] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s += string buf[:n];
+	}
+	return s;
+}
 flashstatus(msg: string)
 {
-	if(sbar != nil) {
-		sbar.left = msg;
-		dirty = 1;
+	if(top != nil){
+		tk->cmd(top, ".status configure -text " + tk->quote(msg));
+		tk->cmd(top, "update");
 	}
 }

@@ -65,10 +65,6 @@ GuiApp: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-WidgetCheck: module {
-	PATH: con "/dis/lib/widget.dis";
-};
-
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -184,18 +180,6 @@ init(nil: ref Draw->Context, args: list of string)
 			"launch 'fractals' resolves");
 		t.assert(fileexists("/dis/wm/clock.dis"),
 			"launch 'clock' resolves");
-		dotest(t, 0);
-	}
-
-	# ── WidgetLoads ──
-	{
-		t := testing->newTsrc("WidgetLoads", SRCFILE);
-		w := load WidgetCheck WidgetCheck->PATH;
-		if(w == nil) {
-			err := sys->sprint("%r");
-			t.fatal("widget.dis failed to load: " + err);
-		} else
-			t.log("widget.dis loaded OK");
 		dotest(t, 0);
 	}
 

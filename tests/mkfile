@@ -152,6 +152,7 @@ SYSMODULES=\
 	geoproj.m\
 	matrix.m\
 	matrixlib.m\
+	matrixtk.m\
 	lists.m\
 	math.m\
 	menu.m\

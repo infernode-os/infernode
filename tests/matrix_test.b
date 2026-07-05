@@ -18,7 +18,11 @@ include "sys.m";
 include "draw.m";
 	draw: Draw;
 
+include "tk.m";
+
 include "matrix.m";
+
+include "matrixtk.m";
 
 include "matrixlib.m";
 	matrixlib: MatrixLib;
@@ -550,6 +554,28 @@ testWatchErrors(t: ref T)
 # entries.  Real instances are fabricated by loading shipped
 # modules; identity is asserted through the nil'd-in-old contract.
 
+# The Dis VM's load typecheck is the discriminator between the two
+# display kinds: a Tk-hosted module must load as MatrixTkDisplay and
+# refuse to load as MatrixDisplay, and vice versa.
+testTkDisplayTypecheck(t: ref T)
+{
+	tkm := load MatrixTkDisplay "/dis/matrix/tk-notes.dis";
+	t.assert(tkm != nil, "tk-notes loads as MatrixTkDisplay");
+	dm := load MatrixDisplay "/dis/matrix/tk-notes.dis";
+	t.assert(dm == nil, "tk-notes refuses MatrixDisplay");
+	dm2 := load MatrixTkDisplay "/dis/matrix/cpu-gauge.dis";
+	t.assert(dm2 == nil, "cpu-gauge refuses MatrixTkDisplay");
+
+	(c, err) := matrixlib->parsecomposition(readfile("/lib/matrix/compositions/tk-demo"));
+	t.assertnil(err, "tk-demo composition parses");
+	if(c == nil)
+		t.fatal("nil composition");
+	rleaf := leafbyname(c.layout, "right");
+	if(rleaf == nil)
+		t.fatal("right leaf missing");
+	t.assertseq(rleaf.modname, "tk-notes", "tk-notes assigned");
+}
+
 testTransplant(t: ref T)
 {
 	oldtext := "layout hsplit 1 1\nleft cpu-gauge /m/a\nright mem-gauge /m/b\n" +
@@ -1051,6 +1077,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WatchGrammar", testWatchGrammar);
 	run("WatchTerminator", testWatchTerminator);
 	run("WatchErrors", testWatchErrors);
+	run("TkDisplayTypecheck", testTkDisplayTypecheck);
 	run("Transplant", testTransplant);
 	run("Isolation", testIsolation);
 

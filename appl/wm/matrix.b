@@ -51,6 +51,8 @@ include "readdir.m";
 
 include "matrix.m";
 
+include "matrixtk.m";
+
 include "matrixlib.m";
 	matrixlib: MatrixLib;
 
@@ -143,6 +145,9 @@ yellowcolor: ref Image;
 guimode: int;
 dirty: int;
 focusmod: MatrixDisplay;	# module with keyboard focus
+tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
+tkregionseq: int;	# widget-path allocator for hosted regions (.r<seq>)
+mtxitem: string;	# canvas item id of the composited-frame image
 
 # Channels
 updatech: chan of int;
@@ -1075,11 +1080,11 @@ initgui(ctxt: ref Draw->Context)
 		". configure -background " + bgcolstr,
 		"canvas .c -borderwidth 0 -background " + bgcolstr,
 		"image create bitmap mtx",
-		".c create image 0 0 -image mtx -anchor nw",
 		"pack .c -fill both -expand 1",
 		"pack propagate . 0",
 		"bind .c <Button-3> {send act menu %X %Y}",
 	});
+	mtxitem = tk->cmd(top, ".c create image 0 0 -image mtx -anchor nw");
 	allocframe(800, 600);
 
 	tkclient->onscreen(top, nil);
@@ -1322,7 +1327,12 @@ redraw()
 		drawpicker(img);
 
 	# Composite the off-screen frame into the canvas image item.
+	# The item's bounding box is computed from the image's size, so
+	# re-set its coords after every put — the size method reruns and
+	# picks up the current dimensions (it would otherwise stay at
+	# the empty size the item was created with).
 	tk->putimage(top, "mtx", img, nil);
+	tk->cmd(top, ".c coords " + mtxitem + " 0 0");
 	tk->cmd(top, "update");
 }
 
@@ -1433,6 +1443,8 @@ drawlayout(dst: ref Image, node: ref LayoutNode)
 	Leaf =>
 		if(n.mod != nil) {
 			n.mod->draw(dst);
+		} else if(n.tkmod != nil) {
+			;	# a live Tk frame overlays this rect
 		} else if(n.modname != "") {
 			# Module not loaded — show placeholder
 			label := n.modname + " @ " + n.mount;
@@ -1470,12 +1482,14 @@ loadleafmodules(node: ref LayoutNode)
 		loadleafmodules(n.child1);
 		loadleafmodules(n.child2);
 	Leaf =>
-		if(n.modname == "" || n.mod != nil)
+		if(n.modname == "" || n.mod != nil || n.tkmod != nil)
 			return;
 		path := "/dis/matrix/" + n.modname + ".dis";
 		mod := load MatrixDisplay path;
 		if(mod == nil) {
-			sys->fprint(stderr, "matrix: cannot load display module %s: %r\n", path);
+			# Not an image module: probe the Tk-hosted interface
+			# (the Dis VM's load typecheck is the discriminator).
+			loadtkleaf(n, path);
 			return;
 		}
 		err := mod->init(display_g, font_g, n.mount);
@@ -1486,6 +1500,45 @@ loadleafmodules(node: ref LayoutNode)
 		mod->resize(n.r);
 		n.mod = mod;
 	}
+}
+
+# Host a Tk display module: a frame in a canvas window item at the
+# leaf's rect.  The runtime owns item geometry; the module owns the
+# frame's children.
+loadtkleaf(n: ref LayoutNode.Leaf, path: string)
+{
+	tkm := load MatrixTkDisplay path;
+	if(tkm == nil) {
+		sys->fprint(stderr, "matrix: cannot load display module %s: %r\n", path);
+		return;
+	}
+	w := sys->sprint(".r%d", tkregionseq++);
+	tk->cmd(top, sys->sprint("frame %s", w));
+	itm := tk->cmd(top, sys->sprint(
+		".c create window %d %d -window %s -anchor nw",
+		n.r.min.x, n.r.min.y, w));
+	if(len itm > 0 && itm[0] == '!') {
+		sys->fprint(stderr, "matrix: %s: cannot host frame: %s\n", n.modname, itm);
+		tk->cmd(top, "destroy " + w);
+		return;
+	}
+	# Geometry via itemconfigure (the same path resize uses): the
+	# explicit size pins the region against the frame's natural
+	# pack size.
+	tk->cmd(top, sys->sprint(".c itemconfigure %s -width %d -height %d",
+		itm, n.r.dx(), n.r.dy()));
+	err := tkm->init(top, w, n.mount);
+	if(err != nil) {
+		sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
+		tk->cmd(top, ".c delete " + itm);
+		tk->cmd(top, "destroy " + w);
+		return;
+	}
+	n.tkmod = tkm;
+	n.tkwin = w;
+	n.tkitem = itm;
+	tkm->resize(n.r);
+	tk->cmd(top, "update");
 }
 
 loadservicemodules()
@@ -1557,6 +1610,8 @@ updatedisplaymodules(node: ref LayoutNode): int
 	Leaf =>
 		if(n.mod != nil)
 			return n.mod->update();
+		if(n.tkmod != nil)
+			return n.tkmod->update();
 	}
 	return 0;
 }
@@ -1572,6 +1627,13 @@ resizedisplaymodules(node: ref LayoutNode)
 	Leaf =>
 		if(n.mod != nil)
 			n.mod->resize(n.r);
+		if(n.tkmod != nil) {
+			tk->cmd(top, sys->sprint(".c coords %s %d %d",
+				n.tkitem, n.r.min.x, n.r.min.y));
+			tk->cmd(top, sys->sprint(".c itemconfigure %s -width %d -height %d",
+				n.tkitem, n.r.dx(), n.r.dy()));
+			n.tkmod->resize(n.r);
+		}
 	}
 }
 
@@ -1586,6 +1648,8 @@ rethemedisplaymodules(node: ref LayoutNode)
 	Leaf =>
 		if(n.mod != nil)
 			n.mod->retheme(display_g);
+		if(n.tkmod != nil)
+			n.tkmod->retheme();
 	}
 }
 
@@ -1601,6 +1665,16 @@ shutdowndisplaymodules(node: ref LayoutNode)
 		if(n.mod != nil) {
 			n.mod->shutdown();
 			n.mod = nil;
+		}
+		if(n.tkmod != nil) {
+			n.tkmod->shutdown();
+			if(n.tkitem != "")
+				tk->cmd(top, ".c delete " + n.tkitem);
+			if(n.tkwin != "")
+				tk->cmd(top, "destroy " + n.tkwin);
+			n.tkmod = nil;
+			n.tkwin = "";
+			n.tkitem = "";
 		}
 	}
 }
@@ -1745,7 +1819,17 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 	Leaf =>
 		if(n.mod != nil && n.r.contains(p.xy)) {
 			focusmod = n.mod;
+			tkfocus = 0;
 			return n.mod->pointer(p);
+		}
+		if(n.tkmod != nil && n.r.contains(p.xy)) {
+			# Tk hit-tests, fires bindings, and manages widget
+			# focus itself; keys follow while the pointer stays
+			# in a hosted region.
+			focusmod = nil;
+			tkfocus = 1;
+			tk->pointer(top, *p);
+			return 1;
 		}
 	}
 	return 0;
@@ -1755,6 +1839,11 @@ handlekey(k: int)
 {
 	if(k < 0)
 		return;
+	if(tkfocus) {
+		tk->keyboard(top, k);
+		tk->cmd(top, "update");
+		return;
+	}
 	if(focusmod != nil)
 		focusmod->key(k);
 }

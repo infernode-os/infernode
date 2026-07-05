@@ -15,6 +15,7 @@ TARG=\
 	mem-gauge.dis\
 	net-gauge.dis\
 	proc-list.dis\
+	tk-notes.dis\
 
 SYSMODULES=\
 	sys.m\
@@ -23,6 +24,8 @@ SYSMODULES=\
 	lucitheme.m\
 	math.m\
 	matrix.m\
+	matrixtk.m\
+	tk.m\
 
 DISBIN=$ROOT/dis/matrix
 

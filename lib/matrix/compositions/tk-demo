@@ -1,0 +1,14 @@
+# tk-demo — hybrid image + Tk-widget composition
+#
+# cpu-gauge blits pixels into the composited frame; tk-notes is a
+# real Tk widget tree (entry + button + listbox) hosted in a canvas
+# window item over the same window.  Notes persist to
+# /tmp/matrix/tk-notes/notes — append a line there from sh (or an
+# agent) and it appears in the listbox on the next update tick.
+
+layout hsplit 50 50
+
+left  cpu-gauge /tmp/matrix/sysmon-svc
+right tk-notes  /tmp/matrix/tk-notes
+
+service sysmon-svc /

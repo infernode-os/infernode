@@ -297,6 +297,45 @@ A service module's `outdir` is a real directory under `/tmp/matrix/`
 needed — local readers may use the real path directly; Veltro and
 remote agents read the served view.
 
+### Tk-Hosted Display Module
+
+A third kind (`module/matrixtk.m`), for regions that want real Tk
+widgets rather than blitted pixels:
+
+```
+MatrixTkDisplay: module {
+    init:     fn(top: ref Tk->Toplevel, prefix, mount: string): string;
+    resize:   fn(r: Draw->Rect);
+    update:   fn(): int;
+    retheme:  fn();
+    shutdown: fn();
+};
+```
+
+The runtime's compositor is a Tk canvas: the composited pixel frame is
+one canvas image item, and each Tk-hosted region is a canvas *window*
+item — Inferno Tk's only absolute-positioning primitive — holding a
+frame `.r<seq>` whose geometry the runtime owns. The module builds
+widgets under `<prefix>.*`, packs them inside its frame, and registers
+its own event channel with `tk->namechan` (derive the channel name
+from the prefix so hosted modules never collide). Loading is probed:
+the runtime tries `MatrixDisplay` first, then `MatrixTkDisplay` — the
+Dis VM's load-time typecheck is the discriminator, so the composition
+format doesn't change.
+
+Events: Tk routes pointer and keyboard itself for hosted regions (the
+runtime hands events to the engine while the pointer is inside one);
+image-based regions keep the runtime's manual routing. Hosted widgets
+inherit the live theme from the Tk engine palette, and — like every
+Tk widget — are drivable from Inferno sh, so an agent can exercise a
+composed GUI for testing and control.
+
+Trust posture: identical to image display modules — in-process,
+trusted, loaded from the local library only. `tk-notes` is the
+reference module (entry + button + listbox persisting to
+`<mount>/notes`); `lib/matrix/compositions/tk-demo` composes it beside
+a pixel gauge in one window.
+
 
 ## Composition File Format
 

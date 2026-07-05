@@ -3,7 +3,7 @@
 #
 # Shared between the Matrix runtime (appl/wm/matrix.b), its tests,
 # and any tool that manipulates compositions.  Callers must include
-# sys.m, draw.m, and matrix.m before this file.
+# sys.m, draw.m, tk.m, matrix.m, and matrixtk.m before this file.
 #
 # A composition is a plain-text description of which modules to
 # load, where they mount, and how display regions are arranged.
@@ -59,6 +59,9 @@ LayoutNode: adt
 		modname: string;
 		mount: string;
 		mod: MatrixDisplay;
+		tkmod: MatrixTkDisplay;	# Tk-hosted alternative to mod
+		tkwin: string;		# frame widget path (".r<seq>")
+		tkitem: string;		# canvas window item id
 		r: Draw->Rect;
 	}
 };

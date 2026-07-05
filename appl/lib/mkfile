@@ -224,6 +224,7 @@ SYSMODULES=\
 	math.m\
 	matrix.m\
 	matrixlib.m\
+	matrixtk.m\
 	memfs.m\
 	menu.m\
 	outlinefont.m\

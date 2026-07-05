@@ -19,7 +19,11 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "tk.m";
+
 include "matrix.m";
+
+include "matrixtk.m";
 
 include "matrixlib.m";
 
@@ -118,8 +122,8 @@ parsecomposition(text: string): (ref Composition, string)
 				return (nil, "layout: bad ratio2");
 
 			(n1, n2) := childnames("", orient);
-			leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, Rect((0,0),(0,0)));
-			leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, Rect((0,0),(0,0)));
+			leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
+			leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
 			c.layout = ref LayoutNode.Split(
 				orient, r1, r2, leaf1, leaf2,
 				Rect((0,0),(0,0)));
@@ -164,8 +168,8 @@ parsecomposition(text: string): (ref Composition, string)
 							return (nil, first + ": max layout depth exceeded");
 
 						(n1, n2) := childnames(first, orient);
-						leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, Rect((0,0),(0,0)));
-						leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, Rect((0,0),(0,0)));
+						leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
+						leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
 						split := ref LayoutNode.Split(
 							orient, r1, r2, leaf1, leaf2,
 							Rect((0,0),(0,0)));
@@ -389,10 +393,18 @@ transplantleaves(oldroot, node: ref LayoutNode)
 		if(n.modname == "")
 			return;
 		o := findleaf(oldroot, n.name);
-		if(o != nil && o.mod != nil &&
-		   o.modname == n.modname && o.mount == n.mount) {
+		if(o == nil || o.modname != n.modname || o.mount != n.mount)
+			return;
+		if(o.mod != nil) {
 			n.mod = o.mod;
 			o.mod = nil;
+		} else if(o.tkmod != nil) {
+			n.tkmod = o.tkmod;
+			n.tkwin = o.tkwin;
+			n.tkitem = o.tkitem;
+			o.tkmod = nil;
+			o.tkwin = "";
+			o.tkitem = "";
 		}
 	}
 }

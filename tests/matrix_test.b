@@ -465,6 +465,80 @@ testTextRoundTrip(t: ref T)
 	t.assertseq(c.text, text, "original text preserved verbatim");
 }
 
+# ── Watch-rule grammar ──────────────────────────────────────
+
+nwatches(c: ref Composition): int
+{
+	n := 0;
+	for(wl := c.watches; wl != nil; wl = tl wl)
+		n++;
+	return n;
+}
+
+testWatchGrammar(t: ref T)
+{
+	# The architecture doc's example, verbatim shape.
+	text := "watch /n/tbl4/portfolio/defense/status\n" +
+		"  crisis -> load defensive\n" +
+		"  normal -> load trading-desk\n";
+	(c, err) := matrixlib->parsecomposition(text);
+	t.assertnil(err, "doc example parses");
+	if(c == nil)
+		t.fatal("nil composition");
+	t.asserteq(nwatches(c), 1, "one rule");
+	w := hd c.watches;
+	t.assertseq(w.path, "/n/tbl4/portfolio/defense/status", "watched path");
+	(p1, a1) := hd w.arms;
+	(p2, a2) := hd tl w.arms;
+	t.assertseq(p1, "crisis", "first pattern");
+	t.assertseq(a1, "load defensive", "first action");
+	t.assertseq(p2, "normal", "second pattern");
+	t.assertseq(a2, "load trading-desk", "second action");
+}
+
+testWatchTerminator(t: ref T)
+{
+	# First non-arm line closes the block and parses normally;
+	# comments and blanks inside the block do not close it.
+	text := "watch /m/status\n" +
+		"# a comment inside the block\n" +
+		"up -> notify it is up\n" +
+		"\n" +
+		"down -> unload\n" +
+		"service s /m\n" +
+		"watch /m/other\n" +
+		"x -> pin snap\n";
+	(c, err) := matrixlib->parsecomposition(text);
+	t.assertnil(err, "mixed watch/service parses");
+	if(c == nil)
+		t.fatal("nil composition");
+	t.asserteq(nwatches(c), 2, "two rules in file order");
+	t.assertseq((hd c.watches).path, "/m/status", "first rule first");
+	t.asserteq(nservices(c), 1, "service after block parsed");
+	(nil, a) := hd (hd c.watches).arms;
+	t.assertseq(a, "notify it is up", "notify text preserved");
+}
+
+testWatchErrors(t: ref T)
+{
+	(nil, e1) := matrixlib->parsecomposition("watch\n");
+	t.assertseq(e1, "watch needs: path", "missing path rejected");
+	(nil, e2) := matrixlib->parsecomposition("watch /m/s\nservice s /m\n");
+	t.assertseq(e2, "watch /m/s: empty block", "empty block via terminator rejected");
+	(nil, e3) := matrixlib->parsecomposition("watch /m/s\n");
+	t.assertseq(e3, "watch /m/s: empty block", "empty block via EOF rejected");
+	(nil, e4) := matrixlib->parsecomposition("watch /m/s\nx -> reboot now\n");
+	t.assertseq(e4, "watch /m/s: unknown watch action: reboot", "unknown verb rejected");
+	(nil, e5) := matrixlib->parsecomposition("watch /m/s\nx -> load\n");
+	t.assertseq(e5, "watch /m/s: load needs exactly one composition name", "load arity checked");
+	(nil, e6) := matrixlib->parsecomposition("watch /m/s\nx -> unload now\n");
+	t.assertseq(e6, "watch /m/s: unload takes no arguments", "unload arity checked");
+	(nil, e7) := matrixlib->parsecomposition("watch /m/s\n-> load x\n");
+	t.assertseq(e7, "watch /m/s: empty pattern", "empty pattern rejected");
+	(nil, e8) := matrixlib->parsecomposition("watch /m/s\nx -> notify\n");
+	t.assertseq(e8, "watch /m/s: notify needs a message", "notify needs text");
+}
+
 # ── Transplant units ────────────────────────────────────────
 #
 # transplant moves live module handles old→new for unchanged
@@ -900,6 +974,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("UnrecognizedLine", testUnrecognizedLine);
 	run("CommentsAndBlanks", testCommentsAndBlanks);
 	run("TextRoundTrip", testTextRoundTrip);
+	run("WatchGrammar", testWatchGrammar);
+	run("WatchTerminator", testWatchTerminator);
+	run("WatchErrors", testWatchErrors);
 	run("Transplant", testTransplant);
 	run("Isolation", testIsolation);
 

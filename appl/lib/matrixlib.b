@@ -42,6 +42,13 @@ parsecomposition(text: string): (ref Composition, string)
 	# Leaf name → LayoutNode map (for resolving nested splits)
 	leafnames: list of (string, ref LayoutNode);
 
+	# Open watch block, if any.  Lines are trimmed, so the block is
+	# content-delimited: every following line containing "->" is an
+	# arm; the first line without one closes the block and is
+	# dispatched normally.  Blank lines and comments are skipped
+	# without closing.
+	curwatch: ref WatchRule;
+
 	lines := splitlines(text);
 
 	for(; lines != nil; lines = tl lines) {
@@ -57,11 +64,40 @@ parsecomposition(text: string): (ref Composition, string)
 			continue;
 		}
 
+		if(curwatch != nil) {
+			arrow := findarrow(line);
+			if(arrow >= 0) {
+				pat := trim(line[0:arrow]);
+				act := trim(line[arrow+2:]);
+				if(pat == "")
+					return (nil, "watch " + curwatch.path + ": empty pattern");
+				aerr := validateaction(act);
+				if(aerr != nil)
+					return (nil, "watch " + curwatch.path + ": " + aerr);
+				curwatch.arms = (pat, act) :: curwatch.arms;
+				continue;
+			}
+			# Block closed by a non-arm line: dispatch it below.
+			if(curwatch.arms == nil)
+				return (nil, "watch " + curwatch.path + ": empty block");
+			curwatch.arms = revarms(curwatch.arms);
+			curwatch = nil;
+		}
+
 		(nil, toks) := sys->tokenize(line, " \t");
 		if(toks == nil)
 			continue;
 		first := hd toks;
 		rest := tl toks;
+
+		# "watch path" — opens an arm block
+		if(first == "watch") {
+			if(len rest != 1)
+				return (nil, "watch needs: path");
+			curwatch = ref WatchRule(hd rest, nil);
+			c.watches = curwatch :: c.watches;
+			continue;
+		}
 
 		# "layout hsplit|vsplit N M" — root split
 		if(first == "layout") {
@@ -165,6 +201,19 @@ parsecomposition(text: string): (ref Composition, string)
 		return (nil, "unrecognized line: " + line);
 	}
 
+	# EOF closes an open watch block.
+	if(curwatch != nil) {
+		if(curwatch.arms == nil)
+			return (nil, "watch " + curwatch.path + ": empty block");
+		curwatch.arms = revarms(curwatch.arms);
+	}
+
+	# Restore file order (rules were prepended).
+	watches: list of ref WatchRule;
+	for(wl := c.watches; wl != nil; wl = tl wl)
+		watches = hd wl :: watches;
+	c.watches = watches;
+
 	# Apply module assignments to layout leaves
 	for(al := c.assigns; al != nil; al = tl al) {
 		a := hd al;
@@ -175,6 +224,49 @@ parsecomposition(text: string): (ref Composition, string)
 	}
 
 	return (c, nil);
+}
+
+# Index of the first "->" in a line, or -1.
+findarrow(s: string): int
+{
+	for(i := 0; i + 1 < len s; i++)
+		if(s[i] == '-' && s[i+1] == '>')
+			return i;
+	return -1;
+}
+
+revarms(arms: list of (string, string)): list of (string, string)
+{
+	rev: list of (string, string);
+	for(; arms != nil; arms = tl arms)
+		rev = hd arms :: rev;
+	return rev;
+}
+
+# Watch actions are the verbs the runtime already exposes, plus
+# notify.  Anything else is a parse error, not a runtime surprise.
+validateaction(act: string): string
+{
+	(n, toks) := sys->tokenize(act, " \t");
+	if(n == 0)
+		return "empty action";
+	case hd toks {
+	"load" =>
+		if(n != 2)
+			return "load needs exactly one composition name";
+	"unload" =>
+		if(n != 1)
+			return "unload takes no arguments";
+	"pin" =>
+		if(n != 2)
+			return "pin needs exactly one name";
+	"notify" =>
+		if(n < 2)
+			return "notify needs a message";
+	* =>
+		return "unknown watch action: " + hd toks;
+	}
+	return nil;
 }
 
 # Shadow-root sequence counter; racing callers are distinct procs,

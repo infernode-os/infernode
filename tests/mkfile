@@ -120,6 +120,7 @@ TARG=\
 	lucibridge_test.dis\
 	lucifer_helpers_test.dis\
 	matrix_perfdashboard_test.dis\
+	matrix_test.dis\
 	opus_test.dis\
 	keyringinst_test.dis\
 	contacts_tool_test.dis\
@@ -147,6 +148,7 @@ SYSMODULES=\
 	llmclient.m\
 	keyring.m\
 	matrix.m\
+	matrixlib.m\
 	lists.m\
 	math.m\
 	menu.m\

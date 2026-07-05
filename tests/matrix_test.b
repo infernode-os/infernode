@@ -23,6 +23,9 @@ include "matrix.m";
 include "matrixlib.m";
 	matrixlib: MatrixLib;
 
+include "sh.m";
+	sh: Sh;
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -137,6 +140,127 @@ nassigns(c: ref Composition): int
 hasprefix(s, pre: string): int
 {
 	return len s >= len pre && s[0:len pre] == pre;
+}
+
+trim(s: string): string
+{
+	start := 0;
+	end := len s;
+	while(start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n'))
+		start++;
+	while(end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n'))
+		end--;
+	return s[start:end];
+}
+
+readbytesfile(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	data := array[0] of byte;
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		grown := array[len data + n] of byte;
+		grown[0:] = data;
+		grown[len data:] = buf[0:n];
+		data = grown;
+	}
+	return data;
+}
+
+writestr(path, s: string): int
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte s;
+	return sys->write(fd, b, len b);
+}
+
+# Poll until path stats OK, up to ms milliseconds.
+waitfor(path: string, ms: int): int
+{
+	for(waited := 0; waited < ms; waited += 250) {
+		(ok, nil) := sys->stat(path);
+		if(ok >= 0)
+			return 1;
+		sys->sleep(250);
+	}
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
+}
+
+lsnames(path: string): list of string
+{
+	names: list of string;
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			names = dirs[i].name :: names;
+	}
+	return names;
+}
+
+hasname(names: list of string, want: string): int
+{
+	for(; names != nil; names = tl names)
+		if(hd names == want)
+			return 1;
+	return 0;
+}
+
+matrixpid := -1;
+
+# Find the pid of a proc whose /prog status names the given module.
+# Used to kill the matrix process group at teardown — matrix is
+# launched via sh (see testControlFSStart), which does not report
+# the background pid.
+pidofmodule(modname: string): int
+{
+	# /prog/<pid>/status: pid pgrp user time state memsize module
+	# The module name can carry a [$Sys] suffix while blocked in a
+	# syscall.  Prefer the group leader (pid == pgrp) so killgrp on
+	# the result takes the whole matrix process group down.
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	anypid := -1;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			status := readfile("/prog/" + dirs[i].name + "/status");
+			if(status == nil)
+				continue;
+			(nil, toks) := sys->tokenize(status, " \t\n");
+			last := "";
+			pgrp := "";
+			nf := 0;
+			for(tp := toks; tp != nil; tp = tl tp) {
+				if(nf == 1)
+					pgrp = hd tp;
+				last = hd tp;
+				nf++;
+			}
+			if(!hasprefix(last, modname))
+				continue;
+			if(dirs[i].name == pgrp)
+				return int dirs[i].name;
+			if(anypid < 0)
+				anypid = int dirs[i].name;
+		}
+	}
+	return anypid;
 }
 
 # ── Parser: shipped compositions ────────────────────────────
@@ -341,6 +465,162 @@ testTextRoundTrip(t: ref T)
 	t.assertseq(c.text, text, "original text preserved verbatim");
 }
 
+# ── Control filesystem surface (/mnt/matrix) ────────────────
+#
+# Spawns the real runtime headless with the shipped sysmon
+# composition and exercises the served tree end to end: status,
+# composition round-trip, per-module files, the out/ passthrough
+# into the service's output directory, the library/ passthrough
+# (text and binary), notifications, and ctl verbs.
+
+testControlFSStart(t: ref T)
+{
+	# Launch through sh rather than a typed load: this file takes
+	# ref fn of its test functions, and a local command-module type
+	# structurally identical to MatrixTest makes the load-site
+	# import table swallow them (see wm_apps_test.b's "no ref fn"
+	# workaround for the same trap).  sh's & shares the namespace,
+	# so the /mnt/matrix mount is visible here.
+	sh = load Sh Sh->PATH;
+	if(sh == nil)
+		t.fatal(sys->sprint("cannot load sh: %r"));
+	sh->system(nil, "/dis/wm/matrix.dis -h /lib/matrix/compositions/sysmon &");
+	if(!waitfor("/mnt/matrix/ctl", 5000))
+		t.fatal("/mnt/matrix/ctl never appeared");
+	matrixpid = pidofmodule("Matrix");
+	t.assert(matrixpid > 0, "matrix pid found in /prog");
+	t.assertseq(trim(readfile("/mnt/matrix/ctl")), "running", "status running");
+}
+
+testControlFSComposition(t: ref T)
+{
+	want := readfile("/lib/matrix/compositions/sysmon");
+	got := readfile("/mnt/matrix/composition");
+	t.assertseq(got, want, "composition round-trips verbatim");
+}
+
+testControlFSModules(t: ref T)
+{
+	names := lsnames("/mnt/matrix/modules");
+	t.assert(hasname(names, "cpu-gauge"), "cpu-gauge listed");
+	t.assert(hasname(names, "mem-gauge"), "mem-gauge listed");
+	t.assert(hasname(names, "proc-list"), "proc-list listed");
+	t.assert(hasname(names, "sysmon-svc"), "sysmon-svc listed");
+
+	t.assertseq(trim(readfile("/mnt/matrix/modules/sysmon-svc/type")), "service", "service type");
+	t.assertseq(trim(readfile("/mnt/matrix/modules/sysmon-svc/mount")), "/", "service mount");
+	t.assertseq(trim(readfile("/mnt/matrix/modules/sysmon-svc/ctl")), "running", "service status");
+	t.assertseq(trim(readfile("/mnt/matrix/modules/cpu-gauge/type")), "display", "display type");
+	# Headless: display modules are never loaded, so they read stopped.
+	t.assertseq(trim(readfile("/mnt/matrix/modules/cpu-gauge/ctl")), "stopped", "display stopped headless");
+}
+
+testControlFSOutPassthrough(t: ref T)
+{
+	# Give sysmon-svc time for at least one poll cycle.
+	if(!waitfor("/mnt/matrix/modules/sysmon-svc/out/cpu/current", 5000))
+		t.fatal("service output never appeared through the control fs");
+	cur := trim(readfile("/mnt/matrix/modules/sysmon-svc/out/cpu/current"));
+	t.assert(cur != "", "out/cpu/current non-empty through control fs");
+	(nil, toks) := sys->tokenize(cur, " ");
+	n := 0;
+	for(; toks != nil; toks = tl toks)
+		n++;
+	t.asserteq(n, 3, "cpu/current is 'pct busy total'");
+
+	# Nested passthrough dirs enumerate.
+	names := lsnames("/mnt/matrix/modules/sysmon-svc/out");
+	t.assert(hasname(names, "cpu"), "out/ lists cpu/");
+	t.assert(hasname(names, "mem"), "out/ lists mem/");
+
+	# Display modules have no out/.
+	(ok, nil) := sys->stat("/mnt/matrix/modules/cpu-gauge/out");
+	t.assert(ok < 0, "display module has no out/");
+
+	# Writes through the passthrough are refused.
+	t.assert(writestr("/mnt/matrix/modules/sysmon-svc/out/cpu/current", "x") < 0,
+		"passthrough is read-only");
+}
+
+testControlFSLibrary(t: ref T)
+{
+	names := lsnames("/mnt/matrix/library/compositions");
+	t.assert(hasname(names, "sysmon"), "library lists sysmon");
+	t.assert(hasname(names, "perf-dashboard"), "library lists perf-dashboard");
+
+	want := readfile("/lib/matrix/compositions/sysmon");
+	got := readfile("/mnt/matrix/library/compositions/sysmon");
+	t.assertseq(got, want, "library composition passthrough matches");
+
+	# Binary passthrough: .dis bytes survive untouched.
+	wantb := readbytesfile("/dis/matrix/cpu-gauge.dis");
+	gotb := readbytesfile("/mnt/matrix/library/modules/cpu-gauge.dis");
+	t.assert(wantb != nil && len wantb > 0, "real .dis readable");
+	t.asserteq(len gotb, len wantb, ".dis length matches through passthrough");
+	same := 1;
+	for(i := 0; i < len wantb && i < len gotb; i++)
+		if(wantb[i] != gotb[i]) {
+			same = 0;
+			break;
+		}
+	t.assert(same, ".dis bytes identical through passthrough");
+}
+
+testControlFSNotifications(t: ref T)
+{
+	(ok, nil) := sys->stat("/mnt/matrix/notifications");
+	t.assert(ok >= 0, "notifications file exists");
+	t.assertseq(readfile("/mnt/matrix/notifications"), "", "notifications empty at start");
+}
+
+testControlFSCtlVerbs(t: ref T)
+{
+	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
+
+	# pin: current composition becomes a named library entry; unpin removes it.
+	t.assert(writestr("/mnt/matrix/ctl", "pin mtest-pinned") > 0, "pin accepted");
+	t.assert(waitfor("/mnt/matrix/library/compositions/mtest-pinned", 2000), "pinned composition served");
+	t.assertseq(readfile("/mnt/matrix/library/compositions/mtest-pinned"),
+		readfile("/mnt/matrix/composition"), "pinned text matches live composition");
+	t.assert(writestr("/mnt/matrix/ctl", "unpin mtest-pinned") > 0, "unpin accepted");
+	(ok, nil) := sys->stat("/lib/matrix/compositions/mtest-pinned");
+	t.assert(ok < 0, "unpin removed the file");
+}
+
+testControlFSUnload(t: ref T)
+{
+	t.assert(writestr("/mnt/matrix/ctl", "unload") > 0, "unload accepted");
+	idle := 0;
+	for(waited := 0; waited < 5000; waited += 250) {
+		if(trim(readfile("/mnt/matrix/ctl")) == "idle") {
+			idle = 1;
+			break;
+		}
+		sys->sleep(250);
+	}
+	t.assert(idle, "status idle after unload");
+	# Dead slots vanish from walks.
+	(ok, nil) := sys->stat("/mnt/matrix/modules/sysmon-svc");
+	t.assert(ok < 0, "unloaded module no longer walkable");
+	names := lsnames("/mnt/matrix/modules");
+	t.assert(!hasname(names, "sysmon-svc"), "unloaded module not listed");
+}
+
+stopmatrix()
+{
+	if(matrixpid <= 0)
+		return;
+	writestr("/mnt/matrix/ctl", "unload");
+	sys->sleep(1500);	# let services notice shutdown
+	fd := sys->open("/prog/" + string matrixpid + "/ctl", Sys->OWRITE);
+	if(fd != nil) {
+		b := array of byte "killgrp";
+		sys->write(fd, b, len b);
+	}
+	sys->unmount(nil, "/mnt/matrix");
+	matrixpid = -1;
+}
+
 # ── Main ────────────────────────────────────────────────────
 
 init(nil: ref Draw->Context, args: list of string)
@@ -381,6 +661,18 @@ init(nil: ref Draw->Context, args: list of string)
 	run("UnrecognizedLine", testUnrecognizedLine);
 	run("CommentsAndBlanks", testCommentsAndBlanks);
 	run("TextRoundTrip", testTextRoundTrip);
+
+	run("ControlFSStart", testControlFSStart);
+	if(matrixpid > 0) {
+		run("ControlFSComposition", testControlFSComposition);
+		run("ControlFSModules", testControlFSModules);
+		run("ControlFSOutPassthrough", testControlFSOutPassthrough);
+		run("ControlFSLibrary", testControlFSLibrary);
+		run("ControlFSNotifications", testControlFSNotifications);
+		run("ControlFSCtlVerbs", testControlFSCtlVerbs);
+		run("ControlFSUnload", testControlFSUnload);
+	}
+	stopmatrix();
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

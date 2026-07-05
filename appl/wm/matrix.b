@@ -62,14 +62,59 @@ Matrix: module
 UPDATE_MS: con 2000;
 
 # ── 9P qid space ───────────────────────────────────────────
+#
+# 64-bit qid path: bits 0..7 node type; 8..19 module slot (4096);
+# 20..43 passthrough slot (16M).  Module slots are append-only and
+# never renumbered (mail9p idiom), so a fid opened before a
+# composition reload keeps resolving to the same module afterwards.
 
-Qroot, Qctl, Qcomposition, Qmoddir: con iota;
-Qmodbase:  con 100;
-MOD_STRIDE: con 8;
-Qmod_dir:  con 0;
-Qmod_ctl:  con 1;
-Qmod_type: con 2;
-Qmod_mount: con 3;
+# Fixed nodes.
+Qroot, Qctl, Qcomposition, Qmoddir, Qlibdir,
+Qlibcompsdir, Qlibmodsdir, Qnotifications: con iota;
+
+# Per-module nodes (module slot packed into bits 8..19).
+Qmoddirent:	con 16;	# modules/<name>/
+Qmodctl:	con 17;
+Qmodtype:	con 18;
+Qmodmount:	con 19;
+Qmodout:	con 20;	# modules/<name>/out/ (service modules only)
+
+# Passthrough node backed by a real file or directory; the real
+# path lives in passtab (slot packed into bits 20..43).
+Qpass:	con 32;
+
+LIBCOMPS: con "/lib/matrix/compositions";
+LIBMODS:  con "/dis/matrix";
+OUTBASE:  con "/tmp/matrix";
+
+# Stable module registry.  Index == the slot packed into qid paths.
+# Slots are appended on first sight of a (name) and revived on
+# reload; a slot whose module left the composition goes !live and
+# walks/stats on it fail, but the slot is never reused.
+ModSlot: adt
+{
+	name:	string;
+	mtype:	string;	# display|service
+	mount:	string;
+	live:	int;
+};
+modslots: array of ref ModSlot;
+nmodslots: int;
+
+# Passthrough registry: synthetic qid → real path.  Append-only for
+# the server lifetime; parentq lets ".." walk back out.
+PassEnt: adt
+{
+	rpath:	string;
+	parentq:	big;
+};
+passtab: array of ref PassEnt;
+npass: int;
+
+# notifications file: bounded in-memory ring appended by watch-rule
+# notify actions (and anything else runtime-worthy).
+NOTIFMAX: con 32*1024;
+notifbuf: string;
 
 # ── Globals ─────────────────────────────────────────────────
 
@@ -191,6 +236,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		raise "fail:parse";
 	}
 	comp = c;
+	syncmodslots();
 
 	# Start 9P server (always, both modes)
 	start9p();
@@ -275,6 +321,13 @@ ensuredir(path: string)
 
 start9p()
 {
+	# The navigator serves real directories (library/, out/) and
+	# needs readdir in every mode, not just GUI.
+	if(readdir == nil)
+		readdir = load Readdir Readdir->PATH;
+	if(readdir == nil)
+		nomod(Readdir->PATH);
+
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0) {
 		sys->fprint(stderr, "matrix: can't create pipe: %r\n");
@@ -335,8 +388,7 @@ Serve:
 				break;
 			}
 
-			qtype := TYPE(c.path);
-			case qtype {
+			case TYPE(c.path) {
 			Qctl =>
 				status := "idle";
 				<-complock;
@@ -353,27 +405,56 @@ Serve:
 				complock <-= 1;
 				srv.reply(styxservers->readbytes(m, array of byte text));
 
-			* =>
-				if(qtype >= Qmodbase) {
-					off := modqoffset(qtype);
-					mi := findmodbyqid(qtype);
-					if(mi == nil) {
-						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-						break;
-					}
-					case off {
-					Qmod_ctl =>
-						srv.reply(styxservers->readbytes(m, array of byte (mi.status + "\n")));
-					Qmod_type =>
-						srv.reply(styxservers->readbytes(m, array of byte (mi.mtype + "\n")));
-					Qmod_mount =>
-						srv.reply(styxservers->readbytes(m, array of byte (mi.mount + "\n")));
-					* =>
-						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-					}
-				} else {
-					srv.reply(ref Rmsg.Error(m.tag, Eperm));
+			Qnotifications =>
+				srv.reply(styxservers->readbytes(m, array of byte notifbuf));
+
+			Qmodctl =>
+				ms := liveslot(c.path);
+				if(ms == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
 				}
+				srv.reply(styxservers->readbytes(m, array of byte (modstatus(ms.name, ms.mtype) + "\n")));
+
+			Qmodtype =>
+				ms := liveslot(c.path);
+				if(ms == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte (ms.mtype + "\n")));
+
+			Qmodmount =>
+				ms := liveslot(c.path);
+				if(ms == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte (ms.mount + "\n")));
+
+			Qpass =>
+				# Raw byte passthrough: .dis binaries and live service
+				# outputs must not round-trip through string.
+				i := PASSIDX(c.path);
+				if(i < 0 || i >= npass) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				fd := sys->open(passtab[i].rpath, Sys->OREAD);
+				if(fd == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				buf := array[m.count] of byte;
+				nr := sys->pread(fd, buf, len buf, m.offset);
+				if(nr < 0) {
+					srv.reply(ref Rmsg.Error(m.tag, sys->sprint("%r")));
+					break;
+				}
+				srv.reply(ref Rmsg.Read(m.tag, buf[0:nr]));
+
+			* =>
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
 
 		Write =>
@@ -487,77 +568,177 @@ handlectl(data: string): string
 	return "usage: load <name>|load -|unload|pin <name>|unpin <name>";
 }
 
-# Module info for 9P
-ModInfo: adt
-{
-	name: string;
-	mtype: string;
-	mount: string;
-	status: string;
-};
+# ── Qid packing ─────────────────────────────────────────────
 
-buildmodlist(): list of ref ModInfo
+TYPE(path: big): int
 {
-	mods: list of ref ModInfo;
-	<-complock;
-	if(comp != nil) {
-		# Display modules
-		if(comp.layout != nil)
-			mods = leafmodlist(comp.layout, mods);
-		# Service modules
-		for(sl := comp.services; sl != nil; sl = tl sl) {
-			se := hd sl;
-			status := "stopped";
-			if(se.mod != nil)
-				status = "running";
-			mods = ref ModInfo(se.name, "service", se.mount, status) :: mods;
-		}
+	return int path & 16rFF;
+}
+
+MODSLOT(path: big): int
+{
+	return (int (path >> 8)) & 16rFFF;
+}
+
+PASSIDX(path: big): int
+{
+	return int ((path >> 20) & big 16rFFFFFF);
+}
+
+QPATH(t, slot, pass: int): big
+{
+	return big t | (big slot << 8) | (big pass << 20);
+}
+
+# ── Module slot registry ────────────────────────────────────
+
+# Current (name, mtype, mount, running) tuples from the composition.
+# Caller holds complock.
+collectmods(): list of (string, string, string, int)
+{
+	mods: list of (string, string, string, int);
+	if(comp == nil)
+		return nil;
+	if(comp.layout != nil)
+		mods = collectleaves(comp.layout, mods);
+	for(sl := comp.services; sl != nil; sl = tl sl) {
+		se := hd sl;
+		mods = (se.name, "service", se.mount, se.mod != nil) :: mods;
 	}
-	complock <-= 1;
 	return mods;
 }
 
-leafmodlist(node: ref LayoutNode, acc: list of ref ModInfo): list of ref ModInfo
+collectleaves(node: ref LayoutNode, acc: list of (string, string, string, int)): list of (string, string, string, int)
 {
 	pick n := node {
 	Split =>
-		acc = leafmodlist(n.child1, acc);
-		acc = leafmodlist(n.child2, acc);
+		acc = collectleaves(n.child1, acc);
+		acc = collectleaves(n.child2, acc);
 	Leaf =>
-		if(n.modname != "") {
-			status := "stopped";
-			if(n.mod != nil)
-				status = "running";
-			acc = ref ModInfo(n.modname, "display", n.mount, status) :: acc;
-		}
+		if(n.modname != "")
+			acc = (n.modname, "display", n.mount, n.mod != nil) :: acc;
 	}
 	return acc;
 }
 
-findmodbyqid(qtype: int): ref ModInfo
+# Re-sync the slot registry with the live composition.  Existing
+# names keep their slot (revived if dead); new names append; names
+# absent from the new composition go !live.  Never renumbers.
+syncmodslots()
 {
-	if(qtype < Qmodbase)
-		return nil;
-	base := Qmodbase + ((qtype - Qmodbase) / MOD_STRIDE) * MOD_STRIDE;
-	idx := (base - Qmodbase) / MOD_STRIDE;
-	mods := buildmodlist();
-	i := 0;
+	<-complock;
+	mods := collectmods();
+	complock <-= 1;
+
+	for(i := 0; i < nmodslots; i++)
+		modslots[i].live = 0;
 	for(ml := mods; ml != nil; ml = tl ml) {
-		if(i == idx)
-			return hd ml;
-		i++;
+		(name, mtype, mount, nil) := hd ml;
+		slot := -1;
+		for(i = 0; i < nmodslots; i++)
+			if(modslots[i].name == name) {
+				slot = i;
+				break;
+			}
+		if(slot < 0) {
+			if(modslots == nil || nmodslots == len modslots) {
+				grown := array[nmodslots + 16] of ref ModSlot;
+				grown[0:] = modslots[0:nmodslots];
+				modslots = grown;
+			}
+			slot = nmodslots++;
+			modslots[slot] = ref ModSlot(name, mtype, mount, 1);
+		} else {
+			modslots[slot].mtype = mtype;
+			modslots[slot].mount = mount;
+			modslots[slot].live = 1;
+		}
+	}
+}
+
+liveslot(path: big): ref ModSlot
+{
+	slot := MODSLOT(path);
+	if(slot < 0 || slot >= nmodslots)
+		return nil;
+	ms := modslots[slot];
+	if(ms == nil || !ms.live)
+		return nil;
+	return ms;
+}
+
+# Module status computed from the live composition at read time.
+modstatus(name, mtype: string): string
+{
+	status := "stopped";
+	<-complock;
+	for(ml := collectmods(); ml != nil; ml = tl ml) {
+		(mname, mmtype, nil, running) := hd ml;
+		if(mname == name && mmtype == mtype) {
+			if(running)
+				status = "running";
+			break;
+		}
+	}
+	complock <-= 1;
+	return status;
+}
+
+# ── Passthrough registry ────────────────────────────────────
+
+passfor(parentq: big, rpath: string): int
+{
+	for(i := 0; i < npass; i++)
+		if(passtab[i].rpath == rpath)
+			return i;
+	if(passtab == nil || npass == len passtab) {
+		grown := array[npass + 32] of ref PassEnt;
+		grown[0:] = passtab[0:npass];
+		passtab = grown;
+	}
+	passtab[npass] = ref PassEnt(rpath, parentq);
+	return npass++;
+}
+
+# Real directory behind a passthrough-capable dir qid, or nil.
+realdirof(path: big): string
+{
+	case TYPE(path) {
+	Qlibcompsdir =>
+		return LIBCOMPS;
+	Qlibmodsdir =>
+		return LIBMODS;
+	Qmodout =>
+		ms := liveslot(path);
+		if(ms == nil || ms.mtype != "service")
+			return nil;
+		return OUTBASE + "/" + ms.name;
+	Qpass =>
+		i := PASSIDX(path);
+		if(i < 0 || i >= npass)
+			return nil;
+		return passtab[i].rpath;
 	}
 	return nil;
 }
 
-modqoffset(qtype: int): int
-{
-	return (qtype - Qmodbase) % MOD_STRIDE;
-}
+# ── notifications ───────────────────────────────────────────
 
-TYPE(path: big): int
+notifappend(line: string)
 {
-	return int path & 16rFFFF;
+	notifbuf += line + "\n";
+	# Drop oldest whole lines once over budget.
+	for(guard := 0; len notifbuf > NOTIFMAX && guard < 1000; guard++) {
+		cut := 0;
+		for(i := 0; i < len notifbuf; i++)
+			if(notifbuf[i] == '\n') {
+				cut = i + 1;
+				break;
+			}
+		if(cut == 0)
+			break;
+		notifbuf = notifbuf[cut:];
+	}
 }
 
 dir(qid: Sys->Qid, name: string, length: big, perm: int): ref Sys->Dir
@@ -576,8 +757,7 @@ dir(qid: Sys->Qid, name: string, length: big, perm: int): ref Sys->Dir
 
 dirgen(p: big): (ref Sys->Dir, string)
 {
-	qtype := TYPE(p);
-	case qtype {
+	case TYPE(p) {
 	Qroot =>
 		return (dir(Qid(p, vers, Sys->QTDIR), ".", big 0, 8r755), nil);
 	Qctl =>
@@ -586,26 +766,89 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "composition", big 0, 8r644), nil);
 	Qmoddir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), "modules", big 0, 8r755), nil);
-	}
-
-	if(qtype >= Qmodbase) {
-		off := modqoffset(qtype);
-		mi := findmodbyqid(qtype);
-		if(mi != nil) {
-			case off {
-			Qmod_dir =>
-				return (dir(Qid(p, vers, Sys->QTDIR), mi.name, big 0, 8r755), nil);
-			Qmod_ctl =>
-				return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r444), nil);
-			Qmod_type =>
-				return (dir(Qid(p, vers, Sys->QTFILE), "type", big 0, 8r444), nil);
-			Qmod_mount =>
-				return (dir(Qid(p, vers, Sys->QTFILE), "mount", big 0, 8r444), nil);
-			}
+	Qlibdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "library", big 0, 8r555), nil);
+	Qlibcompsdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "compositions", big 0, 8r555), nil);
+	Qlibmodsdir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "modules", big 0, 8r555), nil);
+	Qnotifications =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "notifications", big len array of byte notifbuf, 8r444), nil);
+	Qmoddirent =>
+		ms := liveslot(p);
+		if(ms == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTDIR), ms.name, big 0, 8r555), nil);
+	Qmodctl =>
+		if(liveslot(p) == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r444), nil);
+	Qmodtype =>
+		if(liveslot(p) == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), "type", big 0, 8r444), nil);
+	Qmodmount =>
+		if(liveslot(p) == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTFILE), "mount", big 0, 8r444), nil);
+	Qmodout =>
+		rpath := realdirof(p);
+		if(rpath == nil)
+			return (nil, Enotfound);
+		return (dir(Qid(p, vers, Sys->QTDIR), "out", big 0, 8r555), nil);
+	Qpass =>
+		i := PASSIDX(p);
+		if(i < 0 || i >= npass)
+			return (nil, Enotfound);
+		(ok, sd) := sys->stat(passtab[i].rpath);
+		if(ok < 0)
+			return (nil, Enotfound);
+		d := ref sys->zerodir;
+		d.name = sd.name;
+		d.uid = user;
+		d.gid = user;
+		d.length = sd.length;
+		d.atime = sd.atime;
+		d.mtime = sd.mtime;
+		if(sd.mode & Sys->DMDIR) {
+			d.qid = Qid(p, vers, Sys->QTDIR);
+			d.mode = Sys->DMDIR | 8r555;
+		} else {
+			d.qid = Qid(p, vers, Sys->QTFILE);
+			d.mode = 8r444;
 		}
+		return (d, nil);
 	}
 
 	return (nil, Enotfound);
+}
+
+# Emit the fixed children of a static dir for Readdir, honouring
+# offset/count.  ents are qid paths in listing order.
+replyfixed(n: ref Navop.Readdir, ents: array of big)
+{
+	i := n.offset;
+	count := n.count;
+	for(; i < len ents && count > 0; i++) {
+		n.reply <-= dirgen(ents[i]);
+		count--;
+	}
+	n.reply <-= (nil, nil);
+}
+
+# Readdir a passthrough-backed directory: enumerate the real dir,
+# registering each child in passtab so its synthetic qid is stable.
+replypassdir(n: ref Navop.Readdir, dirq: big, rpath: string)
+{
+	(entries, nent) := readdir->init(rpath, Readdir->NAME);
+	i := n.offset;
+	count := n.count;
+	for(; i < nent && count > 0; i++) {
+		idx := passfor(dirq, rpath + "/" + entries[i].name);
+		n.reply <-= dirgen(QPATH(Qpass, 0, idx));
+		count--;
+	}
+	n.reply <-= (nil, nil);
 }
 
 matrixnavigator(navops: chan of ref Navop)
@@ -618,7 +861,8 @@ matrixnavigator(navops: chan of ref Navop)
 		Walk =>
 			qtype := TYPE(n.path);
 
-			if(qtype == Qroot) {
+			case qtype {
+			Qroot =>
 				case n.name {
 				".." =>
 					;
@@ -628,52 +872,107 @@ matrixnavigator(navops: chan of ref Navop)
 					n.path = big Qcomposition;
 				"modules" =>
 					n.path = big Qmoddir;
+				"library" =>
+					n.path = big Qlibdir;
+				"notifications" =>
+					n.path = big Qnotifications;
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
 				}
 				n.reply <-= dirgen(n.path);
-			} else if(qtype == Qmoddir) {
-				# Walk to a module by name
-				mods := buildmodlist();
-				idx := 0;
+
+			Qmoddir =>
+				if(n.name == "..") {
+					n.path = big Qroot;
+					n.reply <-= dirgen(n.path);
+					continue;
+				}
 				found := 0;
-				for(ml := mods; ml != nil; ml = tl ml) {
-					mi := hd ml;
-					if(mi.name == n.name) {
-						n.path = big(Qmodbase + idx * MOD_STRIDE + Qmod_dir);
+				for(slot := 0; slot < nmodslots; slot++) {
+					ms := modslots[slot];
+					if(ms != nil && ms.live && ms.name == n.name) {
+						n.path = QPATH(Qmoddirent, slot, 0);
 						n.reply <-= dirgen(n.path);
 						found = 1;
 						break;
 					}
-					idx++;
 				}
-				if(!found) {
-					case n.name {
-					".." =>
-						n.path = big Qroot;
-						n.reply <-= dirgen(n.path);
-					* =>
-						n.reply <-= (nil, Enotfound);
-					}
-				}
-			} else if(qtype >= Qmodbase && modqoffset(qtype) == Qmod_dir) {
-				# Walk within a module directory
+				if(!found)
+					n.reply <-= (nil, Enotfound);
+
+			Qmoddirent =>
+				slot := MODSLOT(n.path);
 				case n.name {
 				".." =>
 					n.path = big Qmoddir;
 				"ctl" =>
-					n.path = big(qtype + Qmod_ctl);
+					n.path = QPATH(Qmodctl, slot, 0);
 				"type" =>
-					n.path = big(qtype + Qmod_type);
+					n.path = QPATH(Qmodtype, slot, 0);
 				"mount" =>
-					n.path = big(qtype + Qmod_mount);
+					n.path = QPATH(Qmodmount, slot, 0);
+				"out" =>
+					ms := liveslot(n.path);
+					if(ms == nil || ms.mtype != "service") {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = QPATH(Qmodout, slot, 0);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
 				}
 				n.reply <-= dirgen(n.path);
-			} else {
+
+			Qlibdir =>
+				case n.name {
+				".." =>
+					n.path = big Qroot;
+				"compositions" =>
+					n.path = big Qlibcompsdir;
+				"modules" =>
+					n.path = big Qlibmodsdir;
+				* =>
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				n.reply <-= dirgen(n.path);
+
+			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+				if(n.name == "..") {
+					case qtype {
+					Qlibcompsdir or Qlibmodsdir =>
+						n.path = big Qlibdir;
+					Qmodout =>
+						n.path = QPATH(Qmoddirent, MODSLOT(n.path), 0);
+					Qpass =>
+						i := PASSIDX(n.path);
+						if(i < 0 || i >= npass) {
+							n.reply <-= (nil, Enotfound);
+							continue;
+						}
+						n.path = passtab[i].parentq;
+					}
+					n.reply <-= dirgen(n.path);
+					continue;
+				}
+				rpath := realdirof(n.path);
+				if(rpath == nil) {
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				child := rpath + "/" + n.name;
+				(ok, nil) := sys->stat(child);
+				if(ok < 0) {
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				idx := passfor(n.path, child);
+				n.path = QPATH(Qpass, 0, idx);
+				n.reply <-= dirgen(n.path);
+
+			* =>
 				n.reply <-= (nil, "not a directory");
 			}
 
@@ -681,67 +980,55 @@ matrixnavigator(navops: chan of ref Navop)
 			qtype := TYPE(m.path);
 			case qtype {
 			Qroot =>
-				i := n.offset;
-				count := n.count;
-				# Entry 0: ctl
-				if(i == 0 && count > 0) {
-					n.reply <-= dirgen(big Qctl);
-					count--;
-					i++;
-				}
-				# Entry 1: composition
-				if(i <= 1 && count > 0) {
-					n.reply <-= dirgen(big Qcomposition);
-					count--;
-					i++;
-				}
-				# Entry 2: modules
-				if(i <= 2 && count > 0) {
-					n.reply <-= dirgen(big Qmoddir);
-					count--;
-					i++;
-				}
-				n.reply <-= (nil, nil);
+				replyfixed(n, array[] of {
+					big Qctl, big Qcomposition, big Qmoddir,
+					big Qlibdir, big Qnotifications});
 
 			Qmoddir =>
 				i := n.offset;
 				count := n.count;
-				mods := buildmodlist();
-				idx := 0;
-				for(ml := mods; ml != nil && count > 0; ml = tl ml) {
-					if(i <= idx) {
-						qid := Qmodbase + idx * MOD_STRIDE + Qmod_dir;
-						n.reply <-= dirgen(big qid);
+				seen := 0;
+				for(slot := 0; slot < nmodslots && count > 0; slot++) {
+					ms := modslots[slot];
+					if(ms == nil || !ms.live)
+						continue;
+					if(seen >= i) {
+						n.reply <-= dirgen(QPATH(Qmoddirent, slot, 0));
 						count--;
 					}
-					idx++;
+					seen++;
 				}
 				n.reply <-= (nil, nil);
 
-			* =>
-				if(qtype >= Qmodbase && modqoffset(qtype) == Qmod_dir) {
-					# Module directory: ctl, type, mount
-					i := n.offset;
-					count := n.count;
-					base := qtype;
-					if(i == 0 && count > 0) {
-						n.reply <-= dirgen(big(base + Qmod_ctl));
-						count--;
-						i++;
-					}
-					if(i <= 1 && count > 0) {
-						n.reply <-= dirgen(big(base + Qmod_type));
-						count--;
-						i++;
-					}
-					if(i <= 2 && count > 0) {
-						n.reply <-= dirgen(big(base + Qmod_mount));
-						count--;
-					}
-					n.reply <-= (nil, nil);
-				} else {
-					n.reply <-= (nil, "not a directory");
+			Qmoddirent =>
+				slot := MODSLOT(m.path);
+				ms := liveslot(m.path);
+				if(ms == nil) {
+					n.reply <-= (nil, Enotfound);
+					continue;
 				}
+				if(ms.mtype == "service")
+					replyfixed(n, array[] of {
+						QPATH(Qmodctl, slot, 0), QPATH(Qmodtype, slot, 0),
+						QPATH(Qmodmount, slot, 0), QPATH(Qmodout, slot, 0)});
+				else
+					replyfixed(n, array[] of {
+						QPATH(Qmodctl, slot, 0), QPATH(Qmodtype, slot, 0),
+						QPATH(Qmodmount, slot, 0)});
+
+			Qlibdir =>
+				replyfixed(n, array[] of {big Qlibcompsdir, big Qlibmodsdir});
+
+			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+				rpath := realdirof(m.path);
+				if(rpath == nil) {
+					n.reply <-= (nil, Enotfound);
+					continue;
+				}
+				replypassdir(n, m.path, rpath);
+
+			* =>
+				n.reply <-= (nil, "not a directory");
 			}
 		}
 	}
@@ -1469,6 +1756,7 @@ reloadcomposition(text: string)
 		loaddisplaymodules();
 	}
 	loadservicemodules();
+	syncmodslots();
 	vers++;
 }
 

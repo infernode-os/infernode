@@ -43,17 +43,6 @@ include "viewport.m";
 include "wmclient.m";
 	wmclient: Wmclient;
 
-include "menu.m";
-	menumod: Menu;
-	Popup: import menumod;
-
-include "bufio.m";
-	bufio: Bufio;
-	Iobuf: import bufio;
-
-include "imagefile.m";
-	gifwriter: WImagefile;
-
 Presrender: module
 {
 	PATH: con "/dis/wm/presrender.dis";
@@ -113,7 +102,6 @@ monofont_g: ref Font;
 mountpt_g: string;
 actid_g := -1;
 fixedart := "";		# non-"" → render this specific artifact, not "current"
-exportseq := 0;		# monotonically increasing id suffix for export apps
 
 # Colors
 bgcol: ref Image;
@@ -168,14 +156,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 		return;
 	}
 	wmclient->init();
-
-	# Context menu (Zoom/Reset/Export) + image export. Non-fatal if absent:
-	# the right-click menu just degrades to unavailable.  menumod->init needs
-	# the display + font, so it is initialised after those are set up below.
-	menumod = load Menu Menu->PATH;
-	bufio = load Bufio Bufio->PATH;
-	if(bufio != nil)
-		gifwriter = load WImagefile WImagefile->WRITEGIFPATH;
 
 	# Parse args: "presrender" mountpt actid [artid]
 	# If artid is given we render that specific artifact and follow its
@@ -264,9 +244,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(monofont_g == nil)
 		monofont_g = mainfont;
 
-	if(menumod != nil)
-		menumod->init(display_g, mainfont);
-
 	# Load rlayout
 	rlay = load Rlayout Rlayout->PATH;
 	if(rlay != nil)
@@ -304,13 +281,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 				prescroll(1);
 				redraw();
 			}
-
-			# Button-3 (or long-press elsewhere): the viewer context menu —
-			# zoom/reset/export.  Lives here because presrender owns the
-			# content window; a right-click over the content never reaches
-			# lucipres, so the menu had become unreachable.
-			if(p.buttons & 4 && wasdown == 0 && cur != nil)
-				showcontextmenu(p.xy);
 
 			# Button-1 just pressed
 			if(p.buttons == 1 && wasdown == 0 && cur != nil) {
@@ -717,171 +687,6 @@ artzoom(art: ref Artifact): int
 	if(art.zoom == 0)
 		return 100;
 	return art.zoom;
-}
-
-# --- Context menu (zoom / reset / export / close) ---
-
-# Show the viewer context menu for the current artifact and act on the
-# choice.  Ported from lucipres, which lost the ability to service it once
-# presrender took over the content window.
-showcontextmenu(at: Point)
-{
-	if(menumod == nil || cur == nil)
-		return;
-	# Menu items are type-specific (files on disk need no export; rendered
-	# diagrams can export source or image; text exports its content).
-	items: array of string;
-	case cur.atype {
-	"pdf" or "image" =>
-		items = array[] of {"Close", "Zoom In", "Zoom Out", "Reset View"};
-	"mermaid" =>
-		items = array[] of {"Close", "Zoom In", "Zoom Out", "Reset View",
-			"Export Source", "Export Image"};
-	* =>
-		items = array[] of {"Close", "Zoom In", "Zoom Out", "Reset View", "Export"};
-	}
-	pop := menumod->new(items);
-	res := popmenu(pop, at);
-	case res {
-	0 =>
-		deleteartifactui(cur.id);
-	1 =>
-		cur.zoom = artzoom(cur) + 25;
-		if(cur.zoom > 400) cur.zoom = 400;
-		cur.rendimg = nil;
-		redraw();
-	2 =>
-		cur.zoom = artzoom(cur) - 25;
-		if(cur.zoom < 25) cur.zoom = 25;
-		cur.rendimg = nil;
-		redraw();
-	3 =>
-		cur.zoom = 0;
-		cur.panx = 0;
-		cur.pany = 0;
-		cur.rendimg = nil;
-		redraw();
-	4 =>
-		exportartifact(cur);
-	5 =>
-		exportimage(cur);	# only reachable for mermaid
-	}
-}
-
-popmenu(pop: ref Popup, at: Point): int
-{
-	if(win != nil && win.screen != nil && win.image != nil)
-		return pop.showtop(win.screen, win.image.r, at, win.ctxt.ptr);
-	return pop.show(mainwin, at, win.ctxt.ptr);
-}
-
-deleteartifactui(id: string)
-{
-	if(actid_g >= 0)
-		writetofile(sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g),
-			"delete id=" + id);
-}
-
-# Export text content to /tmp and open it in editor as a presentation app.
-exportartifact(art: ref Artifact)
-{
-	if(art == nil)
-		return;
-	ext := ".txt";
-	case art.atype {
-	"markdown" or "doc" => ext = ".md";
-	"mermaid" => ext = ".mmd";
-	"code" => ext = ".b";
-	"table" => ext = ".tsv";
-	}
-	fname := safename(art.label);
-	if(fname == "")
-		fname = "export";
-	fname += "-" + string sys->millisec();
-	path := "/tmp/" + fname + ext;
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd == nil) {
-		sys->fprint(stderr, "presrender: export: cannot create %s: %r\n", path);
-		writetosnarf(art.data);
-		return;
-	}
-	b := array of byte art.data;
-	sys->write(fd, b, len b);
-	fd = nil;
-	launchexport(fname + ext, path);
-}
-
-# Export the rendered image as a GIF and copy its path to the snarf buffer.
-exportimage(art: ref Artifact)
-{
-	if(art == nil || art.rendimg == nil)
-		return;
-	if(gifwriter == nil || bufio == nil) {
-		sys->fprint(stderr, "presrender: export image: GIF writer not available\n");
-		return;
-	}
-	fname := safename(art.label);
-	if(fname == "")
-		fname = "export";
-	fname += "-" + string sys->millisec();
-	path := "/tmp/" + fname + ".gif";
-	ofd := bufio->create(path, Bufio->OWRITE, 8r644);
-	if(ofd == nil) {
-		sys->fprint(stderr, "presrender: export image: cannot create %s: %r\n", path);
-		return;
-	}
-	err := gifwriter->writeimage(ofd, art.rendimg);
-	ofd.close();
-	if(err != nil) {
-		sys->fprint(stderr, "presrender: export image: %s: %s\n", path, err);
-		return;
-	}
-	writetosnarf(path);
-}
-
-launchexport(label, filepath: string)
-{
-	if(actid_g < 0)
-		return;
-	exportseq++;
-	id := sys->sprint("editor-%d", exportseq);
-	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-	writetofile(ctlpath,
-		sys->sprint("create id=%s type=app label=%s dis=/dis/wm/editor.dis", id, label));
-	datapath := sys->sprint("%s/activity/%d/presentation/%s/data", mountpt_g, actid_g, id);
-	fd := sys->open(datapath, Sys->OWRITE);
-	if(fd != nil) {
-		b := array of byte filepath;
-		sys->write(fd, b, len b);
-	}
-}
-
-safename(s: string): string
-{
-	r := "";
-	for(i := 0; i < len s && i < 64; i++) {
-		c := s[i];
-		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		   (c >= '0' && c <= '9') || c == '-' || c == '_')
-			r += s[i:i+1];
-		else if(c == ' ' && len r > 0 && r[len r - 1] != '-')
-			r += "-";
-	}
-	return r;
-}
-
-writetosnarf(text: string)
-{
-	writetofile("/dev/snarf", text);
-}
-
-writetofile(path: string, text: string)
-{
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil)
-		return;
-	b := array of byte text;
-	sys->write(fd, b, len b);
 }
 
 # --- Rendering via registry ---

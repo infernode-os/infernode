@@ -178,6 +178,12 @@ pickerrects: array of Rect;
 pickerhits:  array of string;
 # Edge-trigger for button-1 click detection in the picker.
 lastbtn1: int;
+# 1 while the right-click context menu is posted.  matrix intercepts
+# button-1 for its own picker/handleptr, so without this a click on a menu
+# item never reaches Tk — the menu could not be invoked or dismissed and
+# lingered as a ghost.  While set, pointer events go straight to Tk; it is
+# cleared when the menu tears its window down ("delete" on top.wreq).
+menuposted: int;
 
 # ── Init ────────────────────────────────────────────────────
 
@@ -1216,6 +1222,11 @@ guiloop()
 		# window through here); a loop that never drains it leaves every
 		# posted menu mapped-and-grabbing but windowless — invisible.
 		c = <-top.wreq =>
+			# The context menu tears its window down with "delete <tag>";
+			# that is our signal it is gone, so stop intercepting pointer
+			# events for it.
+			if(len c >= 7 && c[0:7] == "delete ")
+				menuposted = 0;
 			tkclient->wmctl(top, c);
 			if(c != nil && len c > 0 && c[0] == '!') {
 				aw := int tk->cmd(top, ". cget -actwidth");
@@ -1232,8 +1243,14 @@ guiloop()
 			handlekey(k);
 
 		ptr := <-top.ctxt.ptr =>
-			if(ptr.buttons & 4) {
+			if(menuposted) {
+				# Context menu is up: route everything to Tk so it can
+				# track the pointer, invoke an item, or dismiss.  menuposted
+				# clears when the menu tears down (see the wreq arm above).
+				tk->pointer(top, *ptr);
+			} else if(ptr.buttons & 4) {
 				# B3: let the Tk binding fire and post the context menu.
+				menuposted = 1;
 				tk->pointer(top, *ptr);
 				lastbtn1 = 0;
 			} else if(comp == nil || comp.layout == nil) {

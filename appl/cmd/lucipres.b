@@ -321,11 +321,29 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# Load viewport
 	vpmod = load Viewport Viewport->PATH;
 
-	# Load plumbmsg (send-only: no input port needed)
+	# Load plumbmsg and open the 'presentation' plumb port.  This is how
+	# every picker path — the ftree file tree, the context panel, an
+	# agent, or the `plumb` command — opens a file into the presentation
+	# view: it sends a plumb message, the stock plumber (started in
+	# boot.sh) matches /lib/lucifer/plumbing and forwards it here, and
+	# plumbreceiver() turns it into the right artifact.  The plumber comes
+	# up before us in the boot, but retry briefly in case it is still
+	# starting; if it never appears we simply run without the consumer
+	# (ftree falls back to writing /mnt/ui directly).
 	plumbmod = load Plumbmsg Plumbmsg->PATH;
 	if(plumbmod != nil) {
-		if(plumbmod->init(0, nil, 0) < 0)
+		tries := 0;
+		while(plumbmod->init(1, "presentation", 8192) < 0 && tries < 25) {
+			sys->sleep(200);
+			tries++;
+		}
+		if(tries >= 25) {
+			sys->fprint(sys->fildes(2), "lucipres: plumb consumer unavailable (no plumber?); pickers use the /mnt/ui fallback\n");
 			plumbmod = nil;
+		} else {
+			sys->fprint(sys->fildes(2), "lucipres: plumb consumer listening on 'presentation'\n");
+			spawn plumbreceiver();
+		}
 	}
 
 	# Load bufio + GIF writer for image export
@@ -1355,6 +1373,110 @@ launchexport(label, filepath: string)
 		sys->write(fd, b, len b);
 		fd = nil;
 	}
+}
+
+# --- Plumb consumer: open files into the presentation view ---
+#
+# Runs in its own proc, blocking on the 'presentation' plumb port.  It
+# only writes /mnt/ui (the luciuisrv authority) — it never touches this
+# module's own artifact/centeredart state, so there is no race with the
+# event loop: luciuisrv's "presentation new/current" events drive the UI
+# update the normal way.
+
+plumbseq := 0;
+
+plumbreceiver()
+{
+	for(;;) {
+		m := Msg.recv();
+		if(m == nil)
+			break;
+		if(m.data != nil)
+			openintopres(string m.data);
+	}
+}
+
+# Open a file path into the presentation view, choosing the renderer by
+# type: pdf/image/markdown become content artifacts, everything else opens
+# in the editor.  Mirrors ftree's direct path so both routes behave the
+# same.
+openintopres(path: string)
+{
+	path = strip(path);
+	if(path == "" || actid_g < 0)
+		return;
+	name := plumbbasename(path);
+	ext := plumblower(plumbext(path));
+
+	plumbseq++;
+	id := sys->sprint("plumb-%d", plumbseq);
+
+	atype := "";
+	readcontent := 0;
+	case ext {
+	"pdf" =>
+		atype = "pdf";
+	"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
+		atype = "image";
+	"md" or "markdown" =>
+		atype = "markdown";
+		readcontent = 1;
+	* =>
+		atype = "app";		# text/source/unknown -> editor
+	}
+
+	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	if(atype == "app") {
+		# The editor reads its argv from the data field the instant the
+		# artifact is created, so the path must ride in the create command
+		# (data= is terminal, hence last).
+		writetofile(ctlpath, sys->sprint(
+			"create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s",
+			id, name, path));
+	} else {
+		writetofile(ctlpath, sys->sprint("create id=%s type=%s label=%s",
+			id, atype, name));
+		data := path;
+		if(readcontent) {
+			c := readfile(path);
+			if(c != nil)
+				data = c;
+		}
+		writetofile(sys->sprint("%s/activity/%d/presentation/%s/data",
+			mountpt_g, actid_g, id), data);
+	}
+	writetofile(ctlpath, "center id=" + id);
+}
+
+plumbbasename(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return path[i+1:];
+	return path;
+}
+
+plumbext(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--) {
+		if(path[i] == '.')
+			return path[i+1:];
+		if(path[i] == '/')
+			break;
+	}
+	return "";
+}
+
+plumblower(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		r[len r] = c;
+	}
+	return r;
 }
 
 findartifact(id: string): ref Artifact

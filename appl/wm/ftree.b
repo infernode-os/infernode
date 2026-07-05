@@ -62,6 +62,10 @@ include "lucitheme.m";
 include "arg.m";
 	arg: Arg;
 
+include "plumbmsg.m";
+	plumbmod: Plumbmsg;
+	Msg: import plumbmod;
+
 Ftree: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -646,12 +650,49 @@ plumbselected()
 		openfile(n.path);
 }
 
-# Open a file by presenting it in the Lucifer presentation view.  Media and
-# document types (pdf, images, markdown) become content artifacts drawn by
-# presrender; everything else opens in the editor, launched as a
-# presentation-zone app.  We talk to /mnt/ui directly rather than plumbing:
-# the Lucifer session runs no plumber, so a plumb message goes nowhere.
+# Open a file in the Lucifer presentation view.  The primary path is the
+# plumber: it is the shared route that the context panel, agents and the
+# `plumb` command use too, and lucipres consumes it (plumbreceiver) into
+# the presentation.  If no plumber is running we fall back to writing
+# /mnt/ui directly, so a file always opens either way.
 openfile(path: string)
+{
+	if(plumbopen(path))
+		return;
+	opendirect(path);
+}
+
+# Send a file-open plumb message.  Returns 1 if the plumber accepted it
+# (a consumer is attached), 0 if there is no plumber or delivery failed —
+# in which case the caller falls back to the direct path.
+plumbopen(path: string): int
+{
+	if(plumbmod == nil) {
+		plumbmod = load Plumbmsg Plumbmsg->PATH;
+		# init(1, nil, 0): open the send fd (/chan/plumb.input) with no
+		# receive port.  init(0, nil, 0) is the "server that neither sends
+		# nor receives" case and returns WITHOUT opening the send fd, so a
+		# later send() fails with "fd out of range" — that was the original
+		# bug that made ftree's plumbing silently do nothing.
+		if(plumbmod != nil && plumbmod->init(1, nil, 0) < 0)
+			plumbmod = nil;
+	}
+	if(plumbmod == nil)
+		return 0;
+	msg := ref Plumbmsg->Msg("ftree", nil, dirof(path), "text", "",
+		array of byte path);
+	if(msg.send() < 0)
+		return 0;
+	setstatus("opened " + basename(path));
+	redraw();
+	return 1;
+}
+
+# Open a file by writing the presentation view directly via /mnt/ui.  Media
+# and document types (pdf, images, markdown) become content artifacts drawn
+# by presrender; everything else opens in the editor as a presentation-zone
+# app.  This is the fallback when no plumber is available.
+opendirect(path: string)
 {
 	actid := curactid();
 	if(actid < 0) {

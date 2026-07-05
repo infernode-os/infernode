@@ -1,0 +1,23 @@
+# Lucifer plumbing rules.
+#
+# Loaded by the stock Inferno plumber (/dis/plumber.dis), started from
+# /lib/lucifer/boot.sh.  Every picker path — the ftree file tree, the
+# context panel, an agent, or the `plumb` command — sends a file-open
+# message here; the plumber forwards it to the 'presentation' port, which
+# the Lucifer presentation manager (lucipres) consumes and turns into the
+# right artifact: pdf/image/markdown render as content, anything else
+# opens in the editor.
+#
+# One rule, on purpose: the presentation manager picks the renderer by
+# file type, so the rules stay trivial and every file lands in the
+# presentation view rather than spawning a standalone acme/charon window.
+#
+# to update: cat /lib/lucifer/plumbing > /chan/plumb.rules
+# to read:   cat /chan/plumb.rules
+
+# Existing files (any type, spaces allowed) go to the presentation view.
+kind is text
+data matches '[a-zA-Z¡-￿0-9_\-./ ]+'
+data isfile	$0
+data set	$file
+plumb to presentation

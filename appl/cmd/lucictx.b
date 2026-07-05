@@ -19,6 +19,10 @@ include "lucitheme.m";
 
 include "menu.m";
 
+include "plumbmsg.m";
+	plumbmod: Plumbmsg;
+	Msg: import plumbmod;
+
 LuciCtx: module
 {
 	PATH: con "/dis/lucictx.dis";
@@ -1599,7 +1603,8 @@ filebrowser(startpath: string): string
 						launchdisapp(fpath);
 					else if(len fpath > 4 && fpath[len fpath - 4:] == ".dis")
 						sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", fpath);
-					else {
+					else if(!plumbopenfile(fpath, curpath)) {
+						# No plumber — fall back to opening in the editor.
 						has9p := ensureeditor();
 						openineditor(fpath, has9p);
 					}
@@ -2028,6 +2033,27 @@ launchdisapp(path: string)
 }
 
 # Send "open <path>" to edit. Use 9P if available, else real-file IPC.
+# Plumb a file-open so the plumber routes it to the presentation view by
+# type (pdf/image/markdown -> content, text/source -> editor) — the same
+# shared path ftree uses.  Returns 1 if the plumber accepted it, 0 if none
+# is running (caller falls back to opening in the editor directly).
+plumbopenfile(path, dir: string): int
+{
+	if(plumbmod == nil) {
+		plumbmod = load Plumbmsg Plumbmsg->PATH;
+		# init(1, nil, 0) opens the send fd; init(0, nil, 0) returns without
+		# one, so send() would fail "fd out of range".
+		if(plumbmod != nil && plumbmod->init(1, nil, 0) < 0)
+			plumbmod = nil;
+	}
+	if(plumbmod == nil)
+		return 0;
+	msg := ref Plumbmsg->Msg("lucictx", nil, dir, "text", "", array of byte path);
+	if(msg.send() < 0)
+		return 0;
+	return 1;
+}
+
 openineditor(path: string, has9p: int)
 {
 	cmd := "open " + path;

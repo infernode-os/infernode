@@ -134,9 +134,17 @@ echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentat
 # lucipres (the consumer) and ftree (a client) — all forked after this —
 # inherit the same /chan and see the same ports.  Start the plumber before
 # lucifer so the 'presentation' port exists when lucipres opens it.
-bind -bc '#splumber' /chan
-plumber /lib/lucifer/plumbing &
-sleep 1
+# $noplumber=1 skips the plumber (regression-test hook, like $skiplogon):
+# tests/host/presentation_fileopen_test.sh uses it to verify the UI still
+# comes up — Tasks tab and all — when no plumber is present, since the plumb
+# consumer must never gate lucipres's init (see lucipres plumbreceiver).
+if {! ~ $noplumber 1} {
+	bind -bc '#splumber' /chan
+	plumber /lib/lucifer/plumbing &
+	sleep 1
+}{
+	echo 'boot: noplumber=1 — plumber not started (pickers use the /mnt/ui fallback)'
+}
 
 # (No auto-spawn of /dis/wm/shell in Activity 0 — the Main agent
 #  doesn't have shell authority, so the tab either sits empty or, on

@@ -231,6 +231,24 @@ jobs:
           fi
         fi
 
+    - name: Run presentation file-open regression test
+      run: |
+        # Boots the Lucifer GUI headless and asserts the file-open contract:
+        # Tasks tab present (with the plumber both up and absent), and files
+        # route by type (pdf/image/markdown -> presentation, else editor).
+        # Non-fatal in CI (full GUI boot can be timing-sensitive).
+        if [ -f tests/host/presentation_fileopen_test.sh ]; then
+          echo "--- presentation file-open regression test ---"
+          chmod +x tests/host/presentation_fileopen_test.sh
+          ROOT=. bash tests/host/presentation_fileopen_test.sh > pres-fileopen-test.txt 2>&1 || true
+          cat pres-fileopen-test.txt
+          if grep -q ", 0 failed," pres-fileopen-test.txt; then
+            echo "presentation file-open test: PASS"
+          else
+            echo "presentation file-open test: SKIP/FAIL (GUI boot timing-sensitive in CI)"
+          fi
+        fi
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."

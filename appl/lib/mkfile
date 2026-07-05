@@ -78,6 +78,7 @@ TARG=\
 	lock.dis\
 	login.dis\
 	lucitheme.dis\
+	matrixlib.dis\
 	memfs.dis\
 	menu.dis\
 	menuhit.dis\
@@ -219,6 +220,8 @@ SYSMODULES=\
 	lucitheme.m\
 	man.m\
 	math.m\
+	matrix.m\
+	matrixlib.m\
 	memfs.m\
 	menu.m\
 	outlinefont.m\

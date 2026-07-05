@@ -94,9 +94,7 @@ tfaread(Chan *c, void *va, long n, vlong offset)
 
 	switch((ulong)c->qid.path){
 	case Qctl:
-		osenter();			/* USB enumeration blocks — don't stall the VM */
 		avail = fido2bridge_available();
-		osleave();
 		lock(&tfalk);
 		snprint(buf, sizeof buf, "provider=yubikey-fido2 available=%d enrolled=%d\n",
 			avail, tfacred[0] != 0);
@@ -104,9 +102,7 @@ tfaread(Chan *c, void *va, long n, vlong offset)
 		return readstr(offset, va, n, buf);
 
 	case Qproviders:
-		osenter();			/* USB enumeration blocks — don't stall the VM */
 		avail = fido2bridge_available();
-		osleave();
 		snprint(buf, sizeof buf, "yubikey-fido2 available=%d\n", avail);
 		return readstr(offset, va, n, buf);
 
@@ -159,9 +155,7 @@ tfawrite(Chan *c, void *va, long n, vlong offset)
 			pin = buf + 6;
 			while(*pin == ' ')
 				pin++;
-			osenter();		/* blocks on touch (+PIN) — release the VM lock */
 			r = fido2bridge_enroll(pin, cred, sizeof cred, errbuf, sizeof errbuf);	/* touch (+PIN if UV) */
-			osleave();
 			if(r < 0)
 				error(errbuf[0] ? errbuf : "enroll failed");
 			lock(&tfalk);
@@ -194,9 +188,7 @@ tfawrite(Chan *c, void *va, long n, vlong offset)
 		}else
 			pin = "";
 		USED(cred);
-		osenter();		/* blocks on touch (+PIN) — release the VM lock */
 		r = fido2bridge_derive(pin, buf, sp, secret, sizeof secret, errbuf, sizeof errbuf);	/* touch (+PIN if UV) */
-		osleave();
 		if(r < 0)
 			error(errbuf[0] ? errbuf : "derive failed");
 		lock(&tfalk);

@@ -89,6 +89,32 @@ fromhex(s: string): array of byte
 	return a;
 }
 
+contains(s, sub: string): int
+{
+	n := len sub;
+	if(n == 0)
+		return 1;
+	for(i := 0; i + n <= len s; i++)
+		if(s[i:i+n] == sub)
+			return 1;
+	return 0;
+}
+
+# ispinerr — the security key rejected the PIN itself (wrong PIN) or the PIN/UV
+# factor is locked out. On any of these the SAME PIN will fail on every other
+# key slot too, and each attempt decrements the key's hardware retry counter —
+# so a 2-slot account would burn two of the eight lifetime PIN tries per login.
+# The caller must stop iterating slots the instant it sees one. Deliberately
+# excludes NO_CREDENTIALS / INVALID_CREDENTIAL and PIN_REQUIRED (blank PIN on a
+# UV slot): those mean "this slot isn't for the present key / this PIN mode",
+# where trying the next slot is correct and costs no retry.
+ispinerr(e: string): int
+{
+	return contains(e, "PIN_INVALID") || contains(e, "PIN_AUTH_INVALID") ||
+		contains(e, "PIN_BLOCKED") || contains(e, "PIN_AUTH_BLOCKED") ||
+		contains(e, "UV_BLOCKED");
+}
+
 slotdir(user: string): string
 {
 	return Slotbase + "/" + user + "/2fa";
@@ -188,6 +214,11 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		(R, e) := twofa->derive(s.cred, salt, pin);	# touch (+PIN if UV)
 		if(e != nil){
 			lastderr = e;
+			# A rejected/blocked PIN fails identically on every other slot
+			# and each retry costs one of the key's 8 lifetime PIN attempts.
+			# Stop now rather than cascade the same bad PIN across slots.
+			if(ispinerr(e))
+				break;
 			continue;
 		}
 		if(R == nil){

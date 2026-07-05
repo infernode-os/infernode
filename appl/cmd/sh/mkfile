@@ -12,6 +12,7 @@ TARG=sh.dis\
 	string.dis\
 	echo.dis\
 	csv.dis\
+	tk.dis\
 
 INS=	$ROOT/dis/sh.dis\
 	$ROOT/dis/sh/arg.dis\
@@ -21,6 +22,7 @@ INS=	$ROOT/dis/sh.dis\
 	$ROOT/dis/sh/string.dis\
 	$ROOT/dis/sh/echo.dis\
 	$ROOT/dis/sh/csv.dis\
+	$ROOT/dis/sh/tk.dis\
 
 SYSMODULES=\
 	bufio.m\
@@ -33,6 +35,7 @@ SYSMODULES=\
 	string.m\
 	sys.m\
 	tk.m\
+	tkclient.m\
 
 DISBIN=$ROOT/dis/sh
 

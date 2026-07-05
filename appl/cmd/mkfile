@@ -149,6 +149,7 @@ TARG=\
 	rm.dis\
 	rng.dis\
 	runas.dis\
+	scap.dis\
 	sed.dis\
 	sendmail.dis\
 	seq.dis\

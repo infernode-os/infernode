@@ -115,7 +115,7 @@ isint(s: string): int
 
 testLoadDisplays(t: ref T)
 {
-	for(l := "cpu-gauge" :: "mem-gauge" :: "proc-list" :: nil; l != nil; l = tl l) {
+	for(l := "cpu-gauge" :: "mem-gauge" :: "net-gauge" :: "proc-list" :: nil; l != nil; l = tl l) {
 		m := load MatrixDisplay "/dis/matrix/" + hd l + ".dis";
 		t.assert(m != nil, hd l + " loads as MatrixDisplay");
 	}

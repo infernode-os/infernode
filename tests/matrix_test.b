@@ -276,8 +276,8 @@ testParseSysmon(t: ref T)
 		t.fatal("nil composition");
 	t.assert(hasprefix(c.name, "sysmon"), "name from first comment: " + c.name);
 	t.assert(c.layout != nil, "has a layout");
-	t.asserteq(countleaves(c.layout), 3, "hsplit + left vsplit = 3 leaves");
-	t.asserteq(nassigns(c), 3, "three display assignments");
+	t.asserteq(countleaves(c.layout), 4, "hsplit + two vsplits = 4 leaves");
+	t.asserteq(nassigns(c), 4, "four display assignments");
 	t.asserteq(nservices(c), 1, "one service");
 
 	se := servicebyname(c, "sysmon-svc");
@@ -289,11 +289,16 @@ testParseSysmon(t: ref T)
 	if(lt == nil)
 		t.fatal("left/top leaf missing");
 	t.assertseq(lt.modname, "cpu-gauge", "left/top module");
+	t.assertseq(lt.mount, "/tmp/matrix/sysmon-svc", "displays read the service outdir");
 
-	r := leafbyname(c.layout, "right");
+	r := leafbyname(c.layout, "right/top");
 	if(r == nil)
-		t.fatal("right leaf missing");
-	t.assertseq(r.modname, "proc-list", "right module");
+		t.fatal("right/top leaf missing");
+	t.assertseq(r.modname, "proc-list", "right/top module");
+	rb := leafbyname(c.layout, "right/bottom");
+	if(rb == nil)
+		t.fatal("right/bottom leaf missing");
+	t.assertseq(rb.modname, "net-gauge", "right/bottom module");
 }
 
 testParsePerfDashboard(t: ref T)

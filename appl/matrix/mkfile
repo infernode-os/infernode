@@ -11,6 +11,7 @@ TARG=\
 	sysmon-svc.dis\
 	cpu-gauge.dis\
 	mem-gauge.dis\
+	net-gauge.dis\
 	proc-list.dis\
 
 SYSMODULES=\

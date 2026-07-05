@@ -5,7 +5,8 @@ implement ProcList;
 #
 # Reads <mount>/proc/list (one /prog/<pid>/status snapshot per
 # row, fields: pid grpid user time state size_K module — fixed-
-# width as emitted by devprog.c).
+# width as emitted by devprog.c) and joins <mount>/proc/cpurates
+# ("pid pct" per row, written by sysmon-svc) for a CPU%% column.
 #
 # Interactive: click a row to select.  Pressing the 'k' key with
 # a row selected writes "kill" to /prog/<pid>/ctl — the wm/task
@@ -44,6 +45,7 @@ Row: adt {
 	state:	string;
 	size:	string;
 	mod:	string;
+	cpu:	string;	# percent from proc/cpurates, "" if unknown
 };
 
 display_g:	ref Display;
@@ -136,8 +138,9 @@ draw(dst: ref Image)
 	cols := layout();
 	dst.text(Point(cols[0], hdry + 2), dimcol, (0, 0), font_g, "PID");
 	dst.text(Point(cols[1], hdry + 2), dimcol, (0, 0), font_g, "STATE");
-	dst.text(Point(cols[2], hdry + 2), dimcol, (0, 0), font_g, "MEM");
-	dst.text(Point(cols[3], hdry + 2), dimcol, (0, 0), font_g, "MOD");
+	dst.text(Point(cols[2], hdry + 2), dimcol, (0, 0), font_g, "CPU%");
+	dst.text(Point(cols[3], hdry + 2), dimcol, (0, 0), font_g, "MEM");
+	dst.text(Point(cols[4], hdry + 2), dimcol, (0, 0), font_g, "MOD");
 
 	# Body.
 	bodyy := hdry + COLH;
@@ -164,19 +167,21 @@ draw(dst: ref Image)
 				selcol, nil, (0, 0));
 		dst.text(Point(cols[0], y), textcol, (0, 0), font_g, row.pid);
 		dst.text(Point(cols[1], y), textcol, (0, 0), font_g, row.state);
-		dst.text(Point(cols[2], y), textcol, (0, 0), font_g, row.size);
-		dst.text(Point(cols[3], y), dimcol,  (0, 0), font_g, row.mod);
+		dst.text(Point(cols[2], y), textcol, (0, 0), font_g, row.cpu);
+		dst.text(Point(cols[3], y), textcol, (0, 0), font_g, row.size);
+		dst.text(Point(cols[4], y), dimcol,  (0, 0), font_g, row.mod);
 	}
 }
 
-# Column x-positions: PID, STATE, MEM, MODULE.
+# Column x-positions: PID, STATE, CPU%, MEM, MODULE.
 layout(): array of int
 {
-	cols := array[4] of int;
+	cols := array[5] of int;
 	cols[0] = r_g.min.x + PAD;
-	cols[1] = r_g.min.x + r_g.dx() * 18 / 100;
-	cols[2] = r_g.min.x + r_g.dx() * 40 / 100;
-	cols[3] = r_g.min.x + r_g.dx() * 58 / 100;
+	cols[1] = r_g.min.x + r_g.dx() * 16 / 100;
+	cols[2] = r_g.min.x + r_g.dx() * 36 / 100;
+	cols[3] = r_g.min.x + r_g.dx() * 48 / 100;
+	cols[4] = r_g.min.x + r_g.dx() * 62 / 100;
 	return cols;
 }
 
@@ -269,6 +274,29 @@ parselist()
 		}
 	}
 	rows = tmp[0:k];
+
+	# Join per-pid CPU rates.
+	rates := readfile(mountpath + "/proc/cpurates");
+	if(rates == "")
+		return;
+	start = 0;
+	for(i = 0; i <= len rates; i++) {
+		if(i == len rates || rates[i] == '\n') {
+			if(i > start) {
+				(nt, toks) := sys->tokenize(rates[start:i], " \t");
+				if(nt >= 2) {
+					pid := hd toks;
+					pct := hd tl toks;
+					for(j := 0; j < len rows; j++)
+						if(rows[j].pid == pid) {
+							rows[j].cpu = pct;
+							break;
+						}
+				}
+			}
+			start = i + 1;
+		}
+	}
 }
 
 parsestatus(line: string): Row

@@ -554,6 +554,34 @@ testWatchErrors(t: ref T)
 # entries.  Real instances are fabricated by loading shipped
 # modules; identity is asserted through the nil'd-in-old contract.
 
+# App leaves: "region app <dis-path> [args...]" reserves the module
+# name "app"; the path lands in mount and the tail in appargs.
+testAppLeafGrammar(t: ref T)
+{
+	(c, err) := matrixlib->parsecomposition(
+		"layout hsplit 1 1\nleft app /dis/wm/clock.dis -f fmt\nright cpu-gauge /m\n");
+	t.assertnil(err, "app leaf parses");
+	if(c == nil)
+		t.fatal("nil composition");
+	l := leafbyname(c.layout, "left");
+	if(l == nil)
+		t.fatal("left leaf missing");
+	t.assertseq(l.modname, "app", "app kind recorded");
+	t.assertseq(l.mount, "/dis/wm/clock.dis", "dis path in mount");
+	t.assertseq(l.appargs, "-f fmt", "arguments captured");
+	r := leafbyname(c.layout, "right");
+	t.assertseq(r.appargs, "", "non-app leaf has no args");
+
+	(c2, e2) := matrixlib->parsecomposition(readfile("/lib/matrix/compositions/app-demo"));
+	t.assertnil(e2, "shipped app-demo parses");
+	if(c2 == nil)
+		t.fatal("nil composition");
+	rr := leafbyname(c2.layout, "right/right");
+	if(rr == nil)
+		t.fatal("right/right missing");
+	t.assertseq(rr.modname, "app", "app-demo hosts an app leaf");
+}
+
 # The Dis VM's load typecheck is the discriminator between the two
 # display kinds: a Tk-hosted module must load as MatrixTkDisplay and
 # refuse to load as MatrixDisplay, and vice versa.
@@ -1086,6 +1114,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WatchGrammar", testWatchGrammar);
 	run("WatchTerminator", testWatchTerminator);
 	run("WatchErrors", testWatchErrors);
+	run("AppLeafGrammar", testAppLeafGrammar);
 	run("TkDisplayTypecheck", testTkDisplayTypecheck);
 	run("Transplant", testTransplant);
 	run("Isolation", testIsolation);

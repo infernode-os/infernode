@@ -1,0 +1,16 @@
+# app-demo — all three region kinds in one window
+#
+# left: cpu-gauge blits pixels into the composited frame.
+# right/left: tk-notes hosts real Tk widgets in a canvas window item.
+# right/right: an unmodified /dis/wm program (the clock) runs against
+# matrix's built-in mini window manager — any wm app is a drop-in
+# region, launched fresh on load and killed on unload/reload.
+
+layout hsplit 34 66
+right hsplit 50 50
+
+left        cpu-gauge /tmp/matrix/sysmon-svc
+right/left  tk-notes  /tmp/matrix/tk-notes
+right/right app       /dis/wm/clock.dis
+
+service sysmon-svc /

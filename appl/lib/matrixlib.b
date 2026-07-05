@@ -122,8 +122,8 @@ parsecomposition(text: string): (ref Composition, string)
 				return (nil, "layout: bad ratio2");
 
 			(n1, n2) := childnames("", orient);
-			leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
-			leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
+			leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", "", 0, Rect((0,0),(0,0)));
+			leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, nil, "", "", "", 0, Rect((0,0),(0,0)));
 			c.layout = ref LayoutNode.Split(
 				orient, r1, r2, leaf1, leaf2,
 				Rect((0,0),(0,0)));
@@ -168,8 +168,8 @@ parsecomposition(text: string): (ref Composition, string)
 							return (nil, first + ": max layout depth exceeded");
 
 						(n1, n2) := childnames(first, orient);
-						leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
-						leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, nil, "", "", Rect((0,0),(0,0)));
+						leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", "", 0, Rect((0,0),(0,0)));
+						leaf2 := ref LayoutNode.Leaf(n2, "", "", nil, nil, "", "", "", 0, Rect((0,0),(0,0)));
 						split := ref LayoutNode.Split(
 							orient, r1, r2, leaf1, leaf2,
 							Rect((0,0),(0,0)));
@@ -193,11 +193,20 @@ parsecomposition(text: string): (ref Composition, string)
 			}
 		}
 
-		# Module assignment: "region modname mount"
+		# Module assignment: "region modname mount", or app
+		# hosting: "region app /dis/path.dis [args...]"
 		if(len rest >= 2) {
 			modname := hd rest;
 			mount := hd tl rest;
-			ma := ref ModuleAssign(first, modname, mount);
+			args := "";
+			if(modname == "app") {
+				for(atl := tl tl rest; atl != nil; atl = tl atl) {
+					if(args != "")
+						args += " ";
+					args += hd atl;
+				}
+			}
+			ma := ref ModuleAssign(first, modname, mount, args);
 			c.assigns = ma :: c.assigns;
 			continue;
 		}
@@ -222,7 +231,7 @@ parsecomposition(text: string): (ref Composition, string)
 	for(al := c.assigns; al != nil; al = tl al) {
 		a := hd al;
 		if(c.layout != nil) {
-			if(!assignleaf(c.layout, a.region, a.modname, a.mount))
+			if(!assignleaf(c.layout, a.region, a.modname, a.mount, a.args))
 				return (nil, a.region + ": region not found in layout");
 		}
 	}
@@ -392,6 +401,10 @@ transplantleaves(oldroot, node: ref LayoutNode)
 	Leaf =>
 		if(n.modname == "")
 			return;
+		# Hosted apps are never transplanted: their process state
+		# cannot be adopted, so a reload kills and respawns them.
+		if(n.modname == "app")
+			return;
 		o := findleaf(oldroot, n.name);
 		if(o == nil || o.modname != n.modname || o.mount != n.mount)
 			return;
@@ -497,18 +510,19 @@ replaceleaf(node: ref LayoutNode, name: string, replacement: ref LayoutNode): in
 	return 0;
 }
 
-# Assign a module to a named leaf
-assignleaf(node: ref LayoutNode, name, modname, mount: string): int
+# Assign a module (or hosted app) to a named leaf
+assignleaf(node: ref LayoutNode, name, modname, mount, args: string): int
 {
 	pick n := node {
 	Split =>
-		if(assignleaf(n.child1, name, modname, mount))
+		if(assignleaf(n.child1, name, modname, mount, args))
 			return 1;
-		return assignleaf(n.child2, name, modname, mount);
+		return assignleaf(n.child2, name, modname, mount, args);
 	Leaf =>
 		if(n.name == name) {
 			n.modname = modname;
 			n.mount = mount;
+			n.appargs = args;
 			return 1;
 		}
 	}

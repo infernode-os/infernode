@@ -24,7 +24,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Font, Image, Point, Rect, Pointer: import draw;
+	Display, Font, Image, Point, Rect, Pointer, Screen: import draw;
 
 include "arg.m";
 
@@ -43,6 +43,12 @@ include "tk.m";
 
 include "tkclient.m";
 	tkclient: Tkclient;
+
+include "sh.m";
+
+include "wmsrv.m";
+	appwm: Wmsrv;
+	Client: import appwm;
 
 include "lucitheme.m";
 
@@ -148,6 +154,20 @@ focusmod: MatrixDisplay;	# module with keyboard focus
 tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
 tkregionseq: int;	# widget-path allocator for hosted regions (.r<seq>)
 mtxitem: string;	# canvas item id of the composited-frame image
+
+# App hosting: matrix acts as a mini window manager (the lucifer
+# presentation-zone pattern) so unmodified /dis programs run inside
+# regions.  One wmsrv instance serves /chan/wmctl.matrix; each app is
+# launched in a FORKNS'd proc that binds it over /chan/wmctl, so
+# wmclient/tkclient connect to us instead of the outer wm.  Windows
+# are carved from a Screen allocated over matrix's own window image.
+appbase: ref Image;	# offscreen base the app screen lives on
+appscreen: ref Screen;
+appwmchan: chan of (string, chan of (string, ref Draw->Wmcontext));
+applk: chan of int;	# guards apppendq/apprecs
+apppendq: list of ref LayoutNode.Leaf;	# launches awaiting their join
+apprecs: list of (ref LayoutNode.Leaf, ref Wmsrv->Client);
+appkbd: ref Wmsrv->Client;	# app with keyboard focus (pointer-follows)
 
 # Channels
 updatech: chan of int;
@@ -622,7 +642,9 @@ collectleaves(node: ref LayoutNode, acc: list of (string, string, string, int)):
 		acc = collectleaves(n.child1, acc);
 		acc = collectleaves(n.child2, acc);
 	Leaf =>
-		if(n.modname != "")
+		if(n.modname == "app")
+			acc = (appname(n), "app", n.mount, n.apppid > 0) :: acc;
+		else if(n.modname != "")
 			acc = (n.modname, "display", n.mount, n.mod != nil) :: acc;
 	}
 	return acc;
@@ -1090,6 +1112,16 @@ initgui(ctxt: ref Draw->Context)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
+	# The wm may have reshaped the window during onscreen (a
+	# presentation-zone host hands out its content rect, not our
+	# requested 800x600).  Adopt the actual size now, before the
+	# first layout pass — module rects and hosted-app windows are
+	# computed from winr, and a stale frame puts them off-window.
+	aw0 := int tk->cmd(top, ". cget -actwidth");
+	ah0 := int tk->cmd(top, ". cget -actheight");
+	if(aw0 > 0 && ah0 > 0 && (aw0 != winr.dx() || ah0 != winr.dy()))
+		allocframe(aw0, ah0);
+
 	updatech = chan of int;
 	themech = chan[1] of int;
 
@@ -1117,6 +1149,11 @@ allocframe(wd, ht: int)
 	if(ht < 1) ht = 1;
 	winr = Rect((0,0), (wd, ht));
 	mtximg = display_g.newimage(winr, display_g.image.chans, 0, Draw->Nofill);
+	# Hosted-app windows live in frame coordinates; a new frame
+	# needs a new base (the resize walker then pushes reshapes so
+	# each app re-acquires a window on it).
+	if(appwm != nil)
+		rebuildappscreen();
 }
 
 loadcolors()
@@ -1445,6 +1482,14 @@ drawlayout(dst: ref Image, node: ref LayoutNode)
 			n.mod->draw(dst);
 		} else if(n.tkmod != nil) {
 			;	# a live Tk frame overlays this rect
+		} else if(n.modname == "app" && n.apppid > 0) {
+			# Blit the app's offscreen window into the frame.
+			c := clientofleaf(n);
+			if(c != nil) {
+				aimg := c.image("app");
+				if(aimg != nil)
+					dst.draw(n.r, aimg, nil, aimg.r.min);
+			}
 		} else if(n.modname != "") {
 			# Module not loaded — show placeholder
 			label := n.modname + " @ " + n.mount;
@@ -1484,6 +1529,10 @@ loadleafmodules(node: ref LayoutNode)
 	Leaf =>
 		if(n.modname == "" || n.mod != nil || n.tkmod != nil)
 			return;
+		if(n.modname == "app") {
+			loadappleaf(n);
+			return;
+		}
 		path := "/dis/matrix/" + n.modname + ".dis";
 		mod := load MatrixDisplay path;
 		if(mod == nil) {
@@ -1539,6 +1588,302 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	n.tkitem = itm;
 	tkm->resize(n.r);
 	tk->cmd(top, "update");
+}
+
+# ── App hosting ─────────────────────────────────────────────
+
+# Region name flattened for the control fs (9P names cannot hold /).
+appname(n: ref LayoutNode.Leaf): string
+{
+	nm := "app-";
+	for(i := 0; i < len n.name; i++)
+		if(n.name[i] == '/')
+			nm[len nm] = '-';
+		else
+			nm[len nm] = n.name[i];
+	return nm;
+}
+
+ensureappwm(): string
+{
+	if(appwm != nil)
+		return nil;
+	if(top == nil)
+		return "no window";
+	m := load Wmsrv Wmsrv->PATH;
+	if(m == nil)
+		return sys->sprint("cannot load wmsrv: %r");
+	(wmchan, join, req) := m->init("wmctl.matrix");
+	if(join == nil)
+		return "wmsrv init failed";
+	appwmchan = wmchan;
+	# App windows live on a Screen over an OFFSCREEN base image in
+	# frame coordinates, and drawlayout blits each app's window into
+	# the composite every frame.  Hosting them directly over
+	# top.image does not work: Tk's full-frame flushes and the
+	# memlayer composition fight over the same pixels, and whichever
+	# painted last wins (the app went black).  Offscreen hosting
+	# also makes every rect and pointer coordinate identical to the
+	# frame's own space.
+	err := rebuildappscreen();
+	if(err != nil)
+		return err;
+	appwm = m;
+	applk = chan[1] of int;
+	applk <-= 1;
+	spawn appwmloop(join, req);
+	return nil;
+}
+
+rebuildappscreen(): string
+{
+	base := display_g.newimage(winr, display_g.image.chans, 0, Draw->Black);
+	if(base == nil)
+		return sys->sprint("cannot allocate app base: %r");
+	scr := Screen.allocate(base, bgcolor, 0);
+	if(scr == nil)
+		return sys->sprint("cannot allocate app screen: %r");
+	appbase = base;
+	appscreen = scr;
+	return nil;
+}
+
+loadappleaf(n: ref LayoutNode.Leaf)
+{
+	if(!guimode) {
+		sys->fprint(stderr, "matrix: %s: app regions need GUI mode\n", n.mount);
+		return;
+	}
+	# Never hand an app a collapsed rect (Screen.newwindow on a
+	# degenerate rect has bitten the presentation zone before).
+	if(n.r.dx() < 32 || n.r.dy() < 32) {
+		sys->fprint(stderr, "matrix: %s: region too small for an app\n", n.mount);
+		return;
+	}
+	err := ensureappwm();
+	if(err != nil) {
+		sys->fprint(stderr, "matrix: app hosting unavailable: %s\n", err);
+		return;
+	}
+	<-applk;
+	apppendq = append2q(apppendq, n);
+	applk <-= 1;
+	spawn runapp(n);
+}
+
+append2q(q: list of ref LayoutNode.Leaf, n: ref LayoutNode.Leaf): list of ref LayoutNode.Leaf
+{
+	if(q == nil)
+		return n :: nil;
+	return hd q :: append2q(tl q, n);
+}
+
+# The app's proc: fresh pgrp (so unload can killgrp it), private
+# namespace with our wm endpoint bound over the default name, then
+# the program runs as if launched by any window manager.  Apps are
+# trusted in-process peers — no namespace restriction (doc states
+# the posture).
+runapp(n: ref LayoutNode.Leaf)
+{
+	n.apppid = sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
+	# Belt and braces: the app receives our wm channel directly in
+	# its Context, and our endpoint is also bound over the default
+	# name for anything that reconnects via /chan/wmctl.
+	sys->bind("/chan/wmctl.matrix", "/chan/wmctl", Sys->MREPL);
+	mod := load Command n.mount;
+	if(mod == nil) {
+		sys->fprint(stderr, "matrix: cannot load app %s: %r\n", n.mount);
+		n.apppid = 0;
+		return;
+	}
+	argv := n.mount :: nil;
+	if(n.appargs != "") {
+		(nil, atoks) := sys->tokenize(n.appargs, " \t");
+		argv = n.mount :: atoks;
+	}
+	actxt := ref Draw->Context(display_g, nil, appwmchan);
+	{
+		mod->init(actxt, argv);
+	} exception {
+	* =>
+		sys->fprint(stderr, "matrix: app %s raised\n", n.mount);
+	}
+	n.apppid = 0;
+}
+
+leafofclient(c: ref Wmsrv->Client): ref LayoutNode.Leaf
+{
+	<-applk;
+	n: ref LayoutNode.Leaf;
+	for(al := apprecs; al != nil; al = tl al) {
+		(ln, lc) := hd al;
+		if(lc == c) {
+			n = ln;
+			break;
+		}
+	}
+	applk <-= 1;
+	return n;
+}
+
+dropapprec(c: ref Wmsrv->Client)
+{
+	<-applk;
+	keep: list of (ref LayoutNode.Leaf, ref Wmsrv->Client);
+	for(al := apprecs; al != nil; al = tl al) {
+		(nil, lc) := hd al;
+		if(lc != c)
+			keep = hd al :: keep;
+	}
+	apprecs = keep;
+	applk <-= 1;
+	if(appkbd == c)
+		appkbd = nil;
+}
+
+# App windows are allocated in frame coordinates directly.
+appabsrect(r: Rect): Rect
+{
+	return r;
+}
+
+# "!reshape <tag> <reqid> <rect>": tag "." is the app's main window;
+# any other tag is a secondary window (a posted Tk menu).
+reshapetag(s: string): string
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt >= 2)
+		return hd tl toks;
+	return ".";
+}
+
+reshaperect(s: string): Rect
+{
+	(nt, toks) := sys->tokenize(s, " ");
+	if(nt < 7)
+		return Rect((0,0),(0,0));
+	toks = tl tl tl toks;
+	minx := int hd toks; toks = tl toks;
+	miny := int hd toks; toks = tl toks;
+	maxx := int hd toks; toks = tl toks;
+	maxy := int hd toks;
+	return Rect((minx, miny), (maxx, maxy));
+}
+
+appwmloop(join: chan of (ref Wmsrv->Client, chan of string),
+	  req: chan of (ref Wmsrv->Client, array of byte, Sys->Rwrite))
+{
+	for(;;) alt {
+	(c, rc) := <-join =>
+		# Launches are serialised through apppendq; joins arrive in
+		# launch order.
+		<-applk;
+		if(apppendq != nil) {
+			apprecs = (hd apppendq, c) :: apprecs;
+			apppendq = tl apppendq;
+		}
+		applk <-= 1;
+		rc <-= nil;
+
+	(c, data, rc) := <-req =>
+		if(rc == nil) {
+			# client disconnected (app exited)
+			dropapprec(c);
+			continue;
+		}
+		s := string data;
+		nlen := len data;
+		err: string;
+		if(len s >= 8 && s[0:8] == "!reshape" ||
+		   len s >= 9 && s[0:9] == "!onscreen") {
+			n := leafofclient(c);
+			if(n == nil) {
+				err = "unknown client";
+				nlen = -1;
+			} else {
+				tag := reshapetag(s);
+				want := appabsrect(n.r);
+				cur := c.image("app");
+				if(cur == nil) {
+					img := appscreen.newwindow(want, Draw->Refbackup, Draw->Nofill);
+					if(img == nil) {
+						err = "window creation failed";
+						nlen = -1;
+					} else {
+						img.draw(img.r, bgcolor, nil, (0, 0));
+						c.setimage("app", img);
+						c.top();
+					}
+				} else if(tag != ".") {
+					# Secondary window: a Tk menu wants its own
+					# window at its requested rect.
+					mr := reshaperect(s);
+					mimg := appscreen.newwindow(mr, Draw->Refbackup, Draw->Nofill);
+					if(mimg == nil) {
+						err = "window creation failed";
+						nlen = -1;
+					} else {
+						c.setimage(tag, mimg);
+						c.top();
+					}
+				} else if(!cur.r.eq(want)) {
+					# Region moved/resized under the app: give it a
+					# window at the new rect.
+					cur.draw(cur.r, bgcolor, nil, (0, 0));
+					img := appscreen.newwindow(want, Draw->Refbackup, Draw->Nofill);
+					if(img == nil) {
+						err = "window creation failed";
+						nlen = -1;
+					} else {
+						img.draw(img.r, bgcolor, nil, (0, 0));
+						c.setimage("app", img);
+						c.top();
+					}
+				} else
+					c.setimage("app", cur);
+			}
+		}
+		if(len s >= 7 && s[0:7] == "delete ") {
+			(dn, dtoks) := sys->tokenize(s, " ");
+			if(dn >= 2 && hd tl dtoks != "." && hd tl dtoks != "app")
+				c.setimage(hd tl dtoks, nil);
+		}
+		if(s == "embedded-exit")
+			dropapprec(c);
+		alt {
+		rc <-= (nlen, err) =>
+			;
+		* =>
+			;
+		}
+	}
+}
+
+killapp(n: ref LayoutNode.Leaf)
+{
+	if(n.apppid > 0) {
+		fd := sys->open("/prog/" + string n.apppid + "/ctl", Sys->OWRITE);
+		if(fd != nil) {
+			b := array of byte "killgrp";
+			sys->write(fd, b, len b);
+		}
+		n.apppid = 0;
+	}
+	# Drop the client record and its windows.
+	<-applk;
+	keep: list of (ref LayoutNode.Leaf, ref Wmsrv->Client);
+	for(al := apprecs; al != nil; al = tl al) {
+		(ln, lc) := hd al;
+		if(ln != n)
+			keep = hd al :: keep;
+		else {
+			if(appkbd == lc)
+				appkbd = nil;
+			lc.remove();
+		}
+	}
+	apprecs = keep;
+	applk <-= 1;
 }
 
 loadservicemodules()
@@ -1634,6 +1979,23 @@ resizedisplaymodules(node: ref LayoutNode)
 				n.tkitem, n.r.dx(), n.r.dy()));
 			n.tkmod->resize(n.r);
 		}
+		if(n.modname == "app") {
+			# Push a name-"." reshape so the app re-initiates
+			# through the normal client path; the wm loop hands it
+			# a window at the leaf's new rect (a pushed reshape
+			# with any other name is rejected client-side).
+			c := clientofleaf(n);
+			if(c != nil) {
+				nr := appabsrect(n.r);
+				alt {
+				c.ctl <-= sys->sprint("!reshape . -1 %d %d %d %d",
+					nr.min.x, nr.min.y, nr.max.x, nr.max.y) =>
+					;
+				* =>
+					;
+				}
+			}
+		}
 	}
 }
 
@@ -1676,6 +2038,8 @@ shutdowndisplaymodules(node: ref LayoutNode)
 			n.tkwin = "";
 			n.tkitem = "";
 		}
+		if(n.modname == "app")
+			killapp(n);
 	}
 }
 
@@ -1828,11 +2192,45 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 			# in a hosted region.
 			focusmod = nil;
 			tkfocus = 1;
+			appkbd = nil;
 			tk->pointer(top, *p);
 			return 1;
 		}
+		if(n.modname == "app" && n.r.contains(p.xy)) {
+			c := clientofleaf(n);
+			if(c != nil) {
+				focusmod = nil;
+				tkfocus = 0;
+				appkbd = c;
+				np := ref Pointer(p.buttons, p.xy, p.msec);
+				alt {
+				c.ptr <-= np =>
+					;
+				* =>
+					;	# app not draining; drop rather than wedge
+				}
+				return 1;
+			}
+		}
 	}
 	return 0;
+}
+
+clientofleaf(n: ref LayoutNode.Leaf): ref Wmsrv->Client
+{
+	if(applk == nil)
+		return nil;
+	<-applk;
+	c: ref Wmsrv->Client;
+	for(al := apprecs; al != nil; al = tl al) {
+		(ln, lc) := hd al;
+		if(ln == n) {
+			c = lc;
+			break;
+		}
+	}
+	applk <-= 1;
+	return c;
 }
 
 handlekey(k: int)
@@ -1842,6 +2240,15 @@ handlekey(k: int)
 	if(tkfocus) {
 		tk->keyboard(top, k);
 		tk->cmd(top, "update");
+		return;
+	}
+	if(appkbd != nil) {
+		alt {
+		appkbd.kbd <-= k =>
+			;
+		* =>
+			;
+		}
 		return;
 	}
 	if(focusmod != nil)

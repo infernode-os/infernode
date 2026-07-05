@@ -336,6 +336,40 @@ reference module (entry + button + listbox persisting to
 `<mount>/notes`); `lib/matrix/compositions/tk-demo` composes it beside
 a pixel gauge in one window.
 
+### App Regions
+
+The fourth region kind hosts an unmodified `/dis` program:
+
+```
+<region> app <dis-path> [args...]
+```
+
+`app` is a reserved module name. Matrix runs a built-in mini window
+manager (a private wmsrv instance): each app launches in its own
+process group with a forked namespace, receives a `Draw->Context`
+carrying matrix's wm channel (the endpoint is also bound over
+`/chan/wmctl` for anything that reconnects by name), and gets a
+window at its region's rect. The windows live on a Screen over an
+offscreen base image in frame coordinates, and the compositor blits
+each app's window into the frame every redraw — hosting them over
+the live window does not work, because Tk's full-frame flushes and
+the memlayer composition fight over the same pixels. Reshape
+requests are answered with the region rect; a moved or resized
+region pushes a name-`.` reshape so the app re-acquires a window at
+the new geometry (a pushed reshape under any other name is rejected
+client-side). Pointer and keyboard events route to the app whose
+region contains the pointer.
+
+Lifecycle: apps are never transplanted across reloads — a reload (or
+unload) kills the app's process group and, if the region survives,
+launches it fresh. Regions smaller than 32x32 refuse to host an app
+(degenerate window rects have bitten window managers here before).
+Trust posture: apps are in-process peers of display modules —
+trusted, no namespace confinement; the composition author chooses
+what runs. `lib/matrix/compositions/app-demo` composes all three
+region kinds — a pixel gauge, Tk widgets, and the clock — in one
+window.
+
 
 ## Composition File Format
 

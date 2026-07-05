@@ -56,22 +56,30 @@ LayoutNode: adt
 		r: Draw->Rect;
 	Leaf =>
 		name: string;
-		modname: string;
-		mount: string;
+		modname: string;	# module name; "app" is reserved (see below)
+		mount: string;		# 9P mount, or the dis path for app leaves
 		mod: MatrixDisplay;
 		tkmod: MatrixTkDisplay;	# Tk-hosted alternative to mod
 		tkwin: string;		# frame widget path (".r<seq>")
 		tkitem: string;		# canvas window item id
+		appargs: string;	# argument string for app leaves
+		apppid: int;		# app process-group leader (0 = not running)
 		r: Draw->Rect;
 	}
 };
 
-# "region modname mount" line, before it is applied to the layout.
+# The reserved module name "app" hosts an unmodified /dis program in
+# the region: "left/top app /dis/wm/clock.dis [args...]".  The leaf's
+# mount holds the dis path and appargs the remaining tokens.
+
+# "region modname mount [args...]" line, before it is applied to the
+# layout.  args is only populated for app leaves.
 ModuleAssign: adt
 {
 	region: string;
 	modname: string;
 	mount: string;
+	args: string;
 };
 
 # "service name mount" line.  outdir/mod/pid are runtime state.

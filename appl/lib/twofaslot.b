@@ -89,6 +89,32 @@ fromhex(s: string): array of byte
 	return a;
 }
 
+contains(s, sub: string): int
+{
+	n := len sub;
+	if(n == 0)
+		return 1;
+	for(i := 0; i + n <= len s; i++)
+		if(s[i:i+n] == sub)
+			return 1;
+	return 0;
+}
+
+# ispinerr — the security key rejected the PIN itself (wrong PIN) or the PIN/UV
+# factor is locked out. On any of these the SAME PIN will fail on every other
+# key slot too, and each attempt decrements the key's hardware retry counter —
+# so a 2-slot account would burn two of the eight lifetime PIN tries per login.
+# The caller must stop iterating slots the instant it sees one. Deliberately
+# excludes NO_CREDENTIALS / INVALID_CREDENTIAL and PIN_REQUIRED (blank PIN on a
+# UV slot): those mean "this slot isn't for the present key / this PIN mode",
+# where trying the next slot is correct and costs no retry.
+ispinerr(e: string): int
+{
+	return contains(e, "PIN_INVALID") || contains(e, "PIN_AUTH_INVALID") ||
+		contains(e, "PIN_BLOCKED") || contains(e, "PIN_AUTH_BLOCKED") ||
+		contains(e, "UV_BLOCKED");
+}
+
 slotdir(user: string): string
 {
 	return Slotbase + "/" + user + "/2fa";
@@ -161,33 +187,106 @@ is2fa(user: string): int
 	return listslots(slotdir(user)) != nil;
 }
 
+# The credential id of the key slot that last unlocked this account. It is a
+# plaintext hint (the cred id is already stored in the slot files), used only to
+# try the present key's slot first — see frontload/unlock. Absent on first use.
+lastgoodpath(user: string): string
+{
+	return slotdir(user) + "/.lastgood";
+}
+
+readlastgood(user: string): string
+{
+	fd := sys->open(lastgoodpath(user), Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	s := string buf[0:n];
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == '\r' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
+}
+
+writelastgood(user, cred: string)
+{
+	fd := sys->create(lastgoodpath(user), Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return;			# best-effort hint; a miss just costs one slow login
+	b := array of byte (cred + "\n");
+	sys->write(fd, b, len b);
+}
+
+# Move the key slot whose credential last unlocked to the head of the list, so
+# the common case (same physical key every login) tries exactly one slot and
+# touches once instead of probing every absent backup credential in turn.
+frontload(slots: list of ref Slot, cred: string): list of ref Slot
+{
+	if(cred == nil || cred == "")
+		return slots;
+	match: ref Slot;
+	for(l := slots; l != nil; l = tl l){
+		s := hd l;
+		if(s.kind == "key" && s.cred == cred){
+			match = s;
+			break;
+		}
+	}
+	if(match == nil)
+		return slots;		# last-good key no longer enrolled
+	# Rebuild original order with the match removed, then prepend it.
+	rev: list of ref Slot;
+	for(l = slots; l != nil; l = tl l)
+		if(hd l != match)
+			rev = hd l :: rev;
+	ord: list of ref Slot;
+	for(l = rev; l != nil; l = tl l)
+		ord = hd l :: ord;
+	return match :: ord;
+}
+
 unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array of byte, string)
 {
+	stderr := sys->fildes(2);
+	tl0 := sys->millisec();
 	slots := listslots(slotdir(user));
 	if(slots == nil)
 		return (nil, "account has no 2fa slots");
+	# Try the slot that unlocked last time first — one touch in the common case.
+	slots = frontload(slots, readlastgood(user));
 
 	# Try key slots first (needs a present YubiKey + touch).
 	# Track the last derive failure so the caller can surface it; silently
 	# swallowing here makes a wrong PIN look identical to "no working slot"
 	# and the user always ends up at the recovery prompt with no diagnosis.
 	lastderr := "";
+	si := 0;
 	for(l := slots; l != nil; l = tl l){
 		s := hd l;
 		if(s.kind != "key" || s.wrap == nil)
 			continue;
-		if(!twofa->available()){
-			lastderr = "no security key present";
-			continue;
-		}
+		si++;
+		sid := s.cred;
+		if(len sid > 8)
+			sid = sid[0:8];
 		salt := fromhex(s.salt);
 		if(salt == nil || len salt != 32){
 			lastderr = "bad salt in slot";
 			continue;
 		}
+		# No available() pre-check: it runs a full USB enumeration on top of the
+		# one derive() already does, needlessly delaying the touch prompt. derive()
+		# returns "no FIDO device present" by itself when the key is absent.
 		(R, e) := twofa->derive(s.cred, salt, pin);	# touch (+PIN if UV)
 		if(e != nil){
 			lastderr = e;
+			# A rejected/blocked PIN fails identically on every other slot
+			# and each retry costs one of the key's 8 lifetime PIN attempts.
+			# Stop now rather than cascade the same bad PIN across slots.
+			if(ispinerr(e))
+				break;
 			continue;
 		}
 		if(R == nil){
@@ -196,8 +295,11 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		}
 		kek := secstore->mkkek2fa(rootkey, R);
 		DK := secstore->decrypt3(s.wrap, kek, nil, nil);
-		if(DK != nil)
+		if(DK != nil){
+			writelastgood(user, s.cred);	# try this slot first next time
+			sys->fprint(stderr, "2fa: unlocked (slot %s, tried %d, %dms)\n", sid, si, sys->millisec()-tl0);
 			return (DK, nil);
+		}
 		lastderr = "slot wrap did not decrypt with derived key";
 	}
 

@@ -250,10 +250,7 @@ handleenter(): int
 			enablesecstoresave(savedloginpass);
 			createsecstoresentinel();
 			savedloginpass = "";
-			statusmsg = "Unlocked";
-			redraw();
-			ensurellmsrv();
-			sys->sleep(500);
+			finishunlock();
 			return 1;
 		}
 		savedloginpass = "";
@@ -272,10 +269,7 @@ handleenter(): int
 			enablesecstoresave(savedloginpass);
 			createsecstoresentinel();
 			savedloginpass = "";
-			statusmsg = "Unlocked";
-			redraw();
-			ensurellmsrv();
-			sys->sleep(500);
+			finishunlock();
 			return 1;
 		}
 		if(ferr == "NEEDRECOVERY" || (len ferr >= 13 && ferr[:13] == "NEEDRECOVERY:")) {
@@ -516,10 +510,7 @@ dosetupandunlock(pass: string)
 		return;
 	}
 
-	statusmsg = "Unlocked";
-	redraw();
-	ensurellmsrv();
-	sys->sleep(500);
+	finishunlock();
 }
 
 # Normal boot: unlock secstore and load keys.
@@ -574,10 +565,7 @@ dounlock(): int
 		return 0;
 	}
 
-	statusmsg = "Unlocked";
-	redraw();
-	ensurellmsrv();
-	sys->sleep(500);
+	finishunlock();
 	return 1;
 }
 
@@ -587,6 +575,18 @@ createsecstoresentinel()
 	fd := sys->create("/tmp/.secstore-unlocked", Sys->OWRITE, 8r644);
 	if(fd != nil)
 		sys->fprint(fd, "1");
+}
+
+# Post-unlock status. logon exits right after this and its last drawn frame
+# lingers on screen while lucifer + the veltro tools boot (a few seconds), so
+# leave the user on "Starting desktop..." rather than a frozen "Unlocked".
+finishunlock()
+{
+	statusmsg = "Unlocked";
+	redraw();
+	ensurellmsrv();
+	statusmsg = "Starting desktop...";
+	redraw();
 }
 
 # Start llmsrv if not already running.

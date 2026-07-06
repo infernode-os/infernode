@@ -42,6 +42,8 @@ SYSLIBS= \
 	-lpthread\
 	-framework CoreFoundation\
 	-framework IOKit\
+	-framework CoreAudio\
+	-framework AudioToolbox\
 #	-framework CoreFoundation\
 #	-framework IOKit\
 #	-framework ApplicationServices\

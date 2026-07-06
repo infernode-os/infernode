@@ -1001,6 +1001,59 @@ testConvInput(t: ref T)
 	fd = nil;
 }
 
+testVoiceInputMode(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	modefile := TESTMNT + "/input-mode";
+	t.assertseq(strip(readfile(modefile)), "k", "input-mode defaults to keyboard");
+	t.asserteq(writefile(modefile, "v"), 1, "can switch to voice mode");
+	t.assertseq(strip(readfile(modefile)), "v", "input-mode reads voice mode");
+	t.asserteq(writefile(modefile, "k"), 1, "can switch back to keyboard mode");
+	t.assertseq(strip(readfile(modefile)), "k", "input-mode reads keyboard mode");
+}
+
+testVoiceInput(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	voicefile := actbase() + "/conversation/voiceinput";
+	(ok, nil) := sys->stat(voicefile);
+	t.assert(ok >= 0, "conversation/voiceinput should exist");
+	t.asserteq(writefile(voicefile, "voice injected turn"), len "voice injected turn",
+		"voiceinput write should queue voice-originated text");
+	t.assertseq(strip(readfile(voicefile)), "voice injected turn",
+		"voiceinput read should return queued voice-originated text");
+}
+
+testVoiceInputFIFO(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	voicefile := actbase() + "/conversation/voiceinput";
+	t.asserteq(writefile(voicefile, "first voice turn"), len "first voice turn",
+		"first voice write");
+	t.asserteq(writefile(voicefile, "second voice turn"), len "second voice turn",
+		"second voice write");
+	t.asserteq(writefile(voicefile, "third voice turn"), len "third voice turn",
+		"third voice write");
+	t.assertseq(strip(readfile(voicefile)), "first voice turn",
+		"voiceinput preserves FIFO order for first turn");
+	t.assertseq(strip(readfile(voicefile)), "second voice turn",
+		"voiceinput preserves FIFO order for second turn");
+	t.assertseq(strip(readfile(voicefile)), "third voice turn",
+		"voiceinput preserves FIFO order for third turn");
+}
+
 # ============================================================================
 # testConvClear (INFR-131)
 #
@@ -1777,6 +1830,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ConvInput", testConvInput);
 	run("ConvCtlBadWrite", testConvCtlBadWrite);
 	run("ConvClear", testConvClear);
+	run("VoiceInputMode", testVoiceInputMode);
+	run("VoiceInput", testVoiceInput);
+	run("VoiceInputFIFO", testVoiceInputFIFO);
 
 	# Presentation tests
 	run("PresCreate", testPresentationCreate);

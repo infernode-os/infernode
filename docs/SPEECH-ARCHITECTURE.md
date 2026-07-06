@@ -119,6 +119,59 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 | `apikey`       | bearer token                                     | `api` engine. **Stored in process memory in clear.** |
 | `piperbin` / `pipermodel`     | binary path / `.onnx` voice model | `local` engine. |
 | `whisperbin` / `whispermodel` | binary path / `.bin` GGML model    | `local` engine. |
+| `ttsengine` | `engine` or `piper` | Selects whether `/n/speech/say` uses the configured speech9p TTS engine or delegates to the mounted Piper TTS file. |
+| `listenengine` | `whisper` or `parakeet` | Selects the Phase 1 provider behind `/n/speech/listen`. |
+| `whisperstreambin` | command path / wrapper command | Current Whisper-compatible provider. `speech9p` runs this helper and expects newline-delimited `partial ...` / `final ...` records. |
+| `parakeetmount` / `parakeetlisten` / `pipersay` | mounted provider root, STT stream file, and Piper TTS file | Current mounted provider. The provider is expected to be a separately mounted 9P service, typically exposing `/n/parakeet/listen` as a Parakeet continuous `partial ...` / `final ...` stream and `/n/parakeet/say` as Piper-backed TTS. |
+
+`/n/speech/listen` is the stable Infernode-facing interface.  `listenengine`
+selects how that file is backed:
+
+| Provider | Current backing | Lifecycle |
+|----------|-----------------|-----------|
+| `whisper` | `whisperstreambin` command or wrapper | `speech9p` runs the helper for a listen read. This preserves the existing command-backed helper path and is suitable for simple wrappers. |
+| `parakeet` | mounted file such as `/n/parakeet/listen` | The mounted provider owns the live microphone process. `speech9p` keeps the listen file open across reads so the stream remains continuous. |
+
+Parakeet is not a separate speech architecture.  It is the first Phase 1
+provider that needs the mounted-service shape because its useful mode is a
+long-lived microphone stream, for example:
+
+```
+cd <parakeet-checkout>
+<build-dir>/examples/cli/parakeet-cli transcribe \
+    --model models/parakeet_realtime_eou_120m-v1-f16.gguf \
+    --mic --stream --lines
+```
+
+The mounted service exports that process through a 9P namespace, normally:
+
+| Path | Contract |
+|------|----------|
+| `/n/parakeet/listen` | continuous newline-delimited `partial ...`, `final ...`, status, and TTS records from the live microphone stream |
+| `/n/parakeet/say` | write text to synthesize and play with Piper; read the last TTS status |
+| `/n/parakeet/cancel` | optional write-only cancellation hook; `speech9p` writes `cancel` when `/n/speech/cancel` is written |
+
+Infernode wiring is then only:
+
+```
+echo 'listenengine parakeet' > /n/speech/ctl
+echo 'ttsengine piper' > /n/speech/ctl
+echo 'parakeetmount /n/parakeet' > /n/speech/ctl
+```
+
+`speech9p` keeps `/n/parakeet/listen` open across reads so it consumes one
+mounted stream rather than starting bounded transcription requests.  When
+`ttsengine piper` is set, `/n/speech/say` delegates to the configured
+`pipersay` file, normally `/n/parakeet/say`, so the voice-only path uses
+Parakeet STT and Piper TTS from the same mounted process instead of relying on
+platform TTS such as macOS `say`. `voicemode` submits only `final ...` records to Lucia; partial records
+are available for debug or future live UI work but are not submitted as turns in
+Phase 1.
+
+A Whisper provider could be mounted behind the same stream-file contract later.
+Phase 1 keeps the existing Whisper command path because it is already the
+default helper mechanism and does not require the Parakeet-specific
+`--mic --stream` process lifecycle.
 
 ## 3. The three engines
 

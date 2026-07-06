@@ -114,6 +114,26 @@ toolctlmount(mpt: string): string
 	return "/mnt/toolctl";
 }
 
+readsmall(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return agentlib->strip(string buf[0:n]);
+}
+
+inputmode(): string
+{
+	mode := readsmall("/mnt/ui/input-mode");
+	if(mode == "v")
+		return "v";
+	return "k";
+}
+
 # Extract value for key from "key1=val1 key2=val2 ..." string
 getkv(line, key: string): string
 {
@@ -255,9 +275,11 @@ speaktext(text: string)
 	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	writefile(ctxpath, "resource update path=speech status=active");
 
-	fd := sys->open("/n/speech/say", Sys->OWRITE);
+	fd := sys->open("/n/speech/sayq", Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->open("/n/speech/say", Sys->OWRITE);
 	if(fd == nil) {
-		log("speaktext: cannot open /n/speech/say");
+		log("speaktext: cannot open /n/speech/sayq or /n/speech/say");
 		writefile(ctxpath, "resource update path=speech status=idle");
 		return;
 	}
@@ -417,6 +439,8 @@ updatedialogue(idx: int, progress, title, text: string)
 readuserinput(): string
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
+	if(inputmode() == "v")
+		path = sys->sprint("/mnt/ui/activity/%d/conversation/voiceinput", actid);
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
@@ -1233,7 +1257,25 @@ handleslash(cmd: string): int
 			ack = "usage: /tools +name or /tools -name";
 		}
 	"voice" =>
-		if(cmdarg == "" || cmdarg == "on") {
+		(vcmd, vrest) := str->splitl(cmdarg, " \t");
+		varg := str->drop(vrest, " \t");
+		if(vcmd == "mode") {
+			if(varg == "on") {
+				autospeak = 1;
+				writefile("/mnt/ui/input-mode", "v");
+				writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
+					"resource upsert path=/n/speech label=Voice type=audio status=waiting via=voice-mode");
+				ack = "voice mode: on";
+			} else if(varg == "off") {
+				writefile("/n/speech/cancel", "cancel");
+				writefile("/mnt/ui/input-mode", "k");
+				writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
+					"resource upsert path=/n/speech label=Voice type=audio status=idle via=voice-mode");
+				ack = "voice mode: off";
+			} else {
+				ack = "usage: /voice mode on|off";
+			}
+		} else if(cmdarg == "" || cmdarg == "on") {
 			autospeak = 1;
 			ack = "voice: auto-speak enabled";
 		} else if(cmdarg == "off") {
@@ -1256,6 +1298,7 @@ handleslash(cmd: string): int
 		      "/tools +name  — add tool\n" +
 		      "/tools -name  — remove tool\n" +
 		      "/voice on|off  — toggle auto-speak\n" +
+		      "/voice mode on|off  — toggle hands-free voice mode\n" +
 		      "/voice <name>  — change voice\n" +
 		      "/diff  — show cowfs changes\n" +
 		      "/promote [path]  — promote cowfs changes\n" +
@@ -1932,6 +1975,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
+	voiceinputpath := sys->sprint("/mnt/ui/activity/%d/conversation/voiceinput", actid);
 
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sessionid, maxsteps, convcount));
@@ -1962,9 +2006,12 @@ init(nil: ref Draw->Context, args: list of string)
 	# Main loop: re-open input fd each iteration because 9P offset
 	# advances after read, causing subsequent reads to return EOF.
 	for(;;) {
-		inputfd := sys->open(inputpath, Sys->OREAD);
+		path := inputpath;
+		if(inputmode() == "v")
+			path = voiceinputpath;
+		inputfd := sys->open(path, Sys->OREAD);
 		if(inputfd == nil)
-			fatal("cannot open " + inputpath);
+			fatal("cannot open " + path);
 		human := blockread(inputfd);
 		inputfd = nil;
 		if(human == nil) {

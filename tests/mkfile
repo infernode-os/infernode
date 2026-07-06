@@ -71,6 +71,7 @@ TARG=\
 	sdl3_test.dis\
 	sort_test.dis\
 	spawn_test.dis\
+	speech9p_voice_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
 	string_test.dis\

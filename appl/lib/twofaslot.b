@@ -187,23 +187,99 @@ is2fa(user: string): int
 	return listslots(slotdir(user)) != nil;
 }
 
+# The credential id of the key slot that last unlocked this account. It is a
+# plaintext hint (the cred id is already stored in the slot files), used only to
+# try the present key's slot first — see frontload/unlock. Absent on first use.
+lastgoodpath(user: string): string
+{
+	return slotdir(user) + "/.lastgood";
+}
+
+readlastgood(user: string): string
+{
+	fd := sys->open(lastgoodpath(user), Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	s := string buf[0:n];
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == '\r' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
+}
+
+writelastgood(user, cred: string)
+{
+	fd := sys->create(lastgoodpath(user), Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return;			# best-effort hint; a miss just costs one slow login
+	b := array of byte (cred + "\n");
+	sys->write(fd, b, len b);
+}
+
+# Move the key slot whose credential last unlocked to the head of the list, so
+# the common case (same physical key every login) tries exactly one slot and
+# touches once instead of probing every absent backup credential in turn.
+frontload(slots: list of ref Slot, cred: string): list of ref Slot
+{
+	if(cred == nil || cred == "")
+		return slots;
+	match: ref Slot;
+	for(l := slots; l != nil; l = tl l){
+		s := hd l;
+		if(s.kind == "key" && s.cred == cred){
+			match = s;
+			break;
+		}
+	}
+	if(match == nil)
+		return slots;		# last-good key no longer enrolled
+	# Rebuild original order with the match removed, then prepend it.
+	rev: list of ref Slot;
+	for(l = slots; l != nil; l = tl l)
+		if(hd l != match)
+			rev = hd l :: rev;
+	ord: list of ref Slot;
+	for(l = rev; l != nil; l = tl l)
+		ord = hd l :: ord;
+	return match :: ord;
+}
+
 unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array of byte, string)
 {
+	stderr := sys->fildes(2);
+	tl0 := sys->millisec();
 	slots := listslots(slotdir(user));
 	if(slots == nil)
 		return (nil, "account has no 2fa slots");
+	# Try the slot that unlocked last time first — one touch in the common case.
+	slots = frontload(slots, readlastgood(user));
+	nkey := 0;
+	for(cl := slots; cl != nil; cl = tl cl)
+		if((hd cl).kind == "key")
+			nkey++;
+	sys->fprint(stderr, "2fa: unlock: %d key slot(s), listed in %dms\n", nkey, sys->millisec()-tl0);
 
 	# Try key slots first (needs a present YubiKey + touch).
 	# Track the last derive failure so the caller can surface it; silently
 	# swallowing here makes a wrong PIN look identical to "no working slot"
 	# and the user always ends up at the recovery prompt with no diagnosis.
 	lastderr := "";
+	si := 0;
 	for(l := slots; l != nil; l = tl l){
 		s := hd l;
 		if(s.kind != "key" || s.wrap == nil)
 			continue;
+		si++;
+		sid := s.cred;
+		if(len sid > 8)
+			sid = sid[0:8];
+		ta := sys->millisec();
 		if(!twofa->available()){
 			lastderr = "no security key present";
+			sys->fprint(stderr, "2fa: slot #%d[%s]: available()=0 in %dms\n", si, sid, sys->millisec()-ta);
 			continue;
 		}
 		salt := fromhex(s.salt);
@@ -211,7 +287,9 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 			lastderr = "bad salt in slot";
 			continue;
 		}
+		td := sys->millisec();
 		(R, e) := twofa->derive(s.cred, salt, pin);	# touch (+PIN if UV)
+		sys->fprint(stderr, "2fa: slot #%d[%s]: derive returned in %dms, err=%q\n", si, sid, sys->millisec()-td, e);
 		if(e != nil){
 			lastderr = e;
 			# A rejected/blocked PIN fails identically on every other slot
@@ -227,8 +305,11 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		}
 		kek := secstore->mkkek2fa(rootkey, R);
 		DK := secstore->decrypt3(s.wrap, kek, nil, nil);
-		if(DK != nil)
+		if(DK != nil){
+			writelastgood(user, s.cred);	# try this slot first next time
+			sys->fprint(stderr, "2fa: unlocked on slot #%d[%s], total %dms\n", si, sid, sys->millisec()-tl0);
 			return (DK, nil);
+		}
 		lastderr = "slot wrap did not decrypt with derived key";
 	}
 

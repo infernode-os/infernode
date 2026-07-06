@@ -256,11 +256,6 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		return (nil, "account has no 2fa slots");
 	# Try the slot that unlocked last time first — one touch in the common case.
 	slots = frontload(slots, readlastgood(user));
-	nkey := 0;
-	for(cl := slots; cl != nil; cl = tl cl)
-		if((hd cl).kind == "key")
-			nkey++;
-	sys->fprint(stderr, "2fa: unlock: %d key slot(s), listed in %dms\n", nkey, sys->millisec()-tl0);
 
 	# Try key slots first (needs a present YubiKey + touch).
 	# Track the last derive failure so the caller can surface it; silently
@@ -276,20 +271,15 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		sid := s.cred;
 		if(len sid > 8)
 			sid = sid[0:8];
-		ta := sys->millisec();
-		if(!twofa->available()){
-			lastderr = "no security key present";
-			sys->fprint(stderr, "2fa: slot #%d[%s]: available()=0 in %dms\n", si, sid, sys->millisec()-ta);
-			continue;
-		}
 		salt := fromhex(s.salt);
 		if(salt == nil || len salt != 32){
 			lastderr = "bad salt in slot";
 			continue;
 		}
-		td := sys->millisec();
+		# No available() pre-check: it runs a full USB enumeration on top of the
+		# one derive() already does, needlessly delaying the touch prompt. derive()
+		# returns "no FIDO device present" by itself when the key is absent.
 		(R, e) := twofa->derive(s.cred, salt, pin);	# touch (+PIN if UV)
-		sys->fprint(stderr, "2fa: slot #%d[%s]: derive returned in %dms, err=%q\n", si, sid, sys->millisec()-td, e);
 		if(e != nil){
 			lastderr = e;
 			# A rejected/blocked PIN fails identically on every other slot
@@ -307,7 +297,7 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 		DK := secstore->decrypt3(s.wrap, kek, nil, nil);
 		if(DK != nil){
 			writelastgood(user, s.cred);	# try this slot first next time
-			sys->fprint(stderr, "2fa: unlocked on slot #%d[%s], total %dms\n", si, sid, sys->millisec()-tl0);
+			sys->fprint(stderr, "2fa: unlocked (slot %s, tried %d, %dms)\n", sid, si, sys->millisec()-tl0);
 			return (DK, nil);
 		}
 		lastderr = "slot wrap did not decrypt with derived key";

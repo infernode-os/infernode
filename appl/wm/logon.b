@@ -717,7 +717,89 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	}
 
 	sys->fprint(stderr, "logon: loaded %d keys from secstore\n", nloaded);
+
+	# The password just authenticated against the stored PAK verifier, so it is
+	# safe to (re)derive and upgrade a legacy verifier to secstore3. Best-effort.
+	migratepak(user, pass);
 	return nil;
+}
+
+#
+# Opportunistically upgrade the local secstore PAK verifier to secstore3 after a
+# verified login. The verifier is a one-way function of (user, password), so a
+# successful login is proof we can recompute it under the stronger suite; the
+# factotum blob and 2fa key-slots are keyed independently and are untouched.
+#
+# Best-effort: this must NEVER disturb the login that already succeeded, so any
+# error just logs and returns. Idempotent (skips if already secstore3), and it
+# stages to a temp file it reads back and validates before swapping, so a bad or
+# short write can never destroy the working verifier.
+#
+migratepak(user, pass: string)
+{
+	if(secstore == nil || user == nil || user == "")
+		return;
+	pakpath := "/usr/inferno/secstore/" + user + "/PAK";
+
+	rfd := sys->open(pakpath, Sys->OREAD);
+	if(rfd == nil)
+		return;			# no local PAK (e.g. remote store) — nothing to do
+	buf := array[4096] of byte;
+	n := sys->read(rfd, buf, len buf);
+	rfd = nil;
+	if(n <= 0)
+		return;
+	(curver, nil) := secstore->parseverifier(string buf[0:n]);
+	if(curver == "secstore3")
+		return;			# already migrated
+
+	pwhash2 := secstore->mkseckey2(pass);
+	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
+	secstore->erasekey(pwhash2);
+	content := array of byte (secstore->formatverifier("secstore3", hexHi) + "\n");
+
+	tmppath := pakpath + ".new";
+	wfd := sys->create(tmppath, Sys->OWRITE, 8r600);
+	if(wfd == nil){
+		sys->fprint(stderr, "logon: PAK migrate: create %s: %r\n", tmppath);
+		return;
+	}
+	if(sys->write(wfd, content, len content) != len content){
+		sys->fprint(stderr, "logon: PAK migrate: write %s: %r\n", tmppath);
+		wfd = nil;
+		sys->remove(tmppath);
+		return;
+	}
+	wfd = nil;
+
+	# Validate the staged file parses as secstore3 before committing.
+	vfd := sys->open(tmppath, Sys->OREAD);
+	if(vfd == nil){
+		sys->remove(tmppath);
+		return;
+	}
+	vn := sys->read(vfd, buf, len buf);
+	vfd = nil;
+	(nver, nil) := secstore->parseverifier(string buf[0:vn]);
+	if(nver != "secstore3"){
+		sys->fprint(stderr, "logon: PAK migrate: staged verifier failed validation; leaving legacy PAK in place\n");
+		sys->remove(tmppath);
+		return;
+	}
+
+	# Commit: replace PAK with the validated staged file.
+	if(sys->remove(pakpath) < 0){
+		sys->fprint(stderr, "logon: PAK migrate: cannot remove old PAK: %r\n");
+		sys->remove(tmppath);
+		return;
+	}
+	d := sys->nulldir;
+	d.name = "PAK";
+	if(sys->wstat(tmppath, d) < 0){
+		sys->fprint(stderr, "logon: PAK migrate: rename failed: %r — recover with 'secstore-setup -u %s -V secstore3' (the .new file holds the new verifier)\n", user);
+		return;
+	}
+	sys->fprint(stderr, "logon: upgraded secstore PAK verifier to secstore3 for %s\n", user);
 }
 
 createsecstoreacct(pass: string): string

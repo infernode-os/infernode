@@ -8,7 +8,7 @@ implement SecstoreSetup;
 # current factotum keys into the new secstore account.
 #
 # Usage:
-#   auth/secstore-setup [-s storedir] [-u user] [-i] [-V secstore|secstore2|secstore3]
+#   auth/secstore-setup [-s storedir] [-u user] [-i] [-V secstore|secstore3]
 #
 # Options:
 #   -s storedir   secstore data directory (default: /usr/inferno/secstore)
@@ -56,7 +56,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("auth/secstore-setup [-i] [-k password] [-s storedir] [-u user] [-V secstore|secstore2|secstore3]");
+		arg->setusage("auth/secstore-setup [-i] [-k password] [-s storedir] [-u user] [-V secstore|secstore3]");
 		while((o := arg->opt()) != 0)
 			case o {
 			'i' =>	importkeys = 1;
@@ -84,7 +84,7 @@ init(nil: ref Draw->Context, args: list of string)
 			fatal("passwords don't match");
 	}
 
-	if(version != "secstore" && version != "secstore2" && version != "secstore3")
+	if(version != "secstore" && version != "secstore3")
 		fatal("unsupported verifier version");
 
 	# Compute PAK verifier

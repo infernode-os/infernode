@@ -106,6 +106,8 @@ Qcatalogentry:	con 31;
 Qartdispath:	con 32;	# presentation/<id>/dispath  (app type only)
 Qartappstatus:	con 33;	# presentation/<id>/appstatus (app type only)
 Qacturgency:	con 34;	# /activity/{id}/urgency
+Qinputmode:	con 35;	# /input-mode, k=keyboard, v=voice
+Qconvvoiceinput: con 36;	# conversation/voiceinput, voice-originated input
 
 # --- QID encoding ---
 # 64-bit path: [activity_id:16][sub_id:16][unused:24][filetype:8]
@@ -194,6 +196,7 @@ Activity: adt {
 	messages: array of ref ConvMsg;
 	nmsg:	int;
 	inputq:	list of string;
+	voiceinputq: list of string;
 
 	# Presentation
 	currentArtifact: string;
@@ -234,6 +237,7 @@ activities: array of ref Activity;
 nact: int;
 nextactid: int;
 currentact: int;		# id of current activity
+inputmode: string;		# "k" keyboard, "v" voice
 
 # Available resources catalog (loaded once at init from /lib/veltro/resources/)
 catalog: array of ref CatalogEntry;
@@ -373,6 +377,7 @@ init(nil: ref Draw->Context, args: list of string)
 	nact = 0;
 	nextactid = 0;
 	currentact = -1;
+	inputmode = "k";
 	vers = 0;
 
 	# Load available resources catalog from /lib/veltro/resources/
@@ -414,7 +419,7 @@ newactivity(label: string): ref Activity
 	a := ref Activity(
 		id, label, "active",
 		0,					# urgency
-		array[32] of ref ConvMsg, 0, nil,	# conversation
+			array[32] of ref ConvMsg, 0, nil, nil,	# conversation
 		"", array[16] of ref Artifact, 0,	# presentation
 		array[16] of ref Resource, 0,		# resources
 		array[8] of ref Gap, 0,			# gaps
@@ -868,6 +873,8 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 
 	Qactcurrent =>
 		srv.reply(styxservers->readbytes(m, array of byte (string currentact + "\n")));
+	Qinputmode =>
+		srv.reply(styxservers->readbytes(m, array of byte (inputmode + "\n")));
 
 	Qactlabel =>
 		a := findactivity(actid);
@@ -921,6 +928,19 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			# inputq is in FIFO order (head = oldest). INFR-36.
 			data := array of byte (hd a.inputq + "\n");
 			a.inputq = tl a.inputq;
+			srv.reply(styxservers->readbytes(m, data));
+		}
+	Qconvvoiceinput =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		if(a.voiceinputq == nil) {
+			addpending(m.fid, m.tag, Qconvvoiceinput, actid, m);
+		} else {
+			data := array of byte (hd a.voiceinputq + "\n");
+			a.voiceinputq = tl a.voiceinputq;
 			srv.reply(styxservers->readbytes(m, data));
 		}
 
@@ -1104,6 +1124,15 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		vers++;
 		pushglobalevent("activity " + data);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+	Qinputmode =>
+		if(data != "k" && data != "v") {
+			srv.reply(ref Rmsg.Error(m.tag, "input-mode must be k or v"));
+			break;
+		}
+		inputmode = data;
+		vers++;
+		pushglobalevent("input-mode " + inputmode);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qactevent =>
 		# Write to the event file = flush: discard buffered events and kick
@@ -1201,6 +1230,35 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		if(!delivered)
 			a.inputq = appendstr(a.inputq, data);
 		pushevent(actid, "input");
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+	Qconvvoiceinput =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		vdelivered := 0;
+		vprev: ref PendingRead;
+		vp := pending;
+		while(vp != nil) {
+			next := vp.next;
+			if(vp.ft == Qconvvoiceinput && vp.actid == actid) {
+				reply := array of byte (data + "\n");
+				srv_g.reply(styxservers->readbytes(vp.m, reply));
+				if(vprev == nil)
+					pending = next;
+				else
+					vprev.next = next;
+				vdelivered = 1;
+				vp = next;
+				break;
+			}
+			vprev = vp;
+			vp = next;
+		}
+		if(!vdelivered)
+			a.voiceinputq = appendstr(a.voiceinputq, data);
+		pushevent(actid, "voiceinput");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qpresctl =>
@@ -1938,6 +1996,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "notification", big 0, 8r666), nil);
 	Qtoast =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "toast", big 0, 8r666), nil);
+	Qinputmode =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "input-mode", big 0, 8r666), nil);
 	Qactdir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), "activity", big 0, 8r755), nil);
 	Qactcurrent =>
@@ -1958,6 +2018,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r644), nil);
 	Qconvinput =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "input", big 0, 8r666), nil);
+	Qconvvoiceinput =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "voiceinput", big 0, 8r666), nil);
 	Qconvmsg =>
 		return (dir(Qid(p, vers, Sys->QTFILE), string subid, big 0, 8r444), nil);
 	Qpresdir =>
@@ -2035,6 +2097,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, 0, Qnotification);
 				"toast" =>
 					n.path = MKPATH(0, 0, Qtoast);
+				"input-mode" =>
+					n.path = MKPATH(0, 0, Qinputmode);
 				"activity" =>
 					n.path = MKPATH(0, 0, Qactdir);
 				"catalog" =>
@@ -2093,6 +2157,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(actid, 0, Qconvctl);
 				"input" =>
 					n.path = MKPATH(actid, 0, Qconvinput);
+				"voiceinput" =>
+					n.path = MKPATH(actid, 0, Qconvvoiceinput);
 				* =>
 					# Numbered message file
 					idx := strtoint(n.name);
@@ -2274,6 +2340,7 @@ navigator(navops: chan of ref Navop)
 					MKPATH(0, 0, Qevent),
 					MKPATH(0, 0, Qnotification),
 					MKPATH(0, 0, Qtoast),
+					MKPATH(0, 0, Qinputmode),
 					MKPATH(0, 0, Qactdir),
 					MKPATH(0, 0, Qcatalogdir),
 				};
@@ -2320,8 +2387,8 @@ navigator(navops: chan of ref Navop)
 
 			Qconvdir =>
 				a := findactivity(actid);
-				# ctl + input + message files
-				total := 2;
+				# ctl + keyboard input + voice input + message files
+				total := 3;
 				if(a != nil)
 					total += a.nmsg;
 				i := n.offset;
@@ -2336,9 +2403,14 @@ navigator(navops: chan of ref Navop)
 					cnt--;
 					i++;
 				}
+				if(i == 2 && cnt > 0) {
+					n.reply <-= dirgen(MKPATH(actid, 0, Qconvvoiceinput));
+					cnt--;
+					i++;
+				}
 				if(a != nil) {
 					for(; i < total && cnt > 0; i++) {
-						midx := i - 2;
+						midx := i - 3;
 						n.reply <-= dirgen(MKPATH(actid, midx, Qconvmsg));
 						cnt--;
 					}

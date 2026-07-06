@@ -55,7 +55,7 @@ Speech9p: module {
 };
 
 # Qid layout for synthetic files
-Qroot, Qctl, Qsay, Qhear, Qvoices: con iota;
+Qroot, Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel: con iota;
 
 # Per-fid state for say and hear operations
 FidState: adt {
@@ -70,6 +70,7 @@ FidState: adt {
 ENGINE_CMD: con 0;   # Host OS commands via #C (devcmd)
 ENGINE_API: con 1;   # HTTP API (OpenAI, etc.)
 ENGINE_LOCAL: con 2; # Local ML models (Piper TTS, whisper.cpp STT)
+ENGINE_KOKORO: con 3; # Kokoro TTS + streaming helper STT/wake
 
 # Current configuration
 engine := ENGINE_CMD;
@@ -93,6 +94,20 @@ pipermodel := "";    # Path to .onnx voice model
 whisperbin := "whisper-cli";
 whispermodel := "";  # Path to .bin GGML model
 
+# Phase 1 voice-mode helper configuration
+kokorobin := "kokoro-cli";
+ttsengine := "engine";
+listenengine := "whisper";
+whisperstreambin := "whisper-stream";
+wakebin := "openwakeword-cli";
+wakeword := "hey lucia";
+wakethreshold := "0.5";
+parakeetmount := "/n/parakeet";
+parakeetlisten := "/n/parakeet/listen";
+pipersay := "/n/parakeet/say";
+parakeetlistenfd: ref Sys->FD;
+cancelreq := 0;
+
 stderr: ref Sys->FD;
 user: string;
 mountpt := "/n/speech";
@@ -109,7 +124,7 @@ usage()
 	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-k apikey]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /n/speech)\n");
-	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local\n");
+	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local, kokoro\n");
 	sys->fprint(stderr, "  -k key        API key (for api engine)\n");
 	sys->fprint(stderr, "  -u url        API base URL\n");
 	sys->fprint(stderr, "  -v voice      Default voice\n");
@@ -152,6 +167,7 @@ init(nil: ref Draw->Context, args: list of string)
 			"cmd" =>	engine = ENGINE_CMD;
 			"api" =>	engine = ENGINE_API;
 			"local" =>	engine = ENGINE_LOCAL;
+			"kokoro" =>	engine = ENGINE_KOKORO;
 			* =>
 				sys->fprint(stderr, "speech9p: unknown engine '%s'\n", e);
 				usage();
@@ -214,8 +230,12 @@ initplatform()
 			cmdtts = "say";
 		if(cmdstt == "")
 			cmdstt = "whisper-cli";
-		if(voice == "")
-			voice = "samantha";
+		if(voice == "") {
+			if(engine == ENGINE_KOKORO)
+				voice = "af_bella";
+			else
+				voice = "samantha";
+		}
 	"linux" =>
 		# Linux: prefer local ML engine if Piper/whisper are available
 		# On Jetson (ARM64 + GPU), these get CUDA acceleration automatically
@@ -274,6 +294,8 @@ readconfig(): string
 		ename = "api";
 	else if(engine == ENGINE_LOCAL)
 		ename = "local";
+	else if(engine == ENGINE_KOKORO)
+		ename = "kokoro";
 
 	result := "engine " + ename + "\n";
 	result += "voice " + voice + "\n";
@@ -302,6 +324,17 @@ readconfig(): string
 		result += "whispermodel " + whispermodel + "\n";
 	}
 
+	result += "kokorobin " + kokorobin + "\n";
+	result += "ttsengine " + ttsengine + "\n";
+	result += "listenengine " + listenengine + "\n";
+	result += "whisperstreambin " + whisperstreambin + "\n";
+	result += "wakebin " + wakebin + "\n";
+	result += "wakeword " + wakeword + "\n";
+	result += "wakethreshold " + wakethreshold + "\n";
+	result += "parakeetmount " + parakeetmount + "\n";
+	result += "parakeetlisten " + parakeetlisten + "\n";
+	result += "pipersay " + pipersay + "\n";
+
 	return result;
 }
 
@@ -329,6 +362,7 @@ applyconfig(cmd: string): string
 		"cmd" =>	engine = ENGINE_CMD;
 		"api" =>	engine = ENGINE_API;
 		"local" =>	engine = ENGINE_LOCAL;
+		"kokoro" =>	engine = ENGINE_KOKORO;
 		* =>		return "error: unknown engine: " + val;
 		}
 	"voice" =>
@@ -366,6 +400,42 @@ applyconfig(cmd: string): string
 		whisperbin = val;
 	"whispermodel" =>
 		whispermodel = val;
+	"kokorobin" =>
+		kokorobin = val;
+	"ttsengine" =>
+		case val {
+		"engine" or "piper" =>
+			ttsengine = val;
+		* =>
+			return "error: unknown ttsengine: " + val;
+		}
+	"listenengine" =>
+		case val {
+		"whisper" or "parakeet" =>
+			if(listenengine != val)
+				resetparakeetlisten();
+			listenengine = val;
+		* =>
+			return "error: unknown listenengine: " + val;
+		}
+	"whisperstreambin" =>
+		whisperstreambin = val;
+	"wakebin" =>
+		wakebin = val;
+	"wakeword" =>
+		wakeword = val;
+	"wakethreshold" =>
+		wakethreshold = val;
+	"parakeetmount" =>
+		resetparakeetlisten();
+		parakeetmount = val;
+		parakeetlisten = val + "/listen";
+		pipersay = val + "/say";
+	"parakeetlisten" =>
+		resetparakeetlisten();
+		parakeetlisten = val;
+	"pipersay" =>
+		pipersay = val;
 	* =>
 		return "error: unknown config key: " + key;
 	}
@@ -383,6 +453,8 @@ listvoices(): string
 		return listapivoices();
 	ENGINE_LOCAL =>
 		return listlocalvoices();
+	ENGINE_KOKORO =>
+		return listkokorovoices();
 	}
 	return "";
 }
@@ -436,6 +508,8 @@ dosay(text: string): string
 {
 	if(text == "")
 		return "error: no text to speak";
+	if(ttsengine == "piper")
+		return saypiper(text);
 
 	case engine {
 	ENGINE_CMD =>
@@ -444,8 +518,25 @@ dosay(text: string): string
 		return sayapi(text);
 	ENGINE_LOCAL =>
 		return saylocal(text);
+	ENGINE_KOKORO =>
+		return saykokoro(text);
 	}
 	return "error: no engine configured";
+}
+
+saypiper(text: string): string
+{
+	if(pipersay == "")
+		return "error: piper say mount not configured";
+	if(writemounted(pipersay, text + "\n") < 0)
+		return "error: piper say mount unavailable: " + pipersay;
+	result := readmounted(pipersay);
+	if(result == nil)
+		return "ok";
+	result = strip(result);
+	if(result == "")
+		return "ok";
+	return result;
 }
 
 # TTS via host command (platform-specific)
@@ -520,6 +611,107 @@ sayapi(text: string): string
 	return playpcm(audiodata);
 }
 
+# List voices from Kokoro helper.  The helper is intentionally external;
+# Phase 1 does not vendor models or Python packages.
+listkokorovoices(): string
+{
+	if(kokorobin == "")
+		return "(kokoro helper not configured)\n";
+	result := runcmd(kokorobin + " --list-voices 2>/dev/null");
+	if(result == "" || result == "ok" || hasprefix(result, "error:"))
+		return "af_bella\n(default; helper unavailable or does not list voices)\n";
+	return result;
+}
+
+# TTS via Kokoro helper.  Expected contract: read UTF-8 text on stdin and
+# write signed 16-bit mono PCM to stdout at the configured rate.
+saykokoro(text: string): string
+{
+	if(kokorobin == "")
+		return "error: kokoro helper not configured";
+	safe := sanitize(text);
+	if(safe == "")
+		return "error: no speakable text";
+	if(cancelreq)
+		return "error: speech canceled";
+	cmd := kokorobin + " --voice " + voice + " --format pcm --rate " + string audrate;
+	pcmdata := runcmd_stdin(cmd, safe);
+	if(cancelreq)
+		return "error: speech canceled";
+	if(pcmdata == "" || pcmdata == "ok")
+		return "error: kokoro produced no audio";
+	if(hasprefix(pcmdata, "error:"))
+		return pcmdata;
+	return playpcm(array of byte pcmdata);
+}
+
+# Streaming listen helper.  Expected output is newline-delimited records from
+# the helper, for example: "partial ..." and "final ...".  speech9p does not
+# interpret them yet; voicemode consumes the stream records.
+dolisten(): string
+{
+	if(listenengine == "parakeet")
+		return listenparakeet();
+	return listenwhisperstream();
+}
+
+listenwhisperstream(): string
+{
+	if(whisperstreambin == "")
+		return "error: listen helper not configured";
+	cmd := whisperstreambin + " --model " + whispermodel + " --rate 16000 --chans 1 2>/dev/null";
+	result := runcmd(cmd);
+	if(result == "" || result == "ok")
+		return "error: listen helper produced no transcript";
+	return result;
+}
+
+# Parakeet integration is namespace-composed.  The mounted service owns the
+# persistent microphone process; speech9p only reads its stream file.
+listenparakeet(): string
+{
+	if(parakeetlisten == "")
+		return "error: parakeet listen mount not configured";
+	if(parakeetlistenfd == nil) {
+		parakeetlistenfd = sys->open(parakeetlisten, Sys->OREAD);
+		if(parakeetlistenfd == nil)
+			return "error: parakeet listen mount unavailable: " + parakeetlisten;
+	}
+	result := readmountedfd(parakeetlistenfd);
+	if(result == nil) {
+		resetparakeetlisten();
+		return "error: parakeet listen mount unavailable: " + parakeetlisten;
+	}
+	if(strip(result) == "")
+		return "error: parakeet listen produced no transcript";
+	return result;
+}
+
+resetparakeetlisten()
+{
+	parakeetlistenfd = nil;
+}
+
+cancelparakeet()
+{
+	writemounted(parakeetmount + "/cancel", "cancel\n");
+	resetparakeetlisten();
+}
+
+# Wake helper.  Expected output is one wake event line containing model/score or
+# a final wake marker.  The configured wake word is passed for wrappers that
+# support keyword labels.
+dowake(): string
+{
+	if(wakebin == "")
+		return "error: wake helper not configured";
+	cmd := wakebin + " --word '" + wakeword + "' --threshold " + wakethreshold + " 2>/dev/null";
+	result := runcmd(cmd);
+	if(result == "" || result == "ok")
+		return "error: wake helper produced no event";
+	return result;
+}
+
 # === STT: Speech to Text ===
 
 # Record from /dev/audio and transcribe
@@ -532,6 +724,8 @@ dohear(): string
 		return hearapi();
 	ENGINE_LOCAL =>
 		return hearlocal();
+	ENGINE_KOKORO =>
+		return dolisten();
 	}
 	return "error: no engine configured";
 }
@@ -1389,6 +1583,32 @@ hasprefix(s, prefix: string): int
 	return len s >= len prefix && s[0:len prefix] == prefix;
 }
 
+readmounted(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	return readmountedfd(fd);
+}
+
+readmountedfd(fd: ref Sys->FD): string
+{
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return string buf[0:n];
+}
+
+writemounted(path, data: string): int
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte data;
+	return sys->write(fd, b, len b);
+}
+
 strip(s: string): string
 {
 	i := 0;
@@ -1460,6 +1680,18 @@ walkto(n: ref Navop.Walk)
 		"voices" =>
 			n.path = big Qvoices;
 			n.reply <-= dirgen(int n.path);
+		"listen" =>
+			n.path = big Qlisten;
+			n.reply <-= dirgen(int n.path);
+		"wake" =>
+			n.path = big Qwake;
+			n.reply <-= dirgen(int n.path);
+		"sayq" =>
+			n.path = big Qsayq;
+			n.reply <-= dirgen(int n.path);
+		"cancel" =>
+			n.path = big Qcancel;
+			n.reply <-= dirgen(int n.path);
 		* =>
 			n.reply <-= (nil, Enotfound);
 		}
@@ -1494,6 +1726,18 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qvoices =>
 		d.name = "voices";
 		d.mode = 8r444;
+	Qlisten =>
+		d.name = "listen";
+		d.mode = 8r444;
+	Qwake =>
+		d.name = "wake";
+		d.mode = 8r444;
+	Qsayq =>
+		d.name = "sayq";
+		d.mode = 8r666;
+	Qcancel =>
+		d.name = "cancel";
+		d.mode = 8r666;
 	* =>
 		return (nil, Enotfound);
 	}
@@ -1506,7 +1750,7 @@ readdir(n: ref Navop.Readdir, path: int)
 {
 	case path {
 	Qroot =>
-		entries := array[] of {Qctl, Qsay, Qhear, Qvoices};
+		entries := array[] of {Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel};
 		for(i := 0; i < len entries; i++) {
 			if(i >= n.offset) {
 				(d, err) := dirgen(entries[i]);
@@ -1566,6 +1810,25 @@ Serve:
 				srv.reply(styxservers->readbytes(m, fs.hearresp));
 			Qvoices =>
 				srv.reply(styxservers->readstr(m, listvoices()));
+			Qlisten =>
+				srv.reply(styxservers->readstr(m, dolisten()));
+			Qwake =>
+				srv.reply(styxservers->readstr(m, dowake()));
+			Qsayq =>
+				fs := getfidstate(m.fid);
+				if(fs.sayresp == nil && fs.saydone != nil) {
+					fs.sayresp = <-fs.saydone;
+					fs.saydone = nil;
+				}
+				if(fs.sayresp != nil)
+					srv.reply(styxservers->readbytes(m, fs.sayresp));
+				else
+					srv.reply(styxservers->readstr(m, ""));
+			Qcancel =>
+				if(cancelreq)
+					srv.reply(styxservers->readstr(m, "cancel pending\n"));
+				else
+					srv.reply(styxservers->readstr(m, "idle\n"));
 			* =>
 				srv.default(gm);
 			}
@@ -1597,6 +1860,19 @@ Serve:
 				# the serveloop, blocking all other 9P traffic.
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				spawn asyncsay(fs.saydone, strip(text));
+			Qsayq =>
+				text := string m.data;
+				fs := getfidstate(m.fid);
+				fs.sayreq = text;
+				fs.sayresp = nil;
+				fs.saydone = chan of array of byte;
+				cancelreq = 0;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				spawn asyncsay(fs.saydone, strip(text));
+			Qcancel =>
+				cancelreq = 1;
+				cancelparakeet();
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qhear =>
 				# Writing to hear resets/starts a new recording
 				# Parse optional duration: "start 10000" = 10 seconds

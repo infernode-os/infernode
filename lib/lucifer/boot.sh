@@ -116,9 +116,31 @@ sleep 1
 # /tmp truly doesn't exist after this, the mkdir will print to stderr
 # instead of being silenced.
 mkdir -p /tmp
+
+# Speech stack. speechshim9p adapts external host helper CLIs
+# (whisper-stream, kokoro, openwakeword) to the speech provider contract
+# at /n/speechshim; speech9p serves the stable /n/speech surface and is
+# pointed at the shim as its provider. Any other provider serving the
+# same contract (a parakeet export, a remote 9P mount) can replace it
+# with one ctl write. Helpers are external installs and every path
+# soft-fails with an error record, so starting both unconditionally is
+# safe. speech9p must come before lucibridge, which registers the speech
+# resource tile only if /n/speech is mounted at its startup.
+> /tmp/speechshim9p.log
+/dis/veltro/speechshim9p >[2] /tmp/speechshim9p.log
+> /tmp/speech9p.log
+/dis/veltro/speech9p >[2] /tmp/speech9p.log
+echo provider /n/speechshim > /n/speech/ctl
+
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
+
+# Voice-mode daemon — resident and idle until /mnt/ui/input-mode becomes
+# "v" (via /voice mode on, or a spoken control intent). Pre-spawned here
+# so entering voice mode has no first-use startup latency.
+> /tmp/voicemode.log
+voicemode >[2] /tmp/voicemode.log &
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno

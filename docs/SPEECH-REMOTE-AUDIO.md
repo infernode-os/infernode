@@ -5,6 +5,15 @@
 > composition. For the architecture of `speech9p` itself (file tree, engines,
 > data flow, agent integration), see
 > [SPEECH-ARCHITECTURE.md](SPEECH-ARCHITECTURE.md).
+>
+> **Phase 2 pointer.** The Mac-local voice mode
+> ([SPEECH-VOICE-ONLY-PHASE1.md](SPEECH-VOICE-ONLY-PHASE1.md)) is Phase 1 of
+> the voice work; this remote-audio direction is the Phase 2 target (Mac as
+> I/O terminal, Jetson or other host as inference engine), together with
+> pluggable `.dis` speech-engine modules built on the `TTSEngine`/`STTEngine`
+> and `Partial` interfaces in `module/speech.m`. The prerequisites listed
+> below (9P export of `/dev/audio`, bind tooling, mount-path configuration)
+> are not implemented yet.
 
 ## Current Design
 

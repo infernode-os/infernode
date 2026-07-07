@@ -119,18 +119,41 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 | `apikey`       | bearer token                                     | `api` engine. **Stored in process memory in clear.** |
 | `piperbin` / `pipermodel`     | binary path / `.onnx` voice model | `local` engine. |
 | `whisperbin` / `whispermodel` | binary path / `.bin` GGML model    | `local` engine. |
-| `ttsengine` | `engine` or `piper` | Selects whether `/n/speech/say` uses the configured speech9p TTS engine or delegates to the mounted Piper TTS file. |
-| `listenengine` | `whisper` or `parakeet` | Selects the Phase 1 provider behind `/n/speech/listen`. |
-| `whisperstreambin` | command path / wrapper command | Current Whisper-compatible provider. `speech9p` runs this helper and expects newline-delimited `partial ...` / `final ...` records. |
-| `parakeetmount` / `parakeetlisten` / `pipersay` | mounted provider root, STT stream file, and Piper TTS file | Current mounted provider. The provider is expected to be a separately mounted 9P service, typically exposing `/n/parakeet/listen` as a Parakeet continuous `partial ...` / `final ...` stream and `/n/parakeet/say` as Piper-backed TTS. |
+| `ttsengine` | `engine` or `piper` | Selects whether `/n/speech/say` uses the configured speech9p TTS engine or delegates to the provider's `say` file. |
+| `provider` | provider mount root | The speech provider mount behind `listen`, `wake`, kokoro-engine `say`, and `cancel` (see the provider contract below). Default `/n/parakeet`; boot points it at `/n/speechshim`. |
+| `listenengine` | `whisper` or `parakeet` | Compatibility alias; both values consume the provider mount. |
+| `whisperstreambin` / `wakebin` / `kokorobin` / `wakeword` / `wakethreshold` | helper commands and wake tuning | Stored for introspection and forwarded to the provider's `ctl`; `speechshim9p` consumes them. `speech9p` itself runs no helpers. |
+| `parakeetmount` / `parakeetlisten` / `pipersay` | provider root, STT stream file, and TTS say file | Compatibility aliases for `provider` and its derived `listen`/`say` paths. |
 
-`/n/speech/listen` is the stable Infernode-facing interface.  `listenengine`
-selects how that file is backed:
+`/n/speech/listen` is the stable Infernode-facing interface.
 
-| Provider | Current backing | Lifecycle |
-|----------|-----------------|-----------|
-| `whisper` | `whisperstreambin` command or wrapper | `speech9p` runs the helper for a listen read. This preserves the existing command-backed helper path and is suitable for simple wrappers. |
-| `parakeet` | mounted file such as `/n/parakeet/listen` | The mounted provider owns the live microphone process. `speech9p` keeps the listen file open across reads so the stream remains continuous. |
+## The speech provider contract
+
+All streaming voice I/O behind `/n/speech` comes from a single **provider
+mount** — a 9P namespace serving this contract:
+
+| Path | Contract |
+|------|----------|
+| `<provider>/listen` | continuous newline-delimited `partial ...` / `final ...` / `error: ...` records; the provider owns the persistent microphone/STT process |
+| `<provider>/wake`   | read blocks until the wake-word engine fires, then returns one event line (model, score) |
+| `<provider>/say`    | write text to synthesize and play; read the last TTS status |
+| `<provider>/cancel` | write to hard-cancel active TTS |
+| `<provider>/ctl`    | optional provider configuration (helper paths, wake word, voice, ...) |
+| `<provider>/voices` | optional voice list |
+
+`speech9p` selects the provider with `echo 'provider /n/x' > /n/speech/ctl`
+(`parakeetmount` remains as an alias) and consumes only these files — it runs
+no helper binaries itself. Streaming reads ignore the fid offset (a consumer
+holds one fd across many reads), and helper-configuration keys written to
+`/n/speech/ctl` are forwarded to the provider's `ctl`.
+
+Providers implementing the contract today:
+
+| Provider | Backing | Lifecycle |
+|----------|---------|-----------|
+| `speechshim9p` (in-tree, default at `/n/speechshim`) | external helper CLIs — whisper.cpp stream for `listen`, openWakeWord wrapper for `wake`, Kokoro for `say` — driven through `#C`/devcmd | The shim owns the helper processes: streaming helpers are started on first read and restarted transparently when a one-shot helper exits; `cancel` kills the synthesizing process via devcmd `kill`, bounding barge-in silence by one audio chunk. |
+| parakeet export (e.g. `/n/parakeet`) | parakeet-cli `--mic --stream` process exported over 9P | The mounted service owns the live microphone process; `speech9p` keeps the listen file open across reads so the stream remains continuous. |
+| remote provider (Phase 2) | any of the above mounted over the network | Same contract; namespace composition does the remoting (see SPEECH-REMOTE-AUDIO.md). |
 
 Parakeet is not a separate speech architecture.  It is the first Phase 1
 provider that needs the mounted-service shape because its useful mode is a

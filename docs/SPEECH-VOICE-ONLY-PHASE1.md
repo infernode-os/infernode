@@ -5,7 +5,7 @@ Not usable end-to-end yet.
 
 ## Implementation Status
 
-Current Phase 1 work is partial. The branch now has:
+Phase 1 structure (1.0–1.6) is implemented. The branch now has:
 
 - macOS `#A` audio enabled in the emulator config with a CoreAudio-backed
   `emu/MacOSX/audio.c` implementation.
@@ -13,22 +13,62 @@ Current Phase 1 work is partial. The branch now has:
 - A host audio smoke test at `tests/host/audio_macos_test.sh`.
 - `speech9p` additions for Kokoro helper config, `sayq`, `cancel`, `listen`,
   and `wake` files. Helper binaries are still external and may be absent.
+- A unified speech-provider architecture: `speech9p` consumes exactly one
+  provider mount (contract in docs/SPEECH-ARCHITECTURE.md — listen/wake/say/
+  cancel plus optional ctl/voices) and runs no helper binaries itself. The
+  in-tree `speechshim9p` adapts the external helper CLIs to that contract
+  and is the boot-time default provider at `/n/speechshim`; a parakeet
+  export or a remote 9P mount is the same one-line ctl switch. The shim
+  hard-cancels active TTS by killing the helper process (devcmd `kill`),
+  so barge-in silence is bounded by one audio chunk.
+- Asynchronous serving of `listen`, `wake`, `hear`, and in-flight `say`/`sayq`
+  result reads in `speech9p`, with Flush/Clunk cancellation of parked reads.
+  A wake read blocked in a helper no longer freezes the serveloop, so `cancel`
+  writes (barge-in), `ctl`, and `sayq` stay live while helpers run.
 - `luciuisrv` support for `/n/ui/input-mode` and
   `conversation/voiceinput`, so keyboard mode can be paused while
   voice-originated turns still have a privileged path into `lucibridge`.
+  Input-mode changes are broadcast on the global `event` stream.
 - `lucibridge` support for `/voice mode on|off`, while preserving existing
-  `/voice on|off` auto-speak behavior.
-- A `voicemode` daemon MVP that reads `/n/speech/wake` and `/n/speech/listen`,
-  writes voice status resources, and injects final transcripts into
-  `conversation/voiceinput`.
+  `/voice on|off` auto-speak behavior. Keyboard and voice input are read
+  concurrently, so a mode switch takes effect immediately instead of after
+  the next message on the previously selected path; typed plain text is
+  paused (with a notice) while voice mode is active, but typed slash
+  commands — including `/voice mode off` — still work.
+- A resident `voicemode` daemon, pre-spawned at boot in an idle state. It
+  activates on the `input-mode v` broadcast (with an input-mode poll
+  fallback when the event stream is unavailable), runs the
+  WAITING_WAKE → LISTENING → PROCESSING/SPEAKING loop, re-arms wake during
+  the spoken response so a wake event acts as barge-in (`cancel`, then
+  listen), handles spoken control intents (stop/cancel, keyboard,
+  approve/deny), and returns to idle on `input-mode k`.
+- `Esc` exits voice mode: `lucifer`'s kbdproc tracks input-mode from global
+  events and writes `k` back to `/mnt/ui/input-mode` on Esc, which fans out
+  to `voicemode` (cancels speech, idles) and `lucibridge` (resumes typing).
+- Boot wiring in `lib/lucifer/boot.sh`: `speech9p` starts before
+  `lucibridge` (so the speech resource registers), and `voicemode` is
+  pre-spawned idle. Deviation from the original plan: the pre-spawn lives in
+  `boot.sh` rather than `lucifer.b`, because boot.sh is where the sibling
+  services (`luciuisrv`, `tools9p`, `lucibridge`) already start.
+- `module/speech.m` streaming `Partial` record type with the documented
+  `partial`/`final`/`error:` wire format for `/n/speech/listen`.
+- Tests: `tests/speech_wake_test.b`, `tests/speech_listen_test.b`,
+  `tests/speech_kokoro_test.b` (fake host helpers via ctl; includes
+  serveloop-liveness assertions), and `tests/voicemode_test.b` (daemon state
+  machine against a mock file tree), alongside the earlier
+  `tests/speech9p_voice_test.b` and `tests/luciuisrv_test.b` coverage.
 
 Still incomplete:
 
-- No bundled Kokoro, whisper streaming, or openWakeWord helpers.
+- No bundled Kokoro, whisper streaming, or openWakeWord helpers; install them
+  externally per Host Dependencies below.
 - No custom wake model.
-- No robust Echo/VAD handling while TTS is active.
-- Tool/task cancellation is best-effort; hard cancellation of arbitrary tools is
-  still future work.
+- No robust Echo/VAD handling while TTS is active beyond what the helpers
+  provide.
+- Tool/task cancellation is best-effort; hard cancellation of arbitrary
+  tools is still future work. TTS helper processes ARE hard-cancelled
+  (speechshim9p kills them via devcmd on `cancel`); in-flight wake/listen
+  helper reads survive a flush and are drained on completion.
 - Full end-to-end voice-only UX needs real helper installation and manual
   dogfood verification.
 

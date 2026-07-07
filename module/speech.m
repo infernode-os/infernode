@@ -54,6 +54,23 @@ Speech: module {
 		err:    string;  # Error message or nil
 	};
 
+	# One record from a streaming STT session (Phase 1.2 addition).
+	#
+	# /n/speech/listen serves these as newline-delimited text records:
+	#
+	#   partial <text>    hypothesis; may be revised by later records
+	#   final <text>      end-of-speech transcript; closes the utterance
+	#   error: <reason>   helper failure
+	#
+	# Bare text from batch-style helpers is treated as final. voicemode
+	# consumes the stream; speech9p passes helper records through
+	# unparsed (see appl/veltro/speech9p.b dolisten and appl/cmd/
+	# voicemode.b finaltext).
+	Partial: adt {
+		text:    string;  # Transcript text (partial or final)
+		isfinal: int;     # 0 = hypothesis, 1 = end-of-speech transcript
+	};
+
 	# TTS engine interface
 	TTSEngine: adt {
 		name:       fn(e: self ref TTSEngine): string;

@@ -289,6 +289,28 @@ speaktext(text: string)
 	writefile(ctxpath, "resource update path=speech status=idle");
 }
 
+# Persistent conversation-input reader. Re-opens the file for every read
+# because the 9P offset advances after a read (subsequent reads return EOF).
+# Feeds one shared channel so the main loop can block on keyboard input and
+# voice input simultaneously — picking a single path before blocking would
+# leave the bridge stuck on the stale path across an input-mode switch.
+# Sends nil once (open failure or EOF) and exits.
+inputreader(path: string, isvoice: int, ch: chan of (int, string))
+{
+	for(;;) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil) {
+			ch <-= (isvoice, nil);
+			return;
+		}
+		s := blockread(fd);
+		fd = nil;
+		ch <-= (isvoice, s);
+		if(s == nil)
+			return;
+	}
+}
+
 # Read from a blocking fd, strip trailing newline
 blockread(fd: ref Sys->FD): string
 {
@@ -2011,22 +2033,41 @@ init(nil: ref Draw->Context, args: list of string)
 		agentturn(kickoff);
 	}
 
-	# Main loop: re-open input fd each iteration because 9P offset
-	# advances after read, causing subsequent reads to return EOF.
+	# Main loop: both input paths are read concurrently so an input-mode
+	# switch takes effect immediately instead of after the next message on
+	# the previously selected path. Voice-originated turns arrive on
+	# conversation/voiceinput (written by voicemode); typed turns on
+	# conversation/input.
+	inputc := chan of (int, string);
+	spawn inputreader(inputpath, 0, inputc);
+	spawn inputreader(voiceinputpath, 1, inputc);
 	for(;;) {
-		path := inputpath;
-		if(inputmode() == "v")
-			path = voiceinputpath;
-		inputfd := sys->open(path, Sys->OREAD);
-		if(inputfd == nil)
-			fatal("cannot open " + path);
-		human := blockread(inputfd);
-		inputfd = nil;
+		(isvoice, human) := <-inputc;
 		if(human == nil) {
+			if(isvoice) {
+				# Older luciuisrv without voiceinput, or a flushed
+				# read — voice input is unavailable but the bridge
+				# keeps serving typed input.
+				log("voiceinput unavailable");
+				continue;
+			}
 			log("input closed");
 			break;
 		}
-		log("human: " + human);
+		if(isvoice)
+			log("voice: " + human);
+		else
+			log("human: " + human);
+
+		# Mutual exclusion: while voice mode is active, plain typed text
+		# is paused. Slash commands still work so /voice mode off can
+		# always be typed.
+		if(!isvoice && inputmode() == "v" &&
+		   !(len human > 0 && human[0] == '/')) {
+			writemsg("assistant",
+				"voice mode active — press Esc or say \"keyboard\" to resume typing");
+			continue;
+		}
 
 		# Slash commands (/bind, /unbind, /tools, /help) are handled locally.
 		# They update tools9p state and reply immediately; agent is not invoked.

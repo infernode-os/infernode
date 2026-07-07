@@ -186,19 +186,24 @@ testConfig(t: ref T)
 		"ctl reports piper say mount");
 }
 
+# speech9p no longer runs helper binaries itself: listen and wake are
+# consumed from the configured provider mount (speechshim9p, a parakeet
+# export, or — as here — plain files standing in for a provider).
 testListenWakeHelpers(t: ref T)
 {
-	t.assert(writefile(MNT + "/ctl", "whisperstreambin /bin/echo final helper transcript") > 0,
-		"configure fake listen helper");
-	t.assert(writefile(MNT + "/ctl", "wakebin /bin/echo wake helper") > 0,
-		"configure fake wake helper");
+	t.assert(writefile(MNT + "/ctl", "provider " + PARAKEETMNT) > 0,
+		"configure provider mount");
+	t.assert(createfile(PARAKEETMNT + "/listen", "final helper transcript\n") > 0,
+		"create fake provider listen file");
+	t.assert(createfile(PARAKEETMNT + "/wake", "wake hey_lucia 0.88\n") > 0,
+		"create fake provider wake file");
 
 	listen := readfile(MNT + "/listen");
 	t.assert(hassubstr(listen, "final helper transcript"),
-		"listen returns fake helper output");
+		"listen returns provider stream output");
 	wake := readfile(MNT + "/wake");
-	t.assert(hassubstr(wake, "wake helper"),
-		"wake returns fake helper output");
+	t.assert(hassubstr(wake, "wake hey_lucia"),
+		"wake returns provider event");
 }
 
 testParakeetListenMount(t: ref T)

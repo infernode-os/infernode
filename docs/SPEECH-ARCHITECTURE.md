@@ -123,6 +123,7 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 | `provider` | provider mount root | The speech provider mount behind `listen`, `wake`, kokoro-engine `say`, and `cancel` (see the provider contract below). Default `/n/parakeet`; boot points it at `/n/speechshim`. |
 | `listenengine` | `whisper` or `parakeet` | Compatibility alias; both values consume the provider mount. |
 | `whisperstreambin` / `wakebin` / `kokorobin` / `wakeword` / `wakethreshold` | helper commands and wake tuning | Stored for introspection and forwarded to the provider's `ctl`; `speechshim9p` consumes them. `speech9p` itself runs no helpers. |
+| `audiodev` / `capturedev` / `micmode` / `capturerate` | audio routing (see SPEECH-REMOTE-AUDIO.md) | Forwarded to the provider's `ctl` unchanged. In `speechshim9p`: `audiodev` is the playback (and default capture) device path; `capturedev` overrides capture (`default` clears it); `micmode helper\|device` chooses whether the helper CLI grabs the host mic or the shim pumps PCM from the capture device into helper stdin; `capturerate` is the pump sample rate. |
 | `parakeetmount` / `parakeetlisten` / `pipersay` | provider root, STT stream file, and TTS say file | Compatibility aliases for `provider` and its derived `listen`/`say` paths. |
 
 `/n/speech/listen` is the stable Infernode-facing interface.

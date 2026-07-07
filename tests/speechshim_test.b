@@ -29,6 +29,7 @@ SpeechshimTest: module {
 SRCFILE: con "/tests/speechshim_test.b";
 SHIMPATH: con "/dis/veltro/speechshim9p.dis";
 MNT: con "/tmp/speechshim_test";
+PCMFILE: con "/tmp/speechshim_test_pcm";
 
 passed := 0;
 failed := 0;
@@ -127,6 +128,59 @@ testConfig(t: ref T)
 
 # A one-shot helper exits after printing its event; the shim must restart
 # it on the next read so wake stays armed across events.
+testAudioRouting(t: ref T)
+{
+	ctl := readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "audiodev /dev/audio"), "default playback device");
+	t.assert(hassubstr(ctl, "micmode helper"), "default capture mode");
+	t.assert(hassubstr(ctl, "capturerate 16000"), "default capture rate");
+
+	t.assert(writefile(MNT + "/ctl", "audiodev /n/phone/audio") > 0, "audiodev accepted");
+	t.assert(writefile(MNT + "/ctl", "capturerate 24000") > 0, "capturerate accepted");
+	ctl = readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "audiodev /n/phone/audio"), "ctl reports audiodev");
+	t.assert(hassubstr(ctl, "capturerate 24000"), "ctl reports capturerate");
+
+	# Invalid values are logged, not applied (ctl writes always succeed).
+	writefile(MNT + "/ctl", "micmode banana");
+	ctl = readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "micmode helper"), "invalid micmode not applied");
+
+	writefile(MNT + "/ctl", "audiodev /dev/audio");
+	writefile(MNT + "/ctl", "capturerate 16000");
+}
+
+# micmode device: the shim itself reads PCM from the capture device and
+# feeds the listen helper's stdin — the property that makes a 9P-imported
+# microphone (remote instance, Android phone) work like the local one. A
+# plain file stands in for the device; the fake helper consumes 8 bytes of
+# stdin before emitting its record, so the record proves audio actually
+# flowed capture-device → pump → helper stdin.
+testDeviceCapture(t: ref T)
+{
+	fd := sys->create(PCMFILE, Sys->OWRITE, 8r644);
+	t.assert(fd != nil, "create fake capture device");
+	if(fd == nil)
+		return;
+	b := array of byte "0123456789abcdef";
+	sys->write(fd, b, len b);
+	fd = nil;
+
+	t.assert(writefile(MNT + "/ctl", "capturedev " + PCMFILE) > 0, "capturedev accepted");
+	t.assert(writefile(MNT + "/ctl", "micmode device") > 0, "micmode device accepted");
+	t.assert(writefile(MNT + "/ctl",
+		"whisperstreambin /bin/sh -c \"head -c 8 > /dev/null; echo final device audio heard\"") > 0,
+		"configure stdin-consuming fake listen helper");
+
+	listen := readfile(MNT + "/listen");
+	t.assert(hassubstr(listen, "final device audio heard"),
+		"helper fed from the capture device produced its record");
+
+	# Restore defaults for the remaining tests.
+	writefile(MNT + "/ctl", "micmode helper");
+	writefile(MNT + "/ctl", "capturedev default");
+}
+
 testWakeRestarts(t: ref T)
 {
 	t.assert(writefile(MNT + "/ctl", "wakebin /bin/echo wake fake-model 0.91") > 0,
@@ -192,8 +246,10 @@ init(nil: ref Draw->Context, args: list of string)
 	startserver();
 	run("Files", testFiles);
 	run("Config", testConfig);
+	run("AudioRouting", testAudioRouting);
 	run("WakeRestarts", testWakeRestarts);
 	run("ListenRecords", testListenRecords);
+	run("DeviceCapture", testDeviceCapture);
 	run("CancelKillsSay", testCancelKillsSay);
 
 	teardown();

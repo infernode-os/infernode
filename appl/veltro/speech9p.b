@@ -466,6 +466,10 @@ applyconfig(cmd: string): string
 	"wakethreshold" =>
 		wakethreshold = val;
 		forwardprovider(key, val);
+	"audiodev" or "capturedev" or "micmode" or "capturerate" =>
+		# Audio routing lives in the provider (docs/SPEECH-REMOTE-AUDIO.md);
+		# speech9p only passes the knobs through.
+		forwardprovider(key, val);
 	"provider" or "parakeetmount" =>
 		resetprovider();
 		providermount = val;

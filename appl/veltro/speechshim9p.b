@@ -6,7 +6,8 @@ implement Speechshim9p;
 #
 #   /n/speechshim/
 #   ├── ctl      (rw)  kokorobin, whisperstreambin, wakebin, wakeword,
-#   │                  wakethreshold, whispermodel, voice, rate
+#   │                  wakethreshold, whispermodel, voice, rate,
+#   │                  audiodev, capturedev, micmode, capturerate
 #   ├── listen   (r)   newline records from the streaming STT helper:
 #   │                  "partial <text>" / "final <text>" / "error: <reason>"
 #   ├── wake     (r)   blocks until the wake-word helper emits an event line
@@ -26,6 +27,20 @@ implement Speechshim9p;
 # with the shim. TTS is killed on cancel via the devcmd ctl "kill" command,
 # and playback checks the cancel flag between chunks, so barge-in silence is
 # bounded by one audio chunk rather than the remaining utterance.
+#
+# Audio routing (docs/SPEECH-REMOTE-AUDIO.md): playback always goes through
+# the namespace (`audiodev`, default /dev/audio), so binding an imported
+# remote audio device remotes the speakers with no shim changes. Capture has
+# two modes:
+#   micmode helper  (default) the helper CLI grabs the host microphone
+#                   itself — right when the shim runs on the machine the
+#                   user talks to.
+#   micmode device  the shim reads s16le mono PCM from `capturedev` (falls
+#                   back to `audiodev`) at `capturerate` and tees it into
+#                   the stdin of the listen/wake helpers. The microphone is
+#                   then just a namespace entry — an Android phone's or GUI
+#                   terminal's exported /dev/audio works the same as the
+#                   local device.
 #
 
 include "sys.m";
@@ -60,6 +75,10 @@ wakethreshold := "0.5";
 whispermodel := "";
 voice := "af_bella";
 audrate := 24000;
+audiodev := "/dev/audio";
+capturedev := "";		# capture override; empty = audiodev
+micmode := "helper";		# helper | device
+capturerate := 16000;
 
 stderr: ref Sys->FD;
 user: string;
@@ -101,6 +120,13 @@ helperc: chan of ref Helperdone;
 asyncpending: list of (int, int);   # (tag, fid)
 listenbusy := 0;
 wakebusy := 0;
+
+# Capture pump (micmode device): one proc owns the capture device and the
+# helper stdin sinks; registration and reset arrive over pumpc so there is
+# no shared mutable state between the pump and the 9P side.
+SINKLISTEN, SINKWAKE, SINKRESET, SINKQUIT: con iota;
+pumpc: chan of (int, ref Sys->FD);
+pumprunning := 0;
 
 nomod(s: string)
 {
@@ -155,6 +181,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	helperc = chan of ref Helperdone;
+	pumpc = chan[4] of (int, ref Sys->FD);
 
 	navops := chan of ref Navop;
 	spawn navigator(navops);
@@ -244,16 +271,124 @@ runcmd(cmd: string): string
 	return result;
 }
 
+# === Capture pump (micmode device) ===
+
+capdev(): string
+{
+	if(capturedev != "")
+		return capturedev;
+	return audiodev;
+}
+
+# Register a running helper's stdin as a pump sink.
+addsink(kind: int, p: ref Hostproc)
+{
+	wfd := sys->open(p.dir + "/data", Sys->OWRITE);
+	if(wfd == nil)
+		return;
+	if(!pumprunning) {
+		pumprunning = 1;
+		spawn audiopump();
+	}
+	pumpc <-= (kind, wfd);
+}
+
+pumpreset()
+{
+	if(pumprunning)
+		pumpc <-= (SINKRESET, nil);
+}
+
+opencapture(): ref Sys->FD
+{
+	dev := capdev();
+	if(dev == "/dev/audio")
+		bindaudio();
+	ctl := sys->open(dev + "ctl", Sys->OWRITE);
+	if(ctl != nil) {
+		writectl(ctl, sys->sprint("in rate %d", capturerate));
+		writectl(ctl, "in chans 1");
+		writectl(ctl, "in bits 16");
+		writectl(ctl, "in enc pcm");
+		ctl = nil;
+	}
+	return sys->open(dev, Sys->OREAD);
+}
+
+# Read s16le mono PCM from the capture device and tee it into the stdin of
+# the registered streaming helpers. The device is held open only while a
+# sink is registered. On device EOF (an exported file exhausted, an import
+# torn down) the sinks are closed so the helpers see stdin EOF and can
+# flush a final record.
+audiopump()
+{
+	sinks := array[2] of ref Sys->FD;
+	afd: ref Sys->FD;
+	for(;;) {
+		if(sinks[SINKLISTEN] == nil && sinks[SINKWAKE] == nil) {
+			afd = nil;	# release the device while idle
+			(k, fd) := <-pumpc;
+			if(k == SINKQUIT)
+				return;
+			if(k != SINKRESET)
+				sinks[k] = fd;
+			continue;
+		}
+	Drain:
+		for(;;) alt {
+		(k, fd) := <-pumpc =>
+			if(k == SINKQUIT)
+				return;
+			if(k == SINKRESET) {
+				afd = nil;
+				sinks[SINKLISTEN] = nil;
+				sinks[SINKWAKE] = nil;
+			} else
+				sinks[k] = fd;
+		* =>
+			break Drain;
+		}
+		if(sinks[SINKLISTEN] == nil && sinks[SINKWAKE] == nil)
+			continue;
+		if(afd == nil) {
+			afd = opencapture();
+			if(afd == nil) {
+				sinks[SINKLISTEN] = nil;
+				sinks[SINKWAKE] = nil;
+				continue;
+			}
+		}
+		chunk := capturerate / 10 * 2;	# 100ms of s16 mono
+		if(chunk < 512)
+			chunk = 512;
+		buf := array[chunk] of byte;
+		n := sys->read(afd, buf, len buf);
+		if(n <= 0) {
+			afd = nil;
+			sinks[SINKLISTEN] = nil;
+			sinks[SINKWAKE] = nil;
+			continue;
+		}
+		for(k := 0; k < 2; k++)
+			if(sinks[k] != nil && sys->write(sinks[k], buf[0:n], n) < 0)
+				sinks[k] = nil;	# helper died; drop the sink
+	}
+}
+
 # === Streaming reads (listen / wake) ===
 
 listencmd(): string
 {
+	if(micmode == "device")
+		return whisperstreambin;	# full command; reads PCM on stdin
 	return whisperstreambin + " --model " + whispermodel +
 		" --rate 16000 --chans 1 2>/dev/null";
 }
 
 wakecmd(): string
 {
+	if(micmode == "device")
+		return wakebin;			# full command; reads PCM on stdin
 	return wakebin + " --word '" + wakeword + "' --threshold " +
 		wakethreshold + " 2>/dev/null";
 }
@@ -274,6 +409,8 @@ readlisten(): string
 			if(p == nil)
 				return err;
 			listenproc = p;
+			if(micmode == "device")
+				addsink(SINKLISTEN, p);
 		}
 		buf := array[8192] of byte;
 		n := sys->read(listenproc.datafd, buf, len buf);
@@ -296,6 +433,8 @@ readwake(): string
 			if(p == nil)
 				return err;
 			wakeproc = p;
+			if(micmode == "device")
+				addsink(SINKWAKE, p);
 		}
 		buf := array[1024] of byte;
 		n := sys->read(wakeproc.datafd, buf, len buf);
@@ -336,8 +475,9 @@ dosay(text: string): string
 	sys->write(tofd, b, len b);
 	tofd = nil;
 
-	bindaudio();
-	ctl := sys->open("/dev/audioctl", Sys->OWRITE);
+	if(audiodev == "/dev/audio")
+		bindaudio();
+	ctl := sys->open(audiodev + "ctl", Sys->OWRITE);
 	if(ctl != nil) {
 		writectl(ctl, sys->sprint("out rate %d", audrate));
 		writectl(ctl, "out chans 1");
@@ -345,7 +485,7 @@ dosay(text: string): string
 		writectl(ctl, "out enc pcm");
 		ctl = nil;
 	}
-	afd := sys->open("/dev/audio", Sys->OWRITE);
+	afd := sys->open(audiodev, Sys->OWRITE);
 
 	total := 0;
 	buf := array[8192] of byte;
@@ -373,7 +513,7 @@ dosay(text: string): string
 		return status;
 	if(total == 0) {
 		if(afd == nil)
-			return sys->sprint("error: cannot open /dev/audio: %r");
+			return sys->sprint("error: cannot open %s: %r", audiodev);
 		return "error: kokoro produced no audio";
 	}
 	return sys->sprint("ok: played %d bytes", total);
@@ -479,7 +619,23 @@ readconfig(): string
 	result += "whispermodel " + whispermodel + "\n";
 	result += "voice " + voice + "\n";
 	result += "rate " + string audrate + "\n";
+	result += "audiodev " + audiodev + "\n";
+	result += "capturedev " + capturedev + "\n";
+	result += "micmode " + micmode + "\n";
+	result += "capturerate " + string capturerate + "\n";
 	return result;
+}
+
+# Capture-path config changed: restart the streaming helpers so they come
+# back up against the new device/mode, and make the pump drop its device fd
+# and stale sinks.
+resetcapture()
+{
+	killproc(listenproc);
+	listenproc = nil;
+	killproc(wakeproc);
+	wakeproc = nil;
+	pumpreset();
 }
 
 applyconfig(cmd: string): string
@@ -527,6 +683,25 @@ applyconfig(cmd: string): string
 		if(r < 8000 || r > 48000)
 			return "error: rate must be 8000-48000";
 		audrate = r;
+	"audiodev" =>
+		audiodev = val;
+		resetcapture();
+	"capturedev" =>
+		if(val == "default")
+			val = "";
+		capturedev = val;
+		resetcapture();
+	"micmode" =>
+		if(val != "helper" && val != "device")
+			return "error: micmode must be helper or device";
+		micmode = val;
+		resetcapture();
+	"capturerate" =>
+		r := int val;
+		if(r < 8000 || r > 48000)
+			return "error: capturerate must be 8000-48000";
+		capturerate = r;
+		resetcapture();
 	* =>
 		return "error: unknown config key: " + key;
 	}
@@ -790,6 +965,8 @@ Serve:
 		}
 	}
 	navops <-= nil;
+	if(pumprunning)
+		pumpc <-= (SINKQUIT, nil);	# don't outlive the mount
 }
 
 writectl(fd: ref Sys->FD, cmd: string)

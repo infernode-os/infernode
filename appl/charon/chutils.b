@@ -4,6 +4,7 @@ include "common.m";
 include "transport.m";
 include "date.m";
 include "translate.m";
+include "publicnet.m";
 
 	date: Date;
 	me: CharonUtils;
@@ -11,6 +12,7 @@ include "translate.m";
 	D: Draw;
 	S: String;
 	U: Url;
+	publicnet: Publicnet;
 	T: StringIntTab;
 
 Font : import D;
@@ -217,6 +219,9 @@ init(ch: Charon, c: CharonUtils, argl: list of string, evc: chan of ref E->Event
 		trans->init();
 		(dict, nil) = trans->opendict(trans->mkdictname(nil, "charon"));
 	}
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet != nil)
+		publicnet->init();
 
 	# Now have all the modules needed to process command line
 	# (hereafter can use our loadpath() function to substitute the
@@ -389,11 +394,14 @@ freebs(bs: ref ByteSource)
 
 # Fetch a URL synchronously and return the response body as a string.
 # Returns nil on error or empty response.
-fetchurl_text(url: ref Parsedurl) : string
+fetchurl_text(url: ref Parsedurl, initiator: ref Parsedurl) : string
 {
 	if(url == nil)
 		return nil;
-	ri := ref ReqInfo(url, HGet, nil, nil, nil);
+	init := "";
+	if(initiator != nil)
+		init = initiator.tostring();
+	ri := ref ReqInfo(url, HGet, nil, nil, nil, init);
 	bs := startreq(ri);
 	if(bs.err != "") {
 		freebs(bs);
@@ -418,7 +426,7 @@ fetchurl_text(url: ref Parsedurl) : string
 			break;
 		if(newurl != nil) {
 			freebs(bs);
-			ri = ref ReqInfo(newurl, HGet, nil, nil, nil);
+			ri = ref ReqInfo(newurl, HGet, nil, nil, nil, init);
 			bs = startreq(ri);
 			if(bs.err != "") {
 				freebs(bs);
@@ -513,6 +521,10 @@ mainloop:
 			(transport, err) := gettransport(scheme);
 			if(err != "")
 				bs.err = err;
+			else if(publicnet == nil)
+				bs.err = "network policy unavailable";
+			else if(!publicnet->transitionallowed(bs.req.initiator, scheme))
+				bs.err = "network content cannot access local transport";
 			else {
 				sport :=bs.req.url.port;
 				if(sport == "")

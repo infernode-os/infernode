@@ -6,4 +6,5 @@ Publicnet: module {
 	# string pinned to the validated IPv4 address.
 	dialaddr: fn(host, port: string): (string, string);
 	publicipv4: fn(addr: string): int;	# -1 malformed, 0 non-public, 1 public
+	transitionallowed: fn(initiator, targetscheme: string): int;
 };

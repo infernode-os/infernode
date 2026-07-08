@@ -49,5 +49,21 @@ init(nil: ref Draw->Context, nil: list of string)
 		sys->print("PUBLICNET FAIL: public pin addr=%s err=%s\n", addr, err);
 		return;
 	}
-	sys->print("PUBLICNET PASS: classify, deny loopback, pin public address\n");
+	if(publicnet->transitionallowed("https://example.invalid/page", "file")) {
+		sys->print("PUBLICNET FAIL: allowed network-to-file transition\n");
+		return;
+	}
+	if(publicnet->transitionallowed("HTTPS://example.invalid/page", "FILE")) {
+		sys->print("PUBLICNET FAIL: allowed mixed-case network-to-file transition\n");
+		return;
+	}
+	if(!publicnet->transitionallowed("https://example.invalid/page", "https")) {
+		sys->print("PUBLICNET FAIL: denied network-to-network transition\n");
+		return;
+	}
+	if(!publicnet->transitionallowed("", "file")) {
+		sys->print("PUBLICNET FAIL: denied direct local file transition\n");
+		return;
+	}
+	sys->print("PUBLICNET PASS: classify, deny loopback, pin public address, block network-to-local\n");
 }

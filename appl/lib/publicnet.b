@@ -95,3 +95,28 @@ publicipv4(s: string): int
 		return 0;
 	return 1;
 }
+
+transitionallowed(initiator, targetscheme: string): int
+{
+	if(initiator == nil || initiator == "")
+		return 1;
+	is := schemestr(initiator);
+	if(!networkscheme(is))
+		return 1;
+	return networkscheme(targetscheme);
+}
+
+networkscheme(s: string): int
+{
+	if(str != nil)
+		s = str->tolower(s);
+	return s == "http" || s == "https" || s == "ftp";
+}
+
+schemestr(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == ':')
+			return s[0:i];
+	return s;
+}

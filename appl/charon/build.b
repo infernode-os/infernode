@@ -7442,7 +7442,7 @@ fetchandapplycss(is: ref ItemSource, href: string)
 		return;
 	if(dbg)
 		sys->print("fetching stylesheet: %s\n", url.tostring());
-	text := CU->fetchurl_text(url);
+	text := CU->fetchurl_text(url, is.doc.src);
 	if(text == nil || text == "")
 		return;
 	# Parse with css.m and handle @import
@@ -7459,7 +7459,7 @@ fetchandapplycss(is: ref ItemSource, href: string)
 						if(impurl != nil) {
 							if(dbg)
 								sys->print("fetching @import: %s\n", impurl.tostring());
-							imptext := CU->fetchurl_text(impurl);
+							imptext := CU->fetchurl_text(impurl, url);
 							if(imptext != nil && imptext != "")
 								parsestyleblock(is, imptext);
 						}

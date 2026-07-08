@@ -928,7 +928,10 @@ get(g: ref GoSpec, f: ref Frame, origkind: int, hn: ref HistNode) : string
         G->setstatus(X("Fetching", "gui") + " " + sdest);
 	bsmain : ref ByteSource;
 	hdr : ref Header;
-	ri := ref ReqInfo(g.url, g.meth, array of byte g.body, g.auth, g.target);
+	initiator := "";
+	if(f != nil && f.doc != nil && f.doc.src != nil)
+		initiator = f.doc.src.tostring();
+	ri := ref ReqInfo(g.url, g.meth, array of byte g.body, g.auth, g.target, initiator);
 	authtried := 0;
 	realm := "";
 	auth := "";

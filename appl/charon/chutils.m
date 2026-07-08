@@ -180,6 +180,7 @@ CharonUtils: module
 		body:	array of byte;		# used for HPost
 		auth:	string;			# optional auth info
 		target:	string;			# target frame name
+		initiator:	string;			# URL that initiated this fetch, if any
 	};
 
 	MaskedImage: adt {
@@ -350,7 +351,7 @@ CharonUtils: module
 	abortgo: fn(gopgrp: int);
 	netget: fn();
 
-	fetchurl_text: fn(url: ref Url->Parsedurl) : string;
+	fetchurl_text: fn(url: ref Url->Parsedurl, initiator: ref Url->Parsedurl) : string;
 
 	# Miscellaneous utility functions
 	kill: fn(pid: int, dogroup: int);

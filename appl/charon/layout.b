@@ -395,7 +395,10 @@ layout(f: ref Frame, bsmain: ref ByteSource, linkclick: int) : array of byte
 						}
 						news := ref Source.Simage(nil, 0, newci, ps.itl, nil);
 						sources.add(news, 0);
-						startimreq(news, auth);
+						docsrc := "";
+						if(di.src != nil)
+							docsrc = di.src.tostring();
+						startimreq(news, auth, docsrc);
 					}
 				}
 				if(!use)
@@ -437,7 +440,10 @@ layout(f: ref Frame, bsmain: ref ByteSource, linkclick: int) : array of byte
 					if (s.itsrc.reqdurl != nil) {
 						news := ref Source.Srequired(nil, 0, s.itsrc);
 						sources.add(news, 1);
-						rbs := CU->startreq(ref CU->ReqInfo(s.itsrc.reqdurl, CU->HGet, nil, "", ""));
+						docsrc := "";
+						if(di.src != nil)
+							docsrc = di.src.tostring();
+						rbs := CU->startreq(ref CU->ReqInfo(s.itsrc.reqdurl, CU->HGet, nil, "", "", docsrc));
 						news.bs = rbs;
 					} else {
 						if (bs.eof && bs.lim == bs.edata && s.itsrc.toks == nil)
@@ -548,16 +554,19 @@ addsubords(sources: ref Sources, di: ref Docinfo, auth: string) : int
 	# Start requests for new newsources.
 	# di.images are in last-in-document-first order,
 	# so newsources is in first-in-document-first order (good order to load in).
+	initiator := "";
+	if(di.src != nil)
+		initiator = di.src.tostring();
 	for(sl := newsims; sl != nil; sl = tl sl)
-		startimreq(hd sl, auth);
+		startimreq(hd sl, auth, initiator);
 	return anyanim;
 }
 
-startimreq(s: ref Source.Simage, auth: string)
+startimreq(s: ref Source.Simage, auth, initiator: string)
 {
 	if(I == nil)
 		return;
-	bs := CU->startreq(ref CU->ReqInfo(s.ci.src, CU->HGet, nil, auth, ""));
+	bs := CU->startreq(ref CU->ReqInfo(s.ci.src, CU->HGet, nil, auth, "", initiator));
 	s.bs = bs;
 	s.imsrc = I->ImageSource.new(bs, s.ci.width, s.ci.height);
 }

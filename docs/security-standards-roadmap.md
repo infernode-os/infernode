@@ -1,9 +1,9 @@
-# Security Standards Roadmap — InferNode / NERVA
+# Security Standards Roadmap — InferNode
 
 **Status:** Living document — 2026-06-15
 **Audience:** engineering (backlog), and procurement / compliance / accreditors (evidence).
 
-InferNode and NERVA target **government, banking, finance, and military** computing.
+InferNode targets **government, banking, finance, and other high-assurance** computing.
 This document is the deliberate list of standards we aspire to, and — the part that
 matters — **the Inferno-native mechanism that satisfies each one more simply than the
 incumbents.** Every row should answer: *what does the standard require, and what is the
@@ -59,11 +59,11 @@ namespace policy*, not as bolted-on subsystems.
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **NIST SP 800-53 / FISMA** | Control catalog (AC/AU/IA/SC/…) | Map families to namespace + 9P + factotum + audit (see table below) | 1 |
-| **NIST SP 800-171 / CMMC** | CUI protection (defense contractors) | Subset of 800-53; the achievable near-term accreditation target | 1 |
+| **NIST SP 800-171 / CMMC** | CUI protection (regulated contractors) | Subset of 800-53; the achievable near-term accreditation target | 1 |
 | **Common Criteria (ISO 15408)** | Evaluated Protection Profile | Small TCB → target a *Separation Kernel PP* | 2 |
 | **NIST SP 800-207 Zero Trust** | No implicit trust | Default posture (no ambient authority) — mostly document it | 0 |
 
-### Military / classified
+### High-assurance / separation
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **MLS (Bell-LaPadula / Biba)** | No read-up / no write-down | Labels on namespaces; policy at bind time, not a kernel retrofit | 2 |

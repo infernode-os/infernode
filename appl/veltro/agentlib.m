@@ -58,7 +58,7 @@ AgentLib: module {
 	buildtoolresults: fn(results: list of (string, string)): string;
 
 	# MCP router (INFR-247): generic 9P-MCP discovery, tool-def building, and
-	# tolerant tool-name routing — shared by NERVA and the sub-agent bridge. MCP
+	# tolerant tool-name routing — shared by the primary agent dispatch and the sub-agent bridge. MCP
 	# adapters present /mnt/mcp/<server>/{_meta/name, tools/<tool>/{doc,schema,call}}.
 	mcpdiscover: fn(mountpaths: list of string): (list of (string, string), list of (string, string));
 	mcptooldefs: fn(mounts: list of (string, string), maxper, budget: int): string;

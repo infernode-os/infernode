@@ -1233,7 +1233,7 @@ buildtoolresults(results: list of (string, string)): string
 }
 
 # ============================================================================
-# MCP router (INFR-247) — generic 9P-MCP discovery/routing shared by NERVA and
+# MCP router (INFR-247) — generic 9P-MCP discovery/routing shared by the primary agent dispatch and
 # the sub-agent bridge. An MCP adapter (mcp9p / a Styx-mounted serve-<svc>)
 # presents /mnt/mcp/<server>/{_meta/name, tools/<tool>/{doc,schema,call}}.
 # ============================================================================
@@ -1279,7 +1279,7 @@ mcpdiscover(mountpaths: list of string): (list of (string, string), list of (str
 }
 
 # Build the combined tool-defs JSON array for the discovered mounts. Mirrors
-# nerva.b's buildtoolentries: each tool -> {"name":"<prefix>_<tool>",
+# the agent runtime's buildtoolentries: each tool -> {"name":"<prefix>_<tool>",
 # "description":<doc>,"parameters":<schema>}, name-sanitized, $schema stripped.
 mcptooldefs(mounts: list of (string, string), maxper, budget: int): string
 {

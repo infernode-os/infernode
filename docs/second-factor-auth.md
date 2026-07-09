@@ -200,7 +200,7 @@ today (PAK, fetch, write `/mnt/factotum/ctl`).
 
 **Backup key** (`twofaslot->addkey`): wraps the *same* DK into a new key slot
 (unlocked via the recovery passphrase) so a second YubiKey is no single point of
-failure — the NERV "pairs only" rule (Nano + NFC).
+failure — the "pairs only" rule (Nano + NFC).
 
 Properties:
 - A 2FA account has **no password-only slot**, so the blob needs *both* the
@@ -233,7 +233,7 @@ Properties:
 
 - **Lost / absent factor:** must not be a hard lockout. Options: keep the
   password-only path as a recovery mode (weaker, opt-out for high-security), or
-  enroll **two** factors (e.g. both YubiKeys, à la NERV "pairs only" rule), or a
+  enroll **two** factors (e.g. both YubiKeys, à la the "pairs only" rule), or a
   one-time recovery code sealed in a vault. Design supports N factors per account.
 - **Presence ≠ identity:** touch proves the key is present, not who touched it;
   the FIDO2 PIN / biometric supplies the "who."

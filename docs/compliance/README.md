@@ -1,4 +1,4 @@
-# Compliance Evidence Register — InferNode / NERVA
+# Compliance Evidence Register — InferNode
 
 **Status:** Living document — started 2026-06-22
 **Owner:** Security & Compliance program — Jira epic **INFR-328** (roadmap: [`../security-standards-roadmap.md`](../security-standards-roadmap.md))

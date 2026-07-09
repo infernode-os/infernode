@@ -7,8 +7,8 @@ the Atlassian MCP wasn't reachable in-session; bulk-create from this.)
 ---
 
 ## EPIC 0 — Security & Compliance Standards Program (umbrella)
-**Tier:** — **Description:** Establish the program that takes InferNode/NERVA toward
-government, banking, finance, and military accreditation, implemented the Inferno way
+**Tier:** — **Description:** Establish the program that takes InferNode toward
+government, banking, finance, and high-assurance accreditation, implemented the Inferno way
 (namespace + 9P + factotum + small TCB). Tracks the roadmap and the SP 800-53 mapping.
 **Acceptance:** roadmap doc maintained; control-mapping table kept current; each Tier-1
 epic linked here.

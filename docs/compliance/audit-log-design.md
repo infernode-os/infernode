@@ -110,7 +110,7 @@ by construction.
 ```
 seq  timestamp            source   event     hash             message
 1042 2026-06-23T07:15:04Z login    unlock    7b2290…(64 hex)  user=alice aal=3 key=yk-37602882
-1043 2026-06-23T07:20:00Z -        checkpoint 4a90ff…         head=4a90ff… sig=mldsa87:5e21…9a signer=audit@nerva3
+1043 2026-06-23T07:20:00Z -        checkpoint 4a90ff…         head=4a90ff… sig=mldsa87:5e21…9a signer=audit@node2
 ```
 - `seq` decimal, **server-assigned** monotonic (caller can't forge order).
 - `timestamp` **server-assigned** RFC3339 UTC (caller can't backdate).

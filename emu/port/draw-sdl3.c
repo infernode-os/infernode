@@ -764,10 +764,10 @@ sdl3_preinit(void)
 	}
 
 	/* Set app metadata for macOS menu bar and About dialog */
-	SDL_SetAppMetadata("InferNode", "1.0", "systems.nerv.infernode");
-	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_CREATOR_STRING, "NERV Systems");
-	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_COPYRIGHT_STRING, "Copyright 2026 NERV Systems. MIT License.");
-	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_URL_STRING, "https://github.com/NERVsystems/infernode");
+	SDL_SetAppMetadata("InferNode", "1.0", "io.infernode");
+	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_CREATOR_STRING, "The InferNode Authors");
+	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_COPYRIGHT_STRING, "Copyright 2026 The InferNode Authors. MIT License.");
+	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_URL_STRING, "https://github.com/infernode-os/infernode");
 	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_TYPE_STRING, "Operating System");
 
 	driver = SDL_GetCurrentVideoDriver();

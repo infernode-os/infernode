@@ -46,6 +46,7 @@ sleep 3
 
 echo '=== 1. check balance ==='
 cat /n/wallet/veltro-demo-wallet/balance
+echo 'requireapproval off' > /n/wallet/veltro-demo-wallet/ctl
 
 echo '=== 2. send 1000 wei ETH ==='
 echo '1000 $BURN' > /n/wallet/veltro-demo-wallet/pay

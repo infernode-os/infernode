@@ -128,6 +128,7 @@ TARG=\
 	matrix_test.dis\
 	opus_test.dis\
 	keyringinst_test.dis\
+	wallet_capability_test.dis\
 	contacts_tool_test.dis\
 	sms_msgsrc_test.dis\
 	bioauth_test.dis\

@@ -74,7 +74,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	writefile("/n/wallet/ctl", "default captest");
 
 	caps := ref NsConstruct->Capabilities("wallet" :: nil, "/n/wallet" :: nil,
-		nil, nil, nil, nil, 0, 0, -1, nil);
+		nil, nil, nil, nil, 0, 0, -1, nil, nil);
 	sys->pctl(Sys->FORKNS, nil);
 	err := nsc->restrictns(caps);
 	if(err != nil) {

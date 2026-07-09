@@ -315,7 +315,7 @@ restrictNsWorker(result: chan of string)
 		0,                    # xenith
 		-1,                   # actid
 		nil
-	);
+	, nil);
 
 	# Apply namespace restriction
 	err := nsconstruct->restrictns(caps);
@@ -435,7 +435,7 @@ taskMetadataCapabilityWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"task" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (task tool) failed: %s", err);
@@ -474,7 +474,7 @@ tmpVeltroIpcHiddenWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict tmp IPC worker: %s", err);
@@ -513,7 +513,7 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"editor" :: nil, "/tmp/veltro/editor" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict tmp explicit worker: %s", err);
@@ -557,7 +557,7 @@ activityScratchWriter(result: chan of string, id: int)
 	caps := ref NsConstruct->Capabilities(
 		"write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, id, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict writer scratch: %s", err);
@@ -578,7 +578,7 @@ activityScratchReader(result: chan of string, id: int)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, id, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict reader scratch: %s", err);
@@ -607,7 +607,7 @@ networkCapabilityWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"webfetch" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (network tool) failed: %s", err);
@@ -651,7 +651,7 @@ shellWorker(result: chan of string)
 		0,                        # xenith
 		-1,                       # actid
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -718,7 +718,7 @@ mntWorker(result: chan of string)
 		0,                        # xenith
 		-1,                       # actid
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -779,7 +779,7 @@ mntLlmWorker(result: chan of string)
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (llm grant) failed: %s", err);
@@ -836,7 +836,7 @@ mntCombinedWorker(result: chan of string)
 		0,
 		-1,
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -906,7 +906,7 @@ raceWorker(done: chan of int, errors: chan of string)
 		0,
 		-1,
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil)
@@ -938,7 +938,7 @@ verifyNsWorker(result: chan of string)
 		nil, nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1071,7 +1071,7 @@ tmpWritableWorker(result: chan of string)
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1123,7 +1123,7 @@ execGrantsShDisWorker(result: chan of string)
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1193,7 +1193,7 @@ pathsExposureWorker(result: chan of string)
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1310,7 +1310,7 @@ toolCtlHiddenWorker(result: chan of string)
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1380,7 +1380,7 @@ invalidGrantPathsWorker(result: chan of string)
 			nil, nil,
 			0 :: 1 :: 2 :: nil,
 			nil, 0, 0, -1, nil
-		);
+		, nil);
 		err := nsconstruct->restrictns(caps);
 		if(err == nil) {
 			result <-= "restrictns accepted invalid grant path: " + bad[i];
@@ -1411,7 +1411,7 @@ invalidGrantTypeWorker(result: chan of string)
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err == nil) {
 		result <-= "restrictns accepted a grant below a regular file";
@@ -1446,7 +1446,7 @@ testStagedWriteOverlay(t: ref T)
 		0,
 		41,
 		base :: nil
-	);
+	, nil);
 
 	nsconstruct->emitmanifest(caps, manifest);
 	mdata := readfilecontent(manifest);
@@ -1552,7 +1552,7 @@ environmentAllowlistWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns failed: %s", err);
@@ -1602,7 +1602,7 @@ execProgAllowlistWorker(result: chan of string, parentpid: int)
 	caps := ref NsConstruct->Capabilities(
 		"exec" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (exec) failed: %s", err);
@@ -1632,7 +1632,7 @@ progAllowlistWorker(result: chan of string, parentpid: int)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns failed: %s", err);

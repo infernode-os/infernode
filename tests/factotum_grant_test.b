@@ -44,7 +44,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Capabilities(tools, paths, shellcmds, llmconfig, fds, mcproviders,
 	#              memory, xenith, actid, writepaths). actid=-1 => no cowfs.
-	caps := ref NsConstruct->Capabilities(tools, nil, nil, nil, nil, nil, 0, 0, -1, nil);
+	caps := ref NsConstruct->Capabilities(tools, nil, nil, nil, nil, nil, 0, 0, -1, nil, nil);
 
 	sys->pctl(Sys->FORKNS, nil);
 	err := nsc->restrictns(caps);

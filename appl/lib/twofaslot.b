@@ -2,7 +2,7 @@ implement Twofaslot;
 
 #
 # Twofaslot — per-account second-factor key-slots. See module/twofaslot.m and
-# doc/second-factor-auth.md.
+# docs/second-factor-auth.md.
 #
 include "sys.m";
 	sys: Sys;

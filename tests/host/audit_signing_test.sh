@@ -9,7 +9,7 @@
 # auditverify. Non-fatal in CI (best-effort, like the other host tests):
 # a partial Inferno namespace yields SKIP, not failure.
 #
-# See doc/compliance/audit-log-factotum-signing-DESIGN.md.
+# See docs/compliance/audit-log-factotum-signing-DESIGN.md.
 set -e
 
 . "$(dirname "$0")/common.sh"

@@ -1,6 +1,6 @@
 # 2FA host PoC (Phase 0)
 
-Host-side proof-of-concept for `doc/second-factor-auth.md`. It validates — on a
+Host-side proof-of-concept for `docs/second-factor-auth.md`. It validates — on a
 real YubiKey — the cryptographic foundation for gating InferNode's secstore
 unlock behind a physical second factor, **before** any `emu`/Limbo work.
 
@@ -53,4 +53,4 @@ remains a valid fallback provider per the design doc.
 Phase 0 only. Phases 1–4 (emu `dev2fa.c` + `/mnt/2fa`, Limbo `twofa`,
 `secstore.b` `mkfilekey3_2fa`, `logon.b` enroll/unlock UI, mobile-biometric
 provider via the existing `/phone/bio_*` bridge, wallet gating) follow per
-`doc/second-factor-auth.md` §9.
+`docs/second-factor-auth.md` §9.

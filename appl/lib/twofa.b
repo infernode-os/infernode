@@ -2,7 +2,7 @@ implement Twofa;
 
 #
 # Twofa — Limbo wrapper over the #F (2fa) device. See module/twofa.m and
-# doc/second-factor-auth.md.
+# docs/second-factor-auth.md.
 #
 include "sys.m";
 	sys: Sys;

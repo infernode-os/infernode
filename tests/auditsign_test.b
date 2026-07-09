@@ -6,7 +6,7 @@ implement AuditsignTest;
 # exact encode (mkauditkey) and decode (proto/sign.b) transforms plus the
 # keyring sign/verify roundtrip, so a break here localizes the bug without
 # a live factotum. The wire-protocol half is covered by the integration
-# recipe in doc/compliance/audit-log-factotum-signing-DESIGN.md.
+# recipe in docs/compliance/audit-log-factotum-signing-DESIGN.md.
 #
 
 include "sys.m";

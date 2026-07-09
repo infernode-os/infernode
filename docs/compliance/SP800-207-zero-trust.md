@@ -21,7 +21,7 @@ user/host identity.
 | # | SP 800-207 tenet (abridged) | InferNode mechanism | Evidence |
 |---|------------------------------|---------------------|----------|
 | 1 | All data sources & compute are resources | Everything is a file served over Styx/9P | `doc/styx.ms`; `docs/NAMESPACE.md` |
-| 2 | All communication secured regardless of network location | 9P-over-TLS + native STS transport, **hybrid PQ** (X25519+ML-KEM, DH+ML-KEM) | `doc/compliance/CNSA-2.0.md` §4; `docs/CRYPTO-MODERNIZATION.md` §10 |
+| 2 | All communication secured regardless of network location | 9P-over-TLS + native STS transport, **hybrid PQ** (X25519+ML-KEM, DH+ML-KEM) | `docs/compliance/CNSA-2.0.md` §4; `docs/CRYPTO-MODERNIZATION.md` §10 |
 | 3 | Access granted **per-session** | Each agent/process forks its own namespace and is restricted at start of session | `appl/veltro/SECURITY.md` (3 entry points: tools9p/repl/spawn) |
 | 4 | Access by **dynamic policy**, least privilege | Capability set → `restrictns(caps)` bind-replace allowlist; child caps ≤ parent caps | `appl/veltro/nsconstruct.b`; `docs/NAMESPACE_SECURITY_REVIEW.md` §11 |
 | 5 | Integrity/posture of assets monitored | `verifyns()` post-restriction audit (positive + negative assertions); formal verification of the kernel primitive | `appl/veltro/SECURITY.md` §Verification; `formal-verification/` |
@@ -59,7 +59,7 @@ This is the property the roadmap calls out: *"a process cannot name what isn't b
 ## 3. Assurance — the posture is formally verified, not merely asserted
 
 The namespace isolation that Zero Trust rests on is **machine-checked**, which is the
-differentiator a Linux/Windows ZTA cannot offer (see `doc/security-standards-roadmap.md`,
+differentiator a Linux/Windows ZTA cannot offer (see `docs/security-standards-roadmap.md`,
 "the thesis"):
 
 | Property | Tool | Result | Source |

@@ -910,7 +910,8 @@ postevent(msg: string)
 # ---------- 9P File Server ----------
 
 # --- Real-file IPC for Veltro tool access ---
-# /tmp/veltro/editor/ is inside the restricted agent namespace (/tmp/veltro/ is always granted).
+# /tmp/veltro/editor/ is visible to the editor tool through an explicit path
+# capability, not as ambient /tmp/veltro state.
 # Named "editor" (not "edit") to match the tool name and avoid confusion with the "edit" tool.
 EDIT_DIR:  con "/tmp/veltro/editor";
 EDIT_INST: con "/tmp/veltro/editor/1";
@@ -2221,7 +2222,8 @@ readf(path: string): string
 }
 
 # ---------- Real-file IPC helpers ----------
-# /tmp/veltro/editor/ is inside the restricted agent namespace.
+# /tmp/veltro/editor/ is visible to the editor tool through an explicit path
+# capability, not as ambient /tmp/veltro state.
 # The tick loop polls command files and writes state files so the
 # Veltro editor tool can read/write the editor across namespace forks.
 

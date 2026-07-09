@@ -2154,7 +2154,7 @@ globallistener()
 					pcsv := "";
 					(nil, ptoks) := sys->tokenize(strip(paths), "\n");
 					for(; ptoks != nil; ptoks = tl ptoks) {
-						p := strip(hd ptoks);
+						p := provisionpatharg(hd ptoks);
 						if(p == "") continue;
 						if(pcsv != "")
 							pcsv += ",";
@@ -2750,6 +2750,20 @@ readfile(path: string): string
 	if(result == "")
 		return nil;
 	return result;
+}
+
+provisionpatharg(line: string): string
+{
+	line = strip(line);
+	for(i := len line - 1; i > 0; i--) {
+		if(line[i] == ' ') {
+			perm := line[i+1:];
+			if(perm == "ro" || perm == "rw")
+				return line[0:i] + ":" + perm;
+			break;
+		}
+	}
+	return line;
 }
 
 writefile(path, data: string)

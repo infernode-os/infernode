@@ -1217,6 +1217,8 @@ emitmanifestnow(mpath: string)
 	   findtool("contacts") != nil)
 		if(!strlist_contains(allpaths, "/phone"))
 			allpaths = "/phone" :: allpaths;
+	for(tl3 := toolnames; tl3 != nil; tl3 = tl tl3)
+		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	);
@@ -1275,6 +1277,7 @@ applynsrestriction(invokedtool: string): string
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
+	allpaths = addtoolpaths(allpaths, invokedtool);
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	);
@@ -1293,6 +1296,30 @@ applynsrestriction(invokedtool: string): string
 		return e;
 	}
 	return nil;
+}
+
+addtoolpaths(paths: list of string, tool: string): list of string
+{
+	case tool {
+	"charon" =>
+		return addpath(paths, "/tmp/veltro/browser");
+	"editor" =>
+		return addpath(paths, "/tmp/veltro/editor");
+	"shell" =>
+		return addpath(paths, "/tmp/veltro/shell");
+	"fractal" =>
+		return addpath(paths, "/tmp/veltro/fractal");
+	"man" =>
+		return addpath(paths, "/tmp/veltro/man");
+	}
+	return paths;
+}
+
+addpath(paths: list of string, path: string): list of string
+{
+	if(strlist_contains(paths, path))
+		return paths;
+	return path :: paths;
 }
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop, mounted: chan of int)

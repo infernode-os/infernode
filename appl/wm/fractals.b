@@ -1013,7 +1013,8 @@ horizline(calc: ref Calc, d: ref Image, x0, x1, y: int, col: int)
 
 # ---- Veltro real-file IPC ----
 #
-# /tmp/veltro/fractal/ is inside the restricted agent namespace.
+# /tmp/veltro/fractal/ is visible to the fractal tool through an explicit
+# path capability, not as ambient /tmp/veltro state.
 # The tick loop polls command files and writes state files so the
 # Veltro fractal tool can drive the viewer across namespace forks.
 

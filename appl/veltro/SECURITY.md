@@ -45,11 +45,21 @@ Apply these invariants:
   authority-bearing coordinator's context. Cross-boundary output is bounded and
   parsed into an expected result type before trusted code uses it.
 
+Effectful workflows use a proposal/commit split. Agent-visible endpoints create
+inert proposal objects or immutable pending requests; trusted controller
+endpoints perform the commit by copying approved data across the authority
+boundary. Treat this as the general copy-on-write pattern for message replies,
+file edits, payments, and other external effects: proposal files are not effect
+capabilities.
+
 Message replies use two separate authorities. An agent with an exact
-`/mnt/msg/reply` grant can only queue immutable content. The trusted controller
-alone can inspect `/mnt/msg/pending` and consume a request once through
-`/mnt/msg/approve` (or discard it through `/mnt/msg/deny`). Never bind those
-controller endpoints into an agent namespace.
+`/mnt/msg/draft` grant can only queue immutable reply proposals. The trusted
+controller alone can inspect `/mnt/msg/pending` and consume a request once
+through `/mnt/msg/approve` (or discard it through `/mnt/msg/deny`). Never bind
+those controller endpoints into an agent namespace. Message notification text is
+also part of the boundary: source-controlled fields must remain single physical
+lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`
+control records.
 
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates

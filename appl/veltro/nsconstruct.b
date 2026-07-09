@@ -556,7 +556,10 @@ restrictns(caps: ref Capabilities): string
 
 tmpveltroallow(caps: ref Capabilities): list of string
 {
-	allow := "scratch" :: nil;
+	# .ns contains the namespace manifest consumed by Lucifer's context view.
+	# It is application metadata, not authority: hiding it prevents tools9p's
+	# post-restrict emitmanifest() from writing the live namespace description.
+	allow := ".ns" :: "scratch" :: nil;
 
 	for(p := filterpaths(caps.paths, "/tmp/veltro/"); p != nil; p = tl p) {
 		(first, nil) := splitfirst(hd p);

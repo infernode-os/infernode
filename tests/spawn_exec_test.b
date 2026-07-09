@@ -134,17 +134,39 @@ testSpawnExec(t: ref T)
 
 	# First, test with just /tmp (no copying needed, dir already in sandbox)
 	t.log("Testing spawn with list /tmp...");
-	result := tool->exec("tools=list -- list /tmp");
+	result := tool->exec("-- tools=list :: list /tmp");
 
 	t.log(sys->sprint("spawn result (%d chars): %s", len result, result[0:min(300, len result)]));
 
 	if(hasprefix(result, "error:")) {
+		if(result == "error: LLM returned empty response") {
+			t.skip("spawn needs a live LLM response in this harness");
+			return;
+		}
 		t.error(sys->sprint("spawn failed: %s", result));
 		return;
 	}
 
 	# /tmp should exist in restricted namespace
 	t.assert(len result >= 0, "spawn should return a result");
+}
+
+testSpawnRejectsExecWithPaths(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.fatal(sys->sprint("cannot load spawn tool: %r"));
+		return;
+	}
+	err := tool->init();
+	if(err != nil) {
+		t.fatal(sys->sprint("spawn init failed: %s", err));
+		return;
+	}
+	result := tool->exec("-- tools=exec paths=/lib/veltro :: inspect");
+	t.log(sys->sprint("spawn reject result: %s", result));
+	t.assert(contains(result, "exec/shell subagents cannot receive path grants"),
+		"spawn rejects exec with extra paths");
 }
 
 contains(s, sub: string): int
@@ -191,6 +213,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("LoadListTool", testLoadListTool);
 	run("LoadReadTool", testLoadReadTool);
 	run("SpawnExec", testSpawnExec);
+	run("SpawnRejectsExecWithPaths", testSpawnRejectsExecWithPaths);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

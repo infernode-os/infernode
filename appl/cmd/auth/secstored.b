@@ -436,6 +436,10 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	if(n <= 0){
 		if(debug)
 			log(sys->sprint("PAK client read failed: n=%d", n));
+		# The client has already received the server verifier above. A guessing
+		# tool can learn that its password guess was wrong from that verifier and
+		# then close before sending k'. Count that abort as a failed password proof.
+		notefail(C);
 		return (nil, nil, C);
 	}
 	s := string buf[0:n];

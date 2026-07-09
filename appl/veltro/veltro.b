@@ -276,7 +276,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 		parent_caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
-		);
+		, nil);
 
 		# Apply namespace restrictions
 		nserr := nsconstruct->restrictns(parent_caps);

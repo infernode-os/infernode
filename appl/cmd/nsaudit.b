@@ -384,9 +384,9 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 	# and are not covered by cowfs (actid >= 0 covers /n/local/*).
 	for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 		p := hd wl;
-		if(prefix(p, "/tmp/veltro"))
+		if(pathwithin("/tmp/veltro", p))
 			continue;
-		if(caps.actid >= 0 && prefix(p, "/n/local"))
+		if(caps.actid >= 0 && pathwithin("/n/local", p))
 			continue;
 		inv.writes_durable = p :: inv.writes_durable;
 	}
@@ -412,7 +412,7 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 
 	# A factotum mount in reads_fs means the agent can read live secrets.
 	for(rl2 := inv.reads_fs; rl2 != nil; rl2 = tl rl2) {
-		if(prefix(hd rl2, "/mnt/factotum")) {
+		if(pathwithin("/mnt/factotum", hd rl2)) {
 			if(!contains(inv.auths, "reads_secrets_factotum"))
 				inv.auths = "reads_secrets_factotum" :: inv.auths;
 			inv.sources = ("reads_secrets_factotum", "via " + hd rl2) :: inv.sources;
@@ -426,7 +426,36 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		inv.sources = ("spend_ungated", "spends granted, no caps.walletbudget") :: inv.sources;
 	}
 
+	for(pl3 := caps.paths; pl3 != nil; pl3 = tl pl3) {
+		p := hd pl3;
+		if(privilegedControlGrant(p)) {
+			if(!contains(inv.auths, "privileged_control_path"))
+				inv.auths = "privileged_control_path" :: inv.auths;
+			inv.sources = ("privileged_control_path", "via path " + p) :: inv.sources;
+		}
+	}
+
 	return inv;
+}
+
+privilegedControlGrant(p: string): int
+{
+	dangerous := array[] of {
+		"/tool/ctl",
+		"/mnt/toolctl",
+		"/mnt/toolctl/ctl",
+		"/mnt/msg/ctl",
+		"/mnt/msg/pending",
+		"/mnt/msg/approve",
+		"/mnt/msg/deny",
+		"/n/wallet/ctl",
+		"/n/wallet/pending",
+		"/n/wallet/new",
+	};
+	for(i := 0; i < len dangerous; i++)
+		if(p == dangerous[i])
+			return 1;
+	return 0;
 }
 
 contains(l: list of string, s: string): int
@@ -442,6 +471,15 @@ prefix(s, p: string): int
 	if(len s < len p)
 		return 0;
 	return s[0:len p] == p;
+}
+
+pathwithin(grant, want: string): int
+{
+	if(grant == want)
+		return 1;
+	if(len want > len grant && want[0:len grant] == grant && want[len grant] == '/')
+		return 1;
+	return 0;
 }
 
 #
@@ -582,9 +620,9 @@ runReport(inv: ref Inventory, rules: list of ref Rule)
 		for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 			p := hd wl;
 			tag := "";
-			if(prefix(p, "/tmp/veltro"))
+			if(pathwithin("/tmp/veltro", p))
 				tag = " [ephemeral]";
-			else if(inv.caps.actid >= 0 && prefix(p, "/n/local"))
+			else if(inv.caps.actid >= 0 && pathwithin("/n/local", p))
 				tag = sys->sprint(" [cowfs actid=%d]", inv.caps.actid);
 			else
 				tag = " [DURABLE]";
@@ -638,9 +676,9 @@ runReach(inv: ref Inventory, path: string)
 	}
 	if(writ != "") {
 		tag := "";
-		if(prefix(writ, "/tmp/veltro"))
+		if(pathwithin("/tmp/veltro", writ))
 			tag = " (ephemeral)";
-		else if(inv.caps.actid >= 0 && prefix(writ, "/n/local"))
+		else if(inv.caps.actid >= 0 && pathwithin("/n/local", writ))
 			tag = sys->sprint(" (cowfs actid=%d, reversible)", inv.caps.actid);
 		else
 			tag = " (DURABLE)";
@@ -655,7 +693,7 @@ matchesAny(l: list of string, path: string): string
 {
 	for(; l != nil; l = tl l) {
 		p := hd l;
-		if(prefix(path, p))
+		if(pathwithin(p, path))
 			return p;
 	}
 	return "";
@@ -772,9 +810,9 @@ runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rul
 	for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 		p := hd wl;
 		tag := "durable";
-		if(prefix(p, "/tmp/veltro"))
+		if(pathwithin("/tmp/veltro", p))
 			tag = "ephemeral";
-		else if(c.actid >= 0 && prefix(p, "/n/local"))
+		else if(c.actid >= 0 && pathwithin("/n/local", p))
 			tag = "cowfs";
 		sys->fprint(stdout, "writes_fs=%s\treversibility=%s\n",
 			mquote(p), tag);
@@ -809,9 +847,9 @@ runReachMachine(stdout: ref Sys->FD, inv: ref Inventory, path, reach, writ: stri
 		sys->fprint(stdout, "reads_fs=no\n");
 	if(writ != "") {
 		tag := "durable";
-		if(prefix(writ, "/tmp/veltro"))
+		if(pathwithin("/tmp/veltro", writ))
 			tag = "ephemeral";
-		else if(inv.caps.actid >= 0 && prefix(writ, "/n/local"))
+		else if(inv.caps.actid >= 0 && pathwithin("/n/local", writ))
 			tag = "cowfs";
 		sys->fprint(stdout, "writes_fs=yes\tvia=%s\treversibility=%s\n",
 			mquote(writ), tag);

@@ -1002,6 +1002,16 @@ verifyns(expected: list of string): string
 		"/.env",
 		"/.git",
 		"/CLAUDE.md",
+		"/tool/ctl",
+		"/mnt/toolctl",
+		"/mnt/toolctl/ctl",
+		"/mnt/msg/ctl",
+		"/mnt/msg/pending",
+		"/mnt/msg/approve",
+		"/mnt/msg/deny",
+		"/n/wallet/ctl",
+		"/n/wallet/pending",
+		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++) {
 		(dok, nil) := sys->stat(dangerous[i]);

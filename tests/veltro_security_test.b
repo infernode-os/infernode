@@ -933,9 +933,24 @@ verifyNsWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 
+	# Seed representative privileged control files before restriction. The
+	# shared verifier must prove restriction hides real pre-existing controls,
+	# not just paths absent from the test namespace.
+	mkdirp("/tool");
+	createfile("/tool/ctl");
+	mkdirp("/mnt");
+	mkdirp("/mnt/toolctl");
+	createfile("/mnt/toolctl/ctl");
+	mkdirp("/mnt/msg");
+	createfile("/mnt/msg/status");
+	createfile("/mnt/msg/ctl");
+	createfile("/mnt/msg/pending");
+	createfile("/mnt/msg/approve");
+	createfile("/mnt/msg/deny");
+
 	# Apply restrictions first
 	caps := ref NsConstruct->Capabilities(
-		nil, nil, nil, nil,
+		nil, "/mnt/msg" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
 	, nil);
@@ -947,7 +962,7 @@ verifyNsWorker(result: chan of string)
 	}
 
 	# Verify with expected paths
-	expected := "/dis/lib" :: "/dev/cons" :: nil;
+	expected := "/dis/lib" :: "/dev/cons" :: "/mnt/msg/status" :: nil;
 	verr := nsconstruct->verifyns(expected);
 	if(verr != nil) {
 		result <-= sys->sprint("verifyns failed: %s", verr);

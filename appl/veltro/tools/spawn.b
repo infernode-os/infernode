@@ -336,7 +336,7 @@ exec(args: string): string
 			0,    # No xenith
 			-1,   # No cowfs — subagents inherit parent's cowfs via FORKNS
 			nil
-		);
+		, nil);
 
 		# Open the trajectory log fd in the parent namespace, before
 		# spawning. Survives FORKNS + bind-replace via the same fd-keep

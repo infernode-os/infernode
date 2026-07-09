@@ -45,6 +45,13 @@ NsConstruct: module {
 		xenith:      int;                  # 1 = grant /chan (Xenith 9P) access
 		actid:       int;                  # Lucifer activity ID (-1 = no cowfs)
 		writepaths:  list of string;       # Granted paths that should get staged cowfs writes
+		mcpdeny:     list of string;       # MCP tool basenames to drop from every granted
+		                                   #   /mnt/mcp/<server>/tools listing (defense-in-depth,
+		                                   #   INFR-258). The tool dir — and so its /call path —
+		                                   #   becomes invisible to the child's mcpdiscover,
+		                                   #   regardless of which servers `paths` granted. The
+		                                   #   names are caller policy; nsconstruct never knows
+		                                   #   what they mean.
 	};
 
 	# Initialize the module

@@ -116,6 +116,7 @@ TARG=\
 	shell_tool_test.dis\
 	fractal_tool_test.dis\
 	secstore_crypto_test.dis\
+	secstore_abort_probe.dis\
 	twofaslot_test.dis\
 	menu_test.dis\
 	wm_apps_test.dis\

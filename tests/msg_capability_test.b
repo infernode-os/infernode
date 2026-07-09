@@ -38,7 +38,7 @@ init(nil: ref Draw->Context, args: list of string)
 	else
 		paths = "/mnt/msg" :: nil;
 
-	caps := ref NsConstruct->Capabilities("read" :: nil, paths, nil, nil, nil, nil, 0, 0, -1, nil);
+	caps := ref NsConstruct->Capabilities("read" :: nil, paths, nil, nil, nil, nil, 0, 0, -1, nil, nil);
 	sys->pctl(Sys->FORKNS, nil);
 	err := nsc->restrictns(caps);
 	if(err != nil) { sys->print("MSGCAP %s: restrictns err: %s\n", mode, err); return; }

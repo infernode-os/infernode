@@ -1221,7 +1221,7 @@ emitmanifestnow(mpath: string)
 		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
-	);
+	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil)
@@ -1280,7 +1280,7 @@ applynsrestriction(invokedtool: string): string
 	allpaths = addtoolpaths(allpaths, invokedtool);
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
-	);
+	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil) {

@@ -26,7 +26,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	nsc->init();
 
 	# A typical email task agent: read tool only. actid=-1 => no cowfs.
-	caps := ref NsConstruct->Capabilities("read" :: nil, nil, nil, nil, nil, nil, 0, 0, -1, nil);
+	caps := ref NsConstruct->Capabilities("read" :: nil, nil, nil, nil, nil, nil, 0, 0, -1, nil, nil);
 	sys->pctl(Sys->FORKNS, nil);
 	err := nsc->restrictns(caps);
 	if(err != nil)

@@ -51,7 +51,7 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 | **SC-12** Crypto Key Establishment & Management | Establish/manage keys | **Hybrid X25519+ML-KEM** (TLS) and DH+ML-KEM (native). [`NIST-PQC-migration.md`](NIST-PQC-migration.md) | **Met** |
 | **SC-13** Cryptographic Protection (approved/validated) | FIPS-validated crypto | Approved algorithms present (AES-256, SHA-384/512, FIPS 203/204/205 PQC) — but the module is **not FIPS-140-validated** yet. [`CNSA-2.0.md`](CNSA-2.0.md); [`FIPS-140-3-readiness.md`](FIPS-140-3-readiness.md) | Partial (algorithms ✅; validated module ☐) |
 | **SC-23** Session Authenticity | Protect session authenticity | TLS/STS session keys; transcript binding rejects active MITM (`tests/pqauth_test.b` *TamperedEkRejected*) | **Met** |
-| **SC-28** Protection of Information at Rest | Encrypt data at rest | **AES-256-GCM** secstore vault, DK-wrapped, factor-gated. [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) §1; `doc/yubikey-2fa-operations.md` §9 | **Met** |
+| **SC-28** Protection of Information at Rest | Encrypt data at rest | **AES-256-GCM** secstore vault, DK-wrapped, factor-gated. [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) §1; `docs/yubikey-2fa-operations.md` §9 | **Met** |
 | **SC-39** Process Isolation | Isolate processes | Per-process namespaces; Dis VM memory/type safety | **Met** |
 
 ## AU — Audit & Accountability

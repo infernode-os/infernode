@@ -252,7 +252,7 @@ Properties:
 - **Phase 2 — secstore key-slots + logon:** ✅ done. `twofaslot` key-slots;
   enroll / unlock / backup / recovery in `logon.b`; **UV/AAL3** (FIDO PIN); and a
   Settings GUI. End-to-end YubiKey-gated login. **EPIC 1 closed** — see
-  `doc/compliance/SP800-63B-AAL3.md` and `doc/compliance/FIDO2-CTAP2.md`.
+  `docs/compliance/SP800-63B-AAL3.md` and `docs/compliance/FIDO2-CTAP2.md`.
 - **Phase 3 — second provider (future):** wire `phone-bio` through the existing
   `/phone/bio_*` bridge → mobile biometric unlock, same code path.
 - **Phase 4 — factotum proto + wallet (future):** `proto=2fa`; gate wallet-key

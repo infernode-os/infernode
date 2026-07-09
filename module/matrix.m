@@ -12,7 +12,7 @@
 # run headless in their own process, confined by namespace to
 # their mount (read-only) and output directory (read-write).
 #
-# See doc/matrix-architecture.md for the full specification.
+# See docs/matrix-architecture.md for the full specification.
 #
 
 MatrixDisplay: module

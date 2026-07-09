@@ -4,7 +4,7 @@ implement GeoMap;
 # geo-map — a Matrix display module that renders georeferenced entities
 # and drawn features on a projected map.
 #
-# It reads a generic geo tree (the /mnt/geo contract, doc/geo-map-design.md):
+# It reads a generic geo tree (the /mnt/geo contract, docs/geo-map-design.md):
 #
 #   <mount>/entities/<id>   one ndb stanza per moving/point entity
 #   <mount>/features/<id>   one ndb stanza per drawn graphic

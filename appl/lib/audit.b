@@ -9,7 +9,7 @@ implement Audit;
 # for high-value security events) or fail-open. The whole facility tears
 # out by simply not mounting it.
 #
-# See doc/compliance/audit-log-design.md.
+# See docs/compliance/audit-log-design.md.
 #
 
 include "sys.m";

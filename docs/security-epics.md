@@ -1,6 +1,6 @@
 # Security & Compliance — Jira Epics (paste-ready)
 
-Derived from `doc/security-standards-roadmap.md`. Each epic: Summary / Description /
+Derived from `docs/security-standards-roadmap.md`. Each epic: Summary / Description /
 Acceptance Criteria / candidate Stories. Tier per the roadmap. (Authored here because
 the Atlassian MCP wasn't reachable in-session; bulk-create from this.)
 
@@ -14,14 +14,14 @@ government, banking, finance, and military accreditation, implemented the Infern
 epic linked here.
 
 ## EPIC 1 — AAL3-harden YubiKey login (FIRST)
-**Tier:** 1 · **Refs:** `doc/second-factor-auth.md`, NIST SP 800-63B AAL3, FIDO2 UV, PIV/CAC.
+**Tier:** 1 · **Refs:** `docs/second-factor-auth.md`, NIST SP 800-63B AAL3, FIDO2 UV, PIV/CAC.
 **Description:** Move the working 2FA login to a true AAL3 / PIV-CAC posture: hardware
 user-verification, vault keyed to the key, no password-keyed blob ever on disk, no single
 point of failure.
 **Status (2026-06-25): SUBSTANTIALLY COMPLETE — EPIC 1 closed.** Shipped & hardware-verified:
 (a) UV-required login, (b) DK-encrypted save-back, (c) dual/backup key (`2fa addkey` + GUI),
 recovery slot, (e) Settings GUI Security panel, (g) accreditation evidence
-(`doc/compliance/SP800-63B-AAL3.md` + `tests/twofaslot_test.b`, 6/6 PASS). (f) passwordless
+(`docs/compliance/SP800-63B-AAL3.md` + `tests/twofaslot_test.b`, 6/6 PASS). (f) passwordless
 **declined** (defense-in-depth — keep an independent password factor; still AAL3 either way).
 **Acceptance Criteria:**
 - ✅ hmac-secret credential **requires UV (FIDO2 PIN)**, not touch-only. *(shipped, hardware-verified)*

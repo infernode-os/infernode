@@ -87,7 +87,7 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 - **JIT compiled** — native code generation on AMD64 and ARM64; interpreter fallback everywhere.
 - **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 39 tool modules, LLM integration via 9P, and formally verified containment.
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
-- **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](doc/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucifer) or by agents through `/mnt/matrix/ctl`.
+- **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucifer) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending. **Experimental — testnet only.**
 - **Go on Dis** — the [GoDis compiler](tools/godis/README.md) translates Go source to Dis bytecode; 190+ test programs pass end-to-end.
 - **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
@@ -113,7 +113,7 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — namespaces, devices, host integration
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment
-- [doc/matrix-architecture.md](doc/matrix-architecture.md) — Matrix compositional module runtime
+- [docs/matrix-architecture.md](docs/matrix-architecture.md) — Matrix compositional module runtime
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — wallet, x402, secstore, key management
 - [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) — Veltro agent security model
 - [tools/godis/README.md](tools/godis/README.md) — Go-to-Dis compiler architecture

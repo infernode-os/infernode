@@ -54,6 +54,9 @@ include "string.m";
 include "audit.m";
 	audit: Audit;
 
+include "daytime.m";
+	daytime: Daytime;
+
 Secstored: module
 {
 	init: fn(nil: ref Draw->Context, nil: list of string);
@@ -65,9 +68,40 @@ VERSION3: con "secstore3";
 Maxfilesize: con 128*1024;
 Maxmsg: con 4096;
 
+# Online-guessing throttle (NIST SP 800-53 AC-7; SP 800-171 3.5.x; CC FIA_AFL.1;
+# SP 800-63B §5.2.2 rate-limiting). secstored is the only place a password is
+# verified over the wire, so the limit belongs here, not in the logon UI (which
+# a caller can bypass by reconnecting). Inferno precedent: keyfs.b keeps a
+# per-key `failed` counter and disables the key at Maxfail. We follow the same
+# shape but the lock is TEMPORARY — a cooldown, not a permanent disable — so a
+# single-host boot secstore can never be bricked by a mistyped password. The
+# FIDO2 UV/PIN second factor has its own hardware retry counter (twofaslot.b:
+# PIN_BLOCKED after the key's 8 lifetime attempts), so this bounds the password
+# factor to complete the AC-7 story.
+#
+# 10 consecutive wrong-password attempts is well under 800-63B's 100-attempt
+# ceiling yet tolerant of fat-fingering a long secstore password; a 60s cooldown
+# caps sustained online guessing at ~10/min per account. Tune here if an
+# integrator needs stricter limits.
+Maxfail: con 10;	# consecutive wrong-password attempts before lockout
+Locksecs: con 60;	# cooldown window (seconds) once locked
+
 debug := 0;
 storedir := "/usr/inferno/secstore";
 sname := "secstore";	# server identity for PAK
+
+# Per-account failure state, shared across the spawned per-connection procs.
+# Dis scheduling is cooperative (one proc runs until it blocks), and none of the
+# guard helpers below yield, so their read-modify-write of this list is atomic
+# without an explicit lock. In-memory only: the throttle is per server lifetime,
+# which is the right scope for an online rate-limit (offline attack on the blob
+# is a separate concern, mitigated by the PAK design + the FIDO2 factor).
+Acctguard: adt {
+	user:		string;
+	fails:		int;	# consecutive wrong-password attempts
+	lockeduntil:	int;	# epoch seconds; 0 = not locked
+};
+guards: list of ref Acctguard;
 
 # PAK parameters — same as client (from secstore.b)
 PAKparams: adt {
@@ -90,6 +124,82 @@ auditlog(source, event, msg: string)
 		audit->log(source, event, msg);
 }
 
+# Current epoch seconds, or 0 if no clock is available (throttle then fails open
+# rather than risk a permanent lock without a way to time the cooldown).
+guardnow(): int
+{
+	if(daytime == nil)
+		return 0;
+	return daytime->now();
+}
+
+# Find an existing guard for user, or nil. Read-only (does not allocate).
+findguard(user: string): ref Acctguard
+{
+	for(l := guards; l != nil; l = tl l)
+		if((hd l).user == user)
+			return hd l;
+	return nil;
+}
+
+# Seconds remaining on user's lockout, or 0 if not locked. Expired locks are
+# cleared here (fresh window on next attempt), so a legitimate user is never
+# stranded beyond one cooldown.
+lockremaining(user: string): int
+{
+	g := findguard(user);
+	if(g == nil || g.lockeduntil == 0)
+		return 0;
+	now := guardnow();
+	if(now == 0)			# no clock — cannot enforce a timed lock
+		return 0;
+	if(now >= g.lockeduntil){
+		g.lockeduntil = 0;
+		g.fails = 0;
+		return 0;
+	}
+	return g.lockeduntil - now;
+}
+
+# Record a wrong-password attempt for user; lock the account once the threshold
+# is reached. Returns the new consecutive-failure count.
+recordfail(user: string): int
+{
+	g := findguard(user);
+	if(g == nil){
+		g = ref Acctguard(user, 0, 0);
+		guards = g :: guards;
+	}
+	g.fails++;
+	now := guardnow();
+	if(g.fails >= Maxfail && now > 0)
+		g.lockeduntil = now + Locksecs;
+	return g.fails;
+}
+
+# Clear failure state after a successful authentication.
+recordok(user: string)
+{
+	g := findguard(user);
+	if(g != nil){
+		g.fails = 0;
+		g.lockeduntil = 0;
+	}
+}
+
+# Note a wrong-password attempt and emit the lock audit event exactly once, at
+# the moment the threshold is crossed. Called from every branch that means the
+# client failed to prove knowledge of the password (see pakserver).
+notefail(user: string)
+{
+	nf := recordfail(user);
+	if(nf == Maxfail){
+		log(sys->sprint("account %s locked after %d failed attempts (%ds cooldown)", user, nf, Locksecs));
+		auditlog("secstore", "authlock",
+			sys->sprint("user=%s fails=%d locksecs=%d", user, nf, Locksecs));
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -101,6 +211,9 @@ init(nil: ref Draw->Context, args: list of string)
 	audit = load Audit Audit->PATH;	# optional: audit log emitter
 	if(audit != nil)
 		audit->init();
+	daytime = load Daytime Daytime->PATH;	# clock for the lockout cooldown
+	if(daytime == nil)
+		log("warning: daytime unavailable; failed-attempt lockout disabled");
 
 	if(kr == nil || ssl == nil || base64 == nil || dialler == nil || str == nil)
 		fatal("cannot load required modules");
@@ -186,10 +299,13 @@ serve(lconn: ref Dial->Connection)
 		log("ssl ok");
 
 	# PAK authentication
-	(user, hexHi) := pakserver(sslconn);
+	(user, hexHi, claimed) := pakserver(sslconn);
 	if(user == nil){
 		log("PAK auth failed");
-		auditlog("secstore", "authfail", "");
+		if(claimed != nil)
+			auditlog("secstore", "authfail", "user=" + claimed);
+		else
+			auditlog("secstore", "authfail", "");
 		return;
 	}
 
@@ -205,7 +321,7 @@ serve(lconn: ref Dial->Connection)
 
 # ── PAK Server Protocol ──────────────────────────────────────
 
-pakserver(conn: ref Dial->Connection): (string, string)
+pakserver(conn: ref Dial->Connection): (string, string, string)
 {
 	fd := conn.dfd;
 	params: ref PAKparams;
@@ -216,7 +332,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	if(n <= 0){
 		if(debug)
 			log(sys->sprint("PAK initial read failed: n=%d: %r", n));
-		return (nil, nil);
+		return (nil, nil, nil);
 	}
 	hello := string buf[0:n];
 
@@ -228,7 +344,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		log(sys->sprint("PAK tokenized: %d fields", nf));
 	if(nf < 3){
 		writerr(fd, "bad hello");
-		return (nil, nil);
+		return (nil, nil, nil);
 	}
 
 	# First line: "<version>\tPAK"
@@ -237,27 +353,27 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		log(sys->sprint("PAK hdr: %q", hdr));
 	if(len hdr <= 4 || hdr[len hdr-4:] != "\tPAK"){
 		writerr(fd, "bad protocol");
-		return (nil, nil);
+		return (nil, nil, nil);
 	}
 	ver := hdr[0:len hdr-4];
 	params = pakparams(ver);
 	if(params == nil){
 		writerr(fd, "bad protocol");
-		return (nil, nil);
+		return (nil, nil, nil);
 	}
 
 	# C=<user>
 	C := ex("C=", hd flds); flds = tl flds;
 	if(C == nil){
 		writerr(fd, "no user");
-		return (nil, nil);
+		return (nil, nil, nil);
 	}
 
 	# m=<hexm>
 	hexm := ex("m=", hd flds);
 	if(hexm == nil){
 		writerr(fd, "no m");
-		return (nil, nil);
+		return (nil, nil, C);
 	}
 
 	# Handle cansecstore probe (m=0)
@@ -267,18 +383,28 @@ pakserver(conn: ref Dial->Connection): (string, string)
 			sys->fprint(fd, "!account exists");
 		else
 			sys->fprint(fd, "!no account");
-		return (nil, nil);
+		return (nil, nil, nil);	# probe, not an auth attempt
+	}
+
+	# Reject early if this account is in its failed-attempt cooldown, before
+	# spending any crypto — this is the AC-7 / FIA_AFL.1 enforcement point.
+	rem := lockremaining(C);
+	if(rem > 0){
+		log(sys->sprint("rejected locked account %s (%ds remaining)", C, rem));
+		writerr(fd, sys->sprint("account locked; retry in %ds", rem));
+		auditlog("secstore", "authlock", sys->sprint("user=%s reason=throttled remaining=%d", C, rem));
+		return (nil, nil, C);
 	}
 
 	# Look up user's PAK verifier
 	(acctver, hexHi) := readverifier(C);
 	if(hexHi == nil){
 		writerr(fd, "no account");
-		return (nil, nil);
+		return (nil, nil, C);
 	}
 	if(acctver != ver){
 		writerr(fd, "account version mismatch");
-		return (nil, nil);
+		return (nil, nil, C);
 	}
 	Hi := IPint.strtoip(hexHi, 64);
 	m := IPint.strtoip(hexm, 64);
@@ -302,7 +428,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	if(debug)
 		log(sys->sprint("PAK sending mu=%s... k=%s S=%s", hexmu[:20], ks, sname));
 	if(sys->fprint(fd, "mu=%s\nk=%s\nS=%s\n", hexmu, ks, sname) < 0){
-		return (nil, nil);
+		return (nil, nil, C);
 	}
 
 	# Read client verification: "k'=<hash>\n"
@@ -310,7 +436,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	if(n <= 0){
 		if(debug)
 			log(sys->sprint("PAK client read failed: n=%d", n));
-		return (nil, nil);
+		return (nil, nil, C);
 	}
 	s := string buf[0:n];
 
@@ -322,8 +448,13 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		kprime = ex("k'=", s);
 	}
 	if(kprime == nil){
+		# An honest client that derived a different session key (wrong password)
+		# verifies the server's hash first and writes an error here INSTEAD of a
+		# valid k' (secstore.b: "verifier didn't match"). So a normally mistyped
+		# password lands here, not the k'-mismatch branch below — count it.
 		writerr(fd, "no client verifier");
-		return (nil, nil);
+		notefail(C);
+		return (nil, nil, C);
 	}
 	# Strip trailing newline from kprime
 	if(len kprime > 0 && kprime[len kprime - 1] == '\n')
@@ -335,8 +466,11 @@ pakserver(conn: ref Dial->Connection): (string, string)
 	if(debug)
 		log(sys->sprint("PAK client k'=%q expected=%q", kprime, kc));
 	if(kprime != kc){
+		# A client that proceeds with a wrong session key (e.g. a guessing tool
+		# that does not self-abort on the server-hash check). Also a failure.
 		writerr(fd, "client verifier didn't match");
-		return (nil, nil);
+		notefail(C);
+		return (nil, nil, C);
 	}
 
 	# Set session secret (direction=1 for server, opposite of client's 0)
@@ -355,7 +489,7 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		e := ssl->secret(conn, secretin, secretout);
 		if(e != nil){
 			log("setsecret: " + e);
-			return (nil, nil);
+			return (nil, nil, C);
 		}
 	}else{
 		secretin := array[Keyring->SHA1dlen] of byte;
@@ -366,15 +500,17 @@ pakserver(conn: ref Dial->Connection): (string, string)
 		e := ssl->secret(conn, secretin, secretout);
 		if(e != nil){
 			log("setsecret: " + e);
-			return (nil, nil);
+			return (nil, nil, C);
 		}
 	}
 	erasekey(digest);
 
 	if(sys->fprint(conn.cfd, "alg sha256 aes_128_cbc") < 0)
-		return (nil, nil);
+		return (nil, nil, C);
 
-	return (C, hexHi);
+	# Authenticated: clear any accumulated failure state for this account.
+	recordok(C);
+	return (C, hexHi, C);
 }
 
 # ── File Operations ───────────────────────────────────────────

@@ -574,7 +574,7 @@ flowchart LR
 
     eve -. cannot read or impersonate .-> verdict1["✓ safe"]
     mallory -. cannot complete PAK without pwd .-> verdict1
-    guess -. ~5 s + RTT per attempt .-> verdict2["⚠ rate-limit at firewall"]
+    guess -. 10 failures -> 60s account lock .-> verdict2["⚠ throttle + private overlay"]
     ro -. offline brute force on KDF .-> verdict3["⚠ password entropy is the floor"]
     rw -. swap PAK file .-> verdict4["✗ future logins compromised"]
     compromise -. plaintext keys in memory .-> verdict5["✗ total loss"]
@@ -592,7 +592,7 @@ flowchart LR
 |------------------------------------------|------------------------|--------------------------------|-------|
 | **Passive eavesdropper on the LAN**      | No (wire is encrypted post-PAK; PAK reveals nothing). | No. | PAK was designed for exactly this case. |
 | **Active MITM on the wire**              | No. | No (without the password). | They can drop, but cannot complete PAK. |
-| **Network attacker who can reach TCP 5356** | No. | Only by online password guessing — bounded by ~5 s of modexp per attempt, plus network RTT. | Rate-limit at the network layer. There is no built-in lockout. Run secstored on a private overlay (ZeroTier, WireGuard, loopback). |
+| **Network attacker who can reach TCP 5356** | No. | Only by online password guessing — secstored applies a per-account lockout after 10 consecutive failed password proofs. | Keep secstored on loopback or a private overlay anyway: `cansecstore` still reveals account existence, and a reachable attacker can deliberately trip the temporary lockout for a known user. |
 | **Read-only attacker on the storedir disk** | No (blobs are AES-256-GCM with password-derived key). | Offline brute-force on the password is possible — KDF is only 10 000 HMAC-SHA-256 rounds with a fixed salt. | Use a high-entropy password. Encrypt the underlying disk. |
 | **Read/write attacker on the storedir disk** | No (same as above for old blobs). | Yes after the next user login if they replace the `PAK` file (sets a verifier they know the password for) — the user's keys are still encrypted with the *old* password and cannot be read, but new keys saved after login will be encrypted with the new password and visible. | Detect tampering by signing or hashing the storedir out-of-band. |
 | **Compromise of the running emu**        | Yes. | Yes. | factotum keeps cleartext keys in memory; the cached secstore connection authenticates further saves; the password-derived `secstorefilekey` is in memory. Compromised host = total loss. |
@@ -606,16 +606,16 @@ flowchart LR
 - **Forward secrecy across save-back.** factotum reuses the same file-key for
   every save. An attacker who recovers the password later can decrypt every
   past blob still on disk.
-- **Server-side rate limiting.** Online password guessing is bounded only by
-  the modexp cost and the network. A determined attacker with persistent
-  access to the port can probe at a few attempts per minute.
+- **Username privacy and lockout DoS.** Failed password proofs are throttled,
+  but a reachable attacker can still enumerate accounts with `cansecstore` and
+  deliberately trigger the temporary lockout for a known user.
 
 ### 8.2 Recommended deployment posture
 
 - InferNode now defaults secstored to loopback (`tcp!localhost!5356`) because
   the inherited secstore protocol includes unauthenticated `cansecstore`
-  probes and has no built-in lockout. Use `-a` explicitly when you intend to
-  serve remote clients.
+  probes, and because remote lockout is still an availability risk. Use `-a`
+  explicitly when you intend to serve remote clients.
 - For multi-host, run secstored only on a private overlay network. ZeroTier
   with a managed network ID is the InferNode default; WireGuard works equally.
 - Choose a password that survives 10 000 HMAC-SHA-256 rounds against an

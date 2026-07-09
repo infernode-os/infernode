@@ -120,6 +120,32 @@ check "correct password authenticates despite prior failures" "$OUTPUT2" "authen
 
 lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
+sleep 1
+
+# Scenario 3 (adversarial abort): a guessing client can read the server verifier
+# and then close before sending k'. That still means it failed to prove knowledge
+# of the password and must count toward the same lockout threshold.
+cat > "$ROOT/tmp/test_abort_lockout.sh" << EOF
+load std
+bind -a '#I' /net
+ndb/cs
+auth/secstored &
+sleep 2
+auth/secstore-setup -u $USER -k $CORRECT
+echo '--- abort after server verifier attempts ---'
+/tests/secstore_abort_probe.dis $USER 10
+echo '--- prove the account is now locked ---'
+echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 x factotum >[2=1]
+echo '--- abort scenario done ---'
+EOF
+
+OUTPUT3=$(run_emu 90 /tmp/test_abort_lockout.sh)
+
+check "abort-after-verifier attempts lock the account" "$OUTPUT3" "locked after"
+check "post-abort attempts are rejected while locked" "$OUTPUT3" "rejected locked account"
+
+lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
+rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
 
 echo ""
 echo "$((TESTS - FAILURES))/$TESTS passed"

@@ -4,3 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # codeql-action/{init,analyze,upload-sarif} are one action; init and
+      # analyze MUST move together or CodeQL fails with a config-version
+      # mismatch. Bump every sub-path in a single PR.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"

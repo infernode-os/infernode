@@ -153,7 +153,7 @@ isipaddr(s: string): int
 	return S->drop(s, ".0123456789") == nil;
 }
 
-setcookie(ck: ref Cookie)
+setcookie(ck: ref Cookie, fromscript: int)
 {
 	parent, dom: ref Domain;
 	domain := ck.dom;
@@ -167,6 +167,8 @@ setcookie(ck: ref Cookie)
 
 	for (oldck := dom.cookies.next; oldck != nil; oldck = oldck.link.next) {
 		if (ck.name == oldck.name && ck.path == oldck.path) {
+			if(fromscript && oldck.httponly)
+				return;
 			rmcookie(oldck);
 			break;
 		}
@@ -280,7 +282,11 @@ server(fdc: chan of ref Sys->FD, saveinterval: int)
 			save();
 			return;
 		}
-		loadcookie(string line);
+		sline := string line;
+		if(len sline >= 7 && sline[0:7] == "script\t")
+			loadcookiefrom(sline[7:], 1);
+		else
+			loadcookiefrom(sline, 0);
 		alt {
 		rc <-= (len line, nil) =>
 			;
@@ -353,6 +359,11 @@ cookie2str(ck: ref Cookie): string
 
 loadcookie(ckstr: string)
 {
+	loadcookiefrom(ckstr, 0);
+}
+
+loadcookiefrom(ckstr: string, fromscript: int)
+{
 	(n, toks) := sys->tokenize(ckstr, "\t");
 	if (n < 5)
 		return;
@@ -385,19 +396,38 @@ loadcookie(ckstr: string)
 		return;
 
 	ck := ref Cookie(name, value, dom, path, int exp, int sec, int httponly, int samesite, touch++, nil);
-	setcookie(ck);
+	setcookie(ck, fromscript);
 }
 
 Client.set(c: self ref Client, host, path, cookie: string)
 {
-	ck := parsecookie(host, path, cookie);
+	ck := parsecookie(host, path, cookie, 1);
 	if (ck == nil)
 		return;
 	b := array of byte cookie2str(ck);
 	sys->write(c.fd, b, len b);
 }
 
+Client.setscript(c: self ref Client, host, path, cookie: string)
+{
+	ck := parsecookie(host, path, cookie, 0);
+	if (ck == nil)
+		return;
+	b := array of byte ("script\t" + cookie2str(ck));
+	sys->write(c.fd, b, len b);
+}
+
 Client.getcookies(nil: self ref Client, host, path: string, secure: int): string
+{
+	return getcookies0(host, path, secure, 1);
+}
+
+Client.getscriptcookies(nil: self ref Client, host, path: string, secure: int): string
+{
+	return getcookies0(host, path, secure, 0);
+}
+
+getcookies0(host, path: string, secure, includehttponly: int): string
 {
 	dl: list of ref Domain;
 	if (isipaddr(host))
@@ -416,6 +446,8 @@ Client.getcookies(nil: self ref Client, host, path: string, secure: int): string
 		ckl := (hd dl).cookies;
 		for (ck := ckl.next; ck != nil; ck = ck.link.next) {
 			if (ck.secure && !secure)
+				continue;
+			if (ck.httponly && !includehttponly)
 				continue;
 			if (!S->prefix(ck.path, path))
 				continue;
@@ -455,7 +487,7 @@ save()
 	}
 }
 
-parsecookie(dom, path, cookie: string): ref Cookie
+parsecookie(dom, path, cookie: string, allowhttponly: int): ref Cookie
 {
 	defpath := "/";
 	if (path != nil)
@@ -494,7 +526,8 @@ parsecookie(dom, path, cookie: string): ref Cookie
 		"secure" =>
 			ck.secure = 1;
 		"httponly" =>
-			ck.httponly = 1;
+			if(allowhttponly)
+				ck.httponly = 1;
 		"samesite" =>
 			case S->tolower(value) {
 			"strict" =>

@@ -375,7 +375,9 @@ CharonUtils: module
 	stripscript: fn(s: string) : string;	# strip HTML comments from Script
 	getconv: fn(chset : string) : Btos;
 	setcookie: fn(host, path, cookie: string);
+	setscriptcookie: fn(host, path, cookie: string);
 	getcookies: fn(host, path: string, secure: int): string;
+	getscriptcookies: fn(host, path: string, secure: int): string;
 	schemeok: fn(scheme: string): int;	# is URL scheme supported?
 	X: fn(s, note : string) : string;
 };

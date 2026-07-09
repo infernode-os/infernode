@@ -2045,12 +2045,28 @@ getcookies(host, path: string, secure: int): string
 	return ckclient.getcookies(host, path, secure);
 }
 
+getscriptcookies(host, path: string, secure: int): string
+{
+	if (CK == nil || ckclient == nil)
+		return nil;
+	Client: import CK;
+	return ckclient.getscriptcookies(host, path, secure);
+}
+
 setcookie(host, path, cookie: string)
 {
 	if (CK == nil || ckclient == nil)
 		return;
 	Client: import CK;
 	ckclient.set(host, path, cookie);
+}
+
+setscriptcookie(host, path, cookie: string)
+{
+	if (CK == nil || ckclient == nil)
+		return;
+	Client: import CK;
+	ckclient.setscript(host, path, cookie);
 }
 
 ex_mkdir(dirname: string): int

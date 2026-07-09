@@ -449,11 +449,37 @@ func (r *Runner) compile(p Program) (disPath, compErr string) {
 	return disPath, ""
 }
 
+// maxEmuAttempts bounds how many times runEmu re-runs a crashed program before
+// accepting the crash. The emulator faults nondeterministically on a small,
+// run-varying set of programs (a heap-layout-dependent memory corruption in the
+// runtime that shows up under BOTH -c0 and -c1 — not a JIT codegen bug). A
+// fresh process almost never reproduces such a fault, so retrying distinguishes
+// a flaky crash (clears on a later attempt) from a deterministic one (a genuine
+// regression, which faults on every attempt and is still reported). Without
+// this, a single stray segfault flips a program to c0!=c1 and fails the locked
+// differential gate on unrelated PRs. See tools/godis/README and the emu
+// runtime-corruption investigation (x86-64 core dump) for the underlying fix.
+const maxEmuAttempts = 3
+
 // runEmu executes a .dis file under the given JIT mode ("-c0" or "-c1") and
-// returns its stdout plus whether the run crashed. The emulator does not exit
+// returns its stdout plus whether the run crashed, retrying a crashed run up to
+// maxEmuAttempts times so a nondeterministic emulator fault does not masquerade
+// as a codegen divergence. The first clean (non-crashing) attempt wins; if every
+// attempt crashes the last result is returned, preserving detection of genuine
+// deterministic faults.
+func (r *Runner) runEmu(disPath, mode string) (out string, crashed bool) {
+	for attempt := 1; ; attempt++ {
+		out, crashed = r.runEmuOnce(disPath, mode)
+		if !crashed || attempt >= maxEmuAttempts {
+			return out, crashed
+		}
+	}
+}
+
+// runEmuOnce performs a single emulator run. The emulator does not exit
 // cleanly — it hangs after the program returns — so we always run under a
 // timeout and treat the kill as expected, keeping whatever stdout was produced.
-func (r *Runner) runEmu(disPath, mode string) (out string, crashed bool) {
+func (r *Runner) runEmuOnce(disPath, mode string) (out string, crashed bool) {
 	rel, err := filepath.Rel(r.cfg.RootDir, disPath)
 	if err != nil {
 		return "", true

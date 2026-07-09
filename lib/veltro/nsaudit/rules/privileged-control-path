@@ -1,0 +1,5 @@
+rule=PRIVILEGED_CONTROL_PATH
+	severity=high
+	require='privileged_control_path'
+	message='Caps explicitly grant a trusted control path. A model-controlled agent could mutate capabilities, approve pending work, or bypass proposal-only flows.'
+	fix='remove the control path from caps.paths; expose only proposal/read surfaces such as /mnt/msg, /mnt/msg/draft, or /n/wallet after nsconstruct sub-restriction'

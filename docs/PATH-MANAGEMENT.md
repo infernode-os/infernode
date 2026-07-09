@@ -43,7 +43,8 @@ channel, whereas tools9p already exists and is already a shared medium.
 ## The Unified Model
 
 tools9p manages both tools AND paths for the same reason: both are "what the agent can
-access". The `/tool/ctl` file handles all agent capability configuration:
+access". The trusted control alias (`/mnt/toolctl*`) handles capability
+configuration outside the restricted agent namespace:
 
 | Command | Effect |
 |---------|--------|
@@ -52,8 +53,9 @@ access". The `/tool/ctl` file handles all agent capability configuration:
 | `bindpath <path>` | Register a host path; lucibridge binds it on next turn |
 | `unbindpath <path>` | Unregister a path; lucibridge unmounts it on next turn |
 
-Both GUI and CLI (`lucibridge -t tools`, `lucibridge -p paths`, `veltro -t tools`) can
-write to `/tool/ctl` to configure the agent's capabilities.
+GUI and launcher code write to the trusted control alias to configure the
+agent's capabilities. Restricted tool invocations see `/tool` but not the
+generic control file.
 
 ---
 
@@ -104,13 +106,13 @@ but is not a priority.
 
 ## Security Properties
 
-- tools9p runs in a restricted namespace (after `applynsrestriction()`)
-- It can only access files it was started with access to
-- Paths registered via `bindpath` are stored as strings only — tools9p does not bind them
-  itself; lucibridge does the binding in its own namespace after `FORKNS`
-- The agent cannot register arbitrary paths (it runs in a restricted namespace where
-  `/tool/ctl` is write-accessible, but the paths it registers are only bound if
-  lucibridge chooses to honor them — and lucibridge applies `restrictns()` afterward)
+- Tool invocations run in a restricted namespace after `applynsrestriction()`
+- They can only access paths named by the current tool capability set
+- Paths registered via `bindpath` are stored as strings only — tools9p does not
+  bind them itself; lucibridge applies the namespace view in its own process
+- The agent cannot register arbitrary paths: restricted invocations do not see
+  `/tool/ctl`, and child provisioning narrows requested paths through the
+  parent's existing path capabilities
 
 ---
 
@@ -126,5 +128,6 @@ veltro -t "read,list,write" -p "/Users/pdfinn/docs" "Summarize all .md files"
 lucibridge -t "read,list" -p "/Users/pdfinn/docs"
 ```
 
-In both cases the paths are written to `/tool/ctl` as `bindpath` commands, making
-them visible to the tool ecosystem and ensuring `applypathchanges()` picks them up.
+In both cases the paths are written through the trusted control alias as
+`bindpath` commands, making them visible to the tool ecosystem and ensuring
+`applypathchanges()` picks them up.

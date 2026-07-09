@@ -230,7 +230,9 @@ Study these for patterns:
 Veltro agents run in restricted namespaces. When writing code that interacts with Veltro or its tools, be aware:
 
 - **Agents cannot see**: project files (`.env`, `.git`, `CLAUDE.md`), host filesystem (`/n/local`), top-level commands in `/dis`, most of `/dev` and `/lib`
-- **Agents can see**: `/dis/lib`, `/dis/veltro`, `/lib/veltro`, `/tool`, `/mnt/llm`, `/n/speech`, `/tmp/veltro/scratch`
+- **Agents can see**: `/dis/lib`, `/dis/veltro`, `/lib/veltro`, `/tool`, and
+  isolated `/tmp/veltro/scratch`; `/mnt/llm`, `/n/speech`, app IPC trees, and
+  user paths require explicit capabilities or pre-opened descriptors
 - **Subagents** fork the parent's already-restricted namespace and can only narrow further
 - **Security model**: FORKNS + bind-replace (see `appl/veltro/SECURITY.md`)
 

@@ -150,6 +150,7 @@ restrictns(caps: ref Capabilities): string
 	mkdirp("/tmp/veltro/scratch");
 	mkdirp("/tmp/veltro/memory");
 	mkdirp("/tmp/veltro/cow");
+	mkdirp("/tmp/veltro/plans");
 	mkdirp("/tmp/veltro/tasks");
 	mkdirp("/tmp/.veltro-ns");
 	mkdirp(SHADOW_BASE);
@@ -525,6 +526,10 @@ restrictns(caps: ref Capabilities): string
 			return sys->sprint("restrict task metadata: %s", err);
 	}
 
+	err = restrictdir("/tmp/veltro", tmpveltroallow(caps), 1);
+	if(err != nil)
+		return sys->sprint("restrict /tmp/veltro: %s", err);
+
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
 	# constructed first; their backing channels remain valid after the trusted
 	# /tmp/.veltro-ns tree is hidden. Agents retain only their workspace.
@@ -533,6 +538,28 @@ restrictns(caps: ref Capabilities): string
 		return sys->sprint("restrict /tmp: %s", err);
 
 	return nil;
+}
+
+tmpveltroallow(caps: ref Capabilities): list of string
+{
+	allow := "scratch" :: nil;
+
+	for(p := filterpaths(caps.paths, "/tmp/veltro/"); p != nil; p = tl p) {
+		(first, nil) := splitfirst(hd p);
+		if(first != "" && !inlist(first, allow))
+			allow = first :: allow;
+	}
+
+	if(inlist("task", caps.tools))
+		allow = "tasks" :: allow;
+	if(inlist("memory", caps.tools))
+		allow = "memory" :: allow;
+	if(inlist("plan", caps.tools))
+		allow = "plans" :: allow;
+	if(inlist("todo", caps.tools))
+		allow = "todo.txt" :: allow;
+
+	return allow;
 }
 
 # Filter paths that start with a given prefix, stripping the prefix.

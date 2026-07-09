@@ -449,6 +449,84 @@ taskMetadataCapabilityWorker(result: chan of string)
 	result <-= "";
 }
 
+testTmpVeltroIpcHidden(t: ref T)
+{
+	sys->create("/tmp/veltro/ftree", Sys->OREAD, Sys->DMDIR | 8r755);
+	fd := sys->create("/tmp/veltro/ftree/ctl", Sys->OWRITE, 8r666);
+	if(fd == nil) {
+		t.skip("cannot create ftree IPC fixture");
+		return;
+	}
+	sys->fprint(fd, "refresh");
+	fd = nil;
+	result := chan of string;
+	spawn tmpVeltroIpcHiddenWorker(result);
+	r := <-result;
+	sys->remove("/tmp/veltro/ftree/ctl");
+	sys->remove("/tmp/veltro/ftree");
+	if(r != "")
+		t.error(r);
+}
+
+tmpVeltroIpcHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict tmp IPC worker: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/ftree/ctl");
+	if(ok >= 0) {
+		result <-= "restricted agent can reach trusted ftree IPC";
+		return;
+	}
+	result <-= "";
+}
+
+testTmpVeltroExplicitGrant(t: ref T)
+{
+	sys->create("/tmp/veltro/editor", Sys->OREAD, Sys->DMDIR | 8r755);
+	fd := sys->create("/tmp/veltro/editor/state", Sys->OWRITE, 8r666);
+	if(fd == nil) {
+		t.skip("cannot create editor IPC fixture");
+		return;
+	}
+	sys->fprint(fd, "open");
+	fd = nil;
+	result := chan of string;
+	spawn tmpVeltroExplicitGrantWorker(result);
+	r := <-result;
+	sys->remove("/tmp/veltro/editor/state");
+	sys->remove("/tmp/veltro/editor");
+	if(r != "")
+		t.error(r);
+}
+
+tmpVeltroExplicitGrantWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"editor" :: nil, "/tmp/veltro/editor" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
+	);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict tmp explicit worker: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/tmp/veltro/editor/state");
+	if(ok < 0) {
+		result <-= "explicit /tmp/veltro/editor grant missing";
+		return;
+	}
+	result <-= "";
+}
+
 testActivityScratchIsolation(t: ref T)
 {
 	sys->remove("/tmp/veltro/scratch/41001/canary");
@@ -1608,6 +1686,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
 	run("TaskMetadataCapability", testTaskMetadataCapability);
+	run("TmpVeltroIpcHidden", testTmpVeltroIpcHidden);
+	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
 	run("ActivityScratchIsolation", testActivityScratchIsolation);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);

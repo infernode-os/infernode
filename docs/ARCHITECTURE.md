@@ -182,8 +182,9 @@ Key design properties:
 - **Secstore persistence** — new accounts trigger factotum sync to secstore (async).
   Keys survive emu restart.
 - **Budget enforcement** — server-side spending limits; agents cannot bypass.
-- **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access. Unlike
-  `/mnt/llm` (always granted), wallet access is explicitly opt-in.
+- **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access.
+  `/mnt/llm` is also capability-driven: top-level loops grant it when they open
+  model sessions by path, while subagents normally use pre-opened descriptors.
 - **Multi-network** — supports Ethereum Mainnet, Sepolia, Base, Base Sepolia with
   per-network RPC endpoints and USDC contract addresses.
 

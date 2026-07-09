@@ -114,6 +114,12 @@ restricted namespace. Generic write/edit operations accept only this scratch
 path (or an explicit `rw` capability), preventing files at the shared workspace
 root from bypassing activity isolation.
 
+The shared `/tmp/veltro` root is also allowlisted. A generic invocation sees
+only `scratch`; core state such as task metadata, memory, plan/todo fallback
+files, and GUI IPC trees are present only when the relevant tool or an explicit
+path capability names them. Trusted app control files under `/tmp/veltro/*/ctl`
+must never be ambient.
+
 Provisioned children receive only read-only navigation tools by default:
 `read`, `list`, `find`, `search`, and `grep`. Persistence (`memory`), recursive
 delegation (`spawn`), planning state, and UI effects require explicit budgeted

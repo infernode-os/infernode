@@ -16,7 +16,7 @@ SH="/dis/sh.dis"
 run_nsaudit() {
 	timeout 30 "$EMU" -r"$ROOT" "$SH" -c \
 		"path=(/dis/veltro /dis/cmd /dis .); nsaudit -m $*" \
-		</dev/null 2>&1
+		</dev/null 2>&1 || true
 }
 
 out="$(run_nsaudit /tests/nsaudit-rules/durable-host-mutation /tmp/veltroevil/file)"

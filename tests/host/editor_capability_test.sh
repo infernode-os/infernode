@@ -13,7 +13,7 @@ timeout 15 "$EMU" -r"$ROOT" /dis/sh.dis -c \
 	'path=(/dis/veltro /dis/cmd /dis .); mkdir -p /tmp/veltro/editor/1; tools9p editor & sleep 2; echo open /appl/veltro/veltro.b > /tool/editor/run; sleep 2; echo HIDDEN; cat /tool/editor/run; echo open /lib/veltro/meta.txt > /tool/editor/run; sleep 2; echo VISIBLE; cat /tool/editor/run; cat /tmp/veltro/editor/ctl; echo 1 /lib/veltro/meta.txt 1 > /tmp/veltro/editor/index; echo save > /tool/editor/run; sleep 2; echo SAVE; cat /tool/editor/run; echo name /lib/veltro/new.txt > /tool/editor/run; sleep 2; echo NAME; cat /tool/editor/run' \
 	</dev/null >"$log" 2>&1
 rc=$?
-[[ $rc -eq 0 || $rc -eq 124 ]] || { cat "$log"; exit 1; }
+emu_timeout_ok "$rc" || { cat "$log"; exit 1; }
 
 grep -q 'path is outside the agent namespace: /appl/veltro/veltro.b' "$log" || { echo "FAIL: hidden path was accepted"; cat "$log"; exit 1; }
 grep -q 'open /lib/veltro/meta.txt' "$log" || { echo "FAIL: visible path was not forwarded"; cat "$log"; exit 1; }

@@ -92,7 +92,7 @@ dedupisreadonly(name: string): int
 dedupismutating(name: string): int
 {
 	case name {
-	"write" or "edit" or "exec" or "limbo" or "shell" or "safeexec" =>	return 1;
+	"write" or "edit" or "exec" or "limbo" or "shell" =>	return 1;
 	* =>	return 0;
 	}
 }

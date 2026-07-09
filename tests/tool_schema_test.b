@@ -60,7 +60,7 @@ TOOLS := array[] of {
 	"gpu",      "grep",    "hear",     "http",     "json",
 	"keyring",  "launch",  "limbo",    "list",     "man",
 	"memory",   "mount",   "payfetch", "plan",     "present",
-	"read",     "safeexec","say",      "search",   "shell",
+	"read",     "say",     "search",   "shell",
 	"spawn",    "task",    "todo",     "vision",   "wallet",
 	"webfetch", "websearch","wiki",    "write",    "xenith",
 };

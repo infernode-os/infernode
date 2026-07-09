@@ -92,7 +92,6 @@ TARG=\
 	veltro_launch_test.dis\
 	veltro_present_security_test.dis\
 	veltro_more_tools_test.dis\
-	veltro_safeexec_test.dis\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\

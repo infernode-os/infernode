@@ -270,8 +270,12 @@ init(nil: ref Draw->Context, args: list of string)
 				sys->fprint(stderr, "tools9p: invalid -p path %s: %s\n", ppath, perr);
 				raise "fail:usage";
 			}
-			extpaths = ppath :: extpaths;
-			if(explicitperm != "" && findboundpath(ppath) == nil)
+			# Explicit :ro/:rw grants are permission-bearing capabilities.
+			# Keep them in boundpaths only so raw exec cannot inherit a
+			# read-only grant through the untyped extpaths list.
+			if(explicitperm == "")
+				extpaths = ppath :: extpaths;
+			else if(findboundpath(ppath) == nil)
 				boundpaths = ref BoundPath(ppath, pperm) :: boundpaths;
 		'a' =>
 			aarg := arg->earg();
@@ -697,6 +701,31 @@ genwritepaths(): list of string
 	for(bp := boundpaths; bp != nil; bp = tl bp)
 		if((hd bp).perm == "rw")
 			paths = (hd bp).path :: paths;
+	return paths;
+}
+
+execpaths(): list of string
+{
+	# Raw shell execution can write through the filesystem directly, bypassing
+	# write/edit's /tool/paths checks. Only expose explicit rw grants, which
+	# restrictns stages through cowfs via genwritepaths().
+	paths: list of string;
+	for(bp := boundpaths; bp != nil; bp = tl bp)
+		if((hd bp).perm == "rw")
+			paths = (hd bp).path :: paths;
+	return paths;
+}
+
+execwritepaths(): list of string
+{
+	# Exec always sees baseline read-only config/tool trees that nsconstruct
+	# keeps for normal tool operation. Raw shell code can still open those
+	# files for write if the backing filesystem permits it, so stage them
+	# through cowfs as well as explicit rw grants.
+	paths := genwritepaths();
+	paths = addpath(paths, "/lib/veltro");
+	paths = addpath(paths, "/lib/certs");
+	paths = addpath(paths, "/dis/veltro");
 	return paths;
 }
 
@@ -1258,10 +1287,16 @@ applynsrestriction(invokedtool: string): string
 	# Merge extpaths (from -p flags) and boundpaths (from runtime bindpath ctl).
 	# Called per-invocation from asyncexec(), so boundpaths always reflects
 	# the current state — paths bound via the GUI after startup are captured.
+	# Exec is special: it is raw shell authority, so read-only path grants are
+	# not exposed to it. Otherwise shell redirection can mutate a supposedly
+	# read-only tree. Explicit rw grants remain visible and are staged by cowfs.
 	allpaths := extpaths;
-	for(bp2 := boundpaths; bp2 != nil; bp2 = tl bp2)
-		if(!strlist_contains(allpaths, (hd bp2).path))
-			allpaths = (hd bp2).path :: allpaths;
+	if(invokedtool == "exec")
+		allpaths = execpaths();
+	else
+		for(bp2 := boundpaths; bp2 != nil; bp2 = tl bp2)
+			if(!strlist_contains(allpaths, (hd bp2).path))
+				allpaths = (hd bp2).path :: allpaths;
 	# Auto-grant /n/speech when say or hear tool is registered.
 	# speech9p mounts /n/speech in the shared namespace; without this,
 	# restrictns() hides it entirely and say/hear tools fail silently.
@@ -1278,8 +1313,11 @@ applynsrestriction(invokedtool: string): string
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
 	allpaths = addtoolpaths(allpaths, invokedtool);
+	writepaths := genwritepaths();
+	if(invokedtool == "exec")
+		writepaths = execwritepaths();
 	caps := ref NsConstruct->Capabilities(
-		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
+		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, writepaths
 	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);

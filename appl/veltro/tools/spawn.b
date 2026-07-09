@@ -324,6 +324,9 @@ exec(args: string): string
 		# Filter out memory tool — parent agent owns memory exclusively.
 		# Subagents return results via pipe; parent persists what matters.
 		childtools := dropitem("memory", spec.tools);
+		if(spec.paths != nil && (inlist("exec", childtools) || spec.shellcmds != nil)) {
+			return "error: exec/shell subagents cannot receive path grants; use read/list/find/grep for read-only inspection or write/edit with explicit staged write grants";
+		}
 
 		caps := ref NsConstruct->Capabilities(
 			childtools,
@@ -783,6 +786,8 @@ parsespecsection(section: string): (ref SubSpec, string)
 
 	spec := ref SubSpec;
 	spec.task = task;
+	spec.at_ms = 0;
+	spec.every_ms = 0;
 
 	llmmodel   := "haiku";
 	llmtemp    := 0.7;

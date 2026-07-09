@@ -338,18 +338,16 @@ restrictns(caps: ref Capabilities): string
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
 			}
 			# /mnt/msg sub-restriction: granting "/mnt/msg" exposes only the READ
-			# surface (status — the inbox). The SEND endpoint (reply) and the
-			# trusted control file (ctl) and flag endpoint are NEVER exposed by the bare grant — they are
-			# separate capabilities, named explicitly in caps.paths. So a drafting
-			# agent literally cannot see the send path (it does not try to send and
-			# cannot); an authorised send action is granted "/mnt/msg/reply"
-			# separately and gets a writable reply. Pure least-privilege, no gate.
+			# surface (status — the inbox). The proposal endpoint (draft), trusted
+			# control file (ctl), and flag endpoint are NEVER exposed by the bare
+			# grant; they are separate capabilities named explicitly in caps.paths.
+			# A draft is inert until trusted code consumes it through approve.
 			if(inlist("msg", mntpaths)) {
 				msgallow := "status" :: nil;
 				msgwrite := 0;
-				if(inlist("/mnt/msg/reply", caps.paths)) {
-					msgallow = "reply" :: msgallow;
-					msgwrite = 1;	# the send endpoint must be writable
+				if(inlist("/mnt/msg/draft", caps.paths)) {
+					msgallow = "draft" :: msgallow;
+					msgwrite = 1;	# proposal endpoint must be writable
 				}
 				if(inlist("/mnt/msg/flag", caps.paths)) {
 					msgallow = "flag" :: msgallow;

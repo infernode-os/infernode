@@ -40,8 +40,8 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys->remove("/tmp/veltro/sent/security-test");
 
 	request := "email\nsecurity-test\napproved body";
-	if(writefile("/mnt/msg/reply", request) >= 0) {
-		fail("request endpoint claimed the message was sent");
+	if(writefile("/mnt/msg/draft", request) >= 0) {
+		fail("draft endpoint claimed the message was sent");
 		return;
 	}
 	if(readfile("/tmp/veltro/sent/security-test") != nil) {
@@ -70,5 +70,5 @@ init(nil: ref Draw->Context, nil: list of string)
 		fail("consumed request remains pending");
 		return;
 	}
-	sys->print("MSGAPPROVAL PASS: request, exact approval, consume, replay denial\n");
+	sys->print("MSGAPPROVAL PASS: draft, exact approval, consume, replay denial\n");
 }

@@ -322,7 +322,7 @@ handleclassification(response, notification: string)
 	lline := str->tolower(line);
 
 	# Act through the protocol-agnostic msg9p notification plane: flag via
-	# /mnt/msg/ctl, reply via /mnt/msg/reply. Both need the source name (from
+	# /mnt/msg/ctl, draft via /mnt/msg/draft. Both need the source name (from
 	# the notification header) and the source-unique id.
 	src := extractsource(notification);
 	msgid := extractmsgid(notification);
@@ -343,11 +343,11 @@ handleclassification(response, notification: string)
 		if(src != nil && msgid != nil) {
 			draft := extractdraft(response);
 			if(draft != nil) {
-				err := msgreply(src, msgid, draft);
+				err := msgdraft(src, msgid, draft);
 				if(err == nil)
-					log("DECLINE: replied to " + src + "/" + msgid);
+					log("DECLINE: drafted reply to " + src + "/" + msgid);
 				else
-					log("DECLINE: reply failed for " + src + "/" + msgid + ": " + truncate(err, 60));
+					log("DECLINE: draft failed for " + src + "/" + msgid + ": " + truncate(err, 60));
 			} else {
 				log("DECLINE: no draft in LLM response for " + src + "/" + msgid);
 			}
@@ -441,17 +441,17 @@ msgctl(cmd: string): string
 	return nil;
 }
 
-# Send a threaded reply through /mnt/msg/reply (format: <src>\n<id>\n<body>).
-# Returns nil on success or the source's error string.
-msgreply(src, id, body: string): string
+# Queue a threaded reply proposal through /mnt/msg/draft (format:
+# <src>\n<id>\n<body>). Returns nil on success or the server's error string.
+msgdraft(src, id, body: string): string
 {
 	data := src + "\n" + id + "\n" + body;
-	fd := sys->open("/mnt/msg/reply", Sys->OWRITE);
+	fd := sys->open("/mnt/msg/draft", Sys->OWRITE);
 	if(fd == nil)
-		return sys->sprint("open /mnt/msg/reply: %r");
+		return sys->sprint("open /mnt/msg/draft: %r");
 	b := array of byte data;
 	if(sys->write(fd, b, len b) != len b)
-		return sys->sprint("write /mnt/msg/reply: %r");
+		return sys->sprint("write /mnt/msg/draft: %r");
 	return nil;
 }
 

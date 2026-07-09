@@ -39,7 +39,7 @@ underlying protocol." Sources live in `appl/veltro/sources/` (`sms.b`,
                     flag <src> <origid> <word>           set/clear a flag
     notify    (r)   blocking read: one Notification record per event
     status    (r)   human-readable per-source status
-    reply     (w)   <src>\n<origid>\n<body...>           queue immutable reply request
+    draft     (w)   <src>\n<origid>\n<body...>           queue immutable reply proposal
     flag      (w)   <src> <origid> <word>                message flag capability
     pending   (r)   request IDs and metadata              trusted controller only
     approve   (w)   approve <id>                          trusted, one shot
@@ -49,9 +49,9 @@ underlying protocol." Sources live in `appl/veltro/sources/` (`sms.b`,
 
 The agent's action vocabulary is deliberately tiny and protocol-agnostic:
 
-- **request a reply** → write `<src>\n<origid>\n<body>` to `/mnt/msg/reply`. The
+- **draft a reply** → write `<src>\n<origid>\n<body>` to `/mnt/msg/draft`. The
   write reports that approval is required and does not send.
-- **send an approved reply** → a trusted controller reviews `/mnt/msg/pending`
+- **send an approved draft** → a trusted controller reviews `/mnt/msg/pending`
   and writes `approve <id>` to `/mnt/msg/approve`. The immutable request is
   consumed before dispatch, so an ID cannot be replayed.
 - **send a new message** → write `send <src> <recipient>\n<body>` to `/mnt/msg/ctl`.

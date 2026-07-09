@@ -296,26 +296,26 @@ else
     fail "child provision narrowing test failed"
 fi
 
-if emu_c "provision_msg_reply_denied" 14 \
-    "tools9p -p /mnt/msg:rw read task & sleep 3; echo '10 paths=/mnt/msg/reply:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.10/paths"; then
-    if echo "$OUTPUT" | grep -q "^/mnt/msg/reply"; then
-        fail "bare /mnt/msg grant must not mint the hidden reply capability"
+if emu_c "provision_msg_draft_denied" 14 \
+    "tools9p -p /mnt/msg:rw read task & sleep 3; echo '10 paths=/mnt/msg/draft:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.10/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/draft"; then
+        fail "bare /mnt/msg grant must not mint the hidden draft capability"
     else
-        pass "child cannot derive /mnt/msg/reply from bare /mnt/msg"
+        pass "child cannot derive /mnt/msg/draft from bare /mnt/msg"
     fi
 else
-    fail "message reply delegation-denial test failed"
+    fail "message draft delegation-denial test failed"
 fi
 
-if emu_c "provision_msg_reply_exact" 14 \
-    "tools9p -p /mnt/msg/reply:rw read task & sleep 3; echo '11 paths=/mnt/msg/reply:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.11/paths"; then
-    if echo "$OUTPUT" | grep -q "^/mnt/msg/reply rw"; then
-        pass "child may delegate an exact trusted /mnt/msg/reply grant"
+if emu_c "provision_msg_draft_exact" 14 \
+    "tools9p -p /mnt/msg/draft:rw read task & sleep 3; echo '11 paths=/mnt/msg/draft:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.11/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/draft rw"; then
+        pass "child may delegate an exact /mnt/msg/draft grant"
     else
-        fail "exact /mnt/msg/reply grant was not delegated (output: $OUTPUT)"
+        fail "exact /mnt/msg/draft grant was not delegated (output: $OUTPUT)"
     fi
 else
-    fail "exact message reply delegation test failed"
+    fail "exact message draft delegation test failed"
 fi
 
 if emu_c "provision_specific_ro" 14 \

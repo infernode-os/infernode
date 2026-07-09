@@ -861,6 +861,83 @@ mntCombinedWorker(result: chan of string)
 	result <-= "";
 }
 
+# mcpdeny must attenuate inside a granted MCP server without dropping sibling
+# tools. This pins the defense-in-depth path used by spawn.b before MCP discovery.
+testRestrictNsMcpDeny(t: ref T)
+{
+	base := "/mnt/mcp/codexdeny";
+	mkdirp(base + "/_meta");
+	writefilecontent(base + "/_meta/name", "codexdeny\n");
+	mkdirp(base + "/tools/weather");
+	createfile(base + "/tools/weather/call");
+	mkdirp(base + "/tools/geocode");
+	createfile(base + "/tools/geocode/call");
+
+	(ok, nil) := sys->stat(base + "/tools/geocode/call");
+	if(ok < 0) {
+		t.skip("cannot create synthetic /mnt/mcp test fixture");
+		return;
+	}
+
+	result := chan of string;
+	spawn mcpDenyWorker(result);
+	r := <-result;
+
+	sys->remove(base + "/tools/geocode/call");
+	sys->remove(base + "/tools/geocode");
+	sys->remove(base + "/tools/weather/call");
+	sys->remove(base + "/tools/weather");
+	sys->remove(base + "/tools");
+	sys->remove(base + "/_meta/name");
+	sys->remove(base + "/_meta");
+	sys->remove(base);
+
+	if(r != "")
+		t.error(r);
+}
+
+mcpDenyWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/mnt/mcp/codexdeny" :: nil,
+		nil,
+		nil,
+		0 :: 1 :: 2 :: nil,
+		nil,
+		0,
+		0,
+		-1,
+		nil,
+		"geocode" :: nil
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (mcpdeny) failed: %s", err);
+		return;
+	}
+
+	(weatherok, nil) := sys->stat("/mnt/mcp/codexdeny/tools/weather/call");
+	if(weatherok < 0) {
+		result <-= "mcpdeny hid an allowed MCP tool";
+		return;
+	}
+	(geocodeok, nil) := sys->stat("/mnt/mcp/codexdeny/tools/geocode/call");
+	if(geocodeok >= 0) {
+		result <-= "mcpdeny left a denied MCP tool call path visible";
+		return;
+	}
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "mcpdeny grant leaked an unrelated /mnt sibling";
+		return;
+	}
+
+	result <-= "";
+}
+
 # ============================================================================
 # Test 6: RestrictNs - Concurrent
 # Verifies concurrent restrictns calls don't race
@@ -1712,6 +1789,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);
+	run("RestrictNsMcpDeny", testRestrictNsMcpDeny);
 	run("RestrictNsRace", testRestrictNsRace);
 	run("VerifyNs", testVerifyNs);
 	run("AuditLog", testAuditLog);

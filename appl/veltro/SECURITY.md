@@ -61,6 +61,12 @@ also part of the boundary: source-controlled fields must remain single physical
 lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`
 control records.
 
+Wallet payments follow the same split. A `/n/wallet` grant is narrowed inside
+the agent namespace: agents can read account metadata, sign through factotum,
+and write per-account `pay` proposals, but cannot see root `ctl`, `pending`,
+`new`, or per-account `ctl`. Payment approval and wallet configuration remain
+trusted-controller actions outside the model namespace.
+
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
 for granting a compromised model both confidential data and unrestricted egress.

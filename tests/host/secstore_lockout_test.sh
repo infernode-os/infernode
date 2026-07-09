@@ -71,7 +71,7 @@ sleep 2
 auth/secstore-setup -u $USER -k $CORRECT
 echo '--- begin wrong-password attempts ---'
 for(i in 1 2 3 4 5 6 7 8 9 10 11 12){
-	echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 g factotum >[2=1]
+	echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 x factotum >[2=1]
 }
 echo '--- end wrong-password attempts ---'
 EOF

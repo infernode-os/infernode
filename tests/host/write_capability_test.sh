@@ -10,10 +10,12 @@ trap 'rm -f "$CANARY" "$PROBE" "$ROOT/tmp/veltro/scratch/77/private"' EXIT
 
 [[ -x "$EMU" ]] || { echo "ERROR: emu not found at $EMU" >&2; exit 1; }
 
-"$EMU" -r"$ROOT" /dis/sh.dis -c \
+timeout 30 "$EMU" -r"$ROOT" /dis/sh.dis -c \
 	'limbo -I module -o dis/veltro/exec_ro_write_probe.dis tests/exec_ro_write_probe.b' \
-	</dev/null >/tmp/exec-ro-write-probe-build.log 2>&1 ||
-	{ cat /tmp/exec-ro-write-probe-build.log; exit 1; }
+	</dev/null >/tmp/exec-ro-write-probe-build.log 2>&1
+rc=$?
+emu_timeout_ok "$rc" || { cat /tmp/exec-ro-write-probe-build.log; exit 1; }
+[[ -s "$PROBE" ]] || { cat /tmp/exec-ro-write-probe-build.log; echo "ERROR: failed to build $PROBE"; exit 1; }
 
 runemu() {
 	local command="$1"
@@ -25,7 +27,7 @@ runemu() {
 	local rc=$?
 	OUTPUT=$(cat "$log")
 	rm -f "$log"
-	[[ $rc -eq 0 || $rc -eq 124 ]]
+	emu_timeout_ok "$rc"
 }
 
 echo original >"$CANARY"

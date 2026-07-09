@@ -13,7 +13,7 @@ timeout 15 "$EMU" -r"$ROOT" /dis/sh.dis -c \
 rc=$?
 output=$(cat "$log")
 
-[[ $rc -eq 0 || $rc -eq 124 ]] || { echo "$output"; exit 1; }
+emu_timeout_ok "$rc" || { echo "$output"; exit 1; }
 grep -q DONE <<<"$output" || { echo "FAIL: tools9p test did not complete"; echo "$output"; exit 1; }
 
 if grep -Eq 'cannot open.*/net|/net.*does not exist' <<<"$output"; then

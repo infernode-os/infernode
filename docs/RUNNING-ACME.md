@@ -30,7 +30,7 @@
 ### Method 1: Using the startup script (recommended)
 
 ```bash
-cd /Users/pdfinn/github.com/NERVsystems/nerva-9p-paper/inferno/infernode
+cd /path/to/infernode
 export DISPLAY=:0
 ./InferNode.sh
 ```
@@ -38,7 +38,7 @@ export DISPLAY=:0
 ### Method 2: Direct execution
 
 ```bash
-cd /Users/pdfinn/github.com/NERVsystems/nerva-9p-paper/inferno/infernode
+cd /path/to/infernode
 export DISPLAY=:0
 export PATH="$PWD/MacOSX/arm64/bin:$PATH"
 ./MacOSX/arm64/bin/emu -r.

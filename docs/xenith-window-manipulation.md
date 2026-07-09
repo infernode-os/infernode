@@ -226,7 +226,7 @@ This is intentional: after a restart, previous agent sessions no longer exist, s
 |------|---------|
 | `appl/xenith/wind.m` | Added `creatormnt : int` field to Window ADT |
 | `appl/xenith/xfid.b` | Added layout commands, deletion protection, creator tracking |
-| `appl/nerv/agent.b` | Updated system prompt to document new capabilities |
+| the agent module | Updated system prompt to document new capabilities |
 
 ## Usage Examples
 

@@ -76,7 +76,7 @@ Connections between components should be late-bound and configurable, not compil
 
 ## Related Research
 
-The `../nerva-9p-paper` directory contains ongoing research on namespace-bounded security for AI agents. Key areas being explored:
+The `../research` directory contains ongoing research on namespace-bounded security for AI agents. Key areas being explored:
 
 - Namespace isolation as defense against indirect prompt injection
 - Token efficiency of filesystem interfaces vs JSON schemas
@@ -497,7 +497,7 @@ Random thoughts and ideas that don't fit elsewhere yet. Add freely.
 - Pike et al. "The Use of Name Spaces in Plan 9" (1992)
 - Plan 9 Programmer's Manual, Section 4 (File Servers)
 - Inferno Programmer's Guide
-- Ongoing research: `../nerva-9p-paper`
+- Ongoing research: `../research`
 
 ---
 

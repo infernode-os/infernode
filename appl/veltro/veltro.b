@@ -664,7 +664,7 @@ COMPACT_THRESHOLD: con 150000;
 # high-water trigger and veltro's checkandcompact would fire near the same
 # threshold; opting out keeps exactly one authority — the client — for veltro
 # sessions, while the server net stays on by default for clients that don't
-# self-manage (nerva, repl, sub-agents).
+# self-manage (the primary agent, repl, sub-agents).
 selfmanagecompaction(llmsessionid: string)
 {
 	ctlpath := "/mnt/llm/" + llmsessionid + "/ctl";

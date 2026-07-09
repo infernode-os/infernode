@@ -488,5 +488,5 @@ decodetask() → progress channel → progressforwarder() → casync → ImagePr
 - pic language: http://man.cat-v.org/plan_9/1/pic
 - grap language: http://man.cat-v.org/plan_9/1/grap
 - Structural Regular Expressions: http://doc.cat-v.org/bell_labs/structural_regexps/
-- 9P Paper: ../nerva-9p-paper/
+- 9P Paper: ../research/
 - ARM64 Instruction Set: https://developer.arm.com/documentation/ddi0596/

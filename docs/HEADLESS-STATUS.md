@@ -141,7 +141,7 @@ Create a stub Draw module that provides the interface but does nothing.
 ## Testing Commands
 
 ```bash
-cd /Users/pdfinn/github.com/NERVsystems/nerva-9p-paper/inferno/infernode
+cd /path/to/infernode
 
 # Test 1: Verbose output
 ./MacOSX/arm64/bin/emu-headless -r. -v dis/sh.dis

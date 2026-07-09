@@ -48,6 +48,14 @@ check() {
         echo "  got: $(echo "$2" | tail -8)"
     fi
 }
+checkabsent() {
+    if echo "$2" | grep -q "$3"; then
+        fail "$1 (unexpected '$3' in output)"
+        echo "  got: $(echo "$2" | tail -8)"
+    else
+        pass "$1"
+    fi
+}
 
 # Exit 124 (timeout) is tolerated: secstored is a background service that never
 # exits, so the emu run is bounded by timeout and the captured output is used.
@@ -80,6 +88,35 @@ OUTPUT=$(run_emu 90 /tmp/test_lockout.sh)
 
 check "account locks at the failed-attempt threshold" "$OUTPUT" "locked after"
 check "attempts are rejected while the account is locked" "$OUTPUT" "rejected locked account"
+
+lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
+rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
+sleep 1
+
+# Scenario 2 (reset on success): a handful of wrong attempts BELOW the threshold
+# must not lock the account, and a subsequent correct password must still
+# authenticate. This is the other half of FIA_AFL.1 — the control must bound
+# attackers without penalising a legitimate user who fumbles a few times.
+cat > "$ROOT/tmp/test_reset.sh" << EOF
+load std
+bind -a '#I' /net
+ndb/cs
+auth/secstored &
+sleep 2
+auth/secstore-setup -u $USER -k $CORRECT
+echo '--- 3 wrong attempts (below the threshold) ---'
+for(i in 1 2 3){
+	echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 x factotum >[2=1]
+}
+echo '--- now the correct password ---'
+echo $CORRECT | auth/secstore -i -u $USER -s tcp!localhost!5356 t >[2=1]
+echo '--- reset scenario done ---'
+EOF
+
+OUTPUT2=$(run_emu 60 /tmp/test_reset.sh)
+
+checkabsent "a few wrong attempts do not lock a legitimate account" "$OUTPUT2" "locked after"
+check "correct password authenticates despite prior failures" "$OUTPUT2" "authenticated: $USER"
 
 lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true

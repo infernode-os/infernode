@@ -12,7 +12,7 @@ implement Msg9p;
 #   ├── ctl         (rw)  "register <name> <dispath> <config...>"
 #   ├── notify      (r)   Blocking read: returns next notification
 #   ├── status      (r)   Summary of all sources
-#   ├── reply       (w)   Create an immutable pending send request
+#   ├── draft       (w)   Create an immutable pending reply proposal
 #   ├── flag        (w)   "<src> <origid> <flag>" (separate capability)
 #   ├── pending     (r)   Trusted controller view of pending request IDs
 #   ├── approve     (w)   Trusted one-shot approval: "approve <id>"
@@ -56,7 +56,7 @@ Msg9p: module {
 };
 
 # Qid layout
-Qroot, Qctl, Qnotify, Qstatus, Qreply, Qflag, Qpending, Qapprove, Qdeny, Qsrcdir: con iota;
+Qroot, Qctl, Qnotify, Qstatus, Qdraft, Qflag, Qpending, Qapprove, Qdeny, Qsrcdir: con iota;
 
 # Registered source info
 SrcInfo: adt {
@@ -207,8 +207,8 @@ walkto(n: ref Navop.Walk)
 		"status" =>
 			n.path = big Qstatus;
 			n.reply <-= dirgen(int n.path);
-		"reply" =>
-			n.path = big Qreply;
+		"draft" =>
+			n.path = big Qdraft;
 			n.reply <-= dirgen(int n.path);
 		"flag" =>
 			n.path = big Qflag;
@@ -256,8 +256,8 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qstatus =>
 		d.name = "status";
 		d.mode = 8r444;
-	Qreply =>
-		d.name = "reply";
+	Qdraft =>
+		d.name = "draft";
 		d.mode = 8r222;
 	Qflag =>
 		d.name = "flag";
@@ -287,7 +287,7 @@ doreaddir(n: ref Navop.Readdir, path: int)
 {
 	case path {
 	Qroot =>
-		entries := array[] of {Qctl, Qnotify, Qstatus, Qreply, Qflag, Qpending, Qapprove, Qdeny, Qsrcdir};
+		entries := array[] of {Qctl, Qnotify, Qstatus, Qdraft, Qflag, Qpending, Qapprove, Qdeny, Qsrcdir};
 		for(i := 0; i < len entries; i++) {
 			if(i >= n.offset) {
 				(d, err) := dirgen(entries[i]);
@@ -384,8 +384,8 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, cerr));
 				else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-			Qreply =>
-				perr := queuereply(data);
+			Qdraft =>
+				perr := queuedraft(data);
 				srv.reply(ref Rmsg.Error(m.tag, perr));
 			Qflag =>
 				(nil, fargs) := sys->tokenize(data, " \t\r\n");
@@ -494,14 +494,14 @@ handlectl(data: string): string
 	}
 }
 
-# === reply approval: queue immutable action; trusted endpoint consumes once ===
+# === reply approval: queue immutable draft; trusted endpoint commits once ===
 #
-# /mnt/msg/reply (write-only) format:  <srcname>\n<origid>\n<body...>
-# Generic, protocol-agnostic: the consumer replies to a message by its source
-# and original id; the source preserves threading. Spawned from the serve loop
-# so the source's I/O does not block other clients.
+# /mnt/msg/draft (write-only) format:  <srcname>\n<origid>\n<body...>
+# Generic, protocol-agnostic proposal: the writer drafts a threaded reply by
+# source and original id. Nothing is sent until a trusted controller consumes
+# the immutable pending request through /mnt/msg/approve.
 
-queuereply(data: string): string
+queuedraft(data: string): string
 {
 	verr := validreply(data);
 	if(verr != nil)
@@ -510,13 +510,13 @@ queuereply(data: string): string
 	for(p := pendingSends; p != nil; p = tl p) {
 		count++;
 		if((hd p).data == data)
-			return sys->sprint("reply: approval required request %d", (hd p).id);
+			return sys->sprint("draft: approval required request %d", (hd p).id);
 	}
 	if(count >= MAXPENDING)
-		return "reply: approval queue full";
+		return "draft: approval queue full";
 	id := nextSendID++;
 	pendingSends = ref PendingSend(id, data) :: pendingSends;
-	return sys->sprint("reply: approval required request %d", id);
+	return sys->sprint("draft: approval required request %d", id);
 }
 
 validreply(data: string): string
@@ -526,11 +526,11 @@ validreply(data: string): string
 	src = msgstrip(src);
 	origid = msgstrip(origid);
 	if(src == "" || origid == "")
-		return "reply: want <srcname>\\n<origid>\\n<body>";
+		return "draft: want <srcname>\\n<origid>\\n<body>";
 	for(sl := sources; sl != nil; sl = tl sl)
 		if((hd sl).name == src)
 			return nil;
-	return "reply: no source: " + src;
+	return "draft: no source: " + src;
 }
 
 genpending(): string
@@ -811,39 +811,66 @@ hassub(hay, needle: string): int
 formatnotification(srcname: string, n: ref MsgSrc->Notification): string
 {
 	if(n.kind == "error")
-		return "[Message error — " + srcname + "]\n" + n.detail;
+		return "[Message error — " + cleanfield(srcname) + "]\nDetail: " + cleanfield(n.detail);
 
 	if(n.msg == nil)
-		return "[Message " + n.kind + " — " + srcname + "]";
+		return "[Message " + cleanfield(n.kind) + " — " + cleanfield(srcname) + "]";
 
 	m := n.msg;
 
-	text := "[Message notification — " + srcname + "]\n";
+	text := "[Message notification — " + cleanfield(srcname) + "]\n";
 	text += "Triage: " + triageverdict(m) + "\n";
 
 	if(m.sender != nil)
-		text += "From: " + m.sender + "\n";
+		text += "From: " + cleanfield(m.sender) + "\n";
 	if(m.recipient != nil)
-		text += "To: " + m.recipient + "\n";
+		text += "To: " + cleanfield(m.recipient) + "\n";
 	if(m.subject != nil)
-		text += "Subject: " + m.subject + "\n";
+		text += "Subject: " + cleanfield(m.subject) + "\n";
 	if(m.timestamp != nil)
-		text += "Date: " + m.timestamp + "\n";
+		text += "Date: " + cleanfield(m.timestamp) + "\n";
 
 	# Include preview of body (first 200 chars)
-	if(m.body != nil && m.body != "") {
-		preview := m.body;
-		if(len preview > 200)
-			preview = preview[:200] + "...";
-		text += "Preview: " + preview + "\n";
-	}
+	if(m.body != nil && m.body != "")
+		text += "Preview: " + previewfield(m.body, 200) + "\n";
 
-	text += "Message ID: " + m.id + "\n";
+	text += "Message ID: " + cleanfield(m.id) + "\n";
 	text += "---\n";
-	text += "Handle this per your message policy. Reply via /mnt/msg/reply, " +
-		"flag via /mnt/msg/ctl; the full body (when needed) is in the depth mount.";
+	text += "Handle this per your message policy. Draft via /mnt/msg/draft, " +
+		"flag via /mnt/msg/flag; the full body (when needed) is in the depth mount.";
 
 	return text;
+}
+
+cleanfield(s: string): string
+{
+	if(s == nil)
+		return "";
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			out += " ";
+		else
+			out += s[i:i+1];
+	}
+	return out;
+}
+
+previewfield(s: string, max: int): string
+{
+	out := "";
+	i := 0;
+	for(; i < len s && i < max; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			out += " ";
+		else
+			out += s[i:i+1];
+	}
+	if(i < len s)
+		out += "...";
+	return out;
 }
 
 # === Notify queue management ===

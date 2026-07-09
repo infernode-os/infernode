@@ -1,6 +1,6 @@
 #!/dis/sh.dis
 # /mnt/msg capability narrowing: granting /mnt/msg exposes only status (read);
-# the send endpoint reply is hidden unless /mnt/msg/reply is granted separately.
+# the draft endpoint is hidden unless /mnt/msg/draft is granted separately.
 load std
 path=(/dis .)
 mount -ac {mntgen} /n

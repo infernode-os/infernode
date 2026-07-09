@@ -10,6 +10,7 @@ implement Wallet9p;
 #   /n/wallet/
 #       ctl          rw: global config ("limit <amount>", "default <name>")
 #       accounts     r:  newline-separated account names
+#       default      r:  default account name
 #       new          rw: write "eth base myaccount" → read account name
 #       {name}/          per-account directory
 #           address  r:  public address
@@ -72,6 +73,7 @@ Qctl:      con 1;
 Qaccounts: con 2;
 Qnew:      con 3;
 Qpending:  con 4;
+Qdefault:  con 5;
 # Per-account files start at 16
 Qacctdir:  con 16;
 Qaddress:  con 17;
@@ -438,6 +440,12 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		}
 		readstr(srv, m, s);
 
+	Qdefault =>
+		if(defaultacct != "")
+			readstr(srv, m, defaultacct + "\n");
+		else
+			readstr(srv, m, "");
+
 	Qnew =>
 		ns := getnewstate(m.fid);
 		if(ns != nil && ns.result != "")
@@ -614,7 +622,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, err));
 				return;
 			}
-			as := ref AcctState(acct, nil, nil, 0);
+			as := ref AcctState(acct, nil, nil, 1);
 			accounts = as :: accounts;
 			setnewstate(m.fid, name);
 			syncfactotum();
@@ -633,7 +641,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, err));
 				return;
 			}
-			as := ref AcctState(acct, nil, nil, 0);
+			as := ref AcctState(acct, nil, nil, 1);
 			accounts = as :: accounts;
 			setnewstate(m.fid, name);
 			syncfactotum();
@@ -923,7 +931,7 @@ restoreaccounts()
 		(fullacct, err) := wallet->loadaccount(acct.name);
 		if(err != nil || fullacct == nil)
 			continue;
-		as := ref AcctState(fullacct, nil, nil, 0);
+		as := ref AcctState(fullacct, nil, nil, 1);
 		accounts = as :: accounts;
 		sys->fprint(stderr, "wallet9p: restored account: %s (%s)\n",
 			fullacct.name, fullacct.address);
@@ -1319,6 +1327,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, Qctl);
 				else if(name == "accounts")
 					n.path = MKPATH(0, Qaccounts);
+				else if(name == "default")
+					n.path = MKPATH(0, Qdefault);
 				else if(name == "new")
 					n.path = MKPATH(0, Qnew);
 				else if(name == "pending")
@@ -1372,6 +1382,7 @@ navigator(navops: chan of ref Navop)
 				# Root: ctl, accounts, new, pending, then account dirs
 				entries = MKPATH(0, Qpending) :: entries;
 				entries = MKPATH(0, Qnew) :: entries;
+				entries = MKPATH(0, Qdefault) :: entries;
 				entries = MKPATH(0, Qaccounts) :: entries;
 				entries = MKPATH(0, Qctl) :: entries;
 				i := 0;
@@ -1432,6 +1443,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		perm = 8r666;
 	Qaccounts =>
 		name = "accounts";
+	Qdefault =>
+		name = "default";
 	Qnew =>
 		name = "new";
 		perm = 8r666;

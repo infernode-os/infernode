@@ -258,6 +258,12 @@ restrictns(caps: ref Capabilities): string
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
 
+		if(inlist("/n/wallet", caps.paths)) {
+			werr := restrictwallet();
+			if(werr != nil)
+				return sys->sprint("restrict /n/wallet: %s", werr);
+		}
+
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
 			lerr := restrictlocal(localpaths);
@@ -584,6 +590,58 @@ restrictlocal(paths: list of string): string
 	if(err != nil)
 		return err;
 	return nil;
+}
+
+restrictwallet(): string
+{
+	accts := walletaccounts();
+	allow := "accounts" :: "default" :: nil;
+	for(a := accts; a != nil; a = tl a)
+		if(!inlist(hd a, allow))
+			allow = hd a :: allow;
+
+	err := restrictdir("/n/wallet", allow, 0);
+	if(err != nil)
+		return err;
+
+	acctallow := "address" :: "balance" :: "chain" :: "sign" ::
+		"pay" :: "history" :: nil;
+	for(a = accts; a != nil; a = tl a) {
+		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);
+		if(err != nil)
+			return err;
+	}
+	return nil;
+}
+
+walletaccounts(): list of string
+{
+	fd := sys->open("/n/wallet/accounts", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	s := string buf[:n];
+	(nil, toks) := sys->tokenize(s, " \t\r\n");
+	out: list of string;
+	for(; toks != nil; toks = tl toks) {
+		name := hd toks;
+		if(safename(name) && !inlist(name, out))
+			out = name :: out;
+	}
+	return out;
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 0;
+	return 1;
 }
 
 # Recursively restrict a directory to only the granted subpaths.

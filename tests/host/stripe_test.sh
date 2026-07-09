@@ -83,6 +83,7 @@ cat /n/wallet/new
 
 echo '=== balance ==='
 cat /n/wallet/stripe-test/balance
+echo 'requireapproval off' > /n/wallet/stripe-test/ctl
 
 echo '=== pay ==='
 echo '100 Test payment from InferNode' > /n/wallet/stripe-test/pay

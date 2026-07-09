@@ -165,6 +165,8 @@ TOOL_PATHS := array[] of {
 	("task",    "/dis/veltro/tools/task.dis"),
 	# Structured planning
 	("plan",    "/dis/veltro/tools/plan.dis"),
+	# Knowledge base operations via wiki9p
+	("wiki",    "/dis/veltro/tools/wiki.dis"),
 	# Credential management (launches GUI, no key access)
 	("keyring", "/dis/veltro/tools/keyring.dis"),
 	# Wallet operations (crypto/fiat payments via wallet9p)

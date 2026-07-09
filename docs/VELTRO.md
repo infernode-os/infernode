@@ -81,12 +81,12 @@ A child can never exceed the parent's capabilities; it can only narrow them furt
 
 ## Tools
 
-Forty tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a small interface (`init`, `name`, `doc`, `exec`) defined in [`tool.m`](../appl/veltro/tool.m). Tools are loaded on demand and exposed to the agent through `/tool`.
+Thirty-nine tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a small interface (`init`, `name`, `doc`, `exec`) defined in [`tool.m`](../appl/veltro/tool.m). Tools are loaded on demand and exposed to the agent through `/tool`.
 
 | Category       | Tools |
 |----------------|-------|
 | **Files**      | `read`, `write`, `edit`, `list`, `find`, `search`, `grep`, `diff` |
-| **Execution**  | `exec`, `shell`, `launch`, `spawn`, `safeexec` |
+| **Execution**  | `exec`, `shell`, `launch`, `spawn` |
 | **Code**       | `git`, `json`, `vision`, `editor` |
 | **Web**        | `webfetch`, `websearch`, `browse`, `charon`, `http` |
 | **Comms**      | `say`, `hear` |

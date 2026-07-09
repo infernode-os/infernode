@@ -15,7 +15,7 @@ mkdir -p /tmp/.veltro-ns/shadow >[2] /dev/null
 # Start tools9p with the canonical stock toolset (mirrors what
 # lucibridge typically launches with). Single line — Inferno rc
 # does not accept backslash line continuations.
-/dis/veltro/tools9p.dis read list find search write edit grep exec launch spawn safeexec shell limbo xenith present gap editor task plan todo memory diff json webfetch websearch browse charon git say hear vision gpu fractal man keyring wallet payfetch wiki &
+/dis/veltro/tools9p.dis read list find search write edit grep exec launch spawn shell limbo xenith present gap editor task plan todo memory diff json webfetch websearch browse charon git say hear vision gpu fractal man keyring wallet payfetch wiki &
 
 sleep 2
 

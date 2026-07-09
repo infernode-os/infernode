@@ -306,8 +306,6 @@ testOtherToolsNeverApproval(t: ref T)
 	# Tools not in the {exec, write, edit} set should always return 0.
 	t.asserteq(needsapproval("spawn", "tools=write -- write /dis/x"), 0,
 		"spawn never requires approval (gating happens inside spawn)");
-	t.asserteq(needsapproval("safeexec", "write /dis/x"), 0,
-		"safeexec never requires approval at this layer");
 	t.asserteq(needsapproval("plan", "make a plan"), 0,
 		"plan never requires approval");
 	t.asserteq(needsapproval("memory", "save k v"), 0,

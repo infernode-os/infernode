@@ -22,8 +22,8 @@
 | [LUCIFER-EVALUATION.md](LUCIFER-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
 | [evaluations/fractal-app-evaluation.md](evaluations/fractal-app-evaluation.md) | Fractal app production readiness evaluation |
 | [architecture-review-veltro-unification.md](architecture-review-veltro-unification.md) | Veltro architecture review |
-| [../doc/matrix-architecture.md](../doc/matrix-architecture.md) | Matrix compositional module runtime — modules, compositions, the library, 9P control namespace, and the Lucifer GUI control surface |
-| [../doc/9p-data-conventions.md](../doc/9p-data-conventions.md) | 9P data conventions Matrix modules read from and write to |
+| [matrix-architecture.md](matrix-architecture.md) | Matrix compositional module runtime — modules, compositions, the library, 9P control namespace, and the Lucifer GUI control surface |
+| [9p-data-conventions.md](9p-data-conventions.md) | 9P data conventions Matrix modules read from and write to |
 | [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md) | Recommended feature additions |
 
 ## For Developers

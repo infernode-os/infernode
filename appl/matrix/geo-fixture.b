@@ -5,7 +5,7 @@ implement GeoFixture;
 # the geo-map module is demoable in stock InferNode with no live data
 # source: pure test data.
 #
-# It writes the /mnt/geo contract (doc/geo-map-design.md) as flat files
+# It writes the /mnt/geo contract (docs/geo-map-design.md) as flat files
 # under its outdir — the established Matrix service→outdir idiom:
 #
 #   <outdir>/entities/<id>   ndb stanza, rewritten each tick as units move

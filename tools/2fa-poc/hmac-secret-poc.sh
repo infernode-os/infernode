@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Phase 0 PoC orchestrator for InferNode second-factor auth.
-# Proves, on real hardware, the foundation of doc/second-factor-auth.md:
+# Proves, on real hardware, the foundation of docs/second-factor-auth.md:
 #   enroll -> derive(salt) -> derive(salt) again  => identical, device-bound secret R
 #   then mixes R into a secstore-style file key:   filekey = HKDF(pwkey || R)
 #

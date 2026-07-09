@@ -12,7 +12,7 @@ implement Auditchain;
 # unit-tested directly and reused by both the auditfs server and the
 # offline verifier. It composes keyring->sha256; it adds no new crypto.
 #
-# See doc/compliance/audit-log-design.md.
+# See docs/compliance/audit-log-design.md.
 #
 
 include "sys.m";

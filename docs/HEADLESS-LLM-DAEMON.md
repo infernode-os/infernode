@@ -30,7 +30,7 @@ This applies just as well to a language model. The InferNode component
 `llmsrv` (`appl/cmd/llmsrv.b`) translates 9P file operations into HTTP
 calls to an OpenAI-compatible chat-completions endpoint, and presents
 the model as a synthetic filesystem under `/mnt/llm`. The protocol is
-documented in [`doc/llm-mount.md`](../doc/llm-mount.md); the relevant
+documented in [`docs/llm-mount.md`](llm-mount.md); the relevant
 shape is:
 
 ```
@@ -290,7 +290,7 @@ Create `~/.config/systemd/user/infernode-llm.service`. Replace
 ```ini
 [Unit]
 Description=InferNode headless LLM 9P gateway (llmsrv via emu)
-Documentation=file:///path/to/infernode/doc/llm-mount.md
+Documentation=file:///path/to/infernode/docs/llm-mount.md
 After=ollama.service network-online.target
 Requires=ollama.service
 Wants=network-online.target
@@ -648,7 +648,7 @@ its own listener for clean network-policy boundaries.
 
 ## References
 
-- [`doc/llm-mount.md`](../doc/llm-mount.md) — the 9P filesystem layout
+- [`docs/llm-mount.md`](llm-mount.md) — the 9P filesystem layout
   exposed by `llmsrv`, including session control and tool-definition
   files.
 - [`appl/cmd/llmsrv.b`](../appl/cmd/llmsrv.b) — the canonical

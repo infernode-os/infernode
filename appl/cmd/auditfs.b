@@ -21,9 +21,9 @@ implement Auditfs;
 #
 # This is the security-log core. Checkpoint signing (AU-10) is performed
 # by factotum, which holds the signer key — auditfs never sees the private
-# key (see doc/compliance/audit-log-factotum-signing-DESIGN.md). The vac
+# key (see docs/compliance/audit-log-factotum-signing-DESIGN.md). The vac
 # content-store layer for AI-agent provenance is a designed-in follow-on;
-# see doc/compliance/audit-log-design.md.
+# see docs/compliance/audit-log-design.md.
 #
 # Usage:   auditfs [-f backing-file]
 # Mount:   mount {auditfs} /mnt/audit
@@ -78,7 +78,7 @@ seq := 0;			# sequence number of the last record (0 = none)
 # factotum is unreachable or holds no audit signer key, checkpoints are
 # unsigned chain markers and the head must be anchored externally. The
 # public key (not a secret) is fetched from factotum and served at
-# /mnt/audit/pubkey. See doc/compliance/audit-log-factotum-signing-DESIGN.md.
+# /mnt/audit/pubkey. See docs/compliance/audit-log-factotum-signing-DESIGN.md.
 pubkey := "";			# audit public key, fetched from factotum and cached
 
 init(nil: ref Draw->Context, args: list of string)

@@ -7,7 +7,7 @@
 #
 # A composition is a plain-text description of which modules to
 # load, where they mount, and how display regions are arranged.
-# See doc/matrix-architecture.md for the format.
+# See docs/matrix-architecture.md for the format.
 #
 
 MatrixLib: module

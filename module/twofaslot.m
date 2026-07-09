@@ -9,7 +9,7 @@
 # The presence of a slot dir is the marker that the account is "2FA"; legacy
 # password-only accounts have none and are left untouched. This module is pure
 # local-file + crypto: the caller (Settings enroll / logon unlock) owns the
-# secstore re-encrypt of the factotum blob. See doc/second-factor-auth.md.
+# secstore re-encrypt of the factotum blob. See docs/second-factor-auth.md.
 #
 Twofaslot: module
 {

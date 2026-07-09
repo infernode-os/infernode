@@ -2,7 +2,7 @@ implement Cmd2fa;
 
 #
 # 2fa — enroll / manage YubiKey-gated secstore login (the strong, key-slot mode).
-# See doc/second-factor-auth.md. Run after a normal login (secstored up).
+# See docs/second-factor-auth.md. Run after a normal login (secstored up).
 #
 #   2fa status     show whether this account is 2FA + whether a key is present
 #   2fa enroll     bind the present security key + a recovery passphrase (strong:

@@ -30,7 +30,7 @@ namespace kernel.
 > confirmation**. Nothing here is a substitute for independent evaluation.
 
 This ST complements, and does not supersede, the readiness/gap analysis in
-[`../../doc/compliance/Common-Criteria-readiness.md`](../../doc/compliance/Common-Criteria-readiness.md).
+[`Common-Criteria-readiness.md`](Common-Criteria-readiness.md).
 That document scopes the *evaluation effort*; this document is the *ST artifact* that effort
 would begin from.
 
@@ -98,7 +98,7 @@ the multi-threaded host layer of the `emu` port and are documented, not hidden �
 | Claim | Statement |
 |-------|-----------|
 | CC conformance | CC v3.1 Rev 5, **Part 2 conformant** *(SFRs drawn from Part 2 catalogue; self-assessed, not evaluated)* and **Part 3** used for the assurance-argument vocabulary only. |
-| PP conformance | **None claimed.** The architecture is a candidate for a *Separation Kernel Protection Profile* (SKPP lineage) or a general-purpose OS PP; no PP is formally instantiated. See [`../../doc/compliance/Common-Criteria-readiness.md`](../../doc/compliance/Common-Criteria-readiness.md) §2. |
+| PP conformance | **None claimed.** The architecture is a candidate for a *Separation Kernel Protection Profile* (SKPP lineage) or a general-purpose OS PP; no PP is formally instantiated. See [`Common-Criteria-readiness.md`](Common-Criteria-readiness.md) §2. |
 | Package / EAL | **None claimed.** This ST does not assert an EAL. §8 argues why the architecture is favourable for EAL5+ *design* evidence, but no assurance package is met or evaluated. |
 
 Rationale for no PP claim: instantiating the SKPP requires a formally defined TOE boundary
@@ -187,7 +187,7 @@ violate it), not a runtime check that could be bypassed or misconfigured.
 
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
-| **FDP_ACC.2** Complete access control | The namespace SFP covers all subjects (processes) and objects (named resources); all operations are mediated. | Every resource is a file reached only by walking the process's mount table via `namec()`; a name not bound into the namespace cannot be expressed. Single mediation path. | `emu/port/chan.c` (`namec`, `walk`, `findmount`); `../../doc/compliance/SP800-207-zero-trust.md` | By construction |
+| **FDP_ACC.2** Complete access control | The namespace SFP covers all subjects (processes) and objects (named resources); all operations are mediated. | Every resource is a file reached only by walking the process's mount table via `namec()`; a name not bound into the namespace cannot be expressed. Single mediation path. | `emu/port/chan.c` (`namec`, `walk`, `findmount`); `SP800-207-zero-trust.md` | By construction |
 | **FDP_ACF.1** Security-attribute-based access control | Access decided by the subject's namespace bindings and per-mount flags; default-deny. | Mount table + bind/mount flags (`MREPL`/`MBEFORE`/`MCREATE`); `NODEVS` restricts the device namespace. | `emu/port/chan.c` (`cmount`); `Pgrp.nodevs` in `emu/port/pgrp.c` | By construction |
 | **FDP_IFC.1** Subset information-flow control | Flows between namespaces are controlled: a mount in one process's namespace is not visible to another unless independently bound. | `pgrpcpy()` deep-copies the mount table; post-copy mutations are independent. | `emu/port/pgrp.c:74` (`pgrpcpy`) | **Formally verified** (§8.1) |
 | **FDP_IFF.1** Simple security attributes (isolation) | The Namespace Isolation Theorem: a channel appearing at a path in both parent and child was either present at copy time or independently bound by both. | Namespace Isolation Theorem, proved via history variables. | `formal-verification/tla+/IsolationProof.tla`; `formal-verification/spin/namespace_isolation.pml`; `formal-verification/cbmc/harness_pgrpcpy.c` | **Formally verified** (TLA+/SPIN/CBMC) |
@@ -199,11 +199,11 @@ violate it), not a runtime check that could be bypassed or misconfigured.
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
 | **FIA_UID.2** User identification before any action | Subjects are identified before namespace access to protected services. | Factotum credential agent establishes caller/server identity (`Authinfo.cuid`/`suid`). | `module/factotum.m`; `appl/cmd/auth/factotum/` | Configurable |
-| **FIA_UAU.2** User authentication before any action | Authentication precedes access to protected services/nodes. | Factotum auth protocols; native STS mutual authentication between nodes. | `module/factotum.m`; `../../doc/compliance/SP800-63B-AAL3.md` | Configurable |
-| **FIA_UAU.5** Multiple authentication mechanisms | Password/EKE, challenge-response, PKI/X.509, and hardware FIDO2. | Factotum protocol set; FIDO2 user-verification gating secstore unlock (AAL3). | `../../doc/compliance/SP800-63B-AAL3.md`; `../../doc/compliance/FIDO2-CTAP2.md` | Configurable (AAL3 verifier shipped) |
-| **FIA_UAU.6** Re-authenticating | Replay-resistant re-authentication. | Challenge-response (`hmac-secret`); STS handshake with transcript binding. | `../../doc/compliance/SP800-63B-AAL3.md` §"replay"; `tests/pqauth_test.b` | Configurable |
-| **FIA_UAU.1(PKI)** / cert validation | Certificate path validation incl. revocation. | X.509 path validation + CRL; PQ-capable certificates. | `appl/lib/crypt/x509.b`; `../../doc/compliance/X509-mTLS.md` | Configurable |
-| **FIA_AFL.1** Authentication failure handling | Bound failed-attempt exposure of secrets. | secstore factor gating / never-brick enroll; DK-wrapped slots. | `../../doc/compliance/SP800-63B-AAL3.md` §4 | **Needs confirmation** of lockout thresholds (deployment) |
+| **FIA_UAU.2** User authentication before any action | Authentication precedes access to protected services/nodes. | Factotum auth protocols; native STS mutual authentication between nodes. | `module/factotum.m`; `SP800-63B-AAL3.md` | Configurable |
+| **FIA_UAU.5** Multiple authentication mechanisms | Password/EKE, challenge-response, PKI/X.509, and hardware FIDO2. | Factotum protocol set; FIDO2 user-verification gating secstore unlock (AAL3). | `SP800-63B-AAL3.md`; `FIDO2-CTAP2.md` | Configurable (AAL3 verifier shipped) |
+| **FIA_UAU.6** Re-authenticating | Replay-resistant re-authentication. | Challenge-response (`hmac-secret`); STS handshake with transcript binding. | `SP800-63B-AAL3.md` §"replay"; `tests/pqauth_test.b` | Configurable |
+| **FIA_UAU.1(PKI)** / cert validation | Certificate path validation incl. revocation. | X.509 path validation + CRL; PQ-capable certificates. | `appl/lib/crypt/x509.b`; `X509-mTLS.md` | Configurable |
+| **FIA_AFL.1** Authentication failure handling | Bound failed-attempt exposure of secrets. | secstore factor gating / never-brick enroll; DK-wrapped slots. | `SP800-63B-AAL3.md` §4 | **Needs confirmation** of lockout thresholds (deployment) |
 
 ### 6.3 Class FMT — Security Management
 
@@ -212,29 +212,29 @@ violate it), not a runtime check that could be bypassed or misconfigured.
 | **FMT_MSA.1** Management of security attributes | The namespace (the security attribute set) is managed via `bind`/`mount`/`unmount` and `pctl`. | `Sys->pctl` (FORKNS/NEWNS/NODEVS), `bind`/`mount` syscalls. | `emu/port/inferno.c` (`Sys_pctl`); `emu/port/chan.c` | By construction |
 | **FMT_MSA.3** Static attribute initialisation | Restrictive default: a fresh namespace (`NEWNS`) is empty; child cannot exceed parent. | `Sys_pctl(NEWNS)` yields empty mount table; `FORKNS` copies (never widens). | `emu/port/inferno.c:855,869`; `formal-verification/` (attenuation) | By construction (default-deny) |
 | **FMT_SMF.1** Management functions | Bind/mount/unmount, device gating, credential add/delete, audit binding. | Namespace syscalls; `factotum` key add/del; `auditfs` mount. | `emu/port/`; `appl/cmd/auth/factotum/`; `appl/cmd/auditfs.b` | Configurable |
-| **FMT_SMR.1** Security roles | Distinct credential identities per subject; role separation via distinct namespaces/factotum identities. | Per-agent capability sets and factotum identities. | `../../doc/compliance/SP800-53-controls.md` (AC-5) | Configurable |
+| **FMT_SMR.1** Security roles | Distinct credential identities per subject; role separation via distinct namespaces/factotum identities. | Per-agent capability sets and factotum identities. | `SP800-53-controls.md` (AC-5) | Configurable |
 
 ### 6.4 Class FAU — Security Audit
 
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
-| **FAU_GEN.1** Audit data generation | Generate records for defined security events. | `auditfs` service + emitters (secstore auth, 2fa enroll/disable, factotum keyadd/keydel). Record format `seq time source event hash msg`. | `appl/cmd/auditfs.b` (`appendrec`); `../../doc/compliance/SP800-92-audit-log.md` | Configurable (bind the service) |
-| **FAU_GEN.2** User-identity association | Records bound to an identity/source. | `source` field + credential-path emitters. | `appl/lib/audit.b`; `../../doc/compliance/SP800-53-controls.md` (AU-3) | Configurable |
-| **FAU_STG.1** Protected audit-trail storage | Stored records protected from unauthorized modification. | Namespace access control over `/mnt/audit`; append-only 9P service. | `appl/cmd/auditfs.b`; `../../doc/compliance/SP800-92-audit-log.md` | Configurable |
+| **FAU_GEN.1** Audit data generation | Generate records for defined security events. | `auditfs` service + emitters (secstore auth, 2fa enroll/disable, factotum keyadd/keydel). Record format `seq time source event hash msg`. | `appl/cmd/auditfs.b` (`appendrec`); `SP800-92-audit-log.md` | Configurable (bind the service) |
+| **FAU_GEN.2** User-identity association | Records bound to an identity/source. | `source` field + credential-path emitters. | `appl/lib/audit.b`; `SP800-53-controls.md` (AU-3) | Configurable |
+| **FAU_STG.1** Protected audit-trail storage | Stored records protected from unauthorized modification. | Namespace access control over `/mnt/audit`; append-only 9P service. | `appl/cmd/auditfs.b`; `SP800-92-audit-log.md` | Configurable |
 | **FAU_STG.2** Guarantees of audit-data availability / integrity | Tampering (edit/reorder/delete) is detectable. | SHA-256 hash chain: `H[n]=SHA-256(H[n-1] ‖ record)`; signed checkpoints; offline verifier. | `appl/lib/auditchain.b`; `appl/cmd/auditverify.b`; `tests/auditchain_test.b` | **By construction** (cryptographic) |
 | **FAU_SAR.1** Audit review | Records are reviewable/verifiable offline without a secret. | `auditverify -k pubkey` verifies the chain and checkpoint signatures offline. | `appl/cmd/auditverify.b` | Configurable |
 
 *Honest scope:* AU generation covers the auth/identity/credential chokepoints today; broader
 coverage (e.g. every privileged op) and AU-4/5/6/7 operational tooling remain open
-(`../../doc/compliance/SP800-92-audit-log.md`; INFR-343/355/356). An **unsigned-tail** window
+(`SP800-92-audit-log.md`; INFR-343/355/356). An **unsigned-tail** window
 before checkpoint and factotum-held signing-key hardening are tracked, not solved (INFR-356).
 
 ### 6.5 Class FCS — Cryptographic Support
 
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
-| **FCS_CKM.1** Key generation | Generate keys for approved algorithms. | ML-KEM-768/1024 (FIPS 203), ML-DSA-65/87 (FIPS 204), SLH-DSA-SHAKE-192s/256s (FIPS 205), plus classical (AES/ECDH/ed25519). | `libsec/mlkem.c`, `libsec/mldsa.c`, `libsec/slhdsa.c`; `../../doc/compliance/CNSA-2.0.md` | Approved algorithms; **module not CMVP/CAVP validated** |
-| **FCS_CKM.2** Key establishment | Establish shared keys. | **Hybrid** X25519+ML-KEM-768 (TLS 1.3) and DH+ML-KEM (native STS), combined via SHA3-512; CNSA-strict offers SecP384r1MLKEM1024. | `appl/lib/crypt/tls.b` (`GROUP_SECP384R1MLKEM1024 = 0x11ED`); `../../doc/compliance/CNSA-2.0.md` §3.3, §4 | Configurable (default classical; CNSA mode) |
+| **FCS_CKM.1** Key generation | Generate keys for approved algorithms. | ML-KEM-768/1024 (FIPS 203), ML-DSA-65/87 (FIPS 204), SLH-DSA-SHAKE-192s/256s (FIPS 205), plus classical (AES/ECDH/ed25519). | `libsec/mlkem.c`, `libsec/mldsa.c`, `libsec/slhdsa.c`; `CNSA-2.0.md` | Approved algorithms; **module not CMVP/CAVP validated** |
+| **FCS_CKM.2** Key establishment | Establish shared keys. | **Hybrid** X25519+ML-KEM-768 (TLS 1.3) and DH+ML-KEM (native STS), combined via SHA3-512; CNSA-strict offers SecP384r1MLKEM1024. | `appl/lib/crypt/tls.b` (`GROUP_SECP384R1MLKEM1024 = 0x11ED`); `CNSA-2.0.md` §3.3, §4 | Configurable (default classical; CNSA mode) |
 | **FCS_CKM.4** Key destruction | Zeroize key material after use. | `securezero`. | `libsec/securezero.c` | By construction (call-sites: needs coverage confirmation) |
 | **FCS_COP.1(SYM)** Symmetric operation | AEAD symmetric encryption. | AES-256-GCM; ChaCha20-Poly1305. | `libsec/aesgcm.c`, `libsec/ccpoly.c` | Approved algorithms |
 | **FCS_COP.1(HASH)** Hashing | SHA-2 / SHA-3. | SHA-384/512 (`sha2.c`); SHA-3/SHAKE (`sha3.c`) — **NIST FIPS 202 known-answer vectors present**. | `libsec/sha2.c`; `libsec/sha3.c`; `tests/sha3_test.b` (22 KAT digests) | **KAT-tested (SHA-3)** |
@@ -251,13 +251,13 @@ before checkpoint and factotum-held signing-key hardening are tracked, not solve
 > `tests/mldsa_test.b`, `tests/slhdsa_test.b`, `tests/pqauth_test.b`, `tests/*_stress_test.b`,
 > `tests/pqc_fuzz_test.b`). **Formal ACVP/CAVP known-answer validation of the lattice/hash-DSA
 > schemes is pending external cryptographic audit** and is *not* claimed. FIPS-140 module
-> validation is out of scope here (see `../../doc/compliance/FIPS-140-3-readiness.md`).
+> validation is out of scope here (see `FIPS-140-3-readiness.md`).
 
 ### 6.6 Class FPT — Protection of the TSF
 
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
-| **FPT_TDC.1 / TSF self-protection via type safety** | The TSF and application domains are protected from ill-typed data/code. | Dis VM: no raw pointers, bounds-checked arrays, modules **type-checked at load** (`link typecheck` rejection of stale/mismatched bytecode). | `libinterp/`; `CLAUDE.md` ("stale bytecode problem"); `../../doc/compliance/SP800-53-171-mapping.md` §5.SI | By construction |
+| **FPT_TDC.1 / TSF self-protection via type safety** | The TSF and application domains are protected from ill-typed data/code. | Dis VM: no raw pointers, bounds-checked arrays, modules **type-checked at load** (`link typecheck` rejection of stale/mismatched bytecode). | `libinterp/`; `CLAUDE.md` ("stale bytecode problem"); `SP800-53-171-mapping.md` §5.SI | By construction |
 | **FPT_SEP.1 (informative; SKPP lineage)** Domain separation | The TSF maintains a separate security domain per subject. | Per-process namespace + Dis VM per-process memory isolation. Argued under CC v3.1 via ADV_ARC + FDP_IFF.1. | `formal-verification/` (isolation); `emu/port/pgrp.c` | **Formally verified** (isolation core) |
 | **FPT_FLS.1** Fail secure | On loss of the audit service, callers may fail-closed. | `Audit->log()` returns −1 if the service is unbound; caller chooses fail-closed for high-value events. | `appl/lib/audit.b` (header) | Configurable |
 | **FPT_TST (TSF testing)** | The TSF's key properties are tested. | Formal-verification suite runs in CI on every push. | `.github/workflows/formal-verification.yml` | By construction (CI) |
@@ -266,8 +266,8 @@ before checkpoint and factotum-held signing-key hardening are tracked, not solve
 
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
-| **FTP_ITC.1** Inter-TSF trusted channel | Assured-identity, tamper-evident channel between nodes. | Native 9P/Styx STS handshake (mutual auth, line encryption, transcript binding) and TLS 1.2/1.3; hybrid-PQC key exchange. | `../../doc/compliance/CNSA-2.0.md` §3–4; `tests/pqauth_test.b` (*TamperedEkRejected*, *DowngradeRejected*) | Configurable |
-| **FTP_TRP.1** Trusted path | Path for user authentication. | FIDO2 hardware-key user-verification path to secstore unlock. | `../../doc/compliance/SP800-63B-AAL3.md`; `../../doc/compliance/FIDO2-CTAP2.md` | Configurable (AAL3) |
+| **FTP_ITC.1** Inter-TSF trusted channel | Assured-identity, tamper-evident channel between nodes. | Native 9P/Styx STS handshake (mutual auth, line encryption, transcript binding) and TLS 1.2/1.3; hybrid-PQC key exchange. | `CNSA-2.0.md` §3–4; `tests/pqauth_test.b` (*TamperedEkRejected*, *DowngradeRejected*) | Configurable |
+| **FTP_TRP.1** Trusted path | Path for user authentication. | FIDO2 hardware-key user-verification path to secstore unlock. | `SP800-63B-AAL3.md`; `FIDO2-CTAP2.md` | Configurable (AAL3) |
 
 ---
 
@@ -276,7 +276,7 @@ before checkpoint and factotum-held signing-key hardening are tracked, not solve
 No EAL is claimed. This section maps the *existing, in-repository* assurance evidence to the
 CC Part 3 assurance classes so an evaluator can see what is already in hand versus what a real
 evaluation would still require. It restates, in ST form, the gap table of
-[`../../doc/compliance/Common-Criteria-readiness.md`](../../doc/compliance/Common-Criteria-readiness.md) §3.
+[`Common-Criteria-readiness.md`](Common-Criteria-readiness.md) §3.
 
 | Assurance class | What CC asks for | InferNode evidence today | Gap for a real evaluation |
 |-----------------|------------------|--------------------------|---------------------------|
@@ -322,7 +322,7 @@ The mediation of *all* resource access through one Styx/9P name-resolution path
 name is inexpressible), **tamper-resistant** (the application layer is type-/memory-safe Dis
 bytecode with no raw pointers), and **small enough to analyse** (the verified namespace
 subsystem is ~3,831 lines of C — `formal-verification/METHODOLOGY.md` §1.3). This is the AC-25
-reference-monitor property claimed in `../../doc/compliance/SP800-53-controls.md`.
+reference-monitor property claimed in `SP800-53-controls.md`.
 
 ### 8.3 Cryptographic and supply-chain assurance (with limits)
 
@@ -365,7 +365,7 @@ reference-monitor property claimed in `../../doc/compliance/SP800-53-controls.md
   broad FAU coverage are explicitly flagged (§6.5, §6.2, §6.4).
 - **The assurance argument is proportionate.** No EAL is claimed; the ST asserts only that the
   *rare and expensive* high-EAL design evidence (a formal model of the core policy) is already
-  in hand, which is the readiness thesis of `../../doc/compliance/Common-Criteria-readiness.md`.
+  in hand, which is the readiness thesis of `Common-Criteria-readiness.md`.
 
 ---
 
@@ -378,10 +378,10 @@ reference-monitor property claimed in `../../doc/compliance/SP800-53-controls.md
   `formal-verification/cbmc/harness_*_ct.c`, `emu/port/{pgrp,chan,sysfile,inferno,exportfs}.c`,
   `libsec/`, `libinterp/keyring.c`, `appl/cmd/auth/factotum/`, `appl/cmd/auditfs.b`,
   `appl/lib/auditchain.b`, `.github/workflows/{formal-verification,security,scorecard,release,sbom}.yml`.
-- Sibling compliance artifacts: [`../../doc/compliance/Common-Criteria-readiness.md`](../../doc/compliance/Common-Criteria-readiness.md),
-  [`../../doc/compliance/SP800-53-171-mapping.md`](../../doc/compliance/SP800-53-171-mapping.md),
-  [`../../doc/compliance/SP800-53-controls.md`](../../doc/compliance/SP800-53-controls.md),
-  [`../../doc/compliance/CNSA-2.0.md`](../../doc/compliance/CNSA-2.0.md),
-  [`../../doc/compliance/SP800-63B-AAL3.md`](../../doc/compliance/SP800-63B-AAL3.md),
-  [`../../doc/compliance/SP800-92-audit-log.md`](../../doc/compliance/SP800-92-audit-log.md).
+- Sibling compliance artifacts: [`Common-Criteria-readiness.md`](Common-Criteria-readiness.md),
+  [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md),
+  [`SP800-53-controls.md`](SP800-53-controls.md),
+  [`CNSA-2.0.md`](CNSA-2.0.md),
+  [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md),
+  [`SP800-92-audit-log.md`](SP800-92-audit-log.md).
 - Companion in this directory: [`nist-control-mappings.md`](nist-control-mappings.md).

@@ -15,7 +15,7 @@ implement Matrix;
 # Flags:
 #   -h    Force headless mode (skip GUI even if display modules present)
 #
-# See doc/matrix-architecture.md for the full specification.
+# See docs/matrix-architecture.md for the full specification.
 #
 
 include "sys.m";

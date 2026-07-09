@@ -95,4 +95,4 @@ integrity is a property we can prove (recompute the chain; verify the signature 
 public key), access control is the same namespace boundary that bounds everything else,
 and the whole facility tears out by simply not mounting it.*
 
-[INFR-328]: https://nervsystems-team.atlassian.net/browse/INFR-328
+[INFR-328]: https://tracker.internal/browse/INFR-328

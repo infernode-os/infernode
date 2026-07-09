@@ -48,7 +48,7 @@ as **INFR-69**.
   ```
 - `-c0` (interpreter only) runs to completion every time.
 - macOS and Linux builds at the same commit run clean.
-- Reproduces on the current `master` AND on `refs/preserved/nervsystems/*`
+- Reproduces on the current `master` AND on `refs/preserved/*`
   branches that demonstrably worked weeks earlier. **The code didn't
   change; ntdll did.**
 
@@ -299,7 +299,7 @@ shape of fix and are wrong:
   is a project in itself.
 
 - **Reverting recent merges.** The crash predates any recent change.
-  Verified by running historic `refs/preserved/nervsystems/*`
+  Verified by running historic `refs/preserved/*`
   branches against current ntdll.
 
 - **Switching `setjmp` → `_setjmp`.** MSVC's `_setjmp` still uses

@@ -3,7 +3,7 @@ implement AgentlibMcpTest;
 #
 # agentlib_mcp_test.b — unit tests for the shared agentlib MCP router (INFR-247):
 # mcpdiscover / mcptooldefs / mcpresolve. These are the pure-ish functions the
-# NERVA dispatch path and the sub-agent bridge BOTH route through, so a
+# The primary dispatch path and the sub-agent bridge BOTH route through, so a
 # regression here breaks tool routing for the whole agent stack. The live eval
 # rig exercises them end-to-end against the real MCP fleet; this gives them
 # automated CI coverage without a live stack, using synthetic /mnt/mcp-shaped

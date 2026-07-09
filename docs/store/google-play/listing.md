@@ -79,7 +79,7 @@ operating system, developer tools, agent, terminal, 9P, Inferno
 
 ## Contact
 
-- Email: contact@nervsystems.com
+- Support: https://github.com/infernode-os/infernode/issues
 - Privacy policy URL: https://infernode.io/privacy/
 - Support URL: https://infernode.io/support/
 

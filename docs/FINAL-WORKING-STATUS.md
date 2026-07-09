@@ -60,7 +60,7 @@
 ## How to Use
 
 ```bash
-cd /Users/pdfinn/github.com/NERVsystems/nerva-9p-paper/inferno/infernode
+cd /path/to/infernode
 ./emu/MacOSX/o.emu -r.
 ```
 

@@ -1047,7 +1047,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# discovering here scopes the child to exactly what it is allowed to reach.
 	# Register their tool-defs on the child's fresh session (so the model emits
 	# native tool calls for them) and hand the routing maps to the sub-agent.
-	# Bounded by the same per-mount/byte caps NERVA uses. Best-effort: any failure
+	# Bounded by the same per-mount/byte caps the agent runtime uses. Best-effort: any failure
 	# just leaves the child without MCP tools, never breaks the run.
 	if(agentlib != nil && sessionid != "") {
 		mcppaths := filtermcp(caps.paths);

@@ -2,7 +2,7 @@
 
 ## Getting help
 
-- **Email:** contact@nervsystems.com
+- **Support:** https://github.com/infernode-os/infernode/issues
 - **Issues / bug reports:** https://github.com/infernode-os/infernode/issues
 - **Documentation:** https://github.com/infernode-os/infernode (see `README.md`,
   `QUICKSTART.md`, and `docs/`)
@@ -30,4 +30,4 @@ its storage in Android Settings.
 ## Reporting a security issue
 
 Please do not file public issues for security vulnerabilities. Email
-security@nervsystems.com with details and we will respond.
+a private GitHub security advisory (github.com/infernode-os/infernode/security/advisories) with details and we will respond.

@@ -27,6 +27,7 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 | **AC-5** Separation of Duties | Separate duties via access | Capability sets per agent; distinct factotum identities | Partial |
 | **AC-6** Least Privilege | Grant least privilege | **Capability attenuation** (child caps ≤ parent, structural); default-deny bind-replace; `NODEVS` device gate. [`SP800-207-zero-trust.md`](SP800-207-zero-trust.md) §2; `tests/veltro_security_test.b` | **Met** |
 | **AC-6(9)** Audit of Privileged Functions | Log privileged use | Tamper-evident audit log now records privileged credential ops (`factotum` keyadd/keydel, `2fa` enroll/disable, `secstored` auth); broader privileged-op coverage pending. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) | Substantially met |
+| **AC-7** Unsuccessful Logon Attempts | Limit consecutive invalid attempts; auto-lock | `secstored` throttles online password guessing: **10 consecutive wrong-password attempts → 60s per-account lockout**, rejected before crypto, counter reset on success. Temporary cooldown (never bricks the boot store); FIDO2 UV/PIN factor separately hardware-locked (8 tries). `appl/cmd/auth/secstored.b` (`recordfail`/`lockremaining`); `tests/host/secstore_lockout_test.sh` (4/4, emu-verified) | **Met** (threshold tunable) |
 | **AC-25** Reference Monitor | Tamper-proof, small, verifiable mediator | 9P/Styx is the single mediation chokepoint; namespace isolation **formally verified** (TLA+ 3.17B states, SPIN, CBMC on real C). `formal-verification/` | **Met** (assurance-backed) |
 
 ## IA — Identification & Authentication
@@ -36,7 +37,7 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 | **IA-2** Identify/Authenticate Org Users | Uniquely auth users | Factotum + secstore login; native STS mutual auth between nodes | **Met** |
 | **IA-2(1)** MFA to Privileged Accounts | Multifactor | **FIDO2 hardware key + UV (PIN)** gating secstore unlock — AAL3. [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | **Met** |
 | **IA-2(8)** Replay-Resistant Auth | Resist replay | Challenge-response (`hmac-secret`); STS handshake with transcript binding | **Met** |
-| **IA-5** Authenticator Management | Manage authenticators | DK-wrapped secstore slots; recovery slot; never-brick enroll. Dual-key-by-default + DK save-back open (EPIC 1). [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) §4 | Substantially met |
+| **IA-5** Authenticator Management | Manage authenticators | DK-wrapped secstore slots; recovery slot; never-brick enroll; **failed-attempt lockout at the password verifier (see AC-7)**. Dual-key-by-default + DK save-back open (EPIC 1). [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) §4 | Substantially met |
 | **IA-5(2)** PKI-Based Auth | Validate certs incl. revocation | X.509 path validation + **CRL** (`appl/lib/crypt/x509.b:1896,1941`); PQ-capable certs | **Met** |
 | **IA-7** Crypto Module Authentication | Use validated crypto for auth | Approved algorithms in use; module **not** FIPS-validated (see SC-13) | Partial |
 | **IA-8** Identify/Authenticate Non-Org Users | — | Factotum protocols; largely deployment-specific | Partial |
@@ -70,10 +71,10 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 
 ## Disposition
 
-- **Strong, evidenced today:** AC-3, AC-6, AC-25, IA-2/2(1)/2(8)/5(2), SC-7, SC-8(1), SC-12,
-  SC-23, SC-28, SC-39 — these are the hard-to-fake controls a generic OS cannot evidence as
-  cleanly (namespace = capability; formally verified isolation; hybrid-PQC transport;
-  AAL3 hardware auth; AES-256 at rest).
+- **Strong, evidenced today:** AC-3, AC-6, AC-7, AC-25, IA-2/2(1)/2(8)/5(2), SC-7, SC-8(1),
+  SC-12, SC-23, SC-28, SC-39 — these are the hard-to-fake controls a generic OS cannot
+  evidence as cleanly (namespace = capability; formally verified isolation; hybrid-PQC
+  transport; AAL3 hardware auth; AES-256 at rest; verifier-side failed-attempt lockout).
 - **Honest partials:** SC-13 (validated module — Tier 2 FIPS work), IA-5 (dual-key/DK
   save-back — EPIC 1), SC-8 (client-cert mTLS — INFR-344), AC-4 (CDS guard — EPIC 5).
 - **AU core now built:** the tamper-evident audit-log service lands AU-3/8/9/9(3)/10 as

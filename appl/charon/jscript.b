@@ -1165,7 +1165,7 @@ get(ex: ref Exec, o: ref Obj, property: string): ref Val
 		target := top.findbyobj(o);
 		if(target != nil) {
 			url := target.frame.doc.src;
-			ans = CU->getcookies(url.host, url.path, url.scheme == "https");
+			ans = CU->getscriptcookies(url.host, url.path, url.scheme == "https");
 		}
 		return ES->strval(ans);
 	}
@@ -1550,7 +1550,7 @@ put(ex: ref Exec, o: ref Obj, property: string, val: ref Val)
 			target = top.findbyobj(o);
 			if(target != nil && (CU->config).docookies > 0) {
 				url = target.frame.doc.src;
-				CU->setcookie(url.host, url.path, str);
+				CU->setscriptcookie(url.host, url.path, str);
 			}
 			return;
 		"ondblclick" =>

@@ -203,7 +203,7 @@ violate it), not a runtime check that could be bypassed or misconfigured.
 | **FIA_UAU.5** Multiple authentication mechanisms | Password/EKE, challenge-response, PKI/X.509, and hardware FIDO2. | Factotum protocol set; FIDO2 user-verification gating secstore unlock (AAL3). | `SP800-63B-AAL3.md`; `FIDO2-CTAP2.md` | Configurable (AAL3 verifier shipped) |
 | **FIA_UAU.6** Re-authenticating | Replay-resistant re-authentication. | Challenge-response (`hmac-secret`); STS handshake with transcript binding. | `SP800-63B-AAL3.md` §"replay"; `tests/pqauth_test.b` | Configurable |
 | **FIA_UAU.1(PKI)** / cert validation | Certificate path validation incl. revocation. | X.509 path validation + CRL; PQ-capable certificates. | `appl/lib/crypt/x509.b`; `X509-mTLS.md` | Configurable |
-| **FIA_AFL.1** Authentication failure handling | Bound failed-attempt exposure of secrets. | secstore factor gating / never-brick enroll; DK-wrapped slots. | `SP800-63B-AAL3.md` §4 | **Needs confirmation** of lockout thresholds (deployment) |
+| **FIA_AFL.1** Authentication failure handling | Bound consecutive failed authentications. | `secstored` enforces a per-account lockout on the password verifier: 10 consecutive wrong-password attempts → 60s cooldown (rejected before any crypto), counter reset on success. The FIDO2 UV/PIN factor is separately hardware-locked (8 lifetime tries). | `appl/cmd/auth/secstored.b` (`recordfail`/`lockremaining`); `tests/host/secstore_lockout_test.sh` | **By construction** (threshold tunable; INFR-372) |
 
 ### 6.3 Class FMT — Security Management
 
@@ -361,8 +361,8 @@ reference-monitor property claimed in `SP800-53-controls.md`.
   countering objective (§4.1), and each objective is realised by the SFRs of §6 (columns
   cross-reference). O.ISOLATION and O.MEDIATION — the differentiators — are backed by formal
   proof rather than assertion.
-- **No unmet SFR is presented as met.** FCS module-validation, FIA lockout thresholds, and
-  broad FAU coverage are explicitly flagged (§6.5, §6.2, §6.4).
+- **No unmet SFR is presented as met.** FCS module-validation and broad FAU coverage are
+  explicitly flagged (§6.5, §6.4).
 - **The assurance argument is proportionate.** No EAL is claimed; the ST asserts only that the
   *rare and expensive* high-EAL design evidence (a formal model of the core policy) is already
   in hand, which is the readiness thesis of `Common-Criteria-readiness.md`.

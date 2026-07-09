@@ -74,7 +74,7 @@ and the four-family itemization in
 | **IA-5** / 3.5.2 | Authenticator management | DK-wrapped secstore slots; recovery slot; never-brick enroll | Partial | `SP800-63B-AAL3.md` §4 | FIA_AFL.1 | Dual-key-by-default / DK save-back open (EPIC 1) |
 | **IA-5(2)** | PKI-based auth incl. revocation | X.509 path validation + CRL; PQ-capable certs | Configurable | `appl/lib/crypt/x509.b`; `X509-mTLS.md` | FIA_UAU.1(PKI) | |
 | **IA-7** / 3.5.x | Crypto module authentication | Approved algorithms in use; **module not FIPS-validated** | Partial | see SC-13 | FCS_COP.1(SIG) | **gap (F-2)** |
-| **IA-3 / lockout** | Bound failed-attempt exposure | secstore factor gating | Needs confirmation | `SP800-63B-AAL3.md` §4 | FIA_AFL.1 | Lockout thresholds **needs confirmation** — **gap (F-6)** |
+| **AC-7 / IA-5** lockout | Limit consecutive invalid logon attempts | **`secstored` throttles online guessing**: 10 consecutive wrong-password attempts → 60s per-account lock, rejected before any crypto, counter reset on success. FIDO2 UV/PIN factor is separately hardware-locked (8 lifetime tries). | By construction (threshold tunable) | `appl/cmd/auth/secstored.b` (`recordfail`/`lockremaining`/`notefail`); `tests/host/secstore_lockout_test.sh` | FIA_AFL.1 | Resolves former gap F-6 (INFR-372). Temporary cooldown, never bricks the boot store |
 
 ## 4. System & Communications Protection (SC) — SP 800-53 / 800-171 §3.13
 
@@ -132,7 +132,7 @@ support noted. This mirrors and refines
 | **3.1 Access Control** | Namespace = capability; least privilege by construction | By construction | Account lifecycle, SoD policy, CDS (F-7) |
 | **3.3 Audit & Accountability** | Tamper-evident hash-chained `auditfs` | Configurable + by construction | Bind service; AU-4/5/6/7 tooling (F-4); non-repudiation hardening (F-5) |
 | **3.4 Configuration Management** | Reproducible builds, `.dis` integrity, pinned actions, ring-fence | By construction | Org CM policy; enable secure settings |
-| **3.5 Identification & Authentication** | Factotum; FIDO2 AAL3; PKI+CRL | Configurable | Deploy MFA; lockout thresholds (F-6) |
+| **3.5 Identification & Authentication** | Factotum; FIDO2 AAL3; PKI+CRL; **failed-attempt lockout** (`secstored`) | Configurable | Deploy MFA |
 | **3.13 System & Comms Protection** | Namespace boundary; approved + hybrid-PQC crypto; AES-256 at rest | Configurable + by construction | Enable CNSA mode; **FIPS validation (F-2)**; ACVP (F-3); mTLS |
 | **3.14 System & Information Integrity** | Type-/memory-safe Dis VM; CI scanning; formal verification | By construction | Flaw-remediation SLA; TCB race fix (F-1) |
 | 3.2 Awareness/Training, 3.6 Incident Response, 3.7 Maintenance, 3.8 Media Protection, 3.9 Personnel, 3.10 Physical, 3.11 Risk, 3.12 Assessment | Supporting evidence only (signed updates, audit evidence, hardware auth) | Integrator | Organizational controls |
@@ -151,7 +151,7 @@ action). **None of these is presented as met.**
 | **F-3** | No NIST ACVP/CAVP known-answer validation for ML-KEM/ML-DSA/SLH-DSA (round-trip + CBMC only); pending external cryptographic audit | SC-13 (KAT/ACVP) | Validation / assurance | **no dedicated ticket found** |
 | **F-4** | AU-4/5/6/7 operational tooling and broad privileged-op coverage incomplete | AU-6, AC-6(9), AU-12 | Coverage | INFR-343 (partial) |
 | **F-5** | Audit non-repudiation: unsigned-tail window + factotum-held signing key | AU-10 | Hardening | INFR-356 |
-| **F-6** | Authentication lockout thresholds unconfirmed at platform layer | IA-5, FIA_AFL.1 | Needs confirmation | **none** |
+| **F-6** ✅ | ~~Authentication lockout thresholds unconfirmed~~ → **Resolved**: `secstored` enforces a 10-attempt / 60s per-account lockout on the password verifier | AC-7, IA-5, FIA_AFL.1 | **Resolved** | INFR-372 — `appl/cmd/auth/secstored.b`; `tests/host/secstore_lockout_test.sh` |
 | **F-7** | No cross-domain guarded transfer (information-flow guard) | AC-4 | Feature gap | EPIC 5 (planned) |
 
 ---

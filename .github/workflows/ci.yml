@@ -231,6 +231,19 @@ jobs:
           fi
         fi
 
+        # secstored failed-attempt lockout (AC-7 / FIA_AFL.1)
+        if [ -f tests/host/secstore_lockout_test.sh ]; then
+          echo "--- secstore lockout test ---"
+          chmod +x tests/host/secstore_lockout_test.sh
+          ROOT=. bash tests/host/secstore_lockout_test.sh > secstore-lockout-test.txt 2>&1 || true
+          cat secstore-lockout-test.txt
+          if grep -q "=== PASS ===" secstore-lockout-test.txt; then
+            echo "secstore lockout test: PASS"
+          else
+            echo "secstore lockout test: SKIP (requires full Inferno namespace)"
+          fi
+        fi
+
     - name: Run presentation file-open regression test
       run: |
         # Boots the Lucifer GUI headless and asserts the file-open contract:
@@ -548,6 +561,19 @@ jobs:
             echo "audit signing test: PASS"
           else
             echo "audit signing test: SKIP (requires full Inferno namespace)"
+          fi
+        fi
+
+        # secstored failed-attempt lockout (AC-7 / FIA_AFL.1)
+        if [ -f tests/host/secstore_lockout_test.sh ]; then
+          echo "--- secstore lockout test ---"
+          chmod +x tests/host/secstore_lockout_test.sh
+          ROOT=. bash tests/host/secstore_lockout_test.sh > secstore-lockout-test.txt 2>&1 || true
+          cat secstore-lockout-test.txt
+          if grep -q "=== PASS ===" secstore-lockout-test.txt; then
+            echo "secstore lockout test: PASS"
+          else
+            echo "secstore lockout test: SKIP (requires full Inferno namespace)"
           fi
         fi
 

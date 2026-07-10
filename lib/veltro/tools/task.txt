@@ -13,8 +13,8 @@ HOW DELEGATION WORKS (read this first):
   any file it produced and report the result to the user.
 
   task create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
-              [brief=<text>] [instructions=<text>] [category=<text>]
-              [model=<name>] [agenttype=<type>]
+              [category=<text>] [model=<name>] [agenttype=<type>]
+              [brief=<text>] [instructions=<text>]
       Create new task with isolated conversation and tools.
       Tools validated against delegation budget (/tool/budget).
       brief= sets the initial context message for the task agent.
@@ -30,6 +30,10 @@ HOW DELEGATION WORKS (read this first):
                 tools=read,write,edit,find,grep,list,limbo
       Unknown args (e.g. priority=high) are rejected with the list
       of valid keys instead of being silently dropped.
+      Put authority-bearing attrs such as tools=, paths=, model=, and
+      agenttype= before brief=/instructions=. Unquoted brief= and
+      instructions= consume the rest of the line as literal task text;
+      quote them if you intentionally need more attrs after the text.
       Returns activity ID.
 
   task status <id>     Show task status, urgency, label

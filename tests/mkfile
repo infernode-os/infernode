@@ -45,6 +45,7 @@ TARG=\
 	llmclient_reqshape_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
+	mail_provision_test.dis\
 	lists_test.dis\
 	lucifer_flicker_test.dis\
 	lucifer_zorder_test.dis\

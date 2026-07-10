@@ -50,6 +50,8 @@ for profile in "${profiles[@]}"; do
     fail_profile "$profile" "NODEVS/device attach invariant broken" "$out"
   echo "$out" | grep -q 'authority=privileged_control_path' &&
     fail_profile "$profile" "trusted control path granted" "$out"
+  echo "$out" | grep -q 'authority=direct_mail_send' &&
+    fail_profile "$profile" "raw mail send surface granted" "$out"
   echo "$out" | grep -q 'authority=reads_secrets_factotum' &&
     fail_profile "$profile" "factotum secrets visible" "$out"
 

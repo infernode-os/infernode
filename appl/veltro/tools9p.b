@@ -1133,13 +1133,9 @@ provisiontask(args: string)
 			rargs = "-p" :: rargs;
 		}
 	}
-	# Inherit parent's extpaths (e.g. /dis/wm for app discovery).
-	# Without these, the child's restrictns() hides paths the parent
-	# exposes, breaking tools like launch that need /dis/wm access.
-	for(ep := extpaths; ep != nil; ep = tl ep) {
-		rargs = hd ep :: rargs;
-		rargs = "-p" :: rargs;
-	}
+	# Do not inherit parent extpaths wholesale. They are capabilities just like
+	# runtime bindpath grants, and a child should receive only paths named in the
+	# provision request. Tool-required support paths are added by addtoolpaths().
 	# Mount point, activity id, verbose, and program name go first
 	rargs = mpt :: rargs;
 	rargs = "-m" :: rargs;
@@ -1341,6 +1337,8 @@ applynsrestriction(invokedtool: string): string
 addtoolpaths(paths: list of string, tool: string): list of string
 {
 	case tool {
+	"launch" =>
+		return addpath(paths, "/dis/wm");
 	"charon" =>
 		return addpath(paths, "/tmp/veltro/browser");
 	"editor" =>

@@ -645,6 +645,40 @@ testPresentationUpdate(t: ref T)
 }
 
 # ============================================================================
+# Test 8b: testPresentationDataEmbeddedControls
+#
+# Presentation data is model-controlled content. Strings that look like
+# presentation control attributes must stay inside data= and must not mutate
+# type/dispath/app launch state.
+# ============================================================================
+
+testPresentationDataEmbeddedControls(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	presctl := actbase() + "/presentation/ctl";
+	writefile(presctl, "create id=controltext type=text label=ControlText");
+
+	payload := "This is inert text: type=app dis=/dis/wm/shell.dis label=Owned data=-c secrets";
+	n := writefile(presctl, "update id=controltext data=" + payload);
+	t.assert(n > 0, "update with embedded control-looking data should succeed");
+
+	artbase := actbase() + "/presentation/controltext";
+	data := readfile(artbase + "/data");
+	t.assertseq(data, payload, "embedded control-looking data should remain intact");
+
+	atype := strip(readfile(artbase + "/type"));
+	t.assertseq(atype, "text", "embedded type=app should not change artifact type");
+
+	dispath := readfile(artbase + "/dispath");
+	t.assert(dispath == nil || strip(dispath) == "",
+		"embedded dis=/... should not create an app dispath");
+}
+
+# ============================================================================
 # Test 9: testPresentationAppend
 #
 # Append data to an artifact using "append id=... data=..." command.
@@ -1782,6 +1816,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PresCreate", testPresentationCreate);
 	run("PresDataWrite", testPresentationDataWrite);
 	run("PresUpdate", testPresentationUpdate);
+	run("PresDataEmbeddedControls", testPresentationDataEmbeddedControls);
 	run("PresAppend", testPresentationAppend);
 	run("PresCenter", testPresentationCenter);
 	run("PresEvent", testPresentationEvent);

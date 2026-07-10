@@ -1,0 +1,5 @@
+rule=DIRECT_MAIL_SEND
+	severity=high
+	require='direct_mail_send'
+	message='Caps expose mail9p direct SMTP send surfaces. A model-controlled agent can write mail without the /mnt/msg/draft proposal and trusted approval flow.'
+	fix='remove /mnt/mail, compose, or draft-reply paths from agent caps; use /mnt/msg for read status and /mnt/msg/draft only for approved immutable proposals'

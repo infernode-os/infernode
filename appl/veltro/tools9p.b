@@ -668,6 +668,8 @@ childpathallowed(path: string): int
 	# authority to mint hidden controller files in a child namespace.
 	if(privilegedcontrolpath(path))
 		return 0;
+	if(directmailsendpath(path))
+		return 0;
 
 	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
 	# status surface. It must not act as a lexical parent capability for hidden
@@ -688,6 +690,72 @@ childpathallowed(path: string): int
 		if(pathwithin((hd bp).path, path))
 			return 1;
 	return 0;
+}
+
+directmailsendpath(path: string): int
+{
+	if(path == "/mnt/mail")
+		return 1;
+	if(prefix(path, "/mnt/mail/")) {
+		if(pathhascomponent(path, "compose") || pathhascomponent(path, "draft-reply"))
+			return 1;
+		if(mailaccountancestor(path))
+			return 1;
+	}
+	return 0;
+}
+
+prefix(s, p: string): int
+{
+	if(len s < len p)
+		return 0;
+	return s[0:len p] == p;
+}
+
+mailaccountancestor(path: string): int
+{
+	# /mnt/mail/accounts/<acct> exposes compose.
+	if(prefix(path, "/mnt/mail/accounts/") && componentcount(path) <= 4)
+		return 1;
+	# /mnt/mail/accounts/<acct>/boxes/<box>/<uid> exposes draft-reply.
+	if(prefix(path, "/mnt/mail/accounts/") && pathhascomponent(path, "boxes") &&
+	   componentcount(path) <= 7)
+		return 1;
+	return 0;
+}
+
+pathhascomponent(path, want: string): int
+{
+	i := 0;
+	n := len path;
+	while(i < n) {
+		while(i < n && path[i] == '/')
+			i++;
+		j := i;
+		while(j < n && path[j] != '/')
+			j++;
+		if(j > i && path[i:j] == want)
+			return 1;
+		i = j;
+	}
+	return 0;
+}
+
+componentcount(path: string): int
+{
+	nc := 0;
+	i := 0;
+	n := len path;
+	while(i < n) {
+		while(i < n && path[i] == '/')
+			i++;
+		if(i >= n)
+			break;
+		nc++;
+		while(i < n && path[i] != '/')
+			i++;
+	}
+	return nc;
 }
 
 privilegedcontrolpath(path: string): int

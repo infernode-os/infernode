@@ -433,6 +433,11 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 				inv.auths = "privileged_control_path" :: inv.auths;
 			inv.sources = ("privileged_control_path", "via path " + p) :: inv.sources;
 		}
+		if(directMailSendGrant(p)) {
+			if(!contains(inv.auths, "direct_mail_send"))
+				inv.auths = "direct_mail_send" :: inv.auths;
+			inv.sources = ("direct_mail_send", "via path " + p) :: inv.sources;
+		}
 	}
 
 	return inv;
@@ -455,6 +460,34 @@ privilegedControlGrant(p: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(p == dangerous[i])
 			return 1;
+	return 0;
+}
+
+directMailSendGrant(p: string): int
+{
+	if(p == "/mnt/mail")
+		return 1;
+	if(prefix(p, "/mnt/mail/")) {
+		if(pathhascomponent(p, "compose") || pathhascomponent(p, "draft-reply"))
+			return 1;
+	}
+	return 0;
+}
+
+pathhascomponent(p, want: string): int
+{
+	i := 0;
+	n := len p;
+	while(i < n) {
+		while(i < n && p[i] == '/')
+			i++;
+		j := i;
+		while(j < n && p[j] != '/')
+			j++;
+		if(j > i && p[i:j] == want)
+			return 1;
+		i = j;
+	}
 	return 0;
 }
 

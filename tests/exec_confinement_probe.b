@@ -35,5 +35,11 @@ init(nil: ref Draw->Context, nil: list of string)
 		sys->print("FAIL: restricted /prog entry count %d\n", seen);
 		return;
 	}
+
+	fd = sys->open("/fd", Sys->OREAD);
+	if(fd != nil) {
+		sys->print("FAIL: /fd is visible in restricted exec namespace\n");
+		return;
+	}
 	sys->print("PASS: exec process and device capabilities are confined\n");
 }

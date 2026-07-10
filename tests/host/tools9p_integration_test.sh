@@ -359,6 +359,17 @@ else
     fail "live tool-control hiding probe failed"
 fi
 
+if emu_c "fd_hidden_live" 15 \
+    "tools9p read & sleep 3; echo /fd > /tool/read/run; sleep 2; cat /tool/read/run"; then
+    if echo "$OUTPUT" | grep -Eq 'cannot open|does not exist|file does not exist'; then
+        pass "restricted tool invocation cannot enumerate /fd"
+    else
+        fail "restricted tool invocation may see /fd (output: $OUTPUT)"
+    fi
+else
+    fail "live /fd hiding probe failed"
+fi
+
 if emu_c "provision_invalid_paths" 14 \
     "tools9p -p /tmp:rw read task & sleep 3; echo '14 paths=/:rw,/tmp/../lib:rw,/tmp//evil:rw,/tmp/./evil:rw,relative/path:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.14/paths"; then
     if echo "$OUTPUT" | grep -qE '^/|relative/path'; then

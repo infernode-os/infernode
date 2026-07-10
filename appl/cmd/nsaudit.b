@@ -64,7 +64,7 @@ RULES_DIR:       con "/lib/veltro/nsaudit/rules";
 ALWAYS_READS := array[] of {
 	"/dis/lib", "/dis/veltro",
 	"/dev/cons", "/dev/null", "/dev/time",
-	"/lib/certs",
+	"/lib/certs", "/lib/veltro",
 	"/tmp/veltro",
 };
 

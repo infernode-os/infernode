@@ -4,12 +4,26 @@ implement Auditverify;
 # auditverify - offline verifier for the InferNode audit log.
 #
 # Recomputes the SHA-256 hash chain over a set of audit records and
-# reports the first break, if any. With -k it also checks every
-# checkpoint signature against the audit public key (so an auditor
-# verifies the whole history with only the public key — no secret).
+# reports the first break, if any.
+#
+# -k pubkeyfile makes signatures MANDATORY: every checkpoint record
+# must carry a signature that verifies under the audit public key, and
+# at least one signed checkpoint must be present. (A lenient mode would
+# let an attacker who rewrites the whole file simply strip the sig=
+# tokens — or the checkpoint records — and still verify clean. If you
+# hold the public key, your deployment signs; hold the verifier to it.)
+#
+# -a anchorfile checks the chain against an externally-saved copy of
+# /mnt/audit/head ("<tiphash> <seq>"). The chain must contain at least
+# <seq> records and its <seq>-prefix must hash to <tiphash>. This is
+# the truncation defence: a hash chain cut back to any prefix is still
+# internally consistent, so tail deletion is only detectable against a
+# head copied off-host. Anchoring is namespace policy, not machinery:
+#   cp /mnt/audit/head somewhere-else
+#   auditverify -k pub -a head-copy chainfile
 #
 # Usage:
-#   auditverify [-k pubkeyfile] [chainfile]
+#   auditverify [-k pubkeyfile] [-a anchorfile] [chainfile]
 # (chainfile defaults to standard input, e.g. `cat /mnt/audit/chain | auditverify`)
 #
 # Exit: prints "ok: ..." and succeeds, or prints the fault and raises.
@@ -53,12 +67,15 @@ init(nil: ref Draw->Context, args: list of string)
 	ac->init();
 
 	pubkeyfile := "";
+	anchorfile := "";
 	arg->init(args);
-	arg->setusage("auditverify [-k pubkeyfile] [chainfile]");
+	arg->setusage("auditverify [-k pubkeyfile] [-a anchorfile] [chainfile]");
 	while((c := arg->opt()) != 0) {
 		case c {
 		'k' =>
 			pubkeyfile = arg->earg();
+		'a' =>
+			anchorfile = arg->earg();
 		* =>
 			arg->usage();
 		}
@@ -73,27 +90,44 @@ init(nil: ref Draw->Context, args: list of string)
 			fail("cannot parse public key " + pubkeyfile);
 	}
 
+	anchorhash := "";
+	anchorseq := -1;
+	if(anchorfile != "") {
+		(n, toks) := sys->tokenize(readfile(anchorfile), " \t\n");
+		if(n < 2)
+			fail("anchor file must hold '<tiphash> <seq>' (a copy of /mnt/audit/head)");
+		anchorhash = hd toks;
+		anchorseq = int hd tl toks;
+		if(len anchorhash != 2*Auditchain->HASHLEN || anchorseq < 0)
+			fail("cannot parse anchor " + anchorfile);
+	}
+
 	data: string;
 	if(args == nil)
 		data = readfd(sys->fildes(0));
 	else
 		data = readfile(hd args);
 
-	(ok, nrec, ncheck, nsig, msg) := verifychain(data, pk);
+	(ok, nrec, ncheck, nsig, msg) := verifychain(data, pk, anchorhash, anchorseq);
 	if(!ok) {
 		sys->fprint(stderr, "auditverify: %s\n", msg);
 		raise "fail:verify";
 	}
-	sys->print("ok: %d records, %d checkpoints, %d signatures verified\n",
-		nrec, ncheck, nsig);
+	anchored := "";
+	if(anchorseq >= 0)
+		anchored = sys->sprint(", anchored at seq %d", anchorseq);
+	sys->print("ok: %d records, %d checkpoints, %d signatures verified%s\n",
+		nrec, ncheck, nsig, anchored);
 }
 
-verifychain(data: string, pk: ref Keyring->PK): (int, int, int, int, string)
+verifychain(data: string, pk: ref Keyring->PK, anchorhash: string, anchorseq: int): (int, int, int, int, string)
 {
 	prev := ac->genesis();
 	nrec := 0;
 	ncheck := 0;
 	nsig := 0;
+	# seq 0 anchors the empty chain: the head file reads "<genesis> 0".
+	anchored := anchorseq == 0 && anchorhash == ac->hex(prev);
 	(nil, lines) := sys->tokenize(data, "\n");
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
@@ -113,7 +147,14 @@ verifychain(data: string, pk: ref Keyring->PK): (int, int, int, int, string)
 			if(head != ac->hex(prev))
 				return (0, nrec, ncheck, nsig,
 					sys->sprint("checkpoint head mismatch at seq %d", seqf));
-			if(sig != "" && pk != nil) {
+			if(pk != nil) {
+				# With the public key in hand, signatures are mandatory:
+				# a whole-file rewrite can recompute every chain hash but
+				# cannot mint a signature, so tolerating unsigned
+				# checkpoints would hand the attacker a clean bypass.
+				if(sig == "")
+					return (0, nrec, ncheck, nsig,
+						sys->sprint("unsigned checkpoint at seq %d (signature required with -k)", seqf));
 				content := sys->sprint("audit-checkpoint %s %s", head, cseq);
 				cb := array of byte content;
 				cert := kr->strtocert(string ac->unhex(sig));
@@ -129,7 +170,21 @@ verifychain(data: string, pk: ref Keyring->PK): (int, int, int, int, string)
 		}
 		prev = h;
 		nrec = seqf;
+		if(seqf == anchorseq) {
+			if(hashf != anchorhash)
+				return (0, nrec, ncheck, nsig,
+					sys->sprint("anchor mismatch at seq %d (history rewritten)", seqf));
+			anchored = 1;
+		}
 	}
+	if(anchorseq >= 0 && !anchored)
+		return (0, nrec, ncheck, nsig,
+			sys->sprint("chain does not reach anchor seq %d (truncated?)", anchorseq));
+	# Same reasoning as the unsigned-checkpoint rule: a rewrite that
+	# drops the checkpoint records entirely must not verify clean.
+	if(pk != nil && nsig == 0)
+		return (0, nrec, ncheck, nsig,
+			"no signed checkpoints (chain is not attributable to the audit key)");
 	return (1, nrec, ncheck, nsig, "");
 }
 

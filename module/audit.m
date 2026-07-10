@@ -6,6 +6,14 @@ Audit: module
 	# (write-only); it can append but cannot read or rewrite history.
 	LOGFILE:	con "/mnt/audit/log";
 
+	# The opt-in marker (created by audit-setup / AUDITMODE). Its
+	# existence means this install REQUIRES auditing: fail-closed
+	# callers stat it to distinguish "auditing is off" (absent sink is
+	# ignorable) from "auditing is on but the sink is broken" (refuse
+	# the operation). A compile-time constant — usable even when the
+	# audit module itself failed to load.
+	ONFILE:		con "/usr/inferno/audit/on";
+
 	init:		fn();
 
 	# log seals one event: it writes "source event msg" to the audit

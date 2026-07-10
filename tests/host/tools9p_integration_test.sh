@@ -370,6 +370,19 @@ else
     fail "invalid child path provisioning probe failed"
 fi
 
+if emu_c "bindpath_delimiter_rejected" 12 \
+    "tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /tmp/evil,/tmp/forged' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
+        fail "bindpath delimiter probe did not establish a valid control baseline (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "/tmp/evil"; then
+        fail "bindpath accepted a comma-delimited path grant (output: $OUTPUT)"
+    else
+        pass "bindpath rejects path control delimiters"
+    fi
+else
+    fail "bindpath delimiter rejection probe failed"
+fi
+
 if emu_c "provision_sibling_prefix" 14 \
     "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.15/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then

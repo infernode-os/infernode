@@ -61,7 +61,6 @@ DEFAULT_PEERS = [
     ("diff", "diff - Compare two files"),
     ("edit", "edit - Edit file contents"),
     ("websearch", "websearch - Web search"),
-    ("mail", "mail - IMAP email"),
     ("hear", "hear - Speech-to-text"),
     ("man", "man - Manual page viewer"),
     ("task", "task - Delegated AI task"),

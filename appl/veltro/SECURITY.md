@@ -338,7 +338,7 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 /dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory todo websearch grep mail; /dis/veltro/repl -v
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory todo websearch grep; /dis/veltro/repl -v
 
 # Expose a host filesystem path to the agent (-p flag, comma-separated)
 /dis/veltro/tools9p read list find grep; /dis/veltro/repl -p /n/local/Users/pdfinn/projects

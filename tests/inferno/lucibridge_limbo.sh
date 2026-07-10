@@ -74,7 +74,7 @@ if {! mount -A $llmdial /mnt/llm} {
 }
 
 echo START_TOOLS9P
-/dis/veltro/tools9p.dis -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo &
+/dis/veltro/tools9p.dis -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo &
 sleep 2
 echo TOOL_REGISTRY:
 cat /tool/tools

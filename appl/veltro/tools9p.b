@@ -662,13 +662,16 @@ childbudget(): list of string
 
 childpathallowed(path: string): int
 {
+	# Trusted control endpoints are never delegatable through child task
+	# provisioning. A broad parent grant such as /mnt/msg or /n/wallet may be
+	# intentionally attenuated by nsconstruct; it must not become lexical
+	# authority to mint hidden controller files in a child namespace.
+	if(privilegedcontrolpath(path))
+		return 0;
+
 	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
 	# status surface. It must not act as a lexical parent capability for hidden
 	# proposal/control endpoints when an agent provisions a child task.
-	# The trusted controller endpoints are never delegatable through this path.
-	if(path == "/mnt/msg/ctl" || path == "/mnt/msg/pending" ||
-	   path == "/mnt/msg/approve" || path == "/mnt/msg/deny")
-		return 0;
 	if(path == "/mnt/msg/draft" || path == "/mnt/msg/flag") {
 		for(ep0 := extpaths; ep0 != nil; ep0 = tl ep0)
 			if(hd ep0 == path)
@@ -683,6 +686,26 @@ childpathallowed(path: string): int
 			return 1;
 	for(bp := boundpaths; bp != nil; bp = tl bp)
 		if(pathwithin((hd bp).path, path))
+			return 1;
+	return 0;
+}
+
+privilegedcontrolpath(path: string): int
+{
+	dangerous := array[] of {
+		"/tool/ctl",
+		"/mnt/toolctl",
+		"/mnt/toolctl/ctl",
+		"/mnt/msg/ctl",
+		"/mnt/msg/pending",
+		"/mnt/msg/approve",
+		"/mnt/msg/deny",
+		"/n/wallet/ctl",
+		"/n/wallet/pending",
+		"/n/wallet/new",
+	};
+	for(i := 0; i < len dangerous; i++)
+		if(path == dangerous[i])
 			return 1;
 	return 0;
 }

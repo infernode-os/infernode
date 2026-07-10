@@ -307,6 +307,17 @@ else
     fail "message draft delegation-denial test failed"
 fi
 
+if emu_c "provision_msg_ctl_denied" 14 \
+    "tools9p -p /mnt/msg:rw read task & sleep 3; echo '16 paths=/mnt/msg/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/ctl"; then
+        fail "bare /mnt/msg grant must not mint the trusted ctl capability"
+    else
+        pass "child cannot derive /mnt/msg/ctl from bare /mnt/msg"
+    fi
+else
+    fail "message ctl delegation-denial test failed"
+fi
+
 if emu_c "provision_msg_draft_exact" 14 \
     "tools9p -p /mnt/msg/draft:rw read task & sleep 3; echo '11 paths=/mnt/msg/draft:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.11/paths"; then
     if echo "$OUTPUT" | grep -q "^/mnt/msg/draft rw"; then

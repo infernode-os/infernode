@@ -131,6 +131,7 @@ mkdir -p /tmp
 > /tmp/speech9p.log
 /dis/veltro/speech9p >[2] /tmp/speech9p.log
 echo provider /n/speechshim > /n/speech/ctl
+echo duplex half > /n/speech/ctl
 
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &

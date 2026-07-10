@@ -14,6 +14,7 @@ implement Speechshim9p;
 #   ├── say      (rw)  write text: Kokoro synthesizes PCM, played through
 #   │                  /dev/audio in chunks; read returns the status
 #   ├── cancel   (w)   kills the active TTS helper process and stops playback
+#   ├── chime    (w)   local earcons: wake, done, on, off
 #   └── voices   (r)   helper voice list
 #
 # speech9p consumes this mount exactly as it consumes a parakeet export or a
@@ -51,6 +52,9 @@ include "draw.m";
 
 include "arg.m";
 
+include "math.m";
+	math: Math;
+
 include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import styx;
@@ -64,7 +68,7 @@ Speechshim9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-Qroot, Qctl, Qlisten, Qwake, Qsay, Qcancel, Qvoices: con iota;
+Qroot, Qctl, Qlisten, Qwake, Qsay, Qcancel, Qvoices, Qchime: con iota;
 
 # Configuration
 kokorobin := "kokoro-cli";
@@ -79,6 +83,7 @@ audiodev := "/dev/audio";
 capturedev := "";		# capture override; empty = audiodev
 micmode := "helper";		# helper | device
 capturerate := 16000;
+duplex := "full";		# full | half
 
 stderr: ref Sys->FD;
 user: string;
@@ -86,6 +91,7 @@ mountpt := "/n/speechshim";
 cmdbound := 0;
 audiobound := 0;
 cancelreq := 0;
+playing := 0;
 
 # A host helper process behind #C. ctlfd is the clone fd (kept open —
 # killonclose is armed on it); writing "kill" to it terminates the process.
@@ -159,6 +165,9 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
 		nomod(Arg->PATH);
+	math = load Math Math->PATH;
+	if(math == nil)
+		nomod(Math->PATH);
 	arg->init(args);
 	while((o := arg->opt()) != 0)
 		case o {
@@ -221,6 +230,21 @@ bindaudio()
 	audiobound = 1;
 }
 
+openaudioout(rate: int): ref Sys->FD
+{
+	if(audiodev == "/dev/audio")
+		bindaudio();
+	ctl := sys->open(audiodev + "ctl", Sys->OWRITE);
+	if(ctl != nil) {
+		writectl(ctl, sys->sprint("out rate %d", rate));
+		writectl(ctl, "out chans 1");
+		writectl(ctl, "out bits 16");
+		writectl(ctl, "out enc pcm");
+		ctl = nil;
+	}
+	return sys->open(audiodev, Sys->OWRITE);
+}
+
 # Start a host command; the process dies with the shim (killonclose) or on
 # killproc(). Returns (proc, nil) or (nil, error string).
 startproc(cmd: string): (ref Hostproc, string)
@@ -254,6 +278,14 @@ killproc(p: ref Hostproc)
 		sys->fprint(p.ctlfd, "kill");
 }
 
+closeproc(p: ref Hostproc)
+{
+	if(p == nil)
+		return;
+	p.datafd = nil;
+	p.ctlfd = nil;
+}
+
 # One-shot host command, full stdout.
 runcmd(cmd: string): string
 {
@@ -268,6 +300,7 @@ runcmd(cmd: string): string
 			break;
 		result += string rbuf[0:n];
 	}
+	closeproc(p);
 	return result;
 }
 
@@ -369,6 +402,8 @@ audiopump()
 			sinks[SINKWAKE] = nil;
 			continue;
 		}
+		if(duplex == "half" && playing)
+			continue;
 		for(k := 0; k < 2; k++)
 			if(sinks[k] != nil && sys->write(sinks[k], buf[0:n], n) < 0)
 				sinks[k] = nil;	# helper died; drop the sink
@@ -427,7 +462,8 @@ readwake(): string
 		return "error: wake helper not configured";
 	# One restart attempt, same reason as readlisten: one-shot wake
 	# helpers exit after each event and must be restarted transparently.
-	for(attempt := 0; attempt < 2; attempt++) {
+	attempt := 0;
+	for(;;) {
 		if(wakeproc == nil) {
 			(p, err) := startproc(wakecmd());
 			if(p == nil)
@@ -438,9 +474,24 @@ readwake(): string
 		}
 		buf := array[1024] of byte;
 		n := sys->read(wakeproc.datafd, buf, len buf);
-		if(n > 0)
+		if(n > 0) {
+			if(duplex == "half" && playing) {
+				wakeproc = nil;
+				sys->sleep(100);
+				continue;
+			}
 			return string buf[0:n];
+		}
 		wakeproc = nil;
+		attempt++;
+		if(attempt >= 2) {
+			if(!(duplex == "half" && playing))
+				break;
+			# A dead helper (exits with no output — e.g. not
+			# installed) must not spawn-storm while playback pins
+			# us in the suppression loop.
+			sys->sleep(100);
+		}
 	}
 	return "error: wake helper exited";
 }
@@ -468,6 +519,7 @@ dosay(text: string): string
 	tofd := sys->open(p.dir + "/data", Sys->OWRITE);
 	if(tofd == nil) {
 		killproc(p);
+		closeproc(p);
 		sayproc = nil;
 		return sys->sprint("error: cannot open %s/data for write: %r", p.dir);
 	}
@@ -475,21 +527,12 @@ dosay(text: string): string
 	sys->write(tofd, b, len b);
 	tofd = nil;
 
-	if(audiodev == "/dev/audio")
-		bindaudio();
-	ctl := sys->open(audiodev + "ctl", Sys->OWRITE);
-	if(ctl != nil) {
-		writectl(ctl, sys->sprint("out rate %d", audrate));
-		writectl(ctl, "out chans 1");
-		writectl(ctl, "out bits 16");
-		writectl(ctl, "out enc pcm");
-		ctl = nil;
-	}
-	afd := sys->open(audiodev, Sys->OWRITE);
+	afd := openaudioout(audrate);
 
 	total := 0;
 	buf := array[8192] of byte;
 	status := "";
+	playing = 1;
 	for(;;) {
 		n := sys->read(p.datafd, buf, len buf);
 		if(n <= 0)
@@ -508,6 +551,8 @@ dosay(text: string): string
 		}
 		total += n;
 	}
+	playing = 0;
+	closeproc(p);
 	sayproc = nil;
 	if(status != "")
 		return status;
@@ -517,6 +562,61 @@ dosay(text: string): string
 		return "error: kokoro produced no audio";
 	}
 	return sys->sprint("ok: played %d bytes", total);
+}
+
+put16le(buf: array of byte, off, val: int)
+{
+	buf[off] = byte (val & 16rFF);
+	buf[off+1] = byte ((val >> 8) & 16rFF);
+}
+
+playnote(fd: ref Sys->FD, freq, ms: int)
+{
+	nsamp := audrate * ms / 1000;
+	if(nsamp <= 0)
+		return;
+	buf := array[nsamp * 2] of byte;
+	for(i := 0; i < nsamp; i++) {
+		v := int (12000.0 * math->sin(2.0 * Math->Pi *
+			real freq * real i / real audrate));
+		put16le(buf, i * 2, v);
+	}
+	sys->write(fd, buf, len buf);
+}
+
+playchime(kind: string)
+{
+	afd := openaudioout(audrate);
+	if(afd != nil) {
+		case kind {
+		"wake" =>
+			playnote(afd, 660, 120);
+			playnote(afd, 880, 120);
+		"done" =>
+			playnote(afd, 440, 140);
+		"on" =>
+			playnote(afd, 523, 90);
+			playnote(afd, 659, 90);
+			playnote(afd, 784, 120);
+		"off" =>
+			playnote(afd, 784, 90);
+			playnote(afd, 659, 90);
+			playnote(afd, 523, 120);
+		}
+	}
+	playing = 0;
+}
+
+startchime(kind: string)
+{
+	kind = strip(kind);
+	case kind {
+	"wake" or "done" or "on" or "off" =>
+		playing = 1;
+		spawn playchime(kind);
+	* =>
+		sys->fprint(stderr, "speechshim9p: unknown chime: %s\n", kind);
+	}
 }
 
 asyncsay(donech: chan of array of byte, text: string)
@@ -623,6 +723,7 @@ readconfig(): string
 	result += "capturedev " + capturedev + "\n";
 	result += "micmode " + micmode + "\n";
 	result += "capturerate " + string capturerate + "\n";
+	result += "duplex " + duplex + "\n";
 	return result;
 }
 
@@ -702,6 +803,10 @@ applyconfig(cmd: string): string
 			return "error: capturerate must be 8000-48000";
 		capturerate = r;
 		resetcapture();
+	"duplex" =>
+		if(val != "full" && val != "half")
+			return "error: duplex must be full or half";
+		duplex = val;
 	* =>
 		return "error: unknown config key: " + key;
 	}
@@ -780,6 +885,8 @@ walkto(n: ref Navop.Walk)
 		n.path = big Qsay;
 	"cancel" =>
 		n.path = big Qcancel;
+	"chime" =>
+		n.path = big Qchime;
 	"voices" =>
 		n.path = big Qvoices;
 	* =>
@@ -812,6 +919,9 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qcancel =>
 		name = "cancel";
 		perm = 8r222;
+	Qchime =>
+		name = "chime";
+		perm = 8r222;
 	Qvoices =>
 		name = "voices";
 		perm = 8r444;
@@ -841,7 +951,7 @@ readdir(n: ref Navop.Readdir, path: int)
 		n.reply <-= (nil, Enotfound);
 		return;
 	}
-	entries := array[] of {Qctl, Qlisten, Qwake, Qsay, Qcancel, Qvoices};
+	entries := array[] of {Qctl, Qlisten, Qwake, Qsay, Qcancel, Qchime, Qvoices};
 	for(i := n.offset; i < len entries && i < n.offset + n.count; i++) {
 		(d, err) := dirgen(entries[i]);
 		if(err != nil) {
@@ -947,6 +1057,9 @@ Serve:
 				# the playback loop notice within one chunk.
 				cancelreq = 1;
 				killproc(sayproc);
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			Qchime =>
+				startchime(string m.data);
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));

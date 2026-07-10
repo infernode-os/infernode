@@ -170,12 +170,38 @@ testEngineSwitchRoundTrip(t: ref T)
 	t.assert(hassubstr(ctl, "engine kokoro"), "ctl reports kokoro engine again");
 }
 
+killmodule(name: string)
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			pid := dirs[i].name;
+			status := readfile("/prog/" + pid + "/status");
+			if(!hassubstr(status, name))
+				continue;
+			ctl := sys->open("/prog/" + pid + "/ctl", Sys->OWRITE);
+			if(ctl != nil)
+				sys->fprint(ctl, "killgrp");
+		}
+	}
+}
+
 teardown()
 {
 	# Unmount both servers so their serveloops see EOF and exit —
 	# otherwise emu never halts after the tests finish.
 	sys->unmount(nil, MNT);
+	sys->sleep(100);
 	sys->unmount(nil, SHIMMNT);
+	sys->sleep(100);
+	# The provider say path can leave the shim's released process group
+	# referenced after its mount is gone; do not let test cleanup hang emu.
+	killmodule("Speechshim9p");
 }
 
 init(nil: ref Draw->Context, args: list of string)

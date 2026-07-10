@@ -2588,6 +2588,10 @@ kbdproc()
 					escarg = 0;
 					continue;
 				}
+				if(!voicemodeon && (c == 'v' || c == 'V')) {
+					writefile(mountpt + "/input-mode", "v");
+					continue;
+				}
 				# Bare ESC+char: deliver char as-is (fall through to route)
 			2 =>
 				escstate = 0;

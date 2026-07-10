@@ -38,6 +38,7 @@ failed := 0;
 skipped := 0;
 
 daemonpid := -1;
+daemonargs: list of string;
 
 _marker() {}
 
@@ -60,6 +61,14 @@ run(name: string, testfn: ref fn(t: ref T))
 		skipped++;
 	else
 		failed++;
+}
+
+runvm(name: string, extra: list of string, testfn: ref fn(t: ref T))
+{
+	startdaemon(extra);
+	run(name, testfn);
+	stopdaemon();
+	sys->sleep(200);
 }
 
 strip(s: string): string
@@ -112,6 +121,17 @@ hassubstr(s, sub: string): int
 	return 0;
 }
 
+countsubstr(s, sub: string): int
+{
+	if(s == nil || sub == nil || len sub == 0 || len sub > len s)
+		return 0;
+	n := 0;
+	for(i := 0; i <= len s - len sub; i++)
+		if(s[i:i+len sub] == sub)
+			n++;
+	return n;
+}
+
 # Poll until path's content contains sub, or timeout (ms). Returns 1 on hit.
 waitfor(path, sub: string, timeout: int): int
 {
@@ -121,6 +141,16 @@ waitfor(path, sub: string, timeout: int): int
 		sys->sleep(100);
 	}
 	return hassubstr(readfile(path), sub);
+}
+
+waitnotfor(path, sub: string, timeout: int): int
+{
+	for(waited := 0; waited < timeout; waited += 100) {
+		if(hassubstr(readfile(path), sub))
+			return 0;
+		sys->sleep(100);
+	}
+	return !hassubstr(readfile(path), sub);
 }
 
 mkmock()
@@ -134,6 +164,8 @@ mkmock()
 	createfile(MOCKUI + "/input-mode", "k");
 	createfile(MOCKUI + "/activity/current", "0");
 	createfile(MOCKUI + "/activity/0/context/ctl", "");
+	createfile(MOCKUI + "/activity/0/status", "working");
+	createfile(MOCKUI + "/activity/0/conversation/ctl", "");
 	createfile(MOCKUI + "/activity/0/conversation/voiceinput", "");
 	createfile(MOCKSPEECH + "/wake", "wake hey_lucia 0.9\n");
 	createfile(MOCKSPEECH + "/listen", "partial warming up\n");
@@ -148,11 +180,12 @@ rundaemon(pidch: chan of int)
 		sys->fprint(sys->fildes(2), "cannot load voicemode: %r\n");
 		return;
 	}
-	vm->init(nil, "voicemode" :: "-u" :: MOCKUI :: "-s" :: MOCKSPEECH :: nil);
+	vm->init(nil, "voicemode" :: "-u" :: MOCKUI :: "-s" :: MOCKSPEECH :: daemonargs);
 }
 
-startdaemon()
+startdaemon(extra: list of string)
 {
+	daemonargs = extra;
 	sys->create(MOCKSPEECH, Sys->OREAD, Sys->DMDIR | 8r755);
 	mkmock();
 	pidch := chan of int;
@@ -203,12 +236,121 @@ testPartialNotInjected(t: ref T)
 	t.assert(!hassubstr(vi, "warming"), "partial record is not injected");
 }
 
+testPartialThenFinalInjected(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "partial half\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
+		"partial record keeps daemon in listening state");
+	sys->sleep(300);
+	createfile(MOCKSPEECH + "/listen", "partial half\nfinal full transcript\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"full transcript", 5000),
+		"final after partial is injected");
+}
+
+testPartialUpdatesResourceLabel(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "partial half a thou\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
+		"label=Voice: half a thou type=audio status=listening", 5000),
+		"partial transcript updates voice resource label");
+	createfile(MOCKSPEECH + "/listen", "final full transcript\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
+		"label=Voice type=audio status=speaking", 5000),
+		"final transcript restores voice resource label");
+}
+
 testFinalInjected(t: ref T)
 {
 	createfile(MOCKSPEECH + "/listen", "final hello from voice\n");
+	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"hello from voice", 5000),
 		"final transcript injected into conversation/voiceinput");
+}
+
+testListenTimeoutReturnsToWaiting(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
+		"daemon enters listening with empty listen stream");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=waiting", 3000),
+		"listen timeout returns status to waiting");
+}
+
+testWakeDebounce(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "final debounce turn\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"debounce turn", 5000),
+		"first wake reaches listen and injects final");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=speaking", 3000),
+		"completed turn reports speaking before re-arming wake");
+	sys->sleep(300);
+	t.assert(!hassubstr(readfile(MOCKUI + "/activity/0/context/ctl"), "status=listening"),
+		"immediate second wake is debounced instead of starting listen");
+}
+
+testJunkFinalNotInjected(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "final [BLANK_AUDIO]\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitnotfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"BLANK_AUDIO", 1000),
+		"bracketed silence marker is not injected");
+	createfile(MOCKSPEECH + "/listen", "final Thank you.\n");
+	t.assert(waitnotfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"Thank you", 1200),
+		"whisper silence hallucination is not injected");
+}
+
+testControlIntentPunctuation(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "partial waiting\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
+		"daemon is listening before punctuated control intent");
+	createfile(MOCKSPEECH + "/cancel", "");
+	createfile(MOCKSPEECH + "/listen", "final Stop.\n");
+	t.assert(waitfor(MOCKSPEECH + "/cancel", "cancel", 5000),
+		"punctuated stop intent cancels speech");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "Stop"), "punctuated control intent is not injected");
+}
+
+testYesRequiresBlocked(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "final yes\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput", "yes", 5000),
+		"bare yes is injected when no approval is blocked");
+	createfile(MOCKUI + "/input-mode", "k");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=idle", 5000),
+		"daemon exits before blocked approval case");
+	createfile(MOCKUI + "/activity/0/status", "blocked");
+	createfile(MOCKUI + "/activity/0/conversation/voiceinput", "");
+	createfile(MOCKUI + "/activity/0/context/ctl", "");
+	createfile(MOCKSPEECH + "/listen", "final yes\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput", "Allow", 5000),
+		"bare yes maps to Allow only while activity is blocked");
+}
+
+testHelperErrorSurfacedOnce(t: ref T)
+{
+	createfile(MOCKSPEECH + "/wake", "error: wake helper missing\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/ctl", "title=Voice", 6000),
+		"third consecutive helper error posts a voice notice");
+	msg := readfile(MOCKUI + "/activity/0/conversation/ctl");
+	t.assert(countsubstr(msg, "title=Voice") == 1,
+		"voice helper notice is written once in the mock conversation ctl");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=error", 1000),
+		"helper error surfaces in context status");
 }
 
 testSpokenKeyboardIntent(t: ref T)
@@ -216,6 +358,7 @@ testSpokenKeyboardIntent(t: ref T)
 	# "keyboard" is a control intent: it returns input to keyboard mode
 	# instead of becoming a chat turn.
 	createfile(MOCKSPEECH + "/listen", "final keyboard\n");
+	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/input-mode", "k", 5000),
 		"spoken keyboard intent flips input-mode back to k");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=idle", 5000),
@@ -252,14 +395,21 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	startdaemon();
-	run("IdleUntilVoiceMode", testIdleUntilVoiceMode);
-	run("ActivatesOnVoiceMode", testActivatesOnVoiceMode);
-	run("PartialNotInjected", testPartialNotInjected);
-	run("FinalInjected", testFinalInjected);
-	run("SpokenKeyboardIntent", testSpokenKeyboardIntent);
-	run("ReentryAndInputModeExit", testReentryAndInputModeExit);
-	stopdaemon();
+	runvm("IdleUntilVoiceMode", nil, testIdleUntilVoiceMode);
+	runvm("ActivatesOnVoiceMode", nil, testActivatesOnVoiceMode);
+	runvm("PartialNotInjected", nil, testPartialNotInjected);
+	runvm("PartialThenFinalInjected", nil, testPartialThenFinalInjected);
+	runvm("PartialUpdatesResourceLabel", nil, testPartialUpdatesResourceLabel);
+	runvm("FinalInjected", nil, testFinalInjected);
+	runvm("ListenTimeoutReturnsToWaiting", "-t" :: "500" :: "-w" :: "2000" :: nil,
+		testListenTimeoutReturnsToWaiting);
+	runvm("WakeDebounce", "-w" :: "1000" :: nil, testWakeDebounce);
+	runvm("JunkFinalNotInjected", "-w" :: "200" :: nil, testJunkFinalNotInjected);
+	runvm("ControlIntentPunctuation", nil, testControlIntentPunctuation);
+	runvm("YesRequiresBlocked", "-w" :: "200" :: nil, testYesRequiresBlocked);
+	runvm("HelperErrorSurfacedOnce", nil, testHelperErrorSurfacedOnce);
+	runvm("SpokenKeyboardIntent", nil, testSpokenKeyboardIntent);
+	runvm("ReentryAndInputModeExit", nil, testReentryAndInputModeExit);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

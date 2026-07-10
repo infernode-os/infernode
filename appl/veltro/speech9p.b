@@ -55,7 +55,7 @@ Speech9p: module {
 };
 
 # Qid layout for synthetic files
-Qroot, Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel: con iota;
+Qroot, Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel, Qchime: con iota;
 
 # Per-fid state for say and hear operations
 FidState: adt {
@@ -97,7 +97,7 @@ whispermodel := "";  # Path to .bin GGML model
 # Voice-mode speech provider. speech9p does not run streaming helpers
 # itself: wake, streaming listen, and voice-mode TTS are consumed from a
 # provider mount serving the contract documented in
-# docs/SPEECH-ARCHITECTURE.md — listen/wake/say/cancel plus optional
+# docs/SPEECH-ARCHITECTURE.md — listen/wake/say/cancel/chime plus optional
 # ctl/voices. speechshim9p adapts external helper CLIs (whisper-stream,
 # kokoro, openwakeword) to that contract; a parakeet export or a remote
 # 9P-mounted provider serves the same shape. The parakeet*/pipersay ctl
@@ -466,7 +466,7 @@ applyconfig(cmd: string): string
 	"wakethreshold" =>
 		wakethreshold = val;
 		forwardprovider(key, val);
-	"audiodev" or "capturedev" or "micmode" or "capturerate" =>
+	"audiodev" or "capturedev" or "micmode" or "capturerate" or "duplex" =>
 		# Audio routing lives in the provider (docs/SPEECH-REMOTE-AUDIO.md);
 		# speech9p only passes the knobs through.
 		forwardprovider(key, val);
@@ -712,6 +712,12 @@ cancelprovider()
 	if(providermount != "")
 		writemounted(providermount + "/cancel", "cancel\n");
 	resetprovider();
+}
+
+chimeprovider(kind: string)
+{
+	if(providermount != "")
+		writemounted(providermount + "/chime", strip(kind) + "\n");
 }
 
 # Wake. The provider blocks the read until its wake-word engine fires, then
@@ -1809,6 +1815,9 @@ walkto(n: ref Navop.Walk)
 		"cancel" =>
 			n.path = big Qcancel;
 			n.reply <-= dirgen(int n.path);
+		"chime" =>
+			n.path = big Qchime;
+			n.reply <-= dirgen(int n.path);
 		* =>
 			n.reply <-= (nil, Enotfound);
 		}
@@ -1855,6 +1864,9 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qcancel =>
 		d.name = "cancel";
 		d.mode = 8r666;
+	Qchime =>
+		d.name = "chime";
+		d.mode = 8r222;
 	* =>
 		return (nil, Enotfound);
 	}
@@ -1867,7 +1879,7 @@ readdir(n: ref Navop.Readdir, path: int)
 {
 	case path {
 	Qroot =>
-		entries := array[] of {Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel};
+		entries := array[] of {Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel, Qchime};
 		for(i := 0; i < len entries; i++) {
 			if(i >= n.offset) {
 				(d, err) := dirgen(entries[i]);
@@ -1981,6 +1993,8 @@ Serve:
 					srv.reply(styxservers->readstr(m, "cancel pending\n"));
 				else
 					srv.reply(styxservers->readstr(m, "idle\n"));
+			Qchime =>
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			* =>
 				srv.default(gm);
 			}
@@ -2024,6 +2038,9 @@ Serve:
 			Qcancel =>
 				cancelreq = 1;
 				cancelprovider();
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			Qchime =>
+				chimeprovider(string m.data);
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qhear =>
 				# Writing to hear resets/starts a new recording

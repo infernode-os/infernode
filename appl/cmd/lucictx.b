@@ -176,6 +176,10 @@ ntoolplusrects := 0;
 toolentryrects: array of Rect;
 ntoolentryrects := 0;
 
+# Resource row rects
+resourcerects: array of Rect;
+nresourcerects := 0;
+
 # Browse rect (inside user namespace)
 browserect: Rect;
 mobile := 0;		# /env/infmobile=1 — floor browser/list rows at a tap target
@@ -464,6 +468,26 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 								break;
 							}
 							kidx++;
+						}
+						break;
+					}
+				}
+			}
+
+			# Resource row click — /n/speech toggles voice input mode.
+			if(!tabclicked) {
+				for(ri := 0; ri < nresourcerects; ri++) {
+					if(resourcerects[ri].contains(clickpt)) {
+						ridx := 0;
+						for(rl := resources; rl != nil; rl = tl rl) {
+							if(ridx == ri) {
+								if((hd rl).path == "/n/speech") {
+									togglevoicemode();
+									tabclicked = 1;
+								}
+								break;
+							}
+							ridx++;
 						}
 						break;
 					}
@@ -849,6 +873,7 @@ drawcontext(zone: Rect)
 	ntoolentryrects = 0;
 	nctxentryrects = 0;
 	nnsentryrects = 0;
+	nresourcerects = 0;
 	toolavailhdrrect = Rect((0, 0), (0, 0));
 	browserect = Rect((0, 0), (0, 0));
 	agentnshdrrect = Rect((0, 0), (0, 0));
@@ -895,6 +920,52 @@ drawcontext(zone: Rect)
 				}
 				y += barh + 4;
 			}
+		}
+		y += secgap;
+	}
+
+	# --- Resources section ---
+	if(resources != nil) {
+		if(y + mainfont.height > vis_top && y < vis_bot)
+			mainwin.text((zone.min.x + pad, y), labelcol, (0, 0), mainfont, "Resources");
+		y += mainfont.height + 4;
+
+		resourcerects = array[64] of Rect;
+		for(rp := resources; rp != nil; rp = tl rp) {
+			res := hd rp;
+			visible := y + entryH > vis_top && y < vis_bot;
+			rowtexty := y + (entryH - mainfont.height) / 2;
+			if(nresourcerects < len resourcerects)
+				resourcerects[nresourcerects++] = Rect(
+					(zone.min.x, y), (zone.max.x, y + entryH));
+
+			indcol3 := dimcol;
+			if(res.status == "active" || res.status == "listening" ||
+					res.status == "speaking" || res.status == "processing")
+				indcol3 = accentcol;
+			else if(res.status == "error")
+				indcol3 = redcol;
+			else if(res.status == "waiting")
+				indcol3 = greencol;
+
+			if(visible) {
+				tindy := y + (entryH - indh) / 2;
+				mainwin.draw(Rect(
+					(zone.min.x + pad, tindy),
+					(zone.min.x + pad + indw, tindy + indh)),
+					indcol3, nil, (0, 0));
+				label := res.label;
+				if(label == nil || label == "")
+					label = res.path;
+				mainwin.text((zone.min.x + pad + indw + 6, rowtexty),
+					text2col, (0, 0), mainfont, label);
+				if(res.status != nil && res.status != "") {
+					statusw := mainfont.width(res.status);
+					mainwin.text((zone.max.x - pad - statusw, rowtexty),
+						dimcol, (0, 0), mainfont, res.status);
+				}
+			}
+			y += entryH;
 		}
 		y += secgap;
 	}
@@ -2316,6 +2387,16 @@ writetofile(path: string, text: string): int
 	else if(path == "/edit/ctl")
 		sys->fprint(sys->fildes(2), "lucictx: writetofile OK: %s <- %s\n", path, text);
 	return n;
+}
+
+togglevoicemode()
+{
+	path := mountpt_g + "/input-mode";
+	mode := strip(readfile(path));
+	if(mode == "v")
+		writetofile(path, "k");
+	else
+		writetofile(path, "v");
 }
 
 strip(s: string): string

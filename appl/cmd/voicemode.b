@@ -42,17 +42,35 @@ debug := 0;
 ui := "/mnt/ui";
 speech := "/n/speech";
 
+Listenrec: adt {
+	gen: int;
+	text: string;
+};
+
 # Watcher plumbing. Buffered so a watcher finishing a read after the voice
 # loop has exited never deadlocks; stale results are drained on re-entry.
 evch: chan of string;		# "input-mode v|k" and other global events
 wakech: chan of string;		# one wake read result per request
-listench: chan of string;	# one listen read result per request
+listench: chan of ref Listenrec;	# one listen read result per request
 startwake: chan of int;
 startlisten: chan of int;
+timerch: chan of int;
+listenseq := 0;
+
+listentimeout := 10000;
+wakecooldown := 1500;
+
+LISTEN_EMPTY, LISTEN_PARTIAL, LISTEN_FINAL, LISTEN_ERROR: con iota;
+
+silencefinals := array[] of {
+	"thank you",
+	"thanks for watching",
+	"you",
+};
 
 usage()
 {
-	sys->fprint(stderr, "Usage: voicemode [-d] [-u /mnt/ui] [-s /n/speech]\n");
+	sys->fprint(stderr, "Usage: voicemode [-d] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
 	raise "fail:usage";
 }
 
@@ -118,6 +136,26 @@ ctxstatus(actid: int, state: string)
 		state + " via=voice-mode");
 }
 
+partiallabel(text: string): string
+{
+	text = strip(text);
+	if(text == nil || text == "")
+		return "Voice";
+	for(i := 0; i < len text; i++)
+		if(text[i] == '=' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
+			text[i] = ' ';
+	if(len text > 40)
+		text = text[len text - 40:];
+	return "Voice: " + strip(text);
+}
+
+ctxpartial(actid: int, text: string)
+{
+	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
+	writefile(path, "resource upsert path=/n/speech label=" + partiallabel(text) +
+		" type=audio status=listening via=voice-mode");
+}
+
 inputmode(): string
 {
 	return strip(readfile(ui + "/input-mode"));
@@ -137,6 +175,11 @@ voiceinput(actid: int, text: string): int
 cancelspeech()
 {
 	writefile(speech + "/cancel", "cancel");
+}
+
+chime(kind: string)
+{
+	writefile(speech + "/chime", kind);
 }
 
 # Parse a listen-stream record into a final transcript, or nil if the record
@@ -159,16 +202,131 @@ finaltext(s: string): string
 	return s;
 }
 
+ispartial(s: string): int
+{
+	s = strip(s);
+	return s != nil && hasprefix(s, "partial ");
+}
+
+parselisten(s: string): (int, string)
+{
+	s = strip(s);
+	if(s == nil || s == "")
+		return (LISTEN_EMPTY, nil);
+	kind := LISTEN_EMPTY;
+	text := "";
+	(nil, lines) := sys->tokenize(s, "\n");
+	for(; lines != nil; lines = tl lines) {
+		line := strip(hd lines);
+		if(line == "")
+			continue;
+		if(hasprefix(line, "error:")) {
+			if(kind != LISTEN_FINAL)
+				kind = LISTEN_ERROR;
+			continue;
+		}
+		if(ispartial(line)) {
+			if(kind != LISTEN_FINAL) {
+				kind = LISTEN_PARTIAL;
+				text = strip(line[8:]);
+			}
+			continue;
+		}
+		t := finaltext(line);
+		if(t != nil && t != "") {
+			kind = LISTEN_FINAL;
+			text = t;
+		}
+	}
+	return (kind, text);
+}
+
 iserror(s: string): int
 {
 	return s == nil || strip(s) == "" || hasprefix(strip(s), "error:");
+}
+
+ispunct(c: int): int
+{
+	return c == '.' || c == ',' || c == '!' || c == '?' || c == ';' || c == ':';
+}
+
+normalize(text: string): string
+{
+	text = strip(str->tolower(text));
+	if(text == nil || text == "")
+		return text;
+	i := 0;
+	j := len text;
+	while(i < j && ispunct(text[i]))
+		i++;
+	while(j > i && ispunct(text[j-1]))
+		j--;
+	if(i >= j)
+		return "";
+	return strip(text[i:j]);
+}
+
+stripbrackets(text: string): string
+{
+	out := "";
+	for(i := 0; i < len text; i++) {
+		c := text[i];
+		if(c == '[' || c == '(') {
+			close := ']';
+			if(c == '(')
+				close = ')';
+			for(j := i + 1; j < len text && text[j] != close; j++)
+				;
+			if(j < len text) {
+				i = j;
+				out += " ";
+				continue;
+			}
+		}
+		out[len out] = c;
+	}
+	return strip(out);
+}
+
+junkfinal(text: string): int
+{
+	text = strip(text);
+	if(text == nil || text == "")
+		return 1;
+	text = stripbrackets(text);
+	if(text == "")
+		return 1;
+	n := normalize(text);
+	for(i := 0; i < len silencefinals; i++)
+		if(n == silencefinals[i])
+			return 1;
+	return 0;
+}
+
+approvalpending(actid: int): int
+{
+	path := sys->sprint("%s/activity/%d/status", ui, actid);
+	return strip(readfile(path)) == "blocked";
+}
+
+noticevoiceerror(actid: int, reason: string)
+{
+	reason = strip(reason);
+	if(reason == nil || reason == "")
+		reason = "speech helper unavailable";
+	for(i := 0; i < len reason; i++)
+		if(reason[i] == '\n' || reason[i] == '\r' || reason[i] == '\t')
+			reason[i] = ' ';
+	path := sys->sprint("%s/activity/%d/conversation/ctl", ui, actid);
+	writefile(path, "role=veltro dtype=dialogue title=Voice text=" + reason);
 }
 
 # Spoken control intents that act on the session instead of becoming a chat
 # turn. Returns 1 when the utterance was consumed.
 handlecontrol(actid: int, text: string): int
 {
-	lower := str->tolower(text);
+	lower := normalize(text);
 	if(lower == "stop" || lower == "cancel") {
 		cancelspeech();
 		ctxstatus(actid, "waiting");
@@ -182,11 +340,12 @@ handlecontrol(actid: int, text: string): int
 		setinputmode("k");
 		return 1;
 	}
-	if(lower == "approve" || lower == "allow" || lower == "yes") {
+	if(lower == "approve" || lower == "allow" ||
+	   (lower == "yes" && approvalpending(actid))) {
 		voiceinput(actid, "Allow");
 		return 1;
 	}
-	if(lower == "deny" || lower == "no") {
+	if(lower == "deny" || (lower == "no" && approvalpending(actid))) {
 		voiceinput(actid, "Deny");
 		return 1;
 	}
@@ -238,11 +397,40 @@ speechwatcher(file: string, startch: chan of int, ch: chan of string)
 	}
 }
 
+listenwatcher()
+{
+	for(;;) {
+		gen := <-startlisten;
+		listench <-= ref Listenrec(gen, readfile(speech + "/listen"));
+	}
+}
+
 # Non-blocking start request; a no-op if a request is already queued.
 request(startch: chan of int)
 {
 	alt {
 	startch <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
+requestlisten(gen: int)
+{
+	alt {
+	startlisten <-= gen =>
+		;
+	* =>
+		;
+	}
+}
+
+timer(ch: chan of int, ms: int, gen: int)
+{
+	sys->sleep(ms);
+	alt {
+	ch <-= gen =>
 		;
 	* =>
 		;
@@ -257,6 +445,8 @@ drainresults()
 		<-wakech =>
 			;
 		<-listench =>
+			;
+		<-timerch =>
 			;
 		* =>
 			return;
@@ -273,13 +463,21 @@ voiceloop()
 	drainresults();
 	actid := currentactivity();
 	state := WAITING;
+	listengen := 0;
+	lastwake := -wakecooldown;
+	helpererrs := 0;
+	errorshown := 0;
 	ctxstatus(actid, "waiting");
+	chime("on");
 	request(startwake);
 	for(;;) {
 		alt {
 		ev := <-evch =>
 			if(hasprefix(ev, "input-mode ") && strip(ev[11:]) != "v") {
+				listenseq++;
+				listengen = listenseq;
 				cancelspeech();
+				chime("off");
 				ctxstatus(actid, "idle");
 				log("voice mode off");
 				return;
@@ -289,26 +487,77 @@ voiceloop()
 				continue;
 			if(iserror(w)) {
 				log("wake: " + strip(w));
+				helpererrs++;
+				if(helpererrs >= 3 && !errorshown) {
+					noticevoiceerror(actid, strip(w));
+					ctxstatus(actid, "error");
+					errorshown = 1;
+				}
 				sys->sleep(1000);
 				request(startwake);
 				continue;
 			}
+			helpererrs = 0;
+			errorshown = 0;
+			now := sys->millisec();
+			if(now - lastwake < wakecooldown) {
+				log("wake debounce: " + strip(w));
+				sys->sleep(100);
+				request(startwake);
+				continue;
+			}
+			lastwake = now;
 			log("wake: " + strip(w));
+			chime("wake");
 			# Barge-in: any active TTS is cut off before listening.
 			cancelspeech();
 			actid = currentactivity();
 			state = LISTENING;
+			listenseq++;
+			listengen = listenseq;
 			ctxstatus(actid, "listening");
-			request(startlisten);
-		r := <-listench =>
+			spawn timer(timerch, listentimeout, listengen);
+			requestlisten(listengen);
+		rec := <-listench =>
 			if(state != LISTENING)
 				continue;
+			if(rec.gen != listengen)
+				continue;
+			(kind, text) := parselisten(rec.text);
+			if(kind == LISTEN_EMPTY || kind == LISTEN_PARTIAL) {
+				helpererrs = 0;
+				errorshown = 0;
+				if(kind == LISTEN_PARTIAL)
+					ctxpartial(actid, text);
+				sys->sleep(100);
+				requestlisten(listengen);
+				continue;
+			}
+			if(kind == LISTEN_ERROR) {
+				log("listen: " + strip(rec.text));
+				listenseq++;
+				listengen = listenseq;
+				state = WAITING;
+				helpererrs++;
+				if(helpererrs >= 3 && !errorshown) {
+					noticevoiceerror(actid, strip(rec.text));
+					ctxstatus(actid, "error");
+					errorshown = 1;
+				} else
+					ctxstatus(actid, "waiting");
+				sys->sleep(100);
+				request(startwake);
+				continue;
+			}
+			listenseq++;
+			listengen = listenseq;
 			state = WAITING;
-			text := finaltext(r);
-			if(text == nil || text == "") {
-				if(iserror(r))
-					log("listen: " + strip(r));
+			helpererrs = 0;
+			errorshown = 0;
+			if(junkfinal(text)) {
+				log("listen junk: " + text);
 				ctxstatus(actid, "waiting");
+				chime("done");
 				sys->sleep(100);
 				request(startwake);
 				continue;
@@ -316,6 +565,7 @@ voiceloop()
 			log("transcript: " + text);
 			if(handlecontrol(actid, text)) {
 				ctxstatus(actid, "waiting");
+				chime("done");
 				sys->sleep(100);
 				request(startwake);
 				continue;
@@ -330,6 +580,16 @@ voiceloop()
 			# ready reads) from spinning.
 			sys->sleep(100);
 			request(startwake);
+		gen := <-timerch =>
+			if(state == LISTENING && gen == listengen) {
+				log("listen timeout");
+				listenseq++;
+				listengen = listenseq;
+				state = WAITING;
+				ctxstatus(actid, "waiting");
+				chime("done");
+				request(startwake);
+			}
 		}
 	}
 }
@@ -354,6 +614,8 @@ init(nil: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'd' =>	debug = 1;
+		't' =>	listentimeout = int arg->earg();
+		'w' =>	wakecooldown = int arg->earg();
 		'u' =>	ui = arg->earg();
 		's' =>	speech = arg->earg();
 		* =>	usage();
@@ -361,13 +623,14 @@ init(nil: ref Draw->Context, args: list of string)
 
 	evch = chan[8] of string;
 	wakech = chan[2] of string;
-	listench = chan[2] of string;
+	listench = chan[2] of ref Listenrec;
 	startwake = chan[1] of int;
 	startlisten = chan[1] of int;
+	timerch = chan[2] of int;
 
 	spawn eventwatcher();
 	spawn speechwatcher("wake", startwake, wakech);
-	spawn speechwatcher("listen", startlisten, listench);
+	spawn listenwatcher();
 
 	# Resident loop: idle until input-mode becomes "v". The startup check
 	# catches a daemon (re)started while voice mode is already on.

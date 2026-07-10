@@ -604,33 +604,73 @@ Docs:
 
 ## Host Dependencies
 
-These dependency names and URLs are planning-level defaults. Verify current
-canonical install commands during implementation.
+Use the repo installer to prepare the host helpers and print the Inferno ctl
+configuration block:
 
 ```sh
-brew install whisper-cpp
-pip install kokoro-onnx openwakeword
-
-mkdir -p ~/.config/lucia/wake-models
-
-curl -L -o ~/.config/lucia/ggml-base.en.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
-
-# Placeholder until a custom hey_lucia model exists.
-curl -L -o ~/.config/lucia/wake-models/hey_jarvis_v0.1.onnx \
-  https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx
+tools/install-speech-helpers.sh
 ```
 
-Expected `/n/speech/ctl` additions after implementation:
+The installer is macOS-first and safe to re-run. It installs Homebrew
+`whisper-cpp` when Homebrew is available, creates an isolated venv under
+`~/.local/share/infernode-speech/venv`, installs pinned `kokoro-onnx` and
+`openwakeword` packages, downloads the Kokoro model/voices and a whisper.cpp
+`base.en` model, and generates these provider-contract wrappers:
 
 ```text
-engine kokoro
-voice af_bella
-sttmodel /Users/me/.config/lucia/ggml-base.en.bin
-wakemodel /Users/me/.config/lucia/wake-models/hey_jarvis_v0.1.onnx
-wakethold 0.5
-vadthold 0.6
+~/.local/share/infernode-speech/bin/kokoro-cli
+~/.local/share/infernode-speech/bin/whisper-stream-cli
+~/.local/share/infernode-speech/bin/openwakeword-cli
 ```
+
+After `/n/speech` is mounted, paste the ctl block printed by the installer.
+The helper-mode block has this shape:
+
+```sh
+echo 'kokorobin /Users/me/.local/share/infernode-speech/bin/kokoro-cli' > /n/speech/ctl
+echo 'whisperstreambin /Users/me/.local/share/infernode-speech/bin/whisper-stream-cli' > /n/speech/ctl
+echo 'wakebin /Users/me/.local/share/infernode-speech/bin/openwakeword-cli' > /n/speech/ctl
+echo 'whispermodel /Users/me/.local/share/infernode-speech/models/ggml-base.en.bin' > /n/speech/ctl
+echo 'voice af_bella' > /n/speech/ctl
+echo 'wakeword hey jarvis' > /n/speech/ctl
+echo 'wakethreshold 0.5' > /n/speech/ctl
+echo 'duplex half' > /n/speech/ctl
+```
+
+Then start InferNode, press `Alt+V` (or Esc then `v`) to enter voice mode, and
+speak the wake phrase.
+
+**The spoken wake phrase is currently "hey jarvis"**, because the only
+pretrained openWakeWord model available today is `hey_jarvis`. Saying
+"hey lucia" will not trigger wake until a custom hey-lucia model is trained
+and dropped into `~/.local/share/infernode-speech/models/openwakeword/`
+(pass it explicitly with `--model` in the `wakebin` command). The
+`whisper-stream-cli` wrapper runs whisper.cpp in VAD mode: each utterance is
+transcribed after you stop speaking and emitted as a single `final` record —
+so expect turn latency of roughly the utterance length plus transcription
+time, and no live partials from this particular wrapper (a parakeet provider
+supplies partials).
+
+Topology 2/3 users can keep the microphone as a namespace device instead of
+letting helper CLIs grab the host mic directly:
+
+```sh
+echo 'micmode device' > /n/speech/ctl
+echo 'whisperstreambin /Users/me/.local/share/infernode-speech/bin/whisper-stream-cli --stdin --model /Users/me/.local/share/infernode-speech/models/ggml-base.en.bin --rate 16000 --chans 1' > /n/speech/ctl
+echo 'wakebin /Users/me/.local/share/infernode-speech/bin/openwakeword-cli --stdin --word hey jarvis --threshold 0.5 --rate 16000' > /n/speech/ctl
+```
+
+`micmode device` means `speechshim9p` pumps 16 kHz s16le mono PCM into the
+configured helper commands' stdin. The generated openWakeWord wrapper supports
+that stdin-PCM path. Current Homebrew `whisper-cpp` exposes `whisper-stream` as
+a host-capture program, not a stable stdin-PCM streaming filter, so the generated
+`whisper-stream-cli --stdin` reports an `error:` record instead of pretending to
+transcribe. For real stdin streaming STT, use a helper that actually consumes
+stdin PCM and emits `partial` / `final` records.
+
+Host smoke coverage lives in `tests/host/speech_helpers_test.sh`. It exercises
+TTS/PCM and no-mic wrapper paths only; microphone-dependent wake/STT checks are
+left to an interactive TCC-approved session.
 
 ## End-to-End Verification Target
 

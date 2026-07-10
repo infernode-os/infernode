@@ -124,6 +124,7 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 | `listenengine` | `whisper` or `parakeet` | Compatibility alias; both values consume the provider mount. |
 | `whisperstreambin` / `wakebin` / `kokorobin` / `wakeword` / `wakethreshold` | helper commands and wake tuning | Stored for introspection and forwarded to the provider's `ctl`; `speechshim9p` consumes them. `speech9p` itself runs no helpers. |
 | `audiodev` / `capturedev` / `micmode` / `capturerate` | audio routing (see SPEECH-REMOTE-AUDIO.md) | Forwarded to the provider's `ctl` unchanged. In `speechshim9p`: `audiodev` is the playback (and default capture) device path; `capturedev` overrides capture (`default` clears it); `micmode helper\|device` chooses whether the helper CLI grabs the host mic or the shim pumps PCM from the capture device into helper stdin; `capturerate` is the pump sample rate. |
+| `duplex` | `full` or `half` | Forwarded to the provider's `ctl`. In `speechshim9p`, `half` suppresses wake/capture delivery while playback or chimes are active. |
 | `parakeetmount` / `parakeetlisten` / `pipersay` | provider root, STT stream file, and TTS say file | Compatibility aliases for `provider` and its derived `listen`/`say` paths. |
 
 `/n/speech/listen` is the stable Infernode-facing interface.
@@ -139,6 +140,7 @@ mount** — a 9P namespace serving this contract:
 | `<provider>/wake`   | read blocks until the wake-word engine fires, then returns one event line (model, score) |
 | `<provider>/say`    | write text to synthesize and play; read the last TTS status |
 | `<provider>/cancel` | write to hard-cancel active TTS |
+| `<provider>/chime`  | optional write-only local earcons: `wake`, `done`, `on`, `off` |
 | `<provider>/ctl`    | optional provider configuration (helper paths, wake word, voice, ...) |
 | `<provider>/voices` | optional voice list |
 
@@ -148,6 +150,14 @@ no helper binaries itself. Streaming reads ignore the fid offset (a consumer
 holds one fd across many reads), and helper-configuration keys written to
 `/n/speech/ctl` are forwarded to the provider's `ctl`.
 
+InferNode boots voice mode in half-duplex by writing `duplex half` after the
+default `/n/speechshim` provider is selected. During playback and earcons, the
+shim keeps device capture drained but suppresses delivery to STT/wake helpers;
+in helper-microphone mode it discards wake events that arrive while playback is
+active. This prevents TTS echo from re-triggering voice mode at the cost of
+spoken barge-in during assistant speech. Esc barge-in still works, and headset
+or echo-controlled setups can restore spoken barge-in with `duplex full`.
+
 Providers implementing the contract today:
 
 | Provider | Backing | Lifecycle |
@@ -155,6 +165,12 @@ Providers implementing the contract today:
 | `speechshim9p` (in-tree, default at `/n/speechshim`) | external helper CLIs — whisper.cpp stream for `listen`, openWakeWord wrapper for `wake`, Kokoro for `say` — driven through `#C`/devcmd | The shim owns the helper processes: streaming helpers are started on first read and restarted transparently when a one-shot helper exits; `cancel` kills the synthesizing process via devcmd `kill`, bounding barge-in silence by one audio chunk. |
 | parakeet export (e.g. `/n/parakeet`) | parakeet-cli `--mic --stream` process exported over 9P | The mounted service owns the live microphone process; `speech9p` keeps the listen file open across reads so the stream remains continuous. |
 | remote provider (Phase 2) | any of the above mounted over the network | Same contract; namespace composition does the remoting (see SPEECH-REMOTE-AUDIO.md). |
+
+The real-helper setup path is `tools/install-speech-helpers.sh`. It prepares
+the Kokoro, whisper.cpp, and openWakeWord wrapper commands consumed by
+`speechshim9p`, prints the `/n/speech/ctl` block, and leaves microphone access
+to the interactive Inferno session. See `docs/SPEECH-VOICE-ONLY-PHASE1.md` for
+the setup walkthrough and the `micmode device` stdin-PCM limitation notes.
 
 Parakeet is not a separate speech architecture.  It is the first Phase 1
 provider that needs the mounted-service shape because its useful mode is a

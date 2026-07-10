@@ -79,6 +79,14 @@ readfile(path: string): string
 	return string buf[0:n];
 }
 
+filesize(path: string): int
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return -1;
+	return int d.length;
+}
+
 pathexists(path: string): int
 {
 	(ok, nil) := sys->stat(path);
@@ -93,6 +101,17 @@ hassubstr(s, sub: string): int
 		if(s[i:i+len sub] == sub)
 			return 1;
 	return 0;
+}
+
+timer(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
+}
+
+readproc(path: string, ch: chan of string)
+{
+	ch <-= readfile(path);
 }
 
 startserver()
@@ -110,7 +129,7 @@ startserver()
 
 testFiles(t: ref T)
 {
-	files := array[] of {"ctl", "listen", "wake", "say", "cancel", "voices"};
+	files := array[] of {"ctl", "listen", "wake", "say", "cancel", "chime", "voices"};
 	for(i := 0; i < len files; i++)
 		t.assert(pathexists(MNT + "/" + files[i]), files[i] + " should exist");
 }
@@ -148,6 +167,33 @@ testAudioRouting(t: ref T)
 
 	writefile(MNT + "/ctl", "audiodev /dev/audio");
 	writefile(MNT + "/ctl", "capturerate 16000");
+}
+
+testDuplexConfig(t: ref T)
+{
+	ctl := readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "duplex full"), "default duplex is full");
+	t.assert(writefile(MNT + "/ctl", "duplex half") > 0, "duplex half accepted");
+	ctl = readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "duplex half"), "ctl reports duplex half");
+	t.assert(writefile(MNT + "/ctl", "duplex full") > 0, "duplex full accepted");
+	writefile(MNT + "/ctl", "duplex banana");
+	ctl = readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "duplex full"), "invalid duplex not applied");
+}
+
+testChimeAccepted(t: ref T)
+{
+	fd := sys->create(PCMFILE, Sys->OWRITE, 8r644);
+	t.assert(fd != nil, "create fake audio device");
+	if(fd == nil)
+		return;
+	fd = nil;
+	t.assert(writefile(MNT + "/ctl", "audiodev " + PCMFILE) > 0, "audiodev scratch accepted");
+	t.assert(writefile(MNT + "/chime", "wake") > 0, "wake chime write accepted");
+	sys->sleep(500);
+	t.assert(filesize(PCMFILE) > 0, "chime wrote PCM bytes");
+	writefile(MNT + "/ctl", "audiodev /dev/audio");
 }
 
 # micmode device: the shim itself reads PCM from the capture device and
@@ -227,6 +273,62 @@ testCancelKillsSay(t: ref T)
 	t.assert(t1 - t0 < 4000, "cancel killed the helper (no 8s run-out)");
 }
 
+testHalfDuplexSwallowsWakeDuringSay(t: ref T)
+{
+	fd := sys->create(PCMFILE, Sys->OWRITE, 8r644);
+	t.assert(fd != nil, "create fake audio device");
+	if(fd == nil)
+		return;
+	fd = nil;
+
+	t.assert(writefile(MNT + "/ctl", "audiodev " + PCMFILE) > 0, "audiodev scratch accepted");
+	t.assert(writefile(MNT + "/ctl", "duplex half") > 0, "duplex half accepted");
+	t.assert(writefile(MNT + "/ctl",
+		"kokorobin /bin/sh -c \"printf 0123456789; sleep 2; printf abcdef\"") > 0,
+		"configure slow fake synthesizer");
+	t.assert(writefile(MNT + "/ctl", "wakebin /bin/echo wake fake-model 0.92") > 0,
+		"configure immediate fake wake helper");
+
+	sayfd := sys->open(MNT + "/say", Sys->ORDWR);
+	t.assert(sayfd != nil, "say opens");
+	if(sayfd == nil)
+		return;
+	b := array of byte "hello";
+	t.assert(sys->write(sayfd, b, len b) > 0, "say write accepted");
+	sys->sleep(300);	# let dosay enter its playback loop
+
+	wakech := chan of string;
+	spawn readproc(MNT + "/wake", wakech);
+	tmo := chan[1] of int;
+	spawn timer(tmo, 900);
+	early := "";
+	alt {
+	early = <-wakech =>
+		;
+	<-tmo =>
+		;
+	}
+	t.assert(early == "", "wake read suppressed during half-duplex playback");
+
+	tmo2 := chan[1] of int;
+	spawn timer(tmo2, 5000);
+	got := "";
+	alt {
+	got = <-wakech =>
+		;
+	<-tmo2 =>
+		;
+	}
+	t.assert(hassubstr(got, "wake fake-model 0.92"),
+		"wake read completes after playback");
+
+	sys->seek(sayfd, big 0, Sys->SEEKSTART);
+	buf := array[512] of byte;
+	sys->read(sayfd, buf, len buf);
+	writefile(MNT + "/ctl", "duplex full");
+	writefile(MNT + "/ctl", "audiodev /dev/audio");
+}
+
 teardown()
 {
 	sys->unmount(nil, MNT);
@@ -247,10 +349,13 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Files", testFiles);
 	run("Config", testConfig);
 	run("AudioRouting", testAudioRouting);
+	run("DuplexConfig", testDuplexConfig);
+	run("ChimeAccepted", testChimeAccepted);
 	run("WakeRestarts", testWakeRestarts);
 	run("ListenRecords", testListenRecords);
 	run("DeviceCapture", testDeviceCapture);
 	run("CancelKillsSay", testCancelKillsSay);
+	run("HalfDuplexSwallowsWakeDuringSay", testHalfDuplexSwallowsWakeDuringSay);
 
 	teardown();
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -47,17 +47,29 @@ cat /mnt/audit/chain
 echo '--- pubkey (fetched from factotum) ---'
 cat /mnt/audit/pubkey
 
-# PASS only if a signature was sealed AND it verifies offline.
-if {~ `{cat /mnt/audit/chain} sig=*} {
-	echo 'signature present in checkpoint record'
-	echo '--- verify ---'
-	if {cat /mnt/audit/chain | auditverify -k /mnt/audit/pubkey} {
-		echo '=== PASS ==='
-	}{
-		echo '=== FAIL: signature did not verify ==='
-	}
+# The event 'checkpoint' is reserved to the server: a writer-forged
+# checkpoint must be rejected at the log file.
+echo '--- reserved event ---'
+if {echo 'mallory checkpoint head=x' > /mnt/audit/log} {
+	echo '=== FAIL: forged checkpoint accepted ==='
 }{
-	echo '=== FAIL: no sig= in chain (signing did not happen) ==='
+	echo 'reserved event rejected'
+}
+
+# PASS requires the strict anchored verify: -k fails unless every
+# checkpoint carries a verifying signature and at least one is present,
+# and -a fails unless the chain reaches the copied head — so this one
+# command proves signing happened AND the history verifies offline.
+# (The old `~ ... sig=*` presence check tripped an Inferno sh parse
+# quirk with the '=' in the pattern and never actually ran.)
+rm /tmp/audit.head /tmp/audit.pub >[2] /dev/null
+cat /mnt/audit/head > /tmp/audit.head
+cat /mnt/audit/pubkey > /tmp/audit.pub
+echo '--- verify (strict, anchored) ---'
+if {cat /mnt/audit/chain | auditverify -k /tmp/audit.pub -a /tmp/audit.head} {
+	echo '=== PASS ==='
+}{
+	echo '=== FAIL: strict anchored verify failed ==='
 }
 INFERNO
 

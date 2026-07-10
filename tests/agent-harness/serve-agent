@@ -93,7 +93,7 @@ sleep 1
 # The -b set is the full delegation budget; -p is the tool slice for
 # activity 0 (the meta-agent). Matches lib/lucifer/boot.sh so harness
 # scenarios see the same agent capabilities a desktop user would.
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
 
 # ── lucibridge for activity 0 ─────
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &

@@ -275,7 +275,6 @@ SECTION 11: More Capabilities
     | `spawn` | Create isolated subagents for parallel work |
     | `webfetch` | Fetch web pages as clean readable text |
     | `websearch` | Search the web for current information |
-    | `mail` | Read and send email via IMAP/SMTP |
     | `git` | Version control operations |
     | `diff` | File comparison |
     | `json` | Structured data queries |

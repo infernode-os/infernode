@@ -6,6 +6,7 @@ authorities
 reads_fs
   /n/local/Users/pdfinn/sample
   /tmp/veltro
+  /lib/veltro
   /lib/certs
   /dev/time
   /dev/null

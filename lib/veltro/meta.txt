@@ -49,6 +49,10 @@ When creating a task, you construct its entire world:
 - paths= grants filesystem visibility (/n/local/Users/pdfinn, /n/git, etc.)
 - instructions= provides procedural guidance for the task agent
 
+Put authority-bearing attrs (tools=, paths=, model=, agenttype=) before
+brief=/instructions=. Unquoted brief= and instructions= consume the rest of
+the line as literal task text; quote them if more attrs must follow.
+
 Every task agent automatically gets only: read, list, find, search, grep.
 
 Use tools= for every capability beyond that read-only base set:

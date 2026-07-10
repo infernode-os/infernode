@@ -137,6 +137,17 @@ jobs:
           exit 1
         fi
 
+    - name: Run namespace audit checks
+      run: |
+        echo "Running nsaudit security checks..."
+        chmod +x tests/host/nsaudit_rules_test.sh
+        chmod +x tests/host/nsaudit_profiles_test.sh
+        chmod +x tests/host/nsaudit_path_semantics_test.sh
+
+        ROOT=. bash tests/host/nsaudit_rules_test.sh
+        ROOT=. bash tests/host/nsaudit_profiles_test.sh
+        ROOT=. bash tests/host/nsaudit_path_semantics_test.sh
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test

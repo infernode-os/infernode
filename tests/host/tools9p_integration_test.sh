@@ -58,7 +58,7 @@ emu_c() {
         </dev/null >"$log" 2>&1
     local rc=$?
     OUTPUT=$(cat "$log")
-    if [[ "$rc" -eq 0 ]] || [[ "$rc" -eq 124 ]]; then
+    if emu_timeout_ok "$rc"; then
         info "[$name] ok: $OUTPUT"
         return 0
     else
@@ -342,6 +342,69 @@ if emu_c "provision_readonly_baseline" 14 \
     fi
 else
     fail "read-only child baseline test failed"
+fi
+
+echo ""
+echo "── adversarial namespace inputs ──"
+
+if emu_c "tool_ctl_hidden_live" 15 \
+    "tools9p read task & sleep 3; echo /tool/ctl > /tool/read/run; sleep 2; echo TOOLCTL; cat /tool/read/run; echo /mnt/toolctl/ctl > /tool/read/run; sleep 2; echo MNTCTL; cat /tool/read/run"; then
+    ctl_denials=$(echo "$OUTPUT" | grep -Ec 'cannot open|does not exist|file does not exist' || true)
+    if [[ "$ctl_denials" -ge 2 ]]; then
+        pass "restricted tool invocation cannot read /tool/ctl or trusted /mnt/toolctl"
+    else
+        fail "restricted tool invocation may see a tool control path (output: $OUTPUT)"
+    fi
+else
+    fail "live tool-control hiding probe failed"
+fi
+
+if emu_c "fd_hidden_live" 15 \
+    "tools9p read & sleep 3; echo /fd > /tool/read/run; sleep 2; cat /tool/read/run"; then
+    if echo "$OUTPUT" | grep -Eq 'cannot open|does not exist|file does not exist'; then
+        pass "restricted tool invocation cannot enumerate /fd"
+    else
+        fail "restricted tool invocation may see /fd (output: $OUTPUT)"
+    fi
+else
+    fail "live /fd hiding probe failed"
+fi
+
+if emu_c "provision_invalid_paths" 14 \
+    "tools9p -p /tmp:rw read task & sleep 3; echo '14 paths=/:rw,/tmp/../lib:rw,/tmp//evil:rw,/tmp/./evil:rw,relative/path:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.14/paths"; then
+    if echo "$OUTPUT" | grep -qE '^/|relative/path'; then
+        fail "child provisioning accepted traversal or non-absolute path (output: $OUTPUT)"
+    else
+        pass "child provisioning rejects traversal, empty-component, root, and relative paths"
+    fi
+else
+    fail "invalid child path provisioning probe failed"
+fi
+
+if emu_c "bindpath_delimiter_rejected" 12 \
+    "tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /tmp/evil,/tmp/forged' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
+        fail "bindpath delimiter probe did not establish a valid control baseline (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "/tmp/evil"; then
+        fail "bindpath accepted a comma-delimited path grant (output: $OUTPUT)"
+    else
+        pass "bindpath rejects path control delimiters"
+    fi
+else
+    fail "bindpath delimiter rejection probe failed"
+fi
+
+if emu_c "provision_sibling_prefix" 14 \
+    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.15/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
+        fail "child provisioning treated sibling prefix as covered by parent grant"
+    elif echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
+        pass "child provisioning is component-aware for sibling prefixes"
+    else
+        fail "child provisioning did not preserve covered descendant path (output: $OUTPUT)"
+    fi
+else
+    fail "sibling-prefix child path provisioning probe failed"
 fi
 
 # ── summary ──────────────────────────────────────────────────────────────────

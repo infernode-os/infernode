@@ -2,7 +2,7 @@
 
 _Last updated: 2026-06-01_
 
-InferNode ("the app") is published by NERV Systems, LLC ("we", "us"). This
+InferNode ("the app") is published by the InferNode project ("we", "us"). This
 policy explains what the app does with your information. The short version:
 InferNode is a self-contained operating-system environment that runs on your
 device. We do not operate servers that collect your data, we do not sell or
@@ -63,4 +63,4 @@ We may update this policy; the "Last updated" date above will change.
 
 ## Contact
 
-Questions: contact@nervsystems.com
+Questions: https://github.com/infernode-os/infernode/issues

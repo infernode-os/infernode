@@ -45,7 +45,7 @@ Child (after spawn):
   6. pctl(NODEVS, nil)         - Block #U/#p/#c device naming
   7. chdir(sandboxdir)         - Enter prepared sandbox
   8. pctl(NEWNS, nil)          - Sandbox becomes /
-  9. safeexec(task)            - Execute using pre-loaded modules
+  9. runloop(task)             - Execute using pre-loaded tool modules
 ```
 
 ### Sandbox Structure

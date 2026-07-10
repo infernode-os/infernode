@@ -32,3 +32,10 @@ BINDIR="$ROOT/$EMUHOST/$OBJTYPE/bin"
 LIMBO="$BINDIR/limbo"
 
 export ROOT EMUHOST OBJTYPE EMU BINDIR LIMBO
+
+emu_timeout_ok() {
+    case "$1" in
+        0|124|137) return 0 ;;
+        *) return 1 ;;
+    esac
+}

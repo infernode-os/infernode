@@ -204,7 +204,7 @@ restrictnsworker(done: chan of int, errors: chan of string)
 		0,
 		-1,
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {

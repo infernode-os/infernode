@@ -12,7 +12,7 @@ player that blits decoded frames into a WM window **through a matte image** — 
 a feed can appear inside an arbitrary cutout (oval, rounded, bezel). Multiplex =
 one player instance per feed.
 
-This grounds the larger question (drone/camera feeds, TAK video walls): Inferno
+This grounds the larger question (camera feeds, media video walls): Inferno
 was designed for set-top video, and the decode→`writepixels`→masked-`draw`
 pipeline is real, not theoretical.
 
@@ -74,9 +74,9 @@ Make a test clip:  `ffmpeg -f lavfi -i testsrc=size=352x240:rate=25:duration=4 \
 
 ## Limitations / next steps
 
-- **MPEG-1 only.** Real drone/TAK feeds are H.264/HEVC/AV1 → still want
+- **MPEG-1 only.** Real-world feeds are H.264/HEVC/AV1 → still want
   host-side decode (an external service feeding raw/JPEG frames over 9P,
-  mirroring the takconnector pattern). Everything downstream of a frame is done.
+  mirroring the connector pattern). Everything downstream of a frame is done.
   **→ Now under way: see [H264-9P-BRIDGE.md](H264-9P-BRIDGE.md) (Jira epic
   INFR-263). Phase 1 — the `tools/vdec` host decode core — is landed and
   validated; it emits the same I420 this render path consumes.**

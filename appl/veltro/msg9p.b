@@ -479,7 +479,7 @@ handlectl(data: string): string
 		# send <srcname> <recipient>
 		# <body...>
 		# Dispatches to MsgSrc.send on the named source. Generic (used
-		# by SMS now, TAK source planned in nerva3 — same verb).
+		# by SMS now, more sources planned — same verb).
 		if(toks == nil || tl toks == nil)
 			return "usage: send <srcname> <recipient>\\n<body>";
 		return dosend(hd toks, hd tl toks, body);

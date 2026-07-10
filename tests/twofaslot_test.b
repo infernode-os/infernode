@@ -2,7 +2,7 @@ implement TwofaslotTest;
 
 #
 # Regression / accreditation tests for the YubiKey-gated secstore key-slot model
-# (see doc/second-factor-auth.md, doc/yubikey-2fa-operations.md). These assert the
+# (see docs/second-factor-auth.md, docs/yubikey-2fa-operations.md). These assert the
 # security PROPERTIES that must never regress, using only the recovery-slot path
 # and the crypto primitives — NO hardware touch required, so they run in CI.
 #

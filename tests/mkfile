@@ -46,6 +46,7 @@ TARG=\
 	llmclient_reqshape_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
+	mail_provision_test.dis\
 	lists_test.dis\
 	lucifer_flicker_test.dis\
 	lucifer_zorder_test.dis\
@@ -75,6 +76,7 @@ TARG=\
 	sdl3_test.dis\
 	sort_test.dis\
 	spawn_test.dis\
+	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
 	string_test.dis\
@@ -93,7 +95,6 @@ TARG=\
 	veltro_launch_test.dis\
 	veltro_present_security_test.dis\
 	veltro_more_tools_test.dis\
-	veltro_safeexec_test.dis\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
@@ -117,6 +118,7 @@ TARG=\
 	shell_tool_test.dis\
 	fractal_tool_test.dis\
 	secstore_crypto_test.dis\
+	secstore_abort_probe.dis\
 	twofaslot_test.dis\
 	menu_test.dis\
 	wm_apps_test.dis\
@@ -129,6 +131,7 @@ TARG=\
 	matrix_test.dis\
 	opus_test.dis\
 	keyringinst_test.dis\
+	wallet_capability_test.dis\
 	contacts_tool_test.dis\
 	sms_msgsrc_test.dis\
 	bioauth_test.dis\

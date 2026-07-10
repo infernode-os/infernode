@@ -324,6 +324,9 @@ exec(args: string): string
 		# Filter out memory tool — parent agent owns memory exclusively.
 		# Subagents return results via pipe; parent persists what matters.
 		childtools := dropitem("memory", spec.tools);
+		if(spec.paths != nil && (inlist("exec", childtools) || spec.shellcmds != nil)) {
+			return "error: exec/shell subagents cannot receive path grants; use read/list/find/grep for read-only inspection or write/edit with explicit staged write grants";
+		}
 
 		caps := ref NsConstruct->Capabilities(
 			childtools,
@@ -336,7 +339,7 @@ exec(args: string): string
 			0,    # No xenith
 			-1,   # No cowfs — subagents inherit parent's cowfs via FORKNS
 			nil
-		);
+		, nil);
 
 		# Open the trajectory log fd in the parent namespace, before
 		# spawning. Survives FORKNS + bind-replace via the same fd-keep
@@ -783,6 +786,8 @@ parsespecsection(section: string): (ref SubSpec, string)
 
 	spec := ref SubSpec;
 	spec.task = task;
+	spec.at_ms = 0;
+	spec.every_ms = 0;
 
 	llmmodel   := "haiku";
 	llmtemp    := 0.7;
@@ -1047,7 +1052,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# discovering here scopes the child to exactly what it is allowed to reach.
 	# Register their tool-defs on the child's fresh session (so the model emits
 	# native tool calls for them) and hand the routing maps to the sub-agent.
-	# Bounded by the same per-mount/byte caps NERVA uses. Best-effort: any failure
+	# Bounded by the same per-mount/byte caps the agent runtime uses. Best-effort: any failure
 	# just leaves the child without MCP tools, never breaks the run.
 	if(agentlib != nil && sessionid != "") {
 		mcppaths := filtermcp(caps.paths);

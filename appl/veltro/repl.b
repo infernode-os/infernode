@@ -200,7 +200,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 		caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
-		);
+		, nil);
 
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil) {

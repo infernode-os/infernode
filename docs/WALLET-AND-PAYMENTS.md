@@ -255,6 +255,8 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
 /n/wallet/
 ├── ctl              rw   "network <name>", "default <name>", "rpc <url>"
 ├── accounts         r    newline-separated account names
+├── default          r    default account name
+├── pending          r    trusted controller view of pending payments
 ├── new              rw   write: "eth chain name" or "import eth chain name hexkey"
 │                         read: account name after creation
 └── {name}/
@@ -262,10 +264,17 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
     ├── balance      r    live balance from blockchain RPC
     ├── chain        rw   chain name
     ├── sign         rw   write: hex hash → read: hex signature
-    ├── pay          rw   write: "amount recipient" → read: txhash
-    ├── ctl          rw   "budget maxpertx maxpersess currency"
+    ├── pay          rw   write: "amount recipient" → read: pending:id or txhash
+    ├── ctl          rw   "budget maxpertx maxpersess currency", "requireapproval [off]"
     └── history      r    recent transactions
 ```
+
+Agent namespaces do not receive this full tree. A `/n/wallet` capability is
+narrowed to `accounts`, `default`, account directories, and the per-account
+`address`, `balance`, `chain`, `sign`, `pay`, and `history` files. Root `ctl`,
+`pending`, `new`, and per-account `ctl` are trusted controller surfaces and are
+hidden from agents, so a model can queue a payment proposal but cannot approve
+or reconfigure it.
 
 ### Account Creation
 
@@ -321,6 +330,19 @@ echo 'budget 1000000 10000000 USDC' > /n/wallet/myaccount/ctl
 ```
 
 Budget limits are enforced server-side in wallet9p — agents cannot bypass them.
+
+### Payment Approval
+
+New and restored accounts require approval by default. Writing to
+`/n/wallet/{account}/pay` queues a pending payment and returns `pending:<id>`.
+Trusted code outside the agent namespace reviews `/n/wallet/pending` and writes
+`approve <id>` or `deny <id>` to `/n/wallet/ctl`.
+
+Trusted live-payment tests or administrative sessions may explicitly opt out:
+
+```sh
+echo 'requireapproval off' > /n/wallet/myaccount/ctl
+```
 
 ## Ethereum JSON-RPC Client (module/ethrpc.m)
 

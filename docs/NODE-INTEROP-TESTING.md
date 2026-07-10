@@ -1,6 +1,6 @@
 # Node-to-node interoperability testing (cert auth + post-quantum transport)
 
-This document covers how InferNode and NERVA3 nodes authenticate and talk to
+This document covers how InferNode nodes authenticate and talk to
 each other over the native Inferno transport, the test assets that exercise it,
 and a transport-layer bug found and fixed while building them.
 
@@ -39,7 +39,7 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | `tests/concurrent_auth_test.b` | in-emu unit (auto-discovered) | 12 clients authenticate to one spawn-per-connection server **simultaneously** (shared Authinfos both ends), each echoing a distinct 4 KiB payload; asserts every client gets its **own** bytes back — no cross-talk, no races, no hang |
 | `tests/interop/run-mount-auth.sh` | host harness | **real CLI path**: `auth/createsignerkey` -> on-disk keyfile -> `styxlisten -k ... export /lib` (server) <- `mount -k ... -C` (client), reading a file through the encrypted styx mount and verifying it; covers ed25519 + ML-DSA-65 and checks an anonymous `mount -A` is rejected |
 | `tests/handshake_fuzz_test.b` | in-emu unit (auto-discovered) | receiver robustness: 9 malformed inbound handshake streams (empty, garbage, bad/oversized/truncated length headers, zero-length flood, garbage payloads) over real TCP must each make `auth->server` fail closed — no secret, no crash, no hang |
-| `tests/interop/run-interop.sh` | host harness | **cross-binary**: launches two *separate* emu processes (optionally from different InferNode/NERVA3 trees) and transfers a file between them, verifying it byte-for-byte |
+| `tests/interop/run-interop.sh` | host harness | **cross-binary**: launches two *separate* emu processes (optionally from different InferNode trees) and transfers a file between them, verifying it byte-for-byte |
 
 ### Running the in-emu tests
 
@@ -57,8 +57,8 @@ Both **skip cleanly** (rather than fail) on a host with no IP stack at all.
 ### Running the cross-binary harness
 
 ```sh
-# InferNode serves, NERVA3 connects, fully post-quantum certs:
-tests/interop/run-interop.sh /path/to/infernode /path/to/nerva3 mldsa65
+# one node serves, another connects, fully post-quantum certs:
+tests/interop/run-interop.sh /path/to/infernode /path/to/peer mldsa65
 
 # Same binary on both ends (smoke test), classical certs:
 tests/interop/run-interop.sh

@@ -34,7 +34,6 @@ TOOLS=\
     tools/exec.dis\
 	tools/launch.dis\
     tools/spawn.dis\
-    tools/safeexec.dis\
     tools/xenith.dis\
     tools/editor.dis\
     tools/shell.dis\
@@ -143,9 +142,6 @@ tools/launch.dis: tools/launch.b tool.m
 
 tools/spawn.dis: tools/spawn.b tool.m nsconstruct.m subagent.m
 	limbo $LIMBOFLAGS -gw -o tools/spawn.dis tools/spawn.b
-
-tools/safeexec.dis: tools/safeexec.b tool.m
-	limbo $LIMBOFLAGS -gw -o tools/safeexec.dis tools/safeexec.b
 
 tools/xenith.dis: tools/xenith.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/xenith.dis tools/xenith.b

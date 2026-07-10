@@ -12,7 +12,7 @@
 #   5. Tool result with special characters (quotes, newlines, unicode)
 #
 # Requirements:
-#   - ANTHROPIC_API_KEY (env var or LaunchAgent plist)
+#   - ANTHROPIC_API_KEY (env var)
 #   - Inferno emulator at $EMU (set by common.sh; MacOSX or Linux)
 #
 # Usage:
@@ -51,11 +51,10 @@ PASSED=0; FAILED=0; SKIPPED=0
 # Get API key
 API_KEY="${ANTHROPIC_API_KEY:-}"
 if [[ -z "$API_KEY" ]]; then
-	API_KEY=$(plutil -extract EnvironmentVariables.ANTHROPIC_API_KEY raw \
-		~/Library/LaunchAgents/com.nervsystems.llm9p.plist 2>/dev/null || true)
+	API_KEY=""
 fi
 if [[ -z "$API_KEY" ]]; then
-	echo "SKIP: no API key (set ANTHROPIC_API_KEY or configure LaunchAgent)"
+	echo "SKIP: no API key (set ANTHROPIC_API_KEY)"
 	exit 77
 fi
 
@@ -168,7 +167,7 @@ bind -a '#I' /net >[2] /dev/null
 ndb/cs
 auth/factotum
 
-factotumkey=`{os sh -c 'k=${ANTHROPIC_API_KEY:-$(plutil -extract EnvironmentVariables.ANTHROPIC_API_KEY raw ~/Library/LaunchAgents/com.nervsystems.llm9p.plist 2>/dev/null)}; if [ -n "$k" ]; then echo "key proto=pass service=anthropic user=apikey !password=$k"; fi'}
+factotumkey=`{os sh -c 'k=${ANTHROPIC_API_KEY:-}; if [ -n "$k" ]; then echo "key proto=pass service=anthropic user=apikey !password=$k"; fi'}
 echo $factotumkey > /mnt/factotum/ctl >[2] /dev/null
 
 llmsrv &

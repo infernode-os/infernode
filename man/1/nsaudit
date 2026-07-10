@@ -102,6 +102,29 @@ at
 .BR /tool .
 For hypothetical analysis or CI fixtures, construct a mock directory
 of the same shape.
+.SH "PATH-DERIVED AUTHORITIES"
+Some authority axes are inferred from
+.B paths
+even when no tool manifest names them. For example,
+.B /mnt/factotum
+implies
+.BR reads_secrets_factotum ,
+trusted control files such as
+.B /mnt/msg/approve
+imply
+.BR privileged_control_path ,
+and raw mail9p send surfaces such as
+.B /mnt/mail
+or paths containing
+.B compose
+or
+.B draft-reply
+under
+.B /mnt/mail
+imply
+.BR direct_mail_send .
+These path-derived authorities catch unsafe namespace grants that would
+otherwise look like ordinary filesystem reads.
 .SH "AUTHORITY MANIFEST"
 The per-tool authority manifest lives at
 .BR /lib/veltro/nsaudit/authorities/ .

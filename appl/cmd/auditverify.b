@@ -28,7 +28,7 @@ implement Auditverify;
 #
 # Exit: prints "ok: ..." and succeeds, or prints the fault and raises.
 #
-# See doc/compliance/audit-log-design.md.
+# See docs/compliance/audit-log-design.md.
 #
 
 include "sys.m";

@@ -165,6 +165,8 @@ TOOL_PATHS := array[] of {
 	("task",    "/dis/veltro/tools/task.dis"),
 	# Structured planning
 	("plan",    "/dis/veltro/tools/plan.dis"),
+	# Knowledge base operations via wiki9p
+	("wiki",    "/dis/veltro/tools/wiki.dis"),
 	# Credential management (launches GUI, no key access)
 	("keyring", "/dis/veltro/tools/keyring.dis"),
 	# Wallet operations (crypto/fiat payments via wallet9p)
@@ -270,8 +272,12 @@ init(nil: ref Draw->Context, args: list of string)
 				sys->fprint(stderr, "tools9p: invalid -p path %s: %s\n", ppath, perr);
 				raise "fail:usage";
 			}
-			extpaths = ppath :: extpaths;
-			if(explicitperm != "" && findboundpath(ppath) == nil)
+			# Explicit :ro/:rw grants are permission-bearing capabilities.
+			# Keep them in boundpaths only so raw exec cannot inherit a
+			# read-only grant through the untyped extpaths list.
+			if(explicitperm == "")
+				extpaths = ppath :: extpaths;
+			else if(findboundpath(ppath) == nil)
 				boundpaths = ref BoundPath(ppath, pperm) :: boundpaths;
 		'a' =>
 			aarg := arg->earg();
@@ -627,6 +633,9 @@ validatepath(p: string): string
 		return "path must be absolute";
 	if(p == "/")
 		return "root path is not grantable";
+	for(ci := 0; ci < len p; ci++)
+		if(p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
+			return "path contains control delimiter";
 
 	start := 1;
 	for(i := 1; i <= len p; i++) {
@@ -697,6 +706,31 @@ genwritepaths(): list of string
 	for(bp := boundpaths; bp != nil; bp = tl bp)
 		if((hd bp).perm == "rw")
 			paths = (hd bp).path :: paths;
+	return paths;
+}
+
+execpaths(): list of string
+{
+	# Raw shell execution can write through the filesystem directly, bypassing
+	# write/edit's /tool/paths checks. Only expose explicit rw grants, which
+	# restrictns stages through cowfs via genwritepaths().
+	paths: list of string;
+	for(bp := boundpaths; bp != nil; bp = tl bp)
+		if((hd bp).perm == "rw")
+			paths = (hd bp).path :: paths;
+	return paths;
+}
+
+execwritepaths(): list of string
+{
+	# Exec always sees baseline read-only config/tool trees that nsconstruct
+	# keeps for normal tool operation. Raw shell code can still open those
+	# files for write if the backing filesystem permits it, so stage them
+	# through cowfs as well as explicit rw grants.
+	paths := genwritepaths();
+	paths = addpath(paths, "/lib/veltro");
+	paths = addpath(paths, "/lib/certs");
+	paths = addpath(paths, "/dis/veltro");
 	return paths;
 }
 
@@ -1102,13 +1136,9 @@ provisiontask(args: string)
 			rargs = "-p" :: rargs;
 		}
 	}
-	# Inherit parent's extpaths (e.g. /dis/wm for app discovery).
-	# Without these, the child's restrictns() hides paths the parent
-	# exposes, breaking tools like launch that need /dis/wm access.
-	for(ep := extpaths; ep != nil; ep = tl ep) {
-		rargs = hd ep :: rargs;
-		rargs = "-p" :: rargs;
-	}
+	# Do not inherit parent extpaths wholesale. They are capabilities just like
+	# runtime bindpath grants, and a child should receive only paths named in the
+	# provision request. Tool-required support paths are added by addtoolpaths().
 	# Mount point, activity id, verbose, and program name go first
 	rargs = mpt :: rargs;
 	rargs = "-m" :: rargs;
@@ -1221,7 +1251,7 @@ emitmanifestnow(mpath: string)
 		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
-	);
+	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil)
@@ -1258,10 +1288,16 @@ applynsrestriction(invokedtool: string): string
 	# Merge extpaths (from -p flags) and boundpaths (from runtime bindpath ctl).
 	# Called per-invocation from asyncexec(), so boundpaths always reflects
 	# the current state — paths bound via the GUI after startup are captured.
+	# Exec is special: it is raw shell authority, so read-only path grants are
+	# not exposed to it. Otherwise shell redirection can mutate a supposedly
+	# read-only tree. Explicit rw grants remain visible and are staged by cowfs.
 	allpaths := extpaths;
-	for(bp2 := boundpaths; bp2 != nil; bp2 = tl bp2)
-		if(!strlist_contains(allpaths, (hd bp2).path))
-			allpaths = (hd bp2).path :: allpaths;
+	if(invokedtool == "exec")
+		allpaths = execpaths();
+	else
+		for(bp2 := boundpaths; bp2 != nil; bp2 = tl bp2)
+			if(!strlist_contains(allpaths, (hd bp2).path))
+				allpaths = (hd bp2).path :: allpaths;
 	# Auto-grant /n/speech when say or hear tool is registered.
 	# speech9p mounts /n/speech in the shared namespace; without this,
 	# restrictns() hides it entirely and say/hear tools fail silently.
@@ -1278,9 +1314,12 @@ applynsrestriction(invokedtool: string): string
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
 	allpaths = addtoolpaths(allpaths, invokedtool);
+	writepaths := genwritepaths();
+	if(invokedtool == "exec")
+		writepaths = execwritepaths();
 	caps := ref NsConstruct->Capabilities(
-		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
-	);
+		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, writepaths
+	, nil);
 	{
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil) {
@@ -1301,6 +1340,8 @@ applynsrestriction(invokedtool: string): string
 addtoolpaths(paths: list of string, tool: string): list of string
 {
 	case tool {
+	"launch" =>
+		return addpath(paths, "/dis/wm");
 	"charon" =>
 		return addpath(paths, "/tmp/veltro/browser");
 	"editor" =>

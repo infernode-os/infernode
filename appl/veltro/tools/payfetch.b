@@ -148,7 +148,7 @@ exec(args: string): string
 	if(acctname == "")
 		return "error: no wallet account specified and no default set.\n" +
 			"Use: payfetch <url> -a <account>\n" +
-			"Or set default: echo 'default myaccount' > /n/wallet/ctl";
+			"Or set default from a trusted wallet controller.";
 
 	# Validate URL
 	lurl := str->tolower(url);
@@ -241,6 +241,13 @@ exec(args: string): string
 
 getdefaultaccount(): string
 {
+	d := readfile("/n/wallet/default");
+	if(d != nil) {
+		(nil, dtoks) := sys->tokenize(d, " \t\n");
+		if(dtoks != nil)
+			return hd dtoks;
+	}
+
 	s := readfile("/n/wallet/ctl");
 	if(s == nil)
 		return "";

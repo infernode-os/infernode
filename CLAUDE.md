@@ -422,11 +422,11 @@ agent stack, useful outside the harness, and ships normally.
 
 ## Project tracking — Jira (Atlassian Cloud, free tier)
 
-Work on this project is tracked in Jira at **https://nervsystems-team.atlassian.net**.
+Work on this project is tracked in Jira (project keys below).
 
 - **`INFR`** (this repo) — InferNode runtime, llmsrv, lucibridge, Veltro tools, headless serve-llm. Epic: `INFR-1` (LLM-as-tool routing + multi-model serving).
 - **`IOL`** (sibling: `pdfinn/infernode-os-llm`) — LLM corpus, training, eval harness. Epic: `IOL-1` (v4 corpus + harness extensions).
-- **`SCRUM`** — NERV Systems work, compliance.
+- **`SCRUM`** — organizational / compliance work.
 
 A helper script lives in the sibling repo at `pdfinn/infernode-os-llm/tools/jira.py`. Auth: reads `ATL_EMAIL` + `ATL_TOKEN` from env, or `~/.atlassian/credentials` (mode 600). Never commit credentials.
 

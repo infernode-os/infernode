@@ -3,7 +3,7 @@
 # Cross-binary node interoperability harness.
 #
 # Launches two *separate* emu processes — a serving node and a connecting
-# node, optionally from two different InferNode/NERVA3 trees — and drives a
+# node, optionally from two different InferNode trees — and drives a
 # real file transfer between them over the native transport: cert auth + the
 # hybrid post-quantum (ML-KEM-768) STS handshake + aes_256_cbc/sha256 ssl line
 # encryption + 9P export/mount.  Proves two independently-built nodes speak the
@@ -16,8 +16,8 @@
 #   client_root  tree whose emu connects  (default: same as server_root)
 #   alg          signer cert algorithm: ed25519 | mldsa65 (default: ed25519)
 #
-# Example (InferNode serves, NERVA3 connects, fully post-quantum certs):
-#   tests/interop/run-interop.sh /path/to/infernode /path/to/nerva3 mldsa65
+# Example (one node serves, another connects, fully post-quantum certs):
+#   tests/interop/run-interop.sh /path/to/infernode /path/to/peer mldsa65
 #
 set -u
 
@@ -68,7 +68,7 @@ fi
 [ -f "$CLIENT_ROOT/dis/interop_node_client.dis" ] || { echo "interop: client dis missing (build with native limbo)" >&2; exit 2; }
 
 # Generate the signer keyfile once in the server tree, then share it with the
-# client tree (keyring.c is identical across InferNode/NERVA3, so a keyfile is
+# client tree (keyring.c is identical across InferNode trees, so a keyfile is
 # portable).  Both nodes present the same signer identity -> mutual trust.
 mkdir -p "$(dirname "$KEY_HOST_SERVER")"
 if [ ! -s "$KEY_HOST_SERVER" ]; then

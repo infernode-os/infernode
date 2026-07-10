@@ -71,7 +71,7 @@ Successfully ported Inferno OS (infernode variant) to ARM64 macOS with full 64-b
 ### Start the Shell
 
 ```bash
-cd /Users/pdfinn/github.com/NERVsystems/nerva-9p-paper/inferno/infernode
+cd /path/to/infernode
 ./emu/MacOSX/o.emu -r.
 ```
 

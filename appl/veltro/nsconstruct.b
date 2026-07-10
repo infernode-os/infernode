@@ -258,6 +258,12 @@ restrictns(caps: ref Capabilities): string
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
 
+		if(inlist("/n/wallet", caps.paths)) {
+			werr := restrictwallet();
+			if(werr != nil)
+				return sys->sprint("restrict /n/wallet: %s", werr);
+		}
+
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
 			lerr := restrictlocal(localpaths);
@@ -358,6 +364,16 @@ restrictns(caps: ref Capabilities): string
 					return sys->sprint("restrict /mnt/msg: %s", merr);
 			}
 		}
+	}
+
+	# Defense-in-depth: drop caller-named MCP tool basenames from every granted
+	# /mnt/mcp/<server>/tools listing, so the tool dir (and its /call path) is
+	# invisible to the child's mcpdiscover regardless of which servers were
+	# granted. The names are caller policy; nsconstruct never interprets them.
+	if(caps.mcpdeny != nil) {
+		derr := denymcptools(caps.mcpdeny);
+		if(derr != nil)
+			return sys->sprint("deny mcp tools: %s", derr);
 	}
 
 	# 6. Restrict /lib to: veltro/, certs/
@@ -540,7 +556,10 @@ restrictns(caps: ref Capabilities): string
 
 tmpveltroallow(caps: ref Capabilities): list of string
 {
-	allow := "scratch" :: nil;
+	# .ns contains the namespace manifest consumed by Lucifer's context view.
+	# It is application metadata, not authority: hiding it prevents tools9p's
+	# post-restrict emitmanifest() from writing the live namespace description.
+	allow := ".ns" :: "scratch" :: nil;
 
 	for(p := filterpaths(caps.paths, "/tmp/veltro/"); p != nil; p = tl p) {
 		(first, nil) := splitfirst(hd p);
@@ -584,6 +603,58 @@ restrictlocal(paths: list of string): string
 	if(err != nil)
 		return err;
 	return nil;
+}
+
+restrictwallet(): string
+{
+	accts := walletaccounts();
+	allow := "accounts" :: "default" :: nil;
+	for(a := accts; a != nil; a = tl a)
+		if(!inlist(hd a, allow))
+			allow = hd a :: allow;
+
+	err := restrictdir("/n/wallet", allow, 0);
+	if(err != nil)
+		return err;
+
+	acctallow := "address" :: "balance" :: "chain" :: "sign" ::
+		"pay" :: "history" :: nil;
+	for(a = accts; a != nil; a = tl a) {
+		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);
+		if(err != nil)
+			return err;
+	}
+	return nil;
+}
+
+walletaccounts(): list of string
+{
+	fd := sys->open("/n/wallet/accounts", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	s := string buf[:n];
+	(nil, toks) := sys->tokenize(s, " \t\r\n");
+	out: list of string;
+	for(; toks != nil; toks = tl toks) {
+		name := hd toks;
+		if(safename(name) && !inlist(name, out))
+			out = name :: out;
+	}
+	return out;
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 0;
+	return 1;
 }
 
 # Recursively restrict a directory to only the granted subpaths.
@@ -631,6 +702,56 @@ inlist(s: string, l: list of string): int
 		if(hd l == s)
 			return 1;
 	return 0;
+}
+
+denymcptools(deny: list of string): string
+{
+	fd := sys->open("/mnt/mcp", Sys->OREAD);
+	if(fd == nil)
+		return nil;	# no MCP servers mounted — nothing to deny
+	# Collect server names first; we re-bind tools/ dirs below and shouldn't
+	# hold a read fd on the parent across those binds.
+	servers: list of string;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			if(dirs[i].mode & Sys->DMDIR)
+				servers = dirs[i].name :: servers;
+	}
+	fd = nil;
+	for(sl := servers; sl != nil; sl = tl sl) {
+		err := restrictmcptools("/mnt/mcp/" + hd sl + "/tools", deny);
+		if(err != nil)
+			return err;
+	}
+	return nil;
+}
+
+restrictmcptools(toolsdir: string, deny: list of string): string
+{
+	fd := sys->open(toolsdir, Sys->OREAD);
+	if(fd == nil)
+		return nil;	# server exposes no tools/ — nothing to do
+	allow: list of string;
+	denied := 0;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			name := dirs[i].name;
+			if(inlist(name, deny))
+				denied++;
+			else
+				allow = name :: allow;
+		}
+	}
+	fd = nil;
+	if(denied == 0)
+		return nil;	# nothing denied here — leave tools/ as-is
+	return restrictdir(toolsdir, allow, 0);
 }
 
 needsnet(tools: list of string): int
@@ -692,6 +813,9 @@ validatepath(p: string): string
 		return "path must be absolute";
 	if(p == "/")
 		return "root path is not grantable";
+	for(ci := 0; ci < len p; ci++)
+		if(p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
+			return "path contains control delimiter";
 
 	start := 1;
 	for(i := 1; i <= len p; i++) {
@@ -884,6 +1008,16 @@ verifyns(expected: list of string): string
 		"/.env",
 		"/.git",
 		"/CLAUDE.md",
+		"/tool/ctl",
+		"/mnt/toolctl",
+		"/mnt/toolctl/ctl",
+		"/mnt/msg/ctl",
+		"/mnt/msg/pending",
+		"/mnt/msg/approve",
+		"/mnt/msg/deny",
+		"/n/wallet/ctl",
+		"/n/wallet/pending",
+		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++) {
 		(dok, nil) := sys->stat(dangerous[i]);

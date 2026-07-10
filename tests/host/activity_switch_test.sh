@@ -260,7 +260,7 @@ echo "── namespace manifest ──"
 
 if [[ -f "$ROOT/dis/veltro/tools9p.dis" ]]; then
     if emu_c "manifest_diswm" 12 \
-        "tools9p -v -m /tool -p /dis/wm read &sleep 4; cat /tmp/veltro/.ns/manifest"; then
+        "tools9p -v -m /tool -p /dis/wm read &sleep 8; cat /tmp/veltro/.ns/manifest"; then
         if echo "$OUTPUT" | grep -q "path=/dis/wm"; then
             pass "manifest includes /dis/wm from extpaths"
         else

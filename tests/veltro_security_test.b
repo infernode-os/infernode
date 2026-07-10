@@ -315,7 +315,7 @@ restrictNsWorker(result: chan of string)
 		0,                    # xenith
 		-1,                   # actid
 		nil
-	);
+	, nil);
 
 	# Apply namespace restriction
 	err := nsconstruct->restrictns(caps);
@@ -435,7 +435,7 @@ taskMetadataCapabilityWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"task" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (task tool) failed: %s", err);
@@ -474,7 +474,7 @@ tmpVeltroIpcHiddenWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict tmp IPC worker: %s", err);
@@ -513,7 +513,7 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"editor" :: nil, "/tmp/veltro/editor" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict tmp explicit worker: %s", err);
@@ -557,7 +557,7 @@ activityScratchWriter(result: chan of string, id: int)
 	caps := ref NsConstruct->Capabilities(
 		"write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, id, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict writer scratch: %s", err);
@@ -578,7 +578,7 @@ activityScratchReader(result: chan of string, id: int)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, id, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrict reader scratch: %s", err);
@@ -607,7 +607,7 @@ networkCapabilityWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"webfetch" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (network tool) failed: %s", err);
@@ -651,7 +651,7 @@ shellWorker(result: chan of string)
 		0,                        # xenith
 		-1,                       # actid
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -718,7 +718,7 @@ mntWorker(result: chan of string)
 		0,                        # xenith
 		-1,                       # actid
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -779,7 +779,7 @@ mntLlmWorker(result: chan of string)
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (llm grant) failed: %s", err);
@@ -836,7 +836,7 @@ mntCombinedWorker(result: chan of string)
 		0,
 		-1,
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -858,6 +858,83 @@ mntCombinedWorker(result: chan of string)
 		result <-= "ungranted /mnt sibling visible in combined grant";
 		return;
 	}
+	result <-= "";
+}
+
+# mcpdeny must attenuate inside a granted MCP server without dropping sibling
+# tools. This pins the defense-in-depth path used by spawn.b before MCP discovery.
+testRestrictNsMcpDeny(t: ref T)
+{
+	base := "/mnt/mcp/codexdeny";
+	mkdirp(base + "/_meta");
+	writefilecontent(base + "/_meta/name", "codexdeny\n");
+	mkdirp(base + "/tools/weather");
+	createfile(base + "/tools/weather/call");
+	mkdirp(base + "/tools/geocode");
+	createfile(base + "/tools/geocode/call");
+
+	(ok, nil) := sys->stat(base + "/tools/geocode/call");
+	if(ok < 0) {
+		t.skip("cannot create synthetic /mnt/mcp test fixture");
+		return;
+	}
+
+	result := chan of string;
+	spawn mcpDenyWorker(result);
+	r := <-result;
+
+	sys->remove(base + "/tools/geocode/call");
+	sys->remove(base + "/tools/geocode");
+	sys->remove(base + "/tools/weather/call");
+	sys->remove(base + "/tools/weather");
+	sys->remove(base + "/tools");
+	sys->remove(base + "/_meta/name");
+	sys->remove(base + "/_meta");
+	sys->remove(base);
+
+	if(r != "")
+		t.error(r);
+}
+
+mcpDenyWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/mnt/mcp/codexdeny" :: nil,
+		nil,
+		nil,
+		0 :: 1 :: 2 :: nil,
+		nil,
+		0,
+		0,
+		-1,
+		nil,
+		"geocode" :: nil
+	);
+
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (mcpdeny) failed: %s", err);
+		return;
+	}
+
+	(weatherok, nil) := sys->stat("/mnt/mcp/codexdeny/tools/weather/call");
+	if(weatherok < 0) {
+		result <-= "mcpdeny hid an allowed MCP tool";
+		return;
+	}
+	(geocodeok, nil) := sys->stat("/mnt/mcp/codexdeny/tools/geocode/call");
+	if(geocodeok >= 0) {
+		result <-= "mcpdeny left a denied MCP tool call path visible";
+		return;
+	}
+	(acmeok, nil) := sys->stat("/mnt/acme");
+	if(acmeok >= 0) {
+		result <-= "mcpdeny grant leaked an unrelated /mnt sibling";
+		return;
+	}
+
 	result <-= "";
 }
 
@@ -906,7 +983,7 @@ raceWorker(done: chan of int, errors: chan of string)
 		0,
 		-1,
 		nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil)
@@ -933,12 +1010,27 @@ verifyNsWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 
+	# Seed representative privileged control files before restriction. The
+	# shared verifier must prove restriction hides real pre-existing controls,
+	# not just paths absent from the test namespace.
+	mkdirp("/tool");
+	createfile("/tool/ctl");
+	mkdirp("/mnt");
+	mkdirp("/mnt/toolctl");
+	createfile("/mnt/toolctl/ctl");
+	mkdirp("/mnt/msg");
+	createfile("/mnt/msg/status");
+	createfile("/mnt/msg/ctl");
+	createfile("/mnt/msg/pending");
+	createfile("/mnt/msg/approve");
+	createfile("/mnt/msg/deny");
+
 	# Apply restrictions first
 	caps := ref NsConstruct->Capabilities(
-		nil, nil, nil, nil,
+		nil, "/mnt/msg" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -947,7 +1039,7 @@ verifyNsWorker(result: chan of string)
 	}
 
 	# Verify with expected paths
-	expected := "/dis/lib" :: "/dev/cons" :: nil;
+	expected := "/dis/lib" :: "/dev/cons" :: "/mnt/msg/status" :: nil;
 	verr := nsconstruct->verifyns(expected);
 	if(verr != nil) {
 		result <-= sys->sprint("verifyns failed: %s", verr);
@@ -1071,7 +1163,7 @@ tmpWritableWorker(result: chan of string)
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1123,7 +1215,7 @@ execGrantsShDisWorker(result: chan of string)
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1193,7 +1285,7 @@ pathsExposureWorker(result: chan of string)
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1310,7 +1402,7 @@ toolCtlHiddenWorker(result: chan of string)
 		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -1380,7 +1472,7 @@ invalidGrantPathsWorker(result: chan of string)
 			nil, nil,
 			0 :: 1 :: 2 :: nil,
 			nil, 0, 0, -1, nil
-		);
+		, nil);
 		err := nsconstruct->restrictns(caps);
 		if(err == nil) {
 			result <-= "restrictns accepted invalid grant path: " + bad[i];
@@ -1411,7 +1503,7 @@ invalidGrantTypeWorker(result: chan of string)
 		nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err == nil) {
 		result <-= "restrictns accepted a grant below a regular file";
@@ -1446,7 +1538,7 @@ testStagedWriteOverlay(t: ref T)
 		0,
 		41,
 		base :: nil
-	);
+	, nil);
 
 	nsconstruct->emitmanifest(caps, manifest);
 	mdata := readfilecontent(manifest);
@@ -1552,7 +1644,7 @@ environmentAllowlistWorker(result: chan of string)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns failed: %s", err);
@@ -1602,7 +1694,7 @@ execProgAllowlistWorker(result: chan of string, parentpid: int)
 	caps := ref NsConstruct->Capabilities(
 		"exec" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns (exec) failed: %s", err);
@@ -1632,7 +1724,7 @@ progAllowlistWorker(result: chan of string, parentpid: int)
 	caps := ref NsConstruct->Capabilities(
 		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
-	);
+	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns failed: %s", err);
@@ -1697,6 +1789,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);
+	run("RestrictNsMcpDeny", testRestrictNsMcpDeny);
 	run("RestrictNsRace", testRestrictNsRace);
 	run("VerifyNs", testVerifyNs);
 	run("AuditLog", testAuditLog);

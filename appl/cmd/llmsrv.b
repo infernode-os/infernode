@@ -461,7 +461,7 @@ CONTEXTLIMIT: con 200000;
 # overridable per-daemon with -c and per-session via `ctl autocompact <n>`.
 # 150000 ≈ 75% of CONTEXTLIMIT, matching veltro's COMPACT_THRESHOLD. This is
 # a server-side safety net (INFR-223) so long-lived clients that don't drive
-# /compact themselves (nerva, repl, sub-agents) can't grow context unbounded.
+# /compact themselves (the primary agent, repl, sub-agents) can't grow context unbounded.
 # Clients that own their own compaction policy set the session value to 0.
 DEFAULTAUTOCOMPACT: con 150000;
 
@@ -1095,7 +1095,7 @@ rungeneration(sess: ref LlmSession, prompt: string)
 # starting (triggerpending) — so it cannot race a concurrent generation
 # rewriting sess.messages. This is the safety net that makes every client safe
 # by default: clients that don't poll /usage and drive /compact themselves
-# (nerva, repl, sub-agents) are still bounded. Clients that own their own
+# (the primary agent, repl, sub-agents) are still bounded. Clients that own their own
 # compaction policy disable it per-session with `ctl autocompact 0`; the
 # explicit /compact write keeps working regardless. The crossing turn pays one
 # extra summarization round-trip before its reply is released — acceptable

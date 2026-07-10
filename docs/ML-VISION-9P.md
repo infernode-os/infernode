@@ -1,14 +1,13 @@
 # ML vision inference as composable 9P services
 
 **Status:** design exploration (INFR-277) — not committed work. Cross-refs:
-`docs/H264-9P-BRIDGE.md` / INFR-263 (the video bridge), nerva3
-`appl/nerva/TAK-VIDEO.md` / INFR-272 (the NERVA closed loop), INFR-278
+`docs/H264-9P-BRIDGE.md` / INFR-263 (the video bridge), INFR-278
 (namespace convention).
 
 ## Premise
 
-Inference is **just another model served as a filesystem** — the same shape as
-`llm9p`. Three patterns that already exist in the tree combine directly:
+Inference is **just another model served as a filesystem** — the same shape as the
+LLM stack (`/mnt/llm`). Three patterns that already exist in the tree combine directly:
 
 - **models as filesystems** — `/mnt/llm` (your LLM stack)
 - **frames as a filesystem** — `/mnt/video` (the decode bridge)
@@ -23,7 +22,7 @@ the existing one.
 Synthetic **service** file servers live under `/mnt` (e.g. `/mnt/llm` — INFR #216,
 `/mnt/mcp` — #213). `/n` is reserved for fully-mounted **remote filesystem
 trees** (another machine's namespace). So vision uses `/mnt/video` and
-`/mnt/vision`. (`/n/{tak,msg,llm}` were the same drift and have since been
+`/mnt/vision`. (`/n/{msg,llm}` were the same drift and have since been
 migrated to `/mnt` under INFR-254; `mail9p`, `calendar9p` were the same drift and
 are now `/mnt/mail`, `/mnt/cal` — they synthesize their own schema (`ctl`,
 `compose`, `draft-reply`, per-field `<uid>/…`) rather than importing a remote
@@ -49,8 +48,8 @@ with no glue — exactly how `vidplay` consumes the same frames. Output is
 pts=1623ms  person 0.94 320,180 64,140   vehicle 0.88 500,300 120,90
 ```
 
-Those records flow straight into `msg9p` as C2 events — vision becomes tactical
-events on the same async substrate as TAK chat.
+Those records flow straight into `msg9p` as structured events — vision becomes
+events on the same async substrate as the message layer.
 
 ### VLM — "describe / answer about this video"
 
@@ -86,13 +85,6 @@ bandwidth or when the GPU you need is on another box. The architecture makes the
 cut a configuration decision, never a constraint. (This corrects an earlier
 "keep pixels local" overstatement — locality is a tunable, not a rule.)
 
-## The closed loop (NERVA)
-
-Detection bbox + KLV/MISB camera pose → ground coordinates → **CoT marker back to
-TAK** through the `takchat` boundary (same boundary, reverse direction). NERVA
-watches a drone feed, recognizes a vehicle, and publishes a marker to the TAK
-map. See nerva3 `appl/nerva/TAK-VIDEO.md`.
-
 ## Serving lifecycle & resources
 
 A vision serving authority mirrors `llmctl` (load/select/place models). On a
@@ -104,10 +96,10 @@ boundary-confinement principle as CoT and pixel formats.
 ## Where it lives
 
 - **Generic InferNode (public core):** the vision *service* — a sibling of
-  `vdec` and `llm9p`. Host inference process (ONNXRuntime/TensorRT), 9P front
+  `vdec` and the LLM stack. Host inference process (ONNXRuntime/TensorRT), 9P front
   (Limbo shim now → native later → kernel builtin), same migration arc as `vdec`.
-- **NERVA policy (`appl/nerva/`):** which feeds to watch, alert thresholds, and
-  the detection→CoT-marker routing (boundary work in `takchat`).
+- **Application policy layer:** which feeds to watch, alert thresholds, and the
+  downstream event routing — an application overlay on this generic core.
 
 ## Honest open questions
 

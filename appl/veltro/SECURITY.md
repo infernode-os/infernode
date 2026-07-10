@@ -61,6 +61,12 @@ also part of the boundary: source-controlled fields must remain single physical
 lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`
 control records.
 
+Wallet payments follow the same split. A `/n/wallet` grant is narrowed inside
+the agent namespace: agents can read account metadata, sign through factotum,
+and write per-account `pay` proposals, but cannot see root `ctl`, `pending`,
+`new`, or per-account `ctl`. Payment approval and wallet configuration remain
+trusted-controller actions outside the model namespace.
+
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
 for granting a compromised model both confidential data and unrestricted egress.
@@ -332,7 +338,7 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 /dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory todo websearch grep mail; /dis/veltro/repl -v
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory todo websearch grep; /dis/veltro/repl -v
 
 # Expose a host filesystem path to the agent (-p flag, comma-separated)
 /dis/veltro/tools9p read list find grep; /dis/veltro/repl -p /n/local/Users/pdfinn/projects
@@ -619,6 +625,63 @@ checked property. If someone edits `spawn.b` and removes the NODEVS call,
 the subagent fixture snapshot regenerates without `nodevs=set`, the rule
 fires, CI fails.
 
+### Lightweight profile invariants
+
+The first `nsaudit` profile fixtures are deliberately not full shipping
+snapshots. InferNode is still moving too quickly for every ordinary tool list
+or read path to be frozen as a release contract. The current fixtures are
+executable assumptions: they describe the shape of authority we intend, and
+`tests/host/nsaudit_profiles_test.sh` enforces only hard namespace-security
+invariants.
+
+Current fixtures under `tests/nsaudit-fixtures/`:
+
+- `profile-minimal-headless` — base compute agent: read/list/find/grep,
+  no GUI/window authority, no payments, `nodevs=set`.
+- `profile-desktop-gui` — base profile plus explicit UI authority. This is
+  the local Lucifer/desktop shape, not the headless default.
+- `profile-messaging` — base profile plus the message read/proposal surface
+  (`/mnt/msg`, `/mnt/msg/draft`). Trusted message controls remain excluded.
+- `profile-payments` — base profile plus wallet proposal authority
+  (`/n/wallet`) and a declared `walletbudget`. Trusted wallet controls remain
+  excluded.
+
+The important design rule is additive composition. Start with a small base
+namespace, then overlay only the capability layer required for the job:
+messaging, payments, local GUI, or future remote administration. This is a
+natural Plan 9/Inferno shape: profile layers can later be implemented with
+ordinary namespace operations, including union binds where appropriate, without
+turning the audit model into a separate policy engine.
+
+Headless and desktop are distinct because `/mnt/ui` is authority. A headless
+container should not receive `/mnt/ui` or `/chan` just because a UI service is
+mounted somewhere nearby. If another InferNode exports a UI surface into the
+namespace, that becomes a human-interaction and UI-state capability. That may
+be exactly what a remote-admin or "remote desktop" profile wants, but it must
+be explicit:
+
+- `profile-minimal-headless`: no `/mnt/ui`, no `/chan`, no `sends_ui`, no
+  `reads_windows`.
+- `profile-desktop-gui`: local GUI/UI interaction is allowed.
+- future `profile-remote-admin-ui`: explicit remote UI grant, with separate
+  authentication/provenance assumptions.
+- future `profile-observe-ui`: possible read-only/event-only UI view if the
+  namespace surface supports that distinction.
+
+The profile invariant test currently fails on:
+
+- any high-severity `nsaudit` violation;
+- missing `NODEVS` / `attaches_device`;
+- explicit trusted control-path grants;
+- factotum secret visibility;
+- UI authority outside the GUI profile;
+- spend authority outside the payments profile;
+- unbounded spend in the payments profile.
+
+This is intentionally narrower than a full snapshot gate. It lets ordinary
+profile details churn while making the non-negotiable security properties
+visible immediately.
+
 ### CI gate
 
 The gate is not runtime enforcement. It is a build-time check that
@@ -753,12 +816,20 @@ sets. `nsaudit` fills unclaimed ground.
 
 ### Current state
 
-- `appl/cmd/nsaudit.b` — CLI skeleton (in progress).
-- `lib/veltro/nsaudit/authorities/` — one entry (in progress).
-- `lib/veltro/nsaudit/rules/` — one entry (in progress).
-- `tests/nsaudit-fixtures/minimal/` — first fixture (in progress).
+- `appl/cmd/nsaudit.b` — advisory CLI with report, reachability, diff, and
+  machine-readable modes.
+- `lib/veltro/nsaudit/authorities/` — per-tool authority manifests.
+- `lib/veltro/nsaudit/rules/` — rule files, with one fixture per rule under
+  `tests/nsaudit-rules/`.
+- `tests/nsaudit-fixtures/profile-*` — lightweight additive profile fixtures
+  for minimal headless, desktop GUI, messaging, and payments.
+- `tests/host/nsaudit_profiles_test.sh` — hard invariant gate for those
+  profile fixtures.
+- `tests/host/nsaudit_path_semantics_test.sh` — regression for component-aware
+  path containment.
+- No full shipping-profile snapshot gate yet.
 - No `tools9p` metadata exposure yet.
 - No runtime ground-truth check yet.
 - No lucictx integration yet.
-- No `meta-agent` or `lucifer-gui` fixture yet — those are the first real
-  targets after the CLI and one fixture work end-to-end.
+- No `meta-agent`, `remote-admin-ui`, or `lucifer-gui` fixture yet — those are
+  the next high-value profile targets.

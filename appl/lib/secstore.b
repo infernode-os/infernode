@@ -491,7 +491,7 @@ mkfilekey3(user, s: string): array of byte
 # Key-encryption key for a 2FA key-slot: HMAC-SHA256(key=rootkey, msg=R).
 # rootkey is already the expensive mkfilekey3 output, so one HMAC is enough;
 # R is the YubiKey hmac-secret. Used to wrap the random data key (DK) that
-# actually encrypts the factotum blob. See doc/second-factor-auth.md.
+# actually encrypts the factotum blob. See docs/second-factor-auth.md.
 #
 mkkek2fa(rootkey, R: array of byte): array of byte
 {

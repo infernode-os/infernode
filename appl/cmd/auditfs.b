@@ -38,9 +38,9 @@ implement Auditfs;
 #
 # Checkpoint signing (AU-10) is performed by factotum, which holds the
 # signer key — auditfs never sees the private key (see
-# doc/compliance/audit-log-factotum-signing-DESIGN.md). The vac
+# docs/compliance/audit-log-factotum-signing-DESIGN.md). The vac
 # content-store layer for AI-agent provenance is a designed-in follow-on;
-# see doc/compliance/audit-log-design.md.
+# see docs/compliance/audit-log-design.md.
 #
 # Usage:   auditfs [-f backing-file]
 # Mount:   mount {auditfs} /mnt/audit
@@ -102,10 +102,10 @@ lastattempt := 0;		# seq at the last checkpoint attempt
 
 # Checkpoint signatures (AU-10 non-repudiation) are produced by factotum,
 # which holds the signer key — auditfs never sees the private key. When
-# factotum is unreachable or holds no audit signer key, checkpoints are
-# unsigned chain markers and the head must be anchored externally. The
+# factotum is unreachable or holds no audit signer key, no checkpoint is
+# sealed (signed-only) and the head must be anchored externally. The
 # public key (not a secret) is fetched from factotum and served at
-# /mnt/audit/pubkey. See doc/compliance/audit-log-factotum-signing-DESIGN.md.
+# /mnt/audit/pubkey. See docs/compliance/audit-log-factotum-signing-DESIGN.md.
 pubkey := "";			# audit public key, fetched from factotum and cached
 
 init(nil: ref Draw->Context, args: list of string)
@@ -134,7 +134,7 @@ init(nil: ref Draw->Context, args: list of string)
 	ac->init();
 
 	# Optional: factotum performs checkpoint signing. Loosely coupled —
-	# if it is absent, checkpoints fall back to unsigned chain markers.
+	# if it is absent, no checkpoints are sealed (chain-only install).
 	fac = load Factotum Factotum->PATH;
 	if(fac != nil)
 		fac->init();

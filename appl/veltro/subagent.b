@@ -45,7 +45,7 @@ LOG_PREVIEW: con 200;
 
 # Bound each MCP /call so a hung/slow backend degrades to a tool-error (the
 # reason loop treats it as a failure) instead of stalling the child. Matches
-# nerva.b's MCP_CALL_TIMEOUT_MS.
+# the agent's MCP_CALL_TIMEOUT_MS.
 MCP_CALL_TIMEOUT_MS: con 30000;
 
 stderr: ref Sys->FD;

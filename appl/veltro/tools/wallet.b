@@ -17,7 +17,7 @@ implement ToolWallet;
 #   wallet chain <account>             Show chain name
 #   wallet sign <account> <hexhash>    Sign a 32-byte hash (hex-encoded)
 #   wallet history <account>           Show recent transactions
-#   wallet pay <account> <args>        Execute a payment (not yet implemented)
+#   wallet pay <account> <args>        Queue a payment proposal
 #
 
 include "sys.m";
@@ -67,8 +67,8 @@ doc(): string
 		"  wallet history <account>                     Show recent transactions\n" +
 		"  wallet network                               Show current network\n" +
 		"  wallet network <name>                        Switch network\n" +
-		"  wallet pay <account> <wei> <address>         Send ETH (amount in wei)\n" +
-		"  wallet pay <account> usdc <amount> <address> Send USDC (amount in base units, 6 decimals)\n\n" +
+		"  wallet pay <account> <wei> <address>         Queue ETH payment proposal\n" +
+		"  wallet pay <account> usdc <amount> <address> Queue USDC payment proposal\n\n" +
 		"Networks: Ethereum Sepolia, Base Sepolia, Ethereum Mainnet, Base\n\n" +
 		"Examples:\n" +
 		"  wallet accounts\n" +
@@ -194,7 +194,7 @@ cmdhelp(cmd: string): string
 	"pay" =>
 		return "wallet pay <account> <wei> <address>\n" +
 			"wallet pay <account> usdc <amount> <address>\n\n" +
-			"Send ETH (in wei) or USDC (in base units, 6 decimals).\n" +
+			"Queue an ETH or USDC payment proposal for trusted approval.\n" +
 			"examples:\n" +
 			"  wallet pay myaccount 1000 0x742d35Cc...\n" +
 			"  wallet pay myaccount usdc 1000000 0x742d35Cc...";
@@ -261,11 +261,14 @@ dopay(acct: string, args: list of string): string
 	if(n <= 0)
 		return sys->sprint("pay failed: %r");
 
-	# Read back txhash
+	# Read back pending ID or txhash
 	result := readfile(path);
 	if(result == nil || result == "")
-		return "transaction submitted (no hash returned)";
-	return "tx: " + str->take(result, "^\n");
+		return "payment proposal submitted";
+	result = str->take(result, "^\n");
+	if(len result >= 8 && result[0:8] == "pending:")
+		return "payment pending approval: " + result[8:];
+	return "tx: " + result;
 }
 
 donetwork(name: string): string

@@ -89,7 +89,7 @@ else
 fi
 
 if emu_c "child" 18 \
-	"rm -f /tmp/veltro/.ns/manifest.21; mkdir -p /tmp/veltro/child; tools9p -m /tool -b diff -p /tmp/veltro:rw read task diff & sleep 3; echo '21 tools=diff paths=/tmp/veltro/child:rw' > /tool/provision; sleep 6; echo MANIFEST; cat /tmp/veltro/.ns/manifest.21; echo TOOLS; cat /tool.21/tools; echo PATHS; cat /mnt/toolctl.21/paths"; then
+	"rm -f /tmp/veltro/.ns/manifest.21; mkdir -p /tmp/veltro/child; tools9p -m /tool -b diff -p /mnt/llm -p /tmp/veltro:rw read task diff & sleep 3; echo '21 tools=diff paths=/tmp/veltro/child:rw' > /tool/provision; sleep 6; echo MANIFEST; cat /tmp/veltro/.ns/manifest.21; echo TOOLS; cat /tool.21/tools; echo PATHS; cat /mnt/toolctl.21/paths"; then
 	if grep -q '^path=/tmp/veltro/child' <<<"$OUTPUT"; then
 		pass "child manifest includes exact delegated path"
 	else

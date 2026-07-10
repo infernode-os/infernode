@@ -3,7 +3,7 @@
 set -eu
 
 ROOT=${ROOT:-$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)}
-EMU=${EMU:-$ROOT/emu/$(uname -s)/o.emu}
+. "$ROOT/tests/host/common.sh"
 
 if [ ! -x "$EMU" ]; then
 	echo "SKIP: emulator not found at $EMU"

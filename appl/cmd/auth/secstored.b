@@ -115,13 +115,26 @@ paklegacy: ref PAKparams;
 pak3: ref PAKparams;
 
 # auditlog emits a security event to the tamper-evident audit log if the
-# service is bound into the namespace. Loosely coupled: a nil module or an
-# absent /mnt/audit is silently ignored (fail-open). Authentication events
-# are AU-2 / AU-3 records.
-auditlog(source, event, msg: string)
+# service is bound into the namespace; returns -1 when the record could
+# not be sealed. Authentication events are AU-2 / AU-3 records. Loose
+# coupling still holds — an install that never opted in ignores the -1 —
+# but when auditing is required (see auditrequired) the caller must
+# treat -1 as a hard error.
+auditlog(source, event, msg: string): int
 {
-	if(audit != nil)
-		audit->log(source, event, msg);
+	if(audit == nil)
+		return -1;
+	return audit->log(source, event, msg);
+}
+
+# auditrequired reports whether this install opted into auditing (the
+# marker audit-setup / AUDITMODE creates). If so, the completeness
+# contract applies: an authentication that cannot be sealed into the
+# log must not proceed (fail-closed).
+auditrequired(): int
+{
+	(rc, nil) := sys->stat(Audit->ONFILE);
+	return rc == 0;
 }
 
 # Current epoch seconds, or 0 if no clock is available (throttle then fails open
@@ -310,7 +323,10 @@ serve(lconn: ref Dial->Connection)
 	}
 
 	log("authenticated: " + user);
-	auditlog("secstore", "authok", "user=" + user);
+	if(auditlog("secstore", "authok", "user=" + user) < 0 && auditrequired()){
+		log("audit sink unavailable — refusing session (fail-closed)");
+		return;
+	}
 
 	# Send OK
 	sys->fprint(sslconn.dfd, "OK");

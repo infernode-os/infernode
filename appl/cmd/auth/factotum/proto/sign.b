@@ -75,9 +75,23 @@ certdigest(sk: ref Keyring->SK, buf: array of byte): ref Keyring->DigestState
 	return kr->sha256(buf, len buf, nil, nil);
 }
 
+# keyattrs strips the verb attribute (op=...) from the start attrs
+# before key lookup: op selects the operation, not the key, and no
+# stored key carries it — left in, findkey can never match. (This was
+# exactly the op=pubkey failure: signing worked, /mnt/audit/pubkey
+# always came back empty.)
+keyattrs(attrs: list of ref Attr): list of ref Attr
+{
+	r: list of ref Attr;
+	for(; attrs != nil; attrs = tl attrs)
+		if((hd attrs).name != "op")
+			r = hd attrs :: r;
+	return r;
+}
+
 interaction(attrs: list of ref Attr, io: ref IO): string
 {
-	(key, err) := io.findkey(attrs, "!sk?");
+	(key, err) := io.findkey(keyattrs(attrs), "!sk?");
 	if(key == nil)
 		return err;
 	skenc := authio->lookattrval(key.secrets, "!sk");

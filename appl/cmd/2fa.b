@@ -40,6 +40,22 @@ auditlog(event, msg: string)
 		audit->log("2fa", event, msg);
 }
 
+# auditgate is the fail-closed check run BEFORE a lifecycle operation
+# (enroll/addkey/disable): if this install opted into auditing, the
+# operation must be auditable — refuse when the sink can't take the
+# record, rather than mutate identity state un-audited. Checked up
+# front because these operations cannot be undone to satisfy the log.
+auditgate(): string
+{
+	(rc, nil) := sys->stat(Audit->ONFILE);
+	if(rc != 0)
+		return nil;	# auditing not opted in: nothing required
+	fd := sys->open(Audit->LOGFILE, Sys->OWRITE);
+	if(fd == nil)
+		return "auditing is required on this system but /mnt/audit/log is not writable";
+	return nil;
+}
+
 prompt(msg: string): string
 {
 	sys->print("%s", msg);
@@ -108,6 +124,20 @@ init(nil: ref Draw->Context, argv: list of string)
 	"status" =>
 		sys->print("account %s: 2fa-enrolled=%d  key-present=%d\n",
 			user, ts->is2fa(user), twofa->available());
+	"disable" or "enroll" or "addkey" =>
+		if((ge := auditgate()) != nil){
+			sys->fprint(stderr, "2fa %s: %s\n", cmd, ge);
+			raise "fail:audit required";
+		}
+		docmd(cmd, user);
+	* =>
+		sys->fprint(stderr, "usage: 2fa [status|enroll|addkey|disable]\n");
+	}
+}
+
+docmd(cmd, user: string)
+{
+	case cmd {
 	"disable" =>
 		dpass := prompt("secstore password: ");
 		drec := prompt("recovery passphrase (blank if the key is present): ");
@@ -122,8 +152,6 @@ init(nil: ref Draw->Context, argv: list of string)
 		doenroll(user);
 	"addkey" =>
 		doaddkey(user);
-	* =>
-		sys->fprint(stderr, "usage: 2fa [status|enroll|addkey|disable]\n");
 	}
 }
 

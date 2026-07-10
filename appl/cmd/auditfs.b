@@ -9,19 +9,36 @@ implement Auditfs;
 #                record: it assigns the sequence number and timestamp
 #                (so a writer cannot forge order or backdate) and
 #                extends the SHA-256 hash chain (module/auditchain.m).
-#   chain   (r)  the sealed records, oldest first.
+#                The event "checkpoint" is reserved to the server.
+#   chain   (r)  the sealed records, oldest first (streamed by offset).
 #   head    (r)  "<tiphash> <seq>" — the anchor to publish/ship off-host.
-#   verify  (r)  "ok <count>" or "broken at seq <n>" — recompute the chain.
-#   ctl     (w)  "checkpoint" appends a checkpoint marker record.
+#   verify  (r)  "ok <count>", "broken at seq <n>", or "diverged: ..."
+#                (backing file modified behind the running server).
+#   ctl     (w)  "checkpoint" forces a signed root now.
 #
 # Access control is by namespace placement: bind only `log` (write-only)
 # into a subject's namespace and it can append to its own audit trail but
 # cannot read or rewrite history. The chain gives tamper-evidence; an
 # externally-anchored head catches a full rewrite.
 #
-# This is the security-log core. Checkpoint signing (AU-10) is performed
-# by factotum, which holds the signer key — auditfs never sees the private
-# key (see docs/compliance/audit-log-factotum-signing-DESIGN.md). The vac
+# Checkpoints are signed roots (the CT signed-tree-head pattern): the tip
+# transitively covers every record, so one signature commits to the whole
+# history. The server drives its own cadence — a checkpoint at least
+# every CHECKEVERY records, and within CHECKMS of any new record — so the
+# unanchored tail stays bounded without an operator in the loop. A
+# checkpoint exists only if factotum signs it: an unsigned marker proves
+# nothing the chain doesn't already, and the strict verifier
+# (auditverify -k) treats one as tampering. On a chain-only install (no
+# signer key) the log simply has no checkpoints; verify it against an
+# off-host copy of head (auditverify -a).
+#
+# At startup the server seals an "auditfs start" record carrying the host
+# name and the replay outcome, so restarts are visible in the trail and a
+# log is readably bound to its host.
+#
+# Checkpoint signing (AU-10) is performed by factotum, which holds the
+# signer key — auditfs never sees the private key (see
+# docs/compliance/audit-log-factotum-signing-DESIGN.md). The vac
 # content-store layer for AI-agent provenance is a designed-in follow-on;
 # see docs/compliance/audit-log-design.md.
 #
@@ -69,14 +86,24 @@ user := "inferno";
 
 logpath := "/usr/inferno/audit/log";
 logfd: ref Sys->FD;		# append handle to the backing file
+chainfd: ref Sys->FD;		# read handle for streaming /mnt/audit/chain
 
 tiphash: array of byte;		# current chain tip
 seq := 0;			# sequence number of the last record (0 = none)
 
+# Checkpoint cadence: a signed root at least every CHECKEVERY records,
+# and (via the ticker) within CHECKMS of any new record. lastattempt
+# throttles retries when no signer key is provisioned, so a chain-only
+# install pays one failed factotum call per window, not one per write.
+CHECKEVERY: con 64;
+CHECKMS: con 10*60*1000;
+lastcheck := 0;			# seq at the last sealed checkpoint
+lastattempt := 0;		# seq at the last checkpoint attempt
+
 # Checkpoint signatures (AU-10 non-repudiation) are produced by factotum,
 # which holds the signer key — auditfs never sees the private key. When
-# factotum is unreachable or holds no audit signer key, checkpoints are
-# unsigned chain markers and the head must be anchored externally. The
+# factotum is unreachable or holds no audit signer key, no checkpoint is
+# sealed (signed-only) and the head must be anchored externally. The
 # public key (not a secret) is fetched from factotum and served at
 # /mnt/audit/pubkey. See docs/compliance/audit-log-factotum-signing-DESIGN.md.
 pubkey := "";			# audit public key, fetched from factotum and cached
@@ -107,7 +134,7 @@ init(nil: ref Draw->Context, args: list of string)
 	ac->init();
 
 	# Optional: factotum performs checkpoint signing. Loosely coupled —
-	# if it is absent, checkpoints fall back to unsigned chain markers.
+	# if it is absent, no checkpoints are sealed (chain-only install).
 	fac = load Factotum Factotum->PATH;
 	if(fac != nil)
 		fac->init();
@@ -141,6 +168,20 @@ init(nil: ref Draw->Context, args: list of string)
 		if(logfd == nil)
 			fail(sys->sprint("cannot open/create %s: %r (create the parent directory)", logpath));
 	}
+	chainfd = sys->open(logpath, Sys->OREAD);
+	if(chainfd == nil)
+		fail(sys->sprint("cannot open %s for reading: %r", logpath));
+
+	# Seal a boot record: restarts become visible in the trail itself
+	# (a gap-detection aid), and the host identity travels in the chain,
+	# so one host's log reads as that host's. Fatal on failure — a log
+	# that cannot take this record cannot take any.
+	rst := "ok";
+	if(broken >= 0)
+		rst = sys->sprint("broken@%d", broken);
+	err := appendrec("auditfs", "start", sys->sprint("host=%s replay=%s", hostname(), rst));
+	if(err != nil)
+		fail(err);
 
 	styx->init();
 	styxservers->init(styx);
@@ -156,7 +197,42 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qdir, dir("ctl",    8r222, Qctl));    # write-only
 
 	(tc, srv) := Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qdir);
-	serveloop(tc, srv, tree);
+
+	# The cadence ticker: wakes the serveloop so a dirty chain gets its
+	# signed root within CHECKMS even when write traffic stops.
+	tick := chan of int;
+	pidc := chan of int;
+	spawn ticker(tick, pidc);
+	tickpid := <-pidc;
+
+	serveloop(tc, srv, tree, tick);
+	kill(tickpid);
+}
+
+ticker(tick: chan of int, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	for(;;) {
+		sys->sleep(CHECKMS);
+		tick <-= 1;
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+hostname(): string
+{
+	s := readfile("/dev/sysname");
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
+		s = s[0:len s - 1];
+	if(s == "")
+		s = "-";
+	return s;
 }
 
 dir(name: string, perm: int, path: int): Sys->Dir
@@ -174,12 +250,25 @@ dir(name: string, perm: int, path: int): Sys->Dir
 	return d;
 }
 
-serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
+serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree, tick: chan of int)
 {
-	while((tmsg := <-tc) != nil) {
+loop:
+	for(;;) alt {
+	<-tick =>
+		# Cadence, time half: seal a signed root within CHECKMS of any
+		# new record. An idle chain appends nothing; failures (no
+		# signer key — a chain-only install) are silent by design.
+		if(seq > lastcheck) {
+			lastattempt = seq;
+			docheckpoint();
+		}
+
+	tmsg := <-tc =>
+		if(tmsg == nil)
+			break loop;
 		pick tm := tmsg {
 		Readerror =>
-			break;
+			break loop;
 
 		Flush =>
 			srv.reply(ref Rmsg.Flush(tm.tag));
@@ -197,15 +286,25 @@ serveloop(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 				# write-only files read as empty
 				srv.reply(styxservers->readstr(tm, ""));
 			Qchain =>
-				srv.reply(styxservers->readstr(tm, readfile(logpath)));
+				# Stream straight from the backing file at the client's
+				# offset: the file is append-only so offsets are stable,
+				# and a growing log is never copied whole per read.
+				srv.reply(readchain(tm));
 			Qhead =>
 				srv.reply(styxservers->readstr(tm,
 					sys->sprint("%s %d\n", ac->hex(tiphash), seq)));
 			Qverify =>
-				(nil, nil, broken) := replay(readfile(logpath));
+				(ftip, flast, broken) := replay(readfile(logpath));
 				s: string;
 				if(broken >= 0)
 					s = sys->sprint("broken at seq %d\n", broken);
+				else if(flast != seq || ac->hex(ftip) != ac->hex(tiphash))
+					# The file replays clean but disagrees with the live
+					# chain: the backing store was modified behind the
+					# running server (truncate-and-rewrite looks exactly
+					# like this).
+					s = sys->sprint("diverged: file at seq %d tip %s, server at seq %d tip %s\n",
+						flast, ac->hex(ftip), seq, ac->hex(tiphash));
 				else
 					s = sys->sprint("ok %d\n", seq);
 				srv.reply(styxservers->readstr(tm, s));
@@ -263,26 +362,53 @@ writelog(s: string): string
 		return "auditfs: write must be 'source event [message]'";
 	source := hd toks; toks = tl toks;
 	event := hd toks; toks = tl toks;
+	# Checkpoint records are minted only by the server: a writer-
+	# supplied one would carry verifier semantics it has no authority
+	# over (auditverify treats the event specially).
+	if(event == "checkpoint")
+		return "auditfs: event 'checkpoint' is reserved";
 	msg := join(toks);
-	return appendrec(source, event, msg);
+	err := appendrec(source, event, msg);
+	if(err != nil)
+		return err;
+	# Cadence, count half: force a signed root at least every
+	# CHECKEVERY records so the unanchored tail stays bounded under
+	# sustained traffic. One attempt per window when signing is
+	# unavailable, so a chain-only install pays nothing per write.
+	if(seq - lastcheck >= CHECKEVERY && seq - lastattempt >= CHECKEVERY) {
+		lastattempt = seq;
+		docheckpoint();
+	}
+	return nil;
 }
 
 writectl(s: string): string
 {
 	if(s != "checkpoint")
 		return "auditfs: ctl accepts only 'checkpoint'";
-	# The signed content commits to the whole history (the tip
-	# transitively covers every record). It must match exactly what
-	# auditverify recomputes.
+	return docheckpoint();
+}
+
+# docheckpoint seals a signed root over the whole history: the tip
+# transitively covers every record, so one factotum signature (AU-10)
+# commits to all of them. The signed content must match exactly what
+# auditverify recomputes. No signer, no checkpoint: an unsigned marker
+# proves nothing the chain doesn't already, and the strict verifier
+# (-k) rightly reads one as tampering.
+docheckpoint(): string
+{
 	content := sys->sprint("audit-checkpoint %s %d", ac->hex(tiphash), seq);
 	cert := factotumsign(array of byte content);
-	msg: string;
-	if(cert != nil)
-		msg = sys->sprint("head=%s seq=%d sig=%s",
-			ac->hex(tiphash), seq, ac->hex(cert));
-	else
-		msg = sys->sprint("head=%s seq=%d", ac->hex(tiphash), seq);
-	return appendrec("-", "checkpoint", msg);
+	if(cert == nil)
+		return "auditfs: no signer key in factotum (run /lib/sh/audit-setup)";
+	msg := sys->sprint("head=%s seq=%d sig=%s",
+		ac->hex(tiphash), seq, ac->hex(cert));
+	err := appendrec("-", "checkpoint", msg);
+	if(err == nil) {
+		lastcheck = seq;
+		lastattempt = seq;
+	}
+	return err;
 }
 
 # factotumsign asks factotum to sign `content` with the audit signer key
@@ -408,16 +534,47 @@ parserec(line: string): (int, int, string, string, string, string, int)
 	return (seqf, tf, source, event, hashf, join(toks), 1);
 }
 
+# readchain answers one styx Read of /mnt/audit/chain directly from the
+# backing file at the requested offset — no whole-file copy per read.
+readchain(tm: ref Tmsg.Read): ref Rmsg
+{
+	n := tm.count;
+	if(n < 0)
+		n = 0;
+	if(n > 8*Sys->ATOMICIO)
+		n = 8*Sys->ATOMICIO;
+	buf := array[n] of byte;
+	r := sys->pread(chainfd, buf, n, tm.offset);
+	if(r < 0)
+		return ref Rmsg.Error(tm.tag, sys->sprint("%r"));
+	return ref Rmsg.Read(tm.tag, buf[0:r]);
+}
+
 readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
-	s := "";
-	buf := array[8192] of byte;
-	while((m := sys->read(fd, buf, len buf)) > 0)
-		s += string buf[0:m];
-	return s;
+	# Collect chunks and assemble once: += on a string is quadratic,
+	# and this runs over the whole (ever-growing) backing file.
+	chunks: list of array of byte;
+	total := 0;
+	for(;;) {
+		buf := array[Sys->ATOMICIO] of byte;
+		m := sys->read(fd, buf, len buf);
+		if(m <= 0)
+			break;
+		chunks = buf[0:m] :: chunks;
+		total += m;
+	}
+	all := array[total] of byte;
+	o := total;
+	for(; chunks != nil; chunks = tl chunks) {
+		c := hd chunks;
+		o -= len c;
+		all[o:] = c;
+	}
+	return string all;
 }
 
 join(toks: list of string): string

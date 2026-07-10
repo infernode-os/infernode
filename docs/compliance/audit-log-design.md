@@ -3,21 +3,28 @@
 **Status:** Authoritative design (supersedes the `SP800-92-audit-log-DESIGN.md` proposal stub).
 **Implementation:** v1 security log **built and tested** — `auditfs` server (`log`/`chain`/
 `head`/`verify`/`pubkey`/`ctl`), the `auditchain` hash-chain module (unit-tested), the
-`auditverify` offline verifier, and the `audit` client lib. Validated in the headless Linux
-emu: chain tamper/reorder/deletion detection, server round-trip, **keyring-signed checkpoints
-(AU-10)** and offline signature verification with the public key, and rejection of a bad
-signature. One honest deviation from the prose below: v1 loads the signer key from a *keyfile*
-(`createsignerkey` output) and `auditfs` holds it; moving the key into **factotum** so the
-server never holds the private key is the documented hardening step (AU-9/10 crypto is
-identical either way). Access control is namespace placement, as designed (the write files are
-mode-open so any subject with `log` bound can append; restriction is by *what is bound*, not by
-mode bits).
+`auditverify` offline verifier, and the `audit` client lib. Checkpoint signing is
+**factotum-held** (ML-DSA-87 via the `sign` proto): `auditfs` never sees the private key; the
+public key is served at `/mnt/audit/pubkey`. Access control is namespace placement, as
+designed (the write files are mode-open so any subject with `log` bound can append;
+restriction is by *what is bound*, not by mode bits).
+**Hardening pass (2026-07-10):** the enforcement gaps between this design and the code were
+closed — see §5a. In brief: `auditverify -k` makes signatures **mandatory** (a rewrite that
+strips `sig=` tokens or checkpoint records no longer verifies); `auditverify -a` checks the
+chain against an **off-host copy of `head`** (the truncation defence); checkpoints **drive
+themselves** (count + time cadence, signed-only — unsigned markers no longer exist); the
+`checkpoint` event is **reserved** to the server on `log`; a boot `auditfs start` record makes
+restarts visible and binds a log to its host; `verify` detects **live divergence** of the
+backing file from the in-memory chain; `chain` reads stream by offset (no whole-file copy per
+read); and the promised **fail-closed** emitters are real (secstored auth, 2fa lifecycle) via
+the opt-in marker `Audit->ONFILE`.
 **Integration:** `lib/sh/profile` mounts `auditfs` at `/mnt/audit` *before* `auth/secstored`,
 and `secstored` emits the first events — `secstore authok user=<u>` / `secstore authfail`
-(AU-2/AU-3) — via the loosely-coupled `audit` client lib (no-op if `/mnt/audit` is absent).
-Validated in the headless Linux emu. Further emitters (login UI, 2FA enroll/disable, factotum
-key ops, CDS guard) and the vac content-store layer for agent provenance are the next phases.
-**Tracking:** EPIC 2 / [INFR-343]. **Date:** 2026-06-22.
+(AU-2/AU-3) — via the loosely-coupled `audit` client lib (no-op if `/mnt/audit` is absent and
+the install has not opted in). 2fa emits `enroll`/`addkey`/`disable`. Further emitters (login
+UI, factotum key ops, CDS guard) and the vac content-store layer for agent provenance are the
+next phases.
+**Tracking:** EPIC 2 / [INFR-343]. **Date:** 2026-06-22; hardening pass 2026-07-10.
 **Grounding:** read [`plan9-logging-rationale.md`](plan9-logging-rationale.md) (why Plan 9 has no
 logging subsystem) and [`audit-log-prior-art.md`](audit-log-prior-art.md) (the prior-art survey)
 first — this design is the disciplined consequence of both.
@@ -95,11 +102,12 @@ new surface.
 ### 4.1 Files
 | File | Mode | Purpose |
 |------|------|---------|
-| `log` | write-only, append | write `source event msg`; server seals it into a record |
-| `chain` | read-only | the sealed records, oldest first (see 4.2) |
+| `log` | write-only, append | write `source event msg`; server seals it into a record. The event `checkpoint` is **reserved** to the server (a writer must not mint records the verifier gives special semantics) |
+| `chain` | read-only | the sealed records, oldest first (see 4.2); streamed by offset from the backing file |
 | `head` | read-only | `<tiphash> <seq>` — the anchor to publish/ship |
-| `verify` | read-only | `ok <count>` or `broken at seq <n>` |
-| `ctl` | write-only | `checkpoint` forces a signed root now (for high-value events) |
+| `verify` | read-only | `ok <count>`, `broken at seq <n>`, or `diverged: ...` (the backing file replays clean but disagrees with the live chain — it was modified behind the running server) |
+| `pubkey` | read-only | the audit public key, fetched from factotum (empty if signing is not provisioned) |
+| `ctl` | write-only | `checkpoint` forces a signed root now (for high-value events); errors if factotum holds no signer key |
 
 **Access by placement:** a subject's namespace gets **only `log`** bound (write-only) — never
 `chain`/`head`/`verify`/`ctl`. So any subject (including a malicious agent) can append to its
@@ -108,35 +116,59 @@ by construction.
 
 ### 4.2 Record format (line-oriented text, no JSON)
 ```
-seq  timestamp            source   event     hash             message
-1042 2026-06-23T07:15:04Z login    unlock    7b2290…(64 hex)  user=alice aal=3 key=yk-37602882
-1043 2026-06-23T07:20:00Z -        checkpoint 4a90ff…         head=4a90ff… sig=mldsa87:5e21…9a signer=audit@node2
+seq  time        source   event      hash             message
+1    1783700238  auditfs  start      9ce71e…(64 hex)  host=node2 replay=ok
+1042 1783711504  login    unlock     7b2290…          user=alice aal=3 key=yk-37602882
+1043 1783711800  -        checkpoint 4a90ff…          head=2862aa… seq=1042 sig=6d6c…(hex cert)
 ```
 - `seq` decimal, **server-assigned** monotonic (caller can't forge order).
-- `timestamp` **server-assigned** RFC3339 UTC (caller can't backdate).
-- `source` short tag; `event` verb; `message` free `key=value` remainder (server escapes newlines).
+- `time` **server-assigned** epoch seconds (caller can't backdate; text, so `date` converts).
+- `source` short tag; `event` verb; `message` free `key=value` remainder (server escapes newlines
+  and forces source/event to single tokens).
 - `hash` = the chain hash for that record (see §5). The caller writes only `source event msg`.
+- Record 1 of every server run is `auditfs start host=<sysname> replay=ok|broken@<n>`:
+  restarts are visible in the trail, and a log is readably bound to its host.
 
 ## 5. Integrity model
 
 - **Genesis:** `H[0] = SHA256("infernode-audit-v1")`.
 - **Chain:** `H[n] = SHA256(H[n-1] ‖ record_n)` where `record_n` includes seq+time+fields.
   Editing/reordering/deleting any record changes `H[n]` and every `H[>n]`.
-- **Checkpoints (the anchor):** periodically — and **forced on high-value events** via `ctl` —
-  a `checkpoint` record signs `H[tip] ‖ seq ‖ time` with an audit key held by **factotum**
-  (ML-DSA-capable). Checkpoints are public-verifiable with the audit **public** key — no secret
-  needed by the auditor (a CISO win). The chain protects the records *between* checkpoints.
-- **External anchoring:** `head` (and signed checkpoints) are published/shipped off-host per
-  namespace policy, so even a full-rewrite is caught against the external anchor.
-- **Startup:** the server recomputes the chain from the backing file and runs `verify`,
-  **failing loud** on a break.
+- **Checkpoints (the anchor):** the server drives its own cadence — a signed root at least
+  every `CHECKEVERY` records and within `CHECKMS` of any new record — and one can be **forced
+  on high-value events** via `ctl`. A checkpoint record signs
+  `"audit-checkpoint " ‖ hex(H[tip]) ‖ " " ‖ seq` with an audit key held by **factotum**
+  (ML-DSA-87 default). The record's own time is chained, so the signature needn't repeat it.
+  Checkpoints are public-verifiable with the audit **public** key — no secret needed by the
+  auditor (a CISO win). The chain protects the records *between* checkpoints.
+  **Signed-only:** a checkpoint exists only if factotum signs it. An unsigned marker proves
+  nothing the chain doesn't already, and the strict verifier reads one as tampering; a
+  chain-only install (no signer key) simply has no checkpoints and relies on `-a` anchoring.
+- **External anchoring:** `head` is copied off-host per namespace policy (`cp /mnt/audit/head
+  <elsewhere>` — no machinery), and `auditverify -a <head-copy>` requires the chain to reach
+  that seq with that tip. This is what catches **truncation**, which is chain-valid by
+  construction, and full rewrites on installs without a signer key.
+- **Strict verification:** with `-k <pubkey>`, *every* checkpoint must carry a verifying
+  signature and at least one must be present. Rationale: the chain holds no secret, so a
+  privileged rewrite can recompute every hash — the signatures are the only thing it cannot
+  mint, so tolerating their absence would hand the attacker a clean bypass.
+- **Startup:** the server recomputes the chain from the backing file (**failing loud** on a
+  break) and seals an `auditfs start` record carrying the replay outcome. While running,
+  `verify` re-replays the file and reports `diverged` if it no longer matches the live tip.
 - **Bounded tail (honest residual):** records after the last signed checkpoint are chain-
-  protected but not yet anchored; cadence (frequent + forced-seal) bounds the window. Documented.
+  protected but not yet anchored; the built-in cadence bounds the window to
+  min(`CHECKEVERY` records, `CHECKMS`).
 - **Time (AU-8):** timestamps come from the system clock; trusted/synced time (NTP, attested
   clock) is a deployment requirement, stated in the operator doc.
-- **Completeness / fail-closed:** the server appends durably (fsync for high-value); security-
-  critical writers (e.g. `login`) treat an audit-write failure as a **hard error** (fail-closed).
-  General/low-value callers may fail-open. The choice is per-caller policy and documented.
+- **Durability (honest residual):** appends go through the host page cache (Inferno has no
+  fsync); a power cut can lose the newest records, indistinguishable from tail truncation —
+  another reason the anchor cadence matters.
+- **Completeness / fail-closed:** the opt-in marker (`Audit->ONFILE`,
+  `/usr/inferno/audit/on`) means *this install requires auditing*. Security-critical writers
+  honour it: `secstored` refuses an authenticated session whose `authok` cannot be sealed;
+  `2fa` refuses enroll/addkey/disable up front when the sink is unwritable (those operations
+  can't be undone to satisfy the log). Installs that never opted in keep the loose-coupling
+  contract: absent sink, no-op.
 
 ## 6. Threat model (summary)
 
@@ -144,8 +176,11 @@ seq  timestamp            source   event     hash             message
 |-----------|---------|
 | In-namespace process / malicious agent edits past entries | Can't — only `log` is bound; can't reach `chain`. Append-only. |
 | Forges ordering / backdates | Can't — server assigns seq + time. |
-| Privileged host edits the raw backing file | **Detected** — chain + externally-anchored signed checkpoint don't match. (Tamper-evident, not tamper-proof — see `prior-art`.) |
-| Rewrites the whole chain to stay consistent | Must also forge a signed checkpoint (key in factotum, ideally hardware-gated) — can't. |
+| Writer mints a fake `checkpoint` record through `log` | Can't — the event is reserved; the write errors. |
+| Privileged host edits the raw backing file | **Detected** — chain + externally-anchored signed checkpoint don't match. Live edits also surface as `diverged` on `verify`. (Tamper-evident, not tamper-proof — see `prior-art`.) |
+| Rewrites the whole chain to stay consistent (hashes recomputed) | Must forge a signed checkpoint (key in factotum, ideally hardware-gated) — can't. **Requires the strict verifier**: `auditverify -k` refuses unsigned or missing checkpoints, so stripping them doesn't help. |
+| Truncates the tail (chain-valid by construction) | **Detected against an off-host `head` copy** (`auditverify -a`); the signed cadence bounds the loss window. Not detectable from the file alone — honest residual. |
+| Writer claims a false `source` tag | **Honest residual** — the tag is claimed, not derived: `/mnt/audit` is one attach, so all writers share the mount's uname. Mitigation is placement (a subject holds only `log`, can't read the tip to make forgery convincing) and per-subject mounts where attribution matters. |
 | Subject that shouldn't see logs | Not bound into its namespace → can't name `/mnt/audit`. |
 
 ## 7. Loose coupling & tear-out (a hard requirement)
@@ -208,8 +243,11 @@ pre-existing SC-13 gap (`FIPS-140-3-readiness.md`), not introduced here.
 - `appl/cmd/auditverify.b` — offline verifier (recompute chain, check signatures with public key).
 - `module/audit.m` + `appl/lib/audit.b` — optional thin client (`log(source,event,msg)`).
 - `man/4/auditfs`, `man/1/auditverify` — docs incl. operator guide (time, off-host, fail-closed).
-- `tests/audit_test.b` — append/seal, tamper-detection (edit/reorder/delete → `verify` fails),
-  signed-checkpoint verify, namespace write-only property, completeness.
+- `tests/auditchain_test.b` — the pure chain: genesis/extend determinism, tamper detection.
+- `tests/auditverify_test.b` — the adversarial verifier suite: whole-file rewrite, stripped
+  signatures/checkpoints, truncation vs anchor, forged checkpoint head, wrong signing key.
+- `tests/auditsign_test.b` + `tests/host/audit_signing_test.sh` — the signing path, offline
+  and live (factotum genkey → signed checkpoint → strict anchored verify).
 
 **v1 wiring (small, reviewed individually):** `login`/`2fa`, `factotum` emit to `/mnt/audit/log`.
 

@@ -21,6 +21,13 @@ implement Voicemode;
 # conversation/voiceinput path so lucibridge accepts them while keyboard input
 # is paused.
 #
+# Test mode (-p phrase, -e): the LLM-free loop for dogfooding the speech
+# stack in the GUI without API cost. Finals never reach voiceinput; the
+# transcript is posted to the conversation as a "Heard" dialogue line and
+# the canned phrase (-p), or the transcript itself (-e), is spoken via
+# /n/speech/say. Wake, live partials, chimes, barge-in and control intents
+# behave exactly as in normal mode. tools/speech-test.sh --gui boots this.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -60,6 +67,10 @@ listenseq := 0;
 listentimeout := 10000;
 wakecooldown := 1500;
 
+testmode := 0;
+echoback := 0;
+testphrase := "Speech test complete. I heard you.";
+
 LISTEN_EMPTY, LISTEN_PARTIAL, LISTEN_FINAL, LISTEN_ERROR: con iota;
 
 silencefinals := array[] of {
@@ -70,7 +81,7 @@ silencefinals := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: voicemode [-d] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
+	sys->fprint(stderr, "Usage: voicemode [-d] [-e] [-p phrase] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
 	raise "fail:usage";
 }
 
@@ -308,6 +319,25 @@ approvalpending(actid: int): int
 {
 	path := sys->sprint("%s/activity/%d/status", ui, actid);
 	return strip(readfile(path)) == "blocked";
+}
+
+# The say write blocks for the TTS duration on real providers, so test
+# mode runs it spawned; barge-in still works because a wake event writes
+# /n/speech/cancel, which kills the in-flight synthesis.
+saytts(text: string)
+{
+	writefile(speech + "/say", text);
+}
+
+# Test mode: surface the recognized transcript in the conversation view
+# without submitting it as an LLM turn.
+noticeheard(actid: int, text: string)
+{
+	for(i := 0; i < len text; i++)
+		if(text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
+			text[i] = ' ';
+	path := sys->sprint("%s/activity/%d/conversation/ctl", ui, actid);
+	writefile(path, "role=veltro dtype=dialogue title=Heard text=" + text);
 }
 
 noticevoiceerror(actid: int, reason: string)
@@ -571,7 +601,14 @@ voiceloop()
 				continue;
 			}
 			ctxstatus(actid, "processing");
-			if(voiceinput(actid, text) < 0)
+			if(testmode) {
+				noticeheard(actid, text);
+				saytext := testphrase;
+				if(echoback)
+					saytext = text;
+				ctxstatus(actid, "speaking");
+				spawn saytts(saytext);
+			} else if(voiceinput(actid, text) < 0)
 				ctxstatus(actid, "error");
 			else
 				ctxstatus(actid, "speaking");
@@ -614,6 +651,10 @@ init(nil: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'd' =>	debug = 1;
+		'e' =>	echoback = 1;
+			testmode = 1;
+		'p' =>	testphrase = arg->earg();
+			testmode = 1;
 		't' =>	listentimeout = int arg->earg();
 		'w' =>	wakecooldown = int arg->earg();
 		'u' =>	ui = arg->earg();

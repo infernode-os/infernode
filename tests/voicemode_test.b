@@ -6,8 +6,9 @@ implement VoicemodeTest;
 # reads; the daemon's poll fallback (no /event file in the mock ui) and its
 # pacing sleeps make that workable. Covers: idle-until-voice-mode, partial
 # records not injected, final transcript injection through conversation/
-# voiceinput, spoken "keyboard" control intent, and idle return on
-# input-mode "k".
+# voiceinput, spoken "keyboard" control intent, idle return on
+# input-mode "k", and LLM-free test mode (-p/-e: finals bypass voiceinput
+# and answer with a canned say instead).
 #
 
 include "sys.m";
@@ -170,6 +171,7 @@ mkmock()
 	createfile(MOCKSPEECH + "/wake", "wake hey_lucia 0.9\n");
 	createfile(MOCKSPEECH + "/listen", "partial warming up\n");
 	createfile(MOCKSPEECH + "/cancel", "");
+	createfile(MOCKSPEECH + "/say", "");
 }
 
 rundaemon(pidch: chan of int)
@@ -367,6 +369,47 @@ testSpokenKeyboardIntent(t: ref T)
 	t.assert(!hassubstr(vi, "keyboard"), "control intent was not injected as a turn");
 }
 
+testTestModeSpeaksPhrase(t: ref T)
+{
+	# -p puts the daemon in LLM-free test mode: the final transcript is
+	# shown as a "Heard" dialogue line and answered by saying the canned
+	# phrase; conversation/voiceinput (the LLM path) is never written.
+	createfile(MOCKSPEECH + "/listen", "final hello there\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKSPEECH + "/say", "canned reply", 5000),
+		"test-mode final answers with the canned phrase in say");
+	t.assert(hassubstr(readfile(MOCKUI + "/activity/0/conversation/ctl"),
+		"title=Heard text=hello there"),
+		"test-mode final posts the transcript as a Heard dialogue line");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "hello there"),
+		"test-mode final is not injected as an LLM turn");
+}
+
+testTestModeEchoesTranscript(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "final echo me back\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKSPEECH + "/say", "echo me back", 5000),
+		"-e answers with the transcript itself");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "echo me back"),
+		"-e final is not injected as an LLM turn");
+}
+
+testTestModeControlIntentStillWorks(t: ref T)
+{
+	# Control intents must keep acting on the session in test mode
+	# instead of being spoken back.
+	createfile(MOCKSPEECH + "/listen", "final keyboard\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/input-mode", "k", 5000),
+		"spoken keyboard intent exits voice mode in test mode");
+	say := readfile(MOCKSPEECH + "/say");
+	t.assert(!hassubstr(say, "canned reply"),
+		"control intent does not trigger the canned phrase");
+}
+
 testReentryAndInputModeExit(t: ref T)
 {
 	# Re-enter voice mode, then exit via an external input-mode write (the
@@ -409,6 +452,11 @@ init(nil: ref Draw->Context, args: list of string)
 	runvm("YesRequiresBlocked", "-w" :: "200" :: nil, testYesRequiresBlocked);
 	runvm("HelperErrorSurfacedOnce", nil, testHelperErrorSurfacedOnce);
 	runvm("SpokenKeyboardIntent", nil, testSpokenKeyboardIntent);
+	runvm("TestModeSpeaksPhrase", "-p" :: "canned reply" :: nil,
+		testTestModeSpeaksPhrase);
+	runvm("TestModeEchoesTranscript", "-e" :: nil, testTestModeEchoesTranscript);
+	runvm("TestModeControlIntentStillWorks", "-p" :: "canned reply" :: nil,
+		testTestModeControlIntentStillWorks);
 	runvm("ReentryAndInputModeExit", nil, testReentryAndInputModeExit);
 
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -133,15 +133,39 @@ mkdir -p /tmp
 echo provider /n/speechshim > /n/speech/ctl
 echo duplex half > /n/speech/ctl
 
+# Optional host speech-helper configuration. When $speechhelperbin names
+# the bin/ dir created by tools/install-speech-helpers.sh (a HOST path —
+# the shim execs helpers through devcmd), apply the installer's printed
+# ctl block automatically instead of requiring a manual paste. Set by
+# boot-speechtest.sh; a profile can set it too for the normal LLM flow.
+# The wake phrase is "hey jarvis" — the only pretrained openWakeWord
+# model shipped today (see tools/install-speech-helpers.sh).
+if {! ~ $#speechhelperbin 0} {
+	echo kokorobin $speechhelperbin/kokoro-cli > /n/speech/ctl
+	echo whisperstreambin $speechhelperbin/whisper-stream-cli > /n/speech/ctl
+	echo wakebin $speechhelperbin/openwakeword-cli > /n/speech/ctl
+	echo whispermodel $speechhelperbin/../models/ggml-base.en.bin > /n/speech/ctl
+	echo voice af_bella > /n/speech/ctl
+	echo 'wakeword hey jarvis' > /n/speech/ctl
+	echo wakethreshold 0.5 > /n/speech/ctl
+	echo 'boot: speech helpers configured from' $speechhelperbin
+}
+
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
 
 # Voice-mode daemon — resident and idle until /mnt/ui/input-mode becomes
 # "v" (via /voice mode on, or a spoken control intent). Pre-spawned here
-# so entering voice mode has no first-use startup latency.
+# so entering voice mode has no first-use startup latency. $voicetestargs
+# (set by boot-speechtest.sh) puts the daemon in its LLM-free test mode:
+# finals are answered with a canned TTS phrase instead of an LLM turn.
 > /tmp/voicemode.log
-voicemode >[2] /tmp/voicemode.log &
+if {! ~ $#voicetestargs 0} {
+	voicemode $voicetestargs >[2] /tmp/voicemode.log &
+}{
+	voicemode >[2] /tmp/voicemode.log &
+}
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno

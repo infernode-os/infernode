@@ -721,6 +721,79 @@ Acceptance targets:
 - Assistant first token to first audio: under 500 ms with Kokoro.
 - Barge-in to TTS silence: under 200 ms.
 
+## Testing the Speech Loop Without an LLM
+
+`tools/speech-test.sh` boots InferNode headless in a speech test mode
+that exercises the entire microphone → STT → TTS loop with no LLM, no
+GUI, no login, and no API key. Live partial transcripts print to the
+terminal as words are spoken, and every non-junk final transcript is
+answered by speaking a hard-coded phrase (or the transcript itself with
+`-e`). Use it to validate a helper install or an audio topology before
+involving a model.
+
+```sh
+tools/speech-test.sh                            # local helpers, defaults
+tools/speech-test.sh -p 'Hello from InferNode'  # custom phrase
+tools/speech-test.sh -e -n 3                    # echo transcripts, exit after 3 turns
+```
+
+Remote topologies compose the same way as in
+[SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md) — mount the remote
+export, then point ctl keys at it (mounts are unauthenticated; trusted
+networks only):
+
+```sh
+# Remote STT+TTS provider (topology 2):
+tools/speech-test.sh --no-helpers \
+    -M 'tcp!fast-box!7770 /n/remotespeech' -c 'provider /n/remotespeech'
+
+# Remote microphone (topology 3, e.g. InferNode on a phone):
+tools/speech-test.sh \
+    -M 'tcp!phone!7771 /n/phoneaudio' \
+    -c 'capturedev /n/phoneaudio/audio' -c 'micmode device'
+```
+
+The wrapper drives `/dis/speechtest.dis` (`appl/cmd/speechtest.b`),
+which bootstraps `speechshim9p` + `speech9p` in its own namespace when
+`/n/speech` is not already served — so the same command also works from
+a shell inside a booted GUI session, where it reuses the live stack.
+The terminal app needs macOS microphone permission (TCC) for local
+capture. Unit tests: `tests/speechtest_test.b`.
+
+### GUI variant
+
+`tools/speech-test.sh --gui` boots the full lucifer desktop with the
+same LLM-free guarantee, via `/lib/lucifer/boot-speechtest.sh` (the
+boot-mobile.sh pattern: set variables, `run` the canonical boot.sh).
+The login screen is skipped (`skiplogon=1` — no keys are needed since
+nothing calls the LLM) and `voicemode` starts in test mode
+(`-p phrase`, plus `-e` when given): entering voice mode (Esc-V or a
+Voice-chip click), wake on "hey jarvis", live partials in the Voice
+chip, chimes, and barge-in all behave exactly as in production, but a
+final transcript is posted to the conversation as a "Heard" dialogue
+line and answered by speaking the canned phrase instead of becoming an
+LLM turn. Spoken control intents ("stop", "keyboard", …) still work.
+`voicemode` runs with `-d`; its trace is in `/tmp/voicemode.log` inside
+the emu namespace.
+
+```sh
+tools/speech-test.sh --gui                      # full desktop, canned phrase
+tools/speech-test.sh --gui -e                   # …echo the transcript instead
+tools/speech-test.sh --gui -p 'Copy that.'      # custom phrase
+```
+
+`--gui` also exercises the boot-time helper configuration: when
+`~/.local/share/infernode-speech/bin` exists (or
+`$INFERNODE_SPEECH_HOME` points elsewhere), the launcher passes it
+through as `$speechhelperbin` and `boot.sh` applies the installer's ctl
+block (kokorobin / whisperstreambin / wakebin / whispermodel / voice /
+wakeword / wakethreshold) automatically — the same variable can be set
+from a profile to get configured helpers in the normal LLM boot, too.
+The headless-only flags (`-n`, `-c`, `-M`, `-d`) are rejected with
+`--gui`; remote topologies in the GUI are Phase 2 territory.
+Unit tests for the daemon's test mode: `tests/voicemode_test.b`
+(`TestMode*` cases).
+
 ## Planned Files
 
 | Path | Action | Phase |

@@ -110,7 +110,7 @@ doc(): string
 		"        tools=read,write,edit,find,grep,list,limbo).\n" +
 		"      Unknown args are rejected with the list of valid keys.\n" +
 		"      Put tools=/paths=/model=/agenttype= before brief=/instructions=.\n" +
-		"      Unquoted brief=/instructions= consume the rest of the line.\n" +
+		"      brief=/instructions= consume the rest of the line.\n" +
 		"  status <id>     Show task status and urgency\n" +
 		"  list            List all active tasks\n" +
 		"  close <id>      Archive a completed task\n\n" +
@@ -135,7 +135,7 @@ schema(): string
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, close. These are the ONLY commands — there is no write/run/send. To make a task do work, describe it in args brief=/instructions= at create time.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. Unquoted brief=/instructions= consume the rest of the line; quote them if more attrs must follow. For status/close: the task id. Omit for list.\"}" +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/close: the task id. Omit for list.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -193,7 +193,22 @@ parseattrs(s: string): list of (string, string)
 		i++;	# skip =
 		# find value — handle quoted strings
 		val := "";
-		if(i < len s && (s[i] == '"' || s[i] == '\'')) {
+		if(isterminaltextkey(key)) {
+			# brief=/instructions= are terminal free text. Treat the rest of
+			# the argument string as content so hostile copied text cannot
+			# smuggle later tools=/paths=/model= attributes. If the whole
+			# terminal value is quoted, strip that single enclosing pair for
+			# convenience, but never resume attribute parsing after it.
+			val = s[i:];
+			while(len val > 0 && (val[0] == ' ' || val[0] == '\t'))
+				val = val[1:];
+			while(len val > 0 && (val[len val - 1] == ' ' || val[len val - 1] == '\t'))
+				val = val[0:len val - 1];
+			if(len val >= 2 && (val[0] == '"' || val[0] == '\'') &&
+			   val[len val - 1] == val[0])
+				val = val[1:len val - 1];
+			i = len s;
+		} else if(i < len s && (s[i] == '"' || s[i] == '\'')) {
 			q := s[i];
 			i++;	# skip opening quote
 			vstart := i;
@@ -202,16 +217,6 @@ parseattrs(s: string): list of (string, string)
 			val = s[vstart:i];
 			if(i < len s)
 				i++;	# skip closing quote
-		} else if(isterminaltextkey(key)) {
-			# Unquoted brief=/instructions= are terminal free text. Treat the
-			# rest of the argument string as content so hostile copied text
-			# cannot smuggle later tools=/paths=/model= attributes.
-			val = s[i:];
-			while(len val > 0 && (val[0] == ' ' || val[0] == '\t'))
-				val = val[1:];
-			while(len val > 0 && (val[len val - 1] == ' ' || val[len val - 1] == '\t'))
-				val = val[0:len val - 1];
-			i = len s;
 		} else {
 			# Unquoted value. Extend it across spaces until the next token
 			# that is itself a known key=… . LLMs routinely omit quotes around

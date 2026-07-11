@@ -1256,6 +1256,9 @@ mcpdiscover(mountpaths: list of string): (list of (string, string), list of (str
 		prefix := strip(readfile(mount + "/_meta/name"));
 		if(prefix == "")
 			prefix = mcpbasename(mount);
+		prefix = mcpsafename(prefix);
+		if(prefix == "")
+			continue;
 		fd := sys->open(mount + "/tools", Sys->OREAD);
 		if(fd == nil)
 			continue;
@@ -1266,6 +1269,8 @@ mcpdiscover(mountpaths: list of string): (list of (string, string), list of (str
 				break;
 			for(k := 0; k < n; k++) {
 				if((dirs[k].mode & Sys->DMDIR) == 0)
+					continue;
+				if(mcpsafename(dirs[k].name) != dirs[k].name)
 					continue;
 				tools = (dirs[k].name, mount) :: tools;
 				found++;
@@ -1302,6 +1307,8 @@ mcptooldefs(mounts: list of (string, string), maxper, budget: int): string
 			for(k := 0; k < n; k++) {
 				d := dirs[k];
 				if((d.mode & Sys->DMDIR) == 0)
+					continue;
+				if(mcpsafename(d.name) != d.name)
 					continue;
 				if(permount >= maxper)
 					continue;

@@ -329,6 +329,17 @@ else
     fail "wallet control delegation-denial test failed"
 fi
 
+if emu_c "provision_ui_ctl_denied" 14 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/ui >[2] /dev/null; touch /mnt/ui/ctl; tools9p -p /mnt/ui:rw read task & sleep 3; echo '19 paths=/mnt/ui/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.19/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/ui/ctl"; then
+        fail "bare /mnt/ui grant must not mint the trusted UI ctl capability"
+    else
+        pass "child cannot derive /mnt/ui/ctl from bare /mnt/ui"
+    fi
+else
+    fail "UI ctl delegation-denial test failed"
+fi
+
 if emu_c "provision_mail_send_denied" 14 \
     "mkdir /mnt >[2] /dev/null; mkdir /mnt/mail >[2] /dev/null; mkdir /mnt/mail/accounts >[2] /dev/null; mkdir /mnt/mail/accounts/alice >[2] /dev/null; touch /mnt/mail/accounts/alice/compose; mkdir /mnt/mail/accounts/alice/boxes >[2] /dev/null; mkdir /mnt/mail/accounts/alice/boxes/INBOX >[2] /dev/null; mkdir /mnt/mail/accounts/alice/boxes/INBOX/1 >[2] /dev/null; touch /mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply; tools9p -p /mnt/mail/accounts/alice:rw read task & sleep 3; echo '18 paths=/mnt/mail/accounts/alice/compose:rw,/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.18/paths"; then
     if echo "$OUTPUT" | grep -q "^/mnt/mail/accounts/.*/\\(compose\\|draft-reply\\)"; then

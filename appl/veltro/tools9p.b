@@ -638,7 +638,7 @@ validatepath(p: string): string
 	if(p == "/")
 		return "root path is not grantable";
 	for(ci := 0; ci < len p; ci++)
-		if(p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
+		if(p[ci] == ' ' || p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
 			return "path contains control delimiter";
 
 	start := 1;
@@ -1178,12 +1178,25 @@ provisiontask(args: string)
 	# Parse optional tools= and paths= attrs
 	toolsarg := "";
 	pathsarg := "";
+	seentools := 0;
+	seenpaths := 0;
 	for(; toks != nil; toks = tl toks) {
 		tok := hd toks;
-		if(len tok > 6 && tok[0:6] == "tools=")
+		if(len tok > 6 && tok[0:6] == "tools=") {
+			if(seentools) {
+				sys->fprint(stderr, "tools9p: provision: duplicate tools= attr\n");
+				return;
+			}
+			seentools = 1;
 			toolsarg = tok[6:];
-		else if(len tok > 6 && tok[0:6] == "paths=")
+		} else if(len tok > 6 && tok[0:6] == "paths=") {
+			if(seenpaths) {
+				sys->fprint(stderr, "tools9p: provision: duplicate paths= attr\n");
+				return;
+			}
+			seenpaths = 1;
 			pathsarg = tok[6:];
+		}
 	}
 
 	# Build tool list: requested tools must stay within the delegation

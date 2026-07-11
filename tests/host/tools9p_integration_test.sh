@@ -426,22 +426,22 @@ else
 fi
 
 if emu_c "provision_invalid_paths" 14 \
-    "tools9p -p /tmp:rw read task & sleep 3; echo '14 paths=/:rw,/tmp/../lib:rw,/tmp//evil:rw,/tmp/./evil:rw,relative/path:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.14/paths"; then
-    if echo "$OUTPUT" | grep -qE '^/|relative/path'; then
+    "tools9p -p /tmp:rw read task & sleep 3; echo '14 paths=/:rw,/tmp/../lib:rw,/tmp//evil:rw,/tmp/./evil:rw,relative/path:rw,/tmp/a paths=/tmp/forged:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.14/paths"; then
+    if echo "$OUTPUT" | grep -qE '^/|relative/path|/tmp/forged'; then
         fail "child provisioning accepted traversal or non-absolute path (output: $OUTPUT)"
     else
-        pass "child provisioning rejects traversal, empty-component, root, and relative paths"
+        pass "child provisioning rejects traversal, delimiters, empty-component, root, and relative paths"
     fi
 else
     fail "invalid child path provisioning probe failed"
 fi
 
 if emu_c "bindpath_delimiter_rejected" 12 \
-    "tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /tmp/evil,/tmp/forged' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /tmp/evil,/tmp/forged' > /mnt/toolctl/ctl; echo 'bindpath /tmp/a paths=/tmp/forged' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "bindpath delimiter probe did not establish a valid control baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "/tmp/evil"; then
-        fail "bindpath accepted a comma-delimited path grant (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "/tmp/evil" || echo "$OUTPUT" | grep -q "/tmp/forged"; then
+        fail "bindpath accepted a delimiter-bearing path grant (output: $OUTPUT)"
     else
         pass "bindpath rejects path control delimiters"
     fi

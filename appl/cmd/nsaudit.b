@@ -428,6 +428,11 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 
 	for(pl3 := caps.paths; pl3 != nil; pl3 = tl pl3) {
 		p := hd pl3;
+		if(pathwithin("/mnt/llm", p)) {
+			if(!contains(inv.auths, "sends_llm"))
+				inv.auths = "sends_llm" :: inv.auths;
+			inv.sources = ("sends_llm", "via path " + p) :: inv.sources;
+		}
 		if(privilegedControlGrant(p)) {
 			if(!contains(inv.auths, "privileged_control_path"))
 				inv.auths = "privileged_control_path" :: inv.auths;
@@ -461,7 +466,16 @@ privilegedControlGrant(p: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(p == dangerous[i])
 			return 1;
+	if(walletAccountControlGrant(p))
+		return 1;
 	return 0;
+}
+
+walletAccountControlGrant(p: string): int
+{
+	if(!prefix(p, "/n/wallet/"))
+		return 0;
+	return componentcount(p) == 4 && pathhascomponent(p, "ctl");
 }
 
 directMailSendGrant(p: string): int

@@ -776,7 +776,16 @@ privilegedcontrolpath(path: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i])
 			return 1;
+	if(walletaccountcontrolpath(path))
+		return 1;
 	return 0;
+}
+
+walletaccountcontrolpath(path: string): int
+{
+	if(!prefix(path, "/n/wallet/"))
+		return 0;
+	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
 }
 
 pathperm(path: string): string

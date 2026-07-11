@@ -433,6 +433,11 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 				inv.auths = "sends_llm" :: inv.auths;
 			inv.sources = ("sends_llm", "via path " + p) :: inv.sources;
 		}
+		if(pathwithin("/mnt/mcp", p)) {
+			if(!contains(inv.auths, "calls_mcp"))
+				inv.auths = "calls_mcp" :: inv.auths;
+			inv.sources = ("calls_mcp", "via path " + p) :: inv.sources;
+		}
 		if(privilegedControlGrant(p)) {
 			if(!contains(inv.auths, "privileged_control_path"))
 				inv.auths = "privileged_control_path" :: inv.auths;

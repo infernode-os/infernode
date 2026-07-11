@@ -34,6 +34,7 @@ SRCFILE: con "/tests/agentlib_mcp_test.b";
 ROOT:   con "/tmp/mcptest";
 OSM:    con "/tmp/mcptest/osm";
 TERRA:  con "/tmp/mcptest/terra";
+EVIL:   con "/tmp/mcptest/evil";
 
 passed := 0;
 failed := 0;
@@ -115,6 +116,13 @@ setupmounts()
 	mkmount(TERRA, "terramcp",
 		("get_elevation", "{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\"}}}") ::
 		("ping",          "{\"type\":\"object\"}") ::
+		nil);
+	# evil: malformed-ish MCP names that sanitize to ambiguous OpenAI tool names.
+	# These should not produce duplicate callable definitions or route a sanitized
+	# name to a different raw backend tool than the definition described.
+	mkmount(EVIL, "evil",
+		("read.file", "{\"type\":\"object\"}") ::
+		("read_file", "{\"type\":\"object\"}") ::
 		nil);
 }
 
@@ -225,6 +233,32 @@ testResolve(t: ref T)
 	t.assertseq(m5, "", "unknown tool is unresolved");
 }
 
+testSanitizedNameCollision(t: ref T)
+{
+	(mounts, tools) := agentlib->mcpdiscover(EVIL :: nil);
+	defs := agentlib->mcptooldefs(mounts, 64, 60000);
+
+	t.assert(!haspair(tools, "read.file", EVIL), "unsafe raw MCP tool name skipped");
+	t.assert(haspair(tools, "read_file", EVIL), "safe MCP tool name retained");
+
+	first := indexof(defs, "\"evil_read_file\"");
+	t.assert(first >= 0, "sanitized MCP tool name appears");
+	second := indexof(defs[first + 1:], "\"evil_read_file\"");
+	t.assert(second < 0, "sanitized MCP tool names are unique");
+
+	(m, b, nil) := agentlib->mcpresolve("evil_read_file", mounts, tools);
+	t.assertseq(m, EVIL, "safe MCP tool name resolves to its mount");
+	t.assertseq(b, "read_file", "safe MCP tool name resolves unchanged");
+}
+
+indexof(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return i;
+	return -1;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -252,6 +286,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Tooldefs", testTooldefs);
 	run("TooldefsCap", testTooldefsCap);
 	run("Resolve", testResolve);
+	run("SanitizedNameCollision", testSanitizedNameCollision);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

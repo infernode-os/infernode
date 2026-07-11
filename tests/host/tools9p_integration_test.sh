@@ -462,6 +462,28 @@ else
     fail "privileged bindpath rejection probe failed"
 fi
 
+if emu_c "startup_privileged_path_rejected" 12 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; tools9p -p /mnt/msg/ctl:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/msg/ctl"; then
+        pass "startup -p rejects privileged control paths"
+    else
+        fail "tools9p accepted privileged startup -p path (output: $OUTPUT)"
+    fi
+else
+    fail "startup privileged path rejection probe failed"
+fi
+
+if emu_c "startup_direct_send_path_rejected" 12 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/mail >[2] /dev/null; mkdir /mnt/mail/accounts >[2] /dev/null; mkdir /mnt/mail/accounts/alice >[2] /dev/null; touch /mnt/mail/accounts/alice/compose; tools9p -p /mnt/mail/accounts/alice/compose:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/mail/accounts/alice/compose"; then
+        pass "startup -p rejects direct-send paths"
+    else
+        fail "tools9p accepted direct-send startup -p path (output: $OUTPUT)"
+    fi
+else
+    fail "startup direct-send path rejection probe failed"
+fi
+
 if emu_c "provision_sibling_prefix" 14 \
     "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.15/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then

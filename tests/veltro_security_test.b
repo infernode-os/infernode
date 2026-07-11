@@ -1483,6 +1483,44 @@ invalidGrantPathsWorker(result: chan of string)
 	result <-= "";
 }
 
+testPrivilegedGrantPathsRejected(t: ref T)
+{
+	result := chan of string;
+	spawn privilegedGrantPathsWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+privilegedGrantPathsWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	bad := array[] of {
+		"/mnt/msg/ctl",
+		"/n/wallet/alice/ctl",
+		"/mnt/mail/accounts/alice/compose",
+		"/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply",
+	};
+
+	for(i := 0; i < len bad; i++) {
+		caps := ref NsConstruct->Capabilities(
+			"read" :: nil,
+			bad[i] :: nil,
+			nil, nil,
+			0 :: 1 :: 2 :: nil,
+			nil, 0, 0, -1, nil
+		, nil);
+		err := nsconstruct->restrictns(caps);
+		if(err == nil) {
+			result <-= "restrictns accepted privileged grant path: " + bad[i];
+			return;
+		}
+	}
+
+	result <-= "";
+}
+
 # A path that treats an existing file as a directory must fail closed. Otherwise
 # recursive restriction can expose the parent file after the deeper bind fails.
 testInvalidGrantTypeRejected(t: ref T)
@@ -1800,6 +1838,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 	run("ToolCtlHidden", testToolCtlHidden);
 	run("InvalidGrantPathsRejected", testInvalidGrantPathsRejected);
+	run("PrivilegedGrantPathsRejected", testPrivilegedGrantPathsRejected);
 	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
 

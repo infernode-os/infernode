@@ -798,9 +798,12 @@ pathwithin(grant, want: string): int
 validatepaths(paths: list of string, what: string): string
 {
 	for(; paths != nil; paths = tl paths) {
-		err := validatepath(hd paths);
+		p := hd paths;
+		err := validatepath(p);
 		if(err != nil)
-			return sys->sprint("invalid %s %s: %s", what, hd paths, err);
+			return sys->sprint("invalid %s %s: %s", what, p, err);
+		if(!grantpathallowed(p))
+			return sys->sprint("invalid %s %s: privileged path not grantable", what, p);
 	}
 	return nil;
 }
@@ -829,6 +832,111 @@ validatepath(p: string): string
 		}
 	}
 	return nil;
+}
+
+grantpathallowed(path: string): int
+{
+	if(privilegedcontrolpath(path))
+		return 0;
+	if(directmailsendpath(path))
+		return 0;
+	return 1;
+}
+
+privilegedcontrolpath(path: string): int
+{
+	dangerous := array[] of {
+		"/tool/ctl",
+		"/mnt/toolctl",
+		"/mnt/toolctl/ctl",
+		"/mnt/ui/ctl",
+		"/mnt/msg/ctl",
+		"/mnt/msg/pending",
+		"/mnt/msg/approve",
+		"/mnt/msg/deny",
+		"/n/wallet/ctl",
+		"/n/wallet/pending",
+		"/n/wallet/new",
+	};
+	for(i := 0; i < len dangerous; i++)
+		if(path == dangerous[i])
+			return 1;
+	if(walletaccountcontrolpath(path))
+		return 1;
+	return 0;
+}
+
+walletaccountcontrolpath(path: string): int
+{
+	if(!prefix(path, "/n/wallet/"))
+		return 0;
+	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
+}
+
+directmailsendpath(path: string): int
+{
+	if(path == "/mnt/mail")
+		return 1;
+	if(prefix(path, "/mnt/mail/")) {
+		if(pathhascomponent(path, "compose") || pathhascomponent(path, "draft-reply"))
+			return 1;
+		if(mailaccountancestor(path))
+			return 1;
+	}
+	return 0;
+}
+
+mailaccountancestor(path: string): int
+{
+	# /mnt/mail/accounts/<acct> exposes compose.
+	if(prefix(path, "/mnt/mail/accounts/") && componentcount(path) <= 4)
+		return 1;
+	# /mnt/mail/accounts/<acct>/boxes/<box>/<uid> exposes draft-reply.
+	if(prefix(path, "/mnt/mail/accounts/") && pathhascomponent(path, "boxes") &&
+	   componentcount(path) <= 7)
+		return 1;
+	return 0;
+}
+
+prefix(s, p: string): int
+{
+	if(len s < len p)
+		return 0;
+	return s[0:len p] == p;
+}
+
+pathhascomponent(path, want: string): int
+{
+	i := 0;
+	n := len path;
+	while(i < n) {
+		while(i < n && path[i] == '/')
+			i++;
+		j := i;
+		while(j < n && path[j] != '/')
+			j++;
+		if(j > i && path[i:j] == want)
+			return 1;
+		i = j;
+	}
+	return 0;
+}
+
+componentcount(path: string): int
+{
+	nc := 0;
+	i := 0;
+	n := len path;
+	while(i < n) {
+		while(i < n && path[i] == '/')
+			i++;
+		if(i >= n)
+			break;
+		nc++;
+		while(i < n && path[i] != '/')
+			i++;
+	}
+	return nc;
 }
 
 overlaywritepaths(paths: list of string, actid: int): string

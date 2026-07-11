@@ -1833,7 +1833,9 @@ mountresource(ce: ref CatalogEntry)
 	if(ce.rtype == "path") {
 		# Local filesystem path: route through tools9p so lucibridge
 		# binds it in the agent namespace (not lucifer's).
-		writetofile(toolctlmount() + "/ctl", "bindpath " + ce.dial);
+		cmd := "bindpath " + ce.dial;
+		if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
+			return;
 		writetofile(mountpt_g + "/ctl",
 			"catalog mounted name=" + ce.name + " path=" + ce.dial);
 	} else {
@@ -1864,7 +1866,9 @@ unmountresource(ce: ref CatalogEntry)
 	if(ce == nil || ce.mntpath == "")
 		return;
 	if(ce.rtype == "path") {
-		writetofile(toolctlmount() + "/ctl", "unbindpath " + ce.mntpath);
+		cmd := "unbindpath " + ce.mntpath;
+		if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
+			return;
 	} else {
 		sys->unmount(nil, ce.mntpath);
 	}
@@ -2128,7 +2132,9 @@ bindpath(srcpath: string)
 	if(!toolmount_ready())
 		return;
 	# Register in tools9p; lucibridge reads /tool/paths and binds in its namespace.
-	writetofile(toolctlmount() + "/ctl", "bindpath " + srcpath);
+	cmd := "bindpath " + srcpath;
+	if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
+		return;
 	loadpinnedpaths();
 	loadmanifest();
 	loadcontext();
@@ -2139,7 +2145,9 @@ unbindpath(pp: ref PinnedPath)
 {
 	if(pp == nil)
 		return;
-	writetofile(toolctlmount() + "/ctl", "unbindpath " + pp.srcpath);
+	cmd := "unbindpath " + pp.srcpath;
+	if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
+		return;
 	loadpinnedpaths();
 	loadmanifest();
 	loadcontext();
@@ -2155,7 +2163,9 @@ togglepathperm(pp: ref PinnedPath)
 	newperm := "ro";
 	if(pp.perm == "ro")
 		newperm = "rw";
-	writetofile(toolctlmount() + "/ctl", "setperm " + pp.srcpath + " " + newperm);
+	cmd := "setperm " + pp.srcpath + " " + newperm;
+	if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
+		return;
 	loadpinnedpaths();
 	loadcontext();
 	redrawctx();
@@ -2292,12 +2302,12 @@ readfile(path: string): string
 	return result;
 }
 
-writetofile(path: string, text: string)
+writetofile(path: string, text: string): int
 {
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
 		sys->fprint(sys->fildes(2), "lucictx: writetofile open failed: %s: %r\n", path);
-		return;
+		return -1;
 	}
 	b := array of byte text;
 	n := sys->write(fd, b, len b);
@@ -2305,6 +2315,7 @@ writetofile(path: string, text: string)
 		sys->fprint(sys->fildes(2), "lucictx: writetofile short write: %s: wrote %d of %d: %r\n", path, n, len b);
 	else if(path == "/edit/ctl")
 		sys->fprint(sys->fildes(2), "lucictx: writetofile OK: %s <- %s\n", path, text);
+	return n;
 }
 
 strip(s: string): string

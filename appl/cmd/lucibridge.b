@@ -1200,25 +1200,33 @@ handleslash(cmd: string): int
 		if(cmdarg == "") {
 			ack = "usage: /bind <path> [ro|rw]";
 		} else {
-			writefile(toolctlmount(toolmount) + "/ctl", "bindpath " + cmdarg);
-			# Push context event so the namespace view updates immediately
-			ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-			base := pathbase(cmdarg);
-			if(base == nil || base == "")
-				base = cmdarg;
-			writefile(ctxpath, "resource upsert path=" + cmdarg +
-				" label=" + base + " type=fs status=idle via=bound");
-			ack = "bound: " + cmdarg;
+			ctlcmd := "bindpath " + cmdarg;
+			if(writefile(toolctlmount(toolmount) + "/ctl", ctlcmd) != len array of byte ctlcmd) {
+				ack = "bind failed: " + cmdarg;
+			} else {
+				# Push context event so the namespace view updates immediately
+				ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
+				base := pathbase(cmdarg);
+				if(base == nil || base == "")
+					base = cmdarg;
+				writefile(ctxpath, "resource upsert path=" + cmdarg +
+					" label=" + base + " type=fs status=idle via=bound");
+				ack = "bound: " + cmdarg;
+			}
 		}
 	"unbind" =>
 		if(cmdarg == "") {
 			ack = "usage: /unbind <path>";
 		} else {
-			writefile(toolctlmount(toolmount) + "/ctl", "unbindpath " + cmdarg);
-			# Push context event so the namespace view updates immediately
-			ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-			writefile(ctxpath, "resource remove " + cmdarg);
-			ack = "unbound: " + cmdarg;
+			ctlcmd := "unbindpath " + cmdarg;
+			if(writefile(toolctlmount(toolmount) + "/ctl", ctlcmd) != len array of byte ctlcmd) {
+				ack = "unbind failed: " + cmdarg;
+			} else {
+				# Push context event so the namespace view updates immediately
+				ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
+				writefile(ctxpath, "resource remove " + cmdarg);
+				ack = "unbound: " + cmdarg;
+			}
 		}
 	"tools" =>
 		if(len cmdarg == 0) {

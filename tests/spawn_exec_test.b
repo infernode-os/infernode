@@ -169,6 +169,25 @@ testSpawnRejectsExecWithPaths(t: ref T)
 		"spawn rejects exec with extra paths");
 }
 
+testSpawnRejectsPrivilegedPaths(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.fatal(sys->sprint("cannot load spawn tool: %r"));
+		return;
+	}
+	err := tool->init();
+	if(err != nil) {
+		t.fatal(sys->sprint("spawn init failed: %s", err));
+		return;
+	}
+	result := tool->exec("-- tools=read paths=/mnt/msg/ctl :: inspect");
+	t.log(sys->sprint("spawn privileged path reject result: %s", result));
+	t.assert(contains(result, "namespace restriction failed") &&
+		contains(result, "privileged path not grantable"),
+		"spawn rejects privileged child path grants");
+}
+
 contains(s, sub: string): int
 {
 	if(len sub > len s)
@@ -214,6 +233,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("LoadReadTool", testLoadReadTool);
 	run("SpawnExec", testSpawnExec);
 	run("SpawnRejectsExecWithPaths", testSpawnRejectsExecWithPaths);
+	run("SpawnRejectsPrivilegedPaths", testSpawnRejectsPrivilegedPaths);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

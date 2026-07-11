@@ -55,10 +55,15 @@ for d in "$RULESDIR"/*/; do
     want="$(tr -d ' \t\r\n' < "$d/expect")"
     log="/tmp/.nsaudit-${name}.log"
     # nsaudit may exit nonzero on high-severity findings; capture output regardless.
-    timeout 30 "$EMU" -r"$ROOT" "$SH" -c \
-        "path=(/dis/veltro /dis/cmd /dis .); nsaudit -m /tests/nsaudit-rules/$name" \
-        </dev/null >"$log" 2>&1
-    out="$(cat "$log")"
+    out=""
+    for attempt in 1 2 3; do
+        timeout 30 "$EMU" -r"$ROOT" "$SH" -c \
+            "path=(/dis/veltro /dis/cmd /dis .); nsaudit -m /tests/nsaudit-rules/$name" \
+            </dev/null >"$log" 2>&1
+        out="$(cat "$log")"
+        [[ -n "$out" ]] && break
+        info "$name: empty nsaudit output on attempt $attempt, retrying"
+    done
     if grep -q "violation=${want}\b" "$log"; then
         pass "$name -> $want"
     else

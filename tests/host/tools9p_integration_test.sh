@@ -329,6 +329,17 @@ else
     fail "wallet control delegation-denial test failed"
 fi
 
+if emu_c "provision_wallet_account_ctl_denied" 14 \
+    "mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/alice >[2] /dev/null; touch /n/wallet/alice/ctl; tools9p -p /n/wallet:rw read task & sleep 3; echo '20 paths=/n/wallet/alice/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.20/paths"; then
+    if echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl"; then
+        fail "bare /n/wallet grant must not mint per-account wallet ctl"
+    else
+        pass "child cannot derive per-account wallet ctl from bare /n/wallet"
+    fi
+else
+    fail "wallet account ctl delegation-denial test failed"
+fi
+
 if emu_c "provision_ui_ctl_denied" 14 \
     "mkdir /mnt >[2] /dev/null; mkdir /mnt/ui >[2] /dev/null; touch /mnt/ui/ctl; tools9p -p /mnt/ui:rw read task & sleep 3; echo '19 paths=/mnt/ui/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.19/paths"; then
     if echo "$OUTPUT" | grep -q "^/mnt/ui/ctl"; then

@@ -449,6 +449,19 @@ else
     fail "bindpath delimiter rejection probe failed"
 fi
 
+if emu_c "bindpath_privileged_rejected" 12 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/alice >[2] /dev/null; touch /n/wallet/alice/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
+        fail "privileged bindpath probe did not establish a valid baseline (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl"; then
+        fail "bindpath accepted privileged control path (output: $OUTPUT)"
+    else
+        pass "bindpath rejects privileged control paths"
+    fi
+else
+    fail "privileged bindpath rejection probe failed"
+fi
+
 if emu_c "provision_sibling_prefix" 14 \
     "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.15/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then

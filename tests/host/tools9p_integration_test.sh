@@ -318,6 +318,28 @@ else
     fail "message ctl delegation-denial test failed"
 fi
 
+if emu_c "provision_wallet_controls_denied" 14 \
+    "mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; touch /n/wallet/ctl; touch /n/wallet/pending; touch /n/wallet/new; tools9p -p /n/wallet:rw read task & sleep 3; echo '17 paths=/n/wallet/ctl:rw,/n/wallet/pending:rw,/n/wallet/new:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
+    if echo "$OUTPUT" | grep -q "^/n/wallet/\\(ctl\\|pending\\|new\\)"; then
+        fail "bare /n/wallet grant must not mint trusted wallet control capabilities"
+    else
+        pass "child cannot derive wallet ctl/pending/new from bare /n/wallet"
+    fi
+else
+    fail "wallet control delegation-denial test failed"
+fi
+
+if emu_c "provision_mail_send_denied" 14 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/mail >[2] /dev/null; mkdir /mnt/mail/accounts >[2] /dev/null; mkdir /mnt/mail/accounts/alice >[2] /dev/null; touch /mnt/mail/accounts/alice/compose; mkdir /mnt/mail/accounts/alice/boxes >[2] /dev/null; mkdir /mnt/mail/accounts/alice/boxes/INBOX >[2] /dev/null; mkdir /mnt/mail/accounts/alice/boxes/INBOX/1 >[2] /dev/null; touch /mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply; tools9p -p /mnt/mail/accounts/alice:rw read task & sleep 3; echo '18 paths=/mnt/mail/accounts/alice/compose:rw,/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.18/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/mail/accounts/.*/\\(compose\\|draft-reply\\)"; then
+        fail "mail account grant must not mint direct-send child capabilities"
+    else
+        pass "child cannot derive mail compose/draft-reply from account grant"
+    fi
+else
+    fail "mail direct-send delegation-denial test failed"
+fi
+
 if emu_c "provision_msg_draft_exact" 14 \
     "tools9p -p /mnt/msg/draft:rw read task & sleep 3; echo '11 paths=/mnt/msg/draft:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.11/paths"; then
     if echo "$OUTPUT" | grep -q "^/mnt/msg/draft rw"; then

@@ -470,7 +470,21 @@ directMailSendGrant(p: string): int
 	if(prefix(p, "/mnt/mail/")) {
 		if(pathhascomponent(p, "compose") || pathhascomponent(p, "draft-reply"))
 			return 1;
+		if(mailAccountSendAncestor(p))
+			return 1;
 	}
+	return 0;
+}
+
+mailAccountSendAncestor(p: string): int
+{
+	# /mnt/mail/accounts/<acct> exposes compose.
+	if(prefix(p, "/mnt/mail/accounts/") && componentcount(p) <= 4)
+		return 1;
+	# /mnt/mail/accounts/<acct>/boxes/<box>/<uid> exposes draft-reply.
+	if(prefix(p, "/mnt/mail/accounts/") && pathhascomponent(p, "boxes") &&
+	   componentcount(p) <= 7)
+		return 1;
 	return 0;
 }
 
@@ -489,6 +503,23 @@ pathhascomponent(p, want: string): int
 		i = j;
 	}
 	return 0;
+}
+
+componentcount(p: string): int
+{
+	nc := 0;
+	i := 0;
+	n := len p;
+	while(i < n) {
+		while(i < n && p[i] == '/')
+			i++;
+		if(i >= n)
+			break;
+		nc++;
+		while(i < n && p[i] != '/')
+			i++;
+	}
+	return nc;
 }
 
 contains(l: list of string, s: string): int

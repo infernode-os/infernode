@@ -272,6 +272,10 @@ init(nil: ref Draw->Context, args: list of string)
 				sys->fprint(stderr, "tools9p: invalid -p path %s: %s\n", ppath, perr);
 				raise "fail:usage";
 			}
+			if(!bindpathallowed(ppath)) {
+				sys->fprint(stderr, "tools9p: privileged -p path not grantable: %s\n", ppath);
+				raise "fail:usage";
+			}
 			# Explicit :ro/:rw grants are permission-bearing capabilities.
 			# Keep them in boundpaths only so raw exec cannot inherit a
 			# read-only grant through the untyped extpaths list.

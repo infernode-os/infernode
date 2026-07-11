@@ -188,6 +188,45 @@ testSpawnRejectsPrivilegedPaths(t: ref T)
 		"spawn rejects privileged child path grants");
 }
 
+testSpawnJsonSingleAgentWithArrayGrants(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.fatal(sys->sprint("cannot load spawn tool: %r"));
+		return;
+	}
+	err := tool->init();
+	if(err != nil) {
+		t.fatal(sys->sprint("spawn init failed: %s", err));
+		return;
+	}
+	result := tool->exec(`{"task":"inspect","tools":["exec"],"paths":["/lib/veltro"]}`);
+	t.log(sys->sprint("spawn JSON single-agent reject result: %s", result));
+	t.assert(contains(result, "exec/shell subagents cannot receive path grants"),
+		"spawn parses a single JSON agent object before enforcing grants");
+	t.assert(!contains(result, "each subagent needs a task"),
+		"spawn must not misread tools[] as the agents array");
+}
+
+testSpawnJsonRejectsPrivilegedPaths(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/spawn.dis";
+	if(tool == nil) {
+		t.fatal(sys->sprint("cannot load spawn tool: %r"));
+		return;
+	}
+	err := tool->init();
+	if(err != nil) {
+		t.fatal(sys->sprint("spawn init failed: %s", err));
+		return;
+	}
+	result := tool->exec(`{"agents":[{"task":"inspect","tools":["read"],"paths":["/mnt/msg/ctl"]}]}`);
+	t.log(sys->sprint("spawn JSON privileged path reject result: %s", result));
+	t.assert(contains(result, "namespace restriction failed") &&
+		contains(result, "privileged path not grantable"),
+		"spawn rejects privileged JSON path grants");
+}
+
 contains(s, sub: string): int
 {
 	if(len sub > len s)
@@ -234,6 +273,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SpawnExec", testSpawnExec);
 	run("SpawnRejectsExecWithPaths", testSpawnRejectsExecWithPaths);
 	run("SpawnRejectsPrivilegedPaths", testSpawnRejectsPrivilegedPaths);
+	run("SpawnJsonSingleAgentWithArrayGrants", testSpawnJsonSingleAgentWithArrayGrants);
+	run("SpawnJsonRejectsPrivilegedPaths", testSpawnJsonRejectsPrivilegedPaths);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

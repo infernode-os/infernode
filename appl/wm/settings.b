@@ -876,9 +876,10 @@ dobindpath()
 	path := strip(eget(".content.padd"));
 	if(len path == 0)
 		return;
-	writectl("/tool/ctl", "bindpath " + path);
-	tk->cmd(top, ".content.padd delete 0 end");
-	refreshpaths();
+	if(writectl("/tool/ctl", "bindpath " + path) >= 0) {
+		tk->cmd(top, ".content.padd delete 0 end");
+		refreshpaths();
+	}
 }
 
 dounbindpath()
@@ -893,8 +894,8 @@ dounbindpath()
 	(path, nil) := str->splitl(path_items[idx], " \t");
 	if(path == nil || len path == 0)
 		path = path_items[idx];
-	writectl("/tool/ctl", "unbindpath " + path);
-	refreshpaths();
+	if(writectl("/tool/ctl", "unbindpath " + path) >= 0)
+		refreshpaths();
 }
 
 # Reload the /tool/paths listing into the paths listbox.
@@ -1458,17 +1459,20 @@ reloadcolors()
 
 # ── Helpers ───────────────────────────────────────────────────
 
-writectl(path, cmd: string)
+writectl(path, cmd: string): int
 {
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil) {
 		flashstatus(sys->sprint("error: %r"));
-		return;
+		return -1;
 	}
 	b := array of byte cmd;
 	n := sys->write(fd, b, len b);
-	if(n < 0)
+	if(n != len b) {
 		flashstatus(sys->sprint("error: %r"));
+		return -1;
+	}
+	return n;
 }
 
 readfile(path: string): string

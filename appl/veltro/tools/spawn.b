@@ -694,8 +694,7 @@ parsejsonspecs(s: string): (list of ref SubSpec, int, string)
 	if(specstr != "")
 		return parsespecs(specstr);
 
-	# {"agents"|"tasks"|"subagents"|"spawns": [ ... ]}, or — to be robust to
-	# whatever key a model invents — the first array-valued property of the object.
+	# {"agents"|"tasks"|"subagents"|"spawns": [ ... ]}.
 	arr := jv.get("agents");
 	if(arr == nil)
 		arr = jv.get("tasks");
@@ -703,12 +702,25 @@ parsejsonspecs(s: string): (list of ref SubSpec, int, string)
 		arr = jv.get("subagents");
 	if(arr == nil)
 		arr = jv.get("spawns");
-	if(arr == nil)
-		arr = firstarrayvalue(jv);
 	if(arr != nil)
 		return buildfromarray(arr, timeout_ms);
 
-	# Otherwise treat the whole object as a single subagent.
+	# A top-level task/prompt/etc. object is one subagent. Check this before the
+	# key-agnostic array fallback below; otherwise a valid single-agent object
+	# with tools=[...] or paths=[...] would be misread as an array of subagents.
+	if(jfirststr(jv, "task" :: "prompt" :: "instruction" :: "description" :: "role" :: "goal" :: nil) != "") {
+		(sp, e) := buildagent(jv);
+		if(e != "")
+			return (nil, 0, e);
+		return (sp :: nil, timeout_ms, "");
+	}
+
+	# Key-agnostic fallback so any array key a model picks — "children",
+	# "workers", ... — still resolves when the object is clearly a wrapper.
+	arr = firstarrayvalue(jv);
+	if(arr != nil)
+		return buildfromarray(arr, timeout_ms);
+
 	(sp, e) := buildagent(jv);
 	if(e != "")
 		return (nil, 0, e);

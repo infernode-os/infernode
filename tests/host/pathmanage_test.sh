@@ -148,5 +148,30 @@ else
 fi
 
 echo ""
+echo "── launcher namespace grant boundary ──"
+
+if emu_c "veltro_privileged_path_rejected" 12 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; tools9p read & sleep 2; veltro -p /mnt/msg/ctl 'probe unsafe namespace grant'; cat /tool/paths"; then
+    if echo "$OUTPUT" | grep -q "privileged path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/msg/ctl"; then
+        pass "veltro -p rejects privileged control paths"
+    else
+        fail "veltro -p accepted privileged control path (output: $OUTPUT)"
+    fi
+else
+    fail "veltro privileged path rejection probe failed"
+fi
+
+if emu_c "veltro_direct_send_path_rejected" 12 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/mail >[2] /dev/null; mkdir /mnt/mail/accounts >[2] /dev/null; mkdir /mnt/mail/accounts/alice >[2] /dev/null; touch /mnt/mail/accounts/alice/compose; tools9p read & sleep 2; veltro -p /mnt/mail/accounts/alice/compose 'probe unsafe mail grant'; cat /tool/paths"; then
+    if echo "$OUTPUT" | grep -q "privileged path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/mail/accounts/alice/compose"; then
+        pass "veltro -p rejects direct-send paths"
+    else
+        fail "veltro -p accepted direct-send path (output: $OUTPUT)"
+    fi
+else
+    fail "veltro direct-send path rejection probe failed"
+fi
+
+echo ""
 echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
 [[ "$FAILED" -eq 0 ]]

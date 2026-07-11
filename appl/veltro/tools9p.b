@@ -692,6 +692,15 @@ childpathallowed(path: string): int
 	return 0;
 }
 
+bindpathallowed(path: string): int
+{
+	if(privilegedcontrolpath(path))
+		return 0;
+	if(directmailsendpath(path))
+		return 0;
+	return 1;
+}
+
 directmailsendpath(path: string): int
 {
 	if(path == "/mnt/mail")
@@ -1651,6 +1660,10 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "invalid path: " + perr));
 						break;
 					}
+					if(!bindpathallowed(bpath)) {
+						srv.reply(ref Rmsg.Error(m.tag, "privileged path not bindable: " + bpath));
+						break;
+					}
 					existing := findboundpath(bpath);
 					if(existing != nil)
 						existing.perm = bperm;  # update perm on re-bind
@@ -1659,6 +1672,11 @@ Serve:
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				} else if(len data > 11 && data[0:11] == "unbindpath ") {
 					p := data[11:];
+					perr := validatepath(p);
+					if(perr != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, "invalid path: " + perr));
+						break;
+					}
 					nl: list of ref BoundPath;
 					for(bl := boundpaths; bl != nil; bl = tl bl)
 						if((hd bl).path != p)

@@ -7,7 +7,8 @@ implement Speechshim9p;
 #   /n/speechshim/
 #   ├── ctl      (rw)  kokorobin, whisperstreambin, wakebin, wakeword,
 #   │                  wakethreshold, whispermodel, voice, rate,
-#   │                  audiodev, capturedev, micmode, capturerate
+#   │                  audiodev, capturedev, micmode, capturerate,
+#   │                  mic on|off
 #   ├── listen   (r)   newline records from the streaming STT helper:
 #   │                  "partial <text>" / "final <text>" / "error: <reason>"
 #   ├── wake     (r)   blocks until the wake-word helper emits an event line
@@ -24,10 +25,14 @@ implement Speechshim9p;
 # with an "error: ..." record when a helper is absent.
 #
 # Host processes run through #C (devcmd). Streaming helpers (listen, wake)
-# are started once and read incrementally; killonclose is armed so they die
-# with the shim. TTS is killed on cancel via the devcmd ctl "kill" command,
-# and playback checks the cancel flag between chunks, so barge-in silence is
-# bounded by one audio chunk rather than the remaining utterance.
+# are started lazily by the first listen/wake read and read incrementally;
+# killonclose is armed so they die with the shim. The microphone is thus
+# only open while a client is actually reading: nothing runs at boot, and
+# `mic off` on ctl tears the mic-side helpers down again (voicemode writes
+# it when the user leaves voice mode) — the next read re-arms them. TTS is
+# killed on cancel via the devcmd ctl "kill" command, and playback checks
+# the cancel flag between chunks, so barge-in silence is bounded by one
+# audio chunk rather than the remaining utterance.
 #
 # Audio routing (docs/SPEECH-REMOTE-AUDIO.md): playback always goes through
 # the namespace (`audiodev`, default /dev/audio), so binding an imported
@@ -84,6 +89,7 @@ capturedev := "";		# capture override; empty = audiodev
 micmode := "helper";		# helper | device
 capturerate := 16000;
 duplex := "full";		# full | half
+standby := 0;			# mic off: no helper (re)starts until the next listen/wake read
 
 stderr: ref Sys->FD;
 user: string;
@@ -436,6 +442,7 @@ readlisten(): string
 {
 	if(whisperstreambin == "")
 		return "error: listen helper not configured";
+	standby = 0;		# an active reader arms the microphone
 	# One restart attempt: a stale fd from an exited helper (one-shot
 	# helpers exit after each utterance) must not eat a read as an error.
 	for(attempt := 0; attempt < 2; attempt++) {
@@ -446,12 +453,22 @@ readlisten(): string
 			listenproc = p;
 			if(micmode == "device")
 				addsink(SINKLISTEN, p);
+			if(standby) {
+				# `mic off` raced the start; honor it.
+				killproc(p);
+				listenproc = nil;
+				return "error: mic off";
+			}
 		}
 		buf := array[8192] of byte;
 		n := sys->read(listenproc.datafd, buf, len buf);
 		if(n > 0)
 			return string buf[0:n];
 		listenproc = nil;
+		# `mic off` while blocked in the read above kills the helper;
+		# return instead of restarting it.
+		if(standby)
+			return "error: mic off";
 	}
 	return "error: listen helper exited";
 }
@@ -460,10 +477,15 @@ readwake(): string
 {
 	if(wakebin == "")
 		return "error: wake helper not configured";
+	standby = 0;		# an active reader arms the microphone
 	# One restart attempt, same reason as readlisten: one-shot wake
 	# helpers exit after each event and must be restarted transparently.
 	attempt := 0;
 	for(;;) {
+		# `mic off` while blocked in the read below kills the helper;
+		# return instead of restarting it.
+		if(standby)
+			return "error: mic off";
 		if(wakeproc == nil) {
 			(p, err) := startproc(wakecmd());
 			if(p == nil)
@@ -471,6 +493,12 @@ readwake(): string
 			wakeproc = p;
 			if(micmode == "device")
 				addsink(SINKWAKE, p);
+			if(standby) {
+				# `mic off` raced the start; honor it.
+				killproc(p);
+				wakeproc = nil;
+				return "error: mic off";
+			}
 		}
 		buf := array[1024] of byte;
 		n := sys->read(wakeproc.datafd, buf, len buf);
@@ -724,6 +752,10 @@ readconfig(): string
 	result += "micmode " + micmode + "\n";
 	result += "capturerate " + string capturerate + "\n";
 	result += "duplex " + duplex + "\n";
+	if(standby)
+		result += "mic off\n";
+	else
+		result += "mic on\n";
 	return result;
 }
 
@@ -807,6 +839,20 @@ applyconfig(cmd: string): string
 		if(val != "full" && val != "half")
 			return "error: duplex must be full or half";
 		duplex = val;
+	"mic" =>
+		# Voice-mode teardown: `mic off` kills the mic-side helpers
+		# (and the capture pump's device fd) so the microphone is not
+		# held open outside a voice session. The next listen/wake read
+		# re-arms it; `mic on` is accepted for symmetry.
+		case val {
+		"off" =>
+			standby = 1;
+			resetcapture();
+		"on" =>
+			standby = 0;
+		* =>
+			return "error: mic must be on or off";
+		}
 	* =>
 		return "error: unknown config key: " + key;
 	}

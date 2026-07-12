@@ -7,8 +7,9 @@ implement VoicemodeTest;
 # pacing sleeps make that workable. Covers: idle-until-voice-mode, partial
 # records not injected, final transcript injection through conversation/
 # voiceinput, spoken "keyboard" control intent, idle return on
-# input-mode "k", and LLM-free test mode (-p/-e: finals bypass voiceinput
-# and answer with a canned say instead).
+# input-mode "k" with a "mic off" ctl write releasing the microphone, and
+# LLM-free test mode (-p/-e: finals bypass voiceinput and answer with a
+# canned say instead).
 #
 
 include "sys.m";
@@ -172,6 +173,7 @@ mkmock()
 	createfile(MOCKSPEECH + "/listen", "partial warming up\n");
 	createfile(MOCKSPEECH + "/cancel", "");
 	createfile(MOCKSPEECH + "/say", "");
+	createfile(MOCKSPEECH + "/ctl", "");
 }
 
 rundaemon(pidch: chan of int)
@@ -425,6 +427,8 @@ testReentryAndInputModeExit(t: ref T)
 		"external input-mode k returns daemon to idle");
 	t.assert(waitfor(MOCKSPEECH + "/cancel", "cancel", 3000),
 		"exit cancels any in-flight speech");
+	t.assert(waitfor(MOCKSPEECH + "/ctl", "mic off", 3000),
+		"exit releases the microphone (mic off ctl write)");
 }
 
 init(nil: ref Draw->Context, args: list of string)

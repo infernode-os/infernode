@@ -125,6 +125,7 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 | `whisperstreambin` / `wakebin` / `kokorobin` / `wakeword` / `wakethreshold` | helper commands and wake tuning | Stored for introspection and forwarded to the provider's `ctl`; `speechshim9p` consumes them. `speech9p` itself runs no helpers. |
 | `audiodev` / `capturedev` / `micmode` / `capturerate` | audio routing (see SPEECH-REMOTE-AUDIO.md) | Forwarded to the provider's `ctl` unchanged. In `speechshim9p`: `audiodev` is the playback (and default capture) device path; `capturedev` overrides capture (`default` clears it); `micmode helper\|device` chooses whether the helper CLI grabs the host mic or the shim pumps PCM from the capture device into helper stdin; `capturerate` is the pump sample rate. |
 | `duplex` | `full` or `half` | Forwarded to the provider's `ctl`. In `speechshim9p`, `half` suppresses wake/capture delivery while playback or chimes are active. |
+| `mic` | `on` or `off` | Forwarded to the provider's `ctl`. In `speechshim9p`, `off` kills the mic-side helpers (and the capture pump's device fd) and fails pending `listen`/`wake` reads with `error: mic off` instead of restarting them; the next read re-arms the microphone. `voicemode` writes `mic off` on voice-mode exit, so the mic is only open during a voice session. |
 | `parakeetmount` / `parakeetlisten` / `pipersay` | provider root, STT stream file, and TTS say file | Compatibility aliases for `provider` and its derived `listen`/`say` paths. |
 
 `/n/speech/listen` is the stable Infernode-facing interface.

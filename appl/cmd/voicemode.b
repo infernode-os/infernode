@@ -4,10 +4,13 @@ implement Voicemode;
 # voicemode - bridge /n/speech wake/listen events into Lucia activity input.
 #
 # Phase 1 resident daemon. Pre-spawned at boot in an idle state; it activates
-# when /mnt/ui/input-mode becomes "v" (written by lucibridge's "/voice mode on"
-# or by a spoken control intent) and returns to idle on "k" (Esc in lucifer,
-# "/voice mode off", or a spoken "keyboard"). While active it runs the Phase 1
-# state machine:
+# when /mnt/ui/input-mode becomes "v" (the Voice chip click or Esc-V in
+# lucifer, lucibridge's "/voice mode on", or a spoken control intent) and
+# returns to idle on "k" (the same chip/key, Esc, "/voice mode off", or a
+# spoken "keyboard"). The microphone is only open during a voice session:
+# helpers start on the first wake/listen read, and exit writes `mic off` to
+# the speech ctl so the provider tears them down again. While active it runs
+# the Phase 1 state machine:
 #
 #   WAITING_WAKE -> LISTENING -> PROCESSING/SPEAKING -> WAITING_WAKE
 #
@@ -186,6 +189,14 @@ voiceinput(actid: int, text: string): int
 cancelspeech()
 {
 	writefile(speech + "/cancel", "cancel");
+}
+
+# Release the microphone on voice-mode exit: the provider kills its
+# mic-side helpers, and the next wake/listen read (the next session)
+# re-arms them.
+micoff()
+{
+	writefile(speech + "/ctl", "mic off");
 }
 
 chime(kind: string)
@@ -508,6 +519,7 @@ voiceloop()
 				listengen = listenseq;
 				cancelspeech();
 				chime("off");
+				micoff();
 				ctxstatus(actid, "idle");
 				log("voice mode off");
 				return;

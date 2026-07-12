@@ -246,6 +246,46 @@ testListenRecords(t: ref T)
 	t.assert(hassubstr(listen, "final shim transcript"), "listen record delivered");
 }
 
+# `mic off` (written by voicemode on voice-mode exit) must kill the running
+# mic-side helper and complete a pending read with an error instead of
+# restarting it — the microphone is only open during a voice session. The
+# next read re-arms it without any further ctl write.
+testMicOffReleasesHelpers(t: ref T)
+{
+	t.assert(writefile(MNT + "/ctl",
+		"whisperstreambin /bin/sh -c \"echo partial armed; sleep 30\"") > 0,
+		"configure blocking fake listen helper");
+	first := readfile(MNT + "/listen");
+	t.assert(hassubstr(first, "partial armed"), "helper armed by first read");
+
+	pendch := chan of string;
+	spawn readproc(MNT + "/listen", pendch);
+	sys->sleep(300);	# let the read block in the helper
+
+	t0 := sys->millisec();
+	t.assert(writefile(MNT + "/ctl", "mic off") > 0, "mic off accepted");
+	tmo := chan[1] of int;
+	spawn timer(tmo, 4000);
+	got := "";
+	alt {
+	got = <-pendch =>
+		;
+	<-tmo =>
+		;
+	}
+	t1 := sys->millisec();
+	t.assert(hassubstr(got, "error: mic off"),
+		"pending listen read completes instead of restarting the helper");
+	t.assert(t1 - t0 < 3000, "mic off killed the helper promptly (no 30s run-out)");
+	t.assert(hassubstr(readfile(MNT + "/ctl"), "mic off"), "ctl reports mic off");
+
+	t.assert(writefile(MNT + "/ctl", "whisperstreambin /bin/echo final rearmed") > 0,
+		"configure fake listen helper for re-arm");
+	listen := readfile(MNT + "/listen");
+	t.assert(hassubstr(listen, "final rearmed"), "next listen read re-arms the mic");
+	t.assert(hassubstr(readfile(MNT + "/ctl"), "mic on"), "ctl reports mic on after re-arm");
+}
+
 # Cancel must kill the helper process: with a fake synthesizer that would
 # block for 8 seconds, the pending say read has to complete within a couple
 # of seconds of the cancel write.
@@ -353,6 +393,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ChimeAccepted", testChimeAccepted);
 	run("WakeRestarts", testWakeRestarts);
 	run("ListenRecords", testListenRecords);
+	run("MicOffReleasesHelpers", testMicOffReleasesHelpers);
 	run("DeviceCapture", testDeviceCapture);
 	run("CancelKillsSay", testCancelKillsSay);
 	run("HalfDuplexSwallowsWakeDuringSay", testHalfDuplexSwallowsWakeDuringSay);

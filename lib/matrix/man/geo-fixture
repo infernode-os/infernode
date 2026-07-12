@@ -1,0 +1,27 @@
+NAME
+	geo-fixture (service) - write and continuously rewrite a synthetic tree of ndb-stanza entity and feature files, advancing simulated units along fixed courses
+
+INTERFACE
+	service (MatrixService)
+
+READS
+	nothing - the mount parameter is unused; all data is generated
+	in-process
+
+WRITES
+	entities/<id>	ndb stanza, one key=value per line:
+			id= lat= lon= affil= kind= label= course= speed=
+			(five units, rewritten every tick)
+	features/<id>	ndb stanza: id= type=(polygon|polyline|circle)
+			points=<lat,lon ...> [radius=] color=RRGGBBAA
+			[fill=] width= label= (written once at init)
+
+DESCRIPTION
+	1000 ms tick.  Dead-reckons unit positions from course and speed,
+	wrapping within a fixed bounding box (San Francisco Bay).  The
+	unit set exercises friend, hostile, neutral, and unknown
+	affiliations and air/sea/ground kinds.  A data source for
+	exercising ndb-stanza geo consumers without external feeds.
+
+SEE ALSO
+	geo-map (renders this output format)

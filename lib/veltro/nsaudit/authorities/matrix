@@ -1,0 +1,5 @@
+tool=matrix
+	description='Compose and control Matrix modules via /mnt/matrix'
+	authorities='reads_fs writes_fs spawns_proc execs_code'
+	irreversible='spawns_proc'
+	notes='Composition writes make the Matrix runtime load typed .dis modules from /dis/matrix and spawn service processes confined to their composition-declared mounts. proc-list kills selected processes on operator keypress; service grants are namespace-scoped per composition line.'

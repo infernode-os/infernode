@@ -1,0 +1,22 @@
+NAME
+	llm-sessions (display) - render a multi-track timeline of vertical bars positioned by sample timestamp and scaled by token count
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	sessions	one numeric session id per line
+	<id>/history	lines "ms tokens limit", oldest first
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Each session id becomes a horizontal track; each history sample a
+	vertical bar placed on a shared time axis spanning the min..max
+	timestamp across all tracks, scaled against the global limit
+	maximum.  Keeps no local state - the recorder owns the ring.
+	No pointer or key handling.
+
+SEE ALSO
+	llm-recorder (produces this input tree)

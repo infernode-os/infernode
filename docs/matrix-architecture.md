@@ -498,8 +498,13 @@ headless mode, locally, or remotely.
             out/                # Service output (read-only view of
                                 #   /tmp/matrix/<name>; services only)
     library/
+        index                   # whatis-style module index (read-only):
+                                #   name (type) - synopsis, one per module
         modules/
             <name>.dis          # Available module binaries (read-only)
+        man/
+            <name>              # Module contract pages (read-only):
+                                #   NAME/INTERFACE/READS/WRITES
         compositions/
             <name>              # Pinned composition files (read-only;
                                 #   written via the pin/unpin verbs)
@@ -869,6 +874,36 @@ custom IPC, no API client library. `cat /mnt/matrix/composition` shows
 the current state. `echo 'load trading-desk' > /mnt/matrix/ctl` changes
 it. This works identically whether Matrix is running with a GUI or
 headless, locally or remotely.
+
+### Module documentation: man pages versus stories
+
+Modules and compositions are documented differently, on purpose.
+
+A **module** gets a man page (`library/man/<name>`): a NAME synopsis
+and a contract — which interface it implements, which files it READS
+under its mount, which files it WRITES to its outdir. Mechanism only,
+never purpose. Telling an agent what a module is *for* limits what
+the agent can do with it, the same way "cat concatenates files"
+undersells `cat`; a contract, like a Unix man page, lets the reader
+compose unanticipated things. Contracts are extracted from the code,
+not the comments — the code is the contract's source of truth.
+
+A **composition** carries its story: the header comment says what the
+arrangement is and why it earned a place in the library. Purpose is a
+property of the assembly, not the parts, and it is authored at
+crystallisation time by whoever found the arrangement useful — human
+or agent.
+
+The index (`library/index`) is the scan surface: one whatis-shaped
+line per module (`name (type) - synopsis`), regenerated from the man
+pages by `tools/matrix-makewhatis.sh` (`mk index` in appl/matrix).
+There is no semantic search machinery and none is wanted: the reader
+of this index is an LLM, which does semantic matching natively. At
+library scale the agent reads the whole index in one gulp, opens the
+man pages of two or three candidates, and composes from their
+contracts — apropos(1), then man(1). A vector store would be a lossy
+approximation of a capability the reader already has, and a new
+daemon besides.
 
 ### TBL4 as the POC target
 

@@ -161,6 +161,8 @@ TOOL_PATHS := array[] of {
 	("fractal", "/dis/veltro/tools/fractal.dis"),
 	# Man page viewer control (requires wm/man running)
 	("man", "/dis/veltro/tools/man.dis"),
+	# Matrix compositional module runtime (requires wm/matrix running)
+	("matrix", "/dis/veltro/tools/matrix.dis"),
 	# Task delegation (requires luciuisrv)
 	("task",    "/dis/veltro/tools/task.dis"),
 	# Structured planning
@@ -1473,6 +1475,8 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	case tool {
 	"launch" =>
 		return addpath(paths, "/dis/wm");
+	"matrix" =>
+		return addpath(paths, "/mnt/matrix");
 	"charon" =>
 		return addpath(paths, "/tmp/veltro/browser");
 	"editor" =>

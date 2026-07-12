@@ -1,0 +1,21 @@
+NAME
+	cpu-gauge (display) - render a headline value and bar sparkline from a current-sample file and a timestamped history file
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	cpu/current	single line: pct busy total (three ints)
+	cpu/history	one line per sample: ts pct, oldest first
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Draws the current percentage as a headline with busy/total process
+	counts, and the history column as a right-aligned 2px-column bar
+	sparkline scaled 0-100, with min/max readout.  Re-reads both files
+	on every update tick.  No pointer or key handling.
+
+SEE ALSO
+	sysmon-svc (produces cpu/current and cpu/history in its outdir)

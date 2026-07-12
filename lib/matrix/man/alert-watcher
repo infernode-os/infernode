@@ -1,0 +1,26 @@
+NAME
+	alert-watcher (service) - poll a signal file and a status file and emit a sequential alert file per qualifying line or status change
+
+INTERFACE
+	service (MatrixService)
+
+READS
+	signals			one signal per line, whitespace fields:
+				id asset direction confidence signal_type timestamp
+	portfolio/defense/status	single status token
+
+WRITES
+	alert-0000, alert-0001, ...	one plain-text message per file:
+				"high-confidence signal: <asset> <dir> <stype> (conf=<conf>)"
+				or "defense status changed: <old> -> <new>"
+
+DESCRIPTION
+	Polls every 5000 ms.  A signal qualifies when its confidence
+	field is >= "0.7" by string comparison.  The alert counter is
+	in-memory: it resets on reload, and qualifying signals re-emit
+	every poll (no dedup) - consumers should treat the outdir as a
+	stream to drain, not a set.  The first status read primes the
+	comparison; changes alert from the second poll on.
+
+SEE ALSO
+	signal-feed (renders the same signals file)

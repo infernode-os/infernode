@@ -63,6 +63,7 @@ TOOLS=\
     tools/limbo.dis\
     tools/http.dis\
     tools/man.dis\
+    tools/matrix.dis\
     tools/mount.dis\
     tools/payfetch.dis\
     tools/wallet.dis\
@@ -245,6 +246,10 @@ tools/http.dis: tools/http.b tool.m
 # Manual page viewer control tool
 tools/man.dis: tools/man.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/man.dis tools/man.b
+
+# Matrix compositional module runtime control tool
+tools/matrix.dis: tools/matrix.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/matrix.dis tools/matrix.b
 
 # Namespace mount guidance tool (stub: namespace mounting is user-only)
 tools/mount.dis: tools/mount.b tool.m

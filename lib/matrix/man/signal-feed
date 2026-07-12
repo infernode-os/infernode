@@ -1,0 +1,24 @@
+NAME
+	signal-feed (display) - parse one whitespace-separated record per line from the file at the mount path and render a scrollable colour-coded list
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	.	the mount path itself is a FILE (e.g. /n/tbl4/signals):
+		one signal per line, whitespace fields:
+		id asset direction confidence signal_type timestamp
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Lines are reversed on load (source delivers newest-first) and
+	rendered newest-last.  Direction colours each row (long/short)
+	with a +/-/~ indicator; the timestamp renders as HH:MM sliced
+	from an ISO timestamp.  Wheel scrolls one row; click or drag in
+	the right gutter jumps the scrollbar proportionally.  The format
+	is plain text lines, not JSON.
+
+SEE ALSO
+	alert-watcher (watches the same signals file)

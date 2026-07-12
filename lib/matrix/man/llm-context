@@ -1,0 +1,23 @@
+NAME
+	llm-context (display) - render one horizontal fill bar per session id listed in an index file, with a watermark tick at the historical maximum
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	sessions	one numeric session id per line
+	<id>/current	single line: ms model tokens limit
+	<id>/history	lines "ms tokens limit"; only the max tokens
+			value is used, as the watermark
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	One 36 px row per session: model name, tokens/limit readout, fill
+	bar proportional to tokens/limit, watermark tick at the history
+	maximum.  Re-reads on every update tick.  No pointer or key
+	handling.
+
+SEE ALSO
+	llm-recorder (produces this input tree)

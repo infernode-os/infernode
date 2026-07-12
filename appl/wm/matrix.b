@@ -78,7 +78,7 @@ UPDATE_MS: con 2000;
 
 # Fixed nodes.
 Qroot, Qctl, Qcomposition, Qmoddir, Qlibdir,
-Qlibcompsdir, Qlibmodsdir, Qnotifications: con iota;
+Qlibcompsdir, Qlibmodsdir, Qnotifications, Qlibmandir: con iota;
 
 # Per-module nodes (module slot packed into bits 8..19).
 Qmoddirent:	con 16;	# modules/<name>/
@@ -93,6 +93,8 @@ Qpass:	con 32;
 
 LIBCOMPS: con "/lib/matrix/compositions";
 LIBMODS:  con "/dis/matrix";
+LIBMAN:   con "/lib/matrix/man";
+LIBINDEX: con "/lib/matrix/index";
 OUTBASE:  con "/tmp/matrix";
 
 # Stable module registry.  Index == the slot packed into qid paths.
@@ -737,6 +739,8 @@ realdirof(path: big): string
 		return LIBCOMPS;
 	Qlibmodsdir =>
 		return LIBMODS;
+	Qlibmandir =>
+		return LIBMAN;
 	Qmodout =>
 		ms := liveslot(path);
 		if(ms == nil || ms.mtype != "service")
@@ -801,6 +805,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTDIR), "compositions", big 0, 8r555), nil);
 	Qlibmodsdir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), "modules", big 0, 8r555), nil);
+	Qlibmandir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "man", big 0, 8r555), nil);
 	Qnotifications =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "notifications", big len array of byte notifbuf, 8r444), nil);
 	Qmoddirent =>
@@ -962,16 +968,25 @@ matrixnavigator(navops: chan of ref Navop)
 					n.path = big Qlibcompsdir;
 				"modules" =>
 					n.path = big Qlibmodsdir;
+				"man" =>
+					n.path = big Qlibmandir;
+				"index" =>
+					(ok, nil) := sys->stat(LIBINDEX);
+					if(ok < 0) {
+						n.reply <-= (nil, Enotfound);
+						continue;
+					}
+					n.path = QPATH(Qpass, 0, passfor(big Qlibdir, LIBINDEX));
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
 				}
 				n.reply <-= dirgen(n.path);
 
-			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+			Qlibcompsdir or Qlibmodsdir or Qlibmandir or Qmodout or Qpass =>
 				if(n.name == "..") {
 					case qtype {
-					Qlibcompsdir or Qlibmodsdir =>
+					Qlibcompsdir or Qlibmodsdir or Qlibmandir =>
 						n.path = big Qlibdir;
 					Qmodout =>
 						n.path = QPATH(Qmoddirent, MODSLOT(n.path), 0);
@@ -1046,9 +1061,17 @@ matrixnavigator(navops: chan of ref Navop)
 						QPATH(Qmodmount, slot, 0)});
 
 			Qlibdir =>
-				replyfixed(n, array[] of {big Qlibcompsdir, big Qlibmodsdir});
+				ents := array[] of {big Qlibcompsdir, big Qlibmodsdir, big Qlibmandir};
+				(ok, nil) := sys->stat(LIBINDEX);
+				if(ok >= 0) {
+					grown := array[len ents + 1] of big;
+					grown[0:] = ents;
+					grown[len ents] = QPATH(Qpass, 0, passfor(big Qlibdir, LIBINDEX));
+					ents = grown;
+				}
+				replyfixed(n, ents);
 
-			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+			Qlibcompsdir or Qlibmodsdir or Qlibmandir or Qmodout or Qpass =>
 				rpath := realdirof(m.path);
 				if(rpath == nil) {
 					n.reply <-= (nil, Enotfound);

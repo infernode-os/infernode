@@ -1,0 +1,26 @@
+NAME
+	llm-recorder (service) - enumerate numeric subdirectories of a mount, sample a usage and a model file from each, and rewrite an index plus per-id current/history files
+
+INTERFACE
+	service (MatrixService)
+
+READS
+	.		the mount directory (e.g. /mnt/llm): entries whose
+			names are all digits are taken as session ids
+	<id>/usage	text "estimated/limit" (two ints split on '/')
+	<id>/model	model name string
+
+WRITES
+	sessions	one session id per line (ids currently visible)
+	<id>/current	single line: ms model tokens limit
+	<id>/history	one line per ring sample: ms tokens limit,
+			oldest first (60-sample ring)
+
+DESCRIPTION
+	1000 ms poll.  All writes are atomic (tmp file + rename), so
+	readers see old, new, or briefly no file - never torn.  Sessions
+	absent from the source vanish from the index on the next poll;
+	their stale outdir trees are left in place.
+
+SEE ALSO
+	llm-context, llm-sessions (consume this outdir)

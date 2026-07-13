@@ -343,6 +343,9 @@ testRootDirread(t: ref T)
 	t.assertsne(conv, "error:timeout", "conversation readdir must terminate (INFR-127)");
 	t.assert(hassubstr(conv, " ctl"), "conversation listing includes ctl");
 	t.assert(hassubstr(conv, " input"), "conversation listing includes input");
+	t.assert(hassubstr(conv, " voiceinput"), "conversation listing includes voiceinput");
+	t.assert(hassubstr(conv, " control"), "conversation listing includes control: " + conv);
+	t.assert(hassubstr(conv, " draft"), "conversation listing includes draft");
 }
 
 # ============================================================================
@@ -1086,6 +1089,51 @@ testVoiceInputFIFO(t: ref T)
 		"voiceinput preserves FIFO order for second turn");
 	t.assertseq(strip(readfile(voicefile)), "third voice turn",
 		"voiceinput preserves FIFO order for third turn");
+}
+
+testConversationControl(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+	control := actbase() + "/conversation/control";
+	(ok, nil) := sys->stat(control);
+	t.assert(ok >= 0, "conversation/control should exist");
+	t.asserteq(writefile(control, "pause"), len "pause", "pause control write");
+	t.asserteq(writefile(control, "resume"), len "resume", "resume control write");
+	t.assertseq(strip(readfile(control)), "pause", "control preserves FIFO first item");
+	t.assertseq(strip(readfile(control)), "resume", "control preserves FIFO second item");
+}
+
+testConversationDraft(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	draftfile := actbase() + "/conversation/draft";
+	(ok, nil) := sys->stat(draftfile);
+	t.assert(ok >= 0, "conversation/draft should exist");
+	t.asserteq(writefile(draftfile, "half a thou"), len "half a thou",
+		"first partial replaces the draft");
+	t.assertseq(readfile(draftfile), "half a thou",
+		"draft is readable without becoming a message");
+	t.asserteq(writefile(draftfile, "half a thousand"), len "half a thousand",
+		"revised partial replaces rather than appends");
+	t.assertseq(readfile(draftfile), "half a thousand",
+		"latest hypothesis is the whole draft");
+
+	# Draft writes are presentation events, distinct from input submission.
+	writefile(actbase() + "/event", "flush");
+	writefile(draftfile, "visible hypothesis");
+	ev := readevent(actbase() + "/event");
+	t.assertseq(strip(ev), "conversation draft",
+		"draft replacement notifies the conversation renderer");
+
+	writefile(draftfile, "");
+	t.assertseq(readfile(draftfile), "", "empty write clears the draft");
 }
 
 # ============================================================================
@@ -1867,6 +1915,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("VoiceInputMode", testVoiceInputMode);
 	run("VoiceInput", testVoiceInput);
 	run("VoiceInputFIFO", testVoiceInputFIFO);
+	run("ConversationControl", testConversationControl);
+	run("ConversationDraft", testConversationDraft);
 
 	# Presentation tests
 	run("PresCreate", testPresentationCreate);

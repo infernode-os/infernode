@@ -30,13 +30,14 @@ Speech: module {
 
 	# Engine configuration
 	Config: adt {
-		engine:   string;  # Engine name: "cmd", "api"
+		engine:   string;  # Engine name: "cmd", "api", "local", "kokoro", "module"
 		voice:    string;  # Voice identifier (engine-specific)
 		lang:     string;  # Language code (e.g. "en", "es", "fr")
 		apiurl:   string;  # API endpoint URL (for api engine)
 		apikey:   string;  # API key (for api engine)
 		cmdtts:   string;  # Host TTS command (for cmd engine)
 		cmdstt:   string;  # Host STT command (for cmd engine)
+		provider: string;  # Provider mount for namespace-backed engines
 		infmt:    ref AudioFmt;  # Input audio format (for STT)
 		outfmt:   ref AudioFmt;  # Output audio format (from TTS)
 	};
@@ -93,4 +94,17 @@ Speech: module {
 	defaultfmt:  fn(): ref AudioFmt;
 	fmtstr:      fn(fmt: ref AudioFmt): string;
 	parsefmt:    fn(s: string): ref AudioFmt;
+};
+
+# Loadable `.dis` engine contract. Unlike the legacy TTSEngine/STTEngine ADTs
+# above, this is a real Limbo module interface and can be loaded dynamically by
+# speech9p. One module may expose TTS, STT, or both according to caps().
+SpeechEngine: module {
+	init:       fn(): string;
+	name:       fn(): string;
+	caps:       fn(): int;
+	configure:  fn(cfg: ref Speech->Config): string;
+	voices:     fn(): list of string;
+	synthesize: fn(text: string): ref Speech->TTSResult;
+	recognize:  fn(audio: array of byte, fmt: ref Speech->AudioFmt): ref Speech->STTResult;
 };

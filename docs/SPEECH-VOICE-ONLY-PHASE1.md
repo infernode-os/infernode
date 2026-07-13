@@ -1,7 +1,7 @@
 # Voice Mode for Lucia: Phase 1
 
-Status: analysis handoff and implementation plan for branch `feat/gui-stt-tts`.
-Not usable end-to-end yet.
+Status: automated implementation complete on branch `feat/gui-stt-tts`.
+Real microphone, audible GUI, and cross-host acceptance remain human gates.
 
 ## Implementation Status
 
@@ -52,25 +52,45 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
   services (`luciuisrv`, `tools9p`, `lucibridge`) already start.
 - `module/speech.m` streaming `Partial` record type with the documented
   `partial`/`final`/`error:` wire format for `/n/speech/listen`.
+- A repo-owned `whisper-stream-cli --stdin` adapter with energy VAD, partial
+  snapshots, final records, and aggregate confidence metadata. The installer
+  deploys it over the batch-only Homebrew `whisper-cli` without reopening the
+  host microphone for every utterance.
+- Completion-aware FIFO TTS in `lucibridge`, sentence-boundary streaming,
+  first-token/first-audio timings, and cancellation that invalidates queued
+  speech before the next turn.
+- Live transcription drafts at `conversation/draft`, rendered separately from
+  typed compose text, plus both `Esc-V` and SDL Option/Alt+V voice entry.
+- A FIFO `conversation/control` path for spoken cancel, pause, resume, status,
+  and mid-turn refinements. Tool approvals consume the same voice input path,
+  fail closed, and remain cancellable.
+- Low-confidence STT confirmation with a visual prompt and spoken read-back;
+  the threshold defaults to 650 permille and is configurable with
+  `voicemode -q`.
+- Namespace-composable cross-host launch scripts under `/lib/voice`, plus a
+  loadable `SpeechEngine` `.dis` ABI and provider-backed reference module.
 - Tests: `tests/speech_wake_test.b`, `tests/speech_listen_test.b`,
   `tests/speech_kokoro_test.b` (fake host helpers via ctl; includes
   serveloop-liveness assertions), and `tests/voicemode_test.b` (daemon state
   machine against a mock file tree), alongside the earlier
   `tests/speech9p_voice_test.b` and `tests/luciuisrv_test.b` coverage.
 
-Still incomplete:
+Still requires human acceptance:
 
-- No bundled Kokoro, whisper streaming, or openWakeWord helpers; install them
-  externally per Host Dependencies below.
-- No custom wake model.
+- Helper models/binaries remain host dependencies; install them externally per
+  Host Dependencies below.
+- The specific/custom wake model is intentionally deferred.
 - No robust Echo/VAD handling while TTS is active beyond what the helpers
   provide.
 - Tool/task cancellation is best-effort; hard cancellation of arbitrary
   tools is still future work. TTS helper processes ARE hard-cancelled
   (speechshim9p kills them via devcmd on `cancel`); in-flight wake/listen
   helper reads survive a flush and are drained on completion.
-- Full end-to-end voice-only UX needs real helper installation and manual
-  dogfood verification.
+- Confirm audible non-overlapping assistant speech, TTS cancellation, live
+  drafts without compose corruption, `Esc-V`/Option+V, real-microphone spoken
+  controls and approvals, and the low-confidence confirmation flow.
+- Confirm the remote launch scripts with two actual hosts and their device and
+  network permissions.
 
 This document captures Claude's analysis findings, the decisions confirmed with
 the user, and the approved Phase 1 plan for a local, Mac-only voice mode in
@@ -92,8 +112,8 @@ Lucia is currently keyboard-driven. Phase 1 adds a hands-free mode:
    keyboard mode.
 
 Phase 1 runs entirely on one Apple Silicon Mac using the laptop microphone and
-speakers. Remote inference on a Jetson, remote audio binding, and pluggable
-speech engine modules are Phase 2 work.
+speakers. Remote inference, namespace audio routing, and pluggable speech
+engine modules were subsequently implemented as additive follow-on work.
 
 ## Existing Starting Point
 
@@ -656,17 +676,16 @@ letting helper CLIs grab the host mic directly:
 
 ```sh
 echo 'micmode device' > /n/speech/ctl
-echo 'whisperstreambin /Users/me/.local/share/infernode-speech/bin/whisper-stream-cli --stdin --model /Users/me/.local/share/infernode-speech/models/ggml-base.en.bin --rate 16000 --chans 1' > /n/speech/ctl
-echo 'wakebin /Users/me/.local/share/infernode-speech/bin/openwakeword-cli --stdin --word hey jarvis --threshold 0.5 --rate 16000' > /n/speech/ctl
 ```
 
 `micmode device` means `speechshim9p` pumps 16 kHz s16le mono PCM into the
-configured helper commands' stdin. The generated openWakeWord wrapper supports
-that stdin-PCM path. Current Homebrew `whisper-cpp` exposes `whisper-stream` as
-a host-capture program, not a stable stdin-PCM streaming filter, so the generated
-`whisper-stream-cli --stdin` reports an `error:` record instead of pretending to
-transcribe. For real stdin streaming STT, use a helper that actually consumes
-stdin PCM and emits `partial` / `final` records.
+configured helper commands' stdin and supplies their `--stdin`, model, phrase,
+threshold, rate, and channel arguments. The generated openWakeWord wrapper
+consumes that stream directly. Because Homebrew `whisper-stream` only captures a
+host device, the generated Whisper wrapper uses the repo-owned stdin adapter:
+energy VAD segments the PCM and `whisper-cli` transcribes snapshots into
+`partial confidence=N <text>` and `final confidence=N <text>` records. This
+keeps remote/topology-2/3 capture namespace-backed without reopening a host mic.
 
 Host smoke coverage lives in `tests/host/speech_helpers_test.sh`. It exercises
 TTS/PCM and no-mic wrapper paths only; microphone-dependent wake/STT checks are
@@ -819,9 +838,10 @@ Unit tests for the daemon's test mode: `tests/voicemode_test.b`
 
 - Custom-trained `hey lucia` wake model.
 - UI microphone button.
-- Pluggable speech engine `.dis` modules.
+- Pluggable speech engine `.dis` modules (delivered as follow-on work).
 - Jetson-hosted inference.
-- 9P remote-audio bridge implementation.
+- 9P remote-audio launch scripts and routing (delivered as follow-on work;
+  cross-host acceptance remains manual).
 - Multilingual STT/TTS.
 - Voice biometrics or multi-speaker disambiguation.
 

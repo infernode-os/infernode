@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PREFIX=${INFERNODE_SPEECH_HOME:-"$HOME/.local/share/infernode-speech"}
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 VENV="$PREFIX/venv"
 BIN="$PREFIX/bin"
 LIBEXEC="$PREFIX/libexec"
@@ -189,8 +190,10 @@ VAD mode is what makes a voice turn complete — sliding-window step mode
 only ever yields interim hypotheses, which the voice-mode daemon treats
 as partials and never injects.
 
-The --stdin mode is a capability probe only for now; current whisper.cpp
-whisper-stream builds use host capture rather than a stable stdin-PCM stream.
+The --stdin mode reads s16le PCM and uses the repo-owned energy-VAD adapter
+around whisper-cli. Records include the aggregate token confidence:
+  partial confidence=0.8123 <text>
+  final confidence=0.9234 <text>
 EOF
 }
 
@@ -237,13 +240,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ "$stdin_mode" -eq 1 ]; then
-  echo "error: whisper-stream stdin PCM mode is not supported by this whisper.cpp wrapper"
-  exit 0
-fi
-
 if [ -z "$model" ]; then
   model=${INFERNODE_SPEECH_HOME:-"$HOME/.local/share/infernode-speech"}/models/ggml-base.en.bin
+fi
+
+if [ "$stdin_mode" -eq 1 ]; then
+  PREFIX=${INFERNODE_SPEECH_HOME:-"$HOME/.local/share/infernode-speech"}
+  exec "$PREFIX/venv/bin/python" "$PREFIX/libexec/whisper_stdin_cli.py" \
+    --stdin --model "$model" --rate "$rate" --chans "$chans" --length "$length"
 fi
 
 find_whisper_stream() {
@@ -405,6 +409,8 @@ if __name__ == "__main__":
     raise SystemExit(main())
 PY
 
+  install -m 755 "$SCRIPT_DIR/whisper_stdin_cli.py" "$LIBEXEC/whisper_stdin_cli.py"
+
   chmod +x "$BIN/kokoro-cli" "$BIN/whisper-stream-cli" "$BIN/openwakeword-cli"
   chmod +x "$LIBEXEC/kokoro_cli.py" "$LIBEXEC/whisper_stream_cli.sh" "$LIBEXEC/openwakeword_cli.py"
 }
@@ -430,11 +436,10 @@ openWakeWord model shipped today. Saying "hey lucia" will NOT trigger wake
 until a custom hey-lucia model is trained and dropped into
 $OPENWAKEWORD_DIR (the wrapper picks up an explicit --model path).
 
-For micmode device / stdin-PCM routing, use full helper commands:
+For micmode device / stdin-PCM routing, the shim adds the stdin and format
+arguments to the configured helpers:
 
 echo 'micmode device' > /n/speech/ctl
-echo 'whisperstreambin $BIN/whisper-stream-cli --stdin --model $WHISPER_MODEL --rate 16000 --chans 1' > /n/speech/ctl
-echo 'wakebin $BIN/openwakeword-cli --stdin --word hey jarvis --threshold 0.5 --rate 16000' > /n/speech/ctl
 EOF
 }
 

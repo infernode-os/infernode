@@ -2,20 +2,16 @@
 #
 # speech-regress.sh — one-command regression suite for the voice/speech stack.
 #
-# Builds and runs the targeted Limbo suites for voicemode, speech9p,
-# speechshim9p, and the speech tooling inside the emulator, then the
-# host-side helper smoke test. This is deliberately NOT ./run-tests.sh:
+# Builds and runs the targeted Limbo suites for the Lucia voice bridge/UI,
+# voicemode, speech9p, speechshim9p, and the speech tooling inside the
+# emulator, then the host-side helper smoke test. This is deliberately NOT
+# ./run-tests.sh:
 # it touches only the speech/voice suites, so it is cheap enough to run
 # after every change to appl/cmd/voicemode.b, appl/veltro/speech*.b,
 # module/speech.m, tools/install-speech-helpers.sh, or the boot wiring.
 #
 # Pass criteria come from the testing framework's output (a final PASS
 # summary and no "--- FAIL:" lines), not only the exit status.
-#
-# Known pre-existing gotcha: speech_kokoro_test prints PASS but the
-# emulator never halts afterwards (C-level audio teardown, not a voice
-# regression). It runs under timeout, and exit 124 with a PASS summary
-# counts as a pass.
 #
 # usage: tools/speech-regress.sh [-v]
 #   -v   stream each suite's output as it runs (failures always print)
@@ -46,14 +42,18 @@ if [ ! -x "$EMU" ]; then
   exit 1
 fi
 
-# Emu suites, cheapest protocol tests first. speech_kokoro_test goes last:
-# it drives real audio output and its emu never halts (see header).
+# Emu suites, cheapest protocol tests first. The Lucia bridge/UI suites are
+# included because voice controls, approval, live drafts, and TTS lifecycle
+# now cross those boundaries.
 SUITES="
 speechshim_test
 speech9p_voice_test
 speech_wake_test
 speech_listen_test
 voicemode_test
+lucibridge_test
+lucibridge_approval_test
+luciuisrv_test
 speechtest_test
 voice_scripts_test
 speech_kokoro_test
@@ -100,8 +100,6 @@ run_suite() {
   if grep -q '^PASS$' "$log" && ! grep -q -- '--- FAIL:' "$log"; then
     if [ "$status" -eq 0 ]; then
       ok=1
-    elif [ "$status" -eq 124 ] && [ "$name" = speech_kokoro_test ]; then
-      ok=1  # known no-halt gotcha: PASS output + timeout kill
     fi
   fi
 

@@ -249,6 +249,57 @@ testPiperSayMount(t: ref T)
 		"restore default tts engine for later tests");
 }
 
+# Match lucibridge's completion-aware client contract: sayq is opened ORDWR,
+# written once, rewound, and read for the terminal status of that utterance.
+testSayqCompletion(t: ref T)
+{
+	t.assert(writefile(MNT + "/ctl", "ttsengine piper") > 0,
+		"configure piper tts engine");
+	t.assert(writefile(MNT + "/ctl", "parakeetmount " + PARAKEETMNT) > 0,
+		"configure parakeet mount prefix");
+	t.assert(createfile(PARAKEETMNT + "/say", "") >= 0,
+		"create fake mounted piper say file");
+	result := writesayread(MNT + "/sayq", "completion aware speech");
+	t.assert(result != nil && len result > 0,
+		"sayq returns a terminal completion status");
+	written := readfile(PARAKEETMNT + "/say");
+	t.assert(hassubstr(written, "completion aware speech"),
+		"sayq delivered text to the fake provider");
+	t.assert(writefile(MNT + "/ctl", "ttsengine engine") > 0,
+		"restore default tts engine");
+}
+
+testDisEngineModule(t: ref T)
+{
+	t.assert(writefile(MNT + "/ctl", "provider " + PARAKEETMNT) > 0,
+		"configure module provider mount");
+	t.assert(createfile(PARAKEETMNT + "/say", "") >= 0,
+		"create module provider say file");
+	t.assert(createfile(PARAKEETMNT + "/listen", "final module transcript\n") > 0,
+		"create module provider listen file");
+	t.assert(createfile(PARAKEETMNT + "/voices", "module_voice\n") > 0,
+		"create module provider voices file");
+	t.assert(writefile(MNT + "/ctl",
+		"module /dis/veltro/speechprovider.dis") > 0,
+		"load provider-backed SpeechEngine module");
+	ctl := readfile(MNT + "/ctl");
+	t.assert(hassubstr(ctl, "engine module"),
+		"ctl reports dynamically loaded engine selection");
+	t.assert(hassubstr(ctl, "modulename provider"),
+		"ctl reports loaded module name");
+	voices := readfile(MNT + "/voices");
+	t.assert(hassubstr(voices, "module_voice"),
+		"voices are supplied by the loaded module");
+	result := writesayread(MNT + "/sayq", "module-backed speech");
+	t.assert(hassubstr(result, "ok"),
+		"module-backed sayq returns terminal status");
+	written := readfile(PARAKEETMNT + "/say");
+	t.assert(hassubstr(written, "module-backed speech"),
+		"loaded module delegated speech through its provider namespace");
+	t.assert(writefile(MNT + "/ctl", "engine kokoro") > 0,
+		"restore provider engine for later tests");
+}
+
 testCancel(t: ref T)
 {
 	t.assert(writefile(MNT + "/cancel", "cancel") > 0, "cancel write accepted");
@@ -279,6 +330,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ListenWakeHelpers", testListenWakeHelpers);
 	run("ParakeetListenMount", testParakeetListenMount);
 	run("PiperSayMount", testPiperSayMount);
+	run("SayqCompletion", testSayqCompletion);
+	run("DisEngineModule", testDisEngineModule);
 	run("Cancel", testCancel);
 
 	teardown();

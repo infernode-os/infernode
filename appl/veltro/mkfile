@@ -15,6 +15,7 @@ MAIN=\
     subagent.dis\
     mc9p.dis\
     speech9p.dis\
+    speechprovider.dis\
     speechshim9p.dis\
     msg9p.dis\
     msgwatch.dis\
@@ -98,6 +99,9 @@ mc9p.dis: mc9p.b
 
 speech9p.dis: speech9p.b
 	limbo $LIMBOFLAGS -gw speech9p.b
+
+speechprovider.dis: speechprovider.b
+	limbo $LIMBOFLAGS -gw speechprovider.b
 
 speechshim9p.dis: speechshim9p.b
 	limbo $LIMBOFLAGS -gw speechshim9p.b
@@ -269,7 +273,7 @@ tools/wallet.dis: tools/wallet.b tool.m
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools $DISBIN/sources
-	cp agentlib.dis veltro.dis repl.dis tools9p.dis nsconstruct.dis cowfs.dis subagent.dis mc9p.dis speech9p.dis speechshim9p.dis msg9p.dis msgwatch.dis ninepsrc.dis wiki9p.dis $DISBIN/
+	cp agentlib.dis veltro.dis repl.dis tools9p.dis nsconstruct.dis cowfs.dis subagent.dis mc9p.dis speech9p.dis speechprovider.dis speechshim9p.dis msg9p.dis msgwatch.dis ninepsrc.dis wiki9p.dis $DISBIN/
 	cp tools/*.dis $DISBIN/tools/
 	cp sources/*.dis $DISBIN/sources/
 

@@ -223,6 +223,23 @@ testDeviceCapture(t: ref T)
 	t.assert(hassubstr(listen, "final device audio heard"),
 		"helper fed from the capture device produced its record");
 
+	# The shim, not deployment-specific ctl text, owns the stdin contract.
+	# This prevents device mode from accidentally reopening the helper's host mic.
+	t.assert(writefile(MNT + "/ctl",
+		"whisperstreambin /bin/echo final device argv") > 0,
+		"configure argv-reporting device listen helper");
+	listen = readfile(MNT + "/listen");
+	t.assert(hassubstr(listen, "--stdin --model"),
+		"device listen helper receives stdin and model flags");
+	t.assert(hassubstr(listen, "--rate 16000 --chans 1"),
+		"device listen helper receives capture format");
+
+	t.assert(writefile(MNT + "/ctl", "wakebin /bin/echo wake device argv") > 0,
+		"configure argv-reporting device wake helper");
+	wake := readfile(MNT + "/wake");
+	t.assert(hassubstr(wake, "--stdin --word hey lucia --threshold 0.7 --rate 16000"),
+		"device wake helper receives stdin, phrase, threshold, and rate");
+
 	# Restore defaults for the remaining tests.
 	writefile(MNT + "/ctl", "micmode helper");
 	writefile(MNT + "/ctl", "capturedev default");

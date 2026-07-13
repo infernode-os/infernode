@@ -23,6 +23,9 @@ implement Luciuisrv;
 #               conversation/
 #                   ctl              write new messages
 #                   input            user text (blocking read)
+#                   voiceinput       voice-originated text (blocking read)
+#                   control          cancel/pause/resume/refine (blocking read)
+#                   draft            replaceable, non-submitting text
 #                   0, 1, 2...       numbered message files
 #               presentation/
 #                   ctl              create/remove artifacts
@@ -108,6 +111,8 @@ Qartappstatus:	con 33;	# presentation/<id>/appstatus (app type only)
 Qacturgency:	con 34;	# /activity/{id}/urgency
 Qinputmode:	con 35;	# /input-mode, k=keyboard, v=voice
 Qconvvoiceinput: con 36;	# conversation/voiceinput, voice-originated input
+Qconvdraft:	con 37;	# conversation/draft, replaceable non-submitting text
+Qconvcontrol:	con 38;	# conversation/control, active-turn voice controls
 
 # --- QID encoding ---
 # 64-bit path: [activity_id:16][sub_id:16][unused:24][filetype:8]
@@ -197,6 +202,8 @@ Activity: adt {
 	nmsg:	int;
 	inputq:	list of string;
 	voiceinputq: list of string;
+	controlq: list of string;
+	draft:	string;
 
 	# Presentation
 	currentArtifact: string;
@@ -419,7 +426,7 @@ newactivity(label: string): ref Activity
 	a := ref Activity(
 		id, label, "active",
 		0,					# urgency
-			array[32] of ref ConvMsg, 0, nil, nil,	# conversation
+		array[32] of ref ConvMsg, 0, nil, nil, nil, "",	# conversation
 		"", array[16] of ref Artifact, 0,	# presentation
 		array[16] of ref Resource, 0,		# resources
 		array[8] of ref Gap, 0,			# gaps
@@ -943,6 +950,26 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			a.voiceinputq = tl a.voiceinputq;
 			srv.reply(styxservers->readbytes(m, data));
 		}
+	Qconvcontrol =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		if(a.controlq == nil)
+			addpending(m.fid, m.tag, Qconvcontrol, actid, m);
+		else {
+			data := array of byte (hd a.controlq + "\n");
+			a.controlq = tl a.controlq;
+			srv.reply(styxservers->readbytes(m, data));
+		}
+	Qconvdraft =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte a.draft));
 
 	Qconvmsg =>
 		a := findactivity(actid);
@@ -1260,6 +1287,47 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			a.voiceinputq = appendstr(a.voiceinputq, data);
 		pushevent(actid, "voiceinput");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+	Qconvcontrol =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		cdelivered := 0;
+		cprev: ref PendingRead;
+		cp := pending;
+		while(cp != nil) {
+			next := cp.next;
+			if(cp.ft == Qconvcontrol && cp.actid == actid) {
+				reply := array of byte (data + "\n");
+				srv_g.reply(styxservers->readbytes(cp.m, reply));
+				if(cprev == nil)
+					pending = next;
+				else
+					cprev.next = next;
+				cdelivered = 1;
+				cp = next;
+				break;
+			}
+			cprev = cp;
+			cp = next;
+		}
+		if(!cdelivered)
+			a.controlq = appendstr(a.controlq, data);
+		pushevent(actid, "conversation control " + data);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+	Qconvdraft =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		# Replacement semantics are intentional: streaming STT hypotheses
+		# revise one draft without appending messages or submitting turns.
+		a.draft = data;
+		vers++;
+		pushevent(actid, "conversation draft");
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qpresctl =>
 		a := findactivity(actid);
@@ -1397,6 +1465,8 @@ globalctl(data: string): string
 		activities[idx].nbg = 0;
 		activities[idx].pendingevent = nil;
 		activities[idx].inputq = nil;
+		activities[idx].voiceinputq = nil;
+		activities[idx].controlq = nil;
 		vers++;
 		pushglobalevent("activity delete " + idstr);
 		return nil;
@@ -2020,6 +2090,10 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "input", big 0, 8r666), nil);
 	Qconvvoiceinput =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "voiceinput", big 0, 8r666), nil);
+	Qconvcontrol =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "control", big 0, 8r666), nil);
+	Qconvdraft =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "draft", big 0, 8r666), nil);
 	Qconvmsg =>
 		return (dir(Qid(p, vers, Sys->QTFILE), string subid, big 0, 8r444), nil);
 	Qpresdir =>
@@ -2159,6 +2233,10 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(actid, 0, Qconvinput);
 				"voiceinput" =>
 					n.path = MKPATH(actid, 0, Qconvvoiceinput);
+				"control" =>
+					n.path = MKPATH(actid, 0, Qconvcontrol);
+				"draft" =>
+					n.path = MKPATH(actid, 0, Qconvdraft);
 				* =>
 					# Numbered message file
 					idx := strtoint(n.name);
@@ -2304,7 +2382,8 @@ navigator(navops: chan of ref Navop)
 						n.path = MKPATH(0, 0, Qactdir);
 					Qactlabel or Qactstatus or Qacturgency or Qactevent =>
 						n.path = MKPATH(actid, 0, Qact);
-					Qconvctl or Qconvinput or Qconvmsg =>
+					Qconvctl or Qconvinput or Qconvvoiceinput or Qconvcontrol or
+					Qconvdraft or Qconvmsg =>
 						n.path = MKPATH(actid, 0, Qconvdir);
 					Qpresctl or Qprescurrent =>
 						n.path = MKPATH(actid, 0, Qpresdir);
@@ -2387,8 +2466,8 @@ navigator(navops: chan of ref Navop)
 
 			Qconvdir =>
 				a := findactivity(actid);
-				# ctl + keyboard input + voice input + message files
-				total := 3;
+				# ctl + keyboard input + voice input + control + draft + messages
+				total := 5;
 				if(a != nil)
 					total += a.nmsg;
 				i := n.offset;
@@ -2408,9 +2487,19 @@ navigator(navops: chan of ref Navop)
 					cnt--;
 					i++;
 				}
+				if(i == 3 && cnt > 0) {
+					n.reply <-= dirgen(MKPATH(actid, 0, Qconvcontrol));
+					cnt--;
+					i++;
+				}
+				if(i == 4 && cnt > 0) {
+					n.reply <-= dirgen(MKPATH(actid, 0, Qconvdraft));
+					cnt--;
+					i++;
+				}
 				if(a != nil) {
 					for(; i < total && cnt > 0; i++) {
-						midx := i - 3;
+						midx := i - 5;
 						n.reply <-= dirgen(MKPATH(actid, midx, Qconvmsg));
 						cnt--;
 					}

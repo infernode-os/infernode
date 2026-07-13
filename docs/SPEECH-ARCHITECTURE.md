@@ -54,10 +54,11 @@ flowchart LR
 | Component                       | Source                              | Role |
 |---------------------------------|-------------------------------------|------|
 | `speech9p`                      | `appl/veltro/speech9p.b`            | The 9P server. Routes ctl/say/hear/voices to engine backends. |
-| `module/speech.m`               | `module/speech.m`                   | Abstract `TTSEngine`/`STTEngine` interface (currently descriptive — speech9p in-lines its three backends rather than loading separate engine modules). |
+| `module/speech.m`               | `module/speech.m`                   | Batch result types plus the loadable `SpeechEngine` `.dis` module contract. Legacy `TTSEngine`/`STTEngine` ADTs remain for source compatibility. |
+| Provider engine module          | `appl/veltro/speechprovider.b`      | Production `SpeechEngine` implementation that delegates TTS/STT/voices to a namespace provider. |
 | `say` tool                      | `appl/veltro/tools/say.b`           | Veltro tool that opens `/n/speech/say` and writes text. |
 | `hear` tool                     | `appl/veltro/tools/hear.b`          | Veltro tool that writes `start <ms>` to `/n/speech/hear` and reads the transcription back. |
-| `lucibridge` auto-speak         | `appl/cmd/lucibridge.b:speaktext`   | GUI-side path: opens `/n/speech/say` itself when `/voice on` is active. Bypasses the agent tool. |
+| `lucibridge` voice output       | `appl/cmd/lucibridge.b`             | GUI-side path: completion-aware FIFO TTS, sentence-boundary streaming, cancellation, and speech timing. Bypasses the agent tool. |
 | `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:992` | Auto-grants `/n/speech` to agents that have `say` or `hear` registered. |
 
 ## 2. Filesystem
@@ -107,7 +108,8 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 
 | Key            | Values                                          | Notes |
 |----------------|-------------------------------------------------|-------|
-| `engine`       | `cmd` · `api` · `local`                          | `cmd` is the default. `local` is **only** reachable via this verb or auto-detection (the CLI flag rejects it). |
+| `engine`       | `cmd` · `api` · `local` · `kokoro` · `module`     | `cmd` is the default. `module` selects the previously loaded `.dis` engine. |
+| `module`       | path to a `SpeechEngine` `.dis` module             | Loads, configures, and selects a module atomically; failures leave the previous engine active. `-E path` performs the same selection at startup. |
 | `voice`        | engine-specific                                  | API engine silently rewrites `""`, `default`, or `samantha` to `alloy`. |
 | `lang`         | language code, e.g. `en`                         | Cosmetic for `cmd`; passed through to `api`. |
 | `rate`         | 8000–48000                                       | Sample rate (Hz) for `/dev/audio` playback. |
@@ -172,7 +174,7 @@ The real-helper setup path is `tools/install-speech-helpers.sh`. It prepares
 the Kokoro, whisper.cpp, and openWakeWord wrapper commands consumed by
 `speechshim9p`, prints the `/n/speech/ctl` block, and leaves microphone access
 to the interactive Inferno session. See `docs/SPEECH-VOICE-ONLY-PHASE1.md` for
-the setup walkthrough and the `micmode device` stdin-PCM limitation notes.
+the setup walkthrough and the repo-owned `micmode device` stdin-PCM adapter.
 
 Parakeet is not a separate speech architecture.  It is the first Phase 1
 provider that needs the mounted-service shape because its useful mode is a
@@ -215,7 +217,7 @@ Phase 1 keeps the existing Whisper command path because it is already the
 default helper mechanism and does not require the Parakeet-specific
 `--mic --stream` process lifecycle.
 
-## 3. The three engines
+## 3. Engine backends
 
 ```mermaid
 flowchart TB
@@ -252,8 +254,32 @@ while the API and local paths require a working audio device.
 | `cmd`  | `say`/`espeak-ng`/PowerShell via `#C`                    | `ffmpeg` (macOS) / `arecord` (Linux) → temp WAV → `whisper-cli` |
 | `api`  | POST to `/audio/speech` → PCM → `playpcm`               | record via `recordaudio` → POST to `/audio/transcriptions` (multipart) |
 | `local` | `piper --output-raw` (text on stdin) → PCM → `playpcm` | `ffmpeg`/`arecord` → temp WAV → `whisper-cli` |
+| `kokoro` | provider `say` file | provider streaming `listen` file |
+| `module` | loaded module returns PCM, or completes playback itself | captured PCM passed to the loaded module |
 
-### 3.1 Engine selection
+### 3.1 Loadable `.dis` engines
+
+`SpeechEngine` in `module/speech.m` is the runtime module ABI: `init`, `name`,
+`caps`, `configure`, `voices`, `synthesize`, and `recognize`. A module advertises
+`CAPTTS`, `CAPSTT`, or both. Configuration is re-applied when voice, language,
+format, or provider settings change.
+
+```sh
+echo 'provider /n/remotespeech' > /n/speech/ctl
+echo 'module /dis/veltro/speechprovider.dis' > /n/speech/ctl
+cat /n/speech/voices
+```
+
+The in-tree provider module is deliberately file-oriented: it delegates through
+the provider's `say`, `listen`, and `voices` files. Future in-process model
+modules can return PCM directly without changing `speech9p`.
+
+`voicemode` accepts confidence metadata on `partial` and `final` listen
+records. Records below its confirmation threshold are held behind a visual and
+spoken confirmation instead of being submitted as a user turn. The default is
+650 permille; `voicemode -q confidence-permille` selects another value.
+
+### 3.2 Engine selection
 
 ```mermaid
 flowchart TD

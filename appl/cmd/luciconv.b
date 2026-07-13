@@ -111,6 +111,7 @@ msgstore: array of ref ConvMsg;
 nmsg := 0;
 inputbuf: string;
 inputpos := 0;		# cursor position within inputbuf
+draftbuf: string;		# replaceable STT hypothesis; never submitted
 scrollpx := 0;
 maxscrollpx := 0;
 viewport_h := 400;
@@ -210,13 +211,16 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 
 	inputbuf = "";
 	inputpos = 0;
+	draftbuf = "";
 	username = readdevuser();
 	voicech = chan of string;
 	msgstore = array[32] of ref ConvMsg;
 	nmsg = 0;
 
-	if(actid >= 0)
+	if(actid >= 0) {
 		loadmessages();
+		loaddraft();
+	}
 
 	redrawconv();
 
@@ -471,9 +475,16 @@ handleevent(ev: string)
 	if(hasprefix(ev, "switchactivity ")) {
 		newid := strtoint(ev[len "switchactivity ":]);
 		if(newid >= 0) {
+			# A draft belongs only to the active listening context. Clear
+			# the old activity without touching the user's typed compose.
+			writedraft("");
 			actid_g = newid;
+			draftbuf = "";
 			loadmessages();
+			loaddraft();
 		}
+	} else if(ev == "conversation draft") {
+		loaddraft();
 	} else if(hasprefix(ev, "conversation update ")) {
 		idx := strtoint(ev[len "conversation update ":]);
 		if(idx >= 0)
@@ -617,33 +628,47 @@ drawconversation(zone: Rect)
 	maxitw := inputr.dx() - 2 * pad - 8 - micw - sendw;
 	cw := 8;
 
-	# Clamp inputpos
+	# Clamp the real keyboard compose cursor. A voice draft is rendered in
+	# its place, muted and without a cursor, but never overwrites inputbuf.
 	if(inputpos < 0)
 		inputpos = 0;
 	if(inputpos > len inputbuf)
 		inputpos = len inputbuf;
 
-	# Find a visible window of inputbuf that keeps the cursor in view.
+	displaytext := inputbuf;
+	displaypos := inputpos;
+	displaycol := textcol;
+	showcursor := 1;
+	if(draftbuf != nil && draftbuf != "") {
+		displaytext = draftbuf;
+		displaypos = len draftbuf;
+		displaycol = dimcol;
+		showcursor = 0;
+	}
+
+	# Find a visible window that keeps the compose cursor or draft tail in view.
 	# Start by including the cursor position, then expand left/right.
-	vstart := inputpos;
-	vend := inputpos;
+	vstart := displaypos;
+	vend := displaypos;
 
 	# Expand right first
-	while(vend < len inputbuf && mainfont.width(inputbuf[vstart:vend+1]) + cw <= maxitw)
+	while(vend < len displaytext && mainfont.width(displaytext[vstart:vend+1]) + cw <= maxitw)
 		vend++;
 	# Expand left
-	while(vstart > 0 && mainfont.width(inputbuf[vstart-1:vend]) + cw <= maxitw)
+	while(vstart > 0 && mainfont.width(displaytext[vstart-1:vend]) + cw <= maxitw)
 		vstart--;
 
-	itext := inputbuf[vstart:vend];
-	mainwin.text((itx, ity), textcol, (0, 0), mainfont, itext);
+	itext := displaytext[vstart:vend];
+	mainwin.text((itx, ity), displaycol, (0, 0), mainfont, itext);
 
 	# Block cursor at cursor position within visible text
-	pre := inputbuf[vstart:inputpos];
-	ch := mainfont.height;
-	cx := itx + mainfont.width(pre);
-	cy := ity;
-	mainwin.draw(Rect((cx, cy), (cx + cw, cy + ch)), cursorcol, nil, (0, 0));
+	if(showcursor) {
+		pre := displaytext[vstart:displaypos];
+		ch := mainfont.height;
+		cx := itx + mainfont.width(pre);
+		cy := ity;
+		mainwin.draw(Rect((cx, cy), (cx + cw, cy + ch)), cursorcol, nil, (0, 0));
+	}
 
 	if(nmsg == 0) {
 		drawcentertext(Rect((zone.min.x, zone.min.y), (zone.max.x, msgy)),
@@ -1148,6 +1173,28 @@ sendinput(text: string)
 		sys->fprint(stderr, "luciconv: can't open %s: %r\n", path);
 		return;
 	}
+	b := array of byte text;
+	sys->write(fd, b, len b);
+}
+
+loaddraft()
+{
+	if(actid_g < 0) {
+		draftbuf = "";
+		return;
+	}
+	path := sys->sprint("%s/activity/%d/conversation/draft", mountpt_g, actid_g);
+	draftbuf = strip(readfile(path));
+}
+
+writedraft(text: string)
+{
+	if(actid_g < 0)
+		return;
+	path := sys->sprint("%s/activity/%d/conversation/draft", mountpt_g, actid_g);
+	fd := sys->open(path, Sys->OWRITE | Sys->OTRUNC);
+	if(fd == nil)
+		return;
 	b := array of byte text;
 	sys->write(fd, b, len b);
 }

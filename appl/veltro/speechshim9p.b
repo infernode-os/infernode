@@ -10,7 +10,8 @@ implement Speechshim9p;
 #   │                  audiodev, capturedev, micmode, capturerate,
 #   │                  mic on|off
 #   ├── listen   (r)   newline records from the streaming STT helper:
-#   │                  "partial <text>" / "final <text>" / "error: <reason>"
+#   │                  "partial [confidence=N] <text>" /
+#   │                  "final [confidence=N] <text>" / "error: <reason>"
 #   ├── wake     (r)   blocks until the wake-word helper emits an event line
 #   ├── say      (rw)  write text: Kokoro synthesizes PCM, played through
 #   │                  /dev/audio in chunks; read returns the status
@@ -523,7 +524,8 @@ audiopump()
 listencmd(): string
 {
 	if(micmode == "device")
-		return whisperstreambin;	# full command; reads PCM on stdin
+		return whisperstreambin + " --stdin --model " + whispermodel +
+			" --rate " + string capturerate + " --chans 1";
 	return whisperstreambin + " --model " + whispermodel +
 		" --rate 16000 --chans 1";
 }
@@ -531,7 +533,8 @@ listencmd(): string
 wakecmd(): string
 {
 	if(micmode == "device")
-		return wakebin;			# full command; reads PCM on stdin
+		return wakebin + " --stdin --word \"" + wakeword + "\" --threshold " +
+			wakethreshold + " --rate " + string capturerate;
 	# startproc wraps the complete host command in single quotes for #C.
 	# Use double quotes here so a multiword phrase remains one host-shell arg
 	# without terminating that outer command string.

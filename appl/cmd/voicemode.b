@@ -69,6 +69,8 @@ listenseq := 0;
 
 listentimeout := 10000;
 wakecooldown := 1500;
+confidencethreshold := 650;	# thousandths; confidence metadata is optional
+pendingconfirm := "";
 
 testmode := 0;
 echoback := 0;
@@ -84,7 +86,7 @@ silencefinals := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: voicemode [-d] [-e] [-p phrase] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
+	sys->fprint(stderr, "Usage: voicemode [-d] [-e] [-p phrase] [-q confidence-permille] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
 	raise "fail:usage";
 }
 
@@ -225,6 +227,16 @@ voiceinput(actid: int, text: string): int
 	return writefile(path, text);
 }
 
+draftinput(actid: int, text: string): int
+{
+	path := sys->sprint("%s/activity/%d/conversation/draft", ui, actid);
+	fd := sys->open(path, Sys->OWRITE | Sys->OTRUNC);
+	if(fd == nil)
+		return -1;
+	b := array of byte text;
+	return sys->write(fd, b, len b);
+}
+
 cancelspeech()
 {
 	writefile(speech + "/cancel", "cancel");
@@ -261,7 +273,7 @@ finaltext(s: string): string
 	if(s == nil || s == "")
 		return nil;
 	if(hasprefix(s, "final "))
-		return strip(s[6:]);
+		return recordtext(s[6:]);
 	if(hasprefix(s, "text "))
 		return strip(s[5:]);
 	if(hasprefix(s, "partial "))
@@ -271,19 +283,59 @@ finaltext(s: string): string
 	return s;
 }
 
+recordtext(s: string): string
+{
+	s = strip(s);
+	if(!hasprefix(s, "confidence="))
+		return s;
+	for(i := 0; i < len s; i++)
+		if(s[i] == ' ')
+			return strip(s[i+1:]);
+	return nil;
+}
+
+recordconfidence(s: string): int
+{
+	s = strip(s);
+	if(!hasprefix(s, "confidence="))
+		return -1;
+	i := len "confidence=";
+	whole := 0;
+	while(i < len s && s[i] >= '0' && s[i] <= '9') {
+		whole = whole * 10 + s[i] - '0';
+		i++;
+	}
+	if(whole >= 1)
+		return 1000;
+	if(i >= len s || s[i] != '.')
+		return 0;
+	i++;
+	frac := 0;
+	n := 0;
+	while(i < len s && n < 3 && s[i] >= '0' && s[i] <= '9') {
+		frac = frac * 10 + s[i] - '0';
+		i++;
+		n++;
+	}
+	while(n++ < 3)
+		frac *= 10;
+	return frac;
+}
+
 ispartial(s: string): int
 {
 	s = strip(s);
 	return s != nil && hasprefix(s, "partial ");
 }
 
-parselisten(s: string): (int, string)
+parselisten(s: string): (int, string, int)
 {
 	s = strip(s);
 	if(s == nil || s == "")
-		return (LISTEN_EMPTY, nil);
+		return (LISTEN_EMPTY, nil, -1);
 	kind := LISTEN_EMPTY;
 	text := "";
+	confidence := -1;
 	(nil, lines) := sys->tokenize(s, "\n");
 	for(; lines != nil; lines = tl lines) {
 		line := strip(hd lines);
@@ -297,17 +349,20 @@ parselisten(s: string): (int, string)
 		if(ispartial(line)) {
 			if(kind != LISTEN_FINAL) {
 				kind = LISTEN_PARTIAL;
-				text = strip(line[8:]);
+				confidence = recordconfidence(line[8:]);
+				text = recordtext(line[8:]);
 			}
 			continue;
 		}
 		t := finaltext(line);
 		if(t != nil && t != "") {
 			kind = LISTEN_FINAL;
+			if(hasprefix(line, "final "))
+				confidence = recordconfidence(line[6:]);
 			text = t;
 		}
 	}
-	return (kind, text);
+	return (kind, text, confidence);
 }
 
 iserror(s: string): int
@@ -379,6 +434,26 @@ approvalpending(actid: int): int
 	return strip(readfile(path)) == "blocked";
 }
 
+controlinput(actid: int, ctl: string): int
+{
+	path := sys->sprint("%s/activity/%d/conversation/control", ui, actid);
+	n := writefile(path, ctl);
+	if(n < 0)
+		logerr("cannot write active-turn control " + ctl + " to " + path + ": " + sys->sprint("%r"));
+	return n;
+}
+
+activitystatus(actid: int): string
+{
+	return strip(readfile(sys->sprint("%s/activity/%d/status", ui, actid)));
+}
+
+agentbusy(actid: int): int
+{
+	s := activitystatus(actid);
+	return s != nil && s != "" && s != "idle" && s != "active" && s != "complete";
+}
+
 # The say write blocks for the TTS duration on real providers, so test
 # mode runs it spawned; barge-in still works because a wake event writes
 # /n/speech/cancel, which kills the in-flight synthesis.
@@ -396,6 +471,16 @@ noticeheard(actid: int, text: string)
 			text[i] = ' ';
 	path := sys->sprint("%s/activity/%d/conversation/ctl", ui, actid);
 	writefile(path, "role=veltro dtype=dialogue title=Heard text=" + text);
+}
+
+noticeconfirm(actid: int, text: string)
+{
+	for(i := 0; i < len text; i++)
+		if(text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
+			text[i] = ' ';
+	path := sys->sprint("%s/activity/%d/conversation/ctl", ui, actid);
+	writefile(path, "role=veltro dtype=dialogue title=Confirm speech text=I heard: " +
+		text + ". Say yes to continue, or say the correction.");
 }
 
 noticevoiceerror(actid: int, reason: string)
@@ -417,7 +502,25 @@ handlecontrol(actid: int, text: string): int
 	lower := normalize(text);
 	if(lower == "stop" || lower == "cancel") {
 		cancelspeech();
+		controlinput(actid, "cancel");
 		ctxstatus(actid, "waiting");
+		return 1;
+	}
+	if(lower == "pause") {
+		controlinput(actid, "pause");
+		ctxstatus(actid, "paused");
+		return 1;
+	}
+	if(lower == "resume" || (lower == "continue" && activitystatus(actid) == "paused")) {
+		controlinput(actid, "resume");
+		ctxstatus(actid, "waiting");
+		return 1;
+	}
+	if(lower == "status" || lower == "repeat status" || lower == "what is happening") {
+		s := activitystatus(actid);
+		if(s == nil || s == "")
+			s = "idle";
+		spawn saytts("Current activity is " + s + ".");
 		return 1;
 	}
 	if(lower == "keyboard" || lower == "voice mode off") {
@@ -548,12 +651,14 @@ WAITING, LISTENING: con iota;
 voiceloop()
 {
 	log("voice mode on");
+	pendingconfirm = "";
 	drainresults();
 	actid := currentactivity();
 	state := WAITING;
 	listengen := 0;
 	lastwake := -wakecooldown;
 	errorshown := 0;
+	draftinput(actid, "");
 	ctxstatus(actid, "waiting");
 	chime("on");
 	request(startwake);
@@ -563,6 +668,7 @@ voiceloop()
 			if(hasprefix(ev, "input-mode ") && strip(ev[11:]) != "v") {
 				listenseq++;
 				listengen = listenseq;
+				draftinput(actid, "");
 				cancelspeech();
 				chime("off");
 				micoff();
@@ -602,6 +708,7 @@ voiceloop()
 			# Barge-in: any active TTS is cut off before listening.
 			cancelspeech();
 			actid = currentactivity();
+			draftinput(actid, "");
 			state = LISTENING;
 			listenseq++;
 			listengen = listenseq;
@@ -613,11 +720,13 @@ voiceloop()
 				continue;
 			if(rec.gen != listengen)
 				continue;
-			(kind, text) := parselisten(rec.text);
+			(kind, text, confidence) := parselisten(rec.text);
 			if(kind == LISTEN_EMPTY || kind == LISTEN_PARTIAL) {
 				errorshown = 0;
-				if(kind == LISTEN_PARTIAL)
+				if(kind == LISTEN_PARTIAL) {
 					ctxpartial(actid, text);
+					draftinput(actid, text);
+				}
 				sys->sleep(100);
 				requestlisten(listengen);
 				continue;
@@ -628,6 +737,7 @@ voiceloop()
 				listengen = listenseq;
 				state = WAITING;
 				listenoff();
+				draftinput(actid, "");
 				if(!errorshown) {
 					ctxerror(actid, strip(rec.text));
 					noticevoiceerror(actid, strip(rec.text));
@@ -642,6 +752,7 @@ voiceloop()
 			listengen = listenseq;
 			state = WAITING;
 			listenoff();
+			draftinput(actid, "");
 			errorshown = 0;
 			if(junkfinal(text)) {
 				log("listen junk: " + text);
@@ -653,7 +764,39 @@ voiceloop()
 			}
 			log("transcript: " + text);
 			if(handlecontrol(actid, text)) {
+				pendingconfirm = "";
 				ctxstatus(actid, "waiting");
+				chime("done");
+				sys->sleep(100);
+				request(startwake);
+				continue;
+			}
+			if(pendingconfirm != "") {
+				answer := normalize(text);
+				if(answer == "yes" || answer == "confirm" || answer == "correct" ||
+				   answer == "do it") {
+					text = pendingconfirm;
+					pendingconfirm = "";
+					confidence = 1000;
+				} else if(answer == "no" || answer == "wrong" || answer == "cancel") {
+					pendingconfirm = "";
+					ctxstatus(actid, "waiting");
+					spawn saytts("Okay. Please say it again.");
+					chime("done");
+					sys->sleep(100);
+					request(startwake);
+					continue;
+				} else {
+					# Treat any other answer as a spoken correction and apply its
+					# own confidence rather than submitting the old interpretation.
+					pendingconfirm = "";
+				}
+			}
+			if(confidence >= 0 && confidence < confidencethreshold) {
+				pendingconfirm = text;
+				ctxstatus(actid, "confirming");
+				noticeconfirm(actid, text);
+				spawn saytts("I heard " + text + ". Is that right?");
 				chime("done");
 				sys->sleep(100);
 				request(startwake);
@@ -667,10 +810,15 @@ voiceloop()
 					saytext = text;
 				ctxstatus(actid, "speaking");
 				spawn saytts(saytext);
-			} else if(voiceinput(actid, text) < 0)
+			} else {
+				# A follow-up against a busy activity takes conversational
+				# control at the next safe model/tool boundary, then remains
+				# queued on voiceinput as the next turn in the same session.
+				if(agentbusy(actid) && !approvalpending(actid))
+					controlinput(actid, "refine");
+				if(voiceinput(actid, text) < 0)
 				ctxstatus(actid, "error");
-			else
-				ctxstatus(actid, "speaking");
+			}
 			# Re-arm immediately: a wake during the spoken response is
 			# barge-in. The pacing sleep keeps mock file trees (always-
 			# ready reads) from spinning.
@@ -686,6 +834,7 @@ voiceloop()
 				listengen = listenseq;
 				state = WAITING;
 				listenoff();
+				draftinput(actid, "");
 				ctxtimeout(actid);
 				chime("done");
 				request(startwake);
@@ -718,12 +867,15 @@ init(nil: ref Draw->Context, args: list of string)
 			testmode = 1;
 		'p' =>	testphrase = arg->earg();
 			testmode = 1;
+		'q' =>	confidencethreshold = int arg->earg();
 		't' =>	listentimeout = int arg->earg();
 		'w' =>	wakecooldown = int arg->earg();
 		'u' =>	ui = arg->earg();
 		's' =>	speech = arg->earg();
 		* =>	usage();
 		}
+	if(confidencethreshold < 0 || confidencethreshold > 1000)
+		usage();
 
 	evch = chan[8] of string;
 	wakech = chan[2] of string;

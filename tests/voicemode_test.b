@@ -169,6 +169,8 @@ mkmock()
 	createfile(MOCKUI + "/activity/0/status", "working");
 	createfile(MOCKUI + "/activity/0/conversation/ctl", "");
 	createfile(MOCKUI + "/activity/0/conversation/voiceinput", "");
+	createfile(MOCKUI + "/activity/0/conversation/control", "");
+	createfile(MOCKUI + "/activity/0/conversation/draft", "");
 	createfile(MOCKSPEECH + "/wake", "wake hey_lucia 0.9\n");
 	createfile(MOCKSPEECH + "/listen", "partial warming up\n");
 	createfile(MOCKSPEECH + "/cancel", "");
@@ -242,12 +244,13 @@ testPartialNotInjected(t: ref T)
 
 testPartialThenFinalInjected(t: ref T)
 {
-	createfile(MOCKSPEECH + "/listen", "partial half\n");
+	createfile(MOCKSPEECH + "/listen", "partial confidence=0.7000 half\n");
 	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
 		"partial record keeps daemon in listening state");
 	sys->sleep(300);
-	createfile(MOCKSPEECH + "/listen", "partial half\nfinal full transcript\n");
+	createfile(MOCKSPEECH + "/listen",
+		"partial confidence=0.7000 half\nfinal confidence=0.9500 full transcript\n");
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"full transcript", 5000),
 		"final after partial is injected");
@@ -260,10 +263,15 @@ testPartialUpdatesResourceLabel(t: ref T)
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
 		"label=Voice: half a thou type=audio status=listening", 5000),
 		"partial transcript updates voice resource label");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/draft",
+		"half a thou", 3000),
+		"partial transcript replaces the visible conversation draft");
 	createfile(MOCKSPEECH + "/listen", "final full transcript\n");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
-		"label=Voice type=audio status=speaking", 5000),
-		"final transcript restores voice resource label");
+		"label=Voice type=audio status=processing", 5000),
+		"final transcript restores the label without claiming playback started");
+	t.assertseq(readfile(MOCKUI + "/activity/0/conversation/draft"), "",
+		"final transcript clears the draft before submission");
 }
 
 testFinalInjected(t: ref T)
@@ -289,6 +297,8 @@ testListenTimeoutReturnsToWaiting(t: ref T)
 		"listen timeout returns status to waiting");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "label=Voice: no speech heard", 3000),
 		"timeout is visibly distinct from a completed empty turn");
+	t.assertseq(readfile(MOCKUI + "/activity/0/conversation/draft"), "",
+		"listen timeout clears any draft hypothesis");
 	t.assert(waitfor(MOCKSPEECH + "/ctl", "listen off", 3000),
 		"timeout stops the STT helper (listen off ctl write)");
 }
@@ -300,8 +310,8 @@ testWakeDebounce(t: ref T)
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"debounce turn", 5000),
 		"first wake reaches listen and injects final");
-	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=speaking", 3000),
-		"completed turn reports speaking before re-arming wake");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=processing", 3000),
+		"completed turn remains processing until the speech client starts playback");
 	sys->sleep(300);
 	t.assert(!hassubstr(readfile(MOCKUI + "/activity/0/context/ctl"), "status=listening"),
 		"immediate second wake is debounced instead of starting listen");
@@ -330,8 +340,22 @@ testControlIntentPunctuation(t: ref T)
 	createfile(MOCKSPEECH + "/listen", "final Stop.\n");
 	t.assert(waitfor(MOCKSPEECH + "/cancel", "cancel", 5000),
 		"punctuated stop intent cancels speech");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/control", "cancel", 3000),
+		"punctuated stop also cancels the active agent turn");
 	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
 	t.assert(!hassubstr(vi, "Stop"), "punctuated control intent is not injected");
+}
+
+testPauseResumeControls(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen", "final pause\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/control", "pause", 5000),
+		"spoken pause reaches active-turn control");
+	createfile(MOCKUI + "/activity/0/status", "paused");
+	createfile(MOCKSPEECH + "/listen", "final continue\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/control", "resume", 5000),
+		"spoken continue resumes only a paused activity");
 }
 
 testYesRequiresBlocked(t: ref T)
@@ -350,6 +374,23 @@ testYesRequiresBlocked(t: ref T)
 	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput", "Allow", 5000),
 		"bare yes maps to Allow only while activity is blocked");
+}
+
+testLowConfidenceRequiresConfirmation(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen",
+		"final confidence=0.4200 remove the old report\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/ctl",
+		"title=Confirm speech", 5000),
+		"low-confidence final asks for visual confirmation");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "remove the old report"),
+		"low-confidence final is not submitted before confirmation");
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9900 yes\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"remove the old report", 5000),
+		"high-confidence yes submits the interpreted utterance");
 }
 
 testHelperErrorSurfacedOnce(t: ref T)
@@ -461,7 +502,10 @@ init(nil: ref Draw->Context, args: list of string)
 	runvm("WakeDebounce", "-w" :: "1000" :: nil, testWakeDebounce);
 	runvm("JunkFinalNotInjected", "-w" :: "200" :: nil, testJunkFinalNotInjected);
 	runvm("ControlIntentPunctuation", nil, testControlIntentPunctuation);
+	runvm("PauseResumeControls", "-w" :: "200" :: nil, testPauseResumeControls);
 	runvm("YesRequiresBlocked", "-w" :: "200" :: nil, testYesRequiresBlocked);
+	runvm("LowConfidenceRequiresConfirmation", "-w" :: "200" :: nil,
+		testLowConfidenceRequiresConfirmation);
 	runvm("HelperErrorSurfacedOnce", nil, testHelperErrorSurfacedOnce);
 	runvm("SpokenKeyboardIntent", nil, testSpokenKeyboardIntent);
 	runvm("TestModeSpeaksPhrase", "-p" :: "canned reply" :: nil,

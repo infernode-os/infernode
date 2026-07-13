@@ -9,14 +9,17 @@
 > **Phase 2 pointer.** The Mac-local voice mode
 > ([SPEECH-VOICE-ONLY-PHASE1.md](SPEECH-VOICE-ONLY-PHASE1.md)) is Phase 1 of
 > the voice work; this remote-audio direction is the Phase 2 target (Mac as
-> I/O terminal, Jetson or other host as inference engine), together with
-> pluggable `.dis` speech-engine modules built on the `TTSEngine`/`STTEngine`
-> and `Partial` interfaces in `module/speech.m`. The audio-routing side is
+> I/O terminal, Jetson or other host as inference engine). The loadable
+> `SpeechEngine` `.dis` contract and provider-backed reference module are now
+> implemented in `module/speech.m` and `appl/veltro/speechprovider.b`; streaming
+> records continue to use `Partial`. The audio-routing side is
 > now implemented: `speechshim9p` takes its playback and capture devices as
 > namespace paths (`audiodev`, `capturedev`, `micmode device` — see
 > SPEECH-ARCHITECTURE.md), so any 9P-imported audio device works like the
-> local one. What remains manual is starting the services and exports on
-> each host (launch scripts below).
+> local one. The `lib/voice/speech-*` scripts below automate the services,
+> exports, imports, and ctl routing on each host. Real cross-host audio remains
+> an operator acceptance test because it depends on two machines and device
+> permissions.
 
 ## Current Design
 
@@ -95,6 +98,23 @@ Now the remote shim synthesizes and recognizes, but reads its PCM from —
 and plays it back to — the terminal's audio device over 9P. Note the
 `audiodev` value is a path in the *remote* shim's namespace.
 
+The same topology is automated by two launch scripts:
+
+```sh
+# Remote engine first:
+sh /lib/voice/speech-engine tcp!<local-ip>!17010
+
+# Local terminal second:
+sh /lib/voice/speech-terminal tcp!<remote-ip>!17019
+```
+
+The terminal script reuses `/lib/voice/listen` (including audio pre-warm and
+buffer caps), mounts the exported provider, selects it in `/n/speech/ctl`, and
+keeps `duplex half`. The engine script imports the terminal device tree, starts
+an isolated `speechshim9p` mount, selects device-fed PCM, and exports the
+provider contract. Optional port and mount arguments are documented in each
+script's usage header.
+
 ### 3. Remote capture device (e.g. Infernode on an Android phone)
 
 The phone contributes only its microphone; processing and playback stay
@@ -117,6 +137,12 @@ echo 'micmode device' > /n/speech/ctl
 speech come from the phone's mic while TTS still plays through `audiodev`
 (the local speakers, or wherever topology 2 pointed it). Write
 `capturedev default` to fall back to `audiodev` again.
+
+On the processing host, the import and ctl writes are automated as:
+
+```sh
+sh /lib/voice/speech-capture tcp!<phone-ip>!17010
+```
 
 ### Why It Works
 
@@ -143,9 +169,9 @@ hosts:
 
 | Step | Manual? | GUI? | Veltro? |
 |------|---------|------|---------|
-| `listen export /dev` on the mic/speaker host | yes (launch script) | ✗ | ✗ |
-| `mount` terminal/phone audio on the engine host | yes (launch script) | ✗ | ✗ |
-| `speechshim9p &` + export on the engine host | yes (launch script) | ✗ | ✗ |
+| `listen export /dev` on the mic/speaker host | `speech-terminal` | ✗ | ✗ |
+| `mount` terminal/phone audio on the engine host | `speech-engine` / `speech-capture` | ✗ | ✗ |
+| `speechshim9p &` + export on the engine host | `speech-engine` | ✗ | ✗ |
 | Mount remote provider locally | via catalog `[+]` | ✓ | ✗ |
 | `provider` / `audiodev` / `capturedev` / `micmode` ctl writes | yes (one-liners) | ✗ | ✓ (shell tool) |
 
@@ -165,10 +191,11 @@ hosts:
 
 ### Recommended Approach (When Implementing)
 
-Option A — **Launch script automation** (low effort, sufficient for now):
-Bake the exports and mounts into each host's launch command alongside `tools9p` and
-`lucibridge`, and the ctl writes into the local boot script. The catalog entry handles
-the final user-facing mount.
+Option A — **Launch script automation** (implemented):
+`/lib/voice/speech-terminal`, `/lib/voice/speech-engine`, and
+`/lib/voice/speech-capture` perform the exports, mounts, provider startup, and ctl
+writes. The scripts intentionally remain explicit operator commands; they do not
+invent a remote-control authority or store remote credentials.
 
 Option B — **Catalog multi-step connect** (proper GUI solution):
 Extend `CatalogEntry` with a `setup: list of string` field. Each entry is a command

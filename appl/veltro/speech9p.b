@@ -50,6 +50,8 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
+include "speech.m";
+
 Speech9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
@@ -71,6 +73,7 @@ ENGINE_CMD: con 0;   # Host OS commands via #C (devcmd)
 ENGINE_API: con 1;   # HTTP API (OpenAI, etc.)
 ENGINE_LOCAL: con 2; # Local ML models (Piper TTS, whisper.cpp STT)
 ENGINE_KOKORO: con 3; # Kokoro TTS + streaming helper STT/wake
+ENGINE_MODULE: con 4; # Dynamically loaded SpeechEngine `.dis` module
 
 # Current configuration
 engine := ENGINE_CMD;
@@ -82,6 +85,8 @@ apikey := "";
 audrate := 22050;
 audchans := 1;
 audbits := 16;
+enginepath := "";
+engineplugin: SpeechEngine;
 
 # Platform-specific defaults for cmd engine
 cmdtts := "";    # Set in initplatform()
@@ -153,10 +158,11 @@ nomod(s: string)
 
 usage()
 {
-	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-k apikey]\n");
+	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-E module.dis] [-k apikey]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /n/speech)\n");
 	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local, kokoro\n");
+	sys->fprint(stderr, "  -E module.dis Load a SpeechEngine module and select it\n");
 	sys->fprint(stderr, "  -k key        API key (for api engine)\n");
 	sys->fprint(stderr, "  -u url        API base URL\n");
 	sys->fprint(stderr, "  -v voice      Default voice\n");
@@ -205,6 +211,7 @@ init(nil: ref Draw->Context, args: list of string)
 				usage();
 			}
 			engineexplicit = 1;
+		'E' =>	enginepath = arg->earg();
 		'k' =>	apikey = arg->earg();
 		'u' =>	apiurl = arg->earg();
 		'v' =>	voice = arg->earg();
@@ -215,6 +222,14 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Detect platform and set defaults
 	initplatform();
+	if(enginepath != "") {
+		path := enginepath;
+		err := loadengine(path);
+		if(err != nil && err != "") {
+			sys->fprint(stderr, "speech9p: %s\n", err);
+			raise "fail:engine";
+		}
+	}
 
 	sys->pctl(Sys->FORKFD, nil);
 
@@ -320,6 +335,39 @@ detectplatform(): string
 	return "unknown";
 }
 
+speechconfig(): ref Speech->Config
+{
+	infmt := ref Speech->AudioFmt(audrate, audchans, audbits, "pcm");
+	outfmt := ref Speech->AudioFmt(audrate, audchans, audbits, "pcm");
+	return ref Speech->Config("module", voice, lang, apiurl, apikey,
+		cmdtts, cmdstt, providermount, infmt, outfmt);
+}
+
+configureplugin(): string
+{
+	if(engineplugin == nil)
+		return "speech engine module is not loaded";
+	return engineplugin->configure(speechconfig());
+}
+
+loadengine(path: string): string
+{
+	m := load SpeechEngine path;
+	if(m == nil)
+		return sys->sprint("cannot load speech engine %s: %r", path);
+	err := m->init();
+	if(err != nil && err != "")
+		return err;
+	err = m->configure(speechconfig());
+	if(err != nil && err != "")
+		return err;
+	engineplugin = m;
+	enginepath = path;
+	engine = ENGINE_MODULE;
+	engineexplicit = 1;
+	return nil;
+}
+
 # Read current config as text
 readconfig(): string
 {
@@ -330,6 +378,8 @@ readconfig(): string
 		ename = "local";
 	else if(engine == ENGINE_KOKORO)
 		ename = "kokoro";
+	else if(engine == ENGINE_MODULE)
+		ename = "module";
 
 	result := "engine " + ename + "\n";
 	result += "voice " + voice + "\n";
@@ -337,6 +387,9 @@ readconfig(): string
 	result += "rate " + string audrate + "\n";
 	result += "chans " + string audchans + "\n";
 	result += "bits " + string audbits + "\n";
+	result += "module " + enginepath + "\n";
+	if(engineplugin != nil)
+		result += "modulename " + engineplugin->name() + "\n";
 
 	if(engine == ENGINE_CMD) {
 		result += "cmdtts " + cmdtts + "\n";
@@ -398,8 +451,16 @@ applyconfig(cmd: string): string
 		"api" =>	engine = ENGINE_API;
 		"local" =>	engine = ENGINE_LOCAL;
 		"kokoro" =>	engine = ENGINE_KOKORO;
+		"module" =>
+			if(engineplugin == nil)
+				return "error: load a module first with: module /path/engine.dis";
+			engine = ENGINE_MODULE;
 		* =>		return "error: unknown engine: " + val;
 		}
+	"module" =>
+		err := loadengine(val);
+		if(err != nil && err != "")
+			return "error: " + err;
 	"voice" =>
 		voice = val;
 	"lang" =>
@@ -489,6 +550,11 @@ applyconfig(cmd: string): string
 	* =>
 		return "error: unknown config key: " + key;
 	}
+	if(engine == ENGINE_MODULE) {
+		err := configureplugin();
+		if(err != nil && err != "")
+			return "error: " + err;
+	}
 
 	return "ok";
 }
@@ -514,6 +580,13 @@ listvoices(): string
 		return listlocalvoices();
 	ENGINE_KOKORO =>
 		return listkokorovoices();
+	ENGINE_MODULE =>
+		if(engineplugin == nil || !(engineplugin->caps() & Speech->CAPTTS))
+			return "(loaded module has no TTS capability)\n";
+		result := "";
+		for(vs := engineplugin->voices(); vs != nil; vs = tl vs)
+			result += hd vs + "\n";
+		return result;
 	}
 	return "";
 }
@@ -579,6 +652,17 @@ dosay(text: string): string
 		return saylocal(text);
 	ENGINE_KOKORO =>
 		return sayprovider(text);
+	ENGINE_MODULE =>
+		if(engineplugin == nil || !(engineplugin->caps() & Speech->CAPTTS))
+			return "error: loaded module has no TTS capability";
+		r := engineplugin->synthesize(text);
+		if(r == nil)
+			return "error: speech engine returned no TTS result";
+		if(r.err != nil && r.err != "")
+			return "error: " + r.err;
+		if(r.audio != nil && len r.audio > 0)
+			return playpcm(r.audio);
+		return "ok";
 	}
 	return "error: no engine configured";
 }
@@ -760,8 +844,39 @@ dohear(): string
 		return hearlocal();
 	ENGINE_KOKORO =>
 		return dolisten();
+	ENGINE_MODULE =>
+		if(engineplugin == nil || !(engineplugin->caps() & Speech->CAPSTT))
+			return "error: loaded module has no STT capability";
+		fmt := ref Speech->AudioFmt(audrate, audchans, audbits, "pcm");
+		audio := capturepcm(hearduration);
+		if(audio == nil)
+			return "error: recording failed";
+		r := engineplugin->recognize(audio, fmt);
+		if(r == nil)
+			return "error: speech engine returned no STT result";
+		if(r.err != nil && r.err != "")
+			return "error: " + r.err;
+		return r.text;
 	}
 	return "error: no engine configured";
+}
+
+capturepcm(duration: int): array of byte
+{
+	configaudio("in");
+	fd := sys->open("/dev/audio", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	total := (audrate * audchans * (audbits / 8) * duration) / 1000;
+	data := array[total] of byte;
+	nread := 0;
+	while(nread < total) {
+		n := sys->read(fd, data[nread:], total - nread);
+		if(n <= 0)
+			break;
+		nread += n;
+	}
+	return data[0:nread];
 }
 
 # STT via host commands (record + transcribe, all host-side)

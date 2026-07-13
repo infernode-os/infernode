@@ -59,9 +59,42 @@ if ! awk 'previous == "--length" && $0 == "5000" { found=1 } { previous=$0 } END
   exit 1
 fi
 
-timeout 10 "$BIN/whisper-stream-cli" --stdin >"$WORKDIR/whisper-stdin.out"
-if ! grep -q '^error: whisper-stream stdin PCM mode is not supported' "$WORKDIR/whisper-stdin.out"; then
-  echo "FAIL: whisper-stream-cli --stdin did not report the documented limitation" >&2
+# Exercise stdin PCM without microphone permission or a costly real inference.
+# The fake whisper-cli writes the same full-JSON shape as whisper.cpp; energy
+# VAD, partial/final framing, and confidence extraction remain real.
+cat >"$WORKDIR/bin/whisper-cli" <<'SH'
+#!/bin/sh
+out=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  --output-file)
+    out=$2
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+  esac
+done
+cat >"$out.json" <<'JSON'
+{"transcription":[{"text":" namespace audio works","tokens":[{"text":" namespace","p":0.81},{"text":" audio","p":0.90},{"text":" works","p":0.99}]}]}
+JSON
+SH
+chmod +x "$WORKDIR/bin/whisper-cli"
+python3 -c 'import sys; sys.stdout.buffer.write((b"\xe8\x03" * 8000) + (b"\0\0" * 8000))' |
+  INFERNODE_WHISPER_CLI="$WORKDIR/bin/whisper-cli" \
+  INFERNODE_STT_PARTIAL_MS=200 INFERNODE_STT_SILENCE_MS=200 \
+  INFERNODE_STT_RMS_THRESHOLD=100 \
+  timeout 20 "$BIN/whisper-stream-cli" --stdin --model "$WORKDIR/model.bin" \
+    >"$WORKDIR/whisper-stdin.out"
+if ! grep -Eq '^partial confidence=0\.[0-9]+ namespace audio works$' "$WORKDIR/whisper-stdin.out"; then
+  echo "FAIL: whisper-stream-cli --stdin emitted no confidence-bearing partial" >&2
+  cat "$WORKDIR/whisper-stdin.out" >&2
+  exit 1
+fi
+if ! grep -Eq '^final confidence=0\.[0-9]+ namespace audio works$' "$WORKDIR/whisper-stdin.out"; then
+  echo "FAIL: whisper-stream-cli --stdin emitted no confidence-bearing final" >&2
+  cat "$WORKDIR/whisper-stdin.out" >&2
   exit 1
 fi
 

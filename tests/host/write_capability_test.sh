@@ -62,6 +62,12 @@ for target in /lib/veltro/exec-support-canary /lib/certs/exec-support-canary /di
 done
 echo "PASS: exec support-tree writes are ephemeral or denied"
 
+runemu "rm -f /tmp/veltro/.ns/manifest; tools9p exec & sleep 2; echo '/dis/veltro/exec_ro_write_probe.dis /tmp/veltro/.ns/manifest' > /tool/exec/run; sleep 3; cat /tool/exec/run; echo MANIFEST; cat /tmp/veltro/.ns/manifest"
+if grep -q '^WROTE /tmp/veltro/.ns/manifest' <<<"$OUTPUT" || grep -q '^changed$' <<<"$OUTPUT"; then
+	echo "FAIL: exec mutated trusted namespace manifest"; echo "$OUTPUT"; exit 1
+fi
+echo "PASS: exec cannot mutate trusted namespace manifest"
+
 runemu "tools9p -a 77 write & sleep 2; echo /tmp/veltro/shared-root denied > /tool/write/run; sleep 2; cat /tool/write/run; echo /tmp/veltro/scratch/private allowed > /tool/write/run; sleep 2; cat /tool/write/run; echo SCRATCH; cat /tmp/veltro/scratch/77/private"
 grep -q "not covered by an rw path grant" <<<"$OUTPUT" || { echo "FAIL: shared workspace root write was not denied"; exit 1; }
 grep -q '^allowed$' <<<"$OUTPUT" || { echo "FAIL: activity scratch write did not succeed"; exit 1; }

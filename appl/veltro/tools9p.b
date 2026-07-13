@@ -1476,6 +1476,12 @@ applynsrestriction(invokedtool: string): string
 		sys->fprint(stderr, "tools9p: restrictns exception: %s\n", e);
 		return e;
 	}
+	# The manifest is trusted UI/audit metadata for Lucifer's context view.
+	# tools9p may write it from this private namespace, but the model-run tool
+	# code must not be able to spoof or corrupt it afterward.
+	herr := nsconstruct->restrictdir("/tmp/veltro/.ns", nil, 0);
+	if(herr != nil)
+		return "hide namespace manifest: " + herr;
 	return nil;
 }
 

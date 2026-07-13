@@ -985,6 +985,13 @@ jobs:
           echo "Building $dir..."
           (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || true
         done
+        # libtk (Tk reintegration): the emu now links libtk.a, so build it
+        # after the draw libraries it depends on. The loop above is best-effort
+        # (|| true); libtk must succeed or the emu link fails with
+        # "no such file or directory: libtk.a".
+        echo "Building libtk..."
+        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
+        test -f MacOSX/arm64/lib/libtk.a || { echo "libtk.a not produced"; exit 1; }
 
     - name: Build SDL3 GUI emulator
       run: |
@@ -1242,6 +1249,13 @@ jobs:
           echo "Building $dir..."
           (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || true
         done
+        # libtk (Tk reintegration): the emu now links libtk.a, so build it
+        # after the draw libraries it depends on. The loop above is best-effort
+        # (|| true); libtk must succeed or the emu link fails with
+        # "no such file or directory: libtk.a".
+        echo "Building libtk..."
+        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
+        test -f MacOSX/arm64/lib/libtk.a || { echo "libtk.a not produced"; exit 1; }
 
     - name: Build headless emulator
       run: |

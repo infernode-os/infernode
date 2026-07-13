@@ -144,6 +144,13 @@ if {! ftest -f /mnt/factotum/proto}{
 			}{
 				auth/factotum -S tcp!localhost!5356 -P $secpass
 			}
+			# Marker for wm/logon: the login screen may be skipped
+			# ONLY when secstore was genuinely unlocked here from
+			# $SECSTORE_PASSWORD. Factotum merely holding keys is not
+			# authentication — the API-key fallbacks below provision
+			# factotum before logon runs, and an API key must never
+			# bypass the password screen.
+			secstoreautounlock=1
 		}{
 			auth/factotum
 		}

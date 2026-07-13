@@ -185,13 +185,20 @@ spike's limitations.)
 | Phase | Ticket | State |
 |------|--------|-------|
 | 1 — decode core + headless macOS validation | INFR-264 | ✅ done |
-| 2 — hwaccel (VideoToolbox / NVDEC) | INFR-265 | to do |
-| 3a — Limbo `vid9p` styxserver shim | INFR-266 | ✅ done |
+| 2 — hwaccel (VideoToolbox / NVDEC) | INFR-265 | ◑ selection + software fallback landed; GPU path pending on-device |
+| 3a — Limbo `vid9p` styxserver shim | INFR-266 | ✅ done (static + live host-decoder spawn) |
 | 3b — render `/mnt/video` via mpeg path (`vidplay9p` + Matrix `video-pane`) | INFR-268 | ✅ done |
 | 4 — Rust-native 9P server | INFR-267 | to do |
 | 5 — kernel fold-in (ABI TBD) | INFR-269 | blocked |
-| 6 — live RTSP ingest | INFR-271 | to do |
+| 6 — live RTSP ingest | INFR-271 | ◑ host-side URL/RTSP ingest + options landed; wire into `vid9p -c` |
 | chore — FFmpeg 7 / version-flexible pin | INFR-270 | to do |
+
+`◑` = partially landed. INFR-265's hardware decode is structurally complete
+(device create → `get_format` → `av_hwframe_transfer_data` → I420) and falls back
+to software when no device is present; the GPU decode path itself needs
+VideoToolbox/NVDEC hardware to validate. INFR-271's decode core accepts
+`rtsp://`/`http://`/`udp://` URLs with transport/timeout options today; the
+remaining step is to point `vid9p -c vdec <url> --y4m /fd/1` at a live feed.
 
 Naming: this document and the shipped code use **`/mnt/video/<id>`** for the
 mount. Some earlier tickets say `/n/video`; treat them as the same mount —

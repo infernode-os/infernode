@@ -1,0 +1,21 @@
+NAME
+	tk-notes (tk-display) - build entry/button/listbox Tk widgets, append entry text as lines to a notes file, and mirror that file into the listbox
+
+INTERFACE
+	tk-display (MatrixTkDisplay - Tk-hosted; init receives a Tk
+	toplevel and widget prefix instead of a Draw display)
+
+READS
+	notes	whole file, one note per line; re-read each update tick
+		with change detection
+
+WRITES
+	notes	appends "<text>\n" by whole-file read-modify-write
+		(not atomic)
+
+DESCRIPTION
+	Enter or the Add button appends the entry text and refreshes the
+	listbox.  Notes written externally (by an agent or `echo` from
+	sh) appear on the next update tick, making the file a two-way
+	channel between the pane and anything else in the namespace.
+	Creates the mount directory at init if missing.

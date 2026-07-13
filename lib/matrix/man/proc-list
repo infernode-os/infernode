@@ -1,0 +1,25 @@
+NAME
+	proc-list (display) - render a scrollable process table joined from a status-snapshot file and a per-pid rate file, with row selection and a key-triggered kill
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	proc/list	one /prog/<pid>/status row per line:
+			pid grpid user time state size_K module
+	proc/cpurates	one line per pid: pid pct (joined onto rows by pid)
+
+WRITES
+	/prog/<pid>/ctl	the string "kill" - an ABSOLUTE path outside the
+			mount, written only when the operator presses 'k'
+			with a row selected
+
+DESCRIPTION
+	Columns PID/STATE/CPU%/MEM/MOD.  Button-1 toggles row selection;
+	the wheel scrolls three rows.  Killing is deliberately two-step
+	(select, then 'k') to prevent kill-by-misclick.  This is the one
+	display module in the base set with a side effect; compositions
+	that must not kill processes should not include it.
+
+SEE ALSO
+	sysmon-svc (produces proc/list and proc/cpurates in its outdir)

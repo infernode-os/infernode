@@ -30,3 +30,9 @@ SYSMODULES=\
 DISBIN=$ROOT/dis/matrix
 
 <$ROOT/mkfiles/mkdis
+
+# Regenerate the library's whatis-style module index from the NAME
+# lines of lib/matrix/man/*.  Run after adding or renaming a module
+# man page; the generated lib/matrix/index is checked in.
+index:V:
+	sh $ROOT/tools/matrix-makewhatis.sh $ROOT

@@ -854,6 +854,130 @@ testControlFSLibrary(t: ref T)
 	t.assert(same, ".dis bytes identical through passthrough");
 }
 
+# substring search for index-entry checks.
+contains(s, sub: string): int
+{
+	if(len sub == 0)
+		return 1;
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+testControlFSIndex(t: ref T)
+{
+	# The library dir lists the discovery surface.
+	names := lsnames("/mnt/matrix/library");
+	t.assert(hasname(names, "man"), "library lists man/");
+	t.assert(hasname(names, "index"), "library lists index");
+
+	want := readfile("/lib/matrix/index");
+	t.assert(want != "", "real index non-empty");
+	got := readfile("/mnt/matrix/library/index");
+	t.assertseq(got, want, "index passthrough matches");
+
+	# whatis shape: every line is "name (display|service|tk-display) - synopsis".
+	(nil, lines) := sys->tokenize(got, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		ok := contains(l, " (display) - ") || contains(l, " (service) - ") ||
+			contains(l, " (tk-display) - ");
+		t.assert(ok, "index line is whatis-shaped: " + l);
+	}
+
+	t.assert(writestr("/mnt/matrix/library/index", "x") < 0, "index read-only");
+
+	# Never-stale: the served index is synthesised from the man
+	# pages on read.  A new man page appears in it immediately —
+	# no regeneration step — and vanishes when the page goes.
+	tmpman := "/lib/matrix/man/zz-mtest-probe";
+	t.assert(createstr(tmpman,
+		"NAME\n\tzz-mtest-probe (service) - synthetic index probe\n") > 0,
+		"probe man page created");
+	fresh := readfile("/mnt/matrix/library/index");
+	sys->remove(tmpman);
+	t.assert(contains(fresh, "zz-mtest-probe (service) - synthetic index probe"),
+		"new man page appears in served index without regeneration");
+	after := readfile("/mnt/matrix/library/index");
+	t.assert(!contains(after, "zz-mtest-probe"),
+		"removed man page leaves the served index");
+}
+
+testControlFSMan(t: ref T)
+{
+	names := lsnames("/mnt/matrix/library/man");
+	t.assert(hasname(names, "cpu-gauge"), "man lists cpu-gauge");
+	t.assert(hasname(names, "sysmon-svc"), "man lists sysmon-svc");
+
+	want := readfile("/lib/matrix/man/cpu-gauge");
+	got := readfile("/mnt/matrix/library/man/cpu-gauge");
+	t.assert(want != "", "real man page non-empty");
+	t.assertseq(got, want, "man page passthrough matches");
+
+	t.assert(writestr("/mnt/matrix/library/man/cpu-gauge", "x") < 0, "man read-only");
+
+	# Completeness: every shipped module has a man page and an
+	# index entry — a module without documentation cannot land.
+	idx := readfile("/mnt/matrix/library/index");
+	mods := lsnames("/mnt/matrix/library/modules");
+	for(; mods != nil; mods = tl mods) {
+		m := hd mods;
+		if(len m < 5 || m[len m - 4:] != ".dis")
+			continue;
+		name := m[0:len m - 4];
+		(ok, nil) := sys->stat("/mnt/matrix/library/man/" + name);
+		t.assert(ok >= 0, "module has a man page: " + name);
+		t.assert(contains(idx, name + " ("), "module has an index entry: " + name);
+	}
+}
+
+# The Veltro matrix tool is a thin wrapper over this same control
+# fs; drive it against the live runtime to prove the agent-facing
+# path end to end: scan the index, read a contract, inspect status,
+# consume service output.
+VTool: module {
+	init: fn(): string;
+	name: fn(): string;
+	doc:  fn(): string;
+	exec: fn(args: string): string;
+};
+
+testControlFSVeltroTool(t: ref T)
+{
+	tool := load VTool "/dis/veltro/tools/matrix.dis";
+	if(tool == nil)
+		t.fatal(sys->sprint("cannot load matrix tool: %r"));
+	err := tool->init();
+	t.assert(err == nil, "tool init: " + err);
+	t.assertseq(tool->name(), "matrix", "tool name");
+
+	idx := tool->exec("index");
+	t.assert(contains(idx, "cpu-gauge (display) - "), "index served through tool");
+
+	man := tool->exec("man sysmon-svc");
+	t.assert(contains(man, "WRITES"), "man page has WRITES section");
+	t.assert(contains(man, "cpu/current"), "man page carries the contract");
+
+	st := tool->exec("status");
+	t.assert(contains(st, "runtime: running"), "status reports running: " + st);
+	t.assert(contains(st, "sysmon-svc"), "status lists the service");
+
+	lib := tool->exec("library");
+	t.assert(contains(lib, "sysmon"), "library lists sysmon");
+
+	story := tool->exec("story sysmon");
+	t.assertseq(story, readfile("/lib/matrix/compositions/sysmon"), "story round-trips");
+
+	outls := tool->exec("out sysmon-svc");
+	t.assert(contains(outls, "cpu"), "out lists cpu/: " + outls);
+	cur := tool->exec("out sysmon-svc cpu/current");
+	t.assert(!hasprefix(cur, "error:") && cur != "", "out reads a service file");
+
+	bad := tool->exec("man no-such-module");
+	t.assert(hasprefix(bad, "error:"), "missing man page errors cleanly");
+}
+
 testControlFSNotifications(t: ref T)
 {
 	(ok, nil) := sys->stat("/mnt/matrix/notifications");
@@ -1125,6 +1249,9 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSModules", testControlFSModules);
 		run("ControlFSOutPassthrough", testControlFSOutPassthrough);
 		run("ControlFSLibrary", testControlFSLibrary);
+		run("ControlFSIndex", testControlFSIndex);
+		run("ControlFSMan", testControlFSMan);
+		run("ControlFSVeltroTool", testControlFSVeltroTool);
 		run("ControlFSNotifications", testControlFSNotifications);
 		run("ControlFSReload", testControlFSReload);
 		run("ControlFSAlertE2E", testControlFSAlertE2E);

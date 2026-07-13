@@ -1,0 +1,26 @@
+NAME
+	risk-gauge (display) - render a fixed label/value metric column from a five-field file at the mount path plus two files at sibling paths of the mount
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	.	the mount path itself is a FILE (e.g. /n/tbl4/risk):
+		single line, whitespace fields:
+		total_value cash unrealized_pnl portfolio_var position_count
+	../portfolio/defense/status	status word - NOTE: resolved
+		against the mount's PARENT directory
+	../portfolio/risk/var_95	value string - same parent-relative
+		resolution
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Labelled metric rows; the defense status word colour-codes
+	(crisis/caution/normal), unrealized P&L colours by sign, and
+	unreadable metrics render "--".  Because two reads resolve
+	against the parent of the mount, this module's effective
+	contract is the mount's parent directory; a namespace that binds
+	only the mount file will leave those rows at "--".  The value
+	format is plain whitespace text, not JSON.

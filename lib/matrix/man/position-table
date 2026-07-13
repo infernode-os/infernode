@@ -1,0 +1,20 @@
+NAME
+	position-table (display) - read every file in a positions directory as a one-line record and render a scrollable four-column table
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	positions/		directory listing; every entry attempted
+	positions/<name>	single line, whitespace fields:
+				asset quantity avg_cost realized_pnl
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Columns Ticker/Qty/Avg Cost/Real P&L.  The P&L column colours by
+	sign of the string; cost and P&L are $-prefixed.  Wheel scrolls
+	one row; click or drag in the right gutter jumps the scrollbar
+	proportionally.  Re-reads the directory on every update tick.
+	The record format is plain whitespace text, not JSON.

@@ -1,0 +1,28 @@
+NAME
+	geo-map (display) - project ndb-stanza entity and feature files through a map projection and draw graticule, vector features, and affiliation-coloured glyphs
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	entities/		directory; one file per entity
+	entities/<name>	ndb stanza: id= lat= lon= affil= kind= label=
+			course= (lat/lon required; entity skipped otherwise)
+	features/		directory; one file per feature
+	features/<name>	ndb stanza: id= type= points= radius= color=
+			fill= width= label= (type: circle, polygon,
+			polyline; points: space-separated lat,lon pairs)
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Mercator projection via geoproj.  Reloads only when a directory's
+	file count or max mtime changes.  Interactive: button-1 drag
+	pans, click picks the nearest entity, wheel and +/- keys zoom,
+	h/j/k/l pan, f centres on the selection.  Glyph shape follows
+	kind (air triangle, sea diamond, ground square); colour follows
+	affiliation (friend/hostile/neutral/unknown).
+
+SEE ALSO
+	geo-fixture (produces this input format)

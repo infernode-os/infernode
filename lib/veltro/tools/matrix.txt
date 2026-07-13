@@ -1,0 +1,56 @@
+matrix - Compose typed modules through the Matrix control filesystem.
+This tool takes one string argument named "args". The first word of
+"args" is the subcommand: index, man, library, story, status,
+composition, compose, ctl, out.
+Examples on this tool:
+  args = "index"
+  args = "man cpu-gauge"
+  args = "compose service sysmon-svc /"
+  args = "out sysmon-svc cpu/current"
+
+Matrix loads typed Limbo modules (display and service) described by a
+plain-text composition. You never load code directly: you read module
+contracts, write composition text, and consume service outputs — all
+file operations against /mnt/matrix.
+
+Discovery (man pages versus stories):
+  index                One line per module, whatis-style:
+                       name (type) - synopsis
+                       Scan this first; it is small — read it whole.
+  man <module>         The module's CONTRACT: which files it READS
+                       under its mount and WRITES to its outdir.
+                       Compose from contracts, not from guesses.
+  library              Pinned compositions — named arrangements that
+                       earned a place in the library.
+  story <name>         A pinned composition's text. The header
+                       comment says why it exists.
+
+Runtime:
+  status               Runtime state and loaded modules (name, type,
+                       running|stopped, mount).
+  composition          The live composition text.
+  compose <text>       Write a new composition. ';' separates lines:
+                       "compose layout hsplit 50 50; left cpu-gauge
+                       /tmp/matrix/sysmon-svc; service sysmon-svc /"
+                       Unchanged entries keep their live instance
+                       (incremental reload).
+  ctl load <name>      Load a pinned composition by name.
+  ctl unload           Unload all modules.
+  ctl pin <name>       Save the live composition to the library.
+                       Give compositions a '# name — why' header
+                       comment before pinning: that is its story.
+  ctl unpin <name>     Remove a pinned composition.
+  out <module> [file]  List a service's output files, or read one.
+
+Composition grammar (one entry per line):
+  layout <hsplit|vsplit> <n> <m>     split the pane
+  <region> <module> <mount>          display module in a region
+  service <name> <mount>             headless service module
+The mount is the capability grant: a service sees ONLY its mount
+(read-only) and its outdir (read-write). "service foo /" grants the
+whole namespace — grant the narrowest mount that satisfies the
+module's man-page contract.
+
+Matrix must be running: 'launch matrix' (GUI) or wm/matrix -h
+(headless). Display modules render only in GUI mode; service modules
+run in both.

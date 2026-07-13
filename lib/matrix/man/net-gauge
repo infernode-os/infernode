@@ -1,0 +1,24 @@
+NAME
+	net-gauge (display) - render tcp/udp connection-count headlines from a two-line census file and a sparkline of the tcp column from a history file
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	net/current	two lines, keyed on first token:
+			tcp total connected announced
+			udp total connected announced
+	net/history	one line per sample: ts tcp_total tcp_conn udp_total,
+			oldest first (only tcp_total is plotted)
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	Headlines the tcp and udp census counts and plots tcp_total as a
+	right-aligned bar sparkline auto-scaled to the history peak (peak
+	readout top right).  Re-reads on every update tick.  No pointer
+	or key handling.
+
+SEE ALSO
+	sysmon-svc (produces net/current and net/history in its outdir)

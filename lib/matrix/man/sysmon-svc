@@ -1,0 +1,36 @@
+NAME
+	sysmon-svc (service) - poll /dev/memory, /prog/*/status, and /net conversation status at 1 Hz and rewrite current-snapshot and ring-buffer history files
+
+INTERFACE
+	service (MatrixService)
+
+READS
+	The mount parameter is unused; sources are absolute paths in the
+	namespace the service is granted (compositions conventionally
+	pass `service sysmon-svc /`):
+	/dev/memory		pool statistics
+	/prog/<pid>/status	per-process state and tick count
+	/net/tcp/<conv>/status	connection state word
+	/net/udp/<conv>/status	connection state word
+	/net/tcp/stats		verbatim, where the platform provides it
+
+WRITES
+	mem/current	verbatim /dev/memory copy
+	mem/history	ring: ts heap_cur heap_max main_cur main_max image_cur image_max
+	cpu/current	pct busy_procs total_procs
+	cpu/history	ring: ts pct
+	proc/list	concatenated /prog/*/status rows
+	proc/cpurates	one "pid pct" line per live process (tick delta per poll)
+	net/current	"tcp total connected announced" and "udp ..." lines
+	net/history	ring: ts tcp_total tcp_conn udp_total
+	net/stats	verbatim /net/tcp/stats when non-empty
+
+DESCRIPTION
+	1000 ms poll; 60-sample shared ring emitted oldest-first.  CPU
+	percent is derived from aggregate /prog tick deltas over elapsed
+	wall time.  All files are replaced atomically (tmp file + rename),
+	so readers never see torn writes.  Requires a whole-namespace or
+	equivalent grant covering /dev, /prog, and /net.
+
+SEE ALSO
+	cpu-gauge, mem-gauge, net-gauge, proc-list (consume this outdir)

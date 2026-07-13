@@ -1,0 +1,22 @@
+NAME
+	mem-gauge (display) - render per-pool used/max horizontal bars parsed from a /dev/memory-format snapshot file
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	mem/current	verbatim /dev/memory format, one line per pool:
+			cursize maxsize hw nalloc nfree nbrk poolmax name
+			(cursize, maxsize, name used; first 8 pools kept)
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	One labelled horizontal bar per pool, values shown in KB.  A bar
+	recolours when occupancy exceeds 80 percent.  Pools with maxsize
+	<= 0 are skipped.  Re-reads on every update tick.  No pointer or
+	key handling.
+
+SEE ALSO
+	sysmon-svc (produces mem/current in its outdir)

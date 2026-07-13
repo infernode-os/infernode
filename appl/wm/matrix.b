@@ -78,7 +78,7 @@ UPDATE_MS: con 2000;
 
 # Fixed nodes.
 Qroot, Qctl, Qcomposition, Qmoddir, Qlibdir,
-Qlibcompsdir, Qlibmodsdir, Qnotifications: con iota;
+Qlibcompsdir, Qlibmodsdir, Qnotifications, Qlibmandir, Qlibindex: con iota;
 
 # Per-module nodes (module slot packed into bits 8..19).
 Qmoddirent:	con 16;	# modules/<name>/
@@ -93,6 +93,7 @@ Qpass:	con 32;
 
 LIBCOMPS: con "/lib/matrix/compositions";
 LIBMODS:  con "/dis/matrix";
+LIBMAN:   con "/lib/matrix/man";
 OUTBASE:  con "/tmp/matrix";
 
 # Stable module registry.  Index == the slot packed into qid paths.
@@ -435,6 +436,9 @@ Serve:
 			Qnotifications =>
 				srv.reply(styxservers->readbytes(m, array of byte notifbuf));
 
+			Qlibindex =>
+				srv.reply(styxservers->readbytes(m, array of byte synthindex()));
+
 			Qmodctl =>
 				ms := liveslot(c.path);
 				if(ms == nil) {
@@ -737,6 +741,8 @@ realdirof(path: big): string
 		return LIBCOMPS;
 	Qlibmodsdir =>
 		return LIBMODS;
+	Qlibmandir =>
+		return LIBMAN;
 	Qmodout =>
 		ms := liveslot(path);
 		if(ms == nil || ms.mtype != "service")
@@ -749,6 +755,58 @@ realdirof(path: big): string
 		return passtab[i].rpath;
 	}
 	return nil;
+}
+
+# ── library index ───────────────────────────────────────────
+#
+# library/index is synthesised from the man pages on every read, so
+# it can never go stale on a live system: adding a man page to
+# lib/matrix/man is the whole registration step.  The checked-in
+# lib/matrix/index (tools/matrix-makewhatis.sh, mk index in
+# appl/matrix) is the host-side twin for grep without a running
+# runtime; the ControlFSIndex test holds the two identical.
+
+# First non-blank line after the NAME heading, leading whitespace
+# stripped — the whatis line.
+manname(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[4096] of byte;	# NAME leads the page
+	nr := sys->read(fd, buf, len buf);
+	if(nr <= 0)
+		return "";
+	(nil, lines) := sys->tokenize(string buf[0:nr], "\n");
+	grab := 0;
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		if(!grab) {
+			if(l == "NAME")
+				grab = 1;
+			continue;
+		}
+		i := 0;
+		while(i < len l && (l[i] == ' ' || l[i] == '\t'))
+			i++;
+		if(i < len l)
+			return l[i:];
+	}
+	return "";
+}
+
+synthindex(): string
+{
+	(ents, n) := readdir->init(LIBMAN, Readdir->NAME);
+	s := "";
+	for(i := 0; i < n; i++) {
+		if(ents[i].mode & Sys->DMDIR)
+			continue;
+		line := manname(LIBMAN + "/" + ents[i].name);
+		if(line != "")
+			s += line + "\n";
+	}
+	return s;
 }
 
 # ── notifications ───────────────────────────────────────────
@@ -801,6 +859,10 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTDIR), "compositions", big 0, 8r555), nil);
 	Qlibmodsdir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), "modules", big 0, 8r555), nil);
+	Qlibmandir =>
+		return (dir(Qid(p, vers, Sys->QTDIR), "man", big 0, 8r555), nil);
+	Qlibindex =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "index", big len array of byte synthindex(), 8r444), nil);
 	Qnotifications =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "notifications", big len array of byte notifbuf, 8r444), nil);
 	Qmoddirent =>
@@ -962,16 +1024,20 @@ matrixnavigator(navops: chan of ref Navop)
 					n.path = big Qlibcompsdir;
 				"modules" =>
 					n.path = big Qlibmodsdir;
+				"man" =>
+					n.path = big Qlibmandir;
+				"index" =>
+					n.path = big Qlibindex;
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
 				}
 				n.reply <-= dirgen(n.path);
 
-			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+			Qlibcompsdir or Qlibmodsdir or Qlibmandir or Qmodout or Qpass =>
 				if(n.name == "..") {
 					case qtype {
-					Qlibcompsdir or Qlibmodsdir =>
+					Qlibcompsdir or Qlibmodsdir or Qlibmandir =>
 						n.path = big Qlibdir;
 					Qmodout =>
 						n.path = QPATH(Qmoddirent, MODSLOT(n.path), 0);
@@ -1046,9 +1112,10 @@ matrixnavigator(navops: chan of ref Navop)
 						QPATH(Qmodmount, slot, 0)});
 
 			Qlibdir =>
-				replyfixed(n, array[] of {big Qlibcompsdir, big Qlibmodsdir});
+				replyfixed(n, array[] of {big Qlibcompsdir,
+					big Qlibmodsdir, big Qlibmandir, big Qlibindex});
 
-			Qlibcompsdir or Qlibmodsdir or Qmodout or Qpass =>
+			Qlibcompsdir or Qlibmodsdir or Qlibmandir or Qmodout or Qpass =>
 				rpath := realdirof(m.path);
 				if(rpath == nil) {
 					n.reply <-= (nil, Enotfound);

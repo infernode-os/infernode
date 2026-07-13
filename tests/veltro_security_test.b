@@ -527,6 +527,30 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 	result <-= "";
 }
 
+testTmpVeltroTrustedIpcNotGrantable(t: ref T)
+{
+	result := chan of string;
+	spawn tmpVeltroTrustedIpcNotGrantableWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+tmpVeltroTrustedIpcNotGrantableWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, "/tmp/veltro/ftree" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err == nil) {
+		result <-= "trusted ftree IPC grant unexpectedly succeeded";
+		return;
+	}
+	result <-= "";
+}
+
 testActivityScratchIsolation(t: ref T)
 {
 	sys->remove("/tmp/veltro/scratch/41001/canary");
@@ -1818,6 +1842,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TaskMetadataCapability", testTaskMetadataCapability);
 	run("TmpVeltroIpcHidden", testTmpVeltroIpcHidden);
 	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
+	run("TmpVeltroTrustedIpcNotGrantable", testTmpVeltroTrustedIpcNotGrantable);
 	run("ActivityScratchIsolation", testActivityScratchIsolation);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);

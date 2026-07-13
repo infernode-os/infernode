@@ -450,10 +450,10 @@ else
 fi
 
 if emu_c "bindpath_privileged_rejected" 12 \
-    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/alice >[2] /dev/null; touch /n/wallet/alice/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/alice >[2] /dev/null; touch /n/wallet/alice/ctl; mkdir -p /tmp/veltro/ftree; touch /tmp/veltro/ftree/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/ftree:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "privileged bindpath probe did not establish a valid baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl"; then
+    elif echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl" || echo "$OUTPUT" | grep -q "^/tmp/veltro/ftree"; then
         fail "bindpath accepted privileged control path (output: $OUTPUT)"
     else
         pass "bindpath rejects privileged control paths"
@@ -463,8 +463,8 @@ else
 fi
 
 if emu_c "startup_privileged_path_rejected" 12 \
-    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; tools9p -p /mnt/msg/ctl:rw read; cat /tool/paths >[2] /dev/null"; then
-    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/msg/ctl"; then
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; mkdir -p /tmp/veltro/ftree; touch /tmp/veltro/ftree/ctl; tools9p -p /mnt/msg/ctl:rw -p /tmp/veltro/ftree:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/ftree"; then
         pass "startup -p rejects privileged control paths"
     else
         fail "tools9p accepted privileged startup -p path (output: $OUTPUT)"

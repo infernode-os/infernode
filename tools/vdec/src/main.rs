@@ -71,12 +71,19 @@ fn main() {
         eprintln!("vdec: {path}  {w}x{h}  -> I420  ({backend})");
     }
 
+    // `--y4m -` streams YUV4MPEG2 to stdout so the output can be piped straight
+    // into a consumer (e.g. `vid9p -c vdec <url> --y4m -`); any other value is a
+    // file path.
     let mut writer = y4m.as_ref().map(|p| {
-        let f = File::create(p).unwrap_or_else(|e| {
-            eprintln!("vdec: create {p}: {e}");
-            exit(1);
-        });
-        let mut bw = BufWriter::new(f);
+        let sink: Box<dyn Write> = if p == "-" {
+            Box::new(std::io::stdout())
+        } else {
+            Box::new(File::create(p).unwrap_or_else(|e| {
+                eprintln!("vdec: create {p}: {e}");
+                exit(1);
+            }))
+        };
+        let mut bw = BufWriter::new(sink);
         // Frame rate is cosmetic for validation; 25:1 keeps ffplay happy.
         writeln!(bw, "YUV4MPEG2 W{w} H{h} F25:1 Ip A1:1 C420mpeg2").unwrap();
         bw

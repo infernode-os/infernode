@@ -743,6 +743,25 @@ before any implementation begins:
   registry shape; question is what attribute schema, what bootstrap,
   what announcement convention.
 
+Two further constraints are stapled to this design work and must be
+answered by it, not around it:
+
+- **The display-module trust cliff.** Service modules are confined by
+  construction; display modules run in-process with Matrix's full
+  namespace (see "Module namespace isolation"). Locally that is a
+  reasonable trade. For a marketplace it means only the service half
+  of the module system is safe to distribute — a fetched display
+  module is arbitrary code with the operator's namespace. Any
+  marketplace that lists display modules must first bring them under
+  the namespace regime (e.g. out-of-process rendering into a shared
+  image file) or exclude them. "Signed" is not "confined"; signing
+  answers provenance, not blast radius.
+- **Instructional text does not travel.** Per the binding rule in
+  Design Decisions ("Injected text is a distinct trust class"),
+  marketplace-served man pages, stories, and prompt companions are
+  data until locally pinned by a human. The marketplace protocol
+  must not give remote text a path into an agent's context.
+
 The sketch below describes what the marketplace *could* look like once
 those questions are resolved. It is not a specification.
 
@@ -895,8 +914,16 @@ crystallisation time by whoever found the arrangement useful — human
 or agent.
 
 The index (`library/index`) is the scan surface: one whatis-shaped
-line per module (`name (type) - synopsis`), regenerated from the man
-pages by `tools/matrix-makewhatis.sh` (`mk index` in appl/matrix).
+line per module (`name (type) - synopsis`). The runtime synthesises
+it from the man pages on every read, so it cannot go stale on a live
+system — dropping a man page into `lib/matrix/man/` is the whole
+registration step, which keeps the authoring loop closed inside
+Inferno (an agent that writes a module, compiles it, and writes its
+man page has fully registered it). The checked-in `lib/matrix/index`
+(`tools/matrix-makewhatis.sh`, `mk index` in appl/matrix) is the
+host-side twin for grepping without a running runtime; the
+ControlFSIndex test holds the two identical.
+
 There is no semantic search machinery and none is wanted: the reader
 of this index is an LLM, which does semantic matching natively. At
 library scale the agent reads the whole index in one gulp, opens the
@@ -904,6 +931,43 @@ man pages of two or three candidates, and composes from their
 contracts — apropos(1), then man(1). A vector store would be a lossy
 approximation of a capability the reader already has, and a new
 daemon besides.
+
+### Injected text is a distinct trust class (binding)
+
+"The namespace is the only enforcement primitive" is airtight for
+code, because code's attack surface is the filesystem. Text that is
+injected into an agent's context attacks a different surface — the
+model's behaviour — and no namespace can confine what a sentence
+does to a model. This is the one place the enforcement principle
+does not reach, so it gets its own binding rule:
+
+**Instructional text — anything injected into a model's context as
+guidance rather than displayed as data — must be locally authored or
+explicitly operator-reviewed. Text arriving over a foreign mount is
+data to display, never instructions to inject.**
+
+Concretely:
+
+* Module man pages, composition stories, and any future per-
+  composition prompt companion are instructional text when read by
+  an agent for guidance. From the local library, they are trusted
+  (you installed them). From a marketplace or any remote mount,
+  they are untrusted data until a human pins them locally.
+* A fire-time injection mechanism (the msgwatch pattern: policy
+  text loaded into the triggering turn) must resolve its text from
+  the local library only — never directly from a remote mount, and
+  never from a service module's outdir, which is written by code
+  that may itself be consuming untrusted input.
+* Service outputs are data. An agent may read and reason about
+  them; the framing that instructs the agent ("when an alert
+  appears, do X") must come from locally pinned text, not travel
+  in-band with the alert.
+
+This is the structural lesson of ClawHub's 36%-prompt-injection
+skill pool: the fatal design was letting capability and instructions
+travel as one artefact from an untrusted source. Matrix modules are
+namespace-confined; this rule keeps their accompanying text from
+becoming the unconfined half.
 
 ### TBL4 as the POC target
 

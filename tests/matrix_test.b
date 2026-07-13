@@ -887,6 +887,21 @@ testControlFSIndex(t: ref T)
 	}
 
 	t.assert(writestr("/mnt/matrix/library/index", "x") < 0, "index read-only");
+
+	# Never-stale: the served index is synthesised from the man
+	# pages on read.  A new man page appears in it immediately —
+	# no regeneration step — and vanishes when the page goes.
+	tmpman := "/lib/matrix/man/zz-mtest-probe";
+	t.assert(createstr(tmpman,
+		"NAME\n\tzz-mtest-probe (service) - synthetic index probe\n") > 0,
+		"probe man page created");
+	fresh := readfile("/mnt/matrix/library/index");
+	sys->remove(tmpman);
+	t.assert(contains(fresh, "zz-mtest-probe (service) - synthetic index probe"),
+		"new man page appears in served index without regeneration");
+	after := readfile("/mnt/matrix/library/index");
+	t.assert(!contains(after, "zz-mtest-probe"),
+		"removed man page leaves the served index");
 }
 
 testControlFSMan(t: ref T)

@@ -274,6 +274,16 @@ Display modules render with Draw primitives — `Draw->Image.text()`
 for cell values, filled rects for gauges and scrollbars. The interface
 mirrors patterns already present in Lucifer's zone modules.
 
+A display module need not be text or vector: **`video-pane`** treats its
+mount as a [vid9p](../appl/cmd/vid9p.b) stream directory
+(`/mnt/video/<id>`), reads `fmt` for geometry, and on each `update()`
+pulls one decoded I420 frame from `frame` and runs it through the mpeg
+`remap24` (YCbCr→RGB24) path — the same converter the standalone
+`vidplay`/`vidplay9p` players use — compositing it native-size and
+clipped into the pane. This is the in-Matrix render endpoint of the
+host-decode video bridge ([docs/H264-9P-BRIDGE.md](H264-9P-BRIDGE.md));
+multiplex a video wall by placing one `video-pane` leaf per feed.
+
 ### Service Module
 
 ```

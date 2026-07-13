@@ -93,6 +93,17 @@ Unchanged from the MPEG-1 spike: read `frame` → wrap bytes as `Mpegio->YCbCr` 
 `remap->remap(...)` → masked-pane `win.image.draw(dst, frame, matte, p)`
 (`appl/mpeg/vidplay.b:77`). One player instance per feed.
 
+Two consumers exist, both over the identical `fmt`+`frame` interface and both
+reusing `remap24` with no new pixel code:
+
+- **`appl/mpeg/vidplay9p.b`** — a standalone `wmclient` window (optionally a
+  shaped matte), the direct analogue of the MPEG-1 `vidplay`.
+- **`appl/matrix/video-pane.b`** — a Matrix `MatrixDisplay` module, so a feed
+  becomes a pane in a Lucifer composition. The Matrix runtime drives it: one
+  frame is pulled per `update()`, composited native-size and clipped into the
+  pane. This is the "video in the Matrix GUI" endpoint; multiplex a wall by
+  placing one `video-pane` leaf per feed. See `docs/matrix-architecture.md`.
+
 ## 3. Build & test on macOS (phase 1)
 
 ```sh
@@ -175,9 +186,14 @@ spike's limitations.)
 |------|--------|-------|
 | 1 — decode core + headless macOS validation | INFR-264 | ✅ done |
 | 2 — hwaccel (VideoToolbox / NVDEC) | INFR-265 | to do |
-| 3a — Limbo `vid9p` styxserver shim | INFR-266 | to do |
-| 3b — render `/mnt/video` via mpeg path | INFR-268 | to do |
+| 3a — Limbo `vid9p` styxserver shim | INFR-266 | ✅ done |
+| 3b — render `/mnt/video` via mpeg path (`vidplay9p` + Matrix `video-pane`) | INFR-268 | ✅ done |
 | 4 — Rust-native 9P server | INFR-267 | to do |
 | 5 — kernel fold-in (ABI TBD) | INFR-269 | blocked |
 | 6 — live RTSP ingest | INFR-271 | to do |
 | chore — FFmpeg 7 / version-flexible pin | INFR-270 | to do |
+
+Naming: this document and the shipped code use **`/mnt/video/<id>`** for the
+mount. Some earlier tickets say `/n/video`; treat them as the same mount —
+`/mnt/video` is canonical (it is what `vid9p`, `vidplay9p`, and `video-pane`
+actually use).

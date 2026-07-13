@@ -503,6 +503,8 @@ privilegedControlGrant(p: string): int
 			return 1;
 	if(walletAccountControlGrant(p))
 		return 1;
+	if(ftreeControlGrant(p))
+		return 1;
 	return 0;
 }
 
@@ -511,6 +513,11 @@ walletAccountControlGrant(p: string): int
 	if(!prefix(p, "/n/wallet/"))
 		return 0;
 	return componentcount(p) == 4 && pathhascomponent(p, "ctl");
+}
+
+ftreeControlGrant(p: string): int
+{
+	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
 }
 
 directMailSendGrant(p: string): int

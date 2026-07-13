@@ -428,6 +428,11 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 
 	for(pl3 := caps.paths; pl3 != nil; pl3 = tl pl3) {
 		p := hd pl3;
+		if(invalidGrantPath(p) != nil) {
+			if(!contains(inv.auths, "invalid_path_grant"))
+				inv.auths = "invalid_path_grant" :: inv.auths;
+			inv.sources = ("invalid_path_grant", "via path " + p) :: inv.sources;
+		}
 		if(pathwithin("/mnt/llm", p)) {
 			if(!contains(inv.auths, "sends_llm"))
 				inv.auths = "sends_llm" :: inv.auths;
@@ -451,6 +456,31 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 	}
 
 	return inv;
+}
+
+invalidGrantPath(p: string): string
+{
+	if(p == nil || len p == 0)
+		return "empty path";
+	if(p[0] != '/')
+		return "path must be absolute";
+	if(p == "/")
+		return "root path is not grantable";
+	for(ci := 0; ci < len p; ci++)
+		if(p[ci] == ' ' || p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
+			return "path contains control delimiter";
+	start := 1;
+	for(i := 1; i <= len p; i++) {
+		if(i == len p || p[i] == '/') {
+			comp := p[start:i];
+			if(comp == "")
+				return "empty path component";
+			if(comp == "." || comp == "..")
+				return "dot path component";
+			start = i + 1;
+		}
+	}
+	return nil;
 }
 
 privilegedControlGrant(p: string): int

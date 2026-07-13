@@ -793,6 +793,8 @@ privilegedcontrolpath(path: string): int
 			return 1;
 	if(walletaccountcontrolpath(path))
 		return 1;
+	if(ftreecontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -801,6 +803,13 @@ walletaccountcontrolpath(path: string): int
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
 	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
+}
+
+ftreecontrolpath(path: string): int
+{
+	# ftree is a trusted user namespace browser. Its ctl file can bind and
+	# unmount in the user's GUI namespace, so it is never an agent grant.
+	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
 }
 
 pathperm(path: string): string

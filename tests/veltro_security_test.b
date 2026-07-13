@@ -1525,6 +1525,9 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/n/wallet/alice/ctl",
 		"/mnt/mail/accounts/alice/compose",
 		"/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply",
+		"/tmp/veltro/.ns",
+		"/tmp/veltro/cow",
+		"/tmp/veltro/tasks",
 	};
 
 	for(i := 0; i < len bad; i++) {

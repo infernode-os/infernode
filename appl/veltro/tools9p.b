@@ -795,6 +795,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(ftreecontrolpath(path))
 		return 1;
+	if(tmpveltrointernalpath(path))
+		return 1;
 	return 0;
 }
 
@@ -810,6 +812,16 @@ ftreecontrolpath(path: string): int
 	# ftree is a trusted user namespace browser. Its ctl file can bind and
 	# unmount in the user's GUI namespace, so it is never an agent grant.
 	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+}
+
+tmpveltrointernalpath(path: string): int
+{
+	# Internal Veltro state roots are managed by trusted code. Exposing them as
+	# path grants lets an agent spoof manifests, tamper with COW overlays, or
+	# read/write task briefs outside the task tool's mediation.
+	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
+		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
+		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
 }
 
 pathperm(path: string): string

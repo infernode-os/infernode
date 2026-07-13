@@ -505,6 +505,8 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(ftreeControlGrant(p))
 		return 1;
+	if(tmpVeltroInternalGrant(p))
+		return 1;
 	return 0;
 }
 
@@ -518,6 +520,13 @@ walletAccountControlGrant(p: string): int
 ftreeControlGrant(p: string): int
 {
 	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
+}
+
+tmpVeltroInternalGrant(p: string): int
+{
+	return p == "/tmp/veltro/.ns" || prefix(p, "/tmp/veltro/.ns/") ||
+		p == "/tmp/veltro/cow" || prefix(p, "/tmp/veltro/cow/") ||
+		p == "/tmp/veltro/tasks" || prefix(p, "/tmp/veltro/tasks/");
 }
 
 directMailSendGrant(p: string): int

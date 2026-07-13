@@ -797,6 +797,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(tmpveltrointernalpath(path))
 		return 1;
+	if(appipccontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -822,6 +824,18 @@ tmpveltrointernalpath(path: string): int
 	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
 		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
 		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
+}
+
+appipccontrolpath(path: string): int
+{
+	# These real-file IPC trees are capabilities of their fixed-function tools,
+	# not generic path grants. A raw write/exec grant to them bypasses tool-level
+	# mediation and can drive GUI apps or browser navigation directly.
+	return path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
+		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
+		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
+		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
+		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
 }
 
 pathperm(path: string): string

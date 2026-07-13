@@ -507,6 +507,8 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(tmpVeltroInternalGrant(p))
 		return 1;
+	if(appIpcControlGrant(p))
+		return 1;
 	return 0;
 }
 
@@ -527,6 +529,15 @@ tmpVeltroInternalGrant(p: string): int
 	return p == "/tmp/veltro/.ns" || prefix(p, "/tmp/veltro/.ns/") ||
 		p == "/tmp/veltro/cow" || prefix(p, "/tmp/veltro/cow/") ||
 		p == "/tmp/veltro/tasks" || prefix(p, "/tmp/veltro/tasks/");
+}
+
+appIpcControlGrant(p: string): int
+{
+	return p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
+		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
+		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
+		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
+		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
 }
 
 directMailSendGrant(p: string): int

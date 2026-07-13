@@ -94,6 +94,14 @@ log(msg: string)
 		sys->fprint(stderr, "voicemode: %s\n", msg);
 }
 
+# Failures are always logged, not just under -d. The daemon is started by
+# boot.sh without flags, so a debug-gated error path means a silent stack: no
+# log, and nothing to explain why voice mode did nothing.
+logerr(msg: string)
+{
+	sys->fprint(stderr, "voicemode: %s\n", msg);
+}
+
 writefile(path, data: string): int
 {
 	fd := sys->open(path, Sys->OWRITE);
@@ -170,6 +178,37 @@ ctxpartial(actid: int, text: string)
 		" type=audio status=listening via=voice-mode");
 }
 
+# Put the failure reason on the Voice chip itself. The conversation notice is
+# easy to miss and is not where the user is looking after clicking the chip —
+# the chip is, and a bare red "error" does not say what to fix.
+ctxerror(actid: int, reason: string)
+{
+	reason = strip(reason);
+	if(hasprefix(reason, "error:"))
+		reason = strip(reason[6:]);
+	if(reason == nil || reason == "")
+		reason = "speech helper unavailable";
+	for(i := 0; i < len reason; i++)
+		if(reason[i] == '=' || reason[i] == '\n' ||
+				reason[i] == '\r' || reason[i] == '\t')
+			reason[i] = ' ';
+	if(len reason > 48)
+		reason = reason[0:48];
+	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
+	writefile(path, "resource upsert path=/n/speech label=Voice: " + reason +
+		" type=audio status=error via=voice-mode");
+}
+
+# Timeout is non-fatal but must be visible: the chip returns to waiting
+# with a note saying nothing was heard, so a broken STT path does not
+# masquerade as a successful empty utterance. The next wake overwrites it.
+ctxtimeout(actid: int)
+{
+	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
+	writefile(path, "resource upsert path=/n/speech label=Voice: no speech heard" +
+		" type=audio status=waiting via=voice-mode");
+}
+
 inputmode(): string
 {
 	return strip(readfile(ui + "/input-mode"));
@@ -197,6 +236,14 @@ cancelspeech()
 micoff()
 {
 	writefile(speech + "/ctl", "mic off");
+}
+
+# Stop the STT helper between turns: anything it hears while no turn is
+# active (ambient speech, our own TTS) would queue as a stale record and
+# replay into the next turn. The next listen read restarts it.
+listenoff()
+{
+	writefile(speech + "/ctl", "listen off");
 }
 
 chime(kind: string)
@@ -506,7 +553,6 @@ voiceloop()
 	state := WAITING;
 	listengen := 0;
 	lastwake := -wakecooldown;
-	helpererrs := 0;
 	errorshown := 0;
 	ctxstatus(actid, "waiting");
 	chime("on");
@@ -528,18 +574,20 @@ voiceloop()
 			if(state != WAITING)
 				continue;
 			if(iserror(w)) {
-				log("wake: " + strip(w));
-				helpererrs++;
-				if(helpererrs >= 3 && !errorshown) {
+				logerr("wake: " + strip(w));
+				# Report the first failure, not the third: a wake
+				# helper that cannot start fails identically every
+				# time, and three silent seconds read as "the button
+				# did nothing". errorshown keeps it to one notice.
+				if(!errorshown) {
+					ctxerror(actid, strip(w));
 					noticevoiceerror(actid, strip(w));
-					ctxstatus(actid, "error");
 					errorshown = 1;
 				}
 				sys->sleep(1000);
 				request(startwake);
 				continue;
 			}
-			helpererrs = 0;
 			errorshown = 0;
 			now := sys->millisec();
 			if(now - lastwake < wakecooldown) {
@@ -567,7 +615,6 @@ voiceloop()
 				continue;
 			(kind, text) := parselisten(rec.text);
 			if(kind == LISTEN_EMPTY || kind == LISTEN_PARTIAL) {
-				helpererrs = 0;
 				errorshown = 0;
 				if(kind == LISTEN_PARTIAL)
 					ctxpartial(actid, text);
@@ -576,14 +623,14 @@ voiceloop()
 				continue;
 			}
 			if(kind == LISTEN_ERROR) {
-				log("listen: " + strip(rec.text));
+				logerr("listen: " + strip(rec.text));
 				listenseq++;
 				listengen = listenseq;
 				state = WAITING;
-				helpererrs++;
-				if(helpererrs >= 3 && !errorshown) {
+				listenoff();
+				if(!errorshown) {
+					ctxerror(actid, strip(rec.text));
 					noticevoiceerror(actid, strip(rec.text));
-					ctxstatus(actid, "error");
 					errorshown = 1;
 				} else
 					ctxstatus(actid, "waiting");
@@ -594,7 +641,7 @@ voiceloop()
 			listenseq++;
 			listengen = listenseq;
 			state = WAITING;
-			helpererrs = 0;
+			listenoff();
 			errorshown = 0;
 			if(junkfinal(text)) {
 				log("listen junk: " + text);
@@ -631,11 +678,15 @@ voiceloop()
 			request(startwake);
 		gen := <-timerch =>
 			if(state == LISTENING && gen == listengen) {
-				log("listen timeout");
+				# Always logged: a timeout with no transcript is the
+				# signature of a broken STT path, and must not be
+				# indistinguishable from a completed empty turn.
+				logerr("listen timeout: no transcript received");
 				listenseq++;
 				listengen = listenseq;
 				state = WAITING;
-				ctxstatus(actid, "waiting");
+				listenoff();
+				ctxtimeout(actid);
 				chime("done");
 				request(startwake);
 			}

@@ -435,6 +435,7 @@ applyconfig(cmd: string): string
 		whisperbin = val;
 	"whispermodel" =>
 		whispermodel = val;
+		forwardprovider(key, val);
 	"kokorobin" =>
 		kokorobin = val;
 		forwardprovider(key, val);
@@ -466,11 +467,13 @@ applyconfig(cmd: string): string
 	"wakethreshold" =>
 		wakethreshold = val;
 		forwardprovider(key, val);
-	"audiodev" or "capturedev" or "micmode" or "capturerate" or "duplex" or "mic" =>
+	"audiodev" or "capturedev" or "micmode" or "capturerate" or "duplex" or "mic" or "listen" =>
 		# Audio routing lives in the provider (docs/SPEECH-REMOTE-AUDIO.md);
 		# speech9p only passes the knobs through. `mic off` is written by
 		# voicemode on voice-mode exit so the provider releases the
-		# microphone; the next listen/wake read re-arms it.
+		# microphone; the next listen/wake read re-arms it. `listen off`
+		# is written at the end of each voice turn so the STT helper is
+		# not transcribing between turns.
 		forwardprovider(key, val);
 	"provider" or "parakeetmount" =>
 		resetprovider();

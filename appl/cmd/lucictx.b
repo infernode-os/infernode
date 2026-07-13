@@ -945,7 +945,7 @@ drawcontext(zone: Rect)
 				indcol3 = accentcol;
 			else if(res.status == "error")
 				indcol3 = redcol;
-			else if(res.status == "waiting")
+			else if(res.status == "waiting" || res.status == "starting")
 				indcol3 = greencol;
 
 			if(visible) {
@@ -2389,14 +2389,27 @@ writetofile(path: string, text: string): int
 	return n;
 }
 
+# Voice-chip click. The input-mode write is what voicemode acts on, but it is
+# asynchronous — voicemode may take a moment to answer, and if it is not running
+# at all it never will. Upsert the chip row here too so the click always produces
+# an immediate visible state change ("starting"/"idle") rather than appearing to
+# do nothing. voicemode overwrites the row with the real state (waiting,
+# listening, error) as soon as it picks the mode change up; a row still reading
+# "starting" seconds later means voicemode never responded.
 togglevoicemode()
 {
 	path := mountpt_g + "/input-mode";
+	ctl := sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g);
 	mode := strip(readfile(path));
-	if(mode == "v")
+	if(mode == "v") {
 		writetofile(path, "k");
-	else
+		writetofile(ctl, "resource upsert path=/n/speech label=Voice "
+			+ "type=audio status=idle via=voice-mode");
+	} else {
 		writetofile(path, "v");
+		writetofile(ctl, "resource upsert path=/n/speech label=Voice "
+			+ "type=audio status=starting via=voice-mode");
+	}
 }
 
 strip(s: string): string

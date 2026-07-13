@@ -268,21 +268,29 @@ testPartialUpdatesResourceLabel(t: ref T)
 
 testFinalInjected(t: ref T)
 {
+	createfile(MOCKSPEECH + "/ctl", "");
 	createfile(MOCKSPEECH + "/listen", "final hello from voice\n");
 	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"hello from voice", 5000),
 		"final transcript injected into conversation/voiceinput");
+	t.assert(waitfor(MOCKSPEECH + "/ctl", "listen off", 3000),
+		"completed turn stops the STT helper (listen off ctl write)");
 }
 
 testListenTimeoutReturnsToWaiting(t: ref T)
 {
+	createfile(MOCKSPEECH + "/ctl", "");
 	createfile(MOCKSPEECH + "/listen", "");
 	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
 		"daemon enters listening with empty listen stream");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=waiting", 3000),
 		"listen timeout returns status to waiting");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "label=Voice: no speech heard", 3000),
+		"timeout is visibly distinct from a completed empty turn");
+	t.assert(waitfor(MOCKSPEECH + "/ctl", "listen off", 3000),
+		"timeout stops the STT helper (listen off ctl write)");
 }
 
 testWakeDebounce(t: ref T)

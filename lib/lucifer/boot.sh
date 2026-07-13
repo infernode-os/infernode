@@ -133,13 +133,24 @@ mkdir -p /tmp
 echo provider /n/speechshim > /n/speech/ctl
 echo duplex half > /n/speech/ctl
 
-# Optional host speech-helper configuration. When $speechhelperbin names
-# the bin/ dir created by tools/install-speech-helpers.sh (a HOST path —
-# the shim execs helpers through devcmd), apply the installer's printed
-# ctl block automatically instead of requiring a manual paste. Set by
-# boot-speechtest.sh; a profile can set it too for the normal LLM flow.
-# The wake phrase is "hey jarvis" — the only pretrained openWakeWord
-# model shipped today (see tools/install-speech-helpers.sh).
+# Host speech-helper configuration. $speechhelperbin names the bin/ dir
+# created by tools/install-speech-helpers.sh — a HOST path, because the shim
+# execs the helpers through devcmd. boot-speechtest.sh presets it; when it is
+# unset (the normal desktop boot) auto-detect the installer's default prefix,
+# so an existing install is picked up with no manual step. Without this the
+# shim keeps its built-in defaults — bare command names that are not on the
+# host PATH — and the wake helper can never exec, which silently makes voice
+# mode unable to hear anything at all.
+#
+# The prefix is a host path, so it is probed through /n/local (the host root).
+# The wake phrase is "hey jarvis" — the only pretrained openWakeWord model
+# shipped today (see tools/install-speech-helpers.sh).
+if {~ $#speechhelperbin 0} {
+	speechprefix=`{echo 'echo ${INFERNODE_SPEECH_HOME:-$HOME/.local/share/infernode-speech}' | os sh >[2] /dev/null}
+	if {ftest -d /n/local^$speechprefix^/bin} {
+		speechhelperbin=$speechprefix^/bin
+	}
+}
 if {! ~ $#speechhelperbin 0} {
 	echo kokorobin $speechhelperbin/kokoro-cli > /n/speech/ctl
 	echo whisperstreambin $speechhelperbin/whisper-stream-cli > /n/speech/ctl
@@ -149,6 +160,9 @@ if {! ~ $#speechhelperbin 0} {
 	echo 'wakeword hey jarvis' > /n/speech/ctl
 	echo wakethreshold 0.5 > /n/speech/ctl
 	echo 'boot: speech helpers configured from' $speechhelperbin
+}{
+	echo 'boot: no speech helpers found — voice mode will not hear or speak.'
+	echo 'boot: run tools/install-speech-helpers.sh, then restart.'
 }
 
 > /tmp/lucibridge.log

@@ -75,6 +75,9 @@ Speechshim9p: module {
 
 Qroot, Qctl, Qlisten, Qwake, Qsay, Qcancel, Qvoices, Qchime: con iota;
 
+# Bytes of helper stderr retained for diagnostics (see Hostproc.errtail).
+ERRTAIL: con 512;
+
 # Configuration
 kokorobin := "kokoro-cli";
 whisperstreambin := "whisper-stream";
@@ -90,6 +93,7 @@ micmode := "helper";		# helper | device
 capturerate := 16000;
 duplex := "full";		# full | half
 standby := 0;			# mic off: no helper (re)starts until the next listen/wake read
+listenoff := 0;			# listen off: the STT helper stays down until the next listen read
 
 stderr: ref Sys->FD;
 user: string;
@@ -105,6 +109,15 @@ Hostproc: adt {
 	ctlfd:  ref Sys->FD;
 	datafd: ref Sys->FD;
 	dir:    string;
+	# Tail of the helper's stderr, kept by a drain proc. A helper that fails
+	# to start (missing binary, bad model path) exits immediately and the only
+	# account of why is on its stderr — devcmd would otherwise discard it and
+	# leave us reporting a bare "helper exited". The drain also keeps the pipe
+	# from filling: whisper-stream is chatty on stderr, and a full pipe would
+	# block it.
+	errtail: string;
+	errdone: chan of string;
+	outbuf:  string;
 };
 
 listenproc: ref Hostproc;
@@ -275,7 +288,96 @@ startproc(cmd: string): (ref Hostproc, string)
 	if(datafd == nil)
 		return (nil, sys->sprint("error: cannot open %s/data: %r", dir));
 
-	return (ref Hostproc(cfd, datafd, dir), nil);
+	p := ref Hostproc(cfd, datafd, dir, "", chan[1] of string, "");
+	errfd := sys->open(dir + "/stderr", Sys->OREAD);
+	if(errfd != nil)
+		spawn drainstderr(p, errfd);
+
+	return (p, nil);
+}
+
+# Keep the helper's stderr drained, retaining only the tail for diagnostics.
+drainstderr(p: ref Hostproc, errfd: ref Sys->FD)
+{
+	buf := array[1024] of byte;
+	for(;;) {
+		n := sys->read(errfd, buf, len buf);
+		if(n <= 0) {
+			p.errdone <-= p.errtail;
+			return;
+		}
+		s := p.errtail + string buf[0:n];
+		if(len s > ERRTAIL)
+			s = s[len s - ERRTAIL:];
+		p.errtail = s;
+	}
+}
+
+# Return one newline-delimited helper record. Host pipe reads may split a
+# record arbitrarily, so retain an incomplete tail on the process rather than
+# exposing it as a transcript or wake event.
+readrecord(p: ref Hostproc): (string, int)
+{
+	for(;;) {
+		for(i := 0; i < len p.outbuf; i++)
+			if(p.outbuf[i] == '\n') {
+				record := p.outbuf[0:i+1];
+				p.outbuf = p.outbuf[i+1:];
+				return (record, 1);
+			}
+
+		buf := array[8192] of byte;
+		n := sys->read(p.datafd, buf, len buf);
+		if(n <= 0) {
+			if(p.outbuf != "") {
+				record := p.outbuf;
+				p.outbuf = "";
+				return (record, 1);
+			}
+			return ("", 0);
+		}
+		p.outbuf += string buf[0:n];
+	}
+}
+
+after(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# One-line summary of why a helper died, for the "error:" record the client
+# sees. Falls back to the caller's generic reason when stderr said nothing.
+exitreason(p: ref Hostproc, dflt: string): string
+{
+	if(p == nil)
+		return dflt;
+	# stdout EOF and stderr EOF are delivered independently by #C. Wait briefly
+	# for the drainer's completion signal, but never let diagnostics wedge the
+	# voice daemon if a helper closes stdout while retaining stderr.
+	p.datafd = nil;
+	p.ctlfd = nil;	# killonclose also lets /stderr reach EOF
+	if(p.errdone != nil) {
+		timeoutc := chan[1] of int;
+		spawn after(timeoutc, 250);
+		alt {
+		tail := <-p.errdone =>
+			p.errtail = tail;
+		<-timeoutc =>
+			;
+		}
+	}
+	# Last non-blank line: host sh puts "not found" style errors there.
+	(nil, lines) := sys->tokenize(p.errtail, "\n\r");
+	last := "";
+	for(; lines != nil; lines = tl lines) {
+		l := strip(hd lines);
+		if(l != "")
+			last = l;
+	}
+	if(last == "")
+		return dflt;
+	return dflt + ": " + last;
 }
 
 killproc(p: ref Hostproc)
@@ -423,15 +525,18 @@ listencmd(): string
 	if(micmode == "device")
 		return whisperstreambin;	# full command; reads PCM on stdin
 	return whisperstreambin + " --model " + whispermodel +
-		" --rate 16000 --chans 1 2>/dev/null";
+		" --rate 16000 --chans 1";
 }
 
 wakecmd(): string
 {
 	if(micmode == "device")
 		return wakebin;			# full command; reads PCM on stdin
-	return wakebin + " --word '" + wakeword + "' --threshold " +
-		wakethreshold + " 2>/dev/null";
+	# startproc wraps the complete host command in single quotes for #C.
+	# Use double quotes here so a multiword phrase remains one host-shell arg
+	# without terminating that outer command string.
+	return wakebin + " --word \"" + wakeword + "\" --threshold " +
+		wakethreshold;
 }
 
 # Read the next chunk of newline records from a streaming helper, starting
@@ -443,6 +548,8 @@ readlisten(): string
 	if(whisperstreambin == "")
 		return "error: listen helper not configured";
 	standby = 0;		# an active reader arms the microphone
+	listenoff = 0;		# a new listen turn re-arms the STT helper
+	last: ref Hostproc;	# last helper to die, for its stderr
 	# One restart attempt: a stale fd from an exited helper (one-shot
 	# helpers exit after each utterance) must not eat a read as an error.
 	for(attempt := 0; attempt < 2; attempt++) {
@@ -453,24 +560,27 @@ readlisten(): string
 			listenproc = p;
 			if(micmode == "device")
 				addsink(SINKLISTEN, p);
-			if(standby) {
-				# `mic off` raced the start; honor it.
+			if(standby || listenoff) {
+				# `mic off`/`listen off` raced the start; honor it.
 				killproc(p);
 				listenproc = nil;
 				return "error: mic off";
 			}
 		}
-		buf := array[8192] of byte;
-		n := sys->read(listenproc.datafd, buf, len buf);
-		if(n > 0)
-			return string buf[0:n];
+		(record, ok) := readrecord(listenproc);
+		if(ok)
+			return record;
+		dead := listenproc;
 		listenproc = nil;
-		# `mic off` while blocked in the read above kills the helper;
-		# return instead of restarting it.
+		# `mic off`/`listen off` while blocked in the read above kills
+		# the helper; return instead of restarting it.
 		if(standby)
 			return "error: mic off";
+		if(listenoff)
+			return "error: listen off";
+		last = dead;
 	}
-	return "error: listen helper exited";
+	return exitreason(last, "error: listen helper exited");
 }
 
 readwake(): string
@@ -478,6 +588,7 @@ readwake(): string
 	if(wakebin == "")
 		return "error: wake helper not configured";
 	standby = 0;		# an active reader arms the microphone
+	last: ref Hostproc;	# last helper to die, for its stderr
 	# One restart attempt, same reason as readlisten: one-shot wake
 	# helpers exit after each event and must be restarted transparently.
 	attempt := 0;
@@ -500,16 +611,18 @@ readwake(): string
 				return "error: mic off";
 			}
 		}
-		buf := array[1024] of byte;
-		n := sys->read(wakeproc.datafd, buf, len buf);
-		if(n > 0) {
+		(record, ok) := readrecord(wakeproc);
+		if(ok) {
 			if(duplex == "half" && playing) {
+				killproc(wakeproc);
+				closeproc(wakeproc);
 				wakeproc = nil;
 				sys->sleep(100);
 				continue;
 			}
-			return string buf[0:n];
+			return record;
 		}
+		last = wakeproc;
 		wakeproc = nil;
 		attempt++;
 		if(attempt >= 2) {
@@ -521,7 +634,7 @@ readwake(): string
 			sys->sleep(100);
 		}
 	}
-	return "error: wake helper exited";
+	return exitreason(last, "error: wake helper exited");
 }
 
 # === TTS (say) ===
@@ -756,6 +869,10 @@ readconfig(): string
 		result += "mic off\n";
 	else
 		result += "mic on\n";
+	if(listenoff)
+		result += "listen off\n";
+	else
+		result += "listen on\n";
 	return result;
 }
 
@@ -852,6 +969,22 @@ applyconfig(cmd: string): string
 			standby = 0;
 		* =>
 			return "error: mic must be on or off";
+		}
+	"listen" =>
+		# Turn-end teardown from voicemode: `listen off` stops only
+		# the STT helper, so speech between voice turns (ambient talk,
+		# the assistant's own TTS) cannot queue as stale records that
+		# replay into the next turn. Wake stays armed; the next listen
+		# read restarts the STT helper.
+		case val {
+		"off" =>
+			listenoff = 1;
+			killproc(listenproc);
+			listenproc = nil;
+		"on" =>
+			listenoff = 0;
+		* =>
+			return "error: listen must be on or off";
 		}
 	* =>
 		return "error: unknown config key: " + key;

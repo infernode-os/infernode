@@ -179,7 +179,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-usage: whisper-stream-cli [--model PATH] [--rate HZ] [--chans N] [--stdin]
+usage: whisper-stream-cli [--model PATH] [--rate HZ] [--chans N] [--capture ID] [--length MS] [--stdin]
 
 Wrap whisper.cpp's whisper-stream helper in VAD mode (--step 0): each
 utterance is transcribed after you stop speaking and emitted as one record:
@@ -197,6 +197,8 @@ EOF
 model=""
 rate=16000
 chans=1
+capture=${INFERNODE_SPEECH_CAPTURE:--1}
+length=${INFERNODE_SPEECH_WINDOW_MS:-5000}
 stdin_mode=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -210,6 +212,14 @@ while [ "$#" -gt 0 ]; do
     ;;
   --chans)
     chans=${2:-1}
+    shift 2
+    ;;
+  --capture)
+    capture=${2:--1}
+    shift 2
+    ;;
+  --length)
+    length=${2:-5000}
     shift 2
     ;;
   --stdin)
@@ -265,10 +275,16 @@ fi
 # VAD mode: whisper-stream waits for end-of-utterance, then prints the
 # transcribed segment. Filter its chrome — "### Transcription" separators,
 # ANSI escapes, [timestamp] blocks — and emit each utterance as a final.
+#
+# No stdio filter (tr, sed, grep) may sit in this pipeline: writing to a
+# pipe they block-buffer, and transcript lines are tiny, so records would
+# sit in the filter's buffer until the helper exits — which it never does.
+# \r is stripped per line in bash instead. stderr is not discarded: the
+# shim keeps a bounded tail of it, the only diagnostic when whisper dies.
 esc=$(printf '\033')
-"$bin" --model "$model" --capture 0 --step 0 --length 30000 --keep 200 --vad-thold 0.6 2>/dev/null |
-tr -d '\r' |
+"$bin" --model "$model" --capture "$capture" --step 0 --length "$length" --keep 200 --vad-thold 0.6 |
 while IFS= read -r line; do
+  line=${line//$'\r'/}
   case "$line" in
   '#'*) continue ;;
   esac

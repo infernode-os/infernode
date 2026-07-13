@@ -1840,6 +1840,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(backend == nil || backend == "")
 		backend = "api";
 	dial := readndbfield("/lib/ndb/llm", "dial");
+	log("llm configuration mode=" + mode + " backend=" + backend);
 	llmconfigured := 0;
 	if(mode == "remote") {
 		# Remote 9P mount: configured iff a dial address is set.
@@ -1849,6 +1850,10 @@ init(nil: ref Draw->Context, args: list of string)
 	} else if(backend == "api") {
 		# Check factotum for an anthropic API key
 		ctldata := agentlib->readfile("/mnt/factotum/ctl");
+		if(ctldata != nil && len ctldata > 0)
+			log("factotum ctl readable");
+		else
+			log("factotum ctl unreadable or empty");
 		if(ctldata != nil && len ctldata > 0) {
 			(nil, ctllines) := sys->tokenize(ctldata, "\n");
 			for(; ctllines != nil; ctllines = tl ctllines) {
@@ -1857,6 +1862,10 @@ init(nil: ref Draw->Context, args: list of string)
 					llmconfigured = 1;
 			}
 		}
+		if(llmconfigured)
+			log("anthropic factotum key present");
+		else
+			log("anthropic factotum key absent");
 	} else if(backend == "openai") {
 		# Ollama/OpenAI: configured if a URL is set
 		ourl := readndbfield("/lib/ndb/llm", "url");

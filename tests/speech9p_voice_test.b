@@ -193,6 +193,13 @@ testListenWakeHelpers(t: ref T)
 {
 	t.assert(writefile(MNT + "/ctl", "provider " + PARAKEETMNT) > 0,
 		"configure provider mount");
+	t.assert(createfile(PARAKEETMNT + "/ctl", "") >= 0,
+		"create fake provider ctl file");
+	t.assert(writefile(MNT + "/ctl", "whispermodel /tmp/ggml-test.bin") > 0,
+		"whisper model accepted");
+	providerctl := readfile(PARAKEETMNT + "/ctl");
+	t.assert(hassubstr(providerctl, "whispermodel /tmp/ggml-test.bin"),
+		"whisper model forwarded to provider");
 	t.assert(createfile(PARAKEETMNT + "/listen", "final helper transcript\n") > 0,
 		"create fake provider listen file");
 	t.assert(createfile(PARAKEETMNT + "/wake", "wake hey_lucia 0.88\n") > 0,

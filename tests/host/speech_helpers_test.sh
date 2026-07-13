@@ -33,9 +33,69 @@ fi
 
 timeout 10 "$BIN/whisper-stream-cli" --help >/dev/null
 timeout 10 "$BIN/openwakeword-cli" --help >/dev/null
+
+# The native Whisper and openWakeWord backends can enumerate Core Audio in a
+# different order. Prove the configured Whisper capture id reaches the native
+# binary instead of silently falling back to a hard-coded device.
+mkdir -p "$WORKDIR/bin"
+cat >"$WORKDIR/bin/whisper-stream" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" >"$WHISPER_ARG_LOG"
+SH
+chmod +x "$WORKDIR/bin/whisper-stream"
+printf 'fake model\n' >"$WORKDIR/model.bin"
+PATH="$WORKDIR/bin:$PATH" INFERNODE_SPEECH_CAPTURE=2 \
+  INFERNODE_SPEECH_WINDOW_MS=5000 \
+  WHISPER_ARG_LOG="$WORKDIR/whisper.args" \
+  "$BIN/whisper-stream-cli" --model "$WORKDIR/model.bin" >/dev/null
+if ! awk 'previous == "--capture" && $0 == "2" { found=1 } { previous=$0 } END { exit !found }' \
+  "$WORKDIR/whisper.args"; then
+  echo "FAIL: whisper-stream-cli did not forward INFERNODE_SPEECH_CAPTURE" >&2
+  exit 1
+fi
+if ! awk 'previous == "--length" && $0 == "5000" { found=1 } { previous=$0 } END { exit !found }' \
+  "$WORKDIR/whisper.args"; then
+  echo "FAIL: whisper-stream-cli did not forward INFERNODE_SPEECH_WINDOW_MS" >&2
+  exit 1
+fi
+
 timeout 10 "$BIN/whisper-stream-cli" --stdin >"$WORKDIR/whisper-stdin.out"
 if ! grep -q '^error: whisper-stream stdin PCM mode is not supported' "$WORKDIR/whisper-stdin.out"; then
   echo "FAIL: whisper-stream-cli --stdin did not report the documented limitation" >&2
+  exit 1
+fi
+
+# The wrapper must relay records in real time. A stdio filter in its pipeline
+# (tr, sed, grep) block-buffers when writing to a pipe, so tiny transcript
+# lines sit in the filter until the helper exits — which a streaming helper
+# never does: wake works, listen never delivers, all logs stay empty. Fake a
+# whisper-stream that speaks once (with VAD-mode chrome, a timestamp block,
+# and a \r) then stays alive well past the deadline; the final must arrive
+# while the producer is still running.
+cat >"$WORKDIR/bin/whisper-stream" <<'SH'
+#!/bin/sh
+printf '### Transcription 0 START\n'
+printf '[00:00.000 --> 00:02.000]   hello from fake whisper\r\n'
+sleep 15
+SH
+chmod +x "$WORKDIR/bin/whisper-stream"
+: >"$WORKDIR/stream.out"
+PATH="$WORKDIR/bin:$PATH" "$BIN/whisper-stream-cli" --model "$WORKDIR/model.bin" >"$WORKDIR/stream.out" &
+stream_pid=$!
+relayed=0
+deadline=$((SECONDS + 6))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  if grep -q '^final hello from fake whisper$' "$WORKDIR/stream.out"; then
+    relayed=1
+    break
+  fi
+  sleep 0.2
+done
+kill "$stream_pid" 2>/dev/null || true
+wait "$stream_pid" 2>/dev/null || true
+if [ "$relayed" -ne 1 ]; then
+  echo "FAIL: whisper-stream-cli did not relay a record while the helper was still running (stdio buffering in the wrapper pipeline?)" >&2
+  cat "$WORKDIR/stream.out" >&2
   exit 1
 fi
 

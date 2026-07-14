@@ -672,6 +672,12 @@ be explicit:
 - future `profile-observe-ui`: possible read-only/event-only UI view if the
   namespace surface supports that distinction.
 
+The same rule applies to other fixed-function service trees. `/mnt/matrix` is
+derived only from the `matrix` tool, and `/phone` only from `sms`, `dial`, or
+`contacts`; neither is a caller-supplied path capability. This prevents generic
+filesystem or shell tools from driving Matrix composition controls, sending an
+SMS, or initiating a call through a raw namespace grant.
+
 The profile invariant test currently fails on:
 
 - any high-severity `nsaudit` violation;

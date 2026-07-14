@@ -867,6 +867,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(tmpveltrointernalpath(path))
 		return 1;
+	if(uiagentcontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -892,6 +894,13 @@ tmpveltrointernalpath(path: string): int
 	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
 		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
 		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
+}
+
+uiagentcontrolpath(path: string): int
+{
+	# UI authority is derived from fixed-function tools by needsui(), never from
+	# caller-supplied paths that generic filesystem or shell tools can reuse.
+	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
 }
 
 directmailsendpath(path: string): int

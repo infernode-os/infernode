@@ -799,6 +799,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(appipccontrolpath(path))
 		return 1;
+	if(uiagentcontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -836,6 +838,13 @@ appipccontrolpath(path: string): int
 		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
 		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
 		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+}
+
+uiagentcontrolpath(path: string): int
+{
+	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
+	# grant would also hand write/exec every per-activity ctl file.
+	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
 }
 
 pathperm(path: string): string

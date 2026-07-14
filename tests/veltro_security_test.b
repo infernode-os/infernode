@@ -1521,6 +1521,10 @@ privilegedGrantPathsWorker(result: chan of string)
 	sys->pctl(Sys->FORKNS, nil);
 
 	bad := array[] of {
+		"/mnt/ui",
+		"/mnt/ui/activity/0/conversation/ctl",
+		"/mnt/ui/activity/0/context",
+		"/mnt/ui/activity/0/presentation",
 		"/mnt/msg/ctl",
 		"/n/wallet/alice/ctl",
 		"/mnt/mail/accounts/alice/compose",

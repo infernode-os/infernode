@@ -509,6 +509,8 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(appIpcControlGrant(p))
 		return 1;
+	if(uiAgentControlGrant(p))
+		return 1;
 	return 0;
 }
 
@@ -538,6 +540,11 @@ appIpcControlGrant(p: string): int
 		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
 		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
 		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
+}
+
+uiAgentControlGrant(p: string): int
+{
+	return p == "/mnt/ui" || prefix(p, "/mnt/ui/");
 }
 
 directMailSendGrant(p: string): int

@@ -52,6 +52,27 @@ PLAN_TASK_THRESHOLD: con 80;
 DEFAULT_MAX_STEPS: con 200;
 MAX_MAX_STEPS: con 1000;
 
+# Stall recovery. A multi-step run can end its turn with a short "next I'll
+# call X" narration and NO tool call. That reads as end_turn with tools==nil,
+# so the loop would stop mid-task. When it happens after real progress, the
+# harness recovers — bounded by MAX_RECOVERIES so it can never loop, and only
+# on short narrations (long final answers are left to stand).
+#
+# Recovery is deliberately MODEL-AGNOSTIC by default (-X, recoverymode):
+#   "nudge"    re-prompt "call the tool, or reply DONE" — pure harness, safe for
+#              every model (default).
+#   "escalate" nudge PLUS bump the session reasoning one rung (low->medium->
+#              high). Only for reasoning-capable models; opt-in, and even then
+#              gated on the session already reporting a reasoning level, so a
+#              non-reasoning model (e.g. mistral) is never sent a reasoning
+#              request it may reject.
+#   "off"      no recovery (baseline measurement).
+MAX_RECOVERIES: con 2;
+STALL_TEXT_MAX: con 200;
+STALL_NUDGE: con "You described a next action but did not call the tool. "
+	+ "If the task is already complete, reply DONE. Otherwise continue now "
+	+ "by calling the appropriate tool.";
+
 # Session storage: persistent across reboots
 SESSION_BASE: con "/usr/inferno/veltro/sessions";
 
@@ -80,6 +101,18 @@ agenttype := "";
 # reconfiguring the server.
 model := "";
 
+# -R <effort>: per-session reasoning_effort override ("low"|"medium"|"high").
+# Empty = leave the server/backend default untouched. gpt-oss-style models
+# take an analysis-only turn under medium/high reasoning and end the turn
+# without emitting the tool_use block; "low" makes them call tools directly.
+# (llmsrv MODEL-EVAL note recommends "low" for tool-driven scenarios.)
+reasoningeffort := "";
+
+# -X <mode>: stall-recovery mode ("nudge"|"escalate"|"off"). Default "nudge" is
+# model-agnostic (re-prompt only). "escalate" adds reasoning bumps for
+# reasoning-capable models. See the STALL_NUDGE comment block.
+recoverymode := "nudge";
+
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
 
@@ -94,6 +127,8 @@ usage()
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -a type     Run as agent persona /lib/veltro/agents/<type>.txt (e.g. research)\n");
 	sys->fprint(stderr, "  -m model    Override the LLM model for this run (e.g. mistral-small3.2:24b)\n");
+	sys->fprint(stderr, "  -R effort   Per-session reasoning_effort (low|medium|high; reasoning models only)\n");
+	sys->fprint(stderr, "  -X mode     Stall-recovery mode (nudge|escalate|off; default nudge)\n");
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
@@ -198,6 +233,8 @@ init(nil: ref Draw->Context, args: list of string)
 		'r' =>	resumename = arg->earg();
 		'a' =>	agenttype = arg->earg();
 		'm' =>	model = arg->earg();
+		'R' =>	reasoningeffort = arg->earg();
+		'X' =>	recoverymode = arg->earg();
 		'p' =>
 			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
@@ -423,6 +460,48 @@ setenv(name, val: string)
 	data := array of byte val;
 	sys->write(fd, data, len data);
 	fd = nil;
+}
+
+# Best-effort write of a reasoning_effort value to a session's control file.
+writereasoning(id, val: string): int
+{
+	path := "/mnt/llm/" + id + "/reasoning";
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	data := array of byte val;
+	sys->write(fd, data, len data);
+	fd = nil;
+	return 0;
+}
+
+# Read a session's current reasoning effort ("" | "low" | "medium" | "high").
+getreasoning(id: string): string
+{
+	return agentlib->strip(agentlib->readfile("/mnt/llm/" + id + "/reasoning"));
+}
+
+# Next rung on the reasoning ladder; "" means already at the top (or unknown).
+nextreasoning(cur: string): string
+{
+	case cur {
+	"" or "low" =>	return "medium";
+	"medium" =>	return "high";
+	}
+	return "";
+}
+
+setreasoning(llmsessionid: string)
+{
+	if(reasoningeffort == "")
+		return;
+	if(writereasoning(llmsessionid, reasoningeffort) < 0) {
+		if(verbose)
+			sys->fprint(stderr, "veltro: cannot set reasoning: %r\n");
+		return;
+	}
+	if(verbose)
+		sys->fprint(stderr, "veltro: reasoning_effort: %s\n", reasoningeffort);
 }
 
 # Write thinking token budget to the session's thinking file.
@@ -826,18 +905,59 @@ agentloop(fd: ref Sys->FD, id, initialprompt: string)
 		return;
 	}
 
+	madeprogress := 0;	# has the run executed at least one tool call?
+	recoveries := 0;	# stall-recovery escalations used so far
+	justnudged := 0;	# guard: don't re-escalate on the reply to a nudge
+
 	for(step := 0; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: step %d\n", step + 1);
 
 		(stopreason, tools, text) := agentlib->parsellmresponse(response);
 
+		if(verbose)
+			sys->fprint(stderr, "veltro: step %d stopreason=%q ntools=%d textlen=%d\n",
+				step + 1, stopreason, len tools, len text);
+
 		if(text != "")
 			sys->print("%s\n", text);
 
-		# Agent is done
-		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
+		# Turn ended with no tool call. Normally that means done — but a
+		# mid-workflow run that stops on a short narration is the
+		# describe-instead-of-call stall. Recover (bounded) per recoverymode;
+		# otherwise stop for real.
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil) {
+			if(recoverymode != "off" && madeprogress && !justnudged
+			   && text != "" && len text < STALL_TEXT_MAX
+			   && recoveries < MAX_RECOVERIES) {
+				esc := "";
+				# Reasoning bump is opt-in AND only for a session that
+				# already reports a reasoning level — never send a
+				# reasoning request to a non-reasoning model.
+				if(recoverymode == "escalate") {
+					cur := getreasoning(id);
+					nxt := nextreasoning(cur);
+					if(cur != "" && nxt != "" && writereasoning(id, nxt) == 0)
+						esc = sys->sprint(", reasoning %s->%s", cur, nxt);
+				}
+				recoveries++;
+				justnudged = 1;
+				if(verbose)
+					sys->fprint(stderr, "veltro: stall recovery %d/%d: re-prompting%s\n",
+						recoveries, MAX_RECOVERIES, esc);
+				response = agentlib->queryllmfd(fd, STALL_NUDGE);
+				if(response == "") {
+					sys->fprint(stderr, "veltro: empty response after nudge\n");
+					break;
+				}
+				continue;
+			}
 			break;
+		}
+
+		# Real tool call this turn: progress made, clear the nudge guard.
+		madeprogress = 1;
+		justnudged = 0;
 
 		# Display tool invocations
 		for(tc := tools; tc != nil; tc = tl tc) {
@@ -898,6 +1018,7 @@ runagent(task: string)
 		return;
 	}
 	setmodel(llmsessionid);
+	setreasoning(llmsessionid);
 	if(verbose)
 		sys->fprint(stderr, "veltro: llm session %s\n", llmsessionid);
 
@@ -996,6 +1117,7 @@ runresume(name, extra: string)
 		return;
 	}
 	setmodel(llmsessionid);
+	setreasoning(llmsessionid);
 
 	# Veltro owns its own compaction policy (checkandcompact) — opt out of the
 	# server-side auto-compaction net so the two don't both trigger.

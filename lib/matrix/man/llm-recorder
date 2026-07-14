@@ -10,7 +10,7 @@ READS
 	<id>/usage	text "estimated/limit" (two ints split on '/')
 	<id>/model	model name string
 
-WRITES
+WRITES	(to its outdir /tmp/matrix/llm-recorder/ - a consumer mounts it there)
 	sessions	one session id per line (ids currently visible)
 	<id>/current	single line: ms model tokens limit
 	<id>/history	one line per ring sample: ms tokens limit,

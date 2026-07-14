@@ -9,6 +9,14 @@ READS
 			cursize maxsize hw nalloc nfree nbrk poolmax name
 			(cursize, maxsize, name used; first 8 pools kept)
 
+MOUNT
+	Point this module at the outdir of a service that produces
+	mem/current.  A service's outdir is /tmp/matrix/<service-name>,
+	so with sysmon-svc the mount is /tmp/matrix/sysmon-svc
+	(mem/current then resolves under it).
+	Include that service in the same composition (e.g.
+	`service sysmon-svc /`) so its outdir is populated.
+
 WRITES
 	none (renders only)
 

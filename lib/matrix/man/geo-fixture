@@ -8,7 +8,7 @@ READS
 	nothing - the mount parameter is unused; all data is generated
 	in-process
 
-WRITES
+WRITES	(to its outdir /tmp/matrix/geo-fixture/ - a consumer mounts it there)
 	entities/<id>	ndb stanza, one key=value per line:
 			id= lat= lon= affil= kind= label= course= speed=
 			(five units, rewritten every tick)

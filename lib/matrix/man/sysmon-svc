@@ -14,7 +14,8 @@ READS
 	/net/udp/<conv>/status	connection state word
 	/net/tcp/stats		verbatim, where the platform provides it
 
-WRITES
+WRITES	(to its outdir /tmp/matrix/sysmon-svc/ - mount a consuming
+	display module there)
 	mem/current	verbatim /dev/memory copy
 	mem/history	ring: ts heap_cur heap_max main_cur main_max image_cur image_max
 	cpu/current	pct busy_procs total_procs

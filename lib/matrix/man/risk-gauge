@@ -13,6 +13,11 @@ READS
 	../portfolio/risk/var_95	value string - same parent-relative
 		resolution
 
+MOUNT
+	The risk file itself (the mount path IS the file), e.g.
+	/n/tbl4/risk; its PARENT must also hold portfolio/defense/status
+	and portfolio/risk/var_95.  An external source, not a matrix outdir.
+
 WRITES
 	none (renders only)
 

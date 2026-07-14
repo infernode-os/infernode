@@ -9,6 +9,10 @@ READS
 		one signal per line, whitespace fields:
 		id asset direction confidence signal_type timestamp
 
+MOUNT
+	The signals file itself (the mount path IS the file), e.g.
+	/n/tbl4/signals - an external data source, not a matrix outdir.
+
 WRITES
 	none (renders only)
 

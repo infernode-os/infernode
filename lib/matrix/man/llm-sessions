@@ -8,6 +8,13 @@ READS
 	sessions	one numeric session id per line
 	<id>/history	lines "ms tokens limit", oldest first
 
+MOUNT
+	The outdir of a service that produces this session tree
+	(sessions and <id>/history) - /tmp/matrix/<service>.  With
+	llm-recorder: /tmp/matrix/llm-recorder.
+	Include that service in the same composition (e.g.
+	`service sysmon-svc /`) so its outdir is populated.
+
 WRITES
 	none (renders only)
 

@@ -13,6 +13,13 @@ READS
 			fill= width= label= (type: circle, polygon,
 			polyline; points: space-separated lat,lon pairs)
 
+MOUNT
+	The outdir of a service that produces entities/ and features/
+	ndb stanzas - /tmp/matrix/<service>.  With geo-fixture:
+	/tmp/matrix/geo-fixture.
+	Include that service in the same composition (e.g.
+	`service sysmon-svc /`) so its outdir is populated.
+
 WRITES
 	none (renders only)
 

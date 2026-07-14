@@ -11,6 +11,12 @@ READS
 	net/history	one line per sample: ts tcp_total tcp_conn udp_total,
 			oldest first (only tcp_total is plotted)
 
+MOUNT
+	The outdir of a service that produces net/current and net/history
+	- /tmp/matrix/<service>.  With sysmon-svc: /tmp/matrix/sysmon-svc.
+	Include that service in the same composition (e.g.
+	`service sysmon-svc /`) so its outdir is populated.
+
 WRITES
 	none (renders only)
 

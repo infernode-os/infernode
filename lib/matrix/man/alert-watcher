@@ -9,7 +9,7 @@ READS
 				id asset direction confidence signal_type timestamp
 	portfolio/defense/status	single status token
 
-WRITES
+WRITES	(to its outdir /tmp/matrix/alert-watcher/ - a consumer mounts it there)
 	alert-0000, alert-0001, ...	one plain-text message per file:
 				"high-confidence signal: <asset> <dir> <stype> (conf=<conf>)"
 				or "defense status changed: <old> -> <new>"

@@ -9,6 +9,10 @@ READS
 	positions/<name>	single line, whitespace fields:
 				asset quantity avg_cost realized_pnl
 
+MOUNT
+	A directory that contains a positions/ subdirectory, e.g.
+	/n/tbl4/portfolio - an external data source, not a matrix outdir.
+
 WRITES
 	none (renders only)
 

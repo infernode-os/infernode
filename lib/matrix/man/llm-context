@@ -10,6 +10,13 @@ READS
 	<id>/history	lines "ms tokens limit"; only the max tokens
 			value is used, as the watermark
 
+MOUNT
+	The outdir of a service that produces this session tree
+	(sessions, <id>/current, <id>/history) - /tmp/matrix/<service>.
+	With llm-recorder: /tmp/matrix/llm-recorder.
+	Include that service in the same composition (e.g.
+	`service sysmon-svc /`) so its outdir is populated.
+
 WRITES
 	none (renders only)
 

@@ -8,6 +8,14 @@ READS
 	cpu/current	single line: pct busy total (three ints)
 	cpu/history	one line per sample: ts pct, oldest first
 
+MOUNT
+	Point this module at the outdir of a service that produces
+	cpu/current and cpu/history.  A service's outdir is
+	/tmp/matrix/<service-name>, so with sysmon-svc the mount is
+	/tmp/matrix/sysmon-svc (cpu/current then resolves under it).
+	Include that service in the same composition (e.g.
+	`service sysmon-svc /`) so its outdir is populated.
+
 WRITES
 	none (renders only)
 

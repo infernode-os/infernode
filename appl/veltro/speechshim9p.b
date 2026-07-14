@@ -87,7 +87,12 @@ wakeword := "hey lucia";
 wakethreshold := "0.5";
 whispermodel := "";
 voice := "af_bella";
-audrate := 24000;
+# 22050, NOT Kokoro-native 24000: emu's devaudio only accepts the rates in
+# audio_rate_tbl {8000, 11025, 16000, 22050, 44100}. An unsupported rate is
+# rejected silently and playback runs at the 8000 default — Kokoro speech
+# comes out as 3x slow-motion. kokoro-cli resamples to --rate, so 22050 is
+# both accepted and near-native.
+audrate := 22050;
 audiodev := "/dev/audio";
 capturedev := "";		# capture override; empty = audiodev
 micmode := "helper";		# helper | device

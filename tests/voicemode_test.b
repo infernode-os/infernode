@@ -274,8 +274,8 @@ testPartialUpdatesResourceLabel(t: ref T)
 		"partial transcript replaces the visible conversation draft");
 	createfile(MOCKSPEECH + "/listen", "final full transcript\n");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
-		"label=Voice type=audio status=processing", 5000),
-		"final transcript restores the label without claiming playback started");
+		"label=Voice: queued type=audio status=queued", 5000),
+		"busy final visibly reports the queued follow-up");
 	t.assertseq(readfile(MOCKUI + "/activity/0/conversation/draft"), "",
 		"final transcript clears the draft before submission");
 }
@@ -316,8 +316,8 @@ testWakeDebounce(t: ref T)
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"debounce turn", 5000),
 		"first wake reaches listen and injects final");
-	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=processing", 3000),
-		"completed turn remains processing until the speech client starts playback");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=queued", 3000),
+		"completed busy turn remains visibly queued until the agent accepts it");
 	sys->sleep(300);
 	t.assert(!hassubstr(readfile(MOCKUI + "/activity/0/context/ctl"), "status=listening"),
 		"immediate second wake is debounced instead of starting listen");
@@ -545,6 +545,37 @@ testGraceAppendMergesTurn(t: ref T)
 	t.assert(hassubstr(vi, "first part"), "merged turn keeps the first utterance");
 }
 
+testBusyFollowupQueueIsCapped(t: ref T)
+{
+	# The mock activity starts "working". One spoken follow-up may request
+	# refinement and enter voiceinput; further speech must not build an
+	# unbounded queue while that activity remains busy.
+	createfile(MOCKSPEECH + "/listen", "final first queued turn\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"first queued turn", 5000), "first busy follow-up is queued");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=queued", 3000),
+		"queued follow-up is visible on the voice resource");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/control", "refine", 3000),
+		"first busy follow-up requests refinement");
+
+	createfile(MOCKSPEECH + "/listen", "");
+	createfile(MOCKUI + "/activity/0/conversation/voiceinput", "");
+	createfile(MOCKSPEECH + "/listen", "final second queued turn\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
+		"one turn queued", 5000), "additional busy follow-up reports the cap");
+	t.assert(waitnotfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"second queued turn", 1200), "additional busy follow-up is discarded");
+
+	# Once the activity becomes idle, the latch clears and a later turn is
+	# accepted normally.
+	createfile(MOCKSPEECH + "/listen", "");
+	createfile(MOCKUI + "/activity/0/status", "idle");
+	createfile(MOCKSPEECH + "/listen", "final after idle\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"after idle", 5000), "idle activity clears the queued-turn cap");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -585,6 +616,8 @@ init(nil: ref Draw->Context, args: list of string)
 		testGraceCancelDiscards);
 	runvm("GraceAppendMergesTurn", "-g" :: "600" :: "-w" :: "200" :: nil,
 		testGraceAppendMergesTurn);
+	runvm("BusyFollowupQueueIsCapped", "-w" :: "200" :: nil,
+		testBusyFollowupQueueIsCapped);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

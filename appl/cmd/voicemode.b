@@ -72,6 +72,7 @@ wakecooldown := 1500;
 gracems := 3000;		# grace window before a final is submitted; 0 = immediate
 confidencethreshold := 650;	# thousandths; confidence metadata is optional
 pendingconfirm := "";
+busyqueued := 0;		# at most one voice follow-up while the activity is busy
 
 testmode := 0;
 echoback := 0;
@@ -159,6 +160,16 @@ ctxstatus(actid: int, state: string)
 	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
 	writefile(path, "resource upsert path=/n/speech label=Voice type=audio status=" +
 		state + " via=voice-mode");
+}
+
+ctxqueued(actid: int, full: int)
+{
+	label := "Voice: queued";
+	if(full)
+		label = "Voice: busy; one turn queued";
+	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
+	writefile(path, "resource upsert path=/n/speech label=" + label +
+		" type=audio status=queued via=voice-mode");
 }
 
 partiallabel(text: string): string
@@ -677,8 +688,8 @@ WAITING, LISTENING, SENDING: con iota;
 # Submit a completed utterance as the turn (test mode: canned reply, no LLM).
 submitfinal(actid: int, text: string)
 {
-	ctxstatus(actid, "processing");
 	if(testmode) {
+		ctxstatus(actid, "processing");
 		noticeheard(actid, text);
 		saytext := testphrase;
 		if(echoback)
@@ -686,13 +697,29 @@ submitfinal(actid: int, text: string)
 		ctxstatus(actid, "speaking");
 		spawn saytts(saytext);
 	} else {
+		busy := agentbusy(actid);
+		if(!busy)
+			busyqueued = 0;
+		if(busy && busyqueued) {
+			log("busy: discarding additional queued voice turn: " + text);
+			ctxqueued(actid, 1);
+			chime("done");
+			return;
+		}
+		ctxstatus(actid, "processing");
 		# A follow-up against a busy activity takes conversational
 		# control at the next safe model/tool boundary, then remains
 		# queued on voiceinput as the next turn in the same session.
-		if(agentbusy(actid) && !approvalpending(actid))
+		if(busy && !approvalpending(actid))
 			controlinput(actid, "refine");
-		if(voiceinput(actid, text) < 0)
+		if(voiceinput(actid, text) < 0) {
 			ctxstatus(actid, "error");
+			return;
+		}
+		if(busy) {
+			busyqueued = 1;
+			ctxqueued(actid, 0);
+		}
 	}
 }
 
@@ -701,6 +728,7 @@ voiceloop()
 {
 	log("voice mode on");
 	pendingconfirm = "";
+	busyqueued = 0;
 	pendingsend := "";
 	drainresults();
 	actid := currentactivity();
@@ -731,6 +759,7 @@ voiceloop()
 				cancelspeech();
 				chime("off");
 				micoff();
+				busyqueued = 0;
 				ctxstatus(actid, "idle");
 				log("voice mode off");
 				return;

@@ -69,6 +69,7 @@ listenseq := 0;
 
 listentimeout := 10000;
 wakecooldown := 1500;
+gracems := 3000;		# grace window before a final is submitted; 0 = immediate
 confidencethreshold := 650;	# thousandths; confidence metadata is optional
 pendingconfirm := "";
 
@@ -86,7 +87,7 @@ silencefinals := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: voicemode [-d] [-e] [-p phrase] [-q confidence-permille] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
+	sys->fprint(stderr, "Usage: voicemode [-d] [-e] [-p phrase] [-g grace-ms] [-q confidence-permille] [-t ms] [-w ms] [-u /mnt/ui] [-s /n/speech]\n");
 	raise "fail:usage";
 }
 
@@ -178,6 +179,23 @@ ctxpartial(actid: int, text: string)
 	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
 	writefile(path, "resource upsert path=/n/speech label=" + partiallabel(text) +
 		" type=audio status=listening via=voice-mode");
+}
+
+# Grace window: the heard transcript is on the chip (and in the compose
+# draft) while the send timer runs, with a visible countdown so "say
+# cancel to stop it" has both something to judge and a deadline.
+ctxsending(actid: int, text: string, remainms: int)
+{
+	secs := (remainms + 999) / 1000;
+	text = strip(text);
+	for(i := 0; i < len text; i++)
+		if(text[i] == '=' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
+			text[i] = ' ';
+	if(len text > 30)
+		text = text[len text - 30:];
+	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
+	writefile(path, "resource upsert path=/n/speech label=Voice: sending in " +
+		string secs + "s: " + strip(text) + " type=audio status=sending via=voice-mode");
 }
 
 # Put the failure reason on the Voice chip itself. The conversation notice is
@@ -428,6 +446,15 @@ junkfinal(text: string): int
 	return 0;
 }
 
+# Words that discard the pending transcript during the send grace window.
+gracecancel(text: string): int
+{
+	n := normalize(text);
+	return n == "cancel" || n == "no" || n == "stop" || n == "wrong" ||
+		n == "never mind" || n == "nevermind" || n == "discard" ||
+		n == "scratch that";
+}
+
 approvalpending(actid: int): int
 {
 	path := sys->sprint("%s/activity/%d/status", ui, actid);
@@ -645,17 +672,49 @@ drainresults()
 	}
 }
 
-WAITING, LISTENING: con iota;
+WAITING, LISTENING, SENDING: con iota;
+
+# Submit a completed utterance as the turn (test mode: canned reply, no LLM).
+submitfinal(actid: int, text: string)
+{
+	ctxstatus(actid, "processing");
+	if(testmode) {
+		noticeheard(actid, text);
+		saytext := testphrase;
+		if(echoback)
+			saytext = text;
+		ctxstatus(actid, "speaking");
+		spawn saytts(saytext);
+	} else {
+		# A follow-up against a busy activity takes conversational
+		# control at the next safe model/tool boundary, then remains
+		# queued on voiceinput as the next turn in the same session.
+		if(agentbusy(actid) && !approvalpending(actid))
+			controlinput(actid, "refine");
+		if(voiceinput(actid, text) < 0)
+			ctxstatus(actid, "error");
+	}
+}
 
 # Active voice session. Runs until input-mode leaves "v".
 voiceloop()
 {
 	log("voice mode on");
 	pendingconfirm = "";
+	pendingsend := "";
 	drainresults();
 	actid := currentactivity();
 	state := WAITING;
 	listengen := 0;
+	# Grace-window bookkeeping. One timer per SENDING entry (identified by
+	# sendgen); appended speech only moves senddeadline, and the timer
+	# re-arms itself for the remainder when it fires early. Spawning a new
+	# timer per append instead would flood timerch's small buffer with
+	# stale ticks and the live one gets dropped (timer() sends
+	# non-blocking so an exited session never leaks a blocked proc).
+	sendgen := 0;
+	senddeadline := 0;
+	lastappend := "";
 	lastwake := -wakecooldown;
 	errorshown := 0;
 	draftinput(actid, "");
@@ -716,6 +775,65 @@ voiceloop()
 			spawn timer(timerch, listentimeout, listengen);
 			requestlisten(listengen);
 		rec := <-listench =>
+			if(state == SENDING) {
+				if(rec.gen != listengen)
+					continue;
+				(gkind, gtext, nil) := parselisten(rec.text);
+				if(gkind == LISTEN_EMPTY || junkfinal(gtext) && gkind == LISTEN_FINAL) {
+					sys->sleep(100);
+					requestlisten(listengen);
+					continue;
+				}
+				if(gkind == LISTEN_PARTIAL) {
+					draftinput(actid, pendingsend + " " + gtext);
+					sys->sleep(100);
+					requestlisten(listengen);
+					continue;
+				}
+				if(gkind == LISTEN_ERROR) {
+					# The pending text still sends when the grace
+					# timer fires; only the barge-in ear is lost.
+					logerr("listen during grace: " + strip(rec.text));
+					continue;
+				}
+				if(gracecancel(gtext)) {
+					log("grace cancel: " + gtext);
+					pendingsend = "";
+					listenseq++;
+					listengen = listenseq;
+					state = WAITING;
+					listenoff();
+					draftinput(actid, "");
+					ctxstatus(actid, "waiting");
+					spawn saytts("Cancelled.");
+					chime("done");
+					sys->sleep(100);
+					request(startwake);
+					continue;
+				}
+				# The whisper wrapper's sliding window re-emits the
+				# same utterance after a pause; appending it would
+				# turn one sentence into three. (Parakeet emits each
+				# final once, so this only guards the fallback.)
+				if(normalize(gtext) == lastappend) {
+					sys->sleep(100);
+					requestlisten(listengen);
+					continue;
+				}
+				# More speech: the turn was not over. Append and
+				# push the deadline out; the running tick timer
+				# covers the remainder.
+				log("grace append: " + gtext);
+				pendingsend += " " + gtext;
+				lastappend = normalize(gtext);
+				listenseq++;
+				listengen = listenseq;
+				senddeadline = sys->millisec() + gracems;
+				draftinput(actid, pendingsend);
+				ctxsending(actid, pendingsend, gracems);
+				requestlisten(listengen);
+				continue;
+			}
 			if(state != LISTENING)
 				continue;
 			if(rec.gen != listengen)
@@ -750,11 +868,11 @@ voiceloop()
 			}
 			listenseq++;
 			listengen = listenseq;
-			state = WAITING;
-			listenoff();
-			draftinput(actid, "");
 			errorshown = 0;
 			if(junkfinal(text)) {
+				state = WAITING;
+				listenoff();
+				draftinput(actid, "");
 				log("listen junk: " + text);
 				ctxstatus(actid, "waiting");
 				chime("done");
@@ -764,6 +882,9 @@ voiceloop()
 			}
 			log("transcript: " + text);
 			if(handlecontrol(actid, text)) {
+				state = WAITING;
+				listenoff();
+				draftinput(actid, "");
 				pendingconfirm = "";
 				ctxstatus(actid, "waiting");
 				chime("done");
@@ -771,6 +892,7 @@ voiceloop()
 				request(startwake);
 				continue;
 			}
+			confirmed := 0;
 			if(pendingconfirm != "") {
 				answer := normalize(text);
 				if(answer == "yes" || answer == "confirm" || answer == "correct" ||
@@ -778,8 +900,14 @@ voiceloop()
 					text = pendingconfirm;
 					pendingconfirm = "";
 					confidence = 1000;
+					# An explicit yes skips the grace window: the
+					# user already vetted this exact text.
+					confirmed = 1;
 				} else if(answer == "no" || answer == "wrong" || answer == "cancel") {
 					pendingconfirm = "";
+					state = WAITING;
+					listenoff();
+					draftinput(actid, "");
 					ctxstatus(actid, "waiting");
 					spawn saytts("Okay. Please say it again.");
 					chime("done");
@@ -793,6 +921,9 @@ voiceloop()
 				}
 			}
 			if(confidence >= 0 && confidence < confidencethreshold) {
+				state = WAITING;
+				listenoff();
+				draftinput(actid, "");
 				pendingconfirm = text;
 				ctxstatus(actid, "confirming");
 				noticeconfirm(actid, text);
@@ -802,23 +933,34 @@ voiceloop()
 				request(startwake);
 				continue;
 			}
-			ctxstatus(actid, "processing");
-			if(testmode) {
-				noticeheard(actid, text);
-				saytext := testphrase;
-				if(echoback)
-					saytext = text;
-				ctxstatus(actid, "speaking");
-				spawn saytts(saytext);
-			} else {
-				# A follow-up against a busy activity takes conversational
-				# control at the next safe model/tool boundary, then remains
-				# queued on voiceinput as the next turn in the same session.
-				if(agentbusy(actid) && !approvalpending(actid))
-					controlinput(actid, "refine");
-				if(voiceinput(actid, text) < 0)
-				ctxstatus(actid, "error");
+			if(gracems > 0 && !confirmed) {
+				# Grace window: show the transcript (chip + compose
+				# draft) and keep listening. "cancel" discards it,
+				# more speech appends to it, the timer submits it.
+				# The listen helper stays armed so no restart
+				# latency lands inside the window.
+				pendingsend = text;
+				lastappend = normalize(text);
+				state = SENDING;
+				sendgen = listengen;
+				senddeadline = sys->millisec() + gracems;
+				draftinput(actid, pendingsend);
+				ctxsending(actid, pendingsend, gracems);
+				chime("done");
+				# Tick timer: fires every ≤500ms to refresh the
+				# countdown, re-arming until the deadline (which
+				# appended speech may keep moving) passes.
+				tick := gracems;
+				if(tick > 500)
+					tick = 500;
+				spawn timer(timerch, tick, sendgen);
+				requestlisten(listengen);
+				continue;
 			}
+			state = WAITING;
+			listenoff();
+			draftinput(actid, "");
+			submitfinal(actid, text);
 			# Re-arm immediately: a wake during the spoken response is
 			# barge-in. The pacing sleep keeps mock file trees (always-
 			# ready reads) from spinning.
@@ -837,6 +979,29 @@ voiceloop()
 				draftinput(actid, "");
 				ctxtimeout(actid);
 				chime("done");
+				request(startwake);
+			} else if(state == SENDING && gen == sendgen) {
+				now := sys->millisec();
+				if(now < senddeadline) {
+					# Deadline not reached (or moved by appended
+					# speech): refresh the countdown and re-arm.
+					wait := senddeadline - now;
+					if(wait > 500)
+						wait = 500;
+					ctxsending(actid, pendingsend, senddeadline - now);
+					spawn timer(timerch, wait, sendgen);
+					continue;
+				}
+				# Grace window elapsed with no cancel: submit.
+				sendtext := pendingsend;
+				pendingsend = "";
+				listenseq++;
+				listengen = listenseq;
+				state = WAITING;
+				listenoff();
+				draftinput(actid, "");
+				submitfinal(actid, sendtext);
+				sys->sleep(100);
 				request(startwake);
 			}
 		}
@@ -867,6 +1032,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testmode = 1;
 		'p' =>	testphrase = arg->earg();
 			testmode = 1;
+		'g' =>	gracems = int arg->earg();
 		'q' =>	confidencethreshold = int arg->earg();
 		't' =>	listentimeout = int arg->earg();
 		'w' =>	wakecooldown = int arg->earg();
@@ -875,6 +1041,8 @@ init(nil: ref Draw->Context, args: list of string)
 		* =>	usage();
 		}
 	if(confidencethreshold < 0 || confidencethreshold > 1000)
+		usage();
+	if(gracems < 0)
 		usage();
 
 	evch = chan[8] of string;

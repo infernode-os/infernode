@@ -186,7 +186,13 @@ rundaemon(pidch: chan of int)
 		sys->fprint(sys->fildes(2), "cannot load voicemode: %r\n");
 		return;
 	}
-	vm->init(nil, "voicemode" :: "-u" :: MOCKUI :: "-s" :: MOCKSPEECH :: daemonargs);
+	# -g 0 keeps the legacy immediate-submit semantics for the pre-grace
+	# tests; a later -g in daemonargs overrides it (Arg keeps the last).
+	# The mock file tree re-delivers the same final on every read, which
+	# in grace mode reads as "more speech" and restarts the window
+	# forever — grace tests manage the listen file explicitly instead.
+	vm->init(nil, "voicemode" :: "-u" :: MOCKUI :: "-s" :: MOCKSPEECH ::
+		"-g" :: "0" :: daemonargs);
 }
 
 startdaemon(extra: list of string)
@@ -480,6 +486,65 @@ testReentryAndInputModeExit(t: ref T)
 		"exit releases the microphone (mic off ctl write)");
 }
 
+# Grace window (-g): a good final is announced (chip status=sending, text in
+# the compose draft) and only injected after the window elapses. The mock's
+# re-delivery of the same final keeps restarting the window (it reads as
+# appended speech), so each test rewrites the listen file to advance.
+testGraceSubmitsAfterWindow(t: ref T)
+{
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
+		"listening after wake");
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9500 graceful hello\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=sending", 5000),
+		"grace window announced on the chip");
+	# Stop the re-delivery; the window now runs out undisturbed.
+	createfile(MOCKSPEECH + "/listen", "");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "graceful hello"), "not injected inside the window");
+	draft := readfile(MOCKUI + "/activity/0/conversation/draft");
+	t.assert(hassubstr(draft, "graceful hello"), "pending transcript in the draft");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"graceful hello", 5000), "injected after the grace window");
+}
+
+testGraceCancelDiscards(t: ref T)
+{
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
+		"listening after wake");
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9500 do not send this\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=sending", 5000),
+		"grace window announced on the chip");
+	# The re-delivered final keeps the window open until this lands.
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9500 cancel\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=waiting", 5000),
+		"spoken cancel returns to waiting");
+	createfile(MOCKSPEECH + "/listen", "");
+	sys->sleep(900);	# longer than the grace window
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "do not send this"),
+		"cancelled transcript is never injected");
+}
+
+testGraceAppendMergesTurn(t: ref T)
+{
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=listening", 5000),
+		"listening after wake");
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9500 first part\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl", "status=sending", 5000),
+		"grace window announced on the chip");
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9500 second part\n");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/draft", "second part", 5000),
+		"appended speech lands in the draft");
+	createfile(MOCKSPEECH + "/listen", "");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
+		"second part", 5000), "merged turn injected after the window");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(hassubstr(vi, "first part"), "merged turn keeps the first utterance");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -514,6 +579,12 @@ init(nil: ref Draw->Context, args: list of string)
 	runvm("TestModeControlIntentStillWorks", "-p" :: "canned reply" :: nil,
 		testTestModeControlIntentStillWorks);
 	runvm("ReentryAndInputModeExit", nil, testReentryAndInputModeExit);
+	runvm("GraceSubmitsAfterWindow", "-g" :: "600" :: "-w" :: "200" :: nil,
+		testGraceSubmitsAfterWindow);
+	runvm("GraceCancelDiscards", "-g" :: "600" :: "-w" :: "200" :: nil,
+		testGraceCancelDiscards);
+	runvm("GraceAppendMergesTurn", "-g" :: "600" :: "-w" :: "200" :: nil,
+		testGraceAppendMergesTurn);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

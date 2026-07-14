@@ -69,6 +69,23 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
   `voicemode -q`.
 - Namespace-composable cross-host launch scripts under `/lib/voice`, plus a
   loadable `SpeechEngine` `.dis` ABI and provider-backed reference module.
+- A send **grace window** (default 3 s, `voicemode -g`, 0 = immediate): a
+  completed utterance is shown in the compose draft and on the Voice chip
+  before it is submitted; saying "cancel" (or Esc) discards it, and more
+  speech appends to it and restarts the window. An explicitly confirmed
+  low-confidence transcript skips the window.
+- Parakeet realtime STT as the preferred default: the InferNode-owned
+  `tools/parakeet_stream.cpp` adapter streams stdin PCM through the
+  cache-aware `parakeet_realtime_eou_120m-v1` model, so end-of-utterance is
+  detected by the model rather than by energy-VAD silence. The installer
+  builds it when possible and writes the chosen stack to
+  `speech.ctl.sh` (applied by boot.sh); the whisper wrapper remains the
+  fallback. Boot also selects `engine kokoro` so assistant speech uses
+  Kokoro instead of the robotic host `say`.
+- One voice affordance: the compose-row button (formerly press-to-dictate
+  "mic") and Ctrl+Space in the conversation view now toggle the same voice
+  mode as `Esc-V`, Option/Alt+V, and the Voice chip. The one-shot
+  dictation-into-compose pathway is removed.
 - Tests: `tests/speech_wake_test.b`, `tests/speech_listen_test.b`,
   `tests/speech_kokoro_test.b` (fake host helpers via ctl; includes
   serveloop-liveness assertions), and `tests/voicemode_test.b` (daemon state

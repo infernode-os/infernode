@@ -148,6 +148,11 @@ jobs:
         ROOT=. bash tests/host/nsaudit_profiles_test.sh
         ROOT=. bash tests/host/nsaudit_path_semantics_test.sh
 
+    - name: Run llmsrv session capability checks
+      run: |
+        chmod +x tests/host/llmsrv_session_capability_test.sh
+        ROOT=. tests/host/llmsrv_session_capability_test.sh
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test

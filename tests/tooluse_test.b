@@ -75,7 +75,7 @@ hasllm(): int
 
 # ---- Test: session creation ----------------------------------------
 
-# Test that createsession() returns a numeric session ID via /mnt/llm/new.
+# Test that createsession() returns a 128-bit capability via /mnt/llm/new.
 testSessionCreate(t: ref T)
 {
 	if(!hasllm()) {
@@ -86,17 +86,19 @@ testSessionCreate(t: ref T)
 	id := agentlib->createsession();
 	t.assertnotnil(id, "session id is non-empty");
 
-	# Session ID from llmsrv is a decimal integer
+	# Session names are 32 lowercase hexadecimal characters (INFR-321).
 	ok := 1;
+	if(len id != 32)
+		ok = 0;
 	for(i := 0; i < len id; i++) {
 		c := id[i];
-		if(c < '0' || c > '9') {
+		if(!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
 			ok = 0;
 			break;
 		}
 	}
-	t.assert(ok, "session id is numeric");
-	t.log(sys->sprint("session id: %s", id));
+	t.assert(ok, "session name is a 128-bit capability token");
+	t.log(sys->sprint("session token: %s", id));
 }
 
 # ---- Test: tool registration ---------------------------------------

@@ -64,7 +64,10 @@ speech_kokoro_test
 # tools not bootstrapped) fall back to whatever bytecode is already there.
 if command -v mk >/dev/null 2>&1; then
   echo "== building test bytecode"
-  buildlog=$(mktemp -t speech-regress-build)
+  buildlog=$(mktemp "${TMPDIR:-/tmp}/speech-regress-build.XXXXXX") || {
+    echo "speech-regress: could not create build log" >&2
+    exit 1
+  }
   for t in $SUITES; do
     if ! (cd tests && mk "$t.dis") >>"$buildlog" 2>&1; then
       echo "speech-regress: build failed for $t:" >&2
@@ -78,7 +81,10 @@ else
   echo "speech-regress: native mk not on PATH; running existing bytecode" >&2
 fi
 
-logdir=$(mktemp -d -t speech-regress)
+logdir=$(mktemp -d "${TMPDIR:-/tmp}/speech-regress.XXXXXX") || {
+  echo "speech-regress: could not create log directory" >&2
+  exit 1
+}
 trap 'rm -rf "$logdir"' EXIT
 
 failed=""

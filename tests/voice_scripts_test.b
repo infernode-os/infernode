@@ -18,6 +18,8 @@ implement VoiceScriptsTest;
 #   - lib/voice/dial exists, binds devaudio, writes buffer-cap
 #     verbs, calls mount.
 #   - lib/voice/test-tone exists (single-shell loopback recipe).
+#   - speech-terminal / speech-engine / speech-capture automate the documented
+#     remote speech namespace topologies without embedding host policy.
 #
 
 include "sys.m";
@@ -131,6 +133,45 @@ testTestToneShape(t: ref T)
 		"voice/test-tone targets the loopback");
 }
 
+testSpeechTerminalShape(t: ref T)
+{
+	s := script_contents(t, "/lib/voice/speech-terminal");
+	t.assert(contains(s, "sh /lib/voice/listen"),
+		"speech-terminal exports local audio through voice/listen");
+	t.assert(contains(s, "mount -A $engine $provider"),
+		"speech-terminal mounts the remote provider");
+	t.assert(contains(s, "echo 'provider '$provider > /n/speech/ctl"),
+		"speech-terminal selects the mounted provider");
+	t.assert(contains(s, "echo 'duplex half' > /n/speech/ctl"),
+		"speech-terminal preserves the half-duplex default");
+}
+
+testSpeechEngineShape(t: ref T)
+{
+	s := script_contents(t, "/lib/voice/speech-engine");
+	t.assert(contains(s, "mount -A $terminal $termmnt"),
+		"speech-engine imports terminal audio");
+	t.assert(contains(s, "speechshim9p -m $provider"),
+		"speech-engine starts a provider at an isolated mount");
+	t.assert(contains(s, "echo 'audiodev '$termmnt'/audio' > $provider/ctl"),
+		"speech-engine routes playback and default capture through imported audio");
+	t.assert(contains(s, "echo 'micmode device' > $provider/ctl"),
+		"speech-engine enables namespace-backed PCM capture");
+	t.assert(contains(s, "export $provider"),
+		"speech-engine exports the provider contract");
+}
+
+testSpeechCaptureShape(t: ref T)
+{
+	s := script_contents(t, "/lib/voice/speech-capture");
+	t.assert(contains(s, "mount -A $capture $capturemnt"),
+		"speech-capture imports a remote device tree");
+	t.assert(contains(s, "echo 'capturedev '$capturemnt'/audio' > /n/speech/ctl"),
+		"speech-capture changes capture without changing playback");
+	t.assert(contains(s, "echo 'micmode device' > /n/speech/ctl"),
+		"speech-capture enables device-fed helpers");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -149,6 +190,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ListenShape", testListenShape);
 	run("DialShape", testDialShape);
 	run("TestToneShape", testTestToneShape);
+	run("SpeechTerminalShape", testSpeechTerminalShape);
+	run("SpeechEngineShape", testSpeechEngineShape);
+	run("SpeechCaptureShape", testSpeechCaptureShape);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -76,6 +76,13 @@ TARG=\
 	sdl3_test.dis\
 	sort_test.dis\
 	spawn_test.dis\
+	speech9p_voice_test.dis\
+	speech_kokoro_test.dis\
+	speech_listen_test.dis\
+	speech_wake_test.dis\
+	speechshim_test.dis\
+	speechtest_test.dis\
+	voicemode_test.dis\
 	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\

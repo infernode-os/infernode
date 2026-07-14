@@ -116,9 +116,88 @@ sleep 1
 # /tmp truly doesn't exist after this, the mkdir will print to stderr
 # instead of being silenced.
 mkdir -p /tmp
+
+# Speech stack. speechshim9p adapts external host helper CLIs
+# (whisper-stream, kokoro, openwakeword) to the speech provider contract
+# at /n/speechshim; speech9p serves the stable /n/speech surface and is
+# pointed at the shim as its provider. Any other provider serving the
+# same contract (a parakeet export, a remote 9P mount) can replace it
+# with one ctl write. Helpers are external installs and every path
+# soft-fails with an error record, so starting both unconditionally is
+# safe. speech9p must come before lucibridge, which registers the speech
+# resource tile only if /n/speech is mounted at its startup.
+> /tmp/speechshim9p.log
+/dis/veltro/speechshim9p >[2] /tmp/speechshim9p.log
+> /tmp/speech9p.log
+/dis/veltro/speech9p >[2] /tmp/speech9p.log
+echo provider /n/speechshim > /n/speech/ctl
+echo duplex half > /n/speech/ctl
+
+# Host speech-helper configuration. The installer writes its chosen stack
+# to $prefix/speech.ctl.sh (Kokoro TTS + Parakeet realtime STT when it
+# could be built, whisper fallback otherwise) and boot replays that file
+# verbatim — the installer is the single source of truth, so new helper
+# stacks need no boot.sh change. $speechhelperbin (preset by
+# boot-speechtest.sh) bypasses the file and takes the legacy hardcoded
+# path, because the test boots point it at fake helper bins.
+#
+# Legacy path: $speechhelperbin names the bin/ dir created by
+# tools/install-speech-helpers.sh — a HOST path, because the shim execs
+# the helpers through devcmd. Without any of this the shim keeps its
+# built-in defaults — bare command names that are not on the host PATH —
+# and the wake helper can never exec, which silently makes voice mode
+# unable to hear anything at all.
+#
+# The prefix is a host path, so it is probed through /n/local (the host root).
+# The wake phrase is "hey jarvis" — the only pretrained openWakeWord model
+# shipped today (see tools/install-speech-helpers.sh).
+speechctlfile=()
+if {~ $#speechhelperbin 0} {
+	speechprefix=`{echo 'echo ${INFERNODE_SPEECH_HOME:-$HOME/.local/share/infernode-speech}' | os sh >[2] /dev/null}
+	if {ftest -f /n/local^$speechprefix^/speech.ctl.sh} {
+		speechctlfile=/n/local^$speechprefix^/speech.ctl.sh
+	}
+	if {ftest -d /n/local^$speechprefix^/bin} {
+		speechhelperbin=$speechprefix^/bin
+	}
+}
+if {! ~ $#speechctlfile 0} {
+	sh $speechctlfile
+	echo 'boot: speech configured from' $speechctlfile
+}{
+	if {! ~ $#speechhelperbin 0} {
+		# engine kokoro routes speech9p's say through the provider's
+		# Kokoro instead of the robotic host `say` command (engine cmd).
+		echo engine kokoro > /n/speech/ctl
+		echo kokorobin $speechhelperbin/kokoro-cli > /n/speech/ctl
+		echo whisperstreambin $speechhelperbin/whisper-stream-cli > /n/speech/ctl
+		echo wakebin $speechhelperbin/openwakeword-cli > /n/speech/ctl
+		echo whispermodel $speechhelperbin/../models/ggml-base.en.bin > /n/speech/ctl
+		echo voice af_bella > /n/speech/ctl
+		echo 'wakeword hey jarvis' > /n/speech/ctl
+		echo wakethreshold 0.5 > /n/speech/ctl
+		echo 'boot: speech helpers configured from' $speechhelperbin
+	}{
+		echo 'boot: no speech helpers found — voice mode will not hear or speak.'
+		echo 'boot: run tools/install-speech-helpers.sh, then restart.'
+	}
+}
+
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 sleep 1
+
+# Voice-mode daemon — resident and idle until /mnt/ui/input-mode becomes
+# "v" (via /voice mode on, or a spoken control intent). Pre-spawned here
+# so entering voice mode has no first-use startup latency. $voicetestargs
+# (set by boot-speechtest.sh) puts the daemon in its LLM-free test mode:
+# finals are answered with a canned TTS phrase instead of an LLM turn.
+> /tmp/voicemode.log
+if {! ~ $#voicetestargs 0} {
+	voicemode $voicetestargs >[2] /tmp/voicemode.log &
+}{
+	voicemode >[2] /tmp/voicemode.log &
+}
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno

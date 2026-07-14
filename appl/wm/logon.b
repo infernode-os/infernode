@@ -114,9 +114,14 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	if(smallfont == nil)
 		smallfont = bodyfont;
 
-	# If factotum was already started with secstore backing (e.g. headless
-	# mode with $SECSTORE_PASSWORD), skip the login screen entirely.
-	if(factotumhaskeys()) {
+	# Skip the login screen only when the profile explicitly unlocked
+	# secstore from $SECSTORE_PASSWORD (headless mode) — it sets
+	# $secstoreautounlock on exactly that path. Factotum merely holding
+	# keys is NOT evidence of authentication: the profile provisions
+	# API-key fallbacks (host env vars, /lib/veltro/keys files) into
+	# factotum before logon runs, and an API key must never bypass the
+	# password screen.
+	if(secstoreautounlocked() && factotumhaskeys()) {
 		createsecstoresentinel();
 		return;
 	}
@@ -883,6 +888,22 @@ factotumhaskeys(): int
 	buf := array[64] of byte;
 	n := sys->read(fd, buf, len buf);
 	return n > 0;
+}
+
+# Set by lib/sh/profile only on the $SECSTORE_PASSWORD auto-unlock path.
+secstoreautounlocked(): int
+{
+	fd := sys->open("/env/secstoreautounlock", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[16] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	s := string buf[0:n];
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == 0))
+		s = s[0:len s - 1];
+	return s == "1";
 }
 
 secstoreacctexists(): int

@@ -50,12 +50,14 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
+include "speech.m";
+
 Speech9p: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
 # Qid layout for synthetic files
-Qroot, Qctl, Qsay, Qhear, Qvoices: con iota;
+Qroot, Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel, Qchime: con iota;
 
 # Per-fid state for say and hear operations
 FidState: adt {
@@ -70,6 +72,8 @@ FidState: adt {
 ENGINE_CMD: con 0;   # Host OS commands via #C (devcmd)
 ENGINE_API: con 1;   # HTTP API (OpenAI, etc.)
 ENGINE_LOCAL: con 2; # Local ML models (Piper TTS, whisper.cpp STT)
+ENGINE_KOKORO: con 3; # Kokoro TTS + streaming helper STT/wake
+ENGINE_MODULE: con 4; # Dynamically loaded SpeechEngine `.dis` module
 
 # Current configuration
 engine := ENGINE_CMD;
@@ -81,6 +85,8 @@ apikey := "";
 audrate := 22050;
 audchans := 1;
 audbits := 16;
+enginepath := "";
+engineplugin: SpeechEngine;
 
 # Platform-specific defaults for cmd engine
 cmdtts := "";    # Set in initplatform()
@@ -93,10 +99,56 @@ pipermodel := "";    # Path to .onnx voice model
 whisperbin := "whisper-cli";
 whispermodel := "";  # Path to .bin GGML model
 
+# Voice-mode speech provider. speech9p does not run streaming helpers
+# itself: wake, streaming listen, and voice-mode TTS are consumed from a
+# provider mount serving the contract documented in
+# docs/SPEECH-ARCHITECTURE.md — listen/wake/say/cancel/chime plus optional
+# ctl/voices. speechshim9p adapts external helper CLIs (whisper-stream,
+# kokoro, openwakeword) to that contract; a parakeet export or a remote
+# 9P-mounted provider serves the same shape. The parakeet*/pipersay ctl
+# keys below are compatibility aliases into the same state.
+providermount := "/n/parakeet";
+providerlisten := "/n/parakeet/listen";
+providersay := "/n/parakeet/say";
+providerwake := "/n/parakeet/wake";
+providerlistenfd: ref Sys->FD;
+providerwakefd: ref Sys->FD;
+
+# Helper configuration retained for introspection and forwarded to the
+# provider's ctl when one is mounted (speechshim9p consumes these keys).
+kokorobin := "kokoro-cli";
+ttsengine := "engine";
+listenengine := "whisper";
+whisperstreambin := "whisper-stream";
+wakebin := "openwakeword-cli";
+wakeword := "hey lucia";
+wakethreshold := "0.5";
+cancelreq := 0;
+
 stderr: ref Sys->FD;
 user: string;
 mountpt := "/n/speech";
 fidstates: list of ref FidState;
+
+# Async helper completion. listen/wake/hear reads run external helpers that
+# can block indefinitely (a wake read blocks until the wake word is spoken).
+# Running them inline would freeze the serveloop and with it every other 9P
+# request — including the /n/speech/cancel write that barge-in depends on.
+# Instead the read is parked on asyncpending, the helper runs in a spawned
+# proc, and its completion is delivered to the serveloop through helperc.
+# Flush and Clunk remove pending entries; completions whose entry is gone
+# are dropped.
+Helperdone: adt {
+	kind:   int;                # Qlisten, Qwake, Qhear, Qsay, Qsayq
+	fid:    int;
+	m:      ref Tmsg.Read;      # parked request; reply is built from it
+	result: array of byte;
+};
+helperc: chan of ref Helperdone;
+asyncpending: list of (int, int);   # (tag, fid) of reads awaiting a helper
+listenbusy := 0;
+wakebusy := 0;
+hearbusy := 0;
 
 nomod(s: string)
 {
@@ -106,10 +158,11 @@ nomod(s: string)
 
 usage()
 {
-	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-k apikey]\n");
+	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-E module.dis] [-k apikey]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /n/speech)\n");
-	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local\n");
+	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local, kokoro\n");
+	sys->fprint(stderr, "  -E module.dis Load a SpeechEngine module and select it\n");
 	sys->fprint(stderr, "  -k key        API key (for api engine)\n");
 	sys->fprint(stderr, "  -u url        API base URL\n");
 	sys->fprint(stderr, "  -v voice      Default voice\n");
@@ -152,11 +205,13 @@ init(nil: ref Draw->Context, args: list of string)
 			"cmd" =>	engine = ENGINE_CMD;
 			"api" =>	engine = ENGINE_API;
 			"local" =>	engine = ENGINE_LOCAL;
+			"kokoro" =>	engine = ENGINE_KOKORO;
 			* =>
 				sys->fprint(stderr, "speech9p: unknown engine '%s'\n", e);
 				usage();
 			}
 			engineexplicit = 1;
+		'E' =>	enginepath = arg->earg();
 		'k' =>	apikey = arg->earg();
 		'u' =>	apiurl = arg->earg();
 		'v' =>	voice = arg->earg();
@@ -167,6 +222,14 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Detect platform and set defaults
 	initplatform();
+	if(enginepath != "") {
+		path := enginepath;
+		err := loadengine(path);
+		if(err != nil && err != "") {
+			sys->fprint(stderr, "speech9p: %s\n", err);
+			raise "fail:engine";
+		}
+	}
 
 	sys->pctl(Sys->FORKFD, nil);
 
@@ -179,6 +242,8 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "speech9p: can't create pipe: %r\n");
 		raise "fail:pipe";
 	}
+
+	helperc = chan of ref Helperdone;
 
 	navops := chan of ref Navop;
 	spawn navigator(navops);
@@ -214,8 +279,12 @@ initplatform()
 			cmdtts = "say";
 		if(cmdstt == "")
 			cmdstt = "whisper-cli";
-		if(voice == "")
-			voice = "samantha";
+		if(voice == "") {
+			if(engine == ENGINE_KOKORO)
+				voice = "af_bella";
+			else
+				voice = "samantha";
+		}
 	"linux" =>
 		# Linux: prefer local ML engine if Piper/whisper are available
 		# On Jetson (ARM64 + GPU), these get CUDA acceleration automatically
@@ -266,6 +335,39 @@ detectplatform(): string
 	return "unknown";
 }
 
+speechconfig(): ref Speech->Config
+{
+	infmt := ref Speech->AudioFmt(audrate, audchans, audbits, "pcm");
+	outfmt := ref Speech->AudioFmt(audrate, audchans, audbits, "pcm");
+	return ref Speech->Config("module", voice, lang, apiurl, apikey,
+		cmdtts, cmdstt, providermount, infmt, outfmt);
+}
+
+configureplugin(): string
+{
+	if(engineplugin == nil)
+		return "speech engine module is not loaded";
+	return engineplugin->configure(speechconfig());
+}
+
+loadengine(path: string): string
+{
+	m := load SpeechEngine path;
+	if(m == nil)
+		return sys->sprint("cannot load speech engine %s: %r", path);
+	err := m->init();
+	if(err != nil && err != "")
+		return err;
+	err = m->configure(speechconfig());
+	if(err != nil && err != "")
+		return err;
+	engineplugin = m;
+	enginepath = path;
+	engine = ENGINE_MODULE;
+	engineexplicit = 1;
+	return nil;
+}
+
 # Read current config as text
 readconfig(): string
 {
@@ -274,6 +376,10 @@ readconfig(): string
 		ename = "api";
 	else if(engine == ENGINE_LOCAL)
 		ename = "local";
+	else if(engine == ENGINE_KOKORO)
+		ename = "kokoro";
+	else if(engine == ENGINE_MODULE)
+		ename = "module";
 
 	result := "engine " + ename + "\n";
 	result += "voice " + voice + "\n";
@@ -281,6 +387,9 @@ readconfig(): string
 	result += "rate " + string audrate + "\n";
 	result += "chans " + string audchans + "\n";
 	result += "bits " + string audbits + "\n";
+	result += "module " + enginepath + "\n";
+	if(engineplugin != nil)
+		result += "modulename " + engineplugin->name() + "\n";
 
 	if(engine == ENGINE_CMD) {
 		result += "cmdtts " + cmdtts + "\n";
@@ -301,6 +410,18 @@ readconfig(): string
 		result += "whisperbin " + whisperbin + "\n";
 		result += "whispermodel " + whispermodel + "\n";
 	}
+
+	result += "kokorobin " + kokorobin + "\n";
+	result += "ttsengine " + ttsengine + "\n";
+	result += "listenengine " + listenengine + "\n";
+	result += "whisperstreambin " + whisperstreambin + "\n";
+	result += "wakebin " + wakebin + "\n";
+	result += "wakeword " + wakeword + "\n";
+	result += "wakethreshold " + wakethreshold + "\n";
+	result += "provider " + providermount + "\n";
+	result += "parakeetmount " + providermount + "\n";
+	result += "parakeetlisten " + providerlisten + "\n";
+	result += "pipersay " + providersay + "\n";
 
 	return result;
 }
@@ -329,8 +450,17 @@ applyconfig(cmd: string): string
 		"cmd" =>	engine = ENGINE_CMD;
 		"api" =>	engine = ENGINE_API;
 		"local" =>	engine = ENGINE_LOCAL;
+		"kokoro" =>	engine = ENGINE_KOKORO;
+		"module" =>
+			if(engineplugin == nil)
+				return "error: load a module first with: module /path/engine.dis";
+			engine = ENGINE_MODULE;
 		* =>		return "error: unknown engine: " + val;
 		}
+	"module" =>
+		err := loadengine(val);
+		if(err != nil && err != "")
+			return "error: " + err;
 	"voice" =>
 		voice = val;
 	"lang" =>
@@ -366,11 +496,76 @@ applyconfig(cmd: string): string
 		whisperbin = val;
 	"whispermodel" =>
 		whispermodel = val;
+		forwardprovider(key, val);
+	"kokorobin" =>
+		kokorobin = val;
+		forwardprovider(key, val);
+	"ttsengine" =>
+		case val {
+		"engine" or "piper" =>
+			ttsengine = val;
+		* =>
+			return "error: unknown ttsengine: " + val;
+		}
+	"listenengine" =>
+		case val {
+		"whisper" or "parakeet" =>
+			if(listenengine != val)
+				resetprovider();
+			listenengine = val;
+		* =>
+			return "error: unknown listenengine: " + val;
+		}
+	"whisperstreambin" =>
+		whisperstreambin = val;
+		forwardprovider(key, val);
+	"wakebin" =>
+		wakebin = val;
+		forwardprovider(key, val);
+	"wakeword" =>
+		wakeword = val;
+		forwardprovider(key, val);
+	"wakethreshold" =>
+		wakethreshold = val;
+		forwardprovider(key, val);
+	"audiodev" or "capturedev" or "micmode" or "capturerate" or "duplex" or "mic" or "listen" =>
+		# Audio routing lives in the provider (docs/SPEECH-REMOTE-AUDIO.md);
+		# speech9p only passes the knobs through. `mic off` is written by
+		# voicemode on voice-mode exit so the provider releases the
+		# microphone; the next listen/wake read re-arms it. `listen off`
+		# is written at the end of each voice turn so the STT helper is
+		# not transcribing between turns.
+		forwardprovider(key, val);
+	"provider" or "parakeetmount" =>
+		resetprovider();
+		providermount = val;
+		providerlisten = val + "/listen";
+		providersay = val + "/say";
+		providerwake = val + "/wake";
+	"parakeetlisten" =>
+		resetprovider();
+		providerlisten = val;
+	"pipersay" =>
+		providersay = val;
 	* =>
 		return "error: unknown config key: " + key;
 	}
+	if(engine == ENGINE_MODULE) {
+		err := configureplugin();
+		if(err != nil && err != "")
+			return "error: " + err;
+	}
 
 	return "ok";
+}
+
+# Best-effort write-through of helper configuration to the mounted
+# provider's ctl (speechshim9p consumes these keys; other providers may
+# ignore them).
+forwardprovider(key, val: string)
+{
+	if(providermount != "")
+		writemounted(providermount + "/ctl", key + " " + val + "\n");
 }
 
 # List voices for current engine
@@ -383,6 +578,15 @@ listvoices(): string
 		return listapivoices();
 	ENGINE_LOCAL =>
 		return listlocalvoices();
+	ENGINE_KOKORO =>
+		return listkokorovoices();
+	ENGINE_MODULE =>
+		if(engineplugin == nil || !(engineplugin->caps() & Speech->CAPTTS))
+			return "(loaded module has no TTS capability)\n";
+		result := "";
+		for(vs := engineplugin->voices(); vs != nil; vs = tl vs)
+			result += hd vs + "\n";
+		return result;
 	}
 	return "";
 }
@@ -436,6 +640,8 @@ dosay(text: string): string
 {
 	if(text == "")
 		return "error: no text to speak";
+	if(ttsengine == "piper")
+		return sayprovider(text);
 
 	case engine {
 	ENGINE_CMD =>
@@ -444,8 +650,38 @@ dosay(text: string): string
 		return sayapi(text);
 	ENGINE_LOCAL =>
 		return saylocal(text);
+	ENGINE_KOKORO =>
+		return sayprovider(text);
+	ENGINE_MODULE =>
+		if(engineplugin == nil || !(engineplugin->caps() & Speech->CAPTTS))
+			return "error: loaded module has no TTS capability";
+		r := engineplugin->synthesize(text);
+		if(r == nil)
+			return "error: speech engine returned no TTS result";
+		if(r.err != nil && r.err != "")
+			return "error: " + r.err;
+		if(r.audio != nil && len r.audio > 0)
+			return playpcm(r.audio);
+		return "ok";
 	}
 	return "error: no engine configured";
+}
+
+# Delegate TTS to the provider's say file (speechshim9p runs Kokoro; a
+# parakeet export runs Piper; a remote provider does whatever it likes).
+sayprovider(text: string): string
+{
+	if(providersay == "")
+		return "error: speech provider say mount not configured";
+	if(writemounted(providersay, text + "\n") < 0)
+		return "error: speech provider say unavailable: " + providersay;
+	result := readmounted(providersay);
+	if(result == nil)
+		return "ok";
+	result = strip(result);
+	if(result == "")
+		return "ok";
+	return result;
 }
 
 # TTS via host command (platform-specific)
@@ -520,6 +756,80 @@ sayapi(text: string): string
 	return playpcm(audiodata);
 }
 
+# List voices from the provider's voices file when it serves one.
+listkokorovoices(): string
+{
+	if(providermount == "")
+		return "(no speech provider configured)\n";
+	result := readmounted(providermount + "/voices");
+	if(result == nil || strip(result) == "" || hasprefix(strip(result), "error:"))
+		return "af_bella\n(default; provider voices unavailable)\n";
+	return result;
+}
+
+# Streaming listen. The provider owns the persistent microphone/STT process;
+# speech9p only reads its stream file. Records are newline-delimited
+# "partial ..." / "final ..." lines (see module/speech.m Partial); speech9p
+# does not interpret them — voicemode consumes the stream.
+dolisten(): string
+{
+	if(providerlisten == "")
+		return "error: listen provider not configured";
+	if(providerlistenfd == nil) {
+		providerlistenfd = sys->open(providerlisten, Sys->OREAD);
+		if(providerlistenfd == nil)
+			return "error: listen provider unavailable: " + providerlisten;
+	}
+	result := readmountedfd(providerlistenfd);
+	if(result == nil) {
+		providerlistenfd = nil;
+		return "error: listen provider unavailable: " + providerlisten;
+	}
+	if(strip(result) == "")
+		return "error: listen provider produced no transcript";
+	return result;
+}
+
+resetprovider()
+{
+	providerlistenfd = nil;
+	providerwakefd = nil;
+}
+
+cancelprovider()
+{
+	if(providermount != "")
+		writemounted(providermount + "/cancel", "cancel\n");
+	resetprovider();
+}
+
+chimeprovider(kind: string)
+{
+	if(providermount != "")
+		writemounted(providermount + "/chime", strip(kind) + "\n");
+}
+
+# Wake. The provider blocks the read until its wake-word engine fires, then
+# returns one event line containing model/score.
+dowake(): string
+{
+	if(providerwake == "")
+		return "error: wake provider not configured";
+	if(providerwakefd == nil) {
+		providerwakefd = sys->open(providerwake, Sys->OREAD);
+		if(providerwakefd == nil)
+			return "error: wake provider unavailable: " + providerwake;
+	}
+	result := readmountedfd(providerwakefd);
+	if(result == nil) {
+		providerwakefd = nil;
+		return "error: wake provider unavailable: " + providerwake;
+	}
+	if(strip(result) == "")
+		return "error: wake provider produced no event";
+	return result;
+}
+
 # === STT: Speech to Text ===
 
 # Record from /dev/audio and transcribe
@@ -532,8 +842,41 @@ dohear(): string
 		return hearapi();
 	ENGINE_LOCAL =>
 		return hearlocal();
+	ENGINE_KOKORO =>
+		return dolisten();
+	ENGINE_MODULE =>
+		if(engineplugin == nil || !(engineplugin->caps() & Speech->CAPSTT))
+			return "error: loaded module has no STT capability";
+		fmt := ref Speech->AudioFmt(audrate, audchans, audbits, "pcm");
+		audio := capturepcm(hearduration);
+		if(audio == nil)
+			return "error: recording failed";
+		r := engineplugin->recognize(audio, fmt);
+		if(r == nil)
+			return "error: speech engine returned no STT result";
+		if(r.err != nil && r.err != "")
+			return "error: " + r.err;
+		return r.text;
 	}
 	return "error: no engine configured";
+}
+
+capturepcm(duration: int): array of byte
+{
+	configaudio("in");
+	fd := sys->open("/dev/audio", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	total := (audrate * audchans * (audbits / 8) * duration) / 1000;
+	data := array[total] of byte;
+	nread := 0;
+	while(nread < total) {
+		n := sys->read(fd, data[nread:], total - nread);
+		if(n <= 0)
+			break;
+		nread += n;
+	}
+	return data[0:nread];
 }
 
 # STT via host commands (record + transcribe, all host-side)
@@ -1389,6 +1732,32 @@ hasprefix(s, prefix: string): int
 	return len s >= len prefix && s[0:len prefix] == prefix;
 }
 
+readmounted(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	return readmountedfd(fd);
+}
+
+readmountedfd(fd: ref Sys->FD): string
+{
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return string buf[0:n];
+}
+
+writemounted(path, data: string): int
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte data;
+	return sys->write(fd, b, len b);
+}
+
 strip(s: string): string
 {
 	i := 0;
@@ -1400,6 +1769,100 @@ strip(s: string): string
 	if(i >= j)
 		return "";
 	return s[i:j];
+}
+
+# === Async helper reads ===
+
+addasync(tag, fid: int)
+{
+	asyncpending = (tag, fid) :: asyncpending;
+}
+
+isasync(tag: int): int
+{
+	for(l := asyncpending; l != nil; l = tl l) {
+		(t, nil) := hd l;
+		if(t == tag)
+			return 1;
+	}
+	return 0;
+}
+
+cancelasynctag(tag: int)
+{
+	newlist: list of (int, int);
+	for(l := asyncpending; l != nil; l = tl l) {
+		(t, nil) := hd l;
+		if(t != tag)
+			newlist = hd l :: newlist;
+	}
+	asyncpending = newlist;
+}
+
+cancelasyncfid(fid: int)
+{
+	newlist: list of (int, int);
+	for(l := asyncpending; l != nil; l = tl l) {
+		(nil, f) := hd l;
+		if(f != fid)
+			newlist = hd l :: newlist;
+	}
+	asyncpending = newlist;
+}
+
+asynclisten(donec: chan of ref Helperdone, m: ref Tmsg.Read)
+{
+	donec <-= ref Helperdone(Qlisten, m.fid, m, array of byte dolisten());
+}
+
+asyncwake(donec: chan of ref Helperdone, m: ref Tmsg.Read)
+{
+	donec <-= ref Helperdone(Qwake, m.fid, m, array of byte dowake());
+}
+
+asynchear(donec: chan of ref Helperdone, m: ref Tmsg.Read)
+{
+	donec <-= ref Helperdone(Qhear, m.fid, m, array of byte dohear());
+}
+
+# Forward an in-flight TTS completion (say/sayq) to the serveloop so a
+# result read does not block other 9P traffic while playback finishes.
+saywait(kind: int, donec: chan of ref Helperdone, m: ref Tmsg.Read, ch: chan of array of byte)
+{
+	donec <-= ref Helperdone(kind, m.fid, m, <-ch);
+}
+
+# Serveloop-side completion: drop if the read was flushed or clunked,
+# otherwise cache per-fid results and reply.
+asyncdone(srv: ref Styxserver, h: ref Helperdone)
+{
+	case h.kind {
+	Qlisten =>	listenbusy = 0;
+	Qwake =>	wakebusy = 0;
+	Qhear =>	hearbusy = 0;
+	}
+	if(!isasync(h.m.tag))
+		return;
+	cancelasynctag(h.m.tag);
+	fs := getfidstate(h.fid);
+	case h.kind {
+	Qhear =>
+		fs.hearresp = h.result;
+	Qsay or Qsayq =>
+		fs.sayresp = h.result;
+	}
+	if(h.kind == Qlisten || h.kind == Qwake) {
+		# Streaming replies must ignore the fid's read offset: clients
+		# hold one fd across many reads and offset-sliced replies would
+		# EOF the stream after the first read (INFR-28). Reply raw,
+		# clamped to the requested count.
+		data := h.result;
+		if(len data > h.m.count)
+			data = data[0:h.m.count];
+		srv.reply(ref Rmsg.Read(h.m.tag, data));
+		return;
+	}
+	srv.reply(styxservers->readbytes(h.m, h.result));
 }
 
 # === Per-fid state management ===
@@ -1460,6 +1923,21 @@ walkto(n: ref Navop.Walk)
 		"voices" =>
 			n.path = big Qvoices;
 			n.reply <-= dirgen(int n.path);
+		"listen" =>
+			n.path = big Qlisten;
+			n.reply <-= dirgen(int n.path);
+		"wake" =>
+			n.path = big Qwake;
+			n.reply <-= dirgen(int n.path);
+		"sayq" =>
+			n.path = big Qsayq;
+			n.reply <-= dirgen(int n.path);
+		"cancel" =>
+			n.path = big Qcancel;
+			n.reply <-= dirgen(int n.path);
+		"chime" =>
+			n.path = big Qchime;
+			n.reply <-= dirgen(int n.path);
 		* =>
 			n.reply <-= (nil, Enotfound);
 		}
@@ -1494,6 +1972,21 @@ dirgen(path: int): (ref Sys->Dir, string)
 	Qvoices =>
 		d.name = "voices";
 		d.mode = 8r444;
+	Qlisten =>
+		d.name = "listen";
+		d.mode = 8r444;
+	Qwake =>
+		d.name = "wake";
+		d.mode = 8r444;
+	Qsayq =>
+		d.name = "sayq";
+		d.mode = 8r666;
+	Qcancel =>
+		d.name = "cancel";
+		d.mode = 8r666;
+	Qchime =>
+		d.name = "chime";
+		d.mode = 8r222;
 	* =>
 		return (nil, Enotfound);
 	}
@@ -1506,7 +1999,7 @@ readdir(n: ref Navop.Readdir, path: int)
 {
 	case path {
 	Qroot =>
-		entries := array[] of {Qctl, Qsay, Qhear, Qvoices};
+		entries := array[] of {Qctl, Qsay, Qhear, Qvoices, Qlisten, Qwake, Qsayq, Qcancel, Qchime};
 		for(i := 0; i < len entries; i++) {
 			if(i >= n.offset) {
 				(d, err) := dirgen(entries[i]);
@@ -1526,13 +2019,24 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 
 Serve:
 	for(;;) {
-		gm := <-tchan;
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			;
+		h := <-helperc =>
+			asyncdone(srv, h);
+			continue;
+		}
 		if(gm == nil)
 			break Serve;
 
 		pick m := gm {
 		Readerror =>
 			break Serve;
+
+		Flush =>
+			cancelasynctag(m.oldtag);
+			srv.reply(ref Rmsg.Flush(m.tag));
 
 		Read =>
 			fid := srv.getfid(m.fid);
@@ -1547,25 +2051,70 @@ Serve:
 				srv.reply(styxservers->readstr(m, readconfig()));
 			Qsay =>
 				fs := getfidstate(m.fid);
-				# If async TTS is pending, wait for completion
+				# If async TTS is pending, park the read and let a
+				# spawned waiter forward the completion.
 				if(fs.sayresp == nil && fs.saydone != nil) {
-					fs.sayresp = <-fs.saydone;
+					ch := fs.saydone;
 					fs.saydone = nil;
-				}
-				if(fs.sayresp != nil)
+					addasync(m.tag, m.fid);
+					spawn saywait(Qsay, helperc, m, ch);
+				} else if(fs.sayresp != nil)
 					srv.reply(styxservers->readbytes(m, fs.sayresp));
 				else
 					srv.reply(styxservers->readstr(m, ""));
 			Qhear =>
-				# Trigger listening and return transcription
+				# Trigger listening and return transcription.
+				# Recording takes seconds; run it async.
 				fs := getfidstate(m.fid);
-				if(fs.hearresp == nil) {
-					text := dohear();
-					fs.hearresp = array of byte text;
+				if(fs.hearresp != nil)
+					srv.reply(styxservers->readbytes(m, fs.hearresp));
+				else if(hearbusy)
+					srv.reply(styxservers->readstr(m, "error: hear busy"));
+				else {
+					hearbusy = 1;
+					addasync(m.tag, m.fid);
+					spawn asynchear(helperc, m);
 				}
-				srv.reply(styxservers->readbytes(m, fs.hearresp));
 			Qvoices =>
 				srv.reply(styxservers->readstr(m, listvoices()));
+			Qlisten =>
+				# Blocks until the helper produces transcript records;
+				# must not block the serveloop (cancel/ctl stay live).
+				if(listenbusy)
+					srv.reply(styxservers->readstr(m, "error: listen busy"));
+				else {
+					listenbusy = 1;
+					addasync(m.tag, m.fid);
+					spawn asynclisten(helperc, m);
+				}
+			Qwake =>
+				# Blocks until the wake word is detected; async for the
+				# same reason as Qlisten.
+				if(wakebusy)
+					srv.reply(styxservers->readstr(m, "error: wake busy"));
+				else {
+					wakebusy = 1;
+					addasync(m.tag, m.fid);
+					spawn asyncwake(helperc, m);
+				}
+			Qsayq =>
+				fs := getfidstate(m.fid);
+				if(fs.sayresp == nil && fs.saydone != nil) {
+					ch := fs.saydone;
+					fs.saydone = nil;
+					addasync(m.tag, m.fid);
+					spawn saywait(Qsayq, helperc, m, ch);
+				} else if(fs.sayresp != nil)
+					srv.reply(styxservers->readbytes(m, fs.sayresp));
+				else
+					srv.reply(styxservers->readstr(m, ""));
+			Qcancel =>
+				if(cancelreq)
+					srv.reply(styxservers->readstr(m, "cancel pending\n"));
+				else
+					srv.reply(styxservers->readstr(m, "idle\n"));
+			Qchime =>
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			* =>
 				srv.default(gm);
 			}
@@ -1597,6 +2146,22 @@ Serve:
 				# the serveloop, blocking all other 9P traffic.
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				spawn asyncsay(fs.saydone, strip(text));
+			Qsayq =>
+				text := string m.data;
+				fs := getfidstate(m.fid);
+				fs.sayreq = text;
+				fs.sayresp = nil;
+				fs.saydone = chan of array of byte;
+				cancelreq = 0;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				spawn asyncsay(fs.saydone, strip(text));
+			Qcancel =>
+				cancelreq = 1;
+				cancelprovider();
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			Qchime =>
+				chimeprovider(string m.data);
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qhear =>
 				# Writing to hear resets/starts a new recording
 				# Parse optional duration: "start 10000" = 10 seconds
@@ -1616,8 +2181,10 @@ Serve:
 
 		Clunk =>
 			fid := srv.getfid(m.fid);
-			if(fid != nil)
+			if(fid != nil) {
+				cancelasyncfid(m.fid);
 				delfidstate(m.fid);
+			}
 			srv.default(gm);
 
 		* =>

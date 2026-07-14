@@ -6,20 +6,53 @@
 > data flow, agent integration), see
 > [SPEECH-ARCHITECTURE.md](SPEECH-ARCHITECTURE.md).
 >
-> **Phase 2 pointer.** The Mac-local voice mode
-> ([SPEECH-VOICE-ONLY-PHASE1.md](SPEECH-VOICE-ONLY-PHASE1.md)) is Phase 1 of
-> the voice work; this remote-audio direction is the Phase 2 target (Mac as
-> I/O terminal, Jetson or other host as inference engine). The loadable
-> `SpeechEngine` `.dis` contract and provider-backed reference module are now
-> implemented in `module/speech.m` and `appl/veltro/speechprovider.b`; streaming
-> records continue to use `Partial`. The audio-routing side is
-> now implemented: `speechshim9p` takes its playback and capture devices as
-> namespace paths (`audiodev`, `capturedev`, `micmode device` — see
-> SPEECH-ARCHITECTURE.md), so any 9P-imported audio device works like the
-> local one. The `lib/voice/speech-*` scripts below automate the services,
-> exports, imports, and ctl routing on each host. Real cross-host audio remains
-> an operator acceptance test because it depends on two machines and device
-> permissions.
+> **Phase 2 status.** The Mac-local voice mode
+> ([SPEECH-VOICE-ONLY-PHASE1.md](SPEECH-VOICE-ONLY-PHASE1.md)) is Phase 1.
+> Phase 2 starts after that release candidate passes its human exit checks.
+> The loadable `SpeechEngine` ABI, provider-backed module, namespace audio
+> routing, and `lib/voice/speech-*` launch scripts are already implemented;
+> Phase 2 is now the validation, hardening, and distribution milestone rather
+> than a green-field remote-audio implementation.
+
+## Phase 2 Definition and Gates
+
+Phase 2 comprises:
+
+1. Validate all three documented topologies with real hosts, including a Mac
+   terminal and Jetson/other inference host, device permissions, disconnects,
+   reconnects, latency, microphone capture, and playback.
+2. Turn the existing launch scripts into a repeatable remote deployment recipe
+   with explicit helper/model prerequisites and observable failure states.
+3. Add a reproducible, pinned Parakeet EOU conversion helper plus checksum
+   manifest. Uploading the GGUF remains a separate credential/hosting gate;
+   clean installs continue to use Whisper until a published model exists.
+4. Replace Phase 1's daemon-local one-follow-up latch with server-owned bounded
+   queue state, visible depth, and queued-turn cancel/replace behavior.
+5. Consider native 24000/48000 Hz audio only after topology validation; 22050
+   Hz remains the supported default and higher rates are not a release blocker.
+
+The exact wake phrase/model is intentionally not a Phase 2 acceptance item.
+
+Automated loopback and mock coverage must precede each topology change. The
+implementation stops for human acceptance when real two-host audio or GUI
+latency judgement is required; those items are not marked complete from
+non-interactive tests.
+
+### Implemented Foundation
+
+- `speechshim9p` takes playback and capture devices as namespace paths through
+  `audiodev`, `capturedev`, and `micmode device`.
+- `speech9p` forwards routing controls and consumes a single provider mount.
+- The loadable `SpeechEngine` `.dis` contract and provider reference module are
+  available in-tree.
+- `/lib/voice/speech-terminal`, `speech-engine`, and `speech-capture` automate
+  the current export, import, provider, and ctl wiring.
+
+### Remaining Human Gates
+
+- Real cross-host audio with two machines and their device/network permissions.
+- Jetson or equivalent remote helper/model installation and sustained use.
+- Audible queue/backpressure UX and disconnect/recovery behaviour.
 
 ## Current Design
 

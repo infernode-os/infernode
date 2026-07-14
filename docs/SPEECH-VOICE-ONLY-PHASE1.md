@@ -1,7 +1,37 @@
 # Voice Mode for Lucia: Phase 1
 
-Status: automated implementation complete on branch `feat/gui-stt-tts`.
-Real microphone, audible GUI, and cross-host acceptance remain human gates.
+Status: Phase 1 release candidate on
+`infernode-os/voice-mode-phase1-gap-closure`. Automated implementation is
+complete; real microphone, audible GUI, and spoken-control acceptance remain
+human gates. Cross-host acceptance is Phase 2.
+
+## Phase Boundary and Exit Criteria
+
+Phase 1 is the usable **single-host Mac voice interaction** milestone. It
+includes every supported voice-mode entry/exit surface, live partial drafts,
+final/grace/cancel handling, typed-compose preservation, provider-backed
+Kokoro TTS, Parakeet streaming STT with a working Whisper fallback,
+half-duplex echo safety, spoken approvals/refinements, low-confidence
+confirmation, and one visibly capped busy-turn follow-up. It also includes the
+installer/boot selection path, LLM-free speech testing, and explicitly selected
+local OpenAI-compatible LLM backends.
+
+Phase 1 is complete only after all automated checks pass and a human confirms:
+
+1. Normal-speed Kokoro playback and usable Parakeet transcription through the
+   real emulator microphone path.
+2. Grace countdown, final deduplication, append, send, and spoken cancellation.
+3. Voice chip, compose button, Ctrl+Space, Esc-V, and Option/Alt+V all toggle
+   the same mode and return cleanly to preserved keyboard input.
+4. Spoken approvals, denial, refinement, one queued follow-up with visible
+   rejection of additional speech, and low-confidence confirmation.
+5. A real turn completes against the selected local or remote LLM backend
+   without an unrelated API key overriding that selection.
+
+Two-host/Jetson deployment, public Parakeet EOU model distribution, rich queue
+management, native 24000/48000 Hz playback, and any particular/custom wake-word
+model are Phase 2 or later. See
+[SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md).
 
 ## Implementation Status
 
@@ -86,6 +116,10 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
   "mic") and Ctrl+Space in the conversation view now toggle the same voice
   mode as `Esc-V`, Option/Alt+V, and the Voice chip. The one-shot
   dictation-into-compose pathway is removed.
+- One busy-turn follow-up may be queued for refinement. Its Voice resource is
+  visibly `queued`; additional finals are discarded with a visible
+  `one turn queued` status until the activity returns idle, preventing an
+  unbounded spoken backlog against a slow agent.
 - Tests: `tests/speech_wake_test.b`, `tests/speech_listen_test.b`,
   `tests/speech_kokoro_test.b` (fake host helpers via ctl; includes
   serveloop-liveness assertions), and `tests/voicemode_test.b` (daemon state
@@ -97,8 +131,8 @@ Still requires human acceptance:
 - Helper models/binaries remain host dependencies; install them externally per
   Host Dependencies below.
 - The specific/custom wake model is intentionally deferred.
-- No robust Echo/VAD handling while TTS is active beyond what the helpers
-  provide.
+- Half-duplex is the shipped echo-safety default. Full-duplex spoken barge-in
+  remains an explicit opt-in for echo-controlled/headset setups.
 - Tool/task cancellation is best-effort; hard cancellation of arbitrary
   tools is still future work. TTS helper processes ARE hard-cancelled
   (speechshim9p kills them via devcmd on `cancel`); in-flight wake/listen
@@ -106,8 +140,8 @@ Still requires human acceptance:
 - Confirm audible non-overlapping assistant speech, TTS cancellation, live
   drafts without compose corruption, `Esc-V`/Option+V, real-microphone spoken
   controls and approvals, and the low-confidence confirmation flow.
-- Confirm the remote launch scripts with two actual hosts and their device and
-  network permissions.
+- Confirm the selected local OpenAI-compatible or remote LLM backend completes
+  a real voice turn without an Anthropic key changing the selected backend.
 
 This document captures Claude's analysis findings, the decisions confirmed with
 the user, and the approved Phase 1 plan for a local, Mac-only voice mode in
@@ -121,7 +155,7 @@ Lucia is currently keyboard-driven. Phase 1 adds a hands-free mode:
 
 1. Start Lucia.
 2. Type `/voice mode on`.
-3. Say `hey lucia`.
+3. Say the configured wake phrase.
 4. Speak an utterance.
 5. Lucia transcribes it, sends it through the existing conversation path, and
    speaks the assistant response.
@@ -830,7 +864,7 @@ The headless-only flags (`-n`, `-c`, `-M`, `-d`) are rejected with
 Unit tests for the daemon's test mode: `tests/voicemode_test.b`
 (`TestMode*` cases).
 
-## Planned Files
+## Delivered Files
 
 | Path | Action | Phase |
 | --- | --- | --- |
@@ -853,22 +887,19 @@ Unit tests for the daemon's test mode: `tests/voicemode_test.b`
 
 ## Out of Scope for Phase 1
 
-- Custom-trained `hey lucia` wake model.
-- UI microphone button.
-- Pluggable speech engine `.dis` modules (delivered as follow-on work).
+- A particular or custom-trained wake model.
 - Jetson-hosted inference.
-- 9P remote-audio launch scripts and routing (delivered as follow-on work;
-  cross-host acceptance remains manual).
+- Cross-host acceptance and productization of the already-delivered 9P remote
+  audio launch scripts, routing controls, and loadable engine modules.
+- Public distribution of the Parakeet EOU GGUF and a pinned conversion release.
+- Server-owned queue depth, queued-turn cancel/replace, and rich queue UI.
+- Native 24000/48000 Hz emulator playback.
 - Multilingual STT/TTS.
 - Voice biometrics or multi-speaker disambiguation.
 
 ## Immediate Next Step
 
-Start Phase 1.0 with the scaffolding-only commit:
-
-1. Add a compiling `emu/MacOSX/audio.c` stub that exports the required symbols.
-2. Enable the macOS audio object in `emu/MacOSX/emu`.
-3. Link the required audio frameworks.
-4. Rebuild the macOS emulator and confirm it starts.
-
-Do not mix playback, capture, and control handling into the scaffolding commit.
+Run the automated release-candidate suite, merge the candidate locally into
+`dev`, then stop for the human Phase 1 exit checks above. If a check fails, add
+a forward-only fix commit to the Phase 1 branch and merge that commit into
+`dev`; do not amend or rebase the published candidate history.

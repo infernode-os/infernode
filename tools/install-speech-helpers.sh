@@ -16,6 +16,14 @@ OPENWAKEWORD_VERSION=${OPENWAKEWORD_VERSION:-0.6.0}
 KOKORO_MODEL_URL=${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}
 KOKORO_VOICES_URL=${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}
 WHISPER_MODEL_URL=${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin}
+WHISPER_MODEL_FALLBACK_URL=${WHISPER_MODEL_FALLBACK_URL:-}
+if [ -z "$WHISPER_MODEL_FALLBACK_URL" ]; then
+  case "$WHISPER_MODEL_URL" in
+  *\?*) WHISPER_MODEL_FALLBACK_URL="" ;;
+  *) WHISPER_MODEL_FALLBACK_URL="${WHISPER_MODEL_URL}?download=true" ;;
+  esac
+fi
+WHISPER_MODEL_MIN_BYTES=${WHISPER_MODEL_MIN_BYTES:-100000000}
 
 # Parakeet realtime STT (preferred over whisper when it can be built).
 # PARAKEET_SRC may point at an existing parakeet.cpp checkout; otherwise the
@@ -39,6 +47,7 @@ log() {
 download_once() {
   local url=$1
   local dest=$2
+  local tmp="$dest.tmp"
 
   if [ -s "$dest" ]; then
     log "exists: $dest"
@@ -46,8 +55,54 @@ download_once() {
   fi
   mkdir -p "$(dirname "$dest")"
   log "download: $url"
-  curl -L --fail --retry 3 --output "$dest.tmp" "$url"
-  mv "$dest.tmp" "$dest"
+  rm -f "$tmp"
+  if ! curl -L --fail --retry 3 --retry-all-errors --retry-delay 1 \
+      --output "$tmp" "$url"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [ ! -s "$tmp" ]; then
+    log "warn: empty download from $url"
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$dest"
+}
+
+# Download a large model atomically from the first working URL. Existing
+# complete files are never replaced; short HTML/error responses are rejected
+# before they can become the configured model.
+download_model() {
+  local dest=$1
+  local minbytes=$2
+  shift 2
+
+  if [ -s "$dest" ] && [ "$(wc -c <"$dest")" -ge "$minbytes" ]; then
+    log "exists: $dest"
+    return 0
+  fi
+
+  local url tmp="$dest.tmp"
+  mkdir -p "$(dirname "$dest")"
+  for url in "$@"; do
+    [ -n "$url" ] || continue
+    log "download: $url"
+    rm -f "$tmp"
+    if ! curl -L --fail --retry 3 --retry-all-errors --retry-delay 1 \
+        --output "$tmp" "$url"; then
+      rm -f "$tmp"
+      continue
+    fi
+    if [ ! -s "$tmp" ] || [ "$(wc -c <"$tmp")" -lt "$minbytes" ]; then
+      log "warn: rejected short model download from $url"
+      rm -f "$tmp"
+      continue
+    fi
+    mv "$tmp" "$dest"
+    return 0
+  done
+  rm -f "$tmp"
+  return 1
 }
 
 install_whisper_cpp() {
@@ -631,11 +686,13 @@ main() {
   install_python_deps
   download_once "$KOKORO_MODEL_URL" "$KOKORO_DIR/kokoro-v1.0.onnx"
   download_once "$KOKORO_VOICES_URL" "$KOKORO_DIR/voices-v1.0.bin"
-  # HuggingFace intermittently 403s this URL; whisper is only the STT
-  # fallback, so a failed download must not abort the parakeet install.
-  if ! download_once "$WHISPER_MODEL_URL" "$WHISPER_MODEL"; then
-    rm -f "$WHISPER_MODEL.tmp"
-    log "warn: whisper model download failed ($WHISPER_MODEL_URL) — whisper fallback unavailable until it is fetched manually"
+  # Whisper is the clean-install fallback when the Parakeet EOU model is not
+  # available. Hugging Face has intermittently rejected the canonical URL, so
+  # retry it and its explicit download form without ever installing an HTML
+  # error page as the model.
+  if ! download_model "$WHISPER_MODEL" "$WHISPER_MODEL_MIN_BYTES" \
+      "$WHISPER_MODEL_URL" "$WHISPER_MODEL_FALLBACK_URL"; then
+    log "warn: whisper model download failed — fallback unavailable until a valid model is placed at $WHISPER_MODEL"
   fi
   download_openwakeword_models
   write_wrappers
@@ -644,4 +701,6 @@ main() {
   print_ctl_block
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

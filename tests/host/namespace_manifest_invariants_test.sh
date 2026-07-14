@@ -46,6 +46,8 @@ assert_absent_paths() {
 		"/mnt/toolctl"
 		"/mnt/toolctl/ctl"
 		"/mnt/ui"
+		"/mnt/matrix"
+		"/phone"
 		"/chan"
 		"/net"
 		"/net.alt"
@@ -68,7 +70,7 @@ assert_absent_paths() {
 	if [[ -n "$found" ]]; then
 		fail "$label manifest exposes dangerous paths:$found"
 	else
-		pass "$label manifest omits dangerous control, network, wallet, message, UI, and LLM paths"
+		pass "$label manifest omits dangerous control, network, wallet, message, fixed-service, UI, and LLM paths"
 	fi
 }
 

@@ -302,6 +302,13 @@ restrictns(caps: ref Capabilities): string
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
+	# Matrix is a fixed-function capability. Derive its control filesystem from
+	# the tool name so generic filesystem and shell tools cannot request it.
+	if(inlist("matrix", caps.tools)) {
+		(matrixok, nil) := sys->stat("/mnt/matrix");
+		if(matrixok >= 0 && !inlist("matrix", mntpaths))
+			mntpaths = "matrix" :: mntpaths;
+	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
@@ -453,6 +460,13 @@ restrictns(caps: ref Capabilities): string
 	# could read every open Xenith window regardless of namespace restriction.
 	if(caps.xenith)
 		safe = "chan" :: safe;
+	# The phone bridge contains real SMS and call endpoints. It belongs only to
+	# the fixed-function phone tools, never to caller-supplied path grants.
+	if(needsphone(caps.tools)) {
+		(phoneok, nil) := sys->stat("/phone");
+		if(phoneok >= 0)
+			safe = "phone" :: safe;
+	}
 
 	# Expose additional Inferno root-level directories from caps.paths.
 	# e.g. "/appl/veltro" → add "appl" to safe, then restrict /appl to "veltro".
@@ -774,6 +788,15 @@ needsui(tools: list of string): int
 	return 0;
 }
 
+needsphone(tools: list of string): int
+{
+	phone := "sms" :: "dial" :: "contacts" :: nil;
+	for(; tools != nil; tools = tl tools)
+		if(inlist(hd tools, phone))
+			return 1;
+	return 0;
+}
+
 # Split a path into first component and rest.
 # "Users/pdfinn/tmp" → ("Users", "pdfinn/tmp")
 # "tmp" → ("tmp", "")
@@ -869,6 +892,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
+	if(fixedservicecontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -901,6 +926,12 @@ uiagentcontrolpath(path: string): int
 	# UI authority is derived from fixed-function tools by needsui(), never from
 	# caller-supplied paths that generic filesystem or shell tools can reuse.
 	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+fixedservicecontrolpath(path: string): int
+{
+	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/phone" || prefix(path, "/phone/");
 }
 
 directmailsendpath(path: string): int
@@ -1046,12 +1077,14 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 	nentries := array[] of {
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
+		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
 		# /mnt now — application mount points, schema is ours, not /n imports
 		# (docs/NAMESPACE-LAYOUT.md).
 		("/mnt/llm",  "LLM Service",      "rw"),
 		("/mnt/ui",   "UI Service",       "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
+		("/mnt/matrix", "Matrix Runtime", "rw"),
 	};
 
 	for(i = 0; i < len nentries; i++) {

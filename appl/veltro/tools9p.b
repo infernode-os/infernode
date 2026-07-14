@@ -801,6 +801,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
+	if(fixedservicecontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -845,6 +847,12 @@ uiagentcontrolpath(path: string): int
 	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
 	# grant would also hand write/exec every per-activity ctl file.
 	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+fixedservicecontrolpath(path: string): int
+{
+	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/phone" || prefix(path, "/phone/");
 }
 
 pathperm(path: string): string
@@ -1415,15 +1423,6 @@ emitmanifestnow(mpath: string)
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
-	# Auto-grant /phone when any phone-bridge tool is registered. devphone
-	# (#f) is bound at /phone by lib/lucifer/boot-mobile.sh (mobile) or
-	# is mounted from a paired phone (desktop). Child activity namespaces
-	# don't inherit that bind, so restrictns() would otherwise hide /phone
-	# and the sms / dial / contacts tools fail with "does not exist".
-	if(findtool("sms") != nil || findtool("dial") != nil ||
-	   findtool("contacts") != nil)
-		if(!strlist_contains(allpaths, "/phone"))
-			allpaths = "/phone" :: allpaths;
 	for(tl3 := toolnames; tl3 != nil; tl3 = tl tl3)
 		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
@@ -1481,11 +1480,6 @@ applynsrestriction(invokedtool: string): string
 	if(invokedtool == "say" || invokedtool == "hear")
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
-	# Auto-grant /phone when sms or dial tool is registered (see
-	# companion in emitmanifestnow above — same reason).
-	if(invokedtool == "sms" || invokedtool == "dial")
-		if(!strlist_contains(allpaths, "/phone"))
-			allpaths = "/phone" :: allpaths;
 	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))
@@ -1525,8 +1519,6 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	case tool {
 	"launch" =>
 		return addpath(paths, "/dis/wm");
-	"matrix" =>
-		return addpath(paths, "/mnt/matrix");
 	"charon" =>
 		return addpath(paths, "/tmp/veltro/browser");
 	"editor" =>

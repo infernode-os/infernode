@@ -60,6 +60,7 @@ flowchart LR
 | `hear` tool                     | `appl/veltro/tools/hear.b`          | Veltro tool that writes `start <ms>` to `/n/speech/hear` and reads the transcription back. |
 | `lucibridge` voice output       | `appl/cmd/lucibridge.b`             | GUI-side path: completion-aware FIFO TTS, sentence-boundary streaming, cancellation, and speech timing. Bypasses the agent tool. |
 | `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:992` | Auto-grants `/n/speech` to agents that have `say` or `hear` registered. |
+| `parakeet-stream` adapter       | `tools/parakeet_stream.cpp`         | Host-side realtime STT helper: stdin s16le PCM → cache-aware streaming Parakeet EOU model → `partial` / `final confidence=…` records. Built by the installer against an upstream clone of [parakeet.cpp](https://github.com/mudler/parakeet.cpp); the **default STT** when it can be built (whisper wrapper is the fallback). See §3.3. |
 
 ## 2. Filesystem
 
@@ -309,6 +310,47 @@ The CLI parser rejecting `-e local` (`speech9p.b:147–155`) is a clear bug —
 `usage()`, `applyconfig`, and `readconfig` all know about the engine. Until
 fixed, set `local` via `echo 'engine local' > /n/speech/ctl` after launch,
 or rely on the Linux auto-promotion in `initplatform`.
+
+**Boot-time selection is owned by the installer.** `tools/install-speech-helpers.sh`
+writes its chosen stack — one Inferno-sh ctl line per row — to
+`~/.local/share/infernode-speech/speech.ctl.sh`, and `lib/lucifer/boot.sh`
+replays that file verbatim when it exists. The file always includes
+`engine kokoro`, so an installed system speaks with Kokoro rather than the
+`engine cmd` default (the robotic host `say`). Without the file, boot falls
+back to hardcoded ctl lines for a legacy helper install (now also including
+`engine kokoro`), and with no helpers at all speech9p keeps `engine cmd`.
+
+### 3.3 Parakeet realtime STT (`parakeet-stream`)
+
+The default listen helper when the installer can build it. Unlike the
+whisper wrapper — which fakes turn-taking with an energy-VAD around a
+sliding window — the Parakeet `parakeet_realtime_eou_120m-v1` model is a
+cache-aware streaming transducer that emits `<EOU>`/`<EOB>` tokens: **the
+model decides when the utterance is over**.
+
+- Source: `tools/parakeet_stream.cpp` (tracked here), compiled by the
+  installer against a clone of upstream
+  [parakeet.cpp](https://github.com/mudler/parakeet.cpp) (committed API
+  only: `ModelLoader`, `StreamingMel`, `StreamingSession`).
+- Input: s16le PCM on **stdin only** — the shim's capture pump feeds it
+  (`micmode device`, `capturerate 16000`), which is what makes remote-mic
+  topologies pure namespace composition. There is deliberately no
+  microphone code in the adapter.
+- Output: the provider contract's records, flushed per line:
+  `partial <text>` … `final confidence=0.9307 <text>`. Confidence is the
+  mean of the utterance's per-word confidences (NeMo `max_prob`).
+- After each `<EOU>` the adapter resets the streaming session — the model
+  stops emitting after an EOU otherwise (verified against upstream's own
+  file-streaming path), and the reset also bounds hypothesis growth over
+  an hours-long session.
+- The streaming EOU model is not yet published as GGUF; the installer
+  probes `PARAKEET_EOU_MODEL`, its own models dir, and dev checkouts, and
+  prints conversion instructions when none is found (whisper remains the
+  fallback in that case).
+
+Shim configuration is unchanged: the adapter is a drop-in for the
+`whisperstreambin` slot because it accepts the same
+`--stdin --model M --rate R --chans 1` invocation `listencmd()` builds.
 
 ## 4. Data flow
 

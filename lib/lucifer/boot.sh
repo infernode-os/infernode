@@ -133,36 +133,54 @@ mkdir -p /tmp
 echo provider /n/speechshim > /n/speech/ctl
 echo duplex half > /n/speech/ctl
 
-# Host speech-helper configuration. $speechhelperbin names the bin/ dir
-# created by tools/install-speech-helpers.sh — a HOST path, because the shim
-# execs the helpers through devcmd. boot-speechtest.sh presets it; when it is
-# unset (the normal desktop boot) auto-detect the installer's default prefix,
-# so an existing install is picked up with no manual step. Without this the
-# shim keeps its built-in defaults — bare command names that are not on the
-# host PATH — and the wake helper can never exec, which silently makes voice
-# mode unable to hear anything at all.
+# Host speech-helper configuration. The installer writes its chosen stack
+# to $prefix/speech.ctl.sh (Kokoro TTS + Parakeet realtime STT when it
+# could be built, whisper fallback otherwise) and boot replays that file
+# verbatim — the installer is the single source of truth, so new helper
+# stacks need no boot.sh change. $speechhelperbin (preset by
+# boot-speechtest.sh) bypasses the file and takes the legacy hardcoded
+# path, because the test boots point it at fake helper bins.
+#
+# Legacy path: $speechhelperbin names the bin/ dir created by
+# tools/install-speech-helpers.sh — a HOST path, because the shim execs
+# the helpers through devcmd. Without any of this the shim keeps its
+# built-in defaults — bare command names that are not on the host PATH —
+# and the wake helper can never exec, which silently makes voice mode
+# unable to hear anything at all.
 #
 # The prefix is a host path, so it is probed through /n/local (the host root).
 # The wake phrase is "hey jarvis" — the only pretrained openWakeWord model
 # shipped today (see tools/install-speech-helpers.sh).
+speechctlfile=()
 if {~ $#speechhelperbin 0} {
 	speechprefix=`{echo 'echo ${INFERNODE_SPEECH_HOME:-$HOME/.local/share/infernode-speech}' | os sh >[2] /dev/null}
+	if {ftest -f /n/local^$speechprefix^/speech.ctl.sh} {
+		speechctlfile=/n/local^$speechprefix^/speech.ctl.sh
+	}
 	if {ftest -d /n/local^$speechprefix^/bin} {
 		speechhelperbin=$speechprefix^/bin
 	}
 }
-if {! ~ $#speechhelperbin 0} {
-	echo kokorobin $speechhelperbin/kokoro-cli > /n/speech/ctl
-	echo whisperstreambin $speechhelperbin/whisper-stream-cli > /n/speech/ctl
-	echo wakebin $speechhelperbin/openwakeword-cli > /n/speech/ctl
-	echo whispermodel $speechhelperbin/../models/ggml-base.en.bin > /n/speech/ctl
-	echo voice af_bella > /n/speech/ctl
-	echo 'wakeword hey jarvis' > /n/speech/ctl
-	echo wakethreshold 0.5 > /n/speech/ctl
-	echo 'boot: speech helpers configured from' $speechhelperbin
+if {! ~ $#speechctlfile 0} {
+	sh $speechctlfile
+	echo 'boot: speech configured from' $speechctlfile
 }{
-	echo 'boot: no speech helpers found — voice mode will not hear or speak.'
-	echo 'boot: run tools/install-speech-helpers.sh, then restart.'
+	if {! ~ $#speechhelperbin 0} {
+		# engine kokoro routes speech9p's say through the provider's
+		# Kokoro instead of the robotic host `say` command (engine cmd).
+		echo engine kokoro > /n/speech/ctl
+		echo kokorobin $speechhelperbin/kokoro-cli > /n/speech/ctl
+		echo whisperstreambin $speechhelperbin/whisper-stream-cli > /n/speech/ctl
+		echo wakebin $speechhelperbin/openwakeword-cli > /n/speech/ctl
+		echo whispermodel $speechhelperbin/../models/ggml-base.en.bin > /n/speech/ctl
+		echo voice af_bella > /n/speech/ctl
+		echo 'wakeword hey jarvis' > /n/speech/ctl
+		echo wakethreshold 0.5 > /n/speech/ctl
+		echo 'boot: speech helpers configured from' $speechhelperbin
+	}{
+		echo 'boot: no speech helpers found — voice mode will not hear or speak.'
+		echo 'boot: run tools/install-speech-helpers.sh, then restart.'
+	}
 }
 
 > /tmp/lucibridge.log

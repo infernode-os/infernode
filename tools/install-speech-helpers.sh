@@ -17,6 +17,21 @@ KOKORO_MODEL_URL=${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx
 KOKORO_VOICES_URL=${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}
 WHISPER_MODEL_URL=${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin}
 
+# Parakeet realtime STT (preferred over whisper when it can be built).
+# PARAKEET_SRC may point at an existing parakeet.cpp checkout; otherwise the
+# upstream repo is cloned under the install prefix. The streaming EOU model
+# is not yet published as GGUF, so we also probe dev checkouts and accept an
+# explicit PARAKEET_EOU_MODEL path (see find_parakeet_eou_model).
+PARAKEET_DIR="$MODELS/parakeet"
+PARAKEET_SRC=${PARAKEET_SRC:-"$PREFIX/src/parakeet.cpp"}
+PARAKEET_REPO_URL=${PARAKEET_REPO_URL:-https://github.com/mudler/parakeet.cpp.git}
+PARAKEET_EOU_MODEL=${PARAKEET_EOU_MODEL:-}
+PARAKEET_EOU_URL=${PARAKEET_EOU_URL:-https://huggingface.co/mudler/parakeet-cpp-gguf/resolve/main/parakeet_realtime_eou_120m-v1-q8_0.gguf}
+
+# Set by install_parakeet on success; selects the ctl configuration.
+PARAKEET_OK=0
+PARAKEET_MODEL_PATH=""
+
 log() {
   printf '%s\n' "$*"
 }
@@ -415,31 +430,195 @@ PY
   chmod +x "$LIBEXEC/kokoro_cli.py" "$LIBEXEC/whisper_stream_cli.sh" "$LIBEXEC/openwakeword_cli.py"
 }
 
+# Locate (or fetch) the cache-aware streaming EOU GGUF. Echoes the path on
+# stdout, or nothing when unavailable. The model is not yet in the published
+# mudler/parakeet-cpp-gguf set, so the download is attempted last and is
+# allowed to fail.
+find_parakeet_eou_model() {
+  if [ -n "$PARAKEET_EOU_MODEL" ] && [ -s "$PARAKEET_EOU_MODEL" ]; then
+    echo "$PARAKEET_EOU_MODEL"
+    return 0
+  fi
+  local m
+  for m in "$PARAKEET_DIR"/parakeet_realtime_eou_120m*.gguf; do
+    [ -s "$m" ] && { echo "$m"; return 0; }
+  done
+  # Dev convenience: copy a locally converted model out of a checkout.
+  for m in "$PARAKEET_SRC"/models/parakeet_realtime_eou_120m*.gguf \
+           "$HOME"/Projects/parakeet.cpp/models/parakeet_realtime_eou_120m*.gguf; do
+    if [ -s "$m" ]; then
+      mkdir -p "$PARAKEET_DIR"
+      cp "$m" "$PARAKEET_DIR/"
+      echo "$PARAKEET_DIR/$(basename "$m")"
+      return 0
+    fi
+  done
+  local dest="$PARAKEET_DIR/$(basename "$PARAKEET_EOU_URL")"
+  if download_once "$PARAKEET_EOU_URL" "$dest" 2>/dev/null && [ -s "$dest" ]; then
+    echo "$dest"
+    return 0
+  fi
+  rm -f "$dest.tmp"
+  return 0
+}
+
+# Build parakeet-stream: InferNode's realtime STT adapter (the tracked
+# source tools/parakeet_stream.cpp) compiled against an upstream clone of
+# parakeet.cpp. Native EOU turn-taking, faster and more accurate than the
+# whisper base.en VAD wrapper. Soft-fails at every step — whisper remains
+# the fallback stack.
+install_parakeet() {
+  local jobs=4
+  if ! command -v cmake >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
+    log "skip: parakeet needs cmake + git (whisper stack remains the default)"
+    return 0
+  fi
+  if [ ! -f "$PARAKEET_SRC/CMakeLists.txt" ]; then
+    log "clone: $PARAKEET_REPO_URL"
+    if ! git clone --depth 1 --recurse-submodules --shallow-submodules \
+        "$PARAKEET_REPO_URL" "$PARAKEET_SRC"; then
+      log "skip: parakeet clone failed (whisper stack remains the default)"
+      return 0
+    fi
+  fi
+
+  local build="$PARAKEET_SRC/build-infernode"
+  local metal_flag=""
+  if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+    metal_flag="-DPARAKEET_GGML_METAL=ON"
+  fi
+  if [ ! -f "$build/CMakeCache.txt" ]; then
+    log "cmake: configuring parakeet.cpp"
+    if ! cmake -B "$build" -S "$PARAKEET_SRC" -DPARAKEET_SHARED=ON \
+        -DPARAKEET_BUILD_CLI=OFF -DGGML_NATIVE=OFF $metal_flag \
+        -DCMAKE_BUILD_TYPE=Release >/dev/null; then
+      log "skip: parakeet cmake configure failed"
+      return 0
+    fi
+  fi
+  log "build: libparakeet (~1 min)"
+  if ! cmake --build "$build" -j "$jobs" >/dev/null; then
+    log "skip: parakeet build failed"
+    return 0
+  fi
+
+  local libdir="" f
+  for f in "$build"/libparakeet.dylib "$build"/libparakeet.so \
+           "$build"/src/libparakeet.dylib "$build"/src/libparakeet.so; do
+    [ -e "$f" ] && { libdir=$(dirname "$f"); break; }
+  done
+  if [ -z "$libdir" ]; then
+    log "skip: libparakeet not found under $build"
+    return 0
+  fi
+  local ggmldir="$build/third_party/ggml/src"
+
+  log "compile: parakeet-stream adapter"
+  if ! c++ -std=c++17 -O2 "$SCRIPT_DIR/parakeet_stream.cpp" \
+      -I"$PARAKEET_SRC/src" -I"$PARAKEET_SRC/include" \
+      -I"$PARAKEET_SRC/third_party/ggml/include" \
+      -L"$libdir" -L"$ggmldir" -lparakeet -lggml-base \
+      -Wl,-rpath,"$libdir" -Wl,-rpath,"$ggmldir" \
+      -o "$BIN/parakeet-stream"; then
+    log "skip: parakeet-stream compile failed"
+    return 0
+  fi
+
+  local model
+  model=$(find_parakeet_eou_model)
+  if [ -z "$model" ]; then
+    log "notice: parakeet-stream built, but no streaming EOU model found."
+    log "  Convert nvidia/parakeet_realtime_eou_120m-v1 with parakeet.cpp's"
+    log "  scripts/convert_parakeet_to_gguf.py into $PARAKEET_DIR/,"
+    log "  or set PARAKEET_EOU_MODEL=/path/to/model.gguf and re-run."
+    log "  Falling back to the whisper stack until then."
+    return 0
+  fi
+
+  # Smoke: model must load and the adapter must exit cleanly on EOF.
+  log "smoke: parakeet-stream loads $model"
+  if ! dd if=/dev/zero bs=32000 count=1 2>/dev/null | \
+      "$BIN/parakeet-stream" --stdin --model "$model" --rate 16000 >/dev/null; then
+    log "skip: parakeet-stream smoke test failed (whisper stack remains)"
+    return 0
+  fi
+
+  PARAKEET_OK=1
+  PARAKEET_MODEL_PATH="$model"
+  log "ok: parakeet realtime STT installed"
+}
+
+# The boot-time speech configuration, one Inferno-sh command per line.
+# lib/lucifer/boot.sh runs this file verbatim when it exists, making the
+# installer the single source of truth for which helper stack is active.
+write_speech_ctl() {
+  local ctl="$PREFIX/speech.ctl.sh"
+  {
+    echo "# Written by tools/install-speech-helpers.sh — applied by boot.sh."
+    echo "# Regenerate by re-running the installer; hand-edits survive until then."
+    echo "echo 'engine kokoro' > /n/speech/ctl"
+    echo "echo 'kokorobin $BIN/kokoro-cli' > /n/speech/ctl"
+    echo "echo 'wakebin $BIN/openwakeword-cli' > /n/speech/ctl"
+    echo "echo 'voice af_bella' > /n/speech/ctl"
+    echo "echo 'wakeword hey jarvis' > /n/speech/ctl"
+    echo "echo 'wakethreshold 0.5' > /n/speech/ctl"
+    echo "echo 'duplex half' > /n/speech/ctl"
+    if [ "$PARAKEET_OK" = 1 ]; then
+      echo "echo 'whisperstreambin $BIN/parakeet-stream' > /n/speech/ctl"
+      echo "echo 'whispermodel $PARAKEET_MODEL_PATH' > /n/speech/ctl"
+      echo "echo 'micmode device' > /n/speech/ctl"
+      echo "echo 'capturerate 16000' > /n/speech/ctl"
+    else
+      echo "echo 'whisperstreambin $BIN/whisper-stream-cli' > /n/speech/ctl"
+      echo "echo 'whispermodel $WHISPER_MODEL' > /n/speech/ctl"
+      echo "echo 'micmode helper' > /n/speech/ctl"
+    fi
+  } > "$ctl"
+  log "wrote: $ctl"
+}
+
 print_ctl_block() {
   cat <<EOF
 
 InferNode speech helper setup complete.
 
-Paste this block into an Inferno shell after /n/speech is mounted:
+Boot configuration written to $PREFIX/speech.ctl.sh —
+lib/lucifer/boot.sh applies it automatically on the next start. To apply it
+to a running system, paste its contents into an Inferno shell (or run:
+  sh /n/local$PREFIX/speech.ctl.sh ).
 
-echo 'kokorobin $BIN/kokoro-cli' > /n/speech/ctl
+Active stack:
+  TTS   Kokoro (af_bella) via kokoro-onnx
+EOF
+  if [ "$PARAKEET_OK" = 1 ]; then
+    cat <<EOF
+  STT   Parakeet realtime EOU ($(basename "$PARAKEET_MODEL_PATH")) — the model
+        itself detects end-of-utterance; audio is captured by the speech
+        shim and piped to the adapter (micmode device).
+  Wake  openWakeWord ("hey jarvis")
+
+If voice mode hears nothing (emu audio capture issue), fall back to the
+whisper stack from inside Inferno:
+
 echo 'whisperstreambin $BIN/whisper-stream-cli' > /n/speech/ctl
-echo 'wakebin $BIN/openwakeword-cli' > /n/speech/ctl
 echo 'whispermodel $WHISPER_MODEL' > /n/speech/ctl
-echo 'voice af_bella' > /n/speech/ctl
-echo 'wakeword hey jarvis' > /n/speech/ctl
-echo 'wakethreshold 0.5' > /n/speech/ctl
-echo 'duplex half' > /n/speech/ctl
+echo 'micmode helper' > /n/speech/ctl
+EOF
+  else
+    cat <<EOF
+  STT   whisper.cpp VAD wrapper ($(basename "$WHISPER_MODEL"))
+  Wake  openWakeWord ("hey jarvis")
+
+Parakeet realtime STT was not installed (see notices above) — it is faster
+and more accurate; re-run this installer once its requirements are met.
+EOF
+  fi
+  cat <<EOF
 
 NOTE: the spoken wake phrase is "hey jarvis" — the only pretrained
 openWakeWord model shipped today. Saying "hey lucia" will NOT trigger wake
 until a custom hey-lucia model is trained and dropped into
 $OPENWAKEWORD_DIR (the wrapper picks up an explicit --model path).
-
-For micmode device / stdin-PCM routing, the shim adds the stdin and format
-arguments to the configured helpers:
-
-echo 'micmode device' > /n/speech/ctl
 EOF
 }
 
@@ -447,14 +626,21 @@ main() {
   if [ "$(uname -s)" != "Darwin" ]; then
     log "notice: this installer is macOS-first; continuing with portable Python setup"
   fi
-  mkdir -p "$BIN" "$LIBEXEC" "$MODELS" "$KOKORO_DIR" "$OPENWAKEWORD_DIR"
+  mkdir -p "$BIN" "$LIBEXEC" "$MODELS" "$KOKORO_DIR" "$OPENWAKEWORD_DIR" "$PARAKEET_DIR"
   install_whisper_cpp
   install_python_deps
   download_once "$KOKORO_MODEL_URL" "$KOKORO_DIR/kokoro-v1.0.onnx"
   download_once "$KOKORO_VOICES_URL" "$KOKORO_DIR/voices-v1.0.bin"
-  download_once "$WHISPER_MODEL_URL" "$WHISPER_MODEL"
+  # HuggingFace intermittently 403s this URL; whisper is only the STT
+  # fallback, so a failed download must not abort the parakeet install.
+  if ! download_once "$WHISPER_MODEL_URL" "$WHISPER_MODEL"; then
+    rm -f "$WHISPER_MODEL.tmp"
+    log "warn: whisper model download failed ($WHISPER_MODEL_URL) — whisper fallback unavailable until it is fetched manually"
+  fi
   download_openwakeword_models
   write_wrappers
+  install_parakeet
+  write_speech_ctl
   print_ctl_block
 }
 

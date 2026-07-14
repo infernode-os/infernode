@@ -137,6 +137,9 @@ jobs:
           exit 1
         fi
 
+    - name: Run speech regression suite
+      run: bash tools/speech-regress.sh
+
     - name: Run namespace audit checks
       run: |
         echo "Running nsaudit security checks..."

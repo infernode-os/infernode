@@ -4,7 +4,8 @@
 #
 # Builds and runs the targeted Limbo suites for the Lucia voice bridge/UI,
 # voicemode, speech9p, speechshim9p, and the speech tooling inside the
-# emulator, then the host-side helper smoke test. This is deliberately NOT
+# emulator, then the host-side installer/helper/audio smoke tests. This is
+# deliberately NOT
 # ./run-tests.sh:
 # it touches only the speech/voice suites, so it is cheap enough to run
 # after every change to appl/cmd/voicemode.b, appl/veltro/speech*.b,
@@ -82,6 +83,7 @@ trap 'rm -rf "$logdir"' EXIT
 
 failed=""
 npass=0
+nskip=0
 
 run_suite() {
   local name=$1 limit=$2
@@ -123,26 +125,47 @@ for t in $SUITES; do
   run_suite "$t" "$limit"
 done
 
-# Host-side wrapper smoke test. SKIPs itself when no helper install exists,
-# which still counts as a pass here — the emu suites above do not depend on
-# a helper install.
-printf '== speech_helpers_test.sh '
-hostlog=$logdir/host.log
-if bash tests/host/speech_helpers_test.sh >"$hostlog" 2>&1; then
-  # A first-line SKIP means no helper install at all; a trailing SKIP is
-  # only the mic-dependent portion, which needs an interactive TCC session.
-  if head -1 "$hostlog" | grep -q '^SKIP'; then
-    echo "SKIP ($(head -1 "$hostlog"))"
-  else
-    echo "PASS"
-  fi
-  npass=$((npass + 1))
-else
-  echo "FAIL"
-  failed="$failed speech_helpers_test.sh"
-  echo "---- tail of host test output ----"
-  tail -30 "$hostlog"
-  echo "----------------------------------"
+run_host_test() {
+  local name=$1 log status=0 skips
+  log=$logdir/$name.log
+
+  printf '== %s ' "$name"
+  bash "tests/host/$name" >"$log" 2>&1 || status=$?
+  case "$status" in
+  0)
+    skips=$(grep '^SKIP:' "$log" 2>/dev/null | tr '\n' ';' || true)
+    if [ -n "$skips" ]; then
+      echo "PASS (partial: ${skips%;})"
+    else
+      echo "PASS"
+    fi
+    npass=$((npass + 1))
+    ;;
+  77)
+    echo "SKIP ($(grep '^SKIP:' "$log" | head -1))"
+    nskip=$((nskip + 1))
+    ;;
+  *)
+    echo "FAIL (exit $status)"
+    failed="$failed $name"
+    echo "---- tail of $name output ----"
+    tail -30 "$log"
+    echo "----------------------------------"
+    ;;
+  esac
+}
+
+# The download test is hermetic: it sources the installer with a fake curl.
+run_host_test speech_installer_download_test.sh
+
+# The helper test returns 77 when no helper install exists. Its deterministic
+# stdin-PCM coverage still runs without microphone permission when installed.
+run_host_test speech_helpers_test.sh
+
+# CoreAudio coverage is meaningful only on macOS. It reports partial skips
+# when the current session lacks an audio device or TCC microphone permission.
+if [ "$(uname -s)" = Darwin ]; then
+  run_host_test audio_macos_test.sh
 fi
 
 echo
@@ -150,4 +173,8 @@ if [ -n "$failed" ]; then
   echo "speech-regress: FAIL:$failed"
   exit 1
 fi
-echo "speech-regress: all $npass suites passed"
+if [ "$nskip" -gt 0 ]; then
+  echo "speech-regress: $npass passed, $nskip skipped"
+else
+  echo "speech-regress: all $npass suites passed"
+fi

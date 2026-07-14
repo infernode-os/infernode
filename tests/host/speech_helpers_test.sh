@@ -9,7 +9,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 if [ ! -d "$PREFIX" ]; then
   echo "SKIP: speech helper install dir not found: $PREFIX"
-  exit 0
+  exit 77
 fi
 
 require_exec() {

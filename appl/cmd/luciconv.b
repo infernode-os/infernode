@@ -118,12 +118,7 @@ viewport_h := 400;
 lastrendw := 0;
 username := "human";
 
-# Voice input state
-VOICE_IDLE: con 0;
-VOICE_REC: con 1;
-voicestate := VOICE_IDLE;
-voicech: chan of string;
-micrect: Rect;  # Hit area for mic button
+micrect: Rect;  # Hit area for the voice-mode toggle button
 inputrect: Rect;  # Hit area for input field
 
 # Tile layout (populated by drawconversation, used for click hit-testing)
@@ -213,7 +208,6 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	inputpos = 0;
 	draftbuf = "";
 	username = readdevuser();
-	voicech = chan of string;
 	msgstore = array[32] of ref ConvMsg;
 	nmsg = 0;
 
@@ -277,9 +271,9 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 				}
 				redrawconv();
 			} else
-			# Check mic button first
+			# Check the voice-mode toggle button first
 			if(micrect.dx() > 0 && micrect.contains(p.xy)) {
-				startvoice();
+				togglevoice();
 				redrawconv();
 			} else {
 				# Check for dialogue button clicks first
@@ -347,8 +341,8 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	k := <-kbd =>
 		case k {
 		0 =>
-			# Ctrl+Space — toggle voice input
-			startvoice();
+			# Ctrl+Space — toggle voice mode (same as Esc-V / Voice chip)
+			togglevoice();
 		1 =>
 			# Ctrl-A — beginning of line
 			inputpos = 0;
@@ -435,16 +429,6 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 				inputbuf = inputbuf[0:inputpos] + ch + inputbuf[inputpos:];
 				inputpos++;
 			}
-		}
-		redrawconv();
-	vtext := <-voicech =>
-		# Voice transcription result received
-		voicestate = VOICE_IDLE;
-		if(vtext != nil && vtext != "" && !hasprefix(vtext, "error:")) {
-			inputbuf = vtext;
-			sendinput(inputbuf);
-			inputbuf = "";
-			inputpos = 0;
 		}
 		redrawconv();
 	ev := <-evch =>
@@ -592,16 +576,14 @@ drawconversation(zone: Rect)
 	# what's tappable instead of guessing. REC state inverts to the
 	# accent fill so a recording session reads as the active action,
 	# matching how Send is drawn.
-	miclabel: string;
+	miclabel := "voice";
 	micfill: ref Image;
 	miccol: ref Image;
-	case voicestate {
-	VOICE_REC =>
-		miclabel = "REC";
+	if(voiceactive()) {
+		# Voice mode on: inverted accent fill, same treatment as REC/Send.
 		micfill = accentcol;
 		miccol  = bgcol;
-	* =>
-		miclabel = "mic";
+	} else {
 		micfill = bordercol;	# muted chrome — clearly a button, not the primary action
 		miccol  = textcol;
 	}
@@ -1200,86 +1182,41 @@ writedraft(text: string)
 }
 
 # --- Voice input ---
+# The compose-row voice button toggles the SAME voice mode as Esc-V and
+# lucictx's Voice chip: /mnt/ui/input-mode flips between "v" and "k", and
+# the resident voicemode daemon owns the microphone, wake gating, drafts,
+# and transcript submission. luciconv keeps no speech state of its own —
+# the old press-to-dictate flow (a one-shot /n/speech/hear read pasted
+# into the compose box) duplicated voice mode through a second, subtly
+# different microphone pathway and is gone.
 
-startvoice()
+voiceactive(): int
 {
-	if(voicestate != VOICE_IDLE)
-		return;
-	# Check if speech9p is mounted
-	(ok, nil) := sys->stat("/n/speech/hear");
-	if(ok < 0) {
-		sys->fprint(stderr, "luciconv: /n/speech not mounted\n");
-		return;
-	}
-	voicestate = VOICE_REC;
-	spawn voiceworker(voicech);
+	return strip(readfile(mountpt_g + "/input-mode")) == "v";
 }
 
-VOICE_TIMEOUT_MS: con 30000;
-
-VoiceFD: adt {
-	fd: ref Sys->FD;
-};
-
-voiceworker(ch: chan of string)
+togglevoice()
 {
-	fd := sys->open("/n/speech/hear", Sys->ORDWR);
-	if(fd == nil) {
-		ch <-= "error: cannot open /n/speech/hear";
-		return;
-	}
-
-	# Write start command to begin recording
-	cmd := array of byte "start 5000";
-	if(sys->write(fd, cmd, len cmd) < 0) {
-		ch <-= "error: write to hear failed";
-		return;
-	}
-
-	# Read transcription result with timeout.
-	# Use a shared VoiceFD ref so timeout can nil the fd,
-	# preventing voiceread from looping after timeout.
-	# NOTE: if voiceread is blocked inside sys->read when timeout
-	# fires, it will remain blocked until the underlying kernel FD
-	# is closed or the read returns.  This is a known limitation
-	# of Limbo's FD model -- there is no sys->close().
-	sys->seek(fd, big 0, Sys->SEEKSTART);
-	vfd := ref VoiceFD(fd);
-	resultch := chan of string;
-	spawn voiceread(vfd, resultch);
-
-	timeoutch := chan of int;
-	spawn voicetimeout(timeoutch, VOICE_TIMEOUT_MS);
-
-	alt {
-		result := <-resultch =>
-			ch <-= result;
-		<-timeoutch =>
-			vfd.fd = nil;
-			ch <-= "error: voice recognition timed out";
+	path := mountpt_g + "/input-mode";
+	ctl := sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g);
+	if(voiceactive()) {
+		writestring(path, "k");
+		writestring(ctl, "resource upsert path=/n/speech label=Voice "
+			+ "type=audio status=idle via=voice-mode");
+	} else {
+		writestring(path, "v");
+		writestring(ctl, "resource upsert path=/n/speech label=Voice "
+			+ "type=audio status=starting via=voice-mode");
 	}
 }
 
-voiceread(vfd: ref VoiceFD, ch: chan of string)
+writestring(path, text: string)
 {
-	result := "";
-	buf := array[8192] of byte;
-	for(;;) {
-		fd := vfd.fd;
-		if(fd == nil)
-			break;
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-	}
-	ch <-= result;
-}
-
-voicetimeout(ch: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	ch <-= 1;
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte text;
+	sys->write(fd, b, len b);
 }
 
 # --- Word wrapping ---

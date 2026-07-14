@@ -223,8 +223,22 @@ Implications:
   `reasoning: low` for a non-reasoning model) but was **not** the blocker here —
   the bare ask worked at `reasoning: low`. The blocker is the tool-call parser.
 - **Mistral is not currently usable as a tool-driving agent on this stack.**
-  Fixing it is SGLang serving config (tool-call-parser variant / chat template /
-  streaming), not veltro. Filed as an INFR ticket.
+
+**Root cause (isolated by direct SGLang repro, INFR-382): the STREAMING parser.**
+Same tools request straight at SGLang :30000:
+- `stream:false` → **works**: `finish_reason: tool_calls`, clean
+  `list({"path":"."})`. The one-shot mistral parser decodes the emission fine.
+- `stream:true` → **broken**: `content:""`, `tool_calls:null`,
+  `finish_reason:stop`; `parse_streaming_increment: Expecting value`. The tool
+  call is silently dropped, and llmsrv streams.
+
+The template emits the current Mistral format `[TOOL_CALLS]<name>[CALL_ID]<id>
+[ARGS]<json>` (chat_template.jinja:267); SGLang 0.4.9's *streaming incremental*
+mistral parser can't handle it (the one-shot parser can). gpt-oss streams tool
+calls fine on its 0.5.3 image, so the fix is version-side, streaming preserved.
+Tried running mistral on the gpt-oss `orin-0.5.3` image — it's gpt-oss-specific
+and **crashes** on the mistral AWQ model (`Can not import sgl_kernel`). Fix path:
+build a mistral-capable SGLang 0.5.x Orin (sm_87) image (INFR-382, path 1).
 
 ## Open / future work
 

@@ -105,10 +105,12 @@ run_suite() {
     status=$?
   fi
 
+  # Inferno's emulator does not have one portable success exit status after
+  # the test program finishes: it may exit normally, be reaped by timeout(1),
+  # or terminate itself with SIGKILL (137 on Linux). The testing framework's
+  # final PASS marker, with no failure marker, is the authoritative verdict.
   if grep -q '^PASS$' "$log" && ! grep -q -- '--- FAIL:' "$log"; then
-    if [ "$status" -eq 0 ]; then
-      ok=1
-    fi
+    ok=1
   fi
 
   if [ "$ok" = 1 ]; then

@@ -512,6 +512,21 @@ else
     fail "fixed-service derived capability probe failed"
 fi
 
+if emu_c "app_ipc_tool_derived" 15 \
+    "mkdir -p /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; echo shell-transcript > /tmp/veltro/shell/body; echo shell-input > /tmp/veltro/shell/input; echo 'type mandelbrot' > /tmp/veltro/fractal/state; echo 'fractal view' > /tmp/veltro/fractal/view; echo 'man state' > /tmp/veltro/man/state; echo 'manual page view' > /tmp/veltro/man/view; tools9p shell fractal man read & sleep 2; echo read > /tool/shell/ctl; cat /tool/shell/ctl; echo state > /tool/fractal/ctl; cat /tool/fractal/ctl; echo view > /tool/man/ctl; cat /tool/man/ctl; echo /tmp/veltro/shell/body > /tool/read/ctl; echo GENERIC; cat /tool/read/ctl"; then
+    if ! echo "$OUTPUT" | grep -q "shell-transcript" ||
+       ! echo "$OUTPUT" | grep -q "type mandelbrot" ||
+       ! echo "$OUTPUT" | grep -q "manual page view"; then
+        fail "fixed app tools lost their derived IPC capabilities (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "error: cannot open /tmp/veltro/shell/body"; then
+        fail "generic read inherited an app IPC derived capability (output: $OUTPUT)"
+    else
+        pass "fixed app tools receive IPC paths while generic read remains isolated"
+    fi
+else
+    fail "app IPC derived capability probe failed"
+fi
+
 if emu_c "startup_direct_send_path_rejected" 12 \
     "mkdir /mnt >[2] /dev/null; mkdir /mnt/mail >[2] /dev/null; mkdir /mnt/mail/accounts >[2] /dev/null; mkdir /mnt/mail/accounts/alice >[2] /dev/null; touch /mnt/mail/accounts/alice/compose; tools9p -p /mnt/mail/accounts/alice/compose:rw read; cat /tool/paths >[2] /dev/null"; then
     if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/mail/accounts/alice/compose"; then

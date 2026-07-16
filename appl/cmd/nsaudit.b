@@ -520,7 +520,7 @@ walletAccountControlGrant(p: string): int
 {
 	if(!prefix(p, "/n/wallet/"))
 		return 0;
-	return componentcount(p) == 4 && pathhascomponent(p, "ctl");
+	return componentcount(p) >= 4 && pathhascomponent(p, "ctl");
 }
 
 ftreeControlGrant(p: string): int

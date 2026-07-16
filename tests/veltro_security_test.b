@@ -1531,6 +1531,7 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/phone/sms",
 		"/mnt/msg/ctl",
 		"/n/wallet/alice/ctl",
+		"/n/wallet/alice/ctl/session",
 		"/mnt/mail/accounts/alice/compose",
 		"/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply",
 		"/tmp/veltro/.ns",

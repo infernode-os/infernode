@@ -36,6 +36,7 @@ BAD_PRIV=(
   "/mnt/ui/activity/0/presentation"
   "/mnt/msg/ctl"
   "/n/wallet/alice/ctl"
+  "/n/wallet/alice/ctl/session"
   "/tmp/veltro/ftree"
   "/tmp/veltro/.ns"
   "/tmp/veltro/cow"
@@ -122,7 +123,7 @@ for p in "${GOOD[@]}"; do
 done
 
 mkpaths() {
-    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/msg /n/wallet/alice /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/msg/ctl /n/wallet/alice/ctl /tmp/veltro/ftree/ctl /mnt/matrix/ctl /phone/sms /mnt/mail/accounts/alice/compose"
+    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/msg /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/msg/ctl /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /phone/sms /mnt/mail/accounts/alice/compose"
 }
 
 bad_startup=""

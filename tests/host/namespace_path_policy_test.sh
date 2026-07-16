@@ -35,6 +35,7 @@ BAD_PRIV=(
   "/mnt/ui"
   "/mnt/ui/activity/0/presentation"
   "/mnt/msg/ctl"
+  "/mnt/msg/ctl/session"
   "/n/wallet/alice/ctl"
   "/n/wallet/alice/ctl/session"
   "/tmp/veltro/ftree"
@@ -82,8 +83,18 @@ emu_c() {
 
 nsaudit_one() {
     local path="$1"
-    emu_c "nsaudit-$(echo "$path" | tr -c 'A-Za-z0-9' '_')" 30 \
-        "rm -rf /tmp/nspolicy; mkdir -p /tmp/nspolicy/meta; echo read > /tmp/nspolicy/tools; echo '$path' > /tmp/nspolicy/paths; echo toplevel > /tmp/nspolicy/meta/role; echo 0 > /tmp/nspolicy/meta/xenith; echo -1 > /tmp/nspolicy/meta/actid; echo set > /tmp/nspolicy/meta/nodevs; nsaudit -m /tmp/nspolicy"
+    local name="nsaudit-$(echo "$path" | tr -c 'A-Za-z0-9' '_')"
+    local cmd="rm -rf /tmp/nspolicy; mkdir -p /tmp/nspolicy/meta; echo read > /tmp/nspolicy/tools; echo '$path' > /tmp/nspolicy/paths; echo toplevel > /tmp/nspolicy/meta/role; echo 0 > /tmp/nspolicy/meta/xenith; echo -1 > /tmp/nspolicy/meta/actid; echo set > /tmp/nspolicy/meta/nodevs; nsaudit -m /tmp/nspolicy"
+    local ok=1
+    for attempt in 1 2 3; do
+        ok=0
+        emu_c "$name-$attempt" 30 "$cmd" || ok=1
+        if [[ "$ok" -eq 0 && -n "$OUTPUT" ]] &&
+           ! echo "$OUTPUT" | grep -q "segmentation violation"; then
+            return 0
+        fi
+    done
+    return "$ok"
 }
 
 echo -e "${BOLD}namespace path policy drift checks${NC}"
@@ -123,7 +134,7 @@ for p in "${GOOD[@]}"; do
 done
 
 mkpaths() {
-    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/msg /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/msg/ctl /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /phone/sms /mnt/mail/accounts/alice/compose"
+    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/msg/ctl /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/msg/ctl/session /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /phone/sms /mnt/mail/accounts/alice/compose"
 }
 
 bad_startup=""

@@ -499,7 +499,7 @@ privilegedControlGrant(p: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(p == dangerous[i])
+		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
 			return 1;
 	if(walletAccountControlGrant(p))
 		return 1;

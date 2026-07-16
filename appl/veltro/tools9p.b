@@ -789,7 +789,7 @@ privilegedcontrolpath(path: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(path == dangerous[i])
+		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
 	if(walletaccountcontrolpath(path))
 		return 1;

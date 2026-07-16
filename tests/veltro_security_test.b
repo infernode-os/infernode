@@ -1536,6 +1536,11 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/tmp/veltro/.ns",
 		"/tmp/veltro/cow",
 		"/tmp/veltro/tasks",
+		"/tmp/veltro/browser",
+		"/tmp/veltro/editor",
+		"/tmp/veltro/shell",
+		"/tmp/veltro/fractal",
+		"/tmp/veltro/man",
 	};
 
 	for(i := 0; i < len bad; i++) {

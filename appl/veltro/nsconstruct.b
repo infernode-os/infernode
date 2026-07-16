@@ -890,6 +890,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(tmpveltrointernalpath(path))
 		return 1;
+	if(appipccontrolpath(path))
+		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
 	if(fixedservicecontrolpath(path))
@@ -919,6 +921,17 @@ tmpveltrointernalpath(path: string): int
 	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
 		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
 		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
+}
+
+appipccontrolpath(path: string): int
+{
+	# App IPC roots are controlled through their fixed-function tools. A raw
+	# path grant would let generic filesystem/shell tools drive the app protocol.
+	return path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
+		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
+		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
+		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
+		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
 }
 
 uiagentcontrolpath(path: string): int

@@ -810,7 +810,7 @@ walletaccountcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
-	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
+	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
 }
 
 ftreecontrolpath(path: string): int

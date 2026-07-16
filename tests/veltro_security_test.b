@@ -490,10 +490,10 @@ tmpVeltroIpcHiddenWorker(result: chan of string)
 
 testTmpVeltroExplicitGrant(t: ref T)
 {
-	sys->create("/tmp/veltro/editor", Sys->OREAD, Sys->DMDIR | 8r755);
-	fd := sys->create("/tmp/veltro/editor/state", Sys->OWRITE, 8r666);
+	sys->create("/tmp/veltro/shared", Sys->OREAD, Sys->DMDIR | 8r755);
+	fd := sys->create("/tmp/veltro/shared/state", Sys->OWRITE, 8r666);
 	if(fd == nil) {
-		t.skip("cannot create editor IPC fixture");
+		t.skip("cannot create shared tmp fixture");
 		return;
 	}
 	sys->fprint(fd, "open");
@@ -501,8 +501,8 @@ testTmpVeltroExplicitGrant(t: ref T)
 	result := chan of string;
 	spawn tmpVeltroExplicitGrantWorker(result);
 	r := <-result;
-	sys->remove("/tmp/veltro/editor/state");
-	sys->remove("/tmp/veltro/editor");
+	sys->remove("/tmp/veltro/shared/state");
+	sys->remove("/tmp/veltro/shared");
 	if(r != "")
 		t.error(r);
 }
@@ -511,7 +511,7 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	caps := ref NsConstruct->Capabilities(
-		"editor" :: nil, "/tmp/veltro/editor" :: nil, nil, nil,
+		"read" :: nil, "/tmp/veltro/shared" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
@@ -519,9 +519,9 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 		result <-= sys->sprint("restrict tmp explicit worker: %s", err);
 		return;
 	}
-	(ok, nil) := sys->stat("/tmp/veltro/editor/state");
+	(ok, nil) := sys->stat("/tmp/veltro/shared/state");
 	if(ok < 0) {
-		result <-= "explicit /tmp/veltro/editor grant missing";
+		result <-= "explicit /tmp/veltro/shared grant missing";
 		return;
 	}
 	result <-= "";
@@ -1561,6 +1561,62 @@ privilegedGrantPathsWorker(result: chan of string)
 	result <-= "";
 }
 
+testSafeGrantPathsAccepted(t: ref T)
+{
+	result := chan of string;
+	spawn safeGrantPathsWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+safeGrantPathsWorker(result: chan of string)
+{
+	good := array[] of {
+		"/tmp",
+		"/tmp/veltro/scratch",
+		"/mnt/msg",
+		"/mnt/msg/draft",
+	};
+
+	for(i := 0; i < len good; i++) {
+		one := chan of string;
+		spawn safeGrantPathOne(good[i], one);
+		r := <-one;
+		if(r != "") {
+			result <-= r;
+			return;
+		}
+	}
+
+	result <-= "";
+}
+
+safeGrantPathOne(path: string, result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	mkdirp("/mnt/msg");
+	createfile("/mnt/msg/status");
+	createfile("/mnt/msg/draft");
+	mkdirp("/tmp/veltro/scratch");
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		path :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= "restrictns rejected safe grant path " + path + ": " + err;
+		return;
+	}
+
+	result <-= "";
+}
+
 # A path that treats an existing file as a directory must fail closed. Otherwise
 # recursive restriction can expose the parent file after the deeper bind fails.
 testInvalidGrantTypeRejected(t: ref T)
@@ -1880,6 +1936,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ToolCtlHidden", testToolCtlHidden);
 	run("InvalidGrantPathsRejected", testInvalidGrantPathsRejected);
 	run("PrivilegedGrantPathsRejected", testPrivilegedGrantPathsRejected);
+	run("SafeGrantPathsAccepted", testSafeGrantPathsAccepted);
 	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
 

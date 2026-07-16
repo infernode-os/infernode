@@ -1530,6 +1530,7 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/phone",
 		"/phone/sms",
 		"/mnt/msg/ctl",
+		"/mnt/msg/ctl/session",
 		"/n/wallet/alice/ctl",
 		"/n/wallet/alice/ctl/session",
 		"/mnt/mail/accounts/alice/compose",

@@ -134,10 +134,10 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
-	err := validatepaths(caps.paths, "path");
+	err := validatepaths(caps.paths, "path", caps.tools);
 	if(err != nil)
 		return err;
-	err = validatepaths(caps.writepaths, "write path");
+	err = validatepaths(caps.writepaths, "write path", caps.tools);
 	if(err != nil)
 		return err;
 
@@ -818,14 +818,14 @@ pathwithin(grant, want: string): int
 	return 0;
 }
 
-validatepaths(paths: list of string, what: string): string
+validatepaths(paths: list of string, what: string, tools: list of string): string
 {
 	for(; paths != nil; paths = tl paths) {
 		p := hd paths;
 		err := validatepath(p);
 		if(err != nil)
 			return sys->sprint("invalid %s %s: %s", what, p, err);
-		if(!grantpathallowed(p))
+		if(!grantpathallowed(p, tools))
 			return sys->sprint("invalid %s %s: privileged path not grantable", what, p);
 	}
 	return nil;
@@ -857,16 +857,16 @@ validatepath(p: string): string
 	return nil;
 }
 
-grantpathallowed(path: string): int
+grantpathallowed(path: string, tools: list of string): int
 {
-	if(privilegedcontrolpath(path))
+	if(privilegedcontrolpath(path, tools))
 		return 0;
 	if(directmailsendpath(path))
 		return 0;
 	return 1;
 }
 
-privilegedcontrolpath(path: string): int
+privilegedcontrolpath(path: string, tools: list of string): int
 {
 	dangerous := array[] of {
 		"/tool/ctl",
@@ -890,7 +890,7 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(tmpveltrointernalpath(path))
 		return 1;
-	if(appipccontrolpath(path))
+	if(appipccontrolpath(path) && !appipctoolpath(path, tools))
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
@@ -932,6 +932,29 @@ appipccontrolpath(path: string): int
 		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
 		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
 		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+}
+
+appipctoolpath(path: string, tools: list of string): int
+{
+	# These are not user-delegatable filesystem grants. tools9p derives them
+	# only for the matching fixed-function tool invocation, so generic tools in
+	# the same server cannot reuse them.
+	if((path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/")) &&
+	   inlist("charon", tools))
+		return 1;
+	if((path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/")) &&
+	   inlist("editor", tools))
+		return 1;
+	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&
+	   inlist("shell", tools))
+		return 1;
+	if((path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/")) &&
+	   inlist("fractal", tools))
+		return 1;
+	if((path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/")) &&
+	   inlist("man", tools))
+		return 1;
+	return 0;
 }
 
 uiagentcontrolpath(path: string): int

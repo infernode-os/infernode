@@ -144,11 +144,13 @@ jobs:
         chmod +x tests/host/nsaudit_profiles_test.sh
         chmod +x tests/host/nsaudit_path_semantics_test.sh
         chmod +x tests/host/namespace_path_policy_test.sh
+        chmod +x tests/host/namespace_manifest_invariants_test.sh
 
         ROOT=. bash tests/host/nsaudit_rules_test.sh
         ROOT=. bash tests/host/nsaudit_profiles_test.sh
         ROOT=. bash tests/host/nsaudit_path_semantics_test.sh
         ROOT=. bash tests/host/namespace_path_policy_test.sh
+        ROOT=. bash tests/host/namespace_manifest_invariants_test.sh
 
     - name: Run llmsrv session capability checks
       run: |

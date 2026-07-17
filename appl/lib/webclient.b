@@ -170,6 +170,9 @@ requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte)
 request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
 {
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
+		verr := validrequesttext(method, requrl, hdrs);
+		if(verr != nil)
+			return (nil, verr);
 		(resp, err) := dorequest(method, requrl, hdrs, body, public);
 		if(err != nil)
 			return (nil, err);
@@ -200,6 +203,70 @@ request0(method, requrl: string, hdrs: list of Header, body: array of byte, publ
 		}
 	}
 	return (nil, "too many redirects");
+}
+
+validrequesttext(method, requrl: string, hdrs: list of Header): string
+{
+	if(!validtoken(method))
+		return "invalid HTTP method";
+	if(!validurltext(requrl))
+		return "invalid URL text";
+	for(; hdrs != nil; hdrs = tl hdrs) {
+		h := hd hdrs;
+		if(!validheadername(h.name))
+			return "invalid HTTP header name";
+		if(!validheadervalue(h.value))
+			return "invalid HTTP header value";
+	}
+	return nil;
+}
+
+validtoken(s: string): int
+{
+	if(s == nil || len s == 0)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
+	return 1;
+}
+
+validurltext(s: string): int
+{
+	if(s == nil || len s == 0)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
+	return 1;
+}
+
+validheadername(s: string): int
+{
+	if(s == nil || len s == 0)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c <= ' ' || c == ':' || c == 16r7F)
+			return 0;
+	}
+	return 1;
+}
+
+validheadervalue(s: string): int
+{
+	if(s == nil)
+		return 1;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7F)
+			return 0;
+	}
+	return 1;
 }
 
 redirectheaders(hdrs: list of Header): list of Header

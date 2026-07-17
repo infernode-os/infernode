@@ -142,6 +142,31 @@ testPublicRequestRejectsPrivate(t: ref T)
 	}
 }
 
+testRejectsControlRequestText(t: ref T)
+{
+	(resp, err) := webclient->requestpublic("GET", "http://example.com/\r\nX-Evil:%20yes", nil, nil);
+	t.assert(resp == nil, "URL control characters returned no response");
+	t.assert(err != nil && contains(err, "invalid URL text"),
+		"URL control characters rejected before dial");
+
+	(resp, err) = webclient->requestpublic("GET\r\nX-Evil: yes", "http://example.com/", nil, nil);
+	t.assert(resp == nil, "method control characters returned no response");
+	t.assert(err != nil && contains(err, "invalid HTTP method"),
+		"method control characters rejected before dial");
+
+	badhdrs := Header("X-Test", "ok\r\nX-Evil: yes") :: nil;
+	(resp, err) = webclient->requestpublic("GET", "http://example.com/", badhdrs, nil);
+	t.assert(resp == nil, "header value control characters returned no response");
+	t.assert(err != nil && contains(err, "invalid HTTP header value"),
+		"header value control characters rejected before dial");
+
+	badhdrs = Header("X-Test: evil", "ok") :: nil;
+	(resp, err) = webclient->requestpublic("GET", "http://example.com/", badhdrs, nil);
+	t.assert(resp == nil, "header name separator returned no response");
+	t.assert(err != nil && contains(err, "invalid HTTP header name"),
+		"header name separator rejected before dial");
+}
+
 contains(s, needle: string): int
 {
 	if(needle == nil || len needle == 0)
@@ -183,6 +208,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Non-network tests first
 	run("HeaderLookup", testHeaderLookup);
 	run("PublicRequestRejectsPrivate", testPublicRequestRejectsPrivate);
+	run("RejectsControlRequestText", testRejectsControlRequestText);
 
 	# Network tests (may skip if no connectivity)
 	run("HttpsGet", testHttpsGet);

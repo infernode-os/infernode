@@ -77,6 +77,22 @@ EOF
 	exit 1
 fi
 
+# CNSA 2.0 mode: mirror serve-llm.sh's resolution so the harness honors the
+# fleet-wide CNSAMODE policy (ML-KEM-1024 key agreement + ML-DSA-87 signer).
+# Without this the emu defaults to ML-KEM-768; mounting /mnt/llm against a CNSA
+# serve-llm then fails with "authentication failed: bad ml-kem public key
+# length". Resolve + re-export explicitly (same "on unless unset/0/n/N" rule
+# keyring.c cnsamode() applies) so the policy is deterministic regardless of how
+# the caller's environment set it, and reflected into /env/cnsamode for the emu.
+cnsa_truthy() {  # mirror keyring.c: set, non-empty, first char not 0/n/N
+	case "${1:-}" in
+		""|0*|n*|N*) return 1 ;;
+		*)           return 0 ;;
+	esac
+}
+if cnsa_truthy "${CNSAMODE:-}"; then CNSAMODE=1; else CNSAMODE=0; fi
+export CNSAMODE
+
 export SERVE_LLM_AUTH="$LISTEN_MODE"
 export SERVE_LLM_KEY="$KEY_INFPATH"
 
@@ -86,6 +102,7 @@ serve-agent: $(date -Iseconds) starting
   root    = $ROOT
   profile = $PROFILE_INF
   listen  = $LISTEN_MODE (loopback only)
+  cnsa    = $CNSAMODE (1 = ML-KEM-1024 + ML-DSA-87; 0 = ML-KEM-768)
   /mnt/llm  = tcp!127.0.0.1!5640
   /mnt/ui   = tcp!127.0.0.1!5641
   keyfile = $KEY_HOSTPATH (in-emu: $KEY_INFPATH)

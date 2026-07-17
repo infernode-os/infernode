@@ -1,9 +1,9 @@
 # Voice Mode for Lucia: Phase 1
 
-Status: Phase 1 release candidate on
-`infernode-os/voice-mode-phase1-gap-closure`. Automated implementation is
-complete; real microphone, audible GUI, and spoken-control acceptance remain
-human gates. Cross-host acceptance is Phase 2.
+Status: Phase 1 release candidate on `dev`. Automated implementation and the
+composed voice-to-LLM-to-speech path are covered by blocking tests. Real
+microphone/audio quality and physical GUI input remain human gates. Cross-host
+acceptance is Phase 2.
 
 ## Phase Boundary and Exit Criteria
 
@@ -16,17 +16,21 @@ confirmation, and one visibly capped busy-turn follow-up. It also includes the
 installer/boot selection path, LLM-free speech testing, and explicitly selected
 local OpenAI-compatible LLM backends.
 
-Phase 1 is complete only after all automated checks pass and a human confirms:
+Phase 1 is complete only after all automated checks pass and a human confirms
+the hardware and physical-interface behavior that CI cannot reproduce:
 
-1. Normal-speed Kokoro playback and usable Parakeet transcription through the
-   real emulator microphone path.
-2. Grace countdown, final deduplication, append, send, and spoken cancellation.
-3. Voice chip, compose button, Ctrl+Space, Esc-V, and Option/Alt+V all toggle
+1. Through the real emulator microphone path, Parakeet produces usable live
+   partial/final transcription and Kokoro playback is intelligible, natural
+   speed, and non-overlapping.
+2. Voice chip, compose button, Ctrl+Space, Esc-V, and Option/Alt+V all toggle
    the same mode and return cleanly to preserved keyboard input.
-4. Spoken approvals, denial, refinement, one queued follow-up with visible
-   rejection of additional speech, and low-confidence confirmation.
-5. A real turn completes against the selected local or remote LLM backend
-   without an unrelated API key overriding that selection.
+3. macOS microphone permission is granted to the actual launch context, the
+   microphone is released on exit, and Esc stops audible TTS in half-duplex
+   mode and returns to keyboard input.
+
+Grace, final deduplication, append/cancel, low-confidence confirmation, spoken
+approval/refinement/denial, capped follow-up queuing, explicit LLM-provider
+selection, and the full service composition are automated release gates.
 
 Two-host/Jetson deployment, public Parakeet EOU model distribution, rich queue
 management, native 24000/48000 Hz playback, and any particular/custom wake-word
@@ -50,11 +54,11 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
   and is the boot-time default provider at `/n/speechshim`; a parakeet
   export or a remote 9P mount is the same one-line ctl switch. The shim
   hard-cancels active TTS by killing the helper process (devcmd `kill`),
-  so barge-in silence is bounded by one audio chunk.
+  so cancellation silence is bounded by one audio chunk.
 - Asynchronous serving of `listen`, `wake`, `hear`, and in-flight `say`/`sayq`
   result reads in `speech9p`, with Flush/Clunk cancellation of parked reads.
   A wake read blocked in a helper no longer freezes the serveloop, so `cancel`
-  writes (barge-in), `ctl`, and `sayq` stay live while helpers run.
+  writes, `ctl`, and `sayq` stay live while helpers run.
 - `luciuisrv` support for `/n/ui/input-mode` and
   `conversation/voiceinput`, so keyboard mode can be paused while
   voice-originated turns still have a privileged path into `lucibridge`.
@@ -68,10 +72,10 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
 - A resident `voicemode` daemon, pre-spawned at boot in an idle state. It
   activates on the `input-mode v` broadcast (with an input-mode poll
   fallback when the event stream is unavailable), runs the
-  WAITING_WAKE → LISTENING → PROCESSING/SPEAKING loop, re-arms wake during
-  the spoken response so a wake event acts as barge-in (`cancel`, then
-  listen), handles spoken control intents (stop/cancel, keyboard,
-  approve/deny), and returns to idle on `input-mode k`.
+  WAITING_WAKE → LISTENING → PROCESSING/SPEAKING loop, handles spoken control
+  intents (stop/cancel, keyboard, approve/deny), and returns to idle on
+  `input-mode k`. The shipped half-duplex mode suppresses microphone capture
+  during TTS; explicit full-duplex mode may use wake as spoken barge-in.
 - `Esc` exits voice mode: `lucifer`'s kbdproc tracks input-mode from global
   events and writes `k` back to `/mnt/ui/input-mode` on Esc, which fans out
   to `voicemode` (cancels speech, idles) and `lucibridge` (resumes typing).
@@ -125,23 +129,28 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
   serveloop-liveness assertions), and `tests/voicemode_test.b` (daemon state
   machine against a mock file tree), alongside the earlier
   `tests/speech9p_voice_test.b` and `tests/luciuisrv_test.b` coverage.
+- A hermetic composed E2E test at `tests/host/speech_e2e_test.sh` runs the real
+  `luciuisrv`, `voicemode`, `speech9p`, `speechshim9p`, `llmsrv`, and
+  `lucibridge` services. Deterministic host speech helpers and a loopback
+  OpenAI-compatible server replace only hardware and external models. It
+  exercises partial/final transcription and verifies exactly-once final
+  submission, explicit local provider/model selection with unrelated API keys
+  removed, the Lucia reply, TTS delivery, the Voice resource, and microphone
+  release. The test is part of `tools/speech-regress.sh` and therefore blocks
+  CI.
 
-Still requires human acceptance:
+Remaining human acceptance:
 
-- Helper models/binaries remain host dependencies; install them externally per
-  Host Dependencies below.
-- The specific/custom wake model is intentionally deferred.
-- Half-duplex is the shipped echo-safety default. Full-duplex spoken barge-in
-  remains an explicit opt-in for echo-controlled/headset setups.
-- Tool/task cancellation is best-effort; hard cancellation of arbitrary
-  tools is still future work. TTS helper processes ARE hard-cancelled
-  (speechshim9p kills them via devcmd on `cancel`); in-flight wake/listen
-  helper reads survive a flush and are drained on completion.
-- Confirm audible non-overlapping assistant speech, TTS cancellation, live
-  drafts without compose corruption, `Esc-V`/Option+V, real-microphone spoken
-  controls and approvals, and the low-confidence confirmation flow.
-- Confirm the selected local OpenAI-compatible or remote LLM backend completes
-  a real voice turn without an Anthropic key changing the selected backend.
+- Install the real helper models/binaries, grant macOS microphone permission,
+  and confirm Parakeet/Kokoro quality through the emulator's actual audio path.
+- Exercise each physical GUI/keyboard entry surface once and confirm preserved
+  keyboard input, microphone release, and audible Esc cancellation.
+
+The specific/custom wake model is intentionally deferred. Half-duplex is the
+shipped echo-safety default; full-duplex spoken barge-in remains an opt-in for
+echo-controlled/headset setups. Hard cancellation of arbitrary tools remains
+future work, while TTS helper processes are hard-cancelled through
+`speechshim9p`.
 
 This document captures Claude's analysis findings, the decisions confirmed with
 the user, and the approved Phase 1 plan for a local, Mac-only voice mode in
@@ -159,8 +168,7 @@ Lucia is currently keyboard-driven. Phase 1 adds a hands-free mode:
 4. Speak an utterance.
 5. Lucia transcribes it, sends it through the existing conversation path, and
    speaks the assistant response.
-6. Say `hey lucia` during speech to interrupt, or press `Esc` to return to
-   keyboard mode.
+6. Press `Esc` during speech to cancel TTS and return to keyboard mode.
 
 Phase 1 runs entirely on one Apple Silicon Mac using the laptop microphone and
 speakers. Remote inference, namespace audio routing, and pluggable speech
@@ -243,8 +251,8 @@ Remote-audio finding:
 | --- | --- |
 | Deployment target | Local Mac only, Apple Silicon first |
 | Activation | `/voice mode on` and `/voice mode off` |
-| Wake behavior | Wake word: `hey lucia` |
-| Wake model | Placeholder model first, custom `hey lucia` model in Phase 1.x |
+| Wake behavior | Use the phrase supplied by the configured wake model |
+| Wake model | Model identity is not a Phase 1 acceptance gate |
 | Keyboard behavior | Mutually exclusive; typing is paused while voice mode is active |
 | Escape hatch | `Esc` always returns to keyboard mode |
 | STT model | whisper.cpp `base.en` by default |
@@ -776,11 +784,11 @@ After all Phase 1 work lands:
    ```text
    ./run-lucia.sh
    /voice mode on
-   say: hey lucia, what time is it?
+   say: [configured wake phrase], what time is it?
    expected: transcript appears as user input, assistant responds, response is spoken
-   say: hey lucia while response is speaking
-   expected: TTS stops and system returns to listening
-   press Esc
+   press Esc while response is speaking
+   expected: TTS stops and voice mode returns to keyboard input
+   enter voice mode again, then press Esc
    expected: voice mode exits and typing resumes
    ```
 
@@ -789,7 +797,8 @@ Acceptance targets:
 - Wake-word detection latency: under 200 ms from utterance end to wake event.
 - End-of-speech to final transcript: under 800 ms with whisper.cpp `base.en`.
 - Assistant first token to first audio: under 500 ms with Kokoro.
-- Barge-in to TTS silence: under 200 ms.
+- Esc cancellation to TTS silence: under 200 ms in the shipped half-duplex
+  mode. Spoken barge-in requires explicit full-duplex opt-in.
 
 ## Testing the Speech Loop Without an LLM
 
@@ -838,8 +847,8 @@ boot-mobile.sh pattern: set variables, `run` the canonical boot.sh).
 The login screen is skipped (`skiplogon=1` — no keys are needed since
 nothing calls the LLM) and `voicemode` starts in test mode
 (`-p phrase`, plus `-e` when given): entering voice mode (Esc-V or a
-Voice-chip click), wake on "hey jarvis", live partials in the Voice
-chip, chimes, and barge-in all behave exactly as in production, but a
+Voice-chip click), the configured wake phrase, live partials in the Voice
+chip, chimes, and half-duplex echo suppression behave as in production, but a
 final transcript is posted to the conversation as a "Heard" dialogue
 line and answered by speaking the canned phrase instead of becoming an
 LLM turn. Spoken control intents ("stop", "keyboard", …) still work.
@@ -864,6 +873,24 @@ The headless-only flags (`-n`, `-c`, `-M`, `-d`) are rejected with
 Unit tests for the daemon's test mode: `tests/voicemode_test.b`
 (`TestMode*` cases).
 
+### Automated Composed Voice E2E
+
+`tests/host/speech_e2e_test.sh` is the blocking, hardware-free production-path
+test. It starts a loopback OpenAI-compatible endpoint, then runs the real Lucia,
+LLM, bridge, voice-mode, speech-provider, and speech-shim services together.
+The helper fixture emits deterministic wake plus partial/final records and
+captures TTS PCM without requiring microphone permission or installed models.
+
+The scenario proves that a live/final transcript reaches Lucia exactly once,
+the explicitly selected local OpenAI model receives one request, the assistant
+reply returns through the conversation, and that reply reaches `speech9p` TTS.
+It also verifies the Voice lifecycle resource and microphone release. Run it
+directly after building its bytecode, or as part of the normal blocking suite:
+
+```sh
+tools/speech-regress.sh
+```
+
 ## Delivered Files
 
 | Path | Action | Phase |
@@ -883,6 +910,9 @@ Unit tests for the daemon's test mode: `tests/voicemode_test.b`
 | `tests/speech_listen_test.b` | Streaming STT test | 1.6 |
 | `tests/speech_wake_test.b` | Wake-word test | 1.6 |
 | `tests/voicemode_test.b` | Voice daemon test | 1.6 |
+| `tests/speech_e2e_test.b` | Composed Lucia/LLM/voice service test | 1.6 |
+| `tests/host/speech_e2e_test.sh` | Hermetic loopback E2E harness | 1.6 |
+| `tests/host/speech_e2e_helper.sh` | Deterministic speech helper fixture | 1.6 |
 | `docs/SPEECH-REMOTE-AUDIO.md` | Add Phase 2 pointer after Phase 1 stabilizes | 1.6 |
 
 ## Out of Scope for Phase 1
@@ -899,7 +929,6 @@ Unit tests for the daemon's test mode: `tests/voicemode_test.b`
 
 ## Immediate Next Step
 
-Run the automated release-candidate suite, merge the candidate locally into
-`dev`, then stop for the human Phase 1 exit checks above. If a check fails, add
-a forward-only fix commit to the Phase 1 branch and merge that commit into
-`dev`; do not amend or rebase the published candidate history.
+Run the automated release-candidate suite on `dev`, then complete the three
+hardware/physical-interface checks above. If a check fails, add a forward-only
+fix commit; do not amend or rebase published candidate history.

@@ -382,6 +382,24 @@ testYesRequiresBlocked(t: ref T)
 		"bare yes maps to Allow only while activity is blocked");
 }
 
+testNoDeniesBlockedApproval(t: ref T)
+{
+	createfile(MOCKUI + "/activity/0/status", "blocked");
+	createfile(MOCKSPEECH + "/listen", "final no\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput", "Deny", 5000),
+		"bare no maps to Deny while activity is blocked");
+}
+
+testStatusSpeaksActivityState(t: ref T)
+{
+	createfile(MOCKUI + "/activity/0/status", "working");
+	createfile(MOCKSPEECH + "/listen", "final status\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKSPEECH + "/say", "Current activity is working.", 5000),
+		"spoken status reads the current activity state through TTS");
+}
+
 testLowConfidenceRequiresConfirmation(t: ref T)
 {
 	createfile(MOCKSPEECH + "/listen",
@@ -397,6 +415,22 @@ testLowConfidenceRequiresConfirmation(t: ref T)
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"remove the old report", 5000),
 		"high-confidence yes submits the interpreted utterance");
+}
+
+testLowConfidenceNoRequestsRepeat(t: ref T)
+{
+	createfile(MOCKSPEECH + "/listen",
+		"final confidence=0.4200 delete the release branch\n");
+	createfile(MOCKUI + "/input-mode", "v");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/ctl",
+		"title=Confirm speech", 5000),
+		"low-confidence final asks for confirmation before a rejection");
+	createfile(MOCKSPEECH + "/listen", "final confidence=0.9900 no\n");
+	t.assert(waitfor(MOCKSPEECH + "/say", "Okay. Please say it again.", 5000),
+		"spoken no discards the interpretation and asks for a repeat");
+	vi := readfile(MOCKUI + "/activity/0/conversation/voiceinput");
+	t.assert(!hassubstr(vi, "delete the release branch"),
+		"rejected low-confidence interpretation is never submitted");
 }
 
 testHelperErrorSurfacedOnce(t: ref T)
@@ -600,8 +634,14 @@ init(nil: ref Draw->Context, args: list of string)
 	runvm("ControlIntentPunctuation", nil, testControlIntentPunctuation);
 	runvm("PauseResumeControls", "-w" :: "200" :: nil, testPauseResumeControls);
 	runvm("YesRequiresBlocked", "-w" :: "200" :: nil, testYesRequiresBlocked);
+	runvm("NoDeniesBlockedApproval", "-w" :: "200" :: nil,
+		testNoDeniesBlockedApproval);
+	runvm("StatusSpeaksActivityState", "-w" :: "200" :: nil,
+		testStatusSpeaksActivityState);
 	runvm("LowConfidenceRequiresConfirmation", "-w" :: "200" :: nil,
 		testLowConfidenceRequiresConfirmation);
+	runvm("LowConfidenceNoRequestsRepeat", "-w" :: "200" :: nil,
+		testLowConfidenceNoRequestsRepeat);
 	runvm("HelperErrorSurfacedOnce", nil, testHelperErrorSurfacedOnce);
 	runvm("SpokenKeyboardIntent", nil, testSpokenKeyboardIntent);
 	runvm("TestModeSpeaksPhrase", "-p" :: "canned reply" :: nil,

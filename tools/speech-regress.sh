@@ -37,7 +37,7 @@ x86_64|amd64)  objtype=amd64 ;;
 esac
 export PATH=$ROOT/$SYSHOST/$objtype/bin:$PATH
 
-EMU=$ROOT/emu/$SYSHOST/o.emu
+EMU=${EMU:-$ROOT/emu/$SYSHOST/o.emu}
 if [ ! -x "$EMU" ]; then
   echo "speech-regress: emulator not built: $EMU" >&2
   exit 1
@@ -60,6 +60,10 @@ voice_scripts_test
 speech_kokoro_test
 "
 
+# Built here but run through its host wrapper below because it needs a
+# loopback OpenAI-compatible server and deterministic host speech helpers.
+BUILD_ONLY_SUITES="speech_e2e_test"
+
 # Rebuild only the suites we run. Without the native mk (fresh clone,
 # tools not bootstrapped) fall back to whatever bytecode is already there.
 if command -v mk >/dev/null 2>&1; then
@@ -68,7 +72,7 @@ if command -v mk >/dev/null 2>&1; then
     echo "speech-regress: could not create build log" >&2
     exit 1
   }
-  for t in $SUITES; do
+  for t in $SUITES $BUILD_ONLY_SUITES; do
     if ! (cd tests && mk "$t.dis") >>"$buildlog" 2>&1; then
       echo "speech-regress: build failed for $t:" >&2
       cat "$buildlog" >&2
@@ -162,6 +166,10 @@ run_host_test() {
     ;;
   esac
 }
+
+# This is the blocking composed path: real Lucia/LLM/speech services with
+# deterministic loopback fixtures replacing only microphones and models.
+run_host_test speech_e2e_test.sh
 
 # The download test is hermetic: it sources the installer with a fake curl.
 run_host_test speech_installer_download_test.sh

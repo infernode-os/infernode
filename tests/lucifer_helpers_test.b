@@ -277,15 +277,36 @@ slugify(s: string): string
 
 islaunchabledis(path: string): int
 {
-	if(len path < 5 || path[len path - 4:] != ".dis")
+	if(path == nil || len path == 0)
 		return 0;
 	prefixes := "/dis/wm/" :: "/dis/charon/" :: "/dis/xenith/" :: nil;
+	ok := 0;
 	for(pl := prefixes; pl != nil; pl = tl pl) {
 		pfx := hd pl;
-		if(len path >= len pfx && path[0:len pfx] == pfx)
-			return 1;
+		if(len path >= len pfx && path[0:len pfx] == pfx) {
+			ok = 1;
+			break;
+		}
 	}
-	return 0;
+	if(!ok)
+		return 0;
+	if(len path < 4 || path[len path - 4:] != ".dis")
+		return 0;
+	for(i := 0; i < len path; i++) {
+		c := path[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
+	for(i = 0; i < len path - 1; i++) {
+		if(path[i] == '.' && path[i + 1] == '.')
+			return 0;
+		if(path[i] == '/' && path[i + 1] == '/')
+			return 0;
+		if(path[i] == '/' && path[i + 1] == '.' &&
+				(i + 2 >= len path || path[i + 2] == '/'))
+			return 0;
+	}
+	return 1;
 }
 
 sortstrlist(l: list of string): list of string
@@ -642,6 +663,24 @@ testIslaunchabledisShort(t: ref T)
 		"islaunchabledis: short path not allowed");
 }
 
+testIslaunchabledisRejectsTraversal(t: ref T)
+{
+	t.asserteq(islaunchabledis("/dis/wm/../cmd/sh.dis"), 0,
+		"islaunchabledis: parent traversal rejected");
+	t.asserteq(islaunchabledis("/dis/wm/./clock.dis"), 0,
+		"islaunchabledis: dot component rejected");
+	t.asserteq(islaunchabledis("/dis/wm//clock.dis"), 0,
+		"islaunchabledis: empty component rejected");
+}
+
+testIslaunchabledisRejectsWhitespace(t: ref T)
+{
+	t.asserteq(islaunchabledis("/dis/wm/clock.dis data=-c owned"), 0,
+		"islaunchabledis: space-delimited command data rejected");
+	t.asserteq(islaunchabledis("/dis/wm/clock\n.dis"), 0,
+		"islaunchabledis: newline rejected");
+}
+
 # --- sortstrlist tests ---
 
 testSortstrlistBasic(t: ref T)
@@ -760,6 +799,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("IslaunchabledisNotAllowed", testIslaunchabledisNotAllowed);
 	run("IslaunchabledisNotDis", testIslaunchabledisNotDis);
 	run("IslaunchabledisShort", testIslaunchabledisShort);
+	run("IslaunchabledisRejectsTraversal", testIslaunchabledisRejectsTraversal);
+	run("IslaunchabledisRejectsWhitespace", testIslaunchabledisRejectsWhitespace);
 
 	# sortstrlist
 	run("SortstrlistBasic", testSortstrlistBasic);

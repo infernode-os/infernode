@@ -310,6 +310,11 @@ hasprefix(s, prefix: string): int
 isallowedurl(url: string): int
 {
 	lurl := str->tolower(url);
+	for(i := 0; i < len lurl; i++) {
+		c := lurl[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
 	if(hasprefix(lurl, "http://") || hasprefix(lurl, "https://"))
 		return 1;
 	return 0;

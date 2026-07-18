@@ -11,7 +11,7 @@ SUPPORT_CANARIES=(
 	"$ROOT/lib/certs/exec-support-canary"
 	"$ROOT/dis/veltro/exec-support-canary"
 )
-trap 'rm -f "$CANARY" "$PROBE" "$ROOT/tmp/veltro/scratch/77/private" "${SUPPORT_CANARIES[@]}"' EXIT
+trap 'rm -f "$CANARY" "$PROBE" "$ROOT/tmp/veltro/scratch/77/private" "$ROOT/tmp/veltro/escape" "${SUPPORT_CANARIES[@]}"' EXIT
 
 [[ -x "$EMU" ]] || { echo "ERROR: emu not found at $EMU" >&2; exit 1; }
 
@@ -67,6 +67,15 @@ if grep -q '^WROTE /tmp/veltro/.ns/manifest' <<<"$OUTPUT" || grep -q '^changed$'
 	echo "FAIL: exec mutated trusted namespace manifest"; echo "$OUTPUT"; exit 1
 fi
 echo "PASS: exec cannot mutate trusted namespace manifest"
+
+rm -f "$ROOT/tmp/veltro/escape"
+runemu "tools9p -a 77 write edit & sleep 2; echo /tmp/veltro/scratch/../escape escaped > /tool/write/run; sleep 2; cat /tool/write/run; echo /tmp/veltro/scratch/../escape original escaped-edit > /tool/edit/run; sleep 2; cat /tool/edit/run; echo ESCAPE; cat /tmp/veltro/escape >[2] /dev/null; echo DONE"
+denials=$(grep -o "invalid path: dot path component" <<<"$OUTPUT" | wc -l | tr -d ' ')
+[[ $denials -ge 2 ]] || { echo "FAIL: scratch traversal write/edit were not both denied"; echo "$OUTPUT"; exit 1; }
+if grep -q '^escaped' <<<"$OUTPUT" || [[ -e "$ROOT/tmp/veltro/escape" ]]; then
+	echo "FAIL: scratch traversal escaped into shared workspace"; echo "$OUTPUT"; exit 1
+fi
+echo "PASS: scratch traversal cannot escape private workspace"
 
 runemu "tools9p -a 77 write & sleep 2; echo /tmp/veltro/shared-root denied > /tool/write/run; sleep 2; cat /tool/write/run; echo /tmp/veltro/scratch/private allowed > /tool/write/run; sleep 2; cat /tool/write/run; echo SCRATCH; cat /tmp/veltro/scratch/77/private"
 grep -q "not covered by an rw path grant" <<<"$OUTPUT" || { echo "FAIL: shared workspace root write was not denied"; exit 1; }

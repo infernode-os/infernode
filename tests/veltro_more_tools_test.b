@@ -328,6 +328,25 @@ testManUnknownCommand(t: ref T)
 		"unknown man subcommand rejected");
 }
 
+testManRejectsUnsafeOpen(t: ref T)
+{
+	tool := loadtool(t, "man");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("open /tmp/veltro/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "/man"),
+		"man rejects absolute opens outside /man");
+
+	r = tool->exec("open /man/../tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "dot"),
+		"man rejects traversal-shaped /man path");
+
+	r = tool->exec("find SYNOPSIS\nopen /tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "control"),
+		"man rejects control-delimited command text");
+}
+
 # ============================================================================
 # gap — subcommand dispatch and parsing
 # ============================================================================
@@ -614,6 +633,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ManEmpty", testManEmpty);
 	run("ManMissingArgs", testManMissingArgs);
 	run("ManUnknownCommand", testManUnknownCommand);
+	run("ManRejectsUnsafeOpen", testManRejectsUnsafeOpen);
 
 	# gap
 	run("GapNameDoc", testGapNameDoc);

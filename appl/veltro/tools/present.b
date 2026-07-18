@@ -416,6 +416,11 @@ isallowedurl(url: string): int
 	for(i := 0; i < len lurl; i++)
 		if(lurl[i] >= 'A' && lurl[i] <= 'Z')
 			lurl[i] += 'a' - 'A';
+	for(i = 0; i < len lurl; i++) {
+		c := lurl[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
 	return len lurl >= 7 && lurl[0:7] == "http://" ||
 		len lurl >= 8 && lurl[0:8] == "https://";
 }

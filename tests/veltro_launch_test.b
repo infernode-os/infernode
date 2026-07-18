@@ -312,6 +312,23 @@ testRejectsLocalCharonUrls(t: ref T)
 	}
 }
 
+testRejectsControlCharonUrls(t: ref T)
+{
+	tool := loadlaunch(t);
+	if(tool == nil)
+		return;
+
+	bad := array[] of {
+		"http://example.com data=-c owned",
+		"https://example.com\n" + "dis=/dis/wm/shell.dis",
+	};
+	for(i := 0; i < len bad; i++) {
+		r := tool->exec("charon " + bad[i]);
+		t.assert(hassubstr(r, "only accepts http:// and https://"),
+			"charon rejects control-delimited URL");
+	}
+}
+
 testRejectsDataForOtherApps(t: ref T)
 {
 	tool := loadlaunch(t);
@@ -376,6 +393,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Whitelist
 	run("WhitelistOnlyWm", testWhitelistOnlyWm);
 	run("RejectsLocalCharonUrls", testRejectsLocalCharonUrls);
+	run("RejectsControlCharonUrls", testRejectsControlCharonUrls);
 	run("RejectsDataForOtherApps", testRejectsDataForOtherApps);
 
 	if(testing->summary(passed, failed, skipped) > 0)

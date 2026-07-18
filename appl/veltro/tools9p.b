@@ -1763,7 +1763,11 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "path not bound: " + spath));
 					}
 				} else if(len data > 11 && data[0:11] == "budget-add ") {
-					bname := data[11:];
+					bname := str->tolower(data[11:]);
+					if(!toolavailable(bname)) {
+						srv.reply(ref Rmsg.Error(m.tag, "unknown budget tool: " + bname));
+						break;
+					}
 					if(!strlist_contains(budget, bname))
 						budget = bname :: budget;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));

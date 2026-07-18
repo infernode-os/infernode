@@ -1507,6 +1507,83 @@ invalidGrantPathsWorker(result: chan of string)
 	result <-= "";
 }
 
+testInvalidCapabilityNamesRejected(t: ref T)
+{
+	result := chan of string;
+	spawn invalidCapabilityNamesWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+invalidCapabilityNamesWorker(result: chan of string)
+{
+	bad := array[] of {
+		"../read",
+		"wm/shell",
+		"read,list",
+		"read tool",
+		".",
+		"..",
+	};
+
+	for(i := 0; i < len bad; i++) {
+		one := chan of string;
+		spawn invalidCapabilityNameOne(bad[i], 1, one);
+		r := <-one;
+		if(r != "") {
+			result <-= r;
+			return;
+		}
+		one = chan of string;
+		spawn invalidCapabilityNameOne(bad[i], 0, one);
+		r = <-one;
+		if(r != "") {
+			result <-= r;
+			return;
+		}
+	}
+
+	result <-= "";
+}
+
+invalidCapabilityNameOne(name: string, toolname: int, result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	tools := "read" :: nil;
+	shellcmds: list of string;
+	if(toolname)
+		tools = name :: nil;
+	else {
+		tools = "exec" :: nil;
+		shellcmds = name :: nil;
+	}
+
+	caps := ref NsConstruct->Capabilities(
+		tools,
+		nil,
+		shellcmds,
+		nil,
+		0 :: 1 :: 2 :: nil,
+		nil,
+		0,
+		0,
+		-1,
+		nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err == nil) {
+		if(toolname)
+			result <-= "restrictns accepted invalid tool name: " + name;
+		else
+			result <-= "restrictns accepted invalid shell command name: " + name;
+		return;
+	}
+
+	result <-= "";
+}
+
 testPrivilegedGrantPathsRejected(t: ref T)
 {
 	result := chan of string;
@@ -1937,6 +2014,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 	run("ToolCtlHidden", testToolCtlHidden);
 	run("InvalidGrantPathsRejected", testInvalidGrantPathsRejected);
+	run("InvalidCapabilityNamesRejected", testInvalidCapabilityNamesRejected);
 	run("PrivilegedGrantPathsRejected", testPrivilegedGrantPathsRejected);
 	run("SafeGrantPathsAccepted", testSafeGrantPathsAccepted);
 	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);

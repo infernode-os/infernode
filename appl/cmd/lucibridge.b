@@ -1792,8 +1792,9 @@ init(nil: ref Draw->Context, args: list of string)
 					llmconfigured = 1;
 			}
 		}
-	} else if(backend == "openai") {
-		# Ollama/OpenAI: configured if a URL is set
+	} else if(backend == "openai" || backend == "cli") {
+		# Ollama/OpenAI, or the claude-gate CLI gateway (backend=cli,
+		# OpenAI-shaped on localhost): configured if a URL is set
 		ourl := readndbfield("/lib/ndb/llm", "url");
 		if(ourl != nil && ourl != "")
 			llmconfigured = 1;
@@ -1827,6 +1828,12 @@ init(nil: ref Draw->Context, args: list of string)
 					"Common causes: an invalid key, blocked network access to api.anthropic.com, " +
 					"or a startup error logged at /tmp/lucibridge.log. " +
 					"Open Settings → LLM Service, then close InferNode and relaunch it.");
+			else if(backend == "cli")
+				writemsg("veltro",
+					"The Claude CLI gateway is configured, but I can't reach it. " +
+					"Start it on the host (tools/claude-gate/serve-claude-gate.sh, " +
+					"or `llmctl set claude` where systemd runs it), " +
+					"then close InferNode and relaunch it.");
 			else
 				writemsg("veltro",
 					"Your Ollama server is configured, but I can't reach it. " +

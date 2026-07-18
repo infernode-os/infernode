@@ -1,0 +1,26 @@
+# claude-gate.service — user-scope systemd unit for the claude-gate daemon.
+#
+# Install (Linux, e.g. hephaestus):
+#   mkdir -p ~/.config/systemd/user
+#   cp tools/claude-gate/claude-gate.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   llmctl set claude          # starts it and points ndb at it
+#
+# Auth: either `claude` is logged in for this user, or drop a token in
+#   ~/.config/claude-gate/env   with   CLAUDE_CODE_OAUTH_TOKEN=...
+# (created via `claude setup-token`; file mode 600).
+
+[Unit]
+Description=claude-gate — OpenAI-compatible gateway over the Claude Code CLI
+After=network-online.target
+
+[Service]
+Type=exec
+# %h expands to the user's home; adjust if the checkout lives elsewhere.
+ExecStart=%h/github.com/NERVsystems/nerva3/tools/claude-gate/serve-claude-gate.sh
+EnvironmentFile=-%h/.config/claude-gate/env
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

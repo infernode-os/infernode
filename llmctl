@@ -1,8 +1,8 @@
 #!/bin/bash
-# llmctl — Switch the local LLM backend (Ollama ↔ SGLang) cleanly.
+# llmctl — Switch the local LLM backend (Ollama ↔ SGLang ↔ Claude CLI).
 #
 # Acts as the single point of authority over which local-LLM serving
-# stack is running. Stops the other one, starts the chosen one, waits
+# stack is running. Stops the other ones, starts the chosen one, waits
 # for it to be healthy, and then updates the in-emu config
 # (`~/.infernode/lib/ndb/llm`) so that `infernode-llm.service`
 # (lucibridge / llmsrv) dials the now-running backend.
@@ -11,10 +11,17 @@
 # user's interactive session, or the in-emu Plan-9-style /llm/ctl
 # synthetic filesystem (which executes `os llmctl …` for its writes).
 #
+# `claude` is the claude-gate daemon (tools/claude-gate/): an
+# OpenAI-compatible localhost gateway over the Claude Code CLI, so
+# Anthropic models are served on the host's Claude subscription login
+# instead of an API key. Selecting it also writes `backend=cli` to ndb
+# (selecting ollama/sglang writes `backend=openai`) so Settings and the
+# boot profile stay in step.
+#
 # Usage:
 #   llmctl status                  # print: backend / url / health
-#   llmctl set <ollama|sglang|none>
-#   llmctl health [ollama|sglang]  # probe only — no state change
+#   llmctl set <ollama|sglang|claude|none>
+#   llmctl health [ollama|sglang|claude]  # probe only — no state change
 #   llmctl --help
 #
 # Conventions:
@@ -37,9 +44,11 @@ NDB="${HOME}/.infernode/lib/ndb/llm"
 
 OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 SGLANG_URL="${SGLANG_URL:-http://127.0.0.1:30000}"
+CLAUDE_GATE_URL="${CLAUDE_GATE_URL:-http://127.0.0.1:11435}"
 
 OLLAMA_UNIT="ollama.service"
 SGLANG_UNIT="serving-sglang.service"
+CLAUDE_UNIT="claude-gate.service"
 
 # Seconds to wait for a freshly-started backend to become healthy.
 # Ollama: model load is usually a few seconds, GGUF warm caches are
@@ -82,6 +91,11 @@ probe_sglang() {
 	curl -sf -m 3 -o /dev/null "${SGLANG_URL}/v1/models"
 }
 
+probe_claude() {
+	# claude-gate serves /v1/models statically once it's listening.
+	curl -sf -m 3 -o /dev/null "${CLAUDE_GATE_URL}/v1/models"
+}
+
 wait_healthy() {
 	# Polls probe_<backend> up to HEALTH_TIMEOUT_SEC. Returns 0 on
 	# success, 1 on timeout.
@@ -90,6 +104,7 @@ wait_healthy() {
 	case "$backend" in
 		ollama) probe=probe_ollama ;;
 		sglang) probe=probe_sglang ;;
+		claude) probe=probe_claude ;;
 		*) die "wait_healthy: unknown backend $backend" ;;
 	esac
 	deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SEC ))
@@ -113,11 +128,17 @@ current_backend() {
 	if is_active "$OLLAMA_UNIT"; then
 		echo ollama; return
 	fi
+	if is_active "$CLAUDE_UNIT"; then
+		echo claude; return
+	fi
 	if probe_sglang 2>/dev/null; then
 		echo sglang; return
 	fi
 	if probe_ollama 2>/dev/null; then
 		echo ollama; return
+	fi
+	if probe_claude 2>/dev/null; then
+		echo claude; return
 	fi
 	echo none
 }
@@ -178,6 +199,7 @@ cmd_status() {
 	case "$backend" in
 		ollama) url="$OLLAMA_URL/v1"; probe_ollama >/dev/null 2>&1 && healthy=yes || healthy=no ;;
 		sglang) url="$SGLANG_URL/v1"; probe_sglang >/dev/null 2>&1 && healthy=yes || healthy=no ;;
+		claude) url="$CLAUDE_GATE_URL/v1"; probe_claude >/dev/null 2>&1 && healthy=yes || healthy=no ;;
 		none)   url=""; healthy=no ;;
 	esac
 	printf 'backend  %s\n' "$backend"
@@ -186,6 +208,7 @@ cmd_status() {
 	printf 'ndb_url  %s\n' "$ndb_url"
 	printf 'ollama   %s\n' "$(unit_status "$OLLAMA_UNIT")"
 	printf 'sglang   %s\n' "$(unit_status "$SGLANG_UNIT")"
+	printf 'claude   %s\n' "$(unit_status "$CLAUDE_UNIT")"
 }
 
 cmd_health() {
@@ -198,11 +221,15 @@ cmd_health() {
 		sglang)
 			probe_sglang && printf 'sglang  healthy\n' || { printf 'sglang  unhealthy\n'; rc=1; }
 			;;
-		both|"")
+		claude)
+			probe_claude && printf 'claude  healthy\n' || { printf 'claude  unhealthy\n'; rc=1; }
+			;;
+		both|all|"")
 			probe_ollama && printf 'ollama  healthy\n' || { printf 'ollama  unhealthy\n'; rc=1; }
 			probe_sglang && printf 'sglang  healthy\n' || { printf 'sglang  unhealthy\n'; rc=1; }
+			probe_claude && printf 'claude  healthy\n' || { printf 'claude  unhealthy\n'; rc=1; }
 			;;
-		*) die "health: unknown target '$target' (expected ollama|sglang|both)" ;;
+		*) die "health: unknown target '$target' (expected ollama|sglang|claude|both)" ;;
 	esac
 	return $rc
 }
@@ -220,7 +247,8 @@ cmd_set() {
 			# remains whatever the user had set.
 			stop_unit "$SGLANG_UNIT"
 			stop_unit "$OLLAMA_UNIT"
-			echo "llmctl: stopped both backends (ndb unchanged)" >&2
+			stop_unit "$CLAUDE_UNIT"
+			echo "llmctl: stopped all backends (ndb unchanged)" >&2
 			return 0
 			;;
 		ollama)
@@ -228,32 +256,37 @@ cmd_set() {
 			if [ "$before" = "ollama" ] && probe_ollama 2>/dev/null; then
 				# Idempotent: already there + healthy. Just make ndb match.
 				ndb_set url "$new_url"
+				ndb_set backend openai
 				echo "llmctl: ollama already active and healthy; ndb url=$new_url" >&2
 				return 0
 			fi
-			# Stop SGLang first (per the mutual-exclusion contract).
+			# Stop the others first (per the mutual-exclusion contract).
 			stop_unit "$SGLANG_UNIT"
+			stop_unit "$CLAUDE_UNIT"
 			start_unit "$OLLAMA_UNIT"
 			if ! wait_healthy ollama; then
 				echo "llmctl: ollama failed to become healthy within ${HEALTH_TIMEOUT_SEC}s" >&2
 				# Best-effort rollback: stop the failed unit. We don't
-				# auto-restart SGLang since the user explicitly asked
-				# to switch off it.
+				# auto-restart the previous backend since the user
+				# explicitly asked to switch off it.
 				stop_unit "$OLLAMA_UNIT"
 				return 1
 			fi
 			backup_ndb >/dev/null
 			ndb_set url "$new_url"
+			ndb_set backend openai
 			echo "llmctl: ollama active; ndb url=$new_url" >&2
 			;;
 		sglang)
 			local new_url="$SGLANG_URL/v1"
 			if [ "$before" = "sglang" ] && probe_sglang 2>/dev/null; then
 				ndb_set url "$new_url"
+				ndb_set backend openai
 				echo "llmctl: sglang already active and healthy; ndb url=$new_url" >&2
 				return 0
 			fi
 			stop_unit "$OLLAMA_UNIT"
+			stop_unit "$CLAUDE_UNIT"
 			start_unit "$SGLANG_UNIT"
 			if ! wait_healthy sglang; then
 				echo "llmctl: sglang failed to become healthy within ${HEALTH_TIMEOUT_SEC}s" >&2
@@ -262,10 +295,38 @@ cmd_set() {
 			fi
 			backup_ndb >/dev/null
 			ndb_set url "$new_url"
+			ndb_set backend openai
 			echo "llmctl: sglang active; ndb url=$new_url" >&2
 			;;
+		claude)
+			# claude-gate: OpenAI-shaped gateway over the Claude Code
+			# CLI (tools/claude-gate/). GPU stacks are stopped — the
+			# gate serves remote Anthropic models, no local weights.
+			# ndb gets backend=cli so profile/Settings know this is
+			# the CLI gateway, not a local model server.
+			local new_url="$CLAUDE_GATE_URL/v1"
+			if [ "$before" = "claude" ] && probe_claude 2>/dev/null; then
+				ndb_set url "$new_url"
+				ndb_set backend cli
+				echo "llmctl: claude-gate already active and healthy; ndb url=$new_url" >&2
+				return 0
+			fi
+			stop_unit "$OLLAMA_UNIT"
+			stop_unit "$SGLANG_UNIT"
+			start_unit "$CLAUDE_UNIT"
+			if ! wait_healthy claude; then
+				echo "llmctl: claude-gate failed to become healthy within ${HEALTH_TIMEOUT_SEC}s" >&2
+				echo "llmctl: (is the claude CLI logged in? see tools/claude-gate/claude-gate.service)" >&2
+				stop_unit "$CLAUDE_UNIT"
+				return 1
+			fi
+			backup_ndb >/dev/null
+			ndb_set url "$new_url"
+			ndb_set backend cli
+			echo "llmctl: claude-gate active; ndb url=$new_url backend=cli" >&2
+			;;
 		*)
-			die "set: unknown target '$target' (expected ollama|sglang|none)"
+			die "set: unknown target '$target' (expected ollama|sglang|claude|none)"
 			;;
 	esac
 }

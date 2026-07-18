@@ -154,6 +154,22 @@ safeattrtext(s: string): string
 	return strip(out);
 }
 
+validcapname(n: string): int
+{
+	if(n == nil || n == "" || n == "." || n == "..")
+		return 0;
+	for(i := 0; i < len n; i++) {
+		c := n[i];
+		if((c >= 'a' && c <= 'z') ||
+		   (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
 stripquotes(s: string): string
 {
 	if(len s < 2)
@@ -423,6 +439,18 @@ testSafeattrtextControlSyntax(t: ref T)
 	t.assertseq(safeattrtext(input), want, "control attribute text is inert");
 }
 
+testValidcapname(t: ref T)
+{
+	t.assert(validcapname("read"), "simple tool name accepted");
+	t.assert(validcapname("web_search-2"), "underscore/hyphen/digit accepted");
+	t.assert(!validcapname("../read"), "path traversal rejected");
+	t.assert(!validcapname("wm/shell"), "slash rejected");
+	t.assert(!validcapname("read,list"), "comma rejected");
+	t.assert(!validcapname("read tool"), "space rejected");
+	t.assert(!validcapname("."), "dot rejected");
+	t.assert(!validcapname(".."), "dotdot rejected");
+}
+
 # ============================================================
 # Tests: stripquotes()
 # ============================================================
@@ -673,6 +701,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Tasksummary", testTasksummary);
 	run("TasksummaryEmpty", testTasksummaryEmpty);
 	run("SafeattrtextControlSyntax", testSafeattrtextControlSyntax);
+	run("Validcapname", testValidcapname);
 
 	# stripquotes tests
 	run("Stripquotes", testStripquotes);

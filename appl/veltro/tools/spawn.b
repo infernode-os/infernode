@@ -257,6 +257,9 @@ exec(args: string): string
 		return "error: " + perr;
 	if(specs == nil)
 		return "error: no subagent specs provided";
+	nameerr := validatespecnames(specs);
+	if(nameerr != "")
+		return "error: " + nameerr;
 
 	# Count specs
 	N := 0;
@@ -454,6 +457,36 @@ preloadmulti(specs: list of ref SubSpec): string
 	}
 
 	return "";
+}
+
+validatespecnames(specs: list of ref SubSpec): string
+{
+	for(; specs != nil; specs = tl specs) {
+		spec := hd specs;
+		for(t := spec.tools; t != nil; t = tl t)
+			if(!validcapname(hd t))
+				return "invalid tool name: " + hd t;
+		for(c := spec.shellcmds; c != nil; c = tl c)
+			if(!validcapname(hd c))
+				return "invalid shell command name: " + hd c;
+	}
+	return "";
+}
+
+validcapname(n: string): int
+{
+	if(n == nil || n == "" || n == "." || n == "..")
+		return 0;
+	for(i := 0; i < len n; i++) {
+		c := n[i];
+		if((c >= 'a' && c <= 'z') ||
+		   (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # Parse all subagent specs from the exec() args string.

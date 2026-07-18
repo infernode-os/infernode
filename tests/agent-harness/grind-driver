@@ -2,24 +2,29 @@
 # grind-driver — parameterized live-loop driver for the grinding harness.
 #
 # Boots the headless agent stack (llmsrv -> OpenAI-compatible backend,
-# luciuisrv, tools9p, lucibridge activity 0), injects a scenario prompt to
-# Activity 0, waits until the system settles, then emits a clean,
-# machine-parseable state bundle the host orchestrator (grind.py) scores.
+# luciuisrv, tools9p, lucibridge activity 0), optionally wires message-handling
+# (/mnt/msg + mock inbox + msgwatch) and matrix, injects a scenario prompt to
+# Activity 0 (or lets an incoming message drive it), waits until the system
+# settles, then emits a clean, machine-parseable state bundle grind.py scores.
 #
 # The host stages a scenario under $HOME/.infernode/grind/current/ with files:
-#   url model rz settle deadline prompt   (probe list optional: probefiles)
+#   url model rz settle prompt   (optional: probefiles, msg)
 # read here via the trfs host mount at /n/local.
-#
-# Backend-agnostic: url/model select claude-gate (sonnet/opus/haiku) or a local
-# Ollama model (gpt-oss/mistral) so shared prompt/tool changes get regression-
-# checked across backends without touching the driver.
+#   msg = none | inbox | watch
+#     inbox : mount /mnt/msg + register mock email inbox (Activity 0 reads
+#             /mnt/msg/status on a prompt)
+#     watch : also start msgwatch -a 0 so wake/preempt messages are relayed
+#             into Activity 0 autonomously (no user prompt needed)
 #
 # Output contract (everything the host parses is @@-prefixed):
-#   @@GRIND begin|ready|done
+#   @@GRIND begin|ready|settled|done
 #   @@ACT id=<id> status=<s> urgency=<u> label=<l>
 #   @@MSG a=<act> i=<idx>\n<raw message file>\n@@ENDMSG
-#   @@PRES a=<act> id=<artifact> type=<t> label=<l>
-#   @@PROBE <path> <exists|missing> bytes=<n>\n<content>\n@@ENDPROBE
+#   @@PRES a=<act> path=<p> type=<t> label=<l>
+#   @@PROBE <path> exists|missing\n<content>\n@@ENDPROBE
+#   @@MATRIX begin\n<composition>\n@@MATRIX end
+#   @@MSGPENDING begin\n<pending drafts>\n@@MSGPENDING end
+#   @@SENT begin\n<auto-send tripwire listing>\n@@SENT end
 #   @@TRAJLOG begin\n<lucibridge.log>\n@@TRAJLOG end
 
 load std
@@ -38,22 +43,28 @@ grind_url=`{cat $stage/url}
 grind_model=`{cat $stage/model}
 grind_rz=`{cat $stage/rz}
 settle=`{cat $stage/settle}
-deadline=`{cat $stage/deadline}
+# Optional files: guard with ftest (a stderr-redirect inside `{ } breaks the
+# capture in Inferno sh, so read plainly only when present).
+msgmode=none
+if {ftest -f $stage/msg}       { msgmode=`{cat $stage/msg} }
+matrixcomp=none
+if {ftest -f $stage/matrixcomp} { matrixcomp=`{cat $stage/matrixcomp} }
 if {~ $#grind_url 0}   { grind_url=http://127.0.0.1:11435/v1 }
 if {~ $#grind_model 0} { grind_model=sonnet }
 if {~ $#grind_rz 0}    { grind_rz=low }
 if {~ $#settle 0}      { settle=4 }
-if {~ $#deadline 0}    { deadline=40 }
+if {~ $#msgmode 0}     { msgmode=none }
+if {~ $#matrixcomp 0}  { matrixcomp=none }
 
-echo '@@GRIND begin url='^$grind_url^' model='^$grind_model
+echo '@@GRIND begin url='^$grind_url^' model='^$grind_model^' msg='^$msgmode
 
 # LLM service: OpenAI backend -> the parameterized gateway; self-mounts /mnt/llm.
 llmsrv -b openai -u $grind_url -M $grind_model -r $grind_rz >[2] /dev/null &
 sleep 4
 
-# lucibridge's llmconfigured gate only recognizes openai/api/remote, not the
-# live host's backend=cli — stage a synthetic openai ndb so it starts instead
-# of parking on the setup wizard. (llmsrv is already pointed at the backend.)
+# lucibridge's llmconfigured gate: stage a synthetic openai ndb so it starts
+# instead of parking on the setup wizard. (llmsrv is already pointed at the
+# backend; this only satisfies lucibridge's config check.)
 mkdir -p /tmp/grindndb
 echo 'mode=local' > /tmp/grindndb/llm
 echo 'backend=openai' >> /tmp/grindndb/llm
@@ -68,7 +79,32 @@ luciuisrv
 echo activity create Main > /mnt/ui/ctl
 sleep 1
 
-/dis/veltro/tools9p -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
+# Message plane (conditional): mount /mnt/msg and register the mock email inbox
+# (5 canned messages spanning every triage verdict). msgwatch is started later,
+# after lucibridge is ready to receive relayed turns.
+if {~ $msgmode inbox watch} {
+	/dis/veltro/msg9p.dis >[2] /dev/null &
+	sleep 1
+	echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
+	echo '@@GRIND msg-inbox registered'
+}
+
+# Matrix runtime (conditional): pre-start headless so /mnt/matrix exists for the
+# agent to drive via the matrix tool (a delegated task can't launch a GUI app in
+# a headless stack). Service modules only in -h mode.
+if {! ~ $matrixcomp none} {
+	wm/matrix -h /lib/matrix/compositions/$matrixcomp >[2] /tmp/matrix.log &
+	sleep 2
+	if {ftest -f /mnt/matrix/composition} {
+		echo '@@GRIND matrix started comp='^$matrixcomp
+	}{
+		echo '@@GRIND matrix FAILED to start comp='^$matrixcomp
+	}
+}
+
+# tools9p: delegation budget (+matrix for sophisticated-tool grinding) and the
+# activity-0 tool slice.
+/dis/veltro/tools9p -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo,matrix -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
 
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
@@ -86,17 +122,28 @@ for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
 }
 echo '@@GRIND ready '^$ready
 
-# --- inject the scenario prompt verbatim -------------------------------------
-cat $stage/prompt > /mnt/ui/activity/0/conversation/input
+# msgwatch (watch mode only): relay wake/preempt messages into Activity 0.
+if {~ $msgmode watch} {
+	> /tmp/msgwatch.log
+	/dis/veltro/msgwatch.dis -a 0 -v >[2] /tmp/msgwatch.log &
+	echo '@@GRIND msgwatch started'
+}
 
-# --- settle wait: poll until Activity 0's turn completes. Activity 0 is
-# 'working' (or thinking/launching/running/active) for the whole turn and
-# returns to a terminal status ('idle') only at end_turn — so a stable terminal
-# status is the true completion signal (the earlier conversation-count
-# heuristic settled mid-turn on long multi-step delegations). Gate on a reply
-# existing (conversation/1) so we don't fire on the pre-response idle state.
-# rc-sh has no break/arith: grow a list, compare length ($#), guard with a flag.
-# Budget ~420s (140 polls x 3s); ends early once terminal is held `settle` polls.
+# --- inject the scenario prompt verbatim (skip for message-arrival scenarios) -
+promptval=`{cat $stage/prompt}
+if {~ $#promptval 0} {
+	echo '@@GRIND no-prompt (driven by incoming message)'
+}{
+	cat $stage/prompt > /mnt/ui/activity/0/conversation/input
+}
+
+# --- settle wait: poll until Activity 0's turn(s) complete. Activity 0 is
+# 'working' (thinking/launching/running/active) for the whole turn and returns
+# to a terminal status only at end_turn — a stable terminal status is the true
+# completion signal. Gate on a reply existing (conversation/1) so we don't fire
+# on the pre-response idle state. rc-sh has no break/arith: grow a list, compare
+# length ($#), guard with a flag. ~420s budget; ends early once terminal held
+# `settle` polls.
 stablelist=()
 done=no
 for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
@@ -122,14 +169,12 @@ for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
 echo '@@GRIND settled status='^`{cat /mnt/ui/activity/0/status}
 
 # --- state bundle ------------------------------------------------------------
-# Activities (id/status/urgency/label)
 for (a in 0 1 2 3 4 5 6 7 8 9) {
 	if {ftest -f /mnt/ui/activity/$a/label} {
 		echo '@@ACT id='^$a^' status=['^`{cat /mnt/ui/activity/$a/status}^'] urgency=['^`{cat /mnt/ui/activity/$a/urgency}^'] label=['^`{cat /mnt/ui/activity/$a/label}^']'
 	}
 }
 
-# Conversations (raw message files, fenced so multi-line/JSON survives)
 for (a in 0 1 2 3 4 5 6 7 8 9) {
 	if {ftest -f /mnt/ui/activity/$a/label} {
 		for (m in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24) {
@@ -143,8 +188,6 @@ for (a in 0 1 2 3 4 5 6 7 8 9) {
 	}
 }
 
-# Presentation artifacts (per activity). ls yields full paths; the host takes
-# the last path component as the artifact id (avoids an in-emu basename).
 for (a in 0 1 2 3 4 5 6 7 8 9) {
 	if {ftest -d /mnt/ui/activity/$a/presentation} {
 		for (p in `{ls /mnt/ui/activity/$a/presentation}) {
@@ -155,8 +198,6 @@ for (a in 0 1 2 3 4 5 6 7 8 9) {
 	}
 }
 
-# Probe files named by the scenario (optional). Host measures length from the
-# fenced content; we only report presence.
 if {ftest -f $stage/probefiles} {
 	for (pf in `{cat $stage/probefiles}) {
 		if {ftest -f $pf} {
@@ -171,12 +212,25 @@ if {ftest -f $stage/probefiles} {
 	}
 }
 
-# Matrix composition, if the app was launched and mounted its control fs
 if {ftest -f /mnt/matrix/composition} {
 	echo '@@MATRIX begin'
 	cat /mnt/matrix/composition
 	echo ''
 	echo '@@MATRIX end'
+}
+
+# Message-plane state: pending drafts awaiting approval, and the auto-send
+# tripwire (/tmp/veltro/sent must stay empty — nothing is ever auto-sent).
+if {ftest -f /mnt/msg/pending} {
+	echo '@@MSGPENDING begin'
+	cat /mnt/msg/pending
+	echo ''
+	echo '@@MSGPENDING end'
+}
+if {~ $msgmode inbox watch} {
+	echo '@@SENT begin'
+	if {ftest -d /tmp/veltro/sent} { ls /tmp/veltro/sent }
+	echo '@@SENT end'
 }
 
 echo '@@TRAJLOG begin'
@@ -185,10 +239,9 @@ echo '@@TRAJLOG end'
 
 echo '@@GRIND done'
 
-# emu block-buffers stdout to the host pipe. Without a following flush, the two
-# completion markers above can sit unflushed until the host reaps emu (which
-# then loses them). Pad past the block size so they are pushed to the host; the
-# host breaks on @@TRAJLOG end / @@GRIND done and never reads this padding.
+# emu block-buffers stdout to the host pipe; pad past the block so the two
+# completion markers above are flushed before the host reaps emu. The host
+# breaks on @@TRAJLOG end / @@GRIND done and never reads this padding.
 for (a in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
 	for (b in 1 2 3 4 5 6 7 8 9 10) {
 		echo '................................................................'

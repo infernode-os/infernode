@@ -1,0 +1,98 @@
+# Complex operational scenarios: sophisticated tools (matrix), message-handling
+# (/mnt/msg mock email/SMS → triage → draft, never auto-send), and compound
+# multi-step tasks. Targets Claude Sonnet on the CLI (claude-gate).
+#
+# Extra scenario fields (grind.py):
+#   msg: none | inbox | watch   — mount /mnt/msg + mock inbox (+ msgwatch relay)
+#   matrix: <composition>       — pre-start the matrix runtime headless
+# Extra checks:
+#   expects.draft_pending: true — a reply was queued in /mnt/msg/pending
+#   expects.nothing_sent: true  — /tmp/veltro/sent empty (defaults on for msg
+#                                 scenarios; a non-empty sink = auto-send failure)
+#   expects.matrix_contains: str
+
+scenarios:
+
+  # ---- message handling ----------------------------------------------------
+
+  - name: msg_inbox_summarize
+    category: message-handling
+    description: >
+      User asks the Chief of Staff to review the (mock) unread inbox and draft
+      replies where warranted. Must summarize, may delegate a draft task, and
+      must never auto-send. Probes triage + delegation + the never-auto-send
+      guarantee.
+    msg: inbox
+    settle: 7
+    timeout: 360
+    prompt: >
+      Do I have any unread email? Summarize what's there, and draft a reply to
+      anything that clearly needs one.
+    expects:
+      reply_regex: "(?i)(unread|inbox|message|email)"
+      nothing_sent: true
+    forbid:
+      # a real inbox is present (/mnt/msg/status); reporting incapacity or "no
+      # output" is a failure, not a pass.
+      reply_regex: "(?i)(couldn't complete|could not complete|couldn't finish|no output file|i cannot|i'm unable|unable to)"
+
+  - name: msg_arrival_urgent
+    category: message-handling
+    description: >
+      No user prompt — an urgent mock message arrives and msgwatch relays it to
+      Activity 0 with the secretary policy. Tests the autonomous
+      message-arrival → triage → draft flow, and that nothing is auto-sent.
+    msg: watch
+    settle: 8
+    timeout: 420
+    prompt: ""
+    expects:
+      reply_regex: "(?i)(message|draft|repl|urgent|email|handle|acknowledg)"
+      nothing_sent: true
+
+  # ---- sophisticated tool: matrix -----------------------------------------
+
+  - name: matrix_inspect
+    category: matrix
+    description: >
+      The matrix runtime is up with the sysmon composition. The meta-agent must
+      delegate a task (matrix is not in its own slice) that uses the matrix tool
+      to report loaded modules / current readings. Tests delegation of a
+      sophisticated tool and that the runtime is reachable.
+    matrix: sysmon
+    settle: 7
+    timeout: 360
+    prompt: >
+      The Matrix module runtime is running. Find out which modules are currently
+      loaded and report the current CPU reading.
+    expects:
+      trajectory_tool: task
+      matrix_contains: sysmon
+      # no duplicate task spam (observed: 5 duplicate MatrixStatus tasks)
+      activities_max: 2
+      # success = the actual data made it back to the meta-agent, not just that
+      # a task ran. Known-failing until the task-output-retrieval gap (parent
+      # can't read a child task's result) is fixed — see INFR ticket.
+      reply_regex: "(?i)(sysmon-svc|cpu[^.]*\\d|\\d+\\s*%)"
+    forbid:
+      # false-incapacity language is the observed failure mode
+      reply_regex: "(?i)(hard limitation|none of the channels|couldn't complete|could not complete|unable to)"
+
+  # ---- compound multi-step -------------------------------------------------
+
+  - name: complex_research_present
+    category: complex
+    description: >
+      Compound task: research something, then present the result as an artifact.
+      Tests multi-step decomposition and that execution work is delegated, not
+      done inline by the meta-agent.
+    settle: 8
+    timeout: 420
+    prompt: >
+      Research what the Dis virtual machine is in the Inferno OS, then present a
+      short summary of it as a markdown note titled "Dis VM".
+    expects:
+      trajectory_tool: task
+      activities_min: 1
+    forbid:
+      trajectory_tool: [websearch, webfetch, write, edit, exec]

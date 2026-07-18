@@ -65,7 +65,8 @@ llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm}
 llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm}
 llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm}
 
-if {~ $llmbackend openai} {
+# backend=cli is the host-side CLI gateway (claude-gate) — OpenAI-shaped.
+if {~ $llmbackend openai cli} {
 	llmsrv -D -b openai -u $llmurl -M $llmmodel -r low &
 }{
 	if {! ~ $llmmodel ''} {

@@ -62,7 +62,8 @@ llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm}
 llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm}
 llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm}
 
-if {~ $llmbackend openai} {
+# backend=cli is the host-side CLI gateway (claude-gate) — OpenAI-shaped.
+if {~ $llmbackend openai cli} {
 	# -r low: reasoning_effort default for o1-style / gpt-oss models.
 	# Per InferNode MODEL-EVAL: low gives ~15× speedup on tool-driven
 	# scenarios with no quality loss vs default medium. Devstral and

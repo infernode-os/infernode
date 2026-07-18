@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  claude-gate LaunchAgent — autostart the gateway at login on macOS.
+
+  Install:
+    cp tools/claude-gate/com.nervsystems.claude-gate.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nervsystems.claude-gate.plist
+  Remove:
+    launchctl bootout gui/$(id -u)/com.nervsystems.claude-gate
+
+  Adjust the checkout path in ProgramArguments if the repo lives elsewhere.
+  Auth: either `claude login` was run for this user, or put
+  CLAUDE_CODE_OAUTH_TOKEN in ~/.config/claude-gate/env (the serve script
+  does NOT read that file on macOS — export it via EnvironmentVariables
+  below instead if you need token auth).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.nervsystems.claude-gate</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-lc</string>
+		<string>exec "$HOME/github.com/infernode-os/infernode/tools/claude-gate/serve-claude-gate.sh"</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/tmp/claude-gate.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/claude-gate.log</string>
+</dict>
+</plist>

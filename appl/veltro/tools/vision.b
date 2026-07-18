@@ -218,6 +218,8 @@ findvisionmodel(): string
 	if(ndir <= 0)
 		return "";
 	# Return first model found
+	if(!safename(dirs[0].name))
+		return "";
 	return dirs[0].name;
 }
 
@@ -225,12 +227,17 @@ findvisionmodel(): string
 # Follows the clone-based session pattern from gpu.b:runinfer().
 gpuinfer(imagepath, model: string): string
 {
+	if(!safename(model))
+		return "error: unsafe model name";
+
 	# 1. Read clone to get session ID
 	sid := readfile(GPUDIR + "/clone");
 	if(sid == "" || sid[0] == 'e')
 		return "error: failed to allocate GPU session: " + sid;
 	if(len sid > 0 && sid[len sid - 1] == '\n')
 		sid = sid[0:len sid - 1];
+	if(!safename(sid))
+		return "error: unsafe GPU session id";
 
 	sessdir := GPUDIR + "/" + sid;
 
@@ -602,6 +609,20 @@ strip(s: string): string
 hasprefix(s, prefix: string): int
 {
 	return len s >= len prefix && s[0:len prefix] == prefix;
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # Check if string has suffix

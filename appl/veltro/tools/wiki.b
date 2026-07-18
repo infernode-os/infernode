@@ -149,8 +149,11 @@ exec(args: string): string
 doingest(path: string): string
 {
 	cmd := "ingest";
-	if(path != "")
+	if(path != "") {
+		if(!safeingestpath(path))
+			return "error: unsafe ingest path";
 		cmd += " " + path;
+	}
 	return ctlcmd(cmd);
 }
 
@@ -169,6 +172,7 @@ ctlcmd(cmd: string): string
 	data := array of byte cmd;
 	if(sys->write(fd, data, len data) < 0)
 		return sys->sprint("error: write to ctl failed: %r");
+	sys->seek(fd, big 0, Sys->SEEKSTART);
 
 	# Read back result (may take a while for ingest/lint)
 	return readall(fd);
@@ -187,6 +191,7 @@ doquery(question: string): string
 	data := array of byte question;
 	if(sys->write(fd, data, len data) < 0)
 		return sys->sprint("error: write to query failed: %r");
+	sys->seek(fd, big 0, Sys->SEEKSTART);
 
 	return readall(fd);
 }
@@ -226,6 +231,42 @@ readall(fd: ref Sys->FD): string
 	if(result == "")
 		return "(no response)";
 	return result;
+}
+
+safeingestpath(path: string): int
+{
+	rawroot := "/n/wikia/raw";
+	if(path == rawroot)
+		return 1;
+	if(!hasprefix(path, rawroot + "/"))
+		return 0;
+	if(hascontrol(path))
+		return 0;
+
+	part := "";
+	for(i := len rawroot + 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			if(part == "" || part == "." || part == "..")
+				return 0;
+			part = "";
+			continue;
+		}
+		part[len part] = path[i];
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] < ' ')
+			return 1;
+	return 0;
+}
+
+hasprefix(s, prefix: string): int
+{
+	return len s >= len prefix && s[0:len prefix] == prefix;
 }
 
 # Strip leading/trailing whitespace

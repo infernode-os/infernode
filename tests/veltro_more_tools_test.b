@@ -12,6 +12,7 @@ implement VeltroMoreToolsTest;
 #   wallet   — argument parsing, command dispatch, missing-arg errors
 #   keyring  — subcommand dispatch (open / need / check), bad-input errors
 #   man      — subcommand dispatch, missing-arg errors
+#   matrix   — fixed-service path-name validation before /mnt/matrix I/O
 #   gap      — subcommand dispatch (add / resolve / list), bad-input errors
 #   task     — subcommand dispatch (create / status / list / close), errors
 #   wiki     — argument validation, unmounted-/n/wikia error path
@@ -524,6 +525,42 @@ testWikiUnmounted(t: ref T)
 }
 
 # ============================================================================
+# matrix — fixed-service path validation
+# ============================================================================
+
+testMatrixRejectsUnsafeNames(t: ref T)
+{
+	tool := loadtool(t, "matrix");
+	if(tool == nil)
+		return;
+
+	t.assertseq(tool->name(), "matrix", "matrix tool name");
+	r := tool->exec("man ../sysmon");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix man rejects traversal");
+
+	r = tool->exec("story ../../tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix story rejects traversal");
+
+	r = tool->exec("out ../svc history");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix out module rejects traversal");
+
+	r = tool->exec("out sysmon-svc ../secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix out file rejects traversal");
+
+	r = tool->exec("ctl pin ../owned");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix ctl pin rejects traversal");
+
+	r = tool->exec("ctl load sysmon\nunload");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "control"),
+		"matrix ctl rejects control delimiters");
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -598,6 +635,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WikiNameDoc", testWikiNameDoc);
 	run("WikiEmpty", testWikiEmpty);
 	run("WikiUnmounted", testWikiUnmounted);
+
+	# matrix
+	run("MatrixRejectsUnsafeNames", testMatrixRejectsUnsafeNames);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -296,7 +296,7 @@ createwindow(name: string): string
 		ctlpath := sys->sprint("%s/%s/ctl", XENITH_ROOT, winid);
 		ctlfd := sys->open(ctlpath, Sys->OWRITE);
 		if(ctlfd != nil) {
-			namecmd := sys->sprint("name %s\n", name);
+			namecmd := sys->sprint("name %s\n", ctlfield(name));
 			sys->write(ctlfd, array of byte namecmd, len namecmd);
 			ctlfd = nil;
 		}
@@ -360,4 +360,27 @@ splitfirst(s: string): (string, string)
 hasprefix(s, prefix: string): int
 {
 	return len s >= len prefix && s[0:len prefix] == prefix;
+}
+
+ctlfield(s: string): string
+{
+	out := "";
+	lastspace := 1;
+	for(i := 0; i < len s && len out < 120; i++) {
+		c := s[i];
+		if(c == '\n' || c == '\r' || c == '\t' || c < ' ') {
+			if(!lastspace) {
+				out[len out] = ' ';
+				lastspace = 1;
+			}
+			continue;
+		}
+		out[len out] = c;
+		lastspace = (c == ' ');
+	}
+	while(len out > 0 && out[len out - 1] == ' ')
+		out = out[0:len out - 1];
+	if(out == "")
+		return "untitled";
+	return out;
 }

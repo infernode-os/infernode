@@ -224,6 +224,8 @@ docreate(args: string): string
 	"block-beta" or "pie" or "gantt" or "xychart-beta" =>
 		atype = "mermaid";
 	}
+	if(!allowedtype(atype))
+		return "error: unsupported artifact type: " + atype;
 
 	if(label == nil || label == "")
 		label = id;
@@ -239,6 +241,15 @@ docreate(args: string): string
 		return "error: " + err;
 
 	return sys->sprint("created artifact '%s' (type=%s)", id, atype);
+}
+
+allowedtype(atype: string): int
+{
+	case atype {
+	"markdown" or "text" or "table" or "code" or "pdf" or "image" or "mermaid" =>
+		return 1;
+	}
+	return 0;
 }
 
 # Write content to an artifact's data file

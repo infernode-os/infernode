@@ -101,14 +101,25 @@ exec(args: string): string
 	"open" =>
 		if(rest == "")
 			return "error: open requires a title or path";
+		if(!safecontroltext(rest))
+			return "error: open argument contains control delimiter";
+		if(rest[0] == '/') {
+			err := validmanpath(rest);
+			if(err != nil)
+				return "error: " + err;
+		}
 		return sendctl("open " + rest);
 	"scroll" =>
 		if(rest == "")
 			return "error: scroll requires direction (up, down, top, bottom) or line number";
+		if(!safecontroltext(rest))
+			return "error: scroll argument contains control delimiter";
 		return sendctl("scroll " + rest);
 	"find" =>
 		if(rest == "")
 			return "error: find requires search text";
+		if(!safecontroltext(rest))
+			return "error: find argument contains control delimiter";
 		return sendctl("find " + rest);
 	* =>
 		return sys->sprint("error: unknown command '%s'. Use: open, view, state, scroll, find", cmd);
@@ -119,10 +130,46 @@ sendctl(cmd: string): string
 {
 	if(cmd == "")
 		return "error: empty command";
+	if(!safecontroltext(cmd))
+		return "error: command contains control delimiter";
 	err := writefile(MAN_ROOT + "/ctl", cmd);
 	if(err != nil)
 		return err;
 	return "ok";
+}
+
+safecontroltext(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t')
+			return 0;
+	return 1;
+}
+
+validmanpath(path: string): string
+{
+	if(len path <= 5 || path[0:5] != "/man/")
+		return "absolute man opens are restricted to /man";
+	for(i := 0; i < len path; i++)
+		if(path[i] == ' ' || path[i] == '\n' || path[i] == '\r' || path[i] == '\t')
+			return "man path contains control delimiter";
+	start := 1;
+	for(i = 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			comp := path[start:i];
+			if(comp == "")
+				return "man path contains empty component";
+			if(comp == "." || comp == "..")
+				return "man path contains dot component";
+			start = i + 1;
+		}
+	}
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return "man path is outside the agent namespace: " + path;
+	if(d.mode & Sys->DMDIR)
+		return "cannot open directory: " + path;
+	return nil;
 }
 
 # --- I/O helpers ---

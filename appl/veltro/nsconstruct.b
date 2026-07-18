@@ -134,7 +134,13 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
-	err := validatepaths(caps.paths, "path", caps.tools);
+	err := validatecapnames(caps.tools, "tool");
+	if(err != nil)
+		return err;
+	err = validatecapnames(caps.shellcmds, "shell command");
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.paths, "path", caps.tools);
 	if(err != nil)
 		return err;
 	err = validatepaths(caps.writepaths, "write path", caps.tools);
@@ -829,6 +835,32 @@ validatepaths(paths: list of string, what: string, tools: list of string): strin
 			return sys->sprint("invalid %s %s: privileged path not grantable", what, p);
 	}
 	return nil;
+}
+
+validatecapnames(names: list of string, what: string): string
+{
+	for(; names != nil; names = tl names) {
+		n := hd names;
+		if(!validcapname(n))
+			return sys->sprint("invalid %s %s: must be a simple capability name", what, n);
+	}
+	return nil;
+}
+
+validcapname(n: string): int
+{
+	if(n == nil || n == "" || n == "." || n == "..")
+		return 0;
+	for(i := 0; i < len n; i++) {
+		c := n[i];
+		if((c >= 'a' && c <= 'z') ||
+		   (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 validatepath(p: string): string

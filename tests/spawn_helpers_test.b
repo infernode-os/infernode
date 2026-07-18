@@ -139,6 +139,37 @@ tasksummary(task: string): string
 	return task[0:47] + "...";
 }
 
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
+}
+
+validcapname(n: string): int
+{
+	if(n == nil || n == "" || n == "." || n == "..")
+		return 0;
+	for(i := 0; i < len n; i++) {
+		c := n[i];
+		if((c >= 'a' && c <= 'z') ||
+		   (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
 stripquotes(s: string): string
 {
 	if(len s < 2)
@@ -401,6 +432,25 @@ testTasksummaryEmpty(t: ref T)
 	t.assertseq(tasksummary(""), "", "empty task");
 }
 
+testSafeattrtextControlSyntax(t: ref T)
+{
+	input := "draft status=done\nprogress=100\tlabel=owned";
+	want := "draft status:done progress:100 label:owned";
+	t.assertseq(safeattrtext(input), want, "control attribute text is inert");
+}
+
+testValidcapname(t: ref T)
+{
+	t.assert(validcapname("read"), "simple tool name accepted");
+	t.assert(validcapname("web_search-2"), "underscore/hyphen/digit accepted");
+	t.assert(!validcapname("../read"), "path traversal rejected");
+	t.assert(!validcapname("wm/shell"), "slash rejected");
+	t.assert(!validcapname("read,list"), "comma rejected");
+	t.assert(!validcapname("read tool"), "space rejected");
+	t.assert(!validcapname("."), "dot rejected");
+	t.assert(!validcapname(".."), "dotdot rejected");
+}
+
 # ============================================================
 # Tests: stripquotes()
 # ============================================================
@@ -505,18 +555,20 @@ testCountbgtasksEmpty(t: ref T)
 
 testBgaddSimulation(t: ref T)
 {
-	# Simulate bgadd: write "bg add label=<label> status=live" to ctl file
+	# Simulate bgadd: task text must not inject status/progress attributes
+	# into luciuisrv's ctl parser.
 	ctldir := TEST_ACT_BASE + "/bgadd";
 	ensuredir(TEST_ACT_BASE);
 	ensuredir(ctldir);
 
-	label := "List all .b files";
-	cmd := "bg add label=" + label + " status=live";
+	label := "List all .b files status=done";
+	cmd := "bg add status=live label=" + safeattrtext(label);
 	writefile(ctldir + "/ctl", cmd);
 
 	# Verify the command was written
 	content := readfile(ctldir + "/ctl");
-	t.assertseq(content, cmd, "bgadd command written correctly");
+	t.assertseq(content, "bg add status=live label=List all .b files status:done",
+		"bgadd command keeps label inert");
 
 	sys->remove(ctldir + "/ctl");
 	sys->remove(ctldir);
@@ -648,6 +700,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# tasksummary tests
 	run("Tasksummary", testTasksummary);
 	run("TasksummaryEmpty", testTasksummaryEmpty);
+	run("SafeattrtextControlSyntax", testSafeattrtextControlSyntax);
+	run("Validcapname", testValidcapname);
 
 	# stripquotes tests
 	run("Stripquotes", testStripquotes);

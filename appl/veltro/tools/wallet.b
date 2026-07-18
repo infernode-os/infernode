@@ -219,6 +219,8 @@ doaccounts(): string
 
 doread(acct: string, file: string): string
 {
+	if(!validaccount(acct))
+		return "error: unsafe account name";
 	path := WALLET_MOUNT + "/" + acct + "/" + file;
 	s := readfile(path);
 	if(s == nil)
@@ -228,6 +230,8 @@ doread(acct: string, file: string): string
 
 dosign(acct: string, hexhash: string): string
 {
+	if(!validaccount(acct))
+		return "error: unsafe account name";
 	# Validate hex hash looks reasonable
 	if(len hexhash != 64)
 		return "hash must be 64 hex characters (32 bytes)";
@@ -248,6 +252,8 @@ dosign(acct: string, hexhash: string): string
 
 dopay(acct: string, args: list of string): string
 {
+	if(!validaccount(acct))
+		return "error: unsafe account name";
 	# Build pay command: join remaining args
 	cmd := "";
 	for(; args != nil; args = tl args) {
@@ -307,4 +313,18 @@ writefile(path: string, data: string): int
 		return -1;
 	b := array of byte data;
 	return sys->write(fd, b, len b);
+}
+
+validaccount(s: string): int
+{
+	if(s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }

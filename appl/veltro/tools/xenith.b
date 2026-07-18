@@ -261,7 +261,7 @@ docreate(args: string): string
 		ctlpath := sys->sprint("%s/%s/ctl", XENITH_ROOT, winid);
 		ctlfd := sys->open(ctlpath, Sys->OWRITE);
 		if(ctlfd != nil) {
-			namecmd := sys->sprint("name %s\n", winname);
+			namecmd := sys->sprint("name %s\n", ctlfield(winname));
 			sys->write(ctlfd, array of byte namecmd, len namecmd);
 			ctlfd = nil;
 		}
@@ -549,4 +549,27 @@ splitfirst(s: string): (string, string)
 			return (s[0:i], strip(s[i:]));
 	}
 	return (s, "");
+}
+
+ctlfield(s: string): string
+{
+	out := "";
+	lastspace := 1;
+	for(i := 0; i < len s && len out < 120; i++) {
+		c := s[i];
+		if(c == '\n' || c == '\r' || c == '\t' || c < ' ') {
+			if(!lastspace) {
+				out[len out] = ' ';
+				lastspace = 1;
+			}
+			continue;
+		}
+		out[len out] = c;
+		lastspace = (c == ' ');
+	}
+	while(len out > 0 && out[len out - 1] == ' ')
+		out = out[0:len out - 1];
+	if(out == "")
+		return "untitled";
+	return out;
 }

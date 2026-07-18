@@ -1,0 +1,114 @@
+#!/dis/sh.dis
+# grind-smoke — minimal end-to-end boot of the live agent stack for the
+# grinding harness. Boots llmsrv (against a parameterized OpenAI-compatible
+# backend), luciuisrv, tools9p, and lucibridge(activity 0), then injects one
+# prompt to Activity 0 and dumps the conversation. Backend-agnostic: the same
+# driver serves the claude-gate (sonnet/opus/haiku) or a local Ollama model
+# (gpt-oss/mistral/liquid) by varying grind_url / grind_model.
+#
+# Parameters (rc vars, set via emu `sh -l -c 'grind_url=..; run <this>'`):
+#   grind_url    OpenAI-compatible base URL  (default claude-gate 11435)
+#   grind_model  model id                    (default sonnet)
+#   grind_rz     llmsrv reasoning level      (default low)
+#   grind_prompt the single prompt to inject (default identity probe)
+#
+# Machine-parseable output is bracketed by @@GRIND markers so the host
+# orchestrator can parse without guessing.
+
+load std
+path=(/dis .)
+
+# Inferno rc-shell has no ${x:-default}; use the $#x==0 idiom.
+if {~ $#grind_url 0}    { grind_url=http://127.0.0.1:11435/v1 }
+if {~ $#grind_model 0}  { grind_model=sonnet }
+if {~ $#grind_rz 0}     { grind_rz=low }
+if {~ $#grind_prompt 0} { grind_prompt='Who are you? Answer in one sentence.' }
+
+echo '@@GRIND begin url='^$grind_url^' model='^$grind_model
+
+mount -ac {mntgen} /n
+bind -a '#I' /net
+ndb/cs
+
+# Host FS (read-only) so we can reach ~/.infernode and collect files.
+trfs '#U*' /n/local
+ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+
+# lucibridge's llmconfigured gate (lucibridge.b:1769) recognizes only
+# backend=openai/api/remote — NOT backend=cli, which is the live host config
+# (~/.infernode/lib/ndb/llm). Left alone it would park Activity 0 on the
+# first-run setup wizard. Stage a synthetic openai-shaped ndb so the gate
+# passes; llmsrv is already pointed at the gate above, so this only satisfies
+# lucibridge's config check and its temperature/model lookups.
+mkdir -p /tmp/grindndb
+echo 'mode=local' > /tmp/grindndb/llm
+echo 'backend=openai' >> /tmp/grindndb/llm
+echo 'url='^$grind_url >> /tmp/grindndb/llm
+echo 'model='^$grind_model >> /tmp/grindndb/llm
+bind -bc /tmp/grindndb /lib/ndb
+echo '@@GRIND ndb backend=openai url='^$grind_url
+
+# LLM service: OpenAI backend -> the parameterized gateway; self-mounts /mnt/llm.
+llmsrv -D -b openai -u $grind_url -M $grind_model -r $grind_rz &
+sleep 4
+echo '@@GRIND mntllm '^`{ls /mnt/llm | wc -l}^' entries'
+
+# Wallet (keyring tool dependency in the budget)
+/dis/veltro/wallet9p.dis >[2] /dev/null &
+sleep 1
+
+# UI service + seed activity 0
+luciuisrv
+echo activity create Main > /mnt/ui/ctl
+sleep 1
+
+# tools9p: full delegation budget + activity-0 tool slice (mirrors serve-agent)
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo
+echo '@@GRIND after-tools9p tools='^`{cat /tool/tools | wc -l}
+
+# lucibridge for activity 0 (pre-create the log like boot.sh does)
+> /tmp/lucibridge.log
+lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
+echo '@@GRIND after-lucibridge-spawn'
+sleep 8
+echo '@@GRIND lucibridge-early begin'
+cat /tmp/lucibridge.log
+echo '@@GRIND lucibridge-early end'
+
+# Readiness wait: poll the log until activity-0 session is up (bounded ~40s).
+ready=no
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
+	if {~ $ready no} {
+		if {grep -s 'activity 0, session' /tmp/lucibridge.log} {
+			ready=yes
+		}{
+			sleep 2
+		}
+	}
+}
+echo '@@GRIND ready '^$ready
+
+echo '@@GRIND prompt '^$grind_prompt
+echo $grind_prompt > /mnt/ui/activity/0/conversation/input
+echo '@@GRIND after-inject'
+
+sleep 15
+echo '@@GRIND after-sleep'
+
+echo '@@GRIND convdir begin'
+ls /mnt/ui/activity/0/conversation
+echo '@@GRIND convdir end'
+
+echo '@@GRIND conversation begin'
+for (m in 0 1 2 3 4 5 6 7 8 9 10 11 12) {
+	if {ftest -f /mnt/ui/activity/0/conversation/$m} {
+		echo '['$m'] '`{cat /mnt/ui/activity/0/conversation/$m}
+	}
+}
+echo '@@GRIND conversation end'
+
+echo '@@GRIND lucibridge-log begin'
+cat /tmp/lucibridge.log
+echo '@@GRIND lucibridge-log end'
+
+echo '@@GRIND done'

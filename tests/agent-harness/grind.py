@@ -74,6 +74,11 @@ def run_emu(emu, timeout):
                          stderr=subprocess.STDOUT, bufsize=1, text=True,
                          start_new_session=True)
     lines, done, killed = [], False, False
+    # Completion signals: emu block-buffers stdout to the pipe, so the tiny
+    # trailing "@@GRIND done" can sit unflushed. "@@TRAJLOG end" is the last dump
+    # marker and is reliably flushed by the large trajectory cat preceding it —
+    # treat either as "the dump is complete, stop and reap emu."
+    END_MARKERS = ("@@GRIND done", "@@TRAJLOG end")
     try:
         while True:
             left = timeout - (time.monotonic() - t0)
@@ -89,7 +94,7 @@ def run_emu(emu, timeout):
             if line == "":
                 break
             lines.append(line)
-            if line.strip() == "@@GRIND done":
+            if line.strip() in END_MARKERS:
                 done = True
                 break
     finally:
@@ -104,7 +109,7 @@ def run_emu(emu, timeout):
                     pass
                 p.wait()
     rc = p.returncode if p.returncode is not None else -1
-    return "".join(lines), rc, (killed and not done), time.monotonic() - t0
+    return "".join(lines), rc, done, (killed and not done), time.monotonic() - t0
 
 
 # ── parse the @@ state bundle ───────────────────────────────────────
@@ -222,7 +227,7 @@ def as_list(v):
     return v if isinstance(v, list) else [v]
 
 
-def score(sc, st, killed):
+def score(sc, st, completed, killed):
     reasons = []
     reply = final_reply(st)
     exp = sc.get("expects", {}) or {}
@@ -230,8 +235,8 @@ def score(sc, st, killed):
 
     if st["lifecycle"].get("ready", "").strip() != "yes":
         reasons.append("stack never reached readiness")
-    if "done" not in st["lifecycle"]:
-        reasons.append("driver did not finish (@@GRIND done missing)" +
+    if not completed:
+        reasons.append("driver did not finish (no completion marker)" +
                        (" [emu killed at timeout]" if killed else ""))
 
     for want in as_list(exp.get("reply_contains")):
@@ -313,11 +318,11 @@ def main():
         name = sc["name"]
         print(f"[{n}/{len(scenarios)}] {name} ... ", end="", flush=True)
         stage_scenario(sc, args.model, args.url, args.rz)
-        out, rc, killed, dur = run_emu(emu, args.timeout)
+        out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
         if args.keep:
             (outdir / f"{name}.log").write_text(out)
         st = parse_state(out)
-        ok, reasons, reply = score(sc, st, killed)
+        ok, reasons, reply = score(sc, st, completed, killed)
         rec = {"name": name, "category": sc.get("category", ""), "model": args.model,
                "pass": ok, "reasons": reasons, "reply": reply[:400],
                "activities": st["activities"], "tools": st["tools"],

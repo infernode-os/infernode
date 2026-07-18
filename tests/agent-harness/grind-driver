@@ -89,24 +89,29 @@ echo '@@GRIND ready '^$ready
 # --- inject the scenario prompt verbatim -------------------------------------
 cat $stage/prompt > /mnt/ui/activity/0/conversation/input
 
-# --- settle wait: poll until the activity-0 conversation entry count is stable
-# across `settle` consecutive polls, or the fixed poll budget (~180s) elapses.
-# One poll ~= 3s. Multi-step delegation keeps the count changing while busy, so
-# a stable count means the turn(s) have quiesced. rc-sh has no break/arith, so
-# we grow a list and compare its length ($#), and guard with a done flag.
-prev=none
+# --- settle wait: poll until Activity 0's turn completes. Activity 0 is
+# 'working' (or thinking/launching/running/active) for the whole turn and
+# returns to a terminal status ('idle') only at end_turn — so a stable terminal
+# status is the true completion signal (the earlier conversation-count
+# heuristic settled mid-turn on long multi-step delegations). Gate on a reply
+# existing (conversation/1) so we don't fire on the pre-response idle state.
+# rc-sh has no break/arith: grow a list, compare length ($#), guard with a flag.
+# Budget ~420s (140 polls x 3s); ends early once terminal is held `settle` polls.
 stablelist=()
 done=no
-for (r in 1 2 3 4 5 6) {
+for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
 	for (i in 1 2 3 4 5 6 7 8 9 10) {
 		if {~ $done no} {
 			sleep 3
-			n=`{ls /mnt/ui/activity/0/conversation | wc -l}
-			if {~ $n $prev} {
-				stablelist=($stablelist x)
-			}{
+			s=`{cat /mnt/ui/activity/0/status}
+			if {~ $s working thinking launching running active} {
 				stablelist=()
-				prev=$n
+			}{
+				if {ftest -f /mnt/ui/activity/0/conversation/1} {
+					stablelist=($stablelist x)
+				}{
+					stablelist=()
+				}
 			}
 			if {~ $#stablelist $settle} {
 				done=yes
@@ -114,7 +119,7 @@ for (r in 1 2 3 4 5 6) {
 		}
 	}
 }
-echo '@@GRIND settled msgcount='^$prev
+echo '@@GRIND settled status='^`{cat /mnt/ui/activity/0/status}
 
 # --- state bundle ------------------------------------------------------------
 # Activities (id/status/urgency/label)
@@ -179,3 +184,13 @@ cat /tmp/lucibridge.log
 echo '@@TRAJLOG end'
 
 echo '@@GRIND done'
+
+# emu block-buffers stdout to the host pipe. Without a following flush, the two
+# completion markers above can sit unflushed until the host reaps emu (which
+# then loses them). Pad past the block size so they are pushed to the host; the
+# host breaks on @@TRAJLOG end / @@GRIND done and never reads this padding.
+for (a in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
+	for (b in 1 2 3 4 5 6 7 8 9 10) {
+		echo '................................................................'
+	}
+}

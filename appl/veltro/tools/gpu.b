@@ -148,6 +148,9 @@ listmodels(): string
 
 runinfer(model, imagepath: string): string
 {
+	if(!safename(model))
+		return "error: unsafe model name";
+
 	# 1. Read clone to get session ID
 	sid := readfile(GPUDIR + "/clone");
 	if(sid == "" || sid[0] == 'e')
@@ -155,6 +158,8 @@ runinfer(model, imagepath: string): string
 	# Strip trailing newline
 	if(len sid > 0 && sid[len sid - 1] == '\n')
 		sid = sid[0:len sid - 1];
+	if(!safename(sid))
+		return "error: unsafe GPU session id";
 
 	sessdir := GPUDIR + "/" + sid;
 
@@ -187,6 +192,20 @@ runinfer(model, imagepath: string): string
 	if(output == "")
 		return "(no output)";
 	return output;
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # --- I/O helpers ---

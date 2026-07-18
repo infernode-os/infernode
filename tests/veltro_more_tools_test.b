@@ -16,6 +16,8 @@ implement VeltroMoreToolsTest;
 #   gap      — subcommand dispatch (add / resolve / list), bad-input errors
 #   task     — subcommand dispatch (create / status / list / close), errors
 #   wiki     — argument validation, unmounted-/n/wikia error path
+#   say      — unsafe voice names rejected before speech9p ctl writes
+#   gpu      — unsafe model names rejected before /mnt/gpu session writes
 #
 # These tools are an attack surface for the agent: every tool's exec()
 # accepts a free-form string from the LLM.  Bad parsing here = agent
@@ -603,6 +605,44 @@ testMatrixRejectsUnsafeNames(t: ref T)
 }
 
 # ============================================================================
+# say — speech control validation
+# ============================================================================
+
+testSayRejectsUnsafeVoice(t: ref T)
+{
+	tool := loadtool(t, "say");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("-v samantha;touch /tmp/owned hello");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"say rejects shell metacharacters in voice");
+
+	r = tool->exec("-v ../ctl hello");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"say rejects traversal-shaped voice");
+}
+
+# ============================================================================
+# gpu — GPU service control validation
+# ============================================================================
+
+testGpuRejectsUnsafeModel(t: ref T)
+{
+	tool := loadtool(t, "gpu");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("infer ../ctl /tmp/image.jpg");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"gpu rejects traversal-shaped model name");
+
+	r = tool->exec("detect yolov8;touch /tmp/owned /tmp/image.jpg");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"gpu rejects shell metacharacters in model name");
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -682,6 +722,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# matrix
 	run("MatrixRejectsUnsafeNames", testMatrixRejectsUnsafeNames);
+
+	# say
+	run("SayRejectsUnsafeVoice", testSayRejectsUnsafeVoice);
+
+	# gpu
+	run("GpuRejectsUnsafeModel", testGpuRejectsUnsafeModel);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

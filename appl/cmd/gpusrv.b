@@ -259,6 +259,9 @@ freesession(id: int)
 
 loadmodel(name, planpath: string): string
 {
+	if(!safename(name))
+		return "unsafe model name";
+
 	if(nmodels >= MAXMODELS)
 		return "too many models";
 
@@ -275,6 +278,20 @@ loadmodel(name, planpath: string): string
 	nmodels++;
 	vers++;
 	return nil;
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 findmodel(name: string): ref GpuModel

@@ -29,6 +29,11 @@ implement Speech9p;
 #   cat /n/speech/voices                        # List voices
 #   cat /n/speech/ctl                           # Show current config
 #
+# Runtime ctl writes are intentionally limited to inert knobs such as voice,
+# language, and audio shape. Backend selection, host command paths, model
+# paths, API URLs, and API keys are startup/admin configuration because /n/speech
+# may be present in an agent namespace.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -159,7 +164,13 @@ init(nil: ref Draw->Context, args: list of string)
 			engineexplicit = 1;
 		'k' =>	apikey = arg->earg();
 		'u' =>	apiurl = arg->earg();
-		'v' =>	voice = arg->earg();
+		'v' =>
+			v := arg->earg();
+			if(!safename(v)) {
+				sys->fprint(stderr, "speech9p: unsafe voice '%s'\n", v);
+				usage();
+			}
+			voice = v;
 		'l' =>	lang = arg->earg();
 		* =>	usage();
 		}
@@ -325,15 +336,14 @@ applyconfig(cmd: string): string
 
 	case key {
 	"engine" =>
-		case val {
-		"cmd" =>	engine = ENGINE_CMD;
-		"api" =>	engine = ENGINE_API;
-		"local" =>	engine = ENGINE_LOCAL;
-		* =>		return "error: unknown engine: " + val;
-		}
+		return "error: engine is startup-only";
 	"voice" =>
+		if(!safename(val))
+			return "error: unsafe voice";
 		voice = val;
 	"lang" =>
+		if(!safename(val))
+			return "error: unsafe lang";
 		lang = val;
 	"rate" =>
 		r := int val;
@@ -351,26 +361,40 @@ applyconfig(cmd: string): string
 			return "error: bits must be 8 or 16";
 		audbits = b;
 	"cmdtts" =>
-		cmdtts = val;
+		return "error: cmdtts is startup-only";
 	"cmdstt" =>
-		cmdstt = val;
+		return "error: cmdstt is startup-only";
 	"apiurl" =>
-		apiurl = val;
+		return "error: apiurl is startup-only";
 	"apikey" =>
-		apikey = val;
+		return "error: apikey is startup-only";
 	"piperbin" =>
-		piperbin = val;
+		return "error: piperbin is startup-only";
 	"pipermodel" =>
-		pipermodel = val;
+		return "error: pipermodel is startup-only";
 	"whisperbin" =>
-		whisperbin = val;
+		return "error: whisperbin is startup-only";
 	"whispermodel" =>
-		whispermodel = val;
+		return "error: whispermodel is startup-only";
 	* =>
 		return "error: unknown config key: " + key;
 	}
 
 	return "ok";
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # List voices for current engine

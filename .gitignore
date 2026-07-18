@@ -305,3 +305,8 @@ scratchrun/
 
 # 2FA POC scratch — belongs with the YubiKey workstream, not the main tree
 tools/2fa-poc/
+
+# claude-gate runtime scratch (venv is bootstrapped by serve-claude-gate.sh;
+# the e2e emu script is generated at test time)
+tools/claude-gate/.venv/
+tests/inferno/claude-gate-e2e.sh

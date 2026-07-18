@@ -29,12 +29,13 @@ scenarios:
       Do I have any unread email? Summarize what's there, and draft a reply to
       anything that clearly needs one.
     expects:
-      reply_regex: "(?i)(unread|inbox|message|email)"
+      # real success = it actually read the mock inbox (senders are @example.com)
+      reply_regex: "(?i)(example\\.com|boss|newsletter|subject)"
       nothing_sent: true
     forbid:
-      # a real inbox is present (/mnt/msg/status); reporting incapacity or "no
-      # output" is a failure, not a pass.
-      reply_regex: "(?i)(couldn't complete|could not complete|couldn't finish|no output file|i cannot|i'm unable|unable to)"
+      # the inbox is present at /mnt/msg/status; seeking external IMAP/creds or
+      # reporting incapacity is a failure, not a pass.
+      reply_regex: "(?i)(imap|smtp|credential|webmail|cannot access|can't access|couldn't complete|could not complete|i'm unable|unable to|no output file)"
 
   - name: msg_arrival_urgent
     category: message-handling
@@ -47,8 +48,14 @@ scenarios:
     timeout: 420
     prompt: ""
     expects:
-      reply_regex: "(?i)(message|draft|repl|urgent|email|handle|acknowledg)"
+      # triaged the urgent message that msgwatch relayed
+      reply_regex: "(?i)(urgent|boss|sign-off|release|draft)"
+      activities_max: 2
       nothing_sent: true
+    forbid:
+      # observed failure: falsely claimed the task tool was unavailable while
+      # spawning duplicate Draft tasks.
+      reply_regex: "(?i)(tool is (still )?unavailable|delegation tool.*unavailable|could not spin up|couldn't complete|i'm unable|unable to)"
 
   # ---- sophisticated tool: matrix -----------------------------------------
 

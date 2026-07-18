@@ -536,6 +536,9 @@ Serve:
 
 handlectl(data: string): string
 {
+	if(hascontrol(data))
+		return "control text not allowed";
+
 	if(len data > 5 && data[0:5] == "load ") {
 		name := data[5:];
 		text: string;
@@ -545,6 +548,8 @@ handlectl(data: string): string
 				text = comp.text;
 			complock <-= 1;
 		} else {
+			if(!safeleaf(name))
+				return "unsafe composition name";
 			path := "/lib/matrix/compositions/" + name;
 			text = readfile(path);
 			if(text == nil)
@@ -575,6 +580,8 @@ handlectl(data: string): string
 
 	if(len data > 4 && data[0:4] == "pin ") {
 		name := data[4:];
+		if(!safeleaf(name))
+			return "unsafe composition name";
 		<-complock;
 		text := "";
 		if(comp != nil)
@@ -591,12 +598,36 @@ handlectl(data: string): string
 
 	if(len data > 6 && data[0:6] == "unpin ") {
 		name := data[6:];
+		if(!safeleaf(name))
+			return "unsafe composition name";
 		if(sys->remove("/lib/matrix/compositions/" + name) < 0)
 			return sys->sprint("cannot remove: %r");
 		return nil;
 	}
 
 	return "usage: load <name>|load -|unload|pin <name>|unpin <name>";
+}
+
+safeleaf(s: string): int
+{
+	if(s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] < ' ')
+			return 1;
+	return 0;
 }
 
 # ── Qid packing ─────────────────────────────────────────────

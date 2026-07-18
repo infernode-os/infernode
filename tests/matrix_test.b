@@ -1150,6 +1150,12 @@ testControlFSWatch(t: ref T)
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
+	t.assert(writestr("/mnt/matrix/ctl", "pin ../mtest-owned") < 0,
+		"ctl pin rejects traversal name");
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon\nunload") < 0,
+		"ctl rejects control-delimited writes");
+	t.assert(writestr("/mnt/matrix/ctl", "unpin ../sysmon") < 0,
+		"ctl unpin rejects traversal name");
 
 	# pin: current composition becomes a named library entry; unpin removes it.
 	t.assert(writestr("/mnt/matrix/ctl", "pin mtest-pinned") > 0, "pin accepted");

@@ -213,6 +213,29 @@ testWalletDoubledCommand(t: ref T)
 		"doubled 'wallet wallet accounts' not treated as unknown");
 }
 
+testWalletRejectsUnsafeAccount(t: ref T)
+{
+	tool := loadtool(t, "wallet");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("address ../ctl");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet address rejects traversal account");
+
+	r = tool->exec("balance /tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet balance rejects absolute account");
+
+	r = tool->exec("sign ../ctl 9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet sign rejects traversal account");
+
+	r = tool->exec("pay ../ctl 1000 0x000000000000000000000000000000000000dEaD");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet pay rejects traversal account");
+}
+
 # ============================================================================
 # keyring — subcommand dispatch
 # ============================================================================
@@ -620,6 +643,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WalletUnknownCommand", testWalletUnknownCommand);
 	run("WalletMissingArgs", testWalletMissingArgs);
 	run("WalletDoubledCommand", testWalletDoubledCommand);
+	run("WalletRejectsUnsafeAccount", testWalletRejectsUnsafeAccount);
 
 	# keyring
 	run("KeyringNameDoc", testKeyringNameDoc);

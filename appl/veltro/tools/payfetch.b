@@ -149,6 +149,8 @@ exec(args: string): string
 		return "error: no wallet account specified and no default set.\n" +
 			"Use: payfetch <url> -a <account>\n" +
 			"Or set default from a trusted wallet controller.";
+	if(!validaccount(acctname))
+		return "error: unsafe wallet account name";
 
 	# Validate URL
 	lurl := str->tolower(url);
@@ -270,6 +272,8 @@ checkwalletbudget(acctname: string, amount: string): string
 
 recordwalletspend(acctname: string, amt: string)
 {
+	if(!validaccount(acctname))
+		return;
 	fd := sys->open("/n/wallet/" + acctname + "/history", Sys->OWRITE);
 	if(fd != nil) {
 		msg := array of byte ("paid " + amt + "\n");
@@ -354,6 +358,20 @@ readfile(path: string): string
 	if(n <= 0)
 		return nil;
 	return string buf[0:n];
+}
+
+validaccount(s: string): int
+{
+	if(s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 extracthost(url: string): string

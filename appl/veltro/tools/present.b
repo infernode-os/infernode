@@ -224,6 +224,8 @@ docreate(args: string): string
 	"block-beta" or "pie" or "gantt" or "xychart-beta" =>
 		atype = "mermaid";
 	}
+	if(!allowedtype(atype))
+		return "error: unsupported artifact type: " + atype;
 
 	if(label == nil || label == "")
 		label = id;
@@ -239,6 +241,15 @@ docreate(args: string): string
 		return "error: " + err;
 
 	return sys->sprint("created artifact '%s' (type=%s)", id, atype);
+}
+
+allowedtype(atype: string): int
+{
+	case atype {
+	"markdown" or "text" or "table" or "code" or "pdf" or "image" or "mermaid" =>
+		return 1;
+	}
+	return 0;
 }
 
 # Write content to an artifact's data file
@@ -416,6 +427,11 @@ isallowedurl(url: string): int
 	for(i := 0; i < len lurl; i++)
 		if(lurl[i] >= 'A' && lurl[i] <= 'Z')
 			lurl[i] += 'a' - 'A';
+	for(i = 0; i < len lurl; i++) {
+		c := lurl[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
 	return len lurl >= 7 && lurl[0:7] == "http://" ||
 		len lurl >= 8 && lurl[0:8] == "https://";
 }

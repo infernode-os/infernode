@@ -61,3 +61,64 @@ scenarios:
       activities_min: 1
     forbid:
       trajectory_tool: [launch, charon, exec]
+
+  - name: list_dir
+    category: everyday-tools
+    description: >
+      Directory listing the meta-agent answers directly with the list tool.
+      Proves the list tool and that a factual lookup is not over-delegated.
+    settle: 5
+    prompt: "What agent persona files are in /lib/veltro/agents? Just list them."
+    expects:
+      trajectory_tool: list
+      reply_regex: "(?i)(coder|research|verify|secretary|explore|task)"
+    forbid:
+      trajectory_tool: [launch, editor]
+
+  - name: delegate_research
+    category: delegation
+    description: >
+      A research request must be delegated to a task agent granted web tools —
+      the meta-agent must not websearch/webfetch itself.
+    settle: 7
+    prompt: >
+      Research the origins of the Inferno operating system and write me a short
+      summary.
+    expects:
+      trajectory_tool: task
+      activities_min: 1
+    forbid:
+      trajectory_tool: [websearch, webfetch, browse]
+
+  - name: delegate_write_task
+    category: delegation
+    description: >
+      Writing a file requires the write tool, which is NOT in Activity 0's
+      slice — so it must construct a task agent with tools=write. Tests
+      recognition that the work needs delegation plus a correct capability
+      grant (a child activity is created).
+    settle: 7
+    prompt: "Create a file at /tmp/grindout.txt containing the single word HELLO."
+    expects:
+      trajectory_tool: task
+      activities_min: 1
+    forbid:
+      trajectory_tool: [write, edit, exec]
+
+  - name: delegate_multi
+    category: delegation
+    description: >
+      Three unrelated asks in one message. A good Chief of Staff spins up
+      separate task agents (well-scoped, no duplicates) rather than doing the
+      work or collapsing everything into one vague task.
+    settle: 9
+    timeout: 480
+    prompt: >
+      I need three things: research pony breeds for a book I'm writing, draft a
+      short note to my landlord about a leak, and start a small to-do list app.
+      Please get each one started.
+    expects:
+      trajectory_tool: task
+      activities_min: 2
+    forbid:
+      trajectory_tool: [websearch, webfetch, write, edit, exec, launch]

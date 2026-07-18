@@ -1,0 +1,63 @@
+# Core operational scenarios for the InferNode agent grinding harness.
+#
+# Each scenario boots a fresh headless stack, sends `prompt` to Activity 0
+# (the Chief-of-Staff meta-agent), waits `settle` stable polls, then scores the
+# live namespace state + trajectory against expects/forbid.
+#
+# Check vocabulary (grind.py):
+#   expects.reply_contains: str|[str]      final Activity-0 reply contains all
+#   expects.reply_regex: str               final reply matches
+#   expects.reply_is: str                  final reply equals (trimmed)
+#   expects.activity_spawned: str|[str]    a child activity label contains this
+#   expects.activities_min/max: int        child-activity count bounds
+#   expects.trajectory_tool: str|[str]     Activity 0 invoked these tools
+#   expects.probe_contains: [{path,text}]  a staged probe file contains text
+#   expects.artifact_type: str|[str]       a presentation artifact of this type
+#   expects.matrix_contains: str           /mnt/matrix composition contains this
+#   forbid.trajectory_tool: str|[str]      Activity 0 must NOT invoke these
+#   forbid.reply_regex: str                reply must NOT match
+
+scenarios:
+
+  - name: identity
+    category: persona
+    description: >
+      Identity probe. Chief-of-Staff meta.txt mandates the first sentence be
+      exactly "I am Veltro." Proves the prompt stack loads and the gate
+      round-trips. No tools expected.
+    settle: 3
+    prompt: "Who are you? Answer in one sentence."
+    expects:
+      reply_contains: "I am Veltro"
+    forbid:
+      reply_regex: "(?i)\\b(claude|gpt|assistant|language model|anthropic|openai)\\b"
+
+  - name: read_file_direct
+    category: everyday-tools
+    description: >
+      A simple information lookup the meta-agent is allowed to answer directly
+      with the read tool (not delegate, not launch a GUI). Proves everyday tool
+      use and the delegate-vs-do boundary for read-only lookups.
+    settle: 5
+    prompt: >
+      Read the file /lib/veltro/agents/task.txt and tell me the first line
+      verbatim.
+    expects:
+      reply_contains: "task execution agent"
+      trajectory_tool: read
+    forbid:
+      trajectory_tool: [launch, editor, present]
+
+  - name: delegate_launch
+    category: delegation
+    description: >
+      The meta-agent must DELEGATE app-launching to a task agent (per
+      meta.txt: never launch/charon/exec directly). Success = a child activity
+      was created via the task tool; Activity 0 did not launch it itself.
+    settle: 7
+    prompt: "Open the Charon browser to https://example.com for me."
+    expects:
+      trajectory_tool: task
+      activities_min: 1
+    forbid:
+      trajectory_tool: [launch, charon, exec]

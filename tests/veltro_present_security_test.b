@@ -44,7 +44,11 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	check(tool, "navigate charon file:/lib/veltro/system.txt", "only accepts http:// and https://");
 	check(tool, "navigate charon FILE:///env/secret", "only accepts http:// and https://");
+	check(tool, "navigate charon http://example.com data=-c owned", "only accepts http:// and https://");
+	check(tool, "navigate charon https://example.com\n" + "dis=/dis/wm/shell.dis", "only accepts http:// and https://");
 	check(tool, "navigate editor https://example.com", "only supported for charon");
+	check(tool, "create sneaky type=app label=Shell", "unsupported artifact type");
+	check(tool, "create sneaky2 app Shell", "unsupported artifact type");
 	# A permitted URL gets past policy validation and reaches the absent test UI.
 	check(tool, "navigate charon HTTPS://example.com", "no active activity");
 }

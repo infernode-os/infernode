@@ -1367,6 +1367,24 @@ tasksummary(task: string): string
 	return task[0:47] + "...";
 }
 
+# Text written into luciuisrv ctl attributes must stay inert display text.
+# The ctl parser treats any whitespace-delimited word ending in '=' as a new
+# attribute, so collapse controls and replace '=' before embedding task text.
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
+}
+
 # --- Activity / background task helpers ---
 
 # Get the current activity ID from luciuisrv.
@@ -1396,7 +1414,7 @@ countbgtasks(actid: int): int
 bgadd(actid: int, label: string)
 {
 	ctxctl := sys->sprint("%s/activity/%d/context/ctl", UI_MOUNT, actid);
-	cmd := "bg add label=" + label + " status=live";
+	cmd := "bg add status=live label=" + safeattrtext(label);
 	writefile(ctxctl, cmd);
 }
 

@@ -63,7 +63,8 @@ user := "inferno";
 
 # loaded video state
 width, height, fps, framesize, nframes: int;
-i420: array of byte;
+i420: array of byte;	# backing store; only [0:used] is valid data
+used := 0;
 eof := 1;			# static sources are complete from the start
 streaming := 0;
 
@@ -188,15 +189,24 @@ serve(tree: ref Tree)
 	tree.quit();
 }
 
-# Append one frame's I420 payload to the served buffer.
+# Append one frame's I420 payload to the served buffer.  The backing
+# array grows by doubling: a per-frame exact-fit reallocate-and-copy is
+# O(n^2) in copy volume and its ever-larger allocations fragment the Dis
+# arena until even modest streams exhaust the heap.
 grow(fr: array of byte)
 {
-	nb := array[len i420 + len fr] of byte;
-	nb[0:] = i420;
-	nb[len i420:] = fr;
-	i420 = nb;
+	if(used + len fr > len i420){
+		ncap := 2 * len i420;
+		if(ncap < used + len fr)
+			ncap = used + len fr;
+		nb := array[ncap] of byte;
+		nb[0:] = i420[0:used];
+		i420 = nb;
+	}
+	i420[used:] = fr;
+	used += len fr;
 	if(framesize > 0)
-		nframes = len i420 / framesize;
+		nframes = used / framesize;
 }
 
 # Reply to a frame read now if data (or EOF) allows, else park it until the
@@ -205,8 +215,8 @@ grow(fr: array of byte)
 # a live source parks reads that run ahead of the decoder.
 serviceframe(tm: ref Tmsg.Read)
 {
-	if(int tm.offset < len i420 || eof)
-		srv.reply(styxservers->readbytes(tm, i420));
+	if(int tm.offset < used || eof)
+		srv.reply(styxservers->readbytes(tm, i420[0:used]));
 	else
 		parked = tm :: parked;
 }
@@ -216,8 +226,8 @@ wakeparked()
 	still: list of ref Tmsg.Read;
 	for(p := parked; p != nil; p = tl p){
 		tm := hd p;
-		if(int tm.offset < len i420 || eof)
-			srv.reply(styxservers->readbytes(tm, i420));
+		if(int tm.offset < used || eof)
+			srv.reply(styxservers->readbytes(tm, i420[0:used]));
 		else
 			still = tm :: still;
 	}
@@ -279,6 +289,7 @@ startstream(cmd: list of string)
 	}
 	# reset served state for the new source
 	i420 = array[0] of byte;
+	used = 0;
 	width = height = fps = framesize = nframes = 0;
 	eof = 0;
 	streaming = 1;
@@ -472,24 +483,41 @@ loadvideo(path: string): string
 
 	streaming = 0;
 	eof = 1;
-	width = w; height = h; fps = f; framesize = fsz; nframes = n; i420 = nb;
+	width = w; height = h; fps = f; framesize = fsz; nframes = n;
+	i420 = nb; used = len nb;
 	return nil;
 }
 
+# Read a whole file.  Allocate once from the stat length — an append loop
+# that reallocates and copies the accumulated buffer per read is O(n^2)
+# and fragments the arena on multi-megabyte .y4m files.  The post-stat
+# doubling loop only runs if the file grew, or for stat-less sources.
 readall(fd: ref Sys->FD): array of byte
 {
-	buf := array[0] of byte;
+	size := 0;
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0 && d.length > big 0)
+		size = int d.length;
+	buf := array[size] of byte;
+	n := 0;
+	while(n < size){
+		r := sys->read(fd, buf[n:], size-n);
+		if(r <= 0)
+			return buf[0:n];
+		n += r;
+	}
 	tmp := array[32*1024] of byte;
 	for(;;){
-		n := sys->read(fd, tmp, len tmp);
-		if(n <= 0)
+		r := sys->read(fd, tmp, len tmp);
+		if(r <= 0)
 			break;
-		nbuf := array[len buf + n] of byte;
-		nbuf[0:] = buf;
-		nbuf[len buf:] = tmp[0:n];
+		nbuf := array[n + r] of byte;
+		nbuf[0:] = buf[0:n];
+		nbuf[n:] = tmp[0:r];
 		buf = nbuf;
+		n += r;
 	}
-	return buf;
+	return buf[0:n];
 }
 
 findnl(d: array of byte, p: int): int

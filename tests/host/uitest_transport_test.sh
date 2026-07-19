@@ -41,7 +41,7 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=160x120:rate=10
 cat > "$ROOT/.uitest.sh" <<'ISH'
 mkdir -p /mnt/video
 mount {vid9p /.uitest.y4m} /mnt/video
-wm/matrix /lib/matrix/compositions/video-player &
+wm/matrix -g 800x600 /lib/matrix/compositions/video-player &
 sleep 8
 echo ptr 400 280 1 > /chan/uitest
 sleep 1

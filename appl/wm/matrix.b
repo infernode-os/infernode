@@ -163,6 +163,8 @@ Tick: adt {
 };
 ticks: list of ref Tick;
 tickms := UPDATE_MS;	# current timer period
+geomw := 0;		# -g: standalone geometry request (0 = adapt to host)
+geomh := 0;
 
 focusmod: MatrixDisplay;	# module with keyboard focus
 tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
@@ -246,6 +248,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'h' =>	forceheadless = 1;
+		'g' =>
+			# -g WxH: claim this geometry from the wm.  ONLY for
+			# standalone launches (demo rigs under bare wm/wm,
+			# where winplace's fallback window is tiny).  Hosted
+			# launches (Lucifer presentation zone) must NOT set
+			# this: the host hands out its content rect and a
+			# geometry request fights it and lands the window
+			# outside the zone.
+			s := arg->earg();
+			for(gi := 0; gi < len s; gi++)
+				if(s[gi] == 'x') {
+					geomw = int s[0:gi];
+					geomh = int s[gi+1:];
+					break;
+				}
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -1223,29 +1240,25 @@ initgui(ctxt: ref Draw->Context)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
-	# onscreen announces the toplevel's Required rect, which is empty
-	# this early, so winplace falls back to its small default and the
-	# 800x600 toplevel request never reaches the wm.  Ask for our
-	# geometry explicitly ("place" honours a concrete size) and PUMP
-	# THE CTL CHANNEL until the grant arrives: modules loaded against
-	# the small pre-grant window get canvas items created at the wrong
-	# size, and the engine's item input geometry has proven unreliable
-	# across a mid-flight resize (right-hand regions unreachable by
-	# the pointer).  Creating everything at final size sidesteps that.
-	# (A one-line tkclient fix — forcing a layout pass in onscreen —
-	# was tried and REGRESSED placement; the general fix needs real
-	# design in tkclient/wm and stays on the improvement ledger.)
-	tkclient->wmctl(top, "!reshape . -1 0 0 800 600 place");
-	for(gw := 0; gw < 40; gw++) {
-		if(int tk->cmd(top, ". cget -actwidth") >= 780)
-			break;
-		alt {
-		c := <-wmctl or
-		c = <-top.ctxt.ctl or
-		c = <-top.wreq =>
-			tkclient->wmctl(top, c);
-		* =>
-			sys->sleep(25);
+	# Standalone (-g) only: claim the requested geometry and PUMP THE
+	# CTL CHANNEL until the grant arrives, so modules are created at
+	# final size (the engine's item input geometry is unreliable
+	# across a mid-flight resize).  Without -g we ADAPT to whatever
+	# the wm or a presentation-zone host granted — a hosted matrix
+	# must never fight the host's content rect.
+	if(geomw > 0 && geomh > 0) {
+		tkclient->wmctl(top, sys->sprint("!reshape . -1 0 0 %d %d place", geomw, geomh));
+		for(gw := 0; gw < 40; gw++) {
+			if(int tk->cmd(top, ". cget -actwidth") >= geomw - 20)
+				break;
+			alt {
+			c := <-wmctl or
+			c = <-top.ctxt.ctl or
+			c = <-top.wreq =>
+				tkclient->wmctl(top, c);
+			* =>
+				sys->sleep(25);
+			}
 		}
 	}
 

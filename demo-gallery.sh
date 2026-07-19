@@ -9,4 +9,4 @@ EMU="$ROOT/emu/MacOSX/o.emu"
 [ -x "$EMU" ] || { echo "no emu at $EMU"; exit 1; }
 
 exec "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -g900x700 -r"$ROOT" \
-  wm/wm sh -c "wm/matrix /lib/matrix/compositions/widget-gallery & sleep 100000"
+  wm/wm sh -c "wm/matrix -g 800x600 /lib/matrix/compositions/widget-gallery & sleep 100000"

@@ -38,7 +38,7 @@ DRIVER="
 mkdir -p /mnt/video /mnt/videob
 mount {vid9p -c $VDEC udp://127.0.0.1:5004 --y4m - --quiet} /mnt/video
 mount {vid9p -c $VDEC udp://127.0.0.1:5005 --y4m - --quiet} /mnt/videob
-wm/matrix /lib/matrix/compositions/video-live &
+wm/matrix -g 800x600 /lib/matrix/compositions/video-live &
 sleep 100000
 "
 

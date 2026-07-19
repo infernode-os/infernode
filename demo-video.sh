@@ -43,7 +43,7 @@ mount {vid9p -c $VDEC $MEDIA/clipA.mp4 --y4m - --quiet} /mnt/video
 mount {vid9p /video-demo-media/clipB.y4m} /mnt/videob
 mount {vid9p -c $VDEC $MEDIA/clipC.mp4 --y4m - --quiet} /mnt/videoc
 echo demo: feeds mounted
-wm/matrix /lib/matrix/compositions/video-demo &
+wm/matrix -g 800x600 /lib/matrix/compositions/video-demo &
 echo demo: matrix launched
 sleep 100000
 "

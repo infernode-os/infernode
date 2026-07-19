@@ -19,7 +19,7 @@ MEDIA="$ROOT/video-demo-media"
 DRIVER="
 mkdir -p /mnt/video
 mount {vid9p /video-demo-media/clipC.y4m} /mnt/video
-wm/matrix /lib/matrix/compositions/video-player &
+wm/matrix -g 800x600 /lib/matrix/compositions/video-player &
 sleep 100000
 "
 

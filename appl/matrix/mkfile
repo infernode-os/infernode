@@ -18,6 +18,7 @@ TARG=\
 	proc-list.dis\
 	tk-notes.dis\
 	video-ctl.dis\
+	video-overlay.dis\
 	video-pane.dis\
 
 SYSMODULES=\

@@ -68,6 +68,7 @@ Matrix: module
 };
 
 UPDATE_MS: con 2000;
+MINTICK_MS: con 40;	# fastest per-module cadence (25 fps)
 
 # ── 9P qid space ───────────────────────────────────────────
 #
@@ -151,6 +152,18 @@ greencolor: ref Image;
 yellowcolor: ref Image;
 guimode: int;
 dirty: int;
+# Per-leaf update cadence: display modules exporting the optional
+# MatrixTicker interface (matrix.m) run faster than UPDATE_MS; the
+# timer period is the minimum over the current layout and each leaf
+# accumulates elapsed ms until its own interval is due.
+Tick: adt {
+	name:	string;
+	ivl:	int;	# desired update period, ms
+	acc:	int;	# ms accumulated since last update
+};
+ticks: list of ref Tick;
+tickms := UPDATE_MS;	# current timer period
+
 focusmod: MatrixDisplay;	# module with keyboard focus
 tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
 tkregionseq: int;	# widget-path allocator for hosted regions (.r<seq>)
@@ -1251,7 +1264,7 @@ loadcolors()
 updatetimer()
 {
 	for(;;) {
-		sys->sleep(UPDATE_MS);
+		sys->sleep(tickms);
 		alt {
 		updatech <-= 1 =>
 			;
@@ -1583,6 +1596,7 @@ loaddisplaymodules()
 	if(comp == nil || comp.layout == nil)
 		return;
 	loadleafmodules(comp.layout);
+	tickms = recomputetick(comp.layout);
 }
 
 loadleafmodules(node: ref LayoutNode)
@@ -1615,7 +1629,54 @@ loadleafmodules(node: ref LayoutNode)
 		}
 		mod->resize(n.r);
 		n.mod = mod;
+		iv := UPDATE_MS;
+		if((tkr := load MatrixTicker path) != nil) {
+			iv = tkr->interval();
+			if(iv < MINTICK_MS)
+				iv = MINTICK_MS;
+			if(iv > UPDATE_MS)
+				iv = UPDATE_MS;
+		}
+		settick(n.name, iv);
 	}
+}
+
+# Record (or refresh) a leaf's update interval.
+settick(name: string, iv: int)
+{
+	if((t := findtick(name)) != nil) {
+		t.ivl = iv;
+		t.acc = 0;
+		return;
+	}
+	ticks = ref Tick(name, iv, 0) :: ticks;
+}
+
+findtick(name: string): ref Tick
+{
+	for(l := ticks; l != nil; l = tl l)
+		if((hd l).name == name)
+			return hd l;
+	return nil;
+}
+
+# Timer period = min interval over the CURRENT layout's leaves (stale
+# tick entries from an unloaded composition must not keep it fast).
+recomputetick(node: ref LayoutNode): int
+{
+	m := UPDATE_MS;
+	if(node == nil)
+		return m;
+	pick n := node {
+	Split =>
+		m = recomputetick(n.child1);
+		if((m2 := recomputetick(n.child2)) < m)
+			m = m2;
+	Leaf =>
+		if((t := findtick(n.name)) != nil && t.ivl < m)
+			m = t.ivl;
+	}
+	return m;
 }
 
 # Host a Tk display module: a frame in a canvas window item at the
@@ -1650,6 +1711,15 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 		tk->cmd(top, "destroy " + w);
 		return;
 	}
+	iv := UPDATE_MS;
+	if((tkr := load MatrixTicker path) != nil) {
+		iv = tkr->interval();
+		if(iv < MINTICK_MS)
+			iv = MINTICK_MS;
+		if(iv > UPDATE_MS)
+			iv = UPDATE_MS;
+	}
+	settick(n.name, iv);
 	n.tkmod = tkm;
 	n.tkwin = w;
 	n.tkitem = itm;
@@ -2020,6 +2090,12 @@ updatedisplaymodules(node: ref LayoutNode): int
 		c2 := updatedisplaymodules(n.child2);
 		return c1 | c2;
 	Leaf =>
+		if((t := findtick(n.name)) != nil) {
+			t.acc += tickms;
+			if(t.acc < t.ivl)
+				return 0;
+			t.acc = 0;
+		}
 		if(n.mod != nil)
 			return n.mod->update();
 		if(n.tkmod != nil)
@@ -2318,8 +2394,8 @@ handlekey(k: int)
 		}
 		return;
 	}
-	if(focusmod != nil)
-		focusmod->key(k);
+	if(focusmod != nil && focusmod->key(k))
+		dirty = 1;
 }
 
 # ── Watch rules ─────────────────────────────────────────────

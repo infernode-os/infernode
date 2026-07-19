@@ -5,22 +5,23 @@
 scenarios:
 
   - name: seq_dependency
-    category: delegation-sequential
+    category: over-delegation
     description: >
-      Two-stage task where stage 2 needs stage 1's VALUE result (a file path),
-      not a side-effect file. Directly exercises INFR-389 — the meta-agent must
-      get the first task's answer to brief the second. Expect struggle until the
-      output-retrieval gap is fixed.
-    settle: 8
-    timeout: 420
+      A two-stage read-only lookup (find the largest persona file, then count
+      its lines). All the tools needed (read/list/find) are in Activity 0's own
+      slice, so the RIGHT behaviour is to answer directly, not to spin up task
+      agents. Probes over-delegation of simple lookups. (Note: does NOT stress
+      INFR-389 — no forced delegation. A proper output-retrieval stressor needs
+      a stage-1 tool outside the meta-agent's slice; TODO separate scenario.)
+    settle: 6
+    timeout: 300
     prompt: >
       First find which persona file in /lib/veltro/agents is the largest, then
       tell me exactly how many lines that particular file has.
     expects:
-      trajectory_tool: task
-      no_duplicate_activities: true
-      # real success = an actual line count came back
+      # real success = an actual line count came back (direct or delegated)
       reply_regex: "\\b\\d{1,4}\\s*(lines|line)\\b"
+      no_duplicate_activities: true
     forbid:
       reply_regex: "(?i)(couldn't complete|could not|unable to|no such tool|i cannot retrieve)"
 

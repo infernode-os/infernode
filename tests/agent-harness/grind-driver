@@ -171,7 +171,12 @@ echo '@@GRIND settled status='^`{cat /mnt/ui/activity/0/status}
 # --- state bundle ------------------------------------------------------------
 for (a in 0 1 2 3 4 5 6 7 8 9) {
 	if {ftest -f /mnt/ui/activity/$a/label} {
-		echo '@@ACT id='^$a^' status=['^`{cat /mnt/ui/activity/$a/status}^'] urgency=['^`{cat /mnt/ui/activity/$a/urgency}^'] label=['^`{cat /mnt/ui/activity/$a/label}^']'
+		# `{cat} word-splits; $"var rejoins with spaces so a multi-word label
+		# stays one field instead of exploding into several @@ACT fragments.
+		actst=`{cat /mnt/ui/activity/$a/status}
+		actur=`{cat /mnt/ui/activity/$a/urgency}
+		actlbl=`{cat /mnt/ui/activity/$a/label}
+		echo '@@ACT id='^$a^' status=['^$"actst^'] urgency=['^$"actur^'] label=['^$"actlbl^']'
 	}
 }
 
@@ -192,7 +197,9 @@ for (a in 0 1 2 3 4 5 6 7 8 9) {
 	if {ftest -d /mnt/ui/activity/$a/presentation} {
 		for (p in `{ls /mnt/ui/activity/$a/presentation}) {
 			if {ftest -f $p/type} {
-				echo '@@PRES a='^$a^' path='^$p^' type=['^`{cat $p/type}^'] label=['^`{cat $p/label}^']'
+				prtype=`{cat $p/type}
+				prlbl=`{cat $p/label}
+				echo '@@PRES a='^$a^' path='^$p^' type=['^$"prtype^'] label=['^$"prlbl^']'
 			}
 		}
 	}

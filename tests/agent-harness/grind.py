@@ -287,6 +287,11 @@ def score(sc, st, completed, killed):
         reasons.append(f"child activities {len(child)} < {exp['activities_min']}")
     if exp.get("activities_max") is not None and len(child) > exp["activities_max"]:
         reasons.append(f"child activities {len(child)} > {exp['activities_max']}")
+    if exp.get("no_duplicate_activities"):
+        labs = [a["label"] for a in child]
+        dupes = sorted({l for l in labs if labs.count(l) > 1})
+        if dupes:
+            reasons.append(f"duplicate task labels (INFR-390): {dupes}")
 
     for want in as_list(exp.get("trajectory_tool")):
         if want not in st["tools"]:

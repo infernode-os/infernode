@@ -50,7 +50,8 @@ scenarios:
     expects:
       # triaged the urgent message that msgwatch relayed
       reply_regex: "(?i)(urgent|boss|sign-off|release|draft)"
-      activities_max: 2
+      # drafting one task per distinct message is fine; duplicate LABELS are not
+      no_duplicate_activities: true
       nothing_sent: true
     forbid:
       # observed failure: falsely claimed the task tool was unavailable while
@@ -76,7 +77,7 @@ scenarios:
       trajectory_tool: task
       matrix_contains: sysmon
       # no duplicate task spam (observed: 5 duplicate MatrixStatus tasks)
-      activities_max: 2
+      no_duplicate_activities: true
       # success = the actual data made it back to the meta-agent, not just that
       # a task ran. Known-failing until the task-output-retrieval gap (parent
       # can't read a child task's result) is fixed — see INFR ticket.
@@ -101,5 +102,6 @@ scenarios:
     expects:
       trajectory_tool: task
       activities_min: 1
+      no_duplicate_activities: true
     forbid:
       trajectory_tool: [websearch, webfetch, write, edit, exec]

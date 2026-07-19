@@ -1,7 +1,11 @@
 # H.264-over-9P video bridge
 
-Status: **phase 1 landed** — host-side decode core (`tools/vdec`) builds and is
-validated byte-identical to ffmpeg. Phases 2–6 are designed and ticketed below.
+Status: **phases 1–3 landed, validated end to end** — host-side decode core
+(`tools/vdec`, byte-identical to ffmpeg, network-URL ingest), the `vid9p` 9P
+stream server with server-side transport and a live retention window, and the
+Matrix render/control modules composed into player and live-wall
+crystallisations. Remaining: real-GPU hwaccel validation, a real `rtsp://`
+source, the Rust-native server, the kernel fold-in (see the phase map, §8).
 
 Jira epic: **INFR-263**. This document is the design of record; the per-phase
 tickets (INFR-264…271) point back here.
@@ -74,24 +78,73 @@ already consumes — so the render path needs no new code.
 Hardware decoders that emit other layouts (VideoToolbox → NV12) convert to I420
 in the core *before the wire*, so the format is platform-independent (INFR-265).
 
-### 2.3 The 9P interface (per stream) — designed, INFR-266
+### 2.3 The 9P interface (per stream) — built, INFR-266
+
+As implemented in `appl/cmd/vid9p.b` (the design's per-read frame header was
+dropped in favour of plain offset-addressed I420 — simpler, and it makes the
+frame file random access, which is what buys seek/DVR/multi-viewer sync):
 
 ```
-/mnt/video/<id>/ctl      # write: "open <path>", "play", "seek <ms>", "stop"
+/mnt/video/<id>/ctl      # write: "open <file.y4m>" | "play [<cmd> arg...]"
+                         #        "play" | "pause" | "stop"
+                         #        "seek <ms>|+<ms>|-<ms>" | "live"
 /mnt/video/<id>/fmt      # read:  "<w> <h> i420 <fps>"
-/mnt/video/<id>/frame    # read:  blocking; one frame per read:
-                       #        header {magic,w,h,fmt,pts,len} + I420 bytes
-/mnt/video/<id>/status   # read:  state / pts / eof
+/mnt/video/<id>/frame    # read:  raw I420; frame N is framesize bytes at
+                         #        offset N*framesize (framesize = w*h*3/2).
+                         #        Offsets are GLOBAL and monotonic.  On a live
+                         #        stream, a read past the newest frame BLOCKS
+                         #        until it decodes; a read below the retention
+                         #        window errors "frame expired".
+/mnt/video/<id>/status   # read:  "<src> w= h= framesize= frames= first= eof=
+                         #        state= pos= t= follow="  (one line)
 ```
 
 Mirrors the InferNode `ctl`+data idiom (`appl/cmd/llmsrv.b`,
-`appl/veltro/tools9p.b`). Multiplex = one stream dir (and one player) per feed.
+`appl/veltro/tools9p.b`). Multiplex = one stream dir (one vid9p mount) per feed.
+
+**Transport is server state.** The playhead (`state=`/`pos=`/`t=`) lives in
+vid9p and is paced there at the stream's fps, so every consumer of a stream
+renders the same synchronised frame, and anything that can write a file drives
+playback identically — a Matrix `video-ctl` Tk button, a `video-pane`'s keys,
+an agent, or plain sh:
+
+```
+echo pause > /mnt/video/0/ctl
+echo 'seek +5000' > /mnt/video/0/ctl
+```
+
+On a live feed the playhead follows the newest decoded frame (`follow=1`);
+seeking back replays the retained buffer (DVR) and `stop`/`live` snap back to
+the edge.  On a canned clip, playback loops and `stop` rewinds paused.
+
+**Retention.** A live feed keeps a sliding window of the last `-w` seconds
+(default 60, `0` = unlimited) instead of growing without bound; `first=` in
+status is the oldest retained frame and reads below it error.  Static sources
+are always fully retained.  Covered by `tests/host/vid9p_transport_test.sh`.
 
 ### 2.4 Render path — reused, INFR-268
 
 Unchanged from the MPEG-1 spike: read `frame` → wrap bytes as `Mpegio->YCbCr` →
 `remap->remap(...)` → masked-pane `win.image.draw(dst, frame, matte, p)`
 (`appl/mpeg/vidplay.b:77`). One player instance per feed.
+
+Three consumers exist, all over the identical `fmt`+`frame`+`status` interface
+and none adding pixel code:
+
+- **`appl/mpeg/vidplay9p.b`** — a standalone `wmclient` window (optionally a
+  shaped matte), the direct analogue of the MPEG-1 `vidplay`.
+- **`appl/matrix/video-pane.b`** — a Matrix `MatrixDisplay` module: a pure
+  VIEW of the server playhead (it preads whatever frame `pos=` names), so a
+  feed becomes a pane in a composition and every pane on one feed shows the
+  same frame. Exports `MatrixTicker` (40 ms) so the runtime drives it at frame
+  cadence; transport keys forward down the ctl wire.
+- **`appl/matrix/video-ctl.b`** — a Matrix `MatrixTkDisplay` module: real Tk
+  transport buttons (play/pause/stop/±5s + position label), each press one ctl
+  write. Compose beside a `video-pane` over the same mount.
+
+The player and the feed wall are **crystallisations**, not applications:
+`/lib/matrix/compositions/video-player` (pane + ctl over one mount) and
+`video-live` (pane + ctl per live feed). See `docs/matrix-architecture.md`.
 
 ## 3. Build & test on macOS (phase 1)
 
@@ -174,10 +227,22 @@ spike's limitations.)
 | Phase | Ticket | State |
 |------|--------|-------|
 | 1 — decode core + headless macOS validation | INFR-264 | ✅ done |
-| 2 — hwaccel (VideoToolbox / NVDEC) | INFR-265 | to do |
-| 3a — Limbo `vid9p` styxserver shim | INFR-266 | to do |
-| 3b — render `/mnt/video` via mpeg path | INFR-268 | to do |
+| 2 — hwaccel (VideoToolbox / NVDEC) | INFR-265 | ◑ selection + software fallback landed; GPU path pending on-device |
+| 3a — Limbo `vid9p` styxserver shim | INFR-266 | ✅ done (static + live spawn + server-side transport + retention window) |
+| 3b — render `/mnt/video` via mpeg path (`vidplay9p` + Matrix `video-pane`/`video-ctl`) | INFR-268 | ✅ done (player + live wall as crystallisations) |
 | 4 — Rust-native 9P server | INFR-267 | to do |
 | 5 — kernel fold-in (ABI TBD) | INFR-269 | blocked |
-| 6 — live RTSP ingest | INFR-271 | to do |
+| 6 — live RTSP ingest | INFR-271 | ◑ URL/RTSP core + `vid9p -c` live spawn landed; UDP MPEG-TS validated end-to-end (demo-live.sh); a real `rtsp://` source still unexercised |
 | chore — FFmpeg 7 / version-flexible pin | INFR-270 | to do |
+
+`◑` = partially landed. INFR-265's hardware decode is structurally complete
+(device create → `get_format` → `av_hwframe_transfer_data` → I420) and falls back
+to software when no device is present; the GPU decode path itself needs
+VideoToolbox/NVDEC hardware to validate. INFR-271's decode core accepts
+`rtsp://`/`http://`/`udp://` URLs with transport/timeout options today; the
+remaining step is to point `vid9p -c vdec <url> --y4m /fd/1` at a live feed.
+
+Naming: this document and the shipped code use **`/mnt/video/<id>`** for the
+mount. Some earlier tickets say `/n/video`; treat them as the same mount —
+`/mnt/video` is canonical (it is what `vid9p`, `vidplay9p`, and `video-pane`
+actually use).

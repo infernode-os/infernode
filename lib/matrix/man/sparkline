@@ -1,0 +1,27 @@
+NAME
+	sparkline (display) - render the last column of a history-style file as one anti-aliased trend line with a headline value
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	<mount>		one sample per line: [ts] v1 [v2 ...] — the LAST
+			column of each line is the plotted value, oldest
+			first.
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	The minimal trend strip: a title (last two path components of
+	the mount), the current value as a right-aligned headline, and
+	one auto-scaled aadraw polyline with a dot marking the newest
+	sample.  No axes, no chrome — compose several in a column for an
+	at-a-glance board.  Reads the same "[ts] v1 [v2 ...]" shape as
+	line-plot but keeps only the final column, so it works unchanged
+	on single-column files and on multi-column rings.  Re-reads the
+	file on every update tick and redraws only on change.
+
+SEE ALSO
+	line-plot (full axes, every column as a series)
+	sysmon-svc, llm-recorder (produce history rings this can graph)

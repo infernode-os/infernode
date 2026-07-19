@@ -49,6 +49,20 @@ MatrixDisplay: module
 	shutdown:	fn();
 };
 
+# Optional companion interface for display modules that need a faster
+# update() cadence than the runtime default (a video pane playing at
+# frame rate, say).  The runtime probes it by loading the module's .dis
+# under this narrower type — the Dis load typecheck is the discriminator,
+# exactly as with MatrixDisplay vs MatrixTkDisplay — so modules that do
+# not export interval() simply fail the probe and keep the default.
+# NB the probe runs on a fresh, uninitialised instance before init():
+# interval() must be a pure constant function (no globals, no calls).
+MatrixTicker: module
+{
+	# Desired update() period in ms; the runtime clamps it.
+	interval:	fn(): int;
+};
+
 MatrixService: module
 {
 	# Initialise with the mount point this module reads from

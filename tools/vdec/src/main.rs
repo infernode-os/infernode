@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::exit;
 
-use vdec::{Decoder, Frame};
+use vdec::{Decoder, Frame, HwAccel, Options};
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -18,6 +18,7 @@ fn main() {
     let mut limit: Option<usize> = None;
     let mut y4m: Option<String> = None;
     let mut quiet = false;
+    let mut opts = Options::default();
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -29,6 +30,22 @@ fn main() {
                 )
             }
             "--y4m" => y4m = Some(args.next().unwrap_or_else(|| die("--y4m needs a path"))),
+            "--hwaccel" => {
+                let n = args.next().unwrap_or_else(|| die("--hwaccel needs a name"));
+                opts.hwaccel =
+                    HwAccel::parse(&n).unwrap_or_else(|| die(&format!("unknown hwaccel {n}")));
+            }
+            "--rtsp-transport" => {
+                opts.rtsp_transport =
+                    Some(args.next().unwrap_or_else(|| die("--rtsp-transport needs tcp|udp")))
+            }
+            "--timeout" => {
+                let s: f64 = args
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(|| die("--timeout needs seconds"));
+                opts.timeout_us = Some((s * 1_000_000.0) as i64);
+            }
             "--quiet" | "-q" => quiet = true,
             "-h" | "--help" => usage(),
             other => {
@@ -44,23 +61,37 @@ fn main() {
     }
     let path = path.unwrap_or_else(|| usage());
 
-    let mut dec = Decoder::open(&path).unwrap_or_else(|e| {
+    let mut dec = Decoder::open_with(&path, &opts).unwrap_or_else(|e| {
         eprintln!("vdec: open {path}: {e}");
         exit(1);
     });
     let (w, h) = (dec.width(), dec.height());
     if !quiet {
-        eprintln!("vdec: {path}  {w}x{h}  -> I420");
+        let backend = if dec.hw_active() { "hardware" } else { "software" };
+        eprintln!("vdec: {path}  {w}x{h}  -> I420  ({backend})");
     }
 
+    // `--y4m -` streams YUV4MPEG2 to stdout so the output can be piped straight
+    // into a consumer (e.g. `vid9p -c vdec <url> --y4m -`); any other value is a
+    // file path.
     let mut writer = y4m.as_ref().map(|p| {
-        let f = File::create(p).unwrap_or_else(|e| {
-            eprintln!("vdec: create {p}: {e}");
-            exit(1);
-        });
-        let mut bw = BufWriter::new(f);
-        // Frame rate is cosmetic for validation; 25:1 keeps ffplay happy.
-        writeln!(bw, "YUV4MPEG2 W{w} H{h} F25:1 Ip A1:1 C420mpeg2").unwrap();
+        let sink: Box<dyn Write> = if p == "-" {
+            Box::new(std::io::stdout())
+        } else {
+            Box::new(File::create(p).unwrap_or_else(|e| {
+                eprintln!("vdec: create {p}: {e}");
+                exit(1);
+            }))
+        };
+        let mut bw = BufWriter::new(sink);
+        // Stamp the stream's real frame rate — vid9p's server-side playhead
+        // paces from this header, so a wrong rate plays at the wrong speed.
+        // 25:1 only when the container doesn't declare one.
+        let (frn, frd) = match dec.frame_rate() {
+            (0, _) => (25, 1),
+            r => r,
+        };
+        writeln!(bw, "YUV4MPEG2 W{w} H{h} F{frn}:{frd} Ip A1:1 C420mpeg2").unwrap();
         bw
     });
 
@@ -105,13 +136,19 @@ fn main() {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: vdec <input> [--limit N] [--y4m OUT.y4m] [--quiet]");
+    eprintln!("usage: vdec <input|url> [--limit N] [--y4m OUT.y4m] [--quiet]");
+    eprintln!("            [--hwaccel none|videotoolbox|nvdec|cuda|vaapi|qsv]");
+    eprintln!("            [--rtsp-transport tcp|udp] [--timeout SECONDS]");
     eprintln!();
     eprintln!("Host-side video decode core: decodes any libavcodec-supported input");
-    eprintln!("(H.264/HEVC/MPEG/...) to tightly-packed planar I420 frames.");
-    eprintln!("  --y4m OUT   write decoded frames as YUV4MPEG2 (watch: ffplay OUT)");
-    eprintln!("  --limit N   stop after N frames");
-    eprintln!("  --quiet     suppress per-frame logging");
+    eprintln!("(H.264/HEVC/MPEG/...) to tightly-packed planar I420 frames. Input may be");
+    eprintln!("a file or a network URL (rtsp://, rtp://, http(s)://, udp://).");
+    eprintln!("  --y4m OUT          write decoded frames as YUV4MPEG2 (watch: ffplay OUT)");
+    eprintln!("  --limit N          stop after N frames");
+    eprintln!("  --hwaccel NAME     hardware backend; falls back to software if absent");
+    eprintln!("  --rtsp-transport   force RTSP over tcp or udp");
+    eprintln!("  --timeout SECONDS  network I/O read timeout");
+    eprintln!("  --quiet            suppress per-frame logging");
     exit(2);
 }
 

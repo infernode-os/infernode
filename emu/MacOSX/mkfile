@@ -57,7 +57,10 @@ SYSLIBS= \
 default:V:	$O.$CONF
 
 
-$O.$CONF:	$OBJ $CONF.c $CONF.root.h # $LIBNAMES
+# NB $LIBFILES in the prerequisites is load-bearing: without it the
+# emu never relinks after a library rebuild (libtk.a etc.) and every
+# engine change silently ships stale — "I rebuilt and nothing changed".
+$O.$CONF:	$OBJ $CONF.c $CONF.root.h $LIBFILES
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
 	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $GUILIBS
 

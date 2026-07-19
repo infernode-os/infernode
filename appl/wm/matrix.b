@@ -1540,10 +1540,12 @@ drawpicker(dst: ref Image)
 	pad := 12;
 	rowh := font_g.height + 8;
 
-	# Header.
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent),
+	# Header.  NB Image.text takes the TOP-LEFT of the text, not the
+	# baseline — adding ascent here pushed every label down out of
+	# its row band.
+	dst.text(Point(r.min.x + pad, r.min.y + pad),
 		textcolor, (0, 0), font_g, title);
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent + rowh),
+	dst.text(Point(r.min.x + pad, r.min.y + pad + rowh),
 		dimcolor, (0, 0), font_g, hint);
 
 	y := r.min.y + pad + 2 * rowh + rowh / 2;
@@ -1574,7 +1576,7 @@ drawpicker(dst: ref Image)
 			    (r.max.x - pad, y + rowh));
 		# Subtle row background so the click affordance is visible.
 		dst.draw(row, divcolor, nil, (0, 0));
-		dst.text(Point(row.min.x + pad, y + font_g.ascent + 4),
+		dst.text(Point(row.min.x + pad, y + (rowh - font_g.height)/2),
 			textcolor, (0, 0), font_g, nm);
 		hits[nhit]  = nm;
 		rects[nhit] = row;

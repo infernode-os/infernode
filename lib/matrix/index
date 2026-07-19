@@ -12,7 +12,6 @@ proc-list (display) - render a scrollable process table joined from a status-sna
 risk-gauge (display) - render a fixed label/value metric column from a five-field file at the mount path plus two files at sibling paths of the mount
 signal-feed (display) - parse one whitespace-separated record per line from the file at the mount path and render a scrollable colour-coded list
 sysmon-svc (service) - poll /dev/memory, /prog/*/status, and /net conversation status at 1 Hz and rewrite current-snapshot and ring-buffer history files
-tk-gallery (tk-display) - render one of every core Tk widget class twice, engine defaults beside a flat and padded treatment, as a toolkit review instrument
 tk-notes (tk-display) - build entry/button/listbox Tk widgets, append entry text as lines to a notes file, and mirror that file into the listbox
 video-ctl (tk-display) - build play/pause/stop/seek Tk buttons that write transport commands to a vid9p ctl file, with a label mirroring stream status
 video-pane (display) - render a decoded video feed from a vid9p stream directory, compositing I420 frames through the mpeg remap24 path into the pane

@@ -207,6 +207,11 @@ ctxmenuactions: array of string;
 # to pickerrects: a click in rect[i] sends "load <hits[i]>" to ctl.
 pickerrects: array of Rect;
 pickerhits:  array of string;
+
+# Per-leaf load/init failures, keyed by leaf name.  A module that
+# fails must say so ON SCREEN — a silently blank region reads as
+# "the wrong app loaded", not as an error.
+moderrs: list of (string, string);
 # Edge-trigger for button-1 click detection in the picker.
 lastbtn1: int;
 # 1 while the right-click context menu is posted.  matrix intercepts
@@ -606,10 +611,22 @@ handlectl(data: string): string
 	}
 
 	if(data == "unload") {
+		# Unload returns to the picker CRYSTALLISATION, not the
+		# built-in fallback: the two lists differ (the crystallised
+		# picker omits itself), so silently swapping one for the
+		# other made identical-looking rows load different
+		# compositions.  The fallback now appears only when the
+		# picker file is genuinely unavailable.
 		comppath = "";
 		compname = "";
+		text := readfile(LIBCOMPS + "/picker");
+		if(text != nil && text != "") {
+			comppath = LIBCOMPS + "/picker";
+			compname = "picker";
+		} else
+			text = "# empty\n";
 		alt {
-		reloadch <-= "# empty\n" =>
+		reloadch <-= text =>
 			;
 		* =>
 			;
@@ -1276,8 +1293,11 @@ initgui(ctxt: ref Draw->Context)
 	# requested 800x600).  Adopt the actual size now, before the
 	# first layout pass — module rects and hosted-app windows are
 	# computed from winr, and a stale frame puts them off-window.
-	aw0 := int tk->cmd(top, ". cget -actwidth");
-	ah0 := int tk->cmd(top, ". cget -actheight");
+	# NB the frame must match the CANVAS area, not the toplevel:
+	# the canvas sits below the Tk titlebar, and a toplevel-sized
+	# frame both clips at the bottom and skews every hit test.
+	aw0 := int tk->cmd(top, ".c cget -actwidth");
+	ah0 := int tk->cmd(top, ".c cget -actheight");
 	if(aw0 > 0 && ah0 > 0 && (aw0 != winr.dx() || ah0 != winr.dy()))
 		allocframe(aw0, ah0);
 
@@ -1398,8 +1418,8 @@ guiloop()
 				menuposted = 0;
 			tkclient->wmctl(top, c);
 			if(c != nil && len c > 0 && c[0] == '!') {
-				aw := int tk->cmd(top, ". cget -actwidth");
-				ah := int tk->cmd(top, ". cget -actheight");
+				aw := int tk->cmd(top, ".c cget -actwidth");
+				ah := int tk->cmd(top, ".c cget -actheight");
 				if(aw > 0 && ah > 0)
 					allocframe(aw, ah);
 				if(comp.layout != nil)
@@ -1424,9 +1444,12 @@ guiloop()
 				lastbtn1 = 0;
 			} else if(comp == nil || comp.layout == nil) {
 				# Empty-state picker: edge-triggered button-1 click.
+				# The picker draws into the frame — translate the
+				# window-space event before hit-testing (see
+				# canvasorigin).
 				cur := ptr.buttons & 1;
 				if(cur && !lastbtn1)
-					pickerclick(ptr.xy);
+					pickerclick(toframe(ptr).xy);
 				lastbtn1 = cur;
 			} else {
 				lastbtn1 = ptr.buttons & 1;
@@ -1544,8 +1567,13 @@ drawpicker(dst: ref Image)
 		return;
 
 	r := dst.r;
+	# NB this is the BUILT-IN fallback, shown only when the `picker`
+	# crystallisation is unavailable.  Unlike that picker, this list
+	# includes `picker` itself (so it can be restored by click); the
+	# hint below must make the difference visible — the two lists
+	# don't align row-for-row.
 	title := "Matrix — click a composition to load";
-	hint  := "(long-press / right-click for the full menu)";
+	hint  := "(fallback picker: /lib/matrix/compositions/picker is unavailable)";
 	pad := 12;
 	rowh := font_g.height + 8;
 
@@ -1652,10 +1680,15 @@ drawlayout(dst: ref Image, node: ref LayoutNode)
 					dst.draw(n.r, aimg, nil, aimg.r.min);
 			}
 		} else if(n.modname != "") {
-			# Module not loaded — show placeholder
+			# Module not loaded — say so, and say WHY when known.
+			# A silent blank region here is what "the wrong app
+			# loaded" reports are made of.
 			label := n.modname + " @ " + n.mount;
 			pt := Point(n.r.min.x + 8, n.r.min.y + 8 + font_g.height);
 			dst.text(pt, dimcolor, (0, 0), font_g, label);
+			if((lerr := geterr(n.name)) != nil)
+				dst.text(Point(pt.x, pt.y + font_g.height + 4),
+					textcolor, (0, 0), font_g, "failed — " + lerr);
 		}
 	}
 }
@@ -1706,8 +1739,10 @@ loadleafmodules(node: ref LayoutNode)
 		err := mod->init(display_g, font_g, n.mount);
 		if(err != nil) {
 			sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
+			seterr(n.name, "init: " + err);
 			return;
 		}
+		seterr(n.name, nil);
 		mod->resize(n.r);
 		n.mod = mod;
 		iv := UPDATE_MS;
@@ -1720,6 +1755,25 @@ loadleafmodules(node: ref LayoutNode)
 		}
 		settick(n.name, iv);
 	}
+}
+
+seterr(name, err: string)
+{
+	nl: list of (string, string);
+	for(l := moderrs; l != nil; l = tl l)
+		if((hd l).t0 != name)
+			nl = hd l :: nl;
+	if(err != nil && err != "")
+		nl = (name, err) :: nl;
+	moderrs = nl;
+}
+
+geterr(name: string): string
+{
+	for(l := moderrs; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	return nil;
 }
 
 # Record (or refresh) a leaf's update interval.
@@ -1768,6 +1822,7 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	tkm := load MatrixTkDisplay path;
 	if(tkm == nil) {
 		sys->fprint(stderr, "matrix: cannot load display module %s: %r\n", path);
+		seterr(n.name, sys->sprint("cannot load %s: %r", path));
 		return;
 	}
 	w := sys->sprint(".r%d", tkregionseq++);
@@ -1788,10 +1843,12 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	err := tkm->init(top, w, n.mount);
 	if(err != nil) {
 		sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
+		seterr(n.name, "init: " + err);
 		tk->cmd(top, ".c delete " + itm);
 		tk->cmd(top, "destroy " + w);
 		return;
 	}
+	seterr(n.name, nil);
 	iv := UPDATE_MS;
 	if((tkr := load MatrixTicker path) != nil) {
 		iv = tkr->interval();
@@ -2387,23 +2444,44 @@ basename(p: string): string
 
 # ── Event routing ───────────────────────────────────────────
 
+# Pointer events arrive in WINDOW coordinates (tkclient's space,
+# origin at the toplevel's top-left, titlebar included).  Every
+# module/app/picker rect lives in FRAME coordinates — the canvas
+# area below the Tk titlebar.  Hit-testing raw window coords
+# against frame rects shifted every hot zone up by the titlebar
+# height: clicks landed on the row BELOW what they visually hit.
+# Translate once here; Tk-hosted leaves get the RAW event back
+# (Tk routes in window coordinates itself).
+canvasorigin(): Point
+{
+	ox := int tk->cmd(top, ".c cget -actx");
+	oy := int tk->cmd(top, ".c cget -acty");
+	return Point(ox, oy);
+}
+
+toframe(p: ref Pointer): ref Pointer
+{
+	off := canvasorigin();
+	return ref Pointer(p.buttons, Point(p.xy.x - off.x, p.xy.y - off.y), p.msec);
+}
+
 handleptr(p: ref Pointer)
 {
 	if(comp == nil || comp.layout == nil)
 		return;
-	routeptr(comp.layout, p);
+	routeptr(comp.layout, toframe(p), p);
 	dirty = 1;
 }
 
-routeptr(node: ref LayoutNode, p: ref Pointer): int
+routeptr(node: ref LayoutNode, p, rawp: ref Pointer): int
 {
 	if(node == nil)
 		return 0;
 	pick n := node {
 	Split =>
-		if(routeptr(n.child1, p))
+		if(routeptr(n.child1, p, rawp))
 			return 1;
-		return routeptr(n.child2, p);
+		return routeptr(n.child2, p, rawp);
 	Leaf =>
 		if(n.mod != nil && n.r.contains(p.xy)) {
 			focusmod = n.mod;
@@ -2413,11 +2491,12 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 		if(n.tkmod != nil && n.r.contains(p.xy)) {
 			# Tk hit-tests, fires bindings, and manages widget
 			# focus itself; keys follow while the pointer stays
-			# in a hosted region.
+			# in a hosted region.  Tk gets the RAW window-space
+			# event — its widgets live in that space.
 			focusmod = nil;
 			tkfocus = 1;
 			appkbd = nil;
-			tk->pointer(top, *p);
+			tk->pointer(top, *rawp);
 			return 1;
 		}
 		if(n.modname == "app" && n.r.contains(p.xy)) {
@@ -2604,6 +2683,7 @@ reloadcomposition(text: string)
 	# the new composition's watcher starts with all-unseen state, so
 	# a just-loaded composition can never fire immediately.
 	stopwatchers();
+	moderrs = nil;	# stale failures must not annotate the new layout's leaves
 
 	# Incremental: entries unchanged between old and new keep their
 	# live module instance (and, for services, their running proc).

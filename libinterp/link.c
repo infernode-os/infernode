@@ -57,8 +57,10 @@ linkm(Module *m, Modlink *ml, int i, Import *ldt)
 	ml->links[i].frame = l->frame;
 	return 0;
 bad:
+	/* the error reaches the caller via errstr; a console print here
+	 * turns every intentional load-typecheck probe (e.g. Matrix's
+	 * optional-interface discovery) into alarming noise */
 	kwerrstr(e);
-	print("%s\n", e);
 	return -1;
 }
 

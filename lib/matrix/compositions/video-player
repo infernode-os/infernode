@@ -1,0 +1,20 @@
+# video-player — transport-controlled video player crystallisation
+#
+# The player is COMPOSED, not coded: a video-pane (view) and a
+# video-ctl (Tk transport buttons) wired over the same vid9p mount.
+# The playhead lives in the vid9p server, so the buttons, the pane's
+# keys (space/s/arrows), plain sh —
+#     echo pause > /mnt/video/0/ctl
+# — and agents all drive the same state, and every viewer stays in
+# sync.  Add a second video-pane leaf on the same mount and it plays
+# frame-locked to the first.
+#
+# Wire up the feed, then load me:
+#     mount {vid9p /video-demo-media/clipC.y4m} /mnt/video
+#     wm/matrix /lib/matrix/compositions/video-player
+# (demo-player.sh is that, self-contained)
+
+layout vsplit 88 12
+
+top    video-pane /mnt/video/0
+bottom video-ctl  /mnt/video/0

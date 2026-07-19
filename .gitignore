@@ -305,3 +305,6 @@ scratchrun/
 
 # 2FA POC scratch — belongs with the YubiKey workstream, not the main tree
 tools/2fa-poc/
+
+# video demo media — regenerable, see demo-video.sh header
+/video-demo-media/

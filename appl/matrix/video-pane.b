@@ -306,7 +306,7 @@ draw(dst: ref Image)
 
 	if(font_g != nil && statestr != "") {
 		pt := Point(r_g.min.x + PAD, r_g.max.y - STRIPH + 1);
-		dst.text(pt, dimcol, (0,0), font_g, statestr);
+		dst.text(pt, dimcol, (0,0), font_g, fitstr(statestr, r_g.dx() - 2*PAD));
 	}
 
 	if(!haveframe || frame == nil) {
@@ -336,6 +336,18 @@ draw(dst: ref Image)
 	dst.draw(Rect((r_g.min.x, r_g.max.y-1), (r_g.max.x, r_g.max.y)), bordercol, nil, (0,0));
 	dst.draw(Rect((r_g.min.x, r_g.min.y), (r_g.min.x+1, r_g.max.y)), bordercol, nil, (0,0));
 	dst.draw(Rect((r_g.max.x-1, r_g.min.y), (r_g.max.x, r_g.max.y)), bordercol, nil, (0,0));
+}
+
+# Truncate s to fit maxw pixels in the pane's font — a narrow pane
+# shows the state and position and loses the key legend, not the edge
+# of the neighbouring pane.
+fitstr(s: string, maxw: int): string
+{
+	if(font_g == nil || font_g.width(s) <= maxw)
+		return s;
+	while(len s > 1 && font_g.width(s + "..") > maxw)
+		s = s[0:len s - 1];
+	return s + "..";
 }
 
 intersect(a, b: Rect): Rect

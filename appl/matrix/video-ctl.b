@@ -178,14 +178,18 @@ update(): int
 		else if(len t > 7 && t[0:7] == "follow=")
 			fol = int t[7:];
 	}
-	mode := "paused";
+	# Compact: the buttons already say what pressing them does, so the
+	# label carries only what they don't — mode (when not plain
+	# playback) and position — and survives narrow regions.
+	s: string;
 	if(strm && fol && playing)
-		mode = "LIVE";
-	else if(strm && playing)
-		mode = "replay";
+		s = sys->sprint("LIVE %ds", tms/1000);
+	else if(strm)
+		s = sys->sprint("replay %ds/%ds", tms/1000, nf/vrate);
 	else if(playing)
-		mode = "playing";
-	s := sys->sprint("%s %ds/%ds", mode, tms/1000, nf/vrate);
+		s = sys->sprint("%ds/%ds", tms/1000, nf/vrate);
+	else
+		s = sys->sprint("%ds/%ds paused", tms/1000, nf/vrate);
 	if(s == laststate)
 		return 0;
 	laststate = s;

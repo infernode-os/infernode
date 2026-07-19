@@ -1,0 +1,57 @@
+# Everyday-tool breadth on the CLI backend: write→present chains, read-and-
+# summarize-and-present, and a factual multi-file lookup. Probes whether the
+# meta-agent delegates execution work correctly and produces real artifacts.
+
+scenarios:
+
+  - name: write_then_present
+    category: everyday-tools
+    description: >
+      Write a small file then show it. Requires delegating a write task (write
+      is not in the meta-agent's slice) and presenting the result. Probes a
+      two-step create→display chain and artifact production.
+    settle: 8
+    timeout: 420
+    prompt: >
+      Write a short three-line haiku about the Inferno operating system to
+      /tmp/inferno-haiku.txt, then show it to me.
+    expects:
+      trajectory_tool: task
+      no_duplicate_activities: true
+    forbid:
+      trajectory_tool: [write, edit]
+      reply_regex: "(?i)(couldn't complete|could not|unable to|no such tool)"
+
+  - name: read_summarize_present
+    category: everyday-tools
+    description: >
+      Read a real file and present a summary of it. The meta-agent may read
+      directly (read is in its slice) but presenting is fine directly too;
+      success = a faithful summary that names real content from the file.
+    settle: 8
+    timeout: 420
+    prompt: >
+      Summarize what the Chief-of-Staff behaviour file /lib/veltro/meta.txt
+      says, in a few bullet points, and present that summary as a markdown note.
+    expects:
+      no_duplicate_activities: true
+      # names real content from meta.txt (it mandates delegation and the Veltro identity)
+      reply_regex: "(?i)(delegat|task agent|veltro|chief of staff|never (execute|auto-send))"
+    forbid:
+      reply_regex: "(?i)(couldn't complete|could not access|unable to|no such tool|does not exist)"
+
+  - name: count_across_files
+    category: everyday-tools
+    description: >
+      A factual read-only lookup across multiple files — the meta-agent should
+      answer directly (find/grep/list in its slice), not over-delegate.
+    settle: 6
+    timeout: 300
+    prompt: >
+      How many files in /lib/veltro/agents mention the word "DONE"? Give me the
+      count and the filenames.
+    expects:
+      no_duplicate_activities: true
+      reply_regex: "\\b\\d\\b"
+    forbid:
+      reply_regex: "(?i)(couldn't complete|could not|unable to|no such tool)"

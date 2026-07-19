@@ -841,8 +841,16 @@ calltool(tool, args: string): string
 	args = extracttoolargs(args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
-	# Open tool file
+	# Open tool file. The active tool set in tools9p can transiently churn at
+	# session start (a relayed message turn can race tool installation, INFR-391)
+	# so a tool that should exist may briefly be absent. Retry the open a couple
+	# of times before reporting the tool missing, so the agent doesn't see a
+	# spurious "tool not found" and fall back to duplicate/abandoned tasks.
 	fd := sys->open(path, Sys->ORDWR);
+	for(retry := 0; fd == nil && retry < 2; retry++) {
+		sys->sleep(400);
+		fd = sys->open(path, Sys->ORDWR);
+	}
 	if(fd == nil)
 		return sys->sprint("error: tool not found: %s", tool);
 

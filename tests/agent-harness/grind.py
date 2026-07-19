@@ -69,6 +69,12 @@ def stage_scenario(sc, model, url, rz):
     (STAGE / "msg").write_text((sc.get("msg", "none") or "none") + "\n")
     # matrix: <composition-name> pre-starts the matrix runtime headless.
     (STAGE / "matrixcomp").write_text((sc.get("matrix", "none") or "none") + "\n")
+    # followthrough: true → after Activity 0 first settles, wait for any delegated
+    # child activity to reach a terminal status, then re-prompt Activity 0 to
+    # relay the result (the meta-agent's default is to reply "I'll report back"
+    # and go idle, so a single-shot settle captures the acknowledgement, not the
+    # answer). Set on delegated-RESULT scenarios (INFR-394).
+    (STAGE / "followthrough").write_text(("yes" if sc.get("followthrough") else "no") + "\n")
     probes = []
     for chk in (sc.get("expects", {}).get("probe_contains") or []):
         probes.append(chk["path"])
@@ -114,15 +120,20 @@ def run_emu(emu, timeout):
                 break
     finally:
         if p.poll() is None:
+            # Reap the whole process group; tolerate the group already being gone
+            # or reparented (killpg can raise ProcessLookupError/PermissionError —
+            # the latter must NOT crash the batch). Fall back to killing the child.
             try:
-                os.killpg(p.pid, signal.SIGTERM)
-                p.wait(timeout=5)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
                 try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    p.kill()
+                except OSError:
                     pass
-                p.wait()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
     rc = p.returncode if p.returncode is not None else -1
     return "".join(lines), rc, done, (killed and not done), time.monotonic() - t0
 
@@ -369,10 +380,22 @@ def main():
         name = sc["name"]
         print(f"[{n}/{len(scenarios)}] {name} ... ", end="", flush=True)
         stage_scenario(sc, args.model, args.url, args.rz)
-        out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
+        # Retry emu crash-flakes: a run that exits on its own before finishing
+        # (not our timeout) is the known nondeterministic emu segfault, not a
+        # real result. `killed` means WE hit the timeout (a genuine hang) — don't
+        # retry those. Up to 3 attempts.
+        for attempt in range(1, 4):
+            out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
+            st = parse_state(out)
+            # Flakes to retry (not real results): emu exited before finishing and
+            # we didn't time it out (segfault); or a degraded boot left the mock
+            # message plane unmounted.
+            flaked = ((not completed) and (not killed)) or ("msg-inbox FAILED" in out)
+            if not flaked or attempt == 3:
+                break
+            print(f"[boot flake, retry {attempt}] ", end="", flush=True)
         if not args.no_record:
             (outdir / f"{name}.trajectory.log").write_text(out)  # full session record
-        st = parse_state(out)
         ok, reasons, reply = score(sc, st, completed, killed)
         rec = {"name": name, "category": sc.get("category", ""), "model": args.model,
                "pass": ok, "reasons": reasons, "reply": reply[:400],

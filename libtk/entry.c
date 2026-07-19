@@ -381,6 +381,11 @@ tkdrawentry(Tk *tk, Point orig)
 
 	xp = tk->borderwidth + xinset(tk);
 	yp = tk->borderwidth + yinset(tk);
+	/* centre the text vertically when the widget is taller than the
+	 * font (explicit -height, ipad growth): a fixed top inset reads
+	 * as misaligned in any padded field */
+	if((tk->act.height - env->font->height)/2 > yinset(tk))
+		yp = tk->borderwidth + (tk->act.height - env->font->height)/2;
 	s = r;
 	s.min.x += xp;
 	s.max.x -= xp;

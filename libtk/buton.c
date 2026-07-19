@@ -327,11 +327,20 @@ tkdrawbutton(Tk *tk, Point orig)
 		}
 		u.x = p.x + ButtonBorder;
 		u.y = p.y + ButtonBorder + (h - CheckSpace) / 2;
-		cl = tkgc(e, bgnd+TkLightshade);
 		cd = tkgc(e, bgnd+TkDarkshade);
-		tkbevel(i, u, CheckButton, CheckButton, CheckButtonBW, cd, cl);
-		if(tkl->check)
-			tkfillindicator(i, e, u);
+		/* round indicator: a radio group's one-of-many choice must
+		 * read differently from a checkbutton's independent toggle */
+		{
+			Point c;
+			int rr;
+
+			rr = (CheckButton + 2*CheckButtonBW)/2;
+			c.x = u.x + rr;
+			c.y = u.y + rr;
+			ellipse(i, c, rr-1, rr-1, CheckButtonBW-1, cd, ZP);
+			if(tkl->check)
+				fillellipse(i, c, rr-3, rr-3, tkgc(e, TkCselect), ZP);
+		}
 		break;
 	case TKbutton:
 		if ((tk->flag & (Tkactivated|Tkactive)) == (Tkactivated|Tkactive))

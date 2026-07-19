@@ -320,6 +320,13 @@ docreate(args: string): string
 		}
 	}
 
+	# Idempotency guard (INFR-390): the meta-agent repeatedly re-creates the
+	# same-labelled task while waiting on it, spawning duplicate activities.
+	# Refuse a duplicate active label and point it at the existing task.
+	dupid := findlabelledtask(label);
+	if(dupid > 0)
+		return sys->sprint("error: a task labelled \"%s\" already exists (id %d). Use 'task status %d' to check it — do NOT create it again.", label, dupid, dupid);
+
 	# Create activity via /mnt/ui/ctl
 	ctlpath := UI_MOUNT + "/ctl";
 	err := writefile(ctlpath, "activity create " + label);
@@ -473,6 +480,34 @@ dostatus(args: string): string
 	if(urgstr != nil) urgstr = strip(urgstr); else urgstr = "0";
 
 	return sys->sprint("activity %d: %s [%s] urgency=%s", id, label, status, urgstr);
+}
+
+# Returns the id of an existing non-closed, non-hidden activity whose label
+# exactly matches, else -1. Backs the create idempotency guard (INFR-390).
+findlabelledtask(label: string): int
+{
+	info := readfile(UI_MOUNT + "/ctl");
+	if(info == nil)
+		return -1;
+	lines := splitlines(strip(info));
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		if(hasprefix(line, "activities:")) {
+			rest := strip(line[len "activities:":]);
+			(nil, toks) := sys->tokenize(rest, " ");
+			for(; toks != nil; toks = tl toks) {
+				(id, nil) := str->toint(hd toks, 10);
+				if(id <= 0) continue;   # skip meta-agent (0) and invalid ids
+				lbl := readfile(sys->sprint("%s/activity/%d/label", UI_MOUNT, id));
+				st := readfile(sys->sprint("%s/activity/%d/status", UI_MOUNT, id));
+				if(lbl != nil) lbl = strip(lbl);
+				if(st != nil) st = strip(st);
+				if(lbl == label && st != "hidden" && st != "closed")
+					return id;
+			}
+		}
+	}
+	return -1;
 }
 
 dolist(): string

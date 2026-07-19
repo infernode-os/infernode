@@ -116,6 +116,7 @@ maxscrollpx := 0;
 viewport_h := 400;
 lastrendw := 0;
 username := "human";
+agentname := "";		# agent display name from /lib/veltro/agent-name (branding)
 
 # Voice input state
 VOICE_IDLE: con 0;
@@ -211,6 +212,13 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	inputbuf = "";
 	inputpos = 0;
 	username = readdevuser();
+	# Agent display name (branding); empty => fall back to the raw role string.
+	an := readfile("/lib/veltro/agent-name");
+	if(an != nil) {
+		while(len an > 0 && (an[len an-1] == '\n' || an[len an-1] == ' ' || an[len an-1] == '\t' || an[len an-1] == '\r'))
+			an = an[:len an-1];
+		agentname = an;
+	}
 	voicech = chan of string;
 	msgstore = array[32] of ref ConvMsg;
 	nmsg = 0;
@@ -916,6 +924,8 @@ drawconversation(zone: Rect)
 		rolelabel := msg.role;
 		if(human)
 			rolelabel = username;
+		else if(!errrole && agentname != "")
+			rolelabel = agentname;
 		if(ty >= zone.min.y && ty + mainfont.height <= msgy) {
 			if(human)
 				mainwin.text((tilex + tilew - mainfont.width(rolelabel), ty),

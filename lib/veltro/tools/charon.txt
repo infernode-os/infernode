@@ -11,7 +11,7 @@ Examples on this tool:
 If the user says "launch the browser" or "open Charon", use the launch
 tool, NOT this tool.
 
-Charon is the InferNode built-in web browser. It must be launched
+Charon is the %OS% built-in web browser. It must be launched
 first via the `launch` tool: `launch charon` (optionally with a URL).
 This tool sends commands to a running Charon instance.
 

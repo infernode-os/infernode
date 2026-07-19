@@ -1071,6 +1071,10 @@ tkdeliver(Tk *tk, int event, void *data)
 //print("tkdeliver %v to %s\n", event, tkname(tk));
 	if(tk == nil || ((tk->flag&Tkdestroy) && event != TkDestroy))
 		return tk;
+	/* XXX diagnostic (remove): log which widget receives each press,
+	 * pairing with matrix's routing trace to localise dead widgets */
+	if(event & TkButton1P)
+		print("tk: b1p -> %s\n", tkname(tk));
 	if(event&(TkFocusin|TkFocusout) && (tk->flag&Tktakefocus))
 		tk->dirty = tkrect(tk, 1);
 

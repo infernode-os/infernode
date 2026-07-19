@@ -55,3 +55,24 @@ scenarios:
       no_duplicate_activities: true
     forbid:
       reply_regex: "(?i)(what would you like|which .* would you|could you clarify|what kind of|what sort of|can you specify|do you want me to)"
+
+  - name: exec_value_handoff
+    category: delegation-sequential
+    description: >
+      Forces delegation with a VALUE handoff and no shortcut: the meta-agent has
+      no exec tool, so it must delegate a shell command to a task agent, then use
+      that command's numeric output (a value it cannot fabricate) to answer.
+      Directly stresses INFR-389 — the parent must retrieve the child's result.
+      Expect failure until INFR-389 is fixed.
+    settle: 8
+    timeout: 420
+    prompt: >
+      Using a shell command (do not just read the file yourself), get the exact
+      number of lines in /lib/veltro/system.txt, then tell me that number and
+      whether it is over 100.
+    expects:
+      trajectory_tool: task
+      no_duplicate_activities: true
+      reply_regex: "\\b\\d{1,4}\\b.*(over 100|under 100|more than 100|less than 100|not over 100)"
+    forbid:
+      reply_regex: "(?i)(couldn't retrieve|can't retrieve|no such tool|couldn't complete|unable to|didn't return|no output|can't get the result)"

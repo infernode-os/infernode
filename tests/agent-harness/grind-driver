@@ -123,7 +123,12 @@ for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
 echo '@@GRIND ready '^$ready
 
 # msgwatch (watch mode only): relay wake/preempt messages into Activity 0.
+# Let tools9p finish loading its inactive tools first — the /tool/tools churn
+# can transiently drop the task tool from the session (INFR-391), and a relayed
+# turn that races it sees "No such tool available". This only reduces harness
+# flakiness; the underlying reinstall race is tracked in INFR-391.
 if {~ $msgmode watch} {
+	sleep 6
 	> /tmp/msgwatch.log
 	/dis/veltro/msgwatch.dis -a 0 -v >[2] /tmp/msgwatch.log &
 	echo '@@GRIND msgwatch started'

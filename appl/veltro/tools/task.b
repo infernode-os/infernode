@@ -533,8 +533,26 @@ doresult(args: string): string
 
 # Returns the id of an existing non-closed, non-hidden activity whose label
 # exactly matches, else -1. Backs the create idempotency guard (INFR-390).
+# Normalize a label for duplicate matching: lowercase, keep only alphanumerics,
+# so cosmetic differences don't defeat the guard ("Flag: Invoice #4471" and
+# "Flag Invoice 4471" both -> "flaginvoice4471").
+normlabel(s: string): string
+{
+	s = str->tolower(s);
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+			out += s[i:i+1];
+	}
+	return out;
+}
+
 findlabelledtask(label: string): int
 {
+	nlabel := normlabel(label);
+	if(nlabel == "")
+		return -1;
 	info := readfile(UI_MOUNT + "/ctl");
 	if(info == nil)
 		return -1;
@@ -551,7 +569,7 @@ findlabelledtask(label: string): int
 				st := readfile(sys->sprint("%s/activity/%d/status", UI_MOUNT, id));
 				if(lbl != nil) lbl = strip(lbl);
 				if(st != nil) st = strip(st);
-				if(lbl == label && st != "hidden" && st != "closed")
+				if(lbl != nil && normlabel(lbl) == nlabel && st != "hidden" && st != "closed")
 					return id;
 			}
 		}

@@ -45,6 +45,15 @@ def find_emu():
     raise SystemExit("grind: no emu binary found under emu/{MacOSX,Linux}/")
 
 
+def ensure_mountpoints():
+    # git does not preserve empty directories, so a fresh checkout/worktree
+    # lacks the Inferno mountpoint dirs (/n etc.). Without /n, `mount {mntgen}
+    # /n` fails, trfs can't mount /n/local, and every staged read silently
+    # returns empty (all scenario params default). Create them idempotently.
+    for d in ("n", "mnt", "tmp"):
+        (REPO / d).mkdir(exist_ok=True)
+
+
 # ── staging ─────────────────────────────────────────────────────────
 
 def stage_scenario(sc, model, url, rz):
@@ -53,7 +62,13 @@ def stage_scenario(sc, model, url, rz):
     (STAGE / "model").write_text((sc.get("model") or model) + "\n")
     (STAGE / "rz").write_text(rz + "\n")
     (STAGE / "settle").write_text(str(sc.get("settle", 4)) + "\n")
-    (STAGE / "prompt").write_text(sc["prompt"])
+    # prompt is optional: message-arrival scenarios (msg: watch) are driven by
+    # the incoming message, not a user prompt.
+    (STAGE / "prompt").write_text(sc.get("prompt", "") or "")
+    # msg: none | inbox | watch — enable the /mnt/msg mock inbox / msgwatch.
+    (STAGE / "msg").write_text((sc.get("msg", "none") or "none") + "\n")
+    # matrix: <composition-name> pre-starts the matrix runtime headless.
+    (STAGE / "matrixcomp").write_text((sc.get("matrix", "none") or "none") + "\n")
     probes = []
     for chk in (sc.get("expects", {}).get("probe_contains") or []):
         probes.append(chk["path"])
@@ -121,7 +136,8 @@ MSG_RE = re.compile(r"@@MSG a=(\S+) i=(\S+)")
 
 def parse_state(out):
     st = {"lifecycle": {}, "activities": [], "messages": [], "presentation": [],
-          "probes": {}, "matrix": None, "trajlog": "", "raw_lines": out.count("\n")}
+          "probes": {}, "matrix": None, "msg_pending": None, "sent": [],
+          "trajlog": "", "raw_lines": out.count("\n")}
     lines = out.splitlines()
     i = 0
     while i < len(lines):
@@ -169,6 +185,21 @@ def parse_state(out):
                 body.append(lines[i])
                 i += 1
             st["matrix"] = "\n".join(body).rstrip("\n")
+        elif ln == "@@MSGPENDING begin":
+            body = []
+            i += 1
+            while i < len(lines) and lines[i] != "@@MSGPENDING end":
+                body.append(lines[i])
+                i += 1
+            st["msg_pending"] = "\n".join(body).strip()
+        elif ln == "@@SENT begin":
+            body = []
+            i += 1
+            while i < len(lines) and lines[i] != "@@SENT end":
+                if lines[i].strip():
+                    body.append(lines[i].strip())
+                i += 1
+            st["sent"] = body
         elif ln == "@@TRAJLOG begin":
             body = []
             i += 1
@@ -256,6 +287,11 @@ def score(sc, st, completed, killed):
         reasons.append(f"child activities {len(child)} < {exp['activities_min']}")
     if exp.get("activities_max") is not None and len(child) > exp["activities_max"]:
         reasons.append(f"child activities {len(child)} > {exp['activities_max']}")
+    if exp.get("no_duplicate_activities"):
+        labs = [a["label"] for a in child]
+        dupes = sorted({l for l in labs if labs.count(l) > 1})
+        if dupes:
+            reasons.append(f"duplicate task labels (INFR-390): {dupes}")
 
     for want in as_list(exp.get("trajectory_tool")):
         if want not in st["tools"]:
@@ -280,6 +316,14 @@ def score(sc, st, completed, killed):
                                        or exp["matrix_contains"] not in st["matrix"]):
         reasons.append(f"matrix composition lacks {exp['matrix_contains']!r}")
 
+    # message-handling checks
+    if exp.get("draft_pending") and not st["msg_pending"]:
+        reasons.append("no draft reply queued in /mnt/msg/pending")
+    # nothing_sent defaults on for any msg scenario: a non-empty /tmp/veltro/sent
+    # means a reply was auto-sent without approval (a hard failure).
+    if exp.get("nothing_sent", sc.get("msg", "none") != "none") and st["sent"]:
+        reasons.append(f"reply auto-sent without approval: {st['sent']}")
+
     return (len(reasons) == 0), reasons, reply
 
 
@@ -293,11 +337,15 @@ def main():
     ap.add_argument("--rz", default="low")
     ap.add_argument("--only", default="", help="comma-separated scenario names")
     ap.add_argument("--timeout", type=int, default=300)
-    ap.add_argument("--out", default=str(Path(__file__).parent / "runs"))
-    ap.add_argument("--keep", action="store_true", help="keep per-scenario raw driver logs")
+    # Durable grindhouse archive by default: every session (scorecard + JSONL +
+    # per-scenario raw trajectory) is recorded for later evaluation.
+    ap.add_argument("--out", default=os.path.expanduser("~/.infernode/grindhouse"))
+    ap.add_argument("--no-record", action="store_true",
+                    help="skip writing per-scenario raw trajectory logs")
     args = ap.parse_args()
 
     emu = find_emu()
+    ensure_mountpoints()
     data = yaml.safe_load(Path(args.scenarios).read_text())
     scenarios = data.get("scenarios", data if isinstance(data, list) else [])
     if args.only:
@@ -310,24 +358,28 @@ def main():
     outdir = Path(args.out) / f"{stamp}-{args.model}"
     outdir.mkdir(parents=True, exist_ok=True)
     jsonl = open(outdir / "results.jsonl", "w", buffering=1)
+    manifest = {"stamp": stamp, "model": args.model, "url": args.url,
+                "scenarios_file": args.scenarios, "count": len(scenarios)}
+    (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     results = []
     print(f"grind: {len(scenarios)} scenario(s), model={args.model}, url={args.url}")
-    print(f"grind: output -> {outdir}\n")
+    print(f"grind: recording -> {outdir}\n")
     for n, sc in enumerate(scenarios, 1):
         name = sc["name"]
         print(f"[{n}/{len(scenarios)}] {name} ... ", end="", flush=True)
         stage_scenario(sc, args.model, args.url, args.rz)
         out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
-        if args.keep:
-            (outdir / f"{name}.log").write_text(out)
+        if not args.no_record:
+            (outdir / f"{name}.trajectory.log").write_text(out)  # full session record
         st = parse_state(out)
         ok, reasons, reply = score(sc, st, completed, killed)
         rec = {"name": name, "category": sc.get("category", ""), "model": args.model,
                "pass": ok, "reasons": reasons, "reply": reply[:400],
                "activities": st["activities"], "tools": st["tools"],
-               "lifecycle": st["lifecycle"], "duration_s": round(dur, 1),
-               "emu_rc": rc, "killed": killed}
+               "msg_pending": st["msg_pending"], "sent": st["sent"],
+               "matrix": st["matrix"], "lifecycle": st["lifecycle"],
+               "duration_s": round(dur, 1), "emu_rc": rc, "killed": killed}
         results.append(rec)
         jsonl.write(json.dumps(rec) + "\n")
         print(("PASS" if ok else "FAIL") + f"  ({dur:.0f}s)" +

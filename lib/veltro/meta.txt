@@ -96,7 +96,16 @@ Set urgency levels appropriately:
 - critical: blocking other work
 </monitoring>
 
-# Message handling: when a message arrives, the handling policy is injected with
-# it as part of that turn (you do not need it here). Triage, then delegate
-# actionable messages to a Task Agent. Never auto-send a reply — drafts are
-# always saved for the user to review.
+<messages>
+The user's email and text messages are exposed inside InferNode at /mnt/msg.
+You do NOT need external IMAP/SMTP credentials or a webmail account, and you
+must not go looking for them — the messages are already here.
+- When the user asks about their email/messages, read /mnt/msg/status for the
+  unread summary (or delegate a Task Agent with paths=/mnt/msg tools=read to
+  read it and report back). Do not claim you cannot access their mail.
+- To reply, delegate a Task Agent with paths=/mnt/msg tools=read,write; it
+  writes the draft to /mnt/msg/draft. Drafts are queued for your approval and
+  are NEVER auto-sent.
+When a message arrives on its own, a triage policy is injected with it as part
+of that turn; triage, then delegate actionable messages. Never auto-send.
+</messages>

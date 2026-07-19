@@ -113,6 +113,7 @@ doc(): string
 		"      brief=/instructions= consume the rest of the line.\n" +
 		"  status <id>     Show task status and urgency\n" +
 		"  list            List all active tasks\n" +
+		"  result <id>     Get the task agent's final report (its answer)\n" +
 		"  close <id>      Archive a completed task\n\n" +
 		"Each task gets its own conversation, tools, and filesystem overlay.\n" +
 		"Use for work that should happen in parallel or needs isolation.\n\n" +
@@ -134,7 +135,7 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, close. These are the ONLY commands — there is no write/run/send. To make a task do work, describe it in args brief=/instructions= at create time.\"}," +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, result, close. To make a task do work, describe it in args brief=/instructions= at create time. When a task reports done, use 'result <id>' to get its final answer back — do NOT re-create the task to retrieve output.\"}," +
 				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/close: the task id. Omit for list.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
@@ -148,7 +149,7 @@ exec(args: string): string
 		return "error: not initialized";
 	args = strip(args);
 	if(args == "")
-		return "error: no command. Use: create, status, list, close";
+		return "error: no command. Use: create, status, list, result, close";
 
 	(cmd, rest) := splitfirst(args);
 	cmd = str->tolower(cmd);
@@ -160,10 +161,12 @@ exec(args: string): string
 		return dostatus(rest);
 	"list" =>
 		return dolist();
+	"result" =>
+		return doresult(rest);
 	"close" =>
 		return doclose(rest);
 	* =>
-		return sys->sprint("error: unknown command '%s'. Use: create, status, list, close", cmd);
+		return sys->sprint("error: unknown command '%s'. Use: create, status, list, result, close", cmd);
 	}
 }
 
@@ -480,6 +483,52 @@ dostatus(args: string): string
 	if(urgstr != nil) urgstr = strip(urgstr); else urgstr = "0";
 
 	return sys->sprint("activity %d: %s [%s] urgency=%s", id, label, status, urgstr);
+}
+
+# Parse a /mnt/ui conversation message file ("role=<r> text=<...>") into
+# (role, text). text= consumes the rest.
+parseconvmsg(s: string): (string, string)
+{
+	role := "";
+	if(hasprefix(s, "role="))
+		(role, nil) = splitfirst(s[len "role=":]);
+	text := s;
+	(nil, aft) := str->splitstrl(s, "text=");
+	if(aft != "")
+		text = aft[len "text=":];
+	return (strip(role), strip(text));
+}
+
+# Return the child task agent's final report — the last non-human message in its
+# conversation. task status only exposes state; this gives the parent the
+# child's VALUE result so it doesn't have to route answers through scratch files
+# or re-create the task (INFR-389).
+doresult(args: string): string
+{
+	args = strip(args);
+	if(args == "")
+		return "error: activity id required";
+	(id, nil) := str->toint(args, 10);
+	if(id <= 0)
+		return "error: invalid activity id";
+
+	status := readfile(sys->sprint("%s/activity/%d/status", UI_MOUNT, id));
+	if(status == nil)
+		return sys->sprint("error: activity %d not found", id);
+	status = strip(status);
+
+	last := "";
+	for(m := 0; m < 100; m++) {
+		c := readfile(sys->sprint("%s/activity/%d/conversation/%d", UI_MOUNT, id, m));
+		if(c == nil)
+			break;
+		(role, text) := parseconvmsg(c);
+		if(role != "human" && role != "" && text != "")
+			last = text;
+	}
+	if(last == "")
+		return sys->sprint("task %d [%s]: no result yet — it has not produced a reply. Poll 'task status %d' until it reports done, then read the result.", id, status, id);
+	return sys->sprint("task %d [%s] result:\n%s", id, status, last);
 }
 
 # Returns the id of an existing non-closed, non-hidden activity whose label

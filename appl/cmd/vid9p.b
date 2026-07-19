@@ -65,6 +65,16 @@ user := "inferno";
 width, height, fps, framesize, nframes: int;
 i420: array of byte;	# backing store; only [0:used] is valid data
 used := 0;
+
+# server-side transport (INFR-266 §2.3): the playhead is SERVER state,
+# so any writer to ctl — a Tk button, `echo pause > ctl` from sh, an
+# agent — drives every viewer of the stream identically.  Viewers read
+# state/pos from status and render frame `pos`.
+tplaying := 1;
+follow := 1;		# streaming source: playhead tracks the live edge
+pos := 0;		# playhead frame index
+lastadv := 0;		# wall-clock pacing origin (sys->millisec)
+tickc: chan of int;
 eof := 1;			# static sources are complete from the start
 streaming := 0;
 
@@ -126,7 +136,54 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 
 	(tc, srv) = Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
+	tickc = chan of int;
+	spawn ticker();
 	serve(tree);
+}
+
+ticker()
+{
+	for(;;){
+		sys->sleep(40);
+		tickc <-= 1;
+	}
+}
+
+# Advance the playhead at the stream's fps against the wall clock.
+advance()
+{
+	if(!tplaying || nframes <= 0){
+		lastadv = 0;
+		return;
+	}
+	if(streaming && follow){
+		pos = nframes - 1;
+		lastadv = 0;
+		return;
+	}
+	f := fps;
+	if(f <= 0 || f > 120)
+		f = 25;
+	now := sys->millisec();
+	if(lastadv == 0){
+		lastadv = now;
+		return;
+	}
+	steps := (now - lastadv) * f / 1000;
+	if(steps <= 0)
+		return;
+	lastadv += steps * 1000 / f;
+	pos += steps;
+	if(pos >= nframes){
+		if(streaming){
+			# replay caught the live edge: follow it again
+			pos = nframes - 1;
+			follow = 1;
+		} else if(eof && nframes > 0)
+			pos %= nframes;		# canned clip loops
+		else
+			pos = nframes - 1;	# ahead of the decoder: hold
+	}
 }
 
 serve(tree: ref Tree)
@@ -185,6 +242,9 @@ serve(tree: ref Tree)
 		eof = 1;
 		streaming = 0;
 		wakeparked();
+
+	<-tickc =>
+		advance();
 	}
 	tree.quit();
 }
@@ -246,13 +306,21 @@ statusstr(): string
 		src = "streaming";
 	else if(nframes > 0)
 		src = "ready";
-	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d eof=%d\n",
-		src, width, height, framesize, nframes, eof);
+	st := "paused";
+	if(tplaying)
+		st = "playing";
+	t := 0;
+	f := fps;
+	if(f <= 0 || f > 120)
+		f = 25;
+	t = pos * 1000 / f;
+	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d eof=%d state=%s pos=%d t=%d follow=%d\n",
+		src, width, height, framesize, nframes, eof, st, pos, t, follow);
 }
 
 ctlhelp(): string
 {
-	return "open <file.y4m>\nplay <cmd> [arg...]\n";
+	return "open <file.y4m>\nplay [<cmd> arg...]\npause\nstop\nseek <ms>|+<ms>|-<ms>\nlive\n";
 }
 
 doctl(s: string)
@@ -272,6 +340,57 @@ doctl(s: string)
 	"play" =>
 		if(tl toks != nil)
 			startstream(tl toks);
+		else {
+			tplaying = 1;
+			lastadv = 0;
+		}
+	"pause" =>
+		tplaying = 0;
+	"stop" =>
+		if(streaming){
+			# a live feed "stops" back to the live edge
+			follow = 1;
+			tplaying = 1;
+		} else {
+			tplaying = 0;
+			pos = 0;
+		}
+		lastadv = 0;
+	"live" =>
+		follow = 1;
+		tplaying = 1;
+		lastadv = 0;
+	"seek" =>
+		if(tl toks != nil){
+			a := hd tl toks;
+			rel := 0;
+			sign := 1;
+			if(len a > 0 && a[0] == '+'){
+				rel = 1;
+				a = a[1:];
+			} else if(len a > 0 && a[0] == '-'){
+				rel = 1;
+				sign = -1;
+				a = a[1:];
+			}
+			f := fps;
+			if(f <= 0 || f > 120)
+				f = 25;
+			d := sign * (int a) * f / 1000;
+			if(rel)
+				pos += d;
+			else
+				pos = d;
+			if(pos < 0)
+				pos = 0;
+			follow = 0;
+			if(nframes > 0 && pos >= nframes-1){
+				pos = nframes - 1;
+				if(streaming)
+					follow = 1;
+			}
+			lastadv = 0;
+		}
 	}
 }
 
@@ -293,6 +412,10 @@ startstream(cmd: list of string)
 	width = height = fps = framesize = nframes = 0;
 	eof = 0;
 	streaming = 1;
+	tplaying = 1;
+	follow = 1;
+	pos = 0;
+	lastadv = 0;
 	spawn feeder(fd);
 	(w, h, f) := <-geoc;
 	if(w <= 0 || h <= 0){
@@ -485,6 +608,10 @@ loadvideo(path: string): string
 	eof = 1;
 	width = w; height = h; fps = f; framesize = fsz; nframes = n;
 	i420 = nb; used = len nb;
+	tplaying = 1;
+	follow = 0;
+	pos = 0;
+	lastadv = 0;
 	return nil;
 }
 

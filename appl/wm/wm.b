@@ -112,6 +112,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	}
 	wmsize := startwmsize();
 	fakekbd = chan of string;
+
+	# UI test driver: synthetic input via /chan/uitest, so interaction
+	# is scriptable and CI-testable (tests/host).  Writes, one command
+	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal).
+	# Events enter the exact channels the real devices feed.
+	uitest := sys->file2chan("/chan", "uitest");
+	if(uitest != nil)
+		spawn uitestproc(uitest, wmctxt.ptr);
 	for(;;) alt {
 	wmsz := <-wmsize =>
 		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
@@ -766,3 +774,32 @@ exportproc(fd: ref Sys->FD)
 	sys->export(fd, "/chan", Sys->EXPWAIT);
 }
 
+
+# Synthetic input for tests: parse "/chan/uitest" writes and feed the
+# same channels real input arrives on.  Reads answer empty.
+uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
+{
+	for(;;) alt {
+	(nil, nil, nil, rc) := <-f.read =>
+		if(rc != nil)
+			rc <-= (nil, nil);
+	(nil, data, nil, wc) := <-f.write =>
+		if(wc == nil)
+			break;
+		(n, toks) := sys->tokenize(string data, " \t\n");
+		err := "";
+		if(n >= 4 && hd toks == "ptr") {
+			x := int hd tl toks;
+			y := int hd tl tl toks;
+			b := int hd tl tl tl toks;
+			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
+		} else if(n >= 2 && hd toks == "key")
+			fakekbd <-= hd tl toks;
+		else
+			err = "usage: ptr X Y BUTTONS | key RUNE";
+		if(err != "")
+			wc <-= (0, err);
+		else
+			wc <-= (len data, nil);
+	}
+}

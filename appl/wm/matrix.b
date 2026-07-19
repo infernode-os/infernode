@@ -1201,6 +1201,9 @@ initgui(ctxt: ref Draw->Context)
 	# size, and the engine's item input geometry has proven unreliable
 	# across a mid-flight resize (right-hand regions unreachable by
 	# the pointer).  Creating everything at final size sidesteps that.
+	# (A one-line tkclient fix — forcing a layout pass in onscreen —
+	# was tried and REGRESSED placement; the general fix needs real
+	# design in tkclient/wm and stays on the improvement ledger.)
 	tkclient->wmctl(top, "!reshape . -1 0 0 800 600 place");
 	for(gw := 0; gw < 40; gw++) {
 		if(int tk->cmd(top, ". cget -actwidth") >= 780)

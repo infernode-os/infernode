@@ -1192,6 +1192,12 @@ initgui(ctxt: ref Draw->Context)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
+	# onscreen announces the toplevel's Required rect, which is empty
+	# this early, so winplace falls back to its small default and the
+	# 800x600 toplevel request never reaches the wm.  Ask for our
+	# geometry explicitly: "place" honours a concrete size.
+	tkclient->wmctl(top, "!reshape . -1 0 0 800 600 place");
+
 	# The wm may have reshaped the window during onscreen (a
 	# presentation-zone host hands out its content rect, not our
 	# requested 800x600).  Adopt the actual size now, before the

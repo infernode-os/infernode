@@ -100,7 +100,7 @@ mkwidget(class, p, var, deco: string): string
 	"entry" =>
 		c = sys->sprint("entry %s -width %d", p, W);
 	"listbox" =>
-		c = sys->sprint("listbox %s -width %d -height 52", p, W);
+		c = sys->sprint("listbox %s -width %d -height 58", p, W);
 	"scale" =>
 		c = sys->sprint("scale %s -orient horizontal -length %d -from 0 -to 100 -showvalue 1", p, W);
 	"scrollbar" =>
@@ -108,7 +108,7 @@ mkwidget(class, p, var, deco: string): string
 	"canvas" =>
 		c = sys->sprint("canvas %s -width %d -height 44", p, W);
 	"text" =>
-		c = sys->sprint("text %s -width %d -height 52", p, W);
+		c = sys->sprint("text %s -width %d -height 58", p, W);
 	}
 	if((e := cmd(c)) != nil)
 		return e;

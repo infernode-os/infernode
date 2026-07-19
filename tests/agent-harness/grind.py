@@ -369,10 +369,19 @@ def main():
         name = sc["name"]
         print(f"[{n}/{len(scenarios)}] {name} ... ", end="", flush=True)
         stage_scenario(sc, args.model, args.url, args.rz)
-        out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
+        # Retry emu crash-flakes: a run that exits on its own before finishing
+        # (not our timeout) is the known nondeterministic emu segfault, not a
+        # real result. `killed` means WE hit the timeout (a genuine hang) — don't
+        # retry those. Up to 3 attempts.
+        for attempt in range(1, 4):
+            out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
+            st = parse_state(out)
+            crashed = (not completed) and (not killed)
+            if not crashed or attempt == 3:
+                break
+            print(f"[emu crash-flake, retry {attempt}] ", end="", flush=True)
         if not args.no_record:
             (outdir / f"{name}.trajectory.log").write_text(out)  # full session record
-        st = parse_state(out)
         ok, reasons, reply = score(sc, st, completed, killed)
         rec = {"name": name, "category": sc.get("category", ""), "model": args.model,
                "pass": ok, "reasons": reasons, "reply": reply[:400],

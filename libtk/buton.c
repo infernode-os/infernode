@@ -470,6 +470,13 @@ tksizebutton(Tk *tk)
 	}
 	tkl->w = w;
 	tkl->h = h;
+	if(tk->type == TKbutton){
+		/* default touch surface, adopted from the widget-gallery
+		 * review: a button's hit target is padded beyond its
+		 * label; tkdrawlabel centres the label in the surplus */
+		w += 2*ButtonPadX;
+		h += 2*ButtonPadY;
+	}
 	if((tk->flag & Tksetwidth) == 0)
 		tk->req.width = w;
 	if((tk->flag & Tksetheight) == 0)

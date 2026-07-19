@@ -2359,13 +2359,6 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 			focusmod = nil;
 			tkfocus = 1;
 			appkbd = nil;
-			# XXX diagnostic (remove): trace clicks routed into
-			# hosted Tk so dead-widget reports can be localised
-			# to routing vs the engine.
-			if(p.buttons)
-				sys->fprint(stderr, "matrix: ptr %d,%d -> tk region %s [%d %d %d %d]\n",
-					p.xy.x, p.xy.y, n.name,
-					n.r.min.x, n.r.min.y, n.r.max.x, n.r.max.y);
 			tk->pointer(top, *p);
 			return 1;
 		}

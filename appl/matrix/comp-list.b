@@ -4,82 +4,154 @@ implement CompList;
 # comp-list — the composition picker AS a composition module.
 #
 # Lists every composition under the mount (normally
-# /lib/matrix/compositions); a click writes "load <name>" to
-# /mnt/matrix/ctl — the same verb sh and agents use.  The default
-# empty-state picker is just the `picker` crystallisation wiring this
-# module, so users and agents can customise or replace the picker like
-# any other composition.
+# /lib/matrix/compositions) as REAL Tk buttons; each press writes
+# "load <name>" to /mnt/matrix/ctl — the same verb sh and agents use.
+# The default empty-state picker is just the `picker` crystallisation
+# wiring this module, so users and agents can customise or replace the
+# picker like any other composition.
+#
+# Tk widgets on purpose: the engine owns their geometry and routing,
+# so the click target IS the tile — no hand-rolled hit-testing to
+# drift out of alignment (the hand-drawn first version of this module
+# did exactly that).  And, like every Tk widget, they are drivable
+# from Inferno sh.
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
-	drawm: Draw;
-	Display, Font, Image, Point, Rect: import drawm;
+
+include "tk.m";
+	tk: Tk;
+	Toplevel: import tk;
 
 include "readdir.m";
 	readdir: Readdir;
 
-include "lucitheme.m";
+include "matrixtk.m";
 
 include "matrix.m";
 
 CompList: module
 {
-	init:	fn(display: ref Display, font: ref Font, mount: string): string;
-	resize:	fn(r: Rect);
-	update:	fn(): int;
-	draw:	fn(dst: ref Image);
-	pointer:	fn(p: ref Draw->Pointer): int;
-	key:	fn(k: int): int;
-	retheme:	fn(display: ref Display);
+	init:		fn(top: ref Toplevel, prefix, mount: string): string;
+	resize:		fn(r: Draw->Rect);
+	update:		fn(): int;
+	retheme:	fn();
 	shutdown:	fn();
+	interval:	fn(): int;
 };
 
-display_g: ref Display;
-font_g: ref Font;
-mountpath: string;
-r_g: Rect;
-names: array of string;
-rows: array of Rect;
-lastsig: string;
-lastbtn: int;
+# MatrixTicker probe: the library changes rarely; rescan at 1 Hz.
+# Called on a fresh uninitialised instance — must stay a pure constant.
+interval(): int
+{
+	return 1000;
+}
 
-bgcolor, rowcolor, textcolor, dimcolor: ref Image;
+top_g:		ref Toplevel;
+prefix_g:	string;
+mountpath:	string;
+evch:		chan of string;
+stopch:		chan of int;
+names:		array of string;
+lastsig:	string;
+chname:		string;
 
-PAD: con 12;
-
-init(display: ref Display, font: ref Font, mount: string): string
+init(top: ref Toplevel, prefix, mount: string): string
 {
 	sys = load Sys Sys->PATH;
-	drawm = load Draw Draw->PATH;
+	tk = load Tk Tk->PATH;
+	if(tk == nil)
+		return sys->sprint("cannot load Tk: %r");
 	readdir = load Readdir Readdir->PATH;
 	if(readdir == nil)
 		return sys->sprint("cannot load %s: %r", Readdir->PATH);
-	display_g = display;
-	font_g = font;
+
+	top_g = top;
+	prefix_g = prefix;
 	mountpath = mount;
-	loadcolors();
-	rescan();
+	lastsig = "";
+
+	# Channel name derived from the prefix (".r3" → "clr3") so
+	# hosted modules never collide on the toplevel's namechan space.
+	chname = "cl";
+	for(i := 0; i < len prefix; i++)
+		if(prefix[i] != '.')
+			chname[len chname] = prefix[i];
+	evch = chan of string;
+	tk->namechan(top, evch, chname);
+
+	# NB pack order is load-bearing: the bottom edit button must be
+	# packed BEFORE the expanding list, or the list frame claims the
+	# whole remaining area and the button — though drawn on top —
+	# loses the hit test to it.
+	cmds := array[] of {
+		sys->sprint("label %s.title -text {Matrix — click a composition to load}", prefix),
+		sys->sprint("label %s.hint -text {(this picker is itself the `picker` crystallisation — press `edit this picker` to change it)}", prefix),
+		# The picker edits ITSELF: a real Tk button writing the ctl
+		# "edit" verb — the same wire sh and agents use.  (The B3
+		# context menu is currently unreliable in hosted windows —
+		# the button is the doctrine-pure path regardless.)
+		# The button lives in a subframe like video-ctl's buttons:
+		# direct children of a canvas-hosted frame have shown hit
+		# zones offset from their pixels (parked libtk canvas
+		# window-item defect); one level down the geometry behaves.
+		sys->sprint("frame %s.bar", prefix),
+		sys->sprint("button %s.bar.edit -text {edit this picker} -command {send %s -1}", prefix, chname),
+		sys->sprint("frame %s.list", prefix),
+		sys->sprint("pack %s.title -side top -anchor w -padx 8 -pady 4", prefix),
+		sys->sprint("pack %s.hint -side top -anchor w -padx 8", prefix),
+		# The bar sits at the top, in territory whose routing is
+		# exercised every day by the tiles right below it.
+		sys->sprint("pack %s.bar.edit -side left -padx 8 -pady 2 -ipadx 8 -ipady 5", prefix),
+		sys->sprint("pack %s.bar -side top -fill x", prefix),
+		sys->sprint("pack %s.list -side top -fill both -expand 1 -padx 8 -pady 6", prefix),
+		# Matrix's context menu posts via the toplevel's "act"
+		# channel; Inferno Tk does not propagate unhandled events to
+		# parent widgets, so every widget that covers picker ground
+		# carries the B3 binding itself.
+		sys->sprint("bind %s.title <Button-3> {send act menu %%X %%Y}", prefix),
+		sys->sprint("bind %s.hint <Button-3> {send act menu %%X %%Y}", prefix),
+		sys->sprint("bind %s.list <Button-3> {send act menu %%X %%Y}", prefix),
+	};
+	for(i = 0; i < len cmds; i++) {
+		e := tk->cmd(top, cmds[i]);
+		if(e != nil && len e > 0 && e[0] == '!')
+			return "tk: " + e + " on " + cmds[i];
+	}
+
+	stopch = chan[1] of int;
+	spawn evloop();
+	update();
 	return nil;
 }
 
-loadcolors()
+# One button per composition; each press is one ctl write.
+evloop()
 {
-	lucitheme := load Lucitheme Lucitheme->PATH;
-	if(lucitheme != nil) {
-		th := lucitheme->gettheme();
-		bgcolor   = display_g.color(th.bg);
-		rowcolor  = display_g.color(th.border);
-		textcolor = display_g.color(th.text);
-		dimcolor  = display_g.color(th.dim);
-	} else {
-		bgcolor   = display_g.color(int 16r080808FF);
-		rowcolor  = display_g.color(int 16r333355FF);
-		textcolor = display_g.color(int 16rDDDDDDFF);
-		dimcolor  = display_g.color(int 16r888888FF);
+	for(;;) alt {
+	<-stopch =>
+		return;
+	ev := <-evch =>
+		# NB numeric payloads only: Tk `send` did not deliver word
+		# payloads ("send ch edit" never arrived; "send ch -1" does).
+		i := int ev;
+		if(i == -1)
+			ctlwrite("edit");
+		else if(i >= 0 && i < len names)
+			ctlwrite("load " + names[i]);
 	}
+}
+
+ctlwrite(cmd: string)
+{
+	fd := sys->open("/mnt/matrix/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte cmd;
+	sys->write(fd, b, len b);
 }
 
 rescan(): int
@@ -99,74 +171,63 @@ rescan(): int
 		return 0;
 	lastsig = sig;
 	names = tmp[0:nn];
-	rows = array[nn] of Rect;
 	return 1;
 }
 
-resize(r: Rect)
+# Rebuild the button column to match the library.
+rebuild()
 {
-	r_g = r;
+	tkc("destroy " + prefix_g + ".list");
+	tkc(sys->sprint("frame %s.list", prefix_g));
+	for(i := 0; i < len names; i++) {
+		tkc(sys->sprint(
+			"button %s.list.b%d -text {%s} -anchor w -command {send %s %d}",
+			prefix_g, i, names[i], chname, i));
+		tkc(sys->sprint(
+			"bind %s.list.b%d <Button-3> {send act menu %%X %%Y}",
+			prefix_g, i));
+		# -ipadx/-ipady grow the buttons themselves — real touch
+		# surfaces (44pt/48dp-convention targets), not just spacing.
+		tkc(sys->sprint(
+			"pack %s.list.b%d -side top -fill x -pady 2 -ipadx 8 -ipady 5",
+			prefix_g, i));
+	}
+	tkc(sys->sprint(
+		"pack %s.list -side top -fill both -expand 1 -padx 8 -pady 6", prefix_g));
+}
+
+tkc(cmd: string)
+{
+	e := tk->cmd(top_g, cmd);
+	if(e != nil && len e > 0 && e[0] == '!')
+		sys->fprint(sys->fildes(2), "comp-list: tk %s on %s\n", e, cmd);
+}
+
+resize(nil: Draw->Rect)
+{
 }
 
 update(): int
 {
-	return rescan();
+	if(!rescan())
+		return 0;
+	rebuild();
+	return 1;
 }
 
-draw(dst: ref Image)
+retheme()
 {
-	if(dst == nil || font_g == nil)
-		return;
-	dst.draw(r_g, bgcolor, nil, (0, 0));
-	rowh := font_g.height + 8;
-	dst.text(Point(r_g.min.x + PAD, r_g.min.y + PAD),
-		textcolor, (0, 0), font_g, "Matrix — click a composition to load");
-	dst.text(Point(r_g.min.x + PAD, r_g.min.y + PAD + rowh),
-		dimcolor, (0, 0), font_g, "(this picker is itself the `picker` composition — edit it)");
-	y := r_g.min.y + PAD + 2*rowh + rowh/2;
-	for(i := 0; i < len names; i++) {
-		row := Rect((r_g.min.x + PAD, y), (r_g.max.x - PAD, y + rowh));
-		dst.draw(row, rowcolor, nil, (0, 0));
-		dst.text(Point(row.min.x + PAD, y + (rowh - font_g.height)/2),
-			textcolor, (0, 0), font_g, names[i]);
-		rows[i] = row;
-		y += rowh + 4;
-		if(y >= r_g.max.y - rowh)
-			break;
-	}
-}
-
-pointer(p: ref Draw->Pointer): int
-{
-	# edge-triggered button-1: load on press
-	b := p.buttons & 1;
-	hit := 0;
-	if(b && !lastbtn) {
-		for(i := 0; i < len names; i++)
-			if(rows[i].contains(p.xy)) {
-				fd := sys->open("/mnt/matrix/ctl", Sys->OWRITE);
-				if(fd != nil) {
-					c := array of byte ("load " + names[i]);
-					sys->write(fd, c, len c);
-				}
-				hit = 1;
-				break;
-			}
-	}
-	lastbtn = b;
-	return hit;
-}
-
-key(nil: int): int { return 0; }
-
-retheme(display: ref Display)
-{
-	display_g = display;
-	loadcolors();
 }
 
 shutdown()
 {
+	if(stopch != nil) {
+		alt {
+		stopch <-= 1 =>
+			;
+		* =>
+			;
+		}
+	}
 	names = nil;
-	rows = nil;
 }

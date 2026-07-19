@@ -1,5 +1,5 @@
 alert-watcher (service) - poll a signal file and a status file and emit a sequential alert file per qualifying line or status change
-comp-list (display) - list the compositions in a directory as clickable rows that load the chosen one via the Matrix ctl file
+comp-list (tk-display) - list the compositions in a directory as Tk buttons that load the chosen one via the Matrix ctl file
 cpu-gauge (display) - render a headline value and bar sparkline from a current-sample file and a timestamped history file
 geo-fixture (service) - write and continuously rewrite a synthetic tree of ndb-stanza entity and feature files, advancing simulated units along fixed courses
 geo-map (display) - project ndb-stanza entity and feature files through a map projection and draw graticule, vector features, and affiliation-coloured glyphs

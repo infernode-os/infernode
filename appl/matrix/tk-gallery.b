@@ -59,7 +59,7 @@ top_g:		ref Toplevel;
 prefix_g:	string;	# the gridded body frame
 root_g:		string;	# the region prefix (canvas + scrollbar live here)
 
-W: con 190;		# natural width of the field-like widgets
+W: con 225;		# natural width of the field-like widgets
 TONAL: con " -background #1e1e1e";	# Brimstone clActive (see header)
 IPAD: con " -ipadx 8 -ipady 5";
 
@@ -98,7 +98,7 @@ mkwidget(class, p, var, deco: string): string
 	"label" =>
 		c = sys->sprint("label %s -text {label}", p);
 	"entry" =>
-		c = sys->sprint("entry %s -width %d", p, W);
+		c = sys->sprint("entry %s -width %d%s", p, W, deco);
 	"listbox" =>
 		c = sys->sprint("listbox %s -width %d -height 58", p, W);
 	"scale" =>
@@ -130,9 +130,13 @@ mkwidget(class, p, var, deco: string): string
 	"scrollbar" =>
 		cmd(sys->sprint("%s set 0.2 0.5", p));
 	"canvas" =>
+		# rectilinear samples: libdraw has no anti-aliasing, so
+		# curves and diagonals render stepped; the crisp 1px
+		# rectilinear vocabulary is the honest one
 		cmd(sys->sprint("%s create rectangle 8 8 60 36 -outline white", p));
-		cmd(sys->sprint("%s create oval 70 8 120 36 -fill #cc5940", p));
-		cmd(sys->sprint("%s create line 130 36 180 8", p));
+		cmd(sys->sprint("%s create rectangle 70 8 120 36 -fill #cc5940", p));
+		cmd(sys->sprint("%s create line 130 22 180 22", p));
+		cmd(sys->sprint("%s create line 155 8 155 36", p));
 	"text" =>
 		cmd(sys->sprint("%s insert end {text widget\nsecond line}", p));
 	}
@@ -151,8 +155,9 @@ group(rows: array of (string, string, int), c0: int): string
 		deco := "";
 		if(target)
 			deco = TONAL;
-		if(class == "checkbutton" || class == "radio1" || class == "radio2")
-			deco = "";	# indicators carry the state; pad only
+		if(class == "checkbutton" || class == "radio1" || class == "radio2"
+		|| class == "entry")
+			deco = "";	# indicator/field carries the look; pad only
 		if((e := mkwidget(class, dp, sys->sprint("d%d", c0), "")) != nil)
 			return e;
 		if((e = mkwidget(class, pp, sys->sprint("p%d", c0), deco)) != nil)
@@ -208,7 +213,7 @@ init(top: ref Toplevel, prefix, nil: string): string
 		("label",	"w", 0),
 	};
 	fields := array[] of {
-		("entry",	"we", 0),
+		("entry",	"we", 1),
 		("listbox",	"we", 0),
 		("scale",	"we", 0),
 		("scrollbar",	"we", 0),

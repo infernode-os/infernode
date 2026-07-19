@@ -16,6 +16,7 @@ TARG=\
 	net-gauge.dis\
 	proc-list.dis\
 	tk-notes.dis\
+	video-ctl.dis\
 	video-pane.dis\
 
 SYSMODULES=\

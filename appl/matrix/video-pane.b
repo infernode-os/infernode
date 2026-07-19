@@ -15,9 +15,22 @@ implement VideoPane;
 # Composition usage (a leaf naming this module + its stream mount):
 #     ... video-pane /mnt/video/0
 #
-# The Matrix runtime drives playback: it calls update() on its refresh
-# cadence (one decoded frame is pulled per update) and draw() to composite.
-# A canned clip loops; a live feed plays as frames arrive.
+# The pane is a pure VIEW: vid9p owns the transport (playhead, state)
+# server-side, and the pane renders whatever frame `pos` in <mount>/status
+# says — so every viewer of a stream shows the same, synchronised frame,
+# and anything that can write a file drives playback:
+#
+#     echo pause > /mnt/video/0/ctl        # sh
+#     echo 'seek +5000' > /mnt/video/0/ctl
+#
+# The video-ctl Tk module is those writes as buttons; compose it beside
+# this pane on the same mount (see the video-player crystallisation).
+# Keys routed to the focused pane forward down the SAME wire:
+# space = play/pause, s = stop, arrows = seek 5s.
+#
+# The pane exports the optional MatrixTicker interface so the runtime
+# drives update() at frame cadence.  A status strip along the pane's
+# bottom edge shows state and position.
 #
 
 include "sys.m";
@@ -33,6 +46,8 @@ include "mpegio.m";
 
 remap: Remap;
 
+include "keyboard.m";
+
 include "lucitheme.m";
 
 include "matrix.m";
@@ -47,7 +62,15 @@ VideoPane: module
 	key:	fn(k: int): int;
 	retheme:	fn(display: ref Display);
 	shutdown:	fn();
+	interval:	fn(): int;
 };
+
+# MatrixTicker probe: run update() at frame cadence.  Called on a
+# fresh uninitialised instance — must stay a pure constant.
+interval(): int
+{
+	return 40;
+}
 
 display_g: ref Display;
 font_g: ref Font;
@@ -58,15 +81,21 @@ r_g: Rect;
 vw, vh, vrate, framesize: int;
 
 ffd: ref Sys->FD;		# open handle on <mount>/frame
+sfd: ref Sys->FD;		# open handle on <mount>/status
+cfd: ref Sys->FD;		# open handle on <mount>/ctl (transport writes)
 frame: ref Image;		# RGB24 staging image, native video size
 buf: array of byte;		# one I420 frame
 haveframe: int;			# a frame has been decoded into `frame`
+
+lastshown := -1;
+statestr := "";
 
 bgcolor: ref Image;
 bordercol: ref Image;
 dimcol: ref Image;
 
 PAD: con 6;
+STRIPH: con 14;			# transport status strip height
 
 init(display: ref Display, font: ref Font, mount: string): string
 {
@@ -150,19 +179,98 @@ ensureopen(): int
 	}
 	if(ffd == nil)
 		ffd = sys->open(mountpath + "/frame", Sys->OREAD);
+	if(sfd == nil)
+		sfd = sys->open(mountpath + "/status", Sys->OREAD);
 	return ffd != nil;
 }
 
-readfull(fd: ref Sys->FD, b: array of byte): int
+# Parse <mount>/status: "<src> w= h= framesize= frames= eof= state= pos= t= follow=".
+# Returns (streaming, frames, playing, pos, tms, follow); frames <= 0 when unreadable.
+readstatus(): (int, int, int, int, int, int)
 {
+	if(sfd == nil)
+		return (0, -1, 0, 0, 0, 0);
+	b := array[256] of byte;
+	n := sys->pread(sfd, b, len b, big 0);
+	if(n <= 0)
+		return (0, -1, 0, 0, 0, 0);
+	strm := 0;
+	nf := -1;
+	playing := 0;
+	pos := 0;
+	tms := 0;
+	fol := 0;
+	(nil, toks) := sys->tokenize(string b[0:n], " \t\n");
+	if(toks != nil && hd toks == "streaming")
+		strm = 1;
+	for(; toks != nil; toks = tl toks) {
+		t := hd toks;
+		if(len t > 7 && t[0:7] == "frames=")
+			nf = int t[7:];
+		else if(len t > 6 && t[0:6] == "state=")
+			playing = t[6:] == "playing";
+		else if(len t > 4 && t[0:4] == "pos=")
+			pos = int t[4:];
+		else if(len t > 2 && t[0:2] == "t=")
+			tms = int t[2:];
+		else if(len t > 7 && t[0:7] == "follow=")
+			fol = int t[7:];
+	}
+	return (strm, nf, playing, pos, tms, fol);
+}
+
+# Transport commands go to the server's ctl file — the same wire a
+# video-ctl Tk button or `echo ... > ctl` from sh uses.
+ctl(cmd: string)
+{
+	if(cfd == nil)
+		cfd = sys->open(mountpath + "/ctl", Sys->OWRITE);
+	if(cfd == nil)
+		return;
+	b := array of byte cmd;
+	sys->write(cfd, b, len b);
+}
+
+# Fetch frame idx into `frame` via pread — the frame file is random
+# access, which is what makes seek/pause/live-edge all client-side.
+showframe(idx: int): int
+{
+	if(idx < 0)
+		return 0;
+	off := big idx * big framesize;
 	got := 0;
-	while(got < len b) {
-		n := sys->read(fd, b[got:], len b - got);
+	while(got < framesize) {
+		n := sys->pread(ffd, buf[got:], framesize-got, off + big got);
 		if(n <= 0)
 			return 0;
 		got += n;
 	}
+	wh := vw*vh;
+	cw := vw/2; ch := vh/2; csz := cw*ch;
+	p := ref YCbCr(buf[0:wh], buf[wh:wh+csz], buf[wh+csz:wh+2*csz]);
+	frame.writepixels(Rect((0,0),(vw,vh)), remap->remap(p));
+	haveframe = 1;
+	lastshown = idx;
 	return 1;
+}
+
+setstate(strm, nf, playing, tms, fol: int)
+{
+	p := "";
+	if(vrate > 0 && nf >= 0)
+		p = sys->sprint("%ds/%ds", tms/1000, nf/vrate);
+	mode := "paused";
+	if(strm && fol && playing)
+		mode = "LIVE";
+	else if(strm && fol)
+		mode = "live paused";
+	else if(strm && playing)
+		mode = "replay";
+	else if(strm)
+		mode = "replay paused";
+	else if(playing)
+		mode = "playing";
+	statestr = mode + " " + p + "   space=pause s=stop arrows=seek";
 }
 
 resize(r: Rect)
@@ -174,20 +282,15 @@ update(): int
 {
 	if(!ensureopen())
 		return 0;
-	if(!readfull(ffd, buf)) {
-		# EOF / short read: rewind a canned clip and try once more so
-		# looping feeds keep playing. A live feed that has genuinely
-		# stopped will just fail the reopen and hold the last frame.
-		ffd = sys->open(mountpath + "/frame", Sys->OREAD);
-		if(ffd == nil || !readfull(ffd, buf))
-			return 0;
-	}
-	wh := vw*vh;
-	cw := vw/2; ch := vh/2; csz := cw*ch;
-	p := ref YCbCr(buf[0:wh], buf[wh:wh+csz], buf[wh+csz:wh+2*csz]);
-	frame.writepixels(Rect((0,0),(vw,vh)), remap->remap(p));
-	haveframe = 1;
-	return 1;
+	(strm, nf, playing, pos, tms, fol) := readstatus();
+	if(nf <= 0)
+		return 0;
+	was := statestr;
+	changed := 0;
+	if(pos != lastshown && pos < nf && showframe(pos))
+		changed = 1;
+	setstate(strm, nf, playing, tms, fol);
+	return changed || statestr != was;
 }
 
 draw(dst: ref Image)
@@ -195,6 +298,16 @@ draw(dst: ref Image)
 	if(dst == nil)
 		return;
 	dst.draw(r_g, bgcolor, nil, (0,0));
+
+	# video area = pane minus the transport strip along the bottom
+	vidr := r_g;
+	if(vidr.dy() > 3*STRIPH)
+		vidr.max.y -= STRIPH;
+
+	if(font_g != nil && statestr != "") {
+		pt := Point(r_g.min.x + PAD, r_g.max.y - STRIPH + 1);
+		dst.text(pt, dimcol, (0,0), font_g, statestr);
+	}
 
 	if(!haveframe || frame == nil) {
 		# No frame yet: a quiet placeholder so an empty feed is legible.
@@ -206,12 +319,12 @@ draw(dst: ref Image)
 		return;
 	}
 
-	# Centre the native-size frame in the pane, then clip to the pane
-	# rectangle so an oversized frame never bleeds into neighbours.
-	offx := r_g.min.x + (r_g.dx() - vw)/2;
-	offy := r_g.min.y + (r_g.dy() - vh)/2;
+	# Centre the native-size frame in the video area, then clip to it
+	# so an oversized frame never bleeds into neighbours.
+	offx := vidr.min.x + (vidr.dx() - vw)/2;
+	offy := vidr.min.y + (vidr.dy() - vh)/2;
 	pane := Rect((offx,offy), (offx+vw, offy+vh));
-	ir := intersect(pane, r_g);
+	ir := intersect(pane, vidr);
 	if(ir.dx() <= 0 || ir.dy() <= 0)
 		return;
 	# source point in frame space aligned to ir.min
@@ -235,7 +348,29 @@ intersect(a, b: Rect): Rect
 }
 
 pointer(nil: ref Draw->Pointer): int { return 0; }
-key(nil: int): int { return 0; }
+
+# Transport keys, routed by Matrix to the focused pane; each forwards
+# down the same ctl wire the video-ctl buttons and sh use.
+key(k: int): int
+{
+	case k {
+	' ' =>
+		(nil, nil, playing, nil, nil, nil) := readstatus();
+		if(playing)
+			ctl("pause");
+		else
+			ctl("play");
+	's' =>
+		ctl("stop");
+	Keyboard->Left =>
+		ctl("seek -5000");
+	Keyboard->Right =>
+		ctl("seek +5000");
+	* =>
+		return 0;
+	}
+	return 1;
+}
 
 retheme(display: ref Display)
 {
@@ -246,6 +381,8 @@ retheme(display: ref Display)
 shutdown()
 {
 	ffd = nil;
+	sfd = nil;
+	cfd = nil;
 	frame = nil;
 	buf = nil;
 	haveframe = 0;

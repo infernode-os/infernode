@@ -15,17 +15,33 @@ WRITES
 DESCRIPTION
 	The mount path is a vid9p stream directory (e.g. /mnt/video/0)
 	served by appl/cmd/vid9p.b over the host-decode 9P bridge
-	(docs/H264-9P-BRIDGE.md).  fmt is read once for geometry; each
-	Matrix update() pulls one frame from the frame file, wraps its
-	bytes as a Mpegio->YCbCr and runs it through the SAME remap24
-	(YCbCr->RGB24) converter the standalone vidplay/vidplay9p players
-	use — there is no new pixel code.  The frame is drawn at its
-	native size, centred in the pane and clipped to the pane
-	rectangle, with a thin border.  A canned clip loops at end of
-	stream; a live feed plays as frames arrive.  fmt/frame need not
-	exist at init: the pane retries lazily and shows "no video" until
-	the source appears.  Multiplex by placing one video-pane leaf per
-	feed in the composition.
+	(docs/H264-9P-BRIDGE.md).  fmt is read once for geometry; frames
+	are fetched by index with pread (the frame file is random
+	access), wrapped as a Mpegio->YCbCr and run through the SAME
+	remap24 (YCbCr->RGB24) converter the standalone vidplay/vidplay9p
+	players use — there is no new pixel code.  The frame is drawn at
+	its native size, centred in the pane and clipped to the pane
+	rectangle, with a transport status strip along the bottom edge.
+
+	The pane is a transport-controlled player.  It exports the
+	optional MatrixTicker interface (matrix.m), so the runtime calls
+	update() at frame cadence; playback paces itself against the
+	wall clock at the feed's fps.  Keys, routed by Matrix to the
+	focused (hovered) pane:
+
+	space	play / pause
+	s	stop: canned feed rewinds to frame 0, paused; a live
+		feed snaps back to the live edge, playing
+	arrows	seek 5 s back / forward; on a live feed, seeking back
+		replays the retained buffer (DVR) and seeking to the
+		end resumes following the live edge
+
+	A canned clip loops at end of stream; a live (streaming) feed
+	follows the newest decoded frame.  fmt/frame need not exist at
+	init: the pane retries lazily and shows "no video" until the
+	source appears.  Multiplex by placing one video-pane leaf per
+	feed in the composition (see the video-player and video-live
+	crystallisations in /lib/matrix/compositions).
 
 SEE ALSO
 	vid9p (appl/cmd/vid9p.b — serves /mnt/video/<id>)

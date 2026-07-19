@@ -328,8 +328,15 @@ draw(dst: ref Image)
 {
 	dst.draw(r_g, bg, nil, (0, 0));
 	drawgraticule(dst);
+	# z-order, not filename order: translucent AREA FILLS render
+	# under strokes — drawn after, they tint through stroke cores and
+	# swallow the anti-aliased flanks (the "jagged over amber" bug).
 	for(i := 0; i < len features; i++)
-		drawfeature(dst, features[i]);
+		if(features[i].fill != 0)
+			drawfeature(dst, features[i]);
+	for(i = 0; i < len features; i++)
+		if(features[i].fill == 0)
+			drawfeature(dst, features[i]);
 	lblrects = nil;
 	for(i = 0; i < len entities; i++)
 		drawentity(dst, entities[i]);

@@ -69,6 +69,12 @@ def stage_scenario(sc, model, url, rz):
     (STAGE / "msg").write_text((sc.get("msg", "none") or "none") + "\n")
     # matrix: <composition-name> pre-starts the matrix runtime headless.
     (STAGE / "matrixcomp").write_text((sc.get("matrix", "none") or "none") + "\n")
+    # followthrough: true → after Activity 0 first settles, wait for any delegated
+    # child activity to reach a terminal status, then re-prompt Activity 0 to
+    # relay the result (the meta-agent's default is to reply "I'll report back"
+    # and go idle, so a single-shot settle captures the acknowledgement, not the
+    # answer). Set on delegated-RESULT scenarios (INFR-394).
+    (STAGE / "followthrough").write_text(("yes" if sc.get("followthrough") else "no") + "\n")
     probes = []
     for chk in (sc.get("expects", {}).get("probe_contains") or []):
         probes.append(chk["path"])

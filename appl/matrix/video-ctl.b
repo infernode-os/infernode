@@ -85,7 +85,9 @@ init(top: ref Toplevel, prefix, mount: string): string
 		sys->sprint("button %s.b.back -text { -5s } -command {send %s back}", prefix, nm),
 		sys->sprint("button %s.b.fwd -text { +5s } -command {send %s fwd}", prefix, nm),
 		sys->sprint("label %s.b.pos -text {--}", prefix),
-		sys->sprint("pack %s.b.play %s.b.pause %s.b.stop %s.b.back %s.b.fwd -side left -padx 2",
+		# -ipadx/-ipady grow the widgets themselves — a real touch
+		# surface (44pt/48dp-convention targets), not just spacing.
+		sys->sprint("pack %s.b.play %s.b.pause %s.b.stop %s.b.back %s.b.fwd -side left -padx 2 -ipadx 8 -ipady 5",
 			prefix, prefix, prefix, prefix, prefix),
 		sys->sprint("pack %s.b.pos -side right -padx 4", prefix),
 		sys->sprint("pack %s.b -side top -fill x", prefix),

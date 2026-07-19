@@ -80,6 +80,10 @@ BRIDGE_SUFFIX: con "\n\nYou are Veltro, the AI agent in a Lucifer activity. " +
 	"Use tools only when the user asks you to perform a specific task.";
 
 META_PROMPT_PATH: con "/lib/veltro/meta.txt";
+# First-run setup greeting. Read from a data file so a deployment can
+# reword it without patching this module; falls back to the built-in
+# default when the file is absent.
+SETUP_GREETING_PATH: con "/lib/veltro/setup-greeting.txt";
 # Default agentic sampling temperature (low = reliable tool-calling). Override
 # per-deployment with `temperature=` in /lib/ndb/llm. See initsession().
 AGENT_TEMP: con "0.2";
@@ -336,9 +340,11 @@ writedialogue(title, text, progress, options: string): int
 # down MUST stay in sync.  If you rename a button, rename its comparison.
 runsetupwizard()
 {
-	writemsg("veltro",
-		"Welcome to InferNode! I'm **Veltro**, your AI agent.\n\n" +
-		"I need an LLM connection to get started. Choose an option below:");
+	greeting := agentlib->readfile(SETUP_GREETING_PATH);
+	if(greeting == nil)
+		greeting = "Welcome to InferNode! I'm **Veltro**, your AI agent.\n\n" +
+			"I need an LLM connection to get started. Choose an option below:";
+	writemsg("veltro", agentlib->strip(greeting));
 	writedialogue("LLM Setup",
 		"Choose how to connect to an AI model:",
 		"", "Remote API,Local model,Remote 9P");

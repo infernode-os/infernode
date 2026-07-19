@@ -1,0 +1,73 @@
+# Next-round probes: matrix write-ops (compose/load, not just inspect) and a
+# multi-part request. Targets Claude Sonnet on the CLI.
+
+scenarios:
+
+  - name: matrix_compose
+    category: matrix
+    description: >
+      Drive matrix beyond read-only — switch the running composition and report
+      the result. Tests matrix ctl/compose write-ops via a delegated task, and
+      that the value comes back (task result).
+    matrix: sysmon
+    settle: 8
+    timeout: 420
+    prompt: >
+      The Matrix runtime is running the sysmon composition. Switch it to the
+      perf-dashboard composition, then tell me which modules are loaded now.
+    expects:
+      trajectory_tool: task
+      no_duplicate_activities: true
+      reply_regex: "(?i)(perf|dashboard|module|gauge|loaded)"
+    forbid:
+      reply_regex: "(?i)(couldn't complete|could not|unable to|no such tool)"
+
+  - name: multi_part_facts
+    category: compound
+    description: >
+      Three sub-questions in one request. Probes whether the meta-agent answers
+      a multi-part read-only query completely (directly or delegated) without
+      dropping parts.
+    settle: 7
+    timeout: 360
+    prompt: >
+      Three quick things, please answer all three: (1) the first line of
+      /lib/veltro/agents/coder.txt, (2) how many .txt files are in
+      /lib/veltro/agents, and (3) does /lib/veltro/meta.txt mention the word
+      "delegate"?
+    expects:
+      no_duplicate_activities: true
+      # all three parts addressed
+      reply_regex: "(?is)coder.*\\b\\d+\\b.*(delegat|yes|no)"
+    forbid:
+      reply_regex: "(?i)(couldn't complete|could not|unable to|no such tool)"
+
+  - name: matrix_delegate
+    category: matrix
+    description: >
+      Matrix is deliberately NOT pre-started (no matrix: flag). Regression for
+      two fixes found via the grind: (1) meta.txt now teaches the Chief of Staff
+      that 'matrix' is a GRANTABLE tool, so it delegates a matrix-equipped task
+      instead of hunting the filesystem for a "matrix" service and giving up
+      ("I have no tool called matrix… point me to where it lives") — the observed
+      failure. (2) the delegated child pairs launch+matrix so it can start the
+      runtime headlessly. Scored on the delegation DECISION (task used, no
+      give-up), not the async result — following a task to its relayed result
+      needs the harness follow-through phase (see INFR ticket).
+    settle: 7
+    timeout: 360
+    prompt: >
+      I'd like a rundown of the Matrix composition runtime. Start a task to run
+      its module index, its status, and list the pinned compositions, then
+      report back what each one shows.
+    expects:
+      # deterministic delegation signal: task tool used AND a child spawned.
+      # (positive reply wording is free-form — "running now" / "check back" /
+      # "share the results" — so it is NOT asserted; the give-up language is
+      # forbidden below instead.)
+      trajectory_tool: task
+      activities_min: 1
+      no_duplicate_activities: true
+    forbid:
+      # the give-up / filesystem-hunting language that WAS the bug
+      reply_regex: "(?i)(no (tool|matching|such)|can'?t (locate|find)|couldn'?t (locate|find)|what (you mean|this (actually )?is)|point me to|isn'?t (a thing|something)|don'?t want to delegate)"

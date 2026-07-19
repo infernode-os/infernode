@@ -43,11 +43,13 @@ WINW: con 600;
 WINH: con 590;
 
 top: ref Toplevel;
+logoimg: ref Image;	# decoded colour logo, blitted onto the window
 accentcol: string;	# "#rrggbbff" title accent (from theme)
 dimcol:    string;	# "#rrggbbff" URL/footnote colour (from theme)
 
-# (text, dim) pairs — dim=1 lines use the muted colour (URLs).
-lines := array[] of {
+# (text, dim) pairs — dim=1 lines use the muted colour (URLs). This is the
+# built-in default; /lib/lucifer/brand/about.txt overrides it if present.
+deflines := array[] of {
 	("Inferno® Operating System", 0),
 	("Originally by Bell Labs (Lucent)", 0),
 	("Vita Nuova Holdings", 0),
@@ -56,6 +58,8 @@ lines := array[] of {
 	("infernode.io", 1),
 	("github.com/infernode-os", 1),
 };
+lines: array of (string, int);	# runtime description, from brandabout()
+pname: string;			# product name, from brandname()
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -80,11 +84,13 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	}
 
 	loadtheme();
+	pname = brandname();
+	lines = brandabout();
 
 	wmctl: chan of string;
 	(top, wmctl) = tkclient->toplevel(ctxt,
 		sys->sprint("-width %d -height %d", WINW, WINH),
-		"About InferNode", Tkclient->Appl);
+		"About " + pname, Tkclient->Appl);
 
 	build(top.display);
 
@@ -99,6 +105,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	ctl := <-wmctl or
 	ctl = <-top.ctxt.ctl =>
 		tkclient->wmctl(top, ctl);
+		drawlogo();
 
 	key := <-top.ctxt.kbd =>
 		# Ctrl-Q / Del quits; everything else is ignored.
@@ -113,6 +120,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	<-themech =>
 		loadtheme();
 		retheme();
+		drawlogo();
 	}
 }
 
@@ -164,13 +172,17 @@ build(display: ref Display)
 	};
 	tkcmds(cmds);
 
-	# Logo (optional — only if the PNG decodes).
+	# Logo (optional — only if the PNG decodes). Reserve a blank frame the
+	# size of the logo; drawlogo() paints the real colour image over it.
 	if(loadlogo(display))
-		tkcmds(array[] of {"label .c.logo -image about_logo", "pack .c.logo -side top -pady 12"});
+		tkcmds(array[] of {
+			sys->sprint("frame .c.logo -width %d -height %d -background #080808",
+				logoimg.r.dx(), logoimg.r.dy()),
+			"pack .c.logo -side top -pady 12"});
 
 	# Title.
 	tkcmds(array[] of {
-		"label .c.title -text {InferNode} -foreground " + accentcol +
+		"label .c.title -text {" + pname + "} -foreground " + accentcol +
 			" -font " + titlef,
 		"pack .c.title -side top -pady {6 2}",
 	});
@@ -204,6 +216,32 @@ build(display: ref Display)
 
 	tkcmds(array[] of {"pack .c -fill both -expand 1", "pack propagate . 0"});
 	tk->cmd(top, "update");
+	drawlogo();
+}
+
+# Blit the colour logo onto the window over its reserved frame. Inferno Tk
+# only has greyscale images, so — exactly like lucifer's header and the login
+# screen — we draw the real colour Draw image straight onto the window. Called
+# after every Tk repaint (reshape / expose / theme) so it survives redraws.
+drawlogo()
+{
+	if(logoimg == nil || top == nil || top.image == nil)
+		return;
+	fr := tk->rect(top, ".c.logo", 0);
+	if(fr.dx() <= 0 || fr.dy() <= 0)
+		return;
+	# tk->rect returns coordinates in the toplevel's on-screen space, but
+	# top.image is its own (0,0)-based backing buffer. Convert screen->image
+	# by subtracting the root window's origin and re-adding the image origin.
+	root := tk->rect(top, ".", 0);
+	fx := fr.min.x - root.min.x + top.image.r.min.x;
+	fy := fr.min.y - root.min.y + top.image.r.min.y;
+	lw := logoimg.r.dx();
+	lh := logoimg.r.dy();
+	ox := fx + (fr.dx() - lw) / 2;
+	oy := fy + (fr.dy() - lh) / 2;
+	top.image.draw(Rect((ox, oy), (ox + lw, oy + lh)), logoimg, nil, logoimg.r.min);
+	top.image.flush(Draw->Flushnow);
 }
 
 # Re-apply theme-dependent colours after a live theme change.
@@ -219,8 +257,8 @@ retheme()
 	tk->cmd(top, "update");
 }
 
-# Decode the logo PNG into a Tk image named "about_logo".
-# Returns 1 on success.
+# Decode the logo PNG into the colour Draw image `logoimg` (blitted onto the
+# window by drawlogo(), never handed to Tk). Returns 1 on success.
 loadlogo(display: ref Display): int
 {
 	path := logopath();
@@ -239,13 +277,11 @@ loadlogo(display: ref Display): int
 	(raw, nil) := readpng->read(fd);
 	if(raw == nil)
 		return 0;
-	(logo, nil) := remap->remap(raw, display, 0);
-	if(logo == nil)
-		return 0;
-	if(tk->cmd(top, "image create bitmap about_logo")[0] == '!')
-		return 0;
-	e := tk->putimage(top, "about_logo", logo, nil);
-	return e == nil || e == "";
+	# Keep the full-colour Draw image. Inferno Tk images are greyscale
+	# (libtk/image.c: CHAN2(CAlpha,8,CGrey,8)), so we do NOT hand it to Tk;
+	# drawlogo() blits it onto the window directly, as lucifer and logon do.
+	(logoimg, nil) = remap->remap(raw, display, 0);
+	return logoimg != nil;
 }
 
 # The logo file, theme-specific if one exists.
@@ -287,6 +323,67 @@ themelistener(ch: chan of int)
 		if(len ev >= 6 && ev[0:6] == "theme ")
 			ch <-= 1;
 	}
+}
+
+# Product name, from /lib/lucifer/brand/name (default "InferNode").
+brandname(): string
+{
+	n := rf("/lib/lucifer/brand/name");
+	if(n == nil)
+		return "InferNode";
+	return n;
+}
+
+# Description/link lines, from /lib/lucifer/brand/about.txt (default deflines).
+# One label per line; a line is dimmed (URL style) when it has no spaces and
+# contains a dot. Blank lines are skipped.
+brandabout(): array of (string, int)
+{
+	txt := slurp("/lib/lucifer/brand/about.txt");
+	if(txt == nil)
+		return deflines;
+	(nl, ls) := sys->tokenize(txt, "\n");
+	if(nl == 0)
+		return deflines;
+	out := array[nl] of (string, int);
+	i := 0;
+	for(; ls != nil; ls = tl ls){
+		line := hd ls;
+		while(len line > 0 && (line[len line-1] == '\r' || line[len line-1] == ' '))
+			line = line[:len line-1];
+		if(len line == 0)
+			continue;
+		out[i] = (line, urllike(line));
+		i++;
+	}
+	if(i == 0)
+		return deflines;
+	return out[0:i];
+}
+
+urllike(s: string): int
+{
+	dot := 0;
+	for(i := 0; i < len s; i++){
+		if(s[i] == ' ')
+			return 0;
+		if(s[i] == '.')
+			dot = 1;
+	}
+	return dot;
+}
+
+# Read a whole small file (<= 2KB); nil if absent or empty.
+slurp(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[2048] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
 }
 
 rf(name: string): string

@@ -1006,7 +1006,7 @@ drawchrome(r: Rect)
 		} else {
 			tiletotalw = 0;
 			# No tiles: fall back to simple title text
-			title := "InferNode";
+			title := brandname();
 			if(actlabel != nil && actlabel != "")
 				title += " | " + actlabel;
 			if(actstatus != nil && actstatus != "" && actstatus != "idle")
@@ -2738,6 +2738,19 @@ clamptozone(r: Rect, zone: Rect): Rect
 	if(x < zone.min.x) x = zone.min.x;
 	if(y < zone.min.y) y = zone.min.y;
 	return Rect((x, y), (x + w, y + h));
+}
+
+# Product name, from /lib/lucifer/brand/name (default "InferNode").
+brandname(): string
+{
+	n := readfile("/lib/lucifer/brand/name");
+	if(n == nil)
+		return "InferNode";
+	while(len n > 0 && (n[len n-1] == '\n' || n[len n-1] == ' ' || n[len n-1] == '\r'))
+		n = n[:len n-1];
+	if(n == "")
+		return "InferNode";
+	return n;
 }
 
 readfile(path: string): string

@@ -1,0 +1,23 @@
+# video-demo — composable video wall: host-decoded feeds beside a live gauge
+#
+# left/top:    LIVE feed — vid9p spawned the host vdec decoder (H.264 -> I420
+#              streamed over a pipe) and serves frames as they arrive
+#              (/mnt/video/0).
+# left/bottom: CANNED feed — a .y4m produced by vdec, served statically by a
+#              second vid9p (/mnt/videob/0); loops at end of stream.
+# right:       cpu-gauge — an existing Matrix display module, showing a video
+#              pane is an ordinary composable leaf beside any other module.
+#
+# Matrix pulls one frame per update (2 s cadence, wm/matrix UPDATE_MS), so
+# these feeds are 1 fps clips — the panes step in near-real time and testsrc's
+# counter makes the motion obvious.  Full-rate playback is vidplay9p's job
+# (see demo-video.sh, which opens one on a 25 fps live feed).
+
+layout hsplit 66 34
+left vsplit 50 50
+
+left/top    video-pane /mnt/video/0
+left/bottom video-pane /mnt/videob/0
+right       cpu-gauge  /tmp/matrix/sysmon-svc
+
+service sysmon-svc /

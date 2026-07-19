@@ -1,7 +1,9 @@
 alert-watcher (service) - poll a signal file and a status file and emit a sequential alert file per qualifying line or status change
+comp-list (display) - list the compositions in a directory as clickable rows that load the chosen one via the Matrix ctl file
 cpu-gauge (display) - render a headline value and bar sparkline from a current-sample file and a timestamped history file
 geo-fixture (service) - write and continuously rewrite a synthetic tree of ndb-stanza entity and feature files, advancing simulated units along fixed courses
 geo-map (display) - project ndb-stanza entity and feature files through a map projection and draw graticule, vector features, and affiliation-coloured glyphs
+line-plot (display) - graph every numeric column of a history-style file as an anti-aliased auto-scaled series
 llm-context (display) - render one horizontal fill bar per session id listed in an index file, with a watermark tick at the historical maximum
 llm-recorder (service) - enumerate numeric subdirectories of a mount, sample a usage and a model file from each, and rewrite an index plus per-id current/history files
 llm-sessions (display) - render a multi-track timeline of vertical bars positioned by sample timestamp and scaled by token count
@@ -11,5 +13,9 @@ position-table (display) - read every file in a positions directory as a one-lin
 proc-list (display) - render a scrollable process table joined from a status-snapshot file and a per-pid rate file, with row selection and a key-triggered kill
 risk-gauge (display) - render a fixed label/value metric column from a five-field file at the mount path plus two files at sibling paths of the mount
 signal-feed (display) - parse one whitespace-separated record per line from the file at the mount path and render a scrollable colour-coded list
+sparkline (display) - render the last column of a history-style file as one anti-aliased trend line with a headline value
 sysmon-svc (service) - poll /dev/memory, /prog/*/status, and /net conversation status at 1 Hz and rewrite current-snapshot and ring-buffer history files
 tk-notes (tk-display) - build entry/button/listbox Tk widgets, append entry text as lines to a notes file, and mirror that file into the listbox
+video-ctl (tk-display) - build play/pause/stop/seek Tk buttons that write transport commands to a vid9p ctl file, with a label mirroring stream status
+video-overlay (display) - render a vid9p video feed with anti-aliased annotation boxes read from the sibling vision service
+video-pane (display) - render a decoded video feed from a vid9p stream directory, compositing I420 frames through the mpeg remap24 path into the pane

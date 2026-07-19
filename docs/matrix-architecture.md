@@ -228,6 +228,13 @@ starts as generated Limbo code, compiled to `.dis`, loaded into Matrix.
 If it proves useful, it joins the library. Modules crystallise the same
 way compositions do.
 
+The shipped worked example is the video player: there is no player
+application anywhere in the tree — `/lib/matrix/compositions/video-player`
+wires a `video-pane` (view) and a `video-ctl` (Tk transport buttons)
+over one vid9p mount, and `video-live` composes a pane+ctl pair per
+live feed into a wall. The modules are the vocabulary; the
+crystallisation is the sentence.
+
 
 ## Module Interface
 
@@ -273,6 +280,46 @@ MatrixDisplay: module {
 Display modules render with Draw primitives — `Draw->Image.text()`
 for cell values, filled rects for gauges and scrollbars. The interface
 mirrors patterns already present in Lucifer's zone modules.
+
+#### Update cadence: the optional MatrixTicker interface
+
+The runtime drives `update()` every `UPDATE_MS` (2 s) by default. A
+display module that needs a faster cadence — a video pane playing at
+frame rate — additionally exports:
+
+```
+MatrixTicker: module {
+    # Desired update() period in ms; the runtime clamps it to
+    # [40, UPDATE_MS].  Called on a fresh probe instance BEFORE
+    # init(), so it must be a pure constant function.
+    interval: fn(): int;
+};
+```
+
+The runtime probes it by loading the module's `.dis` under this
+narrower type — the Dis load typecheck is the discriminator, exactly
+as with `MatrixDisplay` vs `MatrixTkDisplay` — so existing modules
+neither change nor recompile. Each leaf accumulates elapsed time until
+its own interval is due: a 40 ms video pane does not make a 2 s gauge
+update any faster.
+
+A display module need not be text or vector: **`video-pane`** treats its
+mount as a [vid9p](../appl/cmd/vid9p.b) stream directory
+(`/mnt/video/<id>`) and renders whatever frame the server's playhead
+(`status` `pos=`) names, preading raw I420 and running it through the
+mpeg `remap24` (YCbCr→RGB24) path — the same converter the standalone
+`vidplay`/`vidplay9p` players use — composited native-size and clipped
+into the pane, with a transport status strip. It exports `MatrixTicker`
+(40 ms) so playback runs at frame cadence. Its companion
+**`video-ctl`** (a Tk-hosted module, below) is the transport control
+surface: play/pause/stop/seek buttons that each write one command to
+`<mount>/ctl` — the same wire sh and agents use (`echo pause >
+/mnt/video/0/ctl`), with the playhead living in the vid9p server so
+every viewer stays in sync ([docs/H264-9P-BRIDGE.md](H264-9P-BRIDGE.md)
+§2.3). The player and the live feed wall are crystallisations wiring
+these two modules over a shared mount —
+`/lib/matrix/compositions/video-player` and `video-live`; multiplex a
+wall by adding one pane(+ctl) pair per feed.
 
 ### Service Module
 

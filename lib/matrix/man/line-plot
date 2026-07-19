@@ -1,0 +1,33 @@
+NAME
+	line-plot (display) - graph every numeric column of a history-style file as an anti-aliased auto-scaled series
+
+INTERFACE
+	display (MatrixDisplay)
+
+READS
+	<mount>		one sample per line: [ts] v1 [v2 ...] — an
+			optional leading timestamp column followed by one
+			or more numeric value columns, oldest first.
+
+WRITES
+	none (renders only)
+
+DESCRIPTION
+	The generic "graph this file" view.  Each value column becomes
+	one polyline rendered through aadraw (analytic-coverage
+	anti-aliasing), coloured from a fixed palette (theme accent,
+	cyan, green, amber, text).  All series share one auto-scaled
+	range whose min/max are labelled at the plot corners; a grid
+	line marks zero when the range crosses it.  When a line has two
+	or more columns the first is treated as a timestamp and dropped
+	(the sysmon and llm-recorder history-ring convention); a
+	single-column file plots as-is.  The title is the last two path
+	components of the mount.  The file is re-read on every update
+	tick and redrawn only when its contents change, so pointing it
+	at a live ring (e.g. sysmon-svc's cpu/history) yields a moving
+	chart — but any file an agent appends to with echo has the same
+	shape.
+
+SEE ALSO
+	sparkline (the minimal one-line variant)
+	sysmon-svc, llm-recorder (produce history rings this can graph)

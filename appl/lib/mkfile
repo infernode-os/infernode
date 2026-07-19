@@ -11,6 +11,7 @@ DIRS=\
 	w3c\
 
 TARG=\
+	aadraw.dis\
 	acmewin.dis\
 	arg.dis\
 	audit.dis\

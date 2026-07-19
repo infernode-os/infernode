@@ -1,0 +1,11 @@
+# picker — the composition picker, itself a crystallisation.
+#
+# Matrix loads this when started with no composition, so the picker is
+# user- and agent-editable like everything else: restyle it, split it,
+# put a cpu-gauge beside it — make whatever picker you want.  A click
+# on a row writes "load <name>" to /mnt/matrix/ctl.  If this file is
+# missing, Matrix falls back to a minimal built-in list.
+
+layout vsplit 100 0
+
+top comp-list /lib/matrix/compositions

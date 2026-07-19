@@ -1,0 +1,16 @@
+# video-overlay — live video with ML-style annotations, composed.
+#
+# One video-overlay leaf: the vid9p stream at the mount plus
+# anti-aliased detection boxes read from the sibling vision service
+# (/mnt/video/0 -> /mnt/vision/0/boxes, one "x0 y0 x1 y1 label" line
+# per detection, frame coordinates).  This is the drone/TAK product
+# shape end to end: URL -> vdec -> 9P -> pane, with inference as just
+# another 9P mount beside the stream (INFR-277).
+#
+#     wm/matrix -g 800x600 /lib/matrix/compositions/video-overlay
+# (demo-overlay.sh is that, self-contained, with a synthetic tracker)
+
+layout vsplit 88 12
+
+top    video-overlay /mnt/video/0
+bottom video-ctl     /mnt/video/0

@@ -899,7 +899,7 @@ pcolr(TkTop *t, TkOption *o, void *place, char **str, char *buf, char *ebuf)
 {
 	TkEnv *env;
 	char *e;
-	ulong rgba, dark, light;
+	ulong rgba;
 	int color, setcol;
 
 	*str = tkword(t, *str, buf, ebuf, nil);
@@ -919,15 +919,14 @@ pcolr(TkTop *t, TkOption *o, void *place, char **str, char *buf, char *ebuf)
 
 	color = AUXI(o->aux);
 	rgba = changecol(env, setcol, color, rgba);
-	if(color == TkCbackgnd || color == TkCselectbgnd || color == TkCactivebgnd) {
-		if (setcol) {
-			light = tkrgbashade(rgba, TkLightshade);
-			dark = tkrgbashade(rgba, TkDarkshade);
-		} else
-			light = dark = 0;
-		changecol(env, setcol, color+1, light);
-		changecol(env, setcol, color+2, dark);
-	}
+	USED(rgba);
+	/*
+	 * Flat design system (see colrs.c): the relief shade slots stay
+	 * pinned to the theme's one border colour, inherited from the
+	 * parent env — for CUSTOM widget colours too.  The old computed
+	 * HSV light/dark shades reintroduced a 3D bevel on any widget
+	 * given -background, breaking the uniform hard frame.
+	 */
 	return nil;
 }
 

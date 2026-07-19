@@ -190,7 +190,9 @@ tkmkmenubutton(TkTop *t, char *arg, char **ret, int type, TkOption *opts)
 	tk = tknewobj(t, type, sizeof(Tk)+sizeof(TkLabel));
 	if(tk == nil)
 		return TkNomem;
-	tk->borderwidth = 2;
+	/* match button: under the flat palette a borderwidth of 2 renders
+	 * as a heavy double frame, not a highlight */
+	tk->borderwidth = 1;
 	tk->flag |= Tknograb;
 
 	tkl = TKobj(TkLabel, tk);

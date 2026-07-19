@@ -68,6 +68,7 @@ Matrix: module
 };
 
 UPDATE_MS: con 2000;
+MINTICK_MS: con 40;	# fastest per-module cadence (25 fps)
 
 # ── 9P qid space ───────────────────────────────────────────
 #
@@ -151,6 +152,20 @@ greencolor: ref Image;
 yellowcolor: ref Image;
 guimode: int;
 dirty: int;
+# Per-leaf update cadence: display modules exporting the optional
+# MatrixTicker interface (matrix.m) run faster than UPDATE_MS; the
+# timer period is the minimum over the current layout and each leaf
+# accumulates elapsed ms until its own interval is due.
+Tick: adt {
+	name:	string;
+	ivl:	int;	# desired update period, ms
+	acc:	int;	# ms accumulated since last update
+};
+ticks: list of ref Tick;
+tickms := UPDATE_MS;	# current timer period
+geomw := 0;		# -g: standalone geometry request (0 = adapt to host)
+geomh := 0;
+
 focusmod: MatrixDisplay;	# module with keyboard focus
 tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
 tkregionseq: int;	# widget-path allocator for hosted regions (.r<seq>)
@@ -233,6 +248,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'h' =>	forceheadless = 1;
+		'g' =>
+			# -g WxH: claim this geometry from the wm.  ONLY for
+			# standalone launches (demo rigs under bare wm/wm,
+			# where winplace's fallback window is tiny).  Hosted
+			# launches (Lucifer presentation zone) must NOT set
+			# this: the host hands out its content rect and a
+			# geometry request fights it and lands the window
+			# outside the zone.
+			s := arg->earg();
+			for(gi := 0; gi < len s; gi++)
+				if(s[gi] == 'x') {
+					geomw = int s[0:gi];
+					geomh = int s[gi+1:];
+					break;
+				}
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -246,7 +276,16 @@ init(ctxt: ref Draw->Context, args: list of string)
 	complock <-= 1;
 	reloadch = chan[1] of string;
 
-	# Parse initial composition
+	# Parse initial composition.  With no argument, the picker is
+	# ITSELF a composition (`picker` in the library) so users and
+	# agents can customise it like any other crystallisation; the
+	# built-in drawpicker remains only as the fallback when that
+	# file is absent.
+	if(args == nil) {
+		(pok, nil) := sys->stat(LIBCOMPS + "/picker");
+		if(pok >= 0)
+			args = (LIBCOMPS + "/picker") :: nil;
+	}
 	comptext := "";
 	if(args != nil) {
 		comppath = hd args;
@@ -1210,6 +1249,28 @@ initgui(ctxt: ref Draw->Context)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
+	# Standalone (-g) only: claim the requested geometry and PUMP THE
+	# CTL CHANNEL until the grant arrives, so modules are created at
+	# final size (the engine's item input geometry is unreliable
+	# across a mid-flight resize).  Without -g we ADAPT to whatever
+	# the wm or a presentation-zone host granted — a hosted matrix
+	# must never fight the host's content rect.
+	if(geomw > 0 && geomh > 0) {
+		tkclient->wmctl(top, sys->sprint("!reshape . -1 0 0 %d %d place", geomw, geomh));
+		for(gw := 0; gw < 40; gw++) {
+			if(int tk->cmd(top, ". cget -actwidth") >= geomw - 20)
+				break;
+			alt {
+			c := <-wmctl or
+			c = <-top.ctxt.ctl or
+			c = <-top.wreq =>
+				tkclient->wmctl(top, c);
+			* =>
+				sys->sleep(25);
+			}
+		}
+	}
+
 	# The wm may have reshaped the window during onscreen (a
 	# presentation-zone host hands out its content rect, not our
 	# requested 800x600).  Adopt the actual size now, before the
@@ -1282,7 +1343,7 @@ loadcolors()
 updatetimer()
 {
 	for(;;) {
-		sys->sleep(UPDATE_MS);
+		sys->sleep(tickms);
 		alt {
 		updatech <-= 1 =>
 			;
@@ -1488,10 +1549,12 @@ drawpicker(dst: ref Image)
 	pad := 12;
 	rowh := font_g.height + 8;
 
-	# Header.
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent),
+	# Header.  NB Image.text takes the TOP-LEFT of the text, not the
+	# baseline — adding ascent here pushed every label down out of
+	# its row band.
+	dst.text(Point(r.min.x + pad, r.min.y + pad),
 		textcolor, (0, 0), font_g, title);
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent + rowh),
+	dst.text(Point(r.min.x + pad, r.min.y + pad + rowh),
 		dimcolor, (0, 0), font_g, hint);
 
 	y := r.min.y + pad + 2 * rowh + rowh / 2;
@@ -1522,7 +1585,7 @@ drawpicker(dst: ref Image)
 			    (r.max.x - pad, y + rowh));
 		# Subtle row background so the click affordance is visible.
 		dst.draw(row, divcolor, nil, (0, 0));
-		dst.text(Point(row.min.x + pad, y + font_g.ascent + 4),
+		dst.text(Point(row.min.x + pad, y + (rowh - font_g.height)/2),
 			textcolor, (0, 0), font_g, nm);
 		hits[nhit]  = nm;
 		rects[nhit] = row;
@@ -1614,6 +1677,7 @@ loaddisplaymodules()
 	if(comp == nil || comp.layout == nil)
 		return;
 	loadleafmodules(comp.layout);
+	tickms = recomputetick(comp.layout);
 }
 
 loadleafmodules(node: ref LayoutNode)
@@ -1646,7 +1710,54 @@ loadleafmodules(node: ref LayoutNode)
 		}
 		mod->resize(n.r);
 		n.mod = mod;
+		iv := UPDATE_MS;
+		if((tkr := load MatrixTicker path) != nil) {
+			iv = tkr->interval();
+			if(iv < MINTICK_MS)
+				iv = MINTICK_MS;
+			if(iv > UPDATE_MS)
+				iv = UPDATE_MS;
+		}
+		settick(n.name, iv);
 	}
+}
+
+# Record (or refresh) a leaf's update interval.
+settick(name: string, iv: int)
+{
+	if((t := findtick(name)) != nil) {
+		t.ivl = iv;
+		t.acc = 0;
+		return;
+	}
+	ticks = ref Tick(name, iv, 0) :: ticks;
+}
+
+findtick(name: string): ref Tick
+{
+	for(l := ticks; l != nil; l = tl l)
+		if((hd l).name == name)
+			return hd l;
+	return nil;
+}
+
+# Timer period = min interval over the CURRENT layout's leaves (stale
+# tick entries from an unloaded composition must not keep it fast).
+recomputetick(node: ref LayoutNode): int
+{
+	m := UPDATE_MS;
+	if(node == nil)
+		return m;
+	pick n := node {
+	Split =>
+		m = recomputetick(n.child1);
+		if((m2 := recomputetick(n.child2)) < m)
+			m = m2;
+	Leaf =>
+		if((t := findtick(n.name)) != nil && t.ivl < m)
+			m = t.ivl;
+	}
+	return m;
 }
 
 # Host a Tk display module: a frame in a canvas window item at the
@@ -1681,6 +1792,15 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 		tk->cmd(top, "destroy " + w);
 		return;
 	}
+	iv := UPDATE_MS;
+	if((tkr := load MatrixTicker path) != nil) {
+		iv = tkr->interval();
+		if(iv < MINTICK_MS)
+			iv = MINTICK_MS;
+		if(iv > UPDATE_MS)
+			iv = UPDATE_MS;
+	}
+	settick(n.name, iv);
 	n.tkmod = tkm;
 	n.tkwin = w;
 	n.tkitem = itm;
@@ -2051,6 +2171,12 @@ updatedisplaymodules(node: ref LayoutNode): int
 		c2 := updatedisplaymodules(n.child2);
 		return c1 | c2;
 	Leaf =>
+		if((t := findtick(n.name)) != nil) {
+			t.acc += tickms;
+			if(t.acc < t.ivl)
+				return 0;
+			t.acc = 0;
+		}
 		if(n.mod != nil)
 			return n.mod->update();
 		if(n.tkmod != nil)
@@ -2349,8 +2475,8 @@ handlekey(k: int)
 		}
 		return;
 	}
-	if(focusmod != nil)
-		focusmod->key(k);
+	if(focusmod != nil && focusmod->key(k))
+		dirty = 1;
 }
 
 # ── Watch rules ─────────────────────────────────────────────

@@ -3,24 +3,53 @@ implement Vid9p;
 #
 # vid9p - present decoded video frames as a 9P service at /mnt/video/<id>/.
 #
-# Phase 1 of the multiplexed-video bridge (Jira INFR-266). Reads a YUV4MPEG2
-# (.y4m) stream produced by the host `vdec` decode core (tools/vdec) and serves
-# its frames as a synthetic filesystem:
+# Part of the multiplexed-video bridge (Jira INFR-266). Serves I420 frames
+# produced by the host `vdec` decode core (tools/vdec) as a synthetic
+# filesystem:
 #
-#   /mnt/video/0/ctl      write "open <file.y4m>" to (re)load a source
+#   /mnt/video/0/ctl      write "open <file.y4m>"  load a static .y4m file
+#                         write "play <cmd> [arg..]" spawn a host decoder
+#                               (via os) and stream its y4m stdout live
+#                         write "play" / "pause" / "stop" /
+#                               "seek <ms>|+<ms>|-<ms>" / "live"
+#                               drive the SERVER-side playhead (transport)
 #   /mnt/video/0/fmt      read  "<w> <h> i420 <fps>"
-#   /mnt/video/0/frame    read  the I420 stream: frame N is the framesize bytes
-#                               at offset N*framesize (framesize = w*h*3/2).
-#                               A player reads framesize-byte chunks in sequence.
-#   /mnt/video/0/status   read  human-readable state
+#   /mnt/video/0/frame    read  the I420 stream: frame N is the framesize
+#                               bytes at offset N*framesize (framesize =
+#                               w*h*3/2), offsets GLOBAL and monotonic.
+#                               For a LIVE stream a read past the last
+#                               decoded frame BLOCKS until the next frame
+#                               arrives (or the stream ends); a read below
+#                               the retention window errors "frame expired".
+#   /mnt/video/0/status   read  one line of key=value state: geometry,
+#                               frames=/first= (retained range), eof=,
+#                               state=/pos=/t=/follow= (playhead)
 #
-# The decode core is protocol-agnostic and lives on the host; this shim is the
-# (deliberately disposable) Limbo 9P front. See docs/H264-9P-BRIDGE.md. A later
-# pass swaps the y4m-file source for a live `vdec` spawn and adds a Rust-native
-# 9P server (INFR-267).
+# TRANSPORT: the playhead (state=/pos=) lives in this server and is paced
+# here at the stream's fps, so every consumer renders the same frame and
+# anything that can write a file drives playback — a Matrix video-ctl Tk
+# button, a video-pane's keys, an agent, or plain sh:
+#     echo pause > /mnt/video/0/ctl
+#     echo 'seek +5000' > /mnt/video/0/ctl
+#
+# RETENTION: a live feed keeps the last -w seconds of frames (default 60,
+# 0 = unlimited) as its DVR buffer; the window slides and reads below
+# first= error.  Static sources are always fully retained.
+#
+# Two source modes share one server:
+#   - static  (`open`): the whole .y4m is read into the frame buffer and
+#     served with random access; reads never block (this is the original,
+#     canned path).
+#   - live    (`play`): a host decoder is spawned through the `os` command
+#     and its y4m stdout is parsed incrementally; frames are appended as
+#     they decode and blocked readers are woken. This is the INFR-266
+#     "swap the y4m-file source for a live vdec spawn" step; the decode core
+#     stays protocol-agnostic (see docs/H264-9P-BRIDGE.md).
 #
 # Usage (in the Inferno shell):
-#   mount {vid9p clip.y4m} /mnt/video
+#   mount {vid9p clip.y4m}                        /mnt/video   # static
+#   mount {vid9p -c vdec cam.mp4 --y4m -}         /mnt/video   # live
+#   mount {vid9p -w 120 -c vdec rtsp://cam --y4m -} /mnt/video # 2 min DVR
 #
 
 include "sys.m";
@@ -39,6 +68,10 @@ Vid9p: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
+Command: module {
+	init: fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus: con iota;
 
 tc: chan of ref Tmsg;
@@ -48,7 +81,35 @@ user := "inferno";
 
 # loaded video state
 width, height, fps, framesize, nframes: int;
-i420: array of byte;
+i420: array of byte;	# backing store; only [0:used] is valid data
+used := 0;
+
+# server-side transport (INFR-266 §2.3): the playhead is SERVER state,
+# so any writer to ctl — a Tk button, `echo pause > ctl` from sh, an
+# agent — drives every viewer of the stream identically.  Viewers read
+# state/pos from status and render frame `pos`.
+tplaying := 1;
+follow := 1;		# streaming source: playhead tracks the live edge
+pos := 0;		# playhead frame index
+lastadv := 0;		# wall-clock pacing origin (sys->millisec)
+tickc: chan of int;
+
+# live retention window: a live feed retains the last `wframes` decoded
+# frames (the DVR buffer) instead of growing without bound.  Frame
+# indices and byte offsets stay GLOBAL and monotonic — fbase is the
+# oldest retained frame; reads below it answer "frame expired".  Static
+# sources are always fully retained (wframes = 0 = unlimited).
+fbase := 0;		# index of the oldest retained frame
+wsecs := 60;		# -w: live retention in seconds; 0 = unlimited
+wframes := 0;		# retention in frames (from wsecs once fps is known)
+eof := 1;			# static sources are complete from the start
+streaming := 0;
+
+# live-stream plumbing (nil for a static source)
+framec: chan of array of byte;	# feeder -> serve loop: one decoded frame
+eofc: chan of int;		# feeder -> serve loop: stream ended
+geoc: chan of (int, int, int);	# feeder -> startstream: first-header geometry
+parked: list of ref Tmsg.Read;	# frame reads waiting for more data
 
 badmod(path: string)
 {
@@ -71,10 +132,31 @@ init(nil: ref Draw->Context, args: list of string)
 	nametree->init();
 
 	i420 = array[0] of byte;
+	# Allocated up front so the serve loop's alt never selects on a nil
+	# channel (a nil channel in alt faults). In static mode nothing is
+	# ever sent on them.
+	framec = chan of array of byte;
+	eofc = chan of int;
+	geoc = chan of (int, int, int);
 
-	# optional source file as the sole argument
+	# args: [-w secs] then "-c <cmd> [arg...]" for a live decoder, else
+	# an optional static .y4m file.  -w bounds a live feed's retention
+	# (DVR) window; 0 = unlimited.
 	args = tl args;
-	if(args != nil){
+	if(args != nil && hd args == "-w") {
+		args = tl args;
+		if(args != nil) {
+			wsecs = int hd args;
+			args = tl args;
+		}
+	}
+	if(args != nil && hd args == "-c") {
+		cmd := tl args;
+		if(cmd == nil)
+			sys->fprint(stderr, "vid9p: -c needs a command\n");
+		else
+			startstream(cmd);
+	} else if(args != nil) {
 		e := loadvideo(hd args);
 		if(e != nil)
 			sys->fprint(stderr, "vid9p: %s\n", e);
@@ -89,12 +171,64 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 
 	(tc, srv) = Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
+	tickc = chan of int;
+	spawn ticker();
 	serve(tree);
+}
+
+ticker()
+{
+	for(;;){
+		sys->sleep(40);
+		tickc <-= 1;
+	}
+}
+
+# Advance the playhead at the stream's fps against the wall clock.
+advance()
+{
+	if(!tplaying || nframes <= 0){
+		lastadv = 0;
+		return;
+	}
+	if(streaming && follow){
+		pos = nframes - 1;
+		lastadv = 0;
+		return;
+	}
+	f := fps;
+	if(f <= 0 || f > 120)
+		f = 25;
+	now := sys->millisec();
+	if(lastadv == 0){
+		lastadv = now;
+		return;
+	}
+	steps := (now - lastadv) * f / 1000;
+	if(steps <= 0)
+		return;
+	lastadv += steps * 1000 / f;
+	pos += steps;
+	if(pos >= nframes){
+		if(streaming){
+			# replay caught the live edge: follow it again
+			pos = nframes - 1;
+			follow = 1;
+		} else if(eof && nframes > 0)
+			pos %= nframes;		# canned clip loops
+		else
+			pos = nframes - 1;	# ahead of the decoder: hold
+	}
+	if(pos < fbase)
+		pos = fbase;	# the retention window slid past the playhead
 }
 
 serve(tree: ref Tree)
 {
-	while((tmsg := <-tc) != nil){
+	for(;;) alt {
+	tmsg := <-tc =>
+		if(tmsg == nil)
+			break;
 		pick tm := tmsg {
 		Readerror =>
 			break;
@@ -104,39 +238,136 @@ serve(tree: ref Tree)
 			c := srv.getfid(tm.fid);
 			if(c == nil || !c.isopen){
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-				continue;
-			}
-			case int c.path {
-			Qroot or Qstream =>
-				srv.read(tm);
-			Qfmt =>
-				srv.reply(styxservers->readstr(tm, fmtstr()));
-			Qstatus =>
-				srv.reply(styxservers->readstr(tm, statusstr()));
-			Qctl =>
-				srv.reply(styxservers->readstr(tm, "open <file.y4m>\n"));
-			Qframe =>
-				srv.reply(styxservers->readbytes(tm, i420));
-			* =>
-				srv.reply(ref Rmsg.Error(tm.tag, "vid9p: bad path"));
+			} else {
+				case int c.path {
+				Qroot or Qstream =>
+					srv.read(tm);
+				Qfmt =>
+					srv.reply(styxservers->readstr(tm, fmtstr()));
+				Qstatus =>
+					srv.reply(styxservers->readstr(tm, statusstr()));
+				Qctl =>
+					srv.reply(styxservers->readstr(tm, ctlhelp()));
+				Qframe =>
+					serviceframe(tm);
+				* =>
+					srv.reply(ref Rmsg.Error(tm.tag, "vid9p: bad path"));
+				}
 			}
 		Write =>
 			c := srv.getfid(tm.fid);
 			if(c == nil || !c.isopen){
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-				continue;
-			}
-			if(int c.path != Qctl){
+			} else if(int c.path != Qctl){
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
-				continue;
+			} else {
+				doctl(string tm.data);
+				srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 			}
-			doctl(string tm.data);
-			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 		* =>
 			srv.default(tmsg);
 		}
+
+	fr := <-framec =>
+		# A newly decoded frame: first frame fixes geometry.
+		if(nframes == 0 && width <= 0)
+			; # geometry already set by startstream via geoc
+		grow(fr);
+		wakeparked();
+
+	<-eofc =>
+		eof = 1;
+		streaming = 0;
+		wakeparked();
+
+	<-tickc =>
+		advance();
 	}
 	tree.quit();
+}
+
+# Append one frame's I420 payload to the served buffer.  The backing
+# array grows by doubling: a per-frame exact-fit reallocate-and-copy is
+# O(n^2) in copy volume and its ever-larger allocations fragment the Dis
+# arena until even modest streams exhaust the heap.
+grow(fr: array of byte)
+{
+	if(used + len fr > len i420){
+		ncap := 2 * len i420;
+		if(ncap < used + len fr)
+			ncap = used + len fr;
+		nb := array[ncap] of byte;
+		nb[0:] = i420[0:used];
+		i420 = nb;
+	}
+	i420[used:] = fr;
+	used += len fr;
+	if(framesize > 0)
+		nframes = fbase + used / framesize;
+
+	# retention window: drop the oldest frames once the live buffer
+	# exceeds it.  Trimmed in quarter-window chunks so the copy cost
+	# amortises to a few bytes per byte served.
+	if(wframes > 0 && framesize > 0) {
+		excess := used/framesize - wframes;
+		if(excess >= wframes/4 && excess > 0) {
+			nb := array[len i420] of byte;
+			nb[0:] = i420[excess*framesize:used];
+			i420 = nb;
+			used -= excess*framesize;
+			fbase += excess;
+			if(pos < fbase)
+				pos = fbase;
+		}
+	}
+}
+
+# Reply to a frame read now if data (or EOF) allows, else park it until the
+# next frame arrives. This unifies both source modes: a static source has
+# eof=1 so reads are always answered immediately (past-end -> 0 bytes = EOF);
+# a live source parks reads that run ahead of the decoder.
+# Answer a frame read if the retained data (or EOF) allows; return 0 to
+# park it until the next frame arrives.  Offsets are GLOBAL stream bytes:
+# the retained window is [fbase*framesize, fbase*framesize+used); reads
+# below it name frames the retention window has dropped.
+replyframe(tm: ref Tmsg.Read): int
+{
+	base := big fbase * big framesize;
+	off := tm.offset;
+	if(off < base) {
+		srv.reply(ref Rmsg.Error(tm.tag, "frame expired (retention window)"));
+		return 1;
+	}
+	if(off >= base + big used) {
+		if(eof) {
+			srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
+			return 1;
+		}
+		return 0;
+	}
+	rel := int (off - base);
+	n := tm.count;
+	if(rel + n > used)
+		n = used - rel;
+	srv.reply(ref Rmsg.Read(tm.tag, i420[rel:rel+n]));
+	return 1;
+}
+
+serviceframe(tm: ref Tmsg.Read)
+{
+	if(!replyframe(tm))
+		parked = tm :: parked;
+}
+
+wakeparked()
+{
+	still: list of ref Tmsg.Read;
+	for(p := parked; p != nil; p = tl p){
+		tm := hd p;
+		if(!replyframe(tm))
+			still = tm :: still;
+	}
+	parked = still;
 }
 
 fmtstr(): string
@@ -147,35 +378,265 @@ fmtstr(): string
 statusstr(): string
 {
 	src := "no source";
-	if(nframes > 0)
+	if(streaming)
+		src = "streaming";
+	else if(nframes > 0)
 		src = "ready";
-	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d\n",
-		src, width, height, framesize, nframes);
+	st := "paused";
+	if(tplaying)
+		st = "playing";
+	t := 0;
+	f := fps;
+	if(f <= 0 || f > 120)
+		f = 25;
+	t = pos * 1000 / f;
+	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d first=%d eof=%d state=%s pos=%d t=%d follow=%d\n",
+		src, width, height, framesize, nframes, fbase, eof, st, pos, t, follow);
+}
+
+ctlhelp(): string
+{
+	return "open <file.y4m>\nplay [<cmd> arg...]\npause\nstop\nseek <ms>|+<ms>|-<ms>\nlive\n";
 }
 
 doctl(s: string)
 {
 	(nil, toks) := sys->tokenize(s, " \t\r\n");
-	if(toks != nil && hd toks == "open" && tl toks != nil){
-		e := loadvideo(hd tl toks);
-		if(e != nil)
-			sys->fprint(stderr, "vid9p: open: %s\n", e);
+	if(toks == nil)
+		return;
+	case hd toks {
+	"open" =>
+		if(tl toks != nil){
+			e := loadvideo(hd tl toks);
+			if(e != nil)
+				sys->fprint(stderr, "vid9p: open: %s\n", e);
+			else
+				wakeparked();	# static reload satisfies waiters
+		}
+	"play" =>
+		if(tl toks != nil)
+			startstream(tl toks);
+		else {
+			tplaying = 1;
+			lastadv = 0;
+		}
+	"pause" =>
+		tplaying = 0;
+	"stop" =>
+		if(streaming){
+			# a live feed "stops" back to the live edge
+			follow = 1;
+			tplaying = 1;
+		} else {
+			tplaying = 0;
+			pos = 0;
+		}
+		lastadv = 0;
+	"live" =>
+		follow = 1;
+		tplaying = 1;
+		lastadv = 0;
+	"seek" =>
+		if(tl toks != nil){
+			a := hd tl toks;
+			rel := 0;
+			sign := 1;
+			if(len a > 0 && a[0] == '+'){
+				rel = 1;
+				a = a[1:];
+			} else if(len a > 0 && a[0] == '-'){
+				rel = 1;
+				sign = -1;
+				a = a[1:];
+			}
+			f := fps;
+			if(f <= 0 || f > 120)
+				f = 25;
+			d := sign * (int a) * f / 1000;
+			if(rel)
+				pos += d;
+			else
+				pos = d;
+			if(pos < fbase)
+				pos = fbase;
+			follow = 0;
+			if(nframes > 0 && pos >= nframes-1){
+				pos = nframes - 1;
+				if(streaming)
+					follow = 1;
+			}
+			lastadv = 0;
+		}
 	}
 }
 
-# Parse a YUV4MPEG2 file into the flat I420 frame buffer.
-loadvideo(path: string): string
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return sys->sprint("open %s: %r", path);
-	data := readall(fd);
-	if(len data < 10 || string data[0:9] != "YUV4MPEG2")
-		return sys->sprint("%s: not a YUV4MPEG2 stream", path);
+# ── live stream ─────────────────────────────────────────────
 
-	nl := findnl(data, 0);
+# Spawn a host decoder through `os` and stream its y4m stdout. Blocks until
+# the stream's header geometry is known (or the source ends first) so that
+# fmt is valid as soon as the mount completes.
+startstream(cmd: list of string)
+{
+	fd := starthost(cmd);
+	if(fd == nil){
+		sys->fprint(stderr, "vid9p: cannot start decoder\n");
+		return;
+	}
+	# reset served state for the new source
+	i420 = array[0] of byte;
+	used = 0;
+	width = height = fps = framesize = nframes = 0;
+	eof = 0;
+	streaming = 1;
+	tplaying = 1;
+	follow = 1;
+	pos = 0;
+	fbase = 0;
+	wframes = 0;
+	lastadv = 0;
+	spawn feeder(fd);
+	(w, h, f) := <-geoc;
+	if(w <= 0 || h <= 0){
+		# stream ended before a usable header
+		eof = 1;
+		streaming = 0;
+		return;
+	}
+	width = w; height = h; fps = f;
+	framesize = w*h + 2*(w/2)*(h/2);
+	if(wsecs > 0){
+		f2 := fps;
+		if(f2 <= 0 || f2 > 120)
+			f2 = 25;
+		wframes = wsecs * f2;
+		if(wframes < 8)
+			wframes = 8;
+	}
+}
+
+# Run "os <cmd...>" with its stdout on a pipe; return the read end.
+starthost(cmd: list of string): ref Sys->FD
+{
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0){
+		sys->fprint(stderr, "vid9p: pipe: %r\n");
+		return nil;
+	}
+	spawn hostrun(fds[1], cmd);
+	fds[1] = nil;		# parent keeps only the read end
+	return fds[0];
+}
+
+hostrun(wfd: ref Sys->FD, cmd: list of string)
+{
+	# Private fd table so redirecting stdout does not disturb the server.
+	sys->pctl(Sys->FORKFD, nil);
+	# Detach the child's stdin from the server's fd 0 — when vid9p is a
+	# mounted server, fd 0 IS the 9P channel, and letting the host process
+	# read it would steal bytes from the mount protocol and wedge it.
+	nullfd := sys->open("/dev/null", Sys->OREAD);
+	if(nullfd != nil)
+		sys->dup(nullfd.fd, 0);
+	sys->dup(wfd.fd, 1);
+	wfd = nil;
+	os := load Command "/dis/os.dis";
+	if(os == nil){
+		sys->fprint(stderr, "vid9p: load os: %r\n");
+		return;
+	}
+	os->init(nil, "os" :: cmd);
+}
+
+# Parse a YUV4MPEG2 stream from fd incrementally: header once (emit geometry
+# on geoc), then one FRAME payload at a time onto framec; eofc at end.
+feeder(fd: ref Sys->FD)
+{
+	buf := array[0] of byte;
+	# read the header line
+	(hdr, rest) := readline(fd, buf);
+	if(hdr == nil){
+		geoc <-= (0, 0, 0);
+		eofc <-= 1;
+		return;
+	}
+	(w, h, f) := parsehdr(hdr);
+	if(w <= 0 || h <= 0){
+		geoc <-= (0, 0, 0);
+		eofc <-= 1;
+		return;
+	}
+	geoc <-= (w, h, f);
+	fsz := w*h + 2*(w/2)*(h/2);
+	buf = rest;
+	for(;;){
+		# each frame is "FRAME[ params]\n" then fsz payload bytes
+		(line, r1) := readline(fd, buf);
+		if(line == nil)
+			break;
+		buf = r1;
+		(payload, r2) := readn(fd, buf, fsz);
+		if(payload == nil)
+			break;
+		buf = r2;
+		framec <-= payload;
+	}
+	eofc <-= 1;
+}
+
+# Read up to and including the next '\n' from buf+fd; return (line-without-nl,
+# leftover-after-nl). Returns (nil, ...) at EOF with no data.
+readline(fd: ref Sys->FD, buf: array of byte): (array of byte, array of byte)
+{
+	for(;;){
+		nl := findnl(buf, 0);
+		if(nl < len buf)
+			return (buf[0:nl], buf[nl+1:]);
+		more := readmore(fd);
+		if(more == nil){
+			if(len buf > 0)
+				return (buf, array[0] of byte);
+			return (nil, nil);
+		}
+		buf = cat(buf, more);
+	}
+}
+
+# Ensure n bytes are available; return (n-byte array, leftover). (nil,...) if
+# the stream ends first.
+readn(fd: ref Sys->FD, buf: array of byte, n: int): (array of byte, array of byte)
+{
+	while(len buf < n){
+		more := readmore(fd);
+		if(more == nil)
+			return (nil, nil);
+		buf = cat(buf, more);
+	}
+	return (buf[0:n], buf[n:]);
+}
+
+readmore(fd: ref Sys->FD): array of byte
+{
+	tmp := array[32*1024] of byte;
+	n := sys->read(fd, tmp, len tmp);
+	if(n <= 0)
+		return nil;
+	return tmp[0:n];
+}
+
+cat(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
+}
+
+parsehdr(hdr: array of byte): (int, int, int)
+{
+	if(len hdr < 9 || string hdr[0:9] != "YUV4MPEG2")
+		return (0, 0, 0);
 	w := 0; h := 0; f := 25;
-	(nil, toks) := sys->tokenize(string data[0:nl], " \t");
+	(nil, toks) := sys->tokenize(string hdr, " \t");
 	for(; toks != nil; toks = tl toks){
 		t := hd toks;
 		if(len t < 2)
@@ -186,6 +647,23 @@ loadvideo(path: string): string
 		'F' => f = int t[1:];	# "25:1" -> 25
 		}
 	}
+	return (w, h, f);
+}
+
+# ── static source ───────────────────────────────────────────
+
+# Parse a whole YUV4MPEG2 file into the flat I420 frame buffer.
+loadvideo(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("open %s: %r", path);
+	data := readall(fd);
+	if(len data < 10 || string data[0:9] != "YUV4MPEG2")
+		return sys->sprint("%s: not a YUV4MPEG2 stream", path);
+
+	nl := findnl(data, 0);
+	(w, h, f) := parsehdr(data[0:nl]);
 	if(w <= 0 || h <= 0)
 		return sys->sprint("%s: bad dimensions %dx%d", path, w, h);
 	fsz := w*h + 2*(w/2)*(h/2);
@@ -212,24 +690,49 @@ loadvideo(path: string): string
 		p = ps+fsz;
 	}
 
-	width = w; height = h; fps = f; framesize = fsz; nframes = n; i420 = nb;
+	streaming = 0;
+	eof = 1;
+	width = w; height = h; fps = f; framesize = fsz; nframes = n;
+	i420 = nb; used = len nb;
+	tplaying = 1;
+	follow = 0;
+	pos = 0;
+	fbase = 0;
+	wframes = 0;	# static sources are always fully retained
+	lastadv = 0;
 	return nil;
 }
 
+# Read a whole file.  Allocate once from the stat length — an append loop
+# that reallocates and copies the accumulated buffer per read is O(n^2)
+# and fragments the arena on multi-megabyte .y4m files.  The post-stat
+# doubling loop only runs if the file grew, or for stat-less sources.
 readall(fd: ref Sys->FD): array of byte
 {
-	buf := array[0] of byte;
+	size := 0;
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0 && d.length > big 0)
+		size = int d.length;
+	buf := array[size] of byte;
+	n := 0;
+	while(n < size){
+		r := sys->read(fd, buf[n:], size-n);
+		if(r <= 0)
+			return buf[0:n];
+		n += r;
+	}
 	tmp := array[32*1024] of byte;
 	for(;;){
-		n := sys->read(fd, tmp, len tmp);
-		if(n <= 0)
+		r := sys->read(fd, tmp, len tmp);
+		if(r <= 0)
 			break;
-		nbuf := array[len buf + n] of byte;
-		nbuf[0:] = buf;
-		nbuf[len buf:] = tmp[0:n];
+		nbuf := array[n + r] of byte;
+		nbuf[0:] = buf[0:n];
+		nbuf[n:] = tmp[0:r];
 		buf = nbuf;
+		n += r;
 	}
-	return buf;
+	return buf[0:n];
 }
 
 findnl(d: array of byte, p: int): int

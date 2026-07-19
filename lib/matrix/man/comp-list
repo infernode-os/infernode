@@ -9,7 +9,10 @@ READS
 			/lib/matrix/compositions).
 
 WRITES
-	/mnt/matrix/ctl	"load <name>" when a button is pressed.
+	/mnt/matrix/ctl	"load <name>" when a composition button is
+			pressed; "edit" when the `edit this picker`
+			button is pressed (opens the current composition
+			— the picker itself — in the Lucifer editor).
 
 DESCRIPTION
 	The module behind the default picker composition

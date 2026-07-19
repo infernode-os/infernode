@@ -634,6 +634,14 @@ handlectl(data: string): string
 		return nil;
 	}
 
+	if(data == "edit") {
+		# Open the current composition in the editor — same routine
+		# as the context menu's edit item, reachable over the ctl
+		# wire by sh, agents, and Tk buttons (the picker's uses it).
+		editcurrent();
+		return nil;
+	}
+
 	if(len data > 4 && data[0:4] == "pin ") {
 		name := data[4:];
 		if(!safeleaf(name))
@@ -661,7 +669,7 @@ handlectl(data: string): string
 		return nil;
 	}
 
-	return "usage: load <name>|load -|unload|pin <name>|unpin <name>";
+	return "usage: load <name>|load -|unload|edit|pin <name>|unpin <name>";
 }
 
 safeleaf(s: string): int
@@ -1438,8 +1446,12 @@ guiloop()
 				# clears when the menu tears down (see the wreq arm above).
 				tk->pointer(top, *ptr);
 			} else if(ptr.buttons & 4) {
-				# B3: let the Tk binding fire and post the context menu.
-				menuposted = 1;
+				# B3: forward to Tk so a menu binding can fire — the
+				# canvas's, a hosted frame's, or a module widget's.
+				# menuposted is set when the menu actually posts
+				# (handleaction "menu"): setting it here wedged all
+				# pointer routing whenever the press landed on a
+				# widget with no menu binding and no menu appeared.
 				tk->pointer(top, *ptr);
 				lastbtn1 = 0;
 			} else if(comp == nil || comp.layout == nil) {
@@ -1492,6 +1504,7 @@ handleaction(a: string)
 			x = hd tl toks;
 			y = hd tl tl toks;
 		}
+		menuposted = 1;
 		tk->cmd(top, sys->sprint(".ctx post %s %s", x, y));
 	"m" =>
 		if(tl toks != nil){
@@ -1827,6 +1840,11 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	}
 	w := sys->sprint(".r%d", tkregionseq++);
 	tk->cmd(top, sys->sprint("frame %s", w));
+	# Hosted regions cover the canvas, so the canvas's B3 binding
+	# can't fire over them; the frame carries its own.  (Widgets
+	# the module packs need their own binds — Inferno Tk does not
+	# propagate unhandled events to parents.)
+	tk->cmd(top, sys->sprint("bind %s <Button-3> {send act menu %%X %%Y}", w));
 	itm := tk->cmd(top, sys->sprint(
 		".c create window %d %d -window %s -anchor nw",
 		n.r.min.x, n.r.min.y, w));
@@ -2395,42 +2413,51 @@ domenuitem(action: string)
 		return;
 	}
 	if(action == "edit") {
-		if(comppath == "")
-			return;
-		# Route through luciuisrv's artifact ctl rather than spawning
-		# wm/editor in matrix's own slot.  Each Lucifer app slot has a
-		# single-shot appwm (lucifer.b:appwmrelay reads exactly once);
-		# matrix already consumed its slot for its own window, so
-		# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
-		# leave editor's wmclient->window blocked with no reader.
-		# Letting luciuisrv launch editor gives it its own slot + ctxt.
-		s := readfile("/mnt/ui/activity/current");
-		if(s == nil)
-			s = "0";
-		# Trim trailing whitespace from the activity id read.
-		for(i := len s - 1; i >= 0; i--)
-			if(s[i] != ' ' && s[i] != '\t' &&
-			   s[i] != '\n' && s[i] != '\r') {
-				s = s[0:i+1];
-				break;
-			}
-		pctl := "/mnt/ui/activity/" + s + "/presentation/ctl";
-		cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
-			"label=Edit data=" + comppath;
-		fd := sys->open(pctl, Sys->OWRITE);
-		if(fd == nil) {
-			sys->fprint(stderr, "matrix: cannot open %s: %r\n", pctl);
-			return;
+		editcurrent();
+		return;
+	}
+}
+
+# Open the current composition file in the Lucifer editor.  Shared by
+# the context menu and the ctl "edit" verb (so sh, agents, and Tk
+# buttons like the picker's all reach it over the same wire).
+editcurrent()
+{
+	if(comppath == "")
+		return;
+	# Route through luciuisrv's artifact ctl rather than spawning
+	# wm/editor in matrix's own slot.  Each Lucifer app slot has a
+	# single-shot appwm (lucifer.b:appwmrelay reads exactly once);
+	# matrix already consumed its slot for its own window, so
+	# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
+	# leave editor's wmclient->window blocked with no reader.
+	# Letting luciuisrv launch editor gives it its own slot + ctxt.
+	s := readfile("/mnt/ui/activity/current");
+	if(s == nil)
+		s = "0";
+	# Trim trailing whitespace from the activity id read.
+	for(i := len s - 1; i >= 0; i--)
+		if(s[i] != ' ' && s[i] != '\t' &&
+		   s[i] != '\n' && s[i] != '\r') {
+			s = s[0:i+1];
+			break;
 		}
-		b := array of byte cmd;
-		sys->write(fd, b, len b);
-		fd = nil;
-		# Surface the new editor tab.
-		fd = sys->open(pctl, Sys->OWRITE);
-		if(fd != nil) {
-			cb := array of byte "center id=editor";
-			sys->write(fd, cb, len cb);
-		}
+	pctl := "/mnt/ui/activity/" + s + "/presentation/ctl";
+	cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
+		"label=Edit data=" + comppath;
+	fd := sys->open(pctl, Sys->OWRITE);
+	if(fd == nil) {
+		sys->fprint(stderr, "matrix: cannot open %s: %r\n", pctl);
+		return;
+	}
+	b := array of byte cmd;
+	sys->write(fd, b, len b);
+	fd = nil;
+	# Surface the new editor tab.
+	fd = sys->open(pctl, Sys->OWRITE);
+	if(fd != nil) {
+		cb := array of byte "center id=editor";
+		sys->write(fd, cb, len cb);
 	}
 }
 

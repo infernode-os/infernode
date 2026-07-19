@@ -83,13 +83,38 @@ init(top: ref Toplevel, prefix, mount: string): string
 	evch = chan of string;
 	tk->namechan(top, evch, chname);
 
+	# NB pack order is load-bearing: the bottom edit button must be
+	# packed BEFORE the expanding list, or the list frame claims the
+	# whole remaining area and the button — though drawn on top —
+	# loses the hit test to it.
 	cmds := array[] of {
 		sys->sprint("label %s.title -text {Matrix — click a composition to load}", prefix),
-		sys->sprint("label %s.hint -text {(this picker is itself the `picker` crystallisation — edit it)}", prefix),
+		sys->sprint("label %s.hint -text {(this picker is itself the `picker` crystallisation — press `edit this picker` to change it)}", prefix),
+		# The picker edits ITSELF: a real Tk button writing the ctl
+		# "edit" verb — the same wire sh and agents use.  (The B3
+		# context menu is currently unreliable in hosted windows —
+		# the button is the doctrine-pure path regardless.)
+		# The button lives in a subframe like video-ctl's buttons:
+		# direct children of a canvas-hosted frame have shown hit
+		# zones offset from their pixels (parked libtk canvas
+		# window-item defect); one level down the geometry behaves.
+		sys->sprint("frame %s.bar", prefix),
+		sys->sprint("button %s.bar.edit -text {edit this picker} -command {send %s -1}", prefix, chname),
 		sys->sprint("frame %s.list", prefix),
 		sys->sprint("pack %s.title -side top -anchor w -padx 8 -pady 4", prefix),
 		sys->sprint("pack %s.hint -side top -anchor w -padx 8", prefix),
+		# The bar sits at the top, in territory whose routing is
+		# exercised every day by the tiles right below it.
+		sys->sprint("pack %s.bar.edit -side left -padx 8 -pady 2 -ipadx 8 -ipady 5", prefix),
+		sys->sprint("pack %s.bar -side top -fill x", prefix),
 		sys->sprint("pack %s.list -side top -fill both -expand 1 -padx 8 -pady 6", prefix),
+		# Matrix's context menu posts via the toplevel's "act"
+		# channel; Inferno Tk does not propagate unhandled events to
+		# parent widgets, so every widget that covers picker ground
+		# carries the B3 binding itself.
+		sys->sprint("bind %s.title <Button-3> {send act menu %%X %%Y}", prefix),
+		sys->sprint("bind %s.hint <Button-3> {send act menu %%X %%Y}", prefix),
+		sys->sprint("bind %s.list <Button-3> {send act menu %%X %%Y}", prefix),
 	};
 	for(i = 0; i < len cmds; i++) {
 		e := tk->cmd(top, cmds[i]);
@@ -110,18 +135,22 @@ evloop()
 	<-stopch =>
 		return;
 	ev := <-evch =>
+		# NB numeric payloads only: Tk `send` did not deliver word
+		# payloads ("send ch edit" never arrived; "send ch -1" does).
 		i := int ev;
-		if(i >= 0 && i < len names)
-			ctlload(names[i]);
+		if(i == -1)
+			ctlwrite("edit");
+		else if(i >= 0 && i < len names)
+			ctlwrite("load " + names[i]);
 	}
 }
 
-ctlload(name: string)
+ctlwrite(cmd: string)
 {
 	fd := sys->open("/mnt/matrix/ctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
-	b := array of byte ("load " + name);
+	b := array of byte cmd;
 	sys->write(fd, b, len b);
 }
 
@@ -148,20 +177,30 @@ rescan(): int
 # Rebuild the button column to match the library.
 rebuild()
 {
-	tk->cmd(top_g, "destroy " + prefix_g + ".list");
-	tk->cmd(top_g, sys->sprint("frame %s.list", prefix_g));
+	tkc("destroy " + prefix_g + ".list");
+	tkc(sys->sprint("frame %s.list", prefix_g));
 	for(i := 0; i < len names; i++) {
-		tk->cmd(top_g, sys->sprint(
+		tkc(sys->sprint(
 			"button %s.list.b%d -text {%s} -anchor w -command {send %s %d}",
 			prefix_g, i, names[i], chname, i));
+		tkc(sys->sprint(
+			"bind %s.list.b%d <Button-3> {send act menu %%X %%Y}",
+			prefix_g, i));
 		# -ipadx/-ipady grow the buttons themselves — real touch
 		# surfaces (44pt/48dp-convention targets), not just spacing.
-		tk->cmd(top_g, sys->sprint(
+		tkc(sys->sprint(
 			"pack %s.list.b%d -side top -fill x -pady 2 -ipadx 8 -ipady 5",
 			prefix_g, i));
 	}
-	tk->cmd(top_g, sys->sprint(
+	tkc(sys->sprint(
 		"pack %s.list -side top -fill both -expand 1 -padx 8 -pady 6", prefix_g));
+}
+
+tkc(cmd: string)
+{
+	e := tk->cmd(top_g, cmd);
+	if(e != nil && len e > 0 && e[0] == '!')
+		sys->fprint(sys->fildes(2), "comp-list: tk %s on %s\n", e, cmd);
 }
 
 resize(nil: Draw->Rect)

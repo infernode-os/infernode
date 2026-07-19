@@ -10,14 +10,31 @@ implement Vid9p;
 #   /mnt/video/0/ctl      write "open <file.y4m>"  load a static .y4m file
 #                         write "play <cmd> [arg..]" spawn a host decoder
 #                               (via os) and stream its y4m stdout live
+#                         write "play" / "pause" / "stop" /
+#                               "seek <ms>|+<ms>|-<ms>" / "live"
+#                               drive the SERVER-side playhead (transport)
 #   /mnt/video/0/fmt      read  "<w> <h> i420 <fps>"
 #   /mnt/video/0/frame    read  the I420 stream: frame N is the framesize
 #                               bytes at offset N*framesize (framesize =
-#                               w*h*3/2). A player reads framesize-byte
-#                               chunks in sequence. For a LIVE stream a read
-#                               past the last decoded frame BLOCKS until the
-#                               next frame arrives (or the stream ends).
-#   /mnt/video/0/status   read  human-readable state
+#                               w*h*3/2), offsets GLOBAL and monotonic.
+#                               For a LIVE stream a read past the last
+#                               decoded frame BLOCKS until the next frame
+#                               arrives (or the stream ends); a read below
+#                               the retention window errors "frame expired".
+#   /mnt/video/0/status   read  one line of key=value state: geometry,
+#                               frames=/first= (retained range), eof=,
+#                               state=/pos=/t=/follow= (playhead)
+#
+# TRANSPORT: the playhead (state=/pos=) lives in this server and is paced
+# here at the stream's fps, so every consumer renders the same frame and
+# anything that can write a file drives playback — a Matrix video-ctl Tk
+# button, a video-pane's keys, an agent, or plain sh:
+#     echo pause > /mnt/video/0/ctl
+#     echo 'seek +5000' > /mnt/video/0/ctl
+#
+# RETENTION: a live feed keeps the last -w seconds of frames (default 60,
+# 0 = unlimited) as its DVR buffer; the window slides and reads below
+# first= error.  Static sources are always fully retained.
 #
 # Two source modes share one server:
 #   - static  (`open`): the whole .y4m is read into the frame buffer and
@@ -30,8 +47,9 @@ implement Vid9p;
 #     stays protocol-agnostic (see docs/H264-9P-BRIDGE.md).
 #
 # Usage (in the Inferno shell):
-#   mount {vid9p clip.y4m}                    /mnt/video   # static
-#   mount {vid9p -c vdec cam.mp4 --y4m /fd/1} /mnt/video   # live
+#   mount {vid9p clip.y4m}                        /mnt/video   # static
+#   mount {vid9p -c vdec cam.mp4 --y4m -}         /mnt/video   # live
+#   mount {vid9p -w 120 -c vdec rtsp://cam --y4m -} /mnt/video # 2 min DVR
 #
 
 include "sys.m";
@@ -75,6 +93,15 @@ follow := 1;		# streaming source: playhead tracks the live edge
 pos := 0;		# playhead frame index
 lastadv := 0;		# wall-clock pacing origin (sys->millisec)
 tickc: chan of int;
+
+# live retention window: a live feed retains the last `wframes` decoded
+# frames (the DVR buffer) instead of growing without bound.  Frame
+# indices and byte offsets stay GLOBAL and monotonic — fbase is the
+# oldest retained frame; reads below it answer "frame expired".  Static
+# sources are always fully retained (wframes = 0 = unlimited).
+fbase := 0;		# index of the oldest retained frame
+wsecs := 60;		# -w: live retention in seconds; 0 = unlimited
+wframes := 0;		# retention in frames (from wsecs once fps is known)
 eof := 1;			# static sources are complete from the start
 streaming := 0;
 
@@ -112,9 +139,17 @@ init(nil: ref Draw->Context, args: list of string)
 	eofc = chan of int;
 	geoc = chan of (int, int, int);
 
-	# args: "-c <cmd> [arg...]" for a live decoder, else an optional
-	# static .y4m file.
+	# args: [-w secs] then "-c <cmd> [arg...]" for a live decoder, else
+	# an optional static .y4m file.  -w bounds a live feed's retention
+	# (DVR) window; 0 = unlimited.
 	args = tl args;
+	if(args != nil && hd args == "-w") {
+		args = tl args;
+		if(args != nil) {
+			wsecs = int hd args;
+			args = tl args;
+		}
+	}
 	if(args != nil && hd args == "-c") {
 		cmd := tl args;
 		if(cmd == nil)
@@ -184,6 +219,8 @@ advance()
 		else
 			pos = nframes - 1;	# ahead of the decoder: hold
 	}
+	if(pos < fbase)
+		pos = fbase;	# the retention window slid past the playhead
 }
 
 serve(tree: ref Tree)
@@ -266,18 +303,59 @@ grow(fr: array of byte)
 	i420[used:] = fr;
 	used += len fr;
 	if(framesize > 0)
-		nframes = used / framesize;
+		nframes = fbase + used / framesize;
+
+	# retention window: drop the oldest frames once the live buffer
+	# exceeds it.  Trimmed in quarter-window chunks so the copy cost
+	# amortises to a few bytes per byte served.
+	if(wframes > 0 && framesize > 0) {
+		excess := used/framesize - wframes;
+		if(excess >= wframes/4 && excess > 0) {
+			nb := array[len i420] of byte;
+			nb[0:] = i420[excess*framesize:used];
+			i420 = nb;
+			used -= excess*framesize;
+			fbase += excess;
+			if(pos < fbase)
+				pos = fbase;
+		}
+	}
 }
 
 # Reply to a frame read now if data (or EOF) allows, else park it until the
 # next frame arrives. This unifies both source modes: a static source has
 # eof=1 so reads are always answered immediately (past-end -> 0 bytes = EOF);
 # a live source parks reads that run ahead of the decoder.
+# Answer a frame read if the retained data (or EOF) allows; return 0 to
+# park it until the next frame arrives.  Offsets are GLOBAL stream bytes:
+# the retained window is [fbase*framesize, fbase*framesize+used); reads
+# below it name frames the retention window has dropped.
+replyframe(tm: ref Tmsg.Read): int
+{
+	base := big fbase * big framesize;
+	off := tm.offset;
+	if(off < base) {
+		srv.reply(ref Rmsg.Error(tm.tag, "frame expired (retention window)"));
+		return 1;
+	}
+	if(off >= base + big used) {
+		if(eof) {
+			srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
+			return 1;
+		}
+		return 0;
+	}
+	rel := int (off - base);
+	n := tm.count;
+	if(rel + n > used)
+		n = used - rel;
+	srv.reply(ref Rmsg.Read(tm.tag, i420[rel:rel+n]));
+	return 1;
+}
+
 serviceframe(tm: ref Tmsg.Read)
 {
-	if(int tm.offset < used || eof)
-		srv.reply(styxservers->readbytes(tm, i420[0:used]));
-	else
+	if(!replyframe(tm))
 		parked = tm :: parked;
 }
 
@@ -286,9 +364,7 @@ wakeparked()
 	still: list of ref Tmsg.Read;
 	for(p := parked; p != nil; p = tl p){
 		tm := hd p;
-		if(int tm.offset < used || eof)
-			srv.reply(styxservers->readbytes(tm, i420[0:used]));
-		else
+		if(!replyframe(tm))
 			still = tm :: still;
 	}
 	parked = still;
@@ -314,8 +390,8 @@ statusstr(): string
 	if(f <= 0 || f > 120)
 		f = 25;
 	t = pos * 1000 / f;
-	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d eof=%d state=%s pos=%d t=%d follow=%d\n",
-		src, width, height, framesize, nframes, eof, st, pos, t, follow);
+	return sys->sprint("%s w=%d h=%d framesize=%d frames=%d first=%d eof=%d state=%s pos=%d t=%d follow=%d\n",
+		src, width, height, framesize, nframes, fbase, eof, st, pos, t, follow);
 }
 
 ctlhelp(): string
@@ -381,8 +457,8 @@ doctl(s: string)
 				pos += d;
 			else
 				pos = d;
-			if(pos < 0)
-				pos = 0;
+			if(pos < fbase)
+				pos = fbase;
 			follow = 0;
 			if(nframes > 0 && pos >= nframes-1){
 				pos = nframes - 1;
@@ -415,6 +491,8 @@ startstream(cmd: list of string)
 	tplaying = 1;
 	follow = 1;
 	pos = 0;
+	fbase = 0;
+	wframes = 0;
 	lastadv = 0;
 	spawn feeder(fd);
 	(w, h, f) := <-geoc;
@@ -426,6 +504,14 @@ startstream(cmd: list of string)
 	}
 	width = w; height = h; fps = f;
 	framesize = w*h + 2*(w/2)*(h/2);
+	if(wsecs > 0){
+		f2 := fps;
+		if(f2 <= 0 || f2 > 120)
+			f2 = 25;
+		wframes = wsecs * f2;
+		if(wframes < 8)
+			wframes = 8;
+	}
 }
 
 # Run "os <cmd...>" with its stdout on a pipe; return the read end.
@@ -611,6 +697,8 @@ loadvideo(path: string): string
 	tplaying = 1;
 	follow = 0;
 	pos = 0;
+	fbase = 0;
+	wframes = 0;	# static sources are always fully retained
 	lastadv = 0;
 	return nil;
 }

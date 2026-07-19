@@ -114,15 +114,20 @@ def run_emu(emu, timeout):
                 break
     finally:
         if p.poll() is None:
+            # Reap the whole process group; tolerate the group already being gone
+            # or reparented (killpg can raise ProcessLookupError/PermissionError —
+            # the latter must NOT crash the batch). Fall back to killing the child.
             try:
-                os.killpg(p.pid, signal.SIGTERM)
-                p.wait(timeout=5)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
                 try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    p.kill()
+                except OSError:
                     pass
-                p.wait()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
     rc = p.returncode if p.returncode is not None else -1
     return "".join(lines), rc, done, (killed and not done), time.monotonic() - t0
 
@@ -376,10 +381,13 @@ def main():
         for attempt in range(1, 4):
             out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
             st = parse_state(out)
-            crashed = (not completed) and (not killed)
-            if not crashed or attempt == 3:
+            # Flakes to retry (not real results): emu exited before finishing and
+            # we didn't time it out (segfault); or a degraded boot left the mock
+            # message plane unmounted.
+            flaked = ((not completed) and (not killed)) or ("msg-inbox FAILED" in out)
+            if not flaked or attempt == 3:
                 break
-            print(f"[emu crash-flake, retry {attempt}] ", end="", flush=True)
+            print(f"[boot flake, retry {attempt}] ", end="", flush=True)
         if not args.no_record:
             (outdir / f"{name}.trajectory.log").write_text(out)  # full session record
         ok, reasons, reply = score(sc, st, completed, killed)

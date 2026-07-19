@@ -86,7 +86,15 @@ if {~ $msgmode inbox watch} {
 	/dis/veltro/msg9p.dis >[2] /dev/null &
 	sleep 1
 	echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
-	echo '@@GRIND msg-inbox registered'
+	sleep 1
+	# Verify the mock inbox is actually reachable — occasionally a degraded boot
+	# leaves /mnt unmounted and the whole message plane silently absent. The host
+	# retries this as a flake rather than scoring a real agent failure.
+	if {ftest -f /mnt/msg/status} {
+		echo '@@GRIND msg-inbox registered'
+	}{
+		echo '@@GRIND msg-inbox FAILED /mnt/msg not available (degraded boot)'
+	}
 }
 
 # Matrix runtime (conditional): pre-start headless so /mnt/matrix exists for the

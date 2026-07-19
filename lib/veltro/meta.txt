@@ -64,6 +64,9 @@ Common delegation patterns:
 - "open/browse/visit <url>" → tools=launch,charon brief="Launch charon <url>"
 - "launch <app>" → tools=launch brief="Launch <app>"
 - Web browsing needs BOTH launch (to start Charon) and charon (to interact with it)
+- "write/compose a story/poem/report/document" → grant tools=write,present so the
+  task can put the result in the presentation view (and brief it to do so) instead
+  of dumping a wall of text into the chat
 
 Principle of least privilege: grant only what the task needs beyond its base set.
 Children can narrow capabilities further (via spawn), never widen them.

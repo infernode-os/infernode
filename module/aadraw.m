@@ -21,4 +21,7 @@ AAdraw: module
 	# ellipse ring (outline width w) and filled disc, semi-axes a,b
 	ring:	fn(dst: ref Draw->Image, c: Draw->Point, a, b, w: int, src: ref Draw->Image);
 	disc:	fn(dst: ref Draw->Image, c: Draw->Point, a, b: int, src: ref Draw->Image);
+
+	# filled polygon with anti-aliased edges (even-odd fill rule)
+	fillpoly:	fn(dst: ref Draw->Image, pts: array of Draw->Point, src: ref Draw->Image);
 };

@@ -161,3 +161,64 @@ ell(dst: ref Image, c: Point, a, b, w: int, src: ref Image)
 	}
 	cover(dst, bb, src, cov);
 }
+
+# Filled polygon, anti-aliased: signed distance to the outline —
+# even-odd inside test, minus distance to the nearest edge inside,
+# plus outside — clamped over the one-pixel band.
+fillpoly(dst: ref Image, pts: array of Point, src: ref Image)
+{
+	if(len pts < 3)
+		return;
+	bb := Rect(pts[0], pts[0]);
+	for(i := 1; i < len pts; i++) {
+		if(pts[i].x < bb.min.x) bb.min.x = pts[i].x;
+		if(pts[i].y < bb.min.y) bb.min.y = pts[i].y;
+		if(pts[i].x > bb.max.x) bb.max.x = pts[i].x;
+		if(pts[i].y > bb.max.y) bb.max.y = pts[i].y;
+	}
+	bb = clipbb(dst, bb.inset(-2));
+	W := bb.dx(); H := bb.dy();
+	if(W <= 0 || H <= 0)
+		return;
+	n := len pts;
+	xs := array[n] of real;
+	ys := array[n] of real;
+	for(i = 0; i < n; i++) {
+		xs[i] = real (pts[i].x - bb.min.x);
+		ys[i] = real (pts[i].y - bb.min.y);
+	}
+	cov := array[W*H] of { * => byte 0 };
+	for(y := 0; y < H; y++)
+	for(x := 0; x < W; x++) {
+		px := real x + 0.5; py := real y + 0.5;
+		inside := 0;
+		dmin := 1.0e9;
+		j := n - 1;
+		for(i = 0; i < n; j = i++) {
+			# even-odd crossing test
+			if((ys[i] > py) != (ys[j] > py) &&
+			   px < (xs[j] - xs[i]) * (py - ys[i]) / (ys[j] - ys[i]) + xs[i])
+				inside = !inside;
+			# distance to edge segment
+			vx := xs[j] - xs[i]; vy := ys[j] - ys[i];
+			len2 := vx*vx + vy*vy;
+			t := 0.0;
+			if(len2 > 0.0) {
+				t = ((px - xs[i])*vx + (py - ys[i])*vy) / len2;
+				if(t < 0.0) t = 0.0;
+				else if(t > 1.0) t = 1.0;
+			}
+			dx := px - (xs[i] + t*vx); dy := py - (ys[i] + t*vy);
+			d2 := dx*dx + dy*dy;
+			if(d2 < dmin)
+				dmin = d2;
+		}
+		d := math->sqrt(dmin);
+		if(inside)
+			d = -d;
+		c := cov01(d);
+		if(c > cov[y*W+x])
+			cov[y*W+x] = c;
+	}
+	cover(dst, bb, src, cov);
+}

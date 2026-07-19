@@ -402,8 +402,12 @@ drawfeature(dst: ref Image, f: ref Feature)
 			dst.ellipse(c, rad, rad, f.width, col, (0, 0));
 	"polygon" =>
 		pa := projpts(f.pts);
-		if(f.fill != 0)
-			dst.fillpoly(pa, 0, display_g.color(f.fill), (0, 0));
+		if(f.fill != 0) {
+			if(aad != nil)
+				aad->fillpoly(dst, pa, display_g.color(f.fill));
+			else
+				dst.fillpoly(pa, 0, display_g.color(f.fill), (0, 0));
+		}
 		closed := array[len pa + 1] of Point;
 		closed[0:] = pa;
 		closed[len pa] = pa[0];
@@ -484,12 +488,20 @@ glyph(dst: ref Image, p: Point, kind: string, col: ref Image)
 	case kind {
 	"air" =>		# triangle, apex up
 		pa := array[] of {Point(p.x, p.y - 6), Point(p.x - 6, p.y + 5), Point(p.x + 6, p.y + 5)};
-		dst.fillpoly(pa, 0, col, (0, 0));
-		dst.poly(array[] of {pa[0], pa[1], pa[2], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		if(aad != nil)
+			aad->fillpoly(dst, pa, col);
+		else {
+			dst.fillpoly(pa, 0, col, (0, 0));
+			dst.poly(array[] of {pa[0], pa[1], pa[2], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		}
 	"sea" or "subsurface" =>	# diamond
 		pa := array[] of {Point(p.x, p.y - 6), Point(p.x - 6, p.y), Point(p.x, p.y + 6), Point(p.x + 6, p.y)};
-		dst.fillpoly(pa, 0, col, (0, 0));
-		dst.poly(array[] of {pa[0], pa[1], pa[2], pa[3], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		if(aad != nil)
+			aad->fillpoly(dst, pa, col);
+		else {
+			dst.fillpoly(pa, 0, col, (0, 0));
+			dst.poly(array[] of {pa[0], pa[1], pa[2], pa[3], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		}
 	"ground" or "installation" =>	# square
 		dst.draw(Rect((p.x - 5, p.y - 5), (p.x + 6, p.y + 6)), col, nil, (0, 0));
 		dst.line((p.x - 6, p.y - 6), (p.x + 6, p.y - 6), 0, 0, 0, aoutline, (0, 0));

@@ -899,7 +899,7 @@ pcolr(TkTop *t, TkOption *o, void *place, char **str, char *buf, char *ebuf)
 {
 	TkEnv *env;
 	char *e;
-	ulong rgba, dark, light;
+	ulong rgba;
 	int color, setcol;
 
 	*str = tkword(t, *str, buf, ebuf, nil);
@@ -927,8 +927,6 @@ pcolr(TkTop *t, TkOption *o, void *place, char **str, char *buf, char *ebuf)
 	 * HSV light/dark shades reintroduced a 3D bevel on any widget
 	 * given -background, breaking the uniform hard frame.
 	 */
-	USED(light);
-	USED(dark);
 	return nil;
 }
 

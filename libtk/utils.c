@@ -443,6 +443,118 @@ tkrgbashade(ulong rgba, int shade)
 	return tkrgba(R, G, B, A);
 }
 
+/*
+ * Anti-aliased coverage rendering.  The compositor has always blended
+ * greyscale coverage — that is how every glyph is drawn; the geometric
+ * primitives just never generated any.  These helpers close that gap:
+ * build a GREY8 coverage mask over a bounding box (integer 4x4
+ * supersampling in 1/8th-pixel fixed point, no float dependency) and
+ * blend the source through it exactly as text is blended.
+ */
+void
+tkaacover(Image *img, Rectangle bb, Image *src, uchar *cov)
+{
+	Image *m;
+
+	if(src == nil || Dx(bb) <= 0 || Dy(bb) <= 0)
+		return;
+	m = allocimage(img->display, Rect(0, 0, Dx(bb), Dy(bb)), GREY8, 0, DTransparent);
+	if(m == nil)
+		return;
+	loadimage(m, m->r, cov, Dx(bb)*Dy(bb));
+	gendraw(img, bb, src, bb.min, m, ZP);
+	freeimage(m);
+}
+
+/*
+ * Ellipse coverage into cov (W x H bytes): centre (cx8,cy8), semi-axes
+ * (a8,b8), all in 1/8th-pixel units.  inw8 > 0 hollows an annulus of
+ * that width (an outline ring).  Overwrites cov.
+ */
+void
+tkaacovellipse(uchar *cov, int W, int H, int cx8, int cy8, int a8, int b8, int inw8)
+{
+	int x, y, sx, sy, hit, fx, fy, ia8, ib8;
+	vlong a2, b2, ia2, ib2, qx, qy;
+
+	a2 = (vlong)a8*a8;
+	b2 = (vlong)b8*b8;
+	ia8 = a8 - inw8;
+	ib8 = b8 - inw8;
+	if(ia8 < 0)
+		ia8 = 0;
+	if(ib8 < 0)
+		ib8 = 0;
+	ia2 = (vlong)ia8*ia8;
+	ib2 = (vlong)ib8*ib8;
+	for(y = 0; y < H; y++){
+		for(x = 0; x < W; x++){
+			hit = 0;
+			for(sy = 0; sy < 4; sy++)
+			for(sx = 0; sx < 4; sx++){
+				fx = 8*x + 2*sx + 1 - cx8;
+				fy = 8*y + 2*sy + 1 - cy8;
+				qx = (vlong)fx*fx;
+				qy = (vlong)fy*fy;
+				if(qx*b2 + qy*a2 > a2*b2)
+					continue;
+				if(inw8 > 0 && ia2 > 0 && ib2 > 0)
+				if(qx*ib2 + qy*ia2 <= ia2*ib2)
+					continue;	/* inside the ring's hole */
+				hit++;
+			}
+			cov[y*W+x] = hit*255/16;
+		}
+	}
+}
+
+/*
+ * Max-accumulate the coverage of one line segment with round caps:
+ * distance from (x08,y08)-(x18,y18) <= r8, 1/8th-pixel units.  Call
+ * per segment of a polyline over the same cov to union them.
+ */
+void
+tkaacovseg(uchar *cov, int W, int H, int x08, int y08, int x18, int y18, int r8)
+{
+	int x, y, sx, sy, hit, c, px, py;
+	vlong vx, vy, len2, t, qx, qy, dx, dy, r2;
+
+	vx = x18 - x08;
+	vy = y18 - y08;
+	len2 = vx*vx + vy*vy;
+	r2 = (vlong)r8*r8;
+	for(y = 0; y < H; y++){
+		for(x = 0; x < W; x++){
+			hit = 0;
+			for(sy = 0; sy < 4; sy++)
+			for(sx = 0; sx < 4; sx++){
+				px = 8*x + 2*sx + 1;
+				py = 8*y + 2*sy + 1;
+				t = (vlong)(px - x08)*vx + (vlong)(py - y08)*vy;
+				if(t < 0)
+					t = 0;
+				else if(t > len2)
+					t = len2;
+				if(len2 > 0){
+					qx = x08 + t*vx/len2;
+					qy = y08 + t*vy/len2;
+				} else {
+					qx = x08;
+					qy = y08;
+				}
+				dx = px - qx;
+				dy = py - qy;
+				if(dx*dx + dy*dy > r2)
+					continue;
+				hit++;
+			}
+			c = hit*255/16;
+			if(c > cov[y*W+x])
+				cov[y*W+x] = c;
+		}
+	}
+}
+
 Image*
 tkgshade(TkEnv *e, int col, int shade)
 {
@@ -1071,10 +1183,6 @@ tkdeliver(Tk *tk, int event, void *data)
 //print("tkdeliver %v to %s\n", event, tkname(tk));
 	if(tk == nil || ((tk->flag&Tkdestroy) && event != TkDestroy))
 		return tk;
-	/* XXX diagnostic (remove): log which widget receives each press,
-	 * pairing with matrix's routing trace to localise dead widgets */
-	if(event & TkButton1P)
-		print("tk: b1p -> %s\n", tkname(tk));
 	if(event&(TkFocusin|TkFocusout) && (tk->flag&Tktakefocus))
 		tk->dirty = tkrect(tk, 1);
 

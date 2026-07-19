@@ -318,6 +318,17 @@ else
     fail "message ctl delegation-denial test failed"
 fi
 
+if emu_c "provision_control_descendants_denied" 14 \
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; mkdir /mnt/msg/ctl >[2] /dev/null; touch /mnt/msg/ctl/session; mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/new >[2] /dev/null; touch /n/wallet/new/session; tools9p -p /mnt/msg:rw -p /n/wallet:rw read task & sleep 3; echo '21 paths=/mnt/msg/ctl/session:rw,/n/wallet/new/session:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.21/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/ctl/session" || echo "$OUTPUT" | grep -q "^/n/wallet/new/session"; then
+        fail "broad parent grants must not mint trusted control descendants"
+    else
+        pass "child cannot derive trusted control descendants from broad parents"
+    fi
+else
+    fail "control descendant delegation-denial test failed"
+fi
+
 if emu_c "provision_wallet_controls_denied" 14 \
     "mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; touch /n/wallet/ctl; touch /n/wallet/pending; touch /n/wallet/new; tools9p -p /n/wallet:rw read task & sleep 3; echo '17 paths=/n/wallet/ctl:rw,/n/wallet/pending:rw,/n/wallet/new:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
     if echo "$OUTPUT" | grep -q "^/n/wallet/\\(ctl\\|pending\\|new\\)"; then
@@ -341,11 +352,11 @@ else
 fi
 
 if emu_c "provision_ui_ctl_denied" 14 \
-    "mkdir /mnt >[2] /dev/null; mkdir /mnt/ui >[2] /dev/null; touch /mnt/ui/ctl; tools9p -p /mnt/ui:rw read task & sleep 3; echo '19 paths=/mnt/ui/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.19/paths"; then
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/ui >[2] /dev/null; touch /mnt/ui/ctl; tools9p read task & sleep 3; echo '19 paths=/mnt/ui/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.19/paths"; then
     if echo "$OUTPUT" | grep -q "^/mnt/ui/ctl"; then
-        fail "bare /mnt/ui grant must not mint the trusted UI ctl capability"
+        fail "task's fixed UI capability must not mint the trusted UI ctl capability"
     else
-        pass "child cannot derive /mnt/ui/ctl from bare /mnt/ui"
+        pass "child cannot derive /mnt/ui/ctl from task's fixed UI capability"
     fi
 else
     fail "UI ctl delegation-denial test failed"
@@ -450,10 +461,10 @@ else
 fi
 
 if emu_c "bindpath_privileged_rejected" 12 \
-    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/alice >[2] /dev/null; touch /n/wallet/alice/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "mkdir -p /mnt/ui/activity/0/presentation /mnt/msg/ctl /n/wallet/alice/ctl /n/wallet/new /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; touch /mnt/msg/ctl/session; touch /n/wallet/alice/ctl/session; touch /n/wallet/new/session; touch /tmp/veltro/ftree/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/ui:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/ui/activity/0/presentation:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl/session' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl/session' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/new/session' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/ftree:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/.ns:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/cow:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/tasks:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/browser:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/editor:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/shell:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/fractal:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/man:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "privileged bindpath probe did not establish a valid baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl"; then
+    elif echo "$OUTPUT" | grep -q "^/mnt/ui" || echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/new/session" || echo "$OUTPUT" | grep -q "^/tmp/veltro/ftree" || echo "$OUTPUT" | grep -q "^/tmp/veltro/.ns" || echo "$OUTPUT" | grep -q "^/tmp/veltro/cow" || echo "$OUTPUT" | grep -q "^/tmp/veltro/tasks" || echo "$OUTPUT" | grep -q "^/tmp/veltro/browser" || echo "$OUTPUT" | grep -q "^/tmp/veltro/editor" || echo "$OUTPUT" | grep -q "^/tmp/veltro/shell" || echo "$OUTPUT" | grep -q "^/tmp/veltro/fractal" || echo "$OUTPUT" | grep -q "^/tmp/veltro/man"; then
         fail "bindpath accepted privileged control path (output: $OUTPUT)"
     else
         pass "bindpath rejects privileged control paths"
@@ -463,14 +474,68 @@ else
 fi
 
 if emu_c "startup_privileged_path_rejected" 12 \
-    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; touch /mnt/msg/ctl; tools9p -p /mnt/msg/ctl:rw read; cat /tool/paths >[2] /dev/null"; then
-    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/msg/ctl"; then
+    "mkdir -p /mnt/ui/activity/0/presentation /mnt/msg /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; touch /mnt/msg/ctl; touch /tmp/veltro/ftree/ctl; tools9p -p /mnt/ui:rw -p /mnt/ui/activity/0/presentation:rw -p /mnt/msg/ctl:rw -p /tmp/veltro/ftree:rw -p /tmp/veltro/.ns:rw -p /tmp/veltro/cow:rw -p /tmp/veltro/tasks:rw -p /tmp/veltro/browser:rw -p /tmp/veltro/editor:rw -p /tmp/veltro/shell:rw -p /tmp/veltro/fractal:rw -p /tmp/veltro/man:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/ui" && ! echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/ftree" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/.ns" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/cow" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/tasks" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/browser" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/editor" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/shell" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/fractal" && ! echo "$OUTPUT" | grep -q "^/tmp/veltro/man"; then
         pass "startup -p rejects privileged control paths"
     else
         fail "tools9p accepted privileged startup -p path (output: $OUTPUT)"
     fi
 else
     fail "startup privileged path rejection probe failed"
+fi
+
+if emu_c "bindpath_fixed_service_rejected" 12 \
+    "mkdir -p /mnt/matrix /phone; touch /mnt/matrix/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
+        fail "fixed-service bindpath probe did not establish a valid baseline (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/phone"; then
+        fail "bindpath accepted a fixed-service control tree (output: $OUTPUT)"
+    else
+        pass "bindpath rejects Matrix and phone service trees"
+    fi
+else
+    fail "fixed-service bindpath rejection probe failed"
+fi
+
+if emu_c "startup_fixed_service_rejected" 12 \
+    "mkdir -p /mnt/matrix /phone; touch /mnt/matrix/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/phone"; then
+        pass "startup -p rejects Matrix and phone service trees"
+    else
+        fail "startup -p accepted a fixed-service control tree (output: $OUTPUT)"
+    fi
+else
+    fail "fixed-service startup rejection probe failed"
+fi
+
+if emu_c "fixed_service_tool_derived" 15 \
+    "mkdir -p /mnt/matrix /phone; touch /mnt/matrix/ctl /phone/sms; tools9p sms matrix read & sleep 2; echo '15551234 test' > /tool/sms/ctl; cat /tool/sms/ctl; echo PHONE; cat /phone/sms; echo status > /tool/matrix/ctl; cat /tool/matrix/ctl; echo /phone/sms > /tool/read/ctl; echo GENERIC; cat /tool/read/ctl"; then
+    if ! echo "$OUTPUT" | grep -q "sms: queued to 15551234" ||
+       ! echo "$OUTPUT" | grep -q "send 15551234 test" ||
+       ! echo "$OUTPUT" | grep -q "runtime:"; then
+        fail "fixed tools lost their derived Matrix/phone capabilities (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "error: cannot open /phone/sms"; then
+        fail "generic read inherited the phone tool's derived capability (output: $OUTPUT)"
+    else
+        pass "fixed tools receive Matrix/phone while generic read remains isolated"
+    fi
+else
+    fail "fixed-service derived capability probe failed"
+fi
+
+if emu_c "app_ipc_tool_derived" 15 \
+    "mkdir -p /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; echo shell-transcript > /tmp/veltro/shell/body; echo shell-input > /tmp/veltro/shell/input; echo 'type mandelbrot' > /tmp/veltro/fractal/state; echo 'fractal view' > /tmp/veltro/fractal/view; echo 'man state' > /tmp/veltro/man/state; echo 'manual page view' > /tmp/veltro/man/view; tools9p shell fractal man read & sleep 2; echo read > /tool/shell/ctl; cat /tool/shell/ctl; echo state > /tool/fractal/ctl; cat /tool/fractal/ctl; echo view > /tool/man/ctl; cat /tool/man/ctl; echo /tmp/veltro/shell/body > /tool/read/ctl; echo GENERIC; cat /tool/read/ctl"; then
+    if ! echo "$OUTPUT" | grep -q "shell-transcript" ||
+       ! echo "$OUTPUT" | grep -q "type mandelbrot" ||
+       ! echo "$OUTPUT" | grep -q "manual page view"; then
+        fail "fixed app tools lost their derived IPC capabilities (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "error: cannot open /tmp/veltro/shell/body"; then
+        fail "generic read inherited an app IPC derived capability (output: $OUTPUT)"
+    else
+        pass "fixed app tools receive IPC paths while generic read remains isolated"
+    fi
+else
+    fail "app IPC derived capability probe failed"
 fi
 
 if emu_c "startup_direct_send_path_rejected" 12 \

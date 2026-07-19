@@ -134,10 +134,16 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
-	err := validatepaths(caps.paths, "path");
+	err := validatecapnames(caps.tools, "tool");
 	if(err != nil)
 		return err;
-	err = validatepaths(caps.writepaths, "write path");
+	err = validatecapnames(caps.shellcmds, "shell command");
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.paths, "path", caps.tools);
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.writepaths, "write path", caps.tools);
 	if(err != nil)
 		return err;
 
@@ -302,6 +308,13 @@ restrictns(caps: ref Capabilities): string
 	mntpaths := filterpaths(caps.paths, "/mnt/");
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
+	# Matrix is a fixed-function capability. Derive its control filesystem from
+	# the tool name so generic filesystem and shell tools cannot request it.
+	if(inlist("matrix", caps.tools)) {
+		(matrixok, nil) := sys->stat("/mnt/matrix");
+		if(matrixok >= 0 && !inlist("matrix", mntpaths))
+			mntpaths = "matrix" :: mntpaths;
+	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
@@ -453,6 +466,13 @@ restrictns(caps: ref Capabilities): string
 	# could read every open Xenith window regardless of namespace restriction.
 	if(caps.xenith)
 		safe = "chan" :: safe;
+	# The phone bridge contains real SMS and call endpoints. It belongs only to
+	# the fixed-function phone tools, never to caller-supplied path grants.
+	if(needsphone(caps.tools)) {
+		(phoneok, nil) := sys->stat("/phone");
+		if(phoneok >= 0)
+			safe = "phone" :: safe;
+	}
 
 	# Expose additional Inferno root-level directories from caps.paths.
 	# e.g. "/appl/veltro" → add "appl" to safe, then restrict /appl to "veltro".
@@ -774,6 +794,15 @@ needsui(tools: list of string): int
 	return 0;
 }
 
+needsphone(tools: list of string): int
+{
+	phone := "sms" :: "dial" :: "contacts" :: nil;
+	for(; tools != nil; tools = tl tools)
+		if(inlist(hd tools, phone))
+			return 1;
+	return 0;
+}
+
 # Split a path into first component and rest.
 # "Users/pdfinn/tmp" → ("Users", "pdfinn/tmp")
 # "tmp" → ("tmp", "")
@@ -795,17 +824,43 @@ pathwithin(grant, want: string): int
 	return 0;
 }
 
-validatepaths(paths: list of string, what: string): string
+validatepaths(paths: list of string, what: string, tools: list of string): string
 {
 	for(; paths != nil; paths = tl paths) {
 		p := hd paths;
 		err := validatepath(p);
 		if(err != nil)
 			return sys->sprint("invalid %s %s: %s", what, p, err);
-		if(!grantpathallowed(p))
+		if(!grantpathallowed(p, tools))
 			return sys->sprint("invalid %s %s: privileged path not grantable", what, p);
 	}
 	return nil;
+}
+
+validatecapnames(names: list of string, what: string): string
+{
+	for(; names != nil; names = tl names) {
+		n := hd names;
+		if(!validcapname(n))
+			return sys->sprint("invalid %s %s: must be a simple capability name", what, n);
+	}
+	return nil;
+}
+
+validcapname(n: string): int
+{
+	if(n == nil || n == "" || n == "." || n == "..")
+		return 0;
+	for(i := 0; i < len n; i++) {
+		c := n[i];
+		if((c >= 'a' && c <= 'z') ||
+		   (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 validatepath(p: string): string
@@ -834,16 +889,16 @@ validatepath(p: string): string
 	return nil;
 }
 
-grantpathallowed(path: string): int
+grantpathallowed(path: string, tools: list of string): int
 {
-	if(privilegedcontrolpath(path))
+	if(privilegedcontrolpath(path, tools))
 		return 0;
 	if(directmailsendpath(path))
 		return 0;
 	return 1;
 }
 
-privilegedcontrolpath(path: string): int
+privilegedcontrolpath(path: string, tools: list of string): int
 {
 	dangerous := array[] of {
 		"/tool/ctl",
@@ -859,9 +914,19 @@ privilegedcontrolpath(path: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(path == dangerous[i])
+		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
 	if(walletaccountcontrolpath(path))
+		return 1;
+	if(ftreecontrolpath(path))
+		return 1;
+	if(tmpveltrointernalpath(path))
+		return 1;
+	if(appipccontrolpath(path) && !appipctoolpath(path, tools))
+		return 1;
+	if(uiagentcontrolpath(path))
+		return 1;
+	if(fixedservicecontrolpath(path))
 		return 1;
 	return 0;
 }
@@ -870,7 +935,71 @@ walletaccountcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
-	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
+	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
+}
+
+ftreecontrolpath(path: string): int
+{
+	# ftree is a trusted user namespace browser. Its ctl file can bind and
+	# unmount in the user's GUI namespace, so it is never an agent grant.
+	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+}
+
+tmpveltrointernalpath(path: string): int
+{
+	# Internal Veltro state roots are managed by trusted code. Exposing them as
+	# path grants lets an agent spoof manifests, tamper with COW overlays, or
+	# read/write task briefs outside the task tool's mediation.
+	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
+		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
+		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
+}
+
+appipccontrolpath(path: string): int
+{
+	# App IPC roots are controlled through their fixed-function tools. A raw
+	# path grant would let generic filesystem/shell tools drive the app protocol.
+	return path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
+		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
+		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
+		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
+		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+}
+
+appipctoolpath(path: string, tools: list of string): int
+{
+	# These are not user-delegatable filesystem grants. tools9p derives them
+	# only for the matching fixed-function tool invocation, so generic tools in
+	# the same server cannot reuse them.
+	if((path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/")) &&
+	   inlist("charon", tools))
+		return 1;
+	if((path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/")) &&
+	   inlist("editor", tools))
+		return 1;
+	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&
+	   inlist("shell", tools))
+		return 1;
+	if((path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/")) &&
+	   inlist("fractal", tools))
+		return 1;
+	if((path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/")) &&
+	   inlist("man", tools))
+		return 1;
+	return 0;
+}
+
+uiagentcontrolpath(path: string): int
+{
+	# UI authority is derived from fixed-function tools by needsui(), never from
+	# caller-supplied paths that generic filesystem or shell tools can reuse.
+	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+fixedservicecontrolpath(path: string): int
+{
+	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/phone" || prefix(path, "/phone/");
 }
 
 directmailsendpath(path: string): int
@@ -1016,12 +1145,14 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 	nentries := array[] of {
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
+		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
 		# /mnt now — application mount points, schema is ours, not /n imports
 		# (docs/NAMESPACE-LAYOUT.md).
 		("/mnt/llm",  "LLM Service",      "rw"),
 		("/mnt/ui",   "UI Service",       "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
+		("/mnt/matrix", "Matrix Runtime", "rw"),
 	};
 
 	for(i = 0; i < len nentries; i++) {

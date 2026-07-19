@@ -37,11 +37,12 @@ model=dummy:latest
 dial=
 EOF
 
-# Fake systemctl. Reads/writes WORK/state/{ollama,sglang} files as the
-# live unit state. State word matches `systemctl is-active` output.
+# Fake systemctl. Reads/writes WORK/state/{ollama,sglang,claude} files as
+# the live unit state. State word matches `systemctl is-active` output.
 mkdir -p "$WORK/state"
 echo active   > "$WORK/state/ollama"
 echo inactive > "$WORK/state/sglang"
+echo inactive > "$WORK/state/claude"
 
 cat > "$WORK/bin/systemctl" <<EOF
 #!/bin/sh
@@ -56,6 +57,7 @@ key=
 case "\$unit" in
     ollama.service)         key=ollama ;;
     serving-sglang.service) key=sglang ;;
+    claude-gate.service)    key=claude ;;
     *) echo "fake-systemctl: unknown unit \$unit" >&2; exit 1 ;;
 esac
 state_file="$WORK/state/\$key"
@@ -85,6 +87,8 @@ for arg in "\$@"; do
             [ "\$(cat "$WORK/state/ollama")" = "active" ] && exit 0 || exit 22 ;;
         *30000/v1/models)
             [ "\$(cat "$WORK/state/sglang")" = "active" ] && exit 0 || exit 22 ;;
+        *11435/v1/models)
+            [ "\$(cat "$WORK/state/claude")" = "active" ] && exit 0 || exit 22 ;;
     esac
 done
 exit 22
@@ -188,6 +192,45 @@ if out="$("$LLMCTL" health wat 2>&1)"; then
 fi
 echo "$out" | grep -q "unknown target" || fail "health-bad-target error missing"
 pass "health: bad target rejected"
+
+# 13. `set claude` stops GPU stacks, starts claude-gate, writes url + backend=cli
+echo active   > "$WORK/state/ollama"
+echo inactive > "$WORK/state/sglang"
+echo inactive > "$WORK/state/claude"
+"$LLMCTL" set claude >/dev/null
+[ "$(cat "$WORK/state/ollama")" = "inactive" ] || fail "set claude: ollama should be stopped"
+[ "$(cat "$WORK/state/sglang")" = "inactive" ] || fail "set claude: sglang should be stopped"
+[ "$(cat "$WORK/state/claude")" = "active" ]   || fail "set claude: claude-gate should be started"
+new_url="$(sed -n 's/^url=//p' "$WORK/home/.infernode/lib/ndb/llm")"
+[ "$new_url" = "http://127.0.0.1:11435/v1" ] || fail "set claude: ndb url not updated (got '$new_url')"
+new_backend="$(sed -n 's/^backend=//p' "$WORK/home/.infernode/lib/ndb/llm")"
+[ "$new_backend" = "cli" ] || fail "set claude: ndb backend should be cli (got '$new_backend')"
+pass "set claude starts gate + writes url + backend=cli"
+
+# 14. `set ollama` after claude restores backend=openai and stops the gate
+"$LLMCTL" set ollama >/dev/null
+[ "$(cat "$WORK/state/claude")" = "inactive" ] || fail "set ollama: claude-gate should be stopped"
+[ "$(cat "$WORK/state/ollama")" = "active" ]   || fail "set ollama: ollama should be started"
+new_backend="$(sed -n 's/^backend=//p' "$WORK/home/.infernode/lib/ndb/llm")"
+[ "$new_backend" = "openai" ] || fail "set ollama: ndb backend should be openai (got '$new_backend')"
+pass "set ollama after claude restores backend=openai"
+
+# 15. health includes the claude probe
+echo active > "$WORK/state/claude"
+out="$("$LLMCTL" health 2>&1 || true)"
+echo "$out" | grep -q "^claude  healthy" || fail "health: claude should be healthy"
+out="$("$LLMCTL" health claude 2>&1)" || fail "health claude should exit 0 when healthy"
+echo "$out" | grep -q "^claude  healthy" || fail "health claude: wrong output"
+pass "health covers claude"
+
+# 16. status shows the claude unit line and claude as current backend
+echo inactive > "$WORK/state/ollama"
+echo inactive > "$WORK/state/sglang"
+echo active   > "$WORK/state/claude"
+out="$("$LLMCTL" status)"
+echo "$out" | grep -q "^backend  claude" || fail "status: expected backend=claude"
+echo "$out" | grep -q "^claude   active" || fail "status: claude unit line missing"
+pass "status reports claude backend"
 
 # Restore HOME / PATH (cleanup trap handles WORK)
 HOME="$ORIG_HOME"

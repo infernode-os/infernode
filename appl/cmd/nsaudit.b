@@ -428,6 +428,11 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 
 	for(pl3 := caps.paths; pl3 != nil; pl3 = tl pl3) {
 		p := hd pl3;
+		if(invalidGrantPath(p) != nil) {
+			if(!contains(inv.auths, "invalid_path_grant"))
+				inv.auths = "invalid_path_grant" :: inv.auths;
+			inv.sources = ("invalid_path_grant", "via path " + p) :: inv.sources;
+		}
 		if(pathwithin("/mnt/llm", p)) {
 			if(!contains(inv.auths, "sends_llm"))
 				inv.auths = "sends_llm" :: inv.auths;
@@ -453,6 +458,31 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 	return inv;
 }
 
+invalidGrantPath(p: string): string
+{
+	if(p == nil || len p == 0)
+		return "empty path";
+	if(p[0] != '/')
+		return "path must be absolute";
+	if(p == "/")
+		return "root path is not grantable";
+	for(ci := 0; ci < len p; ci++)
+		if(p[ci] == ' ' || p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
+			return "path contains control delimiter";
+	start := 1;
+	for(i := 1; i <= len p; i++) {
+		if(i == len p || p[i] == '/') {
+			comp := p[start:i];
+			if(comp == "")
+				return "empty path component";
+			if(comp == "." || comp == "..")
+				return "dot path component";
+			start = i + 1;
+		}
+	}
+	return nil;
+}
+
 privilegedControlGrant(p: string): int
 {
 	dangerous := array[] of {
@@ -469,9 +499,19 @@ privilegedControlGrant(p: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(p == dangerous[i])
+		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
 			return 1;
 	if(walletAccountControlGrant(p))
+		return 1;
+	if(ftreeControlGrant(p))
+		return 1;
+	if(tmpVeltroInternalGrant(p))
+		return 1;
+	if(appIpcControlGrant(p))
+		return 1;
+	if(uiAgentControlGrant(p))
+		return 1;
+	if(fixedServiceControlGrant(p))
 		return 1;
 	return 0;
 }
@@ -480,7 +520,39 @@ walletAccountControlGrant(p: string): int
 {
 	if(!prefix(p, "/n/wallet/"))
 		return 0;
-	return componentcount(p) == 4 && pathhascomponent(p, "ctl");
+	return componentcount(p) >= 4 && pathhascomponent(p, "ctl");
+}
+
+ftreeControlGrant(p: string): int
+{
+	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
+}
+
+tmpVeltroInternalGrant(p: string): int
+{
+	return p == "/tmp/veltro/.ns" || prefix(p, "/tmp/veltro/.ns/") ||
+		p == "/tmp/veltro/cow" || prefix(p, "/tmp/veltro/cow/") ||
+		p == "/tmp/veltro/tasks" || prefix(p, "/tmp/veltro/tasks/");
+}
+
+appIpcControlGrant(p: string): int
+{
+	return p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
+		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
+		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
+		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
+		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
+}
+
+uiAgentControlGrant(p: string): int
+{
+	return p == "/mnt/ui" || prefix(p, "/mnt/ui/");
+}
+
+fixedServiceControlGrant(p: string): int
+{
+	return p == "/mnt/matrix" || prefix(p, "/mnt/matrix/") ||
+		p == "/phone" || prefix(p, "/phone/");
 }
 
 directMailSendGrant(p: string): int

@@ -250,6 +250,11 @@ exec(args: string): string
 isallowedurl(url: string): int
 {
 	url = tolower(url);
+	for(i := 0; i < len url; i++) {
+		c := url[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+	}
 	return hasprefix(url, "http://") || hasprefix(url, "https://");
 }
 

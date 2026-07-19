@@ -1,0 +1,5 @@
+rule=INVALID_PATH_GRANT
+	severity=high
+	require='invalid_path_grant'
+	message='Caps contain a malformed namespace path grant. Delimiters, root, relative paths, dot components, and empty components can corrupt text protocols that carry paths.'
+	fix='remove or normalize the grant before launching the agent; grant paths must be absolute delimiter-free component paths'

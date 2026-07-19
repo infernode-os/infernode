@@ -390,8 +390,14 @@ doingest(path: string): string
 	sources: list of string;
 	if(path == nil || path == "" || path == "all")
 		sources = listsources(mountpt + "/raw");
-	else
+	else {
+		err := validateingestpath(path);
+		if(err != nil) {
+			curstate = IDLE;
+			return "error: " + err;
+		}
 		sources = path :: nil;
+	}
 
 	if(sources == nil) {
 		curstate = IDLE;
@@ -528,6 +534,37 @@ writepages(resp, source: string): int
 		}
 	}
 	return count;
+}
+
+validateingestpath(path: string): string
+{
+	rawroot := mountpt + "/raw";
+	if(path == rawroot)
+		return nil;
+	if(!hasprefix(path, rawroot + "/"))
+		return "ingest path must be under " + rawroot;
+	if(hascontrol(path))
+		return "ingest path contains control text";
+
+	part := "";
+	for(i := len rawroot + 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			if(part == "" || part == "." || part == "..")
+				return "ingest path contains unsafe component";
+			part = "";
+			continue;
+		}
+		part[len part] = path[i];
+	}
+	return nil;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] < ' ')
+			return 1;
+	return 0;
 }
 
 # ===================================================================

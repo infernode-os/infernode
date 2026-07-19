@@ -75,7 +75,7 @@ hasllm(): int
 
 # ---- Test: session creation ----------------------------------------
 
-# Test that createsession() returns a numeric session ID via /mnt/llm/new.
+# Test that createsession() returns a 128-bit capability via /mnt/llm/new.
 testSessionCreate(t: ref T)
 {
 	if(!hasllm()) {
@@ -86,17 +86,19 @@ testSessionCreate(t: ref T)
 	id := agentlib->createsession();
 	t.assertnotnil(id, "session id is non-empty");
 
-	# Session ID from llmsrv is a decimal integer
+	# Session names are 32 lowercase hexadecimal characters (INFR-321).
 	ok := 1;
+	if(len id != 32)
+		ok = 0;
 	for(i := 0; i < len id; i++) {
 		c := id[i];
-		if(c < '0' || c > '9') {
+		if(!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
 			ok = 0;
 			break;
 		}
 	}
-	t.assert(ok, "session id is numeric");
-	t.log(sys->sprint("session id: %s", id));
+	t.assert(ok, "session name is a 128-bit capability token");
+	t.log(sys->sprint("session token: %s", id));
 }
 
 # ---- Test: tool registration ---------------------------------------
@@ -178,8 +180,11 @@ testBuildToolDefsAll(t: ref T)
 # ---- Test: LLM query + parsellmresponse ---------------------------
 
 # Test queryllmfd + parsellmresponse on the CLI backend.
-# CLI backend returns plain text → parsellmresponse backward-compat path:
-#   stopreason == ""  tools == nil  text == <LLM response>
+# The CLI backend (claude-gate, via llmsrv -b openai) returns the STOP-prefixed
+# wire format and supports real tool calls. A plain no-tool prompt yields no
+# tool calls (tools == nil) and non-empty text; stopreason carries the reason
+# (e.g. end_turn). (Historically this was the retired plain-text session_ask.go
+# daemon, which returned no STOP prefix — that is no longer the backend.)
 testQueryAndParse(t: ref T)
 {
 	if(!hasllm()) {
@@ -211,10 +216,10 @@ testQueryAndParse(t: ref T)
 		return;
 	}
 
-	# Parse via parsellmresponse — should be backward-compat (no STOP: prefix)
+	# Parse via parsellmresponse. A plain prompt does not call tools, so
+	# tools == nil and text is non-empty; stopreason carries the STOP reason.
 	(stopreason, tools, text) := agentlib->parsellmresponse(response);
-	t.assertseq(stopreason, "", "CLI backend: stopreason is empty (plain text)");
-	t.assert(tools == nil, "CLI backend: no tool calls");
+	t.assert(tools == nil, "CLI backend: no tool calls for a plain prompt");
 	t.assertnotnil(text, "CLI backend: text is non-empty");
 	t.log(sys->sprint("parsellmresponse: stopreason=%q text=%q", stopreason, agentlib->truncate(text, 80)));
 }
@@ -223,10 +228,9 @@ testQueryAndParse(t: ref T)
 
 # Test that writing TOOL_RESULTS format to ask file is accepted
 # by the server (does not crash or return a 9P error).
-# This exercises the parseToolResults path in session_ask.go.
+# This exercises llmsrv's TOOL_RESULTS parse path.
 #
-# Note: With CLI backend, AskWithToolResults() calls the CLI with empty prompt
-# (tool result turns have no prompt), which may produce an empty response.
+# Note: a tool-result turn has no fresh prompt, so the response may be empty.
 # The test verifies acceptance of the write, not the response content.
 testToolResultsWrite(t: ref T)
 {
@@ -260,8 +264,8 @@ testToolResultsWrite(t: ref T)
 	buf := array of byte wire;
 	n := sys->write(fd, buf, len buf);
 
-	# A successful write returns len(buf) (session_ask.go always returns len(p))
-	# A 9P error (e.g. TOOL_RESULTS parse failure) returns -1
+	# A successful write returns len(buf); a 9P error (e.g. TOOL_RESULTS parse
+	# failure) returns -1.
 	t.assert(n > 0, "TOOL_RESULTS write accepted (not a 9P error)");
 	t.log(sys->sprint("TOOL_RESULTS write: %d bytes accepted", n));
 }

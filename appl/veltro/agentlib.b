@@ -51,6 +51,21 @@ init()
 	}
 	json->init(bufio);
 
+	# Agent name for %AGENT% injection into prompt files, so the owner can
+	# rename the agent via /lib/veltro/agent-name without editing any prompt.
+	an := readfile("/lib/veltro/agent-name");
+	if(an != nil) {
+		an = strip(an);
+		if(an != "")
+			agentname = an;
+	}
+	on := readfile("/lib/veltro/os-name");
+	if(on != nil) {
+		on = strip(on);
+		if(on != "")
+			osname = on;
+	}
+
 	wirefmt = load WireFmt WireFmt->PATH;
 	if(wirefmt == nil){
 		sys->fprint(stderr, "agentlib: cannot load WireFmt: %r\n");
@@ -186,6 +201,13 @@ closesession(id: string)
 	fd = nil;
 }
 
+# The prefill marker (e.g. "[Veltro]") the agent echoes at the start of each
+# turn. setprefillpath records it so the strip helpers remove exactly what was
+# prefilled — the agent name is not hardcoded in this library.
+prefillmarker := "[Veltro]";
+agentname := "Veltro";		# %AGENT% placeholder value; see injectagent()
+osname := "InferNode";		# %OS% placeholder value (product/OS name)
+
 # Set prefill on session-specific path
 # (from veltro.b — has verbose logging on failure)
 setprefillpath(path, prefill: string)
@@ -198,6 +220,12 @@ setprefillpath(path, prefill: string)
 	}
 	data := array of byte prefill;
 	sys->write(fd, data, len data);
+	# Record the marker (prefill minus trailing spaces) for the strip helpers.
+	m := prefill;
+	while(len m > 0 && m[len m - 1] == ' ')
+		m = m[:len m - 1];
+	if(m != "")
+		prefillmarker = m;
 }
 
 # Query LLM using persistent fd for conversation history
@@ -307,6 +335,32 @@ discovernamespace(): string
 # Build system prompt with namespace, reminders, and modular tool docs.
 # Does NOT append mode-specific suffix — callers add their own.
 # (from repl.b — has MAXPROMPT 8KB guard against 9P write limit)
+# Replace every occurrence of `from` with `to`.
+substall(s, pat, repl: string): string
+{
+	if(pat == "")
+		return s;
+	out := "";
+	fl := len pat;
+	i := 0;
+	while(i < len s) {
+		if(i + fl <= len s && s[i:i+fl] == pat) {
+			out += repl;
+			i += fl;
+		} else {
+			out[len out] = s[i];
+			i++;
+		}
+	}
+	return out;
+}
+
+# Substitute the %AGENT% placeholder in a prompt with the configured name.
+injectagent(s: string): string
+{
+	return substall(substall(s, "%AGENT%", agentname), "%OS%", osname);
+}
+
 buildsystemprompt(ns, persona: string): string
 {
 	# NOTE: The system prompt may be written to /mnt/llm/{id}/system via a single
@@ -343,6 +397,9 @@ buildsystemprompt(ns, persona: string): string
 
 	if(tooldocs != "")
 		prompt += "\n\n== Tool Documentation ==\n" + tooldocs;
+
+	# Substitute the agent name so no prompt file hardcodes identity.
+	prompt = injectagent(prompt);
 
 	# Guard against exceeding 9P write limit
 	data := array of byte prompt;
@@ -430,7 +487,7 @@ loadreminders(toollist: list of string): string
 # tool_use protocol (the model uses its training, not text instructions).
 defaultsystemprompt(): string
 {
-	return "You are a Veltro agent running in Inferno OS.\n\n" +
+	return "You are a %AGENT% agent running in Inferno OS.\n\n" +
 		"<core_principle>\n" +
 		"Your namespace IS your capability set. If a tool isn't available, it doesn't exist.\n" +
 		"</core_principle>\n\n" +
@@ -468,8 +525,8 @@ parseaction(response: string): (string, string)
 			continue;
 
 		# Strip [Veltro] prefix if present (from prefill)
-		if(hasprefix(line, "[Veltro]"))
-			line = line[8:];
+		if(hasprefix(line, prefillmarker))
+			line = line[len prefillmarker:];
 		line = str->drop(line, " \t");
 		if(line == "")
 			continue;
@@ -528,8 +585,8 @@ parseactions(response: string): list of (string, string)
 			continue;
 
 		# Strip [Veltro] prefix if present
-		if(hasprefix(trimmed, "[Veltro]"))
-			trimmed = trimmed[8:];
+		if(hasprefix(trimmed, prefillmarker))
+			trimmed = trimmed[len prefillmarker:];
 		trimmed = str->drop(trimmed, " \t");
 		if(trimmed == "")
 			continue;
@@ -636,8 +693,8 @@ collectsaytext(first: string, lines: list of string): string
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
 		cleaned := str->drop(line, " \t");
-		if(hasprefix(cleaned, "[Veltro]"))
-			cleaned = cleaned[8:];
+		if(hasprefix(cleaned, prefillmarker))
+			cleaned = cleaned[len prefillmarker:];
 		cleaned = str->drop(cleaned, " \t");
 		lower := str->tolower(cleaned);
 		if(lower == "done" || hasprefix(lower, "done"))
@@ -683,8 +740,8 @@ stripaction(response: string): string
 		if(lower == "done" || hasprefix(lower, "done"))
 			continue;
 		cleaned := str->drop(line, " \t");
-		if(hasprefix(cleaned, "[Veltro]"))
-			cleaned = cleaned[8:];
+		if(hasprefix(cleaned, prefillmarker))
+			cleaned = cleaned[len prefillmarker:];
 		cleaned = str->drop(cleaned, " \t");
 		if(cleaned == "")
 			continue;
@@ -784,8 +841,16 @@ calltool(tool, args: string): string
 	args = extracttoolargs(args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
-	# Open tool file
+	# Open tool file. The active tool set in tools9p can transiently churn at
+	# session start (a relayed message turn can race tool installation, INFR-391)
+	# so a tool that should exist may briefly be absent. Retry the open a couple
+	# of times before reporting the tool missing, so the agent doesn't see a
+	# spurious "tool not found" and fall back to duplicate/abandoned tasks.
 	fd := sys->open(path, Sys->ORDWR);
+	for(retry := 0; fd == nil && retry < 2; retry++) {
+		sys->sleep(400);
+		fd = sys->open(path, Sys->ORDWR);
+	}
 	if(fd == nil)
 		return sys->sprint("error: tool not found: %s", tool);
 

@@ -1,4 +1,4 @@
-You are a Veltro subagent executing a task in a sandboxed Inferno namespace.
+You are a %AGENT% subagent executing a task in a sandboxed Inferno namespace.
 
 Your available tools are listed in the "Your Namespace" section below.
 Invoke tools by outputting the tool name as the first word, followed by arguments.

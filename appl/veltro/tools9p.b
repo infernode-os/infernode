@@ -789,9 +789,19 @@ privilegedcontrolpath(path: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(path == dangerous[i])
+		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
 	if(walletaccountcontrolpath(path))
+		return 1;
+	if(ftreecontrolpath(path))
+		return 1;
+	if(tmpveltrointernalpath(path))
+		return 1;
+	if(appipccontrolpath(path))
+		return 1;
+	if(uiagentcontrolpath(path))
+		return 1;
+	if(fixedservicecontrolpath(path))
 		return 1;
 	return 0;
 }
@@ -800,7 +810,49 @@ walletaccountcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
-	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
+	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
+}
+
+ftreecontrolpath(path: string): int
+{
+	# ftree is a trusted user namespace browser. Its ctl file can bind and
+	# unmount in the user's GUI namespace, so it is never an agent grant.
+	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+}
+
+tmpveltrointernalpath(path: string): int
+{
+	# Internal Veltro state roots are managed by trusted code. Exposing them as
+	# path grants lets an agent spoof manifests, tamper with COW overlays, or
+	# read/write task briefs outside the task tool's mediation.
+	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
+		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
+		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
+}
+
+appipccontrolpath(path: string): int
+{
+	# These real-file IPC trees are capabilities of their fixed-function tools,
+	# not generic path grants. A raw write/exec grant to them bypasses tool-level
+	# mediation and can drive GUI apps or browser navigation directly.
+	return path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
+		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
+		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
+		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
+		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+}
+
+uiagentcontrolpath(path: string): int
+{
+	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
+	# grant would also hand write/exec every per-activity ctl file.
+	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+fixedservicecontrolpath(path: string): int
+{
+	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/phone" || prefix(path, "/phone/");
 }
 
 pathperm(path: string): string
@@ -1371,15 +1423,6 @@ emitmanifestnow(mpath: string)
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
-	# Auto-grant /phone when any phone-bridge tool is registered. devphone
-	# (#f) is bound at /phone by lib/lucifer/boot-mobile.sh (mobile) or
-	# is mounted from a paired phone (desktop). Child activity namespaces
-	# don't inherit that bind, so restrictns() would otherwise hide /phone
-	# and the sms / dial / contacts tools fail with "does not exist".
-	if(findtool("sms") != nil || findtool("dial") != nil ||
-	   findtool("contacts") != nil)
-		if(!strlist_contains(allpaths, "/phone"))
-			allpaths = "/phone" :: allpaths;
 	for(tl3 := toolnames; tl3 != nil; tl3 = tl tl3)
 		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
@@ -1437,11 +1480,6 @@ applynsrestriction(invokedtool: string): string
 	if(invokedtool == "say" || invokedtool == "hear")
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
-	# Auto-grant /phone when sms or dial tool is registered (see
-	# companion in emitmanifestnow above — same reason).
-	if(invokedtool == "sms" || invokedtool == "dial")
-		if(!strlist_contains(allpaths, "/phone"))
-			allpaths = "/phone" :: allpaths;
 	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))
@@ -1467,6 +1505,12 @@ applynsrestriction(invokedtool: string): string
 		sys->fprint(stderr, "tools9p: restrictns exception: %s\n", e);
 		return e;
 	}
+	# The manifest is trusted UI/audit metadata for Lucifer's context view.
+	# tools9p may write it from this private namespace, but the model-run tool
+	# code must not be able to spoof or corrupt it afterward.
+	herr := nsconstruct->restrictdir("/tmp/veltro/.ns", nil, 0);
+	if(herr != nil)
+		return "hide namespace manifest: " + herr;
 	return nil;
 }
 
@@ -1475,8 +1519,6 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	case tool {
 	"launch" =>
 		return addpath(paths, "/dis/wm");
-	"matrix" =>
-		return addpath(paths, "/mnt/matrix");
 	"charon" =>
 		return addpath(paths, "/tmp/veltro/browser");
 	"editor" =>
@@ -1721,7 +1763,11 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "path not bound: " + spath));
 					}
 				} else if(len data > 11 && data[0:11] == "budget-add ") {
-					bname := data[11:];
+					bname := str->tolower(data[11:]);
+					if(!toolavailable(bname)) {
+						srv.reply(ref Rmsg.Error(m.tag, "unknown budget tool: " + bname));
+						break;
+					}
 					if(!strlist_contains(budget, bname))
 						budget = bname :: budget;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));

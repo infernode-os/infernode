@@ -490,10 +490,10 @@ tmpVeltroIpcHiddenWorker(result: chan of string)
 
 testTmpVeltroExplicitGrant(t: ref T)
 {
-	sys->create("/tmp/veltro/editor", Sys->OREAD, Sys->DMDIR | 8r755);
-	fd := sys->create("/tmp/veltro/editor/state", Sys->OWRITE, 8r666);
+	sys->create("/tmp/veltro/shared", Sys->OREAD, Sys->DMDIR | 8r755);
+	fd := sys->create("/tmp/veltro/shared/state", Sys->OWRITE, 8r666);
 	if(fd == nil) {
-		t.skip("cannot create editor IPC fixture");
+		t.skip("cannot create shared tmp fixture");
 		return;
 	}
 	sys->fprint(fd, "open");
@@ -501,8 +501,8 @@ testTmpVeltroExplicitGrant(t: ref T)
 	result := chan of string;
 	spawn tmpVeltroExplicitGrantWorker(result);
 	r := <-result;
-	sys->remove("/tmp/veltro/editor/state");
-	sys->remove("/tmp/veltro/editor");
+	sys->remove("/tmp/veltro/shared/state");
+	sys->remove("/tmp/veltro/shared");
 	if(r != "")
 		t.error(r);
 }
@@ -511,7 +511,7 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	caps := ref NsConstruct->Capabilities(
-		"editor" :: nil, "/tmp/veltro/editor" :: nil, nil, nil,
+		"read" :: nil, "/tmp/veltro/shared" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
@@ -519,9 +519,33 @@ tmpVeltroExplicitGrantWorker(result: chan of string)
 		result <-= sys->sprint("restrict tmp explicit worker: %s", err);
 		return;
 	}
-	(ok, nil) := sys->stat("/tmp/veltro/editor/state");
+	(ok, nil) := sys->stat("/tmp/veltro/shared/state");
 	if(ok < 0) {
-		result <-= "explicit /tmp/veltro/editor grant missing";
+		result <-= "explicit /tmp/veltro/shared grant missing";
+		return;
+	}
+	result <-= "";
+}
+
+testTmpVeltroTrustedIpcNotGrantable(t: ref T)
+{
+	result := chan of string;
+	spawn tmpVeltroTrustedIpcNotGrantableWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+tmpVeltroTrustedIpcNotGrantableWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, "/tmp/veltro/ftree" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err == nil) {
+		result <-= "trusted ftree IPC grant unexpectedly succeeded";
 		return;
 	}
 	result <-= "";
@@ -1483,6 +1507,83 @@ invalidGrantPathsWorker(result: chan of string)
 	result <-= "";
 }
 
+testInvalidCapabilityNamesRejected(t: ref T)
+{
+	result := chan of string;
+	spawn invalidCapabilityNamesWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+invalidCapabilityNamesWorker(result: chan of string)
+{
+	bad := array[] of {
+		"../read",
+		"wm/shell",
+		"read,list",
+		"read tool",
+		".",
+		"..",
+	};
+
+	for(i := 0; i < len bad; i++) {
+		one := chan of string;
+		spawn invalidCapabilityNameOne(bad[i], 1, one);
+		r := <-one;
+		if(r != "") {
+			result <-= r;
+			return;
+		}
+		one = chan of string;
+		spawn invalidCapabilityNameOne(bad[i], 0, one);
+		r = <-one;
+		if(r != "") {
+			result <-= r;
+			return;
+		}
+	}
+
+	result <-= "";
+}
+
+invalidCapabilityNameOne(name: string, toolname: int, result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	tools := "read" :: nil;
+	shellcmds: list of string;
+	if(toolname)
+		tools = name :: nil;
+	else {
+		tools = "exec" :: nil;
+		shellcmds = name :: nil;
+	}
+
+	caps := ref NsConstruct->Capabilities(
+		tools,
+		nil,
+		shellcmds,
+		nil,
+		0 :: 1 :: 2 :: nil,
+		nil,
+		0,
+		0,
+		-1,
+		nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err == nil) {
+		if(toolname)
+			result <-= "restrictns accepted invalid tool name: " + name;
+		else
+			result <-= "restrictns accepted invalid shell command name: " + name;
+		return;
+	}
+
+	result <-= "";
+}
+
 testPrivilegedGrantPathsRejected(t: ref T)
 {
 	result := chan of string;
@@ -1497,10 +1598,28 @@ privilegedGrantPathsWorker(result: chan of string)
 	sys->pctl(Sys->FORKNS, nil);
 
 	bad := array[] of {
+		"/mnt/ui",
+		"/mnt/ui/activity/0/conversation/ctl",
+		"/mnt/ui/activity/0/context",
+		"/mnt/ui/activity/0/presentation",
+		"/mnt/matrix",
+		"/mnt/matrix/composition",
+		"/phone",
+		"/phone/sms",
 		"/mnt/msg/ctl",
+		"/mnt/msg/ctl/session",
 		"/n/wallet/alice/ctl",
+		"/n/wallet/alice/ctl/session",
 		"/mnt/mail/accounts/alice/compose",
 		"/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply",
+		"/tmp/veltro/.ns",
+		"/tmp/veltro/cow",
+		"/tmp/veltro/tasks",
+		"/tmp/veltro/browser",
+		"/tmp/veltro/editor",
+		"/tmp/veltro/shell",
+		"/tmp/veltro/fractal",
+		"/tmp/veltro/man",
 	};
 
 	for(i := 0; i < len bad; i++) {
@@ -1516,6 +1635,62 @@ privilegedGrantPathsWorker(result: chan of string)
 			result <-= "restrictns accepted privileged grant path: " + bad[i];
 			return;
 		}
+	}
+
+	result <-= "";
+}
+
+testSafeGrantPathsAccepted(t: ref T)
+{
+	result := chan of string;
+	spawn safeGrantPathsWorker(result);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+safeGrantPathsWorker(result: chan of string)
+{
+	good := array[] of {
+		"/tmp",
+		"/tmp/veltro/scratch",
+		"/mnt/msg",
+		"/mnt/msg/draft",
+	};
+
+	for(i := 0; i < len good; i++) {
+		one := chan of string;
+		spawn safeGrantPathOne(good[i], one);
+		r := <-one;
+		if(r != "") {
+			result <-= r;
+			return;
+		}
+	}
+
+	result <-= "";
+}
+
+safeGrantPathOne(path: string, result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+
+	mkdirp("/mnt/msg");
+	createfile("/mnt/msg/status");
+	createfile("/mnt/msg/draft");
+	mkdirp("/tmp/veltro/scratch");
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		path :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= "restrictns rejected safe grant path " + path + ": " + err;
+		return;
 	}
 
 	result <-= "";
@@ -1818,6 +1993,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TaskMetadataCapability", testTaskMetadataCapability);
 	run("TmpVeltroIpcHidden", testTmpVeltroIpcHidden);
 	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
+	run("TmpVeltroTrustedIpcNotGrantable", testTmpVeltroTrustedIpcNotGrantable);
 	run("ActivityScratchIsolation", testActivityScratchIsolation);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
@@ -1838,7 +2014,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NodevsBlocksDeviceAttach", testNodevsBlocksDeviceAttach);
 	run("ToolCtlHidden", testToolCtlHidden);
 	run("InvalidGrantPathsRejected", testInvalidGrantPathsRejected);
+	run("InvalidCapabilityNamesRejected", testInvalidCapabilityNamesRejected);
 	run("PrivilegedGrantPathsRejected", testPrivilegedGrantPathsRejected);
+	run("SafeGrantPathsAccepted", testSafeGrantPathsAccepted);
 	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
 

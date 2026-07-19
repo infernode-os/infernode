@@ -99,6 +99,8 @@ exec(args: string): string
 	if(n >= 3 && hd argv == "-v") {
 		argv = tl argv;
 		newvoice := hd argv;
+		if(!safename(newvoice))
+			return "error: unsafe voice name";
 		argv = tl argv;
 
 		# Set voice via ctl
@@ -138,6 +140,20 @@ exec(args: string): string
 		return sys->sprint("error: write to say failed: %r");
 
 	return "ok";
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # Strip leading/trailing whitespace

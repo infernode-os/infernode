@@ -136,15 +136,56 @@ Result: adt {
 	secret:	array of byte;
 };
 
-rawauthproc(fd: ref Sys->FD, ai: ref Keyring->Authinfo, c: chan of ref Result)
+# INFR-378: emu only reaches cleanexit once every Dis proc has terminated
+# (progexit exits when isched.head == nil).  A helper proc left blocked --
+# on a reader-less channel send, a pipe read after its peer is gone, or a
+# long sleep -- keeps the emu open and races the process-group teardown
+# that runs when the test's init() returns.  That leak surfaced as an
+# intermittent hang or a stray "process ... faults" at teardown, right
+# after the suite had already PASSed (the same failure mode fixed for the
+# sibling handshake test crypto_props_test in INFR-303).  The discipline
+# that avoids it: spawned procs self-report their pid so stragglers can be
+# killed, every result/timeout channel is buffered so a late send never
+# blocks, and timers sleep in cancellable slices instead of one long
+# uninterruptible nap.  With that in place authneg_test tears down cleanly
+# and no longer poisons runner.dis.
+killpid(pid: int)
 {
+	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+killpids(pids: list of int)
+{
+	for(; pids != nil; pids = tl pids)
+		killpid(hd pids);
+}
+
+rawauthproc(fd: ref Sys->FD, ai: ref Keyring->Authinfo, pidc: chan of int, c: chan of ref Result)
+{
+	pidc <-= sys->pctl(0, nil);
 	(owner, secret) := kr->auth(fd, ai, 0);
 	c <-= ref Result(owner, secret);
 }
 
-timerproc(c: chan of int, ms: int)
+# Sleep in slices, polling a cancel channel: a "kill" via #p/n/ctl does not
+# interrupt a proc blocked in the host nanosleep on every platform, so a
+# plain sleep(ms) would run to completion and delay emu exit by the full
+# timeout even after the test is done with it.
+timerproc(cancel: chan of int, c: chan of int, ms: int)
 {
-	sys->sleep(ms);
+	for(elapsed := 0; elapsed < ms; elapsed += 100){
+		sys->sleep(100);
+		alt {
+		<-cancel =>
+			return;
+		* =>
+			;
+		}
+	}
 	c <-= 1;
 }
 
@@ -155,21 +196,34 @@ rawHandshake(t: ref T, a, b: ref Keyring->Authinfo, ms: int): (ref Result, ref R
 	if(sys->pipe(fds) < 0)
 		t.fatal(sys->sprint("pipe failed: %r"));
 
-	ca := chan of ref Result;
-	cb := chan of ref Result;
-	tmo := chan of int;
-	spawn rawauthproc(fds[0], a, ca);
-	spawn rawauthproc(fds[1], b, cb);
-	spawn timerproc(tmo, ms);
+	pidc := chan[1] of int;
+	# Buffered result/timeout/cancel chans: a proc that finishes after we
+	# have stopped listening must not block forever on the send.
+	ca := chan[1] of ref Result;
+	cb := chan[1] of ref Result;
+	tmo := chan[1] of int;
+	cancel := chan[1] of int;
+	spawn rawauthproc(fds[0], a, pidc, ca);
+	pida := <-pidc;
+	spawn rawauthproc(fds[1], b, pidc, cb);
+	pidb := <-pidc;
+	spawn timerproc(cancel, tmo, ms);
+	fds = nil;	# only the authprocs hold the pipe ends now
 
 	ra, rb: ref Result;
 	for(got := 0; got < 2;){
 		alt {
 		r := <-ca => ra = r; got++;
 		r := <-cb => rb = r; got++;
-		<-tmo => return (nil, nil);
+		<-tmo =>
+			# Stalled handshake: kill the blocked authprocs so the leak
+			# doesn't pin the emu open; the caller reports the stall.
+			killpid(pida);
+			killpid(pidb);
+			return (nil, nil);
 		}
 	}
+	cancel <-= 1;	# stop the timer so its sleep doesn't delay emu exit
 	return (ra, rb);
 }
 
@@ -237,8 +291,9 @@ testNotExpiredSucceeds(t: ref T)
 
 # ---- CipherMismatch ------------------------------------------------------
 
-cipherServer(fd: ref Sys->FD, ai: ref Keyring->Authinfo, rc: chan of (ref Sys->FD, string))
+cipherServer(fd: ref Sys->FD, ai: ref Keyring->Authinfo, pidc: chan of int, rc: chan of (ref Sys->FD, string))
 {
+	pidc <-= sys->pctl(0, nil);
 	# server offers ONLY aes_256_cbc/sha256
 	(wrapped, err) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, fd, 0);
 	rc <-= (wrapped, err);
@@ -255,20 +310,26 @@ testCipherMismatch(t: ref T)
 	if(sys->pipe(fds) < 0)
 		t.fatal(sys->sprint("pipe failed: %r"));
 
-	rc := chan of (ref Sys->FD, string);
-	spawn cipherServer(fds[0], server, rc);
+	pidc := chan[1] of int;
+	rc := chan[1] of (ref Sys->FD, string);
+	spawn cipherServer(fds[0], server, pidc, rc);
+	spid := <-pidc;
 
 	# client requests aes_128_cbc, which the server did not offer
 	(cwrapped, cerr) := auth->client("aes_128_cbc sha256", client, fds[1]);
 
-	tmo := chan of int;
-	spawn timerproc(tmo, 15000);
+	tmo := chan[1] of int;
+	cancel := chan[1] of int;
+	spawn timerproc(cancel, tmo, 15000);
 	swrapped: ref Sys->FD;
 	serr: string;
 	alt {
 	(w, e) := <-rc => swrapped = w; serr = e;
-	<-tmo => t.fatal("server hung (timeout)");
+	<-tmo =>
+		killpid(spid);
+		t.fatal("server hung (timeout)");
 	}
+	cancel <-= 1;	# stop the timer so its sleep doesn't delay emu exit
 
 	t.assert(swrapped == nil, "server must refuse a cipher it did not offer");
 	t.assert(contains(serr, "unsupported") || contains(serr, "algorithm"),
@@ -280,8 +341,9 @@ testCipherMismatch(t: ref T)
 
 # Relay one byte-stream src->dst.  Once `arm` fires, flip the first byte of the
 # next chunk forwarded (corrupting one ssl record on the encrypted channel).
-tamperRelay(src, dst: ref Sys->FD, arm: chan of int, done: chan of int)
+tamperRelay(src, dst: ref Sys->FD, arm: chan of int, pidc: chan of int, done: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	armed := 0;
 	flipped := 0;
 	buf := array[8192] of byte;
@@ -312,8 +374,9 @@ tamperRelay(src, dst: ref Sys->FD, arm: chan of int, done: chan of int)
 }
 
 tamperServer(fd: ref Sys->FD, ai: ref Keyring->Authinfo, expect: int,
-		ready: chan of int, rc: chan of (int, int))
+		pidc: chan of int, ready: chan of int, rc: chan of (int, int))
 {
+	pidc <-= sys->pctl(0, nil);
 	(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, fd, 0);
 	if(wrapped == nil){
 		ready <-= 0;
@@ -347,29 +410,46 @@ testTamperedCiphertext(t: ref T)
 		t.fatal(sys->sprint("pipe failed: %r"));
 
 	armc := chan[1] of int;	# client -> relay: start corrupting (buffered)
-	rdone := chan of int;
-	spawn tamperRelay(pc[1], ps[1], armc, rdone);	# client -> server (corrupting)
-	spawn tamperRelay(ps[1], pc[1], chan of int, rdone);	# server -> client (clean)
+	rdone := chan[1] of int;
+	pidc := chan[1] of int;
+	spawn tamperRelay(pc[1], ps[1], armc, pidc, rdone);	# client -> server (corrupting)
+	relaypid1 := <-pidc;
+	spawn tamperRelay(ps[1], pc[1], chan[1] of int, pidc, rdone);	# server -> client (clean)
+	relaypid2 := <-pidc;
 
-	ready := chan of int;
-	rc := chan of (int, int);
-	spawn tamperServer(ps[0], server, 260, ready, rc);
+	ready := chan[1] of int;
+	rc := chan[1] of (int, int);
+	spawn tamperServer(ps[0], server, 260, pidc, ready, rc);
+	serverpid := <-pidc;
+
+	# The relays and the tamperServer block on pipe reads (or a reader-less
+	# rdone send); they must be killed before init() returns or they pin the
+	# emu open and race its teardown.  Kill them on every exit path.
+	stragglers := relaypid1 :: relaypid2 :: serverpid :: nil;
 
 	(cwrapped, cerr) := auth->client("aes_256_cbc sha256", client, pc[0]);
-	if(cwrapped == nil)
+	if(cwrapped == nil){
+		killpids(stragglers);
 		t.fatal("client auth+ssl failed: " + cerr);
+	}
 
 	# wait for the server's half before sending data, so the byte the relay
 	# flips is guaranteed to be encrypted *data*, not a handshake frame.
-	tmo := chan of int;
-	spawn timerproc(tmo, 20000);
+	tmo := chan[1] of int;
+	cancel := chan[1] of int;
+	spawn timerproc(cancel, tmo, 20000);
 	alt {
 	sok := <-ready =>
-		if(!sok)
+		if(!sok){
+			cancel <-= 1;
+			killpids(stragglers);
 			t.fatal("server auth+ssl failed");
+		}
 	<-tmo =>
+		killpids(stragglers);
 		t.fatal("server handshake hung (timeout)");
 	}
+	cancel <-= 1;
 
 	armc <-= 1;	# arm the corruption for the next client->server bytes
 
@@ -378,16 +458,23 @@ testTamperedCiphertext(t: ref T)
 		msg[i] = byte ('A' + (i % 26));
 	sys->write(cwrapped, msg, len msg);
 
-	tmo2 := chan of int;
-	spawn timerproc(tmo2, 20000);
+	tmo2 := chan[1] of int;
+	cancel2 := chan[1] of int;
+	spawn timerproc(cancel2, tmo2, 20000);
 	n, ok: int;
 	alt {
 	(rn, rok) := <-rc => n = rn; ok = rok;
-	<-tmo2 => t.fatal("server read hung (timeout)");
+	<-tmo2 =>
+		killpids(stragglers);
+		t.fatal("server read hung (timeout)");
 	}
+	cancel2 <-= 1;
 
 	t.assert(ok == 0, "ssl record MAC must reject a tampered ciphertext (corrupt data not delivered intact)");
 	t.log(sys->sprint("server saw n=%d intact=%d after one flipped ciphertext byte", n, ok));
+
+	# Success path: reap the relays and server so no proc outlives the test.
+	killpids(stragglers);
 }
 
 # NB: handshake-mechanics negatives (protocol downgrade, tampered/malformed

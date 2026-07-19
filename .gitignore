@@ -308,3 +308,8 @@ tools/2fa-poc/
 
 # video demo media — regenerable, see demo-video.sh header
 /video-demo-media/
+
+# claude-gate runtime scratch (venv is bootstrapped by serve-claude-gate.sh;
+# the e2e emu script is generated at test time)
+tools/claude-gate/.venv/
+tests/inferno/claude-gate-e2e.sh

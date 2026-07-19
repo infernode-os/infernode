@@ -11,6 +11,7 @@ TARG=\
 	llm-context.dis\
 	llm-sessions.dis\
 	sysmon-svc.dis\
+	comp-list.dis\
 	cpu-gauge.dis\
 	mem-gauge.dis\
 	net-gauge.dis\

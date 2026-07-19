@@ -276,7 +276,16 @@ init(ctxt: ref Draw->Context, args: list of string)
 	complock <-= 1;
 	reloadch = chan[1] of string;
 
-	# Parse initial composition
+	# Parse initial composition.  With no argument, the picker is
+	# ITSELF a composition (`picker` in the library) so users and
+	# agents can customise it like any other crystallisation; the
+	# built-in drawpicker remains only as the fallback when that
+	# file is absent.
+	if(args == nil) {
+		(pok, nil) := sys->stat(LIBCOMPS + "/picker");
+		if(pok >= 0)
+			args = (LIBCOMPS + "/picker") :: nil;
+	}
 	comptext := "";
 	if(args != nil) {
 		comppath = hd args;

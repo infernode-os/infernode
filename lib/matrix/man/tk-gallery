@@ -11,21 +11,29 @@ WRITES
 	nothing
 
 DESCRIPTION
-	A review instrument for the toolkit's look, not a data view.  The
-	left column renders label, button, checkbutton, radiobutton,
-	entry, listbox, scale, scrollbar, and text exactly as the engine's
-	defaults draw them (raised/sunken bevels, text-tight targets).
-	The right column renders the same widgets in the proposed
+	A review instrument for the toolkit's look, not a data view.  One
+	shared grid, one widget class per row, so the two treatments
+	align row for row: column 0 renders button, checkbutton,
+	radiobutton, choicebutton, menubutton (with menu), label, entry,
+	listbox, scale, scrollbar, canvas, and text exactly as the
+	engine's defaults draw them (raised/sunken bevels, text-tight
+	targets); column 1 renders the same widgets in the proposed
 	InferNode treatment: -relief flat -borderwidth 1 (2D, no bevels)
-	and pack -ipadx/-ipady on interactive widgets — internal padding
+	and grid -ipadx/-ipady on interactive widgets — internal padding
 	that grows the widget's actual hit target, per the 44pt/48dp
-	minimum-touch-target conventions.
+	minimum-touch-target conventions.  The grid lives on a frame
+	hosted as a canvas window item with a scrollbar driving yview, so
+	the gallery fits any region height.
 
 	Widgets carry representative content (entry text, list items, a
-	set scale) so insets and bevels are visible in use.  Compare the
-	columns, then decide the default treatment; per-widget options
-	cover everything shown, and anything chosen as a DEFAULT belongs
-	in the Tk engine (libtk) rather than in every module.
+	set scale, drawn canvas items) so insets and bevels are visible
+	in use.  Compare the columns, then decide the default treatment;
+	per-widget options cover everything shown, and anything chosen as
+	a DEFAULT belongs in the Tk engine (libtk) rather than in every
+	module.  Engine limits the gallery makes visible: no "solid"
+	relief (a flat button has no outline), radiobutton indicators
+	identical to checkbuttons, top-anchored text in tall widgets, a
+	hardcoded sunken bevel on press.
 
 SEE ALSO
 	video-ctl (a Tk control surface using padded targets)

@@ -120,9 +120,12 @@ must not go looking for them — the messages are already here.
 - When the user asks about their email/messages, read /mnt/msg/status for the
   unread summary (or delegate a Task Agent with paths=/mnt/msg tools=read to
   read it and report back). Do not claim you cannot access their mail.
-- To reply, delegate a Task Agent with paths=/mnt/msg tools=read,write; it
-  writes the draft to /mnt/msg/draft. Drafts are queued for your approval and
-  are NEVER auto-sent.
+- To reply, delegate a Task Agent with paths=/mnt/msg,/mnt/msg/draft tools=read,write;
+  it writes the draft to /mnt/msg/draft. IMPORTANT: a bare paths=/mnt/msg grant
+  exposes only the read-only inbox (status) — the draft endpoint is a SEPARATE
+  capability that must be named explicitly (/mnt/msg/draft), or the child's draft
+  write silently fails on a read-only mount. Drafts are queued for your approval
+  and are NEVER auto-sent.
 When a message arrives on its own, a triage policy is injected with it as part
 of that turn; triage, then delegate actionable messages. Never auto-send.
 </messages>

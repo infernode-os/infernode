@@ -49,12 +49,15 @@ msgmode=none
 if {ftest -f $stage/msg}       { msgmode=`{cat $stage/msg} }
 matrixcomp=none
 if {ftest -f $stage/matrixcomp} { matrixcomp=`{cat $stage/matrixcomp} }
+followthrough=no
+if {ftest -f $stage/followthrough} { followthrough=`{cat $stage/followthrough} }
 if {~ $#grind_url 0}   { grind_url=http://127.0.0.1:11435/v1 }
 if {~ $#grind_model 0} { grind_model=sonnet }
 if {~ $#grind_rz 0}    { grind_rz=low }
 if {~ $#settle 0}      { settle=4 }
 if {~ $#msgmode 0}     { msgmode=none }
 if {~ $#matrixcomp 0}  { matrixcomp=none }
+if {~ $#followthrough 0} { followthrough=no }
 
 echo '@@GRIND begin url='^$grind_url^' model='^$grind_model^' msg='^$msgmode
 
@@ -75,9 +78,15 @@ bind -bc /tmp/grindndb /lib/ndb
 /dis/veltro/wallet9p.dis >[2] /dev/null &
 sleep 1
 
-luciuisrv
-echo activity create Main > /mnt/ui/ctl
-sleep 1
+# Service planes are mounted BEFORE luciuisrv. This ordering is load-bearing:
+# luciuisrv forks each delegated child activity from ITS namespace, snapshotted
+# when luciuisrv starts. A service mounted after luciuisrv is visible to
+# Activity 0 (started later still) but NOT to children — so a delegated task
+# granted paths=/mnt/msg or tools=matrix would find /mnt empty and give up
+# (observed: EmailTriage "/mnt doesn't exist", MatrixStatus "no matrix process
+# reachable", while msg_arrival_urgent — Activity 0 reading directly — passed).
+# Mounting first lets children inherit /mnt/msg and /mnt/matrix. Matches the
+# real boot, where services come up before luciuisrv.
 
 # Message plane (conditional): mount /mnt/msg and register the mock email inbox
 # (5 canned messages spanning every triage verdict). msgwatch is started later,
@@ -86,7 +95,15 @@ if {~ $msgmode inbox watch} {
 	/dis/veltro/msg9p.dis >[2] /dev/null &
 	sleep 1
 	echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
-	echo '@@GRIND msg-inbox registered'
+	sleep 1
+	# Verify the mock inbox is actually reachable — occasionally a degraded boot
+	# leaves /mnt unmounted and the whole message plane silently absent. The host
+	# retries this as a flake rather than scoring a real agent failure.
+	if {ftest -f /mnt/msg/status} {
+		echo '@@GRIND msg-inbox registered'
+	}{
+		echo '@@GRIND msg-inbox FAILED /mnt/msg not available (degraded boot)'
+	}
 }
 
 # Matrix runtime (conditional): pre-start headless so /mnt/matrix exists for the
@@ -102,9 +119,23 @@ if {! ~ $matrixcomp none} {
 	}
 }
 
+# luciuisrv AFTER the service mounts, so forked child activities inherit
+# /mnt/msg and /mnt/matrix.
+luciuisrv
+echo activity create Main > /mnt/ui/ctl
+sleep 1
+
 # tools9p: delegation budget (+matrix for sophisticated-tool grinding) and the
 # activity-0 tool slice.
-/dis/veltro/tools9p -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo,matrix -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
+# In msg mode, grant Activity 0 -p /mnt/msg so its read tool can read
+# /mnt/msg/status DIRECTLY (the primary "check my email" flow — meta.txt points
+# there). The real boot always includes this (lib/lucifer/boot.sh); without it
+# Activity 0's read-tool namespace excludes /mnt/msg and it can only delegate,
+# which then strands on the async task result. Conditional so non-msg scenarios
+# don't -p a path that isn't mounted.
+msgp=()
+if {~ $msgmode inbox watch} { msgp=(-p /mnt/msg) }
+/dis/veltro/tools9p -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo,matrix -p /dis/wm $msgp read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
 
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
@@ -123,7 +154,12 @@ for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
 echo '@@GRIND ready '^$ready
 
 # msgwatch (watch mode only): relay wake/preempt messages into Activity 0.
+# Let tools9p finish loading its inactive tools first — the /tool/tools churn
+# can transiently drop the task tool from the session (INFR-391), and a relayed
+# turn that races it sees "No such tool available". This only reduces harness
+# flakiness; the underlying reinstall race is tracked in INFR-391.
 if {~ $msgmode watch} {
+	sleep 6
 	> /tmp/msgwatch.log
 	/dis/veltro/msgwatch.dis -a 0 -v >[2] /tmp/msgwatch.log &
 	echo '@@GRIND msgwatch started'
@@ -167,6 +203,62 @@ for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
 	}
 }
 echo '@@GRIND settled status='^`{cat /mnt/ui/activity/0/status}
+
+# --- follow-through (opt-in): the meta-agent's delegation pattern is to create a
+# task, reply "I'll report back", and go idle — so the first settle captures the
+# acknowledgement, not the result. When followthrough=yes and a child activity is
+# still working, wait for the child(ren) to reach a terminal status, then
+# re-prompt Activity 0 to relay the result and settle again. See INFR-394.
+if {~ $followthrough yes} {
+	anychild=no
+	for (a in 1 2 3 4 5 6 7 8 9) {
+		if {ftest -f /mnt/ui/activity/$a/label} { anychild=yes }
+	}
+	if {~ $anychild yes} {
+		echo '@@GRIND followthrough begin'
+		# wait until no child activity is in a working-ish status (~240s budget)
+		cdone=no
+		for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16) {
+			for (i in 1 2 3 4 5) {
+				if {~ $cdone no} {
+					sleep 3
+					working=no
+					for (a in 1 2 3 4 5 6 7 8 9) {
+						if {ftest -f /mnt/ui/activity/$a/status} {
+							cs=`{cat /mnt/ui/activity/$a/status}
+							if {~ $cs working thinking launching running active} { working=yes }
+						}
+					}
+					if {~ $working no} { cdone=yes }
+				}
+			}
+		}
+		echo '@@GRIND followthrough children-settled'
+		# re-prompt Activity 0 to poll the result and relay it
+		echo 'The delegated task has finished. Use task result to get its output and report back what it found now.' > /mnt/ui/activity/0/conversation/input
+		sleep 6
+		# settle Activity 0 again (same terminal-hold logic as the first pass)
+		stablelist=()
+		fdone=no
+		for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
+			for (i in 1 2 3 4 5 6 7 8 9 10) {
+				if {~ $fdone no} {
+					sleep 3
+					s=`{cat /mnt/ui/activity/0/status}
+					if {~ $s working thinking launching running active} {
+						stablelist=()
+					}{
+						stablelist=($stablelist x)
+					}
+					if {~ $#stablelist $settle} {
+						fdone=yes
+					}
+				}
+			}
+		}
+		echo '@@GRIND followthrough settled status='^`{cat /mnt/ui/activity/0/status}
+	}
+}
 
 # --- state bundle ------------------------------------------------------------
 for (a in 0 1 2 3 4 5 6 7 8 9) {

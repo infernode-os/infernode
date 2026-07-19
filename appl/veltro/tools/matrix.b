@@ -117,6 +117,19 @@ exec(args: string): string
 	(cmd, rest) := splitfirst(args);
 	cmd = str->tolower(cmd);
 
+	# Every command operates on the runtime's control filesystem at /mnt/matrix.
+	# If the runtime is not running that filesystem is absent, and each command
+	# would otherwise fail with a raw "file does not exist" — which sends the
+	# agent thrashing around the namespace hunting for matrix. Detect it once and
+	# return a single clear, actionable message instead.
+	if(!running())
+		return "Matrix is not running: its control filesystem at /mnt/matrix is " +
+			"not mounted, so there is nothing to compose against yet. Start the " +
+			"runtime first — if you have the 'launch' tool, run:  launch matrix  " +
+			"(or wm/matrix -h <composition> for a headless run); otherwise report " +
+			"to the user that Matrix must be started before it can be explored. " +
+			"Once it is running, retry (start with 'matrix index').";
+
 	case cmd {
 	"index" =>
 		return readfile(MATRIX + "/library/index");
@@ -249,6 +262,13 @@ validctl(verb: string): string
 }
 
 # --- I/O helpers ---
+
+# Is the Matrix runtime up? It serves /mnt/matrix/ctl only while running.
+running(): int
+{
+	(ok, nil) := sys->stat(MATRIX + "/ctl");
+	return ok >= 0;
+}
 
 readfile(path: string): string
 {

@@ -3,8 +3,8 @@ task - Create and manage delegated AI tasks
 HOW DELEGATION WORKS (read this first):
   A task agent runs AUTONOMOUSLY. Once you `task create` it, the child
   reads its brief and does the work itself — you do NOT drive it and you
-  do NOT do the work yourself. The task tool has exactly four commands:
-  create, status, list, close. There is NO way to send a task content,
+  do NOT do the work yourself. The task tool has five commands:
+  create, status, list, result, close. There is NO way to send a task content,
   a file path, or a command after creation — calls like `task write ...`
   or `task <path> ...` are errors. Put EVERYTHING the agent needs into
   brief= and instructions= at create time.
@@ -38,6 +38,9 @@ HOW DELEGATION WORKS (read this first):
 
   task status <id>     Show task status, urgency, label
   task list            List all active tasks with status
+  task result <id>     Get the task agent's final report (its answer). Use this
+                       once the task reports done to retrieve what it produced —
+                       do NOT re-create the task to get its output.
   task close <id>      Archive a completed task
 
 Each task gets its own activity tile in the header bar, its own

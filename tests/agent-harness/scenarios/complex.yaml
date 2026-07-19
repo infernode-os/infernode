@@ -69,7 +69,11 @@ scenarios:
       sophisticated tool and that the runtime is reachable.
     matrix: sysmon
     settle: 7
-    timeout: 360
+    timeout: 420
+    # The child does real work (reads matrix module outputs) and Activity 0
+    # replies "I'll report back" and goes idle — so follow-through waits for the
+    # child to finish, then re-prompts Activity 0 to relay the result (INFR-394).
+    followthrough: true
     prompt: >
       The Matrix module runtime is running. Find out which modules are currently
       loaded and report the current CPU reading.
@@ -78,9 +82,9 @@ scenarios:
       matrix_contains: sysmon
       # no duplicate task spam (observed: 5 duplicate MatrixStatus tasks)
       no_duplicate_activities: true
-      # success = the actual data made it back to the meta-agent, not just that
-      # a task ran. Known-failing until the task-output-retrieval gap (parent
-      # can't read a child task's result) is fixed — see INFR ticket.
+      # success = the actual data made it back to the meta-agent, not just that a
+      # task ran. Requires the follow-through phase (task-result retrieval itself
+      # was fixed in INFR-389).
       reply_regex: "(?i)(sysmon-svc|cpu[^.]*\\d|\\d+\\s*%)"
     forbid:
       # false-incapacity language is the observed failure mode
@@ -105,3 +109,37 @@ scenarios:
       no_duplicate_activities: true
     forbid:
       trajectory_tool: [websearch, webfetch, write, edit, exec]
+
+  # ---- reply drafting (validates the draft-path grant) ---------------------
+
+  - name: msg_reply_draft
+    category: message-handling
+    description: >
+      Reply drafting. The user asks the Chief of Staff to draft a reply to the
+      urgent boss message. Validates that Activity 0 delegates a draft task (with
+      the correct paths=/mnt/msg,/mnt/msg/draft grant per the meta.txt fix),
+      never auto-sends, and does not falsely claim it cannot reach the mail — it
+      reads the inbox and composes the reply.
+      NOTE: draft_pending (the draft actually queued in /mnt/msg/pending) is the
+      real target but is currently BLOCKED by INFR-395 — the /mnt/msg/draft grant
+      doesn't confer write in the child namespace, so the child can't write the
+      proposal. Flip draft_pending back on once INFR-395 lands.
+    msg: inbox
+    settle: 7
+    timeout: 420
+    followthrough: true
+    prompt: >
+      Draft a reply to the urgent message from my boss letting them know they
+      have my sign-off to proceed with the release. Prepare it as a draft for my
+      approval — do not send it.
+    expects:
+      trajectory_tool: task
+      no_duplicate_activities: true
+      nothing_sent: true
+      # it engaged with the actual message (boss / sign-off / release), not a refusal
+      reply_regex: "(?i)(boss|sign-off|sign off|release|draft)"
+    forbid:
+      # false-incapacity: claiming it can't reach the mail at all is a failure.
+      # (An honest "the draft couldn't be queued" note is NOT forbidden — that's
+      # the correct report of the INFR-395 limitation.)
+      reply_regex: "(?i)(imap|smtp|credential|webmail|cannot access|can't access your (mail|email)|no mail interface|don't have access to (your )?(mail|email|messages))"

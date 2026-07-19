@@ -84,8 +84,14 @@ fn main() {
             }))
         };
         let mut bw = BufWriter::new(sink);
-        // Frame rate is cosmetic for validation; 25:1 keeps ffplay happy.
-        writeln!(bw, "YUV4MPEG2 W{w} H{h} F25:1 Ip A1:1 C420mpeg2").unwrap();
+        // Stamp the stream's real frame rate — vid9p's server-side playhead
+        // paces from this header, so a wrong rate plays at the wrong speed.
+        // 25:1 only when the container doesn't declare one.
+        let (frn, frd) = match dec.frame_rate() {
+            (0, _) => (25, 1),
+            r => r,
+        };
+        writeln!(bw, "YUV4MPEG2 W{w} H{h} F{frn}:{frd} Ip A1:1 C420mpeg2").unwrap();
         bw
     });
 

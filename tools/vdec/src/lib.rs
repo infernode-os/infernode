@@ -136,6 +136,9 @@ pub struct Decoder {
     time_base: f64,
     width: u32,
     height: u32,
+    /// The stream's average frame rate as a rational, `(0, _)` when the
+    /// container doesn't declare one.
+    frame_rate: (u32, u32),
     /// The hw pixel format frames arrive in when a hardware backend is active,
     /// or `AV_PIX_FMT_NONE` for software. Used to detect frames that must be
     /// transferred out of device memory before scaling.
@@ -195,6 +198,12 @@ impl Decoder {
         let stream_index = stream.index();
         let tb = stream.time_base();
         let time_base = tb.numerator() as f64 / tb.denominator() as f64;
+        let fr = stream.avg_frame_rate();
+        let frame_rate = if fr.numerator() > 0 && fr.denominator() > 0 {
+            (fr.numerator() as u32, fr.denominator() as u32)
+        } else {
+            (0, 1)
+        };
         let params = stream.parameters();
         drop(stream);
 
@@ -215,8 +224,15 @@ impl Decoder {
             time_base,
             width,
             height,
+            frame_rate,
             hw_pix_fmt,
         })
+    }
+
+    /// The stream's declared average frame rate `(num, den)`, or `(0, 1)`
+    /// when the container doesn't say (some raw/live streams).
+    pub fn frame_rate(&self) -> (u32, u32) {
+        self.frame_rate
     }
 
     /// Coded width as reported by the stream (may be 0 until the first frame for

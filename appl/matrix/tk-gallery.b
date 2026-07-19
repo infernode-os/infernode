@@ -59,7 +59,7 @@ top_g:		ref Toplevel;
 prefix_g:	string;	# the gridded body frame
 root_g:		string;	# the region prefix (canvas + scrollbar live here)
 
-W: con 225;		# natural width of the field-like widgets
+W: con 150;		# natural width of the field-like widgets
 TONAL: con " -background #1e1e1e";	# Brimstone clActive (see header)
 IPAD: con " -ipadx 8 -ipady 5";
 
@@ -100,11 +100,16 @@ mkwidget(class, p, var, deco: string): string
 	"entry" =>
 		c = sys->sprint("entry %s -width %d%s", p, W, deco);
 	"listbox" =>
-		c = sys->sprint("listbox %s -width %d -height 58", p, W);
+		# wired to the scrollbar row below (same group/side)
+		c = sys->sprint("listbox %s -width %d -height 58 -xscrollcommand {%s.%s_3 set}",
+			p, W, prefix_g, var);
 	"scale" =>
 		c = sys->sprint("scale %s -orient horizontal -length %d -from 0 -to 100 -showvalue 1", p, W);
 	"scrollbar" =>
-		c = sys->sprint("scrollbar %s -orient horizontal", p);
+		# a scrollbar with nothing to scroll is an unidentifiable
+		# grey slab: this one really scrolls the listbox above it
+		c = sys->sprint("scrollbar %s -orient horizontal -command {%s.%s_1 xview}",
+			p, prefix_g, var);
 	"canvas" =>
 		c = sys->sprint("canvas %s -width %d -height 44", p, W);
 	"text" =>
@@ -124,32 +129,33 @@ mkwidget(class, p, var, deco: string): string
 	"listbox" =>
 		cmd(sys->sprint("%s insert end {listbox item 1}", p));
 		cmd(sys->sprint("%s insert end {listbox item 2}", p));
-		cmd(sys->sprint("%s insert end {listbox item 3}", p));
+		cmd(sys->sprint("%s insert end {listbox item 3 — long enough that the scrollbar below has something real to do}", p));
 	"scale" =>
 		cmd(sys->sprint("%s set 40", p));
-	"scrollbar" =>
-		cmd(sys->sprint("%s set 0.2 0.5", p));
 	"canvas" =>
-		# rectilinear samples: libdraw has no anti-aliasing, so
-		# curves and diagonals render stepped; the crisp 1px
-		# rectilinear vocabulary is the honest one
+		# one of each mark, curves included: libdraw has no
+		# anti-aliasing, so the oval and diagonal render stepped —
+		# shown deliberately, that IS the current rendering truth
+		# (AA is a rasteriser-level engine project, on the list)
 		cmd(sys->sprint("%s create rectangle 8 8 60 36 -outline white", p));
-		cmd(sys->sprint("%s create rectangle 70 8 120 36 -fill #cc5940", p));
-		cmd(sys->sprint("%s create line 130 22 180 22", p));
-		cmd(sys->sprint("%s create line 155 8 155 36", p));
+		cmd(sys->sprint("%s create oval 60 8 100 36 -fill #cc5940", p));
+		cmd(sys->sprint("%s create line 108 36 144 8", p));
+		cmd(sys->sprint("%s create line 108 22 144 22", p));
 	"text" =>
 		cmd(sys->sprint("%s insert end {text widget\nsecond line}", p));
 	}
 	return nil;
 }
 
-# Lay one group's rows into grid columns c0 (default) and c0+1
-# (proposed), starting at grid row 1.  target rows get IPAD on the
-# proposed side.
-group(rows: array of (string, string, int), c0: int): string
+# Lay one group's rows into grid columns c0 (class name), c0+1
+# (default), c0+2 (proposed), starting at grid row 1.  target rows get
+# IPAD on the proposed side.  The name column answers "what is this
+# widget" for every row — a control with no label reads as nothing.
+group(rows: array of (string, string, string, int), c0: int): string
 {
 	for(i := 0; i < len rows; i++) {
-		(class, sticky, target) := rows[i];
+		(class, name, sticky, target) := rows[i];
+		nm := sys->sprint("%s.n%d_%d", prefix_g, c0, i);
 		dp := sys->sprint("%s.d%d_%d", prefix_g, c0, i);
 		pp := sys->sprint("%s.p%d_%d", prefix_g, c0, i);
 		deco := "";
@@ -158,16 +164,20 @@ group(rows: array of (string, string, int), c0: int): string
 		if(class == "checkbutton" || class == "radio1" || class == "radio2"
 		|| class == "entry")
 			deco = "";	# indicator/field carries the look; pad only
-		if((e := mkwidget(class, dp, sys->sprint("d%d", c0), "")) != nil)
+		if((e := cmd(sys->sprint("label %s -text {%s}", nm, name))) != nil)
+			return e;
+		if((e = mkwidget(class, dp, sys->sprint("d%d", c0), "")) != nil)
 			return e;
 		if((e = mkwidget(class, pp, sys->sprint("p%d", c0), deco)) != nil)
 			return e;
 		ipad := "";
 		if(target)
 			ipad = IPAD;
-		if((e = cmd(sys->sprint("grid %s -row %d -column %d -sticky %s -padx 6 -pady 2", dp, i+1, c0, sticky))) != nil)
+		if((e = cmd(sys->sprint("grid %s -row %d -column %d -sticky e -padx 4 -pady 2", nm, i+1, c0))) != nil)
 			return e;
-		if((e = cmd(sys->sprint("grid %s -row %d -column %d -sticky %s -padx 6 -pady 2%s", pp, i+1, c0+1, sticky, ipad))) != nil)
+		if((e = cmd(sys->sprint("grid %s -row %d -column %d -sticky %s -padx 4 -pady 2", dp, i+1, c0+1, sticky))) != nil)
+			return e;
+		if((e = cmd(sys->sprint("grid %s -row %d -column %d -sticky %s -padx 4 -pady 2%s", pp, i+1, c0+2, sticky, ipad))) != nil)
 			return e;
 	}
 	return nil;
@@ -182,52 +192,47 @@ init(top: ref Toplevel, prefix, nil: string): string
 	top_g = top;
 	root_g = prefix;
 
-	# Scrolled-frame safety net (fits without scrolling at any sane
-	# region size; degrades to scrolling instead of losing rows).
-	cmd(sys->sprint("canvas %s.cv -yscrollcommand {%s.vs set}", prefix, prefix));
-	cmd(sys->sprint("scrollbar %s.vs -command {%s.cv yview}", prefix, prefix));
-	cmd(sys->sprint("frame %s.cv.body", prefix));
-	cmd(sys->sprint("pack %s.vs -side right -fill y", prefix));
-	cmd(sys->sprint("pack %s.cv -side left -fill both -expand 1", prefix));
-	cmd(sys->sprint("%s.cv create window 0 0 -window %s.cv.body -anchor nw", prefix, prefix));
-	prefix_g = prefix + ".cv.body";
+	# Widgets grid DIRECTLY into the region frame, exactly like
+	# tk-notes: the engine routes events through one canvas window
+	# item (the region), but NOT through a second nested one — a
+	# scrolled-frame wrapper here left every widget unclickable
+	# (dead slider, no selection, no entry cursor).  Engine defect
+	# noted; until it is fixed, hosted modules must not nest canvas
+	# window items.
+	prefix_g = prefix;
 	p := prefix_g;
 
-	for(c := 0; c < 4; c += 2) {
+	for(c := 0; c < 6; c += 3) {
 		h1 := sys->sprint("%s.hd%d", p, c);
 		h2 := sys->sprint("%s.hp%d", p, c);
 		cmd(sys->sprint("label %s -text {engine defaults}", h1));
 		cmd(sys->sprint("label %s -text {proposed}", h2));
-		cmd(sys->sprint("grid %s -row 0 -column %d -sticky w -padx 6 -pady 4", h1, c));
-		cmd(sys->sprint("grid %s -row 0 -column %d -sticky w -padx 6 -pady 4", h2, c+1));
+		cmd(sys->sprint("grid %s -row 0 -column %d -sticky w -padx 6 -pady 4", h1, c+1));
+		cmd(sys->sprint("grid %s -row 0 -column %d -sticky w -padx 6 -pady 4", h2, c+2));
 	}
 
 	# group A: interactive targets       group B: fields
 	targets := array[] of {
-		("button",	"w", 1),
-		("checkbutton",	"w", 1),
-		("radio1",	"w", 1),
-		("radio2",	"w", 1),
-		("choicebutton","w", 1),
-		("menubutton",	"w", 1),
-		("label",	"w", 0),
+		("button",	"button",	"w", 1),
+		("checkbutton",	"checkbutton",	"w", 1),
+		("radio1",	"radiobutton",	"w", 1),
+		("radio2",	"",		"w", 1),
+		("choicebutton","choicebutton",	"w", 1),
+		("menubutton",	"menubutton",	"w", 1),
+		("label",	"label",	"w", 0),
 	};
 	fields := array[] of {
-		("entry",	"we", 1),
-		("listbox",	"we", 0),
-		("scale",	"we", 0),
-		("scrollbar",	"we", 0),
-		("canvas",	"w", 0),
-		("text",	"we", 0),
+		("entry",	"entry",	"we", 1),
+		("listbox",	"listbox",	"we", 0),
+		("scale",	"scale",	"we", 0),
+		("scrollbar",	"scrollbar",	"we", 0),
+		("canvas",	"canvas",	"w", 0),
+		("text",	"text",	"we", 0),
 	};
 	if((e := group(targets, 0)) != nil)
 		return e;
-	if((e = group(fields, 2)) != nil)
+	if((e = group(fields, 3)) != nil)
 		return e;
-
-	bb := tk->cmd(top_g, "grid bbox " + prefix_g);
-	if(len bb > 0 && bb[0] != '!')
-		cmd(sys->sprint("%s.cv configure -scrollregion {%s}", root_g, bb));
 	return nil;
 }
 

@@ -59,6 +59,8 @@ TILE:		con 256.0;	# world is TILE * 2^zoom pixels wide
 EARTHC:		con 40075016.686;	# equatorial circumference, metres
 
 entities:	array of ref Entity;
+fitted := 0;		# auto-fit fired (once, on first data)
+lblrects: list of Rect;	# labels placed this frame (declutter)
 features:	array of ref Feature;
 selid:		string;
 
@@ -114,8 +116,42 @@ init(display: ref Display, font: ref Font, mount: string): string
 	font_g = font;
 	mountpath = mount;
 	clat = 0.0; clon = 0.0; zoom = 2.0;
+	fitted = 0;
 	loadcolors();
 	return nil;
+}
+
+# Fit the camera to the data ONCE, when the first entities arrive: at
+# the world-scale default zoom a local scenario collapses into one
+# overprinted blob.  Centre on the bbox midpoint and walk the zoom
+# down until the bbox fits ~70% of the pane (projection-exact: uses
+# geo2scr).  Never re-fires, so user pan/zoom is never fought.
+fitview()
+{
+	if(len entities == 0 || r_g.dx() <= 0)
+		return;
+	minla := entities[0].lat; maxla := minla;
+	minlo := entities[0].lon; maxlo := minlo;
+	for(i := 1; i < len entities; i++) {
+		e := entities[i];
+		if(e.lat < minla) minla = e.lat;
+		if(e.lat > maxla) maxla = e.lat;
+		if(e.lon < minlo) minlo = e.lon;
+		if(e.lon > maxlo) maxlo = e.lon;
+	}
+	clat = (minla + maxla) / 2.0;
+	clon = (minlo + maxlo) / 2.0;
+	mw := real r_g.dx() * 0.7;
+	mh := real r_g.dy() * 0.7;
+	for(zoom = 15.0; zoom > 1.0; zoom -= 0.5) {
+		p1 := geo2scr(minla, minlo);
+		p2 := geo2scr(maxla, maxlo);
+		w := real (p2.x - p1.x); if(w < 0.0) w = -w;
+		h := real (p2.y - p1.y); if(h < 0.0) h = -h;
+		if(w <= mw && h <= mh)
+			break;
+	}
+	fitted = 1;
 }
 
 loadcolors()
@@ -168,6 +204,8 @@ update(): int
 		last_ec = ec; last_em = em; last_fc = fc; last_fm = fm;
 		entities = loadentities(mountpath + "/entities");
 		features = loadfeatures(mountpath + "/features");
+		if(!fitted)
+			fitview();
 		return 1;
 	}
 	return 0;
@@ -285,6 +323,7 @@ draw(dst: ref Image)
 	drawgraticule(dst);
 	for(i := 0; i < len features; i++)
 		drawfeature(dst, features[i]);
+	lblrects = nil;
 	for(i = 0; i < len entities; i++)
 		drawentity(dst, entities[i]);
 	drawhud(dst);
@@ -381,8 +420,24 @@ drawentity(dst: ref Image, e: ref Entity)
 		dst.ellipse(p, 11, 11, 1, selcol, (0, 0));
 		dst.ellipse(p, 12, 12, 1, selcol, (0, 0));
 	}
-	if(e.label != "")
-		dst.text(Point(p.x + 9, p.y - font_g.height / 2), col, (0, 0), font_g, e.label);
+	if(e.label != "") {
+		# declutter: when glyphs stack, one legible label beats a
+		# multicolour overprint — skip any label whose rect collides
+		# with one already placed this frame (glyphs still draw)
+		lp := Point(p.x + 9, p.y - font_g.height / 2);
+		lr := Rect(lp, (lp.x + font_g.width(e.label), lp.y + font_g.height));
+		for(ll := lblrects; ll != nil; ll = tl ll)
+			if(rectXrect(lr, hd ll))
+				return;
+		lblrects = lr :: lblrects;
+		dst.text(lp, col, (0, 0), font_g, e.label);
+	}
+}
+
+rectXrect(a, b: Rect): int
+{
+	return a.min.x < b.max.x && b.min.x < a.max.x &&
+	       a.min.y < b.max.y && b.min.y < a.max.y;
 }
 
 # Abstract glyphs by kind; an opaque renderer, no symbology standard.
@@ -421,6 +476,10 @@ drawhud(dst: ref Image)
 	dst.text((x0 + barpx + 6, y - font_g.height / 2), hud, (0, 0), font_g, dist(bar));
 
 	info := sys->sprint("%s  z%2.1f  %2.4f,%2.4f", proj.name, zoom, clat, clon);
+	# opaque strip: the HUD must not overprint graticule labels
+	dst.draw(Rect((r_g.min.x, r_g.min.y),
+		(r_g.min.x + font_g.width(info) + 16, r_g.min.y + font_g.height + 8)),
+		bg, nil, (0, 0));
 	dst.text((r_g.min.x + 8, r_g.min.y + 4), hud, (0, 0), font_g, info);
 }
 
@@ -634,7 +693,15 @@ niceround(v: real): real
 
 deg(v: real): string
 {
-	return sys->sprint("%g", v);
+	# %g leaks binary-float noise ("37.83999999999998") on the
+	# fractional graticule steps a fitted zoom produces; fixed
+	# decimals, then strip trailing zeros for whole degrees.
+	s := sys->sprint("%.2f", v);
+	while(len s > 1 && s[len s - 1] == '0')
+		s = s[0:len s - 1];
+	if(len s > 1 && s[len s - 1] == '.')
+		s = s[0:len s - 1];
+	return s;
 }
 
 dist(m: real): string

@@ -31,6 +31,7 @@ include "lucitheme.m";
 include "geoproj.m";
 	geoproj: Geoproj;
 	Proj: import geoproj;
+include "aadraw.m";
 include "matrix.m";
 
 GeoMap: module
@@ -61,6 +62,9 @@ EARTHC:		con 40075016.686;	# equatorial circumference, metres
 entities:	array of ref Entity;
 fitted := 0;		# auto-fit fired (once, on first data)
 lblrects: list of Rect;	# labels placed this frame (declutter)
+aad: AAdraw;		# anti-aliased strokes/rings (nil = fallback)
+zrin, zrout, zrfit: Rect;	# on-map zoom chip hit rects
+chipdown := 0;
 features:	array of ref Feature;
 selid:		string;
 
@@ -117,6 +121,9 @@ init(display: ref Display, font: ref Font, mount: string): string
 	mountpath = mount;
 	clat = 0.0; clon = 0.0; zoom = 2.0;
 	fitted = 0;
+	aad = load AAdraw AAdraw->PATH;
+	if(aad != nil)
+		aad->init(display);
 	loadcolors();
 	return nil;
 }
@@ -376,9 +383,16 @@ drawfeature(dst: ref Image, f: ref Feature)
 		# metres → pixels at this latitude.
 		mpp := EARTHC * math->cos(clat0 * Math->Degree) / worldppx();
 		rad := rnd(f.radius / mpp);
-		if(f.fill != 0)
-			dst.fillellipse(c, rad, rad, display_g.color(f.fill), (0, 0));
-		dst.ellipse(c, rad, rad, f.width, col, (0, 0));
+		if(f.fill != 0) {
+			if(aad != nil)
+				aad->disc(dst, c, rad, rad, display_g.color(f.fill));
+			else
+				dst.fillellipse(c, rad, rad, display_g.color(f.fill), (0, 0));
+		}
+		if(aad != nil)
+			aad->ring(dst, c, rad, rad, wmax(f.width, 1), col);
+		else
+			dst.ellipse(c, rad, rad, f.width, col, (0, 0));
 	"polygon" =>
 		pa := projpts(f.pts);
 		if(f.fill != 0)
@@ -386,13 +400,23 @@ drawfeature(dst: ref Image, f: ref Feature)
 		closed := array[len pa + 1] of Point;
 		closed[0:] = pa;
 		closed[len pa] = pa[0];
-		dst.poly(closed, 0, 0, f.width, col, (0, 0));
+		if(aad != nil)
+			aad->polyline(dst, closed, wmax(f.width, 1), col);
+		else
+			dst.poly(closed, 0, 0, f.width, col, (0, 0));
 	* =>	# polyline / point
 		pa := projpts(f.pts);
-		if(len pa == 1)
-			dst.fillellipse(pa[0], f.width + 1, f.width + 1, col, (0, 0));
-		else
-			dst.poly(pa, 0, 0, f.width, col, (0, 0));
+		if(len pa == 1) {
+			if(aad != nil)
+				aad->disc(dst, pa[0], f.width + 1, f.width + 1, col);
+			else
+				dst.fillellipse(pa[0], f.width + 1, f.width + 1, col, (0, 0));
+		} else {
+			if(aad != nil)
+				aad->polyline(dst, pa, 2*f.width + 1, col);
+			else
+				dst.poly(pa, 0, 0, f.width, col, (0, 0));
+		}
 	}
 	if(f.label != "" && len f.pts > 0) {
 		(la, lo) := f.pts[0];
@@ -413,12 +437,19 @@ drawentity(dst: ref Image, e: ref Entity)
 		L := 18.0;
 		a := e.course * Math->Degree;
 		tip := Point(p.x + rnd(math->sin(a) * L), p.y - rnd(math->cos(a) * L));
-		dst.line(p, tip, 0, 0, 0, col, (0, 0));
+		if(aad != nil)
+			aad->line(dst, p, tip, 2, col);
+		else
+			dst.line(p, tip, 0, 0, 0, col, (0, 0));
 	}
 	glyph(dst, p, e.kind, col);
 	if(e.id == selid) {
-		dst.ellipse(p, 11, 11, 1, selcol, (0, 0));
-		dst.ellipse(p, 12, 12, 1, selcol, (0, 0));
+		if(aad != nil)
+			aad->ring(dst, p, 12, 12, 2, selcol);
+		else {
+			dst.ellipse(p, 11, 11, 1, selcol, (0, 0));
+			dst.ellipse(p, 12, 12, 1, selcol, (0, 0));
+		}
 	}
 	if(e.label != "") {
 		# declutter: when glyphs stack, one legible label beats a
@@ -481,6 +512,31 @@ drawhud(dst: ref Image)
 		(r_g.min.x + font_g.width(info) + 16, r_g.min.y + font_g.height + 8)),
 		bg, nil, (0, 0));
 	dst.text((r_g.min.x + 8, r_g.min.y + 4), hud, (0, 0), font_g, info);
+
+	# on-map zoom chips, top-right: + / − / fit
+	ch := 22;
+	x1 := r_g.max.x - 8;
+	zrfit = Rect((x1 - ch, r_g.min.y + 8), (x1, r_g.min.y + 8 + ch));
+	zrout = zrfit.subpt((ch + 4, 0));
+	zrin  = zrout.subpt((ch + 4, 0));
+	chip(dst, zrin, "+");
+	chip(dst, zrout, "-");
+	chip(dst, zrfit, "o");
+}
+
+chip(dst: ref Image, r: Rect, s: string)
+{
+	dst.draw(r, bg, nil, (0, 0));
+	dst.border(r, 1, grid, (0, 0));
+	dst.text(Point(r.min.x + (r.dx() - font_g.width(s))/2,
+		r.min.y + (r.dy() - font_g.height)/2), hud, (0, 0), font_g, s);
+}
+
+wmax(a, b: int): int
+{
+	if(a > b)
+		return a;
+	return b;
 }
 
 projpts(g: array of (real, real)): array of Point
@@ -506,6 +562,30 @@ affilcolor(a: string): ref Image
 # ── Input ───────────────────────────────────────────────────
 pointer(p: ref Pointer): int
 {
+	# on-map zoom chips first: a map whose only affordance is drag
+	# is broken for anyone who doesn't know the keys
+	if(p.buttons & 1 && !dragging && !chipdown) {
+		z := 0.0;
+		if(zrin.contains(p.xy)) z = 0.75;
+		else if(zrout.contains(p.xy)) z = -0.75;
+		else if(zrfit.contains(p.xy)) {
+			fitted = 0;
+			fitview();
+			chipdown = 1;
+			return 1;
+		}
+		if(z != 0.0) {
+			zoom += z;
+			if(zoom < 1.0) zoom = 1.0;
+			if(zoom > 18.0) zoom = 18.0;
+			chipdown = 1;
+			return 1;
+		}
+	}
+	if(p.buttons == 0)
+		chipdown = 0;
+	if(chipdown)
+		return 1;
 	if(p.buttons & 1) {
 		if(!dragging) {
 			dragging = 1; moved = 0;

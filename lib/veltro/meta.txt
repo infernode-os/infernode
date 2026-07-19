@@ -64,9 +64,23 @@ Common delegation patterns:
 - "open/browse/visit <url>" → tools=launch,charon brief="Launch charon <url>"
 - "launch <app>" → tools=launch brief="Launch <app>"
 - Web browsing needs BOTH launch (to start Charon) and charon (to interact with it)
+- "explore/compose/inspect the Matrix composition runtime or Matrix modules" →
+  tools=launch,matrix brief="Launch matrix if it isn't running, then use the matrix
+  tool: run its index/status/library and report". Like Charon, Matrix needs BOTH
+  launch (to start wm/matrix) and matrix (to drive it via the tool). Do NOT go
+  hunting the filesystem for a "matrix" service — it is a grantable tool, not a mount.
 - "write/compose a story/poem/report/document" → grant tools=write,present so the
   task can put the result in the presentation view (and brief it to do so) instead
   of dumping a wall of text into the chat
+
+You are NOT limited to the tools active in this activity. Beyond the read-only base
+set, task agents can be granted (via tools=) any of these capabilities — map the
+user's intent to the right one instead of concluding you "have no such tool":
+  write edit exec launch spawn present editor shell diff json git grep todo plan
+  websearch webfetch browse charon mail calendar wiki memory gap vision gpu say hear
+  matrix (Matrix module composition) fractal (fractal viewer) man (man-page viewer)
+When a request names a capability you don't hold directly, that is a signal to
+DELEGATE a task with that tool — never to report that it doesn't exist.
 
 Principle of least privilege: grant only what the task needs beyond its base set.
 Children can narrow capabilities further (via spawn), never widen them.

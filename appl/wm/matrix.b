@@ -1195,8 +1195,25 @@ initgui(ctxt: ref Draw->Context)
 	# onscreen announces the toplevel's Required rect, which is empty
 	# this early, so winplace falls back to its small default and the
 	# 800x600 toplevel request never reaches the wm.  Ask for our
-	# geometry explicitly: "place" honours a concrete size.
+	# geometry explicitly ("place" honours a concrete size) and PUMP
+	# THE CTL CHANNEL until the grant arrives: modules loaded against
+	# the small pre-grant window get canvas items created at the wrong
+	# size, and the engine's item input geometry has proven unreliable
+	# across a mid-flight resize (right-hand regions unreachable by
+	# the pointer).  Creating everything at final size sidesteps that.
 	tkclient->wmctl(top, "!reshape . -1 0 0 800 600 place");
+	for(gw := 0; gw < 40; gw++) {
+		if(int tk->cmd(top, ". cget -actwidth") >= 780)
+			break;
+		alt {
+		c := <-wmctl or
+		c = <-top.ctxt.ctl or
+		c = <-top.wreq =>
+			tkclient->wmctl(top, c);
+		* =>
+			sys->sleep(25);
+		}
+	}
 
 	# The wm may have reshaped the window during onscreen (a
 	# presentation-zone host hands out its content rect, not our
@@ -2342,6 +2359,13 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 			focusmod = nil;
 			tkfocus = 1;
 			appkbd = nil;
+			# XXX diagnostic (remove): trace clicks routed into
+			# hosted Tk so dead-widget reports can be localised
+			# to routing vs the engine.
+			if(p.buttons)
+				sys->fprint(stderr, "matrix: ptr %d,%d -> tk region %s [%d %d %d %d]\n",
+					p.xy.x, p.xy.y, n.name,
+					n.r.min.x, n.r.min.y, n.r.max.x, n.r.max.y);
 			tk->pointer(top, *p);
 			return 1;
 		}

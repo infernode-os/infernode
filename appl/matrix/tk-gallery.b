@@ -233,6 +233,9 @@ init(top: ref Toplevel, prefix, nil: string): string
 		return e;
 	if((e = group(fields, 3)) != nil)
 		return e;
+	# focus the proposed entry so its insertion cursor is visible on
+	# load — a text field with no cursor anywhere reads as dead
+	cmd(sys->sprint("focus %s.p3_0", prefix_g));
 	return nil;
 }
 

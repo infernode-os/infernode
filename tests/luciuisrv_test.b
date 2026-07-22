@@ -1134,6 +1134,21 @@ testConversationDraft(t: ref T)
 
 	writefile(draftfile, "");
 	t.assertseq(readfile(draftfile), "", "empty write clears the draft");
+
+	statusfile := actbase() + "/conversation/draft-status";
+	(ok, nil) = sys->stat(statusfile);
+	t.assert(ok >= 0, "conversation/draft-status should exist");
+	writefile(actbase() + "/event", "flush");
+	t.asserteq(writefile(statusfile, "Sending in 2s - say cancel to stop"),
+		len "Sending in 2s - say cancel to stop",
+		"draft status is replaceable presentation state");
+	t.assertseq(readfile(statusfile), "Sending in 2s - say cancel to stop",
+		"draft status is readable without becoming a message");
+	ev = readevent(actbase() + "/event");
+	t.assertseq(strip(ev), "conversation draft",
+		"draft status replacement notifies the conversation renderer");
+	writefile(statusfile, "");
+	t.assertseq(readfile(statusfile), "", "empty write clears draft status");
 }
 
 # ============================================================================

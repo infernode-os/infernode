@@ -14,8 +14,9 @@ implement Speechtest;
 # the standard provider stack in its own namespace: it spawns
 # speechshim9p at /n/speechshim and speech9p at <speech>, then points
 # the provider at the shim and sets duplex half (the same sequence as
-# lib/lucifer/boot.sh). -H <bindir> applies the host-helper ctl block
-# produced by tools/install-speech-helpers.sh; -c 'key value' appends
+# lib/lucifer/boot.sh). -C <ctlfile> replays the exact configuration
+# produced by tools/install-speech-helpers.sh; -H <bindir> retains the
+# legacy Whisper helper block for explicit test fixtures; -c 'key value' appends
 # raw ctl lines (repeatable) — that is how remote-audio topologies are
 # selected, and -M 'dialaddr mountpt' (repeatable, unauthenticated)
 # mounts a remote 9P export first. See docs/SPEECH-REMOTE-AUDIO.md.
@@ -36,6 +37,8 @@ include "arg.m";
 
 include "string.m";
 	str: String;
+
+include "sh.m";
 
 Speechtest: module
 {
@@ -361,10 +364,11 @@ init(nil: ref Draw->Context, args: list of string)
 
 	arg->init(args);
 	arg->setusage("speechtest [-bde] [-n turns] [-p phrase] [-s /n/speech] " +
-		"[-H helperbindir] [-c 'key value'] [-M 'dialaddr mountpt']");
+		"[-C ctlfile] [-H helperbindir] [-c 'key value'] [-M 'dialaddr mountpt']");
 	ctllines: list of string;
 	mounts: list of string;
 	helperbin := "";
+	ctlfile := "";
 	while((c := arg->opt()) != 0)
 		case c {
 		'b' =>	bootstrap = 1;
@@ -373,6 +377,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'n' =>	turns = int arg->earg();
 		'p' =>	phrase = arg->earg();
 		's' =>	speech = arg->earg();
+		'C' =>	ctlfile = arg->earg();
 		'H' =>	helperbin = arg->earg();
 		'c' =>	ctllines = arg->earg() :: ctllines;
 		'M' =>	mounts = arg->earg() :: mounts;
@@ -401,7 +406,16 @@ init(nil: ref Draw->Context, args: list of string)
 		ctlwrite("duplex half");
 	}
 
-	if(helperbin != "")
+	if(ctlfile != "") {
+		sh := load Sh Sh->PATH;
+		if(sh == nil)
+			fatal(sys->sprint("cannot load sh for %s: %r", ctlfile));
+		err := sh->run(nil, "sh" :: ctlfile :: nil);
+		if(err != nil)
+			fatal(sys->sprint("speech ctl file failed: %s: %s", ctlfile, err));
+		log("ctl file: " + ctlfile);
+	}
+	else if(helperbin != "")
 		helperctl(helperbin);
 	for(; ctllines != nil; ctllines = tl ctllines)
 		ctlwrite(hd ctllines);

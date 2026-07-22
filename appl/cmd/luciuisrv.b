@@ -113,6 +113,7 @@ Qinputmode:	con 35;	# /input-mode, k=keyboard, v=voice
 Qconvvoiceinput: con 36;	# conversation/voiceinput, voice-originated input
 Qconvdraft:	con 37;	# conversation/draft, replaceable non-submitting text
 Qconvcontrol:	con 38;	# conversation/control, active-turn voice controls
+Qconvdraftstatus: con 39;	# conversation/draft-status, pending-turn presentation
 
 # --- QID encoding ---
 # 64-bit path: [activity_id:16][sub_id:16][unused:24][filetype:8]
@@ -204,6 +205,7 @@ Activity: adt {
 	voiceinputq: list of string;
 	controlq: list of string;
 	draft:	string;
+	draftstatus: string;
 
 	# Presentation
 	currentArtifact: string;
@@ -426,7 +428,7 @@ newactivity(label: string): ref Activity
 	a := ref Activity(
 		id, label, "active",
 		0,					# urgency
-		array[32] of ref ConvMsg, 0, nil, nil, nil, "",	# conversation
+		array[32] of ref ConvMsg, 0, nil, nil, nil, "", "", # conversation
 		"", array[16] of ref Artifact, 0,	# presentation
 		array[16] of ref Resource, 0,		# resources
 		array[8] of ref Gap, 0,			# gaps
@@ -970,6 +972,13 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			break;
 		}
 		srv.reply(styxservers->readbytes(m, array of byte a.draft));
+	Qconvdraftstatus =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		srv.reply(styxservers->readbytes(m, array of byte a.draftstatus));
 
 	Qconvmsg =>
 		a := findactivity(actid);
@@ -1325,6 +1334,16 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		# Replacement semantics are intentional: streaming STT hypotheses
 		# revise one draft without appending messages or submitting turns.
 		a.draft = data;
+		vers++;
+		pushevent(actid, "conversation draft");
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+	Qconvdraftstatus =>
+		a := findactivity(actid);
+		if(a == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			break;
+		}
+		a.draftstatus = data;
 		vers++;
 		pushevent(actid, "conversation draft");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -2094,6 +2113,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "control", big 0, 8r666), nil);
 	Qconvdraft =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "draft", big 0, 8r666), nil);
+	Qconvdraftstatus =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "draft-status", big 0, 8r666), nil);
 	Qconvmsg =>
 		return (dir(Qid(p, vers, Sys->QTFILE), string subid, big 0, 8r444), nil);
 	Qpresdir =>
@@ -2237,6 +2258,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(actid, 0, Qconvcontrol);
 				"draft" =>
 					n.path = MKPATH(actid, 0, Qconvdraft);
+				"draft-status" =>
+					n.path = MKPATH(actid, 0, Qconvdraftstatus);
 				* =>
 					# Numbered message file
 					idx := strtoint(n.name);
@@ -2383,7 +2406,7 @@ navigator(navops: chan of ref Navop)
 					Qactlabel or Qactstatus or Qacturgency or Qactevent =>
 						n.path = MKPATH(actid, 0, Qact);
 					Qconvctl or Qconvinput or Qconvvoiceinput or Qconvcontrol or
-					Qconvdraft or Qconvmsg =>
+					Qconvdraft or Qconvdraftstatus or Qconvmsg =>
 						n.path = MKPATH(actid, 0, Qconvdir);
 					Qpresctl or Qprescurrent =>
 						n.path = MKPATH(actid, 0, Qpresdir);
@@ -2466,8 +2489,9 @@ navigator(navops: chan of ref Navop)
 
 			Qconvdir =>
 				a := findactivity(actid);
-				# ctl + keyboard input + voice input + control + draft + messages
-				total := 5;
+				# ctl + keyboard input + voice input + control + draft +
+				# draft-status + messages
+				total := 6;
 				if(a != nil)
 					total += a.nmsg;
 				i := n.offset;
@@ -2497,9 +2521,14 @@ navigator(navops: chan of ref Navop)
 					cnt--;
 					i++;
 				}
+				if(i == 5 && cnt > 0) {
+					n.reply <-= dirgen(MKPATH(actid, 0, Qconvdraftstatus));
+					cnt--;
+					i++;
+				}
 				if(a != nil) {
 					for(; i < total && cnt > 0; i++) {
-						midx := i - 5;
+						midx := i - 6;
 						n.reply <-= dirgen(MKPATH(actid, midx, Qconvmsg));
 						cnt--;
 					}

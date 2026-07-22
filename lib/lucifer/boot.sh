@@ -139,9 +139,9 @@ echo duplex half > /n/speech/ctl
 # to $prefix/speech.ctl.sh (Kokoro TTS + Parakeet realtime STT when it
 # could be built, whisper fallback otherwise) and boot replays that file
 # verbatim — the installer is the single source of truth, so new helper
-# stacks need no boot.sh change. $speechhelperbin (preset by
-# boot-speechtest.sh) bypasses the file and takes the legacy hardcoded
-# path, because the test boots point it at fake helper bins.
+# stacks need no boot.sh change. When $speechhelperbin is preset by
+# boot-speechtest.sh, prefer the adjacent installer configuration; fake
+# helper bins without that file retain the legacy hardcoded path.
 #
 # Legacy path: $speechhelperbin names the bin/ dir created by
 # tools/install-speech-helpers.sh — a HOST path, because the shim execs
@@ -154,6 +154,11 @@ echo duplex half > /n/speech/ctl
 # The wake phrase is "hey jarvis" — the only pretrained openWakeWord model
 # shipped today (see tools/install-speech-helpers.sh).
 speechctlfile=()
+if {! ~ $#speechhelperbin 0} {
+	if {ftest -f /n/local^$speechhelperbin^/../speech.ctl.sh} {
+		speechctlfile=/n/local^$speechhelperbin^/../speech.ctl.sh
+	}
+}
 if {~ $#speechhelperbin 0} {
 	speechprefix=`{echo 'echo ${INFERNODE_SPEECH_HOME:-$HOME/.local/share/infernode-speech}' | os sh >[2] /dev/null}
 	if {ftest -f /n/local^$speechprefix^/speech.ctl.sh} {

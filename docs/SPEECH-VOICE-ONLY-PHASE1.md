@@ -93,8 +93,9 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
 - Completion-aware FIFO TTS in `lucibridge`, sentence-boundary streaming,
   first-token/first-audio timings, and cancellation that invalidates queued
   speech before the next turn.
-- Live transcription drafts at `conversation/draft`, rendered separately from
-  typed compose text, plus both `Esc-V` and SDL Option/Alt+V voice entry.
+- Live transcription drafts at `conversation/draft`, paired with an explicit
+  `conversation/draft-status`, and rendered as a bordered, visibly unsent user
+  turn. Typed compose text remains visible but locked until voice mode exits.
 - A FIFO `conversation/control` path for spoken cancel, pause, resume, status,
   and mid-turn refinements. Tool approvals consume the same voice input path,
   fail closed, and remain cancellable.
@@ -104,10 +105,11 @@ Phase 1 structure (1.0–1.6) is implemented. The branch now has:
 - Namespace-composable cross-host launch scripts under `/lib/voice`, plus a
   loadable `SpeechEngine` `.dis` ABI and provider-backed reference module.
 - A send **grace window** (default 3 s, `voicemode -g`, 0 = immediate): a
-  completed utterance is shown in the compose draft and on the Voice chip
-  before it is submitted; saying "cancel" (or Esc) discards it, and more
-  speech appends to it and restarts the window. An explicitly confirmed
-  low-confidence transcript skips the window.
+  completed utterance remains in the unsent conversation turn with an explicit
+  countdown before submission. The compact Voice resource shows state only;
+  saying "cancel" (or Esc) discards the turn, and more speech appends to it and
+  restarts the window. An explicitly confirmed low-confidence transcript skips
+  the window.
 - Parakeet realtime STT as the preferred default: the InferNode-owned
   `tools/parakeet_stream.cpp` adapter streams stdin PCM through the
   cache-aware `parakeet_realtime_eou_120m-v1` model, so end-of-utterance is
@@ -418,10 +420,10 @@ Continuous-loop implications:
 
 Debug-mode UX:
 
-- Live partial transcript display should be debug-first. While enabled, partial
-  STT text can update visibly while the user speaks, then freeze as the submitted
-  user message once final. In normal mode, avoid making raw partial hypotheses a
-  prominent UI element.
+- Live partial text is user-facing in the bordered unsent conversation turn so
+  the speaker can detect omissions before submission. Debug mode may add raw
+  provider/confidence detail, but hypotheses must never overflow the compact
+  Voice resource row or overwrite the preserved keyboard compose buffer.
 - Action lifecycle visualization should be debug-first: heard -> interpreting ->
   acting -> done/error. In normal mode, prefer the existing conversation,
   speech-state tile, and context/resource activity signals unless the user asks

@@ -172,41 +172,25 @@ ctxqueued(actid: int, full: int)
 		" type=audio status=queued via=voice-mode");
 }
 
-partiallabel(text: string): string
-{
-	text = strip(text);
-	if(text == nil || text == "")
-		return "Voice";
-	for(i := 0; i < len text; i++)
-		if(text[i] == '=' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
-			text[i] = ' ';
-	if(len text > 40)
-		text = text[len text - 40:];
-	return "Voice: " + strip(text);
-}
-
-ctxpartial(actid: int, text: string)
+ctxpartial(actid: int)
 {
 	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
-	writefile(path, "resource upsert path=/n/speech label=" + partiallabel(text) +
+	writefile(path, "resource upsert path=/n/speech label=Voice" +
 		" type=audio status=listening via=voice-mode");
+	draftstatus(actid, "Listening...");
 }
 
-# Grace window: the heard transcript is on the chip (and in the compose
-# draft) while the send timer runs, with a visible countdown so "say
-# cancel to stop it" has both something to judge and a deadline.
-ctxsending(actid: int, text: string, remainms: int)
+# Grace window: the transcript remains in the pending conversation bubble
+# while its separate status line carries the deadline. The Voice resource row
+# stays a concise state indicator instead of trying to render user content in
+# the narrow context column.
+ctxsending(actid: int, remainms: int)
 {
 	secs := (remainms + 999) / 1000;
-	text = strip(text);
-	for(i := 0; i < len text; i++)
-		if(text[i] == '=' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')
-			text[i] = ' ';
-	if(len text > 30)
-		text = text[len text - 30:];
 	path := sys->sprint("%s/activity/%d/context/ctl", ui, actid);
-	writefile(path, "resource upsert path=/n/speech label=Voice: sending in " +
-		string secs + "s: " + strip(text) + " type=audio status=sending via=voice-mode");
+	writefile(path, "resource upsert path=/n/speech label=Voice" +
+		" type=audio status=sending via=voice-mode");
+	draftstatus(actid, "Sending in " + string secs + "s - say cancel to stop");
 }
 
 # Put the failure reason on the Voice chip itself. The conversation notice is
@@ -264,6 +248,24 @@ draftinput(actid: int, text: string): int
 		return -1;
 	b := array of byte text;
 	return sys->write(fd, b, len b);
+}
+
+draftstatus(actid: int, text: string): int
+{
+	path := sys->sprint("%s/activity/%d/conversation/draft-status", ui, actid);
+	fd := sys->open(path, Sys->OWRITE | Sys->OTRUNC);
+	if(fd == nil)
+		return -1;
+	b := array of byte text;
+	return sys->write(fd, b, len b);
+}
+
+cleardraft(actid: int)
+{
+	# Clear text first so a stale transcript cannot survive if an older UI
+	# server does not yet expose draft-status.
+	draftinput(actid, "");
+	draftstatus(actid, "");
 }
 
 cancelspeech()
@@ -745,7 +747,7 @@ voiceloop()
 	lastappend := "";
 	lastwake := -wakecooldown;
 	errorshown := 0;
-	draftinput(actid, "");
+	cleardraft(actid);
 	ctxstatus(actid, "waiting");
 	chime("on");
 	request(startwake);
@@ -755,7 +757,7 @@ voiceloop()
 			if(hasprefix(ev, "input-mode ") && strip(ev[11:]) != "v") {
 				listenseq++;
 				listengen = listenseq;
-				draftinput(actid, "");
+				cleardraft(actid);
 				cancelspeech();
 				chime("off");
 				micoff();
@@ -796,7 +798,7 @@ voiceloop()
 			# Barge-in: any active TTS is cut off before listening.
 			cancelspeech();
 			actid = currentactivity();
-			draftinput(actid, "");
+			cleardraft(actid);
 			state = LISTENING;
 			listenseq++;
 			listengen = listenseq;
@@ -814,6 +816,7 @@ voiceloop()
 					continue;
 				}
 				if(gkind == LISTEN_PARTIAL) {
+					draftstatus(actid, "Listening for more...");
 					draftinput(actid, pendingsend + " " + gtext);
 					sys->sleep(100);
 					requestlisten(listengen);
@@ -832,7 +835,7 @@ voiceloop()
 					listengen = listenseq;
 					state = WAITING;
 					listenoff();
-					draftinput(actid, "");
+					cleardraft(actid);
 					ctxstatus(actid, "waiting");
 					spawn saytts("Cancelled.");
 					chime("done");
@@ -858,8 +861,8 @@ voiceloop()
 				listenseq++;
 				listengen = listenseq;
 				senddeadline = sys->millisec() + gracems;
+				ctxsending(actid, gracems);
 				draftinput(actid, pendingsend);
-				ctxsending(actid, pendingsend, gracems);
 				requestlisten(listengen);
 				continue;
 			}
@@ -871,7 +874,7 @@ voiceloop()
 			if(kind == LISTEN_EMPTY || kind == LISTEN_PARTIAL) {
 				errorshown = 0;
 				if(kind == LISTEN_PARTIAL) {
-					ctxpartial(actid, text);
+					ctxpartial(actid);
 					draftinput(actid, text);
 				}
 				sys->sleep(100);
@@ -884,7 +887,7 @@ voiceloop()
 				listengen = listenseq;
 				state = WAITING;
 				listenoff();
-				draftinput(actid, "");
+				cleardraft(actid);
 				if(!errorshown) {
 					ctxerror(actid, strip(rec.text));
 					noticevoiceerror(actid, strip(rec.text));
@@ -901,7 +904,7 @@ voiceloop()
 			if(junkfinal(text)) {
 				state = WAITING;
 				listenoff();
-				draftinput(actid, "");
+				cleardraft(actid);
 				log("listen junk: " + text);
 				ctxstatus(actid, "waiting");
 				chime("done");
@@ -913,7 +916,7 @@ voiceloop()
 			if(handlecontrol(actid, text)) {
 				state = WAITING;
 				listenoff();
-				draftinput(actid, "");
+				cleardraft(actid);
 				pendingconfirm = "";
 				ctxstatus(actid, "waiting");
 				chime("done");
@@ -936,7 +939,7 @@ voiceloop()
 					pendingconfirm = "";
 					state = WAITING;
 					listenoff();
-					draftinput(actid, "");
+					cleardraft(actid);
 					ctxstatus(actid, "waiting");
 					spawn saytts("Okay. Please say it again.");
 					chime("done");
@@ -952,7 +955,7 @@ voiceloop()
 			if(confidence >= 0 && confidence < confidencethreshold) {
 				state = WAITING;
 				listenoff();
-				draftinput(actid, "");
+				cleardraft(actid);
 				pendingconfirm = text;
 				ctxstatus(actid, "confirming");
 				noticeconfirm(actid, text);
@@ -973,8 +976,8 @@ voiceloop()
 				state = SENDING;
 				sendgen = listengen;
 				senddeadline = sys->millisec() + gracems;
+				ctxsending(actid, gracems);
 				draftinput(actid, pendingsend);
-				ctxsending(actid, pendingsend, gracems);
 				chime("done");
 				# Tick timer: fires every ≤500ms to refresh the
 				# countdown, re-arming until the deadline (which
@@ -988,7 +991,7 @@ voiceloop()
 			}
 			state = WAITING;
 			listenoff();
-			draftinput(actid, "");
+			cleardraft(actid);
 			submitfinal(actid, text);
 			# Re-arm immediately: a wake during the spoken response is
 			# barge-in. The pacing sleep keeps mock file trees (always-
@@ -1005,7 +1008,7 @@ voiceloop()
 				listengen = listenseq;
 				state = WAITING;
 				listenoff();
-				draftinput(actid, "");
+				cleardraft(actid);
 				ctxtimeout(actid);
 				chime("done");
 				request(startwake);
@@ -1017,7 +1020,7 @@ voiceloop()
 					wait := senddeadline - now;
 					if(wait > 500)
 						wait = 500;
-					ctxsending(actid, pendingsend, senddeadline - now);
+					ctxsending(actid, senddeadline - now);
 					spawn timer(timerch, wait, sendgen);
 					continue;
 				}
@@ -1028,7 +1031,7 @@ voiceloop()
 				listengen = listenseq;
 				state = WAITING;
 				listenoff();
-				draftinput(actid, "");
+				cleardraft(actid);
 				submitfinal(actid, sendtext);
 				sys->sleep(100);
 				request(startwake);

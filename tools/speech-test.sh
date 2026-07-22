@@ -10,7 +10,7 @@
 #
 # GUI (--gui): boots the full lucifer desktop via
 # /lib/lucifer/boot-speechtest.sh with voicemode in LLM-free test mode —
-# say "hey jarvis", speak, watch live partials in the Voice chip, hear
+# say "hey jarvis", speak, watch the bordered unsent turn update, hear
 # the canned phrase. Esc-V / Voice-chip click toggle voice mode as usual.
 #
 # Usage:
@@ -70,9 +70,13 @@ while [ $# -gt 0 ]; do
 done
 
 helperbin=-
+configfile=-
 if [ "$usehelpers" = 1 ]; then
 	if [ -d "$HELPERS/bin" ]; then
 		helperbin="$HELPERS/bin"
+		if [ -f "$HELPERS/speech.ctl.sh" ]; then
+			configfile="/n/local$HELPERS/speech.ctl.sh"
+		fi
 	else
 		echo "note: $HELPERS/bin not found — run tools/install-speech-helpers.sh," >&2
 		echo "      or pass --no-helpers with -c/-M lines for a remote provider" >&2
@@ -88,7 +92,9 @@ if [ "$gui" = 1 ]; then
 		sh -l /lib/lucifer/boot-speechtest.sh "$helperbin" "$echoflag" "$phrase"
 fi
 
-if [ "$helperbin" != - ]; then
+if [ "$configfile" != - ]; then
+	args=(-b -C "$configfile" "${args[@]:1}")
+elif [ "$helperbin" != - ]; then
 	args=(-b -H "$helperbin" "${args[@]:1}")
 fi
 

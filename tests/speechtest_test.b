@@ -212,6 +212,14 @@ testErrorDoesNotSpeak(t: ref T)
 		"an error record must not trigger say");
 }
 
+testCtlFileApplied(t: ref T)
+{
+	t.assert(waitfor(MOCK + "/ctl", "engine kokoro", 5000),
+		"-C applies the installer-selected speech ctl file before listening");
+	t.assert(waitfor(MOCK + "/say", PHRASE, 5000),
+		"speech test continues after applying the ctl file");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -230,6 +238,10 @@ init(nil: ref Draw->Context, args: list of string)
 	runst("PartialDoesNotSpeak", "partial hel\n", nil, testPartialDoesNotSpeak);
 	runst("JunkFinalNotSpoken", "final [BLANK_AUDIO]\n", nil, testJunkFinalNotSpoken);
 	runst("ErrorDoesNotSpeak", "error: helper missing\n", nil, testErrorDoesNotSpeak);
+	ctlfile := "/tmp/speechtest_test.ctl.sh";
+	createfile(ctlfile, "echo 'engine kokoro' > " + MOCK + "/ctl\n");
+	runst("CtlFileApplied", "final configured helper\n",
+		"-C" :: ctlfile :: nil, testCtlFileApplied);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

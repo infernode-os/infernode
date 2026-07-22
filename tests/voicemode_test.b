@@ -171,6 +171,7 @@ mkmock()
 	createfile(MOCKUI + "/activity/0/conversation/voiceinput", "");
 	createfile(MOCKUI + "/activity/0/conversation/control", "");
 	createfile(MOCKUI + "/activity/0/conversation/draft", "");
+	createfile(MOCKUI + "/activity/0/conversation/draft-status", "");
 	createfile(MOCKSPEECH + "/wake", "wake hey_lucia 0.9\n");
 	createfile(MOCKSPEECH + "/listen", "partial warming up\n");
 	createfile(MOCKSPEECH + "/cancel", "");
@@ -262,22 +263,27 @@ testPartialThenFinalInjected(t: ref T)
 		"final after partial is injected");
 }
 
-testPartialUpdatesResourceLabel(t: ref T)
+testPartialUpdatesPendingDraft(t: ref T)
 {
 	createfile(MOCKSPEECH + "/listen", "partial half a thou\n");
 	createfile(MOCKUI + "/input-mode", "v");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
-		"label=Voice: half a thou type=audio status=listening", 5000),
-		"partial transcript updates voice resource label");
+		"label=Voice type=audio status=listening", 5000),
+		"voice resource reports listening without duplicating transcript text");
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/draft",
 		"half a thou", 3000),
 		"partial transcript replaces the visible conversation draft");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/draft-status",
+		"Listening", 3000),
+		"partial transcript has an explicit pending-bubble status");
 	createfile(MOCKSPEECH + "/listen", "final full transcript\n");
 	t.assert(waitfor(MOCKUI + "/activity/0/context/ctl",
 		"label=Voice: queued type=audio status=queued", 5000),
 		"busy final visibly reports the queued follow-up");
 	t.assertseq(readfile(MOCKUI + "/activity/0/conversation/draft"), "",
 		"final transcript clears the draft before submission");
+	t.assertseq(readfile(MOCKUI + "/activity/0/conversation/draft-status"), "",
+		"final transcript clears the pending-bubble status");
 }
 
 testFinalInjected(t: ref T)
@@ -538,6 +544,8 @@ testGraceSubmitsAfterWindow(t: ref T)
 	t.assert(!hassubstr(vi, "graceful hello"), "not injected inside the window");
 	draft := readfile(MOCKUI + "/activity/0/conversation/draft");
 	t.assert(hassubstr(draft, "graceful hello"), "pending transcript in the draft");
+	t.assert(waitfor(MOCKUI + "/activity/0/conversation/draft-status",
+		"Sending in", 3000), "pending transcript has a visible countdown");
 	t.assert(waitfor(MOCKUI + "/activity/0/conversation/voiceinput",
 		"graceful hello", 5000), "injected after the grace window");
 }
@@ -625,7 +633,7 @@ init(nil: ref Draw->Context, args: list of string)
 	runvm("ActivatesOnVoiceMode", nil, testActivatesOnVoiceMode);
 	runvm("PartialNotInjected", nil, testPartialNotInjected);
 	runvm("PartialThenFinalInjected", nil, testPartialThenFinalInjected);
-	runvm("PartialUpdatesResourceLabel", nil, testPartialUpdatesResourceLabel);
+	runvm("PartialUpdatesPendingDraft", nil, testPartialUpdatesPendingDraft);
 	runvm("FinalInjected", nil, testFinalInjected);
 	runvm("ListenTimeoutReturnsToWaiting", "-t" :: "500" :: "-w" :: "2000" :: nil,
 		testListenTimeoutReturnsToWaiting);

@@ -1,6 +1,7 @@
 # GUI speech-test boot — the full lucifer desktop with voicemode in its
-# LLM-free test mode: wake ("hey jarvis"), live partials in the Voice
-# chip, and every final transcript answered by speaking a canned phrase.
+# LLM-free test mode: wake ("hey jarvis"), live partials in a bordered
+# unsent conversation turn, and every final transcript answered by speaking
+# a canned phrase.
 # No login, no API key, no LLM traffic — for dogfooding the speech stack
 # without per-turn cost. Same pattern as boot-mobile.sh: set variables,
 # then hand off to the canonical boot.sh via `run`.

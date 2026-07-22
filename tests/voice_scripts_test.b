@@ -172,6 +172,36 @@ testSpeechCaptureShape(t: ref T)
 		"speech-capture enables device-fed helpers");
 }
 
+testSpeechTestUsesInstalledCtl(t: ref T)
+{
+	launcher := script_contents(t, "/tools/speech-test.sh");
+	t.assert(contains(launcher, "speech.ctl.sh"),
+		"headless speech test discovers the installer-selected ctl file");
+	t.assert(contains(launcher, "-C"),
+		"headless speech test passes the selected ctl file to speechtest");
+
+	boot := script_contents(t, "/lib/lucifer/boot.sh");
+	t.assert(contains(boot, "$speechhelperbin^/../speech.ctl.sh"),
+		"GUI speech test prefers the ctl file adjacent to its helper bin");
+}
+
+testVoiceDraftPresentation(t: ref T)
+{
+	conv := script_contents(t, "/appl/cmd/luciconv.b");
+	t.assert(contains(conv, "draft-status"),
+		"conversation reads the voice draft status");
+	t.assert(contains(conv, "voice-draft"),
+		"voice hypotheses render as a conversation turn");
+	t.assert(contains(conv, "not sent"),
+		"the pending voice turn is explicitly marked unsent");
+	t.assert(contains(conv, "voiceactive() && k != 0"),
+		"keyboard compose edits are locked while voice owns the turn");
+
+	boot := script_contents(t, "/appl/cmd/lucifer.b");
+	t.assert(contains(boot, "convEvCh <-= ev"),
+		"global input-mode changes reach the conversation UI");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -193,6 +223,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SpeechTerminalShape", testSpeechTerminalShape);
 	run("SpeechEngineShape", testSpeechEngineShape);
 	run("SpeechCaptureShape", testSpeechCaptureShape);
+	run("SpeechTestUsesInstalledCtl", testSpeechTestUsesInstalledCtl);
+	run("VoiceDraftPresentation", testVoiceDraftPresentation);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -2193,6 +2193,7 @@ globallistener()
 		if(hasprefix(ev, "input-mode ")) {
 			# Voice-mode tracking for kbdproc's Esc escape hatch.
 			voicemodeon = strip(ev[len "input-mode ":]) == "v";
+			convEvCh <-= ev;
 		}
 		if(hasprefix(ev, "applaunch ")) {
 			# "applaunch <activityid> <artifactid>"

@@ -1,0 +1,27 @@
+# speech-capture — topology 3 processing-host role: import a remote /dev
+# tree and use only its audio device for speech capture.
+#
+# Usage:
+#   sh /lib/voice/speech-capture tcp!phone!17010 [capture-mount]
+
+load std
+
+capture=$1
+capturemnt=$2
+if {~ $#capture 0} {
+	echo 'usage: voice/speech-capture capture-device-addr [capture-mount]' >[1=2]
+	exit usage
+}
+if {~ $#capturemnt 0} {
+	capturemnt=/n/capture
+}
+
+mkdir -p $capturemnt
+if {! mount -A $capture $capturemnt} {
+	echo 'voice/speech-capture: capture mount failed:' $capture >[1=2]
+	exit mount
+}
+
+echo 'capturedev '$capturemnt'/audio' > /n/speech/ctl
+echo 'micmode device' > /n/speech/ctl
+echo 'voice/speech-capture: capture device is' $capturemnt'/audio'

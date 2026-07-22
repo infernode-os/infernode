@@ -68,6 +68,7 @@ Matrix: module
 };
 
 UPDATE_MS: con 2000;
+MINTICK_MS: con 40;	# fastest per-module cadence (25 fps)
 
 # ── 9P qid space ───────────────────────────────────────────
 #
@@ -151,6 +152,20 @@ greencolor: ref Image;
 yellowcolor: ref Image;
 guimode: int;
 dirty: int;
+# Per-leaf update cadence: display modules exporting the optional
+# MatrixTicker interface (matrix.m) run faster than UPDATE_MS; the
+# timer period is the minimum over the current layout and each leaf
+# accumulates elapsed ms until its own interval is due.
+Tick: adt {
+	name:	string;
+	ivl:	int;	# desired update period, ms
+	acc:	int;	# ms accumulated since last update
+};
+ticks: list of ref Tick;
+tickms := UPDATE_MS;	# current timer period
+geomw := 0;		# -g: standalone geometry request (0 = adapt to host)
+geomh := 0;
+
 focusmod: MatrixDisplay;	# module with keyboard focus
 tkfocus: int;		# 1: keys go to the Tk engine (a hosted region has focus)
 tkregionseq: int;	# widget-path allocator for hosted regions (.r<seq>)
@@ -192,6 +207,11 @@ ctxmenuactions: array of string;
 # to pickerrects: a click in rect[i] sends "load <hits[i]>" to ctl.
 pickerrects: array of Rect;
 pickerhits:  array of string;
+
+# Per-leaf load/init failures, keyed by leaf name.  A module that
+# fails must say so ON SCREEN — a silently blank region reads as
+# "the wrong app loaded", not as an error.
+moderrs: list of (string, string);
 # Edge-trigger for button-1 click detection in the picker.
 lastbtn1: int;
 # 1 while the right-click context menu is posted.  matrix intercepts
@@ -233,6 +253,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 	while((o := arg->opt()) != 0)
 		case o {
 		'h' =>	forceheadless = 1;
+		'g' =>
+			# -g WxH: claim this geometry from the wm.  ONLY for
+			# standalone launches (demo rigs under bare wm/wm,
+			# where winplace's fallback window is tiny).  Hosted
+			# launches (Lucifer presentation zone) must NOT set
+			# this: the host hands out its content rect and a
+			# geometry request fights it and lands the window
+			# outside the zone.
+			s := arg->earg();
+			for(gi := 0; gi < len s; gi++)
+				if(s[gi] == 'x') {
+					geomw = int s[0:gi];
+					geomh = int s[gi+1:];
+					break;
+				}
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -246,7 +281,16 @@ init(ctxt: ref Draw->Context, args: list of string)
 	complock <-= 1;
 	reloadch = chan[1] of string;
 
-	# Parse initial composition
+	# Parse initial composition.  With no argument, the picker is
+	# ITSELF a composition (`picker` in the library) so users and
+	# agents can customise it like any other crystallisation; the
+	# built-in drawpicker remains only as the fallback when that
+	# file is absent.
+	if(args == nil) {
+		(pok, nil) := sys->stat(LIBCOMPS + "/picker");
+		if(pok >= 0)
+			args = (LIBCOMPS + "/picker") :: nil;
+	}
 	comptext := "";
 	if(args != nil) {
 		comppath = hd args;
@@ -536,6 +580,9 @@ Serve:
 
 handlectl(data: string): string
 {
+	if(hascontrol(data))
+		return "control text not allowed";
+
 	if(len data > 5 && data[0:5] == "load ") {
 		name := data[5:];
 		text: string;
@@ -545,6 +592,8 @@ handlectl(data: string): string
 				text = comp.text;
 			complock <-= 1;
 		} else {
+			if(!safeleaf(name))
+				return "unsafe composition name";
 			path := "/lib/matrix/compositions/" + name;
 			text = readfile(path);
 			if(text == nil)
@@ -562,10 +611,22 @@ handlectl(data: string): string
 	}
 
 	if(data == "unload") {
+		# Unload returns to the picker CRYSTALLISATION, not the
+		# built-in fallback: the two lists differ (the crystallised
+		# picker omits itself), so silently swapping one for the
+		# other made identical-looking rows load different
+		# compositions.  The fallback now appears only when the
+		# picker file is genuinely unavailable.
 		comppath = "";
 		compname = "";
+		text := readfile(LIBCOMPS + "/picker");
+		if(text != nil && text != "") {
+			comppath = LIBCOMPS + "/picker";
+			compname = "picker";
+		} else
+			text = "# empty\n";
 		alt {
-		reloadch <-= "# empty\n" =>
+		reloadch <-= text =>
 			;
 		* =>
 			;
@@ -573,8 +634,18 @@ handlectl(data: string): string
 		return nil;
 	}
 
+	if(data == "edit") {
+		# Open the current composition in the editor — same routine
+		# as the context menu's edit item, reachable over the ctl
+		# wire by sh, agents, and Tk buttons (the picker's uses it).
+		editcurrent();
+		return nil;
+	}
+
 	if(len data > 4 && data[0:4] == "pin ") {
 		name := data[4:];
+		if(!safeleaf(name))
+			return "unsafe composition name";
 		<-complock;
 		text := "";
 		if(comp != nil)
@@ -591,12 +662,36 @@ handlectl(data: string): string
 
 	if(len data > 6 && data[0:6] == "unpin ") {
 		name := data[6:];
+		if(!safeleaf(name))
+			return "unsafe composition name";
 		if(sys->remove("/lib/matrix/compositions/" + name) < 0)
 			return sys->sprint("cannot remove: %r");
 		return nil;
 	}
 
-	return "usage: load <name>|load -|unload|pin <name>|unpin <name>";
+	return "usage: load <name>|load -|unload|edit|pin <name>|unpin <name>";
+}
+
+safeleaf(s: string): int
+{
+	if(s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] < ' ')
+			return 1;
+	return 0;
 }
 
 # ── Qid packing ─────────────────────────────────────────────
@@ -1179,13 +1274,38 @@ initgui(ctxt: ref Draw->Context)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
+	# Standalone (-g) only: claim the requested geometry and PUMP THE
+	# CTL CHANNEL until the grant arrives, so modules are created at
+	# final size (the engine's item input geometry is unreliable
+	# across a mid-flight resize).  Without -g we ADAPT to whatever
+	# the wm or a presentation-zone host granted — a hosted matrix
+	# must never fight the host's content rect.
+	if(geomw > 0 && geomh > 0) {
+		tkclient->wmctl(top, sys->sprint("!reshape . -1 0 0 %d %d place", geomw, geomh));
+		for(gw := 0; gw < 40; gw++) {
+			if(int tk->cmd(top, ". cget -actwidth") >= geomw - 20)
+				break;
+			alt {
+			c := <-wmctl or
+			c = <-top.ctxt.ctl or
+			c = <-top.wreq =>
+				tkclient->wmctl(top, c);
+			* =>
+				sys->sleep(25);
+			}
+		}
+	}
+
 	# The wm may have reshaped the window during onscreen (a
 	# presentation-zone host hands out its content rect, not our
 	# requested 800x600).  Adopt the actual size now, before the
 	# first layout pass — module rects and hosted-app windows are
 	# computed from winr, and a stale frame puts them off-window.
-	aw0 := int tk->cmd(top, ". cget -actwidth");
-	ah0 := int tk->cmd(top, ". cget -actheight");
+	# NB the frame must match the CANVAS area, not the toplevel:
+	# the canvas sits below the Tk titlebar, and a toplevel-sized
+	# frame both clips at the bottom and skews every hit test.
+	aw0 := int tk->cmd(top, ".c cget -actwidth");
+	ah0 := int tk->cmd(top, ".c cget -actheight");
 	if(aw0 > 0 && ah0 > 0 && (aw0 != winr.dx() || ah0 != winr.dy()))
 		allocframe(aw0, ah0);
 
@@ -1251,7 +1371,7 @@ loadcolors()
 updatetimer()
 {
 	for(;;) {
-		sys->sleep(UPDATE_MS);
+		sys->sleep(tickms);
 		alt {
 		updatech <-= 1 =>
 			;
@@ -1306,8 +1426,8 @@ guiloop()
 				menuposted = 0;
 			tkclient->wmctl(top, c);
 			if(c != nil && len c > 0 && c[0] == '!') {
-				aw := int tk->cmd(top, ". cget -actwidth");
-				ah := int tk->cmd(top, ". cget -actheight");
+				aw := int tk->cmd(top, ".c cget -actwidth");
+				ah := int tk->cmd(top, ".c cget -actheight");
 				if(aw > 0 && ah > 0)
 					allocframe(aw, ah);
 				if(comp.layout != nil)
@@ -1326,15 +1446,22 @@ guiloop()
 				# clears when the menu tears down (see the wreq arm above).
 				tk->pointer(top, *ptr);
 			} else if(ptr.buttons & 4) {
-				# B3: let the Tk binding fire and post the context menu.
-				menuposted = 1;
+				# B3: forward to Tk so a menu binding can fire — the
+				# canvas's, a hosted frame's, or a module widget's.
+				# menuposted is set when the menu actually posts
+				# (handleaction "menu"): setting it here wedged all
+				# pointer routing whenever the press landed on a
+				# widget with no menu binding and no menu appeared.
 				tk->pointer(top, *ptr);
 				lastbtn1 = 0;
 			} else if(comp == nil || comp.layout == nil) {
 				# Empty-state picker: edge-triggered button-1 click.
+				# The picker draws into the frame — translate the
+				# window-space event before hit-testing (see
+				# canvasorigin).
 				cur := ptr.buttons & 1;
 				if(cur && !lastbtn1)
-					pickerclick(ptr.xy);
+					pickerclick(toframe(ptr).xy);
 				lastbtn1 = cur;
 			} else {
 				lastbtn1 = ptr.buttons & 1;
@@ -1377,6 +1504,7 @@ handleaction(a: string)
 			x = hd tl toks;
 			y = hd tl tl toks;
 		}
+		menuposted = 1;
 		tk->cmd(top, sys->sprint(".ctx post %s %s", x, y));
 	"m" =>
 		if(tl toks != nil){
@@ -1452,15 +1580,22 @@ drawpicker(dst: ref Image)
 		return;
 
 	r := dst.r;
+	# NB this is the BUILT-IN fallback, shown only when the `picker`
+	# crystallisation is unavailable.  Unlike that picker, this list
+	# includes `picker` itself (so it can be restored by click); the
+	# hint below must make the difference visible — the two lists
+	# don't align row-for-row.
 	title := "Matrix — click a composition to load";
-	hint  := "(long-press / right-click for the full menu)";
+	hint  := "(fallback picker: /lib/matrix/compositions/picker is unavailable)";
 	pad := 12;
 	rowh := font_g.height + 8;
 
-	# Header.
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent),
+	# Header.  NB Image.text takes the TOP-LEFT of the text, not the
+	# baseline — adding ascent here pushed every label down out of
+	# its row band.
+	dst.text(Point(r.min.x + pad, r.min.y + pad),
 		textcolor, (0, 0), font_g, title);
-	dst.text(Point(r.min.x + pad, r.min.y + pad + font_g.ascent + rowh),
+	dst.text(Point(r.min.x + pad, r.min.y + pad + rowh),
 		dimcolor, (0, 0), font_g, hint);
 
 	y := r.min.y + pad + 2 * rowh + rowh / 2;
@@ -1491,7 +1626,7 @@ drawpicker(dst: ref Image)
 			    (r.max.x - pad, y + rowh));
 		# Subtle row background so the click affordance is visible.
 		dst.draw(row, divcolor, nil, (0, 0));
-		dst.text(Point(row.min.x + pad, y + font_g.ascent + 4),
+		dst.text(Point(row.min.x + pad, y + (rowh - font_g.height)/2),
 			textcolor, (0, 0), font_g, nm);
 		hits[nhit]  = nm;
 		rects[nhit] = row;
@@ -1558,10 +1693,15 @@ drawlayout(dst: ref Image, node: ref LayoutNode)
 					dst.draw(n.r, aimg, nil, aimg.r.min);
 			}
 		} else if(n.modname != "") {
-			# Module not loaded — show placeholder
+			# Module not loaded — say so, and say WHY when known.
+			# A silent blank region here is what "the wrong app
+			# loaded" reports are made of.
 			label := n.modname + " @ " + n.mount;
 			pt := Point(n.r.min.x + 8, n.r.min.y + 8 + font_g.height);
 			dst.text(pt, dimcolor, (0, 0), font_g, label);
+			if((lerr := geterr(n.name)) != nil)
+				dst.text(Point(pt.x, pt.y + font_g.height + 4),
+					textcolor, (0, 0), font_g, "failed — " + lerr);
 		}
 	}
 }
@@ -1583,6 +1723,7 @@ loaddisplaymodules()
 	if(comp == nil || comp.layout == nil)
 		return;
 	loadleafmodules(comp.layout);
+	tickms = recomputetick(comp.layout);
 }
 
 loadleafmodules(node: ref LayoutNode)
@@ -1611,11 +1752,79 @@ loadleafmodules(node: ref LayoutNode)
 		err := mod->init(display_g, font_g, n.mount);
 		if(err != nil) {
 			sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
+			seterr(n.name, "init: " + err);
 			return;
 		}
+		seterr(n.name, nil);
 		mod->resize(n.r);
 		n.mod = mod;
+		iv := UPDATE_MS;
+		if((tkr := load MatrixTicker path) != nil) {
+			iv = tkr->interval();
+			if(iv < MINTICK_MS)
+				iv = MINTICK_MS;
+			if(iv > UPDATE_MS)
+				iv = UPDATE_MS;
+		}
+		settick(n.name, iv);
 	}
+}
+
+seterr(name, err: string)
+{
+	nl: list of (string, string);
+	for(l := moderrs; l != nil; l = tl l)
+		if((hd l).t0 != name)
+			nl = hd l :: nl;
+	if(err != nil && err != "")
+		nl = (name, err) :: nl;
+	moderrs = nl;
+}
+
+geterr(name: string): string
+{
+	for(l := moderrs; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	return nil;
+}
+
+# Record (or refresh) a leaf's update interval.
+settick(name: string, iv: int)
+{
+	if((t := findtick(name)) != nil) {
+		t.ivl = iv;
+		t.acc = 0;
+		return;
+	}
+	ticks = ref Tick(name, iv, 0) :: ticks;
+}
+
+findtick(name: string): ref Tick
+{
+	for(l := ticks; l != nil; l = tl l)
+		if((hd l).name == name)
+			return hd l;
+	return nil;
+}
+
+# Timer period = min interval over the CURRENT layout's leaves (stale
+# tick entries from an unloaded composition must not keep it fast).
+recomputetick(node: ref LayoutNode): int
+{
+	m := UPDATE_MS;
+	if(node == nil)
+		return m;
+	pick n := node {
+	Split =>
+		m = recomputetick(n.child1);
+		if((m2 := recomputetick(n.child2)) < m)
+			m = m2;
+	Leaf =>
+		if((t := findtick(n.name)) != nil && t.ivl < m)
+			m = t.ivl;
+	}
+	return m;
 }
 
 # Host a Tk display module: a frame in a canvas window item at the
@@ -1626,10 +1835,16 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	tkm := load MatrixTkDisplay path;
 	if(tkm == nil) {
 		sys->fprint(stderr, "matrix: cannot load display module %s: %r\n", path);
+		seterr(n.name, sys->sprint("cannot load %s: %r", path));
 		return;
 	}
 	w := sys->sprint(".r%d", tkregionseq++);
 	tk->cmd(top, sys->sprint("frame %s", w));
+	# Hosted regions cover the canvas, so the canvas's B3 binding
+	# can't fire over them; the frame carries its own.  (Widgets
+	# the module packs need their own binds — Inferno Tk does not
+	# propagate unhandled events to parents.)
+	tk->cmd(top, sys->sprint("bind %s <Button-3> {send act menu %%X %%Y}", w));
 	itm := tk->cmd(top, sys->sprint(
 		".c create window %d %d -window %s -anchor nw",
 		n.r.min.x, n.r.min.y, w));
@@ -1646,10 +1861,21 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	err := tkm->init(top, w, n.mount);
 	if(err != nil) {
 		sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
+		seterr(n.name, "init: " + err);
 		tk->cmd(top, ".c delete " + itm);
 		tk->cmd(top, "destroy " + w);
 		return;
 	}
+	seterr(n.name, nil);
+	iv := UPDATE_MS;
+	if((tkr := load MatrixTicker path) != nil) {
+		iv = tkr->interval();
+		if(iv < MINTICK_MS)
+			iv = MINTICK_MS;
+		if(iv > UPDATE_MS)
+			iv = UPDATE_MS;
+	}
+	settick(n.name, iv);
 	n.tkmod = tkm;
 	n.tkwin = w;
 	n.tkitem = itm;
@@ -2020,6 +2246,12 @@ updatedisplaymodules(node: ref LayoutNode): int
 		c2 := updatedisplaymodules(n.child2);
 		return c1 | c2;
 	Leaf =>
+		if((t := findtick(n.name)) != nil) {
+			t.acc += tickms;
+			if(t.acc < t.ivl)
+				return 0;
+			t.acc = 0;
+		}
 		if(n.mod != nil)
 			return n.mod->update();
 		if(n.tkmod != nil)
@@ -2181,42 +2413,51 @@ domenuitem(action: string)
 		return;
 	}
 	if(action == "edit") {
-		if(comppath == "")
-			return;
-		# Route through luciuisrv's artifact ctl rather than spawning
-		# wm/editor in matrix's own slot.  Each Lucifer app slot has a
-		# single-shot appwm (lucifer.b:appwmrelay reads exactly once);
-		# matrix already consumed its slot for its own window, so
-		# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
-		# leave editor's wmclient->window blocked with no reader.
-		# Letting luciuisrv launch editor gives it its own slot + ctxt.
-		s := readfile("/mnt/ui/activity/current");
-		if(s == nil)
-			s = "0";
-		# Trim trailing whitespace from the activity id read.
-		for(i := len s - 1; i >= 0; i--)
-			if(s[i] != ' ' && s[i] != '\t' &&
-			   s[i] != '\n' && s[i] != '\r') {
-				s = s[0:i+1];
-				break;
-			}
-		pctl := "/mnt/ui/activity/" + s + "/presentation/ctl";
-		cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
-			"label=Edit data=" + comppath;
-		fd := sys->open(pctl, Sys->OWRITE);
-		if(fd == nil) {
-			sys->fprint(stderr, "matrix: cannot open %s: %r\n", pctl);
-			return;
+		editcurrent();
+		return;
+	}
+}
+
+# Open the current composition file in the Lucifer editor.  Shared by
+# the context menu and the ctl "edit" verb (so sh, agents, and Tk
+# buttons like the picker's all reach it over the same wire).
+editcurrent()
+{
+	if(comppath == "")
+		return;
+	# Route through luciuisrv's artifact ctl rather than spawning
+	# wm/editor in matrix's own slot.  Each Lucifer app slot has a
+	# single-shot appwm (lucifer.b:appwmrelay reads exactly once);
+	# matrix already consumed its slot for its own window, so
+	# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
+	# leave editor's wmclient->window blocked with no reader.
+	# Letting luciuisrv launch editor gives it its own slot + ctxt.
+	s := readfile("/mnt/ui/activity/current");
+	if(s == nil)
+		s = "0";
+	# Trim trailing whitespace from the activity id read.
+	for(i := len s - 1; i >= 0; i--)
+		if(s[i] != ' ' && s[i] != '\t' &&
+		   s[i] != '\n' && s[i] != '\r') {
+			s = s[0:i+1];
+			break;
 		}
-		b := array of byte cmd;
-		sys->write(fd, b, len b);
-		fd = nil;
-		# Surface the new editor tab.
-		fd = sys->open(pctl, Sys->OWRITE);
-		if(fd != nil) {
-			cb := array of byte "center id=editor";
-			sys->write(fd, cb, len cb);
-		}
+	pctl := "/mnt/ui/activity/" + s + "/presentation/ctl";
+	cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
+		"label=Edit data=" + comppath;
+	fd := sys->open(pctl, Sys->OWRITE);
+	if(fd == nil) {
+		sys->fprint(stderr, "matrix: cannot open %s: %r\n", pctl);
+		return;
+	}
+	b := array of byte cmd;
+	sys->write(fd, b, len b);
+	fd = nil;
+	# Surface the new editor tab.
+	fd = sys->open(pctl, Sys->OWRITE);
+	if(fd != nil) {
+		cb := array of byte "center id=editor";
+		sys->write(fd, cb, len cb);
 	}
 }
 
@@ -2230,23 +2471,44 @@ basename(p: string): string
 
 # ── Event routing ───────────────────────────────────────────
 
+# Pointer events arrive in WINDOW coordinates (tkclient's space,
+# origin at the toplevel's top-left, titlebar included).  Every
+# module/app/picker rect lives in FRAME coordinates — the canvas
+# area below the Tk titlebar.  Hit-testing raw window coords
+# against frame rects shifted every hot zone up by the titlebar
+# height: clicks landed on the row BELOW what they visually hit.
+# Translate once here; Tk-hosted leaves get the RAW event back
+# (Tk routes in window coordinates itself).
+canvasorigin(): Point
+{
+	ox := int tk->cmd(top, ".c cget -actx");
+	oy := int tk->cmd(top, ".c cget -acty");
+	return Point(ox, oy);
+}
+
+toframe(p: ref Pointer): ref Pointer
+{
+	off := canvasorigin();
+	return ref Pointer(p.buttons, Point(p.xy.x - off.x, p.xy.y - off.y), p.msec);
+}
+
 handleptr(p: ref Pointer)
 {
 	if(comp == nil || comp.layout == nil)
 		return;
-	routeptr(comp.layout, p);
+	routeptr(comp.layout, toframe(p), p);
 	dirty = 1;
 }
 
-routeptr(node: ref LayoutNode, p: ref Pointer): int
+routeptr(node: ref LayoutNode, p, rawp: ref Pointer): int
 {
 	if(node == nil)
 		return 0;
 	pick n := node {
 	Split =>
-		if(routeptr(n.child1, p))
+		if(routeptr(n.child1, p, rawp))
 			return 1;
-		return routeptr(n.child2, p);
+		return routeptr(n.child2, p, rawp);
 	Leaf =>
 		if(n.mod != nil && n.r.contains(p.xy)) {
 			focusmod = n.mod;
@@ -2256,11 +2518,12 @@ routeptr(node: ref LayoutNode, p: ref Pointer): int
 		if(n.tkmod != nil && n.r.contains(p.xy)) {
 			# Tk hit-tests, fires bindings, and manages widget
 			# focus itself; keys follow while the pointer stays
-			# in a hosted region.
+			# in a hosted region.  Tk gets the RAW window-space
+			# event — its widgets live in that space.
 			focusmod = nil;
 			tkfocus = 1;
 			appkbd = nil;
-			tk->pointer(top, *p);
+			tk->pointer(top, *rawp);
 			return 1;
 		}
 		if(n.modname == "app" && n.r.contains(p.xy)) {
@@ -2318,8 +2581,8 @@ handlekey(k: int)
 		}
 		return;
 	}
-	if(focusmod != nil)
-		focusmod->key(k);
+	if(focusmod != nil && focusmod->key(k))
+		dirty = 1;
 }
 
 # ── Watch rules ─────────────────────────────────────────────
@@ -2447,6 +2710,7 @@ reloadcomposition(text: string)
 	# the new composition's watcher starts with all-unseen state, so
 	# a just-loaded composition can never fire immediately.
 	stopwatchers();
+	moderrs = nil;	# stale failures must not annotate the new layout's leaves
 
 	# Incremental: entries unchanged between old and new keep their
 	# live module instance (and, for services, their running proc).

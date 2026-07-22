@@ -1,0 +1,20 @@
+# plots-demo — the generic chart modules on live system data.
+#
+# line-plot graphs ANY "[ts] v1 [v2 ...]" history file (every value
+# column becomes an anti-aliased series); sparkline is the one-line
+# trend strip.  The top plot and the sparkline read the sysmon
+# service's real cpu history ring, so they move by themselves; the
+# bottom plot reads the committed two-column sample /lib/matrix/
+# demo-series to show multi-series rendering.  Any file an agent
+# writes with echo has the same shape.  Compose your own board.
+
+layout hsplit 55 45
+left  vsplit 50 50
+right vsplit 34 66
+
+left/top     line-plot /tmp/matrix/sysmon-svc/cpu/history
+left/bottom  line-plot /lib/matrix/demo-series
+right/top    sparkline /tmp/matrix/sysmon-svc/cpu/history
+right/bottom cpu-gauge /tmp/matrix/sysmon-svc
+
+service sysmon-svc /

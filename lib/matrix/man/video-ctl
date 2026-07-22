@@ -1,0 +1,35 @@
+NAME
+	video-ctl (tk-display) - build play/pause/stop/seek Tk buttons that write transport commands to a vid9p ctl file, with a label mirroring stream status
+
+INTERFACE
+	tk-display (MatrixTkDisplay + MatrixTicker)
+
+READS
+	<mount>/fmt	"<w> <h> i420 <fps>" — fps for the time readout.
+	<mount>/status	state/pos/frames — mirrored into the label.
+
+WRITES
+	<mount>/ctl	"play", "pause", "stop", "seek -5000", "seek +5000"
+
+DESCRIPTION
+	The mount path is a vid9p stream directory (e.g. /mnt/video/0).
+	Each button press writes one transport string to <mount>/ctl —
+	exactly the wire Inferno sh or an agent uses:
+
+	    echo pause > /mnt/video/0/ctl
+	    echo 'seek +5000' > /mnt/video/0/ctl
+
+	The playhead is vid9p SERVER state (appl/cmd/vid9p.b): these
+	buttons, a video-pane's transport keys, sh, and agents all drive
+	the same state, and every viewer of the stream stays in sync.
+	On a live feed, stop snaps back to the live edge and seeking
+	back replays the retained buffer (DVR).
+
+	Compose beside a video-pane on the same mount; the video-player
+	and video-live crystallisations in /lib/matrix/compositions are
+	exactly that wiring.
+
+SEE ALSO
+	video-pane (the display half)
+	vid9p (appl/cmd/vid9p.b — serves /mnt/video/<id>, owns transport)
+	docs/H264-9P-BRIDGE.md

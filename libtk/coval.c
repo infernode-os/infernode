@@ -191,9 +191,42 @@ tkcvsovaldraw(Image *img, TkCitem *i, TkEnv *pe)
 	dy = Dy(d)/2;
 	c.x = d.min.x + dx;
 	c.y = d.min.y + dy;
-	if(pen != nil)
-		fillellipse(img, c, dx, dy, pen, c);
-	ellipse(img, c, dx, dy, w, tkgc(e, TkCforegnd), c);
+
+	/* anti-aliased: coverage masks blended like glyphs (see utils.c);
+	 * the old fillellipse/ellipse path drew stepped edges */
+	{
+		Rectangle bb;
+		uchar *cov;
+		int W, H, ow, cx8, cy8;
+
+		ow = 2*w;
+		if(ow <= 0)
+			ow = 1;
+		bb = insetrect(d, -(ow/2 + 1));
+		if(rectclip(&bb, img->clipr) == 0)
+			return;
+		W = Dx(bb);
+		H = Dy(bb);
+		cov = malloc(W*H);
+		if(cov == nil){
+			/* out of memory: legible beats invisible */
+			if(pen != nil)
+				fillellipse(img, c, dx, dy, pen, c);
+			ellipse(img, c, dx, dy, w, tkgc(e, TkCforegnd), c);
+			return;
+		}
+		cx8 = 8*(c.x - bb.min.x);
+		cy8 = 8*(c.y - bb.min.y);
+		if(pen != nil){
+			memset(cov, 0, W*H);
+			tkaacovellipse(cov, W, H, cx8, cy8, 8*dx, 8*dy, 0);
+			tkaacover(img, bb, pen, cov);
+		}
+		memset(cov, 0, W*H);
+		tkaacovellipse(cov, W, H, cx8, cy8, 8*dx + 4*ow, 8*dy + 4*ow, 8*ow);
+		tkaacover(img, bb, tkgc(e, TkCforegnd), cov);
+		free(cov);
+	}
 }
 
 char*

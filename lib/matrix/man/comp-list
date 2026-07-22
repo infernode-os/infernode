@@ -1,0 +1,36 @@
+NAME
+	comp-list (tk-display) - list the compositions in a directory as Tk buttons that load the chosen one via the Matrix ctl file
+
+INTERFACE
+	tk-display (MatrixTkDisplay)
+
+READS
+	<mount>		a directory of composition files (normally
+			/lib/matrix/compositions).
+
+WRITES
+	/mnt/matrix/ctl	"load <name>" when a composition button is
+			pressed; "edit" when the `edit this picker`
+			button is pressed (opens the current composition
+			— the picker itself — in the Lucifer editor).
+
+DESCRIPTION
+	The module behind the default picker composition
+	(/lib/matrix/compositions/picker).  It enumerates the mount
+	directory, skips the picker composition itself, and builds one
+	full-width Tk button per composition; a press writes
+	"load <name>" to the Matrix control file, replacing the current
+	composition in place.  The buttons are real Tk widgets on
+	purpose: the engine owns their geometry and routing, so the
+	click target IS the tile — and, like every Tk widget, they are
+	drivable from Inferno sh.  The directory is rescanned once a
+	second (MatrixTicker); the button column rebuilds only when the
+	set of compositions changes.
+
+	Because the picker is itself an ordinary crystallisation wired
+	to this module, users and agents can edit or replace it like
+	any other composition.
+
+SEE ALSO
+	/lib/matrix/compositions/picker (the crystallisation using this)
+	docs/matrix-architecture.md (the ctl load verb)

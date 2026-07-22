@@ -58,10 +58,36 @@ Generates an H.264 testsrc clip, decodes it through both `vdec` and `ffmpeg`, an
 asserts the raw I420 is byte-identical — i.e. that the stride-stripping and plane
 packing are correct. Prints `PASS`/`FAIL`.
 
+## Inputs
+
+A local file **or** a network URL — `rtsp://`, `rtp://`, `http(s)://`, `udp://`
+(INFR-271). URLs open through libavformat's protocol layer with an options
+dictionary:
+
+```sh
+vdec rtsp://cam.local/stream --rtsp-transport tcp --timeout 5 --y4m out.y4m
+vdec http://host/clip.mp4 --limit 100
+```
+
+`--rtsp-transport tcp|udp` forces the RTSP transport; `--timeout SECONDS` sets a
+network I/O read timeout.
+
+## Hardware decode
+
+`--hwaccel none|videotoolbox|nvdec|cuda|vaapi|qsv` selects a libavcodec hardware
+backend (INFR-265). Selection is **best-effort**: if the device can't be created
+or the codec has no matching hw-config, `vdec` logs and falls back to software.
+Hardware frames are transferred to system memory and converted to canonical I420
+before the wire, so the output format is identical across backends. `none`
+(default) is the only backend validated byte-for-byte against ffmpeg here;
+VideoToolbox (macOS) / NVDEC (Jetson) need on-device validation.
+
 ## Status / roadmap
 
-- **Now:** software decode (libavcodec). Output I420 maps 1:1 onto the `YCbCr`
-  ADT the existing MPEG-1 render path already consumes.
-- **Next (ticketed):** VideoToolbox (macOS) + NVDEC (Jetson) hwaccel backends;
-  the thin Limbo `vid9p` styxserver that presents `/n/video`; reuse of
-  `appl/mpeg` rendering; eventual fold of this crate into the Rust kernel.
+- **Now:** software decode (byte-identical to ffmpeg); file and network-URL
+  (RTSP/RTP/HTTP/UDP) inputs; `--hwaccel` selection with software fallback.
+  Output I420 maps 1:1 onto the `YCbCr` ADT the existing render path consumes.
+- **Live in InferNode:** the Limbo `vid9p` styxserver presents `/mnt/video`, and
+  both `appl/mpeg/vidplay9p` and the Matrix `video-pane` render it.
+- **Next (ticketed):** validate VideoToolbox/NVDEC on real hardware; Rust-native
+  9P server; eventual fold of this crate into the Rust kernel.

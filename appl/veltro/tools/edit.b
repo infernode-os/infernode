@@ -371,6 +371,10 @@ readfile(path: string): array of byte
 # Permit the private workspace or the most-specific explicit rw grant.
 checkreadonly(path: string): string
 {
+	perr := validatepath(path);
+	if(perr != nil)
+		return "error: invalid path: " + perr;
+
 	tmp := "/tmp/veltro/scratch";
 	if(len path >= len tmp && path[0:len tmp] == tmp &&
 	   (len path == len tmp || path[len tmp] == '/'))
@@ -418,4 +422,29 @@ checkreadonly(path: string): string
 	if(bestperm == "ro")
 		return sys->sprint("error: %s is read-only", path);
 	return sys->sprint("error: %s is not covered by an rw path grant", path);
+}
+
+# Reject path forms whose lexical spelling can escape a namespace grant.
+validatepath(path: string): string
+{
+	if(path == nil || len path == 0)
+		return "empty path";
+	if(path[0] != '/')
+		return "path must be absolute";
+	for(i := 0; i < len path; i++)
+		if(path[i] == ' ' || path[i] == '\n' || path[i] == '\r' ||
+		   path[i] == '\t' || path[i] == ',')
+			return "path contains control delimiter";
+	start := 1;
+	for(i = 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			comp := path[start:i];
+			if(comp == "")
+				return "empty path component";
+			if(comp == "." || comp == "..")
+				return "dot path component";
+			start = i + 1;
+		}
+	}
+	return nil;
 }

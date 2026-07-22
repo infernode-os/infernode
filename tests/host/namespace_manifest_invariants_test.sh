@@ -46,6 +46,8 @@ assert_absent_paths() {
 		"/mnt/toolctl"
 		"/mnt/toolctl/ctl"
 		"/mnt/ui"
+		"/mnt/matrix"
+		"/phone"
 		"/chan"
 		"/net"
 		"/net.alt"
@@ -59,16 +61,24 @@ assert_absent_paths() {
 		"/mnt/llm"
 	)
 	local found=""
-	local p
-	for p in "${bad[@]}"; do
-		if grep -q "^path=${p}\\([ 	]\\|$\\)" <<<"$output"; then
-			found="$found $p"
-		fi
-	done
+	local line entry p
+	while IFS= read -r line; do
+		case "$line" in
+		path=*)
+			entry="${line#path=}"
+			entry="${entry%%[ 	]*}"
+			for p in "${bad[@]}"; do
+				if [[ "$entry" == "$p" || "$entry" == "$p/"* ]]; then
+					found="$found $entry"
+				fi
+			done
+			;;
+		esac
+	done <<<"$output"
 	if [[ -n "$found" ]]; then
 		fail "$label manifest exposes dangerous paths:$found"
 	else
-		pass "$label manifest omits dangerous control, network, wallet, message, UI, and LLM paths"
+		pass "$label manifest omits dangerous control, network, wallet, message, fixed-service, UI, and LLM paths"
 	fi
 }
 

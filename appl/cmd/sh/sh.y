@@ -1207,6 +1207,9 @@ diagnostic(ctxt: ref Context, s: string)
 
 Context.new(drawcontext: ref Draw->Context): ref Context
 {
+	# initialise before waitfd(): external callers (load Sh; Context.new())
+	# arrive with the sys module variable still nil.
+	initialise();
 	return contextwithwait(drawcontext, waitfd());
 }
 

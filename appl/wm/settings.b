@@ -128,11 +128,22 @@ SFONT: con "/fonts/combined/unicode.sans.14.font";
 theme_names: array of string;
 llm_mode_names := array[] of { "local", "remote" };
 llm_mode_labels := array[] of { "Local", "Remote (9P)" };
-llm_backend_names := array[] of { "api", "openai" };
-llm_backend_labels := array[] of { "Remote API", "Local model" };
+# "cli" is the host-side CLI gateway (claude-gate, tools/claude-gate/):
+# Anthropic models over the host's Claude Code CLI login (subscription
+# billing) instead of an API key. On the wire it's OpenAI-shaped on
+# localhost, so llmsrv dials it with -b openai; the distinct ndb value
+# (backend=cli) keeps the intent visible to this UI and the boot profile.
+llm_backend_names := array[] of { "api", "openai", "cli" };
+llm_backend_labels := array[] of { "Remote API", "Local model", "Claude CLI" };
 llm_stack_names  := array[] of { "ollama", "sglang", "custom" };
 llm_stack_labels := array[] of { "Ollama (:11434)", "SGLang (:30000)", "Custom URL" };
 llm_is_remote: int;		# reflects the mode radio
+llm_mode_set: int;		# 1 once llm_is_remote was seeded from config/click —
+				# without this the first panel build showed the
+				# local fields even when /lib/ndb/llm said remote
+llm_backend_sel := "";		# backend radio click, preserved across the panel
+				# rebuild (which re-reads /lib/ndb/llm and would
+				# otherwise snap the radio back to the old value)
 llm_have_synthfs: int;		# 1 when /llm/ctl is mountable
 llm_models: array of string;	# current model catalogue (for tap-to-fill)
 
@@ -371,8 +382,29 @@ paneltheme()
 panelllm()
 {
 	(curmode, curbackend, cururl, curmodel, curdial, haskey) := readllmconfig();
+	# Seed the mode flag from config on the first build only; after a
+	# radio click the flag is authoritative (the on-disk value is stale
+	# until Apply).
+	if(!llm_mode_set)
+		llm_is_remote = curmode == "remote";
+	llm_mode_set = 1;
 	if(llm_is_remote)
 		curmode = "remote";
+	else
+		curmode = "local";
+	# Same for the backend radio: a click rebuilds this panel, which
+	# re-reads /lib/ndb/llm — still holding the OLD backend — and the
+	# radio would snap back (classic symptom: the user "switches" to a
+	# new backend, but Apply writes the old one). When the switch is
+	# live, also swap in the new backend's default URL if the on-disk
+	# URL is itself just some backend's default, and clear the model —
+	# it's almost certainly wrong for the new backend.
+	if(llm_backend_sel != "" && llm_backend_sel != curbackend) {
+		curbackend = llm_backend_sel;
+		if(isdefaulturl(cururl))
+			cururl = defaulturlfor(curbackend);
+		curmodel = "";
+	}
 	hdr("connh", "Connection");
 	tk->cmd(top, "variable llmmode " + curmode);
 	for(i := 0; i < len llm_mode_names; i++)
@@ -400,6 +432,11 @@ panelllm()
 				i, tk->quote(llm_backend_labels[i]), llm_backend_names[i], c_bg, c_fg, i));
 
 		llm_have_synthfs = synthfs_present();
+		# Claude CLI gateway: no stack radio (the backend radio IS the
+		# choice), but surface llmctl's live view when available so the
+		# user can see whether claude-gate is actually up.
+		if(curbackend == "cli" && llm_have_synthfs)
+			lbl("lstat", readllmstatus_summary());
 		if(curbackend == "openai" && llm_have_synthfs){
 			lbl("lstat", readllmstatus_summary());
 			hdr("sh", "Local stack");
@@ -419,16 +456,35 @@ panelllm()
 		llm_models = readllmmodels();
 		if(llm_models != nil){
 			lbl("modlsl", "Available models (tap to choose):");
-			tk->cmd(top, sys->sprint("listbox .content.modls -height 3 -font %s -selectmode browse" +
+			# Tk dimensions are PIXELS unless unit-suffixed; 'h' is
+			# character heights (libtk/utils.c). The old bare
+			# "-height 3" rendered a 3px sliver whose taps walked the
+			# selection down one row per click with no way back. Size
+			# to the catalogue (capped), scrollbar for long lists.
+			nvis := len llm_models;
+			if(nvis > 6)
+				nvis = 6;
+			tk->cmd(top, "frame .content.modlsf -background " + c_bg);
+			tk->cmd(top, sys->sprint("listbox .content.modlsf.lb -height %dh -font %s -selectmode browse" +
+				" -yscrollcommand {.content.modlsf.sb set}" +
 				" -background %s -foreground %s -selectbackground %s -selectforeground %s",
-				SFONT, c_bg, c_fg, c_accent, c_bg));
+				nvis, SFONT, c_bg, c_fg, c_accent, c_bg));
+			tk->cmd(top, "scrollbar .content.modlsf.sb -command {.content.modlsf.lb yview}" +
+				" -background " + c_bg);
 			for(i := 0; i < len llm_models; i++)
-				tk->cmd(top, sys->sprint(".content.modls insert end {%s}", llm_models[i]));
-			tk->cmd(top, "pack .content.modls -side top -anchor w -fill x");
-			tk->cmd(top, "bind .content.modls <ButtonRelease-1> {send act llmmodel}");
+				tk->cmd(top, sys->sprint(".content.modlsf.lb insert end {%s}", llm_models[i]));
+			if(len llm_models > nvis)
+				tk->cmd(top, "pack .content.modlsf.sb -side right -fill y");
+			tk->cmd(top, "pack .content.modlsf.lb -side left -fill x -expand 1");
+			tk->cmd(top, "pack .content.modlsf -side top -anchor w -fill x");
+			tk->cmd(top, "bind .content.modlsf.lb <ButtonRelease-1> {send act llmmodel}");
 		}
+		# The CLI gateway authenticates with the host's own claude
+		# login (subscription) — no API key involved.
 		ks := "API key: not set (add via Keyring app)";
-		if(haskey)
+		if(curbackend == "cli")
+			ks = "API key: not needed (uses host claude login)";
+		else if(haskey)
 			ks = "API key: configured";
 		lbl("keyl", ks);
 		ps := "Key persistence: inactive (login skipped)";
@@ -555,9 +611,13 @@ handleaction(a: string)
 	"llmmode" =>
 		llm_is_remote = tkv("llmmode") == "remote";
 		buildpanel(CatLLM);
-	"llmbackend" =>	buildpanel(CatLLM);
+	"llmbackend" =>
+		# Remember the click before rebuilding — the rebuild re-reads
+		# /lib/ndb/llm and would otherwise snap the radio back.
+		llm_backend_sel = tkv("llmbackend");
+		buildpanel(CatLLM);
 	"llmmodel" =>
-		s := tk->cmd(top, ".content.modls curselection");
+		s := tk->cmd(top, ".content.modlsf.lb curselection");
 		if(s != nil && len s > 0 && s[0] >= '0' && s[0] <= '9' && llm_models != nil){
 			i := int s;
 			if(i >= 0 && i < len llm_models){
@@ -942,11 +1002,33 @@ applyllm()
 
 	# Local mode: determine selected backend
 	backend := tkv("llmbackend");
-	if(backend != "api" && backend != "openai")
+	if(backend != "api" && backend != "openai" && backend != "cli")
 		backend = "api";
 
 	url := strip(eget(".content.url"));
 	model := strip(eget(".content.model"));
+
+	# Claude CLI gateway: hand off to llmctl ("set claude" starts
+	# claude-gate, stops the GPU stacks, waits for health, writes
+	# url= and backend=cli into ndb) when the /llm synthfs is mounted.
+	# Without the synthfs (no llmctl9p on this host) persist config
+	# only — the user starts the gate by hand (tools/claude-gate/).
+	if(backend == "cli") {
+		if(llm_have_synthfs) {
+			flashstatus("starting claude-gate…");
+			err := writellmctl("set claude");
+			if(err != "") {
+				flashstatus("llmctl error: " + err);
+				return;
+			}
+			writellmconfig("local", backend, url, model, "");
+			flashstatus("Claude CLI gateway active — restart llmsrv for the new URL to be dialed");
+			return;
+		}
+		writellmconfig("local", backend, url, model, "");
+		flashstatus("saved — start claude-gate on the host (tools/claude-gate), then relaunch");
+		return;
+	}
 
 	# If the user picked Ollama or SGLang via the stack radio (only
 	# offered when backend=openai and /llm/ctl is mounted), hand off
@@ -976,6 +1058,30 @@ applyllm()
 
 	writellmconfig("local", backend, url, model, "");
 	flashstatus("LLM config saved — restart llmsrv for backend/URL changes");
+}
+
+# True when the URL is empty or is itself just some backend's default —
+# i.e. safe to replace when the user switches the backend radio. A
+# hand-entered URL never matches and is preserved.
+isdefaulturl(u: string): int
+{
+	u = strip(u);
+	return u == "" ||
+		u == "https://api.anthropic.com" ||
+		u == "http://localhost:11434/v1" ||
+		u == "http://127.0.0.1:11434/v1" ||
+		u == "http://127.0.0.1:30000/v1" ||
+		u == "http://127.0.0.1:11435/v1";
+}
+
+defaulturlfor(backend: string): string
+{
+	case backend {
+	"openai" =>	return "http://localhost:11434/v1";
+	"api" =>	return "https://api.anthropic.com";
+	"cli" =>	return "http://127.0.0.1:11435/v1";
+	}
+	return "";
 }
 
 readllmconfig(): (string, string, string, string, string, int)
@@ -1018,6 +1124,8 @@ readllmconfig(): (string, string, string, string, string, int)
 			url = "http://localhost:11434/v1";
 		else if(backend == "api")
 			url = "https://api.anthropic.com";
+		else if(backend == "cli")
+			url = "http://127.0.0.1:11435/v1";
 	}
 
 	# Check for API key in factotum

@@ -789,7 +789,7 @@ privilegedcontrolpath(path: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(path == dangerous[i])
+		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
 	if(walletaccountcontrolpath(path))
 		return 1;
@@ -799,6 +799,10 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(appipccontrolpath(path))
 		return 1;
+	if(uiagentcontrolpath(path))
+		return 1;
+	if(fixedservicecontrolpath(path))
+		return 1;
 	return 0;
 }
 
@@ -806,7 +810,7 @@ walletaccountcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
-	return componentcount(path) == 4 && pathhascomponent(path, "ctl");
+	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
 }
 
 ftreecontrolpath(path: string): int
@@ -836,6 +840,19 @@ appipccontrolpath(path: string): int
 		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
 		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
 		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+}
+
+uiagentcontrolpath(path: string): int
+{
+	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
+	# grant would also hand write/exec every per-activity ctl file.
+	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+fixedservicecontrolpath(path: string): int
+{
+	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/phone" || prefix(path, "/phone/");
 }
 
 pathperm(path: string): string
@@ -1406,15 +1423,6 @@ emitmanifestnow(mpath: string)
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
-	# Auto-grant /phone when any phone-bridge tool is registered. devphone
-	# (#f) is bound at /phone by lib/lucifer/boot-mobile.sh (mobile) or
-	# is mounted from a paired phone (desktop). Child activity namespaces
-	# don't inherit that bind, so restrictns() would otherwise hide /phone
-	# and the sms / dial / contacts tools fail with "does not exist".
-	if(findtool("sms") != nil || findtool("dial") != nil ||
-	   findtool("contacts") != nil)
-		if(!strlist_contains(allpaths, "/phone"))
-			allpaths = "/phone" :: allpaths;
 	for(tl3 := toolnames; tl3 != nil; tl3 = tl tl3)
 		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
@@ -1472,11 +1480,6 @@ applynsrestriction(invokedtool: string): string
 	if(invokedtool == "say" || invokedtool == "hear")
 		if(!strlist_contains(allpaths, "/n/speech"))
 			allpaths = "/n/speech" :: allpaths;
-	# Auto-grant /phone when sms or dial tool is registered (see
-	# companion in emitmanifestnow above — same reason).
-	if(invokedtool == "sms" || invokedtool == "dial")
-		if(!strlist_contains(allpaths, "/phone"))
-			allpaths = "/phone" :: allpaths;
 	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))
@@ -1516,8 +1519,6 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	case tool {
 	"launch" =>
 		return addpath(paths, "/dis/wm");
-	"matrix" =>
-		return addpath(paths, "/mnt/matrix");
 	"charon" =>
 		return addpath(paths, "/tmp/veltro/browser");
 	"editor" =>
@@ -1762,7 +1763,11 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "path not bound: " + spath));
 					}
 				} else if(len data > 11 && data[0:11] == "budget-add ") {
-					bname := data[11:];
+					bname := str->tolower(data[11:]);
+					if(!toolavailable(bname)) {
+						srv.reply(ref Rmsg.Error(m.tag, "unknown budget tool: " + bname));
+						break;
+					}
 					if(!strlist_contains(budget, bname))
 						budget = bname :: budget;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));

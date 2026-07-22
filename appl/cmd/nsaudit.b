@@ -499,7 +499,7 @@ privilegedControlGrant(p: string): int
 		"/n/wallet/new",
 	};
 	for(i := 0; i < len dangerous; i++)
-		if(p == dangerous[i])
+		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
 			return 1;
 	if(walletAccountControlGrant(p))
 		return 1;
@@ -509,6 +509,10 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(appIpcControlGrant(p))
 		return 1;
+	if(uiAgentControlGrant(p))
+		return 1;
+	if(fixedServiceControlGrant(p))
+		return 1;
 	return 0;
 }
 
@@ -516,7 +520,7 @@ walletAccountControlGrant(p: string): int
 {
 	if(!prefix(p, "/n/wallet/"))
 		return 0;
-	return componentcount(p) == 4 && pathhascomponent(p, "ctl");
+	return componentcount(p) >= 4 && pathhascomponent(p, "ctl");
 }
 
 ftreeControlGrant(p: string): int
@@ -538,6 +542,17 @@ appIpcControlGrant(p: string): int
 		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
 		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
 		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
+}
+
+uiAgentControlGrant(p: string): int
+{
+	return p == "/mnt/ui" || prefix(p, "/mnt/ui/");
+}
+
+fixedServiceControlGrant(p: string): int
+{
+	return p == "/mnt/matrix" || prefix(p, "/mnt/matrix/") ||
+		p == "/phone" || prefix(p, "/phone/");
 }
 
 directMailSendGrant(p: string): int

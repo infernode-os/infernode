@@ -157,6 +157,7 @@ dir(name: string, perm: int, path: int): Sys->Dir
 allowed_verbs := array[] of {
 	"set ollama",
 	"set sglang",
+	"set claude",
 	"set none",
 };
 

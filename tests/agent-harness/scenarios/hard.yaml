@@ -1,0 +1,78 @@
+# Harder scenarios probing new failure modes: sequential-dependency delegation
+# (directly stresses the task-output-retrieval gap INFR-389), error recovery,
+# and an ambiguous open-ended request. Targets Claude Sonnet on the CLI.
+
+scenarios:
+
+  - name: seq_dependency
+    category: over-delegation
+    description: >
+      A two-stage read-only lookup (find the largest persona file, then count
+      its lines). All the tools needed (read/list/find) are in Activity 0's own
+      slice, so the RIGHT behaviour is to answer directly, not to spin up task
+      agents. Probes over-delegation of simple lookups. (Note: does NOT stress
+      INFR-389 — no forced delegation. A proper output-retrieval stressor needs
+      a stage-1 tool outside the meta-agent's slice; TODO separate scenario.)
+    settle: 6
+    timeout: 300
+    prompt: >
+      First find which persona file in /lib/veltro/agents is the largest, then
+      tell me exactly how many lines that particular file has.
+    expects:
+      # real success = an actual line count came back (direct or delegated)
+      reply_regex: "\\b\\d{1,4}\\s*(lines|line)\\b"
+      no_duplicate_activities: true
+    forbid:
+      reply_regex: "(?i)(couldn't complete|could not|unable to|no such tool|i cannot retrieve)"
+
+  - name: error_recovery
+    category: error-recovery
+    description: >
+      The requested file does not exist. The agent must report that clearly and
+      NOT fabricate a summary or spin. Probes honest failure handling.
+    settle: 5
+    timeout: 300
+    prompt: >
+      Read the file /tmp/nonexistent-grind-file-9x7.txt and summarize its
+      contents for me.
+    expects:
+      reply_regex: "(?i)(does not exist|doesn't exist|not found|no such|couldn't find|isn't there|no (such )?file|empty|missing)"
+    forbid:
+      # fabricating content or spinning
+      reply_regex: "(?i)(the file contains|the document describes|in summary, it|here is a summary of its contents)"
+
+  - name: ambiguous_fractal
+    category: model-character
+    description: >
+      Open-ended "something interesting" — a good Chief of Staff acts (delegates
+      a fractal task) rather than interrogating the user. Probes bias-to-action
+      vs over-clarifying.
+    settle: 7
+    timeout: 360
+    prompt: "Show me something interesting with the fractals app."
+    expects:
+      trajectory_tool: task
+      no_duplicate_activities: true
+    forbid:
+      reply_regex: "(?i)(what would you like|which .* would you|could you clarify|what kind of|what sort of|can you specify|do you want me to)"
+
+  - name: exec_value_handoff
+    category: delegation-sequential
+    description: >
+      Forces delegation with a VALUE handoff and no shortcut: the meta-agent has
+      no exec tool, so it must delegate a shell command to a task agent, then use
+      that command's numeric output (a value it cannot fabricate) to answer.
+      Directly stresses INFR-389 — the parent must retrieve the child's result.
+      Expect failure until INFR-389 is fixed.
+    settle: 8
+    timeout: 420
+    prompt: >
+      Using a shell command (do not just read the file yourself), get the exact
+      number of lines in /lib/veltro/system.txt, then tell me that number and
+      whether it is over 100.
+    expects:
+      trajectory_tool: task
+      no_duplicate_activities: true
+      reply_regex: "\\b\\d{1,4}\\b.*(over 100|under 100|more than 100|less than 100|not over 100)"
+    forbid:
+      reply_regex: "(?i)(couldn't retrieve|can't retrieve|no such tool|couldn't complete|unable to|didn't return|no output|can't get the result)"

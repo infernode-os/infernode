@@ -117,6 +117,19 @@ exec(args: string): string
 	(cmd, rest) := splitfirst(args);
 	cmd = str->tolower(cmd);
 
+	# Every command operates on the runtime's control filesystem at /mnt/matrix.
+	# If the runtime is not running that filesystem is absent, and each command
+	# would otherwise fail with a raw "file does not exist" — which sends the
+	# agent thrashing around the namespace hunting for matrix. Detect it once and
+	# return a single clear, actionable message instead.
+	if(!running())
+		return "Matrix is not running: its control filesystem at /mnt/matrix is " +
+			"not mounted, so there is nothing to compose against yet. Start the " +
+			"runtime first — if you have the 'launch' tool, run:  launch matrix  " +
+			"(or wm/matrix -h <composition> for a headless run); otherwise report " +
+			"to the user that Matrix must be started before it can be explored. " +
+			"Once it is running, retry (start with 'matrix index').";
+
 	case cmd {
 	"index" =>
 		return readfile(MATRIX + "/library/index");
@@ -124,6 +137,8 @@ exec(args: string): string
 		m := strip(rest);
 		if(m == "")
 			return "error: man needs a module name (see 'matrix index')";
+		if(!safeleaf(m))
+			return "error: unsafe module name";
 		return readfile(MATRIX + "/library/man/" + m);
 	"library" =>
 		return lsdir(MATRIX + "/library/compositions");
@@ -131,6 +146,8 @@ exec(args: string): string
 		nm := strip(rest);
 		if(nm == "")
 			return "error: story needs a composition name (see 'matrix library')";
+		if(!safeleaf(nm))
+			return "error: unsafe composition name";
 		return readfile(MATRIX + "/library/compositions/" + nm);
 	"status" =>
 		return dostatus();
@@ -142,6 +159,9 @@ exec(args: string): string
 		verb := strip(rest);
 		if(verb == "")
 			return "error: ctl needs a verb: load <name> | load - | unload | pin <name> | unpin <name>";
+		err := validctl(verb);
+		if(err != nil)
+			return "error: " + err;
 		return writectl(verb);
 	"out" =>
 		return doout(rest);
@@ -200,13 +220,55 @@ doout(rest: string): string
 	(m, file) := splitfirst(rest);
 	if(m == "")
 		return "error: out needs a module name";
+	if(!safeleaf(m))
+		return "error: unsafe module name";
 	base := MATRIX + "/modules/" + m + "/out";
 	if(strip(file) == "")
 		return lsdir(base);
-	return readfile(base + "/" + strip(file));
+	file = strip(file);
+	if(!saferelpath(file))
+		return "error: unsafe output file name";
+	return readfile(base + "/" + file);
+}
+
+validctl(verb: string): string
+{
+	if(hascontrol(verb))
+		return "ctl verb may not contain control text";
+	(cmd, rest) := splitfirst(verb);
+	cmd = str->tolower(cmd);
+	rest = strip(rest);
+	case cmd {
+	"unload" =>
+		if(rest != "")
+			return "unload takes no arguments";
+		return nil;
+	"load" =>
+		if(rest == "")
+			return "load needs a composition name";
+		if(rest == "-")
+			return nil;
+		if(!safeleaf(rest))
+			return "unsafe composition name";
+		return nil;
+	"pin" or "unpin" =>
+		if(rest == "")
+			return cmd + " needs a composition name";
+		if(!safeleaf(rest))
+			return "unsafe composition name";
+		return nil;
+	}
+	return "unknown ctl verb";
 }
 
 # --- I/O helpers ---
+
+# Is the Matrix runtime up? It serves /mnt/matrix/ctl only while running.
+running(): int
+{
+	(ok, nil) := sys->stat(MATRIX + "/ctl");
+	return ok >= 0;
+}
 
 readfile(path: string): string
 {
@@ -276,6 +338,45 @@ splitfirst(s: string): (string, string)
 hasprefix(s, pre: string): int
 {
 	return len s >= len pre && s[0:len pre] == pre;
+}
+
+safeleaf(s: string): int
+{
+	if(s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+saferelpath(s: string): int
+{
+	if(s == "" || s[0] == '/' || hascontrol(s))
+		return 0;
+	part := "";
+	for(i := 0; i <= len s; i++) {
+		if(i == len s || s[i] == '/') {
+			if(!safeleaf(part))
+				return 0;
+			part = "";
+			continue;
+		}
+		part[len part] = s[i];
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] < ' ')
+			return 1;
+	return 0;
 }
 
 contains(s, sub: string): int

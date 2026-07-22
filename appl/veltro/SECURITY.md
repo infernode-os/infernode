@@ -638,8 +638,11 @@ Current fixtures under `tests/nsaudit-fixtures/`:
 
 - `profile-minimal-headless` — base compute agent: read/list/find/grep,
   no GUI/window authority, no payments, `nodevs=set`.
-- `profile-desktop-gui` — base profile plus explicit UI authority. This is
-  the local Lucifer/desktop shape, not the headless default.
+- `profile-desktop-gui` — base profile plus fixed-function UI tools. This is
+  the local Lucifer/desktop shape, not the headless default. `/mnt/ui` itself
+  is not a path grant: `nsconstruct` derives its narrowed visibility from the
+  granted UI tools, preventing generic filesystem and shell tools from reusing
+  raw UI controller authority.
 - `profile-messaging` — base profile plus the message read/proposal surface
   (`/mnt/msg`, `/mnt/msg/draft`). Trusted message controls remain excluded.
 - `profile-payments` — base profile plus wallet proposal authority
@@ -662,11 +665,18 @@ be explicit:
 
 - `profile-minimal-headless`: no `/mnt/ui`, no `/chan`, no `sends_ui`, no
   `reads_windows`.
-- `profile-desktop-gui`: local GUI/UI interaction is allowed.
+- `profile-desktop-gui`: local GUI/UI interaction is allowed through
+  fixed-function tools; raw `/mnt/ui` path grants are rejected.
 - future `profile-remote-admin-ui`: explicit remote UI grant, with separate
   authentication/provenance assumptions.
 - future `profile-observe-ui`: possible read-only/event-only UI view if the
   namespace surface supports that distinction.
+
+The same rule applies to other fixed-function service trees. `/mnt/matrix` is
+derived only from the `matrix` tool, and `/phone` only from `sms`, `dial`, or
+`contacts`; neither is a caller-supplied path capability. This prevents generic
+filesystem or shell tools from driving Matrix composition controls, sending an
+SMS, or initiating a call through a raw namespace grant.
 
 The profile invariant test currently fails on:
 

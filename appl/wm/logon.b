@@ -24,6 +24,9 @@ include "draw.m";
 	draw: Draw;
 	Display, Font, Screen, Image, Point, Rect, Pointer: import draw;
 
+include "lucitheme.m";
+	lucitheme: Lucitheme;
+
 include "bufio.m";
 	bufio: Bufio;
 
@@ -93,6 +96,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	kr = load Keyring Keyring->PATH;
 	secstore = load Secstore Secstore->PATH;
 	factotum = load Factotum Factotum->PATH;
+	lucitheme = load Lucitheme Lucitheme->PATH;
 
 	# Open display directly (no wmclient)
 	if(ctxt != nil && ctxt.display != nil)
@@ -343,6 +347,14 @@ handlechar(k: int)
 	redraw();
 }
 
+# Build a Draw colour from a packed lucitheme colour. lucitheme stores each
+# colour as 0xRRGGBBAA with the alpha byte always FF, so drop the low byte
+# and take the top three (a 0xRRGGBB shift would read the alpha as blue).
+rgbint(c: int): ref Image
+{
+	return display_g.rgb((c >> 24) & 16rff, (c >> 16) & 16rff, (c >> 8) & 16rff);
+}
+
 redraw()
 {
 	if(screen == nil)
@@ -352,9 +364,32 @@ redraw()
 	cx := (r.min.x + r.max.x) / 2;
 	cy := (r.min.y + r.max.y) / 2;
 
-	# Black background
-	black := display_g.rgb(16r1a, 16r1a, 16r1a);
-	screen.draw(r, black, nil, ZP);
+	# Theme palette. logon runs very early in boot, so if lucitheme is
+	# unavailable we fall back to the historical hardcoded colours and
+	# never block login. gettheme() itself substitutes Brimstone defaults
+	# for any missing key, so a loaded module always yields a full palette.
+	th: ref Lucitheme->Theme;
+	if(lucitheme != nil)
+		th = lucitheme->gettheme();
+	bgcol, fieldbg, accentcol, textcol, dimcol, redcol: ref Image;
+	if(th != nil) {
+		bgcol     = rgbint(th.bg);
+		fieldbg   = rgbint(th.input);
+		accentcol = rgbint(th.accent);
+		textcol   = rgbint(th.text);
+		dimcol    = rgbint(th.dim);
+		redcol    = rgbint(th.red);
+	} else {
+		bgcol     = display_g.rgb(16r1a, 16r1a, 16r1a);
+		fieldbg   = display_g.rgb(16r2a, 16r2a, 16r2a);
+		accentcol = display_g.rgb(16rff, 16r55, 16r00);
+		textcol   = display_g.rgb(16rff, 16rff, 16rff);
+		dimcol    = display_g.rgb(16r66, 16r66, 16r66);
+		redcol    = display_g.rgb(16rff, 16r44, 16r44);
+	}
+
+	# Background
+	screen.draw(r, bgcol, nil, ZP);
 
 	# Field dimensions (declared early so we can size the centered group)
 	fh := bodyfont.height + 12;
@@ -391,15 +426,8 @@ redraw()
 	} else
 		y += PADDING * 4;
 
-	# Password field (manual draw — centered on screen)
-	orange := display_g.rgb(16rff, 16r55, 16r00);
-	dimgrey := display_g.rgb(16r66, 16r66, 16r66);
-	fieldbg := display_g.rgb(16r2a, 16r2a, 16r2a);
-	white := display_g.rgb(16rff, 16rff, 16rff);
-
 	if(state == STATE_LOGIN_FAILED) {
 		# Failed state: show error and choices, no password field
-		red := display_g.rgb(16rff, 16r44, 16r44);
 
 		# Error message
 		errline := statusmsg;
@@ -409,26 +437,26 @@ redraw()
 			if(errline[si] == '\n') { nl = si; break; }
 		if(nl >= 0) {
 			ew := bodyfont.width(errline[0:nl]);
-			screen.text(Point(cx - ew / 2, y), red, ZP, bodyfont, errline[0:nl]);
+			screen.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline[0:nl]);
 			y += bodyfont.height + PADDING;
 			choiceline := errline[nl+1:];
 			cw2 := bodyfont.width(choiceline);
-			screen.text(Point(cx - cw2 / 2, y), white, ZP, bodyfont, choiceline);
+			screen.text(Point(cx - cw2 / 2, y), textcol, ZP, bodyfont, choiceline);
 			y += bodyfont.height + PADDING;
 		} else {
 			ew := bodyfont.width(errline);
-			screen.text(Point(cx - ew / 2, y), red, ZP, bodyfont, errline);
+			screen.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline);
 			y += bodyfont.height + PADDING;
 		}
 
 		# Warning about consequences
 		warn := "Keys and secrets will not be available.";
 		ww := smallfont.width(warn);
-		screen.text(Point(cx - ww / 2, y), dimgrey, ZP, smallfont, warn);
+		screen.text(Point(cx - ww / 2, y), dimcol, ZP, smallfont, warn);
 		y += smallfont.height;
 		warn2 := "AI integration may not work.";
 		ww2 := smallfont.width(warn2);
-		screen.text(Point(cx - ww2 / 2, y), dimgrey, ZP, smallfont, warn2);
+		screen.text(Point(cx - ww2 / 2, y), dimcol, ZP, smallfont, warn2);
 	} else {
 		# Normal states: show prompt + password field
 		prompt := "Password:";
@@ -443,27 +471,27 @@ redraw()
 			prompt = "Security key PIN:";
 		}
 		pw := bodyfont.width(prompt);
-		screen.text(Point(cx - pw / 2, y), dimgrey, ZP, bodyfont, prompt);
+		screen.text(Point(cx - pw / 2, y), dimcol, ZP, bodyfont, prompt);
 		y += bodyfont.height + 4;
 
 		# Field background (centered)
 		fx := cx - fw / 2;
 		fieldr := Rect((fx, y), (fx + fw, y + fh));
 		screen.draw(fieldr, fieldbg, nil, ZP);
-		screen.border(fieldr, 1, orange, ZP);
+		screen.border(fieldr, 1, accentcol, ZP);
 
 		# Masked password (dots)
 		dots := "";
 		for(i := 0; i < len passbuf; i++)
 			dots += "\u2022";
-		screen.text(Point(fx + 6, y + 6), white, ZP, bodyfont, dots);
+		screen.text(Point(fx + 6, y + 6), textcol, ZP, bodyfont, dots);
 
 		y += fh + PADDING;
 
 		# Status message (centered)
 		if(statusmsg != nil && statusmsg != "") {
 			sw := bodyfont.width(statusmsg);
-			screen.text(Point(cx - sw / 2, y), dimgrey, ZP, bodyfont, statusmsg);
+			screen.text(Point(cx - sw / 2, y), dimcol, ZP, bodyfont, statusmsg);
 		}
 	}
 
@@ -472,14 +500,14 @@ redraw()
 
 	version := rf("/dev/sysctl");
 	if(version == nil)
-		version = "InferNode";
+		version = brandname();
 	vw := smallfont.width(version);
-	screen.text(Point(cx - vw / 2, by), dimgrey, ZP, smallfont, version);
+	screen.text(Point(cx - vw / 2, by), dimcol, ZP, smallfont, version);
 	by += smallfont.height + 2;
 
-	ctext := "\u00A9 2026 InferNode.io";
+	ctext := brandcopyright();
 	cw := smallfont.width(ctext);
-	screen.text(Point(cx - cw / 2, by), dimgrey, ZP, smallfont, ctext);
+	screen.text(Point(cx - cw / 2, by), dimcol, ZP, smallfont, ctext);
 
 	screen.flush(Draw->Flushnow);
 }
@@ -942,6 +970,24 @@ loadpng(path: string): ref Image
 		return nil;
 	(img, nil) := remap->remap(raw, display_g, 0);
 	return img;
+}
+
+# Product name, from /lib/lucifer/brand/name (default "InferNode").
+brandname(): string
+{
+	n := rf("/lib/lucifer/brand/name");
+	if(n == nil)
+		return "InferNode";
+	return n;
+}
+
+# Footer copyright, from /lib/lucifer/brand/copyright (built-in default below).
+brandcopyright(): string
+{
+	c := rf("/lib/lucifer/brand/copyright");
+	if(c == nil)
+		return "© 2026 InferNode.io";
+	return c;
 }
 
 rf(name: string): string

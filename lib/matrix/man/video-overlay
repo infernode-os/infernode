@@ -1,0 +1,29 @@
+NAME
+	video-overlay (display) - render a vid9p video feed with anti-aliased annotation boxes read from the sibling vision service
+
+INTERFACE
+	display (MatrixDisplay + MatrixTicker)
+
+READS
+	<mount>/fmt, /frame, /status	the vid9p stream (as video-pane)
+	<vision>/boxes	one detection per line: "x0 y0 x1 y1 label...",
+			frame pixel coordinates; <vision> is the mount
+			with /video/ replaced by /vision/
+
+WRITES
+	<mount>/ctl	transport (keys forward, as video-pane)
+
+DESCRIPTION
+	video-pane plus an annotation layer: after each frame is
+	composited, every box in <vision>/boxes is stroked anti-aliased
+	(aadraw, theme accent) with its label above, transformed from
+	frame to pane coordinates.  The vision tree is just another 9P
+	mount beside the stream (the INFR-277 convention), so anything —
+	an ML service, an agent, a host process, sh — can write
+	detections and they appear on the live video.  The video-overlay
+	crystallisation wires this with transport; demo-overlay.sh feeds
+	a synthetic tracker.
+
+SEE ALSO
+	video-pane, video-ctl, aadraw (module/aadraw.m)
+	docs/H264-9P-BRIDGE.md

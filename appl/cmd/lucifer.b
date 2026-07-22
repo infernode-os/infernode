@@ -1010,7 +1010,7 @@ drawchrome(r: Rect)
 		} else {
 			tiletotalw = 0;
 			# No tiles: fall back to simple title text
-			title := "InferNode";
+			title := brandname();
 			if(actlabel != nil && actlabel != "")
 				title += " | " + actlabel;
 			if(actstatus != nil && actstatus != "" && actstatus != "idle")
@@ -2147,10 +2147,16 @@ globallistener()
 			# inherit bound paths so the new task has the same access.
 			newid := strtoint(strip(ev[len "newtask ":]));
 			if(newid > 0) {
-				# Remove stale brief/instructions from previous sessions
-				# so lucibridge doesn't inject an old agenda
-				sys->remove("/tmp/veltro/brief." + string newid);
-				sys->remove("/tmp/veltro/instructions." + string newid);
+				# Remove stale per-task state from previous sessions so
+				# lucibridge doesn't inject an old agenda: activity ids reset
+				# each session and are reused, and these files persist under
+				# /tmp/veltro/tasks/. (The earlier paths omitted the tasks/
+				# component, so the stale brief survived and a fresh Task+
+				# activity auto-started the previous task — the pony-brief leak.)
+				sys->remove("/tmp/veltro/tasks/brief." + string newid);
+				sys->remove("/tmp/veltro/tasks/instructions." + string newid);
+				sys->remove("/tmp/veltro/tasks/model." + string newid);
+				sys->remove("/tmp/veltro/tasks/agenttype." + string newid);
 				provision := "provision " + string newid;
 				# Pass user-bound paths
 				paths := readfile("/tool/paths");
@@ -2752,6 +2758,19 @@ clamptozone(r: Rect, zone: Rect): Rect
 	if(x < zone.min.x) x = zone.min.x;
 	if(y < zone.min.y) y = zone.min.y;
 	return Rect((x, y), (x + w, y + h));
+}
+
+# Product name, from /lib/lucifer/brand/name (default "InferNode").
+brandname(): string
+{
+	n := readfile("/lib/lucifer/brand/name");
+	if(n == nil)
+		return "InferNode";
+	while(len n > 0 && (n[len n-1] == '\n' || n[len n-1] == ' ' || n[len n-1] == '\r'))
+		n = n[:len n-1];
+	if(n == "")
+		return "InferNode";
+	return n;
 }
 
 readfile(path: string): string

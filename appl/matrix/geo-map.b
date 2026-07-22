@@ -31,6 +31,7 @@ include "lucitheme.m";
 include "geoproj.m";
 	geoproj: Geoproj;
 	Proj: import geoproj;
+include "aadraw.m";
 include "matrix.m";
 
 GeoMap: module
@@ -59,6 +60,11 @@ TILE:		con 256.0;	# world is TILE * 2^zoom pixels wide
 EARTHC:		con 40075016.686;	# equatorial circumference, metres
 
 entities:	array of ref Entity;
+fitted := 0;		# auto-fit fired (once, on first data)
+lblrects: list of Rect;	# labels placed this frame (declutter)
+aad: AAdraw;		# anti-aliased strokes/rings (nil = fallback)
+zrin, zrout, zrfit: Rect;	# on-map zoom chip hit rects
+chipdown := 0;
 features:	array of ref Feature;
 selid:		string;
 
@@ -114,8 +120,45 @@ init(display: ref Display, font: ref Font, mount: string): string
 	font_g = font;
 	mountpath = mount;
 	clat = 0.0; clon = 0.0; zoom = 2.0;
+	fitted = 0;
+	aad = load AAdraw AAdraw->PATH;
+	if(aad != nil)
+		aad->init(display);
 	loadcolors();
 	return nil;
+}
+
+# Fit the camera to the data ONCE, when the first entities arrive: at
+# the world-scale default zoom a local scenario collapses into one
+# overprinted blob.  Centre on the bbox midpoint and walk the zoom
+# down until the bbox fits ~70% of the pane (projection-exact: uses
+# geo2scr).  Never re-fires, so user pan/zoom is never fought.
+fitview()
+{
+	if(len entities == 0 || r_g.dx() <= 0)
+		return;
+	minla := entities[0].lat; maxla := minla;
+	minlo := entities[0].lon; maxlo := minlo;
+	for(i := 1; i < len entities; i++) {
+		e := entities[i];
+		if(e.lat < minla) minla = e.lat;
+		if(e.lat > maxla) maxla = e.lat;
+		if(e.lon < minlo) minlo = e.lon;
+		if(e.lon > maxlo) maxlo = e.lon;
+	}
+	clat = (minla + maxla) / 2.0;
+	clon = (minlo + maxlo) / 2.0;
+	mw := real r_g.dx() * 0.7;
+	mh := real r_g.dy() * 0.7;
+	for(zoom = 15.0; zoom > 1.0; zoom -= 0.5) {
+		p1 := geo2scr(minla, minlo);
+		p2 := geo2scr(maxla, maxlo);
+		w := real (p2.x - p1.x); if(w < 0.0) w = -w;
+		h := real (p2.y - p1.y); if(h < 0.0) h = -h;
+		if(w <= mw && h <= mh)
+			break;
+	}
+	fitted = 1;
 }
 
 loadcolors()
@@ -168,6 +211,8 @@ update(): int
 		last_ec = ec; last_em = em; last_fc = fc; last_fm = fm;
 		entities = loadentities(mountpath + "/entities");
 		features = loadfeatures(mountpath + "/features");
+		if(!fitted)
+			fitview();
 		return 1;
 	}
 	return 0;
@@ -283,8 +328,16 @@ draw(dst: ref Image)
 {
 	dst.draw(r_g, bg, nil, (0, 0));
 	drawgraticule(dst);
+	# z-order, not filename order: translucent AREA FILLS render
+	# under strokes — drawn after, they tint through stroke cores and
+	# swallow the anti-aliased flanks (the "jagged over amber" bug).
 	for(i := 0; i < len features; i++)
-		drawfeature(dst, features[i]);
+		if(features[i].fill != 0)
+			drawfeature(dst, features[i]);
+	for(i = 0; i < len features; i++)
+		if(features[i].fill == 0)
+			drawfeature(dst, features[i]);
+	lblrects = nil;
 	for(i = 0; i < len entities; i++)
 		drawentity(dst, entities[i]);
 	drawhud(dst);
@@ -337,23 +390,44 @@ drawfeature(dst: ref Image, f: ref Feature)
 		# metres → pixels at this latitude.
 		mpp := EARTHC * math->cos(clat0 * Math->Degree) / worldppx();
 		rad := rnd(f.radius / mpp);
-		if(f.fill != 0)
-			dst.fillellipse(c, rad, rad, display_g.color(f.fill), (0, 0));
-		dst.ellipse(c, rad, rad, f.width, col, (0, 0));
+		if(f.fill != 0) {
+			if(aad != nil)
+				aad->disc(dst, c, rad, rad, display_g.color(f.fill));
+			else
+				dst.fillellipse(c, rad, rad, display_g.color(f.fill), (0, 0));
+		}
+		if(aad != nil)
+			aad->ring(dst, c, rad, rad, wmax(f.width, 1), col);
+		else
+			dst.ellipse(c, rad, rad, f.width, col, (0, 0));
 	"polygon" =>
 		pa := projpts(f.pts);
-		if(f.fill != 0)
-			dst.fillpoly(pa, 0, display_g.color(f.fill), (0, 0));
+		if(f.fill != 0) {
+			if(aad != nil)
+				aad->fillpoly(dst, pa, display_g.color(f.fill));
+			else
+				dst.fillpoly(pa, 0, display_g.color(f.fill), (0, 0));
+		}
 		closed := array[len pa + 1] of Point;
 		closed[0:] = pa;
 		closed[len pa] = pa[0];
-		dst.poly(closed, 0, 0, f.width, col, (0, 0));
+		if(aad != nil)
+			aad->polyline(dst, closed, wmax(f.width, 1), col);
+		else
+			dst.poly(closed, 0, 0, f.width, col, (0, 0));
 	* =>	# polyline / point
 		pa := projpts(f.pts);
-		if(len pa == 1)
-			dst.fillellipse(pa[0], f.width + 1, f.width + 1, col, (0, 0));
-		else
-			dst.poly(pa, 0, 0, f.width, col, (0, 0));
+		if(len pa == 1) {
+			if(aad != nil)
+				aad->disc(dst, pa[0], f.width + 1, f.width + 1, col);
+			else
+				dst.fillellipse(pa[0], f.width + 1, f.width + 1, col, (0, 0));
+		} else {
+			if(aad != nil)
+				aad->polyline(dst, pa, 2*f.width + 1, col);
+			else
+				dst.poly(pa, 0, 0, f.width, col, (0, 0));
+		}
 	}
 	if(f.label != "" && len f.pts > 0) {
 		(la, lo) := f.pts[0];
@@ -374,15 +448,38 @@ drawentity(dst: ref Image, e: ref Entity)
 		L := 18.0;
 		a := e.course * Math->Degree;
 		tip := Point(p.x + rnd(math->sin(a) * L), p.y - rnd(math->cos(a) * L));
-		dst.line(p, tip, 0, 0, 0, col, (0, 0));
+		if(aad != nil)
+			aad->line(dst, p, tip, 2, col);
+		else
+			dst.line(p, tip, 0, 0, 0, col, (0, 0));
 	}
 	glyph(dst, p, e.kind, col);
 	if(e.id == selid) {
-		dst.ellipse(p, 11, 11, 1, selcol, (0, 0));
-		dst.ellipse(p, 12, 12, 1, selcol, (0, 0));
+		if(aad != nil)
+			aad->ring(dst, p, 12, 12, 2, selcol);
+		else {
+			dst.ellipse(p, 11, 11, 1, selcol, (0, 0));
+			dst.ellipse(p, 12, 12, 1, selcol, (0, 0));
+		}
 	}
-	if(e.label != "")
-		dst.text(Point(p.x + 9, p.y - font_g.height / 2), col, (0, 0), font_g, e.label);
+	if(e.label != "") {
+		# declutter: when glyphs stack, one legible label beats a
+		# multicolour overprint — skip any label whose rect collides
+		# with one already placed this frame (glyphs still draw)
+		lp := Point(p.x + 9, p.y - font_g.height / 2);
+		lr := Rect(lp, (lp.x + font_g.width(e.label), lp.y + font_g.height));
+		for(ll := lblrects; ll != nil; ll = tl ll)
+			if(rectXrect(lr, hd ll))
+				return;
+		lblrects = lr :: lblrects;
+		dst.text(lp, col, (0, 0), font_g, e.label);
+	}
+}
+
+rectXrect(a, b: Rect): int
+{
+	return a.min.x < b.max.x && b.min.x < a.max.x &&
+	       a.min.y < b.max.y && b.min.y < a.max.y;
 }
 
 # Abstract glyphs by kind; an opaque renderer, no symbology standard.
@@ -391,12 +488,20 @@ glyph(dst: ref Image, p: Point, kind: string, col: ref Image)
 	case kind {
 	"air" =>		# triangle, apex up
 		pa := array[] of {Point(p.x, p.y - 6), Point(p.x - 6, p.y + 5), Point(p.x + 6, p.y + 5)};
-		dst.fillpoly(pa, 0, col, (0, 0));
-		dst.poly(array[] of {pa[0], pa[1], pa[2], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		if(aad != nil)
+			aad->fillpoly(dst, pa, col);
+		else {
+			dst.fillpoly(pa, 0, col, (0, 0));
+			dst.poly(array[] of {pa[0], pa[1], pa[2], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		}
 	"sea" or "subsurface" =>	# diamond
 		pa := array[] of {Point(p.x, p.y - 6), Point(p.x - 6, p.y), Point(p.x, p.y + 6), Point(p.x + 6, p.y)};
-		dst.fillpoly(pa, 0, col, (0, 0));
-		dst.poly(array[] of {pa[0], pa[1], pa[2], pa[3], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		if(aad != nil)
+			aad->fillpoly(dst, pa, col);
+		else {
+			dst.fillpoly(pa, 0, col, (0, 0));
+			dst.poly(array[] of {pa[0], pa[1], pa[2], pa[3], pa[0]}, 0, 0, 1, aoutline, (0, 0));
+		}
 	"ground" or "installation" =>	# square
 		dst.draw(Rect((p.x - 5, p.y - 5), (p.x + 6, p.y + 6)), col, nil, (0, 0));
 		dst.line((p.x - 6, p.y - 6), (p.x + 6, p.y - 6), 0, 0, 0, aoutline, (0, 0));
@@ -421,7 +526,36 @@ drawhud(dst: ref Image)
 	dst.text((x0 + barpx + 6, y - font_g.height / 2), hud, (0, 0), font_g, dist(bar));
 
 	info := sys->sprint("%s  z%2.1f  %2.4f,%2.4f", proj.name, zoom, clat, clon);
+	# opaque strip: the HUD must not overprint graticule labels
+	dst.draw(Rect((r_g.min.x, r_g.min.y),
+		(r_g.min.x + font_g.width(info) + 16, r_g.min.y + font_g.height + 8)),
+		bg, nil, (0, 0));
 	dst.text((r_g.min.x + 8, r_g.min.y + 4), hud, (0, 0), font_g, info);
+
+	# on-map zoom chips, top-right: + / − / fit
+	ch := 22;
+	x1 := r_g.max.x - 8;
+	zrfit = Rect((x1 - ch, r_g.min.y + 8), (x1, r_g.min.y + 8 + ch));
+	zrout = zrfit.subpt((ch + 4, 0));
+	zrin  = zrout.subpt((ch + 4, 0));
+	chip(dst, zrin, "+");
+	chip(dst, zrout, "-");
+	chip(dst, zrfit, "o");
+}
+
+chip(dst: ref Image, r: Rect, s: string)
+{
+	dst.draw(r, bg, nil, (0, 0));
+	dst.border(r, 1, grid, (0, 0));
+	dst.text(Point(r.min.x + (r.dx() - font_g.width(s))/2,
+		r.min.y + (r.dy() - font_g.height)/2), hud, (0, 0), font_g, s);
+}
+
+wmax(a, b: int): int
+{
+	if(a > b)
+		return a;
+	return b;
 }
 
 projpts(g: array of (real, real)): array of Point
@@ -447,6 +581,30 @@ affilcolor(a: string): ref Image
 # ── Input ───────────────────────────────────────────────────
 pointer(p: ref Pointer): int
 {
+	# on-map zoom chips first: a map whose only affordance is drag
+	# is broken for anyone who doesn't know the keys
+	if(p.buttons & 1 && !dragging && !chipdown) {
+		z := 0.0;
+		if(zrin.contains(p.xy)) z = 0.75;
+		else if(zrout.contains(p.xy)) z = -0.75;
+		else if(zrfit.contains(p.xy)) {
+			fitted = 0;
+			fitview();
+			chipdown = 1;
+			return 1;
+		}
+		if(z != 0.0) {
+			zoom += z;
+			if(zoom < 1.0) zoom = 1.0;
+			if(zoom > 18.0) zoom = 18.0;
+			chipdown = 1;
+			return 1;
+		}
+	}
+	if(p.buttons == 0)
+		chipdown = 0;
+	if(chipdown)
+		return 1;
 	if(p.buttons & 1) {
 		if(!dragging) {
 			dragging = 1; moved = 0;
@@ -634,7 +792,15 @@ niceround(v: real): real
 
 deg(v: real): string
 {
-	return sys->sprint("%g", v);
+	# %g leaks binary-float noise ("37.83999999999998") on the
+	# fractional graticule steps a fitted zoom produces; fixed
+	# decimals, then strip trailing zeros for whole degrees.
+	s := sys->sprint("%.2f", v);
+	while(len s > 1 && s[len s - 1] == '0')
+		s = s[0:len s - 1];
+	if(len s > 1 && s[len s - 1] == '.')
+		s = s[0:len s - 1];
+	return s;
 }
 
 dist(m: real): string

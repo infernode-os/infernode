@@ -47,6 +47,8 @@ enum {
 	CheckButton	= 10,
 	CheckButtonBW	= 1,
 	ButtonBorder	= 4,
+	ButtonPadX	= 8,	/* default hit-target padding beyond the  */
+	ButtonPadY	= 5,	/* label (44pt/48dp touch conventions)     */
 	CheckSpace = CheckButton + 2*CheckButtonBW + 2*ButtonBorder,
 };
 

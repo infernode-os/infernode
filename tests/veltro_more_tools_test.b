@@ -12,9 +12,12 @@ implement VeltroMoreToolsTest;
 #   wallet   — argument parsing, command dispatch, missing-arg errors
 #   keyring  — subcommand dispatch (open / need / check), bad-input errors
 #   man      — subcommand dispatch, missing-arg errors
+#   matrix   — fixed-service path-name validation before /mnt/matrix I/O
 #   gap      — subcommand dispatch (add / resolve / list), bad-input errors
 #   task     — subcommand dispatch (create / status / list / close), errors
 #   wiki     — argument validation, unmounted-/n/wikia error path
+#   say      — unsafe voice names rejected before speech9p ctl writes
+#   gpu      — unsafe model names rejected before /mnt/gpu session writes
 #
 # These tools are an attack surface for the agent: every tool's exec()
 # accepts a free-form string from the LLM.  Bad parsing here = agent
@@ -212,6 +215,29 @@ testWalletDoubledCommand(t: ref T)
 		"doubled 'wallet wallet accounts' not treated as unknown");
 }
 
+testWalletRejectsUnsafeAccount(t: ref T)
+{
+	tool := loadtool(t, "wallet");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("address ../ctl");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet address rejects traversal account");
+
+	r = tool->exec("balance /tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet balance rejects absolute account");
+
+	r = tool->exec("sign ../ctl 9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet sign rejects traversal account");
+
+	r = tool->exec("pay ../ctl 1000 0x000000000000000000000000000000000000dEaD");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet pay rejects traversal account");
+}
+
 # ============================================================================
 # keyring — subcommand dispatch
 # ============================================================================
@@ -325,6 +351,25 @@ testManUnknownCommand(t: ref T)
 	r := tool->exec("teleport SYNOPSIS");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unknown command"),
 		"unknown man subcommand rejected");
+}
+
+testManRejectsUnsafeOpen(t: ref T)
+{
+	tool := loadtool(t, "man");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("open /tmp/veltro/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "/man"),
+		"man rejects absolute opens outside /man");
+
+	r = tool->exec("open /man/../tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "dot"),
+		"man rejects traversal-shaped /man path");
+
+	r = tool->exec("find SYNOPSIS\nopen /tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "control"),
+		"man rejects control-delimited command text");
 }
 
 # ============================================================================
@@ -524,6 +569,80 @@ testWikiUnmounted(t: ref T)
 }
 
 # ============================================================================
+# matrix — fixed-service path validation
+# ============================================================================
+
+testMatrixRejectsUnsafeNames(t: ref T)
+{
+	tool := loadtool(t, "matrix");
+	if(tool == nil)
+		return;
+
+	t.assertseq(tool->name(), "matrix", "matrix tool name");
+	r := tool->exec("man ../sysmon");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix man rejects traversal");
+
+	r = tool->exec("story ../../tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix story rejects traversal");
+
+	r = tool->exec("out ../svc history");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix out module rejects traversal");
+
+	r = tool->exec("out sysmon-svc ../secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix out file rejects traversal");
+
+	r = tool->exec("ctl pin ../owned");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"matrix ctl pin rejects traversal");
+
+	r = tool->exec("ctl load sysmon\nunload");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "control"),
+		"matrix ctl rejects control delimiters");
+}
+
+# ============================================================================
+# say — speech control validation
+# ============================================================================
+
+testSayRejectsUnsafeVoice(t: ref T)
+{
+	tool := loadtool(t, "say");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("-v samantha;touch /tmp/owned hello");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"say rejects shell metacharacters in voice");
+
+	r = tool->exec("-v ../ctl hello");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"say rejects traversal-shaped voice");
+}
+
+# ============================================================================
+# gpu — GPU service control validation
+# ============================================================================
+
+testGpuRejectsUnsafeModel(t: ref T)
+{
+	tool := loadtool(t, "gpu");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("infer ../ctl /tmp/image.jpg");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"gpu rejects traversal-shaped model name");
+
+	r = tool->exec("detect yolov8;touch /tmp/owned /tmp/image.jpg");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"gpu rejects shell metacharacters in model name");
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -564,6 +683,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WalletUnknownCommand", testWalletUnknownCommand);
 	run("WalletMissingArgs", testWalletMissingArgs);
 	run("WalletDoubledCommand", testWalletDoubledCommand);
+	run("WalletRejectsUnsafeAccount", testWalletRejectsUnsafeAccount);
 
 	# keyring
 	run("KeyringNameDoc", testKeyringNameDoc);
@@ -577,6 +697,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ManEmpty", testManEmpty);
 	run("ManMissingArgs", testManMissingArgs);
 	run("ManUnknownCommand", testManUnknownCommand);
+	run("ManRejectsUnsafeOpen", testManRejectsUnsafeOpen);
 
 	# gap
 	run("GapNameDoc", testGapNameDoc);
@@ -598,6 +719,15 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WikiNameDoc", testWikiNameDoc);
 	run("WikiEmpty", testWikiEmpty);
 	run("WikiUnmounted", testWikiUnmounted);
+
+	# matrix
+	run("MatrixRejectsUnsafeNames", testMatrixRejectsUnsafeNames);
+
+	# say
+	run("SayRejectsUnsafeVoice", testSayRejectsUnsafeVoice);
+
+	# gpu
+	run("GpuRejectsUnsafeModel", testGpuRejectsUnsafeModel);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -257,6 +257,9 @@ exec(args: string): string
 		return "error: " + perr;
 	if(specs == nil)
 		return "error: no subagent specs provided";
+	nameerr := validatespecnames(specs);
+	if(nameerr != "")
+		return "error: " + nameerr;
 
 	# Count specs
 	N := 0;
@@ -454,6 +457,36 @@ preloadmulti(specs: list of ref SubSpec): string
 	}
 
 	return "";
+}
+
+validatespecnames(specs: list of ref SubSpec): string
+{
+	for(; specs != nil; specs = tl specs) {
+		spec := hd specs;
+		for(t := spec.tools; t != nil; t = tl t)
+			if(!validcapname(hd t))
+				return "invalid tool name: " + hd t;
+		for(c := spec.shellcmds; c != nil; c = tl c)
+			if(!validcapname(hd c))
+				return "invalid shell command name: " + hd c;
+	}
+	return "";
+}
+
+validcapname(n: string): int
+{
+	if(n == nil || n == "" || n == "." || n == "..")
+		return 0;
+	for(i := 0; i < len n; i++) {
+		c := n[i];
+		if((c >= 'a' && c <= 'z') ||
+		   (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # Parse all subagent specs from the exec() args string.
@@ -1367,6 +1400,24 @@ tasksummary(task: string): string
 	return task[0:47] + "...";
 }
 
+# Text written into luciuisrv ctl attributes must stay inert display text.
+# The ctl parser treats any whitespace-delimited word ending in '=' as a new
+# attribute, so collapse controls and replace '=' before embedding task text.
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
+}
+
 # --- Activity / background task helpers ---
 
 # Get the current activity ID from luciuisrv.
@@ -1396,7 +1447,7 @@ countbgtasks(actid: int): int
 bgadd(actid: int, label: string)
 {
 	ctxctl := sys->sprint("%s/activity/%d/context/ctl", UI_MOUNT, actid);
-	cmd := "bg add label=" + label + " status=live";
+	cmd := "bg add status=live label=" + safeattrtext(label);
 	writefile(ctxctl, cmd);
 }
 

@@ -87,14 +87,26 @@ currentpathsraw := "";
 toolargs: list of string;	# from -t flag (comma-separated tool names)
 pathargs: list of string;	# from -p flag (comma-separated paths)
 
-BRIDGE_SUFFIX: con "\n\nYou are Veltro, the AI agent in a Lucifer activity. " +
+BRIDGE_SUFFIX: con "\n\nYou are %AGENT%, the AI agent in a Lucifer activity. " +
 	"You are NOT ChatGPT, NOT Claude, NOT Llama, NOT any other named model. " +
-	"If asked your identity, the first sentence of your reply is exactly: \"I am Veltro.\" " +
+	"If asked your identity, the first sentence of your reply is exactly: \"I am %AGENT%.\" " +
 	"The user sends messages through the UI. " +
 	"Respond naturally with text for conversational messages, greetings, and answers. " +
 	"Use tools only when the user asks you to perform a specific task.";
 
 META_PROMPT_PATH: con "/lib/veltro/meta.txt";
+# First-run setup greeting. Read from a data file so a deployment can
+# reword it without patching this module; falls back to the built-in
+# default when the file is absent.
+SETUP_GREETING_PATH: con "/lib/veltro/setup-greeting.txt";
+# Agent identity, read from a data file so the owner can rename the agent
+# without patching code (default "Veltro"). agentname is the display name /
+# message role; pmark is the "[Name]" prefill+strip identity marker.
+AGENT_NAME_PATH: con "/lib/veltro/agent-name";
+OS_NAME_PATH: con "/lib/veltro/os-name";
+agentname := "Veltro";
+osname := "InferNode";
+pmark := "[Veltro]";
 # Default agentic sampling temperature (low = reliable tool-calling). Override
 # per-deployment with `temperature=` in /lib/ndb/llm. See initsession().
 AGENT_TEMP: con "0.2";
@@ -500,6 +512,26 @@ blockread(fd: ref Sys->FD): string
 }
 
 # Write a message to the activity conversation
+# Replace every occurrence of `from` with `to` (for %AGENT% injection).
+substall(s, pat, repl: string): string
+{
+	if(pat == "")
+		return s;
+	out := "";
+	fl := len pat;
+	i := 0;
+	while(i < len s) {
+		if(i + fl <= len s && s[i:i+fl] == pat) {
+			out += repl;
+			i += fl;
+		} else {
+			out[len out] = s[i];
+			i++;
+		}
+	}
+	return out;
+}
+
 writemsg(role, text: string)
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
@@ -555,9 +587,11 @@ writedialogue(title, text, progress, options: string): int
 # down MUST stay in sync.  If you rename a button, rename its comparison.
 runsetupwizard()
 {
-	writemsg("veltro",
-		"Welcome to InferNode! I'm **Veltro**, your AI agent.\n\n" +
-		"I need an LLM connection to get started. Choose an option below:");
+	greeting := agentlib->readfile(SETUP_GREETING_PATH);
+	if(greeting == nil)
+		greeting = "Welcome to InferNode! I'm **Veltro**, your AI agent.\n\n" +
+			"I need an LLM connection to get started. Choose an option below:";
+	writemsg("veltro", agentlib->strip(greeting));
 	writedialogue("LLM Setup",
 		"Choose how to connect to an AI model:",
 		"", "Remote API,Local model,Remote 9P");
@@ -878,6 +912,10 @@ initsession(): string
 		if(taskprompt != nil)
 			suffix = "\n\n" + agentlib->strip(taskprompt);
 	}
+	# Inject brand identity into the role suffix (meta.txt / BRIDGE_SUFFIX).
+	suffix = substall(suffix, "%AGENT%", agentname);
+	suffix = substall(suffix, "%OS%", osname);
+
 	MAXWRITE: con 65000;
 	suffixbytes := array of byte suffix;
 	basebytes := array of byte sysprompt;
@@ -919,7 +957,7 @@ initsession(): string
 	# model reflexively introducing itself as ChatGPT / Llama / etc.
 	# Wired only when agentlib has the API available — see INFR-130.
 	prefillpath := "/mnt/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro] ");
+	agentlib->setprefillpath(prefillpath, "[" + agentname + "] ");
 
 	# Install tool definitions for native tool_use protocol.
 	# "say" is intentionally excluded: Claude responds with end_turn text directly,
@@ -988,8 +1026,8 @@ cleanresponse(response: string): string
 		if(line == "")
 			continue;
 		# Strip [Veltro] prefix
-		if(agentlib->hasprefix(line, "[Veltro]"))
-			line = agentlib->strip(line[8:]);
+		if(agentlib->hasprefix(line, pmark))
+			line = agentlib->strip(line[len pmark:]);
 		if(line == "")
 			continue;
 		# Strip "say " prefix
@@ -1019,8 +1057,8 @@ extractsay(response: string): (string, int)
 		line = agentlib->strip(line);
 		if(line == "")
 			continue;
-		if(agentlib->hasprefix(line, "[Veltro]"))
-			line = agentlib->strip(line[8:]);
+		if(agentlib->hasprefix(line, pmark))
+			line = agentlib->strip(line[len pmark:]);
 		if(line == "")
 			continue;
 		lower := str->tolower(line);
@@ -1033,8 +1071,8 @@ extractsay(response: string): (string, int)
 			for(lines = tl lines; lines != nil; lines = tl lines) {
 				rest := hd lines;
 				rest = agentlib->strip(rest);
-				if(agentlib->hasprefix(rest, "[Veltro]"))
-					rest = agentlib->strip(rest[8:]);
+				if(agentlib->hasprefix(rest, pmark))
+					rest = agentlib->strip(rest[len pmark:]);
 				rl := str->tolower(agentlib->strip(rest));
 				if(rl == "done")
 					break;
@@ -2038,6 +2076,23 @@ init(nil: ref Draw->Context, args: list of string)
 		fatal("cannot load agentlib: " + AgentLib->PATH);
 	agentlib->init();
 
+	# Agent identity from data (see AGENT_NAME_PATH) — lets the owner rename
+	# the agent without code changes. Drives the display name/role and the
+	# "[Name]" prefill marker that anchors the model's self-identity.
+	an := agentlib->readfile(AGENT_NAME_PATH);
+	if(an != nil) {
+		an = agentlib->strip(an);
+		if(an != "")
+			agentname = an;
+	}
+	pmark = "[" + agentname + "]";
+	on := agentlib->readfile(OS_NAME_PATH);
+	if(on != nil) {
+		on = agentlib->strip(on);
+		if(on != "")
+			osname = on;
+	}
+
 	arg->init(args);
 	# NOTE: settoolmount() is called after arg parsing sets actid (below)
 	while((c := arg->opt()) != 0) {
@@ -2123,8 +2178,9 @@ init(nil: ref Draw->Context, args: list of string)
 			log("anthropic factotum key present");
 		else
 			log("anthropic factotum key absent");
-	} else if(backend == "openai") {
-		# Ollama/OpenAI: configured if a URL is set
+	} else if(backend == "openai" || backend == "cli") {
+		# Ollama/OpenAI, or the claude-gate CLI gateway (backend=cli,
+		# OpenAI-shaped on localhost): configured if a URL is set
 		ourl := readndbfield("/lib/ndb/llm", "url");
 		if(ourl != nil && ourl != "")
 			llmconfigured = 1;
@@ -2158,6 +2214,12 @@ init(nil: ref Draw->Context, args: list of string)
 					"Common causes: an invalid key, blocked network access to api.anthropic.com, " +
 					"or a startup error logged at /tmp/lucibridge.log. " +
 					"Open Settings → LLM Service, then close InferNode and relaunch it.");
+			else if(backend == "cli")
+				writemsg("veltro",
+					"The Claude CLI gateway is configured, but I can't reach it. " +
+					"Start it on the host (tools/claude-gate/serve-claude-gate.sh, " +
+					"or `llmctl set claude` where systemd runs it), " +
+					"then close InferNode and relaunch it.");
 			else
 				writemsg("veltro",
 					"Your Ollama server is configured, but I can't reach it. " +

@@ -1,0 +1,29 @@
+# video-live — real-time feed wall crystallisation (the drone / TAK shape)
+#
+# Two feeds, each COMPOSED from a video-pane (view) and a video-ctl
+# (Tk transport) wired over that feed's vid9p mount.  vid9p spawns the
+# host vdec decoder on a network URL (rtsp:// rtp:// udp:// http://)
+# and serves frames over 9P as they arrive; the playhead follows the
+# live edge.  This is the display half of the TAK video design (nerva3
+# appl/nerva/TAK-VIDEO.md): the boundary/catalog hands over a URL, and
+# everything from URL to pixels is this generic path.  A bigger wall
+# is more pane+ctl pairs, one per feed.
+#
+# Transport on a live feed: -5s replays the retained buffer (DVR),
+# stop snaps back to the live edge, pause freezes.  All of it is also
+# plain sh:  echo 'seek -10000' > /mnt/video/0/ctl
+#
+# Wire up feeds, then load me:
+#     mount {vid9p -c vdec rtsp://camera/stream --y4m -} /mnt/video
+#     mount {vid9p -c vdec udp://127.0.0.1:5005 --y4m -} /mnt/videob
+#     wm/matrix /lib/matrix/compositions/video-live
+# (demo-live.sh is that, self-contained, with two simulated feeds)
+
+layout hsplit 50 50
+left  vsplit 85 15
+right vsplit 85 15
+
+left/top     video-pane /mnt/video/0
+left/bottom  video-ctl  /mnt/video/0
+right/top    video-pane /mnt/videob/0
+right/bottom video-ctl  /mnt/videob/0

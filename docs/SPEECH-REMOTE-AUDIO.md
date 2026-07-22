@@ -13,6 +13,16 @@
 > routing, and `lib/voice/speech-*` launch scripts are already implemented;
 > Phase 2 is now the validation, hardening, and distribution milestone rather
 > than a green-field remote-audio implementation.
+>
+> **Security status: development only.** The current examples use anonymous
+> `listen -A` / `mount -A` connections and export the host's broad `/dev`
+> tree. That does not preserve InferNode's intended narrow, per-process
+> namespace capabilities: any client that can reach the listener receives more
+> authority than speech needs. A firewall, NAT, or private overlay can reduce
+> reachability, but it does not provide capability attenuation inside
+> InferNode. Keep these topologies limited to trusted development environments
+> until the post-Phase 2 security audit replaces the broad exports with
+> authenticated, speech-specific namespaces.
 
 ## Phase 2 Definition and Gates
 
@@ -37,6 +47,12 @@ Automated loopback and mock coverage must precede each topology change. The
 implementation stops for human acceptance when real two-host audio or GUI
 latency judgement is required; those items are not marked complete from
 non-interactive tests.
+
+Completing the functional Phase 2 gates does not make this transport
+release-ready. A separate security-audit gate must verify authentication,
+least-authority namespace exports, mount ownership and teardown, control-path
+attenuation, and adversarial-client behaviour before the overarching voice
+feature can merge into `dev`.
 
 ### Implemented Foundation
 

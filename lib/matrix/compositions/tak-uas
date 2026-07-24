@@ -1,0 +1,19 @@
+# tak-uas — live UAS gimbal feed via manto's /mnt/vision (TAK fleet).
+#
+# manto, on the perception node, ingests the UAS video (the same
+# RTP/RTSP stream nerv-gcs/ATAK subscribes to), runs detection, and
+# re-serves the ANNOTATED frames over 9P in the vid9p fmt/frame
+# schema.  Mount that tree and point video-pane at a feed directory:
+# the pane detects the transportless source and streams it live —
+# server-paced join-live semantics, detection boxes burned in.
+#
+#   mkdir -p /tmp/vision
+#   mount -A tcp!<manto-host>!6630 /tmp/vision   # or via ssh tunnel
+#   wm/matrix /lib/matrix/compositions/tak-uas
+#
+# demo-tak.sh wires the tunnel + mount + launch.  Edit the feed path
+# below for other feeds (ls /tmp/vision/feeds).
+
+layout vsplit 100 0
+
+top video-pane /tmp/vision/feeds/gz-uas

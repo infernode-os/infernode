@@ -43,7 +43,20 @@ DESCRIPTION
 	feed in the composition (see the video-player and video-live
 	crystallisations in /lib/matrix/compositions).
 
+	LIVE SEQUENTIAL SOURCES.  A mount whose status carries no
+	transport (no "pos=" field — e.g. manto's /mnt/vision/feeds/<id>,
+	which serves the vid9p fmt/frame schema with join-live ring
+	semantics) is played as a stream: a reader proc consumes
+	framesize-byte chunks sequentially, paced by the SERVER (reads
+	park until the next frame; a slow link skips frames, never
+	blocks), and the pane blits the newest frame each tick.  The
+	strip shows "LIVE <w>x<h> stream"; transport keys are inert.
+	This is the TAK/UAS path: mount the perception node's 9P vision
+	tree from anywhere on the mesh and point a leaf at a feed
+	directory (see the tak-uas crystallisation and demo-tak.sh).
+
 SEE ALSO
 	vid9p (appl/cmd/vid9p.b — serves /mnt/video/<id>)
 	vidplay9p (appl/mpeg — standalone windowed player, same feed)
+	/lib/matrix/compositions/tak-uas (live UAS feed via manto)
 	docs/H264-9P-BRIDGE.md, docs/MULTIPLEXED-VIDEO-SPIKE.md

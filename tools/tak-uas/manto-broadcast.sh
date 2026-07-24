@@ -20,7 +20,7 @@ W=1280; H=720; FPS=10; FRAMESIZE=$((W*H*3/2))
 exec "$N/emu/Linux/o.emu" -r"$N" sh -c "mkdir -p /tmp/vb; mount -A tcp!127.0.0.1!6630 /tmp/vb; cat /tmp/vb/feeds/$FEED/frame" \
  | gst-launch-1.0 -q fdsrc fd=0 do-timestamp=true blocksize="$FRAMESIZE" \
    ! rawvideoparse format=i420 width="$W" height="$H" framerate="$FPS"/1 \
-   ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=8000 key-int-max=15 intra-refresh=true \
+   ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=8000 key-int-max=15 \
    ! h264parse config-interval=-1 ! tee name=t \
    t. ! queue leaky=downstream max-size-buffers=300 max-size-bytes=0 max-size-time=0 \
         ! rtph264pay pt=96 config-interval=1 ! rtpstreampay \

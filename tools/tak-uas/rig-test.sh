@@ -53,6 +53,10 @@ g=$(grep -oE "GR3D_FREQ [0-9]+" /tmp/rt3.out | awk '{print $2}')
 [ -n "$g" ] && [ "$g" -le 30 ] && ok "T3.4 GPU ${g}% (DLA carrying)" || bad "T3.4 GPU ${g:-?}% (inference on GPU?)"
 
 echo "== T4 broadcast fresh joins =="
+# T4.0: vdec stdout mode must emit y4m (catches stale-binary / File::create("-") class)
+nc -z 127.0.0.1 5602 2>/dev/null || ssh -f -N -L 5602:127.0.0.1:5602 -o ExitOnForwardFailure=yes hephaestus 2>/dev/null
+sb=$(timeout 12 ./tools/vdec/target/release/vdec tcp://127.0.0.1:5602 --limit 2 --y4m - --quiet 2>/dev/null | wc -c | tr -d " ")
+[ "${sb:-0}" -gt 2000000 ] && ok "T4.0 vdec stdout mode ($sb B)" || bad "T4.0 vdec stdout emits nothing (stale binary? check for a file named -)"
 nc -z 127.0.0.1 5602 2>/dev/null || ssh -f -N -L 5602:127.0.0.1:5602 -o ExitOnForwardFailure=yes hephaestus 2>/dev/null
 rm -f /tmp/rt4.y4m
 timeout 14 ./tools/vdec/target/release/vdec tcp://127.0.0.1:5602 --limit 12 --y4m /tmp/rt4.y4m --quiet 2>/dev/null

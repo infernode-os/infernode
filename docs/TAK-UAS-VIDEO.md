@@ -224,8 +224,17 @@ Hard-won streaming rules baked into `manto-broadcast.sh`:
   `-w 12` (12 s DVR ≈ 166 MB). The 60 s default fills the 1 GB Dis heap
   in ~2 min — vid9p stops reading, vdec dies, the pane goes "no video".
 - Restarting manto-broadcast drops the emu's vdec connection and it does
-  NOT auto-reconnect: after any broadcast restart, relaunch `demo-tak.sh`
-  (the phone reconnects by itself; the emu leg doesn't yet).
+  NOT auto-reconnect: `tools/tak-uas/demo-tak-watch.sh` heals this (~25 s).
+- Rebuilding vdec on macOS needs homebrew ffmpeg 6:
+  `PKG_CONFIG_PATH=/opt/homebrew/opt/ffmpeg@6/lib/pkgconfig cargo build --release`.
+  A STALE vdec binary fails silently in `--y4m -` mode (writes a file
+  literally named `-` instead of stdout) — vid9p never gets the header,
+  `mount {vid9p ...}` hangs, matrix never launches, the pane is blank.
+  rig-test T4.0 guards this class.
+- x264 `intra-refresh=true` is BANNED on the broadcast: it removes
+  periodic IDRs, so mid-stream joiners may never sync (rejoin lottery).
+  Short GOPs (key-int-max=15) give both fast artefact recovery and
+  reliable joins.
 
 ## 8. References
 

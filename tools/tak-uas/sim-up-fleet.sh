@@ -42,9 +42,10 @@ nohup "$MAVPROXY" --master=tcp:127.0.0.1:5760 --master=tcp:127.0.0.1:5770 --mast
 sleep 8
 log "telemetry bridge (vehicle mav-1) -> $ORIN_IP:7089"
 nohup "$PY" "$DIR/../mav_cot_bridge.py" --mav udpin:127.0.0.1:14550 \
-  --takurl "http://$ORIN_IP:7089/api/events" --vehicle mav-1 --rate 5 --stale 30 \
+  --takurl "http://$ORIN_IP:7089/api/events" --vehicle mav-1 --sysid 1 --rate 5 --stale 30 \
   > "$RUN/mavcot.log" 2>&1 & save $!
-nohup "$PY" "$DIR/../uas_cot_executor.py" --mav udp:127.0.0.1:14551 \
-  --takurl "http://$ORIN_IP:7089" --target-prefix hilsim. \
-  > "$RUN/executor.log" 2>&1 & save $!
+# DISABLED pending per-vehicle targeting (dueling-executor incident 2026-07-25):
+# nohup "$PY" "$DIR/../uas_cot_executor.py" --mav udp:127.0.0.1:14551 \
+#   --takurl "http://$ORIN_IP:7089" --target-prefix hilsim. \
+#   > "$RUN/executor.log" 2>&1 & save $!
 log "UP: 3 vehicles. SITL masters 5760/5770/5780; fanout 14550-2."

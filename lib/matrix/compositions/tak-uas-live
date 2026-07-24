@@ -1,0 +1,17 @@
+# tak-uas-live — UAS gimbal feed over the COMPRESSED edge leg.
+#
+# The perception node (hephaestus) encodes manto's ANNOTATED feed to
+# H.264 MPEG-TS on tcp :5602 (one encode, teed with the nerv-gcs RFC4571
+# stream — see docs/TAK-UAS-VIDEO.md and ~/bin/manto-broadcast.sh).  The
+# Mac tunnels that TCP stream and decodes it locally with tools/vdec
+# (ffmpeg), served through vid9p, so the WAN carries compressed H.264
+# instead of raw ~41 MB/s I420.  vid9p serves the decoded stream at
+# /tmp/vision/0.
+#
+#   demo-tak.sh          # wires the tunnel + vid9p/vdec mount + launch
+#
+# The heavier raw-I420-direct-9P path is demo-tak-raw.sh + tak-uas.
+
+layout vsplit 100 0
+
+top video-pane /tmp/vision/0

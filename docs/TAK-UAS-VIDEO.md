@@ -249,6 +249,19 @@ concurrently (NERVsystems/manto#4); when that lands, restore the saved
 3-feed config (`mantod-live.toml.fleet-3feed`), start the b/c
 broadcasts, and `demo-tak-fleet.sh` gives the 3-pane spectate wall.
 
+HARD-WON fleet lesson — the gimbal topic collision has TWO heads: renaming
+the nested gimbal include (gimbal_b/gimbal_c) fixes the name-derived
+topics (camera, zoom), but the joint-command topics (`/gimbal/cmd_pitch`
+`/cmd_roll` `/cmd_yaw`) are EXPLICIT strings in iris_with_gimbal's
+model.sdf (6 occurrences: ArduPilotPlugin control blocks + joint
+controllers). Left shared, all three autopilots cross-command all three
+gimbals — the camera "bounces all over" on every consumer. Clones must
+rewrite them per-bird (`/gimbal_b/cmd_*`). Also: gz sim's process comm
+is `ruby` — `pkill gz` kills nothing and silently STACKS worlds, whose
+same-name camera topics then interleave into one stream (a different
+"insane video"). Kill via ruby-comm cmdline match; verify with
+`gz model --list` + camera-topic count == vehicle count.
+
 Fleet bring-up (canonical copies in tools/tak-uas/): minipc
 `sim-up-fleet.sh` (gazebo ao_fleet ×3 iris, 3× SITL, MAV_SYSID 1/2/3 —
 NB ArduPilot 4.8 renamed SYSID_THISMAV; the old name is silently

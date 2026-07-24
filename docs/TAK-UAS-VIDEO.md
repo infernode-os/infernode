@@ -236,7 +236,27 @@ Hard-won streaming rules baked into `manto-broadcast.sh`:
   Short GOPs (key-int-max=15) give both fast artefact recovery and
   reliable joins.
 
-## 8. References
+## 8. Fleet operation (3 vehicles, selective switching)
+
+The roster carries all three sysids natively — the nerv-gcs vehicle
+dropdown lists `mav-1/2/3` and control switches per vehicle in the
+plugin UI. VIDEO follows the *selected* vehicle via
+`select-vehicle.sh <1|2|3>` (minipc): it aims the single camstream at
+the chosen bird's camera topic, feeding manto's one ingest — phone
+(:5601) and emu (:5602) then both show that vehicle, boxes included.
+One camera streams at a time until manto can serve multiple feeds
+concurrently (NERVsystems/manto#4); when that lands, restore the saved
+3-feed config (`mantod-live.toml.fleet-3feed`), start the b/c
+broadcasts, and `demo-tak-fleet.sh` gives the 3-pane spectate wall.
+
+Fleet bring-up (canonical copies in tools/tak-uas/): minipc
+`sim-up-fleet.sh` (gazebo ao_fleet ×3 iris, 3× SITL, MAV_SYSID 1/2/3 —
+NB ArduPilot 4.8 renamed SYSID_THISMAV; the old name is silently
+ignored in defaults files — one aggregating mavproxy), then
+`camstream-fleet.sh` / `select-vehicle.sh`. mav_cot_bridge needs
+`--sysid 1` on a multi-vehicle fan-out or its track mixes all birds.
+
+## 9. References
 
 - `demo-tak.sh`, `lib/matrix/compositions/tak-uas` (this repo)
 - `appl/matrix/video-pane.b` — live-sequential mode

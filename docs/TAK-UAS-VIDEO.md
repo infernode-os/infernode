@@ -193,7 +193,35 @@ prompt.  **Never `adb uninstall`** — it wipes plugin data.
 - Fix the HIL mashup: same vehicle for pixels and pose ends the
   `pose stale` degradation and enables georeferenced boxes.
 
-## 7. References
+## 7. Reloadable stack (one command per host)
+
+The whole rig re-raises idempotently — each script starts only what's
+missing, so they double as health checks. Canonical copies live in
+`tools/tak-uas/`; deployed to the hosts as:
+
+| Host | Command | Brings up |
+|---|---|---|
+| minipc | `bash ~/nerva-sim/stack-up-minipc.sh` | Gazebo+SITL (sim-up.sh), camstream → heph:5610, phone mavproxy (tcpin:15762), adb reverses, video tunnel → heph:5601 |
+| hephaestus | `bash ~/bin/stack-up-heph.sh` | mantod (DLA inference, CPU decode, 9P :6630), manto-broadcast (one x264 encode → tee → RFC4571 :5601 + MPEG-TS :5602), takconnector host proxy :7089 |
+| Mac | `./demo-tak.sh` | 5602 tunnel + local vdec decode + Matrix player (compressed leg; `demo-tak-raw.sh` = old raw-9P fallback) |
+
+Bring-up order after a cold start: minipc → hephaestus → Mac/phone.
+If gazebo wedges (frozen `/clock`, control service timeouts): reboot the
+minipc and re-run — see UAS-163.
+
+Hard-won streaming rules baked into `manto-broadcast.sh`:
+- `mpegtsmux alignment=7 pat-interval=900 pmt-interval=900 si-interval=900`
+  — without the alignment, a client joining mid-stream lands mid-TS-packet
+  and never decodes ("non-existing PPS", INFR-396).
+- tee branches need `queue leaky=downstream` (a client-less sink otherwise
+  backpressures the whole tee) with DEEP buffers (300) — shallow ones drop
+  frames mid-GOP on transient stalls and artefact the phone.
+- x264 `intra-refresh=true` so residual corruption heals progressively.
+- NVENC (`nvv4l2h264enc`) encodes fine but its stream currently defeats
+  mid-stream joiners; parked until the SPS/PPS handling is solved (NVDEC
+  itself is dead pending NOPS-139).
+
+## 8. References
 
 - `demo-tak.sh`, `lib/matrix/compositions/tak-uas` (this repo)
 - `appl/matrix/video-pane.b` — live-sequential mode

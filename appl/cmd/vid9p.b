@@ -111,6 +111,15 @@ eofc: chan of int;		# feeder -> serve loop: stream ended
 geoc: chan of (int, int, int);	# feeder -> startstream: first-header geometry
 parked: list of ref Tmsg.Read;	# frame reads waiting for more data
 
+# Bounded live storage: a ring of wframes preallocated framesize slots.
+# The contiguous i420 buffer (below) is kept for static sources and the
+# unbounded (-w 0) case, but a bounded live feed must NOT use it: the
+# grow/trim cycle repeatedly allocates window-sized arrays interleaved
+# with per-frame ones, and the Dis arena fragments until the heap dies
+# (INFR-397: at 720p10 that is ~70 s to "arena heap too large").  The
+# ring allocates each uniform slot once and recycles it forever.
+ring: array of array of byte;
+
 badmod(path: string)
 {
 	sys->fprint(sys->fildes(2), "vid9p: cannot load %s: %r\n", path);
@@ -292,6 +301,27 @@ serve(tree: ref Tree)
 # arena until even modest streams exhaust the heap.
 grow(fr: array of byte)
 {
+	# Bounded live feed: copy into the ring slot for this frame index.
+	# No window-sized allocations ever happen on this path, so the
+	# arena stays healthy at any resolution (INFR-397).
+	if(streaming && wframes > 0 && framesize > 0 && len fr == framesize){
+		if(ring == nil || len ring != wframes)
+			ring = array[wframes] of array of byte;
+		slot := ring[nframes % wframes];
+		if(slot == nil){
+			slot = array[framesize] of byte;
+			ring[nframes % wframes] = slot;
+		}
+		slot[0:] = fr;
+		nframes++;
+		if(nframes - fbase > wframes){
+			fbase = nframes - wframes;
+			if(pos < fbase)
+				pos = fbase;
+		}
+		used = (nframes - fbase) * framesize;
+		return;
+	}
 	if(used + len fr > len i420){
 		ncap := 2 * len i420;
 		if(ncap < used + len fr)
@@ -344,6 +374,23 @@ replyframe(tm: ref Tmsg.Read): int
 			return 1;
 		}
 		return 0;
+	}
+	# Ring-backed live feed: serve from the frame's slot, capping the
+	# read at the frame boundary (short reads are legal 9P; readers
+	# loop).  A slice never spans two ring slots.
+	if(ring != nil && framesize > 0) {
+		fidx := int (off / big framesize);
+		foff := int (off % big framesize);
+		fr := ring[fidx % wframes];
+		if(fr == nil) {
+			srv.reply(ref Rmsg.Error(tm.tag, "vid9p: ring hole"));
+			return 1;
+		}
+		n := tm.count;
+		if(foff + n > framesize)
+			n = framesize - foff;
+		srv.reply(ref Rmsg.Read(tm.tag, fr[foff:foff+n]));
+		return 1;
 	}
 	rel := int (off - base);
 	n := tm.count;
@@ -484,6 +531,7 @@ startstream(cmd: list of string)
 	}
 	# reset served state for the new source
 	i420 = array[0] of byte;
+	ring = nil;
 	used = 0;
 	width = height = fps = framesize = nframes = 0;
 	eof = 0;

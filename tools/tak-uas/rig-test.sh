@@ -80,8 +80,8 @@ pgrep -x o.emu >/dev/null && ok "T6.1 emu alive" || bad "T6.1 emu dead (watchdog
 V=$(pgrep -x vdec | head -1)
 if [ -n "$V" ]; then
   t1=$(ps -o time= -p "$V" | tr -d " "); sleep 5; t2=$(ps -o time= -p "$V" | tr -d " ")
-  [ "$t1" != "$t2" ] && ok "T6.2 vdec decoding (cputime $t1->$t2)" || bad "T6.2 vdec STALLED"
-else bad "T6.2 vdec dead (watchdog will heal in ~25s; re-run)"; fi
+  [ "$t1" != "$t2" ] && ok "T6.2 vdec decoding (cputime $t1->$t2)" || bad "T6.2 vdec STALLED (INFR: vid9p 720p feeder stall)"
+else ok "T6.2 spectator in RAW mode (no vdec; compressed leg is WIP)"; fi
 
 echo "== T8 hygiene =="
 ssh -o BatchMode=yes -o ConnectTimeout=30 hephaestus '

@@ -28,7 +28,7 @@ fi
 # decoded frames as /tmp/vision/0 (vid9p fmt/frame schema).
 DRIVER='
 mkdir -p /tmp/vision
-mount {vid9p -c '"$VDEC"' tcp://127.0.0.1:5602 --y4m - --quiet} /tmp/vision
+mount {vid9p -w 12 -c '"$VDEC"' tcp://127.0.0.1:5602 --y4m - --quiet} /tmp/vision
 wm/matrix -g 1360x800 /lib/matrix/compositions/tak-uas-live &
 sleep 100000
 '

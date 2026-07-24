@@ -220,6 +220,12 @@ Hard-won streaming rules baked into `manto-broadcast.sh`:
 - NVENC (`nvv4l2h264enc`) encodes fine but its stream currently defeats
   mid-stream joiners; parked until the SPS/PPS handling is solved (NVDEC
   itself is dead pending NOPS-139).
+- vid9p live retention MUST be bounded at 720p: `demo-tak.sh` passes
+  `-w 12` (12 s DVR ≈ 166 MB). The 60 s default fills the 1 GB Dis heap
+  in ~2 min — vid9p stops reading, vdec dies, the pane goes "no video".
+- Restarting manto-broadcast drops the emu's vdec connection and it does
+  NOT auto-reconnect: after any broadcast restart, relaunch `demo-tak.sh`
+  (the phone reconnects by itself; the emu leg doesn't yet).
 
 ## 8. References
 

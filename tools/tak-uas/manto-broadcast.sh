@@ -24,7 +24,7 @@ exec "$N/emu/Linux/o.emu" -r"$N" sh -c "mkdir -p /tmp/vb; mount -A tcp!127.0.0.1
    ! h264parse config-interval=-1 ! tee name=t \
    t. ! queue leaky=downstream max-size-buffers=300 max-size-bytes=0 max-size-time=0 \
         ! rtph264pay pt=96 config-interval=1 ! rtpstreampay \
-        ! tcpserversink host=127.0.0.1 port="$RFCPORT" sync=false \
+        ! tcpserversink host=127.0.0.1 port="$RFCPORT" sync=false buffers-max=200 recover-policy=latest timeout=10000000000 \
    t. ! queue leaky=downstream max-size-buffers=300 max-size-bytes=0 max-size-time=0 \
         ! mpegtsmux alignment=7 pat-interval=900 pmt-interval=900 si-interval=900 \
-        ! tcpserversink host=127.0.0.1 port="$TSPORT" sync=false
+        ! tcpserversink host=127.0.0.1 port="$TSPORT" sync=false buffers-max=200 recover-policy=latest timeout=10000000000

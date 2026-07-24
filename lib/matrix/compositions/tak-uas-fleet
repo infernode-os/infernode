@@ -1,0 +1,24 @@
+# tak-uas-fleet — three-vehicle UAS spectate wall (compressed edge legs).
+#
+# One pane per vehicle, each on its own vid9p/vdec mount of the perception
+# node's per-feed MPEG-TS broadcast (manto-annotated, one encode per feed):
+#   vehicle 1  heph :5602  ->  /tmp/vision/0
+#   vehicle 2  heph :5604  ->  /tmp/visionb/0
+#   vehicle 3  heph :5606  ->  /tmp/visionc/0
+# The fourth cell carries the transport controls for vehicle 1's feed
+# (DVR replay of the retained window; stop snaps to live).
+#
+#   demo-tak-fleet.sh      # tunnels + mounts + this composition
+#
+# This is the multi-UAS operator-spectate view: fly any bird from
+# nerv-gcs (select-vehicle.sh repoints the handset video), watch all
+# three here with manto boxes burned in.
+
+layout hsplit 50 50
+left  vsplit 50 50
+right vsplit 50 50
+
+left/top     video-pane /tmp/vision/0
+left/bottom  video-pane /tmp/visionb/0
+right/top    video-pane /tmp/visionc/0
+right/bottom video-ctl  /tmp/vision/0

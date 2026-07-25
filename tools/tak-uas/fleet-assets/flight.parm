@@ -1,0 +1,12 @@
+# SITL bench flight params (loaded via --add-param-file).
+# Bench-grade, NOT flight-grade — the goal is reliable autonomous test flight.
+ARMING_CHECK 0
+PILOT_SPEED_UP 500
+PILOT_SPEED_DN 300
+WPNAV_SPEED 800
+DISARM_DELAY 127
+# sim rig: no battery failsafe (long hovers otherwise RTL mid-test)
+BATT_LOW_VOLT 0
+BATT_CRT_VOLT 0
+BATT_FS_LOW_ACT 0
+BATT_FS_CRT_ACT 0

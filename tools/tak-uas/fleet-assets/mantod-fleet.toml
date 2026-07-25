@@ -1,0 +1,87 @@
+[server]
+bind = "127.0.0.1:6630"
+
+[fabric]
+base_port = 6640
+datum_lat_deg = 47.5200
+datum_lon_deg = -121.9750
+frame_addr = "127.0.0.1:6610"
+
+[[feed]]
+id = "gz-uas"
+url = "rtp://127.0.0.1:5610"
+sensor = "eo"
+domain = "sar"
+model = "yolov8n-dla0"
+platform_uid = "nerv-gcs.mav-1"
+
+[feed.telemetry]
+url = "http://10.147.17.120:7089"
+uid = "nerv-gcs.mav-1"
+hfov_deg = 60.0
+vfov_deg = 46.0
+gimbal_pitch_deg = -20.0
+ground_hae_m = 380.0
+
+
+[[feed]]
+id = "gz-uas-b"
+url = "rtp://127.0.0.1:5611"
+sensor = "eo"
+domain = "sar"
+model = "yolov8n-dla0"
+platform_uid = "nerv-gcs.mav-2"
+[feed.telemetry]
+url = "http://10.147.17.120:7089"
+uid = "nerv-gcs.mav-2"
+hfov_deg = 60.0
+vfov_deg = 46.0
+gimbal_pitch_deg = -20.0
+ground_hae_m = 380.0
+
+[[feed]]
+id = "gz-uas-c"
+url = "rtp://127.0.0.1:5612"
+sensor = "eo"
+domain = "sar"
+model = "yolov8n-dla0"
+platform_uid = "nerv-gcs.mav-3"
+[feed.telemetry]
+url = "http://10.147.17.120:7089"
+uid = "nerv-gcs.mav-3"
+hfov_deg = 60.0
+vfov_deg = 46.0
+gimbal_pitch_deg = -20.0
+ground_hae_m = 380.0
+
+[[model]]
+id = "yolov8n-dla0"
+domain = "generic"
+sensor = "eo"
+engine = "/mnt/orin-ssd/pdfinn/models/manto/yolov8n_dla0.plan"
+engine_sha256 = "12bb8129b7c39720b62e2abc9460f3129a0a6422a2aeabb9acf337b8a41f692a"
+placement = "dla0"
+conf_floor = 0.25
+
+[[platform]]
+uid = "nerv-gcs.mav-1"
+kind = "multirotor"
+[[platform.sensor]]
+type = "eo"
+hfov_deg = 60.0
+vfov_deg = 46.0
+
+[[platform]]
+uid = "nerv-gcs.mav-2"
+kind = "multirotor"
+[[platform.sensor]]
+type = "eo"
+hfov_deg = 60.0
+vfov_deg = 46.0
+[[platform]]
+uid = "nerv-gcs.mav-3"
+kind = "multirotor"
+[[platform.sensor]]
+type = "eo"
+hfov_deg = 60.0
+vfov_deg = 46.0

@@ -100,11 +100,17 @@ m = mavutil.mavlink_connection(args.mav)
 m.wait_heartbeat()
 print(f"bridge: mav connected, publishing {UID} -> {args.takurl}", file=sys.stderr)
 
-pos = {"lat": 0.0, "lon": 0.0, "hae": 0.0, "agl": 0.0, "course": 0.0, "speed": 0.0,
-       "batt": 100, "armed": False, "mode": "GUIDED", "sats": 0, "fix": 0,
-       "wpcur": 0, "wpcount": 0,
-       "gpitch": args.gimbal_pitch, "gyaw": args.gimbal_yaw, "gimbal_live": False}
-last = 0.0
+def _newpos():
+    return {"lat": 0.0, "lon": 0.0, "hae": 0.0, "agl": 0.0, "course": 0.0, "speed": 0.0,
+            "batt": 100, "armed": False, "mode": "GUIDED", "sats": 0, "fix": 0,
+            "wpcur": 0, "wpcount": 0,
+            "gpitch": args.gimbal_pitch, "gyaw": args.gimbal_yaw, "gimbal_live": False}
+
+# Per-vehicle state and publish clocks, keyed by MAVLink source system.
+# One CoT track per vehicle: uid hilsim.mav-<sysid> — a single blended dict
+# under one uid made the marker hop between vehicles (the cycling-HILSIM bug).
+vehicles = {}
+last = {}
 n = 0
 while True:
     msg = m.recv_match(type=["GLOBAL_POSITION_INT", "VFR_HUD", "SYS_STATUS",
@@ -112,7 +118,12 @@ while True:
                              "GIMBAL_DEVICE_ATTITUDE_STATUS", "MOUNT_ORIENTATION"],
                        blocking=True, timeout=2)
     if msg:
+        sid = msg.get_srcSystem()
+        if sid in (0, 255) or (args.sysid and sid != args.sysid):
+            msg = None
+    if msg:
         t = msg.get_type()
+        pos = vehicles.setdefault(sid, _newpos())
         if t == "GIMBAL_DEVICE_ATTITUDE_STATUS":
             gp, gy = quat_to_pitch_yaw_deg(msg.q)
             pos["gpitch"], pos["gyaw"] = gp, gy
@@ -141,9 +152,13 @@ while True:
             pos["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             pos["mode"] = COPTER_MODES.get(msg.custom_mode, pos["mode"])
     now = time.time()
-    if now - last >= 1.0 / args.rate and pos["lat"] != 0.0:
+    for sid, pos in vehicles.items():
+        if now - last.get(sid, 0.0) < 1.0 / args.rate or pos["lat"] == 0.0:
+            continue
+        veh = f"mav-{sid}"
+        uid = f"hilsim.{veh}"
         gpsstatus = "FIX_3D" if pos["fix"] >= 3 else ("NO_FIX" if pos["fix"] < 2 else "FIX_2D")
-        xml = COT.format(uid=UID, veh=args.vehicle, t=iso(now), stale=iso(now + args.stale),
+        xml = COT.format(uid=uid, veh=veh, t=iso(now), stale=iso(now + args.stale),
                          lat=pos["lat"], lon=pos["lon"], hae=pos["hae"], agl=pos["agl"],
                          gpitch=pos["gpitch"], gyaw=pos["gyaw"],
                          course=pos["course"], speed=pos["speed"], batt=int(pos["batt"]),
@@ -154,7 +169,7 @@ while True:
             code = post(xml)
             n += 1
             if n % 5 == 1:
-                print(f"  {UID} @ {pos['lat']:.6f},{pos['lon']:.6f} agl {pos['agl']:.1f}m -> {code}", file=sys.stderr)
+                print(f"  {uid} @ {pos['lat']:.6f},{pos['lon']:.6f} agl {pos['agl']:.1f}m -> {code}", file=sys.stderr)
         except Exception as e:
             print(f"  post failed: {e}", file=sys.stderr)
-        last = now
+        last[sid] = now

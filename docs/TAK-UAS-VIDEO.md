@@ -249,6 +249,33 @@ concurrently (NERVsystems/manto#4); when that lands, restore the saved
 3-feed config (`mantod-live.toml.fleet-3feed`), start the b/c
 broadcasts, and `demo-tak-fleet.sh` gives the 3-pane spectate wall.
 
+## THE SAVED SIM — spin up the whole 3-UAS rig anytime
+
+    tools/tak-uas/fleet-up.sh        # bring up / heal EVERYTHING, idempotent (17-check verify)
+    tools/tak-uas/fleet-down.sh      # clean teardown (safe kill patterns)
+    tools/tak-uas/make-fleet-models.sh   # (re)install gazebo fleet assets on a fresh sim host
+
+fleet-up phases: sim (1 gazebo + 3 SITLs sysid 1/2/3 + aggregator) -> 3 camstreams
+(RTP 5610/11/12 -> heph) -> mantod (3 feeds; pose paired off the GCS's own
+nerv-gcs.mav-N CoT via takconnector — single-track COP, no hilsim bridge) ->
+3 broadcasts (RFC4571 5601/03/05 + TS 5602/04/06) -> minipc plumbing (tunnels,
+venv mavproxy 14552->tcpin:15762, adb reverses + :7777 forward) -> phone GCS
+(9P surface probe; ATAK restart if down). Re-run anytime: each phase checks
+before acting, so it doubles as the health check and the healer.
+
+Canonical assets in tools/tak-uas/fleet-assets/: mantod-fleet.toml (3 feeds),
+ao_fleet.sdf world, sysid1/2/3.parm + flight.parm, and the gimbal-DECONFLICTED
+model texts (models/*/model.sdf|config — FDM 9012/9022, gimbal_b/c names,
+/gimbal_b|c/cmd_* joint topics ×6). make-fleet-models.sh clones mesh dirs from
+stock and overlays these texts.
+
+Operate: the phone GCS exports a 9P surface on :7777 (tools/tak-uas/ninep.py
+is a standalone client). `echo mav-2 > attention` switches the operated bird;
+HUD, AR, and VIDEO follow focus (plugin maps mav-1/2/3 -> 5601/03/05).
+`echo full > ui/pane`, `echo EXPANDED > ui/pipMode` drive the display.
+NOTE: every `adb install -r` of the plugin re-trips ATAK's approval gate —
+the operator must re-enable NERV GCS in ATAK's Plugins manager.
+
 HARD-WON fleet lesson — the gimbal topic collision has TWO heads: renaming
 the nested gimbal include (gimbal_b/gimbal_c) fixes the name-derived
 topics (camera, zoom), but the joint-command topics (`/gimbal/cmd_pitch`

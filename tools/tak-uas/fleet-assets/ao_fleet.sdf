@@ -1,0 +1,203 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="iris_runway_targets">
+    <physics name="1ms" type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+    <plugin filename="gz-sim-navsat-system"
+      name="gz::sim::systems::NavSat">
+    </plugin>
+
+    <scene>
+      <ambient>1.0 1.0 1.0</ambient>
+      <background>0.8 0.8 0.8</background>
+      <sky></sky>
+    </scene>
+
+    <spherical_coordinates>
+      <latitude_deg>47.5200</latitude_deg>
+      <longitude_deg>-121.9750</longitude_deg>
+      <elevation>380</elevation>
+      <heading_deg>0</heading_deg>
+      <surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.8 0.8 0.8 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="axes">
+      <static>1</static>
+      <link name="link">
+        <visual name="r">
+          <cast_shadows>0</cast_shadows>
+          <pose>5 0 0.1 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>10 0.01 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 0.8</ambient>
+            <diffuse>1 0 0 0.8</diffuse>
+            <emissive>1 0 0 0.8</emissive>
+            <specular>0.5 0.5 0.5 0.8</specular>
+          </material>
+        </visual>
+        <visual name="g">
+          <cast_shadows>0</cast_shadows>
+          <pose>0 5 0.1 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.01 10 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0 1 0 0.8</ambient>
+            <diffuse>0 1 0 0.8</diffuse>
+            <emissive>0 1 0 0.8</emissive>
+            <specular>0.5 0.5 0.5 0.8</specular>
+          </material>
+        </visual>
+        <visual name="b">
+          <cast_shadows>0</cast_shadows>
+          <pose>0 0 5.1 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.01 0.01 10</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0 0 1 0.8</ambient>
+            <diffuse>0 0 1 0.8</diffuse>
+            <emissive>0 0 1 0.8</emissive>
+            <specular>0.5 0.5 0.5 0.8</specular>
+          </material>
+        </visual>
+        <sensor name="navsat_sensor" type="navsat">
+          <always_on>1</always_on>
+          <update_rate>1</update_rate>
+        </sensor>
+      </link>
+    </model>
+    
+    <include>
+      <uri>model://runway</uri>
+      <pose degrees="true">-29 545 0 0 0 363</pose>
+    </include>
+
+    <include>
+      <uri>model://iris_with_gimbal</uri>
+      <pose degrees="true">0 0 0.195 0 0 90</pose>
+    </include>
+
+    <include>
+      <uri>model://iris_with_gimbal_b</uri>
+      <name>iris_b</name>
+      <pose degrees="true">4 0 0.195 0 0 90</pose>
+    </include>
+
+    <include>
+      <uri>model://iris_with_gimbal_c</uri>
+      <name>iris_c</name>
+      <pose degrees="true">-4 0 0.195 0 0 90</pose>
+    </include>
+
+
+
+    <!-- ============================================================= -->
+    <!-- NERV test targets for manto (perception).                      -->
+    <!-- iris_runway.sdf is otherwise empty (runway + drone only).       -->
+    <!--                                                                 -->
+    <!-- TWO detection paths:                                            -->
+    <!--  * YOLO/ML path (mantod with a TensorRT engine): realistic Fuel -->
+    <!--    meshes below (Walking person, Casual female, Prius) — COCO    -->
+    <!--    YOLO classifies these as person/car. Needs internet on first  -->
+    <!--    load to fetch from fuel.gazebosim.org (verified reachable).   -->
+    <!--    NOTE: COCO YOLO is trained on mostly ground-level imagery;    -->
+    <!--    small top-down aerial targets are harder — fly low/close or   -->
+    <!--    keep targets large in frame for reliable classification.      -->
+    <!--  * MOTION path (default MotionDetector, no ML, no internet): the -->
+    <!--    moving yellow box slides at 0.8 m/s; a station-keeping drone   -->
+    <!--    sees relative motion and fires on it.                         -->
+    <!-- Positions are near the runway so the gimbal sees them on         -->
+    <!-- takeoff/low pass. Adjust poses to your flight path.              -->
+    <!-- ============================================================= -->
+
+    <include>
+      <name>target_person_1</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Walking person</uri>
+      <pose degrees="true">15 545 0 0 0 90</pose>
+    </include>
+
+    <include>
+      <name>target_person_2</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Casual female</uri>
+      <pose degrees="true">22 548 0 0 0 -60</pose>
+    </include>
+
+    <include>
+      <name>target_vehicle</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Prius Hybrid</uri>
+      <pose degrees="true">30 552 0 0 0 30</pose>
+    </include>
+
+    <!-- MOTION target (yellow box): VelocityControl drives it at 0.8 m/s
+         so MotionDetector fires under a hovering drone. No Fuel/ML needed.
+         If gz-sim-velocity-control-system is unavailable in your build,
+         publish to /model/target_rover/cmd_vel or swap for an <actor>. -->
+    <model name="target_rover">
+      <pose degrees="true">10 540 0.4 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>5.0</mass>
+          <inertia><ixx>1</ixx><iyy>1</iyy><izz>1</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="v">
+          <geometry><box><size>0.8 0.8 0.8</size></box></geometry>
+          <material>
+            <ambient>0.95 0.85 0.1 1</ambient>
+            <diffuse>0.95 0.85 0.1 1</diffuse>
+          </material>
+        </visual>
+        <collision name="c">
+          <geometry><box><size>0.8 0.8 0.8</size></box></geometry>
+        </collision>
+      </link>
+      <plugin filename="gz-sim-velocity-control-system"
+              name="gz::sim::systems::VelocityControl">
+        <initial_linear>0.8 0 0</initial_linear>
+      </plugin>
+    </model>
+
+  </world>
+</sdf>

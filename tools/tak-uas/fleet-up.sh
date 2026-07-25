@@ -19,6 +19,10 @@
 #     kills the ssh session (recurring self-kill trap).
 #   - kill broadcast legs by PID (gst + its feeder emu), never by name.
 #   - mavproxy MUST be the sim venv one; bare mavproxy.py is not on PATH.
+#   - the phone MAVLink leg is phone_leg.py (raw passthrough), NEVER a second
+#     mavproxy or an aggregator tcpin: MAVProxy intercepts RC_CHANNELS_OVERRIDE
+#     from TCP GCS clients — sticks die and LOITER settles on SITL's low
+#     throttle baseline.
 #   - adb wedge (screencap 0 bytes, installs hang): pkill -9 -x adb,
 #     start-server, and RE-ADD every reverse — the wedge silently eats them.
 #   - every `adb install -r` of the plugin re-trips ATAK's approval gate:
@@ -125,8 +129,8 @@ for P in 5601 5603 5605; do
 done
 ML=$(ssh_m 'ss -ltn 2>/dev/null | grep -c :15762')
 if [ "${ML:-0}" -ge 1 ]; then ok "phone mavlink leg up (15762)"; else
-  ssh_m 'V=/home/pdfinn/nerva-sim/venv; mkdir -p /tmp/mpphone
-    nohup $V/bin/python3 $V/bin/mavproxy.py --master=udp:127.0.0.1:14552 --out=tcpin:0.0.0.0:15762 --daemon --state-basedir=/tmp/mpphone >/tmp/mpphone.log 2>&1 & sleep 6' >/dev/null 2>&1
+  scp -o BatchMode=yes "$HERE/phone_leg.py" "$MINIPC:~/nerva-sim/phone_leg.py" >/dev/null 2>&1
+  ssh_m 'nohup python3 $HOME/nerva-sim/phone_leg.py 14552 15762 >/tmp/phone_leg.log 2>&1 & sleep 3' >/dev/null 2>&1
   ML=$(ssh_m 'ss -ltn 2>/dev/null | grep -c :15762')
   [ "${ML:-0}" -ge 1 ] && ok "phone mavlink leg launched" || bad "phone mavlink leg failed"
 fi

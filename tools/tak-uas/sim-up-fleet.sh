@@ -38,6 +38,12 @@ done
 log "aggregating mavproxy (3 masters) -> 14550/14551/14552"
 nohup "$MAVPROXY" --master=tcp:127.0.0.1:5760 --master=tcp:127.0.0.1:5770 --master=tcp:127.0.0.1:5780 \
   --out=udp:127.0.0.1:14550 --out=udp:127.0.0.1:14551 --out=udp:127.0.0.1:14552 \
+# Phone MAVLink leg: RAW passthrough bridge (tcp 15762 <-> the aggregator
+# udp out-peer 14552). NEVER a second mavproxy and NEVER a tcpin on the
+# aggregator: MAVProxy intercepts RC_CHANNELS_OVERRIDE from TCP GCS
+# clients and re-targets them (found live: sticks dead on mav-2/3 while
+# LOITER settled). phone_leg.py parses nothing, so nothing is intercepted.
+nohup python3 $HOME/nerva-sim/phone_leg.py 14552 15762 >/tmp/phone_leg.log 2>&1 &
   --daemon --non-interactive > "$RUN/mavproxy.log" 2>&1 & save $!
 sleep 8
 log "telemetry bridge (vehicle mav-1) -> $ORIN_IP:7089"

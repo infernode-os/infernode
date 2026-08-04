@@ -927,6 +927,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
+	if(calendarcontrolpath(path))
+		return 1;
 	if(fixedservicecontrolpath(path))
 		return 1;
 	return 0;
@@ -995,6 +997,21 @@ uiagentcontrolpath(path: string): int
 	# UI authority is derived from fixed-function tools by needsui(), never from
 	# caller-supplied paths that generic filesystem or shell tools can reuse.
 	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+calendarcontrolpath(path: string): int
+{
+	# Calendar depth grants may name exact read/query subtrees, but the scaffold's
+	# root and account roots include writable ctl siblings that configure CalDAV.
+	if(path == "/mnt/cal" || path == "/mnt/cal/ctl" || path == "/mnt/cal/accounts")
+		return 1;
+	if(prefix(path, "/mnt/cal/accounts/")) {
+		if(componentcount(path) <= 4)
+			return 1;
+		if(pathhascomponent(path, "ctl"))
+			return 1;
+	}
+	return 0;
 }
 
 fixedservicecontrolpath(path: string): int

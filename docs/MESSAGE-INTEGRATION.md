@@ -109,6 +109,12 @@ not duplicates. On a resource-constrained node you may run only one; longer term
 a depth service can expose its own notify channel and a thin `MsgSrc` can bridge
 to it so a single connection feeds both.
 
+Depth capability grants must still name safe subtrees. Broad service roots and
+account roots that contain writable `ctl` siblings are control-plane authority,
+not generic filesystem authority. For example, grant exact calendar read/query
+subtrees such as `/mnt/cal/accounts/alice/calendars`, not `/mnt/cal` or
+`/mnt/cal/accounts/alice`.
+
 ## Setup: secrets in keyring, config in Settings
 
 Provisioning an integration is **never** hand-editing `factotum` from a shell.

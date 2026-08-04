@@ -1,4 +1,9 @@
 /mnt/toolctl
 /mnt/factotum
 /mnt/factotum/ctl
+/mnt/cal
+/mnt/cal/ctl
+/mnt/cal/accounts
+/mnt/cal/accounts/alice
+/mnt/cal/accounts/alice/ctl
 /mnt/msg/ctl/session

@@ -46,6 +46,7 @@ assert_absent_paths() {
 		"/mnt/toolctl"
 		"/mnt/toolctl/ctl"
 		"/mnt/factotum"
+		"/mnt/cal"
 		"/mnt/ui"
 		"/mnt/matrix"
 		"/mnt/video"

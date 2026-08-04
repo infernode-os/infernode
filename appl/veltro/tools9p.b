@@ -802,6 +802,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
+	if(calendarcontrolpath(path))
+		return 1;
 	if(fixedservicecontrolpath(path))
 		return 1;
 	return 0;
@@ -848,6 +850,21 @@ uiagentcontrolpath(path: string): int
 	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
 	# grant would also hand write/exec every per-activity ctl file.
 	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+calendarcontrolpath(path: string): int
+{
+	# Calendar depth grants may name exact read/query subtrees, but broad roots
+	# expose writable ctl files that configure accounts and CalDAV operations.
+	if(path == "/mnt/cal" || path == "/mnt/cal/ctl" || path == "/mnt/cal/accounts")
+		return 1;
+	if(prefix(path, "/mnt/cal/accounts/")) {
+		if(componentcount(path) <= 4)
+			return 1;
+		if(pathhascomponent(path, "ctl"))
+			return 1;
+	}
+	return 0;
 }
 
 fixedservicecontrolpath(path: string): int

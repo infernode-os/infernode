@@ -485,22 +485,22 @@ else
 fi
 
 if emu_c "bindpath_fixed_service_rejected" 12 \
-    "mkdir -p /mnt/matrix /phone; touch /mnt/matrix/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "mkdir -p /mnt/matrix /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/video/0/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "fixed-service bindpath probe did not establish a valid baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/phone"; then
+    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/mnt/video" || echo "$OUTPUT" | grep -q "^/phone"; then
         fail "bindpath accepted a fixed-service control tree (output: $OUTPUT)"
     else
-        pass "bindpath rejects Matrix and phone service trees"
+        pass "bindpath rejects Matrix, video, and phone service trees"
     fi
 else
     fail "fixed-service bindpath rejection probe failed"
 fi
 
 if emu_c "startup_fixed_service_rejected" 12 \
-    "mkdir -p /mnt/matrix /phone; touch /mnt/matrix/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
-    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/phone"; then
-        pass "startup -p rejects Matrix and phone service trees"
+    "mkdir -p /mnt/matrix /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/video/0/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /mnt/video:rw -p /mnt/video/0/ctl:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/mnt/video" && ! echo "$OUTPUT" | grep -q "^/phone"; then
+        pass "startup -p rejects Matrix, video, and phone service trees"
     else
         fail "startup -p accepted a fixed-service control tree (output: $OUTPUT)"
     fi

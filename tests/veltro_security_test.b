@@ -1604,6 +1604,8 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/mnt/ui/activity/0/presentation",
 		"/mnt/matrix",
 		"/mnt/matrix/composition",
+		"/mnt/video",
+		"/mnt/video/0/ctl",
 		"/phone",
 		"/phone/sms",
 		"/mnt/msg/ctl",

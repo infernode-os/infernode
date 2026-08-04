@@ -47,6 +47,7 @@ assert_absent_paths() {
 		"/mnt/toolctl/ctl"
 		"/mnt/ui"
 		"/mnt/matrix"
+		"/mnt/video"
 		"/phone"
 		"/chan"
 		"/net"

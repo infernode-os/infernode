@@ -76,7 +76,10 @@ when interactive factotum/secstore unlock is unavailable. Trusted bootstrap code
 should provision those values into factotum when possible. Agent namespaces
 allowlist only `VELTRO_SESSION` under `/env`, so host credential variables never
 become agent capabilities. Runtime agent tools consume credentials through
-factotum only; plaintext key files under `/lib/veltro` are prohibited.
+factotum only; plaintext key files under `/lib/veltro` are prohibited. Raw
+`/mnt/factotum` path grants are also prohibited: fixed-function credential
+tools may receive factotum from trusted namespace construction, but generic
+path grants must not hand the credential service to arbitrary tools.
 
 Three harness entry points apply namespace restriction:
 

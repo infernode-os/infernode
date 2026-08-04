@@ -489,6 +489,7 @@ privilegedControlGrant(p: string): int
 		"/tool/ctl",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
+		"/mnt/factotum",
 		"/mnt/ui/ctl",
 		"/mnt/msg/ctl",
 		"/mnt/msg/pending",

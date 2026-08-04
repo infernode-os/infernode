@@ -673,10 +673,11 @@ be explicit:
   namespace surface supports that distinction.
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
-derived only from the `matrix` tool, and `/phone` only from `sms`, `dial`, or
-`contacts`; neither is a caller-supplied path capability. This prevents generic
-filesystem or shell tools from driving Matrix composition controls, sending an
-SMS, or initiating a call through a raw namespace grant.
+derived only from the `matrix` tool, `/mnt/video` only from video presentation
+tools, and `/phone` only from `sms`, `dial`, or `contacts`; none is a
+caller-supplied path capability. This prevents generic filesystem or shell
+tools from driving Matrix composition controls, video transport controls, SMS,
+or calls through a raw namespace grant.
 
 The profile invariant test currently fails on:
 

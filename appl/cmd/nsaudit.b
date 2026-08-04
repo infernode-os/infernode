@@ -552,6 +552,7 @@ uiAgentControlGrant(p: string): int
 fixedServiceControlGrant(p: string): int
 {
 	return p == "/mnt/matrix" || prefix(p, "/mnt/matrix/") ||
+		p == "/mnt/video" || prefix(p, "/mnt/video/") ||
 		p == "/phone" || prefix(p, "/phone/");
 }
 

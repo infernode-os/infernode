@@ -512,6 +512,8 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(uiAgentControlGrant(p))
 		return 1;
+	if(llmCtlControlGrant(p))
+		return 1;
 	if(calendarControlGrant(p))
 		return 1;
 	if(fixedServiceControlGrant(p))
@@ -550,6 +552,11 @@ appIpcControlGrant(p: string): int
 uiAgentControlGrant(p: string): int
 {
 	return p == "/mnt/ui" || prefix(p, "/mnt/ui/");
+}
+
+llmCtlControlGrant(p: string): int
+{
+	return p == "/llm" || p == "/llm/ctl" || prefix(p, "/llm/ctl/");
 }
 
 calendarControlGrant(p: string): int

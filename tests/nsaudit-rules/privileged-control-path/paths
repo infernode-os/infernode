@@ -6,4 +6,6 @@
 /mnt/cal/accounts
 /mnt/cal/accounts/alice
 /mnt/cal/accounts/alice/ctl
+/llm
+/llm/ctl
 /mnt/msg/ctl/session

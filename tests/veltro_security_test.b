@@ -1609,6 +1609,8 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/mnt/cal/accounts",
 		"/mnt/cal/accounts/alice",
 		"/mnt/cal/accounts/alice/ctl",
+		"/llm",
+		"/llm/ctl",
 		"/mnt/matrix",
 		"/mnt/matrix/composition",
 		"/mnt/video",

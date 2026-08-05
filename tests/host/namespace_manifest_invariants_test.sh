@@ -48,6 +48,8 @@ assert_absent_paths() {
 		"/mnt/factotum"
 		"/mnt/cal"
 		"/mnt/ui"
+		"/llm"
+		"/llm/ctl"
 		"/mnt/matrix"
 		"/mnt/video"
 		"/phone"

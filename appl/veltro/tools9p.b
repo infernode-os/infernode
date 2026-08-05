@@ -802,6 +802,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
+	if(llmctlcontrolpath(path))
+		return 1;
 	if(calendarcontrolpath(path))
 		return 1;
 	if(fixedservicecontrolpath(path))
@@ -850,6 +852,13 @@ uiagentcontrolpath(path: string): int
 	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
 	# grant would also hand write/exec every per-activity ctl file.
 	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+llmctlcontrolpath(path: string): int
+{
+	# /llm/ctl switches host LLM backends through llmctl9p. Keep that Settings
+	# control surface out of caller-supplied path grants.
+	return path == "/llm" || path == "/llm/ctl" || prefix(path, "/llm/ctl/");
 }
 
 calendarcontrolpath(path: string): int

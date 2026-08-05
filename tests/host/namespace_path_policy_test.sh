@@ -41,6 +41,8 @@ BAD_PRIV=(
   "/mnt/cal/accounts"
   "/mnt/cal/accounts/alice"
   "/mnt/cal/accounts/alice/ctl"
+  "/llm"
+  "/llm/ctl"
   "/mnt/msg/ctl"
   "/mnt/msg/ctl/session"
   "/n/wallet/alice/ctl"
@@ -77,6 +79,7 @@ GOOD=(
   "/tmp/veltro/scratch"
   "/mnt/msg"
   "/mnt/msg/draft"
+  "/llm/status"
   "/mnt/cal/accounts/alice/calendars"
 )
 
@@ -144,7 +147,7 @@ for p in "${GOOD[@]}"; do
 done
 
 mkpaths() {
-    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /mnt/msg/ctl /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /mnt/msg/ctl/session /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
+    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /llm /mnt/msg/ctl /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /llm/ctl /llm/status /mnt/msg/ctl/session /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
 }
 
 bad_startup=""

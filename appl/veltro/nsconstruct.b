@@ -927,6 +927,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		return 1;
 	if(uiagentcontrolpath(path))
 		return 1;
+	if(llmctlcontrolpath(path))
+		return 1;
 	if(calendarcontrolpath(path))
 		return 1;
 	if(fixedservicecontrolpath(path))
@@ -997,6 +999,14 @@ uiagentcontrolpath(path: string): int
 	# UI authority is derived from fixed-function tools by needsui(), never from
 	# caller-supplied paths that generic filesystem or shell tools can reuse.
 	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
+}
+
+llmctlcontrolpath(path: string): int
+{
+	# /llm is the Settings bridge to host llmctl. The root contains ctl, so a
+	# broad path grant is administrative authority. Exact status reads may be
+	# granted separately if a future tool needs health visibility.
+	return path == "/llm" || path == "/llm/ctl" || prefix(path, "/llm/ctl/");
 }
 
 calendarcontrolpath(path: string): int

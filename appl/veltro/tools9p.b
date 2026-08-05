@@ -804,6 +804,8 @@ privilegedcontrolpath(path: string): int
 		return 1;
 	if(llmctlcontrolpath(path))
 		return 1;
+	if(auditcontrolpath(path))
+		return 1;
 	if(calendarcontrolpath(path))
 		return 1;
 	if(fixedservicecontrolpath(path))
@@ -859,6 +861,15 @@ llmctlcontrolpath(path: string): int
 	# /llm/ctl switches host LLM backends through llmctl9p. Keep that Settings
 	# control surface out of caller-supplied path grants.
 	return path == "/llm" || path == "/llm/ctl" || prefix(path, "/llm/ctl/");
+}
+
+auditcontrolpath(path: string): int
+{
+	# /mnt/audit/log is the append-only subject capability. A raw root or chain
+	# grant leaks log history; ctl can force signed checkpoints.
+	return path == "/mnt/audit" ||
+		path == "/mnt/audit/ctl" || prefix(path, "/mnt/audit/ctl/") ||
+		path == "/mnt/audit/chain" || prefix(path, "/mnt/audit/chain/");
 }
 
 calendarcontrolpath(path: string): int

@@ -929,6 +929,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		return 1;
 	if(llmctlcontrolpath(path))
 		return 1;
+	if(auditcontrolpath(path))
+		return 1;
 	if(calendarcontrolpath(path))
 		return 1;
 	if(fixedservicecontrolpath(path))
@@ -1007,6 +1009,15 @@ llmctlcontrolpath(path: string): int
 	# broad path grant is administrative authority. Exact status reads may be
 	# granted separately if a future tool needs health visibility.
 	return path == "/llm" || path == "/llm/ctl" || prefix(path, "/llm/ctl/");
+}
+
+auditcontrolpath(path: string): int
+{
+	# Audit subjects should receive only the append endpoint they need:
+	# /mnt/audit/log. Broad roots expose chain history and ctl checkpoints.
+	return path == "/mnt/audit" ||
+		path == "/mnt/audit/ctl" || prefix(path, "/mnt/audit/ctl/") ||
+		path == "/mnt/audit/chain" || prefix(path, "/mnt/audit/chain/");
 }
 
 calendarcontrolpath(path: string): int

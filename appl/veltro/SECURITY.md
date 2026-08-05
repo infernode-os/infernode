@@ -681,9 +681,12 @@ tools, and `/phone` only from `sms`, `dial`, or `contacts`; none is a
 caller-supplied path capability. `/llm/ctl` is likewise Settings/admin
 authority over the host LLM backend, so raw grants of `/llm` or `/llm/ctl` are
 rejected while exact status-only reads can remain ordinary filesystem reads.
-This prevents generic filesystem or shell tools from driving Matrix
-composition controls, video transport controls, SMS, calls, or backend
-switches through a raw namespace grant.
+Audit subjects should receive the exact append-only `/mnt/audit/log` endpoint,
+not `/mnt/audit`, `/mnt/audit/chain`, or
+`/mnt/audit/ctl`; the broad root leaks log history and the control file can
+force checkpoint signing. This prevents generic filesystem or shell tools from
+driving Matrix composition controls, video transport controls, SMS, calls, or
+backend switches and audit-control operations through a raw namespace grant.
 
 The profile invariant test currently fails on:
 

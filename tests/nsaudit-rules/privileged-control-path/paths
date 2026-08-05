@@ -8,4 +8,7 @@
 /mnt/cal/accounts/alice/ctl
 /llm
 /llm/ctl
+/mnt/audit
+/mnt/audit/ctl
+/mnt/audit/chain
 /mnt/msg/ctl/session

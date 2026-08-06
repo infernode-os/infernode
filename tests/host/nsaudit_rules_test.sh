@@ -55,20 +55,28 @@ for d in "$RULESDIR"/*/; do
     want="$(tr -d ' \t\r\n' < "$d/expect")"
     log="/tmp/.nsaudit-${name}.log"
     # nsaudit may exit nonzero on high-severity findings; capture output regardless.
+    # Linux CI can occasionally SIGKILL a short-lived emu after it has produced
+    # output; retry only when the captured output is empty.
     out=""
-    for attempt in 1 2 3; do
+    for attempt in 1 2 3 4 5 6 7 8; do
         timeout 30 "$EMU" -r"$ROOT" "$SH" -c \
             "path=(/dis/veltro /dis/cmd /dis .); nsaudit -m /tests/nsaudit-rules/$name" \
             </dev/null >"$log" 2>&1
+        rc=$?
         out="$(cat "$log")"
         [[ -n "$out" ]] && break
-        info "$name: empty nsaudit output on attempt $attempt, retrying"
+        info "$name: empty nsaudit output on attempt $attempt (rc=$rc), retrying"
+        sleep 1
     done
     if grep -q "violation=${want}\b" "$log"; then
         pass "$name -> $want"
     else
         fail "$name: expected violation=$want, got:"
-        info "$out"
+        if [[ -n "$out" ]]; then
+            echo "$out"
+        else
+            echo "(empty output after retries; last log: $log)"
+        fi
     fi
 done
 

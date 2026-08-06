@@ -315,6 +315,13 @@ restrictns(caps: ref Capabilities): string
 		if(matrixok >= 0 && !inlist("matrix", mntpaths))
 			mntpaths = "matrix" :: mntpaths;
 	}
+	# GPU inference is fixed-function service authority. The gpu and vision
+	# tools receive it per-invocation; generic path grants cannot.
+	if(inlist("gpu", caps.tools) || inlist("vision", caps.tools)) {
+		(gpuok, nil) := sys->stat("/mnt/gpu");
+		if(gpuok >= 0 && !inlist("gpu", mntpaths))
+			mntpaths = "gpu" :: mntpaths;
+	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
@@ -1038,6 +1045,7 @@ calendarcontrolpath(path: string): int
 fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
 		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
 		path == "/phone" || prefix(path, "/phone/");
 }
@@ -1193,6 +1201,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/ui",   "UI Service",       "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 		("/mnt/matrix", "Matrix Runtime", "rw"),
+		("/mnt/gpu", "GPU Service", "rw"),
 	};
 
 	for(i = 0; i < len nentries; i++) {

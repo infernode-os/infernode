@@ -890,6 +890,7 @@ calendarcontrolpath(path: string): int
 fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
 		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
 		path == "/phone" || prefix(path, "/phone/");
 }

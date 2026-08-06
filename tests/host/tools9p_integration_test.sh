@@ -485,22 +485,22 @@ else
 fi
 
 if emu_c "bindpath_fixed_service_rejected" 12 \
-    "mkdir -p /mnt/matrix /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/video/0/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "mkdir -p /mnt/matrix /mnt/gpu/0 /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/video/0/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/gpu:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/gpu/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "fixed-service bindpath probe did not establish a valid baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/mnt/video" || echo "$OUTPUT" | grep -q "^/phone"; then
+    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/mnt/gpu" || echo "$OUTPUT" | grep -q "^/mnt/video" || echo "$OUTPUT" | grep -q "^/phone"; then
         fail "bindpath accepted a fixed-service control tree (output: $OUTPUT)"
     else
-        pass "bindpath rejects Matrix, video, and phone service trees"
+        pass "bindpath rejects Matrix, GPU, video, and phone service trees"
     fi
 else
     fail "fixed-service bindpath rejection probe failed"
 fi
 
 if emu_c "startup_fixed_service_rejected" 12 \
-    "mkdir -p /mnt/matrix /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/video/0/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /mnt/video:rw -p /mnt/video/0/ctl:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
-    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/mnt/video" && ! echo "$OUTPUT" | grep -q "^/phone"; then
-        pass "startup -p rejects Matrix, video, and phone service trees"
+    "mkdir -p /mnt/matrix /mnt/gpu/0 /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/video/0/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /mnt/gpu:rw -p /mnt/gpu/0/ctl:rw -p /mnt/video:rw -p /mnt/video/0/ctl:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/mnt/gpu" && ! echo "$OUTPUT" | grep -q "^/mnt/video" && ! echo "$OUTPUT" | grep -q "^/phone"; then
+        pass "startup -p rejects Matrix, GPU, video, and phone service trees"
     else
         fail "startup -p accepted a fixed-service control tree (output: $OUTPUT)"
     fi
@@ -509,15 +509,18 @@ else
 fi
 
 if emu_c "fixed_service_tool_derived" 15 \
-    "mkdir -p /mnt/matrix /phone; touch /mnt/matrix/ctl /phone/sms; tools9p sms matrix read & sleep 2; echo '15551234 test' > /tool/sms/ctl; cat /tool/sms/ctl; echo PHONE; cat /phone/sms; echo status > /tool/matrix/ctl; cat /tool/matrix/ctl; echo /phone/sms > /tool/read/ctl; echo GENERIC; cat /tool/read/ctl"; then
+    "mkdir -p /mnt/matrix /mnt/gpu/models /phone; echo 'runtime: test' > /mnt/matrix/ctl; echo 'fake gpu info' > /mnt/gpu/ctl; touch /phone/sms; tools9p sms matrix gpu read & sleep 2; echo '15551234 test' > /tool/sms/ctl; cat /tool/sms/ctl; echo PHONE; cat /phone/sms; echo status > /tool/matrix/ctl; cat /tool/matrix/ctl; echo info > /tool/gpu/ctl; cat /tool/gpu/ctl; echo /phone/sms > /tool/read/ctl; echo GENERICPHONE; cat /tool/read/ctl; echo /mnt/gpu/ctl > /tool/read/ctl; echo GENERICGPU; cat /tool/read/ctl"; then
     if ! echo "$OUTPUT" | grep -q "sms: queued to 15551234" ||
        ! echo "$OUTPUT" | grep -q "send 15551234 test" ||
-       ! echo "$OUTPUT" | grep -q "runtime:"; then
-        fail "fixed tools lost their derived Matrix/phone capabilities (output: $OUTPUT)"
+       ! echo "$OUTPUT" | grep -q "runtime:" ||
+       ! echo "$OUTPUT" | grep -q "fake gpu info"; then
+        fail "fixed tools lost their derived Matrix/GPU/phone capabilities (output: $OUTPUT)"
     elif ! echo "$OUTPUT" | grep -q "error: cannot open /phone/sms"; then
         fail "generic read inherited the phone tool's derived capability (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "error: cannot open /mnt/gpu/ctl"; then
+        fail "generic read inherited the GPU tool's derived capability (output: $OUTPUT)"
     else
-        pass "fixed tools receive Matrix/phone while generic read remains isolated"
+        pass "fixed tools receive Matrix/GPU/phone while generic read remains isolated"
     fi
 else
     fail "fixed-service derived capability probe failed"

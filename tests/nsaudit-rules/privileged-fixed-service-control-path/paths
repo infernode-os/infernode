@@ -1,4 +1,6 @@
 /mnt/matrix
+/mnt/gpu
+/mnt/gpu/0/ctl
 /mnt/video
 /mnt/video/0/ctl
 /phone

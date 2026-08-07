@@ -153,7 +153,7 @@ tool grants.
 | 1 | `/dis` | `lib/`, `veltro/` (+ `sh.dis` if exec or shellcmds granted, + named cmds if shellcmds granted) | 0 | Runtime + agent modules only |
 | 2 | `/dis/veltro/tools` | Only granted tool .dis files (if caps.tools is set) | 0 | Per-agent tool allowlist |
 | 3 | `/dev` | `cons`, `null` | 0 | Minimum devices |
-| 4 | `/n` | `llm/` (if mounted), `mcp/` (if mc9p), `speech/` (if speech9p), `git/` (if git9p), `local/` (only if caps.paths grants subpaths) | 0 | Network/service mounts |
+| 4 | `/n` | `speech/` (if explicitly path-granted), `git/` (only for the `git` tool), `wallet/` (if explicitly path-granted), `wikia/` (only for the `wiki` tool), `local/` (only if caps.paths grants subpaths) | 0 | Foreign imports |
 | 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
 | 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
 | 7 | `/` | `dev`, `dis`, `env`, `lib`, `n`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files, descriptors, node identity state, and ambient network access |
@@ -676,9 +676,10 @@ be explicit:
   namespace surface supports that distinction.
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
-derived only from the `matrix` tool, `/mnt/gpu` only from `gpu` or local
-`vision`, `/n/wikia` only from `wiki`, `/mnt/video` only from video
-presentation tools, and `/phone` only from `sms`, `dial`, or `contacts`.
+derived only from the `matrix` tool, `/n/git` only from the `git` tool,
+`/mnt/gpu` only from `gpu` or local `vision`, `/n/wikia` only from `wiki`,
+`/mnt/video` only from video presentation tools, and `/phone` only from `sms`,
+`dial`, or `contacts`.
 Legacy authority roots such as `/mnt/keys`, `/mnt/keysrv`, and
 `/mnt/registry` are also never caller-supplied path capabilities. `/llm/ctl`
 is likewise Settings/admin

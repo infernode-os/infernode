@@ -491,7 +491,7 @@ if emu_c "bindpath_fixed_service_rejected" 12 \
     elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/mnt/gpu" || echo "$OUTPUT" | grep -q "^/mnt/web" || echo "$OUTPUT" | grep -q "^/n/web" || echo "$OUTPUT" | grep -q "^/mnt/wiki" || echo "$OUTPUT" | grep -q "^/n/wikia" || echo "$OUTPUT" | grep -q "^/mnt/video" || echo "$OUTPUT" | grep -q "^/phone"; then
         fail "bindpath accepted a fixed-service control tree (output: $OUTPUT)"
     else
-        pass "bindpath rejects Matrix, GPU, web, wiki, video, and phone service trees"
+        pass "bindpath rejects Matrix, Git, GPU, web, wiki, video, and phone service trees"
     fi
 else
     fail "fixed-service bindpath rejection probe failed"
@@ -500,7 +500,7 @@ fi
 if emu_c "startup_fixed_service_rejected" 12 \
     "mkdir -p /mnt/matrix /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /n/wikia /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /n/wikia/ctl /mnt/video/0/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /mnt/gpu:rw -p /mnt/gpu/0/ctl:rw -p /mnt/web:rw -p /mnt/web/clone:rw -p /n/web:rw -p /n/web/clone:rw -p /mnt/wiki:rw -p /mnt/wiki/new:rw -p /n/wikia:rw -p /n/wikia/ctl:rw -p /mnt/video:rw -p /mnt/video/0/ctl:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
     if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/mnt/gpu" && ! echo "$OUTPUT" | grep -q "^/mnt/web" && ! echo "$OUTPUT" | grep -q "^/n/web" && ! echo "$OUTPUT" | grep -q "^/mnt/wiki" && ! echo "$OUTPUT" | grep -q "^/n/wikia" && ! echo "$OUTPUT" | grep -q "^/mnt/video" && ! echo "$OUTPUT" | grep -q "^/phone"; then
-        pass "startup -p rejects Matrix, GPU, web, wiki, video, and phone service trees"
+        pass "startup -p rejects Matrix, Git, GPU, web, wiki, video, and phone service trees"
     else
         fail "startup -p accepted a fixed-service control tree (output: $OUTPUT)"
     fi

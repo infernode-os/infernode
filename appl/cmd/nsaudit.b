@@ -584,6 +584,7 @@ calendarControlGrant(p: string): int
 fixedServiceControlGrant(p: string): int
 {
 	return p == "/mnt/matrix" || prefix(p, "/mnt/matrix/") ||
+		p == "/n/git" || prefix(p, "/n/git/") ||
 		p == "/mnt/gpu" || prefix(p, "/mnt/gpu/") ||
 		p == "/mnt/web" || prefix(p, "/mnt/web/") ||
 		p == "/n/web" || prefix(p, "/n/web/") ||

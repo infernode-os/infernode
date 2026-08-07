@@ -201,7 +201,7 @@ restrictns(caps: ref Capabilities): string
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
 	#   /n/speech — "/n/speech" in caps.paths
-	#   /n/git    — "/n/git" in caps.paths
+	#   /n/git    — fixed git tool
 	#   /n/wallet — "/n/wallet" in caps.paths
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
@@ -225,8 +225,10 @@ restrictns(caps: ref Capabilities): string
 				nallow = "speech" :: nallow;
 		}
 
-		# /n/git — only if explicitly granted via caps.paths
-		if(inlist("/n/git", caps.paths)) {
+		# /n/git — fixed-function git service. The git tool mounts git/fs here
+		# during trusted init; generic path grants cannot expose gitfs ctl/raw
+		# repository state to unrelated tools.
+		if(inlist("git", caps.tools)) {
 			(gitok, nil) := sys->stat("/n/git");
 			if(gitok >= 0)
 				nallow = "git" :: nallow;
@@ -1053,6 +1055,7 @@ calendarcontrolpath(path: string): int
 fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||

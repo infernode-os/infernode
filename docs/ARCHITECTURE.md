@@ -154,7 +154,7 @@ Policy applied after `FORKNS`:
 - `/dis` → reduced to `lib/`, `veltro/` (+ `sh.dis` if `exec` tool active)
 - `/dis/veltro/tools/` → only registered tool `.dis` files visible
 - `/dev` → reduced to `cons`, `null`, `time`
-- `/n` → capability-gated: `/mnt/llm` always; `/n/git`, `/n/speech` only if in `caps.paths`
+- `/n` → capability-gated foreign imports: `/n/speech` only if in `caps.paths`; `/n/git` only for the fixed `git` tool
 - `/tmp` → writable only at `/tmp/veltro/scratch/`
 
 ### wallet9p (`appl/veltro/wallet9p.b`)

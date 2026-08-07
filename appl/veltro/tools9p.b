@@ -891,6 +891,10 @@ fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
+		path == "/n/web" || prefix(path, "/n/web/") ||
+		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
+		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
 		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
 		path == "/phone" || prefix(path, "/phone/");
 }

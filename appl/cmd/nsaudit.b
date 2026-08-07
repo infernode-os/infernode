@@ -585,6 +585,10 @@ fixedServiceControlGrant(p: string): int
 {
 	return p == "/mnt/matrix" || prefix(p, "/mnt/matrix/") ||
 		p == "/mnt/gpu" || prefix(p, "/mnt/gpu/") ||
+		p == "/mnt/web" || prefix(p, "/mnt/web/") ||
+		p == "/n/web" || prefix(p, "/n/web/") ||
+		p == "/mnt/wiki" || prefix(p, "/mnt/wiki/") ||
+		p == "/n/wikia" || prefix(p, "/n/wikia/") ||
 		p == "/mnt/video" || prefix(p, "/mnt/video/") ||
 		p == "/phone" || prefix(p, "/phone/");
 }

@@ -239,6 +239,14 @@ restrictns(caps: ref Capabilities): string
 				nallow = "wallet" :: nallow;
 		}
 
+		# /n/wikia — fixed-function wiki agent service. The wiki tool receives
+		# it per-invocation; generic path grants cannot drive ctl/query directly.
+		if(inlist("wiki", caps.tools)) {
+			(wikiaok, nil) := sys->stat("/n/wikia");
+			if(wikiaok >= 0)
+				nallow = "wikia" :: nallow;
+		}
+
 		# (The UI presentation surface moved to /mnt/ui — granted + sub-restricted
 		# by the uniform /mnt machinery in step 5b, like /mnt/llm and /mnt/mcp.
 		# It is no longer a /n entry. INFR-254.)
@@ -1046,6 +1054,10 @@ fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
+		path == "/n/web" || prefix(path, "/n/web/") ||
+		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
+		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
 		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
 		path == "/phone" || prefix(path, "/phone/");
 }
@@ -1193,6 +1205,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 	nentries := array[] of {
 		("/n/speech", "Speech",           "rw"),
 		("/n/git",    "Git",              "rw"),
+		("/n/wikia",  "Wiki Agent",       "rw"),
 		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
 		# /mnt now — application mount points, schema is ours, not /n imports
@@ -1202,6 +1215,8 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 		("/mnt/matrix", "Matrix Runtime", "rw"),
 		("/mnt/gpu", "GPU Service", "rw"),
+		("/mnt/web", "Web Service", "rw"),
+		("/mnt/wiki", "Wiki Store", "rw"),
 	};
 
 	for(i = 0; i < len nentries; i++) {

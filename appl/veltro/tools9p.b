@@ -895,6 +895,9 @@ fixedservicecontrolpath(path: string): int
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
 		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
+		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
+		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||
+		path == "/mnt/registry" || prefix(path, "/mnt/registry/") ||
 		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
 		path == "/phone" || prefix(path, "/phone/");
 }

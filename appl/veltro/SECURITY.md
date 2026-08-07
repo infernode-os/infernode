@@ -678,9 +678,10 @@ be explicit:
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/gpu` only from `gpu` or local
 `vision`, `/n/wikia` only from `wiki`, `/mnt/video` only from video
-presentation tools, and `/phone` only from `sms`, `dial`, or `contacts`;
-none is a
-caller-supplied path capability. `/llm/ctl` is likewise Settings/admin
+presentation tools, and `/phone` only from `sms`, `dial`, or `contacts`.
+Legacy authority roots such as `/mnt/keys`, `/mnt/keysrv`, and
+`/mnt/registry` are also never caller-supplied path capabilities. `/llm/ctl`
+is likewise Settings/admin
 authority over the host LLM backend, so raw grants of `/llm` or `/llm/ctl` are
 rejected while exact status-only reads can remain ordinary filesystem reads.
 Audit subjects should receive the exact append-only `/mnt/audit/log` endpoint,

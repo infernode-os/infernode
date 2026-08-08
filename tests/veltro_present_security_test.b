@@ -32,6 +32,25 @@ check(tool: Tool, command, want: string)
 	sys->print("PASS %s\n", command);
 }
 
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	while(len out > 0 && (out[len out - 1] == '\n' || out[len out - 1] == ' ' || out[len out - 1] == '\t'))
+		out = out[0:len out - 1];
+	while(len out > 0 && (out[0] == ' ' || out[0] == '\t'))
+		out = out[1:];
+	return out;
+}
+
 init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -49,6 +68,9 @@ init(nil: ref Draw->Context, nil: list of string)
 	check(tool, "navigate editor https://example.com", "only supported for charon");
 	check(tool, "create sneaky type=app label=Shell", "unsupported artifact type");
 	check(tool, "create sneaky2 app Shell", "unsupported artifact type");
+	if(safeattrtext("Report data=/tmp/owned\nlabel=evil") != "Report data:/tmp/owned label:evil")
+		raise "fail:safeattrtext";
+	sys->print("PASS present label attr text is inert\n");
 	# A permitted URL gets past policy validation and reaches the absent test UI.
 	check(tool, "navigate charon HTTPS://example.com", "no active activity");
 }

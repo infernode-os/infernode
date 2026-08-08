@@ -229,6 +229,7 @@ docreate(args: string): string
 
 	if(label == nil || label == "")
 		label = id;
+	label = safeattrtext(label);
 
 	actid := currentactid();
 	if(actid < 0)
@@ -403,6 +404,7 @@ donavigate(args: string): string
 		label = id;
 	else
 		label = strip(label);
+	label = safeattrtext(label);
 
 	pctl := sys->sprint("%s/activity/%d/presentation/ctl", UI_MOUNT, actid);
 
@@ -552,6 +554,24 @@ readfile(path: string): string
 	if(n <= 0)
 		return nil;
 	return string buf[0:n];
+}
+
+# Text written into luciuisrv ctl attributes must stay inert display text.
+# The ctl parser treats any whitespace-delimited word ending in '=' as a new
+# attribute, so collapse controls and replace '=' before embedding labels.
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
 }
 
 # Process escape sequences in content (\\n → newline, \\t → tab, etc.)

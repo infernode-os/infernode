@@ -1323,6 +1323,9 @@ ios_normalize_rune(Rune r, char *extra, int *extralen)
 }
 #endif
 
+static int alt_v_text_pending;
+static int alt_v_chord;
+
 /*
  * Handle SDL_EVENT_TEXT_INPUT.
  * Decodes UTF-8 text to Unicode codepoints and sends to keyboard queue.
@@ -1334,6 +1337,13 @@ handle_text_input(const char *text)
 {
 	Rune r;
 	int n;
+
+	/* Alt+V is emitted from KEY_DOWN as ESC,v. SDL may also synthesize
+	 * a printable Option character for the same chord; discard it once. */
+	if(alt_v_text_pending) {
+		alt_v_text_pending = 0;
+		return;
+	}
 
 	if ((uchar)text[0] < 0x20 && text[0] != '\t')
 		return;
@@ -1372,6 +1382,19 @@ handle_key_down(SDL_Event *event)
 	int key = 0;
 	SDL_Keymod mods = event->key.mod;
 	SDL_Keycode kc = event->key.key;
+
+	/* Desktop voice-mode chord. Lucifer already treats ESC,v as entry, so
+	 * translate only Alt+V here and leave ordinary Option composition alone. */
+	if((mods & SDL_KMOD_ALT) && event->key.scancode == SDL_SCANCODE_V) {
+		alt_v_text_pending = 1;
+		alt_v_chord = 1;
+		gkbdputc(gkbdq, 27);
+		gkbdputc(gkbdq, 'v');
+		return;
+	}
+	/* If the previous Alt+V produced no TEXT_INPUT event, do not let its
+	 * suppression leak into the next normal key. */
+	alt_v_text_pending = 0;
 
 	/* Ctrl+letter or Cmd+letter -> control character (^A=1, ^H=8, etc.)
 	 * Cmd (GUI mod) is mapped so macOS Cmd+C/X/V work as copy/cut/paste */
@@ -1663,7 +1686,10 @@ sdl3_mainloop(void)
 			case SDL_EVENT_KEY_UP:
 				if (event.key.scancode == SDL_SCANCODE_LALT ||
 				    event.key.scancode == SDL_SCANCODE_RALT) {
-					gkbdputc(gkbdq, Latin);
+					if(alt_v_chord)
+						alt_v_chord = 0;
+					else
+						gkbdputc(gkbdq, Latin);
 				}
 				break;
 

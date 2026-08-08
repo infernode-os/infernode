@@ -106,6 +106,47 @@ After building (see Building section below):
 
 **Note:** The runtime `.dis` files in `dis/` are tracked in git, so basic commands work after clone. If you see `link typecheck` errors, run `./hooks/install.sh` and pull again, or rebuild manually with `mk install` in the affected `appl/` subdirectory.
 
+## Voice Mode
+
+Once Veltro's LLM API key is set up (keyring → factotum inside InferNode),
+talking to Lucia takes one host-side install:
+
+```sh
+tools/install-speech-helpers.sh    # from the repo root, on the host
+```
+
+then restart InferNode. The installer downloads/builds everything and writes
+its configuration to `~/.local/share/infernode-speech/speech.ctl.sh`, which
+`boot.sh` applies automatically — no manual ctl writes. The default stack is
+the most lightweight high-quality option at each stage:
+
+| Stage | Default | Notes |
+|-------|---------|-------|
+| TTS   | **Kokoro** (`af_bella`, kokoro-onnx) | natural voice; the robotic macOS `say` is only a fallback when no helpers are installed |
+| STT   | **Parakeet** realtime EOU 120M (`tools/parakeet_stream.cpp` adapter, built against [parakeet.cpp](https://github.com/mudler/parakeet.cpp)) | streaming transcription; the model itself detects end-of-utterance. Falls back to whisper.cpp `base.en` when parakeet can't be built |
+| Wake  | openWakeWord | wake phrase is **"hey jarvis"** (the only pretrained model) |
+
+### Using it
+
+- **Enter/exit voice mode:** `Esc` `v`, Option/Alt+V (SDL), the **Voice chip**
+  in the context panel, the **voice button** on the chat input row, or
+  Ctrl+Space in the conversation view. All toggle the same thing:
+  `/mnt/ui/input-mode` between `k` and `v`.
+- Say **"hey jarvis"**, speak, and pause. The transcript appears in the
+  compose box and on the Voice chip, then sends after a **3-second grace
+  window** — say **"cancel"** to discard it, or keep talking to extend it.
+  (`voicemode -g 0` restores instant send.)
+- Low-confidence transcripts ask for a spoken yes/no first.
+- `Esc` exits voice mode at any point and releases the microphone.
+
+### Verifying without an LLM
+
+`tools/speech-test.sh` exercises microphone → STT → TTS with no login, no
+API key, and no per-turn cost (`-g` for the GUI variant). See
+`docs/SPEECH-ARCHITECTURE.md` for the full architecture, remote-audio
+topologies, and every ctl knob, and `docs/SPEECH-REMOTE-AUDIO.md` for
+running the microphone and the speech engines on different machines.
+
 ## Building
 
 ### Linux x86_64 (Intel/AMD)

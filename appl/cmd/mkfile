@@ -187,6 +187,7 @@ TARG=\
 	vacget.dis\
 	vacput.dis\
 	vid9p.dis\
+	voicemode.dis\
 	wav2iaf.dis\
 	wc.dis\
 	webfs.dis\

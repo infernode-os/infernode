@@ -47,6 +47,21 @@ autospeak := 0;
 maxsteps := DEFAULT_MAX_STEPS;
 stderr: ref Sys->FD;
 
+Speakreq: adt {
+	gen: int;
+	text: string;
+};
+
+speakq: chan of ref Speakreq;
+speakdone: chan of int;
+speakgen := 0;
+
+# Persistent input readers and cooperative active-turn control.
+inputc: chan of (int, string);
+turngen := 0;
+turnpaused := 0;
+turnactive := 0;
+
 # LLM session state
 sessionid := "";
 llmfd: ref Sys->FD;
@@ -124,6 +139,26 @@ toolctlmount(mpt: string): string
 	if(len mpt > 6 && mpt[0:6] == "/tool.")
 		return "/mnt/toolctl." + mpt[6:];
 	return "/mnt/toolctl";
+}
+
+readsmall(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return agentlib->strip(string buf[0:n]);
+}
+
+inputmode(): string
+{
+	mode := readsmall("/mnt/ui/input-mode");
+	if(mode == "v")
+		return "v";
+	return "k";
 }
 
 # Extract value for key from "key1=val1 key2=val2 ..." string
@@ -260,23 +295,207 @@ registernamespace()
 	log(sys->sprint("context: registered %d namespace entries", nreg));
 }
 
-# Speak text via speech9p (fire-and-forget, runs in spawned goroutine)
-speaktext(text: string)
+# Append without reversing the existing FIFO order.
+appendspeak(l: list of ref Speakreq, r: ref Speakreq): list of ref Speakreq
 {
-	# Update context zone status
-	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-	writefile(ctxpath, "resource update path=speech status=active");
+	if(l == nil)
+		return r :: nil;
+	rev: list of ref Speakreq;
+	for(; l != nil; l = tl l)
+		rev = hd l :: rev;
+	rev = r :: rev;
+	result: list of ref Speakreq;
+	for(; rev != nil; rev = tl rev)
+		result = hd rev :: result;
+	return result;
+}
 
-	fd := sys->open("/n/speech/say", Sys->OWRITE);
-	if(fd == nil) {
-		log("speaktext: cannot open /n/speech/say");
-		writefile(ctxpath, "resource update path=speech status=idle");
+# Speak one queue entry via speech9p. sayq is a per-fid transaction: the
+# read after the write blocks until playback finishes, keeping the resource
+# truthfully active for the whole utterance. Older providers with only /say
+# still work, but cannot report playback completion.
+speaktext(r: ref Speakreq)
+{
+	if(r.gen != speakgen) {
+		speakdone <-= r.gen;
 		return;
 	}
-	b := array of byte text;
-	sys->write(fd, b, len b);
 
-	writefile(ctxpath, "resource update path=speech status=idle");
+	# Update context zone status
+	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
+	writefile(ctxpath, "resource update path=/n/speech status=active");
+
+	queued := 1;
+	fd := sys->open("/n/speech/sayq", Sys->ORDWR);
+	if(fd == nil) {
+		queued = 0;
+		fd = sys->open("/n/speech/say", Sys->OWRITE);
+	}
+	if(fd == nil) {
+		log("speaktext: cannot open /n/speech/sayq or /n/speech/say");
+		if(r.gen == speakgen)
+			writefile(ctxpath, "resource update path=/n/speech status=error");
+		speakdone <-= r.gen;
+		return;
+	}
+	if(r.gen != speakgen) {
+		speakdone <-= r.gen;
+		return;
+	}
+	b := array of byte r.text;
+	if(sys->write(fd, b, len b) < 0) {
+		log("speaktext: write failed");
+		if(r.gen == speakgen)
+			writefile(ctxpath, "resource update path=/n/speech status=error");
+		speakdone <-= r.gen;
+		return;
+	}
+
+	if(queued) {
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+		status := array[256] of byte;
+		n := sys->read(fd, status, len status);
+		if(n < 0)
+			log("speaktext: sayq completion read failed");
+		else if(n > 0)
+			log("speaktext: " + string status[0:n]);
+	}
+	if(r.gen != speakgen)
+		writefile("/n/speech/cancel", "cancel");
+	else
+		writefile(ctxpath, "resource update path=/n/speech status=idle");
+	speakdone <-= r.gen;
+}
+
+# Single queue manager: accepts new speech while playback is in progress, but
+# launches at most one blocking sayq transaction at a time.
+speechmanager()
+{
+	pending: list of ref Speakreq;
+	busy := 0;
+	for(;;) {
+		while(!busy && pending != nil) {
+			r := hd pending;
+			pending = tl pending;
+			if(r.gen != speakgen)
+				continue;
+			busy = 1;
+			spawn speaktext(r);
+		}
+		alt {
+		r := <-speakq =>
+			if(r != nil && r.text != "" && r.gen == speakgen)
+				pending = appendspeak(pending, r);
+		<-speakdone =>
+			busy = 0;
+		}
+	}
+}
+
+queuespeech(text: string)
+{
+	if(text != "")
+		speakq <-= ref Speakreq(speakgen, text);
+}
+
+# Queue complete sentence-sized prefixes while text is still streaming.
+# The returned byte index is the first unspoken byte; final flushes a short
+# tail so response audio starts before the entire model turn is complete.
+queuespeechavailable(text: string, start, final: int): int
+{
+	if(start < 0 || start > len text)
+		start = 0;
+	end := -1;
+	for(i := start; i < len text; i++)
+		if((text[i] == '.' || text[i] == '!' || text[i] == '?' || text[i] == '\n') &&
+		   i - start >= 24)
+			end = i + 1;
+	if(final && end < len text)
+		end = len text;
+	if(end > start) {
+		chunk := agentlib->strip(text[start:end]);
+		if(chunk != "")
+			queuespeech(chunk);
+		return end;
+	}
+	return start;
+}
+
+cancelspeechqueue()
+{
+	speakgen++;
+	writefile("/n/speech/cancel", "cancel");
+}
+
+# Persistent conversation-input reader. Re-opens the file for every read
+# because the 9P offset advances after a read (subsequent reads return EOF).
+# Feeds one shared channel so the main loop can block on keyboard input and
+# voice input simultaneously — picking a single path before blocking would
+# leave the bridge stuck on the stale path across an input-mode switch.
+# Sends nil once (open failure or EOF) and exits.
+inputreader(path: string, isvoice: int, ch: chan of (int, string))
+{
+	for(;;) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil) {
+			ch <-= (isvoice, nil);
+			return;
+		}
+		s := blockread(fd);
+		fd = nil;
+		ch <-= (isvoice, s);
+		if(s == nil)
+			return;
+	}
+}
+
+controlreader(path: string)
+{
+	for(;;) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil) {
+			sys->sleep(500);
+			continue;
+		}
+		ctl := agentlib->strip(blockread(fd));
+		fd = nil;
+		if(ctl == nil || ctl == "")
+			continue;
+		case ctl {
+		"cancel" or "refine" =>
+			turngen++;
+			turnpaused = 0;
+			cancelspeechqueue();
+			if(turnactive)
+				setstatus("cancelling");
+		"pause" =>
+			turnpaused = 1;
+			cancelspeechqueue();
+			if(turnactive)
+				setstatus("paused");
+		"resume" =>
+			turnpaused = 0;
+			if(turnactive)
+				setstatus("working");
+		* =>
+			log("unknown turn control: " + ctl);
+		}
+	}
+}
+
+# Tool backends do not all expose hard interruption. Cancellation therefore
+# takes effect at the next LLM/tool boundary and prevents subsequent actions.
+turncheckpoint(gen: int): int
+{
+	if(gen != turngen)
+		return -1;
+	while(turnpaused) {
+		setstatus("paused");
+		sys->sleep(100);
+		if(gen != turngen)
+			return -1;
+	}
+	return 0;
 }
 
 # Read from a blocking fd, strip trailing newline
@@ -451,6 +670,8 @@ updatedialogue(idx: int, progress, title, text: string)
 readuserinput(): string
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
+	if(inputmode() == "v")
+		path = sys->sprint("/mnt/ui/activity/%d/conversation/voiceinput", actid);
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
@@ -479,8 +700,16 @@ needsapproval(toolname, args: string): int
 	return 0;
 }
 
-# Pre-tool approval gate. Returns "allow" or "deny".
-pretoolapproval(toolname, args: string): string
+# Send one timeout tick without leaving a resident timer process behind.
+approvaltick(c: chan of int)
+{
+	sys->sleep(100);
+	c <-= 1;
+}
+
+# Pre-tool approval gate. Returns "allow" or "deny". Cancellation is checked
+# while blocked so a spoken Stop cannot strand the turn in an approval read.
+pretoolapproval(toolname, args: string, gen: int): string
 {
 	if(!needsapproval(toolname, args))
 		return "allow";
@@ -490,11 +719,29 @@ pretoolapproval(toolname, args: string): string
 	log("pretool: awaiting approval for " + toolname);
 	setstatus("blocked");
 	seturgency(2);
-	response := readuserinput();
+	# Use the already-running shared readers so typed buttons and spoken
+	# Allow/Deny reach the same gate; a second direct reader races them.
+	response := "";
+	done := 0;
+	while(!done) {
+		tick := chan[1] of int;
+		spawn approvaltick(tick);
+		alt {
+		(nil, response) = <-inputc =>
+			done = 1;
+		<-tick =>
+			if(gen != turngen) {
+				response = "Deny";
+				done = 1;
+			}
+		}
+	}
 	log("pretool: user responded: " + response);
 	setstatus("working");
 	seturgency(0);
-	if(response == "Deny" || response == "deny" || response == "no") {
+	# Fail closed: only an explicit affirmative releases a sensitive tool.
+	if(response != "Allow" && response != "allow" && response != "approve" &&
+	   response != "yes") {
 		if(didx >= 0)
 			updatedialogue(didx, "", "Denied", "");
 		return "deny";
@@ -749,7 +996,7 @@ initsession(): string
 	# Register speech resource if speech9p is available
 	if(autospeak) {
 		ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-		writefile(ctxpath, "resource add path=speech label=Speech type=tool status=idle");
+		writefile(ctxpath, "resource upsert path=/n/speech label=Voice type=audio status=idle");
 		log("context: registered speech resource");
 	}
 
@@ -1279,7 +1526,25 @@ handleslash(cmd: string): int
 			ack = "usage: /tools +name or /tools -name";
 		}
 	"voice" =>
-		if(cmdarg == "" || cmdarg == "on") {
+		(vcmd, vrest) := str->splitl(cmdarg, " \t");
+		varg := str->drop(vrest, " \t");
+		if(vcmd == "mode") {
+			if(varg == "on") {
+				autospeak = 1;
+				writefile("/mnt/ui/input-mode", "v");
+				writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
+					"resource upsert path=/n/speech label=Voice type=audio status=waiting via=voice-mode");
+				ack = "voice mode: on";
+			} else if(varg == "off") {
+				cancelspeechqueue();
+				writefile("/mnt/ui/input-mode", "k");
+				writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
+					"resource upsert path=/n/speech label=Voice type=audio status=idle via=voice-mode");
+				ack = "voice mode: off";
+			} else {
+				ack = "usage: /voice mode on|off";
+			}
+		} else if(cmdarg == "" || cmdarg == "on") {
 			autospeak = 1;
 			ack = "voice: auto-speak enabled";
 		} else if(cmdarg == "off") {
@@ -1302,6 +1567,7 @@ handleslash(cmd: string): int
 		      "/tools +name  — add tool\n" +
 		      "/tools -name  — remove tool\n" +
 		      "/voice on|off  — toggle auto-speak\n" +
+		      "/voice mode on|off  — toggle hands-free voice mode\n" +
 		      "/voice <name>  — change voice\n" +
 		      "/diff  — show cowfs changes\n" +
 		      "/promote [path]  — promote cowfs changes\n" +
@@ -1424,6 +1690,8 @@ cowrevert(arg: string): string
 
 agentturn(input: string)
 {
+	mygen := turngen;
+	turnactive = 1;
 	agentlib->dedupreset();	# fresh read-cache per turn
 
 	# Sync convcount with actual server message count before streaming.
@@ -1455,7 +1723,13 @@ agentturn(input: string)
 	streambase := "/mnt/llm/" + sessionid;
 
 	hitlimit := 1;
+	cancelled := 0;
 	for(step := 0; step < maxsteps; step++) {
+		if(turncheckpoint(mygen) < 0) {
+			cancelled = 1;
+			break;
+		}
+		stepstarted := sys->millisec();
 		log(sys->sprint("step %d: writing %d bytes to LLM", step + 1, len array of byte prompt));
 
 		# Start async generation — returns immediately with new llmsrv,
@@ -1474,11 +1748,14 @@ agentturn(input: string)
 		# For step > 0 (tool-execution follow-ups) defer creation to the first
 		# actual chunk, so tool-only steps produce no spurious bubble.
 		placeholder_idx := -1;
+		speechconsumed := 0;
+		streamtext := "";
 		if(streamfd != nil) {
 			log("stream: reading " + streampath);
 			buf := array[512] of byte;
 			growing := "";
 			nchunks := 0;
+			spoken := 0;
 			# Show activity cursor immediately on the first step.
 			if(step == 0) {
 				placeholder_idx = convcount;
@@ -1490,6 +1767,20 @@ agentturn(input: string)
 					break;
 				growing += string buf[0:n];
 				nchunks++;
+				if(nchunks == 1)
+					log(sys->sprint("voice-timing first-token %dms", sys->millisec() - stepstarted));
+				if(autospeak) {
+					# Stream only the parsed assistant text. The raw stream may
+					# contain STOP/TOOL protocol records which must never be read
+					# aloud as if they were a user-facing answer.
+					(nil, nil, speechtext) := agentlib->parsellmresponse(growing);
+					oldspoken := spoken;
+					spoken = queuespeechavailable(speechtext, spoken, 0);
+					if(oldspoken == 0 && spoken > 0)
+						log(sys->sprint("voice-timing first-audio-queued %dms", sys->millisec() - stepstarted));
+					speechconsumed = spoken;
+					streamtext = speechtext;
+				}
 				# Create placeholder on the first chunk if not already created
 				# (steps > 0), seeded with actual text.
 				if(placeholder_idx < 0) {
@@ -1531,6 +1822,10 @@ agentturn(input: string)
 				updateliveconvmsg(placeholder_idx, "(no response from LLM)");
 			else
 				writemsg("veltro", "(no response from LLM)");
+			break;
+		}
+		if(turncheckpoint(mygen) < 0) {
+			cancelled = 1;
 			break;
 		}
 
@@ -1583,6 +1878,17 @@ agentturn(input: string)
 				updateliveconvmsg(placeholder_idx, text);
 			else
 				writemsg("veltro", text);
+			if(autospeak) {
+				# `spoken` exists only on the streaming branch. Derive the
+				# consumed prefix from growing when available; legacy backends
+				# simply queue the complete parsed response here.
+				consumed := 0;
+				if(speechconsumed > 0 && speechconsumed <= len text &&
+				   speechconsumed <= len streamtext &&
+				   text[0:speechconsumed] == streamtext[0:speechconsumed])
+					consumed = speechconsumed;
+				queuespeechavailable(text, consumed, 1);
+			}
 		} else if(placeholder_idx >= 0) {
 			# Tool-only or empty response: clear placeholder so tile is hidden
 			updateliveconvmsg(placeholder_idx, "");
@@ -1597,9 +1903,14 @@ agentturn(input: string)
 		# Execute tools, intercepting say locally.
 		results: list of (string, string);
 		for(tc := tools; tc != nil; tc = tl tc) {
+			if(turncheckpoint(mygen) < 0) {
+				cancelled = 1;
+				break;
+			}
 			(id, name, args) := hd tc;
 			if(str->tolower(name) == "say") {
 				writemsg("veltro", args);
+				queuespeech(args);
 				results = (id, "said") :: results;
 			} else {
 				# Mark the tool as active in the context zone for the full duration.
@@ -1625,7 +1936,7 @@ agentturn(input: string)
 				}
 
 				# Pre-tool approval for destructive operations
-				approval := pretoolapproval(nm, eargs);
+				approval := pretoolapproval(nm, eargs, mygen);
 				if(approval == "deny") {
 					results = (id, "error: operation denied by operator") :: results;
 					writefile(ctxpath, "resource update path=" + nm + " status=idle");
@@ -1647,6 +1958,8 @@ agentturn(input: string)
 				setstatus(nm);
 				log("tool " + name + ": calling with " + string len eargs + " bytes");
 				result := agentlib->calltool(name, eargs);
+				if(turncheckpoint(mygen) < 0)
+					cancelled = 1;
 				agentlib->deduprecord(nm, eargs, result, step);
 				setstatus("working");
 				writefile(ctxpath, "resource update path=" + nm + " status=idle");
@@ -1677,6 +1990,8 @@ agentturn(input: string)
 				results = (id, result) :: results;
 			}
 		}
+		if(cancelled)
+			break;
 
 		# Reverse results (list was built by prepending).
 		rev: list of (string, string);
@@ -1716,7 +2031,11 @@ agentturn(input: string)
 		prompt = agentlib->buildtoolresults(rev);
 	}
 
-	if(hitlimit) {
+	turnactive = 0;
+	if(cancelled) {
+		writemsg("veltro", "(cancelled)");
+		setstatus("idle");
+	} else if(hitlimit) {
 		writemsg("veltro", sys->sprint(
 			"(reached %d-step limit — send another message to continue)", maxsteps));
 		setstatus("idle");
@@ -1740,6 +2059,9 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
+	speakq = chan of ref Speakreq;
+	speakdone = chan of int;
+	spawn speechmanager();
 
 	str = load String String->PATH;
 	if(str == nil)
@@ -1830,6 +2152,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(backend == nil || backend == "")
 		backend = "api";
 	dial := readndbfield("/lib/ndb/llm", "dial");
+	log("llm configuration mode=" + mode + " backend=" + backend);
 	llmconfigured := 0;
 	if(mode == "remote") {
 		# Remote 9P mount: configured iff a dial address is set.
@@ -1839,6 +2162,10 @@ init(nil: ref Draw->Context, args: list of string)
 	} else if(backend == "api") {
 		# Check factotum for an anthropic API key
 		ctldata := agentlib->readfile("/mnt/factotum/ctl");
+		if(ctldata != nil && len ctldata > 0)
+			log("factotum ctl readable");
+		else
+			log("factotum ctl unreadable or empty");
 		if(ctldata != nil && len ctldata > 0) {
 			(nil, ctllines) := sys->tokenize(ctldata, "\n");
 			for(; ctllines != nil; ctllines = tl ctllines) {
@@ -1847,6 +2174,10 @@ init(nil: ref Draw->Context, args: list of string)
 					llmconfigured = 1;
 			}
 		}
+		if(llmconfigured)
+			log("anthropic factotum key present");
+		else
+			log("anthropic factotum key absent");
 	} else if(backend == "openai" || backend == "cli") {
 		# Ollama/OpenAI, or the claude-gate CLI gateway (backend=cli,
 		# OpenAI-shaped on localhost): configured if a URL is set
@@ -2002,6 +2333,11 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
+	voiceinputpath := sys->sprint("/mnt/ui/activity/%d/conversation/voiceinput", actid);
+	inputc = chan of (int, string);
+	spawn inputreader(inputpath, 0, inputc);
+	spawn inputreader(voiceinputpath, 1, inputc);
+	spawn controlreader(sys->sprint("/mnt/ui/activity/%d/conversation/control", actid));
 
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sessionid, maxsteps, convcount));
@@ -2029,19 +2365,38 @@ init(nil: ref Draw->Context, args: list of string)
 		agentturn(kickoff);
 	}
 
-	# Main loop: re-open input fd each iteration because 9P offset
-	# advances after read, causing subsequent reads to return EOF.
+	# Main loop: both input paths are read concurrently so an input-mode
+	# switch takes effect immediately instead of after the next message on
+	# the previously selected path. Voice-originated turns arrive on
+	# conversation/voiceinput (written by voicemode); typed turns on
+	# conversation/input.
 	for(;;) {
-		inputfd := sys->open(inputpath, Sys->OREAD);
-		if(inputfd == nil)
-			fatal("cannot open " + inputpath);
-		human := blockread(inputfd);
-		inputfd = nil;
+		(isvoice, human) := <-inputc;
 		if(human == nil) {
+			if(isvoice) {
+				# Older luciuisrv without voiceinput, or a flushed
+				# read — voice input is unavailable but the bridge
+				# keeps serving typed input.
+				log("voiceinput unavailable");
+				continue;
+			}
 			log("input closed");
 			break;
 		}
-		log("human: " + human);
+		if(isvoice)
+			log("voice: " + human);
+		else
+			log("human: " + human);
+
+		# Mutual exclusion: while voice mode is active, plain typed text
+		# is paused. Slash commands still work so /voice mode off can
+		# always be typed.
+		if(!isvoice && inputmode() == "v" &&
+		   !(len human > 0 && human[0] == '/')) {
+			writemsg("assistant",
+				"voice mode active — press Esc or say \"keyboard\" to resume typing");
+			continue;
+		}
 
 		# Slash commands (/bind, /unbind, /tools, /help) are handled locally.
 		# They update tools9p state and reply immediately; agent is not invoked.

@@ -87,6 +87,9 @@ testParse(t: ref T)
 	chk(t, "brief=use a=b as an example", "brief", "use a=b as an example");
 	chk(t, "label=BugFix agenttype=coder brief=fix the bug in cat.b", "brief", "fix the bug in cat.b");
 	chk(t, "label=BugFix agenttype=coder brief=fix the bug in cat.b", "agenttype", "coder");
+	t.assert(strlistcontains(parsetoollist("read\nwrite,exec grep"), "exec"), "tool budget parser accepts mixed delimiters");
+	t.assert(!strlistcontains(parsetoollist("read\nwrite,exec grep"), "ex"), "tool budget parser rejects substring matches");
+	t.assert(!strlistcontains(parsetoollist("webfetch"), "web"), "tool budget parser rejects prefix matches");
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -204,4 +207,14 @@ strlistcontains(l: list of string, s: string): int
 		if(hd l == s)
 			return 1;
 	return 0;
+}
+
+parsetoollist(s: string): list of string
+{
+	(nil, toks) := sys->tokenize(s, " \t\r\n,");
+	out: list of string;
+	for(; toks != nil; toks = tl toks)
+		if(hd toks != "")
+			out = hd toks :: out;
+	return out;
 }

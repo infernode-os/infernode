@@ -443,6 +443,13 @@ testGapAddNoUI(t: ref T)
 		"error explains UI is not running");
 }
 
+testGapSafeattrtextControlSyntax(t: ref T)
+{
+	input := "missing data relevance=low\nprogress=100\tlabel=owned";
+	want := "missing data relevance:low progress:100 label:owned";
+	t.assertseq(safeattrtext(input), want, "gap description text is inert in context ctl attrs");
+}
+
 # ============================================================================
 # task — subcommand dispatch
 # ============================================================================
@@ -657,6 +664,25 @@ hassubstr(s, sub: string): int
 	return 0;
 }
 
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	while(len out > 0 && (out[len out - 1] == '\n' || out[len out - 1] == ' ' || out[len out - 1] == '\t'))
+		out = out[0:len out - 1];
+	while(len out > 0 && (out[0] == ' ' || out[0] == '\t'))
+		out = out[1:];
+	return out;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -706,6 +732,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("GapResolveRequiresDescription", testGapResolveRequiresDescription);
 	run("GapUnknownCommand", testGapUnknownCommand);
 	run("GapAddNoUI", testGapAddNoUI);
+	run("GapSafeattrtextControlSyntax", testGapSafeattrtextControlSyntax);
 
 	# task
 	run("TaskNameDoc", testTaskNameDoc);

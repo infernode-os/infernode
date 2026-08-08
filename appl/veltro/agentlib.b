@@ -1380,7 +1380,7 @@ mcptooldefs(mounts: list of (string, string), maxper, budget: int): string
 				toolname := d.name;
 				doc := strip(readfile(toolsdir + "/" + toolname + "/doc"));
 				schema := mcpstripschemafield(strip(readfile(toolsdir + "/" + toolname + "/schema")));
-				if(len schema < 2 || schema[0] != '{')
+				if(!mcpvalidschemaobject(schema))
 					schema = "{\"type\":\"object\"}";
 				safe := mcpsafename(prefix + "_" + toolname);
 				entry := "{\"name\":\"" + safe + "\",\"description\":" +
@@ -1538,6 +1538,62 @@ mcpjsonstr(s: string): string
 	}
 	r += "\"";
 	return r;
+}
+
+# Return true only for a single balanced JSON object. This is deliberately
+# small: MCP providers are outside the core namespace boundary, so malformed
+# schema text must not be able to splice fields into the tool definition array.
+mcpvalidschemaobject(s: string): int
+{
+	s = strip(s);
+	if(len s < 2 || s[0] != '{')
+		return 0;
+	depth := 0;
+	instr := 0;
+	esc := 0;
+	closed := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(instr) {
+			if(esc) {
+				esc = 0;
+				continue;
+			}
+			if(c == '\\') {
+				esc = 1;
+				continue;
+			}
+			if(c == '"')
+				instr = 0;
+			continue;
+		}
+		if(c == '"') {
+			if(closed)
+				return 0;
+			instr = 1;
+			continue;
+		}
+		if(c == '{' || c == '[') {
+			if(closed)
+				return 0;
+			depth++;
+			continue;
+		}
+		if(c == '}' || c == ']') {
+			if(depth <= 0)
+				return 0;
+			depth--;
+			if(depth == 0) {
+				if(c != '}')
+					return 0;
+				closed = 1;
+			}
+			continue;
+		}
+		if(closed && c != ' ' && c != '\t' && c != '\n' && c != '\r')
+			return 0;
+	}
+	return closed && depth == 0 && !instr && !esc;
 }
 
 # Remove a top-level "$schema":"..." field (Anthropic rejects it). Crude but

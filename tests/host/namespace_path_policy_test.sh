@@ -173,20 +173,24 @@ mkpaths() {
     echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /llm /mnt/audit /mnt/msg/ctl /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /n/git /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /n/wikia /mnt/keys/alice /mnt/keysrv /mnt/registry /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /llm/ctl /llm/status /mnt/audit/ctl /mnt/audit/chain /mnt/audit/log /mnt/audit/head /mnt/msg/ctl/session /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /n/git/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /n/wikia/ctl /mnt/keys/alice/secret /mnt/keysrv/secret /mnt/registry/new /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
 }
 
-bad_startup=""
+startup_bad_failed=0
 for p in "${BAD_PRIV[@]}" "${BAD_DIRECT_SEND[@]}" "${BAD_INVALID[@]}"; do
-    bad_startup="$bad_startup -p $p:rw"
-done
-
-if emu_c "tools9p-startup-bad" 20 \
-    "$(mkpaths); tools9p $bad_startup read; cat /tool/paths >[2] /dev/null"; then
-    if echo "$OUTPUT" | grep -q "path not grantable" || echo "$OUTPUT" | grep -q "invalid -p path"; then
-        pass "tools9p startup rejects bad corpus"
+    pname="$(echo "$p" | tr -c 'A-Za-z0-9' '_')"
+    if emu_c "tools9p-startup-bad-$pname" 10 \
+        "$(mkpaths); tools9p -p $p:rw read; cat /tool/paths >[2] /dev/null"; then
+        if echo "$OUTPUT" | grep -q "path not grantable" || echo "$OUTPUT" | grep -q "invalid -p path"; then
+            :
+        else
+            startup_bad_failed=1
+            fail "tools9p startup accepted bad path $p (output: $OUTPUT)"
+        fi
     else
-        fail "tools9p startup accepted bad corpus (output: $OUTPUT)"
+        startup_bad_failed=1
+        fail "tools9p startup bad path probe failed for $p (output: $OUTPUT)"
     fi
-else
-    fail "tools9p startup bad corpus probe failed (output: $OUTPUT)"
+done
+if [[ "$startup_bad_failed" -eq 0 ]]; then
+    pass "tools9p startup rejects bad corpus"
 fi
 
 bindcmds="tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl"

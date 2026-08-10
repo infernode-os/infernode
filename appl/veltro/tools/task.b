@@ -313,11 +313,13 @@ docreate(args: string): string
 	if(toolsarg != "") {
 		budgetstr := readfile("/tool/budget");
 		if(budgetstr != nil) {
-			budgetstr = strip(budgetstr);
+			budget := parsetoollist(budgetstr);
 			(nil, reqtoks) := sys->tokenize(toolsarg, ",");
 			for(; reqtoks != nil; reqtoks = tl reqtoks) {
-				t := hd reqtoks;
-				if(!contains(budgetstr, t))
+				t := strip(hd reqtoks);
+				if(t == "")
+					continue;
+				if(!strlistcontains(budget, t))
 					return sys->sprint("error: tool '%s' not in delegation budget", t);
 			}
 		}
@@ -760,19 +762,12 @@ knownagenttypes(): string
 	return r;
 }
 
-contains(haystack, needle: string): int
+parsetoollist(s: string): list of string
 {
-	nlen := len needle;
-	for(i := 0; i <= len haystack - nlen; i++) {
-		if(haystack[i:i+nlen] == needle) {
-			# Check word boundary
-			if(i > 0 && haystack[i-1] != '\n' && haystack[i-1] != ' ' && haystack[i-1] != ',')
-				continue;
-			end := i + nlen;
-			if(end < len haystack && haystack[end] != '\n' && haystack[end] != ' ' && haystack[end] != ',')
-				continue;
-			return 1;
-		}
-	}
-	return 0;
+	(nil, toks) := sys->tokenize(s, " \t\r\n,");
+	out: list of string;
+	for(; toks != nil; toks = tl toks)
+		if(hd toks != "")
+			out = hd toks :: out;
+	return out;
 }

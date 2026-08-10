@@ -28,9 +28,12 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	nsc->init();
 
-	mode := "with";
-	if(tl args != nil)
-		mode = hd tl args;
+	if(tl args == nil)
+		raise "skip:factotum grant helper is driven by inferno/factotum_grant.sh";
+
+	mode := hd tl args;
+	if(mode != "with" && mode != "vision" && mode != "withexec" && mode != "without")
+		raise "skip:factotum grant helper is driven by inferno/factotum_grant.sh";
 
 	tools: list of string;
 	if(mode == "with")

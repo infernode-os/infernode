@@ -155,6 +155,7 @@ doadd(args: string): string
 
 	if(desc == "")
 		return "error: gap description required";
+	desc = safeattrtext(desc);
 
 	actid := currentactid();
 	if(actid < 0)
@@ -173,6 +174,24 @@ doadd(args: string): string
 	}
 
 	return sys->sprint("gap '%s' [%s]", desc, relevance);
+}
+
+# Text written into luciuisrv ctl attributes must stay inert display text.
+# The ctl parser treats any whitespace-delimited word ending in '=' as a new
+# attribute, so collapse controls and replace '=' before embedding descriptions.
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
 }
 
 # Remove a gap by description.

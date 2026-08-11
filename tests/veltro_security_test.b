@@ -1575,6 +1575,7 @@ invalidGrantPathsWorker(result: chan of string)
 		"/n/local/project/../secret",
 		"/n/local/project/./secret",
 		"/n/local/project//secret",
+		"/n/local/project/type=tool",
 		"n/local/project",
 	};
 

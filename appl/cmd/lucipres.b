@@ -1404,6 +1404,21 @@ safename(s: string): string
 	return r;
 }
 
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
+}
+
 # Launch editor as a presentation zone app to edit an exported file.
 # Creates an artifact of type=app with dispath=/dis/wm/editor.dis
 # and data=filepath so lucifer passes it as an argument.
@@ -1417,7 +1432,7 @@ launchexport(label, filepath: string)
 	id := sys->sprint("editor-%d", exportseq);
 	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
 	cmd := sys->sprint("create id=%s type=app label=%s dis=/dis/wm/editor.dis",
-		id, label);
+		id, safeattrtext(label));
 	writetofile(ctlpath, cmd);
 	# Write the file path into the artifact's data field
 	datapath := sys->sprint("%s/activity/%d/presentation/%s/data",
@@ -1474,6 +1489,7 @@ openintopres(path: string)
 	if(path == "" || actid_g < 0)
 		return;
 	name := plumbbasename(path);
+	label := safeattrtext(name);
 	ext := plumblower(plumbext(path));
 
 	plumbseq++;
@@ -1500,10 +1516,10 @@ openintopres(path: string)
 		# (data= is terminal, hence last).
 		writetofile(ctlpath, sys->sprint(
 			"create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s",
-			id, name, path));
+			id, label, path));
 	} else {
 		writetofile(ctlpath, sys->sprint("create id=%s type=%s label=%s",
-			id, atype, name));
+			id, atype, label));
 		data := path;
 		if(readcontent) {
 			c := readfile(path);

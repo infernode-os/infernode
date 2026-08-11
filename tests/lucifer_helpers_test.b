@@ -154,6 +154,30 @@ safename(s: string): string
 	return r;
 }
 
+# safeattrtext — mirrors ftree.b/lucipres.b presentation ctl labels
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	i = 0;
+	while(i < len out && out[i] == ' ')
+		i++;
+	j := len out;
+	while(j > i && out[j-1] == ' ')
+		j--;
+	if(i >= j)
+		return "";
+	return out[i:j];
+}
+
 # trimcell — mirrors lucipres.b
 trimcell(s: string): string
 {
@@ -462,6 +486,23 @@ testSafenameTruncation(t: ref T)
 	t.asserteq(len result, 64, "safename: truncated at 64 chars");
 }
 
+# --- safeattrtext tests ---
+
+testSafeattrtextBlocksCtlInjection(t: ref T)
+{
+	raw := "report dis=/dis/wm/shell.dis type=app";
+	attrs := parseattrs("id=x type=text label=" + raw);
+	t.assertseq(getattr(attrs, "dis"), "/dis/wm/shell.dis",
+		"raw label demonstrates presentation ctl attr injection");
+
+	safe := safeattrtext(raw);
+	attrs = parseattrs("id=x type=text label=" + safe);
+	t.assertseq(getattr(attrs, "label"), "report dis:/dis/wm/shell.dis type:app",
+		"safeattrtext keeps control-looking label text inert");
+	t.assertseq(getattr(attrs, "dis"), nil,
+		"safeattrtext prevents injected dis attr");
+}
+
 # --- tabparsecells tests ---
 
 testTabparsecellsBasic(t: ref T)
@@ -751,6 +792,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SafenameEmpty", testSafenameEmpty);
 	run("SafenameHyphensUnderscores", testSafenameHyphensUnderscores);
 	run("SafenameTruncation", testSafenameTruncation);
+
+	# safeattrtext
+	run("SafeattrtextBlocksCtlInjection", testSafeattrtextBlocksCtlInjection);
 
 	# tabparsecells
 	run("TabparsecellsBasic", testTabparsecellsBasic);

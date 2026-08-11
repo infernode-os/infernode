@@ -702,6 +702,7 @@ opendirect(path: string)
 	}
 
 	name := basename(path);
+	label := safeattrtext(name);
 	ext := str->tolower(fileext(path));
 
 	openseq++;
@@ -730,14 +731,14 @@ opendirect(path: string)
 		# path must therefore ride in the create command itself (data= is a
 		# terminal attribute, so it goes last); a later data-file write would
 		# race the launch and the editor would open empty.
-		cmd := sys->sprint("create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s", id, name, path);
+		cmd := sys->sprint("create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s", id, label, path);
 		if(writestr(ctlpath, cmd) < 0) {
 			setstatus(sys->sprint("open failed: %r"));
 			redraw();
 			return;
 		}
 	} else {
-		cmd := sys->sprint("create id=%s type=%s label=%s", id, atype, name);
+		cmd := sys->sprint("create id=%s type=%s label=%s", id, atype, label);
 		if(writestr(ctlpath, cmd) < 0) {
 			setstatus(sys->sprint("present failed: %r"));
 			redraw();
@@ -805,6 +806,29 @@ readfilestr(path: string): string
 		s += string buf[0:n];
 	}
 	return s;
+}
+
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	i = 0;
+	while(i < len out && out[i] == ' ')
+		i++;
+	j := len out;
+	while(j > i && out[j-1] == ' ')
+		j--;
+	if(i >= j)
+		return "";
+	return out[i:j];
 }
 
 fileext(path: string): string

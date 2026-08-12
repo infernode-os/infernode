@@ -120,20 +120,25 @@ emu_c() {
     emu_timeout_ok "$rc"
 }
 
-nsaudit_one() {
-    local path="$1"
-    local name="nsaudit-$(echo "$path" | tr -c 'A-Za-z0-9' '_')"
-    local cmd="rm -rf /tmp/nspolicy; mkdir -p /tmp/nspolicy/meta; echo read > /tmp/nspolicy/tools; echo '$path' > /tmp/nspolicy/paths; echo toplevel > /tmp/nspolicy/meta/role; echo 0 > /tmp/nspolicy/meta/xenith; echo -1 > /tmp/nspolicy/meta/actid; echo set > /tmp/nspolicy/meta/nodevs; nsaudit -m /tmp/nspolicy"
+emu_c_retry() {
+    local name="$1" tout="$2" cmd="$3"
     local ok=1
     for attempt in 1 2 3; do
         ok=0
-        emu_c "$name-$attempt" 30 "$cmd" || ok=1
+        emu_c "$name-$attempt" "$tout" "$cmd" || ok=1
         if [[ "$ok" -eq 0 && -n "$OUTPUT" ]] &&
            ! echo "$OUTPUT" | grep -q "segmentation violation"; then
             return 0
         fi
     done
     return "$ok"
+}
+
+nsaudit_one() {
+    local path="$1"
+    local name="nsaudit-$(echo "$path" | tr -c 'A-Za-z0-9' '_')"
+    local cmd="rm -rf /tmp/nspolicy; mkdir -p /tmp/nspolicy/meta; echo read > /tmp/nspolicy/tools; echo '$path' > /tmp/nspolicy/paths; echo toplevel > /tmp/nspolicy/meta/role; echo 0 > /tmp/nspolicy/meta/xenith; echo -1 > /tmp/nspolicy/meta/actid; echo set > /tmp/nspolicy/meta/nodevs; nsaudit -m /tmp/nspolicy"
+    emu_c_retry "$name" 30 "$cmd"
 }
 
 echo -e "${BOLD}namespace path policy drift checks${NC}"
@@ -198,7 +203,7 @@ STARTUP_BAD=(
 startup_bad_failed=0
 for p in "${STARTUP_BAD[@]}"; do
     pname="$(echo "$p" | tr -c 'A-Za-z0-9' '_')"
-    if emu_c "tools9p-startup-bad-$pname" 10 \
+    if emu_c_retry "tools9p-startup-bad-$pname" 10 \
         "$(mkpaths); tools9p -p $p:rw read; cat /tool/paths >[2] /dev/null"; then
         if echo "$OUTPUT" | grep -q "path not grantable" || echo "$OUTPUT" | grep -q "invalid -p path"; then
             :

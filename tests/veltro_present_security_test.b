@@ -68,6 +68,14 @@ init(nil: ref Draw->Context, nil: list of string)
 	check(tool, "navigate editor https://example.com", "only supported for charon");
 	check(tool, "create sneaky type=app label=Shell", "unsupported artifact type");
 	check(tool, "create sneaky2 app Shell", "unsupported artifact type");
+	check(tool, "create ../../owned type=text label=Owned", "invalid artifact id");
+	check(tool, "create bad=id type=text label=Owned", "invalid artifact id");
+	check(tool, "write ../owned payload", "invalid artifact id");
+	check(tool, "append bad/id payload", "invalid artifact id");
+	check(tool, "center bad\nid", "invalid artifact id");
+	check(tool, "delete id=other", "invalid artifact id");
+	check(tool, "kill bad/id", "invalid artifact id");
+	check(tool, "navigate bad/id https://example.com", "invalid artifact id");
 	if(safeattrtext("Report data=/tmp/owned\nlabel=evil") != "Report data:/tmp/owned label:evil")
 		raise "fail:safeattrtext";
 	sys->print("PASS present label attr text is inert\n");

@@ -187,6 +187,8 @@ docreate(args: string): string
 	(id, rest) := splitfirst(args);
 	if(id == "")
 		return "error: artifact id required";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 
 	atype := "";
 	label := "";
@@ -263,6 +265,8 @@ dowrite(args: string): string
 	(id, content) := splitfirst(args);
 	if(id == "")
 		return "error: artifact id required";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 	if(content == "")
 		return "error: content required";
 
@@ -306,6 +310,8 @@ doappend(args: string): string
 	(id, content) := splitfirst(args);
 	if(id == "")
 		return "error: artifact id required";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 
 	# Strip a single pair of surrounding double quotes if present
 	# (same reasoning as in dowrite — models copy quoted-arg examples).
@@ -334,6 +340,8 @@ docenter(args: string): string
 	id := strip(args);
 	if(id == "")
 		return "error: usage: center <id>";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 
 	actid := currentactid();
 	if(actid < 0)
@@ -354,6 +362,8 @@ dokill(args: string): string
 	id := strip(args);
 	if(id == "")
 		return "error: usage: kill <id>";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 
 	actid := currentactid();
 	if(actid < 0)
@@ -380,6 +390,8 @@ donavigate(args: string): string
 	(id, url) := splitfirst(args);
 	if(id == "")
 		return "error: app id required";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 	if(url == "")
 		return sys->sprint("error: url required — e.g. navigate %s http://example.com", id);
 	if(id != "charon")
@@ -444,6 +456,8 @@ dodelete(args: string): string
 	id := strip(args);
 	if(id == "")
 		return "error: usage: delete <id>";
+	if(!validid(id))
+		return "error: invalid artifact id: " + id;
 
 	actid := currentactid();
 	if(actid < 0)
@@ -572,6 +586,20 @@ safeattrtext(s: string): string
 			out[len out] = c;
 	}
 	return strip(out);
+}
+
+validid(id: string): int
+{
+	if(id == nil || len id == 0 || len id > 128)
+		return 0;
+	for(i := 0; i < len id; i++) {
+		c := id[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 # Process escape sequences in content (\\n → newline, \\t → tab, etc.)

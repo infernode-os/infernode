@@ -1763,7 +1763,7 @@ loadcatalog()
 		dial := getattr(attrs, "mount");
 		if(dial == nil) dial = "";
 		catalog = ref CatalogEntry(
-			getattr(attrs, "name"),
+			safeattrtext(getattr(attrs, "name")),
 			getattr(attrs, "desc"),
 			getattr(attrs, "type"),
 			mntpath,
@@ -1777,15 +1777,49 @@ loadcatalog()
 
 slugify(s: string): string
 {
-	r := s;
-	for(i := 0; i < len r; i++) {
-		c := r[i];
+	r := "";
+	lastdash := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
 		if(c >= 'A' && c <= 'Z')
-			r[i] = c + ('a' - 'A');
-		else if(c == ' ' || c == '\t')
-			r[i] = '-';
+			c += 'a' - 'A';
+		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-') {
+			r[len r] = c;
+			lastdash = 0;
+		} else if(!lastdash && len r > 0) {
+			r[len r] = '-';
+			lastdash = 1;
+		}
 	}
+	while(len r > 0 && r[len r - 1] == '-')
+		r = r[0:len r - 1];
+	if(r == "")
+		return "resource";
 	return r;
+}
+
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	i = 0;
+	while(i < len out && out[i] == ' ')
+		i++;
+	j := len out;
+	while(j > i && out[j-1] == ' ')
+		j--;
+	if(i >= j)
+		return "";
+	return out[i:j];
 }
 
 pathbase(s: string): string
@@ -1837,7 +1871,7 @@ mountresource(ce: ref CatalogEntry)
 		if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
 			return;
 		writetofile(mountpt_g + "/ctl",
-			"catalog mounted name=" + ce.name + " path=" + ce.dial);
+			"catalog mounted name=" + safeattrtext(ce.name) + " path=" + safeattrtext(ce.dial));
 	} else {
 		# Network mount via dial: mount into lucifer's namespace at
 		# /tmp/veltro/mnt/<slug> (network catalog mounts are separate
@@ -1857,7 +1891,7 @@ mountresource(ce: ref CatalogEntry)
 			return;
 		}
 		writetofile(mountpt_g + "/ctl",
-			"catalog mounted name=" + ce.name + " path=" + mntdir);
+			"catalog mounted name=" + safeattrtext(ce.name) + " path=" + safeattrtext(mntdir));
 	}
 }
 
@@ -1872,7 +1906,7 @@ unmountresource(ce: ref CatalogEntry)
 	} else {
 		sys->unmount(nil, ce.mntpath);
 	}
-	writetofile(mountpt_g + "/ctl", "catalog unmounted " + ce.name);
+	writetofile(mountpt_g + "/ctl", "catalog unmounted " + safeattrtext(ce.name));
 }
 
 scantoolcatalog(): list of string
@@ -1962,7 +1996,7 @@ removetool(name: string)
 
 resolvegap(desc: string)
 {
-	writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g), "gap resolve desc=" + desc);
+	writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g), "gap resolve desc=" + safeattrtext(desc));
 	loadcontext();
 	redrawctx();
 }

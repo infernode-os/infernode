@@ -288,14 +288,25 @@ pathparent(s: string): string
 
 slugify(s: string): string
 {
-	r := s;
-	for(i := 0; i < len r; i++) {
-		c := r[i];
+	r := "";
+	lastdash := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
 		if(c >= 'A' && c <= 'Z')
-			r[i] = c + ('a' - 'A');
-		else if(c == ' ' || c == '\t')
-			r[i] = '-';
+			c += 'a' - 'A';
+		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+		   c == '_' || c == '-') {
+			r[len r] = c;
+			lastdash = 0;
+		} else if(!lastdash && len r > 0) {
+			r[len r] = '-';
+			lastdash = 1;
+		}
 	}
+	while(len r > 0 && r[len r - 1] == '-')
+		r = r[0:len r - 1];
+	if(r == "")
+		return "resource";
 	return r;
 }
 
@@ -666,6 +677,14 @@ testSlugifyAlreadyLower(t: ref T)
 	t.assertseq(slugify("already-lower"), "already-lower", "slugify no-op");
 }
 
+testSlugifyRejectsMountPathSyntax(t: ref T)
+{
+	t.assertseq(slugify("../bad/name\npath=owned"), "bad-name-path-owned",
+		"slugify removes path and ctl syntax");
+	t.assertseq(slugify("///"), "resource",
+		"slugify empty unsafe names use fallback");
+}
+
 # --- islaunchabledis tests ---
 
 testIslaunchabledisWm(t: ref T)
@@ -835,6 +854,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SlugifyLowercase", testSlugifyLowercase);
 	run("SlugifyTabs", testSlugifyTabs);
 	run("SlugifyAlreadyLower", testSlugifyAlreadyLower);
+	run("SlugifyRejectsMountPathSyntax", testSlugifyRejectsMountPathSyntax);
 
 	# islaunchabledis
 	run("IslaunchabledisWm", testIslaunchabledisWm);

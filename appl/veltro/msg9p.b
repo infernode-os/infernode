@@ -386,7 +386,10 @@ Serve:
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qdraft =>
 				perr := queuedraft(data);
-				srv.reply(ref Rmsg.Error(m.tag, perr));
+				if(perr != nil)
+					srv.reply(ref Rmsg.Error(m.tag, perr));
+				else
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qflag =>
 				(nil, fargs) := sys->tokenize(data, " \t\r\n");
 				ferr := doflag(fargs);
@@ -510,13 +513,13 @@ queuedraft(data: string): string
 	for(p := pendingSends; p != nil; p = tl p) {
 		count++;
 		if((hd p).data == data)
-			return sys->sprint("draft: approval required request %d", (hd p).id);
+			return nil;
 	}
 	if(count >= MAXPENDING)
 		return "draft: approval queue full";
 	id := nextSendID++;
 	pendingSends = ref PendingSend(id, data) :: pendingSends;
-	return sys->sprint("draft: approval required request %d", id);
+	return nil;
 }
 
 validreply(data: string): string

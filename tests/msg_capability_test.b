@@ -55,19 +55,32 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("MSGCAP %s: status=%d draft=%d\n", mode, statusvis, draftvis);
 
 	if(mode == "send") {
-		if(draftvis && pok < 0 && aok < 0 && dok < 0 && fok < 0 && cok < 0)
-			sys->print("MSGCAP send: PASS draft visible with explicit /mnt/msg/draft grant\n");
-		else
-			sys->print("MSGCAP send: FAIL draft visible=%d pending=%d approve=%d deny=%d\n", draftvis, pok >= 0, aok >= 0, dok >= 0);
+		if(draftvis && pok < 0 && aok < 0 && dok < 0 && fok < 0 && cok < 0) {
+			fd := sys->open("/mnt/msg/draft", Sys->OWRITE);
+			if(fd == nil)
+				fail(sys->sprint("send: cannot open draft: %r"));
+			data := "email\n1\nqueued reply";
+			b := array of byte data;
+			if(sys->write(fd, b, len b) != len b)
+				fail(sys->sprint("send: draft write rejected: %r"));
+			sys->print("MSGCAP send: PASS draft visible with explicit /mnt/msg/draft grant and write queues\n");
+		} else
+			fail(sys->sprint("send: draft visible=%d pending=%d approve=%d deny=%d", draftvis, pok >= 0, aok >= 0, dok >= 0));
 	} else if(mode == "flag") {
 		if(fok >= 0 && cok < 0 && !draftvis)
 			sys->print("MSGCAP flag: PASS flag visible, trusted ctl and draft HIDDEN\n");
 		else
-			sys->print("MSGCAP flag: FAIL flag=%d ctl=%d draft=%d\n", fok >= 0, cok >= 0, draftvis);
+			fail(sys->sprint("flag: flag=%d ctl=%d draft=%d", fok >= 0, cok >= 0, draftvis));
 	} else {
 		if(statusvis && !draftvis)
 			sys->print("MSGCAP draft: PASS read surface only — status visible, draft path HIDDEN\n");
 		else
-			sys->print("MSGCAP draft: FAIL (status=%d draft=%d; want status=1 draft=0)\n", statusvis, draftvis);
+			fail(sys->sprint("draft: status=%d draft=%d; want status=1 draft=0", statusvis, draftvis));
 	}
+}
+
+fail(msg: string)
+{
+	sys->print("MSGCAP: FAIL %s\n", msg);
+	raise "fail:msgcap";
 }

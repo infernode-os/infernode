@@ -679,6 +679,10 @@ doregister(args: list of string): string
 
 	srcname := hd args;
 	dispath := hd tl args;
+	if(!safesrcname(srcname))
+		return "register: unsafe source name";
+	if(!safedispath(dispath))
+		return "register: unsafe module path";
 
 	# Check for duplicate
 	for(sl := sources; sl != nil; sl = tl sl)
@@ -712,6 +716,53 @@ doregister(args: list of string): string
 
 	sys->fprint(stderr, "msg9p: registered source '%s' from %s\n", srcname, dispath);
 	return nil;
+}
+
+safesrcname(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+safedispath(path: string): int
+{
+	if(path == nil || path == "" || path[0] != '/' || !hassuffix(path, ".dis"))
+		return 0;
+	if(hascontrol(path))
+		return 0;
+
+	part := "";
+	for(i := 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			if(part == "" || part == "." || part == "..")
+				return 0;
+			part = "";
+			continue;
+		}
+		part[len part] = path[i];
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7f)
+			return 1;
+	return 0;
+}
+
+hassuffix(s, suffix: string): int
+{
+	return len s >= len suffix && s[len s - len suffix:] == suffix;
 }
 
 dounregister(srcname: string): string

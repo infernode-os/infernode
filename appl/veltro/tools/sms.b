@@ -116,6 +116,8 @@ exec(args: string): string
 	body := s[i:];
 	if(num == "" || body == "")
 		return "sms: usage: sms <number> <body...>";
+	if(!safenumber(num))
+		return "sms: unsafe number";
 
 	fd := sys->open(PHONE_SMS, Sys->OWRITE);
 	if(fd == nil)
@@ -129,4 +131,24 @@ exec(args: string): string
 		return sys->sprint("sms: write to %s failed: %r", PHONE_SMS);
 
 	return "sms: queued to " + num;
+}
+
+safenumber(num: string): int
+{
+	if(num == nil || num == "")
+		return 0;
+	digits := 0;
+	for(i := 0; i < len num; i++) {
+		c := num[i];
+		if(c >= '0' && c <= '9') {
+			digits++;
+			continue;
+		}
+		if(c == '+' && i == 0)
+			continue;
+		if(c == '-' || c == '(' || c == ')' || c == '.')
+			continue;
+		return 0;
+	}
+	return digits > 0;
 }

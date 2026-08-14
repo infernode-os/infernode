@@ -317,6 +317,8 @@ send(msg: ref Message): string
 		return "sms: send: nil message";
 	if(msg.recipient == nil || msg.recipient == "")
 		return "sms: send: missing recipient";
+	if(!safenumber(msg.recipient))
+		return "sms: send: unsafe recipient";
 	if(msg.body == nil || msg.body == "")
 		return "sms: send: missing body";
 
@@ -342,6 +344,26 @@ reply(origid, body: string): string
 	m.recipient = num;
 	m.body = body;
 	return send(m);
+}
+
+safenumber(num: string): int
+{
+	if(num == nil || num == "")
+		return 0;
+	digits := 0;
+	for(i := 0; i < len num; i++) {
+		c := num[i];
+		if(c >= '0' && c <= '9') {
+			digits++;
+			continue;
+		}
+		if(c == '+' && i == 0)
+			continue;
+		if(c == '-' || c == '(' || c == ')' || c == '.')
+			continue;
+		return 0;
+	}
+	return digits > 0;
 }
 
 setflag(id: string, flag, add: int): string

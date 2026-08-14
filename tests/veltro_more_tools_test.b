@@ -238,6 +238,21 @@ testWalletRejectsUnsafeAccount(t: ref T)
 		"wallet pay rejects traversal account");
 }
 
+testWalletRejectsUnsafeNetwork(t: ref T)
+{
+	tool := loadtool(t, "wallet");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("network Base\napprove 1");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wallet network rejects control delimiters");
+
+	r = tool->exec("network Base approve 1");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unknown"),
+		"wallet network rejects unknown names before wallet ctl write");
+}
+
 # ============================================================================
 # keyring — subcommand dispatch
 # ============================================================================
@@ -710,6 +725,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WalletMissingArgs", testWalletMissingArgs);
 	run("WalletDoubledCommand", testWalletDoubledCommand);
 	run("WalletRejectsUnsafeAccount", testWalletRejectsUnsafeAccount);
+	run("WalletRejectsUnsafeNetwork", testWalletRejectsUnsafeNetwork);
 
 	# keyring
 	run("KeyringNameDoc", testKeyringNameDoc);

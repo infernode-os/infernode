@@ -286,6 +286,8 @@ donetwork(name: string): string
 			return "cannot read wallet ctl";
 		return s;
 	}
+	if(!validnetwork(name))
+		return "error: unknown or unsafe network name";
 	# Set network — reconstruct name with spaces for multi-word names
 	# e.g. "Base" or "Ethereum Sepolia" or "Base Sepolia"
 	n := writefile(WALLET_MOUNT + "/ctl", "network " + name);
@@ -327,4 +329,13 @@ validaccount(s: string): int
 		return 0;
 	}
 	return 1;
+}
+
+validnetwork(s: string): int
+{
+	case s {
+	"Ethereum Sepolia" or "Base Sepolia" or "Ethereum Mainnet" or "Base" =>
+		return 1;
+	}
+	return 0;
 }

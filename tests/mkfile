@@ -92,6 +92,7 @@ TARG=\
 	webclient_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
+	veltro_charon_security_test.dis\
 	veltro_launch_test.dis\
 	veltro_present_security_test.dis\
 	veltro_more_tools_test.dis\

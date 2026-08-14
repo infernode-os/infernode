@@ -171,6 +171,8 @@ dofollow(args: string): string
 	args = strip(args);
 	if(args == "")
 		return "error: usage: follow <link-number>";
+	if(!validindex(args))
+		return "error: invalid link number: " + args;
 	err := writefile(BROWSER_DIR + "/ctl", "follow " + args);
 	if(err != nil)
 		return err;
@@ -187,6 +189,16 @@ dofollow(args: string): string
 	if(hasprefix(status, "error:"))
 		return status;
 	return sys->sprint("Followed link %s\nTitle: %s\nURL: %s", args, title, url);
+}
+
+validindex(s: string): int
+{
+	if(s == nil || s == "" || len s > 9)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
 }
 
 doctl(cmd: string): string

@@ -711,6 +711,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			payamt = first;
 			payrecip = hd tl paytoks;
 		}
+		payerr := validatepay(as, paytoken, payamt, payrecip);
+		if(payerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, payerr));
+			return;
+		}
 
 		# Check if approval is required for this account
 		if(as.requireapproval) {
@@ -722,7 +727,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 		} else {
 			# Execute immediately
 			txhash: string;
-			payerr: string;
 			if(paytoken == "usdc")
 				(txhash, payerr) = executeerc20(as, payamt, payrecip);
 			else
@@ -778,6 +782,48 @@ parsetype(s: string): int
 	if(s == "stripe" || s == "fiat")
 		return Wallet->ACCT_STRIPE;
 	return Wallet->ACCT_ETH;
+}
+
+validatepay(as: ref AcctState, token, amount, recipient: string): string
+{
+	if(!validamount(amount))
+		return "invalid payment amount";
+	if(token == "usdc" || as.acct.accttype == Wallet->ACCT_ETH) {
+		if(ethcrypto->strtoaddr(recipient) == nil)
+			return "invalid recipient address";
+		return nil;
+	}
+	if(as.acct.accttype == Wallet->ACCT_STRIPE) {
+		if(recipient == nil || recipient == "" || len recipient > 256 || hascontrol(recipient))
+			return "invalid payment description";
+		return nil;
+	}
+	return nil;
+}
+
+validamount(s: string): int
+{
+	if(s == nil || s == "")
+		return 0;
+	nonzero := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < '0' || c > '9')
+			return 0;
+		if(c != '0')
+			nonzero = 1;
+	}
+	return nonzero;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			return 1;
+	}
+	return 0;
 }
 
 # --- Pending payment approval/denial ---

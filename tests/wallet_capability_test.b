@@ -95,6 +95,14 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 
+	if(writefile("/n/wallet/captest/pay", "abc 0x000000000000000000000000000000000000dEaD") >= 0) {
+		fail("wallet accepted non-decimal payment amount");
+		return;
+	}
+	if(writefile("/n/wallet/captest/pay", "1000 not-an-address") >= 0) {
+		fail("wallet accepted unsafe payment recipient");
+		return;
+	}
 	if(writefile("/n/wallet/captest/pay", "1000 0x000000000000000000000000000000000000dEaD") <= 0) {
 		fail("agent could not queue wallet payment proposal");
 		return;

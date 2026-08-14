@@ -592,6 +592,25 @@ testWikiUnmounted(t: ref T)
 		"wiki status without /n/wikia mounted reports the mount");
 }
 
+testWikiRejectsUnsafeIngestPath(t: ref T)
+{
+	tool := loadtool(t, "wiki");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("ingest /n/wikia/raw/../secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wiki ingest rejects traversal before wiki9p I/O");
+
+	r = tool->exec("ingest /tmp/secret");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wiki ingest rejects paths outside /n/wikia/raw");
+
+	r = tool->exec("ingest /n/wikia/raw/doc\nlint");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wiki ingest rejects control delimiters");
+}
+
 # ============================================================================
 # matrix — fixed-service path validation
 # ============================================================================
@@ -843,6 +862,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WikiNameDoc", testWikiNameDoc);
 	run("WikiEmpty", testWikiEmpty);
 	run("WikiUnmounted", testWikiUnmounted);
+	run("WikiRejectsUnsafeIngestPath", testWikiRejectsUnsafeIngestPath);
 
 	# matrix
 	run("MatrixRejectsUnsafeNames", testMatrixRejectsUnsafeNames);

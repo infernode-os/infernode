@@ -190,7 +190,7 @@ stripquotes(s: string): string
 	return s;
 }
 
-# Extract host from URL (strips scheme, port, path)
+# Extract host from URL (strips scheme, userinfo, port, path)
 extracthost(url: string): string
 {
 	# Skip scheme
@@ -208,17 +208,25 @@ extracthost(url: string): string
 			break;
 		}
 	}
+	# Strip userinfo before port parsing, so user@host is checked as host.
+	for(i = 0; i < len s; i++) {
+		if(s[i] == '@') {
+			s = s[i+1:];
+			break;
+		}
+	}
+	# Preserve bracketed IPv6 through to isblocked().
+	if(len s > 0 && s[0] == '[') {
+		for(i = 1; i < len s; i++) {
+			if(s[i] == ']')
+				return str->tolower(s[0:i+1]);
+		}
+		return str->tolower(s);
+	}
 	# Strip port
 	for(i = 0; i < len s; i++) {
 		if(s[i] == ':') {
 			s = s[0:i];
-			break;
-		}
-	}
-	# Strip userinfo
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '@') {
-			s = s[i+1:];
 			break;
 		}
 	}

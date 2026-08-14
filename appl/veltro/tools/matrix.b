@@ -117,6 +117,10 @@ exec(args: string): string
 	(cmd, rest) := splitfirst(args);
 	cmd = str->tolower(cmd);
 
+	perr := prevalidate(cmd, rest);
+	if(perr != nil)
+		return "error: " + perr;
+
 	# Every command operates on the runtime's control filesystem at /mnt/matrix.
 	# If the runtime is not running that filesystem is absent, and each command
 	# would otherwise fail with a raw "file does not exist" — which sends the
@@ -168,6 +172,35 @@ exec(args: string): string
 	* =>
 		return sys->sprint("error: unknown command '%s'.\n\n%s", cmd, doc());
 	}
+}
+
+prevalidate(cmd, rest: string): string
+{
+	case cmd {
+	"man" =>
+		m := strip(rest);
+		if(m != "" && !safeleaf(m))
+			return "unsafe module name";
+	"story" =>
+		nm := strip(rest);
+		if(nm != "" && !safeleaf(nm))
+			return "unsafe composition name";
+	"ctl" =>
+		verb := strip(rest);
+		if(verb != "") {
+			err := validctl(verb);
+			if(err != nil)
+				return err;
+		}
+	"out" =>
+		(m, file) := splitfirst(rest);
+		if(m != "" && !safeleaf(m))
+			return "unsafe module name";
+		file = strip(file);
+		if(file != "" && !saferelpath(file))
+			return "unsafe output file name";
+	}
+	return nil;
 }
 
 dostatus(): string

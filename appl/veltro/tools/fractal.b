@@ -114,28 +114,38 @@ exec(args: string): string
 	"view" =>
 		return readfile(FRACT_ROOT + "/view");
 	"zoomin" =>
-		if(countwords(rest) < 4)
+		if(countwords(rest) != 4)
 			return "error: zoomin requires 4 args: zoomin <x1> <y1> <x2> <y2>";
+		if(!saferealargs(rest, 4))
+			return "error: unsafe fractal arguments";
 		return sendctl("zoomin " + rest);
 	"center" =>
-		if(countwords(rest) < 3)
+		if(countwords(rest) != 3)
 			return "error: center requires 3 args: center <re> <im> <radius>";
+		if(!saferealargs(rest, 3))
+			return "error: unsafe fractal arguments";
 		return sendctl("center " + rest);
 	"zoomout" =>
 		return sendctl("zoomout");
 	"julia" =>
-		if(countwords(rest) < 2)
+		if(countwords(rest) != 2)
 			return "error: julia requires 2 args: julia <re> <im> (e.g. julia -0.4 0.6)";
+		if(!saferealargs(rest, 2))
+			return "error: unsafe fractal arguments";
 		return sendctl("julia " + rest);
 	"mandelbrot" =>
 		return sendctl("mandelbrot");
 	"depth" =>
 		if(rest == "")
 			return "error: depth requires 1 arg: depth <n> (1=default, higher=more detail)";
+		if(countwords(rest) != 1 || !safeint(rest))
+			return "error: unsafe fractal depth";
 		return sendctl("depth " + rest);
 	"fill" =>
 		if(rest == "")
 			return "error: fill requires 1 arg: fill on|off";
+		if(countwords(rest) != 1 || (rest != "on" && rest != "off" && rest != "1" && rest != "0"))
+			return "error: unsafe fractal fill";
 		return sendctl("fill " + rest);
 	"restart" =>
 		return sendctl("restart");
@@ -221,6 +231,74 @@ countwords(s: string): int
 		}
 	}
 	return n;
+}
+
+saferealargs(s: string, want: int): int
+{
+	if(hascontrol(s))
+		return 0;
+	(n, toks) := sys->tokenize(s, " \t");
+	if(n != want)
+		return 0;
+	for(; toks != nil; toks = tl toks)
+		if(!safereal(hd toks))
+			return 0;
+	return 1;
+}
+
+safereal(s: string): int
+{
+	if(s == "" || len s > 40)
+		return 0;
+	i := 0;
+	if(s[i] == '-' || s[i] == '+')
+		i++;
+	digits := 0;
+	dot := 0;
+	exp := 0;
+	for(; i < len s; i++) {
+		c := s[i];
+		if(c >= '0' && c <= '9') {
+			digits++;
+			continue;
+		}
+		if(c == '.' && !dot && !exp) {
+			dot = 1;
+			continue;
+		}
+		if((c == 'e' || c == 'E') && !exp && digits > 0) {
+			exp = 1;
+			digits = 0;
+			if(i + 1 < len s && (s[i + 1] == '-' || s[i + 1] == '+'))
+				i++;
+			continue;
+		}
+		return 0;
+	}
+	return digits > 0;
+}
+
+safeint(s: string): int
+{
+	if(hascontrol(s))
+		return 0;
+	s = strip(s);
+	if(s == "" || len s > 3)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < '0' || c > '9')
+			return 0;
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r' || s[i] < ' ')
+			return 1;
+	return 0;
 }
 
 splitfirst(s: string): (string, string)

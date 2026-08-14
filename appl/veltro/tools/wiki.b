@@ -107,11 +107,6 @@ exec(args: string): string
 	if(args == "")
 		return "error: usage: wiki <ingest|query|lint|status|log> [args]";
 
-	# Check that wiki9p is mounted
-	(ok, nil) := sys->stat(WIKIA_CTL);
-	if(ok < 0)
-		return "error: /n/wikia not mounted (run wiki9p first)";
-
 	# Parse command
 	(nil, argv) := sys->tokenize(args, " \t");
 	if(argv == nil)
@@ -130,19 +125,37 @@ exec(args: string): string
 
 	case verb {
 	"ingest" =>
+		if(rest != "" && !safeingestpath(rest))
+			return "error: unsafe ingest path";
+		if(!mounted())
+			return "error: /n/wikia not mounted (run wiki9p first)";
 		return doingest(rest);
 	"query" =>
+		if(!mounted())
+			return "error: /n/wikia not mounted (run wiki9p first)";
 		return doquery(rest);
 	"lint" =>
+		if(!mounted())
+			return "error: /n/wikia not mounted (run wiki9p first)";
 		return dolint();
 	"status" =>
+		if(!mounted())
+			return "error: /n/wikia not mounted (run wiki9p first)";
 		return dostatus();
 	"log" =>
+		if(!mounted())
+			return "error: /n/wikia not mounted (run wiki9p first)";
 		return dolog();
 	* =>
 		return "error: unknown command: " + verb +
 			"\ncommands: ingest, query, lint, status, log";
 	}
+}
+
+mounted(): int
+{
+	(ok, nil) := sys->stat(WIKIA_CTL);
+	return ok >= 0;
 }
 
 # Send a command to wiki9p ctl and read the result

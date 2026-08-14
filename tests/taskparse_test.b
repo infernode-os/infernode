@@ -87,6 +87,9 @@ testParse(t: ref T)
 	chk(t, "brief=use a=b as an example", "brief", "use a=b as an example");
 	chk(t, "label=BugFix agenttype=coder brief=fix the bug in cat.b", "brief", "fix the bug in cat.b");
 	chk(t, "label=BugFix agenttype=coder brief=fix the bug in cat.b", "agenttype", "coder");
+	t.assertseq(safeattrtext("Good\nactivity=create Owned\tstatus=live"),
+		"Good activity:create Owned status:live",
+		"task control-file display text is inert");
 	t.assert(strlistcontains(parsetoollist("read\nwrite,exec grep"), "exec"), "tool budget parser accepts mixed delimiters");
 	t.assert(!strlistcontains(parsetoollist("read\nwrite,exec grep"), "ex"), "tool budget parser rejects substring matches");
 	t.assert(!strlistcontains(parsetoollist("webfetch"), "web"), "tool budget parser rejects prefix matches");
@@ -207,6 +210,28 @@ strlistcontains(l: list of string, s: string): int
 		if(hd l == s)
 			return 1;
 	return 0;
+}
+
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
+}
+
+strip(s: string): string
+{
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
+		s = s[0:len s - 1];
+	return s;
 }
 
 parsetoollist(s: string): list of string

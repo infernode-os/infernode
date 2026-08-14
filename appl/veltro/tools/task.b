@@ -290,6 +290,9 @@ docreate(args: string): string
 	label := getattr(attrs, "label");
 	if(label == "")
 		return "error: label required. Usage: create label=<name> [tools=<csv>]";
+	label = safeattrtext(label);
+	if(label == "")
+		return "error: label contains no safe display text";
 
 	agenttype := str->tolower(getattr(attrs, "agenttype"));
 	(deftools, defmodel) := agentdefaults(agenttype);
@@ -360,6 +363,8 @@ docreate(args: string): string
 	}
 
 	if(newid < 0)
+		(newid, nil) = str->toint(strip(readfile(UI_MOUNT + "/activity/current")), 10);
+	if(newid < 0)
 		return "error: could not determine new activity id";
 
 	# Set urgency if specified
@@ -429,9 +434,9 @@ docreate(args: string): string
 		writefile(dashctl, "synopsis " + string newid + " " + label);
 		category := getattr(attrs, "category");
 		if(category != "")
-			writefile(dashctl, "categorize " + string newid + " " + category);
+			writefile(dashctl, "categorize " + string newid + " " + safeattrtext(category));
 		if(instructions != "")
-			writefile(dashctl, "instructions " + string newid + " " + instructions);
+			writefile(dashctl, "instructions " + string newid + " " + safeattrtext(instructions));
 	}
 
 	# Delegate provisioning to tools9p's narrow child-provision path.
@@ -691,6 +696,24 @@ splitlines(s: string): list of string
 	for(; result != nil; result = tl result)
 		rev = hd result :: rev;
 	return rev;
+}
+
+# Text written into ctl attributes must stay inert display text. The ctl
+# parser treats whitespace-delimited words ending in '=' as new attributes, so
+# collapse controls and replace '=' before embedding model-supplied metadata.
+safeattrtext(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return strip(out);
 }
 
 # Return the first attr key that is not in createkeys, or "" if all are valid.

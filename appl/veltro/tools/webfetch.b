@@ -638,14 +638,21 @@ extracthost(url: string): string
 		}
 	}
 	for(i = 0; i < len s; i++) {
-		if(s[i] == ':') {
-			s = s[0:i];
+		if(s[i] == '@') {
+			s = s[i+1:];
 			break;
 		}
 	}
+	if(len s > 0 && s[0] == '[') {
+		for(i = 1; i < len s; i++) {
+			if(s[i] == ']')
+				return str->tolower(s[0:i+1]);
+		}
+		return str->tolower(s);
+	}
 	for(i = 0; i < len s; i++) {
-		if(s[i] == '@') {
-			s = s[i+1:];
+		if(s[i] == ':') {
+			s = s[0:i];
 			break;
 		}
 	}

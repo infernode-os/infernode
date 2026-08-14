@@ -19,6 +19,7 @@ implement VeltroMoreToolsTest;
 #   say      — unsafe voice names rejected before speech9p ctl writes
 #   gpu      — unsafe model names rejected before /mnt/gpu session writes
 #   fractal  — exact typed args before fractal ctl writes
+#   http/webfetch/payfetch — private URL rejection before network dials
 #
 # These tools are an attack surface for the agent: every tool's exec()
 # accepts a free-form string from the LLM.  Bad parsing here = agent
@@ -701,6 +702,50 @@ testFractalRejectsUnsafeCtl(t: ref T)
 }
 
 # ============================================================================
+# network tools — SSRF guard parsing
+# ============================================================================
+
+testNetworkToolsRejectPrivateUrls(t: ref T)
+{
+	http := loadtool(t, "http");
+	if(http != nil) {
+		r := http->exec("GET http://[::1]:1/");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"http rejects bracketed IPv6 loopback");
+
+		r = http->exec("GET http://user@10.0.0.1:1/");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"http rejects userinfo-hidden RFC1918 host");
+	}
+
+	webfetch := loadtool(t, "webfetch");
+	if(webfetch != nil) {
+		r := webfetch->exec("http://[::1]:1/");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"webfetch rejects bracketed IPv6 loopback");
+
+		r = webfetch->exec("http://user@192.168.0.1:1/");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"webfetch rejects userinfo-hidden RFC1918 host");
+	}
+
+	payfetch := loadtool(t, "payfetch");
+	if(payfetch != nil) {
+		r := payfetch->exec("http://[::1]:1/ -a acct");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"payfetch rejects bracketed IPv6 loopback");
+
+		r = payfetch->exec("http://172.16.0.1:1/ -a acct");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"payfetch rejects 172.16/12 private host");
+
+		r = payfetch->exec("http://2130706433:1/ -a acct");
+		t.assert(hassubstr(r, "error") && hassubstr(r, "private"),
+			"payfetch rejects numeric loopback host form");
+	}
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -810,6 +855,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# fractal
 	run("FractalRejectsUnsafeCtl", testFractalRejectsUnsafeCtl);
+
+	# network tools
+	run("NetworkToolsRejectPrivateUrls", testNetworkToolsRejectPrivateUrls);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

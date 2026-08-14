@@ -640,7 +640,8 @@ validatepath(p: string): string
 	if(p == "/")
 		return "root path is not grantable";
 	for(ci := 0; ci < len p; ci++)
-		if(p[ci] == ' ' || p[ci] == '\n' || p[ci] == '\r' || p[ci] == '\t' || p[ci] == ',')
+		if(p[ci] == ' ' || p[ci] == '\n' || p[ci] == '\r' ||
+		   p[ci] == '\t' || p[ci] == ',' || p[ci] == '=')
 			return "path contains control delimiter";
 
 	start := 1;

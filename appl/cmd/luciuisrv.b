@@ -1609,12 +1609,19 @@ ctxctl(a: ref Activity, data: string): string
 		via := getattr(attrs, "via");
 		if(path == nil || path == "")
 			return "missing path";
+		if(!validctxpath(path))
+			return "invalid resource path";
 		if(label == nil)
 			label = path;
 		if(rtype == nil)
 			rtype = "unknown";
 		if(status == nil)
 			status = "idle";
+		label = safeattrtext(label);
+		rtype = safeattrtext(rtype);
+		status = safeattrtext(status);
+		latency = safeattrtext(latency);
+		via = safeattrtext(via);
 		if(a.nres >= MAX_RESOURCES)
 			return "too many resources";
 		if(a.nres >= len a.resources) {
@@ -1633,21 +1640,23 @@ ctxctl(a: ref Activity, data: string): string
 		path := getattr(attrs, "path");
 		if(path == nil || path == "")
 			return "missing path";
+		if(!validctxpath(path))
+			return "invalid resource path";
 		found := 0;
 		for(i := 0; i < a.nres; i++) {
 			if(a.resources[i].path == path) {
 				s := getattr(attrs, "status");
 				if(s != nil)
-					a.resources[i].status = s;
+					a.resources[i].status = safeattrtext(s);
 				sf := getattr(attrs, "staleFor");
 				if(sf != nil)
-					a.resources[i].staleFor = sf;
+					a.resources[i].staleFor = safeattrtext(sf);
 				l := getattr(attrs, "latency");
 				if(l != nil)
-					a.resources[i].latency = l;
+					a.resources[i].latency = safeattrtext(l);
 				v := getattr(attrs, "via");
 				if(v != nil)
-					a.resources[i].via = v;
+					a.resources[i].via = safeattrtext(v);
 				found = 1;
 				break;
 			}
@@ -1664,6 +1673,8 @@ ctxctl(a: ref Activity, data: string): string
 		path := getattr(attrs, "path");
 		if(path == nil || path == "")
 			return "missing path";
+		if(!validctxpath(path))
+			return "invalid resource path";
 		found := -1;
 		for(i := 0; i < a.nres; i++) {
 			if(a.resources[i].path == path) {
@@ -1674,16 +1685,16 @@ ctxctl(a: ref Activity, data: string): string
 		if(found >= 0) {
 			l := getattr(attrs, "label");
 			if(l != nil)
-				a.resources[found].label = l;
+				a.resources[found].label = safeattrtext(l);
 			t := getattr(attrs, "type");
 			if(t != nil)
-				a.resources[found].rtype = t;
+				a.resources[found].rtype = safeattrtext(t);
 			s := getattr(attrs, "status");
 			if(s != nil)
-				a.resources[found].status = s;
+				a.resources[found].status = safeattrtext(s);
 			v := getattr(attrs, "via");
 			if(v != nil)
-				a.resources[found].via = v;
+				a.resources[found].via = safeattrtext(v);
 		} else {
 			label := getattr(attrs, "label");
 			rtype := getattr(attrs, "type");
@@ -1692,6 +1703,10 @@ ctxctl(a: ref Activity, data: string): string
 			if(label == nil) label = path;
 			if(rtype == nil) rtype = "unknown";
 			if(status == nil) status = "idle";
+			label = safeattrtext(label);
+			rtype = safeattrtext(rtype);
+			status = safeattrtext(status);
+			via = safeattrtext(via);
 			if(a.nres >= MAX_RESOURCES)
 				return "too many resources";
 			if(a.nres >= len a.resources) {
@@ -1734,6 +1749,8 @@ ctxctl(a: ref Activity, data: string): string
 	}
 	if(hasprefix(data, "resource activity ")) {
 		path := data[len "resource activity ":];
+		if(!validctxpath(path))
+			return "invalid resource path";
 		found := 0;
 		for(i := 0; i < a.nres; i++) {
 			if(a.resources[i].path == path) {
@@ -1758,6 +1775,8 @@ ctxctl(a: ref Activity, data: string): string
 			return "missing desc";
 		if(relevance == nil)
 			relevance = "medium";
+		desc = safeattrtext(desc);
+		relevance = safeattrtext(relevance);
 		if(a.ngaps >= MAX_GAPS)
 			return "too many gaps";
 		if(a.ngaps >= len a.gaps) {
@@ -1791,6 +1810,8 @@ ctxctl(a: ref Activity, data: string): string
 			return "missing desc";
 		if(relevance == nil || relevance == "")
 			relevance = "medium";
+		desc = safeattrtext(desc);
+		relevance = safeattrtext(relevance);
 		# Find existing gap with same desc
 		found := -1;
 		for(i := 0; i < a.ngaps; i++) {
@@ -1823,6 +1844,7 @@ ctxctl(a: ref Activity, data: string): string
 		desc := getattr(attrs, "desc");
 		if(desc == nil || desc == "")
 			return "missing desc";
+		desc = safeattrtext(desc);
 		found := -1;
 		for(i := 0; i < a.ngaps; i++) {
 			if(a.gaps[i].desc == desc) {
@@ -1848,6 +1870,8 @@ ctxctl(a: ref Activity, data: string): string
 			return "missing label";
 		if(status == nil)
 			status = "idle";
+		label = safeattrtext(label);
+		status = safeattrtext(status);
 		if(a.nbg >= MAX_BGTASKS)
 			return "too many background tasks";
 		if(a.nbg >= len a.bgtasks) {
@@ -1879,13 +1903,13 @@ ctxctl(a: ref Activity, data: string): string
 		attrs := parseattrs(rem);
 		s := getattr(attrs, "status");
 		if(s != nil)
-			a.bgtasks[idx].status = s;
+			a.bgtasks[idx].status = safeattrtext(s);
 		p := getattr(attrs, "progress");
 		if(p != nil)
-			a.bgtasks[idx].progress = p;
+			a.bgtasks[idx].progress = safeattrtext(p);
 		l := getattr(attrs, "label");
 		if(l != nil)
-			a.bgtasks[idx].label = l;
+			a.bgtasks[idx].label = safeattrtext(l);
 		vers++;
 		pushevent(a.id, "context background");
 		return nil;
@@ -2481,8 +2505,14 @@ parseattrs(s: string): list of ref Attr
 		i++;
 
 	j := i;
+	inquote := 0;
 	while(j < len s) {
-		if(s[j] == '=') {
+		if(s[j] == '"') {
+			inquote = !inquote;
+			j++;
+			continue;
+		}
+		if(!inquote && s[j] == '=') {
 			kstart := j - 1;
 			while(kstart > i && s[kstart - 1] != ' ' && s[kstart - 1] != '\t')
 				kstart--;
@@ -2540,6 +2570,47 @@ parseattrs(s: string): list of ref Attr
 	for(; attrs != nil; attrs = tl attrs)
 		rev = hd attrs :: rev;
 	return rev;
+}
+
+validctxpath(p: string): int
+{
+	if(p == nil || p == "")
+		return 0;
+	for(i := 0; i < len p; i++) {
+		c := p[i];
+		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+		   c == ',' || c == '=')
+			return 0;
+	}
+	return 1;
+}
+
+safeattrtext(s: string): string
+{
+	if(s == nil)
+		return nil;
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '=')
+			out[len out] = ':';
+		else if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return trimspaces(out);
+}
+
+trimspaces(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
+		i++;
+	j := len s;
+	while(j > i && (s[j - 1] == ' ' || s[j - 1] == '\t' || s[j - 1] == '\n' || s[j - 1] == '\r'))
+		j--;
+	return s[i:j];
 }
 
 getattr(attrs: list of ref Attr, key: string): string

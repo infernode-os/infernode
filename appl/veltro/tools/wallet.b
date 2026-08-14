@@ -7,15 +7,14 @@ implement ToolWallet;
 # filesystem at /n/wallet/.  The agent writes commands, the tool
 # reads/writes the appropriate wallet9p files.
 #
-# The agent NEVER sees private keys — signing happens inside
-# wallet9p, which retrieves keys from factotum.
+# The agent NEVER sees private keys or arbitrary hash signing. Agents queue
+# proposals; trusted wallet9p approval code signs committed payments via factotum.
 #
 # Usage:
 #   wallet accounts                    List all wallet accounts
 #   wallet address <account>           Show public address
 #   wallet balance <account>           Show balance
 #   wallet chain <account>             Show chain name
-#   wallet sign <account> <hexhash>    Sign a 32-byte hash (hex-encoded)
 #   wallet history <account>           Show recent transactions
 #   wallet pay <account> <args>        Queue a payment proposal
 #
@@ -136,10 +135,6 @@ exec(args: string): string
 		if(rest == nil)
 			return "error: missing account name\nexample: wallet chain myaccount";
 		return doread(stripquotes(hd rest), "chain");
-	"sign" =>
-		if(rest == nil || tl rest == nil)
-			return "error: need account and hash\nexample: wallet sign myaccount a1b2c3...64hexchars";
-		return dosign(stripquotes(hd rest), stripquotes(hd tl rest));
 	"history" =>
 		if(rest == nil)
 			return "error: missing account name\nexample: wallet history myaccount";
@@ -167,7 +162,7 @@ exec(args: string): string
 		return cmdhelp(hd rest);
 	* =>
 		return "error: unknown command '" + cmd + "'\n" +
-			"valid commands: accounts, address, balance, chain, history, pay, network, sign\n" +
+			"valid commands: accounts, address, balance, chain, history, pay, network\n" +
 			"example: wallet accounts";
 	}
 }
@@ -226,28 +221,6 @@ doread(acct: string, file: string): string
 	if(s == nil)
 		return sys->sprint("cannot read %s: %r", path);
 	return str->take(s, "^\n") ;
-}
-
-dosign(acct: string, hexhash: string): string
-{
-	if(!validaccount(acct))
-		return "error: unsafe account name";
-	# Validate hex hash looks reasonable
-	if(len hexhash != 64)
-		return "hash must be 64 hex characters (32 bytes)";
-
-	# Write hash to sign file
-	path := WALLET_MOUNT + "/" + acct + "/sign";
-	n := writefile(path, hexhash);
-	if(n <= 0)
-		return sys->sprint("sign failed: %r");
-
-	# Read back signature
-	sig := readfile(path);
-	if(sig == nil || sig == "")
-		return "no signature returned";
-
-	return str->take(sig, "^\n");
 }
 
 dopay(acct: string, args: list of string): string

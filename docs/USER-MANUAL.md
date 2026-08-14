@@ -742,7 +742,7 @@ Budget enforcement is server-side in wallet9p. Agents cannot bypass spending lim
 ### Key Security
 
 - Private keys live in factotum, never in wallet9p's memory
-- Agents write a hash to `/n/wallet/{name}/sign` and read back a signature — the key never enters the agent's address space
+- Agents can queue payment proposals, but raw hash signing is not exposed through the agent wallet grant
 - Wallet access is namespace-gated: agents need explicit `"/n/wallet"` in their capabilities
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see raw keys
 

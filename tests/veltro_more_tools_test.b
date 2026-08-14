@@ -18,6 +18,7 @@ implement VeltroMoreToolsTest;
 #   wiki     — argument validation, unmounted-/n/wikia error path
 #   say      — unsafe voice names rejected before speech9p ctl writes
 #   gpu      — unsafe model names rejected before /mnt/gpu session writes
+#   fractal  — exact typed args before fractal ctl writes
 #
 # These tools are an attack surface for the agent: every tool's exec()
 # accepts a free-form string from the LLM.  Bad parsing here = agent
@@ -665,6 +666,41 @@ testGpuRejectsUnsafeModel(t: ref T)
 }
 
 # ============================================================================
+# fractal — fixed-service control validation
+# ============================================================================
+
+testFractalRejectsUnsafeCtl(t: ref T)
+{
+	tool := loadtool(t, "fractal");
+	if(tool == nil)
+		return;
+
+	r := tool->exec("zoomin -0.8 0.05 -0.7 0.15\nrestart");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"fractal zoomin rejects extra/control-delimited arguments");
+
+	r = tool->exec("center -0.75 0.1 0.02 restart");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "requires"),
+		"fractal center rejects extra tokens");
+
+	r = tool->exec("julia -0.4 0.6\nmandelbrot");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"fractal julia rejects control delimiters");
+
+	r = tool->exec("depth 3\nrestart");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"fractal depth rejects control delimiters");
+
+	r = tool->exec("fill on\nrestart");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"fractal fill rejects control delimiters");
+
+	r = tool->exec("julia -0.4 0.6");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "/tmp/veltro/fractal/ctl"),
+		"valid fractal julia reaches service ctl path when unmounted");
+}
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -771,6 +807,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# gpu
 	run("GpuRejectsUnsafeModel", testGpuRejectsUnsafeModel);
+
+	# fractal
+	run("FractalRejectsUnsafeCtl", testFractalRejectsUnsafeCtl);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -205,6 +205,7 @@ doresolve(args: string): string
 
 	if(desc == "")
 		return "error: usage: resolve \"desc\"";
+	desc = safeattrtext(desc);
 
 	actid := currentactid();
 	if(actid < 0)

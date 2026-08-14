@@ -290,12 +290,16 @@ cat /n/wallet/myaccount/address    # → 0x...
 echo 'import eth ethereum myaccount 0123456789abcdef...' > /n/wallet/new
 ```
 
-### Signing
+### Trusted Signing
 
 ```sh
 echo 'abcdef0123456789...' > /n/wallet/myaccount/sign    # 32-byte hash as hex
 cat /n/wallet/myaccount/sign    # → 65-byte signature as hex
 ```
+
+The raw `sign` file is a trusted wallet9p interface. The agent-facing wallet
+grant and `wallet` tool do not expose arbitrary hash signing; agents queue
+payment proposals through `pay`, and trusted approval code commits them.
 
 ### Network Selection
 
@@ -411,8 +415,8 @@ wallet accounts                    List all wallet accounts
 wallet address <account>           Show public address
 wallet balance <account>           Show balance
 wallet chain <account>             Show blockchain network
-wallet sign <account> <hexhash>    Sign a 32-byte hash
 wallet history <account>           Show recent transactions
+wallet pay <account> <wei> <addr>  Queue a payment proposal
 ```
 
 ### payfetch tool
@@ -441,7 +445,7 @@ Wallet access is gated by namespace capabilities:
 - Agent needs `"/n/wallet"` in `caps.paths` to access the wallet
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see private keys
 - Budget enforcement is server-side in wallet9p
-- The agent writes a hash to `sign`, reads back a signature — the key never enters the agent's address space
+- Agents queue payment proposals; arbitrary hash signing stays on the trusted wallet9p interface
 
 ## Wallet GUI App (wm/wallet.b)
 

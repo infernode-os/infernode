@@ -84,14 +84,20 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	if(!exists("/n/wallet/accounts") || !exists("/n/wallet/default") ||
 	   !exists("/n/wallet/captest/address") || !exists("/n/wallet/captest/pay") ||
-	   !exists("/n/wallet/captest/sign") || !exists("/n/wallet/captest/history")) {
+	   !exists("/n/wallet/captest/history")) {
 		fail("agent wallet proposal/read surface missing");
 		return;
 	}
 
 	if(exists("/n/wallet/ctl") || exists("/n/wallet/pending") ||
-	   exists("/n/wallet/new") || exists("/n/wallet/captest/ctl")) {
+	   exists("/n/wallet/new") || exists("/n/wallet/captest/ctl") ||
+	   exists("/n/wallet/captest/sign")) {
 		fail("trusted wallet commit/config files visible");
+		return;
+	}
+	if(writefile("/n/wallet/captest/sign",
+	    "9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658") >= 0) {
+		fail("wallet grant allowed raw hash signing");
 		return;
 	}
 
@@ -117,5 +123,5 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 
-	sys->print("WALLETCAP PASS: wallet grant exposes proposals but hides commit/config authority\n");
+	sys->print("WALLETCAP PASS: wallet grant exposes proposals but hides commit/config/sign authority\n");
 }

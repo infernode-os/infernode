@@ -654,7 +654,7 @@ restrictwallet(): string
 	if(err != nil)
 		return err;
 
-	acctallow := "address" :: "balance" :: "chain" :: "sign" ::
+	acctallow := "address" :: "balance" :: "chain" ::
 		"pay" :: "history" :: nil;
 	for(a = accts; a != nil; a = tl a) {
 		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);

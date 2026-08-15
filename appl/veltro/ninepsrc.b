@@ -94,6 +94,16 @@ init(config: string): string
 	if(daytime == nil)
 		return "ninepsrc: cannot load Daytime";
 
+	srcname = "ninep";
+	mountdial = nil;
+	mountpt = nil;
+	evfile = "events";
+	urgent = 0;
+	mounted = 0;
+	tsfield = nil;
+	mountdone = 0;
+	seq = 0;
+
 	# Parse key=value config.
 	if((v := getcfg(config, "name")) != nil)
 		srcname = v;
@@ -108,6 +118,17 @@ init(config: string): string
 	if(getcfg(config, "mounted") == "1")
 		mounted = 1;
 	tsfield = getcfg(config, "tsfield");
+
+	if(!safesrcname(srcname))
+		return "ninepsrc: config: unsafe source name";
+	if(mountdial != nil && hascontrol(mountdial))
+		return "ninepsrc: config: unsafe mount";
+	if(!safemountpt(mountpt))
+		return "ninepsrc: config: unsafe mountpt";
+	if(!saferelfile(evfile))
+		return "ninepsrc: config: unsafe file";
+	if(tsfield != nil && tsfield != "" && tsfield != "unixnanos" && tsfield != "unixsecs")
+		return "ninepsrc: config: unsafe tsfield";
 
 	if(!mounted && mountdial == nil)
 		return "ninepsrc: config: mount= required (or mounted=1 if pre-mounted)";
@@ -329,6 +350,71 @@ getcfg(config, key: string): string
 		while(i < len config && config[i] != ' ' && config[i] != '\t')
 			i++;
 	}
+}
+
+safesrcname(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+safemountpt(path: string): int
+{
+	return safepath(path, 1, 1);
+}
+
+saferelfile(path: string): int
+{
+	return safepath(path, 0, 0);
+}
+
+safepath(path: string, absolute, require_n: int): int
+{
+	if(path == nil || path == "" || hascontrol(path))
+		return 0;
+	if(absolute) {
+		if(path[0] != '/')
+			return 0;
+		if(require_n && !(path == "/n" || hasprefix(path, "/n/")))
+			return 0;
+	} else if(path[0] == '/')
+		return 0;
+
+	part := "";
+	start := 0;
+	if(absolute)
+		start = 1;
+	for(i := start; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			if(part == "" || part == "." || part == "..")
+				return 0;
+			part = "";
+			continue;
+		}
+		part[len part] = path[i];
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7f)
+			return 1;
+	return 0;
+}
+
+hasprefix(s, prefix: string): int
+{
+	return len s >= len prefix && s[:len prefix] == prefix;
 }
 
 netmkaddr(addr, net, svc: string): string

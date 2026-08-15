@@ -93,6 +93,7 @@ BAD_INVALID=(
   "/tmp/../lib"
   "/tmp//evil"
   "/tmp/./evil"
+  "/tmp/a=forged"
 )
 
 GOOD=(

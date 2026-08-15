@@ -71,7 +71,31 @@ init(nil: ref Draw->Context, nil: list of string)
 		fail("cannot create test wallet account");
 		return;
 	}
+	if(writefile("/n/wallet/new", "eth ethereum bad/name") >= 0) {
+		fail("wallet accepted unsafe account name");
+		return;
+	}
+	if(writefile("/n/wallet/new", "eth ethereum extra tokens") >= 0) {
+		fail("wallet accepted extra account creation tokens");
+		return;
+	}
+	if(writefile("/n/wallet/ctl", "default bad/name") >= 0) {
+		fail("wallet accepted unsafe default account name");
+		return;
+	}
 	writefile("/n/wallet/ctl", "default captest");
+	if(writefile("/n/wallet/captest/pay", "1000 0x000000000000000000000000000000000000dEaD") <= 0) {
+		fail("trusted setup could not queue wallet payment proposal");
+		return;
+	}
+	if(writefile("/n/wallet/ctl", "deny 1 trailing") >= 0) {
+		fail("wallet accepted trailing tokens on pending denial");
+		return;
+	}
+	if(writefile("/n/wallet/ctl", "deny 1") <= 0) {
+		fail("wallet rejected exact pending denial");
+		return;
+	}
 
 	caps := ref NsConstruct->Capabilities("wallet" :: nil, "/n/wallet" :: nil,
 		nil, nil, nil, nil, 0, 0, -1, nil, nil);

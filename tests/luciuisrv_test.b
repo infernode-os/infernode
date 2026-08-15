@@ -1201,6 +1201,64 @@ testContextControlTextSanitized(t: ref T)
 	t.assert(hassubstr(bg, "status=live:now"), "background status is inert");
 }
 
+testCtlAdversarialTokens(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity");
+		return;
+	}
+
+	convctl := actbase() + "/conversation/ctl";
+	presctl := actbase() + "/presentation/ctl";
+
+	n := writefile(convctl, "role=\"human\nstatus=owned\" text=bad role");
+	t.assert(n < 0, "conversation rejects role control injection");
+
+	n = writefile(convctl, "role=human dtype=\"form\nprogress=100\" text=bad dtype");
+	t.assert(n < 0, "conversation rejects dtype control injection");
+
+	n = writefile(convctl, "role=human dtype=form title=\"Allow\nrole=system\" progress=\"50\nowned=1\" options=\"Allow\nDeny\" text=dialogue");
+	t.assert(n > 0, "conversation accepts sanitized display metadata");
+	msg := "";
+	for(i := 0; i < 50; i++) {
+		s := readfile(actbase() + "/conversation/" + string i);
+		if(s != nil && hassubstr(s, "text=dialogue")) {
+			msg = s;
+			break;
+		}
+	}
+	t.assert(msg != "", "sanitized dialogue message is readable");
+	t.assert(!hassubstr(msg, "\nrole=system"), "dialogue title cannot inject role line");
+	t.assert(!hassubstr(msg, "\nowned=1"), "dialogue progress cannot inject control line");
+	t.assert(!hassubstr(msg, "\nDeny"), "dialogue options cannot inject extra line");
+
+	n = writefile(presctl, "create id=badtype type=\"app\nid=owned\" label=Bad");
+	t.assert(n < 0, "presentation rejects artifact type control injection");
+
+	n = writefile(presctl, "create id=badlabel type=text label=\"Owned\nid=other\"");
+	t.assert(n > 0, "presentation accepts sanitized label metadata");
+	label := readfile(actbase() + "/presentation/badlabel/label");
+	t.assert(!hassubstr(label, "\nid=other"), "artifact label cannot inject control line");
+
+	n = writefile(actbase() + "/presentation/current", "bad\nid");
+	t.assert(n < 0, "direct presentation/current write rejects invalid id");
+
+	n = writefile(presctl, "create id=statusapp type=app label=StatusApp");
+	t.assert(n > 0, "presentation creates app artifact for status test");
+	n = writefile(actbase() + "/presentation/statusapp/appstatus", "running\nowned=1");
+	t.assert(n > 0, "appstatus accepts sanitized display state");
+	status := readfile(actbase() + "/presentation/statusapp/appstatus");
+	t.assert(!hassubstr(status, "\nowned=1"), "appstatus cannot inject event/control line");
+
+	n = writefile(TESTMNT + "/ctl", "theme halo\nactivity delete 0");
+	t.assert(n < 0, "global ctl rejects theme control injection");
+
+	n = writefile(TESTMNT + "/notification", "warning hello\nactivity delete 0");
+	t.assert(n > 0, "notification accepts sanitized message text");
+	note := readfile(TESTMNT + "/notification");
+	t.assert(!hassubstr(note, "\nactivity delete"), "notification cannot inject a second event line");
+}
+
 # ============================================================================
 # Test 21: testGapUpsert
 #
@@ -1885,6 +1943,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ContextBgTaskAdd", testContextBgTaskAdd);
 	run("ContextResourceUpdate", testContextResourceUpdate);
 	run("ContextControlTextSanitized", testContextControlTextSanitized);
+	run("CtlAdversarialTokens", testCtlAdversarialTokens);
 	run("GapUpsert", testGapUpsert);
 	run("GapResolve", testGapResolve);
 	run("CatalogRead", testCatalogRead);

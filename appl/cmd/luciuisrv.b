@@ -1079,6 +1079,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qnotification =>
+		data = safeeventtext(data);
 		if(qlen(notifyq) >= MAX_QUEUE_DEPTH) {
 			srv.reply(ref Rmsg.Error(m.tag, "notification queue full"));
 			return;
@@ -1087,6 +1088,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qtoast =>
+		data = safeeventtext(data);
 		if(qlen(toastq) >= MAX_QUEUE_DEPTH) {
 			srv.reply(ref Rmsg.Error(m.tag, "toast queue full"));
 			return;
@@ -1124,7 +1126,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		a.label = data;
+		a.label = safeattrtext(data);
 		vers++;
 		pushevent(actid, "label");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -1135,7 +1137,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		a.status = data;
+		a.status = safeattrtext(data);
 		vers++;
 		pushevent(actid, "status");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -1222,6 +1224,10 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
+		if(!validid(data) || findartifact(a, data) == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "unknown artifact"));
+			break;
+		}
 		a.currentArtifact = data;
 		vers++;
 		pushevent(actid, "presentation current");
@@ -1246,9 +1252,9 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		a.artifacts[subid].appstatus = data;
+		a.artifacts[subid].appstatus = safeattrtext(data);
 		vers++;
-		pushevent(actid, "presentation app " + a.artifacts[subid].id + " status=" + data);
+		pushevent(actid, "presentation app " + a.artifacts[subid].id + " status=" + a.artifacts[subid].appstatus);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qctxctl =>
@@ -1310,7 +1316,7 @@ globalctl(data: string): string
 		return nil;
 	}
 	if(hasprefix(data, "activity create ")) {
-		label := data[len "activity create ":];
+		label := safeattrtext(data[len "activity create ":]);
 		a := newactivity(label);
 		if(a == nil)
 			return "too many activities";
@@ -1345,6 +1351,8 @@ globalctl(data: string): string
 	}
 	if(hasprefix(data, "theme ")) {
 		name := data[len "theme ":];
+		if(!validid(name))
+			return "invalid theme name";
 		# Persist theme choice (truncate to avoid stale trailing bytes)
 		fd := sys->open("/lib/lucifer/theme/current", Sys->OWRITE|Sys->OTRUNC);
 		if(fd == nil)
@@ -1389,13 +1397,17 @@ convctl(a: ref Activity, data: string): string
 		if(hasattr(attrs, "text"))
 			a.messages[idx].text = getattr(attrs, "text");
 		if(hasattr(attrs, "progress"))
-			a.messages[idx].progress = getattr(attrs, "progress");
+			a.messages[idx].progress = safeattrtext(getattr(attrs, "progress"));
 		if(hasattr(attrs, "title"))
-			a.messages[idx].title = getattr(attrs, "title");
+			a.messages[idx].title = safeattrtext(getattr(attrs, "title"));
 		if(hasattr(attrs, "options"))
-			a.messages[idx].options = getattr(attrs, "options");
-		if(hasattr(attrs, "dtype"))
-			a.messages[idx].dtype = getattr(attrs, "dtype");
+			a.messages[idx].options = safeattrtext(getattr(attrs, "options"));
+		if(hasattr(attrs, "dtype")) {
+			dt := safeattrtext(getattr(attrs, "dtype"));
+			if(dt != "" && !validdtype(dt))
+				return "invalid dtype";
+			a.messages[idx].dtype = dt;
+		}
 		vers++;
 		pushevent(a.id, "conversation update " + string idx);
 		return nil;
@@ -1413,8 +1425,18 @@ convctl(a: ref Activity, data: string): string
 
 	if(role == nil || role == "")
 		return "missing role";
+	role = safeattrtext(role);
+	if(!validrole(role))
+		return "invalid role";
 	if(text == nil)
 		text = "";
+	using = safeattrtext(using);
+	dtype = safeattrtext(dtype);
+	title = safeattrtext(title);
+	progress = safeattrtext(progress);
+	options = safeattrtext(options);
+	if(dtype != nil && dtype != "" && !validdtype(dtype))
+		return "invalid dtype";
 
 	idx := addmessage(a, role, text, using, dtype, title, progress, options);
 	if(idx < 0)
@@ -1438,8 +1460,13 @@ presctl(a: ref Activity, data: string): string
 			return "missing id";
 		if(atype == nil || atype == "")
 			atype = "text";
+		atype = safeattrtext(atype);
+		if(!validleaf(atype))
+			return "invalid artifact type";
 		if(label == nil)
 			label = id;
+		label = safeattrtext(label);
+		dispath = safeattrtext(dispath);
 		if(findartifact(a, id) != nil)
 			return "artifact already exists: " + id;
 		art := addartifact(a, id, atype, label);
@@ -1476,10 +1503,14 @@ presctl(a: ref Activity, data: string): string
 			art.data = d;
 		l := getattr(attrs, "label");
 		if(l != nil)
-			art.label = l;
+			art.label = safeattrtext(l);
 		t := getattr(attrs, "type");
-		if(t != nil)
+		if(t != nil) {
+			t = safeattrtext(t);
+			if(!validleaf(t))
+				return "invalid artifact type";
 			art.atype = t;
+		}
 		vers++;
 		pushevent(a.id, "presentation " + id);
 		return nil;
@@ -1574,7 +1605,7 @@ presctl(a: ref Activity, data: string): string
 		if(art == nil)
 			return "unknown artifact: " + id;
 		if(status != nil)
-			art.appstatus = status;
+			art.appstatus = safeattrtext(status);
 		vers++;
 		pushevent(a.id, "presentation app " + id + " status=" + art.appstatus);
 		return nil;
@@ -2600,6 +2631,45 @@ safeattrtext(s: string): string
 			out[len out] = c;
 	}
 	return trimspaces(out);
+}
+
+safeeventtext(s: string): string
+{
+	if(s == nil)
+		return nil;
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '\n' || c == '\r' || c == '\t')
+			out[len out] = ' ';
+		else
+			out[len out] = c;
+	}
+	return trimspaces(out);
+}
+
+validrole(role: string): int
+{
+	return role == "human" || role == "veltro" || role == "system" || role == "tool";
+}
+
+validdtype(dtype: string): int
+{
+	return dtype == "dialogue" || dtype == "form";
+}
+
+validleaf(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }
 
 trimspaces(s: string): string

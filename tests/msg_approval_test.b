@@ -40,8 +40,8 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys->remove("/tmp/veltro/sent/security-test");
 
 	request := "email\nsecurity-test\napproved body";
-	if(writefile("/mnt/msg/draft", request) >= 0) {
-		fail("draft endpoint claimed the message was sent");
+	if(writefile("/mnt/msg/draft", request) < 0) {
+		fail("draft endpoint rejected safe pending reply");
 		return;
 	}
 	if(readfile("/tmp/veltro/sent/security-test") != nil) {

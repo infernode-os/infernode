@@ -219,7 +219,7 @@ strindex(hay, needle: string): int
 # Mark a message seen via msg9p ctl, so an ignored message is not re-delivered.
 markseen(src, id: string)
 {
-	if(src == "" || id == "")
+	if(!safesrcname(src) || !safetoken(id))
 		return;
 	fd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
 	if(fd == nil) {
@@ -394,10 +394,15 @@ extractmsgid(notification: string): string
 			# Extract just the numeric part after source/
 			for(i := len id - 1; i >= 0; i--) {
 				if(id[i] == '/') {
-					return id[i+1:];
+					tok := id[i+1:];
+					if(safetoken(tok))
+						return tok;
+					return nil;
 				}
 			}
-			return id;
+			if(safetoken(id))
+				return id;
+			return nil;
 		}
 	}
 	return nil;
@@ -425,7 +430,34 @@ extractsource(notification: string): string
 		end++;
 	if(end <= start)
 		return nil;
-	return line[start:end];
+	src := line[start:end];
+	if(safesrcname(src))
+		return src;
+	return nil;
+}
+
+safesrcname(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+safetoken(s: string): int
+{
+	if(s == nil || s == "")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7f)
+			return 0;
+	return 1;
 }
 
 # Write a command to /mnt/msg/ctl (e.g. "flag email 42 seen"). Returns nil on

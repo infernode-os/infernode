@@ -530,6 +530,10 @@ validreply(data: string): string
 	origid = msgstrip(origid);
 	if(src == "" || origid == "")
 		return "draft: want <srcname>\\n<origid>\\n<body>";
+	if(!safesrcname(src))
+		return "draft: unsafe source name";
+	if(hascontrol(origid))
+		return "draft: unsafe message id";
 	for(sl := sources; sl != nil; sl = tl sl)
 		if((hd sl).name == src)
 			return nil;
@@ -595,6 +599,10 @@ handlereply(data: string): string
 	origid = msgstrip(origid);
 	if(src == "" || origid == "")
 		return "reply: want <srcname>\\n<origid>\\n<body>";
+	if(!safesrcname(src))
+		return "reply: unsafe source name";
+	if(hascontrol(origid))
+		return "reply: unsafe message id";
 	for(sl := sources; sl != nil; sl = tl sl)
 		if((hd sl).name == src)
 			return (hd sl).mod->reply(origid, body);
@@ -645,11 +653,15 @@ dosend(srcname, recipient, body: string): string
 # flag semantics (SMS) implement setflag as an idempotent no-op.
 doflag(args: list of string): string
 {
-	if(args == nil || tl args == nil || tl tl args == nil)
+	if(args == nil || tl args == nil || tl tl args == nil || tl tl tl args != nil)
 		return "usage: flag <src> <origid> <seen|unseen|flagged|unflagged|urgent|draft>";
 	srcname := hd args;
 	origid := hd tl args;
 	word := str->tolower(hd tl tl args);
+	if(!safesrcname(srcname))
+		return "flag: unsafe source name";
+	if(hascontrol(origid))
+		return "flag: unsafe message id";
 
 	flag := 0;
 	add := 0;

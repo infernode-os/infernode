@@ -185,6 +185,10 @@ prevalidate(cmd, rest: string): string
 		nm := strip(rest);
 		if(nm != "" && !safeleaf(nm))
 			return "unsafe composition name";
+	"compose" =>
+		cerr := agentcomposepolicy(rest);
+		if(cerr != nil)
+			return cerr;
 	"ctl" =>
 		verb := strip(rest);
 		if(verb != "") {
@@ -236,9 +240,64 @@ docompose(text: string): string
 			out += strip(hd parts) + "\n";
 		text = out;
 	}
+	cerr := agentcomposepolicy(text);
+	if(cerr != nil)
+		return "error: " + cerr;
 	if(writestr(MATRIX + "/composition", text) < 0)
 		return sys->sprint("error: composition write failed: %r");
 	return "composition written; reload applied.\n\n" + readfile(MATRIX + "/composition");
+}
+
+agentcomposepolicy(text: string): string
+{
+	text = normalizecompose(text);
+	(nil, lines) := sys->tokenize(text, "\n");
+	for(; lines != nil; lines = tl lines) {
+		line := strip(hd lines);
+		if(line == "" || line[0] == '#')
+			continue;
+		(nil, toks) := sys->tokenize(line, " \t");
+		if(toks == nil)
+			continue;
+		first := hd toks;
+		rest := tl toks;
+		if(first == "service") {
+			if(len rest != 2)
+				return "service needs: name mount";
+			if(len rest >= 1 && !safeleaf(hd rest))
+				return "unsafe service module name";
+			if(len rest >= 2 && hd tl rest == "/")
+				return "service whole-namespace grants are not agent-composeable";
+			if(len rest >= 2 && !safeabspath(hd tl rest))
+				return "unsafe service mount path";
+			continue;
+		}
+		if(first == "layout" || first == "watch")
+			continue;
+		if(rest != nil && hd rest == "app")
+			return "app hosting is not agent-composeable";
+		if(rest != nil && tl rest != nil) {
+			if(len rest != 2)
+				return "display module needs: name mount";
+			if(!safeleaf(hd rest))
+				return "unsafe matrix module name";
+			if(!safeabspath(hd tl rest))
+				return "unsafe matrix mount path";
+		}
+	}
+	return nil;
+}
+
+normalizecompose(text: string): string
+{
+	text = strip(text);
+	if(contains(text, "\n"))
+		return text;
+	out := "";
+	(nil, parts) := sys->tokenize(text, ";");
+	for(; parts != nil; parts = tl parts)
+		out += strip(hd parts) + "\n";
+	return out;
 }
 
 writectl(verb: string): string
@@ -393,6 +452,25 @@ saferelpath(s: string): int
 		return 0;
 	part := "";
 	for(i := 0; i <= len s; i++) {
+		if(i == len s || s[i] == '/') {
+			if(!safeleaf(part))
+				return 0;
+			part = "";
+			continue;
+		}
+		part[len part] = s[i];
+	}
+	return 1;
+}
+
+safeabspath(s: string): int
+{
+	if(s == "" || s[0] != '/' || hascontrol(s))
+		return 0;
+	if(s == "/")
+		return 1;
+	part := "";
+	for(i := 1; i <= len s; i++) {
 		if(i == len s || s[i] == '/') {
 			if(!safeleaf(part))
 				return 0;

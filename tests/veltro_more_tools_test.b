@@ -649,6 +649,14 @@ testMatrixRejectsUnsafeNames(t: ref T)
 	r = tool->exec("ctl load sysmon\nunload");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "control"),
 		"matrix ctl rejects control delimiters");
+
+	r = tool->exec("compose layout hsplit 1 1;left app /dis/wm/clock.dis");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "app hosting"),
+		"matrix compose rejects app hosting");
+
+	r = tool->exec("compose service sysmon-svc /");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "whole-namespace"),
+		"matrix compose rejects whole namespace service grants");
 }
 
 # ============================================================================

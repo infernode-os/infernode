@@ -98,6 +98,8 @@ parsecomposition(text: string): (ref Composition, string)
 		if(first == "watch") {
 			if(len rest != 1)
 				return (nil, "watch needs: path");
+			if(!safemount(hd rest))
+				return (nil, "watch: unsafe path");
 			curwatch = ref WatchRule(hd rest, nil);
 			c.watches = curwatch :: c.watches;
 			continue;
@@ -133,10 +135,14 @@ parsecomposition(text: string): (ref Composition, string)
 
 		# "service name mount"
 		if(first == "service") {
-			if(len rest < 2)
+			if(len rest != 2)
 				return (nil, "service needs: name mount");
 			sname := hd rest;
 			smount := hd tl rest;
+			if(!safeleaf(sname))
+				return (nil, "service: unsafe module name");
+			if(!safemount(smount))
+				return (nil, "service: unsafe mount path");
 			se := ref ServiceEntry(sname, smount, "", nil, 0);
 			c.services = se :: c.services;
 			continue;
@@ -200,11 +206,20 @@ parsecomposition(text: string): (ref Composition, string)
 			mount := hd tl rest;
 			args := "";
 			if(modname == "app") {
+				if(!safeapppath(mount))
+					return (nil, first + ": unsafe app path");
 				for(atl := tl tl rest; atl != nil; atl = tl atl) {
 					if(args != "")
 						args += " ";
 					args += hd atl;
 				}
+			} else {
+				if(len rest != 2)
+					return (nil, first + ": display module needs: name mount");
+				if(!safeleaf(modname))
+					return (nil, first + ": unsafe module name");
+				if(!safemount(mount))
+					return (nil, first + ": unsafe mount path");
 			}
 			ma := ref ModuleAssign(first, modname, mount, args);
 			c.assigns = ma :: c.assigns;
@@ -456,6 +471,81 @@ parseint(s: string): (int, string)
 	if(rest != nil && rest != "")
 		return (0, "not an integer");
 	return (v, nil);
+}
+
+safeleaf(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+safemount(path: string): int
+{
+	if(path == "/")
+		return 1;
+	return safepath(path, 1, 1);
+}
+
+safeapppath(path: string): int
+{
+	if(!safepath(path, 1, 1))
+		return 0;
+	if(!hasprefix(path, "/dis/wm/") || !hassuffix(path, ".dis"))
+		return 0;
+	return 1;
+}
+
+safepath(path: string, absolute, simpleleaf: int): int
+{
+	if(path == nil || path == "" || hascontrol(path))
+		return 0;
+	if(absolute && path[0] != '/')
+		return 0;
+	if(!absolute && path[0] == '/')
+		return 0;
+
+	part := "";
+	start := 0;
+	if(absolute)
+		start = 1;
+	for(i := start; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			if(part == "" || part == "." || part == "..")
+				return 0;
+			if(simpleleaf && i == len path && !safeleaf(part))
+				return 0;
+			part = "";
+			continue;
+		}
+		part[len part] = path[i];
+	}
+	return 1;
+}
+
+hascontrol(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7f)
+			return 1;
+	return 0;
+}
+
+hasprefix(s, pre: string): int
+{
+	return len s >= len pre && s[:len pre] == pre;
+}
+
+hassuffix(s, suffix: string): int
+{
+	return len s >= len suffix && s[len s - len suffix:] == suffix;
 }
 
 # Compute child names for a split

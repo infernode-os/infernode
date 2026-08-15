@@ -447,6 +447,30 @@ testServiceNeedsMount(t: ref T)
 	t.assertseq(err, "service needs: name mount", "service without mount rejected");
 }
 
+testUnsafeCompositionTokens(t: ref T)
+{
+	(nil, err) := matrixlib->parsecomposition("service ../owned /m\n");
+	t.assertseq(err, "service: unsafe module name", "unsafe service name rejected");
+
+	(nil, err) = matrixlib->parsecomposition("service svc /m/../secret\n");
+	t.assertseq(err, "service: unsafe mount path", "unsafe service mount rejected");
+
+	(nil, err) = matrixlib->parsecomposition("service svc /m,secret\n");
+	t.assertseq(err, "service: unsafe mount path", "unsafe service delimiter rejected");
+
+	(nil, err) = matrixlib->parsecomposition("service svc /m extra\n");
+	t.assertseq(err, "service needs: name mount", "extra service token rejected");
+
+	(nil, err) = matrixlib->parsecomposition("layout hsplit 1 1\nleft ../owned /m\n");
+	t.assertseq(err, "left: unsafe module name", "unsafe display module rejected");
+
+	(nil, err) = matrixlib->parsecomposition("layout hsplit 1 1\nleft mod /m extra\n");
+	t.assertseq(err, "left: display module needs: name mount", "extra display token rejected");
+
+	(nil, err) = matrixlib->parsecomposition("layout hsplit 1 1\nleft app /dis/sh.dis\n");
+	t.assertseq(err, "left: unsafe app path", "unsafe app path rejected");
+}
+
 testUnrecognizedLine(t: ref T)
 {
 	(nil, err) := matrixlib->parsecomposition("gibberish\n");
@@ -1238,6 +1262,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SplitConsumedRegion", testSplitConsumedRegion);
 	run("MaxDepth", testMaxDepth);
 	run("ServiceNeedsMount", testServiceNeedsMount);
+	run("UnsafeCompositionTokens", testUnsafeCompositionTokens);
 	run("UnrecognizedLine", testUnrecognizedLine);
 	run("CommentsAndBlanks", testCommentsAndBlanks);
 	run("TextRoundTrip", testTextRoundTrip);

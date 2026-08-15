@@ -581,6 +581,37 @@ strlist_contains(l: list of string, s: string): int
 	return 0;
 }
 
+isdigit(c: int): int
+{
+	return c >= '0' && c <= '9';
+}
+
+parseactivityid(s: string): (int, string)
+{
+	if(s == nil || len s == 0)
+		return (-1, "missing activity id");
+	for(i := 0; i < len s; i++)
+		if(!isdigit(s[i]))
+			return (-1, "activity id must be decimal digits");
+	(id, nil) := str->toint(s, 10);
+	if(id < 0)
+		return (-1, "invalid activity id");
+	return (id, nil);
+}
+
+validtooltoken(name: string): int
+{
+	if(name == nil || len name == 0)
+		return 0;
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
 # Generate list of bound paths (newline-separated for /tool/paths).
 # Format: "path perm" per line (e.g. "/n/local/Users/pdfinn/tmp rw").
 genpathlist(): string
@@ -1272,9 +1303,9 @@ provisiontask(args: string)
 	}
 	idstr := hd toks;
 	toks = tl toks;
-	(id, nil) := str->toint(idstr, 10);
-	if(id < 0) {
-		sys->fprint(stderr, "tools9p: provision: invalid id %s\n", idstr);
+	(id, iderr) := parseactivityid(idstr);
+	if(iderr != nil) {
+		sys->fprint(stderr, "tools9p: provision: invalid id %s: %s\n", idstr, iderr);
 		return;
 	}
 
@@ -1299,6 +1330,9 @@ provisiontask(args: string)
 			}
 			seenpaths = 1;
 			pathsarg = tok[6:];
+		} else {
+			sys->fprint(stderr, "tools9p: provision: unknown attr %s\n", tok);
+			return;
 		}
 	}
 
@@ -1312,6 +1346,10 @@ provisiontask(args: string)
 		(nil, ttoks) := sys->tokenize(toolsarg, ",");
 		for(; ttoks != nil; ttoks = tl ttoks) {
 			tname := hd ttoks;
+			if(!validtooltoken(tname)) {
+				sys->fprint(stderr, "tools9p: provision: invalid tool name %s\n", tname);
+				return;
+			}
 			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname)) {
 				sys->fprint(stderr, "tools9p: provision: denied tool %s\n", tname);
 				continue;

@@ -160,6 +160,39 @@ testEditTool(t: ref T)
 	t.assert(hassubstr(doc, "replace"), "doc mentions replace");
 }
 
+testEditRejectsControlDelimiterPath(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/edit.dis";
+	if(tool == nil) {
+		t.skip("cannot load edit tool");
+		return;
+	}
+
+	result := tool->exec("/tmp/veltro/scratch/a=b old new");
+	t.assert(hassubstr(result, "error: invalid path") &&
+		hassubstr(result, "control delimiter"),
+		"edit rejects '=' in path before namespace/write checks");
+}
+
+testEditorRejectsControlDelimiterPath(t: ref T)
+{
+	tool := load Tool "/dis/veltro/tools/editor.dis";
+	if(tool == nil) {
+		t.skip("cannot load editor tool");
+		return;
+	}
+
+	result := tool->exec("name /tmp/veltro/scratch/a=b");
+	t.assert(hassubstr(result, "error: invalid path") &&
+		hassubstr(result, "control delimiter"),
+		"editor name rejects '=' in path before ctl write");
+
+	result = tool->exec("open /tmp/veltro/scratch/a=b");
+	t.assert(hassubstr(result, "error: invalid path") &&
+		hassubstr(result, "control delimiter"),
+		"editor open rejects '=' in path before stat/ctl write");
+}
+
 # Test that Exec tool loads and has correct name/doc
 testExecTool(t: ref T)
 {
@@ -378,6 +411,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SearchTool", testSearchTool);
 	run("WriteTool", testWriteTool);
 	run("EditTool", testEditTool);
+	run("EditRejectsControlDelimiterPath", testEditRejectsControlDelimiterPath);
+	run("EditorRejectsControlDelimiterPath", testEditorRejectsControlDelimiterPath);
 	run("ExecTool", testExecTool);
 	run("SpawnTool", testSpawnTool);
 

@@ -433,7 +433,7 @@ validatepath(path: string): string
 		return "path must be absolute";
 	for(i := 0; i < len path; i++)
 		if(path[i] == ' ' || path[i] == '\n' || path[i] == '\r' ||
-		   path[i] == '\t' || path[i] == ',')
+		   path[i] == '\t' || path[i] == ',' || path[i] == '=')
 			return "path contains control delimiter";
 	start := 1;
 	for(i = 1; i <= len path; i++) {

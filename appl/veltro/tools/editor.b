@@ -210,6 +210,9 @@ doopen(path: string): string
 	path = strip(path);
 	if(path == "")
 		return "error: usage: open <path>";
+	err := validatepath(path);
+	if(err != nil)
+		return "error: invalid path: " + err;
 	(ok, d) := sys->stat(path);
 	if(ok < 0)
 		return sys->sprint("error: path is outside the agent namespace: %s", path);
@@ -406,7 +409,7 @@ validatepath(path: string): string
 		return "path must be absolute";
 	for(i := 0; i < len path; i++)
 		if(path[i] == ' ' || path[i] == '\n' || path[i] == '\r' ||
-		   path[i] == '\t' || path[i] == ',')
+		   path[i] == '\t' || path[i] == ',' || path[i] == '=')
 			return "path contains control delimiter";
 	start := 1;
 	for(i = 1; i <= len path; i++) {

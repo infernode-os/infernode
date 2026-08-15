@@ -562,7 +562,8 @@ validateingestpath(path: string): string
 hascontrol(s: string): int
 {
 	for(i := 0; i < len s; i++)
-		if(s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] < ' ')
+		if(s[i] == ' ' || s[i] == '\n' || s[i] == '\r' ||
+		   s[i] == '\t' || s[i] == ',' || s[i] == '=' || s[i] < ' ')
 			return 1;
 	return 0;
 }

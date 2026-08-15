@@ -605,6 +605,14 @@ testWikiRejectsUnsafeIngestPath(t: ref T)
 	r = tool->exec("ingest /n/wikia/raw/doc\nlint");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"wiki ingest rejects control delimiters");
+
+	r = tool->exec("ingest /n/wikia/raw/doc=owned");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wiki ingest rejects key delimiter in paths");
+
+	r = tool->exec("ingest /n/wikia/raw/doc,owned");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
+		"wiki ingest rejects list delimiter in paths");
 }
 
 # ============================================================================

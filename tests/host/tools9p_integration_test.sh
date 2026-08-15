@@ -447,6 +447,17 @@ else
     fail "invalid child path provisioning probe failed"
 fi
 
+if emu_c "provision_bad_grammar_rejected" 14 \
+    "tools9p -b diff -p /tmp:rw read diff task & sleep 3; echo '22x tools=diff paths=/tmp:rw' > /tool/provision; echo '23 unexpected=1 paths=/tmp:rw' > /tool/provision; echo '24 tools=diff=owned paths=/tmp:rw' > /tool/provision; sleep 5; echo BADID; cat /mnt/toolctl.22/paths >[2] /dev/null; echo UNKNOWN; cat /mnt/toolctl.23/paths >[2] /dev/null; echo BADTOOL; cat /mnt/toolctl.24/paths >[2] /dev/null; echo DONE"; then
+    if echo "$OUTPUT" | grep -q "^/tmp rw"; then
+        fail "child provisioning accepted malformed id, unknown attr, or invalid tool token (output: $OUTPUT)"
+    else
+        pass "child provisioning rejects malformed id, unknown attrs, and invalid tool tokens"
+    fi
+else
+    fail "bad child provisioning grammar probe failed"
+fi
+
 if emu_c "bindpath_delimiter_rejected" 12 \
     "tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /tmp/evil,/tmp/forged' > /mnt/toolctl/ctl; echo 'bindpath /tmp/a paths=/tmp/forged' > /mnt/toolctl/ctl; echo 'bindpath /tmp/a=forged' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then

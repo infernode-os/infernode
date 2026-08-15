@@ -76,6 +76,9 @@ init(nil: ref Draw->Context, nil: list of string)
 	check("external ingest path", "ingest /tmp/secret", "under " + MNT + "/raw");
 	check("raw traversal", "ingest " + MNT + "/raw/../secret", "unsafe");
 	check("control-delimited path", "ingest " + MNT + "/raw/file\nlint", "control");
+	check("trailing ingest token", "ingest " + MNT + "/raw/file extra", "usage: ingest");
+	check("trailing lint token", "lint extra", "usage: lint");
+	check("trailing reset token", "reset extra", "usage: reset");
 
 	sys->print("WIKI9P-SECURITY PASS\n");
 }

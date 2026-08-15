@@ -794,10 +794,16 @@ handlectl(cmd: string): string
 		path := "";
 		if(argv != nil)
 			path = hd argv;
+		if(argv != nil && tl argv != nil)
+			return "error: usage: ingest [path]";
 		return doingest(path);
 	"lint" =>
+		if(argv != nil)
+			return "error: usage: lint";
 		return dolint();
 	"reset" =>
+		if(argv != nil)
+			return "error: usage: reset";
 		llmclose();
 		return "ok: session closed";
 	* =>

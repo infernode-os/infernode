@@ -1308,11 +1308,17 @@ handleslash(cmd: string): int
 		if(len cmdarg == 0) {
 			ack = "usage: /tools +name or /tools -name";
 		} else if(cmdarg[0] == '+') {
-			writefile(toolctlmount(toolmount) + "/ctl", "add " + cmdarg[1:]);
-			ack = "tool added: " + cmdarg[1:];
+			ctlcmd := "add " + cmdarg[1:];
+			if(writefile(toolctlmount(toolmount) + "/ctl", ctlcmd) != len array of byte ctlcmd)
+				ack = "tool add failed: " + cmdarg[1:];
+			else
+				ack = "tool added: " + cmdarg[1:];
 		} else if(cmdarg[0] == '-') {
-			writefile(toolctlmount(toolmount) + "/ctl", "remove " + cmdarg[1:]);
-			ack = "tool removed: " + cmdarg[1:];
+			ctlcmd := "remove " + cmdarg[1:];
+			if(writefile(toolctlmount(toolmount) + "/ctl", ctlcmd) != len array of byte ctlcmd)
+				ack = "tool remove failed: " + cmdarg[1:];
+			else
+				ack = "tool removed: " + cmdarg[1:];
 		} else {
 			ack = "usage: /tools +name or /tools -name";
 		}

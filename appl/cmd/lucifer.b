@@ -275,6 +275,10 @@ MOBILE_TITLEBARH: con MOBILE_TAPMIN;  # per-zone title bar = one tap target tall
 # nslistener process ID — killed and respawned on activity switch
 nslistenerpid := -1;
 
+# Hands-free voice mode active (input-mode "v") — tracked from global
+# events by globallistener; kbdproc uses it for the Esc escape hatch.
+voicemodeon := 0;
+
 # Zone channels
 convMouseCh: chan of ref Pointer;
 convKbdCh:   chan of int;
@@ -2186,6 +2190,11 @@ globallistener()
 				lucipres_g->deliverevent("activity new " + string newid);
 			alt { uievent <-= 1 => ; * => ; }
 		}
+		if(hasprefix(ev, "input-mode ")) {
+			# Voice-mode tracking for kbdproc's Esc escape hatch.
+			voicemodeon = strip(ev[len "input-mode ":]) == "v";
+			convEvCh <-= ev;
+		}
 		if(hasprefix(ev, "applaunch ")) {
 			# "applaunch <activityid> <artifactid>"
 			# Launch the app in the EXACT activity that created it,
@@ -2568,6 +2577,14 @@ kbdproc()
 			case escstate {
 			0 =>
 				if(c == 27) {
+					# Esc is the unconditional voice-mode escape
+					# hatch: return to keyboard input immediately,
+					# even while speech helpers are active. voicemode
+					# sees the input-mode broadcast and cancels TTS.
+					if(voicemodeon) {
+						writefile(mountpt + "/input-mode", "k");
+						continue;
+					}
 					escstate = 1;
 					continue;
 				}
@@ -2576,6 +2593,10 @@ kbdproc()
 				if(c == '[') {
 					escstate = 2;
 					escarg = 0;
+					continue;
+				}
+				if(!voicemodeon && (c == 'v' || c == 'V')) {
+					writefile(mountpt + "/input-mode", "v");
 					continue;
 				}
 				# Bare ESC+char: deliver char as-is (fall through to route)

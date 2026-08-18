@@ -1,0 +1,54 @@
+# speech-engine — topology 2 engine role: import the terminal's /dev,
+# run speechshim9p against its audio, and export the provider contract.
+#
+# Usage:
+#   sh /lib/voice/speech-engine tcp!terminal!17010 [provider-port] [terminal-mount] [provider-mount]
+
+load std
+
+terminal=$1
+providerport=$2
+termmnt=$3
+provider=$4
+if {~ $#terminal 0} {
+	echo 'usage: voice/speech-engine terminal-audio-addr [provider-port] [terminal-mount] [provider-mount]' >[1=2]
+	exit usage
+}
+if {~ $#providerport 0} {
+	providerport=17019
+}
+if {~ $#termmnt 0} {
+	termmnt=/n/term
+}
+if {~ $#provider 0} {
+	provider=/n/speechengine
+}
+
+mkdir -p $termmnt
+if {! mount -A $terminal $termmnt} {
+	echo 'voice/speech-engine: terminal audio mount failed:' $terminal >[1=2]
+	exit mount
+}
+
+mkdir -p $provider
+speechshim9p -m $provider &
+shim_pid=$apid
+sleep 1
+if {! ftest -e $provider/ctl} {
+	echo 'voice/speech-engine: speechshim9p did not mount at' $provider >[1=2]
+	if {ftest -e /prog/$shim_pid} {
+		echo kill >/prog/$shim_pid/ctl
+	}
+	exit shim
+}
+
+echo 'audiodev '$termmnt'/audio' > $provider/ctl
+echo 'capturedev default' > $provider/ctl
+echo 'micmode device' > $provider/ctl
+echo 'duplex half' > $provider/ctl
+
+addr='tcp!*!'$providerport
+echo 'voice/speech-engine:' $addr 'exporting' $provider
+listen -A $addr {
+	export $provider
+}

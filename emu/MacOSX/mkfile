@@ -53,6 +53,8 @@ SYSLIBS= \
 	-lpthread\
 	-framework CoreFoundation\
 	-framework IOKit\
+	-framework CoreAudio\
+	-framework AudioToolbox\
 
 default:V:	$O.$CONF
 

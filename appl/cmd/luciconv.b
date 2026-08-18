@@ -111,6 +111,8 @@ msgstore: array of ref ConvMsg;
 nmsg := 0;
 inputbuf: string;
 inputpos := 0;		# cursor position within inputbuf
+draftbuf: string;		# replaceable STT hypothesis; never submitted
+draftstatusbuf: string;	# listening/countdown state shown with the hypothesis
 scrollpx := 0;
 maxscrollpx := 0;
 viewport_h := 400;
@@ -118,12 +120,7 @@ lastrendw := 0;
 username := "human";
 agentname := "";		# agent display name from /lib/veltro/agent-name (branding)
 
-# Voice input state
-VOICE_IDLE: con 0;
-VOICE_REC: con 1;
-voicestate := VOICE_IDLE;
-voicech: chan of string;
-micrect: Rect;  # Hit area for mic button
+micrect: Rect;  # Hit area for the voice-mode toggle button
 inputrect: Rect;  # Hit area for input field
 
 # Tile layout (populated by drawconversation, used for click hit-testing)
@@ -211,6 +208,8 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 
 	inputbuf = "";
 	inputpos = 0;
+	draftbuf = "";
+	draftstatusbuf = "";
 	username = readdevuser();
 	# Agent display name (branding); empty => fall back to the raw role string.
 	an := readfile("/lib/veltro/agent-name");
@@ -219,12 +218,13 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			an = an[:len an-1];
 		agentname = an;
 	}
-	voicech = chan of string;
 	msgstore = array[32] of ref ConvMsg;
 	nmsg = 0;
 
-	if(actid >= 0)
+	if(actid >= 0) {
 		loadmessages();
+		loaddraft();
+	}
 
 	redrawconv();
 
@@ -248,10 +248,11 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		}
 		# Button-1 just pressed
 		if(p.buttons == 1 && wasdown == 0) {
+			locked := voiceactive();
 			# Mobile soft keyboard: raise it only when the input field
 			# is tapped; hide it on any other tap in the chat zone.
 			if(mobile) {
-				if(inputrect.dx() > 0 && inputrect.contains(p.xy)) {
+				if(!locked && inputrect.dx() > 0 && inputrect.contains(p.xy)) {
 					# INFR-166: tell SDL the actual focused
 					# widget rect (in window points) so it
 					# slides this widget — not a hard-coded
@@ -274,16 +275,16 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# pressing Return on desktop: submit inputbuf if
 			# non-empty, then clear it.
 			if(mobile && sendrect.dx() > 0 && sendrect.contains(p.xy)) {
-				if(len inputbuf > 0) {
+				if(!locked && len inputbuf > 0) {
 					sendinput(inputbuf);
 					inputbuf = "";
 					inputpos = 0;
 				}
 				redrawconv();
 			} else
-			# Check mic button first
+			# Check the voice-mode toggle button first
 			if(micrect.dx() > 0 && micrect.contains(p.xy)) {
-				startvoice();
+				togglevoice();
 				redrawconv();
 			} else {
 				# Check for dialogue button clicks first
@@ -310,7 +311,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		}
 		# Button-3 press: context menu
 		if((p.buttons & 4) != 0 && (wasdown & 4) == 0) {
-			if(inputrect.dx() > 0 && inputrect.contains(p.xy)) {
+			if(!voiceactive() && inputrect.dx() > 0 && inputrect.contains(p.xy)) {
 				# Input field context menu
 				if(menumod != nil) {
 					items := array[] of {"Copy", "Paste"};
@@ -349,10 +350,15 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			prevbuttons = 0;
 		}
 	k := <-kbd =>
+		if(voiceactive() && k != 0 && k != 16rF00E && k != 16rF00F) {
+			# Voice owns the pending turn. Preserve the typed compose
+			# verbatim until the user exits voice mode.
+			redrawconv();
+		} else {
 		case k {
 		0 =>
-			# Ctrl+Space — toggle voice input
-			startvoice();
+			# Ctrl+Space — toggle voice mode (same as Esc-V / Voice chip)
+			togglevoice();
 		1 =>
 			# Ctrl-A — beginning of line
 			inputpos = 0;
@@ -441,16 +447,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			}
 		}
 		redrawconv();
-	vtext := <-voicech =>
-		# Voice transcription result received
-		voicestate = VOICE_IDLE;
-		if(vtext != nil && vtext != "" && !hasprefix(vtext, "error:")) {
-			inputbuf = vtext;
-			sendinput(inputbuf);
-			inputbuf = "";
-			inputpos = 0;
 		}
-		redrawconv();
 	ev := <-evch =>
 		handleevent(ev);
 		redrawconv();
@@ -479,9 +476,24 @@ handleevent(ev: string)
 	if(hasprefix(ev, "switchactivity ")) {
 		newid := strtoint(ev[len "switchactivity ":]);
 		if(newid >= 0) {
+			# A draft belongs only to the active listening context. Clear
+			# the old activity without touching the user's typed compose.
+			writedraft("");
+			writedraftstatus("");
 			actid_g = newid;
+			draftbuf = "";
+			draftstatusbuf = "";
 			loadmessages();
+			loaddraft();
 		}
+	} else if(hasprefix(ev, "input-mode ")) {
+		if(strip(ev[len "input-mode ":]) == "v") {
+			reqkbd(0);
+			if(softkbd != nil)
+				softkbd->clear_rect();
+		}
+	} else if(ev == "conversation draft") {
+		loaddraft();
 	} else if(hasprefix(ev, "conversation update ")) {
 		idx := strtoint(ev[len "conversation update ":]);
 		if(idx >= 0)
@@ -563,7 +575,11 @@ drawconversation(zone: Rect)
 	inputr := Rect((zone.min.x + pad, zone.max.y - inputh),
 		(zone.max.x - pad, zone.max.y));
 	inputrect = inputr;
-	mainwin.draw(inputr, inputcol, nil, (0, 0));
+	locked := voiceactive();
+	inputfill := inputcol;
+	if(locked)
+		inputfill = bordercol;
+	mainwin.draw(inputr, inputfill, nil, (0, 0));
 
 	# Send button — mobile only. Sits between the input area and
 	# the mic button. Tapping it submits the current inputbuf, same
@@ -578,9 +594,15 @@ drawconversation(zone: Rect)
 		sendx := inputr.max.x - sendw;
 		sendy := inputr.min.y;
 		sendrect = Rect((sendx, sendy), (inputr.max.x, inputr.max.y));
-		mainwin.draw(sendrect, accentcol, nil, (0, 0));
+		sendfill := accentcol;
+		sendcol := bgcol;
+		if(locked) {
+			sendfill = bordercol;
+			sendcol = dimcol;
+		}
+		mainwin.draw(sendrect, sendfill, nil, (0, 0));
 		sty := sendy + (inputh - mainfont.height) / 2;
-		mainwin.text((sendx + pad, sty), bgcol, (0, 0), mainfont, "Send");
+		mainwin.text((sendx + pad, sty), sendcol, (0, 0), mainfont, "Send");
 	}
 
 	# Mic button at right edge of input (or left of Send on mobile).
@@ -589,16 +611,14 @@ drawconversation(zone: Rect)
 	# what's tappable instead of guessing. REC state inverts to the
 	# accent fill so a recording session reads as the active action,
 	# matching how Send is drawn.
-	miclabel: string;
+	miclabel := "voice";
 	micfill: ref Image;
 	miccol: ref Image;
-	case voicestate {
-	VOICE_REC =>
-		miclabel = "REC";
+	if(locked) {
+		# Voice mode on: inverted accent fill, same treatment as REC/Send.
 		micfill = accentcol;
 		miccol  = bgcol;
-	* =>
-		miclabel = "mic";
+	} else {
 		micfill = bordercol;	# muted chrome — clearly a button, not the primary action
 		miccol  = textcol;
 	}
@@ -625,44 +645,61 @@ drawconversation(zone: Rect)
 	maxitw := inputr.dx() - 2 * pad - 8 - micw - sendw;
 	cw := 8;
 
-	# Clamp inputpos
+	# Clamp the real keyboard compose cursor. Voice mode leaves the typed
+	# compose visible but locks and dims it while the pending turn is shown
+	# in the conversation above.
 	if(inputpos < 0)
 		inputpos = 0;
 	if(inputpos > len inputbuf)
 		inputpos = len inputbuf;
 
-	# Find a visible window of inputbuf that keeps the cursor in view.
+	displaytext := inputbuf;
+	displaypos := inputpos;
+	displaycol := textcol;
+	showcursor := 1;
+	if(locked) {
+		displaycol = dimcol;
+		showcursor = 0;
+	}
+
+	# Find a visible window that keeps the compose cursor in view.
 	# Start by including the cursor position, then expand left/right.
-	vstart := inputpos;
-	vend := inputpos;
+	vstart := displaypos;
+	vend := displaypos;
 
 	# Expand right first
-	while(vend < len inputbuf && mainfont.width(inputbuf[vstart:vend+1]) + cw <= maxitw)
+	while(vend < len displaytext && mainfont.width(displaytext[vstart:vend+1]) + cw <= maxitw)
 		vend++;
 	# Expand left
-	while(vstart > 0 && mainfont.width(inputbuf[vstart-1:vend]) + cw <= maxitw)
+	while(vstart > 0 && mainfont.width(displaytext[vstart-1:vend]) + cw <= maxitw)
 		vstart--;
 
-	itext := inputbuf[vstart:vend];
-	mainwin.text((itx, ity), textcol, (0, 0), mainfont, itext);
+	itext := displaytext[vstart:vend];
+	mainwin.text((itx, ity), displaycol, (0, 0), mainfont, itext);
 
 	# Block cursor at cursor position within visible text
-	pre := inputbuf[vstart:inputpos];
-	ch := mainfont.height;
-	cx := itx + mainfont.width(pre);
-	cy := ity;
-	mainwin.draw(Rect((cx, cy), (cx + cw, cy + ch)), cursorcol, nil, (0, 0));
+	if(showcursor) {
+		pre := displaytext[vstart:displaypos];
+		ch := mainfont.height;
+		cx := itx + mainfont.width(pre);
+		cy := ity;
+		mainwin.draw(Rect((cx, cy), (cx + cw, cy + ch)), cursorcol, nil, (0, 0));
+	}
 
-	if(nmsg == 0) {
+	hasdraft := draftbuf != nil && draftbuf != "";
+	drawn := nmsg;
+	if(hasdraft)
+		drawn++;
+	if(drawn == 0) {
 		drawcentertext(Rect((zone.min.x, zone.min.y), (zone.max.x, msgy)),
 			"No messages yet");
 		return;
 	}
 
 	# Reset tile layout
-	tilelayout = array[nmsg + 1] of ref TileRect;
+	tilelayout = array[drawn + 1] of ref TileRect;
 	ntiles = 0;
-	dlgbuttons = array[nmsg * 4] of ref DlgButton;  # up to 4 buttons per dialogue
+	dlgbuttons = array[drawn * 4] of ref DlgButton;  # up to 4 buttons per dialogue
 	ndlgbuttons = 0;
 
 	tilegap := 4;
@@ -677,12 +714,30 @@ drawconversation(zone: Rect)
 		lastrendw = tilew;
 	}
 
-	marr := msgstore;
+	marr := array[drawn] of ref ConvMsg;
+	for(mi := 0; mi < nmsg; mi++)
+		marr[mi] = msgstore[mi];
+	if(hasdraft)
+		marr[nmsg] = ref ConvMsg("human", draftbuf, "", nil,
+			"voice-draft", draftstatusbuf, "", "");
 
 	# Pass 1: estimate heights
-	harr := array[nmsg] of int;
+	harr := array[drawn] of int;
 	total_h := 0;
-	for(pi := 0; pi < nmsg; pi++) {
+	for(pi := 0; pi < drawn; pi++) {
+		if(marr[pi].dtype == "voice-draft") {
+			t := strip(marr[pi].text);
+			ls := wraptext(t, tilew - 8);
+			n := 0;
+			for(wl := ls; wl != nil; wl = tl wl)
+				n++;
+			h := mainfont.height + n * mainfont.height + 2 * tpadv;
+			if(marr[pi].title != "")
+				h += mainfont.height;
+			harr[pi] = h;
+			total_h += h + tilegap;
+			continue;
+		}
 		# Dialogue tiles have their own height calculation
 		if(marr[pi].dtype == "dialogue" || marr[pi].dtype == "form") {
 			DLGPAD := 8;
@@ -750,7 +805,7 @@ drawconversation(zone: Rect)
 	# Pass 2: render visible messages
 	codebg := codebgcol_g;
 	ey := msgy + scrollpx;
-	for(ri := nmsg - 1; ri >= 0; ri--) {
+	for(ri := drawn - 1; ri >= 0; ri--) {
 		if(harr[ri] == 0)
 			continue;
 		tiletop_e := ey - harr[ri] - tilegap;
@@ -782,7 +837,7 @@ drawconversation(zone: Rect)
 
 	# Draw messages bottom-up
 	y := msgy + scrollpx;
-	for(i := nmsg - 1; i >= 0; i--) {
+	for(i := drawn - 1; i >= 0; i--) {
 		tileh := harr[i];
 		if(tileh == 0)
 			continue;
@@ -797,12 +852,16 @@ drawconversation(zone: Rect)
 
 		msg := marr[i];
 		isdialogue := msg.dtype == "dialogue" || msg.dtype == "form";
+		pending := msg.dtype == "voice-draft";
 		human := msg.role == "human" && !isdialogue;
 		errrole := msg.role == "error" && !isdialogue;
 		tilecol: ref Image;
 		rolecol: ref Image;
 		if(isdialogue) {
 			tilecol = veltrocol;
+			rolecol = accentcol;
+		} else if(pending) {
+			tilecol = inputcol;
 			rolecol = accentcol;
 		} else if(human) {
 			tilecol = humancol;
@@ -822,6 +881,16 @@ drawconversation(zone: Rect)
 		if(drawtop < drawbot) {
 			tiler := Rect((tilex, drawtop), (tilex + tilew, drawbot));
 			mainwin.draw(tiler, tilecol, nil, (0, 0));
+			if(pending) {
+				mainwin.draw(Rect((tiler.min.x, tiler.min.y),
+					(tiler.max.x, tiler.min.y + 1)), accentcol, nil, (0, 0));
+				mainwin.draw(Rect((tiler.min.x, tiler.max.y - 1),
+					(tiler.max.x, tiler.max.y)), accentcol, nil, (0, 0));
+				mainwin.draw(Rect((tiler.min.x, tiler.min.y),
+					(tiler.min.x + 1, tiler.max.y)), accentcol, nil, (0, 0));
+				mainwin.draw(Rect((tiler.max.x - 1, tiler.min.y),
+					(tiler.max.x, tiler.max.y)), accentcol, nil, (0, 0));
+			}
 		}
 		if(ntiles < len tilelayout)
 			tilelayout[ntiles++] = ref TileRect(
@@ -922,7 +991,9 @@ drawconversation(zone: Rect)
 
 		ty := tiletop + tpadv;
 		rolelabel := msg.role;
-		if(human)
+		if(pending)
+			rolelabel = username + " - not sent";
+		else if(human)
 			rolelabel = username;
 		else if(!errrole && agentname != "")
 			rolelabel = agentname;
@@ -942,6 +1013,13 @@ drawconversation(zone: Rect)
 				if(ty + mainfont.height > zone.min.y) {
 					lx := tilex + tilew - mainfont.width(hd ll);
 					mainwin.text((lx, ty), textcol, (0, 0), mainfont, hd ll);
+				}
+				ty += mainfont.height;
+			}
+			if(pending && msg.title != "") {
+				if(ty < msgy && ty + mainfont.height > zone.min.y) {
+					lx := tilex + tilew - mainfont.width(msg.title);
+					mainwin.text((lx, ty), accentcol, (0, 0), mainfont, msg.title);
 				}
 				ty += mainfont.height;
 			}
@@ -1162,87 +1240,79 @@ sendinput(text: string)
 	sys->write(fd, b, len b);
 }
 
+loaddraft()
+{
+	if(actid_g < 0) {
+		draftbuf = "";
+		draftstatusbuf = "";
+		return;
+	}
+	path := sys->sprint("%s/activity/%d/conversation/draft", mountpt_g, actid_g);
+	draftbuf = strip(readfile(path));
+	path = sys->sprint("%s/activity/%d/conversation/draft-status", mountpt_g, actid_g);
+	draftstatusbuf = strip(readfile(path));
+}
+
+writedraft(text: string)
+{
+	if(actid_g < 0)
+		return;
+	path := sys->sprint("%s/activity/%d/conversation/draft", mountpt_g, actid_g);
+	fd := sys->open(path, Sys->OWRITE | Sys->OTRUNC);
+	if(fd == nil)
+		return;
+	b := array of byte text;
+	sys->write(fd, b, len b);
+}
+
+writedraftstatus(text: string)
+{
+	if(actid_g < 0)
+		return;
+	path := sys->sprint("%s/activity/%d/conversation/draft-status", mountpt_g, actid_g);
+	fd := sys->open(path, Sys->OWRITE | Sys->OTRUNC);
+	if(fd == nil)
+		return;
+	b := array of byte text;
+	sys->write(fd, b, len b);
+}
+
 # --- Voice input ---
+# The compose-row voice button toggles the SAME voice mode as Esc-V and
+# lucictx's Voice chip: /mnt/ui/input-mode flips between "v" and "k", and
+# the resident voicemode daemon owns the microphone, wake gating, drafts,
+# and transcript submission. luciconv keeps no speech state of its own —
+# the old press-to-dictate flow (a one-shot /n/speech/hear read pasted
+# into the compose box) duplicated voice mode through a second, subtly
+# different microphone pathway and is gone.
 
-startvoice()
+voiceactive(): int
 {
-	if(voicestate != VOICE_IDLE)
-		return;
-	# Check if speech9p is mounted
-	(ok, nil) := sys->stat("/n/speech/hear");
-	if(ok < 0) {
-		sys->fprint(stderr, "luciconv: /n/speech not mounted\n");
-		return;
-	}
-	voicestate = VOICE_REC;
-	spawn voiceworker(voicech);
+	return strip(readfile(mountpt_g + "/input-mode")) == "v";
 }
 
-VOICE_TIMEOUT_MS: con 30000;
-
-VoiceFD: adt {
-	fd: ref Sys->FD;
-};
-
-voiceworker(ch: chan of string)
+togglevoice()
 {
-	fd := sys->open("/n/speech/hear", Sys->ORDWR);
-	if(fd == nil) {
-		ch <-= "error: cannot open /n/speech/hear";
-		return;
-	}
-
-	# Write start command to begin recording
-	cmd := array of byte "start 5000";
-	if(sys->write(fd, cmd, len cmd) < 0) {
-		ch <-= "error: write to hear failed";
-		return;
-	}
-
-	# Read transcription result with timeout.
-	# Use a shared VoiceFD ref so timeout can nil the fd,
-	# preventing voiceread from looping after timeout.
-	# NOTE: if voiceread is blocked inside sys->read when timeout
-	# fires, it will remain blocked until the underlying kernel FD
-	# is closed or the read returns.  This is a known limitation
-	# of Limbo's FD model -- there is no sys->close().
-	sys->seek(fd, big 0, Sys->SEEKSTART);
-	vfd := ref VoiceFD(fd);
-	resultch := chan of string;
-	spawn voiceread(vfd, resultch);
-
-	timeoutch := chan of int;
-	spawn voicetimeout(timeoutch, VOICE_TIMEOUT_MS);
-
-	alt {
-		result := <-resultch =>
-			ch <-= result;
-		<-timeoutch =>
-			vfd.fd = nil;
-			ch <-= "error: voice recognition timed out";
+	path := mountpt_g + "/input-mode";
+	ctl := sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g);
+	if(voiceactive()) {
+		writestring(path, "k");
+		writestring(ctl, "resource upsert path=/n/speech label=Voice "
+			+ "type=audio status=idle via=voice-mode");
+	} else {
+		writestring(path, "v");
+		writestring(ctl, "resource upsert path=/n/speech label=Voice "
+			+ "type=audio status=starting via=voice-mode");
 	}
 }
 
-voiceread(vfd: ref VoiceFD, ch: chan of string)
+writestring(path, text: string)
 {
-	result := "";
-	buf := array[8192] of byte;
-	for(;;) {
-		fd := vfd.fd;
-		if(fd == nil)
-			break;
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-	}
-	ch <-= result;
-}
-
-voicetimeout(ch: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	ch <-= 1;
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte text;
+	sys->write(fd, b, len b);
 }
 
 # --- Word wrapping ---

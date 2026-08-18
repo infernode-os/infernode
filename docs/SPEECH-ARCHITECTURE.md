@@ -54,11 +54,13 @@ flowchart LR
 | Component                       | Source                              | Role |
 |---------------------------------|-------------------------------------|------|
 | `speech9p`                      | `appl/veltro/speech9p.b`            | The 9P server. Routes ctl/say/hear/voices to engine backends. |
-| `module/speech.m`               | `module/speech.m`                   | Abstract `TTSEngine`/`STTEngine` interface (currently descriptive — speech9p in-lines its three backends rather than loading separate engine modules). |
+| `module/speech.m`               | `module/speech.m`                   | Batch result types plus the loadable `SpeechEngine` `.dis` module contract. Legacy `TTSEngine`/`STTEngine` ADTs remain for source compatibility. |
+| Provider engine module          | `appl/veltro/speechprovider.b`      | Production `SpeechEngine` implementation that delegates TTS/STT/voices to a namespace provider. |
 | `say` tool                      | `appl/veltro/tools/say.b`           | Veltro tool that opens `/n/speech/say` and writes text. |
 | `hear` tool                     | `appl/veltro/tools/hear.b`          | Veltro tool that writes `start <ms>` to `/n/speech/hear` and reads the transcription back. |
-| `lucibridge` auto-speak         | `appl/cmd/lucibridge.b:speaktext`   | GUI-side path: opens `/n/speech/say` itself when `/voice on` is active. Bypasses the agent tool. |
+| `lucibridge` voice output       | `appl/cmd/lucibridge.b`             | GUI-side path: completion-aware FIFO TTS, sentence-boundary streaming, cancellation, and speech timing. Bypasses the agent tool. |
 | `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:992` | Auto-grants `/n/speech` to agents that have `say` or `hear` registered. |
+| `parakeet-stream` adapter       | `tools/parakeet_stream.cpp`         | Host-side realtime STT helper: stdin s16le PCM → cache-aware streaming Parakeet EOU model → `partial` / `final confidence=…` records. Built by the installer against an upstream clone of [parakeet.cpp](https://github.com/mudler/parakeet.cpp); the **default STT** when it can be built (whisper wrapper is the fallback). See §3.3. |
 
 ## 2. Filesystem
 
@@ -107,7 +109,8 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 
 | Key            | Values                                          | Notes |
 |----------------|-------------------------------------------------|-------|
-| `engine`       | `cmd` · `api` · `local`                          | `cmd` is the default. `local` is **only** reachable via this verb or auto-detection (the CLI flag rejects it). |
+| `engine`       | `cmd` · `api` · `local` · `kokoro` · `module`     | `cmd` is the default. `module` selects the previously loaded `.dis` engine. |
+| `module`       | path to a `SpeechEngine` `.dis` module             | Loads, configures, and selects a module atomically; failures leave the previous engine active. `-E path` performs the same selection at startup. |
 | `voice`        | engine-specific                                  | API engine silently rewrites `""`, `default`, or `samantha` to `alloy`. |
 | `lang`         | language code, e.g. `en`                         | Cosmetic for `cmd`; passed through to `api`. |
 | `rate`         | 8000–48000                                       | Sample rate (Hz) for `/dev/audio` playback. |
@@ -119,8 +122,103 @@ write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 | `apikey`       | bearer token                                     | `api` engine. **Stored in process memory in clear.** |
 | `piperbin` / `pipermodel`     | binary path / `.onnx` voice model | `local` engine. |
 | `whisperbin` / `whispermodel` | binary path / `.bin` GGML model    | `local` engine. |
+| `ttsengine` | `engine` or `piper` | Selects whether `/n/speech/say` uses the configured speech9p TTS engine or delegates to the provider's `say` file. |
+| `provider` | provider mount root | The speech provider mount behind `listen`, `wake`, kokoro-engine `say`, and `cancel` (see the provider contract below). Default `/n/parakeet`; boot points it at `/n/speechshim`. |
+| `listenengine` | `whisper` or `parakeet` | Compatibility alias; both values consume the provider mount. |
+| `whisperstreambin` / `wakebin` / `kokorobin` / `wakeword` / `wakethreshold` | helper commands and wake tuning | Stored for introspection and forwarded to the provider's `ctl`; `speechshim9p` consumes them. `speech9p` itself runs no helpers. |
+| `audiodev` / `capturedev` / `micmode` / `capturerate` | audio routing (see SPEECH-REMOTE-AUDIO.md) | Forwarded to the provider's `ctl` unchanged. In `speechshim9p`: `audiodev` is the playback (and default capture) device path; `capturedev` overrides capture (`default` clears it); `micmode helper\|device` chooses whether the helper CLI grabs the host mic or the shim pumps PCM from the capture device into helper stdin; `capturerate` is the pump sample rate. |
+| `duplex` | `full` or `half` | Forwarded to the provider's `ctl`. In `speechshim9p`, `half` suppresses wake/capture delivery while playback or chimes are active. |
+| `mic` | `on` or `off` | Forwarded to the provider's `ctl`. In `speechshim9p`, `off` kills the mic-side helpers (and the capture pump's device fd) and fails pending `listen`/`wake` reads with `error: mic off` instead of restarting them; the next read re-arms the microphone. `voicemode` writes `mic off` on voice-mode exit, so the mic is only open during a voice session. |
+| `listen` | `on` or `off` | Forwarded to the provider's `ctl`. In `speechshim9p`, `off` kills only the STT helper and fails a pending `listen` read with `error: listen off` instead of restarting it; wake stays armed, and the next `listen` read restarts STT. `voicemode` writes `listen off` at the end of every voice turn (final, error, or timeout), so speech between turns — ambient talk, the assistant's own TTS — cannot queue as stale records that replay into the next turn. |
+| `parakeetmount` / `parakeetlisten` / `pipersay` | provider root, STT stream file, and TTS say file | Compatibility aliases for `provider` and its derived `listen`/`say` paths. |
 
-## 3. The three engines
+`/n/speech/listen` is the stable Infernode-facing interface.
+
+## The speech provider contract
+
+All streaming voice I/O behind `/n/speech` comes from a single **provider
+mount** — a 9P namespace serving this contract:
+
+| Path | Contract |
+|------|----------|
+| `<provider>/listen` | continuous newline-delimited `partial ...` / `final ...` / `error: ...` records; the provider owns the persistent microphone/STT process |
+| `<provider>/wake`   | read blocks until the wake-word engine fires, then returns one event line (model, score) |
+| `<provider>/say`    | write text to synthesize and play; read the last TTS status |
+| `<provider>/cancel` | write to hard-cancel active TTS |
+| `<provider>/chime`  | optional write-only local earcons: `wake`, `done`, `on`, `off` |
+| `<provider>/ctl`    | optional provider configuration (helper paths, wake word, voice, ...) |
+| `<provider>/voices` | optional voice list |
+
+`speech9p` selects the provider with `echo 'provider /n/x' > /n/speech/ctl`
+(`parakeetmount` remains as an alias) and consumes only these files — it runs
+no helper binaries itself. Streaming reads ignore the fid offset (a consumer
+holds one fd across many reads), and helper-configuration keys written to
+`/n/speech/ctl` are forwarded to the provider's `ctl`.
+
+InferNode boots voice mode in half-duplex by writing `duplex half` after the
+default `/n/speechshim` provider is selected. During playback and earcons, the
+shim keeps device capture drained but suppresses delivery to STT/wake helpers;
+in helper-microphone mode it discards wake events that arrive while playback is
+active. This prevents TTS echo from re-triggering voice mode at the cost of
+spoken barge-in during assistant speech. Esc barge-in still works, and headset
+or echo-controlled setups can restore spoken barge-in with `duplex full`.
+
+Providers implementing the contract today:
+
+| Provider | Backing | Lifecycle |
+|----------|---------|-----------|
+| `speechshim9p` (in-tree, default at `/n/speechshim`) | external helper CLIs — whisper.cpp stream for `listen`, openWakeWord wrapper for `wake`, Kokoro for `say` — driven through `#C`/devcmd | The shim owns the helper processes: streaming helpers are started on first read and restarted transparently when a one-shot helper exits; `cancel` kills the synthesizing process via devcmd `kill`, bounding barge-in silence by one audio chunk. |
+| parakeet export (e.g. `/n/parakeet`) | parakeet-cli `--mic --stream` process exported over 9P | The mounted service owns the live microphone process; `speech9p` keeps the listen file open across reads so the stream remains continuous. |
+| remote provider (Phase 2) | any of the above mounted over the network | Same contract; namespace composition does the remoting (see SPEECH-REMOTE-AUDIO.md). |
+
+The real-helper setup path is `tools/install-speech-helpers.sh`. It prepares
+the Kokoro, whisper.cpp, and openWakeWord wrapper commands consumed by
+`speechshim9p`, prints the `/n/speech/ctl` block, and leaves microphone access
+to the interactive Inferno session. See `docs/SPEECH-VOICE-ONLY-PHASE1.md` for
+the setup walkthrough and the repo-owned `micmode device` stdin-PCM adapter.
+
+Parakeet is not a separate speech architecture.  It is the first Phase 1
+provider that needs the mounted-service shape because its useful mode is a
+long-lived microphone stream, for example:
+
+```
+cd <parakeet-checkout>
+<build-dir>/examples/cli/parakeet-cli transcribe \
+    --model models/parakeet_realtime_eou_120m-v1-f16.gguf \
+    --mic --stream --lines
+```
+
+The mounted service exports that process through a 9P namespace, normally:
+
+| Path | Contract |
+|------|----------|
+| `/n/parakeet/listen` | continuous newline-delimited `partial ...`, `final ...`, status, and TTS records from the live microphone stream |
+| `/n/parakeet/say` | write text to synthesize and play with Piper; read the last TTS status |
+| `/n/parakeet/cancel` | optional write-only cancellation hook; `speech9p` writes `cancel` when `/n/speech/cancel` is written |
+
+Infernode wiring is then only:
+
+```
+echo 'listenengine parakeet' > /n/speech/ctl
+echo 'ttsengine piper' > /n/speech/ctl
+echo 'parakeetmount /n/parakeet' > /n/speech/ctl
+```
+
+`speech9p` keeps `/n/parakeet/listen` open across reads so it consumes one
+mounted stream rather than starting bounded transcription requests.  When
+`ttsengine piper` is set, `/n/speech/say` delegates to the configured
+`pipersay` file, normally `/n/parakeet/say`, so the voice-only path uses
+Parakeet STT and Piper TTS from the same mounted process instead of relying on
+platform TTS such as macOS `say`. `voicemode` submits only `final ...` records to Lucia; partial records
+are available for debug or future live UI work but are not submitted as turns in
+Phase 1.
+
+A Whisper provider could be mounted behind the same stream-file contract later.
+Phase 1 keeps the existing Whisper command path because it is already the
+default helper mechanism and does not require the Parakeet-specific
+`--mic --stream` process lifecycle.
+
+## 3. Engine backends
 
 ```mermaid
 flowchart TB
@@ -157,8 +255,32 @@ while the API and local paths require a working audio device.
 | `cmd`  | `say`/`espeak-ng`/PowerShell via `#C`                    | `ffmpeg` (macOS) / `arecord` (Linux) → temp WAV → `whisper-cli` |
 | `api`  | POST to `/audio/speech` → PCM → `playpcm`               | record via `recordaudio` → POST to `/audio/transcriptions` (multipart) |
 | `local` | `piper --output-raw` (text on stdin) → PCM → `playpcm` | `ffmpeg`/`arecord` → temp WAV → `whisper-cli` |
+| `kokoro` | provider `say` file | provider streaming `listen` file |
+| `module` | loaded module returns PCM, or completes playback itself | captured PCM passed to the loaded module |
 
-### 3.1 Engine selection
+### 3.1 Loadable `.dis` engines
+
+`SpeechEngine` in `module/speech.m` is the runtime module ABI: `init`, `name`,
+`caps`, `configure`, `voices`, `synthesize`, and `recognize`. A module advertises
+`CAPTTS`, `CAPSTT`, or both. Configuration is re-applied when voice, language,
+format, or provider settings change.
+
+```sh
+echo 'provider /n/remotespeech' > /n/speech/ctl
+echo 'module /dis/veltro/speechprovider.dis' > /n/speech/ctl
+cat /n/speech/voices
+```
+
+The in-tree provider module is deliberately file-oriented: it delegates through
+the provider's `say`, `listen`, and `voices` files. Future in-process model
+modules can return PCM directly without changing `speech9p`.
+
+`voicemode` accepts confidence metadata on `partial` and `final` listen
+records. Records below its confirmation threshold are held behind a visual and
+spoken confirmation instead of being submitted as a user turn. The default is
+650 permille; `voicemode -q confidence-permille` selects another value.
+
+### 3.2 Engine selection
 
 ```mermaid
 flowchart TD
@@ -188,6 +310,47 @@ The CLI parser rejecting `-e local` (`speech9p.b:147–155`) is a clear bug —
 `usage()`, `applyconfig`, and `readconfig` all know about the engine. Until
 fixed, set `local` via `echo 'engine local' > /n/speech/ctl` after launch,
 or rely on the Linux auto-promotion in `initplatform`.
+
+**Boot-time selection is owned by the installer.** `tools/install-speech-helpers.sh`
+writes its chosen stack — one Inferno-sh ctl line per row — to
+`~/.local/share/infernode-speech/speech.ctl.sh`, and `lib/lucifer/boot.sh`
+replays that file verbatim when it exists. The file always includes
+`engine kokoro`, so an installed system speaks with Kokoro rather than the
+`engine cmd` default (the robotic host `say`). Without the file, boot falls
+back to hardcoded ctl lines for a legacy helper install (now also including
+`engine kokoro`), and with no helpers at all speech9p keeps `engine cmd`.
+
+### 3.3 Parakeet realtime STT (`parakeet-stream`)
+
+The default listen helper when the installer can build it. Unlike the
+whisper wrapper — which fakes turn-taking with an energy-VAD around a
+sliding window — the Parakeet `parakeet_realtime_eou_120m-v1` model is a
+cache-aware streaming transducer that emits `<EOU>`/`<EOB>` tokens: **the
+model decides when the utterance is over**.
+
+- Source: `tools/parakeet_stream.cpp` (tracked here), compiled by the
+  installer against a clone of upstream
+  [parakeet.cpp](https://github.com/mudler/parakeet.cpp) (committed API
+  only: `ModelLoader`, `StreamingMel`, `StreamingSession`).
+- Input: s16le PCM on **stdin only** — the shim's capture pump feeds it
+  (`micmode device`, `capturerate 16000`), which is what makes remote-mic
+  topologies pure namespace composition. There is deliberately no
+  microphone code in the adapter.
+- Output: the provider contract's records, flushed per line:
+  `partial <text>` … `final confidence=0.9307 <text>`. Confidence is the
+  mean of the utterance's per-word confidences (NeMo `max_prob`).
+- After each `<EOU>` the adapter resets the streaming session — the model
+  stops emitting after an EOU otherwise (verified against upstream's own
+  file-streaming path), and the reset also bounds hypothesis growth over
+  an hours-long session.
+- The streaming EOU model is not yet published as GGUF; the installer
+  probes `PARAKEET_EOU_MODEL`, its own models dir, and dev checkouts, and
+  prints conversion instructions when none is found (whisper remains the
+  fallback in that case).
+
+Shim configuration is unchanged: the adapter is a drop-in for the
+`whisperstreambin` slot because it accepts the same
+`--stdin --model M --rate R --chans 1` invocation `listencmd()` builds.
 
 ## 4. Data flow
 

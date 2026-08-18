@@ -1,0 +1,40 @@
+# speech-terminal — topology 2 terminal role: export this machine's audio,
+# mount a remote speech provider, and select it for /n/speech.
+#
+# Usage:
+#   sh /lib/voice/speech-terminal tcp!engine!17019 [audio-port] [provider-mount]
+
+load std
+
+engine=$1
+audioport=$2
+provider=$3
+if {~ $#engine 0} {
+	echo 'usage: voice/speech-terminal engine-provider-addr [audio-port] [provider-mount]' >[1=2]
+	exit usage
+}
+if {~ $#audioport 0} {
+	audioport=17010
+}
+if {~ $#provider 0} {
+	provider=/n/remotespeech
+}
+
+# voice/listen owns the devaudio bind, buffer caps, pre-warm, and export loop.
+sh /lib/voice/listen $audioport &
+terminal_pid=$apid
+sleep 1
+
+mkdir -p $provider
+if {! mount -A $engine $provider} {
+	echo 'voice/speech-terminal: provider mount failed:' $engine >[1=2]
+	if {ftest -e /prog/$terminal_pid} {
+		echo kill >/prog/$terminal_pid/ctl
+	}
+	exit mount
+}
+
+echo 'provider '$provider > /n/speech/ctl
+echo 'duplex half' > /n/speech/ctl
+echo 'voice/speech-terminal: audio tcp!*!'$audioport 'provider' $provider
+echo '  listener pid=' $terminal_pid

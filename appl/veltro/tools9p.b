@@ -1158,10 +1158,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	if(nserr != nil) {
 		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
 		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
-		alt {
-		cleanupchan <-= mypid => ;
-		* => ;
-		}
+		cleanupchan <-= mypid;
 		return;
 	}
 	result := exectool(ti.name, data);
@@ -1171,12 +1168,15 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	rbytes := array of byte result;
 	ti.result = rbytes;
 	srv.reply(ref Rmsg.Write(tag, count));
-	# Signal cleanup goroutine to remove this invocation's shadow dirs.
-	# Non-blocking: if buffer is full, drop (dirs cleaned at next startup).
-	alt {
-		cleanupchan <-= mypid => ;
-		* => ;
-	}
+	# Hand this invocation's shadow dirs to the cleanup goroutine.
+	#
+	# This send used to be non-blocking, dropping the pid whenever the
+	# 32-slot buffer was full — i.e. exactly under the concurrent tool
+	# load that creates shadows fastest.  A dropped pid is a permanent
+	# leak: nothing else knows those directories exist, and the startup
+	# sweep only runs on the next process.  The client has already been
+	# replied to above, so blocking here delays only this proc's exit.
+	cleanupchan <-= mypid;
 }
 
 rf(f: string): string
@@ -1191,22 +1191,48 @@ rf(f: string): string
 	return string b[0:n];
 }
 
-# Remove one shadow dir and its one-level-deep placeholder entries.
-# From the parent namespace (no FORKNS), the shadow dir's children are empty
-# placeholder dirs/files — the bind mounts over them exist only in child
-# goroutine namespaces and are invisible here.
+# Remove a shadow directory and everything beneath it.
+#
+# From the parent namespace (no FORKNS) a shadow dir's own entries are just
+# empty placeholder dirs/files — the bind mounts over them live in child
+# goroutine namespaces and are invisible here.  But the tree is not flat.
+#
+# Shadow dirs nest.  restrictns() restricts /tmp last, so every shadow a
+# *child* namespace builds lands inside its parent's shadow:
+#   shadow/<a>/.veltro-ns/shadow/<b>/.veltro-ns/shadow/<c>...
+# The previous one-level version could not remove those: sys->remove()
+# fails on a non-empty directory, so the nested child survived, the
+# remove of its parent then failed too, and the whole tree stayed on
+# disk for ever.  Both callers (removepidshadows per invocation and
+# cleanshadows at startup) funnel through here, so nothing ever reaped
+# a nested shadow — they accumulated across sessions without bound.
+#
+# Collect each directory's entries before deleting any of them: removing
+# during the dirread loop shifts the directory offset and silently skips
+# siblings.
 removeshadowdir(dir: string)
 {
+	entries: list of (string, int);
 	fd := sys->open(dir, Sys->OREAD);
 	if(fd != nil) {
 		for(;;) {
-			(n, entries) := sys->dirread(fd);
+			(n, d) := sys->dirread(fd);
 			if(n <= 0)
 				break;
 			for(i := 0; i < n; i++)
-				sys->remove(dir + "/" + entries[i].name);
+				entries = (d[i].name, d[i].mode & Sys->DMDIR) :: entries;
 		}
 		fd = nil;
+	}
+	for(; entries != nil; entries = tl entries) {
+		(name, isdir) := hd entries;
+		if(name == "." || name == "..")
+			continue;
+		child := dir + "/" + name;
+		if(isdir)
+			removeshadowdir(child);
+		else
+			sys->remove(child);
 	}
 	sys->remove(dir);
 }

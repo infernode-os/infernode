@@ -82,10 +82,20 @@ trfsin(cfd, sfd: ref Sys->FD)
 			fid := ref Fid(m.fid, 0, 0);
 			fids.add(m.fid, fid);
 			addtfid(m.tag, fid);
+		Flush =>
+			# The client has abandoned oldtag.  Drop its pending entry:
+			# otherwise a flushed request leaves tfids populated forever
+			# and the next request to reuse that tag picks up the stale Fid.
+			deltfid(m.oldtag);
 		Read =>
 			fid := fids.find(m.fid);
 			addtfid(m.tag, fid);
-			if(fid.isdir){
+			# fid is nil for a read on a fid we never saw opened (for
+			# example one whose Open drew an Rerror).  Dereferencing it
+			# killed this proc, and with trfsin dead nothing forwards
+			# client messages any more: every later access through the
+			# mount hangs and the exported server keeps all its fids open.
+			if(fid != nil && fid.isdir){
 				m.count /= NBspacelen;	# translated strings might grow by this much
 				if(m.offset == big 0)
 					fid.aux = 0;
@@ -110,13 +120,21 @@ trfsout(cfd, sfd: ref Sys->FD)
 			msize = m.msize;
 			if(msize > len b)
 				b = array[msize] of byte;	# a bit more than needed but doesn't matter
+		Error =>
+			# An Rerror still consumes the tag of the Open/Create/Read
+			# that provoked it.  Without this case the tag stayed in
+			# tfids for ever, so tfids grew without bound and the next
+			# request that reused the tag got the stale Fid back —
+			# eventually handing a nil to the cases below.
+			deltfid(m.tag);
 		Create or
 		Open =>
 			fid := deltfid(m.tag);
-			fid.isdir = m.qid.qtype & Sys->QTDIR;
+			if(fid != nil)
+				fid.isdir = m.qid.qtype & Sys->QTDIR;
 		Read =>
 			fid := deltfid(m.tag);
-			if(fid.isdir){
+			if(fid != nil && fid.isdir){
 				bs := 0;
 				for(n := 0; n < len m.data; ){
 					(ds, d) := styx->unpackdir(m.data[n:]);
@@ -154,10 +172,12 @@ Table[T].new(nslots: int, nilval: T): ref Table[T]
 
 Table[T].add(t: self ref Table[T], id: int, x: T): int
 {
+	# Replace, don't ignore.  Tags and fid numbers are both reused, and
+	# silently keeping the previous entry meant a new Open inherited the
+	# old Fid's isdir/aux — which corrupts the directory-read offset
+	# arithmetic in trfsin/trfsout (fid.aux is accumulated per fid).
+	t.del(id);
 	slot := id % len t.items;
-	for(q := t.items[slot]; q != nil; q = tl q)
-		if((hd q).t0 == id)
-			return 0;
 	t.items[slot] = (id, x) :: t.items[slot];
 	return 1;
 }

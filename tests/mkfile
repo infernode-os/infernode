@@ -134,6 +134,7 @@ TARG=\
 	wallet_capability_test.dis\
 	secp256k1_test.dis\
 	ethcrypto_test.dis\
+	ethrpc_conv_test.dis\
 	x402_test.dis\
 	wiki9p_security_probe.dis\
 	contacts_tool_test.dis\

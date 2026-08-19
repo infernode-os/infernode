@@ -83,8 +83,9 @@ init(nil: ref Draw->Context, nil: list of string)
 	}
 
 	if(!exists("/n/wallet/accounts") || !exists("/n/wallet/default") ||
+	   !exists("/n/wallet/network") ||
 	   !exists("/n/wallet/captest/address") || !exists("/n/wallet/captest/pay") ||
-	   !exists("/n/wallet/captest/sign") || !exists("/n/wallet/captest/history")) {
+	   !exists("/n/wallet/captest/authorize") || !exists("/n/wallet/captest/history")) {
 		fail("agent wallet proposal/read surface missing");
 		return;
 	}
@@ -92,6 +93,14 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(exists("/n/wallet/ctl") || exists("/n/wallet/pending") ||
 	   exists("/n/wallet/new") || exists("/n/wallet/captest/ctl")) {
 		fail("trusted wallet commit/config files visible");
+		return;
+	}
+
+	# The raw signing oracle must never be agent-visible: signing an
+	# arbitrary 32-byte hash with the spend key bypasses budget and
+	# approval policy entirely (e.g. EIP-3009 transfer authorizations).
+	if(exists("/n/wallet/captest/sign")) {
+		fail("blind signing oracle (sign) visible to agent");
 		return;
 	}
 

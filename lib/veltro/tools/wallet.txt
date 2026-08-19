@@ -1,30 +1,40 @@
 wallet - Cryptocurrency and fiat payment operations (no key access).
 This tool takes one string argument named "args". The first word of
-"args" is the subcommand: accounts, address, balance, chain, sign,
-history, pay.
+"args" is the subcommand: accounts, address, balance, chain, history,
+network, pay.
 Examples:
   args = "accounts"
   args = "balance main"
   args = "address main"
   args = "history main"
-The agent NEVER sees private keys — signing happens inside wallet9p.
-
-Provides wallet operations via the wallet9p filesystem at /n/wallet/.
+  args = "pay main 1000 0xRecipientAddress"
 The agent NEVER sees private keys — signing happens inside wallet9p,
 which retrieves keys from factotum on demand.
+
+Provides wallet operations via the wallet9p filesystem at /n/wallet/.
 
 Usage:
   wallet accounts                     List all wallet accounts
   wallet address <account>            Show public address for an account
   wallet balance <account>            Show current balance
-  wallet chain <account>              Show chain name (e.g. ethereum, bitcoin)
-  wallet sign <account> <hexhash>     Sign a 32-byte hex-encoded hash
+  wallet chain <account>              Show chain name (e.g. ethereum, base)
   wallet history <account>            Show recent transactions
-  wallet pay <account> <args>         Execute a payment (not yet implemented)
+  wallet network                      Show the active network (read-only)
+  wallet pay <account> <wei> <addr>   Queue an ETH payment proposal
+  wallet pay <account> usdc <amount> <addr>   Queue a USDC payment proposal
+
+Amounts must be plain integers in base units: wei for ETH
+(1 ETH = 10^18 wei), 1 USDC = 1000000.
+
+Payments are PROPOSALS: unless a trusted controller configured the
+account otherwise, a pay command queues the payment for human approval
+and returns "payment pending approval: <id>". It executes only after a
+trusted controller approves it in the wallet GUI. Budget limits are
+enforced server-side and cannot be bypassed from this tool.
 
 The wallet must be running and unlocked. Keys live in factotum and
 are never exposed to this tool — use the keyring tool if a key is
-missing.
+missing. There is no raw signing command.
 
 Examples:
   wallet accounts

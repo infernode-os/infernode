@@ -60,6 +60,9 @@ include "wallet.m";
 include "ethrpc.m";
 	ethrpc: Ethrpc;
 
+include "x402.m";
+	x402mod: X402;
+
 include "stripe.m";
 	stripemod: Stripe;
 
@@ -74,6 +77,7 @@ Qaccounts: con 2;
 Qnew:      con 3;
 Qpending:  con 4;
 Qdefault:  con 5;
+Qnetwork:  con 6;
 # Per-account files start at 16
 Qacctdir:  con 16;
 Qaddress:  con 17;
@@ -83,30 +87,51 @@ Qsign:     con 20;
 Qpay:      con 21;
 Qacctctl:  con 22;
 Qhistory:  con 23;
+Qauthorize: con 24;
 
-NACCTFILES: con 7;	# files per account dir
+NACCTFILES: con 8;	# files per account dir
+
+MAXHISTORY: con 200;	# history entries kept per account
+PENDTTL:    con 900;	# seconds before an unapproved payment expires
+MAXPENDING: con 100;	# total pending-payment records kept
 
 # Account state
 AcctState: adt {
+	id:         int;		# stable account id (survives list changes)
 	acct:       ref Wallet->Account;
-	signresult: array of byte;	# pending sign result
 	history:    list of string;	# recent transactions
-	requireapproval: int;		# 1 = require GUI approval for payments
+	nhistory:   int;
+	requireapproval: int;		# 1 = require trusted approval for payments
+	# Last pay/authorize results at account level.  Readers prefer
+	# their own fid's result; these keep the write-close-open-read
+	# (echo/cat) idiom working for single clients.
+	payresult:  string;
+	authresult: string;
 };
 
 # Pending payment (awaiting approval)
 PendingPay: adt {
 	id:        int;
+	kind:      string;	# "pay" or "x402"
 	acct:      string;
 	amount:    string;
-	recipient: string;
-	token:     string;	# "eth" or "usdc"
+	recipient: string;	# recipient (pay) or payto (x402)
+	token:     string;	# "eth" or "usdc" (pay); asset address (x402)
 	agent:     string;	# agent name (if from tool)
-	result:    string;	# nil = pending, "approved:txhash" or "denied"
+	created:   big;		# epoch seconds when queued
+	# x402-only fields
+	network:   string;
+	tokenname: string;
+	tokenver:  string;
+	timeout:   int;
+	resource:  string;
+	result:    string;	# nil = pending; "approved:<data>", "denied",
+				# "expired", or "error:<msg>"
 };
 
 pendingpays: list of ref PendingPay;
 nextpendingid := 1;
+nextacctid := 0;
 
 stderr: ref Sys->FD;
 user: string;
@@ -171,26 +196,24 @@ findacct(name: string): ref AcctState
 	return nil;
 }
 
-# Find account by ID (index in list)
+# Find account by its stable id.  Ids are assigned once at creation
+# and never reused, so a 9P fid opened on an account file keeps
+# referring to that same account even as accounts are added.
 findacctbyid(id: int): ref AcctState
 {
-	i := 0;
 	for(l := accounts; l != nil; l = tl l) {
-		if(i == id)
+		if((hd l).id == id)
 			return hd l;
-		i++;
 	}
 	return nil;
 }
 
-# Get account ID (index) from name
+# Get stable account ID from name
 acctidbyname(name: string): int
 {
-	i := 0;
 	for(l := accounts; l != nil; l = tl l) {
 		if((hd l).acct.name == name)
-			return i;
-		i++;
+			return (hd l).id;
 	}
 	return -1;
 }
@@ -260,6 +283,153 @@ delsignstate(fid: int)
 	signstates = nl;
 }
 
+# Per-fid result state for the pay and authorize files.
+# Results are bound to the writing fid so concurrent clients never
+# read each other's transaction results.
+FidResult: adt {
+	fid:    int;
+	result: string;
+};
+paystates: list of ref FidResult;
+authstates: list of ref FidResult;
+
+getfidresult(states: list of ref FidResult, fid: int): ref FidResult
+{
+	for(l := states; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+setpaystate(fid: int, result: string)
+{
+	fr := getfidresult(paystates, fid);
+	if(fr != nil) {
+		fr.result = result;
+		return;
+	}
+	paystates = ref FidResult(fid, result) :: paystates;
+}
+
+setauthstate(fid: int, result: string)
+{
+	fr := getfidresult(authstates, fid);
+	if(fr != nil) {
+		fr.result = result;
+		return;
+	}
+	authstates = ref FidResult(fid, result) :: authstates;
+}
+
+delfidresult(fid: int)
+{
+	nl: list of ref FidResult;
+	for(l := paystates; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			nl = hd l :: nl;
+	paystates = nl;
+	nl = nil;
+	for(l = authstates; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			nl = hd l :: nl;
+	authstates = nl;
+}
+
+#
+# Resolve a per-fid result that may reference a pending payment.
+# "pending:<id>" strings are resolved against the pending list so the
+# reader sees approval/denial/expiry as it happens.
+#
+resolvefidresult(s: string): string
+{
+	if(s == nil)
+		return "";
+	if(!(len s > 8 && s[0:8] == "pending:"))
+		return s;
+	(id, ok) := strint(s[8:]);
+	if(!ok)
+		return "error:bad pending id";
+	pp := findpending(id);
+	if(pp == nil)
+		return "expired";
+	checkpendingexpiry(pp);
+	if(pp.result == nil)
+		return s;	# still pending
+	if(len pp.result > 9 && pp.result[0:9] == "approved:")
+		return pp.result[9:];
+	return pp.result;	# "denied", "expired", or "error:..."
+}
+
+findpending(id: int): ref PendingPay
+{
+	for(pl := pendingpays; pl != nil; pl = tl pl)
+		if((hd pl).id == id)
+			return hd pl;
+	return nil;
+}
+
+checkpendingexpiry(pp: ref PendingPay)
+{
+	if(pp.result == nil && now() > pp.created + big PENDTTL)
+		pp.result = "expired";
+}
+
+# Strict non-negative int parse
+strint(s: string): (int, int)
+{
+	if(s == nil || s == "" || len s > 9)
+		return (0, 0);
+	v := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(!(c >= '0' && c <= '9'))
+			return (0, 0);
+		v = v * 10 + (c - '0');
+	}
+	return (v, 1);
+}
+
+# Epoch seconds from /dev/time (microseconds)
+now(): big
+{
+	fd := sys->open("/dev/time", Sys->OREAD);
+	if(fd == nil)
+		return big 0;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return big 0;
+	s := string buf[0:n];
+	usec := big 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= '0' && c <= '9')
+			usec = usec * big 10 + big (c - '0');
+	}
+	return usec / big 1000000;
+}
+
+#
+# Fill buf completely with cryptographically secure random bytes.
+# Returns 0 on success, -1 on failure (callers must fail closed).
+#
+randfill(buf: array of byte): int
+{
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
+	if(fd == nil)
+		fd = sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	off := 0;
+	while(off < len buf) {
+		n := sys->read(fd, buf[off:], len buf - off);
+		if(n <= 0)
+			return -1;
+		off += n;
+	}
+	return 0;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -307,6 +477,14 @@ init(nil: ref Draw->Context, args: list of string)
 	err = ethrpc->init(networks[0].rpcurl);
 	if(err != nil) {
 		sys->fprint(stderr, "wallet9p: ethrpc init: %s\n", err);
+		raise "fail:init";
+	}
+
+	x402mod = load X402 X402->PATH;
+	if(x402mod == nil) nomod(X402->PATH);
+	err = x402mod->init();
+	if(err != nil) {
+		sys->fprint(stderr, "wallet9p: x402 init: %s\n", err);
 		raise "fail:init";
 	}
 
@@ -402,6 +580,7 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 		Clunk =>
 			delnewstate(m.fid);
 			delsignstate(m.fid);
+			delfidresult(m.fid);
 			srv.default(gm);
 
 		* =>
@@ -457,13 +636,22 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		s := "";
 		for(pl := pendingpays; pl != nil; pl = tl pl) {
 			pp := hd pl;
+			checkpendingexpiry(pp);
 			if(pp.result == nil)
-				s += sys->sprint("%d %s %s %s %s %s\n",
-					pp.id, pp.acct, pp.token, pp.amount,
+				s += sys->sprint("%d %s %s %s %s %s %s\n",
+					pp.id, pp.kind, pp.acct, pp.token, pp.amount,
 					pp.recipient, pp.agent);
 		}
 		if(s == "")
 			s = "(none)\n";
+		readstr(srv, m, s);
+
+	Qnetwork =>
+		net := getnetwork();
+		s := "name " + net.name + "\n" +
+			"chainid " + string net.chainid + "\n" +
+			"caip2 eip155:" + string net.chainid + "\n" +
+			"usdc " + net.usdc + "\n";
 		readstr(srv, m, s);
 
 	Qaddress =>
@@ -509,8 +697,25 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			return;
 		}
-		if(as.signresult != nil)
-			readstr(srv, m, string as.signresult + "\n");
+		fr := getfidresult(paystates, m.fid);
+		if(fr != nil && fr.result != nil)
+			readstr(srv, m, resolvefidresult(fr.result) + "\n");
+		else if(as.payresult != nil)
+			readstr(srv, m, resolvefidresult(as.payresult) + "\n");
+		else
+			readstr(srv, m, "");
+
+	Qauthorize =>
+		as := findacctbyid(aid);
+		if(as == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			return;
+		}
+		fr := getfidresult(authstates, m.fid);
+		if(fr != nil && fr.result != nil)
+			readstr(srv, m, resolvefidresult(fr.result) + "\n");
+		else if(as.authresult != nil)
+			readstr(srv, m, resolvefidresult(as.authresult) + "\n");
 		else
 			readstr(srv, m, "");
 
@@ -520,12 +725,18 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			return;
 		}
-		# Return budget info if set
-		budget := wallet->checkbudget(as.acct, big 0);
-		if(budget == nil)
-			readstr(srv, m, "no budget\n");
+		s := "";
+		b := wallet->budgetfor(as.acct);
+		if(b == nil)
+			s += "no budget\n";
 		else
-			readstr(srv, m, budget + "\n");
+			s += sys->sprint("budget %bd %bd %s spent %bd\n",
+				b.maxpertx, b.maxpersess, b.currency, b.spent);
+		if(as.requireapproval)
+			s += "requireapproval on\n";
+		else
+			s += "requireapproval off\n";
+		readstr(srv, m, s);
 
 	Qhistory =>
 		as := findacctbyid(aid);
@@ -580,14 +791,22 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			}
 			setnetwork(nname);
 		} else if(cmd == "approve" && ntoks >= 2) {
-			pid := int hd tl toks;
+			(pid, ok) := strint(hd tl toks);
+			if(!ok) {
+				srv.reply(ref Rmsg.Error(m.tag, "approve: bad id"));
+				return;
+			}
 			err := approvepending(pid);
 			if(err != nil) {
 				srv.reply(ref Rmsg.Error(m.tag, err));
 				return;
 			}
 		} else if(cmd == "deny" && ntoks >= 2) {
-			pid := int hd tl toks;
+			(pid, ok) := strint(hd tl toks);
+			if(!ok) {
+				srv.reply(ref Rmsg.Error(m.tag, "deny: bad id"));
+				return;
+			}
 			err := denypending(pid);
 			if(err != nil) {
 				srv.reply(ref Rmsg.Error(m.tag, err));
@@ -604,12 +823,25 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 		data = str->take(data, "^\n\r");
 		(ntoks, toks) := sys->tokenize(data, " \t");
 
-		if(ntoks >= 1 && hd toks == "import" && ntoks >= 5) {
-			# import eth base myaccount hexkey
+		if(ntoks >= 1 && hd toks == "import") {
+			# import eth base myaccount hexkey — exactly 5 tokens
+			if(ntoks != 5) {
+				srv.reply(ref Rmsg.Error(m.tag, "usage: import type chain name hexkey"));
+				return;
+			}
 			toks = tl toks;
-			accttype := parsetype(hd toks); toks = tl toks;
+			accttype := parsetype(hd toks);
+			if(accttype < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, "unknown account type: " + hd toks));
+				return;
+			}
+			toks = tl toks;
 			chain := hd toks; toks = tl toks;
 			name := hd toks; toks = tl toks;
+			if(findacct(name) != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "account exists: " + name));
+				return;
+			}
 			hexkey := hd toks;
 			privkey := ethcrypto->hexdecode(hexkey);
 			if(privkey == nil) {
@@ -622,14 +854,18 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, err));
 				return;
 			}
-			as := ref AcctState(acct, nil, nil, 1);
-			accounts = as :: accounts;
+			addaccount(acct);
 			setnewstate(m.fid, name);
 			syncfactotum();
 			vers++;
-		} else if(ntoks >= 3) {
+		} else if(ntoks == 3) {
 			# eth base myaccount
-			accttype := parsetype(hd toks); toks = tl toks;
+			accttype := parsetype(hd toks);
+			if(accttype < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, "unknown account type: " + hd toks));
+				return;
+			}
+			toks = tl toks;
 			chain := hd toks; toks = tl toks;
 			name := hd toks;
 			if(findacct(name) != nil) {
@@ -641,13 +877,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, err));
 				return;
 			}
-			as := ref AcctState(acct, nil, nil, 1);
-			accounts = as :: accounts;
+			addaccount(acct);
 			setnewstate(m.fid, name);
 			syncfactotum();
 			vers++;
 		} else {
-			srv.reply(ref Rmsg.Error(m.tag, "usage: type chain name"));
+			srv.reply(ref Rmsg.Error(m.tag, "usage: type chain name | import type chain name hexkey"));
 			return;
 		}
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -658,7 +893,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			return;
 		}
-		as.acct.chain = str->take(data, "^\n\r \t");
+		nc := str->take(data, "^\n\r \t");
+		if(!safechain(nc)) {
+			srv.reply(ref Rmsg.Error(m.tag, "invalid chain name"));
+			return;
+		}
+		as.acct.chain = nc;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qsign =>
@@ -712,12 +952,20 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			payrecip = hd tl paytoks;
 		}
 
+		# Validate before queueing or executing: a payment that can
+		# never execute should be rejected at submission time.
+		verr := validatepay(as, paytoken, payamt, payrecip);
+		if(verr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "pay: " + verr));
+			return;
+		}
+
 		# Check if approval is required for this account
 		if(as.requireapproval) {
-			pp := ref PendingPay(nextpendingid++, as.acct.name,
-				payamt, payrecip, paytoken, "agent", nil);
-			pendingpays = pp :: pendingpays;
-			as.signresult = array of byte ("pending:" + string pp.id);
+			pp := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
+			pres := "pending:" + string pp.id;
+			setpaystate(m.fid, pres);
+			as.payresult = pres;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else {
 			# Execute immediately
@@ -731,9 +979,46 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, "pay: " + payerr));
 				return;
 			}
-			# Store result for read-back and add to history
-			as.signresult = array of byte txhash;
-			as.history = ("pay " + payamt + " " + payrecip + " " + txhash) :: as.history;
+			setpaystate(m.fid, txhash);
+			as.payresult = txhash;
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		}
+
+	Qauthorize =>
+		as := findacctbyid(aid);
+		if(as == nil) {
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			return;
+		}
+		(areq, aerr) := parseauthreq(data);
+		if(aerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + aerr));
+			return;
+		}
+		aerr = validateauth(as, areq);
+		if(aerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + aerr));
+			return;
+		}
+		if(as.requireapproval) {
+			pp := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
+			pp.network = areq.network;
+			pp.tokenname = areq.tokenname;
+			pp.tokenver = areq.tokenver;
+			pp.timeout = areq.timeout;
+			pp.resource = areq.resource;
+			pres := "pending:" + string pp.id;
+			setauthstate(m.fid, pres);
+			as.authresult = pres;
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		} else {
+			(res, xerr) := executex402(as, areq);
+			if(xerr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "authorize: " + xerr));
+				return;
+			}
+			setauthstate(m.fid, res);
+			as.authresult = res;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		}
 
@@ -748,9 +1033,14 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 		(ntoks, toks) := sys->tokenize(data, " \t");
 		if(ntoks >= 1 && hd toks == "budget" && ntoks >= 4) {
 			toks = tl toks;
-			maxpertx := big hd toks; toks = tl toks;
-			maxpersess := big hd toks; toks = tl toks;
+			(maxpertx, ok1) := strbig(hd toks); toks = tl toks;
+			(maxpersess, ok2) := strbig(hd toks); toks = tl toks;
 			currency := hd toks;
+			if(!ok1 || !ok2 || !(currency == "USDC" || currency == "ETH" || currency == "USD")) {
+				srv.reply(ref Rmsg.Error(m.tag,
+					"usage: budget <maxpertx> <maxpersess> USDC|ETH|USD (integer base units)"));
+				return;
+			}
 			b := ref Wallet->Budget(maxpertx, maxpersess, big 0, currency);
 			wallet->setbudget(as.acct, b);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -777,49 +1067,122 @@ parsetype(s: string): int
 		return Wallet->ACCT_SOL;
 	if(s == "stripe" || s == "fiat")
 		return Wallet->ACCT_STRIPE;
-	return Wallet->ACCT_ETH;
+	return -1;
+}
+
+# Register a new account with a stable id
+addaccount(acct: ref Wallet->Account)
+{
+	as := ref AcctState(nextacctid++, acct, nil, 0, 1, nil, nil);
+	accounts = as :: accounts;
+}
+
+# Queue a pending payment; prunes resolved records beyond MAXPENDING
+newpending(kind, acct, amount, recipient, token: string): ref PendingPay
+{
+	pp := ref PendingPay(nextpendingid++, kind, acct, amount, recipient,
+		token, "agent", now(), "", "", "", 0, "", nil);
+	pendingpays = pp :: pendingpays;
+
+	n := 0;
+	for(pl := pendingpays; pl != nil; pl = tl pl)
+		n++;
+	if(n > MAXPENDING) {
+		# drop the oldest resolved entries (list is newest-first)
+		keep: list of ref PendingPay;
+		kept := 0;
+		for(pl = pendingpays; pl != nil; pl = tl pl) {
+			p := hd pl;
+			if(kept < MAXPENDING || p.result == nil) {
+				keep = p :: keep;
+				kept++;
+			}
+		}
+		# restore newest-first order
+		pendingpays = nil;
+		for(; keep != nil; keep = tl keep)
+			pendingpays = hd keep :: pendingpays;
+	}
+	return pp;
+}
+
+safechain(s: string): int
+{
+	if(s == nil || s == "" || len s > 64)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+# Strict non-negative big parse
+strbig(s: string): (big, int)
+{
+	if(s == nil || s == "" || len s > 18)
+		return (big 0, 0);
+	v := big 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(!(c >= '0' && c <= '9'))
+			return (big 0, 0);
+		v = v * big 10 + big (c - '0');
+	}
+	return (v, 1);
 }
 
 # --- Pending payment approval/denial ---
 
 approvepending(id: int): string
 {
-	for(pl := pendingpays; pl != nil; pl = tl pl) {
-		pp := hd pl;
-		if(pp.id == id && pp.result == nil) {
-			# Find the account and execute
-			as := findacct(pp.acct);
-			if(as == nil)
-				return "account not found: " + pp.acct;
-			txhash: string;
-			payerr: string;
-			if(pp.token == "usdc")
-				(txhash, payerr) = executeerc20(as, pp.amount, pp.recipient);
-			else
-				(txhash, payerr) = executepayment(as, pp.amount, pp.recipient);
-			if(payerr != nil) {
-				pp.result = "error:" + payerr;
-				return "pay: " + payerr;
-			}
-			pp.result = "approved:" + txhash;
-			as.signresult = array of byte txhash;
-			as.history = ("pay " + pp.amount + " " + pp.recipient + " " + txhash) :: as.history;
-			return nil;
+	pp := findpending(id);
+	if(pp == nil || pp.result != nil)
+		return "pending payment not found: " + string id;
+	checkpendingexpiry(pp);
+	if(pp.result != nil)
+		return "pending payment expired: " + string id;
+
+	as := findacct(pp.acct);
+	if(as == nil)
+		return "account not found: " + pp.acct;
+
+	if(pp.kind == "x402") {
+		areq := ref AuthReq(pp.network, pp.token, pp.recipient,
+			pp.amount, pp.timeout, pp.tokenname, pp.tokenver, pp.resource);
+		(res, xerr) := executex402(as, areq);
+		if(xerr != nil) {
+			pp.result = "error:" + xerr;
+			return "authorize: " + xerr;
 		}
+		pp.result = "approved:" + res;
+		return nil;
 	}
-	return "pending payment not found: " + string id;
+
+	txhash: string;
+	payerr: string;
+	if(pp.token == "usdc")
+		(txhash, payerr) = executeerc20(as, pp.amount, pp.recipient);
+	else
+		(txhash, payerr) = executepayment(as, pp.amount, pp.recipient);
+	if(payerr != nil) {
+		pp.result = "error:" + payerr;
+		return "pay: " + payerr;
+	}
+	pp.result = "approved:" + txhash;
+	return nil;
 }
 
 denypending(id: int): string
 {
-	for(pl := pendingpays; pl != nil; pl = tl pl) {
-		pp := hd pl;
-		if(pp.id == id && pp.result == nil) {
-			pp.result = "denied";
-			return nil;
-		}
-	}
-	return "pending payment not found: " + string id;
+	pp := findpending(id);
+	if(pp == nil || pp.result != nil)
+		return "pending payment not found: " + string id;
+	pp.result = "denied";
+	return nil;
 }
 
 readstr(srv: ref Styxserver, m: ref Tmsg.Read, s: string)
@@ -929,10 +1292,13 @@ restoreaccounts()
 			continue;
 		# Load full account info (derives address from factotum key)
 		(fullacct, err) := wallet->loadaccount(acct.name);
-		if(err != nil || fullacct == nil)
+		if(err != nil || fullacct == nil) {
+			if(err != nil)
+				sys->fprint(stderr, "wallet9p: skipping account %s: %s\n",
+					acct.name, err);
 			continue;
-		as := ref AcctState(fullacct, nil, nil, 1);
-		accounts = as :: accounts;
+		}
+		addaccount(fullacct);
 		sys->fprint(stderr, "wallet9p: restored account: %s (%s)\n",
 			fullacct.name, fullacct.address);
 	}
@@ -1044,6 +1410,123 @@ querybalance(as: ref AcctState): string
 
 # --- Payment execution ---
 
+# x402 authorization request (parsed from the authorize file)
+AuthReq: adt {
+	network:   string;
+	asset:     string;
+	payto:     string;
+	amount:    string;
+	timeout:   int;
+	tokenname: string;
+	tokenver:  string;
+	resource:  string;
+};
+
+#
+# Budget enforcement.  If a budget is configured for the account it is
+# a hard cap: the payment's currency must match the budget currency
+# and the amount must pass per-tx and per-session limits.  A budget in
+# a different currency fails closed — it cannot be evaluated.
+# With no budget configured, the approval gate is the control.
+#
+budgeterr(as: ref AcctState, currency: string, amt: array of byte): string
+{
+	b := wallet->budgetfor(as.acct);
+	if(b == nil)
+		return nil;
+	if(b.currency != currency)
+		return "budget is in " + b.currency + "; cannot evaluate a " +
+			currency + " payment against it";
+	(v, ok) := amounttobig(amt);
+	if(!ok)
+		return "amount exceeds evaluable budget range";
+	return wallet->checkbudget(as.acct, v);
+}
+
+recordspendamt(as: ref AcctState, amt: array of byte)
+{
+	(v, ok) := amounttobig(amt);
+	if(ok)
+		wallet->recordspend(as.acct, v);
+}
+
+# Big-endian bytes -> big, if the value fits in a non-negative int64
+amounttobig(b: array of byte): (big, int)
+{
+	if(b == nil)
+		return (big 0, 1);
+	i := 0;
+	while(i < len b && b[i] == byte 0)
+		i++;
+	b = b[i:];
+	if(len b > 8 || (len b == 8 && int b[0] >= 16r80))
+		return (big 0, 0);
+	v := big 0;
+	for(i = 0; i < len b; i++)
+		v = (v << 8) | big int b[i];
+	return (v, 1);
+}
+
+# Append a timestamped history entry, capped at MAXHISTORY
+addhistory(as: ref AcctState, entry: string)
+{
+	as.history = (sys->sprint("%bd ", now()) + entry) :: as.history;
+	as.nhistory++;
+	if(as.nhistory > MAXHISTORY) {
+		# drop the oldest entry (last in the list)
+		nl: list of string;
+		n := 0;
+		for(l := as.history; l != nil && n < MAXHISTORY; l = tl l) {
+			nl = hd l :: nl;
+			n++;
+		}
+		as.history = nil;
+		for(; nl != nil; nl = tl nl)
+			as.history = hd nl :: as.history;
+		as.nhistory = n;
+	}
+}
+
+#
+# The chain ID used for signing comes from the local network
+# configuration, never from the RPC endpoint.  The endpoint is
+# cross-checked and a mismatch refuses to sign: a malicious or
+# misconfigured RPC must not be able to move a payment to a
+# different chain.
+#
+confirmchainid(net: ref NetworkConfig): string
+{
+	(rpcid, err) := ethrpc->chainid();
+	if(err != nil)
+		return "cannot confirm chain id: " + err;
+	if(rpcid != net.chainid)
+		return sys->sprint("RPC chain id %d does not match configured network %s (%d); refusing to sign",
+			rpcid, net.name, net.chainid);
+	return nil;
+}
+
+# Validate a pay request without executing it
+validatepay(as: ref AcctState, token, amount, recipient: string): string
+{
+	if(as.acct.accttype == Wallet->ACCT_STRIPE) {
+		(nil, ok) := strbig(amount);
+		if(!ok)
+			return "invalid amount: " + amount;
+		return nil;
+	}
+	if(as.acct.accttype != Wallet->ACCT_ETH)
+		return "only ETH and Stripe accounts can send payments";
+	amt := ethcrypto->dectobe(amount);
+	if(amt == nil)
+		return "invalid amount (must be integer base units): " + amount;
+	if(ethcrypto->strtoaddr(recipient) == nil)
+		return "invalid recipient address: " + recipient;
+	cur := "ETH";
+	if(token == "usdc")
+		cur = "USDC";
+	return budgeterr(as, cur, amt);
+}
+
 executepayment(as: ref AcctState, amount: string, recipient: string): (string, string)
 {
 	if(as.acct.accttype == Wallet->ACCT_STRIPE)
@@ -1055,48 +1538,53 @@ executepayment(as: ref AcctState, amount: string, recipient: string): (string, s
 	if(addr == "" || addr == nil)
 		return (nil, "account has no address");
 
+	# Amount is wei as a strict decimal string (uint256)
+	amt := ethcrypto->dectobe(amount);
+	if(amt == nil)
+		return (nil, "invalid amount (must be integer wei): " + amount);
+
+	dstaddr := ethcrypto->strtoaddr(recipient);
+	if(dstaddr == nil)
+		return (nil, "invalid recipient address: " + recipient);
+
+	# Budget is enforced on every execution path, including approvals
+	berr := budgeterr(as, "ETH", amt);
+	if(berr != nil)
+		return (nil, "budget: " + berr);
+
+	net := getnetwork();
+	cerr := confirmchainid(net);
+	if(cerr != nil)
+		return (nil, cerr);
+
 	# Get nonce
 	(nonce, nonceerr) := ethrpc->getnonce(addr);
 	if(nonceerr != nil)
 		return (nil, "nonce: " + nonceerr);
 
-	# Parse amount as wei (decimal string)
-	# For now, amount is in wei directly
-	weiamt := amount;
-
-	# Build EIP-155 transaction
 	# Query network gas price, fall back to 1 gwei
 	gasprice := big 1000000000;	# fallback: 1 gwei
 	{
 		(gpstr, gperr) := ethrpc->gasprice();
-		if(gperr == nil && gpstr != nil && gpstr != "0")
-			gasprice = strtobig(gpstr);
+		if(gperr == nil && gpstr != nil && gpstr != "0") {
+			(gp, gok) := strbig(gpstr);
+			if(gok)
+				gasprice = gp;
+		}
 	}
 	# Cap at 100 gwei to prevent fee spikes
 	if(gasprice > big 100000000000)
 		gasprice = big 100000000000;
 	gaslimit := big 21000;	# standard ETH transfer
 
-	dstaddr := ethcrypto->strtoaddr(recipient);
-	if(dstaddr == nil)
-		return (nil, "invalid recipient address: " + recipient);
-
-	# Convert wei amount string to big
-	weivalue := strtobig(weiamt);
-
-	# Get chain ID
-	(chainid, chiderr) := ethrpc->chainid();
-	if(chiderr != nil)
-		return (nil, "chainid: " + chiderr);
-
 	tx := ref Ethcrypto->EthTx(
 		big nonce,
 		gasprice,
 		gaslimit,
 		dstaddr,
-		weivalue,
+		amt,
 		nil,		# no data (simple transfer)
-		chainid
+		net.chainid
 	);
 
 	# Retrieve private key from factotum, sign the full tx, zero key
@@ -1123,6 +1611,8 @@ executepayment(as: ref AcctState, amount: string, recipient: string): (string, s
 	if(senderr != nil)
 		return (nil, "send: " + senderr);
 
+	recordspendamt(as, amt);
+	addhistory(as, "pay eth " + amount + " " + recipient + " " + txhash);
 	return (txhash, nil);
 }
 
@@ -1140,58 +1630,58 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 
 	net := getnetwork();
 
-	# Get nonce
-	(nonce, nonceerr) := ethrpc->getnonce(addr);
-	if(nonceerr != nil)
-		return (nil, "nonce: " + nonceerr);
-
-	# Build transfer(address,uint256) calldata
-	# Function selector: 0xa9059cbb
-	# address: padded to 32 bytes
-	# amount: padded to 32 bytes
 	recipaddr := ethcrypto->strtoaddr(recipient);
 	if(recipaddr == nil)
 		return (nil, "invalid recipient: " + recipient);
 
 	# Amount is in token base units (USDC = 6 decimals, so 1 USDC = 1000000)
-	amtbig := strtobig(amount);
-	amtbytes := ethcrypto->bigtobytes(amtbig);
+	amtbytes := ethcrypto->dectobe(amount);
+	if(amtbytes == nil)
+		return (nil, "invalid amount (must be integer base units): " + amount);
 
-	# Build calldata: selector(4) + address(32) + amount(32) = 68 bytes
+	berr := budgeterr(as, "USDC", amtbytes);
+	if(berr != nil)
+		return (nil, "budget: " + berr);
+
+	cerr := confirmchainid(net);
+	if(cerr != nil)
+		return (nil, cerr);
+
+	# Get nonce
+	(nonce, nonceerr) := ethrpc->getnonce(addr);
+	if(nonceerr != nil)
+		return (nil, "nonce: " + nonceerr);
+
+	# Build transfer(address,uint256) calldata:
+	# selector(4) + address(32) + amount(32) = 68 bytes
 	calldata := array[68] of byte;
+	for(i := 0; i < 68; i++)
+		calldata[i] = byte 0;
 	# Function selector a9059cbb
 	calldata[0] = byte 16ra9;
 	calldata[1] = byte 16r05;
 	calldata[2] = byte 16r9c;
 	calldata[3] = byte 16rbb;
-	# Pad recipient address to 32 bytes (left-padded with zeros)
-	for(i := 0; i < 12; i++)
-		calldata[4+i] = byte 0;
+	# Recipient address, left-padded to 32 bytes
 	calldata[16:] = recipaddr;
-	# Pad amount to 32 bytes (left-padded with zeros)
-	for(i = 0; i < 32; i++)
-		calldata[36+i] = byte 0;
-	off := 68 - len amtbytes;
-	if(off < 36) off = 36;
-	calldata[off:] = amtbytes;
+	# Amount, left-padded to 32 bytes (dectobe guarantees <= 32 bytes)
+	calldata[68 - len amtbytes:] = amtbytes;
 
 	# Gas for ERC-20 transfer is higher than simple ETH
 	# Query network gas price, fall back to 1 gwei
 	gasprice := big 1000000000;	# fallback: 1 gwei
 	{
 		(gpstr, gperr) := ethrpc->gasprice();
-		if(gperr == nil && gpstr != nil && gpstr != "0")
-			gasprice = strtobig(gpstr);
+		if(gperr == nil && gpstr != nil && gpstr != "0") {
+			(gp, gok) := strbig(gpstr);
+			if(gok)
+				gasprice = gp;
+		}
 	}
 	# Cap at 100 gwei to prevent fee spikes
 	if(gasprice > big 100000000000)
 		gasprice = big 100000000000;
 	gaslimit := big 100000;	# ERC-20 transfers need ~65000 gas
-
-	# Get chain ID
-	(chainid, chiderr) := ethrpc->chainid();
-	if(chiderr != nil)
-		return (nil, "chainid: " + chiderr);
 
 	# Transaction goes TO the token contract, with 0 ETH value
 	tokenaddr := ethcrypto->strtoaddr(net.usdc);
@@ -1203,9 +1693,9 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 		gasprice,
 		gaslimit,
 		tokenaddr,	# send to token contract
-		big 0,		# 0 ETH value
+		nil,		# 0 ETH value
 		calldata,	# transfer(recipient, amount)
-		chainid
+		net.chainid
 	);
 
 	# Sign
@@ -1231,20 +1721,150 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 	if(senderr != nil)
 		return (nil, "send: " + senderr);
 
+	recordspendamt(as, amtbytes);
+	addhistory(as, "pay usdc " + amount + " " + recipient + " " + txhash);
 	return (txhash, nil);
 }
 
-strtobig(s: string): big
+# --- x402 authorization (EIP-3009 TransferWithAuthorization) ---
+
+#
+# Parse an authorize request: newline-separated "key value" lines.
+# name/version take the rest of the line (token names contain spaces).
+#
+parseauthreq(data: string): (ref AuthReq, string)
 {
-	v := big 0;
-	if(s == nil)
-		return v;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c >= '0' && c <= '9')
-			v = v * big 10 + big (c - '0');
+	req := ref AuthReq("", "", "", "", 0, "", "", "");
+	(nil, lines) := sys->tokenize(data, "\n\r");
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		(key, val) := str->splitstrl(line, " ");
+		if(val == nil)
+			continue;
+		val = val[1:];	# skip the separator
+		case key {
+		"scheme" =>
+			if(val != "exact")
+				return (nil, "unsupported scheme: " + val);
+		"network" =>	req.network = val;
+		"asset" =>	req.asset = val;
+		"payto" =>	req.payto = val;
+		"amount" =>	req.amount = val;
+		"timeout" =>
+			(t, ok) := strint(val);
+			if(!ok)
+				return (nil, "bad timeout");
+			req.timeout = t;
+		"name" =>	req.tokenname = val;
+		"version" =>	req.tokenver = val;
+		"resource" =>
+			if(len val <= 1024)
+				req.resource = val;
+		* =>
+			return (nil, "unknown field: " + key);
+		}
 	}
-	return v;
+	if(req.network == "" || req.asset == "" || req.payto == "" || req.amount == "")
+		return (nil, "missing required field (network/asset/payto/amount)");
+	# clamp validity window
+	if(req.timeout < 30)
+		req.timeout = 30;
+	if(req.timeout > 3600)
+		req.timeout = 3600;
+	return (req, nil);
+}
+
+#
+# Validate an authorization request against the active network and
+# the account's budget, without signing anything.
+#
+validateauth(as: ref AcctState, req: ref AuthReq): string
+{
+	if(as.acct.accttype != Wallet->ACCT_ETH)
+		return "only ETH accounts can authorize x402 payments";
+	if(as.acct.address == nil || as.acct.address == "")
+		return "account has no address";
+
+	net := getnetwork();
+	netid := x402mod->networktochainid(req.network);
+	if(netid != net.chainid)
+		return sys->sprint("request network %s does not match active network %s (eip155:%d)",
+			req.network, net.name, net.chainid);
+
+	if(ethcrypto->strtoaddr(req.asset) == nil)
+		return "invalid asset address";
+	if(ethcrypto->strtoaddr(req.payto) == nil)
+		return "invalid payto address";
+	amt := ethcrypto->dectobe(req.amount);
+	if(amt == nil)
+		return "invalid amount (must be integer base units)";
+	if(req.tokenname == "" || len req.tokenname > 64 || len req.tokenver > 16)
+		return "invalid token name/version";
+
+	return budgeterr(as, assetcurrency(req.asset), amt);
+}
+
+# Map an asset contract address to a budget currency name.
+# Only the active network's USDC contract is recognized; anything else
+# fails closed against a configured budget.
+assetcurrency(asset: string): string
+{
+	net := getnetwork();
+	if(hexeq(asset, net.usdc))
+		return "USDC";
+	return "token:" + asset;
+}
+
+hexeq(a, b: string): int
+{
+	return str->tolower(a) == str->tolower(b);
+}
+
+#
+# Sign an EIP-3009 authorization.  wallet9p generates the nonce and
+# validity window and computes the EIP-712 digest itself, so the key
+# only ever signs messages this server constructed.
+#
+executex402(as: ref AcctState, req: ref AuthReq): (string, string)
+{
+	verr := validateauth(as, req);
+	if(verr != nil)
+		return (nil, verr);
+
+	amt := ethcrypto->dectobe(req.amount);
+
+	nonce := array[32] of byte;
+	if(randfill(nonce) < 0)
+		return (nil, "no entropy source for nonce generation");
+
+	nowt := now();
+	if(nowt <= big 0)
+		return (nil, "no time source for validity window");
+	validafter := nowt - big 600;	# tolerate clock skew
+	if(validafter < big 0)
+		validafter = big 0;
+	validbefore := nowt + big req.timeout;
+
+	(digest, derr) := x402mod->authdigest(req.network, req.asset, req.payto,
+		as.acct.address, req.amount, validafter, validbefore, nonce,
+		req.tokenname, req.tokenver);
+	if(derr != nil)
+		return (nil, "digest: " + derr);
+
+	(sig, serr) := wallet->signhash(as.acct, digest);
+	if(serr != nil)
+		return (nil, "sign: " + serr);
+	if(sig == nil || len sig != 65)
+		return (nil, "sign: malformed signature");
+
+	recordspendamt(as, amt);
+	addhistory(as, "x402 " + req.amount + " " + req.asset + " " + req.payto);
+
+	res := "sig " + ethcrypto->hexencode(sig) +
+		" from " + as.acct.address +
+		" nonce " + ethcrypto->hexencode(nonce) +
+		sys->sprint(" validafter %bd validbefore %bd", validafter, validbefore);
+	return (res, nil);
 }
 
 # --- Stripe fiat backend ---
@@ -1284,28 +1904,21 @@ executestripepayment(as: ref AcctState, amount: string, description: string): (s
 	if(err != nil)
 		return (nil, "Stripe: " + err);
 
-	cents := strtoint(amount);
-	if(cents <= 0)
+	(cents, ok) := strint(amount);
+	if(!ok || cents <= 0)
 		return (nil, "invalid amount: " + amount);
+
+	berr := budgeterr(as, "USD", ethcrypto->dectobe(amount));
+	if(berr != nil)
+		return (nil, "budget: " + berr);
 
 	(id, perr) := stripemod->createpayment(cents, "usd", description);
 	if(perr != nil)
 		return (nil, "Stripe: " + perr);
 
+	recordspendamt(as, ethcrypto->dectobe(amount));
+	addhistory(as, "pay usd-cents " + amount + " " + description);
 	return (id, nil);
-}
-
-strtoint(s: string): int
-{
-	v := 0;
-	if(s == nil)
-		return 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c >= '0' && c <= '9')
-			v = v * 10 + (c - '0');
-	}
-	return v;
 }
 
 # --- Navigator ---
@@ -1333,6 +1946,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, Qnew);
 				else if(name == "pending")
 					n.path = MKPATH(0, Qpending);
+				else if(name == "network")
+					n.path = MKPATH(0, Qnetwork);
 				else {
 					# Look for account name
 					id := acctidbyname(name);
@@ -1355,6 +1970,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(aid, Qsign);
 				else if(name == "pay")
 					n.path = MKPATH(aid, Qpay);
+				else if(name == "authorize")
+					n.path = MKPATH(aid, Qauthorize);
 				else if(name == "ctl")
 					n.path = MKPATH(aid, Qacctctl);
 				else if(name == "history")
@@ -1364,7 +1981,7 @@ navigator(navops: chan of ref Navop)
 					continue;
 				}
 			} else if(name == "..") {
-				if(ft >= Qacctdir && ft <= Qhistory)
+				if(ft >= Qacctdir && ft <= Qauthorize)
 					n.path = MKPATH(ACCTID(n.path), Qacctdir);
 				else
 					n.path = MKPATH(0, Qroot);
@@ -1379,17 +1996,15 @@ navigator(navops: chan of ref Navop)
 			entries: list of big;
 
 			if(ft == Qroot) {
-				# Root: ctl, accounts, new, pending, then account dirs
+				# Root: ctl, accounts, new, pending, network, then account dirs
+				entries = MKPATH(0, Qnetwork) :: entries;
 				entries = MKPATH(0, Qpending) :: entries;
 				entries = MKPATH(0, Qnew) :: entries;
 				entries = MKPATH(0, Qdefault) :: entries;
 				entries = MKPATH(0, Qaccounts) :: entries;
 				entries = MKPATH(0, Qctl) :: entries;
-				i := 0;
-				for(l := accounts; l != nil; l = tl l) {
-					entries = MKPATH(i, Qacctdir) :: entries;
-					i++;
-				}
+				for(l := accounts; l != nil; l = tl l)
+					entries = MKPATH((hd l).id, Qacctdir) :: entries;
 			} else if(ft == Qacctdir) {
 				aid := ACCTID(n.path);
 				entries =
@@ -1398,6 +2013,7 @@ navigator(navops: chan of ref Navop)
 					MKPATH(aid, Qchain) ::
 					MKPATH(aid, Qsign) ::
 					MKPATH(aid, Qpay) ::
+					MKPATH(aid, Qauthorize) ::
 					MKPATH(aid, Qacctctl) ::
 					MKPATH(aid, Qhistory) ::
 					nil;
@@ -1451,6 +2067,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qpending =>
 		name = "pending";
 		perm = 8r444;
+	Qnetwork =>
+		name = "network";
+		perm = 8r444;
 	Qacctdir =>
 		as := findacctbyid(aid);
 		if(as != nil)
@@ -1471,6 +2090,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 		perm = 8r666;
 	Qpay =>
 		name = "pay";
+		perm = 8r666;
+	Qauthorize =>
+		name = "authorize";
 		perm = 8r666;
 	Qacctctl =>
 		name = "ctl";

@@ -36,4 +36,6 @@ Wallet: module {
 	checkbudget:	fn(acct: ref Account, amount: big): string;
 		# returns nil if OK, error string if over budget
 	recordspend:	fn(acct: ref Account, amount: big);
+	budgetfor:	fn(acct: ref Account): ref Budget;
+		# returns the configured budget, or nil if none
 };

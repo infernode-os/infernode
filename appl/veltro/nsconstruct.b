@@ -628,7 +628,7 @@ restrictlocal(paths: list of string): string
 restrictwallet(): string
 {
 	accts := walletaccounts();
-	allow := "accounts" :: "default" :: nil;
+	allow := "accounts" :: "default" :: "network" :: nil;
 	for(a := accts; a != nil; a = tl a)
 		if(!inlist(hd a, allow))
 			allow = hd a :: allow;
@@ -637,8 +637,12 @@ restrictwallet(): string
 	if(err != nil)
 		return err;
 
-	acctallow := "address" :: "balance" :: "chain" :: "sign" ::
-		"pay" :: "history" :: nil;
+	# No "sign": raw hash signing is a blind oracle over the spend key
+	# and would let an agent authorize arbitrary transfers outside the
+	# budget/approval policy.  Agents get "authorize" (structured,
+	# policy-checked EIP-3009 requests) and "pay" (proposals) instead.
+	acctallow := "address" :: "balance" :: "chain" ::
+		"pay" :: "authorize" :: "history" :: nil;
 	for(a = accts; a != nil; a = tl a) {
 		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);
 		if(err != nil)
@@ -935,7 +939,11 @@ walletaccountcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
-	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
+	if(componentcount(path) < 4)
+		return 0;
+	# Per-account ctl (budget/approval config) and sign (blind signing
+	# oracle over the spend key) are trusted controller surfaces.
+	return pathhascomponent(path, "ctl") || pathhascomponent(path, "sign");
 }
 
 ftreecontrolpath(path: string): int

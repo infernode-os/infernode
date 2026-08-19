@@ -347,6 +347,11 @@ timeoutTask(ch: chan of int, ms: int)
 | `xenith_concurrency_test.b` | Xenith concurrent operations |
 | `xenith_exit_test.b` | Xenith exit handling |
 | `sdl3_test.b` | SDL3 GUI backend |
+| `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
+| `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
+| `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
+| `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
+| `wallet_capability_test.b` | Wallet agent-namespace narrowing |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

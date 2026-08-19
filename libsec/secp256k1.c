@@ -679,6 +679,7 @@ k1_rfc6979_k(uchar kout[32], const uchar privkey[32], const uchar hash[32])
 			mpfree(km);
 			mpfree(nm);
 			/* zero temporaries */
+			secureZero(V, 32);
 			secureZero(K, 32);
 			secureZero(tmp, 32);
 			secureZero(buf, sizeof(buf));
@@ -700,6 +701,7 @@ k1_rfc6979_k(uchar kout[32], const uchar privkey[32], const uchar hash[32])
 
 	/* should never reach here; fallback to random */
 	prng(kout, 32);
+	secureZero(V, 32);
 	secureZero(K, 32);
 	secureZero(tmp, 32);
 	secureZero(buf, sizeof(buf));
@@ -709,18 +711,44 @@ k1_rfc6979_k(uchar kout[32], const uchar privkey[32], const uchar hash[32])
  * Public API
  */
 
+/*
+ * A private key is valid iff 0 < priv < n (curve order).
+ * Returns 1 if valid, 0 otherwise.
+ */
+int
+secp256k1_privkey_valid(uchar priv[32])
+{
+	k1fe kfe;
+	int ok;
+
+	k1_bytes_to_fe(kfe, priv);
+	ok = !k1_fe_is_zero(kfe) && !k1_fe_gte(kfe, K1_N);
+	secureZero(kfe, sizeof(kfe));
+	return ok;
+}
+
 int
 secp256k1_keygen(uchar priv[32], uchar pub[65])
 {
-	k1fe kfe, one;
+	k1fe one;
 	k1fe RX, RY, RZ;
 	uchar kbuf[32];
+	int i;
 
-	/* generate random scalar, ensure 0 < k < n */
-	prng(kbuf, 32);
-	k1_bytes_to_fe(kfe, kbuf);
-	if(k1_fe_is_zero(kfe) || k1_fe_gte(kfe, K1_N))
-		kbuf[0] = 1;  /* simple fix for edge cases */
+	/*
+	 * Rejection sampling: draw until 0 < k < n.  The rejection
+	 * probability is ~2^-128, so one draw is virtually always enough;
+	 * the loop bound only guards against a broken CSPRNG.
+	 */
+	for(i = 0; ; i++){
+		if(i >= 64){
+			secureZero(kbuf, sizeof(kbuf));
+			return -1;
+		}
+		prng(kbuf, 32);
+		if(secp256k1_privkey_valid(kbuf))
+			break;
+	}
 
 	memmove(priv, kbuf, 32);
 
@@ -728,8 +756,11 @@ secp256k1_keygen(uchar priv[32], uchar pub[65])
 	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
 	k1_point_mul(RX, RY, RZ, priv, K1_Gx, K1_Gy, one);
 
-	if(k1_fe_is_zero(RZ))
+	if(k1_fe_is_zero(RZ)){
+		secureZero(kbuf, sizeof(kbuf));
+		secureZero(priv, 32);
 		return -1;
+	}
 
 	/* uncompressed format: 0x04 || x || y */
 	pub[0] = 0x04;
@@ -740,24 +771,34 @@ secp256k1_keygen(uchar priv[32], uchar pub[65])
 		k1fe chkx, chky;
 		k1_bytes_to_fe(chkx, pub + 1);
 		k1_bytes_to_fe(chky, pub + 33);
-		if(!k1_point_on_curve(chkx, chky))
+		if(!k1_point_on_curve(chkx, chky)){
+			secureZero(kbuf, sizeof(kbuf));
+			secureZero(priv, 32);
 			return -1;
+		}
 	}
 
 	secureZero(kbuf, sizeof(kbuf));
 	return 0;
 }
 
-void
+int
 secp256k1_pubkey(uchar pub[65], uchar priv[32])
 {
 	k1fe one, RX, RY, RZ;
 
+	if(!secp256k1_privkey_valid(priv))
+		return -1;
+
 	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
 	k1_point_mul(RX, RY, RZ, priv, K1_Gx, K1_Gy, one);
 
+	if(k1_fe_is_zero(RZ))
+		return -1;
+
 	pub[0] = 0x04;
 	k1_point_to_affine(pub + 1, pub + 33, RX, RY, RZ);
+	return 0;
 }
 
 /*
@@ -776,6 +817,10 @@ secp256k1_sign(uchar sig[65], uchar priv[32], uchar *hash, int hashlen)
 	uchar kbuf[32], xbuf[32], ybuf[32];
 	uchar hbuf[32], nbuf[32];
 	int recid;
+
+	/* reject out-of-range keys before deriving anything from them */
+	if(!secp256k1_privkey_valid(priv))
+		return -1;
 
 	/* load curve order */
 	k1_fe_to_bytes(nbuf, K1_N);

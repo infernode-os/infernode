@@ -22,6 +22,7 @@ TARG=\
 	bufio_test.dis\
 	kbddrainer_test.dis\
 	concurrency_test.dis\
+	casel_test.dis\
 	cookiesrv_httponly_test.dis\
 	cowfs_test.dis\
 	cut_test.dis\

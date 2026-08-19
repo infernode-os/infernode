@@ -618,26 +618,34 @@ OP(casel)
 	WORD *t, *l, d, n, n2;
 	LONG v;
 
+	/* casel table layout follows limbo dis.c Tcasel: a count in a
+	 * 2*IBY2WD slot, then per case [lo][hi][pc+pad] where the 64-bit
+	 * bounds are IBY2LG each and the pc pads to 2*IBY2WD, then the
+	 * default pc. With IBY2WD == IBY2LG == 8 that is a 4-WORD stride
+	 * with the pc at l[2]. The historical walk assumed the 32-bit
+	 * shape (6 4-byte words, pc at l[4]); on this port it read garbage
+	 * bounds and a wild destination the first time any module used
+	 * `case big` (INFR-355 salvaged ventisrv, the first in the tree). */
 	v = V(s);
 	t = (WORD*)((WORD)R.d + 2*IBY2WD);
 	n = t[-2];
 	if(n < 0)
 		n = -n - 1;
-	d = t[n*6];
+	d = t[n*4];
 
 	while(n > 0) {
 		n2 = n >> 1;
-		l = t + n2*6;
-		if(v < ((LONG*)l)[0]) {
+		l = t + n2*4;
+		if(v < (LONG)l[0]) {
 			n = n2;
 			continue;
 		}
-		if(v >= ((LONG*)l)[1]) {
-			t = l+6;
+		if(v >= (LONG)l[1]) {
+			t = l+4;
 			n -= n2 + 1;
 			continue;
 		}
-		d = l[4];
+		d = l[2];
 		break;
 	}
 	if(R.M->compiled) {

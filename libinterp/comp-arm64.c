@@ -1066,6 +1066,11 @@ comcasel(Inst *i)
 	int l;
 	WORD *t, *e;
 
+	/* casel table (limbo dis.c Tcasel, 64-bit): count in a 2*IBY2WD
+	 * slot, then per case [lo][hi][pc+pad] — a 4-WORD stride with the
+	 * pc at t[2]. The old walk patched the 32-bit stride-6 shape and
+	 * corrupted module data whenever a module used `case big`
+	 * (INFR-355). */
 	t = (WORD*)(mod->origmp + i->d.ind + 2*IBY2WD);
 	l = t[-2];
 	if(pass == 0) {
@@ -1076,10 +1081,10 @@ comcasel(Inst *i)
 	if(l >= 0)
 		return;
 	t[-2] = -l - 1;
-	e = t + t[-2] * 6;
+	e = t + t[-2] * 4;
 	while(t < e) {
-		t[4] = RELPC(patch[t[4]]);
-		t += 6;
+		t[2] = RELPC(patch[t[2]]);
+		t += 4;
 	}
 	t[0] = RELPC(patch[t[0]]);
 }

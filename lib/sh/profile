@@ -109,6 +109,14 @@ if {~ $emuhost MacOSX Linux}{
 if {ftest -f /usr/inferno/audit/on} {
 	mkdir -p /mnt/audit >[2] /dev/null
 	mount {auditfs} /mnt/audit >[2] /dev/null
+	# Agent-provenance content store (INFR-355): a local write-once
+	# venti holding audit-record payloads (auditprov(2), ventisrv(8)).
+	# Persistent under the audit dir; touch never truncates an existing
+	# store. Localhost-only; audit emitters find it at the auditprov
+	# default (override with the auditventi env var). Non-fatal.
+	mkdir -p /usr/inferno/audit/venti >[2] /dev/null
+	touch /usr/inferno/audit/venti/data /usr/inferno/audit/venti/index >[2] /dev/null
+	ventisrv -d /usr/inferno/audit/venti/data -i /usr/inferno/audit/venti/index -w 'tcp!127.0.0.1!17034' 1073741824 8192 >[2] /dev/null &
 }
 
 # ── Secstored (persistent encrypted key storage) ──────────

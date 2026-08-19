@@ -38,6 +38,11 @@ include "nsconstruct.m";
 include "agentlib.m";
 	agentlib: AgentLib;
 
+include "audit.m";
+
+include "auditprov.m";
+	ap: AuditProv;
+
 Veltro: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
@@ -73,6 +78,19 @@ maxsteps := DEFAULT_MAX_STEPS;
 # base system prompt, running this top-level loop as that agent (e.g.
 # research, explore, plan). Empty = the default Veltro behaviour.
 agenttype := "";
+
+# Agent provenance (INFR-355): the llm session id the current run seals
+# records under; "" until a run starts (and when the install does not
+# audit — ap stays nil then and prov() is a no-op).
+provagent := "";
+
+# Seal one provenance record for this agent.
+prov(event, msg: string, payload: array of byte)
+{
+	if(ap == nil)
+		return;
+	ap->log("veltro", event, msg, payload);
+}
 
 # -m <model>: override the LLM model for this run by writing it to the
 # session's /mnt/llm/<id>/model file (llmsrv routes per-session). Empty = the
@@ -273,6 +291,35 @@ init(nil: ref Draw->Context, args: list of string)
 				break;
 		if(pl == nil)
 			pathlist = "/mnt/llm" :: pathlist;
+
+		# Agent provenance (INFR-355). Fail-closed under Audit->ONFILE:
+		# an install that requires auditing refuses to run an agent whose
+		# actions cannot be sealed (the secstored authok posture — agent
+		# activity is a high-value event). Without the marker, absence of
+		# /mnt/audit simply disables provenance (loose coupling).
+		auditing := 0;
+		(alogok, nil) := sys->stat("/mnt/audit/log");
+		if(alogok >= 0)
+			auditing = 1;
+		(aonok, nil) := sys->stat(Audit->ONFILE);
+		if(aonok >= 0 && !auditing) {
+			sys->fprint(stderr, "veltro: this install requires auditing (%s) but /mnt/audit is not mounted\n",
+				Audit->ONFILE);
+			raise "fail:audit";
+		}
+		if(auditing) {
+			ap = load AuditProv AuditProv->PATH;
+			if(ap != nil && ap->init() != nil)
+				ap = nil;
+			# Dial + handshake the content store BEFORE restrictns: the
+			# session fd survives restriction, so the parent's namespace
+			# needs no network grant on account of auditing. Attach
+			# failure degrades to content=unstored records, never blocks.
+			if(ap != nil)
+				ap->attach(nil);
+			# The append-only sink rides into the restricted namespace.
+			pathlist = "/mnt/audit/log" :: pathlist;
+		}
 
 		parent_caps := ref NsConstruct->Capabilities(
 			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
@@ -757,9 +804,14 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 	if(n == 1) {
 		(id, name, args) := hd calls;
 		skip := agentlib->dedupcheck(name, args);
-		if(skip != "")
+		if(skip != "") {
+			prov("toolres", sys->sprint("agent=%s step=%d tool=%s status=cached",
+				provagent, step + 1, name), array of byte skip);
 			return (id, skip) :: nil;
+		}
 		r := exectool1(name, args);
+		prov("toolres", sys->sprint("agent=%s step=%d tool=%s", provagent, step + 1, name),
+			array of byte r);
 		agentlib->deduprecord(name, args, r, step);
 		if(len r > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(provenance(name, args) + r, step);
@@ -796,6 +848,8 @@ exectools(calls: list of (string, string, string), step: int): list of (string, 
 		<-timeoutch =>
 			r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
 		}
+		prov("toolres", sys->sprint("agent=%s step=%d tool=%s", provagent, step + 1, name),
+			array of byte r);
 		agentlib->deduprecord(name, args, r, step);
 		if(len r > AgentLib->STREAM_THRESHOLD) {
 			scratchfile := agentlib->writescratch(provenance(name, args) + r, step * 10 + i);
@@ -820,13 +874,18 @@ agentloop(fd: ref Sys->FD, id, initialprompt: string)
 	if(verbose)
 		sys->fprint(stderr, "veltro: agentloop start\n");
 
+	prov("prompt", "agent=" + id + " step=0", array of byte initialprompt);
 	response := agentlib->queryllmfd(fd, initialprompt);
 	if(response == "") {
 		sys->fprint(stderr, "veltro: LLM returned empty response\n");
+		prov("agentdone", "agent=" + id + " steps=0 stop=empty", nil);
 		return;
 	}
+	prov("llm", "agent=" + id + " step=0", array of byte response);
 
-	for(step := 0; step < maxsteps; step++) {
+	done := 0;
+	step := 0;
+	for(; step < maxsteps; step++) {
 		if(verbose)
 			sys->fprint(stderr, "veltro: step %d\n", step + 1);
 
@@ -836,13 +895,22 @@ agentloop(fd: ref Sys->FD, id, initialprompt: string)
 			sys->print("%s\n", text);
 
 		# Agent is done
-		if(stopreason == "end_turn" || stopreason == "" || tools == nil)
+		if(stopreason == "end_turn" || stopreason == "" || tools == nil) {
+			sr := stopreason;
+			if(sr == "")
+				sr = "none";
+			prov("agentdone", sys->sprint("agent=%s steps=%d stop=%s", id, step, sr),
+				array of byte text);
+			done = 1;
 			break;
+		}
 
 		# Display tool invocations
 		for(tc := tools; tc != nil; tc = tl tc) {
 			(nil, name, args) := hd tc;
 			sys->print("[%s %s]\n", name, agentlib->truncate(args, 80));
+			prov("toolcall", sys->sprint("agent=%s step=%d tool=%s", id, step + 1, name),
+				array of byte args);
 		}
 
 		# Execute tools (parallel if multiple)
@@ -861,9 +929,15 @@ agentloop(fd: ref Sys->FD, id, initialprompt: string)
 		response = agentlib->queryllmfd(fd, wire);
 		if(response == "") {
 			sys->fprint(stderr, "veltro: empty response after tool results\n");
+			prov("agentdone", sys->sprint("agent=%s steps=%d stop=empty", id, step + 1), nil);
+			done = 1;
 			break;
 		}
+		prov("llm", sys->sprint("agent=%s step=%d", id, step + 1), array of byte response);
 	}
+
+	if(!done)
+		prov("agentdone", sys->sprint("agent=%s steps=%d stop=max-steps", id, step), nil);
 
 	if(verbose)
 		sys->fprint(stderr, "veltro: agentloop done\n");
@@ -917,7 +991,19 @@ runagent(task: string)
 
 	# Set system prompt for native tool_use
 	systempath := "/mnt/llm/" + llmsessionid + "/system";
-	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns, loadpersona()));
+	sysprompt := agentlib->buildsystemprompt(ns, loadpersona());
+	agentlib->setsystemprompt(systempath, sysprompt);
+
+	# Provenance (INFR-355): seal what this agent is, what it can see,
+	# and what it was asked — before the first model turn.
+	mname := model;
+	if(mname == "")
+		mname = "default";
+	provagent = llmsessionid;
+	prov("agentstart", "agent=" + llmsessionid + " session=" + slug + " model=" + mname, nil);
+	prov("nscaps", "agent=" + llmsessionid, array of byte ns);
+	prov("sysprompt", "agent=" + llmsessionid, array of byte sysprompt);
+	prov("task", "agent=" + llmsessionid, array of byte task);
 
 	# Install tool definitions for native tool_use protocol
 	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
@@ -942,6 +1028,8 @@ runagent(task: string)
 	# Save plan to session directory
 	if(sdir != "" && plan != "")
 		writefile(sdir + "/plan", plan);
+	if(plan != "")
+		prov("plan", "agent=" + llmsessionid, array of byte plan);
 
 	# Assemble initial prompt (system prompt already set separately)
 	prompt: string;
@@ -1011,7 +1099,20 @@ runresume(name, extra: string)
 		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
 
 	systempath := "/mnt/llm/" + llmsessionid + "/system";
-	agentlib->setsystemprompt(systempath, agentlib->buildsystemprompt(ns, loadpersona()));
+	sysprompt := agentlib->buildsystemprompt(ns, loadpersona());
+	agentlib->setsystemprompt(systempath, sysprompt);
+
+	# Provenance (INFR-355): a resumed run is a fresh model conversation —
+	# seal its inputs like a new one.
+	mname := model;
+	if(mname == "")
+		mname = "default";
+	provagent = llmsessionid;
+	prov("agentstart", "agent=" + llmsessionid + " session=" + actualname +
+		" resume=1 model=" + mname, nil);
+	prov("nscaps", "agent=" + llmsessionid, array of byte ns);
+	prov("sysprompt", "agent=" + llmsessionid, array of byte sysprompt);
+	prov("task", "agent=" + llmsessionid, array of byte task);
 
 	# Install tool definitions for native tool_use protocol
 	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");

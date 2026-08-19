@@ -63,6 +63,9 @@ include "../subagent.m";
 include "agentlib.m";
 	agentlib: AgentLib;
 
+include "auditprov.m";
+	ap: AuditProv;
+
 ToolSpawn: module {
 	init: fn(): string;
 	name: fn(): string;
@@ -156,8 +159,69 @@ init(): string
 	agentlib = load AgentLib AgentLib->PATH;
 	if(agentlib != nil)
 		agentlib->init();
+	# Provenance emitter (INFR-355). Loaded in the parent namespace like
+	# agentlib; optional — an install without auditing leaves ap nil and
+	# spawn behaves exactly as before.
+	ap = load AuditProv AuditProv->PATH;
+	if(ap != nil && ap->init() != nil)
+		ap = nil;
 	inited = 1;
 	return nil;
+}
+
+# ---- Provenance (INFR-355) ----
+
+provinited := 0;
+
+# Seal one parent-side provenance record. Lazy-attaches the content
+# store on first use; degradation is auditprov's (content=unstored) and
+# absence of /mnt/audit makes the whole thing a no-op.
+provemit(event, msg: string, payload: array of byte)
+{
+	if(ap == nil)
+		return;
+	if(!provinited) {
+		provinited = 1;
+		ap->attach(nil);
+	}
+	ap->log("veltro", event, msg, payload);
+}
+
+# Dial a content-store connection for one child. The fd is handed to
+# runchild, kept across NEWFD, and handshaken inside the restricted
+# namespace (subagent setprov/attachfd). nil = store unreachable; the
+# child still seals records via its bound /mnt/audit/log.
+provdial(): ref Sys->FD
+{
+	if(ap == nil)
+		return nil;
+	(fd, nil) := ap->dialraw(nil);
+	return fd;
+}
+
+# Serialize what a child was granted, for the subcaps record payload.
+capsmanifest(caps: ref NsConstruct->Capabilities, at_ms, every_ms, timeout_ms: int): string
+{
+	s := "tools=" + joinlist(caps.tools) + "\n";
+	s += "paths=" + joinlist(caps.paths) + "\n";
+	s += "shellcmds=" + joinlist(caps.shellcmds) + "\n";
+	if(caps.llmconfig != nil) {
+		s += "model=" + caps.llmconfig.model + "\n";
+		s += sys->sprint("thinking=%d\n", caps.llmconfig.thinking);
+	}
+	s += sys->sprint("at_ms=%d every_ms=%d timeout_ms=%d\n", at_ms, every_ms, timeout_ms);
+	return s;
+}
+
+joinlist(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		if(s != "")
+			s += ",";
+		s += hd l;
+	}
+	return s;
 }
 
 name(): string
@@ -331,9 +395,23 @@ exec(args: string): string
 			return "error: exec/shell subagents cannot receive path grants; use read/list/find/grep for read-only inspection or write/edit with explicit staged write grants";
 		}
 
+		# Provenance (INFR-355): when this install audits, every child gets
+		# the append-only audit sink bound into its namespace. Install
+		# policy, not a model-granted capability — added after the
+		# exec/path ban above deliberately: /mnt/audit/log is a write-only
+		# sink (auditcontrolpath keeps chain/ctl/root ungrantable), not an
+		# inspection surface.
+		childpaths := spec.paths;
+		auditing := 0;
+		(aok, nil) := sys->stat("/mnt/audit/log");
+		if(aok >= 0) {
+			auditing = 1;
+			childpaths = "/mnt/audit/log" :: childpaths;
+		}
+
 		caps := ref NsConstruct->Capabilities(
 			childtools,
-			spec.paths,
+			childpaths,
 			spec.shellcmds,
 			spec.llmconfig,
 			0 :: 1 :: 2 :: nil,
@@ -350,6 +428,19 @@ exec(args: string): string
 		# a missing log must never break the agent loop.
 		logfd := opensubagentlog(batchms, idx);
 
+		# Provenance (INFR-355): name the child, seal what it was asked
+		# and what it was granted, and dial it a content-store
+		# connection to carry into the restricted namespace.
+		childid := "";
+		provfd: ref Sys->FD;
+		if(auditing) {
+			childid = sys->sprint("sub-%d-%d", batchms, idx);
+			provemit("spawn", "child=" + childid, array of byte spec.task);
+			provemit("subcaps", "child=" + childid,
+				array of byte capsmanifest(caps, spec.at_ms, spec.every_ms, timeout_ms));
+			provfd = provdial();
+		}
+
 		# Scheduled (at= or every=): fire-and-forget. The child becomes a
 		# real, killable process visible in /prog; result collection
 		# would block well past any sane timeout (at= may be hours away;
@@ -357,7 +448,7 @@ exec(args: string): string
 		# do not spawn a collector. Cancellation: echo kill > /prog/$pid/ctl.
 		if(spec.at_ms > 0 || spec.every_ms > 0) {
 			# Pass nil pipe — runchild detects this and writes nothing back.
-			spawn runchild(nil, logfd, caps, spec.task, slot.mod, spec.at_ms, spec.every_ms);
+			spawn runchild(nil, logfd, caps, spec.task, slot.mod, childid, provfd, spec.at_ms, spec.every_ms);
 			schedmsg: string;
 			if(spec.at_ms > 0)
 				schedmsg = sys->sprint("scheduled: single run in %d ms", spec.at_ms);
@@ -376,7 +467,7 @@ exec(args: string): string
 			continue;
 		}
 
-		spawn runchild(pipefds[1], logfd, caps, spec.task, slot.mod, 0, 0);
+		spawn runchild(pipefds[1], logfd, caps, spec.task, slot.mod, childid, provfd, 0, 0);
 		pipefds[1] = nil;
 		spawn collectorwithTimeout(pipefds[0], resultchan, timeout_ms, idx);
 		idx++;
@@ -1001,7 +1092,8 @@ collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, tim
 # and is not waiting. Cancellation: echo kill > /prog/$pid/ctl.
 runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
          caps: ref NsConstruct->Capabilities, task: string,
-         samod: SubAgent, at_ms: int, every_ms: int)
+         samod: SubAgent, childid: string, provfd: ref Sys->FD,
+         at_ms: int, every_ms: int)
 {
 	# Step 1: Fresh process group (empty service registry)
 	if(sys->pctl(Sys->NEWPGRP, nil) < 0) {
@@ -1130,6 +1222,8 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 		keepfds = llmaskfd.fd :: keepfds;
 	if(logfd != nil)
 		keepfds = logfd.fd :: keepfds;
+	if(provfd != nil)
+		keepfds = provfd.fd :: keepfds;
 	if(sys->pctl(Sys->NEWFD, keepfds) < 0) {
 		writeresult(pipefd, "ERROR:cannot restrict file descriptors");
 		return;
@@ -1154,6 +1248,12 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	systemprompt := "";
 	if(caps.llmconfig != nil)
 		systemprompt = caps.llmconfig.system;
+
+	# Arm provenance (INFR-355): the child completes the content-store
+	# handshake and seals its own trajectory from inside the restricted
+	# namespace (the audit sink is bound via the caps auto-grant above).
+	if(childid != "")
+		samod->setprov(childid, provfd);
 
 	# at= scheduling: sleep once before the (single) iteration. Caps are
 	# already attenuated above — the sleeping process holds the same

@@ -262,10 +262,18 @@ The child process applies the full isolation sequence:
 4. Open LLM FDs          -- While /mnt/llm still accessible from parent
 5. restrictns(caps)      -- Further bind-replace restrictions
 6. verifysafefds()       -- Redirect FDs 0-2 to /dev/null if nil
-7. pctl(NEWFD, keepfds)  -- Prune all other FDs
+7. pctl(NEWFD, keepfds)  -- Prune all other FDs (llm ask, log, pipe, provenance store)
 8. pctl(NODEVS)          -- Block #U/#p/#c device naming
-9. subagent->runloop()   -- Execute task with pre-loaded tool modules
+9. setprov(childid, fd)  -- Arm audit provenance (INFR-355): child seals its
+                            trajectory via the bound write-only /mnt/audit/log;
+                            payloads go to the content store over the pre-dialed fd
+10. subagent->runloop()  -- Execute task with pre-loaded tool modules
 ```
+
+When the install audits (`/mnt/audit/log` present), spawn auto-grants that
+append-only path into every child's caps; `auditcontrolpath` keeps
+`/mnt/audit` itself, `chain`, and `ctl` ungrantable, so a child can append
+to its own trail but can never read or rewrite history (AU-9 by placement).
 
 ## Subagent Architecture
 

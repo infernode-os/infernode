@@ -26,6 +26,12 @@ include "nsconstruct.m";
 
 include "cowfs.m";
 
+include "keyring.m";
+	kr: Keyring;
+
+include "audit.m";
+	audit: Audit;
+
 # Trusted namespace construction state lives outside the agent workspace.
 # /tmp is narrowed only after all shadow-backed binds have been installed.
 SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
@@ -581,6 +587,19 @@ restrictns(caps: ref Capabilities): string
 	if(err != nil)
 		return sys->sprint("restrict /tmp/veltro: %s", err);
 
+	# Provenance (INFR-355): record this restriction while the trusted
+	# /tmp/.veltro-ns tree is still reachable (step 10 hides it). The
+	# manifest lands in AUDIT_DIR and, when the install audits, its hash
+	# is sealed into /mnt/audit — the sink was bound by the caps grant
+	# above, so the record comes from inside the restricted namespace.
+	# ops are consumed newest-first (emitauditlog reverses them).
+	auditops := "restrict /tmp -> veltro (final, after this manifest)" ::
+		("shellcmds=" + joincsv(caps.shellcmds)) ::
+		("writepaths=" + joincsv(caps.writepaths)) ::
+		("paths=" + joincsv(caps.paths)) ::
+		("tools=" + joincsv(caps.tools)) :: nil;
+	emitauditlog(sys->sprint("%d", sys->pctl(0, nil)), auditops);
+
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
 	# constructed first; their backing channels remain valid after the trusted
 	# /tmp/.veltro-ns tree is hidden. Agents retain only their workspace.
@@ -589,6 +608,17 @@ restrictns(caps: ref Capabilities): string
 		return sys->sprint("restrict /tmp: %s", err);
 
 	return nil;
+}
+
+joincsv(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		if(s != "")
+			s += ",";
+		s += hd l;
+	}
+	return s;
 }
 
 tmpveltroallow(caps: ref Capabilities): list of string
@@ -1355,27 +1385,50 @@ emitauditlog(id: string, ops: list of string)
 
 	mkdirp(AUDIT_DIR);
 
-	auditpath := AUDIT_DIR + "/" + id + ".ns";
-	fd := sys->create(auditpath, Sys->OWRITE, FILE_MODE);
-	if(fd == nil)
-		return;
+	content := sys->sprint("# Veltro Namespace Audit (v3)\n# ID: %s\n\n", id);
 
-	sys->fprint(fd, "# Veltro Namespace Audit (v3)\n# ID: %s\n\n", id);
-
-	# Write operations in reverse order (oldest first)
+	# Operations arrive newest-first; render oldest-first
 	revops: list of string;
 	for(; ops != nil; ops = tl ops)
 		revops = hd ops :: revops;
 	for(; revops != nil; revops = tl revops)
-		sys->fprint(fd, "%s\n", hd revops);
+		content += (hd revops) + "\n";
 
 	# Dump current namespace state
 	pid := sys->pctl(0, nil);
 	nscontent := readfile(sys->sprint("/prog/%d/ns", pid));
 	if(nscontent != "")
-		sys->fprint(fd, "\n# Current namespace:\n%s", nscontent);
+		content += "\n# Current namespace:\n" + nscontent;
 
-	fd = nil;
+	auditpath := AUDIT_DIR + "/" + id + ".ns";
+	fd := sys->create(auditpath, Sys->OWRITE, FILE_MODE);
+	if(fd != nil) {
+		b := array of byte content;
+		sys->write(fd, b, len b);
+		fd = nil;
+	}
+
+	# Provenance (INFR-355): seal the manifest hash into the audit chain.
+	# The full manifest stays in AUDIT_DIR; the chain pins it so it cannot
+	# be quietly edited after the fact. No-op when the install does not
+	# audit — /mnt/audit/log is simply not bound and audit->log returns -1.
+	if(audit == nil) {
+		audit = load Audit Audit->PATH;
+		if(audit != nil)
+			audit->init();
+	}
+	if(kr == nil)
+		kr = load Keyring Keyring->PATH;
+	if(audit != nil && kr != nil) {
+		mb := array of byte content;
+		digest := array[Keyring->SHA256dlen] of byte;
+		kr->sha256(mb, len mb, digest, nil);
+		hex := "";
+		for(i := 0; i < len digest; i++)
+			hex += sys->sprint("%.2ux", int digest[i]);
+		audit->log("veltro", "nsrestrict",
+			sys->sprint("id=%s sha256=%s size=%d", id, hex, len mb));
+	}
 }
 
 # Helper: create directory with parents

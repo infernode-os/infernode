@@ -49,4 +49,14 @@ SubAgent: module {
 	# tools: (bare-tool,mount). Empty maps leave the child native-tools-only.
 	setmcp: fn(mounts: list of (string, string),
 	            tools: list of (string, string));
+
+	# Agent provenance (INFR-355). Called by spawn.b AFTER restrictns and
+	# before runloop. id names this child in audit records; fd is a dialed
+	# but un-handshaken connection to the provenance content store
+	# (auditprov->dialraw in the parent; the fd survives NEWFD via
+	# keepfds, and the child completes the venti handshake). nil fd = no
+	# content store reachable: records still seal through the bound
+	# /mnt/audit/log with payloads marked content=unstored. Never called =
+	# no provenance emission at all (install without auditing).
+	setprov: fn(id: string, fd: ref Sys->FD);
 };

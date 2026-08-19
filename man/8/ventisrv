@@ -1,0 +1,118 @@
+.TH VENTISRV 8
+.SH NAME
+ventisrv \- venti server
+.SH SYNOPSIS
+.B ventisrv
+[
+.B -DcCqv
+] [
+.B -I
+.I indexoffset
+] [
+.B -i
+.I index
+] [
+.B -d
+.I data
+] [
+.B -s
+.I statsfile
+] [
+.B -r
+.I addr
+] [
+.B -w
+.I addr
+]
+.I maxdatasize
+.I meanblocksize
+.SH DESCRIPTION
+Ventisrv is a venti server that keeps scores partially in memory for fast lookups.  A venti server is a write-once store for data blocks.  The address of a block is the SHA-1
+.I score
+of that block along with a user-specified type.  Using the score as address has two interesting properties.  First, the address of the data can be used to verify the data are equal to those requested (this also means data "at" an address cannot be overwritten).  Second, multiple writes of the same data can be detected by checking if the score (address) is already present; the data only has to be stored once.  Since venti does not allow removal of blocks, a venti server can be used as permanent archival storage server.
+.PP
+The scores of the blocks stored in the venti server are kept in memory only partially.  When a request for a block comes in, all partial matches are determined, each specifying a block address in the data file.  The block for each match is read from the data file and returned if the score in the block header is equal to the requested score.  The number of bits kept in memory is the minimum number of bits required for a high probability (0.999) of resulting in a single match if the score is present.  The required number of bits is determined from the arguments passed at startup.
+.I Maxdatasize
+is the maximum file size of the data file.  Or, the last addressable block in the data file.
+.I Meanblocksize
+is the (expected) mean blocksize.  These values are used to determine the number of storable blocks from which the amount of bits for the score is deduced.  Note that the index file stores a fixed number of score bytes, so a ventisrv can be restarted with other values.
+.PP
+To determine the memory requirements for a ventisrv configuration, specify the
+.B -q
+option.  It quits after initialisation and enables verbose output, before reading the index file, and thus prints the memory necessary for the configuration.  If the system (e.g. emu) has too little heap memory available, a warning is printed.
+.PP
+Data blocks are stored in a normal, append-only file, specified with
+.BR -d .
+The blocks are prepended with a header that holds the size, score and type of the block, and the starting time of the connection that wrote the block.  The index file is also a normal, append-only file, specified with
+.BR -i ,
+that only has headers:  a part of the score, type and offset of the block header in the data file.  At startup, the blocks for the last 128 headers in the index file are verified (the (partial) scores in the headers and actual scores are checked).  With
+.B -I
+the byte offset in the index file to start verifying at can be set, it should be a multiple of 15, the index header size.
+Missing headers are added from the data file to the index file if necessary.  Thus, starting ventisrv after truncating the index file will regerenate it from the data file.  Then the index file is read into memory (using only the minimum required bits).
+.PP
+.TP
+.B -c
+Compress blocks before writing.  Implies
+.BR -C .
+Ventisrv does not compress by default because compression is slow.
+.TP
+.B -C
+Make ventisrv accept compressed blocks in the data file, default is to not accept them.  Implied by
+.BR -c .
+This uses an additional bit of memory per score.
+.TP
+.B -q
+Quit just before reading the index and data files at startup.  This is useful for learning how much memory is needed for the specified data file size and mean block size configuration.
+.TP
+.BI -I " indexoffset"
+Offset in the index file to start verifying headers with the data file.  Must be a multiple of 15, the index header size.  With this option ventisrv can be used as a diagnostics tool for the index and data file.
+.TP
+.BI -i " index"
+File to use as index file.  Default is
+.IR index .
+.TP
+.BI -d " data"
+File to use as data file.  Default is
+.IR data .
+.TP
+.BI -s " statsfile"
+File to serve statistics on.  Default is
+.IR /chan/ventisrvstats .
+Each line starts with a space-padded 14 byte number followed by a space and a textual description.  The last line is empty unless a write error has occurred, in which case it contains the error message.
+.TP
+.B -D
+Print (lots of) debug messages.  Prints multiple lines per venti transaction.
+.TP
+.B -v
+Be more verbose, especially at startup and when errors occur.
+.TP
+.BI -r " address"
+Listen for read-only connections on
+.IR address .
+.TP
+.BI -w " address"
+Listen for connections on
+.IR address .
+If neither
+.B -r
+nor
+.B -w
+is specified, a default of
+.I "-w net!*!venti"
+is assumed.
+.PP
+Note that
+.I ventisrv
+does not authenticate connections and cannot use raw disks for storage.
+.SH SOURCE
+.B /appl/cmd/ventisrv.b
+.SH SEE ALSO
+.IR vacget (1),
+.IR vacfs (4),
+.IR auditfs (4)
+.SH BUGS
+Bad data files have to be fixed manually, with diagostics from ventisrv.
+.br
+The index file can grow quite large, causing slow startup.
+.br
+Memory usage is calculated based on averages and guesses about dis memory needs.

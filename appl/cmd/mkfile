@@ -186,6 +186,7 @@ TARG=\
 	vacfs.dis\
 	vacget.dis\
 	vacput.dis\
+	ventisrv.dis\
 	vid9p.dis\
 	wav2iaf.dis\
 	wc.dis\

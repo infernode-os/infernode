@@ -47,11 +47,22 @@ prng(uchar *p, int n)
 		if(r < 0) {
 			if(errno == EINTR)
 				continue;
-			/* fallback to /dev/urandom */
+			/* fallback to /dev/urandom; must fill completely */
 			int fd = open("/dev/urandom", 0);
 			if(fd >= 0) {
-				if(read(fd, p, n)){/*nothing*/}
+				while(n > 0) {
+					ssize_t rr = read(fd, p, n);
+					if(rr <= 0)
+						break;
+					p += rr;
+					n -= rr;
+				}
 				close(fd);
+			}
+			if(n > 0) {
+				fprint(2, "prng: no secure random source available "
+					"(getrandom and /dev/urandom failed), aborting\n");
+				abort();
 			}
 			return;
 		}
@@ -62,11 +73,18 @@ prng(uchar *p, int n)
 	int fd;
 	fd = open("/dev/urandom", 0);
 	if(fd >= 0) {
-		if(read(fd, p, n)){/*nothing*/}
+		while(n > 0) {
+			ssize_t r = read(fd, p, n);
+			if(r <= 0)
+				break;
+			p += r;
+			n -= r;
+		}
 		close(fd);
-	} else {
+	}
+	if(n > 0) {
 		/* no secure random source available — abort rather than
-		 * silently falling back to the insecure C rand() */
+		 * silently returning a partially filled or empty buffer */
 		fprint(2, "prng: no secure random source available "
 			"(/dev/urandom failed), aborting\n");
 		abort();

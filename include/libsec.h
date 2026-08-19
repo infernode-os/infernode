@@ -146,7 +146,8 @@ int	p384_ecdh(uchar shared[48], uchar priv[48], ECpoint384 *peerpub);
 /* secp256k1 ECDSA (Ethereum/Bitcoin) */
 /* ===================================================== */
 int	secp256k1_keygen(uchar priv[32], uchar pub[65]);
-void	secp256k1_pubkey(uchar pub[65], uchar priv[32]);
+int	secp256k1_privkey_valid(uchar priv[32]);
+int	secp256k1_pubkey(uchar pub[65], uchar priv[32]);
 int	secp256k1_sign(uchar sig[65], uchar priv[32], uchar *hash, int hashlen);
 int	secp256k1_recover(uchar pub[65], uchar *hash, int hashlen, uchar sig[65]);
 int	secp256k1_verify(uchar sig[64], uchar pub[65], uchar *hash, int hashlen);

@@ -65,7 +65,7 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 | **AU-9** Protection of Audit Information | Protect logs from tampering | SHA-256 hash chain (tamper-evident) + namespace access control + external anchor. [`SP800-92-audit-log.md`](SP800-92-audit-log.md); `tests/auditchain_test.b` (tamper/reorder/deletion) | **Met** |
 | **AU-9(3)** Cryptographic Protection | Cryptographic integrity | Hash chain + signed checkpoints. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) | **Met** |
 | **AU-10** Non-Repudiation | Verifiable origin binding | `keyring`-signed checkpoints; `auditverify -k pubkey` verifies offline with no secret. [`appl/cmd/auditverify.b`](../../appl/cmd/auditverify.b) | Substantially met (unsigned-tail; INFR-356) |
-| **AU-12** Audit Record Generation | Generate records across components | Emitters at auth/identity/credential chokepoints; one `load Audit` per subsystem. CDS/veltro pending (INFR-355) | Substantially met |
+| **AU-12** Audit Record Generation | Generate records across components | Emitters at auth/identity/credential chokepoints; one `load Audit` per subsystem. Veltro agent provenance wired (INFR-355): full trajectory sealed, payloads content-addressed via `auditprov(2)`/`ventisrv(8)`. CDS emitters follow the CDS guard itself | Substantially met |
 
 ---
 

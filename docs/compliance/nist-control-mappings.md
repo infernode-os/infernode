@@ -62,7 +62,7 @@ and the four-family itemization in
 | **AU-9** / 3.3.8 | Protect audit info from tampering | SHA-256 hash chain + namespace ACL + external anchor | By construction (cryptographic) | `appl/lib/auditchain.b`; `tests/auditchain_test.b` | FAU_STG.2 | Tamper/reorder/delete detectable |
 | **AU-9(3)** | Cryptographic protection of audit info | Hash chain + signed checkpoints | By construction | `SP800-92-audit-log.md` | FAU_STG.2 | |
 | **AU-10** / 3.3.x | Non-repudiation | Keyring-signed checkpoints; `auditverify -k pubkey` offline | Partial | `appl/cmd/auditverify.b` | FAU_STG.2, FAU_SAR.1 | Unsigned-tail window; factotum-held key — **gap (F-5)** (INFR-356) |
-| **AU-12** / 3.3.1 | Record generation across components | Emitters at auth/identity/credential chokepoints | Partial | `appl/lib/audit.b` | FAU_GEN.1 | CDS/veltro emitters pending (INFR-355) |
+| **AU-12** / 3.3.1 | Record generation across components | Emitters at auth/identity/credential chokepoints + veltro agent-provenance trajectory (INFR-355) | Substantial | `appl/lib/audit.b`, `appl/lib/auditprov.b` | FAU_GEN.1 | CDS emitters follow the CDS guard itself |
 
 ## 3. Identification & Authentication (IA) — SP 800-53 / 800-171 §3.5
 

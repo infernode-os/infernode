@@ -1,0 +1,48 @@
+.TH AUDITGET 1
+.SH NAME
+auditget \- fetch and verify an audit-record payload
+.SH SYNOPSIS
+.B auditget
+[
+.B -a
+.I addr
+] [
+.B -s
+.I sha256
+]
+.I score
+.SH DESCRIPTION
+A payload-bearing audit record (see
+.IR auditprov (2))
+carries
+.B content=
+and
+.B sha256=
+fields.
+.I Auditget
+fetches the payload named by
+.I score
+from the provenance content store and streams it to standard output.
+The venti fetch itself verifies every block against its score; with
+.B -s
+the payload is additionally checked against the given SHA-256 \(em the
+hash the audit chain sealed \(em and the command fails on mismatch.
+.PP
+.B -a
+names the content store; the default is the
+.B auditventi
+environment variable, then
+.BR tcp!127.0.0.1!17034 .
+.SH EXAMPLE
+Fetch and verify the payload of a chain record:
+.EX
+	; grep 'veltro task' /mnt/audit/chain
+	1042 ... veltro task agent=7 content=5d1f\fI...\fP sha256=29da\fI...\fP size=41
+	; auditget -s 29da\fI...\fP 5d1f\fI...\fP
+.EE
+.SH SOURCE
+.B /appl/cmd/auditget.b
+.SH SEE ALSO
+.IR auditprov (2),
+.IR auditfs (4),
+.IR ventisrv (8)

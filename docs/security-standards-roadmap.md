@@ -118,8 +118,10 @@ The artifact procurement and accreditors actually ask for. Fill the *Mechanism* 
    (`tests/twofaslot_test.b`); passwordless deliberately declined. Evidence:
    `docs/compliance/SP800-63B-AAL3.md`; ops in `docs/yubikey-2fa-operations.md`.
 2. **Tamper-evident audit-log service** — ✅ **BUILT** (`/mnt/audit`, hash chain + factotum-signed
-   checkpoints, offline verifier, lifecycle emitters; INFR-343/356). Remaining: AU-4/5/6/7
-   operational tooling + retention, and the agent-provenance content store (INFR-355) — see the
+   checkpoints, offline verifier, lifecycle emitters; INFR-343/356). The agent-provenance
+   content store is ✅ **BUILT** too (INFR-355: `ventisrv(8)` + `auditprov(2)` + veltro
+   trajectory emitters, `content=<score> sha256=<hex>` records). Remaining: AU-4/5/6/7
+   operational tooling + retention — see the
    residual-gap table in [`compliance/SP800-92-audit-log.md`](compliance/SP800-92-audit-log.md).
 3. **CNSA 2.0 strict params** — ✅ **DONE**: ML-KEM-1024 negotiated end-to-end on both transports (INFR-329) and ML-DSA-87 the default signer under CNSA mode across `createsignerkey` + the auth-domain CA (INFR-330); G3 (LMS/XMSS) Not Applicable. Met under CNSA-strict mode; default deployments stay classical by design. See [`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md).
 4. **SP 800-53 / 800-171 control-mapping** — unlocks federal & finance conversations.

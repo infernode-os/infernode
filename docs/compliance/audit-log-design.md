@@ -197,24 +197,42 @@ seq  time        source   event      hash             message
 
 If we dislike it, we delete one command, one lib, and the mount line. That's the test.
 
-## 8. Extending cleanly to AI-agent logging (designed-in, not built yet)
+## 8. Extending cleanly to AI-agent logging (BUILT — INFR-355)
 
 v1 is a **security log**. The agent-provenance extension (prompts, completions, tool calls,
-spawns — see the earlier discussion) drops in **without reworking the spine**:
+spawns) dropped in **without reworking the spine**, exactly as designed:
 
 1. **Same chain, same files, same record format.** Agent events are just more `source=veltro`
-   records.
-2. **Bulk content by reference.** A large prompt/completion is stored as a **vac block** (the
-   content store layer) and the record carries `content=<vacscore>` — the chain line stays
-   tiny, identical content dedupes, and the sensitive payload is separable from the broadly-
-   auditable trail (confidentiality/minimization). This is the one *additive* layer (vac as the
-   content store + `vacfs` as the read path); it does not change v1's mechanism.
-3. **Same namespace property.** Agents get write-only `log` bound → they record their own
-   trajectory but can't rewrite it.
+   records: `agentstart`/`nscaps`/`sysprompt`/`task`/`plan`, per-step `prompt`/`llm`/
+   `toolcall`/`toolres`, `spawn`/`subcaps` plus the child-side `substart`/`subtask`/`subllm`/
+   `subtool`/`subtoolres`/`subdone`, `nsrestrict`, `agentdone`.
+2. **Bulk content by reference.** A payload is stored in a local `ventisrv(8)` (salvaged from
+   mjl's public-domain GSoC 2007 ventivac work — the server the in-tree vac stack always
+   referenced) as a vac hash tree, and the record carries
+   `content=<score> sha256=<hex> size=<n>` (`auditprov(2)`; read back with `auditget(1)`).
+   The chain line stays tiny, identical content dedupes, and the sensitive payload is
+   separable from the broadly-auditable trail (confidentiality/minimization).
+   **The SHA-256 pin is deliberate:** venti scores are SHA-1, which is collision-broken, so
+   the score is treated as a *locator* only; the record's SHA-256 — sealed under the chain —
+   is what pins the payload. A chosen-prefix SHA-1 collision buys an attacker nothing.
+3. **Same namespace property.** Agents get write-only `log` bound (`spawn` auto-grants
+   `/mnt/audit/log`; `auditcontrolpath` keeps `chain`/`ctl`/the root ungrantable) → they
+   record their own trajectory but can't read or rewrite it. Children carry a pre-dialed
+   store connection across `pctl(NEWNS)` and complete the venti handshake inside the
+   restricted namespace.
 4. **Volume knob.** High-volume agent records use cheap per-record hashing + amortized
-   checkpoint signing (the reason B/chain was chosen over a per-record MAC).
+   checkpoint signing (the reason B/chain was chosen over a per-record MAC). Store
+   unreachable degrades to `content=unstored` — the event still seals, the trail shows the
+   gap. Fail-closed: under `Audit->ONFILE`, veltro refuses to start an agent whose actions
+   cannot be sealed (the `secstored` authok posture).
+5. **Confidentiality model (decided):** plaintext blocks by **placement**, the Plan 9 way —
+   the store's data file sits under the audit directory's permissions, read capability is
+   possession of the score (you can only name what you have hashed), and subjects never see
+   the chain that maps scores to context. Known residual: venti's write-once dedup is a
+   presence oracle for a subject that already holds a candidate payload. Encryption-at-rest
+   is a deployment choice (encrypted volume), not machinery here.
 
-So the v1→agent path is *add a content-store layer and wire emitters*, never a redesign.
+The v1→agent path was *add a content-store layer and wire emitters* — no redesign.
 
 ## 9. CISO / control mapping (how this closes the AU gap)
 
@@ -251,8 +269,15 @@ pre-existing SC-13 gap (`FIPS-140-3-readiness.md`), not introduced here.
 
 **v1 wiring (small, reviewed individually):** `login`/`2fa`, `factotum` emit to `/mnt/audit/log`.
 
-**v2 (agent provenance):** add the vac content-store layer + `content=<score>`; wire
-`appl/veltro/{spawn,subagent,nsconstruct}` emitters (route the existing `emitauditlog`).
+**v2 (agent provenance) — shipped (INFR-355):**
+- `appl/cmd/ventisrv.b` — the content store (salvaged, public domain); `man/8/ventisrv`.
+- `module/auditprov.m` + `appl/lib/auditprov.b` — store + seal (`content=<score>
+  sha256=<hex> size=<n>`); `man/2/auditprov`.
+- `appl/cmd/auditget.b` — auditor-side fetch + SHA-256 verify; `man/1/auditget`.
+- Emitters wired in `appl/veltro/{veltro,subagent}.b` and `appl/veltro/tools/spawn.b`;
+  `nsconstruct.b`'s previously-uncalled `emitauditlog` now driven by `restrictns` and
+  sealed into the chain (`nsrestrict`).
+- `tests/auditprov_test.b` — live ventisrv + auditfs integration (8 tests).
 
 ## 11. What we deliberately do NOT build
 No daemon/socket protocol; no facility/severity config language; no binary journal; no internal

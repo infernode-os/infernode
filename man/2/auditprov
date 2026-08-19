@@ -1,0 +1,92 @@
+.TH AUDITPROV 2
+.SH NAME
+auditprov \- agent-provenance emitter for the tamper-evident audit log
+.SH SYNOPSIS
+.EX
+include "auditprov.m";
+auditprov := load AuditProv AuditProv->PATH;
+
+init:     fn(): string;
+attach:   fn(addr: string): string;
+dialraw:  fn(addr: string): (ref Sys->FD, string);
+attachfd: fn(fd: ref Sys->FD): string;
+attached: fn(): int;
+put:      fn(data: array of byte): (string, string, string);
+get:      fn(score: string): (array of byte, string);
+sha256:   fn(data: array of byte): string;
+log:      fn(source, event, msg: string, payload: array of byte): int;
+.EE
+.SH DESCRIPTION
+.B Auditprov
+extends the audit log served by
+.IR auditfs (4)
+with content-addressed payloads, so that bulky agent-provenance
+content \(em prompts, tool arguments and results, completions \(em can
+be sealed into the tamper-evident trail without bloating the chain.
+The payload is stored in a
+.IR ventisrv (8)
+content store as a vac hash tree; the audit record carries three
+fields appended to its message:
+.EX
+	content=<score> sha256=<hex> size=<n>
+.EE
+.I Score
+is the venti score of a packed vac entry describing the payload
+(fetch it with
+.IR auditget (1)
+or
+.BR get ).
+.I Sha256
+is the SHA-256 digest of the raw payload.
+The score is only a locator; the SHA-256 is the integrity pin, and it
+is sealed under the SHA-256 hash chain of
+.IR auditfs (4),
+so venti's SHA-1 addressing cannot be used to equivocate a payload
+after the fact.
+.PP
+.B Init
+loads the underlying modules and must be called first.
+.B Attach
+dials the content store and performs the venti handshake;
+an empty
+.I addr
+resolves via the
+.B auditventi
+environment variable, then the default
+.BR tcp!127.0.0.1!17034 .
+.B Dialraw
+dials without handshaking, returning a connection descriptor that a
+parent may hand to a namespace-restricted child (the descriptor
+survives
+.BR pctl(NEWNS) );
+the child completes the handshake with
+.BR attachfd .
+.PP
+.B Put
+stores a payload and returns its score and SHA-256;
+identical payloads dedupe to the same score.
+.B Get
+fetches a payload back by score.
+.B Log
+combines the two: it stores
+.I payload
+(when non-nil) and seals one record via
+.IR audit (2)'s
+append-only sink
+.BR /mnt/audit/log .
+It returns 0 on success and \-1 if the record could not be sealed.
+If the payload cannot be stored, the record is still sealed with
+.B content=unstored
+(the event is never lost) and \-2 is returned; the caller decides
+whether that is fatal (see
+.B Audit->ONFILE
+for the fail-closed convention).
+.SH SOURCE
+.B /appl/lib/auditprov.b
+.SH SEE ALSO
+.IR auditget (1),
+.IR auditfs (4),
+.IR ventisrv (8),
+.IR venti (2)
+.br
+.B /doc/compliance/audit-log-design.md

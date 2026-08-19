@@ -732,17 +732,17 @@ echo 'network Base' > /n/wallet/ctl
 
 Veltro agents can use the `wallet` and `payfetch` tools:
 
-- **`wallet`** — List accounts, check balances, sign transactions
+- **`wallet`** — List accounts, check balances, queue payment proposals
 - **`payfetch`** — HTTP client that automatically handles x402 payment flows
 
-When a server returns HTTP 402 Payment Required, `payfetch` parses the payment requirements, checks the wallet budget, signs the authorization, and retries — all transparently.
+When a server returns HTTP 402 Payment Required, `payfetch` requests a payment authorization from the wallet and retries with it. By default the request waits in the wallet's approval queue — you approve or deny it in the wallet GUI (right-click → **Pending Payments**).
 
-Budget enforcement is server-side in wallet9p. Agents cannot bypass spending limits.
+Budget and approval enforcement is server-side in wallet9p. Agents cannot bypass spending limits or the approval queue.
 
 ### Key Security
 
-- Private keys live in factotum, never in wallet9p's memory
-- Agents can queue payment proposals, but raw hash signing is not exposed through the agent wallet grant
+- Private keys live in factotum; wallet9p fetches them per operation and zeroes them immediately
+- Agents never see the raw signing interface. They submit structured payment requests (`pay`, `authorize`); wallet9p constructs what it signs, so the key only ever signs messages the wallet itself built and policy-checked
 - Wallet access is namespace-gated: agents need explicit `"/n/wallet"` in their capabilities
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see raw keys
 

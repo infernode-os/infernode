@@ -1,6 +1,6 @@
 # PDF Module
 
-Infernode includes a native PDF parser and renderer written entirely in Limbo.
+InferNode includes a native PDF parser and renderer written entirely in Limbo.
 It can open PDF files, extract text, and render pages to Draw images — all
 within the Inferno environment with no external dependencies (aside from an
 optional host-side `pdftoppm` fallback in the Xenith integration).
@@ -299,7 +299,7 @@ The parser is designed to handle malformed PDFs gracefully:
 
 ## Reproducing the Conformance Tests
 
-The test PDFs are **not** included in the Infernode distribution — they are
+The test PDFs are **not** included in the InferNode distribution — they are
 fetched from upstream open-source repositories on demand. The full corpus is
 ~1.8 GB on disk (10,302 files). To reproduce:
 

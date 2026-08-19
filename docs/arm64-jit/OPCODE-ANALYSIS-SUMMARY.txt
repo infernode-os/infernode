@@ -265,7 +265,7 @@ VERIFICATION PERFORMED:
 CONFIDENCE: High
   - Direct code analysis of switch statement
   - All 171 cases enumerated and categorized
-  - Consistent with Infernode/Limbo VM design
+  - Consistent with InferNode/Limbo VM design
   - Compatible with ARM32 implementation
 
 ================================================================================

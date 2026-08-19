@@ -1,7 +1,7 @@
 # Plan: Namespace Security Verification — Closing Gaps for Publication
 
 ## Goal
-Bring the Infernode namespace isolation formal verification to an academically
+Bring the InferNode namespace isolation formal verification to an academically
 publishable standard, suitable for venues like USENIX Security, OSDI, or FM/CAV.
 
 ## Current State Assessment

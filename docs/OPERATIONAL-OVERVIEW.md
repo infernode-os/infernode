@@ -1,4 +1,4 @@
-# Infernode / Veltro — Operational Overview
+# InferNode / Veltro — Operational Overview
 
 ## The Platform
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Build script for Linux x86_64 (amd64)
-# Builds Infernode with SDL3 GUI (Lucifer) by default.
+# Builds InferNode with SDL3 GUI (Lucifer) by default.
 # Run this on any x86_64 Linux system.
 #
 # Usage:

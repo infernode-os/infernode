@@ -1,8 +1,8 @@
-# Infernode / Veltro — Architecture
+# InferNode / Veltro — Architecture
 
 ## Overview
 
-Infernode is Inferno OS running natively on AMD64 and ARM64 (macOS, Linux, Windows). The AI
+InferNode is Inferno OS running natively on AMD64 and ARM64 (macOS, Linux, Windows). The AI
 agent stack runs entirely inside the Inferno emulator (`emu`), using Plan 9's "everything is
 a file" model to integrate the LLM API, tool execution, wallet, and GUI through a unified 9P namespace.
 

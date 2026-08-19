@@ -15,6 +15,7 @@ TARG=\
 	acmewin.dis\
 	arg.dis\
 	audit.dis\
+	auditprov.dis\
 	auditchain.dis\
 	testing.dis\
 	textwidget.dis\

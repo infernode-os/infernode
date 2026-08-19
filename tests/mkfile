@@ -6,6 +6,7 @@ DIRS=\
 TARG=\
 	9p_export_test.dis\
 	auditchain_test.dis\
+	auditprov_test.dis\
 	auditsign_test.dis\
 	auditverify_test.dis\
 	alpha_test.dis\

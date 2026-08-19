@@ -60,7 +60,7 @@ and factotum. Then `-c` runs the quoted command string:
 |------|---------|---------|
 | 1 | `wm/logon` | Login screen. Creates secstore account on first run, unlocks and loads keys on subsequent runs. Blocks until the user enters their password. |
 | 2 | `llmsrv &` | LLM 9P file server. Mounts at `/mnt/llm`. Reads config from `lib/ndb/llm` (via profile). The `&` backgrounds it. |
-| 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Experimental. |
+| 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Mounts at `/n/wallet`; enforces budget and approval policy on all payments. |
 | 4 | `luciuisrv` | UI 9P server. Creates the `/mnt/ui` namespace that lucifer, lucipres, luciconv, and lucibridge all communicate through. This is the hub. |
 | 5 | `echo activity create Main > /mnt/ui/ctl` | Creates the default "Main" activity (task/conversation). |
 | 6 | `tools9p -v -m /tool -b ... -p ...` | Veltro tool server. `-b` lists built-in tool modules. `-p` lists tools available to the agent as "passive" (invocable). Mounts at `/tool`. |

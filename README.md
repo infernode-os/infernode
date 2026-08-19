@@ -88,7 +88,7 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 - **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 39 tool modules, LLM integration via 9P, and formally verified containment.
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucifer) or by agents through `/mnt/matrix/ctl`.
-- **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending. **Experimental — testnet only.**
+- **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
 - **Go on Dis** — the [GoDis compiler](tools/godis/README.md) translates Go source to Dis bytecode; 190+ test programs pass end-to-end.
 - **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
 - **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).

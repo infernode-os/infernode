@@ -107,8 +107,9 @@ init(nil: ref Draw->Context, nil: list of string)
 	}
 
 	if(!exists("/n/wallet/accounts") || !exists("/n/wallet/default") ||
+	   !exists("/n/wallet/network") ||
 	   !exists("/n/wallet/captest/address") || !exists("/n/wallet/captest/pay") ||
-	   !exists("/n/wallet/captest/history")) {
+	   !exists("/n/wallet/captest/authorize") || !exists("/n/wallet/captest/history")) {
 		fail("agent wallet proposal/read surface missing");
 		return;
 	}
@@ -125,6 +126,10 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 
+	# The checks above also cover the raw signing oracle: signing an
+	# arbitrary 32-byte hash with the spend key bypasses budget and
+	# approval policy entirely (e.g. an EIP-3009 transfer of the whole
+	# balance), so it must be neither visible nor writable.
 	if(writefile("/n/wallet/captest/pay", "abc 0x000000000000000000000000000000000000dEaD") >= 0) {
 		fail("wallet accepted non-decimal payment amount");
 		return;

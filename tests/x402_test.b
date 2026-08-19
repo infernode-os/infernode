@@ -181,6 +181,93 @@ testParseSettlementFailed(t: ref T)
 	t.assertseq(sr.errorreason, "insufficient balance", "error reason");
 }
 
+#
+# EIP-712 / EIP-3009 type-hash constants.  These are the well-known
+# published constants (EIP-712 spec; USDC's FiatTokenV2 contract) —
+# a mismatch means our Keccak or type strings are wrong.
+#
+
+testEIP712TypeHashes(t: ref T)
+{
+	dh := array of byte "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+	digest := array[32] of byte;
+	kr->keccak256(dh, len dh, digest);
+	t.assertseq(ethcrypto->hexencode(digest),
+		"8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f",
+		"EIP712Domain type hash matches spec constant");
+
+	th := array of byte "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)";
+	kr->keccak256(th, len th, digest);
+	t.assertseq(ethcrypto->hexencode(digest),
+		"7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267",
+		"TransferWithAuthorization type hash matches EIP-3009 constant");
+}
+
+#
+# authdigest: determinism, sensitivity, and strict validation.
+#
+
+testAuthDigest(t: ref T)
+{
+	nonce := array[32] of byte;
+	for(i := 0; i < 32; i++)
+		nonce[i] = byte i;
+
+	(d1, e1) := x402->authdigest("eip155:84532",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"10000", big 1000, big 2000, nonce, "USDC", "2");
+	t.assert(e1 == nil, "authdigest succeeds on valid input");
+	t.assert(d1 != nil && len d1 == 32, "digest is 32 bytes");
+
+	(d2, nil) := x402->authdigest("eip155:84532",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"10000", big 1000, big 2000, nonce, "USDC", "2");
+	t.assert(d2 != nil && ethcrypto->hexencode(d1) == ethcrypto->hexencode(d2),
+		"authdigest is deterministic");
+
+	(d3, nil) := x402->authdigest("eip155:84532",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"10001", big 1000, big 2000, nonce, "USDC", "2");
+	t.assert(d3 != nil && ethcrypto->hexencode(d1) != ethcrypto->hexencode(d3),
+		"amount change changes digest");
+
+	# strict validation failures
+	(dx, ex) := x402->authdigest("eip155:84532",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"1.5", big 1000, big 2000, nonce, "USDC", "2");
+	t.assert(dx == nil && ex != nil, "fractional amount rejected");
+
+	(dx, ex) = x402->authdigest("eip155:84532",
+		"notanaddress",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"10000", big 1000, big 2000, nonce, "USDC", "2");
+	t.assert(dx == nil && ex != nil, "bad asset address rejected");
+
+	(dx, ex) = x402->authdigest("eip155:84532",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"10000", big 2000, big 1000, nonce, "USDC", "2");
+	t.assert(dx == nil && ex != nil, "inverted validity window rejected");
+
+	badnonce := array[16] of byte;
+	(dx, ex) = x402->authdigest("eip155:84532",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"10000", big 1000, big 2000, badnonce, "USDC", "2");
+	t.assert(dx == nil && ex != nil, "short nonce rejected");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -227,6 +314,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Settlement tests
 	run("Settlement/Success", testParseSettlement);
 	run("Settlement/Failed", testParseSettlementFailed);
+
+	# EIP-712 / EIP-3009
+	run("EIP712/TypeHashes", testEIP712TypeHashes);
+	run("EIP712/AuthDigest", testAuthDigest);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

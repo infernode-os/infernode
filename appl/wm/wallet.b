@@ -55,7 +55,7 @@ AcctInfo: adt {
 
 # ── Modes ─────────────────────────────────────────────────────
 
-ModeView, ModeNewETH, ModeImport, ModePay: con iota;
+ModeView, ModeNewETH, ModeImport, ModePay, ModePending: con iota;
 
 Field: adt {
 	path:    string;
@@ -216,6 +216,7 @@ buildmenus()
 	tk->cmd(top, ".mainmenu add command -label {New Ethereum Account} -command {send act new}");
 	tk->cmd(top, ".mainmenu add command -label {Import Private Key} -command {send act import}");
 	tk->cmd(top, ".mainmenu add separator");
+	tk->cmd(top, ".mainmenu add command -label {Pending Payments} -command {send act pending}");
 	tk->cmd(top, ".mainmenu add command -label {Refresh} -command {send act refresh}");
 	tk->cmd(top, "menu .detailmenu");
 	tk->cmd(top, ".detailmenu add command -label {Send Payment} -command {send act pay}");
@@ -255,8 +256,79 @@ setmode(m: int)
 			}, "Import", "doimport");
 	ModePay =>
 		buildpay();
+	ModePending =>
+		buildpending();
 	}
 	tk->cmd(top, "update");
+}
+
+# ── Pending payment review (approve/deny) ─────────────────────
+
+buildpending()
+{
+	r := ".main.right";
+	tk->cmd(top, "label " + r + ".title -text {Pending Payments}");
+	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {8 4}");
+
+	raw := readwalletfile("", "pending");
+	(nil, lines) := sys->tokenize(raw, "\n");
+	nrows := 0;
+	for(; lines != nil; lines = tl lines){
+		ln := strip(hd lines);
+		if(ln == "" || ln == "(none)")
+			continue;
+		# "<id> <kind> <acct> <token> <amount> <recipient> <agent>"
+		(ntoks, toks) := sys->tokenize(ln, " \t");
+		if(ntoks < 6)
+			continue;
+		id := hd toks;
+		kind := hd tl toks;
+		acct := hd tl tl toks;
+		token := hd tl tl tl toks;
+		amount := hd tl tl tl tl toks;
+		recip := hd tl tl tl tl tl toks;
+
+		desc := acct + ": " + amount + " " + token + " -> " + recip;
+		if(kind == "x402")
+			desc = acct + ": x402 " + amount + " of " + token + " -> " + recip;
+		if(len desc > 76)
+			desc = desc[0:76] + "...";
+
+		f := r + sys->sprint(".p%d", nrows);
+		tk->cmd(top, "frame " + f);
+		tk->cmd(top, "label " + f + ".l -text {#" + id + " " + desc + "}");
+		tk->cmd(top, "button " + f + ".ok -text {Approve} -command {send act approve " + id + "}");
+		tk->cmd(top, "button " + f + ".no -text {Deny} -command {send act deny " + id + "}");
+		tk->cmd(top, "pack " + f + ".l -side left -padx {12 8}");
+		tk->cmd(top, "pack " + f + ".no -side right -padx {4 12}");
+		tk->cmd(top, "pack " + f + ".ok -side right -padx 4");
+		tk->cmd(top, "pack " + f + " -side top -fill x -pady 2");
+		nrows++;
+	}
+	if(nrows == 0){
+		tk->cmd(top, "label " + r + ".none -text {No pending payments} -foreground " + dim);
+		tk->cmd(top, "pack " + r + ".none -side top -anchor w -padx 12 -pady 8");
+	}
+	tk->cmd(top, "button " + r + ".back -text {Back} -command {send act cancel}");
+	tk->cmd(top, "pack " + r + ".back -side top -anchor w -padx 12 -pady {8 4}");
+}
+
+doapprove(id: string)
+{
+	if(writewalletctl("ctl", "approve " + id) <= 0)
+		setstatus(errmsg("approve failed"));
+	else
+		setstatus("Payment " + id + " approved");
+	setmode(ModePending);
+}
+
+dodeny(id: string)
+{
+	if(writewalletctl("ctl", "deny " + id) <= 0)
+		setstatus(errmsg("deny failed"));
+	else
+		setstatus("Payment " + id + " denied");
+	setmode(ModePending);
 }
 
 buildview()
@@ -430,6 +502,13 @@ handleaction(a: string)
 	"new" =>     setmode(ModeNewETH);
 	"import" =>  setmode(ModeImport);
 	"pay" =>     if(selacct >= 0) setmode(ModePay);
+	"pending" => setmode(ModePending);
+	"approve" =>
+		if(tl toks != nil)
+			doapprove(hd tl toks);
+	"deny" =>
+		if(tl toks != nil)
+			dodeny(hd tl toks);
 	"refresh" =>
 		refreshaccounts();
 		setmode(ModeView);
@@ -525,6 +604,21 @@ dosend()
 		return;
 	}
 	txhash := strip(readwalletfile(acct.name, "pay"));
+	if(len txhash > 8 && txhash[0:8] == "pending:"){
+		# This payment was initiated by the user right here, so the
+		# trusted GUI approves its own proposal immediately.  Agent
+		# proposals still wait in the Pending Payments queue.
+		if(writewalletctl("ctl", "approve " + txhash[8:]) <= 0){
+			setstatus(errmsg("payment queued but approval failed"));
+			setmode(ModePending);
+			return;
+		}
+		txhash = strip(readwalletfile(acct.name, "pay"));
+	}
+	if(len txhash > 6 && txhash[0:6] == "error:"){
+		setstatus("Payment failed: " + txhash[6:]);
+		return;
+	}
 	if(txhash != ""){
 		shown := txhash;
 		if(len shown > 20)

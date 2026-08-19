@@ -279,7 +279,16 @@ weitohex(wei: string): string
 	ip := IPint.strtoip(s, 10);
 	if(ip == nil)
 		return nil;
-	return "0x" + ip.iptostr(16);
+	# iptostr emits uppercase hex; Ethereum canonical form is lowercase
+	h := ip.iptostr(16);
+	lh := "";
+	for(i = 0; i < len h; i++) {
+		c := h[i];
+		if(c >= 'A' && c <= 'F')
+			c += 'a' - 'A';
+		lh[len lh] = c;
+	}
+	return "0x" + lh;
 }
 
 # Wei → ETH string (18 decimal places, trimmed)

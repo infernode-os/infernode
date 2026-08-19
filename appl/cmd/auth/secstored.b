@@ -1,7 +1,7 @@
 implement Secstored;
 
 #
-# secstored - Secstore server for Infernode
+# secstored - Secstore server for InferNode
 #
 # Implements the Plan 9 secstore server protocol (PAK authentication,
 # encrypted file storage).  Compatible with the existing secstore

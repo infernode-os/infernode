@@ -1,9 +1,9 @@
 /*
- * SDL3 GUI Backend for Infernode
+ * SDL3 GUI Backend for InferNode
  *
  * This module provides cross-platform GUI via SDL3.
  * It is completely self-contained and can be removed
- * without impacting Infernode core.
+ * without impacting InferNode core.
  *
  * Platforms: macOS (Metal), Linux (Vulkan/OpenGL), Windows (D3D12)
  *
@@ -12,7 +12,7 @@
  * RENDERING ARCHITECTURE (Performance Critical)
  * =============================================
  *
- * Infernode's draw system calls flushmemscreen() frequently during rendering
+ * InferNode's draw system calls flushmemscreen() frequently during rendering
  * (100-1000+ times per frame for text-heavy operations like directory
  * listings or text selection). The naive implementation would call
  * SDL_UpdateTexture() and SDL_RenderPresent() on each flush, but on macOS
@@ -897,10 +897,10 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		return nil;
 	}
 
-	/* Initialize buffer to white (Infernode default) */
+	/* Initialize buffer to white (InferNode default) */
 	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
-	/* Return screen parameters to Infernode */
+	/* Return screen parameters to InferNode */
 	*r = Rect(0, 0, sdl_width, sdl_height);
 	*chan = XRGB32;
 	*d = 32;
@@ -950,7 +950,7 @@ flushmemscreen(Rectangle r)
 
 	/*
 	 * Accumulate into bounding box of all dirty regions.
-	 * No locking needed - single writer (Infernode), single reader (main loop).
+	 * No locking needed - single writer (InferNode), single reader (main loop).
 	 */
 	if (!dirty_pending) {
 		dirty_min_x = r.min.x;
@@ -971,7 +971,7 @@ flushmemscreen(Rectangle r)
 
 /*
  * Set mouse pointer position
- * Coordinates from Infernode are in texture space; we convert to window space.
+ * Coordinates from InferNode are in texture space; we convert to window space.
  */
 void
 setpointer(int x, int y)
@@ -1001,7 +1001,7 @@ setpointer(int x, int y)
 }
 
 /*
- * Draw cursor (Infernode's software cursor).
+ * Draw cursor (InferNode's software cursor).
  * Convert Inferno cursor bitmap to SDL3 cursor.
  *
  * Inferno cursor data layout (1-bpp, MSB-first):
@@ -1084,7 +1084,7 @@ clipread(void)
 	if (!text)
 		return nil;
 
-	/* Copy to Infernode-managed memory */
+	/* Copy to InferNode-managed memory */
 	char *result = strdup(text);
 	SDL_free(text);
 
@@ -1430,7 +1430,7 @@ sdl3_mainloop(void)
 
 	/* mainloop running on main thread */
 
-	/* Event loop - processes SDL events and sends to Infernode */
+	/* Event loop - processes SDL events and sends to InferNode */
 	for(;;) {
 #ifndef __APPLE__
 		handle_window_creation();

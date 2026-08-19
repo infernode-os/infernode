@@ -1,4 +1,4 @@
-# Quantum-Safe Cryptography Plan for Infernode
+# Quantum-Safe Cryptography Plan for InferNode
 
 **Status:** Complete — All phases implemented (FIPS 203, 204, 205)
 **Date:** 2026-03-05
@@ -34,7 +34,7 @@ quantum-safe end-to-end. See
 
 ## 1. Motivation
 
-Quantum computers capable of running Shor's algorithm will break RSA, DSA, ECDH, ECDSA, and ElGamal — all asymmetric algorithms currently used in Infernode. The **"harvest now, decrypt later"** threat means adversaries recording encrypted traffic today can decrypt it once they obtain a cryptographically relevant quantum computer (projected 5-10 years).
+Quantum computers capable of running Shor's algorithm will break RSA, DSA, ECDH, ECDSA, and ElGamal — all asymmetric algorithms currently used in InferNode. The **"harvest now, decrypt later"** threat means adversaries recording encrypted traffic today can decrypt it once they obtain a cryptographically relevant quantum computer (projected 5-10 years).
 
 NIST finalized three post-quantum cryptography standards in August 2024:
 
@@ -119,7 +119,7 @@ ML-KEM first (addresses harvest-now-decrypt-later), then ML-DSA (addresses futur
 
 ## 4. SHA-3 / SHAKE Prerequisite
 
-Both ML-KEM and ML-DSA require SHAKE-128 and SHAKE-256 (extendable output functions based on Keccak). Infernode currently has SHA-1/SHA-256/SHA-384/SHA-512 but **no SHA-3 family**.
+Both ML-KEM and ML-DSA require SHAKE-128 and SHAKE-256 (extendable output functions based on Keccak). InferNode currently has SHA-1/SHA-256/SHA-384/SHA-512 but **no SHA-3 family**.
 
 ### Phase 0: SHA-3 / SHAKE Implementation
 

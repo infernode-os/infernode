@@ -67,7 +67,14 @@ if {~ $emuhost MacOSX Linux Nt}{
 	# First-run only: seed writable defaults from the emu root (don't clobber
 	# a user's existing config on later boots).
 	if {! ftest -f $infhome/lib/ndb/llm} {
-		cp /lib/ndb/llm $infhome/lib/ndb/llm >[2] /dev/null
+		# /lib/ndb/llm is git-ignored (a developer's endpoints stay
+		# local), so a source tree may not have one — fall back to the
+		# tracked template. Release artifacts ship their own defaults.
+		if {ftest -f /lib/ndb/llm} {
+			cp /lib/ndb/llm $infhome/lib/ndb/llm >[2] /dev/null
+		} {
+			cp /lib/ndb/llm.example $infhome/lib/ndb/llm >[2] /dev/null
+		}
 		cp /lib/lucifer/theme/current $infhome/lib/lucifer/theme/current >[2] /dev/null
 		cp /lib/veltro/meta.txt $infhome/lib/veltro/meta.txt >[2] /dev/null
 		cp /lib/veltro/agents/task.txt $infhome/lib/veltro-agents/task.txt >[2] /dev/null

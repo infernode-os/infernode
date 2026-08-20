@@ -124,7 +124,8 @@ subdirectories over the corresponding paths in the Inferno namespace.
 ~/.infernode/
   usr/inferno/secstore/     # Encrypted key storage (PAK + factotum files)
   usr/inferno/tmp/           # Persistent temp files
-  lib/ndb/                   # LLM config (lib/ndb/llm)
+  lib/ndb/                   # LLM config (lib/ndb/llm — git-ignored;
+                             #   tracked template is lib/ndb/llm.example)
   lib/lucifer/theme/         # GUI theme (current)
   lib/veltro/                # Agent state (welcome_shown, tour_offered, meta.txt)
   lib/veltro-agents/         # Task agent prompts

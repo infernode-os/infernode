@@ -351,6 +351,8 @@ timeoutTask(ch: chan of int, ms: int)
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
 | `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
+| `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
+| `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).

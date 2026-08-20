@@ -28,19 +28,31 @@ extern ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 #include <bcrypt.h>
 #endif
 
-//
-//  fill a buffer with cryptographically secure random bytes
-//
-void
-prng(uchar *p, int n)
+/*
+ * Fill a buffer with cryptographically secure random bytes.
+ *
+ * prngtry() reports failure to the caller; prng() treats failure as
+ * fatal.  Code that can degrade or report an error (a /dev entry
+ * serving a whole VM, say) must use prngtry(): aborting there turns a
+ * degraded-entropy condition into a crash for every hosted process.
+ * Code that would otherwise use weak key material must use prng().
+ *
+ * Returns 0 on success, -1 if the buffer could not be completely
+ * filled from a secure source.  A partial buffer is never returned as
+ * success.
+ */
+int
+prngtry(uchar *p, int n)
 {
+	if(n <= 0)
+		return 0;
 #if defined(__APPLE__)
 	arc4random_buf(p, n);
+	return 0;
 #elif defined(_WIN32)
-	if(BCryptGenRandom(NULL, p, n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
-		fprint(2, "prng: BCryptGenRandom failed, aborting\n");
-		abort();
-	}
+	if(BCryptGenRandom(NULL, p, n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+		return -1;
+	return 0;
 #elif defined(__linux__)
 	while(n > 0) {
 		ssize_t r = getrandom(p, n, 0);
@@ -61,16 +73,12 @@ prng(uchar *p, int n)
 				}
 				close(fd);
 			}
-			if(n > 0) {
-				fprint(2, "prng: no secure random source available "
-					"(getrandom and /dev/urandom failed), aborting\n");
-				abort();
-			}
-			return;
+			return n > 0 ? -1 : 0;
 		}
 		p += r;
 		n -= r;
 	}
+	return 0;
 #else
 	int fd;
 	fd = open("/dev/urandom", 0);
@@ -86,12 +94,17 @@ prng(uchar *p, int n)
 		}
 		close(fd);
 	}
-	if(n > 0) {
-		/* no secure random source available — abort rather than
-		 * silently returning a partially filled or empty buffer */
-		fprint(2, "prng: no secure random source available "
-			"(/dev/urandom failed), aborting\n");
+	return n > 0 ? -1 : 0;
+#endif
+}
+
+void
+prng(uchar *p, int n)
+{
+	if(prngtry(p, n) < 0) {
+		/* no secure random source — abort rather than proceed with
+		 * unfilled or predictable key material */
+		fprint(2, "prng: no secure random source available, aborting\n");
 		abort();
 	}
-#endif
 }

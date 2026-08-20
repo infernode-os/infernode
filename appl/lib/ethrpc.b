@@ -76,9 +76,17 @@ chainid(): (int, string)
 	(result, err) := rpccall("eth_chainId", "[]");
 	if(err != nil)
 		return (0, err);
-	id := hexnum(getresultstr(result));
-	if(id < 0)
+	# Parse at full precision first so a chain id beyond int range is
+	# reported as the (unsupported) number it is, rather than as a
+	# malformed response — the network table only holds ids that fit
+	# an int, so such a chain simply is not one we can sign for.
+	raw := getresultstr(result);
+	dec := hextowei(raw);
+	if(dec == nil)
 		return (0, "eth_chainId: malformed response");
+	id := hexnum(raw);
+	if(id < 0)
+		return (0, "eth_chainId: unsupported chain id " + dec);
 	return (id, nil);
 }
 

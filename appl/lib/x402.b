@@ -167,6 +167,28 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 	if(!validacct(acctname))
 		return (nil, "unsafe wallet account name");
 
+	# EVERY field below comes from the server's 402 response and is
+	# about to be concatenated into a newline-delimited, key-value
+	# protocol.  A field containing a newline would inject additional
+	# keys — and wallet9p's parser would let them override payto and
+	# amount — so the payload is signed for an attacker's recipient.
+	# Validate shape here and reject control characters outright;
+	# wallet9p independently re-validates and rejects duplicate keys.
+	if(req.scheme != "exact")
+		return (nil, "unsupported payment scheme: " + clean(req.scheme));
+	if(!validnetwork(req.network))
+		return (nil, "malformed network in 402 response: " + clean(req.network));
+	if(ethcrypto->strtoaddr(req.asset) == nil)
+		return (nil, "malformed asset address in 402 response: " + clean(req.asset));
+	if(ethcrypto->strtoaddr(req.payto) == nil)
+		return (nil, "malformed payTo address in 402 response: " + clean(req.payto));
+	if(ethcrypto->dectobe(req.amount) == nil)
+		return (nil, "malformed amount in 402 response: " + clean(req.amount));
+	if(req.timeout < 0)
+		return (nil, "malformed timeout in 402 response");
+	if(!validtoken(req.name) || !validtoken(req.version))
+		return (nil, "malformed token name/version in 402 response");
+
 	reqtext := "scheme " + req.scheme + "\n" +
 		"network " + req.network + "\n" +
 		"asset " + req.asset + "\n" +
@@ -175,8 +197,11 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 		"timeout " + string req.timeout + "\n" +
 		"name " + req.name + "\n" +
 		"version " + req.version + "\n";
-	if(resource != nil && resource.url != "")
+	if(resource != nil && resource.url != "") {
+		if(!validurlfield(resource.url))
+			return (nil, "malformed resource url in 402 response");
 		reqtext += "resource " + resource.url + "\n";
+	}
 
 	authpath := "/n/wallet/" + acctname + "/authorize";
 	fd := sys->open(authpath, Sys->ORDWR);
@@ -331,22 +356,26 @@ chaintonetwork(chain: string): string
 	return "eip155:1";	# default to mainnet
 }
 
+#
+# Parse "eip155:NNNN" → NNNN.  Returns 0 for anything that is not a
+# well-formed EIP-155 CAIP-2 id.
+#
+# This MUST NOT default to a real chain: wallet9p pins payments by
+# comparing this against the active network's chain id, so returning
+# 1 (mainnet) for unparseable input made that check pass — fail-open —
+# whenever the wallet happened to be on mainnet.
+#
 networktochainid(network: string): int
 {
-	# Parse "eip155:NNNN" → NNNN
-	if(len network > 7 && network[0:7] == "eip155:") {
-		rest := network[7:];
-		id := 0;
-		for(i := 0; i < len rest; i++) {
-			c := rest[i];
-			if(c >= '0' && c <= '9')
-				id = id * 10 + (c - '0');
-			else
-				break;
-		}
-		return id;
-	}
-	return 1;	# default mainnet
+	if(!validnetwork(network))
+		return 0;
+	rest := network[7:];
+	if(len rest > 9)
+		return 0;	# beyond what an int chain id can hold
+	id := 0;
+	for(i := 0; i < len rest; i++)
+		id = id * 10 + (rest[i] - '0');
+	return id;
 }
 
 #
@@ -574,6 +603,74 @@ strip(s: string): string
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == '\r' || s[len s - 1] == ' '))
 		s = s[0:len s - 1];
 	return s;
+}
+
+#
+# Field validators for the wallet authorize protocol.
+#
+# The protocol is line-oriented "key value", so no field may contain a
+# newline, carriage return, or any other control character.  These are
+# deliberately conservative: anything unusual is rejected rather than
+# escaped, because the consequence of a mistake is a signed transfer.
+#
+
+# No control characters (including \n and \r), printable ASCII only
+noctl(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] > '~')
+			return 0;
+	return 1;
+}
+
+# "eip155:<digits>", nothing else
+validnetwork(s: string): int
+{
+	if(s == nil || len s < 8 || len s > 32 || s[0:7] != "eip155:")
+		return 0;
+	rest := s[7:];
+	for(i := 0; i < len rest; i++)
+		if(!(rest[i] >= '0' && rest[i] <= '9'))
+			return 0;
+	return 1;
+}
+
+# Token name / version: short, printable, no control characters
+validtoken(s: string): int
+{
+	if(s == nil || len s == 0 || len s > 64)
+		return 0;
+	return noctl(s);
+}
+
+# Resource URL echoed back into the request line
+validurlfield(s: string): int
+{
+	if(s == nil || len s == 0 || len s > 1024)
+		return 0;
+	if(!noctl(s))
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == ' ')
+			return 0;
+	return 1;
+}
+
+# Sanitize an untrusted string for inclusion in an error message
+clean(s: string): string
+{
+	if(s == nil)
+		return "";
+	if(len s > 64)
+		s = s[0:64];
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c > '~')
+			c = '?';
+		r[len r] = c;
+	}
+	return r;
 }
 
 validacct(s: string): int

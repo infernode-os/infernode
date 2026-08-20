@@ -425,6 +425,62 @@ dectobe(s: string): array of byte
 }
 
 #
+# Compare two big-endian unsigned integers of any length.
+# -1 if a < b, 0 if a == b, 1 if a > b.
+#
+becmp(a, b: array of byte): int
+{
+	a = minimalbe(a);
+	b = minimalbe(b);
+	if(len a != len b) {
+		if(len a < len b)
+			return -1;
+		return 1;
+	}
+	for(i := 0; i < len a; i++) {
+		if(a[i] != b[i]) {
+			if(int a[i] < int b[i])
+				return -1;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+#
+# Add two big-endian unsigned integers.
+# Returns nil on overflow past 2^256-1.
+#
+beadd(a, b: array of byte): array of byte
+{
+	a = minimalbe(a);
+	b = minimalbe(b);
+	n := len a;
+	if(len b > n)
+		n = len b;
+	r := array[n + 1] of byte;
+	for(i := 0; i < len r; i++)
+		r[i] = byte 0;
+	carry := 0;
+	for(i = 0; i < n; i++) {
+		av := 0;
+		if(i < len a)
+			av = int a[len a - 1 - i];
+		bv := 0;
+		if(i < len b)
+			bv = int b[len b - 1 - i];
+		sum := av + bv + carry;
+		r[len r - 1 - i] = byte (sum & 16rff);
+		carry = sum >> 8;
+	}
+	r[0] = byte carry;
+	r = minimalbe(r);
+	if(len r > 32)
+		return nil;
+	return r;
+}
+
+#
 # Big-endian unsigned bytes -> decimal string (arbitrary precision).
 #
 betodec(b: array of byte): string

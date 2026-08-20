@@ -193,6 +193,12 @@ testWalletMissingArgs(t: ref T)
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unknown command"),
 		"sign is not an agent wallet command");
 
+	# 'sign' no longer exists at all: raw hash signing was a blind
+	# oracle over the spend key, so it is not an agent capability
+	r = tool->exec("sign myacct deadbeef");
+	t.assert(hassubstr(r, "unknown command"),
+		"sign with args is still not a command");
+
 	# 'pay' needs at least account + amount
 	r = tool->exec("pay myacct");
 	t.assert(hassubstr(r, "error"), "pay with one arg rejected");
@@ -229,7 +235,7 @@ testWalletRejectsUnsafeAccount(t: ref T)
 
 	r = tool->exec("sign ../ctl 9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unknown command"),
-		"wallet sign is not an agent command");
+		"wallet sign is gone, not merely guarded");
 
 	r = tool->exec("pay ../ctl 1000 0x000000000000000000000000000000000000dEaD");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),

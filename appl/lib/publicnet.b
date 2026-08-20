@@ -120,3 +120,187 @@ schemestr(s: string): string
 			return s[0:i];
 	return s;
 }
+
+#
+# ── URL host extraction and blocking ─────────────────────────────────
+#
+# Shared by every fetch tool (webfetch, payfetch, http). Keeping this
+# in one place is the point: private copies of a security predicate
+# drift, and the weakest copy is the one that gets exploited.
+#
+
+urlhost(url: string): string
+{
+	if(sys == nil || str == nil)
+		init();
+	s := url;
+	# strip scheme
+	for(i := 0; i < len s; i++) {
+		if(i + 2 < len s && s[i] == '/' && s[i+1] == '/') {
+			s = s[i+2:];
+			break;
+		}
+	}
+	# strip path/query/fragment
+	for(i = 0; i < len s; i++) {
+		c := s[i];
+		if(c == '/' || c == '?' || c == '#') {
+			s = s[0:i];
+			break;
+		}
+	}
+	# strip userinfo FIRST (rightmost '@'), else "user:pass@host"
+	# leaves "user" once the port strip below cuts at the first ':'
+	for(i = len s - 1; i >= 0; i--) {
+		if(s[i] == '@') {
+			s = s[i+1:];
+			break;
+		}
+	}
+	if(len s > 0 && s[0] == '[') {
+		# bracketed IPv6 literal: keep "[...]", drop any :port after
+		for(i = 0; i < len s; i++) {
+			if(s[i] == ']') {
+				s = s[0:i+1];
+				break;
+			}
+		}
+	} else {
+		for(i = 0; i < len s; i++) {
+			if(s[i] == ':') {
+				s = s[0:i];
+				break;
+			}
+		}
+	}
+	return str->tolower(s);
+}
+
+hostblocked(host: string): int
+{
+	if(sys == nil || str == nil)
+		init();
+	if(host == nil || host == "")
+		return 1;
+	host = str->tolower(host);
+	if(len host > 2 && host[0] == '[' && host[len host - 1] == ']')
+		host = host[1:len host - 1];
+
+	# literal name forms
+	if(host == "localhost" || host == "ip6-localhost" ||
+	   host == "metadata" || host == "metadata.google.internal")
+		return 1;
+	if(hasprefix(host, "localhost."))
+		return 1;
+
+	# IPv6: loopback, unspecified, unique-local (fc00::/7), link-local
+	if(hasprefix(host, "::") || hasprefix(host, "fc") ||
+	   hasprefix(host, "fd") || hasprefix(host, "fe80"))
+		return 1;
+	if(host == "0:0:0:0:0:0:0:1" ||
+	   host == "0000:0000:0000:0000:0000:0000:0000:0001")
+		return 1;
+
+	# IPv4 literal in any radix (decimal, octal, hex, packed integer).
+	# 0177.0.0.1, 0x7f.0.0.1 and 2130706433 are all 127.0.0.1.
+	(v, ok) := parseipv4any(host);
+	if(ok)
+		return publicipv4(dotted(v)) != 1;
+
+	return 0;
+}
+
+# Parse an IPv4 literal the way inet_aton does: 1-4 dot-separated
+# parts, each decimal, octal (leading 0) or hex (leading 0x).
+# Returns (address, 1) on success.
+parseipv4any(s: string): (int, int)
+{
+	if(s == nil || s == "")
+		return (0, 0);
+	parts: list of int;
+	nparts := 0;
+	start := 0;
+	for(i := 0; i <= len s; i++) {
+		if(i < len s && s[i] != '.')
+			continue;
+		if(i == start)
+			return (0, 0);
+		(v, ok) := parseradix(s[start:i]);
+		if(!ok)
+			return (0, 0);
+		parts = v :: parts;
+		nparts++;
+		start = i + 1;
+	}
+	if(nparts < 1 || nparts > 4)
+		return (0, 0);
+	# reverse into order
+	ordered := array[nparts] of int;
+	k := nparts - 1;
+	for(pl := parts; pl != nil; pl = tl pl)
+		ordered[k--] = hd pl;
+
+	# last part absorbs the remaining bytes (a.b.c.d, a.b.c, a.b, a)
+	addr := 0;
+	for(j := 0; j < nparts - 1; j++) {
+		if(ordered[j] > 255)
+			return (0, 0);
+		addr |= ordered[j] << (8 * (3 - j));
+	}
+	last := ordered[nparts - 1];
+	maxlast := 0;
+	case nparts {
+	1 => maxlast = 16r7fffffff;	# full 32-bit (int is signed; see below)
+	2 => maxlast = 16rffffff;
+	3 => maxlast = 16rffff;
+	* => maxlast = 16rff;
+	}
+	if(last < 0 || (nparts > 1 && last > maxlast))
+		return (0, 0);
+	addr |= last;
+	return (addr, 1);
+}
+
+parseradix(s: string): (int, int)
+{
+	if(s == nil || s == "" || len s > 11)
+		return (0, 0);
+	base := 10;
+	if(len s > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+		base = 16;
+		s = s[2:];
+	} else if(len s > 1 && s[0] == '0') {
+		base = 8;
+		s = s[1:];
+	}
+	if(s == "")
+		return (0, 1);
+	v := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		d := -1;
+		if(c >= '0' && c <= '9')
+			d = c - '0';
+		else if(base == 16 && c >= 'a' && c <= 'f')
+			d = c - 'a' + 10;
+		else if(base == 16 && c >= 'A' && c <= 'F')
+			d = c - 'A' + 10;
+		if(d < 0 || d >= base)
+			return (0, 0);
+		v = v * base + d;
+		if(v < 0)
+			return (0, 0);	# overflowed
+	}
+	return (v, 1);
+}
+
+dotted(v: int): string
+{
+	return sys->sprint("%d.%d.%d.%d", (v >> 24) & 16rff,
+		(v >> 16) & 16rff, (v >> 8) & 16rff, v & 16rff);
+}
+
+hasprefix(s, p: string): int
+{
+	return len s >= len p && s[0:len p] == p;
+}

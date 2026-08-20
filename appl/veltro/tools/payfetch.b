@@ -31,6 +31,9 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "publicnet.m";
+	publicnet: Publicnet;
+
 include "webclient.m";
 	webclient: Webclient;
 	Header, Response: import webclient;
@@ -68,6 +71,10 @@ init(): string
 	err := webclient->init();
 	if(err != nil)
 		return "Webclient init: " + err;
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet == nil)
+		return "cannot load Publicnet";
+	publicnet->init();
 	x402 = load X402 X402->PATH;
 	if(x402 == nil)
 		return "cannot load X402";
@@ -421,108 +428,18 @@ validaccount(s: string): int
 	return 1;
 }
 
-# Extract the host from a URL.  Order matters: userinfo must be
-# stripped BEFORE the port, or "http://user:pass@host/" parses as host
-# "user" and dodges isblocked.  Bracketed IPv6 hosts keep their
-# brackets (isblocked strips them).  Kept textually identical to the
-# copies in webfetch.b and http.b.
+# The URL host extractor and the SSRF blocklist live in publicnet,
+# the same module that re-checks the address at dial time. Local
+# copies of these two functions drifted apart across the fetch
+# tools; there is now one definition.
 extracthost(url: string): string
 {
-	s := url;
-	# strip scheme
-	for(i := 0; i < len s; i++) {
-		if(i + 2 < len s && s[i] == '/' && s[i+1] == '/') {
-			s = s[i+2:];
-			break;
-		}
-	}
-	# strip path
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '/') { s = s[0:i]; break; }
-	}
-	# strip userinfo (rightmost '@' in the authority)
-	for(i = len s - 1; i >= 0; i--) {
-		if(s[i] == '@') { s = s[i+1:]; break; }
-	}
-	if(len s > 0 && s[0] == '[') {
-		# bracketed IPv6: keep "[...]", drop any :port after it
-		for(i = 0; i < len s; i++) {
-			if(s[i] == ']') { s = s[0:i+1]; break; }
-		}
-	} else {
-		# strip port
-		for(i = 0; i < len s; i++) {
-			if(s[i] == ':') { s = s[0:i]; break; }
-		}
-	}
-	return str->tolower(s);
+	return publicnet->urlhost(url);
 }
 
-# Same policy as webfetch's isblocked.  Localhost is always blocked:
-# the outbound path (webclient requestpublic -> publicnet) refuses
-# loopback and private ranges at dial anyway, so a hostname-level
-# escape hatch could never work and would only weaken this predicate.
-# Local x402 test servers must listen on a routable address.
 isblocked(host: string): int
 {
-	if(len host > 2 && host[0] == '[' && host[len host - 1] == ']')
-		host = host[1:len host - 1];
-	if(host == "localhost" || host == "127.0.0.1" || host == "::1" ||
-	   host == "0.0.0.0" || host == "0:0:0:0:0:0:0:1" ||
-	   host == "::ffff:127.0.0.1" ||
-	   host == "0000:0000:0000:0000:0000:0000:0000:0001")
-		return 1;
-	if(hasprefix(host, "::"))
-		return 1;
-	if(hasprefix(host, "10."))
-		return 1;
-	if(hasprefix(host, "172.")) {
-		rest := host[4:];
-		for(i := 0; i < len rest; i++) {
-			if(rest[i] == '.') {
-				(octet, ok) := strnum(rest[0:i]);
-				if(ok && octet >= 16 && octet <= 31)
-					return 1;
-				break;
-			}
-		}
-	}
-	if(hasprefix(host, "192.168."))
-		return 1;
-	if(hasprefix(host, "169.254."))
-		return 1;
-	if(hasprefix(host, "fd") || hasprefix(host, "fc"))
-		return 1;
-	if(hasprefix(host, "fe80"))
-		return 1;
-	if(host == "metadata.google.internal" || host == "metadata")
-		return 1;
-	# Bare-integer and hex hostnames encode IPs and dodge prefix checks
-	alldigits := len host > 0;
-	for(i := 0; i < len host; i++) {
-		if(host[i] < '0' || host[i] > '9') {
-			alldigits = 0;
-			break;
-		}
-	}
-	if(alldigits)
-		return 1;
-	if(hasprefix(host, "0x") || hasprefix(host, "0X"))
-		return 1;
-	return 0;
-}
-
-strnum(s: string): (int, int)
-{
-	if(s == nil || s == "" || len s > 3)
-		return (0, 0);
-	v := 0;
-	for(i := 0; i < len s; i++) {
-		if(!(s[i] >= '0' && s[i] <= '9'))
-			return (0, 0);
-		v = v * 10 + (s[i] - '0');
-	}
-	return (v, 1);
+	return publicnet->hostblocked(host);
 }
 
 hasprefix(s, prefix: string): int

@@ -56,6 +56,7 @@ include "string.m";
 include "tool.m";
 
 include "nsconstruct.m";
+	nsc: NsConstruct;
 
 Tools9p: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
@@ -845,11 +846,19 @@ privilegedcontrolpath(path: string): int
 	return 0;
 }
 
+# Delegate to nsconstruct's single definition. A local copy of this
+# predicate drifted once already: nsconstruct learned that per-account
+# "sign" is privileged while this copy still allowed it, which would
+# have let an agent bind the raw signing oracle as a capability.
 walletaccountcontrolpath(path: string): int
 {
-	if(!prefix(path, "/n/wallet/"))
-		return 0;
-	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
+	if(nsc == nil) {
+		nsc = load NsConstruct NsConstruct->PATH;
+		if(nsc == nil)
+			return 1;	# fail closed: cannot verify, so deny
+		nsc->init();
+	}
+	return nsc->walletcontrolpath(path);
 }
 
 ftreecontrolpath(path: string): int

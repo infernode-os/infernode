@@ -969,7 +969,7 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
-	if(walletaccountcontrolpath(path))
+	if(walletcontrolpath(path))
 		return 1;
 	if(ftreecontrolpath(path))
 		return 1;
@@ -990,7 +990,16 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	return 0;
 }
 
-walletaccountcontrolpath(path: string): int
+#
+# Exported (NsConstruct->walletcontrolpath) so every namespace gate
+# uses ONE definition of this predicate; tools9p calls this rather
+# than keeping its own copy.
+#
+# "sign" is listed even though wallet9p no longer serves that file:
+# the guard costs nothing and keeps the oracle closed if it is ever
+# reintroduced.
+#
+walletcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;

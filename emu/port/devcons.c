@@ -315,7 +315,13 @@ consread(Chan *c, void *va, long n, vlong offset)
 		 * what emu/port/random.c and the wallet documented for this
 		 * device.  Under emu the host CSPRNG is always available.
 		 */
-		prng(va, n);
+		/*
+		 * prngtry(), not prng(): this device serves every hosted
+		 * process, so a missing entropy source must fail this read,
+		 * not abort() the whole emulator.
+		 */
+		if(prngtry(va, n) < 0)
+			error("no secure random source");
 		return n;
 
 	case Qhostowner:

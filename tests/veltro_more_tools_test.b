@@ -248,13 +248,16 @@ testWalletRejectsUnsafeNetwork(t: ref T)
 	if(tool == nil)
 		return;
 
+	# Agents cannot switch networks at all any more: the tool's network
+	# subcommand is read-only, so injection through a network name (a
+	# smuggled newline, or trailing ctl verbs) has no reachable sink.
 	r := tool->exec("network Base\napprove 1");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
-		"wallet network rejects control delimiters");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "trusted operation"),
+		"wallet network refuses to switch (control delimiters have no sink)");
 
 	r = tool->exec("network Base approve 1");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "unknown"),
-		"wallet network rejects unknown names before wallet ctl write");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "trusted operation"),
+		"wallet network refuses to switch (no ctl write path)");
 }
 
 # ============================================================================

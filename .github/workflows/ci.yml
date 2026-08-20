@@ -46,6 +46,32 @@ jobs:
         fi
         echo "Ring-fence OK: no testing-only harness files outside tests/agent-harness/."
 
+    - name: Verify local-only config files are not tracked
+      run: |
+        # lib/ndb/llm holds a developer's LLM endpoints, gateway URLs and
+        # model choices. It is .gitignore'd — but .gitignore does nothing
+        # for a file that is already tracked, which is how a private LAN
+        # host reached the public repo once before. Ship lib/ndb/llm.example
+        # instead; release.yml writes distribution defaults into artifacts.
+        offenders=""
+        for f in lib/ndb/llm lib/ndb/local; do
+          if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+            offenders="$offenders $f"
+          fi
+        done
+        if [ -n "$offenders" ]; then
+          echo "FATAL: local-only config files are tracked:$offenders" >&2
+          echo "" >&2
+          echo "Untrack them (git rm --cached <file>) and keep the tracked" >&2
+          echo "template (<file>.example) as the shipped default." >&2
+          exit 1
+        fi
+        if [ ! -f lib/ndb/llm.example ]; then
+          echo "FATAL: lib/ndb/llm.example is missing — first run has no template to seed from." >&2
+          exit 1
+        fi
+        echo "Config ring-fence OK: local-only config untracked, template present."
+
   # ─────────────────────────────────────────────
   # Linux AMD64: Full bootstrap build from source
   # ─────────────────────────────────────────────

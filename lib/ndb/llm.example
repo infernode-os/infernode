@@ -1,0 +1,40 @@
+#
+# LLM runtime configuration for InferNode.
+#
+# lib/ndb/llm is git-ignored so a developer's endpoints, models, and
+# gateway URLs stay local. This file is the tracked template.
+#
+# You normally do NOT need to copy it by hand:
+#   - lib/sh/profile seeds $home/.infernode/lib/ndb/llm from this
+#     template on first run when no config exists yet;
+#   - the Settings app and llmctl write the seeded copy thereafter;
+#   - setup-macos.sh / setup-linux.sh write it during guided setup;
+#   - release artifacts ship their own distribution defaults.
+#
+# Ship this file BLANK. lucibridge treats a set url= as "already
+# configured" and skips the first-run setup wizard, so a stray value
+# here sends a fresh install straight to an endpoint that does not
+# exist on the user's machine, with no way through the UI to fix it.
+#
+# Fields:
+#   mode     local | remote
+#              local  — talk to a backend on this machine (or a URL)
+#              remote — mount a remote llmsrv over 9P (see dial=)
+#   backend  api | openai | cli
+#              api    — Anthropic API (url=https://api.anthropic.com)
+#              openai — any OpenAI-compatible server (Ollama, SGLang, …)
+#              cli    — a local Claude CLI gateway
+#   url      backend endpoint, e.g. http://127.0.0.1:11434/v1
+#   model    model name to request, e.g. mistral-small3.2:24b
+#   dial     remote mode only: 9P dial string, e.g. tcp!host!5640
+#
+# Optional:
+#   auth        keyring (remote mode, authenticated mount)
+#   keyfile     path to the keyring file used by auth=keyring
+#   temperature per-deployment sampling temperature override
+#
+mode=local
+backend=
+url=
+model=
+dial=

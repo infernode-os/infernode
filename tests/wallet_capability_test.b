@@ -104,13 +104,33 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 
-	if(writefile("/n/wallet/captest/pay", "1000 0x000000000000000000000000000000000000dEaD") <= 0) {
+	# Results are bound to the writing fid (a shared account-level
+	# result would hand one agent's txhash or signed authorization to
+	# another), so the proposal must be written and read on ONE fd.
+	pfd := sys->open("/n/wallet/captest/pay", Sys->ORDWR);
+	if(pfd == nil) {
+		fail("agent could not open wallet pay file");
+		return;
+	}
+	pcmd := array of byte "1000 0x000000000000000000000000000000000000dEaD";
+	if(sys->write(pfd, pcmd, len pcmd) <= 0) {
 		fail("agent could not queue wallet payment proposal");
 		return;
 	}
-	pay := readfile("/n/wallet/captest/pay");
+	pbuf := array[1024] of byte;
+	sys->seek(pfd, big 0, Sys->SEEKSTART);
+	pn := sys->read(pfd, pbuf, len pbuf);
+	pay := "";
+	if(pn > 0)
+		pay = string pbuf[0:pn];
 	if(pay == nil || len pay < 8 || pay[0:8] != "pending:") {
 		fail("wallet payment did not become pending proposal");
+		return;
+	}
+	# A reader that did not submit the proposal must see nothing.
+	leak := readfile("/n/wallet/captest/pay");
+	if(leak != nil && len leak > 0 && leak[0] != '\n') {
+		fail("pay result leaked to an unrelated reader");
 		return;
 	}
 	if(exists("/n/wallet/pending") || exists("/n/wallet/ctl")) {

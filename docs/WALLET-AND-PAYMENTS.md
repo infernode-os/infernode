@@ -64,7 +64,7 @@ InferNode provides a native cryptocurrency wallet that enables Veltro AI agents 
 │          │ tool     │ (x402)    │                        │
 ├──────────┴──────────┴───────────┴───────────────────────┤
 │                   wallet9p (9P server)                   │
-│              /n/wallet/{acct}/address,balance,sign...    │
+│           /n/wallet/{acct}/address,balance,pay,authorize │
 ├─────────────────────────────────────────────────────────┤
 │  ethcrypto     │  ethrpc        │  x402         │ stripe │
 │  (RLP, EIP-155)│  (JSON-RPC)    │  (HTTP 402)   │ (fiat) │
@@ -324,7 +324,6 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
     ├── address      r    public address (EIP-55 checksummed)
     ├── balance      r    live balance from blockchain RPC
     ├── chain        rw   chain name
-    ├── sign         rw   TRUSTED ONLY: write hex hash → read hex signature
     ├── pay          rw   write: "amount recipient" → read: pending:id or txhash
     ├── authorize    rw   write: structured x402 request → read: pending:id or
     │                         "sig <hex> from <addr> nonce <hex> validafter <n> validbefore <n>"
@@ -335,21 +334,27 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
 Agent namespaces do not receive this full tree. A `/n/wallet` capability is
 narrowed to `accounts`, `default`, `network`, account directories, and the
 per-account `address`, `balance`, `chain`, `pay`, `authorize`, and `history`
-files. Root `ctl`, `pending`, `new`, per-account `ctl`, **and per-account
-`sign`** are trusted controller surfaces hidden from agents.
+files. Root `ctl`, `pending`, `new`, and per-account `ctl` are trusted
+controller surfaces hidden from agents.
 
-The `sign` file is deliberately excluded from the agent surface: it signs an
-arbitrary caller-chosen 32-byte hash with the account's spend key, which makes
-it a *blind signing oracle* — an agent could hash an EIP-3009
+**There is no raw signing file.** An earlier `sign` file signed an arbitrary
+caller-chosen 32-byte hash with the account's spend key — a *blind signing
+oracle*: anything that could reach it could hash an EIP-3009
 TransferWithAuthorization for the entire balance and have the wallet sign it,
-bypassing budgets and the approval queue entirely. Agents instead use the
-structured `pay` and `authorize` files, where wallet9p itself constructs
-everything that gets signed and enforces policy first. `nsconstruct` also
-refuses `sign` (and per-account `ctl`) as explicit `caps.paths` grants.
+bypassing budgets and the approval queue entirely. Keeping agents away from it
+depended on namespace narrowing being correct everywhere, which is one bug away
+from re-exposure, so the file was removed outright. Payments go through the
+structured `pay` and `authorize` files, where wallet9p constructs everything it
+signs and enforces policy first. `nsconstruct` still refuses `sign` (and
+per-account `ctl`) as `caps.paths` grants, and `tools9p` shares that one
+predicate (`NsConstruct->walletcontrolpath`) rather than keeping a copy.
 
-Results from `pay` and `authorize` are bound to the writing fid (concurrent
-clients never see each other's results), with a per-account fallback so the
-shell `echo`/`cat` idiom keeps working for a single client.
+**Results are bound to the writing fid.** wallet9p is a single server shared by
+every agent's bound view, and a signed EIP-3009 authorization is a replayable
+bearer credential, so a reader that did not submit the request sees nothing —
+there is no account-level fallback. Clients must write and read on ONE `ORDWR`
+descriptor (write, seek 0, read); the shell `echo`-then-`cat` idiom will not
+return a result.
 
 ### Account Creation
 
@@ -364,20 +369,6 @@ cat /n/wallet/myaccount/address    # → 0x...
 ```sh
 echo 'import eth ethereum myaccount 0123456789abcdef...' > /n/wallet/new
 ```
-
-### Signing (trusted controllers only)
-
-The raw hash-signing interface is not visible to agents (see above). From a
-trusted namespace, write and read on the **same file descriptor** — the
-signature is bound to the writing fid:
-
-```sh
-# inside a trusted controller, ORDWR on one fd:
-#   write 64 hex chars (32-byte hash), seek 0, read back 130 hex chars
-```
-
-Agent-reachable signing goes through `pay` (transactions) and `authorize`
-(EIP-3009 payment authorizations), both policy-checked.
 
 ### x402 Authorization
 
@@ -401,6 +392,13 @@ nonce and validity window itself (validAfter is backdated 600 s for clock
 skew), computes the EIP-712 digest itself, checks the budget, and queues
 for approval. The signature it returns authorizes exactly one transfer of
 exactly that amount to exactly that recipient within the validity window.
+
+The request format is line-oriented `key value`, and every field originates
+in a remote server's 402 response, so both ends are strict about it: the
+x402 client rejects any field containing a control character (a smuggled
+newline would inject extra lines), and **wallet9p rejects duplicate keys**
+outright rather than letting a later `payto`/`amount` line override an
+earlier one. Unknown fields are refused.
 
 ### Network Selection
 
@@ -466,7 +464,7 @@ right-click menu (the status bar shows a count when payments are waiting),
 or from a trusted shell:
 
 ```sh
-cat /n/wallet/pending                 # "<id> <kind> <acct> <token> <amount> <recipient> <agent>"
+cat /n/wallet/pending   # "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
 echo 'approve 3' > /n/wallet/ctl      # or: deny 3
 ```
 
@@ -608,9 +606,11 @@ Wallet access is gated by namespace capabilities:
 - Agent needs `"/n/wallet"` in `caps.paths` to access the wallet
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see private keys
 - Budget and approval enforcement is server-side in wallet9p, on every path
-- Agents never see the raw `sign` file. They submit structured `pay` and
+- There is no raw signing file at all. Agents submit structured `pay` and
   `authorize` requests; wallet9p constructs and policy-checks everything the
   key signs, and the key never enters the agent's address space
+- Results are per-fid: one agent cannot read another's txhash or signed
+  authorization
 
 ## Wallet GUI App (wm/wallet.b)
 
@@ -702,22 +702,28 @@ All transactions verifiable at [sepolia.etherscan.io](https://sepolia.etherscan.
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/secp256k1_test.dis -v    # curve, ECDSA, recovery
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/ethcrypto_test.dis -v    # RLP, EIP-155 spec vector, dectobe
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/x402_test.dis -v         # parsing, EIP-712 type hashes, authdigest
+./emu/MacOSX/o.emu -r. -c0 /dis/tests/publicnet_host_test.dis  # URL host parsing + SSRF blocklist
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/wallet_capability_test.dis  # agent namespace narrowing
 ```
 
 Notable assertions: the EIP-155 specification test vector must produce a
 byte-identical signed transaction to go-ethereum; the EIP-712 and EIP-3009
 type hashes must match the published constants; `dectobe` must reject every
-malformed amount form; the agent namespace must expose `authorize` and hide
-`sign`.
+malformed amount form; `becmp`/`beadd` must carry budget arithmetic past
+2^63 without wrapping; `networktochainid` must fail closed; the shared SSRF
+predicate must block octal, hex, and packed-integer IP encodings; and the
+agent namespace must expose `authorize` while no `sign` file exists at all.
 
 ### Integration Tests (run on host)
 
 ```sh
-bash tests/host/wallet9p_test.sh              # wallet9p policy surface (11 assertions:
-                                              #   import, address KAT, strict amounts,
-                                              #   budget caps + currency fail-closed,
-                                              #   x402 pending/approve/deny, network pinning)
+bash tests/host/wallet9p_test.sh              # wallet policy suite against a live
+                                              #   wallet9p: address KAT, key validation,
+                                              #   strict amounts, uint256 budgets,
+                                              #   currency fail-closed, network pinning,
+                                              #   request-injection rejection,
+                                              #   pending/approve/deny, per-fid isolation,
+                                              #   and absence of the signing oracle
 bash tests/host/wallet_e2e_test.sh            # Base Sepolia RPC connectivity
 bash tests/host/secstore_logon_test.sh        # secstore + factotum persistence (10 tests)
 bash tests/host/secstore_apikey_test.sh       # API key persistence through secstore (10 tests)
@@ -752,7 +758,8 @@ All integration tests use dedicated test user accounts (`testuser-walletpersist`
 
 The CI pipeline (`.github/workflows/ci.yml`) runs on both Linux AMD64 and macOS ARM64:
 - All `*_test.dis` unit tests via the emu test runner
-- `wallet9p_test.sh` — create account, read address, sign hash
+- `wallet9p_test.sh` — wallet policy suite (budgets, approval queue,
+  x402 authorization, network pinning, per-fid isolation)
 - `wallet_persist_test.sh` — secstore round-trip key survival
 
 ## Building

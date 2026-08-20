@@ -73,5 +73,7 @@ X402: module {
 
 	# Map chain name to CAIP-2 network identifier
 	chaintonetwork:	fn(chain: string): string;
+	# "eip155:NNNN" -> NNNN; 0 if not a well-formed EIP-155 id.
+	# Never defaults to a real chain: callers pin payments with it.
 	networktochainid:	fn(network: string): int;
 };

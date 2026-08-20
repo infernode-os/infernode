@@ -268,6 +268,32 @@ testAuthDigest(t: ref T)
 	t.assert(dx == nil && ex != nil, "short nonce rejected");
 }
 
+#
+# networktochainid must never default to a real chain: wallet9p pins
+# payments by comparing it against the active network, so returning 1
+# for unparseable input made that check pass whenever the wallet
+# happened to be on mainnet.
+#
+testNetworkFailClosed(t: ref T)
+{
+	t.asserteq(x402->networktochainid("garbage"), 0, "unknown network -> 0");
+	t.asserteq(x402->networktochainid(""), 0, "empty network -> 0");
+	t.asserteq(x402->networktochainid("eip155:"), 0, "empty chain id -> 0");
+	t.asserteq(x402->networktochainid("eip155:abc"), 0, "non-numeric chain id -> 0");
+	t.asserteq(x402->networktochainid("solana:mainnet"), 0, "non-EVM network -> 0");
+	t.asserteq(x402->networktochainid("eip155:1x"), 0, "trailing junk -> 0");
+	t.asserteq(x402->networktochainid("eip155:1"), 1, "mainnet still parses");
+
+	# authdigest must refuse to build a digest for an unknown network
+	nonce := array[32] of byte;
+	(d, e) := x402->authdigest("garbage",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+		"1", big 1, big 2, nonce, "USDC", "2");
+	t.assert(d == nil && e != nil, "authdigest rejects unknown network");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -318,6 +344,9 @@ init(nil: ref Draw->Context, args: list of string)
 	# EIP-712 / EIP-3009
 	run("EIP712/TypeHashes", testEIP712TypeHashes);
 	run("EIP712/AuthDigest", testAuthDigest);
+
+	# Network id parsing must fail closed
+	run("Chain/FailClosed", testNetworkFailClosed);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -170,7 +170,6 @@ Cryptocurrency wallet exposed as a 9P file server at `/n/wallet/`.
     ├── address      r    public address (EIP-55 checksummed)
     ├── balance      r    live balance from blockchain RPC
     ├── chain        rw   chain name
-    ├── sign         rw   trusted only: write hex hash → read hex signature
     ├── pay          rw   write: "amount recipient" → read: txhash or pending:id
     ├── authorize    rw   write: structured x402/EIP-3009 request → read: signature
     ├── ctl          rw   "budget maxpertx maxpersess currency", "requireapproval"
@@ -183,9 +182,9 @@ Key design properties:
 - **Secstore persistence** — new accounts trigger factotum sync to secstore (async).
   Keys survive emu restart.
 - **Budget + approval enforcement** — server-side; every execution path checks the
-  account budget, and payments queue for trusted approval by default. Agents never
-  see the raw `sign` file (a hash-blind signing oracle); they submit structured
-  `pay`/`authorize` requests that wallet9p constructs and signs itself.
+  account budget, and payments queue for trusted approval by default. There is no
+  raw signing file: agents submit structured `pay`/`authorize` requests that
+  wallet9p constructs, policy-checks, and signs itself.
 - **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access.
   `/mnt/llm` is also capability-driven: top-level loops grant it when they open
   model sessions by path, while subagents normally use pre-opened descriptors.

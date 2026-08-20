@@ -83,13 +83,21 @@ Qacctdir:  con 16;
 Qaddress:  con 17;
 Qbalance:  con 18;
 Qchain:    con 19;
-Qsign:     con 20;
+# 20 was Qsign, the raw hash-signing oracle. It is deliberately gone:
+# it signed any caller-supplied 32-byte hash with the spend key, with
+# no budget, approval, or chain check, so anything that could reach it
+# could authorize a transfer of the whole balance. Agents were kept
+# away from it by namespace narrowing alone, which is one bug away
+# from re-exposing it. Nothing in the tree needs it -- payments go
+# through Qpay and Qauthorize, where wallet9p builds and policy-checks
+# what it signs -- so the file no longer exists. The number stays
+# retired so a stale qid can never be read as a different file.
 Qpay:      con 21;
 Qacctctl:  con 22;
 Qhistory:  con 23;
 Qauthorize: con 24;
 
-NACCTFILES: con 8;	# files per account dir
+NACCTFILES: con 7;	# files per account dir
 
 MAXHISTORY: con 200;	# history entries kept per account
 PENDTTL:    con 900;	# seconds before an unapproved payment expires
@@ -102,11 +110,6 @@ AcctState: adt {
 	history:    list of string;	# recent transactions
 	nhistory:   int;
 	requireapproval: int;		# 1 = require trusted approval for payments
-	# Last pay/authorize results at account level.  Readers prefer
-	# their own fid's result; these keep the write-close-open-read
-	# (echo/cat) idiom working for single clients.
-	payresult:  string;
-	authresult: string;
 };
 
 # Pending payment (awaiting approval)
@@ -151,13 +154,6 @@ NewState: adt {
 };
 newstates: list of ref NewState;
 
-# Per-fid state for sign file
-SignState: adt {
-	fid:    int;
-	acct:   string;
-	result: array of byte;
-};
-signstates: list of ref SignState;
 
 MKPATH(id, filetype: int): big
 {
@@ -255,34 +251,6 @@ delnewstate(fid: int)
 	newstates = nl;
 }
 
-# Per-fid sign state management
-getsignstate(fid: int, acctname: string): ref SignState
-{
-	for(l := signstates; l != nil; l = tl l)
-		if((hd l).fid == fid && (hd l).acct == acctname)
-			return hd l;
-	return nil;
-}
-
-setsignstate(fid: int, acctname: string, result: array of byte)
-{
-	ss := getsignstate(fid, acctname);
-	if(ss != nil) {
-		ss.result = result;
-		return;
-	}
-	signstates = ref SignState(fid, acctname, result) :: signstates;
-}
-
-delsignstate(fid: int)
-{
-	nl: list of ref SignState;
-	for(l := signstates; l != nil; l = tl l)
-		if((hd l).fid != fid)
-			nl = hd l :: nl;
-	signstates = nl;
-}
-
 # Per-fid result state for the pay and authorize files.
 # Results are bound to the writing fid so concurrent clients never
 # read each other's transaction results.
@@ -368,9 +336,17 @@ findpending(id: int): ref PendingPay
 	return nil;
 }
 
+#
+# Expiry is fail-closed on the time source: if /dev/time is unreadable
+# now() returns 0, and a TTL that silently never fires would leave
+# stale authorizations approvable forever. No clock means expired.
+#
 checkpendingexpiry(pp: ref PendingPay)
 {
-	if(pp.result == nil && now() > pp.created + big PENDTTL)
+	if(pp.result != nil)
+		return;
+	t := now();
+	if(t <= big 0 || pp.created <= big 0 || t > pp.created + big PENDTTL)
 		pp.result = "expired";
 }
 
@@ -579,7 +555,6 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 
 		Clunk =>
 			delnewstate(m.fid);
-			delsignstate(m.fid);
 			delfidresult(m.fid);
 			srv.default(gm);
 
@@ -637,10 +612,14 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		for(pl := pendingpays; pl != nil; pl = tl pl) {
 			pp := hd pl;
 			checkpendingexpiry(pp);
-			if(pp.result == nil)
-				s += sys->sprint("%d %s %s %s %s %s %s\n",
+			if(pp.result == nil) {
+				net := pp.network;
+				if(net == "")
+					net = "-";
+				s += sys->sprint("%d %s %s %s %s %s %s %s\n",
 					pp.id, pp.kind, pp.acct, pp.token, pp.amount,
-					pp.recipient, pp.agent);
+					pp.recipient, net, pp.agent);
+			}
 		}
 		if(s == "")
 			s = "(none)\n";
@@ -679,29 +658,20 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		}
 		readstr(srv, m, as.acct.chain + "\n");
 
-	Qsign =>
-		as := findacctbyid(aid);
-		if(as == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			return;
-		}
-		ss := getsignstate(m.fid, as.acct.name);
-		if(ss != nil && ss.result != nil)
-			readstr(srv, m, ethcrypto->hexencode(ss.result) + "\n");
-		else
-			readstr(srv, m, "");
-
 	Qpay =>
 		as := findacctbyid(aid);
 		if(as == nil) {
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			return;
 		}
+		# Per-fid ONLY: results are never exposed to a reader that did
+		# not write the request.  wallet9p is one backend shared by
+		# every agent's bound view, so an account-level fallback would
+		# hand another principal's txhash (or pending id) to whoever
+		# opened the file next.
 		fr := getfidresult(paystates, m.fid);
 		if(fr != nil && fr.result != nil)
 			readstr(srv, m, resolvefidresult(fr.result) + "\n");
-		else if(as.payresult != nil)
-			readstr(srv, m, resolvefidresult(as.payresult) + "\n");
 		else
 			readstr(srv, m, "");
 
@@ -711,11 +681,12 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			return;
 		}
+		# Per-fid ONLY — see Qpay above.  A signed EIP-3009
+		# authorization is a replayable bearer credential; handing one
+		# to a reader that did not request it is a fund-moving leak.
 		fr := getfidresult(authstates, m.fid);
 		if(fr != nil && fr.result != nil)
 			readstr(srv, m, resolvefidresult(fr.result) + "\n");
-		else if(as.authresult != nil)
-			readstr(srv, m, resolvefidresult(as.authresult) + "\n");
 		else
 			readstr(srv, m, "");
 
@@ -730,8 +701,10 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		if(b == nil)
 			s += "no budget\n";
 		else
-			s += sys->sprint("budget %bd %bd %s spent %bd\n",
-				b.maxpertx, b.maxpersess, b.currency, b.spent);
+			s += sys->sprint("budget %s %s %s spent %s\n",
+				ethcrypto->betodec(b.maxpertx),
+				ethcrypto->betodec(b.maxpersess),
+				b.currency, ethcrypto->betodec(b.spent));
 		if(as.requireapproval)
 			s += "requireapproval on\n";
 		else
@@ -901,27 +874,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 		as.acct.chain = nc;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
-	Qsign =>
-		as := findacctbyid(aid);
-		if(as == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			return;
-		}
-		# Write hex-encoded hash, get signature back on read
-		hexhash := str->take(data, "^\n\r \t");
-		hash := ethcrypto->hexdecode(hexhash);
-		if(hash == nil || len hash != 32) {
-			srv.reply(ref Rmsg.Error(m.tag, "sign: need 32-byte hash as hex"));
-			return;
-		}
-		(sig, err) := wallet->signhash(as.acct, hash);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, "sign: " + err));
-			return;
-		}
-		setsignstate(m.fid, as.acct.name, sig);
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	Qpay =>
 		as := findacctbyid(aid);
 		if(as == nil) {
@@ -971,10 +923,17 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 
 		# Check if approval is required for this account
 		if(as.requireapproval) {
-			pp := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
+			(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
+			if(qerr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "pay: " + qerr));
+				return;
+			}
+			# Bind the proposal to the network it was quoted on, so a
+			# network switch between proposal and approval cannot
+			# silently redirect it to another chain.
+			pp.network = "eip155:" + string getnetwork().chainid;
 			pres := "pending:" + string pp.id;
 			setpaystate(m.fid, pres);
-			as.payresult = pres;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else {
 			# Execute immediately
@@ -989,7 +948,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				return;
 			}
 			setpaystate(m.fid, txhash);
-			as.payresult = txhash;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		}
 
@@ -1010,7 +968,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			return;
 		}
 		if(as.requireapproval) {
-			pp := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
+			(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
+			if(qerr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
+				return;
+			}
 			pp.network = areq.network;
 			pp.tokenname = areq.tokenname;
 			pp.tokenver = areq.tokenver;
@@ -1018,7 +980,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			pp.resource = areq.resource;
 			pres := "pending:" + string pp.id;
 			setauthstate(m.fid, pres);
-			as.authresult = pres;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else {
 			(res, xerr) := executex402(as, areq);
@@ -1027,7 +988,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				return;
 			}
 			setauthstate(m.fid, res);
-			as.authresult = res;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		}
 
@@ -1042,15 +1002,20 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 		(ntoks, toks) := sys->tokenize(data, " \t");
 		if(ntoks >= 1 && hd toks == "budget" && ntoks >= 4) {
 			toks = tl toks;
-			(maxpertx, ok1) := strbig(hd toks); toks = tl toks;
-			(maxpersess, ok2) := strbig(hd toks); toks = tl toks;
+			# uint256 base units: a wei-denominated ETH limit passes
+			# 2^63 at 9.3 ETH, so these must not go through an int64
+			# parser (which previously rejected any limit >= 1 ETH
+			# and left the account with no cap at all).
+			maxpertx := ethcrypto->dectobe(hd toks); toks = tl toks;
+			maxpersess := ethcrypto->dectobe(hd toks); toks = tl toks;
 			currency := hd toks;
-			if(!ok1 || !ok2 || !(currency == "USDC" || currency == "ETH" || currency == "USD")) {
+			if(maxpertx == nil || maxpersess == nil ||
+			   !(currency == "USDC" || currency == "ETH" || currency == "USD")) {
 				srv.reply(ref Rmsg.Error(m.tag,
 					"usage: budget <maxpertx> <maxpersess> USDC|ETH|USD (integer base units)"));
 				return;
 			}
-			b := ref Wallet->Budget(maxpertx, maxpersess, big 0, currency);
+			b := ref Wallet->Budget(maxpertx, maxpersess, nil, currency);
 			wallet->setbudget(as.acct, b);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else if(ntoks >= 1 && hd toks == "requireapproval") {
@@ -1082,51 +1047,70 @@ parsetype(s: string): int
 # Register a new account with a stable id
 addaccount(acct: ref Wallet->Account)
 {
-	as := ref AcctState(nextacctid++, acct, nil, 0, 1, nil, nil);
+	as := ref AcctState(nextacctid++, acct, nil, 0, 1);
 	accounts = as :: accounts;
 }
 
-# Queue a pending payment; prunes resolved records beyond MAXPENDING
-newpending(kind, acct, amount, recipient, token: string): ref PendingPay
+#
+# Queue a pending payment.
+#
+# The queue is a hard-bounded resource in a process shared by every
+# agent: an unresolved proposal is never silently dropped to make room
+# (that would lose a payment a human may be about to review), so once
+# MAXPENDING live proposals exist, new ones are REFUSED. Resolved
+# records are recycled first, and expiry is applied on the way in so a
+# stale queue drains itself instead of wedging the account.
+#
+newpending(kind, acct, amount, recipient, token: string): (ref PendingPay, string)
 {
-	pp := ref PendingPay(nextpendingid++, kind, acct, amount, recipient,
-		token, "agent", now(), "", "", "", 0, "", nil);
-	pendingpays = pp :: pendingpays;
+	t := now();
+	if(t <= big 0)
+		return (nil, "no time source: cannot queue a payment for approval");
 
-	n := 0;
-	for(pl := pendingpays; pl != nil; pl = tl pl)
-		n++;
-	if(n > MAXPENDING) {
-		# drop the oldest resolved entries (list is newest-first)
-		keep: list of ref PendingPay;
-		kept := 0;
-		for(pl = pendingpays; pl != nil; pl = tl pl) {
-			p := hd pl;
-			if(kept < MAXPENDING || p.result == nil) {
-				keep = p :: keep;
-				kept++;
-			}
-		}
-		# restore newest-first order
-		pendingpays = nil;
-		for(; keep != nil; keep = tl keep)
-			pendingpays = hd keep :: pendingpays;
+	# expire stale records, then drop resolved ones beyond the cap
+	live := 0;
+	keep: list of ref PendingPay;
+	for(pl := pendingpays; pl != nil; pl = tl pl) {
+		pp := hd pl;
+		checkpendingexpiry(pp);
+		if(pp.result == nil)
+			live++;
 	}
-	return pp;
+	if(live >= MAXPENDING)
+		return (nil, sys->sprint("pending queue full (%d awaiting approval): approve or deny before submitting more", live));
+
+	kept := 0;
+	for(pl = pendingpays; pl != nil; pl = tl pl) {
+		pp := hd pl;
+		if(pp.result == nil || kept < MAXPENDING) {
+			keep = pp :: keep;
+			kept++;
+		}
+	}
+	pendingpays = nil;
+	for(; keep != nil; keep = tl keep)
+		pendingpays = hd keep :: pendingpays;
+
+	np := ref PendingPay(nextpendingid++, kind, acct, amount, recipient,
+		token, "agent", t, "", "", "", 0, "", nil);
+	pendingpays = np :: pendingpays;
+	return (np, nil);
 }
 
+inlist(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+# Chain names must satisfy the SAME rule the wallet library applies on
+# persistence (Wallet->validname): a name accepted here but rejected
+# there would silently revert to a default on the next restart.
 safechain(s: string): int
 {
-	if(s == nil || s == "" || len s > 64)
-		return 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
-			continue;
-		return 0;
-	}
-	return 1;
+	return wallet->validname(s);
 }
 
 # Strict non-negative big parse
@@ -1158,6 +1142,17 @@ approvepending(id: int): string
 	as := findacct(pp.acct);
 	if(as == nil)
 		return "account not found: " + pp.acct;
+
+	# The proposal was quoted, budget-checked, and shown to the
+	# approver against one specific chain. If the active network has
+	# changed since, approving it would settle somewhere the approver
+	# never saw -- refuse rather than silently switch chains.
+	active := "eip155:" + string getnetwork().chainid;
+	if(pp.network != "" && pp.network != active) {
+		pp.result = "error:network changed since proposal";
+		return sys->sprint("payment %d was proposed on %s but the active network is now %s; it was not executed",
+			id, pp.network, active);
+	}
 
 	if(pp.kind == "x402") {
 		areq := ref AuthReq(pp.network, pp.token, pp.recipient,
@@ -1446,34 +1441,12 @@ budgeterr(as: ref AcctState, currency: string, amt: array of byte): string
 	if(b.currency != currency)
 		return "budget is in " + b.currency + "; cannot evaluate a " +
 			currency + " payment against it";
-	(v, ok) := amounttobig(amt);
-	if(!ok)
-		return "amount exceeds evaluable budget range";
-	return wallet->checkbudget(as.acct, v);
+	return wallet->checkbudget(as.acct, amt);
 }
 
 recordspendamt(as: ref AcctState, amt: array of byte)
 {
-	(v, ok) := amounttobig(amt);
-	if(ok)
-		wallet->recordspend(as.acct, v);
-}
-
-# Big-endian bytes -> big, if the value fits in a non-negative int64
-amounttobig(b: array of byte): (big, int)
-{
-	if(b == nil)
-		return (big 0, 1);
-	i := 0;
-	while(i < len b && b[i] == byte 0)
-		i++;
-	b = b[i:];
-	if(len b > 8 || (len b == 8 && int b[0] >= 16r80))
-		return (big 0, 0);
-	v := big 0;
-	for(i = 0; i < len b; i++)
-		v = (v << 8) | big int b[i];
-	return (v, 1);
+	wallet->recordspend(as.acct, amt);
 }
 
 # Append a timestamped history entry, capped at MAXHISTORY
@@ -1747,6 +1720,11 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 parseauthreq(data: string): (ref AuthReq, string)
 {
 	req := ref AuthReq("", "", "", "", 0, "", "", "");
+	# A repeated key must be an error, never last-wins: the request is
+	# built from a remote server's 402 response, and a newline smuggled
+	# into any field would otherwise let a later "payto"/"amount" line
+	# silently override the one the client validated and displayed.
+	seen: list of string;
 	(nil, lines) := sys->tokenize(data, "\n\r");
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
@@ -1754,10 +1732,13 @@ parseauthreq(data: string): (ref AuthReq, string)
 		if(val == nil)
 			continue;
 		val = val[1:];	# skip the separator
+		if(inlist(key, seen))
+			return (nil, "duplicate field: " + key);
+		seen = key :: seen;
 		case key {
 		"scheme" =>
 			if(val != "exact")
-				return (nil, "unsupported scheme: " + val);
+				return (nil, "unsupported scheme");
 		"network" =>	req.network = val;
 		"asset" =>	req.asset = val;
 		"payto" =>	req.payto = val;
@@ -1773,7 +1754,7 @@ parseauthreq(data: string): (ref AuthReq, string)
 			if(len val <= 1024)
 				req.resource = val;
 		* =>
-			return (nil, "unknown field: " + key);
+			return (nil, "unknown field");
 		}
 	}
 	if(req.network == "" || req.asset == "" || req.payto == "" || req.amount == "")
@@ -1978,8 +1959,6 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(aid, Qbalance);
 				else if(name == "chain")
 					n.path = MKPATH(aid, Qchain);
-				else if(name == "sign")
-					n.path = MKPATH(aid, Qsign);
 				else if(name == "pay")
 					n.path = MKPATH(aid, Qpay);
 				else if(name == "authorize")
@@ -2023,7 +2002,6 @@ navigator(navops: chan of ref Navop)
 					MKPATH(aid, Qaddress) ::
 					MKPATH(aid, Qbalance) ::
 					MKPATH(aid, Qchain) ::
-					MKPATH(aid, Qsign) ::
 					MKPATH(aid, Qpay) ::
 					MKPATH(aid, Qauthorize) ::
 					MKPATH(aid, Qacctctl) ::
@@ -2096,9 +2074,6 @@ dirgen(p: big): (ref Sys->Dir, string)
 		name = "balance";
 	Qchain =>
 		name = "chain";
-		perm = 8r666;
-	Qsign =>
-		name = "sign";
 		perm = 8r666;
 	Qpay =>
 		name = "pay";

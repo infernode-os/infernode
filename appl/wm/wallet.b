@@ -277,9 +277,9 @@ buildpending()
 		ln := strip(hd lines);
 		if(ln == "" || ln == "(none)")
 			continue;
-		# "<id> <kind> <acct> <token> <amount> <recipient> <agent>"
+		# "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
 		(ntoks, toks) := sys->tokenize(ln, " \t");
-		if(ntoks < 6)
+		if(ntoks < 7)
 			continue;
 		id := hd toks;
 		kind := hd tl toks;
@@ -287,10 +287,13 @@ buildpending()
 		token := hd tl tl tl toks;
 		amount := hd tl tl tl tl toks;
 		recip := hd tl tl tl tl tl toks;
+		net := hd tl tl tl tl tl tl toks;
 
-		desc := acct + ": " + amount + " " + token + " -> " + recip;
+		# The network is part of what is being approved: the same
+		# amount settles very differently on a testnet and on mainnet.
+		desc := acct + ": " + amount + " " + token + " -> " + recip + " [" + net + "]";
 		if(kind == "x402")
-			desc = acct + ": x402 " + amount + " of " + token + " -> " + recip;
+			desc = acct + ": x402 " + amount + " of " + token + " -> " + recip + " [" + net + "]";
 		if(len desc > 76)
 			desc = desc[0:76] + "...";
 
@@ -667,9 +670,9 @@ pendingmatches(id, acct, amount, recipient: string): int
 	raw := readwalletfile("", "pending");
 	(nil, lines) := sys->tokenize(raw, "\n");
 	for(; lines != nil; lines = tl lines){
-		# "<id> <kind> <acct> <token> <amount> <recipient> <agent>"
+		# "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
 		(ntoks, toks) := sys->tokenize(strip(hd lines), " \t");
-		if(ntoks < 6 || hd toks != id)
+		if(ntoks < 7 || hd toks != id)
 			continue;
 		kind := hd tl toks;
 		pacct := hd tl tl toks;

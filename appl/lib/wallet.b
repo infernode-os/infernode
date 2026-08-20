@@ -382,33 +382,48 @@ setbudget(acct: ref Account, b: ref Budget)
 	budgets = (acct.name, b) :: newlist;
 }
 
-checkbudget(acct: ref Account, amount: big): string
+checkbudget(acct: ref Account, amount: array of byte): string
 {
 	if(acct == nil)
 		return "nil account";
+	if(amount == nil)
+		return "nil amount";
 
 	b := getbudget(acct.name);
 	if(b == nil)
 		return nil;
 
-	if(b.maxpertx > big 0 && amount > b.maxpertx)
-		return sys->sprint("amount %bd exceeds per-tx limit %bd %s",
-			amount, b.maxpertx, b.currency);
+	# a zero/empty limit means "no limit" for that dimension
+	if(ethcrypto->becmp(b.maxpertx, nil) > 0 &&
+	   ethcrypto->becmp(amount, b.maxpertx) > 0)
+		return sys->sprint("amount %s exceeds per-tx limit %s %s",
+			ethcrypto->betodec(amount), ethcrypto->betodec(b.maxpertx),
+			b.currency);
 
-	if(b.maxpersess > big 0 && b.spent + amount > b.maxpersess)
-		return sys->sprint("amount %bd would exceed session limit %bd %s (spent: %bd)",
-			amount, b.maxpersess, b.currency, b.spent);
+	if(ethcrypto->becmp(b.maxpersess, nil) > 0) {
+		total := ethcrypto->beadd(b.spent, amount);
+		if(total == nil)
+			return "session total would overflow uint256";
+		if(ethcrypto->becmp(total, b.maxpersess) > 0)
+			return sys->sprint("amount %s would exceed session limit %s %s (spent: %s)",
+				ethcrypto->betodec(amount),
+				ethcrypto->betodec(b.maxpersess), b.currency,
+				ethcrypto->betodec(b.spent));
+	}
 
 	return nil;
 }
 
-recordspend(acct: ref Account, amount: big)
+recordspend(acct: ref Account, amount: array of byte)
 {
-	if(acct == nil)
+	if(acct == nil || amount == nil)
 		return;
 	b := getbudget(acct.name);
-	if(b != nil)
-		b.spent += amount;
+	if(b == nil)
+		return;
+	total := ethcrypto->beadd(b.spent, amount);
+	if(total != nil)
+		b.spent = total;
 }
 
 budgetfor(acct: ref Account): ref Budget

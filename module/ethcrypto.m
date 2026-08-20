@@ -51,4 +51,12 @@ Ethcrypto: module {
 
 	# Big-endian unsigned bytes -> decimal string (arbitrary precision).
 	betodec:	fn(b: array of byte): string;
+
+	# Compare two big-endian unsigned integers of any length.
+	# Returns -1 if a < b, 0 if equal, 1 if a > b.
+	becmp:	fn(a, b: array of byte): int;
+
+	# Add two big-endian unsigned integers; result is minimal-length.
+	# Returns nil if the sum would exceed 2^256-1.
+	beadd:	fn(a, b: array of byte): array of byte;
 };

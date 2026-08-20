@@ -490,6 +490,7 @@ void	genrandom(uchar *buf, int nbytes);
 void	_genrandomqlock(void);
 void	_genrandomqunlock(void);
 void	prng(uchar *buf, int nbytes);
+int	prngtry(uchar *buf, int nbytes);	/* 0 ok, -1 no secure source (never aborts) */
 ulong	fastrand(void);
 ulong	nfastrand(ulong);
 

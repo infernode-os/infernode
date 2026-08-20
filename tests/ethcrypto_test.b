@@ -397,6 +397,48 @@ testBigToBytes(t: ref T)
 	t.assertseq(gweihex, "04a817c800", "bigtobytes(20gwei) = 04a817c800");
 }
 
+#
+# uint256 compare/add. These carry budget enforcement: a wei budget
+# passes 2^63 at 9.3 ETH, so an int64 path silently mis-evaluated
+# limits on exactly the accounts budgets exist to protect.
+#
+testBeCmpAdd(t: ref T)
+{
+	one := ethcrypto->dectobe("1");
+	two := ethcrypto->dectobe("2");
+	zero := ethcrypto->dectobe("0");
+
+	t.asserteq(ethcrypto->becmp(one, two), -1, "1 < 2");
+	t.asserteq(ethcrypto->becmp(two, one), 1, "2 > 1");
+	t.asserteq(ethcrypto->becmp(one, one), 0, "1 == 1");
+	t.asserteq(ethcrypto->becmp(zero, nil), 0, "zero == nil (both empty)");
+	t.asserteq(ethcrypto->becmp(one, nil), 1, "1 > nil");
+
+	# leading zeros must not change the comparison
+	padded := array[] of { byte 0, byte 0, byte 1 };
+	t.asserteq(ethcrypto->becmp(padded, one), 0, "leading zeros ignored");
+
+	# values that do not fit int64
+	tenEth := ethcrypto->dectobe("10000000000000000000");	# 1e19
+	oneEth := ethcrypto->dectobe("1000000000000000000");	# 1e18
+	t.asserteq(ethcrypto->becmp(tenEth, oneEth), 1, "10 ETH > 1 ETH (both > 2^63 territory)");
+
+	sum := ethcrypto->beadd(oneEth, oneEth);
+	t.assertseq(ethcrypto->betodec(sum), "2000000000000000000", "1 ETH + 1 ETH");
+
+	big1 := ethcrypto->dectobe("18446744073709551615");	# 2^64-1
+	sum2 := ethcrypto->beadd(big1, one);
+	t.assertseq(ethcrypto->betodec(sum2), "18446744073709551616",
+		"2^64-1 + 1 carries correctly past 64 bits");
+
+	t.assertseq(ethcrypto->betodec(ethcrypto->beadd(zero, zero)), "0", "0 + 0");
+
+	# overflow past uint256 returns nil rather than wrapping
+	maxu := ethcrypto->dectobe("115792089237316195423570985008687907853269984665640564039457584007913129639935");
+	t.assert(ethcrypto->beadd(maxu, one) == nil, "2^256-1 + 1 overflows to nil");
+	t.assert(ethcrypto->beadd(maxu, zero) != nil, "2^256-1 + 0 is fine");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -449,6 +491,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Tx/EIP155Vector", testSignTxEIP155Vector);
 	run("Tx/LargeValue", testSignTxLargeValue);
 	run("Dec/Strict", testDectobeStrict);
+	run("Uint256/CmpAdd", testBeCmpAdd);
 
 	# EIP-712 tests
 	run("EIP712/Hash", testEIP712Hash);

@@ -190,10 +190,11 @@ testWalletMissingArgs(t: ref T)
 	r := tool->exec("sign");
 	t.assert(hassubstr(r, "error"), "sign with no args rejected");
 
-	# 'sign acct shorthex' rejected for non-64-char hash
+	# 'sign' no longer exists: raw hash signing was a blind oracle over
+	# the spend key and is not an agent capability at all now
 	r = tool->exec("sign myacct deadbeef");
-	t.assert(hassubstr(r, "64 hex"),
-		"sign with short hash rejected");
+	t.assert(hassubstr(r, "unknown command"),
+		"sign is not an agent command");
 
 	# 'pay' needs at least account + amount
 	r = tool->exec("pay myacct");
@@ -230,8 +231,8 @@ testWalletRejectsUnsafeAccount(t: ref T)
 		"wallet balance rejects absolute account");
 
 	r = tool->exec("sign ../ctl 9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
-		"wallet sign rejects traversal account");
+	t.assert(hassubstr(r, "unknown command"),
+		"wallet sign is gone, not merely guarded");
 
 	r = tool->exec("pay ../ctl 1000 0x000000000000000000000000000000000000dEaD");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),

@@ -43,6 +43,18 @@ DESCRIPTION
 	feed in the composition (see the video-player and video-live
 	crystallisations in /lib/matrix/compositions).
 
+	LIVE SEQUENTIAL SOURCES.  A mount whose status carries no
+	transport (no "pos=" field — e.g. a vision service's /mnt/vision/feeds/<id>,
+	which serves the vid9p fmt/frame schema with join-live ring
+	semantics) is played as a stream: a reader proc consumes
+	framesize-byte chunks sequentially, paced by the SERVER (reads
+	park until the next frame; a slow link skips frames, never
+	blocks), and the pane blits the newest frame each tick.  The
+	strip shows "LIVE <w>x<h> stream"; transport keys are inert.
+	This is the remote-camera path: mount a perception host's 9P
+	vision tree from any reachable host and point a leaf at a feed
+	directory.
+
 SEE ALSO
 	vid9p (appl/cmd/vid9p.b — serves /mnt/video/<id>)
 	vidplay9p (appl/mpeg — standalone windowed player, same feed)

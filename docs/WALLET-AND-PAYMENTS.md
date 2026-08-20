@@ -596,9 +596,10 @@ When a server returns 402 Payment Required:
 
 The agent explicitly chooses `payfetch` over `webfetch` when willing to spend
 money. payfetch applies the same SSRF blocklist as webfetch (private ranges,
-IPv6 loopback/link-local, cloud metadata, bare-IP encodings); localhost is
-only reachable when the host sets `PAYFETCH_ALLOW_LOCALHOST=1` for local x402
-test servers.
+IPv6 loopback/link-local, cloud metadata, bare-IP encodings), and the
+outbound path (publicnet) independently refuses private and reserved
+destinations at dial time on every hop. Loopback is always unreachable —
+local x402 test servers must listen on a routable address.
 
 ### Namespace Security
 
@@ -733,10 +734,13 @@ git clone git@github.com:infernode-os/x402-test-server.git
 cd x402-test-server && npm install && npm start
 ```
 
-The server runs on `http://localhost:4020` and returns proper x402 v2 402 responses. Test from the Inferno shell:
+The server listens on port 4020 and returns proper x402 v2 402 responses.
+payfetch cannot reach loopback addresses (its SSRF policy and publicnet both
+refuse them), so address the server by a routable address — e.g. the host's
+LAN IP. Test from the Inferno shell:
 
 ```
-echo 'http://localhost:4020/api/data -a veltro-demo-wallet' > /tool.1/payfetch/ctl
+echo 'http://<lan-ip>:4020/api/data -a veltro-demo-wallet' > /tool.1/payfetch/ctl
 cat /tool.1/payfetch/ctl
 ```
 

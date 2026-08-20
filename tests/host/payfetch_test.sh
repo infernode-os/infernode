@@ -115,10 +115,11 @@ sleep 1
 sleep 3
 echo 'eth ethereum payfetch-test' > /n/wallet/new
 sleep 1
-# Trusted opt-outs for the test rig: skip the approval queue and
-# allow payfetch to reach the localhost x402 test server.
+# Trusted opt-out for the test rig: skip the approval queue.
+# NOTE: payfetch cannot reach loopback addresses (publicnet refuses
+# private/reserved ranges at dial), so the x402 test server must be
+# reachable on a routable address for the paid-endpoint checks to work.
 echo 'requireapproval off' > /n/wallet/payfetch-test/ctl
-PAYFETCH_ALLOW_LOCALHOST=1
 
 echo '=== payfetch free endpoint ==='
 echo 'http://localhost:4020/api/free -a payfetch-test' > /tool/payfetch/ctl

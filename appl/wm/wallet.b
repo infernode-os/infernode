@@ -599,21 +599,39 @@ dosend()
 	cmd := amount + " " + recipient;
 	if(len tokv >= 4 && tokv[0:4] == "USDC")
 		cmd = "usdc " + amount + " " + recipient;
-	if(writewalletctl(acct.name + "/pay", cmd) <= 0){
+	# Single ORDWR fd for write and read: wallet9p binds the result to
+	# the writing fid, so this read can only ever observe OUR proposal
+	# — never a concurrent agent proposal's pending id.  (A fresh fd
+	# would fall back to the account-level result, which an agent
+	# could have overwritten between our write and read.)
+	fd := sys->open(WALLET + "/" + acct.name + "/pay", Sys->ORDWR);
+	if(fd == nil){
 		setstatus(errmsg("payment failed"));
 		return;
 	}
-	txhash := strip(readwalletfile(acct.name, "pay"));
+	b := array of byte cmd;
+	if(sys->write(fd, b, len b) <= 0){
+		setstatus(errmsg("payment failed"));
+		return;
+	}
+	txhash := payresult(fd);
 	if(len txhash > 8 && txhash[0:8] == "pending:"){
 		# This payment was initiated by the user right here, so the
-		# trusted GUI approves its own proposal immediately.  Agent
-		# proposals still wait in the Pending Payments queue.
-		if(writewalletctl("ctl", "approve " + txhash[8:]) <= 0){
+		# trusted GUI approves its own proposal — but only after
+		# confirming the pending record is exactly what was just
+		# submitted.  Agent proposals still wait in the queue.
+		id := txhash[8:];
+		if(!pendingmatches(id, acct.name, amount, recipient)){
+			setstatus("Queued payment doesn't match this form — review Pending Payments");
+			setmode(ModePending);
+			return;
+		}
+		if(writewalletctl("ctl", "approve " + id) <= 0){
 			setstatus(errmsg("payment queued but approval failed"));
 			setmode(ModePending);
 			return;
 		}
-		txhash = strip(readwalletfile(acct.name, "pay"));
+		txhash = payresult(fd);
 	}
 	if(len txhash > 6 && txhash[0:6] == "error:"){
 		setstatus("Payment failed: " + txhash[6:]);
@@ -628,6 +646,39 @@ dosend()
 		setstatus("Payment submitted");
 	cachedbalance = "";
 	setmode(ModeView);
+}
+
+# Read the pay result on the given (writing) fid
+payresult(fd: ref Sys->FD): string
+{
+	rbuf := array[1024] of byte;
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	n := sys->read(fd, rbuf, len rbuf);
+	if(n <= 0)
+		return "";
+	return strip(string rbuf[0:n]);
+}
+
+# Confirm a pending record is a pay proposal with exactly the account,
+# amount, and recipient the user just entered — the guard that keeps
+# auto-approve from ever blessing someone else's queued payment.
+pendingmatches(id, acct, amount, recipient: string): int
+{
+	raw := readwalletfile("", "pending");
+	(nil, lines) := sys->tokenize(raw, "\n");
+	for(; lines != nil; lines = tl lines){
+		# "<id> <kind> <acct> <token> <amount> <recipient> <agent>"
+		(ntoks, toks) := sys->tokenize(strip(hd lines), " \t");
+		if(ntoks < 6 || hd toks != id)
+			continue;
+		kind := hd tl toks;
+		pacct := hd tl tl toks;
+		pamount := hd tl tl tl tl toks;
+		precip := hd tl tl tl tl tl toks;
+		return kind == "pay" && pacct == acct &&
+			pamount == amount && precip == recipient;
+	}
+	return 0;
 }
 
 netchange()

@@ -951,6 +951,15 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			payamt = first;
 			payrecip = hd tl paytoks;
 		}
+		# Label the pending entry with the real asset so the approval
+		# UI never misstates what is being authorized.
+		if(as.acct.accttype == Wallet->ACCT_STRIPE) {
+			if(paytoken == "usdc") {
+				srv.reply(ref Rmsg.Error(m.tag, "pay: Stripe accounts cannot send USDC"));
+				return;
+			}
+			paytoken = "usd-cents";
+		}
 
 		# Validate before queueing or executing: a payment that can
 		# never execute should be rejected at submission time.
@@ -1505,14 +1514,17 @@ confirmchainid(net: ref NetworkConfig): string
 	return nil;
 }
 
-# Validate a pay request without executing it
+# Validate a pay request without executing it.  Must be at least as
+# strict as the execution path: anything that would fail after human
+# approval has to be rejected at submission time instead.
 validatepay(as: ref AcctState, token, amount, recipient: string): string
 {
 	if(as.acct.accttype == Wallet->ACCT_STRIPE) {
-		(nil, ok) := strbig(amount);
-		if(!ok)
-			return "invalid amount: " + amount;
-		return nil;
+		# mirror executestripepayment exactly (strint, positive)
+		(cents, ok) := strint(amount);
+		if(!ok || cents <= 0)
+			return "invalid amount (cents, up to 9 digits): " + amount;
+		return budgeterr(as, "USD", ethcrypto->dectobe(amount));
 	}
 	if(as.acct.accttype != Wallet->ACCT_ETH)
 		return "only ETH and Stripe accounts can send payments";

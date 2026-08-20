@@ -190,36 +190,38 @@ stripquotes(s: string): string
 	return s;
 }
 
-# Extract host from URL (strips scheme, port, path)
+# Extract the host from a URL.  Order matters: userinfo must be
+# stripped BEFORE the port, or "http://user:pass@host/" parses as host
+# "user" and dodges isblocked.  Bracketed IPv6 hosts keep their
+# brackets (isblocked strips them).  Kept textually identical to the
+# copies in payfetch.b and webfetch.b.
 extracthost(url: string): string
 {
-	# Skip scheme
 	s := url;
+	# strip scheme
 	for(i := 0; i < len s; i++) {
 		if(i + 2 < len s && s[i] == '/' && s[i+1] == '/') {
 			s = s[i+2:];
 			break;
 		}
 	}
-	# Strip path
+	# strip path
 	for(i = 0; i < len s; i++) {
-		if(s[i] == '/') {
-			s = s[0:i];
-			break;
-		}
+		if(s[i] == '/') { s = s[0:i]; break; }
 	}
-	# Strip port
-	for(i = 0; i < len s; i++) {
-		if(s[i] == ':') {
-			s = s[0:i];
-			break;
-		}
+	# strip userinfo (rightmost '@' in the authority)
+	for(i = len s - 1; i >= 0; i--) {
+		if(s[i] == '@') { s = s[i+1:]; break; }
 	}
-	# Strip userinfo
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '@') {
-			s = s[i+1:];
-			break;
+	if(len s > 0 && s[0] == '[') {
+		# bracketed IPv6: keep "[...]", drop any :port after it
+		for(i = 0; i < len s; i++) {
+			if(s[i] == ']') { s = s[0:i+1]; break; }
+		}
+	} else {
+		# strip port
+		for(i = 0; i < len s; i++) {
+			if(s[i] == ':') { s = s[0:i]; break; }
 		}
 	}
 	return str->tolower(s);

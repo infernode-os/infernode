@@ -159,14 +159,18 @@ loadaccount(name: string): (ref Account, string)
 				privkey := ethcrypto->hexdecode(password);
 				if(privkey != nil && len privkey == 32) {
 					pub := kr->secp256k1_pubkey(privkey);
-					if(pub == nil)
+					if(pub == nil) {
+						zeroarray(privkey);
 						return (nil, "stored key for " + name + " is invalid");
+					}
 					addr := ethcrypto->pubkeytoaddr(pub);
 					if(addr != nil)
 						addrstr = ethcrypto->addrtostr(addr);
 					zeroarray(privkey);
-				} else
+				} else {
+					zeroarray(privkey);
 					return (nil, "stored key for " + name + " is malformed");
+				}
 			} else if(atype == ACCT_SOL) {
 				if(chain == "")
 					chain = "solana";
@@ -274,8 +278,16 @@ parsefactotumline(line: string): ref Account
 		name = rest[7:];
 	}
 
-	if(atype < 0 || !validname(name))
+	if(atype < 0)
 		return nil;
+	if(!validname(name)) {
+		# A wallet key exists but its name can't be exposed through
+		# the 9P tree — warn rather than silently hiding the account
+		# (and whatever funds sit behind it).
+		sys->fprint(sys->fildes(2),
+			"wallet: skipping factotum key service=%s: unsupported account name (allowed: a-z A-Z 0-9 - _ .)\n", svc);
+		return nil;
+	}
 
 	chain := findattr(line, "chain");
 	if(chain == nil || !validname(chain)) {
@@ -323,8 +335,10 @@ signhash(acct: ref Account, hash: array of byte): (array of byte, string)
 
 	if(acct.accttype == ACCT_ETH) {
 		privkey := ethcrypto->hexdecode(password);
-		if(privkey == nil || len privkey != 32)
+		if(privkey == nil || len privkey != 32) {
+			zeroarray(privkey);
 			return (nil, "invalid key in factotum");
+		}
 		sig := kr->secp256k1_sign(privkey, hash);
 		zeroarray(privkey);
 		if(sig == nil)
@@ -334,8 +348,10 @@ signhash(acct: ref Account, hash: array of byte): (array of byte, string)
 
 	if(acct.accttype == ACCT_SOL) {
 		seed := ethcrypto->hexdecode(password);
-		if(seed == nil || len seed != 32)
+		if(seed == nil || len seed != 32) {
+			zeroarray(seed);
 			return (nil, "invalid key in factotum");
+		}
 		sig := kr->ed25519_sign(seed, hash);
 		zeroarray(seed);
 		if(sig == nil)

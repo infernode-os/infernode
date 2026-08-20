@@ -172,8 +172,8 @@ exec(args: string): string
 	if(!hasprefix(lurl, "http://") && !hasprefix(lurl, "https://"))
 		return "error: URL must start with http:// or https://";
 
-	# SSRF protection (same policy as webfetch; localhost only with
-	# an explicit trusted opt-in for local x402 test servers)
+	# SSRF protection (same policy as webfetch; publicnet enforces the
+	# same ranges again at dial time on every hop)
 	host := extracthost(url);
 	if(isblocked(host))
 		return "error: requests to internal/private network addresses are not allowed";
@@ -421,31 +421,48 @@ validaccount(s: string): int
 	return 1;
 }
 
+# Extract the host from a URL.  Order matters: userinfo must be
+# stripped BEFORE the port, or "http://user:pass@host/" parses as host
+# "user" and dodges isblocked.  Bracketed IPv6 hosts keep their
+# brackets (isblocked strips them).  Kept textually identical to the
+# copies in webfetch.b and http.b.
 extracthost(url: string): string
 {
 	s := url;
-	i := 0;
-	for(i = 0; i < len s; i++) {
+	# strip scheme
+	for(i := 0; i < len s; i++) {
 		if(i + 2 < len s && s[i] == '/' && s[i+1] == '/') {
 			s = s[i+2:];
 			break;
 		}
 	}
+	# strip path
 	for(i = 0; i < len s; i++) {
 		if(s[i] == '/') { s = s[0:i]; break; }
 	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == ':') { s = s[0:i]; break; }
-	}
-	for(i = 0; i < len s; i++) {
+	# strip userinfo (rightmost '@' in the authority)
+	for(i = len s - 1; i >= 0; i--) {
 		if(s[i] == '@') { s = s[i+1:]; break; }
+	}
+	if(len s > 0 && s[0] == '[') {
+		# bracketed IPv6: keep "[...]", drop any :port after it
+		for(i = 0; i < len s; i++) {
+			if(s[i] == ']') { s = s[0:i+1]; break; }
+		}
+	} else {
+		# strip port
+		for(i = 0; i < len s; i++) {
+			if(s[i] == ':') { s = s[0:i]; break; }
+		}
 	}
 	return str->tolower(s);
 }
 
-# Same policy as webfetch's isblocked.  Localhost is normally blocked
-# too; setting the env var PAYFETCH_ALLOW_LOCALHOST=1 (a trusted,
-# host-side decision) permits it for local x402 test servers.
+# Same policy as webfetch's isblocked.  Localhost is always blocked:
+# the outbound path (webclient requestpublic -> publicnet) refuses
+# loopback and private ranges at dial anyway, so a hostname-level
+# escape hatch could never work and would only weaken this predicate.
+# Local x402 test servers must listen on a routable address.
 isblocked(host: string): int
 {
 	if(len host > 2 && host[0] == '[' && host[len host - 1] == ']')
@@ -453,11 +470,8 @@ isblocked(host: string): int
 	if(host == "localhost" || host == "127.0.0.1" || host == "::1" ||
 	   host == "0.0.0.0" || host == "0:0:0:0:0:0:0:1" ||
 	   host == "::ffff:127.0.0.1" ||
-	   host == "0000:0000:0000:0000:0000:0000:0000:0001") {
-		if(localhostallowed() && (host == "localhost" || host == "127.0.0.1"))
-			return 0;
+	   host == "0000:0000:0000:0000:0000:0000:0000:0001")
 		return 1;
-	}
 	if(hasprefix(host, "::"))
 		return 1;
 	if(hasprefix(host, "10."))
@@ -496,12 +510,6 @@ isblocked(host: string): int
 	if(hasprefix(host, "0x") || hasprefix(host, "0X"))
 		return 1;
 	return 0;
-}
-
-localhostallowed(): int
-{
-	s := readfile("/env/PAYFETCH_ALLOW_LOCALHOST");
-	return s != nil && len s >= 1 && s[0] == '1';
 }
 
 strnum(s: string): (int, int)

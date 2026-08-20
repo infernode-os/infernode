@@ -308,7 +308,14 @@ consread(Chan *c, void *va, long n, vlong offset)
 		return randomread(va, n);
 
 	case Qnotquiterandom:
-		genrandom(va, n);
+		/*
+		 * Host OS CSPRNG (libsec prng(): arc4random_buf/getrandom/
+		 * BCryptGenRandom).  Historically this was libsec genrandom()
+		 * — a never-reseeded X9.17 3DES DRBG — which is well below
+		 * what emu/port/random.c and the wallet documented for this
+		 * device.  Under emu the host CSPRNG is always available.
+		 */
+		prng(va, n);
 		return n;
 
 	case Qhostowner:

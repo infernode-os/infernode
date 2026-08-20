@@ -179,6 +179,20 @@ jobs:
         # tmp directory (needed by profile)
         mkdir -p "$STAGE/tmp"
 
+        # Distribution defaults for LLM config. lib/ndb/llm is git-ignored
+        # (a developer's endpoints stay local), so the source tree may carry
+        # no config at all, or a private one — never ship either. Blank: a
+        # set url= makes lucibridge treat the install as already configured
+        # and skip the first-run setup wizard.
+        mkdir -p "$STAGE/lib/ndb"
+        cat > "$STAGE/lib/ndb/llm" << 'LLMCONF'
+        mode=local
+        backend=
+        url=
+        model=
+        dial=
+        LLMCONF
+
         # mkconfig and mkfiles (needed for building from source)
         cp mkconfig "$STAGE/"
         [ -d mkfiles ] && cp -a mkfiles "$STAGE/"
@@ -636,6 +650,20 @@ jobs:
 
         # tmp directory (needed by profile)
         mkdir -p "$STAGE/tmp"
+
+        # Distribution defaults for LLM config. lib/ndb/llm is git-ignored
+        # (a developer's endpoints stay local), so the source tree may carry
+        # no config at all, or a private one — never ship either. Blank: a
+        # set url= makes lucibridge treat the install as already configured
+        # and skip the first-run setup wizard.
+        mkdir -p "$STAGE/lib/ndb"
+        cat > "$STAGE/lib/ndb/llm" << 'LLMCONF'
+        mode=local
+        backend=
+        url=
+        model=
+        dial=
+        LLMCONF
 
         # mkconfig and mkfiles (needed for building from source)
         cp mkconfig "$STAGE/"
@@ -1316,6 +1344,20 @@ jobs:
         # tmp directory (needed by profile)
         mkdir -p "$STAGE/tmp"
 
+        # Distribution defaults for LLM config. lib/ndb/llm is git-ignored
+        # (a developer's endpoints stay local), so the source tree may carry
+        # no config at all, or a private one — never ship either. Blank: a
+        # set url= makes lucibridge treat the install as already configured
+        # and skip the first-run setup wizard.
+        mkdir -p "$STAGE/lib/ndb"
+        cat > "$STAGE/lib/ndb/llm" << 'LLMCONF'
+        mode=local
+        backend=
+        url=
+        model=
+        dial=
+        LLMCONF
+
         # mkconfig and mkfiles (needed for building from source)
         cp mkconfig "$STAGE/"
         [ -d mkfiles ] && cp -a mkfiles "$STAGE/"
@@ -1529,6 +1571,15 @@ jobs:
           foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
             if (Test-Path $f) { Copy-Item $f "$Stage\" }
           }
+          # Distribution defaults for LLM config. lib/ndb/llm is git-ignored
+          # (a developer's endpoints stay local), so the source tree may carry
+          # no config at all, or a private one — never ship either. Blank: a
+          # set url= makes lucibridge treat the install as already configured
+          # and skip the first-run setup wizard.
+          New-Item -ItemType Directory -Force -Path "$Stage\lib\ndb" | Out-Null
+          Set-Content -Path "$Stage\lib\ndb\llm" -Encoding ascii -Value @(
+            "mode=local", "backend=", "url=", "model=", "dial="
+          )
         }
 
         # CI guard: refuse to ship testing-only harness files. See CLAUDE.md

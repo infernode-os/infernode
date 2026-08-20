@@ -88,6 +88,13 @@ namespace policy*, not as bolted-on subsystems.
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **NIST SP 800-92 + tamper-evident logs** | Complete, integrity-protected audit | One hash-chained append-only 9P log service (`#`-device); Merkle-verifiable. Underwrites SOC 2, FISMA AU, PCI-10 at once | 1 |
+
+### AI governance
+| Standard | Requires | Inferno-native mechanism | Tier |
+|----------|----------|--------------------------|------|
+| **EU AI Act Art. 12 (record-keeping)** | Automatic lifetime event logging with traceability | ✅ **BUILT** (INFR-355): full agent trajectory — prompts, caps, tool calls, spawns, completions — sealed into the tamper-evident chain, payloads content-addressed, offline public-key verifiable. See [`compliance/ai-governance.md`](compliance/ai-governance.md) | 0→1 |
+| **NIST AI RMF ("accountable & transparent")** | Traceability evidence for agent actions and authority | Same mechanism; capability grants are first-class records (`nscaps`/`subcaps`/`nsrestrict`) | 0→1 |
+| **ISO/IEC 42001 (AI management systems)** | Operational logging/traceability controls an AIMS audit samples | Same mechanism; `auditverify -k` gives auditors an auditee-independent integrity check | 1 |
 | **SP 800-53 AU-10 — non-repudiation (human authorization of agent actions)** | Bind a human's authority to high-risk/agent-initiated actions; prove who authorized what | YubiKey UV **signature over the canonical action** + hash-chained record; enforced by **namespace construction** so the on-device AI agent can't reach the capability or forge approval — see EPIC 7 (`docs/security-epics.md`). A differentiator for *safe autonomous agents*. | 1 |
 
 ---

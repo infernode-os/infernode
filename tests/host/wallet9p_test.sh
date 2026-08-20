@@ -86,10 +86,22 @@ INFERNO
 OUT=$(mktemp /tmp/wallet9p_test_out.XXXXXX)
 "$EMU" -r"$ROOT" -c0 sh /tmp/wallet9p_testscript.sh > "$OUT" 2>&1 &
 EMU_PID=$!
-( sleep 45; kill $EMU_PID 2>/dev/null ) &
-WATCHDOG=$!
+# The Inferno script leaves factotum and wallet9p running, so emu never
+# self-exits; poll for the completion marker and kill it as soon as the
+# script is done (45s hard cap for hangs).
+i=0
+while [ $i -lt 45 ]; do
+    if grep -q '=== SCRIPT DONE ===' "$OUT" 2>/dev/null; then
+        break
+    fi
+    if ! kill -0 $EMU_PID 2>/dev/null; then
+        break
+    fi
+    sleep 1
+    i=$((i + 1))
+done
+kill $EMU_PID 2>/dev/null || true
 wait $EMU_PID 2>/dev/null || true
-kill $WATCHDOG 2>/dev/null || true
 
 fail=0
 expect() {
@@ -109,15 +121,22 @@ expect 'invalid amount' "fractional amount rejected"
 expect 'exceeds per-tx limit' "over-budget payment rejected"
 expect 'budget is in ETH' "budget currency mismatch fails closed"
 expect 'pending:1' "authorize queued pending approval"
-expect '^sig [0-9a-f]' "approved authorization returns signature" || true
-grep -Eq 'sig [0-9a-f]{130} from 0x' "$OUT" || { echo "FAIL: signature line malformed"; fail=1; }
+if grep -Eq 'sig [0-9a-f]{130} from 0x' "$OUT"; then
+    echo "PASS: approved authorization returns signature"
+else
+    echo "FAIL: approved authorization returns signature"
+    fail=1
+fi
 expect 'denied' "denied authorization reports denied"
 expect 'does not match active network' "wrong-network authorization refused"
 
-rm -f "$OUT" "$ROOT/tmp/wallet9p_testscript.sh"
-
 if [ $fail -ne 0 ]; then
+    echo "--- emulator output ($OUT) ---"
+    cat "$OUT"
+    echo "--- end emulator output ---"
+    rm -f "$OUT" "$ROOT/tmp/wallet9p_testscript.sh"
     echo "wallet9p_test: FAILED"
     exit 1
 fi
+rm -f "$OUT" "$ROOT/tmp/wallet9p_testscript.sh"
 echo "wallet9p_test: PASS"

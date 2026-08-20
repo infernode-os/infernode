@@ -171,7 +171,12 @@ getreceipt(txhash: string): (ref TxReceipt, string)
 	if(rv == nil || rv.isnull())
 		return (nil, nil);	# pending — no receipt yet
 
+	# status must parse to the documented {0,1} domain; a missing or
+	# malformed field is an error, never a value a fail-open caller
+	# could mistake for success
 	status := hexnum(jvgetstr(rv, "status"));
+	if(status < 0 || status > 1)
+		return (nil, "eth_getTransactionReceipt: malformed status in receipt");
 	blocknumber := jvgetstr(rv, "blockNumber");
 	gasused := jvgetstr(rv, "gasUsed");
 

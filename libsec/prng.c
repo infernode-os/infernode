@@ -52,6 +52,8 @@ prng(uchar *p, int n)
 			if(fd >= 0) {
 				while(n > 0) {
 					ssize_t rr = read(fd, p, n);
+					if(rr < 0 && errno == EINTR)
+						continue;
 					if(rr <= 0)
 						break;
 					p += rr;
@@ -75,6 +77,8 @@ prng(uchar *p, int n)
 	if(fd >= 0) {
 		while(n > 0) {
 			ssize_t r = read(fd, p, n);
+			if(r < 0 && errno == EINTR)
+				continue;
 			if(r <= 0)
 				break;
 			p += r;

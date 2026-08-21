@@ -122,8 +122,11 @@ subdirectories over the corresponding paths in the Inferno namespace.
 
 ```
 ~/.infernode/
-  usr/inferno/secstore/     # Encrypted key storage (PAK + factotum files)
-  usr/inferno/tmp/           # Persistent temp files
+  usr/                       # ALL of /usr — every user home, durable
+    inferno/                 #   default account, seeded from the shipped
+                             #   skeleton on first run (namespace, lib/*,
+                             #   charon/config; secstore/, tmp/, keyring/)
+    <name>/                  #   accounts created later (newuser(8))
   lib/ndb/                   # LLM config (lib/ndb/llm)
   lib/lucifer/theme/         # GUI theme (current)
   lib/veltro/                # Agent state (welcome_shown, tour_offered, meta.txt)
@@ -132,15 +135,19 @@ subdirectories over the corresponding paths in the Inferno namespace.
   tmp/                       # Session temp files
 ```
 
+The audit chain, its venti content store, and snapshots all live under
+`/usr/inferno` and are therefore durable with no special-casing. See
+`docs/PERSISTENCE.md` for the design and its historical grounding.
+
 ### How It Works
 
-The profile (`lib/sh/profile`) uses `bind -bc` to overlay each
-`~/.infernode` subdirectory onto the corresponding Inferno path:
+The profile (`lib/sh/profile`) uses `bind -bc` to overlay `~/.infernode`
+directories onto the corresponding Inferno paths — `/usr` is bound whole:
 
 ```
-bind -bc ~/.infernode/usr/inferno/secstore  /usr/inferno/secstore
-bind -bc ~/.infernode/lib/ndb               /lib/ndb
-bind -bc ~/.infernode/lib/veltro            /lib/veltro
+bind -bc ~/.infernode/usr       /usr
+bind -bc ~/.infernode/lib/ndb   /lib/ndb
+bind -bc ~/.infernode/lib/veltro /lib/veltro
 ...
 ```
 

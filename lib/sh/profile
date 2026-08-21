@@ -44,18 +44,27 @@ if {~ $emuhost MacOSX Linux Nt}{
 	home=$ghome
 
 	# ── Writable overlay from ~/.infernode ──────────────────
-	# User state (secstore, config, tmp) always goes to ~/.infernode,
-	# regardless of whether this is a bundle, dev checkout, or headless.
-	# The emu root stays clean — no user data mixed with system files.
+	# User state always goes to ~/.infernode, regardless of whether this
+	# is a bundle, dev checkout, or headless. The emu root stays clean —
+	# no user data mixed with system files.
+	#
+	# ALL of /usr is durable (docs/PERSISTENCE.md): the whole tree is
+	# union-bound from ~/.infernode/usr, so every user home — including
+	# accounts made later with newuser(8) — and everything services put
+	# under /usr (secstore, the audit chain and its venti store,
+	# snapshots) survives app updates and reinstalls. This is the
+	# historical Inferno/Plan 9 contract re-created for hosted installs:
+	# updates replace the system tree; they never touch /usr.
 	infhome=$ghome^/.infernode
 
 	# Ensure every overlay SOURCE dir exists BEFORE the binds below. This runs
 	# unconditionally (not gated on first-run): `bind -bc` of a missing source
 	# silently falls back to the emu-root dir, so a deleted (or never-created)
-	# ~/.infernode/usr/inferno/secstore would route secstore into the emu root /
-	# bundle instead of the user's home — and 2FA enrollment would not persist.
+	# ~/.infernode/usr would route user state into the emu root / bundle
+	# instead of the user's home — and nothing would persist.
 	mkdir -p $infhome/usr/inferno/secstore
 	mkdir -p $infhome/usr/inferno/tmp
+	mkdir -p $infhome/usr/inferno/lib
 	mkdir -p $infhome/lib/ndb
 	mkdir -p $infhome/lib/lucifer/theme
 	mkdir -p $infhome/lib/veltro
@@ -73,9 +82,27 @@ if {~ $emuhost MacOSX Linux Nt}{
 		cp /lib/veltro/agents/task.txt $infhome/lib/veltro-agents/task.txt >[2] /dev/null
 	}
 
-	# Writable overlay mounts
-	bind -bc $infhome/usr/inferno/secstore /usr/inferno/secstore
-	bind -bc $infhome/usr/inferno/tmp      /usr/inferno/tmp
+	# First-run only: seed the default user's home from the shipped
+	# /usr/inferno skeleton (the historical `cp -r /usr/inferno
+	# /usr/<name>` — doc/install.ms "Adding new users" — done once for
+	# the durable side). After this, /usr/inferno resolves entirely to
+	# the ~/.infernode copy; later skeleton changes in the system tree
+	# do not propagate to existing homes — the historical norm.
+	if {! ftest -f $infhome/usr/inferno/namespace} {
+		cp /usr/inferno/namespace $infhome/usr/inferno/namespace >[2] /dev/null
+		cp /usr/inferno/lib/plumbing $infhome/usr/inferno/lib/plumbing >[2] /dev/null
+		cp /usr/inferno/lib/profile $infhome/usr/inferno/lib/profile >[2] /dev/null
+		cp /usr/inferno/lib/functions $infhome/usr/inferno/lib/functions >[2] /dev/null
+		mkdir -p $infhome/usr/inferno/charon
+		cp /usr/inferno/charon/config $infhome/usr/inferno/charon/config >[2] /dev/null
+		mkdir -p $infhome/usr/inferno/keyring
+	}
+
+	# Writable overlay mounts. /usr is bound WHOLE: names present on the
+	# durable side win, creates land durable, and anything only in the
+	# system tree (e.g. the pristine skeleton, the testnode fixture)
+	# still shows through the union.
+	bind -bc $infhome/usr /usr
 	bind -bc $infhome/lib/ndb              /lib/ndb
 	bind -bc $infhome/lib/lucifer/theme    /lib/lucifer/theme
 	bind -bc $infhome/lib/veltro           /lib/veltro

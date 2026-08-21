@@ -563,6 +563,9 @@ work, so it has a feedback loop:
 
 In reading order for a new contributor:
 
+- [TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md) — this
+  document put into practice: design, build, test, and document a
+  complete service (`countfs`), every artifact shipping in-tree.
 - [9p-data-conventions.md](9p-data-conventions.md) — data
   formats across 9P; the no-JSON argument in full.
 - [NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md) — `/mnt` vs `/n`;

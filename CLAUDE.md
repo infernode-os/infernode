@@ -138,6 +138,8 @@ The Inferno® shell is rc-style, not POSIX sh:
 - `for` loops: `for i in $list { commands }` not `for i in $list; do ... done`
 - Different quoting rules
 
+Full dialect reference: [docs/INFERNO-SHELL.md](docs/INFERNO-SHELL.md).
+
 ## Testing System
 
 InferNode uses a custom testing framework (`module/testing.m`) for Limbo unit tests.

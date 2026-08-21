@@ -118,33 +118,13 @@ hook does this after pulls).
 
 ## The shell
 
-You will also write Inferno `sh`. It is rc-style, not POSIX, and
-POSIX habits are the most common review comment we make:
-
-| POSIX habit | Inferno sh |
-|---|---|
-| `a && b` | `a ; b` (no `&&`, no `\|\|`) |
-| `for i in x y; do ...; done` | `for i in x y { ... }` |
-| `if [ -d /x ]; then` | `if {ftest -d /x} { ... }` |
-| `. script.sh` | `run script.sh` |
-| `VAR=v cmd` | `VAR=v; cmd` |
-| exit status tests | `raise 'fail:reason'` / `raise 'skip:reason'` |
-| `"$var/path"` (empty var → `/path`) | `$var^/path` **raises** `null list in concatenation` when `$var` is empty — guard with `if {! ~ $#var 0}` before any `^` on command-substitution output |
-| `cmd > $f` failing quietly in an `if` | a failed redirection **raises past `if {...}`**, aborting the script — to assert "writing $f fails", let the command open it: `cp /dev/null $f` |
-
-Scripts begin `#!/dis/sh.dis` and usually `load std`. Quoting is
-single-quote based, with `''` to embed a quote. A backgrounded
-9P server (`svc &`) keeps the emulator alive until killed —
-remember that in test scripts. `doc/sh.ms` is the full paper;
-`man/1/sh` the reference.
-
-The last two table rows are semantic, not stylistic — rc-legal
-scripts that raise at runtime. Both have shipped: an unguarded
-null-list concatenation in a boot probe aborts the entire boot for
-every user, and the redirection rule is why the tutorial's contract
-test asserts write-denial with `cp` (see
-[TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md), step 5). The
-style gate cannot catch these — it checks style, not semantics.
+You will also write Inferno `sh`. It is rc-style, not POSIX — no
+`&&`/`||`, `for i in x y { ... }`, different quoting — and POSIX
+habits in it are the most common review comment we make. The
+dialect has its own reference:
+[INFERNO-SHELL.md](INFERNO-SHELL.md) — the POSIX→Inferno
+translation table, the two runtime gotchas that have shipped as
+real bugs, and the script conventions.
 
 
 ## Where tests go

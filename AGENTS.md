@@ -38,7 +38,7 @@ Use the platform scripts instead of inventing local build flows.
 
 ## Coding Style & Naming Conventions
 
-Match the surrounding code closely. Limbo (`.b`) is close to Go in structure but should follow existing Inferno idioms, naming, and control-flow style. C uses Plan 9 / Inferno conventions and tabs, not generic modern C house styles. *Host-side* shell scripts (`tests/host/`, `tools/`, `build-*.sh`) stay POSIX `sh` compatible; scripts that run *inside Inferno* (`tests/inferno/`, `lib/sh/`, boot scripts) are rc-style — no `&&`/`||` — see the shell table in [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md). Name new emulator tests `*_test.b`, host tests `*_test.sh`, and keep module interfaces in `module/` aligned with their implementation names.
+Match the surrounding code closely. Limbo (`.b`) is close to Go in structure but should follow existing Inferno idioms, naming, and control-flow style. C uses Plan 9 / Inferno conventions and tabs, not generic modern C house styles. *Host-side* shell scripts (`tests/host/`, `tools/`, `build-*.sh`) stay POSIX `sh` compatible; scripts that run *inside Inferno* (`tests/inferno/`, `lib/sh/`, boot scripts) are rc-style — no `&&`/`||` — see [docs/INFERNO-SHELL.md](docs/INFERNO-SHELL.md). Name new emulator tests `*_test.b`, host tests `*_test.sh`, and keep module interfaces in `module/` aligned with their implementation names.
 
 Use Inferno `mk`, not GNU make, for subtree builds. In `mkfile`s, do not chain commands with `&&`; use separate rules or `;`.
 

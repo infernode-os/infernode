@@ -512,7 +512,7 @@ any code is written:
 | A global "busy"/"in-use" flag any client can wedge | Per-fid session state, torn down at clunk; exclusivity is `DMEXCL`. (See "The fid is the session" in the ninep-server skill.) |
 | UI policy (chords, bindings, gestures) inside a device driver | Drivers deliver events; policy lives in the window system. |
 | An effectful file an agent can reach, guarded by a flag | Proposal/commit split; put the commit in a namespace the agent doesn't have. |
-| `&&`, `\|\|`, POSIX loops in Inferno-side scripts | Inferno `sh` is rc-style; see [LIMBO-FOR-GO-PROGRAMMERS.md](LIMBO-FOR-GO-PROGRAMMERS.md#the-shell). |
+| `&&`, `\|\|`, POSIX loops in Inferno-side scripts | Inferno `sh` is rc-style; see [INFERNO-SHELL.md](INFERNO-SHELL.md). |
 | GNU make / `limbo -o` by hand | `mk` and `tools/compile-limbo.sh`; the module's `PATH` constant decides the target. |
 
 None of these is an absolute prohibition — JSON is right at

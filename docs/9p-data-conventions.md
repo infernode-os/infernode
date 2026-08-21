@@ -43,25 +43,8 @@ choosing any mount point.
 ## Why Not JSON
 
 JSON is the default instinct for structured data. It is wrong
-here. The reasons are architectural, not aesthetic.
-
-**Simplicity.** A line of space-separated fields is the simplest
-possible representation of a record. It requires no grammar, no
-escaping rules, no nesting, no closing delimiters. The cognitive
-load of reading `37.7749 -122.4194 San_Francisco 2025-02-15T14:32:00Z`
-is zero. The cognitive load of reading the equivalent JSON is not
-zero — your eye has to parse braces, colons, quotes, and commas
-to find the four values. Simplicity is not a preference in Plan 9.
-It is a design principle. Every layer of unnecessary syntax is a
-layer of unnecessary complexity in every tool that touches the data.
-
-**Clarity.** Text lines are human-readable at every point in the
-system. `cat /mnt/sensors/temperature` shows a number. `cat /mnt/alerts`
-shows one alert per line. There is nothing to decode, no structure
-to navigate, no keys to look up. The data is right there. This
-matters for debugging, for auditing, for understanding what a
-system is doing at 3 AM when something is wrong. JSON forces you
-to visually parse structure before you can see values.
+here. The reasons are architectural, not aesthetic — so the
+architecture comes first.
 
 **Tool composition.** The entire Plan 9 and Inferno tool ecosystem
 assumes text lines. Pipes, `grep`, `awk`, `sed`, `sort`, `wc`,
@@ -97,6 +80,24 @@ text: `/proc/*/status` (space-separated fields), `/dev/sysstat`
 your 9P server emits JSON, it is the odd one out. Every consumer
 needs special-case code. Every tool that works on other parts of
 the namespace stops working on yours.
+
+**Simplicity.** A line of space-separated fields is the simplest
+possible representation of a record. It requires no grammar, no
+escaping rules, no nesting, no closing delimiters. The cognitive
+load of reading `37.7749 -122.4194 San_Francisco 2025-02-15T14:32:00Z`
+is zero. The cognitive load of reading the equivalent JSON is not
+zero — your eye has to parse braces, colons, quotes, and commas
+to find the four values. Simplicity is not a preference in Plan 9.
+It is a design principle. Every layer of unnecessary syntax is a
+layer of unnecessary complexity in every tool that touches the data.
+
+**Clarity.** Text lines are human-readable at every point in the
+system. `cat /mnt/sensors/temperature` shows a number. `cat /mnt/alerts`
+shows one alert per line. There is nothing to decode, no structure
+to navigate, no keys to look up. The data is right there. This
+matters for debugging, for auditing, for understanding what a
+system is doing at 3 AM when something is wrong. JSON forces you
+to visually parse structure before you can see values.
 
 **Agents.** AI agents read and write files. They understand text
 natively — it is their primary medium. An agent reasoning about

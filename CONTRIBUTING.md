@@ -331,7 +331,10 @@ InferNode's shell (`sh`) is rc-style, **not** POSIX:
 - `for` loops: `for i in $list { commands }`
 - Different quoting rules than bash/zsh
 
-This matters when writing scripts that run inside the emulator.
+This matters when writing scripts that run inside the emulator. The
+full dialect reference — the POSIX→Inferno translation table, the
+runtime gotchas that have shipped as real bugs, and the script
+conventions — is [docs/INFERNO-SHELL.md](docs/INFERNO-SHELL.md).
 
 ## Community
 

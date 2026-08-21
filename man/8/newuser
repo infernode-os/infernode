@@ -1,0 +1,57 @@
+.TH NEWUSER 8
+.SH NAME
+newuser \- create a user home directory from the shipped skeleton
+.SH SYNOPSIS
+.B newuser
+[
+.B -s
+.I skeleton
+]
+.I name
+.SH DESCRIPTION
+.I Newuser
+creates
+.BI /usr/ name
+by copying the skeleton home directory (default
+.BR /usr/inferno ),
+then ensures the per-user working directories
+.BR tmp ,
+.B keyring
+and
+.B charon
+exist.
+The contents of the skeleton's
+.B secstore
+and
+.B tmp
+directories are not copied \(em credentials and temporary state are
+per-user, never inherited.
+.PP
+On hosted installs the whole of
+.B /usr
+is durable (bound from
+.BR ~/.infernode/usr ;
+see
+.BR /doc/PERSISTENCE.md ),
+so the new home survives system updates by construction.
+.PP
+Creating the home does not grant network authentication: an
+administrator adds the account on the signer with
+.IR changelogin (8),
+and the user obtains certificates at first login with
+.IR getauthinfo (8),
+exactly as in original Inferno.
+.SH SOURCE
+.B /appl/cmd/newuser.b
+.SH HISTORY
+Original Inferno documented this operation as prose \(em
+.I "copy the directory /usr/inferno into /usr/username"
+\(em and
+.IR kfscmd (8)'s
+.B newuser
+command was documented inside a roff ignore-block but never
+implemented. This command finishes that arc.
+.SH SEE ALSO
+.IR logon (1),
+.IR changelogin (8),
+.IR getauthinfo (8)

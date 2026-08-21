@@ -168,50 +168,12 @@ This mounts the host's root filesystem (`#U*`) at `/n/local`, giving you access 
 InferNode uses a shell profile (`/lib/sh/profile`) to configure the namespace at login.
 This profile runs when you start the shell with the `-l` (login) flag.
 
-**Current Profile (`/lib/sh/profile`):**
-```sh
-#!/dis/sh.dis
-# InferNode shell initialization
-load std
-
-# Set command search path
-path=(/dis .)
-
-# Get username
-user="{cat /dev/user}
-
-# Mount namespace generator (synchronous - must complete before continuing)
-mount -ac {mntgen} /n
-
-# Mount LLM filesystem if server is running (optional, non-blocking on failure)
-mount -A tcp!127.0.0.1!5641 /mnt/llm >[2] /dev/null
-
-# Setup home directory based on platform
-if {~ $emuhost MacOSX Linux}{
-	# For macOS/Linux, mount host filesystem (synchronous)
-	trfs '#U*' /n/local >[2] /dev/null
-	# Get actual HOME from host
-	ghome=/n/local/^`{echo 'echo $HOME' | os sh}
-	home=$ghome
-}{
-	# Fallback to /usr/username for other systems
-	home=/usr/^$user
-	if {! ftest -d $home} {
-		mkdir -p $home
-	}
-}
-
-# Create tmp directory if needed
-if {! ftest -d $home/tmp} {
-	mkdir -p $home/tmp
-}
-
-# Bind tmp to /tmp so applications can find it
-bind -bc $home/tmp /tmp
-
-# Change to home directory
-cd $home
-```
+The profile itself is the authority — read `lib/sh/profile` in the tree
+rather than a copy here (an embedded copy of it in this document went
+stale once already). The short version: host filesystem at `/n/local`,
+host home as the Inferno home, the `~/.infernode` writable overlay
+(whole-`/usr` durable — see `docs/PERSISTENCE.md`), then optional
+services (audit, snapshots) by their opt-in markers.
 
 ### Key Profile Components
 

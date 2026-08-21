@@ -119,6 +119,7 @@ schema *you* author is a `/mnt` candidate even when served from a remote node.
 | `/mnt/<app>`   | application mount points we synthesize (`mcp`, `acme`, `wiki`, …)|
 | `/n/<source>`  | foreign trees imported intact, named per source                 |
 | `/srv`         | service registry — posted channels other procs can mount        |
+| `/usr/<user>`  | user homes — **durable**: the whole tree is bound from `~/.infernode/usr` on hosted installs, so it survives system updates; new homes via `newuser(8)` (see `docs/PERSISTENCE.md`) |
 | `/chan`        | `file2chan` endpoints                                            |
 
 `/appl/foo.b` ↔ `/dis/foo.dis` is a deliberate source↔object mirror; don't break

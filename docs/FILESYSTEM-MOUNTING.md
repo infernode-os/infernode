@@ -72,8 +72,11 @@ Creates `/n` as a mount point directory.
 ### Variables Set by Profile
 
 - `$user` - Your Inferno username (from `/dev/user`)
-- `$home` - Your Inferno home (`/usr/username`)
-- `$ghome` - Your macOS home (e.g., `/n/local/Users/pdfinn`)
+- `$home` - Your Inferno home. On desktop hosts this is your HOST home
+  (`$ghome`); `/usr/<user>` is the durable Inferno-side home tree,
+  bound whole from `~/.infernode/usr` (see `docs/PERSISTENCE.md`)
+- `$ghome` - Your macOS home (e.g., `/n/local/Users/<you>`)
+- `$infhome` - `~/.infernode` (durable user state; overlay source)
 - `$lhome` - acme-home directory (`$ghome/acme-home`)
 - `$emuhost` - Host OS type (MacOSX, Linux, Nt)
 
@@ -103,8 +106,8 @@ After profile runs:
 - `/n/local` - Your entire macOS filesystem
 - `/n/local/Users/pdfinn` - Your macOS home
 - `$lhome/acme-home` - Persistent acme workspace
-- `/usr/pdfinn` - Your Inferno home (bound to lhome)
-- `/tmp` - Temporary files (bound to $home/tmp)
+- `/usr/<user>` - Durable Inferno home tree (bound from `~/.infernode/usr`)
+- `/tmp` - Temporary files (bound from `~/.infernode/tmp`)
 
 ### Accessing Mac Files from Inferno
 

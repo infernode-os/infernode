@@ -69,6 +69,22 @@ Inferno user name
 .BI /usr/ user
 .IR user 's
 home directory
+.SH INFERNODE
+InferNode's
+.I wm/logon
+is a different program from the original described above: a secstore
+unlock screen that establishes the user's encrypted key store under
+.B /usr/inferno/secstore
+(see
+.BR /doc/AUTHENTICATION.md ).
+It does not require or create
+.BI /usr/ user
+itself; user homes are durable via the
+.B ~/.infernode
+overlay and are created with
+.IR newuser (8).
+The original behaviour documented above still describes upstream
+Inferno and native ports.
 .SH SOURCE
 .B /appl/wm/logon.b
 .SH SEE ALSO

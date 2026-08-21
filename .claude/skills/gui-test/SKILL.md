@@ -91,8 +91,13 @@ rendered state of a full session:
 SDL_VIDEODRIVER=dummy "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m \
   -g1024x768 -r"$PWD" /dis/sh.dis -l -c \
   "skiplogon=1; run /lib/lucifer/boot.sh & sleep 50; scap /tmp/shot.img"
-python3 tools/p9img2png.py tmp/shot.img shot.png
+python3 tools/p9img2png.py ~/.infernode/tmp/shot.img shot.png
 ```
+
+Mind the decode path: under `sh -l` the profile binds `~/.infernode/tmp`
+(and, after logon, `$home/tmp`) over `/tmp`, so the file lands there on
+the host — NOT under `$ROOT/tmp`. (Verified end-to-end 2026-08-21: full
+boot, scap, decode, correct 1024x768 render.)
 
 Combine with a `/mnt/ui` driver before the `scap` call to screenshot a
 specific app or state.

@@ -19,18 +19,29 @@ makes blocking *syscalls* return `EINTR`. It does **nothing** to a
 wait resumes as if nothing happened. A driver that parks in a condvar
 wait is unkillable from inside Inferno.
 
-Rules, each learned from a real deadlock:
+Rules, each learned from a real deadlock. Cite and copy only
+*exercised* code — the shapes below are all from files that run on
+every platform, every day (not the dormant BSD ports, whose drivers
+nobody has proven in years):
 
-- **Host blocking goes inside `osenter()`/`osleave()`** so the proc is
-  in the right state to be interrupted and the kill is delivered as
-  `EINTR`. `emu/FreeBSD/audio.c` is the exemplar — every blocking read
-  and write is wrapped.
-- **Prefer the emu `Rendez`** (`emu/port/dat.h`) for waits the Inferno
-  side must be able to break; it participates in the proc model.
-- **Never hold a `QLock` across a blocking wait.** The waiter blocks
-  with the lock held, the closer blocks on the lock, and the device is
-  wedged until the emulator dies. Take the lock, update state, release,
-  *then* wait.
+- **Blocking syscalls go inside `osenter()`/`osleave()`** so the proc
+  is in the interruptible state and the kill arrives as `EINTR`. This
+  is the pattern throughout the live port layer: `emu/port/devcmd.c`,
+  `emu/port/deveia-posix.c`, `emu/port/ipif6-posix.c`.
+- **Callback-fed host APIs (CoreAudio/AudioQueue, most modern media
+  frameworks) have no syscall to interrupt** — and a
+  `pthread_cond_wait` for data a callback may never deliver is exactly
+  the unkillable case. Do not park there. Either wait on the emu
+  `Rendez` (`emu/port/dat.h`), which participates in the proc model,
+  or use the incumbent's shape: a **bounded poll** —
+  `emu/MacOSX/audio-sdl3.c` loops on `SDL_GetAudioStreamData` with a
+  5 ms delay, and its header comment argues the trade explicitly. A
+  wait that always returns within milliseconds cannot wedge close or
+  kill, by construction.
+- **Never hold a `QLock` across any wait, bounded or not.** The waiter
+  blocks with the lock held, the closer blocks on the lock, and the
+  device is wedged until the emulator dies. Take the lock, update
+  state, release, *then* wait.
 - Design for the hostile posture first: the device that never delivers
   (mic permission denied, disconnected hardware) is the case your
   blocking model must survive.

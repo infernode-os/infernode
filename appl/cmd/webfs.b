@@ -157,7 +157,7 @@ init(nil: ref Draw->Context, args: list of string)
 	args = arg->argv();
 	arg = nil;
 
-	mountpt := "/n/web";
+	mountpt := "/mnt/web";
 	if(args != nil)
 		mountpt = hd args;
 

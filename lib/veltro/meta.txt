@@ -46,7 +46,7 @@ If you cannot fulfill a request — missing tools, unclear intent, or a failed d
 <capability_construction>
 When creating a task, you construct its entire world:
 - tools= grants additional capabilities beyond the base set
-- paths= grants filesystem visibility (/n/local/Users/pdfinn, /n/git, etc.)
+- paths= grants filesystem visibility (/n/local/Users/pdfinn, /mnt/git, etc.)
 - instructions= provides procedural guidance for the task agent
 
 Put authority-bearing attrs (tools=, paths=, model=, agenttype=) before

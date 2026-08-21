@@ -207,7 +207,6 @@ restrictns(caps: ref Capabilities): string
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
 	#   /n/speech — "/n/speech" in caps.paths
-	#   /n/git    — fixed git tool
 	#   /n/wallet — "/n/wallet" in caps.paths
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
@@ -229,15 +228,6 @@ restrictns(caps: ref Capabilities): string
 			(speechok, nil) := sys->stat("/n/speech");
 			if(speechok >= 0)
 				nallow = "speech" :: nallow;
-		}
-
-		# /n/git — fixed-function git service. The git tool mounts git/fs here
-		# during trusted init; generic path grants cannot expose gitfs ctl/raw
-		# repository state to unrelated tools.
-		if(inlist("git", caps.tools)) {
-			(gitok, nil) := sys->stat("/n/git");
-			if(gitok >= 0)
-				nallow = "git" :: nallow;
 		}
 
 		# /n/wallet — only if explicitly granted via caps.paths
@@ -337,6 +327,15 @@ restrictns(caps: ref Capabilities): string
 		(gpuok, nil) := sys->stat("/mnt/gpu");
 		if(gpuok >= 0 && !inlist("gpu", mntpaths))
 			mntpaths = "gpu" :: mntpaths;
+	}
+	# /mnt/git — fixed-function git service (git/fs, mounted by the git tool
+	# during trusted init; migrated from /n/git per docs/NAMESPACE-LAYOUT.md,
+	# INFR-401). Derived only from the git tool; generic path grants cannot
+	# expose gitfs ctl/raw repository state to unrelated tools.
+	if(inlist("git", caps.tools)) {
+		(gitok, nil) := sys->stat("/mnt/git");
+		if(gitok >= 0 && !inlist("git", mntpaths))
+			mntpaths = "git" :: mntpaths;
 	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
@@ -1103,6 +1102,7 @@ calendarcontrolpath(path: string): int
 fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
@@ -1258,7 +1258,6 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
 		("/n/speech", "Speech",           "rw"),
-		("/n/git",    "Git",              "rw"),
 		("/n/wikia",  "Wiki Agent",       "rw"),
 		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
@@ -1269,6 +1268,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 		("/mnt/matrix", "Matrix Runtime", "rw"),
 		("/mnt/gpu", "GPU Service", "rw"),
+		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),
 		("/mnt/registry", "Registry", "rw"),

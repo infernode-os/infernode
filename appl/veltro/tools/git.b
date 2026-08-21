@@ -3,7 +3,7 @@ implement ToolGit;
 #
 # git - Git repository access for Veltro agents
 #
-# Read operations go through git/fs mounted at /n/git.
+# Read operations go through git/fs mounted at /mnt/git.
 # Write operations go through a worker thread that retains
 # the unrestricted namespace (spawned before restriction).
 #
@@ -69,7 +69,7 @@ init(): string
 	if(ok < 0)
 		return nil;  # No repo; exec() will return errors
 
-	# Mount git/fs at /n/git before namespace restriction
+	# Mount git/fs at /mnt/git before namespace restriction
 	ready := chan of int;
 	spawn mountgitfs(ready);
 	result := <-ready;
@@ -96,7 +96,7 @@ mountgitfs(ready: chan of int)
 	}
 
 	{
-		gitfs->init(nil, "git/fs" :: "-m" :: "/n/git" :: "/.git" :: nil);
+		gitfs->init(nil, "git/fs" :: "-m" :: "/mnt/git" :: "/.git" :: nil);
 		ready <-= 1;
 	} exception {
 	"*" =>
@@ -299,15 +299,15 @@ workercall(cmdline: string): string
 
 gitstatus(): string
 {
-	branch := strip(readfile("/n/git/ctl"));
+	branch := strip(readfile("/mnt/git/ctl"));
 	if(branch == "")
 		branch = "(unknown)";
 
-	headhash := strip(readfile("/n/git/HEAD/hash"));
+	headhash := strip(readfile("/mnt/git/HEAD/hash"));
 	if(headhash == "")
 		return "On branch " + branch + "\n(no commits)";
 
-	headmsg := strip(readfile("/n/git/HEAD/msg"));
+	headmsg := strip(readfile("/mnt/git/HEAD/msg"));
 	(firstline, nil) := splitline(headmsg);
 
 	return "On branch " + branch + "\n" +
@@ -318,20 +318,20 @@ gitlog(n: int): string
 {
 	result := "";
 
-	hash := strip(readfile("/n/git/HEAD/hash"));
+	hash := strip(readfile("/mnt/git/HEAD/hash"));
 	if(hash == "")
 		return "(no commits)";
 
-	author := strip(readfile("/n/git/HEAD/author"));
-	msg := strip(readfile("/n/git/HEAD/msg"));
+	author := strip(readfile("/mnt/git/HEAD/author"));
+	msg := strip(readfile("/mnt/git/HEAD/msg"));
 	(firstline, nil) := splitline(msg);
 	result = shorthash(hash) + " " + firstline + "\n";
 	result += "  Author: " + author + "\n";
 
-	parent := strip(readfile("/n/git/HEAD/parent"));
+	parent := strip(readfile("/mnt/git/HEAD/parent"));
 
 	for(i := 1; i < n && parent != "" && parent != "nil"; i++) {
-		objdir := "/n/git/object/" + parent;
+		objdir := "/mnt/git/object/" + parent;
 
 		author = strip(readfile(objdir + "/author"));
 		msg = strip(readfile(objdir + "/msg"));
@@ -351,16 +351,16 @@ gitshow(gitref: string): string
 	objdir: string;
 
 	if(len gitref == 40) {
-		objdir = "/n/git/object/" + gitref;
+		objdir = "/mnt/git/object/" + gitref;
 	} else {
-		hash := strip(readfile("/n/git/branch/heads/" + gitref + "/hash"));
+		hash := strip(readfile("/mnt/git/branch/heads/" + gitref + "/hash"));
 		if(hash != "") {
-			objdir = "/n/git/object/" + hash;
+			objdir = "/mnt/git/object/" + hash;
 			gitref = hash;
 		} else {
-			hash = strip(readfile("/n/git/tag/" + gitref + "/hash"));
+			hash = strip(readfile("/mnt/git/tag/" + gitref + "/hash"));
 			if(hash != "") {
-				objdir = "/n/git/object/" + hash;
+				objdir = "/mnt/git/object/" + hash;
 				gitref = hash;
 			} else
 				return "error: cannot find ref: " + gitref;
@@ -413,9 +413,9 @@ gitshow(gitref: string): string
 
 gitbranch(): string
 {
-	current := strip(readfile("/n/git/ctl"));
+	current := strip(readfile("/mnt/git/ctl"));
 
-	entries := listdir("/n/git/branch/heads");
+	entries := listdir("/mnt/git/branch/heads");
 	if(entries == nil)
 		return "(no branches)";
 
@@ -428,10 +428,10 @@ gitbranch(): string
 			result += "  " + bname + "\n";
 	}
 
-	remotes := listdir("/n/git/branch/remotes");
+	remotes := listdir("/mnt/git/branch/remotes");
 	for(; remotes != nil; remotes = tl remotes) {
 		remote := hd remotes;
-		rbranches := listdir("/n/git/branch/remotes/" + remote);
+		rbranches := listdir("/mnt/git/branch/remotes/" + remote);
 		for(; rbranches != nil; rbranches = tl rbranches)
 			result += "  remotes/" + remote + "/" + hd rbranches + "\n";
 	}
@@ -441,7 +441,7 @@ gitbranch(): string
 
 gittag(): string
 {
-	entries := listdir("/n/git/tag");
+	entries := listdir("/mnt/git/tag");
 	if(entries == nil)
 		return "(no tags)";
 
@@ -462,16 +462,16 @@ gitcat(args: string): string
 
 	treepath: string;
 	if(gitref == "") {
-		treepath = "/n/git/HEAD/tree/" + fpath;
+		treepath = "/mnt/git/HEAD/tree/" + fpath;
 	} else {
-		hash := strip(readfile("/n/git/branch/heads/" + gitref + "/hash"));
+		hash := strip(readfile("/mnt/git/branch/heads/" + gitref + "/hash"));
 		if(hash == "") {
 			if(len gitref == 40)
 				hash = gitref;
 			else
 				return "error: cannot find ref: " + gitref;
 		}
-		treepath = "/n/git/object/" + hash + "/tree/" + fpath;
+		treepath = "/mnt/git/object/" + hash + "/tree/" + fpath;
 	}
 
 	content := readfile(treepath);

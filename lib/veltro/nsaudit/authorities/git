@@ -1,5 +1,5 @@
 tool=git
-	description='Git repository access via git/fs at /n/git'
+	description='Git repository access via git/fs at /mnt/git'
 	authorities='reads_fs writes_fs'
 	irreversible='writes_fs'
-	notes='Read goes through /n/git. The WRITE path runs in a worker that retained the UNRESTRICTED namespace (spawned before restriction) — durable host mutation is reachable regardless of caps.paths. High-trust.'
+	notes='Read goes through /mnt/git. The WRITE path runs in a worker that retained the UNRESTRICTED namespace (spawned before restriction) — durable host mutation is reachable regardless of caps.paths. High-trust.'

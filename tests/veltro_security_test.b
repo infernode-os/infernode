@@ -827,29 +827,30 @@ mntLlmWorker(result: chan of string)
 	result <-= "";
 }
 
-# The git service is a fixed tool-derived /n import. The git tool must see
-# /n/git without a raw path grant, while generic tools must not.
+# The git service is a fixed tool-derived /mnt application mount (migrated
+# from /n/git per docs/NAMESPACE-LAYOUT.md, INFR-401). The git tool must see
+# /mnt/git without a raw path grant, while generic tools must not.
 testRestrictNsGitToolDerived(t: ref T)
 {
-	createdn := 0;
-	(ok, nil) := sys->stat("/n");
+	createdmnt := 0;
+	(ok, nil) := sys->stat("/mnt");
 	if(ok < 0) {
-		fd := sys->create("/n", Sys->OREAD, Sys->DMDIR | 8r755);
+		fd := sys->create("/mnt", Sys->OREAD, Sys->DMDIR | 8r755);
 		if(fd == nil) {
-			t.skip("cannot create /n test fixture");
+			t.skip("cannot create /mnt test fixture");
 			return;
 		}
 		fd = nil;
-		createdn = 1;
+		createdmnt = 1;
 	}
 	createdgit := 0;
-	(ok, nil) = sys->stat("/n/git");
+	(ok, nil) = sys->stat("/mnt/git");
 	if(ok < 0) {
-		fd := sys->create("/n/git", Sys->OREAD, Sys->DMDIR | 8r755);
+		fd := sys->create("/mnt/git", Sys->OREAD, Sys->DMDIR | 8r755);
 		if(fd == nil) {
-			if(createdn)
-				sys->remove("/n");
-			t.skip("cannot create /n/git test fixture");
+			if(createdmnt)
+				sys->remove("/mnt");
+			t.skip("cannot create /mnt/git test fixture");
 			return;
 		}
 		fd = nil;
@@ -865,9 +866,9 @@ testRestrictNsGitToolDerived(t: ref T)
 	}
 
 	if(createdgit)
-		sys->remove("/n/git");
-	if(createdn)
-		sys->remove("/n");
+		sys->remove("/mnt/git");
+	if(createdmnt)
+		sys->remove("/mnt");
 	if(r != "")
 		t.error(r);
 }
@@ -886,9 +887,9 @@ gitToolDerivedWorker(result: chan of string)
 		result <-= sys->sprint("restrictns (git tool) failed: %s", err);
 		return;
 	}
-	(gitok, nil) := sys->stat("/n/git");
+	(gitok, nil) := sys->stat("/mnt/git");
 	if(gitok < 0) {
-		result <-= "/n/git missing for git tool without raw path grant";
+		result <-= "/mnt/git missing for git tool without raw path grant";
 		return;
 	}
 	result <-= "";
@@ -908,9 +909,9 @@ gitGenericHiddenWorker(result: chan of string)
 		result <-= sys->sprint("restrictns (generic tool) failed: %s", err);
 		return;
 	}
-	(gitok, nil) := sys->stat("/n/git");
+	(gitok, nil) := sys->stat("/mnt/git");
 	if(gitok >= 0) {
-		result <-= "/n/git visible to generic tool without git capability";
+		result <-= "/mnt/git visible to generic tool without git capability";
 		return;
 	}
 	result <-= "";

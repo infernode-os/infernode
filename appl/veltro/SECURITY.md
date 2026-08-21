@@ -691,7 +691,7 @@ be explicit:
   namespace surface supports that distinction.
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
-derived only from the `matrix` tool, `/n/git` only from the `git` tool,
+derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
 `/mnt/gpu` only from `gpu` or local `vision`, `/n/wikia` only from `wiki`,
 `/mnt/video` only from video presentation tools, and `/phone` only from `sms`,
 `dial`, or `contacts`.

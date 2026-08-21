@@ -1,7 +1,7 @@
 git - Git repository access and management
 
 Provides full git repository access. Read operations use the native
-git filesystem (git/fs at /n/git). Write operations use a worker
+git filesystem (git/fs at /mnt/git). Write operations use a worker
 thread with direct repository access.
 
 Read commands:

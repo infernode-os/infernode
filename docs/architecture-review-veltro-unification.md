@@ -206,7 +206,7 @@ The pieces already exist:
 - **Phase 2**: A dedicated `compose` or `create` tool that handles the compile-register lifecycle, with appropriate sandboxing (the new tool's namespace is restricted by the creating agent's capabilities -- you can't escalate privileges by writing code).
 - **Phase 3**: The AI can introspect available modules, read their interfaces, and generate correct Limbo code that type-checks. The module system provides the contracts; the AI provides the composition.
 
-The security model handles this naturally: a composed tool inherits the creating agent's namespace restrictions. You can't write a tool that accesses `/n/git` if your namespace doesn't include it. Capability attenuation is preserved even through code generation.
+The security model handles this naturally: a composed tool inherits the creating agent's namespace restrictions. You can't write a tool that accesses `/mnt/git` if your namespace doesn't include it. Capability attenuation is preserved even through code generation.
 
 ## Design Note: The Semantic Shim as Temporary Adapter
 

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-InferNode is a mixed C, Limbo, and shell repository — application code is written in Limbo, never in other languages. Core runtime and kernel code lives in `libinterp/`, `emu/port/`, and `libsec/`. Limbo applications and libraries live under `appl/`, with notable areas in `appl/cmd/`, `appl/veltro/`, and `appl/xenith/`. Interface definitions belong in `module/*.m`. Tests are under `tests/`, with emulator tests named `*_test.b` and host-side shell tests in `tests/host/*_test.sh`. Supporting material lives in `docs/`, `formal-verification/`, and `tools/`.
+InferNode is a mixed C, Limbo, and shell repository — where "shell" means two dialects: host-side POSIX `sh` and Inferno's rc-style `sh` (see Coding Style below; they are not interchangeable). The Limbo rule is scoped to the **canonical core**: in-tree application code (`appl/`, `module/`) is written in Limbo. Connectors and ancillary services are deliberately not so constrained — **anything that speaks 9P integrates, in any language**. Serve 9P from Go, Python, Rust, C++, whatever you like; it gets mounted at a canonical path (`docs/NAMESPACE-LAYOUT.md`) and every InferNode program and agent uses it as files. You do not need to learn Limbo to contribute an integration. Core runtime and kernel code lives in `libinterp/`, `emu/port/`, and `libsec/`. Limbo applications and libraries live under `appl/`, with notable areas in `appl/cmd/`, `appl/veltro/`, and `appl/xenith/`. Interface definitions belong in `module/*.m`. Tests are under `tests/`, with emulator tests named `*_test.b` and host-side shell tests in `tests/host/*_test.sh`. Supporting material lives in `docs/`, `formal-verification/`, and `tools/`.
 
 ## Design Principles
 

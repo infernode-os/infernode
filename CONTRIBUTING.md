@@ -79,6 +79,16 @@ Each tool is a Limbo module that serves a synthetic filesystem under `/tool/`.
 An AI agent (or any program) interacts with external services by reading and
 writing files — no new protocol to learn.
 
+**And no required language.** An integration is either a Limbo tool module
+in-tree, or an out-of-tree 9P server in whatever language you like — mature
+9P libraries exist for Go, Python, Rust, C, and others. If it serves 9P,
+InferNode mounts it at a canonical path and every program and agent uses it
+as files; the speech helpers (C++) and the LLM backends behind `llmsrv` are
+existing examples. Limbo is required only for the canonical in-tree core.
+Either way, start with the namespace sketch (["New Service / Tool
+Proposal"](docs/DESIGN-PRINCIPLES.md) issue template) — the file interface
+is the design regardless of implementation language.
+
 **Integrations we'd love to see:**
 
 | Category | Examples |

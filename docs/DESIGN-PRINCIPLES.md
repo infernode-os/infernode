@@ -50,9 +50,14 @@ add it as files.
 server, not a library, not an RPC endpoint, not a daemon with a
 bespoke socket protocol. Any program in any language — and any
 AI agent — can use it with `open`, `read`, `write`. No SDKs.
-No protocol buffers. Just files. (This is conceptually what MCP
-does for AI tools, except the protocol is forty years simpler
-and every existing tool already speaks it.)
+No protocol buffers. Just files. And the universality runs both
+ways: a service written in *any* language integrates by serving
+9P — Limbo is the language of the canonical in-tree core, not an
+entry requirement for connectors and ancillary services, which
+live outside the tree and meet the system at the mount point.
+(This is conceptually what MCP does for AI tools, except the
+protocol is forty years simpler and every existing tool already
+speaks it.)
 
 **The namespace is the schema.** The directory hierarchy carries
 the structure that other systems put into JSON objects, schemas,

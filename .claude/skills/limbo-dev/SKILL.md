@@ -87,5 +87,4 @@ checklist honestly.
 
 `-c1` enables JIT, `-c0` forces the interpreter (useful for isolating JIT
 bugs). Inferno's shell is rc-style: no `&&`/`||`, `for i in $x { ... }` —
-see the shell section of
-[docs/LIMBO-FOR-GO-PROGRAMMERS.md](../../../docs/LIMBO-FOR-GO-PROGRAMMERS.md).
+see [docs/INFERNO-SHELL.md](../../../docs/INFERNO-SHELL.md).

@@ -8,8 +8,8 @@
 #
 # Scope: this gate checks STYLE, not semantics. An rc-legal script can
 # still raise at runtime (null-list concatenation, failed redirections
-# escaping if-blocks) — those live in the shell table of
-# docs/LIMBO-FOR-GO-PROGRAMMERS.md, which is documentation's job.
+# escaping if-blocks) — those live in
+# docs/INFERNO-SHELL.md, which is documentation's job.
 #
 # Checks:
 #   1. POSIX-isms (&& / ||) in Inferno-side shell scripts. Inferno sh
@@ -61,7 +61,7 @@ for f in $inferno_scripts; do
         esac
         case $line in
         *"&&"*|*"||"*)
-            warn "$f" "$n" "Inferno sh is rc-style: '&&'/'||' do not exist (use ';' or if {cmd} { ... }). See docs/LIMBO-FOR-GO-PROGRAMMERS.md, 'The shell'."
+            warn "$f" "$n" "Inferno sh is rc-style: '&&'/'||' do not exist (use ';' or if {cmd} { ... }). See docs/INFERNO-SHELL.md."
             ;;
         esac
     done < "$f"

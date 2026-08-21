@@ -53,7 +53,7 @@ an empty
 resolves via the
 .B auditventi
 environment variable, then the default
-.BR tcp!127.0.0.1!17034 .
+.BR tcp!127.0.0.1!17040 .
 .B Dialraw
 dials without handshaking, returning a connection descriptor that a
 parent may hand to a namespace-restricted child (the descriptor

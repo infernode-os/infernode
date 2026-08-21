@@ -32,7 +32,7 @@ hash the audit chain sealed \(em and the command fails on mismatch.
 names the content store; the default is the
 .B auditventi
 environment variable, then
-.BR tcp!127.0.0.1!17034 .
+.BR tcp!127.0.0.1!17040 .
 .SH EXAMPLE
 Fetch and verify the payload of a chain record:
 .EX

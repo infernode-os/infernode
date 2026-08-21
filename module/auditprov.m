@@ -5,7 +5,7 @@ AuditProv: module
 	# Default dial address of the provenance content store (a local
 	# ventisrv(8)). Override with the auditventi environment variable
 	# (/env/auditventi); an explicit attach() argument overrides both.
-	DEFADDR:	con "tcp!127.0.0.1!17034";
+	DEFADDR:	con "tcp!127.0.0.1!17040";
 
 	# Payload-bearing records carry exactly these fields, appended by
 	# log():  content=<score> sha256=<hex> size=<n>

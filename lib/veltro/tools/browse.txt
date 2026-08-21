@@ -1,0 +1,17 @@
+browse - Fetch a web page and display it in a Xenith window
+
+Fetches a URL over HTTP/HTTPS, formats HTML into readable text
+(headings, paragraphs, lists, code blocks, links, tables), and writes
+it into a new Xenith window named after the page title. Non-HTML
+content is displayed as-is. Requires Xenith to be running.
+
+Usage:
+  browse <url>            Fetch and display a web page
+
+The URL must start with http:// or https://. On success the tool
+returns "<window-id> <page-title>". HTTP errors (status 400 and
+above) and empty responses are reported as errors.
+
+Examples:
+  browse https://example.com
+  browse https://www.ietf.org/rfc/rfc2616.txt

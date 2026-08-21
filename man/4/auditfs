@@ -139,7 +139,9 @@ cat /mnt/audit/chain | auditverify -k /tmp/auditpub
 .B /lib/sh/audit-setup
 .SH SEE ALSO
 .IR keyring (2),
-.IR factotum (4)
+.IR auditprov (2),
+.IR factotum (4),
+.IR ventisrv (8)
 .br
 .B doc/compliance/audit-log-design.md
 .br
@@ -149,5 +151,11 @@ Records since the last signed
 .B ctl
 checkpoint are protected by the hash chain but are not yet covered
 by a signature; checkpoint frequently (and on high-value events) to
-bound that window. A content-addressed store for high-volume
-agent-provenance payloads is a planned extension.
+bound that window.
+.PP
+High-volume agent-provenance payloads are no longer inlined: they
+are content-addressed into a
+.IR ventisrv (8)
+store via
+.IR auditprov (2),
+with the SHA-256 pin sealed under the chain.

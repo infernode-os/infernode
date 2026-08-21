@@ -13,8 +13,11 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CMDFILE="$1"; OUTPNG="$2"; W="${3:-360}"; H="${4:-240}"
-EMU="$ROOT/emu/Linux/o.emu"
-[ -x "$EMU" ] || { echo "build the Linux emu first ($EMU)"; exit 1; }
+case "$(uname -s)" in
+Darwin) EMU="$ROOT/emu/MacOSX/o.emu" ;;
+*)      EMU="$ROOT/emu/Linux/o.emu" ;;
+esac
+[ -x "$EMU" ] || { echo "build the emulator first ($EMU)"; exit 1; }
 # stage the command file inside the emu root
 TMPC="$ROOT/.tksnap.cmds"
 cp "$CMDFILE" "$TMPC"

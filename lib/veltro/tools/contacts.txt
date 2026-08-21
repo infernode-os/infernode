@@ -1,0 +1,23 @@
+contacts - Look up phone numbers in the device address book
+
+Reads /phone/contacts and returns rows whose contact name contains
+the query (case-insensitive substring match). Use the returned number
+with the sms or dial tools. Requires /phone (mobile build, or a
+desktop mounting a phone's /phone); on iOS the first read triggers
+the system contacts permission prompt.
+
+Usage:
+  contacts <query>        Search contacts by name substring
+  contacts                Empty query lists the first 50 contacts
+
+Output is TSV, one number per row, with a header:
+  name<TAB>kind<TAB>number
+where kind is one of mobile / work / home / main / other. Results are
+truncated at 50 rows. Bridge status lines starting with "#" (e.g.
+"# contacts: permission denied") are passed through verbatim, so a
+denied permission is distinguishable from "no matches".
+
+Examples:
+  contacts mom
+  contacts sarah
+  contacts smith

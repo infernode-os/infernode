@@ -2,6 +2,114 @@
 
 All notable changes to InferNode are documented in this file.
 
+## [Unreleased]
+
+### Agent provenance & audit (INFR-355)
+
+- **Trajectory sealing** — the Veltro agent stack seals its full trajectory
+  (prompts, LLM output, tool calls, capability grants, namespace-restriction
+  manifests) into the tamper-evident audit chain; bulky payloads are
+  content-addressed into a `ventisrv(8)` store with the SHA-256 pin sealed
+  under the chain (`auditprov(2)`) (#508).
+
+### Persistence
+
+- **Whole-`/usr` durability** — all of `/usr` is bound from the durable
+  overlay; system updates never touch user state. `newuser(8)` creates
+  accounts from the skeleton; `snapd(8)` takes daily deduplicated venti
+  snapshots of `/usr` (one text line per snapshot: timestamp + `vac:` score,
+  restorable with `vacfs(4)`). Settings gains Auditing and Snapshots panels
+  (#511).
+
+### Wallet
+
+- **Out of experimental** — the Ethereum wallet is production-supported:
+  budgets hard-capped on every path, trusted approval on payments, agents
+  see proposal files only (#512, with the raw signing surface removed in
+  #488 and proposal validation in #487).
+
+### GUI & video
+
+- **Live video panes** — vid9p live-feed ring, Matrix video panes, colour
+  fixes; trfs fd-handling fixes (#510).
+
+### Security
+
+- ~40 further namespace-hardening fixes: control-grammar tightening
+  (wallet #499, wiki #500, msg #496), path-delimiter rejection across
+  write/editor/wiki (#493–#495), luciuisrv control metadata (#502),
+  matrix composition grants (#501), provisioning validation (#503),
+  failed-tool-mutation reporting (#505).
+
+## [0.3.6] - 2026-07-20
+
+- **claude-gate** — Anthropic models served through the Claude Code CLI as an
+  LLM backend, with Settings LLM-panel fixes (#440); factotum API-key
+  provisioning generalized beyond one vendor (#321 lineage) and tools read
+  secrets from factotum — no plaintext key files (#322).
+- **Video over 9P end to end** — Matrix player, Tk design-system engine work
+  (#453); click-target alignment and Tk-button picker (#454).
+- **Agent-facing module discovery** — man pages, `whatis` index, and a Veltro
+  tool for Matrix module discovery (#408).
+- **Branding** — themed login screen (#448) and About box / desktop title
+  from data files (#450).
+- **Shell fix** — initialise before `waitfd()` in `Context.new`; rebuild
+  stale `sh.m` consumers (#455).
+- Continued namespace hardening (#410–#443): fixed-service namespaces
+  reserved (#418, #419), app-IPC grant scoping (#417–#424), manifest hiding
+  (#414), MCP tool-name/schema validation (#397, #471 lineage), exec
+  write-containment (#374).
+
+## [0.3.5] - 2026-07-13
+
+The bulk of a sustained agent-security campaign (~60 PRs), plus the audit
+hardening pass.
+
+- **Audit-log hardening** — strict verification (`-k` makes signatures
+  mandatory), off-host anchoring (`-a`), self-driving signed checkpoint
+  cadence, fail-closed emitters (#389); checkpoint signing moved into
+  factotum (ML-DSA-87) so `auditfs` never holds the key (INFR-356).
+- **nsaudit as a CI gate** — namespace-configuration audit runs on every PR
+  against committed fixtures (#391), with the internal configuration audit
+  tool underneath (#310).
+- **mcpdeny** — drop named MCP tools from a child's grant (INFR-258, #369).
+- **Failed-attempt lockout** — AC-7/FIA_AFL.1 in `secstored`; compliance
+  docs reorganized into an evidence register (#368, #373).
+- **Tk reintegration** — libtk built for macOS release jobs (#409).
+- Dozens of grant-model fixes: raw service grants denied (factotum #462,
+  auditfs #465, gpu #467, video #461, calendar #463, key registry #469,
+  llmctl #464), delegated control paths blocked (#392–#394), egress
+  flagging for MCP mounts and LLM paths (#395, #396), namespace grant
+  delimiter/descendant rejection (#386, #406, #426), mail-send grants
+  flagged (#383).
+
+## [0.3.4] - 2026-07-02
+
+- **Send is a capability** — `/mnt/msg` send split from read; authorise-to-send
+  with one-shot approval for replies (INFR-367, #337, #343).
+- **Per-invocation attenuation** — each tool call runs in a namespace
+  containing only the invoked tool (#338).
+- **Workspace isolation** — activity workspaces and child capabilities
+  isolated (#342); delegated task metadata isolated (#340).
+- **Charon SSRF** — private-network fetches blocked (#344).
+
+## [0.3.3] - 2026-06-30
+
+- **Headless macOS arm64 release artifact** (#335).
+- Confused-deputy fixes: editor paths (#333), browser local files (#334);
+  agent write-capability enforcement (#331).
+
+## [0.3.2] - 2026-06-30
+
+- **`/mnt` by capability only** — mounts are granted, never inherited by
+  existence (INFR-366, #329).
+- **Delegation reliability** — lost-task race in parallel delegation fixed
+  (INFR-362, #320); task agents auto-start reliably, low agentic
+  temperature (#317).
+- **Fail closed** — namespace setup errors abort the agent (#319); auth
+  transport algorithm policy enforced (#318), noncanonical frames rejected
+  (#315), client identity preserved after `listen` (#313).
+
 ## [0.3.1] - 2026-06-29
 
 Security-hardening point release, with cross-platform YubiKey/FIDO2 second-factor

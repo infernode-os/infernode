@@ -1,0 +1,20 @@
+sms - Send a text message (SMS) via /phone/sms
+
+Writes a send request to the devphone device. On iOS the system
+compose sheet opens pre-filled and the user must one-tap Send — it
+cannot send silently. On Android the message goes out directly via
+the cellular radio (requires the SEND_SMS grant). On macOS the
+request is logged only. Requires /phone (bind -a '#f' /phone in the
+boot profile).
+
+Usage:
+  sms <number> <body...>  Send a text message
+
+The first token is the recipient number; everything after it is the
+message body. Numbers may contain digits, a leading +, and the
+punctuation - ( ) . — anything else is rejected as "unsafe number".
+Returns "sms: queued to <number>".
+
+Examples:
+  sms 5551234 On my way, ETA 10
+  sms +442071234567 Confirmed for 14:00 tomorrow.

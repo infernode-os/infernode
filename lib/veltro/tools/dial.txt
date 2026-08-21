@@ -1,0 +1,20 @@
+dial - Place a phone call via /phone/phone
+
+Writes a dial request to the devphone device. On iOS the system
+call-confirmation UI is shown and the user must authorise the call —
+it cannot dial silently. On Android the call is placed directly
+(requires the CALL_PHONE grant). On macOS the request is logged only
+(no cellular radio). Requires /phone (bind -a '#f' /phone in the
+boot profile).
+
+Usage:
+  dial <number>           Place a call to a phone number
+
+The number should be in international format where possible
+(e.g. +14155551234). Call state notifications (connected /
+disconnected) arrive via /mnt/msg/notify, not from this tool.
+Returns "dial: requested <number>".
+
+Examples:
+  dial 5551234
+  dial +442071234567

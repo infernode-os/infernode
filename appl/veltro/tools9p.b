@@ -191,20 +191,22 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-p path] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
 	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
-	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable)\n");
-	sys->fprint(stderr, "                e.g. -p /dis/wm exposes /dis/wm/ for GUI app discovery\n");
+	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
+	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
+	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable; :ro/:rw\n");
+	sys->fprint(stderr, "                makes it a typed grant). e.g. -p /dis/wm for GUI app discovery\n");
 	sys->fprint(stderr, "\n");
 	sys->fprint(stderr, "Available tools:\n");
 	sys->fprint(stderr, "  Core:    read, list, find, search, grep, write, edit\n");
 	sys->fprint(stderr, "  Execute: exec, launch, spawn\n");
 	sys->fprint(stderr, "  UI:      xenith, ask, present, gap\n");
-	sys->fprint(stderr, "  Utils:   diff, json, http, git, memory, todo, websearch\n");
+	sys->fprint(stderr, "  Utils:   diff, json, webfetch, git, memory, todo, websearch\n");
 	sys->fprint(stderr, "  Vision:  vision, gpu\n");
 	raise "fail:usage";
 }

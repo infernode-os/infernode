@@ -754,7 +754,7 @@ See [docs/WALLET-AND-PAYMENTS.md](WALLET-AND-PAYMENTS.md) for the full architect
 
 ### The Namespace is the Security Boundary
 
-InferNode's security model is simple: **a process can only access what's in its namespace**. The Veltro harness uses this primitive to sandbox each running agent — see the README "Terminology" section for the harness/agent distinction.
+InferNode's security model is simple: **a process can only access what's in its namespace**. The Veltro harness uses this primitive to sandbox each running agent — see the Terminology section of `appl/veltro/SECURITY.md` for the harness/agent distinction.
 
 A running agent in a restricted namespace:
 ```

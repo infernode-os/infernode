@@ -16,7 +16,7 @@ Inferno OS running as a native process on macOS ARM64, with a working JIT compil
 
 **lucibridge** is the GUI-side harness bridge. It runs in the background, connects Lucifer's conversation UI to the LLM, re-reads tool and path state at the start of each agent turn, and handles slash commands (`/bind`, `/unbind`, `/tools +/-name`) for interactive namespace management.
 
-(See the README "Terminology" section for the harness/agent distinction.)
+(See the Terminology section of `appl/veltro/SECURITY.md` for the harness/agent distinction.)
 
 ---
 

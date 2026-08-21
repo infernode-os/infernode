@@ -140,7 +140,7 @@ See `formal-verification/README.md` and `formal-verification/METHODOLOGY.md`.
 
 ```bash
 # Clone
-git clone https://github.com/NERVsystems/infernode.git
+git clone https://github.com/infernode-os/infernode.git
 cd infernode
 
 # Install the post-merge hook (prevents stale bytecode after pulls)
@@ -302,7 +302,7 @@ This matters when writing scripts that run inside the emulator.
 
 ## Community
 
-- **Issues**: [GitHub Issues](https://github.com/NERVsystems/infernode/issues)
+- **Issues**: [GitHub Issues](https://github.com/infernode-os/infernode/issues)
   for bugs, feature requests, and questions
 - **Security**: Report vulnerabilities privately via our
   [Security Policy](SECURITY.md) — do **not** open public issues

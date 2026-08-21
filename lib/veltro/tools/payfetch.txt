@@ -1,0 +1,28 @@
+payfetch - Fetch a URL, automatically paying via x402 if required
+
+Like webfetch, but when the server answers 402 Payment Required with
+x402 payment requirements it requests a signed payment authorization
+from the wallet and retries with the payment attached. Choose
+payfetch over webfetch only when willing to spend money. Requires
+/n/wallet access; budgets and approval policy are enforced inside
+wallet9p and cannot be bypassed from this tool.
+
+Usage:
+  payfetch <url>                        Fetch using the default wallet account
+  payfetch <url> -a <account>           Use a specific wallet account
+  payfetch <url> -a <account> -c <chain>  Override the chain preference
+
+With no -a, the default account is read from /n/wallet/default (or
+/n/wallet/ctl); an error is returned if none is set. The payment
+option is chosen to match the wallet's active network; -c overrides
+(default preference: base). If the account requires approval, the
+tool waits up to 90s for a trusted controller to approve, then
+returns "payment pending approval" — retry the fetch after approval.
+What was paid is reported in a leading "[Paid ...]" line before the
+content. Requests to internal/private network addresses are blocked;
+requests time out after 30s and bodies are truncated at 512KB.
+
+Examples:
+  payfetch https://api.example.com/paid/report
+  payfetch https://api.example.com/paid/report -a main
+  payfetch https://api.example.com/paid/report -a main -c base

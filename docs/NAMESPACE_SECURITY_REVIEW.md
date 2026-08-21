@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Veltro is an agent harness for Inferno OS where **namespace IS the capability system**. The harness (`nsconstruct`, `tools9p`, `lucibridge`, and the `veltro`/`repl`/`spawn` entry points) restricts what each running agent can see; agents themselves are running harness instances with a model and a capability set. See the README "Terminology" section for the full model/harness/agent/subagent distinction.
+Veltro is an agent harness for Inferno OS where **namespace IS the capability system**. The harness (`nsconstruct`, `tools9p`, `lucibridge`, and the `veltro`/`repl`/`spawn` entry points) restricts what each running agent can see; agents themselves are running harness instances with a model and a capability set. See the Terminology section of [appl/veltro/SECURITY.md](../appl/veltro/SECURITY.md) for the full model/harness/agent/subagent distinction.
 
 This document compares two approaches for implementing namespace-based security when spawning subagents with restricted capabilities.
 
@@ -678,7 +678,7 @@ Three entry points apply restriction:
 5. `/n/local` → only granted subpaths (recursive drill-down)
 6. `/lib` → `veltro/`
 7. `/tmp` → `veltro/`
-8. `/` → 13 safe Inferno system directories (hides .env, .git, CLAUDE.md, source tree)
+8. `/` → a small allowlist of safe Inferno system directories (8 base entries in `nsconstruct.b` — `dev dis env lib n prog tmp tool` — extended per-capability with `net`, `mnt`, `chan`, `phone`; hides .env, .git, CLAUDE.md, source tree)
 
 **Implementation challenges solved**:
 - **Root restriction**: `dirread()` returns entries from ALL union members. Individual bind-overs don't hide entries. Solution: `restrictdir("/", safe)` replaces the entire root union.

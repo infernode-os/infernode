@@ -10,13 +10,13 @@ cryptography. Contributions of all kinds are welcome — from typo fixes to new
 If you're new to the project:
 
 1. Read the [Quick Start Guide](QUICKSTART.md) to build and run InferNode
-2. Read [The InferNode Way](docs/INFERNODE-WAY.md) — how design works here,
+2. Read the [Design Principles](docs/DESIGN-PRINCIPLES.md) — how design works here,
    and why (this is the one document that will save you the most time)
 3. Browse [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a system overview
 4. Try the [Interactive Tour](RUN_TOUR.md) to explore features hands-on
 5. Look at issues labeled **good first issue** for approachable tasks
 
-## The InferNode Way
+## Design Principles
 
 InferNode follows the Plan 9 / Inferno design tradition, taken seriously:
 every capability is a file server, the namespace is both the API schema and
@@ -27,7 +27,7 @@ to change in review.
 
 To make that painless rather than painful:
 
-- **Read [docs/INFERNODE-WAY.md](docs/INFERNODE-WAY.md) before designing
+- **Read [docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md) before designing
   anything.** It explains the head-space with concrete wrong/right examples
   from this codebase, and lists the subsystems (audit, provenance,
   persistence, factotum, wallet) new work is expected to compose with.
@@ -277,7 +277,7 @@ vectors for decapsulation to verify round-trip correctness.
 - **Update docs** when changing interfaces or adding features
 - **Run the test suite** before submitting
 - **Describe the motivation** — what problem does this solve?
-- **Follow [The InferNode Way](docs/INFERNODE-WAY.md)** — file interfaces
+- **Follow the [Design Principles](docs/DESIGN-PRINCIPLES.md)** — file interfaces
   not APIs, text not JSON inside the namespace, namespace shape not policy
   code. Reviewers will point at specific sections of that document rather
   than re-arguing each case.

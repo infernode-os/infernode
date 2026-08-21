@@ -8,7 +8,7 @@ assignees: ''
 
 <!--
 The file interface IS the design. A sketch is reviewed in minutes;
-code is not. See docs/INFERNODE-WAY.md ("Proposing a new service or
+code is not. See docs/DESIGN-PRINCIPLES.md ("Proposing a new service or
 tool") for what good answers look like.
 -->
 

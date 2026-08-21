@@ -1,6 +1,6 @@
 name: style-gate
 
-# Advisory foreign-paradigm checks (docs/INFERNODE-WAY.md): POSIX-isms in
+# Advisory foreign-paradigm checks (docs/DESIGN-PRINCIPLES.md): POSIX-isms in
 # Inferno-side shell scripts, JSON module use inside appl/ outside the
 # boundary allowlist. Findings surface as PR warnings; the job never fails
 # until STYLE_GATE_STRICT is flipped in tools/style-gate.sh's environment.

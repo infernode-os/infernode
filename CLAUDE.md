@@ -6,7 +6,7 @@ This guide ensures Claude Code works correctly with the InferNode (Inferno® OS)
 
 The design philosophy — namespace-as-capability, file interfaces not APIs,
 text not JSON, mechanism not policy — is in
-[docs/INFERNODE-WAY.md](docs/INFERNODE-WAY.md), with wrong/right examples
+[docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md), with wrong/right examples
 from this tree. New services start with a namespace sketch in an issue, not
 with code. Limbo is close to Go:
 [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md).

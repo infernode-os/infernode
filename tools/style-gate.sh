@@ -1,5 +1,5 @@
 #!/bin/sh
-# style-gate.sh — advisory checks for foreign paradigms (docs/INFERNODE-WAY.md).
+# style-gate.sh — advisory checks for foreign paradigms (docs/DESIGN-PRINCIPLES.md).
 #
 # Advisory by default: findings are printed as GitHub ::warning::
 # annotations and the script exits 0, so it never blocks a merge.

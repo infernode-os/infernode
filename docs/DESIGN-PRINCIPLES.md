@@ -1,4 +1,4 @@
-# The InferNode Way
+# InferNode Design Principles
 
 How to think about design in this system — for human contributors
 and AI agents alike. Read this before designing anything new.
@@ -501,7 +501,7 @@ work, so it has a feedback loop:
   contributor's.
 - **Misses get filed.** When a contributor or agent goes wrong in
   a way this document should have prevented — or a section is
-  cited and still misread — open an issue labeled `way-doc-gap`
+  cited and still misread — open an issue labeled `principles-gap`
   saying what was misunderstood. Those issues are this document's
   revision queue.
 - **Perishable facts live elsewhere.** This document states
@@ -509,7 +509,7 @@ work, so it has a feedback loop:
   which harness is unverified, tool inventories) belong in the
   skills under `.claude/skills/` and in the referenced docs, where
   they are expected to be maintained. If you find a dated claim
-  here, that is a `way-doc-gap` issue too.
+  here, that is a `principles-gap` issue too.
 
 
 ## Further reading

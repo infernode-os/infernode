@@ -6,7 +6,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [INFERNODE-WAY.md](INFERNODE-WAY.md) | **The design philosophy** — namespace-as-capability, file interfaces, text protocols, mechanism over policy; read before designing anything |
+| [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) | **The design philosophy** — namespace-as-capability, file interfaces, text protocols, mechanism over policy; read before designing anything |
 | [LIMBO-FOR-GO-PROGRAMMERS.md](LIMBO-FOR-GO-PROGRAMMERS.md) | Limbo mapped from Go, plus the gotchas that bite |
 | [NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md) | `/mnt` vs `/n` placement convention and why it is security work |
 | [compliance/](compliance/README.md) | Standards evidence register (CNSA 2.0, zero trust, SP 800-92 audit, SLSA, FIPS 140-3 readiness, AI governance) |

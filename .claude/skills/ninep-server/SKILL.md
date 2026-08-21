@@ -5,7 +5,7 @@ description: Author a 9P file server or Veltro tool module the canonical InferNo
 
 # Authoring a 9P file server
 
-Read [docs/INFERNODE-WAY.md](../../../docs/INFERNODE-WAY.md) first if you
+Read [docs/DESIGN-PRINCIPLES.md](../../../docs/DESIGN-PRINCIPLES.md) first if you
 haven't. The non-negotiables: the file tree IS the API (design it first,
 propose it in an issue), placement follows schema authorship
 ([docs/NAMESPACE-LAYOUT.md](../../../docs/NAMESPACE-LAYOUT.md): `/mnt/<app>`

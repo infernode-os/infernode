@@ -93,12 +93,17 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	# daemon: first snapshot shortly after boot (give ventisrv time to
-	# come up), then daily
+	# come up), then daily. A failed attempt retries on a short fuse —
+	# a boot race (the store still announcing) must not cost a day of
+	# history; the status file reflects each failure meanwhile.
 	sys->sleep(15000);
 	for(;;) {
 		err := snapshot();
-		if(err != nil)
+		if(err != nil) {
 			sys->fprint(stderr, "snapd: %s\n", err);
+			sys->sleep(60000);
+			continue;
+		}
 		sys->sleep(DAYMS);
 	}
 }

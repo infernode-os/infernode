@@ -15,13 +15,13 @@ is a 9P file server that exposes HTTP operations as files.
 It mounts at
 .I mountpoint
 (default:
-.BR /n/web )
+.BR /mnt/web )
 and provides a simple filesystem interface for making HTTP requests.
 .PP
 The filesystem structure is:
 .IP
 .EX
-/n/web/
+/mnt/web/
     url           (w)  Write URL to fetch
     method        (rw) GET or POST (default: GET)
     body          (rw) POST body content
@@ -60,30 +60,30 @@ Enable 9P protocol tracing for debugging.
 Fetch a web page:
 .IP
 .EX
-web9p /n/web
-echo 'https://example.com' > /n/web/url
-cat /n/web/result
+web9p /mnt/web
+echo 'https://example.com' > /mnt/web/url
+cat /mnt/web/result
 .EE
 .PP
 POST data to an API:
 .IP
 .EX
-echo 'https://api.example.com/data' > /n/web/url
-echo 'POST' > /n/web/method
-echo '{"key": "value"}' > /n/web/body
-cat /n/web/result
-cat /n/web/status
+echo 'https://api.example.com/data' > /mnt/web/url
+echo 'POST' > /mnt/web/method
+echo '{"key": "value"}' > /mnt/web/body
+cat /mnt/web/result
+cat /mnt/web/status
 .EE
 .PP
 For agent use, the typical pattern is:
 .IP
 .EX
-echo 'url' > /n/web/url && cat /n/web/result
+echo 'url' > /mnt/web/url && cat /mnt/web/result
 .EE
 .SH FILES
-.TF /n/web
+.TF /mnt/web
 .TP
-.B /n/web
+.B /mnt/web
 Default mount point
 .SH SOURCE
 .B /appl/cmd/web9p.b

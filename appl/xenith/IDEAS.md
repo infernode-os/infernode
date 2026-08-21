@@ -267,25 +267,25 @@ HTTP as filesystem via 9P. Mount web9p to expose HTTP operations as files:
 
 ```sh
 # Mount web9p
-web9p /n/web
+web9p /mnt/web
 
 # Simple GET request
-echo 'https://example.com' > /n/web/url
-cat /n/web/result
+echo 'https://example.com' > /mnt/web/url
+cat /mnt/web/result
 
 # POST request
-echo 'https://api.example.com/data' > /n/web/url
-echo 'POST' > /n/web/method
-echo 'body content here' > /n/web/body
-cat /n/web/result
+echo 'https://api.example.com/data' > /mnt/web/url
+echo 'POST' > /mnt/web/method
+echo 'body content here' > /mnt/web/body
+cat /mnt/web/result
 
 # Check status
-cat /n/web/status
+cat /mnt/web/status
 ```
 
 **Filesystem structure:**
 ```
-/n/web/
+/mnt/web/
 ├── url           # (w) write URL to fetch
 ├── method        # (rw) GET or POST (default: GET)
 ├── body          # (rw) POST body content

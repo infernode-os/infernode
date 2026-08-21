@@ -12,7 +12,7 @@ Before designing any new service, tool, or interface, read [docs/DESIGN-PRINCIPL
 
 A new service or tool starts with a namespace sketch — the file tree it serves, each file's read/write behavior, an example shell session — proposed in an issue *before* implementation ("Proposing a new service or tool" in DESIGN-PRINCIPLES.md). The file interface is the design; review happens there first.
 
-Task-specific playbooks (compiling Limbo correctly, writing tests, the headless GUI harness, authoring a 9P file server) live in `.claude/skills/*/SKILL.md`. They are plain markdown — useful to any agent or human, not only Claude.
+Task-specific playbooks (compiling Limbo correctly, writing tests, the headless GUI harness, authoring a 9P file server, writing emulator C) live in `.claude/skills/*/SKILL.md`. They are plain markdown — useful to any agent or human, not only Claude.
 
 ## Build, Test, and Development Commands
 

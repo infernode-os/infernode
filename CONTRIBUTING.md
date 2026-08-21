@@ -36,6 +36,9 @@ To make that painless rather than painful:
   behavior, and an example shell session — before writing code. A sketch is
   reviewed in minutes; most design feedback happens there, where changing
   course is free. Use the "New service / tool proposal" issue template.
+  This is policy, not a suggestion: PRs that introduce a non-trivial file
+  interface without a linked proposal issue will be returned for the
+  sketch first.
 - **New to Limbo?** It's close to Go, by ancestry:
   [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md)
   maps the concepts and lists the gotchas.

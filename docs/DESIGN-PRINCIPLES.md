@@ -201,6 +201,14 @@ parses at startup or an API it exposes. Where a write changes a
 value that can also be read, the write format matches the read
 format.
 
+**Writes are RPCs — on both sides.** The server rejects a bad
+request with an error reply, so failures land at the writer. The
+caller's dual: a 9P write can fail, and its error is the server
+talking to you — a caller that logs the error and continues has
+not handled it. Hardening lands as new error replies; validation
+you passed last month may reject you today, and your caller must
+surface that, never swallow it.
+
 **Sessions via the clone pattern.** When clients need per-session
 state, serve a `clone` file: reading it allocates a session and
 returns its id, and a directory of that name appears with the
@@ -413,6 +421,41 @@ manifests rot. Remember its scope: nsaudit is advisory; the
 namespace is still what enforces.
 
 
+## The host boundary
+
+The principles above govern the world inside the namespace. A feature
+also touches the host — installers, downloads, boot scripts, release
+artifacts — and that boundary has its own rules, each of which exists
+because a real contribution violated it:
+
+**Anything fetched is pinned and verified.** An installer that clones
+a third-party repository at default-branch HEAD and executes the build
+hands code execution on every user's machine to whoever controls that
+repository. Clones pin a commit SHA; model and blob downloads pin a
+revision URL (not a mutable branch ref); and files are verified
+against a SHA256 manifest committed in this tree before they are
+installed. A version pin without a hash pin still floats — the hash is
+the guarantee, the version is documentation.
+
+**An installer never builds-and-executes unpinned HEAD.** Same rule,
+stated for the case that hides it: "clone, compile, run" is execution
+of unreviewed code even though no binary was downloaded.
+
+**Boot never executes files authored outside the tree.**
+Configuration is data: the tree's code parses `key value` lines, or
+the running service accepts ctl writes. A host-writable script that
+boot runs verbatim is a persistence hook for anything that can write
+the file — however convenient it was to generate at install time.
+
+**Placement is shipping.** The release copy loop packs `dis lib fonts
+module services locale usr mnt` into every tarball, .app, and .zip. A
+"dev-only" helper placed under `lib/` is in every user's install — its
+placement *is* a release decision. Development-rig material lives
+outside those directories; `tests/agent-harness/` and its CI
+ring-fence are the precedent for keeping something out of artifacts
+deliberately.
+
+
 ## The honest boundaries
 
 A philosophy is trustworthy only if it states its own limits.
@@ -453,11 +496,14 @@ any code is written:
 | JSON crossing a 9P interface | Why isn't the hierarchy the schema? ([9p-data-conventions.md](9p-data-conventions.md)) |
 | A policy check on a path the caller can name | Why is the path nameable at all? |
 | A config file a service parses at startup | Why not a `ctl` file — or a mount? |
+| Boot (or a service) *executes* a file written outside the tree | Configuration is data: parse `key value` lines or accept ctl writes. A host-writable script run at boot is a persistence hook, not a config. |
 | A client library other programs must link | Why isn't `open`/`read`/`write` enough? |
 | A daemon with a bespoke socket protocol | Why not a 9P server? |
 | A central registry/manager/bus | What existing mechanism composes instead? |
 | "Access denied" errors reachable by a confined process | Denial should be absence. |
 | A second copy of a security predicate | Share the function. |
+| A global "busy"/"in-use" flag any client can wedge | Per-fid session state, torn down at clunk; exclusivity is `DMEXCL`. (See "The fid is the session" in the ninep-server skill.) |
+| UI policy (chords, bindings, gestures) inside a device driver | Drivers deliver events; policy lives in the window system. |
 | An effectful file an agent can reach, guarded by a flag | Proposal/commit split; put the commit in a namespace the agent doesn't have. |
 | `&&`, `\|\|`, POSIX loops in Inferno-side scripts | Inferno `sh` is rc-style; see [LIMBO-FOR-GO-PROGRAMMERS.md](LIMBO-FOR-GO-PROGRAMMERS.md#the-shell). |
 | GNU make / `limbo -o` by hand | `mk` and `tools/compile-limbo.sh`; the module's `PATH` constant decides the target. |

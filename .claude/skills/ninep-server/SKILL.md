@@ -85,6 +85,30 @@ Limbo-served mounts. See
 `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md` before touching
 namespace calls near server startup.
 
+## The fid is the session
+
+Per-client state — busy flags, parked reads, a helper fd, anything that
+exists because *this* client is using the service — hangs off the fid,
+never off a global. 9P guarantees the server hears about client death:
+the mount driver clunks a dead process's fids, and a connection hangup
+clunks everything on it. So:
+
+- Tear session state down in the **Clunk** handler; cancel the
+  outstanding parked request in **Flush**. If cleanup only happens along
+  one client's happy-path exit, any other client (a crash, a stray
+  `cat`) wedges the service permanently.
+- A resource that admits one holder at a time is expressed as
+  **exclusive-open** (`DMEXCL` in the file's mode) so a second open
+  fails honestly at open time — not as a first-come global busy flag
+  that only the winner can clear.
+- `chatsrv.b` shows the pending-request/Flush-cancel idiom; `gpusrv.b`
+  shows per-session state behind `clone`.
+
+And on the client side of any 9P interface: **a write can fail — check
+the reply.** A ctl write that gets `Rmsg.Error` and is merely logged to
+stderr has not happened; callers that drop data on a failed write turn
+a server-side validation into silent data loss.
+
 ## Veltro tool modules (agent-callable tools)
 
 The contract is `appl/veltro/tool.m`: five functions —

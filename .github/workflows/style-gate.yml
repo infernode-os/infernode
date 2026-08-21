@@ -22,3 +22,20 @@ jobs:
           persist-credentials: false
       - name: Run advisory style gate
         run: sh tools/style-gate.sh
+      - name: Proposal-link check (soft)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch -q --depth=1 origin "$BASE_SHA"
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA" HEAD -- \
+            'appl/*9p.b' 'appl/**/*9p.b' 'module/*.m' | tr '\n' ' ')
+          if [ -z "$added" ]; then
+            echo "proposal-check: no new file-interface sources"
+            exit 0
+          fi
+          if printf '%s' "$PR_BODY" | grep -qiE 'proposal|#[0-9]+'; then
+            echo "proposal-check: new interface sources ($added) and the description references an issue"
+          else
+            echo "::warning::This PR adds file-interface sources ($added) but its description links no proposal issue. Non-trivial file interfaces start with a namespace-sketch proposal — see docs/DESIGN-PRINCIPLES.md, 'Proposing a new service or tool', and the 'New Service / Tool Proposal' issue template."
+          fi

@@ -111,6 +111,23 @@ if {~ $emuhost MacOSX Linux Nt}{
 	mkdir -p /lib/keyring >[2] /dev/null
 	bind -bc $infhome/lib/keyring          /lib/keyring >[2] /dev/null
 	bind -bc $infhome/tmp /tmp >[2] /dev/null
+
+	# ── Snapshots (venti archive) — OFF by default ──────────
+	# Daily vac snapshot of the whole durable /usr into a local venti
+	# (the dump filesystem's role; docs/PERSISTENCE.md). Enable with
+	# Settings → Snapshots, or: mkdir -p /usr/inferno/snapshots;
+	# touch /usr/inferno/snapshots/on. Durability of /usr does NOT
+	# depend on this — snapshots add history, not persistence.
+	# The store lives OUTSIDE /usr (a snapshot must not contain its
+	# own store): ~/.infernode/venti, on the canonical venti port.
+	# Size cap and snapd's -m must stay in sync.
+	if {ftest -f /usr/inferno/snapshots/on} {
+		mkdir -p $infhome/venti
+		touch $infhome/venti/data $infhome/venti/index >[2] /dev/null
+		ventistore=$infhome/venti
+		ventisrv -d $ventistore/data -i $ventistore/index -w 'tcp!127.0.0.1!17034' 8589934592 8192 >[2] /dev/null &
+		snapd >[2] /dev/null &
+	}
 }{
 	# Non-desktop platforms (native hardware, embedded)
 	home=/usr/^$user

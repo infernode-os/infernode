@@ -1,0 +1,74 @@
+.TH SNAPD 8
+.SH NAME
+snapd \- daily vac snapshots of /usr into the local venti store
+.SH SYNOPSIS
+.B snapd
+[
+.B -1
+] [
+.B -a
+.I addr
+] [
+.B -p
+.I tree
+] [
+.B -m
+.I maxdatasize
+]
+.SH DESCRIPTION
+.I Snapd
+archives the durable
+.B /usr
+tree into the snapshot venti store as a vac tree, once shortly after
+startup and then daily; with
+.B -1
+it takes a single snapshot and exits.
+Each snapshot appends one line \(em a timestamp and a
+.B vac:
+score \(em to
+.BR /usr/inferno/snapshots/log ;
+the most recent outcome is written to
+.BR /usr/inferno/snapshots/status .
+A snapshot names an immutable tree: mount it read-only with
+.IR vacfs (4)
+or extract files with
+.IR vacget (1).
+Identical content dedupes in the store, so a snapshot costs only what
+changed.
+.PP
+Durability of
+.B /usr
+does not depend on snapshots \(em it comes from the
+.B ~/.infernode
+overlay (see
+.BR /doc/PERSISTENCE.md ).
+Snapshots add history: the dump filesystem's role.
+.PP
+Before each snapshot the store's data file (found via the
+.B ventistore
+environment variable, set by the boot profile) is checked against
+.IR maxdatasize ;
+past 80% a warning is written to the status file and, when the install
+audits, to the audit log.
+The store is write-once \(em reclaiming space means starting a fresh
+store.
+.PP
+The boot profile starts
+.I snapd
+and its
+.IR ventisrv (8)
+when
+.B /usr/inferno/snapshots/on
+exists (Settings \(-> Snapshots).
+The store lives outside
+.B /usr
+\(em a snapshot must not contain its own store \(em on the canonical
+venti port
+.BR tcp!127.0.0.1!17034 .
+.SH SOURCE
+.B /appl/cmd/snapd.b
+.SH SEE ALSO
+.IR ventisrv (8),
+.IR vacfs (4),
+.IR vacget (1),
+.IR auditprov (2)

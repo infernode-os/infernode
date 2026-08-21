@@ -157,6 +157,7 @@ TARG=\
 	seq.dis\
 	sha1sum.dis\
 	sleep.dis\
+	snapd.dis\
 	sort.dis\
 	stack.dis\
 	stackv.dis\

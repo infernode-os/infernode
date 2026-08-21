@@ -172,25 +172,32 @@ init(): string
 # ---- Provenance (INFR-355) ----
 
 provinited := 0;
+provrequired := 0;
 
 # Seal one parent-side provenance record. Lazy-attaches the content
-# store on first use; degradation is auditprov's (content=unstored) and
-# absence of /mnt/audit makes the whole thing a no-op.
+# store on first use. Optional auditing may degrade to content=unstored;
+# required auditing treats either store or sink failure as fatal.
 provemit(event, msg: string, payload: array of byte)
 {
 	if(ap == nil)
-		return;
+		if(provrequired)
+			raise "fail:audit";
+		else
+			return;
 	if(!provinited) {
 		provinited = 1;
-		ap->attach(nil);
+		aerr := ap->attach(nil);
+		if(aerr != nil && provrequired)
+			raise "fail:audit";
 	}
-	ap->log("veltro", event, msg, payload);
+	if(ap->log("veltro", event, msg, payload) != 0 && provrequired)
+		raise "fail:audit";
 }
 
 # Dial a content-store connection for one child. The fd is handed to
 # runchild, kept across NEWFD, and handshaken inside the restricted
-# namespace (subagent setprov/attachfd). nil = store unreachable; the
-# child still seals records via its bound /mnt/audit/log.
+# namespace (subagent setprov/attachfd). nil is accepted only when auditing
+# is optional; a required child refuses to start without the store.
 provdial(): ref Sys->FD
 {
 	if(ap == nil)
@@ -403,11 +410,15 @@ exec(args: string): string
 		# inspection surface.
 		childpaths := spec.paths;
 		auditing := 0;
+		(reqok, nil) := sys->stat("/usr/inferno/audit/on");
+		provrequired = reqok >= 0;
 		(aok, nil) := sys->stat("/mnt/audit/log");
 		if(aok >= 0) {
 			auditing = 1;
 			childpaths = "/mnt/audit/log" :: childpaths;
 		}
+		if(provrequired && !auditing)
+			return "error: auditing is required but /mnt/audit/log is unavailable";
 
 		caps := ref NsConstruct->Capabilities(
 			childtools,
@@ -1253,7 +1264,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# handshake and seals its own trajectory from inside the restricted
 	# namespace (the audit sink is bound via the caps auto-grant above).
 	if(childid != "")
-		samod->setprov(childid, provfd);
+		samod->setprov(childid, provfd, provrequired);
 
 	# at= scheduling: sleep once before the (single) iteration. Caps are
 	# already attenuated above — the sleeping process holds the same

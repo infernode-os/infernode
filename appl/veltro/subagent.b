@@ -79,6 +79,7 @@ logfd: ref Sys->FD;
 # content=unstored. provid == "" disables emission entirely.
 provid := "";
 provfd0: ref Sys->FD;
+provrequired := 0;
 
 init(): string
 {
@@ -113,20 +114,27 @@ init(): string
 	return nil;
 }
 
-setprov(id: string, fd: ref Sys->FD)
+setprov(id: string, fd: ref Sys->FD, required: int)
 {
 	provid = id;
 	provfd0 = fd;
+	provrequired = required;
 }
 
 # Seal one provenance record; no-op unless spawn.b armed us via setprov.
-# Fail-open by design: the install-level fail-closed gate (Audit->ONFILE)
-# is enforced by the parent before any child is spawned.
+# An armed required child fails closed on both sink and content-store errors.
 prov(event, msg: string, payload: array of byte)
 {
-	if(ap == nil || provid == "")
+	if(provid == "")
 		return;
-	ap->log("veltro", event, msg, payload);
+	if(ap == nil) {
+		if(provrequired)
+			raise "fail:audit";
+		return;
+	}
+	rc := ap->log("veltro", event, msg, payload);
+	if(provrequired && rc != 0)
+		raise "fail:audit";
 }
 
 joinnames(l: list of string): string
@@ -172,6 +180,8 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 
 	if(agentlib == nil)
 		return "ERROR:agentlib unavailable in subagent";
+	if(provrequired && ap == nil)
+		return "ERROR:required provenance module unavailable";
 
 	# Build namespace description
 	ns := discovernamespace(toolnames);
@@ -185,9 +195,13 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	# the restricted namespace, then seal what this child was given.
 	if(ap != nil && provid != "") {
 		if(provfd0 != nil) {
-			ap->attachfd(provfd0);
+			aerr := ap->attachfd(provfd0);
 			provfd0 = nil;
+			if(aerr != nil && provrequired)
+				return "ERROR:required provenance store unavailable: " + aerr;
 		}
+		if(provrequired && !ap->attached())
+			return "ERROR:required provenance store unavailable";
 		prov("substart", "agent=" + provid + " tools=" + joinnames(toolnames),
 			array of byte systemprompt);
 		prov("subtask", "agent=" + provid, array of byte task);

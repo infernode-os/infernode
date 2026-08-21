@@ -190,6 +190,9 @@ Dhdrsize:	con 4+Scoresize+1+2+4;	# magic+score+type+size+conntime
 Fhdrsize:	con 4+1+2;	# magic+count+size
 Fbhdrsize:	con 20+1+2+4;	# score+type+size+conntime
 Maxreaders:	con 32;
+Maxclients:	con 64;
+Maxpendingwrites: con 1024;
+Handshakems:	con 10000;
 Maxblocksize:	con Dhdrsize+Venti->Maxlumpsize;
 
 typebits: con 8;	# must be 8
@@ -204,7 +207,7 @@ maxdatasize: big;
 Arraysize:	con 4+4+4;
 Refsize:	con 4;
 
-listenaddr: con "net!*!venti";
+listenaddr: con "net!127.0.0.1!venti";
 indexfile := "index";
 datafile := "data";
 statsdir := "/chan/";
@@ -229,6 +232,7 @@ storec: chan of ref Store;
 writererrorc: chan of string;
 sem: ref Semaphore;
 statsem: ref Semaphore;
+clienttokens: chan of int;
 
 writequeue: ref Queue;
 flatequeue: ref Fifo;
@@ -321,9 +325,15 @@ init(nil: ref Draw->Context, args: list of string)
 	lookupdonec = chan[1] of (int, ref Vmsg, ref Client);
 	syncdonec = chan[1] of (ref Vmsg, ref Client);
 	storec = chan[32] of ref Store;
-	writererrorc = chan of string;
+	# Error publication must not block a worker while main is synchronously
+	# draining outstanding lookups in takewrites(). Only the first error is
+	# published (seterror guards lasterr), so one slot is sufficient.
+	writererrorc = chan[1] of string;
 	sem = Semaphore.new();
 	statsem = Semaphore.new();
+	clienttokens = chan[Maxclients] of int;
+	for(i := 0; i < Maxclients; i++)
+		clienttokens <-= 1;
 
 	writequeue = ref Queue(array[2] of ref Block, 0);
 	flatequeue = ref Fifo(array[64] of ref Block, 0, 0, Semaphore.new());
@@ -388,10 +398,38 @@ listener(aconn: Sys->Connection, readonly: int)
 			fail(sprint("listen: %r"));
 		if(debug) say("listener: have client");
 		dfd := sys->open(conn.dir+"/data", sys->ORDWR);
-		if(dfd == nil) {
-			if(verbose) say(sprint("opening connection data file: %r"));
-		} else
-			spawn client(dfd, readonly);
+		cfd := sys->open(conn.dir+"/ctl", sys->OWRITE);
+		if(dfd == nil || cfd == nil) {
+			if(verbose) say(sprint("opening connection data/control file: %r"));
+			dfd = nil;
+			cfd = nil;
+		} else {
+			<-clienttokens;
+			spawn clientguard(dfd, cfd, readonly);
+		}
+	}
+}
+
+clientguard(fd, cfd: ref Sys->FD, readonly: int)
+{
+	{
+		client(fd, cfd, readonly);
+	} exception {
+	* =>
+		;
+	}
+	clienttokens <-= 1;
+}
+
+handshaketimer(cfd: ref Sys->FD, done: chan of int)
+{
+	sys->sleep(Handshakems);
+	alt {
+	<-done =>
+		;
+	* =>
+		if(cfd != nil)
+			sys->fprint(cfd, "hangup");
 	}
 }
 
@@ -720,6 +758,11 @@ reader()
 			(hit, nil, err) := datalookup(w.addrs, w.b.score, w.b.dtype, 0, len w.b.d);
 			if(err != nil) {
 				if(debug) say("reader: datalookup failed: "+err);
+				sem.obtain();
+				writequeue.remove(w.b);
+				sem.release();
+				seterror("write lookup: " + err);
+				lookupdonec<- = (1, nil, w.c);
 				continue;
 			}
 			if(hit) {
@@ -1073,15 +1116,22 @@ main()
 			}
 
 			score := Score(sha1(tmsg.data));
-			c.respc<- = ref Vmsg.Rwrite(0, tmsg.tid, score);
 
-			if(score.eq(zeroscore))
+			if(score.eq(zeroscore)) {
+				c.respc<- = ref Vmsg.Rwrite(0, tmsg.tid, score);
 				continue;
+			}
 
 			sem.obtain();
 			d := queuelookup(score, tmsg.etype);
 			if(d != nil) {
 				sem.release();
+				c.respc<- = ref Vmsg.Rwrite(0, tmsg.tid, score);
+				continue;
+			}
+			if(writequeue.n >= Maxpendingwrites) {
+				sem.release();
+				c.respc<- = ref Vmsg.Rerror(0, tmsg.tid, "write queue full");
 				continue;
 			}
 			addrs := memlookup(score, tmsg.etype);
@@ -1092,6 +1142,7 @@ main()
 				lookupsend(ref Lookup.Write(c, tmsg.tid, addrs, b));
 			else
 				storec<- = ref Store.Write(c, b);
+			c.respc<- = ref Vmsg.Rwrite(0, tmsg.tid, score);
 
 		Tsync =>
 			nsyncs++;
@@ -1168,10 +1219,13 @@ handshake(fd: ref Sys->FD): string
 	return nil;
 }
 
-client(fd: ref Sys->FD, readonly: int)
+client(fd, cfd: ref Sys->FD, readonly: int)
 {
 	conntime := big daytime->now();
+	hsdone := chan[1] of int;
+	spawn handshaketimer(cfd, hsdone);
 	herr := handshake(fd);
+	hsdone <-= 1;
 	if(herr != nil) {
 		if(debug) say("handshake failed: "+herr);
 		return;

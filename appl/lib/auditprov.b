@@ -144,6 +144,8 @@ sha256(data: array of byte): string
 put(data: array of byte): (string, string, string)
 {
 	sha := sha256(data);
+	if(len data > MAXPAYLOAD)
+		return (nil, sha, "payload exceeds audit limit");
 	if(session == nil)
 		return (nil, sha, "no content store attached");
 
@@ -169,9 +171,15 @@ put(data: array of byte): (string, string, string)
 			return (nil, sha, sys->sprint("store flush: %r"));
 		}
 		(ok, score) := session.write(Dirtype, ent.pack());
-		sema.release();
-		if(ok < 0)
+		if(ok < 0) {
+			sema.release();
 			return (nil, sha, sys->sprint("store entry: %r"));
+		}
+		if(session.sync() < 0) {
+			sema.release();
+			return (nil, sha, sys->sprint("store sync: %r"));
+		}
+		sema.release();
 		return (score.text(), sha, nil);
 	} exception {
 	* =>
@@ -200,7 +208,16 @@ get(scorestr: string): (array of byte, string)
 			sema.release();
 			return (nil, sys->sprint("unpack entry: %r"));
 		}
-		data := array[int ent.size] of byte;
+		if(ent.size < big 0 || ent.size > big MAXPAYLOAD) {
+			sema.release();
+			return (nil, "payload size outside audit limit");
+		}
+		nbytes := int ent.size;
+		if(big nbytes != ent.size) {
+			sema.release();
+			return (nil, "payload size cannot be represented");
+		}
+		data := array[nbytes] of byte;
 		vf := Vacfile.new(session, ent);
 		o := 0;
 		while(o < len data) {

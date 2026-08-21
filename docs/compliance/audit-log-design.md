@@ -222,7 +222,7 @@ spawns) dropped in **without reworking the spine**, exactly as designed:
    restricted namespace.
 4. **Volume knob.** High-volume agent records use cheap per-record hashing + amortized
    checkpoint signing (the reason B/chain was chosen over a per-record MAC). Store
-   unreachable degrades to `content=unstored` — the event still seals, the trail shows the
+   unreachable degrades to `content=unstored` when auditing is optional — the event still seals, the trail shows the
    gap. Fail-closed: under `Audit->ONFILE`, veltro refuses to start an agent whose actions
    cannot be sealed (the `secstored` authok posture).
 5. **Confidentiality model (decided):** plaintext blocks by **placement**, the Plan 9 way —

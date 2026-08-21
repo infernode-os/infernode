@@ -20,6 +20,13 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
+include "dial.m";
+	dial: Dial;
+
+include "venti.m";
+	venti: Venti;
+	Entry, Session, Score, Dirtype, Entryactive: import venti;
+
 include "auditprov.m";
 	ap: AuditProv;
 
@@ -200,6 +207,23 @@ testAttach(t: ref T)
 	t.asserteq(ap->attached(), 1, "session up");
 }
 
+testHandshakeTimeout(t: ref T)
+{
+	cc := dial->dial(VADDR, nil);
+	if(cc == nil) {
+		t.fatal("cannot dial stalled Venti client");
+		return;
+	}
+	# The server sends its version first, then waits for the peer version.
+	# Withhold it beyond ventisrv's 10-second handshake deadline.
+	sys->sleep(11000);
+	buf := array[128] of byte;
+	n := sys->read(cc.dfd, buf, len buf);
+	t.assert(n > 0, "server greeting arrived before timeout");
+	n = sys->read(cc.dfd, buf, len buf);
+	t.assert(n <= 0, "stalled pre-handshake connection was hung up");
+}
+
 testPutGet(t: ref T)
 {
 	payload := array of byte "agent provenance payload";
@@ -215,6 +239,28 @@ testPutGet(t: ref T)
 	(back, gerr) := ap->get(score);
 	t.assertnil(gerr, "get by score");
 	t.assertseq(string back, string payload, "payload round-trips");
+}
+
+testOversizeEntry(t: ref T)
+{
+	cc := dial->dial(VADDR, nil);
+	if(cc == nil) {
+		t.fatal("cannot dial Venti for forged entry");
+		return;
+	}
+	s := Session.new(cc.dfd);
+	if(s == nil) {
+		t.fatal("cannot handshake forged-entry session");
+		return;
+	}
+	ent := ref Entry(0, 8192, 8192, 0, Entryactive,
+		big AuditProv->MAXPAYLOAD + big 1, Score.zero());
+	(ok, score) := s.write(Dirtype, ent.pack());
+	t.assert(ok >= 0, "forged oversized entry stored");
+	t.assert(s.sync() >= 0, "forged entry synced");
+	(data, err) := ap->get(score.text());
+	t.assert(data == nil, "oversized entry returned no allocation");
+	t.assert(contains(err, "outside audit limit"), "oversized entry rejected by size cap");
 }
 
 testBigPayload(t: ref T)
@@ -274,6 +320,17 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load testing";
 	}
 	testing->init();
+	dial = load Dial Dial->PATH;
+	if(dial == nil) {
+		sys->fprint(sys->fildes(2), "cannot load dial: %r\n");
+		raise "fail:cannot load dial";
+	}
+	venti = load Venti Venti->PATH;
+	if(venti == nil) {
+		sys->fprint(sys->fildes(2), "cannot load venti: %r\n");
+		raise "fail:cannot load venti";
+	}
+	venti->init();
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -296,8 +353,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Sha256", testSha256);
 	run("PlainLog", testPlainLog);
 	run("Unstored", testUnstored);
+	run("HandshakeTimeout", testHandshakeTimeout);
 	run("Attach", testAttach);
 	run("PutGet", testPutGet);
+	run("OversizeEntry", testOversizeEntry);
 	run("BigPayload", testBigPayload);
 	run("EmptyPayload", testEmptyPayload);
 	run("ProvRecord", testProvRecord);

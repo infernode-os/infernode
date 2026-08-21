@@ -83,13 +83,18 @@ agenttype := "";
 # records under; "" until a run starts (and when the install does not
 # audit — ap stays nil then and prov() is a no-op).
 provagent := "";
+provrequired := 0;
 
 # Seal one provenance record for this agent.
 prov(event, msg: string, payload: array of byte)
 {
 	if(ap == nil)
 		return;
-	ap->log("veltro", event, msg, payload);
+	rc := ap->log("veltro", event, msg, payload);
+	if(provrequired && rc != 0) {
+		sys->fprint(stderr, "veltro: required provenance failed for %s (status %d)\n", event, rc);
+		raise "fail:audit";
+	}
 }
 
 # -m <model>: override the LLM model for this run by writing it to the
@@ -302,6 +307,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(alogok >= 0)
 			auditing = 1;
 		(aonok, nil) := sys->stat(Audit->ONFILE);
+		provrequired = aonok >= 0;
 		if(aonok >= 0 && !auditing) {
 			sys->fprint(stderr, "veltro: this install requires auditing (%s) but /mnt/audit is not mounted\n",
 				Audit->ONFILE);
@@ -309,14 +315,28 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 		if(auditing) {
 			ap = load AuditProv AuditProv->PATH;
-			if(ap != nil && ap->init() != nil)
+			aperr := "cannot load audit provenance module";
+			if(ap != nil)
+				aperr = ap->init();
+			if(aperr != nil) {
 				ap = nil;
+				if(provrequired) {
+					sys->fprint(stderr, "veltro: required provenance unavailable: %s\n", aperr);
+					raise "fail:audit";
+				}
+			}
 			# Dial + handshake the content store BEFORE restrictns: the
 			# session fd survives restriction, so the parent's namespace
 			# needs no network grant on account of auditing. Attach
-			# failure degrades to content=unstored records, never blocks.
-			if(ap != nil)
-				ap->attach(nil);
+			# Optional auditing may degrade to content=unstored; the install
+			# marker makes attachment failure fatal.
+			if(ap != nil) {
+				aerr := ap->attach(nil);
+				if(aerr != nil && provrequired) {
+					sys->fprint(stderr, "veltro: required provenance store unavailable: %s\n", aerr);
+					raise "fail:audit";
+				}
+			}
 			# The append-only sink rides into the restricted namespace.
 			pathlist = "/mnt/audit/log" :: pathlist;
 		}

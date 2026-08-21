@@ -97,13 +97,17 @@ If neither
 .B -r
 nor
 .B -w
-is specified, a default of
-.I "-w net!*!venti"
+is specified, a loopback-only default of
+.I "-w net!127.0.0.1!venti"
 is assumed.
 .PP
 Note that
 .I ventisrv
 does not authenticate connections and cannot use raw disks for storage.
+Explicit non-loopback listeners therefore expose every block to anyone
+who learns its score and should be isolated by the surrounding network.
+The server limits concurrent clients and pending writes to bound memory
+consumption under stalled or hostile connections.
 .SH SOURCE
 .B /appl/cmd/ventisrv.b
 .SH SEE ALSO

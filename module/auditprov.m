@@ -6,6 +6,9 @@ AuditProv: module
 	# ventisrv(8)). Override with the auditventi environment variable
 	# (/env/auditventi); an explicit attach() argument overrides both.
 	DEFADDR:	con "tcp!127.0.0.1!17040";
+	# get() returns one in-memory array. Refuse hostile vac entries that
+	# claim an impractical size before converting big to int or allocating.
+	MAXPAYLOAD:	con 64*1024*1024;
 
 	# Payload-bearing records carry exactly these fields, appended by
 	# log():  content=<score> sha256=<hex> size=<n>
@@ -29,7 +32,7 @@ AuditProv: module
 	attachfd:	fn(fd: ref Sys->FD): string;
 	attached:	fn(): int;
 
-	# put stores a payload as a vac hash tree (Datatype blocks under a
+	# put stores and syncs a payload as a vac hash tree (Datatype blocks under a
 	# packed entry written as a Dirtype block) and returns
 	# (score-hex, sha256-hex, error). Identical payloads dedupe.
 	put:		fn(data: array of byte): (string, string, string);

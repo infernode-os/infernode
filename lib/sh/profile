@@ -72,6 +72,10 @@ if {~ $emuhost MacOSX Linux Nt}{
 	mkdir -p $infhome/lib/veltro-keys
 	mkdir -p $infhome/lib/keyring
 	mkdir -p $infhome/tmp
+	# The overlay contains secstore material, signer keys, API keys, audit
+	# payloads, and snapshot bearer scores. Tighten existing installations
+	# as well as fresh directories; mkdir does not repair old modes.
+	chmod 700 $infhome $infhome/usr/inferno/secstore $infhome/lib/keyring $infhome/lib/veltro-keys >[2] /dev/null
 
 	# First-run only: seed writable defaults from the emu root (don't clobber
 	# a user's existing config on later boots).
@@ -131,6 +135,8 @@ if {~ $emuhost MacOSX Linux Nt}{
 	if {ftest -f /usr/inferno/snapshots/on} {
 		mkdir -p $infhome/venti
 		touch $infhome/venti/data $infhome/venti/index >[2] /dev/null
+		chmod 700 $infhome/venti >[2] /dev/null
+		chmod 600 $infhome/venti/data $infhome/venti/index >[2] /dev/null
 		ventistore=$infhome/venti
 		ventisrv -d $ventistore/data -i $ventistore/index -w 'tcp!127.0.0.1!17034' 8589934592 8192 >[2] /dev/null &
 		snapd >[2] /dev/null &
@@ -153,6 +159,7 @@ if {~ $emuhost MacOSX Linux Nt}{
 # operator step; the general build leaves it unset. See INFR-357 and
 # doc/compliance/SP800-92-audit-log.md. Non-fatal: never blocks boot.
 mkdir -p /usr/inferno/audit >[2] /dev/null
+chmod 700 /usr/inferno/audit >[2] /dev/null
 if {~ $emuhost MacOSX Linux}{
 	auditmode=`{os sh -c 'if [ -n "$AUDITMODE" ]; then echo on; fi' >[2] /dev/null}
 	if {~ $auditmode on} { touch /usr/inferno/audit/on >[2] /dev/null }
@@ -167,6 +174,8 @@ if {ftest -f /usr/inferno/audit/on} {
 	# default (override with the auditventi env var). Non-fatal.
 	mkdir -p /usr/inferno/audit/venti >[2] /dev/null
 	touch /usr/inferno/audit/venti/data /usr/inferno/audit/venti/index >[2] /dev/null
+	chmod 700 /usr/inferno/audit/venti >[2] /dev/null
+	chmod 600 /usr/inferno/audit/venti/data /usr/inferno/audit/venti/index >[2] /dev/null
 	ventisrv -d /usr/inferno/audit/venti/data -i /usr/inferno/audit/venti/index -w 'tcp!127.0.0.1!17040' 1073741824 8192 >[2] /dev/null &
 }
 

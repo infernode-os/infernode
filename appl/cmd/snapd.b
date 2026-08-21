@@ -55,7 +55,7 @@ SNAPDIR: con "/usr/inferno/snapshots";
 # (reproducible from releases); the host home stays out (the host's
 # own backup domain); the store stays out (outside these trees by
 # construction).
-DEFTREES: con "/usr /lib/ndb /lib/lucifer/theme /lib/veltro /lib/keyring";
+DEFTREES: con "/usr /lib/lucifer/theme /lib/veltro";
 DAYMS: con 24 * 60 * 60 * 1000;
 MAXDATA: con big 8589934592;	# keep in sync with the profile's ventisrv args
 WARNPCT: con 80;
@@ -95,7 +95,9 @@ init(nil: ref Draw->Context, args: list of string)
 		trees = deftrees;
 	}
 
-	sys->create(SNAPDIR, Sys->OREAD, Sys->DMDIR | 8r755);
+	sys->create(SNAPDIR, Sys->OREAD, Sys->DMDIR | 8r700);
+	if((serr := restrictmode(SNAPDIR, Sys->DMDIR | 8r700)) != nil)
+		fail(serr);
 
 	if(oneshot) {
 		err := snapshot();
@@ -130,12 +132,15 @@ snapshot(): string
 	line := sprint("%s %s\n", stamp(), score);
 	fd := sys->open(SNAPDIR + "/log", Sys->OWRITE);
 	if(fd == nil)
-		fd = sys->create(SNAPDIR + "/log", Sys->OWRITE, 8r644);
+		fd = sys->create(SNAPDIR + "/log", Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return status(sprint("cannot write snapshot log: %r"));
+	if((merr := restrictfd(fd, 8r600)) != nil)
+		return status(merr);
 	sys->seek(fd, big 0, Sys->SEEKEND);
 	b := array of byte line;
-	sys->write(fd, b, len b);
+	if(sys->write(fd, b, len b) != len b)
+		return status(sprint("cannot append snapshot log: %r"));
 	fd = nil;
 
 	if(audit != nil)
@@ -157,6 +162,12 @@ vacput(): string
 	ofd := sys->create(outpath, Sys->OWRITE, 8r600);
 	if(ofd == nil) {
 		status(sprint("cannot create %s: %r", outpath));
+		return nil;
+	}
+	if(restrictfd(ofd, 8r600) != nil) {
+		ofd = nil;
+		sys->remove(outpath);
+		status("cannot restrict vacput output file");
 		return nil;
 	}
 	donec := chan of int;
@@ -218,14 +229,35 @@ capacitycheck()
 
 status(s: string): string
 {
-	fd := sys->create(SNAPDIR + "/status", Sys->OWRITE, 8r644);
+	fd := sys->create(SNAPDIR + "/status", Sys->OWRITE, 8r600);
 	if(fd != nil) {
+		if(restrictfd(fd, 8r600) != nil)
+			return "cannot restrict snapshot status file";
 		b := array of byte (s + "\n");
-		sys->write(fd, b, len b);
+		if(sys->write(fd, b, len b) != len b)
+			return sprint("cannot write snapshot status: %r");
 	}
 	if(len s >= 2 && s[0:2] == "ok")
 		return nil;
 	return s;
+}
+
+restrictmode(path: string, mode: int): string
+{
+	d := sys->nulldir;
+	d.mode = mode;
+	if(sys->wstat(path, d) < 0)
+		return sprint("cannot restrict %s: %r", path);
+	return nil;
+}
+
+restrictfd(fd: ref Sys->FD, mode: int): string
+{
+	d := sys->nulldir;
+	d.mode = mode;
+	if(sys->fwstat(fd, d) < 0)
+		return sprint("cannot restrict snapshot file: %r");
+	return nil;
 }
 
 stamp(): string

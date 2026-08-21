@@ -23,20 +23,21 @@ archive, once shortly after startup and then daily; with
 it takes a single snapshot and exits.
 The default set is
 .B /usr
-plus the configuration overlays that live outside it:
-.BR /lib/ndb ,
+plus non-secret configuration overlays that live outside it:
 .BR /lib/lucifer/theme ,
-.B /lib/veltro
-and
-.BR /lib/keyring ,
+.BR /lib/veltro ,
 each captured as the namespace sees it (the durable overlay side
 first). Repeatable
 .B -p
 options replace the set.
-Note that keyring files are archived: scores from this store name key
-material, exactly as the host-side
-.B ~/.infernode/lib/keyring
-files do; the store is localhost-only.
+Credential-bearing
+.BR /lib/keyring
+and endpoint configuration under
+.BR /lib/ndb
+are deliberately excluded from the default set. They may be selected
+explicitly with
+.BR -p ,
+but doing so places them in a score-addressed, unauthenticated store.
 Each snapshot appends one line \(em a timestamp and a
 .B vac:
 score \(em to

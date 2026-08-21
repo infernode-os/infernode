@@ -31,10 +31,12 @@ Config overlays outside `/usr` (`/lib/ndb`, theme, veltro state,
 
 On top of durability sits **history**: with snapshots enabled
 (`Settings → Snapshots`, or `touch /usr/inferno/snapshots/on`),
-`snapd(8)` archives the whole of `/usr` **plus the config overlays
-outside it** (`/lib/ndb`, theme, `/lib/veltro`, `/lib/keyring` — the
-union view, durable side first) daily into a local write-once venti
-store as one vac archive. Each snapshot is one line — a date and a
+`snapd(8)` archives the whole of `/usr` plus the non-secret config overlays
+outside it (theme and `/lib/veltro`, durable side first) daily into a local
+write-once venti store as one vac archive. Credential-bearing `/lib/keyring`
+and endpoint configuration under `/lib/ndb` are excluded by default; selecting
+them explicitly with `snapd -p` places them in the score-addressed,
+unauthenticated store. Each snapshot is one line — a date and a
 45-byte score — in `/usr/inferno/snapshots/log`; any past state mounts
 read-only with `vacfs(4)` or extracts with `vacget(1)`. Identical
 content dedupes, so a snapshot costs only what changed.
@@ -96,7 +98,9 @@ day's `/usr` from the copy.
 Ports: the snapshot venti listens on the canonical venti port
 (`tcp!127.0.0.1!17034`, per `lib/ndb/common`); the audit content store
 uses `tcp!127.0.0.1!17040` (override: `auditventi` env). Both are
-localhost-only; the venti protocol is unauthenticated.
+localhost-only; the venti protocol is unauthenticated. The profile repairs
+the backing Venti directories to mode 0700 and their data/index files to
+0600 on every boot, including upgrades from older installations.
 
 Capacity: `snapd` warns (status file, audit log when auditing is on)
 past 80% of the store's configured maximum. Venti is write-once —

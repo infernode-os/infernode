@@ -10,6 +10,36 @@ space-separated. Records are one per line. Complex structures
 are decomposed into the directory hierarchy.
 
 
+## Where to mount it
+
+Before the data format comes the mount point, and the rule is
+about schema authorship, not data location:
+
+**A tree your program synthesizes — you author the schema —
+mounts under `/mnt/<app>`, even when the backing data is remote.**
+`webfs` serves remote HTTP yet lives at `/mnt/web`, because *it*
+invents the `ctl`/`uri`/`body` schema. Every example in this
+document is an app-authored tree, so every example mounts under
+`/mnt`.
+
+**A foreign tree imported intact — the schema is theirs — mounts
+under `/n/<source>`, named for its source.** `/n/local` (the host
+filesystem), a remote peer's exported root. A remote LLM does
+*not* belong here: you are not importing a peer's tree to live as
+`/n/<peer>`, you are populating *your* `/mnt/llm` from it.
+Locality is not placement — it is just how the name gets
+populated.
+
+The convention is security work, not cosmetics: `/mnt` is ours to
+subdivide, so a sub-agent can be granted exactly
+`/mnt/<app>/<sub>` and nothing else, while `/n` remains a small,
+vetted import allowlist. A few older trees predate the convention
+(`/n/wallet`, `/n/git`); do not copy them for new work. The full
+argument, the decision checklist, and the reference tree are in
+[NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md) — read it before
+choosing any mount point.
+
+
 ## Why Not JSON
 
 JSON is the default instinct for structured data. It is wrong
@@ -26,7 +56,7 @@ It is a design principle. Every layer of unnecessary syntax is a
 layer of unnecessary complexity in every tool that touches the data.
 
 **Clarity.** Text lines are human-readable at every point in the
-system. `cat /n/sensors/temperature` shows a number. `cat /n/alerts`
+system. `cat /mnt/sensors/temperature` shows a number. `cat /mnt/alerts`
 shows one alert per line. There is nothing to decode, no structure
 to navigate, no keys to look up. The data is right there. This
 matters for debugging, for auditing, for understanding what a
@@ -40,8 +70,8 @@ server emits one record per line, the full power of this ecosystem
 is immediately available.
 
 ```
-cat /n/sensors/readings | grep temperature | wc -l
-cat /n/fleet/vehicles | awk '{print $1, $4}' | sort
+cat /mnt/sensors/readings | grep temperature | wc -l
+cat /mnt/fleet/vehicles | awk '{print $1, $4}' | sort
 ```
 
 JSON breaks this. A JSON array is not a sequence of lines — it is
@@ -100,23 +130,23 @@ optionally followed by a newline.
 
 Sensor network:
 ```
-/n/sensors/temperature     →  22.5
-/n/sensors/humidity        →  0.65
-/n/sensors/status          →  normal
+/mnt/sensors/temperature     →  22.5
+/mnt/sensors/humidity        →  0.65
+/mnt/sensors/status          →  normal
 ```
 
 Fleet tracking:
 ```
-/n/fleet/vehicles/truck-7/lat   →  37.7749
-/n/fleet/vehicles/truck-7/lon   →  -122.4194
-/n/fleet/vehicles/truck-7/speed →  65.2
+/mnt/fleet/vehicles/truck-7/lat   →  37.7749
+/mnt/fleet/vehicles/truck-7/lon   →  -122.4194
+/mnt/fleet/vehicles/truck-7/speed →  65.2
 ```
 
 Trading system:
 ```
-/n/portfolio/cash           →  125000.00
-/n/portfolio/total_value    →  1250000.50
-/n/portfolio/defense/status →  normal
+/mnt/portfolio/cash           →  125000.00
+/mnt/portfolio/total_value    →  1250000.50
+/mnt/portfolio/defense/status →  normal
 ```
 
 This is the most Plan 9 pattern. The directory hierarchy is the
@@ -131,7 +161,7 @@ separated by spaces.
 
 Geospatial observations:
 ```
-/n/observations:
+/mnt/observations:
 sta-001 37.7749 -122.4194 22.5 0.65 clear 2025-02-15T14:32:00Z
 sta-002 34.0522 -118.2437 28.1 0.42 clear 2025-02-15T14:32:00Z
 sta-003 40.7128 -74.0060 -2.3 0.78 snow 2025-02-15T14:32:00Z
@@ -139,7 +169,7 @@ sta-003 40.7128 -74.0060 -2.3 0.78 snow 2025-02-15T14:32:00Z
 
 Network events:
 ```
-/n/firewall/log:
+/mnt/firewall/log:
 a]1e8400 10.0.1.15 10.0.2.30 443 allow 2025-02-15T14:32:00Z
 b72e8401 192.168.1.5 10.0.1.15 22 deny 2025-02-15T14:33:12Z
 c83e8402 10.0.1.20 8.8.8.8 53 allow 2025-02-15T14:33:15Z
@@ -147,7 +177,7 @@ c83e8402 10.0.1.20 8.8.8.8 53 allow 2025-02-15T14:33:15Z
 
 Trading signals:
 ```
-/n/signals:
+/mnt/signals:
 550e8400 AAPL long 0.85 sentiment 2025-02-15T14:32:00Z
 660e8401 TSLA short 0.72 technical 2025-02-15T14:33:00Z
 ```
@@ -189,14 +219,14 @@ content is the value.
 
 Wrong:
 ```
-/n/sensors/station-1  →  {"temperature": 22.5, "humidity": 0.65, "status": "normal"}
+/mnt/sensors/station-1  →  {"temperature": 22.5, "humidity": 0.65, "status": "normal"}
 ```
 
 Right:
 ```
-/n/sensors/station-1/temperature  →  22.5
-/n/sensors/station-1/humidity     →  0.65
-/n/sensors/station-1/status       →  normal
+/mnt/sensors/station-1/temperature  →  22.5
+/mnt/sensors/station-1/humidity     →  0.65
+/mnt/sensors/station-1/status       →  normal
 ```
 
 If the values are logically grouped, use a subdirectory. The
@@ -208,7 +238,7 @@ Simple lists (identifiers, labels, available resources) are one
 item per line.
 
 ```
-/n/fleet/drivers:
+/mnt/fleet/drivers:
 Alice Chen
 Bob Martinez
 Carol Okafor
@@ -227,9 +257,9 @@ Files that accept commands (not just data) follow the Plan 9
 `ctl` convention. Commands are text strings written to the file.
 
 ```
-echo alarm > /n/sensors/station-1/status
-echo 30 > /n/sensors/station-1/poll_interval
-echo rebalance > /n/portfolio/ctl
+echo alarm > /mnt/sensors/station-1/status
+echo 30 > /mnt/sensors/station-1/poll_interval
+echo rebalance > /mnt/portfolio/ctl
 ```
 
 ### Writable data files

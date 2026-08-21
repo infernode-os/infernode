@@ -56,7 +56,7 @@ and every existing tool already speaks it.)
 
 **The namespace is the schema.** The directory hierarchy carries
 the structure that other systems put into JSON objects, schemas,
-and API documentation. `/n/sensors/station-1/temperature`
+and API documentation. `/mnt/sensors/station-1/temperature`
 containing `22.5` needs no parser and no spec. Design the tree
 and you have designed the interface.
 

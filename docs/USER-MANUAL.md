@@ -110,7 +110,7 @@ No SDKs. No libraries. No protocol buffers. Just files.
 
 ### Namespaces are Private
 
-Every process has its own view of the filesystem. What you see at `/n/web` might not exist for another process. This is the foundation of security: you can't access what isn't in your namespace.
+Every process has its own view of the filesystem. What you see at `/mnt/web` might not exist for another process. This is the foundation of security: you can't access what isn't in your namespace.
 
 ### Text is Universal
 

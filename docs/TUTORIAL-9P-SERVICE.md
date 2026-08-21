@@ -16,7 +16,7 @@ The service is deliberately tiny: a counter. Three files, three
 control verbs. Small enough to hold in your head; complete enough
 to exercise every convention a real service uses. The reasoning
 behind those conventions is in
-[INFERNODE-WAY.md](INFERNODE-WAY.md) — this page is the practice
+[DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) — this page is the practice
 to that theory.
 
 

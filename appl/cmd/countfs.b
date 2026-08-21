@@ -16,7 +16,7 @@ implement Countfs;
 #
 #	mount {countfs} /mnt/count
 #
-# Design notes (the reasoning lives in docs/INFERNODE-WAY.md):
+# Design notes (the reasoning lives in docs/DESIGN-PRINCIPLES.md):
 #   - /mnt/count, not /n/count: this program authors the schema.
 #   - access control is the file modes: ctl cannot be read, value and
 #     log cannot be written.  No policy code.

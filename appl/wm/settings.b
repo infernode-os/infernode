@@ -72,10 +72,16 @@ Settings: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
+# for running one-shot commands (snapd -1) in-process
+Runnable: module
+{
+	init: fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity: con iota;
-NCATS: con 9;
+CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots: con iota;
+NCATS: con 11;
 
 catnames := array[] of {
 	"Theme",
@@ -87,6 +93,8 @@ catnames := array[] of {
 	"Startup Profile",
 	"Messaging",
 	"Security",
+	"Auditing",
+	"Snapshots",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
@@ -102,6 +110,8 @@ catshortnames := array[] of {
 	"profile",
 	"messaging",
 	"security",
+	"audit",
+	"snapshots",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -337,6 +347,8 @@ buildpanel(cat: int)
 	CatProfile =>	panelprofile();
 	CatMessaging =>	panelmessaging();
 	CatSecurity =>	panelsecurity();
+	CatAudit =>	panelaudit();
+	CatSnapshots =>	panelsnapshots();
 	}
 	tk->cmd(top, "update");
 }
@@ -591,6 +603,239 @@ secentry(name, prompt: string)
 	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -fill x -pady 2", name));
 }
 
+
+# ── Auditing panel ─────────────────────────────────────────────
+# The tamper-evident audit log (auditfs(4)) + agent provenance
+# (auditprov(2)). Enable/disable persist the opt-in marker; the
+# services themselves start from the boot profile, so those need a
+# relaunch (same pattern as the LLM panel — mounts made from this
+# process would not be visible to the rest of the system). Checkpoint
+# and Verify act on the LIVE mount and work immediately.
+
+AUDITON: con "/usr/inferno/audit/on";
+
+panelaudit()
+{
+	hdr("audh", "Tamper-evident audit log");
+	lbl("audstat", auditstatus());
+	if(fileexists(AUDITON))
+		btn("auddis", "Disable auditing (relaunch required)", "auditdisable");
+	else
+		btn("auden", "Enable auditing (relaunch required)", "auditenable");
+	if(fileexists("/mnt/audit/ctl")) {
+		btn("audck", "Sign a checkpoint now", "auditck");
+		btn("audvf", "Verify the chain now", "auditverify");
+	}
+	lbl("audsign", "Signing key: run  sh /lib/sh/audit-setup  once in a shell (needs factotum).");
+	lbl("audres", "");
+}
+
+auditstatus(): string
+{
+	s := "";
+	if(fileexists(AUDITON))
+		s = "enabled (marker present)";
+	else
+		s = "disabled";
+	if(fileexists("/mnt/audit/ctl")) {
+		head := readfile1("/mnt/audit/head");
+		(n, toks) := sys->tokenize(head, " \n");
+		if(n >= 2)
+			s += sys->sprint("; running, %s records sealed", hd tl toks);
+		else
+			s += "; running";
+		if(len readfile1("/mnt/audit/pubkey") > 0)
+			s += "; checkpoints signed";
+		else
+			s += "; chain-only (no signer key)";
+	} else
+		s += "; not running this session";
+	return s;
+}
+
+# ── Snapshots panel ────────────────────────────────────────────
+# Daily vac snapshots of the durable /usr into the local venti store
+# (snapd(8)). Enable/disable persist the marker (daemons start at
+# boot); Snapshot Now talks to the store over TCP, so it works live
+# whenever the store is up.
+
+SNAPON: con "/usr/inferno/snapshots/on";
+SNAPLOG: con "/usr/inferno/snapshots/log";
+
+panelsnapshots()
+{
+	hdr("snph", "Snapshots (venti archive of /usr)");
+	lbl("snpstat", snapstatus());
+	if(fileexists(SNAPON)) {
+		btn("snpdis", "Disable daily snapshots (relaunch required)", "snapdisable");
+		btn("snpnow", "Snapshot now", "snapnow");
+	} else
+		btn("snpen", "Enable daily snapshots (relaunch required)", "snapenable");
+	hdr("snplh", "Recent snapshots");
+	recent := recentsnapshots();
+	if(recent == "")
+		recent = "(none yet)";
+	lbl("snplist", recent);
+	lbl("snphint", "Mount one read-only:  mount {vacfs -a tcp!127.0.0.1!17034 <score>} /n/snap");
+	lbl("snpres", "");
+}
+
+snapstatus(): string
+{
+	s := "";
+	if(fileexists(SNAPON))
+		s = "enabled";
+	else
+		s = "disabled";
+	st := readfile1("/usr/inferno/snapshots/status");
+	if(st != "")
+		s += "; last: " + strip(st);
+	store := eget2("/env/ventistore");
+	if(store != "") {
+		(ok, d) := sys->stat(store + "/data");
+		if(ok >= 0)
+			s += sys->sprint("; store %bd MB", d.length / big (1024*1024));
+	}
+	return s;
+}
+
+recentsnapshots(): string
+{
+	a := readlines(SNAPLOG);
+	if(a == nil || len a == 0)
+		return "";
+	first := 0;
+	if(len a > 6)
+		first = len a - 6;
+	s := "";
+	for(i := len a - 1; i >= first; i--) {
+		if(s != "")
+			s += "\n";
+		s += a[i];
+	}
+	return s;
+}
+
+doauditenable()
+{
+	mkdirp2("/usr/inferno");
+	mkdirp2("/usr/inferno/audit");
+	if(touchfile(AUDITON))
+		flashstatus("auditing enabled — close InferNode and relaunch");
+	else
+		flashstatus(sys->sprint("cannot create marker: %r"));
+	buildpanel(CatAudit);
+}
+
+doauditdisable()
+{
+	if(sys->remove(AUDITON) < 0)
+		flashstatus(sys->sprint("cannot remove marker: %r"));
+	else
+		flashstatus("auditing disabled — close InferNode and relaunch");
+	buildpanel(CatAudit);
+}
+
+doauditck()
+{
+	fd := sys->open("/mnt/audit/ctl", Sys->OWRITE);
+	if(fd == nil) {
+		setpanellbl("audres", sys->sprint("cannot open audit ctl: %r"));
+		return;
+	}
+	b := array of byte "checkpoint";
+	if(sys->write(fd, b, len b) < 0)
+		setpanellbl("audres", sys->sprint("checkpoint failed: %r"));
+	else
+		setpanellbl("audres", "checkpoint signed");
+}
+
+doauditverify()
+{
+	setpanellbl("audres", "verify: " + strip(readfile1("/mnt/audit/verify")));
+}
+
+dosnapenable()
+{
+	mkdirp2("/usr/inferno");
+	mkdirp2("/usr/inferno/snapshots");
+	if(touchfile(SNAPON))
+		flashstatus("daily snapshots enabled — close InferNode and relaunch");
+	else
+		flashstatus(sys->sprint("cannot create marker: %r"));
+	buildpanel(CatSnapshots);
+}
+
+dosnapdisable()
+{
+	if(sys->remove(SNAPON) < 0)
+		flashstatus(sys->sprint("cannot remove marker: %r"));
+	else
+		flashstatus("daily snapshots disabled — close InferNode and relaunch");
+	buildpanel(CatSnapshots);
+}
+
+dosnapnow()
+{
+	snapd := load Runnable "/dis/snapd.dis";
+	if(snapd == nil) {
+		setpanellbl("snpres", sys->sprint("cannot load snapd: %r"));
+		return;
+	}
+	setpanellbl("snpres", "snapshotting...");
+	tk->cmd(top, "update");
+	{
+		snapd->init(nil, "snapd" :: "-1" :: nil);
+	} exception {
+	* =>
+		setpanellbl("snpres", "snapshot failed — is the store running? " + strip(readfile1("/usr/inferno/snapshots/status")));
+		return;
+	}
+	buildpanel(CatSnapshots);
+	flashstatus("snapshot taken");
+}
+
+# ── shared small helpers for the two panels ────────────────────
+
+fileexists(p: string): int
+{
+	return sys->stat(p).t0 >= 0;
+}
+
+readfile1(p: string): string
+{
+	fd := sys->open(p, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[2048] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[:n];
+}
+
+eget2(p: string): string
+{
+	return strip(readfile1(p));
+}
+
+touchfile(p: string): int
+{
+	fd := sys->create(p, Sys->OWRITE, 8r644);
+	return fd != nil;
+}
+
+mkdirp2(p: string)
+{
+	sys->create(p, Sys->OREAD, Sys->DMDIR | 8r755);
+}
+
+setpanellbl(name, text: string)
+{
+	tk->cmd(top, sys->sprint(".content.%s configure -text %s", name, tk->quote(text)));
+	tk->cmd(top, "update");
+}
+
 # ── Action dispatch ────────────────────────────────────────────
 
 handleaction(a: string)
@@ -646,6 +891,13 @@ handleaction(a: string)
 		flashstatus("restart required for profile changes");
 	"msgedit" =>	openineditor("/lib/veltro/sources/email.conf");
 	"msgregister" =>	doregisteremail();
+	"auditenable" =>	doauditenable();
+	"auditdisable" =>	doauditdisable();
+	"auditck" =>	doauditck();
+	"auditverify" =>	doauditverify();
+	"snapenable" =>	dosnapenable();
+	"snapdisable" =>	dosnapdisable();
+	"snapnow" =>	dosnapnow();
 	"secenroll" =>	doenroll2fa();
 	"secaddkey" =>	doaddkey2fa();
 	"secdisable" =>	dodisable2fa();

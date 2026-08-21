@@ -113,17 +113,6 @@ Windows support works (headless + SDL3 GUI) but needs polish:
 See [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md) and
 `build-windows-amd64.ps1`.
 
-### GoDis Compiler
-
-The Go-to-Dis compiler (`tools/godis/`) compiles Go source to Dis bytecode.
-It's preliminary — 190+ tests passing — and a great area for compiler
-enthusiasts:
-
-- Expanding Go language feature coverage
-- Improving Dis bytecode generation
-- Adding optimization passes
-- Test coverage for edge cases
-
 ### Platform Testing
 
 We ship on Linux (x86-64, ARM64), macOS (ARM64), and Windows (x86-64).
@@ -307,7 +296,6 @@ CI will automatically run:
 | `appl/lib/` | Limbo | Libraries (styx, styxservers, JSON, TLS, etc.) |
 | `module/` | Limbo | Interface definitions (like header files) |
 | `formal-verification/` | TLA+/SPIN/CBMC | Security proofs |
-| `tools/godis/` | Go | Go-to-Dis compiler |
 
 ### The Limbo Language
 

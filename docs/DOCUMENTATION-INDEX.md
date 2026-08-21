@@ -120,10 +120,6 @@ Detailed JIT documentation is in `docs/arm64-jit/` (27 files covering implementa
 
 See [formal-verification/README.md](../formal-verification/README.md) for TLA+, SPIN, and CBMC verification of namespace isolation (3 tools, 11 properties, 3.17B+ states explored).
 
-## GoDis Compiler
-
-See [tools/godis/README.md](../tools/godis/README.md) for the Go-to-Dis compiler architecture, translation strategy, and 190+ passing tests.
-
 ## The Key 64-bit Fix
 
 Pool quanta must be 127 for 64-bit (not 31 as for 32-bit). This single change in `emu/port/alloc.c` was the critical breakthrough that made the entire port work. See [LESSONS-LEARNED.md](LESSONS-LEARNED.md) for the full story.

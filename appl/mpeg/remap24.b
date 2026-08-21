@@ -71,9 +71,11 @@ remap(p: ref Mpegio->YCbCr): array of byte
 				l := 2;
 				do {
 					y := int Y[n++] << B;
-					out[x++] = clamp[((y + r0[k]) >> B) + CLOFF];
-					out[x++] = clamp[((y + b0r1[k]) >> B) + CLOFF];
+					# Draw->RGB24 is BGR in memory (imgload.b: "RGB24 needs BGR"),
+					# so emit blue, green, red — not red, green, blue.
 					out[x++] = clamp[((y + b1[k]) >> B) + CLOFF];
+					out[x++] = clamp[((y + b0r1[k]) >> B) + CLOFF];
+					out[x++] = clamp[((y + r0[k]) >> B) + CLOFF];
 				} while (--l > 0);
 			}
 		} while (--j > 0);

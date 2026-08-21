@@ -238,7 +238,7 @@ testSignTx(t: ref T)
 		big 20 * billion,		# gasprice (20 gwei)
 		big 21000,			# gaslimit
 		dst,				# destination
-		billion * billion,			# value (1 ETH = 10^18 wei)
+		ethcrypto->dectobe("1000000000000000000"),	# value (1 ETH in wei)
 		nil,				# data
 		1				# chainid (mainnet)
 	);
@@ -252,6 +252,79 @@ testSignTx(t: ref T)
 	t.assert(int signed[0] >= 16rc0, "signed tx starts with RLP list prefix");
 }
 
+#
+# Canonical EIP-155 test vector (from the EIP-155 specification).
+# Cross-validates RLP encoding, Keccak-256, RFC 6979 deterministic k,
+# low-S normalization, and the EIP-155 v calculation against go-ethereum.
+#
+testSignTxEIP155Vector(t: ref T)
+{
+	priv := ethcrypto->hexdecode("4646464646464646464646464646464646464646464646464646464646464646");
+	dst := ethcrypto->strtoaddr("0x3535353535353535353535353535353535353535");
+
+	tx := ref Ethcrypto->EthTx(
+		big 9,					# nonce
+		big 20000000000,			# gasprice (20 gwei)
+		big 21000,				# gaslimit
+		dst,
+		ethcrypto->dectobe("1000000000000000000"),	# 1 ETH
+		nil,
+		1					# chainid (mainnet)
+	);
+
+	signed := ethcrypto->signtx(tx, priv);
+	t.assert(signed != nil, "EIP-155 vector: signtx returns result");
+
+	expected := "f86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83";
+	t.assertseq(ethcrypto->hexencode(signed), expected,
+		"EIP-155 spec vector: signed raw tx matches go-ethereum");
+}
+
+#
+# Large (multi-word) values must round-trip: a 100 ETH value does not
+# fit in Limbo's 64-bit big and must survive via dectobe/uint256 bytes.
+#
+testSignTxLargeValue(t: ref T)
+{
+	priv := ethcrypto->hexdecode("4646464646464646464646464646464646464646464646464646464646464646");
+	dst := ethcrypto->strtoaddr("0x3535353535353535353535353535353535353535");
+
+	v := ethcrypto->dectobe("100000000000000000000");	# 100 ETH > 2^63
+	t.assert(v != nil, "dectobe accepts 100 ETH in wei");
+	t.assertseq(ethcrypto->betodec(v), "100000000000000000000",
+		"betodec round-trips 100 ETH in wei");
+
+	tx := ref Ethcrypto->EthTx(big 0, big 1000000000, big 21000, dst, v, nil, 1);
+	signed := ethcrypto->signtx(tx, priv);
+	t.assert(signed != nil, "signtx handles >64-bit value");
+}
+
+#
+# Strict decimal parsing: dectobe must reject anything that is not
+# a plain decimal integer (silent tolerance here corrupts amounts).
+#
+testDectobeStrict(t: ref T)
+{
+	t.assert(ethcrypto->dectobe("1.5") == nil, "dectobe rejects '1.5'");
+	t.assert(ethcrypto->dectobe("-1") == nil, "dectobe rejects '-1'");
+	t.assert(ethcrypto->dectobe("10 USDC") == nil, "dectobe rejects '10 USDC'");
+	t.assert(ethcrypto->dectobe("") == nil, "dectobe rejects empty string");
+	t.assert(ethcrypto->dectobe("0x10") == nil, "dectobe rejects hex");
+	# 2^256 exactly (79 digits would also fail the length gate; this is
+	# the 78-digit overflow case)
+	toobig := "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+	t.assert(ethcrypto->dectobe(toobig) == nil, "dectobe rejects 2^256");
+	maxok := "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+	b := ethcrypto->dectobe(maxok);
+	t.assert(b != nil, "dectobe accepts 2^256-1");
+	t.asserteq(len b, 32, "2^256-1 is 32 bytes");
+
+	z := ethcrypto->dectobe("0");
+	t.assert(z != nil, "dectobe accepts '0'");
+	t.asserteq(len z, 0, "zero is the empty array");
+	t.assertseq(ethcrypto->betodec(z), "0", "betodec(empty) = '0'");
+}
+
 testSignTxDeterministic(t: ref T)
 {
 	priv := ethcrypto->hexdecode("0000000000000000000000000000000000000000000000000000000000000001");
@@ -259,7 +332,7 @@ testSignTxDeterministic(t: ref T)
 
 	tx := ref Ethcrypto->EthTx(
 		big 0, big 20000000000, big 21000, dst,
-		big 1000000000000000000, nil, 1
+		ethcrypto->dectobe("1000000000000000000"), nil, 1
 	);
 
 	signed1 := ethcrypto->signtx(tx, priv);
@@ -324,6 +397,48 @@ testBigToBytes(t: ref T)
 	t.assertseq(gweihex, "04a817c800", "bigtobytes(20gwei) = 04a817c800");
 }
 
+#
+# uint256 compare/add. These carry budget enforcement: a wei budget
+# passes 2^63 at 9.3 ETH, so an int64 path silently mis-evaluated
+# limits on exactly the accounts budgets exist to protect.
+#
+testBeCmpAdd(t: ref T)
+{
+	one := ethcrypto->dectobe("1");
+	two := ethcrypto->dectobe("2");
+	zero := ethcrypto->dectobe("0");
+
+	t.asserteq(ethcrypto->becmp(one, two), -1, "1 < 2");
+	t.asserteq(ethcrypto->becmp(two, one), 1, "2 > 1");
+	t.asserteq(ethcrypto->becmp(one, one), 0, "1 == 1");
+	t.asserteq(ethcrypto->becmp(zero, nil), 0, "zero == nil (both empty)");
+	t.asserteq(ethcrypto->becmp(one, nil), 1, "1 > nil");
+
+	# leading zeros must not change the comparison
+	padded := array[] of { byte 0, byte 0, byte 1 };
+	t.asserteq(ethcrypto->becmp(padded, one), 0, "leading zeros ignored");
+
+	# values that do not fit int64
+	tenEth := ethcrypto->dectobe("10000000000000000000");	# 1e19
+	oneEth := ethcrypto->dectobe("1000000000000000000");	# 1e18
+	t.asserteq(ethcrypto->becmp(tenEth, oneEth), 1, "10 ETH > 1 ETH (both > 2^63 territory)");
+
+	sum := ethcrypto->beadd(oneEth, oneEth);
+	t.assertseq(ethcrypto->betodec(sum), "2000000000000000000", "1 ETH + 1 ETH");
+
+	big1 := ethcrypto->dectobe("18446744073709551615");	# 2^64-1
+	sum2 := ethcrypto->beadd(big1, one);
+	t.assertseq(ethcrypto->betodec(sum2), "18446744073709551616",
+		"2^64-1 + 1 carries correctly past 64 bits");
+
+	t.assertseq(ethcrypto->betodec(ethcrypto->beadd(zero, zero)), "0", "0 + 0");
+
+	# overflow past uint256 returns nil rather than wrapping
+	maxu := ethcrypto->dectobe("115792089237316195423570985008687907853269984665640564039457584007913129639935");
+	t.assert(ethcrypto->beadd(maxu, one) == nil, "2^256-1 + 1 overflows to nil");
+	t.assert(ethcrypto->beadd(maxu, zero) != nil, "2^256-1 + 0 is fine");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -373,6 +488,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# Transaction tests
 	run("Tx/Sign", testSignTx);
 	run("Tx/Deterministic", testSignTxDeterministic);
+	run("Tx/EIP155Vector", testSignTxEIP155Vector);
+	run("Tx/LargeValue", testSignTxLargeValue);
+	run("Dec/Strict", testDectobeStrict);
+	run("Uint256/CmpAdd", testBeCmpAdd);
 
 	# EIP-712 tests
 	run("EIP712/Hash", testEIP712Hash);

@@ -675,7 +675,7 @@ restrictlocal(paths: list of string): string
 restrictwallet(): string
 {
 	accts := walletaccounts();
-	allow := "accounts" :: "default" :: nil;
+	allow := "accounts" :: "default" :: "network" :: nil;
 	for(a := accts; a != nil; a = tl a)
 		if(!inlist(hd a, allow))
 			allow = hd a :: allow;
@@ -684,8 +684,12 @@ restrictwallet(): string
 	if(err != nil)
 		return err;
 
+	# No "sign": raw hash signing is a blind oracle over the spend key
+	# and would let an agent authorize arbitrary transfers outside the
+	# budget/approval policy.  Agents get "authorize" (structured,
+	# policy-checked EIP-3009 requests) and "pay" (proposals) instead.
 	acctallow := "address" :: "balance" :: "chain" ::
-		"pay" :: "history" :: nil;
+		"pay" :: "authorize" :: "history" :: nil;
 	for(a = accts; a != nil; a = tl a) {
 		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);
 		if(err != nil)
@@ -965,7 +969,7 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
-	if(walletaccountcontrolpath(path))
+	if(walletcontrolpath(path))
 		return 1;
 	if(ftreecontrolpath(path))
 		return 1;
@@ -986,11 +990,24 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	return 0;
 }
 
-walletaccountcontrolpath(path: string): int
+#
+# Exported (NsConstruct->walletcontrolpath) so every namespace gate
+# uses ONE definition of this predicate; tools9p calls this rather
+# than keeping its own copy.
+#
+# "sign" is listed even though wallet9p no longer serves that file:
+# the guard costs nothing and keeps the oracle closed if it is ever
+# reintroduced.
+#
+walletcontrolpath(path: string): int
 {
 	if(!prefix(path, "/n/wallet/"))
 		return 0;
-	return componentcount(path) >= 4 && pathhascomponent(path, "ctl");
+	if(componentcount(path) < 4)
+		return 0;
+	# Per-account ctl (budget/approval config) and sign (blind signing
+	# oracle over the spend key) are trusted controller surfaces.
+	return pathhascomponent(path, "ctl") || pathhascomponent(path, "sign");
 }
 
 ftreecontrolpath(path: string): int

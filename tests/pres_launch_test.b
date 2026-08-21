@@ -15,7 +15,7 @@ include "sys.m";
 
 include "draw.m";
 
-include "../appl/veltro/nsconstruct.m";
+include "nsconstruct.m";
 	nsconstruct: NsConstruct;
 	Capabilities: import nsconstruct;
 

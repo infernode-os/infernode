@@ -52,8 +52,10 @@ init(): string
 #
 createaccount(name: string, accttype: int, chain: string): (ref Account, string)
 {
-	if(name == nil || name == "")
-		return (nil, "empty account name");
+	if(!validname(name))
+		return (nil, "invalid account name (use a-z A-Z 0-9 - _ .)");
+	if(!validname(chain))
+		return (nil, "invalid chain name");
 
 	if(accttype == ACCT_ETH) {
 		(priv, pub) := kr->secp256k1_keygen();
@@ -66,7 +68,7 @@ createaccount(name: string, accttype: int, chain: string): (ref Account, string)
 			return (nil, "address derivation failed");
 		}
 
-		err := storekey(name, accttype, priv);
+		err := storekey(name, accttype, priv, chain);
 		if(err != nil) {
 			zeroarray(priv);
 			return (nil, err);
@@ -79,8 +81,9 @@ createaccount(name: string, accttype: int, chain: string): (ref Account, string)
 	if(accttype == ACCT_SOL) {
 		# Solana uses Ed25519 — 32-byte seed
 		seed := array[32] of byte;
-		randread(seed);
-		err := storekey(name, accttype, seed);
+		if(randread(seed) < 0)
+			return (nil, "no entropy source for key generation");
+		err := storekey(name, accttype, seed, chain);
 		if(err != nil) {
 			zeroarray(seed);
 			return (nil, err);
@@ -100,8 +103,10 @@ createaccount(name: string, accttype: int, chain: string): (ref Account, string)
 #
 importaccount(name: string, accttype: int, chain: string, privkey: array of byte): (ref Account, string)
 {
-	if(name == nil || name == "")
-		return (nil, "empty account name");
+	if(!validname(name))
+		return (nil, "invalid account name (use a-z A-Z 0-9 - _ .)");
+	if(!validname(chain))
+		return (nil, "invalid chain name");
 	if(privkey == nil || len privkey == 0)
 		return (nil, "empty private key");
 
@@ -110,9 +115,10 @@ importaccount(name: string, accttype: int, chain: string, privkey: array of byte
 	if(accttype == ACCT_ETH) {
 		if(len privkey != 32)
 			return (nil, "ETH private key must be 32 bytes");
+		# secp256k1_pubkey validates 0 < key < n and returns nil otherwise
 		pub := kr->secp256k1_pubkey(privkey);
 		if(pub == nil)
-			return (nil, "public key derivation failed");
+			return (nil, "invalid private key (zero or out of curve order range)");
 		addr := ethcrypto->pubkeytoaddr(pub);
 		if(addr == nil)
 			return (nil, "address derivation failed");
@@ -125,7 +131,7 @@ importaccount(name: string, accttype: int, chain: string, privkey: array of byte
 	} else
 		return (nil, "unknown account type");
 
-	err := storekey(name, accttype, privkey);
+	err := storekey(name, accttype, privkey, chain);
 	if(err != nil)
 		return (nil, err);
 
@@ -145,20 +151,29 @@ loadaccount(name: string): (ref Account, string)
 		svc := servicekey(name, atype);
 		(nil, password) := factotum->getuserpasswd("proto=pass service=" + svc);
 		if(password != nil && password != "") {
-			chain := "";
+			chain := storedchain(svc);
 			addrstr := "";
 			if(atype == ACCT_ETH) {
-				chain = "ethereum";
+				if(chain == "")
+					chain = "ethereum";
 				privkey := ethcrypto->hexdecode(password);
 				if(privkey != nil && len privkey == 32) {
 					pub := kr->secp256k1_pubkey(privkey);
+					if(pub == nil) {
+						zeroarray(privkey);
+						return (nil, "stored key for " + name + " is invalid");
+					}
 					addr := ethcrypto->pubkeytoaddr(pub);
 					if(addr != nil)
 						addrstr = ethcrypto->addrtostr(addr);
 					zeroarray(privkey);
+				} else {
+					zeroarray(privkey);
+					return (nil, "stored key for " + name + " is malformed");
 				}
 			} else if(atype == ACCT_SOL) {
-				chain = "solana";
+				if(chain == "")
+					chain = "solana";
 			} else if(atype == ACCT_STRIPE) {
 				chain = "stripe";
 				addrstr = "stripe:" + name;
@@ -167,6 +182,36 @@ loadaccount(name: string): (ref Account, string)
 		}
 	}
 	return (nil, "account not found: " + name);
+}
+
+#
+# Read the chain= attribute stored alongside a wallet key in factotum.
+# Returns "" if not recorded (pre-existing keys).
+#
+storedchain(svc: string): string
+{
+	fd := sys->open("/mnt/factotum/ctl", Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[8192] of byte;
+	all := "";
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		all += string buf[0:n];
+	}
+	(nil, lines) := sys->tokenize(all, "\n");
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		if(findattr(line, "service") == svc) {
+			c := findattr(line, "chain");
+			if(c != nil && validname(c))
+				return c;
+			return "";
+		}
+	}
+	return "";
 }
 
 #
@@ -233,16 +278,27 @@ parsefactotumline(line: string): ref Account
 		name = rest[7:];
 	}
 
-	if(atype < 0 || name == "")
+	if(atype < 0)
 		return nil;
+	if(!validname(name)) {
+		# A wallet key exists but its name can't be exposed through
+		# the 9P tree — warn rather than silently hiding the account
+		# (and whatever funds sit behind it).
+		sys->fprint(sys->fildes(2),
+			"wallet: skipping factotum key service=%s: unsupported account name (allowed: a-z A-Z 0-9 - _ .)\n", svc);
+		return nil;
+	}
 
-	chain := "";
-	if(atype == ACCT_ETH)
-		chain = "ethereum";
-	else if(atype == ACCT_SOL)
-		chain = "solana";
-	else if(atype == ACCT_STRIPE)
-		chain = "stripe";
+	chain := findattr(line, "chain");
+	if(chain == nil || !validname(chain)) {
+		chain = "";
+		if(atype == ACCT_ETH)
+			chain = "ethereum";
+		else if(atype == ACCT_SOL)
+			chain = "solana";
+		else if(atype == ACCT_STRIPE)
+			chain = "stripe";
+	}
 
 	return ref Account(name, atype, chain, "");
 }
@@ -279,8 +335,10 @@ signhash(acct: ref Account, hash: array of byte): (array of byte, string)
 
 	if(acct.accttype == ACCT_ETH) {
 		privkey := ethcrypto->hexdecode(password);
-		if(privkey == nil || len privkey != 32)
+		if(privkey == nil || len privkey != 32) {
+			zeroarray(privkey);
 			return (nil, "invalid key in factotum");
+		}
 		sig := kr->secp256k1_sign(privkey, hash);
 		zeroarray(privkey);
 		if(sig == nil)
@@ -290,8 +348,10 @@ signhash(acct: ref Account, hash: array of byte): (array of byte, string)
 
 	if(acct.accttype == ACCT_SOL) {
 		seed := ethcrypto->hexdecode(password);
-		if(seed == nil || len seed != 32)
+		if(seed == nil || len seed != 32) {
+			zeroarray(seed);
 			return (nil, "invalid key in factotum");
+		}
 		sig := kr->ed25519_sign(seed, hash);
 		zeroarray(seed);
 		if(sig == nil)
@@ -322,33 +382,55 @@ setbudget(acct: ref Account, b: ref Budget)
 	budgets = (acct.name, b) :: newlist;
 }
 
-checkbudget(acct: ref Account, amount: big): string
+checkbudget(acct: ref Account, amount: array of byte): string
 {
 	if(acct == nil)
 		return "nil account";
+	if(amount == nil)
+		return "nil amount";
 
 	b := getbudget(acct.name);
 	if(b == nil)
 		return nil;
 
-	if(b.maxpertx > big 0 && amount > b.maxpertx)
-		return sys->sprint("amount %bd exceeds per-tx limit %bd %s",
-			amount, b.maxpertx, b.currency);
+	# a zero/empty limit means "no limit" for that dimension
+	if(ethcrypto->becmp(b.maxpertx, nil) > 0 &&
+	   ethcrypto->becmp(amount, b.maxpertx) > 0)
+		return sys->sprint("amount %s exceeds per-tx limit %s %s",
+			ethcrypto->betodec(amount), ethcrypto->betodec(b.maxpertx),
+			b.currency);
 
-	if(b.maxpersess > big 0 && b.spent + amount > b.maxpersess)
-		return sys->sprint("amount %bd would exceed session limit %bd %s (spent: %bd)",
-			amount, b.maxpersess, b.currency, b.spent);
+	if(ethcrypto->becmp(b.maxpersess, nil) > 0) {
+		total := ethcrypto->beadd(b.spent, amount);
+		if(total == nil)
+			return "session total would overflow uint256";
+		if(ethcrypto->becmp(total, b.maxpersess) > 0)
+			return sys->sprint("amount %s would exceed session limit %s %s (spent: %s)",
+				ethcrypto->betodec(amount),
+				ethcrypto->betodec(b.maxpersess), b.currency,
+				ethcrypto->betodec(b.spent));
+	}
 
 	return nil;
 }
 
-recordspend(acct: ref Account, amount: big)
+recordspend(acct: ref Account, amount: array of byte)
 {
-	if(acct == nil)
+	if(acct == nil || amount == nil)
 		return;
 	b := getbudget(acct.name);
-	if(b != nil)
-		b.spent += amount;
+	if(b == nil)
+		return;
+	total := ethcrypto->beadd(b.spent, amount);
+	if(total != nil)
+		b.spent = total;
+}
+
+budgetfor(acct: ref Account): ref Budget
+{
+	if(acct == nil)
+		return nil;
+	return getbudget(acct.name);
 }
 
 getbudget(name: string): ref Budget
@@ -376,12 +458,22 @@ servicekey(name: string, accttype: int): string
 	return "wallet-unknown-" + name;
 }
 
-storekey(name: string, accttype: int, key: array of byte): string
+storekey(name: string, accttype: int, key: array of byte, chain: string): string
 {
 	svc := servicekey(name, accttype);
-	hexkey := ethcrypto->hexencode(key);
 
-	cmd := "key proto=pass service=" + svc + " user=key !password=" + hexkey;
+	# Binary keys (ETH, Solana) are hex-encoded; Stripe API keys are
+	# text and stored as-is (consumers read them back verbatim).
+	storedkey: string;
+	if(accttype == ACCT_STRIPE)
+		storedkey = string key;
+	else
+		storedkey = ethcrypto->hexencode(key);
+
+	attrs := "key proto=pass service=" + svc + " user=key";
+	if(chain != nil && chain != "" && validname(chain))
+		attrs += " chain=" + chain;
+	cmd := attrs + " !password=" + storedkey;
 	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("cannot open factotum: %r");
@@ -394,6 +486,24 @@ storekey(name: string, accttype: int, key: array of byte): string
 	return nil;
 }
 
+#
+# Account and chain names appear in factotum attributes, 9P file
+# names, and ctl commands; restrict them to a safe character set.
+#
+validname(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == ".." || len s > 64)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
 zeroarray(a: array of byte)
 {
 	if(a == nil)
@@ -402,9 +512,26 @@ zeroarray(a: array of byte)
 		a[i] = byte 0;
 }
 
-randread(buf: array of byte)
+#
+# Fill buf completely with cryptographically secure random bytes.
+# Prefers /dev/notquiterandom (host CSPRNG under emu — fast, well
+# seeded); falls back to /dev/random (timing-based entropy, works on
+# bare metal).  Returns 0 on success, -1 if the buffer could not be
+# filled — callers MUST treat -1 as fatal, never use a partial buffer.
+#
+randread(buf: array of byte): int
 {
-	fd := sys->open("/dev/random", Sys->OREAD);
-	if(fd != nil)
-		sys->read(fd, buf, len buf);
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
+	if(fd == nil)
+		fd = sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	off := 0;
+	while(off < len buf) {
+		n := sys->read(fd, buf[off:], len buf - off);
+		if(n <= 0)
+			return -1;
+		off += n;
+	}
+	return 0;
 }

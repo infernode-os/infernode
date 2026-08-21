@@ -1,8 +1,8 @@
-# Infernode / Veltro — Architecture
+# InferNode / Veltro — Architecture
 
 ## Overview
 
-Infernode is Inferno OS running natively on AMD64 and ARM64 (macOS, Linux, Windows). The AI
+InferNode is Inferno OS running natively on AMD64 and ARM64 (macOS, Linux, Windows). The AI
 agent stack runs entirely inside the Inferno emulator (`emu`), using Plan 9's "everything is
 a file" model to integrate the LLM API, tool execution, wallet, and GUI through a unified 9P namespace.
 
@@ -170,18 +170,21 @@ Cryptocurrency wallet exposed as a 9P file server at `/n/wallet/`.
     ├── address      r    public address (EIP-55 checksummed)
     ├── balance      r    live balance from blockchain RPC
     ├── chain        rw   chain name
-    ├── sign         rw   write: hex hash → read: hex signature
-    ├── pay          rw   write: "amount recipient" → read: txhash
-    ├── ctl          rw   "budget maxpertx maxpersess currency"
+    ├── pay          rw   write: "amount recipient" → read: txhash or pending:id
+    ├── authorize    rw   write: structured x402/EIP-3009 request → read: signature
+    ├── ctl          rw   "budget maxpertx maxpersess currency", "requireapproval"
     └── history      r    recent transactions
 ```
 
 Key design properties:
 - **Factotum-backed** — private keys stored in factotum (`service=wallet-eth-{name}`),
-  never in wallet9p's memory. Signing writes a hash, reads back a signature.
+  never in wallet9p's memory long-term. Keys are fetched per operation and zeroed.
 - **Secstore persistence** — new accounts trigger factotum sync to secstore (async).
   Keys survive emu restart.
-- **Budget enforcement** — server-side spending limits; agents cannot bypass.
+- **Budget + approval enforcement** — server-side; every execution path checks the
+  account budget, and payments queue for trusted approval by default. There is no
+  raw signing file: agents submit structured `pay`/`authorize` requests that
+  wallet9p constructs, policy-checks, and signs itself.
 - **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access.
   `/mnt/llm` is also capability-driven: top-level loops grant it when they open
   model sessions by path, while subagents normally use pre-opened descriptors.

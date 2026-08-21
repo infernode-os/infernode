@@ -51,15 +51,29 @@ X402: module {
 	# Prefers EVM networks the wallet supports
 	selectoption:	fn(pr: ref PaymentRequired, chain: string): ref PaymentReq;
 
-	# Build a payment payload and sign it
-	# Returns base64-encoded JSON for the PAYMENT-SIGNATURE header
+	# Request a signed EIP-3009 payment authorization from wallet9p.
+	# Writes a structured request to /n/wallet/{acct}/authorize where
+	# budget and approval policy are enforced server-side, polls for up
+	# to waitsecs while approval is pending, and returns the payment
+	# payload JSON for the X-PAYMENT header (not yet base64-encoded).
+	# Returns ("", "pending:<id>") if approval did not arrive in time.
 	authorize:	fn(req: ref PaymentReq, resource: ref ResourceInfo,
-			   acctname: string): (string, string);
+			   acctname: string, waitsecs: int): (string, string);
+
+	# Compute the EIP-712 digest of an EIP-3009 TransferWithAuthorization.
+	# Used by wallet9p so the signer constructs — and therefore knows —
+	# exactly what it is signing.  amount is a strict decimal string in
+	# the asset's base units; nonce is 32 random bytes.
+	authdigest:	fn(network, asset, payto, from, amount: string,
+			   validafter, validbefore: big, nonce: array of byte,
+			   tokenname, tokenversion: string): (array of byte, string);
 
 	# Parse a settlement response from the server
 	parsesettlement:	fn(body: string): (ref SettlementResp, string);
 
 	# Map chain name to CAIP-2 network identifier
 	chaintonetwork:	fn(chain: string): string;
+	# "eip155:NNNN" -> NNNN; 0 if not a well-formed EIP-155 id.
+	# Never defaults to a real chain: callers pin payments with it.
 	networktochainid:	fn(network: string): int;
 };

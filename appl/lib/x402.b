@@ -150,70 +150,117 @@ selectoption(pr: ref PaymentRequired, chain: string): ref PaymentReq
 }
 
 #
-# Build and sign a payment authorization.
+# Request a signed payment authorization from wallet9p.
 #
-# Constructs an EIP-3009 authorization:
-# 1. Build authorization struct (from, to, value, validAfter, validBefore, nonce)
-# 2. Hash with EIP-712 domain separator
-# 3. Sign via /n/wallet/{acct}/sign
-# 4. Encode as JSON, base64 for PAYMENT-SIGNATURE header
+# The wallet server owns the whole EIP-3009 construction: it generates
+# the nonce and validity window, computes the EIP-712 digest itself
+# (so it knows exactly what it signs), enforces budget and approval
+# policy, and returns the signature.  This function only formats the
+# request, polls while approval is pending, and assembles the payment
+# payload JSON.
 #
 authorize(req: ref PaymentReq, resource: ref ResourceInfo,
-	  acctname: string): (string, string)
+	  acctname: string, waitsecs: int): (string, string)
 {
 	if(req == nil)
 		return (nil, "nil payment requirement");
+	if(!validacct(acctname))
+		return (nil, "unsafe wallet account name");
 
-	# Read the wallet address
-	addrstr := readfile("/n/wallet/" + acctname + "/address");
-	if(addrstr == nil)
-		return (nil, "cannot read wallet address for " + acctname);
-	addrstr = strip(addrstr);
+	# EVERY field below comes from the server's 402 response and is
+	# about to be concatenated into a newline-delimited, key-value
+	# protocol.  A field containing a newline would inject additional
+	# keys — and wallet9p's parser would let them override payto and
+	# amount — so the payload is signed for an attacker's recipient.
+	# Validate shape here and reject control characters outright;
+	# wallet9p independently re-validates and rejects duplicate keys.
+	if(req.scheme != "exact")
+		return (nil, "unsupported payment scheme: " + clean(req.scheme));
+	if(!validnetwork(req.network))
+		return (nil, "malformed network in 402 response: " + clean(req.network));
+	if(ethcrypto->strtoaddr(req.asset) == nil)
+		return (nil, "malformed asset address in 402 response: " + clean(req.asset));
+	if(ethcrypto->strtoaddr(req.payto) == nil)
+		return (nil, "malformed payTo address in 402 response: " + clean(req.payto));
+	if(ethcrypto->dectobe(req.amount) == nil)
+		return (nil, "malformed amount in 402 response: " + clean(req.amount));
+	if(req.timeout < 0)
+		return (nil, "malformed timeout in 402 response");
+	if(!validtoken(req.name) || !validtoken(req.version))
+		return (nil, "malformed token name/version in 402 response");
 
-	# Current time + timeout for validity window
-	now := daytime();
-	validafter := string now;
-	validbefore := string (now + req.timeout);
+	reqtext := "scheme " + req.scheme + "\n" +
+		"network " + req.network + "\n" +
+		"asset " + req.asset + "\n" +
+		"payto " + req.payto + "\n" +
+		"amount " + req.amount + "\n" +
+		"timeout " + string req.timeout + "\n" +
+		"name " + req.name + "\n" +
+		"version " + req.version + "\n";
+	if(resource != nil && resource.url != "") {
+		if(!validurlfield(resource.url))
+			return (nil, "malformed resource url in 402 response");
+		reqtext += "resource " + resource.url + "\n";
+	}
 
-	# Generate nonce (random 32 bytes, hex-encoded)
-	noncebuf := array[32] of byte;
-	readrandom(noncebuf);
-	nonce := ethcrypto->hexencode(noncebuf);
-
-	# Build EIP-712 domain separator hash
-	# Domain: { name: tokenName, version: tokenVersion, chainId, verifyingContract: asset }
-	chainid := networktochainid(req.network);
-	domainhash := eip712domainhash(req.name, req.version, chainid, req.asset);
-
-	# Build struct hash for TransferWithAuthorization
-	# TransferWithAuthorization(address from, address to, uint256 value,
-	#   uint256 validAfter, uint256 validBefore, bytes32 nonce)
-	structhash := eip712structhash(addrstr, req.payto, req.amount,
-		validafter, validbefore, nonce);
-
-	# EIP-712 hash
-	msghash := ethcrypto->eip712hash(domainhash, structhash);
-	if(msghash == nil)
-		return (nil, "EIP-712 hash failed");
-
-	# Sign via wallet9p — use single fd for write then read (same fid)
-	hexhash := ethcrypto->hexencode(msghash);
-	signpath := "/n/wallet/" + acctname + "/sign";
-	fd := sys->open(signpath, Sys->ORDWR);
+	authpath := "/n/wallet/" + acctname + "/authorize";
+	fd := sys->open(authpath, Sys->ORDWR);
 	if(fd == nil)
-		return (nil, sys->sprint("cannot open %s: %r", signpath));
-	wb := array of byte hexhash;
+		return (nil, sys->sprint("cannot open %s: %r", authpath));
+	wb := array of byte reqtext;
 	n := sys->write(fd, wb, len wb);
 	if(n <= 0)
-		return (nil, sys->sprint("sign write failed: %r"));
-	# Read back signature on same fd
-	rbuf := array[256] of byte;
-	sys->seek(fd, big 0, Sys->SEEKSTART);
-	rn := sys->read(fd, rbuf, len rbuf);
-	if(rn <= 0)
-		return (nil, "no signature returned");
-	sigstr := string rbuf[0:rn];
-	sigstr = strip(sigstr);
+		return (nil, sys->sprint("authorize request failed: %r"));
+
+	# Poll the same fid: wallet9p returns "pending:<id>" until the
+	# payment is approved (or denied/expired) by a trusted controller.
+	result := "";
+	waited := 0;
+	for(;;) {
+		rbuf := array[2048] of byte;
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+		rn := sys->read(fd, rbuf, len rbuf);
+		if(rn <= 0)
+			return (nil, "no authorization returned");
+		result = strip(string rbuf[0:rn]);
+		if(len result >= 8 && result[0:8] == "pending:") {
+			if(waited >= waitsecs)
+				return ("", result);	# still pending; caller may retry later
+			sys->sleep(2000);
+			waited += 2;
+			continue;
+		}
+		break;
+	}
+	if(result == "denied")
+		return (nil, "payment denied by wallet controller");
+	if(result == "expired")
+		return (nil, "payment approval window expired");
+	if(len result >= 6 && result[0:6] == "error:")
+		return (nil, result[6:]);
+
+	# Parse: "sig <hex> from <addr> nonce <hex> validafter <n> validbefore <n>"
+	sigstr := "";
+	addrstr := "";
+	nonce := "";
+	validafter := "";
+	validbefore := "";
+	(nil, toks) := sys->tokenize(result, " \t\n");
+	while(toks != nil && tl toks != nil) {
+		k := hd toks;
+		v := hd tl toks;
+		toks = tl tl toks;
+		case k {
+		"sig" =>		sigstr = v;
+		"from" =>	addrstr = v;
+		"nonce" =>	nonce = v;
+		"validafter" =>	validafter = v;
+		"validbefore" =>	validbefore = v;
+		}
+	}
+	if(sigstr == "" || addrstr == "" || nonce == "" ||
+	   validafter == "" || validbefore == "")
+		return (nil, "malformed authorization from wallet: " + result);
 
 	# Build PaymentPayload JSON
 	authobj := json->jvobject(
@@ -309,22 +356,66 @@ chaintonetwork(chain: string): string
 	return "eip155:1";	# default to mainnet
 }
 
+#
+# Parse "eip155:NNNN" → NNNN.  Returns 0 for anything that is not a
+# well-formed EIP-155 CAIP-2 id.
+#
+# This MUST NOT default to a real chain: wallet9p pins payments by
+# comparing this against the active network's chain id, so returning
+# 1 (mainnet) for unparseable input made that check pass — fail-open —
+# whenever the wallet happened to be on mainnet.
+#
 networktochainid(network: string): int
 {
-	# Parse "eip155:NNNN" → NNNN
-	if(len network > 7 && network[0:7] == "eip155:") {
-		rest := network[7:];
-		id := 0;
-		for(i := 0; i < len rest; i++) {
-			c := rest[i];
-			if(c >= '0' && c <= '9')
-				id = id * 10 + (c - '0');
-			else
-				break;
-		}
-		return id;
-	}
-	return 1;	# default mainnet
+	if(!validnetwork(network))
+		return 0;
+	rest := network[7:];
+	if(len rest > 9)
+		return 0;	# beyond what an int chain id can hold
+	id := 0;
+	for(i := 0; i < len rest; i++)
+		id = id * 10 + (rest[i] - '0');
+	return id;
+}
+
+#
+# Compute the EIP-712 digest of an EIP-3009 TransferWithAuthorization.
+# All inputs are strictly validated; wallet9p calls this so the signer
+# itself constructs the message it signs.
+#
+authdigest(network, asset, payto, from, amount: string,
+	validafter, validbefore: big, nonce: array of byte,
+	tokenname, tokenversion: string): (array of byte, string)
+{
+	chainid := networktochainid(network);
+	if(chainid <= 0)
+		return (nil, "unknown network: " + network);
+	if(ethcrypto->strtoaddr(asset) == nil)
+		return (nil, "invalid asset address");
+	if(ethcrypto->strtoaddr(payto) == nil)
+		return (nil, "invalid payto address");
+	if(ethcrypto->strtoaddr(from) == nil)
+		return (nil, "invalid from address");
+	if(ethcrypto->dectobe(amount) == nil)
+		return (nil, "invalid amount (must be integer base units)");
+	if(nonce == nil || len nonce != 32)
+		return (nil, "nonce must be 32 bytes");
+	if(validafter < big 0 || validbefore <= validafter)
+		return (nil, "invalid validity window");
+	if(tokenname == "" || len tokenname > 64 || len tokenversion > 16)
+		return (nil, "invalid token name/version");
+
+	domainhash := eip712domainhash(tokenname, tokenversion, chainid, asset);
+	structhash := eip712structhash(from, payto, amount,
+		sys->sprint("%bd", validafter), sys->sprint("%bd", validbefore),
+		ethcrypto->hexencode(nonce));
+	if(domainhash == nil || structhash == nil)
+		return (nil, "EIP-712 encoding failed");
+
+	digest := ethcrypto->eip712hash(domainhash, structhash);
+	if(digest == nil)
+		return (nil, "EIP-712 hash failed");
+	return (digest, nil);
 }
 
 #
@@ -434,18 +525,11 @@ pad32addr(addr: array of byte): array of byte
 	return r;
 }
 
-# Convert decimal string to big-endian bytes
+# Convert decimal string to big-endian bytes (strict; garbage -> nil,
+# which pad32 turns into an all-zero word — callers validate first)
 strtobigbytes(s: string): array of byte
 {
-	if(s == nil || s == "")
-		return array[0] of byte;
-	v := big 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c >= '0' && c <= '9')
-			v = v * big 10 + big (c - '0');
-	}
-	return ethcrypto->bigtobytes(v);
+	return ethcrypto->dectobe(s);
 }
 
 #
@@ -521,29 +605,84 @@ strip(s: string): string
 	return s;
 }
 
-daytime(): int
+#
+# Field validators for the wallet authorize protocol.
+#
+# The protocol is line-oriented "key value", so no field may contain a
+# newline, carriage return, or any other control character.  These are
+# deliberately conservative: anything unusual is rejected rather than
+# escaped, because the consequence of a mistake is a signed transfer.
+#
+
+# No control characters (including \n and \r), printable ASCII only
+noctl(s: string): int
 {
-	fd := sys->open("/dev/time", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	buf := array[64] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return 0;
-	# /dev/time returns microseconds; convert to seconds
-	s := string buf[0:n];
-	usec := big 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c >= '0' && c <= '9')
-			usec = usec * big 10 + big (c - '0');
-	}
-	return int (usec / big 1000000);
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] > '~')
+			return 0;
+	return 1;
 }
 
-readrandom(buf: array of byte)
+# "eip155:<digits>", nothing else
+validnetwork(s: string): int
 {
-	fd := sys->open("/dev/random", Sys->OREAD);
-	if(fd != nil)
-		sys->read(fd, buf, len buf);
+	if(s == nil || len s < 8 || len s > 32 || s[0:7] != "eip155:")
+		return 0;
+	rest := s[7:];
+	for(i := 0; i < len rest; i++)
+		if(!(rest[i] >= '0' && rest[i] <= '9'))
+			return 0;
+	return 1;
+}
+
+# Token name / version: short, printable, no control characters
+validtoken(s: string): int
+{
+	if(s == nil || len s == 0 || len s > 64)
+		return 0;
+	return noctl(s);
+}
+
+# Resource URL echoed back into the request line
+validurlfield(s: string): int
+{
+	if(s == nil || len s == 0 || len s > 1024)
+		return 0;
+	if(!noctl(s))
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == ' ')
+			return 0;
+	return 1;
+}
+
+# Sanitize an untrusted string for inclusion in an error message
+clean(s: string): string
+{
+	if(s == nil)
+		return "";
+	if(len s > 64)
+		s = s[0:64];
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c > '~')
+			c = '?';
+		r[len r] = c;
+	}
+	return r;
+}
+
+validacct(s: string): int
+{
+	if(s == nil || s == "" || s == "." || s == ".." || len s > 64)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+		return 0;
+	}
+	return 1;
 }

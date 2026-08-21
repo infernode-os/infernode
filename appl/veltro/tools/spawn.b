@@ -57,7 +57,7 @@ include "json.m";
 	JValue: import json;
 
 include "../tool.m";
-include "../nsconstruct.m";
+include "nsconstruct.m";
 	nsconstruct: NsConstruct;
 include "../subagent.m";
 include "agentlib.m";

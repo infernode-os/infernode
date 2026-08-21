@@ -17,6 +17,7 @@ include "sys.m";
 
 include "keyring.m";
 	kr: Keyring;
+	IPint: import kr;
 
 include "ethcrypto.m";
 
@@ -188,6 +189,18 @@ rlpencode_uint(v: big): array of byte
 	return rlpencode_bytes(b);
 }
 
+#
+# RLP-encode an unsigned integer given as big-endian bytes.
+# Leading zeros are stripped; zero encodes as the empty string (0x80).
+#
+rlpencode_bigbe(b: array of byte): array of byte
+{
+	b = minimalbe(b);
+	if(len b == 0)
+		return array[] of { byte 16r80 };
+	return rlpencode_bytes(b);
+}
+
 # Encode a length as big-endian bytes (no leading zeros)
 encodelen(n: int): array of byte
 {
@@ -238,14 +251,26 @@ signtx(tx: ref EthTx, privkey: array of byte): array of byte
 {
 	if(tx == nil || privkey == nil || len privkey != 32)
 		return nil;
+	if(tx.chainid <= 0)
+		return nil;
+	if(tx.nonce < big 0 || tx.gasprice < big 0 || tx.gaslimit <= big 0)
+		return nil;
 
 	dstbytes := tx.dst;
 	if(dstbytes == nil)
 		dstbytes = array[0] of byte;
+	# destination must be a full address or empty (contract creation)
+	if(len dstbytes != 0 && len dstbytes != 20)
+		return nil;
 
 	databytes := tx.data;
 	if(databytes == nil)
 		databytes = array[0] of byte;
+
+	# value is an unsigned big-endian integer, at most 32 bytes
+	valuebytes := minimalbe(tx.value);
+	if(len valuebytes > 32)
+		return nil;
 
 	# Build unsigned tx fields for signing hash
 	# Prepend in reverse order so the list ends up [nonce, gasprice, ..., chainid, 0, 0]
@@ -254,7 +279,7 @@ signtx(tx: ref EthTx, privkey: array of byte): array of byte
 	fields = rlpencode_uint(big 0) :: fields;		# empty r
 	fields = rlpencode_uint(big tx.chainid) :: fields;
 	fields = rlpencode_bytes(databytes) :: fields;
-	fields = rlpencode_uint(tx.value) :: fields;
+	fields = rlpencode_bigbe(valuebytes) :: fields;
 	fields = rlpencode_bytes(dstbytes) :: fields;
 	fields = rlpencode_uint(tx.gaslimit) :: fields;
 	fields = rlpencode_uint(tx.gasprice) :: fields;
@@ -276,18 +301,19 @@ signtx(tx: ref EthTx, privkey: array of byte): array of byte
 	sbytes := sig[32:64];
 	recid := int sig[64];
 
-	# EIP-155: v = recid + chainid*2 + 35
-	v := big (recid + tx.chainid * 2 + 35);
+	# EIP-155: v = recid + chainid*2 + 35 (big arithmetic — chainid*2+35
+	# overflows int for chain IDs near 2^31)
+	v := big recid + big tx.chainid * big 2 + big 35;
 
 	# Build signed tx: [nonce, gasprice, gaslimit, to, value, data, v, r, s]
 	# r and s are integers — strip leading zeros before RLP encoding
 	# Prepend in reverse order so list ends up in correct order
 	signed: list of array of byte;
-	signed = rlpencode_bytes(stripzeros(sbytes)) :: signed;
-	signed = rlpencode_bytes(stripzeros(rbytes)) :: signed;
+	signed = rlpencode_bigbe(sbytes) :: signed;
+	signed = rlpencode_bigbe(rbytes) :: signed;
 	signed = rlpencode_uint(v) :: signed;
 	signed = rlpencode_bytes(databytes) :: signed;
-	signed = rlpencode_uint(tx.value) :: signed;
+	signed = rlpencode_bigbe(valuebytes) :: signed;
 	signed = rlpencode_bytes(dstbytes) :: signed;
 	signed = rlpencode_uint(tx.gaslimit) :: signed;
 	signed = rlpencode_uint(tx.gasprice) :: signed;
@@ -360,6 +386,112 @@ stripzeros(b: array of byte): array of byte
 	if(i == 0)
 		return b;
 	return b[i:];
+}
+
+# Minimal big-endian representation of an unsigned integer:
+# all leading zeros stripped; zero becomes the empty array.
+minimalbe(b: array of byte): array of byte
+{
+	if(b == nil)
+		return array[0] of byte;
+	i := 0;
+	while(i < len b && b[i] == byte 0)
+		i++;
+	return b[i:];
+}
+
+#
+# Strict decimal string -> big-endian unsigned bytes (uint256).
+# Rejects empty strings, non-digit characters, >78 digits, and
+# values >= 2^256.  Returns nil on error; zero returns an empty array.
+#
+dectobe(s: string): array of byte
+{
+	if(s == nil || len s == 0 || len s > 78)
+		return nil;
+	for(i := 0; i < len s; i++)
+		if(!(s[i] >= '0' && s[i] <= '9'))
+			return nil;
+	ip := IPint.strtoip(s, 10);
+	if(ip == nil)
+		return nil;
+	b := ip.iptobebytes();
+	if(b == nil)
+		return nil;
+	b = minimalbe(b);
+	if(len b > 32)
+		return nil;
+	return b;
+}
+
+#
+# Compare two big-endian unsigned integers of any length.
+# -1 if a < b, 0 if a == b, 1 if a > b.
+#
+becmp(a, b: array of byte): int
+{
+	a = minimalbe(a);
+	b = minimalbe(b);
+	if(len a != len b) {
+		if(len a < len b)
+			return -1;
+		return 1;
+	}
+	for(i := 0; i < len a; i++) {
+		if(a[i] != b[i]) {
+			if(int a[i] < int b[i])
+				return -1;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+#
+# Add two big-endian unsigned integers.
+# Returns nil on overflow past 2^256-1.
+#
+beadd(a, b: array of byte): array of byte
+{
+	a = minimalbe(a);
+	b = minimalbe(b);
+	n := len a;
+	if(len b > n)
+		n = len b;
+	r := array[n + 1] of byte;
+	for(i := 0; i < len r; i++)
+		r[i] = byte 0;
+	carry := 0;
+	for(i = 0; i < n; i++) {
+		av := 0;
+		if(i < len a)
+			av = int a[len a - 1 - i];
+		bv := 0;
+		if(i < len b)
+			bv = int b[len b - 1 - i];
+		sum := av + bv + carry;
+		r[len r - 1 - i] = byte (sum & 16rff);
+		carry = sum >> 8;
+	}
+	r[0] = byte carry;
+	r = minimalbe(r);
+	if(len r > 32)
+		return nil;
+	return r;
+}
+
+#
+# Big-endian unsigned bytes -> decimal string (arbitrary precision).
+#
+betodec(b: array of byte): string
+{
+	b = minimalbe(b);
+	if(len b == 0)
+		return "0";
+	ip := IPint.bebytestoip(b);
+	if(ip == nil)
+		return "";
+	return ip.iptostr(10);
 }
 
 hextoval(c: int): int

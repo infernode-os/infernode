@@ -3926,7 +3926,8 @@ Keyring_secp256k1_pubkey(void *fp)
 	if(f->priv == H || f->priv->len != 32)
 		error(exBadKey);
 
-	secp256k1_pubkey(pub, f->priv->data);
+	if(secp256k1_pubkey(pub, f->priv->data) != 0)
+		return;	/* out-of-range key: return nil */
 	*f->ret = mem2array(pub, 65);
 }
 
@@ -3993,6 +3994,8 @@ Keyring_keccak256(void *fp)
 		return;
 
 	n = f->n;
+	if(n < 0)
+		n = 0;
 	if(n > f->buf->len)
 		n = f->buf->len;
 	if(f->digest->len < 32)

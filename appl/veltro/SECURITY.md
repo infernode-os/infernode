@@ -62,10 +62,17 @@ lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`
 control records.
 
 Wallet payments follow the same split. A `/n/wallet` grant is narrowed inside
-the agent namespace: agents can read account metadata, sign through factotum,
-and write per-account `pay` proposals, but cannot see root `ctl`, `pending`,
-`new`, or per-account `ctl`. Payment approval and wallet configuration remain
-trusted-controller actions outside the model namespace.
+the agent namespace: agents can read account metadata and write per-account
+`pay` proposals and structured `authorize` (x402/EIP-3009) requests, but cannot
+see root `ctl`, `pending`, `new`, or per-account `ctl`. There is no raw `sign`
+file at all: a hash-blind signing oracle over the spend key — signing an
+attacker-chosen 32-byte hash can authorize an arbitrary transfer — cannot be
+protected by namespace narrowing alone, so it was removed rather than hidden
+(`NsConstruct->walletcontrolpath`, shared with `tools9p`, still refuses it as a
+grant). wallet9p constructs everything it signs
+(transactions from `pay`, EIP-712 digests from `authorize`) and enforces budget
+and approval policy on every execution path. Payment approval and wallet
+configuration remain trusted-controller actions outside the model namespace.
 
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates

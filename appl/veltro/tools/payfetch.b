@@ -31,9 +31,15 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "publicnet.m";
+	publicnet: Publicnet;
+
 include "webclient.m";
 	webclient: Webclient;
 	Header, Response: import webclient;
+
+include "encoding.m";
+	base64: Encoding;
 
 include "x402.m";
 	x402: X402;
@@ -65,13 +71,25 @@ init(): string
 	err := webclient->init();
 	if(err != nil)
 		return "Webclient init: " + err;
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet == nil)
+		return "cannot load Publicnet";
+	publicnet->init();
 	x402 = load X402 X402->PATH;
 	if(x402 == nil)
 		return "cannot load X402";
 	err = x402->init();
 	if(err != nil)
 		return "X402 init: " + err;
+	base64 = load Encoding Encoding->BASE64PATH;
+	if(base64 == nil)
+		return "cannot load base64 encoding";
 	return nil;
+}
+
+enc64(s: string): string
+{
+	return base64->enc(array of byte s);
 }
 
 name(): string
@@ -93,10 +111,12 @@ doc(): string
 		"Behavior:\n" +
 		"  1. Fetches the URL normally\n" +
 		"  2. If the server returns 402 Payment Required with x402 headers,\n" +
-		"     automatically signs a payment and retries\n" +
+		"     requests a payment authorization from the wallet and retries\n" +
 		"  3. Reports what was paid before returning content\n\n" +
 		"The agent must have /n/wallet access (caps.paths must include /n/wallet).\n" +
-		"Budget limits set on the wallet account are enforced.\n";
+		"Budget and approval policy are enforced inside wallet9p: if the\n" +
+		"account requires approval, the fetch waits up to 90s for a trusted\n" +
+		"controller to approve, then reports pending if it hasn't been.\n";
 }
 
 schema(): string
@@ -129,6 +149,7 @@ exec(args: string): string
 	toks = tl toks;
 	acctname := "";
 	chain := "base";
+	chainoverride := 0;
 
 	while(toks != nil) {
 		flag := hd toks;
@@ -138,6 +159,7 @@ exec(args: string): string
 			toks = tl toks;
 		} else if(flag == "-c" && toks != nil) {
 			chain = hd toks;
+			chainoverride = 1;
 			toks = tl toks;
 		}
 	}
@@ -157,7 +179,8 @@ exec(args: string): string
 	if(!hasprefix(lurl, "http://") && !hasprefix(lurl, "https://"))
 		return "error: URL must start with http:// or https://";
 
-	# SSRF protection
+	# SSRF protection (same policy as webfetch; publicnet enforces the
+	# same ranges again at dial time on every hop)
 	host := extracthost(url);
 	if(isblocked(host))
 		return "error: requests to internal/private network addresses are not allowed";
@@ -191,25 +214,44 @@ exec(args: string): string
 	if(pr.accepts == nil && pr.errmsg != nil && pr.errmsg != "")
 		return "error: server payment error: " + pr.errmsg;
 
-	# Select payment option
-	opt := x402->selectoption(pr, chain);
+	# Select payment option: prefer the wallet's ACTIVE network (read
+	# from /n/wallet/network) so we never request an authorization the
+	# wallet will refuse; an explicit -c overrides.
+	opt: ref X402->PaymentReq;
+	walletnet := walletcaip2();
+	if(chainoverride)
+		opt = x402->selectoption(pr, chain);
+	else if(walletnet != "")
+		opt = selectbynetwork(pr, walletnet);
+	if(opt == nil)
+		opt = x402->selectoption(pr, chain);
 	if(opt == nil)
 		return "error: no compatible payment option for chain '" + chain + "'" +
 			"\nServer accepts: " + listnetworks(pr);
 
-	# Check budget before paying
-	budgeterr := checkwalletbudget(acctname, opt.amount);
-	if(budgeterr != nil)
-		return "error: budget check failed: " + budgeterr;
+	# Client-side sanity check on the quoted amount.  This is advisory
+	# only — the enforcing budget/approval checks run inside wallet9p,
+	# where the agent cannot bypass them.
+	if(!validamount(opt.amount))
+		return "error: server quoted a malformed payment amount: " + opt.amount;
 
-	# Sign payment authorization
-	(payload, aerr) := x402->authorize(opt, pr.resource, acctname);
-	if(aerr != nil)
+	# Request a signed authorization from wallet9p (budget + approval
+	# enforced there); poll up to 90s while approval is pending.
+	(payload, aerr) := x402->authorize(opt, pr.resource, acctname, 90);
+	if(aerr != nil) {
+		if(len aerr > 8 && aerr[0:8] == "pending:")
+			return "payment pending approval (" + aerr[8:] + ").\n" +
+				"A trusted controller must approve it in the wallet GUI\n" +
+				"(or via /n/wallet/ctl); retry this fetch after approval.";
 		return "error: payment authorization failed: " + aerr;
+	}
 
-	# Retry with PAYMENT-SIGNATURE header
+	# Retry with the payment header.  X-PAYMENT carries the payload
+	# base64-encoded per the x402 spec; the legacy PAYMENT-SIGNATURE
+	# header (raw JSON) is kept for older servers.
 	payhdrs := Header("User-Agent", "Veltro/1.0 (x402-enabled)") ::
 		Header("Accept", "text/html, application/json, text/plain, */*") ::
+		Header("X-PAYMENT", enc64(payload)) ::
 		Header("PAYMENT-SIGNATURE", payload) :: nil;
 
 	(resp2, err2) := dofetch("GET", url, payhdrs, nil);
@@ -220,7 +262,9 @@ exec(args: string): string
 		return sys->sprint("error: paid request returned HTTP %d", resp2.statuscode);
 
 	# Check settlement response if present
-	settlement := getheader(resp2.headers, "PAYMENT-RESPONSE");
+	settlement := getheader(resp2.headers, "X-PAYMENT-RESPONSE");
+	if(settlement == "")
+		settlement = getheader(resp2.headers, "PAYMENT-RESPONSE");
 	paidmsg := "";
 	if(settlement != "") {
 		(sr, nil) := x402->parsesettlement(settlement);
@@ -232,9 +276,6 @@ exec(args: string): string
 	} else {
 		paidmsg = sys->sprint("[Paid %s on %s]\n", opt.amount, opt.network);
 	}
-
-	# Record the spend
-	recordwalletspend(acctname, opt.amount);
 
 	return paidmsg + formatresponse(resp2);
 }
@@ -260,25 +301,38 @@ getdefaultaccount(): string
 	return "";
 }
 
-checkwalletbudget(acctname: string, amount: string): string
+# Read the wallet's active network as a CAIP-2 id ("eip155:NNNN")
+walletcaip2(): string
 {
-	# Write to the wallet account ctl to check budget
-	# For now, just verify the account exists
-	addr := readfile("/n/wallet/" + acctname + "/address");
-	if(addr == nil)
-		return "account '" + acctname + "' not found";
+	s := readfile("/n/wallet/network");
+	if(s == nil)
+		return "";
+	(nil, lines) := sys->tokenize(s, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(nil, toks) := sys->tokenize(hd lines, " \t");
+		if(toks != nil && hd toks == "caip2" && tl toks != nil)
+			return hd tl toks;
+	}
+	return "";
+}
+
+selectbynetwork(pr: ref X402->PaymentRequired, network: string): ref X402->PaymentReq
+{
+	for(l := pr.accepts; l != nil; l = tl l) {
+		if((hd l).network == network)
+			return hd l;
+	}
 	return nil;
 }
 
-recordwalletspend(acctname: string, amt: string)
+validamount(s: string): int
 {
-	if(!validaccount(acctname))
-		return;
-	fd := sys->open("/n/wallet/" + acctname + "/history", Sys->OWRITE);
-	if(fd != nil) {
-		msg := array of byte ("paid " + amt + "\n");
-		sys->write(fd, msg, len msg);
-	}
+	if(s == nil || s == "" || len s > 78)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(!(s[i] >= '0' && s[i] <= '9'))
+			return 0;
+	return 1;
 }
 
 # ── HTTP helpers ─────────────────────────────────────────────
@@ -374,80 +428,18 @@ validaccount(s: string): int
 	return 1;
 }
 
+# The URL host extractor and the SSRF blocklist live in publicnet,
+# the same module that re-checks the address at dial time. Local
+# copies of these two functions drifted apart across the fetch
+# tools; there is now one definition.
 extracthost(url: string): string
 {
-	s := url;
-	i := 0;
-	for(i = 0; i < len s; i++) {
-		if(i + 2 < len s && s[i] == '/' && s[i+1] == '/') {
-			s = s[i+2:];
-			break;
-		}
-	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '/') { s = s[0:i]; break; }
-	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '@') { s = s[i+1:]; break; }
-	}
-	if(len s > 0 && s[0] == '[') {
-		for(i = 1; i < len s; i++)
-			if(s[i] == ']')
-				return str->tolower(s[0:i+1]);
-		return str->tolower(s);
-	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == ':') { s = s[0:i]; break; }
-	}
-	return str->tolower(s);
+	return publicnet->urlhost(url);
 }
 
 isblocked(host: string): int
 {
-	if(len host > 2 && host[0] == '[' && host[len host - 1] == ']')
-		host = host[1:len host - 1];
-	if(host == "localhost" || host == "127.0.0.1" || host == "::1" ||
-	   host == "0.0.0.0" || host == "[::1]" || host == "[::0]" ||
-	   host == "0:0:0:0:0:0:0:1" || host == "::ffff:127.0.0.1" ||
-	   host == "0000:0000:0000:0000:0000:0000:0000:0001")
-		return 1;
-	if(hasprefix(host, "::"))
-		return 1;
-	if(hasprefix(host, "10."))
-		return 1;
-	if(hasprefix(host, "172.")) {
-		rest := host[4:];
-		for(i := 0; i < len rest; i++) {
-			if(rest[i] == '.') {
-				octet := int rest[0:i];
-				if(octet >= 16 && octet <= 31)
-					return 1;
-				break;
-			}
-		}
-	}
-	if(hasprefix(host, "192.168."))
-		return 1;
-	if(hasprefix(host, "169.254."))
-		return 1;
-	if(hasprefix(host, "fd") || hasprefix(host, "fc"))
-		return 1;
-	if(hasprefix(host, "fe80"))
-		return 1;
-	if(host == "metadata.google.internal" || host == "metadata")
-		return 1;
-	alldigits := len host > 0;
-	for(i := 0; i < len host; i++) {
-		if(host[i] < '0' || host[i] > '9') {
-			alldigits = 0;
-			break;
-		}
-	}
-	if(alldigits)
-		return 1;
-	if(hasprefix(host, "0x") || hasprefix(host, "0X"))
-		return 1;
-	return 0;
+	return publicnet->hostblocked(host);
 }
 
 hasprefix(s, prefix: string): int

@@ -137,6 +137,12 @@ TARG=\
 	opus_test.dis\
 	keyringinst_test.dis\
 	wallet_capability_test.dis\
+	secp256k1_test.dis\
+	ethcrypto_test.dis\
+	ethrpc_conv_test.dis\
+	publicnet_host_test.dis\
+	wallet_policy_test.dis\
+	x402_test.dis\
 	wiki9p_security_probe.dis\
 	contacts_tool_test.dis\
 	sms_tool_test.dis\
@@ -215,8 +221,8 @@ tooldoc_test.dis: tooldoc_test.b $ROOT/appl/veltro/agentlib.m
 tool_schema_test.dis: tool_schema_test.b $ROOT/appl/veltro/agentlib.m $ROOT/appl/veltro/tool.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tool_schema_test.b
 
-# pres_launch_test needs -I for appl/veltro/nsconstruct.m
-pres_launch_test.dis: pres_launch_test.b $ROOT/appl/veltro/nsconstruct.m
+# pres_launch_test uses nsconstruct.m (canonical copy in module/)
+pres_launch_test.dis: pres_launch_test.b $ROOT/module/nsconstruct.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw pres_launch_test.b
 
 # render_registry_test needs -I for appl/xenith/render.m

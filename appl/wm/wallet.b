@@ -55,7 +55,7 @@ AcctInfo: adt {
 
 # ── Modes ─────────────────────────────────────────────────────
 
-ModeView, ModeNewETH, ModeImport, ModePay: con iota;
+ModeView, ModeNewETH, ModeImport, ModePay, ModePending: con iota;
 
 Field: adt {
 	path:    string;
@@ -216,6 +216,7 @@ buildmenus()
 	tk->cmd(top, ".mainmenu add command -label {New Ethereum Account} -command {send act new}");
 	tk->cmd(top, ".mainmenu add command -label {Import Private Key} -command {send act import}");
 	tk->cmd(top, ".mainmenu add separator");
+	tk->cmd(top, ".mainmenu add command -label {Pending Payments} -command {send act pending}");
 	tk->cmd(top, ".mainmenu add command -label {Refresh} -command {send act refresh}");
 	tk->cmd(top, "menu .detailmenu");
 	tk->cmd(top, ".detailmenu add command -label {Send Payment} -command {send act pay}");
@@ -255,8 +256,82 @@ setmode(m: int)
 			}, "Import", "doimport");
 	ModePay =>
 		buildpay();
+	ModePending =>
+		buildpending();
 	}
 	tk->cmd(top, "update");
+}
+
+# ── Pending payment review (approve/deny) ─────────────────────
+
+buildpending()
+{
+	r := ".main.right";
+	tk->cmd(top, "label " + r + ".title -text {Pending Payments}");
+	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {8 4}");
+
+	raw := readwalletfile("", "pending");
+	(nil, lines) := sys->tokenize(raw, "\n");
+	nrows := 0;
+	for(; lines != nil; lines = tl lines){
+		ln := strip(hd lines);
+		if(ln == "" || ln == "(none)")
+			continue;
+		# "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
+		(ntoks, toks) := sys->tokenize(ln, " \t");
+		if(ntoks < 7)
+			continue;
+		id := hd toks;
+		kind := hd tl toks;
+		acct := hd tl tl toks;
+		token := hd tl tl tl toks;
+		amount := hd tl tl tl tl toks;
+		recip := hd tl tl tl tl tl toks;
+		net := hd tl tl tl tl tl tl toks;
+
+		# The network is part of what is being approved: the same
+		# amount settles very differently on a testnet and on mainnet.
+		desc := acct + ": " + amount + " " + token + " -> " + recip + " [" + net + "]";
+		if(kind == "x402")
+			desc = acct + ": x402 " + amount + " of " + token + " -> " + recip + " [" + net + "]";
+		if(len desc > 76)
+			desc = desc[0:76] + "...";
+
+		f := r + sys->sprint(".p%d", nrows);
+		tk->cmd(top, "frame " + f);
+		tk->cmd(top, "label " + f + ".l -text {#" + id + " " + desc + "}");
+		tk->cmd(top, "button " + f + ".ok -text {Approve} -command {send act approve " + id + "}");
+		tk->cmd(top, "button " + f + ".no -text {Deny} -command {send act deny " + id + "}");
+		tk->cmd(top, "pack " + f + ".l -side left -padx {12 8}");
+		tk->cmd(top, "pack " + f + ".no -side right -padx {4 12}");
+		tk->cmd(top, "pack " + f + ".ok -side right -padx 4");
+		tk->cmd(top, "pack " + f + " -side top -fill x -pady 2");
+		nrows++;
+	}
+	if(nrows == 0){
+		tk->cmd(top, "label " + r + ".none -text {No pending payments} -foreground " + dim);
+		tk->cmd(top, "pack " + r + ".none -side top -anchor w -padx 12 -pady 8");
+	}
+	tk->cmd(top, "button " + r + ".back -text {Back} -command {send act cancel}");
+	tk->cmd(top, "pack " + r + ".back -side top -anchor w -padx 12 -pady {8 4}");
+}
+
+doapprove(id: string)
+{
+	if(writewalletctl("ctl", "approve " + id) <= 0)
+		setstatus(errmsg("approve failed"));
+	else
+		setstatus("Payment " + id + " approved");
+	setmode(ModePending);
+}
+
+dodeny(id: string)
+{
+	if(writewalletctl("ctl", "deny " + id) <= 0)
+		setstatus(errmsg("deny failed"));
+	else
+		setstatus("Payment " + id + " denied");
+	setmode(ModePending);
 }
 
 buildview()
@@ -430,6 +505,13 @@ handleaction(a: string)
 	"new" =>     setmode(ModeNewETH);
 	"import" =>  setmode(ModeImport);
 	"pay" =>     if(selacct >= 0) setmode(ModePay);
+	"pending" => setmode(ModePending);
+	"approve" =>
+		if(tl toks != nil)
+			doapprove(hd tl toks);
+	"deny" =>
+		if(tl toks != nil)
+			dodeny(hd tl toks);
 	"refresh" =>
 		refreshaccounts();
 		setmode(ModeView);
@@ -520,11 +602,44 @@ dosend()
 	cmd := amount + " " + recipient;
 	if(len tokv >= 4 && tokv[0:4] == "USDC")
 		cmd = "usdc " + amount + " " + recipient;
-	if(writewalletctl(acct.name + "/pay", cmd) <= 0){
+	# Single ORDWR fd for write and read: wallet9p binds the result to
+	# the writing fid, so this read can only ever observe OUR proposal
+	# — never a concurrent agent proposal's pending id.  (A fresh fd
+	# would fall back to the account-level result, which an agent
+	# could have overwritten between our write and read.)
+	fd := sys->open(WALLET + "/" + acct.name + "/pay", Sys->ORDWR);
+	if(fd == nil){
 		setstatus(errmsg("payment failed"));
 		return;
 	}
-	txhash := strip(readwalletfile(acct.name, "pay"));
+	b := array of byte cmd;
+	if(sys->write(fd, b, len b) <= 0){
+		setstatus(errmsg("payment failed"));
+		return;
+	}
+	txhash := payresult(fd);
+	if(len txhash > 8 && txhash[0:8] == "pending:"){
+		# This payment was initiated by the user right here, so the
+		# trusted GUI approves its own proposal — but only after
+		# confirming the pending record is exactly what was just
+		# submitted.  Agent proposals still wait in the queue.
+		id := txhash[8:];
+		if(!pendingmatches(id, acct.name, amount, recipient)){
+			setstatus("Queued payment doesn't match this form — review Pending Payments");
+			setmode(ModePending);
+			return;
+		}
+		if(writewalletctl("ctl", "approve " + id) <= 0){
+			setstatus(errmsg("payment queued but approval failed"));
+			setmode(ModePending);
+			return;
+		}
+		txhash = payresult(fd);
+	}
+	if(len txhash > 6 && txhash[0:6] == "error:"){
+		setstatus("Payment failed: " + txhash[6:]);
+		return;
+	}
 	if(txhash != ""){
 		shown := txhash;
 		if(len shown > 20)
@@ -534,6 +649,39 @@ dosend()
 		setstatus("Payment submitted");
 	cachedbalance = "";
 	setmode(ModeView);
+}
+
+# Read the pay result on the given (writing) fid
+payresult(fd: ref Sys->FD): string
+{
+	rbuf := array[1024] of byte;
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	n := sys->read(fd, rbuf, len rbuf);
+	if(n <= 0)
+		return "";
+	return strip(string rbuf[0:n]);
+}
+
+# Confirm a pending record is a pay proposal with exactly the account,
+# amount, and recipient the user just entered — the guard that keeps
+# auto-approve from ever blessing someone else's queued payment.
+pendingmatches(id, acct, amount, recipient: string): int
+{
+	raw := readwalletfile("", "pending");
+	(nil, lines) := sys->tokenize(raw, "\n");
+	for(; lines != nil; lines = tl lines){
+		# "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
+		(ntoks, toks) := sys->tokenize(strip(hd lines), " \t");
+		if(ntoks < 7 || hd toks != id)
+			continue;
+		kind := hd tl toks;
+		pacct := hd tl tl toks;
+		pamount := hd tl tl tl tl toks;
+		precip := hd tl tl tl tl tl toks;
+		return kind == "pay" && pacct == acct &&
+			pamount == amount && precip == recipient;
+	}
+	return 0;
 }
 
 netchange()
@@ -660,19 +808,96 @@ loadhistory(acctname: string)
 
 fmthistory(line: string): string
 {
-	(nil, toks) := sys->tokenize(line, " \t");
-	if(toks != nil && hd toks == "pay")
-		toks = tl toks;
-	amount := ""; recip := ""; txhash := "";
-	if(toks != nil){ amount = hd toks; toks = tl toks; }
-	if(toks != nil){ recip = hd toks; toks = tl toks; }
-	if(toks != nil){ txhash = hd toks; }
+	(kind, token, amount, recip, txhash) := parsehistory(line);
+	if(kind == "")
+		return line;
 	if(len recip > 12)
 		recip = recip[0:6] + ".." + recip[len recip - 4:];
-	out := amount + " -> " + recip;
+	out := amount;
+	if(token != "")
+		out += " " + token;
+	out += " -> " + recip;
 	if(len txhash > 10)
 		out += "  tx:" + txhash[0:10] + "..";
 	return out;
+}
+
+#
+# wallet9p history lines are "<epoch> <kind> ..." :
+#   <ts> pay  <token> <amount> <recipient> <txhash>
+#   <ts> x402 <amount> <asset> <payto>
+# The leading timestamp and the token field were added when history
+# became an audit trail; parse defensively so a line written by an
+# older server (no timestamp, no token) still renders.
+#
+parsehistory(line: string): (string, string, string, string, string)
+{
+	(nil, toks) := sys->tokenize(line, " \t");
+	if(toks == nil)
+		return ("", "", "", "", "");
+
+	# skip a leading epoch timestamp if present
+	if(alldigits(hd toks)){
+		toks = tl toks;
+		if(toks == nil)
+			return ("", "", "", "", "");
+	}
+
+	kind := hd toks;
+	toks = tl toks;
+
+	if(kind == "x402"){
+		amount := next(toks); toks = rest(toks);
+		asset := next(toks); toks = rest(toks);
+		payto := next(toks);
+		return ("x402", shortasset(asset), amount, payto, "");
+	}
+	if(kind != "pay")
+		return ("", "", "", "", "");
+
+	# "pay <token> <amount> <recipient> <txhash>"; a line from an older
+	# server omits the token, in which case the next field is numeric.
+	token := next(toks);
+	if(alldigits(token)){
+		amount := token; toks = rest(toks);
+		recip := next(toks); toks = rest(toks);
+		return ("pay", "", amount, recip, next(toks));
+	}
+	toks = rest(toks);
+	amount := next(toks); toks = rest(toks);
+	recip := next(toks); toks = rest(toks);
+	return ("pay", token, amount, recip, next(toks));
+}
+
+next(l: list of string): string
+{
+	if(l == nil)
+		return "";
+	return hd l;
+}
+
+rest(l: list of string): list of string
+{
+	if(l == nil)
+		return nil;
+	return tl l;
+}
+
+alldigits(s: string): int
+{
+	if(s == nil || s == "")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+shortasset(a: string): string
+{
+	if(len a > 12)
+		return a[0:6] + ".." + a[len a - 4:];
+	return a;
 }
 
 selectedtxhash(): string
@@ -684,14 +909,8 @@ selectedtxhash(): string
 	i := 0;
 	for(l := historyraw; l != nil; l = tl l){
 		if(i == idx){
-			(nil, toks) := sys->tokenize(hd l, " \t");
-			if(toks != nil && hd toks == "pay")
-				toks = tl toks;
-			if(toks != nil) toks = tl toks;	# amount
-			if(toks != nil) toks = tl toks;	# recipient
-			if(toks != nil)
-				return hd toks;
-			return "";
+			(nil, nil, nil, nil, txhash) := parsehistory(hd l);
+			return txhash;
 		}
 		i++;
 	}

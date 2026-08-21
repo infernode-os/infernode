@@ -1,6 +1,6 @@
-# Infernode - Development Guide for Claude
+# InferNode - Development Guide for Claude
 
-This guide ensures Claude Code works correctly with the Infernode (Inferno® OS) codebase.
+This guide ensures Claude Code works correctly with the InferNode (Inferno® OS) codebase.
 
 ## JIT Compiler Availability
 
@@ -130,7 +130,7 @@ The Inferno® shell is rc-style, not POSIX sh:
 
 ## Testing System
 
-Infernode uses a custom testing framework (`module/testing.m`) for Limbo unit tests.
+InferNode uses a custom testing framework (`module/testing.m`) for Limbo unit tests.
 
 ### Running Tests
 
@@ -347,6 +347,13 @@ timeoutTask(ch: chan of int, ms: int)
 | `xenith_concurrency_test.b` | Xenith concurrent operations |
 | `xenith_exit_test.b` | Xenith exit handling |
 | `sdl3_test.b` | SDL3 GUI backend |
+| `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
+| `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
+| `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
+| `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
+| `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
+| `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
+| `wallet_capability_test.b` | Wallet agent-namespace narrowing |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

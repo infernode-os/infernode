@@ -28,6 +28,9 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "publicnet.m";
+	publicnet: Publicnet;
+
 include "webclient.m";
 	webclient: Webclient;
 
@@ -58,6 +61,10 @@ init(): string
 	err := webclient->init();
 	if(err != nil)
 		return "Webclient init: " + err;
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet == nil)
+		return "cannot load Publicnet";
+	publicnet->init();
 	return nil;
 }
 
@@ -620,92 +627,18 @@ splitlines(s: string): list of string
 
 # ---- SSRF protection (same as http.b) ----
 
-# Extract host from URL
+# The URL host extractor and the SSRF blocklist live in publicnet,
+# the same module that re-checks the address at dial time. Local
+# copies of these two functions drifted apart across the fetch
+# tools; there is now one definition.
 extracthost(url: string): string
 {
-	s := url;
-	i := 0;
-	for(i = 0; i < len s; i++) {
-		if(i + 2 < len s && s[i] == '/' && s[i+1] == '/') {
-			s = s[i+2:];
-			break;
-		}
-	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '/') {
-			s = s[0:i];
-			break;
-		}
-	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == '@') {
-			s = s[i+1:];
-			break;
-		}
-	}
-	if(len s > 0 && s[0] == '[') {
-		for(i = 1; i < len s; i++) {
-			if(s[i] == ']')
-				return str->tolower(s[0:i+1]);
-		}
-		return str->tolower(s);
-	}
-	for(i = 0; i < len s; i++) {
-		if(s[i] == ':') {
-			s = s[0:i];
-			break;
-		}
-	}
-	return str->tolower(s);
+	return publicnet->urlhost(url);
 }
 
-# Check if host is blocked (internal/private/metadata)
 isblocked(host: string): int
 {
-	if(len host > 2 && host[0] == '[' && host[len host - 1] == ']')
-		host = host[1:len host - 1];
-	if(host == "localhost" || host == "127.0.0.1" || host == "::1" ||
-	   host == "0.0.0.0" || host == "[::1]" || host == "[::0]" ||
-	   host == "0:0:0:0:0:0:0:1" || host == "::ffff:127.0.0.1" ||
-	   host == "0000:0000:0000:0000:0000:0000:0000:0001")
-		return 1;
-	if(hasprefix(host, "::"))
-		return 1;
-	if(hasprefix(host, "10."))
-		return 1;
-	if(hasprefix(host, "172.")) {
-		rest := host[4:];
-		for(i := 0; i < len rest; i++) {
-			if(rest[i] == '.') {
-				octet := int rest[0:i];
-				if(octet >= 16 && octet <= 31)
-					return 1;
-				break;
-			}
-		}
-	}
-	if(hasprefix(host, "192.168."))
-		return 1;
-	if(hasprefix(host, "169.254."))
-		return 1;
-	if(hasprefix(host, "fd") || hasprefix(host, "fc"))
-		return 1;
-	if(hasprefix(host, "fe80"))
-		return 1;
-	if(host == "metadata.google.internal" || host == "metadata")
-		return 1;
-	alldigits := len host > 0;
-	for(i := 0; i < len host; i++) {
-		if(host[i] < '0' || host[i] > '9') {
-			alldigits = 0;
-			break;
-		}
-	}
-	if(alldigits)
-		return 1;
-	if(hasprefix(host, "0x") || hasprefix(host, "0X"))
-		return 1;
-	return 0;
+	return publicnet->hostblocked(host);
 }
 
 # ---- Utility functions ----

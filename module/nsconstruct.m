@@ -85,6 +85,13 @@ NsConstruct: module {
 	# Writes to /tmp/veltro/.ns/audit/{id}.ns
 	emitauditlog: fn(id: string, ops: list of string);
 
+	# True if `path` names a per-account wallet control surface that
+	# must never be granted to an agent (per-account `ctl`, and the
+	# retired `sign` oracle). Exported so tools9p and nsconstruct
+	# cannot drift apart on it: two copies of a security predicate
+	# that disagree mean one of them re-opens what the other closed.
+	walletcontrolpath: fn(path: string): int;
+
 	# Clean up shadow directories for the current process.
 	# Call on agent exit to reclaim /tmp/veltro/.ns/shadow/{pid}-* entries.
 	cleanup: fn();

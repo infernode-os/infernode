@@ -58,7 +58,7 @@ stored in factotum and are not written under `/lib/veltro`.
 
 ### Themes
 
-Lucifer ships with two themes:
+Lucia ships with two themes:
 
 - **brimstone** — dark theme (default)
 - **halo** — light theme (Plan 9-inspired)

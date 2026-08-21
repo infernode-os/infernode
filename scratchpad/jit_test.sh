@@ -39,7 +39,7 @@ esac
 
 # Find emulator binary
 EMUBIN=""
-for name in o.emu Infernode; do
+for name in o.emu InferNode; do
     if [[ -x "$ROOT/emu/$EMUHOST/$name" ]]; then
         EMUBIN="$ROOT/emu/$EMUHOST/$name"
         break

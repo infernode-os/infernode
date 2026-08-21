@@ -7,8 +7,11 @@ implement ToolWallet;
 # filesystem at /n/wallet/.  The agent writes commands, the tool
 # reads/writes the appropriate wallet9p files.
 #
-# The agent NEVER sees private keys or arbitrary hash signing. Agents queue
-# proposals; trusted wallet9p approval code signs committed payments via factotum.
+# The agent NEVER sees private keys — signing happens inside
+# wallet9p, which retrieves keys from factotum.  There is
+# deliberately no raw signing command: agents queue payment
+# proposals (pay) or structured x402 authorizations (payfetch);
+# budget and approval policy are enforced inside wallet9p.
 #
 # Usage:
 #   wallet accounts                    List all wallet accounts
@@ -16,6 +19,7 @@ implement ToolWallet;
 #   wallet balance <account>           Show balance
 #   wallet chain <account>             Show chain name
 #   wallet history <account>           Show recent transactions
+#   wallet network                     Show the active network
 #   wallet pay <account> <args>        Queue a payment proposal
 #
 
@@ -64,15 +68,12 @@ doc(): string
 		"  wallet balance <account>                     Show balance (USDC + ETH)\n" +
 		"  wallet chain <account>                       Show blockchain network\n" +
 		"  wallet history <account>                     Show recent transactions\n" +
-		"  wallet network                               Show current network\n" +
-		"  wallet network <name>                        Switch network\n" +
+		"  wallet network                               Show the active network\n" +
 		"  wallet pay <account> <wei> <address>         Queue ETH payment proposal\n" +
 		"  wallet pay <account> usdc <amount> <address> Queue USDC payment proposal\n\n" +
-		"Networks: Ethereum Sepolia, Base Sepolia, Ethereum Mainnet, Base\n\n" +
 		"Examples:\n" +
 		"  wallet accounts\n" +
 		"  wallet balance myaccount\n" +
-		"  wallet network Base Sepolia\n" +
 		"  wallet pay myaccount 1000 0xRecipientAddress          Send 1000 wei\n" +
 		"  wallet pay myaccount usdc 1000000 0xRecipientAddress  Send 1 USDC\n" +
 		"  wallet pay stripe-acct 500 'Payment for service'     Stripe: $5.00\n\n" +
@@ -80,23 +81,26 @@ doc(): string
 		"  eth/ethereum  — Ethereum/Base crypto wallet (secp256k1)\n" +
 		"  stripe/fiat   — Stripe fiat payments (requires API key in factotum)\n\n" +
 		"Notes:\n" +
-		"  - ETH amounts are always in wei (1 ETH = 10^18 wei, 1 gwei = 10^9 wei)\n" +
-		"  - USDC amounts are in base units (1 USDC = 1000000)\n" +
-		"  - Stripe amounts are in cents (500 = $5.00 USD)\n" +
+		"  - Amounts must be plain integers in base units: wei for ETH\n" +
+		"    (1 ETH = 10^18 wei), 1 USDC = 1000000, cents for Stripe\n" +
+		"  - Payments are proposals: they wait for trusted approval unless\n" +
+		"    the account was explicitly configured otherwise\n" +
 		"  - Private keys are never exposed to the agent\n" +
-		"  - Budget limits are enforced server-side\n";
+		"  - Budget limits are enforced server-side in wallet9p\n" +
+		"  - Switching networks is a trusted operation (wallet GUI or\n" +
+		"    /n/wallet/ctl), not available to agents\n";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"wallet\"," +
-		"\"description\":\"Cryptocurrency and fiat payment operations via /n/wallet. Private keys are never exposed; budget limits are enforced server-side.\"," +
+		"\"description\":\"Cryptocurrency and fiat payment operations via /n/wallet. Private keys are never exposed; payments are proposals that need trusted approval; budget limits are enforced server-side.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"command\":{\"type\":\"string\",\"description\":\"One of: accounts, address, balance, chain, history, network, pay.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"For address/balance/chain/history: account name. For network: omit to read, or pass the network name to switch. For pay: <account> <wei> <to-address> for ETH, or <account> usdc <amount> <to-address> for USDC. Omit for accounts.\"}" +
+				"\"args\":{\"type\":\"string\",\"description\":\"For address/balance/chain/history: account name. For network: omit (read-only). For pay: <account> <wei> <to-address> for ETH, or <account> usdc <amount> <to-address> for USDC; amounts are plain integers in base units. Omit for accounts.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -146,16 +150,9 @@ exec(args: string): string
 				"example: wallet pay myaccount usdc 1000000 0x742d35Cc6634C0532925a3b844Bc9";
 		return dopay(stripquotes(hd rest), tl rest);
 	"network" =>
-		if(rest == nil)
-			return donetwork(nil);
-		# Rejoin network name (may have spaces)
-		nname := "";
-		for(r := rest; r != nil; r = tl r) {
-			if(nname != "")
-				nname += " ";
-			nname += hd r;
-		}
-		return donetwork(nname);
+		if(rest != nil)
+			return "error: switching networks is a trusted operation (use the wallet GUI); 'wallet network' shows the active network";
+		return donetwork();
 	"help" =>
 		if(rest == nil)
 			return doc();
@@ -194,11 +191,10 @@ cmdhelp(cmd: string): string
 			"  wallet pay myaccount 1000 0x742d35Cc...\n" +
 			"  wallet pay myaccount usdc 1000000 0x742d35Cc...";
 	"network" =>
-		return "wallet network\n" +
-			"wallet network <name>\n\n" +
-			"Show or switch the active network.\n" +
-			"Available: Ethereum Sepolia, Base Sepolia, Ethereum Mainnet, Base\n" +
-			"example: wallet network Base Sepolia";
+		return "wallet network\n\n" +
+			"Show the active network (name, chain id, USDC contract).\n" +
+			"Switching networks is a trusted operation done from the\n" +
+			"wallet GUI or /n/wallet/ctl, not from this tool.";
 	* =>
 		return "no specific help for '" + cmd + "'\n" + doc();
 	}
@@ -235,38 +231,35 @@ dopay(acct: string, args: list of string): string
 		cmd += hd args;
 	}
 
+	# Single fd for write then read: wallet9p binds the result to the
+	# writing fid, so the read must happen on the same one.
 	path := WALLET_MOUNT + "/" + acct + "/pay";
-	n := writefile(path, cmd);
+	fd := sys->open(path, Sys->ORDWR);
+	if(fd == nil)
+		return sys->sprint("pay failed: cannot open %s: %r", path);
+	b := array of byte cmd;
+	n := sys->write(fd, b, len b);
 	if(n <= 0)
 		return sys->sprint("pay failed: %r");
-
-	# Read back pending ID or txhash
-	result := readfile(path);
-	if(result == nil || result == "")
+	rbuf := array[1024] of byte;
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	rn := sys->read(fd, rbuf, len rbuf);
+	if(rn <= 0)
 		return "payment proposal submitted";
-	result = str->take(result, "^\n");
+
+	result := str->take(string rbuf[0:rn], "^\n");
 	if(len result >= 8 && result[0:8] == "pending:")
-		return "payment pending approval: " + result[8:];
+		return "payment pending approval: " + result[8:] +
+			"\nA trusted controller must approve it before it executes.";
 	return "tx: " + result;
 }
 
-donetwork(name: string): string
+donetwork(): string
 {
-	if(name == nil) {
-		# Read current network
-		s := readfile(WALLET_MOUNT + "/ctl");
-		if(s == nil)
-			return "cannot read wallet ctl";
-		return s;
-	}
-	if(!validnetwork(name))
-		return "error: unknown or unsafe network name";
-	# Set network — reconstruct name with spaces for multi-word names
-	# e.g. "Base" or "Ethereum Sepolia" or "Base Sepolia"
-	n := writefile(WALLET_MOUNT + "/ctl", "network " + name);
-	if(n <= 0)
-		return sys->sprint("network switch failed: %r");
-	return "network set to " + name;
+	s := readfile(WALLET_MOUNT + "/network");
+	if(s == nil)
+		return "cannot read wallet network";
+	return s;
 }
 
 readfile(path: string): string

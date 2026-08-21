@@ -3,11 +3,17 @@ spawn - Parallel subagents with isolated namespaces
   Spawn -- tools=<tools> :: <task>
   Spawn -- tools=t1 :: task A -- tools=t2 :: task B   (parallel)
 
-  tools=     (required) Comma-separated: "read,list,grep"
+  Native tool-call form:
+  {"agents":[{"task":"task A","tools":["read","grep"]}]}
+
+  tools=     Comma-separated in the text form; array in native tool calls.
+             Omitted native tool grants default to plan only.
   paths=     Host paths: "/n/local/Users/me/src"
   agenttype= explore | plan | task | default
-  model=     haiku (default) | sonnet | opus
+  model=     Optional model name; omitted uses the llmsrv backend default.
+  shellcmds= Named top-level commands; effective only with an exec grant.
 
-Results: === Subagent N: task === blocks. Task must not contain ' -- '.
+Results: === Subagent N: task === blocks. Use native tool-call form when task
+text contains legacy separators such as ' -- ' or ' :: '.
 
   Spawn -- tools=read,list :: summarize /appl/veltro

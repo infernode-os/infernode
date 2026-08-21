@@ -9,8 +9,9 @@
 # Capability attenuation is natural: children fork an already-restricted
 # namespace and can only narrow further.
 #
-# Replaces v2's NEWNS + sandbox directory construction with zero file copying,
-# no sandbox directory management, and no NEWNS bootstrap problem.
+# Replaces v2's NEWNS + copied sandbox with zero file copying and no NEWNS
+# bootstrap problem. Bind shadows are physical directories and are reclaimed
+# by the trusted tools9p cleanup loop.
 #
 
 NsConstruct: module {
@@ -59,14 +60,14 @@ NsConstruct: module {
 
 	# Restrict a directory to only the allowed entries.
 	# Creates shadow dir, binds allowed items into it, replaces target with MREPL.
-	# writable=1 adds Sys->MCREATE to the final bind (needed for /tmp).
-	# writable=0 for all read-only directories (/dis, /lib, /dev, /n, /).
+	# writable=1 adds Sys->MCREATE to the final and inner binds. Use it only
+	# for explicitly writable views such as /tmp and proposal endpoints.
 	# Items not in allowed list become invisible after the bind-replace.
 	# Returns nil on success, error string on failure.
 	restrictdir: fn(target: string, allowed: list of string, writable: int): string;
 
-	# Apply full namespace restriction policy using restrictdir() calls
-	# Restricts /dis, /dev, /n, /lib, /tmp based on capabilities
+	# Apply the full namespace policy, including /dis, /dev, /n, /mnt,
+	# /lib, /env, /prog, /tool, activity scratch, /tmp, and root.
 	# Returns nil on success, error string on failure
 	restrictns: fn(caps: ref Capabilities): string;
 
@@ -82,7 +83,7 @@ NsConstruct: module {
 	verifyns: fn(expected: list of string): string;
 
 	# Emit audit log of namespace restriction operations
-	# Writes to /tmp/veltro/.ns/audit/{id}.ns
+	# Writes to the trusted backing tree under /tmp/.veltro-ns/audit.
 	emitauditlog: fn(id: string, ops: list of string);
 
 	# True if `path` names a per-account wallet control surface that
@@ -93,6 +94,6 @@ NsConstruct: module {
 	walletcontrolpath: fn(path: string): int;
 
 	# Clean up shadow directories for the current process.
-	# Call on agent exit to reclaim /tmp/veltro/.ns/shadow/{pid}-* entries.
+	# Call on agent exit to reclaim /tmp/.veltro-ns/shadow/{pid}-* entries.
 	cleanup: fn();
 };

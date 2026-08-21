@@ -136,6 +136,22 @@ single-quote based, with `''` to embed a quote. A backgrounded
 remember that in test scripts. `doc/sh.ms` is the full paper;
 `man/1/sh` the reference.
 
+Two runtime behaviors that have broken real boots and tests:
+
+- **Concatenating with an empty list raises.** Variables are
+  lists, and `$var^/path` with an empty `$var` aborts the script
+  with `sh: null list in concatenation` — it does not interpolate
+  to `/path` the way `"$var/path"` would in POSIX sh. Guard
+  anything that might be empty: `if {! ~ $#var 0} { ... }`.
+  In a boot script, an unguarded probe like this takes down the
+  whole boot for every user.
+- **A failed redirection raises, even inside `if {...}`.** To
+  assert "writing this file fails", let the *command* attempt the
+  open (`cp /dev/null $f`), not a sh redirection (`echo x > $f`)
+  — the latter aborts the script instead of failing the
+  condition. See the contract-test step of
+  [TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md).
+
 
 ## Where tests go
 

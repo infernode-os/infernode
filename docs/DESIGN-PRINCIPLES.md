@@ -453,6 +453,7 @@ any code is written:
 | JSON crossing a 9P interface | Why isn't the hierarchy the schema? ([9p-data-conventions.md](9p-data-conventions.md)) |
 | A policy check on a path the caller can name | Why is the path nameable at all? |
 | A config file a service parses at startup | Why not a `ctl` file — or a mount? |
+| Boot (or a service) *executes* a file written outside the tree | Configuration is data: parse `key value` lines or accept ctl writes. A host-writable script run at boot is a persistence hook, not a config. |
 | A client library other programs must link | Why isn't `open`/`read`/`write` enough? |
 | A daemon with a bespoke socket protocol | Why not a 9P server? |
 | A central registry/manager/bus | What existing mechanism composes instead? |

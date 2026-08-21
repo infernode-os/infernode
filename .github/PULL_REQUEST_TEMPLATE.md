@@ -20,3 +20,12 @@ How was this tested?
 - [ ] No `.dis` build artifacts committed from `appl/` or `tests/`
 - [ ] Documentation updated (if applicable)
 - [ ] No secrets, API keys, or credentials included
+
+The InferNode way (see [docs/INFERNODE-WAY.md](../blob/master/docs/INFERNODE-WAY.md); check what applies):
+
+- [ ] New capabilities are exposed as file interfaces (9P), not libraries/RPC/bespoke protocols
+- [ ] Data crossing 9P interfaces is plain text (no JSON inside the namespace)
+- [ ] Access restriction is namespace shape (bind/mount), not policy checks on nameable paths
+- [ ] New service/tool followed a namespace-sketch proposal issue (for non-trivial interfaces)
+- [ ] Scripts that run inside Inferno are rc-style sh (no `&&`/`||`) and committed executable
+- [ ] Irreversible/credentialed actions emit audit records; agent-facing effects have provenance emitters

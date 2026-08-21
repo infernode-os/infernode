@@ -26,7 +26,18 @@ auth/factotum &
 sleep 1
 /dis/veltro/wallet9p.dis &
 sleep 2
-/dis/tests/wallet_policy_test.dis
+# The policy suite lands in /dis/tests via `mk install`, but CI compiles
+# tests straight into /tests. Accept either; a missing binary must be a
+# loud failure, not a silent pass.
+if {ftest -f /dis/tests/wallet_policy_test.dis} {
+	/dis/tests/wallet_policy_test.dis
+} {
+	if {ftest -f /tests/wallet_policy_test.dis} {
+		/tests/wallet_policy_test.dis
+	} {
+		echo 'FAIL: wallet_policy_test.dis not found in /dis/tests or /tests'
+	}
+}
 echo '=== SCRIPT DONE ==='
 INFERNO
 

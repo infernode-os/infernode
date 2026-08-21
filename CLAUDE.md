@@ -2,6 +2,17 @@
 
 This guide ensures Claude Code works correctly with the InferNode (Inferno® OS) codebase.
 
+## Design Orientation (read before designing anything new)
+
+The design philosophy — namespace-as-capability, file interfaces not APIs,
+text not JSON, mechanism not policy — is in
+[docs/INFERNODE-WAY.md](docs/INFERNODE-WAY.md), with wrong/right examples
+from this tree. New services start with a namespace sketch in an issue, not
+with code. Limbo is close to Go:
+[docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md).
+Task playbooks (compile loop, tests, headless GUI harness, authoring 9P
+servers) are project skills under `.claude/skills/`.
+
 ## JIT Compiler Availability
 
 **AMD64 (x86-64) and ARM64 have JIT compilers.** The ARM64 JIT (`libinterp/comp-arm64.c`) supports both macOS (Apple Silicon) and Linux (e.g. NVIDIA Jetson). Run with `emu -c1` to enable JIT compilation, `emu -c0` for interpreter only.

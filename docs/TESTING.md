@@ -224,9 +224,15 @@ The following require manual verification or a running full Lucifer session:
    The `tooluse_test` covers the protocol, but a complete multi-turn agent session with
    real tool use requires llmsrv and a user prompt.
 
-2. **GUI rendering** — lucifer's draw stack (zone layout, font rendering, PDF display)
-   cannot be tested headlessly. `luciuisrv_test` covers the 9P state machine; the
-   rendering layer is verified manually.
+2. **GUI rendering** — partially automated, contrary to what this section used
+   to say. Headless harnesses exist and run in CI: full Lucifer boots under
+   `SDL_VIDEODRIVER=dummy` with a `/mnt/ui` driver script
+   (`tests/host/presentation_fileopen_test.sh`), Tk command lists render
+   off-screen to PNG (`tools/tk-snapshot.sh`, `tests/tkrender.b`,
+   `tests/tkimgrender.b`), and a live display can be screenshotted with
+   `scap` + `tools/p9img2png.py`. See the `gui-test` skill
+   (`.claude/skills/gui-test/SKILL.md`) for the recipes. What still needs
+   eyes: subjective visual quality and interaction feel.
 
 3. **Context zone → lucibridge sync** — the full chain "user clicks [-] on tool → lucictx
    writes to /tool/ctl → lucibridge picks up change on next turn → LLM loses schema"

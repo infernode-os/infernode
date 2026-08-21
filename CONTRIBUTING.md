@@ -10,9 +10,35 @@ cryptography. Contributions of all kinds are welcome — from typo fixes to new
 If you're new to the project:
 
 1. Read the [Quick Start Guide](QUICKSTART.md) to build and run InferNode
-2. Browse [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a system overview
-3. Try the [Interactive Tour](RUN_TOUR.md) to explore features hands-on
-4. Look at issues labeled **good first issue** for approachable tasks
+2. Read [The InferNode Way](docs/INFERNODE-WAY.md) — how design works here,
+   and why (this is the one document that will save you the most time)
+3. Browse [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a system overview
+4. Try the [Interactive Tour](RUN_TOUR.md) to explore features hands-on
+5. Look at issues labeled **good first issue** for approachable tasks
+
+## The InferNode Way
+
+InferNode follows the Plan 9 / Inferno design tradition, taken seriously:
+every capability is a file server, the namespace is both the API schema and
+the security mechanism, and data crossing a 9P interface is plain text.
+Designs that are idiomatic elsewhere — REST endpoints, JSON configs, client
+SDKs, policy middleware — do not compose with this system and will be asked
+to change in review.
+
+To make that painless rather than painful:
+
+- **Read [docs/INFERNODE-WAY.md](docs/INFERNODE-WAY.md) before designing
+  anything.** It explains the head-space with concrete wrong/right examples
+  from this codebase, and lists the subsystems (audit, provenance,
+  persistence, factotum, wallet) new work is expected to compose with.
+- **Propose a namespace sketch first.** For a new service or 9P tool, open
+  an issue with the file tree you intend to serve, each file's read/write
+  behavior, and an example shell session — before writing code. A sketch is
+  reviewed in minutes; most design feedback happens there, where changing
+  course is free. Use the "New service / tool proposal" issue template.
+- **New to Limbo?** It's close to Go, by ancestry:
+  [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md)
+  maps the concepts and lists the gotchas.
 
 ## What InferNode Needs
 
@@ -251,6 +277,10 @@ vectors for decapsulation to verify round-trip correctness.
 - **Update docs** when changing interfaces or adding features
 - **Run the test suite** before submitting
 - **Describe the motivation** — what problem does this solve?
+- **Follow [The InferNode Way](docs/INFERNODE-WAY.md)** — file interfaces
+  not APIs, text not JSON inside the namespace, namespace shape not policy
+  code. Reviewers will point at specific sections of that document rather
+  than re-arguing each case.
 
 CI will automatically run:
 - Build verification (Linux x86-64, macOS ARM64)
@@ -288,7 +318,9 @@ it up quickly:
 - `alt` statement for selecting across multiple channels
 
 The best way to learn is to read `appl/cmd/` for simple utilities and
-`module/sys.m` for the system call interface.
+`module/sys.m` for the system call interface. If you come from Go, start
+with [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md);
+the original language paper is in-tree at `doc/limbo/limbo.ms`.
 
 ### The Inferno Shell
 

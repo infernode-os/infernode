@@ -67,8 +67,10 @@ Fast variant when you only need luciuisrv semantics:
 tools/tk-snapshot.sh cmds.txt out.png 360 240
 ```
 
-`cmds.txt` is one Tk command per line (`#` comments; `\n` becomes a real
-newline). Internally: `tests/tkrender.b` builds a no-window-manager
+Prerequisite: `dis/tests/tkrender.dis` is a test build product, not
+shipped — run `cd tests; mk install` once first (verified end-to-end on
+macOS 2026-08-22). `cmds.txt` is one Tk command per line (`#` comments;
+`\n` becomes a real newline). Internally: `tests/tkrender.b` builds a no-window-manager
 toplevel and `writeimage`s it; `tools/p9img2png.py` decodes on the host.
 The wrapper picks the platform emulator by `uname`; if an older checkout
 errors about the Linux emu, run the two steps manually with

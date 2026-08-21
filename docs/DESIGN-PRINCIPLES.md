@@ -309,8 +309,9 @@ existing mechanism suffices.
 
 **Observability.**
 Wrong: a metrics endpoint with an exporter and a scrape format.
-Right: a readable file; one line per counter.
-`cat /chan/ventisrvstats` is the monitoring interface.
+Right: a readable file; one line per counter. `ventisrv` started
+with `-s /chan/ventisrvstats` serves its counters exactly that
+way, and `cat` is the monitoring interface.
 Why: `grep` and `awk` are your dashboard. Every consumer speaks
 file already.
 

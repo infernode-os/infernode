@@ -29,11 +29,14 @@ text lines, never JSON
 
 1. `appl/cmd/chatsrv.b` (~270 lines) — cleanest minimal styxservers+nametree
    server, including the hard part: the blocking-read / pending-request /
-   Flush-cancel idiom.
+   Flush-cancel idiom. (Upstream heritage, but verified still mounting and
+   serving in this tree, 2026-08-22.)
 2. `appl/cmd/mntgen.b` (~190 lines) — smallest; dynamic tree mutation.
 3. `appl/cmd/gpusrv.b` — the clone/session-multiplexing idiom; its 35-line
-   header comment is the best tutorial in the tree. Also `appl/cmd/webfs.b`
-   (remote-backed service that still lives under `/mnt`).
+   header comment is the best tutorial in the tree. (`appl/cmd/webfs.b`
+   shows the same idiom for a remote-backed `/mnt` service, but it is
+   upstream heritage nothing in this tree exercises — read it for the
+   shape, don't assume its behavior.)
 4. `appl/cmd/auditfs.b` — the header-comment style every server should ship:
    every file explained, access-control-by-placement argued.
 5. `appl/cmd/llmctl9p.b` — well-commented shape, but note its host-crossing
@@ -118,10 +121,11 @@ The contract is `appl/veltro/tool.m`: five functions —
 `exec`'s argv parser expects.
 
 Checklist for a new tool:
-1. Module in `appl/veltro/tools/<name>.b` following `appl/veltro/tools/http.b`.
-   If the tool needs privileges (a mount, network), acquire them in `init()`
-   *before* namespace restriction and talk to a spawned worker over a
-   channel — see `appl/veltro/tools/git.b`.
+1. Module in `appl/veltro/tools/<name>.b` following
+   `appl/veltro/tools/webfetch.b` (registered, exercised, and a model
+   header). If the tool needs privileges (a mount, network), acquire them
+   in `init()` *before* namespace restriction and talk to a spawned worker
+   over a channel — see `appl/veltro/tools/git.b`.
 2. Register in the static `TOOL_PATHS` table in `appl/veltro/tools9p.b` —
    unregistered tools do not exist, by design.
 3. Doc file `lib/veltro/tools/<name>.txt` (rigid format — copy

@@ -255,9 +255,8 @@ production service is more of the same conventions, not different
 ones:
 
 - **Per-session state** → the `clone` pattern: reading `clone`
-  allocates a session directory. Study `appl/cmd/gpusrv.b` (its
-  header comment is the best tutorial in the tree) and
-  `appl/cmd/webfs.b`.
+  allocates a session directory. Study `appl/cmd/gpusrv.b` — its
+  header comment is the best tutorial in the tree.
 - **Blocking reads / events** → hold the `Tmsg.Read` and reply when
   data arrives; cancel it on `Flush`. `appl/cmd/chatsrv.b` shows
   the pending-request idiom in ~30 lines. The moment you hold

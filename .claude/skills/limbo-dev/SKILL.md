@@ -9,7 +9,7 @@ description: Compile and build Limbo code correctly — the native toolchain, th
 
 ```sh
 export ROOT=$PWD
-export PATH=$PWD/MacOSX/arm64/bin:$PATH   # Linux: $PWD/Linux/386|amd64|arm64/bin
+export PATH=$PWD/MacOSX/arm64/bin:$PATH   # Linux: $PWD/Linux/amd64|arm64/bin
 ```
 
 If `mk`/`limbo` don't exist yet: `./makemk.sh`, then the platform build

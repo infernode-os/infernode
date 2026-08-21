@@ -32,6 +32,17 @@ implement VideoPane;
 # drives update() at frame cadence.  A status strip along the pane's
 # bottom edge shows state and position.
 #
+# LIVE SEQUENTIAL SOURCES: a mount whose status carries no transport
+# (no "pos=" — e.g. a vision service's /mnt/vision/feeds/<id>, serving the
+# vid9p fmt/frame schema with join-live ring semantics and reads that
+# park until the next frame) is played as a stream: a reader proc
+# consumes framesize-byte chunks sequentially — the SERVER paces it —
+# and the pane blits the newest frame each tick.  No transport keys;
+# the strip shows LIVE.  This is the remote-camera path: a perception
+# service ingests a camera stream and re-serves annotated I420 over
+# 9P; this pane mounts it from any reachable host (see
+# docs/H264-9P-BRIDGE.md).
+#
 
 include "sys.m";
 	sys: Sys;
@@ -86,6 +97,14 @@ cfd: ref Sys->FD;		# open handle on <mount>/ctl (transport writes)
 frame: ref Image;		# RGB24 staging image, native video size
 buf: array of byte;		# one I420 frame
 haveframe: int;			# a frame has been decoded into `frame`
+
+# live-sequential source state (status without pos= / no status at all)
+seqmode := 0;			# 1: stream the frame file, server-paced
+seqprobed := 0;			# transport-vs-stream decided
+framech: chan of array of byte;	# reader -> pane, filled frames
+freech: chan of array of byte;	# pane -> reader, recycled buffers
+rdpid := -1;			# reader proc, killed on shutdown
+stopreader := 0;
 
 lastshown := -1;
 statestr := "";
@@ -181,7 +200,80 @@ ensureopen(): int
 		ffd = sys->open(mountpath + "/frame", Sys->OREAD);
 	if(sfd == nil)
 		sfd = sys->open(mountpath + "/status", Sys->OREAD);
+
+	# Transport or stream?  A vid9p status always carries "pos=";
+	# a live source (a /mnt/vision feed) has a status without it, or
+	# no status file at all.  Decide once, then leave the stream to
+	# a dedicated reader proc — its reads PARK server-side until the
+	# next frame, so the server paces us and a slow link just skips
+	# frames (the ring semantics), never wedging the GUI loop.
+	if(!seqprobed && vw > 0 && ffd != nil) {
+		if(sfd != nil) {
+			b := array[512] of byte;
+			n := sys->pread(sfd, b, len b, big 0);
+			if(n > 0) {
+				seqmode = !contains(string b[0:n], "pos=");
+				seqprobed = 1;
+			}
+		} else {
+			seqmode = 1;
+			seqprobed = 1;
+		}
+		if(seqprobed && seqmode) {
+			framech = chan[1] of array of byte;
+			freech = chan[2] of array of byte;
+			freech <-= array[framesize] of byte;
+			freech <-= array[framesize] of byte;
+			stopreader = 0;
+			spawn streamreader();
+		}
+	}
 	return ffd != nil;
+}
+
+contains(s, sub: string): int
+{
+	n := len sub;
+	for(i := 0; i + n <= len s; i++)
+		if(s[i:i+n] == sub)
+			return 1;
+	return 0;
+}
+
+# Sequential reader for live sources: consume framesize-byte chunks
+# from <mount>/frame on a private fd (per-fid join-live semantics),
+# hand full frames to update() over a two-buffer ping-pong.  Blocking
+# is the design: the server parks the read until a new frame exists.
+streamreader()
+{
+	rdpid = sys->pctl(0, nil);
+	fd := sys->open(mountpath + "/frame", Sys->OREAD);
+	for(;;) {
+		if(stopreader)
+			return;
+		if(fd == nil) {
+			sys->sleep(500);
+			fd = sys->open(mountpath + "/frame", Sys->OREAD);
+			continue;
+		}
+		fb := <-freech;
+		got := 0;
+		while(got < framesize) {
+			n := sys->read(fd, fb[got:], framesize-got);
+			if(n <= 0) {
+				fd = nil;	# source went away; reopen joins live
+				break;
+			}
+			got += n;
+		}
+		if(got < framesize) {
+			freech <-= fb;
+			continue;
+		}
+		if(stopreader)
+			return;
+		framech <-= fb;
+	}
 }
 
 # Parse <mount>/status: "<src> w= h= framesize= frames= eof= state= pos= t= follow=".
@@ -245,13 +337,19 @@ showframe(idx: int): int
 			return 0;
 		got += n;
 	}
-	wh := vw*vh;
-	cw := vw/2; ch := vh/2; csz := cw*ch;
-	p := ref YCbCr(buf[0:wh], buf[wh:wh+csz], buf[wh+csz:wh+2*csz]);
-	frame.writepixels(Rect((0,0),(vw,vh)), remap->remap(p));
-	haveframe = 1;
+	convertframe(buf);
 	lastshown = idx;
 	return 1;
+}
+
+# I420 -> RGB24 into the staging image, via the shared remap24 path.
+convertframe(fb: array of byte)
+{
+	wh := vw*vh;
+	cw := vw/2; ch := vh/2; csz := cw*ch;
+	p := ref YCbCr(fb[0:wh], fb[wh:wh+csz], fb[wh+csz:wh+2*csz]);
+	frame.writepixels(Rect((0,0),(vw,vh)), remap->remap(p));
+	haveframe = 1;
 }
 
 setstate(strm, nf, playing, tms, fol: int)
@@ -282,6 +380,25 @@ update(): int
 {
 	if(!ensureopen())
 		return 0;
+	if(seqmode) {
+		# Stream view: blit the newest complete frame, if one
+		# arrived since the last tick; never block the GUI loop.
+		changed := 0;
+		alt {
+		fb := <-framech =>
+			convertframe(fb);
+			freech <-= fb;
+			changed = 1;
+		* =>
+			;
+		}
+		ns := sys->sprint("LIVE %dx%d stream", vw, vh);
+		if(ns != statestr) {
+			statestr = ns;
+			changed = 1;
+		}
+		return changed;
+	}
 	(strm, nf, playing, pos, tms, fol) := readstatus();
 	if(nf <= 0)
 		return 0;
@@ -365,6 +482,8 @@ pointer(nil: ref Draw->Pointer): int { return 0; }
 # down the same ctl wire the video-ctl buttons and sh use.
 key(k: int): int
 {
+	if(seqmode)
+		return 0;	# a live stream has no client transport
 	case k {
 	' ' =>
 		(nil, nil, playing, nil, nil, nil) := readstatus();
@@ -392,6 +511,15 @@ retheme(display: ref Display)
 
 shutdown()
 {
+	stopreader = 1;
+	if(rdpid >= 0) {
+		# The reader may be parked in a server-paced read; kill it
+		# rather than leak a blocked proc past module unload.
+		fd := sys->open("/prog/" + string rdpid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+		rdpid = -1;
+	}
 	ffd = nil;
 	sfd = nil;
 	cfd = nil;

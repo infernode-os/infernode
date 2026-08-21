@@ -248,7 +248,7 @@ const (
 )
 
 // IBY2WD is the number of bytes per word (pointer size).
-// On 64-bit Dis VMs (like Infernode on ARM64), this is 8.
+// On 64-bit Dis VMs (like InferNode on ARM64), this is 8.
 const IBY2WD = 8
 
 // MaxTemp is the byte offset where local variables start in a frame.

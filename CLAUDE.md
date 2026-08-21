@@ -1,6 +1,6 @@
-# Infernode - Development Guide for Claude
+# InferNode - Development Guide for Claude
 
-This guide ensures Claude Code works correctly with the Infernode (Inferno® OS) codebase.
+This guide ensures Claude Code works correctly with the InferNode (Inferno® OS) codebase.
 
 ## JIT Compiler Availability
 
@@ -130,7 +130,7 @@ The Inferno® shell is rc-style, not POSIX sh:
 
 ## Testing System
 
-Infernode uses a custom testing framework (`module/testing.m`) for Limbo unit tests.
+InferNode uses a custom testing framework (`module/testing.m`) for Limbo unit tests.
 
 ### Running Tests
 

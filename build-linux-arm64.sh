@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Build script for Linux ARM64 (aarch64)
-# Builds Infernode with SDL3 GUI (Lucifer) by default.
+# Builds InferNode with SDL3 GUI (Lucifer) by default.
 # Run this on any ARM64 Linux system (Jetson, Raspberry Pi 4, etc.).
 #
 # Usage:

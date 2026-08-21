@@ -62,7 +62,7 @@ detect_platform() {
 
     # Find emulator binary
     EMU=""
-    for name in o.emu Infernode; do
+    for name in o.emu InferNode; do
         if [[ -x "$ROOT/emu/$EMUHOST/$name" ]]; then
             EMU="$ROOT/emu/$EMUHOST/$name"
             break

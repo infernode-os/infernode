@@ -2,7 +2,7 @@
 
 **If text looks smeared, blurry, or has a ghosted shadow — read this first.**
 
-This issue has recurred multiple times across Infernode. This document records the root cause, the diagnostic path, and the permanent fix pattern so we never spend time on it again.
+This issue has recurred multiple times across InferNode. This document records the root cause, the diagnostic path, and the permanent fix pattern so we never spend time on it again.
 
 ---
 

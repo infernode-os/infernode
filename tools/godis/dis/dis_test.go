@@ -360,7 +360,7 @@ func TestModuleWithLDT(t *testing.T) {
 }
 
 func TestDecodeRealDisFiles(t *testing.T) {
-	// Find and decode real .dis files from the Infernode dis/ directory
+	// Find and decode real .dis files from the InferNode dis/ directory
 	disDir := filepath.Join("..", "..", "..", "dis")
 	if _, err := os.Stat(disDir); os.IsNotExist(err) {
 		t.Skip("dis/ directory not found")

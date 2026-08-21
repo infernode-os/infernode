@@ -5,7 +5,7 @@
 
 ## Summary
 
-The fractal app is **production-ready** for its current scope: a Mandelbrot/Julia set browser with AI agent control. The code is clean, well-structured, thoroughly tested, documented, and integrated into the Infernode ecosystem. A few minor gaps exist around error handling and the architectural coupling between the viewer and the Veltro tool, but neither blocks a release.
+The fractal app is **production-ready** for its current scope: a Mandelbrot/Julia set browser with AI agent control. The code is clean, well-structured, thoroughly tested, documented, and integrated into the InferNode ecosystem. A few minor gaps exist around error handling and the architectural coupling between the viewer and the Veltro tool, but neither blocks a release.
 
 **Verdict: Ready for production release**, with minor improvements recommended.
 

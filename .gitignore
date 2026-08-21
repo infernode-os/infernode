@@ -90,6 +90,7 @@ test-output.txt
 
 # Claude Code local settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # Veltro API keys (secrets)
 lib/veltro/keys/

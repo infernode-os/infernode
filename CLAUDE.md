@@ -11,7 +11,7 @@ from this tree. New services start with a namespace sketch in an issue, not
 with code. Limbo is close to Go:
 [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md).
 Task playbooks (compile loop, tests, headless GUI harness, authoring 9P
-servers) are project skills under `.claude/skills/`.
+servers, emulator C) are project skills under `.claude/skills/`.
 
 ## JIT Compiler Availability
 
@@ -54,9 +54,8 @@ The `dis/` directory (the Inferno runtime tree) **is tracked in git**. This is i
 However, **build artifacts in source directories are not tracked**:
 - `appl/**/*.dis` — intermediate build outputs (`.gitignore`d)
 - `tests/**/*.dis` — compiled tests (`.gitignore`d)
-- `dis/tests/*.dis` — test bytecode in the runtime tree (`.gitignore`d)
 
-This means: the runtime tree ships pre-built, but you never commit `.dis` files from `appl/` or `tests/`.
+This means: the runtime tree ships pre-built — including `dis/tests/`, whose test bytecode is tracked and updated via `mk install` like the rest of `dis/` — but you never commit `.dis` files from the `appl/` or `tests/` source directories.
 
 **The stale bytecode problem:** When a `.m` interface file changes (e.g. `module/widget.m`), every `.dis` compiled against the old interface becomes stale. The Dis VM rejects stale modules at load time with `link typecheck` errors — apps show blank tabs, commands fail to load, and everything looks broken even though the source is fine. This is the most common class of post-pull breakage.
 

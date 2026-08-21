@@ -62,7 +62,17 @@ fine. Rebuild the directories that compile against the changed interface
 Plan 9 `mk`, not GNU make. No `&&` in recipes — use `;` or separate rules.
 `mk install` copies output into the tracked runtime tree `dis/`;
 `mk nuke` cleans. Never commit `.dis` from `appl/` or `tests/` (gitignored);
-`dis/` changes must come from `mk install`, not manual copies.
+`dis/` changes — including `dis/tests/`, which is tracked like the rest of
+the runtime tree — must come from `mk install`, not manual copies.
+
+## Before opening a PR
+
+Verify every modified file's pre-image matches master tip (rebase, then
+`git diff master...HEAD` and check the base blobs). A branch cut from — or
+contaminated by — another unmerged branch can carry someone else's change
+through a textually clean merge, silently. Then run
+`tools/verify-dis-paths.sh` and fill the PR template's design-principles
+checklist honestly.
 
 ## Running what you built
 

@@ -6,6 +6,11 @@
 # Set STYLE_GATE_STRICT=1 to make findings fail (exit 1) once the
 # tree is clean and the project decides to enforce.
 #
+# Scope: this gate checks STYLE, not semantics. An rc-legal script can
+# still raise at runtime (null-list concatenation, failed redirections
+# escaping if-blocks) — those live in the shell table of
+# docs/LIMBO-FOR-GO-PROGRAMMERS.md, which is documentation's job.
+#
 # Checks:
 #   1. POSIX-isms (&& / ||) in Inferno-side shell scripts. Inferno sh
 #      is rc-style; && and || do not exist and scripts containing them

@@ -195,6 +195,14 @@ On a booted system with `mntgen` serving `/mnt`, you would mount at
 `/mnt/count` directly. Note the last line: the bad verb failed *at
 the writer*, with the server's error text.
 
+That cuts both ways. When you are the *caller* of a 9P interface, a
+write is an RPC and its error reply is the server talking to you —
+a caller that logs the error to stderr and carries on has not
+handled it, and if it already consumed the data it meant to write,
+it has silently lost it. Servers get hardened over time; validation
+your write passed last month may reject it today. Check the reply,
+surface the failure, and never discard the payload on error.
+
 
 ## Step 5 — The contract test
 
@@ -252,7 +260,11 @@ ones:
   `appl/cmd/webfs.b`.
 - **Blocking reads / events** → hold the `Tmsg.Read` and reply when
   data arrives; cancel it on `Flush`. `appl/cmd/chatsrv.b` shows
-  the pending-request idiom in ~30 lines.
+  the pending-request idiom in ~30 lines. The moment you hold
+  per-client state — a parked read, a busy flag, a helper fd — the
+  fid is the session: key the state to the fid and tear it down in
+  `Clunk`, which 9P guarantees you receive even when the client
+  dies. See "The fid is the session" in the `ninep-server` skill.
 - **Irreversible actions** → emit an audit record: one write to
   `/mnt/audit/log`, no-op if absent (`man/4/auditfs`).
 - **Agent access** → decide which files are grantable and which are

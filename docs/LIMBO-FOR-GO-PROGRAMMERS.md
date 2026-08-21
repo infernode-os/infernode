@@ -129,6 +129,8 @@ POSIX habits are the most common review comment we make:
 | `. script.sh` | `run script.sh` |
 | `VAR=v cmd` | `VAR=v; cmd` |
 | exit status tests | `raise 'fail:reason'` / `raise 'skip:reason'` |
+| `"$var/path"` (empty var → `/path`) | `$var^/path` **raises** `null list in concatenation` when `$var` is empty — guard with `if {! ~ $#var 0}` before any `^` on command-substitution output |
+| `cmd > $f` failing quietly in an `if` | a failed redirection **raises past `if {...}`**, aborting the script — to assert "writing $f fails", let the command open it: `cp /dev/null $f` |
 
 Scripts begin `#!/dis/sh.dis` and usually `load std`. Quoting is
 single-quote based, with `''` to embed a quote. A backgrounded
@@ -136,21 +138,13 @@ single-quote based, with `''` to embed a quote. A backgrounded
 remember that in test scripts. `doc/sh.ms` is the full paper;
 `man/1/sh` the reference.
 
-Two runtime behaviors that have broken real boots and tests:
-
-- **Concatenating with an empty list raises.** Variables are
-  lists, and `$var^/path` with an empty `$var` aborts the script
-  with `sh: null list in concatenation` — it does not interpolate
-  to `/path` the way `"$var/path"` would in POSIX sh. Guard
-  anything that might be empty: `if {! ~ $#var 0} { ... }`.
-  In a boot script, an unguarded probe like this takes down the
-  whole boot for every user.
-- **A failed redirection raises, even inside `if {...}`.** To
-  assert "writing this file fails", let the *command* attempt the
-  open (`cp /dev/null $f`), not a sh redirection (`echo x > $f`)
-  — the latter aborts the script instead of failing the
-  condition. See the contract-test step of
-  [TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md).
+The last two table rows are semantic, not stylistic — rc-legal
+scripts that raise at runtime. Both have shipped: an unguarded
+null-list concatenation in a boot probe aborts the entire boot for
+every user, and the redirection rule is why the tutorial's contract
+test asserts write-denial with `cp` (see
+[TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md), step 5). The
+style gate cannot catch these — it checks style, not semantics.
 
 
 ## Where tests go

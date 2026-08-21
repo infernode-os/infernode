@@ -42,6 +42,9 @@ Conventions the docs used to omit:
 - `mk install` places `.dis` both in `tests/` (where `runner.dis` scans)
   and `dis/tests/` (what `run-tests.sh` invokes). Compiling manually to
   only one location makes the test invisible to the other entry point.
+  **Commit the `dis/tests/` copy** — the runtime tree tracks test
+  bytecode like the rest of `dis/`; only the `tests/` and `appl/`
+  intermediates stay untracked.
 - **CI compiles tests per-file with plain `limbo -I$ROOT/module -o ...`,
   not via `tests/mkfile`** — a test that needs extra include paths (a
   special mkfile rule) will compile locally and fail CI's compile gate.
@@ -92,6 +95,21 @@ timeout, then `kill` the emu. Reference implementation:
 Note: several `tests/host/*_test.sh` are static source-greps (regression
 pins on C/Limbo source patterns), not runtime tests — read the test before
 assuming it exercises behavior.
+
+## Norms for new tests
+
+- **Assert behavior, not source text.** A grep over source is a
+  regression *pin* — label it as one, and never let it be the only
+  coverage of a runnable artifact. A grep-shape test cannot notice
+  that a script invokes a binary the sh path can't resolve; a contract
+  test that runs the script can.
+- **A suite that skips in CI guards nothing in CI.** If a test exits
+  77 whenever its environment is absent, say in its header where it
+  actually runs — and prefer a fake-helper/fake-backend it can drive
+  hermetically over an environment-gated skip.
+- **The contract test is the durable form of "I ran it."** Every
+  shipped script and every served interface gets one, at the cheapest
+  tier that can observe it.
 
 ## What CI actually does
 

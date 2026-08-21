@@ -29,3 +29,4 @@ Design principles (see [docs/DESIGN-PRINCIPLES.md](https://github.com/infernode-
 - [ ] New service/tool followed a namespace-sketch proposal issue (for non-trivial interfaces)
 - [ ] Scripts that run inside Inferno are rc-style sh (no `&&`/`||`) and committed executable
 - [ ] Irreversible/credentialed actions emit audit records; agent-facing effects have provenance emitters
+- [ ] Anything this PR downloads or executes from outside the tree is pinned (commit SHA / revision URL) and checksum-verified

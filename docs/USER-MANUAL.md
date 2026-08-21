@@ -738,6 +738,9 @@ Veltro agents can use the `wallet` and `payfetch` tools:
 When a server returns HTTP 402 Payment Required, `payfetch` requests a payment authorization from the wallet and retries with it. By default the request waits in the wallet's approval queue — you approve or deny it in the wallet GUI (right-click → **Pending Payments**).
 
 Budget and approval enforcement is server-side in wallet9p. Agents cannot bypass spending limits or the approval queue.
+ERC-20 accounts use a separate ETH-denominated gas budget, and all external
+payment requests reserve budget before submission so an ambiguous network
+error cannot be retried around the session limit.
 
 ### Key Security
 

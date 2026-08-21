@@ -172,7 +172,8 @@ Cryptocurrency wallet exposed as a 9P file server at `/n/wallet/`.
     ├── chain        rw   chain name
     ├── pay          rw   write: "amount recipient" → read: txhash or pending:id
     ├── authorize    rw   write: structured x402/EIP-3009 request → read: signature
-    ├── ctl          rw   "budget maxpertx maxpersess currency", "requireapproval"
+    ├── ctl          rw   "budget maxpertx maxpersess currency",
+    │                     "gasbudget maxpertx maxpersess", "requireapproval"
     └── history      r    recent transactions
 ```
 

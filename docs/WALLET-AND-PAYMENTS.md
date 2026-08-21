@@ -327,7 +327,8 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
     ├── pay          rw   write: "amount recipient" → read: pending:id or txhash
     ├── authorize    rw   write: structured x402 request → read: pending:id or
     │                         "sig <hex> from <addr> nonce <hex> validafter <n> validbefore <n>"
-    ├── ctl          rw   "budget maxpertx maxpersess currency", "requireapproval [off]"
+    ├── ctl          rw   "budget maxpertx maxpersess currency",
+    │                     "gasbudget maxpertx maxpersess", "requireapproval [off]"
     └── history      r    recent transactions (timestamped, capped at 200)
 ```
 
@@ -435,6 +436,7 @@ When a new account is created, wallet9p immediately triggers a factotum sync to 
 
 ```sh
 echo 'budget 1000000 10000000 USDC' > /n/wallet/myaccount/ctl
+echo 'gasbudget 10000000000000000 50000000000000000' > /n/wallet/myaccount/ctl
 ```
 
 Budgets are hard caps enforced inside wallet9p on **every** execution path:
@@ -445,6 +447,18 @@ in cents): a payment in a currency the configured budget cannot evaluate is
 **rejected**, not waved through — including x402 requests for any asset other
 than the active network's USDC contract. Human approval does not override a
 budget; over-budget payments fail even after approval.
+
+An ERC-20 account also requires a separate `gasbudget`, denominated in ETH
+wei. This keeps token value and network fees in truthful units. ETH transfers
+charge their value plus the transaction's maximum gas cost to the ETH budget;
+ERC-20 transfers charge token value to the asset budget and maximum gas cost
+to the gas budget.
+
+Budget is reserved immediately before submitting an already-signed transaction
+or Stripe request. A transport error after submission has an ambiguous outcome,
+so the reservation is retained and history records `pay-uncertain`; retrying
+cannot bypass the session cap. Stripe requests additionally carry an
+idempotency key.
 
 Amount parsing everywhere is strict: only plain decimal integers are
 accepted (`"1.5"`, `"10 USDC"`, hex, or empty amounts are errors, never
@@ -485,6 +499,9 @@ cross-checks `eth_chainId` against the configured value and **refuses to
 sign** on mismatch or error — a compromised or misconfigured RPC endpoint
 cannot move a payment onto a different chain. x402 authorization requests
 must likewise name the active network or they are rejected.
+Transaction nonces are requested from the `pending` state to avoid replacing
+an earlier unmined wallet transaction, and send acknowledgements must contain
+a canonical 32-byte transaction hash.
 
 ## Ethereum JSON-RPC Client (module/ethrpc.m)
 
@@ -647,7 +664,7 @@ Basic Stripe API client for fiat payments. API key stored in factotum.
 
 ```limbo
 stripe->init(apikey);
-(id, err) := stripe->createpayment(amount, "usd", "description");
+(id, err) := stripe->createpayment(amount, "usd", "description", idempotencykey);
 (balance, err) := stripe->balance();
 (charges, err) := stripe->recent(10);
 ```
@@ -773,23 +790,11 @@ cd libsec && mk install
 cd ../libinterp && rm -f keyring.h keyringif.h && mk keyring.h && mk keyringif.h && mk install
 cd ../emu/MacOSX && mk o.emu && cp o.emu InferNode
 
-# Limbo libraries
-limbo -I$ROOT/module -gw -o dis/lib/ethcrypto.dis appl/lib/ethcrypto.b
-limbo -I$ROOT/module -gw -o dis/lib/wallet.dis appl/lib/wallet.b
-limbo -I$ROOT/module -gw -o dis/lib/x402.dis appl/lib/x402.b
-limbo -I$ROOT/module -gw -o dis/lib/stripe.dis appl/lib/stripe.b
-limbo -I$ROOT/module -gw -o dis/lib/ethrpc.dis appl/lib/ethrpc.b
-
-# 9P server and tools
-limbo -I$ROOT/module -gw -o dis/veltro/wallet9p.dis appl/veltro/wallet9p.b
-cd appl/veltro/tools && limbo -I$ROOT/module -I$ROOT/appl/veltro -gw \
-    -o $ROOT/dis/veltro/tools/wallet.dis wallet.b
-cd appl/veltro/tools && limbo -I$ROOT/module -I$ROOT/appl/veltro -gw \
-    -o $ROOT/dis/veltro/tools/payfetch.dis payfetch.b
-
-# GUI apps
-limbo -I$ROOT/module -gw -o dis/wm/wallet.dis appl/wm/wallet.b
-limbo -I$ROOT/module -gw -o dis/wm/logon.dis appl/wm/logon.b
+# Limbo libraries, Veltro server/tools, tests, and GUI apps
+cd appl/lib && mk install
+cd ../veltro && mk install
+cd ../wm && mk install
+cd ../../tests && mk install
 
 # Widget toolkit (if widget.m changed, rebuild all GUI apps)
 limbo -I$ROOT/module -gw -o dis/lib/widget.dis appl/lib/widget.b

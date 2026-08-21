@@ -136,7 +136,9 @@ getnonce(addr: string): (int, string)
 {
 	if(!validaddress(addr))
 		return (0, "eth_getTransactionCount: invalid address");
-	params := "[\"" + addr + "\",\"latest\"]";
+	# Include locally pending transactions so sequential wallet sends do not
+	# reuse a nonce while the preceding transaction is still unmined.
+	params := "[\"" + addr + "\",\"pending\"]";
 	(result, err) := rpccall("eth_getTransactionCount", params);
 	if(err != nil)
 		return (0, err);
@@ -160,7 +162,10 @@ sendrawtx(rawtx: string): (string, string)
 	(result, err) := rpccall("eth_sendRawTransaction", params);
 	if(err != nil)
 		return (nil, err);
-	return (getresultstr(result), nil);
+	txhash := getresultstr(result);
+	if(!validtxhash(txhash))
+		return (nil, "eth_sendRawTransaction: malformed transaction hash");
+	return (txhash, nil);
 }
 
 #

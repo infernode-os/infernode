@@ -19,6 +19,7 @@ MAIN=\
     msgwatch.dis\
     ninepsrc.dis\
     wiki9p.dis\
+    wallet9p.dis\
 
 SOURCES=\
     sources/email.dis\
@@ -74,13 +75,13 @@ all:V: $MAIN $TOOLS $SOURCES
 agentlib.dis: agentlib.b agentlib.m
 	limbo $LIMBOFLAGS -gw agentlib.b
 
-veltro.dis: veltro.b agentlib.m tool.m nsconstruct.m
+veltro.dis: veltro.b agentlib.m tool.m $MODDIR/nsconstruct.m
 	limbo $LIMBOFLAGS -gw veltro.b
 
 tools9p.dis: tools9p.b tool.m
 	limbo $LIMBOFLAGS -gw tools9p.b
 
-nsconstruct.dis: nsconstruct.b nsconstruct.m
+nsconstruct.dis: nsconstruct.b $MODDIR/nsconstruct.m
 	limbo $LIMBOFLAGS -gw nsconstruct.b
 
 cowfs.dis: cowfs.b
@@ -109,6 +110,9 @@ ninepsrc.dis: ninepsrc.b
 
 wiki9p.dis: wiki9p.b
 	limbo $LIMBOFLAGS -gw wiki9p.b
+
+wallet9p.dis: wallet9p.b
+	limbo $LIMBOFLAGS -gw wallet9p.b
 
 # Sources
 sources/email.dis: sources/email.b
@@ -141,7 +145,7 @@ tools/exec.dis: tools/exec.b tool.m
 tools/launch.dis: tools/launch.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/launch.dis tools/launch.b
 
-tools/spawn.dis: tools/spawn.b tool.m nsconstruct.m subagent.m
+tools/spawn.dis: tools/spawn.b tool.m $MODDIR/nsconstruct.m subagent.m
 	limbo $LIMBOFLAGS -gw -o tools/spawn.dis tools/spawn.b
 
 tools/xenith.dis: tools/xenith.b tool.m
@@ -265,7 +269,7 @@ tools/wallet.dis: tools/wallet.b tool.m
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools $DISBIN/sources
-	cp agentlib.dis veltro.dis repl.dis tools9p.dis nsconstruct.dis cowfs.dis subagent.dis mc9p.dis speech9p.dis msg9p.dis msgwatch.dis ninepsrc.dis wiki9p.dis $DISBIN/
+	cp $MAIN $DISBIN/
 	cp tools/*.dis $DISBIN/tools/
 	cp sources/*.dis $DISBIN/sources/
 

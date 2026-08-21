@@ -705,6 +705,14 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 				ethcrypto->betodec(b.maxpertx),
 				ethcrypto->betodec(b.maxpersess),
 				b.currency, ethcrypto->betodec(b.spent));
+		fb := wallet->feebudgetfor(as.acct);
+		if(fb == nil)
+			s += "no gasbudget\n";
+		else
+			s += sys->sprint("gasbudget %s %s spent %s\n",
+				ethcrypto->betodec(fb.maxpertx),
+				ethcrypto->betodec(fb.maxpersess),
+				ethcrypto->betodec(fb.spent));
 		if(as.requireapproval)
 			s += "requireapproval on\n";
 		else
@@ -1035,6 +1043,19 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			b := ref Wallet->Budget(maxpertx, maxpersess, nil, currency);
 			wallet->setbudget(as.acct, b);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		} else if(ntoks == 3 && hd toks == "gasbudget") {
+			toks = tl toks;
+			maxpertx := ethcrypto->dectobe(hd toks); toks = tl toks;
+			maxpersess := ethcrypto->dectobe(hd toks);
+			if(maxpertx == nil || maxpersess == nil ||
+			   as.acct.accttype != Wallet->ACCT_ETH) {
+				srv.reply(ref Rmsg.Error(m.tag,
+					"usage: gasbudget <maxpertx> <maxpersess> (ETH accounts, wei)"));
+				return;
+			}
+			fb := ref Wallet->FeeBudget(maxpertx, maxpersess, nil);
+			wallet->setfeebudget(as.acct, fb);
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else if(ntoks >= 1 && hd toks == "requireapproval") {
 			val := 1;
 			if(ntoks >= 2 && hd tl toks == "off")
@@ -1042,7 +1063,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			as.requireapproval = val;
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else {
-			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | requireapproval [off]"));
+			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | gasbudget maxpertx maxpersess | requireapproval [off]"));
 		}
 
 	* =>
@@ -1510,9 +1531,9 @@ budgeterr(as: ref AcctState, currency: string, amt: array of byte): string
 	return wallet->checkbudget(as.acct, amt);
 }
 
-recordspendamt(as: ref AcctState, amt: array of byte)
+reserveamt(as: ref AcctState, amt: array of byte): string
 {
-	wallet->recordspend(as.acct, amt);
+	return wallet->reserve(as.acct, amt);
 }
 
 # Append a timestamped history entry, capped at MAXHISTORY
@@ -1670,13 +1691,27 @@ executepayment(as: ref AcctState, amount: string, recipient: string): (string, s
 	if(rawtx == nil)
 		return (nil, "transaction signing failed");
 
+	# Reserve value plus the maximum fee before the irreversible send. A
+	# transport error cannot prove the network rejected the transaction.
+	maxfee := ethcrypto->dectobe(string (gasprice * gaslimit));
+	charge := ethcrypto->beadd(amt, maxfee);
+	if(charge == nil)
+		return (nil, "transaction charge overflows uint256");
+	berr = budgeterr(as, "ETH", charge);
+	if(berr != nil)
+		return (nil, "budget including gas: " + berr);
+	berr = reserveamt(as, charge);
+	if(berr != nil)
+		return (nil, "budget including gas: " + berr);
+
 	# Submit to network
 	hextx := ethcrypto->hexencode(rawtx);
 	(txhash, senderr) := ethrpc->sendrawtx(hextx);
-	if(senderr != nil)
-		return (nil, "send: " + senderr);
+	if(senderr != nil) {
+		addhistory(as, "pay-uncertain eth " + amount + " " + recipient);
+		return (nil, "send outcome uncertain; reserved budget retained: " + senderr);
+	}
 
-	recordspendamt(as, amt);
 	addhistory(as, "pay eth " + amount + " " + recipient + " " + txhash);
 	return (txhash, nil);
 }
@@ -1780,13 +1815,30 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 	if(rawtx == nil)
 		return (nil, "transaction signing failed");
 
+	# ERC-20 value and ETH gas are different units and therefore have
+	# separate hard limits. Check both before consuming either reservation.
+	maxfee := ethcrypto->dectobe(string (gasprice * gaslimit));
+	berr = wallet->checkbudget(as.acct, amtbytes);
+	if(berr != nil)
+		return (nil, "budget: " + berr);
+	ferr := wallet->checkfee(as.acct, maxfee);
+	if(ferr != nil)
+		return (nil, "gas budget: " + ferr);
+	berr = reserveamt(as, amtbytes);
+	if(berr != nil)
+		return (nil, "budget: " + berr);
+	ferr = wallet->reservefee(as.acct, maxfee);
+	if(ferr != nil)
+		return (nil, "gas budget: " + ferr);
+
 	# Submit
 	hextx := ethcrypto->hexencode(rawtx);
 	(txhash, senderr) := ethrpc->sendrawtx(hextx);
-	if(senderr != nil)
-		return (nil, "send: " + senderr);
+	if(senderr != nil) {
+		addhistory(as, "pay-uncertain usdc " + amount + " " + recipient);
+		return (nil, "send outcome uncertain; reserved budgets retained: " + senderr);
+	}
 
-	recordspendamt(as, amtbytes);
 	addhistory(as, "pay usdc " + amount + " " + recipient + " " + txhash);
 	return (txhash, nil);
 }
@@ -1930,7 +1982,9 @@ executex402(as: ref AcctState, req: ref AuthReq): (string, string)
 	if(sig == nil || len sig != 65)
 		return (nil, "sign: malformed signature");
 
-	recordspendamt(as, amt);
+	rerr := reserveamt(as, amt);
+	if(rerr != nil)
+		return (nil, "budget: " + rerr);
 	addhistory(as, "x402 " + req.amount + " " + req.asset + " " + req.payto);
 
 	res := "sig " + ethcrypto->hexencode(sig) +
@@ -1985,11 +2039,21 @@ executestripepayment(as: ref AcctState, amount: string, description: string): (s
 	if(berr != nil)
 		return (nil, "budget: " + berr);
 
-	(id, perr) := stripemod->createpayment(cents, "usd", description);
-	if(perr != nil)
-		return (nil, "Stripe: " + perr);
+	keybytes := array[16] of byte;
+	if(randfill(keybytes) < 0)
+		return (nil, "no entropy source for Stripe idempotency key");
+	idempotencykey := "infernode-" + ethcrypto->hexencode(keybytes);
+	amt := ethcrypto->dectobe(amount);
+	berr = reserveamt(as, amt);
+	if(berr != nil)
+		return (nil, "budget: " + berr);
 
-	recordspendamt(as, ethcrypto->dectobe(amount));
+	(id, perr) := stripemod->createpayment(cents, "usd", description, idempotencykey);
+	if(perr != nil) {
+		addhistory(as, "pay-uncertain usd-cents " + amount);
+		return (nil, "Stripe outcome uncertain; reserved budget retained: " + perr);
+	}
+
 	addhistory(as, "pay usd-cents " + amount + " " + description);
 	return (id, nil);
 }

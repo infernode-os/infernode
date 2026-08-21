@@ -38,13 +38,24 @@ Wallet: module {
 		spent:		array of byte;	# spent this session
 		currency:	string;		# "USDC", "ETH", "USD"
 	};
+	FeeBudget: adt {
+		maxpertx:	array of byte;	# max ETH network fee per transaction (wei)
+		maxpersess:	array of byte;	# max ETH network fees per session (wei)
+		spent:		array of byte;
+	};
 
 	setbudget:	fn(acct: ref Account, b: ref Budget);
 	checkbudget:	fn(acct: ref Account, amount: array of byte): string;
 		# returns nil if OK, error string if over budget
 	recordspend:	fn(acct: ref Account, amount: array of byte);
+	reserve:	fn(acct: ref Account, amount: array of byte): string;
+		# checks and records before an irreversible external request
 	budgetfor:	fn(acct: ref Account): ref Budget;
 		# returns the configured budget, or nil if none
+	setfeebudget:	fn(acct: ref Account, b: ref FeeBudget);
+	checkfee:	fn(acct: ref Account, amount: array of byte): string;
+	reservefee:	fn(acct: ref Account, amount: array of byte): string;
+	feebudgetfor:	fn(acct: ref Account): ref FeeBudget;
 
 	# Canonical account/chain name rule.  Names reach factotum
 	# attributes, 9P file names, and ctl commands, so every surface

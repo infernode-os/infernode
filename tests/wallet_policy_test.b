@@ -207,6 +207,19 @@ testBudgetCurrencyFailsClosed(t: ref T)
 	t.assert(err != nil, "USDC authorization against an ETH budget refused");
 }
 
+testGasBudget(t: ref T)
+{
+	pertx := "10000000000000000";
+	persess := "50000000000000000";
+	t.assert(wr(W + "/policy/ctl", "gasbudget " + pertx + " " + persess) > 0,
+		"separate ETH gas budget accepted");
+	ctl := rd(W + "/policy/ctl");
+	t.assert(contains(ctl, "gasbudget " + pertx + " " + persess + " spent 0"),
+		"gas budget reads back in wei without mixing asset units");
+	t.assert(wr(W + "/policy/ctl", "gasbudget nope 10") <= 0,
+		"malformed gas budget rejected");
+}
+
 testNetworkPinning(t: ref T)
 {
 	wr(W + "/policy/ctl", "budget 500 2000 USDC");
@@ -262,6 +275,9 @@ testApprovalFlow(t: ref T)
 		"pending list shows the network being authorized");
 
 	t.assert(wr(W + "/ctl", "approve " + id) > 0, "approve accepted");
+	ctl := rd(W + "/policy/ctl");
+	t.assert(contains(ctl, "USDC spent 100"),
+		"signed authorization reserves session budget immediately");
 
 	# read the result back on a FRESH fd: the request fid is gone, and
 	# results are per-fid, so nothing must leak here
@@ -341,6 +357,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Pay/StrictAmounts", testStrictAmounts);
 	run("Budget/Uint256", testBudgetUint256);
 	run("Budget/CurrencyFailsClosed", testBudgetCurrencyFailsClosed);
+	run("Budget/Gas", testGasBudget);
 	run("Network/Pinning", testNetworkPinning);
 	run("Authorize/InjectionRejected", testInjectionRejected);
 	run("Authorize/ApprovalFlow", testApprovalFlow);

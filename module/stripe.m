@@ -5,7 +5,7 @@ Stripe: module {
 
 	# Create a payment intent
 	# amount in smallest currency unit (cents for USD)
-	createpayment:	fn(amount: int, currency: string, description: string): (string, string);
+	createpayment:	fn(amount: int, currency: string, description, idempotencykey: string): (string, string);
 		# returns (payment_intent_id, error)
 
 	# Get account balance

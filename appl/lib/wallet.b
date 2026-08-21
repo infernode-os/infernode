@@ -18,6 +18,10 @@ include "keyring.m";
 include "factotum.m";
 	factotum: Factotum;
 
+include "lock.m";
+	lock: Lock;
+	Semaphore: import lock;
+
 include "ethcrypto.m";
 	ethcrypto: Ethcrypto;
 
@@ -25,6 +29,8 @@ include "wallet.m";
 
 # Per-account budget storage (in-memory, keyed by account name)
 budgets: list of (string, ref Budget);
+feebudgets: list of (string, ref FeeBudget);
+budgetsema: ref Semaphore;
 
 init(): string
 {
@@ -44,6 +50,10 @@ init(): string
 	if(factotum == nil)
 		return "cannot load Factotum";
 	factotum->init();
+	lock = load Lock Lock->PATH;
+	if(lock == nil)
+		return "cannot load Lock";
+	budgetsema = Semaphore.new();
 	return nil;
 }
 
@@ -426,11 +436,108 @@ recordspend(acct: ref Account, amount: array of byte)
 		b.spent = total;
 }
 
+reserve(acct: ref Account, amount: array of byte): string
+{
+	budgetsema.obtain();
+	err := checkbudget(acct, amount);
+	if(err != nil) {
+		budgetsema.release();
+		return err;
+	}
+	b := getbudget(acct.name);
+	if(b == nil) {
+		budgetsema.release();
+		return nil;
+	}
+	total := ethcrypto->beadd(b.spent, amount);
+	if(total == nil) {
+		budgetsema.release();
+		return "session total would overflow uint256";
+	}
+	b.spent = total;
+	budgetsema.release();
+	return nil;
+}
+
 budgetfor(acct: ref Account): ref Budget
 {
 	if(acct == nil)
 		return nil;
 	return getbudget(acct.name);
+}
+
+setfeebudget(acct: ref Account, b: ref FeeBudget)
+{
+	if(acct == nil || b == nil)
+		return;
+	newlist: list of (string, ref FeeBudget);
+	for(l := feebudgets; l != nil; l = tl l) {
+		(bname, nil) := hd l;
+		if(bname != acct.name)
+			newlist = hd l :: newlist;
+	}
+	feebudgets = (acct.name, b) :: newlist;
+}
+
+checkfee(acct: ref Account, amount: array of byte): string
+{
+	if(acct == nil)
+		return "nil account";
+	if(amount == nil)
+		return "nil fee";
+	b := getfeebudget(acct.name);
+	if(b == nil)
+		return "no ETH fee budget configured";
+	if(ethcrypto->becmp(b.maxpertx, nil) > 0 &&
+	   ethcrypto->becmp(amount, b.maxpertx) > 0)
+		return sys->sprint("fee %s exceeds per-tx fee limit %s ETH wei",
+			ethcrypto->betodec(amount), ethcrypto->betodec(b.maxpertx));
+	if(ethcrypto->becmp(b.maxpersess, nil) > 0) {
+		total := ethcrypto->beadd(b.spent, amount);
+		if(total == nil)
+			return "fee session total would overflow uint256";
+		if(ethcrypto->becmp(total, b.maxpersess) > 0)
+			return sys->sprint("fee %s would exceed session fee limit %s ETH wei (spent: %s)",
+				ethcrypto->betodec(amount), ethcrypto->betodec(b.maxpersess),
+				ethcrypto->betodec(b.spent));
+	}
+	return nil;
+}
+
+reservefee(acct: ref Account, amount: array of byte): string
+{
+	budgetsema.obtain();
+	err := checkfee(acct, amount);
+	if(err != nil) {
+		budgetsema.release();
+		return err;
+	}
+	b := getfeebudget(acct.name);
+	total := ethcrypto->beadd(b.spent, amount);
+	if(total == nil) {
+		budgetsema.release();
+		return "fee session total would overflow uint256";
+	}
+	b.spent = total;
+	budgetsema.release();
+	return nil;
+}
+
+feebudgetfor(acct: ref Account): ref FeeBudget
+{
+	if(acct == nil)
+		return nil;
+	return getfeebudget(acct.name);
+}
+
+getfeebudget(name: string): ref FeeBudget
+{
+	for(l := feebudgets; l != nil; l = tl l) {
+		(n, b) := hd l;
+		if(n == name)
+			return b;
+	}
+	return nil;
 }
 
 getbudget(name: string): ref Budget

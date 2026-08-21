@@ -73,7 +73,7 @@ init(apikey: string): string
 # POST /v1/payment_intents
 # Body: amount=NNN&currency=usd&description=...
 #
-createpayment(amount: int, currency: string, description: string): (string, string)
+createpayment(amount: int, currency: string, description, idempotencykey: string): (string, string)
 {
 	if(secretkey == "")
 		return (nil, "stripe not initialized");
@@ -83,7 +83,7 @@ createpayment(amount: int, currency: string, description: string): (string, stri
 		"&description=" + urlencode(description) +
 		"&automatic_payment_methods[enabled]=true";
 
-	(resp, err) := apipost("/payment_intents", body);
+	(resp, err) := apipost("/payment_intents", body, idempotencykey);
 	if(err != nil)
 		return (nil, err);
 
@@ -197,13 +197,15 @@ apiget(path: string): (ref Response, string)
 	return webclient->request("GET", url, hdrs, nil);
 }
 
-apipost(path: string, body: string): (ref Response, string)
+apipost(path: string, body, idempotencykey: string): (ref Response, string)
 {
 	url := APIBASE + path;
 	hdrs :=
 		authheader() ::
 		Header("Content-Type", "application/x-www-form-urlencoded") ::
 		nil;
+	if(idempotencykey != nil && idempotencykey != "")
+		hdrs = Header("Idempotency-Key", idempotencykey) :: hdrs;
 	return webclient->request("POST", url, hdrs, array of byte body);
 }
 

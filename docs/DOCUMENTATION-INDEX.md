@@ -31,6 +31,7 @@
 | Document | Description |
 |----------|-------------|
 | [CLAUDE.md](../CLAUDE.md) | Development guide for Claude Code (build, test, project structure) |
+| [TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md) | **Worked tutorial** — design, build, test, and document a 9P service (`countfs`); every artifact ships in-tree |
 | [TESTING.md](TESTING.md) | Testing guide (unit tests, integration tests, CI) |
 | [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) | Performance specifications and benchmarks |
 | [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results (v1, v2, v3 suites) |

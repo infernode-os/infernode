@@ -48,6 +48,7 @@ TARG=\
 	cleanname.dis\
 	cmp.dis\
 	comm.dis\
+	countfs.dis\
 	cp.dis\
 	cprof.dis\
 	cpu.dis\

@@ -2,6 +2,7 @@ intro 0intro
 9srvfs 9srvfs
 acme acme
 archfs archfs
+countfs countfs
 cpu cpu
 dbfs dbfs
 rawdbfs dbfs

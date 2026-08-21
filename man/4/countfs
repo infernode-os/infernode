@@ -1,0 +1,71 @@
+.TH COUNTFS 4
+.SH NAME
+countfs \- counter file service (tutorial example)
+.SH SYNOPSIS
+.BI "mount {countfs} " dir
+.SH DESCRIPTION
+.I Countfs
+serves 9P on its standard input, presenting a small file tree that
+maintains a single integer counter.  It exists as the worked example
+for the file-server tutorial,
+.BR docs/TUTORIAL-9P-SERVICE.md ,
+and is deliberately minimal: three files, text data, access control
+by file mode.
+.PP
+The served tree contains:
+.TP
+.B ctl
+Write-only (mode 222).  Accepts one textual request per write:
+.RS
+.TP
+.BI add " n"
+add
+.I n
+to the counter
+.TP
+.BI set " n"
+set the counter to
+.I n
+.TP
+.B reset
+set the counter to zero
+.RE
+.IP
+Any other request fails with an error.  Reads are rejected by the
+file mode.
+.TP
+.B value
+Read-only (mode 444).  The current counter value as decimal text,
+one line.
+.TP
+.B log
+Read-only (mode 444).  One line per change, oldest first, at most 64
+lines, fields space-separated:
+.IP
+.EX
+.I time verb old new
+.EE
+.IP
+where
+.I time
+is an RFC 3339 UTC timestamp.  The log is line-oriented so that
+.IR grep (1)
+and pipelines apply directly.
+.SH EXAMPLE
+.EX
+mount {countfs} /mnt/count
+echo add 5 > /mnt/count/ctl
+cat /mnt/count/value        # prints 5
+cat /mnt/count/log
+.EE
+.SH SOURCE
+.B /appl/cmd/countfs.b
+.SH SEE ALSO
+.IR mount (1),
+.IR styxservers (2),
+.IR mntgen (4),
+.B docs/TUTORIAL-9P-SERVICE.md
+.SH BUGS
+The counter and log are held in memory and vanish with the process;
+persistence, were it wanted, would come from mounting the service
+over a durable path, not from code.

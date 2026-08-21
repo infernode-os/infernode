@@ -808,19 +808,96 @@ loadhistory(acctname: string)
 
 fmthistory(line: string): string
 {
-	(nil, toks) := sys->tokenize(line, " \t");
-	if(toks != nil && hd toks == "pay")
-		toks = tl toks;
-	amount := ""; recip := ""; txhash := "";
-	if(toks != nil){ amount = hd toks; toks = tl toks; }
-	if(toks != nil){ recip = hd toks; toks = tl toks; }
-	if(toks != nil){ txhash = hd toks; }
+	(kind, token, amount, recip, txhash) := parsehistory(line);
+	if(kind == "")
+		return line;
 	if(len recip > 12)
 		recip = recip[0:6] + ".." + recip[len recip - 4:];
-	out := amount + " -> " + recip;
+	out := amount;
+	if(token != "")
+		out += " " + token;
+	out += " -> " + recip;
 	if(len txhash > 10)
 		out += "  tx:" + txhash[0:10] + "..";
 	return out;
+}
+
+#
+# wallet9p history lines are "<epoch> <kind> ..." :
+#   <ts> pay  <token> <amount> <recipient> <txhash>
+#   <ts> x402 <amount> <asset> <payto>
+# The leading timestamp and the token field were added when history
+# became an audit trail; parse defensively so a line written by an
+# older server (no timestamp, no token) still renders.
+#
+parsehistory(line: string): (string, string, string, string, string)
+{
+	(nil, toks) := sys->tokenize(line, " \t");
+	if(toks == nil)
+		return ("", "", "", "", "");
+
+	# skip a leading epoch timestamp if present
+	if(alldigits(hd toks)){
+		toks = tl toks;
+		if(toks == nil)
+			return ("", "", "", "", "");
+	}
+
+	kind := hd toks;
+	toks = tl toks;
+
+	if(kind == "x402"){
+		amount := next(toks); toks = rest(toks);
+		asset := next(toks); toks = rest(toks);
+		payto := next(toks);
+		return ("x402", shortasset(asset), amount, payto, "");
+	}
+	if(kind != "pay")
+		return ("", "", "", "", "");
+
+	# "pay <token> <amount> <recipient> <txhash>"; a line from an older
+	# server omits the token, in which case the next field is numeric.
+	token := next(toks);
+	if(alldigits(token)){
+		amount := token; toks = rest(toks);
+		recip := next(toks); toks = rest(toks);
+		return ("pay", "", amount, recip, next(toks));
+	}
+	toks = rest(toks);
+	amount := next(toks); toks = rest(toks);
+	recip := next(toks); toks = rest(toks);
+	return ("pay", token, amount, recip, next(toks));
+}
+
+next(l: list of string): string
+{
+	if(l == nil)
+		return "";
+	return hd l;
+}
+
+rest(l: list of string): list of string
+{
+	if(l == nil)
+		return nil;
+	return tl l;
+}
+
+alldigits(s: string): int
+{
+	if(s == nil || s == "")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+shortasset(a: string): string
+{
+	if(len a > 12)
+		return a[0:6] + ".." + a[len a - 4:];
+	return a;
 }
 
 selectedtxhash(): string
@@ -832,14 +909,8 @@ selectedtxhash(): string
 	i := 0;
 	for(l := historyraw; l != nil; l = tl l){
 		if(i == idx){
-			(nil, toks) := sys->tokenize(hd l, " \t");
-			if(toks != nil && hd toks == "pay")
-				toks = tl toks;
-			if(toks != nil) toks = tl toks;	# amount
-			if(toks != nil) toks = tl toks;	# recipient
-			if(toks != nil)
-				return hd toks;
-			return "";
+			(nil, nil, nil, nil, txhash) := parsehistory(hd l);
+			return txhash;
 		}
 		i++;
 	}

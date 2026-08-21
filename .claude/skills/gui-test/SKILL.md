@@ -70,8 +70,9 @@ tools/tk-snapshot.sh cmds.txt out.png 360 240
 `cmds.txt` is one Tk command per line (`#` comments; `\n` becomes a real
 newline). Internally: `tests/tkrender.b` builds a no-window-manager
 toplevel and `writeimage`s it; `tools/p9img2png.py` decodes on the host.
-Known limitation: the wrapper currently hardcodes the Linux emu path — on
-macOS run the two steps manually with `emu/MacOSX/o.emu`.
+The wrapper picks the platform emulator by `uname`; if an older checkout
+errors about the Linux emu, run the two steps manually with
+`emu/MacOSX/o.emu`.
 
 Rules from `docs/TK-MIGRATION.md` (read its "Verifying a migration"
 section): `-width`/`-height` are pixels, not characters; action channels

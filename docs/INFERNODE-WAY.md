@@ -488,6 +488,30 @@ A maintainer can approve, redirect, or point at prior art in one
 pass — before any of your time is spent on implementation.
 
 
+## Keeping this document honest
+
+This document only earns its keep if it actually prevents wasted
+work, so it has a feedback loop:
+
+- **Reviewers cite sections, not opinions.** A review comment that
+  asks for a design change should point at the section here (or in
+  a companion doc) that explains why. That keeps rejections
+  impersonal and fast — and it tests the document: if there is no
+  section to cite, the gap is the document's, not the
+  contributor's.
+- **Misses get filed.** When a contributor or agent goes wrong in
+  a way this document should have prevented — or a section is
+  cited and still misread — open an issue labeled `way-doc-gap`
+  saying what was misunderstood. Those issues are this document's
+  revision queue.
+- **Perishable facts live elsewhere.** This document states
+  principles, which age well. Current-state facts (what CI gates,
+  which harness is unverified, tool inventories) belong in the
+  skills under `.claude/skills/` and in the referenced docs, where
+  they are expected to be maintained. If you find a dated claim
+  here, that is a `way-doc-gap` issue too.
+
+
 ## Further reading
 
 In reading order for a new contributor:

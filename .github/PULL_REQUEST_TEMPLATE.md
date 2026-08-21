@@ -21,7 +21,7 @@ How was this tested?
 - [ ] Documentation updated (if applicable)
 - [ ] No secrets, API keys, or credentials included
 
-The InferNode way (see [docs/INFERNODE-WAY.md](../blob/master/docs/INFERNODE-WAY.md); check what applies):
+The InferNode way (see [docs/INFERNODE-WAY.md](https://github.com/infernode-os/infernode/blob/master/docs/INFERNODE-WAY.md); check what applies):
 
 - [ ] New capabilities are exposed as file interfaces (9P), not libraries/RPC/bespoke protocols
 - [ ] Data crossing 9P interfaces is plain text (no JSON inside the namespace)

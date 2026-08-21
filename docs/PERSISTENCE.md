@@ -31,8 +31,10 @@ Config overlays outside `/usr` (`/lib/ndb`, theme, veltro state,
 
 On top of durability sits **history**: with snapshots enabled
 (`Settings → Snapshots`, or `touch /usr/inferno/snapshots/on`),
-`snapd(8)` archives the whole of `/usr` daily into a local write-once
-venti store as a vac tree. Each snapshot is one line — a date and a
+`snapd(8)` archives the whole of `/usr` **plus the config overlays
+outside it** (`/lib/ndb`, theme, `/lib/veltro`, `/lib/keyring` — the
+union view, durable side first) daily into a local write-once venti
+store as one vac archive. Each snapshot is one line — a date and a
 45-byte score — in `/usr/inferno/snapshots/log`; any past state mounts
 read-only with `vacfs(4)` or extracts with `vacget(1)`. Identical
 content dedupes, so a snapshot costs only what changed.
@@ -105,6 +107,13 @@ reclaiming space means starting a fresh store, by design.
 - No restore-from-snapshot as the durability story (see §2).
 - No automatic migration of `/usr` across skeleton changes — seeding is
   first-boot-only, the historical norm.
+- No InferNode-side primary home yet. A contemplated future shape —
+  closer to the original logon model — is that each person gets a real
+  `/usr/<name>` (via `newuser(8)`) as their PRIMARY home, with the host
+  home union-bound *into* it rather than standing in for it, and
+  InferNode-created files living there. Deferred: the current
+  host-home-as-home setup is robust, and the hard requirement — an app
+  update must never lose user data — is already met by the overlay.
 - No remote-`/usr` default. The network-computer configuration (mount a
   server's `/usr`, roam with signer certificates) remains possible —
   the overlay is just a bind, and a user `namespace` file can mount

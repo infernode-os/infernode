@@ -48,13 +48,21 @@ Command: module
 
 VENTIADDR: con "tcp!127.0.0.1!17034";
 SNAPDIR: con "/usr/inferno/snapshots";
+
+# Default archive set: the durable /usr plus the ~/.infernode config
+# overlays that live OUTSIDE /usr (captured as the namespace sees them
+# — the union view, durable side first). The system tree stays out
+# (reproducible from releases); the host home stays out (the host's
+# own backup domain); the store stays out (outside these trees by
+# construction).
+DEFTREES: con "/usr /lib/ndb /lib/lucifer/theme /lib/veltro /lib/keyring";
 DAYMS: con 24 * 60 * 60 * 1000;
 MAXDATA: con big 8589934592;	# keep in sync with the profile's ventisrv args
 WARNPCT: con 80;
 
 stderr: ref Sys->FD;
 addr := VENTIADDR;
-tree := "/usr";
+trees: list of string;
 maxdata := MAXDATA;
 
 init(nil: ref Draw->Context, args: list of string)
@@ -71,17 +79,21 @@ init(nil: ref Draw->Context, args: list of string)
 
 	oneshot := 0;
 	arg->init(args);
-	arg->setusage("snapd [-1] [-a addr] [-p tree] [-m maxdatasize]");
+	arg->setusage("snapd [-1] [-a addr] [-p tree]... [-m maxdatasize]");
 	while((c := arg->opt()) != 0)
 		case c {
 		'1' =>	oneshot = 1;
 		'a' =>	addr = arg->earg();
-		'p' =>	tree = arg->earg();
+		'p' =>	trees = arg->earg() :: trees;
 		'm' =>	maxdata = big arg->earg();
 		* =>	arg->usage();
 		}
 	if(arg->argv() != nil)
 		arg->usage();
+	if(trees == nil) {
+		(nil, deftrees) := sys->tokenize(DEFTREES, " ");
+		trees = deftrees;
+	}
 
 	sys->create(SNAPDIR, Sys->OREAD, Sys->DMDIR | 8r755);
 
@@ -127,7 +139,7 @@ snapshot(): string
 	fd = nil;
 
 	if(audit != nil)
-		audit->log("snapd", "snapshot", "tree=" + tree + " score=" + score);
+		audit->log("snapd", "snapshot", "trees=" + jointrees(",") + " score=" + score);
 	return status("ok " + stamp() + " " + score);
 }
 
@@ -178,7 +190,7 @@ vacputproc(cmd: Command, ofd: ref Sys->FD, donec: chan of int)
 	sys->dup(ofd.fd, 1);
 	ofd = nil;
 	{
-		cmd->init(nil, "vacput" :: "-a" :: addr :: tree :: nil);
+		cmd->init(nil, "vacput" :: "-a" :: addr :: revtrees());
 	} exception {
 	* =>
 		;
@@ -236,6 +248,26 @@ getenv(name: string): string
 	s := string buf[:n];
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == 0))
 		s = s[:len s - 1];
+	return s;
+}
+
+# trees was built by prepending -p args; restore command-line order
+revtrees(): list of string
+{
+	r: list of string;
+	for(l := trees; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+jointrees(sep: string): string
+{
+	s := "";
+	for(l := revtrees(); l != nil; l = tl l) {
+		if(s != "")
+			s += sep;
+		s += hd l;
+	}
 	return s;
 }
 

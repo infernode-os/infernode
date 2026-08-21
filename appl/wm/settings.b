@@ -664,7 +664,7 @@ SNAPLOG: con "/usr/inferno/snapshots/log";
 
 panelsnapshots()
 {
-	hdr("snph", "Snapshots (venti archive of /usr)");
+	hdr("snph", "Snapshots (venti archive of /usr + config overlays)");
 	lbl("snpstat", snapstatus());
 	if(fileexists(SNAPON)) {
 		btn("snpdis", "Disable daily snapshots (relaunch required)", "snapdisable");

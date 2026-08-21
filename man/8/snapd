@@ -17,12 +17,26 @@ snapd \- daily vac snapshots of /usr into the local venti store
 ]
 .SH DESCRIPTION
 .I Snapd
-archives the durable
-.B /usr
-tree into the snapshot venti store as a vac tree, once shortly after
-startup and then daily; with
+archives the durable trees into the snapshot venti store as one vac
+archive, once shortly after startup and then daily; with
 .B -1
 it takes a single snapshot and exits.
+The default set is
+.B /usr
+plus the configuration overlays that live outside it:
+.BR /lib/ndb ,
+.BR /lib/lucifer/theme ,
+.B /lib/veltro
+and
+.BR /lib/keyring ,
+each captured as the namespace sees it (the durable overlay side
+first). Repeatable
+.B -p
+options replace the set.
+Note that keyring files are archived: scores from this store name key
+material, exactly as the host-side
+.B ~/.infernode/lib/keyring
+files do; the store is localhost-only.
 Each snapshot appends one line \(em a timestamp and a
 .B vac:
 score \(em to

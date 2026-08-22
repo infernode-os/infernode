@@ -9,11 +9,17 @@ Veltro uses Inferno OS namespace isolation to create secure environments for AI 
 This document distinguishes:
 
 - **Harness** — the namespace-restriction machinery itself: `nsconstruct`,
-  `tools9p`, `lucibridge`, and the `veltro`/`repl`/`spawn` entry points that
-  call `restrictns(caps)`. The harness defines what an agent *can* do.
-- **Agent** — a running process executing the harness loop with a model and a
-  capability set. Each `repl`, `veltro`, `lucibridge`, or `spawn`'d child is a
-  separate agent with its own restricted namespace.
+  `tools9p`, and the `veltro`/`repl`/`spawn` entry points. The harness defines
+  what an agent *can* do and is trusted code.
+- **Coordinator** — the process that owns the model loop and chooses which
+  tool request to send. `veltro` and `repl` restrict their own namespaces.
+  `lucibridge` is a trusted GUI coordinator: it does not call `restrictns()`;
+  model-requested effects cross into a fresh, confined `tools9p` worker for
+  every call. Model text is data and never executes in the coordinator.
+- **Agent** — a logical model session plus its capability set. Do not assume
+  one agent means one confined process: the enforcement point is either its
+  restricted coordinator (`veltro`/`repl`), its per-call `tools9p` worker, or
+  its spawned child.
 - **Subagent** — an agent created by another agent via the `spawn` tool.
   Subagents inherit an already-restricted namespace and can only narrow it
   further (capability attenuation).
@@ -88,15 +94,18 @@ factotum only; plaintext key files under `/lib/veltro` are prohibited. Raw
 tools may receive factotum from trusted namespace construction, but generic
 path grants must not hand the credential service to arbitrary tools.
 
-Three harness entry points apply namespace restriction:
+Four model-execution boundaries apply namespace restriction:
 
 | Entry Point | Where | When |
 |-------------|-------|------|
 | `tools9p` invocation | `appl/veltro/tools9p.b` | Per tool call, after `FORKNS`, attenuated to the invoked tool |
 | `repl` init | `appl/veltro/repl.b` | After mount checks, before LLM session |
+| `veltro` init | `appl/veltro/veltro.b` | After tool discovery, before LLM session |
 | `spawn` child | `appl/veltro/tools/spawn.b` | In runchild(), before subagent->runloop() |
 
-All three call `nsconstruct->restrictns(caps)` after `pctl(FORKNS)`.
+All four call `nsconstruct->restrictns(caps)` after `pctl(FORKNS)`. `lucibridge`
+does not run model-supplied code directly; it relies on the `tools9p` row for
+every model-requested tool effect.
 
 ## How It Works
 
@@ -112,22 +121,26 @@ All three call `nsconstruct->restrictns(caps)` after `pctl(FORKNS)`.
 4. Result: target shows only allowed items; everything else is gone
 ```
 
-`writable=1` adds `MCREATE` to the final bind so file creation is permitted at the
-mount point. Required for `/tmp`; all other directories use `writable=0`.
+`writable=1` adds `MCREATE` to the final and inner binds so file creation is
+permitted. It is used only for explicit writable views such as `/tmp`, activity
+scratch, wallet proposal files, message draft/flag endpoints, and cowfs staging.
 
 Special handling for `target == "/"`:
 - Skips `stat()` on each item to avoid deadlock on 9P self-mounts (e.g., `/tool`)
 - Creates directory mount points unconditionally
 - Bind failures are non-fatal (item may not exist in current namespace)
 
-### Two-Level Restriction
+### Layered Restriction
 
 ```
-tools9p/repl:   FORKNS + restrictns()   -- restrict agent's namespace
+tools9p call:   FORKNS + restrictns()   -- one invoked tool only
+veltro/repl:    FORKNS + restrictns()   -- restrict coordinator namespace
 subagent spawn: FORKNS + restrictns()   -- inherit + further restrict
 ```
 
-Both levels use the same `restrictdir()` primitive. Capability attenuation is natural: children fork an already-restricted namespace and can only narrow further.
+All layers use the same `restrictdir()` primitive. Capability attenuation is
+natural: children fork an already-restricted namespace and can only narrow
+further.
 
 Task briefs, instructions, model choices, and agent-role selections are exchanged
 under `/tmp/veltro/tasks`. `restrictns()` replaces that directory with an empty
@@ -153,18 +166,23 @@ tool grants.
 
 ## Namespace Restriction Policy
 
-`restrictns(caps)` applies these restrictions in order:
+`restrictns(caps)` applies these restrictions in order. Conditional entries are
+absent, not present-and-denied:
 
-| Step | Target | Allowed | writable | Purpose |
-|------|--------|---------|----------|---------|
-| 1 | `/dis` | `lib/`, `veltro/` (+ `sh.dis` if exec or shellcmds granted, + named cmds if shellcmds granted) | 0 | Runtime + agent modules only |
-| 2 | `/dis/veltro/tools` | Only granted tool .dis files (if caps.tools is set) | 0 | Per-agent tool allowlist |
-| 3 | `/dev` | `cons`, `null` | 0 | Minimum devices |
-| 4 | `/n` | `speech/` (if explicitly path-granted), `git/` (only for the `git` tool), `wallet/` (if explicitly path-granted), `wikia/` (only for the `wiki` tool), `local/` (only if caps.paths grants subpaths) | 0 | Foreign imports |
-| 5 | `/n/local` | Only granted subpaths (recursive restrictdir) | 0 | Host filesystem drill-down |
-| 6 | `/lib` | `veltro/` | 0 | Agent config, tools, reminders |
-| 7 | `/` | `dev`, `dis`, `env`, `lib`, `n`, `prog`, `tmp`, `tool` (+ `net`/`net.alt` only for fixed-function network tools; `chan` only if `caps.xenith`) | 0 | Hide project files, descriptors, node identity state, and ambient network access |
-| 8 | `/tmp` | `veltro/` | **1** | Hide trusted shadow/audit backing while retaining writable agent workspace |
+| Step | Target | Allowed | Purpose |
+|------|--------|---------|---------|
+| 1 | `/dis` | `lib/`, `veltro/`; `sh.dis` for exec; named commands from `shellcmds`; explicitly granted `/dis/<tree>` | Runtime and named executable allowlist |
+| 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
+| 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
+| 4 | `/n` | Capability-derived foreign imports: speech, wallet, wikia, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
+| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services are narrowed again | Synthesized-service capabilities |
+| 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
+| 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
+| 8 | `/prog` | Current pid for non-exec tools; empty for exec, including exec with `shellcmds` | No parent/sibling inspection or control |
+| 9 | `/` | Base system dirs plus only capability-derived `/mnt`, network, UI, phone, and explicit root trees | Replace the host-backed root union |
+| 10 | `/tool` and extra roots | Tool metadata/current tool plus recursively narrowed explicit path grants | Remove generic control files and sibling paths |
+| 11 | activity views | Per-activity cowfs writes, scratch, task metadata, and tool-specific `/tmp/veltro` entries | Isolate mutable state |
+| 12 | `/tmp` | `veltro/` only, writable | Hide `/tmp/.veltro-ns` after construction |
 
 **Order matters**: all bind replacements and COW mounts are created from trusted
 backing under `/tmp/.veltro-ns/`; `/tmp` is restricted last. Existing mount
@@ -175,7 +193,7 @@ the shadow directories or namespace audit snapshots.
 
 ## Namespace After Restriction
 
-### Parent agent (started via `tools9p` / `repl` harness entry points)
+### Representative Restricted View
 
 ```
 /
@@ -183,37 +201,45 @@ the shadow directories or namespace audit snapshots.
 +-- dev/
 |   +-- cons      console I/O
 |   +-- null      null device
+|   +-- time      read-only clock
 +-- dis/
 |   +-- lib/      Limbo runtime libraries
 |   +-- veltro/   agent modules + tools
 +-- env/          environment variables
 +-- lib/
 |   +-- veltro/   agents/, reminders/, tools/, system.txt
+|   +-- certs/    TLS trust roots
 +-- n/
-|   +-- llm/      LLM access (if mounted)
-|   +-- speech/   speech synthesis/recognition (if mounted)
+|   +-- ...       only granted foreign imports
++-- mnt/          only when an application subtree is granted
+|   +-- llm/      coordinator only; spawned children use a pre-opened FD
 +-- net/          TCP/IP networking (fixed-function network invocation only)
-+-- prog/         process information
++-- prog/         self only; empty for exec
 +-- tmp/
 |   +-- veltro/
 |       +-- scratch/     agent workspace
-|       +-- .ns/         shadow dirs + audit logs
+|       +-- .ns/         coordinator manifest metadata, when retained
 +-- tool/         tools9p mount (9P filesystem)
 
 NOT VISIBLE after restriction:
 /.env, /.git, /CLAUDE.md        project secrets/config
 /appl, /emu, /module, /mkfiles  source tree
-/n/local                        host macOS filesystem
+/n/local                        host filesystem, unless exactly granted
 /chan                            Xenith windows (unless xenith tool granted)
 /fonts, /icons, /man            non-essential data
 /dis/*.dis                      top-level commands
 ```
 
+The tree is capability-dependent. `/mnt`, `/net`, `/chan`, `/phone`, extra
+root directories, and most `/tmp/veltro` entries do not exist unless the
+current operation needs them. Bind shadows and namespace audit backing live at
+`/tmp/.veltro-ns`, which is hidden by the final `/tmp` replacement.
+
 ### Child Subagent (spawn)
 
-Inherits parent's already-restricted namespace, then further restricts:
-- `/dis/veltro/tools/` narrowed to only granted tool .dis files
-- Everything else inherited from parent (already restricted)
+The child starts a fresh process group and environment, forks the already
+restricted parent namespace, narrows tools and paths again, prunes descriptors,
+then applies `NODEVS`. It cannot recover authority absent from the parent.
 
 ## Entry Point Details
 
@@ -226,37 +252,43 @@ not ambient authority inside each operation. A `read` or `exec` call does not
 inherit `/net`, factotum, `/chan`, UI, or sibling tool modules merely because a
 network/UI tool is also registered.
 
-The ordering remains security-critical:
+For ordinary tools the ordering remains security-critical:
 
 ```
 asyncexec(tool):
   1. pctl(FORKNS)
-  2. bind /tool.N over /tool
-  3. restrictns(Capabilities(tools = [tool], ...))
-  4. pctl(NODEVS), then execute only that tool module
+  2. pctl(NODEVS)
+  3. bind /tool.N over /tool
+  4. restrictns(Capabilities(tools = [tool], ...))
+  5. execute only that tool module
 ```
 
-`exec` has one constrained variation: its trusted wrapper opens the current
-worker's `#p/<pid>/wait` before `NODEVS`, retains that single FD across
-`NEWFD`, applies `NODEVS`, and passes the FD to sh through `systemfd`. Its
-`/prog` directory is empty. Model-supplied command text is parsed only after
-device attachment is disabled, so shell child waiting does not require ambient
-process control authority.
+`exec` defers `NODEVS` to its trusted wrapper. The wrapper opens the current
+worker's `#p/<pid>/wait`, retains only that FD and its I/O across `NEWFD`, then
+applies `NODEVS` before parsing or running model-supplied command text. Its
+`/prog` directory is empty even when named `shellcmds` are granted.
 
 After restriction, all async tool execution threads (via `spawn asyncexec()`) inherit the restricted namespace.
 
-### repl Restriction
+### repl and veltro Restriction
 
-The REPL applies restriction after verifying `/tool` and `/mnt/llm` are mounted, but before creating the LLM session:
+Both command-line coordinators apply `NODEVS` and restriction after discovering
+their tool/path grants but before creating the LLM session:
 
 ```
 1. Load NsConstruct module (while /dis unrestricted)
 2. Read /tool/tools -- get live tool list before restriction
 3. pctl(FORKNS)
-4. restrictns(caps)   -- caps.tools = live tool list; caps.paths = -p flag paths
-5. Create LLM session -- /mnt/llm still accessible
-6. Enter repl loop
+4. pctl(NODEVS)
+5. restrictns(caps)   -- includes internal /mnt/llm grant
+6. Create LLM session
+7. Enter model loop
 ```
+
+`lucibridge` is different: it remains a trusted UI coordinator and does not
+call `restrictns()`. Its model-requested tool calls cross the per-invocation
+`tools9p` boundary above. Changes that execute model text or tool modules inside
+`lucibridge` would violate this contract.
 
 ### spawn Child Restriction
 
@@ -304,20 +336,21 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 
 | Property | Mechanism |
 |----------|-----------|
-| No host filesystem access | `/n/local` hidden by `/n` restriction; `#U` blocked by NODEVS (child) |
+| No ambient host filesystem | `/n/local` is absent unless exactly granted; `#U` attachment is blocked by `NODEVS` at every execution boundary |
 | No project file exposure | Root restriction hides `.env`, `.git`, `CLAUDE.md`, source tree |
-| No env secrets | NEWENV creates empty environment (child) |
-| No FD leaks | NEWFD with explicit keep-list (child) |
+| No env secrets | `/env` is allowlisted; spawned children also use `NEWENV` |
+| No ambient child FDs | Spawn uses `NEWFD`; exec keeps only I/O and its private wait FD |
 | Safe FD 0-2 | `verifysafefds()` redirects nil FDs to `/dev/null` |
 | Empty srv registry | NEWPGRP first (child) |
 | Truthful namespace | bind-replace shows only allowed items; no "access denied" on visible paths |
 | Capability attenuation | Child forks restricted parent, can only narrow |
-| No cleanup needed | bind-replace is namespace-only, no physical directories to manage |
-| Auditable | `verifyns()` checks for dangerous paths; `emitauditlog()` records operations |
+| Bounded process visibility | `/prog` is self-only for non-exec tools and empty for exec, with or without `shellcmds` |
+| Shadow cleanup | tools9p reclaims per-call physical shadows and sweeps crash leftovers at startup |
+| Auditable construction | `emitauditlog()` records restrictions; `verifyns()` is a test/debug helper, not an automatic runtime gate |
 | No cross-window access | `/chan` hidden unless `caps.xenith` is set; REPL opens FDs before restriction |
 | exec grants sh.dis only | `sh.dis` bound when `exec` is in caps.tools; named commands require `shellcmds` |
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
-| /tmp writable | `restrictdir("/tmp", ..., 1)` — MCREATE applied only to /tmp, not /dis/lib/dev |
+| Writable views explicit | `MCREATE` appears only on `/tmp`, proposal endpoints, activity scratch, and cowfs staging |
 | Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
 | Speech preserved | `/n/speech` auto-detected and included in `/n` allowlist |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
@@ -356,7 +389,7 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 /dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json http git memory todo websearch grep; /dis/veltro/repl -v
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json webfetch git memory todo websearch grep; /dis/veltro/repl -v
 
 # Expose a host filesystem path to the agent (-p flag, comma-separated)
 /dis/veltro/tools9p read list find grep; /dis/veltro/repl -p /n/local/Users/pdfinn/projects
@@ -375,7 +408,7 @@ From within an agent session:
 spawn tools=read,list -- list the contents of /n and /tmp
 spawn tools=read,list,find agenttype=explore -- find all .b files under /appl
 spawn tools=read agenttype=plan model=sonnet -- plan a refactor of repl.b
-spawn tools=read,write,edit shellcmds=cat,ls -- edit /tmp/veltro/scratch/notes.txt
+spawn tools=exec shellcmds=cat,ls -- inspect only with the named commands
 ```
 
 Options:
@@ -383,7 +416,7 @@ Options:
 - `paths=<csv>` -- host filesystem paths to expose (optional)
 - `shellcmds=<csv>` -- shell commands to allow (grants sh.dis + named cmds)
 - `agenttype=<type>` -- agent prompt: default, explore, plan, task
-- `model=<name>` -- LLM model (default: haiku)
+- `model=<name>` -- LLM model (default: the llmsrv backend default)
 - `temperature=<float>` -- 0.0-2.0 (default: 0.7)
 - `thinking=<val>` -- off, max, or token budget 0-30000
 - `system=<prompt>` -- explicit system prompt (overrides agenttype)
@@ -397,13 +430,18 @@ If speech9p is mounted at `/n/speech`:
 
 ## Verification
 
-`verifyns(expected)` performs post-restriction auditing:
+`verifyns(expected)` is an explicit test/debug helper. Production entry points
+do not call it automatically. When invoked it:
 
 1. Reads `/prog/$pid/ns` for current namespace state
 2. Checks for known dangerous paths in mount table (`/n/local`, `#U` bindings)
 3. Negative assertions: `stat()` on `/.env`, `/.git`, `/CLAUDE.md`, `/n/local` -- must fail
 4. Positive assertions: `stat()` on expected paths -- must succeed
 5. Returns nil on success, violation description on failure
+
+Runtime enforcement comes from `restrictns()`, `NODEVS`, process groups, and
+descriptor pruning. `nsaudit` and namespace manifests are advisory evidence;
+they do not repair a bad runtime capability set.
 
 ## Design Decisions
 
@@ -412,11 +450,11 @@ If speech9p is mounted at `/n/speech`:
 | Criterion | v2 (NEWNS + sandbox) | v3 (FORKNS + bind-replace) |
 |-----------|---------------------|---------------------------|
 | File copying | Required (NEWNS loses binds) | None |
-| Cleanup | Required (rmrf sandbox dir) | None (namespace-only) |
+| Cleanup | Required (rmrf copied sandbox) | Reclaim small bind-shadow directories |
 | Bootstrap | Chicken-and-egg problem | No problem (fork existing) |
-| Code size | ~860 lines | ~455 lines |
+| Code size | Larger copied-sandbox builder | `nsconstruct.b` plus focused helpers |
 | Security model | Allowlist (by construction) | Allowlist (by replacement) |
-| Race conditions | Create-fails-if-exists | PID-scoped shadow dirs |
+| Collision control | Create-fails-if-exists | PID/sequence/time-scoped shadow dirs |
 
 ### Why restrict `/` (root)?
 
@@ -436,10 +474,12 @@ tools9p cleanup process can access this tree; restricted agents cannot.
 
 | File | Purpose |
 |------|---------|
-| `appl/veltro/nsconstruct.m` | Module interface: restrictdir, restrictns, verifyns, emitauditlog |
-| `appl/veltro/nsconstruct.b` | Core implementation (~455 lines) |
+| `module/nsconstruct.m` | Module interface: capabilities, restriction, verification helpers |
+| `appl/veltro/nsconstruct.b` | Core implementation |
 | `appl/veltro/tools9p.b` | Tool filesystem server with serveloop namespace restriction |
 | `appl/veltro/repl.b` | Interactive REPL with namespace restriction at init |
+| `appl/veltro/veltro.b` | Single-shot coordinator with namespace restriction at init |
+| `appl/cmd/lucibridge.b` | Trusted GUI coordinator; model effects go through tools9p |
 | `appl/veltro/tools/spawn.b` | Secure subagent spawn with FORKNS + restrictns |
 | `appl/veltro/subagent.b` | Subagent runloop (runs in restricted namespace) |
 | `lib/veltro/agents/*.txt` | Agent type prompts (default, explore, plan, task) |
@@ -463,6 +503,7 @@ Tests cover:
 - `restrictdir()` idempotent (multiple calls safe)
 - `restrictns()` full policy (/dis, /dev, /n, /lib, /tmp, /)
 - `restrictns()` shell access via shellcmds
+- `/prog` is empty for exec both with and without shellcmds
 - `restrictns()` concurrent (race safety)
 - `verifyns()` violation detection
 - Audit logging
@@ -476,7 +517,7 @@ Concurrency tests in `tests/veltro_concurrent_test.b`:
 - Concurrent restrictdir
 - Concurrent restrictns
 
-## Future Investigation: nsaudit
+## nsaudit: Advisory Analysis
 
 ### Not verification — syntactic analysis
 
@@ -546,9 +587,8 @@ Live audit: `nsaudit /tool`. Hypothetical analysis: construct a mock
 directory of the same shape. Fixtures for CI are directories of the same
 shape.
 
-A small addition to `tools9p` is required: expose `role`, `xenith`, `actid`,
-`nodevs` as scalar files under `/tool/meta/`. Without this, `nsaudit` only
-sees `tools` and `paths`.
+`tools9p` exposes `role`, `xenith`, `actid`, and `nodevs` as read-only scalar
+files under `/tool/meta/`. Fixtures use the same shape.
 
 **Tool authority manifest — ndb files at `lib/veltro/nsaudit/authorities/<tool>`:**
 
@@ -557,8 +597,8 @@ sees `tools` and `paths`.
     authorities  spawns_proc execs_code reads_fs writes_fs dials_net
     irreversible spawns_proc writes_fs dials_net
     notes        Force multiplier. Grants anything the spawned shell can
-                 reach within the agent's namespace. Scope limited by
-                 caps.shellcmds if set, otherwise unrestricted.
+                 reach within the agent's namespace. Named top-level
+                 commands require caps.shellcmds.
 
 One file per tool. Adding a tool means adding a file. Reviewed at every
 new tool.
@@ -566,32 +606,18 @@ new tool.
 **Rules — ndb files at `lib/veltro/nsaudit/rules/<name>`:**
 
     ; cat lib/veltro/nsaudit/rules/device-gate-bypass
-    name      DEVICE_GATE_BYPASS
+    rule      DEVICE_GATE_BYPASS
     severity  high
-    condition role=toplevel nodevs=unset
+    require   'role=toplevel nodevs=unset'
     message   top-level caps grants kernel device attach without NODEVS.
               Any sys->bind on an #x device will succeed, reaching
               #sfactotum, #U (host fs), or other kernel services
               regardless of path-based restriction.
     fix       add sys->pctl(Sys->NODEVS, nil) after the FORKNS site
 
-One file per rule. Adding a rule means adding a file (and a test).
-
-**Suppressions — ndb files at `lib/veltro/nsaudit/suppressions/<fixture>.<rule>`
-with expiry:**
-
-    ; cat lib/veltro/nsaudit/suppressions/shipping-default-full.exec-force-multiplier
-    rule     EXEC_FORCE_MULTIPLIER
-    scope    fixture=shipping-default-full
-    reason   Interactive REPL exposes exec so power users can run
-             commands. Scoped by caps.shellcmds and user consent at
-             first launch.
-    reviewed 2026-04-11
-    by       pdfinn
-    expires  2026-10-11
-
-Expired suppressions fail CI. Every rule suppression is a named, dated
-file — no hidden exceptions.
+One file per rule. Adding a rule means adding a file and a fixture under
+`tests/nsaudit-rules/`. Suppression files are not implemented; a finding must
+currently be removed by changing the capability set or the reviewed rule.
 
 ### Authority axes (closed set)
 
@@ -619,7 +645,7 @@ and enumerable. Adding a new axis is a deliberate act, not a derivation:
 | Windows | `modifies_windows` | `caps.xenith` |
 | Memory | `persists_memory` | `caps.memory` |
 
-### Initial rule set
+### Current Rule Set
 
 Each rule is a file at `lib/veltro/nsaudit/rules/`, each with a test
 under `tests/nsaudit-rules/`. New rules land as (file, test) pairs.
@@ -627,6 +653,9 @@ under `tests/nsaudit-rules/`. New rules land as (file, test) pairs.
 | Rule | Condition | Severity |
 |---|---|---|
 | `DEVICE_GATE_BYPASS` | `role=toplevel` ∧ `nodevs=unset` | high |
+| `DIRECT_MAIL_SEND` | a raw mail compose/send path is granted | high |
+| `INVALID_PATH_GRANT` | malformed or delimiter-bearing path grant | high |
+| `PRIVILEGED_CONTROL_PATH` | a trusted controller path is granted | high |
 | `EXFIL_RISK_EGRESS` | `reads_fs ∩ (dials_net ∨ sends_llm ∨ spawns_proc)` | high |
 | `EXEC_FORCE_MULTIPLIER` | `exec` in tools | info |
 | `UNCONSTRAINED_SHELL` | `exec` in tools ∧ `shellcmds` empty | high |
@@ -637,11 +666,9 @@ under `tests/nsaudit-rules/`. New rules land as (file, test) pairs.
 | `NET_EGRESS_IMPLICIT` | `dials_net` without matching `mcproviders` entry | medium |
 | `SUBAGENT_MISSING_NODEVS` | `role=child` ∧ `nodevs=unset` | high |
 
-`SUBAGENT_MISSING_NODEVS` is worth highlighting: it turns the
-`spawn.b:576` `pctl(NODEVS)` call from an implementation detail into a
-checked property. If someone edits `spawn.b` and removes the NODEVS call,
-the subagent fixture snapshot regenerates without `nodevs=set`, the rule
-fires, CI fails.
+`SUBAGENT_MISSING_NODEVS` turns the child `pctl(NODEVS)` call from an
+implementation detail into a checked profile property. A child fixture with
+`nodevs=unset` fires the rule and fails CI.
 
 ### Lightweight profile invariants
 
@@ -721,41 +748,15 @@ This is intentionally narrower than a full snapshot gate. It lets ordinary
 profile details churn while making the non-negotiable security properties
 visible immediately.
 
-### CI gate
+### CI Gate
 
-The gate is not runtime enforcement. It is a build-time check that
-shipping configurations match committed expectations.
+The gate is not runtime enforcement. CI runs the rule fixtures, additive
+profile invariants, and component-aware path checks. These fail on known bad
+authority compositions but do not freeze complete shipping namespace snapshots.
 
-**Fixtures at `tests/nsaudit-fixtures/<name>/`:** directories of the same
-shape as a live `/tool`, one per shipping configuration.
-
-- `shipping-default-full` — full GUI (`lib/lucifer/boot.sh` line 48)
-- `shipping-default-headless` — REPL without GUI
-- `shipping-default-subagent` — spawned child config (must have
-  `nodevs=set`)
-- `meta-agent` — the Meta Agent / Chief of Staff config used by
-  `lucibridge` at activity 0 (first high-value target)
-- `lucifer-gui` — lucifer's own context-zone namespace (second
-  high-value target)
-- `shipping-default-minimal` — smallest viable agent
-
-**Snapshots at `tests/nsaudit-fixtures/<name>/expected.ns`:** committed
-ndb file containing the authority inventory, violations list, and
-suppression references. The source of truth for "what this config grants."
-
-**The gate itself:** a `mk nsaudit-check` target in `tests/mkfile` that
-runs `nsaudit` against every fixture and diffs the output against the
-snapshot. Exit nonzero on any difference. Wire into
-`.github/workflows/` alongside the existing security checks.
-
-A companion script, `tests/nsaudit-fixtures/verify-matches-boot.sh`,
-diffs fixture contents against the tool list in `lib/lucifer/boot.sh`
-— so the fixture cannot silently drift from the real shipping commands.
-
-Updating a fixture or snapshot requires a deliberate edit in the PR,
-visible to reviewers. Adding a suppression requires a named, dated file
-with an expiry. Both force conscious decisions about what authorities
-ship by default.
+The current additive fixtures are listed above. Full shipping snapshots and
+boot-configuration drift checks do not exist yet; do not describe a profile
+fixture as proof that a live launcher has the same authority set.
 
 ### What nsaudit cannot answer
 
@@ -781,22 +782,23 @@ The one place runtime code is needed is the cross-check: does `nsaudit`'s
 static model of `reads_fs` agree with what `restrictns()` actually
 produces at runtime?
 
-A test (`tests/nsaudit_groundtruth_test.b`) forks, applies real
-`restrictns(caps)` for each fixture, walks the resulting namespace with a
-bounded BFS, and asserts the walked set equals the `reads_fs` set the
-linter computed for the same caps. Any disagreement means either the
-linter's model or the implementation has drifted — both are real bugs.
+The proposed `tests/nsaudit_groundtruth_test.b` should fork, apply real
+`restrictns(caps)` for each fixture, walk the resulting namespace with a
+bounded BFS, and assert the walked set equals the `reads_fs` set the linter
+computed for the same caps. That test does not exist yet. Any disagreement
+would mean either the linter's model or the implementation has drifted.
 
 This is where `nswalk` lives: not as a user-facing tool, but as a
 subroutine of the ground-truth check. Once it exists as a subroutine,
 exposing it as a user tool is cheap.
 
-### NODEVS device-attach gate (RESOLVED)
+### NODEVS Device-Attach Gate
 
-`pctl(NODEVS)` is applied before model-controlled code at **every** agent FORKNS site — the spawned
-child (`spawn.b:1071`) **and** all three top-level entry points:
-`veltro.b:169`, `repl.b:170`, `tools9p.b:798`, each immediately after
-`pctl(FORKNS)` (except for exec's trusted wait-FD setup described above). The kernel device gate is at `emu/port/chan.c:1046-1053`;
+`pctl(NODEVS)` is applied before model-controlled code at every execution
+boundary: `veltro`, `repl`, each ordinary `tools9p` invocation, the exec
+wrapper after its private wait FD is opened, and each spawned child after its
+namespace and keep-list are complete. The kernel device gate is in
+`emu/port/chan.c`;
 with `nodevs` set, `sys->bind("#sfactotum", "/tmp/veltro/x", MREPL)` (and any
 `#x` attach outside the `|esDa` allowlist) fails, so device-attach cannot
 bypass the path-based restriction.
@@ -807,40 +809,19 @@ asserts that after `NODEVS`, `bind("#p", …)` and `bind("#sfactotum", …)`
 both fail (and that `#p` *succeeds* before `NODEVS`, so the test proves the
 gate, not an unrelated error).
 
-The one remaining `FORKNS` without `NODEVS` is the throwaway introspection
-fork in `tools9p.b`'s `emitmanifestnow()`: it forks only to compute a
+The throwaway `FORKNS` in `tools9p.b`'s `emitmanifestnow()` has no `NODEVS`:
+it forks only to compute a
 namespace manifest for the UI and **discards** that namespace immediately —
 it runs no model-driven code and never execs, so it is not an agent
-sandbox and does not need the gate. The planned `nsaudit` rule
-`TOPLEVEL_MISSING_NODEVS` keeps the agent sites covered going forward.
+sandbox and does not need the gate.
 
-### Sequencing
+### Remaining Work
 
-1. **CLI skeleton** (`appl/cmd/nsaudit.b`): ndb parsing via
-   `Attrdb`, three modes — full report, `-reach PATH`, `-d before after`.
-   ~300 lines. Runs inside emu, no namespace manipulation.
-2. **Per-tool manifest** for existing tools in `appl/veltro/tools/`.
-   One file per tool, ndb format. Each entry is a small act of honest
-   assessment — read the tool's source, decide what authorities it grants.
-3. **Initial rule set** — the ten rules above, one file each,
-   test-per-rule.
-4. **Initial fixtures** — `meta-agent` first (the user's stated priority),
-   then `lucifer-gui`, then the three shipping defaults, then `minimal`.
-5. **CI gate** — `mk nsaudit-check` + snapshot diff + boot-script drift
-   detection.
-6. **Runtime ground-truth check** (`tests/nsaudit_groundtruth_test.b`)
-   using a bounded `nswalk` subroutine. Catches manifest/implementation
-   drift.
-7. **`tools9p` metadata exposure** — scalar files under `/tool/meta/`.
-8. **lucictx integration** — new collapsible Authority section;
-   re-run `nsaudit` on every `/tool/ctl` write; inline `-reach PATH` on
-   hover in the file browser.
-9. **Staging/preview** — right-click "What would change?" in lucictx
-   runs `nsaudit -d` between current `/tool` and a staged mock.
-
-Steps 1–5 are the shipping-gate MVP. That is what protects the defaults.
-Steps 6–9 add the debug UX and the live GUI. Every step is additive; the
-earlier steps keep working as the later ones land.
+- Add a runtime ground-truth test that compares advisory authority output with
+  the namespace produced by `restrictns()`.
+- Add full fixtures for the meta-agent, Lucifer GUI, and remote administration.
+- Add shipping-profile snapshots tied to actual boot configuration.
+- Integrate authority display and preview into lucictx.
 
 ### Prior art, or lack thereof
 
@@ -867,7 +848,7 @@ sets. `nsaudit` fills unclaimed ground.
 - `tests/host/nsaudit_path_semantics_test.sh` — regression for component-aware
   path containment.
 - No full shipping-profile snapshot gate yet.
-- No `tools9p` metadata exposure yet.
+- `tools9p` exposes read-only role, xenith, activity, and NODEVS metadata.
 - No runtime ground-truth check yet.
 - No lucictx integration yet.
 - No `meta-agent`, `remote-admin-ui`, or `lucifer-gui` fixture yet — those are

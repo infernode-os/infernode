@@ -440,11 +440,10 @@ restrictns(caps: ref Capabilities): string
 	}
 	# 8. Restrict /prog to this process. The process device otherwise exposes
 	# sibling namespaces, descriptors, status, stacks and writable control files.
-	# Non-shell tools only need the current process. Inferno sh creates another
-	# process and opens /prog/<child>/wait after restriction, so an explicit shell
-	# capability temporarily retains full /prog.
+	# Exec receives its own pre-opened wait descriptor from the trusted wrapper,
+	# so it needs no /prog entries even when named shell commands are granted.
 	(progok, nil) := sys->stat("/prog");
-	if(progok >= 0 && caps.shellcmds == nil) {
+	if(progok >= 0) {
 		progallow: list of string;
 		# The exec wrapper supplies sh with a pre-opened wait FD. Its command
 		# process therefore needs no /prog entry, including the wrapper's ctl.

@@ -20,6 +20,7 @@ implement VeltroSecurityTest;
 #   11. exec in tools grants sh.dis (shell interpreter needed by exec tool)
 #   12. caps.paths exposes granted /n/local/ subtree
 #   13. pctl(NODEVS) blocks attach of devices outside |esDa allowlist
+#   14. /prog hides parent/sibling processes, including exec with shellcmds
 #
 
 include "sys.m";
@@ -2025,6 +2026,46 @@ testExecProgAllowlist(t: ref T)
 		t.error(r);
 }
 
+testExecShellProgAllowlist(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn execShellProgAllowlistWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+execShellProgAllowlistWorker(result: chan of string, parentpid: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"exec" :: nil, nil, "cat" :: nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (exec + shellcmds) failed: %s", err);
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ctl", parentpid));
+	if(parentok >= 0) {
+		result <-= "exec with shellcmds can control its parent process";
+		return;
+	}
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil) {
+		result <-= "exec with shellcmds has no restricted process directory";
+		return;
+	}
+	(n, nil) := sys->dirread(fd);
+	if(n != 0) {
+		result <-= "exec with shellcmds can enumerate other processes";
+		return;
+	}
+	result <-= "";
+}
+
 execProgAllowlistWorker(result: chan of string, parentpid: int)
 {
 	sys->pctl(Sys->FORKNS, nil);
@@ -2123,6 +2164,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);
 	run("ExecProgAllowlist", testExecProgAllowlist);
+	run("ExecShellProgAllowlist", testExecShellProgAllowlist);
 	run("RestrictNsShell", testRestrictNsShell);
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);

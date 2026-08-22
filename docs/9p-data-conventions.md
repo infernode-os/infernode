@@ -63,6 +63,15 @@ operate on it without a dedicated parser as an intermediary. The
 tool ecosystem becomes useless, and every consumer must import
 a JSON library instead of calling `tokenize`.
 
+The strong form of the objection is JSON Lines — one object per
+line, which `grep` and `wc` handle fine. Notice that it concedes
+the argument: once the format is one record per line, the braces,
+quotes, and colons are vestigial. The field tools still don't
+apply (`awk '{print $1, $4}'` needs a `jq` this namespace doesn't
+have), and stripping the leftover syntax yields exactly the
+`attr=value` records described below — the same self-description,
+already native here.
+
 **Parseability.** `sys->tokenize(line, " \t")` splits a text line
 into fields in one call. No module to load, no buffer to create,
 no error tree to walk. A display module that reads sensor data
@@ -99,18 +108,26 @@ matters for debugging, for auditing, for understanding what a
 system is doing at 3 AM when something is wrong. JSON forces you
 to visually parse structure before you can see values.
 
-**Agents.** AI agents read and write files. They understand text
-natively — it is their primary medium. An agent reasoning about
-the line `AAPL long 0.85 sentiment` can parse it instantly. An
-agent reasoning about `{"asset":"AAPL","direction":"long",
-"confidence":0.85,"signal_type":"sentiment"}` must first parse
-the JSON structure, then extract the same four values. LLMs are
-measurably worse at extracting values from JSON than from plain
-text — the syntactic overhead (braces, quotes, colons, commas)
-consumes context and introduces extraction errors that do not
-occur with space-separated fields. In a system where agents are
-first-class consumers of the namespace, the data format must be
-optimised for how agents actually process text.
+**Agents.** AI agents read and write files, and plain text is
+their cheapest medium: an agent reads `AAPL long 0.85 sentiment`
+directly, while the JSON equivalent spends context tokens on
+braces, quotes, and keys before any value appears. The effect
+sharpens as models shrink. Small models routinely produce correct
+answers wrapped in malformed JSON, and forcing the schema at the
+decoder inverts the problem — the output becomes valid *and
+wrong*: on sub-3B models, hard schema constraints took one
+measured tool-call task from 91% working calls to 48%, every
+failure well-formed (the "constraint tax", arXiv:2605.26128).
+The research advice is "reason free, constrain late" — which is
+this system, built as an operating system: an agent never emits a
+schema at all. It writes `add 5` to a ctl file; the structure
+lives in the namespace, and the server validates the write,
+rejecting a bad one with an error the caller sees. Semantic
+errors surface instead of hiding inside syntactically valid
+output. The smaller the model — and InferNode's on-device
+direction is exactly the small-model regime — the more this
+convention is the difference between an agent that works and one
+that emits well-formed failures.
 
 JSON is appropriate at system boundaries — when talking to
 external HTTP APIs, REST services, or web browsers. Inside the
@@ -188,6 +205,33 @@ Field order is fixed and documented. There is no header line — the
 format is part of the interface specification, not embedded in
 the data.
 
+### Records with named fields: attr=value
+
+When a record's fields are optional, sparse, or likely to grow,
+name them, `ndb(6)` style: space-separated `attr=value` pairs,
+one record per line.
+
+```
+/mnt/fleet/events:
+time=2026-02-15T14:32:00Z truck=7 event=arrive dock=3
+time=2026-02-15T14:40:11Z truck=9 event=depart
+```
+
+This is the tradition's answer to schema evolution — the one
+honest argument for JSON. Positional fields break every consumer
+the day a field is inserted; named fields are order-independent
+and extend without breaking anyone. The cost is a few bytes per
+field. The records remain one `grep` and one `tokenize` away,
+and `lib/ndb` queries them directly. In-tree precedent: the
+audit log's record fields, `nsaudit -m`'s machine interface,
+and `lib/ndb` itself.
+
+Choose by stability: **positional fields** for stable, dense,
+high-rate records; **attr=value** when fields are optional or
+the schema will evolve; **the directory hierarchy** when the
+structure is an entity's state rather than a stream of records
+(see below).
+
 ### Field ordering
 
 Fields are ordered from most important to least important, left
@@ -214,9 +258,12 @@ interrupt time).
 
 ### Key-value data: use the directory
 
-Do not put key-value pairs in a single file. Use the directory
-structure. Each key becomes a file (or subdirectory) whose
-content is the value.
+This section is about an *entity's state* — a station, an
+account, a session. (A *stream of records* whose fields need
+names is the attr=value case above; the two are different shapes
+and get different treatment.) Do not put an entity's key-value
+pairs in a single file. Use the directory structure. Each key
+becomes a file (or subdirectory) whose content is the value.
 
 Wrong:
 ```
@@ -290,7 +337,8 @@ Prefer option 2. Quoting adds parsing complexity.
 |---------|--------|
 | Single value | Own file, value as text |
 | Multiple records | One per line, space-separated fields |
-| Key-value data | Directory hierarchy |
+| Records with optional/evolving fields | `attr=value` pairs, ndb(6) style |
+| Key-value data (entity state) | Directory hierarchy |
 | Simple list | One item per line |
 | Numbers | Decimal text, appropriate precision |
 | Timestamps | RFC 3339 |

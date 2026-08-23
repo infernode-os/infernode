@@ -622,7 +622,7 @@ restrictns(caps: ref Capabilities): string
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
-	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), auditops, auditfd) != 0 &&
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd) != 0 &&
 	   auditrequired)
 		return "required namespace audit write failed";
 	auditfd = nil;
@@ -1425,10 +1425,13 @@ verifyns(expected: list of string): string
 # Emit audit log of namespace restriction operations
 emitauditlog(id: string, ops: list of string)
 {
-	emitauditlogto(id, ops, nil);
+	# -1: a direct caller outside restrictns has no activity to attribute the
+	# restriction to. The field is still emitted so a reader can tell an
+	# unattributed record from one written before attribution existed.
+	emitauditlogto(id, -1, ops, nil);
 }
 
-emitauditlogto(id: string, ops: list of string, auditfd: ref Sys->FD): int
+emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD): int
 {
 	if(sys == nil)
 		init();
@@ -1479,7 +1482,11 @@ emitauditlogto(id: string, ops: list of string, auditfd: ref Sys->FD): int
 		hex := "";
 		for(i := 0; i < len digest; i++)
 			hex += sys->sprint("%.2ux", int digest[i]);
-		msg := sys->sprint("id=%s sha256=%s size=%d", id, hex, len mb);
+		# id names the emitting process; it is not an activity id, so on its
+		# own it cannot tie a restriction to the agent it restricted
+		# (INFR-409). Carry the activity explicitly.
+		msg := sys->sprint("id=%s activity=%d manifest=%s.ns sha256=%s size=%d",
+			id, actid, id, hex, len mb);
 		if(auditfd != nil) {
 			line := array of byte ("veltro nsrestrict " + msg + "\n");
 			if(sys->write(auditfd, line, len line) != len line)

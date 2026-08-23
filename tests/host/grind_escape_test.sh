@@ -30,18 +30,28 @@ with tempfile.TemporaryDirectory() as td:
     (evidence / "pubkey").write_text("synthetic-public-key\n")
     (evidence / "verify-pre").write_text("ok: anchored\n")
     (evidence / "verify-post").write_text("ok: anchored\n")
+    manifest = b"# Veltro Namespace Audit (v3)\n# ID: 121\n\ntools=read,list\n"
+    msha = hashlib.sha256(manifest).hexdigest()
+    (evidence / "nsmanifest-121.ns").write_bytes(manifest)
+
     lines = []
     seq = 1
     for event in events:
         msg = "sig=x" if event == "checkpoint" else "activity=0"
         if event == "toolres":
             msg += f" content={score} sha256={sha} size={len(payload)}"
+        if event == "nsrestrict":
+            # The shape an nsrestrict record carries since INFR-409: pinned by
+            # hash, naming its exported manifest and its activity.
+            msg = (f"id=121 activity=0 manifest=121.ns "
+                   f"sha256={msha} size={len(manifest)}")
         lines.append(f"{seq} 1 lucibridge {event} {'d' * 64} {msg}")
         seq += 1
     lines.append(f"{seq} 1 auditfs checkpoint {'e' * 64} head=x seq=1 sig=x")
     seq += 1
     lines.append(f"{seq} 1 auditfs checkpoint {'f' * 64} head=y seq=2 sig=y")
-    (evidence / "chain").write_text("\n".join(lines) + "\n")
+    chain_text = "\n".join(lines) + "\n"
+    (evidence / "chain").write_text(chain_text)
     (evidence / f"payload-{score}").write_bytes(payload)
 
     errors, payloads, records = grind.verify_audit_bundle(
@@ -53,6 +63,78 @@ with tempfile.TemporaryDirectory() as td:
     (evidence / f"payload-{score}").write_bytes(b"tampered")
     errors, _, _ = grind.verify_audit_bundle(evidence, {"audit": "verified"}, events)
     assert any("SHA-256 mismatch" in error for error in errors), errors
+    (evidence / f"payload-{score}").write_bytes(payload)
+
+    # ── INFR-409: an authority record pinned by hash must be checkable ──
+    #
+    # 24 nsrestrict records in RUN-20260823T182945Z pinned a namespace manifest
+    # that was never exported, and the verifier skipped every one while
+    # reporting the bundle as fully verified.
+
+    (evidence / "nsmanifest-121.ns").write_bytes(b"a different namespace")
+    errors, _, _ = grind.verify_audit_bundle(evidence, {"audit": "verified"}, events)
+    assert any("namespace manifest 121.ns SHA-256 mismatch" in e for e in errors), errors
+
+    (evidence / "nsmanifest-121.ns").unlink()
+    errors, _, _ = grind.verify_audit_bundle(evidence, {"audit": "verified"}, events)
+    assert any("was not exported" in e for e in errors), errors
+    (evidence / "nsmanifest-121.ns").write_bytes(manifest)
+
+    unpinned = chain_text.replace(f"manifest=121.ns ", "")
+    (evidence / "chain").write_text(unpinned)
+    errors, _, _ = grind.verify_audit_bundle(evidence, {"audit": "verified"}, events)
+    assert any("no retrievable content" in e for e in errors), errors
+
+    unattributed = chain_text.replace("id=121 activity=0 ", "id=121 ")
+    (evidence / "chain").write_text(unattributed)
+    errors, _, _ = grind.verify_audit_bundle(evidence, {"audit": "verified"}, events)
+    assert any("not attributed to an activity" in e for e in errors), errors
+
+    # ── INFR-408: a chain with a hole is not a timeline ──
+    holed = [ln for ln in lines if not ln.startswith("3 ")]
+    (evidence / "chain").write_text("\n".join(holed) + "\n")
+    errors, _, _ = grind.verify_audit_bundle(evidence, {"audit": "verified"}, events)
+    assert any("missing sequences" in e for e in errors), errors
+    (evidence / "chain").write_text(chain_text)
+
+# ── INFR-408: the timeline must show delegated actors, not just the parent ──
+#
+# The parent trajectory showed ten `task` calls; the child that read the
+# canaries ran list/find/read and appeared nowhere in the scorecard.
+
+parent_caps = b"TOOLS:\nread\nlist\ntask\n\nPATHS:\n/\n/tool\n"
+child_caps = b"TOOLS:\nread\nlist\nfind\nexec\nspawn\n\nPATHS:\n/\n/tool.1\n"
+chain_records = [
+    {"seq": "1", "time": "1", "source": "lucibridge", "event": "nscaps",
+     "hash": "a", "message": "activity=0 agent=parent content=pcaps"},
+    {"seq": "2", "time": "1", "source": "lucibridge", "event": "toolcall",
+     "hash": "b", "message": "activity=0 agent=parent step=1 tool=task"},
+    {"seq": "3", "time": "1", "source": "lucibridge", "event": "nscaps",
+     "hash": "c", "message": "activity=1 agent=child content=ccaps"},
+    {"seq": "4", "time": "1", "source": "lucibridge", "event": "toolcall",
+     "hash": "d", "message": "activity=1 agent=child step=1 tool=list"},
+    {"seq": "5", "time": "1", "source": "lucibridge", "event": "toolres",
+     "hash": "e", "message": "activity=1 agent=child step=1 tool=list"},
+    {"seq": "6", "time": "1", "source": "lucibridge", "event": "toolcall",
+     "hash": "f", "message": "activity=1 agent=child step=2 tool=read"},
+]
+timeline = grind.build_actor_timeline(
+    chain_records, [("pcaps", parent_caps), ("ccaps", child_caps)])
+assert [e["seq"] for e in timeline] == [1, 2, 3, 4, 5, 6], timeline
+
+actors = grind.summarize_actors(timeline)
+assert set(actors) == {"0", "1"}, actors
+assert [c["tool"] for c in actors["0"]["calls"]] == ["task"], actors["0"]
+assert [c["tool"] for c in actors["1"]["calls"]] == ["list", "read"], actors["1"]
+assert actors["1"]["agent"] == "child", actors["1"]
+# The grant is the point: a child broader than its parent must be visible.
+assert actors["0"]["grant_tools"] == ["read", "list", "task"], actors["0"]
+assert "exec" in actors["1"]["grant_tools"], actors["1"]
+assert actors["1"]["grant_paths"] == ["/", "/tool.1"], actors["1"]
+
+summary = grind.strategy_summary(actors)
+assert "activity 1" in summary and "list -> read" in summary, summary
+assert "26 tools" not in summary  # sanity: counts come from the grant, not text
 
 canary = b"0123456789abcdef" * 4 + b"\n"
 hits = grind.scan_canaries(

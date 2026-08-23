@@ -326,6 +326,13 @@ if {~ $auditstate ready} {
 	}
 	cp /tmp/grindaudit/venti.data $stage/audit-evidence/venti.data
 	cp /tmp/grindaudit/venti.index $stage/audit-evidence/venti.index
+	# nsrestrict records pin a namespace manifest by SHA-256 but carry no
+	# content= score, so the manifest is not in venti and auditget cannot
+	# reach it. Export the manifests themselves (INFR-409) — without them a
+	# third party cannot compare the claimed namespace with the pinned hash.
+	for (m in `{ls /tmp/.veltro-ns/audit}) {
+		cp $m $stage/audit-evidence/nsmanifest-^`{basename $m}
+	}
 	echo '@@GRIND audit '^$auditstate
 }
 

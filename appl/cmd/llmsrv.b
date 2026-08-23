@@ -232,6 +232,7 @@ init(nil: ref Draw->Context, args: list of string)
 	apiurl = "";
 	apikey = "";
 	defaultmodel = "claude-sonnet-4-5-20250929";
+	modelset := 0;
 	defaultreasoning = "";
 	autocompactdefault = DEFAULTAUTOCOMPACT;
 
@@ -241,7 +242,10 @@ init(nil: ref Draw->Context, args: list of string)
 		'm' => mountpt = arg->earg();
 		'b' => backend = arg->earg();
 		'u' => apiurl = arg->earg();
-		'M' => defaultmodel = arg->earg();
+		'M' => {
+			defaultmodel = arg->earg();
+			modelset = 1;
+		}
 		'r' => defaultreasoning = arg->earg();
 		'c' => autocompactdefault = strtoint(arg->earg());
 		* =>   usage();
@@ -249,6 +253,11 @@ init(nil: ref Draw->Context, args: list of string)
 	if(autocompactdefault < 0)
 		autocompactdefault = 0;
 	arg = nil;
+	# An OpenAI-compatible backend must not inherit the Anthropic default.
+	# Empty means "use the backend's configured default"; callers can still
+	# select a model explicitly with -M or the per-session model file.
+	if(backend == "openai" && !modelset)
+		defaultmodel = "";
 
 	# Factotum is preferred. Environment fallback supports direct headless
 	# daemon startup where no interactive factotum/secstore unlock is possible;

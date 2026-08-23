@@ -49,8 +49,8 @@ pass "health reports mock backend"
 
 # 2. /v1/models lists the aliases llmsrv's model picker shows
 out="$(curl -sf "$BASE/v1/models")"
-echo "$out" | grep -q '"gpt-5-codex"' || fail "models: gpt-5-codex missing ($out)"
-pass "models lists aliases"
+echo "$out" | grep -q '"default"' || fail "models: default missing ($out)"
+pass "models lists stable CLI default"
 
 # 3. Plain completion — OpenAI shape llmclient.b parses
 out="$(curl -sf "$BASE/v1/chat/completions" -H 'Content-Type: application/json' -d '{
@@ -134,6 +134,9 @@ assert argv[argv.index("--cd") + 1] == m.WORKDIR, argv
 assert argv[argv.index("--output-schema") + 1] == "/tmp/s.json", argv
 assert argv[-1] == "-", argv
 assert "PROMPT" not in argv, argv
+# The advertised default must not become `codex -m default`.
+argv = m.build_argv("default", None, "/tmp/last.txt", "PROMPT")
+assert "-m" not in argv, argv
 # No schema (no tools in the request) ⇒ no --output-schema flag at all.
 argv = m.build_argv("", None, "/tmp/last.txt", "PROMPT")
 assert "--output-schema" not in argv, argv
@@ -161,5 +164,39 @@ for bad in ("Authorization", "Bearer"):
     assert bad not in src, "gate builds an auth header: " + bad
 PY
 pass "no API key reaches the codex CLI, no auth header anywhere"
+
+# 10. A logged-out CLI must prevent readiness rather than serving a static
+# model list that makes llmctl report a healthy but unusable backend.
+python3 - "$ROOT" <<'PY' || fail "login readiness check"
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.MOCK = False
+class Result:
+    stdout = "Logged in using ChatGPT"
+    stderr = ""
+    returncode = 0
+m.subprocess.run = lambda *args, **kwargs: Result()
+m.check_codex_auth()
+Result.returncode = 1
+Result.stderr = "Not logged in"
+try:
+    m.check_codex_auth()
+except SystemExit as e:
+    assert "Not logged in" in str(e), e
+else:
+    raise AssertionError("logged-out CLI accepted")
+Result.returncode = 0
+Result.stderr = ""
+Result.stdout = "Logged in using an API key"
+try:
+    m.check_codex_auth()
+except SystemExit as e:
+    assert "not logged in with ChatGPT" in str(e), e
+else:
+    raise AssertionError("API-key login accepted as ChatGPT OAuth")
+PY
+pass "startup readiness requires a ChatGPT OAuth login"
 
 echo "=== codex-gate mock-mode tests: all green ==="

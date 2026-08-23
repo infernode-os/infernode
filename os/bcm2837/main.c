@@ -141,12 +141,33 @@ startmmu(void)
 static void
 checkunaligned(void)
 {
-	static u8int buf[32];
+	/*
+	 * The misalignment must be GUARANTEED, not incidental.
+	 *
+	 * A plain u8int array has natural alignment 1, so where &buf[4]
+	 * lands is an accident of what else is in .bss -- and if it
+	 * happens to fall on an 8-byte boundary this becomes an ordinary
+	 * aligned access that passes even with RAM mapped Device, which
+	 * is the exact regression this check exists to catch. Anchoring
+	 * the buffer to a u64int forces 8-byte alignment, so &buf[4] is
+	 * always 4 mod 8. The assertion below makes that a checked fact
+	 * rather than a hoped-for one.
+	 */
+	static union {
+		u64int	align;
+		u8int	b[32];
+	} u;
 	volatile u64int *p;
 	u64int v;
 
-	/* 4-byte aligned but deliberately not 8-byte aligned */
-	p = (volatile u64int*)(void*)&buf[4];
+	p = (volatile u64int*)(void*)&u.b[4];
+	if(((uintptr)p & 7) != 4){
+		uartputs("mmu:  unaligned check MISCONFIGURED (address is ");
+		uartputx((uintptr)p);
+		uartputs(", not 4 mod 8)\n");
+		return;
+	}
+
 	*p = 0x0123456789ABCDEFULL;
 	v = *p;
 
@@ -300,18 +321,35 @@ probearch(void)
 	 * masks and then unconditionally unmasks would silently enable
 	 * interrupts inside a caller that had deliberately masked them.
 	 */
+	/*
+	 * Interrupts are still masked here -- l.S erets with DAIF set and
+	 * nothing has enabled them yet -- so testing splhi() first would
+	 * compare a masked previous level against a masked new one and
+	 * pass even if splhi returned the NEW level rather than the old.
+	 * Drop to low first so the two are actually distinguishable.
+	 */
 	ok = 1;
+	spllo();
+	if(!islo())
+		ok = 0;			/* spllo did not unmask */
+
 	s = splhi();
+	if(s & (1<<7))
+		ok = 0;			/* splhi must report the PREVIOUS (low) level */
 	if(islo())
 		ok = 0;			/* still low after splhi */
+
 	old = spllo();
+	if((old & (1<<7)) == 0)
+		ok = 0;			/* spllo must report the previous (high) level */
 	if(!islo())
 		ok = 0;			/* still high after spllo */
-	if((old & (1<<7)) == 0)
-		ok = 0;			/* spllo should have reported I set */
-	splx(s);
-	if(islo())
-		ok = 0;			/* splx did not restore the masked state */
+
+	splx(s);			/* s was taken while low: restores low */
+	if(!islo())
+		ok = 0;			/* splx did not restore the saved level */
+
+	splhi();			/* leave as found: masked */
 
 	uartputs(", spl ");
 	uartputs(ok ? "OK" : "BROKEN");
@@ -361,15 +399,19 @@ probelibkern(void)
 	 * uses constantly, and under LP64 they must consume 64 bits.
 	 */
 	/*
-	 * The %lux value is deliberately larger than 2^32.  A %lu that
-	 * consumed only 32 bits would still print 0xC0A80101 correctly,
-	 * so a test using a value that fits in 32 bits proves nothing
-	 * about whether the format is LP64-correct.
+	 * BOTH values are deliberately larger than 2^32.  A %lu that
+	 * consumed only 32 bits would still print a smaller value
+	 * correctly, so an operand that fits in 32 bits proves nothing
+	 * about whether the format is LP64-correct.  This originally
+	 * passed 0xC0A80101 to %lud -- the very value the comment
+	 * declared insufficient -- so only %lux was actually guarded.
+	 * 12884901889 is 0x300000001, which needs the full 64 bits in
+	 * decimal as well as hex.
 	 */
 	n = snprint(buf, sizeof buf, "%d %s %lud %lux", 42, "dis",
-		(ulong)3232235777UL, (ulong)0x1DEADBEEFUL);
+		(ulong)12884901889UL, (ulong)0x1DEADBEEFUL);
 	uartputs(", snprint ");
-	if(n > 0 && strcmp(buf, "42 dis 3232235777 1deadbeef") == 0)
+	if(n > 0 && strcmp(buf, "42 dis 12884901889 1deadbeef") == 0)
 		uartputs("OK");
 	else{
 		uartputs("WRONG: ");
@@ -437,16 +479,47 @@ probexalloc(void)
 	if(a == nil || b == nil)
 		ok = 0;
 	else{
+		int i;
+
 		if(a == b)
 			ok = 0;				/* handed out twice */
-		if(memchr(a, 0xFF, 4096) != nil)
-			ok = 0;				/* not zeroed */
-		if((uintptr)a < conf.base0)
-			ok = 0;				/* outside its own bank */
+
+		/*
+		 * Scan for ANY non-zero byte, not one chosen value. Looking
+		 * only for 0xFF would miss a block still holding the 0xAA
+		 * this probe itself writes below, which is exactly the case
+		 * a non-zeroing allocator would produce on the second run.
+		 */
+		for(i = 0; i < 4096; i++)
+			if(a[i] != 0 || b[i] != 0)
+				ok = 0;
+
+		/*
+		 * Bound the allocation at BOTH ends. Checking only the lower
+		 * bound would let an allocation running past ramtop into
+		 * VideoCore-owned memory pass -- which is the hazard
+		 * confinit() exists to avoid, so it is the one worth
+		 * asserting.
+		 */
+		if((uintptr)a < conf.base0 || (uintptr)b < conf.base0)
+			ok = 0;
+		if((uintptr)a + 4096 > mmuramtop() || (uintptr)b + 4096 > mmuramtop())
+			ok = 0;
+
+		/*
+		 * Reject PARTIAL overlap, not just exact aliasing. a == b is
+		 * already caught above; two blocks sharing half their extent
+		 * would slip past a check that only compares first bytes.
+		 */
+		if(!(a + 4096 <= b || b + 4096 <= a))
+			ok = 0;
+
 		memset(a, 0xAA, 4096);
 		memset(b, 0xBB, 4096);
 		if(a[0] != (char)0xAA || b[0] != (char)0xBB)
-			ok = 0;				/* they overlap */
+			ok = 0;
+		if(a[4095] != (char)0xAA || b[4095] != (char)0xBB)
+			ok = 0;			/* the far end must be ours too */
 		xfree(a);
 		xfree(b);
 	}

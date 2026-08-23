@@ -267,8 +267,11 @@ check "boot OK"                       "completes boot without faulting"
 # The mailbox round trip. 0xa02082 is a real Pi 3B board revision, so
 # this also confirms we are talking to a plausible BCM2837 and not just
 # reading back zeroes.
-check "mbox: board rev 0x"            "mailbox property call returns a board revision"
-check "ARM memory"                    "mailbox reports ARM memory split"
+# Pin the actual revision. "board rev 0x" matched an all-zero readback,
+# so a mailbox that returned nothing would have passed -- the very thing
+# the check claimed to rule out. 0xa02082 is a real Pi 3B revision word.
+check "board rev 0x0000000000a02082"  "mailbox returns the true board revision"
+check "ARM memory 9[0-9][0-9]MB"      "mailbox reports a plausible ARM memory split"
 
 # MMU. The unaligned check is the one that matters: it is a regression
 # guard on the memory ATTRIBUTES, not on translation working. RAM

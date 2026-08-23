@@ -8,10 +8,17 @@
 
 #include "u.h"
 #include "../port/lib.h"
+#include "mem.h"
 #include "dat.h"
 #include "io.h"
 #include "ureg.h"
 #include "fns.h"
+
+/*
+ * The machine configuration os/port reads. Declared extern in dat.h and
+ * defined here, which is where upstream's platform main.c puts it.
+ */
+Conf conf;
 
 static u64int
 currentel(void)
@@ -371,6 +378,82 @@ probelibkern(void)
 	uartputs("\n");
 }
 
+/*
+ * Describe the machine to os/port, then bring up the base allocator.
+ *
+ * xalloc hands out memory in coarse chunks and everything above it --
+ * alloc.c's pools, Blocks, page tables for processes -- is carved out of
+ * what it owns. It needs to be told which physical memory is actually
+ * free, which is everything between the end of the kernel image and the
+ * top of ARM-visible RAM. Above ramtop the VideoCore owns the memory, so
+ * handing any of it out would corrupt the GPU's world (including the
+ * framebuffer) rather than merely running out.
+ */
+static void
+confinit(void)
+{
+	extern char end[];
+	uintptr base, top;
+
+	memset(&conf, 0, sizeof conf);
+
+	conf.nmach = 1;			/* one core running so far */
+	conf.nproc = 100;
+	conf.ialloc = 128*1024;
+	conf.pipeqsize = 256*1024;
+
+	base = PGROUND((uintptr)end);
+	top = mmuramtop();
+
+	conf.base0 = base;
+	conf.npage0 = (top - base) / BY2PG;
+	conf.npage = conf.npage0;
+
+	print("conf: %lud free pages (%ludMB) from %lux to %lux\n",
+		conf.npage0, (conf.npage0 * BY2PG) >> 20,
+		(ulong)base, (ulong)top);
+}
+
+/*
+ * Exercise the imported allocator.
+ *
+ * xalloc zeroes what it returns, so a fresh allocation reading back
+ * non-zero means it handed out memory that is still in use somewhere --
+ * which is worth catching here rather than as corruption later.
+ */
+static void
+probexalloc(void)
+{
+	char *a, *b;
+	int ok;
+
+	confinit();
+	xinit();
+
+	ok = 1;
+
+	a = xalloc(4096);
+	b = xalloc(4096);
+	if(a == nil || b == nil)
+		ok = 0;
+	else{
+		if(a == b)
+			ok = 0;				/* handed out twice */
+		if(memchr(a, 0xFF, 4096) != nil)
+			ok = 0;				/* not zeroed */
+		if((uintptr)a < conf.base0)
+			ok = 0;				/* outside its own bank */
+		memset(a, 0xAA, 4096);
+		memset(b, 0xBB, 4096);
+		if(a[0] != (char)0xAA || b[0] != (char)0xBB)
+			ok = 0;				/* they overlap */
+		xfree(a);
+		xfree(b);
+	}
+
+	print("xall: xalloc %s\n", ok ? "OK (distinct, zeroed, in-bank)" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -437,6 +520,7 @@ kmain(void)
 	probegpio();
 	probearch();
 	probelibkern();
+	probexalloc();
 	probeclock();
 	probefb();
 

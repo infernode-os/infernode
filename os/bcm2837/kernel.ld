@@ -27,5 +27,13 @@ SECTIONS
 	. = ALIGN(16);
 	__bss_end = .;
 
+	/*
+	 * First address past the kernel image. Everything from here to
+	 * the top of ARM-visible memory is free for xalloc to hand out.
+	 * Page-aligned because that is the unit xalloc counts in.
+	 */
+	. = ALIGN(4096);
+	end = .;
+
 	/DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }

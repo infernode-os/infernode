@@ -65,3 +65,80 @@ errfmt(Fmt *f)
 	USED(f);
 	return -1;
 }
+
+/*
+ * print() and panic().
+ *
+ * os/port calls these constantly, and both are variadic, so they can
+ * only exist once the fmt engine does. Output goes straight to the
+ * PL011 rather than through a console queue: there is no /dev/cons yet,
+ * and more importantly a panic must be able to reach the wire when the
+ * rest of the kernel is already broken.
+ *
+ * The buffer is static and the printing is not re-entrant. That is the
+ * usual bargain for kernel print: a fixed buffer that cannot itself
+ * fail to allocate is worth more than reentrancy in the one code path
+ * whose job is to report that something has gone wrong.
+ */
+static char printbuf[1024];
+
+int
+print(char *fmt, ...)
+{
+	va_list arg;
+	int n;
+
+	_fmtlock();
+	va_start(arg, fmt);
+	n = vsnprint(printbuf, sizeof printbuf, fmt, arg);
+	va_end(arg);
+	uartputs(printbuf);
+	_fmtunlock();
+
+	return n;
+}
+
+void
+panic(char *fmt, ...)
+{
+	va_list arg;
+
+	/*
+	 * Mask interrupts first. A timer tick arriving mid-panic would
+	 * re-enter the kernel through a path that is, by definition, no
+	 * longer trustworthy.
+	 */
+	splhi();
+
+	uartputs("\npanic: ");
+
+	va_start(arg, fmt);
+	vsnprint(printbuf, sizeof printbuf, fmt, arg);
+	va_end(arg);
+	uartputs(printbuf);
+
+	uartputs("\nhalted.\n");
+
+	for(;;)
+		__asm__ volatile("wfe");
+}
+
+/*
+ * Hooks os/port/xalloc.c calls that belong to subsystems not yet
+ * imported: ixsummary is the interrupt-time allocation report, and
+ * debugkey registers a console debug key. Both are reporting aids, so
+ * stubbing them changes no behaviour -- but they are declared here
+ * rather than deleted from xalloc.c so that file stays diff-able
+ * against upstream.
+ */
+void
+ixsummary(void)
+{
+	print("xalloc: ialloc %lud\n", conf.ialloc);
+}
+
+void
+debugkey(int c, char *name, void (*f)(void), int t)
+{
+	USED(c); USED(name); USED(f); USED(t);
+}

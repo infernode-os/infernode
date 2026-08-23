@@ -150,6 +150,25 @@ build_kernel() {
         objs+=("$o")
     fi
 
+    # os/port and libkern: sources imported from upstream Inferno.
+    #
+    # Warnings are suppressed wholesale EXCEPT the two that mark Plan 9 C
+    # dialect, which are escalated to errors. Those are not style nits:
+    # an anonymous "Lock;" member declares nothing under clang, so the
+    # next field silently lands at offset 0 and every lock operation
+    # corrupts it. That is not hypothetical -- it destroyed xalloc's free
+    # list and made xalloc return nil for every request. Catching it at
+    # build time is the difference between a compile error and memory
+    # corruption in an imported file nobody is reading closely.
+    for f in "$ROOT"/os/port/*.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/osport-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -Wno-everything \
+             -Werror=missing-declarations -Werror=incompatible-pointer-types \
+             -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
     # libkern: the freestanding libc the kernel must supply itself, since
     # there is no host to borrow one from. Warnings are not escalated here
     # -- these are imported upstream sources being ported, and the port is
@@ -157,7 +176,9 @@ build_kernel() {
     for f in "$ROOT"/libkern/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/libkern-$(basename "$f").o"
-        "$CC" "${CFLAGS[@]}" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${CFLAGS[@]}" -Wno-everything \
+             -Werror=missing-declarations -Werror=incompatible-pointer-types \
+             -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
     done
 
@@ -268,6 +289,9 @@ check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access le
 # libkern -- the freestanding libc, imported from upstream. The snprint
 # check is the significant one: dofmt is the engine behind print(), which
 # os/port uses everywhere, and %lud/%lux must consume 64 bits under LP64.
+check "conf: [0-9]* free pages"       "confinit finds the free memory bank"
+check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed in-bank memory"
+
 check "libk: mem/str OK"              "libkern mem/str primitives work"
 check "snprint OK"                    "Plan 9 fmt engine formats correctly under LP64"
 
@@ -369,10 +393,15 @@ fi
 VARIANT="$BUILD/main-fault.c"
 cat > "$VARIANT" <<'EOF'
 #include "u.h"
+#include "../port/lib.h"
+#include "mem.h"
 #include "dat.h"
 #include "io.h"
 #include "ureg.h"
 #include "fns.h"
+
+/* main.c normally defines this; the variant replaces main.c */
+Conf conf;
 
 void
 kmain(void)

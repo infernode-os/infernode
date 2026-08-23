@@ -26,6 +26,53 @@
  */
 typedef struct Ureg Ureg;
 
+typedef struct Lock Lock;
+typedef struct Conf Conf;
+
+/*
+ * A spin lock.
+ *
+ * key is the word _tas operates on and is ulong to match upstream's
+ * portfns.h declaration of ulong _tas(ulong*). sr holds the interrupt
+ * level saved by ilock so iunlock can restore exactly what was found
+ * rather than assuming interrupts were enabled. pc records who took it,
+ * which is what makes a stuck lock diagnosable instead of a hang.
+ *
+ * Named members rather than the Plan 9 anonymous embedding used
+ * upstream -- see os/bcm2837/README.md for why -fms-extensions is not a
+ * safe substitute.
+ */
+struct Lock
+{
+	ulong	key;
+	ulong	sr;
+	uintptr	pc;
+	int	pri;
+};
+
+/*
+ * Machine configuration, filled in at boot. os/port/xalloc.c reads the
+ * memory bank fields directly to decide what it may hand out.
+ *
+ * These are ulong, matching upstream, which is correct here only
+ * because ulong is 64 bits: base0/base1 hold addresses.
+ */
+struct Conf
+{
+	ulong	nmach;		/* processors */
+	ulong	nproc;		/* processes */
+	ulong	npage0;		/* pages in bank 0 */
+	ulong	npage1;		/* pages in bank 1 */
+	ulong	npage;		/* total physical pages */
+	ulong	base0;		/* base of bank 0 */
+	ulong	base1;		/* base of bank 1 */
+	ulong	ialloc;		/* max interrupt-time allocation, bytes */
+	ulong	pipeqsize;	/* size in bytes of pipe queues */
+	int	nuart;		/* number of uart devices */
+};
+
+extern Conf conf;
+
 /*
  * A framebuffer as the VideoCore firmware handed it back.  pitch is the
  * byte stride of a row and is NOT necessarily width*bytes-per-pixel --

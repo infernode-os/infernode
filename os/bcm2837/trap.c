@@ -108,16 +108,6 @@ dumpureg(Ureg *u)
 }
 
 void
-panic(char *msg)
-{
-	uartputs("\npanic: ");
-	uartputs(msg);
-	uartputs("\nhalted.\n");
-	for(;;)
-		__asm__ volatile("wfe");
-}
-
-void
 trap(Ureg *u)
 {
 	u32int ec;

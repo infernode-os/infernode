@@ -47,6 +47,28 @@ int	islo(void);
  */
 #define getcallerpc(x)	((ulong)(uintptr)__builtin_return_address(0))
 
+/* print.c -- the seam libkern's fmt engine expects from the kernel */
+int	print(char*, ...);
+void	panic(char*, ...);
+void	ixsummary(void);
+void	debugkey(int, char*, void(*)(void), int);
+
+/* lock.c -- stands in for os/port/taslock.c until proc.c exists */
+void	lock(Lock*);
+void	unlock(Lock*);
+int	canlock(Lock*);
+void	ilock(Lock*);
+void	iunlock(Lock*);
+
+/* os/port/xalloc.c */
+void	xinit(void);
+void*	xalloc(ulong);
+void*	xspanalloc(ulong, int, ulong);
+void	xfree(void*);
+void	xhole(uintptr, uintptr);
+int	xmerge(void*, void*);
+void	xsummary(void);
+
 /* clock.c */
 void	clockinit(void);
 u64int	clockcount(void);
@@ -74,7 +96,6 @@ u64int	mmumair(void);
 /* trap.c */
 void	trap(Ureg*);
 void	dumpureg(Ureg*);
-void	panic(char*);
 
 /* vectors.S */
 void	trapinit(void);

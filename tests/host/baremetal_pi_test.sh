@@ -313,6 +313,7 @@ check "pgrp: newpgrp OK"                "os/port/pgrp allocates a process group"
 check "chan: newchan/cname OK"          "os/port/chan allocates channels and composes paths"
 check "root: devattach/walk/cclose OK"   "root device attaches, walks to /dev, and closes cleanly"
 check "file: kopen/kread/kclose OK"      "os/port/sysfile opens, reads and closes a real path"
+check "qio:  qopen/qwrite/qread/qbwrite OK" "os/port/qio queues bytes and Blocks with correct accounting"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

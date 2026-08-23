@@ -124,19 +124,13 @@ panic(char *fmt, ...)
 }
 
 /*
- * Hooks os/port/xalloc.c calls that belong to subsystems not yet
- * imported: ixsummary is the interrupt-time allocation report, and
- * debugkey registers a console debug key. Both are reporting aids, so
- * stubbing them changes no behaviour -- but they are declared here
- * rather than deleted from xalloc.c so that file stays diff-able
- * against upstream.
+ * ixsummary was defined here; os/port/qio.c now provides the real one,
+ * which reports actual interrupt-time Block allocation rather than just
+ * the configured limit.
+ *
+ * debugkey stays: it registers a console debug key and belongs to
+ * devcons.c, which is not imported.
  */
-void
-ixsummary(void)
-{
-	print("xalloc: ialloc %lud\n", conf.ialloc);
-}
-
 void
 debugkey(Rune c, char *name, void (*f)(void), int t)
 {

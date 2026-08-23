@@ -1203,6 +1203,83 @@ probesysfile(void)
 		ok ? "OK (opened /, read \"dev\", closed)" : "BROKEN");
 }
 
+/*
+ * Queues -- the byte/Block pipe os/port and os/ip are built on.
+ *
+ * A Queue is a chain of Blocks with flow control. devcons pushes console
+ * input through one; every socket in os/ip has four of them (read,
+ * write, error, snoop). So this is the last structural piece before
+ * either a console or a network stack.
+ *
+ * Only paths with data already present are exercised. qread on an empty
+ * queue sleeps until a writer arrives, and with no second process that
+ * would hang rather than fail -- the same limit as the qlock probe.
+ */
+static void
+probeqio(void)
+{
+	Queue *q;
+	Block *b;
+	char buf[64];
+	int ok;
+	long n;
+
+	ok = 1;
+
+	q = qopen(4096, 0, nil, nil);
+	if(q == nil){
+		print("qio:  qopen failed\n");
+		return;
+	}
+
+	if(qlen(q) != 0)
+		ok = 0;			/* a fresh queue holds nothing */
+
+	/* byte interface: write then read back */
+	if(qwrite(q, "hello", 5) != 5)
+		ok = 0;
+	if(qlen(q) != 5)
+		ok = 0;
+	n = qread(q, buf, sizeof buf);
+	if(n != 5 || memcmp(buf, "hello", 5) != 0)
+		ok = 0;
+	if(qlen(q) != 0)
+		ok = 0;			/* reading must consume */
+
+	/*
+	 * Block interface: this is the path os/ip actually uses, and it
+	 * must hand back the same Block rather than copying.
+	 */
+	b = allocb(64);
+	if(b == nil)
+		ok = 0;
+	else {
+		memmove(b->wp, "packet", 6);
+		b->wp += 6;
+		if(qbwrite(q, b) < 0)
+			ok = 0;
+		if(qlen(q) != 6)
+			ok = 0;
+		b = qbread(q, 64);
+		if(b == nil || BLEN(b) != 6 || memcmp(b->rp, "packet", 6) != 0)
+			ok = 0;
+		if(b != nil)
+			freeb(b);
+	}
+
+	/* a queue past its limit must refuse rather than grow without bound */
+	if(qwrite(q, "x", 1) != 1)
+		ok = 0;
+	qflush(q);
+	if(qlen(q) != 0)
+		ok = 0;			/* flush must discard */
+
+	qfree(q);
+
+	print("qio:  qopen/qwrite/qread/qbwrite %s\n",
+		ok ? "OK (bytes and Blocks, flow accounted)" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -1317,6 +1394,7 @@ kmain(void)
 	probechan();
 	proberoot();
 	probesysfile();
+	probeqio();
 	probeclock();
 	probefb();
 

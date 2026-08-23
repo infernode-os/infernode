@@ -124,6 +124,28 @@ _assert(char *s)
  */
 
 /*
+ * devcons.c -- print into the console queue.
+ *
+ * qio.c calls this when a Queue operation needs to report. devcons.c
+ * routes it through the console's Queue so it interleaves correctly
+ * with everything else on /dev/cons; with no console device yet there
+ * is no queue to interleave with, so it goes straight out the UART like
+ * print() does.
+ */
+int
+kprint(char *fmt, ...)
+{
+	va_list arg;
+	static char buf[256];
+
+	va_start(arg, fmt);
+	vsnprint(buf, sizeof buf, fmt, arg);
+	va_end(arg);
+	putstrn(buf, strlen(buf));
+	return strlen(buf);
+}
+
+/*
  * devcons.c
  */
 int

@@ -28,6 +28,8 @@ void	fbrect(Fbinfo*, int, int, int, int, u32int);
 /* arch.S -- AArch64 primitives that cannot be written in C */
 ulong	_tas(ulong*);
 void	coherence(void);
+int	setlabel(Label*);
+void	gotolabel(Label*);
 void	cacheiflush(void*, ulong);
 
 /* arch.c -- interrupt priority level */

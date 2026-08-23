@@ -1,17 +1,14 @@
 /*
- * Port-specific data types for the bare-metal BCM2837 kernel.
+ * Platform data types for the bare-metal BCM2837 kernel.
  *
- * The integer vocabulary now comes from Inferno/arm64/include/u.h,
- * which is the same header upstream Inferno's native ports use (one per
- * objtype) and the one os/port will expect.  It replaces the local
- * typedefs this file started with: keeping a second definition of uchar
- * and friends would guarantee the two drifted, and os/port's whole
- * pointer-in-ulong convention depends on getting exactly one answer for
- * how wide these are.
+ * Structured the way every upstream os/ port structures its dat.h: the
+ * machine-specific types first, then ../port/portdat.h, then Mach --
+ * which has to come last because it holds a Proc*, and Proc is defined
+ * by portdat.h.
  *
- * The tree's own include/lib9.h is not usable here -- it pulls in
- * stdio.h, setjmp.h and time.h, none of which exist with no host OS
- * underneath.
+ * The integer vocabulary comes from Inferno/arm64/include/u.h. The
+ * tree's own include/lib9.h is not usable here: it pulls in stdio.h,
+ * setjmp.h and time.h, none of which exist with no host OS underneath.
  *
  * Following Plan 9 convention, this header does NOT include u.h: every
  * .c includes u.h first and dat.h after.  Upstream os/port is written
@@ -20,31 +17,44 @@
  * because it is expected to be included once, first, by hand.
  */
 
-/*
- * Forward declaration so fns.h can prototype the trap handlers without
- * dragging in ureg.h everywhere.
- */
-typedef struct Ureg Ureg;
+typedef struct Conf	Conf;
+typedef struct FPenv	FPenv;
+typedef struct FPU	FPU;
+typedef struct Label	Label;
+typedef struct Lock	Lock;
+typedef struct Mach	Mach;
+typedef struct Ureg	Ureg;
+
+typedef ulong		Instr;
 
 /*
- * The pool allocator's types (Bhdr, Pool, and the D2B/B2D accessors).
- * Upstream reaches these through os/port/portdat.h; emu/port/dat.h does
- * the same thing at its line 47. pool.h needs no host headers, so it is
- * usable here unchanged.
+ * pool.h is NOT included here: ../port/portdat.h includes <pool.h>
+ * itself, and pool.h has no include guard, so a second inclusion is a
+ * redefinition error rather than a no-op.
  */
-#include "pool.h"
 
-typedef struct Lock Lock;
-typedef struct Conf Conf;
+/*
+ * A saved execution point, for the scheduler.
+ *
+ * Only sp and pc: gotolabel restores the stack pointer and jumps, and
+ * the callee-saved registers survive because setlabel's caller saved
+ * them on entry per AAPCS64.  This is NOT jmp_buf (see u.h), which has
+ * to save far more because it can be longjmp'd to from anywhere.
+ */
+struct Label
+{
+	uintptr	sp;
+	uintptr	pc;
+};
 
 /*
  * A spin lock.
  *
  * key is the word _tas operates on and is ulong to match upstream's
- * portfns.h declaration of ulong _tas(ulong*). sr holds the interrupt
+ * portfns.h declaration of ulong _tas(ulong*).  sr holds the interrupt
  * level saved by ilock so iunlock can restore exactly what was found
- * rather than assuming interrupts were enabled. pc records who took it,
- * which is what makes a stuck lock diagnosable instead of a hang.
+ * rather than assuming.  pc records who took it, which is what makes a
+ * stuck lock diagnosable instead of a hang.
  *
  * Named members rather than the Plan 9 anonymous embedding used
  * upstream -- see os/bcm2837/README.md for why -fms-extensions is not a
@@ -59,7 +69,37 @@ struct Lock
 };
 
 /*
- * Machine configuration, filled in at boot. os/port/xalloc.c reads the
+ * Per-thread floating point state, held in Osenv.
+ *
+ * The 32-bit ARM ports carry an emulated-FP register file here because
+ * they had no hardware FPU. AArch64 mandates FP/SIMD, so this is just
+ * the two control registers; the register file itself lives in FPU
+ * below, saved per process rather than per thread.
+ */
+struct FPenv
+{
+	u32int	fpcr;		/* control: rounding and trap enables */
+	u32int	fpsr;		/* status: accrued exception flags */
+};
+
+/*
+ * Saved FP/SIMD state, per process.
+ *
+ * AArch64 has 32 128-bit V registers plus FPCR and FPSR.  Nothing saves
+ * or restores this yet -- the kernel is built -mgeneral-regs-only
+ * precisely so no interrupt path touches FP state we are not preserving
+ * -- but Proc embeds an FPU, so the shape has to be right now or every
+ * Proc changes size later.
+ */
+struct FPU
+{
+	uvlong	regs[64];	/* 32 x 128-bit V registers */
+	u32int	fpcr;
+	u32int	fpsr;
+};
+
+/*
+ * Machine configuration, filled in at boot.  os/port/xalloc.c reads the
  * memory bank fields directly to decide what it may hand out.
  *
  * These are ulong, matching upstream, which is correct here only
@@ -77,85 +117,44 @@ struct Conf
 	ulong	ialloc;		/* max interrupt-time allocation, bytes */
 	ulong	pipeqsize;	/* size in bytes of pipe queues */
 	int	nuart;		/* number of uart devices */
+	ulong	monitor;	/* has a display? */
+	ulong	copymode;	/* 0 copy-on-write, 1 copy-on-reference */
 };
 
-extern Conf conf;
-/*
- * From upstream os/port/portdat.h:610. Defined here until portdat.h
- * itself is imported, which cannot happen before the Proc and Chan
- * layers exist.
- */
-enum
-{
-	MAXPOOL	= 8,
-};
-
-typedef struct Rendez Rendez;
-typedef struct Proc Proc;
+#include "../port/portdat.h"
 
 /*
- * The seed of the process layer.
+ * Per-processor state.  Must follow portdat.h because it holds a Proc*.
  *
- * os/port/alloc.c waits on up->sleep when a pool is exhausted, so `up`
- * must at least be dereferenceable. This is the minimum shape that
- * allows the allocator to be imported unmodified; the real Proc arrives
- * with proc.c and will replace it wholesale.
+ * The 32-bit ARM ports carry separate fiq/irq/abt/und stacks here,
+ * because AArch32 gives each exception mode its own banked stack
+ * pointer.  AArch64 does not work that way: there is one vector table
+ * and exceptions taken to EL1 use SP_EL1, so those fields have no
+ * meaning here and are gone.
  */
-struct Rendez
+struct Mach
 {
-	Lock	l;
-	Proc*	p;
+	int		machno;		/* physical id of this processor */
+	uintptr		splpc;		/* pc of the last caller to splhi */
+	Proc*		proc;		/* current process on this processor */
+	Label		sched;		/* scheduler's saved context */
+	Lock		alarmlock;	/* access to the alarm list */
+	void*		alarm;		/* alarms bound to this clock */
+	ulong		ticks;		/* of the clock, since boot */
+	ulong		cpuhz;
+	int		nrdy;
+	int		stack[1];
 };
 
-struct Proc
-{
-	Rendez	sleep;
-};
-
-extern Proc *up;
-
-typedef struct Block Block;
+extern Mach	*m;
+extern Proc	*up;
+extern Mach	mach0;
 
 /*
- * Packet and queue buffer, from upstream os/port/portdat.h:171.
- *
- * Defined here until portdat.h itself can be imported. Taken from
- * UPSTREAM rather than from emu/port/dat.h, which is otherwise the
- * better 64-bit reference: emu's Block has no checksum field and defines
- * only BINTR/BFREE, because hosted Inferno never sees a NIC that can
- * offload a checksum. os/ip reads both, so a kernel Block needs the
- * upstream shape.
- *
- * All six pointers, so the struct is 8-byte aligned throughout on LP64
- * and BLEN/BALLOC stay pointer arithmetic rather than anything that
- * needs widening.
+ * Single core for now.  When the secondary cores are released from the
+ * park loop in l.S this becomes an array indexed by machno.
  */
-struct Block
-{
-	Block*	next;
-	Block*	list;
-	uchar*	rp;			/* first unconsumed byte */
-	uchar*	wp;			/* first empty byte */
-	uchar*	lim;			/* 1 past the end of the buffer */
-	uchar*	base;			/* start of the buffer */
-	void	(*free)(Block*);
-	ushort	flag;
-	ushort	checksum;		/* IP checksum of the complete packet */
-};
-
-#define BLEN(s)		((s)->wp - (s)->rp)
-#define BALLOC(s)	((s)->lim - (s)->base)
-
-enum
-{
-	BINTR	= (1<<0),
-	BFREE	= (1<<1),
-	Bipck	= (1<<2),		/* ip checksum offloaded */
-	Budpck	= (1<<3),		/* udp checksum offloaded */
-	Btcpck	= (1<<4),		/* tcp checksum offloaded */
-	Bpktck	= (1<<5),		/* packet checksum offloaded */
-};
-
+#define	MACHP(n)	((n) == 0 ? &mach0 : (Mach*)0)
 
 /*
  * A framebuffer as the VideoCore firmware handed it back.  pitch is the

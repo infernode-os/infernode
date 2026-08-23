@@ -110,3 +110,46 @@ cacheiflush:
 	isb
 3:
 	ret
+
+/*
+ * Context switching for the scheduler.
+ *
+ * int setlabel(Label *l)
+ * void gotolabel(Label *l)
+ *
+ * setlabel records where execution is and returns 0. gotolabel restores
+ * that point, and execution resumes as if setlabel had returned 1 --
+ * the classic Plan 9 pairing, and the whole mechanism proc.c's sched()
+ * uses to leave one process and enter another.
+ *
+ * Only sp and the return address are saved. That is sufficient, and it
+ * is not an oversight: under AAPCS64 x19-x28 and x29 are callee-saved,
+ * so any caller of setlabel that cares about them has already spilled
+ * them to its own frame -- which the restored sp brings back. Saving
+ * them here as well would duplicate the caller's work.
+ *
+ * Label layout must match struct Label in dat.h: sp at 0, pc at 8.
+ */
+	.global	setlabel
+setlabel:
+	mov	x1, sp
+	str	x1, [x0, #0]		/* l->sp */
+	str	x30, [x0, #8]		/* l->pc: where to resume */
+	mov	x0, #0			/* first return: 0 */
+	ret
+
+	.global	gotolabel
+gotolabel:
+	ldr	x1, [x0, #0]
+	ldr	x30, [x0, #8]
+	mov	sp, x1
+	/*
+	 * The stack pointer just changed out from under us. dsb/isb are
+	 * not needed for that, but the return must not be speculated
+	 * against the old frame, and x30 was loaded from memory the
+	 * scheduler wrote -- so order the load before the branch.
+	 */
+	dsb	nsh
+	isb
+	mov	x0, #1			/* setlabel appears to return 1 */
+	ret

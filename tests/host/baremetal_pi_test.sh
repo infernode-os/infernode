@@ -123,7 +123,7 @@ trap 'rm -rf "$BUILD"' EXIT
 # headers upstream's native ports use, and the ones os/port will expect.
 # include/ supplies kern.h, the kernel libc declarations libkern implements.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 # Build every source in the port, so a new file is picked up automatically
@@ -297,6 +297,7 @@ check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed 
 
 check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
 check "blok: allocb/freeb OK"          "os/port/allocb Blocks have headroom and correct extents"
+check "lbl:  setlabel/gotolabel OK"     "context-switch primitives round trip and restore sp"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

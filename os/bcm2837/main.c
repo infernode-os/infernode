@@ -691,6 +691,116 @@ probeblock(void)
 	print("blok: allocb/freeb %s\n", ok ? "OK (headroom, extents, distinct)" : "BROKEN");
 }
 
+/*
+ * setlabel/gotolabel -- the mechanism the scheduler is built on.
+ *
+ * proc.c's sched() leaves a process by setlabel-ing into its Proc and
+ * gotolabel-ing into the scheduler's own Label, and enters one by doing
+ * the reverse. If this pairing is wrong the kernel does not fail here,
+ * it fails the first time two processes exist, in a way that looks like
+ * memory corruption rather than a broken jump.
+ *
+ * Every variable below is static ON PURPOSE. gotolabel restores sp and
+ * pc and nothing else -- callee-saved registers survive only because
+ * the caller spilled them, and anything the compiler chose to keep in a
+ * caller-saved register across the call is stale afterwards. Statics
+ * live in memory, so they are immune. This is the same reason
+ * setjmp/longjmp requires volatile, and getting it wrong here would
+ * make the test lie rather than fail.
+ */
+static Label plabel;
+static int pcount;
+static int psp_ok;
+
+static uintptr
+getsp(void)
+{
+	uintptr sp;
+
+	__asm__ volatile("mov %0, sp" : "=r"(sp));
+	return sp;
+}
+
+/*
+ * Burn a few hundred bytes of stack, then jump. The frame here must be
+ * large enough that a gotolabel which failed to restore sp would leave
+ * it visibly wrong on return.
+ *
+ * noinline is load-bearing: called once from one place, clang inlines
+ * this at -O2, which puts gotolabel back at the same stack depth as
+ * setlabel and makes restoring sp a no-op again. An earlier version of
+ * this test passed with the sp restore deleted for exactly that reason.
+ */
+static void __attribute__((noinline))
+deeper(void)
+{
+	volatile char pad[512];
+
+	pad[0] = 1;
+	pad[511] = 2;
+
+	gotolabel(&plabel);
+
+	/*
+	 * Unreachable, but it must be here.
+	 *
+	 * With gotolabel as the last statement, clang emits a TAIL CALL:
+	 * it runs this function's epilogue -- restoring sp -- and then
+	 * branches. gotolabel would then already be at the caller's stack
+	 * depth, making the sp restore a no-op and the test unable to
+	 * detect its removal. Verified in the disassembly: "add sp, sp,
+	 * #0x10" followed by "b". Referencing pad afterwards forces a
+	 * real call, so gotolabel genuinely runs on this frame.
+	 */
+	pad[1] = 3;
+	USED(pad);
+}
+
+static void
+probelabel(void)
+{
+	static uintptr sp0, sp1;
+	static int ok;
+
+	ok = 1;
+	pcount = 0;
+	psp_ok = 0;
+
+	sp0 = getsp();
+
+	if(setlabel(&plabel) == 0){
+		/* first pass: setlabel must report 0 */
+		pcount++;
+		/*
+		 * Jump back from DEEPER in the stack, not from here.
+		 * Calling gotolabel at the same depth setlabel was taken
+		 * at makes restoring sp a no-op, so the check would pass
+		 * even with the restore deleted -- which is exactly what
+		 * an earlier version of this test did.
+		 */
+		deeper();
+		/* gotolabel must not return */
+		ok = 0;
+		pcount += 100;
+	} else {
+		/* resumed: setlabel now appears to have returned 1 */
+		pcount++;
+	}
+
+	sp1 = getsp();
+	if(sp0 != sp1)
+		ok = 0;			/* stack pointer not restored */
+	else
+		psp_ok = 1;
+
+	if(pcount != 2)
+		ok = 0;			/* did not pass through exactly twice */
+
+	print("lbl:  setlabel/gotolabel %s (passes=%d, sp %s)\n",
+		ok ? "OK" : "BROKEN", pcount,
+		psp_ok ? "restored" : "NOT restored");
+}
+
 static void
 probefb(void)
 {
@@ -760,6 +870,7 @@ kmain(void)
 	probexalloc();
 	probealloc();
 	probeblock();
+	probelabel();
 	probeclock();
 	probefb();
 

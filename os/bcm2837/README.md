@@ -185,6 +185,43 @@ firmware rather than hardcoded because the split is configurable in
 the load address. Real hardware enters directly. Boot code must not
 assume its entry PC.
 
+## Decision: the Plan 9 C dialect is de-anonymized by hand
+
+`os/port` and `os/ip` are written in Plan 9 C, which uses three
+extensions ISO C does not have: anonymous struct members (`Lock;` inside
+a struct), passing the *container* where an embedded member is expected
+(`qlock(c)` for `qlock(&c->l)`), and omitting parameter names in
+definitions. That is roughly 115 declaration sites and 270 call sites
+across the two trees, so how it is handled is a real decision rather than
+a detail.
+
+The obvious answer — GCC's `-fplan9-extensions`, which implements exactly
+this — **does not work here**, and the reason matters:
+
+- `-fplan9-extensions` is a **GCC** flag. Neither Apple clang 17 nor
+  Homebrew LLVM clang 21 recognizes it at all.
+- Clang's `-fms-extensions` accepts the anonymous members and *appears*
+  to accept the container-passing, but only by downgrading it to a
+  `-Wincompatible-pointer-types` warning. It never performs the
+  conversion. It happens to produce correct code when the anonymous
+  member is at offset 0, which is why it looks like it works.
+- Tested with the member at offset 16: the call wrote to **offset 0**.
+  It clobbered an unrelated field and left the lock untouched, silently.
+
+Silent memory corruption on lock acquisition is the worst possible
+failure mode in a kernel, and `-fms-extensions` produces it without so
+much as an error. So imported files get explicit member names
+(`Lock l;`, `Ref r;`) and explicit call sites (`&c->l`, `&c->r`).
+
+This also matches what InferNode's hosted tree already did —
+`emu/port/dat.h` names these members explicitly — which keeps the two
+ports diff-able. That is worth a great deal, because 34 of the `os/port`
+files have a 64-bit-clean sibling in `emu/port` and are best ported by
+diffing against it.
+
+A real `aarch64-elf-gcc` would restore the option, and is worth
+revisiting if one is ever installed.
+
 ## Next
 
 1. Timer and interrupt controller, then a scheduler.

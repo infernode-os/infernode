@@ -882,6 +882,65 @@ probeproc(void)
 	print("\n");
 }
 
+/*
+ * QLocks and RWlocks -- the blocking locks os/port uses everywhere a
+ * spinlock would be wrong.
+ *
+ * Only the UNCONTENDED paths are exercised. A contended qlock parks the
+ * caller and calls sched(), and with no other runnable process that
+ * would hang rather than fail -- so this checks that taking a free lock
+ * does not sleep, that the lock is then genuinely held, and that
+ * releasing it makes it available again. Contention needs two processes
+ * and belongs with the first real sched() test.
+ */
+static void
+probeqlock(void)
+{
+	static QLock q;
+	static RWlock rw;
+	Pgrp *pg;
+	int ok;
+
+	ok = 1;
+
+	/* a free qlock must be takeable without sleeping */
+	qlock(&q);
+	if(canqlock(&q))
+		ok = 0;			/* it reported free while we hold it */
+	qunlock(&q);
+	if(!canqlock(&q))
+		ok = 0;			/* still held after release */
+	qunlock(&q);
+
+	/* readers must not exclude readers */
+	rlock(&rw);
+	rlock(&rw);
+	runlock(&rw);
+	runlock(&rw);
+
+	/* a writer must exclude, and release cleanly */
+	wlock(&rw);
+	wunlock(&rw);
+
+	/* and the lock must be reusable afterwards */
+	rlock(&rw);
+	runlock(&rw);
+
+	print("qlok: qlock/rwlock %s\n", ok ? "OK (uncontended paths)" : "BROKEN");
+
+	/*
+	 * pgrp.c: a process group is the root of a namespace, so this is
+	 * the first structure that will hold mounts once chan.c lands.
+	 */
+	ok = 1;
+	pg = newpgrp();
+	if(pg == nil || pg->r.ref != 1)
+		ok = 0;
+	else
+		closepgrp(pg);
+	print("pgrp: newpgrp %s\n", ok ? "OK" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -992,6 +1051,7 @@ kmain(void)
 	probeblock();
 	probelabel();
 	probeproc();
+	probeqlock();
 	probeclock();
 	probefb();
 

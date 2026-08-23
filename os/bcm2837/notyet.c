@@ -133,50 +133,47 @@ iprint(char *fmt, ...)
 }
 
 /*
- * pgrp.c / devenv.c -- namespace teardown.
+ * chan.c -- channel lifetime.
  *
- * These free a process's namespace, file descriptors, environment and
- * signer keys on exit. Nothing creates any of those yet, so the pointers
- * are always nil and doing nothing is correct rather than merely
- * convenient. That stops being true the moment chan.c lands.
+ * pgrp.c's namespace teardown calls these to release the Chans a mount
+ * table holds. Nothing creates a Chan yet, so those tables are empty and
+ * these are never reached with real work to do -- which is the only
+ * reason a stub is acceptable here. The moment chan.c lands these must
+ * go, and the linker will say so.
  */
 void
-closepgrp(Pgrp *p)
+cclose(Chan *c)
 {
-	USED(p);
+	USED(c);
+}
+
+Chan*
+cclone(Chan *c)
+{
+	USED(c);
+	panic("cclone: chan.c not imported yet");
+	return nil;
 }
 
 void
-closefgrp(Fgrp *f)
+putmhead(Mhead *m)
 {
-	USED(f);
+	USED(m);
 }
 
+/*
+ * closepgrp, closefgrp, closesigs and resrcwait were stubbed here.
+ * os/port/pgrp.c now provides the real ones, which genuinely tear down
+ * a namespace rather than doing nothing, so the stubs are gone.
+ *
+ * closeegrp still belongs to devenv.c, which is not imported.
+ */
 void
 closeegrp(Egrp *e)
 {
 	USED(e);
 }
 
-void
-closesigs(Skeyset *s)
-{
-	USED(s);
-}
-
-/*
- * pgrp.c -- wait for a resource to become available.
- *
- * Called when a process cannot get memory or a proc slot. The real one
- * sleeps and retries; with no scheduler able to run anything else,
- * sleeping would hang. Report and let the caller fail.
- */
-void
-resrcwait(char *reason)
-{
-	if(reason != nil)
-		print("resrcwait: %s\n", reason);
-}
 
 /*
  * dis.c -- the Dis VM.

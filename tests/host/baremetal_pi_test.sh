@@ -308,6 +308,8 @@ check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
 check "blok: allocb/freeb OK"          "os/port/allocb Blocks have headroom and correct extents"
 check "lbl:  setlabel/gotolabel OK"     "context-switch primitives round trip and restore sp"
 check "proc: procinit/newproc OK"       "os/port/proc allocates processes with distinct pids and stacks"
+check "qlok: qlock/rwlock OK"           "os/port/qlock blocking locks work uncontended"
+check "pgrp: newpgrp OK"                "os/port/pgrp allocates a process group"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

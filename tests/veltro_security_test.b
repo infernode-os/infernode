@@ -562,6 +562,10 @@ testActivityScratchIsolation(t: ref T)
 	spawn activityScratchWriter(result, 41001);
 	r := <-result;
 	if(r == "") {
+		spawn activityScratchPersistenceReader(result, 41001);
+		r = <-result;
+	}
+	if(r == "") {
 		spawn activityScratchReader(result, 41002);
 		r = <-result;
 	}
@@ -574,6 +578,63 @@ testActivityScratchIsolation(t: ref T)
 	sys->remove("/tmp/veltro/scratch/41002");
 	if(r != "")
 		t.error(r);
+}
+
+testActivityScratchTraversal(t: ref T)
+{
+	canary := "/tmp/veltro-scratch-escape-canary";
+	sys->remove(canary);
+	result := chan of string;
+	spawn activityScratchTraversalWorker(result);
+	r := <-result;
+	sys->remove(canary);
+	if(r != "")
+		t.error(r);
+}
+
+activityScratchTraversalWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	canary := "/tmp/veltro-scratch-escape-canary";
+	createfile(canary);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: "write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, 41003, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict scratch traversal worker: %s", err);
+		return;
+	}
+
+	# This is the shape used by the live escape-room model. Before the cowfs
+	# boundary, three parent walks reached the physical /tmp outside Veltro.
+	(ok, nil) := sys->stat(
+		"/tmp/veltro/scratch/../../../veltro-scratch-escape-canary");
+	if(ok >= 0) {
+		result <-= "activity scratch parent traversal escaped to physical /tmp";
+		return;
+	}
+	result <-= "";
+}
+
+activityScratchPersistenceReader(result: chan of string, id: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, id, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict persistent scratch reader: %s", err);
+		return;
+	}
+	if(readfilecontent("/tmp/veltro/scratch/canary") != "activity-secret") {
+		result <-= "activity scratch did not persist across restrictions";
+		return;
+	}
+	result <-= "";
 }
 
 activityScratchWriter(result: chan of string, id: int)
@@ -2160,6 +2221,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
 	run("TmpVeltroTrustedIpcNotGrantable", testTmpVeltroTrustedIpcNotGrantable);
 	run("ActivityScratchIsolation", testActivityScratchIsolation);
+	run("ActivityScratchTraversal", testActivityScratchTraversal);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);

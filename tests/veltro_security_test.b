@@ -580,42 +580,103 @@ testActivityScratchIsolation(t: ref T)
 		t.error(r);
 }
 
-testActivityScratchTraversal(t: ref T)
+# Parent-traversal containment across every restricted boundary.
+#
+# The previous version of this test probed exactly one path —
+# /tmp/veltro/scratch/../../../<canary> — with the canary planted in the
+# physical /tmp. Three parent walks land at the EMULATOR ROOT, where that name
+# never existed, so the stat failed and the test passed while the hole stood
+# wide open. It certified commit 5b5a963b as a fix; it was not one. Two parent
+# walks reach the physical /tmp, and /dis/lib/../.. reaches the emulator root.
+#
+# So: probe a matrix, plant a canary at each depth the traversal can actually
+# reach, and probe WRITES as well as reads. The escape is not read-only — an
+# agent granted only read and list can create files anywhere under the
+# emulator root, which makes it a persistence and next-boot code-execution
+# primitive, not an information leak.
+#
+# Every escape is reported, not just the first, so the output measures how far
+# containment is from holding rather than stopping at one symptom.
+
+TRAVERSAL_TMP_CANARY: con "/tmp/veltro-traversal-canary";
+TRAVERSAL_ROOT_CANARY: con "/veltro-traversal-canary-root";
+TRAVERSAL_TMP_ESCAPE: con "/tmp/veltro-traversal-escape";
+TRAVERSAL_ROOT_ESCAPE: con "/veltro-traversal-escape-root";
+
+testNamespaceTraversalContainment(t: ref T)
 {
-	canary := "/tmp/veltro-scratch-escape-canary";
-	sys->remove(canary);
+	cleanuptraversal();
 	result := chan of string;
-	spawn activityScratchTraversalWorker(result);
+	spawn traversalWorker(result);
 	r := <-result;
-	sys->remove(canary);
+	cleanuptraversal();
 	if(r != "")
-		t.error(r);
+		t.error("namespace traversal escaped:\n" + r);
 }
 
-activityScratchTraversalWorker(result: chan of string)
+cleanuptraversal()
+{
+	sys->remove(TRAVERSAL_TMP_CANARY);
+	sys->remove(TRAVERSAL_ROOT_CANARY);
+	sys->remove(TRAVERSAL_TMP_ESCAPE);
+	sys->remove(TRAVERSAL_ROOT_ESCAPE);
+}
+
+traversalWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
-	canary := "/tmp/veltro-scratch-escape-canary";
-	createfile(canary);
+	createfile(TRAVERSAL_TMP_CANARY);
+	createfile(TRAVERSAL_ROOT_CANARY);
+
 	caps := ref NsConstruct->Capabilities(
 		"read" :: "write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
 		nil, 0, 0, 41003, nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
-		result <-= sys->sprint("restrict scratch traversal worker: %s", err);
+		result <-= sys->sprint("restrict traversal worker: %s", err);
 		return;
 	}
 
-	# This is the shape used by the live escape-room model. Before the cowfs
-	# boundary, three parent walks reached the physical /tmp outside Veltro.
-	(ok, nil) := sys->stat(
-		"/tmp/veltro/scratch/../../../veltro-scratch-escape-canary");
-	if(ok >= 0) {
-		result <-= "activity scratch parent traversal escaped to physical /tmp";
-		return;
+	report := "";
+
+	# Reads. Each entry is a path that must NOT resolve to a canary planted
+	# outside every grant. The scratch shapes are what the live escape-room
+	# model used; the /dis and /lib shapes show the same hole is a property of
+	# restrictdir generally, not of the activity scratch mount.
+	reads := array[] of {
+		"/tmp/veltro/scratch/../../veltro-traversal-canary",
+		"/tmp/veltro/scratch/../../../veltro-traversal-canary-root",
+		"/tmp/veltro/scratch/../../../../veltro-traversal-canary-root",
+		"/tmp/veltro/../../veltro-traversal-canary",
+		"/dis/lib/../../veltro-traversal-canary-root",
+		"/dis/veltro/../../veltro-traversal-canary-root",
+		"/lib/veltro/../../veltro-traversal-canary-root",
+	};
+	for(i := 0; i < len reads; i++) {
+		(ok, nil) := sys->stat(reads[i]);
+		if(ok >= 0)
+			report += sys->sprint("  READ  %s reached a canary outside the namespace\n",
+				reads[i]);
 	}
-	result <-= "";
+
+	# Writes. A confined agent must not be able to create a file outside its
+	# granted writable view by any traversal.
+	writes := array[] of {
+		"/tmp/veltro/scratch/../../veltro-traversal-escape",
+		"/dis/lib/../../veltro-traversal-escape-root",
+		"/lib/veltro/../../veltro-traversal-escape-root",
+	};
+	for(i = 0; i < len writes; i++) {
+		fd := sys->create(writes[i], Sys->OWRITE, 8r600);
+		if(fd != nil) {
+			fd = nil;
+			report += sys->sprint("  WRITE %s created a file outside the namespace\n",
+				writes[i]);
+		}
+	}
+
+	result <-= report;
 }
 
 activityScratchPersistenceReader(result: chan of string, id: int)
@@ -2221,7 +2282,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
 	run("TmpVeltroTrustedIpcNotGrantable", testTmpVeltroTrustedIpcNotGrantable);
 	run("ActivityScratchIsolation", testActivityScratchIsolation);
-	run("ActivityScratchTraversal", testActivityScratchTraversal);
+	run("NamespaceTraversalContainment", testNamespaceTraversalContainment);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);

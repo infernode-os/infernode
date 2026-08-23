@@ -107,6 +107,22 @@ void	kmain(void);
  * setlabel/gotolabel doing for error handling what sched() does for
  * context switching.
  */
+/*
+ * Console output mirror.
+ *
+ * devcons.c calls this, when non-nil, to send console text somewhere in
+ * addition to the serial line -- a framebuffer, typically. Declared
+ * extern here and defined once in main.c: upstream's platform fns.h
+ * writes it without extern, which makes it a tentative definition and a
+ * duplicate symbol under -fno-common, the same way portfns.h's
+ * kproftick was.
+ *
+ * Left nil for now. Pointing it at a framebuffer text renderer is what
+ * would put console output on the 7in panel.
+ */
+void	setpanic(void);
+extern void	(*screenputs)(char*, int);
+
 /* platform hooks os/port/proc.c calls */
 void	idlehands(void);
 void	procsave(Proc*);

@@ -67,109 +67,24 @@ errfmt(Fmt *f)
 }
 
 /*
- * print() and panic().
+ * print(), panic(), putstrn(), iprint(), kprint(), snprint(), sprint(),
+ * _assert() and debugkey() were all defined here while there was no
+ * console device. os/port/devcons.c owns them now, and routes them
+ * through the console Queue so they interleave correctly on /dev/cons
+ * instead of each racing straight to the UART.
  *
- * os/port calls these constantly, and both are variadic, so they can
- * only exist once the fmt engine does. Output goes straight to the
- * PL011 rather than through a console queue: there is no /dev/cons yet,
- * and more importantly a panic must be able to reach the wire when the
- * rest of the kernel is already broken.
- *
- * The buffer is static and the printing is not re-entrant. That is the
- * usual bargain for kernel print: a fixed buffer that cannot itself
- * fail to allocate is worth more than reentrancy in the one code path
- * whose job is to report that something has gone wrong.
+ * What remains is the seam libkern's fmt engine expects the KERNEL to
+ * fill in, which devcons.c does not provide: the format lock and the
+ * two verbs the kernel decides the meaning of.
  */
-static char printbuf[1024];
-
-int
-print(char *fmt, ...)
-{
-	va_list arg;
-	int n;
-
-	_fmtlock();
-	va_start(arg, fmt);
-	n = vsnprint(printbuf, sizeof printbuf, fmt, arg);
-	va_end(arg);
-	uartputstr(printbuf);
-	_fmtunlock();
-
-	return n;
-}
-
-void
-panic(char *fmt, ...)
-{
-	va_list arg;
-
-	/*
-	 * Mask interrupts first. A timer tick arriving mid-panic would
-	 * re-enter the kernel through a path that is, by definition, no
-	 * longer trustworthy.
-	 */
-	splhi();
-
-	uartputstr("\npanic: ");
-
-	va_start(arg, fmt);
-	vsnprint(printbuf, sizeof printbuf, fmt, arg);
-	va_end(arg);
-	uartputstr(printbuf);
-
-	uartputstr("\nhalted.\n");
-
-	for(;;)
-		__asm__ volatile("wfe");
-}
 
 /*
- * ixsummary was defined here; os/port/qio.c now provides the real one,
- * which reports actual interrupt-time Block allocation rather than just
- * the configured limit.
- *
- * debugkey stays: it registers a console debug key and belongs to
- * devcons.c, which is not imported.
- */
-void
-debugkey(Rune c, char *name, void (*f)(void), int t)
-{
-	USED(c); USED(name); USED(f); USED(t);
-}
-
-/*
- * Raw console write. os/port uses this to get bytes out without going
- * through the fmt engine -- notably from the pool allocator's corruption
- * reporter, which must be able to speak when the heap is already
- * suspect.
- */
-void
-putstrn(char *s, int n)
-{
-	int i;
-
-	for(i = 0; i < n; i++){
-		if(s[i] == '\n')
-			uartputc('\r');
-		uartputc(s[i]);
-	}
-}
-
-/*
- * Upstream sets a flag that makes print() bypass any console queueing so
- * a panic message cannot be lost behind a lock. Output here already goes
- * straight to the PL011, so there is nothing to switch -- but the
- * function must exist, and when a console driver lands it becomes the
- * place that switch happens.
+ * Upstream sets a flag that makes print() bypass console queueing so a
+ * panic message cannot be lost behind a lock. devcons.c reads that flag
+ * (via its own machinery); this is the platform half, and there is
+ * nothing to switch yet because the UART write below is unbuffered.
  */
 void
 setpanic(void)
 {
 }
-
-/*
- * return0, tsleep and exhausted used to be stubbed here. os/port/proc.c
- * now provides the real ones -- tsleep genuinely sleeps, and exhausted
- * kills the offending process instead of just reporting -- so the stubs
- * are gone rather than shadowing them.
- */

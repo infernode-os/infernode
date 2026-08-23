@@ -154,6 +154,20 @@ clockintr(void)
 		return 0;
 
 	ticks++;
+
+	/*
+	 * m->ticks is not bookkeeping -- os/port reads it directly.
+	 *
+	 * devcons.c's prflush() waits "while(serwrite==nil &&
+	 * consactive())" and gives up once m->ticks has advanced by HZ.
+	 * A platform clock that keeps its own counter and never updates
+	 * m->ticks makes that loop wait forever, which presents as the
+	 * console silently hanging on the first print rather than as a
+	 * clock problem. proc.c's scheduler accounting reads it too.
+	 */
+	if(m != nil)
+		m->ticks++;
+
 	armtick();
 	return 1;
 }

@@ -89,6 +89,7 @@ QEMU="$(command -v qemu-system-aarch64 2>/dev/null)"
 CC="$(command -v clang 2>/dev/null)"
 LLD="$(find_lld)"
 OBJCOPY="$(find_objcopy)"
+AR="$(command -v llvm-ar 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-ar)"
 
 if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" ]]; then
     skip "AArch64 cross toolchain not available (need clang, ld.lld, llvm-objcopy)"
@@ -130,7 +131,7 @@ CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
 # rather than silently going untested.
 build_kernel() {
     local outimg="$1" mainsrc="$2"
-    local objs=() f o
+    local objs=() libobjs=() f o
 
     # NB: object names keep the source extension. A port with both
     # arch.S and arch.c would otherwise produce arch.o twice, and the
@@ -178,8 +179,17 @@ build_kernel() {
         objs+=("$o")
     done
 
-    # libkern: the freestanding libc the kernel must supply itself, since
-    # there is no host to borrow one from. Warnings are not escalated here
+    # libkern is built as an ARCHIVE, not a list of objects.
+    #
+    # That is not a packaging preference: os/port/devcons.c defines
+    # snprint and sprint itself, and libkern defines them too. Linking
+    # every libkern object unconditionally makes those duplicate
+    # symbols. An archive member is only pulled in if it resolves
+    # something still undefined, so devcons.c's definitions win and
+    # libkern's are simply never extracted -- which is exactly how
+    # upstream's build behaves, since it links libkern.a.
+    #
+    # Warnings are not escalated here
     # -- these are imported upstream sources being ported, and the port is
     # tracked deliberately rather than by drowning the build in noise.
     for f in "$ROOT"/libkern/*.c; do
@@ -188,10 +198,11 @@ build_kernel() {
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
              -Werror=missing-declarations -Werror=incompatible-pointer-types \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
-        objs+=("$o")
+        libobjs+=("$o")
     done
+    "$AR" rcs "$BUILD/libkern.a" "${libobjs[@]}" 2>>"$BUILD/cc.log" || return 1
 
-    "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" -o "$BUILD/k.elf" 2>>"$BUILD/cc.log" || return 1
+    "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" "$BUILD/libkern.a" -o "$BUILD/k.elf" 2>>"$BUILD/cc.log" || return 1
     "$OBJCOPY" -O binary "$BUILD/k.elf" "$outimg" 2>>"$BUILD/cc.log" || return 1
     return 0
 }
@@ -314,6 +325,8 @@ check "chan: newchan/cname OK"          "os/port/chan allocates channels and com
 check "root: devattach/walk/cclose OK"   "root device attaches, walks to /dev, and closes cleanly"
 check "file: kopen/kread/kclose OK"      "os/port/sysfile opens, reads and closes a real path"
 check "qio:  qopen/qwrite/qread/qbwrite OK" "os/port/qio queues bytes and Blocks with correct accounting"
+check "cons: hello from /dev/cons"       "text written to the PATH /dev/cons reaches the console"
+check "cons: /dev/cons OK"               "console device binds into the namespace and is writable"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"
@@ -432,7 +445,7 @@ Proc *up;
 Talarm talarm;
 void (*kproftick)(ulong);
 void (*proctrace)(Proc*, int, vlong);
-void (*serwrite)(char*, int);
+void (*screenputs)(char*, int);
 
 void confinit(void) { }
 void idlehands(void) { __asm__ volatile("wfi"); }
@@ -444,6 +457,9 @@ kmain(void)
 {
 	uartinit();
 	trapinit();
+	/* panic() goes through devcons, which discards output with no
+	 * console queue and no serial hook -- so wire the serial hook. */
+	serwrite = uartputs;
 	uartputstr("\nfault-injection variant\n");
 	__asm__ volatile(".word 0x00000000");
 	uartputstr("BUG: execution continued past an undefined instruction\n");

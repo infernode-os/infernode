@@ -96,3 +96,26 @@ uartputd(u64int v)
 	while(--i >= 0)
 		uartputc(buf[i]);
 }
+
+/*
+ * The UART console write devcons.c calls.
+ *
+ * portfns.h declares this as uartputs(char*, int) -- a counted write to
+ * the serial console, not a C string. It is the reason this port's own
+ * convenience helper is named uartputstr: the name belongs to os/port's
+ * interface, not to a local shortcut.
+ *
+ * Unbuffered and synchronous on purpose. This is the path a panic takes,
+ * and a panic that queues its output can lose it.
+ */
+void
+uartputs(char *s, int n)
+{
+	int i;
+
+	for(i = 0; i < n; i++){
+		if(s[i] == '\n')
+			uartputc('\r');
+		uartputc(s[i]);
+	}
+}

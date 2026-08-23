@@ -52,6 +52,22 @@ typedef	short			s16int;
 typedef	int			s32int;
 typedef	long long		s64int;
 
+/*
+ * The intN/uintN spelling of the same widths. Both exist because the
+ * tree uses both: os/port and libkern say u32int, while include/libsec.h
+ * and include/mp.h say int32. MacOSX/arm64/include/lib9.h defines both
+ * for exactly this reason, so the native header has to as well.
+ */
+typedef	signed char		int8;
+typedef	short			int16;
+typedef	int			int32;
+typedef	long long		int64;
+
+typedef	unsigned char		uint8;
+typedef	unsigned short		uint16;
+typedef	unsigned int		uint32;
+typedef	unsigned long long	uint64;
+
 typedef	unsigned long		uintptr;
 typedef	long			intptr;
 typedef	unsigned long		usize;

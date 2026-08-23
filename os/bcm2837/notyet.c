@@ -43,34 +43,121 @@
  * entry is a call through nil.
  */
 extern Dev rootdevtab;
+extern Dev consdevtab;
 
 Dev*	devtab[] =
 {
-	&rootdevtab,
+	&rootdevtab,		/* '/' -- the namespace root */
+	&consdevtab,		/* 'c' -- /dev/cons and friends */
 	nil,
 };
 
 /*
- * The host owner. With no user model yet there is one principal; this
- * becomes real when devcons and the user machinery are imported.
+ * eve, iseve and seconds were defined here; os/port/devcons.c provides
+ * them now.
  */
-char*	eve = "inferno";
 
 /*
- * Wall-clock seconds since the epoch, and the boot-time date the kernel
- * was handed. There is no RTC driver and the VideoCore firmware does not
- * provide the time, so this counts from boot rather than pretending to
- * know the date. Returning a monotonically increasing value is what
- * chan.c actually needs (it stamps Chan mtimes); returning a wrong
- * absolute date would be worse than an obviously relative one.
+ * Boot-time date, normally read from an RTC. There is none on this
+ * board and the VideoCore firmware does not supply the time, so
+ * devcons.c's #c/time reports seconds since boot rather than an
+ * absolute date it would be inventing.
  */
 ulong	kerndate;
 
-long
-seconds(void)
+/*
+ * devcons.c consults this to decide whether console output should also
+ * go to a screen. Nothing installs a screenputs yet, so it stays off.
+ */
+int	consoleprint;
+
+
+/*
+ * Halt. Upstream reboots or returns to a monitor; there is nowhere to
+ * return to here, so stop the core with interrupts masked rather than
+ * spinning.
+ */
+void
+exit(int code)
 {
-	return (long)(clockticks() / HZ);
+	USED(code);
+	print("\nkernel exit\n");
+	splhi();
+	for(;;)
+		__asm__ volatile("wfi");
 }
+
+/*
+ * The JIT flag. os/pc sets this from a "code" section in the kernel
+ * configuration; devcons.c reports it through #c/jit. Zero means the
+ * Dis interpreter rather than comp-arm64.c, which is the right default
+ * until the JIT's icache maintenance is validated on real silicon.
+ */
+int	cflag;
+
+/*
+ * dis.c -- rename the user a Prog runs as. devcons.c calls it when
+ * /dev/user is written. No Dis program exists to rename yet.
+ */
+void
+renameproguser(char *old, char *new)
+{
+	USED(old); USED(new);
+}
+
+/*
+ * portclock.c -- register a periodic callback on the clock interrupt.
+ *
+ * devcons.c uses it for keyboard repeat, and dis.c will use it for
+ * per-Prog time accounting. This port drives its tick directly from
+ * clock.c rather than through portclock.c's Timer machinery, so there
+ * is no list to add to yet -- but callers must not silently believe
+ * they were registered, hence the report.
+ */
+Timer*
+addclock0link(void (*f)(void), int ms)
+{
+	USED(f); USED(ms);
+	print("addclock0link: portclock.c not imported; %d ms callback ignored\n", ms);
+	return nil;
+}
+
+/*
+ * random.c provides the pool; this is the platform entropy source it
+ * stirs in. The BCM2837 has a hardware RNG at 0x3F104000 that is worth
+ * wiring up -- until then this contributes nothing rather than
+ * contributing something predictable, and callers get zeroes they can
+ * see rather than randomness they cannot trust.
+ */
+ulong
+genrandom(void)
+{
+	return 0;
+}
+
+/*
+ * Platform reset paths devcons.c exposes through #c/reboot and the
+ * debug keys. There is no firmware to return to; halting is the honest
+ * answer, and exit() already does it.
+ */
+void
+reboot(void)
+{
+	print("reboot: not supported; halting\n");
+	exit(0);
+}
+
+void
+halt(void)
+{
+	exit(0);
+}
+
+/*
+ * devcons.c consults this to decide whether to keep a broken process
+ * around for a debugger rather than reaping it. There is no debugger.
+ */
+int	keepbroken;
 
 /*
  * devmnt.c -- the 9P mount client.
@@ -108,78 +195,13 @@ muxclose(Mnt *m)
 	USED(m);
 }
 
-/*
- * lib.h's assert() calls this. Upstream puts it in a library; it is
- * here because a failed assertion must be able to report before any
- * console device exists.
- */
-void
-_assert(char *s)
-{
-	panic("assert failed: %s", s);
-}
 
 /*
  * openmode was implemented here. os/port/sysfile.c now provides it.
  */
 
-/*
- * devcons.c -- print into the console queue.
- *
- * qio.c calls this when a Queue operation needs to report. devcons.c
- * routes it through the console's Queue so it interleaves correctly
- * with everything else on /dev/cons; with no console device yet there
- * is no queue to interleave with, so it goes straight out the UART like
- * print() does.
- */
-int
-kprint(char *fmt, ...)
-{
-	va_list arg;
-	static char buf[256];
 
-	va_start(arg, fmt);
-	vsnprint(buf, sizeof buf, fmt, arg);
-	va_end(arg);
-	putstrn(buf, strlen(buf));
-	return strlen(buf);
-}
 
-/*
- * devcons.c
- */
-int
-iseve(void)
-{
-	/*
-	 * "Is the caller the host owner?" With no user model yet there is
-	 * exactly one principal, and it is that one. This becomes a real
-	 * check when devcons and the user machinery are imported -- until
-	 * then it must not be used to gate anything security-relevant.
-	 */
-	return 1;
-}
-
-int
-iprint(char *fmt, ...)
-{
-	va_list arg;
-	static char buf[256];
-	int s;
-
-	/*
-	 * print() from interrupt context. Masks interrupts rather than
-	 * taking the console lock, because the caller may already hold it.
-	 */
-	s = splhi();
-	va_start(arg, fmt);
-	vsnprint(buf, sizeof buf, fmt, arg);
-	va_end(arg);
-	putstrn(buf, strlen(buf));
-	splx(s);
-
-	return strlen(buf);
-}
 
 /*
  * closepgrp, closefgrp, closesigs and resrcwait were stubbed here.

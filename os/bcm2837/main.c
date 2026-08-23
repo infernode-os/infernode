@@ -36,12 +36,12 @@ Talarm	talarm;
 /*
  * Optional kernel hooks, declared in portfns.h and defined here exactly
  * once. Each stays nil unless a subsystem installs itself: kproftick is
- * the kernel profiler's timer callback, proctrace the scheduler trace
- * hook, and serwrite an alternate console writer.
+ * the kernel profiler's timer callback and proctrace the scheduler
+ * trace hook. serwrite belongs to devcons.c, which defines it.
  */
 void	(*kproftick)(ulong);
 void	(*proctrace)(Proc*, int, vlong);
-void	(*serwrite)(char*, int);
+void	(*screenputs)(char*, int);
 
 /*
  * The current process. There is no scheduler yet, so this is a single
@@ -488,9 +488,21 @@ confinit(void)
 	conf.npage0 = (top - base) / BY2PG;
 	conf.npage = conf.npage0;
 
-	print("conf: %lud free pages (%ludMB) from %lux to %lux\n",
-		conf.npage0, (conf.npage0 * BY2PG) >> 20,
-		(ulong)base, (ulong)top);
+	/*
+	 * uartputstr, not print: confinit runs before printinit and before
+	 * serwrite is set, and devcons.c discards output when it has
+	 * neither a queue nor a serial hook. Anything reporting from this
+	 * early in boot has to talk to the PL011 directly.
+	 */
+	uartputstr("conf: ");
+	uartputd(conf.npage0);
+	uartputstr(" free pages (");
+	uartputd((conf.npage0 * BY2PG) >> 20);
+	uartputstr("MB) from ");
+	uartputx(base);
+	uartputstr(" to ");
+	uartputx(top);
+	uartputstr("\n");
 }
 
 /*
@@ -505,9 +517,6 @@ probexalloc(void)
 {
 	char *a, *b;
 	int ok;
-
-	confinit();
-	xinit();
 
 	ok = 1;
 
@@ -578,8 +587,6 @@ probealloc(void)
 {
 	char *a, *b, *c;
 	int ok, i;
-
-	poolinit();
 
 	ok = 1;
 
@@ -904,8 +911,6 @@ probeproc(void)
 	Proc *p, *q;
 	int ok;
 
-	procinit();
-
 	ok = 1;
 
 	p = newproc();
@@ -1142,6 +1147,7 @@ probesysfile(void)
 		print("file: newproc failed\n");
 		return;
 	}
+	kstrdup(&p->env->user, eve);	/* run as the host owner */
 	p->env->pgrp = newpgrp();
 	p->env->fgrp = newfgrp(nil);
 	if(p->env->pgrp == nil || p->env->fgrp == nil){
@@ -1280,6 +1286,56 @@ probeqio(void)
 		ok ? "OK (bytes and Blocks, flow accounted)" : "BROKEN");
 }
 
+/*
+ * The console device in the namespace.
+ *
+ * devcons provides #c: cons, random, time, drivers, sysname and the
+ * rest. Binding it at /dev is what makes "/dev/cons" a path a program
+ * can open -- and writing to that path is the first output in this
+ * kernel that goes through the full stack (namec, the Chan, the device
+ * write) rather than straight at the UART.
+ */
+static void
+probecons(void)
+{
+	int fd, ok;
+	char buf[64];
+	long n;
+
+	ok = 1;
+
+	/* run every device's init, as a real kernel does at boot */
+	chandevinit();
+
+	/* bind #c onto /dev so the console is reachable by path */
+	if(kbind("#c", "/dev", MREPL|MCREATE) < 0)
+		ok = 0;
+
+	fd = kopen("/dev/cons", OWRITE);
+	if(fd < 0)
+		ok = 0;
+	else {
+		n = kwrite(fd, "cons: hello from /dev/cons\n", 27);
+		if(n != 27)
+			ok = 0;
+		kclose(fd);
+	}
+
+	/* #c/sysname is a plain readable file: a good round-trip check */
+	fd = kopen("/dev/sysname", OREAD);
+	if(fd < 0)
+		ok = 0;
+	else {
+		n = kread(fd, buf, sizeof buf - 1);
+		if(n < 0)
+			ok = 0;
+		kclose(fd);
+	}
+
+	print("cons: /dev/cons %s\n",
+		ok ? "OK (bound #c at /dev, wrote through the namespace)" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -1377,10 +1433,64 @@ kmain(void)
 	trapinit();
 	uartputstr("  vectors:         installed at VBAR_EL1\n\n");
 
+
 	checktraps();
 
 	probehw();
 	startmmu();
+
+	/*
+	 * Boot proper, in dependency order. Each stage needs the one
+	 * before it, and the ordering is not cosmetic:
+	 *
+	 *   confinit  finds the free memory bank
+	 *   xinit     hands that bank to the base allocator
+	 *   poolinit  builds malloc's pools on top of xalloc
+	 *   printinit gives devcons a line queue -- which it allocates,
+	 *             so it cannot come before poolinit
+	 *   procinit  carves the process table out of xalloc
+	 *
+	 * Everything before this point reports through uartputstr(),
+	 * which writes to the PL011 directly and needs nothing
+	 * initialised. Everything after can use print().
+	 */
+	confinit();
+	xinit();
+	poolinit();
+	printinit();
+
+	/*
+	 * Point the console at the serial line.
+	 *
+	 * devcons.c's putstrn0() sends output to the kprint queue, then to
+	 * a screen, then to serwrite -- and if none of those are set and
+	 * printq is still nil, it DISCARDS the text and returns. printq is
+	 * only created when a process opens the console device, so on a
+	 * board that boots to a serial console every print() before that
+	 * would vanish silently.
+	 *
+	 * serwrite is the hook upstream provides for exactly this: "the
+	 * console is a serial line". uartputs already has the right
+	 * signature because portfns.h defines it that way.
+	 */
+	serwrite = uartputs;
+
+	/*
+	 * Establish the host owner.
+	 *
+	 * eve is the user the kernel considers privileged; devcons.c
+	 * declares it but leaves it nil, and iseve() compares the current
+	 * process's user against it. Left nil, every permission check on
+	 * a device file fails -- opening /dev/cons returns "permission
+	 * denied", which reads like a mode problem and is really an
+	 * identity problem.
+	 *
+	 * A full kernel sets this in main() and gives the first process
+	 * the same name in init0(). This is that, minus the process part,
+	 * which probesysfile does when it builds its Proc.
+	 */
+	kstrdup(&eve, "inferno");
+	procinit();
 	checkunaligned();
 	probegpio();
 	probearch();
@@ -1391,9 +1501,10 @@ kmain(void)
 	probelabel();
 	probeproc();
 	probeqlock();
+	probesysfile();
+	probecons();
 	probechan();
 	proberoot();
-	probesysfile();
 	probeqio();
 	probeclock();
 	probefb();

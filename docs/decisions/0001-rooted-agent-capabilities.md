@@ -4,7 +4,8 @@ Status: Proposed
 
 Date: 2026-08-24
 
-Tracking: INFR-405, INFR-406, INFR-407, INFR-408, INFR-409
+Tracking: [INFR-410](https://nervsystems-team.atlassian.net/browse/INFR-410)
+(Epic), with INFR-405, INFR-406, INFR-407, INFR-408, and INFR-409
 
 Evidence: [PR #534](https://github.com/infernode-os/infernode/pull/534),
 run `RUN-20260823T182945Z`
@@ -202,4 +203,3 @@ This decision does not claim protection against kernel vulnerabilities,
 hardware attacks, covert channels, or denial of service. It does not replace
 resource budgets or network isolation. It defines how delegated filesystem
 and tool authority must be represented, constructed, and verified.
-

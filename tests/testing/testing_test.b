@@ -65,6 +65,78 @@ testAssertFalse(t: ref T)
 	t.assert(inner.failed, "inner test should be marked as failed");
 }
 
+testFailOutranksSkip(t: ref T)
+{
+	# A recorded failure must not be retractable by a later skip.
+	#
+	# Several tests call t.error() when something fails and then
+	# t.skip() to stop. If skip won, done() reported SKIP and summary()
+	# counted it as a non-failure, so the suite exited 0 with a real
+	# regression recorded and discarded.
+	inner := ref T("inner", "", 0, 0, nil, 0);
+	inner.error("something is genuinely broken");
+
+	# skip() raises, so catch it the way a test runner would
+	{
+		inner.skip("giving up");
+	} exception {
+	"fail:skip" =>
+		;
+	* =>
+		;
+	}
+
+	t.assert(inner.failed, "failure must survive a subsequent skip");
+	t.assert(!inner.skipped, "skip must not mask an already-recorded failure");
+}
+
+testSkipAloneStillSkips(t: ref T)
+{
+	# The converse: a skip with no prior failure is still a skip.
+	inner := ref T("inner", "", 0, 0, nil, 0);
+	{
+		inner.skip("genuinely unavailable");
+	} exception {
+	"fail:skip" =>
+		;
+	* =>
+		;
+	}
+
+	t.assert(inner.skipped, "a skip with no failure must still be a skip");
+	t.assert(!inner.failed, "skipping must not invent a failure");
+}
+
+testAssertHelpersFailOnMismatch(t: ref T)
+{
+	# The assertion helpers were only ever tested in the passing
+	# direction, so if all of them were no-ops this file still passed --
+	# and with it every suite that rests on them.
+	inner := ref T("inner", "", 0, 0, nil, 0);
+	inner.asserteq(1, 2, "mismatch");
+	t.assert(inner.failed, "asserteq must fail on mismatch");
+
+	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner.assertne(3, 3, "equal");
+	t.assert(inner.failed, "assertne must fail when equal");
+
+	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner.assertseq("a", "b", "mismatch");
+	t.assert(inner.failed, "assertseq must fail on mismatch");
+
+	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner.assertsne("a", "a", "equal");
+	t.assert(inner.failed, "assertsne must fail when equal");
+
+	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner.assertnil("not empty", "should be nil");
+	t.assert(inner.failed, "assertnil must fail on a non-empty string");
+
+	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner.assertnotnil("", "should be non-nil");
+	t.assert(inner.failed, "assertnotnil must fail on an empty string");
+}
+
 testAssertEq(t: ref T)
 {
 	t.asserteq(1, 1, "1 should equal 1");
@@ -173,6 +245,9 @@ init(nil: ref Draw->Context, args: list of string)
 	# Run all tests
 	run("AssertTrue", testAssertTrue);
 	run("AssertFalse", testAssertFalse);
+	run("FailOutranksSkip", testFailOutranksSkip);
+	run("SkipAloneStillSkips", testSkipAloneStillSkips);
+	run("AssertHelpersFailOnMismatch", testAssertHelpersFailOnMismatch);
 	run("AssertEq", testAssertEq);
 	run("AssertNe", testAssertNe);
 	run("AssertSeq", testAssertSeq);

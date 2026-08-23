@@ -140,6 +140,15 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
+	# Preserve only the append capability while constructing the namespace.
+	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;
+	# keeping the FD local also avoids exposing the audit tree to the tool worker.
+	(auditon, nil) := sys->stat(Audit->ONFILE);
+	auditrequired := auditon >= 0;
+	auditfd := sys->open(Audit->LOGFILE, Sys->OWRITE);
+	if(auditrequired && auditfd == nil)
+		return "required audit sink unavailable";
+
 	err := validatecapnames(caps.tools, "tool");
 	if(err != nil)
 		return err;
@@ -613,7 +622,10 @@ restrictns(caps: ref Capabilities): string
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
-	emitauditlog(sys->sprint("%d", sys->pctl(0, nil)), auditops);
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), auditops, auditfd) != 0 &&
+	   auditrequired)
+		return "required namespace audit write failed";
+	auditfd = nil;
 
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
 	# constructed first; their backing channels remain valid after the trusted
@@ -1413,6 +1425,11 @@ verifyns(expected: list of string): string
 # Emit audit log of namespace restriction operations
 emitauditlog(id: string, ops: list of string)
 {
+	emitauditlogto(id, ops, nil);
+}
+
+emitauditlogto(id: string, ops: list of string, auditfd: ref Sys->FD): int
+{
 	if(sys == nil)
 		init();
 
@@ -1443,8 +1460,9 @@ emitauditlog(id: string, ops: list of string)
 
 	# Provenance (INFR-355): seal the manifest hash into the audit chain.
 	# The full manifest stays in AUDIT_DIR; the chain pins it so it cannot
-	# be quietly edited after the fact. No-op when the install does not
-	# audit — /mnt/audit/log is simply not bound and audit->log returns -1.
+	# be quietly edited after the fact. restrictns passes a pre-opened append
+	# FD because /mnt/audit is deliberately absent from the completed namespace;
+	# direct callers fall back to Audit->log and may no-op when auditing is off.
 	if(audit == nil) {
 		a := load Audit Audit->PATH;
 		if(a != nil) {
@@ -1454,16 +1472,24 @@ emitauditlog(id: string, ops: list of string)
 	}
 	if(kr == nil)
 		kr = load Keyring Keyring->PATH;
-	if(audit != nil && kr != nil) {
+	if(kr != nil) {
 		mb := array of byte content;
 		digest := array[Keyring->SHA256dlen] of byte;
 		kr->sha256(mb, len mb, digest, nil);
 		hex := "";
 		for(i := 0; i < len digest; i++)
 			hex += sys->sprint("%.2ux", int digest[i]);
-		audit->log("veltro", "nsrestrict",
-			sys->sprint("id=%s sha256=%s size=%d", id, hex, len mb));
+		msg := sys->sprint("id=%s sha256=%s size=%d", id, hex, len mb);
+		if(auditfd != nil) {
+			line := array of byte ("veltro nsrestrict " + msg + "\n");
+			if(sys->write(auditfd, line, len line) != len line)
+				return -1;
+			return 0;
+		}
+		if(audit != nil)
+			return audit->log("veltro", "nsrestrict", msg);
 	}
+	return -1;
 }
 
 # Helper: create directory with parents

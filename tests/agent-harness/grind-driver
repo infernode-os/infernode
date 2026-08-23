@@ -8,7 +8,7 @@
 # settles, then emits a clean, machine-parseable state bundle grind.py scores.
 #
 # The host stages a scenario under $HOME/.infernode/grind/current/ with files:
-#   url model rz settle prompt   (optional: probefiles, msg)
+#   url model rz settle prompt   (optional: probefiles, msg, audit)
 # read here via the trfs host mount at /n/local.
 #   msg = none | inbox | watch
 #     inbox : mount /mnt/msg + register mock email inbox (Activity 0 reads
@@ -51,6 +51,8 @@ matrixcomp=none
 if {ftest -f $stage/matrixcomp} { matrixcomp=`{cat $stage/matrixcomp} }
 followthrough=no
 if {ftest -f $stage/followthrough} { followthrough=`{cat $stage/followthrough} }
+auditwant=no
+if {ftest -f $stage/audit} { auditwant=`{cat $stage/audit} }
 if {~ $#grind_url 0}   { grind_url=http://127.0.0.1:11435/v1 }
 if {~ $#grind_model 0} { grind_model=sonnet }
 if {~ $#grind_rz 0}    { grind_rz=low }
@@ -58,8 +60,42 @@ if {~ $#settle 0}      { settle=4 }
 if {~ $#msgmode 0}     { msgmode=none }
 if {~ $#matrixcomp 0}  { matrixcomp=none }
 if {~ $#followthrough 0} { followthrough=no }
+if {~ $#auditwant 0} { auditwant=no }
 
 echo '@@GRIND begin url='^$grind_url^' model='^$grind_model^' msg='^$msgmode
+
+# Optional sealed provenance capture. The required marker is created only
+# after auditfs, its factotum-held signing key, and the Venti payload store are
+# all live. From that point lucibridge and Veltro fail closed on capture loss.
+auditstate=off
+if {~ $auditwant yes required} {
+	rm -r /tmp/grindaudit >[2] /dev/null
+	mkdir -p /tmp/grindaudit /mnt/audit $stage/audit-evidence
+	auth/factotum >[2] /tmp/grindaudit/factotum.log &
+	sleep 2
+	if {ftest -f /mnt/factotum/ctl} {
+		echo 'genkey proto=sign service=audit alg=mldsa87 owner=grind' > /mnt/factotum/ctl
+		mount {auditfs -f /tmp/grindaudit/chain.log} /mnt/audit
+		touch /tmp/grindaudit/venti.data /tmp/grindaudit/venti.index
+		ventisrv -d /tmp/grindaudit/venti.data -i /tmp/grindaudit/venti.index -w 'tcp!127.0.0.1!17040' 1073741824 8192 >[2] /tmp/grindaudit/venti.log &
+		sleep 3
+		if {ftest -f /mnt/audit/log} {
+			if {ftest -f /mnt/audit/pubkey} {
+				mkdir -p /usr/inferno/audit /tmp/grindaudit/required
+				touch /tmp/grindaudit/required/on
+				bind /tmp/grindaudit/required /usr/inferno/audit
+				echo 'grind begin capture=required' > /mnt/audit/log
+				echo checkpoint > /mnt/audit/ctl
+				cat /mnt/audit/head > /tmp/grindaudit/pre.head
+				cat /mnt/audit/pubkey > /tmp/grindaudit/pubkey
+				cp /tmp/grindaudit/pre.head $stage/audit-evidence/pre.head
+				cp /tmp/grindaudit/pubkey $stage/audit-evidence/pubkey
+				auditstate=ready
+			}
+		}
+	}
+	echo '@@GRIND audit '^$auditstate
+}
 
 # LLM service: OpenAI backend -> the parameterized gateway; self-mounts /mnt/llm.
 llmsrv -b openai -u $grind_url -M $grind_model -r $grind_rz >[2] /dev/null &
@@ -258,6 +294,39 @@ if {~ $followthrough yes} {
 		}
 		echo '@@GRIND followthrough settled status='^`{cat /mnt/ui/activity/0/status}
 	}
+}
+
+# Seal the completed run and export a self-contained evidence bundle through
+# the host staging mount before the emulator is reaped. auditget retrieves each
+# stored provenance payload; the host recomputes its chain-pinned SHA-256.
+if {~ $auditstate ready} {
+	echo 'grind end capture=complete' > /mnt/audit/log
+	echo checkpoint > /mnt/audit/ctl
+	cat /mnt/audit/head > /tmp/grindaudit/post.head
+	cat /mnt/audit/chain > /tmp/grindaudit/chain
+	auditstate=broken
+	if {auditverify -k /tmp/grindaudit/pubkey -a /tmp/grindaudit/pre.head /tmp/grindaudit/chain > /tmp/grindaudit/verify-pre >[2=1]} {
+		if {auditverify -k /tmp/grindaudit/pubkey -a /tmp/grindaudit/post.head /tmp/grindaudit/chain > /tmp/grindaudit/verify-post >[2=1]} {
+			auditstate=verified
+		}
+	}
+	cp /tmp/grindaudit/pre.head $stage/audit-evidence/pre.head
+	cp /tmp/grindaudit/post.head $stage/audit-evidence/post.head
+	cp /tmp/grindaudit/pubkey $stage/audit-evidence/pubkey
+	cp /tmp/grindaudit/chain $stage/audit-evidence/chain
+	cp /tmp/grindaudit/verify-pre $stage/audit-evidence/verify-pre
+	cp /tmp/grindaudit/verify-post $stage/audit-evidence/verify-post
+	awk '{for(i=1;i<=NF;i++) if($i ~ /^content=[0-9a-f]+(:[0-9]+)?$/) {sub(/^content=/,"",$i); print $i}}' /tmp/grindaudit/chain > /tmp/grindaudit/scores
+	for (score in `{cat /tmp/grindaudit/scores}) {
+		if {auditget $score > $stage/audit-evidence/payload-$score} {
+			echo $score^' ok' >> $stage/audit-evidence/payload-status
+		}{
+			echo $score^' failed' >> $stage/audit-evidence/payload-status
+		}
+	}
+	cp /tmp/grindaudit/venti.data $stage/audit-evidence/venti.data
+	cp /tmp/grindaudit/venti.index $stage/audit-evidence/venti.index
+	echo '@@GRIND audit '^$auditstate
 }
 
 # --- state bundle ------------------------------------------------------------

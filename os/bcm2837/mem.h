@@ -27,6 +27,9 @@
 #define	PGSHIFT		12			/* log2(BY2PG) */
 #define	PGROUND(s)	(((s)+(BY2PG-1))&~(BY2PG-1))
 
+/* round s up to a multiple of sz, which must be a power of two */
+#define	ROUND(s, sz)	(((s)+((sz)-1))&~((sz)-1))
+
 #define	MAXMACH		4			/* four Cortex-A53 cores */
 
 #define	KSTACK		(16*1024)		/* kernel stack per process */

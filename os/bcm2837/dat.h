@@ -114,6 +114,48 @@ struct Proc
 
 extern Proc *up;
 
+typedef struct Block Block;
+
+/*
+ * Packet and queue buffer, from upstream os/port/portdat.h:171.
+ *
+ * Defined here until portdat.h itself can be imported. Taken from
+ * UPSTREAM rather than from emu/port/dat.h, which is otherwise the
+ * better 64-bit reference: emu's Block has no checksum field and defines
+ * only BINTR/BFREE, because hosted Inferno never sees a NIC that can
+ * offload a checksum. os/ip reads both, so a kernel Block needs the
+ * upstream shape.
+ *
+ * All six pointers, so the struct is 8-byte aligned throughout on LP64
+ * and BLEN/BALLOC stay pointer arithmetic rather than anything that
+ * needs widening.
+ */
+struct Block
+{
+	Block*	next;
+	Block*	list;
+	uchar*	rp;			/* first unconsumed byte */
+	uchar*	wp;			/* first empty byte */
+	uchar*	lim;			/* 1 past the end of the buffer */
+	uchar*	base;			/* start of the buffer */
+	void	(*free)(Block*);
+	ushort	flag;
+	ushort	checksum;		/* IP checksum of the complete packet */
+};
+
+#define BLEN(s)		((s)->wp - (s)->rp)
+#define BALLOC(s)	((s)->lim - (s)->base)
+
+enum
+{
+	BINTR	= (1<<0),
+	BFREE	= (1<<1),
+	Bipck	= (1<<2),		/* ip checksum offloaded */
+	Budpck	= (1<<3),		/* udp checksum offloaded */
+	Btcpck	= (1<<4),		/* tcp checksum offloaded */
+	Bpktck	= (1<<5),		/* packet checksum offloaded */
+};
+
 
 /*
  * A framebuffer as the VideoCore firmware handed it back.  pitch is the

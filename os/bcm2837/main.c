@@ -620,6 +620,77 @@ probealloc(void)
 	}
 }
 
+/*
+ * Blocks: the packet and queue buffer os/port and os/ip are built on.
+ *
+ * Every packet in the IP stack is a Block, and qio.c's Queues are chains
+ * of them. The headroom matters as much as the allocation: a driver must
+ * be able to prepend an Ethernet header in place, or every transmit
+ * reallocates and copies the whole packet.
+ *
+ * Note where that headroom actually comes from. allocb asks for
+ * Hdrspc extra bytes, but then positions rp using msize() -- the size
+ * the POOL actually handed back, which is usually more than requested.
+ * The slack between the two is what rp is advanced by. So headroom is a
+ * consequence of pool rounding as much as of Hdrspc, and setting Hdrspc
+ * to zero does not necessarily remove it. What is asserted below is the
+ * property that matters -- that a media header fits before rp -- rather
+ * than the mechanism that provides it.
+ */
+static void
+probeblock(void)
+{
+	Block *b, *c;
+	int ok;
+
+	ok = 1;
+
+	b = allocb(1500);
+	c = allocb(1500);
+	if(b == nil || c == nil)
+		ok = 0;
+	else {
+		if(BLEN(b) != 0)
+			ok = 0;			/* a fresh block holds nothing */
+		if(BALLOC(b) < 1500)
+			ok = 0;			/* must fit what was asked for */
+		if(b->rp < b->base || b->wp != b->rp || b->lim < b->wp)
+			ok = 0;			/* pointers must be ordered */
+
+		/* a 14-byte Ethernet header must fit before rp, in place */
+		if(b->rp - b->base < 14)
+			ok = 0;
+		else {
+			b->rp -= 14;
+			memset(b->rp, 0xEE, 14);
+			if(BLEN(b) != 14)
+				ok = 0;
+			b->rp += 14;
+		}
+
+		/* writing the full payload must stay inside the block */
+		memset(b->wp, 0x42, 1500);
+		b->wp += 1500;
+		if(BLEN(b) != 1500 || b->wp > b->lim)
+			ok = 0;
+
+		if(b->base == c->base)
+			ok = 0;			/* two blocks sharing a buffer */
+
+		freeb(b);
+		freeb(c);
+	}
+
+	/* iallocb is the interrupt-time variant and must be usable too */
+	b = iallocb(64);
+	if(b == nil || BALLOC(b) < 64)
+		ok = 0;
+	else
+		freeb(b);
+
+	print("blok: allocb/freeb %s\n", ok ? "OK (headroom, extents, distinct)" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -688,6 +759,7 @@ kmain(void)
 	probelibkern();
 	probexalloc();
 	probealloc();
+	probeblock();
 	probeclock();
 	probefb();
 

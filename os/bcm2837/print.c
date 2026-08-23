@@ -198,3 +198,15 @@ tsleep(Rendez *r, int (*f)(void*), void *arg, int ms)
 	USED(r); USED(f); USED(arg); USED(ms);
 	panic("tsleep: out of memory and no scheduler to wait for");
 }
+
+/*
+ * Report a resource the kernel has run out of. Upstream defines this in
+ * proc.c, where it also kills the current process; with no scheduler
+ * there is nothing to kill, so it reports and continues -- the caller
+ * (allocb) is already returning nil and handles that.
+ */
+void
+exhausted(char *resource)
+{
+	print("out of %s\n", resource);
+}

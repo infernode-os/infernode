@@ -64,6 +64,13 @@ void	iunlock(Lock*);
 char*	smprint(char*, ...);
 char*	strdup(char*);
 
+/* os/port/allocb.c */
+Block*	allocb(int);
+Block*	iallocb(int);
+void	freeb(Block*);
+void	checkb(Block*, char*);
+void	iallocsummary(void);
+
 /* os/port/alloc.c */
 void	poolinit(void);
 void*	malloc(ulong);
@@ -74,12 +81,14 @@ void	setrealloctag(void*, ulong);
 ulong	getmalloctag(void*);
 ulong	getrealloctag(void*);
 void*	smalloc(ulong);
+ulong	msize(void*);
 void*	mallocz(ulong, int);
 void	poolimmutable(void*);
 void	poolmutable(void*);
 
 /* console + panic support os/port expects */
 void	putstrn(char*, int);
+void	exhausted(char*);
 void	setpanic(void);
 int	return0(void*);
 void	tsleep(Rendez*, int(*)(void*), void*, int);

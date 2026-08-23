@@ -296,6 +296,7 @@ check "conf: [0-9]* free pages"       "confinit finds the free memory bank"
 check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed in-bank memory"
 
 check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
+check "blok: allocb/freeb OK"          "os/port/allocb Blocks have headroom and correct extents"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

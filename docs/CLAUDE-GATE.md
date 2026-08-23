@@ -118,7 +118,9 @@ claude login                      # once — or export CLAUDE_CODE_OAUTH_TOKEN
 tools/claude-gate/serve-claude-gate.sh   # or systemd/launchd per above
 ```
 
-Then either set it from **Settings → LLM → Backend → "Claude CLI"** (writes
+On a fresh install the first-run wizard offers **Claude CLI** directly, so a
+user on a subscription never has to reach for an API key. Otherwise set
+it from **Settings → LLM → Backend → "Claude CLI"** (writes
 `backend=cli` + `url=http://127.0.0.1:11435/v1` to `/lib/ndb/llm`), or edit
 `~/.infernode/lib/ndb/llm` directly and restart llmsrv. Plain
 `backend=openai` with the same URL also works (useful when older checkouts

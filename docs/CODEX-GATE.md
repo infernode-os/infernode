@@ -135,7 +135,9 @@ codex login                            # once — ChatGPT sign-in
 tools/codex-gate/serve-codex-gate.sh   # or systemd/launchd per above
 ```
 
-Then either set it from **Settings → LLM → Backend → "Codex CLI"** (writes
+On a fresh install the first-run wizard offers **Codex CLI** directly, so a
+user on a subscription never has to reach for an API key. Otherwise set
+it from **Settings → LLM → Backend → "Codex CLI"** (writes
 `backend=codex` + `url=http://127.0.0.1:11436/v1` to `/lib/ndb/llm`), or
 edit `~/.infernode/lib/ndb/llm` directly and restart llmsrv. Plain
 `backend=openai` with the same URL also works (useful when older checkouts

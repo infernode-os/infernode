@@ -141,4 +141,25 @@ assert "-m" not in argv, argv
 PY
 pass "codex exec argv is sandboxed and stdin-fed"
 
+# 9. Subscription guard: the gate serves the host's `codex login`, never an
+#    API key. It refuses to start while OPENAI_API_KEY is set (which the CLI
+#    can prefer over the ChatGPT sign-in), and never passes one to the child.
+out="$(OPENAI_API_KEY=sk-nope python3 "$GATE" 2>&1 || true)"
+echo "$out" | grep -q "OPENAI_API_KEY is set" || fail "gate started with an API key set ($out)"
+pass "gate refuses to start with OPENAI_API_KEY set"
+
+python3 - "$ROOT" <<'PY' || fail "API key reaches the CLI"
+import os, sys, importlib.util
+os.environ["OPENAI_API_KEY"] = "sk-nope"
+os.environ["CODEX_GATE_MOCK"] = "1"          # skip the startup guard, test the plumbing
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert "OPENAI_API_KEY" not in m.child_env(), "API key leaked into the codex child env"
+src = open(sys.argv[1] + "/tools/codex-gate/codex_gate.py").read()
+for bad in ("Authorization", "Bearer"):
+    assert bad not in src, "gate builds an auth header: " + bad
+PY
+pass "no API key reaches the codex CLI, no auth header anywhere"
+
 echo "=== codex-gate mock-mode tests: all green ==="

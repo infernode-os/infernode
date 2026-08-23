@@ -1429,9 +1429,11 @@ emitauditlog(id: string, ops: list of string)
 	# be quietly edited after the fact. No-op when the install does not
 	# audit — /mnt/audit/log is simply not bound and audit->log returns -1.
 	if(audit == nil) {
-		audit = load Audit Audit->PATH;
-		if(audit != nil)
-			audit->init();
+		a := load Audit Audit->PATH;
+		if(a != nil) {
+			a->init();
+			audit = a;
+		}
 	}
 	if(kr == nil)
 		kr = load Keyring Keyring->PATH;

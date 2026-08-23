@@ -142,3 +142,59 @@ debugkey(int c, char *name, void (*f)(void), int t)
 {
 	USED(c); USED(name); USED(f); USED(t);
 }
+
+/*
+ * Raw console write. os/port uses this to get bytes out without going
+ * through the fmt engine -- notably from the pool allocator's corruption
+ * reporter, which must be able to speak when the heap is already
+ * suspect.
+ */
+void
+putstrn(char *s, int n)
+{
+	int i;
+
+	for(i = 0; i < n; i++){
+		if(s[i] == '\n')
+			uartputc('\r');
+		uartputc(s[i]);
+	}
+}
+
+/*
+ * Upstream sets a flag that makes print() bypass any console queueing so
+ * a panic message cannot be lost behind a lock. Output here already goes
+ * straight to the PL011, so there is nothing to switch -- but the
+ * function must exist, and when a console driver lands it becomes the
+ * place that switch happens.
+ */
+void
+setpanic(void)
+{
+}
+
+int
+return0(void *v)
+{
+	USED(v);
+	return 0;
+}
+
+/*
+ * There is no scheduler yet.
+ *
+ * os/port/alloc.c calls this from smalloc() when a pool is exhausted,
+ * expecting to sleep until another process frees memory. With one core,
+ * no processes and nothing else running, nothing will ever free
+ * anything -- so waiting is an infinite hang. Failing loudly is the
+ * honest behaviour, and it names the real problem (the pool is
+ * exhausted) rather than presenting as a lockup.
+ *
+ * proc.c replaces this with the real tsleep.
+ */
+void
+tsleep(Rendez *r, int (*f)(void*), void *arg, int ms)
+{
+	USED(r); USED(f); USED(arg); USED(ms);
+	panic("tsleep: out of memory and no scheduler to wait for");
+}

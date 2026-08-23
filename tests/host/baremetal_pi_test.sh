@@ -123,7 +123,7 @@ trap 'rm -rf "$BUILD"' EXIT
 # headers upstream's native ports use, and the ones os/port will expect.
 # include/ supplies kern.h, the kernel libc declarations libkern implements.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/Inferno/arm64/include"
+        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 # Build every source in the port, so a new file is picked up automatically
@@ -295,6 +295,9 @@ check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access le
 check "conf: [0-9]* free pages"       "confinit finds the free memory bank"
 check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed in-bank memory"
 
+check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
+check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
+
 check "libk: mem/str OK"              "libkern mem/str primitives work"
 check "snprint OK"                    "Plan 9 fmt engine formats correctly under LP64"
 
@@ -403,8 +406,10 @@ cat > "$VARIANT" <<'EOF'
 #include "ureg.h"
 #include "fns.h"
 
-/* main.c normally defines this; the variant replaces main.c */
+/* main.c normally defines these; the variant replaces main.c */
 Conf conf;
+static Proc mainproc;
+Proc *up = &mainproc;
 
 void
 kmain(void)

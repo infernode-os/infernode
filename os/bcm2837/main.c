@@ -20,6 +20,15 @@
  */
 Conf conf;
 
+/*
+ * The current process. There is no scheduler yet, so this is a single
+ * static stand-in -- but it must be dereferenceable, because
+ * os/port/alloc.c takes &up->sleep when a pool runs dry. proc.c
+ * replaces it with the real per-core current-process pointer.
+ */
+static Proc mainproc;
+Proc *up = &mainproc;
+
 static u64int
 currentel(void)
 {
@@ -527,6 +536,90 @@ probexalloc(void)
 	print("xall: xalloc %s\n", ok ? "OK (distinct, zeroed, in-bank)" : "BROKEN");
 }
 
+/*
+ * Bring up the pool allocator that sits on xalloc, and exercise it.
+ *
+ * This is what malloc() means in an Inferno kernel: three pools (main,
+ * heap, image) carved out of xalloc's memory, with the heap and image
+ * pools being the ones the Dis VM's garbage collector allocates from.
+ * Getting it running is the precondition for libinterp doing anything
+ * at all.
+ */
+static void
+probealloc(void)
+{
+	char *a, *b, *c;
+	int ok, i;
+
+	poolinit();
+
+	ok = 1;
+
+	a = malloc(100);
+	b = malloc(100);
+	if(a == nil || b == nil)
+		ok = 0;
+	else {
+		if(!(a + 100 <= b || b + 100 <= a))
+			ok = 0;			/* overlapping allocations */
+
+		/* malloc must zero, like the kernel's callers assume */
+		for(i = 0; i < 100; i++)
+			if(a[i] != 0 || b[i] != 0)
+				ok = 0;
+
+		memset(a, 0xA5, 100);
+		memset(b, 0x5A, 100);
+		if(a[0] != (char)0xA5 || a[99] != (char)0xA5)
+			ok = 0;
+		if(b[0] != (char)0x5A || b[99] != (char)0x5A)
+			ok = 0;
+	}
+
+	/* free then re-allocate: the pool must reuse rather than grow forever */
+	free(a);
+	free(b);
+	c = malloc(100);
+	if(c == nil)
+		ok = 0;
+	free(c);
+
+	/* a large allocation exercises a different path than the small ones */
+	a = malloc(200*1024);
+	if(a == nil)
+		ok = 0;
+	else {
+		memset(a, 0x11, 200*1024);
+		free(a);
+	}
+
+	print("pool: malloc/free %s\n", ok ? "OK (distinct, zeroed, reusable)" : "BROKEN");
+
+	/*
+	 * These libkern entry points need an allocator, so they could not
+	 * be linked until now. smprint is the dynamic-buffer formatter and
+	 * strdup the canonical malloc-and-copy -- between them they are
+	 * what most of os/port reaches for when it needs a string.
+	 */
+	{
+		char *s;
+		int sok;
+
+		sok = 1;
+		s = smprint("%s-%d-%lux", "dis", 7, (ulong)0x1BADF00DUL);
+		if(s == nil || strcmp(s, "dis-7-1badf00d") != 0)
+			sok = 0;
+		free(s);
+
+		s = strdup("namespace");
+		if(s == nil || strcmp(s, "namespace") != 0)
+			sok = 0;
+		free(s);
+
+		print("pool: smprint/strdup %s\n", sok ? "OK" : "BROKEN");
+	}
+}
+
 static void
 probefb(void)
 {
@@ -594,6 +687,7 @@ kmain(void)
 	probearch();
 	probelibkern();
 	probexalloc();
+	probealloc();
 	probeclock();
 	probefb();
 

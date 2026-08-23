@@ -26,6 +26,14 @@
  */
 typedef struct Ureg Ureg;
 
+/*
+ * The pool allocator's types (Bhdr, Pool, and the D2B/B2D accessors).
+ * Upstream reaches these through os/port/portdat.h; emu/port/dat.h does
+ * the same thing at its line 47. pool.h needs no host headers, so it is
+ * usable here unchanged.
+ */
+#include "pool.h"
+
 typedef struct Lock Lock;
 typedef struct Conf Conf;
 
@@ -72,6 +80,40 @@ struct Conf
 };
 
 extern Conf conf;
+/*
+ * From upstream os/port/portdat.h:610. Defined here until portdat.h
+ * itself is imported, which cannot happen before the Proc and Chan
+ * layers exist.
+ */
+enum
+{
+	MAXPOOL	= 8,
+};
+
+typedef struct Rendez Rendez;
+typedef struct Proc Proc;
+
+/*
+ * The seed of the process layer.
+ *
+ * os/port/alloc.c waits on up->sleep when a pool is exhausted, so `up`
+ * must at least be dereferenceable. This is the minimum shape that
+ * allows the allocator to be imported unmodified; the real Proc arrives
+ * with proc.c and will replace it wholesale.
+ */
+struct Rendez
+{
+	Lock	l;
+	Proc*	p;
+};
+
+struct Proc
+{
+	Rendez	sleep;
+};
+
+extern Proc *up;
+
 
 /*
  * A framebuffer as the VideoCore firmware handed it back.  pitch is the

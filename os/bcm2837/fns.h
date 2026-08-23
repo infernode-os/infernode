@@ -60,6 +60,30 @@ int	canlock(Lock*);
 void	ilock(Lock*);
 void	iunlock(Lock*);
 
+/* libkern, once an allocator exists */
+char*	smprint(char*, ...);
+char*	strdup(char*);
+
+/* os/port/alloc.c */
+void	poolinit(void);
+void*	malloc(ulong);
+void	free(void*);
+void	poolsummary(void);
+void	setmalloctag(void*, ulong);
+void	setrealloctag(void*, ulong);
+ulong	getmalloctag(void*);
+ulong	getrealloctag(void*);
+void*	smalloc(ulong);
+void*	mallocz(ulong, int);
+void	poolimmutable(void*);
+void	poolmutable(void*);
+
+/* console + panic support os/port expects */
+void	putstrn(char*, int);
+void	setpanic(void);
+int	return0(void*);
+void	tsleep(Rendez*, int(*)(void*), void*, int);
+
 /* os/port/xalloc.c */
 void	xinit(void);
 void*	xalloc(ulong);

@@ -140,7 +140,15 @@ union FPdbleword
  * one place that serves both.
  */
 #define	USED(x)		if(x){}else{}
-#define	SET(x)		((x) = 0)
+
+/*
+ * SET is a no-op, matching MacOSX/arm64/include/lib9.h. It marks a
+ * variable the programmer knows is assigned before use where the
+ * compiler's flow analysis cannot see it -- it must NOT assign, or it
+ * would mask a genuine use-before-set. Variadic because upstream calls
+ * it with more than one variable (os/port/alloc.c:839).
+ */
+#define	SET(...)
 
 /*
  * Use the compiler's variadic argument handling.  See the note above:

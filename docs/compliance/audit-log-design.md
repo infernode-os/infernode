@@ -276,7 +276,9 @@ pre-existing SC-13 gap (`FIPS-140-3-readiness.md`), not introduced here.
 - `appl/cmd/auditget.b` — auditor-side fetch + SHA-256 verify; `man/1/auditget`.
 - Emitters wired in `appl/veltro/{veltro,subagent}.b` and `appl/veltro/tools/spawn.b`;
   `nsconstruct.b`'s previously-uncalled `emitauditlog` now driven by `restrictns` and
-  sealed into the chain (`nsrestrict`).
+  sealed into the chain (`nsrestrict`). Namespace construction pre-opens only the
+  write-only append FD before `/mnt` is restricted and closes it before tool code
+  runs; `/mnt/audit` is never added to the tool namespace.
 - `tests/auditprov_test.b` — live ventisrv + auditfs integration (8 tests).
 
 ## 11. What we deliberately do NOT build

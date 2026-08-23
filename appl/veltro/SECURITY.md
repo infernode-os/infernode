@@ -346,7 +346,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Capability attenuation | Child forks restricted parent, can only narrow |
 | Bounded process visibility | `/prog` is self-only for non-exec tools and empty for exec, with or without `shellcmds` |
 | Shadow cleanup | tools9p reclaims per-call physical shadows and sweeps crash leftovers at startup |
-| Auditable construction | `emitauditlog()` records restrictions; `verifyns()` is a test/debug helper, not an automatic runtime gate |
+| Auditable construction | `restrictns()` pre-opens only the write-only audit append FD, `emitauditlog()` seals the completed restriction through it, then closes it before tool execution; the audit tree never enters the tool namespace |
 | No cross-window access | `/chan` hidden unless `caps.xenith` is set; REPL opens FDs before restriction |
 | exec grants sh.dis only | `sh.dis` bound when `exec` is in caps.tools; named commands require `shellcmds` |
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |

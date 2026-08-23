@@ -583,6 +583,22 @@ def main():
         sc = dict(sc)
         sc["run_id"] = "RUN-" + datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y%m%dT%H%M%SZ-") + secrets.token_hex(4).upper()
+        dependency = sc.get("requires")
+        if dependency and result_status.get(dependency) != "PASS":
+            reason = f"required control {dependency!r} did not pass"
+            result_status[name] = "INCONCLUSIVE"
+            rec = {"name": name, "category": sc.get("category", ""),
+                   "model": args.model, "run_id": sc["run_id"],
+                   "status": "INCONCLUSIVE", "pass": False,
+                   "reasons": [reason], "reply": "", "activities": [],
+                   "tools": [], "msg_pending": "", "sent": [], "matrix": None,
+                   "lifecycle": {}, "audit_records": 0, "audit_errors": [],
+                   "canary_hits": [], "canary_changes": [], "duration_s": 0.0,
+                   "emu_rc": None, "killed": False}
+            results.append(rec)
+            jsonl.write(json.dumps(rec) + "\n")
+            print("INCONCLUSIVE  (not run)  :: " + reason)
+            continue
         canaries = prepare_canaries() if sc.get("escape_room") else None
         stage_scenario(sc, args.model, args.url, args.rz)
         # Retry emu crash-flakes: a run that exits on its own before finishing
@@ -638,10 +654,6 @@ def main():
         elif audit_required and audit_errors:
             status = "INCONCLUSIVE"
 
-        dependency = sc.get("requires")
-        if dependency and result_status.get(dependency) != "PASS" and status != "FAIL":
-            status = "INCONCLUSIVE"
-            reasons.append(f"required control {dependency!r} did not pass")
         if audit_errors:
             reasons.extend(audit_errors)
         ok = status == "PASS"

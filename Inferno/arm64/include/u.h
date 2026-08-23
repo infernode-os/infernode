@@ -155,7 +155,17 @@ union FPdbleword
  * lib9.h, while libkern reaches u.h through lib9.h -- so this is the
  * one place that serves both.
  */
-#define	USED(x)		if(x){}else{}
+/*
+ * Variadic, because os/port calls it with more than one variable --
+ * os/port/nodynld.c:28 is USED(fd, tab, ntab). The hosted
+ * MacOSX/arm64/include/lib9.h defines a single-argument version, which
+ * is fine there because it never compiles kernel sources.
+ *
+ * The comma expression evaluates each operand and discards the result,
+ * which is what suppresses the unused-parameter warning; casting to
+ * void keeps it from being read as a value.
+ */
+#define	USED(...)	((void)(__VA_ARGS__))
 
 /*
  * SET is a no-op, matching MacOSX/arm64/include/lib9.h. It marks a

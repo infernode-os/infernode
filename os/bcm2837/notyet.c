@@ -160,6 +160,22 @@ halt(void)
 int	keepbroken;
 
 /*
+ * portclock.c -- called from inside a contended ilock spin.
+ *
+ * Upstream uses it to notice that the clock interrupt has been masked
+ * for too long while spinning, and to run the timer callbacks that
+ * would otherwise be starved. This port drives its tick from clock.c
+ * rather than portclock.c's Timer machinery, and runs on one core where
+ * a contended ilock means a deadlock rather than a wait -- so there is
+ * nothing useful to do here yet, and taslock.c's spin limit is what
+ * actually catches the deadlock.
+ */
+void
+clockcheck(void)
+{
+}
+
+/*
  * devmnt.c -- the 9P mount client.
  *
  * sysfile.c's mount path calls these to negotiate a version and
@@ -203,18 +219,6 @@ muxclose(Mnt *m)
 
 
 
-/*
- * closepgrp, closefgrp, closesigs and resrcwait were stubbed here.
- * os/port/pgrp.c now provides the real ones, which genuinely tear down
- * a namespace rather than doing nothing, so the stubs are gone.
- *
- * closeegrp still belongs to devenv.c, which is not imported.
- */
-void
-closeegrp(Egrp *e)
-{
-	USED(e);
-}
 
 
 /*

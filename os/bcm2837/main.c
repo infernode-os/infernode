@@ -30,8 +30,6 @@ Conf conf;
 Mach	mach0;
 Mach	*m = &mach0;
 
-/* the timer alarm list, owned by os/port/proc.c's alarm machinery */
-Talarm	talarm;
 
 /*
  * Optional kernel hooks, declared in portfns.h and defined here exactly

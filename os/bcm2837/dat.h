@@ -34,17 +34,32 @@ typedef ulong		Instr;
  */
 
 /*
- * A saved execution point, for the scheduler.
+ * A saved execution point, for the scheduler and for error unwinding.
  *
- * Only sp and pc: gotolabel restores the stack pointer and jumps, and
- * the callee-saved registers survive because setlabel's caller saved
- * them on entry per AAPCS64.  This is NOT jmp_buf (see u.h), which has
- * to save far more because it can be longjmp'd to from anywhere.
+ * sp, pc, AND the callee-saved registers x19-x29.
+ *
+ * Saving only sp and pc -- which is what upstream's 32-bit ARM ports do
+ * -- is wrong under a modern compiler, and wrong in a way that produces
+ * corruption rather than a crash. gotolabel is a longjmp: it re-enters
+ * a frame from deeper in the call chain, SKIPPING every intervening
+ * epilogue. Callee-saved registers are callee-saved precisely because
+ * those epilogues restore them, so bypassing the epilogues leaves them
+ * holding whatever the abandoned callees left behind.
+ *
+ * Upstream survives this because the Plan 9 compiler keeps locals in
+ * memory. clang at -O2 does not: os/port/dev.c's devwalk kept its
+ * Walkqid* in x19 across waserror(), and its error handler then called
+ * free() on whatever x19 happened to contain. The pool allocator
+ * rejected the pointer, which is the good outcome -- the bad one is a
+ * pointer that happens to look valid.
+ *
+ * Order here must match arch.S: sp at 0, pc at 8, regs at 16.
  */
 struct Label
 {
 	uintptr	sp;
 	uintptr	pc;
+	uintptr	regs[11];	/* x19-x29 */
 };
 
 /*

@@ -40,7 +40,11 @@ enum
 static void
 lockloop(Lock *l, uintptr pc)
 {
-	uartputstr("\nlock: stuck spinning, taken at pc=");
+	uartputstr("\nlock: stuck spinning, lock=");
+	uartputx((uintptr)l);
+	uartputstr(" key=");
+	uartputx(l->key);
+	uartputstr(" taken at pc=");
 	uartputx(l->pc);
 	uartputstr(" waiter pc=");
 	uartputx(pc);

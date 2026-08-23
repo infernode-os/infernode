@@ -122,24 +122,43 @@ cacheiflush:
  * the classic Plan 9 pairing, and the whole mechanism proc.c's sched()
  * uses to leave one process and enter another.
  *
- * Only sp and the return address are saved. That is sufficient, and it
- * is not an oversight: under AAPCS64 x19-x28 and x29 are callee-saved,
- * so any caller of setlabel that cares about them has already spilled
- * them to its own frame -- which the restored sp brings back. Saving
- * them here as well would duplicate the caller's work.
+ * sp, the return address, AND x19-x29 are saved.
  *
- * Label layout must match struct Label in dat.h: sp at 0, pc at 8.
+ * Saving the callee-saved registers is REQUIRED, not belt-and-braces.
+ * It is tempting to argue they survive because setlabel's caller
+ * spilled them on entry -- but gotolabel re-enters that frame from
+ * deeper in the call chain, skipping every intervening epilogue, and
+ * those epilogues are exactly what would have restored them. See the
+ * note on struct Label in dat.h for the corruption this produced.
+ *
+ * Label layout must match dat.h: sp at 0, pc at 8, regs at 16.
  */
 	.global	setlabel
 setlabel:
 	mov	x1, sp
 	str	x1, [x0, #0]		/* l->sp */
 	str	x30, [x0, #8]		/* l->pc: where to resume */
+
+	/* callee-saved registers: x19-x29, at l->regs (offset 16) */
+	stp	x19, x20, [x0, #16]
+	stp	x21, x22, [x0, #32]
+	stp	x23, x24, [x0, #48]
+	stp	x25, x26, [x0, #64]
+	stp	x27, x28, [x0, #80]
+	str	x29, [x0, #96]
+
 	mov	x0, #0			/* first return: 0 */
 	ret
 
 	.global	gotolabel
 gotolabel:
+	ldp	x19, x20, [x0, #16]
+	ldp	x21, x22, [x0, #32]
+	ldp	x23, x24, [x0, #48]
+	ldp	x25, x26, [x0, #64]
+	ldp	x27, x28, [x0, #80]
+	ldr	x29, [x0, #96]
+
 	ldr	x1, [x0, #0]
 	ldr	x30, [x0, #8]
 	mov	sp, x1

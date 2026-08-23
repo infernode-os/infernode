@@ -267,6 +267,23 @@ void		schedinit(void);
 long		seconds(void);
 extern void	(*serwrite)(char*, int);
 int		setcolor(ulong, ulong, ulong, ulong);
+/*
+ * returns_twice is REQUIRED, not decorative.
+ *
+ * setlabel/gotolabel are setjmp/longjmp under another name: waserror()
+ * calls setlabel and returns 0, and a later error() gotolabels back so
+ * it appears to return 1. Without this attribute the compiler does not
+ * know control can re-enter here, so it happily keeps locals in
+ * caller-saved registers across the call -- and after the longjmp those
+ * registers hold whatever the intervening code left in them.
+ *
+ * Upstream never needed it because the Plan 9 compiler kept locals in
+ * memory. Under clang at -O2 it manifested as os/port/dev.c's devwalk
+ * calling free() on a stale `wq` in its waserror() handler, which the
+ * pool allocator rejected as a bad pointer -- a corruption whose cause
+ * is nowhere near where it surfaces.
+ */
+__attribute__((returns_twice))
 int		setlabel(Label*);
 void		setmalloctag(void*, ulong);
 int		setpri(int);

@@ -13,6 +13,7 @@
 #include "io.h"
 #include "ureg.h"
 #include "fns.h"
+#include "kernel.h"
 
 /*
  * The machine configuration os/port reads. Declared extern in dat.h and
@@ -735,6 +736,47 @@ probeblock(void)
  * setjmp/longjmp requires volatile, and getting it wrong here would
  * make the test lie rather than fail.
  */
+/*
+ * Hold values in callee-saved registers across a setlabel/gotolabel
+ * round trip and verify they come back.
+ *
+ * The register hints are hints, but the volatile asm barriers stop the
+ * compiler from rematerialising the values from constants, so it has to
+ * keep them live in registers across the call -- which is precisely the
+ * situation that broke.
+ */
+static Label clabel;
+static int cpass;
+
+static int __attribute__((noinline))
+checkcalleesaved(void)
+{
+	register uintptr a __asm__("x19");
+	register uintptr b __asm__("x24");
+	register uintptr c __asm__("x28");
+
+	a = 0x1111111111111111ULL;
+	b = 0x2222222222222222ULL;
+	c = 0x3333333333333333ULL;
+	__asm__ volatile("" :: "r"(a), "r"(b), "r"(c));
+
+	cpass = 0;
+	if(setlabel(&clabel) == 0){
+		cpass = 1;
+		/* clobber them, then jump back */
+		__asm__ volatile("mov x19, #0\n\tmov x24, #0\n\tmov x28, #0"
+			::: "x19", "x24", "x28");
+		gotolabel(&clabel);
+		return 0;
+	}
+
+	__asm__ volatile("" : "=r"(a), "=r"(b), "=r"(c));
+	if(a != 0x1111111111111111ULL) return 0;
+	if(b != 0x2222222222222222ULL) return 0;
+	if(c != 0x3333333333333333ULL) return 0;
+	return cpass == 1;
+}
+
 static Label plabel;
 static int pcount;
 static int psp_ok;
@@ -820,12 +862,28 @@ probelabel(void)
 	else
 		psp_ok = 1;
 
+	/*
+	 * Callee-saved registers must survive too, and this is NOT
+	 * implied by the sp check.
+	 *
+	 * gotolabel re-enters this frame from deeper in the call chain,
+	 * skipping the epilogues that would normally restore x19-x29. An
+	 * earlier version of setlabel saved only sp and pc, and this test
+	 * passed anyway -- the corruption surfaced much later, as
+	 * os/port/dev.c calling free() on a stale pointer it had kept in
+	 * x19 across waserror(). Ask the compiler to hold a value in a
+	 * callee-saved register across the jump and check it survives.
+	 */
+	if(!checkcalleesaved())
+		ok = 0;
+
 	if(pcount != 2)
 		ok = 0;			/* did not pass through exactly twice */
 
-	print("lbl:  setlabel/gotolabel %s (passes=%d, sp %s)\n",
+	print("lbl:  setlabel/gotolabel %s (passes=%d, sp %s, callee-saved %s)\n",
 		ok ? "OK" : "BROKEN", pcount,
-		psp_ok ? "restored" : "NOT restored");
+		psp_ok ? "restored" : "NOT restored",
+		checkcalleesaved() ? "preserved" : "LOST");
 }
 
 /*
@@ -1054,6 +1112,97 @@ proberoot(void)
 		ok ? "OK (attached, walked to /dev, closed)" : "BROKEN");
 }
 
+/*
+ * The system call layer -- an actual filesystem interface.
+ *
+ * sysfile.c is what turns Chans into file descriptors: kopen, kread,
+ * kclose and the rest. Getting a real fd back from a real path is the
+ * point at which the kernel stops being a set of data structures and
+ * starts being something a program could use.
+ *
+ * This needs a process with a namespace, so `up` is switched from the
+ * static boot placeholder to a proper Proc from newproc(), with a Pgrp
+ * (the mount table namec walks) and an Fgrp (where file descriptors
+ * live). That is the first time in this kernel that `up` means what
+ * os/port assumes it means.
+ */
+static void
+probesysfile(void)
+{
+	Proc *p;
+	int fd, ok;
+	Dir *d;
+	char buf[512];
+	long n;
+
+	ok = 1;
+
+	p = newproc();
+	if(p == nil){
+		print("file: newproc failed\n");
+		return;
+	}
+	p->env->pgrp = newpgrp();
+	p->env->fgrp = newfgrp(nil);
+	if(p->env->pgrp == nil || p->env->fgrp == nil){
+		print("file: no namespace\n");
+		return;
+	}
+	up = p;
+
+	/*
+	 * Root the namespace.
+	 *
+	 * A Pgrp with no slash is not a namespace -- namec() resolves an
+	 * absolute path by walking from pgrp->slash, so leaving it nil
+	 * means every path lookup dereferences nil. It surfaced here as a
+	 * spinlock stuck on address 0x20, which is nil plus the offset of
+	 * the RWlock inside Pgrp: a nil deref wearing a lock contention
+	 * costume.
+	 *
+	 * This is what init0() does at boot in a full kernel: attach the
+	 * root device, make it slash, and clone it for dot.
+	 */
+	up->env->pgrp->slash = devattach('/', "");
+	up->env->pgrp->dot = cclone(up->env->pgrp->slash);
+
+	/*
+	 * Open the root directory by name. This exercises the whole
+	 * chain: namec parses the path, walks it through the mount table
+	 * to the root device, opens the Chan, and newfd installs it in
+	 * the Fgrp.
+	 */
+	fd = kopen("/", OREAD);
+	if(fd < 0)
+		ok = 0;
+	else {
+		/* reading a directory returns packed stat entries */
+		n = kread(fd, buf, sizeof buf);
+			if(n <= 0)
+			ok = 0;
+		else {
+			/* the single entry must be the /dev we put in rootfs.c */
+			d = malloc(sizeof(Dir) + n);
+			if(d != nil){
+				if(convM2D((uchar*)buf, n, d, (char*)(d+1)) <= BIT16SZ)
+					ok = 0;
+				else if(strcmp(d->name, "dev") != 0)
+					ok = 0;
+				free(d);
+			}
+		}
+		if(kclose(fd) < 0)
+			ok = 0;
+	}
+
+	/* a path that does not exist must fail rather than succeed quietly */
+	if(kopen("/nosuchfile", OREAD) >= 0)
+		ok = 0;
+
+	print("file: kopen/kread/kclose %s\n",
+		ok ? "OK (opened /, read \"dev\", closed)" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -1167,6 +1316,7 @@ kmain(void)
 	probeqlock();
 	probechan();
 	proberoot();
+	probesysfile();
 	probeclock();
 	probefb();
 

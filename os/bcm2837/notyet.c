@@ -73,6 +73,32 @@ seconds(void)
 }
 
 /*
+ * devmnt.c -- the 9P mount client.
+ *
+ * sysfile.c's mount path calls these to negotiate a version and
+ * authenticate against a remote server. Reached only through mount(),
+ * and nothing mounts anything yet -- but unlike the teardown stubs
+ * these have no meaningful empty behaviour: silently reporting a
+ * successful version negotiation that never happened would corrupt the
+ * protocol state of whatever came next. So they refuse.
+ */
+Chan*
+mntauth(Chan *c, char *spec)
+{
+	USED(c); USED(spec);
+	error("devmnt not imported: cannot authenticate a mount");
+	return nil;
+}
+
+long
+mntversion(Chan *c, char *version, int msize, int returnlen)
+{
+	USED(c); USED(version); USED(msize); USED(returnlen);
+	error("devmnt not imported: cannot negotiate 9P version");
+	return 0;
+}
+
+/*
  * devmnt.c -- tear down a mount's RPC multiplexer. Nothing mounts
  * anything yet, so there is never a Mnt to close.
  */
@@ -94,24 +120,8 @@ _assert(char *s)
 }
 
 /*
- * sysfile.c -- validate and canonicalise an open mode.
- *
- * Implemented rather than stubbed: chan.c calls it on every open, and a
- * stub returning the mode unchanged would let invalid modes through to
- * a device driver, which is exactly the check this performs.
+ * openmode was implemented here. os/port/sysfile.c now provides it.
  */
-int
-openmode(ulong o)
-{
-	if(o >= (OTRUNC|OCEXEC|ORCLOSE|OEXEC))
-		error(Ebadarg);
-	o &= ~(OTRUNC|OCEXEC|ORCLOSE);
-	if(o > OEXEC)
-		error(Ebadarg);
-	if(o == OEXEC)
-		return OREAD;
-	return o;
-}
 
 /*
  * devcons.c

@@ -306,12 +306,13 @@ check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed 
 
 check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
 check "blok: allocb/freeb OK"          "os/port/allocb Blocks have headroom and correct extents"
-check "lbl:  setlabel/gotolabel OK"     "context-switch primitives round trip and restore sp"
+check "lbl:  setlabel/gotolabel OK"     "context switch restores sp AND callee-saved registers"
 check "proc: procinit/newproc OK"       "os/port/proc allocates processes with distinct pids and stacks"
 check "qlok: qlock/rwlock OK"           "os/port/qlock blocking locks work uncontended"
 check "pgrp: newpgrp OK"                "os/port/pgrp allocates a process group"
 check "chan: newchan/cname OK"          "os/port/chan allocates channels and composes paths"
 check "root: devattach/walk/cclose OK"   "root device attaches, walks to /dev, and closes cleanly"
+check "file: kopen/kread/kclose OK"      "os/port/sysfile opens, reads and closes a real path"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

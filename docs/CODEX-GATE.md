@@ -78,7 +78,10 @@ All endpoints bind `127.0.0.1` only.
 {"status": "ok", "backend": "codex-cli", "held_turns": 0, "stateless": true}
 ```
 
-- `status` — always `"ok"` if the daemon is serving.
+- `status` — `"ok"` if the daemon is serving. Non-mock startup first runs
+  `codex login status`, so missing or API-key authentication cannot masquerade
+  as ChatGPT OAuth readiness. The explicit `CODEX_GATE_ALLOW_API_KEY=1`
+  override bypasses this subscription check.
 - `backend` — `"codex-cli"` normally; `"mock"` when started with
   `CODEX_GATE_MOCK=1` (deterministic test backend, no CLI, no billing).
 - `held_turns` — always 0 here (see above); present so monitoring can treat
@@ -118,7 +121,7 @@ Config (env, read at start):
 | `CODEX_GATE_HOST` / `CODEX_GATE_PORT` | `127.0.0.1:11436` | listen address |
 | `CODEX_GATE_BIN` | `codex` | the CLI binary |
 | `CODEX_GATE_MODEL` | *(empty)* | model when the request names none; empty = let the CLI use its own configured default (no `-m` passed) |
-| `CODEX_GATE_MODELS` | `gpt-5-codex,gpt-5-codex-mini` | advertised on `/v1/models` |
+| `CODEX_GATE_MODELS` | `default` | advertised on `/v1/models`; `default` omits `codex -m` so the CLI chooses its configured current model |
 | `CODEX_GATE_TIMEOUT` | `900` | seconds one `codex exec` may run |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
@@ -167,7 +170,7 @@ deliberately).
 |---|---|---|
 | `backend=` | `codex` | Codex CLI gateway. Boot profiles launch `llmsrv -b openai` for it (`lib/lucifer/boot.sh`, `lib/sh/profile`, `lib/sh/serve-profile` match `openai cli codex`). |
 | `url=` | `http://127.0.0.1:11436/v1` | Override port via `CODEX_GATE_PORT` (gate) + `CODEX_GATE_URL` (llmctl). |
-| `model=` | e.g. `gpt-5-codex` | Passed straight to `codex -m`; leave empty to use the CLI's configured default. |
+| `model=` | e.g. a model supported by the installed CLI | Passed straight to `codex -m`; leave empty or use `default` to use the CLI's configured default. `llmctl set codex` clears stale model ids when switching backends. |
 
 ## Limitations / notes
 

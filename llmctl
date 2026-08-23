@@ -360,6 +360,7 @@ cmd_set() {
 			if [ "$before" = "codex" ] && probe_codex 2>/dev/null; then
 				ndb_set url "$new_url"
 				ndb_set backend codex
+				ndb_set model ""
 				echo "llmctl: codex-gate already active and healthy; ndb url=$new_url" >&2
 				return 0
 			fi
@@ -376,6 +377,7 @@ cmd_set() {
 			backup_ndb >/dev/null
 			ndb_set url "$new_url"
 			ndb_set backend codex
+			ndb_set model ""
 			echo "llmctl: codex-gate active; ndb url=$new_url backend=codex" >&2
 			;;
 		*)

@@ -68,6 +68,7 @@ import json
 import logging
 import os
 import shlex
+import subprocess
 import tempfile
 import time
 import uuid
@@ -90,7 +91,7 @@ SANDBOX = os.environ.get("CODEX_GATE_SANDBOX", "read-only")
 # can; whatever a request names is passed straight to `codex -m`, so the
 # list is a convenience, not a whitelist.  Override with CODEX_GATE_MODELS.
 ADVERTISED_MODELS = [m for m in os.environ.get(
-    "CODEX_GATE_MODELS", "gpt-5-codex,gpt-5-codex-mini").split(",") if m]
+    "CODEX_GATE_MODELS", "default").split(",") if m]
 
 # Where `codex exec` runs.  A private empty directory, not the user's
 # checkout: the CLI's own shell/read tools stay sandboxed (--sandbox
@@ -365,6 +366,30 @@ def child_env():
     return env
 
 
+def check_codex_auth():
+    """Refuse readiness when the CLI cannot use a ChatGPT login."""
+    if MOCK:
+        return
+    try:
+        result = subprocess.run(
+            [CODEX_BIN, "login", "status"], env=child_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=10, check=False)
+    except FileNotFoundError:
+        raise SystemExit("codex-gate: codex CLI not found (%s)" % CODEX_BIN)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("codex-gate: timed out checking codex login status")
+    status = (result.stdout + "\n" + result.stderr).strip()
+    if result.returncode != 0:
+        detail = status.splitlines()
+        detail = detail[-1] if detail else "not logged in"
+        raise SystemExit("codex-gate: codex login unavailable: %s" % detail)
+    if "chatgpt" not in status.lower():
+        raise SystemExit(
+            "codex-gate: Codex is not logged in with ChatGPT; run `codex login` "
+            "or explicitly allow API-key mode with CODEX_GATE_ALLOW_API_KEY=1")
+
+
 def unknown_flag(stderr):
     """The flag a clap usage error is complaining about, if it's one of ours."""
     for flag in OPTIONAL_FLAGS - _dropped_flags:
@@ -390,7 +415,9 @@ def build_argv(model, schema_path, last_message_path, prompt):
     add("--cd", WORKDIR)
     add("--output-last-message", last_message_path)
     add("--output-schema", schema_path)
-    if model:
+    # "default" is the stable model-picker entry. Codex model names evolve;
+    # omitting -m lets the installed CLI choose its configured current model.
+    if model and model != "default":
         argv += ["-m", model]
     argv += shlex.split(os.environ.get("CODEX_GATE_EXEC_ARGS", ""))
     argv.append(prompt if PROMPT_ARGV else "-")
@@ -621,6 +648,11 @@ def main():
             "codex-gate: OPENAI_API_KEY is set — the CLI may bill the API "
             "instead of your ChatGPT plan. Unset it (serve-codex-gate.sh "
             "does) or set CODEX_GATE_ALLOW_API_KEY=1 to override.")
+
+    allow_api_key = os.environ.get("OPENAI_API_KEY") and \
+        os.environ.get("CODEX_GATE_ALLOW_API_KEY") == "1"
+    if not allow_api_key:
+        check_codex_auth()
 
     if not MOCK:
         try:

@@ -71,7 +71,11 @@ if {! ~ $skiplogon 1} {
 		# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 		# the same way.
 		if {~ $llmbackend openai cli codex} {
-			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
+			if {! ~ $llmmodel ''} {
+				llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
+			}{
+				llmsrv -b openai -u $llmurl >[2] /dev/null
+			}
 		}{
 			if {! ~ $llmmodel ''} {
 				llmsrv -M $llmmodel >[2] /dev/null

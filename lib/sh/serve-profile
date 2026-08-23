@@ -69,7 +69,11 @@ if {~ $llmbackend openai cli codex} {
 	# Per InferNode MODEL-EVAL: low gives ~15× speedup on tool-driven
 	# scenarios with no quality loss vs default medium. Devstral and
 	# Anthropic backends ignore the field — safe to set unconditionally.
-	llmsrv -D -b openai -u $llmurl -M $llmmodel -r low &
+	if {! ~ $llmmodel ''} {
+		llmsrv -D -b openai -u $llmurl -M $llmmodel -r low &
+	}{
+		llmsrv -D -b openai -u $llmurl -r low &
+	}
 }{
 	if {! ~ $llmmodel ''} {
 		llmsrv -D -M $llmmodel &

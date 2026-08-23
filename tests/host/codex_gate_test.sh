@@ -130,6 +130,9 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 argv = m.build_argv("gpt-5-codex", "/tmp/s.json", "/tmp/last.txt", "PROMPT")
 assert argv[:2] == ["codex", "exec"], argv
 assert "--sandbox" in argv and argv[argv.index("--sandbox") + 1] == "read-only", argv
+assert "--disable" in argv and argv[argv.index("--disable") + 1] == "shell_tool", argv
+assert "--strict-config" in argv, argv
+assert any(a.startswith("developer_instructions=") for a in argv), argv
 assert argv[argv.index("--cd") + 1] == m.WORKDIR, argv
 assert argv[argv.index("--output-schema") + 1] == "/tmp/s.json", argv
 assert argv[-1] == "-", argv

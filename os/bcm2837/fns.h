@@ -27,6 +27,7 @@ void	fbrect(Fbinfo*, int, int, int, int, u32int);
 
 /* arch.S -- AArch64 primitives that cannot be written in C */
 void	coherence(void);
+void	fpinit(void);
 void	cacheiflush(void*, ulong);
 
 /* arch.c -- interrupt priority level */

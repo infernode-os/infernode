@@ -85,3 +85,17 @@ islo(void)
 {
 	return (rddaif() & Daifi) == 0;
 }
+
+
+/*
+ * Make instructions written as data visible to the fetcher.
+ *
+ * os/port calls this after loading a Dis module and, once the JIT is
+ * running, after emitting code. It is cacheiflush() under the name
+ * os/port uses -- see arch.S for why AArch64 needs it at all.
+ */
+void
+segflush(void *a, ulong n)
+{
+	cacheiflush(a, n);
+}

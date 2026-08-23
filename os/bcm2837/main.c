@@ -941,6 +941,73 @@ probeqlock(void)
 	print("pgrp: newpgrp %s\n", ok ? "OK" : "BROKEN");
 }
 
+/*
+ * Channels and path names -- the namespace layer.
+ *
+ * A Chan is Inferno's file handle, and Cname is the path that got you
+ * there. Every mount, bind and open in the system is built on these, so
+ * this is the layer that makes "everything is a file" mean anything.
+ *
+ * Only the allocation and path machinery is exercised. Walking a path
+ * (namec) needs devtab populated with real devices, which arrives with
+ * devroot.c -- until then there is nothing to walk to.
+ */
+static void
+probechan(void)
+{
+	Chan *c, *d;
+	Cname *n;
+	int ok;
+
+	ok = 1;
+
+	c = newchan();
+	d = newchan();
+	if(c == nil || d == nil)
+		ok = 0;
+	else {
+		if(c == d)
+			ok = 0;			/* same Chan handed out twice */
+		if(c->r.ref != 1 || d->r.ref != 1)
+			ok = 0;			/* a fresh Chan holds one reference */
+	}
+
+	/*
+	 * Path names. addelem is what walking a path does one component
+	 * at a time, and it is where a namespace either composes
+	 * correctly or silently produces the wrong file.
+	 */
+	n = newcname("/");
+	if(n == nil || n->r.ref != 1)
+		ok = 0;
+	else {
+		n = addelem(n, "dev");
+		n = addelem(n, "cons");
+		if(n == nil || strcmp(n->s, "/dev/cons") != 0)
+			ok = 0;
+		cnameclose(n);
+	}
+
+	/*
+	 * The two Chans are deliberately NOT closed.
+	 *
+	 * cclose() calls devtab[c->type]->close(c), and newchan() hands
+	 * back type 0 -- but devtab is still the empty placeholder, so
+	 * that is a call through a nil function pointer. It jumps to
+	 * address 0 and executes whatever is there, which surfaces as an
+	 * "unknown reason" synchronous exception rather than anything
+	 * resembling a nil dereference.
+	 *
+	 * That is not a defect in chan.c: a Chan is meaningless without a
+	 * device behind it. Closing becomes testable when devroot.c lands
+	 * and devtab has a real entry. Leaking two Chans in a boot probe
+	 * is the lesser evil against not testing allocation at all.
+	 */
+
+	print("chan: newchan/cname %s\n",
+		ok ? "OK (refcounts, path composition)" : "BROKEN");
+}
+
 static void
 probefb(void)
 {
@@ -1052,6 +1119,7 @@ kmain(void)
 	probelabel();
 	probeproc();
 	probeqlock();
+	probechan();
 	probeclock();
 	probefb();
 

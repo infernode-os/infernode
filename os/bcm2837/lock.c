@@ -40,11 +40,11 @@ enum
 static void
 lockloop(Lock *l, uintptr pc)
 {
-	uartputs("\nlock: stuck spinning, taken at pc=");
+	uartputstr("\nlock: stuck spinning, taken at pc=");
 	uartputx(l->pc);
-	uartputs(" waiter pc=");
+	uartputstr(" waiter pc=");
 	uartputx(pc);
-	uartputs("\n");
+	uartputstr("\n");
 	panic("lockloop");
 }
 
@@ -79,7 +79,7 @@ void
 unlock(Lock *l)
 {
 	if(l->key == 0)
-		uartputs("unlock: not locked\n");
+		uartputstr("unlock: not locked\n");
 	l->pc = 0;
 	/*
 	 * coherence() before releasing: a store to data the lock protects
@@ -122,7 +122,7 @@ iunlock(Lock *l)
 	ulong sr;
 
 	if(l->key == 0)
-		uartputs("iunlock: not locked\n");
+		uartputstr("iunlock: not locked\n");
 	sr = l->sr;
 	l->pc = 0;
 	coherence();

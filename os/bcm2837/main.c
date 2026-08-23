@@ -21,6 +21,28 @@
 Conf conf;
 
 /*
+ * Per-processor state. One core for now, so one Mach; m points at it.
+ * MACHP(n) in dat.h resolves through the same object, so there is a
+ * single place this becomes an array when the secondary cores are
+ * released from the park loop in l.S.
+ */
+Mach	mach0;
+Mach	*m = &mach0;
+
+/* the timer alarm list, owned by os/port/proc.c's alarm machinery */
+Talarm	talarm;
+
+/*
+ * Optional kernel hooks, declared in portfns.h and defined here exactly
+ * once. Each stays nil unless a subsystem installs itself: kproftick is
+ * the kernel profiler's timer callback, proctrace the scheduler trace
+ * hook, and serwrite an alternate console writer.
+ */
+void	(*kproftick)(ulong);
+void	(*proctrace)(Proc*, int, vlong);
+void	(*serwrite)(char*, int);
+
+/*
  * The current process. There is no scheduler yet, so this is a single
  * static stand-in -- but it must be dereferenceable, because
  * os/port/alloc.c takes &up->sleep when a pool runs dry. proc.c
@@ -65,9 +87,9 @@ midr(void)
 static void
 checktraps(void)
 {
-	uartputs("trap: testing exception path with BRK...");
+	uartputstr("trap: testing exception path with BRK...");
 	__asm__ volatile("brk #0");
-	uartputs("trap: returned from exception, save/restore OK\n");
+	uartputstr("trap: returned from exception, save/restore OK\n");
 }
 
 /*
@@ -80,24 +102,24 @@ probehw(void)
 {
 	u32int v[2];
 
-	uartputs("mbox: ");
+	uartputstr("mbox: ");
 	v[0] = 0;
 	if(mboxprop(Taggetrev, v, 0, 1) == 0){
-		uartputs("board rev ");
+		uartputstr("board rev ");
 		uartputx(v[0]);
 	}else{
-		uartputs("board rev query FAILED");
+		uartputstr("board rev query FAILED");
 	}
 
 	v[0] = 0;
 	v[1] = 0;
 	if(mboxprop(Taggetarmmem, v, 0, 2) == 0){
-		uartputs(", ARM memory ");
+		uartputstr(", ARM memory ");
 		uartputd(v[1] >> 20);
-		uartputs("MB at ");
+		uartputstr("MB at ");
 		uartputx(v[0]);
 	}
-	uartputs("\n");
+	uartputstr("\n");
 }
 
 /*
@@ -113,24 +135,24 @@ startmmu(void)
 {
 	mmuinit();
 
-	uartputs("mmu:  ");
+	uartputstr("mmu:  ");
 	if(!mmuon()){
-		uartputs("FAILED to enable\n");
+		uartputstr("FAILED to enable\n");
 		return;
 	}
-	uartputs("on, caches ");
-	uartputs(mmucaches() ? "on" : "off");
-	uartputs(", identity map 0-");
+	uartputstr("on, caches ");
+	uartputstr(mmucaches() ? "on" : "off");
+	uartputstr(", identity map 0-");
 	uartputd(mmumapped() >> 20);
-	uartputs("MB, ramtop ");
+	uartputstr("MB, ramtop ");
 	uartputx(mmuramtop());
-	uartputs("\n      ttbr0=");
+	uartputstr("\n      ttbr0=");
 	uartputx(mmul1());
-	uartputs(" tcr=");
+	uartputstr(" tcr=");
 	uartputx(mmutcr());
-	uartputs(" mair=");
+	uartputstr(" mair=");
 	uartputx(mmumair());
-	uartputs("\n");
+	uartputstr("\n");
 }
 
 /*
@@ -171,20 +193,20 @@ checkunaligned(void)
 
 	p = (volatile u64int*)(void*)&u.b[4];
 	if(((uintptr)p & 7) != 4){
-		uartputs("mmu:  unaligned check MISCONFIGURED (address is ");
+		uartputstr("mmu:  unaligned check MISCONFIGURED (address is ");
 		uartputx((uintptr)p);
-		uartputs(", not 4 mod 8)\n");
+		uartputstr(", not 4 mod 8)\n");
 		return;
 	}
 
 	*p = 0x0123456789ABCDEFULL;
 	v = *p;
 
-	uartputs("mmu:  unaligned 64-bit access ");
+	uartputstr("mmu:  unaligned 64-bit access ");
 	if(v == 0x0123456789ABCDEFULL)
-		uartputs("OK (Normal memory; would fault with MMU off)\n");
+		uartputstr("OK (Normal memory; would fault with MMU off)\n");
 	else
-		uartputs("returned WRONG VALUE\n");
+		uartputstr("returned WRONG VALUE\n");
 }
 
 /*
@@ -206,14 +228,14 @@ probegpio(void)
 	f14 = gpiogetfunc(14);
 	f15 = gpiogetfunc(15);
 
-	uartputs("gpio: pin14 func=");
+	uartputstr("gpio: pin14 func=");
 	uartputd(f14);
-	uartputs(" pin15 func=");
+	uartputstr(" pin15 func=");
 	uartputd(f15);
 	if(f14 == Gpioalt0 && f15 == Gpioalt0)
-		uartputs(" (ALT0/UART as set) OK\n");
+		uartputstr(" (ALT0/UART as set) OK\n");
 	else
-		uartputs(" UNEXPECTED (wanted ALT0 on both)\n");
+		uartputstr(" UNEXPECTED (wanted ALT0 on both)\n");
 }
 
 /*
@@ -238,11 +260,11 @@ probeclock(void)
 
 	clockinit();
 
-	uartputs("clk:  cntfrq ");
+	uartputstr("clk:  cntfrq ");
 	uartputd(clockfreq());
-	uartputs("Hz (");
+	uartputstr("Hz (");
 	uartputd(clockfreq() / 1000000);
-	uartputs("MHz)\n");
+	uartputstr("MHz)\n");
 
 	/* time 50ms by both clocks */
 	s0 = systimer();
@@ -254,19 +276,19 @@ probeclock(void)
 	sysus = s1 - s0;
 	genus = ((c1 - c0) * 1000000) / clockfreq();
 
-	uartputs("clk:  50ms measured: systimer ");
+	uartputstr("clk:  50ms measured: systimer ");
 	uartputd(sysus);
-	uartputs("us, generic ");
+	uartputstr("us, generic ");
 	uartputd(genus);
-	uartputs("us -- ");
+	uartputstr("us -- ");
 
 	/* agree within 5%? */
 	lo = (sysus * 95) / 100;
 	hi = (sysus * 105) / 100;
 	if(genus >= lo && genus <= hi)
-		uartputs("clocks AGREE\n");
+		uartputstr("clocks AGREE\n");
 	else
-		uartputs("clocks DISAGREE (cntfrq is lying)\n");
+		uartputstr("clocks DISAGREE (cntfrq is lying)\n");
 
 	/*
 	 * Now let interrupts in.  Wait for a few ticks with a wall-clock
@@ -278,15 +300,15 @@ probeclock(void)
 	while(clockticks() < 5 && systimer() < deadline)
 		;
 
-	uartputs("clk:  irq ");
+	uartputstr("clk:  irq ");
 	if(clockticks() >= 5){
-		uartputs("firing, ");
+		uartputstr("firing, ");
 		uartputd(clockticks());
-		uartputs(" ticks at 100Hz OK\n");
+		uartputstr(" ticks at 100Hz OK\n");
 	}else{
-		uartputs("NOT firing (");
+		uartputstr("NOT firing (");
 		uartputd(clockticks());
-		uartputs(" ticks in 500ms)\n");
+		uartputstr(" ticks in 500ms)\n");
 	}
 }
 
@@ -322,8 +344,8 @@ probearch(void)
 	if(_tas(&lk) != 0)
 		ok = 0;
 
-	uartputs("arch: _tas ");
-	uartputs(ok ? "OK" : "BROKEN");
+	uartputstr("arch: _tas ");
+	uartputstr(ok ? "OK" : "BROKEN");
 
 	/*
 	 * spl must report the PREVIOUS level, not the new one.  Code that
@@ -360,9 +382,9 @@ probearch(void)
 
 	splhi();			/* leave as found: masked */
 
-	uartputs(", spl ");
-	uartputs(ok ? "OK" : "BROKEN");
-	uartputs(" (level restored, not assumed)\n");
+	uartputstr(", spl ");
+	uartputstr(ok ? "OK" : "BROKEN");
+	uartputstr(" (level restored, not assumed)\n");
 }
 
 /*
@@ -400,8 +422,8 @@ probelibkern(void)
 	if(strchr(buf, 'f') != buf+2)
 		ok = 0;
 
-	uartputs("libk: mem/str ");
-	uartputs(ok ? "OK" : "BROKEN");
+	uartputstr("libk: mem/str ");
+	uartputstr(ok ? "OK" : "BROKEN");
 
 	/*
 	 * The Plan 9 fmt engine. %ld and %lux are the formats os/port
@@ -419,14 +441,14 @@ probelibkern(void)
 	 */
 	n = snprint(buf, sizeof buf, "%d %s %lud %lux", 42, "dis",
 		(ulong)12884901889UL, (ulong)0x1DEADBEEFUL);
-	uartputs(", snprint ");
+	uartputstr(", snprint ");
 	if(n > 0 && strcmp(buf, "42 dis 12884901889 1deadbeef") == 0)
-		uartputs("OK");
+		uartputstr("OK");
 	else{
-		uartputs("WRONG: ");
-		uartputs(buf);
+		uartputstr("WRONG: ");
+		uartputstr(buf);
 	}
-	uartputs("\n");
+	uartputstr("\n");
 }
 
 /*
@@ -440,7 +462,12 @@ probelibkern(void)
  * handing any of it out would corrupt the GPU's world (including the
  * framebuffer) rather than merely running out.
  */
-static void
+/*
+ * Not static: portfns.h declares confinit() because os/port calls it
+ * during boot. It is one of the handful of functions every platform
+ * must supply.
+ */
+void
 confinit(void)
 {
 	extern char end[];
@@ -801,29 +828,83 @@ probelabel(void)
 		psp_ok ? "restored" : "NOT restored");
 }
 
+/*
+ * The scheduler's data structures.
+ *
+ * procinit carves the process table out of xalloc and threads it into a
+ * free list; newproc takes one, assigns a pid, and gives it a kernel
+ * stack. This is proc.c genuinely running rather than merely linking --
+ * it exercises the free list, the pid allocator, the Ref locking in
+ * incref, and the Label the scheduler will later setlabel into.
+ *
+ * Not yet exercised: sched() itself, which needs a second process to
+ * switch to and a run queue with something on it.
+ */
+static void
+probeproc(void)
+{
+	Proc *p, *q;
+	int ok;
+
+	procinit();
+
+	ok = 1;
+
+	p = newproc();
+	q = newproc();
+	if(p == nil || q == nil)
+		ok = 0;
+	else {
+		if(p == q)
+			ok = 0;			/* handed out the same slot twice */
+		if(p->pid == 0 || q->pid == 0 || p->pid == q->pid)
+			ok = 0;			/* pids must be distinct and non-zero */
+		if(p->state != Scheding)
+			ok = 0;			/* newproc leaves a proc mid-schedule */
+
+		/*
+		 * A fresh proc must have a kernel stack, and it must lie in
+		 * the memory xalloc owns rather than pointing anywhere.
+		 */
+		if(p->kstack == nil || q->kstack == nil)
+			ok = 0;
+		else if((uintptr)p->kstack < conf.base0
+		     || (uintptr)p->kstack >= mmuramtop())
+			ok = 0;
+		if(p->kstack == q->kstack)
+			ok = 0;			/* two procs sharing one stack */
+	}
+
+	print("proc: procinit/newproc %s", ok ? "OK" : "BROKEN");
+	if(p != nil && q != nil)
+		print(" (pids %lud,%lud, %lud slots)", (ulong)p->pid, (ulong)q->pid,
+			(ulong)conf.nproc);
+	print("\n");
+}
+
 static void
 probefb(void)
 {
 	Fbinfo fb;
 
 	if(fbinit(&fb) < 0){
-		uartputs("fb:   no framebuffer (no display attached?)\n");
+		uartputstr("fb:   no framebuffer (no display attached?)\n");
 		return;
 	}
 
-	uartputs("fb:   ");
+	uartputstr("fb:   ");
 	uartputd(fb.width);
-	uartputs("x");
+	uartputstr("x");
 	uartputd(fb.height);
-	uartputs("x");
+	uartputstr("x");
 	uartputd(fb.depth);
-	uartputs(" pitch=");
+	uartputstr(" pitch=");
 	uartputd(fb.pitch);
-	uartputs(" base=");
+	uartputstr(" base=");
 	uartputx(fb.base);
-	uartputs(" size=");
+	uartputstr(" size=");
 	uartputd(fb.size);
-	uartputs("\n");
+	uartputstr("\n");
 
 	/*
 	 * Paint something identifiable.  On the 7in panel this is the
@@ -835,7 +916,46 @@ probefb(void)
 	fbrect(&fb, 20, 40, 120, 80, 0x00FF0000);
 	fbrect(&fb, 160, 40, 120, 80, 0x0000FF00);
 	fbrect(&fb, 300, 40, 120, 80, 0x000000FF);
-	uartputs("fb:   test pattern drawn\n");
+	uartputstr("fb:   test pattern drawn\n");
+}
+
+/*
+ * Called by the scheduler when no process is ready to run.
+ *
+ * wfi rather than a spin: it stops the core until an interrupt arrives,
+ * which on this board means the next timer tick. Spinning would work
+ * and would also cook the SoC.
+ */
+/*
+ * Entry point for a newly created kernel process, called via its saved
+ * Label. os/port/proc.c sets a kproc's pc here; the real work is that
+ * the process starts with interrupts enabled, which it does not inherit
+ * from the scheduler's context.
+ */
+void
+kprocchild(Proc *p, void (*func)(void*), void *arg)
+{
+	p->kpfun = func;
+	p->arg = arg;
+}
+
+void
+idlehands(void)
+{
+	__asm__ volatile("wfi");
+}
+
+/*
+ * Save any per-process state the scheduler does not, on the way out of
+ * a context switch. That means FP/SIMD -- and nothing here uses it yet,
+ * because the kernel is built -mgeneral-regs-only precisely so that no
+ * path can dirty FP state we are not preserving. When FP is enabled for
+ * user code this is where the V registers and FPCR/FPSR get saved.
+ */
+void
+procsave(Proc *p)
+{
+	USED(p);
 }
 
 void
@@ -843,21 +963,21 @@ kmain(void)
 {
 	uartinit();
 
-	uartputs("\nInferNode bare-metal (BCM2837 / Raspberry Pi 3B+)\n");
+	uartputstr("\nInferNode bare-metal (BCM2837 / Raspberry Pi 3B+)\n");
 
-	uartputs("  exception level: EL");
+	uartputstr("  exception level: EL");
 	uartputc('0' + (int)currentel());
-	uartputs("\n  midr_el1:        ");
+	uartputstr("\n  midr_el1:        ");
 	uartputx(midr());
-	uartputs("\n  mpidr_el1:       ");
+	uartputstr("\n  mpidr_el1:       ");
 	uartputx(mpidr());
-	uartputs("\n  console:         PL011 UART0, polled");
-	uartputs("\n  types:           ");
-	uartputs(typecheck() ? "arm64 u.h OK (LP64, stdarg)" : "TYPE FOUNDATION BROKEN");
-	uartputs("\n");
+	uartputstr("\n  console:         PL011 UART0, polled");
+	uartputstr("\n  types:           ");
+	uartputstr(typecheck() ? "arm64 u.h OK (LP64, stdarg)" : "TYPE FOUNDATION BROKEN");
+	uartputstr("\n");
 
 	trapinit();
-	uartputs("  vectors:         installed at VBAR_EL1\n\n");
+	uartputstr("  vectors:         installed at VBAR_EL1\n\n");
 
 	checktraps();
 
@@ -871,10 +991,11 @@ kmain(void)
 	probealloc();
 	probeblock();
 	probelabel();
+	probeproc();
 	probeclock();
 	probefb();
 
-	uartputs("\nboot OK\n");
+	uartputstr("\nboot OK\n");
 
 	for(;;)
 		__asm__ volatile("wfe");

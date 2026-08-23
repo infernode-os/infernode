@@ -1,3 +1,15 @@
+/*
+ * Imported from upstream Inferno os/port/portfns.h.
+ *
+ * DIVERGENCE FROM UPSTREAM: kproftick, proctrace and serwrite are
+ * declared extern. Upstream writes them without it, which makes each
+ * a TENTATIVE DEFINITION -- so every .c including this header defines
+ * its own copy. The Plan 9 compiler and pre-10 gcc merged those into a
+ * single common symbol; clang 11+ and gcc 10+ default to -fno-common
+ * and reject them as duplicate symbols at link time. The definitions
+ * now live once, in the platform's main.c.
+ */
+
 #define		FPinit() fpinit() /* remove this if math lib is linked */
 void		FPrestore(void*);
 void		FPsave(void*);
@@ -129,7 +141,7 @@ void		kproc(char*, void(*)(void*), void*, int);
 int		kfgrpclose(Fgrp*, int);
 void		kprocchild(Proc*, void (*)(void*), void*);
 int		kprint(char*, ...);
-void	(*kproftick)(ulong);
+extern void	(*kproftick)(ulong);
 void		ksetenv(char*, char*, int);
 void		kstrcpy(char*, char*, int);
 void		kstrdup(char**, char*);
@@ -198,7 +210,7 @@ void		procctl(Proc*);
 void		procdump(void);
 void		procinit(void);
 Proc*		proctab(int);
-void	(*proctrace)(Proc*, int, vlong); 
+extern void	(*proctrace)(Proc*, int, vlong);
 int		progfdprint(Chan*, int, int, char*, int);
 int		pullblock(Block**, int);
 Block*		pullupblock(Block*, int);
@@ -253,7 +265,7 @@ Proc*		runproc(void);
 void		sched(void);
 void		schedinit(void);
 long		seconds(void);
-void		(*serwrite)(char*, int);
+extern void	(*serwrite)(char*, int);
 int		setcolor(ulong, ulong, ulong, ulong);
 int		setlabel(Label*);
 void		setmalloctag(void*, ulong);

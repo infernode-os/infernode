@@ -160,10 +160,19 @@ build_kernel() {
     # list and made xalloc return nil for every request. Catching it at
     # build time is the difference between a compile error and memory
     # corruption in an imported file nobody is reading closely.
+    # errstr.h is GENERATED from os/port/error.h, exactly as upstream's
+    # os/port/portmkfile does it: the sed rewrites each
+    # "extern char Efoo[]; /* text */" declaration into
+    # 'char Efoo[] = "text";'. Generating rather than committing it
+    # keeps error.h the single place an error string is written, so a
+    # declaration and its text cannot drift apart.
+    sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' \
+        < "$ROOT/os/port/error.h" > "$BUILD/errstr.h" || return 1
+
     for f in "$ROOT"/os/port/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/osport-$(basename "$f").o"
-        "$CC" "${CFLAGS[@]}" -Wno-everything \
+        "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
              -Werror=missing-declarations -Werror=incompatible-pointer-types \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
@@ -176,7 +185,7 @@ build_kernel() {
     for f in "$ROOT"/libkern/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/libkern-$(basename "$f").o"
-        "$CC" "${CFLAGS[@]}" -Wno-everything \
+        "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
              -Werror=missing-declarations -Werror=incompatible-pointer-types \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
@@ -298,6 +307,7 @@ check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed 
 check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
 check "blok: allocb/freeb OK"          "os/port/allocb Blocks have headroom and correct extents"
 check "lbl:  setlabel/gotolabel OK"     "context-switch primitives round trip and restore sp"
+check "proc: procinit/newproc OK"       "os/port/proc allocates processes with distinct pids and stacks"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"
@@ -410,17 +420,27 @@ cat > "$VARIANT" <<'EOF'
 
 /* main.c normally defines these; the variant replaces main.c */
 Conf conf;
-static Proc mainproc;
-Proc *up = &mainproc;
+Mach mach0;
+Mach *m = &mach0;
+Proc *up;
+Talarm talarm;
+void (*kproftick)(ulong);
+void (*proctrace)(Proc*, int, vlong);
+void (*serwrite)(char*, int);
+
+void confinit(void) { }
+void idlehands(void) { __asm__ volatile("wfi"); }
+void procsave(Proc *p) { USED(p); }
+void kprocchild(Proc *p, void (*f)(void*), void *a) { USED(p); USED(f); USED(a); }
 
 void
 kmain(void)
 {
 	uartinit();
 	trapinit();
-	uartputs("\nfault-injection variant\n");
+	uartputstr("\nfault-injection variant\n");
 	__asm__ volatile(".word 0x00000000");
-	uartputs("BUG: execution continued past an undefined instruction\n");
+	uartputstr("BUG: execution continued past an undefined instruction\n");
 	for(;;)
 		__asm__ volatile("wfe");
 }
@@ -448,6 +468,7 @@ if build_kernel "$BUILD/fault.img" "$VARIANT"; then
     fi
 else
     fail "fault-injection variant failed to build"
+    [[ "$VERBOSE" -eq 1 ]] && tail -20 "$BUILD/cc.log"
 fi
 
 echo ""

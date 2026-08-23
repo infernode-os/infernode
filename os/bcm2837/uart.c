@@ -54,7 +54,7 @@ uartputc(int c)
 }
 
 void
-uartputs(char *s)
+uartputstr(char *s)
 {
 	while(*s){
 		if(*s == '\n')
@@ -73,7 +73,7 @@ uartputx(u64int v)
 		buf[i] = "0123456789abcdef"[v & 0xF];
 		v >>= 4;
 	}
-	uartputs("0x");
+	uartputstr("0x");
 	for(i = 0; i < 16; i++)
 		uartputc(buf[i]);
 }

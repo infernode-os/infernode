@@ -30,6 +30,17 @@
 /* round s up to a multiple of sz, which must be a power of two */
 #define	ROUND(s, sz)	(((s)+((sz)-1))&~((sz)-1))
 
+/*
+ * Clock rate. Must agree with the Hz enum in clock.c, which is what
+ * actually programs the timer comparator -- os/port converts
+ * milliseconds to ticks with MS2TK, so a mismatch makes every sleep and
+ * timeout wrong by that ratio without anything looking broken.
+ */
+#define	HZ		100			/* clock ticks per second */
+#define	MS2HZ		(1000/HZ)		/* milliseconds per tick */
+#define	TK2SEC(t)	((t)/HZ)		/* ticks to seconds */
+#define	MS2TK(t)	((t)/MS2HZ)		/* milliseconds to ticks */
+
 #define	MAXMACH		4			/* four Cortex-A53 cores */
 
 #define	KSTACK		(16*1024)		/* kernel stack per process */

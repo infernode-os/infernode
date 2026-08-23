@@ -5,7 +5,7 @@
 /* uart.c */
 void	uartinit(void);
 void	uartputc(int);
-void	uartputs(char*);
+void	uartputstr(char*);
 void	uartputx(u64int);
 void	uartputd(u64int);
 
@@ -26,18 +26,10 @@ void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 
 /* arch.S -- AArch64 primitives that cannot be written in C */
-ulong	_tas(ulong*);
 void	coherence(void);
-int	setlabel(Label*);
-void	gotolabel(Label*);
 void	cacheiflush(void*, ulong);
 
 /* arch.c -- interrupt priority level */
-ulong	splhi(void);
-ulong	spllo(void);
-void	splx(ulong);
-void	splxpc(ulong);
-int	islo(void);
 
 /*
  * os/port calls getcallerpc(&firstarg) to record which caller took a
@@ -50,59 +42,22 @@ int	islo(void);
 #define getcallerpc(x)	((ulong)(uintptr)__builtin_return_address(0))
 
 /* print.c -- the seam libkern's fmt engine expects from the kernel */
-int	print(char*, ...);
-void	panic(char*, ...);
 void	ixsummary(void);
-void	debugkey(int, char*, void(*)(void), int);
 
 /* lock.c -- stands in for os/port/taslock.c until proc.c exists */
-void	lock(Lock*);
-void	unlock(Lock*);
-int	canlock(Lock*);
-void	ilock(Lock*);
-void	iunlock(Lock*);
 
 /* libkern, once an allocator exists */
-char*	smprint(char*, ...);
-char*	strdup(char*);
 
 /* os/port/allocb.c */
-Block*	allocb(int);
-Block*	iallocb(int);
-void	freeb(Block*);
-void	checkb(Block*, char*);
-void	iallocsummary(void);
 
 /* os/port/alloc.c */
-void	poolinit(void);
-void*	malloc(ulong);
-void	free(void*);
-void	poolsummary(void);
-void	setmalloctag(void*, ulong);
-void	setrealloctag(void*, ulong);
-ulong	getmalloctag(void*);
-ulong	getrealloctag(void*);
-void*	smalloc(ulong);
-ulong	msize(void*);
-void*	mallocz(ulong, int);
-void	poolimmutable(void*);
-void	poolmutable(void*);
 
 /* console + panic support os/port expects */
-void	putstrn(char*, int);
-void	exhausted(char*);
-void	setpanic(void);
-int	return0(void*);
-void	tsleep(Rendez*, int(*)(void*), void*, int);
 
 /* os/port/xalloc.c */
-void	xinit(void);
-void*	xalloc(ulong);
 void*	xspanalloc(ulong, int, ulong);
-void	xfree(void*);
 void	xhole(uintptr, uintptr);
 int	xmerge(void*, void*);
-void	xsummary(void);
 
 /* clock.c */
 void	clockinit(void);
@@ -110,7 +65,6 @@ u64int	clockcount(void);
 u64int	clockfreq(void);
 u64int	clockticks(void);
 u64int	systimer(void);
-void	microdelay(u64int);
 int	clockintr(void);
 int	irqdispatch(void);
 void	intrenable(void);
@@ -140,3 +94,26 @@ int	typecheck(void);
 
 /* main.c */
 void	kmain(void);
+
+/*
+ * The portable kernel's function declarations. Upstream's platform
+ * fns.h ends this way; everything above is the machine-specific half
+ * that os/port expects each port to supply.
+ */
+/*
+ * The error-unwinding macro os/port is written against. It pushes a
+ * Label onto the current process's error stack and returns 0; a later
+ * error() gotolabels back to it, so it appears to return 1. This is
+ * setlabel/gotolabel doing for error handling what sched() does for
+ * context switching.
+ */
+/* platform hooks os/port/proc.c calls */
+void	idlehands(void);
+void	procsave(Proc*);
+void	confinit(void);
+void	dumpstack(void);
+void	kprocchild(Proc*, void(*)(void*), void*);
+
+#define	waserror()	(up->nerrlab++, setlabel(&up->errlab[up->nerrlab-1]))
+
+#include "../port/portfns.h"

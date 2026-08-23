@@ -92,7 +92,7 @@ print(char *fmt, ...)
 	va_start(arg, fmt);
 	n = vsnprint(printbuf, sizeof printbuf, fmt, arg);
 	va_end(arg);
-	uartputs(printbuf);
+	uartputstr(printbuf);
 	_fmtunlock();
 
 	return n;
@@ -110,14 +110,14 @@ panic(char *fmt, ...)
 	 */
 	splhi();
 
-	uartputs("\npanic: ");
+	uartputstr("\npanic: ");
 
 	va_start(arg, fmt);
 	vsnprint(printbuf, sizeof printbuf, fmt, arg);
 	va_end(arg);
-	uartputs(printbuf);
+	uartputstr(printbuf);
 
-	uartputs("\nhalted.\n");
+	uartputstr("\nhalted.\n");
 
 	for(;;)
 		__asm__ volatile("wfe");
@@ -138,7 +138,7 @@ ixsummary(void)
 }
 
 void
-debugkey(int c, char *name, void (*f)(void), int t)
+debugkey(Rune c, char *name, void (*f)(void), int t)
 {
 	USED(c); USED(name); USED(f); USED(t);
 }
@@ -173,40 +173,9 @@ setpanic(void)
 {
 }
 
-int
-return0(void *v)
-{
-	USED(v);
-	return 0;
-}
-
 /*
- * There is no scheduler yet.
- *
- * os/port/alloc.c calls this from smalloc() when a pool is exhausted,
- * expecting to sleep until another process frees memory. With one core,
- * no processes and nothing else running, nothing will ever free
- * anything -- so waiting is an infinite hang. Failing loudly is the
- * honest behaviour, and it names the real problem (the pool is
- * exhausted) rather than presenting as a lockup.
- *
- * proc.c replaces this with the real tsleep.
+ * return0, tsleep and exhausted used to be stubbed here. os/port/proc.c
+ * now provides the real ones -- tsleep genuinely sleeps, and exhausted
+ * kills the offending process instead of just reporting -- so the stubs
+ * are gone rather than shadowing them.
  */
-void
-tsleep(Rendez *r, int (*f)(void*), void *arg, int ms)
-{
-	USED(r); USED(f); USED(arg); USED(ms);
-	panic("tsleep: out of memory and no scheduler to wait for");
-}
-
-/*
- * Report a resource the kernel has run out of. Upstream defines this in
- * proc.c, where it also kills the current process; with no scheduler
- * there is nothing to kill, so it reports and continues -- the caller
- * (allocb) is already returning nil and handles that.
- */
-void
-exhausted(char *resource)
-{
-	print("out of %s\n", resource);
-}

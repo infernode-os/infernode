@@ -67,8 +67,8 @@ slotname(u64int t)
 
 	if(t > 15)
 		return "bad slot";
-	uartputs(kind[t & 3]);
-	uartputs(" from ");
+	uartputstr(kind[t & 3]);
+	uartputstr(" from ");
 	return from[(t >> 2) & 3];
 }
 
@@ -77,36 +77,36 @@ dumpureg(Ureg *u)
 {
 	int i;
 
-	uartputs("\n  vector:  ");
-	uartputs(slotname(u->type));
-	uartputs("\n  esr:     ");
+	uartputstr("\n  vector:  ");
+	uartputstr(slotname(u->type));
+	uartputstr("\n  esr:     ");
 	uartputx(u->esr);
-	uartputs("  ec=");
+	uartputstr("  ec=");
 	uartputx((u->esr >> ESRECSHIFT) & ESRECMASK);
-	uartputs(" (");
-	uartputs(ecname((u32int)((u->esr >> ESRECSHIFT) & ESRECMASK)));
-	uartputs(")\n  iss:     ");
+	uartputstr(" (");
+	uartputstr(ecname((u32int)((u->esr >> ESRECSHIFT) & ESRECMASK)));
+	uartputstr(")\n  iss:     ");
 	uartputx(u->esr & ESRISSMASK);
-	uartputs("\n  far:     ");
+	uartputstr("\n  far:     ");
 	uartputx(u->far);
-	uartputs("\n  elr(pc): ");
+	uartputstr("\n  elr(pc): ");
 	uartputx(u->pc);
-	uartputs("\n  spsr:    ");
+	uartputstr("\n  spsr:    ");
 	uartputx(u->psr);
-	uartputs("\n  sp:      ");
+	uartputstr("\n  sp:      ");
 	uartputx(u->sp);
-	uartputs("\n");
+	uartputstr("\n");
 
 	for(i = 0; i < 31; i++){
 		if((i % 2) == 0)
-			uartputs("  ");
-		uartputs("x");
+			uartputstr("  ");
+		uartputstr("x");
 		uartputd(i);
-		uartputs(i < 10 ? ":  " : ": ");
+		uartputstr(i < 10 ? ":  " : ": ");
 		uartputx(u->r[i]);
-		uartputs((i % 2) ? "\n" : "   ");
+		uartputstr((i % 2) ? "\n" : "   ");
 	}
-	uartputs("\n");
+	uartputstr("\n");
 }
 
 void
@@ -123,7 +123,7 @@ trap(Ureg *u)
 	 */
 	if(u->type == Tirq || u->type == Tirq0){
 		if(!irqdispatch()){
-			uartputs("\ntrap: unhandled IRQ");
+			uartputstr("\ntrap: unhandled IRQ");
 			dumpureg(u);
 			panic("unhandled IRQ");
 		}
@@ -137,16 +137,47 @@ trap(Ureg *u)
 	 * ELR points AT the brk, so advance one instruction to resume.
 	 */
 	if(ec == 0x3C){
-		uartputs("\ntrap: BRK #");
+		uartputstr("\ntrap: BRK #");
 		uartputd(u->esr & 0xFFFF);
-		uartputs(" at pc=");
+		uartputstr(" at pc=");
 		uartputx(u->pc);
-		uartputs(" -- stepping over\n");
+		uartputstr(" -- stepping over\n");
 		u->pc += 4;
 		return;
 	}
 
-	uartputs("\n*** unhandled exception ***");
+	uartputstr("\n*** unhandled exception ***");
 	dumpureg(u);
 	panic("unhandled exception");
+}
+
+/*
+ * Print a backtrace for the current process.
+ *
+ * os/port calls this when something has gone wrong enough to want the
+ * stack. AArch64 frames are chained through x29 -- each frame stores the
+ * caller's x29 and x30 at [x29] and [x29,#8] -- so the chain can be
+ * walked without unwind tables, provided the code was built with frame
+ * pointers. Bounded, because the whole point is to run when memory is
+ * already suspect and a corrupt chain must not become an infinite loop.
+ */
+void
+dumpstack(void)
+{
+	uintptr fp, pc, top;
+	int i;
+
+	__asm__ volatile("mov %0, x29" : "=r"(fp));
+
+	top = (uintptr)m + KSTACK;
+	print("stack trace:\n");
+	for(i = 0; i < 32 && fp != 0; i++){
+		if((fp & 7) != 0 || fp < conf.base0 || fp >= top + KSTACK)
+			break;			/* chain is not credible */
+		pc = *(uintptr*)(fp + 8);
+		if(pc == 0)
+			break;
+		print("  %lux\n", (ulong)pc);
+		fp = *(uintptr*)fp;
+	}
 }

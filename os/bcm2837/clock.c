@@ -100,11 +100,11 @@ systimer(void)
  * by the hardware rather than reported by firmware.
  */
 void
-microdelay(u64int us)
+microdelay(int us)
 {
 	u64int end;
 
-	end = systimer() + us;
+	end = systimer() + (u64int)(uint)us;
 	while(systimer() < end)
 		;
 }

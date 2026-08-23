@@ -91,6 +91,18 @@ struct FPenv
  * -- but Proc embeds an FPU, so the shape has to be right now or every
  * Proc changes size later.
  */
+/*
+ * Per-process FP state machine, as os/port/proc.c expects. Nothing
+ * switches FP state yet -- the kernel is -mgeneral-regs-only -- so every
+ * Proc stays at FPINIT, but proc.c assigns the value so it must exist.
+ */
+enum
+{
+	FPINIT,
+	FPACTIVE,
+	FPINACTIVE,
+};
+
 struct FPU
 {
 	uvlong	regs[64];	/* 32 x 128-bit V registers */

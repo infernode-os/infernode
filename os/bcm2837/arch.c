@@ -40,7 +40,7 @@ rddaif(void)
 	return v;
 }
 
-ulong
+int
 splhi(void)
 {
 	u64int d;
@@ -48,10 +48,10 @@ splhi(void)
 	d = rddaif();
 	__asm__ volatile("msr daifset, #2" ::: "memory");
 	__asm__ volatile("isb");
-	return (ulong)d;
+	return (int)d;
 }
 
-ulong
+int
 spllo(void)
 {
 	u64int d;
@@ -59,13 +59,13 @@ spllo(void)
 	d = rddaif();
 	__asm__ volatile("msr daifclr, #2" ::: "memory");
 	__asm__ volatile("isb");
-	return (ulong)d;
+	return (int)d;
 }
 
 void
-splx(ulong s)
+splx(int s)
 {
-	__asm__ volatile("msr daif, %0" :: "r"((u64int)s) : "memory");
+	__asm__ volatile("msr daif, %0" :: "r"((u64int)(uint)s) : "memory");
 	__asm__ volatile("isb");
 }
 
@@ -75,7 +75,7 @@ splx(ulong s)
  * is the same operation under the name os/port expects.
  */
 void
-splxpc(ulong s)
+splxpc(int s)
 {
 	splx(s);
 }

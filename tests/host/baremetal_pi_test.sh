@@ -117,8 +117,10 @@ info "qemu:    $QEMU"
 BUILD="$(mktemp -d)"
 trap 'rm -rf "$BUILD"' EXIT
 
+# Inferno/arm64/include supplies u.h -- the same per-objtype type header
+# upstream's native ports use, and the one os/port will expect.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -Wall -Wextra -I"$SRC")
+        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/Inferno/arm64/include")
 
 # Build every source in the port, so a new file is picked up automatically
 # rather than silently going untested.
@@ -218,6 +220,7 @@ check "InferNode bare-metal"          "kernel boots and reaches kmain"
 check "exception level: EL1"          "drops from EL2 to EL1"
 check "midr_el1:        0x00000000410fd0" \
                                       "reports a Cortex-A53 MIDR (BCM2837)"
+check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdarg)"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"
@@ -335,6 +338,7 @@ fi
 #
 VARIANT="$BUILD/main-fault.c"
 cat > "$VARIANT" <<'EOF'
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "ureg.h"

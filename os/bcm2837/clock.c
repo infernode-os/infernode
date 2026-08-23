@@ -21,6 +21,7 @@
  * display tears", never like "the clock is wrong".
  */
 
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "fns.h"

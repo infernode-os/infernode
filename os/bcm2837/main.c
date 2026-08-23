@@ -6,6 +6,7 @@
  * anything that goes wrong after THAT reports too rather than hanging.
  */
 
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "ureg.h"
@@ -301,7 +302,10 @@ kmain(void)
 	uartputx(midr());
 	uartputs("\n  mpidr_el1:       ");
 	uartputx(mpidr());
-	uartputs("\n  console:         PL011 UART0, polled\n");
+	uartputs("\n  console:         PL011 UART0, polled");
+	uartputs("\n  types:           ");
+	uartputs(typecheck() ? "arm64 u.h OK (LP64, stdarg)" : "TYPE FOUNDATION BROKEN");
+	uartputs("\n");
 
 	trapinit();
 	uartputs("  vectors:         installed at VBAR_EL1\n\n");

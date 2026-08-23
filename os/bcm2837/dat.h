@@ -1,29 +1,24 @@
 /*
- * Minimal freestanding type vocabulary for the bare-metal kernel.
+ * Port-specific data types for the bare-metal BCM2837 kernel.
  *
- * The tree's include/lib9.h cannot be used here: it pulls in stdio.h,
- * setjmp.h, time.h and friends, none of which exist when there is no
- * host OS underneath.  These typedefs deliberately mirror the names
- * lib9.h defines so that code moving between the hosted and native
- * trees reads the same.
+ * The integer vocabulary now comes from Inferno/arm64/include/u.h,
+ * which is the same header upstream Inferno's native ports use (one per
+ * objtype) and the one os/port will expect.  It replaces the local
+ * typedefs this file started with: keeping a second definition of uchar
+ * and friends would guarantee the two drifted, and os/port's whole
+ * pointer-in-ulong convention depends on getting exactly one answer for
+ * how wide these are.
+ *
+ * The tree's own include/lib9.h is not usable here -- it pulls in
+ * stdio.h, setjmp.h and time.h, none of which exist with no host OS
+ * underneath.
+ *
+ * Following Plan 9 convention, this header does NOT include u.h: every
+ * .c includes u.h first and dat.h after.  Upstream os/port is written
+ * that way throughout, so matching it keeps imported files diff-able
+ * against their originals -- and u.h has no include guard, exactly
+ * because it is expected to be included once, first, by hand.
  */
-
-#define nil	((void*)0)
-
-typedef unsigned char		uchar;
-typedef unsigned short		ushort;
-typedef unsigned int		uint;
-typedef signed char		schar;
-typedef long long		vlong;
-typedef unsigned long long	uvlong;
-
-typedef unsigned char		u8int;
-typedef unsigned short		u16int;
-typedef unsigned int		u32int;
-typedef unsigned long long	u64int;
-
-typedef unsigned long		uintptr;
-typedef long			intptr;
 
 /*
  * Forward declaration so fns.h can prototype the trap handlers without

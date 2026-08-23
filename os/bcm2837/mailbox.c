@@ -21,6 +21,7 @@
  * is the reminder.
  */
 
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "fns.h"

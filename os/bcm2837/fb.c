@@ -14,6 +14,7 @@
  * modest default so the rest of bring-up can still proceed.
  */
 
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "fns.h"

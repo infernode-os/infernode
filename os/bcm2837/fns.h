@@ -57,5 +57,8 @@ void	panic(char*);
 /* vectors.S */
 void	trapinit(void);
 
+/* typecheck.c */
+int	typecheck(void);
+
 /* main.c */
 void	kmain(void);

@@ -11,6 +11,7 @@
  * trips, and later it is what a debugger breakpoint lands on.
  */
 
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "ureg.h"

@@ -8,6 +8,7 @@
  * serial0, so plain -serial stdio picks it up.
  */
 
+#include "u.h"
 #include "dat.h"
 #include "io.h"
 #include "fns.h"

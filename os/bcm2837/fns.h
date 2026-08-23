@@ -18,6 +18,17 @@ int	fbinit(Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 
+/* mmu.c */
+void	mmuinit(void);
+void	mmuenable(void);
+int	mmuon(void);
+int	mmucaches(void);
+uintptr	mmuramtop(void);
+uintptr	mmul1(void);
+uintptr	mmumapped(void);
+u64int	mmutcr(void);
+u64int	mmumair(void);
+
 /* trap.c */
 void	trap(Ureg*);
 void	dumpureg(Ureg*);

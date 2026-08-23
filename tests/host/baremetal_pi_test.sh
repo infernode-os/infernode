@@ -227,6 +227,14 @@ check "boot OK"                       "completes boot without faulting"
 # reading back zeroes.
 check "mbox: board rev 0x"            "mailbox property call returns a board revision"
 check "ARM memory"                    "mailbox reports ARM memory split"
+
+# MMU. The unaligned check is the one that matters: it is a regression
+# guard on the memory ATTRIBUTES, not on translation working. RAM
+# accidentally mapped Device would still boot and still show a working
+# identity map, then fail unpredictably wherever the compiler merged
+# stores.
+check "mmu:  on, caches on"           "MMU and caches enabled"
+check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access legal)"
 check "fb:   [0-9]"                   "framebuffer allocated"
 check "test pattern drawn"            "framebuffer written without faulting"
 

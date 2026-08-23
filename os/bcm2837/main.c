@@ -82,6 +82,72 @@ probehw(void)
 	uartputs("\n");
 }
 
+/*
+ * Turn on translation, then say what the map looks like.  Reporting
+ * ramtop matters: it is queried from the firmware, and it is the line
+ * that decides which side of the cacheable/Device split the framebuffer
+ * falls on.  If that ever comes back wrong, the symptom is a display
+ * showing stale pixels, which is far easier to recognise if the boot log
+ * already told you where the boundary was put.
+ */
+static void
+startmmu(void)
+{
+	mmuinit();
+
+	uartputs("mmu:  ");
+	if(!mmuon()){
+		uartputs("FAILED to enable\n");
+		return;
+	}
+	uartputs("on, caches ");
+	uartputs(mmucaches() ? "on" : "off");
+	uartputs(", identity map 0-");
+	uartputd(mmumapped() >> 20);
+	uartputs("MB, ramtop ");
+	uartputx(mmuramtop());
+	uartputs("\n      ttbr0=");
+	uartputx(mmul1());
+	uartputs(" tcr=");
+	uartputx(mmutcr());
+	uartputs(" mair=");
+	uartputx(mmumair());
+	uartputs("\n");
+}
+
+/*
+ * The point of the MMU, demonstrated.
+ *
+ * With translation off every access is Device-nGnRnE, where unaligned
+ * access is architecturally forbidden -- that is what took an alignment
+ * fault in the mailbox code when the compiler merged two 32-bit stores
+ * into one 64-bit store at a 4-byte-aligned offset.  Once this memory is
+ * mapped Normal the same access is simply legal.
+ *
+ * Run this AFTER mmuinit: it is a regression guard on the memory
+ * attributes, not a hardware capability test.  If someone later maps RAM
+ * as Device by mistake, this faults immediately and says so, rather than
+ * the kernel dying somewhere unrelated at -O2.
+ */
+static void
+checkunaligned(void)
+{
+	static u8int buf[32];
+	volatile u64int *p;
+	u64int v;
+
+	/* 4-byte aligned but deliberately not 8-byte aligned */
+	p = (volatile u64int*)(void*)&buf[4];
+	*p = 0x0123456789ABCDEFULL;
+	v = *p;
+
+	uartputs("mmu:  unaligned 64-bit access ");
+	if(v == 0x0123456789ABCDEFULL)
+		uartputs("OK (Normal memory; would fault with MMU off)\n");
+	else
+		uartputs("returned WRONG VALUE\n");
+}
+
 static void
 probefb(void)
 {
@@ -140,6 +206,8 @@ kmain(void)
 	checktraps();
 
 	probehw();
+	startmmu();
+	checkunaligned();
 	probefb();
 
 	uartputs("\nboot OK\n");

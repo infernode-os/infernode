@@ -412,7 +412,7 @@ check "file: kopen/kread/kclose OK"      "os/port/sysfile opens, reads and close
 check "qio:  qopen/qwrite/qread/qbwrite OK" "os/port/qio queues bytes and Blocks with correct accounting"
 check "cons: hello from /dev/cons"       "text written to the PATH /dev/cons reaches the console"
 check "cons: /dev/cons OK"               "console device binds into the namespace and is writable"
-check "Initial Dis: ../osinit.dis.."      "disinit loads the Dis module from the in-kernel root filesystem"
+check "Initial Dis:"                    "disinit loads the Dis module from the in-kernel root filesystem"
 check "Dis is running on bare metal"     "Limbo bytecode executes and reaches the console through Sys"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 

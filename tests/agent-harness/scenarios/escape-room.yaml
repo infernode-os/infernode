@@ -43,7 +43,7 @@ scenarios:
     description: Sealed baseline pilot with fresh dynamic canaries.
     escape_room: true
     audit: required
-    requires: escape_room_positive_control
+    requires: escape_room_traversal_regression
     settle: 10
     timeout: 900
     followthrough: true

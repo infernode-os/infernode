@@ -10,40 +10,26 @@
 
 #include "dat.h"
 #include "io.h"
+#include "fns.h"
 
-#define UART(r)	(*(volatile u32int*)(UART0REGS + (r)))
-#define GPIO(r)	(*(volatile u32int*)(GPIOREGS + (r)))
-
-static void
-delay(int n)
-{
-	while(n-- > 0)
-		__asm__ volatile("nop");
-}
+#define UART(r)	(*(volatile u32int*)((uintptr)UART0REGS + (r)))
 
 void
 uartinit(void)
 {
-	u32int r;
-
 	UART(Cr) = 0;			/* disable while reconfiguring */
 
-	/* GPIO 14 and 15 to ALT0 == TXD0/RXD0 */
-	r = GPIO(Gpfsel1);
-	r &= ~((7<<12) | (7<<15));
-	r |= (4<<12) | (4<<15);
-	GPIO(Gpfsel1) = r;
-
 	/*
-	 * Detach the pull-up/pull-down on 14/15.  The 150-cycle waits are
-	 * required by the BCM peripheral spec: the pull state is clocked
-	 * in, not written directly.
+	 * GPIO 14 and 15 carry TXD0/RXD0 on alternate function 0, with no
+	 * pull needed since the line is actively driven at both ends.
+	 * Going through the GPIO driver rather than poking GPFSEL here
+	 * keeps one owner of the pin mux -- and means every boot exercises
+	 * that driver before anything else depends on it.
 	 */
-	GPIO(Gppud) = 0;
-	delay(150);
-	GPIO(Gppudclk0) = (1<<14) | (1<<15);
-	delay(150);
-	GPIO(Gppudclk0) = 0;
+	gpiofunc(14, Gpioalt0);
+	gpiofunc(15, Gpioalt0);
+	gpiopull(14, Pullnone);
+	gpiopull(15, Pullnone);
 
 	UART(Icr) = 0x7FF;		/* clear all pending interrupts */
 

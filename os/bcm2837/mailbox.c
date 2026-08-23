@@ -25,7 +25,7 @@
 #include "io.h"
 #include "fns.h"
 
-#define MBOX(r)	(*(volatile u32int*)(MBOXREGS + (r)))
+#define MBOX(r)	(*(volatile u32int*)((uintptr)MBOXREGS + (r)))
 
 /*
  * Shared request buffer.  Single-threaded for now; when there is a

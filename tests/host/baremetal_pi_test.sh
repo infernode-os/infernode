@@ -233,6 +233,7 @@ check "ARM memory"                    "mailbox reports ARM memory split"
 # accidentally mapped Device would still boot and still show a working
 # identity map, then fail unpredictably wherever the compiler merged
 # stores.
+check "gpio: pin14 func=4 pin15 func=4" "GPIO pin-mux readback matches what UART set"
 check "mmu:  on, caches on"           "MMU and caches enabled"
 check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access legal)"
 check "fb:   [0-9]"                   "framebuffer allocated"

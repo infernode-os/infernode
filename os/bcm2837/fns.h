@@ -9,6 +9,13 @@ void	uartputs(char*);
 void	uartputx(u64int);
 void	uartputd(u64int);
 
+/* gpio.c */
+void	gpiofunc(int, int);
+void	gpiopull(int, int);
+void	gpioout(int, int);
+int	gpioin(int);
+int	gpiogetfunc(int);
+
 /* mailbox.c */
 int	mboxprop(u32int, u32int*, int, int);
 int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);

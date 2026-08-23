@@ -148,6 +148,35 @@ checkunaligned(void)
 		uartputs("returned WRONG VALUE\n");
 }
 
+/*
+ * Read back the pin mux the UART set up.
+ *
+ * Deliberately non-invasive: it only READS function selects, and only
+ * for pins this kernel already configured.  Driving an arbitrary pin as
+ * a self-test would be reckless on real hardware, where something may be
+ * wired to it -- the header pins are attached to whatever the owner
+ * plugged in, and a test that asserts an output could short a driven
+ * line.  Reading back proves the mux took, which is the part that is
+ * otherwise invisible.
+ */
+static void
+probegpio(void)
+{
+	int f14, f15;
+
+	f14 = gpiogetfunc(14);
+	f15 = gpiogetfunc(15);
+
+	uartputs("gpio: pin14 func=");
+	uartputd(f14);
+	uartputs(" pin15 func=");
+	uartputd(f15);
+	if(f14 == Gpioalt0 && f15 == Gpioalt0)
+		uartputs(" (ALT0/UART as set) OK\n");
+	else
+		uartputs(" UNEXPECTED (wanted ALT0 on both)\n");
+}
+
 static void
 probefb(void)
 {
@@ -208,6 +237,7 @@ kmain(void)
 	probehw();
 	startmmu();
 	checkunaligned();
+	probegpio();
 	probefb();
 
 	uartputs("\nboot OK\n");

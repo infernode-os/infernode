@@ -105,10 +105,40 @@ enum
 	Rxe		= 1<<9,
 };
 
-/* GPIO register offsets */
+/*
+ * GPIO register offsets.  GPFSEL is six registers of ten pins, three
+ * bits each; SET/CLR/LEV are two registers of 32 pins, one bit each.
+ * Set and clear are separate write-only registers so a single pin can be
+ * driven without a read-modify-write.
+ */
 enum
 {
+	Gpfsel0		= 0x00,
 	Gpfsel1		= 0x04,
+	Gpset0		= 0x1C,
+	Gpclr0		= 0x28,
+	Gplev0		= 0x34,
 	Gppud		= 0x94,
 	Gppudclk0	= 0x98,
+};
+
+/* GPIO pin functions, as encoded in GPFSEL */
+enum
+{
+	Gpioin		= 0,
+	Gpioout		= 1,
+	Gpioalt0	= 4,
+	Gpioalt1	= 5,
+	Gpioalt2	= 6,
+	Gpioalt3	= 7,
+	Gpioalt4	= 3,
+	Gpioalt5	= 2,
+};
+
+/* GPPUD pull states */
+enum
+{
+	Pullnone	= 0,
+	Pulldown	= 1,
+	Pullup		= 2,
 };

@@ -252,6 +252,64 @@ probeclock(void)
 	}
 }
 
+/*
+ * Exercise the primitives os/port's taslock.c is written against.
+ *
+ * These are the leaves everything else stands on: if _tas does not
+ * actually implement test-and-set, every lock in the kernel silently
+ * fails to exclude, and the symptom is corruption somewhere unrelated
+ * rather than a lock that visibly misbehaves.  Cheap to check here,
+ * enormously expensive to debug later.
+ */
+static void
+probearch(void)
+{
+	ulong lk, old, s;
+	int ok;
+
+	ok = 1;
+
+	/* test-and-set: first take succeeds (returns old value 0) */
+	lk = 0;
+	if(_tas(&lk) != 0 || lk != 1)
+		ok = 0;
+
+	/* second take must fail and must report the old value as held */
+	if(_tas(&lk) == 0)
+		ok = 0;
+
+	/* release and re-take */
+	lk = 0;
+	coherence();
+	if(_tas(&lk) != 0)
+		ok = 0;
+
+	uartputs("arch: _tas ");
+	uartputs(ok ? "OK" : "BROKEN");
+
+	/*
+	 * spl must report the PREVIOUS level, not the new one.  Code that
+	 * masks and then unconditionally unmasks would silently enable
+	 * interrupts inside a caller that had deliberately masked them.
+	 */
+	ok = 1;
+	s = splhi();
+	if(islo())
+		ok = 0;			/* still low after splhi */
+	old = spllo();
+	if(!islo())
+		ok = 0;			/* still high after spllo */
+	if((old & (1<<7)) == 0)
+		ok = 0;			/* spllo should have reported I set */
+	splx(s);
+	if(islo())
+		ok = 0;			/* splx did not restore the masked state */
+
+	uartputs(", spl ");
+	uartputs(ok ? "OK" : "BROKEN");
+	uartputs(" (level restored, not assumed)\n");
+}
+
 static void
 probefb(void)
 {
@@ -316,6 +374,7 @@ kmain(void)
 	startmmu();
 	checkunaligned();
 	probegpio();
+	probearch();
 	probeclock();
 	probefb();
 

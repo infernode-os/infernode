@@ -128,11 +128,14 @@ build_kernel() {
     local outimg="$1" mainsrc="$2"
     local objs=() f o
 
+    # NB: object names keep the source extension. A port with both
+    # arch.S and arch.c would otherwise produce arch.o twice, and the
+    # duplicate would be linked twice rather than diagnosed.
     for f in "$SRC"/*.S "$SRC"/*.c; do
         [[ -e "$f" ]] || continue
         # main.c may be substituted for a fault-injecting variant
         [[ "$(basename "$f")" == "main.c" && -n "$mainsrc" ]] && continue
-        o="$BUILD/$(basename "${f%.*}").o"
+        o="$BUILD/$(basename "$f").o"
         "$CC" "${CFLAGS[@]}" -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
     done
@@ -244,6 +247,12 @@ check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access le
 # be wrong, and a wrong one never presents as a clock bug -- it presents
 # as flaky networking or early timeouts. Cross-checking against the
 # fixed-rate 1MHz system timer catches it at boot.
+# The primitives os/port/taslock.c is written directly against. A _tas
+# that does not exclude does not misbehave visibly -- every lock in the
+# kernel just stops excluding, and the damage appears somewhere else.
+check "arch: _tas OK"                 "_tas implements test-and-set"
+check "spl OK"                        "spl returns the previous level rather than assuming"
+
 check "clk:  cntfrq [0-9]"            "generic timer reports a frequency"
 check "clocks AGREE"                  "generic timer agrees with the 1MHz system timer"
 check "clk:  irq firing"              "timer interrupts are delivered"

@@ -25,6 +25,28 @@ int	fbinit(Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 
+/* arch.S -- AArch64 primitives that cannot be written in C */
+ulong	_tas(ulong*);
+void	coherence(void);
+void	cacheiflush(void*, ulong);
+
+/* arch.c -- interrupt priority level */
+ulong	splhi(void);
+ulong	spllo(void);
+void	splx(ulong);
+void	splxpc(ulong);
+int	islo(void);
+
+/*
+ * os/port calls getcallerpc(&firstarg) to record which caller took a
+ * lock.  Upstream implements it by walking back from the argument's
+ * address, which assumes a stack-based calling convention.  AAPCS64
+ * passes arguments in registers, so that would read garbage; the
+ * compiler builtin is both correct and cheaper.  It is a macro rather
+ * than a function so the builtin resolves in the CALLER's frame.
+ */
+#define getcallerpc(x)	((ulong)(uintptr)__builtin_return_address(0))
+
 /* clock.c */
 void	clockinit(void);
 u64int	clockcount(void);

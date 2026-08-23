@@ -25,6 +25,19 @@ int	fbinit(Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 
+/* clock.c */
+void	clockinit(void);
+u64int	clockcount(void);
+u64int	clockfreq(void);
+u64int	clockticks(void);
+u64int	systimer(void);
+void	microdelay(u64int);
+int	clockintr(void);
+int	irqdispatch(void);
+void	intrenable(void);
+void	intrdisable(void);
+int	intrenabled(void);
+
 /* mmu.c */
 void	mmuinit(void);
 void	mmuenable(void);

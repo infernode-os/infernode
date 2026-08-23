@@ -177,6 +177,80 @@ probegpio(void)
 		uartputs(" UNEXPECTED (wanted ALT0 on both)\n");
 }
 
+/*
+ * Start the clock, and check it against an independent reference.
+ *
+ * CNTFRQ_EL0 is not derived by the hardware -- it is a value firmware
+ * writes, and firmware can write the wrong one.  If it lies, every delay
+ * and timeout in the kernel is off by that ratio, and the symptom is
+ * never "the clock is wrong": it is flaky networking, or a display that
+ * tears, or timeouts that fire early under load.  The BCM system timer
+ * runs at a fixed 1MHz set by the hardware, so timing the same interval
+ * with both and comparing catches it immediately.
+ *
+ * Then prove interrupts actually arrive, rather than assuming that
+ * arming the comparator was enough.
+ */
+static void
+probeclock(void)
+{
+	u64int c0, c1, s0, s1, genus, sysus, lo, hi;
+	u64int deadline;
+
+	clockinit();
+
+	uartputs("clk:  cntfrq ");
+	uartputd(clockfreq());
+	uartputs("Hz (");
+	uartputd(clockfreq() / 1000000);
+	uartputs("MHz)\n");
+
+	/* time 50ms by both clocks */
+	s0 = systimer();
+	c0 = clockcount();
+	microdelay(50000);
+	c1 = clockcount();
+	s1 = systimer();
+
+	sysus = s1 - s0;
+	genus = ((c1 - c0) * 1000000) / clockfreq();
+
+	uartputs("clk:  50ms measured: systimer ");
+	uartputd(sysus);
+	uartputs("us, generic ");
+	uartputd(genus);
+	uartputs("us -- ");
+
+	/* agree within 5%? */
+	lo = (sysus * 95) / 100;
+	hi = (sysus * 105) / 100;
+	if(genus >= lo && genus <= hi)
+		uartputs("clocks AGREE\n");
+	else
+		uartputs("clocks DISAGREE (cntfrq is lying)\n");
+
+	/*
+	 * Now let interrupts in.  Wait for a few ticks with a wall-clock
+	 * deadline so a dead interrupt line fails as a report rather than
+	 * as a hang.
+	 */
+	intrenable();
+	deadline = systimer() + 500000;		/* 500ms */
+	while(clockticks() < 5 && systimer() < deadline)
+		;
+
+	uartputs("clk:  irq ");
+	if(clockticks() >= 5){
+		uartputs("firing, ");
+		uartputd(clockticks());
+		uartputs(" ticks at 100Hz OK\n");
+	}else{
+		uartputs("NOT firing (");
+		uartputd(clockticks());
+		uartputs(" ticks in 500ms)\n");
+	}
+}
+
 static void
 probefb(void)
 {
@@ -238,6 +312,7 @@ kmain(void)
 	startmmu();
 	checkunaligned();
 	probegpio();
+	probeclock();
 	probefb();
 
 	uartputs("\nboot OK\n");

@@ -121,6 +121,22 @@ trap(Ureg *u)
 {
 	u32int ec;
 
+	/*
+	 * Interrupts first: they are the common case once the clock is
+	 * running, and unlike a fault they carry no syndrome worth
+	 * decoding.  An IRQ nobody claims is reported rather than
+	 * silently dropped -- a stuck interrupt line that is quietly
+	 * ignored presents as the kernel mysteriously making no progress.
+	 */
+	if(u->type == Tirq || u->type == Tirq0){
+		if(!irqdispatch()){
+			uartputs("\ntrap: unhandled IRQ");
+			dumpureg(u);
+			panic("unhandled IRQ");
+		}
+		return;
+	}
+
 	ec = (u32int)((u->esr >> ESRECSHIFT) & ESRECMASK);
 
 	/*

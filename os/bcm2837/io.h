@@ -14,6 +14,43 @@ enum
 	GPIOREGS	= PHYSIO+0x200000,
 	UART0REGS	= PHYSIO+0x201000,	/* PL011 */
 	MBOXREGS	= PHYSIO+0x00B880,	/* VideoCore mailbox */
+	SYSTIMERREGS	= PHYSIO+0x003000,	/* free-running 1MHz counter */
+
+	/*
+	 * ARM local peripherals: per-core timer and mailbox routing.
+	 * These live OUTSIDE the 0x3F000000 peripheral window, at a
+	 * separate base introduced with the BCM2836 for multicore.
+	 */
+	ARMLOCAL	= 0x40000000,
+};
+
+/* BCM system timer: a 64-bit free-running counter ticking at 1MHz */
+enum
+{
+	Stcs		= 0x00,
+	Stclo		= 0x04,
+	Stchi		= 0x08,
+};
+
+/* ARM local peripheral register offsets */
+enum
+{
+	Lcontrol	= 0x00,
+	Lprescaler	= 0x08,
+	Ltimerirq0	= 0x40,		/* core 0 timer IRQ control */
+	Lirqsource0	= 0x60,		/* core 0 IRQ source */
+};
+
+/*
+ * Core timer IRQ control bits.  We run at EL1 non-secure, so the
+ * physical timer we can reach is the non-secure one: CNTPNSIRQ.
+ */
+enum
+{
+	Cntpsirq	= 1<<0,		/* secure physical */
+	Cntpnsirq	= 1<<1,		/* non-secure physical -- ours */
+	Cntphpirq	= 1<<2,		/* hypervisor physical */
+	Cntvirq		= 1<<3,		/* virtual */
 };
 
 /*

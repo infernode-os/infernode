@@ -236,6 +236,15 @@ check "ARM memory"                    "mailbox reports ARM memory split"
 check "gpio: pin14 func=4 pin15 func=4" "GPIO pin-mux readback matches what UART set"
 check "mmu:  on, caches on"           "MMU and caches enabled"
 check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access legal)"
+# The clock. "clocks AGREE" is the load-bearing one: CNTFRQ_EL0 is a
+# value firmware writes rather than something hardware derives, so it can
+# be wrong, and a wrong one never presents as a clock bug -- it presents
+# as flaky networking or early timeouts. Cross-checking against the
+# fixed-rate 1MHz system timer catches it at boot.
+check "clk:  cntfrq [0-9]"            "generic timer reports a frequency"
+check "clocks AGREE"                  "generic timer agrees with the 1MHz system timer"
+check "clk:  irq firing"              "timer interrupts are delivered"
+
 check "fb:   [0-9]"                   "framebuffer allocated"
 check "test pattern drawn"            "framebuffer written without faulting"
 

@@ -4,22 +4,39 @@ Tracked as **INFR-404**. This is InferNode running *native* — as the
 firmware on the board, with no host OS underneath — rather than *hosted*,
 which is what everything under `emu/` does.
 
-Status: **early bring-up.** Working so far:
+Status: **the Dis VM runs.** A Limbo program, compiled to bytecode and
+embedded in the kernel image, is loaded from the in-kernel root
+filesystem and executed, and its `sys->print()` reaches the console
+through the Sys module, sysfile, chan, devcons and the UART.
 
-- boots, parks the three secondary cores, clears `.bss`
-- drops EL2 → EL1 (the firmware enters at EL2)
-- PL011 console
+Working:
+
+- boot, secondary-core parking, EL2 → EL1, PL011 console
 - AArch64 exception vectors, ESR decoding, register dump on fault
 - MMU with an identity map, caches on, correct memory attributes
-- VideoCore mailbox (property channel)
-- framebuffer, verified pixel-exact
-- GPIO
+- VideoCore mailbox; framebuffer, verified pixel-exact; GPIO
+- ARM generic timer at 100Hz, IRQ delivery, cross-checked against the
+  BCM system timer
+- `xalloc`, the pool allocator (`malloc`/`free`), Blocks
+- the scheduler: process table, context switch, blocking locks
+- namespace: channels, path composition, process groups, the root
+  device, `kopen`/`kread`/`kwrite`/`kbind`
+- a console on `/dev/cons`
+- the Dis VM: `libinterp` linked, `disinit`, and Limbo bytecode executing
 
-Not yet: timer, interrupt controller, scheduler, and the Dis VM itself.
+Known limitation: the VM stalls after its first system call. See
+"VM bring-up" below — the cause is partly identified and the
+investigation is written down rather than left to be repeated.
 
-Regression-tested by `tests/host/baremetal_pi_test.sh`, which builds the
-port, boots it under QEMU, and asserts on the result — including pulling
-the framebuffer back out via QMP and checking pixel values.
+Not done: `portclock.c`, `exportfs.c`, `devprog`/`devsrv`/`devenv`,
+`os/ip` and any networking, the JIT (excluded deliberately — it needs a
+bare-metal W^X allocator), and **any run on real hardware**. Everything
+above is QEMU.
+
+Regression-tested by `tests/host/baremetal_pi_test.sh` (44 checks), which
+builds the port, boots it under QEMU, and asserts on the result —
+including pulling the framebuffer back out via QMP and checking pixel
+values.
 
 ## Why `os/` and not `emu/<Platform>`
 

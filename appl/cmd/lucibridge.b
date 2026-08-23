@@ -359,9 +359,16 @@ writedialogue(title, text, progress, options: string): int
 	return idx;
 }
 
-# Show the first-run LLM setup wizard. Offers three peer options
-# (Remote API, Local model, Remote 9P), launches the right
-# configurator for each, and parks until the user restarts.
+# Show the first-run LLM setup wizard. Offers five peer options
+# (Remote API, Local model, Claude CLI, Codex CLI, Remote 9P), launches
+# the right configurator for each, and parks until the user restarts.
+#
+# The two CLI options are the subscription route: a host-side gateway
+# (tools/claude-gate, tools/codex-gate) serving whatever the host's own
+# `claude`/`codex` login is, with no API key anywhere. They belong here
+# rather than only in Settings — a user who already pays for one of those
+# subscriptions should not have to find their way to a config panel to
+# discover that pasting an API key isn't the only option.
 #
 # NOTE: the dialogue returns the clicked LABEL as the choice string, so
 # the labels in the option list below and the choice comparisons further
@@ -375,7 +382,7 @@ runsetupwizard()
 	writemsg("veltro", agentlib->strip(greeting));
 	writedialogue("LLM Setup",
 		"Choose how to connect to an AI model:",
-		"", "Remote API,Local model,Remote 9P");
+		"", "Remote API,Local model,Claude CLI,Codex CLI,Remote 9P");
 	log("displayed LLM setup dialogue");
 
 	pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
@@ -408,6 +415,28 @@ runsetupwizard()
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the Ollama backend, " +
 				"and set the URL (e.g. `http://localhost:11434/v1`). " +
 				"Then close InferNode and relaunch it.");
+		} else if(choice == "Claude CLI" || choice == "Codex CLI") {
+			# CLI gateways: no key, the host CLI's own subscription
+			# login. emu never starts host daemons, so the wizard can
+			# only open Settings and say what has to be running on the
+			# host side. `llmctl set <cli>` matches the gate names.
+			cli := "claude";
+			gate := "claude-gate";
+			if(choice == "Codex CLI") {
+				cli = "codex";
+				gate = "codex-gate";
+			}
+			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
+			sys->sleep(500);
+			writefile(pctl, "center id=settings");
+			writemsg("veltro",
+				"Settings is open on **LLM Service**. Keep Mode on Local, choose the " +
+				"**" + choice + "** backend, and press Apply — no API key is needed, " +
+				"it uses your host `" + cli + "` login.\n\n" +
+				"On the host: run `" + cli + " login` once if you haven't, and make sure " +
+				"the gateway is running (`tools/" + gate + "/serve-" + gate + ".sh`, or " +
+				"`llmctl set " + cli + "` where systemd runs it). " +
+				"Then close InferNode and relaunch it.");
 		} else if(choice == "Remote 9P") {
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
 			sys->sleep(500);
@@ -423,8 +452,9 @@ runsetupwizard()
 			writemsg("user", choice);
 			writemsg("veltro",
 				"I'm not connected to an LLM yet, so I can't reply. Choose an option above " +
-				"(Remote API / Local model / Remote 9P) to set one up — or, if you already " +
-				"configured it in Settings, close InferNode and relaunch so the change takes effect.");
+				"(Remote API / Local model / Claude CLI / Codex CLI / Remote 9P) to set one " +
+				"up — or, if you already configured it in Settings, close InferNode and " +
+				"relaunch so the change takes effect.");
 			continue;	# keep listening; don't park
 		}
 		# A configurator was opened — park until the user quits and relaunches.
@@ -1892,9 +1922,10 @@ init(nil: ref Draw->Context, args: list of string)
 					llmconfigured = 1;
 			}
 		}
-	} else if(backend == "openai" || backend == "cli") {
-		# Ollama/OpenAI, or the claude-gate CLI gateway (backend=cli,
-		# OpenAI-shaped on localhost): configured if a URL is set
+	} else if(backend == "openai" || backend == "cli" || backend == "codex") {
+		# Ollama/OpenAI, or a CLI gateway (claude-gate backend=cli,
+		# codex-gate backend=codex — both OpenAI-shaped on localhost):
+		# configured if a URL is set
 		ourl := readndbfield("/lib/ndb/llm", "url");
 		if(ourl != nil && ourl != "")
 			llmconfigured = 1;
@@ -1933,6 +1964,12 @@ init(nil: ref Draw->Context, args: list of string)
 					"The Claude CLI gateway is configured, but I can't reach it. " +
 					"Start it on the host (tools/claude-gate/serve-claude-gate.sh, " +
 					"or `llmctl set claude` where systemd runs it), " +
+					"then close InferNode and relaunch it.");
+			else if(backend == "codex")
+				writemsg("veltro",
+					"The Codex CLI gateway is configured, but I can't reach it. " +
+					"Start it on the host (tools/codex-gate/serve-codex-gate.sh, " +
+					"or `llmctl set codex` where systemd runs it), " +
 					"then close InferNode and relaunch it.");
 			else
 				writemsg("veltro",

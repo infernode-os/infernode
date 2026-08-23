@@ -37,12 +37,13 @@ model=dummy:latest
 dial=
 EOF
 
-# Fake systemctl. Reads/writes WORK/state/{ollama,sglang,claude} files as
-# the live unit state. State word matches `systemctl is-active` output.
+# Fake systemctl. Reads/writes WORK/state/{ollama,sglang,claude,codex}
+# files as the live unit state. State word matches `systemctl is-active`.
 mkdir -p "$WORK/state"
 echo active   > "$WORK/state/ollama"
 echo inactive > "$WORK/state/sglang"
 echo inactive > "$WORK/state/claude"
+echo inactive > "$WORK/state/codex"
 
 cat > "$WORK/bin/systemctl" <<EOF
 #!/bin/sh
@@ -58,6 +59,7 @@ case "\$unit" in
     ollama.service)         key=ollama ;;
     serving-sglang.service) key=sglang ;;
     claude-gate.service)    key=claude ;;
+    codex-gate.service)     key=codex ;;
     *) echo "fake-systemctl: unknown unit \$unit" >&2; exit 1 ;;
 esac
 state_file="$WORK/state/\$key"
@@ -89,6 +91,8 @@ for arg in "\$@"; do
             [ "\$(cat "$WORK/state/sglang")" = "active" ] && exit 0 || exit 22 ;;
         *11435/v1/models)
             [ "\$(cat "$WORK/state/claude")" = "active" ] && exit 0 || exit 22 ;;
+        *11436/v1/models)
+            [ "\$(cat "$WORK/state/codex")" = "active" ] && exit 0 || exit 22 ;;
     esac
 done
 exit 22
@@ -231,6 +235,50 @@ out="$("$LLMCTL" status)"
 echo "$out" | grep -q "^backend  claude" || fail "status: expected backend=claude"
 echo "$out" | grep -q "^claude   active" || fail "status: claude unit line missing"
 pass "status reports claude backend"
+
+# 17. `set codex` stops the other backends, starts codex-gate, writes
+#     url + backend=codex
+echo active   > "$WORK/state/ollama"
+echo inactive > "$WORK/state/sglang"
+echo inactive > "$WORK/state/claude"
+echo inactive > "$WORK/state/codex"
+"$LLMCTL" set codex >/dev/null
+[ "$(cat "$WORK/state/ollama")" = "inactive" ] || fail "set codex: ollama should be stopped"
+[ "$(cat "$WORK/state/sglang")" = "inactive" ] || fail "set codex: sglang should be stopped"
+[ "$(cat "$WORK/state/claude")" = "inactive" ] || fail "set codex: claude-gate should be stopped"
+[ "$(cat "$WORK/state/codex")" = "active" ]    || fail "set codex: codex-gate should be started"
+new_url="$(sed -n 's/^url=//p' "$WORK/home/.infernode/lib/ndb/llm")"
+[ "$new_url" = "http://127.0.0.1:11436/v1" ] || fail "set codex: ndb url not updated (got '$new_url')"
+new_backend="$(sed -n 's/^backend=//p' "$WORK/home/.infernode/lib/ndb/llm")"
+[ "$new_backend" = "codex" ] || fail "set codex: ndb backend should be codex (got '$new_backend')"
+pass "set codex starts gate + writes url + backend=codex"
+
+# 18. `set claude` after codex stops the codex gate (mutual exclusion)
+"$LLMCTL" set claude >/dev/null
+[ "$(cat "$WORK/state/codex")" = "inactive" ] || fail "set claude: codex-gate should be stopped"
+[ "$(cat "$WORK/state/claude")" = "active" ]  || fail "set claude: claude-gate should be started"
+pass "set claude after codex stops codex-gate"
+
+# 19. health and status cover codex
+echo inactive > "$WORK/state/ollama"
+echo inactive > "$WORK/state/sglang"
+echo inactive > "$WORK/state/claude"
+echo active   > "$WORK/state/codex"
+out="$("$LLMCTL" health 2>&1 || true)"
+echo "$out" | grep -q "^codex   healthy" || fail "health: codex should be healthy"
+out="$("$LLMCTL" health codex 2>&1)" || fail "health codex should exit 0 when healthy"
+echo "$out" | grep -q "^codex   healthy" || fail "health codex: wrong output"
+out="$("$LLMCTL" status)"
+echo "$out" | grep -q "^backend  codex" || fail "status: expected backend=codex"
+echo "$out" | grep -q "^codex    active" || fail "status: codex unit line missing"
+echo "$out" | grep -q "^url      http://127.0.0.1:11436/v1" || fail "status: codex url missing"
+pass "health + status cover codex"
+
+# 20. `set none` stops the codex gate too
+echo active > "$WORK/state/codex"
+"$LLMCTL" set none >/dev/null 2>&1
+[ "$(cat "$WORK/state/codex")" = "inactive" ] || fail "set none: codex-gate should be stopped"
+pass "set none stops codex-gate"
 
 # Restore HOME / PATH (cleanup trap handles WORK)
 HOME="$ORIG_HOME"

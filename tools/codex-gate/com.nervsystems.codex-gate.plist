@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  codex-gate LaunchAgent — autostart the gateway at login on macOS.
+
+  Install:
+    cp tools/codex-gate/com.nervsystems.codex-gate.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nervsystems.codex-gate.plist
+  Remove:
+    launchctl bootout gui/$(id -u)/com.nervsystems.codex-gate
+
+  Adjust the checkout path in ProgramArguments if the repo lives elsewhere.
+  Auth: `codex login` must have been run for this user. Extra environment
+  goes in EnvironmentVariables below (the serve script does not read
+  ~/.config/codex-gate/env on macOS).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.nervsystems.codex-gate</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-lc</string>
+		<string>exec "$HOME/github.com/infernode-os/infernode/tools/codex-gate/serve-codex-gate.sh"</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/tmp/codex-gate.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/codex-gate.log</string>
+</dict>
+</plist>

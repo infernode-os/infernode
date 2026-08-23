@@ -1,0 +1,26 @@
+# codex-gate.service — user-scope systemd unit for the codex-gate daemon.
+#
+# Install (Linux):
+#   mkdir -p ~/.config/systemd/user
+#   cp tools/codex-gate/codex-gate.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   llmctl set codex           # starts it and points ndb at it
+#
+# Auth: `codex login` must have been run for this user — the CLI's own
+# ChatGPT credentials in ~/.codex are what the gate serves on. Extra env
+# (CODEX_GATE_MODEL, CODEX_GATE_PORT, …) goes in ~/.config/codex-gate/env.
+
+[Unit]
+Description=codex-gate — OpenAI-compatible gateway over the ChatGPT Codex CLI
+After=network-online.target
+
+[Service]
+Type=exec
+# %h expands to the user's home; adjust if the checkout lives elsewhere.
+ExecStart=%h/github.com/infernode-os/infernode/tools/codex-gate/serve-codex-gate.sh
+EnvironmentFile=-%h/.config/codex-gate/env
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -168,6 +168,31 @@ build_kernel() {
     # list and made xalloc return nil for every request. Catching it at
     # build time is the difference between a compile error and memory
     # corruption in an imported file nobody is reading closely.
+    # /osinit.dis -- the initial Dis program, compiled into the kernel.
+    #
+    # Two steps, and they are the same two os/port/mkroot performs:
+    # compile the Limbo source to bytecode, then turn the bytecode into
+    # a C array the kernel image carries. A native Inferno kernel has no
+    # storage driver at boot, so its root filesystem IS its image.
+    if [[ -n "$LIMBO" && -f "$ROOT/os/init/bcm2837init.b" ]]; then
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/osinit.dis" \
+            "$ROOT/os/init/bcm2837init.b" 2>>"$BUILD/cc.log" || return 1
+        python3 - "$BUILD/osinit.dis" "$BUILD/osinit.c" <<'DISEOF'
+import sys
+data = open(sys.argv[1], "rb").read()
+with open(sys.argv[2], "w") as f:
+    f.write("/* generated from os/init/bcm2837init.b -- do not edit */\n")
+    f.write("typedef unsigned char uchar;\n\n")
+    f.write("uchar rootosinitcode[] = {\n")
+    for i in range(0, len(data), 12):
+        f.write("\t" + ",".join("0x%02x" % b for b in data[i:i+12]) + ",\n")
+    f.write("};\n\nint rootosinitlen = %d;\n" % len(data))
+DISEOF
+        "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
+            -c "$BUILD/osinit.c" -o "$BUILD/osinit.o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$BUILD/osinit.o")
+    fi
+
     # errstr.h is GENERATED from os/port/error.h, exactly as upstream's
     # os/port/portmkfile does it: the sed rewrites each
     # "extern char Efoo[]; /* text */" declaration into
@@ -387,6 +412,8 @@ check "file: kopen/kread/kclose OK"      "os/port/sysfile opens, reads and close
 check "qio:  qopen/qwrite/qread/qbwrite OK" "os/port/qio queues bytes and Blocks with correct accounting"
 check "cons: hello from /dev/cons"       "text written to the PATH /dev/cons reaches the console"
 check "cons: /dev/cons OK"               "console device binds into the namespace and is writable"
+check "Initial Dis: ../osinit.dis.."      "disinit loads the Dis module from the in-kernel root filesystem"
+check "Dis is running on bare metal"     "Limbo bytecode executes and reaches the console through Sys"
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

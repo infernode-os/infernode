@@ -97,22 +97,6 @@ exit(int code)
 
 
 
-/*
- * portclock.c -- register a periodic callback on the clock interrupt.
- *
- * devcons.c uses it for keyboard repeat, and dis.c will use it for
- * per-Prog time accounting. This port drives its tick directly from
- * clock.c rather than through portclock.c's Timer machinery, so there
- * is no list to add to yet -- but callers must not silently believe
- * they were registered, hence the report.
- */
-Timer*
-addclock0link(void (*f)(void), int ms)
-{
-	USED(f); USED(ms);
-	print("addclock0link: portclock.c not imported; %d ms callback ignored\n", ms);
-	return nil;
-}
 
 /*
  * random.c provides the pool; this is the platform entropy source it

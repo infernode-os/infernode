@@ -36,6 +36,34 @@ enum
 	Hz		= 100,		/* scheduler ticks per second */
 };
 
+/*
+ * Periodic callbacks registered through addclock0link().
+ *
+ * os/port uses this for anything that must run on the clock rather than
+ * on a process: devcons's keyboard repeat, and -- the one that matters
+ * -- os/port/dis.c's accountant(), which charges elapsed time against
+ * the running Prog. The Dis scheduler uses that accounting to decide
+ * when a Prog's quantum is up, so with no clock callback the VM runs one
+ * program and never switches away from it.
+ *
+ * A fixed array rather than the Timer list portclock.c maintains: this
+ * port drives its tick straight from the generic timer, and four slots
+ * is more than the kernel currently registers.
+ */
+enum
+{
+	Nclock0	= 8,
+};
+
+static struct
+{
+	void	(*f)(void);
+	int	ms;		/* requested period */
+	int	when;		/* ticks until next call */
+} clock0[Nclock0];
+
+static int nclock0;
+
 static u64int cntfrq;		/* generic timer rate, from CNTFRQ_EL0 */
 static u64int tickinterval;	/* generic timer ticks between interrupts */
 static u64int ticks;		/* ticks since clockinit */
@@ -146,6 +174,7 @@ int
 clockintr(void)
 {
 	u64int ctl;
+	int i;
 
 	__asm__ volatile("mrs %0, cntp_ctl_el0" : "=r"(ctl));
 
@@ -167,6 +196,21 @@ clockintr(void)
 	 */
 	if(m != nil)
 		m->ticks++;
+
+	/*
+	 * Run the registered clock callbacks. Done here, in interrupt
+	 * context, because that is what "on the clock" means -- these are
+	 * exactly the things that must happen whether or not any process
+	 * is willing to yield.
+	 */
+	for(i = 0; i < nclock0; i++){
+		if(clock0[i].f == nil)
+			continue;
+		if(--clock0[i].when <= 0){
+			clock0[i].when = clock0[i].ms;
+			(*clock0[i].f)();
+		}
+	}
 
 	armtick();
 	return 1;
@@ -214,4 +258,31 @@ irqdispatch(void)
 		handled = 1;
 
 	return handled;
+}
+
+/*
+ * Register a periodic callback, called every ms milliseconds.
+ *
+ * The Timer* return is portclock.c's handle for cancelling one; nothing
+ * here cancels, so nil is honest rather than a fabricated handle a
+ * caller might later pass to a timer layer that does not exist.
+ */
+Timer*
+addclock0link(void (*f)(void), int ms)
+{
+	int i, s;
+
+	s = splhi();
+	if(nclock0 >= Nclock0){
+		splx(s);
+		print("addclock0link: no free slot for a %d ms callback\n", ms);
+		return nil;
+	}
+	i = nclock0++;
+	clock0[i].f = f;
+	clock0[i].ms = MS2TK(ms) > 0 ? MS2TK(ms) : 1;
+	clock0[i].when = clock0[i].ms;
+	splx(s);
+
+	return nil;
 }

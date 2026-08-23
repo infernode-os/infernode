@@ -128,6 +128,7 @@ extern void	(*screenputs)(char*, int);
 void	idlehands(void);
 void	procsave(Proc*);
 void	confinit(void);
+extern int	rootosinitlen;
 void	dumpstack(void);
 void	kprocchild(Proc*, void(*)(void*), void*);
 

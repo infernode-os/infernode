@@ -86,13 +86,23 @@ struct Lock
 /*
  * Per-thread floating point state, held in Osenv.
  *
- * The 32-bit ARM ports carry an emulated-FP register file here because
- * they had no hardware FPU. AArch64 mandates FP/SIMD, so this is just
- * the two control registers; the register file itself lives in FPU
- * below, saved per process rather than per thread.
+ * This must be big enough for everything FPsave() writes into it --
+ * os/port/dis.c does FPsave(&up->env->fpu) with exactly this struct.
+ *
+ * An earlier version defined it as just FPCR and FPSR, on the reasoning
+ * that AArch64 has real hardware FP and does not need the emulated
+ * register file the 32-bit ARM ports carry here. That was wrong in the
+ * worst available way: FPsave still wrote all 32 V registers, 520 bytes
+ * into an 8-byte field, straight through the rest of Osenv. The kernel
+ * did not fault -- it silently corrupted the process environment and
+ * then stopped, with no indication that floating point was involved.
+ *
+ * The layout is fixed by arch.S: 32 128-bit V registers, then FPCR at
+ * offset 512 and FPSR at 516. Do not reorder without changing both.
  */
 struct FPenv
 {
+	uvlong	regs[64];	/* 32 x 128-bit V registers */
 	u32int	fpcr;		/* control: rounding and trap enables */
 	u32int	fpsr;		/* status: accrued exception flags */
 };

@@ -1167,7 +1167,23 @@ probesysfile(void)
 	 * This is what init0() does at boot in a full kernel: attach the
 	 * root device, make it slash, and clone it for dot.
 	 */
-	up->env->pgrp->slash = devattach('/', "");
+	/*
+	 * Attach through the DEVICE's own attach, not devattach().
+	 *
+	 * devattach() is the generic helper in dev.c: it manufactures a
+	 * Chan bound to a device letter and nothing more. The root
+	 * device's rootattach() does something devattach cannot know
+	 * about -- it walks rootdata and copies each embedded file's
+	 * length from *sizep into size, because mkroot emits the length
+	 * as a separate symbol resolved at link time.
+	 *
+	 * Calling devattach directly produced a namespace where every
+	 * embedded file existed, could be opened, and read as ZERO bytes.
+	 * /osinit.dis then failed to load with "bad magic", which is a
+	 * true statement about an empty file and a completely misleading
+	 * description of the problem.
+	 */
+	up->env->pgrp->slash = devtab[devno('/', 0)]->attach("");
 	up->env->pgrp->dot = cclone(up->env->pgrp->slash);
 
 	/*
@@ -1334,6 +1350,34 @@ probecons(void)
 		ok ? "OK (bound #c at /dev, wrote through the namespace)" : "BROKEN");
 }
 
+/*
+ * Start the Dis virtual machine.
+ *
+ * disinit() is the handover: it initialises the opcode table, registers
+ * the built-in modules, loads /osinit.dis out of the in-kernel root
+ * filesystem, schedules it, opens fd 0/1/2 on #c/cons, and enters
+ * vmachine() -- which does not return. From that point the machine is
+ * running Limbo, and the C kernel exists only to serve it.
+ *
+ * This must run as a kernel process rather than inline: vmachine() is
+ * the VM's scheduler loop and owns the thread it runs on.
+ */
+static void
+startdis(void)
+{
+	print("\ndis:  handing control to the Dis VM\n");
+	print("dis:  /osinit.dis is %d bytes, compiled into the image\n",
+		rootosinitlen);
+
+		/*
+	 * KPDUPPG|KPDUPFDG|KPDUPENVG: the Dis process inherits the
+	 * namespace, file descriptors and environment rather than
+	 * starting with none. disinit() opens #c/cons three times for
+	 * fd 0/1/2, which needs a mount table to resolve it against.
+	 */
+	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
+}
+
 static void
 probefb(void)
 {
@@ -1384,9 +1428,47 @@ probefb(void)
  * the process starts with interrupts enabled, which it does not inherit
  * from the scheduler's context.
  */
+/*
+ * Where a new kernel process begins executing.
+ *
+ * The scheduler enters a process by gotolabel-ing into its sched Label,
+ * so a brand new process needs one that points somewhere sensible. That
+ * is here: drop to spllo (a new process starts with interrupts enabled,
+ * which it does not inherit from the scheduler), call the function it
+ * was created for, and pexit when that returns.
+ *
+ * The waserror is not decoration. If the process body calls error()
+ * without a matching handler, the unwind runs off the bottom of its
+ * error stack; catching it here turns that into a message instead of a
+ * jump through an uninitialised Label.
+ */
+static void
+linkproc(void)
+{
+	spllo();
+	if(waserror())
+		print("linkproc: error() underflow: %s\n", up->env->errstr);
+	else
+		(*up->kpfun)(up->arg);
+	pexit("end proc", 1);
+}
+
 void
 kprocchild(Proc *p, void (*func)(void*), void *arg)
 {
+	p->sched.pc = (uintptr)linkproc;
+
+	/*
+	 * KSTACK-16, not KSTACK-8.
+	 *
+	 * Every 32-bit ARM port upstream writes -8, which is correct
+	 * there. AArch64 requires the stack pointer to be 16-byte aligned
+	 * whenever it is used to access memory, and an SP alignment fault
+	 * is a synchronous exception on the very first push -- before the
+	 * process has run a single useful instruction.
+	 */
+	p->sched.sp = (uintptr)p->kstack + KSTACK - 16;
+
 	p->kpfun = func;
 	p->arg = arg;
 }
@@ -1508,6 +1590,23 @@ kmain(void)
 	probefb();
 
 	uartputstr("\nboot OK\n");
+
+	startdis();
+
+	/*
+	 * Enter the scheduler. schedinit() never returns: it setlabels
+	 * into m->sched and then runs whatever is on the run queue --
+	 * which is the Dis kproc created above.
+	 *
+	 * up must be nil going in. schedinit's first act is to decide what
+	 * to do with the process it was called from, and there isn't one:
+	 * kmain is the boot path, not a process. Leaving up pointing at
+	 * the Proc probesysfile borrowed would make the scheduler try to
+	 * re-queue or reap it.
+	 */
+	up = nil;
+	intrenable();
+	schedinit();
 
 	for(;;)
 		__asm__ volatile("wfe");

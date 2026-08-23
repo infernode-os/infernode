@@ -1,0 +1,279 @@
+#!/bin/bash
+#
+# tests/host/baremetal_pi_test.sh
+#
+# Build and boot the bare-metal BCM2837 (Raspberry Pi 3B+) kernel under
+# QEMU's raspi3b machine model, and assert on what it reports over the
+# PL011 console.
+#
+# This covers the parts of early bring-up that otherwise fail as a silent
+# hang: dropping EL2->EL1, installing VBAR_EL1, and the exception
+# save/dispatch/restore round trip. It also injects a deliberate fault to
+# prove the panic path still reports rather than wedging.
+#
+# Deliberately does NOT source common.sh: that resolves $EMU and the Limbo
+# toolchain, and this test needs neither -- it exercises a cross-built
+# AArch64 kernel, not anything running inside emu.
+#
+# Skips cleanly when the cross toolchain or QEMU is absent, so it is safe
+# to run anywhere.
+#
+# Run from project root: ./tests/host/baremetal_pi_test.sh [-v]
+#
+
+ROOT="${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+SRC="$ROOT/os/bcm2837"
+VERBOSE=0
+
+while getopts "v" opt; do
+    case $opt in
+        v) VERBOSE=1 ;;
+        *) echo "Usage: $0 [-v]"; exit 1 ;;
+    esac
+done
+
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
+    BOLD='\033[1m'; NC='\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; BOLD=''; NC=''
+fi
+
+PASSED=0; FAILED=0; SKIPPED=0
+
+pass()  { echo -e "${GREEN}PASS${NC}: $1"; PASSED=$((PASSED+1)); return 0; }
+fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
+skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
+info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
+
+echo -e "${BOLD}Bare-metal BCM2837 (Raspberry Pi 3B+) boot tests${NC}"
+echo ""
+
+#
+# Toolchain discovery.
+#
+# There is no committed mkfile for this tree yet, on purpose: the only
+# ELF-capable linker on a typical macOS dev box is the ld.lld bundled
+# inside the rustup toolchain, and hardcoding that path into build rules
+# would be wrong. So search the plausible locations instead of assuming.
+#
+find_lld() {
+    local c
+    for c in \
+        "$(command -v ld.lld 2>/dev/null)" \
+        "$HOME"/.rustup/toolchains/*/lib/rustlib/*/bin/gcc-ld/ld.lld \
+        /opt/homebrew/opt/lld/bin/ld.lld \
+        /usr/local/opt/lld/bin/ld.lld
+    do
+        [[ -n "$c" && -x "$c" ]] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+find_objcopy() {
+    local c
+    for c in \
+        "$(command -v llvm-objcopy 2>/dev/null)" \
+        "$(command -v aarch64-elf-objcopy 2>/dev/null)" \
+        /opt/homebrew/opt/llvm/bin/llvm-objcopy \
+        /usr/local/opt/llvm/bin/llvm-objcopy
+    do
+        [[ -n "$c" && -x "$c" ]] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
+
+QEMU="$(command -v qemu-system-aarch64 2>/dev/null)"
+CC="$(command -v clang 2>/dev/null)"
+LLD="$(find_lld)"
+OBJCOPY="$(find_objcopy)"
+
+if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" ]]; then
+    skip "AArch64 cross toolchain not available (need clang, ld.lld, llvm-objcopy)"
+    echo ""
+    echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
+    exit 0
+fi
+if [[ -z "$QEMU" ]]; then
+    skip "qemu-system-aarch64 not installed"
+    echo ""
+    echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
+    exit 0
+fi
+if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi3b'; then
+    skip "this QEMU build has no raspi3b machine model"
+    echo ""
+    echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
+    exit 0
+fi
+
+info "cc:      $CC"
+info "ld:      $LLD"
+info "objcopy: $OBJCOPY"
+info "qemu:    $QEMU"
+
+BUILD="$(mktemp -d)"
+trap 'rm -rf "$BUILD"' EXIT
+
+CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
+        -O2 -Wall -Wextra -I"$SRC")
+
+# Build every source in the port, so a new file is picked up automatically
+# rather than silently going untested.
+build_kernel() {
+    local outimg="$1" mainsrc="$2"
+    local objs=() f o
+
+    for f in "$SRC"/*.S "$SRC"/*.c; do
+        [[ -e "$f" ]] || continue
+        # main.c may be substituted for a fault-injecting variant
+        [[ "$(basename "$f")" == "main.c" && -n "$mainsrc" ]] && continue
+        o="$BUILD/$(basename "${f%.*}").o"
+        "$CC" "${CFLAGS[@]}" -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
+    if [[ -n "$mainsrc" ]]; then
+        o="$BUILD/main-variant.o"
+        "$CC" "${CFLAGS[@]}" -c "$mainsrc" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    fi
+
+    "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" -o "$BUILD/k.elf" 2>>"$BUILD/cc.log" || return 1
+    "$OBJCOPY" -O binary "$BUILD/k.elf" "$outimg" 2>>"$BUILD/cc.log" || return 1
+    return 0
+}
+
+# Boot an image and capture the serial output. The kernel never exits, so
+# it must be killed; partial output is what we want.
+boot_kernel() {
+    local img="$1" secs="${2:-10}"
+    python3 - "$QEMU" "$img" "$secs" <<'PYEOF'
+import subprocess, sys
+qemu, img, secs = sys.argv[1], sys.argv[2], int(sys.argv[3])
+p = subprocess.Popen([qemu, "-M", "raspi3b", "-kernel", img,
+                      "-display", "none", "-serial", "stdio"],
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+try:
+    out, _ = p.communicate(timeout=secs)
+except subprocess.TimeoutExpired:
+    p.kill()
+    out, _ = p.communicate()
+sys.stdout.write(out.decode(errors="replace"))
+PYEOF
+}
+
+#
+# 1. It builds.
+#
+if build_kernel "$BUILD/kernel8.img" ""; then
+    pass "kernel cross-builds for aarch64-elf"
+else
+    fail "kernel failed to build"
+    [[ "$VERBOSE" -eq 1 ]] && cat "$BUILD/cc.log"
+    echo ""
+    echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
+    exit 1
+fi
+
+#
+# 2. The vector table is where VBAR_EL1 requires (2048-byte aligned).
+#    Getting this wrong produces exceptions that vanish into nothing.
+#
+NM="$(command -v llvm-nm 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-nm)"
+if [[ -x "$NM" ]]; then
+    vaddr="$("$NM" "$BUILD/k.elf" 2>/dev/null | awk '$3=="vectors"{print $1}')"
+    if [[ -n "$vaddr" ]]; then
+        if (( 0x$vaddr % 2048 == 0 )); then
+            pass "vector table is 2048-byte aligned (0x$vaddr)"
+        else
+            fail "vector table misaligned at 0x$vaddr -- VBAR_EL1 requires 2048"
+        fi
+    else
+        skip "could not locate 'vectors' symbol"
+    fi
+else
+    skip "llvm-nm not available for alignment check"
+fi
+
+#
+# 3. It boots and reports.
+#
+OUT="$(boot_kernel "$BUILD/kernel8.img" 10)"
+info "--- serial output ---"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+check() {
+    local pattern="$1" what="$2"
+    if grep -q "$pattern" <<<"$OUT"; then
+        pass "$what"
+    else
+        fail "$what (no match for: $pattern)"
+    fi
+}
+
+check "InferNode bare-metal"          "kernel boots and reaches kmain"
+check "exception level: EL1"          "drops from EL2 to EL1"
+check "midr_el1:        0x00000000410fd0" \
+                                      "reports a Cortex-A53 MIDR (BCM2837)"
+check "vectors:         installed"    "installs VBAR_EL1"
+check "save/restore OK"               "exception save/dispatch/restore round trips"
+check "boot OK"                       "completes boot without faulting"
+
+#
+# 4. The panic path reports instead of hanging.
+#
+#    Regression guard for the failure mode this whole layer exists to
+#    prevent: a fault that produces silence. Build a variant whose kmain
+#    executes an undefined instruction and confirm it decodes and panics.
+#
+VARIANT="$BUILD/main-fault.c"
+cat > "$VARIANT" <<'EOF'
+#include "dat.h"
+#include "io.h"
+#include "ureg.h"
+#include "fns.h"
+
+void
+kmain(void)
+{
+	uartinit();
+	trapinit();
+	uartputs("\nfault-injection variant\n");
+	__asm__ volatile(".word 0x00000000");
+	uartputs("BUG: execution continued past an undefined instruction\n");
+	for(;;)
+		__asm__ volatile("wfe");
+}
+EOF
+
+if build_kernel "$BUILD/fault.img" "$VARIANT"; then
+    FOUT="$(boot_kernel "$BUILD/fault.img" 10)"
+    info "--- fault variant output ---"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$FOUT"
+
+    if grep -q "unhandled exception" <<<"$FOUT"; then
+        pass "undefined instruction is caught and reported"
+    else
+        fail "undefined instruction did not produce a fault report"
+    fi
+    if grep -q "panic:" <<<"$FOUT"; then
+        pass "fatal fault panics rather than hanging silently"
+    else
+        fail "fatal fault did not panic"
+    fi
+    if grep -q "BUG: execution continued" <<<"$FOUT"; then
+        fail "execution continued past an undefined instruction"
+    else
+        pass "execution did not run past the faulting instruction"
+    fi
+else
+    fail "fault-injection variant failed to build"
+fi
+
+echo ""
+echo -e "${BOLD}Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED${NC}"
+[[ "$FAILED" -eq 0 ]] || exit 1
+exit 0

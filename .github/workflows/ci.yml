@@ -180,6 +180,14 @@ jobs:
         ROOT=. bash tests/host/namespace_manifest_invariants_test.sh
         ROOT=. bash tests/host/veltro_namespace_failclosed_test.sh
 
+    - name: Run escape-room evidence checks
+      run: |
+        # Gates audit-bundle verification, canary scanning, and the
+        # evidence-privacy invariants (INFR-406): raw evidence is 0700/0600
+        # and the derived public artifact carries no canary value.
+        chmod +x tests/host/grind_escape_test.sh
+        ROOT=. bash tests/host/grind_escape_test.sh
+
     - name: Run llmsrv session capability checks
       run: |
         chmod +x tests/host/llmsrv_session_capability_test.sh

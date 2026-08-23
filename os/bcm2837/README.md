@@ -263,6 +263,43 @@ diffing against it.
 A real `aarch64-elf-gcc` would restore the option, and is worth
 revisiting if one is ever installed.
 
+## VM bring-up: where it stops, and what was ruled out
+
+The Dis VM loads `/osinit.dis` out of the in-kernel root filesystem,
+executes it, and its first `sys->print()` reaches the console. It then
+stalls. This is what the emulator was able to establish about why,
+recorded so the next session does not repeat it.
+
+**The scheduler is not the problem.** Three kernel processes were
+observed being entered through `linkproc` — devcons's `consdbg`, and two
+test processes. `sched()`, `runproc()` and `gotolabel()` all work.
+
+**Timed sleeps are broken, and the cause is known.** Nothing calls
+`checkalarms()`. `tsleep()` arms an alarm and blocks; `checkalarms()` is
+what wakes it, and every upstream clock handler calls it from the clock
+interrupt. Adding it *does* fix the handoff — a two-process
+sleep/wakeup test that hung without it completed with it.
+
+**But adding it corrupts the heap.** With `checkalarms()` in the clock
+interrupt, the main pool fails its magic check, and the bytes found in
+the damaged `Bhdr` are the string `"inferno"` — so something on the
+wakeup path writes past an allocation. Calling it from interrupt context
+is the obvious suspect: it reaches `wakeup()` → `ready()`, which takes
+the run queue lock, and this port has no `portclock.c` to provide the
+Timer discipline upstream's handlers run under. Importing `portclock.c`
+is likely the actual fix rather than calling `checkalarms()` directly.
+
+**The interpreter stall is separate and not yet explained.** With the VM
+running, `xec` is entered exactly once and does not return, and `R.PC`
+stays frozen — so it is stuck inside a single `optab[]` handler rather
+than looping over instructions. Ruled out: optimisation level (`-O0`
+behaves identically), a zero `quanta` (it is `PQUANTA`), and the JIT
+(excluded; `cflag` is 0, so `xec` is the interpreter's).
+
+A program whose first statement is a `print` produces that output; one
+that does arithmetic first produces none. That is the sharpest clue
+available and the place to start.
+
 ## Next
 
 1. Timer and interrupt controller, then a scheduler.

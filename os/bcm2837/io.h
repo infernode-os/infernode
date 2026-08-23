@@ -13,6 +13,61 @@ enum
 
 	GPIOREGS	= PHYSIO+0x200000,
 	UART0REGS	= PHYSIO+0x201000,	/* PL011 */
+	MBOXREGS	= PHYSIO+0x00B880,	/* VideoCore mailbox */
+};
+
+/*
+ * The VideoCore sees memory through its own bus addresses.  ORing in
+ * 0xC0000000 selects the alias that bypasses the VC L2 cache, which is
+ * what we want for buffers the ARM has written: it means the GPU is not
+ * reading through a cache the ARM cannot flush.
+ */
+#define BUSADDR(a)	(((uintptr)(a) & ~0xC0000000UL) | 0xC0000000UL)
+
+/* mailbox register offsets */
+enum
+{
+	Mboxread	= 0x00,
+	Mboxstatus	= 0x18,
+	Mboxwrite	= 0x20,
+
+	Mboxfull	= 0x80000000,
+	Mboxempty	= 0x40000000,
+
+	Mboxchanprop	= 8,	/* ARM -> VC property tags */
+};
+
+/* property interface response codes */
+enum
+{
+	Propreq		= 0x00000000,
+	Propok		= 0x80000000,
+	Properr		= 0x80000001,
+};
+
+/* property tags we use */
+enum
+{
+	Taggetfwrev	= 0x00000001,
+	Taggetmodel	= 0x00010001,
+	Taggetrev	= 0x00010002,
+	Taggetmac	= 0x00010003,
+	Taggetserial	= 0x00010004,
+	Taggetarmmem	= 0x00010005,
+	Taggetvcmem	= 0x00010006,
+
+	Tagfballoc	= 0x00040001,
+	Tagfbgetdim	= 0x00040003,	/* physical (display) w/h */
+	Tagfbgetpitch	= 0x00040008,
+	Tagfbsetdim	= 0x00048003,	/* physical w/h */
+	Tagfbsetvdim	= 0x00048004,	/* virtual w/h */
+	Tagfbsetdepth	= 0x00048005,
+	Tagfbsetorder	= 0x00048006,
+	Tagfbsetvoff	= 0x00048009,
+
+	Taggettouchbuf	= 0x0004000F,
+
+	Tagend		= 0x00000000,
 };
 
 /* PL011 UART register offsets */

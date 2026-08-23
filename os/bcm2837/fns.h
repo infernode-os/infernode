@@ -9,6 +9,15 @@ void	uartputs(char*);
 void	uartputx(u64int);
 void	uartputd(u64int);
 
+/* mailbox.c */
+int	mboxprop(u32int, u32int*, int, int);
+int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);
+
+/* fb.c */
+int	fbinit(Fbinfo*);
+void	fbfill(Fbinfo*, u32int);
+void	fbrect(Fbinfo*, int, int, int, int, u32int);
+
 /* trap.c */
 void	trap(Ureg*);
 void	dumpureg(Ureg*);

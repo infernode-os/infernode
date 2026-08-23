@@ -52,6 +52,73 @@ checktraps(void)
 	uartputs("trap: returned from exception, save/restore OK\n");
 }
 
+/*
+ * Ask the firmware what board this is.  Cheap, and it is the first
+ * confirmation that the mailbox round trip works at all -- worth having
+ * before anything depends on the mailbox for something harder to debug.
+ */
+static void
+probehw(void)
+{
+	u32int v[2];
+
+	uartputs("mbox: ");
+	v[0] = 0;
+	if(mboxprop(Taggetrev, v, 0, 1) == 0){
+		uartputs("board rev ");
+		uartputx(v[0]);
+	}else{
+		uartputs("board rev query FAILED");
+	}
+
+	v[0] = 0;
+	v[1] = 0;
+	if(mboxprop(Taggetarmmem, v, 0, 2) == 0){
+		uartputs(", ARM memory ");
+		uartputd(v[1] >> 20);
+		uartputs("MB at ");
+		uartputx(v[0]);
+	}
+	uartputs("\n");
+}
+
+static void
+probefb(void)
+{
+	Fbinfo fb;
+
+	if(fbinit(&fb) < 0){
+		uartputs("fb:   no framebuffer (no display attached?)\n");
+		return;
+	}
+
+	uartputs("fb:   ");
+	uartputd(fb.width);
+	uartputs("x");
+	uartputd(fb.height);
+	uartputs("x");
+	uartputd(fb.depth);
+	uartputs(" pitch=");
+	uartputd(fb.pitch);
+	uartputs(" base=");
+	uartputx(fb.base);
+	uartputs(" size=");
+	uartputd(fb.size);
+	uartputs("\n");
+
+	/*
+	 * Paint something identifiable.  On the 7in panel this is the
+	 * first thing that will ever be visible, so make it unambiguous
+	 * rather than a single colour that could be a stuck backlight.
+	 */
+	fbfill(&fb, 0x00101018);
+	fbrect(&fb, 0, 0, (int)fb.width, 8, 0x00C03020);
+	fbrect(&fb, 20, 40, 120, 80, 0x00FF0000);
+	fbrect(&fb, 160, 40, 120, 80, 0x0000FF00);
+	fbrect(&fb, 300, 40, 120, 80, 0x000000FF);
+	uartputs("fb:   test pattern drawn\n");
+}
+
 void
 kmain(void)
 {
@@ -71,6 +138,9 @@ kmain(void)
 	uartputs("  vectors:         installed at VBAR_EL1\n\n");
 
 	checktraps();
+
+	probehw();
+	probefb();
 
 	uartputs("\nboot OK\n");
 

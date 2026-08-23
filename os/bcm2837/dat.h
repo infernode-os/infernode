@@ -24,3 +24,26 @@ typedef unsigned long long	u64int;
 
 typedef unsigned long		uintptr;
 typedef long			intptr;
+
+/*
+ * Forward declaration so fns.h can prototype the trap handlers without
+ * dragging in ureg.h everywhere.
+ */
+typedef struct Ureg Ureg;
+
+/*
+ * A framebuffer as the VideoCore firmware handed it back.  pitch is the
+ * byte stride of a row and is NOT necessarily width*bytes-per-pixel --
+ * the firmware pads, and assuming otherwise skews the image.
+ */
+typedef struct Fbinfo Fbinfo;
+
+struct Fbinfo
+{
+	uintptr	base;
+	u32int	size;
+	u32int	pitch;
+	u32int	width;
+	u32int	height;
+	u32int	depth;
+};

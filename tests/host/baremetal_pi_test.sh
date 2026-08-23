@@ -222,6 +222,92 @@ check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"
 
+# The mailbox round trip. 0xa02082 is a real Pi 3B board revision, so
+# this also confirms we are talking to a plausible BCM2837 and not just
+# reading back zeroes.
+check "mbox: board rev 0x"            "mailbox property call returns a board revision"
+check "ARM memory"                    "mailbox reports ARM memory split"
+check "fb:   [0-9]"                   "framebuffer allocated"
+check "test pattern drawn"            "framebuffer written without faulting"
+
+#
+# 3a. The framebuffer actually contains what was drawn.
+#
+#     Allocating a framebuffer and writing to it can both "succeed" while
+#     nothing reaches the display -- wrong pitch, wrong base, wrong
+#     channel order. Pull the real framebuffer back out of QEMU with a
+#     QMP screendump and check pixel values against the pattern kmain
+#     draws. This is the only check here that would catch a byte-order
+#     regression, which is otherwise invisible from the console.
+#
+python3 - "$QEMU" "$BUILD/kernel8.img" "$BUILD/screen.ppm" <<'PYEOF' > "$BUILD/pixels.txt" 2>&1
+import subprocess, socket, time, json, os, sys
+qemu, img, ppm = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# A free-ish high port; QMP over TCP because the AF_UNIX path limit
+# (~104 chars) is easy to exceed under a temp dir.
+PORT = 4477
+p = subprocess.Popen([qemu, "-M", "raspi3b", "-kernel", img,
+                      "-display", "none", "-serial", "null",
+                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+try:
+    deadline = time.time() + 15
+    s = None
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1); break
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); sys.exit(0)
+    time.sleep(3)                      # let kmain reach the draw
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    f.write(json.dumps({"execute": "screendump",
+                        "arguments": {"filename": ppm}}) + "\n"); f.flush()
+    f.readline()
+    s.close()
+finally:
+    p.kill(); p.communicate()
+
+if not os.path.exists(ppm):
+    print("SKIP no screendump"); sys.exit(0)
+
+d = open(ppm, "rb").read()
+parts = d.split(b"\n", 3)
+if parts[0] != b"P6":
+    print("SKIP not a P6 ppm"); sys.exit(0)
+w, h = map(int, parts[1].split()); px = parts[3]
+
+def pix(x, y):
+    o = (y*w + x)*3
+    return tuple(px[o:o+3])
+
+# must match the pattern drawn by probefb() in main.c
+checks = [
+    ("background", (500, 400), (0x10, 0x10, 0x18)),
+    ("top bar",    (400, 3),   (0xC0, 0x30, 0x20)),
+    ("red rect",   (60, 80),   (0xFF, 0x00, 0x00)),
+    ("green rect", (200, 80),  (0x00, 0xFF, 0x00)),
+    ("blue rect",  (350, 80),  (0x00, 0x00, 0xFF)),
+]
+bad = [f"{n} got={pix(*xy)} want={want}" for n, xy, want in checks if pix(*xy) != want]
+print("DIMS %dx%d" % (w, h))
+print("OK" if not bad else "BAD " + "; ".join(bad))
+PYEOF
+
+PIXOUT="$(cat "$BUILD/pixels.txt")"
+info "$PIXOUT"
+if grep -q '^SKIP' <<<"$PIXOUT"; then
+    skip "framebuffer pixel check ($(grep '^SKIP' <<<"$PIXOUT"))"
+elif grep -q '^OK' <<<"$PIXOUT"; then
+    pass "framebuffer contents match the drawn pattern (correct pitch, base and channel order)"
+else
+    fail "framebuffer contents wrong: $(grep '^BAD' <<<"$PIXOUT")"
+fi
+
 #
 # 4. The panic path reports instead of hanging.
 #

@@ -314,3 +314,6 @@ tools/2fa-poc/
 # the e2e emu script is generated at test time)
 tools/claude-gate/.venv/
 tests/inferno/claude-gate-e2e.sh
+
+# codex-gate runtime scratch (venv is bootstrapped by serve-codex-gate.sh)
+tools/codex-gate/.venv/

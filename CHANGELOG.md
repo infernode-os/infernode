@@ -28,6 +28,15 @@ All notable changes to InferNode are documented in this file.
   see proposal files only (#512, with the raw signing surface removed in
   #488 and proposal validation in #487).
 
+### LLM backends
+
+- **codex-gate** — OpenAI models served through the ChatGPT Codex CLI on the
+  host's own subscription login, as a sibling of claude-gate: an
+  OpenAI-compatible localhost gateway on `:11436`, `backend=codex` in ndb, a
+  "Codex CLI" choice in the Settings LLM panel, and `llmctl set|health codex`.
+  The tool bridge is prompt-level (`codex exec --output-schema`) rather than
+  MCP, so the gate is stateless — see `docs/CODEX-GATE.md`.
+
 ### GUI & video
 
 - **Live video panes** — vid9p live-feed ring, Matrix video panes, colour

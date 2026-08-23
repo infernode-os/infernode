@@ -28,6 +28,9 @@ the host's own login. The daemon is stateless between conversations except
 for **held turns** — tool-calling turns kept alive while InferNode executes
 the tools (see below).
 
+Its sibling [codex-gate](CODEX-GATE.md) does the same for OpenAI models
+over the ChatGPT Codex CLI, on port 11436.
+
 ## Why a gateway (and not a new llmclient backend)
 
 The CLI/Agent SDK is an agent harness, not a Messages endpoint: it wants to

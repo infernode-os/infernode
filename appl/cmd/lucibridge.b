@@ -1892,9 +1892,10 @@ init(nil: ref Draw->Context, args: list of string)
 					llmconfigured = 1;
 			}
 		}
-	} else if(backend == "openai" || backend == "cli") {
-		# Ollama/OpenAI, or the claude-gate CLI gateway (backend=cli,
-		# OpenAI-shaped on localhost): configured if a URL is set
+	} else if(backend == "openai" || backend == "cli" || backend == "codex") {
+		# Ollama/OpenAI, or a CLI gateway (claude-gate backend=cli,
+		# codex-gate backend=codex — both OpenAI-shaped on localhost):
+		# configured if a URL is set
 		ourl := readndbfield("/lib/ndb/llm", "url");
 		if(ourl != nil && ourl != "")
 			llmconfigured = 1;
@@ -1933,6 +1934,12 @@ init(nil: ref Draw->Context, args: list of string)
 					"The Claude CLI gateway is configured, but I can't reach it. " +
 					"Start it on the host (tools/claude-gate/serve-claude-gate.sh, " +
 					"or `llmctl set claude` where systemd runs it), " +
+					"then close InferNode and relaunch it.");
+			else if(backend == "codex")
+				writemsg("veltro",
+					"The Codex CLI gateway is configured, but I can't reach it. " +
+					"Start it on the host (tools/codex-gate/serve-codex-gate.sh, " +
+					"or `llmctl set codex` where systemd runs it), " +
 					"then close InferNode and relaunch it.");
 			else
 				writemsg("veltro",

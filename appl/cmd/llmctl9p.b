@@ -158,6 +158,7 @@ allowed_verbs := array[] of {
 	"set ollama",
 	"set sglang",
 	"set claude",
+	"set codex",
 	"set none",
 };
 

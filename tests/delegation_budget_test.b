@@ -156,7 +156,8 @@ testDelegateBudgetOnlyTool(t: ref T)
 }
 
 # Negative guard: a tool NOT in the budget must still be refused, so the
-# fix doesn't become a free-for-all.
+# fix doesn't become a free-for-all. Since INFR-405 the refusal is atomic —
+# the write itself fails and no child is launched at all.
 testDenyNonBudgetTool(t: ref T)
 {
 	if(readfile(TOOLMNT + "/budget") == nil) {
@@ -165,13 +166,74 @@ testDenyNonBudgetTool(t: ref T)
 	}
 	bogus := "definitelynotarealtool";
 	id := 8132;
-	writefile(TOOLMNT + "/provision", sys->sprint("%d tools=%s", id, bogus));
+	n := writefile(TOOLMNT + "/provision", sys->sprint("%d tools=%s", id, bogus));
+	t.assert(n < 0, "provision write is refused for a non-budget tool");
 	got := childtoollist(id);
-	if(got == "") {
-		t.skip("child did not mount; cannot verify denial");
+	t.assert(!hasentry(got, bogus), "non-budget tool is refused, not delegated");
+}
+
+# INFR-405: a request naming a path this agent cannot delegate must abort
+# provisioning, not drop the path and launch the child anyway. Dropping it is
+# what let a child asking for three traversal paths launch on the default
+# grant instead — broader authority than the request ever named.
+testRefuseDeniedPath(t: ref T)
+{
+	if(readfile(TOOLMNT + "/budget") == nil) {
+		t.skip("tools9p not mounted at /tool");
 		return;
 	}
-	t.assert(!hasentry(got, bogus), "non-budget tool is refused, not delegated");
+	id := 8133;
+	# The exact shape used by the escape-room regression: non-canonical, and
+	# rejected by validatepath as a dot component.
+	n := writefile(TOOLMNT + "/provision",
+		sys->sprint("%d paths=/tmp/veltro/scratch/../../..", id));
+	t.assert(n < 0, "provision write is refused for a non-canonical path");
+	t.assertseq(childtoollist(id), "",
+		sys->sprint("no child mounted at %s.%d after a refused path", TOOLMNT, id));
+}
+
+# INFR-405: a mixed request must not be silently narrowed to its valid half.
+testRefuseMixedValidInvalid(t: ref T)
+{
+	if(readfile(TOOLMNT + "/budget") == nil) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	id := 8134;
+	n := writefile(TOOLMNT + "/provision",
+		sys->sprint("%d tools=read,definitelynotarealtool", id));
+	t.assert(n < 0, "provision write is refused when only some tools are grantable");
+	t.assertseq(childtoollist(id), "",
+		sys->sprint("no child mounted at %s.%d after a mixed request", TOOLMNT, id));
+}
+
+# INFR-405: an omitted tools= is a request for the read-only baseline, not for
+# the entire delegation budget. The escape-room child inherited twenty-six
+# tools this way — including write, exec, launch and spawn — from a parent
+# that held thirteen.
+testOmittedToolsIsBaseline(t: ref T)
+{
+	if(readfile(TOOLMNT + "/budget") == nil) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	tool := budgetonlytool();
+	if(tool == "") {
+		t.skip("no budget-only (inactive) tool present — cannot exercise the default");
+		return;
+	}
+	id := 8135;
+	if(writefile(TOOLMNT + "/provision", string id) < 0) {
+		t.fatal("cannot write /tool/provision");
+		return;
+	}
+	got := childtoollist(id);
+	t.assertnotnil(got, sys->sprint("child /tool.%d/tools readable after provision", id));
+	t.assert(!hasentry(got, tool), sys->sprint(
+		"omitted tools= must not grant budget-only tool '%s' (child tools: %s)", tool, got));
+	# The baseline itself must still be there — an unnamed child is a reader.
+	t.assert(hasentry(got, "read") || hasentry(got, "list"),
+		sys->sprint("child keeps the read-only baseline (child tools: %s)", got));
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -188,8 +250,11 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	run("DelegateBudgetOnlyTool", testDelegateBudgetOnlyTool);
-	run("DenyNonBudgetTool",      testDenyNonBudgetTool);
+	run("DelegateBudgetOnlyTool",   testDelegateBudgetOnlyTool);
+	run("DenyNonBudgetTool",        testDenyNonBudgetTool);
+	run("RefuseDeniedPath",         testRefuseDeniedPath);
+	run("RefuseMixedValidInvalid",  testRefuseMixedValidInvalid);
+	run("OmittedToolsIsBaseline",   testOmittedToolsIsBaseline);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

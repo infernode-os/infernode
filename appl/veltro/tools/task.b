@@ -457,14 +457,34 @@ docreate(args: string): string
 	# closed. Remove any stale manifest first (/tmp persists across runs).
 	manifestp := sys->sprint("/tmp/veltro/.ns/manifest.%d", newid);
 	sys->remove(manifestp);
+
+	# Provisioning is now atomic (INFR-405): tools9p validates the request on
+	# this write and refuses it outright rather than dropping the tools and
+	# paths it will not grant. A refusal must not surface as a created
+	# activity — the caller would poll an activity that has no agent behind
+	# it, or worse, assume the narrowing it asked for was applied. Tear the
+	# activity down and report the reason.
 	perr := writefile("/tool/provision", provcmd[10:]);
-	if(perr != nil)
-		sys->fprint(sys->fildes(2), "task: provision warning: %s\n", perr);
+	if(perr != nil) {
+		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+		return sys->sprint("error: task not created — %s", perr);
+	}
+
+	# The manifest is written only after the child's restrictns completes, so
+	# its absence means the namespace never came up. Reporting success here
+	# would hand the caller an activity whose confinement was never applied.
+	provisioned := 0;
 	for(w := 0; w < 120; w++) {		# bounded ~6s
 		(mok, nil) := sys->stat(manifestp);
-		if(mok >= 0)
+		if(mok >= 0) {
+			provisioned = 1;
 			break;
+		}
 		sys->sleep(50);
+	}
+	if(!provisioned) {
+		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+		return sys->sprint("error: task not created — activity %d did not finish namespace setup", newid);
 	}
 
 	return sys->sprint("created activity %d: %s", newid, label);

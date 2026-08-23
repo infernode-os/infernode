@@ -1331,21 +1331,24 @@ ShCommand: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-provisiontask(args: string)
+# Validate a provision request and build the child tools9p argument list.
+# Runs INLINE on the serveloop (INFR-405) so a rejected request fails the
+# ctl write itself: the caller learns provisioning was refused instead of
+# being told an activity was created and silently getting a default grant.
+# Every check aborts. A denied tool or path is a refused delegation, never a
+# quietly narrowed one — partial provisioning is how a child ends up with the
+# broad default authority the request never asked for.
+provisionparse(args: string): (int, string, list of string, string)
 {
 	# Parse id and optional key=value attrs
 	(nil, toks) := sys->tokenize(args, " ");
-	if(toks == nil) {
-		sys->fprint(stderr, "tools9p: provision: no activity id\n");
-		return;
-	}
+	if(toks == nil)
+		return (-1, nil, nil, "no activity id");
 	idstr := hd toks;
 	toks = tl toks;
 	(id, iderr) := parseactivityid(idstr);
-	if(iderr != nil) {
-		sys->fprint(stderr, "tools9p: provision: invalid id %s: %s\n", idstr, iderr);
-		return;
-	}
+	if(iderr != nil)
+		return (-1, nil, nil, sys->sprint("invalid id %s: %s", idstr, iderr));
 
 	# Parse optional tools= and paths= attrs
 	toolsarg := "";
@@ -1355,22 +1358,17 @@ provisiontask(args: string)
 	for(; toks != nil; toks = tl toks) {
 		tok := hd toks;
 		if(len tok > 6 && tok[0:6] == "tools=") {
-			if(seentools) {
-				sys->fprint(stderr, "tools9p: provision: duplicate tools= attr\n");
-				return;
-			}
+			if(seentools)
+				return (id, nil, nil, "duplicate tools= attr");
 			seentools = 1;
 			toolsarg = tok[6:];
 		} else if(len tok > 6 && tok[0:6] == "paths=") {
-			if(seenpaths) {
-				sys->fprint(stderr, "tools9p: provision: duplicate paths= attr\n");
-				return;
-			}
+			if(seenpaths)
+				return (id, nil, nil, "duplicate paths= attr");
 			seenpaths = 1;
 			pathsarg = tok[6:];
 		} else {
-			sys->fprint(stderr, "tools9p: provision: unknown attr %s\n", tok);
-			return;
+			return (id, nil, nil, sys->sprint("unknown attr %s", tok));
 		}
 	}
 
@@ -1378,31 +1376,31 @@ provisiontask(args: string)
 	# budget and be loaded (active OR pre-loaded inactive). The budget,
 	# not the parent's active set, is the delegation boundary — a child
 	# may receive any budget tool even when the parent holds it inactive.
-	# Child tasks may narrow, never expand beyond the budget.
+	# Child tasks may narrow, never expand beyond the budget. A tool the
+	# budget denies aborts the whole request: dropping it would launch a
+	# child whose authority nobody asked for and nobody was told about.
 	toollist: list of string;
 	if(toolsarg != "") {
 		(nil, ttoks) := sys->tokenize(toolsarg, ",");
 		for(; ttoks != nil; ttoks = tl ttoks) {
 			tname := hd ttoks;
-			if(!validtooltoken(tname)) {
-				sys->fprint(stderr, "tools9p: provision: invalid tool name %s\n", tname);
-				return;
-			}
-			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname)) {
-				sys->fprint(stderr, "tools9p: provision: denied tool %s\n", tname);
-				continue;
-			}
+			if(!validtooltoken(tname))
+				return (id, nil, nil, sys->sprint("invalid tool name %s", tname));
+			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname))
+				return (id, nil, nil, sys->sprint("denied tool %s (not in delegation budget)", tname));
 			toollist = tname :: toollist;
 		}
-	} else {
-		# Default: delegate all budget tools
-		for(b := childbudget(); b != nil; b = tl b)
-			toollist = hd b :: toollist;
 	}
 
 	# Baseline tools are read-only namespace navigation. Persistence, recursive
 	# delegation, planning state, and UI effects are explicit capabilities and
 	# must never appear merely because the subject is a child agent.
+	#
+	# An omitted tools= is a request for the baseline, NOT for the whole
+	# delegation budget (INFR-405). Defaulting to the budget let a parent
+	# holding thirteen read-mostly tools mint a child holding twenty-six,
+	# including write, exec, launch and spawn — delegation that amplifies
+	# rather than narrows. Authority beyond the baseline must be named.
 	basics := "read" :: "list" :: "find" :: "search" :: "grep" :: nil;
 	for(bl := basics; bl != nil; bl = tl bl)
 		if(findtool(hd bl) != nil && !strlist_contains(toollist, hd bl))
@@ -1414,17 +1412,13 @@ provisiontask(args: string)
 		for(; ptoks0 != nil; ptoks0 = tl ptoks0) {
 			raw := hd ptoks0;
 			if(raw == "")
-				continue;
+				return (id, nil, nil, "empty path in paths=");
 			(ppath, pperm) := splitpathperm(raw);
 			perr := validatepath(ppath);
-			if(perr != nil) {
-				sys->fprint(stderr, "tools9p: provision: denied invalid path %s: %s\n", ppath, perr);
-				continue;
-			}
-			if(!childpathallowed(ppath)) {
-				sys->fprint(stderr, "tools9p: provision: denied path %s\n", ppath);
-				continue;
-			}
+			if(perr != nil)
+				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
+			if(!childpathallowed(ppath))
+				return (id, nil, nil, sys->sprint("denied path %s (outside this agent's grants)", ppath));
 			if(pathperm(ppath) == "ro")
 				pperm = "ro";
 			pathcaps = ref BoundPath(ppath, pperm) :: pathcaps;
@@ -1464,6 +1458,13 @@ provisiontask(args: string)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;
 
+	return (id, mpt, rargs, nil);
+}
+
+# Launch the validated child. Runs spawned: mounting the child tools9p and
+# then handing control to lucibridge blocks for the life of the activity.
+provisionrun(id: int, mpt: string, rargs: list of string)
+{
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
 
 	# Load and spawn child tools9p as a module (new data segment per load).
@@ -1906,19 +1907,35 @@ Serve:
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				} else if(len data > 10 && data[0:10] == "provision ") {
 					# "provision <id> [tools=<csv>] [paths=<csv>]"
-					# Spawn child tools9p + lucibridge in the UNRESTRICTED
-					# parent namespace (serveloop runs before any restrictns).
-					spawn provisiontask(data[10:]);
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					# Validate inline so a refused delegation fails THIS write
+					# (INFR-405); only a fully-granted request is launched, and
+					# it launches in the UNRESTRICTED parent namespace
+					# (serveloop runs before any restrictns).
+					(pid0, pmpt, prargs, perr0) := provisionparse(data[10:]);
+					if(perr0 != nil) {
+						sys->fprint(stderr, "tools9p: provision: %s\n", perr0);
+						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
+					} else {
+						spawn provisionrun(pid0, pmpt, prargs);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					}
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw> or budget-add|budget-remove <tool> or provision <id>"));
 				}
 
 			Qprovision =>
 				# Agent-visible provisioning is intentionally narrow: the child task
-				# may only receive subsets of the current tool/path grants.
-				spawn provisiontask(data);
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				# may only receive subsets of the current tool/path grants. A request
+				# naming anything outside them is refused here, in the write, so the
+				# caller cannot mistake a dropped grant for a provisioned child.
+				(qid0, qmpt, qrargs, qerr) := provisionparse(data);
+				if(qerr != nil) {
+					sys->fprint(stderr, "tools9p: provision: %s\n", qerr);
+					srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
+				} else {
+					spawn provisionrun(qid0, qmpt, qrargs);
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				}
 
 			* =>
 				# Tool ctl writes - execute asynchronously to avoid blocking serveloop.

@@ -43,13 +43,17 @@ should make. So this gate bridges at the **prompt** level:
 
 1. The request's tool definitions are rendered into the prompt as an
    `<available_tools>` manifest.
-2. `codex exec --output-schema` constrains the final agent message to
+2. A fixed Codex developer instruction identifies that manifest as a virtual
+   caller-tool protocol, and `--disable shell_tool` prevents the CLI's native
+   shell from competing with it. The model must request effects from Veltro,
+   not inspect the gateway host.
+3. `codex exec --output-schema` constrains the final agent message to
    `{"content": str, "tool_calls": [{"name", "arguments"}]}`.
-3. A non-empty `tool_calls` array becomes an ordinary OpenAI `tool_calls`
+4. A non-empty `tool_calls` array becomes an ordinary OpenAI `tool_calls`
    response with `finish_reason: tool_calls`. llmsrv turns that into the
    `TOOL:` lines the agent already parses, and the agent executes the tools
    through its own policy layer exactly as with Ollama.
-4. llmsrv owns the transcript and re-sends it in full, so the results arrive
+5. llmsrv owns the transcript and re-sends it in full, so the results arrive
    as `role=tool` messages on the next request and are replayed into a fresh
    `codex exec`.
 
@@ -138,6 +142,22 @@ codex login                            # once — ChatGPT sign-in
 tools/codex-gate/serve-codex-gate.sh   # or systemd/launchd per above
 ```
 
+On Linux, Codex's read-only sandbox requires Bubblewrap and permission to
+create unprivileged user namespaces. Install the distribution's `bubblewrap`
+package and verify a native tool call before starting InferNode:
+
+```sh
+codex exec --sandbox read-only --skip-git-repo-check \
+  'Use the shell tool to run pwd, then report its output.'
+```
+
+Do not continue if this reports `Failed RTM_NEWADDR`, a user-namespace error,
+or a sandbox fallback. Ubuntu 24.04 may set
+`kernel.apparmor_restrict_unprivileged_userns=1`; use an appropriate AppArmor
+profile, or change that setting only inside a dedicated gateway VM. Do not
+disable the Codex sandbox to make the check pass. See the current
+[Codex sandbox prerequisites](https://developers.openai.com/codex/concepts/sandboxing#prerequisites).
+
 On a fresh install the first-run wizard offers **Codex CLI** directly, so a
 user on a subscription never has to reach for an API key. Otherwise set
 it from **Settings → LLM → Backend → "Codex CLI"** (writes
@@ -181,13 +201,11 @@ deliberately).
   optimization, not correctness-relevant.
 - **`temperature`/`max_tokens` are accepted and ignored** — the CLI owns
   generation limits.
-- **The CLI's own tools cannot be disabled**, only sandboxed. `codex exec`
-  runs with `--sandbox read-only` (override with `CODEX_GATE_SANDBOX`) and
-  `--cd` pointed at a private empty directory, so its shell/read tools start
-  somewhere with nothing to read and cannot write. The prompt also tells the
-  model to ask for a tool rather than work around one. This is a weaker
-  fence than claude-gate's explicit disallow list — if that matters for your
-  deployment, run the gate as a user with nothing to read.
+- **The CLI's native shell is disabled.** The gate enforces
+  `--disable shell_tool`, a fixed `developer_instructions` adapter contract,
+  `--sandbox read-only`, and `--cd` to a private empty directory. The first two
+  make caller tools functional; the latter two remain defense in depth. Run
+  the gate as a dedicated user with nothing else to read.
 - **Global CLI instructions still load.** A `~/.codex/AGENTS.md` (or config
   in `~/.codex/config.toml`) applies to gate traffic too. Set
   `CODEX_GATE_CODEX_HOME` to a directory holding only `auth.json` to isolate
@@ -195,9 +213,10 @@ deliberately).
 - **Flag compatibility.** `--json`, `--skip-git-repo-check`, `--cd`,
   `--output-last-message` and `--output-schema` are dropped automatically if
   the installed CLI rejects them (the call is retried without). `--sandbox`
-  is deliberately *not* auto-dropped: a build that doesn't understand it
-  fails loudly rather than running the CLI's tools unsandboxed. The gate
-  also parses both `codex exec --json` event dialects (the current
+  `--disable shell_tool`, `--strict-config`, and `developer_instructions` are
+  deliberately *not* auto-dropped: a build that doesn't understand the
+  adapter's security contract fails loudly. The gate also parses both
+  `codex exec --json` event dialects (the current
   `item.completed` stream and the older `msg`-wrapped one).
 
 ## Tests

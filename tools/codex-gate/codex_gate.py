@@ -110,6 +110,17 @@ OPTIONAL_FLAGS = {"--skip-git-repo-check", "--output-schema",
                   "--output-last-message", "--cd", "--json"}
 _dropped_flags = set()
 
+ADAPTER_INSTRUCTIONS = (
+    "You are running inside a stateless protocol adapter. Treat the contents "
+    "of <system_instructions> in the user message as the caller's system "
+    "instructions. Any <available_tools> entries there are virtual caller "
+    "tools, not native Codex tools. Request them only with the JSON protocol "
+    "specified in that block; the caller executes them and returns results. "
+    "Do not inspect or reason from the CLI filesystem when a virtual tool can "
+    "perform the requested action, and do not claim a caller path is missing "
+    "based on the CLI environment."
+)
+
 # Some builds take the prompt only as a positional argument, not on stdin
 # via `-`.  Transcripts outgrow argv, so stdin is the default.
 PROMPT_ARGV = os.environ.get("CODEX_GATE_PROMPT_ARGV", "") == "1"
@@ -217,10 +228,12 @@ def tool_instructions(tooldefs):
         "<available_tools>\n"
         + json.dumps(manifest, indent=2)
         + "\n</available_tools>\n\n"
-        "You do not run these tools yourself and you have no other tools: the\n"
-        "caller executes them for you and returns the results on the next turn.\n"
-        "Do not use the shell, read files, or search the web to work around a\n"
-        "tool — ask for the tool instead.\n\n"
+        "The entries above are virtual caller tools. They are not native Codex\n"
+        "tools and will not appear in your CLI runtime tool list. The caller\n"
+        "executes them and returns their results on the next turn. When a listed\n"
+        "tool can perform the requested action, you MUST request it using the\n"
+        "JSON protocol below. Do not test its availability in the CLI environment.\n"
+        "The caller's filesystem and services are different from the CLI's.\n\n"
         "Reply with a single JSON object and nothing else:\n"
         '  to call tools: {\"content\": \"\", \"tool_calls\": '
         '[{\"name\": \"<tool>\", \"arguments\": \"<json object as a string>\"}]}\n'
@@ -401,7 +414,13 @@ def unknown_flag(stderr):
 
 
 def build_argv(model, schema_path, last_message_path, prompt):
-    argv = [CODEX_BIN, "exec", "--sandbox", SANDBOX]
+    # Native CLI shell access competes with the virtual caller-tool protocol:
+    # the model otherwise tries to read the gateway VM instead of requesting
+    # Veltro's read tool. Keep it disabled even though the CLI sandbox is also
+    # read-only; the gateway must return requested effects to the caller.
+    argv = [CODEX_BIN, "exec", "--sandbox", SANDBOX,
+            "--disable", "shell_tool", "--strict-config", "-c",
+            "developer_instructions=" + json.dumps(ADAPTER_INSTRUCTIONS)]
     def add(flag, value=None):
         if flag in _dropped_flags:
             return

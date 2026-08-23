@@ -569,7 +569,24 @@ restrictns(caps: ref Capabilities): string
 	err = mkdirp(scratchdir);
 	if(err != nil)
 		return sys->sprint("create activity scratch: %s", err);
-	if(sys->bind(scratchdir, "/tmp/veltro/scratch", Sys->MREPL|Sys->MCREATE) < 0)
+
+	# Never bind the descendant backing directory over its ancestor. Walking
+	# ".." from that bind root follows the source channel back through the
+	# physical /tmp hierarchy and can recover the pre-restriction root. Serve
+	# the persistent backing directory through cowfs instead: its 9P navigator
+	# clamps ".." at the mount root and validates every relative component.
+	scratchbase := "/tmp/.veltro-ns/scratch-base";
+	err = mkdirp(scratchbase);
+	if(err != nil)
+		return sys->sprint("create activity scratch base: %s", err);
+	scratchfs := load Cowfs Cowfs->PATH;
+	if(scratchfs == nil)
+		return sys->sprint("cannot load scratch cowfs: %r");
+	(scratchfd, scratcherr) := scratchfs->start(scratchbase, scratchdir);
+	if(scratcherr != nil)
+		return sys->sprint("start activity scratch: %s", scratcherr);
+	if(sys->mount(scratchfd, nil, "/tmp/veltro/scratch",
+		Sys->MREPL|Sys->MCREATE, nil) < 0)
 		return sys->sprint("isolate activity scratch: %r");
 
 	# Task briefs contain untrusted message bodies and user instructions. They

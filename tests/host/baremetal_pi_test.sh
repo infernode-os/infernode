@@ -119,8 +119,12 @@ trap 'rm -rf "$BUILD"' EXIT
 
 # Inferno/arm64/include supplies u.h -- the same per-objtype type header
 # upstream's native ports use, and the one os/port will expect.
+# Inferno/arm64/include supplies u.h and lib9.h -- the per-objtype type
+# headers upstream's native ports use, and the ones os/port will expect.
+# include/ supplies kern.h, the kernel libc declarations libkern implements.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/Inferno/arm64/include")
+        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/Inferno/arm64/include"
+        -I"$ROOT/include" -I"$ROOT/libkern")
 
 # Build every source in the port, so a new file is picked up automatically
 # rather than silently going untested.
@@ -145,6 +149,17 @@ build_kernel() {
         "$CC" "${CFLAGS[@]}" -c "$mainsrc" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
     fi
+
+    # libkern: the freestanding libc the kernel must supply itself, since
+    # there is no host to borrow one from. Warnings are not escalated here
+    # -- these are imported upstream sources being ported, and the port is
+    # tracked deliberately rather than by drowning the build in noise.
+    for f in "$ROOT"/libkern/*.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/libkern-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
 
     "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" -o "$BUILD/k.elf" 2>>"$BUILD/cc.log" || return 1
     "$OBJCOPY" -O binary "$BUILD/k.elf" "$outimg" 2>>"$BUILD/cc.log" || return 1
@@ -250,6 +265,12 @@ check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access le
 # The primitives os/port/taslock.c is written directly against. A _tas
 # that does not exclude does not misbehave visibly -- every lock in the
 # kernel just stops excluding, and the damage appears somewhere else.
+# libkern -- the freestanding libc, imported from upstream. The snprint
+# check is the significant one: dofmt is the engine behind print(), which
+# os/port uses everywhere, and %lud/%lux must consume 64 bits under LP64.
+check "libk: mem/str OK"              "libkern mem/str primitives work"
+check "snprint OK"                    "Plan 9 fmt engine formats correctly under LP64"
+
 check "arch: _tas OK"                 "_tas implements test-and-set"
 check "spl OK"                        "spl returns the previous level rather than assuming"
 

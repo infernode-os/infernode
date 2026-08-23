@@ -185,6 +185,47 @@ firmware rather than hardcoded because the split is configurable in
 the load address. Real hardware enters directly. Boot code must not
 assume its entry PC.
 
+## What has been imported from upstream so far
+
+Upstream Inferno is MIT and its copyright holders — Lucent, Vita Nuova,
+the Plan 9 Foundation — are already the ones named in this tree's
+`LICENSE`, so the import is clean. Upstream's root `NOTICE` states it
+plainly, and there are no GPL/BSD/Apache markers anywhere in `os/` or
+`libkern`.
+
+| Path | From | Notes |
+|---|---|---|
+| `Inferno/arm64/include/u.h` | authored, from `Inferno/arm/include/u.h` | LP64, `<stdarg.h>`, named union members |
+| `Inferno/arm64/include/lib9.h` | authored, from the arm original | thin: `u.h` + `kern.h` |
+| `include/kern.h` | upstream, verbatim | 601 lines, no host includes, was absent here |
+| `os/port/lib.h` | upstream, verbatim | kernel libc declarations |
+| `libkern/` | upstream, 58 files | see below |
+
+**`libkern` was far smaller than expected.** 40 of its files already
+exist in this tree's `lib9` and diff against upstream at 0–1 lines — the
+whole `fmt`, `convM2S`/`convS2M`, `rune` and `utf` layer was already
+64-bit clean, and includes only `lib9.h`/`fcall.h` rather than any host
+header. So the import is really just the freestanding libc primitives a
+kernel must supply itself because there is no host to borrow them from.
+
+Not imported, deliberately:
+
+- `vlrt-*`, `vlop-*`, `div-*` — 64-bit arithmetic emulation for 32-bit
+  machines. AArch64 does this in hardware.
+- every other architecture's `frexp-`, `getfcr-`, `memmove-`, `nan-`,
+  `strchr-` variant.
+- `charstod.c`, `pow10.c` — the only files needing hardware FP. The
+  kernel is built `-mgeneral-regs-only` so no interrupt path can touch
+  FP/SIMD state that is not saved. Upstream's own kernel stubs `_efgfmt`
+  to `-1`, so the native kernel never formatted floating point either.
+- `strdup.c`, `vsmprint.c`, `smprint.c`, `fcallfmt.c` — these need an
+  allocator, which arrives with `os/port/alloc.c` in Layer 1.
+
+Four upstream sources needed edits, all of them C-dialect rather than
+64-bit: `atol.c` and `toupper.c` omitted return types (Plan 9 C allows
+it, C99 does not), and `kern.h` declared `strtoll` without the `const`
+its own definition uses.
+
 ## Decision: the Plan 9 C dialect is de-anonymized by hand
 
 `os/port` and `os/ip` are written in Plan 9 C, which uses three

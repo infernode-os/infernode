@@ -131,6 +131,18 @@ union FPdbleword
 #define	FPAINVAL	(1<<0)
 
 /*
+ * Plan 9 idioms used throughout the kernel and libkern.  USED marks a
+ * value kept deliberately but not read; SET silences a "may be used
+ * uninitialised" warning where the programmer knows better than the
+ * compiler's flow analysis.  They live here rather than in lib9.h
+ * because kernel sources include u.h and ../port/lib.h but never
+ * lib9.h, while libkern reaches u.h through lib9.h -- so this is the
+ * one place that serves both.
+ */
+#define	USED(x)		if(x){}else{}
+#define	SET(x)		((x) = 0)
+
+/*
  * Use the compiler's variadic argument handling.  See the note above:
  * the Plan 9 va_list cannot be made correct on AAPCS64.
  */

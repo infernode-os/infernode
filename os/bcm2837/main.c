@@ -7,6 +7,7 @@
  */
 
 #include "u.h"
+#include "../port/lib.h"
 #include "dat.h"
 #include "io.h"
 #include "ureg.h"
@@ -310,6 +311,66 @@ probearch(void)
 	uartputs(" (level restored, not assumed)\n");
 }
 
+/*
+ * Exercise libkern -- the freestanding libc the kernel supplies itself,
+ * imported from upstream Inferno.
+ *
+ * The formatting check is the one that matters. dofmt is the engine
+ * behind print(), which os/port uses everywhere, and it is the first
+ * imported code here with real internal machinery rather than a
+ * one-line primitive. If snprint works on bare metal, the whole
+ * fmt/convM2S/convS2M layer that os/port and 9P depend on is viable.
+ */
+static void
+probelibkern(void)
+{
+	char buf[64];
+	char a[16], b[16];
+	int ok, n;
+
+	ok = 1;
+
+	/* mem primitives */
+	memset(a, 0x5A, sizeof a);
+	memmove(b, a, sizeof a);
+	if(memcmp(a, b, sizeof a) != 0)
+		ok = 0;
+	memset(b, 0, sizeof b);
+	if(memcmp(a, b, sizeof a) == 0)
+		ok = 0;
+
+	/* string primitives */
+	strcpy(buf, "inferno");
+	if(strlen(buf) != 7 || strcmp(buf, "inferno") != 0)
+		ok = 0;
+	if(strchr(buf, 'f') != buf+2)
+		ok = 0;
+
+	uartputs("libk: mem/str ");
+	uartputs(ok ? "OK" : "BROKEN");
+
+	/*
+	 * The Plan 9 fmt engine. %ld and %lux are the formats os/port
+	 * uses constantly, and under LP64 they must consume 64 bits.
+	 */
+	/*
+	 * The %lux value is deliberately larger than 2^32.  A %lu that
+	 * consumed only 32 bits would still print 0xC0A80101 correctly,
+	 * so a test using a value that fits in 32 bits proves nothing
+	 * about whether the format is LP64-correct.
+	 */
+	n = snprint(buf, sizeof buf, "%d %s %lud %lux", 42, "dis",
+		(ulong)3232235777UL, (ulong)0x1DEADBEEFUL);
+	uartputs(", snprint ");
+	if(n > 0 && strcmp(buf, "42 dis 3232235777 1deadbeef") == 0)
+		uartputs("OK");
+	else{
+		uartputs("WRONG: ");
+		uartputs(buf);
+	}
+	uartputs("\n");
+}
+
 static void
 probefb(void)
 {
@@ -375,6 +436,7 @@ kmain(void)
 	checkunaligned();
 	probegpio();
 	probearch();
+	probelibkern();
 	probeclock();
 	probefb();
 

@@ -989,23 +989,69 @@ probechan(void)
 	}
 
 	/*
-	 * The two Chans are deliberately NOT closed.
-	 *
-	 * cclose() calls devtab[c->type]->close(c), and newchan() hands
-	 * back type 0 -- but devtab is still the empty placeholder, so
-	 * that is a call through a nil function pointer. It jumps to
-	 * address 0 and executes whatever is there, which surfaces as an
-	 * "unknown reason" synchronous exception rather than anything
-	 * resembling a nil dereference.
-	 *
-	 * That is not a defect in chan.c: a Chan is meaningless without a
-	 * device behind it. Closing becomes testable when devroot.c lands
-	 * and devtab has a real entry. Leaking two Chans in a boot probe
-	 * is the lesser evil against not testing allocation at all.
+	 * These two were allocated by hand and have no device behind
+	 * them, so they cannot be closed -- cclose() would call
+	 * devtab[c->type]->close(c) and type 0 is the root device, which
+	 * never attached them. Freeing them directly is what chanfree is
+	 * for.
 	 */
+	if(c != nil) chanfree(c);
+	if(d != nil) chanfree(d);
 
 	print("chan: newchan/cname %s\n",
 		ok ? "OK (refcounts, path composition)" : "BROKEN");
+}
+
+/*
+ * The root device, and a Chan with something real behind it.
+ *
+ * devattach('/', "") returns a Chan attached to the root device, which
+ * is where every namespace starts -- everything else is bound or
+ * mounted onto it. This is the first Chan in the system that a device
+ * actually owns, so it is also the first that can be walked and closed.
+ *
+ * Closing is the part worth having: it faulted through a nil function
+ * pointer while devtab was empty, and the symptom (EC=0, "unknown
+ * reason", at an address in an unrelated function) looked nothing like
+ * the cause.
+ */
+static void
+proberoot(void)
+{
+	Chan *c;
+	Walkqid *wq;
+	int ok;
+
+	ok = 1;
+
+	c = devattach('/', "");
+	if(c == nil)
+		ok = 0;
+	else {
+		if(c->type != devno('/', 0))
+			ok = 0;			/* not bound to the root device */
+		if(c->r.ref != 1)
+			ok = 0;
+		if((c->qid.type & QTDIR) == 0)
+			ok = 0;			/* the root must be a directory */
+
+		/* walk to the one entry the root filesystem has */
+		wq = devtab[c->type]->walk(c, nil, (char*[]){"dev"}, 1);
+		if(wq == nil || wq->nqid != 1)
+			ok = 0;
+		else {
+			if((wq->qid[0].type & QTDIR) == 0)
+				ok = 0;		/* /dev is a directory */
+			if(wq->clone != nil)
+				cclose(wq->clone);
+			free(wq);
+		}
+
+		cclose(c);		/* the path that used to fault */
+	}
+
+	print("root: devattach/walk/cclose %s\n",
+		ok ? "OK (attached, walked to /dev, closed)" : "BROKEN");
 }
 
 static void
@@ -1120,6 +1166,7 @@ kmain(void)
 	probeproc();
 	probeqlock();
 	probechan();
+	proberoot();
 	probeclock();
 	probefb();
 

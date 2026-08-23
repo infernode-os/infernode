@@ -4,9 +4,22 @@ Tracked as **INFR-404**. This is InferNode running *native* — as the
 firmware on the board, with no host OS underneath — rather than *hosted*,
 which is what everything under `emu/` does.
 
-Status: **early bring-up.** The kernel boots, parks the secondary cores,
-clears `.bss`, and talks to the PL011 console. Nothing else yet: no
-exception vectors, no MMU, no timer, no Dis VM.
+Status: **early bring-up.** Working so far:
+
+- boots, parks the three secondary cores, clears `.bss`
+- drops EL2 → EL1 (the firmware enters at EL2)
+- PL011 console
+- AArch64 exception vectors, ESR decoding, register dump on fault
+- MMU with an identity map, caches on, correct memory attributes
+- VideoCore mailbox (property channel)
+- framebuffer, verified pixel-exact
+- GPIO
+
+Not yet: timer, interrupt controller, scheduler, and the Dis VM itself.
+
+Regression-tested by `tests/host/baremetal_pi_test.sh`, which builds the
+port, boots it under QEMU, and asserts on the result — including pulling
+the framebuffer back out via QMP and checking pixel values.
 
 ## Why `os/` and not `emu/<Platform>`
 
@@ -146,15 +159,47 @@ MMU → UART → mailbox → SD → framebuffer → USB-net); the code here is
 written from the Broadcom peripheral documentation and the ARM
 architecture reference manual.
 
+## Lessons that cost time
+
+Recorded because each one presents as something other than what it is.
+
+**With the MMU off, all memory is Device-nGnRnE.** That forbids unaligned
+access outright — and at `-O2` the compiler will merge two adjacent
+32-bit stores into one 64-bit store. In the mailbox code that landed at a
+4-byte-but-not-8-byte-aligned offset and took an alignment fault.
+`SCTLR_EL1.A` does not help; Device-memory alignment faults ignore it.
+Bringing the MMU up removes the whole class.
+
+**Framebuffer pixel order names describe byte order, not word layout.**
+Tag `0x00048006` documents `0=BGR, 1=RGB`, but order 1 puts red at the
+*lowest address*, so a little-endian load reads `0xAABBGGRR` and a
+literal `0xFF0000` renders blue. We use order 0.
+
+**The GPU does not snoop the ARM's caches.** The framebuffer must not be
+mapped cacheable, or the display shows stale pixels while writes sit in a
+dirty cache line. It falls above `ramtop`, which is queried from the
+firmware rather than hardcoded because the split is configurable in
+`config.txt`.
+
+**QEMU starts the CPU at `0x0`,** behind a firmware shim that branches to
+the load address. Real hardware enters directly. Boot code must not
+assume its entry PC.
+
 ## Next
 
-1. Exception vectors and a fault handler, so crashes report instead of
-   silently hanging.
-2. Drop from EL2 to EL1 (the firmware enters at EL2 — see the boot output
-   above).
-3. MMU and page tables; get the caches on.
-4. Timer and interrupt controller, then a scheduler.
-5. Scope which parts of `emu/port` are genuinely portable versus
-   POSIX-bound — this determines how much of the existing tree the native
-   kernel can reuse, and is the main open design question.
-6. Bring up the Dis VM and `comp-arm64.c` on the board.
+1. Timer and interrupt controller, then a scheduler.
+2. Import upstream Inferno's `os/port` (native kernel core) and `os/ip`
+   (TCP/IP stack) and port them to 64-bit. Upstream is MIT and its
+   copyright holders are already credited in this tree's `LICENSE`, so
+   the import is clean — but **no upstream `os/` port has ever been
+   64-bit**; every one of them (`os/pc`, `os/sa1110`, `os/pxa`,
+   `os/omap`) is 32-bit. That port is this project's main contribution.
+   It also matters because InferNode today has *no* TCP/IP stack at all:
+   `emu/port/ipif-posix.c` delegates to host sockets, which a bare-metal
+   kernel cannot do.
+3. Bring up the Dis VM and `comp-arm64.c` on the board.
+4. FT5406 touch, via mailbox tag `0x0004000F` — the firmware polls the
+   controller into a buffer, so no I2C driver is needed.
+5. Networking. Wired Ethernet first: the 3B+'s LAN7515 sits behind USB,
+   so a DWC2 host controller stack is the gating item. WiFi (CYW43455
+   over SDIO) comes after, and shares the `os/ip` work.

@@ -34,6 +34,7 @@ echo 'genkey written'
 
 # Start the audit log; it will drive factotum to sign checkpoints.
 mkdir -p /usr/inferno/audit
+mkdir -p /mnt/audit
 mount {auditfs} /mnt/audit
 sleep 1
 
@@ -76,11 +77,19 @@ INFERNO
 mkdir -p "$ROOT/tmp" 2>/dev/null || true
 cp /tmp/audit_signing_testscript.sh "$ROOT/tmp/audit_signing_testscript.sh"
 
-"$EMU" -r"$ROOT" -c0 sh /tmp/audit_signing_testscript.sh 2>&1 &
+OUT=/tmp/audit_signing_test.out
+rm -f "$OUT"
+"$EMU" -r"$ROOT" -c0 sh /tmp/audit_signing_testscript.sh >"$OUT" 2>&1 &
 EMU_PID=$!
 ( sleep 40; kill $EMU_PID 2>/dev/null ) &
 WATCHDOG=$!
 wait $EMU_PID 2>/dev/null || true
 kill $WATCHDOG 2>/dev/null || true
 
-echo "audit_signing_test: done"
+cat "$OUT"
+if ! grep -q '^=== PASS ===$' "$OUT"; then
+	echo "FAIL: signed audit checkpoint was not strictly verified"
+	exit 1
+fi
+
+echo "audit_signing_test: PASS"

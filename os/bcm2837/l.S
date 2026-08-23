@@ -6,11 +6,25 @@
  * core 0 alone proceed.  The parked cores sit in wfe; bringing them up
  * later means writing an entry address to their mailbox and issuing sev.
  *
+ * The firmware enters at EL2, so we drop to EL1 before running any C.
+ * Doing it here rather than later keeps every C function in the kernel
+ * at one known exception level.
+ *
  * Note: do not assume the PC at entry.  QEMU's raspi3b starts execution
  * at 0x0 behind a small firmware shim that branches to the load address,
  * whereas real hardware enters directly.  Everything here is written
  * position-independently or via the linker-supplied symbols.
  */
+
+/*
+ * SCTLR_EL1 with the RES1 bits set and everything else off: MMU
+ * disabled, caches disabled, little-endian.  A known starting state
+ * matters more than a fast one until the MMU is up.
+ */
+#define SCTLRRES1	0x30D00800
+
+/* SPSR to eret with: EL1h (use SP_EL1), all of DAIF masked */
+#define SPSREL1H	0x3C5
 
 .section ".text.boot"
 .global _start
@@ -32,6 +46,54 @@ core0:
 	 */
 	ldr	x0, =_start
 	mov	sp, x0
+
+	/* already at EL1?  then there is nothing to drop. */
+	mrs	x0, CurrentEL
+	lsr	x0, x0, #2
+	cmp	x0, #1
+	b.eq	atel1
+
+	/*
+	 * At EL2.  Let EL1 use the physical counter and timer, and zero
+	 * the virtual offset so virtual and physical time agree.
+	 */
+	mrs	x0, cnthctl_el2
+	orr	x0, x0, #3		/* EL1PCTEN | EL1PCEN */
+	msr	cnthctl_el2, x0
+	msr	cntvoff_el2, xzr
+
+	/* EL1 executes AArch64 (HCR_EL2.RW, bit 31) */
+	mov	x0, #1
+	lsl	x0, x0, #31
+	msr	hcr_el2, x0
+
+	/* give EL1 a known control register */
+	ldr	x0, =SCTLRRES1
+	msr	sctlr_el1, x0
+
+	/* eret into atel1, at EL1h, interrupts masked */
+	mov	x0, #SPSREL1H
+	msr	spsr_el2, x0
+	adr	x0, atel1
+	msr	elr_el2, x0
+	ldr	x0, =_start
+	msr	sp_el1, x0
+	eret
+
+atel1:
+	/* re-establish the stack: SP_EL1 selection may have changed it */
+	ldr	x0, =_start
+	mov	sp, x0
+
+	/*
+	 * Let EL0 and EL1 touch FP/SIMD (CPACR_EL1.FPEN = 0b11).  The
+	 * kernel is built -mgeneral-regs-only and does not need it, but
+	 * leaving it trapped would turn any future FP use into a baffling
+	 * exception rather than working code.
+	 */
+	mov	x0, #(3 << 20)
+	msr	cpacr_el1, x0
+	isb
 
 	/* zero .bss */
 	ldr	x1, =__bss_start

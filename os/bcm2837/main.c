@@ -1,39 +1,16 @@
 /*
  * Kernel entry for the bare-metal BCM2837 port.
  *
- * At this stage the only job is to prove the toolchain and the boot path:
- * a cross-built AArch64 image loads at the right address, one core runs,
- * .bss is clear, and the console works.  Everything past that -- exception
- * vectors, MMU, timer, the Dis VM itself -- follows from here.
+ * Bring-up order matters here: the console comes up first so that
+ * everything after it can report, then the exception vectors so that
+ * anything that goes wrong after THAT reports too rather than hanging.
  */
 
 #include "dat.h"
 #include "io.h"
+#include "ureg.h"
+#include "fns.h"
 
-void	uartinit(void);
-void	uartputc(int);
-void	uartputs(char*);
-
-static void
-uartputx(u64int v)
-{
-	char buf[16];
-	int i;
-
-	for(i = 15; i >= 0; i--){
-		buf[i] = "0123456789abcdef"[v & 0xF];
-		v >>= 4;
-	}
-	uartputs("0x");
-	for(i = 0; i < 16; i++)
-		uartputc(buf[i]);
-}
-
-/*
- * Which exception level the firmware left us in decides how much setup
- * is needed before EL1 kernel code can run.  The VideoCore firmware
- * normally enters at EL2 on the Pi 3, so this is worth knowing early.
- */
 static u64int
 currentel(void)
 {
@@ -52,6 +29,29 @@ mpidr(void)
 	return v;
 }
 
+static u64int
+midr(void)
+{
+	u64int v;
+
+	__asm__ volatile("mrs %0, midr_el1" : "=r"(v));
+	return v;
+}
+
+/*
+ * Prove the exception path round trips before relying on it.  A BRK
+ * raises a synchronous exception; trap() reports it and steps over the
+ * instruction, so reaching the line after this means the full save,
+ * dispatch and restore worked.
+ */
+static void
+checktraps(void)
+{
+	uartputs("trap: testing exception path with BRK...");
+	__asm__ volatile("brk #0");
+	uartputs("trap: returned from exception, save/restore OK\n");
+}
+
 void
 kmain(void)
 {
@@ -61,10 +61,18 @@ kmain(void)
 
 	uartputs("  exception level: EL");
 	uartputc('0' + (int)currentel());
+	uartputs("\n  midr_el1:        ");
+	uartputx(midr());
 	uartputs("\n  mpidr_el1:       ");
 	uartputx(mpidr());
 	uartputs("\n  console:         PL011 UART0, polled\n");
-	uartputs("boot OK\n");
+
+	trapinit();
+	uartputs("  vectors:         installed at VBAR_EL1\n\n");
+
+	checktraps();
+
+	uartputs("\nboot OK\n");
 
 	for(;;)
 		__asm__ volatile("wfe");

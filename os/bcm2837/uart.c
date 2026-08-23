@@ -73,3 +73,37 @@ uartputs(char *s)
 		uartputc(*s++);
 	}
 }
+
+void
+uartputx(u64int v)
+{
+	char buf[16];
+	int i;
+
+	for(i = 15; i >= 0; i--){
+		buf[i] = "0123456789abcdef"[v & 0xF];
+		v >>= 4;
+	}
+	uartputs("0x");
+	for(i = 0; i < 16; i++)
+		uartputc(buf[i]);
+}
+
+void
+uartputd(u64int v)
+{
+	char buf[20];
+	int i;
+
+	if(v == 0){
+		uartputc('0');
+		return;
+	}
+	i = 0;
+	while(v > 0 && i < (int)sizeof(buf)){
+		buf[i++] = '0' + (int)(v % 10);
+		v /= 10;
+	}
+	while(--i >= 0)
+		uartputc(buf[i]);
+}

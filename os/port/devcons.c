@@ -758,6 +758,23 @@ consinit(void)
 	debugkey('q', "panic", qpanic, 1);
 	debugkey('r', "exit", rexit, 1);
 	klogq = qopen(128*1024, 0, 0, 0);
+
+	/*
+	 * The keyboard queue.
+	 *
+	 * devcons declares kbdq and every input path writes to it, but
+	 * nothing here ever created it -- upstream leaves that to a
+	 * platform keyboard driver, and this board has no keyboard. So
+	 * reading /dev/cons reached qread() with a nil Queue and the
+	 * kernel died in ilock() on a nil Lock:
+	 *
+	 *     panic: ilock: no way out: lock 0x0
+	 *
+	 * which is the shell asking for its first line of input.
+	 */
+	kbdq = qopen(4*1024, 0, nil, nil);
+	if(kbdq == nil)
+		panic("consinit: cannot allocate kbdq");
 }
 
 static Chan*

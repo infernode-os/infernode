@@ -54,6 +54,22 @@ uartputc(int c)
 	UART(Dr) = c;
 }
 
+/*
+ * Non-blocking read of one character, or -1 if the receive FIFO is
+ * empty.
+ *
+ * The console has been write-only until now, which was enough to watch
+ * the kernel boot and nothing more: a shell that cannot be typed at is
+ * a log, not a session.
+ */
+int
+uartgetc(void)
+{
+	if(UART(Fr) & Rxfe)
+		return -1;
+	return UART(Dr) & 0xFF;
+}
+
 void
 uartputstr(char *s)
 {

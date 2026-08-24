@@ -5,6 +5,7 @@
 /* uart.c */
 void	uartinit(void);
 void	uartputc(int);
+int	uartgetc(void);
 void	uartputstr(char*);
 void	uartputx(u64int);
 void	uartputd(u64int);

@@ -52,17 +52,22 @@ typedef struct Sys_FileIO Sys_FileIO;
  */
 extern Dev rootdevtab;
 extern Dev consdevtab;
+extern Dev progdevtab;
 
 Dev*	devtab[] =
 {
 	&rootdevtab,		/* '/' -- the namespace root */
 	&consdevtab,		/* 'c' -- /dev/cons and friends */
+	&progdevtab,		/* 'p' -- #p, the process device */
 	nil,
 };
 
 /*
  * eve, iseve and seconds were defined here; os/port/devcons.c provides
  * them now.
+ *
+ * modstatus and dbgexit were here too. os/port/devprog.c provides both,
+ * and the linker insisted -- which is what this file is for.
  */
 
 /*
@@ -166,19 +171,6 @@ modinit(void)
 	sysmodinit();
 }
 
-/*
- * devprog.c -- format a Prog's current module and pc for /prog/N/status.
- * devprog is not imported; exception.c calls this when reporting where a
- * Dis exception was raised.
- */
-WORD
-modstatus(REG *r, char *ptr, int len)
-{
-	USED(r);
-	if(len > 0)
-		ptr[0] = 0;
-	return 0;
-}
 
 /*
  * exportfs.c -- serve a namespace over 9P. Nothing exports anything yet.
@@ -191,16 +183,6 @@ export(int fd, char *dir, int flag)
 	return -1;
 }
 
-/*
- * A debug-key hook devcons.c offers for dropping into a debugger.
- * There is none.
- */
-void
-dbgexit(Prog *p, int kill, char *msg)
-{
-	USED(p); USED(kill);
-	print("dbgexit: %s\n", msg != nil ? msg : "");
-}
 
 /*
  * devsrv.c -- convert a Sys->FileIO channel into a server Chan.
@@ -230,6 +212,19 @@ void
 kmapinval(void)
 {
 }
+
+/*
+ * devsrv.c -- the Dis channel types for a served file.
+ *
+ * devprog.c compares a heap value's type against these when it walks a
+ * process's heap, to tell a read/write channel from an ordinary one.
+ * devsrv is not imported, so nothing ever creates one: leaving them nil
+ * makes that comparison answer "not a served channel", which is both
+ * true and the conservative branch. They must be DELETED when
+ * devsrv.c lands, and the linker will insist.
+ */
+Type*	Trdchan;
+Type*	Twrchan;
 
 /*
  * devmnt.c -- the 9P mount client.

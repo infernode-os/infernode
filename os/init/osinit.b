@@ -28,6 +28,8 @@ include "sys.m";
 
 include "draw.m";
 
+include "sh.m";
+
 Init: module
 {
 	init:	fn();
@@ -85,5 +87,27 @@ init()
 	}
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
 
-	sys->print("\ninit: done\n");
+	sys->print("\ninit: starting the shell\n\n");
+
+	#
+	# Hand over to /dis/sh.dis.
+	#
+	# Inferno has no exec(2): a command IS a Dis module, so running the
+	# shell means loading it and calling its init(). It never returns
+	# while the shell is running.
+	#
+	# sh's own initialise() loads Filepat, String, Bufio, Env and Arg
+	# and calls badmodule() -- which is fatal -- on any that are
+	# missing, so all five have to be in the kernel's root filesystem
+	# alongside sh.dis itself.
+	#
+	sh := load Command Command->PATH;
+	if(sh == nil){
+		sys->print("init: cannot load %s: %r\n", Command->PATH);
+		return;
+	}
+
+	sh->init(nil, "sh" :: nil);
+
+	sys->print("init: the shell returned\n");
 }

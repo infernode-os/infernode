@@ -1392,6 +1392,43 @@ probecons(void)
  */
 extern int	rootmaxq;
 
+/*
+ * Feed the serial line into the console input queue.
+ *
+ * This board has no keyboard: the only way to type at it is the UART,
+ * on GPIO 14/15 through a USB-serial cable, or -serial stdio under
+ * QEMU. Polling rather than taking the PL011 receive interrupt keeps
+ * the driver honest about what it has been tested with -- the transmit
+ * path has been polled since the first boot, and an interrupt-driven
+ * receive path would be the first untested interrupt source in the
+ * kernel. It can become one later; a shell that answers is worth more
+ * now than a tidy one that does not exist.
+ *
+ * kbdputc does the line discipline -- echo, backspace, kill -- and
+ * hands complete lines to kbdq, which is what /dev/cons reads.
+ */
+static void
+uartkproc(void *a)
+{
+	int c;
+
+	USED(a);
+	for(;;){
+		c = uartgetc();
+		if(c < 0){
+			/*
+			 * Nothing waiting. Sleep briefly rather than spin:
+			 * this shares one core with everything else, and a
+			 * tight poll would starve the process that is
+			 * supposed to be reading what we produce.
+			 */
+			tsleep(&up->sleep, return0, nil, 10);
+			continue;
+		}
+		kbdputc(kbdq, c);
+	}
+}
+
 static void
 startdis(void)
 {
@@ -1405,6 +1442,7 @@ startdis(void)
 	 * starting with none. disinit() opens #c/cons three times for
 	 * fd 0/1/2, which needs a mount table to resolve it against.
 	 */
+	kproc("uart", uartkproc, nil, 0);
 	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
 }
 

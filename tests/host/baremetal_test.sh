@@ -211,6 +211,18 @@ build_kernel() {
             "/dis/lib/bufio.dis=$ROOT/dis/lib/bufio.dis"
             "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
             "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
+
+            # A few commands, so the shell has something to run. Each
+            # is a Dis module the shell loads by name out of $path, and
+            # ls pulls in Readdir and Daytime on top of what sh already
+            # needs.
+            "/dis/echo.dis=$ROOT/dis/echo.dis"
+            "/dis/cat.dis=$ROOT/dis/cat.dis"
+            "/dis/pwd.dis=$ROOT/dis/pwd.dis"
+            "/dis/ls.dis=$ROOT/dis/ls.dis"
+            "/dis/lib/readdir.dis=$ROOT/dis/lib/readdir.dis"
+            "/dis/lib/daytime.dis=$ROOT/dis/lib/daytime.dis"
+            "/dis/lib/workdir.dis=$ROOT/dis/lib/workdir.dis"
         )
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
@@ -254,6 +266,17 @@ build_kernel() {
     for f in "$ROOT"/os/port/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/osport-$(basename "$f").o"
+        # devprog.c formats Dis values -- reading /prog/N/heap prints a
+        # REAL with %g -- so it needs FP, like libinterp and for the
+        # same reason. Everything else in os/port keeps
+        # -mgeneral-regs-only so no interrupt path can dirty FP state.
+        if [[ "$(basename "$f")" == "devprog.c" ]]; then
+            "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything \
+                 -Werror=missing-declarations -Werror=incompatible-pointer-types \
+                 -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+            objs+=("$o")
+            continue
+        fi
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
              -Werror=missing-declarations -Werror=incompatible-pointer-types \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1

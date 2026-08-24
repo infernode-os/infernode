@@ -54,6 +54,21 @@ uartputc(int c)
 	UART(Dr) = c;
 }
 
+/*
+ * Non-blocking read of one character, or -1 if the receive FIFO is
+ * empty. Same PL011 as bcm2837, so the same two lines.
+ *
+ * Required of every board: os/arm64/main.c's uart kproc feeds the
+ * console input queue from here, which is what makes a shell typeable.
+ */
+int
+uartgetc(void)
+{
+	if(UART(Fr) & Rxfe)
+		return -1;
+	return UART(Dr) & 0xFF;
+}
+
 void
 uartputstr(char *s)
 {

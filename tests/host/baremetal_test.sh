@@ -229,6 +229,15 @@ build_kernel() {
             "/dis/lib/readdir.dis=$ROOT/dis/lib/readdir.dis"
             "/dis/lib/daytime.dis=$ROOT/dis/lib/daytime.dis"
             "/dis/lib/workdir.dis=$ROOT/dis/lib/workdir.dis"
+
+            # sh's loadable builtins. Inferno's shell keeps if/while/for
+            # and friends in modules under BUILTINPATH (/dis/sh) rather
+            # than in sh.dis itself, so a shell without them can run
+            # commands and pipelines but has no control flow at all --
+            # "for(i in 1 2 3)" fails looking for ./for.
+            "/dis/sh/std.dis=$ROOT/dis/sh/std.dis"
+            "/dis/sh/expr.dis=$ROOT/dis/sh/expr.dis"
+            "/dis/sh/string.dis=$ROOT/dis/sh/string.dis"
         )
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
@@ -602,7 +611,9 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo shell-is-alive' \
         'ls /dis' \
         'echo piped-through | cat' \
-        'q=`{echo one two three}; echo subst-count $#q')"
+        'q=`{echo one two three}; echo subst-count $#q' \
+        'load std' \
+        'for(i in a b c){ echo loop-$i }')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -636,6 +647,20 @@ if grep -q 'subst-count 3' <<<"$SHOUT"; then
     pass "command substitution works (backquote through a pipe)"
 else
     fail "command substitution did not return 3 words"
+fi
+
+# Inferno's shell keeps if/while/for in loadable modules under
+# BUILTINPATH (/dis/sh), not in sh.dis, so a shell without them runs
+# commands and pipelines but has no control flow at all -- "for(...)"
+# fails looking for ./for. Counts iterations rather than just checking
+# the command did not error.
+# Count distinct iterations, not lines: the first one shares a line with
+# the prompt. The echoed command carries "loop-$i", which does not match
+# [abc], so it cannot inflate the count.
+if [[ "$(grep -o 'loop-[abc]' <<<"$SHOUT" | sort -u | wc -l | tr -d ' ')" == "3" ]]; then
+    pass "shell control flow works (load std, for loop over three items)"
+else
+    fail "for loop did not produce three iterations"
 fi
 
 #

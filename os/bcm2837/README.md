@@ -280,42 +280,77 @@ diffing against it.
 A real `aarch64-elf-gcc` would restore the option, and is worth
 revisiting if one is ever installed.
 
-## VM bring-up: where it stops, and what was ruled out
+## VM bring-up: the four bugs that were in the way
 
-The Dis VM loads `/osinit.dis` out of the in-kernel root filesystem,
-executes it, and its first `sys->print()` reaches the console. It then
-stalls. This is what the emulator was able to establish about why,
-recorded so the next session does not repeat it.
+The Dis VM now loads `/osinit.dis` from the in-kernel root filesystem and
+runs it to completion: it prints, reads a file through the namespace,
+writes to `/dev/cons`, and does a thousand heap allocations through the
+garbage collector. Four separate bugs stood between "first `sys->print`
+reaches the console" and that, and each is worth recording because none
+of them announced itself where it happened.
 
-**The scheduler is not the problem.** Three kernel processes were
-observed being entered through `linkproc` — devcons's `consdbg`, and two
-test processes. `sched()`, `runproc()` and `gotolabel()` all work.
+**1. `addclock0link` deadlocked against `tod`.** `os/port/tod.c`
+initialises itself lazily: the first `ns2fastticks()` calls `todinit()`,
+and `todinit()` ends by calling `addclock0link()`. So the first timer
+callback registered before `tod` is up re-enters `addclock0link()` while
+already holding `timers[0]`, and taslock's spin limit fires with
+`ilock: no way out` — which reads as a lock bug and is an
+initialisation-order bug. `clockinit()` used to run in a probe, after
+`chandevinit()` had already registered a console callback. It now runs
+in the boot sequence, before anything can register a timer.
 
-**Timed sleeps are broken, and the cause is known.** Nothing calls
-`checkalarms()`. `tsleep()` arms an alarm and blocks; `checkalarms()` is
-what wakes it, and every upstream clock handler calls it from the clock
-interrupt. Adding it *does* fix the handoff — a two-process
-sleep/wakeup test that hung without it completed with it.
+**2. The pool quanta was a 32-bit number.** This was the heap
+corruption. `p->quanta` is both the allocation granularity and the
+smallest block the allocator can create when it splits, so it has a hard
+lower bound: a free block must hold a complete `Bhdr` — including the
+five `u.s` tree pointers `pooladd()` writes — plus its `Btail`. That is
+32 bytes on ILP32 and 64 under LP64. Upstream's `31` let the splitter
+carve out a 32-byte remainder, and `pooladd()` then wrote 24 bytes past
+the end of it onto the next block's `magic` and `size`.
+`emu/port/alloc.c` already carries this scar and uses `127`. It is now
+`63` here, with a compile-time assertion so a future field added to
+`Bhdr` breaks the build instead of memory.
 
-**But adding it corrupts the heap.** With `checkalarms()` in the clock
-interrupt, the main pool fails its magic check, and the bytes found in
-the damaged `Bhdr` are the string `"inferno"` — so something on the
-wakeup path writes past an allocation. Calling it from interrupt context
-is the obvious suspect: it reaches `wakeup()` → `ready()`, which takes
-the run queue lock, and this port has no `portclock.c` to provide the
-Timer discipline upstream's handlers run under. Importing `portclock.c`
-is likely the actual fix rather than calling `checkalarms()` directly.
+**3. FP/SIMD state was not saved across context switches.** `procsave()`
+was a no-op, on the reasoning that the kernel is built
+`-mgeneral-regs-only`. That is true of the kernel and false of the
+system: `libinterp` is deliberately built *with* FP, because Dis has a
+floating point type, and `libinterp` is where a Dis process spends its
+time. `d8`-`d15` are callee-saved under AAPCS64 and were preserved
+neither by the interrupt path (which saves `x0`-`x30` into the `Ureg`)
+nor by `setlabel`/`gotolabel` (which save `x19`-`x29`). clang allocates
+those registers for ordinary values, so the damage landed on live
+pointers, not on Limbo floats: a preempted process resumed, returned
+through a corrupted frame, and died somewhere unrelated with `pc = sp-16`
+on a stack it did not own.
 
-**The interpreter stall is separate and not yet explained.** With the VM
-running, `xec` is entered exactly once and does not return, and `R.PC`
-stays frozen — so it is stuck inside a single `optab[]` handler rather
-than looping over instructions. Ruled out: optimisation level (`-O0`
-behaves identically), a zero `quanta` (it is `PQUANTA`), and the JIT
-(excluded; `cflag` is 0, so `xec` is the interpreter's).
+**4. `getcallerpc` was one frame short.** Not a crash — worse. The
+out-of-line version in `arch.S` returned `x30`, a PC *inside* the calling
+function rather than that function's return address, so every allocator
+and lock diagnostic in the kernel produced a confident, plausible lie.
+`probecallerpc()` now checks it.
 
-A program whose first statement is a `print` produces that output; one
-that does arithmetic first produces none. That is the sharpest clue
-available and the place to start.
+### What this cost, and the lesson
+
+Bug 2 took by far the longest, and most of that time was not spent on
+the allocator. The test harness linked both the real kernel and the
+fault-injection kernel to a single `k.elf`, so the ELF left on disk
+belonged to whichever built last. Every faulting address resolved
+against the wrong binary and landed in a function that had nothing to do
+with anything — `cmount`, `cvtup`, `eqchantdqid`. Two of those were
+disassembled, found to be preceded by a `nop` rather than a `bl`, and
+still not disbelieved, because a symbol name is very convincing.
+
+Each image now gets its own ELF, and `BAREMETAL_BUILD_DIR` keeps the
+build directory so a fault can be symbolised at all. **Verify the
+toolchain before trusting what it tells you about the bug** — a
+diagnostic nobody checks is not neutral, it actively misleads.
+
+### Still open
+
+`/dev/sysname` reads back empty, and the kernel's `print` does not
+implement `%q` — it emits the verb literally. Neither is load-bearing
+yet; both are visible in the `osinit` output.
 
 ## Next
 

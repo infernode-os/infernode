@@ -101,11 +101,33 @@ schedinit(void)		/* never returns */
 void
 sched(void)
 {
+	/*
+	 * sched() switches stacks, so it must be running on the stack it
+	 * thinks it is. up and the actual stack pointer disagreeing is
+	 * the one thing that makes every later symptom incomprehensible:
+	 * setlabel() below records the WRONG stack into up->sched, and
+	 * the eventual gotolabel() resumes the process somewhere it never
+	 * ran, with the corruption surfacing an unbounded time later as a
+	 * bad PSTATE, a jump into data, or a fault from an exception
+	 * level this kernel never uses.
+	 *
+	 * Check it here, where the question is cheap and the answer is
+	 * exact, rather than inferring it afterwards from wreckage.
+	 */
+	if(up != nil && up->kstack != nil){
+		uintptr sp = (uintptr)&sp;	/* a local IS the stack */
+
+		if(sp < (uintptr)up->kstack || sp > (uintptr)up->kstack + KSTACK)
+			panic("sched: pid %lud sp %lux outside kstack %lux..%lux",
+				up->pid, sp, (uintptr)up->kstack,
+				(uintptr)up->kstack + KSTACK);
+	}
+
 	if(up) {
 		splhi();
 		procsave(up);
 		if(setlabel(&up->sched)) {
-			/* procrestore(up); */
+			procrestore(up);
 			spllo();
 			return;
 		}

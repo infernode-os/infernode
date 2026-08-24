@@ -565,6 +565,7 @@ void (*screenputs)(char*, int);
 void confinit(void) { }
 void idlehands(void) { __asm__ volatile("wfi"); }
 void procsave(Proc *p) { USED(p); }
+void procrestore(Proc *p) { USED(p); }
 void kprocchild(Proc *p, void (*f)(void*), void *a) { USED(p); USED(f); USED(a); }
 
 void

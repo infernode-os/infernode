@@ -184,6 +184,7 @@ init()
 	# system down with it cannot be used to diagnose anything.
 	#
 	spawn pingit();
+	spawn tcpecho();
 
 	sys->print("\ninit: starting the shell\n\n");
 
@@ -272,4 +273,111 @@ pingit()
 		sys->print("init: ICMP echo reply from 127.0.0.1 (%d bytes)\n", n);
 	else
 		sys->print("init: unexpected ICMP type %d\n", int rep[Ipsize]);
+}
+
+#
+# A TCP connection to ourselves over loopback.
+#
+# ICMP proves the stack moves packets. TCP proves it does the hard
+# part: a three-way handshake, sequence numbers advancing on both
+# sides, windows, and an ordered byte stream in each direction. It is
+# also the direct exercise of the arithmetic that was wrong under LP64
+# -- every segment compares sequence numbers through seq_lt and
+# friends, and the connection simply stalls if they answer wrongly.
+#
+# The listener has to be a separate thread because opening the listen
+# file blocks until somebody connects.
+#
+Tcpport:	con "9999";
+
+tcpecho()
+{
+	sync := chan of int;
+
+	spawn tcplistener(sync);
+	if(<-sync != 1){
+		sys->print("init: tcp listener failed to announce\n");
+		return;
+	}
+
+	c := sys->open("/net/tcp/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: cannot clone a tcp conversation: %r\n");
+		return;
+	}
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("init: tcp clone gave no number: %r\n");
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	if(sys->fprint(c, "connect 127.0.0.1!" + Tcpport) < 0){
+		sys->print("init: tcp connect failed: %r\n");
+		return;
+	}
+
+	d := sys->open("/net/tcp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open tcp data: %r\n");
+		return;
+	}
+
+	msg := array of byte "hello-tcp";
+	if(sys->write(d, msg, len msg) != len msg){
+		sys->print("init: tcp write failed: %r\n");
+		return;
+	}
+
+	rbuf := array[64] of byte;
+	rn := sys->read(d, rbuf, len rbuf);
+	if(rn <= 0){
+		sys->print("init: tcp read failed: %r\n");
+		return;
+	}
+
+	sys->print("init: TCP echo over loopback returned %q\n",
+		string rbuf[0:rn]);
+}
+
+tcplistener(sync: chan of int)
+{
+	a := sys->open("/net/tcp/clone", Sys->ORDWR);
+	if(a == nil){
+		sync <-= 0;
+		return;
+	}
+	nbuf := array[32] of byte;
+	n := sys->read(a, nbuf, len nbuf);
+	if(n <= 0){
+		sync <-= 0;
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	if(sys->fprint(a, "announce " + Tcpport) < 0){
+		sync <-= 0;
+		return;
+	}
+	sync <-= 1;
+
+	# Blocks until the other side connects; returns the NEW
+	# conversation carrying the accepted connection.
+	l := sys->open("/net/tcp/" + conv + "/listen", Sys->ORDWR);
+	if(l == nil)
+		return;
+	ln := sys->read(l, nbuf, len nbuf);
+	if(ln <= 0)
+		return;
+	nconv := string nbuf[0:ln];
+
+	d := sys->open("/net/tcp/" + nconv + "/data", Sys->ORDWR);
+	if(d == nil)
+		return;
+
+	buf := array[64] of byte;
+	rn := sys->read(d, buf, len buf);
+	if(rn > 0)
+		sys->write(d, buf[0:rn], rn);
 }

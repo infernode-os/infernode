@@ -620,6 +620,13 @@ check "init: 127.0.0.1/8 configured"    "an IP interface is configured on the lo
 # that path, and none of them can be verified by reading a stats file.
 check "ICMP echo reply from 127.0.0.1"  "the stack moves packets: an ICMP echo completes over loopback"
 
+# TCP is the hard part: a three-way handshake, sequence numbers
+# advancing on both sides, windows, and an ordered byte stream each
+# way. It is also the direct exercise of the arithmetic that was wrong
+# under LP64 -- every segment compares sequence numbers, and a
+# connection whose comparisons answer wrongly stalls rather than fails.
+check "TCP echo over loopback returned"  "TCP completes a connection and returns data over loopback"
+
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 
 #
@@ -644,7 +651,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'for(i in a b c){ echo loop-$i }' \
         'cat /dev/drivers' \
         'cat /net/ipifc/stats' \
-        'cat /net/iproute')"
+        'cat /net/iproute' \
+        'cat /net/tcp/stats')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -738,6 +746,16 @@ if grep -q '^127\.255\.255\.255 ' <<<"$SHOUT"; then
     pass "route end addresses are right (broadcast is 127.255.255.255)"
 else
     fail "directed broadcast for 127.0.0.0/8 is wrong or missing"
+fi
+
+# Zero retransmits is the real evidence the sequence comparisons are
+# right. A connection with broken seq_lt/seq_gt does not fail: it
+# retransmits, reorders, or stalls, and every one of those shows up
+# here before it shows up as a symptom.
+if grep -q '^RetransSegs: 0' <<<"$SHOUT" && grep -q '^OutOfOrder: 0' <<<"$SHOUT"; then
+    pass "TCP ran clean (no retransmits, nothing out of order)"
+else
+    fail "TCP reported retransmits or reordering over loopback"
 fi
 
 #

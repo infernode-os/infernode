@@ -266,6 +266,8 @@ isaconfig(char *class, int ctlrno, Hci *hp)
 void	ipifcinit(Fs*);
 void	icmpinit(Fs*);
 void	icmp6init(Fs*);
+void	tcpinit(Fs*);
+void	udpinit(Fs*);
 
 void (*ipprotoinit[])(Fs*) =
 {
@@ -281,6 +283,8 @@ void (*ipprotoinit[])(Fs*) =
 	ipifcinit,
 	icmpinit,		/* ping, and the errors every other layer needs */
 	icmp6init,		/* not optional: the v6 core calls into it */
+	udpinit,
+	tcpinit,
 	nil,
 };
 
@@ -325,6 +329,21 @@ char*
 commonuser(void)
 {
 	return eve;
+}
+
+/*
+ * The current error string, for a caller inside waserror().
+ *
+ * Plan 9 keeps it in up->errstr; Inferno keeps it per-environment in
+ * up->env->errstr, which is the same difference that had to be applied
+ * throughout devusb.c and usbdwc.c on import. tcp.c reaches it through
+ * this one accessor, so the difference lives here rather than in the
+ * imported file.
+ */
+char*
+commonerror(void)
+{
+	return up->env->errstr;
 }
 
 /*

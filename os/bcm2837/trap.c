@@ -95,6 +95,29 @@ dumpureg(Ureg *u)
 	uartputx(u->psr);
 	uartputstr("\n  sp:      ");
 	uartputx(u->sp);
+
+	/*
+	 * Where the stack pointer is matters more than its value.
+	 *
+	 * A kernel stack that has run off its allocation does not fault:
+	 * it simply walks down into whatever the pool handed out below
+	 * it, so the corruption appears somewhere else entirely and the
+	 * eventual crash is a jump to an address read back off the
+	 * damaged stack. Saying whether sp is still inside up->kstack
+	 * turns that from a guess into a fact, at the one moment the
+	 * question is being asked.
+	 */
+	if(up != nil && up->kstack != nil){
+		uartputstr("\n  kstack:  ");
+		uartputx((uintptr)up->kstack);
+		uartputstr("..");
+		uartputx((uintptr)up->kstack + KSTACK);
+		uartputstr(u->sp >= (uintptr)up->kstack &&
+			   u->sp <= (uintptr)up->kstack + KSTACK
+				? " (sp inside)" : " (sp OUTSIDE -- stack overflow?)");
+		uartputstr("\n  pid:     ");
+		uartputd(up->pid);
+	}
 	uartputstr("\n");
 
 	for(i = 0; i < 31; i++){

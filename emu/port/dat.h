@@ -131,12 +131,29 @@ struct Chan
 	Cname	*name;
 };
 
+/*
+ * Cname is Plan 9 Fourth Edition's Path: the textual path PLUS, for each
+ * element, the mount point crossed to reach it (nil where none was).
+ *
+ * Inferno inherited the pre-4e shape — a bare string — and with it the
+ * pre-4e undomount(), which reverses a bind by comparing that string
+ * against mount-table entries. A parent walk out of a bound-in directory
+ * therefore escaped to the pre-restriction tree, because the string
+ * matched a mount point whose channel was somewhere else entirely.
+ *
+ * mtpt makes ".." exact instead of a guess: it pops the channel actually
+ * crossed. mtpt[0] pins the namespace root and is never popped, so a walk
+ * cannot rise above it however many ".." elements are supplied.
+ */
 struct Cname
 {
 	Ref	r;
 	int	alen;			/* allocated length */
 	int	len;			/* strlen(s) */
 	char	*s;
+	int	mlen;			/* mount-point slots in use */
+	int	malen;			/* slots allocated */
+	Chan	**mtpt;			/* mount point crossed per element; [0] is the root pin */
 };
 
 struct Dev

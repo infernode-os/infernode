@@ -612,9 +612,20 @@ testNamespaceTraversalContainment(t: ref T)
 	result := chan of string;
 	spawn traversalWorker(result);
 	r := <-result;
+
+	# Adjudicate the writes from OUTSIDE the restricted namespace: did a file
+	# actually land at a physical path the agent was never granted?
+	escapes := "";
+	outside := array[] of {TRAVERSAL_TMP_ESCAPE, TRAVERSAL_ROOT_ESCAPE};
+	for(i := 0; i < len outside; i++) {
+		(ok, nil) := sys->stat(outside[i]);
+		if(ok >= 0)
+			escapes += sys->sprint("  WRITE landed outside the namespace at %s\n",
+				outside[i]);
+	}
 	cleanuptraversal();
-	if(r != "")
-		t.error("namespace traversal escaped:\n" + r);
+	if(r != "" || escapes != "")
+		t.error("namespace traversal escaped:\n" + r + escapes);
 }
 
 cleanuptraversal()
@@ -768,13 +779,15 @@ traversalWorker(result: chan of string)
 		"/dis/lib/../../veltro-traversal-escape-root",
 		"/lib/veltro/../../veltro-traversal-escape-root",
 	};
+	# A successful create is not by itself an escape: once ".." clamps, the
+	# same path resolves to somewhere legitimately inside the namespace and
+	# creating there is correct. What matters is whether the file appears at
+	# the physical location outside, which only the unrestricted parent can
+	# see — so record the attempt and let the caller adjudicate.
 	for(i = 0; i < len writes; i++) {
 		fd := sys->create(writes[i], Sys->OWRITE, 8r600);
-		if(fd != nil) {
+		if(fd != nil)
 			fd = nil;
-			report += sys->sprint("  WRITE %s created a file outside the namespace\n",
-				writes[i]);
-		}
 	}
 
 	result <-= report;

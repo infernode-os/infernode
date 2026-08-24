@@ -212,8 +212,85 @@ newcname(char *s)
 	n->s = smalloc(n->alen);
 	memmove(n->s, s, i+1);
 	n->r.ref = 1;
+	n->mlen = 0;
+	n->malen = 0;
+	n->mtpt = nil;
 	incref(&ncname);
 	return n;
+}
+
+/*
+ * Mount-point stack helpers (Plan 9 4e Path semantics).
+ *
+ * Every slot holds a counted reference. The array is owned by the Cname and
+ * so is shared under the same copy-on-write discipline as the string: a
+ * Cname with r.ref > 1 must be duplicated, references and all, before it is
+ * modified. Getting this wrong leaks channels or frees them early, and the
+ * symptom surfaces far from here.
+ */
+enum { MTPTSLOP = 4 };
+
+static void
+mtptfree(Cname *n)
+{
+	int i;
+
+	if(n->mtpt == nil)
+		return;
+	for(i = 0; i < n->mlen; i++)
+		if(n->mtpt[i] != nil)
+			cclose(n->mtpt[i]);
+	free(n->mtpt);
+	n->mtpt = nil;
+	n->mlen = 0;
+	n->malen = 0;
+}
+
+static void
+mtptgrow(Cname *n, int want)
+{
+	Chan **t;
+	int a;
+
+	if(want <= n->malen)
+		return;
+	a = want + MTPTSLOP;
+	t = smalloc(a * sizeof(Chan*));
+	memset(t, 0, a * sizeof(Chan*));
+	if(n->mtpt != nil){
+		memmove(t, n->mtpt, n->mlen * sizeof(Chan*));
+		free(n->mtpt);
+	}
+	n->mtpt = t;
+	n->malen = a;
+}
+
+/* Duplicate the stack into a fresh Cname, taking a reference on each entry. */
+static void
+mtptcopy(Cname *dst, Cname *src)
+{
+	int i;
+
+	if(src->mlen == 0)
+		return;
+	mtptgrow(dst, src->mlen);
+	for(i = 0; i < src->mlen; i++){
+		dst->mtpt[i] = src->mtpt[i];
+		if(dst->mtpt[i] != nil)
+			incref(&dst->mtpt[i]->r);
+	}
+	dst->mlen = src->mlen;
+}
+
+/* Push the mount point crossed for one new path element (nil if none). */
+void
+cnamepush(Cname *n, Chan *mp)
+{
+	mtptgrow(n, n->mlen + 1);
+	n->mtpt[n->mlen] = mp;
+	if(mp != nil)
+		incref(&mp->r);
+	n->mlen++;
 }
 
 void
@@ -224,6 +301,7 @@ cnameclose(Cname *n)
 	if(decref(&n->r))
 		return;
 	decref(&ncname);
+	mtptfree(n);
 	free(n->s);
 	free(n);
 }
@@ -239,8 +317,9 @@ addelem(Cname *n, char *s)
 		return n;
 
 	if(n->r.ref > 1){
-		/* copy on write */
+		/* copy on write — the mount-point stack copies with the string */
 		new = newcname(n->s);
+		mtptcopy(new, n);
 		cnameclose(n);
 		n = new;
 	}
@@ -636,44 +715,44 @@ Chan*
 undomount(Chan *c, Cname *name)
 {
 	Chan *nc;
-	Pgrp *pg;
-	Mount *t;
-	Mhead **h, **he, *f;
 
-	pg = up->env->pgrp;
-	rlock(&pg->ns);
-	if(waserror()) {
-		runlock(&pg->ns);
-		nexterror();
+	/*
+	 * Plan 9 4e semantics. The pre-4e version of this function searched the
+	 * mount table for a head whose recorded NAME matched the cleaned path,
+	 * then returned that head's left-hand side. Two things went wrong with
+	 * that. It over-fired: any head whose name happened to match handed back
+	 * a channel from before the namespace was restricted. And it under-fired:
+	 * restrictdir() binds a real directory onto a shadow placeholder, so the
+	 * head's recorded name is the shadow path and never the path an agent
+	 * walks — no match, no clamp, and ".." kept the raw device parent.
+	 *
+	 * The stack records the channel actually crossed, so no comparison is
+	 * needed, and slot 0 is never popped, which pins the root.
+	 */
+	if(name->mlen == 0)
+		return c;
+
+	if(name->mlen == 1){
+		/*
+		 * Slot 0 pins the namespace root and is never popped, so it keeps
+		 * its reference and we take a fresh one. This is the clamp: any
+		 * number of ".." elements at the root return the root.
+		 */
+		nc = name->mtpt[0];
+		if(nc == nil || nc == c)
+			return c;
+		incref(&nc->r);
+		cclose(c);
+		return nc;
 	}
 
-	he = &pg->mnthash[MNTHASH];
-	for(h = pg->mnthash; h < he; h++) {
-		for(f = *h; f; f = f->hash) {
-			if(strcmp(f->from->name->s, name->s) != 0)
-				continue;
-			for(t = f->mount; t; t = t->next) {
-				if(eqchan(c, t->to, 1)) {
-					/*
-					 * We want to come out on the left hand side of the mount
-					 * point using the element of the union that we entered on.
-					 * To do this, find the element that has a from name of
-					 * c->name->s.
-					 */
-					if(strcmp(t->head->from->name->s, name->s) != 0)
-						continue;
-					nc = t->head->from;
-					incref(&nc->r);
-					cclose(c);
-					c = nc;
-					break;
-				}
-			}
-		}
-	}
-	poperror();
-	runlock(&pg->ns);
-	return c;
+	name->mlen--;
+	nc = name->mtpt[name->mlen];
+	name->mtpt[name->mlen] = nil;
+	if(nc == nil)
+		return c;	/* no mount crossed at this element — the device's parent is correct */
+	cclose(c);
+	return nc;		/* inherit the slot's reference */
 }
 
 /*
@@ -696,6 +775,25 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 	cname = c->name;
 	incref(&cname->r);
 	mh = nil;
+
+	/*
+	 * Pin the origin of this walk (INFR-407). A channel that has never been
+	 * walked has an empty stack; slot 0 records where it started, and is
+	 * never popped, so ".." cannot rise above it. For an absolute path that
+	 * origin is the namespace root. For a relative walk the starting channel
+	 * already carries the stack it accumulated when it was walked to, so
+	 * mlen is non-zero and cwd keeps its real parents.
+	 */
+	if(cname->mlen == 0){
+		if(cname->r.ref > 1){
+			Cname *pinned;
+
+			pinned = newcname(cname->s);
+			cnameclose(cname);
+			cname = pinned;
+		}
+		cnamepush(cname, c);
+	}
 
 	/*
 	 * While we haven't gotten all the way down the path:
@@ -819,8 +917,22 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				}
 				n = i+1;
 			}
-			for(i=0; i<n; i++)
+			for(i=0; i<n; i++){
 				cname = addelem(cname, names[nhave+i]);
+				/*
+				 * One stack slot per element. Only the element a mount
+				 * was found at records a crossing; the rest are nil,
+				 * which means the device's own ".." is already correct
+				 * (we are inside a bound tree, not at its boundary).
+				 * nmh->from is the LEFT side of the mount — for a Veltro
+				 * shadow that is the placeholder inside the shadow, which
+				 * is exactly where ".." must land.
+				 */
+				if(i == n-1 && nmh != nil)
+					cnamepush(cname, nmh->from);
+				else
+					cnamepush(cname, nil);
+			}
 		}
 		cclose(c);
 		c = nc;

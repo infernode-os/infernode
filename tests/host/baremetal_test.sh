@@ -378,6 +378,38 @@ sys.stdout.write(out.decode(errors="replace"))
 PYEOF
 }
 
+# Boot, wait for the shell prompt, type commands at it, and return
+# everything the machine said.
+#
+# The shell is the point of the whole exercise, and nothing else in this
+# file can catch it breaking: every other check reads output the kernel
+# produces on its own, and a shell that never reaches a prompt -- or
+# reaches one and cannot be typed at -- looks identical to a clean boot
+# from the outside.
+shell_session() {
+    local img="$1"; shift
+    python3 - "$QEMU" "$img" "$QEMUARGS" "$@" <<'PYEOF'
+import subprocess, sys, time
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+cmds = sys.argv[4:]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
+                      "-display", "none", "-serial", "stdio"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+try:
+    time.sleep(3)                 # boot, then reach the prompt
+    for c in cmds:
+        p.stdin.write(c.encode() + b"\n")
+        p.stdin.flush()
+        time.sleep(1.5)
+except Exception:
+    pass
+p.kill()
+out, _ = p.communicate()
+sys.stdout.write(out.decode(errors="replace"))
+PYEOF
+}
+
 #
 # Everything below runs once per platform.
 #
@@ -540,6 +572,41 @@ check "cons: hello from /dev/cons"       "text written to the PATH /dev/cons rea
 check "cons: /dev/cons OK"               "console device binds into the namespace and is writable"
 check "Initial Dis:"                    "disinit loads the Dis module from the in-kernel root filesystem"
 check "Dis is running on bare metal"     "Limbo bytecode executes and reaches the console through Sys"
+check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
+
+#
+# The shell, driven for real.
+#
+# Boots, waits for the prompt, and types at it over the serial line. A
+# marker string proves the whole chain end to end: kbdputc's line
+# discipline, kbdq, /dev/cons, sh's parser, loading a command module out
+# of the in-kernel root filesystem, and its output coming back.
+#
+# Worth the seconds it costs. Everything else in this file reads output
+# the kernel produces unprompted, so a shell that never reaches a prompt
+# -- or reaches one and ignores the keyboard -- would look exactly like
+# a clean boot.
+SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'echo shell-is-alive' \
+        'ls /dis')"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
+
+# The marker appears twice: once as the terminal echo of what was
+# typed, and once as the command's output. Only the second is evidence,
+# so drop any line that still carries the command word.
+if grep -v 'echo ' <<<"$SHOUT" | grep -q 'shell-is-alive'; then
+    pass "the shell reads typed input and runs a command from /dis"
+else
+    fail "the shell did not run a typed command (no 'shell-is-alive')"
+fi
+
+if grep -q "/dis/sh.dis" <<<"$SHOUT"; then
+    pass "ls lists the in-kernel root filesystem"
+else
+    fail "ls did not list /dis"
+fi
+
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
 check "libk: mem/str OK"              "libkern mem/str primitives work"

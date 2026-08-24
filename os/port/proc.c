@@ -143,6 +143,30 @@ sched(void)
 	up->state = Running;
 	up->mach = MACHP(m->machno);	/* m might be a fixed address; use MACHP */
 	m->proc = up;
+
+	/*
+	 * gotolabel() is an unconditional branch through up->sched.pc, so a
+	 * bad word here fails at whatever address it lands on rather than
+	 * where it was written. Label is also the first field of Proc, which
+	 * makes it the first thing an overrun into a Proc destroys. Check it
+	 * while it can still be attributed.
+	 */
+	if(up->sched.pc < (uintptr)_start || up->sched.pc >= (uintptr)__bss_start)
+		panic("sched: pid %lud label pc %lux not in text (sp %lux kstack %lux)",
+			up->pid, up->sched.pc, up->sched.sp, (uintptr)up->kstack);
+
+	/*
+	 * The label's sp matters as much as its pc: gotolabel installs it
+	 * directly, so a bad one puts the resumed process on a stack it
+	 * does not own, and the damage only surfaces once something
+	 * overflows into whatever is next in .bss.
+	 */
+	if(up->sched.sp < (uintptr)up->kstack ||
+	   up->sched.sp > (uintptr)up->kstack + KSTACK)
+		panic("sched: pid %lud label sp %lux outside kstack %lux..%lux",
+			up->pid, up->sched.sp, (uintptr)up->kstack,
+			(uintptr)up->kstack + KSTACK);
+
 	gotolabel(&up->sched);
 }
 

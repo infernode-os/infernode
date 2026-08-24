@@ -132,12 +132,34 @@ dumpureg(Ureg *u)
 	uartputstr("\n");
 }
 
+/* kernel image bounds, from the linker script */
+extern char _start[], end[];
+
 static int panicking;
 
 void
 trap(Ureg *u)
 {
 	u32int ec;
+
+	/*
+	 * Catch a bad stack at the first exception taken on it.
+	 *
+	 * Every stack in this kernel is either below the image (the boot
+	 * stack, set to _start in l.S) or at or above `end` (a kstack from
+	 * smalloc). An sp inside [_start, end) is impossible, and by the
+	 * time it shows up as a wild pc the code that set it is long gone.
+	 *
+	 * Reporting here names the instruction that was actually running
+	 * on it. Without this the earliest catch was sched(), which only
+	 * says a bogus stack reached the scheduler -- true, and far too
+	 * late to attribute.
+	 */
+	if(u->sp >= (uintptr)_start && u->sp < (uintptr)end){
+		uartputstr("\n*** exception taken on an impossible stack ***");
+		dumpureg(u);
+		panic("sp inside the kernel image");
+	}
 
 	/*
 	 * Interrupts first: they are the common case once the clock is

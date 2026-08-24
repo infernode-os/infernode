@@ -93,7 +93,7 @@ enum
  */
 struct Conv
 {
-	QLock;
+	QLock	ql;	/* was anonymous: clang declares no field for it */
 
 	int	x;			/* conversation index */
 	Proto*	p;
@@ -229,7 +229,7 @@ struct Hostparams {
 
 struct Ipifc
 {
-	RWlock;
+	RWlock	rwl;	/* was anonymous: clang declares no field for it */
 	
 	Conv	*conv;		/* link to its conversation structure */
 	char	dev[64];	/* device we're attached to */
@@ -291,7 +291,7 @@ struct Iphash
 };
 struct Ipht
 {
-	Lock;
+	Lock	lk;	/* was anonymous: clang declares no field for it */
 	Iphash	*tab[Nipht];
 };
 void iphtadd(Ipht*, Conv*);
@@ -303,7 +303,7 @@ Conv* iphtlook(Ipht *ht, uchar *sa, ushort sp, uchar *da, ushort dp);
  */
 struct Proto
 {
-	QLock;
+	QLock	ql;	/* was anonymous: clang declares no field for it */
 	char*		name;		/* protocol name */
 	int		x;		/* protocol index */
 	int		ipproto;	/* ip protocol type */
@@ -339,7 +339,7 @@ struct Proto
  *  Stream for sending packets to user level
  */
 struct IProuter {
-	QLock;
+	QLock	ql;	/* was anonymous: clang declares no field for it */
 	int	opens;
 	Queue	*q;
 };
@@ -349,7 +349,7 @@ struct IProuter {
  */
 struct Fs
 {
-	RWlock;
+	RWlock	rwl;	/* was anonymous: clang declares no field for it */
 	int	dev;
 
 	int	np;
@@ -527,7 +527,19 @@ typedef char ipllenmatchesaddrlen[
 
 struct Route
 {
-	RouteTree;
+	/* RouteTree, flattened -- Plan 9 anonymous struct member;
+	 * clang has no -fplan9-extensions, and flattening keeps every
+	 * existing field reference working unchanged. */
+	Route*	right;
+	Route*	left;
+	Route*	mid;
+	uchar	depth;
+	uchar	type;
+	uchar	ifcid;		/* must match ifc->id */
+	Ipifc	*ifc;
+	char	tag[4];
+	int	ref;
+
 
 	union {
 		V6route	v6;

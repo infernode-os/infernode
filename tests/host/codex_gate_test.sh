@@ -106,7 +106,31 @@ echo "$r" | grep -q '"content": "MOCK_REPLY: hi"' || fail "stream: delta missing
 echo "$r" | grep -q 'data: \[DONE\]' || fail "stream: no [DONE]"
 pass "SSE streaming shape"
 
-# 7. The prompt-level tool protocol parses into OpenAI tool_calls
+# 7. Deterministic Codex failure injection has the same external shape as a
+#    CLI usage-limit failure: CodexError becomes an OpenAI-compatible 502.
+ERROR_PORT=$((PORT+1))
+CODEX_GATE_MOCK=1 \
+CODEX_GATE_MOCK_ERROR='usage limit reached; retry after reset' \
+CODEX_GATE_PORT=$ERROR_PORT python3 "$GATE" >/dev/null 2>&1 &
+ERROR_PID=$!
+ERROR_BODY="$(mktemp "${TMPDIR:-/tmp}/codex-gate-error.XXXXXX")"
+trap 'kill $GATE_PID $ERROR_PID 2>/dev/null || true; rm -f "$ERROR_BODY"' EXIT
+i=0
+while ! curl -sf -m 1 "http://127.0.0.1:$ERROR_PORT/health" >/dev/null 2>&1; do
+    i=$((i+1))
+    [ $i -lt 30 ] || fail "error-injection gate did not come up on :$ERROR_PORT"
+    sleep 0.2
+done
+status="$(curl -s -o "$ERROR_BODY" -w '%{http_code}' \
+    "http://127.0.0.1:$ERROR_PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"default","messages":[{"role":"user","content":"hello"}]}')"
+[ "$status" = 502 ] || fail "fault injection returned HTTP $status"
+grep -q 'usage limit reached' "$ERROR_BODY" || \
+    fail "fault injection lost the CLI error"
+pass "usage-limit fault injection returns the production error shape"
+
+# 8. The prompt-level tool protocol parses into OpenAI tool_calls
 python3 - "$ROOT" <<'PY' || fail "tool-reply parser"
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location(
@@ -121,7 +145,7 @@ assert (c, calls) == ("just prose", []), (c, calls)
 PY
 pass "tool-reply parser handles fences and prose"
 
-# 8. codex exec argv: sandboxed, private workdir, prompt on stdin
+# 9. codex exec argv: sandboxed, private workdir, prompt on stdin
 python3 - "$ROOT" <<'PY' || fail "argv shape"
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location(
@@ -147,7 +171,7 @@ assert "-m" not in argv, argv
 PY
 pass "codex exec argv is sandboxed and stdin-fed"
 
-# 9. Subscription guard: the gate serves the host's `codex login`, never an
+# 10. Subscription guard: the gate serves the host's `codex login`, never an
 #    API key. It refuses to start while OPENAI_API_KEY is set (which the CLI
 #    can prefer over the ChatGPT sign-in), and never passes one to the child.
 out="$(OPENAI_API_KEY=sk-nope python3 "$GATE" 2>&1 || true)"
@@ -168,7 +192,7 @@ for bad in ("Authorization", "Bearer"):
 PY
 pass "no API key reaches the codex CLI, no auth header anywhere"
 
-# 10. A logged-out CLI must prevent readiness rather than serving a static
+# 11. A logged-out CLI must prevent readiness rather than serving a static
 # model list that makes llmctl report a healthy but unusable backend.
 python3 - "$ROOT" <<'PY' || fail "login readiness check"
 import sys, importlib.util

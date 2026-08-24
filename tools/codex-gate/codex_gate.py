@@ -46,6 +46,7 @@
 #   CODEX_GATE_HOST       default 127.0.0.1
 #   CODEX_GATE_PORT       default 11436
 #   CODEX_GATE_MOCK       "1" = deterministic mock backend (tests; no CLI)
+#   CODEX_GATE_MOCK_ERROR non-empty = fail every mock turn with this message
 #   CODEX_GATE_BIN        codex binary (default "codex", found on PATH)
 #   CODEX_GATE_MODEL      default model; empty = let the CLI use its own
 #   CODEX_GATE_MODELS     comma-separated list advertised on /v1/models
@@ -80,6 +81,7 @@ log = logging.getLogger("codex-gate")
 HOST = os.environ.get("CODEX_GATE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CODEX_GATE_PORT", "11436"))
 MOCK = os.environ.get("CODEX_GATE_MOCK", "") == "1"
+MOCK_ERROR = os.environ.get("CODEX_GATE_MOCK_ERROR", "")
 CODEX_BIN = os.environ.get("CODEX_GATE_BIN", "codex")
 DEFAULT_MODEL = os.environ.get("CODEX_GATE_MODEL", "")
 EXEC_TIMEOUT = float(os.environ.get("CODEX_GATE_TIMEOUT", "900"))
@@ -578,6 +580,8 @@ async def mock_turn(model, system_prompt, prompt, tooldefs, trailing_tools):
     """Deterministic stand-in mirroring claude-gate's mock, adapted to this
     gate's stateless shape: tool results arrive in the request, not on a
     held turn.  `MOCK_TOOL_CALL <name> <json>` triggers one tool call."""
+    if MOCK_ERROR:
+        raise CodexError(MOCK_ERROR)
     if trailing_tools:
         content = trailing_tools[-1].get("content") or ""
         suffix = " (is_error)" if is_error_result(content) else ""

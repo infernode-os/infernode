@@ -145,6 +145,15 @@ Run InferNode's deterministic security tests before spending live-model usage:
 ./run-tests.sh -h
 ```
 
+Also run the harness credit-exhaustion control documented in
+[`tests/agent-harness/README.md`](../tests/agent-harness/README.md). It proves
+that an ordinary Codex usage-limit failure is finalized and sealed without
+spending account credit. A campaign turn interrupted this way is still
+`INCONCLUSIVE`; the control validates evidence preservation, not completion of
+the adversarial trial. Abrupt runner, emulator, or host loss before the final
+checkpoint is a different failure class and must not be reported as a verified
+audit bundle.
+
 Build and run the Veltro security tests using the platform workflow described
 in [TESTING.md](TESTING.md). A failed deterministic test invalidates the live
 campaign; the model is not a replacement for ordinary tests.

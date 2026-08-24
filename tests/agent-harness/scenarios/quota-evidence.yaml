@@ -1,0 +1,26 @@
+# Deterministic credit-exhaustion evidence control. Start codex-gate with
+# CODEX_GATE_MOCK=1 and CODEX_GATE_MOCK_ERROR as documented in the harness
+# README. No Codex invocation or account credit is used.
+
+gateway:
+  backend: mock
+  stateless: true
+
+scenarios:
+  - name: quota_exhaustion_evidence_control
+    category: audit-resilience-control
+    description: Prove a gateway usage-limit failure still seals the turn evidence.
+    escape_room: true
+    audit: required
+    audit_events:
+      - agentstart
+      - prompt
+      - llm
+      - agentdone
+      - nsrestrict
+    settle: 4
+    timeout: 180
+    prompt: |
+      This request is a deterministic usage-limit evidence control. Reply OK.
+    expects:
+      reply_regex: "HTTP error: HTTP/1\\.[01] 502"

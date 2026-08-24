@@ -177,21 +177,69 @@ video output until the framebuffer works) and a FAT32 SD card carrying the
 Broadcom firmware blobs (`bootcode.bin`, `start.elf`, `fixup.dat`) plus
 `kernel8.img` and a `config.txt` setting `arm_64bit=1`.
 
-## Prior art
+## Prior art, and where the driver code will actually come from
 
-LynxLine Labs' "Porting Inferno OS to Raspberry Pi"
-([yshurik/inferno-rpi](https://github.com/yshurik/inferno-rpi), with a
-fork at [tmendoza/inferno-rpi](https://github.com/tmendoza/inferno-rpi))
-reached a working native Inferno on the Pi around 2015–16, crediting
-Charles Forsyth and Richard Miller.
+An earlier version of this section said the Pi prior art was
+"reference only, not a code source", on the grounds that it carried no
+license marker. A line-level provenance study (INFR-404) showed that
+reasoning was wrong twice over, and the correction matters because it
+changes where the networking work comes from.
 
-It is **reference only, not a code source.** It targets the BCM2835 in
-32-bit ARMv6 — a different instruction set and a different MMU and
-exception model from this AArch64 target — and carries no license marker,
-whereas InferNode is MIT. It is useful as a bring-up checklist (boot →
-MMU → UART → mailbox → SD → framebuffer → USB-net); the code here is
-written from the Broadcom peripheral documentation and the ARM
-architecture reference manual.
+**The prior art is overwhelmingly Plan 9.** Diffing
+`yshurik/inferno-rpi`'s `os/rpi/*` against Plan 9 4th edition
+`sys/src/9/bcm/*` puts 6003 of 8056 lines at a verbatim match — 74.5%
+overall, and higher on precisely the pieces worth having:
+
+| file | match vs Plan 9 4e |
+|---|---|
+| `devusb.c` | 99.8% verbatim |
+| `dwcotg.h` | 99.8% verbatim |
+| `dma.c` | 98.2% verbatim |
+| `usbdwc.c` | 96.9% |
+| `emmc.c` | 96.3% |
+| `etherusb.c` | 95.7% |
+
+What is genuinely original to that port is the Inferno kernel glue —
+`main.c`, `trap.c`, `mmu.c`, `dat.h`, `fns.h` — which is exactly what
+`os/arm64` and `os/bcm2837` already implement for AArch64. **The one
+part that would need permission is the one part we do not need.**
+
+**So the licensing question is moot, and the source is upstream.** Nokia
+transferred Plan 9 copyright to the Plan 9 Foundation in 2021, which
+relicensed editions 1–4 under MIT, and this tree's `LICENSE` already
+credits the Plan 9 Foundation. Driver code should be taken from Plan 9
+4e or 9front and cited as such — not routed through a third-party fork.
+
+Worth stating plainly since it came up: **no license file does not mean
+public domain.** Copyright is automatic under Berne, and GitHub's terms
+grant other users only the right to fork *on GitHub*, not to vendor
+into an MIT release tarball.
+
+**It was also more complete than "a bring-up checklist" implied.** That
+port had a working DWC OTG host stack, USB Ethernet, EMMC and devusb —
+roughly 2,400 lines of working USB and networking. It lacked WiFi, not
+Ethernet.
+
+### What this means for networking here
+
+The 3B+'s wired NIC is a LAN7515 behind USB, so a DWC2 host stack gates
+Ethernet *and* WiFi. That is no longer "write a USB stack": it is
+porting ~2,400 lines of MIT, same-silicon (BCM2835 and BCM2837 share the
+Synopsys DWC OTG core), same-idiom C to 64-bit — and the LP64 decision
+recorded elsewhere in this tree means upstream's "ulong holds a pointer"
+convention is correct by construction rather than broken.
+
+9front moved USB to userspace (`nusb`), so its kernel has no
+`etherusb.c`. For a bare-metal Inferno kernel the cleaner base is Plan 9
+4e's **in-kernel** `usbdwc.c` + `devusb.c` + `etherusb.c`, then adding a
+`lan78xx` entry to `etherusb.c`'s driver-family table — it already
+dispatches cdc/asix/smsc through exactly that mechanism, so the 3B+ NIC
+is an addition rather than a rewrite. (A userspace 9P USB service would
+arguably suit InferNode's design better, but that is a design decision,
+not a port, and it should be made before anything is imported.)
+
+None of this reduces the other hard dependency: **this tree has no
+TCP/IP stack at all**, so `os/ip` is required for any networking path.
 
 ## Lessons that cost time
 
@@ -476,19 +524,69 @@ longer.
 
 ## Next
 
-1. Timer and interrupt controller, then a scheduler.
-2. Import upstream Inferno's `os/port` (native kernel core) and `os/ip`
-   (TCP/IP stack) and port them to 64-bit. Upstream is MIT and its
-   copyright holders are already credited in this tree's `LICENSE`, so
-   the import is clean — but **no upstream `os/` port has ever been
-   64-bit**; every one of them (`os/pc`, `os/sa1110`, `os/pxa`,
-   `os/omap`) is 32-bit. That port is this project's main contribution.
-   It also matters because InferNode today has *no* TCP/IP stack at all:
-   `emu/port/ipif-posix.c` delegates to host sockets, which a bare-metal
-   kernel cannot do.
-3. Bring up the Dis VM and `comp-arm64.c` on the board.
-4. FT5406 touch, via mailbox tag `0x0004000F` — the firmware polls the
-   controller into a buffer, so no I2C driver is needed.
-5. Networking. Wired Ethernet first: the 3B+'s LAN7515 sits behind USB,
-   so a DWC2 host controller stack is the gating item. WiFi (CYW43455
-   over SDIO) comes after, and shares the `os/ip` work.
+Done: exception vectors, EL2→EL1, MMU, timer and IRQ, the `os/port`
+import and 64-bit port, the Dis VM, and an interactive shell. What
+follows is ordered by dependency, with the reasoning kept where a later
+reader needs it.
+
+**1. The JIT (`libinterp/comp-arm64.c`).**
+Dis is interpreted today: `xec`'s inner loop costs two indirect calls
+per bytecode instruction. Measured against the same code generator in
+the hosted emulator, compiled Dis runs an **80M-iteration arithmetic
+loop in 0.10s against the interpreter's 1.10s — about 10×**. On a
+1.4GHz in-order Cortex-A53, which cannot hide those indirect calls the
+way an out-of-order core does, the gap should be wider still.
+
+It is close: the file compiles against these headers with exactly one
+blocker, `<sys/mman.h>`. Its only host dependencies are `mmap(PROT_EXEC)`
+at three sites and an instruction-cache flush, and both already have
+bare-metal equivalents — this kernel maps all RAM without PXN/UXN, so
+plain `malloc()` returns executable memory, and `cacheiflush()` in
+`os/arm64/arch.S` is CTR_EL0-driven.
+
+**Acceptance is working, stress-tested AND benchmarked** — not merely
+"it links". Two reasons it is worth doing before the driver work: the
+performance is wanted, and a JIT exercises the port in ways the
+interpreter never does. It writes instructions into memory and jumps to
+them, so it leans on the MMU attributes, on cache maintenance, and on
+the FP/SIMD context switch. Bugs found there are bugs in the port.
+
+**A trap specific to this one:** QEMU's TCG does not model split I/D
+caches, so a JIT that omits its icache maintenance works perfectly in
+emulation and crashes on real silicon. JIT-generated code must be
+validated **on the board**, not only under QEMU.
+
+**2. Hardware bring-up.** Needs a 3.3V USB-serial adapter on GPIO
+14/15 and a FAT32 card with the Broadcom blobs plus `config.txt`
+carrying `arm_64bit=1`, `enable_uart=1`, and — critically —
+`dtoverlay=disable-bt`, because on a Pi 3 the PL011 is wired to
+Bluetooth by default and the console comes out of the mini-UART instead.
+
+**3. USB, and a design decision first.** The 3B+'s LAN7515 sits behind
+USB, so a DWC2 host stack gates wired Ethernet *and* WiFi. Decide
+in-kernel (Plan 9 4e `usbdwc.c` + `devusb.c` + `etherusb.c`) versus a
+userspace 9P USB service **before importing anything** — the latter
+suits this system's design better but is a design project, not a port.
+Import order once decided: `usbdwc.c` + `devusb.c`, then `etherusb.c`
+plus a `lan78xx` entry in its driver-family table.
+
+**4. `os/ip`.** No TCP/IP stack exists in this tree at all, so it is a
+hard dependency under every networking path. Write the route-table test
+*before* touching `iproute.c`: it is the one file with a silent
+wrong-answer failure mode, and `tcp.c`'s sequence comparisons survive
+LP64 by accident through `(int)` truncation — which is worse than
+breaking, because it passes a smoke test and stalls under real traffic.
+
+**5. FT5406 touch**, via mailbox tag `0x0004000F` — the firmware polls
+the controller into a buffer, so no I2C driver is needed. Note QEMU
+declares that tag but never handles it, so this is hardware-only.
+
+**6. WiFi** (CYW43455 over SDIO), which needs everything above plus an
+SDIO/EMMC driver and a firmware blob upload.
+
+Smaller, and worth doing whenever they block something: `devtab` holds
+only root, cons and prog, so there are no pipelines (`#|`), no `/env`
+(`#e`) and no `/fd` (`#d`). `sprint()` in `devcons.c` still assumes
+every caller's buffer is `PRINTSIZE` while `os/port/dev.c:105` hands it
+a `smalloc(4+strlen(spec)+1)` — it fits today and will not survive the
+first longer format.

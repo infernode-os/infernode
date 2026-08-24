@@ -182,11 +182,34 @@ jobs:
 
     - name: Run escape-room evidence checks
       run: |
-        # Gates audit-bundle verification, canary scanning, and the
-        # evidence-privacy invariants (INFR-406): raw evidence is 0700/0600
-        # and the derived public artifact carries no canary value.
+        # Gates audit-bundle verification, canary scanning, the
+        # evidence-privacy invariants (INFR-406) — raw evidence is 0700/0600
+        # and the derived public artifact carries no canary value — and the
+        # attempt-preservation / fail-closed retry rules (INFR-411).
         chmod +x tests/host/grind_escape_test.sh
         ROOT=. bash tests/host/grind_escape_test.sh
+
+    - name: Run outer escape-lab evidence checks
+      run: |
+        # INFR-412: the outer lab creates pcap, console, command log and
+        # manifest private, refuses to start over an exposure, and seals
+        # 0700/0600 at the end.
+        chmod +x tests/agent-harness/escape-lab.sh
+        chmod +x tests/host/escape_lab_evidence_test.sh
+        ROOT=. sh tests/host/escape_lab_evidence_test.sh
+
+    - name: Run codex-gate preflight checks
+      run: |
+        # INFR-413: the gateway pins the Codex CLI's plugin, app, MCP, skill,
+        # memory and shell-snapshot surface, refuses an isolated Codex home
+        # that holds unsanctioned configuration, and reports what it pinned.
+        # Mock backend — no CLI, no billing; the pinned feature names are
+        # validated against the installed CLI only when one is present.
+        chmod +x tests/host/codex_gate_test.sh
+        # 77 is the suite's skip status (no aiohttp on the runner).
+        rc=0
+        ROOT=. bash tests/host/codex_gate_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run llmsrv session capability checks
       run: |

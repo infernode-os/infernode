@@ -207,6 +207,10 @@ if {~ $#promptval 0} {
 	echo '@@GRIND no-prompt (driven by incoming message)'
 }{
 	cat $stage/prompt > /mnt/ui/activity/0/conversation/input
+	# The host classifies an emulator exit by what had already happened
+	# (INFR-411). Past this line the model is live, so an exit is a result,
+	# never a boot flake.
+	echo '@@GRIND prompt injected words='^$#promptval
 }
 
 # --- settle wait: poll until Activity 0's turn(s) complete. Activity 0 is

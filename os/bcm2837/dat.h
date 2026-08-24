@@ -183,6 +183,27 @@ struct Mach
 	int		stack[1];
 };
 
+/*
+ * Which processors are up, and whether we are shutting down.
+ *
+ * os/port/portclock.c's hzclock() returns early unless this
+ * processor's bit is set, so nothing on the clock -- including
+ * checkalarms() and preemption -- runs until boot sets it. That guard
+ * is the point: it stops the clock interrupt from scheduling or
+ * expiring alarms before there is anything safe to schedule.
+ *
+ * Named Lock rather than the Plan 9 anonymous embed, as everywhere else
+ * in this port.
+ */
+extern struct Active
+{
+	Lock	l;
+	int	machs;			/* bitmap of active CPUs */
+	int	exiting;		/* shutdown */
+	int	ispanic;		/* shutdown in response to a panic */
+	int	thunderbirdsarego;	/* secondaries may enter schedinit */
+} active;
+
 extern Mach	*m;
 extern Proc	*up;
 extern Mach	mach0;

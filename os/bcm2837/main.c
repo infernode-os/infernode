@@ -30,6 +30,8 @@ Conf conf;
 Mach	mach0;
 Mach	*m = &mach0;
 
+struct Active active;
+
 
 /*
  * Optional kernel hooks, declared in portfns.h and defined here exactly
@@ -256,8 +258,6 @@ probeclock(void)
 {
 	u64int c0, c1, s0, s1, genus, sysus, lo, hi;
 	u64int deadline;
-
-	clockinit();
 
 	uartputstr("clk:  cntfrq ");
 	uartputd(clockfreq());
@@ -1540,6 +1540,22 @@ kmain(void)
 	printinit();
 
 	/*
+	 * The clock, before anything can register a timer callback.
+	 *
+	 * clockinit() ends by calling timersinit()/todinit(), and
+	 * os/port/tod.c initialises itself lazily: the first
+	 * ns2fastticks() triggers todinit(), which calls addclock0link()
+	 * -- from inside an addclock0link() that already holds
+	 * timers[0]. So whoever registers the first timer deadlocks
+	 * unless tod is already up.
+	 *
+	 * That is exactly what happened while this lived in a probe:
+	 * chandevinit() registers a console callback during device
+	 * initialisation, which ran before the clock did.
+	 */
+	clockinit();
+
+	/*
 	 * Point the console at the serial line.
 	 *
 	 * devcons.c's putstrn0() sends output to the kprint queue, then to
@@ -1590,6 +1606,15 @@ kmain(void)
 	probefb();
 
 	uartputstr("\nboot OK\n");
+
+	/*
+	 * Declare this processor open for business. Until now hzclock()
+	 * has been returning early on every tick: no alarms expiring, no
+	 * preemption. That is deliberate -- the clock must not try to
+	 * schedule anything before the process table, namespace and
+	 * console exist.
+	 */
+	active.machs = 1;
 
 	startdis();
 

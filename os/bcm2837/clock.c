@@ -36,34 +36,6 @@ enum
 	Hz		= 100,		/* scheduler ticks per second */
 };
 
-/*
- * Periodic callbacks registered through addclock0link().
- *
- * os/port uses this for anything that must run on the clock rather than
- * on a process: devcons's keyboard repeat, and -- the one that matters
- * -- os/port/dis.c's accountant(), which charges elapsed time against
- * the running Prog. The Dis scheduler uses that accounting to decide
- * when a Prog's quantum is up, so with no clock callback the VM runs one
- * program and never switches away from it.
- *
- * A fixed array rather than the Timer list portclock.c maintains: this
- * port drives its tick straight from the generic timer, and four slots
- * is more than the kernel currently registers.
- */
-enum
-{
-	Nclock0	= 8,
-};
-
-static struct
-{
-	void	(*f)(void);
-	int	ms;		/* requested period */
-	int	when;		/* ticks until next call */
-} clock0[Nclock0];
-
-static int nclock0;
-
 static u64int cntfrq;		/* generic timer rate, from CNTFRQ_EL0 */
 static u64int tickinterval;	/* generic timer ticks between interrupts */
 static u64int ticks;		/* ticks since clockinit */
@@ -164,6 +136,26 @@ clockinit(void)
 	/* route the non-secure physical timer to core 0's IRQ line */
 	LOCAL(Ltimerirq0) = Cntpnsirq;
 
+	/*
+	 * Initialise the timer and time-of-day layers HERE, before
+	 * anything can register a timer.
+	 *
+	 * The ordering is load-bearing, not tidiness. os/port/tod.c
+	 * initialises itself lazily: ns2fastticks() calls todinit() if it
+	 * has not run, and todinit() ends by calling addclock0link().
+	 * But addclock0link() reaches ns2fastticks() through tadd() while
+	 * already holding timers[0] -- so the first timer ever registered
+	 * re-enters addclock0link and deadlocks on its own lock.
+	 *
+	 * Upstream never sees this because every port calls todinit()
+	 * from its clock setup, so tod.init is already 1 and the lazy
+	 * path is never taken. Doing the same here is the fix; taslock.c
+	 * caught it as "ilock: no way out", which is a considerably
+	 * better outcome than a silent hang.
+	 */
+	timersinit();
+	todinit();
+
 	armtick();
 }
 
@@ -171,10 +163,9 @@ clockinit(void)
  * Called from the IRQ path.  Returns non-zero if this was our timer.
  */
 int
-clockintr(void)
+clockintr(Ureg *u)
 {
 	u64int ctl;
-	int i;
 
 	__asm__ volatile("mrs %0, cntp_ctl_el0" : "=r"(ctl));
 
@@ -194,23 +185,20 @@ clockintr(void)
 	 * console silently hanging on the first print rather than as a
 	 * clock problem. proc.c's scheduler accounting reads it too.
 	 */
-	if(m != nil)
-		m->ticks++;
-
 	/*
-	 * Run the registered clock callbacks. Done here, in interrupt
-	 * context, because that is what "on the clock" means -- these are
-	 * exactly the things that must happen whether or not any process
-	 * is willing to yield.
+	 * Hand the tick to os/port/portclock.c rather than doing the work
+	 * here. hzclock() bumps m->ticks, runs the profiling hook, calls
+	 * checkalarms() to expire timed sleeps, and -- the part this port
+	 * previously did not do at all -- calls sched() when something is
+	 * ready, which is what preempts a running process.
+	 *
+	 * Doing it by hand was how the earlier heap corruption happened:
+	 * checkalarms() reaches wakeup() -> ready(), and hzclock() runs it
+	 * only after checking that this processor is marked active, so a
+	 * hand-rolled version calls it during boot when there is nothing
+	 * safe to wake.
 	 */
-	for(i = 0; i < nclock0; i++){
-		if(clock0[i].f == nil)
-			continue;
-		if(--clock0[i].when <= 0){
-			clock0[i].when = clock0[i].ms;
-			(*clock0[i].f)();
-		}
-	}
+	hzclock(u);
 
 	armtick();
 	return 1;
@@ -248,41 +236,51 @@ intrenabled(void)
  * silently dropped.
  */
 int
-irqdispatch(void)
+irqdispatch(Ureg *u)
 {
 	int handled;
 
 	handled = 0;
 
-	if(clockintr())
+	if(clockintr(u))
 		handled = 1;
 
 	return handled;
 }
 
 /*
- * Register a periodic callback, called every ms milliseconds.
+ * The high-resolution counter os/port/tod.c and portclock.c are built
+ * on.
  *
- * The Timer* return is portclock.c's handle for cancelling one; nothing
- * here cancels, so nil is honest rather than a fabricated handle a
- * caller might later pass to a timer layer that does not exist.
+ * This is a very good fit for the ARM generic timer: CNTPCT_EL0 is a
+ * free-running 64-bit counter at CNTFRQ_EL0, which is exactly what
+ * fastticks() is specified to return. The 32-bit ARM ports have to
+ * synthesise this from a 32-bit peripheral counter and track wrap;
+ * there is nothing to track here.
  */
-Timer*
-addclock0link(void (*f)(void), int ms)
+uvlong
+fastticks(uvlong *hz)
 {
-	int i, s;
+	if(hz != nil)
+		*hz = cntfrq;
+	return clockcount();
+}
 
-	s = splhi();
-	if(nclock0 >= Nclock0){
-		splx(s);
-		print("addclock0link: no free slot for a %d ms callback\n", ms);
-		return nil;
-	}
-	i = nclock0++;
-	clock0[i].f = f;
-	clock0[i].ms = MS2TK(ms) > 0 ? MS2TK(ms) : 1;
-	clock0[i].when = clock0[i].ms;
-	splx(s);
-
-	return nil;
+/*
+ * Program the timer comparator for an absolute fastticks value.
+ *
+ * CNTP_CVAL_EL0 takes an absolute compare value, which is what
+ * timerset() is given -- so unlike the periodic tick (which rearms
+ * through the TVAL down-counter) this needs no conversion.
+ *
+ * A deadline already in the past must still fire: the architecture
+ * raises the interrupt as soon as the counter is >= the comparator, so
+ * setting a stale value is self-correcting rather than a lost timer.
+ */
+void
+timerset(uvlong when)
+{
+	__asm__ volatile("msr cntp_cval_el0, %0" :: "r"(when));
+	__asm__ volatile("msr cntp_ctl_el0, %0" :: "r"((u64int)1));
+	__asm__ volatile("isb");
 }

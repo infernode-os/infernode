@@ -122,8 +122,21 @@ info "ld:      $LLD"
 info "objcopy: $OBJCOPY"
 info "qemu:    $QEMU"
 
-BUILD="$(mktemp -d)"
-trap 'rm -rf "$BUILD"' EXIT
+# The build directory is normally a temporary that is removed on exit.
+# That is right for a test run and wrong for a debugging session: when the
+# kernel faults, the only way to turn the reported PCs back into symbols is
+# the ELF that produced them, and it has just been deleted.
+#
+# BAREMETAL_BUILD_DIR keeps it. Setting it also suppresses the cleanup, so
+# the k.elf, the objects and cc.log survive for nm/objdump.
+if [ -n "${BAREMETAL_BUILD_DIR:-}" ]; then
+	BUILD="$BAREMETAL_BUILD_DIR"
+	mkdir -p "$BUILD"
+	info "build:   $BUILD (kept: BAREMETAL_BUILD_DIR)"
+else
+	BUILD="$(mktemp -d)"
+	trap 'rm -rf "$BUILD"' EXIT
+fi
 
 # Inferno/arm64/include supplies u.h -- the same per-objtype type header
 # upstream's native ports use, and the one os/port will expect.
@@ -528,6 +541,7 @@ cat > "$VARIANT" <<'EOF'
 Conf conf;
 Mach mach0;
 Mach *m = &mach0;
+struct Active active;
 Proc *up;
 void (*kproftick)(ulong);
 void (*proctrace)(Proc*, int, vlong);

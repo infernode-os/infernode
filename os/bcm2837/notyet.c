@@ -218,6 +218,20 @@ srvf2c(char *name, char *desc, Sys_FileIO *io)
 }
 
 /*
+ * Discard temporary kernel mappings.
+ *
+ * portclock.c calls this from the clock interrupt. Ports with a
+ * kmap()/kunmap() window for touching physical pages outside the kernel
+ * map use it to invalidate that window. This port maps all of RAM
+ * identically and never creates one, so there is nothing to discard --
+ * and that stays true only while the map is a flat identity.
+ */
+void
+kmapinval(void)
+{
+}
+
+/*
  * devmnt.c -- the 9P mount client.
  *
  * sysfile.c's mount path calls these to negotiate a version and

@@ -122,7 +122,7 @@ trap(Ureg *u)
 	 * ignored presents as the kernel mysteriously making no progress.
 	 */
 	if(u->type == Tirq || u->type == Tirq0){
-		if(!irqdispatch()){
+		if(!irqdispatch(u)){
 			uartputstr("\ntrap: unhandled IRQ");
 			dumpureg(u);
 			panic("unhandled IRQ");

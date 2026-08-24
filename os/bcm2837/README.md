@@ -489,7 +489,13 @@ ordering was chosen.
 
 - **Not imported:** `etherusb.c`. It is an in-kernel `Ether` driver and
   this decision says that layer is not kernel code.
-- **To import:** `ethermedium.c` and `chandial.c` into `os/ip`.
+- **Imported:** `ethermedium.c`, linked from `os/arm64/main.c` beside
+  `loopbackmediumlink()`. It needed one supporting function,
+  `commonfdtochan()`, which upstream keeps in `os/ip/plan9.c` alongside
+  `commonuser` and `commonerror` — both of which were already in
+  `os/arm64/notyet.c`, so it joined them there. **`chandial.c` is not
+  needed**: `ip.h` declares it, but `ethermedium` reaches its device
+  with `kdial()` and `kopen()`, which this tree already has.
 - **Already imported and unaffected:** `usbdwc.c`, `devusb.c`.
 - **To write:** a Dis program speaking CDC (for QEMU's `usb-net`) and
   LAN78xx (for the board), serving the ether interface sketched above.

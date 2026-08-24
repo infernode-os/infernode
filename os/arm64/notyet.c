@@ -332,6 +332,24 @@ commonuser(void)
 }
 
 /*
+ * Turn a file descriptor into a Chan.
+ *
+ * os/ip needs this because ethermedium.c holds its device open across
+ * the life of the binding: kdial() hands back a descriptor, but a
+ * descriptor belongs to the calling process's Fgrp and the medium
+ * outlives that call. So it converts to a Chan, which it owns, and
+ * closes the descriptor.
+ *
+ * Upstream keeps this one-line wrapper in os/ip/plan9.c alongside
+ * commonuser and commonerror, which already live here.
+ */
+Chan*
+commonfdtochan(int fd, int mode, int chkmnt, int iref)
+{
+	return fdtochan(up->env->fgrp, fd, mode, chkmnt, iref);
+}
+
+/*
  * The current error string, for a caller inside waserror().
  *
  * Plan 9 keeps it in up->errstr; Inferno keeps it per-environment in

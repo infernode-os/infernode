@@ -1490,6 +1490,7 @@ extern int	cflag;
 extern Dev	usbdevtab;
 extern Dev	ipdevtab;
 extern void	loopbackmediumlink(void);
+extern void	ethermediumlink(void);
 
 #ifndef CFLAG
 #define CFLAG 1
@@ -1581,6 +1582,19 @@ usbkproc(void *a)
 	 * kind this board has until USB enumeration exists.
 	 */
 	loopbackmediumlink();
+
+	/*
+	 * The Ethernet medium, for the same reason loopback is linked
+	 * here: upstream's ipreset() links only null and pkt, and
+	 * everything else is a medium a particular configuration opts
+	 * into.
+	 *
+	 * It attaches by NAME (see the header of os/ip/ethermedium.c), so
+	 * linking it commits this kernel to nothing about where the
+	 * driver lives -- which is the point, because on this board it
+	 * lives outside the kernel.
+	 */
+	ethermediumlink();
 	if(ipdevtab.reset != nil)
 		ipdevtab.reset();
 

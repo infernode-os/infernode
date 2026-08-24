@@ -1207,15 +1207,32 @@ probesysfile(void)
 			if(n <= 0)
 			ok = 0;
 		else {
-			/* the single entry must be the /dev we put in rootfs.c */
-			d = malloc(sizeof(Dir) + n);
-			if(d != nil){
-				if(convM2D((uchar*)buf, n, d, (char*)(d+1)) <= BIT16SZ)
-					ok = 0;
-				else if(strcmp(d->name, "dev") != 0)
-					ok = 0;
+			/*
+			 * Scan the packed stat entries for /dev rather than
+			 * assuming it comes first. The root's contents are
+			 * generated from a manifest now, so their order is a
+			 * property of the build and not something a test of
+			 * the file path should be pinned to.
+			 */
+			int off, found;
+			uint m;
+
+			found = 0;
+			for(off = 0; off < n; off += m){
+				d = malloc(sizeof(Dir) + (n - off));
+				if(d == nil)
+					break;
+				m = convM2D((uchar*)buf+off, n-off, d, (char*)(d+1));
+				if(m <= BIT16SZ){
+					free(d);
+					break;
+				}
+				if(strcmp(d->name, "dev") == 0)
+					found = 1;
 				free(d);
 			}
+			if(!found)
+				ok = 0;
 		}
 		if(kclose(fd) < 0)
 			ok = 0;
@@ -1226,7 +1243,7 @@ probesysfile(void)
 		ok = 0;
 
 	print("file: kopen/kread/kclose %s\n",
-		ok ? "OK (opened /, read \"dev\", closed)" : "BROKEN");
+		ok ? "OK (opened /, found \"dev\", closed)" : "BROKEN");
 }
 
 /*
@@ -1368,12 +1385,19 @@ probecons(void)
  * This must run as a kernel process rather than inline: vmachine() is
  * the VM's scheduler loop and owns the thread it runs on.
  */
+/*
+ * The generated root filesystem's tables (tools/mkrootfs.py). devroot.c
+ * declares neither, so say so here rather than including a generated
+ * header just for a count.
+ */
+extern int	rootmaxq;
+
 static void
 startdis(void)
 {
 	print("\ndis:  handing control to the Dis VM\n");
-	print("dis:  /osinit.dis is %d bytes, compiled into the image\n",
-		rootosinitlen);
+	print("dis:  root filesystem: %d entries compiled into the image\n",
+		rootmaxq);
 
 		/*
 	 * KPDUPPG|KPDUPFDG|KPDUPENVG: the Dis process inherits the

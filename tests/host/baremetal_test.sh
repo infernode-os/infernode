@@ -186,29 +186,37 @@ build_kernel() {
     # list and made xalloc return nil for every request. Catching it at
     # build time is the difference between a compile error and memory
     # corruption in an imported file nobody is reading closely.
-    # /osinit.dis -- the initial Dis program, compiled into the kernel.
+    # The root filesystem, compiled into the kernel image.
     #
-    # Two steps, and they are the same two os/port/mkroot performs:
-    # compile the Limbo source to bytecode, then turn the bytecode into
-    # a C array the kernel image carries. A native Inferno kernel has no
-    # storage driver at boot, so its root filesystem IS its image.
+    # A native Inferno kernel has no storage driver at boot, so its root
+    # filesystem IS its image. tools/mkrootfs.py stands in for
+    # os/port/mkroot: it takes a manifest, compiles each file in as a
+    # byte array, and emits the roottab/rootdata pair devroot.c serves
+    # them from.
+    #
+    # The shell needs more than itself. sh.b's initialise() loads
+    # Filepat, String, Bufio, Env and Arg and calls badmodule() -- which
+    # is fatal -- on any that are missing, so all five have to be in the
+    # image before there can be a prompt.
     if [[ -n "$LIMBO" && -f "$ROOT/os/init/osinit.b" ]]; then
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/osinit.dis" \
             "$ROOT/os/init/osinit.b" 2>>"$BUILD/cc.log" || return 1
-        python3 - "$BUILD/osinit.dis" "$BUILD/osinit.c" <<'DISEOF'
-import sys
-data = open(sys.argv[1], "rb").read()
-with open(sys.argv[2], "w") as f:
-    f.write("/* generated from os/init/osinit.b -- do not edit */\n")
-    f.write("typedef unsigned char uchar;\n\n")
-    f.write("uchar rootosinitcode[] = {\n")
-    for i in range(0, len(data), 12):
-        f.write("\t" + ",".join("0x%02x" % b for b in data[i:i+12]) + ",\n")
-    f.write("};\n\nint rootosinitlen = %d;\n" % len(data))
-DISEOF
+
+        rootmanifest=(
+            "/osinit.dis=$BUILD/osinit.dis"
+            "/dev="
+            "/dis/sh.dis=$ROOT/dis/sh.dis"
+            "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
+            "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
+            "/dis/lib/bufio.dis=$ROOT/dis/lib/bufio.dis"
+            "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
+            "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
+        )
+        python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
+            "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
-            -c "$BUILD/osinit.c" -o "$BUILD/osinit.o" 2>>"$BUILD/cc.log" || return 1
-        objs+=("$BUILD/osinit.o")
+            -c "$BUILD/rootfs.c" -o "$BUILD/rootfs.o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$BUILD/rootfs.o")
     fi
 
     # errstr.h is GENERATED from os/port/error.h, exactly as upstream's

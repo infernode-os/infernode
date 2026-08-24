@@ -4,10 +4,10 @@ Tracked as **INFR-404**. This is InferNode running *native* — as the
 firmware on the board, with no host OS underneath — rather than *hosted*,
 which is what everything under `emu/` does.
 
-Status: **the Dis VM runs.** A Limbo program, compiled to bytecode and
-embedded in the kernel image, is loaded from the in-kernel root
-filesystem and executed, and its `sys->print()` reaches the console
-through the Sys module, sysfile, chan, devcons and the UART.
+Status: **there is a shell, networking, and a JIT.** The system boots to
+an interactive prompt, runs pipelines and command substitution as
+JIT-compiled AArch64, answers pings and completes TCP connections over
+its own IP stack, and enumerates the USB bus end to end.
 
 Working:
 
@@ -15,23 +15,25 @@ Working:
 - AArch64 exception vectors, ESR decoding, register dump on fault
 - MMU with an identity map, caches on, correct memory attributes
 - VideoCore mailbox; framebuffer, verified pixel-exact; GPIO
-- ARM generic timer at 100Hz, IRQ delivery, cross-checked against the
-  BCM system timer
+- ARM generic timer at 100Hz; device interrupts through the VideoCore
+  controller, asserted at boot rather than assumed
 - `xalloc`, the pool allocator (`malloc`/`free`), Blocks
 - the scheduler: process table, context switch, blocking locks
 - namespace: channels, path composition, process groups, the root
   device, `kopen`/`kread`/`kwrite`/`kbind`
-- a console on `/dev/cons`
-- the Dis VM: `libinterp` linked, `disinit`, and Limbo bytecode executing
+- a console on `/dev/cons`, `#p` (processes), `#|` (pipes)
+- the Dis VM, and the **JIT**: 27× the interpreter, bit-identical results
+- an interactive shell: pipelines, command substitution, `for` loops
+- **`os/ip`**: ICMP and TCP over loopback, route table, `ptclbsum`
+- **USB**: `#u`, the DWC OTG host stack, and enumeration through a hub
+  to the CDC Ethernet device behind it
 
-Known limitation: the VM stalls after its first system call. See
-"VM bring-up" below — the cause is partly identified and the
-investigation is written down rather than left to be repeated.
-
-Not done: `portclock.c`, `exportfs.c`, `devprog`/`devsrv`/`devenv`,
-`os/ip` and any networking, the JIT (excluded deliberately — it needs a
-bare-metal W^X allocator), and **any run on real hardware**. Everything
-above is QEMU.
+Not done: no packet has yet been sent or received on a real network —
+that needs the class driver described under "Decision: device protocols
+live outside the kernel, mechanism inside". And **nothing here has run
+on real hardware**; everything above is QEMU. The JIT in particular is
+not accepted until it has, because TCG does not model split I/D caches,
+so missing icache maintenance is invisible in emulation.
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the
 port, boots it under QEMU, and asserts on the result — including pulling
@@ -234,9 +236,11 @@ convention is correct by construction rather than broken.
 4e's **in-kernel** `usbdwc.c` + `devusb.c` + `etherusb.c`, then adding a
 `lan78xx` entry to `etherusb.c`'s driver-family table — it already
 dispatches cdc/asix/smsc through exactly that mechanism, so the 3B+ NIC
-is an addition rather than a rewrite. (A userspace 9P USB service would
-arguably suit InferNode's design better, but that is a design decision,
-not a port, and it should be made before anything is imported.)
+is an addition rather than a rewrite. **That last step is no longer the
+plan** — see "Decision: device protocols live outside the kernel,
+mechanism inside" below. `usbdwc.c` and `devusb.c` were imported;
+`etherusb.c` will not be, because it is an in-kernel `Ether` driver and
+that layer is now a program.
 
 None of this reduces the other hard dependency: **this tree has no
 TCP/IP stack at all**, so `os/ip` is required for any networking path.
@@ -344,6 +348,151 @@ diffing against it.
 
 A real `aarch64-elf-gcc` would restore the option, and is worth
 revisiting if one is ever installed.
+
+## Decision: device protocols live outside the kernel, mechanism inside
+
+Recorded because the section above deferred it: *"A userspace 9P USB
+service would arguably suit InferNode's design better, but that is a
+design decision, not a port, and it should be made before anything is
+imported."* It is now made.
+
+**The rule.** The kernel provides access to the *bus* — registers, DMA,
+interrupts, and raw endpoints. A driver that speaks one device's
+*protocol* on top of that lives outside the kernel, as a program.
+Concretely: `usbdwc.c` and `devusb.c` (`#u`) are in; the CDC and
+LAN78xx Ethernet drivers are not, and neither will USB storage, HID or
+audio be.
+
+### The argument that does not work
+
+The obvious case for userspace is fault isolation: a bug in a driver
+should not be able to panic the machine or corrupt unrelated memory.
+That argument is true, and it is not the reason, because it proves far
+too much.
+
+Look at what this kernel already loads:
+
+    &rootdevtab   '/'   the namespace
+    &consdevtab   'c'   /dev/cons
+    &progdevtab   'p'   #p, processes
+    &pipedevtab   '|'   #|, pipes
+    &usbdevtab    'u'   #u, raw USB endpoints
+    &ipdevtab     'I'   #I, the entire IP stack
+
+`#I` is seventeen files including a full TCP implementation, parsing
+hostile input straight off the wire. If "a bug here shouldn't take the
+machine down" were the operative principle, `os/ip` would be the *first*
+thing evicted and a USB Ethernet driver would be somewhere near the
+last. Nobody is proposing to evict it. So fault isolation cannot be what
+is actually being applied, and a decision justified by it would be a
+decision we do not in fact believe.
+
+Inferno is not a microkernel and this port is not going to make it one.
+Saying so plainly is worth more than a rationale that sounds principled
+and is not.
+
+### The line that does hold
+
+Two kinds of thing belong in the kernel:
+
+- **Resources that must be shared and arbitrated across every user.**
+  The namespace, the process table, pipes, the IP stack. Everything
+  multiplexes through these; putting one outside means every user pays
+  an extra hop to reach it, and the kernel's own `kdial` would come to
+  depend on a process it is supposed to be able to start.
+- **Register, DMA and interrupt access**, where there is no lower-level
+  mechanism to build on. `usbdwc.c` owns the DWC OTG core's registers
+  and its interrupt; nothing underneath it could.
+
+Everything else — one device's protocol, expressed on top of a mechanism
+the kernel already exposes — goes outside. `#u` exists *precisely* to
+make that possible: it is raw endpoint access, deliberately published as
+files so that class drivers need not be kernel code. A CDC or LAN78xx
+driver is exactly that shape.
+
+This is "mechanism, not policy" (docs/DESIGN-PRINCIPLES.md) applied to
+drivers, and it is a line that can be drawn the same way twice.
+
+### What it commits us to
+
+If the ether driver is a program, so are the rest of the USB class
+drivers: storage, HID, audio. They are all the same shape — protocol on
+top of `#u`, used by one device — and splitting them by convenience
+would leave us with no rule at all. A future in-kernel USB class driver
+needs to argue against this section, not around it.
+
+### What it does not commit us to
+
+Not `#I`, not the scheduler, not `usbdwc`. Those are the first category,
+and nothing here is an argument for moving them. In particular this is
+not a staged plan to arrive at a microkernel by increments.
+
+### How it attaches, concretely
+
+The important discovery is that **`os/ip` attaches to a name, not to a
+struct.** `os/ip/ip.h` declares
+
+    extern Chan* chandial(char*, char*, char*, Chan**);
+
+and `ethermedium`'s bind goes through it. The medium dials an ether
+device by *name* and cannot tell whether what answers is a C driver
+compiled into the kernel or a 9P server mounted into the kernel's
+namespace. That is what makes this decision cheap rather than a rewrite:
+only the USB protocol moves out. ARP, Ethernet framing and demultiplexing
+by ether type stay in `os/ip`, where `arp.c` already implements them.
+
+The namespace, then:
+
+    #u/usb/ep3.1/data      bulk in    -+
+    #u/usb/ep3.2/data      bulk out   -+--> etherusb (Dis)
+                                                |  serves 9P
+                                          /net/ether0/
+                                              addr        the MAC
+                                              clone       open for a connection
+                                              N/ctl       "connect 0x800"
+                                              N/data      frames of that type
+                                                |  chandial("/net/ether0!0x800")
+                                          ethermedium.c
+                                                |
+                                             os/ip
+
+`ethermedium` opens three connections — `0x800` (IPv4), `0x806` (ARP),
+`0x86DD` (IPv6) — so the server's only real obligation beyond shuttling
+bytes is to demultiplex inbound frames by ether type onto the right
+connection. That is the interface `devether` provides in Plan 9, so the
+shape is not invented here.
+
+**`pktmedium` is not the attach point,** though it is the medium already
+in this tree and was the obvious first guess. Its `pktin` calls
+`ipiput4` directly: it hands over IP datagrams, does no Ethernet framing
+and no ARP. Binding there would mean reimplementing ARP in Limbo
+alongside the copy in `arp.c` — more code, in a second language, for a
+problem already solved.
+
+### The cost, stated rather than predicted
+
+With `#I` inside the kernel and the driver outside, every packet crosses
+the boundary: two copies and two trips through the Dis VM in each
+direction. A microkernel would not pay this, and Inferno's not being one
+is exactly where the cost shows up. The Pi 3B+'s NIC is behind USB 2.0
+and realistically tops out around 200-300 Mbit, so the extra copies may
+well not be the limit — but that is a guess, and guesses about
+performance are how this sort of decision goes wrong.
+
+So it gets measured once there is something to measure, on hardware, and
+the number goes in this file. If it turns out to matter, moving a
+*working* driver into the kernel is a much smaller job than debugging an
+in-kernel one from scratch — which is the other half of why this
+ordering was chosen.
+
+### What changes about the import plan
+
+- **Not imported:** `etherusb.c`. It is an in-kernel `Ether` driver and
+  this decision says that layer is not kernel code.
+- **To import:** `ethermedium.c` and `chandial.c` into `os/ip`.
+- **Already imported and unaffected:** `usbdwc.c`, `devusb.c`.
+- **To write:** a Dis program speaking CDC (for QEMU's `usb-net`) and
+  LAN78xx (for the board), serving the ether interface sketched above.
 
 ## VM bring-up: the four bugs that were in the way
 
@@ -585,13 +734,17 @@ carrying `arm_64bit=1`, `enable_uart=1`, and — critically —
 `dtoverlay=disable-bt`, because on a Pi 3 the PL011 is wired to
 Bluetooth by default and the console comes out of the mini-UART instead.
 
-**3. USB, and a design decision first.** The 3B+'s LAN7515 sits behind
-USB, so a DWC2 host stack gates wired Ethernet *and* WiFi. Decide
-in-kernel (Plan 9 4e `usbdwc.c` + `devusb.c` + `etherusb.c`) versus a
-userspace 9P USB service **before importing anything** — the latter
-suits this system's design better but is a design project, not a port.
-Import order once decided: `usbdwc.c` + `devusb.c`, then `etherusb.c`
-plus a `lan78xx` entry in its driver-family table.
+**3. USB — the host stack is in, the class driver is next.** The 3B+'s
+LAN7515 sits behind USB, so a DWC2 host stack gates wired Ethernet
+*and* WiFi. `usbdwc.c` and `devusb.c` are imported and the bus
+enumerates end to end under QEMU: root hub, a real hub addressed and
+interrogated over the wire, and the CDC Ethernet device behind it.
+
+The design decision this item used to be waiting on is made and written
+up — see "Decision: device protocols live outside the kernel, mechanism
+inside". The class driver is a Dis program, not `etherusb.c`. Remaining:
+`ethermedium.c` and `chandial.c` into `os/ip`, then the program itself,
+speaking CDC against QEMU's `usb-net` and LAN78xx against the board.
 
 **4. `os/ip`.** No TCP/IP stack exists in this tree at all, so it is a
 hard dependency under every networking path. Write the route-table test

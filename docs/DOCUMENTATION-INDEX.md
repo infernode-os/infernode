@@ -29,6 +29,7 @@
 | Document | Description |
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, layer diagram, and component overview |
+| [decisions/0001-rooted-agent-capabilities.md](decisions/0001-rooted-agent-capabilities.md) | Proposed decision: rooted 9P filesystem capabilities and atomic agent delegation |
 | [LUCIFER-EVALUATION.md](LUCIFER-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
 | [evaluations/fractal-app-evaluation.md](evaluations/fractal-app-evaluation.md) | Fractal app production readiness evaluation |
 | [architecture-review-veltro-unification.md](architecture-review-veltro-unification.md) | Veltro architecture review |

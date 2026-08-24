@@ -19,6 +19,7 @@ EMUDIRS=\
 	libdraw\
 	libmemdraw\
 	libmemlayer\
+	libtk\
 	utils/data2c\
 	utils/ndate\
 	emu\

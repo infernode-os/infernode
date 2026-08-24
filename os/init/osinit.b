@@ -429,6 +429,7 @@ Ddev:		con 1;		# descriptor type: device
 Dconf:		con 2;		# descriptor type: configuration
 Dhub:		con 16r29;	# descriptor type: hub
 Clhub:		con 9;		# device class: hub
+Clcomm:		con 2;		# device class: communications
 
 HPpresent:	con 16r1;
 HPenable:	con 16r2;
@@ -676,10 +677,38 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	}
 	sys->fprint(dctl, "address");
 
-	if(class == Clhub)
+	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
-	else
-		dumpconfig(d, indent + "  ");
+		return;
+	}
+
+	dumpconfig(d, indent + "  ");
+
+	#
+	# Hand it to a class driver, which is a program. The bus walk's
+	# job ends at "there is a device of this class at this endpoint";
+	# what to say to it is not the kernel's business.
+	#
+	if(class == Clcomm)
+		startdriver("/dis/etherusb.dis", name);
+}
+
+#
+# Load a class driver and let it run in its own process.
+#
+# A command in Inferno is a Dis module -- there is no exec(2) -- so
+# starting one means loading it and calling init(). It is spawned
+# rather than called so that a driver which blocks waiting for its
+# device does not stop the rest of the bus walk.
+#
+startdriver(path, name: string)
+{
+	drv := load Command path;
+	if(drv == nil){
+		sys->print("init: cannot load %s: %r\n", path);
+		return;
+	}
+	spawn drv->init(nil, "etherusb" :: name :: nil);
 }
 
 #

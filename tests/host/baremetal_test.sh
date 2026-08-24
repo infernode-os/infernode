@@ -221,8 +221,17 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/osinit.dis" \
             "$ROOT/os/init/osinit.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The USB Ethernet class driver, which is a program rather than
+        # kernel code -- see "Decision: device protocols live outside
+        # the kernel, mechanism inside" in os/bcm2837/README.md. osinit
+        # loads it by name once the bus walk has found something it
+        # might drive.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/etherusb.dis" \
+            "$ROOT/os/init/etherusb.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
+            "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dev="
             "/net="
             "/prog="
@@ -683,6 +692,20 @@ check "if 0 alt 0: class 2.2.255"        "interface 0 is CDC control, vendor pro
 check "if 1 alt 0: class 10.0.0"         "interface 1 is CDC data"
 check "ep2 in bulk maxpkt 64"            "the bulk IN endpoint is described"
 check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
+
+# The class driver, which is a PROGRAM -- loaded by osinit, not linked
+# into the kernel. See the driver-placement decision in
+# os/bcm2837/README.md.
+#
+# The MAC is the load-bearing check: it is not a constant anywhere in
+# this tree, it is queried out of the device over RNDIS, so a correct
+# answer means the whole chain worked -- SET_CONFIGURATION, a bulk
+# endpoint created through #u, and an RNDIS request/response pair
+# carried on class control transfers to an interface.
+check "etherusb: ep3.0 bulk endpoint is ep3.2" "the driver creates a bulk endpoint through #u"
+check "etherusb: RNDIS 1.0, max transfer 1580" "the RNDIS handshake completes"
+check "etherusb: ep3.0 MAC 52:54:00:12:34:57"  "the MAC is read out of the device"
+check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 
 # Interrupts, asserted rather than assumed.
 #

@@ -363,11 +363,52 @@ build directory so a fault can be symbolised at all. **Verify the
 toolchain before trusting what it tells you about the bug** — a
 diagnostic nobody checks is not neutral, it actively misleads.
 
-### Still open
+### Still open: sp is corrupted while a Dis process runs
 
-`/dev/sysname` reads back empty, and the kernel's `print` does not
-implement `%q` — it emits the verb literally. Neither is load-bearing
-yet; both are visible in the `osinit` output.
+The port boots and runs `/osinit.dis` to completion, but only about
+half to three-quarters of the time. The same image, booted repeatedly
+under the same QEMU, either finishes cleanly or dies -- so this is
+timing, and the clock interrupt is the only thing that varies.
+
+What is established:
+
+* **sp ends up inside `.bss`.** Every stack in this kernel is either
+  below the image (`l.S` sets `sp = _start`) or at or above `end` (a
+  kstack from `smalloc`). An sp in `[_start, end)` is impossible, and
+  that is exactly where the failures put it -- 0xcc590, 0xca3b8.
+
+* **It is not the scheduler, and not a saved label.** `sched()` checks
+  that it is running on `up`'s stack, and `gotolabel` checks that
+  `up->sched.pc` is in the text and `up->sched.sp` is inside
+  `up->kstack`. Over twelve boots none of those fire, while all six
+  failures are caught at trap entry. So sp goes bad while the process
+  is running normally, not across a context switch.
+
+* **The cascade after it is fully accounted for.** `fmtalloc` --
+  libkern's format-handler table -- sits at 0xcc458 and is 1032 bytes.
+  A stack at 0xcc590 puts `print()`'s 256-byte `buf` straight down over
+  it, so the next conversion loads a handler that has had a formatted
+  character written into it: 0xb1738 is `_flagfmt`, and 0x35000b1738 is
+  `_flagfmt` with byte 4 replaced by `'5'`. Branching through that is
+  the "PC alignment fault at 0xa" and "instruction abort at
+  0x35000b1738" the port kept producing. `_fmtdispatch` also spins
+  `while(p->fmt == nil)`, which is the other symptom: a boot that stops
+  mid-word and hangs.
+
+* **The real stack survives in registers.** In the captured dump x5 and
+  x6 still hold 0xe2d20, inside pid 5's actual kstack, while sp points
+  into `.bss`.
+
+The next step is to find who writes sp. The instrumentation to do it is
+in place: `BAREMETAL_BUILD_DIR` keeps the build so a pc can be
+symbolised, each image has its own ELF, and a fault reports once and
+halts instead of looping.
+
+Two smaller things also remain: `/dev/sysname` and `%q` were fixed, but
+`sprint()` in `devcons.c` still assumes every caller's buffer is
+`PRINTSIZE`, and `os/port/dev.c:105` hands it a `smalloc(4+strlen+1)`.
+It fits today and will not survive the first caller that formats
+something longer.
 
 ## Next
 

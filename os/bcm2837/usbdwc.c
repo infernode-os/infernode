@@ -169,7 +169,33 @@ chansetup(Hostchan *hc, Ep *ep)
 		hcc |= Lspddev;
 		/* fall through */
 	case Fullspeed:
-		if(ep->dev->hub > 1){
+		/*
+		 * Splits, and ONLY when the bus is actually high speed.
+		 *
+		 * A split transaction exists so a high-speed hub can talk
+		 * to a full- or low-speed device behind it at the slower
+		 * rate without holding the high-speed bus idle. If the bus
+		 * below the controller is not running at high speed there
+		 * is nothing to translate: everything is already going at
+		 * the device's rate, and asking for a split makes the
+		 * controller wait for a start-of-frame that means nothing
+		 * to it.
+		 *
+		 * Upstream keys on hub > 1 alone, because on a real Pi the
+		 * hub soldered to the root port (the LAN9514) is always
+		 * high speed, so the two conditions coincide. They do not
+		 * coincide under emulation, where the hub on the root port
+		 * is a full-speed one -- and the symptom is not a wrong
+		 * answer but a driver that stops for ever inside sofwait(),
+		 * one level deeper into the tree than anything that had
+		 * been tried before.
+		 *
+		 * The root port's negotiated speed answers this for the
+		 * whole tree: a full-speed hub makes the port full speed,
+		 * so if the port is not high speed nothing below it is.
+		 */
+		if(ep->dev->hub > 1 &&
+		   (ctlr->regs->hport0 & Prtspd) == HIGHSPEED){
 			hc->hcsplt = Spltena | POS_ALL | ep->dev->hub<<OHubaddr |
 				ep->dev->port;
 			break;
@@ -446,6 +472,28 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		}
 		n = hc->hcdma - hcdma;
 		if(n == 0){
+			/*
+			 * A zero-length transfer moves no data, so hcdma
+			 * cannot advance, and this controller does not
+			 * decrement Pktcnt for it either -- neither of
+			 * upstream's two completion tests can fire, and the
+			 * loop retries for ever.
+			 *
+			 * Xfercomp is the controller saying the transfer is
+			 * done. When nothing was asked for, that is the
+			 * whole story: there is no short-transfer case to
+			 * confuse it with, because zero bytes is what was
+			 * wanted and zero bytes is what arrived.
+			 *
+			 * This is the status stage of every control
+			 * transfer that has no data stage -- SET_ADDRESS,
+			 * SET_CONFIGURATION, every hub SET_FEATURE. Without
+			 * it a device can be described but never addressed,
+			 * so enumeration stops at the first device on the
+			 * bus.
+			 */
+			if(len == 0 && (i & Xfercomp))
+				break;
 			if((hc->hctsiz & Pktcnt) != (hctsiz & Pktcnt))
 				break;
 			else

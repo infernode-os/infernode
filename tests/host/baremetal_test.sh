@@ -662,9 +662,16 @@ check "present"                          "the root hub sees the attached device"
 # a wrong-but-plausible descriptor is exactly what must not pass.
 check "USB port 1 after reset"           "SET_FEATURE(PORT_RESET) enables the port"
 check "enabled"                          "the port reports itself enabled after reset"
-check "USB device allocated as ep2.0"    "newdev allocates an endpoint and names it back"
-check "0x0409:0x55aa class 9 (hub)"      "the device descriptor reads back real values"
+check "ep2.0 0x0409:0x55aa class 9 (hub)" "the device descriptor reads back real values"
 check "maxpkt 8 usb 1.1"                 "descriptor fields are the device's, not padding"
+
+# Enumerating THROUGH the hub. Everything above talks to the first
+# device on the bus; these need it addressed first, which is the step
+# that requires a control transfer with no data stage to complete.
+check "is a hub with 8 port(s)"          "the hub descriptor reports its port count"
+check "port 1 0x0103 present enabled"    "a hub port powers up, resets and enables"
+check "ep3.0 0x0525:0xa4a2 class 2"      "the device behind the hub enumerates"
+check "class 2 maxpkt 64 usb 2.0"        "it is the CDC Ethernet adapter, at high speed"
 
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 

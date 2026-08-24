@@ -412,10 +412,21 @@ Rother:		con 3;		# recipient: other (a port)
 
 Rgetstatus:	con 0;
 Rsetfeature:	con 3;
+Rsetaddress:	con 5;
 Rgetdesc:	con 6;
-Rportreset:	con 4;		# hub feature selector
+
+#
+# Hub feature selectors. The root hub understands only the first two,
+# because devusb answers for it and switches on wValue rather than on
+# the request code. A REAL hub is a device like any other: the request
+# code matters, and it also has to be told to turn its ports on.
+#
+Fportenable:	con 1;
+Fportreset:	con 4;
+Fportpower:	con 8;
 
 Ddev:		con 1;		# descriptor type: device
+Dhub:		con 16r29;	# descriptor type: hub
 Clhub:		con 9;		# device class: hub
 
 HPpresent:	con 16r1;
@@ -454,15 +465,32 @@ ctlreq(d: ref Sys->FD, rtype, req, value, index, length: int, rep: array of byte
 	return sys->read(d, rep, len rep);
 }
 
-portstatus(d: ref Sys->FD): int
+#
+# GET_STATUS on a hub port. wValue is 0 for a real hub because the
+# standard says so, and 0 for the root hub because devusb switches on
+# wValue and 0 is what selects portstatus there -- so one shape serves
+# both.
+#
+portstatus(d: ref Sys->FD, port: int): int
 {
-	rep := array[8] of byte;
+	rep := array[4] of byte;
 
-	# devusb switches on wValue, not on the request code, so wValue
-	# carries the feature selector -- 0 here selects portstatus.
-	if(ctlreq(d, Rd2h|Rclass|Rother, Rgetstatus, 0, 1, 4, rep) < 2)
+	if(ctlreq(d, Rd2h|Rclass|Rother, Rgetstatus, 0, port, len rep, rep) < len rep)
 		return -1;
 	return int rep[0] | (int rep[1] << 8);
+}
+
+#
+# SET_FEATURE on a hub port, with no data stage. The read still has to
+# happen: for the root hub devusb parks the reply in ep->rhrepl and
+# refuses to answer twice, so an uncollected one is handed to the NEXT
+# request instead.
+#
+portfeature(d: ref Sys->FD, port, feature: int): int
+{
+	rep := array[4] of byte;
+
+	return ctlreq(d, Rh2d|Rclass|Rother, Rsetfeature, feature, port, 0, rep);
 }
 
 statusflags(status: int): string
@@ -505,7 +533,7 @@ usbprobe()
 		return;
 	}
 
-	status := portstatus(d);
+	status := portstatus(d, 1);
 	if(status < 0){
 		sys->print("init: usb port status failed: %r\n");
 		return;
@@ -523,13 +551,12 @@ usbprobe()
 	# addressable: until the port is reset it has not negotiated a
 	# speed and does not answer on the default address.
 	#
-	rep := array[8] of byte;
-	if(ctlreq(d, Rh2d|Rclass|Rother, Rsetfeature, Rportreset, 1, 0, rep) < 2){
+	if(portfeature(d, 1, Fportreset) < 0){
 		sys->print("init: usb port reset failed: %r\n");
 		return;
 	}
 
-	status = portstatus(d);
+	status = portstatus(d, 1);
 	if(status < 0){
 		sys->print("init: usb port status after reset failed: %r\n");
 		return;
@@ -542,22 +569,22 @@ usbprobe()
 		return;
 	}
 
-	enumerate(speedname(status));
+	enumerate("/usb/usb/ep1.0/ctl", 1, speedname(status), "");
 }
 
 #
-# Allocate a device on the bus and ask it what it is.
+# Bring one device up on a port of some hub, and if it turns out to be
+# a hub itself, walk it too.
 #
-# This is the point where the port stops being a register and starts
-# being a device: every transfer from here on is a real USB transaction
-# carried over the wire by the DWC controller, not a request devusb
-# answers on the root hub's behalf.
+# hubctl is the ctl file of the hub the device hangs off -- the root
+# hub's for the first call, a real hub's for the recursive ones. depth
+# is only used to indent the report.
 #
-enumerate(speed: string)
+enumerate(hubctl: string, port: int, speed, indent: string)
 {
-	c := sys->open("/usb/usb/ep1.0/ctl", Sys->ORDWR);
+	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
-		sys->print("init: cannot open the root hub ctl: %r\n");
+		sys->print("init: cannot open %s: %r\n", hubctl);
 		return;
 	}
 
@@ -567,7 +594,7 @@ enumerate(speed: string)
 	# ctl file has to be held open across both operations; opening it
 	# twice would allocate a device and then lose its name.
 	#
-	if(sys->fprint(c, "newdev %s 1", speed) < 0){
+	if(sys->fprint(c, "newdev %s %d", speed, port) < 0){
 		sys->print("init: usb newdev failed: %r\n");
 		return;
 	}
@@ -577,9 +604,8 @@ enumerate(speed: string)
 	# past the end of the (not yet written) name, and ctlread ends in
 	# readstr(offset, ...), which answers 0 for any offset past the
 	# string. That looks exactly like an empty ctl file, and %r then
-	# prints whatever unrelated error was last set -- here "file does
-	# not exist", from an open that had succeeded minutes earlier.
-	# Plan 9's usbd preads at 0 for the same reason.
+	# prints whatever unrelated error was last set. Plan 9's usbd
+	# preads at 0 for the same reason.
 	#
 	nbuf := array[32] of byte;
 	n := sys->pread(c, nbuf, len nbuf, big 0);
@@ -589,8 +615,6 @@ enumerate(speed: string)
 	}
 	name := string nbuf[0:n];
 
-	sys->print("init: USB device allocated as %s at %s speed\n", name, speed);
-
 	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
 	if(d == nil){
 		sys->print("init: cannot open %s: %r\n", name);
@@ -599,10 +623,10 @@ enumerate(speed: string)
 
 	#
 	# GET_DESCRIPTOR(DEVICE) on the default address. The device has
-	# not been given an address yet, and does not need one for this:
+	# not been given an address yet and does not need one for this:
 	# usbdwc leaves the address field zero while the device is in
-	# Dconfig, which is exactly what the bus expects of a device that
-	# has just been reset.
+	# Dconfig, which is what the bus expects of a device that has just
+	# been reset.
 	#
 	desc := array[18] of byte;
 	n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
@@ -613,20 +637,139 @@ enumerate(speed: string)
 
 	vendor := int desc[8] | (int desc[9] << 8);
 	product := int desc[10] | (int desc[11] << 8);
-
-	#
-	# Class 9 is a hub. On this board that is the expected answer:
-	# the root port does not go to the device, it goes to a hub, and
-	# everything else hangs off that. Naming it here saves the next
-	# reader wondering why the descriptor does not match whatever
-	# they plugged in.
-	#
 	class := int desc[4];
+	maxpkt := int desc[7];
+
 	what := "";
 	if(class == Clhub)
 		what = " (hub)";
 
-	sys->print("init: USB device %#4.4x:%#4.4x class %d%s maxpkt %d usb %d.%d\n",
-		vendor, product, class, what, int desc[7],
+	sys->print("init: %sUSB %s %#4.4x:%#4.4x class %d%s maxpkt %d usb %d.%d\n",
+		indent, name, vendor, product, class, what, maxpkt,
 		int desc[3], int desc[2] >> 4);
+
+	#
+	# Now give it an address. Two steps that must happen in this
+	# order: the request goes out on the wire while the device is
+	# still answering on address 0, and only then is the kernel told,
+	# because that is what makes usbdwc start putting the address in
+	# the channel register.
+	#
+	# maxpkt first. devusb assumes 64 for anything not low speed, and
+	# this device says 8; a control transfer split into the wrong
+	# packet size is a bus error rather than a short read.
+	#
+	dctl := sys->open("/usb/usb/" + name + "/ctl", Sys->ORDWR);
+	if(dctl == nil){
+		sys->print("init: cannot open %s ctl: %r\n", name);
+		return;
+	}
+	sys->fprint(dctl, "maxpkt %d", maxpkt);
+
+	nb := devnum(name);
+	rep := array[4] of byte;
+	if(ctlreq(d, Rh2d, Rsetaddress, nb, 0, 0, rep) < 0){
+		sys->print("init: %s set address %d failed: %r\n", name, nb);
+		return;
+	}
+	sys->fprint(dctl, "address");
+
+	if(class == Clhub)
+		hubwalk(name, d, dctl, indent + "  ");
+}
+
+#
+# Walk a real hub: read how many ports it has, power them, and
+# enumerate whatever is plugged into each.
+#
+# Nothing here is intercepted by the kernel. Every one of these is a
+# control transfer to a device on the wire, which is the difference
+# between this and the root hub -- there the request code was ignored
+# and only wValue mattered.
+#
+hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
+{
+	#
+	# devusb refuses newdev on anything that has not been declared a
+	# hub, because a hub is the only kind of device that can have
+	# something behind it.
+	#
+	sys->fprint(dctl, "hub");
+
+	# Not "hd": that is the list-head operator, and using it as a
+	# variable makes the parser reject every later line that touches
+	# it rather than the declaration itself.
+	hubd := array[8] of byte;
+	n := ctlreq(d, Rd2h|Rclass, Rgetdesc, Dhub << 8, 0, len hubd, hubd);
+	if(n < 5){
+		sys->print("init: %s hub descriptor failed (%d): %r\n", name, n);
+		return;
+	}
+
+	nports := int hubd[2];
+
+	#
+	# bPwrOn2PwrGood is in units of 2ms: how long after switching a
+	# port on before its power is good. Reading a port before then
+	# reports it empty, which looks exactly like nothing being
+	# plugged in.
+	#
+	pwrgood := int hubd[5] * 2;
+	if(pwrgood < 10)
+		pwrgood = 10;
+
+	sys->print("init: %s%s is a hub with %d port(s), power good in %dms\n",
+		indent, name, nports, pwrgood);
+
+	for(port := 1; port <= nports; port++){
+		if(portfeature(d, port, Fportpower) < 0){
+			sys->print("init: %sport %d power failed: %r\n", indent, port);
+			continue;
+		}
+	}
+	sys->sleep(pwrgood);
+
+	for(port = 1; port <= nports; port++){
+		status := portstatus(d, port);
+		if(status < 0){
+			sys->print("init: %sport %d status failed: %r\n", indent, port);
+			continue;
+		}
+		if((status & HPpresent) == 0)
+			continue;
+
+		if(portfeature(d, port, Fportreset) < 0){
+			sys->print("init: %sport %d reset failed: %r\n", indent, port);
+			continue;
+		}
+		sys->sleep(50);
+
+		status = portstatus(d, port);
+		sys->print("init: %sport %d %#4.4x%s\n",
+			indent, port, status, statusflags(status));
+		if((status & HPenable) == 0)
+			continue;
+
+		enumerate("/usb/usb/" + name + "/ctl", port,
+			speedname(status), indent);
+	}
+}
+
+#
+# "ep2.0" -> 2. The device number is what SET_ADDRESS has to carry:
+# devusb allocated it, the device does not know it yet, and the two
+# only agree once the request has gone out on the wire.
+#
+devnum(name: string): int
+{
+	n := 0;
+
+	for(i := 0; i < len name; i++){
+		c := name[i];
+		if(c >= '0' && c <= '9')
+			n = n * 10 + (c - '0');
+		else if(n != 0)
+			break;
+	}
+	return n;
 }

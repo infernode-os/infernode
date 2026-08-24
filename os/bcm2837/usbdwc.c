@@ -557,6 +557,17 @@ ctltrans(Ep *ep, uchar *req, long n)
 		/* XXX cache madness */
 		epio->cb = b = allocb(ROUND(datalen, ep->maxpkt) + CACHELINESZ);
 		b->wp = (uchar*)ROUND((uintptr)b->wp, CACHELINESZ);
+		/*
+		 * rp follows wp. The DMA target is the ROUNDED address, so
+		 * that is where the data begins; ctldata() below hands the
+		 * caller "n bytes from b->rp". Leaving rp at the unrounded
+		 * base means the reply is read from the alignment padding
+		 * in front of the data -- a descriptor of the right LENGTH,
+		 * full of whatever allocb left behind, which reads as a
+		 * device that answered with all zeros rather than as a bug
+		 * in this file.
+		 */
+		b->rp = b->wp;
 		memset(b->wp, 0x55, b->lim - b->wp);
 		cachedwbinvse(b->wp, b->lim - b->wp);
 		data = b->wp;

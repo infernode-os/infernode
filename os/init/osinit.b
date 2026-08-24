@@ -416,6 +416,7 @@ Rgetdesc:	con 6;
 Rportreset:	con 4;		# hub feature selector
 
 Ddev:		con 1;		# descriptor type: device
+Clhub:		con 9;		# device class: hub
 
 HPpresent:	con 16r1;
 HPenable:	con 16r2;
@@ -613,7 +614,19 @@ enumerate(speed: string)
 	vendor := int desc[8] | (int desc[9] << 8);
 	product := int desc[10] | (int desc[11] << 8);
 
-	sys->print("init: USB device %#4.4x:%#4.4x class %d maxpkt %d usb %d.%d\n",
-		vendor, product, int desc[4], int desc[7],
+	#
+	# Class 9 is a hub. On this board that is the expected answer:
+	# the root port does not go to the device, it goes to a hub, and
+	# everything else hangs off that. Naming it here saves the next
+	# reader wondering why the descriptor does not match whatever
+	# they plugged in.
+	#
+	class := int desc[4];
+	what := "";
+	if(class == Clhub)
+		what = " (hub)";
+
+	sys->print("init: USB device %#4.4x:%#4.4x class %d%s maxpkt %d usb %d.%d\n",
+		vendor, product, class, what, int desc[7],
 		int desc[3], int desc[2] >> 4);
 }

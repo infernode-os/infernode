@@ -163,6 +163,19 @@ build_kernel() {
     local outimg="$1" mainsrc="$2" extra="$3"
     local objs=() libobjs=() f o
 
+    # Remove the previous image FIRST.
+    #
+    # Every failure path below is "return 1", and the caller reports it
+    # as a failed build and carries on with the rest of the checks --
+    # which boot $outimg. If a stale image is still sitting there, they
+    # boot the LAST kernel that compiled, and every measurement after a
+    # compile error describes code that was never built. That has now
+    # produced confident wrong answers three times in this port, and it
+    # is indistinguishable from the real thing while it is happening.
+    #
+    # Deleting it up front makes a failed build fail loudly instead.
+    rm -f "$outimg" "${outimg%.img}.elf"
+
     # Extra defines for this image only. Used to build a JIT-off twin
     # of the same kernel: benchmarking a JIT against a DIFFERENT binary
     # proves nothing, so the ONLY difference must be -DCFLAG=0.
@@ -635,6 +648,23 @@ check "TCP echo over loopback returned"  "TCP completes a connection and returns
 # with an empty bus the same request reports 0x0500 powered highspeed.
 check "USB root hub port 1 status"       "a USB control transfer reaches the DWC controller"
 check "present"                          "the root hub sees the attached device"
+
+# Enumeration: reset the port, allocate a device, and read its device
+# descriptor over the wire. The values are checked rather than just the
+# line, because the failure this replaced produced a descriptor of the
+# right LENGTH full of zeros -- the DMA target is the cache-line-rounded
+# address and the block's rp was left pointing at the padding in front
+# of it, so the reply read back as a device that answered with nothing.
+#
+# QEMU's raspi3b puts a hub (NEC 0409:55aa) on the root port, so class 9
+# is the expected answer and the usb-net sits behind it. If a future
+# QEMU models a different hub this will fail loudly, which is the point:
+# a wrong-but-plausible descriptor is exactly what must not pass.
+check "USB port 1 after reset"           "SET_FEATURE(PORT_RESET) enables the port"
+check "enabled"                          "the port reports itself enabled after reset"
+check "USB device allocated as ep2.0"    "newdev allocates an endpoint and names it back"
+check "0x0409:0x55aa class 9 (hub)"      "the device descriptor reads back real values"
+check "maxpkt 8 usb 1.1"                 "descriptor fields are the device's, not padding"
 
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 

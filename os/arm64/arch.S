@@ -228,6 +228,67 @@ getcallerpc:
 	ret
 
 /*
+ * void cachedwbinvse(void *addr, int len)
+ *
+ * Clean AND invalidate the data cache over a range, to the Point of
+ * Coherency.
+ *
+ * This is what makes DMA correct, in both directions, and it is not
+ * optional: before a device reads a buffer the CPU's dirty lines must
+ * be written out or the device sees stale memory, and after a device
+ * writes one the CPU's clean lines must be dropped or it reads stale
+ * cache. "dc civac" does both, which is why the driver can use one
+ * call for either direction.
+ *
+ * The line size comes from CTR_EL0.DminLine rather than a constant.
+ * Upstream's bcm port hardcodes 32, which is right for the ARM11 in a
+ * Pi 1 and wrong for the Cortex-A53 here -- and a line size that is
+ * too large silently skips lines, which is the failure that presents
+ * as rare, load-dependent data corruption rather than as a fault.
+ */
+/*
+ * void cachedwbse(void *addr, int len)
+ *
+ * Clean (write back) without invalidating -- used before a device
+ * READS a buffer, where the CPU's copy stays valid.
+ */
+	.global	cachedwbse
+cachedwbse:
+	mrs	x2, ctr_el0
+	ubfx	x3, x2, #16, #4
+	mov	x4, #4
+	lsl	x3, x4, x3
+	sub	x4, x3, #1
+	add	x1, x0, x1
+	bic	x0, x0, x4
+1:
+	dc	cvac, x0
+	add	x0, x0, x3
+	cmp	x0, x1
+	b.lo	1b
+	dsb	sy
+	isb
+	ret
+
+	.global	cachedwbinvse
+cachedwbinvse:
+	mrs	x2, ctr_el0
+	ubfx	x3, x2, #16, #4		/* DminLine: log2 words per line */
+	mov	x4, #4
+	lsl	x3, x4, x3		/* line size in bytes */
+	sub	x4, x3, #1
+	add	x1, x0, x1		/* end address */
+	bic	x0, x0, x4		/* round start down to a line */
+1:
+	dc	civac, x0
+	add	x0, x0, x3
+	cmp	x0, x1
+	b.lo	1b
+	dsb	sy
+	isb
+	ret
+
+/*
  * void FPsave(void*) / void FPrestore(void*)
  *
  * Save and restore the FP/SIMD register file across a context switch,

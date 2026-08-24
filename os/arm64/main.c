@@ -227,7 +227,7 @@ probeclock(void)
 	 * timeout source even when the thing under test is broken -- and it
 	 * is the one clock every AArch64 board has.
 	 */
-	intrenable();
+	spllo();
 	deadline = clockcount() + clockfreq()/2;	/* 500ms */
 	while(clockticks() < 5 && clockcount() < deadline)
 		;
@@ -1405,6 +1405,7 @@ extern int	rootmaxq;
  * int.
  */
 extern int	cflag;
+extern Dev	usbdevtab;
 
 #ifndef CFLAG
 #define CFLAG 1
@@ -1447,6 +1448,40 @@ uartkproc(void *a)
 	}
 }
 
+/*
+ * Bring up USB, from a process rather than from the boot path.
+ *
+ * The DWC driver's init() sleeps -- tsleep() while the controller
+ * resets -- and sleeping requires a scheduler and a process to put to
+ * sleep. Calling it from kmain() runs it on the boot stack with no way
+ * to yield, which sched()'s stack invariant catches immediately:
+ *
+ *     panic: sched: pid 3 sp 7fbf8 outside kstack fb7b0..ff7b0
+ *
+ * That is the check earning its keep: without it the failure would
+ * have been a corrupted boot stack surfacing much later somewhere
+ * unrelated.
+ *
+ * Upstream has the same constraint and meets it by structure -- a real
+ * Inferno kernel runs chandevreset() early in main() and chandevinit()
+ * from its FIRST PROCESS, not from the boot path. This kernel still
+ * calls chandevinit() during boot because the passive devices (root,
+ * cons) are needed before there are processes at all, so USB gets its
+ * own kproc instead of restructuring that now.
+ */
+static void
+usbkproc(void *a)
+{
+	USED(a);
+
+	usbdwclink();		/* addhcitype("dwcotg", reset) */
+	if(usbdevtab.reset != nil)
+		usbdevtab.reset();
+	if(usbdevtab.init != nil)
+		usbdevtab.init();
+	pexit("", 0);
+}
+
 static void
 startdis(void)
 {
@@ -1481,6 +1516,7 @@ startdis(void)
 	 * starting with none. disinit() opens #c/cons three times for
 	 * fd 0/1/2, which needs a mount table to resolve it against.
 	 */
+	kproc("usb", usbkproc, nil, 0);
 	kproc("uart", uartkproc, nil, 0);
 	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
 }
@@ -1652,6 +1688,13 @@ kmain(void)
 	 * chandevinit() registers a console callback during device
 	 * initialisation, which ran before the clock did.
 	 */
+	/*
+	 * The interrupt controller, before the clock -- clockinit()
+	 * routes the timer, and any driver that registers a handler needs
+	 * the controller's tables to exist first.
+	 */
+	intrinit();
+
 	clockinit();
 
 	/*
@@ -1750,7 +1793,7 @@ kmain(void)
 	 * re-queue or reap it.
 	 */
 	up = nil;
-	intrenable();
+	spllo();
 	schedinit();
 
 	for(;;)

@@ -613,7 +613,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo piped-through | cat' \
         'q=`{echo one two three}; echo subst-count $#q' \
         'load std' \
-        'for(i in a b c){ echo loop-$i }')"
+        'for(i in a b c){ echo loop-$i }' \
+        'cat /dev/drivers')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -661,6 +662,16 @@ if [[ "$(grep -o 'loop-[abc]' <<<"$SHOUT" | sort -u | wc -l | tr -d ' ')" == "3"
     pass "shell control flow works (load std, for loop over three items)"
 else
     fail "for loop did not produce three iterations"
+fi
+
+# #u is the USB device framework -- the kernel half of the split this
+# port deliberately kept (host controller and endpoint I/O in the
+# kernel, enumeration and class drivers out). /dev/drivers is devcons
+# listing devtab, so this asks the running kernel rather than the build.
+if grep -q '^#u usb' <<<"$SHOUT"; then
+    pass "#u is registered: the USB framework is in the running kernel"
+else
+    fail "#u missing from /dev/drivers"
 fi
 
 #

@@ -182,3 +182,30 @@ mboxfballoc(u32int w, u32int h, u32int depth, Fbinfo *fb)
 
 	return 0;
 }
+
+/*
+ * Turn a VideoCore power domain on or off.
+ *
+ * USB is powered down at reset, and a controller that has not been
+ * powered on reads back as absent rather than as an error -- so
+ * without this the driver simply reports no hardware.
+ *
+ * Powerwait asks the firmware not to return until the domain has
+ * actually settled, which is what makes the call usable as a
+ * precondition rather than a request.
+ */
+enum
+{
+	TagSetpower	= 0x00028001,
+	Powerwait	= 1<<1,
+};
+
+int
+setpower(int dev, int on)
+{
+	u32int buf[2];
+
+	buf[0] = dev;
+	buf[1] = Powerwait | (on ? 1 : 0);
+	return mboxprop(TagSetpower, buf, sizeof buf, sizeof buf);
+}

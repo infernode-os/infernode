@@ -37,8 +37,74 @@ enum
 {
 	Lcontrol	= 0x00,
 	Lprescaler	= 0x08,
+	Lgpuirqrouting	= 0x0C,		/* which core sees GPU interrupts */
 	Ltimerirq0	= 0x40,		/* core 0 timer IRQ control */
 	Lirqsource0	= 0x60,		/* core 0 IRQ source */
+};
+
+/*
+ * Accessor for the ARM local block. A separate window from the
+ * 0x3F000000 peripheral base -- it arrived with BCM2836 for multicore.
+ */
+#define LOCAL(r)	(*(volatile u32int*)((uintptr)ARMLOCAL + (r)))
+
+/*
+ * Bits in a core's IRQ source register.
+ *
+ * Igpu is the one that matters for devices: EVERY one of the 72
+ * interrupts owned by the VideoCore controller arrives here as this
+ * single bit, and the handler must then ask that controller which one
+ * actually fired.
+ */
+enum
+{
+	Igpu		= 1<<8,		/* some GPU interrupt is pending */
+};
+
+/*
+ * The VideoCore interrupt controller: 64 GPU sources then 8 ARM ones.
+ */
+enum
+{
+	Nirq		= 72,
+	IRQusb		= 9,		/* DWC OTG host controller */
+	IRQbasic	= 64,		/* first ARM-private source */
+	IRQtimerArm	= IRQbasic + 0,	/* the ARM-side timer below */
+};
+
+/*
+ * The ARM-side timer (an SP804 variant), separate from both the
+ * generic timer and the VideoCore system timer.
+ *
+ * This kernel does not need it to keep time -- the generic timer does
+ * that. It is here because usbdwc.c uses it as a deferral mechanism:
+ * the USB interrupt does the hardware work, then schedules this timer
+ * to raise an ordinary interrupt on which it is safe to call wakeup().
+ */
+enum
+{
+	ARMTIMERREGS	= PHYSIO+0x00B400,
+
+	TmrEnable	= 1<<7,
+	TmrIntEnable	= 1<<5,
+};
+
+/*
+ * VideoCore power domains, indices for the mailbox set-power tag.
+ * USB is off at reset and the controller reads back as absent until
+ * the firmware is asked to power it on.
+ */
+enum
+{
+	PowerSd		= 0,
+	PowerUart0,
+	PowerUart1,
+	PowerUsb,
+	PowerI2c0,
+	PowerI2c1,
+	PowerI2c2,
+	PowerSpi,
+	PowerCcp2tx,
 };
 
 /*

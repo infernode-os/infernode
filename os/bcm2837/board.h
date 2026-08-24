@@ -21,6 +21,7 @@ int	gpiogetfunc(int);
 
 /* mailbox.c */
 int	mboxprop(u32int, u32int*, int, int);
+int	setpower(int, int);
 int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);
 
 /* fb.c */

@@ -43,6 +43,14 @@
 
 #define	MAXMACH		4			/* four Cortex-A53 cores */
 
+/*
+ * Cortex-A53 L1 data cache line. Upstream's bcm port says 32, which is
+ * the ARM11 in a Pi 1; getting this too LARGE skips lines during cache
+ * maintenance and corrupts DMA under load, so it is worth stating
+ * per-SoC rather than inheriting.
+ */
+#define	CACHELINESZ	64
+
 #define	KSTACK		(16*1024)		/* kernel stack per process */
 
 /*

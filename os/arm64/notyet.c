@@ -21,6 +21,7 @@
 #include "io.h"
 #include "fns.h"
 #include "interp.h"
+#include "usb.h"
 
 /*
  * Forward declaration rather than including runt.h. srvf2c only takes a
@@ -54,6 +55,7 @@ extern Dev rootdevtab;
 extern Dev consdevtab;
 extern Dev progdevtab;
 extern Dev pipedevtab;
+extern Dev usbdevtab;
 
 Dev*	devtab[] =
 {
@@ -61,6 +63,7 @@ Dev*	devtab[] =
 	&consdevtab,		/* 'c' -- /dev/cons and friends */
 	&progdevtab,		/* 'p' -- #p, the process device */
 	&pipedevtab,		/* '|' -- #|, pipes */
+	&usbdevtab,		/* 'u' -- #u, USB endpoints */
 	nil,
 };
 
@@ -213,6 +216,34 @@ srvf2c(char *name, char *desc, Sys_FileIO *io)
 void
 kmapinval(void)
 {
+}
+
+/*
+ * Kernel-configuration lookups devusb.c inherits from the PC world.
+ *
+ * Neither is "not yet implemented": this machine has no such concept.
+ * There is no boot-time config string table, and no ISA bus for
+ * isaconfig() to describe -- devusb.c's ISA path exists so a PC can be
+ * told where a controller lives, and on this board the controller is
+ * at a fixed address the driver already knows.
+ *
+ * Returning "nothing configured" is therefore the TRUE answer, not a
+ * placeholder. usbreset() falls through to the card path, where
+ * usbdwclink()'s addhcitype("dwcotg", reset) registered the real
+ * driver.
+ */
+char*
+getconf(char *name)
+{
+	USED(name);
+	return nil;
+}
+
+int
+isaconfig(char *class, int ctlrno, Hci *hp)
+{
+	USED(class); USED(ctlrno); USED(hp);
+	return 0;
 }
 
 /*

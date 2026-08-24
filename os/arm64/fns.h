@@ -40,6 +40,8 @@ void	boardfbprobe(void);
 void	coherence(void);
 void	fpinit(void);
 void	cacheiflush(void*, ulong);
+void	cachedwbinvse(void*, int);
+void	cachedwbse(void*, int);
 
 /* arch.c -- interrupt priority level */
 
@@ -79,9 +81,19 @@ u64int	clockticks(void);
 void	microdelay(int);
 int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
-void	intrenable(void);
-void	intrdisable(void);
-int	intrenabled(void);
+/*
+ * intr.c -- the board's interrupt controller.
+ *
+ * intrenable() registers a handler for one source. It does NOT mean
+ * "unmask interrupts on this CPU"; that is spllo(), and this name
+ * meant it here once, which is exactly the confusion worth naming.
+ */
+void	intrenable(int, void (*)(Ureg*, void*), void*, int, char*);
+void	intrdisable(int, void (*)(Ureg*, void*), void*, int, char*);
+void	intrinit(void);
+void	armtimerset(int);
+void	usbdwclink(void);
+int	intrgpu(Ureg*);
 
 /* mmu.c */
 void	mmuinit(void);

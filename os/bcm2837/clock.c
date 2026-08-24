@@ -30,7 +30,7 @@
 #include "board.h"
 
 #define ST(r)	(*(volatile u32int*)((uintptr)SYSTIMERREGS + (r)))
-#define LOCAL(r) (*(volatile u32int*)((uintptr)ARMLOCAL + (r)))
+/* LOCAL() now lives in io.h -- intr.c needs it too. */
 
 enum
 {
@@ -205,29 +205,65 @@ clockintr(Ureg *u)
 	return 1;
 }
 
-void
-intrenable(void)
+/*
+ * The ARM-side timer, used purely as a software-triggered interrupt.
+ *
+ * usbdwc.c needs somewhere safe to finish work the USB interrupt
+ * started: upstream runs that interrupt as an FIQ, where taking the
+ * locks wakeup() needs is not allowed, so it arms this timer and does
+ * the wakeups from the ordinary interrupt that follows. Keeping the
+ * mechanism means the driver stays diffable against Plan 9 rather than
+ * being restructured around this port's lack of FIQ support.
+ */
+typedef struct Armtimer Armtimer;
+struct Armtimer
 {
-	/* clear DAIF.I -- unmask IRQ */
-	__asm__ volatile("msr daifclr, #2");
-	__asm__ volatile("isb");
-}
+	u32int	load;
+	u32int	val;
+	u32int	ctl;
+	u32int	irqack;
+	u32int	irq;
+	u32int	maskedirq;
+	u32int	reload;
+	u32int	predivider;
+	u32int	count;
+};
+
+/* volatile: Device memory, and adjacent stores must not be merged. */
+#define ARMTIMER	((volatile Armtimer*)(uintptr)ARMTIMERREGS)
 
 void
-intrdisable(void)
+armtimerset(int n)
 {
-	__asm__ volatile("msr daifset, #2");
-	__asm__ volatile("isb");
+	Armtimer *tm;
+
+	tm = ARMTIMER;
+	if(n > 0){
+		tm->ctl |= TmrEnable|TmrIntEnable;
+		tm->load = n;
+	}else{
+		tm->load = 0;
+		tm->ctl &= ~(TmrEnable|TmrIntEnable);
+		tm->irqack = 1;
+	}
+	coherence();
 }
 
-int
-intrenabled(void)
-{
-	u64int daif;
-
-	__asm__ volatile("mrs %0, daif" : "=r"(daif));
-	return (daif & (1<<7)) == 0;	/* DAIF.I is bit 7 */
-}
+/*
+ * intrenable(void)/intrdisable(void)/intrenabled(void) used to live
+ * here, meaning "unmask IRQs on this CPU". They are gone, for two
+ * reasons that point the same way.
+ *
+ * They duplicated spllo()/splhi()/islo(), which os/arm64/arch.c
+ * already provides and which os/port calls everywhere.
+ *
+ * And they occupied a name that means something else entirely in every
+ * Inferno and Plan 9 kernel: intrenable(irq, fn, arg, tbdf, name)
+ * registers a handler for one interrupt source. A device driver
+ * written against that convention -- usbdwc.c, say -- would have
+ * compiled against the wrong function or not at all. os/bcm2837/intr.c
+ * now provides the real one.
+ */
 
 /*
  * Dispatch a pending interrupt.  With only one source wired up this is
@@ -245,6 +281,13 @@ irqdispatch(Ureg *u)
 
 	if(clockintr(u))
 		handled = 1;
+
+	/*
+	 * Everything that is not the timer arrives as one bit. Ask the
+	 * VideoCore controller which of its 72 sources actually fired.
+	 */
+	if(LOCAL(Lirqsource0) & Igpu)
+		handled |= intrgpu(u);
 
 	return handled;
 }

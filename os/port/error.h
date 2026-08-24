@@ -59,3 +59,7 @@ extern char Enegoff[];	/* negative i/o offset */
 extern char Ecmdargs[];		/* wrong #args in control message */
 extern char Ebadstat[];		/* malformed stat buffer */
 extern char	Enofd[];	/* no free file descriptors */
+
+extern char Edetach[];		/* device is detached */
+extern char Enotconf[];		/* endpoint not configured */
+extern char Estalled[];		/* endpoint stalled */

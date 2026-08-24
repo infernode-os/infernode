@@ -132,6 +132,8 @@ dumpureg(Ureg *u)
 	uartputstr("\n");
 }
 
+static int panicking;
+
 void
 trap(Ureg *u)
 {
@@ -170,6 +172,30 @@ trap(Ureg *u)
 	}
 
 	uartputstr("\n*** unhandled exception ***");
+
+	/*
+	 * One dump, then stop.
+	 *
+	 * A fault taken while reporting a fault is not additional
+	 * information, it is the destruction of the information already
+	 * printed: the handler re-enters, prints the banner again, and
+	 * overwrites the register dump that identified the ORIGINAL fault
+	 * with one describing the wreckage. Observed as a console full of
+	 * half-printed banners and nothing usable in between.
+	 *
+	 * The emergency stack above catches the case where sp points into
+	 * the kernel image, but it cannot help when sp merely points at
+	 * the wrong heap allocation -- which is the common one here. So
+	 * bound the recursion explicitly rather than relying on the frame
+	 * landing somewhere survivable.
+	 */
+	if(panicking++){
+		uartputstr(" NESTED -- halting to preserve the first report\n");
+		splhi();
+		for(;;)
+			__asm__ volatile("wfi");
+	}
+
 	dumpureg(u);
 	panic("unhandled exception");
 }

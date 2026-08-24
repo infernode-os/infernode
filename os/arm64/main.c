@@ -27,6 +27,12 @@ Conf conf;
  * single place this becomes an array when the secondary cores are
  * released from the park loop in l.S.
  */
+/*
+ * The device tree pointer, stored by l.S. Nothing here parses it (see
+ * fns.h), but l.S writes to it unconditionally, so it needs a home.
+ */
+uintptr	dtbptr;
+
 Mach	mach0;
 Mach	*m = &mach0;
 

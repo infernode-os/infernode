@@ -94,11 +94,17 @@ uintptr	mmumapped(void);
 u64int	mmutcr(void);
 u64int	mmumair(void);
 
-/* fdt.c -- the device tree the firmware passed in x0 */
+/*
+ * The device tree pointer the firmware passed in x0.
+ *
+ * l.S parks it as its first instruction and stores it once .bss is
+ * clear. Both boot protocols supply one -- the Raspberry Pi firmware
+ * passes a DTB as well -- and this port does not parse it: bcm2837
+ * gets its memory layout from the VideoCore mailbox. Kept because
+ * discarding the pointer is a latent gap, and recovering it later
+ * would mean touching the reset path.
+ */
 extern uintptr	dtbptr;
-int	fdtvalid(void);
-uintptr	fdtsize(void);
-int	fdtmemory(uintptr*, uintptr*);
 
 /* trap.c */
 void	trap(Ureg*);

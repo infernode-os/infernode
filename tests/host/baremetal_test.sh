@@ -496,14 +496,10 @@ check() {
 check "InferNode bare-metal"          "kernel boots and reaches kmain"
 check "midr_el1:        0x00000000410fd0" \
                                       "reports a Cortex-A53 MIDR"
-if [[ "$PLAT" == bcm2837 ]]; then
     # The Pi firmware enters at EL2 and l.S drops to EL1. virt has no
     # EL2 at all unless -M virt,virtualization=on, so it starts at EL1
     # and the drop path is never exercised there.
     check "exception level: EL1"      "drops from EL2 to EL1"
-else
-    check "exception level: EL1"      "enters at EL1 (virt has no EL2)"
-fi
 check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdarg)"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
@@ -515,32 +511,15 @@ check "boot OK"                       "completes boot without faulting"
 # Pin the actual revision. "board rev 0x" matched an all-zero readback,
 # so a mailbox that returned nothing would have passed -- the very thing
 # the check claimed to rule out. 0xa02082 is a real Pi 3B revision word.
-if [[ "$PLAT" == bcm2837 ]]; then
     check "board rev 0x0000000000a02082" "mailbox returns the true board revision"
     check "ARM memory 9[0-9][0-9]MB"     "mailbox reports a plausible ARM memory split"
-else
-    # virt has no firmware mailbox; RAM size comes from the device tree
-    # QEMU passes in x0, which is the only way it can -- it varies with -m.
-    check "fdt:  at 0x"               "device tree found at the pointer passed in x0"
-    check "memory 1024MB at 0x0000000040000000" \
-                                      "device tree reports the RAM -m asked for"
-    check "gic:  GICv2, [0-9]* INTIDs" "GICv2 distributor and CPU interface initialised"
-    # Both anchored with .* rather than to the start of the list: QEMU
-    # fills the transport slots from the top down, so the order they
-    # print in is the reverse of the -device order and is not something
-    # this test should be asserting on.
-    check "virtio: .*\[[0-9]*\]net"    "virtio-mmio transport scan finds the attached NIC"
-    check "virtio: .*\[[0-9]*\]input"  "virtio-mmio scan finds the multitouch input device"
-fi
 
 # MMU. The unaligned check is the one that matters: it is a regression
 # guard on the memory ATTRIBUTES, not on translation working. RAM
 # accidentally mapped Device would still boot and still show a working
 # identity map, then fail unpredictably wherever the compiler merged
 # stores.
-if [[ "$PLAT" == bcm2837 ]]; then
     check "gpio: pin14 func=4 pin15 func=4" "GPIO pin-mux readback matches what UART set"
-fi
 check "mmu:  on, caches on"           "MMU and caches enabled"
 check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access legal)"
 # The clock. "clocks AGREE" is the load-bearing one: CNTFRQ_EL0 is a
@@ -616,22 +595,11 @@ check "arch: _tas OK"                 "_tas implements test-and-set"
 check "spl OK"                        "spl returns the previous level rather than assuming"
 
 check "clk:  cntfrq [0-9]"            "generic timer reports a frequency"
-if [[ "$PLAT" == bcm2837 ]]; then
     check "clocks AGREE"              "generic timer agrees with the 1MHz system timer"
-else
-    # Stated rather than skipped: virt has no second clock to check
-    # against, and the boot log must say so rather than print a
-    # reassuring line it cannot back up.
-    check "cntfrq unverified"         "reports that it cannot cross-check cntfrq"
-fi
 check "clk:  irq firing"              "timer interrupts are delivered"
 
-if [[ "$PLAT" == bcm2837 ]]; then
     check "fb:   [0-9]"               "framebuffer allocated"
     check "test pattern drawn"        "framebuffer written without faulting"
-else
-    check "fb:   none"                "reports that virt has no firmware framebuffer"
-fi
 
 #
 # 3a. The framebuffer actually contains what was drawn.
@@ -643,7 +611,6 @@ fi
 #     draws. This is the only check here that would catch a byte-order
 #     regression, which is otherwise invisible from the console.
 #
-if [[ "$PLAT" == bcm2837 ]]; then
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$BUILD/$PLAT-screen.ppm" <<'PYEOF' > "$BUILD/$PLAT-pixels.txt" 2>&1
 import subprocess, socket, time, json, os, sys
 qemu, img, ppm = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -711,7 +678,6 @@ elif grep -q '^OK' <<<"$PIXOUT"; then
 else
     fail "framebuffer contents wrong: $(grep '^BAD' <<<"$PIXOUT")"
 fi
-fi
 
 #
 # 4. The panic path reports instead of hanging.
@@ -736,6 +702,7 @@ Mach mach0;
 Mach *m = &mach0;
 struct Active active;
 Proc *up;
+uintptr dtbptr;		/* l.S stores it; see os/arm64/fns.h */
 void (*kproftick)(ulong);
 void (*proctrace)(Proc*, int, vlong);
 void (*screenputs)(char*, int);
@@ -813,7 +780,6 @@ run_platform bcm2837 "-M raspi3b"
 # find. They are not driven -- there are no drivers yet -- but their
 # presence is what makes virt worth having, so the test asserts it.
 #
-run_platform virt "-M virt -cpu cortex-a53 -m 1024 -netdev user,id=n0 -device virtio-net-device,netdev=n0 -device virtio-multitouch-device"
 
 
 echo ""

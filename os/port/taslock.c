@@ -106,7 +106,43 @@ unlock(Lock *l)
 	coherence();
 	if(up){
 		up->pri = p;
-		if(up->state == Running && anyhigher())
+
+		/*
+		 * islo(), which upstream does not check.
+		 *
+		 * Rescheduling here is a courtesy: the lock is free, so if
+		 * something more urgent is waiting, yield to it. But it is
+		 * only a courtesy where yielding is LEGAL, and it is not
+		 * legal when the caller is holding interrupts off.
+		 *
+		 * sched() ends by resuming the process through
+		 * "procrestore(up); spllo();" -- it unconditionally ENABLES
+		 * interrupts. So an unlock() inside an splhi() region hands
+		 * the caller back a machine with interrupts on, silently
+		 * discarding the mask it established and expects to undo
+		 * itself with splx(). Every invariant that region was
+		 * protecting is then unprotected, while the code that set
+		 * it up carries on believing otherwise.
+		 *
+		 * This is Plan 9's rule -- its unlock() spells the same
+		 * condition "&& islo()" -- and Inferno has simply never
+		 * needed it, because almost nothing in the tree calls
+		 * sleep() with interrupts already off.
+		 *
+		 * usbdwc.c does, on every transfer: chanwait() takes
+		 * splhi(), sets the channel's interrupt mask, and sleeps.
+		 * When the controller has ALREADY completed the transfer --
+		 * which is the normal case under emulation, and a race on
+		 * real hardware -- the condition function is true on entry,
+		 * sleep() takes its early-return path, and unlock(&up->rlock)
+		 * reschedules from inside the splhi region. The process is
+		 * requeued, resumed, and re-enters the same unlock; the
+		 * stack pointer descends a few hundred bytes each round and
+		 * the kernel stack overflows some tens of rounds later, at
+		 * which point the guard word finally reports a corrupt
+		 * process on a stack that has nothing to do with the driver.
+		 */
+		if(up->state == Running && anyhigher() && islo())
 			sched();
 	}
 }

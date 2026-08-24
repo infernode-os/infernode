@@ -259,7 +259,17 @@ cachedwbse:
 	mov	x4, #4
 	lsl	x3, x4, x3
 	sub	x4, x3, #1
-	add	x1, x0, x1
+	/*
+	 * uxtw, not a bare x1. "int len" is passed in W1, and AAPCS64
+	 * leaves the TOP 32 BITS OF X1 UNSPECIFIED -- the caller is not
+	 * required to clear them, and clang does not. Adding the full
+	 * 64-bit register makes the end address whatever junk the
+	 * previous call left behind, and the loop then walks the whole
+	 * address space one cache line at a time. It presents as the
+	 * machine locking up inside a driver, with the DEVICE looking
+	 * like the thing that hung.
+	 */
+	add	x1, x0, w1, uxtw
 	bic	x0, x0, x4
 1:
 	dc	cvac, x0
@@ -277,7 +287,7 @@ cachedwbinvse:
 	mov	x4, #4
 	lsl	x3, x4, x3		/* line size in bytes */
 	sub	x4, x3, #1
-	add	x1, x0, x1		/* end address */
+	add	x1, x0, w1, uxtw	/* end address; see cachedwbse on uxtw */
 	bic	x0, x0, x4		/* round start down to a line */
 1:
 	dc	civac, x0

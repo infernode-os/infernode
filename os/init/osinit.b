@@ -406,14 +406,95 @@ tcplistener(sync: chan of int)
 # the hub is the first device on the bus.
 #
 Rd2h:		con 16r80;	# device to host
+Rh2d:		con 16r00;	# host to device
 Rclass:		con 16r20;	# class request
 Rother:		con 3;		# recipient: other (a port)
+
 Rgetstatus:	con 0;
+Rsetfeature:	con 3;
+Rgetdesc:	con 6;
+Rportreset:	con 4;		# hub feature selector
+
+Ddev:		con 1;		# descriptor type: device
 
 HPpresent:	con 16r1;
 HPenable:	con 16r2;
 HPpower:	con 16r100;
+HPslow:		con 16r200;
 HPhigh:		con 16r400;
+
+#
+# A control request is eight bytes on the wire in every case, so one
+# helper covers the whole protocol: write the setup packet, read the
+# reply. The endpoint file is the transaction -- there is no ioctl, no
+# submit-and-poll, and nothing to free.
+#
+ctlreq(d: ref Sys->FD, rtype, req, value, index, length: int, rep: array of byte): int
+{
+	setup := array[8] of byte;
+	setup[0] = byte rtype;
+	setup[1] = byte req;
+	setup[2] = byte (value & 16rFF);
+	setup[3] = byte ((value >> 8) & 16rFF);
+	setup[4] = byte (index & 16rFF);
+	setup[5] = byte ((index >> 8) & 16rFF);
+	setup[6] = byte (length & 16rFF);
+	setup[7] = byte ((length >> 8) & 16rFF);
+
+	if(sys->write(d, setup, len setup) != len setup)
+		return -1;
+
+	#
+	# The reply must always be collected, even when it is not wanted.
+	# devusb stashes it in ep->rhrepl and rhubread refuses to answer
+	# twice; leaving one behind means the NEXT request reads a stale
+	# value, or falls through to the controller and blocks there.
+	#
+	return sys->read(d, rep, len rep);
+}
+
+portstatus(d: ref Sys->FD): int
+{
+	rep := array[8] of byte;
+
+	# devusb switches on wValue, not on the request code, so wValue
+	# carries the feature selector -- 0 here selects portstatus.
+	if(ctlreq(d, Rd2h|Rclass|Rother, Rgetstatus, 0, 1, 4, rep) < 2)
+		return -1;
+	return int rep[0] | (int rep[1] << 8);
+}
+
+statusflags(status: int): string
+{
+	# Limbo has no conditional expression -- if is a statement.
+	flags := "";
+	if(status & HPpresent)
+		flags += " present";
+	if(status & HPenable)
+		flags += " enabled";
+	if(status & HPpower)
+		flags += " powered";
+	if(status & HPslow)
+		flags += " lowspeed";
+	if(status & HPhigh)
+		flags += " highspeed";
+	return flags;
+}
+
+#
+# Speed is only meaningful after a reset: before one the port has not
+# yet negotiated, so asking is guesswork. Read it rather than assume it
+# -- newdev takes the speed as an argument and gets the maximum packet
+# size wrong if it is told the wrong one.
+#
+speedname(status: int): string
+{
+	if(status & HPhigh)
+		return "high";
+	if(status & HPslow)
+		return "low";
+	return "full";
+}
 
 usbprobe()
 {
@@ -423,44 +504,116 @@ usbprobe()
 		return;
 	}
 
-	#
-	# A hub class GET_STATUS for port 1. devusb switches on wValue,
-	# not on the request code, so wValue carries Rgetstatus.
-	#
-	setup := array[8] of byte;
-	setup[0] = byte (Rd2h|Rclass|Rother);
-	setup[1] = byte Rgetstatus;
-	setup[2] = byte 0;		# wValue lo -- selects portstatus
-	setup[3] = byte 0;		# wValue hi
-	setup[4] = byte 1;		# wIndex lo -- port 1
-	setup[5] = byte 0;		# wIndex hi
-	setup[6] = byte 4;		# wLength lo
-	setup[7] = byte 0;		# wLength hi
+	status := portstatus(d);
+	if(status < 0){
+		sys->print("init: usb port status failed: %r\n");
+		return;
+	}
+	sys->print("init: USB root hub port 1 status %#4.4x%s\n",
+		status, statusflags(status));
 
-	if(sys->write(d, setup, len setup) != len setup){
-		sys->print("init: usb setup write failed: %r\n");
+	if((status & HPpresent) == 0){
+		sys->print("init: USB bus is empty\n");
 		return;
 	}
 
+	#
+	# Reset the port. A device that is merely present is not yet
+	# addressable: until the port is reset it has not negotiated a
+	# speed and does not answer on the default address.
+	#
 	rep := array[8] of byte;
-	n := sys->read(d, rep, len rep);
-	if(n < 2){
-		sys->print("init: usb status read failed (%d): %r\n", n);
+	if(ctlreq(d, Rh2d|Rclass|Rother, Rsetfeature, Rportreset, 1, 0, rep) < 2){
+		sys->print("init: usb port reset failed: %r\n");
 		return;
 	}
 
-	status := int rep[0] | (int rep[1] << 8);
+	status = portstatus(d);
+	if(status < 0){
+		sys->print("init: usb port status after reset failed: %r\n");
+		return;
+	}
+	sys->print("init: USB port 1 after reset %#4.4x%s\n",
+		status, statusflags(status));
 
-	# Limbo has no conditional expression -- if is a statement.
-	flags := "";
-	if(status & HPpresent)
-		flags += " present";
-	if(status & HPenable)
-		flags += " enabled";
-	if(status & HPpower)
-		flags += " powered";
-	if(status & HPhigh)
-		flags += " highspeed";
+	if((status & HPenable) == 0){
+		sys->print("init: USB port did not enable\n");
+		return;
+	}
 
-	sys->print("init: USB root hub port 1 status %#4.4x%s\n", status, flags);
+	enumerate(speedname(status));
+}
+
+#
+# Allocate a device on the bus and ask it what it is.
+#
+# This is the point where the port stops being a register and starts
+# being a device: every transfer from here on is a real USB transaction
+# carried over the wire by the DWC controller, not a request devusb
+# answers on the root hub's behalf.
+#
+enumerate(speed: string)
+{
+	c := sys->open("/usb/usb/ep1.0/ctl", Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: cannot open the root hub ctl: %r\n");
+		return;
+	}
+
+	#
+	# newdev allocates the endpoint and leaves its NAME to be read
+	# back from the same fd -- devusb stashes it in Chan.aux. So the
+	# ctl file has to be held open across both operations; opening it
+	# twice would allocate a device and then lose its name.
+	#
+	if(sys->fprint(c, "newdev %s 1", speed) < 0){
+		sys->print("init: usb newdev failed: %r\n");
+		return;
+	}
+
+	#
+	# pread at 0, not read. The write above advanced the fd's offset
+	# past the end of the (not yet written) name, and ctlread ends in
+	# readstr(offset, ...), which answers 0 for any offset past the
+	# string. That looks exactly like an empty ctl file, and %r then
+	# prints whatever unrelated error was last set -- here "file does
+	# not exist", from an open that had succeeded minutes earlier.
+	# Plan 9's usbd preads at 0 for the same reason.
+	#
+	nbuf := array[32] of byte;
+	n := sys->pread(c, nbuf, len nbuf, big 0);
+	if(n <= 0){
+		sys->print("init: usb newdev gave no name (%d)\n", n);
+		return;
+	}
+	name := string nbuf[0:n];
+
+	sys->print("init: USB device allocated as %s at %s speed\n", name, speed);
+
+	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open %s: %r\n", name);
+		return;
+	}
+
+	#
+	# GET_DESCRIPTOR(DEVICE) on the default address. The device has
+	# not been given an address yet, and does not need one for this:
+	# usbdwc leaves the address field zero while the device is in
+	# Dconfig, which is exactly what the bus expects of a device that
+	# has just been reset.
+	#
+	desc := array[18] of byte;
+	n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
+	if(n < len desc){
+		sys->print("init: device descriptor read failed (%d): %r\n", n);
+		return;
+	}
+
+	vendor := int desc[8] | (int desc[9] << 8);
+	product := int desc[10] | (int desc[11] << 8);
+
+	sys->print("init: USB device %#4.4x:%#4.4x class %d maxpkt %d usb %d.%d\n",
+		vendor, product, int desc[4], int desc[7],
+		int desc[3], int desc[2] >> 4);
 }

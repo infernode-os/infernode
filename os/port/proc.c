@@ -244,13 +244,37 @@ loop:
 
 	if(!canlock(&runq[0].l))
 		goto loop;
-	/* choose first one we last ran on this processor at this level or hasn't moved recently */
+	/*
+	 * Choose the first one we last ran on this processor at this
+	 * level, or that hasn't moved recently.
+	 *
+	 * l must come out of this as p's PREDECESSOR: the unlink below
+	 * uses it for both "l->rnext = p->rnext" and "rq->tail = l".
+	 * Upstream never advances it -- the loop increments only p -- so
+	 * l is always nil, and choosing anything other than the head then
+	 * runs "rq->head = p->rnext", which drops every process ahead of
+	 * p off the queue. They are never scheduled again, nrdy is
+	 * decremented once for all of them, and the level's bit in
+	 * "occupied" is left describing a queue that no longer holds
+	 * them.
+	 *
+	 * It survives upstream because on a uniprocessor the head almost
+	 * always satisfies the test and the loop breaks immediately.
+	 * That makes it latent rather than absent, which is the worst
+	 * kind of bug to inherit.
+	 *
+	 * When the loop runs to completion p is nil and we fall back to
+	 * the head, so l has to be reset -- at that point it is the TAIL,
+	 * not the head's predecessor.
+	 */
 	l = nil;
-	for(p = rq->head; p != nil; p = p->rnext)
+	for(p = rq->head; p != nil; l = p, p = p->rnext)
 		if(p->mp == nil || p->mp == MACHP(m->machno) || p->movetime < MACHP(0)->ticks)
 			break;
-	if(p == nil)
+	if(p == nil){
 		p = rq->head;
+		l = nil;
+	}
 	/* p->mach==0 only when process state is saved */
 	if(p == 0 || p->mach) {
 		unlock(&runq[0].l);

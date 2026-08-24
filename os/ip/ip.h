@@ -693,9 +693,15 @@ extern ulong	restrict_mtu(uchar*, ulong);
 
 /*
  * bootp.c
+ *
+ * extern, not tentative definitions. Written without it, every
+ * translation unit that includes this header DEFINES these -- which
+ * links under the Plan 9 compiler's common symbols and is a duplicate
+ * symbol under clang's default -fno-common. os/port/portfns.h had the
+ * same three (kproftick, proctrace, serwrite) and needed the same fix.
  */
-char*	(*bootp)(Ipifc*);
-int	(*bootpread)(char*, ulong, int);
+extern char*	(*bootp)(Ipifc*);
+extern int	(*bootpread)(char*, ulong, int);
 
 /*
  *  iprouter.c

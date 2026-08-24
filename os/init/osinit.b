@@ -104,6 +104,18 @@ init()
 	t1 := sys->millisec();
 	sys->print("bench: %d iterations in %d ms (acc=%d)\n", 2000000, t1-t0, acc);
 
+	#
+	# Put the IP stack where Inferno expects it.
+	#
+	# #I is the device; /net is the conventional path, and everything
+	# that speaks to the network -- including the shell -- looks there
+	# rather than at the device name. It also makes the stack
+	# reachable by typing: in the shell a bare '#' begins a comment,
+	# so '#I/ipifc' cannot be written without quoting it.
+	#
+	if(sys->bind("#I", "/net", Sys->MREPL) < 0)
+		sys->print("init: cannot bind #I on /net: %r\n");
+
 	sys->print("\ninit: starting the shell\n\n");
 
 	#

@@ -211,6 +211,7 @@ build_kernel() {
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dev="
+            "/net="
             "/dis/sh.dis=$ROOT/dis/sh.dis"
             "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
             "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
@@ -293,6 +294,23 @@ build_kernel() {
             continue
         fi
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
+             -Werror=missing-declarations -Werror=incompatible-pointer-types \
+             -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
+    # os/ip -- the TCP/IP stack.
+    #
+    # Same treatment as os/port: warnings suppressed wholesale EXCEPT
+    # the two that mark the Plan 9 C dialect, which are errors. That
+    # escalation is not pedantry here -- it is what located all 167
+    # call sites where an anonymous lock member was being passed as its
+    # containing struct, each of which would otherwise have locked
+    # whatever field happened to sit at offset 0.
+    for f in "$ROOT"/os/ip/*.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/osip-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -I"$ROOT/os/ip" -I"$BUILD" -Wno-everything \
              -Werror=missing-declarations -Werror=incompatible-pointer-types \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
@@ -476,11 +494,11 @@ QEMUARGS="$2"
 # selects which os/<plat> supplies mem.h, io.h and board.h to the shared
 # os/arm64 and os/port sources, and $SRC is not known until here.
 IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -DINFERNO_NATIVE
-        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
+        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include"
         -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
 
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
@@ -614,7 +632,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'q=`{echo one two three}; echo subst-count $#q' \
         'load std' \
         'for(i in a b c){ echo loop-$i }' \
-        'cat /dev/drivers')"
+        'cat /dev/drivers' \
+        'cat /net/ipifc/stats')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -672,6 +691,22 @@ if grep -q '^#u usb' <<<"$SHOUT"; then
     pass "#u is registered: the USB framework is in the running kernel"
 else
     fail "#u missing from /dev/drivers"
+fi
+
+# #I is the IP stack. Reading its MIB is a stronger check than the
+# device merely existing: DefaultTTL comes from ip_init having run and
+# ipifcinit having registered the protocol that owns interfaces, so a
+# stack that linked but never initialised would not produce it.
+if grep -q '^#I ip' <<<"$SHOUT"; then
+    pass "#I is registered: the IP stack is in the running kernel"
+else
+    fail "#I missing from /dev/drivers"
+fi
+
+if grep -q '^DefaultTTL: 255' <<<"$SHOUT"; then
+    pass "the IP stack initialised (ipifc reports its MIB)"
+else
+    fail "#I/ipifc/stats did not report DefaultTTL"
 fi
 
 #

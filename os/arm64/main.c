@@ -1406,6 +1406,8 @@ extern int	rootmaxq;
  */
 extern int	cflag;
 extern Dev	usbdevtab;
+extern Dev	ipdevtab;
+extern void	loopbackmediumlink(void);
 
 #ifndef CFLAG
 #define CFLAG 1
@@ -1479,6 +1481,27 @@ usbkproc(void *a)
 		usbdevtab.reset();
 	if(usbdevtab.init != nil)
 		usbdevtab.init();
+
+	/*
+	 * The IP stack.
+	 *
+	 * ipreset() registers the media types and installs the address
+	 * format verbs (%I, %E, %V and friends), which os/ip uses in
+	 * nearly every diagnostic it prints -- without them an error
+	 * message about an address prints the verb instead of the
+	 * address.
+	 *
+	 * loopbackmediumlink() is called here rather than in ipreset()
+	 * because upstream's ipreset links only null and pkt; loopback is
+	 * a separate medium a configuration opts into. It is the one that
+	 * matters most right now: it gives a stack that can be exercised
+	 * end to end with no network hardware at all, which is the only
+	 * kind this board has until USB enumeration exists.
+	 */
+	loopbackmediumlink();
+	if(ipdevtab.reset != nil)
+		ipdevtab.reset();
+
 	pexit("", 0);
 }
 

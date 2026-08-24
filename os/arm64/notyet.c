@@ -57,6 +57,7 @@ extern Dev consdevtab;
 extern Dev progdevtab;
 extern Dev pipedevtab;
 extern Dev usbdevtab;
+extern Dev mntdevtab;
 extern Dev ipdevtab;
 
 Dev*	devtab[] =
@@ -66,6 +67,7 @@ Dev*	devtab[] =
 	&progdevtab,		/* 'p' -- #p, the process device */
 	&pipedevtab,		/* '|' -- #|, pipes */
 	&usbdevtab,		/* 'u' -- #u, USB endpoints */
+	&mntdevtab,		/* 'M' -- #M, the 9P client */
 	&ipdevtab,		/* 'I' -- #I, the IP stack */
 	nil,
 };
@@ -406,41 +408,6 @@ int	(*bootpread)(char*, ulong, int);
 Type*	Trdchan;
 Type*	Twrchan;
 
-/*
- * devmnt.c -- the 9P mount client.
- *
- * sysfile.c's mount path calls these to negotiate a version and
- * authenticate against a remote server. Reached only through mount(),
- * and nothing mounts anything yet -- but unlike the teardown stubs
- * these have no meaningful empty behaviour: silently reporting a
- * successful version negotiation that never happened would corrupt the
- * protocol state of whatever came next. So they refuse.
- */
-Chan*
-mntauth(Chan *c, char *spec)
-{
-	USED(c); USED(spec);
-	error("devmnt not imported: cannot authenticate a mount");
-	return nil;
-}
-
-long
-mntversion(Chan *c, char *version, int msize, int returnlen)
-{
-	USED(c); USED(version); USED(msize); USED(returnlen);
-	error("devmnt not imported: cannot negotiate 9P version");
-	return 0;
-}
-
-/*
- * devmnt.c -- tear down a mount's RPC multiplexer. Nothing mounts
- * anything yet, so there is never a Mnt to close.
- */
-void
-muxclose(Mnt *m)
-{
-	USED(m);
-}
 
 
 /*

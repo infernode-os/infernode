@@ -113,7 +113,11 @@ init()
 	# reachable by typing: in the shell a bare '#' begins a comment,
 	# so '#I/ipifc' cannot be written without quoting it.
 	#
-	if(sys->bind("#I", "/net", Sys->MREPL) < 0)
+	# MBEFORE, not MREPL. devip's files must come first, but the
+	# directory underneath carries /net/ether0 -- the mount point the
+	# USB Ethernet driver publishes itself on -- and MREPL would hide
+	# it, leaving the driver with nowhere to appear.
+	if(sys->bind("#I", "/net", Sys->MBEFORE) < 0)
 		sys->print("init: cannot bind #I on /net: %r\n");
 
 	#

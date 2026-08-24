@@ -243,6 +243,20 @@ build_kernel() {
             "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
             "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
 
+            # The 9P server library, for etherusb. A class driver that
+            # lives outside the kernel has to publish a file interface
+            # to be reachable from it, and this is what serves one.
+            "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
+            "/dis/lib/styxservers.dis=$ROOT/dis/lib/styxservers.dis"
+            "/dis/lib/nametree.dis=$ROOT/dis/lib/nametree.dis"
+            "/dis/lib/tables.dis=$ROOT/dis/lib/tables.dis"
+
+            # The mount point for it. #I is bound on /net with MBEFORE
+            # rather than MREPL precisely so this survives in the union:
+            # devip has no "ether0" of its own, and a mount needs its
+            # target to exist.
+            "/net/ether0="
+
             # A few commands, so the shell has something to run. Each
             # is a Dis module the shell loads by name out of $path, and
             # ls pulls in Readdir and Daytime on top of what sh already
@@ -706,6 +720,22 @@ check "etherusb: ep3.0 bulk endpoint is ep3.2" "the driver creates a bulk endpoi
 check "etherusb: RNDIS 1.0, max transfer 1580" "the RNDIS handshake completes"
 check "etherusb: ep3.0 MAC 52:54:00:12:34:57"  "the MAC is read out of the device"
 check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
+
+# The file interface, and the interface bound to it. "configured"
+# only appears if ethermedium dialled /net/ether0, opened its three
+# connections, read the MAC out of <n>/stats, and accepted the address
+# -- which in turn required a gratuitous ARP to be TRANSMITTED over
+# USB. Verified independently against QEMU's own packet capture:
+#
+#   ARP, Announcement 10.0.2.15
+#   ARP, Request who-has 10.0.2.2 tell 10.0.2.15
+#   ARP, Reply 10.0.2.2 is-at 52:55:0a:00:02:02
+#
+# The reply is on the wire; receiving it does not work yet. See
+# "Receive does not complete" in os/bcm2837/README.md.
+check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
+check "10.0.2.15/24 configured on ipifc"       "os/ip binds an interface to a driver outside the kernel"
+check "default route via 10.0.2.2"             "a default route is installed"
 
 # Interrupts, asserted rather than assumed.
 #

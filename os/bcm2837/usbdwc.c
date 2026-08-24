@@ -84,7 +84,29 @@ struct Ctlr {
 };
 
 struct Epio {
-	QLock	ql;
+	/*
+	 * Two locks, not one.
+	 *
+	 * A bulk or interrupt endpoint number names TWO endpoints -- 0x82
+	 * and 0x02 are different pipes that happen to share the number 2
+	 * -- and devusb represents the pair as a single Ep with mode rw.
+	 * One lock across both directions then means a reader blocked
+	 * waiting for a packet, which is the normal resting state of any
+	 * network driver, holds the endpoint against every transmit
+	 * forever.
+	 *
+	 * That is exactly what happened to the first frame this port
+	 * tried to send: the receive process was parked in a bulk IN, the
+	 * transmit never reached eptrans() at all, and the interface
+	 * above it sat waiting for a write that could not start.
+	 *
+	 * Control transfers keep sharing ql, and must: there epwrite
+	 * performs the whole transaction and epread only collects the
+	 * reply out of cb, so the two halves are one operation and have
+	 * to stay serialised against each other.
+	 */
+	QLock	ql;		/* writes, and control transfers entire */
+	QLock	rl;		/* reads on bulk and interrupt endpoints */
 	Block	*cb;
 	ulong	lastpoll;
 };
@@ -437,7 +459,25 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		hc->hcchar = (hc->hcchar &~ Chdis) | Chen;
 		clog(ep, hc);
 		if(ep->ttype == Tbulk && dir == Epin)
-			i = chanwait(ep, ctlr, hc, /* Ack| */ Chhltd);
+			/*
+			 * Nak as well as Chhltd.
+			 *
+			 * A bulk IN with nothing to collect is answered by
+			 * the device with NAK, and the driver is meant to
+			 * come back and ask again -- which the loop below
+			 * does. Waiting only on Chhltd assumes the
+			 * controller halts the channel on a NAK; this one
+			 * does not, so the wait never ends and a receive
+			 * issued before the first packet arrives never
+			 * returns, no matter what turns up afterwards.
+			 *
+			 * The symptom was a network that transmitted
+			 * perfectly and received nothing: the ARP request
+			 * went out, the reply came back on the wire, and
+			 * the driver was still asleep in the read it had
+			 * posted beforehand.
+			 */
+			i = chanwait(ep, ctlr, hc, Chhltd|Nak);
 		else if(ep->ttype == Tintr && (hc->hcsplt & Spltena))
 			i = chanwait(ep, ctlr, hc, Chhltd);
 		else
@@ -571,7 +611,28 @@ eptrans(Ep *ep, int rw, void *a, long n)
 		nexterror();
 	}
 	chansetup(hc, ep);
-	if(rw == Read && ep->ttype == Tbulk)
+	/*
+	 * A packet at a time for bulk in BOTH directions, unless splits
+	 * are in use.
+	 *
+	 * Upstream only does this for bulk reads, on the reasoning that
+	 * an IN transfer can end short so the host must drive it packet
+	 * by packet, while an OUT transfer is entirely the host's to
+	 * schedule and can be programmed once for the whole length. That
+	 * is true of the hardware and not of this controller model: a
+	 * two-packet OUT programmed in one go never reports completion,
+	 * exactly as a two-packet control IN did not.
+	 *
+	 * The first frame this driver ever tried to send was a 60-byte
+	 * gratuitous ARP, 104 bytes once wrapped for RNDIS, and it
+	 * stopped here -- with the interface bound and everything above
+	 * it convinced the write was in progress.
+	 *
+	 * Splits still have to be one channel operation, so they keep the
+	 * single-shot path; see chansetup and ctltrans, which draw the
+	 * same line for the same reason.
+	 */
+	if(ep->ttype == Tbulk && (rw == Read || (hc->hcsplt & Spltena) == 0))
 		n = multitrans(ep, hc, rw, a, n);
 	else{
 		n = chanio(ep, hc, rw == Read? Epin : Epout, ep->toggle[rw],
@@ -951,13 +1012,23 @@ epread(Ep *ep, void *a, long n)
 	uchar *p;
 	ulong elapsed;
 	long nr;
+	QLock *lk;
 
 	ddprint("epread ep%d.%d %ld\n", ep->dev->nb, ep->nb, n);
 	epio = ep->aux;
 	b = nil;
-	qlock(&epio->ql);
+	/*
+	 * Control reads take ql, everything else rl -- see Epio. Taking
+	 * the right one matters more than it looks: this lock is held
+	 * across a transfer that may never complete.
+	 */
+	if(ep->ttype == Tctl)
+		lk = &epio->ql;
+	else
+		lk = &epio->rl;
+	qlock(lk);
 	if(waserror()){
-		qunlock(&epio->ql);
+		qunlock(lk);
 		if(b)
 			freeb(b);
 		nexterror();
@@ -967,7 +1038,7 @@ epread(Ep *ep, void *a, long n)
 		error(Egreg);
 	case Tctl:
 		nr = ctldata(ep, a, n);
-		qunlock(&epio->ql);
+		qunlock(lk);
 		poperror();
 		return nr;
 	case Tintr:
@@ -983,7 +1054,7 @@ epread(Ep *ep, void *a, long n)
 		nr = eptrans(ep, Read, p, n);
 		epio->lastpoll = TK2MS(m->ticks);
 		memmove(a, p, nr);
-		qunlock(&epio->ql);
+		qunlock(lk);
 		freeb(b);
 		poperror();
 		return nr;

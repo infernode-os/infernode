@@ -15,6 +15,8 @@
 #include "fns.h"
 #include "kernel.h"
 
+extern Dev	mntdevtab;	/* #M, the 9P client */
+
 /*
  * The machine configuration os/port reads. Declared extern in dat.h and
  * defined here, which is where upstream's platform main.c puts it.
@@ -1428,6 +1430,28 @@ probecons(void)
 	long n;
 
 	ok = 1;
+
+	/*
+	 * #M's reset, before anything can mount.
+	 *
+	 * A real Inferno kernel calls chandevreset() early in main() and
+	 * every device's reset runs from there. This one does not -- the
+	 * comment above usbkproc() explains why, and usb and ip already
+	 * call their own resets by hand as a result -- so devmnt's has to
+	 * be called explicitly too, and nothing else will do it.
+	 *
+	 * It is not optional and it fails loudly rather than subtly:
+	 * mntalloc.id starts at 1 so that a Mnt's id is never 0, and
+	 * mntchk() panics with "mntchk 3: can't happen" on an id of 0.
+	 * Which is what it did, on the first mount this kernel ever
+	 * attempted. It also reserves tag 0 and NOTAG, and installs the
+	 * %F fcall format every 9P diagnostic is written against.
+	 *
+	 * Unlike usb's, this reset depends on no hardware, so it can be
+	 * called here, before there are processes.
+	 */
+	if(mntdevtab.reset != nil)
+		mntdevtab.reset();
 
 	/* run every device's init, as a real kernel does at boot */
 	chandevinit();

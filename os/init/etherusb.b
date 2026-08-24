@@ -35,6 +35,16 @@ include "draw.m";
 
 include "sh.m";
 
+include "styx.m";
+	styx: Styx;
+	Tmsg, Rmsg: import Styx;
+
+include "styxservers.m";
+	styxservers: Styxservers;
+	Styxserver, Navigator, Fid: import styxservers;
+	nametree: Nametree;
+	Tree: import nametree;
+
 #
 # Control-request shape. Same eight bytes as always; what differs from
 # the bus walk in osinit is the recipient -- these go to an INTERFACE,
@@ -72,6 +82,52 @@ Filterdefault:	con 16r0000000D;
 
 Maxctl:		con 1024;
 
+#
+# The file interface ethermedium dials. Taken from os/port/dial.c
+# call() and etherbind() rather than from memory:
+#
+#	clone		open, then read -> the connection number
+#	<n>/ctl		"connect 0x800", then "nonblocking"
+#	<n>/data	one read or write is one ETHERNET FRAME, header
+#			and all -- ethermedium strips the 14 bytes itself
+#	<n>/stats	"addr: <12 hex>" and "mbps: <n>"
+#
+# ethermedium opens three connections -- 0x800 (IPv4), 0x806 (ARP) and
+# 0x86DD (IPv6) -- and expects inbound frames demultiplexed onto them
+# by ether type. Four are provided so there is one spare.
+#
+Nconv:		con 4;
+Qdir:		con 0;
+Qclone:		con 1;
+Qcbase:		con 16;		# per-connection qids start here
+
+# the four files of a connection, in qid order
+Qcdir, Qcctl, Qcdata, Qcstats: con iota;
+
+Qmax:		con 16;		# frames buffered per connection
+Npend:		con 8;		# reads outstanding per connection
+Maxframe:	con 1514;	# an Ethernet frame, header included
+Rnisdata:	con 16r00000001;
+Rnishdr:	con 44;		# RNDIS_PACKET_MSG, before the frame
+
+Conv: adt {
+	etype:	int;			# ether type, -1 until connected
+	q:	array of array of byte;	# frames waiting for a reader
+	nq:	int;
+	pend:	array of int;		# tags of reads waiting for a frame
+	npend:	int;
+	drops:	int;
+	inpkt:	int;
+	outpkt:	int;
+};
+
+convs: array of ref Conv;
+mac := array[6] of byte;
+bulkfd: ref Sys->FD;
+tc: chan of ref Tmsg;
+srv: ref Styxserver;
+rxq: chan of (int, array of byte);
+
 dev: string;			# "ep3.0"
 ctl: ref Sys->FD;		# #u/usb/<dev>/ctl
 ep0: ref Sys->FD;		# #u/usb/<dev>/data -- the control endpoint
@@ -82,6 +138,16 @@ init(nil: ref Draw->Context, argv: list of string)
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return;
+	styx = load Styx Styx->PATH;
+	styxservers = load Styxservers Styxservers->PATH;
+	nametree = load Nametree Nametree->PATH;
+	if(styx == nil || styxservers == nil || nametree == nil){
+		sys->print("etherusb: cannot load the 9P modules: %r\n");
+		return;
+	}
+	styx->init();
+	styxservers->init(styx);
+	nametree->init();
 
 	argv = tl argv;
 	if(argv == nil){
@@ -130,6 +196,21 @@ init(nil: ref Draw->Context, argv: list of string)
 	# name is determined anyway: same device, endpoint 2.
 	#
 	bulk := epname(dev, 2);
+
+	#
+	# The new endpoint inherits nothing. devusb's newdevep leaves
+	# maxpkt at the 8 that epalloc starts every endpoint with, and
+	# "maxpkt 64" on the CONTROL endpoint earlier said nothing about
+	# this one -- so without this the driver would move bulk data in
+	# 8-byte packets and be told, correctly, that everything worked.
+	# The size is the device's own answer, from its configuration
+	# descriptor.
+	#
+	bctl := sys->open("/usb/usb/" + bulk + "/ctl", Sys->ORDWR);
+	if(bctl == nil || sys->fprint(bctl, "maxpkt 64") < 0){
+		sys->print("etherusb: cannot set the bulk packet size: %r\n");
+		return;
+	}
 	sys->print("etherusb: %s bulk endpoint is %s\n", dev, bulk);
 
 	if(rndisinit() < 0)
@@ -151,7 +232,184 @@ init(nil: ref Draw->Context, argv: list of string)
 		sys->print("etherusb: cannot set the packet filter: %r\n");
 		return;
 	}
+	bulkfd = sys->open("/usb/usb/" + bulk + "/data", Sys->ORDWR);
+	if(bulkfd == nil){
+		sys->print("etherusb: cannot open %s: %r\n", bulk);
+		return;
+	}
+
 	sys->print("etherusb: %s ready\n", dev);
+	serve();
+}
+
+#
+# Serve the netif interface, and mount it where ethermedium will dial
+# it.
+#
+# The mount is visible system-wide because this driver was spawned
+# rather than forked into its own namespace: a device that only its own
+# driver can see would be of no use to anyone.
+#
+serve()
+{
+	convs = array[Nconv] of ref Conv;
+	for(i := 0; i < Nconv; i++)
+		convs[i] = ref Conv(-1, array[Qmax] of array of byte, 0,
+			array[Npend] of int, 0, 0, 0, 0);
+
+	(tree, treeop) := nametree->start();
+	tree.create(big Qdir, dir(".", Sys->DMDIR|8r555, Qdir));
+	tree.create(big Qdir, dir("clone", 8r666, Qclone));
+	for(i = 0; i < Nconv; i++){
+		cd := Qcbase + i*4;
+		tree.create(big Qdir, dir(string i, Sys->DMDIR|8r555, cd+Qcdir));
+		tree.create(big (cd+Qcdir), dir("ctl", 8r666, cd+Qcctl));
+		tree.create(big (cd+Qcdir), dir("data", 8r666, cd+Qcdata));
+		tree.create(big (cd+Qcdir), dir("stats", 8r444, cd+Qcstats));
+	}
+
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("etherusb: no pipe: %r\n");
+		return;
+	}
+	(tc, srv) = Styxserver.new(p[0], Navigator.new(treeop), big Qdir);
+
+	rxq = chan of (int, array of byte);
+	spawn rxproc();
+
+	#
+	# The mount happens in ANOTHER process, and that is not a style
+	# choice.
+	#
+	# Styxserver.new starts reading the pipe straight away and hands
+	# every request to the channel this process is about to select
+	# on. mount() begins by exchanging Tversion and Tattach with the
+	# server -- so mounting from here would block sending the first
+	# request to a channel that only this process, now stuck inside
+	# mount, will ever read from. The server must be answering before
+	# anything tries to mount it.
+	#
+	spawn mountproc(p[1]);
+
+	loop(tree);
+}
+
+mountproc(fd: ref Sys->FD)
+{
+	if(sys->mount(fd, nil, "/net/ether0", Sys->MREPL, "") < 0){
+		sys->print("etherusb: cannot mount /net/ether0: %r\n");
+		return;
+	}
+	sys->print("etherusb: serving /net/ether0\n");
+	netconfig();
+}
+
+#
+# Bind an interface to this device and give it an address.
+#
+# The address is static and QEMU's: user-mode networking always puts
+# the guest at 10.0.2.15/24 behind a gateway at 10.0.2.2. That is
+# expedient rather than right -- choosing an address is policy and
+# belongs in something like Plan 9's ipconfig, not in a driver -- but
+# there is no DHCP client in this image yet, and hardcoding it here is
+# at least honest about being a stand-in.
+#
+netconfig()
+{
+	ifc := sys->open("/net/ipifc/clone", Sys->ORDWR);
+	if(ifc == nil){
+		sys->print("etherusb: cannot clone an interface: %r\n");
+		return;
+	}
+
+	nbuf := array[32] of byte;
+	n := sys->read(ifc, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("etherusb: ipifc clone gave no number\n");
+		return;
+	}
+	ifcno := string nbuf[0:n];
+
+	if(sys->fprint(ifc, "bind ether /net/ether0") < 0){
+		sys->print("etherusb: bind ether failed: %r\n");
+		return;
+	}
+	if(sys->fprint(ifc, "add 10.0.2.15 255.255.255.0") < 0){
+		sys->print("etherusb: add address failed: %r\n");
+		return;
+	}
+	sys->print("etherusb: 10.0.2.15/24 configured on ipifc %s\n", ifcno);
+
+	r := sys->open("/net/iproute", Sys->ORDWR);
+	if(r == nil || sys->fprint(r, "add 0.0.0.0 0.0.0.0 10.0.2.2") < 0){
+		sys->print("etherusb: default route failed: %r\n");
+		return;
+	}
+	sys->print("etherusb: default route via 10.0.2.2\n");
+
+	pingout();
+}
+
+#
+# Send one ICMP echo to the gateway and wait for the reply.
+#
+# This is the only check that proves the whole path rather than a part
+# of it: the request leaves through RNDIS, over the bulk endpoint,
+# through the hub, to QEMU's network stack -- and the reply comes back
+# the other way, is demultiplexed by ether type onto the IPv4
+# connection, and reaches os/ip. Everything up to here could be true
+# with a device that quietly discarded every packet.
+#
+pingout()
+{
+	c := sys->open("/net/icmp/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("etherusb: cannot clone icmp: %r\n");
+		return;
+	}
+
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("etherusb: icmp clone gave no number\n");
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	if(sys->fprint(c, "connect 10.0.2.2!1") < 0){
+		sys->print("etherusb: icmp connect failed: %r\n");
+		return;
+	}
+
+	d := sys->open("/net/icmp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("etherusb: cannot open icmp data: %r\n");
+		return;
+	}
+
+	# 20 bytes of IP header space, then an 8-byte ICMP header and a
+	# little payload. icmp.c fills the header in.
+	req := array[20 + 8 + 8] of byte;
+	for(i := 0; i < len req; i++)
+		req[i] = byte 0;
+	req[20] = byte 8;		# type: echo request
+	req[20+6] = byte 0;		# sequence
+	req[20+7] = byte 1;
+
+	if(sys->write(d, req, len req) != len req){
+		sys->print("etherusb: icmp write failed: %r\n");
+		return;
+	}
+
+	rep := array[128] of byte;
+	n = sys->read(d, rep, len rep);
+	if(n <= 0){
+		sys->print("etherusb: no echo reply (%d): %r\n", n);
+		return;
+	}
+	sys->print("etherusb: ICMP echo reply from 10.0.2.2 (%d bytes, type %d)\n",
+		n, int rep[20]);
 }
 
 #
@@ -350,4 +608,370 @@ epname(d: string, nb: int): string
 		if(d[i] == '.')
 			return d[0:i+1] + string nb;
 	return d;
+}
+
+dir(name: string, perm: int, path: int): Sys->Dir
+{
+	d := sys->zerodir;
+	d.name = name;
+	d.uid = "inferno";
+	d.gid = "inferno";
+	d.qid.path = big path;
+	if(perm & Sys->DMDIR)
+		d.qid.qtype = Sys->QTDIR;
+	else
+		d.qid.qtype = Sys->QTFILE;
+	d.mode = perm;
+	return d;
+}
+
+qconv(path: int): int
+{
+	return (path - Qcbase) / 4;
+}
+
+qkind(path: int): int
+{
+	return (path - Qcbase) % 4;
+}
+
+#
+# The serve loop handles 9P requests and arriving frames in ONE
+# process, which is what makes the pending-read bookkeeping safe: a
+# reply is only ever written from here.
+#
+# A read of <n>/data with no frame waiting cannot be answered yet, so
+# its tag is remembered and answered when one arrives. Doing that by
+# blocking here instead would stall every other connection, and doing
+# it by spawning a process per read would have several of them writing
+# replies down the same pipe at once.
+#
+loop(tree: ref Tree)
+{
+	done := 0;
+
+	while(done == 0){
+		alt {
+		tmsg := <-tc =>
+			if(tmsg == nil)
+				done = 1;
+			else
+				done = request(tmsg);
+		(ci, frame) := <-rxq =>
+			deliver(ci, frame);
+		}
+	}
+	tree.quit();
+}
+
+request(tmsg: ref Tmsg): int
+{
+	pick tm := tmsg {
+	Readerror =>
+		return 1;
+	Open =>
+		return openreq(tm);
+	Read =>
+		return readreq(tm);
+	Write =>
+		return writereq(tm);
+	Flush =>
+		# Cancel any read waiting on this tag before acknowledging,
+		# or a frame arriving later would be replied to a tag the
+		# client has already given up on.
+		for(i := 0; i < Nconv; i++)
+			unpend(convs[i], tm.oldtag);
+		srv.reply(ref Rmsg.Flush(tm.tag));
+	Clunk =>
+		srv.clunk(tm);
+	* =>
+		srv.default(tmsg);
+	}
+	return 0;
+}
+
+#
+# Opening clone allocates a connection AND rebinds the fid to that
+# connection's ctl file.
+#
+# That is not a flourish: os/port/dial.c writes "connect ..." to the
+# same descriptor it opened clone with, so the clone fid has to BE the
+# new connection's ctl afterwards. A server that returns only a number
+# and leaves the fid pointing at clone gets the connect request written
+# to the wrong file.
+#
+openreq(tm: ref Tmsg.Open): int
+{
+	(c, mode, f, err) := srv.canopen(tm);
+	if(c == nil){
+		srv.reply(ref Rmsg.Error(tm.tag, err));
+		return 0;
+	}
+	if(int c.path != Qclone){
+		c.open(mode, f.qid);
+		srv.reply(ref Rmsg.Open(tm.tag, f.qid, srv.iounit()));
+		return 0;
+	}
+
+	n := -1;
+	for(i := 0; i < Nconv; i++)
+		if(convs[i].etype < 0){
+			n = i;
+			break;
+		}
+	if(n < 0){
+		srv.reply(ref Rmsg.Error(tm.tag, "no free connections"));
+		return 0;
+	}
+	convs[n].etype = 0;		# taken, not yet connected
+
+	q := Sys->Qid(big (Qcbase + n*4 + Qcctl), 0, Sys->QTFILE);
+	c.open(mode, q);
+	srv.reply(ref Rmsg.Open(tm.tag, q, srv.iounit()));
+	return 0;
+}
+
+readreq(tm: ref Tmsg.Read): int
+{
+	(c, err) := srv.canread(tm);
+	if(c == nil){
+		srv.reply(ref Rmsg.Error(tm.tag, err));
+		return 0;
+	}
+	path := int c.path;
+	if(path == Qdir){
+		srv.read(tm);
+		return 0;
+	}
+	if(path < Qcbase){
+		srv.reply(ref Rmsg.Error(tm.tag, "phase error"));
+		return 0;
+	}
+
+	n := qconv(path);
+	case qkind(path) {
+	Qcdir =>
+		srv.read(tm);
+	Qcctl =>
+		# The connection number, which is what dial reads back.
+		srv.reply(styxservers->readstr(tm, string n));
+	Qcstats =>
+		srv.reply(styxservers->readstr(tm, stats(n)));
+	Qcdata =>
+		cv := convs[n];
+		if(cv.nq > 0){
+			frame := cv.q[0];
+			for(i := 1; i < cv.nq; i++)
+				cv.q[i-1] = cv.q[i];
+			cv.nq--;
+			srv.reply(ref Rmsg.Read(tm.tag, frame));
+		}else if(cv.npend < Npend)
+			cv.pend[cv.npend++] = tm.tag;
+		else
+			srv.reply(ref Rmsg.Error(tm.tag, "too many reads outstanding"));
+	* =>
+		srv.reply(ref Rmsg.Error(tm.tag, "phase error"));
+	}
+	return 0;
+}
+
+writereq(tm: ref Tmsg.Write): int
+{
+	(c, err) := srv.canwrite(tm);
+	if(c == nil){
+		srv.reply(ref Rmsg.Error(tm.tag, err));
+		return 0;
+	}
+	path := int c.path;
+	if(path < Qcbase){
+		srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
+		return 0;
+	}
+
+	n := qconv(path);
+	case qkind(path) {
+	Qcctl =>
+		e := ctlwrite(n, string tm.data);
+		if(e != nil)
+			srv.reply(ref Rmsg.Error(tm.tag, e));
+		else
+			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+	Qcdata =>
+		if(transmit(tm.data) < 0)
+			srv.reply(ref Rmsg.Error(tm.tag, "write failed"));
+		else {
+			convs[n].outpkt++;
+			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+		}
+	* =>
+		srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
+	}
+	return 0;
+}
+
+ctlwrite(n: int, s: string): string
+{
+	(nf, flds) := sys->tokenize(s, " \t\n");
+	if(nf < 1)
+		return "empty control request";
+
+	case hd flds {
+	"connect" =>
+		if(nf != 2)
+			return "usage: connect <ethertype>";
+		convs[n].etype = hexint(hd tl flds);
+	"nonblocking" =>
+		# Accepted and ignored: every read here is already answered
+		# out of a queue or deferred, so nothing blocks the client
+		# that this could switch off.
+		;
+	* =>
+		return "unknown control request";
+	}
+	return nil;
+}
+
+stats(n: int): string
+{
+	cv := convs[n];
+	return sys->sprint("in: %d\nlink: 1\nout: %d\ncrc errs: 0\n" +
+		"overflows: %d\nsoft overflows: 0\nframing errs: 0\n" +
+		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n",
+		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
+		int mac[0], int mac[1], int mac[2],
+		int mac[3], int mac[4], int mac[5]);
+}
+
+unpend(cv: ref Conv, tag: int)
+{
+	for(i := 0; i < cv.npend; i++)
+		if(cv.pend[i] == tag){
+			for(j := i+1; j < cv.npend; j++)
+				cv.pend[j-1] = cv.pend[j];
+			cv.npend--;
+			return;
+		}
+}
+
+#
+# A frame has arrived for connection ci. Answer a waiting read if there
+# is one, otherwise queue it, otherwise drop it -- which is what a NIC
+# does when nobody is collecting, and is counted rather than hidden.
+#
+deliver(ci: int, frame: array of byte)
+{
+	cv := convs[ci];
+	cv.inpkt++;
+
+	if(cv.npend > 0){
+		tag := cv.pend[0];
+		for(i := 1; i < cv.npend; i++)
+			cv.pend[i-1] = cv.pend[i];
+		cv.npend--;
+		srv.reply(ref Rmsg.Read(tag, frame));
+		return;
+	}
+	if(cv.nq < Qmax)
+		cv.q[cv.nq++] = frame;
+	else
+		cv.drops++;
+}
+
+#
+# Wrap an Ethernet frame in an RNDIS packet message and send it.
+#
+transmit(frame: array of byte): int
+{
+	buf := array[Rnishdr + len frame] of byte;
+	for(i := 0; i < Rnishdr; i++)
+		buf[i] = byte 0;
+
+	put4(buf, 0, Rnisdata);
+	put4(buf, 4, len buf);
+	# DataOffset counts from byte 8 of the message, not from its start
+	put4(buf, 8, Rnishdr - 8);
+	put4(buf, 12, len frame);
+	buf[Rnishdr:] = frame;
+
+	if(sys->write(bulkfd, buf, len buf) != len buf)
+		return -1;
+	return 0;
+}
+
+#
+# Read frames off the bulk endpoint for as long as the device lives.
+#
+# One bulk read can carry several RNDIS messages, so the buffer is
+# walked rather than assumed to hold exactly one.
+#
+rxproc()
+{
+	buf := array[Rnishdr + Maxframe + 64] of byte;
+
+	for(;;){
+		n := sys->read(bulkfd, buf, len buf);
+		if(n <= 0){
+			sys->print("etherusb: bulk read ended (%d): %r\n", n);
+			return;
+		}
+
+		for(off := 0; off + Rnishdr <= n; ){
+			if(get4(buf, off) != big Rnisdata)
+				break;
+			msglen := int get4(buf, off+4);
+			dataoff := off + 8 + int get4(buf, off+8);
+			datalen := int get4(buf, off+12);
+			if(msglen < Rnishdr || off + msglen > n)
+				break;
+			if(datalen < 14 || dataoff + datalen > n)
+				break;
+
+			frame := array[datalen] of byte;
+			frame[0:] = buf[dataoff:dataoff+datalen];
+
+			# Ether type is bytes 12 and 13, after the two
+			# addresses. That is the only field this driver has
+			# to understand: everything above the demultiplex is
+			# os/ip's business.
+			etype := (int frame[12] << 8) | int frame[13];
+			ci := -1;
+			for(i := 0; i < Nconv; i++)
+				if(convs[i].etype == etype){
+					ci = i;
+					break;
+				}
+			if(ci >= 0)
+				rxq <-= (ci, frame);
+
+			off += msglen;
+		}
+	}
+}
+
+#
+# "0x800" -> 2048. Limbo's string-to-int conversion stops at the 'x',
+# and every ether type ethermedium dials is written that way -- so
+# taking it as decimal silently binds every connection to type 0 and
+# the demultiplex never matches anything.
+#
+hexint(s: string): int
+{
+	if(len s > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+		s = s[2:];
+
+	v := 0;
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		d := -1;
+		if(c >= '0' && c <= '9')
+			d = c - '0';
+		else if(c >= 'a' && c <= 'f')
+			d = c - 'a' + 10;
+		else if(c >= 'A' && c <= 'F')
+			d = c - 'A' + 10;
+		if(d < 0)
+			break;
+		v = v * 16 + d;
+	}
+	return v;
 }

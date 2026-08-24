@@ -670,6 +670,50 @@ Raising `KSTACK` from 16K to 64K did **not** help -- 5 of 8 boots still
 overflowed -- and that is what proved it recursion rather than depth.
 `KSTACK` is back at upstream's 16K.
 
+### Receive does not complete (open)
+
+The USB Ethernet path transmits and does not receive. That is not a
+guess about where the boundary is: QEMU's own packet capture
+(`-object filter-dump`) shows both halves of the conversation on the
+wire.
+
+    ARP, Announcement 10.0.2.15, length 46
+    ARP, Request who-has 10.0.2.2 tell 10.0.2.15, length 46
+    ARP, Reply 10.0.2.2 is-at 52:55:0a:00:02:02, length 50
+
+So everything up to and including transmission works: RNDIS framing,
+the bulk OUT, the hub, and os/ip's whole send path down through
+`ethermedium` and the driver's file interface. The reply is delivered
+to the device and never reaches the driver.
+
+What is known:
+
+- The receive process is inside `sys->read` on the bulk endpoint from
+  the moment the driver is ready. It never returns, before or after
+  the reply arrives.
+- It reaches `eptrans` -- traced as `rw=Read n=0x656 maxpkt=0x40
+  splt=0` -- and blocks below that, inside `chanwait`.
+- It is not the shared endpoint lock. That was a real bug in the same
+  path and is fixed (`Epio` now has separate read and write locks);
+  fixing it is what let transmission work at all.
+- Waking bulk IN on `Nak` as well as `Chhltd` was tried, on the theory
+  that the controller does not halt the channel when the device NAKs
+  an empty read. It did not change the behaviour, though it did stop
+  the machine wedging, so it is kept.
+
+The most likely remaining explanation is that this controller model
+does not signal anything for a bulk IN posted before data exists, so a
+receive issued in advance -- which is what any network driver does --
+is never completed no matter what arrives later. If that is right, the
+fix is for the driver to post receives differently rather than for the
+kernel to wait harder, and the next thing to measure is what `hcint`
+and `hcchar` hold on that channel while the frame is sitting in the
+device.
+
+Worth stating plainly: this is the one part of the networking path
+that has never worked, and everything on either side of it has been
+verified independently rather than inferred.
+
 ### Smaller things still open
 
 `sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,

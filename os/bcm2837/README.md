@@ -672,43 +672,62 @@ overflowed -- and that is what proved it recursion rather than depth.
 
 ### Receive does not complete (open)
 
-The USB Ethernet path transmits and does not receive. That is not a
-guess about where the boundary is: QEMU's own packet capture
-(`-object filter-dump`) shows both halves of the conversation on the
-wire.
+The USB Ethernet path transmits and does not receive. Transmission is
+confirmed against QEMU's own packet capture rather than this kernel's
+account of itself (`-object filter-dump`):
 
-    ARP, Announcement 10.0.2.15, length 46
-    ARP, Request who-has 10.0.2.2 tell 10.0.2.15, length 46
-    ARP, Reply 10.0.2.2 is-at 52:55:0a:00:02:02, length 50
+    52:54:00:12:34:57 > ff:ff:ff:ff:ff:ff  ARP Announcement 10.0.2.15
+    52:54:00:12:34:57 > ff:ff:ff:ff:ff:ff  ARP Request who-has 10.0.2.2
+    52:55:0a:00:02:02 > 52:54:00:12:34:57  ARP Reply 10.0.2.2 is-at ...
 
 So everything up to and including transmission works: RNDIS framing,
 the bulk OUT, the hub, and os/ip's whole send path down through
-`ethermedium` and the driver's file interface. The reply is delivered
-to the device and never reaches the driver.
+`ethermedium` and the driver's file interface. The reply is addressed
+to us and never reaches the driver.
 
-What is known:
+**Two real bugs were found on the way here, and both are fixed.**
 
-- The receive process is inside `sys->read` on the bulk endpoint from
-  the moment the driver is ready. It never returns, before or after
-  the reply arrives.
-- It reaches `eptrans` -- traced as `rw=Read n=0x656 maxpkt=0x40
-  splt=0` -- and blocks below that, inside `chanwait`.
-- It is not the shared endpoint lock. That was a real bug in the same
-  path and is fixed (`Epio` now has separate read and write locks);
-  fixing it is what let transmission work at all.
-- Waking bulk IN on `Nak` as well as `Chhltd` was tried, on the theory
-  that the controller does not halt the channel when the device NAKs
-  an empty read. It did not change the behaviour, though it did stop
-  the machine wedging, so it is kept.
+The first was a MAC of `00:00:00:00:00:00` on every outbound frame.
+`init()` declared `mac := array[6] of byte`, which in Limbo makes a
+LOCAL that shadows the module-level `mac` -- so the address queried
+from the device went into the local, the global stayed zero, the stats
+file reported `addr: 000000000000`, and `ethermedium` bound the
+interface to an address no device owned. Replies were addressed to
+that, and the device was right to ignore them. This would have broken
+receive on real hardware exactly as it did here.
 
-The most likely remaining explanation is that this controller model
-does not signal anything for a bulk IN posted before data exists, so a
-receive issued in advance -- which is what any network driver does --
-is never completed no matter what arrives later. If that is right, the
-fix is for the driver to post receives differently rather than for the
-kernel to wait harder, and the next thing to measure is what `hcint`
-and `hcchar` hold on that channel while the frame is sitting in the
-device.
+The second was a receive spin. A bulk IN against a drained device
+returns a zero-length packet rather than a NAK, and `chanio` decides a
+transfer is finished by hcdma advancing or Pktcnt changing -- neither
+of which happens for a zero-length transfer. It retried immediately,
+for ever: three million bus transactions a second, which starved
+everything else and presented as the kernel hanging rather than as a
+driver spinning. `Xfercomp` with nothing moved now ends the transfer.
+
+**What is known about what remains.**
+
+- The device NAKs or returns zero-length for every bulk IN. QEMU's own
+  trace (`-trace enable=usb_dwc2_packet_status`) shows `USB_RET_NAK`
+  and `USB_RET_SUCCESS len 0`, and never a data-bearing IN.
+- The channel is programmed correctly. `hcchar` decodes as device 3,
+  endpoint 2, direction IN, type bulk, maxpkt 64.
+- The device is in the right state to receive. It reports
+  configuration 2 when asked with GET_CONFIGURATION, and the RNDIS
+  packet filter reads back as the `0x0d` that was set -- QEMU's
+  usb-net drops incoming packets unless both of those hold.
+- It is not the endpoint lock. That was a real bug in the same path
+  (`Epio` now has separate read and write locks) and fixing it is what
+  made transmission work at all.
+- Waking bulk IN on `Nak` as well as `Chhltd` did not change the
+  symptom, but is kept: it is correct, and without it the machine
+  wedged.
+
+So the device satisfies every precondition QEMU's usb-net checks
+before accepting a frame, and still never has one to hand over. The
+next thing to establish is whether `usbnet_receive` is being reached
+at all -- which needs either a QEMU build with usb-net tracing, or a
+test against a second RNDIS implementation to find out whose end of
+the contract is being misread.
 
 Worth stating plainly: this is the one part of the networking path
 that has never worked, and everything on either side of it has been

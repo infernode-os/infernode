@@ -514,26 +514,29 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		n = hc->hcdma - hcdma;
 		if(n == 0){
 			/*
-			 * A zero-length transfer moves no data, so hcdma
-			 * cannot advance, and this controller does not
-			 * decrement Pktcnt for it either -- neither of
-			 * upstream's two completion tests can fire, and the
-			 * loop retries for ever.
+			 * Nothing moved, and the controller says the
+			 * transfer is finished. Believe it.
 			 *
-			 * Xfercomp is the controller saying the transfer is
-			 * done. When nothing was asked for, that is the
-			 * whole story: there is no short-transfer case to
-			 * confuse it with, because zero bytes is what was
-			 * wanted and zero bytes is what arrived.
+			 * Upstream decides by hcdma advancing or Pktcnt
+			 * changing, and neither happens here: a zero-length
+			 * transfer moves no data by definition, and this
+			 * controller does not decrement Pktcnt for one. So
+			 * both of its tests fail and the loop retries
+			 * immediately, for ever.
 			 *
-			 * This is the status stage of every control
-			 * transfer that has no data stage -- SET_ADDRESS,
-			 * SET_CONFIGURATION, every hub SET_FEATURE. Without
-			 * it a device can be described but never addressed,
-			 * so enumeration stops at the first device on the
-			 * bus.
+			 * That matters twice over. It is the status stage of
+			 * every control transfer with no data stage --
+			 * SET_ADDRESS, SET_CONFIGURATION, every hub
+			 * SET_FEATURE -- so without this a device can be
+			 * described but never addressed. And it is what a
+			 * bulk IN returns when the device has been drained:
+			 * a zero-length packet rather than a NAK. Retrying
+			 * that at full speed produced three million bus
+			 * transactions a second and starved everything else
+			 * on the machine, which presents as the kernel
+			 * hanging rather than as a driver spinning.
 			 */
-			if(len == 0 && (i & Xfercomp))
+			if(i & Xfercomp)
 				break;
 			if((hc->hctsiz & Pktcnt) != (hctsiz & Pktcnt))
 				break;

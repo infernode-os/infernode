@@ -56,6 +56,14 @@ Rclass:		con 16r20;
 Riface:		con 1;		# recipient: interface
 
 Rsetconf:	con 9;		# SET_CONFIGURATION
+Rgetconf:	con 8;		# GET_CONFIGURATION
+
+#
+# bConfigurationValue from this device's configuration descriptor.
+# Not 1: that is only a convention, and SET_CONFIGURATION for a value
+# the device does not have is a stall rather than a diagnosable error.
+#
+Configvalue:	con 2;
 
 #
 # RNDIS rides on two class requests rather than having its own
@@ -170,7 +178,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	# value the device does not have is a stall rather than a
 	# diagnosable error.
 	#
-	if(ctlout(Rh2d, Rsetconf, 2, 0, nil) < 0){
+	if(ctlout(Rh2d, Rsetconf, Configvalue, 0, nil) < 0){
 		sys->print("etherusb: set configuration failed: %r\n");
 		return;
 	}
@@ -216,7 +224,15 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(rndisinit() < 0)
 		return;
 
-	mac := array[6] of byte;
+	#
+	# No ":=" here. The MAC is module-level state because the stats
+	# file has to report it long after init() returns, and declaring
+	# it again would make a local that shadows it -- leaving the
+	# global zero, the stats file answering "addr: 000000000000",
+	# and every frame going out from 00:00:00:00:00:00. Which is
+	# exactly what happened: the ARP requests were sent and answered,
+	# and the replies were addressed to a MAC no device owned.
+	#
 	if(rndisquery(Oidmac, mac) < 0){
 		sys->print("etherusb: cannot read the MAC address: %r\n");
 		return;
@@ -237,6 +253,22 @@ init(nil: ref Draw->Context, argv: list of string)
 		sys->print("etherusb: cannot open %s: %r\n", bulk);
 		return;
 	}
+
+	#
+	# GET_CONFIGURATION, asked rather than assumed.
+	#
+	# Everything below depends on the device being configured, and
+	# the failure mode if it is not is silence: the device answers
+	# control requests, accepts the RNDIS handshake, and simply drops
+	# every packet it is sent. A line of output here is cheaper than
+	# discovering that from a packet capture.
+	#
+	gc := array[1] of byte;
+	if(ctlin(Rd2h, Rgetconf, 0, 0, gc) < 1)
+		sys->print("etherusb: GET_CONFIGURATION failed: %r\n");
+	else if(int gc[0] != Configvalue)
+		sys->print("etherusb: device is in configuration %d, wanted %d\n",
+			int gc[0], Configvalue);
 
 	sys->print("etherusb: %s ready\n", dev);
 	serve();
@@ -910,9 +942,19 @@ rxproc()
 
 	for(;;){
 		n := sys->read(bulkfd, buf, len buf);
-		if(n <= 0){
-			sys->print("etherusb: bulk read ended (%d): %r\n", n);
+		if(n < 0){
+			sys->print("etherusb: bulk read failed: %r\n");
 			return;
+		}
+		if(n == 0){
+			#
+			# A zero-length read means the device had nothing,
+			# not that it has gone away -- so wait a moment and
+			# ask again rather than treating it as the end.
+			# Without the pause this is a busy loop on the bus.
+			#
+			sys->sleep(20);
+			continue;
 		}
 
 		for(off := 0; off + Rnishdr <= n; ){

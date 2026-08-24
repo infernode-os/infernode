@@ -670,68 +670,55 @@ Raising `KSTACK` from 16K to 64K did **not** help -- 5 of 8 boots still
 overflowed -- and that is what proved it recursion rather than depth.
 `KSTACK` is back at upstream's 16K.
 
-### Receive does not complete (open)
+### Receive works; ARP does not resolve (open)
 
-The USB Ethernet path transmits and does not receive. Transmission is
-confirmed against QEMU's own packet capture rather than this kernel's
-account of itself (`-object filter-dump`):
+Frames now arrive. The driver reads them off the bulk endpoint,
+un-wraps the RNDIS header and hands them to the right connection:
 
-    52:54:00:12:34:57 > ff:ff:ff:ff:ff:ff  ARP Announcement 10.0.2.15
+    etherusb: rx read 108        (44 bytes of RNDIS header, 64 of frame)
+    etherusb: rx frame 64 type 0x806
+
+and QEMU's packet capture shows the conversation it belongs to:
+
     52:54:00:12:34:57 > ff:ff:ff:ff:ff:ff  ARP Request who-has 10.0.2.2
     52:55:0a:00:02:02 > 52:54:00:12:34:57  ARP Reply 10.0.2.2 is-at ...
 
-So everything up to and including transmission works: RNDIS framing,
-the bulk OUT, the hub, and os/ip's whole send path down through
-`ethermedium` and the driver's file interface. The reply is addressed
-to us and never reaches the driver.
+What does NOT happen is the next thing: `os/ip` does not resolve the
+address, so the ICMP echo that was waiting on it never leaves. The
+capture ends after three frames.
 
-**Two real bugs were found on the way here, and both are fixed.**
+So the open problem has moved out of USB entirely. Everything below
+`/net/ether0` -- the controller, the hub, RNDIS, the bulk endpoints in
+both directions, the file interface, the demultiplex by ether type --
+is now demonstrated rather than assumed. What is left is between
+`recvarpproc` reading that frame and `arp.c` deciding the address is
+known.
 
-The first was a MAC of `00:00:00:00:00:00` on every outbound frame.
-`init()` declared `mac := array[6] of byte`, which in Limbo makes a
-LOCAL that shadows the module-level `mac` -- so the address queried
-from the device went into the local, the global stayed zero, the stats
-file reported `addr: 000000000000`, and `ethermedium` bound the
-interface to an address no device owned. Replies were addressed to
-that, and the device was right to ignore them. This would have broken
-receive on real hardware exactly as it did here.
+**Three bugs were found getting this far, and all are fixed.**
 
-The second was a receive spin. A bulk IN against a drained device
-returns a zero-length packet rather than a NAK, and `chanio` decides a
-transfer is finished by hcdma advancing or Pktcnt changing -- neither
-of which happens for a zero-length transfer. It retried immediately,
-for ever: three million bus transactions a second, which starved
-everything else and presented as the kernel hanging rather than as a
-driver spinning. `Xfercomp` with nothing moved now ends the transfer.
+- Every outbound frame carried a MAC of `00:00:00:00:00:00`.
+  `init()` declared `mac := array[6] of byte`, which in Limbo makes a
+  LOCAL shadowing the module-level `mac`, so the stats file reported
+  `addr: 000000000000` and the interface bound to an address no device
+  owned. It looked like a receive fault and was a send fault.
+- A bulk IN against a drained device returns a zero-length packet
+  rather than a NAK, and `chanio` decided a transfer was finished only
+  when hcdma advanced or Pktcnt changed -- neither of which happens
+  when nothing moved. It retried immediately and for ever: three
+  million bus transactions a second, which starved the machine and
+  presented as the kernel hanging.
+- A read boundary is not a message boundary. The endpoint delivers
+  maxpkt bytes at a time and a read ends at the first short packet, so
+  an RNDIS message larger than one packet -- which every Ethernet
+  frame is -- can arrive split across two reads. Parsing each read
+  alone discarded the head of the message and then found garbage where
+  the next header should be, so the stream never resynchronised. The
+  driver reassembles now.
 
-**What is known about what remains.**
-
-- The device NAKs or returns zero-length for every bulk IN. QEMU's own
-  trace (`-trace enable=usb_dwc2_packet_status`) shows `USB_RET_NAK`
-  and `USB_RET_SUCCESS len 0`, and never a data-bearing IN.
-- The channel is programmed correctly. `hcchar` decodes as device 3,
-  endpoint 2, direction IN, type bulk, maxpkt 64.
-- The device is in the right state to receive. It reports
-  configuration 2 when asked with GET_CONFIGURATION, and the RNDIS
-  packet filter reads back as the `0x0d` that was set -- QEMU's
-  usb-net drops incoming packets unless both of those hold.
-- It is not the endpoint lock. That was a real bug in the same path
-  (`Epio` now has separate read and write locks) and fixing it is what
-  made transmission work at all.
-- Waking bulk IN on `Nak` as well as `Chhltd` did not change the
-  symptom, but is kept: it is correct, and without it the machine
-  wedged.
-
-So the device satisfies every precondition QEMU's usb-net checks
-before accepting a frame, and still never has one to hand over. The
-next thing to establish is whether `usbnet_receive` is being reached
-at all -- which needs either a QEMU build with usb-net tracing, or a
-test against a second RNDIS implementation to find out whose end of
-the contract is being misread.
-
-Worth stating plainly: this is the one part of the networking path
-that has never worked, and everything on either side of it has been
-verified independently rather than inferred.
+Next: instrument `recvarp` in os/ip/ethermedium.c. The frame is
+delivered to the connection `recvarpproc` is reading, so either that
+read is not being satisfied or the reply is being rejected once it
+gets there -- and both are cheap to tell apart from inside arp.c.
 
 ### Smaller things still open
 

@@ -938,55 +938,83 @@ transmit(frame: array of byte): int
 #
 rxproc()
 {
-	buf := array[Rnishdr + Maxframe + 64] of byte;
+	#
+	# Reassembly, because a read boundary is not a message boundary.
+	#
+	# The endpoint delivers maxpkt bytes at a time and a read ends at
+	# the first short packet, so an RNDIS message larger than one
+	# packet -- which every Ethernet frame is -- can arrive split
+	# across two reads. Parsing each read on its own throws away the
+	# head of every such message and then finds garbage where the
+	# next header should be, which is worse than losing the frame:
+	# the stream never resynchronises.
+	#
+	# So keep what does not yet form a whole message and prepend it
+	# to the next read.
+	#
+	acc := array[2 * (Rnishdr + Maxframe)] of byte;
+	nacc := 0;
 
 	for(;;){
-		n := sys->read(bulkfd, buf, len buf);
+		if(nacc >= len acc)			# desynchronised; start over
+			nacc = 0;
+
+		n := sys->read(bulkfd, acc[nacc:], len acc - nacc);
 		if(n < 0){
 			sys->print("etherusb: bulk read failed: %r\n");
 			return;
 		}
 		if(n == 0){
 			#
-			# A zero-length read means the device had nothing,
-			# not that it has gone away -- so wait a moment and
-			# ask again rather than treating it as the end.
-			# Without the pause this is a busy loop on the bus.
+			# Nothing waiting. Pause before asking again: without
+			# it this is a busy loop on the bus.
 			#
 			sys->sleep(20);
 			continue;
 		}
+		nacc += n;
 
-		for(off := 0; off + Rnishdr <= n; ){
-			if(get4(buf, off) != big Rnisdata)
+		off := 0;
+		while(off + Rnishdr <= nacc){
+			if(get4(acc, off) != big Rnisdata){
+				# Not a packet message and never will be.
+				off = nacc;
 				break;
-			msglen := int get4(buf, off+4);
-			dataoff := off + 8 + int get4(buf, off+8);
-			datalen := int get4(buf, off+12);
-			if(msglen < Rnishdr || off + msglen > n)
+			}
+			msglen := int get4(acc, off+4);
+			if(msglen < Rnishdr || msglen > len acc){
+				off = nacc;
 				break;
-			if(datalen < 14 || dataoff + datalen > n)
+			}
+			if(off + msglen > nacc)		# incomplete; wait for more
 				break;
 
-			frame := array[datalen] of byte;
-			frame[0:] = buf[dataoff:dataoff+datalen];
+			dataoff := off + 8 + int get4(acc, off+8);
+			datalen := int get4(acc, off+12);
+			if(datalen >= 14 && dataoff + datalen <= nacc){
+				frame := array[datalen] of byte;
+				frame[0:] = acc[dataoff:dataoff+datalen];
 
-			# Ether type is bytes 12 and 13, after the two
-			# addresses. That is the only field this driver has
-			# to understand: everything above the demultiplex is
-			# os/ip's business.
-			etype := (int frame[12] << 8) | int frame[13];
-			ci := -1;
-			for(i := 0; i < Nconv; i++)
-				if(convs[i].etype == etype){
-					ci = i;
-					break;
-				}
-			if(ci >= 0)
-				rxq <-= (ci, frame);
-
+				#
+				# Ether type is bytes 12 and 13, after the two
+				# addresses. It is the only field this driver
+				# has to understand: everything above the
+				# demultiplex is os/ip's business.
+				#
+				etype := (int frame[12] << 8) | int frame[13];
+				for(i := 0; i < Nconv; i++)
+					if(convs[i].etype == etype){
+						rxq <-= (i, frame);
+						break;
+					}
+			}
 			off += msglen;
 		}
+
+		# Shuffle whatever is left of a partial message to the front.
+		if(off > 0 && off < nacc)
+			acc[0:] = acc[off:nacc];
+		nacc -= off;
 	}
 }
 

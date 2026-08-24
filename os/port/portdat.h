@@ -439,6 +439,7 @@ enum
 	Proc_exitbig,
 
 	NERR		= 30,
+	KSTACKGUARD	= 0xfeedfacedeadbeefULL,	/* base-of-kstack canary */
 
 	Unknown		= 0,
 	IdleGC,
@@ -496,6 +497,7 @@ struct Proc
 	void*		arg;
 	FPU		fpsave;
 	int		scallnr;
+	int		inpreempt;	/* preemption in flight for this proc */
 	int		nerrlab;
 	Label		errlab[NERR];
 	char	genbuf[128];	/* buffer used e.g. for last name element from namec */

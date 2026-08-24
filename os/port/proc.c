@@ -345,6 +345,17 @@ newproc(void)
 		panic("pidalloc");
 	if(p->kstack == 0)
 		p->kstack = smalloc(KSTACK);
+
+	/*
+	 * Guard word at the base of the kernel stack.
+	 *
+	 * A kernel stack that runs off its bottom does not fault -- it
+	 * keeps descending into whatever the pool handed out below it, so
+	 * the failure appears somewhere else entirely and much later. The
+	 * guard turns "sp is somewhere impossible" into "this process
+	 * overflowed its stack", which are very different bugs.
+	 */
+	*(ulong*)p->kstack = KSTACKGUARD;
 	addprog(p);
 
 	return p;
@@ -638,6 +649,25 @@ errorf(char *fmt, ...)
 	vseprint(buf, buf+sizeof(buf), fmt, arg);
 	va_end(arg);
 	error(buf);
+}
+
+/*
+ * Refuse to push an error label past the end of up->errlab.
+ *
+ * NERR is 30, which is generous for legitimate nesting -- so hitting it
+ * means waserror() calls are leaking, not that the depth is genuine.
+ * Saying so here names the moment it happens; without it the array
+ * simply overflows into the rest of Proc and the damage surfaces later
+ * as a jump to a nonsense address.
+ */
+void
+errlabcheck(void)
+{
+	if(up == nil)
+		panic("waserror: not in a process");
+	if(up->nerrlab >= NERR)
+		panic("waserror: error stack overflow, nerrlab %d pc %lux",
+			up->nerrlab, getcallerpc(&up));
 }
 
 void

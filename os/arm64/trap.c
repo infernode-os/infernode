@@ -155,6 +155,18 @@ trap(Ureg *u)
 	 * says a bogus stack reached the scheduler -- true, and far too
 	 * late to attribute.
 	 */
+	/*
+	 * Has the current process run off the bottom of its kernel stack?
+	 * Checked before the sp-range test because it is the more specific
+	 * answer: it names the process that did it, rather than merely
+	 * observing that sp is somewhere it should not be.
+	 */
+	if(up != nil && up->kstack != nil && *(ulong*)up->kstack != KSTACKGUARD){
+		uartputstr("\n*** kernel stack overflow: guard word clobbered ***");
+		dumpureg(u);
+		panic("kstack overflow");
+	}
+
 	if(u->sp >= (uintptr)_start && u->sp < (uintptr)end){
 		uartputstr("\n*** exception taken on an impossible stack ***");
 		dumpureg(u);

@@ -185,6 +185,7 @@ Mount*		newmount(Mhead*, Chan*, int, char*);
 Pgrp*		newpgrp(void);
 Proc*		newproc(void);
 char*		nextelem(char*, char*);
+void		errlabcheck(void);
 void		nexterror(void);
 Cname*		newcname(char*);
 int		notify(Ureg*);

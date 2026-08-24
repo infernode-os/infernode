@@ -151,6 +151,19 @@ extern int	rootosinitlen;
 void	dumpstack(void);
 void	kprocchild(Proc*, void(*)(void*), void*);
 
-#define	waserror()	(up->nerrlab++, setlabel(&up->errlab[up->nerrlab-1]))
+/*
+ * waserror() had no bound. up->errlab holds NERR entries; once nerrlab
+ * reaches NERR the setlabel() below writes a whole Label -- sp, pc and
+ * eleven callee-saved registers -- past the end of the array and into
+ * the rest of Proc, and the matching nexterror() then gotolabel()s
+ * through whatever it finds. That sets sp and pc to arbitrary values,
+ * which is not a crash so much as a random jump.
+ *
+ * errlabcheck() makes the overflow say so. It has to be a separate
+ * call rather than a test inside the expression because setlabel()
+ * must be reached from the CALLER's frame -- that is the frame
+ * gotolabel() will resume into.
+ */
+#define	waserror()	(errlabcheck(), up->nerrlab++, setlabel(&up->errlab[up->nerrlab-1]))
 
 #include "../port/portfns.h"

@@ -166,10 +166,35 @@ hzclock(Ureg *ur)
 
 	checkalarms();
 
-	if(up && up->state == Running){
+	/*
+	 * Preempt -- but never re-entrantly.
+	 *
+	 * sched() re-enables interrupts (spllo) when the process is
+	 * resumed, and it does that while still inside this interrupt
+	 * handler, several frames deep. The next tick can therefore arrive
+	 * before this one has unwound, call hzclock again, and preempt
+	 * again. Nothing bounds that: each nesting keeps its Ureg and its
+	 * frames on the SAME kernel stack, so the stack only grows.
+	 *
+	 * It ends with the process running off the bottom of its kstack,
+	 * down through the heap and into .bss, where the frames land on
+	 * libkern's format-handler table and the next print() branches
+	 * through a pointer with a formatted character written into it.
+	 * Raising KSTACK from 16K to 64K did not help, which is what
+	 * proved it recursion rather than depth.
+	 *
+	 * The flag lives in Proc rather than Mach because sched() does not
+	 * return until THIS process is scheduled again: it brackets one
+	 * process's preemption exactly. A Mach-wide flag would stay set
+	 * while some other process ran and would suppress its preemption
+	 * too.
+	 */
+	if(up && up->state == Running && !up->inpreempt){
 		if(anyready()){
+			up->inpreempt = 1;
 			sched();
 			splhi();
+			up->inpreempt = 0;
 		}
 	}
 }

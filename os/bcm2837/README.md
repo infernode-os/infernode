@@ -529,32 +529,55 @@ import and 64-bit port, the Dis VM, and an interactive shell. What
 follows is ordered by dependency, with the reasoning kept where a later
 reader needs it.
 
-**1. The JIT (`libinterp/comp-arm64.c`).**
-Dis is interpreted today: `xec`'s inner loop costs two indirect calls
-per bytecode instruction. Measured against the same code generator in
-the hosted emulator, compiled Dis runs an **80M-iteration arithmetic
-loop in 0.10s against the interpreter's 1.10s — about 10×**. On a
-1.4GHz in-order Cortex-A53, which cannot hide those indirect calls the
-way an out-of-order core does, the gap should be wider still.
+**1. The JIT — done in emulation, hardware validation outstanding.**
 
-It is close: the file compiles against these headers with exactly one
-blocker, `<sys/mman.h>`. Its only host dependencies are `mmap(PROT_EXEC)`
-at three sites and an instruction-cache flush, and both already have
-bare-metal equivalents — this kernel maps all RAM without PXN/UXN, so
-plain `malloc()` returns executable memory, and `cacheiflush()` in
-`os/arm64/arch.S` is CTR_EL0-driven.
+Dis is compiled to AArch64 rather than interpreted. Measured on the
+same kernel, differing only by `-DCFLAG=0`:
 
-**Acceptance is working, stress-tested AND benchmarked** — not merely
-"it links". Two reasons it is worth doing before the driver work: the
-performance is wanted, and a JIT exercises the port in ways the
-interpreter never does. It writes instructions into memory and jumps to
-them, so it leans on the MMU attributes, on cache maintenance, and on
-the FP/SIMD context switch. Bugs found there are bugs in the port.
+    JIT:    2000000 iterations in   80 ms (acc=1048429888)
+    no JIT: 2000000 iterations in 2160 ms (acc=1048429888)
 
-**A trap specific to this one:** QEMU's TCG does not model split I/D
-caches, so a JIT that omits its icache maintenance works perfectly in
-emulation and crashes on real silicon. JIT-generated code must be
-validated **on the board**, not only under QEMU.
+**27×**, against 10× measured for the same code generator in the hosted
+emulator on an M-series Mac. That direction was predicted and the
+reason holds: `xec`'s inner loop costs two indirect calls per Dis
+instruction, and an in-order Cortex-A53 cannot hide them the way an
+out-of-order core does. 12/12 clean boots; the shell, pipelines and
+command substitution all run as compiled code.
+
+The suite checks two things that are not the same: that compiled code
+computes the **same answer** as the interpreter, bit for bit, and that
+it is faster. A JIT that is merely fast is a miscompilation waiting to
+be found. The interpreter stays the reference, so any disagreement is
+bisectable against it.
+
+`comp-arm64.c` gained an `INFERNO_NATIVE` arm beside the `APPLE_JIT`
+one it already had. Its only host dependencies were `mmap(PROT_EXEC)`
+and an icache flush; this kernel maps all RAM without PXN/UXN so
+`malloc()` returns executable memory, and `cacheiflush()` is
+CTR_EL0-driven.
+
+**Still gated on hardware.** QEMU's TCG does not model split I/D
+caches, so a JIT that skips its icache maintenance works perfectly in
+emulation and executes stale instructions on a Cortex-A53. Acceptance
+is not complete until JIT-generated code has run on the board.
+
+*Two harness bugs it exposed, both stale build state:* libinterp ships
+ten `comp-*.c` files each defining `compile()`, and excluding only
+`comp-amd64.c` left the linker free to pick `comp-68020.c` — so the
+first time `cflag` went above zero, the kernel compiled a Dis module
+with a 68020 code generator and branched into it. Then, after
+narrowing the build, it *still* did: `ar r` replaces and adds members
+but never removes one, so the stale object was still in `libkern.a`.
+That is the third time on this branch that stale build state has
+produced confident wrong behaviour.
+
+*And a real kernel bug,* found stress-testing the JIT through the
+shell: a backquote substitution killed the machine with
+`panic: devno | 0x7c`. `kpipe()` reached `devtab` through
+`devno('|', 0)`, and `devno` panics on a miss when `user == 0` — so any
+Limbo program calling `sys->pipe()` on a kernel without `#|` took the
+system down. Both halves fixed: `#|` imported, and a missing device is
+now an error to the caller rather than a panic.
 
 **2. Hardware bring-up.** Needs a 3.3V USB-serial adapter on GPIO
 14/15 and a FAT32 card with the Broadcom blobs plus `config.txt`
@@ -585,8 +608,10 @@ declares that tag but never handles it, so this is hardware-only.
 SDIO/EMMC driver and a firmware blob upload.
 
 Smaller, and worth doing whenever they block something: `devtab` holds
-only root, cons and prog, so there are no pipelines (`#|`), no `/env`
-(`#e`) and no `/fd` (`#d`). `sprint()` in `devcons.c` still assumes
+root, cons, prog and pipe, so there is still no `/env` (`#e`) and no
+`/fd` (`#d`). `sysfile.c:514` reaches the mount device through
+`devno('M', 0)` — the same panic-on-miss hazard `#|` had, harmless only
+while nothing mounts anything. `sprint()` in `devcons.c` still assumes
 every caller's buffer is `PRINTSIZE` while `os/port/dev.c:105` hands it
 a `smalloc(4+strlen(spec)+1)` — it fits today and will not survive the
 first longer format.

@@ -1584,6 +1584,26 @@ kmain(void)
 	 * which probesysfile does when it builds its Proc.
 	 */
 	kstrdup(&eve, "inferno");
+
+	/*
+	 * The host's name, reported through #c/sysname. devcons.c declares
+	 * sysname but leaves it nil and nothing else sets it, so
+	 * /dev/sysname read back empty -- which looks like a broken device
+	 * rather than an unset string.
+	 */
+	kstrdup(&sysname, "infernode");
+
+	/*
+	 * Install %q.
+	 *
+	 * libkern has fmtquote.c and quotefmtinstall(), but nothing in this
+	 * port ever called it, so print() emitted the verb literally: a
+	 * Limbo program printing %q got back the two characters "%q".
+	 * Inferno code uses %q for any string that might contain spaces, so
+	 * this is not cosmetic -- it silently mangles the diagnostics you
+	 * reach for when something else is wrong.
+	 */
+	quotefmtinstall();
 	procinit();
 	checkunaligned();
 	boardioprobe();

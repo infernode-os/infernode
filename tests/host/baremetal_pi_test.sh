@@ -128,7 +128,7 @@ info "qemu:    $QEMU"
 # the ELF that produced them, and it has just been deleted.
 #
 # BAREMETAL_BUILD_DIR keeps it. Setting it also suppresses the cleanup, so
-# the k.elf, the objects and cc.log survive for nm/objdump.
+# the per-image .elf files, the objects and cc.log survive for nm/objdump.
 if [ -n "${BAREMETAL_BUILD_DIR:-}" ]; then
 	BUILD="$BAREMETAL_BUILD_DIR"
 	mkdir -p "$BUILD"
@@ -300,8 +300,22 @@ DISEOF
     done
     "$AR" rcs "$BUILD/libkern.a" "${libobjs[@]}" 2>>"$BUILD/cc.log" || return 1
 
-    "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" "$BUILD/libkern.a" -o "$BUILD/k.elf" 2>>"$BUILD/cc.log" || return 1
-    "$OBJCOPY" -O binary "$BUILD/k.elf" "$outimg" 2>>"$BUILD/cc.log" || return 1
+    # The ELF is named after the image it produces, NOT a shared k.elf.
+    #
+    # build_kernel runs twice -- once for the real kernel and once for the
+    # fault-injection kernel -- so a fixed name means the second link
+    # overwrites the first, and the ELF left on disk belongs to whichever
+    # ran last. Every symbol then resolves against the wrong binary.
+    #
+    # That is not a theoretical tidiness point. Debugging a pool
+    # corruption, "alloc:D2B (from 85218/a57b8)" resolved into cmount and
+    # cvtup, at a nop and an FP load -- addresses that cannot be return
+    # addresses at all. getcallerpc was blamed and rewritten before the
+    # actual cause turned up: the ELF being read was the fault kernel's,
+    # while the addresses came from the real one.
+    local kelf="${outimg%.img}.elf"
+    "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" "$BUILD/libkern.a" -o "$kelf" 2>>"$BUILD/cc.log" || return 1
+    "$OBJCOPY" -O binary "$kelf" "$outimg" 2>>"$BUILD/cc.log" || return 1
     return 0
 }
 
@@ -343,7 +357,7 @@ fi
 #
 NM="$(command -v llvm-nm 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-nm)"
 if [[ -x "$NM" ]]; then
-    vaddr="$("$NM" "$BUILD/k.elf" 2>/dev/null | awk '$3=="vectors"{print $1}')"
+    vaddr="$("$NM" "$BUILD/kernel8.elf" 2>/dev/null | awk '$3=="vectors"{print $1}')"
     if [[ -n "$vaddr" ]]; then
         if (( 0x$vaddr % 2048 == 0 )); then
             pass "vector table is 2048-byte aligned (0x$vaddr)"

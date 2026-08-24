@@ -35,6 +35,43 @@ struct Pool
 	void	(*move)(void*, void*);
 };
 
+/*
+ * Allocation granularity: every request is rounded up to a multiple of
+ * Poolquanta+1, and that is also the smallest block the allocator can
+ * ever create when it splits a free chunk.
+ *
+ * It therefore has a hard lower bound. A free block is not merely a
+ * header and a tail -- pooladd() threads it into the free tree, which
+ * writes the five Bhdr.u.s pointers. So a block must be able to hold a
+ * COMPLETE Bhdr plus its Btail even when it holds no user data at all.
+ *
+ * Upstream's 31 is a 32-bit number. There, magic and size are 4 bytes
+ * each and the tree pointers are 4 bytes each, so a free node fits in
+ * exactly 32 bytes and 31 is precisely right. Under LP64 every one of
+ * those fields doubles and the same node needs 64 bytes -- but nothing
+ * stops the splitter from carving out a 32-byte remainder, at which
+ * point pooladd() writes 24 bytes past the end of it, directly onto the
+ * following block's magic and size.
+ *
+ * That is what corrupted this kernel's heap. It surfaced as a D2B
+ * failure freeing an unrelated buffer in libinterp's module loader, and
+ * cost a long hunt through parsemod before the allocator was suspected
+ * at all -- the block that got destroyed had nothing to do with the
+ * allocation that destroyed it.
+ *
+ * emu/port/alloc.c already carries this scar and uses 127, because its
+ * Bhdr also has allocpc/reallocpc fields. os/port's Bhdr does not, so
+ * 63 is the true minimum here. Asserted rather than trusted: if Bhdr
+ * ever grows, this fails to compile instead of quietly corrupting
+ * memory again.
+ */
+enum {
+	Poolquanta	= 63
+};
+
+typedef char poolquantabigenough[
+	(Poolquanta + 1) >= (int)(sizeof(Bhdr) + sizeof(Btail)) ? 1 : -1];
+
 static
 struct
 {
@@ -44,9 +81,9 @@ struct
 } table = {
 	3,
 	{
-		{ "main",  0,	 4*1024*1024, 31,  128*1024, 15*256*1024 },
-		{ "heap",  1,	16*1024*1024, 31,  128*1024, 15*1024*1024 },
-		{ "image", 2,	 8*1024*1024, 31, 300*1024, 15*512*1024 },
+		{ "main",  0,	 4*1024*1024, Poolquanta,  128*1024, 15*256*1024 },
+		{ "heap",  1,	16*1024*1024, Poolquanta,  128*1024, 15*1024*1024 },
+		{ "image", 2,	 8*1024*1024, Poolquanta, 300*1024, 15*512*1024 },
 	}
 };
 

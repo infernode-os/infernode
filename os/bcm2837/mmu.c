@@ -41,6 +41,7 @@
 #include "dat.h"
 #include "io.h"
 #include "fns.h"
+#include "board.h"
 
 enum
 {

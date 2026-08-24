@@ -93,35 +93,6 @@ checktraps(void)
 	uartputstr("trap: returned from exception, save/restore OK\n");
 }
 
-/*
- * Ask the firmware what board this is.  Cheap, and it is the first
- * confirmation that the mailbox round trip works at all -- worth having
- * before anything depends on the mailbox for something harder to debug.
- */
-static void
-probehw(void)
-{
-	u32int v[2];
-
-	uartputstr("mbox: ");
-	v[0] = 0;
-	if(mboxprop(Taggetrev, v, 0, 1) == 0){
-		uartputstr("board rev ");
-		uartputx(v[0]);
-	}else{
-		uartputstr("board rev query FAILED");
-	}
-
-	v[0] = 0;
-	v[1] = 0;
-	if(mboxprop(Taggetarmmem, v, 0, 2) == 0){
-		uartputstr(", ARM memory ");
-		uartputd(v[1] >> 20);
-		uartputstr("MB at ");
-		uartputx(v[0]);
-	}
-	uartputstr("\n");
-}
 
 /*
  * Turn on translation, then say what the map looks like.  Reporting
@@ -210,53 +181,25 @@ checkunaligned(void)
 		uartputstr("returned WRONG VALUE\n");
 }
 
-/*
- * Read back the pin mux the UART set up.
- *
- * Deliberately non-invasive: it only READS function selects, and only
- * for pins this kernel already configured.  Driving an arbitrary pin as
- * a self-test would be reckless on real hardware, where something may be
- * wired to it -- the header pins are attached to whatever the owner
- * plugged in, and a test that asserts an output could short a driven
- * line.  Reading back proves the mux took, which is the part that is
- * otherwise invisible.
- */
-static void
-probegpio(void)
-{
-	int f14, f15;
-
-	f14 = gpiogetfunc(14);
-	f15 = gpiogetfunc(15);
-
-	uartputstr("gpio: pin14 func=");
-	uartputd(f14);
-	uartputstr(" pin15 func=");
-	uartputd(f15);
-	if(f14 == Gpioalt0 && f15 == Gpioalt0)
-		uartputstr(" (ALT0/UART as set) OK\n");
-	else
-		uartputstr(" UNEXPECTED (wanted ALT0 on both)\n");
-}
 
 /*
- * Start the clock, and check it against an independent reference.
+ * Start the clock, and prove interrupts actually arrive.
  *
- * CNTFRQ_EL0 is not derived by the hardware -- it is a value firmware
- * writes, and firmware can write the wrong one.  If it lies, every delay
- * and timeout in the kernel is off by that ratio, and the symptom is
- * never "the clock is wrong": it is flaky networking, or a display that
- * tears, or timeouts that fire early under load.  The BCM system timer
- * runs at a fixed 1MHz set by the hardware, so timing the same interval
- * with both and comparing catches it immediately.
+ * Two separate questions, and only the second is portable. Whether
+ * CNTFRQ_EL0 is telling the truth needs a second, independently-rated
+ * clock, and which one that is -- if there is one at all -- is a
+ * property of the board; boardclockcheck() answers it.
  *
- * Then prove interrupts actually arrive, rather than assuming that
- * arming the comparator was enough.
+ * What is portable is whether arming the comparator actually produces
+ * an interrupt at the core. That is worth testing separately because
+ * arming it always "works": the write succeeds whether or not the
+ * interrupt controller is routing the line, so a mis-programmed GIC or
+ * a mis-set BCM local-timer route presents as a kernel that boots fine
+ * and then never preempts anything.
  */
 static void
 probeclock(void)
 {
-	u64int c0, c1, s0, s1, genus, sysus, lo, hi;
 	u64int deadline;
 
 	uartputstr("clk:  cntfrq ");
@@ -265,38 +208,22 @@ probeclock(void)
 	uartputd(clockfreq() / 1000000);
 	uartputstr("MHz)\n");
 
-	/* time 50ms by both clocks */
-	s0 = systimer();
-	c0 = clockcount();
-	microdelay(50000);
-	c1 = clockcount();
-	s1 = systimer();
-
-	sysus = s1 - s0;
-	genus = ((c1 - c0) * 1000000) / clockfreq();
-
-	uartputstr("clk:  50ms measured: systimer ");
-	uartputd(sysus);
-	uartputstr("us, generic ");
-	uartputd(genus);
-	uartputstr("us -- ");
-
-	/* agree within 5%? */
-	lo = (sysus * 95) / 100;
-	hi = (sysus * 105) / 100;
-	if(genus >= lo && genus <= hi)
-		uartputstr("clocks AGREE\n");
-	else
-		uartputstr("clocks DISAGREE (cntfrq is lying)\n");
+	boardclockcheck();
 
 	/*
 	 * Now let interrupts in.  Wait for a few ticks with a wall-clock
 	 * deadline so a dead interrupt line fails as a report rather than
 	 * as a hang.
+	 *
+	 * The deadline is measured with the generic timer's counter rather
+	 * than a platform one. CNTPCT_EL0 free-runs whether or not the
+	 * comparator interrupt is routed anywhere, so it stays a valid
+	 * timeout source even when the thing under test is broken -- and it
+	 * is the one clock every AArch64 board has.
 	 */
 	intrenable();
-	deadline = systimer() + 500000;		/* 500ms */
-	while(clockticks() < 5 && systimer() < deadline)
+	deadline = clockcount() + clockfreq()/2;	/* 500ms */
+	while(clockticks() < 5 && clockcount() < deadline)
 		;
 
 	uartputstr("clk:  irq ");
@@ -1457,42 +1384,6 @@ startdis(void)
 	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
 }
 
-static void
-probefb(void)
-{
-	Fbinfo fb;
-
-	if(fbinit(&fb) < 0){
-		uartputstr("fb:   no framebuffer (no display attached?)\n");
-		return;
-	}
-
-	uartputstr("fb:   ");
-	uartputd(fb.width);
-	uartputstr("x");
-	uartputd(fb.height);
-	uartputstr("x");
-	uartputd(fb.depth);
-	uartputstr(" pitch=");
-	uartputd(fb.pitch);
-	uartputstr(" base=");
-	uartputx(fb.base);
-	uartputstr(" size=");
-	uartputd(fb.size);
-	uartputstr("\n");
-
-	/*
-	 * Paint something identifiable.  On the 7in panel this is the
-	 * first thing that will ever be visible, so make it unambiguous
-	 * rather than a single colour that could be a stuck backlight.
-	 */
-	fbfill(&fb, 0x00101018);
-	fbrect(&fb, 0, 0, (int)fb.width, 8, 0x00C03020);
-	fbrect(&fb, 20, 40, 120, 80, 0x00FF0000);
-	fbrect(&fb, 160, 40, 120, 80, 0x0000FF00);
-	fbrect(&fb, 300, 40, 120, 80, 0x000000FF);
-	uartputstr("fb:   test pattern drawn\n");
-}
 
 /*
  * Called by the scheduler when no process is ready to run.
@@ -1559,16 +1450,42 @@ idlehands(void)
 }
 
 /*
- * Save any per-process state the scheduler does not, on the way out of
- * a context switch. That means FP/SIMD -- and nothing here uses it yet,
- * because the kernel is built -mgeneral-regs-only precisely so that no
- * path can dirty FP state we are not preserving. When FP is enabled for
- * user code this is where the V registers and FPCR/FPSR get saved.
+ * Save and restore the per-process state the scheduler does not: the
+ * FP/SIMD register file.
+ *
+ * This was a no-op, on the reasoning that the kernel is built
+ * -mgeneral-regs-only so nothing can dirty FP state. That reasoning
+ * was true of the kernel and false of the system: libinterp is
+ * deliberately built WITH FP -- Dis has a floating point type and the
+ * interpreter will not compile without it -- and libinterp is exactly
+ * what a Dis process spends its time in.
+ *
+ * So the V registers are live in precisely the processes that get
+ * preempted. The clock interrupt saves x0-x30 into the Ureg and
+ * nothing else, and sched()'s setlabel/gotolabel preserve x19-x29 and
+ * nothing else. d8-d15 are callee-saved under AAPCS64 and were being
+ * preserved by neither, so a process resumed after another one ran
+ * came back with whatever the other process left in them.
+ *
+ * The result was not a wrong number in a Limbo float. clang allocates
+ * those registers for ordinary values when FP is available, so the
+ * damage landed on live pointers and control flow: a preempted Dis
+ * process would resume, return through a corrupted frame, and die
+ * somewhere unrelated with pc = sp-16 on a stack it did not own.
+ * Deterministic runs were fine; anything that took an interrupt at the
+ * wrong instruction was not, which is why it looked like a 50% coin
+ * flip rather than a bug.
  */
 void
 procsave(Proc *p)
 {
-	USED(p);
+	FPsave(&p->fpsave);
+}
+
+void
+procrestore(Proc *p)
+{
+	FPrestore(&p->fpsave);
 }
 
 void
@@ -1576,7 +1493,9 @@ kmain(void)
 {
 	uartinit();
 
-	uartputstr("\nInferNode bare-metal (BCM2837 / Raspberry Pi 3B+)\n");
+	uartputstr("\nInferNode bare-metal (");
+	uartputstr(boardname());
+	uartputstr(")\n");
 
 	uartputstr("  exception level: EL");
 	uartputc('0' + (int)currentel());
@@ -1595,7 +1514,7 @@ kmain(void)
 
 	checktraps();
 
-	probehw();
+	boardprobe();
 	startmmu();
 
 	/*
@@ -1667,7 +1586,7 @@ kmain(void)
 	kstrdup(&eve, "inferno");
 	procinit();
 	checkunaligned();
-	probegpio();
+	boardioprobe();
 	probearch();
 	probelibkern();
 	probexalloc();
@@ -1683,7 +1602,7 @@ kmain(void)
 	proberoot();
 	probeqio();
 	probeclock();
-	probefb();
+	boardfbprobe();
 
 	uartputstr("\nboot OK\n");
 

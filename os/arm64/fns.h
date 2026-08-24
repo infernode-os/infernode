@@ -9,21 +9,31 @@ void	uartputstr(char*);
 void	uartputx(u64int);
 void	uartputd(u64int);
 
-/* gpio.c */
-void	gpiofunc(int, int);
-void	gpiopull(int, int);
-void	gpioout(int, int);
-int	gpioin(int);
-int	gpiogetfunc(int);
-
-/* mailbox.c */
-int	mboxprop(u32int, u32int*, int, int);
-int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);
-
-/* fb.c */
-int	fbinit(Fbinfo*);
-void	fbfill(Fbinfo*, u32int);
-void	fbrect(Fbinfo*, int, int, int, int, u32int);
+/*
+ * board.c -- the four things a platform supplies to the shared kmain.
+ *
+ * Everything else in this header is common to any AArch64 board. These
+ * are the seams where "which machine is this" is allowed to matter, and
+ * keeping them few is the point: a fifth hook should be an argument for
+ * moving the code into os/arm64, not for widening the interface.
+ *
+ * boardname       banner text, so the log says which port produced it
+ * boardprobe      earliest platform bring-up, before the MMU. An
+ *                 interrupt controller belongs here -- clockinit runs
+ *                 later and expects one to exist.
+ * boardioprobe    platform I/O self-tests, after the process table
+ * boardclockcheck cross-check CNTFRQ_EL0 against an independent clock.
+ *                 CNTFRQ is a value firmware writes rather than
+ *                 something hardware derives, so it can be wrong, and a
+ *                 wrong one never presents as a clock bug.
+ * boardfbprobe    framebuffer bring-up, last, once everything it needs
+ *                 is up
+ */
+char*	boardname(void);
+void	boardprobe(void);
+void	boardioprobe(void);
+void	boardclockcheck(void);
+void	boardfbprobe(void);
 
 /* arch.S -- AArch64 primitives that cannot be written in C */
 void	coherence(void);
@@ -65,7 +75,7 @@ void	clockinit(void);
 u64int	clockcount(void);
 u64int	clockfreq(void);
 u64int	clockticks(void);
-u64int	systimer(void);
+void	microdelay(int);
 int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
 void	intrenable(void);
@@ -127,6 +137,7 @@ extern void	(*screenputs)(char*, int);
 /* platform hooks os/port/proc.c calls */
 void	idlehands(void);
 void	procsave(Proc*);
+void	procrestore(Proc*);
 void	confinit(void);
 void	kmapinval(void);
 void	hzclock(Ureg*);

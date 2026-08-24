@@ -27,6 +27,7 @@
 #include "dat.h"
 #include "io.h"
 #include "fns.h"
+#include "board.h"
 
 #define ST(r)	(*(volatile u32int*)((uintptr)SYSTIMERREGS + (r)))
 #define LOCAL(r) (*(volatile u32int*)((uintptr)ARMLOCAL + (r)))

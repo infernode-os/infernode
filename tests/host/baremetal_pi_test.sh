@@ -145,11 +145,11 @@ fi
 # include/ supplies kern.h, the kernel libc declarations libkern implements.
 # libinterp needs FP; the kernel core must not have it.
 IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib
-        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
+        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
         -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
 
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 # Build every source in the port, so a new file is picked up automatically
@@ -219,7 +219,11 @@ DISEOF
     # NB: object names keep the source extension. A port with both
     # arch.S and arch.c would otherwise produce arch.o twice, and the
     # duplicate would be linked twice rather than diagnosed.
-    for f in "$SRC"/*.S "$SRC"/*.c; do
+    # os/arm64 holds everything an AArch64 board shares -- the boot stub,
+    # vectors, trap decoding, spl, the Dis-level probes and kmain itself.
+    # $SRC holds only what is genuinely machine-specific. Both are globbed
+    # so a new file in either is picked up rather than silently untested.
+    for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "$SRC"/*.S "$SRC"/*.c; do
         [[ -e "$f" ]] || continue
         # main.c may be substituted for a fault-injecting variant
         [[ "$(basename "$f")" == "main.c" && -n "$mainsrc" ]] && continue

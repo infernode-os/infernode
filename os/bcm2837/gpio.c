@@ -20,6 +20,7 @@
 #include "dat.h"
 #include "io.h"
 #include "fns.h"
+#include "board.h"
 
 #define GPIO(r)	(*(volatile u32int*)((uintptr)GPIOREGS + (r)))
 

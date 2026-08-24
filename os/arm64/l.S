@@ -10,6 +10,10 @@
  * Doing it here rather than later keeps every C function in the kernel
  * at one known exception level.
  *
+ * x0 carries a flattened device tree pointer under both boot
+ * protocols this tree targets -- QEMU's Linux arm64 one and the
+ * Raspberry Pi firmware's.  It is saved to dtbptr for ../arm64/fdt.c.
+ *
  * Note: do not assume the PC at entry.  QEMU's raspi3b starts execution
  * at 0x0 behind a small firmware shim that branches to the load address,
  * whereas real hardware enters directly.  Everything here is written
@@ -30,6 +34,16 @@
 .global _start
 
 _start:
+	/*
+	 * x0 holds a device tree pointer, and this is the only moment it
+	 * survives: x0 is the first register anything reaches for. Park
+	 * it in a callee-saved register now and store it once .bss has
+	 * been cleared -- storing it before the clear would zero it.
+	 * x19 survives the eret below; eret changes exception level, not
+	 * general registers.
+	 */
+	mov	x19, x0
+
 	mrs	x0, mpidr_el1
 	and	x0, x0, #3
 	cbz	x0, core0
@@ -105,6 +119,10 @@ clrbss:
 	b	clrbss
 
 callmain:
+	/* .bss is clear, so the device tree pointer can be recorded */
+	ldr	x0, =dtbptr
+	str	x19, [x0]
+
 	bl	kmain
 
 	/* kmain must not return; park if it does */

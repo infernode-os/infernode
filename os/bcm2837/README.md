@@ -33,10 +33,11 @@ Not done: `portclock.c`, `exportfs.c`, `devprog`/`devsrv`/`devenv`,
 bare-metal W^X allocator), and **any run on real hardware**. Everything
 above is QEMU.
 
-Regression-tested by `tests/host/baremetal_pi_test.sh` (44 checks), which
-builds the port, boots it under QEMU, and asserts on the result —
-including pulling the framebuffer back out via QMP and checking pixel
-values.
+Regression-tested by `tests/host/baremetal_test.sh`, which builds the
+port, boots it under QEMU, and asserts on the result — including pulling
+the framebuffer back out via QMP and checking pixel values. That harness
+runs **both** boards: see [os/virt](../virt/README.md), the QEMU `virt`
+port that shares this kernel.
 
 ## Why `os/` and not `emu/<Platform>`
 
@@ -51,6 +52,22 @@ This mirrors upstream Inferno, which kept native ports under `os/`
 (`os/pc`, `os/bcm`, …) separate from `emu/`. The directory is named for
 the SoC rather than the board so that a later BCM2711 (Pi 4) port sits
 alongside it, and so CM3+/Zero 2 W — same silicon — can share it.
+
+### `os/arm64`, and what is left here
+
+Everything an AArch64 board shares now lives in `os/arm64`: the boot
+stub, exception vectors, trap decoding, `spl`, the device-tree parser,
+the portable probes and `kmain` itself. `os/bcm2837` keeps only what is
+genuinely this SoC — the memory map, PL011 wiring, VideoCore mailbox,
+GPIO, framebuffer, the system timer and the MMU map — plus `board.c`,
+the five hooks `../arm64/fns.h` declares.
+
+That split was forced by [os/virt](../virt/README.md) and is the honest
+place for the line: with one board, "shared" and "BCM2837" were
+indistinguishable, and `main.c` had grown to 1700 lines of mostly
+board-independent bring-up checks. A sixth board hook should be read as
+an argument for moving code into `os/arm64`, not for widening the
+interface.
 
 ## Why the Pi 3B+
 

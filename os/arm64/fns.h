@@ -93,6 +93,12 @@ uintptr	mmumapped(void);
 u64int	mmutcr(void);
 u64int	mmumair(void);
 
+/* fdt.c -- the device tree the firmware passed in x0 */
+extern uintptr	dtbptr;
+int	fdtvalid(void);
+uintptr	fdtsize(void);
+int	fdtmemory(uintptr*, uintptr*);
+
 /* trap.c */
 void	trap(Ureg*);
 void	dumpureg(Ureg*);

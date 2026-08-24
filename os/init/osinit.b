@@ -1,7 +1,11 @@
 implement Init;
 
 #
-# Initial Dis program for the bare-metal BCM2837 (Raspberry Pi 3B+) port.
+# Initial Dis program for the bare-metal AArch64 ports.
+#
+# Shared by os/bcm2837 and os/virt: nothing in it is board-specific,
+# and having one file means a divergence between the two ports cannot
+# hide in a second copy of the first program either of them runs.
 #
 # This is what disinit() loads and schedmod() runs -- the first Limbo
 # code the kernel executes, and the point at which the machine stops

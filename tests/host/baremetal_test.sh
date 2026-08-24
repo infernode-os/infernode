@@ -1,10 +1,23 @@
 #!/bin/bash
 #
-# tests/host/baremetal_pi_test.sh
+# tests/host/baremetal_test.sh
 #
-# Build and boot the bare-metal BCM2837 (Raspberry Pi 3B+) kernel under
-# QEMU's raspi3b machine model, and assert on what it reports over the
-# PL011 console.
+# Build and boot the bare-metal AArch64 kernels under QEMU and assert on
+# what they report over the PL011 console.
+#
+# Two machines, from one shared os/arm64 tree:
+#
+#   bcm2837  QEMU raspi3b -- the Raspberry Pi 3B+ SoC, the hardware
+#            target. Has a VideoCore mailbox, a firmware framebuffer,
+#            GPIO and a second fixed-rate clock; has no NIC model.
+#   virt     QEMU virt    -- a synthetic machine, the development
+#            target. Has a GICv2 and virtio-mmio (net, gpu, input);
+#            has no framebuffer and no second clock.
+#
+# Running both is the point rather than a convenience: the two boards
+# share os/port and os/arm64, so a failure on one and not the other
+# localises itself. It also stops the shared tree from quietly growing a
+# dependency on one machine's peculiarities.
 #
 # This covers the parts of early bring-up that otherwise fail as a silent
 # hang: dropping EL2->EL1, installing VBAR_EL1, and the exception
@@ -22,7 +35,6 @@
 #
 
 ROOT="${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
-SRC="$ROOT/os/bcm2837"
 VERBOSE=0
 
 while getopts "v" opt; do
@@ -46,7 +58,7 @@ fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
 skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
 info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
 
-echo -e "${BOLD}Bare-metal BCM2837 (Raspberry Pi 3B+) boot tests${NC}"
+echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837 + virt)${NC}"
 echo ""
 
 #
@@ -83,8 +95,6 @@ find_objcopy() {
     return 1
 }
 
-[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
-
 QEMU="$(command -v qemu-system-aarch64 2>/dev/null)"
 CC="$(command -v clang 2>/dev/null)"
 LLD="$(find_lld)"
@@ -110,12 +120,14 @@ if [[ -z "$QEMU" ]]; then
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi3b'; then
-    skip "this QEMU build has no raspi3b machine model"
-    echo ""
-    echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
-    exit 0
-fi
+for mach in raspi3b virt; do
+    if ! "$QEMU" -machine help 2>/dev/null | grep -q "^$mach"; then
+        skip "this QEMU build has no $mach machine model"
+        echo ""
+        echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
+        exit 0
+    fi
+done
 
 info "cc:      $CC"
 info "ld:      $LLD"
@@ -144,13 +156,6 @@ fi
 # headers upstream's native ports use, and the ones os/port will expect.
 # include/ supplies kern.h, the kernel libc declarations libkern implements.
 # libinterp needs FP; the kernel core must not have it.
-IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib
-        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
-        -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
-
-CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
-        -I"$ROOT/include" -I"$ROOT/libkern")
 
 # Build every source in the port, so a new file is picked up automatically
 # rather than silently going untested.
@@ -187,14 +192,14 @@ build_kernel() {
     # compile the Limbo source to bytecode, then turn the bytecode into
     # a C array the kernel image carries. A native Inferno kernel has no
     # storage driver at boot, so its root filesystem IS its image.
-    if [[ -n "$LIMBO" && -f "$ROOT/os/init/bcm2837init.b" ]]; then
+    if [[ -n "$LIMBO" && -f "$ROOT/os/init/osinit.b" ]]; then
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/osinit.dis" \
-            "$ROOT/os/init/bcm2837init.b" 2>>"$BUILD/cc.log" || return 1
+            "$ROOT/os/init/osinit.b" 2>>"$BUILD/cc.log" || return 1
         python3 - "$BUILD/osinit.dis" "$BUILD/osinit.c" <<'DISEOF'
 import sys
 data = open(sys.argv[1], "rb").read()
 with open(sys.argv[2], "w") as f:
-    f.write("/* generated from os/init/bcm2837init.b -- do not edit */\n")
+    f.write("/* generated from os/init/osinit.b -- do not edit */\n")
     f.write("typedef unsigned char uchar;\n\n")
     f.write("uchar rootosinitcode[] = {\n")
     for i in range(0, len(data), 12):
@@ -327,10 +332,10 @@ DISEOF
 # it must be killed; partial output is what we want.
 boot_kernel() {
     local img="$1" secs="${2:-10}"
-    python3 - "$QEMU" "$img" "$secs" <<'PYEOF'
+    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" <<'PYEOF'
 import subprocess, sys
-qemu, img, secs = sys.argv[1], sys.argv[2], int(sys.argv[3])
-p = subprocess.Popen([qemu, "-M", "raspi3b", "-kernel", img,
+qemu, img, secs, extra = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
                       "-display", "none", "-serial", "stdio"],
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 try:
@@ -343,9 +348,43 @@ PYEOF
 }
 
 #
+# Everything below runs once per platform.
+#
+# $PLAT selects the machine-specific half: which os/<plat> directory is
+# built, which QEMU machine boots it, and which assertions apply. The
+# common checks -- os/port, libkern, the Dis VM -- are asserted
+# identically on both, which is what makes a divergence between them
+# mean something.
+#
+# The body is deliberately NOT indented into the function. It contains
+# quoted heredocs carrying Python, and indenting those would leave the
+# Python indented too -- a syntax error inside a heredoc that bash -n
+# cannot see.
+#
+run_platform() {
+PLAT="$1"
+SRC="$ROOT/os/$PLAT"
+QEMUARGS="$2"
+
+[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
+
+# Rebuilt per platform rather than once at the top: -I"$SRC" is what
+# selects which os/<plat> supplies mem.h, io.h and board.h to the shared
+# os/arm64 and os/port sources, and $SRC is not known until here.
+IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib
+        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
+        -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
+
+CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
+        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -I"$ROOT/include" -I"$ROOT/libkern")
+
+echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+#
 # 1. It builds.
 #
-if build_kernel "$BUILD/kernel8.img" ""; then
+if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
     pass "kernel cross-builds for aarch64-elf"
 else
     fail "kernel failed to build"
@@ -361,7 +400,7 @@ fi
 #
 NM="$(command -v llvm-nm 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-nm)"
 if [[ -x "$NM" ]]; then
-    vaddr="$("$NM" "$BUILD/kernel8.elf" 2>/dev/null | awk '$3=="vectors"{print $1}')"
+    vaddr="$("$NM" "$BUILD/$PLAT-kernel.elf" 2>/dev/null | awk '$3=="vectors"{print $1}')"
     if [[ -n "$vaddr" ]]; then
         if (( 0x$vaddr % 2048 == 0 )); then
             pass "vector table is 2048-byte aligned (0x$vaddr)"
@@ -378,7 +417,7 @@ fi
 #
 # 3. It boots and reports.
 #
-OUT="$(boot_kernel "$BUILD/kernel8.img" 10)"
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 10)"
 info "--- serial output ---"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
 
@@ -392,9 +431,16 @@ check() {
 }
 
 check "InferNode bare-metal"          "kernel boots and reaches kmain"
-check "exception level: EL1"          "drops from EL2 to EL1"
 check "midr_el1:        0x00000000410fd0" \
-                                      "reports a Cortex-A53 MIDR (BCM2837)"
+                                      "reports a Cortex-A53 MIDR"
+if [[ "$PLAT" == bcm2837 ]]; then
+    # The Pi firmware enters at EL2 and l.S drops to EL1. virt has no
+    # EL2 at all unless -M virt,virtualization=on, so it starts at EL1
+    # and the drop path is never exercised there.
+    check "exception level: EL1"      "drops from EL2 to EL1"
+else
+    check "exception level: EL1"      "enters at EL1 (virt has no EL2)"
+fi
 check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdarg)"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
@@ -406,15 +452,32 @@ check "boot OK"                       "completes boot without faulting"
 # Pin the actual revision. "board rev 0x" matched an all-zero readback,
 # so a mailbox that returned nothing would have passed -- the very thing
 # the check claimed to rule out. 0xa02082 is a real Pi 3B revision word.
-check "board rev 0x0000000000a02082"  "mailbox returns the true board revision"
-check "ARM memory 9[0-9][0-9]MB"      "mailbox reports a plausible ARM memory split"
+if [[ "$PLAT" == bcm2837 ]]; then
+    check "board rev 0x0000000000a02082" "mailbox returns the true board revision"
+    check "ARM memory 9[0-9][0-9]MB"     "mailbox reports a plausible ARM memory split"
+else
+    # virt has no firmware mailbox; RAM size comes from the device tree
+    # QEMU passes in x0, which is the only way it can -- it varies with -m.
+    check "fdt:  at 0x"               "device tree found at the pointer passed in x0"
+    check "memory 1024MB at 0x0000000040000000" \
+                                      "device tree reports the RAM -m asked for"
+    check "gic:  GICv2, [0-9]* INTIDs" "GICv2 distributor and CPU interface initialised"
+    # Both anchored with .* rather than to the start of the list: QEMU
+    # fills the transport slots from the top down, so the order they
+    # print in is the reverse of the -device order and is not something
+    # this test should be asserting on.
+    check "virtio: .*\[[0-9]*\]net"    "virtio-mmio transport scan finds the attached NIC"
+    check "virtio: .*\[[0-9]*\]input"  "virtio-mmio scan finds the multitouch input device"
+fi
 
 # MMU. The unaligned check is the one that matters: it is a regression
 # guard on the memory ATTRIBUTES, not on translation working. RAM
 # accidentally mapped Device would still boot and still show a working
 # identity map, then fail unpredictably wherever the compiler merged
 # stores.
-check "gpio: pin14 func=4 pin15 func=4" "GPIO pin-mux readback matches what UART set"
+if [[ "$PLAT" == bcm2837 ]]; then
+    check "gpio: pin14 func=4 pin15 func=4" "GPIO pin-mux readback matches what UART set"
+fi
 check "mmu:  on, caches on"           "MMU and caches enabled"
 check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access legal)"
 # The clock. "clocks AGREE" is the load-bearing one: CNTFRQ_EL0 is a
@@ -455,11 +518,22 @@ check "arch: _tas OK"                 "_tas implements test-and-set"
 check "spl OK"                        "spl returns the previous level rather than assuming"
 
 check "clk:  cntfrq [0-9]"            "generic timer reports a frequency"
-check "clocks AGREE"                  "generic timer agrees with the 1MHz system timer"
+if [[ "$PLAT" == bcm2837 ]]; then
+    check "clocks AGREE"              "generic timer agrees with the 1MHz system timer"
+else
+    # Stated rather than skipped: virt has no second clock to check
+    # against, and the boot log must say so rather than print a
+    # reassuring line it cannot back up.
+    check "cntfrq unverified"         "reports that it cannot cross-check cntfrq"
+fi
 check "clk:  irq firing"              "timer interrupts are delivered"
 
-check "fb:   [0-9]"                   "framebuffer allocated"
-check "test pattern drawn"            "framebuffer written without faulting"
+if [[ "$PLAT" == bcm2837 ]]; then
+    check "fb:   [0-9]"               "framebuffer allocated"
+    check "test pattern drawn"        "framebuffer written without faulting"
+else
+    check "fb:   none"                "reports that virt has no firmware framebuffer"
+fi
 
 #
 # 3a. The framebuffer actually contains what was drawn.
@@ -471,7 +545,8 @@ check "test pattern drawn"            "framebuffer written without faulting"
 #     draws. This is the only check here that would catch a byte-order
 #     regression, which is otherwise invisible from the console.
 #
-python3 - "$QEMU" "$BUILD/kernel8.img" "$BUILD/screen.ppm" <<'PYEOF' > "$BUILD/pixels.txt" 2>&1
+if [[ "$PLAT" == bcm2837 ]]; then
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$BUILD/$PLAT-screen.ppm" <<'PYEOF' > "$BUILD/$PLAT-pixels.txt" 2>&1
 import subprocess, socket, time, json, os, sys
 qemu, img, ppm = sys.argv[1], sys.argv[2], sys.argv[3]
 
@@ -529,7 +604,7 @@ print("DIMS %dx%d" % (w, h))
 print("OK" if not bad else "BAD " + "; ".join(bad))
 PYEOF
 
-PIXOUT="$(cat "$BUILD/pixels.txt")"
+PIXOUT="$(cat "$BUILD/$PLAT-pixels.txt")"
 info "$PIXOUT"
 if grep -q '^SKIP' <<<"$PIXOUT"; then
     skip "framebuffer pixel check ($(grep '^SKIP' <<<"$PIXOUT"))"
@@ -537,6 +612,7 @@ elif grep -q '^OK' <<<"$PIXOUT"; then
     pass "framebuffer contents match the drawn pattern (correct pitch, base and channel order)"
 else
     fail "framebuffer contents wrong: $(grep '^BAD' <<<"$PIXOUT")"
+fi
 fi
 
 #
@@ -546,7 +622,7 @@ fi
 #    prevent: a fault that produces silence. Build a variant whose kmain
 #    executes an undefined instruction and confirm it decodes and panics.
 #
-VARIANT="$BUILD/main-fault.c"
+VARIANT="$BUILD/$PLAT-main-fault.c"
 cat > "$VARIANT" <<'EOF'
 #include "u.h"
 #include "../port/lib.h"
@@ -588,8 +664,8 @@ kmain(void)
 }
 EOF
 
-if build_kernel "$BUILD/fault.img" "$VARIANT"; then
-    FOUT="$(boot_kernel "$BUILD/fault.img" 10)"
+if build_kernel "$BUILD/$PLAT-fault.img" "$VARIANT"; then
+    FOUT="$(boot_kernel "$BUILD/$PLAT-fault.img" 10)"
     info "--- fault variant output ---"
     [[ "$VERBOSE" -eq 1 ]] && echo "$FOUT"
 
@@ -612,6 +688,35 @@ else
     fail "fault-injection variant failed to build"
     [[ "$VERBOSE" -eq 1 ]] && tail -20 "$BUILD/cc.log"
 fi
+
+echo ""
+}
+
+#
+# The Pi 3B+ SoC. -M raspi3b fixes the CPU, so no -cpu is needed.
+#
+run_platform bcm2837 "-M raspi3b"
+
+#
+# The virt machine.
+#
+# -cpu cortex-a53 is NOT optional, and is the single most confusing
+# thing about this target: -M virt defaults to cortex-a15, a 32-bit
+# ARMv7 CPU, even under qemu-system-aarch64. An AArch64 kernel booted
+# without it does not fail -- it produces absolutely no output at all,
+# because the CPU is decoding the image as ARM32. Picking the same A53
+# the Pi has also keeps the MIDR assertion common to both platforms.
+#
+# -m 1024 matches the Pi 3B+'s 1GB, and is asserted on: it proves the
+# device-tree parse read a real number rather than falling back to a
+# default that happened to look plausible.
+#
+# The virtio devices are attached so the transport scan has something to
+# find. They are not driven -- there are no drivers yet -- but their
+# presence is what makes virt worth having, so the test asserts it.
+#
+run_platform virt "-M virt -cpu cortex-a53 -m 1024 -netdev user,id=n0 -device virtio-net-device,netdev=n0 -device virtio-multitouch-device"
+
 
 echo ""
 echo -e "${BOLD}Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED${NC}"

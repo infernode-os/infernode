@@ -363,52 +363,68 @@ build directory so a fault can be symbolised at all. **Verify the
 toolchain before trusting what it tells you about the bug** — a
 diagnostic nobody checks is not neutral, it actively misleads.
 
-### Still open: sp is corrupted while a Dis process runs
+### The instability: re-entrant preemption (fixed)
 
-The port boots and runs `/osinit.dis` to completion, but only about
-half to three-quarters of the time. The same image, booted repeatedly
-under the same QEMU, either finishes cleanly or dies -- so this is
-timing, and the clock interrupt is the only thing that varies.
+The port booted and ran `/osinit.dis` to completion only about half the
+time, from the same image under the same QEMU. It now does so on every
+boot -- 28/28 on bcm2837, 10/10 on virt.
 
-What is established:
+`hzclock()` calls `sched()` directly from the clock interrupt, and
+`sched()` re-enables interrupts when the process is resumed -- while
+still inside the interrupt handler, several frames deep. The next tick
+could therefore arrive before the first had unwound, call `hzclock`
+again, and preempt again. Nothing bounded it, and every nesting kept
+its `Ureg` and frames on the *same* kernel stack, so the stack only
+grew.
 
-* **sp ends up inside `.bss`.** Every stack in this kernel is either
-  below the image (`l.S` sets `sp = _start`) or at or above `end` (a
-  kstack from `smalloc`). An sp in `[_start, end)` is impossible, and
-  that is exactly where the failures put it -- 0xcc590, 0xca3b8.
+The end of it was the process running off the bottom of its 16K kstack,
+down through the heap and into `.bss`, where the frames landed on
+`fmtalloc` -- libkern's format-handler table -- and the next `print()`
+branched through a handler with a formatted character written into it.
+Every symptom traced back to that:
 
-* **It is not the scheduler, and not a saved label.** `sched()` checks
-  that it is running on `up`'s stack, and `gotolabel` checks that
-  `up->sched.pc` is in the text and `up->sched.sp` is inside
-  `up->kstack`. Over twelve boots none of those fire, while all six
-  failures are caught at trap entry. So sp goes bad while the process
-  is running normally, not across a context switch.
+| symptom | what it actually was |
+|---|---|
+| `pc = 0x35000b1738` | `_flagfmt` with byte 4 replaced by `'5'` |
+| `pc = 0xa` | a handler slot overwritten by `'\n'` |
+| boot stops mid-word and hangs | `_fmtdispatch` spinning on `p->fmt == nil` |
 
-* **The cascade after it is fully accounted for.** `fmtalloc` --
-  libkern's format-handler table -- sits at 0xcc458 and is 1032 bytes.
-  A stack at 0xcc590 puts `print()`'s 256-byte `buf` straight down over
-  it, so the next conversion loads a handler that has had a formatted
-  character written into it: 0xb1738 is `_flagfmt`, and 0x35000b1738 is
-  `_flagfmt` with byte 4 replaced by `'5'`. Branching through that is
-  the "PC alignment fault at 0xa" and "instruction abort at
-  0x35000b1738" the port kept producing. `_fmtdispatch` also spins
-  `while(p->fmt == nil)`, which is the other symptom: a boot that stops
-  mid-word and hangs.
+`up->inpreempt` now brackets one process's preemption. The flag is in
+`Proc` and not `Mach` because `sched()` does not return until *that*
+process is scheduled again; a Mach-wide flag would stay set while
+another process ran and suppress its preemption too.
 
-* **The real stack survives in registers.** In the captured dump x5 and
-  x6 still hold 0xe2d20, inside pid 5's actual kstack, while sp points
-  into `.bss`.
+**What actually found it** was a guard word at the base of every kstack,
+which caught the overflow immediately: sp at 0xdf340 against a base of
+0xdf1f0, 336 bytes left of 16K. Before that, four separate theories had
+been proposed and all four were wrong -- a stale `up` during
+scheduling, a corrupted saved label, an `errlab` overflow, and simple
+stack depth. Each was killed by an invariant that could be checked
+rather than argued about, and the invariants are still in the tree
+because they cost nothing and they are what made the difference:
 
-The next step is to find who writes sp. The instrumentation to do it is
-in place: `BAREMETAL_BUILD_DIR` keeps the build so a pc can be
-symbolised, each image has its own ELF, and a fault reports once and
-halts instead of looping.
+* a kstack guard word, checked at trap entry
+* an sp-range check at trap entry -- every stack is below the image or
+  at/above `end`, so `[_start, end)` is impossible
+* `sched()` must be running on `up`'s stack
+* `up->sched.pc` in the text and `up->sched.sp` inside `up->kstack`
+  before `gotolabel()`
+* `errlabcheck()` -- `waserror()` had **no** bound on `up->nerrlab`, so
+  at `NERR` it would write a whole `Label` past the end of `errlab` and
+  `nexterror()` would `gotolabel()` through it. `error()` checked the
+  wrong bound (`> NERR`, not `>=`) and only there. It has never fired,
+  but the hazard was real.
 
-Two smaller things also remain: `/dev/sysname` and `%q` were fixed, but
-`sprint()` in `devcons.c` still assumes every caller's buffer is
-`PRINTSIZE`, and `os/port/dev.c:105` hands it a `smalloc(4+strlen+1)`.
-It fits today and will not survive the first caller that formats
-something longer.
+Raising `KSTACK` from 16K to 64K did **not** help -- 5 of 8 boots still
+overflowed -- and that is what proved it recursion rather than depth.
+`KSTACK` is back at upstream's 16K.
+
+### Smaller things still open
+
+`sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,
+and `os/port/dev.c:105` hands it a `smalloc(4+strlen(spec)+1)`. It fits
+today and will not survive the first caller that formats something
+longer.
 
 ## Next
 

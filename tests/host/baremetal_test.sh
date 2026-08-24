@@ -673,6 +673,20 @@ check "port 1 0x0103 present enabled"    "a hub port powers up, resets and enabl
 check "ep3.0 0x0525:0xa4a2 class 2"      "the device behind the hub enumerates"
 check "class 2 maxpkt 64 usb 2.0"        "it is the CDC Ethernet adapter, at high speed"
 
+# Interrupts, asserted rather than assumed.
+#
+# The clock probe elsewhere tests the generic timer, which is PER-CORE
+# and never touches the VideoCore controller -- so it says nothing
+# about devices. These two do.
+#
+# They matter because a driver whose interrupt line goes nowhere is
+# indistinguishable from a working one under emulation: transfers
+# complete inside the register write that starts them, every wait finds
+# its condition already true, and nothing is ever left to wake. It
+# stays indistinguishable right up until it meets hardware.
+check "intr: device interrupt delivered" "a device interrupt reaches the CPU through the VideoCore controller"
+check "controller interrupt reaches the CPU" "the USB controller's own interrupt is delivered"
+
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 
 #

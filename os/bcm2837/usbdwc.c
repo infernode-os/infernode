@@ -91,6 +91,7 @@ struct Epio {
 
 static Ctlr dwc;
 static int debug;
+static ulong nusbintr;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -748,11 +749,61 @@ init(Hci *hp)
 	r->gintsts = ~0;
 	r->gintmsk = Hcintr;
 	r->gahbcfg |= Glblintrmsk;
+
+	/*
+	 * Does this controller's interrupt actually reach the CPU?
+	 *
+	 * Nothing else answers this. Every transfer runs inside an
+	 * splhi() region and acknowledges its own completion before
+	 * interrupts are enabled again, so under emulation -- where the
+	 * controller finishes a transfer inside the register write that
+	 * starts it -- a perfectly working driver takes ZERO interrupts
+	 * and a driver whose interrupt line goes nowhere looks exactly
+	 * the same. It stays looking the same until something has to wait
+	 * for a transfer that has not already happened, which is to say
+	 * until it meets real hardware.
+	 *
+	 * Start-of-frame is the right thing to ask with: it happens every
+	 * frame whether or not anything is being transferred, so it tests
+	 * the line and nothing else. Unmask it, wait a few frames, count.
+	 */
+	{
+		ulong n0;
+		int ms;
+
+		n0 = nusbintr;
+		r->gintsts = Sofintr;
+		r->gintmsk |= Sofintr;
+		for(ms = 0; ms < 50 && nusbintr == n0; ms++)
+			tsleep(&up->sleep, return0, 0, 1);
+		r->gintmsk &= ~Sofintr;
+		r->gintsts = Sofintr;
+
+		print("usbotg: controller interrupt %s (%lud taken in %dms)\n",
+			nusbintr > n0 ? "reaches the CPU" : "NEVER ARRIVES",
+			nusbintr - n0, ms);
+	}
 }
 
+/*
+ * Reachable as "dump" on #u/usb/ctl.
+ *
+ * The interrupt count is the point. Everything this driver does
+ * involves sleeping until the controller says it is finished, and for
+ * a long time none of those wakeups could have arrived -- the handoff
+ * went through a timer this board does not model -- yet transfers
+ * still completed, because emulation finishes them synchronously and
+ * each sleep found its condition already true. A count of zero and a
+ * count of hundreds look identical from the outside. So say it.
+ */
 static void
-dump(Hci*)
+dump(Hci *hp)
 {
+	Ctlr *ctlr;
+
+	ctlr = hp->aux;
+	print("usbotg: %lud interrupts taken, gintsts %8.8ux hport0 %8.8ux\n",
+		nusbintr, ctlr->regs->gintsts, ctlr->regs->hport0);
 }
 
 static void
@@ -768,6 +819,7 @@ fiqintr(Ureg*, void *a)
 	ctlr = hp->aux;
 	r = ctlr->regs;
 	wakechan = 0;
+	nusbintr++;
 	intr = r->gintsts;
 	if(intr & Hcintr){
 		haint = r->haint & r->haintmsk;
@@ -789,31 +841,46 @@ fiqintr(Ureg*, void *a)
 			ctlr->sofchan = 0;
 		}
 	}
-	if(wakechan){
-		ctlr->wakechan |= wakechan;
-		armtimerset(1);
-	}
-}
-
-static void
-irqintr(Ureg*, void *a)
-{
-	Ctlr *ctlr;
-	uint wakechan;
-	int i, x;
-
-	ctlr = a;
-	x = splhi();
-	armtimerset(0);
-	wakechan = ctlr->wakechan;
-	ctlr->wakechan = 0;
-	splx(x);
+	/*
+	 * Wake the sleepers here, rather than deferring.
+	 *
+	 * Upstream cannot: it runs this as a genuine FIQ, and an FIQ
+	 * handler must not call wakeup() -- it can be taken while the
+	 * scheduler holds its own locks. So it records which channels
+	 * need waking and arms the ARM timer, whose ordinary IRQ handler
+	 * does the wakeups a moment later.
+	 *
+	 * This port does not run it as an FIQ. devusb registers
+	 * hp->interrupt through intrenable() like any other driver, so
+	 * this is ordinary interrupt context and wakeup() is exactly what
+	 * belongs here. sleep() takes splhi() before touching the Rendez
+	 * lock, so there is no window for this to interrupt a holder of
+	 * the lock it is about to take.
+	 *
+	 * Deferring is also not merely unnecessary here, it is broken:
+	 * the ARM timer at PHYSIO+0xB400 is not modelled by QEMU. Writes
+	 * to it are dropped and its control register reads back zero, so
+	 * the deferred wakeup never happened and every USB wait that
+	 * genuinely needed an interrupt would have blocked for ever. The
+	 * enumeration written against this driver got as far as it did
+	 * only because emulated transfers complete synchronously, so each
+	 * sleep found its condition already true and returned without
+	 * ever needing to be woken.
+	 */
 	for(i = 0; wakechan; i++){
 		if(wakechan & 1)
 			wakeup(&ctlr->chanintr[i]);
 		wakechan >>= 1;
 	}
 }
+
+/*
+ * irqintr() lived here: the second half of upstream's FIQ-to-IRQ
+ * handoff, registered on the ARM timer and doing the wakeups that
+ * fiqintr() had queued. Both halves are gone -- fiqintr() wakes
+ * directly now, for the reasons given there -- and with them the
+ * registration of a handler on a timer this board does not model.
+ */
 
 static void
 epopen(Ep *ep)
@@ -1063,8 +1130,6 @@ reset(Hci *hp)
 	if((id>>16) != ('O'<<8 | 'T'))
 		return -1;
 	dprint("usbotg: rev %d.%3.3x\n", (id>>12)&0xF, id&0xFFF);
-
-	intrenable(IRQtimerArm, irqintr, ctlr, 0, "dwc");
 
 	hp->aux = ctlr;
 	hp->port = 0;

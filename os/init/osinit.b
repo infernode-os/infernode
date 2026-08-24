@@ -570,6 +570,7 @@ usbprobe()
 	}
 
 	enumerate("/usb/usb/ep1.0/ctl", 1, speedname(status), "");
+	usbreport();
 }
 
 #
@@ -676,6 +677,22 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 
 	if(class == Clhub)
 		hubwalk(name, d, dctl, indent + "  ");
+}
+
+#
+# Ask the controller how many interrupts it has actually raised.
+#
+# Worth doing explicitly: every wait in the USB driver is a sleep that
+# an interrupt is supposed to end, and a driver whose interrupts never
+# arrive looks exactly like one whose interrupts work, right up until
+# it is asked to wait for something that has not already happened.
+#
+usbreport()
+{
+	c := sys->open("/usb/usb/ctl", Sys->OWRITE);
+	if(c == nil)
+		return;
+	sys->fprint(c, "dump");
 }
 
 #

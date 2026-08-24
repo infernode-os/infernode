@@ -203,6 +203,88 @@ checkunaligned(void)
  * a mis-set BCM local-timer route presents as a kernel that boots fine
  * and then never preempts anything.
  */
+/*
+ * Does a DEVICE interrupt actually reach this processor?
+ *
+ * The clock probe above answers a narrower question. The generic timer
+ * is a PER-CORE interrupt: it arrives at the core directly and never
+ * touches the VideoCore controller. Every device on this SoC arrives a
+ * different way -- through one of 72 sources in that controller, ORed
+ * into a single Igpu bit in the core's IRQ source register -- and
+ * nothing had ever tested that path.
+ *
+ * It mattered. The USB driver spent a long debugging session looking
+ * like it had a transfer bug, when in fact no GPU interrupt had ever
+ * been delivered and every wait was resolving only because emulation
+ * completes transfers synchronously, so each sleep found its condition
+ * already true. That is exactly the kind of thing that works until it
+ * is asked to do something real.
+ *
+ * The ARM timer is the vehicle rather than the subject: it is a "basic"
+ * source, so it exercises intrenable(), the controller's enable
+ * registers, the routing to this core, the vector, irqdispatch() and
+ * intrgpu() -- everything a device IRQ uses except the GPU-specific
+ * enable word.
+ *
+ * Bounded by the generic timer's free-running counter, so a dead
+ * interrupt line reports rather than hangs.
+ */
+static int intrprobefired;
+
+enum { Intprobechan = 3 };		/* system timer compare channel */
+
+#define STREG(r)	(*(volatile u32int*)((uintptr)SYSTIMERREGS + (r)))
+
+static void
+intrprobehandler(Ureg*, void*)
+{
+	STREG(Stcs) = 1 << Intprobechan;	/* acknowledge the match */
+	intrprobefired++;
+}
+
+static void
+probeintr(void)
+{
+	u64int deadline;
+
+	/*
+	 * The system timer, not the ARM timer.
+	 *
+	 * The obvious vehicle is the ARM timer at PHYSIO+0xB400, and it
+	 * is the wrong one: QEMU's raspi3b does not model it. Writes are
+	 * dropped and its control register reads back zero, so a probe
+	 * built on it reports "no interrupt" whether or not interrupts
+	 * work -- which is exactly the sort of answer that sends you
+	 * looking in the wrong place. It is also worth knowing in its own
+	 * right, because usbdwc.c defers its wakeups through that timer.
+	 *
+	 * The system timer is modelled, and it is a better subject
+	 * anyway: it is a genuine GPU source, so a match exercises the
+	 * GPU enable word as well -- the same path every device on this
+	 * SoC uses, including the USB controller.
+	 *
+	 * Channels 0 and 2 belong to the VideoCore firmware on real
+	 * hardware. 1 and 3 are ours.
+	 */
+	intrprobefired = 0;
+	STREG(Stcs) = 1 << Intprobechan;
+	intrenable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
+	STREG(Stc0 + Intprobechan*4) = STREG(Stclo) + 10000;	/* 10ms */
+	coherence();
+
+	spllo();
+	deadline = clockcount() + clockfreq()/2;		/* 500ms */
+	while(intrprobefired == 0 && clockcount() < deadline)
+		;
+	splhi();
+
+	print("intr: device interrupt %s (system timer via the VideoCore controller)\n",
+		intrprobefired ? "delivered" : "NEVER DELIVERED");
+
+	intrdisable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
+	STREG(Stcs) = 1 << Intprobechan;
+}
+
 static void
 probeclock(void)
 {
@@ -1789,6 +1871,7 @@ kmain(void)
 	proberoot();
 	probeqio();
 	probeclock();
+	probeintr();
 	boardfbprobe();
 
 	uartputstr("\nboot OK\n");

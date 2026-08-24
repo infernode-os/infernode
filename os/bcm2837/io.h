@@ -29,6 +29,7 @@ enum
 {
 	Stcs		= 0x00,
 	Stclo		= 0x04,
+	Stc0		= 0x0C,		/* compare 0..3; a match raises GPU IRQ n */
 	Stchi		= 0x08,
 };
 

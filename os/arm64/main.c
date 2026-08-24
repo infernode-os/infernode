@@ -1406,6 +1406,10 @@ extern int	rootmaxq;
  */
 extern int	cflag;
 
+#ifndef CFLAG
+#define CFLAG 1
+#endif
+
 /*
  * Feed the serial line into the console input queue.
  *
@@ -1458,7 +1462,12 @@ startdis(void)
 	 * what this kernel did before, so a miscompilation can always be
 	 * bisected against it.
 	 */
-	cflag = 1;
+	/*
+	 * CFLAG is overridable from the build so the same kernel can be
+	 * measured both ways. Benchmarking a JIT against a DIFFERENT
+	 * kernel proves nothing -- everything else has to be identical.
+	 */
+	cflag = CFLAG;
 
 	print("\ndis:  handing control to the Dis VM\n");
 	print("dis:  cflag=%d (%s)\n", cflag,

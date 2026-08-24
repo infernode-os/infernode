@@ -87,6 +87,23 @@ init()
 	}
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
 
+	#
+	# A fixed arithmetic loop, timed. Reported so the harness can run
+	# the same kernel with the JIT on and off and compare -- which is
+	# the only comparison that means anything, since everything else
+	# about the two images is identical.
+	#
+	# Deliberately integer-only and allocation-free: this measures the
+	# code the JIT generates, not the allocator or the garbage
+	# collector.
+	#
+	t0 := sys->millisec();
+	acc := 0;
+	for(k := 0; k < 2000000; k++)
+		acc += (k*3) ^ (k>>2);
+	t1 := sys->millisec();
+	sys->print("bench: %d iterations in %d ms (acc=%d)\n", 2000000, t1-t0, acc);
+
 	sys->print("\ninit: starting the shell\n\n");
 
 	#

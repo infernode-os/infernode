@@ -1399,6 +1399,14 @@ probecons(void)
 extern int	rootmaxq;
 
 /*
+ * libinterp's JIT switch, defined in os/port/dis.c. Declared here
+ * rather than pulled in from a libinterp header, which would drag the
+ * whole interpreter view of the world into a file that only wants one
+ * int.
+ */
+extern int	cflag;
+
+/*
  * Feed the serial line into the console input queue.
  *
  * This board has no keyboard: the only way to type at it is the UART,
@@ -1438,7 +1446,23 @@ uartkproc(void *a)
 static void
 startdis(void)
 {
+	/*
+	 * Compile Dis to native AArch64 rather than interpreting it.
+	 *
+	 * cflag is what libinterp checks in parsemod() to decide whether
+	 * to run a module through comp-arm64.c. Above 3 it also dumps the
+	 * generated code, which is the only practical way to inspect it
+	 * on a machine with no debugger.
+	 *
+	 * The interpreter remains the reference: -c0 behaviour is exactly
+	 * what this kernel did before, so a miscompilation can always be
+	 * bisected against it.
+	 */
+	cflag = 1;
+
 	print("\ndis:  handing control to the Dis VM\n");
+	print("dis:  cflag=%d (%s)\n", cflag,
+		cflag ? "JIT: compiling Dis to AArch64" : "interpreter only");
 	print("dis:  root filesystem: %d entries compiled into the image\n",
 		rootmaxq);
 

@@ -10,8 +10,16 @@
 #include "interp.h"
 #include "raise.h"
 
+/*
+ * INFERNO_NATIVE: built into a bare-metal kernel (os/), which has no
+ * mmap and needs none. See the allocation sites below.
+ */
+#ifdef INFERNO_NATIVE
+extern void	cacheiflush(void*, ulong);
+#else
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 /*
  * Apple's per-thread W^X JIT controls (pthread_jit_write_protect_np and
@@ -2124,7 +2132,20 @@ preamble(void)
 		return;
 
 	sz = 64 * sizeof(u32int);
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	/*
+	 * No mmap on bare metal, and no need for one: the kernel maps all
+	 * RAM without PXN/UXN, so ordinary kernel memory is already
+	 * executable. That is RWX everywhere -- a weaker posture than the
+	 * hosted builds, which deliberately keep JIT pages off the heap
+	 * (see the module-code site below). Making it W^X here means an
+	 * executable-only pool and page-granular mappings; this port maps
+	 * in 2MB blocks today.
+	 */
+	comvec = malloc(sz);
+	if(comvec == nil)
+		error(exNomem);
+#elif defined(APPLE_JIT)
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
@@ -2180,7 +2201,9 @@ preamble(void)
 		code = save;
 	}
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	cacheiflush(start, sz);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2587,7 +2610,11 @@ typecom(Type *t)
 
 	sz = n * sizeof(u32int);
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	start = malloc(sz);
+	if(start == nil)
+		return;
+#elif defined(APPLE_JIT)
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(start == MAP_FAILED)
@@ -2606,7 +2633,9 @@ typecom(Type *t)
 	t->destroy = code;
 	comd(t);
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	cacheiflush(start, sz);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2722,7 +2751,11 @@ compile(Module *m, int size, Modlink *ml)
 		codesize += pagesz;	/* extra guard page */
 	}
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	base = malloc(codesize);
+	if(base == nil)
+		goto bad;
+#elif defined(APPLE_JIT)
 	base = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(base == MAP_FAILED) {
@@ -2830,7 +2863,16 @@ compile(Module *m, int size, Modlink *ml)
 	}
 	m->pctab = patch;
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	/*
+	 * The icache maintenance is load-bearing on real silicon and
+	 * invisible under emulation: QEMU's TCG does not model split
+	 * I/D caches, so a JIT that skips this works perfectly in QEMU
+	 * and executes stale instructions on a Cortex-A53. Any change
+	 * here has to be validated on the board.
+	 */
+	cacheiflush(base, codesize);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(base, codesize);
 #else

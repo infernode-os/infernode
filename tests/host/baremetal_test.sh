@@ -292,15 +292,31 @@ build_kernel() {
     # dirty FP state that is not being saved -- which means procsave()
     # has to start saving it before Dis code actually runs.
     #
-    # Excluded: comp-arm64.c and comp-amd64.c (the JITs allocate
-    # executable memory through mmap, which does not exist here), and
+    # EXACTLY ONE code generator may be linked. libinterp ships ten
+    # comp-*.c files and each defines compile(), preamble() and comvec;
+    # they are pulled from an archive, so the linker silently takes the
+    # first that resolves the symbol and never reports the other nine.
+    #
+    # That is not hypothetical. Excluding only comp-amd64.c left
+    # comp-386.c and comp-68020.c in the build, and the first time
+    # cflag was set above zero the kernel compiled a Dis module with a
+    # 68020 code generator and branched into it. It was harmless before
+    # only because cflag was 0 and nothing ever called compile().
+    #
+    # comp-arm64.c IS built: -DINFERNO_NATIVE selects its bare-metal
+    # arms, which take executable memory from malloc (this kernel maps
+    # all RAM without PXN/UXN) and flush the icache with cacheiflush.
+    #
+    # Also excluded:
     # the optional modules draw/gpu/crypt/ipint/math, each of which
     # needs its own limbo-generated header. A minimal kernel needs only
     # the sys module.
     for f in "$ROOT"/libinterp/*.c; do
         [[ -e "$f" ]] || continue
         case "$(basename "$f")" in
-        comp-amd64.c|comp-arm64.c|draw.c|gpu.c|crypt.c|ipint.c|math.c) continue;;
+        comp-arm64.c) ;;			# the one we want
+        comp-*.c) continue;;			# every other code generator
+        draw.c|gpu.c|crypt.c|ipint.c|math.c) continue;;
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
         "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
@@ -338,6 +354,16 @@ build_kernel() {
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
+    # Delete the archive first. "ar r" REPLACES and ADDS members, but it
+    # never removes one, so an object dropped from the build stays in
+    # libkern.a forever and keeps satisfying the symbol it defines.
+    #
+    # That cost real time: libinterp ships ten comp-*.c code generators
+    # and each defines compile(). After narrowing the build to
+    # comp-arm64.c, the kernel still compiled Dis modules with the
+    # 68020 generator, because its object from a previous run was still
+    # in the archive and the linker took the first match.
+    rm -f "$BUILD/libkern.a"
     "$AR" rcs "$BUILD/libkern.a" "${libobjs[@]}" 2>>"$BUILD/cc.log" || return 1
 
     # The ELF is named after the image it produces, NOT a shared k.elf.
@@ -434,7 +460,7 @@ QEMUARGS="$2"
 # Rebuilt per platform rather than once at the top: -I"$SRC" is what
 # selects which os/<plat> supplies mem.h, io.h and board.h to the shared
 # os/arm64 and os/port sources, and $SRC is not known until here.
-IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib
+IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -DINFERNO_NATIVE
         -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
         -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
 

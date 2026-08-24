@@ -213,6 +213,7 @@ build_kernel() {
             "/dev="
             "/net="
             "/prog="
+            "/usb="
             "/dis/sh.dis=$ROOT/dis/sh.dis"
             "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
             "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
@@ -627,6 +628,14 @@ check "ICMP echo reply from 127.0.0.1"  "the stack moves packets: an ICMP echo c
 # connection whose comparisons answer wrongly stalls rather than fails.
 check "TCP echo over loopback returned"  "TCP completes a connection and returns data over loopback"
 
+# The first USB transaction: an 8-byte setup packet written to the root
+# hub's control endpoint, intercepted by devusb and turned into
+# hp->portstatus(), read back out of the DWC controller's hport0
+# register. "present" appears only when a device is actually attached --
+# with an empty bus the same request reports 0x0500 powered highspeed.
+check "USB root hub port 1 status"       "a USB control transfer reaches the DWC controller"
+check "present"                          "the root hub sees the attached device"
+
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 
 #
@@ -968,7 +977,14 @@ echo ""
 #
 # The Pi 3B+ SoC. -M raspi3b fixes the CPU, so no -cpu is needed.
 #
-run_platform bcm2837 "-M raspi3b"
+# A USB Ethernet device is attached so the bus has something on it.
+#
+# QEMU's raspi3b models no built-in NIC -- which was read as "networking
+# cannot be developed in emulation" -- but it DOES model the DWC OTG
+# controller, and it accepts a usb-net on that bus. So device presence,
+# and eventually enumeration and a real driver, can all be exercised
+# here rather than only on hardware.
+run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0"
 
 #
 # The virt machine.

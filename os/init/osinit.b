@@ -126,6 +126,14 @@ init()
 		sys->print("init: cannot bind #p on /prog: %r\n");
 
 	#
+	# And the USB device framework on /usb. Same reason as the others:
+	# '#' begins a comment in the shell, so the device name cannot be
+	# typed, and a bus you cannot look at is a bus you cannot bring up.
+	#
+	if(sys->bind("#u", "/usb", Sys->MREPL) < 0)
+		sys->print("init: cannot bind #u on /usb: %r\n");
+
+	#
 	# Bring up loopback.
 	#
 	# This is the first thing that exercises the stack rather than
@@ -185,6 +193,7 @@ init()
 	#
 	spawn pingit();
 	spawn tcpecho();
+	spawn usbprobe();
 
 	sys->print("\ninit: starting the shell\n\n");
 
@@ -380,4 +389,78 @@ tcplistener(sync: chan of int)
 	rn := sys->read(d, buf, len buf);
 	if(rn > 0)
 		sys->write(d, buf[0:rn], rn);
+}
+
+#
+# Ask the USB root hub about its port.
+#
+# This is the first thing that drives the DWC OTG controller through
+# the interface a real enumerator would use: an 8-byte setup packet
+# written to the root hub's control endpoint, and the reply read back.
+# devusb.c intercepts requests to the root hub and turns them into
+# hp->portstatus(), so a correct answer means the whole chain works --
+# #u's endpoint machinery, the Hci binding, and usbdwc's register
+# access.
+#
+# The root hub is ep1.0, not ep0.0: devusb numbers devices from 1 and
+# the hub is the first device on the bus.
+#
+Rd2h:		con 16r80;	# device to host
+Rclass:		con 16r20;	# class request
+Rother:		con 3;		# recipient: other (a port)
+Rgetstatus:	con 0;
+
+HPpresent:	con 16r1;
+HPenable:	con 16r2;
+HPpower:	con 16r100;
+HPhigh:		con 16r400;
+
+usbprobe()
+{
+	d := sys->open("/usb/usb/ep1.0/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open the usb root hub: %r\n");
+		return;
+	}
+
+	#
+	# A hub class GET_STATUS for port 1. devusb switches on wValue,
+	# not on the request code, so wValue carries Rgetstatus.
+	#
+	setup := array[8] of byte;
+	setup[0] = byte (Rd2h|Rclass|Rother);
+	setup[1] = byte Rgetstatus;
+	setup[2] = byte 0;		# wValue lo -- selects portstatus
+	setup[3] = byte 0;		# wValue hi
+	setup[4] = byte 1;		# wIndex lo -- port 1
+	setup[5] = byte 0;		# wIndex hi
+	setup[6] = byte 4;		# wLength lo
+	setup[7] = byte 0;		# wLength hi
+
+	if(sys->write(d, setup, len setup) != len setup){
+		sys->print("init: usb setup write failed: %r\n");
+		return;
+	}
+
+	rep := array[8] of byte;
+	n := sys->read(d, rep, len rep);
+	if(n < 2){
+		sys->print("init: usb status read failed (%d): %r\n", n);
+		return;
+	}
+
+	status := int rep[0] | (int rep[1] << 8);
+
+	# Limbo has no conditional expression -- if is a statement.
+	flags := "";
+	if(status & HPpresent)
+		flags += " present";
+	if(status & HPenable)
+		flags += " enabled";
+	if(status & HPpower)
+		flags += " powered";
+	if(status & HPhigh)
+		flags += " highspeed";
+
+	sys->print("init: USB root hub port 1 status %#4.4x%s\n", status, flags);
 }

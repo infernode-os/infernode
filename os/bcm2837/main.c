@@ -892,6 +892,85 @@ probelabel(void)
 }
 
 /*
+ * getcallerpc must name the caller.
+ *
+ * There are two implementations and they have to agree. fns.h defines a
+ * macro over __builtin_return_address for anything that includes it;
+ * libinterp does not, so it calls the out-of-line version in arch.S.
+ *
+ * They disagreed. The asm returned x30, which on entry is a PC *inside*
+ * the calling function rather than that function's own return address.
+ * Nothing detected it, because the value is only ever printed -- so it
+ * degraded every allocator and lock diagnostic in the kernel into
+ * confident nonsense. A pool corruption reported "alloc:D2B (from
+ * 85134/a56d4)", and both addresses resolved into functions that never
+ * allocate anything, which is worse than no attribution at all: it sends
+ * you reading the wrong code.
+ *
+ * So check the answer rather than trusting it. Both forms are called
+ * from a known function and the result must land inside that function.
+ * Wrapping the name in parentheses suppresses the function-like macro,
+ * which is what makes it possible to test the asm version from a file
+ * that has the macro in scope.
+ */
+static uintptr	gcpmacro(void);
+static uintptr	gcpasm(void);
+static int	gcpcaller(uintptr*, uintptr*);
+
+static uintptr __attribute__((noinline))
+gcpmacro(void)
+{
+	int dummy = 0;
+	return (uintptr)getcallerpc(&dummy);
+}
+
+static uintptr __attribute__((noinline))
+gcpasm(void)
+{
+	int dummy = 0;
+	return (uintptr)(getcallerpc)(&dummy);
+}
+
+/*
+ * Both calls happen here, so both answers must point into this
+ * function. Returning 1 keeps it from being folded away.
+ */
+static int __attribute__((noinline))
+gcpcaller(uintptr *pm, uintptr *pa)
+{
+	*pm = gcpmacro();
+	*pa = gcpasm();
+	return 1;
+}
+
+static void
+probecallerpc(void)
+{
+	uintptr pm, pa, lo;
+	int mok, aok;
+
+	gcpcaller(&pm, &pa);
+
+	/*
+	 * A return address into gcpcaller lies just past one of the two
+	 * call sites, so it is above the function entry and within a
+	 * short distance of it. That is a loose bound deliberately --
+	 * the point is to catch an answer from an unrelated function,
+	 * which is the failure that actually occurred, not to pin an
+	 * exact offset the optimiser is free to move.
+	 */
+	lo = (uintptr)gcpcaller;
+	mok = pm > lo && pm < lo + 0x200;
+	aok = pa > lo && pa < lo + 0x200;
+
+	print("gcpc: getcallerpc %s (macro %s, asm %s, caller %p)\n",
+		mok && aok ? "OK" : "BROKEN",
+		mok ? "names caller" : "WRONG",
+		aok ? "names caller" : "WRONG",
+		(void*)lo);
+}
+
+/*
  * The scheduler's data structures.
  *
  * procinit carves the process table out of xalloc and threads it into a
@@ -1595,6 +1674,7 @@ kmain(void)
 	probealloc();
 	probeblock();
 	probelabel();
+	probecallerpc();
 	probeproc();
 	probeqlock();
 	probesysfile();

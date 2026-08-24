@@ -202,13 +202,29 @@ fpinit:
  *
  * os/bcm2837/fns.h defines this as a macro over
  * __builtin_return_address for kernel sources, which is both correct
- * and free. libinterp does not include that header and calls it as a
- * function, so one has to exist -- returning the link register is the
- * same answer the macro gives its caller.
+ * and free. libinterp does not include that header, so it calls this
+ * out-of-line version instead, and the two MUST give the same answer.
+ *
+ * They did not. This returned x30, which at entry is the return address
+ * into the function that called getcallerpc -- a PC inside the caller,
+ * not the caller's own return address. The macro gives the latter. So
+ * every allocator diagnostic raised from libinterp (D2B's poolfault, the
+ * lock tracking) reported a PC in a function that had nothing to do with
+ * the fault: chasing "alloc:D2B (from 85134/a56d4)" led into
+ * eqchantdqid and cvtup, neither of which allocates anything.
+ *
+ * The caller's return address is its saved x30, one frame up. AAPCS64's
+ * standard prologue stores x29/x30 as a pair and sets x29 to the frame
+ * base, so the saved link register is at [x29, #8]. This is a leaf, so
+ * x29 still belongs to the caller on entry.
+ *
+ * Both the kernel and libinterp are built -fno-omit-frame-pointer so
+ * that frame exists to walk; without it clang may drop x29 at -O2 and
+ * this reads whatever the register happened to hold.
  */
 	.global	getcallerpc
 getcallerpc:
-	mov	x0, x30
+	ldr	x0, [x29, #8]
 	ret
 
 /*

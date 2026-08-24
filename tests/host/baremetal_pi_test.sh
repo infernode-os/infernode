@@ -145,11 +145,11 @@ fi
 # include/ supplies kern.h, the kernel libc declarations libkern implements.
 # libinterp needs FP; the kernel core must not have it.
 IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib
-        -O2 -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
+        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include"
         -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
 
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -Wall -Wextra -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/port" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 # Build every source in the port, so a new file is picked up automatically
@@ -416,6 +416,7 @@ check "xall: xalloc OK"               "os/port/xalloc allocates distinct zeroed 
 check "pool: malloc/free OK"           "os/port/alloc pool allocator works"
 check "blok: allocb/freeb OK"          "os/port/allocb Blocks have headroom and correct extents"
 check "lbl:  setlabel/gotolabel OK"     "context switch restores sp AND callee-saved registers"
+check "gcpc: getcallerpc OK"            "getcallerpc names the caller from both the macro and the asm"
 check "proc: procinit/newproc OK"       "os/port/proc allocates processes with distinct pids and stacks"
 check "qlok: qlock/rwlock OK"           "os/port/qlock blocking locks work uncontended"
 check "pgrp: newpgrp OK"                "os/port/pgrp allocates a process group"

@@ -106,10 +106,10 @@ exccommon:
 	add	x17, x17, :lo12:_start
 	cmp	x16, x17
 	b.lo	1f				/* below the image entirely */
-	adrp	x17, __bss_start
-	add	x17, x17, :lo12:__bss_start
+	adrp	x17, end
+	add	x17, x17, :lo12:end
 	cmp	x16, x17
-	b.hs	1f				/* .bss or heap: a real stack */
+	b.hs	1f				/* at or above end: a heap stack */
 
 	/*
 	 * Bogus.  Move to the emergency stack so the frame lands somewhere

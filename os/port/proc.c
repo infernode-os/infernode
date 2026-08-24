@@ -98,6 +98,12 @@ schedinit(void)		/* never returns */
 	sched();
 }
 
+/*
+ * Kernel image bounds, from the linker script. Both boards define
+ * these; text/rodata/data is [_start, __bss_start).
+ */
+extern char _start[], __bss_start[];
+
 void
 sched(void)
 {

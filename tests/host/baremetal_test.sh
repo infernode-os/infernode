@@ -212,6 +212,7 @@ build_kernel() {
             "/osinit.dis=$BUILD/osinit.dis"
             "/dev="
             "/net="
+            "/prog="
             "/dis/sh.dis=$ROOT/dis/sh.dis"
             "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
             "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
@@ -610,6 +611,15 @@ check "cons: hello from /dev/cons"       "text written to the PATH /dev/cons rea
 check "cons: /dev/cons OK"               "console device binds into the namespace and is writable"
 check "Initial Dis:"                    "disinit loads the Dis module from the in-kernel root filesystem"
 check "Dis is running on bare metal"     "Limbo bytecode executes and reaches the console through Sys"
+check "init: 127.0.0.1/8 configured"    "an IP interface is configured on the loopback medium"
+
+# A packet, end to end. ipoput4 -> loopback medium -> ipiput4 -> ICMP
+# recognises the request, generates a reply, and it is delivered back to
+# the conversation that sent it. Checksums, the route lookup, the
+# interface's self addresses and the protocol demultiplexer are all on
+# that path, and none of them can be verified by reading a stats file.
+check "ICMP echo reply from 127.0.0.1"  "the stack moves packets: an ICMP echo completes over loopback"
+
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 
 #

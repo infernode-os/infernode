@@ -112,17 +112,12 @@ exit(int code)
 
 
 /*
- * random.c provides the pool; this is the platform entropy source it
- * stirs in. The BCM2837 has a hardware RNG at 0x3F104000 that is worth
- * wiring up -- until then this contributes nothing rather than
- * contributing something predictable, and callers get zeroes they can
- * see rather than randomness they cannot trust.
+ * genrandom was stubbed here as "ulong genrandom(void)" returning 0.
+ * That was wrong twice: devcons.c calls it as genrandom(buf, n), so the
+ * signature did not match, and the BCM2837 has a hardware RNG that was
+ * noted here and never wired up. os/bcm2837/random.c now provides both
+ * it and hwrandom().
  */
-ulong
-genrandom(void)
-{
-	return 0;
-}
 
 /*
  * Platform reset paths devcons.c exposes through #c/reboot and the

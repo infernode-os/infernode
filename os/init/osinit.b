@@ -117,6 +117,15 @@ init()
 		sys->print("init: cannot bind #I on /net: %r\n");
 
 	#
+	# And the process device on /prog. sh reaches it as #p directly
+	# for its wait file, so nothing has needed the conventional path
+	# until now -- but a system you cannot list the processes of is
+	# one you cannot diagnose, and that is exactly what #p is for.
+	#
+	if(sys->bind("#p", "/prog", Sys->MREPL) < 0)
+		sys->print("init: cannot bind #p on /prog: %r\n");
+
+	#
 	# Bring up loopback.
 	#
 	# This is the first thing that exercises the stack rather than
@@ -152,6 +161,30 @@ init()
 		}
 	}
 
+	#
+	# Send a packet.
+	#
+	# Everything above proves the stack is present and configured.
+	# This proves it MOVES DATA: an ICMP echo request goes out through
+	# ipoput4, across the loopback medium, back in through ipiput4, is
+	# recognised by icmp.c, answered, and delivered back to this
+	# conversation. Checksums, the route lookup, the interface's self
+	# addresses and the protocol demultiplexer are all on that path,
+	# and none of them can be verified by reading a stats file.
+	#
+	# The write is 20 bytes of IP header the stack fills in itself,
+	# then the ICMP header at offset 20 -- that layout is icmpkick's
+	# contract, not a convention: it requires at least
+	# ICMP_IPSIZE + ICMP_HDRSIZE and overwrites the addresses,
+	# protocol, id and checksum.
+	#
+	#
+	# In its own thread: if it blocks, the shell still comes up and
+	# the machine stays inspectable. A diagnostic that takes the
+	# system down with it cannot be used to diagnose anything.
+	#
+	spawn pingit();
+
 	sys->print("\ninit: starting the shell\n\n");
 
 	#
@@ -175,4 +208,68 @@ init()
 	sh->init(nil, "sh" :: nil);
 
 	sys->print("init: the shell returned\n");
+}
+
+Echoreq:	con 8;		# ICMP type: echo request
+Echoreply:	con 0;		# ICMP type: echo reply
+Ipsize:		con 20;		# icmp.c ICMP_IPSIZE
+Hdrsize:	con 8;		# icmp.c ICMP_HDRSIZE
+
+pingit()
+{
+	c := sys->open("/net/icmp/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: cannot clone an icmp conversation: %r\n");
+		return;
+	}
+
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("init: icmp clone gave no number: %r\n");
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	#
+	# The "!1" is not a port ICMP has any use for -- it has none. The
+	# generic connect parser in devip.c requires an addr!port pair and
+	# rejects a bare address as "malformed address", so every protocol
+	# has to supply one whether it means anything or not.
+	#
+	if(sys->fprint(c, "connect 127.0.0.1!1") < 0){
+		sys->print("init: icmp connect failed: %r\n");
+		return;
+	}
+
+	d := sys->open("/net/icmp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open icmp data: %r\n");
+		return;
+	}
+
+	req := array[Ipsize + Hdrsize + 8] of byte;
+	for(i := 0; i < len req; i++)
+		req[i] = byte 0;
+	req[Ipsize] = byte Echoreq;		# type
+	req[Ipsize + 1] = byte 0;		# code
+	req[Ipsize + 6] = byte 0;		# sequence, high
+	req[Ipsize + 7] = byte 1;		# sequence, low
+
+	if(sys->write(d, req, len req) != len req){
+		sys->print("init: icmp write failed: %r\n");
+		return;
+	}
+
+	rep := array[256] of byte;
+	n = sys->read(d, rep, len rep);
+	if(n < Ipsize + Hdrsize){
+		sys->print("init: no echo reply (read %d): %r\n", n);
+		return;
+	}
+
+	if(int rep[Ipsize] == Echoreply)
+		sys->print("init: ICMP echo reply from 127.0.0.1 (%d bytes)\n", n);
+	else
+		sys->print("init: unexpected ICMP type %d\n", int rep[Ipsize]);
 }

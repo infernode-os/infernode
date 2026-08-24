@@ -105,6 +105,36 @@ randominit(void)
 	rb.target = 16;
 	rb.ep = rb.buf + sizeof(rb.buf);
 	rb.rp = rb.wp = rb.buf;
+
+	/*
+	 * Prime the pool from the hardware generator.
+	 *
+	 * Without this the FIRST caller to want randomness sleeps in
+	 * randomread() until the clock-jitter producer has stirred enough
+	 * bits in -- and if that producer is not running, or is not
+	 * getting scheduled, it sleeps forever. That is not a theoretical
+	 * risk: it hung this kernel the first time anything opened a
+	 * network conversation, because setlport() calls nrand() to pick a
+	 * port and nrand() seeds itself from here.
+	 *
+	 * Priming removes the dependency on the producer ever having run,
+	 * which is what makes the failure impossible rather than unlikely.
+	 * The jitter producer still runs and still stirs the pool; it is
+	 * simply no longer the only source.
+	 */
+	{
+		int got;
+
+		/*
+		 * One byte short of the buffer, deliberately. rb is a
+		 * circular buffer in which wp == rp means EMPTY, so filling
+		 * it completely wraps wp back onto rp and the pool reads as
+		 * empty again -- priming it perfectly and achieving nothing.
+		 */
+		got = hwrandom(rb.buf, sizeof(rb.buf) - 1);
+		if(got > 0)
+			rb.wp = rb.buf + got;
+	}
 }
 
 /*

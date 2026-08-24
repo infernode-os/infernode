@@ -116,6 +116,42 @@ init()
 	if(sys->bind("#I", "/net", Sys->MREPL) < 0)
 		sys->print("init: cannot bind #I on /net: %r\n");
 
+	#
+	# Bring up loopback.
+	#
+	# This is the first thing that exercises the stack rather than
+	# merely linking it: cloning an interface, binding a medium to it,
+	# and assigning an address all run real code, and the address
+	# assignment is what inserts a route -- the v4addroute path whose
+	# end-address arithmetic was wrong under LP64 until it was fixed.
+	#
+	# Loopback needs no hardware, which is the point. This board has
+	# no usable network device until USB enumeration exists, so
+	# loopback is the only way to exercise the stack at all.
+	#
+	ifc := sys->open("/net/ipifc/clone", Sys->ORDWR);
+	if(ifc == nil)
+		sys->print("init: cannot clone an interface: %r\n");
+	else {
+		nbuf := array[32] of byte;
+		n := sys->read(ifc, nbuf, len nbuf);
+		if(n <= 0)
+			sys->print("init: cloned interface has no number: %r\n");
+		else {
+			ifcno := string nbuf[0:n];
+			sys->print("init: ipifc %s cloned\n", ifcno);
+
+			# The medium first: an address cannot be assigned to
+			# an interface that is not bound to anything.
+			if(sys->fprint(ifc, "bind loopback") < 0)
+				sys->print("init: bind loopback failed: %r\n");
+			else if(sys->fprint(ifc, "add 127.0.0.1 255.0.0.0") < 0)
+				sys->print("init: add 127.0.0.1 failed: %r\n");
+			else
+				sys->print("init: 127.0.0.1/8 configured on ipifc %s\n", ifcno);
+		}
+	}
+
 	sys->print("\ninit: starting the shell\n\n");
 
 	#

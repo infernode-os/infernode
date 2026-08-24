@@ -633,7 +633,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'load std' \
         'for(i in a b c){ echo loop-$i }' \
         'cat /dev/drivers' \
-        'cat /net/ipifc/stats')"
+        'cat /net/ipifc/stats' \
+        'cat /net/iproute')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -707,6 +708,26 @@ if grep -q '^DefaultTTL: 255' <<<"$SHOUT"; then
     pass "the IP stack initialised (ipifc reports its MIB)"
 else
     fail "#I/ipifc/stats did not report DefaultTTL"
+fi
+
+# Loopback configured, end to end: osinit clones an interface, binds
+# the loopback medium and assigns 127.0.0.1/8, and this reads back the
+# routes that assignment created.
+if grep -q '^127\.0\.0\.1 .* 4u ' <<<"$SHOUT"; then
+    pass "loopback is configured (127.0.0.1 present as a unicast self route)"
+else
+    fail "no unicast route for 127.0.0.1"
+fi
+
+# The directed broadcast is derived from the route's END ADDRESS -- the
+# "ea = sa | ~m" arithmetic that produced 0xffffffff_xxxxxxxx under
+# LP64 until iproute.c was fixed. Seeing 127.255.255.255 rather than
+# something enormous is that fix confirmed in the running kernel, not
+# just in the host test.
+if grep -q '^127\.255\.255\.255 ' <<<"$SHOUT"; then
+    pass "route end addresses are right (broadcast is 127.255.255.255)"
+else
+    fail "directed broadcast for 127.0.0.0/8 is wrong or missing"
 fi
 
 #

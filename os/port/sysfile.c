@@ -381,6 +381,7 @@ kfversion(int fd, uint msize, char *vers, uint arglen)
 int
 kpipe(int fd[2])
 {
+	int i;
 	Dev *d;
 	Fgrp *f;
 	Chan *c[2];
@@ -388,7 +389,17 @@ kpipe(int fd[2])
 
 	f = up->env->fgrp;
 
-	d = devtab[devno('|', 0)];
+	/*
+	 * user=1: a device that is not configured must be an error to the
+	 * caller, not a panic. With user=0 a Limbo program calling
+	 * sys->pipe() on a kernel built without #| takes the whole machine
+	 * down -- which is what typing a backquote substitution at the
+	 * shell used to do.
+	 */
+	i = devno('|', 1);
+	if(i < 0)
+		error("pipes not configured in this kernel");
+	d = devtab[i];
 	c[0] = namec("#|", Atodir, 0, 0);
 	c[1] = 0;
 	fd[0] = -1;

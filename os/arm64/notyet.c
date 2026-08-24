@@ -53,12 +53,14 @@ typedef struct Sys_FileIO Sys_FileIO;
 extern Dev rootdevtab;
 extern Dev consdevtab;
 extern Dev progdevtab;
+extern Dev pipedevtab;
 
 Dev*	devtab[] =
 {
 	&rootdevtab,		/* '/' -- the namespace root */
 	&consdevtab,		/* 'c' -- /dev/cons and friends */
 	&progdevtab,		/* 'p' -- #p, the process device */
+	&pipedevtab,		/* '|' -- #|, pipes */
 	nil,
 };
 

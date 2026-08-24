@@ -600,7 +600,9 @@ check "init: starting the shell"        "the initial Dis program hands over to /
 SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'echo shell-is-alive' \
-        'ls /dis')"
+        'ls /dis' \
+        'echo piped-through | cat' \
+        'q=`{echo one two three}; echo subst-count $#q')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -616,6 +618,24 @@ if grep -q "/dis/sh.dis" <<<"$SHOUT"; then
     pass "ls lists the in-kernel root filesystem"
 else
     fail "ls did not list /dis"
+fi
+
+# Pipelines and command substitution both go through #|. Before the pipe
+# device was imported, sysfile.c's kpipe() indexed devtab via
+# devno('|', 0) -- and a devno miss with user==0 PANICS, so typing a
+# backquote at the shell took the kernel down. Worth a check of its own:
+# a shell without pipelines is half a shell, and the failure mode was a
+# dead machine rather than an error message.
+if grep -v 'echo ' <<<"$SHOUT" | grep -q 'piped-through'; then
+    pass "pipelines work (echo | cat)"
+else
+    fail "pipeline produced no output"
+fi
+
+if grep -q 'subst-count 3' <<<"$SHOUT"; then
+    pass "command substitution works (backquote through a pipe)"
+else
+    fail "command substitution did not return 3 words"
 fi
 
 #

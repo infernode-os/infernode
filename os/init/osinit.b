@@ -426,6 +426,7 @@ Fportreset:	con 4;
 Fportpower:	con 8;
 
 Ddev:		con 1;		# descriptor type: device
+Dconf:		con 2;		# descriptor type: configuration
 Dhub:		con 16r29;	# descriptor type: hub
 Clhub:		con 9;		# device class: hub
 
@@ -677,6 +678,92 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 
 	if(class == Clhub)
 		hubwalk(name, d, dctl, indent + "  ");
+	else
+		dumpconfig(d, indent + "  ");
+}
+
+#
+# Read the configuration descriptor and report what the device offers.
+#
+# A device descriptor says what the device IS; the configuration
+# descriptor says what it can DO -- which interfaces it has, and which
+# endpoints each one needs. That is what a class driver has to read
+# before it can open anything, because endpoint numbers are the
+# device's choice, not a convention.
+#
+# It arrives as a run of variable-length descriptors packed end to end,
+# each "length, type, ...", so it is walked rather than indexed.
+#
+dumpconfig(d: ref Sys->FD, indent: string)
+{
+	# The first nine bytes are enough to learn the total length.
+	hdr := array[9] of byte;
+	n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
+	if(n < len hdr){
+		sys->print("init: %sconfig descriptor header failed (%d)\n",
+			indent, n);
+		return;
+	}
+
+	total := int hdr[2] | (int hdr[3] << 8);
+	if(total < len hdr || total > 512){
+		sys->print("init: %sconfig descriptor length %d unreasonable\n",
+			indent, total);
+		return;
+	}
+
+	cfg := array[total] of byte;
+	n = ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, total, cfg);
+	if(n < total){
+		sys->print("init: %sconfig descriptor short (%d of %d)\n",
+			indent, n, total);
+		return;
+	}
+
+	sys->print("init: %sconfig: %d interface(s), %d bytes, value %d\n",
+		indent, int cfg[4], total, int cfg[5]);
+
+	for(i := 0; i + 2 <= total; ){
+		dlen := int cfg[i];
+		dtype := int cfg[i+1];
+		if(dlen < 2)
+			break;
+
+		case dtype {
+		4 =>	# interface
+			if(i + 9 <= total)
+				sys->print("init: %s  if %d alt %d: class %d.%d.%d, %d endpoint(s)\n",
+					indent, int cfg[i+2], int cfg[i+3],
+					int cfg[i+5], int cfg[i+6], int cfg[i+7],
+					int cfg[i+4]);
+		5 =>	# endpoint
+			if(i + 7 <= total){
+				addr := int cfg[i+2];
+				attr := int cfg[i+3];
+				mx := int cfg[i+4] | (int cfg[i+5] << 8);
+				dir := "out";
+				if(addr & 16r80)
+					dir = "in";
+				sys->print("init: %s    ep%d %s %s maxpkt %d\n",
+					indent, addr & 16rF, dir,
+					eptype(attr & 3), mx);
+			}
+		* =>
+			;
+		}
+		i += dlen;
+	}
+}
+
+eptype(t: int): string
+{
+	case t {
+	0 =>	return "control";
+	1 =>	return "iso";
+	2 =>	return "bulk";
+	3 =>	return "interrupt";
+	}
+	return "?";
 }
 
 #

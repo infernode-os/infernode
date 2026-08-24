@@ -673,6 +673,17 @@ check "port 1 0x0103 present enabled"    "a hub port powers up, resets and enabl
 check "ep3.0 0x0525:0xa4a2 class 2"      "the device behind the hub enumerates"
 check "class 2 maxpkt 64 usb 2.0"        "it is the CDC Ethernet adapter, at high speed"
 
+# The configuration descriptor: what the device can DO, as opposed to
+# what it is. This is the first MULTI-PACKET control transfer in the
+# port -- 67 bytes at maxpkt 64 -- and it needed a driver fix to
+# complete, so the endpoint lines are checked rather than just the
+# header.
+check "config: 2 interface(s), 67 bytes"  "the full configuration descriptor reads back"
+check "if 0 alt 0: class 2.2.255"        "interface 0 is CDC control, vendor protocol (RNDIS)"
+check "if 1 alt 0: class 10.0.0"         "interface 1 is CDC data"
+check "ep2 in bulk maxpkt 64"            "the bulk IN endpoint is described"
+check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
+
 # Interrupts, asserted rather than assumed.
 #
 # The clock probe elsewhere tests the generic timer, which is PER-CORE

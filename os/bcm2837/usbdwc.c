@@ -635,7 +635,30 @@ ctltrans(Ep *ep, uchar *req, long n)
 	chansetup(hc, ep);
 	chanio(ep, hc, Epout, SETUP, req, Rsetuplen);
 	if(req[Rtype] & Rd2h){
-		if(ep->dev->hub <= 1){
+		/*
+		 * Packet at a time unless splits are in use.
+		 *
+		 * Upstream chooses by hub depth: multitrans() for a device
+		 * on the root port, one single-shot chanio() for anything
+		 * behind a hub. The condition it is really reaching for is
+		 * whether SPLIT transactions are involved -- a split has to
+		 * be issued as one channel operation, and on a real Pi the
+		 * hub on the root port is high speed, so "behind a hub" and
+		 * "split" mean the same thing there.
+		 *
+		 * They do not mean the same thing here. The hub on this
+		 * root port is full speed, so nothing below it splits (see
+		 * chansetup), and the single-shot path is chosen for a
+		 * transfer that has no reason to use it. A multi-packet
+		 * control IN then programs the channel once for the rounded
+		 * length -- 128 bytes for a 67-byte descriptor -- and waits
+		 * for a completion the controller never reports, because
+		 * the device stopped at 67.
+		 *
+		 * So key it on hcsplt, which is the actual question, and
+		 * which chansetup has already answered by this point.
+		 */
+		if((hc->hcsplt & Spltena) == 0){
 			ep->toggle[Read] = DATA1;
 			b->wp += multitrans(ep, hc, Read, data, datalen);
 		}else

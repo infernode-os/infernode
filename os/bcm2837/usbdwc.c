@@ -465,7 +465,22 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	else
 		n = len;
 	hc->hctsiz = n | npkt<<OPktcnt | pid;
-	hc->hcdma  = PADDR(a);
+	/*
+	 * BUSADDR, not PADDR.
+	 *
+	 * The controller is a bus master on the VideoCore side and sees
+	 * memory through ITS addresses, not the ARM's -- the same reason
+	 * mailbox.c hands the GPU a BUSADDR. Giving it an ARM physical
+	 * address programmes the channel to DMA somewhere that means
+	 * nothing to it, and the symptom is not an error: the channel is
+	 * enabled, hcint stays 00000000 for ever, and the transfer never
+	 * happens at all.
+	 *
+	 * QEMU does not model the address alias, so PADDR works there and
+	 * only there. This is the third bug today whose whole existence
+	 * was invisible in emulation.
+	 */
+	hc->hcdma  = BUSADDR(PADDR(a));
 
 	nleft = len;
 	logstart(ep);
@@ -876,58 +891,22 @@ init(Hci *hp)
 	r->gahbcfg |= Glblintrmsk;
 
 	/*
-	 * Does this controller's interrupt actually reach the CPU?
+	 * There was a start-of-frame self-test here, and it was wrong.
 	 *
-	 * Nothing else answers this. Every transfer runs inside an
-	 * splhi() region and acknowledges its own completion before
-	 * interrupts are enabled again, so under emulation -- where the
-	 * controller finishes a transfer inside the register write that
-	 * starts it -- a perfectly working driver takes ZERO interrupts
-	 * and a driver whose interrupt line goes nowhere looks exactly
-	 * the same. It stays looking the same until something has to wait
-	 * for a transfer that has not already happened, which is to say
-	 * until it meets real hardware.
+	 * It unmasked SOF and waited 50ms for an interrupt -- from this
+	 * function, which runs before the root port has ever been reset
+	 * or enabled. An unenabled port carries no frames, so there is no
+	 * SOF to receive, so it always reported "NEVER ARRIVES" on real
+	 * hardware. That is not a diagnostic, it is a false alarm with a
+	 * confident name, and it was read as a hardware fault twice
+	 * before the register dump showed gintsts & gintmsk was simply
+	 * zero and the controller was behaving correctly.
 	 *
-	 * Start-of-frame is the right thing to ask with: it happens every
-	 * frame whether or not anything is being transferred, so it tests
-	 * the line and nothing else. Unmask it, wait a few frames, count.
+	 * What actually catches a broken interrupt path is the timeout in
+	 * chanwait(): a transfer that never completes now reports the
+	 * channel state instead of hanging the machine, which is a real
+	 * measurement taken at a moment when the answer means something.
 	 */
-	{
-		ulong n0;
-		int ms;
-
-		n0 = nusbintr;
-		r->gintsts = Sofintr;
-		r->gintmsk |= Sofintr;
-		for(ms = 0; ms < 50 && nusbintr == n0; ms++)
-			tsleep(&up->sleep, return0, 0, 1);
-		r->gintmsk &= ~Sofintr;
-		r->gintsts = Sofintr;
-
-		print("usbotg: controller interrupt %s (%lud taken in %dms)\n",
-			nusbintr > n0 ? "reaches the CPU" : "NEVER ARRIVES",
-			nusbintr - n0, ms);
-
-		/*
-		 * When it does not arrive, say where the chain stops.
-		 *
-		 * There are four places it can break and they are
-		 * distinguishable: the controller not raising it at all
-		 * (gintsts clear), raising it with the cause masked
-		 * (gintsts set, gintmsk clear), raising it with the global
-		 * enable off (gahbcfg bit 0 clear), or raising it into a
-		 * VideoCore controller that is not passing it on (gintsts
-		 * set and pending clear). Printing all of them costs one
-		 * line and turns the next step from a guess into a lookup.
-		 */
-		if(nusbintr == n0)
-			print("usbotg:   gintsts %8.8ux gintmsk %8.8ux gahbcfg %8.8ux\n"
-			      "usbotg:   vc pending %8.8ux enable %8.8ux routing %8.8ux\n",
-				r->gintsts, r->gintmsk, r->gahbcfg,
-				*(volatile u32int*)(uintptr)(PHYSIO+0x00B204),
-				*(volatile u32int*)(uintptr)(PHYSIO+0x00B210),
-				LOCAL(Lgpuirqrouting));
-	}
 }
 
 /*

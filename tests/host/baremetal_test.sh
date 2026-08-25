@@ -788,7 +788,11 @@ check "default route via 10.0.2.2"             "a default route is installed"
 # its condition already true, and nothing is ever left to wake. It
 # stays indistinguishable right up until it meets hardware.
 check "intr: device interrupt delivered" "a device interrupt reaches the CPU through the VideoCore controller"
-check "controller interrupt reaches the CPU" "the USB controller's own interrupt is delivered"
+# The check for the USB controller's interrupt was removed with the
+# self-test behind it: it asked whether start-of-frame arrived before
+# the root port was enabled, which it cannot, so it reported a fault
+# that was not one. chanwait's timeout is what reports a genuinely
+# broken interrupt path now.
 
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 

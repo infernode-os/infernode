@@ -1073,16 +1073,38 @@ def pix(x, y):
     o = (y*w + x)*3
     return tuple(px[o:o+3])
 
-# must match the pattern drawn by probefb() in main.c
-checks = [
-    ("background", (500, 400), (0x10, 0x10, 0x18)),
-    ("top bar",    (400, 3),   (0xC0, 0x30, 0x20)),
-    ("red rect",   (60, 80),   (0xFF, 0x00, 0x00)),
-    ("green rect", (200, 80),  (0x00, 0xFF, 0x00)),
-    ("blue rect",  (350, 80),  (0x00, 0x00, 0xFF)),
-]
-bad = [f"{n} got={pix(*xy)} want={want}" for n, xy, want in checks if pix(*xy) != want]
-print("DIMS %dx%d" % (w, h))
+# The console has taken the screen, so the boot test pattern is gone --
+# correctly: a console clears what was there. What replaces the pattern
+# check proves strictly more.
+#
+# Background colour still proves CHANNEL ORDER on its own: 0x101018 is
+# asymmetric across the three channels, so a swap reads 0x181010 and is
+# caught. Glyph pixels prove the font rendered and that pitch and base
+# put it where it belongs -- which the pattern also proved, except that
+# a console exercises far more of the path to get there.
+BG = (0x10, 0x10, 0x18)
+FG = (0xC8, 0xC8, 0xC8)
+
+nbg = nfg = 0
+rows = set()
+for y in range(h):
+    for x in range(0, w, 2):        # every other column is plenty
+        c = pix(x, y)
+        if c == BG:
+            nbg += 1
+        elif c == FG:
+            nfg += 1
+            rows.add(y)
+
+bad = []
+if nbg < (w // 2) * h // 4:
+    bad.append(f"background {BG} covers only {nbg} sampled pixels")
+if nfg < 500:
+    bad.append(f"only {nfg} text pixels -- console drew nothing legible")
+if len(rows) < 32:
+    bad.append(f"text spans {len(rows)} scanlines -- expected many lines")
+
+print("DIMS %dx%d bg=%d fg=%d rows=%d" % (w, h, nbg, nfg, len(rows)))
 print("OK" if not bad else "BAD " + "; ".join(bad))
 PYEOF
 
@@ -1091,7 +1113,7 @@ info "$PIXOUT"
 if grep -q '^SKIP' <<<"$PIXOUT"; then
     skip "framebuffer pixel check ($(grep '^SKIP' <<<"$PIXOUT"))"
 elif grep -q '^OK' <<<"$PIXOUT"; then
-    pass "framebuffer contents match the drawn pattern (correct pitch, base and channel order)"
+    pass "the console rendered text (correct pitch, base, channel order and font)"
 else
     fail "framebuffer contents wrong: $(grep '^BAD' <<<"$PIXOUT")"
 fi

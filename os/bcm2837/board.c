@@ -130,11 +130,18 @@ boardclockcheck(void)
 		uartputstr("clocks DISAGREE (cntfrq is lying)\n");
 }
 
+/*
+ * Static, because the console keeps a pointer to it.
+ *
+ * This was a local, which was correct while the framebuffer was only
+ * ever painted once from inside this function. A console outlives the
+ * probe that finds the screen.
+ */
+static Fbinfo fb;
+
 void
 boardfbprobe(void)
 {
-	Fbinfo fb;
-
 	if(fbinit(&fb) < 0){
 		uartputstr("fb:   no framebuffer (no display attached?)\n");
 		return;
@@ -165,6 +172,21 @@ boardfbprobe(void)
 	fbrect(&fb, 160, 40, 120, 80, 0x0000FF00);
 	fbrect(&fb, 300, 40, 120, 80, 0x000000FF);
 	uartputstr("fb:   test pattern drawn\n");
+
+	/*
+	 * Take the screen as a console.
+	 *
+	 * putstrn0 already calls screenputs when there is one; installing
+	 * it here is what makes every kernel print appear on the panel as
+	 * well as on the wire. consoleprint has to be set too: it
+	 * defaults to 0, which gates both this and the echo of typed
+	 * characters.
+	 */
+	if(fbconsinit(&fb) == 0){
+		screenputs = fbconsputs;
+		consoleprint = 1;
+		uartputstr("fb:   console on the panel\n");
+	}
 }
 
 /*

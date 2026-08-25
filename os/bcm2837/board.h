@@ -28,6 +28,8 @@ int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);
 int	fbinit(Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
+int	fbconsinit(Fbinfo*);
+void	fbconsputs(char*, int);
 
 /*
  * clock.c -- the BCM system timer, a free-running 64-bit counter at a

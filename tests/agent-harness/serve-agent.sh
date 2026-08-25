@@ -77,6 +77,15 @@ EOF
 	exit 1
 fi
 
+cnsa_truthy() {
+	case "${1:-}" in
+		""|0*|n*|N*) return 1 ;;
+		*)           return 0 ;;
+	esac
+}
+if cnsa_truthy "${CNSAMODE:-}"; then CNSAMODE=1; else CNSAMODE=0; fi
+export CNSAMODE
+
 export SERVE_LLM_AUTH="$LISTEN_MODE"
 export SERVE_LLM_KEY="$KEY_INFPATH"
 
@@ -86,6 +95,7 @@ serve-agent: $(date -Iseconds) starting
   root    = $ROOT
   profile = $PROFILE_INF
   listen  = $LISTEN_MODE (loopback only)
+  cnsa    = $CNSAMODE (1 = ML-KEM-1024 + ML-DSA-87; 0 = ML-KEM-768)
   /mnt/llm  = tcp!127.0.0.1!5640
   /mnt/ui   = tcp!127.0.0.1!5641
   keyfile = $KEY_HOSTPATH (in-emu: $KEY_INFPATH)

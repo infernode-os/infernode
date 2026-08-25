@@ -30,6 +30,9 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
+include "agentlib.m";
+	agentlib: AgentLib;
+
 Tools9pTest: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
@@ -200,6 +203,23 @@ testRegistryReadable(t: ref T)
 	if(len first > 0)
 		t.assert(strcontains(reg, first),
 			"_registry should contain tool '" + first + "' from /tool/tools");
+}
+
+testGrantableCatalogue(t: ref T)
+{
+	if(!hastool()) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	grantable := readfile(TOOLMNT + "/grantable");
+	if(grantable == "") {
+		t.skip("tools9p has no delegation budget");
+		return;
+	}
+	t.assert(strcontains(grantable, " - "), "grantable records include one-line summaries");
+	ns := agentlib->discovernamespace();
+	t.assert(strcontains(ns, "GRANTABLE TO CHILD TASKS:\n"), "namespace names the delegation catalogue");
+	t.assert(strcontains(ns, grantable), "namespace includes the live grantable catalogue");
 }
 
 # Test 3: /tool/help returns documentation when written a tool name
@@ -574,6 +594,12 @@ trimnl(s: string): string
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	agentlib = load AgentLib AgentLib->PATH;
+	if(agentlib == nil) {
+		sys->fprint(sys->fildes(2), "cannot load agentlib module\n");
+		raise "fail:load";
+	}
+	agentlib->init();
 	testing = load Testing Testing->PATH;
 	if(testing == nil) {
 		sys->fprint(sys->fildes(2), "cannot load testing module\n");
@@ -587,6 +613,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("ToolsList",             testToolsList);
 	run("RegistryReadable",      testRegistryReadable);
+	run("GrantableCatalogue",    testGrantableCatalogue);
 	run("HelpLookup",            testHelpLookup);
 	run("CtlRemoveAdd",          testCtlRemoveAdd);
 	run("CtlAddUnknown",         testCtlAddUnknown);

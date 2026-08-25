@@ -20,6 +20,7 @@ implement Tools9p;
 # Filesystem structure:
 #   /tool/
 #   ├── tools        (r)   List available tool names
+#   ├── grantable    (r)   Tools this agent may delegate, with summaries
 #   ├── help         (rw)  Write name, read documentation
 #   ├── ctl          (rw)  trusted control plane (user/UI only)
 #   ├── provision    (rw)  child-task provisioning (narrowing only)
@@ -64,7 +65,7 @@ Tools9p: module {
 
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
-	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs: con iota;
+	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -1016,6 +1017,41 @@ genbudgetlist(): string
 	return result;
 }
 
+toolsummary(name: string): string
+{
+	doc := readfile("/lib/veltro/tools/" + name + ".txt");
+	for(i := 0; i < len doc; i++)
+		if(doc[i] == '\n' || doc[i] == '\r')
+			break;
+	if(i == 0)
+		return name + " - no description available";
+	line := doc[0:i];
+	if(len line >= 6 && line[0:3] == "== " && line[len line - 3:] == " ==")
+		line = line[3:len line - 3];
+	if(len line >= len name && str->tolower(line[0:len name]) == name) {
+		j := len name;
+		for(; j < len line; j++) {
+			c := line[j];
+			if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+				break;
+		}
+		if(j < len line)
+			line = line[j:];
+	}
+	return name + " - " + line;
+}
+
+gengrantablelist(): string
+{
+	result := "";
+	for(b := childbudget(); b != nil; b = tl b) {
+		if(result != "")
+			result += "\n";
+		result += toolsummary(hd b);
+	}
+	return result;
+}
+
 # Generate list of tool names (newline-separated for /tool/tools)
 gentoollist(): string
 {
@@ -1731,6 +1767,9 @@ Serve:
 				data := array of byte gentoollist();
 				srv.reply(styxservers->readbytes(m, data));
 
+			Qgrantable =>
+				srv.reply(styxservers->readbytes(m, array of byte gengrantablelist()));
+
 			Qhelp =>
 				# Return last help query result (stored globally so
 				# separate write/read fids see the same data)
@@ -2000,6 +2039,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qtools =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "tools", big 0, 8r444), nil);
 
+	Qgrantable =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "grantable", big 0, 8r444), nil);
+
 	Qhelp =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "help", big 0, 8r644), nil);
 
@@ -2072,6 +2114,8 @@ navigator(navops: chan of ref Navop)
 					;  # stay at root
 				"tools" =>
 					n.path = big Qtools;
+				"grantable" =>
+					n.path = big Qgrantable;
 				"help" =>
 					n.path = big Qhelp;
 				"_registry" =>
@@ -2152,8 +2196,8 @@ navigator(navops: chan of ref Navop)
 
 			case qtype {
 			Qroot =>
-				# Root contains: tools, help, _registry, ctl, paths, budget, activity,
-				# optional provision, and tool directories.
+				# Root contains: tools, grantable, help, _registry, ctl, paths, budget,
+				# activity, optional provision, and tool directories.
 				i := n.offset;
 				count := n.count;
 
@@ -2213,16 +2257,23 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
-				if(findtool("task") != nil && i <= 8 && count > 0) {
+				# Entry 8: grantable delegation catalogue
+				if(i <= 8 && count > 0) {
+					n.reply <-= dirgen(big Qgrantable);
+					count--;
+					i++;
+				}
+
+				if(findtool("task") != nil && i <= 9 && count > 0) {
 					n.reply <-= dirgen(big Qprovision);
 					count--;
 					i++;
 				}
 
 				# Remaining entries: registered tool directories
-				baseoff := 8;
+				baseoff := 9;
 				if(findtool("task") != nil)
-					baseoff = 9;
+					baseoff = 10;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;

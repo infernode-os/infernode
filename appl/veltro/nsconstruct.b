@@ -538,7 +538,7 @@ restrictns(caps: ref Capabilities): string
 	# trusted /mnt/toolctl* alias outside the restricted root.
 	(toolok, nil) := sys->stat("/tool");
 	if(toolok >= 0) {
-		toolallow := "tools" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
+		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)

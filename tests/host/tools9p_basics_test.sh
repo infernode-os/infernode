@@ -114,6 +114,27 @@ else
     skip "tools9p failed to start for budget test"
 fi
 
+# --- Test 5: Grantable catalogue is truthful and reaches namespace discovery ---
+if emu_c "grantable" 20 "tools9p -m /tool -b write,matrix,webfetch read task & sleep 2; ls /tool; cat /tool/grantable; /dis/tests/tools9p_test.dis -v"; then
+    if ! echo "$OUTPUT" | grep -q '^/tool/grantable$'; then
+        fail "grantable file missing from /tool directory listing"
+    elif ! echo "$OUTPUT" | grep -q '^write - Write file contents'; then
+        fail "grantable catalogue missing write summary: $(echo "$OUTPUT" | head -5)"
+    elif ! echo "$OUTPUT" | grep -q '^matrix - Compose typed modules'; then
+        fail "grantable catalogue missing matrix summary: $(echo "$OUTPUT" | head -5)"
+    elif ! echo "$OUTPUT" | grep -q '^webfetch - Fetch and Read Web Pages'; then
+        fail "grantable catalogue did not normalize a header-style summary"
+    elif echo "$OUTPUT" | grep -q '^exec - '; then
+        fail "grantable catalogue exposed exec outside the delegation budget"
+    elif ! echo "$OUTPUT" | grep -q -- 'PASS: GrantableCatalogue'; then
+        fail "agent namespace did not receive the grantable catalogue: $(echo "$OUTPUT" | tail -8)"
+    else
+        pass "grantable catalogue is budget-scoped, described, and injected"
+    fi
+else
+    fail "grantable catalogue integration probe failed"
+fi
+
 echo ""
 echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
 [[ "$FAILED" -eq 0 ]]

@@ -1738,6 +1738,7 @@ toolCtlHiddenWorker(result: chan of string)
 	# behavior without requiring a running tools9p instance.
 	mkdirp("/tool");
 	createfile("/tool/tools");
+	createfile("/tool/grantable");
 	createfile("/tool/help");
 	createfile("/tool/_registry");
 	createfile("/tool/ctl");
@@ -1770,6 +1771,12 @@ toolCtlHiddenWorker(result: chan of string)
 	(provok, nil) := sys->stat("/tool/provision");
 	if(provok < 0) {
 		result <-= "/tool/provision should remain visible for task delegation";
+		return;
+	}
+
+	(grantok, nil) := sys->stat("/tool/grantable");
+	if(grantok < 0) {
+		result <-= "/tool/grantable should remain visible for delegation planning";
 		return;
 	}
 

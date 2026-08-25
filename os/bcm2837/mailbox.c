@@ -229,8 +229,26 @@ setpower(int dev, int on)
 	 *
 	 * The result was also discarded, so none of this was visible.
 	 */
-	if(mboxprop(TagSetpower, buf, 2, 2) < 0)
+	if(mboxprop(TagSetpower, buf, 2, 2) < 0){
+		print("setpower: dev %d: property call failed\n", dev);
 		return -1;
+	}
+
+	/*
+	 * Report the reply rather than just a verdict.
+	 *
+	 * Bit 1 is Powerwait on the way in and "device does not exist" on
+	 * the way back -- the same bit meaning two different things -- so
+	 * a verdict derived from it is worth exactly as much as the
+	 * assumption behind it. mboxbuf[4] carries the firmware's
+	 * per-tag response word, which says whether the tag was
+	 * processed at all.
+	 */
+	print("setpower: dev %d -> resp %8.8ux, dev %ud, state %8.8ux%s%s\n",
+		dev, mboxbuf[4], buf[0], buf[1],
+		buf[1] & 1 ? " ON" : " OFF",
+		buf[1] & Powernodevice ? " NODEVICE" : "");
+
 	if(buf[1] & Powernodevice)
 		return -1;
 	return (buf[1] & 1) == (on ? 1 : 0) ? 0 : -1;

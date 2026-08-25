@@ -1708,6 +1708,26 @@ lanselftest()
 }
 
 #
+# Do these two addresses match?
+#
+# Written out because Limbo's == on arrays compares REFERENCES, not
+# contents: "frame[0:6] == mac[0:6]" compiles, is always false, and was
+# the entire reason this test reported failure while the chip was doing
+# exactly what it was asked. The frame came back with RX_CMD_A 00008040
+# -- 64 bytes, unicast address matched -- and was thrown away by the
+# comparison meant to recognise it.
+#
+sameaddr(a, b: array of byte): int
+{
+	if(len a < 6 || len b < 6)
+		return 0;
+	for(i := 0; i < 6; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+#
 # Write MAC_CR with the MAC stopped, which is the only time it listens.
 #
 # The board proved this rather than a datasheet: MAC_CR was written with
@@ -1912,7 +1932,7 @@ lanloopback(mode: int): int
 				sys->print("etherusb:   unwrap gave nothing (used %d)\n", used);
 			continue;
 		}
-		if(len frame >= 14 && frame[0:6] == mac[0:6]){
+		if(len frame >= 14 && sameaddr(frame, mac)){
 			sys->print("etherusb: loopback OK -- %d bytes returned\n",
 				len frame);
 			ok = 0;

@@ -275,6 +275,18 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
+readprovisionstate(id: int): string
+{
+	raw := readfile("/tool/provision");
+	if(raw == nil)
+		return "";
+	prefix := string id + " ";
+	for(lines := splitlines(strip(raw)); lines != nil; lines = tl lines)
+		if(hasprefix(hd lines, prefix))
+			return strip((hd lines)[len prefix:]);
+	return "";
+}
+
 docreate(args: string): string
 {
 	attrs := parseattrs(args);
@@ -450,9 +462,9 @@ docreate(args: string): string
 
 	# Provisioning is now atomic (INFR-405): tools9p validates the request on
 	# this write and refuses it outright rather than dropping the tools and
-	# paths it will not grant. The write also blocks until trusted tools9p has
-	# observed the child's confinement manifest (INFR-362); the task tool cannot
-	# read that manifest because model-run tools correctly have .ns hidden.
+	# paths it will not grant. Trusted tools9p publishes a narrow lifecycle result
+	# after observing confinement; the task tool cannot read the hidden manifest
+	# and does not report success while provisioning is still starting.
 	# A refusal must not surface as a created
 	# activity — the caller would poll an activity that has no agent behind
 	# it, or worse, assume the narrowing it asked for was applied. Tear the
@@ -464,7 +476,19 @@ docreate(args: string): string
 		return sys->sprint("error: task not created — %s", perr);
 	}
 
-	return sys->sprint("created activity %d: %s", newid, label);
+	for(w := 0; w < 700; w++) {
+		pstatus := readprovisionstate(newid);
+		if(hasprefix(pstatus, "failed")) {
+			writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+			return sys->sprint("error: task not created — activity %d %s", newid, pstatus);
+		}
+		if(pstatus == "ready")
+			return sys->sprint("created activity %d: %s", newid, label);
+		sys->sleep(50);
+	}
+	writefile("/tool/provision", "cancel " + string newid);
+	writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+	return sys->sprint("error: task not created — activity %d provisioning timed out", newid);
 }
 
 dostatus(args: string): string

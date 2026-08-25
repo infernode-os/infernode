@@ -236,11 +236,9 @@ testOmittedToolsIsBaseline(t: ref T)
 		sys->sprint("child keeps the read-only baseline (child tools: %s)", got));
 }
 
-# INFR-362: the provision write itself is the trusted completion signal. The
-# task tool cannot inspect /tmp/veltro/.ns (and must not regain that authority),
-# so a successful write means the child's post-restriction manifest is already
-# durable and the mounted tool service corresponds to that child.
-testProvisionWriteCompletesAfterManifest(t: ref T)
+# INFR-362: trusted tools9p owns completion state. The task tool cannot inspect
+# /tmp/veltro/.ns; it waits for the narrow provision lifecycle to report ready.
+testProvisionLifecycleCompletesAfterManifest(t: ref T)
 {
 	if(readfile(TOOLMNT + "/budget") == nil) {
 		t.skip("tools9p not mounted at /tool");
@@ -251,10 +249,19 @@ testProvisionWriteCompletesAfterManifest(t: ref T)
 	sys->remove(mpath);
 	n := writefile(TOOLMNT + "/provision", string id);
 	t.assert(n >= 0, "valid provision write succeeds");
-	(mok, nil) := sys->stat(mpath);
-	t.assert(mok >= 0, "successful provision write implies confinement manifest exists");
+	ready := 0;
+	for(i := 0; i < 400; i++) {
+		state := readfile(TOOLMNT + "/provision");
+		(mok, nil) := sys->stat(mpath);
+		if(mok >= 0 && hasentry(state, string id) && hasentry(state, "ready")) {
+			ready = 1;
+			break;
+		}
+		sys->sleep(50);
+	}
+	t.assert(ready, "ready lifecycle implies confinement manifest exists");
 	t.assertnotnil(childtoollist(id),
-		sys->sprint("successful provision write implies %s.%d is mounted", TOOLMNT, id));
+		sys->sprint("ready lifecycle implies %s.%d is mounted", TOOLMNT, id));
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -276,7 +283,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RefuseDeniedPath",         testRefuseDeniedPath);
 	run("RefuseMixedValidInvalid",  testRefuseMixedValidInvalid);
 	run("OmittedToolsIsBaseline",   testOmittedToolsIsBaseline);
-	run("ProvisionWriteCompletesAfterManifest", testProvisionWriteCompletesAfterManifest);
+	run("ProvisionLifecycleCompletesAfterManifest", testProvisionLifecycleCompletesAfterManifest);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

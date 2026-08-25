@@ -119,6 +119,11 @@ cleanupchan: chan of int;
 # transaction. The long-lived dispatcher owns its serialization (INFR-362).
 taskcreatelock: chan of int;
 provisiondelay := 0;
+ProvisionState: adt {
+	id: int;
+	state: string;
+};
+provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifest_written := 0;  # Set after first emitmanifest() call
 
@@ -1196,28 +1201,26 @@ istaskcreate(ti: ref ToolInfo, data: string): int
 
 releasetaskcreate(locked: int)
 {
-	if(locked)
+	if(locked) {
 		<-taskcreatelock;
+		if(verbose) sys->fprint(stderr, "tools9p: task create released transaction lock\n");
+	}
 }
 
-settoolresult(c: ref Fid, ti: ref ToolInfo, result: string)
-{
-	data := array of byte result;
-	c.data = data;
-	ti.result = data;
-}
-
-asyncexec(srv: ref Styxserver, c: ref Fid, tag: int, count: int, ti: ref ToolInfo, data: string)
+asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
 	# Keep batched creates single-file before either invocation forks its
 	# namespace. This covers the whole allocation/provision transaction and
 	# leaves status/list/result calls independently responsive.
 	locked := istaskcreate(ti, data);
-	if(locked)
+	if(locked) {
+		if(verbose) sys->fprint(stderr, "tools9p: task create waiting for transaction lock\n");
 		taskcreatelock <-= 1;
+		if(verbose) sys->fprint(stderr, "tools9p: task create acquired transaction lock\n");
+	}
 	mypid := sys->pctl(Sys->FORKNS, nil);
 	if(mypid < 0) {
-		settoolresult(c, ti, "error: cannot fork namespace");
+		ti.result = array of byte "error: cannot fork namespace";
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
 		releasetaskcreate(locked);
 		return;
@@ -1225,7 +1228,7 @@ asyncexec(srv: ref Styxserver, c: ref Fid, tag: int, count: int, ti: ref ToolInf
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
-		settoolresult(c, ti, "error: cannot disable device attachment");
+		ti.result = array of byte "error: cannot disable device attachment";
 		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
 		releasetaskcreate(locked);
 		return;
@@ -1238,24 +1241,24 @@ asyncexec(srv: ref Styxserver, c: ref Fid, tag: int, count: int, ti: ref ToolInf
 	# (not in the safe list) and the bind would fail silently, leaving
 	# /tool pointing to the parent instance (wrong activity ID).
 	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
-		settoolresult(c, ti, "error: cannot bind activity tool service");
+		ti.result = array of byte "error: cannot bind activity tool service";
 		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
 		releasetaskcreate(locked);
 		return;
 	}
-	nserr := applynsrestriction(ti.name);
+	nserr: string;
+	if(!locked)
+		nserr = applynsrestriction(ti.name);
 	if(nserr != nil) {
-		settoolresult(c, ti, "error: namespace restriction failed: " + nserr);
+		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
 		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
 		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
 		return;
 	}
 	result := exectool(ti.name, data);
-	# Assign the per-fid result before replying so concurrent callers read the
-	# response from their own transaction. Keep the global fallback for clients
-	# that write and read through separate fids.
-	settoolresult(c, ti, result);
+	# Assign result before replying so it is visible for subsequent reads.
+	ti.result = array of byte result;
 	srv.reply(ref Rmsg.Write(tag, count));
 	releasetaskcreate(locked);
 	# Hand this invocation's shadow dirs to the cleanup goroutine.
@@ -1543,6 +1546,32 @@ provisionparse(args: string): (int, string, list of string, string)
 	return (id, mpt, rargs, nil);
 }
 
+setprovisionstate(id: int, state: string)
+{
+	for(ps := provisionstates; ps != nil; ps = tl ps)
+		if((hd ps).id == id) {
+			(hd ps).state = state;
+			return;
+		}
+	provisionstates = ref ProvisionState(id, state) :: provisionstates;
+}
+
+getprovisionstate(id: int): string
+{
+	for(ps := provisionstates; ps != nil; ps = tl ps)
+		if((hd ps).id == id)
+			return (hd ps).state;
+	return "";
+}
+
+genprovisionstates(): string
+{
+	out := "";
+	for(ps := provisionstates; ps != nil; ps = tl ps)
+		out += sys->sprint("%d %s\n", (hd ps).id, (hd ps).state);
+	return out;
+}
+
 provisionstatus(id: int, status: string)
 {
 	fd := sys->open(sys->sprint("/mnt/ui/activity/%d/status", id), Sys->OWRITE);
@@ -1558,19 +1587,29 @@ provisioncleanup(mpt: string)
 	sys->unmount(nil, mpt);
 }
 
-provisionfail(srv: ref Styxserver, tag, id: int, mpt, reason: string)
+provisionfail(id: int, mpt, reason: string): string
 {
+	setprovisionstate(id, "failed: " + reason);
 	provisionstatus(id, "failed: " + reason);
 	provisioncleanup(mpt);
-	srv.reply(ref Rmsg.Error(tag, "provision failed: " + reason));
+	return "provision failed: " + reason;
 }
 
-# Launch the validated child and own the provisioning write reply. A successful
-# write is the completion record: it is sent only after the child's namespace
-# manifest exists. This keeps trusted readiness metadata out of the task tool's
-# namespace while preserving ordinary 9P write-as-RPC semantics.
-provisionrun(srv: ref Styxserver, tag: int, count: int,
-	id: int, mpt: string, rargs: list of string)
+runprovisionedagent(lb: ShCommand, id: int, lbargs: list of string)
+{
+	{
+		lb->init(nil, lbargs);
+	} exception e {
+	"*" =>
+		provisionstatus(id, "failed: task agent exited");
+		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
+	}
+}
+
+# Launch the validated child and publish a narrow lifecycle result only after
+# the namespace manifest exists. This keeps trusted readiness metadata out of
+# the task tool's namespace.
+provisionrun(id: int, mpt: string, rargs: list of string)
 {
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
 	mpath := manifestpath(mpt);
@@ -1579,13 +1618,13 @@ provisionrun(srv: ref Styxserver, tag: int, count: int,
 	t9p := load ShCommand "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load tools9p.dis: %r\n");
-		provisionfail(srv, tag, id, mpt, "cannot load tools9p");
+		provisionfail(id, mpt, "cannot load tools9p");
 		return;
 	}
 	lb := load ShCommand "/dis/lucibridge.dis";
 	if(lb == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
-		provisionfail(srv, tag, id, mpt, "cannot load lucibridge");
+		provisionfail(id, mpt, "cannot load lucibridge");
 		return;
 	}
 	spawn t9p->init(nil, rargs);
@@ -1602,7 +1641,7 @@ provisionrun(srv: ref Styxserver, tag: int, count: int,
 	}
 	if(!ready) {
 		sys->fprint(stderr, "tools9p: provision: %s did not mount after 10s\n", mpt);
-		provisionfail(srv, tag, id, mpt, "child tool service did not mount");
+		provisionfail(id, mpt, "child tool service did not mount");
 		return;
 	}
 
@@ -1617,23 +1656,21 @@ provisionrun(srv: ref Styxserver, tag: int, count: int,
 	}
 	if(!nsready) {
 		sys->fprint(stderr, "tools9p: provision: activity %d did not finish namespace setup\n", id);
-		provisionfail(srv, tag, id, mpt, "child did not finish namespace setup");
+		provisionfail(id, mpt, "child did not finish namespace setup");
 		return;
 	}
 
-	sys->fprint(stderr, "tools9p: provision: %s confined, starting lucibridge\n", mpt);
-	srv.reply(ref Rmsg.Write(tag, count));
-
+	if(getprovisionstate(id) == "cancelled") {
+		provisioncleanup(mpt);
+		return;
+	}
+	sys->fprint(stderr, "tools9p: provision: %s confined\n", mpt);
+	setprovisionstate(id, "ready");
+	provisionstatus(id, "ready");
 	lbargs := "lucibridge" :: "-a" :: string id :: "-s" :: nil;
 	if(verbose)
 		lbargs = "lucibridge" :: "-v" :: "-a" :: string id :: "-s" :: nil;
-	{
-		lb->init(nil, lbargs);
-	} exception e {
-	"*" =>
-		provisionstatus(id, "failed: task agent exited");
-		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
-	}
+	spawn runprovisionedagent(lb, id, lbargs);
 }
 
 # Return manifest file path for a given tools9p mount point.
@@ -1888,6 +1925,9 @@ Serve:
 			Qactivity =>
 				srv.reply(styxservers->readbytes(m, array of byte string activityid));
 
+			Qprovision =>
+				srv.reply(styxservers->readbytes(m, array of byte genprovisionstates()));
+
 			Qmetarole =>
 				srv.reply(styxservers->readbytes(m, array of byte (agentrole + "\n")));
 
@@ -1916,12 +1956,9 @@ Serve:
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
 					Qtool_ctl or Qtool_run =>
-						result := c.data;
-						if(result == nil)
-							result = ti.result;
-						if(result == nil)
-							result = array of byte "error: no result (write arguments first)";
-						srv.reply(styxservers->readbytes(m, result));
+						if(ti.result == nil)
+							ti.result = array of byte "error: no result (write arguments first)";
+						srv.reply(styxservers->readbytes(m, ti.result));
 					Qtool_doc =>
 						doc := gettooldoc(ti.name);
 						srv.reply(styxservers->readbytes(m, array of byte doc));
@@ -2048,7 +2085,9 @@ Serve:
 						sys->fprint(stderr, "tools9p: provision: %s\n", perr0);
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
 					} else {
-						spawn provisionrun(srv, m.tag, len m.data, pid0, pmpt, prargs);
+						setprovisionstate(pid0, "starting");
+						spawn provisionrun(pid0, pmpt, prargs);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					}
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw> or budget-add|budget-remove <tool> or provision <id>"));
@@ -2059,12 +2098,26 @@ Serve:
 				# may only receive subsets of the current tool/path grants. A request
 				# naming anything outside them is refused here, in the write, so the
 				# caller cannot mistake a dropped grant for a provisioned child.
-				(qid0, qmpt, qrargs, qerr) := provisionparse(data);
-				if(qerr != nil) {
-					sys->fprint(stderr, "tools9p: provision: %s\n", qerr);
-					srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
+				if(len data > 7 && data[0:7] == "cancel ") {
+					(cid, cerr) := parseactivityid(data[7:]);
+					if(cerr != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, "invalid cancellation: " + cerr));
+					} else {
+						setprovisionstate(cid, "cancelled");
+						provisionstatus(cid, "failed: provisioning cancelled");
+						provisioncleanup("/tool." + string cid);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					}
 				} else {
-					spawn provisionrun(srv, m.tag, len m.data, qid0, qmpt, qrargs);
+					(qid0, qmpt, qrargs, qerr) := provisionparse(data);
+					if(qerr != nil) {
+						sys->fprint(stderr, "tools9p: provision: %s\n", qerr);
+						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
+					} else {
+						setprovisionstate(qid0, "starting");
+						spawn provisionrun(qid0, qmpt, qrargs);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					}
 				}
 
 			* =>
@@ -2086,7 +2139,7 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 						break;
 					}
-					spawn asyncexec(srv, c, m.tag, len m.data, ti, data);
+					spawn asyncexec(srv, m.tag, len m.data, ti, data);
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				}

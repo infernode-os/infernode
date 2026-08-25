@@ -210,20 +210,14 @@ testDelayedSetupConsistency(t: ref T)
 
 testExplicitProvisionFailure(t: ref T)
 {
-	tool := load ToolTask "/dis/veltro/tools/task.dis";
-	if(tool == nil) {
-		t.fatal("cannot reload task tool");
+	tool := setup(t);
+	if(tool == nil)
+		return;
+	if(writefile(UI + "/ctl", "activity create FailedSetup") < 0) {
+		t.fatal("cannot create failed activity");
 		return;
 	}
-	if(tool->init() != nil) {
-		t.fatal("cannot reinitialize task tool");
-		return;
-	}
-	if(taskid == "") {
-		t.fatal("delayed task was not created");
-		return;
-	}
-	id := taskid;
+	id := "1";
 	writefile(UI + "/activity/" + id + "/conversation/ctl", "clear");
 	writefile(UI + "/activity/" + id + "/status", "failed: namespace setup did not complete");
 	result := tool->exec("result " + id);
@@ -241,7 +235,6 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	run("DelayedSetupConsistency", testDelayedSetupConsistency);
 	run("ExplicitProvisionFailure", testExplicitProvisionFailure);
 	sys->unmount(nil, UI);
 

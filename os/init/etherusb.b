@@ -1708,6 +1708,41 @@ lanselftest()
 }
 
 #
+# Write MAC_CR with the MAC stopped, which is the only time it listens.
+#
+# The board proved this rather than a datasheet: MAC_CR was written with
+# the auto bits cleared and full duplex set, and read back 00001802 --
+# ADP had cleared, AUTO_DUPLEX and AUTO_SPEED had not, and FULL_DUPLEX
+# had not set. A register that accepts some of a write and ignores the
+# rest is a register being written at the wrong time, and it is why the
+# loopback bit never took either.
+#
+# Stopping the receiver and transmitter around it costs nothing here and
+# explains a whole evening of settings that appeared to apply.
+#
+lanmaccr(val: int): int
+{
+	(e1, rx) := lanrd(Lmacrx);
+	(e2, tx) := lanrd(Lmactx);
+	if(e1 < 0 || e2 < 0)
+		return -1;
+
+	if(lanwr(Lmacrx, rx & ~Lrxen) < 0 || lanwr(Lmactx, tx & ~Ltxen) < 0)
+		return -1;
+	if(lanwr(Lmaccr, val) < 0)
+		return -1;
+	if(lanwr(Lmactx, tx) < 0 || lanwr(Lmacrx, rx) < 0)
+		return -1;
+
+	(e3, v) := lanrd(Lmaccr);
+	if(e3 < 0)
+		return -1;
+	if(v != val)
+		sys->print("etherusb: MAC_CR wanted %8.8ux got %8.8ux\n", val, v);
+	return 0;
+}
+
+#
 # What every register in the data path says right now.
 #
 lanstate(when: string)
@@ -1734,7 +1769,7 @@ lanstate(when: string)
 #
 lanunloop(cr: int)
 {
-	lanwr(Lmaccr, cr);
+	lanmaccr(cr);
 	lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart);
 }
 
@@ -1782,7 +1817,7 @@ lanloopback(mode: int): int
 		# of the same chip disagree about the clock and no data
 		# moves.
 		#
-		if(lanwr(Lmaccr, (cr & ~(Lmacadp|Lmacautodup|Lmacautospd|Lmacspdmask))
+		if(lanmaccr((cr & ~(Lmacadp|Lmacautodup|Lmacautospd|Lmacspdmask))
 				| Lmacspd100 | Lmacfull) < 0){
 			sys->print("etherusb: cannot force MAC speed: %r\n");
 			return -1;
@@ -1797,7 +1832,8 @@ lanloopback(mode: int): int
 			return -1;
 		}
 	}else{
-		if(lanwr(Lmaccr, cr | Lmacloop) < 0){
+		if(lanmaccr((cr & ~(Lmacadp|Lmacautodup|Lmacautospd|Lmacspdmask))
+				| Lmacloop | Lmacspd100 | Lmacfull) < 0){
 			sys->print("etherusb: cannot enter MAC loopback: %r\n");
 			return -1;
 		}
@@ -2172,7 +2208,7 @@ lansetup(): int
 	(ec, cr) := lanrd(Lmaccr);
 	if(ec < 0)
 		return -1;
-	if(lanwr(Lmaccr, cr | Lmacadp | Lmacautodup | Lmacautospd) < 0){
+	if(lanmaccr(cr | Lmacadp | Lmacautodup | Lmacautospd) < 0){
 		sys->print("etherusb: LAN78xx MAC_CR setup failed: %r\n");
 		return -1;
 	}

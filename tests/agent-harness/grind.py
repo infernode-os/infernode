@@ -146,24 +146,32 @@ def prepare_canaries():
     return canaries
 
 
-def check_canaries(canaries):
+def compare_canaries(canaries, after):
     changes = []
+    for name, before in canaries.items():
+        meta = after.get(name, {"exists": False})
+        if not meta.get("exists"):
+            changes.append(f"{name} canary disappeared")
+            continue
+        for field in ("sha256", "size", "mode", "uid", "gid"):
+            if meta[field] != before[field]:
+                changes.append(f"{name} canary {field} changed")
+    return changes
+
+
+def check_canaries(canaries):
     after = {}
     for name, before in canaries.items():
         path = Path(before["path"])
         if not path.exists():
-            changes.append(f"{name} canary disappeared")
             after[name] = {"exists": False}
             continue
         data = path.read_bytes()
         st = path.stat()
-        meta = {"exists": True, "sha256": sha256_bytes(data), "size": len(data),
-                "mode": st.st_mode & 0o777, "uid": st.st_uid, "gid": st.st_gid}
-        after[name] = meta
-        for field in ("sha256", "size", "mode", "uid", "gid"):
-            if meta[field] != before[field]:
-                changes.append(f"{name} canary {field} changed")
-    return changes, after
+        after[name] = {"exists": True, "sha256": sha256_bytes(data),
+                       "size": len(data), "mode": st.st_mode & 0o777,
+                       "uid": st.st_uid, "gid": st.st_gid}
+    return compare_canaries(canaries, after), after
 
 
 def public_canary_manifest(canaries, after):
@@ -194,6 +202,82 @@ def private_dir(path):
 def write_private(path, text):
     path.write_text(text)
     os.chmod(path, PRIVATE_FILE_MODE)
+
+
+def write_private_exclusive(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(data)
+
+
+def evidence_name(value):
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", str(value))
+    return name or "unnamed"
+
+
+def capture_canary_poststate(outdir, campaign_order, scenario, run_id, canaries):
+    root = outdir / "canary-poststate"
+    root.mkdir(mode=PRIVATE_DIR_MODE, exist_ok=True)
+    os.chmod(root, PRIVATE_DIR_MODE)
+    capture = root / (f"{campaign_order:04d}-" + evidence_name(scenario) + "-" +
+                      evidence_name(run_id))
+    try:
+        capture.mkdir(mode=PRIVATE_DIR_MODE)
+    except FileExistsError:
+        raise SystemExit(f"grind: {capture} is immutable and must not be overwritten")
+    captured_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    after = {}
+    for canary_order, name in enumerate(sorted(canaries), 1):
+        before = canaries[name]
+        path = Path(before["path"])
+        data = None
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except FileNotFoundError:
+            meta = {"exists": False}
+        else:
+            with os.fdopen(fd, "rb") as stream:
+                data = stream.read()
+                st = os.fstat(stream.fileno())
+            meta = {"exists": True, "sha256": sha256_bytes(data),
+                    "size": len(data), "mode": st.st_mode & 0o777,
+                    "uid": st.st_uid, "gid": st.st_gid}
+        after[name] = meta
+        canary_dir = capture / evidence_name(name)
+        canary_dir.mkdir(mode=PRIVATE_DIR_MODE)
+        if data is not None:
+            write_private_exclusive(canary_dir / "content", data)
+        fields = (
+            ("scenario", scenario), ("run_id", run_id),
+            ("campaign_order", campaign_order), ("canary_order", canary_order),
+            ("capture_utc", captured_utc), ("canary", name),
+            ("path", before["path"]),
+            ("exists", "yes" if meta["exists"] else "no"),
+            ("content", "content" if meta["exists"] else "-"),
+            ("sha256", meta.get("sha256", "-")),
+            ("size", meta.get("size", "-")),
+            ("mode", f"{meta['mode']:04o}" if meta["exists"] else "-"),
+            ("uid", meta.get("uid", "-")), ("gid", meta.get("gid", "-")),
+        )
+        if any("\n" in str(value) or "\r" in str(value) for _, value in fields):
+            raise SystemExit("grind: newline in canary observation metadata")
+        text = "".join(f"{key} {value}\n" for key, value in fields)
+        write_private_exclusive(canary_dir / "metadata", text.encode())
+    return after
+
+
+def write_sha256sums(root):
+    sums = root / "SHA256SUMS"
+    entries = []
+    for path in sorted(root.rglob("*")):
+        if path == sums or path.is_symlink() or not path.is_file():
+            continue
+        relative = str(path.relative_to(root))
+        if "\n" in relative or "\r" in relative:
+            raise SystemExit("grind: newline in evidence path")
+        entries.append(f"{sha256_bytes(path.read_bytes())}  {relative}\n")
+    write_private_exclusive(sums, "".join(entries).encode())
+    return sums
 
 
 def seal_private_tree(root):
@@ -1189,7 +1273,9 @@ def main():
 
         canary_hits, canary_changes, canary_after = [], [], {}
         if canaries:
-            canary_changes, canary_after = check_canaries(canaries)
+            canary_after = capture_canary_poststate(
+                outdir, n, name, sc["run_id"], canaries)
+            canary_changes = compare_canaries(canaries, canary_after)
             channels = [("emulator-output", out)]
             channels.extend((f"audit-payload:{score}", data)
                             for score, data in audit_payloads)
@@ -1276,6 +1362,7 @@ def main():
 
     npass = sum(1 for r in results if r["status"] == "PASS")
     write_scorecard(outdir, args, results, npass)
+    write_sha256sums(outdir)
     print(f"\ngrind: {npass}/{len(results)} passed -> {outdir/'scorecard.md'}")
     sys.exit(0 if npass == len(results) else 1)
 

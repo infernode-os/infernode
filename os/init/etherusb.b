@@ -93,6 +93,50 @@ Filterdefault:	con 16r0000000D;
 Maxctl:		con 1024;
 
 #
+# LAN78xx -- the Microchip family behind the Pi 3B+'s LAN7515, which
+# is a high-speed hub with an Ethernet function on it.
+#
+# Registers are read and written with two vendor requests rather than
+# any class protocol, and each frame carries a command header: eight
+# bytes out, ten bytes in.
+#
+# THE REGISTER MAP BELOW IS UNVALIDATED. It has never been run against
+# the silicon, so setup() checks what it can rather than assuming:
+# ID_REV is read back first and an implausible answer refuses the
+# device instead of configuring it wrongly. A driver that half-works is
+# worse here than one that declines, because a NIC that is misprogrammed
+# comes up and silently carries nothing.
+#
+Rvendor:	con 16r40;		# host to device, vendor, device
+Rvendorin:	con 16rC0;		# device to host, vendor, device
+Rwritereg:	con 16rA0;
+Rreadreg:	con 16rA1;
+
+Lidrev:		con 16r000;
+Lhwcfg:		con 16r010;
+Lfctrxctl:	con 16r0C0;
+Lfcttxctl:	con 16r0C4;
+Lmacrx:		con 16r104;
+Lmactx:		con 16r108;
+Lrxaddrh:	con 16r118;
+Lrxaddrl:	con 16r11C;
+
+Lhwlrst:	con 16r00000002;	# HW_CFG: soft reset
+# 1<<31, not 16r80000000: bit 31 does not fit a Limbo int, which
+# is signed 32-bit, so the literal would be a big and the argument
+# types would not match.
+Lfcten:		con 1 << 31;		# FCT_{RX,TX}_CTL: enable
+Lrxen:		con 16r00000001;	# MAC_RX: receiver enable
+Ltxen:		con 16r00000001;	# MAC_TX: transmitter enable
+
+Ltxhdr:		con 8;			# TX_CMD_A and TX_CMD_B
+Lrxhdr:		con 10;			# RX_CMD_A, RX_CMD_B, RX_CMD_C
+Ltxfcs:		con 16r00400000;	# TX_CMD_A: append FCS
+Ltxlen:		con 16r000FFFFF;	# TX_CMD_A: frame length
+Lrxlen:		con 16r00003FFF;	# RX_CMD_A: frame length
+Lrxerr:		con 16r00400000;	# RX_CMD_A: receive error
+
+#
 # The file interface ethermedium dials. Taken from os/port/dial.c
 # call() and etherbind() rather than from memory:
 #
@@ -208,6 +252,14 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	families = array[] of {
 		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap),
+		#
+		# Microchip. -1 matches any product because the 3B+ carries a
+		# LAN7515 while the family covers 7800 and 7850 too, and
+		# lansetup() identifies the part from ID_REV anyway -- which
+		# is a better check than a number in a table, since it also
+		# proves register access works.
+		#
+		Family("lan78xx", 16r0424, -1, lansetup, lanwrap, lanunwrap),
 	};
 
 	#
@@ -1196,4 +1248,164 @@ devid(): (int, int)
 		return (-1, -1);
 	return (int desc[8] | (int desc[9] << 8),
 		int desc[10] | (int desc[11] << 8));
+}
+
+#
+# The LAN78xx family.
+#
+# Registers are 32 bits, little-endian, addressed by wIndex and carried
+# in the data stage of a vendor request.
+#
+lanrd(reg: int): (int, int)
+{
+	v := array[4] of byte;
+
+	if(ctlin(Rvendorin, Rreadreg, 0, reg, v) < len v)
+		return (-1, 0);
+	return (0, int get4(v, 0));
+}
+
+lanwr(reg, val: int): int
+{
+	v := array[4] of byte;
+
+	put4(v, 0, val);
+	return ctlout(Rvendor, Rwritereg, 0, reg, v);
+}
+
+lansetup(): int
+{
+	#
+	# Identify before configuring.
+	#
+	# This register map has never been run against the silicon, so
+	# the first thing to establish is whether the device answers at
+	# all in the way the map assumes. All-zeroes or all-ones means
+	# the read did not reach a register, and there is nothing to be
+	# gained by writing to the rest of them on that basis.
+	#
+	(err, idrev) := lanrd(Lidrev);
+	if(err < 0){
+		sys->print("etherusb: LAN78xx ID_REV read failed: %r\n");
+		return -1;
+	}
+	if(idrev == 0 || idrev == -1){		# -1 is 0xFFFFFFFF as an int
+		sys->print("etherusb: LAN78xx ID_REV reads %8.8ux -- refusing\n",
+			idrev);
+		return -1;
+	}
+	sys->print("etherusb: LAN78xx ID_REV %8.8ux\n", idrev);
+
+	#
+	# Soft reset, then wait for the bit to clear itself.
+	#
+	if(lanwr(Lhwcfg, Lhwlrst) < 0){
+		sys->print("etherusb: LAN78xx reset failed: %r\n");
+		return -1;
+	}
+	for(i := 0; i < 100; i++){
+		(e, hw) := lanrd(Lhwcfg);
+		if(e < 0)
+			return -1;
+		if((hw & Lhwlrst) == 0)
+			break;
+		sys->sleep(10);
+	}
+	if(i >= 100){
+		sys->print("etherusb: LAN78xx reset never completed\n");
+		return -1;
+	}
+
+	#
+	# The MAC address, which the device holds in two registers -- the
+	# low four bytes and the high two. It is the device's own, from
+	# its OTP or EEPROM, and reading it is also a second check that
+	# register access works: an address of all zeroes or all ones is
+	# not one.
+	#
+	(e1, lo) := lanrd(Lrxaddrl);
+	(e2, hi) := lanrd(Lrxaddrh);
+	if(e1 < 0 || e2 < 0){
+		sys->print("etherusb: LAN78xx cannot read its MAC: %r\n");
+		return -1;
+	}
+	mac[0] = byte (lo & 16rFF);
+	mac[1] = byte ((lo >> 8) & 16rFF);
+	mac[2] = byte ((lo >> 16) & 16rFF);
+	mac[3] = byte ((lo >> 24) & 16rFF);
+	mac[4] = byte (hi & 16rFF);
+	mac[5] = byte ((hi >> 8) & 16rFF);
+
+	zero := 1;
+	for(i = 0; i < 6; i++)
+		if(int mac[i] != 0)
+			zero = 0;
+	if(zero){
+		sys->print("etherusb: LAN78xx MAC reads all zeroes -- refusing\n");
+		return -1;
+	}
+
+	#
+	# Turn on the FIFOs and then the MAC, in that order: enabling the
+	# receiver before the FIFO that feeds it has somewhere to put
+	# what arrives is how a device ends up dropping its first frames.
+	#
+	if(lanwr(Lfctrxctl, Lfcten) < 0 || lanwr(Lfcttxctl, Lfcten) < 0){
+		sys->print("etherusb: LAN78xx FIFO enable failed: %r\n");
+		return -1;
+	}
+	if(lanwr(Lmactx, Ltxen) < 0 || lanwr(Lmacrx, Lrxen) < 0){
+		sys->print("etherusb: LAN78xx MAC enable failed: %r\n");
+		return -1;
+	}
+
+	#
+	# NOT DONE: the PHY. Link needs the internal PHY brought up and
+	# auto-negotiation completed, which is done through MII_ACC and
+	# MII_DATA and is a good deal more than a handful of register
+	# writes. Without it this driver will configure the MAC and see
+	# no carrier -- which is the honest state to be in, and is why
+	# there is a line of output saying so rather than silence.
+	#
+	sys->print("etherusb: LAN78xx MAC configured; PHY and link not yet brought up\n");
+	return 0;
+}
+
+#
+# TX_CMD_A carries the length and asks the device to append the FCS;
+# TX_CMD_B is unused for a plain frame.
+#
+lanwrap(frame: array of byte): array of byte
+{
+	buf := array[Ltxhdr + len frame] of byte;
+
+	put4(buf, 0, (len frame & Ltxlen) | Ltxfcs);
+	put4(buf, 4, 0);
+	buf[Ltxhdr:] = frame;
+	return buf;
+}
+
+#
+# RX_CMD_A holds the length in its low bits and an error flag higher
+# up. A frame flagged in error is consumed and discarded rather than
+# passed on: it is the device saying the bytes are not trustworthy.
+#
+lanunwrap(buf: array of byte, n: int): (int, array of byte)
+{
+	if(n < Lrxhdr)
+		return (0, nil);
+
+	cmda := int get4(buf, 0);
+	datalen := cmda & Lrxlen;
+	if(datalen < 14 || datalen > Maxframe)
+		return (-1, nil);
+	if(Lrxhdr + datalen > n)
+		return (0, nil);
+
+	if(cmda & Lrxerr)
+		return (Lrxhdr + datalen, nil);
+
+	frame := array[datalen] of byte;
+	frame[0:] = buf[Lrxhdr:Lrxhdr+datalen];
+	return (Lrxhdr + datalen, frame);
 }

@@ -881,7 +881,22 @@ board's controller is the real thing behind a real high-speed hub, so
 the split-transaction paths that never execute under emulation will
 execute there.
 
-**3. USB — the host stack is in, the class driver is next.** The 3B+'s
+**3. USB — a class driver exists; LAN78xx is unvalidated.** The RNDIS
+family works end to end under QEMU. The LAN78xx family, which is what
+the 3B+'s LAN7515 actually speaks, is written but **has never been run
+against the silicon**, and its register map came from knowledge rather
+than from a datasheet on the desk. It is built to fail loudly rather
+than half-work: `lansetup()` reads ID_REV first and refuses a device
+that answers 0 or all-ones, and refuses again if the MAC reads back as
+all zeroes, because a NIC that is misprogrammed comes up and silently
+carries nothing.
+
+The PHY is not done. Link needs the internal PHY brought up and
+auto-negotiation completed through MII_ACC and MII_DATA, which is more
+than a handful of writes; the driver says so on the console rather
+than leaving it to be inferred from a dead interface.
+
+**3a. The old item, for reference —** The 3B+'s
 LAN7515 sits behind USB, so a DWC2 host stack gates wired Ethernet
 *and* WiFi. `usbdwc.c` and `devusb.c` are imported and the bus
 enumerates end to end under QEMU: root hub, a real hub addressed and

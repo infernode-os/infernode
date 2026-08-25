@@ -85,6 +85,19 @@ enum
 enum
 {
 	ARMTIMERREGS	= PHYSIO+0x00B400,
+	PMREGS		= PHYSIO+0x100000,	/* power management / watchdog */
+
+	/*
+	 * The watchdog, which is how this SoC reboots: there is no reset
+	 * line to pull. Arm it with a short timeout and let it expire.
+	 * Every write needs the password in the top half or it is
+	 * ignored silently.
+	 */
+	Pmrstc		= 0x1C,
+	Pmwdog		= 0x24,
+	Pmpassword	= 0x5A000000,
+	Pmwrcfgclr	= 0xFFFFFFCF,
+	Pmwrcfgfull	= 0x00000020,	/* full reset */
 
 	TmrEnable	= 1<<7,
 	TmrIntEnable	= 1<<5,

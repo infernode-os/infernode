@@ -187,3 +187,4 @@ void	kprocchild(Proc*, void(*)(void*), void*);
 #define	waserror()	(errlabcheck(), up->nerrlab++, setlabel(&up->errlab[up->nerrlab-1]))
 
 #include "../port/portfns.h"
+void	boardreboot(void);

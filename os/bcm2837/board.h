@@ -36,3 +36,4 @@ void	fbrect(Fbinfo*, int, int, int, int, u32int);
  * boardclockcheck() measures CNTFRQ_EL0 against.
  */
 u64int	systimer(void);
+void	boardreboot(void);

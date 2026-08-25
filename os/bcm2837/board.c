@@ -166,3 +166,34 @@ boardfbprobe(void)
 	fbrect(&fb, 300, 40, 120, 80, 0x000000FF);
 	uartputstr("fb:   test pattern drawn\n");
 }
+
+/*
+ * Reset the machine.
+ *
+ * This SoC has no reset line to assert: rebooting means arming the
+ * watchdog with a short timeout and letting it expire. Every write to
+ * the power-management block needs the password in the top half, and a
+ * write without it is ignored SILENTLY -- which is the failure mode to
+ * watch for if this ever stops working.
+ *
+ * It matters for more than tidiness here. The kernel is delivered over
+ * the serial line by serialboot, which only runs at reset, so without
+ * a way to reset from software every iteration needs a human to pull
+ * the power. With it, the loop closes: send a kernel, run it, write
+ * "reboot" to #c/sysctl, send the next one.
+ */
+void
+boardreboot(void)
+{
+	volatile u32int *rstc, *wdog;
+
+	rstc = (u32int*)(uintptr)(PMREGS + Pmrstc);
+	wdog = (u32int*)(uintptr)(PMREGS + Pmwdog);
+
+	*wdog = Pmpassword | 16;		/* a few ticks is plenty */
+	*rstc = Pmpassword | (*rstc & Pmwrcfgclr) | Pmwrcfgfull;
+	coherence();
+
+	for(;;)
+		;
+}

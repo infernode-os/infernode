@@ -59,6 +59,14 @@ enum
 	 */
 	USBREGS		= PHYSIO + 0x980000,
 	Resetlimit	= 100000,	/* ~1s at 10us a turn */
+	/*
+	 * How long to wait on one transfer, and how many attempts before
+	 * calling it dead. Generous on purpose: the point is to bound a
+	 * failure, not to police latency.
+	 */
+	Chantmout	= 200,		/* ms per attempt */
+	Maxtmout	= 10,		/* attempts before giving up */
+
 	Enabledelay	= 50,
 	Resetdelay	= 10,
 	ResetdelayHS	= 50,
@@ -272,18 +280,48 @@ chandone(void *a)
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 {
-	int intr, n, x, ointr;
+	int intr, n, x, ointr, ntmout;
 	ulong start, now;
 	Dwcregs *r;
 
 	r = ctlr->regs;
 	n = hc - r->hchan;
+	ntmout = 0;
 	for(;;){
 restart:
 		x = splhi();
 		r->haintmsk |= 1<<n;
 		hc->hcintmsk = mask;
-		sleep(&ctlr->chanintr[n], chandone, hc);
+		/*
+		 * Bounded, not indefinite.
+		 *
+		 * An unbounded sleep here means any transfer the controller
+		 * never completes takes the whole machine with it -- not
+		 * just USB, and not just the process that asked. On this
+		 * board that is exactly what happened: enumeration stalled
+		 * after the port reset and the console went silent, so
+		 * there was no shell left to ask what had gone wrong and
+		 * no way to reboot except the power switch.
+		 *
+		 * A transfer that does not finish is a fault to report, not
+		 * a reason to stop. Waiting a bounded time and retrying a
+		 * bounded number of times turns a dead machine into an I/O
+		 * error, which the caller above can print.
+		 */
+		tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
+		if(!chandone(hc)){
+			hc->hcintmsk = 0;
+			splx(x);
+			if(++ntmout > Maxtmout){
+				hc->hcchar |= Chdis;
+				print("usbotg: ep%d.%d transfer timed out "
+					"(hcint %8.8ux hcchar %8.8ux gintsts %8.8ux)\n",
+					ep->dev->nb, ep->nb, hc->hcint,
+					hc->hcchar, r->gintsts);
+				error(Eio);
+			}
+			continue;
+		}
 		hc->hcintmsk = 0;
 		splx(x);
 		intr = hc->hcint;
@@ -869,6 +907,26 @@ init(Hci *hp)
 		print("usbotg: controller interrupt %s (%lud taken in %dms)\n",
 			nusbintr > n0 ? "reaches the CPU" : "NEVER ARRIVES",
 			nusbintr - n0, ms);
+
+		/*
+		 * When it does not arrive, say where the chain stops.
+		 *
+		 * There are four places it can break and they are
+		 * distinguishable: the controller not raising it at all
+		 * (gintsts clear), raising it with the cause masked
+		 * (gintsts set, gintmsk clear), raising it with the global
+		 * enable off (gahbcfg bit 0 clear), or raising it into a
+		 * VideoCore controller that is not passing it on (gintsts
+		 * set and pending clear). Printing all of them costs one
+		 * line and turns the next step from a guess into a lookup.
+		 */
+		if(nusbintr == n0)
+			print("usbotg:   gintsts %8.8ux gintmsk %8.8ux gahbcfg %8.8ux\n"
+			      "usbotg:   vc pending %8.8ux enable %8.8ux routing %8.8ux\n",
+				r->gintsts, r->gintmsk, r->gahbcfg,
+				*(volatile u32int*)(uintptr)(PHYSIO+0x00B204),
+				*(volatile u32int*)(uintptr)(PHYSIO+0x00B210),
+				LOCAL(Lgpuirqrouting));
 	}
 }
 

@@ -131,7 +131,9 @@ exit(int code)
 void
 reboot(void)
 {
-	print("reboot: not supported; halting\n");
+	print("reboot: resetting via the watchdog\n");
+	boardreboot();
+	/* boardreboot does not return; if it somehow does, stop. */
 	exit(0);
 }
 

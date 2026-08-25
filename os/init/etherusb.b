@@ -425,7 +425,21 @@ init(nil: ref Draw->Context, argv: list of string)
 		dev, family.name, int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5]);
 
-	bulkfd = sys->open("/usb/usb/" + inname + "/data", Sys->ORDWR);
+	#
+	# Open each endpoint for what it is.
+	#
+	# A separate IN endpoint was created "bulk r" and an OUT endpoint
+	# "bulk w", so opening either ORDWR is refused -- correctly, and
+	# reported as "permission denied", which reads like a protection
+	# problem rather than a mode mismatch. Only the shared case is
+	# genuinely read-write.
+	#
+	inmode := Sys->OREAD;
+	outmode := Sys->OWRITE;
+	if(outname == inname)
+		inmode = outmode = Sys->ORDWR;
+
+	bulkfd = sys->open("/usb/usb/" + inname + "/data", inmode);
 	if(bulkfd == nil){
 		sys->print("etherusb: cannot open %s: %r\n", inname);
 		return;
@@ -433,7 +447,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(outname == inname)
 		bulkoutfd = bulkfd;
 	else {
-		bulkoutfd = sys->open("/usb/usb/" + outname + "/data", Sys->ORDWR);
+		bulkoutfd = sys->open("/usb/usb/" + outname + "/data", outmode);
 		if(bulkoutfd == nil){
 			sys->print("etherusb: cannot open %s: %r\n", outname);
 			return;

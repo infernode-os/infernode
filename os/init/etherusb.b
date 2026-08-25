@@ -353,7 +353,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		sys->print("etherusb: cannot set the bulk packet size: %r\n");
 		return;
 	}
-	sys->print("etherusb: %s bulk endpoint is %s\n", dev, bulk);
+	sys->print("etherusb: %s bulk endpoint is %s, maxpkt %d\n", dev, bulk, mp);
 
 	if(family.setup() < 0)
 		return;

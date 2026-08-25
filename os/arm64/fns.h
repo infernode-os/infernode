@@ -82,6 +82,7 @@ u64int	clockticks(void);
 void	microdelay(int);
 int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
+extern int irqorphan;
 /*
  * intr.c -- the board's interrupt controller.
  *

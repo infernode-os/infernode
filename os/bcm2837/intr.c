@@ -60,6 +60,24 @@ enum {
 static Vctl vctl[Nirq];
 
 /*
+ * A software copy of what we have actually enabled.
+ *
+ * The pending registers report sources that are ASSERTED, not sources
+ * that are enabled -- a peripheral nobody is listening to still shows a
+ * pending bit. Dispatching straight from pending therefore walks into
+ * sources this kernel never asked for and has no handler for.
+ *
+ * That stayed invisible while the timer was the only thing that ever
+ * fired. The moment USB began working on the board, the first unclaimed
+ * bit panicked the kernel with "unhandled IRQ" -- immediately after the
+ * transfer that finally succeeded.
+ */
+static u32int irqenabled[3];
+
+/* the last source that arrived with no handler; -1 if none has */
+int irqorphan = -1;
+
+/*
  * volatile, and not as a formality.
  *
  * These are Device-nGnRnE, where unaligned access is a fault regardless
@@ -101,12 +119,16 @@ intrenable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 	vctl[irq].name = name;
 	coherence();
 
-	if(irq < 32)
+	if(irq < 32){
+		irqenabled[0] |= 1 << irq;
 		INTREGS->GPUenable[0] = 1 << irq;
-	else if(irq < 64)
+	}else if(irq < 64){
+		irqenabled[1] |= 1 << (irq - 32);
 		INTREGS->GPUenable[1] = 1 << (irq - 32);
-	else
+	}else{
+		irqenabled[2] |= 1 << (irq - 64);
 		INTREGS->ARMenable = 1 << (irq - 64);
+	}
 }
 
 void
@@ -125,6 +147,13 @@ intrdisable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 		INTREGS->ARMdisable = 1 << (irq - 64);
 	coherence();
 
+	if(irq < 32)
+		irqenabled[0] &= ~(1 << irq);
+	else if(irq < 64)
+		irqenabled[1] &= ~(1 << (irq - 32));
+	else
+		irqenabled[2] &= ~(1 << (irq - 64));
+
 	vctl[irq].f = nil;
 	vctl[irq].a = nil;
 	vctl[irq].name = nil;
@@ -139,8 +168,15 @@ intrdisable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 static int
 intrrun(Ureg *u, int irq)
 {
-	if(vctl[irq].f == nil)
+	if(vctl[irq].f == nil){
+		/*
+		 * Record it so the panic can say WHICH source nobody
+		 * claimed. "unhandled IRQ" with no number sent the last
+		 * diagnosis to the register dump and a guess.
+		 */
+		irqorphan = irq;
 		return 0;
+	}
 	vctl[irq].f(u, vctl[irq].a);
 	return 1;
 }
@@ -157,12 +193,12 @@ intrgpu(Ureg *u)
 
 	handled = 0;
 
-	p = INTREGS->GPUpending[0];
+	p = INTREGS->GPUpending[0] & irqenabled[0];
 	for(i = 0; p != 0; i++, p >>= 1)
 		if(p & 1)
 			handled |= intrrun(u, i);
 
-	p = INTREGS->GPUpending[1];
+	p = INTREGS->GPUpending[1] & irqenabled[1];
 	for(i = 32; p != 0; i++, p >>= 1)
 		if(p & 1)
 			handled |= intrrun(u, i);
@@ -172,7 +208,7 @@ intrgpu(Ureg *u)
 	 * convenience; only the ARM-private sources in the low 8 bits are
 	 * ours to dispatch, or they would be handled twice.
 	 */
-	p = INTREGS->ARMpending & 0xFF;
+	p = INTREGS->ARMpending & 0xFF & irqenabled[2];
 	for(i = 64; p != 0; i++, p >>= 1)
 		if(p & 1)
 			handled |= intrrun(u, i);

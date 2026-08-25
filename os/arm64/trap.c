@@ -182,7 +182,8 @@ trap(Ureg *u)
 	 */
 	if(u->type == Tirq || u->type == Tirq0){
 		if(!irqdispatch(u)){
-			uartputstr("\ntrap: unhandled IRQ");
+			uartputstr("\ntrap: unhandled IRQ ");
+			uartputd(irqorphan);
 			dumpureg(u);
 			panic("unhandled IRQ");
 		}

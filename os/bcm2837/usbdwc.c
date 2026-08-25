@@ -285,6 +285,7 @@ chandone(void *a)
  */
 static int dwcdmaalias = 1;
 static int dwcdmaprobed;
+static int dwcchanlog;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
@@ -577,6 +578,30 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 				hc->hcchar |= Oddfrm;
 		}
 		hc->hcchar = (hc->hcchar &~ Chdis) | Chen;
+		/*
+		 * What the core did with the enable, immediately.
+		 *
+		 * The timeout dump shows hcchar with Chdis SET, and that
+		 * dump happens before anything in this driver tries to halt
+		 * the channel -- the line above explicitly clears Chdis as
+		 * it sets Chen. So on the first transfer, when hcchar starts
+		 * from zero, something other than this driver is setting it,
+		 * and the core setting Chdis itself means it refused to run
+		 * the channel rather than merely not having run it yet.
+		 *
+		 * gnptxsts is the other half: in DMA mode an OUT transfer
+		 * needs a free entry in the non-periodic request queue and a
+		 * free slot in the transmit FIFO. If either reads zero the
+		 * channel stays enabled and idle for ever, which is exactly
+		 * what we see, and neither was being read.
+		 */
+		if(dwcchanlog < 3){
+			dwcchanlog++;
+			print("usbotg: enabled ep%d.%d: hcchar %8.8ux "
+				"hcint %8.8ux gnptxsts %8.8ux hptxsts %8.8ux\n",
+				ep->dev->nb, ep->nb, hc->hcchar, hc->hcint,
+				ctlr->regs->gnptxsts, ctlr->regs->hptxsts);
+		}
 		clog(ep, hc);
 		if(ep->ttype == Tbulk && dir == Epin)
 			/*

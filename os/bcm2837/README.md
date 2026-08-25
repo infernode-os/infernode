@@ -86,40 +86,48 @@ interface.
 
 ## Building
 
-Everything needed is already present on a normal macOS dev box — no
-`brew install` required. There is deliberately no build script or mkfile
-yet: the linker path below is machine-specific, and pinning it into
-committed build rules would be wrong until the toolchain choice settles.
+The kernel is built by `tests/host/baremetal_test.sh`, and that is the
+only supported way to build it.
 
-```sh
-cd os/bcm2837
+That is deliberate rather than lazy. The build has to compile `os/port`,
+`os/ip`, `libinterp`, this board's drivers and a root filesystem, link
+them against a machine-specific `ld.lld`, generate `runt.h` and
+`sysmod.h` with the Limbo compiler, and compile the Limbo that goes into
+the image -- and the harness already does all of it, in the right
+order, with the two warnings that catch Plan 9 dialect errors escalated
+to errors. A second copy of that in a script would drift from the one
+that is actually exercised.
 
-LLD=~/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/ld.lld
-OBJCOPY=/opt/homebrew/opt/llvm/bin/llvm-objcopy
-CC="clang --target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only -O2 -Wall -Wextra"
+    BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
 
-$CC -c l.S -o l.o
-$CC -c uart.c -o uart.o
-$CC -c main.c -o main.o
-"$LLD" -T kernel.ld l.o uart.o main.o -o kernel8.elf
-"$OBJCOPY" -O binary kernel8.elf kernel8.img
-```
+leaves the artefacts in `/tmp/bm`:
 
-Note for zsh users: `$CC` above is written unquoted on purpose, but zsh
-does **not** word-split unquoted parameter expansions the way bash does.
-Run these under `sh`/`bash`, or paste the flags inline — otherwise clang
-swallows the whole string into `--target=` and fails with "invalid
-version in target triple".
+    bcm2837-kernel.img     the image -- rename to kernel8.img for a Pi
+    bcm2837-kernel.elf     the same thing unflattened, for addr2line
+    bcm2837-nojit.img      the same kernel with -DCFLAG=0, for the
+                           JIT comparison
+    cc.log                 every compiler and linker diagnostic
 
-Toolchain notes:
+Building through the test harness also means the image is never written
+unless it passed, which matters more when the target is a board than
+when it is QEMU: `build_kernel()` deletes the output before it starts,
+so a compile error cannot leave the previous kernel sitting there
+looking current. That has caught three separate rounds of confident
+wrong measurements on this branch.
 
-- **Compiler**: Apple clang, via `--target=aarch64-elf`. It emits real
+Toolchain, all present on a normal macOS dev box with no `brew install`:
+
+- **Compiler**: Apple clang via `--target=aarch64-elf`. It emits real
   ELF AArch64 objects; no GNU cross-gcc is needed.
-- **Linker**: `ld.lld`, taken from the rustup toolchain. Xcode ships no
-  `ld.lld`, and Homebrew's `llvm` formula omits it, so on a typical dev
-  box the rustup copy is the only ELF-capable linker available.
-- **objcopy**: Homebrew `llvm`'s `llvm-objcopy`, to flatten ELF into the
-  raw image the Pi boot ROM expects.
+- **Linker**: `ld.lld`. Xcode ships none and Homebrew's `llvm` formula
+  omits it, so the rustup toolchain's copy is usually the only
+  ELF-capable linker on the machine. The harness finds it.
+- **objcopy**: Homebrew `llvm`'s `llvm-objcopy`, to flatten the ELF
+  into the raw image the Pi boot ROM expects.
+
+If any of those is missing the harness SKIPS rather than fails, so a
+clean run with no output about the kernel means the toolchain was not
+found, not that everything passed.
 
 ## Running under QEMU
 
@@ -786,11 +794,38 @@ Limbo program calling `sys->pipe()` on a kernel without `#|` took the
 system down. Both halves fixed: `#|` imported, and a missing device is
 now an error to the caller rather than a panic.
 
-**2. Hardware bring-up.** Needs a 3.3V USB-serial adapter on GPIO
-14/15 and a FAT32 card with the Broadcom blobs plus `config.txt`
-carrying `arm_64bit=1`, `enable_uart=1`, and — critically —
-`dtoverlay=disable-bt`, because on a Pi 3 the PL011 is wired to
-Bluetooth by default and the console comes out of the mini-UART instead.
+**2. Hardware bring-up.** The card needs a FAT32 partition holding the
+Broadcom blobs (`bootcode.bin`, `start.elf`, `fixup.dat` from
+raspberrypi/firmware), a `config.txt`, and this kernel named
+`kernel8.img`:
+
+    BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
+    cp /tmp/bm/bcm2837-kernel.img /Volumes/<card>/kernel8.img
+
+`config.txt` wants three lines:
+
+    arm_64bit=1
+    enable_uart=1
+    dtoverlay=disable-bt
+
+The third is the one that costs an afternoon if it is missing. On a Pi
+3 the PL011 is wired to Bluetooth by default and the mini-UART is on
+the header instead -- so the console comes out of a different device at
+a different clock, and the symptom is a board that boots to silence.
+`kernel.ld` links at 0x80000, which is where the boot ROM loads
+`kernel8.img` in 64-bit mode, so no `kernel_address` is needed.
+
+Console is a 3.3V USB-serial adapter on GPIO 14/15 (pins 8 and 10),
+ground to pin 6. **Not 5V**: the Pi's GPIO is not 5V tolerant.
+
+Two things are known to be untested on hardware and are the first to
+watch. The JIT has never run on a real Cortex-A53, and QEMU's TCG does
+not model split I/D caches, so missing icache maintenance is invisible
+in emulation and would present as executing stale instructions. And
+every USB finding on this branch is against QEMU's DWC model; the
+board's controller is the real thing behind a real high-speed hub, so
+the split-transaction paths that never execute under emulation will
+execute there.
 
 **3. USB — the host stack is in, the class driver is next.** The 3B+'s
 LAN7515 sits behind USB, so a DWC2 host stack gates wired Ethernet

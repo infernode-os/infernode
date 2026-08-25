@@ -58,6 +58,7 @@ extern Dev progdevtab;
 extern Dev pipedevtab;
 extern Dev usbdevtab;
 extern Dev mntdevtab;
+extern Dev envdevtab;
 extern Dev ipdevtab;
 
 Dev*	devtab[] =
@@ -68,6 +69,7 @@ Dev*	devtab[] =
 	&pipedevtab,		/* '|' -- #|, pipes */
 	&usbdevtab,		/* 'u' -- #u, USB endpoints */
 	&mntdevtab,		/* 'M' -- #M, the 9P client */
+	&envdevtab,		/* 'e' -- #e, the environment */
 	&ipdevtab,		/* 'I' -- #I, the IP stack */
 	nil,
 };

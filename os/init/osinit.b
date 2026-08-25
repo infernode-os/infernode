@@ -130,6 +130,23 @@ init()
 		sys->print("init: cannot bind #p on /prog: %r\n");
 
 	#
+	# And the environment on /env.
+	#
+	# Inferno has no environ array: a variable IS a file, and
+	# inheritance is a namespace operation rather than a copy. Until
+	# #e was imported this kernel had noenv.c -- whose own header
+	# said "use this when devenv.c not used" -- so a Limbo program
+	# could not read or set a variable at all.
+	#
+	# MCREATE as well as MREPL: setting a variable CREATES a file, so
+	# a mount point that forbids creation makes the environment
+	# readable and not writable -- "mounted directory forbids
+	# creation" from the shell, on what looks like an ordinary
+	# assignment.
+	if(sys->bind("#e", "/env", Sys->MREPL|Sys->MCREATE) < 0)
+		sys->print("init: cannot bind #e on /env: %r\n");
+
+	#
 	# And the USB device framework on /usb. Same reason as the others:
 	# '#' begins a comment in the shell, so the device name cannot be
 	# typed, and a bus you cannot look at is a bus you cannot bring up.
@@ -576,7 +593,6 @@ usbprobe()
 	}
 
 	enumerate("/usb/usb/ep1.0/ctl", 1, speedname(status), "");
-	usbreport();
 }
 
 #
@@ -799,21 +815,6 @@ eptype(t: int): string
 	return "?";
 }
 
-#
-# Ask the controller how many interrupts it has actually raised.
-#
-# Worth doing explicitly: every wait in the USB driver is a sleep that
-# an interrupt is supposed to end, and a driver whose interrupts never
-# arrive looks exactly like one whose interrupts work, right up until
-# it is asked to wait for something that has not already happened.
-#
-usbreport()
-{
-	c := sys->open("/usb/usb/ctl", Sys->OWRITE);
-	if(c == nil)
-		return;
-	sys->fprint(c, "dump");
-}
 
 #
 # Walk a real hub: read how many ports it has, power them, and

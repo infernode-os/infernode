@@ -1244,6 +1244,14 @@ probesysfile(void)
 	kstrdup(&p->env->user, eve);	/* run as the host owner */
 	p->env->pgrp = newpgrp();
 	p->env->fgrp = newfgrp(nil);
+	/*
+	 * And an environment group. #e refuses to attach without one --
+	 * envattach() errors with Enodev if up->env->egrp is nil -- so
+	 * without this the environment device is present in the devtab
+	 * and unusable, which reports as "no free devices" and sounds
+	 * like something else entirely.
+	 */
+	p->env->egrp = newegrp();
 	if(p->env->pgrp == nil || p->env->fgrp == nil){
 		print("file: no namespace\n");
 		return;

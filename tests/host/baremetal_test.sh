@@ -236,6 +236,7 @@ build_kernel() {
             "/net="
             "/prog="
             "/usb="
+            "/env="
             "/dis/sh.dis=$ROOT/dis/sh.dis"
             "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
             "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
@@ -494,7 +495,7 @@ p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
 try:
-    time.sleep(3)                 # boot, then reach the prompt
+    time.sleep(8)                 # boot, then reach the prompt
     for c in cmds:
         p.stdin.write(c.encode() + b"\n")
         p.stdin.flush()
@@ -770,6 +771,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo shell-is-alive' \
         'ls /dis' \
         'echo piped-through | cat' \
+        'echo env-round-trip > /env/probe' \
+        'cat /env/probe' \
         'q=`{echo one two three}; echo subst-count $#q' \
         'load std' \
         'for(i in a b c){ echo loop-$i }' \
@@ -804,6 +807,17 @@ if grep -v 'echo ' <<<"$SHOUT" | grep -q 'piped-through'; then
     pass "pipelines work (echo | cat)"
 else
     fail "pipeline produced no output"
+fi
+
+# #e, exercised from the shell rather than merely linked. Setting a
+# variable CREATES a file, so this needs both the device and a mount
+# point that permits creation: binding it MREPL without MCREATE gives
+# "mounted directory forbids creation" on an ordinary assignment, and
+# the failed create then took the kernel down with "panic: cclose".
+if grep -v 'echo ' <<<"$SHOUT" | grep -q 'env-round-trip'; then
+    pass "#e stores and returns a variable through /env"
+else
+    fail "environment variable did not round-trip through /env"
 fi
 
 if grep -q 'subst-count 3' <<<"$SHOUT"; then

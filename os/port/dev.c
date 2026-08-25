@@ -95,14 +95,28 @@ devattach(int tc, char *spec)
 {
 	Chan *c;
 	char *buf;
+	int n;
 
 	c = newchan();
 	mkqid(&c->qid, 0, 0, QTDIR);
 	c->type = devno(tc, 0);
 	if(spec == nil)
 		spec = "";
-	buf = smalloc(4+strlen(spec)+1);
-	sprint(buf, "#%C%s", tc, spec);
+	/*
+	 * snprint, with the size this buffer actually has.
+	 *
+	 * sprint() passes vseprint a bound of s+PRINTSIZE whatever the
+	 * caller's buffer really is, so its safety here is an argument
+	 * rather than a check: 4 covers '#' plus a %C rune at UTFmax,
+	 * and the +1 the terminator, so it does fit. It fits for every
+	 * sprint() caller in this tree -- that was swept -- but this is
+	 * the only one whose buffer is sized at runtime from a caller's
+	 * string, which makes it the only one where the argument has to
+	 * be re-made every time the format changes.
+	 */
+	n = 4+strlen(spec)+1;
+	buf = smalloc(n);
+	snprint(buf, n, "#%C%s", tc, spec);
 	c->name = newcname(buf);
 	free(buf);
 	return c;

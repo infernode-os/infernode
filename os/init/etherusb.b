@@ -266,7 +266,8 @@ family: Family;
 
 convs: array of ref Conv;
 mac := array[6] of byte;
-bulkfd: ref Sys->FD;
+bulkfd: ref Sys->FD;		# bulk IN
+bulkoutfd: ref Sys->FD;		# bulk OUT; the same fd when one endpoint serves both
 tc: chan of ref Tmsg;
 srv: ref Styxserver;
 rxq: chan of (int, array of byte);
@@ -359,55 +360,63 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	#
-	# The bulk endpoint. One Ep in both directions -- devusb keeps a
-	# toggle per direction, so a single "rw" endpoint is a pair of
-	# pipes, and asking for two separate ones on the same number is
-	# rejected as already in use.
+	# The bulk endpoints, on the numbers the DEVICE declares.
 	#
-	if(sys->fprint(ctl, "new 2 bulk rw") < 0){
-		sys->print("etherusb: cannot create the bulk endpoint: %r\n");
-		return;
-	}
-
+	# This asked for endpoint 2 read-write, because the RNDIS adapter
+	# it was written against puts both directions on 2. The LAN7800
+	# does not: bulk IN is endpoint 1 and bulk OUT is endpoint 2. So
+	# every write went to the right place and every read was aimed at
+	# an IN endpoint that does not exist -- which the controller
+	# reports as a transaction error, not as an empty read, and which
+	# is why ep4.2 returned intr 00000082 on every attempt including
+	# inside PHY loopback where a frame had definitely been sent.
 	#
-	# The name is constructed, not read back.
-	#
-	# "newdev" stashes the new endpoint's name for the next read of
-	# the ctl file; "new" does not -- it only calls newdevep -- so
-	# reading here returns this endpoint's own status line instead,
-	# which looks enough like an answer to be mistaken for one. The
-	# name is determined anyway: same device, endpoint 2.
-	#
-	bulk := epname(dev, 2);
-
-	#
-	# The new endpoint inherits nothing. devusb's newdevep leaves
-	# maxpkt at the 8 that epalloc starts every endpoint with, and
-	# "maxpkt 64" on the CONTROL endpoint earlier said nothing about
-	# this one -- so without this the driver would move bulk data in
-	# 8-byte packets and be told, correctly, that everything worked.
-	# The size is the device's own answer, from its configuration
-	# descriptor -- which is what this says and, until now, was not
-	# what it did: it wrote a constant 64. That is right for a
-	# full-speed bulk endpoint and wrong for a high-speed one, which
-	# is 512. The RNDIS adapter this was developed against sat behind
-	# QEMU's USB 1.1 hub, so 64 was correct there and nowhere else.
-	# On the 3B+ every device is high speed, and a 512-byte packet
-	# arriving at a 64-byte expectation is a babble, reported as
-	# "usbotg: ep4.2 error intr 00000082" -- Chhltd|Xacterr.
+	# When both directions share a number, one "rw" endpoint is still
+	# the right answer: devusb keeps a toggle per direction, so that
+	# is already a pair of pipes, and asking for two on the same
+	# number is rejected as already in use.
 	#
 	dumpendpoints();
-	mp := bulkmaxpkt();
-	if(mp <= 0){
-		sys->print("etherusb: cannot read the bulk packet size\n");
+	(inep, outep, mp) := bulkeps();
+	if(inep < 0 || outep < 0){
+		sys->print("etherusb: no pair of bulk endpoints\n");
 		return;
 	}
-	bctl := sys->open("/usb/usb/" + bulk + "/ctl", Sys->ORDWR);
-	if(bctl == nil || sys->fprint(bctl, "maxpkt %d", mp) < 0){
-		sys->print("etherusb: cannot set the bulk packet size: %r\n");
-		return;
+
+	inname := "";
+	outname := "";
+	if(inep == outep){
+		if(sys->fprint(ctl, "new %d bulk rw", inep) < 0){
+			sys->print("etherusb: cannot create the bulk endpoint: %r\n");
+			return;
+		}
+		inname = epname(dev, inep);
+		outname = inname;
+	}else{
+		if(sys->fprint(ctl, "new %d bulk r", inep) < 0 ||
+		   sys->fprint(ctl, "new %d bulk w", outep) < 0){
+			sys->print("etherusb: cannot create the bulk endpoints: %r\n");
+			return;
+		}
+		inname = epname(dev, inep);
+		outname = epname(dev, outep);
 	}
-	sys->print("etherusb: %s bulk endpoint is %s, maxpkt %d\n", dev, bulk, mp);
+
+	#
+	# The new endpoints inherit nothing. devusb's newdevep leaves
+	# maxpkt at the 8 that epalloc starts every endpoint with, and
+	# "maxpkt 64" on the CONTROL endpoint earlier said nothing about
+	# these -- so without this the driver would move bulk data in
+	# 8-byte packets and be told, correctly, that everything worked.
+	# The size is the device's own answer, from its endpoint
+	# descriptor: 512 for high speed, 64 for full.
+	#
+	if(setmaxpkt(inname, mp) < 0)
+		return;
+	if(outname != inname && setmaxpkt(outname, mp) < 0)
+		return;
+	sys->print("etherusb: %s bulk in %s out %s, maxpkt %d\n",
+		dev, inname, outname, mp);
 
 	if(family.setup() < 0)
 		return;
@@ -416,10 +425,19 @@ init(nil: ref Draw->Context, argv: list of string)
 		dev, family.name, int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5]);
 
-	bulkfd = sys->open("/usb/usb/" + bulk + "/data", Sys->ORDWR);
+	bulkfd = sys->open("/usb/usb/" + inname + "/data", Sys->ORDWR);
 	if(bulkfd == nil){
-		sys->print("etherusb: cannot open %s: %r\n", bulk);
+		sys->print("etherusb: cannot open %s: %r\n", inname);
 		return;
+	}
+	if(outname == inname)
+		bulkoutfd = bulkfd;
+	else {
+		bulkoutfd = sys->open("/usb/usb/" + outname + "/data", Sys->ORDWR);
+		if(bulkoutfd == nil){
+			sys->print("etherusb: cannot open %s: %r\n", outname);
+			return;
+		}
 	}
 
 	#
@@ -495,6 +513,63 @@ dumpendpoints()
 		i += dlen;
 	}
 }
+
+#
+# The bulk endpoint numbers and packet size, from the configuration
+# descriptor. Returns (in, out, maxpkt), each -1 if not found.
+#
+# Walked rather than indexed: a configuration is a run of
+# variable-length descriptors packed end to end, each "length, type".
+#
+bulkeps(): (int, int, int)
+{
+	hdr := array[9] of byte;
+
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
+		return (-1, -1, -1);
+	total := int hdr[2] | (int hdr[3] << 8);
+	if(total < len hdr || total > 512)
+		return (-1, -1, -1);
+	cfg := array[total] of byte;
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
+		return (-1, -1, -1);
+
+	inep := -1;
+	outep := -1;
+	mp := -1;
+	for(i := 0; i + 2 <= total; ){
+		dlen := int cfg[i];
+		if(dlen < 2)
+			break;
+		if(int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2){
+			addr := int cfg[i+2];
+			sz := int cfg[i+4] | (int cfg[i+5] << 8);
+			if(addr & 16r80){
+				if(inep < 0){
+					inep = addr & 16rF;
+					mp = sz;
+				}
+			}else if(outep < 0)
+				outep = addr & 16rF;
+		}
+		i += dlen;
+	}
+	return (inep, outep, mp);
+}
+
+#
+# Tell devusb the packet size for an endpoint it just created.
+#
+setmaxpkt(name: string, mp: int): int
+{
+	fd := sys->open("/usb/usb/" + name + "/ctl", Sys->ORDWR);
+	if(fd == nil || sys->fprint(fd, "maxpkt %d", mp) < 0){
+		sys->print("etherusb: cannot set %s packet size: %r\n", name);
+		return -1;
+	}
+	return 0;
+}
+
 
 #
 # wMaxPacketSize of the first bulk endpoint, from the configuration
@@ -1212,7 +1287,7 @@ transmit(frame: array of byte): int
 {
 	buf := family.wrap(frame);
 
-	if(sys->write(bulkfd, buf, len buf) != len buf)
+	if(sys->write(bulkoutfd, buf, len buf) != len buf)
 		return -1;
 	return 0;
 }

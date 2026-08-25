@@ -784,7 +784,7 @@ check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
 # answer means the whole chain worked -- SET_CONFIGURATION, a bulk
 # endpoint created through #u, and an RNDIS request/response pair
 # carried on class control transfers to an interface.
-check "etherusb: ep3.0 bulk endpoint is ep3.2" "the driver creates a bulk endpoint through #u"
+check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u"
 check "etherusb: RNDIS 1.0, max transfer 1580" "the RNDIS handshake completes"
 check "etherusb: ep3.0 rndis, MAC 52:54:00:12:34:57" "the family is chosen and the MAC read out of the device"
 check "etherusb: ep3.0 ready"                  "the packet filter is accepted"

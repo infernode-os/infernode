@@ -185,6 +185,19 @@ Lfcten:		con 1 << 31;		# FCT_{RX,TX}_CTL: enable
 Lrxen:		con 16r00000001;	# MAC_RX: receiver enable
 Lmaccr:		con 16r100;		# MAC_CR
 Lmacloop:	con 16r00000400;	# MAC_CR: loopback, no PHY involved
+Lmacadp:	con 16r00002000;	# MAC_CR: automatic duplex polarity
+Lmacautodup:	con 16r00001000;	# MAC_CR: follow the PHY's duplex
+Lmacautospd:	con 16r00000800;	# MAC_CR: follow the PHY's speed
+Lmacfull:	con 16r00000008;	# MAC_CR: full duplex
+Lmacspd100:	con 16r00000002;	# MAC_CR: 100Mb/s
+Lmacspdmask:	con 16r00000006;	# MAC_CR: speed field
+
+#
+# MAC_RX carries the largest frame the receiver will accept in bits
+# 16-29. At reset it is ZERO, so every frame is oversized and dropped.
+#
+Lrxmaxshift:	con 16;
+Lrxfcsstrip:	con 16r00000010;	# MAC_RX: strip the FCS
 
 # which loop lanloopback() should close
 Lpby:		con 0;			# inside the PHY
@@ -1739,6 +1752,18 @@ lanloopback(mode: int): int
 		return -1;
 
 	if(mode == Lpby){
+		#
+		# Force the MAC to the speed the PHY is being forced to.
+		# Left on automatic it follows a PHY that, in loopback with
+		# no link partner, has nothing to report -- so the two ends
+		# of the same chip disagree about the clock and no data
+		# moves.
+		#
+		if(lanwr(Lmaccr, (cr & ~(Lmacadp|Lmacautodup|Lmacautospd|Lmacspdmask))
+				| Lmacspd100 | Lmacfull) < 0){
+			sys->print("etherusb: cannot force MAC speed: %r\n");
+			return -1;
+		}
 		if(lanmiiwr(Mbmcr, Mbmcrloop | Mbmcr100 | Mbmcrfull) < 0){
 			sys->print("etherusb: cannot enter PHY loopback: %r\n");
 			return -1;
@@ -2092,7 +2117,31 @@ lansetup(): int
 		return -1;
 	}
 
-	if(lanwr(Lmactx, Ltxen) < 0 || lanwr(Lmacrx, Lrxen) < 0){
+	#
+	# Tell the receiver how large a frame may be, and let the MAC
+	# follow the PHY's speed.
+	#
+	# MAC_RX's max-size field is zero at reset, which means every
+	# frame that arrives is oversized and discarded -- a receiver
+	# enabled and configured to accept nothing. And MAC_CR came up
+	# 00003000: automatic duplex, but automatic SPEED clear and the
+	# speed field zero, which is 10Mb/s. A MAC clocked for 10 against
+	# a PHY doing anything else moves no data and reports nothing
+	# about why.
+	#
+	# Both were missing, and either alone is enough to produce a link
+	# that looks fine and a receiver that never delivers a frame.
+	#
+	(ec, cr) := lanrd(Lmaccr);
+	if(ec < 0)
+		return -1;
+	if(lanwr(Lmaccr, cr | Lmacadp | Lmacautodup | Lmacautospd) < 0){
+		sys->print("etherusb: LAN78xx MAC_CR setup failed: %r\n");
+		return -1;
+	}
+
+	if(lanwr(Lmactx, Ltxen) < 0 ||
+	   lanwr(Lmacrx, (Maxframe << Lrxmaxshift) | Lrxfcsstrip | Lrxen) < 0){
 		sys->print("etherusb: LAN78xx MAC enable failed: %r\n");
 		return -1;
 	}

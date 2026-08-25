@@ -1328,6 +1328,7 @@ portreset(Hci *hp, int port, int on)
 	Ctlr *ctlr;
 	Dwcregs *r;
 	int b, s;
+	uint spd, want;
 
 	assert(port == 1);
 	ctlr = hp->aux;
@@ -1346,6 +1347,49 @@ portreset(Hci *hp, int port, int on)
 	dprint("usbotg reset=%d; sts %#x\n", on, s);
 	if((s & Prtena) == 0)
 		print("usbotg: host port not enabled after reset");
+
+	/*
+	 * Make the PHY clock follow the speed the port actually came up
+	 * at, and say what that was.
+	 *
+	 * hcfg's Fslspclksel selects 30/60MHz for a high-speed PHY or
+	 * 48MHz for full/low speed, and it is NOT self-configuring: the
+	 * core keeps whatever was there across the reset. Leave it at
+	 * 30/60MHz while the port enumerates a full-speed device and the
+	 * host has the wrong bit clock for the bus it is driving -- at
+	 * which point a channel can be enabled, correctly programmed,
+	 * with queue space free, and simply never run. That is the
+	 * symptom this port has had all along, and the register was
+	 * never being written.
+	 *
+	 * Changing the selection requires another port reset for it to
+	 * take effect, which is why this is done here rather than at
+	 * init: init does not yet know the speed.
+	 *
+	 * Nothing in emulation depends on the PHY bit clock, so this is
+	 * invisible under QEMU in either state.
+	 */
+	spd = s & Prtspd;
+	want = spd == HIGHSPEED ? HCFG_30_60_MHZ : HCFG_48_MHZ;
+	print("usbotg: port %s speed, hport0 %8.8ux, hcfg %8.8ux -> clk %s\n",
+		spd == HIGHSPEED ? "high" :
+		spd == FULLSPEED ? "full" :
+		spd == LOWSPEED ? "low" : "reserved",
+		s, r->hcfg,
+		want == HCFG_30_60_MHZ ? "30/60MHz" : "48MHz");
+
+	if((r->hcfg & Fslspclksel) != want){
+		r->hcfg = (r->hcfg & ~Fslspclksel) | want;
+		r->hport0 = Prtpwr | Prtrst;
+		tsleep(&up->sleep, return0, 0, ResetdelayHS);
+		r->hport0 = Prtpwr;
+		tsleep(&up->sleep, return0, 0, Enabledelay);
+		s = r->hport0;
+		b = s & (Prtconndet|Prtenchng|Prtovrcurrchng);
+		if(b != 0)
+			r->hport0 = Prtpwr | b;
+		print("usbotg: re-reset after clock change, hport0 %8.8ux\n", s);
+	}
 	return 0;
 }
 

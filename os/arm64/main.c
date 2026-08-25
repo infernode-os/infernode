@@ -231,6 +231,44 @@ checkunaligned(void)
  * Bounded by the generic timer's free-running counter, so a dead
  * interrupt line reports rather than hangs.
  */
+/*
+ * Does anything arrive on the UART's receive side?
+ *
+ * Output has worked since the first boot, so the line, the adapter and
+ * the baud are all right in one direction. Input has never been tested
+ * on hardware at all -- it works under QEMU, which proves only that the
+ * software path is sound.
+ *
+ * This asks the lowest level directly, bypassing the console queue, the
+ * kbd drainer and the shell: if a byte reaches uartgetc() the fault is
+ * above here, and if none does the fault is below -- the receive
+ * enable, the pin mux, or a wire that was never connected because
+ * nothing until now needed it.
+ */
+static void
+probeuartin(void)
+{
+	u64int deadline;
+	int c, n;
+
+	uartputstr("uart: send any character within 3 seconds to test input\n");
+
+	n = 0;
+	deadline = clockcount() + 3*clockfreq();
+	while(clockcount() < deadline){
+		c = uartgetc();
+		if(c >= 0){
+			n++;
+			if(n == 1)
+				print("uart: input OK, first byte %#2.2ux\n", c);
+		}
+	}
+	if(n == 0)
+		print("uart: NO INPUT -- nothing reached the receive FIFO\n");
+	else
+		print("uart: input OK, %d byte(s) received\n", n);
+}
+
 static int intrprobefired;
 
 enum { Intprobechan = 3 };		/* system timer compare channel */
@@ -1918,6 +1956,7 @@ kmain(void)
 	probeqio();
 	probeclock();
 	probeintr();
+	probeuartin();
 	boardfbprobe();
 
 	uartputstr("\nboot OK\n");

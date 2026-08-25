@@ -315,9 +315,13 @@ restart:
 			if(++ntmout > Maxtmout){
 				hc->hcchar |= Chdis;
 				print("usbotg: ep%d.%d transfer timed out "
-					"(hcint %8.8ux hcchar %8.8ux gintsts %8.8ux)\n",
+					"(hcint %8.8ux hcchar %8.8ux gintsts %8.8ux\n"
+					"usbotg:   hcdma %8.8ux hctsiz %8.8ux "
+					"haint %8.8ux haintmsk %8.8ux gahbcfg %8.8ux)\n",
 					ep->dev->nb, ep->nb, hc->hcint,
-					hc->hcchar, r->gintsts);
+					hc->hcchar, r->gintsts,
+					hc->hcdma, hc->hctsiz,
+					r->haint, r->haintmsk, r->gahbcfg);
 				error(Eio);
 			}
 			continue;

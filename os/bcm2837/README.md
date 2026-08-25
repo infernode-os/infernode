@@ -774,6 +774,74 @@ IminLine, `dsb ish`, `isb`. It takes a `ulong` length, so unlike
 negative. Static review is as far as this can be taken: TCG does not
 model split I/D caches, so the only real test is the board.
 
+### First hardware bring-up: what emulation could not have told us
+
+The port ran on a real Pi 3B+ for the first time and everything above
+the drivers worked on the first attempt: boot, EL2->EL1, MMU, both
+timers cross-checked, interrupts, the Dis VM, the JIT, the IP stack,
+ICMP and TCP over loopback, and a shell prompt. `midr_el1` reads
+0x410fd034 (Cortex-A53 r0p4), board rev a020d3, 948MB. The generic
+timer is 19.2MHz here against 62.5MHz under QEMU and the two clocks
+still agree, so no frequency had been baked in anywhere.
+
+What follows is the part worth keeping: every bug found on the board
+was invisible in emulation, and three of them were mine in ways QEMU
+could not have exposed.
+
+**A bus address is not a physical address.** `chanio` programmed
+`hc->hcdma = PADDR(a)`. The DWC OTG core is a bus master on the
+VideoCore side and sees memory through ITS addresses -- the same
+reason `mailbox.c` uses `BUSADDR`, a macro that had been sitting in
+io.h with exactly one caller. QEMU does not model the alias, so PADDR
+is correct there and only there. **Any DMA on this SoC needs BUSADDR;
+if a new driver's transfers silently never happen, look here first.**
+
+**An unbounded wait is a machine-killer, not a driver bug.**
+`chanwait()` slept indefinitely for a transfer to complete. Under
+emulation transfers always completed, so it never mattered. On the
+board it took the whole machine down -- no console output, no response
+to input -- which meant there was no shell left to ask what had gone
+wrong and no way to reboot but the power switch. Bounding it turned a
+dead board into a printed fault, and that printed fault is what found
+the bus-address bug one iteration later. **Bound every wait on a
+device that can fail to answer.**
+
+**A self-test can be a false alarm with a confident name.** A
+start-of-frame probe unmasked SOF and waited 50ms from inside the USB
+`init()` -- which runs before the root port has been reset or enabled,
+and an unenabled port carries no frames. It reported "controller
+interrupt NEVER ARRIVES" on every real boot for a controller behaving
+perfectly correctly, and sent me chasing an inherited-FIQ theory that
+a register dump then refuted. It has been deleted. **A test that can
+report failure for a legitimate condition is worse than no test**, and
+this one cost two iterations and a wrong hypothesis committed to the
+history.
+
+**Console input had never been exercised.** Output worked from the
+first boot, which proves the line, the adapter and the baud in one
+direction only. Nothing had ever typed at the board. Under
+investigation.
+
+### Working on the board without moving the card
+
+`serialboot` lives on the card and pulls the kernel over the UART on
+every reset -- see the commit that added it. The loop is: build, send
+(about a minute for 618KB at 115200), watch. `reboot()` is implemented
+via the watchdog, since this SoC has no reset line, so once the
+console accepts input the loop needs nobody at the power switch.
+
+The `config.txt` recipe that works, with `init_uart_clock` pinned
+because uart.c divides for 115200 assuming 48MHz and the firmware, not
+the kernel, decides what that reference is:
+
+    kernel=serialboot.img
+    arm_64bit=1
+    dtoverlay=disable-bt
+    init_uart_clock=48000000
+
+`infernode8.img` is kept alongside as a fallback: swapping the
+`kernel=` line boots a kernel directly, without a host feeding one.
+
 ### Smaller things still open
 
 `sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,

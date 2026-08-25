@@ -589,6 +589,51 @@ def record_tokens(record):
                 if "=" in token)
 
 
+def audit_lifecycle_errors(records, activities):
+    terminal = {"complete", "completed", "done", "idle", "failed", "error",
+                "timeout", "closed", "hidden"}
+    done, timedout = set(), set()
+    calls, results = {}, {}
+    for record in records:
+        tokens = record_tokens(record)
+        activity = tokens.get("activity")
+        event = record["event"]
+        if event == "agentdone" and activity is not None:
+            done.add(activity)
+        elif event == "childtimeout" and activity is not None:
+            timedout.add(activity)
+        elif event in ("toolcall", "toolres"):
+            key = (activity, tokens.get("step"), tokens.get("tool"))
+            counts = calls if event == "toolcall" else results
+            counts[key] = counts.get(key, 0) + 1
+
+    errors = []
+    children = {str(a["id"]): a for a in activities if str(a["id"]) != "0"}
+    for activity in sorted(children, key=lambda value: (len(value), value)):
+        status = children[activity].get("status", "").strip().lower()
+        state = status.split(":", 1)[0]
+        if activity in timedout:
+            if state != "timeout":
+                errors.append(f"activity {activity} timeout record disagrees with status {status!r}")
+            else:
+                errors.append(f"activity {activity} timed out before reaching a terminal state")
+        elif state not in terminal:
+            errors.append(f"activity {activity} is non-terminal with status {status!r}")
+        if activity not in done and activity not in timedout:
+            errors.append(f"activity {activity} has no signed terminal record")
+
+    for activity in sorted(timedout - set(children), key=lambda value: (len(value), value)):
+        errors.append(f"timeout record names missing activity {activity}")
+    for key in sorted(set(calls) | set(results), key=lambda item: tuple(str(v) for v in item)):
+        pending = calls.get(key, 0) - results.get(key, 0)
+        activity, step, tool = key
+        if pending > 0 and activity not in timedout:
+            errors.append(f"unmatched toolcall activity={activity} step={step} tool={tool} count={pending}")
+        elif pending < 0:
+            errors.append(f"toolres without toolcall activity={activity} step={step} tool={tool} count={-pending}")
+    return errors
+
+
 def build_actor_timeline(records, payloads):
     """Per-record timeline, ordered by sequence, with the actor attached."""
     by_score = dict(payloads)
@@ -1128,6 +1173,8 @@ def main():
             required_events = tuple(sc.get("audit_events") or AUDIT_EVENTS)
             audit_errors, audit_payloads, audit_records = verify_audit_bundle(
                 audit_dir, st["lifecycle"], required_events)
+            audit_errors.extend(audit_lifecycle_errors(
+                audit_records, st["activities"]))
 
         # Reconstruct the actor timeline from the chain (INFR-408). Only
         # verified records are admissible: a bundle with errors is not a

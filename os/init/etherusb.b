@@ -55,6 +55,8 @@ Rd2h:		con 16r80;
 Rclass:		con 16r20;
 Riface:		con 1;		# recipient: interface
 
+Rgetdesc:	con 6;		# GET_DESCRIPTOR
+Ddev:		con 1;		# descriptor type: device
 Rsetconf:	con 9;		# SET_CONFIGURATION
 Rgetconf:	con 8;		# GET_CONFIGURATION
 
@@ -129,6 +131,39 @@ Conv: adt {
 	outpkt:	int;
 };
 
+#
+# THE DRIVER FAMILY TABLE.
+#
+# USB Ethernet is not one protocol. What a device wants said to it
+# before it will carry frames, and what it wraps each frame in, differ
+# completely between families -- so those two things are per-family and
+# everything else in this program is not.
+#
+#   setup    bring the device to the point of carrying frames, and
+#            leave its MAC in mac[]. Returns 0, or -1 having said why.
+#   wrap     build the bytes to write for one outbound frame.
+#   unwrap   given a buffer, return (bytes consumed, the frame within),
+#            or (0, nil) if it does not yet hold a whole message, or
+#            (-1, nil) if it never will.
+#
+# Adding a family is filling in an entry. That is deliberate: the one
+# that matters on the actual board -- LAN78xx, for the 3B+'s LAN7515 --
+# cannot be written honestly from memory and has to be developed
+# against the hardware, so the seam it will need exists first and is
+# exercised by the family that can be tested.
+#
+Family: adt {
+	name:	string;
+	vid:	int;			# -1 matches any
+	pid:	int;
+	setup:	ref fn(): int;
+	wrap:	ref fn(frame: array of byte): array of byte;
+	unwrap:	ref fn(buf: array of byte, n: int): (int, array of byte);
+};
+
+families: array of Family;
+family: Family;
+
 convs: array of ref Conv;
 mac := array[6] of byte;
 bulkfd: ref Sys->FD;
@@ -168,6 +203,31 @@ init(nil: ref Draw->Context, argv: list of string)
 	ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
 	if(ctl == nil || ep0 == nil){
 		sys->print("etherusb: cannot open %s: %r\n", dev);
+		return;
+	}
+
+	families = array[] of {
+		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap),
+	};
+
+	#
+	# Which family. Chosen from the device's identity rather than
+	# assumed, so an unrecognised device is refused with its numbers
+	# rather than driven with the wrong protocol -- which on a NIC
+	# means a link that comes up and silently carries nothing.
+	#
+	(vid, pid) := devid();
+	found := 0;
+	for(i := 0; i < len families; i++)
+		if((families[i].vid < 0 || families[i].vid == vid) &&
+		   (families[i].pid < 0 || families[i].pid == pid)){
+			family = families[i];
+			found = 1;
+			break;
+		}
+	if(!found){
+		sys->print("etherusb: %s is %#4.4x:%#4.4x, no driver family\n",
+			dev, vid, pid);
 		return;
 	}
 
@@ -221,33 +281,13 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 	sys->print("etherusb: %s bulk endpoint is %s\n", dev, bulk);
 
-	if(rndisinit() < 0)
+	if(family.setup() < 0)
 		return;
 
-	#
-	# No ":=" here. The MAC is module-level state because the stats
-	# file has to report it long after init() returns, and declaring
-	# it again would make a local that shadows it -- leaving the
-	# global zero, the stats file answering "addr: 000000000000",
-	# and every frame going out from 00:00:00:00:00:00. Which is
-	# exactly what happened: the ARP requests were sent and answered,
-	# and the replies were addressed to a MAC no device owned.
-	#
-	if(rndisquery(Oidmac, mac) < 0){
-		sys->print("etherusb: cannot read the MAC address: %r\n");
-		return;
-	}
-
-	sys->print("etherusb: %s MAC %2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x\n",
-		dev, int mac[0], int mac[1], int mac[2],
+	sys->print("etherusb: %s %s, MAC %2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x\n",
+		dev, family.name, int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5]);
 
-	filter := array[4] of byte;
-	put4(filter, 0, Filterdefault);
-	if(rndisset(Oidfilter, filter) < 0){
-		sys->print("etherusb: cannot set the packet filter: %r\n");
-		return;
-	}
 	bulkfd = sys->open("/usb/usb/" + bulk + "/data", Sys->ORDWR);
 	if(bulkfd == nil){
 		sys->print("etherusb: cannot open %s: %r\n", bulk);
@@ -939,16 +979,7 @@ deliver(ci: int, frame: array of byte)
 #
 transmit(frame: array of byte): int
 {
-	buf := array[Rnishdr + len frame] of byte;
-	for(i := 0; i < Rnishdr; i++)
-		buf[i] = byte 0;
-
-	put4(buf, 0, Rnisdata);
-	put4(buf, 4, len buf);
-	# DataOffset counts from byte 8 of the message, not from its start
-	put4(buf, 8, Rnishdr - 8);
-	put4(buf, 12, len frame);
-	buf[Rnishdr:] = frame;
+	buf := family.wrap(frame);
 
 	if(sys->write(bulkfd, buf, len buf) != len buf)
 		return -1;
@@ -967,15 +998,16 @@ rxproc()
 	# Reassembly, because a read boundary is not a message boundary.
 	#
 	# The endpoint delivers maxpkt bytes at a time and a read ends at
-	# the first short packet, so an RNDIS message larger than one
-	# packet -- which every Ethernet frame is -- can arrive split
-	# across two reads. Parsing each read on its own throws away the
-	# head of every such message and then finds garbage where the
-	# next header should be, which is worse than losing the frame:
-	# the stream never resynchronises.
+	# the first short packet, so a message larger than one packet --
+	# which every Ethernet frame is -- can arrive split across two
+	# reads. Parsing each read on its own throws away the head of
+	# every such message and then finds nonsense where the next header
+	# should be, which is worse than losing a frame: the stream never
+	# resynchronises.
 	#
-	# So keep what does not yet form a whole message and prepend it
-	# to the next read.
+	# So keep what does not yet form a whole message, and prepend it
+	# to the next read. What counts as a whole message is the family's
+	# business, not this loop's.
 	#
 	acc := array[2 * (Rnishdr + Maxframe)] of byte;
 	nacc := 0;
@@ -1000,40 +1032,31 @@ rxproc()
 		nacc += n;
 
 		off := 0;
-		while(off + Rnishdr <= nacc){
-			if(get4(acc, off) != big Rnisdata){
-				# Not a packet message and never will be.
+		while(off < nacc){
+			(used, frame) := family.unwrap(acc[off:nacc], nacc - off);
+			if(used < 0){		# never going to parse; drop it
 				off = nacc;
 				break;
 			}
-			msglen := int get4(acc, off+4);
-			if(msglen < Rnishdr || msglen > len acc){
-				off = nacc;
+			if(used == 0)		# incomplete; wait for more
 				break;
-			}
-			if(off + msglen > nacc)		# incomplete; wait for more
-				break;
+			off += used;
 
-			dataoff := off + 8 + int get4(acc, off+8);
-			datalen := int get4(acc, off+12);
-			if(datalen >= 14 && dataoff + datalen <= nacc){
-				frame := array[datalen] of byte;
-				frame[0:] = acc[dataoff:dataoff+datalen];
+			if(frame == nil)
+				continue;
 
-				#
-				# Ether type is bytes 12 and 13, after the two
-				# addresses. It is the only field this driver
-				# has to understand: everything above the
-				# demultiplex is os/ip's business.
-				#
-				etype := (int frame[12] << 8) | int frame[13];
-				for(i := 0; i < Nconv; i++)
-					if(convs[i].etype == etype){
-						rxq <-= (i, frame);
-						break;
-					}
-			}
-			off += msglen;
+			#
+			# Ether type is bytes 12 and 13, after the two
+			# addresses. It is the only field this driver has to
+			# understand: everything above the demultiplex is
+			# os/ip's business.
+			#
+			etype := (int frame[12] << 8) | int frame[13];
+			for(i := 0; i < Nconv; i++)
+				if(convs[i].etype == etype){
+					rxq <-= (i, frame);
+					break;
+				}
 		}
 
 		# Shuffle whatever is left of a partial message to the front.
@@ -1080,4 +1103,97 @@ pingsend(d: ref Sys->FD, req: array of byte)
 		}
 		sys->sleep(300);
 	}
+}
+
+#
+# The RNDIS family.
+#
+# What QEMU's usb-net speaks, and what makes this program testable
+# before there is hardware. Microsoft's protocol carries its control
+# messages inside two class requests rather than on an endpoint of its
+# own, and puts a 44-byte header on every frame.
+#
+rndissetup(): int
+{
+	if(rndisinit() < 0)
+		return -1;
+
+	#
+	# No ":=" on mac. It is module-level state because the stats file
+	# has to report it long after setup returns, and declaring it
+	# again here would make a local that shadows it -- leaving the
+	# global zero, the stats file answering "addr: 000000000000", and
+	# every frame going out from 00:00:00:00:00:00. Which is exactly
+	# what happened: the ARP requests were sent and answered, and the
+	# replies were addressed to a MAC no device owned.
+	#
+	if(rndisquery(Oidmac, mac) < 0){
+		sys->print("etherusb: cannot read the MAC address: %r\n");
+		return -1;
+	}
+
+	filter := array[4] of byte;
+	put4(filter, 0, Filterdefault);
+	if(rndisset(Oidfilter, filter) < 0){
+		sys->print("etherusb: cannot set the packet filter: %r\n");
+		return -1;
+	}
+	return 0;
+}
+
+rndiswrap(frame: array of byte): array of byte
+{
+	buf := array[Rnishdr + len frame] of byte;
+	for(i := 0; i < Rnishdr; i++)
+		buf[i] = byte 0;
+
+	put4(buf, 0, Rnisdata);
+	put4(buf, 4, len buf);
+	# DataOffset counts from byte 8 of the message, not from its start
+	put4(buf, 8, Rnishdr - 8);
+	put4(buf, 12, len frame);
+	buf[Rnishdr:] = frame;
+	return buf;
+}
+
+#
+# Returns (bytes consumed, frame), (0, nil) if buf does not yet hold a
+# whole message, or (-1, nil) if it never will.
+#
+rndisunwrap(buf: array of byte, n: int): (int, array of byte)
+{
+	if(n < Rnishdr)
+		return (0, nil);
+	if(get4(buf, 0) != big Rnisdata)
+		return (-1, nil);
+
+	msglen := int get4(buf, 4);
+	if(msglen < Rnishdr)
+		return (-1, nil);
+	if(msglen > n)
+		return (0, nil);
+
+	dataoff := 8 + int get4(buf, 8);
+	datalen := int get4(buf, 12);
+	if(datalen < 14 || dataoff + datalen > n)
+		return (msglen, nil);	# consume it; there is no frame in it
+
+	frame := array[datalen] of byte;
+	frame[0:] = buf[dataoff:dataoff+datalen];
+	return (msglen, frame);
+}
+
+#
+# The device's vendor and product, from its descriptor. Asked rather
+# than passed down, so this program does not depend on whoever started
+# it having got the identity right.
+#
+devid(): (int, int)
+{
+	desc := array[18] of byte;
+
+	if(ctlin(Rd2h, Rgetdesc, Ddev << 8, 0, desc) < len desc)
+		return (-1, -1);
+	return (int desc[8] | (int desc[9] << 8),
+		int desc[10] | (int desc[11] << 8));
 }

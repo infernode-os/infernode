@@ -802,11 +802,21 @@ raspberrypi/firmware), a `config.txt`, and this kernel named
     BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
     cp /tmp/bm/bcm2837-kernel.img /Volumes/<card>/kernel8.img
 
-`config.txt` wants three lines:
+`config.txt` wants four lines:
 
     arm_64bit=1
     enable_uart=1
     dtoverlay=disable-bt
+    init_uart_clock=48000000
+
+The last one is not optional here even though it is often described as
+a default. `uart.c` divides for 115200 assuming a 48MHz reference --
+IBRD 26, FBRD 3, which is 48000000/(16*115200) = 26.04 -- and the
+firmware, not the kernel, decides what that reference actually is. If
+it differs, the divisor is wrong by the same ratio and the console
+produces framing errors and garbage rather than nothing, which reads
+as a broken kernel rather than a misconfigured clock. Pinning it costs
+one line.
 
 The third is the one that costs an afternoon if it is missing. On a Pi
 3 the PL011 is wired to Bluetooth by default and the mini-UART is on

@@ -61,6 +61,8 @@ models: list of string;
 # verify: an adversarial "run it, don't read it" checker (exec + read tools,
 # no write/edit — read-only on the project) that emits a PASS/FAIL/PARTIAL
 # verdict backed by captured output.
+# redteam: an authorized source-assisted security tester. It inherits the
+# parent model so a campaign can pin model identity and reasoning at the gate.
 # Tools must still be in the delegation budget; missing ones are dropped at
 # provision time.
 agentdefs: list of (string, string, string);
@@ -83,6 +85,7 @@ init(): string
 		("coder", "daedalus", "read,write,edit,find,grep,list,limbo") ::
 		("research", "gpt-oss", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
 		("verify", "gpt-oss", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
+		("redteam", "", "read,list,find,search,grep,write,exec,limbo,plan,todo,spawn") ::
 		nil;
 
 	return nil;

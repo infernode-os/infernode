@@ -73,6 +73,7 @@ Caps: adt {
 	dir:       string;
 	tools:     list of string;
 	paths:     list of string;
+	writepaths: list of string; # paths records whose permission is rw
 	role:      string;    # "toplevel" | "child"
 	xenith:    int;
 	actid:     int;
@@ -204,7 +205,19 @@ parseCaps(dir: string): ref Caps
 	c.xenith = 0;
 
 	c.tools = readLines(dir + "/tools");
-	c.paths = readLines(dir + "/paths");
+	# Fixtures historically stored one path per line (implicitly rw). Live
+	# tools9p stores "path ro|rw" so the same file also describes attenuation.
+	# Parse both shapes; treating the whole live record as a path produces false
+	# INVALID_PATH_GRANT and write-authority findings.
+	rawpaths := readLines(dir + "/paths");
+	for(; rawpaths != nil; rawpaths = tl rawpaths) {
+		(p, perm) := splitPathPerm(hd rawpaths);
+		if(p == "")
+			continue;
+		c.paths = appendstr(c.paths, p);
+		if(perm == "rw")
+			c.writepaths = appendstr(c.writepaths, p);
+	}
 
 	role := readScalar(dir + "/meta/role");
 	if(role != "")
@@ -254,6 +267,29 @@ readScalar(path: string): string
 		return "";
 	line := b.gets('\n');
 	return trim(line);
+}
+
+splitPathPerm(s: string): (string, string)
+{
+	s = trim(s);
+	for(i := len s - 1; i >= 0; i--)
+		if(s[i] == ' ' || s[i] == '\t') {
+			p := trim(s[0:i]);
+			perm := trim(s[i+1:]);
+			if(perm == "ro" || perm == "rw")
+				return (p, perm);
+			break;
+		}
+	# Legacy fixture shape and tools9p's historical default are writable.
+	return (s, "rw");
+}
+
+appendstr(values: list of string, value: string): list of string
+{
+	if(values == nil)
+		return value :: nil;
+	head := hd values;
+	return head :: appendstr(tl values, value);
 }
 
 trim(s: string): string
@@ -367,7 +403,7 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 						inv.reads_fs = hd pl :: inv.reads_fs;
 			}
 			if(a == "writes_fs") {
-				for(pl := caps.paths; pl != nil; pl = tl pl)
+				for(pl := caps.writepaths; pl != nil; pl = tl pl)
 					if(!contains(inv.writes_fs, hd pl))
 						inv.writes_fs = hd pl :: inv.writes_fs;
 			}
@@ -381,12 +417,12 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 	}
 
 	# writes_fs_durable = writes_fs entries that are not /tmp/veltro
-	# and are not covered by cowfs (actid >= 0 covers /n/local/*).
+	# and are not covered by the activity's cowfs-staged writable grants.
 	for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 		p := hd wl;
 		if(pathwithin("/tmp/veltro", p))
 			continue;
-		if(caps.actid >= 0 && pathwithin("/n/local", p))
+		if(caps.actid >= 0 && contains(caps.writepaths, p))
 			continue;
 		inv.writes_durable = p :: inv.writes_durable;
 	}

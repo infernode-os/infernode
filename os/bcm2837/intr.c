@@ -53,6 +53,10 @@ struct Vctl
 	char	*name;
 };
 
+enum {
+	Fiqenable = 1<<7,	/* FIQ control: a source is selected */
+};
+
 static Vctl vctl[Nirq];
 
 /*
@@ -188,12 +192,36 @@ void
 intrinit(void)
 {
 	int i;
+	u32int fiq;
 
 	for(i = 0; i < Nirq; i++){
 		vctl[i].f = nil;
 		vctl[i].a = nil;
 		vctl[i].name = nil;
 	}
+
+	/*
+	 * Report what we inherited before changing it.
+	 *
+	 * The FIQ source register survives a warm reboot, and whatever
+	 * ran before us may have left one selected. That matters more
+	 * than it sounds: on this controller an interrupt chosen as the
+	 * FIQ source is REMOVED FROM THE IRQ PENDING REGISTERS
+	 * altogether, so it silently stops arriving by the path every
+	 * driver here expects -- with no bit set anywhere to explain
+	 * why.
+	 *
+	 * Linux's Pi USB driver uses the FIQ, and for exactly IRQ 9. So
+	 * rebooting out of Linux into this kernel is enough to make USB
+	 * interrupts vanish while every other GPU interrupt keeps
+	 * working, which is precisely what the first run on real
+	 * hardware did.
+	 */
+	fiq = INTREGS->FIQctl;
+	if(fiq & Fiqenable)
+		print("intr: inherited FIQ source %d -- clearing\n", fiq & 0x7F);
+
+	INTREGS->FIQctl = 0;		/* every source back on the IRQ path */
 
 	INTREGS->GPUdisable[0] = ~0;
 	INTREGS->GPUdisable[1] = ~0;

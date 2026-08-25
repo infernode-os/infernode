@@ -57,6 +57,7 @@ Riface:		con 1;		# recipient: interface
 
 Rgetdesc:	con 6;		# GET_DESCRIPTOR
 Ddev:		con 1;		# descriptor type: device
+Dconf:		con 2;		# descriptor type: configuration
 Rsetconf:	con 9;		# SET_CONFIGURATION
 Rgetconf:	con 8;		# GET_CONFIGURATION
 
@@ -65,7 +66,9 @@ Rgetconf:	con 8;		# GET_CONFIGURATION
 # Not 1: that is only a convention, and SET_CONFIGURATION for a value
 # the device does not have is a stall rather than a diagnosable error.
 #
-Configvalue:	con 2;
+# bConfigurationValue is read from the device, never assumed -- see
+# configvalue(). It is only conventionally 1, and the two devices this
+# drives disagree about it.
 
 #
 # RNDIS rides on two class requests rather than having its own
@@ -284,14 +287,21 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	#
-	# Configuration 2, which is what this device's configuration
-	# descriptor declares. Not 1: bConfigurationValue is the device's
-	# choice and only conventionally 1, and a SET_CONFIGURATION for a
-	# value the device does not have is a stall rather than a
-	# diagnosable error.
+	# Ask the device which configuration it has, rather than naming
+	# one.
 	#
-	if(ctlout(Rh2d, Rsetconf, Configvalue, 0, nil) < 0){
-		sys->print("etherusb: set configuration failed: %r\n");
+	# This was the constant 2, which is what the RNDIS adapter
+	# developed against declares. bConfigurationValue is the device's
+	# own choice: the LAN7800 on the Pi 3B+ declares 1, so the
+	# constant sent it a SET_CONFIGURATION for a value it does not
+	# have. The device kept the configuration it already had and the
+	# only symptom was a line saying so.
+	#
+	cfgval := configvalue();
+	if(cfgval < 0)
+		return;
+	if(ctlout(Rh2d, Rsetconf, cfgval, 0, nil) < 0){
+		sys->print("etherusb: set configuration %d failed: %r\n", cfgval);
 		return;
 	}
 
@@ -358,12 +368,28 @@ init(nil: ref Draw->Context, argv: list of string)
 	gc := array[1] of byte;
 	if(ctlin(Rd2h, Rgetconf, 0, 0, gc) < 1)
 		sys->print("etherusb: GET_CONFIGURATION failed: %r\n");
-	else if(int gc[0] != Configvalue)
+	else if(int gc[0] != cfgval)
 		sys->print("etherusb: device is in configuration %d, wanted %d\n",
-			int gc[0], Configvalue);
+			int gc[0], cfgval);
 
 	sys->print("etherusb: %s ready\n", dev);
 	serve();
+}
+
+#
+# The device's own bConfigurationValue, from the first nine bytes of its
+# configuration descriptor. Returns -1 if it cannot be read, in which
+# case there is nothing safe to select.
+#
+configvalue(): int
+{
+	hdr := array[9] of byte;
+
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr){
+		sys->print("etherusb: config descriptor failed: %r\n");
+		return -1;
+	}
+	return int hdr[5];
 }
 
 #

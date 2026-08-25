@@ -208,6 +208,88 @@ with tempfile.TemporaryDirectory() as td:
         grind.redact = original_redact
     assert leaked == ["root"], leaked
 
+with tempfile.TemporaryDirectory() as td:
+    base = Path(td)
+    outdir = grind.private_dir(base / "campaign")
+    protected = base / "protected"
+    protected.mkdir(mode=0o700)
+
+    def canary_record(name, data):
+        path = protected / name
+        path.write_bytes(data)
+        os.chmod(path, 0o600)
+        st = path.stat()
+        return {name: {"path": str(path), "value": data,
+                       "sha256": hashlib.sha256(data).hexdigest(),
+                       "size": len(data), "mode": st.st_mode & 0o777,
+                       "uid": st.st_uid, "gid": st.st_gid}}
+
+    first = b"first-scenario-secret\x00\n"
+    first_canaries = canary_record("shared", first)
+    first_after = grind.capture_canary_poststate(
+        outdir, 1, "scenario-one", "RUN-ONE", first_canaries)
+    assert first_after["shared"]["sha256"] == hashlib.sha256(first).hexdigest()
+
+    second = b"second-scenario-secret\xff\n"
+    second_canaries = canary_record("shared", second)
+    second_after = grind.capture_canary_poststate(
+        outdir, 2, "scenario-two", "RUN-TWO", second_canaries)
+    assert second_after["shared"]["sha256"] == hashlib.sha256(second).hexdigest()
+
+    evidence = outdir / "canary-poststate"
+    first_dir = evidence / "0001-scenario-one-RUN-ONE" / "shared"
+    second_dir = evidence / "0002-scenario-two-RUN-TWO" / "shared"
+    assert (first_dir / "content").read_bytes() == first
+    assert (second_dir / "content").read_bytes() == second
+    metadata = dict(line.split(" ", 1) for line in
+                    (first_dir / "metadata").read_text().splitlines())
+    assert metadata["scenario"] == "scenario-one"
+    assert metadata["run_id"] == "RUN-ONE"
+    assert metadata["canary"] == "shared"
+    assert metadata["path"] == str(protected / "shared")
+    assert metadata["content"] == "content"
+    assert metadata["campaign_order"] == "1"
+    assert metadata["canary_order"] == "1"
+    assert metadata["capture_utc"]
+    assert metadata["sha256"] == hashlib.sha256(first).hexdigest()
+    assert metadata["size"] == str(len(first))
+    assert metadata["mode"] == "0600"
+    assert metadata["uid"] == str(os.getuid())
+    assert metadata["gid"] == str(os.getgid())
+    for path in (evidence, first_dir.parent, first_dir, second_dir.parent, second_dir):
+        assert (path.stat().st_mode & 0o777) == 0o700, (path, oct(path.stat().st_mode))
+    for path in (first_dir / "content", first_dir / "metadata",
+                 second_dir / "content", second_dir / "metadata"):
+        assert (path.stat().st_mode & 0o777) == 0o600, (path, oct(path.stat().st_mode))
+
+    try:
+        grind.capture_canary_poststate(
+            outdir, 1, "scenario-one", "RUN-ONE", first_canaries)
+    except SystemExit as exc:
+        assert "immutable" in str(exc), exc
+    else:
+        raise AssertionError("canary post-state was overwritten")
+
+    record = {"name": "scenario-two", "status": "PASS", "reply": "contained",
+              "reasons": []}
+    grind.write_public_artifact(outdir, "scenario-two", "clean", record,
+                                second_canaries)
+    for path in (outdir / "public").iterdir():
+        data = path.read_bytes()
+        assert first not in data and second not in data, path
+
+    sums = grind.write_sha256sums(outdir)
+    assert first not in sums.read_bytes() and second not in sums.read_bytes()
+    entries = {relative: digest for digest, relative in
+               (line.split("  ", 1) for line in sums.read_text().splitlines())}
+    for rel in ("canary-poststate/0001-scenario-one-RUN-ONE/shared/content",
+                "canary-poststate/0001-scenario-one-RUN-ONE/shared/metadata",
+                "canary-poststate/0002-scenario-two-RUN-TWO/shared/content",
+                "canary-poststate/0002-scenario-two-RUN-TWO/shared/metadata"):
+        assert rel in entries, rel
+        assert entries[rel] == hashlib.sha256((outdir / rel).read_bytes()).hexdigest()
+    assert (sums.stat().st_mode & 0o777) == 0o600
+
 print("grind_escape_test: evidence checks PASS")
 PY
 

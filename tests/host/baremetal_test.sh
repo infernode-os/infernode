@@ -1184,6 +1184,27 @@ echo ""
 # controller, and it accepts a usb-net on that bus. So device presence,
 # and eventually enumeration and a real driver, can all be exercised
 # here rather than only on hardware.
+# ---------------------------------------------------------------------
+# Source-level gate: mboxprop's counts are ELEMENTS, not bytes.
+#
+# This exists because the runtime checks below could not catch the bug it
+# guards. setpower passed `sizeof buf` where mboxprop wants a u32int
+# count -- declaring a 32-byte value buffer for an 8-byte tag, reading six
+# words past a two-element array and writing eight back over the caller's
+# stack frame. Restoring that bug and re-running the whole suite gives 90
+# green: QEMU's property handler tolerates the mismatched size and replies
+# ON regardless, so asserting the reply proves nothing about the call.
+#
+# A calling-convention error is a property of the source, so check the
+# source. Anything else is theatre.
+# ---------------------------------------------------------------------
+if grep -n 'mboxprop(' os/bcm2837/*.c | grep -q 'sizeof'; then
+    fail "mboxprop called with sizeof -- its counts are elements, not bytes"
+    grep -n 'mboxprop(' os/bcm2837/*.c | grep 'sizeof'
+else
+    pass "every mboxprop call passes element counts, not sizeof"
+fi
+
 run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0"
 
 #

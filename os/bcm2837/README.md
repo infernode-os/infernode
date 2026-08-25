@@ -730,6 +730,50 @@ work that will not carry over to the board. It is worth enough effort
 to keep the emulated path usable as a test rig, and not worth more
 than that; the LAN78xx family is the one that matters on hardware.
 
+### What changes on real hardware, and what to suspect first
+
+Reviewed before the board arrived, because the answer was not what the
+commit messages implied.
+
+**The split-transaction path is NOT the one the board will use.** Five
+USB changes on this branch are gated on splits not being in use, and
+that was described as leaving hardware behaviour alone. It does not.
+The 3B+'s LAN7515 is a HIGH-SPEED hub and the Ethernet function behind
+it is high speed too, so `ep->dev->speed` is Highspeed, `chansetup`
+falls through to `hcsplt = 0`, and every one of those gates takes the
+same branch on the board that it takes under QEMU. Splits will only be
+exercised by full- or low-speed devices plugged into the Pi's own
+ports.
+
+That is reassuring in one way -- the paths that were debugged here are
+the paths that will run, rather than emulator-only detours -- and it
+means two of them are genuine behaviour changes against upstream on
+real silicon:
+
+- `ctltrans` uses `multitrans` for the data stage of a control IN
+  where upstream would program one transfer. Packet at a time. It is
+  upstream's own root-port path, so it is proven, just slower.
+- `eptrans` uses `multitrans` for bulk OUT likewise. At high speed
+  maxpkt is 512, so a 1514-byte frame becomes three channel
+  operations instead of one.
+
+**So if networking on the board works but is slow, look there first.**
+Neither change is needed on hardware if the controller completes a
+multi-packet transfer programmed in one go, which the real one is
+documented to do and QEMU's model does not. The other three -- the
+zero-length completion test, waking bulk IN on Nak as well as Chhltd,
+and the separate read and write locks in Epio -- are supersets of
+upstream's behaviour or outright fixes, and should be left alone.
+
+**The JIT's cache maintenance was reviewed and looks correct.**
+`cacheiflush` does the architecturally required sequence: `dc cvau`
+over the range using CTR_EL0.DminLine, `dsb ish`, `ic ivau` using
+IminLine, `dsb ish`, `isb`. It takes a `ulong` length, so unlike
+`cachedwbse` -- which had exactly this bug -- the prototype makes the
+64-bit `add` safe, and every caller passes a `ulong` that cannot be
+negative. Static review is as far as this can be taken: TCG does not
+model split I/D caches, so the only real test is the board.
+
 ### Smaller things still open
 
 `sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,

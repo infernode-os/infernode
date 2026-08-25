@@ -885,6 +885,16 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 			sys->print("init: %sport %d status failed: %r\n", indent, port);
 			continue;
 		}
+		#
+		# Report every port, not only the ones with something on
+		# them. A port that is skipped silently is indistinguishable
+		# from a port that was never looked at: the 3B+'s hub walk
+		# printed nothing at all for all four ports, which could
+		# equally have meant an empty hub, a failed status read or a
+		# loop that never ran.
+		#
+		sys->print("init: %sport %d %#4.4x%s\n",
+			indent, port, status, statusflags(status));
 		if((status & HPpresent) == 0)
 			continue;
 

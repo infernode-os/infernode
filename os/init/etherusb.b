@@ -334,10 +334,22 @@ init(nil: ref Draw->Context, argv: list of string)
 	# this one -- so without this the driver would move bulk data in
 	# 8-byte packets and be told, correctly, that everything worked.
 	# The size is the device's own answer, from its configuration
-	# descriptor.
+	# descriptor -- which is what this says and, until now, was not
+	# what it did: it wrote a constant 64. That is right for a
+	# full-speed bulk endpoint and wrong for a high-speed one, which
+	# is 512. The RNDIS adapter this was developed against sat behind
+	# QEMU's USB 1.1 hub, so 64 was correct there and nowhere else.
+	# On the 3B+ every device is high speed, and a 512-byte packet
+	# arriving at a 64-byte expectation is a babble, reported as
+	# "usbotg: ep4.2 error intr 00000082" -- Chhltd|Xacterr.
 	#
+	mp := bulkmaxpkt();
+	if(mp <= 0){
+		sys->print("etherusb: cannot read the bulk packet size\n");
+		return;
+	}
 	bctl := sys->open("/usb/usb/" + bulk + "/ctl", Sys->ORDWR);
-	if(bctl == nil || sys->fprint(bctl, "maxpkt 64") < 0){
+	if(bctl == nil || sys->fprint(bctl, "maxpkt %d", mp) < 0){
 		sys->print("etherusb: cannot set the bulk packet size: %r\n");
 		return;
 	}
@@ -374,6 +386,39 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	sys->print("etherusb: %s ready\n", dev);
 	serve();
+}
+
+#
+# wMaxPacketSize of the first bulk endpoint, from the configuration
+# descriptor. Returns -1 if it cannot be found.
+#
+# Walked rather than indexed: the configuration arrives as a run of
+# variable-length descriptors packed end to end, each "length, type".
+#
+bulkmaxpkt(): int
+{
+	hdr := array[9] of byte;
+
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
+		return -1;
+	total := int hdr[2] | (int hdr[3] << 8);
+	if(total < len hdr || total > 512)
+		return -1;
+
+	cfg := array[total] of byte;
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
+		return -1;
+
+	for(i := 0; i + 2 <= total; ){
+		dlen := int cfg[i];
+		if(dlen < 2)
+			break;
+		# 5 is an endpoint descriptor; bmAttributes 2 is bulk
+		if(int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2)
+			return int cfg[i+4] | (int cfg[i+5] << 8);
+		i += dlen;
+	}
+	return -1;
 }
 
 #

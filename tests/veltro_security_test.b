@@ -2129,6 +2129,27 @@ testStagedWriteOverlay(t: ref T)
 		"manifest generation does not mutate the underlying file");
 }
 
+testDirectWriteManifest(t: ref T)
+{
+	mkdirp("/mnt/msg");
+	writefilecontent("/mnt/msg/draft", "");
+	manifest := "/tmp/veltro/.ns/test-manifest-direct";
+	sys->remove(manifest);
+	caps := ref NsConstruct->Capabilities(
+		"write" :: nil,
+		"/mnt/msg/draft" :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, 42,
+		"/mnt/msg/draft" :: nil
+	, nil);
+	nsconstruct->emitmanifest(caps, manifest);
+	mdata := readfilecontent(manifest);
+	t.assert(contains(mdata, "path=/mnt/msg/draft"), "manifest includes transactional endpoint");
+	t.assert(contains(mdata, "path=/mnt/msg/draft label=mnt/msg/draft perm=rw"),
+		"manifest marks transactional endpoint as direct rw");
+}
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -2431,6 +2452,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SafeGrantPathsAccepted", testSafeGrantPathsAccepted);
 	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
+	run("DirectWriteManifest", testDirectWriteManifest);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

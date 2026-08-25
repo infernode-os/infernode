@@ -275,6 +275,18 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
+readprovisionstate(id: int): string
+{
+	raw := readfile("/tool/provision");
+	if(raw == nil)
+		return "";
+	prefix := string id + " ";
+	for(lines := splitlines(strip(raw)); lines != nil; lines = tl lines)
+		if(hasprefix(hd lines, prefix))
+			return strip((hd lines)[len prefix:]);
+	return "";
+}
+
 docreate(args: string): string
 {
 	attrs := parseattrs(args);
@@ -448,19 +460,12 @@ docreate(args: string): string
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
 
-	# INFR-362: serialize provisioning. Provisioning runs asynchronously in the
-	# parent namespace; a sibling `task create` issued in the SAME turn (parallel
-	# tool calls — e.g. Mistral emits all at once) would otherwise overlap this
-	# child's namespace setup and find /mnt/ui transiently hidden, silently
-	# dropping the task. Wait for this child's manifest, which is written only
-	# AFTER its restrictns completes — by then the racy bind-replace window is
-	# closed. Remove any stale manifest first (/tmp persists across runs).
-	manifestp := sys->sprint("/tmp/veltro/.ns/manifest.%d", newid);
-	sys->remove(manifestp);
-
 	# Provisioning is now atomic (INFR-405): tools9p validates the request on
 	# this write and refuses it outright rather than dropping the tools and
-	# paths it will not grant. A refusal must not surface as a created
+	# paths it will not grant. Trusted tools9p publishes a narrow lifecycle result
+	# after observing confinement; the task tool cannot read the hidden manifest
+	# and does not report success while provisioning is still starting.
+	# A refusal must not surface as a created
 	# activity — the caller would poll an activity that has no agent behind
 	# it, or worse, assume the narrowing it asked for was applied. Tear the
 	# activity down and report the reason.
@@ -471,26 +476,19 @@ docreate(args: string): string
 		return sys->sprint("error: task not created — %s", perr);
 	}
 
-	# The manifest is written only after the child's restrictns completes. Keep
-	# the accepted activity visible if setup outlives this bounded wait: the
-	# provisioner owns its eventual working or explicit failed status.
-	provisioned := 0;
-	for(w := 0; w < 120; w++) {		# bounded ~6s
-		(mok, nil) := sys->stat(manifestp);
-		if(mok >= 0) {
-			provisioned = 1;
-			break;
+	for(w := 0; w < 700; w++) {
+		pstatus := readprovisionstate(newid);
+		if(hasprefix(pstatus, "failed")) {
+			writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+			return sys->sprint("error: task not created — activity %d %s", newid, pstatus);
 		}
+		if(pstatus == "ready")
+			return sys->sprint("created activity %d: %s", newid, label);
 		sys->sleep(50);
 	}
-	if(!provisioned) {
-		pstatus := strip(readfile(sys->sprint("%s/activity/%d/status", UI_MOUNT, newid)));
-		if(hasprefix(pstatus, "failed"))
-			return sys->sprint("created activity %d: %s (%s; read task result %d)", newid, label, pstatus, newid);
-		return sys->sprint("created activity %d: %s (namespace setup pending; poll task status %d)", newid, label, newid);
-	}
-
-	return sys->sprint("created activity %d: %s", newid, label);
+	writefile("/tool/provision", "cancel " + string newid);
+	writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+	return sys->sprint("error: task not created — activity %d provisioning timed out", newid);
 }
 
 dostatus(args: string): string

@@ -1210,15 +1210,24 @@ componentcount(path: string): int
 	return nc;
 }
 
+directwritepath(path: string): int
+{
+	return path == "/mnt/msg/draft" || path == "/mnt/msg/flag";
+}
+
 overlaywritepaths(paths: list of string, actid: int): string
 {
-	cowfs := load Cowfs Cowfs->PATH;
-	if(cowfs == nil)
-		return sys->sprint("cannot load cowfs: %r");
-
+	cowfs: Cowfs;
 	seq := 0;
 	for(p := paths; p != nil; p = tl p) {
 		fullpath := hd p;
+		if(directwritepath(fullpath))
+			continue;
+		if(cowfs == nil) {
+			cowfs = load Cowfs Cowfs->PATH;
+			if(cowfs == nil)
+				return sys->sprint("cannot load cowfs: %r");
+		}
 		(ok, nil) := sys->stat(fullpath);
 		if(ok < 0)
 			continue;
@@ -1364,6 +1373,8 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		for(wp2 := caps.writepaths; wp2 != nil; wp2 = tl wp2)
 			if(pathwithin(hd wp2, p))
 				perm = "cow";
+		if(directwritepath(p) && inlist(p, caps.writepaths))
+			perm = "rw";
 		if(caps.actid < 0)
 			perm = "ro";
 		if(ok >= 0)

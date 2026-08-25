@@ -384,6 +384,21 @@ else
     fail "exact message draft delegation test failed"
 fi
 
+if emu_c "provision_msg_draft_write" 24 \
+    "msg9p >[2] /tmp/msg-draft-write.log & sleep 2; echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl; tools9p -b write -p /mnt/msg/draft:rw read task & sleep 3; echo '25 tools=write paths=/mnt/msg/draft:rw' > /tool/provision; sleep 5; echo '/mnt/msg/draft email\\n1\\ndelegated reply' > /tool.25/write/run; echo RESULT; cat /tool.25/write/run; echo PENDING; cat /mnt/msg/pending"; then
+    if ! echo "$OUTPUT" | grep -q "wrote .* bytes to /mnt/msg/draft"; then
+        fail "child write tool could not use the exact draft capability (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "^[0-9][0-9]* email 1 "; then
+        fail "delegated draft did not reach the trusted pending queue (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "cowfs /mnt/msg/draft"; then
+        fail "transactional draft endpoint was incorrectly sent through cowfs"
+    else
+        pass "child exact draft grant writes a pending reply proposal"
+    fi
+else
+    fail "delegated message draft write test failed"
+fi
+
 if emu_c "provision_specific_ro" 14 \
     "tools9p -p /tmp:rw -p /tmp/readonly:ro read task & sleep 3; echo '12 paths=/tmp/readonly/file:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.12/paths"; then
     if echo "$OUTPUT" | grep -q "^/tmp/readonly/file ro"; then

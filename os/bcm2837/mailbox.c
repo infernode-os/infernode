@@ -198,6 +198,7 @@ enum
 {
 	TagSetpower	= 0x00028001,
 	Powerwait	= 1<<1,
+	Powernodevice	= 1<<1,		/* in the RESPONSE: no such device */
 };
 
 int
@@ -207,5 +208,30 @@ setpower(int dev, int on)
 
 	buf[0] = dev;
 	buf[1] = Powerwait | (on ? 1 : 0);
-	return mboxprop(TagSetpower, buf, sizeof buf, sizeof buf);
+
+	/*
+	 * ELEMENT counts, not byte counts.
+	 *
+	 * mboxprop's nreq/nresp are u32int counts -- every other caller
+	 * passes 0,1 or 0,2 -- and this passed sizeof buf, which is 8.
+	 * The damage was threefold: the request declared a 32-byte value
+	 * buffer for a tag the firmware expects to be 8, so the tag could
+	 * be rejected outright; the copy in read 8 words from this
+	 * 2-element array, six of them off the end; and the copy out
+	 * wrote 8 words back into it, over six words of this function's
+	 * stack frame.
+	 *
+	 * A USB block that was never actually powered explains what the
+	 * board has been showing: registers that read back (they are not
+	 * on the gated rail), a PHY too partly-initialised to complete a
+	 * high-speed chirp -- hence a high-speed hub enumerating at full
+	 * speed -- and channels that are accepted and never run.
+	 *
+	 * The result was also discarded, so none of this was visible.
+	 */
+	if(mboxprop(TagSetpower, buf, 2, 2) < 0)
+		return -1;
+	if(buf[1] & Powernodevice)
+		return -1;
+	return (buf[1] & 1) == (on ? 1 : 0) ? 0 : -1;
 }

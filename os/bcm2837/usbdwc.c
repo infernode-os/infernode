@@ -980,7 +980,9 @@ init(Hci *hp)
 	ctlr->chanintr = malloc(ctlr->nchan * sizeof(Rendez));
 
 	r->gahbcfg = 0;
-	setpower(PowerUsb, 1);
+	if(setpower(PowerUsb, 1) < 0)
+		print("usbotg: FIRMWARE REFUSED to power the USB block -- "
+			"the controller is running unpowered\n");
 
 	for(n = 0; n < Resetlimit; n++){
 		if(r->grstctl & Ahbidle)

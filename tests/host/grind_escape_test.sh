@@ -512,16 +512,52 @@ cancelled[2]["status"] = "timeout"
 child_records.append(
     {"seq": "7", "event": "childtimeout", "message": "activity=2 status=read"})
 lifecycle_errors = grind.audit_lifecycle_errors(child_records, cancelled)
-assert lifecycle_errors == ["activity 2 timed out before reaching a terminal state"], lifecycle_errors
+assert any("activity 2 timed out" in e and "step=1 tool=read" in e
+           for e in lifecycle_errors), lifecycle_errors
 assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
 
 all_done = complete_and_blocked[:2]
 assert grind.audit_lifecycle_errors(child_records[:4], all_done) == []
 
+audit_only_ten = [
+    {"seq": "1", "event": "agentstart", "message": "activity=10 agent=deep"},
+    {"seq": "2", "event": "toolcall", "message": "activity=10 agent=deep step=1 tool=read"},
+    {"seq": "3", "event": "toolres", "message": "activity=10 agent=deep step=1 tool=read"},
+]
+errors = grind.audit_lifecycle_errors(
+    audit_only_ten, [{"id": "0", "status": "idle", "label": "Main"}])
+assert any("activity 10 has signed agentstart but is missing" in e for e in errors), errors
+assert any("activity 10 has no signed terminal record" in e for e in errors), errors
+assert status(audit_errors=errors) == "INCONCLUSIVE"
+
+sparse_ids = [str(i) for i in range(1, 24, 2)]
+sparse_ui = [{"id": "0", "status": "idle", "label": "Main"}] + [
+    {"id": activity, "status": "complete", "label": "Child" + activity}
+    for activity in sparse_ids]
+sparse_records = []
+for activity in sparse_ids:
+    sparse_records.extend([
+        {"seq": "1", "event": "agentstart", "message": f"activity={activity} agent=a{activity}"},
+        {"seq": "2", "event": "agentdone", "message": f"activity={activity} agent=a{activity}"},
+    ])
+assert grind.audit_lifecycle_errors(sparse_records, sparse_ui) == []
+
+ui_only = sparse_ui + [{"id": "42", "status": "complete", "label": "UIOnly"}]
+errors = grind.audit_lifecycle_errors(sparse_records, ui_only)
+assert any("activity 42 appears in UI but has no signed agentstart" in e for e in errors), errors
+assert any("activity 42 has no signed terminal record" in e for e in errors), errors
+
+audit_only_done = audit_only_ten + [
+    {"seq": "4", "event": "agentdone", "message": "activity=10 agent=deep"}]
+assert grind.audit_lifecycle_errors(
+    audit_only_done, [{"id": "0", "status": "idle", "label": "Main"}]) == []
+
 driver = (root / "tests/agent-harness/grind-driver").read_text()
-assert "grind childtimeout activity=" in driver
-assert "echo timeout > /mnt/ui/activity/$a/status" in driver
+assert "grind childtimeout activity=" in driver and "operation=" in driver
+assert "echo timeout > $ad/status" in driver
 assert "@@GRIND children terminal=" in driver
+assert "ls /mnt/ui/activity" in driver
+assert "for (a in 1 2 3 4 5 6 7 8 9)" not in driver
 
 # ── the loop itself: retry a boot flake, fail closed on an active crash ──
 #

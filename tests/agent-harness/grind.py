@@ -676,13 +676,15 @@ def record_tokens(record):
 def audit_lifecycle_errors(records, activities):
     terminal = {"complete", "completed", "done", "idle", "failed", "error",
                 "timeout", "closed", "hidden"}
-    done, timedout = set(), set()
+    started, done, timedout = set(), set(), set()
     calls, results = {}, {}
     for record in records:
         tokens = record_tokens(record)
         activity = tokens.get("activity")
         event = record["event"]
-        if event == "agentdone" and activity is not None:
+        if event == "agentstart" and activity is not None:
+            started.add(activity)
+        elif event == "agentdone" and activity is not None:
             done.add(activity)
         elif event == "childtimeout" and activity is not None:
             timedout.add(activity)
@@ -692,22 +694,45 @@ def audit_lifecycle_errors(records, activities):
             counts[key] = counts.get(key, 0) + 1
 
     errors = []
-    children = {str(a["id"]): a for a in activities if str(a["id"]) != "0"}
+    ui = {str(a["id"]): a for a in activities if str(a["id"]) != "0"}
+    audited = started - {"0"}
+    actors = {key[0] for key in set(calls) | set(results) if key[0] not in (None, "0")}
+    for activity in sorted(actors - audited, key=lambda value: (len(value), value)):
+        errors.append(f"activity {activity} has tool records but no signed agentstart")
+    for activity in sorted(set(ui) - audited, key=lambda value: (len(value), value)):
+        errors.append(f"activity {activity} appears in UI but has no signed agentstart")
+
+    children = set(ui) | audited
     for activity in sorted(children, key=lambda value: (len(value), value)):
-        status = children[activity].get("status", "").strip().lower()
-        state = status.split(":", 1)[0]
+        shown = ui.get(activity)
+        if shown is not None:
+            status = shown.get("status", "").strip().lower()
+            state = status.split(":", 1)[0]
+            if state not in terminal:
+                errors.append(f"activity {activity} is non-terminal with status {status!r}")
+        else:
+            status = "missing"
+            if activity not in done and activity not in timedout:
+                errors.append(f"activity {activity} has signed agentstart but is missing from UI state")
+
+        pending_ops = []
+        for key in sorted(set(calls) | set(results), key=lambda item: tuple(str(v) for v in item)):
+            if key[0] != activity:
+                continue
+            pending = calls.get(key, 0) - results.get(key, 0)
+            if pending > 0:
+                pending_ops.append(f"step={key[1]} tool={key[2]} count={pending}")
         if activity in timedout:
-            if state != "timeout":
+            if shown is not None and status.split(":", 1)[0] != "timeout":
                 errors.append(f"activity {activity} timeout record disagrees with status {status!r}")
-            else:
-                errors.append(f"activity {activity} timed out before reaching a terminal state")
-        elif state not in terminal:
-            errors.append(f"activity {activity} is non-terminal with status {status!r}")
-        if activity not in done and activity not in timedout:
+            detail = " with outstanding " + ", ".join(pending_ops) if pending_ops else ""
+            errors.append(f"activity {activity} timed out before reaching a terminal state{detail}")
+        elif activity not in done:
             errors.append(f"activity {activity} has no signed terminal record")
 
-    for activity in sorted(timedout - set(children), key=lambda value: (len(value), value)):
-        errors.append(f"timeout record names missing activity {activity}")
+    for activity in sorted((done | timedout) - started - {"0"},
+                           key=lambda value: (len(value), value)):
+        errors.append(f"activity {activity} has terminal evidence but no signed agentstart")
     for key in sorted(set(calls) | set(results), key=lambda item: tuple(str(v) for v in item)):
         pending = calls.get(key, 0) - results.get(key, 0)
         activity, step, tool = key

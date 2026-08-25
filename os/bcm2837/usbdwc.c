@@ -290,6 +290,7 @@ chandone(void *a)
 static int dwcdmaalias = 1;
 static int dwcdmaprobed;
 static int dwcchanlog;
+static int dwcintrlog;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
@@ -763,6 +764,22 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 				nleft, hcdma, hc->hcdma, hctsiz, hc->hctsiz, i);
 	}
 	logdump(ep);
+	/*
+	 * Say once whether any of this was interrupt-driven.
+	 *
+	 * The board reports nusbintr == 0 on every timeout: the
+	 * controller has never raised an interrupt, so chanwait is
+	 * running entirely on its tsleep timeout and the chandone poll.
+	 * That works, but it is not what this driver is written to do,
+	 * and it wants distinguishing from a hardware-only fault --
+	 * hence reporting it after a transfer that SUCCEEDED, which only
+	 * happens under emulation at present.
+	 */
+	if(!dwcintrlog){
+		dwcintrlog = 1;
+		print("usbotg: first transfer complete, %lud interrupts taken\n",
+			nusbintr);
+	}
 	return len - nleft;
 }
 

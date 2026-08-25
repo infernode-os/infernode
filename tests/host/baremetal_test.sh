@@ -501,7 +501,14 @@ p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
 try:
     time.sleep(8)                 # boot, then reach the prompt
     for c in cmds:
-        p.stdin.write(c.encode() + b"\n")
+        # CR, not NL -- this is what a terminal's Enter key sends, and
+        # what anything driving the line from a script sends. Typing NL
+        # here for eight months meant the cooked-mode line discipline was
+        # never tested with the byte it actually receives, and the board
+        # duly took input that never reached the shell: consread ends a
+        # line on NL or ^D, so an untranslated CR was appended to
+        # kbd.line and the line was never terminated.
+        p.stdin.write(c.encode() + b"\r")
         p.stdin.flush()
         time.sleep(1.5)
 except Exception:
@@ -620,6 +627,17 @@ OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 10)"
 info "--- serial output ---"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
 
+# The inverse of check: some faults announce themselves, and the absence
+# of the announcement is the thing worth asserting.
+refute() {
+    local pattern="$1" what="$2"
+    if grep -q "$pattern" <<<"$OUT"; then
+        fail "$what (matched: $pattern)"
+    else
+        pass "$what"
+    fi
+}
+
 check() {
     local pattern="$1" what="$2"
     if grep -q "$pattern" <<<"$OUT"; then
@@ -722,6 +740,17 @@ check "present"                          "the root hub sees the attached device"
 # is the expected answer and the usb-net sits behind it. If a future
 # QEMU models a different hub this will fail loudly, which is the point:
 # a wrong-but-plausible descriptor is exactly what must not pass.
+# The firmware's answer to the power request, not just the request.
+#
+# setpower passed `sizeof buf` where mboxprop wants a u32int COUNT, so it
+# declared a 32-byte value buffer for an 8-byte tag, read six words past
+# a two-element array and wrote eight words back over the caller's stack
+# frame -- and discarded the result, so none of it showed. Asserting the
+# reply is what makes the contract testable rather than assumed.
+check "setpower: dev 3"                  "the USB power domain is requested by id"
+check "setpower: dev 3 .* ON"            "the firmware confirms the USB block is powered"
+refute "FIRMWARE REFUSED"                "the USB block is not left unpowered"
+
 check "USB port 1 after reset"           "SET_FEATURE(PORT_RESET) enables the port"
 check "enabled"                          "the port reports itself enabled after reset"
 check "ep2.0 0x0409:0x55aa class 9 (hub)" "the device descriptor reads back real values"

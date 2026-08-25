@@ -124,6 +124,30 @@ Lmactx:		con 16r108;
 Lrxaddrh:	con 16r118;
 Lrxaddrl:	con 16r11C;
 
+#
+# OTP, where this part keeps its MAC address when there is no EEPROM --
+# which is the case on the Pi 3B+, whose RX_ADDR registers consequently
+# read back all-ones rather than an address.
+#
+# The offsets are OTP_BASE_ADDR + 4*n in the vendor's own numbering, so
+# they are written that way rather than pre-added: it keeps them
+# checkable against lan78xx.h at a glance.
+#
+Lotpbase:	con 16r1000;
+Lotppwrdn:	con Lotpbase + 4*0;
+Lotpaddr1:	con Lotpbase + 4*1;
+Lotpaddr2:	con Lotpbase + 4*2;
+Lotprddata:	con Lotpbase + 4*6;
+Lotpfunccmd:	con Lotpbase + 4*8;
+Lotpcmdgo:	con Lotpbase + 4*10;
+Lotpstatus:	con Lotpbase + 4*12;
+
+Lotppwrdnn:	con 16r01;	# OTP_PWR_DN: awake when this is CLEAR
+Lotpread:	con 16r01;	# OTP_FUNC_CMD: read
+Lotpgo:		con 16r01;	# OTP_CMD_GO
+Lotpbusy:	con 16r01;	# OTP_STATUS
+Lotpmacoff:	con 16r01;	# where the address sits in OTP
+
 Lhwlrst:	con 16r00000002;	# HW_CFG: soft reset
 # 1<<31, not 16r80000000: bit 31 does not fit a Limbo int, which
 # is signed 32-bit, so the literal would be a big and the argument
@@ -1344,6 +1368,88 @@ lanwr(reg, val: int): int
 	return ctlout(Rvendor, Rwritereg, 0, reg, v);
 }
 
+#
+# Wait for the OTP block to finish whatever it was told to do.
+#
+lanotpwait(): int
+{
+	for(i := 0; i < 100; i++){
+		(e, st) := lanrd(Lotpstatus);
+		if(e < 0)
+			return -1;
+		if((st & Lotpbusy) == 0)
+			return 0;
+		sys->sleep(1);
+	}
+	sys->print("etherusb: LAN78xx OTP stayed busy\n");
+	return -1;
+}
+
+#
+# Read len buf bytes out of OTP starting at off.
+#
+# One byte per command: address high, address low, "read", "go", wait,
+# collect. There is no burst form, which is why this is a loop and not a
+# single transfer.
+#
+lanotp(off: int, buf: array of byte): int
+{
+	#
+	# Power the block up first. PWRDN_N is inverted -- the OTP is
+	# awake when the bit is CLEAR -- and reading it while powered
+	# down returns nothing useful rather than failing.
+	#
+	(e, pd) := lanrd(Lotppwrdn);
+	if(e < 0)
+		return -1;
+	if(pd & Lotppwrdnn){
+		if(lanwr(Lotppwrdn, 0) < 0)
+			return -1;
+		if(lanotpwait() < 0)
+			return -1;
+	}
+
+	for(i := 0; i < len buf; i++){
+		a := off + i;
+		if(lanwr(Lotpaddr1, (a >> 8) & 16r1F) < 0 ||
+		   lanwr(Lotpaddr2, a & 16rFF) < 0 ||
+		   lanwr(Lotpfunccmd, Lotpread) < 0 ||
+		   lanwr(Lotpcmdgo, Lotpgo) < 0)
+			return -1;
+		if(lanotpwait() < 0)
+			return -1;
+		(e2, v) := lanrd(Lotprddata);
+		if(e2 < 0)
+			return -1;
+		buf[i] = byte (v & 16rFF);
+	}
+	return 0;
+}
+
+#
+# Is this a MAC address a station may actually use?
+#
+# All-zeroes and all-ones are what unprogrammed registers read as, and
+# the low bit of the first byte is the multicast flag -- a station
+# address with it set is not one. Checking replaces the OTP signature
+# check Linux does: a byte that fails this is not an address whatever
+# the signature said.
+#
+macusable(m: array of byte): int
+{
+	zero := 1;
+	ones := 1;
+	for(i := 0; i < len m; i++){
+		if(int m[i] != 0)
+			zero = 0;
+		if(int m[i] != 16rFF)
+			ones = 0;
+	}
+	if(zero || ones)
+		return 0;
+	return (int m[0] & 1) == 0;
+}
+
 lansetup(): int
 {
 	#
@@ -1407,13 +1513,38 @@ lansetup(): int
 	mac[4] = byte (hi & 16rFF);
 	mac[5] = byte ((hi >> 8) & 16rFF);
 
-	zero := 1;
-	for(i = 0; i < 6; i++)
-		if(int mac[i] != 0)
-			zero = 0;
-	if(zero){
-		sys->print("etherusb: LAN78xx MAC reads all zeroes -- refusing\n");
-		return -1;
+	#
+	# Fall back to OTP, which is where this board actually keeps it.
+	#
+	# RX_ADDR is loaded from EEPROM at reset, and the Pi 3B+ has no
+	# EEPROM on this part -- so those registers read back all-ones and
+	# the driver reported a MAC of ff:ff:ff:ff:ff:ff. The address is in
+	# OTP instead, which has to be asked for a byte at a time.
+	#
+	if(!macusable(mac)){
+		if(lanotp(Lotpmacoff, mac) < 0){
+			sys->print("etherusb: LAN78xx OTP read failed: %r\n");
+			return -1;
+		}
+		if(!macusable(mac)){
+			sys->print("etherusb: LAN78xx has no usable MAC in RX_ADDR or OTP\n");
+			return -1;
+		}
+
+		#
+		# Put it where the receiver looks. RX_ADDR is what the MAC
+		# filters incoming frames against, so an address that only
+		# exists in this driver's memory would be advertised in
+		# every packet sent and matched by none received.
+		#
+		lo = (int mac[0]) | (int mac[1] << 8) |
+			(int mac[2] << 16) | (int mac[3] << 24);
+		hi = (int mac[4]) | (int mac[5] << 8);
+		if(lanwr(Lrxaddrl, lo) < 0 || lanwr(Lrxaddrh, hi) < 0){
+			sys->print("etherusb: LAN78xx cannot set its MAC: %r\n");
+			return -1;
+		}
+		sys->print("etherusb: LAN78xx MAC from OTP\n");
 	}
 
 	#

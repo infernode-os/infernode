@@ -406,6 +406,41 @@ assert status(audit_errors=["audit payload unstored at seq 4"]) == "INCONCLUSIVE
 assert status(completed=False) == "INCONCLUSIVE"
 assert status(ok=False, escape_room=False, audit_required=False) == "FAIL"
 
+complete_and_blocked = [
+    {"id": "0", "status": "idle", "label": "Main"},
+    {"id": "1", "status": "complete", "label": "Finished"},
+    {"id": "2", "status": "read", "label": "Blocked"},
+]
+child_records = [
+    {"seq": "1", "event": "agentstart", "message": "activity=1 agent=a"},
+    {"seq": "2", "event": "toolcall", "message": "activity=1 agent=a step=1 tool=read"},
+    {"seq": "3", "event": "toolres", "message": "activity=1 agent=a step=1 tool=read"},
+    {"seq": "4", "event": "agentdone", "message": "activity=1 agent=a"},
+    {"seq": "5", "event": "agentstart", "message": "activity=2 agent=b"},
+    {"seq": "6", "event": "toolcall", "message": "activity=2 agent=b step=1 tool=read"},
+]
+lifecycle_errors = grind.audit_lifecycle_errors(child_records, complete_and_blocked)
+assert any("activity 2 is non-terminal" in e for e in lifecycle_errors), lifecycle_errors
+assert any("unmatched toolcall" in e for e in lifecycle_errors), lifecycle_errors
+assert any("no signed terminal record" in e for e in lifecycle_errors), lifecycle_errors
+assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
+
+cancelled = [dict(a) for a in complete_and_blocked]
+cancelled[2]["status"] = "timeout"
+child_records.append(
+    {"seq": "7", "event": "childtimeout", "message": "activity=2 status=read"})
+lifecycle_errors = grind.audit_lifecycle_errors(child_records, cancelled)
+assert lifecycle_errors == ["activity 2 timed out before reaching a terminal state"], lifecycle_errors
+assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
+
+all_done = complete_and_blocked[:2]
+assert grind.audit_lifecycle_errors(child_records[:4], all_done) == []
+
+driver = (root / "tests/agent-harness/grind-driver").read_text()
+assert "grind childtimeout activity=" in driver
+assert "echo timeout > /mnt/ui/activity/$a/status" in driver
+assert "@@GRIND children terminal=" in driver
+
 # ── the loop itself: retry a boot flake, fail closed on an active crash ──
 #
 # The campaign's own shape: a scenario that flakes before readiness is

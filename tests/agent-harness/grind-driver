@@ -300,6 +300,41 @@ if {~ $followthrough yes} {
 	}
 }
 
+childsettled=no
+for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
+	if {~ $childsettled no} {
+		childpending=no
+		for (a in 1 2 3 4 5 6 7 8 9) {
+			if {ftest -f /mnt/ui/activity/$a/status} {
+				cs=`{cat /mnt/ui/activity/$a/status}
+				if {! ~ $cs complete completed done idle failed error timeout closed hidden} {
+					childpending=yes
+				}
+			}
+		}
+		if {~ $childpending no} {
+			childsettled=yes
+		}{
+			sleep 3
+		}
+	}
+}
+if {~ $childsettled no} {
+	for (a in 1 2 3 4 5 6 7 8 9) {
+		if {ftest -f /mnt/ui/activity/$a/status} {
+			cs=`{cat /mnt/ui/activity/$a/status}
+			if {! ~ $cs complete completed done idle failed error timeout closed hidden} {
+				if {~ $auditstate ready} {
+					echo 'grind childtimeout activity='^$a^' status='^$"cs > /mnt/audit/log
+				}
+				echo timeout > /mnt/ui/activity/$a/status
+				echo '@@GRIND child-timeout activity='^$a^' status='^$"cs
+			}
+		}
+	}
+}
+echo '@@GRIND children terminal='^$childsettled
+
 # Seal the completed run and export a self-contained evidence bundle through
 # the host staging mount before the emulator is reaped. auditget retrieves each
 # stored provenance payload; the host recomputes its chain-pinned SHA-256.

@@ -186,6 +186,10 @@ Lrxen:		con 16r00000001;	# MAC_RX: receiver enable
 Lmaccr:		con 16r100;		# MAC_CR
 Lmacloop:	con 16r00000400;	# MAC_CR: loopback, no PHY involved
 
+# which loop lanloopback() should close
+Lpby:		con 0;			# inside the PHY
+Lmacy:		con 1;			# inside the MAC
+
 #
 # The receive filtering engine. At reset it passes nothing, so a device
 # whose RFE_CTL is never written receives no frames at all -- which is
@@ -1680,8 +1684,22 @@ lanselftest()
 	(e, sr) = lanmiird(Mbmsr);
 	if(e < 0 || (sr & Mbmsrlink))
 		return;		# a real link is a better test than this one
-	sys->print("etherusb: no link -- testing the data path in MAC loopback\n");
-	lanloopback();
+	sys->print("etherusb: no link -- testing the data path in loopback\n");
+	if(lanloopback(Lpby) == 0)
+		return;
+	sys->print("etherusb: PHY loopback did not return a frame; trying the MAC\n");
+	if(lanloopback(Lmacy) == 0)
+		return;
+	sys->print("etherusb: loopback: nothing came back either way\n");
+}
+
+#
+# Undo whichever loopback was set, and put the PHY back to negotiating.
+#
+lanunloop(cr: int)
+{
+	lanwr(Lmaccr, cr);
+	lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart);
 }
 
 #
@@ -1698,24 +1716,50 @@ lanselftest()
 # Auto-negotiation cannot run against nothing, so the speed and duplex
 # are forced: that is what loopback requires, not a shortcut.
 #
-lanloopback(): int
+lanloopback(mode: int): int
 {
 	#
-	# Loop back at the MAC rather than at the PHY.
+	# Two places to loop, and they fail for different reasons.
 	#
-	# MAC_CR has a loopback bit, and it is the better instrument: it
-	# ties the transmitter to the receiver above the PHY entirely, so
-	# the test does not depend on a PHY that has no link, no
-	# auto-negotiation to force, and no speed to guess at. The PHY
-	# loopback this replaces asked the one part of the chain that
-	# cannot work without a cable to stand in for the rest of it.
+	# PHY internal loopback is the standard test with no cable: the
+	# PHY generates its own clocking, so it works with no link
+	# partner. MAC loopback ties transmitter to receiver above the
+	# PHY, which is tidier but still depends on the PHY supplying a
+	# clock -- and a PHY with no link may not be.
+	#
+	# I tried MAC loopback first on the strength of a PHY-loopback
+	# run that reported nothing. That run was reading from an
+	# endpoint that did not exist, so it was not evidence of
+	# anything. Try both, say which was used, and let the board
+	# decide rather than repeating the same mistake in the other
+	# direction.
 	#
 	(e0, cr) := lanrd(Lmaccr);
-	if(e0 < 0 || lanwr(Lmaccr, cr | Lmacloop) < 0){
-		sys->print("etherusb: cannot enter MAC loopback: %r\n");
+	if(e0 < 0)
 		return -1;
+
+	if(mode == Lpby){
+		if(lanmiiwr(Mbmcr, Mbmcrloop | Mbmcr100 | Mbmcrfull) < 0){
+			sys->print("etherusb: cannot enter PHY loopback: %r\n");
+			return -1;
+		}
+		(e, bc) := lanmiird(Mbmcr);
+		if(e < 0 || (bc & Mbmcrloop) == 0){
+			sys->print("etherusb: PHY loopback bit did not take (bmcr %4.4ux)\n", bc);
+			return -1;
+		}
+	}else{
+		if(lanwr(Lmaccr, cr | Lmacloop) < 0){
+			sys->print("etherusb: cannot enter MAC loopback: %r\n");
+			return -1;
+		}
+		(e, v) := lanrd(Lmaccr);
+		if(e < 0 || (v & Lmacloop) == 0){
+			sys->print("etherusb: MAC loopback bit did not take (mac_cr %8.8ux)\n", v);
+			return -1;
+		}
 	}
-	sys->sleep(50);
+	sys->sleep(100);
 
 	#
 	# A frame addressed to ourselves. Broadcast would also come back,
@@ -1736,7 +1780,7 @@ lanloopback(): int
 	sys->print("etherusb: loopback sending %d bytes\n", len tx);
 	if(transmit(tx) < 0){
 		sys->print("etherusb: loopback transmit failed: %r\n");
-		lanwr(Lmaccr, cr);
+		lanunloop(cr);
 		return -1;
 	}
 
@@ -1777,11 +1821,8 @@ lanloopback(): int
 			break;
 		}
 	}
-	if(ok < 0)
-		sys->print("etherusb: loopback: nothing came back\n");
-
 	# Put it back the way it was, whatever happened.
-	lanwr(Lmaccr, cr);
+	lanunloop(cr);
 	return ok;
 }
 

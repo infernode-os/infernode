@@ -59,6 +59,7 @@ enum
 	 */
 	USBREGS		= PHYSIO + 0x980000,
 	Resetlimit	= 100000,	/* ~1s at 10us a turn */
+	Chandislimit	= 10000,	/* ~100ms; a live channel halts at once */
 	/*
 	 * How long to wait on one transfer, and how many attempts before
 	 * calling it dead. Generous on purpose: the point is to bound a
@@ -519,8 +520,29 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			dprint("ep%d.%d before chanio hcchar=%8.8ux\n",
 				ep->dev->nb, ep->nb, hc->hcchar);
 			hc->hcchar |= Chen | Chdis;
-			while(hc->hcchar&Chen)
-				;
+			/*
+			 * Bounded, because a channel that never ran also
+			 * never halts.
+			 *
+			 * This waits for the controller to acknowledge a
+			 * disable. Upstream spins here for ever, which is
+			 * safe only if the channel was live: after a
+			 * transfer that timed out because the controller
+			 * ignored it, Chen stays set and this loop is the
+			 * end of the process. That is what silently ate the
+			 * retry after the first ep2.0 timeout -- one attempt
+			 * appeared in the log and the next never issued,
+			 * because the probe was still spinning here.
+			 */
+			for(n = 0; n < Chandislimit; n++){
+				if((hc->hcchar & Chen) == 0)
+					break;
+				microdelay(10);
+			}
+			if(n >= Chandislimit)
+				print("usbotg: ep%d.%d channel will not halt "
+					"(hcchar %8.8ux)\n",
+					ep->dev->nb, ep->nb, hc->hcchar);
 			hc->hcint = Chhltd;
 		}
 		if((i = hc->hcint) != 0){

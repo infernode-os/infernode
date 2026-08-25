@@ -1585,7 +1585,6 @@ static void
 uartkproc(void *a)
 {
 	int c;
-	static int nkbd;
 
 	USED(a);
 	for(;;){
@@ -1601,17 +1600,38 @@ uartkproc(void *a)
 			continue;
 		}
 		/*
-		 * Say what arrives, the first few times. Bytes are known to
-		 * reach uartgetc() on the board and known not to reach the
-		 * shell, and this process is the only thing between them --
-		 * so either it is not running, or kbdputc is where they
-		 * stop.
+		 * Enter sends CR, not NL -- every terminal emulator does,
+		 * and so does anything driving this line from a script.
+		 * consread()'s cooked-mode line discipline ends a line on
+		 * NL (or ^D) and nothing else, so an untranslated CR is
+		 * appended to kbd.line as an ordinary character and the
+		 * line is never terminated: the characters arrive, the
+		 * kernel holds them, and the shell waits for a line that
+		 * can never be completed.
+		 *
+		 * This is what ICRNL does on any other system. A board
+		 * whose only console is a UART has to do it somewhere, and
+		 * the driver that owns the line is the place.
 		 */
-		if(nkbd < 4){
-			nkbd++;
-			print("uart: kproc got %#2.2ux -> kbdq %s\n",
-				c, kbdq == nil ? "IS NIL" : "ok");
-		}
+		if(c == '\r')
+			c = '\n';
+
+		/*
+		 * Echo here too, because nothing else will. echo() in
+		 * devcons writes to printq or to a bitmapped display;
+		 * printq is never set in this tree and this board has no
+		 * screen, so without this the console is blind -- you type
+		 * and see nothing, which reads exactly like input being
+		 * dropped.
+		 *
+		 * Not via screenputs: putstrn0 already sends kernel output
+		 * down the same wire through serwrite, so borrowing the
+		 * screen hook would double every line the kernel prints.
+		 */
+		if(c == '\n')
+			uartputc('\r');
+		uartputc(c);
+
 		kbdputc(kbdq, c);
 	}
 }

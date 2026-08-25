@@ -1461,11 +1461,22 @@ provisionparse(args: string): (int, string, list of string, string)
 	return (id, mpt, rargs, nil);
 }
 
-# Launch the validated child. Runs spawned: mounting the child tools9p and
-# then handing control to lucibridge blocks for the life of the activity.
+# Launch the validated child. Runs spawned: mounting and restricting the child
+# tools9p, then handing control to lucibridge blocks for the activity lifetime.
+provisionstatus(id: int, status: string)
+{
+	fd := sys->open(sys->sprint("/mnt/ui/activity/%d/status", id), Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte status;
+	sys->write(fd, b, len b);
+}
+
 provisionrun(id: int, mpt: string, rargs: list of string)
 {
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
+	mpath := manifestpath(mpt);
+	sys->remove(mpath);
 
 	# Load and spawn child tools9p as a module (new data segment per load).
 	# This avoids the unreliable shell-based approach — direct module loading
@@ -1473,6 +1484,7 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	t9p := load ShCommand "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load tools9p.dis: %r\n");
+		provisionstatus(id, "failed: namespace setup could not start");
 		return;
 	}
 	spawn t9p->init(nil, rargs);
@@ -1490,16 +1502,33 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	}
 	if(!ready) {
 		sys->fprint(stderr, "tools9p: provision: %s did not mount after 10s\n", mpt);
+		provisionstatus(id, "failed: namespace tool service did not mount");
 		return;
 	}
 
-	sys->fprint(stderr, "tools9p: provision: %s mounted, starting lucibridge\n", mpt);
+	ready = 0;
+	for(i = 0; i < 400; i++) {
+		(ok, nil) := sys->stat(mpath);
+		if(ok >= 0) {
+			ready = 1;
+			break;
+		}
+		sys->sleep(50);
+	}
+	if(!ready) {
+		sys->fprint(stderr, "tools9p: provision: %s did not finish namespace setup after 20s\n", mpt);
+		provisionstatus(id, "failed: namespace setup did not complete");
+		return;
+	}
+
+	sys->fprint(stderr, "tools9p: provision: %s restricted, starting lucibridge\n", mpt);
 
 	# Load and start lucibridge — this blocks (runs agent loop),
 	# which is fine since provisiontask is already a spawned goroutine.
 	lb := load ShCommand "/dis/lucibridge.dis";
 	if(lb == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
+		provisionstatus(id, "failed: task agent could not start");
 		return;
 	}
 	lbargs := "lucibridge" :: "-a" :: string id :: "-s" :: nil;

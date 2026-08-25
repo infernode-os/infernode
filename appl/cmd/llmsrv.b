@@ -150,9 +150,22 @@ user: string;
 vers: int;
 
 # Session pool
+Asyncop: adt {
+	id: int;
+	tag: int;
+};
+
+Asyncreply: adt {
+	id: int;
+	msg: ref Rmsg;
+};
+
 sessions: array of ref LlmSession;
 nsessions: int;
 nextsid: int;
+asyncrepl: chan of ref Asyncreply;
+pendingops: list of ref Asyncop;
+nextasyncid: int;
 
 MAXSESSIONS: con 128;
 MAXPROMPT: con 1048576;
@@ -303,6 +316,7 @@ init(nil: ref Draw->Context, args: list of string)
 	fds[0] = nil;
 
 	pidc := chan of int;
+	asyncrepl = chan of ref Asyncreply;
 	spawn serveloop(tchan, srv, pidc, navops);
 	<-pidc;
 
@@ -513,7 +527,10 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 	pidc <-= sys->pctl(Sys->FORKNS|Sys->NEWFD, 1::2::srv.fd.fd::nil);
 
 Serve:
-	while((gm := <-tchan) != nil) {
+	for(;;) alt {
+	gm := <-tchan =>
+		if(gm == nil)
+			break Serve;
 		pick m := gm {
 		Readerror =>
 			sys->fprint(stderr, "llmsrv: fatal read error: %s\n", m.error);
@@ -583,8 +600,8 @@ Serve:
 				# persistent ORDWR fd, never clunked between turns).
 				triggerpending(sess);
 				if(sess.genactive) {
-					# Block until generation completes, then reply
-					spawn asyncaskread(srv, m, sess);
+					askid := trackasync(m.tag);
+					spawn asyncaskread(askid, m, sess);
 				} else {
 					content := sess.lastresponse;
 					if(content != "" && content[len content - 1] != '\n')
@@ -601,8 +618,8 @@ Serve:
 				# Same write->read transition trigger as Qask, so the
 				# streaming interface (write /ask, read /stream) still works.
 				triggerpending(sess);
-				# Spawn async reader that blocks on stream channel
-				spawn asyncstreamread(srv, m, sess);
+				streamid := trackasync(m.tag);
+				spawn asyncstreamread(streamid, m, sess);
 
 			Qmodel =>
 				sess := findsession(sid);
@@ -909,7 +926,8 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				spawn asynccompact(srv, m.tag, len m.data, sess);
+				compactid := trackasync(m.tag);
+				spawn asynccompact(compactid, m.tag, len m.data, sess);
 
 			Qctl =>
 				sess := findsession(sid);
@@ -945,6 +963,10 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
 
+		Flush =>
+			untrackasync(m.oldtag);
+			srv.reply(ref Rmsg.Flush(m.tag));
+
 		Clunk =>
 			finalizewrite(srv, m.fid);
 			srv.clunk(m);
@@ -978,6 +1000,10 @@ Serve:
 		* =>
 			srv.default(gm);
 		}
+
+	rep := <-asyncrepl =>
+		if(completeasync(rep.id))
+			srv.reply(rep.msg);
 	}
 	navops <-= nil;
 }
@@ -1038,7 +1064,7 @@ triggerpending(sess: ref LlmSession)
 		return;
 	# Allocate channels before spawning, then run generation async.
 	sess.streamch = chan[256] of string;
-	sess.donech = chan of int;
+	sess.donech = chan[1] of int;
 	sess.genactive = 1;
 	spawn rungeneration(sess, prompt);
 }
@@ -1239,7 +1265,40 @@ endgeneration(sess: ref LlmSession)
 
 # --- Async blocking reads ---
 
-asyncaskread(srv: ref Styxserver, m: ref Tmsg.Read, sess: ref LlmSession)
+trackasync(tag: int): int
+{
+	id := ++nextasyncid;
+	pendingops = ref Asyncop(id, tag) :: pendingops;
+	return id;
+}
+
+untrackasync(tag: int): int
+{
+	found := 0;
+	kept: list of ref Asyncop;
+	for(ops := pendingops; ops != nil; ops = tl ops)
+		if((hd ops).tag == tag && !found)
+			found = 1;
+		else
+			kept = hd ops :: kept;
+	pendingops = kept;
+	return found;
+}
+
+completeasync(id: int): int
+{
+	found := 0;
+	kept: list of ref Asyncop;
+	for(ops := pendingops; ops != nil; ops = tl ops)
+		if((hd ops).id == id && !found)
+			found = 1;
+		else
+			kept = hd ops :: kept;
+	pendingops = kept;
+	return found;
+}
+
+asyncaskread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)
 {
 	# Block until generation completes
 	donech := sess.donech;
@@ -1250,26 +1309,26 @@ asyncaskread(srv: ref Styxserver, m: ref Tmsg.Read, sess: ref LlmSession)
 	if(content != "" && content[len content - 1] != '\n')
 		content += "\n";
 
-	srv.reply(styxservers->readbytes(m, array of byte content));
+	asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, array of byte content));
 }
 
-asyncstreamread(srv: ref Styxserver, m: ref Tmsg.Read, sess: ref LlmSession)
+asyncstreamread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)
 {
 	ch := sess.streamch;
 	if(ch == nil) {
 		# No active generation — EOF
-		srv.reply(styxservers->readbytes(m, nil));
+		asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, nil));
 		return;
 	}
 
 	chunk := <-ch;
 	if(chunk == nil || chunk == "") {
 		# Channel "closed" (EOF sentinel)
-		srv.reply(styxservers->readbytes(m, nil));
+		asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, nil));
 		return;
 	}
 
-	srv.reply(styxservers->readbytes(m, array of byte chunk));
+	asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, array of byte chunk));
 }
 
 # --- Compaction ---
@@ -1336,20 +1395,20 @@ compactnow(sess: ref LlmSession): string
 # (serialize per session, INFR-223) rather than race it. Clients drive
 # /compact between turns (e.g. veltro's checkandcompact, after queryllmfd
 # returns), so this guard does not impede normal use.
-asynccompact(srv: ref Styxserver, tag: int, count: int, sess: ref LlmSession)
+asynccompact(id, tag, count: int, sess: ref LlmSession)
 {
 	if(sess.genactive) {
-		srv.reply(ref Rmsg.Error(tag, "compact: generation in progress, retry"));
+		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(tag, "compact: generation in progress, retry"));
 		return;
 	}
 
 	err := compactnow(sess);
 	if(err != nil) {
-		srv.reply(ref Rmsg.Error(tag, "compact: " + err));
+		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(tag, "compact: " + err));
 		return;
 	}
 
-	srv.reply(ref Rmsg.Write(tag, count));
+	asyncrepl <-= ref Asyncreply(id, ref Rmsg.Write(tag, count));
 }
 
 # --- Tool definition parsing ---

@@ -260,25 +260,15 @@ fbconsinit(Fbinfo *fb)
 	fbcls();
 
 	/*
-	 * Draw a banner directly, and say what the pixel reads back as.
+	 * Say so on the panel itself.
 	 *
-	 * The panel went black when this was first installed: the clear
-	 * had plainly reached the display -- the test pattern vanished --
-	 * and no text ever appeared. That is two faults with one
-	 * appearance. Either nothing is reaching screenputs, which is
-	 * entirely possible because most of this kernel's boot output
-	 * goes through uartputstr and never enters devcons at all, or
-	 * glyphs are being drawn and not becoming visible.
-	 *
-	 * Writing here settles it without needing devcons: if this banner
-	 * appears, drawing works and the console is simply not being
-	 * called. The read-back is the other half -- a pixel that reads
-	 * as the foreground colour was written, whatever the panel shows.
+	 * Kept from the diagnostic that established this worked, because
+	 * it is worth having: the first line on the screen is the one
+	 * that proves the screen is a console rather than a surface
+	 * something drew on once. It is also drawn from here, without
+	 * devcons in the path, so it appears even if nothing else ever
+	 * routes text this way.
 	 */
 	fbconsputs("InferNode console\n", 18);
-
-	uartputstr("fb:   glyph pixel reads ");
-	uartputx(((volatile u32int*)cons->base)[3 * (cons->pitch / 4) + 2]);
-	uartputstr("\n");
 	return 0;
 }

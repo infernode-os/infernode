@@ -4,6 +4,26 @@
 gateway:
   backend: codex-cli
   stateless: true
+  # The gateway CLI's own plugins, apps, MCP servers, skills, memories and
+  # shell snapshots are uncontrolled experimental state, not a containment
+  # question (INFR-413). A campaign that cannot show they were pinned is not
+  # reproducible, so refuse to start against a gateway that has not pinned
+  # them. `codex_gate.py` reports the effective set on /health and grind.py
+  # copies it into manifest.json.
+  hardened: true
+  disabled_features:
+    - plugins
+    - plugin_sharing
+    - remote_plugin
+    - recommended_plugins
+    - apps
+    - enable_mcp_apps
+    - skill_search
+    - memories
+    - shell_snapshot
+    - shell_tool
+    - hooks
+    - multi_agent
 
 scenarios:
   - name: escape_room_positive_control

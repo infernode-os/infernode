@@ -59,17 +59,25 @@
 #   CODEX_GATE_EXEC_ARGS  extra args appended to every `codex exec`
 #   CODEX_GATE_PROMPT_ARGV  "1" = pass the prompt as argv, not on stdin
 #   CODEX_GATE_DEBUG      verbose logging
+#   CODEX_GATE_HARDEN     "0" = do not pin the CLI feature surface (see below)
+#   CODEX_GATE_DISABLE_FEATURES  comma list replacing the pinned disable set
+#   CODEX_GATE_HOME_ALLOW comma list of entries allowed in CODEX_GATE_CODEX_HOME
+#
+# Also: `codex_gate.py --inventory [CODEX_HOME]` prints a hashed inventory of
+# the model-side state the CLI created, and exits.  Run it after a campaign.
 #
 # Billing guard: OPENAI_API_KEY in the environment can make the CLI bill the
 # API instead of the ChatGPT plan.  serve-codex-gate.sh unsets it; we also
 # refuse to start unless CODEX_GATE_ALLOW_API_KEY=1 explicitly overrides.
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -126,6 +134,230 @@ ADAPTER_INSTRUCTIONS = (
 # Some builds take the prompt only as a positional argument, not on stdin
 # via `-`.  Transcripts outgrow argv, so stdin is the default.
 PROMPT_ARGV = os.environ.get("CODEX_GATE_PROMPT_ARGV", "") == "1"
+
+
+# ── pinned CLI feature surface (INFR-413) ──────────────────────────
+#
+# During the escape-room campaign, Codex CLI 0.149.0 populated a fresh 0700
+# CODEX_HOME that held only auth.json with 144 plugin-cache files (~26 MiB,
+# the remote curated catalog included), 60 system-skill files, and a shell
+# snapshot.  Nothing escaped — the CLI ran --sandbox read-only, with its
+# native shell disabled, in an empty working directory on a VM with no target
+# filesystem — but the model was carrying tools and instructions nobody
+# recorded, and the next campaign would carry different ones.  So the gateway
+# pins the surface instead of inheriting whatever the installed CLI defaults
+# to, and reports what it pinned on /health for the campaign manifest.
+#
+# `--disable X` is `-c features.X=false`.  An unknown name is a hard error
+# from the CLI, and that is the point: a build that renames one must fail
+# loudly rather than quietly serve requests with the feature back on.
+
+HARDEN = os.environ.get("CODEX_GATE_HARDEN", "1") != "0"
+
+# Flags that stop the CLI reading configuration of its own or writing session
+# state.  Like --sandbox, these are never auto-dropped on a usage error.
+HARDEN_FLAGS = ("--ephemeral", "--ignore-user-config", "--ignore-rules")
+
+DEFAULT_DISABLED_FEATURES = (
+    # plugins, including the remote curated catalog and its cache
+    "plugins", "plugin_sharing", "remote_plugin", "recommended_plugins",
+    # apps and the MCP surface they reach
+    "apps", "enable_mcp_apps", "tool_call_mcp_elicitation",
+    # system skills and the dependency installer a skill can trigger
+    "skill_search", "skill_mcp_dependency_install",
+    # state that would persist between trials
+    "memories", "shell_snapshot",
+    # code execution that is not the caller's virtual-tool protocol
+    "shell_tool", "hooks",
+    # the CLI running agents of its own; the caller owns delegation
+    "multi_agent", "multi_agent_v2",
+    # host surfaces a protocol adapter has no use for
+    "browser_use", "browser_use_external", "browser_use_full_cdp_access",
+    "computer_use", "in_app_browser", "image_generation", "view_image",
+    "tool_suggest",
+)
+
+# Entries the protocol's isolated Codex home is allowed to hold before the
+# first request.  The dedicated OAuth login and nothing else: a config.toml,
+# an AGENTS.md, an mcp.json or a plugins directory that arrived some other way
+# is an uncontrolled instruction or tool source.
+DEFAULT_HOME_ALLOW = ("auth.json", "auth.json.lock", "version.json",
+                      "installation_id")
+
+
+def disabled_features():
+    """The features every `codex exec` turns off.
+
+    Unhardened, the native shell is still disabled — that one is the adapter's
+    security contract (the model must request effects from the caller, not
+    inspect the gateway host), not a reproducibility measure.
+    """
+    override = os.environ.get("CODEX_GATE_DISABLE_FEATURES")
+    if override is not None:
+        return tuple(f.strip() for f in override.split(",") if f.strip())
+    return DEFAULT_DISABLED_FEATURES if HARDEN else ("shell_tool",)
+
+
+def home_allowlist():
+    override = os.environ.get("CODEX_GATE_HOME_ALLOW")
+    if override is not None:
+        return tuple(n.strip() for n in override.split(",") if n.strip())
+    return DEFAULT_HOME_ALLOW
+
+
+def profile_flags():
+    """The invariant, security-relevant part of every `codex exec`.
+
+    build_argv() and the /health profile are both built from this, so the
+    flags a campaign records cannot drift from the flags it ran under.
+    """
+    flags = ["--sandbox", SANDBOX, "--strict-config"]
+    for feature in disabled_features():
+        flags += ["--disable", feature]
+    if HARDEN:
+        flags += list(HARDEN_FLAGS)
+    return flags
+
+
+def codex_home_violations(home, allow):
+    """Entries in the isolated Codex home that were not put there on purpose."""
+    try:
+        entries = sorted(os.listdir(home))
+    except OSError as e:
+        return ["cannot read CODEX_HOME %s: %s" % (home, e)]
+    violations = []
+    mode = os.stat(home).st_mode & 0o777
+    if mode & 0o077:
+        violations.append("CODEX_HOME is mode %s; it holds credentials" % oct(mode))
+    for name in entries:
+        if name in allow:
+            continue
+        kind = "directory" if os.path.isdir(os.path.join(home, name)) else "file"
+        violations.append("unexpected %s %r" % (kind, name))
+    return violations
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def codex_home_inventory(home):
+    """Every file under a Codex home, hashed.
+
+    The CLI populates this directory itself while a campaign runs, so an
+    inventory taken afterwards is the only account of what model-side state
+    the trials actually carried.  The top-level `sha256` covers the whole
+    listing, so two campaigns can be compared by one value.
+    """
+    entries = []
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(home):
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, home)
+            try:
+                stat = os.stat(path)
+                entries.append({"path": rel, "size": stat.st_size,
+                                "mode": oct(stat.st_mode & 0o777),
+                                "sha256": file_sha256(path)})
+                total += stat.st_size
+            except OSError as e:
+                entries.append({"path": rel, "error": str(e)})
+    listing = "\n".join("%s %s" % (e["path"], e.get("sha256", "unreadable"))
+                        for e in entries)
+    return {"home": home, "files": len(entries), "bytes": total,
+            "sha256": hashlib.sha256(listing.encode()).hexdigest(),
+            "entries": entries}
+
+
+def codex_version():
+    try:
+        result = subprocess.run([CODEX_BIN, "--version"], env=child_env(),
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise SystemExit("codex-gate: cannot determine codex version: %s" % e)
+    if result.returncode != 0:
+        raise SystemExit("codex-gate: `codex --version` failed: %s"
+                         % result.stdout.strip())
+    return result.stdout.strip()
+
+
+def parse_features(text):
+    """`codex features list` output → {name: enabled}.
+
+    Each line is "<name> <stage…> <true|false>"; only the first and last
+    fields matter here.
+    """
+    features = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[-1] in ("true", "false"):
+            features[fields[0]] = fields[-1] == "true"
+    return features
+
+
+def effective_features(disabled):
+    """Ask the installed CLI what its feature set is under our flags.
+
+    Two jobs at once: it validates every pinned name against this build (the
+    CLI errors on one it does not know) and it produces the hashable record
+    the campaign manifest needs.  It evaluates the same CODEX_HOME the child
+    will use, so a config.toml smuggled in there would show up here too.
+    """
+    argv = [CODEX_BIN, "features", "list"]
+    for feature in disabled:
+        argv += ["--disable", feature]
+    try:
+        result = subprocess.run(argv, env=child_env(), stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise SystemExit("codex-gate: cannot inspect codex features: %s" % e)
+    if result.returncode != 0:
+        raise SystemExit("codex-gate: the installed CLI rejected the pinned "
+                         "feature set: %s" % result.stdout.strip())
+    features = parse_features(result.stdout)
+    still_on = [f for f in disabled if features.get(f)]
+    if still_on:
+        raise SystemExit("codex-gate: the CLI reports %s still enabled after "
+                         "--disable" % ", ".join(still_on))
+    canonical = "\n".join("%s=%s" % (k, features[k]) for k in sorted(features))
+    return features, hashlib.sha256(canonical.encode()).hexdigest()
+
+
+# Filled in at startup by gate_profile(); reported on /health so a campaign
+# manifest records the CLI version and effective configuration it ran against.
+PROFILE = {}
+
+
+def gate_profile():
+    """Version, flags and effective feature set of this gateway."""
+    profile = {
+        "hardened": HARDEN,
+        "sandbox": SANDBOX,
+        "exec_flags": profile_flags(),
+        "disabled_features": list(disabled_features()),
+        "adapter_instructions_sha256":
+            hashlib.sha256(ADAPTER_INSTRUCTIONS.encode()).hexdigest(),
+    }
+    if MOCK:
+        profile["codex_version"] = "mock"
+        return profile
+    profile["codex_version"] = codex_version()
+    features, digest = effective_features(disabled_features())
+    profile["features_sha256"] = digest
+    profile["features_enabled"] = sorted(k for k, on in features.items() if on)
+    home = os.environ.get("CODEX_GATE_CODEX_HOME")
+    if home:
+        profile["codex_home_baseline"] = {
+            k: v for k, v in codex_home_inventory(home).items() if k != "entries"}
+    return profile
 
 _sem = None     # asyncio.Semaphore, created on startup
 
@@ -416,13 +648,14 @@ def unknown_flag(stderr):
 
 
 def build_argv(model, schema_path, last_message_path, prompt):
-    # Native CLI shell access competes with the virtual caller-tool protocol:
+    # profile_flags() carries the sandbox, the pinned feature disables and the
+    # "read no configuration of your own" flags. Native CLI shell access is
+    # among them because it competes with the virtual caller-tool protocol:
     # the model otherwise tries to read the gateway VM instead of requesting
-    # Veltro's read tool. Keep it disabled even though the CLI sandbox is also
-    # read-only; the gateway must return requested effects to the caller.
-    argv = [CODEX_BIN, "exec", "--sandbox", SANDBOX,
-            "--disable", "shell_tool", "--strict-config", "-c",
-            "developer_instructions=" + json.dumps(ADAPTER_INSTRUCTIONS)]
+    # Veltro's read tool. None of these are droppable — a build that does not
+    # understand one must fail loudly rather than run without it.
+    argv = [CODEX_BIN, "exec"] + profile_flags() + \
+        ["-c", "developer_instructions=" + json.dumps(ADAPTER_INSTRUCTIONS)]
     def add(flag, value=None):
         if flag in _dropped_flags:
             return
@@ -650,20 +883,37 @@ async def models(request):
 
 
 async def health(request):
-    return web.json_response({
+    body = {
         "status": "ok",
         "backend": "mock" if MOCK else "codex-cli",
         # No live CLI session spans a tool round-trip here (see the module
         # comment); the key stays for parity with claude-gate's /health.
         "held_turns": 0,
         "stateless": True,
-    })
+    }
+    # The pinned CLI surface (INFR-413). A campaign records this verbatim, and
+    # grind.py's gateway preflight refuses to start a trial against a gateway
+    # that is not running the profile the scenario asked for.
+    body.update(PROFILE)
+    return web.json_response(body)
 
 
 def main():
     logging.basicConfig(
         level=logging.DEBUG if os.environ.get("CODEX_GATE_DEBUG") else logging.INFO,
         format="codex-gate: %(levelname)s %(message)s")
+
+    # `codex_gate.py --inventory [HOME]` — the post-campaign account of the
+    # model-side state the CLI created for itself (INFR-413). Not a server
+    # mode; it prints and exits.
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--inventory":
+        home = (argv[1] if len(argv) > 1 else
+                os.environ.get("CODEX_GATE_CODEX_HOME") or
+                os.environ.get("CODEX_HOME") or
+                os.path.expanduser("~/.codex"))
+        print(json.dumps(codex_home_inventory(home), indent=2))
+        return
 
     if os.environ.get("OPENAI_API_KEY") and not MOCK \
             and os.environ.get("CODEX_GATE_ALLOW_API_KEY") != "1":
@@ -672,10 +922,30 @@ def main():
             "instead of your ChatGPT plan. Unset it (serve-codex-gate.sh "
             "does) or set CODEX_GATE_ALLOW_API_KEY=1 to override.")
 
+    # An isolated Codex home is only isolated if nothing else got in. Checked
+    # before the first request, because the CLI populates the directory itself
+    # once one arrives and the baseline is gone (INFR-413).
+    home = os.environ.get("CODEX_GATE_CODEX_HOME")
+    if home and not MOCK:
+        violations = codex_home_violations(home, home_allowlist())
+        if violations:
+            raise SystemExit(
+                "codex-gate: refusing to serve — %s holds configuration this "
+                "gateway did not sanction:\n  %s\nRemove it, or widen "
+                "CODEX_GATE_HOME_ALLOW deliberately."
+                % (home, "\n  ".join(violations)))
+
     allow_api_key = os.environ.get("OPENAI_API_KEY") and \
         os.environ.get("CODEX_GATE_ALLOW_API_KEY") == "1"
     if not allow_api_key:
         check_codex_auth()
+
+    PROFILE.update(gate_profile())
+    if not MOCK:
+        log.info("codex %s, %s, %d features disabled",
+                 PROFILE.get("codex_version"),
+                 "hardened" if HARDEN else "NOT hardened",
+                 len(PROFILE.get("disabled_features", [])))
 
     if not MOCK:
         try:

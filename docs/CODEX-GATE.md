@@ -79,7 +79,12 @@ All endpoints bind `127.0.0.1` only.
 `/health` response:
 
 ```json
-{"status": "ok", "backend": "codex-cli", "held_turns": 0, "stateless": true}
+{"status": "ok", "backend": "codex-cli", "held_turns": 0, "stateless": true,
+ "hardened": true, "codex_version": "codex-cli 0.149.0",
+ "sandbox": "read-only", "exec_flags": ["--sandbox", "read-only", "..."],
+ "disabled_features": ["plugins", "..."], "features_sha256": "…",
+ "adapter_instructions_sha256": "…",
+ "codex_home_baseline": {"files": 1, "bytes": 4156, "sha256": "…"}}
 ```
 
 - `status` — `"ok"` if the daemon is serving. Non-mock startup first runs
@@ -90,6 +95,11 @@ All endpoints bind `127.0.0.1` only.
   `CODEX_GATE_MOCK=1` (deterministic test backend, no CLI, no billing).
 - `held_turns` — always 0 here (see above); present so monitoring can treat
   both gates alike.
+- `hardened`, `codex_version`, `exec_flags`, `disabled_features`,
+  `features_sha256`, `adapter_instructions_sha256`, `codex_home_baseline` —
+  the pinned CLI surface (see below). `grind.py` copies these into a
+  campaign's `manifest.json` and a scenario file can require them, so a
+  containment result names the gateway configuration it was measured under.
 
 ## Lifecycle & startup
 
@@ -133,7 +143,56 @@ Config (env, read at start):
 | `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child, to isolate `~/.codex` (you must copy `auth.json` in yourself) |
 | `CODEX_GATE_EXEC_ARGS` | *(empty)* | extra args appended to every `codex exec` |
 | `CODEX_GATE_PROMPT_ARGV` | *(unset)* | `1` = pass the prompt as argv instead of stdin |
+| `CODEX_GATE_HARDEN` | `1` | pin the CLI feature surface (see below); `0` disables the pinning but never the adapter's own `--disable shell_tool` |
+| `CODEX_GATE_DISABLE_FEATURES` | *(unset)* | comma list replacing the pinned disable set |
+| `CODEX_GATE_HOME_ALLOW` | `auth.json,auth.json.lock,version.json,installation_id` | what the isolated Codex home may contain at startup |
 | `CODEX_GATE_MOCK`, `CODEX_GATE_DEBUG` | — | test backend, verbose logs |
+
+## Pinned CLI surface
+
+The Codex CLI is an agent harness with a life of its own. During the
+escape-room campaign it populated a fresh 0700 `CODEX_HOME` — created with
+nothing in it but `auth.json` — with 144 plugin-cache files (~26 MiB,
+including the remote curated catalog), 60 system-skill files and a shell
+snapshot. Nothing escaped: the CLI ran `--sandbox read-only`, with its native
+shell disabled, in an empty working directory, on a machine with no access to
+the system under test. But the model was carrying tools and instructions that
+no run record named, and the next run would carry different ones.
+
+So the gate pins the surface rather than inheriting it (INFR-413). Every
+`codex exec` gets:
+
+- `--ephemeral`, so no session files are written;
+- `--ignore-user-config`, so no `config.toml` is loaded;
+- `--ignore-rules`, so no user or project execpolicy `.rules` file is loaded;
+- `--disable` for plugins (and plugin sharing, remote plugins, the recommended
+  catalog), apps and their MCP surface, skill search and the skill dependency
+  installer, memories, shell snapshots, hooks, the CLI's own multi-agent mode,
+  and the browser/computer/image surfaces a protocol adapter has no use for.
+
+None of these are auto-dropped on a usage error, for the same reason
+`--sandbox` is not: a build that does not understand one must fail loudly
+instead of quietly running without it. At startup the gate asks
+`codex features list` for the effective state under exactly those flags, which
+both validates every pinned name against the installed build and produces the
+hash reported on `/health`.
+
+If `CODEX_GATE_CODEX_HOME` is set, the gate inventories it **before**
+authenticating through it and refuses to serve when it holds anything outside
+the allowlist — a `config.toml`, an `AGENTS.md`, an `mcp.json`, a `plugins/`
+or `skills/` directory — or when the directory itself is group- or
+world-accessible. The check runs once at startup because the CLI fills the
+directory in itself as soon as the first request arrives.
+
+After a campaign, account for what it created:
+
+```sh
+tools/codex-gate/serve-codex-gate.sh --inventory    # or: --inventory PATH
+```
+
+That prints every file under the Codex home with its size, mode and SHA-256,
+plus one digest over the whole listing, so two campaigns can be compared by a
+single value.
 
 ## Setup (pointing InferNode at it)
 
@@ -206,25 +265,35 @@ deliberately).
   `--sandbox read-only`, and `--cd` to a private empty directory. The first two
   make caller tools functional; the latter two remain defense in depth. Run
   the gate as a dedicated user with nothing else to read.
-- **Global CLI instructions still load.** A `~/.codex/AGENTS.md` (or config
-  in `~/.codex/config.toml`) applies to gate traffic too. Set
-  `CODEX_GATE_CODEX_HOME` to a directory holding only `auth.json` to isolate
-  it.
+- **Global CLI instructions do not load.** `--ignore-user-config` and
+  `--ignore-rules` keep `config.toml`, execpolicy `.rules` and the
+  configuration-borne instruction sources out. `AGENTS.md` files are read from
+  the working directory, which is a private empty one. Set
+  `CODEX_GATE_CODEX_HOME` to a directory holding only `auth.json` as well, and
+  the gate will hold it to that.
 - **Flag compatibility.** `--json`, `--skip-git-repo-check`, `--cd`,
   `--output-last-message` and `--output-schema` are dropped automatically if
   the installed CLI rejects them (the call is retried without). `--sandbox`
-  `--disable shell_tool`, `--strict-config`, and `developer_instructions` are
-  deliberately *not* auto-dropped: a build that doesn't understand the
-  adapter's security contract fails loudly. The gate also parses both
+  `--disable`, `--strict-config`, `--ephemeral`, `--ignore-user-config`,
+  `--ignore-rules` and `developer_instructions` are deliberately *not*
+  auto-dropped: a build that doesn't understand the adapter's security
+  contract fails loudly. The gate also parses both
   `codex exec --json` event dialects (the current
   `item.completed` stream and the older `msg`-wrapped one).
 
 ## Tests
 
 ```sh
-./tests/host/codex_gate_test.sh     # mock-mode: OpenAI surface + tool bridge
+./tests/host/codex_gate_test.sh     # mock-mode: OpenAI surface, tool bridge,
+                                    # pinned CLI surface, Codex-home preflight
 ./tests/host/llmctl_test.sh         # llmctl incl. set codex / backend=codex
 ```
+
+`codex_gate_test.sh` bills nothing. When a `codex` CLI is on `PATH` it also
+checks every pinned feature name against that build — `codex features list`
+evaluates local configuration only — so a renamed flag is caught before a
+campaign runs with the feature quietly back on. Without a CLI that one check
+is skipped and the rest still runs.
 
 Live end-to-end (needs a logged-in CLI; uses your plan's allowance): start
 the gate, then inside emu `llmsrv -b openai -u http://127.0.0.1:11436/v1`

@@ -154,7 +154,8 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 argv = m.build_argv("gpt-5-codex", "/tmp/s.json", "/tmp/last.txt", "PROMPT")
 assert argv[:2] == ["codex", "exec"], argv
 assert "--sandbox" in argv and argv[argv.index("--sandbox") + 1] == "read-only", argv
-assert "--disable" in argv and argv[argv.index("--disable") + 1] == "shell_tool", argv
+disabled = [argv[i + 1] for i, a in enumerate(argv) if a == "--disable"]
+assert "shell_tool" in disabled, argv
 assert "--strict-config" in argv, argv
 assert any(a.startswith("developer_instructions=") for a in argv), argv
 assert argv[argv.index("--cd") + 1] == m.WORKDIR, argv
@@ -225,5 +226,164 @@ else:
     raise AssertionError("API-key login accepted as ChatGPT OAuth")
 PY
 pass "startup readiness requires a ChatGPT OAuth login"
+
+# 11. The CLI's own plugin/skill/MCP surface is pinned, not inherited.
+#     Codex CLI 0.149.0 filled a fresh CODEX_HOME (auth.json only) with 144
+#     plugin-cache files, 60 system-skill files and a shell snapshot during
+#     the escape-room campaign (INFR-413). None of it was recorded anywhere.
+python3 - "$ROOT" <<'PY' || fail "gateway hardening"
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+
+root = sys.argv[1]
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", root + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# Every hardening flag reaches the child, and none of them is droppable: a
+# CLI that rejects one must fail loudly, exactly as with --sandbox.
+argv = m.build_argv("gpt-5-codex", "/tmp/s.json", "/tmp/last.txt", "PROMPT")
+for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules"):
+    assert flag in argv, (flag, argv)
+    assert flag not in m.OPTIONAL_FLAGS, flag
+assert "--sandbox" not in m.OPTIONAL_FLAGS
+disabled = [argv[i + 1] for i, a in enumerate(argv) if a == "--disable"]
+for feature in ("plugins", "apps", "skill_search", "memories",
+                "shell_snapshot", "shell_tool", "hooks", "multi_agent"):
+    assert feature in disabled, (feature, disabled)
+assert disabled == list(m.disabled_features()), (disabled, m.disabled_features())
+# The recorded profile is built from the same function as the argv, so a
+# campaign manifest cannot describe flags the gate did not actually pass.
+flags = m.profile_flags()
+assert flags == argv[2:2 + len(flags)], (flags, argv)
+
+# Turning hardening off is deliberate and visible — but the adapter's own
+# security contract (no native shell) is not part of the switch.
+os.environ["CODEX_GATE_HARDEN"] = "0"
+m.HARDEN = False
+assert m.disabled_features() == ("shell_tool",), m.disabled_features()
+assert "--ephemeral" not in m.profile_flags(), m.profile_flags()
+m.HARDEN = True
+del os.environ["CODEX_GATE_HARDEN"]
+
+# An isolated Codex home holds the dedicated login and nothing else.
+with tempfile.TemporaryDirectory() as td:
+    home = os.path.join(td, "codex-home")
+    os.mkdir(home, 0o700)
+    open(os.path.join(home, "auth.json"), "w").write("{}")
+    assert m.codex_home_violations(home, m.home_allowlist()) == []
+
+    for name in ("config.toml", "AGENTS.md", "mcp.json"):
+        path = os.path.join(home, name)
+        open(path, "w").write("x")
+        violations = m.codex_home_violations(home, m.home_allowlist())
+        assert any(name in v for v in violations), (name, violations)
+        os.unlink(path)
+
+    for name in ("plugins", "skills", "rules", "shell_snapshots"):
+        path = os.path.join(home, name)
+        os.mkdir(path)
+        violations = m.codex_home_violations(home, m.home_allowlist())
+        assert any(name in v and "directory" in v for v in violations), \
+            (name, violations)
+        os.rmdir(path)
+
+    # It also holds an OAuth credential, so a readable home is a violation.
+    os.chmod(home, 0o755)
+    violations = m.codex_home_violations(home, m.home_allowlist())
+    assert any("credentials" in v for v in violations), violations
+    os.chmod(home, 0o700)
+
+    # The post-campaign inventory accounts for what the CLI created itself.
+    os.makedirs(os.path.join(home, "plugins", "cache"))
+    open(os.path.join(home, "plugins", "cache", "catalog.json"), "w").write("[]")
+    inventory = m.codex_home_inventory(home)
+    assert inventory["files"] == 2, inventory
+    paths = sorted(e["path"] for e in inventory["entries"])
+    assert paths == ["auth.json", "plugins/cache/catalog.json"], paths
+    assert all(len(e["sha256"]) == 64 for e in inventory["entries"]), inventory
+    before = inventory["sha256"]
+    open(os.path.join(home, "plugins", "cache", "catalog.json"), "w").write("[1]")
+    assert m.codex_home_inventory(home)["sha256"] != before
+
+# `codex features list` output → the effective state the manifest records.
+features = m.parse_features(
+    "plugins                     stable             false\n"
+    "shell_tool                  stable             false\n"
+    "web_search                  stable             true\n")
+assert features == {"plugins": False, "shell_tool": False, "web_search": True}, features
+PY
+pass "hardening flags, home preflight and state inventory"
+
+# 12. The pinned feature names must exist in the installed CLI. This is the
+#     forward-compatibility gate: a renamed flag would otherwise silently stop
+#     disabling anything. Deterministic and offline — `codex features list`
+#     evaluates local configuration and bills nothing.
+if command -v codex >/dev/null 2>&1; then
+    python3 - "$ROOT" <<'PY' || fail "pinned features not known to the installed CLI"
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.MOCK = False
+features, digest = m.effective_features(m.DEFAULT_DISABLED_FEATURES)
+assert len(digest) == 64, digest
+for feature in m.DEFAULT_DISABLED_FEATURES:
+    assert feature in features, "installed CLI does not know " + feature
+    assert features[feature] is False, feature
+try:
+    m.effective_features(("no_such_feature_xyz",))
+except SystemExit as e:
+    assert "rejected" in str(e), e
+else:
+    raise AssertionError("an unknown feature name was accepted silently")
+PY
+    pass "pinned feature names validate against the installed codex CLI"
+else
+    echo "skip: codex CLI not on PATH — pinned feature names not validated"
+fi
+
+# 13. /health carries the pinned profile, so a campaign manifest records the
+#     configuration the trial actually ran under.
+out="$(curl -sf "$BASE/health")"
+echo "$out" | grep -q '"hardened": true' || fail "health: no hardening flag ($out)"
+echo "$out" | grep -q '"disabled_features"' || fail "health: no feature list ($out)"
+echo "$out" | grep -q '"shell_tool"' || fail "health: shell_tool not pinned ($out)"
+echo "$out" | grep -q '"exec_flags"' || fail "health: no exec flags ($out)"
+echo "$out" | grep -q '"adapter_instructions_sha256"' || fail "health: adapter contract unhashed ($out)"
+pass "health reports the pinned CLI profile"
+
+# 14. grind.py's gateway preflight refuses an unpinned gateway.
+python3 - "$ROOT" "$PORT" <<'PY' || fail "grind gateway preflight"
+import importlib.util
+import sys
+
+root, port = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location(
+    "grind", root + "/tests/agent-harness/grind.py")
+grind = importlib.util.module_from_spec(spec); spec.loader.exec_module(grind)
+
+url = "http://127.0.0.1:%s/v1" % port
+# The mock backend is not codex-cli, so the escape-room requirement rejects it
+# before anything else — that guard already existed and must keep working.
+for requirements, expect in (
+        ({"backend": "codex-cli"}, "backend"),
+        ({"hardened": True, "backend": "mock"}, None),
+        ({"disabled_features": ["plugins"], "backend": "mock"}, None),
+        ({"disabled_features": ["no_such_feature"], "backend": "mock"}, "does not disable"),
+        ({"codex_version": "codex-cli 9.9.9", "backend": "mock"}, "pins")):
+    try:
+        grind.gateway_preflight(url, "default", requirements)
+    except RuntimeError as e:
+        assert expect and expect in str(e), (requirements, e)
+    else:
+        assert expect is None, (requirements, "was accepted")
+PY
+pass "grind preflight rejects a gateway that is not pinned as required"
 
 echo "=== codex-gate mock-mode tests: all green ==="

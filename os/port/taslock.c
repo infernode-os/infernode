@@ -102,8 +102,25 @@ unlock(Lock *l)
 		print("unlock: not locked: pc %lux\n", getcallerpc(&l));
 	p = l->pri;
 	l->pc = 0;
-	l->key = 0;
+	/*
+	 * The barrier goes BEFORE the store that releases the lock, not
+	 * after it.
+	 *
+	 * Releasing is "everything I did under this lock is visible, and
+	 * only then is the lock free". Ordering it the other way round
+	 * lets the store that frees the lock be observed before the
+	 * writes it was protecting, so another observer can take the
+	 * lock and read data that has not arrived yet -- and _tas()
+	 * acquires with ldaxr, so the acquire side is already correct
+	 * and would give no warning.
+	 *
+	 * Latent rather than live in this kernel: the secondary cores
+	 * are parked, so there is no other observer to see the wrong
+	 * order. It becomes real on the day SMP is brought up, and it
+	 * would be a very unpleasant thing to go looking for then.
+	 */
 	coherence();
+	l->key = 0;
 	if(up){
 		up->pri = p;
 
@@ -156,7 +173,24 @@ iunlock(Lock *l)
 		print("iunlock: not locked: pc %lux\n", getcallerpc(&l));
 	sr = l->sr;
 	l->pc = 0;
-	l->key = 0;
+	/*
+	 * The barrier goes BEFORE the store that releases the lock, not
+	 * after it.
+	 *
+	 * Releasing is "everything I did under this lock is visible, and
+	 * only then is the lock free". Ordering it the other way round
+	 * lets the store that frees the lock be observed before the
+	 * writes it was protecting, so another observer can take the
+	 * lock and read data that has not arrived yet -- and _tas()
+	 * acquires with ldaxr, so the acquire side is already correct
+	 * and would give no warning.
+	 *
+	 * Latent rather than live in this kernel: the secondary cores
+	 * are parked, so there is no other observer to see the wrong
+	 * order. It becomes real on the day SMP is brought up, and it
+	 * would be a very unpleasant thing to go looking for then.
+	 */
 	coherence();
+	l->key = 0;
 	splxpc(sr);
 }

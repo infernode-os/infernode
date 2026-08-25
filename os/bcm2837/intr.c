@@ -266,3 +266,40 @@ intrinit(void)
 	LOCAL(Lgpuirqrouting) = 0;	/* IRQ (not FIQ) to core 0 */
 	coherence();
 }
+
+/*
+ * Say what the interrupt controller actually shows, when nothing claimed
+ * an interrupt.
+ *
+ * The first attempt at this reported only the source intrrun could not
+ * place, which turned out to be the wrong question: irqorphan came back
+ * -1, meaning nothing enabled-and-pending was rejected -- irqdispatch
+ * simply found nothing to dispatch. So the interrupt arrives from
+ * somewhere outside the GPU pending set, and the registers that would
+ * name it are the local source register and the three pending registers,
+ * none of which were being printed.
+ *
+ * uartputstr rather than print: this runs at splhi from the trap path,
+ * where the console queue has no reader.
+ */
+void
+intrdump(void)
+{
+	uartputstr("intr: Lirqsource0 ");
+	uartputx(LOCAL(Lirqsource0));
+	uartputstr(" GPUpending ");
+	uartputx(INTREGS->GPUpending[0]);
+	uartputstr(" ");
+	uartputx(INTREGS->GPUpending[1]);
+	uartputstr(" ARMpending ");
+	uartputx(INTREGS->ARMpending);
+	uartputstr("\n      enabled ");
+	uartputx(irqenabled[0]);
+	uartputstr(" ");
+	uartputx(irqenabled[1]);
+	uartputstr(" ");
+	uartputx(irqenabled[2]);
+	uartputstr(" orphan ");
+	uartputd(irqorphan);
+	uartputstr("\n");
+}

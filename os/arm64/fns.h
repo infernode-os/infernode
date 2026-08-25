@@ -83,6 +83,7 @@ void	microdelay(int);
 int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
 extern int irqorphan;
+void	intrdump(void);
 /*
  * intr.c -- the board's interrupt controller.
  *

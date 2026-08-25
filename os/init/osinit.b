@@ -934,7 +934,24 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 	sys->sleep(pwrgood);
 
 	for(port = 1; port <= nports; port++){
-		status := portstatus(d, port);
+		#
+		# Poll, rather than asking once.
+		#
+		# Powering a port is not the same as a device having
+		# signalled attach on it: the hub reports power good after
+		# pwrgood ms, but the device downstream then has to be seen
+		# to connect, and that is its own timescale. Asking exactly
+		# once at pwrgood reports an empty port for anything slower
+		# than the hub -- which is every port on this board except
+		# the one whose device was already up.
+		#
+		status := -1;
+		for(try := 0; try < 10; try++){
+			status = portstatus(d, port);
+			if(status < 0 || (status & HPpresent))
+				break;
+			sys->sleep(50);
+		}
 		if(status < 0){
 			sys->print("init: %sport %d status failed: %r\n", indent, port);
 			continue;

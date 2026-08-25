@@ -1733,6 +1733,7 @@ lanloopback(): int
 	for(i = 14; i < len tx; i++)
 		tx[i] = byte (i & 16rFF);
 
+	sys->print("etherusb: loopback sending %d bytes\n", len tx);
 	if(transmit(tx) < 0){
 		sys->print("etherusb: loopback transmit failed: %r\n");
 		lanwr(Lmaccr, cr);
@@ -1743,13 +1744,32 @@ lanloopback(): int
 	ok := -1;
 	for(try := 0; try < 20; try++){
 		n := sys->read(bulkfd, buf, len buf);
+		#
+		# Say what the read did, for the first few attempts.
+		#
+		# This loop swallowed every n <= 0 in silence, which makes
+		# "nothing came back" cover two opposite faults: an endpoint
+		# that NAKs for ever and never delivers, versus data that
+		# arrives and fails to unwrap. Those need opposite fixes and
+		# the test could not tell them apart -- so it was reporting
+		# a conclusion it had not earned.
+		#
+		if(try < 4)
+			sys->print("etherusb: loopback read %d -> %d\n", try, n);
 		if(n <= 0){
 			sys->sleep(50);
 			continue;
 		}
-		(nil, frame) := family.unwrap(buf, n);
-		if(frame == nil)
+		if(try < 4 && n >= 8)
+			sys->print("etherusb:   rx %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
+				int buf[0], int buf[1], int buf[2], int buf[3],
+				int buf[4], int buf[5], int buf[6], int buf[7]);
+		(used, frame) := family.unwrap(buf, n);
+		if(frame == nil){
+			if(try < 4)
+				sys->print("etherusb:   unwrap gave nothing (used %d)\n", used);
 			continue;
+		}
 		if(len frame >= 14 && frame[0:6] == mac[0:6]){
 			sys->print("etherusb: loopback OK -- %d bytes returned\n",
 				len frame);

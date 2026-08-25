@@ -1001,7 +1001,7 @@ init(Hci *hp)
 {
 	Ctlr *ctlr;
 	Dwcregs *r;
-	uint n, rx, tx, ptx;
+	uint n, rx, tx, ptx, cfg, hsphy, width;
 
 	ctlr = hp->aux;
 	r = ctlr->regs;
@@ -1022,6 +1022,54 @@ init(Hci *hp)
 	if(n >= Resetlimit)
 		print("usbotg: AHB never idle (grstctl %8.8ux) -- "
 			"controller absent or unpowered?\n", r->grstctl);
+	/*
+	 * Select the PHY interface BEFORE the soft reset, because the
+	 * reset is what makes the selection take effect.
+	 *
+	 * This was not being done at all. The reference driver gets away
+	 * with it because the VideoCore firmware configures the PHY first
+	 * and these fields survive a soft reset -- but that only holds if
+	 * the firmware really did initialise the block. If the power
+	 * request never took (see setpower), the PHY is left at reset
+	 * defaults instead, and a core whose PHY interface width does not
+	 * match the wiring cannot move data: host channels are accepted,
+	 * report queue space, and never run.
+	 *
+	 * The width is read from ghwcfg4 rather than assumed. 0 is 8-bit,
+	 * 1 is 16-bit, 2 means software may choose -- take 16, which is
+	 * the faster and what this SoC is wired for. Usbtrdtim follows the
+	 * width: the databook gives 5 for 16-bit and 9 for 8-bit, and the
+	 * board reads back 5 against a Phyif of 0, which is inconsistent
+	 * on its face and is what first suggested this.
+	 *
+	 * QEMU reports PHY_NOT_SUPPORTED in ghwcfg2, so neither branch
+	 * runs there and emulation is unaffected -- which also means
+	 * emulation cannot validate it. It is reasoned from the databook
+	 * and from what Linux's dwc_otg and u-boot's dwc2 both do.
+	 */
+	cfg = r->gusbcfg;
+	hsphy = r->ghwcfg2 & Hs_phy_type;
+	width = (r->ghwcfg4 & Utmi_phy_data_width) >> 14;
+	if(hsphy == PHY_ULPI){
+		cfg |= Ulpi_utmi_sel;
+		cfg &= ~Phyif;
+	}else if(hsphy == PHY_UTMI || hsphy == PHY_UTMI_ULPI){
+		cfg &= ~Ulpi_utmi_sel;
+		if(width == 0)
+			cfg &= ~Phyif;
+		else
+			cfg |= Phyif;
+	}
+	if(hsphy != PHY_NOT_SUPPORTED){
+		cfg = (cfg & ~Usbtrdtim) |
+			((cfg & Phyif) ? 5 : 9) << OUsbtrdtim;
+		print("usbotg: PHY %s, utmi width %s, gusbcfg %8.8ux -> %8.8ux\n",
+			hsphy == PHY_ULPI ? "ULPI" : "UTMI+",
+			width == 0 ? "8" : width == 1 ? "16" : "8 or 16 (taking 16)",
+			r->gusbcfg, cfg);
+		r->gusbcfg = cfg;
+	}
+
 	greset(r, Csftrst);
 
 	r->gusbcfg |= Force_host_mode;

@@ -63,6 +63,9 @@ enum
 	 * point is to fail eventually with a message, not to be precise.
 	 */
 	Mboxspin = 100*1000*1000,
+
+	/* every caller hands mboxcall the one shared buffer */
+	Mboxbufsize = 64 * sizeof(u32int),
 };
 
 /*
@@ -77,6 +80,27 @@ mboxcall(u32int chan, volatile u32int *buf)
 
 	want = (u32int)(BUSADDR(buf) & ~0xFUL) | (chan & 0xF);
 
+	/*
+	 * Clean the buffer out of the caches before the firmware reads it.
+	 *
+	 * BUSADDR sets 0xC0000000, the alias that BYPASSES the caches, and
+	 * the VideoCore does not snoop the ARM's L1/L2 in any case. So the
+	 * firmware reads RAM directly, and anything still sitting dirty in
+	 * our cache is invisible to it -- it sees whatever was at those
+	 * addresses before. dsb() does not help: it orders accesses, it
+	 * does not push them to memory.
+	 *
+	 * Nothing here is modelled by QEMU, which has no caches at all, so
+	 * this is invisible in emulation in both directions: a missing
+	 * clean cannot fail there and a correct one cannot be shown to
+	 * matter. It has to be reasoned about rather than tested.
+	 *
+	 * Whether it works without this depends on whether the lines
+	 * happen to have been evicted, which is not a property a driver
+	 * may rely on -- and would show up as calls that succeed early in
+	 * boot and fail later, once more code has been through the cache.
+	 */
+	cachedwbse((void*)buf, Mboxbufsize);
 	dsb();
 
 	/*
@@ -121,6 +145,19 @@ mboxcall(u32int chan, volatile u32int *buf)
 			break;
 	}
 	dsb();
+
+	/*
+	 * And discard them again before reading the reply, which the
+	 * firmware wrote straight to RAM behind our caches.
+	 *
+	 * Clean-and-invalidate rather than invalidate alone is safe here
+	 * only because the buffer was cleaned above and nothing has
+	 * written to it since: the lines are clean, so the write-back half
+	 * moves nothing and cannot put stale data back over the reply.
+	 * That ordering is load-bearing -- doing this without the clean
+	 * above would risk exactly the corruption it is meant to prevent.
+	 */
+	cachedwbinvse((void*)buf, Mboxbufsize);
 
 	return buf[1] == Propok ? 0 : -1;
 }

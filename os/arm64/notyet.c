@@ -105,9 +105,40 @@ int	consoleprint;
 void
 exit(int code)
 {
+	static int resetting;
+	int i;
+
 	USED(code);
 	print("\nkernel exit\n");
 	splhi();
+
+	/*
+	 * Reset into serialboot rather than halt.
+	 *
+	 * Halting is the honest answer only if someone is standing at the
+	 * board. This kernel is developed over a serial cable: a hang
+	 * costs a physical power cycle, while a reset lands in serialboot,
+	 * which is exactly where the next kernel gets loaded from. Every
+	 * panic was costing a trip to the hardware, including a panic
+	 * whose whole content was "USB finally worked and then an
+	 * interrupt arrived that nobody claimed".
+	 *
+	 * The pause is so the fault can be read before the console goes.
+	 * uartputstr rather than print: this is splhi, the console queue
+	 * has no reader here, and the message that explains the reset must
+	 * not be the one that gets lost.
+	 *
+	 * Guarded, because boardreboot() failing back into exit() would
+	 * otherwise recurse instead of stopping.
+	 */
+	if(!resetting){
+		resetting = 1;
+		uartputstr("kernel exit: resetting into serialboot\n");
+		for(i = 0; i < 3000; i++)
+			microdelay(1000);
+		boardreboot();
+	}
+
 	for(;;)
 		__asm__ volatile("wfi");
 }

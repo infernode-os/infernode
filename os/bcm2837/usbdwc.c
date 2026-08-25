@@ -595,12 +595,45 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		 * channel stays enabled and idle for ever, which is exactly
 		 * what we see, and neither was being read.
 		 */
-		if(dwcchanlog < 3){
+		if(dwcchanlog < 2){
+			uint c0, i0, cn, in;
+			int k;
+
 			dwcchanlog++;
 			print("usbotg: enabled ep%d.%d: hcchar %8.8ux "
 				"hcint %8.8ux gnptxsts %8.8ux hptxsts %8.8ux\n",
 				ep->dev->nb, ep->nb, hc->hcchar, hc->hcint,
 				ctlr->regs->gnptxsts, ctlr->regs->hptxsts);
+			/*
+			 * When does it change, not just what it ends up as.
+			 *
+			 * Every dump so far has been an end state: hcchar with
+			 * Chdis set and hcint empty, read a second or more
+			 * after the enable. That is the same picture whether
+			 * the core rejected the channel outright in a few
+			 * microseconds -- which means a configuration it will
+			 * not accept -- or tried for milliseconds and gave up,
+			 * which means the transfer started and the bus did not
+			 * answer. Those want opposite fixes, and the snapshot
+			 * cannot tell them apart.
+			 */
+			c0 = hc->hcchar;
+			i0 = hc->hcint;
+			for(k = 0; k < 40; k++){
+				microdelay(100);
+				cn = hc->hcchar;
+				in = hc->hcint;
+				if(cn != c0 || in != i0){
+					print("usbotg:   +%dus hcchar %8.8ux->%8.8ux "
+						"hcint %8.8ux->%8.8ux\n",
+						(k+1)*100, c0, cn, i0, in);
+					c0 = cn;
+					i0 = in;
+				}
+			}
+			print("usbotg:   after 4ms hcchar %8.8ux hcint %8.8ux "
+				"gintsts %8.8ux\n",
+				hc->hcchar, hc->hcint, ctlr->regs->gintsts);
 		}
 		clog(ep, hc);
 		if(ep->ttype == Tbulk && dir == Epin)

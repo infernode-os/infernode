@@ -277,6 +277,14 @@ chandone(void *a)
 	return (hc->hcint & hc->hcintmsk) != 0;
 }
 
+/*
+ * Which address form the controller is handed for DMA; see chanio().
+ * Starts at the VideoCore alias, and the first timeout flips it, so a
+ * single boot tests both and reports which one moves data.
+ */
+static int dwcdmaalias = 1;
+static int dwcdmaprobed;
+
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 {
@@ -322,6 +330,13 @@ restart:
 					hc->hcchar, r->gintsts,
 					hc->hcdma, hc->hctsiz,
 					r->haint, r->haintmsk, r->gahbcfg);
+				if(!dwcdmaprobed){
+					dwcdmaprobed = 1;
+					dwcdmaalias = !dwcdmaalias;
+					print("usbotg: retrying with %s DMA addresses\n",
+						dwcdmaalias ? "BUSADDR (VideoCore alias)"
+							: "PADDR (ARM physical)");
+				}
 				error(Eio);
 			}
 			continue;
@@ -470,7 +485,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		n = len;
 	hc->hctsiz = n | npkt<<OPktcnt | pid;
 	/*
-	 * BUSADDR, not PADDR.
+	 * BUSADDR or PADDR -- settled on the board, not by argument.
 	 *
 	 * The controller is a bus master on the VideoCore side and sees
 	 * memory through ITS addresses, not the ARM's -- the same reason
@@ -480,11 +495,19 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 * enabled, hcint stays 00000000 for ever, and the transfer never
 	 * happens at all.
 	 *
-	 * QEMU does not model the address alias, so PADDR works there and
-	 * only there. This is the third bug today whose whole existence
-	 * was invisible in emulation.
+	 * That is the argument for the alias, and mailbox.c settles the
+	 * same question the same way. But it is only an argument: the
+	 * DWC OTG may instead be an ARM-side AXI master, in which case
+	 * 0xC0000000|phys is past the end of the 948MB this board has
+	 * and is simply unreachable -- which produces the identical
+	 * symptom, an enabled channel that never runs.
+	 *
+	 * Both readings predict exactly what the register dump shows, so
+	 * the dump cannot separate them. dwcdmaalias flips after the
+	 * first timeout so that one boot tries each and the board says
+	 * which is right.
 	 */
-	hc->hcdma  = BUSADDR(PADDR(a));
+	hc->hcdma  = dwcdmaalias ? BUSADDR(PADDR(a)) : (uint)PADDR(a);
 
 	nleft = len;
 	logstart(ep);

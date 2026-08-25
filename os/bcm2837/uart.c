@@ -65,9 +65,27 @@ uartputc(int c)
 int
 uartgetc(void)
 {
+	u32int d;
+
 	if(UART(Fr) & Rxfe)
 		return -1;
-	return UART(Dr) & 0xFF;
+
+	/*
+	 * The data register carries the receive ERROR flags in bits 8-11
+	 * alongside the byte: framing, parity, break and overrun. They
+	 * latch, and they are cleared by writing the receive-status
+	 * register -- not by reading the data. Ignoring them entirely, as
+	 * this did, means an overrun during boot leaves a flag set for
+	 * ever and the byte itself is returned with high bits that are
+	 * not data.
+	 *
+	 * Under emulation nothing ever overruns, so this could not have
+	 * shown up before there was a real line with real timing on it.
+	 */
+	d = UART(Dr);
+	if(d & Rxerrors)
+		UART(Rsrecr) = 0;
+	return d & 0xFF;
 }
 
 void

@@ -191,6 +191,7 @@ enum
 enum
 {
 	Dr		= 0x00,		/* data */
+	Rsrecr		= 0x04,		/* receive status; write clears errors */
 	Fr		= 0x18,		/* flag */
 	Ibrd		= 0x24,		/* integer baud rate divisor */
 	Fbrd		= 0x28,		/* fractional baud rate divisor */
@@ -205,6 +206,12 @@ enum
 {
 	Txff		= 1<<5,		/* transmit FIFO full */
 	Rxfe		= 1<<4,		/* receive FIFO empty */
+};
+
+/* Dr bits: the receive errors ride along with the byte */
+enum
+{
+	Rxerrors	= 0xF<<8,	/* framing, parity, break, overrun */
 };
 
 /* Lcrh bits */

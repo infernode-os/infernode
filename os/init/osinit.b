@@ -651,12 +651,24 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	# Dconfig, which is what the bus expects of a device that has just
 	# been reset.
 	#
+	#
+	# Retried, because the first attempt is also how the driver
+	# discovers which DMA address form this controller understands:
+	# it flips after a timeout, and the retry is what tests the
+	# other one. A device that answers on the second attempt has
+	# told us something the first attempt could not.
+	#
 	desc := array[18] of byte;
-	n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
-	if(n < len desc){
+	for(try := 0; try < 3; try++){
+		n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
+		if(n >= len desc)
+			break;
 		sys->print("init: device descriptor read failed (%d): %r\n", n);
-		return;
 	}
+	if(n < len desc)
+		return;
+	if(try > 0)
+		sys->print("init: descriptor read succeeded on attempt %d\n", try+1);
 
 	vendor := int desc[8] | (int desc[9] << 8);
 	product := int desc[10] | (int desc[11] << 8);

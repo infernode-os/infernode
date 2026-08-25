@@ -1585,6 +1585,7 @@ static void
 uartkproc(void *a)
 {
 	int c;
+	static int nkbd;
 
 	USED(a);
 	for(;;){
@@ -1598,6 +1599,18 @@ uartkproc(void *a)
 			 */
 			tsleep(&up->sleep, return0, nil, 10);
 			continue;
+		}
+		/*
+		 * Say what arrives, the first few times. Bytes are known to
+		 * reach uartgetc() on the board and known not to reach the
+		 * shell, and this process is the only thing between them --
+		 * so either it is not running, or kbdputc is where they
+		 * stop.
+		 */
+		if(nkbd < 4){
+			nkbd++;
+			print("uart: kproc got %#2.2ux -> kbdq %s\n",
+				c, kbdq == nil ? "IS NIL" : "ok");
 		}
 		kbdputc(kbdq, c);
 	}

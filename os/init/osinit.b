@@ -434,6 +434,7 @@ Rother:		con 3;		# recipient: other (a port)
 Rgetstatus:	con 0;
 Rsetfeature:	con 3;
 Rsetaddress:	con 5;
+Rsetconfig:	con 9;
 Rgetdesc:	con 6;
 
 #
@@ -709,6 +710,25 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	}
 	sys->fprint(dctl, "address");
 
+	#
+	# SET_CONFIGURATION, which was missing entirely.
+	#
+	# SET_ADDRESS leaves the device in the Address state, where the
+	# spec requires it to answer standard requests and nothing else.
+	# Class-specific requests -- which is all of the hub port status
+	# and port feature traffic below -- are only defined once the
+	# device is Configured.
+	#
+	# QEMU's hub answered them anyway, so the bus walk worked in
+	# emulation and the omission was invisible. The 3B+'s USB2514
+	# follows the spec: every one of its four ports read back 0x0000,
+	# with not even PORT_POWER set, and the SET_FEATURE that was meant
+	# to turn that power on reported no error because the hub is
+	# entitled to ignore it in that state.
+	#
+	if(configure(name, d, indent) < 0)
+		return;
+
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
 		return;
@@ -755,6 +775,40 @@ startdriver(path, name: string)
 # It arrives as a run of variable-length descriptors packed end to end,
 # each "length, type, ...", so it is walked rather than indexed.
 #
+#
+# Read the configuration descriptor for its bConfigurationValue and
+# select it. Returns -1 if the device cannot be configured, in which
+# case nothing class-specific will work and there is no point going on.
+#
+configure(name: string, d: ref Sys->FD, indent: string): int
+{
+	hdr := array[9] of byte;
+	rep := array[4] of byte;
+
+	n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
+	if(n < len hdr){
+		sys->print("init: %s%s config descriptor failed (%d): %r\n",
+			indent, name, n);
+		return -1;
+	}
+
+	# byte 5 is bConfigurationValue; 0 would mean "unconfigured"
+	cfgval := int hdr[5];
+	if(cfgval == 0){
+		sys->print("init: %s%s offers no configuration to select\n",
+			indent, name);
+		return -1;
+	}
+
+	if(ctlreq(d, Rh2d, Rsetconfig, cfgval, 0, 0, rep) < 0){
+		sys->print("init: %s%s set configuration %d failed: %r\n",
+			indent, name, cfgval);
+		return -1;
+	}
+	sys->print("init: %s%s configured (value %d)\n", indent, name, cfgval);
+	return 0;
+}
+
 dumpconfig(d: ref Sys->FD, indent: string)
 {
 	# The first nine bytes are enough to learn the total length.

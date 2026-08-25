@@ -289,6 +289,7 @@ static int dwcdmaprobed;
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 {
+	uint fn1, fn2;
 	int intr, n, x, ointr, ntmout;
 	ulong start, now;
 	Dwcregs *r;
@@ -331,6 +332,23 @@ restart:
 					hc->hcchar, r->gintsts,
 					hc->hcdma, hc->hctsiz,
 					r->haint, r->haintmsk, r->gahbcfg);
+				/*
+				 * Is the controller alive at all, and is the
+				 * host still framing? nusbintr separates "the
+				 * core never interrupts" from "it interrupts
+				 * and we lose the wakeup"; two reads of hfnum
+				 * separate "frames are running" from "the host
+				 * scheduler is stopped", which look identical
+				 * from the channel registers alone.
+				 */
+				fn1 = r->hfnum;
+				microdelay(1000);
+				fn2 = r->hfnum;
+				print("usbotg:   %lud intrs taken, hfnum "
+					"%8.8ux->%8.8ux, hcintmsk %8.8ux, "
+					"hcsplt %8.8ux\n",
+					nusbintr, fn1, fn2,
+					hc->hcintmsk, hc->hcsplt);
 				if(!dwcdmaprobed){
 					dwcdmaprobed = 1;
 					dwcdmaalias = !dwcdmaalias;
@@ -933,6 +951,33 @@ init(Hci *hp)
 	greset(r, Txfflsh);
 	dprint("usbotg: FIFO depth %d sizes rx/nptx/ptx %8.8ux %8.8ux %8.8ux\n",
 		n, r->grxfsiz, r->gnptxfsiz, r->hptxfsiz);
+
+	/*
+	 * Say what this core actually is, once.
+	 *
+	 * A channel that is enabled, correctly programmed and simply
+	 * never runs is consistent with the core not having the DMA
+	 * engine we are assuming: Architecture reports SLAVE_ONLY,
+	 * EXT_DMA or INT_DMA, and gahbcfg's Dmaenable means nothing
+	 * unless it is INT_DMA. It is also consistent with the FIFO
+	 * carve-up above exceeding what the core has, which would make
+	 * the configuration invalid rather than merely tight.
+	 *
+	 * Both are one register read, and neither was being read.
+	 */
+	print("usbotg: arch %s, hs phy %s, %d channels, fifo depth %d "
+		"(allocated %d)\n",
+		(r->ghwcfg2 & Architecture) == INT_DMA ? "internal DMA" :
+		(r->ghwcfg2 & Architecture) == EXT_DMA ? "external DMA" :
+		(r->ghwcfg2 & Architecture) == SLAVE_ONLY ? "SLAVE ONLY" :
+			"reserved",
+		(r->ghwcfg2 & Hs_phy_type) == PHY_UTMI ? "UTMI+" :
+		(r->ghwcfg2 & Hs_phy_type) == PHY_ULPI ? "ULPI" :
+		(r->ghwcfg2 & Hs_phy_type) == PHY_UTMI_ULPI ? "UTMI+/ULPI" :
+			"NOT SUPPORTED",
+		ctlr->nchan, n, rx + tx + ptx);
+	print("usbotg: hcfg %8.8ux gusbcfg %8.8ux ghwcfg2 %8.8ux\n",
+		r->hcfg, r->gusbcfg, r->ghwcfg2);
 
 	r->hport0 = Prtpwr|Prtconndet|Prtenchng|Prtovrcurrchng;
 	r->gintsts = ~0;

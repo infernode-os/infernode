@@ -429,10 +429,17 @@ pingout()
 	req[20+6] = byte 0;		# sequence
 	req[20+7] = byte 1;
 
-	if(sys->write(d, req, len req) != len req){
-		sys->print("etherusb: icmp write failed: %r\n");
-		return;
-	}
+	#
+	# Send repeatedly rather than once.
+	#
+	# The first echo request is sent before the gateway's hardware
+	# address is known, so os/ip has to hold it pending ARP -- and if
+	# that resolution loses the race, the request is dropped and
+	# nothing here would ever ask again. Retransmitting is what every
+	# ping does, and it is the difference between this answering
+	# reliably and answering about one time in three.
+	#
+	spawn pingsend(d, req);
 
 	rep := array[128] of byte;
 	n = sys->read(d, rep, len rep);
@@ -791,6 +798,24 @@ readreq(tm: ref Tmsg.Read): int
 		srv.reply(styxservers->readstr(tm, stats(n)));
 	Qcdata =>
 		cv := convs[n];
+		#
+		# A read of nothing is answered with nothing, at once.
+		#
+		# It must never be parked waiting for a frame. ethermedium
+		# starts its reader processes from inside etherbind(), and
+		# ipifcbind() only sets ifc->maxtu AFTER that returns -- so
+		# the first read each of them issues asks for
+		# ifc->maxtu == 0 bytes. Parking those means the readers
+		# never come back to issue a real read, and worse, the
+		# first frame to arrive is handed to a zero-length read and
+		# truncated away. That is precisely what happened to the
+		# ARP reply: delivered, consumed, and reported to arp.c as
+		# "0 bytes".
+		#
+		if(tm.count == 0){
+			srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
+			return 0;
+		}
 		if(cv.nq > 0){
 			frame := cv.q[0];
 			for(i := 1; i < cv.nq; i++)
@@ -1044,4 +1069,15 @@ hexint(s: string): int
 		v = v * 16 + d;
 	}
 	return v;
+}
+
+pingsend(d: ref Sys->FD, req: array of byte)
+{
+	for(i := 0; i < 8; i++){
+		if(sys->write(d, req, len req) != len req){
+			sys->print("etherusb: icmp write failed: %r\n");
+			return;
+		}
+		sys->sleep(300);
+	}
 }

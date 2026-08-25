@@ -104,6 +104,8 @@ init()
 	t1 := sys->millisec();
 	sys->print("bench: %d iterations in %d ms (acc=%d)\n", 2000000, t1-t0, acc);
 
+	jitstress();
+
 	#
 	# Put the IP stack where Inferno expects it.
 	#
@@ -1001,6 +1003,208 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		enumerate("/usb/usb/" + name + "/ctl", port,
 			speedname(status), indent);
 	}
+}
+
+#
+# Exercise the JIT across the instruction set, not across one loop.
+#
+# The existing benchmark runs "acc += (k*3) ^ (k>>2)" two million times.
+# That is six opcodes. A miscompilation in loads and stores, calls,
+# 64-bit arithmetic, floating point, arrays, strings or channels would
+# pass it without a murmur -- and comp-arm64.c is the riskiest thing in
+# this tree running somewhere it has never run.
+#
+# Each class folds its results into a checksum and prints it. The value
+# itself means nothing; what means something is that the JIT and the
+# interpreter produce the SAME one. The harness builds both kernels and
+# compares every line, so a divergence names the class it is in rather
+# than reporting that something, somewhere, is wrong.
+#
+# Timings are printed per class too, which is what makes "benchmarked"
+# more than a single arithmetic loop.
+#
+jitfold(h, v: int): int
+{
+	return h * 31 + v;
+}
+
+jitstress()
+{
+	sys->print("jit: stress begins\n");
+
+	jitint();
+	jitbig();
+	jitreal();
+	jitarray();
+	jitstring();
+	jitcall();
+	jitchan();
+
+	sys->print("jit: stress ends\n");
+}
+
+#
+# Integer arithmetic, including the cases that are easy to get wrong:
+# negative operands, division and remainder truncation, and shifts.
+#
+jitint()
+{
+	t0 := sys->millisec();
+	h := 0;
+	for(i := -5000; i < 5000; i++){
+		h = jitfold(h, i + 7);
+		h = jitfold(h, i - 9);
+		h = jitfold(h, i * 3);
+		if(i != 0){
+			h = jitfold(h, 1000000 / i);
+			h = jitfold(h, 1000000 % i);
+		}
+		h = jitfold(h, i & 16r5A5A);
+		h = jitfold(h, i | 16r0F0F);
+		h = jitfold(h, i ^ 16r1234);
+		h = jitfold(h, i << (i & 7));
+		h = jitfold(h, i >> (i & 7));
+		if(i < 0)
+			h = jitfold(h, -i);
+	}
+	sys->print("jit: int %8.8ux in %d ms\n", h, sys->millisec()-t0);
+}
+
+#
+# 64-bit arithmetic. This tree is LP64 and the JIT is new; big is where
+# a 32-bit assumption would show up first.
+#
+jitbig()
+{
+	t0 := sys->millisec();
+	h := 0;
+	b := big 1;
+	for(i := 0; i < 20000; i++){
+		b = b * big 3 + big i;
+		b = b ^ big 16r5A5A5A5A;
+		if(b < big 0)
+			b = -b;
+		b = b % big 1000000007;
+		h = jitfold(h, int b);
+		h = jitfold(h, int (b >> 16));
+	}
+	sys->print("jit: big %8.8ux in %d ms\n", h, sys->millisec()-t0);
+}
+
+#
+# Floating point, including comparisons and the int/real conversions
+# either side of it.
+#
+jitreal()
+{
+	t0 := sys->millisec();
+	h := 0;
+	r := 1.0;
+	for(i := 1; i < 20000; i++){
+		r = r * 1.0000001 + real i / 1000.0;
+		if(r > 1000000.0)
+			r = r / 1000.0;
+		h = jitfold(h, int (r * 100.0));
+		if(r < 1.0)
+			h = jitfold(h, 1);
+	}
+	sys->print("jit: real %8.8ux in %d ms\n", h, sys->millisec()-t0);
+}
+
+#
+# Loads and stores: indexing, slicing and copying, which is where a
+# wrong addressing mode hides.
+#
+jitarray()
+{
+	t0 := sys->millisec();
+	h := 0;
+	a := array[256] of int;
+	b := array[256] of byte;
+	for(i := 0; i < len a; i++){
+		a[i] = i * i;
+		b[i] = byte (i & 16rFF);
+	}
+	for(n := 0; n < 200; n++){
+		for(i = 0; i < len a; i++){
+			a[i] = a[i] + a[(i + n) & 16rFF];
+			h = jitfold(h, a[i]);
+		}
+		c := array[64] of byte;
+		c[0:] = b[n & 16r7F : (n & 16r7F) + 64];
+		for(i = 0; i < len c; i++)
+			h = jitfold(h, int c[i]);
+	}
+	sys->print("jit: array %8.8ux in %d ms\n", h, sys->millisec()-t0);
+}
+
+#
+# Strings: concatenation, comparison and indexing, which go through the
+# runtime rather than being open-coded.
+#
+jitstring()
+{
+	t0 := sys->millisec();
+	h := 0;
+	for(n := 0; n < 2000; n++){
+		s := "";
+		for(i := 0; i < 16; i++)
+			s += string ((n + i) & 16rF);
+		h = jitfold(h, len s);
+		for(i = 0; i < len s; i++)
+			h = jitfold(h, s[i]);
+		if(s < "9")
+			h = jitfold(h, 1);
+		if(s == "")
+			h = jitfold(h, 2);
+	}
+	sys->print("jit: string %8.8ux in %d ms\n", h, sys->millisec()-t0);
+}
+
+#
+# Calls: deep recursion and several arguments, exercising frame setup
+# and the return path rather than the body.
+#
+jitrec(n, a, b, c: int): int
+{
+	if(n <= 0)
+		return a ^ b ^ c;
+	return jitrec(n - 1, b + 1, c + 2, a + 3) + 1;
+}
+
+jitcall()
+{
+	t0 := sys->millisec();
+	h := 0;
+	for(i := 0; i < 2000; i++)
+		h = jitfold(h, jitrec(100, i, i * 2, i * 3));
+	sys->print("jit: call %8.8ux in %d ms\n", h, sys->millisec()-t0);
+}
+
+#
+# Channels and spawn: the Dis operations with no C equivalent, and the
+# ones a compiler is most likely to leave to the interpreter.
+#
+jitproducer(c: chan of int, n: int)
+{
+	for(i := 0; i < n; i++)
+		c <-= i * 7;
+	c <-= -1;
+}
+
+jitchan()
+{
+	t0 := sys->millisec();
+	h := 0;
+	c := chan of int;
+	spawn jitproducer(c, 20000);
+	for(;;){
+		v := <-c;
+		if(v < 0)
+			break;
+		h = jitfold(h, v);
+	}
+	sys->print("jit: chan %8.8ux in %d ms\n", h, sys->millisec()-t0);
 }
 
 #

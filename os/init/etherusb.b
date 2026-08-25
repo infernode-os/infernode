@@ -183,6 +183,19 @@ Lhwlrst:	con 16r00000002;	# HW_CFG: soft reset
 # types would not match.
 Lfcten:		con 1 << 31;		# FCT_{RX,TX}_CTL: enable
 Lrxen:		con 16r00000001;	# MAC_RX: receiver enable
+Lmaccr:		con 16r100;		# MAC_CR
+Lmacloop:	con 16r00000400;	# MAC_CR: loopback, no PHY involved
+
+#
+# The receive filtering engine. At reset it passes nothing, so a device
+# whose RFE_CTL is never written receives no frames at all -- which is
+# indistinguishable from a dead wire, and was.
+#
+Lrfectl:	con 16r0B0;
+Lrfebcast:	con 16r00000400;	# accept broadcast
+Lrfemcast:	con 16r00000200;	# accept multicast
+Lrfeucast:	con 16r00000100;	# accept unicast
+Lrfeperfect:	con 16r00000002;	# match against RX_ADDR
 Ltxen:		con 16r00000001;	# MAC_TX: transmitter enable
 
 Ltxhdr:		con 8;			# TX_CMD_A and TX_CMD_B
@@ -1667,7 +1680,7 @@ lanselftest()
 	(e, sr) = lanmiird(Mbmsr);
 	if(e < 0 || (sr & Mbmsrlink))
 		return;		# a real link is a better test than this one
-	sys->print("etherusb: no link -- testing the data path in PHY loopback\n");
+	sys->print("etherusb: no link -- testing the data path in MAC loopback\n");
 	lanloopback();
 }
 
@@ -1687,11 +1700,22 @@ lanselftest()
 #
 lanloopback(): int
 {
-	if(lanmiiwr(Mbmcr, Mbmcrloop | Mbmcr100 | Mbmcrfull) < 0){
-		sys->print("etherusb: cannot enter PHY loopback: %r\n");
+	#
+	# Loop back at the MAC rather than at the PHY.
+	#
+	# MAC_CR has a loopback bit, and it is the better instrument: it
+	# ties the transmitter to the receiver above the PHY entirely, so
+	# the test does not depend on a PHY that has no link, no
+	# auto-negotiation to force, and no speed to guess at. The PHY
+	# loopback this replaces asked the one part of the chain that
+	# cannot work without a cable to stand in for the rest of it.
+	#
+	(e0, cr) := lanrd(Lmaccr);
+	if(e0 < 0 || lanwr(Lmaccr, cr | Lmacloop) < 0){
+		sys->print("etherusb: cannot enter MAC loopback: %r\n");
 		return -1;
 	}
-	sys->sleep(100);
+	sys->sleep(50);
 
 	#
 	# A frame addressed to ourselves. Broadcast would also come back,
@@ -1711,7 +1735,7 @@ lanloopback(): int
 
 	if(transmit(tx) < 0){
 		sys->print("etherusb: loopback transmit failed: %r\n");
-		lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart);
+		lanwr(Lmaccr, cr);
 		return -1;
 	}
 
@@ -1727,17 +1751,17 @@ lanloopback(): int
 		if(frame == nil)
 			continue;
 		if(len frame >= 14 && frame[0:6] == mac[0:6]){
-			sys->print("etherusb: PHY loopback OK -- %d bytes returned\n",
+			sys->print("etherusb: loopback OK -- %d bytes returned\n",
 				len frame);
 			ok = 0;
 			break;
 		}
 	}
 	if(ok < 0)
-		sys->print("etherusb: PHY loopback: nothing came back\n");
+		sys->print("etherusb: loopback: nothing came back\n");
 
 	# Put it back the way it was, whatever happened.
-	lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart);
+	lanwr(Lmaccr, cr);
 	return ok;
 }
 
@@ -1991,6 +2015,22 @@ lansetup(): int
 		sys->print("etherusb: LAN78xx FIFO enable failed: %r\n");
 		return -1;
 	}
+	#
+	# Tell the receive filter what to accept, BEFORE enabling the
+	# receiver.
+	#
+	# RFE_CTL was never written, and at reset it passes nothing: no
+	# unicast, no broadcast, no multicast. A MAC configured this way
+	# is fully enabled and receives not one frame, which looks exactly
+	# like an unplugged cable from every vantage point this driver
+	# has -- and did, including inside a loopback test where the frame
+	# had definitely been sent.
+	#
+	if(lanwr(Lrfectl, Lrfebcast|Lrfemcast|Lrfeucast|Lrfeperfect) < 0){
+		sys->print("etherusb: LAN78xx receive filter setup failed: %r\n");
+		return -1;
+	}
+
 	if(lanwr(Lmactx, Ltxen) < 0 || lanwr(Lmacrx, Lrxen) < 0){
 		sys->print("etherusb: LAN78xx MAC enable failed: %r\n");
 		return -1;

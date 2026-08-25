@@ -1297,6 +1297,30 @@ probesysfile(void)
 	up = p;
 
 	/*
+	 * Publish the board's Ethernet address into the environment.
+	 *
+	 * The LAN7800 on this board cannot report its own: it has no
+	 * EEPROM and its OTP is unprogrammed, so RX_ADDR reads all-ones.
+	 * The address belongs to the BOARD, not to the part -- the
+	 * firmware derives it from the serial number -- so the kernel is
+	 * the only thing positioned to ask, and /env is how a program
+	 * that needs it can be told without any of this being wired into
+	 * the driver.
+	 */
+	{
+		uchar mac[6];
+		char buf[32];
+
+		if(getmacaddr(mac) == 0){
+			snprint(buf, sizeof buf,
+				"%2.2ux:%2.2ux:%2.2ux:%2.2ux:%2.2ux:%2.2ux",
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+			ksetenv("ethermac", buf, 0);
+			print("mbox: board ethernet address %s\n", buf);
+		}
+	}
+
+	/*
 	 * Root the namespace.
 	 *
 	 * A Pgrp with no slash is not a namespace -- namec() resolves an

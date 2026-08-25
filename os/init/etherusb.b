@@ -1369,6 +1369,64 @@ lanwr(reg, val: int): int
 }
 
 #
+# The board's Ethernet address, as the kernel found it.
+#
+# This part cannot report its own: no EEPROM, unprogrammed OTP. On this
+# board the address belongs to the BOARD rather than to the chip -- the
+# firmware derives it from the serial number -- so the kernel asks and
+# publishes it, and this reads what was published. Nothing here knows
+# that it came from a VideoCore mailbox, which is the point.
+#
+envmac(m: array of byte): int
+{
+	fd := sys->open("/env/ethermac", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return -1;
+
+	(nf, fields) := sys->tokenize(string buf[0:n], ":\n");
+	if(nf < 6)
+		return -1;
+	for(i := 0; i < 6; i++){
+		v := hexbyte(hd fields);
+		if(v < 0)
+			return -1;
+		m[i] = byte v;
+		fields = tl fields;
+	}
+	return 0;
+}
+
+#
+# Two hex digits. Written out rather than loading String for it: this
+# module has no other use for that module, and a parser that accepts
+# only what it should is three lines.
+#
+hexbyte(t: string): int
+{
+	if(len t == 0 || len t > 2)
+		return -1;
+	v := 0;
+	for(i := 0; i < len t; i++){
+		c := t[i];
+		d := -1;
+		if(c >= '0' && c <= '9')
+			d = c - '0';
+		else if(c >= 'a' && c <= 'f')
+			d = c - 'a' + 10;
+		else if(c >= 'A' && c <= 'F')
+			d = c - 'A' + 10;
+		if(d < 0)
+			return -1;
+		v = v * 16 + d;
+	}
+	return v;
+}
+
+#
 # Wait for the OTP block to finish whatever it was told to do.
 #
 lanotpwait(): int
@@ -1526,8 +1584,13 @@ lansetup(): int
 			sys->print("etherusb: LAN78xx OTP read failed: %r\n");
 			return -1;
 		}
+		if(!macusable(mac) && envmac(mac) == 0)
+			sys->print("etherusb: MAC from /env/ethermac\n");
+		else if(macusable(mac))
+			sys->print("etherusb: LAN78xx MAC from OTP\n");
+
 		if(!macusable(mac)){
-			sys->print("etherusb: LAN78xx has no usable MAC in RX_ADDR or OTP\n");
+			sys->print("etherusb: no usable MAC in RX_ADDR, OTP or /env\n");
 			return -1;
 		}
 
@@ -1544,7 +1607,6 @@ lansetup(): int
 			sys->print("etherusb: LAN78xx cannot set its MAC: %r\n");
 			return -1;
 		}
-		sys->print("etherusb: LAN78xx MAC from OTP\n");
 	}
 
 	#

@@ -328,3 +328,37 @@ setpower(int dev, int on)
 		return -1;
 	return (buf[1] & 1) == (on ? 1 : 0) ? 0 : -1;
 }
+
+/*
+ * The board's Ethernet address, from the firmware.
+ *
+ * This part has no EEPROM and its OTP is unprogrammed, so the LAN7800
+ * cannot say what its own address is -- the Pi's Ethernet address is
+ * derived by the firmware from the board serial and handed to the
+ * operating system. Linux receives it in the device tree as
+ * local-mac-address; asking the mailbox directly gets the same answer
+ * without needing to parse one.
+ */
+enum
+{
+	TagGetmac	= 0x00010003,
+};
+
+int
+getmacaddr(uchar *mac)
+{
+	u32int v[2];
+
+	v[0] = v[1] = 0;
+	if(mboxprop(TagGetmac, v, 0, 2) < 0)
+		return -1;
+
+	/* six bytes, low word first, in wire order */
+	mac[0] = v[0];
+	mac[1] = v[0] >> 8;
+	mac[2] = v[0] >> 16;
+	mac[3] = v[0] >> 24;
+	mac[4] = v[1];
+	mac[5] = v[1] >> 8;
+	return 0;
+}

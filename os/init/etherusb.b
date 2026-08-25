@@ -396,6 +396,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	# arriving at a 64-byte expectation is a babble, reported as
 	# "usbotg: ep4.2 error intr 00000082" -- Chhltd|Xacterr.
 	#
+	dumpendpoints();
 	mp := bulkmaxpkt();
 	if(mp <= 0){
 		sys->print("etherusb: cannot read the bulk packet size\n");
@@ -446,6 +447,53 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(family.name == "lan78xx")
 		lanselftest();
 	serve();
+}
+
+#
+# Say what endpoints this device actually has.
+#
+# The bulk endpoint number is assumed to be 2 in both directions, which
+# is true of the RNDIS adapter this was written against and is an
+# assumption nothing has ever checked. A device whose IN endpoint is on a
+# different number would be read from an endpoint that does not exist,
+# and the host controller reports that as a transaction error rather than
+# as an empty read -- which is exactly what ep4.2 returns on this board.
+#
+dumpendpoints()
+{
+	hdr := array[9] of byte;
+
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
+		return;
+	total := int hdr[2] | (int hdr[3] << 8);
+	if(total < len hdr || total > 512)
+		return;
+	cfg := array[total] of byte;
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
+		return;
+
+	for(i := 0; i + 2 <= total; ){
+		dlen := int cfg[i];
+		if(dlen < 2)
+			break;
+		if(int cfg[i+1] == 5 && i + 6 < total){
+			addr := int cfg[i+2];
+			attr := int cfg[i+3];
+			mp := int cfg[i+4] | (int cfg[i+5] << 8);
+			dir := "out";
+			if(addr & 16r80)
+				dir = "in";
+			kind := "control";
+			case attr & 3 {
+			1 => kind = "iso";
+			2 => kind = "bulk";
+			3 => kind = "interrupt";
+			}
+			sys->print("etherusb:   endpoint %d %s %s maxpkt %d\n",
+				addr & 16rF, dir, kind, mp);
+		}
+		i += dlen;
+	}
 }
 
 #

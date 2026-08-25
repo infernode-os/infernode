@@ -16,6 +16,11 @@
 #include "fns.h"
 #include "board.h"
 
+enum
+{
+	Txspin = 10*1000*1000,	/* generous; only a wedged line reaches it */
+};
+
 #define UART(r)	(*(volatile u32int*)((uintptr)UART0REGS + (r)))
 
 void
@@ -49,8 +54,17 @@ uartinit(void)
 void
 uartputc(int c)
 {
-	while(UART(Fr) & Txff)
-		;
+	long i;
+
+	/*
+	 * Bounded: a transmitter that never drains would otherwise hang
+	 * every print(), including the one trying to report the fault.
+	 * Dropping the character is the right failure -- the console is
+	 * a diagnostic, not a contract.
+	 */
+	for(i = 0; UART(Fr) & Txff; i++)
+		if(i >= Txspin)
+			return;
 	UART(Dr) = c;
 }
 

@@ -55,6 +55,16 @@ dsb(void)
 	__asm__ volatile("dsb sy" ::: "memory");
 }
 
+enum
+{
+	/*
+	 * Generous: the firmware can take milliseconds to service a
+	 * property call, and this is a bare loop on a 1.4GHz core. The
+	 * point is to fail eventually with a message, not to be precise.
+	 */
+	Mboxspin = 100*1000*1000,
+};
+
 /*
  * Post the buffer to a channel and wait for the reply.  Returns 0 on
  * success, -1 if the firmware rejected the request.
@@ -63,21 +73,49 @@ static int
 mboxcall(u32int chan, volatile u32int *buf)
 {
 	u32int v, want;
+	long i;
 
 	want = (u32int)(BUSADDR(buf) & ~0xFUL) | (chan & 0xF);
 
 	dsb();
-	while(MBOX(Mboxstatus) & Mboxfull)
-		;
+
+	/*
+	 * Bounded, because the firmware is another processor and it can
+	 * decline to answer.
+	 *
+	 * Both of these waits were unbounded, and the outer loop below
+	 * had no exit either: if no reply for our channel ever arrived,
+	 * the kernel span here for ever with nothing printed. That is not
+	 * a theoretical failure mode -- the mailbox is how memory size,
+	 * board revision, the framebuffer and the USB power domain are
+	 * obtained, so it runs before there is any other way to say what
+	 * went wrong, and the symptom is a board that appears simply dead.
+	 *
+	 * Emulation cannot produce this: QEMU's firmware model always
+	 * answers, and answers immediately. That is exactly why it needs
+	 * bounding by inspection rather than by testing.
+	 *
+	 * A plain iteration count rather than a clock: this runs before
+	 * clock initialisation.
+	 */
+	for(i = 0; MBOX(Mboxstatus) & Mboxfull; i++)
+		if(i >= Mboxspin){
+			uartputstr("mbox: full, firmware not draining\n");
+			return -1;
+		}
 	MBOX(Mboxwrite) = want;
 
 	/*
 	 * Replies for other channels can in principle turn up here, so
 	 * keep reading until one for ours arrives.
 	 */
-	for(;;){
-		while(MBOX(Mboxstatus) & Mboxempty)
-			;
+	for(i = 0;; i++){
+		if(i >= Mboxspin){
+			uartputstr("mbox: no reply for our channel\n");
+			return -1;
+		}
+		if(MBOX(Mboxstatus) & Mboxempty)
+			continue;
 		v = MBOX(Mboxread);
 		if((v & 0xF) == (chan & 0xF))
 			break;

@@ -59,7 +59,8 @@ enum
 	 */
 	USBREGS		= PHYSIO + 0x980000,
 	Resetlimit	= 100000,	/* ~1s at 10us a turn */
-	Chandislimit	= 10000,	/* ~100ms; a live channel halts at once */
+	Chandislimit	= 10000,
+	Sofspin		= 100000,	/* frames stop only if the host does */	/* ~100ms; a live channel halts at once */
 	/*
 	 * How long to wait on one transfer, and how many attempts before
 	 * calling it dead. Generous on purpose: the point is to bound a
@@ -253,6 +254,9 @@ sofdone(void *a)
 static void
 sofwait(Ctlr *ctlr, int n)
 {
+	int nwait;
+
+	nwait = 0;
 	Dwcregs *r;
 	int x;
 
@@ -264,7 +268,7 @@ sofwait(Ctlr *ctlr, int n)
 		r->gintmsk |= Sofintr;
 		sleep(&ctlr->chanintr[n], sofdone, r);
 		splx(x);
-	}while((r->hfnum & 7) == 6);
+	}while((r->hfnum & 7) == 6 && ++nwait < Sofspin);
 }
 
 static int
@@ -408,7 +412,7 @@ static int
 chanintr(Ctlr *ctlr, int n)
 {
 	Hostchan *hc;
-	int i;
+	int i, k;
 
 	hc = &ctlr->regs->hchan[n];
 	if(ctlr->debugchan & (1<<n))
@@ -427,8 +431,17 @@ chanintr(Ctlr *ctlr, int n)
 	if(hc->hcchar & Chen){
 		iprint("hcchar %8.8ux hcint %8.8ux", hc->hcchar, hc->hcint);
 		hc->hcchar |= Chen | Chdis;
-		while(hc->hcchar&Chen)
-			;
+		/*
+		 * Bounded, and this copy matters more than the one in
+		 * chanio: this runs in the interrupt handler, so a channel
+		 * that never halts does not hang one process, it hangs the
+		 * machine with interrupts off.
+		 */
+		for(k = 0; k < Chandislimit; k++){
+			if((hc->hcchar & Chen) == 0)
+				break;
+			microdelay(10);
+		}
 		iprint(" %8.8ux\n", hc->hcint);
 	}
 	hc->hcint = i;

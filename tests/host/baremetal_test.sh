@@ -304,6 +304,10 @@ build_kernel() {
     # $SRC holds only what is genuinely machine-specific. Both are globbed
     # so a new file in either is picked up rather than silently untested.
     for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "$SRC"/*.S "$SRC"/*.c; do
+        # serialboot is a separate program that happens to live in this
+        # directory: it is the bootloader that fetches this kernel, has
+        # a _start of its own, and must not be linked into it.
+        case "$(basename "$f")" in serialboot.*) continue;; esac
         [[ -e "$f" ]] || continue
         # main.c may be substituted for a fault-injecting variant
         [[ "$(basename "$f")" == "main.c" && -n "$mainsrc" ]] && continue
@@ -541,6 +545,40 @@ CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+#
+# serialboot, the serial bootloader.
+#
+# Built here because this is the only supported build path, and
+# regression-checked because it is the piece that must keep working
+# when the kernel does not: it lives on the card permanently and pulls
+# the kernel down the wire on every reset, so a board with a broken
+# kernel costs a reset rather than a trip to find the card reader.
+#
+# It shares no code with the kernel, deliberately.
+#
+if [[ "$PLAT" == "bcm2837" ]]; then
+    # Objects go in their own directory: the kernel link collects .o
+    # files from the build dir, and serialboot has a _start of its own.
+    mkdir -p "$BUILD/sb"
+    SBF=("${CFLAGS[@]}")
+    if "$CC" "${SBF[@]}" -c "$ROOT/os/bcm2837/serialboot.c" -o "$BUILD/sb/c.o" 2>>"$BUILD/cc.log" \
+    && "$CC" "${SBF[@]}" -c "$ROOT/os/bcm2837/serialboot.S" -o "$BUILD/sb/s.o" 2>>"$BUILD/cc.log" \
+    && "$LLD" -T "$ROOT/os/bcm2837/serialboot.ld" "$BUILD/sb/s.o" "$BUILD/sb/c.o" \
+            -o "$BUILD/sb/serialboot.elf" 2>>"$BUILD/cc.log" \
+    && "$OBJCOPY" -O binary "$BUILD/sb/serialboot.elf" "$BUILD/serialboot.img" 2>>"$BUILD/cc.log"; then
+        sbsz=$(wc -c < "$BUILD/serialboot.img" | tr -d ' ')
+        # It relocates itself out of 0x80000 before loading anything
+        # there, so it must stay far smaller than the kernel it fetches.
+        if [[ "$sbsz" -gt 64 && "$sbsz" -lt 16384 ]]; then
+            pass "serialboot builds and is $sbsz bytes"
+        else
+            fail "serialboot is $sbsz bytes, which is not a plausible size"
+        fi
+    else
+        fail "serialboot failed to build"
+    fi
+fi
 
 #
 # 1. It builds.

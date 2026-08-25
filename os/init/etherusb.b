@@ -169,6 +169,9 @@ Mphyid1:	con 2;
 Mphyid2:	con 3;
 
 Mbmcrreset:	con 16r8000;		# BMCR: reset, self-clearing
+Mbmcrloop:	con 16r4000;		# BMCR: internal loopback
+Mbmcr100:	con 16r2000;		# BMCR: 100Mb/s
+Mbmcrfull:	con 16r0100;		# BMCR: full duplex
 Mbmcraneg:	con 16r1000;		# BMCR: auto-negotiation enable
 Mbmcrrestart:	con 16r0200;		# BMCR: restart auto-negotiation
 Mbmsrlink:	con 16r0004;		# BMSR: link is up
@@ -435,6 +438,13 @@ init(nil: ref Draw->Context, argv: list of string)
 			int gc[0], cfgval);
 
 	sys->print("etherusb: %s ready\n", dev);
+
+	#
+	# Run the data-path self-test now rather than in setup: loopback
+	# needs the bulk endpoint, which does not exist until here.
+	#
+	if(family.name == "lan78xx")
+		lanselftest();
 	serve();
 }
 
@@ -1506,6 +1516,92 @@ lanphy(): int
 	}
 	sys->print("etherusb: LAN78xx no link (cable unplugged?)\n");
 	return 0;
+}
+
+#
+# Called once the endpoint is open, which loopback needs and lanphy()
+# runs too early to have.
+#
+lanselftest()
+{
+	(e, sr) := lanmiird(Mbmsr);
+	if(e < 0)
+		return;
+	(e, sr) = lanmiird(Mbmsr);
+	if(e < 0 || (sr & Mbmsrlink))
+		return;		# a real link is a better test than this one
+	sys->print("etherusb: no link -- testing the data path in PHY loopback\n");
+	lanloopback();
+}
+
+#
+# Send a frame to ourselves through the PHY's internal loopback.
+#
+# This exists because a link needs something at the other end of the
+# cable, and the whole data path below the link does not. Loopback ties
+# the PHY's transmitter to its own receiver inside the chip, so a frame
+# goes out through the TX header, the MAC and the transmit FIFO, comes
+# back through the receive FIFO and the RX header, and arrives on the
+# bulk endpoint -- every line of this driver that carries data, with no
+# cable and no switch involved.
+#
+# Auto-negotiation cannot run against nothing, so the speed and duplex
+# are forced: that is what loopback requires, not a shortcut.
+#
+lanloopback(): int
+{
+	if(lanmiiwr(Mbmcr, Mbmcrloop | Mbmcr100 | Mbmcrfull) < 0){
+		sys->print("etherusb: cannot enter PHY loopback: %r\n");
+		return -1;
+	}
+	sys->sleep(100);
+
+	#
+	# A frame addressed to ourselves. Broadcast would also come back,
+	# but our own address exercises the receiver's address filter --
+	# which is the part that silently drops everything if RX_ADDR was
+	# never programmed.
+	#
+	tx := array[64] of byte;
+	for(i := 0; i < len tx; i++)
+		tx[i] = byte 0;
+	tx[0:] = mac;			# destination: us
+	tx[6:] = mac;			# source: us
+	tx[12] = byte 16r08;		# a plausible ethertype
+	tx[13] = byte 16r00;
+	for(i = 14; i < len tx; i++)
+		tx[i] = byte (i & 16rFF);
+
+	if(transmit(tx) < 0){
+		sys->print("etherusb: loopback transmit failed: %r\n");
+		lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart);
+		return -1;
+	}
+
+	buf := array[Maxframe + 64] of byte;
+	ok := -1;
+	for(try := 0; try < 20; try++){
+		n := sys->read(bulkfd, buf, len buf);
+		if(n <= 0){
+			sys->sleep(50);
+			continue;
+		}
+		(nil, frame) := family.unwrap(buf, n);
+		if(frame == nil)
+			continue;
+		if(len frame >= 14 && frame[0:6] == mac[0:6]){
+			sys->print("etherusb: PHY loopback OK -- %d bytes returned\n",
+				len frame);
+			ok = 0;
+			break;
+		}
+	}
+	if(ok < 0)
+		sys->print("etherusb: PHY loopback: nothing came back\n");
+
+	# Put it back the way it was, whatever happened.
+	lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart);
+	return ok;
 }
 
 #

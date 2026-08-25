@@ -451,6 +451,8 @@ Ddev:		con 1;		# descriptor type: device
 Dconf:		con 2;		# descriptor type: configuration
 Dhub:		con 16r29;	# descriptor type: hub
 Clhub:		con 9;		# device class: hub
+Clvendor:	con 255;	# device class: vendor-specific
+Vmicrochip:	con 16r0424;	# Microchip/SMSC: the LAN78xx family
 Clcomm:		con 2;		# device class: communications
 
 HPpresent:	con 16r1;
@@ -741,7 +743,22 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	# job ends at "there is a device of this class at this endpoint";
 	# what to say to it is not the kernel's business.
 	#
-	if(class == Clcomm)
+	#
+	# Hand over on class OR on identity.
+	#
+	# CDC devices announce themselves by class. The LAN78xx does not:
+	# the 3B+'s onboard Ethernet enumerates as 0424:7800 with class
+	# 255, vendor-specific, because its control interface is a set of
+	# vendor register reads and writes rather than anything the CDC
+	# spec describes. Dispatching on class alone finds every USB
+	# Ethernet device except the one soldered to this board.
+	#
+	# The id check is deliberately narrow -- Microchip's vendor id,
+	# which covers the LAN78xx family etherusb knows -- rather than
+	# "start the driver for anything vendor-specific", which would
+	# spawn a driver per unknown device and call that discovery.
+	#
+	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name);
 }
 

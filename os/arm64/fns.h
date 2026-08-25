@@ -84,6 +84,8 @@ int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
 extern int irqorphan;
 void	intrdump(void);
+int	intrpending(void);
+extern ulong nspurious;
 /*
  * intr.c -- the board's interrupt controller.
  *

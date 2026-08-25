@@ -289,7 +289,33 @@ irqdispatch(Ureg *u)
 	if(LOCAL(Lirqsource0) & Igpu)
 		handled |= intrgpu(u);
 
-	return handled;
+	if(handled)
+		return 1;
+
+	/*
+	 * Nothing claimed it, and nothing is asserted either: the source
+	 * went away between the CPU latching the exception and us looking.
+	 * That is a spurious interrupt, it is normal, and it must not be
+	 * fatal.
+	 *
+	 * This driver stack generates them by construction. chanwait polls
+	 * at splhi and clears hcintmsk and haintmsk once a transfer
+	 * completes, which de-asserts the controller; the interrupt the
+	 * CPU had already latched then fires as soon as spl drops, with
+	 * nothing left pending. The board showed exactly that -- an IRQ
+	 * taken one line after the first successful USB transfer, with
+	 * Lirqsource0 and all three pending registers reading zero.
+	 *
+	 * A source that is genuinely pending and genuinely unhandled is a
+	 * different thing and still reported: that one would spin for ever
+	 * if ignored, and it is what the panic is for.
+	 */
+	if(!intrpending()){
+		nspurious++;
+		return 1;
+	}
+
+	return 0;
 }
 
 /*

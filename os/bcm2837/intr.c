@@ -77,6 +77,9 @@ static u32int irqenabled[3];
 /* the last source that arrived with no handler; -1 if none has */
 int irqorphan = -1;
 
+/* interrupts that had already gone away by the time we looked */
+ulong nspurious;
+
 /*
  * volatile, and not as a formality.
  *
@@ -299,7 +302,22 @@ intrdump(void)
 	uartputx(irqenabled[1]);
 	uartputstr(" ");
 	uartputx(irqenabled[2]);
+	uartputstr(" spurious ");
+	uartputd(nspurious);
 	uartputstr(" orphan ");
 	uartputd(irqorphan);
 	uartputstr("\n");
+}
+
+/*
+ * Is anything asserted at all?
+ *
+ * Lives here because the controller registers do, and because the
+ * question only has meaning next to the enable masks this file owns.
+ */
+int
+intrpending(void)
+{
+	return (LOCAL(Lirqsource0) | INTREGS->GPUpending[0] |
+		INTREGS->GPUpending[1] | INTREGS->ARMpending) != 0;
 }

@@ -236,6 +236,27 @@ testOmittedToolsIsBaseline(t: ref T)
 		sys->sprint("child keeps the read-only baseline (child tools: %s)", got));
 }
 
+# INFR-362: the provision write itself is the trusted completion signal. The
+# task tool cannot inspect /tmp/veltro/.ns (and must not regain that authority),
+# so a successful write means the child's post-restriction manifest is already
+# durable and the mounted tool service corresponds to that child.
+testProvisionWriteCompletesAfterManifest(t: ref T)
+{
+	if(readfile(TOOLMNT + "/budget") == nil) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	id := 8136;
+	mpath := sys->sprint("/tmp/veltro/.ns/manifest.%d", id);
+	sys->remove(mpath);
+	n := writefile(TOOLMNT + "/provision", string id);
+	t.assert(n >= 0, "valid provision write succeeds");
+	(mok, nil) := sys->stat(mpath);
+	t.assert(mok >= 0, "successful provision write implies confinement manifest exists");
+	t.assertnotnil(childtoollist(id),
+		sys->sprint("successful provision write implies %s.%d is mounted", TOOLMNT, id));
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -255,6 +276,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RefuseDeniedPath",         testRefuseDeniedPath);
 	run("RefuseMixedValidInvalid",  testRefuseMixedValidInvalid);
 	run("OmittedToolsIsBaseline",   testOmittedToolsIsBaseline);
+	run("ProvisionWriteCompletesAfterManifest", testProvisionWriteCompletesAfterManifest);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

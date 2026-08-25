@@ -115,6 +115,10 @@ SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
 
 # Buffered channel for async shadow dir cleanup; asyncexec sends PID when done
 cleanupchan: chan of int;
+# `activity create` plus the following activity-list read is one allocation
+# transaction. The long-lived dispatcher owns its serialization (INFR-362).
+taskcreatelock: chan of int;
+provisiondelay := 0;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifest_written := 0;  # Set after first emitmanifest() call
 
@@ -192,12 +196,13 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] [-z ms] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
 	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
+	sys->fprint(stderr, "  -z ms         Delay child namespace setup (test harness only)\n");
 	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
 	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
 	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable; :ro/:rw\n");
@@ -267,6 +272,11 @@ init(nil: ref Draw->Context, args: list of string)
 			agentrole = rarg;
 		'N' =>	agentnodevs = "set";
 		'm' =>	mountpt = arg->earg();
+		'z' =>
+			(zarg, nil) := str->toint(arg->earg(), 10);
+			if(zarg < 0 || zarg > 10000)
+				usage();
+			provisiondelay = zarg;
 		'p' =>
 			parg := arg->earg();
 			explicitperm := "";
@@ -323,6 +333,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Clean shadow dirs left by previous session (crash or kill).
 	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
 	cleanupchan = chan[32] of int;
+	taskcreatelock = chan[1] of int;
 	cleanshadows();
 	spawn shadowcleanloop();
 
@@ -382,6 +393,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# restrictns + emitmanifest — its namespace is discarded after.
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
+	if(agentrole == "child" && provisiondelay > 0)
+		sys->sleep(provisiondelay);
 	spawn emitmanifestnow(manifestpath(mountpt));
 }
 
@@ -1175,19 +1188,46 @@ exectool(name, args: string): string
 # Namespace restriction is applied HERE (not in serveloop) so each
 # invocation uses the current boundpaths at call time — essential for
 # paths bound via the GUI after the server was already running.
-asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
+istaskcreate(ti: ref ToolInfo, data: string): int
 {
+	return ti != nil && ti.name == "task" &&
+		(data == "create" || (len data > 7 && data[0:7] == "create "));
+}
+
+releasetaskcreate(locked: int)
+{
+	if(locked)
+		<-taskcreatelock;
+}
+
+settoolresult(c: ref Fid, ti: ref ToolInfo, result: string)
+{
+	data := array of byte result;
+	c.data = data;
+	ti.result = data;
+}
+
+asyncexec(srv: ref Styxserver, c: ref Fid, tag: int, count: int, ti: ref ToolInfo, data: string)
+{
+	# Keep batched creates single-file before either invocation forks its
+	# namespace. This covers the whole allocation/provision transaction and
+	# leaves status/list/result calls independently responsive.
+	locked := istaskcreate(ti, data);
+	if(locked)
+		taskcreatelock <-= 1;
 	mypid := sys->pctl(Sys->FORKNS, nil);
 	if(mypid < 0) {
-		ti.result = array of byte "error: cannot fork namespace";
+		settoolresult(c, ti, "error: cannot fork namespace");
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
+		releasetaskcreate(locked);
 		return;
 	}
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
-		ti.result = array of byte "error: cannot disable device attachment";
+		settoolresult(c, ti, "error: cannot disable device attachment");
 		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
+		releasetaskcreate(locked);
 		return;
 	}
 	# Bind our mount point over /tool BEFORE namespace restriction.
@@ -1198,24 +1238,26 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	# (not in the safe list) and the bind would fail silently, leaving
 	# /tool pointing to the parent instance (wrong activity ID).
 	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
-		ti.result = array of byte "error: cannot bind activity tool service";
+		settoolresult(c, ti, "error: cannot bind activity tool service");
 		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
+		releasetaskcreate(locked);
 		return;
 	}
 	nserr := applynsrestriction(ti.name);
 	if(nserr != nil) {
-		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
+		settoolresult(c, ti, "error: namespace restriction failed: " + nserr);
 		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
 		cleanupchan <-= mypid;
+		releasetaskcreate(locked);
 		return;
 	}
 	result := exectool(ti.name, data);
-	# Assign result before replying so it's visible for subsequent reads.
-	# NOTE: concurrent writes to the same tool will overwrite each other's
-	# result — this is a known limitation. A per-fid result map would fix it.
-	rbytes := array of byte result;
-	ti.result = rbytes;
+	# Assign the per-fid result before replying so concurrent callers read the
+	# response from their own transaction. Keep the global fallback for clients
+	# that write and read through separate fids.
+	settoolresult(c, ti, result);
 	srv.reply(ref Rmsg.Write(tag, count));
+	releasetaskcreate(locked);
 	# Hand this invocation's shadow dirs to the cleanup goroutine.
 	#
 	# This send used to be non-blocking, dropping the pid whenever the
@@ -1490,6 +1532,10 @@ provisionparse(args: string): (int, string, list of string, string)
 	rargs = "child" :: rargs;
 	rargs = "-r" :: rargs;
 	rargs = "-N" :: rargs;
+	if(provisiondelay > 0) {
+		rargs = string provisiondelay :: rargs;
+		rargs = "-z" :: rargs;
+	}
 	if(verbose)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;
@@ -1497,8 +1543,6 @@ provisionparse(args: string): (int, string, list of string, string)
 	return (id, mpt, rargs, nil);
 }
 
-# Launch the validated child. Runs spawned: mounting and restricting the child
-# tools9p, then handing control to lucibridge blocks for the activity lifetime.
 provisionstatus(id: int, status: string)
 {
 	fd := sys->open(sys->sprint("/mnt/ui/activity/%d/status", id), Sys->OWRITE);
@@ -1508,24 +1552,44 @@ provisionstatus(id: int, status: string)
 	sys->write(fd, b, len b);
 }
 
-provisionrun(id: int, mpt: string, rargs: list of string)
+provisioncleanup(mpt: string)
+{
+	sys->unmount(nil, controlmount(mpt));
+	sys->unmount(nil, mpt);
+}
+
+provisionfail(srv: ref Styxserver, tag, id: int, mpt, reason: string)
+{
+	provisionstatus(id, "failed: " + reason);
+	provisioncleanup(mpt);
+	srv.reply(ref Rmsg.Error(tag, "provision failed: " + reason));
+}
+
+# Launch the validated child and own the provisioning write reply. A successful
+# write is the completion record: it is sent only after the child's namespace
+# manifest exists. This keeps trusted readiness metadata out of the task tool's
+# namespace while preserving ordinary 9P write-as-RPC semantics.
+provisionrun(srv: ref Styxserver, tag: int, count: int,
+	id: int, mpt: string, rargs: list of string)
 {
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
 	mpath := manifestpath(mpt);
 	sys->remove(mpath);
 
-	# Load and spawn child tools9p as a module (new data segment per load).
-	# This avoids the unreliable shell-based approach — direct module loading
-	# guarantees the server starts and we can poll for mount readiness.
 	t9p := load ShCommand "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load tools9p.dis: %r\n");
-		provisionstatus(id, "failed: namespace setup could not start");
+		provisionfail(srv, tag, id, mpt, "cannot load tools9p");
+		return;
+	}
+	lb := load ShCommand "/dis/lucibridge.dis";
+	if(lb == nil) {
+		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
+		provisionfail(srv, tag, id, mpt, "cannot load lucibridge");
 		return;
 	}
 	spawn t9p->init(nil, rargs);
 
-	# Poll for mount readiness — wait until the trusted control alias exists
 	ctlpath := controlmount(mpt) + "/ctl";
 	ready := 0;
 	for(i := 0; i < 20; i++) {
@@ -1538,39 +1602,38 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	}
 	if(!ready) {
 		sys->fprint(stderr, "tools9p: provision: %s did not mount after 10s\n", mpt);
-		provisionstatus(id, "failed: namespace tool service did not mount");
+		provisionfail(srv, tag, id, mpt, "child tool service did not mount");
 		return;
 	}
 
-	ready = 0;
+	nsready := 0;
 	for(i = 0; i < 400; i++) {
 		(ok, nil) := sys->stat(mpath);
 		if(ok >= 0) {
-			ready = 1;
+			nsready = 1;
 			break;
 		}
 		sys->sleep(50);
 	}
-	if(!ready) {
-		sys->fprint(stderr, "tools9p: provision: %s did not finish namespace setup after 20s\n", mpt);
-		provisionstatus(id, "failed: namespace setup did not complete");
+	if(!nsready) {
+		sys->fprint(stderr, "tools9p: provision: activity %d did not finish namespace setup\n", id);
+		provisionfail(srv, tag, id, mpt, "child did not finish namespace setup");
 		return;
 	}
 
-	sys->fprint(stderr, "tools9p: provision: %s restricted, starting lucibridge\n", mpt);
+	sys->fprint(stderr, "tools9p: provision: %s confined, starting lucibridge\n", mpt);
+	srv.reply(ref Rmsg.Write(tag, count));
 
-	# Load and start lucibridge — this blocks (runs agent loop),
-	# which is fine since provisiontask is already a spawned goroutine.
-	lb := load ShCommand "/dis/lucibridge.dis";
-	if(lb == nil) {
-		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
-		provisionstatus(id, "failed: task agent could not start");
-		return;
-	}
 	lbargs := "lucibridge" :: "-a" :: string id :: "-s" :: nil;
 	if(verbose)
 		lbargs = "lucibridge" :: "-v" :: "-a" :: string id :: "-s" :: nil;
-	lb->init(nil, lbargs);
+	{
+		lb->init(nil, lbargs);
+	} exception e {
+	"*" =>
+		provisionstatus(id, "failed: task agent exited");
+		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
+	}
 }
 
 # Return manifest file path for a given tools9p mount point.
@@ -1853,11 +1916,12 @@ Serve:
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
 					Qtool_ctl or Qtool_run =>
-						# ctl and run share ti.result: write args to either,
-						# read either back. run is the INFR-2 alias.
-						if(ti.result == nil)
-							ti.result = array of byte "error: no result (write arguments first)";
-						srv.reply(styxservers->readbytes(m, ti.result));
+						result := c.data;
+						if(result == nil)
+							result = ti.result;
+						if(result == nil)
+							result = array of byte "error: no result (write arguments first)";
+						srv.reply(styxservers->readbytes(m, result));
 					Qtool_doc =>
 						doc := gettooldoc(ti.name);
 						srv.reply(styxservers->readbytes(m, array of byte doc));
@@ -1984,8 +2048,7 @@ Serve:
 						sys->fprint(stderr, "tools9p: provision: %s\n", perr0);
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
 					} else {
-						spawn provisionrun(pid0, pmpt, prargs);
-						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						spawn provisionrun(srv, m.tag, len m.data, pid0, pmpt, prargs);
 					}
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw> or budget-add|budget-remove <tool> or provision <id>"));
@@ -2001,8 +2064,7 @@ Serve:
 					sys->fprint(stderr, "tools9p: provision: %s\n", qerr);
 					srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
 				} else {
-					spawn provisionrun(qid0, qmpt, qrargs);
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					spawn provisionrun(srv, m.tag, len m.data, qid0, qmpt, qrargs);
 				}
 
 			* =>
@@ -2024,7 +2086,7 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 						break;
 					}
-					spawn asyncexec(srv, m.tag, len m.data, ti, data);
+					spawn asyncexec(srv, c, m.tag, len m.data, ti, data);
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				}

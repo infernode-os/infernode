@@ -670,55 +670,57 @@ Raising `KSTACK` from 16K to 64K did **not** help -- 5 of 8 boots still
 overflowed -- and that is what proved it recursion rather than depth.
 `KSTACK` is back at upstream's 16K.
 
-### Receive works; ARP does not resolve (open)
+### Networking works, intermittently (open)
 
-Frames now arrive. The driver reads them off the bulk endpoint,
-un-wraps the RNDIS header and hands them to the right connection:
+The whole path works. os/ip resolves an address by ARP, sends an ICMP
+echo through an interface bound to a driver that is not in the kernel,
+and reads the reply back:
 
-    etherusb: rx read 108        (44 bytes of RNDIS header, 64 of frame)
-    etherusb: rx frame 64 type 0x806
+    etherusb: 10.0.2.15/24 configured on ipifc 1
+    etherusb: default route via 10.0.2.2
+    etherusb: ICMP echo reply from 10.0.2.2 (46 bytes, type 0)
 
-and QEMU's packet capture shows the conversation it belongs to:
+It does so on roughly three runs in five. What remains is a race, in a
+working system.
 
-    52:54:00:12:34:57 > ff:ff:ff:ff:ff:ff  ARP Request who-has 10.0.2.2
-    52:55:0a:00:02:02 > 52:54:00:12:34:57  ARP Reply 10.0.2.2 is-at ...
+**The symptom, precisely.** A failing run shows the receive process
+reading exactly 44 bytes, twice, and never producing a frame:
 
-What does NOT happen is the next thing: `os/ip` does not resolve the
-address, so the ICMP echo that was waiting on it never leaves. The
-capture ends after three frames.
+    RX read 44 (acc 44)
+    RX read 44 (acc 44)
 
-So the open problem has moved out of USB entirely. Everything below
-`/net/ether0` -- the controller, the hub, RNDIS, the bulk endpoints in
-both directions, the file interface, the demultiplex by ether type --
-is now demonstrated rather than assumed. What is left is between
-`recvarpproc` reading that frame and `arp.c` deciding the address is
-known.
+44 is the length of an RNDIS header alone. The real message is 108
+bytes -- 44 of header and 64 of frame -- delivered as a 64-byte packet
+followed by a 44-byte one. So in a failing run the first 64 bytes have
+already been consumed and discarded somewhere, and what arrives is the
+tail of a message whose head no longer exists. The driver cannot
+resynchronise from that, because an RNDIS stream has no framing other
+than the lengths in the headers.
 
-**Three bugs were found getting this far, and all are fixed.**
+**A hypothesis that was tried and is WRONG.** The obvious explanation
+is that `chanio` measures how much arrived by watching hcdma advance,
+and that this controller does not always write the DMA pointer back --
+so a packet that genuinely landed is counted as nothing and dropped.
+Taking the length from hctsiz's Xfersize instead, which counts down as
+data arrives, made it strictly worse: six runs out of six failed
+rather than two out of five. Reverted. Whatever consumes those 64
+bytes, it is not that.
 
-- Every outbound frame carried a MAC of `00:00:00:00:00:00`.
-  `init()` declared `mac := array[6] of byte`, which in Limbo makes a
-  LOCAL shadowing the module-level `mac`, so the stats file reported
-  `addr: 000000000000` and the interface bound to an address no device
-  owned. It looked like a receive fault and was a send fault.
-- A bulk IN against a drained device returns a zero-length packet
-  rather than a NAK, and `chanio` decided a transfer was finished only
-  when hcdma advanced or Pktcnt changed -- neither of which happens
-  when nothing moved. It retried immediately and for ever: three
-  million bus transactions a second, which starved the machine and
-  presented as the kernel hanging.
-- A read boundary is not a message boundary. The endpoint delivers
-  maxpkt bytes at a time and a read ends at the first short packet, so
-  an RNDIS message larger than one packet -- which every Ethernet
-  frame is -- can arrive split across two reads. Parsing each read
-  alone discarded the head of the message and then found garbage where
-  the next header should be, so the stream never resynchronised. The
-  driver reassembles now.
+Worth stating because it is easy to reach for twice.
 
-Next: instrument `recvarp` in os/ip/ethermedium.c. The frame is
-delivered to the connection `recvarpproc` is reading, so either that
-read is not being satisfied or the reply is being rejected once it
-gets there -- and both are cheap to tell apart from inside arp.c.
+**What is NOT in doubt**, having each been verified independently:
+the controller, the hub, RNDIS init and the packet filter, both bulk
+directions, the file interface, the demultiplex by ether type, and
+os/ip's send and receive paths. Three separate bugs were found and
+fixed getting here -- a shadowed `mac` that put 00:00:00:00:00:00 on
+every frame, a zero-length-packet spin that starved the machine, and a
+parked zero-count read that truncated the first frame to arrive.
+
+**On how much this is worth.** RNDIS is what QEMU's usb-net speaks and
+the Pi 3B+'s LAN7515 does not, so this particular race is emulator
+work that will not carry over to the board. It is worth enough effort
+to keep the emulated path usable as a test rig, and not worth more
+than that; the LAN78xx family is the one that matters on hardware.
 
 ### Smaller things still open
 

@@ -209,6 +209,7 @@ Lmacy:		con 1;			# inside the MAC
 # indistinguishable from a dead wire, and was.
 #
 Lrfectl:	con 16r0B0;
+Lintsts:	con 16r00C;		# INT_STS
 Lrfebcast:	con 16r00000400;	# accept broadcast
 Lrfemcast:	con 16r00000200;	# accept multicast
 Lrfeucast:	con 16r00000100;	# accept unicast
@@ -1707,6 +1708,28 @@ lanselftest()
 }
 
 #
+# What every register in the data path says right now.
+#
+lanstate(when: string)
+{
+	(e1, cr) := lanrd(Lmaccr);
+	(e2, rx) := lanrd(Lmacrx);
+	(e3, tx) := lanrd(Lmactx);
+	(e4, fr) := lanrd(Lfctrxctl);
+	(e5, ft) := lanrd(Lfcttxctl);
+	(e6, rf) := lanrd(Lrfectl);
+	(e7, is) := lanrd(Lintsts);
+	if(e1 < 0 || e2 < 0 || e3 < 0 || e4 < 0 || e5 < 0 || e6 < 0 || e7 < 0){
+		sys->print("etherusb: %s: register read failed: %r\n", when);
+		return;
+	}
+	sys->print("etherusb: %s mac_cr %8.8ux mac_rx %8.8ux mac_tx %8.8ux\n",
+		when, cr, rx, tx);
+	sys->print("etherusb: %s fct_rx %8.8ux fct_tx %8.8ux rfe %8.8ux int %8.8ux\n",
+		when, fr, ft, rf, is);
+}
+
+#
 # Undo whichever loopback was set, and put the PHY back to negotiating.
 #
 lanunloop(cr: int)
@@ -1802,12 +1825,26 @@ lanloopback(mode: int): int
 	for(i = 14; i < len tx; i++)
 		tx[i] = byte (i & 16rFF);
 
+	#
+	# Photograph the data path either side of the transmit.
+	#
+	# Everything so far has been inferred from a frame not coming
+	# back, which is the least informative symptom this chip has: it
+	# is equally consistent with the MAC never transmitting, the loop
+	# not closing, the receive filter dropping it, the FIFO being
+	# disabled, and the endpoint being read too early. Reading the
+	# registers says which.
+	#
+	lanstate("before");
 	sys->print("etherusb: loopback sending %d bytes\n", len tx);
 	if(transmit(tx) < 0){
 		sys->print("etherusb: loopback transmit failed: %r\n");
 		lanunloop(cr);
 		return -1;
 	}
+
+	sys->sleep(50);
+	lanstate("after");
 
 	buf := array[Maxframe + 64] of byte;
 	ok := -1;

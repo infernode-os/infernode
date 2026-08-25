@@ -1757,7 +1757,17 @@ lanmaccr(val: int): int
 	(e3, v) := lanrd(Lmaccr);
 	if(e3 < 0)
 		return -1;
-	if(v != val)
+	#
+	# Ignore speed and duplex when checking the readback.
+	#
+	# With AUTO_SPEED and AUTO_DUPLEX set the hardware maintains those
+	# fields itself, so they are status as much as control: MAC_CR
+	# comes back 00003802 for a write of 00003800 because the chip
+	# filled in 100Mb/s, which is correct and not a failed write. The
+	# check exists to catch a register that ignored us, and it should
+	# not report the one case where the register is doing its job.
+	#
+	if((v & ~(Lmacspdmask|Lmacfull)) != (val & ~(Lmacspdmask|Lmacfull)))
 		sys->print("etherusb: MAC_CR wanted %8.8ux got %8.8ux\n", val, v);
 	return 0;
 }

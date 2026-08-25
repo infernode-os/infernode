@@ -148,6 +148,32 @@ Lotpgo:		con 16r01;	# OTP_CMD_GO
 Lotpbusy:	con 16r01;	# OTP_STATUS
 Lotpmacoff:	con 16r01;	# where the address sits in OTP
 
+#
+# MDIO, the bus to the internal PHY. MII_ACC carries the address and the
+# direction and self-clears when the access completes; MII_DATA is the
+# word either way.
+#
+Lmiiacc:	con 16r120;
+Lmiidata:	con 16r124;
+
+Lmiibusy:	con 16r01;
+Lmiiwrite:	con 16r02;
+Lmiiphyshift:	con 11;
+Lmiiregshift:	con 6;
+Lphyaddr:	con 1;			# the LAN78xx internal PHY
+
+# Registers every MII PHY has, in the numbering the standard gives them.
+Mbmcr:		con 0;			# control
+Mbmsr:		con 1;			# status
+Mphyid1:	con 2;
+Mphyid2:	con 3;
+
+Mbmcrreset:	con 16r8000;		# BMCR: reset, self-clearing
+Mbmcraneg:	con 16r1000;		# BMCR: auto-negotiation enable
+Mbmcrrestart:	con 16r0200;		# BMCR: restart auto-negotiation
+Mbmsrlink:	con 16r0004;		# BMSR: link is up
+Mbmsraneg:	con 16r0020;		# BMSR: auto-negotiation complete
+
 Lhwlrst:	con 16r00000002;	# HW_CFG: soft reset
 # 1<<31, not 16r80000000: bit 31 does not fit a Limbo int, which
 # is signed 32-bit, so the literal would be a big and the argument
@@ -1369,6 +1395,120 @@ lanwr(reg, val: int): int
 }
 
 #
+# Wait for MII_ACC to self-clear, which is how this part signals that an
+# MDIO access has finished.
+#
+lanmiiwait(): int
+{
+	for(i := 0; i < 100; i++){
+		(e, v) := lanrd(Lmiiacc);
+		if(e < 0)
+			return -1;
+		if((v & Lmiibusy) == 0)
+			return 0;
+		sys->sleep(1);
+	}
+	sys->print("etherusb: LAN78xx MDIO stayed busy\n");
+	return -1;
+}
+
+lanmiird(reg: int): (int, int)
+{
+	if(lanmiiwait() < 0)
+		return (-1, 0);
+	acc := (Lphyaddr << Lmiiphyshift) | (reg << Lmiiregshift) | Lmiibusy;
+	if(lanwr(Lmiiacc, acc) < 0)
+		return (-1, 0);
+	if(lanmiiwait() < 0)
+		return (-1, 0);
+	(e, v) := lanrd(Lmiidata);
+	if(e < 0)
+		return (-1, 0);
+	return (0, v & 16rFFFF);
+}
+
+lanmiiwr(reg, val: int): int
+{
+	if(lanmiiwait() < 0)
+		return -1;
+	if(lanwr(Lmiidata, val & 16rFFFF) < 0)
+		return -1;
+	acc := (Lphyaddr << Lmiiphyshift) | (reg << Lmiiregshift) |
+		Lmiiwrite | Lmiibusy;
+	if(lanwr(Lmiiacc, acc) < 0)
+		return -1;
+	return lanmiiwait();
+}
+
+#
+# Bring the PHY up and wait for a link.
+#
+# Until this ran, the MAC was configured and the wire was dead: every
+# bulk IN came back as a transaction error because there was nothing on
+# the other side of the receiver to produce a packet. Auto-negotiation
+# with a switch takes seconds, not milliseconds, which is why the wait
+# here is generous and why it reports rather than failing -- a board on
+# a desk with no cable in it is not a broken driver.
+#
+lanphy(): int
+{
+	(e1, id1) := lanmiird(Mphyid1);
+	(e2, id2) := lanmiird(Mphyid2);
+	if(e1 < 0 || e2 < 0){
+		sys->print("etherusb: LAN78xx PHY id read failed: %r\n");
+		return -1;
+	}
+	if(id1 == 0 || id1 == 16rFFFF){
+		sys->print("etherusb: LAN78xx PHY id reads %4.4ux -- no PHY\n", id1);
+		return -1;
+	}
+	sys->print("etherusb: LAN78xx PHY id %4.4ux%4.4ux\n", id1, id2);
+
+	if(lanmiiwr(Mbmcr, Mbmcrreset) < 0){
+		sys->print("etherusb: LAN78xx PHY reset failed: %r\n");
+		return -1;
+	}
+	for(i := 0; i < 100; i++){
+		(e, v) := lanmiird(Mbmcr);
+		if(e < 0)
+			return -1;
+		if((v & Mbmcrreset) == 0)
+			break;
+		sys->sleep(10);
+	}
+
+	if(lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart) < 0){
+		sys->print("etherusb: LAN78xx autonegotiation failed to start: %r\n");
+		return -1;
+	}
+
+	for(i = 0; i < 100; i++){
+		(e, sr) := lanmiird(Mbmsr);
+		if(e < 0)
+			return -1;
+		#
+		# BMSR latches link-down low, so it is read twice: the
+		# first read clears a stale drop and the second is the
+		# current state. Reading it once reports a link that came
+		# up moments ago as still down.
+		#
+		(e, sr) = lanmiird(Mbmsr);
+		if(e < 0)
+			return -1;
+		if(sr & Mbmsrlink){
+			how := "";
+			if(sr & Mbmsraneg)
+				how = " (autonegotiated)";
+			sys->print("etherusb: LAN78xx link up%s\n", how);
+			return 0;
+		}
+		sys->sleep(100);
+	}
+	sys->print("etherusb: LAN78xx no link (cable unplugged?)\n");
+	return 0;
+}
+
+#
 # The board's Ethernet address, as the kernel found it.
 #
 # This part cannot report its own: no EEPROM, unprogrammed OTP. On this
@@ -1623,15 +1763,8 @@ lansetup(): int
 		return -1;
 	}
 
-	#
-	# NOT DONE: the PHY. Link needs the internal PHY brought up and
-	# auto-negotiation completed, which is done through MII_ACC and
-	# MII_DATA and is a good deal more than a handful of register
-	# writes. Without it this driver will configure the MAC and see
-	# no carrier -- which is the honest state to be in, and is why
-	# there is a line of output saying so rather than silence.
-	#
-	sys->print("etherusb: LAN78xx MAC configured; PHY and link not yet brought up\n");
+	if(lanphy() < 0)
+		return -1;
 	return 0;
 }
 

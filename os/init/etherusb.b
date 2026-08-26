@@ -796,6 +796,9 @@ netconfig()
 			sys->print("etherusb: default route via %s\n", gw);
 	}
 
+	dumpfile("/net/iproute");
+	dumpfile("/net/ipifc/" + ifcno + "/status");
+
 	#
 	# The gateway first, then something beyond it.
 	#
@@ -820,6 +823,29 @@ netconfig()
 # connection, and reaches os/ip. Everything up to here could be true
 # with a device that quietly discarded every packet.
 #
+#
+# Show a file from the network namespace.
+#
+# The board answers its gateway and not an address beyond it, which is
+# the routing table's business, and guessing at what that table contains
+# has already been tried. This prints it.
+#
+dumpfile(path: string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil){
+		sys->print("etherusb: cannot open %s: %r\n", path);
+		return;
+	}
+	buf := array[2048] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0){
+		sys->print("etherusb: %s is empty\n", path);
+		return;
+	}
+	sys->print("etherusb: %s:\n%s", path, string buf[0:n]);
+}
+
 #
 # A DHCP client, small enough to live here.
 #

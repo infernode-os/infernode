@@ -229,9 +229,17 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/etherusb.dis" \
             "$ROOT/os/init/etherusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The HID boot keyboard, likewise a program. Boot protocol only:
+        # parsing a report descriptor is real work, and the boot
+        # protocol exists so a machine that has just started can read a
+        # keyboard without doing any of it.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/kbdusb.dis" \
+            "$ROOT/os/init/kbdusb.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
+            "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dev="
             "/net="
             "/prog="

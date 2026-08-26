@@ -453,6 +453,9 @@ Ddev:		con 1;		# descriptor type: device
 Dconf:		con 2;		# descriptor type: configuration
 Dhub:		con 16r29;	# descriptor type: hub
 Clhub:		con 9;		# device class: hub
+Clhid:		con 3;		# interface class: human interface
+Hidkbd:		con 1;		# HID boot protocol: keyboard
+Hidmouse:	con 2;		# HID boot protocol: mouse
 Clvendor:	con 255;	# device class: vendor-specific
 Vmicrochip:	con 16r0424;	# Microchip/SMSC: the LAN78xx family
 Clcomm:		con 2;		# device class: communications
@@ -545,6 +548,9 @@ statusflags(status: int): string
 # -- newdev takes the speed as an argument and gets the maximum packet
 # size wrong if it is told the wrong one.
 #
+# What dumpconfig last saw on a HID interface; 0 if none.
+hidproto := 0;
+
 speedname(status: int): string
 {
 	if(status & HPhigh)
@@ -768,7 +774,18 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 		return;
 	}
 
+	hidproto = 0;
 	dumpconfig(d, indent + "  ");
+
+	#
+	# A keyboard is worth starting; a mouse has nowhere to go yet.
+	# Saying so is better than silence, because "nothing happened" and
+	# "there is no driver for that" look identical from here.
+	#
+	if(hidproto == Hidkbd)
+		startdriver("/dis/kbdusb.dis", name);
+	else if(hidproto == Hidmouse)
+		sys->print("init: %s%s is a mouse; no driver yet\n", indent, name);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's
@@ -895,11 +912,21 @@ dumpconfig(d: ref Sys->FD, indent: string)
 
 		case dtype {
 		4 =>	# interface
-			if(i + 9 <= total)
+			if(i + 9 <= total){
 				sys->print("init: %s  if %d alt %d: class %d.%d.%d, %d endpoint(s)\n",
 					indent, int cfg[i+2], int cfg[i+3],
 					int cfg[i+5], int cfg[i+6], int cfg[i+7],
 					int cfg[i+4]);
+				#
+				# HID lives on the INTERFACE, not the device:
+				# a keyboard's device class is 0 and its
+				# interface class is 3.1.1. Dispatching on
+				# the device class alone therefore never sees
+				# an input device at all.
+				#
+				if(int cfg[i+5] == Clhid && hidproto == 0)
+					hidproto = int cfg[i+7];
+			}
 		5 =>	# endpoint
 			if(i + 7 <= total){
 				addr := int cfg[i+2];

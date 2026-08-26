@@ -208,9 +208,30 @@ void
 fbconsputs(char *s, int n)
 {
 	int i, c;
+	ulong t0, dt;
+	static int nslow;
 
 	if(cons == nil)
 		return;
+
+	/*
+	 * Time this, because it is on the path a keystroke takes.
+	 *
+	 * echo() in devcons sends typed characters to screenputs and to
+	 * printq. printq is never set in this tree, so a character
+	 * injected through /dev/keyboard -- which is how the USB keyboard
+	 * driver delivers -- is echoed HERE and nowhere else. The serial
+	 * console never sees it, which is why watching the wire showed
+	 * nothing while the panel showed the keystrokes arriving slowly.
+	 *
+	 * Every scroll moves about 1.5MB of Device-nGnRnE memory, which
+	 * is uncached and permits no write combining, so each access is
+	 * its own bus transaction. That is the obvious suspect and it is
+	 * worth a number rather than an assumption.
+	 *
+	 * uartputstr, not print: print comes back through here.
+	 */
+	t0 = TK2MS(m->ticks);
 
 	for(i = 0; i < n; i++){
 		c = s[i] & 0xFF;
@@ -242,6 +263,14 @@ fbconsputs(char *s, int n)
 		}
 		while(cy + Fh > (int)cons->height)
 			fbscroll();
+	}
+
+	dt = TK2MS(m->ticks) - t0;
+	if(dt > 100 && nslow < 8){
+		nslow++;
+		uartputstr("fb:   console write took ");
+		uartputd(dt);
+		uartputstr("ms\n");
 	}
 }
 

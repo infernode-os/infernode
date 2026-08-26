@@ -184,7 +184,18 @@ intrendpoint(): (int, int, int)
 
 openintr(epnum, maxpkt, ival: int): ref Sys->FD
 {
-	if(sys->fprint(ctlfd, "new %d intr r", epnum) < 0){
+	#
+	# "interrupt", not "intr".
+	#
+	# devusb's table spells it in full, and name2ttype falls back to
+	# strtol() for anything it does not recognise -- so "intr" parsed
+	# as 0 and produced an endpoint of some other type entirely,
+	# without an error. Reads on it then took a different path in
+	# devusb and returned zero without ever reaching the controller
+	# driver, which is why neither the completion log nor the failure
+	# log in usbdwc ever printed: the transfer was never attempted.
+	#
+	if(sys->fprint(ctlfd, "new %d interrupt r", epnum) < 0){
 		sys->print("kbdusb: cannot create endpoint %d: %r\n", epnum);
 		return nil;
 	}

@@ -139,7 +139,7 @@ init(nil: ref Draw->Context, args: list of string)
 	else
 		sys->print("kbdusb: wrote a test K to /dev/keyboard\n");
 
-	poll(fd, kbd);
+	poll(fd, kbd, ival);
 }
 
 #
@@ -218,7 +218,7 @@ openintr(epnum, maxpkt, ival: int): ref Sys->FD
 # not been released -- typing it again on every poll is what turns a
 # keyboard into a stuck key.
 #
-poll(fd, kbd: ref Sys->FD)
+poll(fd, kbd: ref Sys->FD, ival: int)
 {
 	buf := array[64] of byte;
 	prev := array[Reportlen] of byte;
@@ -226,6 +226,7 @@ poll(fd, kbd: ref Sys->FD)
 		prev[i] = byte 0;
 
 	nlog := 0;
+	nempty := 0;
 	for(;;){
 		n := sys->read(fd, buf, len buf);
 		#
@@ -234,21 +235,35 @@ poll(fd, kbd: ref Sys->FD)
 		# decode to nothing look identical from the shell, and they
 		# are opposite faults.
 		#
-		if(nlog < 6){
+		#
+		# Log what ARRIVES, not what does not.
+		#
+		# An interrupt endpoint with nothing to say returns zero
+		# bytes, and logging those buried the interesting case: six
+		# lines of "returned 0" and no room left for a keypress.
+		#
+		if(n >= Reportlen && nlog < 6){
 			nlog++;
-			if(n >= 8)
-				sys->print("kbdusb: report %d: %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
-					n, int buf[0], int buf[1], int buf[2],
-					int buf[3], int buf[4], int buf[5],
-					int buf[6], int buf[7]);
-			else
-				sys->print("kbdusb: read returned %d: %r\n", n);
+			sys->print("kbdusb: report %d: %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
+				n, int buf[0], int buf[1], int buf[2],
+				int buf[3], int buf[4], int buf[5],
+				int buf[6], int buf[7]);
 		}
 		if(n < Reportlen){
-			if(n < 0)
-				sys->sleep(20);
+			#
+			# Wait a poll interval. Without this the loop spins
+			# as fast as the endpoint can say "nothing", which
+			# starves everything else on a single core and is
+			# how this driver behaved on its first run.
+			#
+			nempty++;
+			if(nempty == 200)
+				sys->print("kbdusb: %d empty reads; no reports from the keyboard\n",
+					nempty);
+			sys->sleep(ival);
 			continue;
 		}
+		nempty = 0;
 
 		mod := int buf[0];
 		for(i = 2; i < Reportlen; i++){

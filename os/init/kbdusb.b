@@ -120,7 +120,25 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
-	sys->print("kbdusb: %s ready on endpoint %d\n", dev, epnum);
+	sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d\n",
+		dev, epnum, maxpkt, ival);
+
+	#
+	# Prove the injection path before blaming the keyboard.
+	#
+	# Nothing appears when keys are pressed, and that has two quite
+	# different causes: reports are not arriving from the device, or
+	# they are and the characters are not reaching the console. This
+	# writes one character that no key produced, so if a stray 'K'
+	# turns up at the shell the second half works and the fault is
+	# upstream of it.
+	#
+	tst := array of byte "K";
+	if(sys->write(kbd, tst, len tst) != len tst)
+		sys->print("kbdusb: cannot write /dev/keyboard: %r\n");
+	else
+		sys->print("kbdusb: wrote a test K to /dev/keyboard\n");
+
 	poll(fd, kbd);
 }
 
@@ -207,8 +225,25 @@ poll(fd, kbd: ref Sys->FD)
 	for(i := 0; i < len prev; i++)
 		prev[i] = byte 0;
 
+	nlog := 0;
 	for(;;){
 		n := sys->read(fd, buf, len buf);
+		#
+		# Say what the endpoint returns, a few times. A read that
+		# returns nothing and a read that returns a report we then
+		# decode to nothing look identical from the shell, and they
+		# are opposite faults.
+		#
+		if(nlog < 6){
+			nlog++;
+			if(n >= 8)
+				sys->print("kbdusb: report %d: %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
+					n, int buf[0], int buf[1], int buf[2],
+					int buf[3], int buf[4], int buf[5],
+					int buf[6], int buf[7]);
+			else
+				sys->print("kbdusb: read returned %d: %r\n", n);
+		}
 		if(n < Reportlen){
 			if(n < 0)
 				sys->sleep(20);

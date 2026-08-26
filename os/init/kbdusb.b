@@ -287,8 +287,25 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 				continue;
 			c := decode(k, mod);
 			if(c > 0){
+				#
+				# Time the injection separately.
+				#
+				# The read blocks until a key is pressed and
+				# then returns promptly -- 152 seconds for
+				# one, which is how long it waited, not how
+				# long it took. So the USB side is behaving
+				# and the delay is downstream of here: either
+				# writing to /dev/keyboard, or the console
+				# echoing it.
+				#
 				s := sys->sprint("%c", c);
+				w0 := sys->millisec();
 				sys->write(kbd, array of byte s, len array of byte s);
+				dw := sys->millisec() - w0;
+				if(dw > 100 && nslow < 8){
+					nslow++;
+					sys->print("kbdusb: write took %d ms\n", dw);
+				}
 			}
 		}
 		prev[0:] = buf[0:Reportlen];

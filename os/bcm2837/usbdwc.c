@@ -609,6 +609,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	int nleft, n, nt, i, maxpkt, npkt;
 	uint hcdma, hctsiz, lasti;
 	int splitphase, nyets;
+	ulong tstart;
 
 	ctlr = ep->hp->aux;
 	maxpkt = ep->maxpkt;
@@ -648,6 +649,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	lasti = 0;
 	splitphase = 0;
 	nyets = 0;
+	tstart = TK2MS(m->ticks);
 	nleft = len;
 	logstart(ep);
 	for(;;){
@@ -786,14 +788,32 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		 */
 		if(ep->ttype == Tintr && dwcintrsplit < 12){
 			dwcintrsplit++;
-			print("usbotg: intr phase %d i %8.8ux hcsplt %8.8ux dma %8.8ux->%8.8ux\n",
-				splitphase, i, hc->hcsplt, hcdma, hc->hcdma);
+			print("usbotg: intr phase %d i %8.8ux after %ldms\n",
+				splitphase, i,
+				(long)TK2MS(m->ticks) - (long)tstart);
 		}
 
 		if(hc->hcsplt & Spltena){
 			if(splitphase == 0){
-				splitphase = 1;
-				continue;	/* now collect it */
+				/*
+				 * Advance only if the hub ACCEPTED it.
+				 *
+				 * This advanced unconditionally, which is
+				 * wrong: a start-split answered with NAK was
+				 * not accepted, and collecting a result the
+				 * hub never agreed to fetch is meaningless.
+				 * The board shows exactly that -- phase 0
+				 * and phase 1 alternating, both reporting
+				 * Chhltd|Nak -- so every poll of an idle
+				 * keyboard costs two channel operations
+				 * where one would do, and the second is
+				 * asking about nothing.
+				 */
+				if(i & Ack){
+					splitphase = 1;
+					continue;	/* now collect it */
+				}
+				/* not accepted: let the NAK path retry */
 			}
 			splitphase = 0;
 			if(i & (Nyet|Frmovrun)){

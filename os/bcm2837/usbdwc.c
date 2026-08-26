@@ -1257,31 +1257,7 @@ init(Hci *hp)
 	r->gintmsk = Hcintr;
 	r->gahbcfg |= Glblintrmsk;
 
-	/*
-	 * Does this controller raise an interrupt AT ALL?
-	 *
-	 * Everything slow about USB on this board comes back to the same
-	 * thing: no interrupt ever arrives, so every wait runs to its
-	 * timeout and a keyboard is polled about twice a second. Four
-	 * attempts to shorten the wait instead all broke split
-	 * transactions, so the question can no longer be avoided.
-	 *
-	 * Start-of-frame is the cleanest probe: it fires every 125us
-	 * regardless of what is attached, so unmasking it briefly answers
-	 * "does IRQ 9 reach us" without depending on a transfer. If the
-	 * count moves, the wiring is sound and something about CHANNEL
-	 * interrupts is wrong; if it does not, nothing this driver does
-	 * to its masks will ever matter.
-	 *
-	 * Bounded hard, and the handler acknowledges SOF, so this cannot
-	 * storm.
-	 */
-	nusbintr = 0;
-	r->gintmsk |= Sofintr;
-	tsleep(&up->sleep, return0, 0, 50);
-	r->gintmsk &= ~Sofintr;
-	print("usbotg: SOF probe: %lud interrupts in 50ms\n", nusbintr);
-	nusbintr = 0;
+
 
 	/*
 	 * There was a start-of-frame self-test here, and it was wrong.

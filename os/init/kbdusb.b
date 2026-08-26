@@ -238,6 +238,8 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 
 	nempty := 0;
 	nsent := 0;
+	npoll := 0;
+	tpoll := 0;
 	nslow := 0;
 	for(;;){
 		#
@@ -250,6 +252,26 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		# that takes seconds and a read that is called seconds apart
 		# are different faults.
 		#
+		#
+		# Count the polls, and say the rate.
+		#
+		# The interrupt path turns out to work -- a start-of-frame
+		# probe took one interrupt and the handler masks it off
+		# itself, which is correct -- so "this driver never takes an
+		# interrupt" was a wrong premise that four attempted fixes
+		# rested on. Which means the poll rate is still unexplained
+		# and should be measured rather than derived: a keyboard
+		# read either happens often and misses keys anyway, or does
+		# not happen often, and those are different faults.
+		#
+		if(npoll == 0)
+			tpoll = sys->millisec();
+		npoll++;
+		if(npoll % 50 == 0){
+			el := sys->millisec() - tpoll;
+			sys->print("kbdusb: %d polls in %d ms\n", npoll, el);
+		}
+
 		t0 := sys->millisec();
 		n := sys->read(fd, buf, len buf);
 		dt := sys->millisec() - t0;

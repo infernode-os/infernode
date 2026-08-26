@@ -138,11 +138,33 @@ boardclockcheck(void)
  * probe that finds the screen.
  */
 static Fbinfo fb;
+static Fbinfo fb2;
 
 void
 boardfbprobe(void)
 {
-	if(fbinit(&fb) < 0){
+	int ndisp;
+
+	/*
+	 * Bring up every display, not just the one the firmware favours.
+	 *
+	 * With the 7in DSI panel attached the firmware makes it the
+	 * default, so a machine with a monitor on HDMI and a panel on the
+	 * ribbon put its console on the panel and left the monitor
+	 * showing the firmware's rainbow. Most people do not own the
+	 * panel, so HDMI is the display that matters most -- and the
+	 * answer is not to choose between them but to drive both.
+	 *
+	 * Display 0 first, so that a firmware which reports a second
+	 * display and then refuses to allocate on it still leaves a
+	 * working console.
+	 */
+	ndisp = mboxfbnumdisplays();
+	uartputstr("fb:   displays: ");
+	uartputd(ndisp);
+	uartputstr("\n");
+
+	if(fbinitdisp(0, &fb) < 0){
 		uartputstr("fb:   no framebuffer (no display attached?)\n");
 		return;
 	}
@@ -196,8 +218,34 @@ boardfbprobe(void)
 	if(fbconsinit(&fb) == 0){
 		screenputs = fbconsputs;
 		consoleprint = 1;
-		uartputstr("fb:   console on the panel\n");
 	}
+
+	/*
+	 * The second display, if there is one and it will have us.
+	 *
+	 * Its framebuffer must be a DIFFERENT buffer from the first: the
+	 * firmware has historically kept one, and one buffer handed back
+	 * twice would mean the second display was never really allocated
+	 * and the console would be drawing the same pixels twice through
+	 * two aliases. Comparing the bases is what tells those apart.
+	 */
+	if(ndisp > 1 && fbinitdisp(1, &fb2) == 0){
+		if(fb2.base == fb.base){
+			uartputstr("fb:   display 1 shares display 0's buffer; "
+				"not mirroring\n");
+		}else{
+			uartputstr("fb:   ");
+			uartputd(fb2.width);
+			uartputstr("x");
+			uartputd(fb2.height);
+			uartputstr(" on display 1, base ");
+			uartputx(fb2.base);
+			uartputstr("\n");
+			mmunormalnc(fb2.base, fb2.size);
+			fbconsadd(&fb2);
+		}
+	}
+	mboxfbdispnum(0);
 }
 
 /*

@@ -49,6 +49,7 @@ enum
 	 * one that pauses a second per line is not.
 	 */
 	Scrolllines = 8,
+	Maxscreens = 2,		/* HDMI and the DSI panel */
 
 	Fg	= 0x00C8C8C8,	/* text */
 	Bg	= 0x00101018,	/* background, matching the test pattern */
@@ -264,172 +265,177 @@ static uchar latin1font[0x60][Fh] = {
 	/* 255 U+00FF 'ÿ' */ {0x00, 0x00, 0x34, 0x00, 0x00, 0x43, 0x62, 0x22, 0x26, 0x34, 0x1C, 0x1C, 0x18, 0x18, 0x10, 0x70},
 };
 
-static Fbinfo *cons;
-static int cx, cy;		/* cursor, in pixels, relative to the visible window */
+/*
+ * The console can drive more than one screen.
+ *
+ * A Raspberry Pi with the 7in DSI panel attached has TWO displays, and
+ * the firmware makes the panel the default -- so a machine with a
+ * monitor plugged into HDMI and a panel on the ribbon showed its
+ * console only on the panel, and the monitor sat on the firmware's
+ * rainbow. Most people do not own the panel, so HDMI is the display
+ * that matters most, and the console has to reach both.
+ *
+ * Each screen keeps its OWN cursor and its own geometry, and the same
+ * stream of runes is drawn on all of them. That is mirroring in the
+ * sense that matters -- the same content is on every display -- without
+ * pretending the displays are the same shape.
+ *
+ * The alternative was tried and is worse: one shared cursor clamped to
+ * the smallest screen. A 1024x768 monitor beside an 800x480 panel then
+ * uses a corner of the monitor, and the panel is laid out for a screen
+ * it is not, which on real glass looked like smeared text. A console
+ * that wraps at each display's own width costs a cursor per screen and
+ * looks right on both.
+ */
+typedef struct Screen Screen;
+struct Screen
+{
+	Fbinfo	*fb;
+	int	voff;		/* where the visible window sits in the buffer */
+	int	w, h;		/* what this screen gives the console */
+	int	cx, cy;		/* this screen's cursor, in pixels */
+	int	hwscroll;	/* firmware will move the window for us */
+	int	vh;		/* usable scanlines in the allocation */
+	int	scrollpix;	/* how far one scroll moves this screen */
+};
+
+static Screen screens[Maxscreens];
+static int nscreens;
 
 /*
- * Where the visible window sits inside the taller virtual framebuffer,
- * and whether the firmware will move it for us.
- *
- * mailbox.c asks for a virtual framebuffer twice the height of the
- * display. Scrolling is then a matter of telling the GPU to start
- * reading one line further down -- a register write -- instead of
- * dragging the whole screen through memory. The measurement that
- * prompted this: a console write took 740ms and every millisecond of it
- * was the memmove.
- *
- * hwscroll is probed rather than assumed, because a firmware that
- * refuses the tag must still get a working console, just a slow one.
+ * Clear virtual scanlines [y0, y0+nl) on one screen.
  */
-static int voff;
-static int hwscroll;
-static int conh;		/* console height in scanlines */
-static int vh;			/* usable scanlines in the allocation */
+static void
+fbclearlines(Screen *s, int y0, int nl)
+{
+	int y, x, stride;
+	volatile u32int *p;
+
+	stride = (int)(s->fb->pitch / 4);
+	p = (volatile u32int*)s->fb->base;
+	for(y = y0; y < y0 + nl; y++)
+		for(x = 0; x < (int)s->fb->width; x++)
+			p[y * stride + x] = Bg;
+}
 
 static void
 fbcls(void)
 {
-	fbfill(cons, Bg);
-	cx = 0;
-	cy = 0;
-	voff = 0;
-	if(hwscroll)
-		mboxfbvoff(0, 0);
+	int i;
+
+	for(i = 0; i < nscreens; i++){
+		fbfill(screens[i].fb, Bg);
+		screens[i].voff = 0;
+		screens[i].cx = 0;
+		screens[i].cy = 0;
+		if(screens[i].hwscroll){
+			mboxfbdispnum(screens[i].fb->disp);
+			mboxfbvoff(0, 0);
+		}
+	}
 }
 
 /*
- * Clear virtual scanlines [y0, y0+nl).
+ * Scroll one screen, moving the window if the firmware will and copying
+ * pixels if it will not.
  */
 static void
-fbclearlines(int y0, int nl)
-{
-	int y, x, stride;
-	volatile u32int *p;
-
-	stride = (int)(cons->pitch / 4);
-	p = (volatile u32int*)cons->base;
-	for(y = y0; y < y0 + nl; y++)
-		for(x = 0; x < (int)cons->width; x++)
-			p[y * stride + x] = Bg;
-}
-
-/*
- * Scroll by moving the window down the virtual framebuffer.
- *
- * The window walks down until it reaches the bottom half, at which point
- * the visible content is folded back to the top and the walk begins
- * again. That fold is a full-screen move -- the same one this used to do
- * for every line -- but it now happens once per screenful instead, so
- * the cost per line is divided by the number of lines on the screen.
- */
-/*
- * Scroll the window, refusing to write outside the allocation.
- *
- * The bounds test is not defensive decoration. Once the window moves
- * down, glyphs and cleared lines land BELOW the visible height, so an
- * arithmetic slip here does not draw in the wrong place -- it writes
- * over whatever the firmware put after the framebuffer. Two comparisons
- * are nothing beside the mailbox call in the same function, and the
- * console gives up its fast path rather than the machine giving up its
- * memory.
- */
-static void
-fbscrollhw(void)
+screenscroll(Screen *s)
 {
 	static int folded;
+	uchar *base;
+	ulong linebytes, movebytes;
+	int y, x, stride, newcy;
 
-	if(voff + conh + Fh > vh){
-		if(!folded){
-			folded = 1;
-			uartputstr("fb:   window folded once\n");
+	base = (uchar*)s->fb->base;
+	newcy = s->cy - s->scrollpix;
+	if(newcy < 0)
+		newcy = 0;
+
+	if(s->hwscroll){
+		if(s->voff + s->h + s->scrollpix > s->vh){
+			/*
+			 * Fold: the window is as far down the buffer as it
+			 * goes, so the visible content moves back to the
+			 * top. This is the whole-screen move that used to
+			 * happen for every line; it now happens once per
+			 * screenful.
+			 */
+			if(!folded){
+				folded = 1;
+				uartputstr("fb:   window folded once\n");
+			}
+			memmove(base, base + (ulong)s->voff * s->fb->pitch,
+				(ulong)s->h * s->fb->pitch);
+			s->voff = 0;
+			mboxfbdispnum(s->fb->disp);
+			mboxfbvoff(0, 0);
 		}
-		/* fold: the window is as far down as the buffer allows */
-		memmove((uchar*)cons->base,
-			(uchar*)cons->base + (ulong)voff * cons->pitch,
-			(ulong)conh * cons->pitch);
-		voff = 0;
-		mboxfbvoff(0, 0);
-	}
+		s->voff += s->scrollpix;
 
-	voff += Fh;
-	cy -= Fh;
-	if(cy < 0)
-		cy = 0;
+		if(s->voff + newcy + s->scrollpix > s->vh
+		|| s->voff + s->h > s->vh){
+			uartputstr("fb:   SCROLL OUT OF RANGE, reverting to copy\n");
+			s->hwscroll = 0;
+			s->voff = 0;
+			mboxfbdispnum(s->fb->disp);
+			mboxfbvoff(0, 0);
+			s->cy = newcy;
+			return;
+		}
 
-	if(voff + cy + Fh > vh || voff + conh > vh){
-		uartputstr("fb:   SCROLL OUT OF RANGE, reverting to copy\n");
-		hwscroll = 0;
-		voff = 0;
-		mboxfbvoff(0, 0);
-		fbcls();
+		fbclearlines(s, s->voff + newcy, s->scrollpix);
+
+		/*
+		 * Select the display before moving its window: the offset
+		 * tag applies to whichever display the firmware has
+		 * current, so with two screens the second one's offset
+		 * would otherwise be written to the first.
+		 */
+		mboxfbdispnum(s->fb->disp);
+		mboxfbvoff(0, s->voff);
+		s->cy = newcy;
 		return;
 	}
 
-	fbclearlines(voff + cy, Fh);
-	mboxfbvoff(0, voff);
-}
-
-/*
- * The fallback: move everything up and clear the last lines.
- *
- * At 800x480 that is about 1.5MB per scroll through memory the ARM
- * reaches slowly, which is why Scrolllines batches several lines into
- * one move. Only reached when the firmware will not move the window.
- */
-static void
-fbscrollsw(void)
-{
-	uchar *base;
-	ulong linebytes, movebytes;
-	int y, x, stride;
-	volatile u32int *p;
-
-	base = (uchar*)cons->base;
-	linebytes = cons->pitch * Fh * Scrolllines;
-	if(linebytes > cons->pitch * (ulong)conh)
-		linebytes = cons->pitch * (ulong)conh;
-	movebytes = cons->pitch * (ulong)conh - linebytes;
+	/* the slow path: move the pixels */
+	linebytes = s->fb->pitch * (ulong)s->scrollpix;
+	if(linebytes > s->fb->pitch * (ulong)s->h)
+		linebytes = s->fb->pitch * (ulong)s->h;
+	movebytes = s->fb->pitch * (ulong)s->h - linebytes;
 
 	memmove(base, base + linebytes, movebytes);
 
-	stride = (int)(cons->pitch / 4);
-	p = (volatile u32int*)(base + movebytes);
-	for(y = 0; y < Fh * Scrolllines && cy - y > 0; y++)
-		for(x = 0; x < (int)cons->width; x++)
-			p[y * stride + x] = Bg;
+	stride = (int)(s->fb->pitch / 4);
+	{
+		volatile u32int *p;
 
-	cy -= Fh * Scrolllines;
-	if(cy < 0)
-		cy = 0;
-}
-
-static void
-fbscroll(void)
-{
-	if(hwscroll)
-		fbscrollhw();
-	else
-		fbscrollsw();
+		p = (volatile u32int*)(base + movebytes);
+		for(y = 0; y < s->scrollpix && s->cy - y > 0; y++)
+			for(x = 0; x < s->w; x++)
+				p[y * stride + x] = Bg;
+	}
+	s->cy = newcy;
 }
 
 /*
- * Blank the character cell the cursor is on.
+ * Blank the character cell one screen's cursor is on.
  */
 static void
-fbclearcell(void)
+screenclearcell(Screen *s)
 {
 	int y, x, stride;
 	volatile u32int *p;
 
-	stride = (int)(cons->pitch / 4);
-	p = (volatile u32int*)cons->base;
+	stride = (int)(s->fb->pitch / 4);
+	p = (volatile u32int*)s->fb->base;
 	for(y = 0; y < Fh; y++){
-		if(cy + y >= conh)
+		if(s->cy + y >= s->h)
 			break;
 		for(x = 0; x < Fw; x++){
-			if(cx + x >= (int)cons->width)
+			if(s->cx + x >= s->w)
 				break;
-			p[(voff + cy + y) * stride + cx + x] = Bg;
+			p[(s->voff + s->cy + y) * stride + s->cx + x] = Bg;
 		}
 	}
 }
@@ -448,14 +454,89 @@ fbfindglyph(Rune r)
 }
 
 static void
-fbglyph(Rune c)
+screenglyph(Screen *s, uchar *g)
 {
-	uchar *g;
 	int y, x, stride;
 	volatile u32int *p;
-	uchar box[Fh];
 
-	g = fbfindglyph(c);
+	stride = (int)(s->fb->pitch / 4);
+	p = (volatile u32int*)s->fb->base;
+	for(y = 0; y < Fh; y++){
+		if(s->cy + y >= s->h)
+			break;
+		for(x = 0; x < Fw; x++){
+			if(s->cx + x >= s->w)
+				break;
+			if(g[y] & (0x80 >> x))
+				p[(s->voff + s->cy + y) * stride + s->cx + x] = Fg;
+		}
+	}
+}
+
+/*
+ * One rune onto one screen, advancing that screen's cursor.
+ */
+static void
+screenputrune(Screen *s, Rune r, uchar *g)
+{
+	switch(r){
+	case '\n':
+		s->cx = 0;
+		s->cy += Fh;
+		break;
+	case '\r':
+		s->cx = 0;
+		break;
+	case '\t':
+		s->cx = (s->cx / (Fw * 8) + 1) * (Fw * 8);
+		break;
+	case '\b':
+		/*
+		 * Destructive, because here the console IS the terminal.
+		 *
+		 * devcons echoes the raw character -- it does not send the
+		 * "\b \b" a program would use to rub a character out on a
+		 * glass tty -- so if this only moved the cursor, nothing
+		 * would ever be erased. That is exactly what it looked
+		 * like: deletes were obeyed (the shell received "HEL"
+		 * after "HELLO" and two backspaces) while the panel still
+		 * showed all five letters.
+		 */
+		if(s->cx >= Fw){
+			s->cx -= Fw;
+			screenclearcell(s);
+		}
+		break;
+	default:
+		if(r < ' ')		/* other control characters */
+			break;
+		screenglyph(s, g);
+		s->cx += Fw;
+		break;
+	}
+	if(s->cx + Fw > s->w){
+		s->cx = 0;
+		s->cy += Fh;
+	}
+	while(s->cy + Fh > s->h)
+		screenscroll(s);
+}
+
+/*
+ * One rune onto every screen.
+ *
+ * The glyph is looked up ONCE and handed to each screen: it is the same
+ * bitmap on all of them, and the lookup includes building the
+ * "unrenderable" box, which there is no reason to do twice.
+ */
+static void
+fbputrune(Rune r)
+{
+	uchar box[Fh];
+	uchar *g;
+	int i, y;
+
+	g = fbfindglyph(r);
 	if(g == nil){
 		/*
 		 * Show that something is there and cannot be drawn.
@@ -473,67 +554,8 @@ fbglyph(Rune c)
 		g = box;
 	}
 
-	stride = (int)(cons->pitch / 4);
-	p = (volatile u32int*)cons->base;
-	for(y = 0; y < Fh; y++){
-		if(cy + y >= conh)
-			break;
-		for(x = 0; x < Fw; x++){
-			if(cx + x >= (int)cons->width)
-				break;
-			if(g[y] & (0x80 >> x))
-				p[(voff + cy + y) * stride + cx + x] = Fg;
-		}
-	}
-}
-
-/*
- * One rune onto the screen, advancing the cursor.
- */
-static void
-fbputrune(Rune r)
-{
-	switch(r){
-	case '\n':
-		cx = 0;
-		cy += Fh;
-		break;
-	case '\r':
-		cx = 0;
-		break;
-	case '\t':
-		cx = (cx / (Fw * 8) + 1) * (Fw * 8);
-		break;
-	case '\b':
-		/*
-		 * Destructive, because here the console IS the terminal.
-		 *
-		 * devcons echoes the raw character -- it does not send the
-		 * "\b \b" a program would use to rub a character out on a
-		 * glass tty -- so if this only moved the cursor, nothing
-		 * would ever be erased. That is exactly what it looked
-		 * like: deletes were obeyed (the shell received "HEL"
-		 * after "HELLO" and two backspaces) while the panel still
-		 * showed all five letters.
-		 */
-		if(cx >= Fw){
-			cx -= Fw;
-			fbclearcell();
-		}
-		break;
-	default:
-		if(r < ' ')		/* other control characters */
-			break;
-		fbglyph(r);
-		cx += Fw;
-		break;
-	}
-	if(cx + Fw > (int)cons->width){
-		cx = 0;
-		cy += Fh;
-	}
-	while(cy + Fh > conh)
-		fbscroll();
+	for(i = 0; i < nscreens; i++)
+		screenputrune(&screens[i], r, g);
 }
 
 /*
@@ -557,7 +579,7 @@ fbconsputs(char *s, int n)
 	Rune r;
 	int i, k;
 
-	if(cons == nil)
+	if(nscreens == 0)
 		return;
 
 	for(i = 0; i < n; ){
@@ -583,67 +605,97 @@ fbconsputs(char *s, int n)
 }
 
 /*
+ * Add a screen for the console to draw on. Returns 0 if it took it.
+ */
+int
+fbconsadd(Fbinfo *fb)
+{
+	Screen *s;
+	int i;
+
+	if(fb == nil || fb->base == 0 || fb->pitch == 0)
+		return -1;
+	if(fb->depth != 32)		/* the glyph writer assumes it */
+		return -1;
+	if(nscreens >= Maxscreens)
+		return -1;
+
+	s = &screens[nscreens];
+	s->fb = fb;
+	s->voff = 0;
+	s->vh = (int)(fb->size / fb->pitch);
+	s->w = (int)fb->width;
+	s->h = (int)fb->height;
+#ifdef FBSCROLLTEST
+	/*
+	 * Give the console only half of this screen so the other half
+	 * becomes the scrolling headroom.
+	 *
+	 * QEMU grants the offset but reports a screen-sized allocation,
+	 * so the gate below -- correctly -- keeps the fast path off
+	 * there, and the code that only runs on hardware would be the
+	 * code no test ever touches. Halving makes the headroom real
+	 * WITHIN the allocation the emulator did give us, so the offset
+	 * arithmetic, the fold and the clearing all execute under test.
+	 */
+	s->h /= 2;
+	s->h -= s->h % Fh;
+#endif
+	s->h -= s->h % Fh;
+
+	/*
+	 * Two things must hold before this screen's window may be moved,
+	 * and only one of them is about scrolling.
+	 *
+	 * The buffer must be taller than the display, because once the
+	 * window moves down, glyphs and cleared lines are written BELOW
+	 * the visible height -- straight past the end of the allocation
+	 * if the firmware quietly gave a screen-sized buffer anyway. That
+	 * check is what keeps a refused request from turning into memory
+	 * corruption, so it comes first, and the headroom is taken from
+	 * the size REPORTED rather than the size asked for.
+	 *
+	 * Then the offset itself: accepting the tag is not the test,
+	 * since a firmware with nowhere to move the window clamps the
+	 * offset to zero and still reports success, and a console
+	 * scrolled with an offset that never moves shows one screenful
+	 * for ever. Ask for one line down and require that exact answer.
+	 */
+	s->hwscroll = 0;
+	mboxfbdispnum(fb->disp);
+	if(s->vh >= s->h + Fh && mboxfbvoff(0, Fh) == Fh)
+		s->hwscroll = 1;
+	mboxfbvoff(0, 0);
+
+	/*
+	 * One line at a time when the window can be moved, because that
+	 * is free; several at a time when pixels have to be copied,
+	 * because that is where the cost is. Per screen, since one
+	 * display can have the fast path while the other does not.
+	 */
+	s->scrollpix = s->hwscroll? Fh : Fh * Scrolllines;
+
+	nscreens++;
+
+	uartputstr("fb:   console on display ");
+	uartputd(fb->disp);
+	uartputstr(", ");
+	uartputd(s->w);
+	uartputstr("x");
+	uartputd(s->h);
+	uartputstr(screens[nscreens-1].hwscroll?
+		" (scroll by GPU offset)\n" : " (scroll by copy)\n");
+	return 0;
+}
+
+/*
  * Take over the screen. Returns 0 if there is one to take over.
  */
 int
 fbconsinit(Fbinfo *fb)
 {
-	if(fb == nil || fb->base == 0 || fb->pitch == 0)
+	if(fbconsadd(fb) < 0)
 		return -1;
-	if(fb->depth != 32)		/* the glyph writer assumes it */
-		return -1;
-
-	cons = fb;
-
-	/*
-	 * Two things must hold before the window may be moved, and only
-	 * one of them is about scrolling.
-	 *
-	 * The buffer must actually be twice the height of the display,
-	 * because once the window moves down, glyphs and cleared lines are
-	 * written BELOW the visible height -- straight past the end of the
-	 * allocation if the firmware quietly gave us a screen-sized buffer
-	 * anyway. That is the check that keeps a refused request from
-	 * turning into memory corruption, so it comes first.
-	 *
-	 * Then the offset itself: accepting the tag is not the test, since
-	 * a firmware with nowhere to move the window clamps the offset to
-	 * zero and still reports success, and a console scrolled with an
-	 * offset that never moves shows one screenful forever. Ask for one
-	 * line down and require that exact answer back.
-	 */
-	conh = (int)fb->height;
-	vh = (int)(fb->size / fb->pitch);
-#ifdef FBSCROLLTEST
-	/*
-	 * Give the console only half the panel so the other half becomes
-	 * the scrolling headroom.
-	 *
-	 * QEMU grants the offset but reports a screen-sized allocation, so
-	 * the gate below -- correctly -- keeps the fast path off there,
-	 * and the code that only ever runs on hardware is the code no test
-	 * ever touches. Halving the console makes the headroom real
-	 * WITHIN the allocation the emulator did give us, so the offset
-	 * arithmetic, the fold, and the clearing all execute under test.
-	 */
-	conh /= 2;
-	conh -= conh % Fh;
-#endif
-
-	hwscroll = 0;
-	if(vh >= conh + Fh && mboxfbvoff(0, Fh) == Fh)
-		hwscroll = 1;
-	mboxfbvoff(0, 0);
-
-	/*
-	 * Say which path is in use, because the two are indistinguishable
-	 * from the screen until the console has scrolled a full screenful,
-	 * and by then the evidence has gone past.
-	 */
-	if(hwscroll)
-		uartputstr("fb:   scroll by GPU offset\n");
-	else
-		uartputstr("fb:   scroll by copy (firmware refused the offset)\n");
 
 	fbcls();
 

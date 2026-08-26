@@ -1266,7 +1266,7 @@ fi
 if build_kernel "$BUILD/$PLAT-fbscroll.img" "" "-DFBSCROLLTEST"; then
     FBOUT="$(boot_kernel "$BUILD/$PLAT-fbscroll.img" 20)"
     OUT_SAVED="$OUT"; OUT="$FBOUT"
-    check "fb:   scroll by GPU offset" "the console scrolls by moving the window, not the pixels"
+    check "console on display .*scroll by GPU offset" "the console scrolls by moving the window, not the pixels"
     check "fb:   window folded once"   "the window walks to the end of the buffer and folds back"
     refute "SCROLL OUT OF RANGE"       "no scroll writes outside the framebuffer allocation"
     check "boot OK"                    "the kernel boots through a full scroll cycle without faulting"

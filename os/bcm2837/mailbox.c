@@ -208,13 +208,30 @@ mboxprop(u32int tag, u32int *data, int nreq, int nresp)
  * these into separate calls is a classic way to get a black screen.
  */
 int
-mboxfballoc(u32int w, u32int h, u32int depth, Fbinfo *fb)
+mboxfballoc(u32int disp, u32int w, u32int h, u32int depth, Fbinfo *fb)
 {
-	volatile u32int *p, *tagalloc, *tagpitch;
+	volatile u32int *p, *tagalloc, *tagpitch, *tagdisp;
 
 	p = mboxbuf;
 	*p++ = 0;			/* size, patched below */
 	*p++ = Propreq;
+
+	/*
+	 * Choose the display FIRST, in this same message.
+	 *
+	 * Tags are processed in order, so selecting the display here is
+	 * what makes every tag after it -- the dimensions, the depth, the
+	 * allocation itself -- apply to that display rather than to
+	 * whichever one the firmware happens to have made current. Sent
+	 * as a separate call beforehand, the selection was simply
+	 * refused: asking for display 1 returned 0.
+	 *
+	 * The firmware writes back the display it actually selected, so
+	 * the caller can tell a granted request from an ignored one
+	 * rather than assuming.
+	 */
+	tagdisp = p;
+	*p++ = Tagfbsetdispnum; *p++ = 4; *p++ = Propreq; *p++ = disp;
 
 	*p++ = Tagfbsetdim;   *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h;
 	/*
@@ -259,6 +276,7 @@ mboxfballoc(u32int w, u32int h, u32int depth, Fbinfo *fb)
 	if(mboxcall(Mboxchanprop, mboxbuf) < 0)
 		return -1;
 
+	fb->disp = tagdisp[3];
 	fb->base = tagalloc[3] & 0x3FFFFFFF;	/* bus -> ARM physical */
 	fb->size = tagalloc[4];
 	fb->pitch = tagpitch[3];
@@ -400,4 +418,42 @@ mboxfbvoff(u32int x, u32int y)
 	if(mboxprop(Tagfbsetvoff, buf, 2, 2) < 0)
 		return -1;
 	return (int)buf[1];
+}
+
+/*
+ * How many displays the firmware knows about.
+ *
+ * Returns 1 when it cannot say. An unimplemented tag comes back with the
+ * response bit clear and a zero length, which mboxprop does not
+ * distinguish from success, so a count of zero -- or an absurd one --
+ * means "the firmware did not answer this", not "there are no displays".
+ */
+int
+mboxfbnumdisplays(void)
+{
+	u32int buf[1];
+
+	buf[0] = 0;
+	if(mboxprop(Tagfbgetnumdisp, buf, 0, 1) < 0)
+		return 1;
+	if(buf[0] == 0 || buf[0] > 4)
+		return 1;
+	return (int)buf[0];
+}
+
+/*
+ * Choose which display the framebuffer tags act on.
+ *
+ * Returns the display the firmware says it selected, which need not be
+ * the one asked for.
+ */
+int
+mboxfbdispnum(u32int n)
+{
+	u32int buf[1];
+
+	buf[0] = n;
+	if(mboxprop(Tagfbsetdispnum, buf, 1, 1) < 0)
+		return -1;
+	return (int)buf[0];
 }

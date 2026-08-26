@@ -22,14 +22,18 @@ int	gpiogetfunc(int);
 /* mailbox.c */
 int	mboxprop(u32int, u32int*, int, int);
 int	setpower(int, int);
-int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);
+int	mboxfballoc(u32int, u32int, u32int, u32int, Fbinfo*);
+int	mboxfbnumdisplays(void);
 int	mboxfbvoff(u32int, u32int);
 
 /* fb.c */
 int	fbinit(Fbinfo*);
+int	fbinitdisp(u32int, Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 int	fbconsinit(Fbinfo*);
+int	fbconsadd(Fbinfo*);
+int	mboxfbdispnum(u32int);
 void	fbconsputs(char*, int);
 
 /*

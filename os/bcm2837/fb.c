@@ -32,11 +32,46 @@ enum
 int
 fbinit(Fbinfo *fb)
 {
+	return fbinitdisp(0, fb);
+}
+
+/*
+ * Bring up one display's framebuffer.
+ *
+ * The size is asked for rather than chosen: the firmware has already
+ * negotiated a mode with whatever is plugged in -- EDID over HDMI, the
+ * panel's own timings over DSI -- and it is the only thing that knows
+ * the answer. Deffbwidth is a fallback for a display that will not say.
+ */
+int
+fbinitdisp(u32int disp, Fbinfo *fb)
+{
 	u32int dim[2];
-	u32int w, h;
+	u32int w, h, sel;
 
 	w = Deffbwidth;
 	h = Deffbheight;
+
+	/*
+	 * Select before asking. GET_DIM reports the CURRENT display, so
+	 * without this every display is asked about display 0 and a
+	 * second one is allocated at the first one's size.
+	 *
+	 * Through a COPY, and that is not a detail. mboxprop writes the
+	 * firmware's response back over the buffer it is given, so
+	 * passing &disp handed the reply -- 0 -- straight into the
+	 * variable naming the display we wanted. Every line after it then
+	 * asked for display 0: the allocation went to display 0 at the
+	 * size just queried from display 1, which reallocated the panel's
+	 * framebuffer at 1024x768 and left HDMI with nothing. The panel
+	 * showed a buffer of the wrong shape and the monitor kept the
+	 * firmware's rainbow, and it read as "the firmware refuses a
+	 * second display" when in fact the second display was never
+	 * requested.
+	 */
+	sel = disp;
+	if(disp != 0)
+		mboxprop(Tagfbsetdispnum, &sel, 1, 1);
 
 	dim[0] = 0;
 	dim[1] = 0;
@@ -45,8 +80,26 @@ fbinit(Fbinfo *fb)
 		h = dim[1];
 	}
 
-	if(mboxfballoc(w, h, Fbdepth, fb) < 0)
+	if(mboxfballoc(disp, w, h, Fbdepth, fb) < 0)
 		return -1;
+
+	/*
+	 * Record the display we ASKED for, not the one echoed back.
+	 *
+	 * The set-display tag does not report reliably here: the board
+	 * allocates a 1024x768 buffer at a fresh address when asked for
+	 * display 1 -- which is HDMI's negotiated mode and plainly not
+	 * the 800x480 panel -- and still answers 0. Believing the echo
+	 * meant the second screen was recorded as display 0, so every
+	 * later tag meant for it, the scroll offset above all, was
+	 * addressed to the first.
+	 *
+	 * The evidence that the request was honoured is the allocation
+	 * itself: a different size at a different base. board.c checks
+	 * that, which is a fact about what we got rather than a claim
+	 * about what the firmware meant.
+	 */
+	fb->disp = disp;
 
 	return 0;
 }

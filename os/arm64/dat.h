@@ -223,6 +223,7 @@ typedef struct Fbinfo Fbinfo;
 
 struct Fbinfo
 {
+	u32int	disp;		/* which display the firmware put it on */
 	uintptr	base;
 	u32int	size;
 	u32int	pitch;

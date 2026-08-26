@@ -796,7 +796,18 @@ netconfig()
 			sys->print("etherusb: default route via %s\n", gw);
 	}
 
-	pingout(gw);
+	#
+	# The gateway first, then something beyond it.
+	#
+	# They fail differently and it is worth knowing which: the gateway
+	# answering proves the interface, the address, ARP and the route;
+	# an address on the far side of it proves the route actually
+	# forwards. A board that can reach its router and nothing else is
+	# a board with a working driver and a network problem.
+	#
+	if(gw != "")
+		pingout(gw);
+	pingout("8.8.8.8");
 }
 
 #
@@ -1089,7 +1100,7 @@ dhcpwait(c: chan of array of byte, xid, want, ms: int): array of byte
 	}
 }
 
-pingout(gw: string)
+pingout(dest: string)
 {
 	c := sys->open("/net/icmp/clone", Sys->ORDWR);
 	if(c == nil){
@@ -1105,8 +1116,16 @@ pingout(gw: string)
 	}
 	conv := string nbuf[0:n];
 
-	if(sys->fprint(c, "connect 10.0.2.2!1") < 0){
-		sys->print("etherusb: icmp connect failed: %r\n");
+	#
+	# The gateway DHCP named, not the one this was written against.
+	#
+	# This said "connect 10.0.2.2!1" while taking the address as an
+	# argument and ignoring it -- so on a real network it pinged
+	# QEMU's gateway, which is not there, and said nothing at all
+	# about it.
+	#
+	if(sys->fprint(c, "connect %s!1", dest) < 0){
+		sys->print("etherusb: icmp connect to %s failed: %r\n", dest);
 		return;
 	}
 
@@ -1137,14 +1156,33 @@ pingout(gw: string)
 	#
 	spawn pingsend(d, req);
 
-	rep := array[128] of byte;
-	n = sys->read(d, rep, len rep);
-	if(n <= 0){
-		sys->print("etherusb: no echo reply (%d): %r\n", n);
-		return;
+	#
+	# Bounded, for the same reason the DHCP read is: a read on this
+	# socket blocks, so a host that does not answer takes the caller
+	# with it. This one produced no output at all on the board --
+	# neither a reply nor a failure -- which is what a blocked read
+	# looks like from outside.
+	#
+	rc := chan of array of byte;
+	spawn pingreader(d, rc);
+	tc := chan of int;
+	spawn dhcptimer(tc, 3000);
+
+	alt {
+	rep := <-rc =>
+		sys->print("etherusb: ICMP echo reply from %s (%d bytes, type %d)\n",
+			dest, len rep, int rep[20]);
+	<-tc =>
+		sys->print("etherusb: no echo reply from %s\n", dest);
 	}
-	sys->print("etherusb: ICMP echo reply from 10.0.2.2 (%d bytes, type %d)\n",
-		n, int rep[20]);
+}
+
+pingreader(d: ref Sys->FD, c: chan of array of byte)
+{
+	rep := array[128] of byte;
+	n := sys->read(d, rep, len rep);
+	if(n > 0)
+		c <-= rep[0:n];
 }
 
 #

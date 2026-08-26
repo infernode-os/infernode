@@ -236,7 +236,6 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 	for(i := 0; i < len prev; i++)
 		prev[i] = byte 0;
 
-	nlog := 0;
 	nempty := 0;
 	for(;;){
 		n := sys->read(fd, buf, len buf);
@@ -246,20 +245,6 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		# decode to nothing look identical from the shell, and they
 		# are opposite faults.
 		#
-		#
-		# Log what ARRIVES, not what does not.
-		#
-		# An interrupt endpoint with nothing to say returns zero
-		# bytes, and logging those buried the interesting case: six
-		# lines of "returned 0" and no room left for a keypress.
-		#
-		if(n >= Reportlen && nlog < 6){
-			nlog++;
-			sys->print("kbdusb: report %d: %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
-				n, int buf[0], int buf[1], int buf[2],
-				int buf[3], int buf[4], int buf[5],
-				int buf[6], int buf[7]);
-		}
 		if(n < Reportlen){
 			#
 			# Wait a poll interval. Without this the loop spins

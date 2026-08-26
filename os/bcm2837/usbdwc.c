@@ -66,7 +66,8 @@ enum
 	 * calling it dead. Generous on purpose: the point is to bound a
 	 * failure, not to police latency.
 	 */
-	Chantmout	= 200,		/* ms per attempt */
+	Chantmout	= 200,
+	Pollspin	= 100,	/* ~1ms of polling before falling back to sleep */		/* ms per attempt */
 	Maxtmout	= 10,		/* attempts before giving up */
 
 	Enabledelay	= 50,
@@ -124,22 +125,11 @@ struct Epio {
 
 static Ctlr dwc;
 static int debug;
+/* interrupts this controller has raised */
 static ulong nusbintr;
-
-/* how many split configurations still to report; see chansetup */
-static int dwcspltlog;
-
-/* how many slow-device transfers still to report; see chanio */
-static int dwcslowlog;
-
-/* how many interrupt transfers still to report; see chanio */
-static int dwcintrxfer;
 
 /* how many interrupt failures still to report; see eptrans */
 static int dwcintrerr;
-
-/* how many interrupt reads still to report; see epread */
-static int dwceprdlog;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -257,22 +247,6 @@ chansetup(Hostchan *hc, Ep *ep)
 	hc->hcchar = hcc;
 	hc->hcint = ~0;
 
-	/*
-	 * Say what was programmed for a device that is not high speed.
-	 *
-	 * Splits are configured from ep->dev->speed, ->hub and ->port,
-	 * and every one of those is set by something else -- the Limbo
-	 * bus walk through devusb -- so "the condition is true" has been
-	 * an assumption three times now. This prints the inputs and the
-	 * result together.
-	 */
-	if(ep->dev->speed != Highspeed && dwcspltlog < 4){
-		dwcspltlog++;
-		print("usbotg: ep%d.%d speed %d hub %d port %d -> "
-			"hcsplt %8.8ux hcchar %8.8ux\n",
-			ep->dev->nb, ep->nb, ep->dev->speed, ep->dev->hub,
-			ep->dev->port, hc->hcsplt, hc->hcchar);
-	}
 }
 
 /*
@@ -352,7 +326,7 @@ static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 {
 	uint fn1, fn2;
-	int intr, n, x, ointr, ntmout;
+	int intr, n, x, ointr, ntmout, np;
 	ulong start, now;
 	Dwcregs *r;
 
@@ -380,7 +354,38 @@ restart:
 		 * bounded number of times turns a dead machine into an I/O
 		 * error, which the caller above can print.
 		 */
-		tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
+		/*
+		 * Poll briefly before sleeping.
+		 *
+		 * This driver never takes a USB interrupt -- the whole wait
+		 * runs at splhi and hcintmsk is cleared before spl drops,
+		 * so the core asserts and de-asserts where nothing can be
+		 * delivered. tsleep therefore almost always returns on its
+		 * TIMEOUT rather than on a wakeup, and every transfer that
+		 * does not complete before the sleep begins costs the full
+		 * Chantmout: 200ms for something the bus finishes in
+		 * microseconds.
+		 *
+		 * Enumeration survived that because it is a few dozen
+		 * transfers. A keyboard does not: polling an interrupt
+		 * endpoint at 200ms a go put roughly a minute between
+		 * pressing a key and seeing it, and any key pressed and
+		 * released inside one of those windows was never reported
+		 * at all -- the device reports changes, and we were not
+		 * looking when they changed.
+		 *
+		 * So spin on chandone first, for about a millisecond, which
+		 * is far longer than a transfer needs and far shorter than
+		 * anything a person notices. The sleep stays as the
+		 * fallback for a transfer that genuinely stalls.
+		 */
+		for(np = 0; np < Pollspin; np++){
+			if(chandone(hc))
+				break;
+			microdelay(10);
+		}
+		if(!chandone(hc))
+			tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
 		if(!chandone(hc)){
 			hc->hcintmsk = 0;
 			splx(x);
@@ -918,53 +923,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		intrdump();
 	}
 
-	/*
-	 * What a slow device's transfer actually returned.
-	 *
-	 * The buffer the bus walk hands down is zeroed and comes back
-	 * full of 0x55, so something is WRITING those bytes rather than
-	 * leaving it untouched. That separates two possibilities which
-	 * have looked identical from outside: a transfer the controller
-	 * believes succeeded while carrying nonsense, or one that failed
-	 * with the buffer left holding whatever was last put there.
-	 *
-	 * hcint says which, and hctsiz says how much the controller
-	 * thinks it moved.
-	 */
-	/*
-	 * Interrupt transfers get their own budget.
-	 *
-	 * The slow-device log above is spent on the control transfers
-	 * that enumerate the device, so the interrupt endpoint the
-	 * keyboard actually reports through -- the one returning nothing
-	 * -- never appeared in it.
-	 */
-	if(ep->ttype == Tintr && dwcintrxfer < 6){
-		dwcintrxfer++;
-		print("usbotg: ep%d.%d intr len %d nleft %d last %8.8ux "
-			"hcsplt %8.8ux hctsiz %8.8ux\n",
-			ep->dev->nb, ep->nb, len, nleft, lasti,
-			hc->hcsplt, hc->hctsiz);
-	}
-
-	if(ep->dev->speed != Highspeed && dwcslowlog < 4){
-		dwcslowlog++;
-		/*
-		 * lasti, not hc->hcint: chanio clears the interrupt bits as
-		 * it consumes them, so reading the register here reports
-		 * 00000000 for every transfer whatever happened. That is
-		 * the third time in this driver a probe has been placed
-		 * after the value it wanted was cleared.
-		 */
-		print("usbotg: ep%d.%d slow xfer len %d nleft %d last %8.8ux "
-			"hcsplt %8.8ux hctsiz %8.8ux\n",
-			ep->dev->nb, ep->nb, len, nleft, lasti,
-			hc->hcsplt, hc->hctsiz);
-		if(len - nleft >= 4)
-			print("usbotg:   data %2.2ux %2.2ux %2.2ux %2.2ux\n",
-				((uchar*)a)[0], ((uchar*)a)[1],
-				((uchar*)a)[2], ((uchar*)a)[3]);
-	}
 	return len - nleft;
 }
 
@@ -1517,22 +1475,6 @@ epread(Ep *ep, void *a, long n)
 		poperror();
 		return nr;
 	case Tintr:
-		/*
-		 * Confirm this is reached at all.
-		 *
-		 * The keyboard's reads return zero promptly and forever,
-		 * and neither the completion log at the end of chanio nor
-		 * the failure log in eptrans has ever printed. Those cover
-		 * success and failure between them, so the remaining
-		 * possibility is that the transfer is not being attempted
-		 * -- which is a different fault from either, and is not
-		 * something the driver has been asked before.
-		 */
-		if(dwceprdlog < 4){
-			dwceprdlog++;
-			print("usbotg: epread ep%d.%d intr n %ld pollival %d\n",
-				ep->dev->nb, ep->nb, n, ep->pollival);
-		}
 		elapsed = TK2MS(m->ticks) - epio->lastpoll;
 		if(elapsed < ep->pollival)
 			tsleep(&up->sleep, return0, 0, ep->pollival - elapsed);

@@ -130,7 +130,10 @@ static ulong nusbintr;
 static int dwcspltlog;
 
 /* how many slow-device transfers still to report; see chanio */
-static int dwcslowlog;	/* interrupts this controller has raised */
+static int dwcslowlog;
+
+/* how many interrupt transfers still to report; see chanio */
+static int dwcintrxfer;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -922,6 +925,22 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 * hcint says which, and hctsiz says how much the controller
 	 * thinks it moved.
 	 */
+	/*
+	 * Interrupt transfers get their own budget.
+	 *
+	 * The slow-device log above is spent on the control transfers
+	 * that enumerate the device, so the interrupt endpoint the
+	 * keyboard actually reports through -- the one returning nothing
+	 * -- never appeared in it.
+	 */
+	if(ep->ttype == Tintr && dwcintrxfer < 6){
+		dwcintrxfer++;
+		print("usbotg: ep%d.%d intr len %d nleft %d last %8.8ux "
+			"hcsplt %8.8ux hctsiz %8.8ux\n",
+			ep->dev->nb, ep->nb, len, nleft, lasti,
+			hc->hcsplt, hc->hctsiz);
+	}
+
 	if(ep->dev->speed != Highspeed && dwcslowlog < 4){
 		dwcslowlog++;
 		/*

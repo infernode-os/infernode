@@ -367,8 +367,19 @@ ctlout(rtype, req, value, index: int): int
 
 	if(sys->write(ep0, buf, len buf) != len buf)
 		return -1;
+	#
+	# The reply decides whether it worked, and this threw it away.
+	#
+	# A stalled control request -- which is what a device answers when
+	# it does not support a request, or does not support it addressed
+	# the way it was -- fails on the READ, not the write. Returning 0
+	# regardless meant SET_PROTOCOL and SET_IDLE could both be
+	# refused in silence, and this driver would report itself ready
+	# having configured nothing.
+	#
 	rep := array[8] of byte;
-	sys->read(ep0, rep, len rep);
+	if(sys->read(ep0, rep, len rep) < 0)
+		return -1;
 	return 0;
 }
 

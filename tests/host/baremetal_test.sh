@@ -1135,6 +1135,38 @@ else
 fi
 
 #
+# 3b. Scrolling by moving the window, not by moving the pixels.
+#
+#     Console writes measured 570-770ms on hardware and all of it was
+#     the full-screen memmove -- which put a keystroke's echo the better
+#     part of a second behind the key. The framebuffer is now allocated
+#     taller than the display and scrolling sets a GPU offset instead.
+#
+#     That path cannot run under a plain emulated boot: QEMU grants the
+#     offset but reports a screen-sized allocation, so the safety gate
+#     -- rightly -- keeps the fast path off, and the code that only runs
+#     on hardware would be the code nothing tests. So build a variant
+#     that gives the console half the panel and uses the other half as
+#     headroom. The offset arithmetic, the fold, and the line clearing
+#     then all execute inside the allocation QEMU really did give us.
+#
+#     What this proves is bounded but is the part that matters: the
+#     window moves, a full cycle folds back to the top, no write lands
+#     outside the buffer, and the kernel still finishes booting.
+#
+if build_kernel "$BUILD/$PLAT-fbscroll.img" "" "-DFBSCROLLTEST"; then
+    FBOUT="$(boot_kernel "$BUILD/$PLAT-fbscroll.img" 20)"
+    OUT_SAVED="$OUT"; OUT="$FBOUT"
+    check "fb:   scroll by GPU offset" "the console scrolls by moving the window, not the pixels"
+    check "fb:   window folded once"   "the window walks to the end of the buffer and folds back"
+    refute "SCROLL OUT OF RANGE"       "no scroll writes outside the framebuffer allocation"
+    check "boot OK"                    "the kernel boots through a full scroll cycle without faulting"
+    OUT="$OUT_SAVED"
+else
+    fail "the framebuffer-scroll variant failed to build"
+fi
+
+#
 # 4. The panic path reports instead of hanging.
 #
 #    Regression guard for the failure mode this whole layer exists to

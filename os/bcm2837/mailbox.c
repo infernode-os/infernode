@@ -217,7 +217,21 @@ mboxfballoc(u32int w, u32int h, u32int depth, Fbinfo *fb)
 	*p++ = Propreq;
 
 	*p++ = Tagfbsetdim;   *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h;
-	*p++ = Tagfbsetvdim;  *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h;
+	/*
+	 * Twice as tall a VIRTUAL framebuffer as the display shows.
+	 *
+	 * The extra height is what makes scrolling free: the visible
+	 * window is moved down it by setting an offset, which is a
+	 * register the GPU reads, instead of moving 1.5MB of pixels
+	 * through a bus the ARM reaches slowly. A console write on this
+	 * board measured 990ms and every millisecond of it was the
+	 * memmove.
+	 *
+	 * When the offset reaches the bottom the content is folded back
+	 * to the top, which costs one move -- but once per screenful
+	 * rather than once per line.
+	 */
+	*p++ = Tagfbsetvdim;  *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h * 2;
 	*p++ = Tagfbsetvoff;  *p++ = 8; *p++ = Propreq; *p++ = 0; *p++ = 0;
 	*p++ = Tagfbsetdepth; *p++ = 4; *p++ = Propreq; *p++ = depth;
 	/*
@@ -361,4 +375,29 @@ getmacaddr(uchar *mac)
 	mac[4] = v[1];
 	mac[5] = v[1] >> 8;
 	return 0;
+}
+
+/*
+ * Move the visible window within the virtual framebuffer.
+ *
+ * This is the whole point of allocating one taller than the screen: the
+ * GPU is told where to start reading and does the rest. Nothing is
+ * copied.
+ *
+ * Returns the offset the firmware actually GRANTED, which is not always
+ * the one asked for -- a firmware with no virtual space to spare clamps
+ * it to zero and reports success. Returning the granted value rather
+ * than an error code is what lets the caller tell a working offset from
+ * an accepted-and-ignored one, and fall back to copying pixels.
+ */
+int
+mboxfbvoff(u32int x, u32int y)
+{
+	u32int buf[2];
+
+	buf[0] = x;
+	buf[1] = y;
+	if(mboxprop(Tagfbsetvoff, buf, 2, 2) < 0)
+		return -1;
+	return (int)buf[1];
 }

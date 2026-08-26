@@ -153,7 +153,26 @@ static uchar font[Fhi - Flo + 1][Fh] = {
 };
 
 static Fbinfo *cons;
-static int cx, cy;		/* cursor, in pixels */
+static int cx, cy;		/* cursor, in pixels, relative to the visible window */
+
+/*
+ * Where the visible window sits inside the taller virtual framebuffer,
+ * and whether the firmware will move it for us.
+ *
+ * mailbox.c asks for a virtual framebuffer twice the height of the
+ * display. Scrolling is then a matter of telling the GPU to start
+ * reading one line further down -- a register write -- instead of
+ * dragging the whole screen through memory. The measurement that
+ * prompted this: a console write took 740ms and every millisecond of it
+ * was the memmove.
+ *
+ * hwscroll is probed rather than assumed, because a firmware that
+ * refuses the tag must still get a working console, just a slow one.
+ */
+static int voff;
+static int hwscroll;
+static int conh;		/* console height in scanlines */
+static int vh;			/* usable scanlines in the allocation */
 
 static void
 fbcls(void)
@@ -161,18 +180,92 @@ fbcls(void)
 	fbfill(cons, Bg);
 	cx = 0;
 	cy = 0;
+	voff = 0;
+	if(hwscroll)
+		mboxfbvoff(0, 0);
 }
 
 /*
- * Move everything up one line and clear the last.
- *
- * A whole-screen move per line is not clever, and at 800x480 it is about
- * 1.5MB -- which at this resolution costs less than any of the
- * alternatives cost in complexity, and a console that scrolls slowly is
- * still a console.
+ * Clear virtual scanlines [y0, y0+nl).
  */
 static void
-fbscroll(void)
+fbclearlines(int y0, int nl)
+{
+	int y, x, stride;
+	volatile u32int *p;
+
+	stride = (int)(cons->pitch / 4);
+	p = (volatile u32int*)cons->base;
+	for(y = y0; y < y0 + nl; y++)
+		for(x = 0; x < (int)cons->width; x++)
+			p[y * stride + x] = Bg;
+}
+
+/*
+ * Scroll by moving the window down the virtual framebuffer.
+ *
+ * The window walks down until it reaches the bottom half, at which point
+ * the visible content is folded back to the top and the walk begins
+ * again. That fold is a full-screen move -- the same one this used to do
+ * for every line -- but it now happens once per screenful instead, so
+ * the cost per line is divided by the number of lines on the screen.
+ */
+/*
+ * Scroll the window, refusing to write outside the allocation.
+ *
+ * The bounds test is not defensive decoration. Once the window moves
+ * down, glyphs and cleared lines land BELOW the visible height, so an
+ * arithmetic slip here does not draw in the wrong place -- it writes
+ * over whatever the firmware put after the framebuffer. Two comparisons
+ * are nothing beside the mailbox call in the same function, and the
+ * console gives up its fast path rather than the machine giving up its
+ * memory.
+ */
+static void
+fbscrollhw(void)
+{
+	static int folded;
+
+	if(voff + conh + Fh > vh){
+		if(!folded){
+			folded = 1;
+			uartputstr("fb:   window folded once\n");
+		}
+		/* fold: the window is as far down as the buffer allows */
+		memmove((uchar*)cons->base,
+			(uchar*)cons->base + (ulong)voff * cons->pitch,
+			(ulong)conh * cons->pitch);
+		voff = 0;
+		mboxfbvoff(0, 0);
+	}
+
+	voff += Fh;
+	cy -= Fh;
+	if(cy < 0)
+		cy = 0;
+
+	if(voff + cy + Fh > vh || voff + conh > vh){
+		uartputstr("fb:   SCROLL OUT OF RANGE, reverting to copy\n");
+		hwscroll = 0;
+		voff = 0;
+		mboxfbvoff(0, 0);
+		fbcls();
+		return;
+	}
+
+	fbclearlines(voff + cy, Fh);
+	mboxfbvoff(0, voff);
+}
+
+/*
+ * The fallback: move everything up and clear the last lines.
+ *
+ * At 800x480 that is about 1.5MB per scroll through memory the ARM
+ * reaches slowly, which is why Scrolllines batches several lines into
+ * one move. Only reached when the firmware will not move the window.
+ */
+static void
+fbscrollsw(void)
 {
 	uchar *base;
 	ulong linebytes, movebytes;
@@ -181,9 +274,9 @@ fbscroll(void)
 
 	base = (uchar*)cons->base;
 	linebytes = cons->pitch * Fh * Scrolllines;
-	if(linebytes > cons->pitch * cons->height)
-		linebytes = cons->pitch * cons->height;
-	movebytes = cons->pitch * cons->height - linebytes;
+	if(linebytes > cons->pitch * (ulong)conh)
+		linebytes = cons->pitch * (ulong)conh;
+	movebytes = cons->pitch * (ulong)conh - linebytes;
 
 	memmove(base, base + linebytes, movebytes);
 
@@ -196,6 +289,15 @@ fbscroll(void)
 	cy -= Fh * Scrolllines;
 	if(cy < 0)
 		cy = 0;
+}
+
+static void
+fbscroll(void)
+{
+	if(hwscroll)
+		fbscrollhw();
+	else
+		fbscrollsw();
 }
 
 static void
@@ -212,13 +314,13 @@ fbglyph(int c)
 	stride = (int)(cons->pitch / 4);
 	p = (volatile u32int*)cons->base;
 	for(y = 0; y < Fh; y++){
-		if(cy + y >= (int)cons->height)
+		if(cy + y >= conh)
 			break;
 		for(x = 0; x < Fw; x++){
 			if(cx + x >= (int)cons->width)
 				break;
 			if(g[y] & (0x80 >> x))
-				p[(cy + y) * stride + cx + x] = Fg;
+				p[(voff + cy + y) * stride + cx + x] = Fg;
 		}
 	}
 }
@@ -227,32 +329,9 @@ void
 fbconsputs(char *s, int n)
 {
 	int i, c;
-	ulong t0, dt;
-	static int nslow;
-	static int nscroll;
-	static ulong scrollms;
 
 	if(cons == nil)
 		return;
-
-	/*
-	 * Time this, because it is on the path a keystroke takes.
-	 *
-	 * echo() in devcons sends typed characters to screenputs and to
-	 * printq. printq is never set in this tree, so a character
-	 * injected through /dev/keyboard -- which is how the USB keyboard
-	 * driver delivers -- is echoed HERE and nowhere else. The serial
-	 * console never sees it, which is why watching the wire showed
-	 * nothing while the panel showed the keystrokes arriving slowly.
-	 *
-	 * Every scroll moves about 1.5MB of Device-nGnRnE memory, which
-	 * is uncached and permits no write combining, so each access is
-	 * its own bus transaction. That is the obvious suspect and it is
-	 * worth a number rather than an assumption.
-	 *
-	 * uartputstr, not print: print comes back through here.
-	 */
-	t0 = TK2MS(m->ticks);
 
 	for(i = 0; i < n; i++){
 		c = s[i] & 0xFF;
@@ -282,38 +361,9 @@ fbconsputs(char *s, int n)
 			cx = 0;
 			cy += Fh;
 		}
-		while(cy + Fh > (int)cons->height){
-			ulong s0;
-
-			s0 = TK2MS(m->ticks);
+		while(cy + Fh > conh)
 			fbscroll();
-			nscroll++;
-			scrollms += TK2MS(m->ticks) - s0;
-		}
 	}
-
-	dt = TK2MS(m->ticks) - t0;
-	if(dt > 100 && nslow < 8){
-		nslow++;
-		/*
-		 * Split the cost. Mapping the framebuffer Normal
-		 * non-cacheable took a write from 1780ms to about 1200,
-		 * which is a real improvement and nothing like enough --
-		 * so the memory type was not what dominates. This says how
-		 * much of it is scrolling and how much is everything else.
-		 */
-		uartputstr("fb:   write ");
-		uartputd(dt);
-		uartputstr("ms, of which ");
-		uartputd(scrollms);
-		uartputstr("ms in ");
-		uartputd(nscroll);
-		uartputstr(" scroll(s), ");
-		uartputd(n);
-		uartputstr(" chars\n");
-	}
-	nscroll = 0;
-	scrollms = 0;
 }
 
 /*
@@ -328,6 +378,57 @@ fbconsinit(Fbinfo *fb)
 		return -1;
 
 	cons = fb;
+
+	/*
+	 * Two things must hold before the window may be moved, and only
+	 * one of them is about scrolling.
+	 *
+	 * The buffer must actually be twice the height of the display,
+	 * because once the window moves down, glyphs and cleared lines are
+	 * written BELOW the visible height -- straight past the end of the
+	 * allocation if the firmware quietly gave us a screen-sized buffer
+	 * anyway. That is the check that keeps a refused request from
+	 * turning into memory corruption, so it comes first.
+	 *
+	 * Then the offset itself: accepting the tag is not the test, since
+	 * a firmware with nowhere to move the window clamps the offset to
+	 * zero and still reports success, and a console scrolled with an
+	 * offset that never moves shows one screenful forever. Ask for one
+	 * line down and require that exact answer back.
+	 */
+	conh = (int)fb->height;
+	vh = (int)(fb->size / fb->pitch);
+#ifdef FBSCROLLTEST
+	/*
+	 * Give the console only half the panel so the other half becomes
+	 * the scrolling headroom.
+	 *
+	 * QEMU grants the offset but reports a screen-sized allocation, so
+	 * the gate below -- correctly -- keeps the fast path off there,
+	 * and the code that only ever runs on hardware is the code no test
+	 * ever touches. Halving the console makes the headroom real
+	 * WITHIN the allocation the emulator did give us, so the offset
+	 * arithmetic, the fold, and the clearing all execute under test.
+	 */
+	conh /= 2;
+	conh -= conh % Fh;
+#endif
+
+	hwscroll = 0;
+	if(vh >= conh + Fh && mboxfbvoff(0, Fh) == Fh)
+		hwscroll = 1;
+	mboxfbvoff(0, 0);
+
+	/*
+	 * Say which path is in use, because the two are indistinguishable
+	 * from the screen until the console has scrolled a full screenful,
+	 * and by then the evidence has gone past.
+	 */
+	if(hwscroll)
+		uartputstr("fb:   scroll by GPU offset\n");
+	else
+		uartputstr("fb:   scroll by copy (firmware refused the offset)\n");
+
 	fbcls();
 
 	/*

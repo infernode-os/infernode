@@ -237,8 +237,25 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		prev[i] = byte 0;
 
 	nempty := 0;
+	nslow := 0;
 	for(;;){
+		#
+		# Time the read.
+		#
+		# Latency is still tens of seconds after bounding the split
+		# retry, and the arithmetic does not account for it: a poll
+		# should cost at most a second or so. Guessing at where the
+		# rest goes has been wrong twice, so measure it -- a read
+		# that takes seconds and a read that is called seconds apart
+		# are different faults.
+		#
+		t0 := sys->millisec();
 		n := sys->read(fd, buf, len buf);
+		dt := sys->millisec() - t0;
+		if(dt > 250 && nslow < 8){
+			nslow++;
+			sys->print("kbdusb: read took %d ms (returned %d)\n", dt, n);
+		}
 		#
 		# Say what the endpoint returns, a few times. A read that
 		# returns nothing and a read that returns a report we then

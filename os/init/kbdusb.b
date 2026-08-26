@@ -237,6 +237,7 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		prev[i] = byte 0;
 
 	nempty := 0;
+	nsent := 0;
 	nslow := 0;
 	for(;;){
 		#
@@ -302,10 +303,24 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 				w0 := sys->millisec();
 				sys->write(kbd, array of byte s, len array of byte s);
 				dw := sys->millisec() - w0;
-				if(dw > 100 && nslow < 8){
-					nslow++;
-					sys->print("kbdusb: write took %d ms\n", dw);
-				}
+				nsent++;
+				#
+				# Report delivery, because "nothing appears"
+				# has two causes and they are opposite.
+				#
+				# The first two or three keys echo and later
+				# ones do not, which is the shape of a queue
+				# filling rather than of a slow path: kbdputc
+				# feeds kbdq and qproduce DROPS silently when
+				# it is full. So say what this driver has
+				# actually delivered. If the count keeps
+				# rising while the screen stays still, the
+				# loss is downstream of here; if it stops,
+				# it is not.
+				#
+				if(nsent <= 12 || dw > 100)
+					sys->print("kbdusb: sent %d (%c) write %d ms\n",
+						nsent, c, dw);
 			}
 		}
 		prev[0:] = buf[0:Reportlen];

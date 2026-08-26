@@ -66,9 +66,31 @@ enum
 	 * calling it dead. Generous on purpose: the point is to bound a
 	 * failure, not to police latency.
 	 */
-	Chantmout	= 200,
-	Pollspin	= 100,	/* ~1ms of polling before falling back to sleep */		/* ms per attempt */
-	Maxtmout	= 10,		/* attempts before giving up */
+	/*
+	 * The timeout IS the cost of every transfer here.
+	 *
+	 * This driver never takes a USB interrupt: chanwait runs the
+	 * whole wait at splhi and clears hcintmsk before spl drops, so
+	 * the core asserts and de-asserts where nothing can be
+	 * delivered. tsleep therefore returns on its timeout rather than
+	 * on a wakeup, every time.
+	 *
+	 * At 200ms a slice that made a keyboard unusable: about a minute
+	 * to echo a key, and anything pressed and released between polls
+	 * never reported at all, because the device reports CHANGES and
+	 * nothing was looking when they changed.
+	 *
+	 * Spinning on chandone instead was tried twice and broke
+	 * something both times -- enumeration stalled, then the keyboard
+	 * stopped reporting -- because a split transaction is timed
+	 * against the frame counter and holding splhi across it disturbs
+	 * exactly that. So shorten the slice rather than replace the
+	 * sleep: the same two seconds of total patience, in pieces small
+	 * enough that a transfer costs milliseconds. Nothing spins and
+	 * nothing holds splhi any longer than before.
+	 */
+	Chantmout	= 5,		/* ms per attempt */
+	Maxtmout	= 400,		/* attempts before giving up */
 
 	Enabledelay	= 50,
 	Resetattempts	= 3,	/* a fluffed chirp usually succeeds next time */
@@ -323,7 +345,7 @@ static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 {
 	uint fn1, fn2;
-	int intr, n, x, ointr, ntmout, np;
+	int intr, n, x, ointr, ntmout;
 	ulong start, now;
 	Dwcregs *r;
 
@@ -360,7 +382,7 @@ restart:
 		 * delivered. tsleep therefore almost always returns on its
 		 * TIMEOUT rather than on a wakeup, and every transfer that
 		 * does not complete before the sleep begins costs the full
-		 * Chantmout: 200ms for something the bus finishes in
+		 * Chantmout, which is now a few milliseconds rather than
 		 * microseconds.
 		 *
 		 * Enumeration survived that because it is a few dozen
@@ -376,37 +398,7 @@ restart:
 		 * anything a person notices. The sleep stays as the
 		 * fallback for a transfer that genuinely stalls.
 		 */
-		/*
-		 * Poll only for the endpoints whose latency matters.
-		 *
-		 * The spin was applied to every transfer and enumeration
-		 * started failing with "endpoint stalled" on the low-speed
-		 * devices that had enumerated cleanly an hour before. That
-		 * is a control transfer through a transaction translator,
-		 * whose two halves are timed against the frame counter, and
-		 * spinning at splhi across them is exactly the kind of
-		 * change that would disturb it.
-		 *
-		 * Interrupt endpoints are where the 200ms timeout actually
-		 * hurt: a keyboard polled at that rate takes about a minute
-		 * to echo and drops anything pressed and released between
-		 * polls. Control transfers happen a few dozen times at boot
-		 * and can afford the sleep.
-		 *
-		 * So spin for intr and leave everything else as it was.
-		 * Narrowing it is not a guess about the mechanism -- it
-		 * confines a change that broke something to the case that
-		 * needed it.
-		 */
-		if(ep->ttype == Tintr){
-			for(np = 0; np < Pollspin; np++){
-				if(chandone(hc))
-					break;
-				microdelay(10);
-			}
-		}
-		if(!chandone(hc))
-			tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
+		tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
 		if(!chandone(hc)){
 			hc->hcintmsk = 0;
 			splx(x);

@@ -86,6 +86,7 @@ extern int irqorphan;
 void	intrdump(void);
 int	intrpending(void);
 int	getmacaddr(uchar*);
+void	mmunormalnc(uintptr, usize);
 extern ulong nspurious;
 /*
  * intr.c -- the board's interrupt controller.

@@ -147,6 +147,17 @@ boardfbprobe(void)
 		return;
 	}
 
+	/*
+	 * Make the screen Normal non-cacheable before drawing on it.
+	 *
+	 * It falls in the range mapped Device-nGnRnE at boot, which is
+	 * correct for peripherals and wrong for a framebuffer: no write
+	 * combining means every pixel and every byte of a scroll is its
+	 * own bus transaction, and a console write was measured at
+	 * 1780ms because of it.
+	 */
+	mmunormalnc(fb.base, fb.size);
+
 	uartputstr("fb:   ");
 	uartputd(fb.width);
 	uartputstr("x");

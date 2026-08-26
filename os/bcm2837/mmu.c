@@ -64,6 +64,7 @@ enum
 	/* lower attributes */
 	Attridx0	= 0<<2,		/* MAIR index 0: Normal WB */
 	Attridx1	= 1<<2,		/* MAIR index 1: Device-nGnRnE */
+	Attridx2	= 2<<2,		/* MAIR index 2: Normal, non-cacheable */
 	Apkrw		= 0<<6,		/* EL1 read/write, EL0 none */
 	Shnone		= 0<<8,
 	Shinner		= 3<<8,
@@ -91,9 +92,22 @@ enum
 
 /*
  * MAIR: attr0 = 0xFF (Normal, inner and outer write-back, read and
- * write allocate), attr1 = 0x00 (Device-nGnRnE).
+ * write allocate), attr1 = 0x00 (Device-nGnRnE), attr2 = 0x44 (Normal,
+ * inner and outer NON-cacheable).
+ *
+ * attr2 exists for the framebuffer. Device-nGnRnE is the safe default
+ * for anything above ramtop because it makes no assumptions, but it
+ * also forbids write combining and reordering, so every store is its
+ * own bus transaction. A screen is not a control register: it wants
+ * bulk stores, and mapping 1.5MB of it as Device made a console write
+ * take the better part of two seconds.
+ *
+ * Normal non-cacheable is the right attribute. The GPU does not snoop
+ * the ARM caches, so caching it would need maintenance on every draw --
+ * but non-cacheable Normal needs none, while still allowing the wide,
+ * combined accesses that make a memmove of a screen reasonable.
  */
-#define Mairval		(0x00ULL<<8 | 0xFFULL)
+#define Mairval		(0x44ULL<<16 | 0x00ULL<<8 | 0xFFULL)
 
 /*
  * TCR: T0SZ=25 for a 39-bit VA, TTBR0 walks inner-shareable and
@@ -250,4 +264,45 @@ mmucaches(void)
 
 	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
 	return (sctlr & (Sctlrc|Sctlri)) == (Sctlrc|Sctlri);
+}
+
+/*
+ * Remap a region as Normal non-cacheable.
+ *
+ * Called once the firmware has said where the framebuffer is, which is
+ * necessarily after the tables are built: the address is not known at
+ * boot and the region is inside the range mapped Device by default.
+ *
+ * Rounds outwards to whole 2MB blocks, because that is the granularity
+ * these tables use. That can catch neighbouring addresses, which is
+ * acceptable here: the framebuffer sits in the VideoCore's own region
+ * above ramtop, its neighbours are the same kind of memory, and none of
+ * them are control registers whose ordering matters.
+ */
+void
+mmunormalnc(uintptr base, usize len)
+{
+	uintptr pa, end;
+	int i, j;
+
+	end = (base + len + L2blocksize - 1) & ~((uintptr)L2blocksize - 1);
+	base &= ~((uintptr)L2blocksize - 1);
+
+	for(pa = base; pa < end; pa += L2blocksize){
+		i = (int)(pa / (L2blocksize * (uvlong)Ntabent));
+		j = (int)((pa / L2blocksize) % Ntabent);
+		if(i < 0 || i >= Nl2tab)
+			continue;
+		l2tab[i][j] = (u64int)pa | Dblock | Attridx2 | Apkrw |
+			Shnone | Af | Pxn | Uxn;
+	}
+
+	/*
+	 * The tables were written as data and are about to be walked by
+	 * the MMU, and the old entries may be cached in the TLB.
+	 */
+	__asm__ volatile("dsb ishst");
+	__asm__ volatile("tlbi vmalle1is");
+	__asm__ volatile("dsb ish");
+	__asm__ volatile("isb");
 }

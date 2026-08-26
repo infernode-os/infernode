@@ -376,10 +376,34 @@ restart:
 		 * anything a person notices. The sleep stays as the
 		 * fallback for a transfer that genuinely stalls.
 		 */
-		for(np = 0; np < Pollspin; np++){
-			if(chandone(hc))
-				break;
-			microdelay(10);
+		/*
+		 * Poll only for the endpoints whose latency matters.
+		 *
+		 * The spin was applied to every transfer and enumeration
+		 * started failing with "endpoint stalled" on the low-speed
+		 * devices that had enumerated cleanly an hour before. That
+		 * is a control transfer through a transaction translator,
+		 * whose two halves are timed against the frame counter, and
+		 * spinning at splhi across them is exactly the kind of
+		 * change that would disturb it.
+		 *
+		 * Interrupt endpoints are where the 200ms timeout actually
+		 * hurt: a keyboard polled at that rate takes about a minute
+		 * to echo and drops anything pressed and released between
+		 * polls. Control transfers happen a few dozen times at boot
+		 * and can afford the sleep.
+		 *
+		 * So spin for intr and leave everything else as it was.
+		 * Narrowing it is not a guess about the mechanism -- it
+		 * confines a change that broke something to the case that
+		 * needed it.
+		 */
+		if(ep->ttype == Tintr){
+			for(np = 0; np < Pollspin; np++){
+				if(chandone(hc))
+					break;
+				microdelay(10);
+			}
 		}
 		if(!chandone(hc))
 			tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);

@@ -600,8 +600,6 @@ logdump(Ep *ep)
 	nchanlog = 0;
 }
 
-static int nkbdlog;
-
 static int
 chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 {
@@ -756,27 +754,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			i = chanwait(ep, ctlr, hc, Chhltd|Nak);
 		clog(ep, hc);
 		lasti = i;
-
-		/*
-		 * Trace an interrupt endpoint, but only when something other
-		 * than "nothing to report" happens.
-		 *
-		 * An idle keyboard answers every complete-split with
-		 * Chhltd|Nak, so logging every iteration says nothing and
-		 * costs a console write twenty times a second -- which is how
-		 * the last round of instrumentation ended up being most of the
-		 * latency it was measuring. Everything else is worth seeing.
-		 *
-		 * Read BEFORE the registers are cleared. Three earlier probes
-		 * were placed after the lines that clear the value being
-		 * measured and dutifully reported zero.
-		 */
-		if(ep->ttype == Tintr && i != (Chhltd|Nak) && nkbdlog < 48){
-			nkbdlog++;
-			print("usbotg: intr i %8.8ux splt %8.8ux tsiz %8.8ux "
-				"phase %d nyets %d\n",
-				i, hc->hcsplt, hc->hctsiz, splitphase, nyets);
-		}
 
 		hc->hcint = i;
 

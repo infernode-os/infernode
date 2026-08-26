@@ -663,17 +663,46 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	# other one. A device that answers on the second attempt has
 	# told us something the first attempt could not.
 	#
+	#
+	# Check the descriptor, do not just count the bytes.
+	#
+	# A device descriptor begins with its own length (18) and its type
+	# (1). Accepting any 18 bytes means accepting 18 bytes of
+	# anything -- which is exactly what happened: a low-speed
+	# keyboard whose transfer returned 0x55 repeating was reported as
+	# "0x5555:0x5555 class 85 maxpkt 85 usb 85.5", the retry loop saw
+	# a full-length read and stopped, and the driver then programmed
+	# a maximum packet size of 85 from a field that was never a
+	# field.
+	#
+	# Two bytes of validation turn that into a retry, and a retry is
+	# worth having: the identical device on the next port enumerates
+	# correctly, so this is a transfer that fails sometimes rather
+	# than a device that cannot be read.
+	#
 	desc := array[18] of byte;
+	ok := 0;
 	for(try := 0; try < 3; try++){
 		n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
-		if(n >= len desc)
-			break;
-		sys->print("init: device descriptor read failed (%d): %r\n", n);
+		if(n < len desc){
+			sys->print("init: %sdevice descriptor read failed (%d): %r\n",
+				indent, n);
+			continue;
+		}
+		if(int desc[0] != len desc || int desc[1] != Ddev){
+			sys->print("init: %sdevice descriptor is not one (len %d type %d) -- retrying\n",
+				indent, int desc[0], int desc[1]);
+			sys->sleep(50);
+			continue;
+		}
+		ok = 1;
+		break;
 	}
-	if(n < len desc)
+	if(!ok)
 		return;
 	if(try > 0)
-		sys->print("init: descriptor read succeeded on attempt %d\n", try+1);
+		sys->print("init: %sdescriptor read succeeded on attempt %d\n",
+			indent, try+1);
 
 	vendor := int desc[8] | (int desc[9] << 8);
 	product := int desc[10] | (int desc[11] << 8);

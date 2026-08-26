@@ -124,7 +124,10 @@ struct Epio {
 
 static Ctlr dwc;
 static int debug;
-static ulong nusbintr;	/* interrupts this controller has raised */
+static ulong nusbintr;
+
+/* how many split configurations still to report; see chansetup */
+static int dwcspltlog;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -310,7 +313,6 @@ static int dwcdmaprobed;
 static int dwcchanlog;
 static int dwcintrlog;
 static int dwcintrprobe;
-static int dwcspltlog;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)

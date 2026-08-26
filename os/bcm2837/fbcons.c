@@ -300,6 +300,28 @@ fbscroll(void)
 		fbscrollsw();
 }
 
+/*
+ * Blank the character cell the cursor is on.
+ */
+static void
+fbclearcell(void)
+{
+	int y, x, stride;
+	volatile u32int *p;
+
+	stride = (int)(cons->pitch / 4);
+	p = (volatile u32int*)cons->base;
+	for(y = 0; y < Fh; y++){
+		if(cy + y >= conh)
+			break;
+		for(x = 0; x < Fw; x++){
+			if(cx + x >= (int)cons->width)
+				break;
+			p[(voff + cy + y) * stride + cx + x] = Bg;
+		}
+	}
+}
+
 static void
 fbglyph(int c)
 {
@@ -347,8 +369,23 @@ fbconsputs(char *s, int n)
 			cx = (cx / (Fw * 8) + 1) * (Fw * 8);
 			break;
 		case '\b':
-			if(cx >= Fw)
+			/*
+			 * Destructive, because here the console IS the
+			 * terminal.
+			 *
+			 * devcons echoes the raw character -- it does not
+			 * send the "\b \b" a program would use to rub a
+			 * character out on a glass tty -- so if this only
+			 * moved the cursor, nothing would ever be erased.
+			 * That is exactly what it looked like: deletes were
+			 * being obeyed (the shell received "HEL" after
+			 * "HELLO" and two backspaces) while the panel still
+			 * showed all five letters.
+			 */
+			if(cx >= Fw){
 				cx -= Fw;
+				fbclearcell();
+			}
 			break;
 		default:
 			if(c < Flo || c > Fhi)

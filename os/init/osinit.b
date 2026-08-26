@@ -216,7 +216,28 @@ init()
 	#
 	spawn pingit();
 	spawn tcpecho();
-	spawn usbprobe();
+
+	#
+	# Let the machine finish coming up before handing over.
+	#
+	# The shell prints its prompt once and then waits, so anything
+	# printed after it starts scrolls the prompt away -- and the bus
+	# walk plus DHCP is two screens of output. What the user is left
+	# looking at is the last driver message, with no way to tell the
+	# machine is ready short of pressing return to draw a fresh
+	# prompt. If boot drops you into a shell, the prompt is how you
+	# know.
+	#
+	# Waited on, not slept through, and bounded either way: a probe
+	# that hangs must still leave a usable shell, because a machine
+	# you cannot ask questions of is a machine you cannot debug. That
+	# property is why the walk was spawned in the first place, and it
+	# is kept here rather than traded away.
+	#
+	usbdone := chan of int;
+	spawn usbprobe(usbdone);
+	waitfor(usbdone, Walkwait, "the USB bus walk");
+	waitnet(Netwait);
 
 	sys->print("\ninit: starting the shell\n\n");
 
@@ -241,6 +262,70 @@ init()
 	sh->init(nil, "sh" :: nil);
 
 	sys->print("init: the shell returned\n");
+}
+
+#
+# How long boot may hold the prompt back, in milliseconds.
+#
+# Generous for the bus walk, which is the bulk of the output and is
+# known to finish. Much tighter for the network, because the failure
+# case is common and cheap to get wrong: a machine with no cable would
+# otherwise sit for the whole DHCP fallback before showing a prompt,
+# which is a worse fault than the one being fixed. Ten seconds covers a
+# DHCP exchange on a switch that spends a few of them in listening and
+# learning; a slower one lands a couple of lines under the prompt, which
+# is a far smaller sin than a blank screen.
+#
+Walkwait:	con 30000;
+Netwait:	con 10000;
+
+#
+# Wait for a channel, or give up and say so.
+#
+waitfor(c: chan of int, ms: int, what: string)
+{
+	t := chan of int;
+	spawn timer(t, ms);
+	alt {
+	<-c =>
+		;
+	<-t =>
+		sys->print("init: %s is still running; starting the shell anyway\n",
+			what);
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+#
+# Wait until an ethernet interface has been given an address.
+#
+# The driver is a separate program, so there is no channel to wait on --
+# but it publishes its result in the namespace, and that is the thing
+# actually worth waiting for. Polled rather than slept for a fixed time:
+# a cable that is not plugged in should cost the full wait, and a fast
+# DHCP server should cost almost none.
+#
+waitnet(ms: int)
+{
+	for(waited := 0; waited < ms; waited += 250){
+		(ok, nil) := sys->stat("/net/ipifc/1/status");
+		if(ok >= 0){
+			#
+			# Configured, but the driver still has a few lines
+			# to print about it. Let them land above the prompt
+			# rather than below.
+			#
+			sys->sleep(750);
+			return;
+		}
+		sys->sleep(250);
+	}
+	sys->print("init: no network yet; starting the shell anyway\n");
 }
 
 Echoreq:	con 8;		# ICMP type: echo request
@@ -560,7 +645,25 @@ speedname(status: int): string
 	return "full";
 }
 
-usbprobe()
+usbprobe(done: chan of int)
+{
+	#
+	# Signal completion however this returns.
+	#
+	# Every early exit below is a plain "return", and the shell is
+	# waiting on this channel; a probe that gives up quietly must not
+	# also hold the prompt back.
+	#
+	{
+		usbwalk();
+	} exception {
+	* =>
+		sys->print("init: usb probe failed\n");
+	}
+	done <-= 1;
+}
+
+usbwalk()
 {
 	d := sys->open("/usb/usb/ep1.0/data", Sys->ORDWR);
 	if(d == nil){

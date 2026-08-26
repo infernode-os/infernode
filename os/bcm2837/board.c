@@ -139,9 +139,69 @@ boardclockcheck(void)
  */
 static Fbinfo fb;
 
+/*
+ * Report what displays the firmware has, without allocating on any.
+ *
+ * Deliberately read-only. The VideoCore firmware has historically kept
+ * ONE framebuffer, and selecting another display before allocating can
+ * release the buffer the first one is using -- which on this board is
+ * the DSI panel the console lives on. Losing the working display to
+ * find out whether a second exists is a poor trade, so ask first, and
+ * decide what to do about HDMI with the answer in hand.
+ *
+ * The selection is restored before returning, so this leaves the
+ * firmware exactly as it was found.
+ */
+static void
+fbreportdisplays(void)
+{
+	int n, i, sel, cur;
+	u32int w, h;
+
+	n = mboxfbnumdisplays();
+	uartputstr("fb:   displays: ");
+	uartputd(n);
+	uartputstr("\n");
+	if(n <= 1)
+		return;
+
+	cur = mboxfbdisplaynum(0);
+	if(cur < 0){
+		uartputstr("fb:   cannot select a display; leaving it alone\n");
+		return;
+	}
+
+	for(i = 0; i < n; i++){
+		sel = mboxfbdisplaynum(i);
+		if(sel != i){
+			uartputstr("fb:     display ");
+			uartputd(i);
+			uartputstr(" not selectable\n");
+			continue;
+		}
+		if(mboxfbgetdim(&w, &h) < 0 || w == 0 || h == 0){
+			uartputstr("fb:     display ");
+			uartputd(i);
+			uartputstr(" reports no size\n");
+			continue;
+		}
+		uartputstr("fb:     display ");
+		uartputd(i);
+		uartputstr(" is ");
+		uartputd(w);
+		uartputstr("x");
+		uartputd(h);
+		uartputstr("\n");
+	}
+
+	mboxfbdisplaynum(0);
+}
+
 void
 boardfbprobe(void)
 {
+	fbreportdisplays();
+
 	if(fbinit(&fb) < 0){
 		uartputstr("fb:   no framebuffer (no display attached?)\n");
 		return;

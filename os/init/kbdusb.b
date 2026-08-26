@@ -53,6 +53,24 @@ Mlshift:	con 16r02;
 Mrshift:	con 16r20;
 Mlctrl:		con 16r01;
 Mrctrl:		con 16r10;
+Malt:		con 16r04;
+Mraltgr:	con 16r40;
+
+#
+# The compose key, as a rune.
+#
+# Inferno composes accented and symbolic characters through devcons: the
+# Latin rune puts kbdputc into a collecting state and the keystrokes
+# after it are looked up in os/port/latin1.h, so Alt then ' then e gives
+# e-acute. All of that machinery is already in the kernel and already
+# linked -- what was missing is that nothing ever sent the rune, because
+# this driver ignored the Alt modifier entirely.
+#
+# It matters beyond typing prose: a file or a host in a namespace can
+# have accented characters in its name, and a console that cannot enter
+# them cannot reach it.
+#
+Latin:		con 16rE06F;	# Spec|0x6f, include/keyboard.h
 
 dev: string;
 ctlfd: ref Sys->FD;	# the device's ctl file
@@ -262,6 +280,20 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		nempty = 0;
 
 		mod := int buf[0];
+
+		#
+		# Alt is a PREFIX, not a held modifier.
+		#
+		# Emitted once when it goes down, which is what devcons
+		# expects: the rune starts a collecting state that consumes
+		# the next keystrokes, rather than modifying the one
+		# pressed with it. Sending it on every report while the key
+		# is held would restart that collection on each poll and
+		# nothing would ever compose.
+		#
+		if((mod & (Malt|Mraltgr)) != 0 && (int prev[0] & (Malt|Mraltgr)) == 0)
+			emit(kbd, Latin);
+
 		for(i = 2; i < Reportlen; i++){
 			k := int buf[i];
 			if(k == 0)
@@ -269,13 +301,25 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 			if(held(prev, k))
 				continue;
 			c := decode(k, mod);
-			if(c > 0){
-				s := sys->sprint("%c", c);
-				sys->write(kbd, array of byte s, len array of byte s);
-			}
+			if(c > 0)
+				emit(kbd, c);
 		}
 		prev[0:] = buf[0:Reportlen];
 	}
+}
+
+#
+# Send one rune to /dev/keyboard.
+#
+# As UTF-8, because that is what the write path decodes: devcons walks
+# the buffer with chartorune and hands each rune to kbdputc. Runes above
+# ASCII -- the compose key among them -- would otherwise arrive as
+# whatever their low byte happened to be.
+#
+emit(kbd: ref Sys->FD, c: int)
+{
+	b := array of byte sys->sprint("%c", c);
+	sys->write(kbd, b, len b);
 }
 
 held(prev: array of byte, k: int): int

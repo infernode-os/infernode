@@ -401,3 +401,59 @@ mboxfbvoff(u32int x, u32int y)
 		return -1;
 	return (int)buf[1];
 }
+
+/*
+ * How many displays the firmware knows about.
+ *
+ * Returns 1 when it cannot say. An unimplemented tag comes back with the
+ * response bit clear and a zero length, which mboxprop does not
+ * distinguish from a successful call, so a count of zero -- or an absurd
+ * one -- means "the firmware did not answer this", not "there are no
+ * displays". One is the answer that keeps the caller on the path that
+ * already works.
+ */
+int
+mboxfbnumdisplays(void)
+{
+	u32int buf[1];
+
+	buf[0] = 0;
+	if(mboxprop(Tagfbgetnumdisp, buf, 0, 1) < 0)
+		return 1;
+	if(buf[0] == 0 || buf[0] > 4)
+		return 1;
+	return (int)buf[0];
+}
+
+/*
+ * Choose which display the framebuffer tags act on.
+ *
+ * Returns the display the firmware says it selected, which need not be
+ * the one asked for.
+ */
+int
+mboxfbdisplaynum(u32int n)
+{
+	u32int buf[1];
+
+	buf[0] = n;
+	if(mboxprop(Tagfbsetdispnum, buf, 1, 1) < 0)
+		return -1;
+	return (int)buf[0];
+}
+
+/*
+ * The physical size of the currently selected display.
+ */
+int
+mboxfbgetdim(u32int *w, u32int *h)
+{
+	u32int buf[2];
+
+	buf[0] = buf[1] = 0;
+	if(mboxprop(Tagfbgetdim, buf, 0, 2) < 0)
+		return -1;
+	*w = buf[0];
+	*h = buf[1];
+	return 0;
+}

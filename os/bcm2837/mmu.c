@@ -305,4 +305,21 @@ mmunormalnc(uintptr base, usize len)
 	__asm__ volatile("tlbi vmalle1is");
 	__asm__ volatile("dsb ish");
 	__asm__ volatile("isb");
+
+	/*
+	 * Say what the descriptor now holds.
+	 *
+	 * A scroll of 1.45MB still takes about a second after this,
+	 * which is roughly Device-memory throughput -- so either the
+	 * remap did not take, or the memory type was never the
+	 * bottleneck. Reading the entry back separates those without
+	 * another guess.
+	 */
+	i = (int)(base / (L2blocksize * (uvlong)Ntabent));
+	j = (int)((base / L2blocksize) % Ntabent);
+	uartputstr("mmu:  fb descriptor ");
+	uartputx(l2tab[i][j]);
+	uartputstr(" (attridx ");
+	uartputd((l2tab[i][j] >> 2) & 7);
+	uartputstr(")\n");
 }

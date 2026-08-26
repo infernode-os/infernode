@@ -174,9 +174,21 @@ fbreportdisplays(void)
 	for(i = 0; i < n; i++){
 		sel = mboxfbdisplaynum(i);
 		if(sel != i){
+			/*
+			 * Say what came back, because the two ways this
+			 * fails need different answers. A firmware that
+			 * does not implement the tag leaves the request
+			 * word alone, so the reply reads back as the
+			 * number asked for; one that implements it and
+			 * refuses returns the display it kept. Printing
+			 * "not selectable" alone cannot tell them apart,
+			 * and the next move depends on which it is.
+			 */
 			uartputstr("fb:     display ");
 			uartputd(i);
-			uartputstr(" not selectable\n");
+			uartputstr(" not selectable (firmware returned ");
+			uartputd(sel);
+			uartputstr(")\n");
 			continue;
 		}
 		if(mboxfbgetdim(&w, &h) < 0 || w == 0 || h == 0){

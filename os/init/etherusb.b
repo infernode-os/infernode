@@ -796,8 +796,17 @@ netconfig()
 			sys->print("etherusb: default route via %s\n", gw);
 	}
 
-	dumpfile("/net/iproute");
-	dumpfile("/net/ipifc/" + ifcno + "/status");
+	#
+	# The route table and the interface status are NOT printed here.
+	#
+	# They were how the routing arithmetic got verified during
+	# bring-up, and they earned their place then. They have outlived
+	# it: twenty lines of table land on the console after the shell
+	# has already printed its prompt, because DHCP finishes when it
+	# finishes and init does not hold the prompt back for it. Both
+	# files are still there to be read -- "cat /net/iproute" -- which
+	# is the whole point of a namespace.
+	#
 
 	#
 	# The gateway first, then something beyond it.
@@ -1026,7 +1035,20 @@ dhcp(): (string, string, string)
 	xid := sys->millisec() | 1;
 	pkt := array[Udphdr7 + 576] of byte;
 
-	for(try := 0; try < 6; try++){
+	#
+	# Keep asking for the better part of a minute.
+	#
+	# Six tries over twenty seconds was tuned when this ran BEFORE the
+	# shell and every second of it delayed the prompt. It no longer
+	# does -- init hands over on its own bound and lets the driver
+	# finish in its own time -- so the window can be as long as a slow
+	# switch actually needs. Spanning tree can hold a port in
+	# listening and learning for around thirty seconds, and a DISCOVER
+	# sent into that window is simply discarded; giving up at twenty
+	# is how this came back with an address on one boot and nothing on
+	# the next from the same cable.
+	#
+	for(try := 0; try < 14; try++){
 		if(dhcpxchg(d, pkt, xid, Dhcpdiscover, nil, nil) < 0)
 			continue;
 		offer := dhcpwait(rc, xid, Dhcpoffer, 3000);
@@ -1057,7 +1079,7 @@ dhcp(): (string, string, string)
 		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
 		return (addr, mask, gw);
 	}
-	sys->print("etherusb: no DHCP reply after 6 tries over 20 seconds\n");
+	sys->print("etherusb: no DHCP reply after 14 tries over ~45 seconds\n");
 	return (nil, nil, nil);
 }
 

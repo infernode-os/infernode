@@ -954,15 +954,39 @@ configure(name: string, d: ref Sys->FD, indent: string): int
 	hdr := array[9] of byte;
 	rep := array[4] of byte;
 
-	n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
-	if(n < len hdr){
-		sys->print("init: %s%s config descriptor failed (%d): %r\n",
-			indent, name, n);
-		return -1;
+	#
+	# Read it, and CHECK IT, and retry if it is nonsense.
+	#
+	# A control transfer that comes back wrong does not report an
+	# error -- it hands over whatever the buffer held, and on this
+	# board a failed low-speed split fills it with 0x55, alternating
+	# bits, a bus sampled at the wrong rate. Accepting that meant
+	# SET_CONFIGURATION with a value of 85, which the device rejects
+	# or ignores, so no endpoint ever worked and the keyboard driver
+	# was never started -- with nothing in the log but a plausible
+	# looking "configured (value 85)".
+	#
+	# A configuration descriptor names its own length and type, so it
+	# can say whether it is one. The device descriptor is already
+	# validated this way for the same reason; this is the other half.
+	#
+	cfgval := 0;
+	for(try := 0; try < 3; try++){
+		n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
+		if(n < len hdr){
+			sys->print("init: %s%s config descriptor failed (%d): %r\n",
+				indent, name, n);
+			continue;
+		}
+		if(int hdr[0] != 9 || int hdr[1] != Dconf){
+			sys->print("init: %s%s bad config descriptor (len %d type %d), retrying\n",
+				indent, name, int hdr[0], int hdr[1]);
+			continue;
+		}
+		# byte 5 is bConfigurationValue; 0 would mean "unconfigured"
+		cfgval = int hdr[5];
+		break;
 	}
-
-	# byte 5 is bConfigurationValue; 0 would mean "unconfigured"
-	cfgval := int hdr[5];
 	if(cfgval == 0){
 		sys->print("init: %s%s offers no configuration to select\n",
 			indent, name);

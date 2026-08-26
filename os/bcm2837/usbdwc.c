@@ -133,7 +133,10 @@ static int dwcspltlog;
 static int dwcslowlog;
 
 /* how many interrupt transfers still to report; see chanio */
-static int dwcintrxfer;	/* interrupts this controller has raised */
+static int dwcintrxfer;
+
+/* how many interrupt failures still to report; see eptrans */
+static int dwcintrerr;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -994,6 +997,24 @@ eptrans(Ep *ep, int rw, void *a, long n)
 	}
 	hc = chanalloc(ep);
 	if(waserror()){
+		/*
+		 * Say why an interrupt transfer failed.
+		 *
+		 * This path returns 0 for a stall, which the caller cannot
+		 * distinguish from "the device had nothing to say" -- and
+		 * for an interrupt endpoint those are opposite answers. A
+		 * keyboard that stalls every poll and a keyboard with no
+		 * keys pressed both read as zero bytes, promptly, for ever.
+		 *
+		 * The error also never reaches chanio's own logging,
+		 * because it unwinds past the end of it, which is why the
+		 * interrupt transfer appeared not to happen at all.
+		 */
+		if(ep->ttype == Tintr && dwcintrerr < 4){
+			dwcintrerr++;
+			print("usbotg: ep%d.%d intr failed: %s\n",
+				ep->dev->nb, ep->nb, up->env->errstr);
+		}
 		ep->toggle[rw] = hc->hctsiz & Pid;
 		chanrelease(ep, hc);
 		if(strcmp(up->env->errstr, Estalled) == 0)

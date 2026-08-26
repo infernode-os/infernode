@@ -532,6 +532,13 @@ Rgetdesc:	con 6;
 #
 Fportenable:	con 1;
 Fportreset:	con 4;
+
+#
+# How long to let a device settle after its port is reset, and how many
+# times to reset it before giving up on it.
+#
+Resetrecovery:	con 50;
+Enumattempts:	con 3;
 Fportpower:	con 8;
 
 Ddev:		con 1;		# descriptor type: device
@@ -718,12 +725,12 @@ usbwalk()
 # hub's for the first call, a real hub's for the recursive ones. depth
 # is only used to indent the report.
 #
-enumerate(hubctl: string, port: int, speed, indent: string)
+enumerate(hubctl: string, port: int, speed, indent: string): int
 {
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: cannot open %s: %r\n", hubctl);
-		return;
+		return -1;
 	}
 
 	#
@@ -734,7 +741,7 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	#
 	if(sys->fprint(c, "newdev %s %d", speed, port) < 0){
 		sys->print("init: usb newdev failed: %r\n");
-		return;
+		return -1;
 	}
 
 	#
@@ -749,14 +756,14 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	n := sys->pread(c, nbuf, len nbuf, big 0);
 	if(n <= 0){
 		sys->print("init: usb newdev gave no name (%d)\n", n);
-		return;
+		return -1;
 	}
 	name := string nbuf[0:n];
 
 	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
 	if(d == nil){
 		sys->print("init: cannot open %s: %r\n", name);
-		return;
+		return -1;
 	}
 
 	#
@@ -808,8 +815,10 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 		ok = 1;
 		break;
 	}
-	if(!ok)
-		return;
+	if(!ok){
+		sys->print("init: %s%s never answered after reset\n", indent, name);
+		return -1;
+	}
 	if(try > 0)
 		sys->print("init: %sdescriptor read succeeded on attempt %d\n",
 			indent, try+1);
@@ -841,7 +850,7 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	dctl := sys->open("/usb/usb/" + name + "/ctl", Sys->ORDWR);
 	if(dctl == nil){
 		sys->print("init: cannot open %s ctl: %r\n", name);
-		return;
+		return -1;
 	}
 	sys->fprint(dctl, "maxpkt %d", maxpkt);
 
@@ -849,7 +858,7 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	rep := array[4] of byte;
 	if(ctlreq(d, Rh2d, Rsetaddress, nb, 0, 0, rep) < 0){
 		sys->print("init: %s set address %d failed: %r\n", name, nb);
-		return;
+		return -1;
 	}
 	sys->fprint(dctl, "address");
 
@@ -870,11 +879,11 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	# entitled to ignore it in that state.
 	#
 	if(configure(name, d, indent) < 0)
-		return;
+		return -1;
 
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
-		return;
+		return -1;
 	}
 
 	hidproto = 0;
@@ -912,6 +921,7 @@ enumerate(hubctl: string, port: int, speed, indent: string)
 	#
 	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name);
+	return 0;
 }
 
 #
@@ -1224,8 +1234,54 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		if((status & HPenable) == 0)
 			continue;
 
-		enumerate("/usb/usb/" + name + "/ctl", port,
-			speedname(status), indent);
+		#
+		# Let the device recover before speaking to it.
+		#
+		# A port that reports itself enabled is not yet a device
+		# that will answer: the spec gives one up to 10ms after
+		# reset (TRSTRCY) before it has to respond, and asking
+		# inside that window gets nothing back -- which arrives as
+		# a buffer still holding 0x55 rather than as an error,
+		# because a control transfer that returns no data does not
+		# report one. Fifty milliseconds costs nothing once per
+		# device.
+		#
+		sys->sleep(Resetrecovery);
+
+		#
+		# And if it still will not talk, RESET IT AGAIN.
+		#
+		# Re-reading the descriptor three times does not help a
+		# device that came out of reset wrong; only another reset
+		# does. The root port already works this way and reports
+		# which attempt succeeded -- this is the same treatment for
+		# devices behind a hub, which is where the low-speed
+		# failures actually happen.
+		#
+		for(etry := 0; etry < Enumattempts; etry++){
+			if(enumerate("/usb/usb/" + name + "/ctl", port,
+			    speedname(status), indent) == 0)
+				break;
+			if(etry == Enumattempts - 1){
+				sys->print("init: %sport %d gave up after %d attempts\n",
+					indent, port, Enumattempts);
+				break;
+			}
+			sys->print("init: %sport %d resetting again\n", indent, port);
+			if(portfeature(d, port, Fportreset) < 0)
+				break;
+			for(rw := 0; rw < 25; rw++){
+				sys->sleep(20);
+				status = portstatus(d, port);
+				if(status < 0 || (status & HPenable))
+					break;
+				if((status & HPreset) == 0)
+					break;
+			}
+			if(status < 0 || (status & HPenable) == 0)
+				break;
+			sys->sleep(Resetrecovery);
+		}
 	}
 }
 

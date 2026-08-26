@@ -263,33 +263,55 @@ chansetup(Hostchan *hc, Ep *ep)
 	}
 }
 
-static int
-sofdone(void *a)
-{
-	Dwcregs *r;
-
-	r = a;
-	return r->gintsts & Sofintr;
-}
+/*
+ * sofdone was the condition sofwait slept on. sofwait polls the frame
+ * counter now -- see the comment there -- so nothing sleeps on a
+ * start-of-frame any more, and the interrupt it waited for is one this
+ * driver never takes.
+ */
 
 static void
 sofwait(Ctlr *ctlr, int n)
 {
-	int nwait;
-
-	nwait = 0;
 	Dwcregs *r;
-	int x;
+	int i, f, last;
 
+	USED(n);
 	r = ctlr->regs;
-	do{
-		r->gintsts = Sofintr;
-		x = splhi();
-		ctlr->sofchan |= 1<<n;
-		r->gintmsk |= Sofintr;
-		sleep(&ctlr->chanintr[n], sofdone, r);
-		splx(x);
-	}while((r->hfnum & 7) == 6 && ++nwait < Sofspin);
+
+	/*
+	 * Watch the frame counter instead of waiting for an interrupt.
+	 *
+	 * This slept -- unbounded, not tsleep -- on the start-of-frame
+	 * interrupt. This driver never takes a USB interrupt: chanwait
+	 * runs its whole wait at splhi and clears hcintmsk before
+	 * lowering spl, so the core asserts and de-asserts where nothing
+	 * can be delivered. So the sleep returned only when sofdone
+	 * happened to be true on entry, and would otherwise have waited
+	 * for ever for a wakeup that cannot come.
+	 *
+	 * It matters only here, because only a split transaction calls
+	 * this -- which is to say only a low-speed or full-speed device
+	 * behind a high-speed hub, which is to say the keyboard. The
+	 * alignment a split needs was therefore whatever the frame
+	 * counter happened to hold, and the alternative to that was a
+	 * hang.
+	 *
+	 * hfnum's low three bits are the microframe. Wait for one to
+	 * begin, and do not start a split in microframe 6: the complete
+	 * split would fall at the frame boundary, which is the case the
+	 * original was avoiding.
+	 */
+	last = r->hfnum & 7;
+	for(i = 0; i < Sofspin; i++){
+		f = r->hfnum & 7;
+		if(f != last){
+			if(f != 6)
+				return;
+			last = f;
+		}
+		microdelay(5);
+	}
 }
 
 static int

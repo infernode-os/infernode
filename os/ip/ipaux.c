@@ -619,7 +619,7 @@ void
 iphtadd(Ipht *ht, Conv *c)
 {
 	ulong hv;
-	Iphash *h;
+	Iphash *h, *p;
 
 	hv = iphash(c->raddr, c->rport, c->laddr, c->lport);
 	h = smalloc(sizeof(*h));
@@ -641,6 +641,30 @@ iphtadd(Ipht *ht, Conv *c)
 	h->c = c;
 
 	lock(&ht->lk);
+	/*
+	 * Refuse to hash the same conversation twice.
+	 *
+	 * udp announces AND connects through here, and closes once. A
+	 * conversation that did both is added twice and removed once, so
+	 * an entry survives pointing at a Conv the stack believes it has
+	 * finished with -- and the bucket a removal searches is computed
+	 * from the conversation's CURRENT addresses, which a connect
+	 * changes, so the leftover is not even in the bucket that would
+	 * be searched next time.
+	 *
+	 * The board faulted in iphtlook walking a chain into freed
+	 * memory: the faulting address was an Iphash.next read from a
+	 * pointer that was not one. This says whether that is where it
+	 * came from.
+	 */
+	for(p = ht->tab[hv]; p != nil; p = p->next)
+		if(p->c == c){
+			unlock(&ht->lk);
+			print("iphtadd: conv %p already hashed in bucket %lud\n",
+				c, hv);
+			free(h);
+			return;
+		}
 	h->next = ht->tab[hv];
 	ht->tab[hv] = h;
 	unlock(&ht->lk);
@@ -650,18 +674,29 @@ void
 iphtrem(Ipht *ht, Conv *c)
 {
 	ulong hv;
+	int found;
 	Iphash **l, *h;
 
 	hv = iphash(c->raddr, c->rport, c->laddr, c->lport);
 	lock(&ht->lk);
+	found = 0;
 	for(l = &ht->tab[hv]; (*l) != nil; l = &(*l)->next)
 		if((*l)->c == c){
 			h = *l;
 			(*l) = h->next;
 			free(h);
+			found = 1;
 			break;
 		}
 	unlock(&ht->lk);
+
+	/*
+	 * A removal that removes nothing leaves the entry behind for
+	 * ever, and says the bucket was computed from addresses that
+	 * changed after the entry was made.
+	 */
+	if(!found)
+		print("iphtrem: conv %p not in bucket %lud\n", c, hv);
 }
 
 /* look for a matching conversation with the following precedence

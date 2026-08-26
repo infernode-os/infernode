@@ -221,6 +221,16 @@ boardfbprobe(void)
 	}
 
 	/*
+	 * Tell the pointer how big the screen is.
+	 *
+	 * A mouse reports movement, never position, so without a bound
+	 * the accumulated position walks off the display and does not
+	 * come back. The console knows the size; the pointer device has
+	 * no way to find out on its own.
+	 */
+	pointerbounds((int)fb.width, (int)fb.height);
+
+	/*
 	 * The second display, if there is one and it will have us.
 	 *
 	 * Its framebuffer must be a DIFFERENT buffer from the first: the

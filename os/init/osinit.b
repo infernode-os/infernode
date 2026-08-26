@@ -884,15 +884,10 @@ enumerate(hubctl: string, port: int, speed, indent: string): int
 	hidproto = 0;
 	dumpconfig(d, indent + "  ");
 
-	#
-	# A keyboard is worth starting; a mouse has nowhere to go yet.
-	# Saying so is better than silence, because "nothing happened" and
-	# "there is no driver for that" look identical from here.
-	#
 	if(hidproto == Hidkbd)
 		startdriver("/dis/kbdusb.dis", name);
 	else if(hidproto == Hidmouse)
-		sys->print("init: %s%s is a mouse; no driver yet\n", indent, name);
+		startdriver("/dis/mouseusb.dis", name);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's

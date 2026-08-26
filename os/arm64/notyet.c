@@ -60,6 +60,7 @@ extern Dev usbdevtab;
 extern Dev mntdevtab;
 extern Dev envdevtab;
 extern Dev ipdevtab;
+extern Dev pointerdevtab;
 
 Dev*	devtab[] =
 {
@@ -71,6 +72,7 @@ Dev*	devtab[] =
 	&mntdevtab,		/* 'M' -- #M, the 9P client */
 	&envdevtab,		/* 'e' -- #e, the environment */
 	&ipdevtab,		/* 'I' -- #I, the IP stack */
+	&pointerdevtab,		/* 'm' -- #m, the pointer */
 	nil,
 };
 

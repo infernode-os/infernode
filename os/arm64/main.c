@@ -1530,6 +1530,16 @@ probecons(void)
 	if(kbind("#c", "/dev", MREPL|MCREATE) < 0)
 		ok = 0;
 
+	/*
+	 * And the pointer, so /dev/pointer is a path like any other.
+	 *
+	 * MAFTER, not MREPL: #c is already there and holds the console.
+	 * The union is the point -- a pointing device is one more file in
+	 * /dev, not a competing idea of what /dev is.
+	 */
+	if(kbind("#m", "/dev", MAFTER) < 0)
+		ok = 0;
+
 	fd = kopen("/dev/cons", OWRITE);
 	if(fd < 0)
 		ok = 0;

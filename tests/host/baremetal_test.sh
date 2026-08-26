@@ -236,10 +236,15 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/kbdusb.dis" \
             "$ROOT/os/init/kbdusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The HID boot mouse, for the same reason and by the same route.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/mouseusb.dis" \
+            "$ROOT/os/init/mouseusb.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
+            "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
             "/dev="
             "/net="
             "/prog="
@@ -1490,6 +1495,102 @@ else
 fi
 
 #
+# 3f. A mouse, from the HID device to /dev/pointer.
+#
+#     The pointer is a FILE. Anything that can write to /dev/pointer is
+#     a pointing device, and the USB mouse driver is a Limbo program
+#     that does exactly that -- so this can be checked without a window
+#     system, which is just as well, because there is not one yet.
+#
+#     QEMU's usb-mouse plus input-send-event moves a real emulated
+#     device, so the whole path is under test: split interrupt transfer,
+#     the three-byte boot report, the signed deltas, the button
+#     remapping, /dev/pointer, and the shell reading it back.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-mouse.txt" 2>&1
+import subprocess, socket, json, time, sys, threading
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+PORT = 4481
+p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-mouse",
+                     "-kernel", img, "-display", "none", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+try:
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); p.kill(); sys.exit(0)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+
+    deadline = time.time() + 60
+    while time.time() < deadline and b"mouseusb: " not in buf:
+        time.sleep(0.2)
+    if b"mouseusb: " not in buf:
+        print("SKIP mouse driver never started"); p.kill(); sys.exit(0)
+    time.sleep(3)
+
+    # Read the pointer from the shell, then move the mouse.
+    p.stdin.write(b"path=(/dis .)\r"); p.stdin.flush()
+    time.sleep(1.5)
+    p.stdin.write(b"cat /dev/pointer\r"); p.stdin.flush()
+    time.sleep(2)
+
+    for _ in range(6):
+        f.write(json.dumps({"execute": "input-send-event", "arguments":
+            {"events": [{"type": "rel", "data": {"axis": "x", "value": 12}},
+                        {"type": "rel", "data": {"axis": "y", "value": 7}}]}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.25)
+    time.sleep(3)
+    s.close()
+finally:
+    p.kill(); p.wait()
+
+txt = bytes(buf).decode("utf-8", "replace")
+print("DRIVER-OK" if "mouseusb: " in txt and "ready on endpoint" in txt else "DRIVER-MISSING")
+# A pointer report is "m" then x, y, buttons, msec. Non-zero x or y
+# means the deltas were accumulated rather than dropped.
+import re
+rep = [m for m in re.findall(r"m\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)", txt)]
+moved = [r for r in rep if int(r[0]) != 0 or int(r[1]) != 0]
+print("REPORTS %d MOVED %d" % (len(rep), len(moved)))
+print("MOVED-OK" if moved else "MOVED-NONE")
+PYEOF
+
+MOUSEOUT="$(cat "$BUILD/$PLAT-mouse.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- mouse ---"; echo "$MOUSEOUT"; }
+if grep -q '^SKIP' <<<"$MOUSEOUT"; then
+    skip "mouse ($(grep '^SKIP' <<<"$MOUSEOUT" | head -1))"
+else
+    if grep -q 'DRIVER-OK' <<<"$MOUSEOUT"; then
+        pass "the mouse driver claims a HID boot mouse and opens its endpoint"
+    else
+        fail "the USB mouse driver did not start"
+    fi
+    if grep -q 'MOVED-OK' <<<"$MOUSEOUT"; then
+        pass "moving the mouse moves the pointer ($(grep -o 'REPORTS [0-9]* MOVED [0-9]*' <<<"$MOUSEOUT"))"
+    else
+        fail "mouse movement did not reach /dev/pointer ($(grep -o 'REPORTS [0-9]* MOVED [0-9]*' <<<"$MOUSEOUT"))"
+    fi
+fi
+
+#
 # 3e. A reboot that does not need the shell.
 #
 #     "echo reboot > /dev/sysctl" needs a shell sitting at a prompt, and
@@ -1530,7 +1631,10 @@ try:
         time.sleep(0.2)
     time.sleep(2)
     p.stdin.write(b"\x14\x14r"); p.stdin.flush()
-    time.sleep(4)
+    # exit() waits a few seconds before pulling the watchdog, so give the
+    # machine time to come back and say so. Four seconds killed QEMU
+    # after the reset had been announced but before the second banner.
+    time.sleep(12)
 except Exception:
     pass
 p.kill(); p.wait()

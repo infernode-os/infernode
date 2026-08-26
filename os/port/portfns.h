@@ -173,6 +173,7 @@ Chan*		mntauth(Chan*, char*);
 long		mntversion(Chan*, char*, int, int);
 void		mountfree(Mount*);
 void		mousetrack(int, int, int, int);
+void		pointerbounds(int, int);
 uvlong		ms2fastticks(ulong);
 ulong		msize(void*);
 void		mul64fract(uvlong*, uvlong, uvlong);

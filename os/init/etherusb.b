@@ -731,12 +731,17 @@ mountproc(fd: ref Sys->FD)
 #
 # Bind an interface to this device and give it an address.
 #
-# The address is static and QEMU's: user-mode networking always puts
-# the guest at 10.0.2.15/24 behind a gateway at 10.0.2.2. That is
-# expedient rather than right -- choosing an address is policy and
-# belongs in something like Plan 9's ipconfig, not in a driver -- but
-# there is no DHCP client in this image yet, and hardcoding it here is
-# at least honest about being a stand-in.
+# DHCP first, and the hardcoded QEMU pair only if that finds nothing.
+#
+# The static address was always a stand-in and said so: choosing an
+# address is policy, and 10.0.2.15/24 behind 10.0.2.2 is true of exactly
+# one network -- QEMU's user-mode NAT, which is where this driver was
+# written. On any real network it is meaningless, and the board sat with
+# a live autonegotiated link and an address nobody could route to.
+#
+# Asking is the mechanism that removes the policy: the answer comes from
+# the network rather than from this file, and the QEMU pair survives only
+# as the fallback for the one network that has no DHCP server.
 #
 netconfig()
 {
@@ -758,20 +763,40 @@ netconfig()
 		sys->print("etherusb: bind ether failed: %r\n");
 		return;
 	}
-	if(sys->fprint(ifc, "add 10.0.2.15 255.255.255.0") < 0){
+	#
+	# An address is needed before DHCP can be spoken, because the
+	# stack will not send from an interface that has none. 0.0.0.0 is
+	# what the protocol expects a client to be using at this point.
+	#
+	if(sys->fprint(ifc, "add 0.0.0.0 0.0.0.0") < 0){
+		sys->print("etherusb: add 0.0.0.0 failed: %r\n");
+		return;
+	}
+
+	(addr, mask, gw) := dhcp();
+	if(addr == nil){
+		sys->print("etherusb: no DHCP answer; falling back to QEMU's addresses\n");
+		addr = "10.0.2.15";
+		mask = "255.255.255.0";
+		gw = "10.0.2.2";
+	}
+
+	sys->fprint(ifc, "remove 0.0.0.0 0.0.0.0");
+	if(sys->fprint(ifc, "add %s %s", addr, mask) < 0){
 		sys->print("etherusb: add address failed: %r\n");
 		return;
 	}
-	sys->print("etherusb: 10.0.2.15/24 configured on ipifc %s\n", ifcno);
+	sys->print("etherusb: %s mask %s on ipifc %s\n", addr, mask, ifcno);
 
-	r := sys->open("/net/iproute", Sys->ORDWR);
-	if(r == nil || sys->fprint(r, "add 0.0.0.0 0.0.0.0 10.0.2.2") < 0){
-		sys->print("etherusb: default route failed: %r\n");
-		return;
+	if(gw != ""){
+		r := sys->open("/net/iproute", Sys->ORDWR);
+		if(r == nil || sys->fprint(r, "add 0.0.0.0 0.0.0.0 %s", gw) < 0)
+			sys->print("etherusb: default route failed: %r\n");
+		else
+			sys->print("etherusb: default route via %s\n", gw);
 	}
-	sys->print("etherusb: default route via 10.0.2.2\n");
 
-	pingout();
+	pingout(gw);
 }
 
 #
@@ -784,7 +809,287 @@ netconfig()
 # connection, and reaches os/ip. Everything up to here could be true
 # with a device that quietly discarded every packet.
 #
-pingout()
+#
+# A DHCP client, small enough to live here.
+#
+# The tree has one already (appl/cmd/ip/dhcp.b) and it is the right thing
+# to use once this image can carry its module dependencies. It cannot
+# yet, and an address obtained from the network beats an address written
+# into a driver by enough that this is worth its own two hundred lines.
+#
+# Only what is needed: DISCOVER, OFFER, REQUEST, ACK, and the three
+# options that make an interface usable -- netmask, router, and the
+# server identity the REQUEST has to name. Leases are not renewed. This
+# is a machine that has just booted asking what it is called, not a
+# long-running client.
+#
+
+Bootpsize:	con 236;	# fixed part, before options
+Udphdr7:	con 52;		# raddr, laddr, ifcaddr, rport, lport
+
+Dhcpdiscover:	con 1;
+Dhcpoffer:	con 2;
+Dhcprequest:	con 3;
+Dhcpack:	con 5;
+
+Odmask:		con 1;		# subnet mask
+Odrouter:	con 3;		# gateway
+Odreqaddr:	con 50;		# the address being requested
+Odmsgtype:	con 53;
+Odserverid:	con 54;
+Odparams:	con 55;
+Odend:		con 255;
+
+#
+# The IPv6-mapped form of an IPv4 address, which is what the stack's
+# header format carries even for v4 traffic.
+#
+v4map(a: array of byte, off: int, b0, b1, b2, b3: int)
+{
+	for(i := 0; i < 16; i++)
+		a[off+i] = byte 0;
+	a[off+10] = byte 16rFF;
+	a[off+11] = byte 16rFF;
+	a[off+12] = byte b0;
+	a[off+13] = byte b1;
+	a[off+14] = byte b2;
+	a[off+15] = byte b3;
+}
+
+dotted(a: array of byte, off: int): string
+{
+	return sys->sprint("%d.%d.%d.%d", int a[off], int a[off+1],
+		int a[off+2], int a[off+3]);
+}
+
+#
+# Build the fixed part of a BOOTP request. Returns the length used.
+#
+dhcpfixed(p: array of byte, xid: int, mac: array of byte)
+{
+	for(i := 0; i < Bootpsize; i++)
+		p[i] = byte 0;
+	p[0] = byte 1;			# BOOTREQUEST
+	p[1] = byte 1;			# ethernet
+	p[2] = byte 6;			# six bytes of it
+	p[4] = byte (xid >> 24);
+	p[5] = byte (xid >> 16);
+	p[6] = byte (xid >> 8);
+	p[7] = byte xid;
+	#
+	# Ask for the reply by broadcast. We have no address yet, so a
+	# server that unicasts to the address it is about to give us is
+	# talking to something that cannot hear it.
+	#
+	p[10] = byte 16r80;
+	p[28:] = mac[0:6];		# chaddr
+	p[236-1] = byte 0;
+}
+
+#
+# The option block: magic cookie, then type-length-value, then end.
+#
+dhcpopts(p: array of byte, off: int, kind: int, reqaddr, srvid: array of byte): int
+{
+	p[off++] = byte 99; p[off++] = byte 130;	# magic cookie
+	p[off++] = byte 83; p[off++] = byte 99;
+
+	p[off++] = byte Odmsgtype; p[off++] = byte 1; p[off++] = byte kind;
+
+	if(reqaddr != nil){
+		p[off++] = byte Odreqaddr; p[off++] = byte 4;
+		p[off:] = reqaddr[0:4];
+		off += 4;
+	}
+	if(srvid != nil){
+		p[off++] = byte Odserverid; p[off++] = byte 4;
+		p[off:] = srvid[0:4];
+		off += 4;
+	}
+
+	p[off++] = byte Odparams; p[off++] = byte 2;
+	p[off++] = byte Odmask; p[off++] = byte Odrouter;
+
+	p[off++] = byte Odend;
+	return off;
+}
+
+#
+# Find an option in a reply. Returns nil if it is not there.
+#
+dhcpopt(p: array of byte, n, want: int): array of byte
+{
+	off := Bootpsize + 4;		# past the fixed part and the cookie
+	while(off + 2 <= n){
+		kind := int p[off];
+		if(kind == Odend)
+			break;
+		if(kind == 0){		# pad
+			off++;
+			continue;
+		}
+		olen := int p[off+1];
+		if(off + 2 + olen > n)
+			break;
+		if(kind == want){
+			v := array[olen] of byte;
+			v[0:] = p[off+2:off+2+olen];
+			return v;
+		}
+		off += 2 + olen;
+	}
+	return nil;
+}
+
+#
+# Ask the network what this machine is called. Returns
+# (address, mask, gateway), all nil if nobody answered.
+#
+dhcp(): (string, string, string)
+{
+	c := sys->open("/net/udp/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("etherusb: cannot clone udp: %r\n");
+		return (nil, nil, nil);
+	}
+	nbuf := array[32] of byte;
+	nn := sys->read(c, nbuf, len nbuf);
+	if(nn <= 0)
+		return (nil, nil, nil);
+	conv := string nbuf[0:nn];
+
+	if(sys->fprint(c, "headers") < 0 ||
+	   sys->fprint(c, "announce 68") < 0){
+		sys->print("etherusb: udp setup failed: %r\n");
+		return (nil, nil, nil);
+	}
+
+	d := sys->open("/net/udp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("etherusb: cannot open udp data: %r\n");
+		return (nil, nil, nil);
+	}
+
+	rc := chan of array of byte;
+	spawn dhcpreader(d, rc);
+
+	xid := sys->millisec() | 1;
+	pkt := array[Udphdr7 + 576] of byte;
+
+	for(try := 0; try < 3; try++){
+		if(dhcpxchg(d, pkt, xid, Dhcpdiscover, nil, nil) < 0)
+			continue;
+		offer := dhcpwait(rc, xid, Dhcpoffer, 2000);
+		if(offer == nil)
+			continue;
+
+		yiaddr := array[4] of byte;
+		yiaddr[0:] = offer[16:20];
+		srvid := dhcpopt(offer, len offer, Odserverid);
+		if(srvid == nil || len srvid < 4)
+			continue;
+
+		if(dhcpxchg(d, pkt, xid, Dhcprequest, yiaddr, srvid) < 0)
+			continue;
+		ack := dhcpwait(rc, xid, Dhcpack, 2000);
+		if(ack == nil)
+			continue;
+
+		addr := dotted(ack, 16);
+		mask := "255.255.255.0";
+		gw := "";
+		m := dhcpopt(ack, len ack, Odmask);
+		if(m != nil && len m >= 4)
+			mask = dotted(m, 0);
+		g := dhcpopt(ack, len ack, Odrouter);
+		if(g != nil && len g >= 4)
+			gw = dotted(g, 0);
+		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
+		return (addr, mask, gw);
+	}
+	sys->print("etherusb: no DHCP reply after 3 tries\n");
+	return (nil, nil, nil);
+}
+
+#
+# Send one DHCP message to the broadcast address.
+#
+dhcpxchg(d: ref Sys->FD, pkt: array of byte, xid, kind: int,
+	reqaddr, srvid: array of byte): int
+{
+	v4map(pkt, 0, 255, 255, 255, 255);	# raddr
+	v4map(pkt, 16, 0, 0, 0, 0);		# laddr
+	v4map(pkt, 32, 0, 0, 0, 0);		# ifcaddr
+	pkt[48] = byte 0; pkt[49] = byte 67;	# rport
+	pkt[50] = byte 0; pkt[51] = byte 68;	# lport
+
+	body := pkt[Udphdr7:];
+	dhcpfixed(body, xid, mac);
+	n := dhcpopts(body, Bootpsize, kind, reqaddr, srvid);
+
+	if(sys->write(d, pkt, Udphdr7 + n) != Udphdr7 + n){
+		sys->print("etherusb: DHCP send failed: %r\n");
+		return -1;
+	}
+	return 0;
+}
+
+#
+# Read the socket in its own process, because a read on it BLOCKS.
+#
+# The obvious loop -- read, check, sleep, try again -- cannot time out:
+# with no server on the network the first read never returns, the retry
+# never happens, and the fallback that exists precisely for a network
+# with no DHCP server can never be reached. The boot hangs on the one
+# case the fallback was written for.
+#
+dhcpreader(d: ref Sys->FD, c: chan of array of byte)
+{
+	for(;;){
+		buf := array[Udphdr7 + 576] of byte;
+		n := sys->read(d, buf, len buf);
+		if(n <= 0)
+			break;
+		c <-= buf[0:n];
+	}
+}
+
+dhcptimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+#
+# Wait for a reply of the wanted type carrying our transaction id.
+# Returns the body, or nil if none arrived in time.
+#
+dhcpwait(c: chan of array of byte, xid, want, ms: int): array of byte
+{
+	t := chan of int;
+	spawn dhcptimer(t, ms);
+
+	for(;;){
+		alt {
+		buf := <-c =>
+			if(len buf <= Udphdr7 + Bootpsize)
+				continue;
+			body := buf[Udphdr7:];
+			got := (int body[4] << 24) | (int body[5] << 16) |
+				(int body[6] << 8) | int body[7];
+			if(got != xid)
+				continue;
+			ty := dhcpopt(body, len body, Odmsgtype);
+			if(ty == nil || len ty < 1 || int ty[0] != want)
+				continue;
+			return body;
+		<-t =>
+			return nil;
+		}
+	}
+}
+
+pingout(gw: string)
 {
 	c := sys->open("/net/icmp/clone", Sys->ORDWR);
 	if(c == nil){

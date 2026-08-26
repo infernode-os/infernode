@@ -802,7 +802,7 @@ check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 # The reply is on the wire; receiving it does not work yet. See
 # "Receive does not complete" in os/bcm2837/README.md.
 check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
-check "10.0.2.15/24 configured on ipifc"       "os/ip binds an interface to a driver outside the kernel"
+check "10.0.2.15 mask 255.255.255.0 on ipifc"       "os/ip binds an interface to a driver outside the kernel"
 check "default route via 10.0.2.2"             "a default route is installed"
 
 # Interrupts, asserted rather than assumed.

@@ -612,7 +612,31 @@ parsemac(uchar *to, char *from, int len)
 ulong
 iphash(uchar *sa, ushort sp, uchar *da, ushort dp)
 {
-	return ((sa[IPaddrlen-1]<<24) ^ (sp << 16) ^ (da[IPaddrlen-1]<<8) ^ dp ) % Nhash;
+	/*
+	 * Unsigned, and it matters.
+	 *
+	 * sa[] is uchar, which promotes to signed int. A last address
+	 * byte of 0x80 or more shifted left 24 sets the sign bit, the
+	 * whole expression goes negative, and C's % returns a NEGATIVE
+	 * remainder -- which is then assigned to a ulong and used to
+	 * index ht->tab[]. The read lands astronomically out of bounds
+	 * and whatever it finds is walked as a chain of Iphash.
+	 *
+	 * 255.255.255.255 is such an address, so this fires the moment
+	 * anything speaks DHCP. The board took a data abort in iphtlook
+	 * twice, at two different instructions, on the SAME faulting
+	 * address both times -- 0x01b900001f580015 -- which is what a
+	 * deterministic bad index looks like rather than heap
+	 * corruption, and is what sent the first diagnosis after a
+	 * double-hashed conversation that does not exist.
+	 *
+	 * The same sign-extension class as the nhgetl bug fixed earlier
+	 * in this port, in the same family of file, for the same reason:
+	 * this code was written where these promotions did not reach a
+	 * 64-bit index.
+	 */
+	return (((ulong)sa[IPaddrlen-1]<<24) ^ ((ulong)sp << 16) ^
+		((ulong)da[IPaddrlen-1]<<8) ^ (ulong)dp) % Nhash;
 }
 
 void

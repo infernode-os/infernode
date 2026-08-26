@@ -984,13 +984,26 @@ dhcp(): (string, string, string)
 	rc := chan of array of byte;
 	spawn dhcpreader(d, rc);
 
+	#
+	# Give the switch time to start forwarding.
+	#
+	# A link that has just come up is not a link that carries traffic
+	# yet: a managed port spends seconds in listening and learning
+	# before it forwards, and everything sent into that window is
+	# dropped. This asked three times over six seconds and got an
+	# address on one boot and nothing on the next, from the same cable
+	# into the same switch -- which is what a race against spanning
+	# tree looks like rather than a protocol fault.
+	#
+	sys->sleep(2000);
+
 	xid := sys->millisec() | 1;
 	pkt := array[Udphdr7 + 576] of byte;
 
-	for(try := 0; try < 3; try++){
+	for(try := 0; try < 6; try++){
 		if(dhcpxchg(d, pkt, xid, Dhcpdiscover, nil, nil) < 0)
 			continue;
-		offer := dhcpwait(rc, xid, Dhcpoffer, 2000);
+		offer := dhcpwait(rc, xid, Dhcpoffer, 3000);
 		if(offer == nil)
 			continue;
 
@@ -1002,7 +1015,7 @@ dhcp(): (string, string, string)
 
 		if(dhcpxchg(d, pkt, xid, Dhcprequest, yiaddr, srvid) < 0)
 			continue;
-		ack := dhcpwait(rc, xid, Dhcpack, 2000);
+		ack := dhcpwait(rc, xid, Dhcpack, 3000);
 		if(ack == nil)
 			continue;
 
@@ -1018,7 +1031,7 @@ dhcp(): (string, string, string)
 		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
 		return (addr, mask, gw);
 	}
-	sys->print("etherusb: no DHCP reply after 3 tries\n");
+	sys->print("etherusb: no DHCP reply after 6 tries over 20 seconds\n");
 	return (nil, nil, nil);
 }
 

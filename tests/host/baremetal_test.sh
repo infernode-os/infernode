@@ -1490,6 +1490,61 @@ else
 fi
 
 #
+# 3e. A reboot that does not need the shell.
+#
+#     "echo reboot > /dev/sysctl" needs a shell sitting at a prompt, and
+#     during development it very often is not: the board is part way
+#     through a boot, or the console is busy printing, and the typed
+#     command interleaves with that output and is mangled. It then fails
+#     SILENTLY -- the characters were consumed by a line nobody ran --
+#     and the only way back is the power switch. That happened twice in
+#     one session.
+#
+#     Ctrl-T Ctrl-T r is handled in kbdputc, character by character,
+#     before the line discipline and before any shell. devcons already
+#     binds 'r' to rexit, and exit() on this board resets into
+#     serialboot -- which is exactly where a development reboot wants to
+#     land, since that is what receives the next image.
+#
+#     Asserted by the machine actually going round: the banner appears
+#     twice in one capture.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-rebootkey.txt" 2>&1
+import subprocess, sys, time, threading
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
+                      "-display", "none", "-serial", "stdio"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+try:
+    deadline = time.time() + 60
+    while time.time() < deadline and b"starting the shell" not in buf:
+        time.sleep(0.2)
+    time.sleep(2)
+    p.stdin.write(b"\x14\x14r"); p.stdin.flush()
+    time.sleep(4)
+except Exception:
+    pass
+p.kill(); p.wait()
+sys.stdout.write(bytes(buf).decode(errors="replace"))
+PYEOF
+
+BOOTS="$(grep -c 'InferNode bare-metal' "$BUILD/$PLAT-rebootkey.txt")"
+if grep -q 'resetting into serialboot' "$BUILD/$PLAT-rebootkey.txt" && [[ "$BOOTS" -ge 2 ]]; then
+    pass "Ctrl-T Ctrl-T r reboots the machine without a shell (booted $BOOTS times)"
+else
+    fail "the reboot debug key did not restart the machine (boots=$BOOTS)"
+fi
+
+#
 # 4. The panic path reports instead of hanging.
 #
 #    Regression guard for the failure mode this whole layer exists to

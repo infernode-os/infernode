@@ -162,7 +162,16 @@ exit(int code)
 void
 reboot(void)
 {
-	print("reboot: resetting via the watchdog\n");
+	/*
+	 * uartputstr, not print.
+	 *
+	 * print() queues, and the queue is drained by a process --
+	 * boardreboot() below never returns, so nothing ever drains it
+	 * and the message is lost with the machine that was going to
+	 * print it. The reset then looks like a crash: the console simply
+	 * stops and starts again with no line saying why.
+	 */
+	uartputstr("reboot: resetting via the watchdog\n");
 	boardreboot();
 	/* boardreboot does not return; if it somehow does, stop. */
 	exit(0);

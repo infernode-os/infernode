@@ -1762,6 +1762,27 @@ startdis(void)
 	 * starting with none. disinit() opens #c/cons three times for
 	 * fd 0/1/2, which needs a mount table to resolve it against.
 	 */
+	/*
+	 * Ctrl-T Ctrl-T r reboots this machine, and nothing here has to
+	 * arrange it.
+	 *
+	 * devcons already registers 'r' as a debug key bound to rexit,
+	 * and debugkey() silently IGNORES a second registration of the
+	 * same rune -- so a "reboot" key added here would have been dead
+	 * code that looked live. exit() on this board resets into
+	 * serialboot, which is exactly where a development reboot wants
+	 * to land, so the existing key is the right one.
+	 *
+	 * It matters because it does not need a shell. "echo reboot >
+	 * /dev/sysctl" works only when one is sitting at a prompt ready
+	 * to read a line, and during development it very often is not:
+	 * the board is part way through a boot, or the console is busy
+	 * printing, and the typed command interleaves with that output
+	 * and is mangled. It then fails silently and the only way back is
+	 * the power switch. A debug key is handled in kbdputc, character
+	 * by character, before the line discipline and before any shell.
+	 */
+
 	kproc("usb", usbkproc, nil, 0);
 	kproc("uart", uartkproc, nil, 0);
 	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);

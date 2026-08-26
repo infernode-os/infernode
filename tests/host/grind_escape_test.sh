@@ -18,6 +18,30 @@ spec = importlib.util.spec_from_file_location(
 grind = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(grind)
 
+# Source-aware scenarios carry a pre-model nsaudit report in the same state
+# bundle as the trajectory. Preserve it verbatim for evidence and scoring.
+nsaudit_out = ("@@GRIND ready yes\n@@NSAUDIT begin\n"
+               "nsaudit=caps\tdir=/tool\trole=toplevel\n"
+               "nsaudit=violation\tseverity=high\trule=TEST\n"
+               "@@NSAUDIT end\n@@GRIND done\n")
+nsaudit_state = grind.parse_state(nsaudit_out)
+assert nsaudit_state["nsaudit"].startswith("nsaudit=caps"), nsaudit_state
+assert "severity=high" in nsaudit_state["nsaudit"], nsaudit_state
+
+with tempfile.TemporaryDirectory() as td:
+    oldstage = grind.STAGE
+    oldtmp = grind.INEMU_TMP
+    grind.STAGE = Path(td) / "stage"
+    grind.INEMU_TMP = Path(td) / "tmp"
+    grind.stage_scenario({"source_ro": True, "nsaudit": True,
+                          "prompt": "inspect source", "run_id": "RUN-TEST"},
+                         "default", "http://127.0.0.1:1/v1", "high")
+    assert (grind.STAGE / "source-ro").read_text() == "yes\n"
+    assert (grind.STAGE / "nsaudit").read_text() == "yes\n"
+    assert (grind.STAGE / "rz").read_text() == "high\n"
+    grind.STAGE = oldstage
+    grind.INEMU_TMP = oldtmp
+
 payload = b"sealed tool result"
 sha = hashlib.sha256(payload).hexdigest()
 score = "a" * 40 + ":3"

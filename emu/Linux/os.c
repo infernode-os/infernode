@@ -1,6 +1,7 @@
 #include	<sys/types.h>
 #include	<time.h>
 #include	<termios.h>
+#include	<sys/ucontext.h>
 #include	<signal.h>
 #include 	<pwd.h>
 #include	<sched.h>
@@ -64,16 +65,85 @@ isnilref(siginfo_t *si)
 	return si != 0 && (si->si_addr == (void*)~(uintptr_t)0 || (uintptr_t)si->si_addr < 512);
 }
 
+/*
+ * Report where a memory fault happened before handing it to disfault().
+ *
+ * A nil dereference from Limbo is an ordinary exception and needs no
+ * commentary.  Anything else is an emulator bug, and the campaign that
+ * motivated this (INFR-421) had to be re-run because all it left behind
+ * was rc=-11: the ucontext was discarded here, so no PC, no symbol, no
+ * faulting function.  The MacOSX port already prints this; keeping the
+ * two in step means a Linux crash is diagnosable from its log alone,
+ * whether or not a core was allowed.
+ *
+ * dladdr() is not async-signal-safe, strictly.  We are already on a
+ * path that ends in disfault or death, the same trade the MacOSX
+ * handler makes, and an unresolved PC is itself a finding: it means the
+ * fault was in JIT-generated code.
+ *
+ * dladdr and REG_RIP live behind _GNU_SOURCE, which cannot be set here:
+ * it makes features.h force _XOPEN_SOURCE to 700 and lib9.h then
+ * redefines it to 500, warning on every build.  Declare the two pieces
+ * we need instead.  REG_RIP/REG_EIP are fixed by the x86 psABI.
+ */
+typedef struct {
+	const char	*dli_fname;
+	void		*dli_fbase;
+	const char	*dli_sname;
+	void		*dli_saddr;
+} Dlinfo;
+
+extern int dladdr(const void*, Dlinfo*);
+
+enum {
+	Gregrip	= 16,	/* REG_RIP */
+	Gregeip	= 14,	/* REG_EIP */
+};
+
+static void
+faultwhere(void *a)
+{
+	ucontext_t *uc;
+	Dlinfo di;
+	void *pc;
+
+	if(a == nil)
+		return;
+	uc = (ucontext_t*)a;
+#if defined(__x86_64__)
+	pc = (void*)uc->uc_mcontext.gregs[Gregrip];
+#elif defined(__i386__)
+	pc = (void*)uc->uc_mcontext.gregs[Gregeip];
+#elif defined(__aarch64__)
+	pc = (void*)uc->uc_mcontext.pc;
+#else
+	USED(uc);
+	return;
+#endif
+	fprint(2, "  PC=%p\n", pc);
+	if(dladdr(pc, &di) && di.dli_sname != nil)
+		fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
+			(ulong)((uintptr)pc - (uintptr)di.dli_saddr));
+	else
+		fprint(2, "  PC not in any image (JIT-generated code?)\n");
+	if(up != nil && up->nlocks > 0)
+		fprint(2, "  holding %d lock(s)\n", up->nlocks);
+}
+
 static void
 trapmemref(int signo, siginfo_t *si, void *a)
 {
-	USED(a);	/* ucontext_t*, could fetch pc in machine-dependent way */
 	if(isnilref(si))
 		disfault(nil, exNilref);
-	else if(signo == SIGBUS)
+	else if(signo == SIGBUS){
+		fprint(2, "BUS: addr=%p code=%d\n", si->si_addr, si->si_code);
+		faultwhere(a);
 		sysfault("bad address addr=", si->si_addr);	/* eg, misaligned */
-	else
+	}else{
+		fprint(2, "SEGV: addr=%p code=%d\n", si->si_addr, si->si_code);
+		faultwhere(a);
 		sysfault("segmentation violation addr=", si->si_addr);
+	}
 }
 
 static void

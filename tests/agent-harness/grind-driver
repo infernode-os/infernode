@@ -8,7 +8,8 @@
 # settles, then emits a clean, machine-parseable state bundle grind.py scores.
 #
 # The host stages a scenario under $HOME/.infernode/grind/current/ with files:
-#   url model rz settle prompt   (optional: probefiles, msg, audit)
+#   url model rz settle prompt
+#   (optional: probefiles, msg, audit, source-ro, nsaudit)
 # read here via the trfs host mount at /n/local.
 #   msg = none | inbox | watch
 #     inbox : mount /mnt/msg + register mock email inbox (Activity 0 reads
@@ -53,6 +54,10 @@ followthrough=no
 if {ftest -f $stage/followthrough} { followthrough=`{cat $stage/followthrough} }
 auditwant=no
 if {ftest -f $stage/audit} { auditwant=`{cat $stage/audit} }
+sourcewant=no
+if {ftest -f $stage/source-ro} { sourcewant=`{cat $stage/source-ro} }
+nsauditwant=no
+if {ftest -f $stage/nsaudit} { nsauditwant=`{cat $stage/nsaudit} }
 if {~ $#grind_url 0}   { grind_url=http://127.0.0.1:11435/v1 }
 if {~ $#grind_model 0} { grind_model=sonnet }
 if {~ $#grind_rz 0}    { grind_rz=low }
@@ -61,6 +66,8 @@ if {~ $#msgmode 0}     { msgmode=none }
 if {~ $#matrixcomp 0}  { matrixcomp=none }
 if {~ $#followthrough 0} { followthrough=no }
 if {~ $#auditwant 0} { auditwant=no }
+if {~ $#sourcewant 0} { sourcewant=no }
+if {~ $#nsauditwant 0} { nsauditwant=no }
 
 echo '@@GRIND begin url='^$grind_url^' model='^$grind_model^' msg='^$msgmode
 
@@ -171,7 +178,30 @@ sleep 1
 # don't -p a path that isn't mounted.
 msgp=()
 if {~ $msgmode inbox watch} { msgp=(-p /mnt/msg) }
-/dis/veltro/tools9p -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo,matrix -p /dis/wm $msgp read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
+sourcep=()
+if {~ $sourcewant yes} {
+	# Explicit source roots only. Binding / would alias the dynamic canaries and
+	# evidence directories into the agent namespace and invalidate the trial.
+	rm -r /tmp/veltro/probe-sdk >[2] /dev/null
+	mkdir -p /tmp/veltro/probe-sdk/dis /tmp/veltro/probe-sdk/tests
+	cp /dis/nsaudit.dis /tmp/veltro/probe-sdk/dis/nsaudit.dis
+	cp /dis/limbo.dis /tmp/veltro/probe-sdk/dis/limbo.dis
+	cp -r /module /tmp/veltro/probe-sdk/module
+	cp -r /tests/nsaudit-fixtures /tmp/veltro/probe-sdk/tests/nsaudit-fixtures
+	cp -r /tests/nsaudit-rules /tmp/veltro/probe-sdk/tests/nsaudit-rules
+	sourcep=(-p /appl:ro -p /module:ro -p /emu:ro -p /libinterp:ro
+		-p /libsec:ro -p /tests:ro -p /docs:ro
+		-p /formal-verification:ro -p /tools:ro
+		-p /tmp/veltro/probe-sdk:rw)
+}
+/dis/veltro/tools9p -N -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo,matrix -p /dis/wm $msgp $sourcep read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
+
+if {~ $nsauditwant yes} {
+	sleep 2
+	echo '@@NSAUDIT begin'
+	path=(/dis/veltro /dis/cmd /dis .); nsaudit -m /tool
+	echo '@@NSAUDIT end'
+}
 
 > /tmp/lucibridge.log
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &

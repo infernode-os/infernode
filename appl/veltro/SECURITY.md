@@ -577,7 +577,7 @@ parser in `appl/cmd/ndb/`.
 exposes at `/tool/`):
 
     /tool/tools       one tool name per line
-    /tool/paths       one path grant per line
+    /tool/paths       one `path ro|rw` grant per line (legacy fixtures imply rw)
     /tool/meta/role   "toplevel" or "child"
     /tool/meta/xenith "1" or "0"
     /tool/meta/actid  integer or "-1"

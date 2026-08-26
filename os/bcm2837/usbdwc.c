@@ -333,13 +333,6 @@ chandone(void *a)
 	return (hc->hcint & hc->hcintmsk) != 0;
 }
 
-/*
- * Which address form the controller is handed for DMA; see chanio().
- * Starts at the VideoCore alias, and the first timeout flips it, so a
- * single boot tests both and reports which one moves data.
- */
-static int dwcdmaalias = 1;
-static int dwcdmaprobed;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
@@ -429,13 +422,6 @@ restart:
 					"hcsplt %8.8ux\n",
 					nusbintr, fn1, fn2,
 					hc->hcintmsk, hc->hcsplt);
-				if(!dwcdmaprobed){
-					dwcdmaprobed = 1;
-					dwcdmaalias = !dwcdmaalias;
-					print("usbotg: retrying with %s DMA addresses\n",
-						dwcdmaalias ? "BUSADDR (VideoCore alias)"
-							: "PADDR (ARM physical)");
-				}
 				error(Eio);
 			}
 			continue;
@@ -594,29 +580,27 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		n = len;
 	hc->hctsiz = n | npkt<<OPktcnt | pid;
 	/*
-	 * BUSADDR or PADDR -- settled on the board, not by argument.
+	 * BUSADDR, not PADDR.
 	 *
-	 * The controller is a bus master on the VideoCore side and sees
-	 * memory through ITS addresses, not the ARM's -- the same reason
-	 * mailbox.c hands the GPU a BUSADDR. Giving it an ARM physical
-	 * address programmes the channel to DMA somewhere that means
-	 * nothing to it, and the symptom is not an error: the channel is
-	 * enabled, hcint stays 00000000 for ever, and the transfer never
-	 * happens at all.
+	 * The controller masters memory from the VideoCore side and sees
+	 * it through those addresses, the same reason mailbox.c hands the
+	 * GPU a BUSADDR.
 	 *
-	 * That is the argument for the alias, and mailbox.c settles the
-	 * same question the same way. But it is only an argument: the
-	 * DWC OTG may instead be an ARM-side AXI master, in which case
-	 * 0xC0000000|phys is past the end of the 948MB this board has
-	 * and is simply unreachable -- which produces the identical
-	 * symptom, an enabled channel that never runs.
+	 * This was briefly switchable, because an enabled channel that
+	 * never ran was equally consistent with the alias being wrong.
+	 * The board settled it: both forms failed identically, and the
+	 * real fault was that the USB block had never been powered --
+	 * setpower was passing byte counts where element counts were
+	 * wanted, and the mailbox buffer was never cleaned from the
+	 * caches.
 	 *
-	 * Both readings predict exactly what the register dump shows, so
-	 * the dump cannot separate them. dwcdmaalias flips after the
-	 * first timeout so that one boot tries each and the board says
-	 * which is right.
+	 * The switch is gone because it was not merely dead: it flipped
+	 * this mode GLOBALLY on the first timeout anywhere, so a single
+	 * slow transfer silently changed how every later one addressed
+	 * memory. That is a poor thing to leave in a driver, and a worse
+	 * thing to leave in one whose timeouts were being tuned.
 	 */
-	hc->hcdma  = dwcdmaalias ? BUSADDR(PADDR(a)) : (uint)PADDR(a);
+	hc->hcdma  = BUSADDR(PADDR(a));
 
 	lasti = 0;
 	splitphase = 0;

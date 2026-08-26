@@ -459,6 +459,7 @@ Clcomm:		con 2;		# device class: communications
 
 HPpresent:	con 16r1;
 HPenable:	con 16r2;
+HPreset:	con 16r10;	# the hub clears this itself when the reset is done
 HPpower:	con 16r100;
 HPslow:		con 16r200;
 HPhigh:		con 16r400;
@@ -1027,19 +1028,41 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		# set, enable bit clear -- while the keyboard on the port
 		# beside it enumerated, from one attempt each.
 		#
+		#
+		# Issue the reset, then WAIT for the hub to finish it.
+		#
+		# The first version of this slept a flat 50ms and retried
+		# the reset if the port was not enabled -- which made things
+		# worse, not better: re-issuing SET_FEATURE(PORT_RESET)
+		# restarts the reset, so a port that needed longer than 50ms
+		# was interrupted and restarted three times and never
+		# converged. It reported 0x0311 every attempt: present,
+		# powered, low speed, and reset STILL ASSERTED.
+		#
+		# A hub clears the reset bit itself when it is done and sets
+		# enable. So poll for that, and only re-issue the reset if
+		# the hub has finished and still not enabled the port.
+		#
 		for(rtry := 0; rtry < 3; rtry++){
 			if(portfeature(d, port, Fportreset) < 0){
 				sys->print("init: %sport %d reset failed: %r\n",
 					indent, port);
 				break;
 			}
-			sys->sleep(50);
-			status = portstatus(d, port);
-			if(status & HPenable)
+			for(w := 0; w < 25; w++){	# up to half a second
+				sys->sleep(20);
+				status = portstatus(d, port);
+				if(status < 0)
+					break;
+				if(status & HPenable)
+					break;
+				if((status & HPreset) == 0)
+					break;	# hub finished, port not enabled
+			}
+			if(status < 0 || (status & HPenable))
 				break;
-			sys->print("init: %sport %d %#4.4x did not enable, retrying\n",
+			sys->print("init: %sport %d %#4.4x not enabled after reset, retrying\n",
 				indent, port, status);
-			sys->sleep(50);
 		}
 
 		sys->print("init: %sport %d %#4.4x%s\n",

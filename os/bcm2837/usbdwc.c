@@ -127,7 +127,10 @@ static int debug;
 static ulong nusbintr;
 
 /* how many split configurations still to report; see chansetup */
-static int dwcspltlog;	/* interrupts this controller has raised */
+static int dwcspltlog;
+
+/* how many slow-device transfers still to report; see chanio */
+static int dwcslowlog;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -905,6 +908,31 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			ctlr->regs->gintsts, ctlr->regs->gintmsk,
 			ctlr->regs->gahbcfg);
 		intrdump();
+	}
+
+	/*
+	 * What a slow device's transfer actually returned.
+	 *
+	 * The buffer the bus walk hands down is zeroed and comes back
+	 * full of 0x55, so something is WRITING those bytes rather than
+	 * leaving it untouched. That separates two possibilities which
+	 * have looked identical from outside: a transfer the controller
+	 * believes succeeded while carrying nonsense, or one that failed
+	 * with the buffer left holding whatever was last put there.
+	 *
+	 * hcint says which, and hctsiz says how much the controller
+	 * thinks it moved.
+	 */
+	if(ep->dev->speed != Highspeed && dwcslowlog < 4){
+		dwcslowlog++;
+		print("usbotg: ep%d.%d slow xfer len %d nleft %d hcint %8.8ux "
+			"hcsplt %8.8ux hctsiz %8.8ux\n",
+			ep->dev->nb, ep->nb, len, nleft, hc->hcint,
+			hc->hcsplt, hc->hctsiz);
+		if(len - nleft >= 4)
+			print("usbotg:   data %2.2ux %2.2ux %2.2ux %2.2ux\n",
+				((uchar*)a)[0], ((uchar*)a)[1],
+				((uchar*)a)[2], ((uchar*)a)[3]);
 	}
 	return len - nleft;
 }

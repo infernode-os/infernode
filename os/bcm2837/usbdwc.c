@@ -703,6 +703,47 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			qunlock(&ctlr->split);
 		}
 
+		/*
+		 * Drive the split here, because nothing else will.
+		 *
+		 * A split transaction is two transactions: a start-split
+		 * that asks the hub to fetch, and a complete-split that
+		 * collects. chanintr makes that transition -- it sets
+		 * Compsplt on Chhltd|Ack and re-enables the channel -- and
+		 * chanintr runs only from the interrupt handler.
+		 *
+		 * This driver never takes a USB interrupt. Not because one
+		 * is missed: chanwait runs the whole wait at splhi, sets
+		 * hcintmsk, and clears it again before lowering spl, so the
+		 * core asserts and de-asserts inside a window where
+		 * interrupts cannot be delivered. For a transfer that
+		 * completes on its own that is merely a polled driver and
+		 * works. For a split it means the complete-split is never
+		 * issued: the loop below sees Chhltd|Ack, moves no data,
+		 * and re-issues the SAME start-split for ever.
+		 *
+		 * A low-speed keyboard behind a high-speed hub therefore
+		 * reads back 0x55 repeating -- alternating bits, an
+		 * untranslated bus sampled at the wrong rate -- rather than
+		 * a descriptor.
+		 *
+		 * So make the transition on the polled path too. Doing it
+		 * here rather than repairing the interrupt is deliberate:
+		 * the polled path is the one this port actually executes,
+		 * and a split that works only when an interrupt happens to
+		 * be delivered would be worse than one that never is.
+		 */
+		if((hc->hcsplt & Spltena) && (i & Xfercomp) == 0){
+			if(i == (Chhltd|Ack)){
+				hc->hcsplt |= Compsplt;
+				continue;
+			}
+			if(i & (Nyet|Frmovrun)){
+				/* the hub is not ready; ask again */
+				continue;
+			}
+		}
+
 		if((i & Xfercomp) == 0 && i != (Chhltd|Ack) && i != Chhltd){
 			if(i & Stall)
 				error(Estalled);

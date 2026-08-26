@@ -2055,6 +2055,33 @@ kmain(void)
 	probeclock();
 	probeintr();
 	probeuartin();
+	/*
+	 * Size the allocator pools for THIS machine.
+	 *
+	 * os/port/alloc.c ships ceilings of 4MB, 16MB and 8MB. They are
+	 * upstream defaults for far smaller systems, and the hosted
+	 * emulator never lives with them -- it is started with
+	 * -pmain=1024m -pheap=1024m -pimage=1024m, which is exactly this
+	 * adjustment made on a command line. Bare metal has no command
+	 * line, so it got the defaults and a board with 946MB of RAM
+	 * refused a one-megabyte allocation with "arena too large" while
+	 * loading a driver.
+	 *
+	 * A ceiling is not a reservation -- pools grow from xalloc on
+	 * demand -- so these are bounds on runaway growth rather than
+	 * memory set aside. Taken as fractions of what conf found, so a
+	 * board with different memory gets proportionate limits instead
+	 * of numbers that happen to suit this one.
+	 */
+	{
+		ulong mem;
+
+		mem = (ulong)conf.npage * BY2PG;
+		poolsize(mainmem, mem/8, 0);
+		poolsize(heapmem, mem/4, 0);
+		poolsize(imagmem, mem/8, 0);
+	}
+
 	boardfbprobe();
 	boardsdprobe();
 

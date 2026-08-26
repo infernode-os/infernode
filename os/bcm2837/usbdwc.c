@@ -170,8 +170,6 @@ static ulong nusbintr;
 /* how many interrupt failures still to report; see eptrans */
 static int dwcintrerr;
 
-/* how many interrupt split phases still to report; see chanio */
-static int dwcintrsplit;
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -609,7 +607,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	int nleft, n, nt, i, maxpkt, npkt;
 	uint hcdma, hctsiz, lasti;
 	int splitphase, nyets;
-	ulong tstart;
 
 	ctlr = ep->hp->aux;
 	maxpkt = ep->maxpkt;
@@ -649,7 +646,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	lasti = 0;
 	splitphase = 0;
 	nyets = 0;
-	tstart = TK2MS(m->ticks);
 	nleft = len;
 	logstart(ep);
 	for(;;){
@@ -773,26 +769,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		 * status, and rather than read back from hcsplt, which
 		 * chanio clears a few lines above this.
 		 */
-		/*
-		 * Watch the split phases for an interrupt endpoint.
-		 *
-		 * The keyboard's read runs the whole 2s timeout every time
-		 * rather than NAKing and retrying quickly, so it polls
-		 * under twice a second and loses most keys. Every previous
-		 * split log was spent on the control transfers that
-		 * enumerate the device; this path has never been watched.
-		 *
-		 * Each line is one turn of the loop: which phase it was in,
-		 * what the channel reported, and how far the DMA pointer
-		 * moved.
-		 */
-		if(ep->ttype == Tintr && dwcintrsplit < 12){
-			dwcintrsplit++;
-			print("usbotg: intr phase %d i %8.8ux after %ldms\n",
-				splitphase, i,
-				(long)TK2MS(m->ticks) - (long)tstart);
-		}
-
 		if(hc->hcsplt & Spltena){
 			if(splitphase == 0){
 				/*

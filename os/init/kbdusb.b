@@ -237,48 +237,11 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		prev[i] = byte 0;
 
 	nempty := 0;
-	nsent := 0;
-	npoll := 0;
-	tpoll := 0;
 	nslow := 0;
 	for(;;){
 		#
 		# Time the read.
-		#
-		# Latency is still tens of seconds after bounding the split
-		# retry, and the arithmetic does not account for it: a poll
-		# should cost at most a second or so. Guessing at where the
-		# rest goes has been wrong twice, so measure it -- a read
-		# that takes seconds and a read that is called seconds apart
-		# are different faults.
-		#
-		#
-		# Count the polls, and say the rate.
-		#
-		# The interrupt path turns out to work -- a start-of-frame
-		# probe took one interrupt and the handler masks it off
-		# itself, which is correct -- so "this driver never takes an
-		# interrupt" was a wrong premise that four attempted fixes
-		# rested on. Which means the poll rate is still unexplained
-		# and should be measured rather than derived: a keyboard
-		# read either happens often and misses keys anyway, or does
-		# not happen often, and those are different faults.
-		#
-		if(npoll == 0)
-			tpoll = sys->millisec();
-		npoll++;
-		if(npoll % 50 == 0){
-			el := sys->millisec() - tpoll;
-			sys->print("kbdusb: %d polls in %d ms\n", npoll, el);
-		}
-
-		t0 := sys->millisec();
 		n := sys->read(fd, buf, len buf);
-		dt := sys->millisec() - t0;
-		if(dt > 250 && nslow < 8){
-			nslow++;
-			sys->print("kbdusb: read took %d ms (returned %d)\n", dt, n);
-		}
 		#
 		# Say what the endpoint returns, a few times. A read that
 		# returns nothing and a read that returns a report we then
@@ -310,39 +273,8 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 				continue;
 			c := decode(k, mod);
 			if(c > 0){
-				#
-				# Time the injection separately.
-				#
-				# The read blocks until a key is pressed and
-				# then returns promptly -- 152 seconds for
-				# one, which is how long it waited, not how
-				# long it took. So the USB side is behaving
-				# and the delay is downstream of here: either
-				# writing to /dev/keyboard, or the console
-				# echoing it.
-				#
 				s := sys->sprint("%c", c);
-				w0 := sys->millisec();
 				sys->write(kbd, array of byte s, len array of byte s);
-				dw := sys->millisec() - w0;
-				nsent++;
-				#
-				# Report delivery, because "nothing appears"
-				# has two causes and they are opposite.
-				#
-				# The first two or three keys echo and later
-				# ones do not, which is the shape of a queue
-				# filling rather than of a slow path: kbdputc
-				# feeds kbdq and qproduce DROPS silently when
-				# it is full. So say what this driver has
-				# actually delivered. If the count keeps
-				# rising while the screen stays still, the
-				# loss is downstream of here; if it stops,
-				# it is not.
-				#
-				if(nsent <= 12 || dw > 100)
-					sys->print("kbdusb: sent %d (%c) write %d ms\n",
-						nsent, c, dw);
 			}
 		}
 		prev[0:] = buf[0:Reportlen];

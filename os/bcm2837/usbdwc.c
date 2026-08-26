@@ -70,6 +70,7 @@ enum
 	Maxtmout	= 10,		/* attempts before giving up */
 
 	Enabledelay	= 50,
+	Resetattempts	= 3,	/* a fluffed chirp usually succeeds next time */
 	Resetdelay	= 10,
 	ResetdelayHS	= 50,
 
@@ -1490,7 +1491,8 @@ portreset(Hci *hp, int port, int on)
 {
 	Ctlr *ctlr;
 	Dwcregs *r;
-	int b, s;
+	int b, s;	int n;
+
 	uint spd, want;
 
 	assert(port == 1);
@@ -1499,17 +1501,43 @@ portreset(Hci *hp, int port, int on)
 	dprint("usbotg reset=%d; sts %#x\n", on, r->hport0);
 	if(!on)
 		return 0;
-	r->hport0 = Prtpwr | Prtrst;
-	tsleep(&up->sleep, return0, 0, ResetdelayHS);
-	r->hport0 = Prtpwr;
-	tsleep(&up->sleep, return0, 0, Enabledelay);
-	s = r->hport0;
-	b = s & (Prtconndet|Prtenchng|Prtovrcurrchng);
-	if(b != 0)
-		r->hport0 = Prtpwr | b;
+	/*
+	 * Reset, and try again if the port does not come up.
+	 *
+	 * One reset was enough until a keyboard and mouse were plugged
+	 * in, and then roughly one boot in three came back with hport0
+	 * 00021401: connected, powered, NOT enabled, and negotiated at
+	 * FULL speed where a working boot gets high. That combination is
+	 * a high-speed handshake that did not complete, not a delay that
+	 * is too short -- both delays here are already the spec's, 50ms
+	 * of reset and 50ms to enable.
+	 *
+	 * A device that fluffs the chirp will usually manage it on a
+	 * second attempt, which is why every real host retries rather
+	 * than declaring the port dead. Failing on the first try leaves
+	 * the whole tree unreachable -- including the ethernet the rest
+	 * of this session depends on -- for a fault that costs 100ms to
+	 * try again.
+	 */
+	for(n = 0; n < Resetattempts; n++){
+		r->hport0 = Prtpwr | Prtrst;
+		tsleep(&up->sleep, return0, 0, ResetdelayHS);
+		r->hport0 = Prtpwr;
+		tsleep(&up->sleep, return0, 0, Enabledelay);
+		s = r->hport0;
+		b = s & (Prtconndet|Prtenchng|Prtovrcurrchng);
+		if(b != 0)
+			r->hport0 = Prtpwr | b;
+		if(s & Prtena)
+			break;
+		print("usbotg: host port not enabled after reset %d "
+			"(hport0 %8.8ux)\n", n + 1, s);
+	}
 	dprint("usbotg reset=%d; sts %#x\n", on, s);
 	if((s & Prtena) == 0)
-		print("usbotg: host port not enabled after reset");
+		print("usbotg: host port will not enable\n");
+	else if(n > 0)
+		print("usbotg: host port enabled on attempt %d\n", n + 1);
 
 	/*
 	 * Make the PHY clock follow the speed the port actually came up

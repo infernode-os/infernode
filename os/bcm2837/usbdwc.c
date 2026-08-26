@@ -600,11 +600,13 @@ logdump(Ep *ep)
 	nchanlog = 0;
 }
 
+static int nkbdlog;
+
 static int
 chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 {
 	Ctlr *ctlr;
-	int nleft, n, nt, i, maxpkt, npkt;
+	int nleft, n, nt, i, maxpkt, npkt, nprog;
 	uint hcdma, hctsiz, lasti;
 	int splitphase, nyets;
 
@@ -643,6 +645,15 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 */
 	hc->hcdma  = BUSADDR(PADDR(a));
 
+	/*
+	 * What was programmed, kept so the loop can tell if the controller
+	 * is ever left running past it. The counters are 19 bits and they
+	 * wrap: 0x38, 0x30 ... 0x08, 0x00, 0x7fff8, and by then hcdma is
+	 * writing outside the caller's buffer. A transfer that has run past
+	 * its own length is a bug to stop on, not to keep servicing.
+	 */
+	nprog = n;
+
 	lasti = 0;
 	splitphase = 0;
 	nyets = 0;
@@ -651,6 +662,12 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	for(;;){
 		hcdma = hc->hcdma;
 		hctsiz = hc->hctsiz;
+		if((int)(hctsiz & Xfersize) > nprog){
+			print("usbotg: ep%d.%d transfer ran past its length "
+				"(hctsiz %8.8ux, asked %d) -- stopping\n",
+				ep->dev->nb, ep->nb, hctsiz, nprog);
+			break;
+		}
 		hc->hctsiz = hctsiz & ~Dopng;
 		if(hc->hcchar&Chen){
 			dprint("ep%d.%d before chanio hcchar=%8.8ux\n",
@@ -739,6 +756,28 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			i = chanwait(ep, ctlr, hc, Chhltd|Nak);
 		clog(ep, hc);
 		lasti = i;
+
+		/*
+		 * Trace an interrupt endpoint, but only when something other
+		 * than "nothing to report" happens.
+		 *
+		 * An idle keyboard answers every complete-split with
+		 * Chhltd|Nak, so logging every iteration says nothing and
+		 * costs a console write twenty times a second -- which is how
+		 * the last round of instrumentation ended up being most of the
+		 * latency it was measuring. Everything else is worth seeing.
+		 *
+		 * Read BEFORE the registers are cleared. Three earlier probes
+		 * were placed after the lines that clear the value being
+		 * measured and dutifully reported zero.
+		 */
+		if(ep->ttype == Tintr && i != (Chhltd|Nak) && nkbdlog < 48){
+			nkbdlog++;
+			print("usbotg: intr i %8.8ux splt %8.8ux tsiz %8.8ux "
+				"phase %d nyets %d\n",
+				i, hc->hcsplt, hc->hctsiz, splitphase, nyets);
+		}
+
 		hc->hcint = i;
 
 		if(hc->hcsplt & Spltena){
@@ -770,20 +809,41 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		 * chanio clears a few lines above this.
 		 */
 		if(hc->hcsplt & Spltena){
-			if(splitphase == 0){
+			if(splitphase == 0 && (i & Xfercomp) == 0){
 				/*
-				 * Advance only if the hub ACCEPTED it.
+				 * Advance only if the hub ACCEPTED it AND
+				 * there is still something to collect.
 				 *
-				 * This advanced unconditionally, which is
-				 * wrong: a start-split answered with NAK was
-				 * not accepted, and collecting a result the
-				 * hub never agreed to fetch is meaningless.
-				 * The board shows exactly that -- phase 0
-				 * and phase 1 alternating, both reporting
-				 * Chhltd|Nak -- so every poll of an idle
-				 * keyboard costs two channel operations
-				 * where one would do, and the second is
-				 * asking about nothing.
+				 * Ack alone does not mean "start-split
+				 * accepted". This core sets it on success
+				 * too: a FINISHED split reports
+				 * Xfercomp|Chhltd|Ack. Keying on Ack by
+				 * itself therefore swallowed completed
+				 * transfers -- the continue below jumped
+				 * back over the accounting at the bottom of
+				 * the loop, so nleft was never decremented
+				 * and the transfer was simply issued again.
+				 *
+				 * The board showed it plainly. hctsiz walked
+				 * down eight bytes at a time, 0038, 0030,
+				 * 0028 ... 0008, 0000, and then WRAPPED --
+				 * 5ffffff8, 1ff7fff0 -- with hcdma marching
+				 * on past the end of the caller's buffer.
+				 * Every keystroke after the first was
+				 * written outside it.
+				 *
+				 * Xfercomp is the discriminator: Ack without
+				 * it means the hub took the job and the
+				 * result must still be collected; Ack with
+				 * it means the whole transfer is done and
+				 * belongs to the accounting below.
+				 *
+				 * Checking Ack alone was already the second
+				 * mistake here. The first triggered on the
+				 * exact value Chhltd|Ack, which this core
+				 * does not report; loosening that to a bit
+				 * test fixed the start-split and broke the
+				 * completion.
 				 */
 				if(i & Ack){
 					splitphase = 1;

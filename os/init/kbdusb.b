@@ -123,22 +123,6 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d\n",
 		dev, epnum, maxpkt, ival);
 
-	#
-	# Prove the injection path before blaming the keyboard.
-	#
-	# Nothing appears when keys are pressed, and that has two quite
-	# different causes: reports are not arriving from the device, or
-	# they are and the characters are not reaching the console. This
-	# writes one character that no key produced, so if a stray 'K'
-	# turns up at the shell the second half works and the fault is
-	# upstream of it.
-	#
-	tst := array of byte "K";
-	if(sys->write(kbd, tst, len tst) != len tst)
-		sys->print("kbdusb: cannot write /dev/keyboard: %r\n");
-	else
-		sys->print("kbdusb: wrote a test K to /dev/keyboard\n");
-
 	poll(fd, kbd, ival);
 }
 
@@ -231,7 +215,20 @@ openintr(epnum, maxpkt, ival: int): ref Sys->FD
 #
 poll(fd, kbd: ref Sys->FD, ival: int)
 {
-	buf := array[64] of byte;
+	#
+	# One report per read, not a bufferful.
+	#
+	# Reading 64 bytes from an 8-byte endpoint does not mean "give me
+	# whatever is there". It programs the controller for EIGHT packets,
+	# so the read cannot finish until eight reports have arrived -- four
+	# keystrokes, since a key press and its release are one report each
+	# -- and seven of the eight are then thrown away by the decoder
+	# below, which only ever looks at the first Reportlen bytes.
+	#
+	# Asking for exactly one report is what makes a keystroke a
+	# keystroke.
+	#
+	buf := array[Reportlen] of byte;
 	prev := array[Reportlen] of byte;
 	for(i := 0; i < len prev; i++)
 		prev[i] = byte 0;

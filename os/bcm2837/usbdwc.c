@@ -106,8 +106,6 @@ enum
 	 * was.
 	 */
 	Maxnyet		= 2,		/* split retries before reporting none */
-	Slicems		= 5,		/* ms per slice of one attempt */
-	Nslice		= 40,		/* slices, so an attempt is still 200ms */
 	Chantmout	= 200,		/* ms per attempt */
 	Maxtmout	= 10,		/* attempts before giving up */
 
@@ -357,7 +355,7 @@ static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 {
 	uint fn1, fn2;
-	int intr, n, x, ointr, ntmout, np;
+	int intr, n, x, ointr, ntmout;
 	ulong start, now;
 	Dwcregs *r;
 
@@ -411,29 +409,29 @@ restart:
 		 * fallback for a transfer that genuinely stalls.
 		 */
 		/*
-		 * Arm ONCE, then wait in short slices.
+		 * One long sleep, and it is load-bearing.
 		 *
-		 * The masks above are what make the channel report; a
-		 * previous attempt shortened the wait by looping back to
-		 * restart, which re-armed them every time and disturbed the
-		 * split transaction that timing depends on. Enumeration
-		 * stalled. This does not touch them: it arms once and
-		 * sleeps repeatedly, so the transaction sees exactly what it
-		 * saw when the wait was a single long sleep.
+		 * Four attempts have been made to shorten this so an
+		 * interrupt endpoint could be polled faster, and all four
+		 * broke split transactions: spinning on chandone at splhi;
+		 * looping back to restart with a 5ms timeout, which re-armed
+		 * the masks each time; shortening Chantmout outright; and
+		 * arming once then sleeping in forty short slices, which
+		 * touches no masks at all and STILL fails. Enumeration
+		 * stalls or times out every time.
 		 *
-		 * The point is the poll rate. Without interrupts, tsleep
-		 * returns on its timeout, so that timeout is what a transfer
-		 * costs -- and an interrupt endpoint polled at 200ms a go
-		 * reads a keyboard about once a second. A HID device holds
-		 * only its LATEST state, so at that rate pressing 1, 2, 3
-		 * delivers 1 and 3 and loses 2 entirely, which is exactly
-		 * what the board does.
+		 * Whatever the mechanism, the split sequence wants this wait
+		 * left alone, and four failures is enough evidence to stop
+		 * trying to make the approach work.
+		 *
+		 * The cost is real and understood: without interrupts tsleep
+		 * returns on its timeout, so an interrupt endpoint is read
+		 * about once a second, and a HID device that holds only its
+		 * latest state loses keys pressed between reads. The fix for
+		 * that is to make the USB interrupt actually arrive -- see
+		 * the note in eptrans -- not to keep shaving this timeout.
 		 */
-		for(np = 0; np < Nslice; np++){
-			tsleep(&ctlr->chanintr[n], chandone, hc, Slicems);
-			if(chandone(hc))
-				break;
-		}
+		tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
 		if(!chandone(hc)){
 			hc->hcintmsk = 0;
 			splx(x);

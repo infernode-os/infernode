@@ -105,7 +105,9 @@ enum
 	 * slice; bounding that is what fixed it, and this stays as it
 	 * was.
 	 */
-	Maxnyet		= 2,		/* split retries before reporting none */
+	Maxnyet		= 2,
+				/* split retries before reporting none */
+	Maxeprep	= 4,	/* error lines per endpoint before going quiet */
 	Chantmout	= 200,		/* ms per attempt */
 	Maxtmout	= 10,		/* attempts before giving up */
 
@@ -870,9 +872,29 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 					tsleep(&up->sleep, return0, 0, 1);
 				continue;
 			}
+			/*
+			 * Report a run of errors a few times, then stop.
+			 *
+			 * Unplugging a device does not stop the driver that
+			 * was polling it: every transfer then fails with
+			 * Xacterr and this printed once per attempt, which
+			 * at a 10ms poll interval is a hundred lines a
+			 * second across the console and the panel. The
+			 * first few say everything the later ones do.
+			 *
+			 * The count resets on any successful transfer, so a
+			 * device that recovers is not permanently quiet.
+			 */
 			logdump(ep);
-			print("usbotg: ep%d.%d error intr %8.8ux\n",
-				ep->dev->nb, ep->nb, i);
+			if(ep->nerr < Maxeprep){
+				if(++ep->nerr == Maxeprep)
+					print("usbotg: ep%d.%d error intr %8.8ux"
+						" (further errors suppressed)\n",
+						ep->dev->nb, ep->nb, i);
+				else
+					print("usbotg: ep%d.%d error intr %8.8ux\n",
+						ep->dev->nb, ep->nb, i);
+			}
 			if(i & ~(Chhltd|Ack))
 				error(Eio);
 			if(hc->hcdma != hcdma)
@@ -930,6 +952,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 					len, len - nleft + n);
 			n = nleft;
 		}
+		ep->nerr = 0;		/* it works again; report the next run */
 		nleft -= n;
 		if(nleft == 0 || (n % maxpkt) != 0)
 			break;

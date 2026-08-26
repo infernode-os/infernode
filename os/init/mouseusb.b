@@ -38,6 +38,7 @@ Dconf:		con 2;
 Bootproto:	con 0;		# SET_PROTOCOL: 0 is boot, 1 is report
 
 Reportlen:	con 3;		# buttons, dx, dy
+Maxerr:		con 100;	# failed reads before deciding it is gone
 
 #
 # Buttons, and they are NOT in the same order on both sides.
@@ -148,8 +149,30 @@ poll(fd, ptr: ref Sys->FD, ival: int, maxpkt: int)
 		n = maxpkt;
 	buf := array[n] of byte;
 
+	nerr := 0;
 	for(;;){
 		nr := sys->read(fd, buf, len buf);
+		if(nr < 0){
+		#
+		# A run of read ERRORS means the device is gone.
+		#
+		# Unplugging one does not stop the driver polling it: every
+		# transfer then fails, and a loop that treats a failure the
+		# same as "nothing to report" polls a dead endpoint for
+		# ever, at a hundred failures a second. Distinguish them --
+		# a short read is an idle device, a negative one is a
+		# broken transfer -- and give up on a run of the latter.
+		#
+		# The count resets on any successful read, so a device that
+		# glitches and recovers is not abandoned.
+		#
+			if(++nerr >= Maxerr){
+				sys->print("mouseusb: %s stopped responding; unplugged?\n", dev);
+				return;
+			}
+			sys->sleep(ival);
+			continue;
+		}
 		if(nr < Reportlen){
 			#
 			# Wait a poll interval rather than spinning as fast
@@ -160,6 +183,7 @@ poll(fd, ptr: ref Sys->FD, ival: int, maxpkt: int)
 			continue;
 		}
 
+		nerr = 0;
 		b := buttons(int buf[0]);
 		dx := signed(int buf[1]);
 		dy := signed(int buf[2]);

@@ -45,6 +45,7 @@ Dconf:		con 2;
 Bootproto:	con 0;		# SET_PROTOCOL: 0 is boot, 1 is report
 
 Reportlen:	con 8;		# the boot keyboard report
+Maxerr:		con 100;	# failed reads before deciding it is gone
 
 #
 # Modifier bits in byte 0 of the report.
@@ -252,11 +253,34 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		prev[i] = byte 0;
 
 	nempty := 0;
+	nerr := 0;
 	nslow := 0;
 	for(;;){
 		#
 		# Time the read.
 		n := sys->read(fd, buf, len buf);
+		if(n < 0){
+		#
+		# A run of read ERRORS means the device is gone.
+		#
+		# Unplugging one does not stop the driver polling it: every
+		# transfer then fails, and a loop that treats a failure the
+		# same as "nothing to report" polls a dead endpoint for
+		# ever, at a hundred failures a second. Distinguish them --
+		# a short read is an idle device, a negative one is a
+		# broken transfer -- and give up on a run of the latter.
+		#
+		# The count resets on any successful read, so a device that
+		# glitches and recovers is not abandoned.
+		#
+			if(++nerr >= Maxerr){
+				sys->print("kbdusb: %s stopped responding; unplugged?\n", dev);
+				return;
+			}
+			sys->sleep(ival);
+			continue;
+		}
+		nerr = 0;
 		#
 		# Say what the endpoint returns, a few times. A read that
 		# returns nothing and a read that returns a report we then

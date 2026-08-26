@@ -232,6 +232,7 @@ struct Ep
 	int	mode;		/* OREAD, OWRITE, or ORDWR */
 	int	clrhalt;	/* true if halt was cleared on ep. */
 	int	debug;		/* per endpoint debug flag */
+	int	nerr;		/* consecutive transfer errors, for reporting */
 	char*	info;		/* for humans to read */
 	long	maxpkt;		/* maximum packet size */
 	int	ttype;		/* tranfer type */

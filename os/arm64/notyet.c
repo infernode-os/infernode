@@ -62,6 +62,7 @@ extern Dev envdevtab;
 extern Dev ipdevtab;
 extern Dev pointerdevtab;
 extern Dev sddevtab;
+extern Dev bootdevtab;
 
 Dev*	devtab[] =
 {
@@ -75,6 +76,7 @@ Dev*	devtab[] =
 	&ipdevtab,		/* 'I' -- #I, the IP stack */
 	&pointerdevtab,		/* 'm' -- #m, the pointer */
 	&sddevtab,		/* 'S' -- #S, the SD card as a file */
+	&bootdevtab,		/* 'B' -- #B, the running kernel image */
 	nil,
 };
 

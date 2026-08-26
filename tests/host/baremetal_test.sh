@@ -1867,6 +1867,68 @@ else
 fi
 
 #
+#     Installing the running kernel onto the card.
+#
+#     The machine boots by having a host push an image down the serial
+#     line, which is fine for development and is not a way to own a
+#     computer. The image is already in memory -- it is what was loaded
+#     and what is executing -- so #B publishes it and installing it is
+#     an ordinary cp through an ordinary filesystem.
+#
+#     The assertion is made from OUTSIDE the guest and against the
+#     ACTUAL kernel file: the bytes on the card must equal the bytes of
+#     the image that was booted. That is what catches the failure this
+#     device is designed around -- serving the live memory instead of a
+#     snapshot, which hands out a kernel whose data segment is whatever
+#     it had become while running, and would boot into a state no fresh
+#     image was ever in.
+#
+cp "$SD32" "$BUILD/$PLAT-sdinstall.img"
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" \
+         "$BUILD/$PLAT-sdinstall.img" <<'PYEOF' > "$BUILD/$PLAT-install.txt" 2>&1
+import subprocess, sys, time, threading
+qemu, img, extra, sd = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
+                     "-drive", "file=%s,if=sd,format=raw" % sd,
+                     "-display", "none", "-serial", "stdio"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+deadline = time.time() + 90
+while time.time() < deadline and b"starting the shell" not in buf:
+    time.sleep(0.2)
+time.sleep(3)
+try:
+    p.stdin.write(b"path=(/dis .)\r"); p.stdin.flush(); time.sleep(1.5)
+    p.stdin.write(b"cp /dev/bootimage /n/dos/INFRNODE.IMG\r"); p.stdin.flush()
+    time.sleep(35)
+    p.stdin.write(b"ls -l /n/dos/INFRNODE.IMG\r"); p.stdin.flush(); time.sleep(3)
+except Exception:
+    pass
+p.kill(); p.wait()
+sys.stdout.write(bytes(buf).decode(errors="replace"))
+PYEOF
+
+if python3 -c "
+import sys
+img = open('$BUILD/$PLAT-kernel.img','rb').read()
+card = open('$BUILD/$PLAT-sdinstall.img','rb').read()
+i = card.find(img[:4096])
+sys.exit(0 if i >= 0 and card[i:i+len(img)] == img else 1)
+" 2>/dev/null; then
+    pass "the running kernel installs itself onto the card, byte for byte"
+else
+    fail "the kernel written to the card does not match the image that booted"
+fi
+
+#
 #     And a write, in a kernel built only for this.
 #
 #     A write test needs somewhere to write, and picking a sector that

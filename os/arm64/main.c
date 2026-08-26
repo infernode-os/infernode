@@ -1905,6 +1905,16 @@ procrestore(Proc *p)
 void
 kmain(void)
 {
+	/*
+	 * Copy the loaded image before anything writes to .data.
+	 *
+	 * This is the only moment the memory the kernel occupies still
+	 * holds exactly what serialboot put there. Afterwards it holds a
+	 * kernel that has been running, which is not something worth
+	 * writing to a card and booting.
+	 */
+	bootimgsnap();
+
 	uartinit();
 
 	uartputstr("\nInferNode bare-metal (");
@@ -2061,6 +2071,9 @@ kmain(void)
 	 * because everything it needs is compiled into this image.
 	 */
 	kbind("#S", "/dev", MAFTER);
+
+	/* the running kernel, so it can be copied onto the card */
+	kbind("#B", "/dev", MAFTER);
 
 	uartputstr("\nboot OK\n");
 

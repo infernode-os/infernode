@@ -18,6 +18,18 @@ SECTIONS
 	.rodata : { *(.rodata*) }
 	.data   : { *(.data*) }
 
+	/*
+	 * The last byte that is IN the image file.
+	 *
+	 * objcopy -O binary stops at the end of .data, while __bss_start
+	 * is aligned past it -- so a snapshot taken to __bss_start is a
+	 * few bytes longer than the file it is meant to be a copy of.
+	 * Harmless when booted, since those bytes land in .bss and are
+	 * cleared, but it means a checksum of the installed kernel does
+	 * not match a checksum of the file.
+	 */
+	edata = .;
+
 	. = ALIGN(16);
 	__bss_start = .;
 	.bss : {

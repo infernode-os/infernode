@@ -216,6 +216,7 @@ init()
 	#
 	spawn pingit();
 	spawn tcpecho();
+	sdsetup();
 
 	#
 	# Spawned, and the shell starts straight after it.
@@ -922,6 +923,98 @@ enumerate(hubctl: string, port: int, speed, indent: string): int
 # rather than called so that a driver which blocks waiting for its
 # device does not stop the rest of the bus walk.
 #
+#
+# Name the partitions on the SD card, and serve the FAT one.
+#
+# The kernel offers named byte ranges and knows nothing about partition
+# tables; reading the master boot record is policy, so it happens here.
+# Whoever reads it decides what the ranges are called, and dossrv --
+# an ordinary Limbo program with no special privilege -- turns the FAT
+# one into a namespace.
+#
+sdsetup()
+{
+	fd := sys->open("/dev/sdcard", Sys->OREAD);
+	if(fd == nil)
+		return;			# no card, which is not an error
+
+	sec := array[512] of byte;
+	if(sys->pread(fd, sec, len sec, big 0) != len sec){
+		sys->print("init: cannot read the card\n");
+		return;
+	}
+	if(int sec[510] != 16r55 || int sec[511] != 16rAA){
+		sys->print("init: card has no partition table\n");
+		return;
+	}
+
+	ctl := sys->open("/dev/sdctl", Sys->OWRITE);
+	if(ctl == nil){
+		sys->print("init: cannot open /dev/sdctl: %r\n");
+		return;
+	}
+
+	dos := "";
+	for(i := 0; i < 4; i++){
+		p := 446 + i*16;
+		ptype := int sec[p+4];	# 'type' is a Limbo keyword
+		if(ptype == 0)
+			continue;
+		start := int sec[p+8] | (int sec[p+9] << 8) |
+			(int sec[p+10] << 16) | (int sec[p+11] << 24);
+		nsec := int sec[p+12] | (int sec[p+13] << 8) |
+			(int sec[p+14] << 16) | (int sec[p+15] << 24);
+
+		name := sys->sprint("sd%d", i);
+		if(sys->fprint(ctl, "part %s %d %d", name, start, nsec) < 0){
+			sys->print("init: cannot name partition %d: %r\n", i);
+			continue;
+		}
+		sys->print("init: /dev/%s: type %#2.2x, %d sectors\n",
+			name, ptype, nsec);
+
+		#
+		# The FAT types, and only the first one found.
+		#
+		# 0x0B and 0x0C are FAT32, 0x06 and 0x0E FAT16, 0x04 small
+		# FAT16, 0x01 FAT12. The Pi's boot partition is 0x0C.
+		#
+		if(dos == "" && (ptype == 16r01 || ptype == 16r04 ||
+		    ptype == 16r06 || ptype == 16r0B || ptype == 16r0C ||
+		    ptype == 16r0E))
+			dos = name;
+	}
+
+	if(dos == "")
+		return;
+
+	srv := load Command "/dis/dossrv.dis";
+	if(srv == nil){
+		sys->print("init: cannot load dossrv: %r\n");
+		return;
+	}
+	#
+	# Called, NOT spawned, and that is the whole difference between
+	# this working and not.
+	#
+	# dossrv mounts the filesystem in the process that calls it and
+	# returns once the mount is done; the server itself carries on in
+	# a process it spawned. sh, meanwhile, forks its namespace the
+	# moment it starts -- so a mount that lands after that is made in
+	# a namespace the shell does not share, and /n/dos stays the empty
+	# directory it was in the image. Spawning this raced the shell and
+	# lost.
+	#
+	{
+		srv->init(nil, "dossrv" :: "-f" :: "/dev/" + dos ::
+			"-m" :: "/n/dos" :: nil);
+		sys->print("init: /dev/%s mounted on /n/dos\n", dos);
+	} exception {
+	* =>
+		sys->print("init: dossrv could not serve /dev/%s\n", dos);
+	}
+}
+
 startdriver(path, name: string)
 {
 	drv := load Command path;

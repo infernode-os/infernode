@@ -31,6 +31,7 @@ int	emmcinit(void);
 int	emmcread(uvlong, void*);
 int	emmcwrite(uvlong, void*);
 int	emmcpresent(void);
+uvlong	emmcnblocks(void);
 void	boardsdprobe(void);
 int	mboxfbvoff(u32int, u32int);
 

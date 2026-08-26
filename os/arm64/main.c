@@ -2048,6 +2048,20 @@ kmain(void)
 	boardfbprobe();
 	boardsdprobe();
 
+	/*
+	 * Bind the card into /dev AFTER probing for it, not before.
+	 *
+	 * #S refuses to attach when there is no card -- which is right,
+	 * since every file it would offer is a range of a device that is
+	 * not there -- so binding it before emmcinit() has run means
+	 * binding it before the card exists, and the bind simply fails.
+	 * The card then works perfectly and /dev/sdcard is missing.
+	 *
+	 * Not fatal if there is no card: a board without one still boots,
+	 * because everything it needs is compiled into this image.
+	 */
+	kbind("#S", "/dev", MAFTER);
+
 	uartputstr("\nboot OK\n");
 
 	/*

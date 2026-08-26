@@ -30,6 +30,7 @@ enum
 	Allsendcid	= 2,
 	Sendrelativeaddr= 3,
 	Selectcard	= 7,
+	Sendcsd		= 9,
 	Sendifcond	= 8,
 	Stoptransmission= 12,
 	Setblocklen	= 16,
@@ -326,6 +327,51 @@ emmcinit(void)
 	}
 	sdcard.rca = resp[0] >> 16;
 
+	/*
+	 * The card's size, from the CSD, and it must be asked for HERE.
+	 *
+	 * SEND_CSD is only answered in the stand-by state -- after the
+	 * card has an address and before it is selected -- so this sits
+	 * between CMD3 and CMD7 rather than anywhere more convenient.
+	 *
+	 * The 136-bit response arrives with the start and CRC bits
+	 * stripped, so RESP3 holds bits 127..104, RESP2 103..72, RESP1
+	 * 71..40 and RESP0 39..8. Every field below is indexed off that,
+	 * which is the part worth writing down: the bit numbers in the
+	 * specification are NOT the bit numbers in these registers.
+	 */
+	if(emmccmd(Sendcsd, sdcard.rca << 16, Cmdrsp136 | Cmdcrcchk, resp) == 0){
+		u32int csz, ver;	/* NOT csize: pool.h has a macro of that name */
+
+		ver = (resp[3] >> 22) & 3;	/* CSD_STRUCTURE, bits 127:126 */
+		if(ver == 1){
+			/* v2: C_SIZE is bits 69:48, and the unit is 512KB */
+			csz = (resp[1] >> 8) & 0x3FFFFF;
+			sdcard.nblocks = ((uvlong)csz + 1) * 1024;
+		}else{
+			/*
+			 * v1: capacity is (C_SIZE+1) * 2^(C_SIZE_MULT+2)
+			 * blocks of 2^READ_BL_LEN bytes, which is the older
+			 * and more awkward encoding.
+			 */
+			u32int mult, blen;
+
+			/*
+			 * C_SIZE is bits 73:62, so it STRADDLES resp2 and
+			 * resp1: two bits at the bottom of resp2 (73:72)
+			 * and ten at the top of resp1 (71:62). Getting the
+			 * halves the wrong way round is what reported a
+			 * 64MB card as 30736MB.
+			 */
+			csz = ((resp[2] & 3) << 10) | ((resp[1] >> 22) & 0x3FF);
+			mult = (resp[1] >> 7) & 7;	/* C_SIZE_MULT, 49:47 */
+			blen = (resp[2] >> 8) & 0xF;	/* READ_BL_LEN, 83:80 */
+			sdcard.nblocks = ((uvlong)csz + 1) << (mult + 2);
+			if(blen > 9)
+				sdcard.nblocks <<= blen - 9;
+		}
+	}
+
 	if(emmccmd(Selectcard, sdcard.rca << 16, Cmdrsp48busy | Cmdcrcchk, resp) < 0){
 		uartputstr("emmc: card will not select\n");
 		return -1;
@@ -373,8 +419,10 @@ emmcinit(void)
 	sdcard.valid = 1;
 
 	uartputstr("emmc: card ready, ");
-	uartputstr(sdcard.hcs? "high capacity (block addressed)\n"
-		: "standard capacity (byte addressed)\n");
+	uartputstr(sdcard.hcs? "high capacity (block addressed), "
+		: "standard capacity (byte addressed), ");
+	uartputd(sdcard.nblocks / 2048);
+	uartputstr(" MB\n");
 	return 0;
 }
 
@@ -461,4 +509,10 @@ int
 emmcpresent(void)
 {
 	return sdcard.valid;
+}
+
+uvlong
+emmcnblocks(void)
+{
+	return sdcard.nblocks;
 }

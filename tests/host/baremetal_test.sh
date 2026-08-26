@@ -245,6 +245,12 @@ build_kernel() {
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+
+            # The FAT filesystem, as a program. Imported from upstream
+            # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
+            # os/port and os/ip, and byte-identical to the copy in the
+            # local hellaphone tree.
+            "/dis/dossrv.dis=$ROOT/dis/dossrv.dis"
             "/dev="
             "/net="
             "/prog="
@@ -270,6 +276,11 @@ build_kernel() {
             # devip has no "ether0" of its own, and a mount needs its
             # target to exist.
             "/net/ether0="
+
+            # Where a filesystem gets mounted. dossrv mounts itself at
+            # /n/dos, and a mount needs its target to exist.
+            "/n="
+            "/n/dos="
 
             # A few commands, so the shell has something to run. Each
             # is a Dis module the shell loads by name out of $path, and
@@ -1609,14 +1620,88 @@ fi
 SDIMG="$BUILD/$PLAT-sd.img"
 python3 - "$SDIMG" <<'PYEOF'
 import struct, sys
-buf = bytearray(8*1024*1024)
+
+# A card with a partition table and a real FAT16 filesystem in it.
+#
+# Built here rather than with mkfs or hdiutil so the test carries its own
+# fixture and does not depend on what the host happens to provide. It is
+# also the only way to assert on EXACT contents: the partition entry and
+# the file inside it are both known because both were written right here.
+SEC   = 512
+PSTART = 2048            # where the partition begins, in sectors
+PSECS  = 65536           # 32MB
+SPC    = 4               # sectors per cluster
+RESV   = 1
+NFAT   = 2
+FATSECS = 64
+ROOTENT = 512
+ROOTSECS = ROOTENT * 32 // SEC
+
+part = bytearray(PSECS * SEC)
+
+# Boot sector: the BIOS parameter block is what dossrv reads to find
+# everything else, so every field below is load-bearing.
+bs = bytearray(SEC)
+bs[0:3]   = b"\xEB\x3C\x90"
+bs[3:11]  = b"INFRNODE"
+struct.pack_into("<H", bs, 11, SEC)       # bytes per sector
+bs[13] = SPC
+struct.pack_into("<H", bs, 14, RESV)      # reserved sectors
+bs[16] = NFAT
+struct.pack_into("<H", bs, 17, ROOTENT)   # root directory entries
+struct.pack_into("<H", bs, 19, PSECS if PSECS < 65536 else 0)
+bs[21] = 0xF8                             # media descriptor
+struct.pack_into("<H", bs, 22, FATSECS)   # sectors per FAT
+struct.pack_into("<H", bs, 24, 32)        # sectors per track
+struct.pack_into("<H", bs, 26, 64)        # heads
+struct.pack_into("<I", bs, 28, PSTART)    # hidden sectors
+struct.pack_into("<I", bs, 32, 0 if PSECS < 65536 else PSECS)
+bs[36] = 0x80                             # drive number
+bs[38] = 0x29                             # extended boot signature
+struct.pack_into("<I", bs, 39, 0x12345678)
+bs[43:54] = b"INFRBOOT   "
+bs[54:62] = b"FAT16   "
+bs[510] = 0x55; bs[511] = 0xAA
+part[0:SEC] = bs
+
+CONTENT = b"hello from the SD card\n"
+
+# Two FATs. Cluster 0 and 1 are reserved; the file occupies cluster 2
+# and ends there.
+fat = bytearray(FATSECS * SEC)
+struct.pack_into("<H", fat, 0, 0xFFF8)
+struct.pack_into("<H", fat, 2, 0xFFFF)
+struct.pack_into("<H", fat, 4, 0xFFFF)
+for i in range(NFAT):
+    off = (RESV + i*FATSECS) * SEC
+    part[off:off+len(fat)] = fat
+
+# One root directory entry, in the 8.3 form FAT stores.
+rootoff = (RESV + NFAT*FATSECS) * SEC
+d = bytearray(32)
+d[0:11] = b"HELLO   TXT"
+d[11] = 0x20                              # archive
+struct.pack_into("<H", d, 26, 2)          # first cluster
+struct.pack_into("<I", d, 28, len(CONTENT))
+part[rootoff:rootoff+32] = d
+
+dataoff = (RESV + NFAT*FATSECS + ROOTSECS) * SEC
+part[dataoff:dataoff+len(CONTENT)] = CONTENT
+
+# And the card around it.
+#
+# 64MB exactly, because QEMU's SD model requires a power-of-two image
+# and silently refuses to present a card otherwise -- which arrives as
+# "emmc: no card in the slot" and reads like a driver fault.
+buf = bytearray(64*1024*1024)
 e = bytearray(16)
-e[0] = 0x80              # bootable
-e[4] = 0x0C              # FAT32 LBA
-e[8:12]  = struct.pack("<I", 2048)
-e[12:16] = struct.pack("<I", 4096)
+e[0] = 0x80                               # bootable
+e[4] = 0x06                               # FAT16
+struct.pack_into("<I", e, 8, PSTART)
+struct.pack_into("<I", e, 12, PSECS)
 buf[446:462] = e
 buf[510] = 0x55; buf[511] = 0xAA
+buf[PSTART*SEC : PSTART*SEC + len(part)] = part
 open(sys.argv[1], "wb").write(buf)
 PYEOF
 
@@ -1629,9 +1714,48 @@ QEMUARGS="$SAVEDARGS"
 OUT_SAVED="$OUT"; OUT="$SDOUT"
 check "emmc: card ready"            "the SD controller initialises a card"
 check "emmc: MBR ok"                "sector 0 reads back with a valid boot signature"
-check "start 2048 sectors 4096"     "the partition table holds the values the image was built with"
+check "start 2048 sectors 65536"    "the partition table holds the values the image was built with"
 refute "emmc: cannot read"          "no read failed"
 OUT="$OUT_SAVED"
+
+#
+#     A filesystem, end to end.
+#
+#     This is the check that ties the whole stack together and the only
+#     one that would catch most of it breaking: the EMMC driver reads
+#     blocks, #S turns a range of them into a file, init reads the
+#     partition table and names that range, dossrv reads a FAT
+#     filesystem out of the named file and mounts it, and the shell
+#     reads a file through the mount. Every layer is on the path, and
+#     the content asserted is the content this test wrote into the
+#     image.
+#
+#     It also pins down a bug that cost real time: dossrv must be CALLED,
+#     not spawned. It mounts in the calling process and returns once the
+#     mount is done, while sh forks its namespace the moment it starts --
+#     so a spawned dossrv raced the shell and the mount landed in a
+#     namespace the shell did not share. The symptom was an empty
+#     /n/dos with no error anywhere, which reads like a broken
+#     filesystem rather than a lost race.
+#
+QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
+FSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'ls /n/dos' \
+        'cat /n/dos/HELLO.TXT')"
+QEMUARGS="$SAVEDARGS"
+FSOUT="$(tr -d '\r' <<<"$FSOUT")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- filesystem ---"; echo "$FSOUT"; }
+
+OUT_SAVED="$OUT"; OUT="$FSOUT"
+check "/n/dos/hello.txt"           "the FAT filesystem is mounted and lists its files"
+OUT="$OUT_SAVED"
+
+if grep -q 'hello from the SD card' <<<"$FSOUT"; then
+    pass "a file is read from the card through dossrv, block driver to shell"
+else
+    fail "could not read a file from the mounted filesystem"
+fi
 
 #
 #     And a write, in a kernel built only for this.

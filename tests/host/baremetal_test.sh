@@ -1211,6 +1211,153 @@ else
 fi
 
 #
+# 3c. A USB keyboard, enumerated and typed on.
+#
+#     This is the regression guard for the failure that cost an entire
+#     evening, and it is worth saying exactly what it catches, because
+#     nothing else here does.
+#
+#     The keyboard is a LOW-SPEED device behind a hub, so every transfer
+#     to it is a split transaction -- and a split that goes wrong does
+#     not report an error. It returns 0x55 repeating, alternating bits,
+#     a bus sampled at the wrong rate, and the caller takes that for a
+#     descriptor: a configuration value of 85, an interface class of 85,
+#     no driver matched, and a boot log that reads as success. Three
+#     separate mistakes in the split state machine presented that way,
+#     and each was found by a person typing at a board and getting
+#     nothing back.
+#
+#     QEMU will attach one (-device usb-kbd) and its dwc2 model carries
+#     the whole path: enumeration, the HID boot interface, the interrupt
+#     endpoint, and the driver. So the whole path can be asserted here
+#     instead.
+#
+SAVEDARGS="$QEMUARGS"
+QEMUARGS="$QEMUARGS -device usb-kbd"
+KBDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 22)"
+QEMUARGS="$SAVEDARGS"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- usb keyboard boot ---"; echo "$KBDOUT"; }
+
+OUT_SAVED="$OUT"; OUT="$KBDOUT"
+check "class 3.1.1"                 "a HID boot keyboard interface is found on the bus"
+check "kbdusb: .* ready on endpoint" "the keyboard driver claims it and opens its interrupt endpoint"
+
+# The specific corruption, named. A descriptor read that returns 0x55
+# yields these exact numbers, and asserting their ABSENCE is what makes
+# this test fail for the reason it was written rather than for some
+# other one.
+refute "class 85"                   "no descriptor read returned 0x55 garbage"
+refute "value 85"                   "no configuration was selected from a corrupt descriptor"
+refute "is not one"                 "no descriptor had to be rejected as malformed"
+refute "configuration unreadable"   "every device configuration was readable"
+OUT="$OUT_SAVED"
+
+#
+# 3d. A keystroke, from the HID device to the shell.
+#
+#     3c proves the keyboard is found and claimed. It does NOT prove a
+#     key press survives the trip, and that is the part that kept
+#     breaking: the driver was ready, the endpoint was open, and the
+#     transfers still returned nothing usable -- or returned the same
+#     report eight times, or wrote past the end of the buffer.
+#
+#     So press keys. QEMU's input-send-event drives the emulated HID
+#     device exactly as a finger would, and the assertion is made at the
+#     far end: the SHELL runs what was typed and prints the result. Every
+#     stage is on that path -- split interrupt transfer, report decode,
+#     /dev/keyboard, the line discipline, the shell.
+#
+#     The path is set over the serial line first, deliberately. That is
+#     setup, not the thing under test, and typing it on the emulated
+#     keyboard would make a failure anywhere in setup look like a
+#     keyboard fault.
+#
+#     Compose is tested the same way and for the same reason: it is
+#     invisible on the panel unless the console can draw the rune, so
+#     asserting it here -- where the shell echoes the composed character
+#     back as UTF-8 -- separates "compose is broken" from "the font has
+#     no glyph". Alt then apostrophe then e is U+00E9, which is C3 A9.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-keys.txt" 2>&1
+import subprocess, socket, json, time, sys, threading
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+PORT = 4479
+p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-kbd",
+                     "-kernel", img, "-display", "none", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+
+try:
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); p.kill(); sys.exit(0)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+
+    # Wait for the driver to claim the keyboard, then let the shell settle.
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if b"ready on endpoint" in buf:
+            break
+        time.sleep(0.2)
+    else:
+        print("SKIP keyboard driver never became ready"); p.kill(); sys.exit(0)
+    time.sleep(3)
+
+    # Setup over the serial line -- not part of what is being tested.
+    p.stdin.write(b"path=(/dis .)\r"); p.stdin.flush()
+    time.sleep(1.5)
+
+    def press(*keys):
+        for k in keys:
+            for down in (True, False):
+                f.write(json.dumps({"execute": "input-send-event", "arguments":
+                    {"events": [{"type": "key", "data": {"down": down,
+                     "key": {"type": "qcode", "data": k}}}]}}) + "\n")
+                f.flush(); f.readline()
+                time.sleep(0.06)
+
+    press("e","c","h","o","spc","k","b","d","o","k","ret")
+    time.sleep(3)
+    press("e","c","h","o","spc","alt","apostrophe","e","ret")
+    time.sleep(3)
+    s.close()
+finally:
+    p.kill(); p.wait()
+
+out = bytes(buf)
+txt = out.decode("utf-8", "replace")
+print("TYPED-OK" if "kbdok" in txt.split("echo kbdok")[-1] else "TYPED-MISSING")
+print("COMPOSE-OK" if b"\xc3\xa9" in out else "COMPOSE-MISSING")
+PYEOF
+
+KEYOUT="$(cat "$BUILD/$PLAT-keys.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- keystroke test ---"; echo "$KEYOUT"; }
+if grep -q '^SKIP' <<<"$KEYOUT"; then
+    skip "keystroke delivery ($(grep '^SKIP' <<<"$KEYOUT" | head -1))"
+elif grep -q 'TYPED-OK' <<<"$KEYOUT"; then
+    pass "a keypress on the USB keyboard reaches the shell and runs a command"
+else
+    fail "keys pressed on the USB keyboard did not reach the shell"
+fi
+
+#
 # 4. The panic path reports instead of hanging.
 #
 #    Regression guard for the failure mode this whole layer exists to

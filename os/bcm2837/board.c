@@ -288,3 +288,96 @@ boardreboot(void)
 	for(;;)
 		;
 }
+
+/*
+ * Read sector 0 and say what is on the card.
+ *
+ * A driver that initialises and is never asked for a block proves
+ * nothing: the interesting failures -- a byte-addressed card treated as
+ * block-addressed, a clock divider computed from the wrong base -- all
+ * produce a controller that comes up perfectly and then reads the wrong
+ * data, or none. So read something whose shape is known.
+ *
+ * The master boot record is the right thing to read for that. It ends
+ * in 0x55 0xAA, which is a two-byte check that no amount of reading the
+ * wrong sector is likely to pass, and the four partition entries in
+ * front of it are what a filesystem will need next anyway.
+ */
+enum { Emmctestblock = 10000 };
+
+void
+boardsdprobe(void)
+{
+	static uchar sec[512];
+	uchar *p;
+	int i, type;
+	u32int start, len;
+
+	if(emmcinit() < 0)
+		return;
+
+	if(emmcread(0, sec) < 0){
+		uartputstr("emmc: cannot read sector 0\n");
+		return;
+	}
+
+	if(sec[510] != 0x55 || sec[511] != 0xAA){
+		uartputstr("emmc: sector 0 has no boot signature "
+			"(not a partitioned card?)\n");
+		return;
+	}
+	uartputstr("emmc: MBR ok, partitions:\n");
+
+#ifdef EMMCWRITETEST
+	/*
+	 * Write a block and read it back.
+	 *
+	 * Behind a build flag, and it stays there. A write test needs
+	 * somewhere to write, and on a real board the only card present
+	 * is the one holding the firmware and the loader that put this
+	 * kernel in memory -- so a test that picks a sector "that looks
+	 * free" is a test that eventually destroys the machine it runs
+	 * on. The emulator gets a scratch image and the shipped kernel
+	 * never contains this code at all.
+	 */
+	{
+		static uchar wbuf[512], rbuf[512];
+		int j, bad;
+
+		for(j = 0; j < 512; j++)
+			wbuf[j] = (uchar)(j ^ 0x5A);
+		if(emmcwrite(Emmctestblock, wbuf) < 0)
+			uartputstr("emmc: write failed\n");
+		else if(emmcread(Emmctestblock, rbuf) < 0)
+			uartputstr("emmc: read back failed\n");
+		else{
+			bad = 0;
+			for(j = 0; j < 512; j++)
+				if(rbuf[j] != wbuf[j])
+					bad++;
+			if(bad)
+				uartputstr("emmc: WRITE ROUND TRIP CORRUPT\n");
+			else
+				uartputstr("emmc: write/read round trip OK\n");
+		}
+	}
+#endif
+
+	for(i = 0; i < 4; i++){
+		p = sec + 446 + i*16;
+		type = p[4];
+		if(type == 0)
+			continue;
+		start = p[8] | p[9]<<8 | p[10]<<16 | (u32int)p[11]<<24;
+		len   = p[12] | p[13]<<8 | p[14]<<16 | (u32int)p[15]<<24;
+		uartputstr("emmc:   ");
+		uartputd(i);
+		uartputstr(": type ");
+		uartputx(type);
+		uartputstr(" start ");
+		uartputd(start);
+		uartputstr(" sectors ");
+		uartputd(len);
+		uartputstr("\n");
+	}
+}

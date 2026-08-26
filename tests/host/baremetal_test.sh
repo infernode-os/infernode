@@ -1591,6 +1591,83 @@ else
 fi
 
 #
+# 3g. The SD card, as blocks.
+#
+#     QEMU's raspi3b models the Arasan controller and takes a card
+#     image, so the whole driver can be exercised here rather than
+#     against the one card on the one board -- which matters more than
+#     usual for this device: the only card a real Pi has is the one
+#     holding the firmware and the loader that put this kernel in
+#     memory.
+#
+#     The image is built with a known partition table, so the assertion
+#     is on VALUES rather than on plausibility. An initialised
+#     controller that reads the wrong sector, or treats a byte-addressed
+#     card as block-addressed, comes up perfectly and returns data --
+#     just not this data.
+#
+SDIMG="$BUILD/$PLAT-sd.img"
+python3 - "$SDIMG" <<'PYEOF'
+import struct, sys
+buf = bytearray(8*1024*1024)
+e = bytearray(16)
+e[0] = 0x80              # bootable
+e[4] = 0x0C              # FAT32 LBA
+e[8:12]  = struct.pack("<I", 2048)
+e[12:16] = struct.pack("<I", 4096)
+buf[446:462] = e
+buf[510] = 0x55; buf[511] = 0xAA
+open(sys.argv[1], "wb").write(buf)
+PYEOF
+
+SAVEDARGS="$QEMUARGS"
+QEMUARGS="$QEMUARGS -drive file=$SDIMG,if=sd,format=raw"
+SDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 20)"
+QEMUARGS="$SAVEDARGS"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- sd ---"; grep emmc <<<"$SDOUT"; }
+
+OUT_SAVED="$OUT"; OUT="$SDOUT"
+check "emmc: card ready"            "the SD controller initialises a card"
+check "emmc: MBR ok"                "sector 0 reads back with a valid boot signature"
+check "start 2048 sectors 4096"     "the partition table holds the values the image was built with"
+refute "emmc: cannot read"          "no read failed"
+OUT="$OUT_SAVED"
+
+#
+#     And a write, in a kernel built only for this.
+#
+#     A write test needs somewhere to write, and picking a sector that
+#     "looks free" on a real board eventually destroys the machine the
+#     test runs on. So the write path is compiled in ONLY under
+#     -DEMMCWRITETEST, against a scratch image, and is not in the kernel
+#     that goes to hardware.
+#
+if build_kernel "$BUILD/$PLAT-sdwrite.img" "" "-DEMMCWRITETEST"; then
+    cp "$SDIMG" "$BUILD/$PLAT-sdw.img"
+    QEMUARGS="$SAVEDARGS -drive file=$BUILD/$PLAT-sdw.img,if=sd,format=raw"
+    SDWOUT="$(boot_kernel "$BUILD/$PLAT-sdwrite.img" 20)"
+    QEMUARGS="$SAVEDARGS"
+    OUT_SAVED="$OUT"; OUT="$SDWOUT"
+    check "write/read round trip OK" "a block written to the card reads back byte for byte"
+    refute "WRITE ROUND TRIP CORRUPT" "the written block was not corrupted"
+    OUT="$OUT_SAVED"
+
+    # The host can see it too, which is a check the guest cannot fake.
+    if python3 -c "
+import sys
+d = open('$BUILD/$PLAT-sdw.img','rb').read()
+b = d[10000*512:10000*512+512]
+sys.exit(0 if b == bytes((i ^ 0x5A) & 0xff for i in range(512)) else 1)
+" 2>/dev/null; then
+        pass "the written block is on the card image as seen from outside the guest"
+    else
+        fail "the block the guest claims it wrote is not in the image"
+    fi
+else
+    fail "the SD write-test kernel failed to build"
+fi
+
+#
 # 3e. A reboot that does not need the shell.
 #
 #     "echo reboot > /dev/sysctl" needs a shell sitting at a prompt, and

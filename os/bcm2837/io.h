@@ -86,6 +86,7 @@ enum
 {
 	ARMTIMERREGS	= PHYSIO+0x00B400,
 	PMREGS		= PHYSIO+0x100000,	/* power management / watchdog */
+	EMMCREGS	= PHYSIO+0x300000,	/* SD card host controller */
 
 	/*
 	 * The watchdog, which is how this SoC reboots: there is no reset
@@ -185,6 +186,9 @@ enum
 	Tagfbsetdispnum	= 0x00048013,	/* which one later fb tags apply to */
 
 	Taggettouchbuf	= 0x0004000F,
+	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
+
+	Clkemmc		= 1,		/* clock id for the SD controller */
 
 	Tagend		= 0x00000000,
 };
@@ -267,4 +271,71 @@ enum
 	Pullnone	= 0,
 	Pulldown	= 1,
 	Pullup		= 2,
+};
+
+/*
+ * EMMC register offsets.
+ *
+ * The BCM2837's SD host controller is an SDHCI-like design: an
+ * Arasan controller with the standard register block at a non-standard
+ * spacing, which is why these are named rather than taken from a
+ * generic SDHCI header.
+ */
+enum
+{
+	Emmcarg2	= 0x00,
+	Emmcblksizecnt	= 0x04,		/* block size and count */
+	Emmcarg1	= 0x08,
+	Emmccmdtm	= 0x0C,		/* command and transfer mode */
+	Emmcresp0	= 0x10,
+	Emmcresp1	= 0x14,
+	Emmcresp2	= 0x18,
+	Emmcresp3	= 0x1C,
+	Emmcdata	= 0x20,
+	Emmcstatus	= 0x24,
+	Emmccontrol0	= 0x28,
+	Emmccontrol1	= 0x2C,
+	Emmcinterrupt	= 0x30,
+	Emmcirptmask	= 0x34,
+	Emmcirpten	= 0x38,
+	Emmccontrol2	= 0x3C,
+	Emmcslotisrver	= 0xFC,
+
+	/* Emmcstatus */
+	Cmdinhibit	= 1<<0,		/* command line in use */
+	Datinhibit	= 1<<1,		/* data lines in use */
+	Bufwriteen	= 1<<10,
+	Bufreaden	= 1<<11,
+
+	/* Emmccontrol0 */
+	Hctldwidth4	= 1<<1,
+	Hctlhsen	= 1<<2,
+
+	/* Emmccontrol1 */
+	Clkintlen	= 1<<0,		/* enable the internal clock */
+	Clkstable	= 1<<1,
+	Clken		= 1<<2,		/* clock to the card */
+	Srsthc		= 1<<24,	/* reset the whole host controller */
+	Srstcmd		= 1<<25,
+	Srstdata	= 1<<26,
+
+	/* Emmcinterrupt / irptmask / irpten */
+	Cmddone		= 1<<0,
+	Datadone	= 1<<1,
+	Writerdy	= 1<<4,
+	Readrdy		= 1<<5,
+	Interrorbit	= 1<<15,	/* any error; the detail is above */
+
+	/* Emmccmdtm */
+	Tmblkcnten	= 1<<1,
+	Tmautocmd12	= 1<<2,
+	Tmdatdirread	= 1<<4,
+	Tmmultiblock	= 1<<5,
+	Cmdrspnone	= 0<<16,
+	Cmdrsp136	= 1<<16,
+	Cmdrsp48	= 2<<16,
+	Cmdrsp48busy	= 3<<16,
+	Cmdcrcchk	= 1<<19,
+	Cmdidxchk	= 1<<20,
+	Cmdisdata	= 1<<21,
 };

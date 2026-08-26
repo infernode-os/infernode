@@ -36,6 +36,7 @@ void	boardprobe(void);
 void	boardioprobe(void);
 void	boardclockcheck(void);
 void	boardfbprobe(void);
+void	boardsdprobe(void);
 
 /* arch.S -- AArch64 primitives that cannot be written in C */
 void	coherence(void);

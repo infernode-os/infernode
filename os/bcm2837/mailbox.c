@@ -457,3 +457,24 @@ mboxfbdispnum(u32int n)
 		return -1;
 	return (int)buf[0];
 }
+
+/*
+ * The rate a peripheral clock is actually running at.
+ *
+ * Asked for rather than assumed: the EMMC base clock depends on what
+ * the firmware negotiated for the core, which config.txt can change, so
+ * a divider computed from a hardcoded base gives a card clock that is
+ * wrong by whatever the user set. Returns 0 if the firmware will not
+ * say, and the caller decides what to do about that.
+ */
+u32int
+mboxclockrate(u32int id)
+{
+	u32int buf[2];
+
+	buf[0] = id;
+	buf[1] = 0;
+	if(mboxprop(Taggetclockrate, buf, 1, 2) < 0)
+		return 0;
+	return buf[1];
+}

@@ -2046,6 +2046,7 @@ kmain(void)
 	probeintr();
 	probeuartin();
 	boardfbprobe();
+	boardsdprobe();
 
 	uartputstr("\nboot OK\n");
 

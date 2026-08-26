@@ -39,6 +39,7 @@ enum
 	Writemultiple	= 25,
 	Appcmd		= 55,
 	Sdsendopcond	= 41,		/* ACMD41 */
+	Setbuswidth	= 6,		/* ACMD6 */
 
 	Blocksize	= 512,
 
@@ -348,8 +349,26 @@ emmcinit(void)
 		return -1;
 	}
 
-	c1 = emmcrd(Emmccontrol0);
-	emmcwr(Emmccontrol0, c1 | Hctldwidth4);
+	/*
+	 * Four-bit bus, and BOTH ends have to agree.
+	 *
+	 * Setting the host controller's width without telling the card is
+	 * the whole bug: the host then clocks four data lines while the
+	 * card is still driving one, so commands keep working -- they go
+	 * over CMD, which is unaffected -- and every DATA transfer
+	 * returns nothing. The controller comes up, the card is
+	 * identified, and sector 0 will not read. QEMU's model tolerates
+	 * the mismatch, so it only appears on real silicon.
+	 *
+	 * ACMD6 first, and the host follows only if the card agreed. A
+	 * card that refuses stays at one bit, which is slower and
+	 * correct.
+	 */
+	if(emmcappcmd(Setbuswidth, 2, Cmdrsp48 | Cmdcrcchk | Cmdidxchk, resp) == 0){
+		c1 = emmcrd(Emmccontrol0);
+		emmcwr(Emmccontrol0, c1 | Hctldwidth4);
+	}else
+		uartputstr("emmc: card kept a 1-bit bus\n");
 
 	sdcard.valid = 1;
 
@@ -381,11 +400,22 @@ emmcread(uvlong blockno, void *a)
 
 	emmcwr(Emmcblksizecnt, (1 << 16) | Blocksize);
 	if(emmccmd(Readsingle, addr,
-	    Cmdrsp48 | Cmdcrcchk | Cmdidxchk | Cmdisdata | Tmdatdirread, nil) < 0)
+	    Cmdrsp48 | Cmdcrcchk | Cmdidxchk | Cmdisdata | Tmdatdirread, nil) < 0){
+		/*
+		 * Which step failed is the whole diagnosis here. The
+		 * command not completing means the card never accepted the
+		 * request; data never becoming ready means it accepted it
+		 * and the data lines are not working, which is a different
+		 * fault with a different cause.
+		 */
+		uartputstr("emmc: read command refused\n");
 		return -1;
+	}
 
-	if(emmcwaitintr(Readrdy) < 0)
+	if(emmcwaitintr(Readrdy) < 0){
+		uartputstr("emmc: no data from the card\n");
 		return -1;
+	}
 
 	p = a;
 	for(i = 0; i < Blocksize/4; i++)

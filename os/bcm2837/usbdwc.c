@@ -136,7 +136,10 @@ static int dwcslowlog;
 static int dwcintrxfer;
 
 /* how many interrupt failures still to report; see eptrans */
-static int dwcintrerr;	/* interrupts this controller has raised */
+static int dwcintrerr;
+
+/* how many interrupt reads still to report; see epread */
+static int dwceprdlog;	/* interrupts this controller has raised */
 
 static char Ebadlen[] = "bad usb request length";
 
@@ -1514,6 +1517,22 @@ epread(Ep *ep, void *a, long n)
 		poperror();
 		return nr;
 	case Tintr:
+		/*
+		 * Confirm this is reached at all.
+		 *
+		 * The keyboard's reads return zero promptly and forever,
+		 * and neither the completion log at the end of chanio nor
+		 * the failure log in eptrans has ever printed. Those cover
+		 * success and failure between them, so the remaining
+		 * possibility is that the transfer is not being attempted
+		 * -- which is a different fault from either, and is not
+		 * something the driver has been asked before.
+		 */
+		if(dwceprdlog < 4){
+			dwceprdlog++;
+			print("usbotg: epread ep%d.%d intr n %ld pollival %d\n",
+				ep->dev->nb, ep->nb, n, ep->pollival);
+		}
 		elapsed = TK2MS(m->ticks) - epio->lastpoll;
 		if(elapsed < ep->pollival)
 			tsleep(&up->sleep, return0, 0, ep->pollival - elapsed);

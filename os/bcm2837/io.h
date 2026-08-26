@@ -187,6 +187,7 @@ enum
 
 	Taggettouchbuf	= 0x0004000F,
 	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
+	Taggetedidblock	= 0x00030020,	/* the display's own description */
 
 	Clkemmc		= 1,		/* clock id for the SD controller */
 

@@ -66,6 +66,7 @@ enum
 
 	/* every caller hands mboxcall the one shared buffer */
 	Mboxbufsize = 64 * sizeof(u32int),
+	Maxvalwords = 64 - 8,	/* room for the header, the tag and Tagend */
 };
 
 /*
@@ -176,7 +177,13 @@ mboxprop(u32int tag, u32int *data, int nreq, int nresp)
 	int i, nval;
 
 	nval = nreq > nresp ? nreq : nresp;
-	if(nval > 32)
+	/*
+	 * 56, not 32. An EDID block alone is 34 words of value buffer,
+	 * and mboxbuf holds 64 -- six of which are the message header and
+	 * the end tag. The old limit was conservative rather than
+	 * derived, and refused a request that fits comfortably.
+	 */
+	if(nval > Maxvalwords)
 		return -1;
 
 	mboxbuf[0] = (nval + 6) * 4;	/* total size in bytes */
@@ -477,4 +484,39 @@ mboxclockrate(u32int id)
 	if(mboxprop(Taggetclockrate, buf, 1, 2) < 0)
 		return 0;
 	return buf[1];
+}
+
+/*
+ * Read one 128-byte EDID block from the display.
+ *
+ * This is how "is anything actually plugged in?" is answered. The
+ * firmware reports the display COUNT whether or not a monitor is
+ * attached, and hands out a fallback mode -- 720x480 with nothing on
+ * the HDMI socket -- so counting displays and allocating for each one
+ * means allocating a megabyte and a half of framebuffer that nobody
+ * will ever see.
+ *
+ * EDID is the display's own description of itself, read over the
+ * monitor's data channel. A display that is not there cannot answer,
+ * which is exactly the distinction wanted. Note that a DSI panel has no
+ * EDID either: it is not on a channel that carries one, so absence of
+ * EDID means "no monitor on this connector", not "no display".
+ *
+ * Returns 0 and fills buf on success.
+ */
+int
+mboxedid(u32int block, uchar *buf)
+{
+	u32int v[34];
+	int i;
+
+	memset(v, 0, sizeof v);
+	v[0] = block;
+	if(mboxprop(Taggetedidblock, v, 1, nelem(v)) < 0)
+		return -1;
+	if(v[1] != 0)			/* status: 0 is success */
+		return -1;
+	for(i = 0; i < 128; i++)
+		buf[i] = (uchar)(v[2 + i/4] >> ((i%4) * 8));
+	return 0;
 }

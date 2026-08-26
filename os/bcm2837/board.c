@@ -144,6 +144,7 @@ void
 boardfbprobe(void)
 {
 	int ndisp;
+	static uchar edid[128];
 
 	/*
 	 * Bring up every display, not just the one the firmware favours.
@@ -239,6 +240,30 @@ boardfbprobe(void)
 	 * and the console would be drawing the same pixels twice through
 	 * two aliases. Comparing the bases is what tells those apart.
 	 */
+	/*
+	 * Only bring up a second display if something is ACTUALLY on it.
+	 *
+	 * The display count is not evidence: the firmware reports two
+	 * whether or not a monitor is plugged in, and hands out a
+	 * fallback mode -- 720x480 with an empty HDMI socket -- so
+	 * trusting the count means allocating a megabyte and a half of
+	 * framebuffer and faithfully drawing the console into a buffer
+	 * that reaches no glass at all.
+	 *
+	 * EDID is the display describing itself over the monitor's data
+	 * channel, so a display that is not there cannot answer. That is
+	 * the question actually being asked. It is asked of the second
+	 * display only: display 0 is whatever the firmware chose as
+	 * primary and is known to work, and a DSI panel has no EDID to
+	 * give -- it is not on a channel that carries one -- so demanding
+	 * EDID of it would reject the one display that certainly exists.
+	 */
+	if(ndisp > 1 && mboxfbdispnum(1) >= 0 && mboxedid(0, edid) < 0){
+		uartputstr("fb:   display 1 has no EDID; nothing connected\n");
+		ndisp = 1;
+	}
+	mboxfbdispnum(0);
+
 	if(ndisp > 1 && fbinitdisp(1, &fb2) == 0){
 		if(fb2.base == fb.base){
 			uartputstr("fb:   display 1 shares display 0's buffer; "

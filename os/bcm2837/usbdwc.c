@@ -89,8 +89,25 @@ enum
 	 * enough that a transfer costs milliseconds. Nothing spins and
 	 * nothing holds splhi any longer than before.
 	 */
-	Chantmout	= 5,		/* ms per attempt */
-	Maxtmout	= 400,		/* attempts before giving up */
+	/*
+	 * Long slices, few of them, and that ordering is deliberate.
+	 *
+	 * Shortening the slice to 5ms with 400 attempts -- the same two
+	 * seconds of patience -- broke low-speed enumeration, because
+	 * each attempt re-arms haintmsk and hcintmsk and takes splhi
+	 * again. Four hundred of those inside one split transaction
+	 * disturbs the frame timing it depends on, exactly as spinning
+	 * on chandone did. Two different attempts to reduce latency here
+	 * broke the same thing for the same reason.
+	 *
+	 * The latency was never really this constant. It was the split
+	 * retry below re-issuing on every NYET, each one costing a whole
+	 * slice; bounding that is what fixed it, and this stays as it
+	 * was.
+	 */
+	Maxnyet		= 2,		/* split retries before reporting none */
+	Chantmout	= 200,		/* ms per attempt */
+	Maxtmout	= 10,		/* attempts before giving up */
 
 	Enabledelay	= 50,
 	Resetattempts	= 3,	/* a fluffed chirp usually succeeds next time */
@@ -565,7 +582,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	Ctlr *ctlr;
 	int nleft, n, nt, i, maxpkt, npkt;
 	uint hcdma, hctsiz, lasti;
-	int splitphase;
+	int splitphase, nyets;
 
 	ctlr = ep->hp->aux;
 	maxpkt = ep->maxpkt;
@@ -604,6 +621,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 
 	lasti = 0;
 	splitphase = 0;
+	nyets = 0;
 	nleft = len;
 	logstart(ep);
 	for(;;){
@@ -734,10 +752,32 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			}
 			splitphase = 0;
 			if(i & (Nyet|Frmovrun)){
-				/* translator not ready; ask again */
-				splitphase = 1;
-				continue;
+				/*
+				 * The translator has nothing yet. Ask again
+				 * a few times, then give up and let the
+				 * caller decide.
+				 *
+				 * This retried without limit, and each retry
+				 * costs a full Chantmout. An interrupt
+				 * endpoint with no key pressed NYETs every
+				 * time, so polling a keyboard cost seconds
+				 * per attempt and a keypress took about a
+				 * minute to appear -- while anything pressed
+				 * and released in between was never seen,
+				 * because the device reports changes.
+				 *
+				 * A poll that returns "nothing yet" promptly
+				 * is the correct answer for an interrupt
+				 * endpoint; the caller asks again in a
+				 * moment.
+				 */
+				if(++nyets <= Maxnyet){
+					splitphase = 1;
+					continue;
+				}
+				break;
 			}
+			nyets = 0;
 		}
 
 		if((i & Xfercomp) == 0 && i != (Chhltd|Ack) && i != Chhltd){

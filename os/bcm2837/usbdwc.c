@@ -291,6 +291,7 @@ static int dwcdmaalias = 1;
 static int dwcdmaprobed;
 static int dwcchanlog;
 static int dwcintrlog;
+static int dwcintrprobe;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
@@ -369,6 +370,26 @@ restart:
 		hc->hcintmsk = 0;
 		splx(x);
 		intr = hc->hcint;
+		/*
+		 * What the interrupt path looked like at the moment a
+		 * channel finished.
+		 *
+		 * The earlier reading was taken after the transfer was over
+		 * and said nothing: Hcintr is legitimately clear by then.
+		 * This is the instant that matters -- the channel has
+		 * raised something, so if the core is going to assert, it
+		 * has. haint says the channel reached the aggregate
+		 * register, gintsts bit 25 says the core raised Hcintr, and
+		 * GPUpending bit 9 says whether that reached the interrupt
+		 * controller at all.
+		 */
+		if(dwcintrprobe < 3){
+			dwcintrprobe++;
+			print("usbotg: done hcint %8.8ux haint %8.8ux "
+				"haintmsk %8.8ux gintsts %8.8ux pending %d\n",
+				intr, r->haint, r->haintmsk, r->gintsts,
+				intrpending());
+		}
 		if(intr & Chhltd)
 			return intr;
 		start = fastticks(0);

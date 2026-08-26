@@ -777,8 +777,29 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 */
 	if(!dwcintrlog){
 		dwcintrlog = 1;
+		/*
+		 * Whether the controller is even asking.
+		 *
+		 * Zero interrupts with transfers completing means this
+		 * driver is running entirely on its polling fallback --
+		 * which works for a simple transfer and CANNOT work for a
+		 * split, because the start-split to complete-split
+		 * transition happens in chanintr and chanintr runs only
+		 * from the handler. That is why a low-speed keyboard behind
+		 * a high-speed hub reads back 0x55 repeating: the complete
+		 * split never issues.
+		 *
+		 * These three say where it stops. gintsts is what the core
+		 * has raised; GPUpending bit 9 is whether that reached the
+		 * VideoCore controller; and the enable mask is whether we
+		 * ever asked for it.
+		 */
 		print("usbotg: first transfer complete, %lud interrupts taken\n",
 			nusbintr);
+		print("usbotg: gintsts %8.8ux gintmsk %8.8ux gahbcfg %8.8ux\n",
+			ctlr->regs->gintsts, ctlr->regs->gintmsk,
+			ctlr->regs->gahbcfg);
+		intrdump();
 	}
 	return len - nleft;
 }

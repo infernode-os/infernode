@@ -571,7 +571,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 {
 	Ctlr *ctlr;
 	int nleft, n, nt, i, maxpkt, npkt;
-	uint hcdma, hctsiz;
+	uint hcdma, hctsiz, lasti;
 
 	ctlr = ep->hp->aux;
 	maxpkt = ep->maxpkt;
@@ -610,6 +610,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 */
 	hc->hcdma  = dwcdmaalias ? BUSADDR(PADDR(a)) : (uint)PADDR(a);
 
+	lasti = 0;
 	nleft = len;
 	logstart(ep);
 	for(;;){
@@ -742,6 +743,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		else
 			i = chanwait(ep, ctlr, hc, Chhltd|Nak);
 		clog(ep, hc);
+		lasti = i;
 		hc->hcint = i;
 
 		if(hc->hcsplt & Spltena){
@@ -925,9 +927,16 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 */
 	if(ep->dev->speed != Highspeed && dwcslowlog < 4){
 		dwcslowlog++;
-		print("usbotg: ep%d.%d slow xfer len %d nleft %d hcint %8.8ux "
+		/*
+		 * lasti, not hc->hcint: chanio clears the interrupt bits as
+		 * it consumes them, so reading the register here reports
+		 * 00000000 for every transfer whatever happened. That is
+		 * the third time in this driver a probe has been placed
+		 * after the value it wanted was cleared.
+		 */
+		print("usbotg: ep%d.%d slow xfer len %d nleft %d last %8.8ux "
 			"hcsplt %8.8ux hctsiz %8.8ux\n",
-			ep->dev->nb, ep->nb, len, nleft, hc->hcint,
+			ep->dev->nb, ep->nb, len, nleft, lasti,
 			hc->hcsplt, hc->hctsiz);
 		if(len - nleft >= 4)
 			print("usbotg:   data %2.2ux %2.2ux %2.2ux %2.2ux\n",

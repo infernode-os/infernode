@@ -1017,13 +1017,31 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		if((status & HPpresent) == 0)
 			continue;
 
-		if(portfeature(d, port, Fportreset) < 0){
-			sys->print("init: %sport %d reset failed: %r\n", indent, port);
-			continue;
+		#
+		# Reset, and try again if the port does not enable.
+		#
+		# The root port needed exactly this and for the same reason:
+		# a device that fluffs its reset handshake usually manages
+		# on a second attempt, and giving up after one leaves it
+		# invisible. The mouse's port came back 0x0311 -- reset bit
+		# set, enable bit clear -- while the keyboard on the port
+		# beside it enumerated, from one attempt each.
+		#
+		for(rtry := 0; rtry < 3; rtry++){
+			if(portfeature(d, port, Fportreset) < 0){
+				sys->print("init: %sport %d reset failed: %r\n",
+					indent, port);
+				break;
+			}
+			sys->sleep(50);
+			status = portstatus(d, port);
+			if(status & HPenable)
+				break;
+			sys->print("init: %sport %d %#4.4x did not enable, retrying\n",
+				indent, port, status);
+			sys->sleep(50);
 		}
-		sys->sleep(50);
 
-		status = portstatus(d, port);
 		sys->print("init: %sport %d %#4.4x%s\n",
 			indent, port, status, statusflags(status));
 		if((status & HPenable) == 0)

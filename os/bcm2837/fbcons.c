@@ -33,6 +33,23 @@ enum
 	Flo	= 32,		/* first glyph */
 	Fhi	= 126,		/* last glyph */
 
+	/*
+	 * How many lines one scroll moves.
+	 *
+	 * A scroll is a memmove of the whole screen, and on this board
+	 * that measured about a second for 1.45MB -- with the region
+	 * already mapped Normal non-cacheable, which was checked rather
+	 * than assumed: the descriptor reads back attridx 2. ARM access
+	 * to VideoCore-managed memory is simply slow, so the fix is to
+	 * scroll rarely rather than to scroll faster.
+	 *
+	 * Eight lines costs the same second but pays it one time in
+	 * eight, and leaves a gap at the bottom that fills before the
+	 * next one. A terminal that jumps by a few lines is ordinary;
+	 * one that pauses a second per line is not.
+	 */
+	Scrolllines = 8,
+
 	Fg	= 0x00C8C8C8,	/* text */
 	Bg	= 0x00101018,	/* background, matching the test pattern */
 };
@@ -163,18 +180,20 @@ fbscroll(void)
 	volatile u32int *p;
 
 	base = (uchar*)cons->base;
-	linebytes = cons->pitch * Fh;
-	movebytes = cons->pitch * (cons->height - Fh);
+	linebytes = cons->pitch * Fh * Scrolllines;
+	if(linebytes > cons->pitch * cons->height)
+		linebytes = cons->pitch * cons->height;
+	movebytes = cons->pitch * cons->height - linebytes;
 
 	memmove(base, base + linebytes, movebytes);
 
 	stride = (int)(cons->pitch / 4);
 	p = (volatile u32int*)(base + movebytes);
-	for(y = 0; y < Fh; y++)
+	for(y = 0; y < Fh * Scrolllines && cy - y > 0; y++)
 		for(x = 0; x < (int)cons->width; x++)
 			p[y * stride + x] = Bg;
 
-	cy -= Fh;
+	cy -= Fh * Scrolllines;
 	if(cy < 0)
 		cy = 0;
 }

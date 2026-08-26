@@ -1758,6 +1758,115 @@ else
 fi
 
 #
+#     The same again on FAT32, which is a different filesystem.
+#
+#     Not a variation on a theme: FAT32 announces itself by leaving the
+#     ORIGINAL fields empty -- zero sectors-per-FAT, zero root entries --
+#     and puts the real values elsewhere, and its root directory is an
+#     ordinary cluster chain rather than a reserved area. dossrv as
+#     imported read FAT12 and FAT16 only, so the Raspberry Pi's own boot
+#     partition (type 0x0C) mounted and listed nothing.
+#
+#     This is the case that matters on the actual hardware, so it gets
+#     its own fixture rather than being assumed to follow from FAT16.
+#
+SD32="$BUILD/$PLAT-sd32.img"
+python3 - "$SD32" <<'PYEOF'
+import struct, sys
+
+SEC   = 512
+PSTART = 2048
+PSECS  = 131072          # 64MB, enough to be a genuine FAT32
+SPC    = 1
+RESV   = 32
+NFAT   = 2
+FATSZ  = 1024            # sectors per FAT, comfortably enough
+
+part = bytearray(PSECS * SEC)
+
+bs = bytearray(SEC)
+bs[0:3]   = b"\xEB\x58\x90"
+bs[3:11]  = b"INFRNODE"
+struct.pack_into("<H", bs, 11, SEC)
+bs[13] = SPC
+struct.pack_into("<H", bs, 14, RESV)
+bs[16] = NFAT
+struct.pack_into("<H", bs, 17, 0)      # root entries: ZERO, this is FAT32
+struct.pack_into("<H", bs, 19, 0)      # 16-bit total: zero, see offset 32
+bs[21] = 0xF8
+struct.pack_into("<H", bs, 22, 0)      # 16-bit sectors/FAT: ZERO, see 36
+struct.pack_into("<H", bs, 24, 32)
+struct.pack_into("<H", bs, 26, 64)
+struct.pack_into("<I", bs, 28, PSTART)
+struct.pack_into("<I", bs, 32, PSECS)
+struct.pack_into("<I", bs, 36, FATSZ)  # the real sectors per FAT
+struct.pack_into("<H", bs, 40, 0)      # ext flags
+struct.pack_into("<H", bs, 42, 0)      # version
+struct.pack_into("<I", bs, 44, 2)      # the root's first CLUSTER
+struct.pack_into("<H", bs, 48, 1)      # FSInfo sector
+struct.pack_into("<H", bs, 50, 6)      # backup boot sector
+bs[64] = 0x80
+bs[66] = 0x29
+struct.pack_into("<I", bs, 67, 0x32323232)
+bs[71:82] = b"INFR32     "
+bs[82:90] = b"FAT32   "
+bs[510] = 0x55; bs[511] = 0xAA
+part[0:SEC] = bs
+
+CONTENT = b"fat32 works on bare metal\n"
+
+# Cluster 2 is the root directory, cluster 3 is the file. Entries are
+# 32 bits and the top four are reserved, hence 0x0FFFFFFF for a chain
+# end rather than 0xFFFFFFFF.
+fat = bytearray(FATSZ * SEC)
+struct.pack_into("<I", fat, 0, 0x0FFFFFF8)
+struct.pack_into("<I", fat, 4, 0x0FFFFFFF)
+struct.pack_into("<I", fat, 8, 0x0FFFFFFF)   # root, one cluster
+struct.pack_into("<I", fat, 12, 0x0FFFFFFF)  # the file, one cluster
+for i in range(NFAT):
+    off = (RESV + i*FATSZ) * SEC
+    part[off:off+len(fat)] = fat
+
+data = (RESV + NFAT*FATSZ) * SEC             # cluster 2 begins here
+d = bytearray(32)
+d[0:11] = b"HELLO32 TXT"
+d[11] = 0x20
+struct.pack_into("<H", d, 20, 0)             # start cluster, HIGH half
+struct.pack_into("<H", d, 26, 3)             # start cluster, low half
+struct.pack_into("<I", d, 28, len(CONTENT))
+part[data:data+32] = d
+
+fileoff = data + (3-2)*SPC*SEC
+part[fileoff:fileoff+len(CONTENT)] = CONTENT
+
+buf = bytearray(256*1024*1024)               # power of two, for QEMU
+e = bytearray(16)
+e[0] = 0x80
+e[4] = 0x0C                                  # FAT32 LBA
+struct.pack_into("<I", e, 8, PSTART)
+struct.pack_into("<I", e, 12, PSECS)
+buf[446:462] = e
+buf[510] = 0x55; buf[511] = 0xAA
+buf[PSTART*SEC : PSTART*SEC + len(part)] = part
+open(sys.argv[1], "wb").write(buf)
+PYEOF
+
+QEMUARGS="$SAVEDARGS -drive file=$SD32,if=sd,format=raw"
+FS32="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'ls /n/dos' \
+        'cat /n/dos/HELLO32.TXT')"
+QEMUARGS="$SAVEDARGS"
+FS32="$(tr -d '\r' <<<"$FS32")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- fat32 ---"; echo "$FS32"; }
+
+if grep -q 'fat32 works on bare metal' <<<"$FS32"; then
+    pass "a FAT32 filesystem is mounted and read (the Pi boot partition's format)"
+else
+    fail "FAT32 could not be read"
+fi
+
+#
 #     And a write, in a kernel built only for this.
 #
 #     A write test needs somewhere to write, and picking a sector that

@@ -1108,7 +1108,8 @@ Dosbpb: adt {
 	mediadesc: int;
 	fatsize: int;	# in sectors 
 	fatclusters: int;
-	fatbits: int;	# 12 or 16 
+	fatbits: int;	# 12, 16 or 32
+	rootclust: int;	# FAT32 only: the root is a cluster chain, not an area
 	fataddr: int; #big;	# sector number 
 	rootaddr: int; #big;
 	dataaddr: int; #big;
@@ -1299,13 +1300,31 @@ Dmddo:
 	bp.mediadesc = int b.mediadesc;
 	bp.fatsize = bytes2short(b.fatsize);
 
+	#
+	# FAT32 announces itself by leaving the OLD fields empty.
+	#
+	# A zero sectors-per-FAT means the real value is in the 32-bit
+	# field at offset 36, and a zero root-entry count means there is no
+	# reserved root area at all: the root is an ordinary cluster chain
+	# starting at the cluster named at offset 44. Neither field is in
+	# the Dosboot adt, which describes the original BPB, so they are
+	# read straight out of the sector.
+	#
+	bp.rootclust = 0;
+	if(bp.fatsize == 0 && bp.rootsize == 0) {
+		bp.fatsize = bytes2int(p.iobuf[36:40]);
+		bp.rootclust = bytes2int(p.iobuf[44:48]);
+	}
+
 	bp.fataddr = int bp.nresrv;
 	bp.rootaddr = bp.fataddr + bp.nfats*bp.fatsize;
 	i = bp.rootsize*DOSDIRSIZE + bp.sectsize-1;
 	i /= bp.sectsize;
 	bp.dataaddr = bp.rootaddr + i;
 	bp.fatclusters = FATRESRV+(bp.volsize - bp.dataaddr)/bp.clustsize;
-	if(bp.fatclusters < 4087)
+	if(bp.rootclust != 0)
+		bp.fatbits = 32;
+	else if(bp.fatclusters < 4087)
 		bp.fatbits = 12;
 	else
 		bp.fatbits = 16;
@@ -1370,22 +1389,33 @@ putfile(f: ref Xfile)
 	dp.d = nil;
 }
 
-getstart(nil: ref Xfs, d: ref Dosdir): int
+#
+# A FAT32 start cluster is 32 bits, split across the directory entry:
+# the low half at offset 26 and the HIGH half at offset 20, which is
+# inside what the original format called reserved. arr2Dd already
+# captures bytes 12..21 as "reserved", so reserved[8] and reserved[9]
+# are those two bytes and no change to the entry layout is needed.
+#
+getstart(xf: ref Xfs, d: ref Dosdir): int
 {
+	bp := xf.ptr;
+
 	start := bytes2short(d.start);
-#	if(xf.isfat32)
-#		start |= bytes2short(d.hstart)<<16;
+	if(bp.fatbits == 32)
+		start |= bytes2short(d.reserved[8:10])<<16;
 	return start;
 }
 
-putstart(nil: ref Xfs, d: ref Dosdir, start: int)
+putstart(xf: ref Xfs, d: ref Dosdir, start: int)
 {
+	bp := xf.ptr;
+
 	d.start[0] = byte start;
 	d.start[1] = byte (start>>8);
-#	if(xf.isfat32){
-#		d.hstart[0] = start>>16;
-#		d.hstart[1] = start>>24;
-#	}
+	if(bp.fatbits == 32){
+		d.reserved[8] = byte (start>>16);
+		d.reserved[9] = byte (start>>24);
+	}
 }
 
 #
@@ -1463,11 +1493,45 @@ fileclust(f: ref Xfile, iclust: int, cflag: int): int
 # return the disk sector for the isect disk sector in f,
 # allocating space if necessary and cflag is set
 #
+#
+# Walk a cluster chain from start, nskip links along.
+#
+# Uncached, unlike fileclust, and that is fine for what uses it: the
+# FAT32 root directory, which is walked from the beginning each time and
+# is a handful of clusters. fileclust cannot serve here because it takes
+# the starting cluster from a directory ENTRY, and the root does not
+# have one -- that is the whole difference between FAT32's root and
+# every other directory.
+#
+chainclust(xf: ref Xfs, start: int, nskip: int): int
+{
+	clust := start;
+
+	while(--nskip >= 0) {
+		clust = getfat(xf, clust);
+		if(clust <= 0)
+			return -1;
+	}
+	return clust;
+}
+
 fileaddr(f: ref Xfile, isect: int, cflag: int): int
 {
 	bp := f.xf.ptr;
 	dp := f.ptr;
 	if(isroot(dp.addr)) {
+		#
+		# On FAT32 the root is an ordinary cluster chain, so it is
+		# followed like any other directory and has no fixed size
+		# to bound it -- the chain ending is what bounds it.
+		#
+		if(bp.rootclust != 0) {
+			clust := chainclust(f.xf, bp.rootclust,
+				isect/bp.clustsize);
+			if(clust < 0)
+				return -1;
+			return clust2sect(bp, clust) + isect%bp.clustsize;
+		}
 		if(isect*bp.sectsize >= bp.rootsize*DOSDIRSIZE)
 			return -1;
 		return bp.rootaddr + isect;
@@ -1879,8 +1943,18 @@ walkup(f: ref Xfile): (int, ref Dosptr)
 	# open parent's parent's parent, and walk through it until parent's paretn is found
 	# need this to find parent's parent's addr and offset
 	#
+	#
+	# A ".." entry naming cluster 0 means "the root".
+	#
+	# On FAT12 and FAT16 that is the reserved root area, at rootaddr.
+	# On FAT32 the root is a cluster chain like any other directory, so
+	# 0 has to be translated into the root's actual cluster before it
+	# is used -- otherwise walking up from a subdirectory lands on the
+	# start of the FAT rather than on the root.
+	#
 	ppclust := ppstart;
-	# TO DO: FAT32
+	if(ppclust == 0 && bp.rootclust != 0)
+		ppclust = bp.rootclust;
 	if(ppclust != 0)
 		k := clust2sect(bp, ppclust);
 	else
@@ -1945,6 +2019,8 @@ walkup(f: ref Xfile): (int, ref Dosptr)
 				so%bp.clustsize;
 		}
 		else {
+			# the fixed root area; FAT32 never reaches here,
+			# because ppclust was translated above
 			if(so*bp.sectsize >= bp.rootsize*DOSDIRSIZE) { 
  				if(p != nil) 
 					putsect(p);

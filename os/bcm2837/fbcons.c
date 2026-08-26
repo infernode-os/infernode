@@ -210,6 +210,8 @@ fbconsputs(char *s, int n)
 	int i, c;
 	ulong t0, dt;
 	static int nslow;
+	static int nscroll;
+	static ulong scrollms;
 
 	if(cons == nil)
 		return;
@@ -261,17 +263,38 @@ fbconsputs(char *s, int n)
 			cx = 0;
 			cy += Fh;
 		}
-		while(cy + Fh > (int)cons->height)
+		while(cy + Fh > (int)cons->height){
+			ulong s0;
+
+			s0 = TK2MS(m->ticks);
 			fbscroll();
+			nscroll++;
+			scrollms += TK2MS(m->ticks) - s0;
+		}
 	}
 
 	dt = TK2MS(m->ticks) - t0;
 	if(dt > 100 && nslow < 8){
 		nslow++;
-		uartputstr("fb:   console write took ");
+		/*
+		 * Split the cost. Mapping the framebuffer Normal
+		 * non-cacheable took a write from 1780ms to about 1200,
+		 * which is a real improvement and nothing like enough --
+		 * so the memory type was not what dominates. This says how
+		 * much of it is scrolling and how much is everything else.
+		 */
+		uartputstr("fb:   write ");
 		uartputd(dt);
-		uartputstr("ms\n");
+		uartputstr("ms, of which ");
+		uartputd(scrollms);
+		uartputstr("ms in ");
+		uartputd(nscroll);
+		uartputstr(" scroll(s), ");
+		uartputd(n);
+		uartputstr(" chars\n");
 	}
+	nscroll = 0;
+	scrollms = 0;
 }
 
 /*

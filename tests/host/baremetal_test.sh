@@ -623,7 +623,15 @@ fi
 #
 # 3. It boots and reports.
 #
-OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 10)"
+# 30 seconds, not 10.
+#
+# The DHCP client waits two seconds for the switch to start forwarding
+# and then retries for twenty, because a link that has just come up does
+# not carry traffic yet. Under emulation nobody answers, so the boot
+# spends the whole of that budget before the network configuration is
+# printed -- and a boot window shorter than the code's own timeouts
+# tests how fast the kernel gives up, not what it does.
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 30)"
 info "--- serial output ---"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
 

@@ -241,6 +241,23 @@ chansetup(Hostchan *hc, Ep *ep)
 	}
 	hc->hcchar = hcc;
 	hc->hcint = ~0;
+
+	/*
+	 * Say what was programmed for a device that is not high speed.
+	 *
+	 * Splits are configured from ep->dev->speed, ->hub and ->port,
+	 * and every one of those is set by something else -- the Limbo
+	 * bus walk through devusb -- so "the condition is true" has been
+	 * an assumption three times now. This prints the inputs and the
+	 * result together.
+	 */
+	if(ep->dev->speed != Highspeed && dwcspltlog < 4){
+		dwcspltlog++;
+		print("usbotg: ep%d.%d speed %d hub %d port %d -> "
+			"hcsplt %8.8ux hcchar %8.8ux\n",
+			ep->dev->nb, ep->nb, ep->dev->speed, ep->dev->hub,
+			ep->dev->port, hc->hcsplt, hc->hcchar);
+	}
 }
 
 static int
@@ -293,6 +310,7 @@ static int dwcdmaprobed;
 static int dwcchanlog;
 static int dwcintrlog;
 static int dwcintrprobe;
+static int dwcspltlog;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)

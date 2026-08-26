@@ -318,9 +318,6 @@ chandone(void *a)
  */
 static int dwcdmaalias = 1;
 static int dwcdmaprobed;
-static int dwcchanlog;
-static int dwcintrlog;
-static int dwcintrprobe;
 
 static int
 chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
@@ -430,26 +427,6 @@ restart:
 		hc->hcintmsk = 0;
 		splx(x);
 		intr = hc->hcint;
-		/*
-		 * What the interrupt path looked like at the moment a
-		 * channel finished.
-		 *
-		 * The earlier reading was taken after the transfer was over
-		 * and said nothing: Hcintr is legitimately clear by then.
-		 * This is the instant that matters -- the channel has
-		 * raised something, so if the core is going to assert, it
-		 * has. haint says the channel reached the aggregate
-		 * register, gintsts bit 25 says the core raised Hcintr, and
-		 * GPUpending bit 9 says whether that reached the interrupt
-		 * controller at all.
-		 */
-		if(dwcintrprobe < 3){
-			dwcintrprobe++;
-			print("usbotg: done hcint %8.8ux haint %8.8ux "
-				"haintmsk %8.8ux gintsts %8.8ux pending %d\n",
-				intr, r->haint, r->haintmsk, r->gintsts,
-				intrpending());
-		}
 		if(intr & Chhltd)
 			return intr;
 		start = fastticks(0);
@@ -693,46 +670,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		 * channel stays enabled and idle for ever, which is exactly
 		 * what we see, and neither was being read.
 		 */
-		if(dwcchanlog < 2){
-			uint c0, i0, cn, in;
-			int k;
-
-			dwcchanlog++;
-			print("usbotg: enabled ep%d.%d: hcchar %8.8ux "
-				"hcint %8.8ux gnptxsts %8.8ux hptxsts %8.8ux\n",
-				ep->dev->nb, ep->nb, hc->hcchar, hc->hcint,
-				ctlr->regs->gnptxsts, ctlr->regs->hptxsts);
-			/*
-			 * When does it change, not just what it ends up as.
-			 *
-			 * Every dump so far has been an end state: hcchar with
-			 * Chdis set and hcint empty, read a second or more
-			 * after the enable. That is the same picture whether
-			 * the core rejected the channel outright in a few
-			 * microseconds -- which means a configuration it will
-			 * not accept -- or tried for milliseconds and gave up,
-			 * which means the transfer started and the bus did not
-			 * answer. Those want opposite fixes, and the snapshot
-			 * cannot tell them apart.
-			 */
-			c0 = hc->hcchar;
-			i0 = hc->hcint;
-			for(k = 0; k < 40; k++){
-				microdelay(100);
-				cn = hc->hcchar;
-				in = hc->hcint;
-				if(cn != c0 || in != i0){
-					print("usbotg:   +%dus hcchar %8.8ux->%8.8ux "
-						"hcint %8.8ux->%8.8ux\n",
-						(k+1)*100, c0, cn, i0, in);
-					c0 = cn;
-					i0 = in;
-				}
-			}
-			print("usbotg:   after 4ms hcchar %8.8ux hcint %8.8ux "
-				"gintsts %8.8ux\n",
-				hc->hcchar, hc->hcint, ctlr->regs->gintsts);
-		}
 		clog(ep, hc);
 		if(ep->ttype == Tbulk && dir == Epin)
 			/*
@@ -896,32 +833,6 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	 * hence reporting it after a transfer that SUCCEEDED, which only
 	 * happens under emulation at present.
 	 */
-	if(!dwcintrlog){
-		dwcintrlog = 1;
-		/*
-		 * Whether the controller is even asking.
-		 *
-		 * Zero interrupts with transfers completing means this
-		 * driver is running entirely on its polling fallback --
-		 * which works for a simple transfer and CANNOT work for a
-		 * split, because the start-split to complete-split
-		 * transition happens in chanintr and chanintr runs only
-		 * from the handler. That is why a low-speed keyboard behind
-		 * a high-speed hub reads back 0x55 repeating: the complete
-		 * split never issues.
-		 *
-		 * These three say where it stops. gintsts is what the core
-		 * has raised; GPUpending bit 9 is whether that reached the
-		 * VideoCore controller; and the enable mask is whether we
-		 * ever asked for it.
-		 */
-		print("usbotg: first transfer complete, %lud interrupts taken\n",
-			nusbintr);
-		print("usbotg: gintsts %8.8ux gintmsk %8.8ux gahbcfg %8.8ux\n",
-			ctlr->regs->gintsts, ctlr->regs->gintmsk,
-			ctlr->regs->gahbcfg);
-		intrdump();
-	}
 
 	return len - nleft;
 }

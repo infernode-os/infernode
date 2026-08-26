@@ -1027,27 +1027,71 @@ configure(name: string, d: ref Sys->FD, indent: string): int
 
 dumpconfig(d: ref Sys->FD, indent: string)
 {
-	# The first nine bytes are enough to learn the total length.
+	#
+	# Read it until it looks like a configuration descriptor.
+	#
+	# Control transfers to a low-speed device behind a translator come
+	# back as 0x55 -- alternating bits -- often enough that a single
+	# attempt is a coin toss, and the failure does NOT arrive as an
+	# error: the length field reads 21845, which is 0x5555, and the
+	# type reads 85. This device descriptor and this device's own
+	# nine-byte config header both succeeded moments earlier, so it is
+	# a transfer that fails sometimes and not a device that cannot be
+	# read.
+	#
+	# It is worth retrying rather than reporting, because what is lost
+	# is not a diagnostic: the interface class lives in here, and the
+	# class is how a device is matched to a driver. A keyboard whose
+	# configuration cannot be read is a keyboard with no driver, which
+	# is the whole of "the keys do nothing".
+	#
+	total := 0;
 	hdr := array[9] of byte;
-	n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
-	if(n < len hdr){
-		sys->print("init: %sconfig descriptor header failed (%d)\n",
-			indent, n);
-		return;
-	}
+	cfg: array of byte;
+	for(try := 0; try < Enumattempts; try++){
+		n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
+		if(n < len hdr){
+			sys->print("init: %sconfig descriptor header failed (%d)\n",
+				indent, n);
+			continue;
+		}
+		if(int hdr[0] != 9 || int hdr[1] != Dconf){
+			sys->print("init: %sconfig header is not one (len %d type %d)\n",
+				indent, int hdr[0], int hdr[1]);
+			continue;
+		}
+		total = int hdr[2] | (int hdr[3] << 8);
+		if(total < len hdr || total > 512){
+			sys->print("init: %sconfig descriptor length %d unreasonable\n",
+				indent, total);
+			total = 0;
+			continue;
+		}
 
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512){
-		sys->print("init: %sconfig descriptor length %d unreasonable\n",
-			indent, total);
-		return;
+		cfg = array[total] of byte;
+		n = ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, total, cfg);
+		if(n < total){
+			sys->print("init: %sconfig descriptor short (%d of %d)\n",
+				indent, n, total);
+			total = 0;
+			continue;
+		}
+		#
+		# The full read repeats the header, so it can be checked
+		# against itself: a second transfer that returned garbage
+		# disagrees with the first about what this descriptor is.
+		#
+		if(int cfg[0] != 9 || int cfg[1] != Dconf){
+			sys->print("init: %sconfig body is not one (len %d type %d)\n",
+				indent, int cfg[0], int cfg[1]);
+			total = 0;
+			continue;
+		}
+		break;
 	}
-
-	cfg := array[total] of byte;
-	n = ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, total, cfg);
-	if(n < total){
-		sys->print("init: %sconfig descriptor short (%d of %d)\n",
-			indent, n, total);
+	if(total == 0){
+		sys->print("init: %sconfiguration unreadable; no driver can be matched\n",
+			indent);
 		return;
 	}
 

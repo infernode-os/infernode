@@ -286,6 +286,54 @@ build_kernel() {
             "/dis/sh/std.dis=$ROOT/dis/sh/std.dis"
             "/dis/sh/expr.dis=$ROOT/dis/sh/expr.dis"
             "/dis/sh/string.dis=$ROOT/dis/sh/string.dis"
+
+            # The login profile. sh reads it only with -l, which is what
+            # osinit passes; it is what runs "load std", so without it
+            # the shell has no control flow.
+            "/lib/sh/profile=$ROOT/os/init/profile"
+
+            # Enough commands to use the machine.
+            #
+            # Every one of these is a Dis module loaded by name out of
+            # $path, and $path already defaults to (/dis .) -- so a
+            # missing command does not report itself as missing. It
+            # reports the LAST path tried: "'./date' file does not
+            # exist", which reads like a broken shell rather than an
+            # image that was never given a date command.
+            #
+            # cd is among them deliberately. It is NOT a shell builtin
+            # in Inferno -- the builtins are the control-flow words in
+            # /dis/sh/std.dis -- so "cd" with no /dis/cd.dis is exactly
+            # as absent as any other command.
+            "/dis/cd.dis=$ROOT/dis/cd.dis"
+            "/dis/date.dis=$ROOT/dis/date.dis"
+            "/dis/ps.dis=$ROOT/dis/ps.dis"
+            "/dis/ns.dis=$ROOT/dis/ns.dis"
+            "/dis/bind.dis=$ROOT/dis/bind.dis"
+            "/dis/mount.dis=$ROOT/dis/mount.dis"
+            "/dis/mkdir.dis=$ROOT/dis/mkdir.dis"
+            "/dis/rm.dis=$ROOT/dis/rm.dis"
+            "/dis/cp.dis=$ROOT/dis/cp.dis"
+            "/dis/mv.dis=$ROOT/dis/mv.dis"
+            "/dis/wc.dis=$ROOT/dis/wc.dis"
+            "/dis/sleep.dis=$ROOT/dis/sleep.dis"
+            "/dis/tail.dis=$ROOT/dis/tail.dis"
+            "/dis/sort.dis=$ROOT/dis/sort.dis"
+            "/dis/grep.dis=$ROOT/dis/grep.dis"
+            "/dis/basename.dis=$ROOT/dis/basename.dis"
+            "/dis/du.dis=$ROOT/dis/du.dis"
+            "/dis/kill.dis=$ROOT/dis/kill.dis"
+
+            # What those commands load in turn. Resolved from each
+            # source's "load X X->PATH" against the PATH constants in
+            # module/*.m, not guessed: a command whose library is absent
+            # does not fail to be found, it fails to LOAD, which is a
+            # different and more confusing error.
+            "/dis/lib/auth.dis=$ROOT/dis/lib/auth.dis"
+            "/dis/lib/factotum.dis=$ROOT/dis/lib/factotum.dis"
+            "/dis/lib/names.dis=$ROOT/dis/lib/names.dis"
+            "/dis/lib/regex.dis=$ROOT/dis/lib/regex.dis"
+            "/dis/lib/styxpersist.dis=$ROOT/dis/lib/styxpersist.dis"
         )
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
@@ -896,7 +944,24 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /dev/drivers' \
         'cat /net/ipifc/stats' \
         'cat /net/iproute' \
-        'cat /net/tcp/stats')"
+        'cat /net/tcp/stats' \
+        'cd /dis; pwd; cd /' \
+        'date' \
+        'basename /a/b/see-me' \
+        'echo one two three | wc' \
+        'ns' \
+        'echo grep-found-it | grep found' \
+        'ps | wc -l' \
+        'sleep 0; echo slept-ok' \
+        'for(i in x y z){ echo loop2-$i }')"
+
+# Strip carriage returns once, here.
+#
+# This is a serial console: every line ends CR LF, so a pattern anchored
+# with $ cannot match and a command that worked perfectly reports as
+# broken. Two checks below were written, failed, and were investigated
+# before the cause turned out to be the terminal rather than the shell.
+SHOUT="$(tr -d '\r' <<<"$SHOUT")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -1208,6 +1273,73 @@ if build_kernel "$BUILD/$PLAT-fbscroll.img" "" "-DFBSCROLLTEST"; then
     OUT="$OUT_SAVED"
 else
     fail "the framebuffer-scroll variant failed to build"
+fi
+
+#
+# 2f. The shell can actually run commands.
+#
+#     A command that is missing from the image does NOT report itself
+#     missing. $path already defaults to (/dis .), so the shell tries
+#     /dis/date.dis, then ./date, and reports the LAST one -- "'./date'
+#     file does not exist" -- which reads like a broken shell rather
+#     than an image that was never given a date command. Being in the
+#     manifest is also not enough: a command whose library is absent is
+#     found and then fails to LOAD, which is a third distinct error.
+#
+#     So run them. Each check below is a command doing its job, which is
+#     the only form of this that cannot pass while the machine is
+#     unusable.
+#
+# "#/dis", not "/dis": the root filesystem is compiled into the kernel
+# and served by the root DEVICE, so a path under it names that device.
+# That prefix is correct and worth asserting rather than trimming.
+if grep -qE '^#?/dis$' <<<"$SHOUT"; then
+    pass "cd changes directory and pwd reports it"
+else
+    fail "cd or pwd did not work"
+fi
+
+if grep -qE '^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) ' <<<"$SHOUT"; then
+    pass "date runs and prints a date"
+else
+    fail "date did not run (is /dis/date.dis in the image?)"
+fi
+
+if grep -q '^see-me$' <<<"$SHOUT"; then
+    pass "basename runs"
+else
+    fail "basename did not run"
+fi
+
+# wc on "one two three" is 1 line, 3 words, 14 bytes.
+if grep -qE '^ *1 +3 +14' <<<"$SHOUT"; then
+    pass "a pipeline works (echo into wc counts correctly)"
+else
+    fail "echo | wc did not produce the right counts"
+fi
+
+if grep -q 'slept-ok' <<<"$SHOUT"; then
+    pass "sleep runs and returns"
+else
+    fail "sleep did not run"
+fi
+
+if grep -qE '^(bind|mount) ' <<<"$SHOUT"; then
+    pass "ns prints the namespace"
+else
+    fail "ns did not print a namespace"
+fi
+
+if grep -q 'grep-found-it' <<<"$SHOUT"; then
+    pass "grep runs and matches"
+else
+    fail "grep did not run"
+fi
+
+if grep -v 'echo ' <<<"$SHOUT" | grep -q 'loop2-y'; then
+    pass "control flow works without typing 'load std' first (the profile ran)"
+else
+    fail "for(){} did not run -- /lib/sh/profile did not load std"
 fi
 
 #

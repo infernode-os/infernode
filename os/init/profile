@@ -1,0 +1,20 @@
+# The shell profile for a bare-metal InferNode.
+#
+# NOT lib/sh/profile from the hosted tree. That one mounts a host
+# filesystem, starts mntgen and ndb/cs, and wires up telephony -- none of
+# which exists here, and each failure would print at a user who has just
+# booted a machine and cannot yet tell a missing feature from a broken
+# one.
+#
+# sh reads this only when started with -l, which osinit does.
+
+# Control flow lives in loadable modules under /dis/sh, not in sh
+# itself, so without this a shell can run commands and pipelines but has
+# no if, while or for at all -- "for(i in 1 2 3)" fails looking for
+# ./for.
+load std
+
+# The default is already (/dis .) -- see sh.b -- and it is set here so
+# that it is stated somewhere a person can read and change, rather than
+# being a constant compiled into the shell.
+path=(/dis .)

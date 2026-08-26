@@ -258,7 +258,16 @@ init()
 		return;
 	}
 
-	sh->init(nil, "sh" :: nil);
+	#
+	# -l, so the shell reads /lib/sh/profile.
+	#
+	# That is where "load std" happens, and without it sh can run
+	# commands and pipelines but has no control flow whatever: if,
+	# while and for live in loadable modules under /dis/sh rather than
+	# in the shell itself, so "for(i in 1 2 3)" fails looking for
+	# ./for.
+	#
+	sh->init(nil, "sh" :: "-l" :: nil);
 
 	sys->print("init: the shell returned\n");
 }

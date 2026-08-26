@@ -786,56 +786,41 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		 * chanio clears a few lines above this.
 		 */
 		if(hc->hcsplt & Spltena){
-			if(splitphase == 0 && hc->hcdma == hcdma && nleft > 0){
+			if(splitphase == 0 && (i & Xfercomp) == 0){
 				/*
-				 * Advance only if the hub ACCEPTED it and
-				 * nothing has arrived yet.
+				 * Advance only if the hub ACCEPTED it AND
+				 * there is still something to collect.
 				 *
-				 * WHETHER DATA MOVED is the discriminator,
-				 * not any status bit. hcdma is the address
-				 * the controller is writing through, so it
-				 * advances exactly when bytes landed: a
-				 * start-split moves none and its result
-				 * still has to be collected, while a
-				 * transfer that delivered is finished and
+				 * Ack alone does not mean "start-split
+				 * accepted". This core sets it on success
+				 * too: a FINISHED split reports
+				 * Xfercomp|Chhltd|Ack. Keying on Ack by
+				 * itself therefore swallowed completed
+				 * transfers -- the continue below jumped
+				 * back over the accounting at the bottom of
+				 * the loop, so nleft was never decremented
+				 * and the transfer was simply issued again.
+				 *
+				 * The board showed it plainly. hctsiz walked
+				 * down eight bytes at a time, 0038, 0030,
+				 * 0028 ... 0008, 0000, and then WRAPPED --
+				 * 5ffffff8, 1ff7fff0 -- with hcdma marching
+				 * on past the end of the caller's buffer.
+				 * Every keystroke after the first was
+				 * written outside it.
+				 *
+				 * Xfercomp is the discriminator: Ack without
+				 * it means the hub took the job and the
+				 * result must still be collected; Ack with
+				 * it means the whole transfer is done and
 				 * belongs to the accounting below.
 				 *
-				 * Three conditions have been tried on this
-				 * line and the first two were both guesses
-				 * about what a status word means.
-				 *
-				 * The exact value Chhltd|Ack, per the
-				 * databook -- this core does not report it,
-				 * so the condition never fired, chanio took
-				 * a start-split for the whole transfer and
-				 * the caller got whatever the buffer held:
-				 * 0x55 repeating.
-				 *
-				 * Then Ack as a bit test. That fixed the
-				 * start-split and broke the completion,
-				 * because this core sets Ack on success too
-				 * -- a finished split reports
-				 * Xfercomp|Chhltd|Ack. Completed transfers
-				 * matched, the continue jumped back over
-				 * the accounting, nleft never decremented
-				 * and the transfer was re-issued: hctsiz
-				 * walked 0038, 0030 ... 0000 and WRAPPED to
-				 * 5ffffff8 with hcdma marching past the end
-				 * of the caller's buffer.
-				 *
-				 * Then the absence of Xfercomp, which was
-				 * the same mistake a third time and cost an
-				 * enumeration: this core reports Xfercomp
-				 * on a control START-split too, so control
-				 * transfers stopped collecting their data
-				 * and 0x55 came back as a configuration
-				 * value of 85.
-				 *
-				 * nleft > 0 keeps a zero-length stage -- the
-				 * status stage of every control transfer
-				 * that has no data -- out of it, since
-				 * nothing will ever move for one and it
-				 * would otherwise be re-issued for ever.
+				 * Checking Ack alone was already the second
+				 * mistake here. The first triggered on the
+				 * exact value Chhltd|Ack, which this core
+				 * does not report; loosening that to a bit
+				 * test fixed the start-split and broke the
+				 * completion.
 				 */
 				if(i & Ack){
 					splitphase = 1;

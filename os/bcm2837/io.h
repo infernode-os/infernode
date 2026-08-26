@@ -181,8 +181,6 @@ enum
 	Tagfbsetdepth	= 0x00048005,
 	Tagfbsetorder	= 0x00048006,
 	Tagfbsetvoff	= 0x00048009,
-	Tagfbgetnumdisp	= 0x00040013,	/* how many displays the firmware has */
-	Tagfbsetdispnum	= 0x00048013,	/* which one later fb tags apply to */
 
 	Taggettouchbuf	= 0x0004000F,
 

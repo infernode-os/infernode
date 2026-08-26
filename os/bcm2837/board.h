@@ -24,9 +24,6 @@ int	mboxprop(u32int, u32int*, int, int);
 int	setpower(int, int);
 int	mboxfballoc(u32int, u32int, u32int, Fbinfo*);
 int	mboxfbvoff(u32int, u32int);
-int	mboxfbnumdisplays(void);
-int	mboxfbdisplaynum(u32int);
-int	mboxfbgetdim(u32int*, u32int*);
 
 /* fb.c */
 int	fbinit(Fbinfo*);

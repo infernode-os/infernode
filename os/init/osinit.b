@@ -218,28 +218,25 @@ init()
 	spawn tcpecho();
 
 	#
-	# Wait for the console's INPUT PATH, not for services.
+	# Spawned, and the shell starts straight after it.
 	#
-	# That is the line worth drawing, and it decides this on
-	# principle rather than on how noisy a given driver happens to
-	# be. A prompt you cannot type at is not a prompt, and the
-	# keyboard driver is started by the bus walk -- so the walk is
-	# part of bringing the console up and is waited for. The network
-	# is a service: it can finish whenever it finishes, and its
-	# progress arriving under an already-usable prompt is ordinary
-	# console traffic, not a defect. Waiting on it would also mean a
-	# machine with no cable sitting through the whole DHCP fallback
-	# before showing a prompt.
+	# Making the shell WAIT for this walk was tried, so that the
+	# prompt would be the last thing on screen rather than buried
+	# under two screens of enumeration. It has to be reverted: every
+	# build carrying that change failed to enumerate the low-speed
+	# keyboard -- control transfers coming back as 0x55 -- and every
+	# build without it enumerated cleanly, five to nothing against
+	# four to nothing for. The mechanism is not understood, which is
+	# exactly why the change does not stay: a prompt in a tidier
+	# place is not worth a keyboard that does not work, and shipping
+	# it while calling the failure intermittent would be shipping a
+	# known regression under a friendlier name.
 	#
-	# Waited on, not slept through, and bounded: a probe that hangs
-	# must still leave a usable shell, because a machine you cannot
-	# ask questions of is a machine you cannot debug. That property
-	# is why the walk was spawned in the first place and it is kept
-	# here rather than traded away.
+	# What made it findable was building the last known-good commit
+	# from a pristine copy and re-applying changes in groups, rather
+	# than reasoning about which one looked guilty.
 	#
-	usbdone := chan of int;
-	spawn usbprobe(usbdone);
-	waitfor(usbdone, Walkwait, "the USB bus walk");
+	spawn usbprobe();
 
 	sys->print("\ninit: starting the shell\n\n");
 
@@ -272,29 +269,6 @@ init()
 # keyboard driver is on the other side of it; bounded, because a walk
 # that hangs must not cost the shell.
 #
-Walkwait:	con 30000;
-
-#
-# Wait for a channel, or give up and say so.
-#
-waitfor(c: chan of int, ms: int, what: string)
-{
-	t := chan of int;
-	spawn timer(t, ms);
-	alt {
-	<-c =>
-		;
-	<-t =>
-		sys->print("init: %s is still running; starting the shell anyway\n",
-			what);
-	}
-}
-
-timer(c: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	c <-= 1;
-}
 
 Echoreq:	con 8;		# ICMP type: echo request
 Echoreply:	con 0;		# ICMP type: echo reply
@@ -620,7 +594,7 @@ speedname(status: int): string
 	return "full";
 }
 
-usbprobe(done: chan of int)
+usbprobe()
 {
 	#
 	# Signal completion however this returns.
@@ -635,7 +609,6 @@ usbprobe(done: chan of int)
 	* =>
 		sys->print("init: usb probe failed\n");
 	}
-	done <-= 1;
 }
 
 usbwalk()

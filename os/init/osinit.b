@@ -218,26 +218,28 @@ init()
 	spawn tcpecho();
 
 	#
-	# Let the machine finish coming up before handing over.
+	# Wait for the console's INPUT PATH, not for services.
 	#
-	# The shell prints its prompt once and then waits, so anything
-	# printed after it starts scrolls the prompt away -- and the bus
-	# walk plus DHCP is two screens of output. What the user is left
-	# looking at is the last driver message, with no way to tell the
-	# machine is ready short of pressing return to draw a fresh
-	# prompt. If boot drops you into a shell, the prompt is how you
-	# know.
+	# That is the line worth drawing, and it decides this on
+	# principle rather than on how noisy a given driver happens to
+	# be. A prompt you cannot type at is not a prompt, and the
+	# keyboard driver is started by the bus walk -- so the walk is
+	# part of bringing the console up and is waited for. The network
+	# is a service: it can finish whenever it finishes, and its
+	# progress arriving under an already-usable prompt is ordinary
+	# console traffic, not a defect. Waiting on it would also mean a
+	# machine with no cable sitting through the whole DHCP fallback
+	# before showing a prompt.
 	#
-	# Waited on, not slept through, and bounded either way: a probe
-	# that hangs must still leave a usable shell, because a machine
-	# you cannot ask questions of is a machine you cannot debug. That
-	# property is why the walk was spawned in the first place, and it
-	# is kept here rather than traded away.
+	# Waited on, not slept through, and bounded: a probe that hangs
+	# must still leave a usable shell, because a machine you cannot
+	# ask questions of is a machine you cannot debug. That property
+	# is why the walk was spawned in the first place and it is kept
+	# here rather than traded away.
 	#
 	usbdone := chan of int;
 	spawn usbprobe(usbdone);
 	waitfor(usbdone, Walkwait, "the USB bus walk");
-	waitnet(Netwait);
 
 	sys->print("\ninit: starting the shell\n\n");
 
@@ -265,19 +267,12 @@ init()
 }
 
 #
-# How long boot may hold the prompt back, in milliseconds.
-#
-# Generous for the bus walk, which is the bulk of the output and is
-# known to finish. Much tighter for the network, because the failure
-# case is common and cheap to get wrong: a machine with no cable would
-# otherwise sit for the whole DHCP fallback before showing a prompt,
-# which is a worse fault than the one being fixed. Ten seconds covers a
-# DHCP exchange on a switch that spends a few of them in listening and
-# learning; a slower one lands a couple of lines under the prompt, which
-# is a far smaller sin than a blank screen.
+# How long boot may hold the prompt back for the bus walk, in
+# milliseconds. Generous, because the walk is known to finish and the
+# keyboard driver is on the other side of it; bounded, because a walk
+# that hangs must not cost the shell.
 #
 Walkwait:	con 30000;
-Netwait:	con 10000;
 
 #
 # Wait for a channel, or give up and say so.
@@ -299,33 +294,6 @@ timer(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
 	c <-= 1;
-}
-
-#
-# Wait until an ethernet interface has been given an address.
-#
-# The driver is a separate program, so there is no channel to wait on --
-# but it publishes its result in the namespace, and that is the thing
-# actually worth waiting for. Polled rather than slept for a fixed time:
-# a cable that is not plugged in should cost the full wait, and a fast
-# DHCP server should cost almost none.
-#
-waitnet(ms: int)
-{
-	for(waited := 0; waited < ms; waited += 250){
-		(ok, nil) := sys->stat("/net/ipifc/1/status");
-		if(ok >= 0){
-			#
-			# Configured, but the driver still has a few lines
-			# to print about it. Let them land above the prompt
-			# rather than below.
-			#
-			sys->sleep(750);
-			return;
-		}
-		sys->sleep(250);
-	}
-	sys->print("init: no network yet; starting the shell anyway\n");
 }
 
 Echoreq:	con 8;		# ICMP type: echo request
@@ -725,6 +693,38 @@ usbwalk()
 # hub's for the first call, a real hub's for the recursive ones. depth
 # is only used to indent the report.
 #
+#
+# Reset a hub port again and wait for the device to come back.
+#
+# Opened per call rather than threaded through: this runs at most twice
+# per device on a bad boot and never on a good one, so a file open is
+# not the expensive part of it.
+#
+reresetport(hubdata: string, port: int, indent: string): int
+{
+	d := sys->open(hubdata, Sys->ORDWR);
+	if(d == nil)
+		return -1;
+
+	sys->print("init: %sport %d did not answer; resetting it again\n",
+		indent, port);
+	if(portfeature(d, port, Fportreset) < 0)
+		return -1;
+
+	for(w := 0; w < 25; w++){		# up to half a second
+		sys->sleep(20);
+		status := portstatus(d, port);
+		if(status < 0)
+			return -1;
+		if(status & HPenable)
+			break;
+		if((status & HPreset) == 0)
+			break;
+	}
+	sys->sleep(Resetrecovery);
+	return 0;
+}
+
 enumerate(hubctl: string, port: int, speed, indent: string): int
 {
 	c := sys->open(hubctl, Sys->ORDWR);
@@ -797,9 +797,23 @@ enumerate(hubctl: string, port: int, speed, indent: string): int
 	# correctly, so this is a transfer that fails sometimes rather
 	# than a device that cannot be read.
 	#
+	#
+	# Between attempts, RESET THE PORT AGAIN -- on this same device.
+	#
+	# Re-reading a descriptor does not help one that came out of reset
+	# wrong; only another reset does. But it has to be another reset
+	# of the device already allocated, not another trip through
+	# enumeration: newdev hands out a fresh device each time it is
+	# called, so retrying from the top left the same keyboard
+	# enumerated twice, and the second copy -- ep8.0 -- had no
+	# endpoints for the driver to open.
+	#
 	desc := array[18] of byte;
 	ok := 0;
-	for(try := 0; try < 3; try++){
+	hubdata := hubctl[0:len hubctl - 3] + "data";
+	for(try := 0; try < Enumattempts; try++){
+		if(try > 0 && reresetport(hubdata, port, indent) < 0)
+			break;
 		n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
 		if(n < len desc){
 			sys->print("init: %sdevice descriptor read failed (%d): %r\n",
@@ -807,9 +821,8 @@ enumerate(hubctl: string, port: int, speed, indent: string): int
 			continue;
 		}
 		if(int desc[0] != len desc || int desc[1] != Ddev){
-			sys->print("init: %sdevice descriptor is not one (len %d type %d) -- retrying\n",
+			sys->print("init: %sdevice descriptor is not one (len %d type %d)\n",
 				indent, int desc[0], int desc[1]);
-			sys->sleep(50);
 			continue;
 		}
 		ok = 1;
@@ -1248,40 +1261,8 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		#
 		sys->sleep(Resetrecovery);
 
-		#
-		# And if it still will not talk, RESET IT AGAIN.
-		#
-		# Re-reading the descriptor three times does not help a
-		# device that came out of reset wrong; only another reset
-		# does. The root port already works this way and reports
-		# which attempt succeeded -- this is the same treatment for
-		# devices behind a hub, which is where the low-speed
-		# failures actually happen.
-		#
-		for(etry := 0; etry < Enumattempts; etry++){
-			if(enumerate("/usb/usb/" + name + "/ctl", port,
-			    speedname(status), indent) == 0)
-				break;
-			if(etry == Enumattempts - 1){
-				sys->print("init: %sport %d gave up after %d attempts\n",
-					indent, port, Enumattempts);
-				break;
-			}
-			sys->print("init: %sport %d resetting again\n", indent, port);
-			if(portfeature(d, port, Fportreset) < 0)
-				break;
-			for(rw := 0; rw < 25; rw++){
-				sys->sleep(20);
-				status = portstatus(d, port);
-				if(status < 0 || (status & HPenable))
-					break;
-				if((status & HPreset) == 0)
-					break;
-			}
-			if(status < 0 || (status & HPenable) == 0)
-				break;
-			sys->sleep(Resetrecovery);
-		}
+		enumerate("/usb/usb/" + name + "/ctl", port,
+			speedname(status), indent);
 	}
 }
 

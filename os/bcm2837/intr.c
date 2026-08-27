@@ -318,6 +318,33 @@ intrdump(void)
 int
 intrpending(void)
 {
-	return (LOCAL(Lirqsource0) | INTREGS->GPUpending[0] |
-		INTREGS->GPUpending[1] | INTREGS->ARMpending) != 0;
+	/*
+	 * MASKED BY WHAT WE ENABLED, which is the whole point and was
+	 * missing.
+	 *
+	 * The pending registers report sources that are ASSERTED, not
+	 * sources anyone is listening to -- the same fact the top of this
+	 * file records, and this function ignored it. So a peripheral
+	 * nobody enabled, merely by asserting, made an interrupt look
+	 * "genuinely pending and unhandled" and the caller panicked:
+	 *
+	 *     trap: unhandled IRQ
+	 *     intr: Lirqsource0 0x100 GPUpending 0x200 0 ARMpending 0x800
+	 *           enabled 0x200 0 0 spurious 10 orphan -1
+	 *
+	 * orphan -1 says it plainly -- nothing enabled and pending was
+	 * ever rejected. Intermittent, because it needs a source to
+	 * assert in the window between intrgpu reading the pending
+	 * registers and this reading them again.
+	 *
+	 * Lirqsource0 has no enable mask of its own: it is the ARM local
+	 * block's summary, one bit per core-level source. Igpu is
+	 * excluded because it only means "look at the GPU controller",
+	 * which the GPU words below answer properly; the rest are the
+	 * per-core timers, which are enabled elsewhere and are ours.
+	 */
+	return ((LOCAL(Lirqsource0) & ~Igpu) != 0) ||
+		(INTREGS->GPUpending[0] & irqenabled[0]) != 0 ||
+		(INTREGS->GPUpending[1] & irqenabled[1]) != 0 ||
+		(INTREGS->ARMpending & 0xFF & irqenabled[2]) != 0;
 }

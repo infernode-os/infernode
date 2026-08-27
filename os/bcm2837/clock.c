@@ -279,6 +279,14 @@ irqdispatch(Ureg *u)
 
 	handled = 0;
 
+	/*
+	 * Cleared per dispatch, not per boot. It records the source
+	 * intrrun could not place, and the decision below is about THIS
+	 * interrupt -- a stale value from an earlier one would condemn a
+	 * later spurious interrupt for something it did not do.
+	 */
+	irqorphan = -1;
+
 	if(clockintr(u))
 		handled = 1;
 
@@ -310,7 +318,31 @@ irqdispatch(Ureg *u)
 	 * different thing and still reported: that one would spin for ever
 	 * if ignored, and it is what the panic is for.
 	 */
-	if(!intrpending()){
+	/*
+	 * Nothing claimed it. Two different things look like this and
+	 * only one of them is a fault.
+	 *
+	 * If a source that is ENABLED and PENDING was rejected for want
+	 * of a handler, intrrun recorded it, and that one would spin for
+	 * ever if ignored: it is what the panic is for.
+	 *
+	 * Otherwise the source went away between the CPU latching the
+	 * exception and us looking. That is a spurious interrupt, it is
+	 * normal, and it must not be fatal. This driver stack generates
+	 * them by construction: chanwait polls at splhi and clears
+	 * hcintmsk and haintmsk once a transfer completes, which
+	 * de-asserts the controller, and the interrupt the CPU had
+	 * already latched then fires as soon as spl drops with nothing
+	 * left pending.
+	 *
+	 * The test used to be intrpending() alone, which asks a
+	 * different question -- "is anything asserted anywhere" -- and
+	 * answered yes for peripherals nobody enabled. That panicked the
+	 * board intermittently during USB bring-up with orphan reading
+	 * -1: nothing enabled and pending had been rejected, so there was
+	 * nothing to panic about.
+	 */
+	if(irqorphan < 0){
 		nspurious++;
 		return 1;
 	}

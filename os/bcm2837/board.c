@@ -451,14 +451,23 @@ displaywatch(void *a)
 			return;
 
 		/*
-		 * Whether display 1 has been brought up, tracked here
-		 * rather than inferred from the console's screen count.
-		 * The count is not that question: it is zero both before
-		 * the first screen is added and after the console gives
-		 * them all up, so a watcher reading it re-added the same
-		 * display on every poll.
+		 * Nothing to do if the display is already up -- and this
+		 * test comes FIRST, before anything is asked of the
+		 * firmware, because fbinitdisp REALLOCATES a
+		 * framebuffer. Probing a display the console is already
+		 * drawing on is not a harmless look: it hands back a new
+		 * buffer at a possibly different pitch while text is
+		 * being written into the old one.
+		 *
+		 * Two conditions, because there are two ways it can
+		 * already be up. `have` is this watcher's own doing;
+		 * screens > 1 is the boot walk's, for a display that was
+		 * plugged in before power-on. Neither is derivable from
+		 * the other, and the screen count alone was the bug
+		 * above: it also reads zero after the console gives the
+		 * screen up.
 		 */
-		if(have)
+		if(have || fbconsscreens() > 1)
 			continue;
 
 		if(mboxfbdispnum(1) < 0)

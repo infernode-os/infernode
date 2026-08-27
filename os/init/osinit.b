@@ -668,7 +668,7 @@ usbwalk()
 		return;
 	}
 
-	enumerate("/usb/usb/ep1.0/ctl", 1, speedname(status), "");
+	enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
 }
 
 #
@@ -682,16 +682,16 @@ usbwalk()
 #
 # Reset a hub port again and wait for the device to come back.
 #
-# Opened per call rather than threaded through: this runs at most twice
-# per device on a bad boot and never on a good one, so a file open is
-# not the expensive part of it.
+# Takes the hub's OPEN fd rather than reopening it by path. Reopening
+# was wrong twice over: devusb hands out an endpoint to one opener, so
+# the second open failed and the retry gave up immediately -- and the
+# failed namespace walk left a channel that was then closed twice,
+# panicking the kernel with "cclose" the moment any device failed to
+# enumerate. A device failing to enumerate is common enough on this
+# board that it took the machine down on most boots.
 #
-reresetport(hubdata: string, port: int, indent: string): int
+reresetport(d: ref Sys->FD, port: int, indent: string): int
 {
-	d := sys->open(hubdata, Sys->ORDWR);
-	if(d == nil)
-		return -1;
-
 	sys->print("init: %sport %d did not answer; resetting it again\n",
 		indent, port);
 	if(portfeature(d, port, Fportreset) < 0)
@@ -711,7 +711,7 @@ reresetport(hubdata: string, port: int, indent: string): int
 	return 0;
 }
 
-enumerate(hubctl: string, port: int, speed, indent: string): int
+enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): int
 {
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
@@ -796,9 +796,8 @@ enumerate(hubctl: string, port: int, speed, indent: string): int
 	#
 	desc := array[18] of byte;
 	ok := 0;
-	hubdata := hubctl[0:len hubctl - 3] + "data";
 	for(try := 0; try < Enumattempts; try++){
-		if(try > 0 && reresetport(hubdata, port, indent) < 0)
+		if(try > 0 && reresetport(hubd, port, indent) < 0)
 			break;
 		n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
 		if(n < len desc){
@@ -1293,7 +1292,7 @@ portsetup(d: ref Sys->FD, name: string, port: int, indent: string): int
 	#
 	sys->sleep(Resetrecovery);
 
-	enumerate("/usb/usb/" + name + "/ctl", port, speedname(status), indent);
+	enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
 	return 0;
 }
 

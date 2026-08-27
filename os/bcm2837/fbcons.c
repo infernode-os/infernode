@@ -712,3 +712,15 @@ fbconsinit(Fbinfo *fb)
 	fbconsputs("InferNode console\n", 18);
 	return 0;
 }
+
+/*
+ * How many screens the console is drawing on.
+ *
+ * The display watcher needs to know whether it has already brought a
+ * screen up, and nscreens is private to this file.
+ */
+int
+fbconsscreens(void)
+{
+	return nscreens;
+}

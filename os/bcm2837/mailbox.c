@@ -49,6 +49,32 @@
  */
 static volatile u32int mboxbuf[64] __attribute__((aligned(16)));
 
+/*
+ * One buffer, therefore one lock.
+ *
+ * Every caller hands mboxcall the same mboxbuf, so two callers at once
+ * interleave their requests into it and both get an answer to a
+ * question neither asked. That is not hypothetical: the framebuffer
+ * console sets a GPU offset through this on EVERY scroll, from whatever
+ * process happened to be printing, so any two processes printing at
+ * once already race here -- and it becomes routine the moment more than
+ * one core is running.
+ *
+ * A plain Lock, deliberately, not a QLock and not an ilock:
+ *
+ *   - it is taken before the scheduler exists (board revision and
+ *     memory size are read from kmain), which rules out sleeping locks;
+ *   - a mailbox call can spin for a long time if the firmware never
+ *     answers, and an ilock would hold interrupts off for all of it,
+ *     turning a stalled firmware into a dead machine;
+ *   - nothing takes it from interrupt context, so there is no handler
+ *     to deadlock against. That last point rests on iprint reaching the
+ *     screen only when iprintscreenputs is set, and it is not set. If
+ *     that ever changes, this becomes an ilock and Mboxspin has to come
+ *     down with it.
+ */
+static Lock mboxlock;
+
 static void
 dsb(void)
 {
@@ -73,8 +99,21 @@ enum
  * Post the buffer to a channel and wait for the reply.  Returns 0 on
  * success, -1 if the firmware rejected the request.
  */
+static int mboxcall1(u32int, volatile u32int*);
+
 static int
 mboxcall(u32int chan, volatile u32int *buf)
+{
+	int r;
+
+	lock(&mboxlock);
+	r = mboxcall1(chan, buf);
+	unlock(&mboxlock);
+	return r;
+}
+
+static int
+mboxcall1(u32int chan, volatile u32int *buf)
 {
 	u32int v, want;
 	long i;

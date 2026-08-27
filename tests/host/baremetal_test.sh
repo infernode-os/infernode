@@ -1972,6 +1972,99 @@ else
 fi
 
 #
+# 3h. A device plugged in AFTER boot is noticed.
+#
+#     The bus used to be walked once and never again, so a keyboard
+#     connected after boot was invisible until the machine restarted --
+#     which is indistinguishable from the keyboard being broken, and is
+#     exactly how it was reported.
+#
+#     QEMU can add a USB device to a running machine, so the thing that
+#     was missing is the thing this tests: boot with NO keyboard,
+#     confirm the driver is not running, then plug one in and require
+#     that the driver claims it without a reboot.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt" 2>&1
+import subprocess, socket, json, time, sys, threading
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+PORT = 4483
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
+                     "-display", "none", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+try:
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); p.kill(); sys.exit(0)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+
+    # Let the boot walk finish with nothing attached.
+    deadline = time.time() + 90
+    while time.time() < deadline and b"starting the shell" not in buf:
+        time.sleep(0.2)
+    time.sleep(8)
+    before = bytes(buf)
+
+    # Now plug a keyboard in.
+    f.write(json.dumps({"execute": "device_add",
+        "arguments": {"driver": "usb-kbd", "id": "hotkbd"}}) + "\n")
+    f.flush(); f.readline()
+
+    time.sleep(15)
+    s.close()
+finally:
+    p.kill(); p.wait()
+
+after = bytes(buf)
+print("BEFORE-CLEAN" if b"kbdusb:" not in before else "BEFORE-DIRTY")
+tail = after[len(before):]
+print("ATTACH-SEEN" if b"device attached" in tail else "ATTACH-MISSED")
+print("CLAIMED" if b"kbdusb:" in tail and b"ready on endpoint" in tail else "NOT-CLAIMED")
+PYEOF
+
+HOTOUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- hotplug ---"; echo "$HOTOUT"; }
+if grep -q '^SKIP' <<<"$HOTOUT"; then
+    skip "usb hotplug ($(grep '^SKIP' <<<"$HOTOUT" | head -1))"
+else
+    # The "before" check is what stops this passing for the wrong
+    # reason: if a keyboard were somehow present at boot, the driver
+    # would claim it then and the test would look like hotplug worked.
+    if grep -q 'BEFORE-CLEAN' <<<"$HOTOUT"; then
+        pass "the machine boots with no keyboard and no keyboard driver"
+    else
+        fail "a keyboard driver was already running before anything was plugged in"
+    fi
+    if grep -q 'ATTACH-SEEN' <<<"$HOTOUT"; then
+        pass "the hub watcher notices a port change after boot"
+    else
+        fail "plugging a device in after boot went unnoticed"
+    fi
+    if grep -q 'CLAIMED' <<<"$HOTOUT"; then
+        pass "a device plugged in after boot is enumerated and claimed by its driver"
+    else
+        fail "the hotplugged device was never claimed by a driver"
+    fi
+fi
+
+#
 # 3e. A reboot that does not need the shell.
 #
 #     "echo reboot > /dev/sysctl" needs a shell sitting at a prompt, and

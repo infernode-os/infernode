@@ -140,6 +140,8 @@ boardclockcheck(void)
 static Fbinfo fb;
 static Fbinfo fb2;
 
+enum { Dispwatchival = 2000 };	/* ms between EDID probes */
+
 void
 boardfbprobe(void)
 {
@@ -404,5 +406,64 @@ boardsdprobe(void)
 		uartputstr(" sectors ");
 		uartputd(len);
 		uartputstr("\n");
+	}
+}
+
+/*
+ * Watch for a display being plugged in.
+ *
+ * EDID was read once, at boot, so a monitor connected afterwards was
+ * invisible until the machine was restarted -- which looks exactly like
+ * the monitor not working. The firmware answers EDID whenever it is
+ * asked, so there is no reason to only ask once.
+ *
+ * Only the second display is watched. Display 0 is whatever the
+ * firmware chose as primary and is already the console; a DSI panel has
+ * no EDID to give in any case.
+ *
+ * One direction only: a display that appears is brought up, a display
+ * that goes away is left alone. Removing a screen from under a console
+ * that may be drawing on it needs the console to stop using it first,
+ * and that is worth doing properly rather than racing.
+ */
+void
+displaywatch(void *a)
+{
+	static uchar edid[128];
+	int ndisp;
+
+	USED(a);
+
+	ndisp = mboxfbnumdisplays();
+	if(ndisp <= 1)
+		return;			/* nowhere for one to appear */
+
+	for(;;){
+		tsleep(&up->sleep, return0, nil, Dispwatchival);
+
+		if(fbconsscreens() > 1)
+			continue;	/* already have it */
+
+		if(mboxfbdispnum(1) < 0)
+			continue;
+		if(mboxedid(0, edid) < 0){
+			mboxfbdispnum(0);
+			continue;
+		}
+		mboxfbdispnum(0);
+
+		if(fbinitdisp(1, &fb2) < 0)
+			continue;
+		if(fb2.base == fb.base)
+			continue;	/* one buffer handed back twice */
+
+		uartputstr("fb:   display 1 connected, ");
+		uartputd(fb2.width);
+		uartputstr("x");
+		uartputd(fb2.height);
+		uartputstr("\n");
+
+		mmunormalnc(fb2.base, fb2.size);
+		fbconsadd(&fb2);
 	}
 }

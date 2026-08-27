@@ -490,6 +490,7 @@ Fportreset:	con 4;
 # times to reset it before giving up on it.
 #
 Resetrecovery:	con 50;
+Watchival:	con 1000;	# how often a hub's ports are re-read, ms
 Enumattempts:	con 3;
 Fportpower:	con 8;
 
@@ -1221,6 +1222,80 @@ eptype(t: int): string
 	return "?";
 }
 
+#
+# Reset a port and enumerate whatever is on it.
+#
+# Split out of the boot walk so the hub watcher can call exactly the
+# same code when something is plugged in later. A device that arrives
+# after boot has to go through precisely what a device present at boot
+# goes through -- if the two paths differ, one of them is the one that
+# never gets exercised.
+#
+portsetup(d: ref Sys->FD, name: string, port: int, indent: string): int
+{
+	#
+	# Reset, and try again if the port does not enable.
+	#
+	# The root port needed exactly this and for the same reason: a
+	# device that fluffs its reset handshake usually manages on a
+	# second attempt, and giving up after one leaves it invisible.
+	#
+	# Issue the reset, then WAIT for the hub to finish it. An earlier
+	# version slept a flat 50ms and re-issued the reset if the port
+	# was not enabled, which made things worse: re-issuing
+	# SET_FEATURE(PORT_RESET) RESTARTS the reset, so a port needing
+	# longer than 50ms was interrupted and restarted three times and
+	# never converged -- reporting 0x0311 (present, powered, low
+	# speed, reset still asserted) every attempt.
+	#
+	# A hub clears the reset bit itself when it is done and sets
+	# enable, so poll for that and only re-issue if the hub has
+	# finished and still not enabled the port.
+	#
+	status := -1;
+	for(rtry := 0; rtry < 3; rtry++){
+		if(portfeature(d, port, Fportreset) < 0){
+			sys->print("init: %sport %d reset failed: %r\n", indent, port);
+			return -1;
+		}
+		for(w := 0; w < 25; w++){		# up to half a second
+			sys->sleep(20);
+			status = portstatus(d, port);
+			if(status < 0)
+				break;
+			if(status & HPenable)
+				break;
+			if((status & HPreset) == 0)
+				break;		# hub finished, port not enabled
+		}
+		if(status < 0 || (status & HPenable))
+			break;
+		sys->print("init: %sport %d %#4.4x not enabled after reset, retrying\n",
+			indent, port, status);
+	}
+
+	sys->print("init: %sport %d %#4.4x%s\n",
+		indent, port, status, statusflags(status));
+	if(status < 0 || (status & HPenable) == 0)
+		return -1;
+
+	#
+	# Let the device recover before speaking to it.
+	#
+	# A port that reports itself enabled is not yet a device that will
+	# answer: the spec gives one up to 10ms after reset (TRSTRCY)
+	# before it has to respond, and asking inside that window gets
+	# nothing back -- which arrives as a buffer still holding 0x55
+	# rather than as an error, because a control transfer that returns
+	# no data does not report one.
+	#
+	sys->sleep(Resetrecovery);
+
+	enumerate("/usb/usb/" + name + "/ctl", port, speedname(status), indent);
+	return 0;
+}
+
+
 
 #
 # Walk a real hub: read how many ports it has, power them, and
@@ -1309,74 +1384,84 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		if((status & HPpresent) == 0)
 			continue;
 
-		#
-		# Reset, and try again if the port does not enable.
-		#
-		# The root port needed exactly this and for the same reason:
-		# a device that fluffs its reset handshake usually manages
-		# on a second attempt, and giving up after one leaves it
-		# invisible. The mouse's port came back 0x0311 -- reset bit
-		# set, enable bit clear -- while the keyboard on the port
-		# beside it enumerated, from one attempt each.
-		#
-		#
-		# Issue the reset, then WAIT for the hub to finish it.
-		#
-		# The first version of this slept a flat 50ms and retried
-		# the reset if the port was not enabled -- which made things
-		# worse, not better: re-issuing SET_FEATURE(PORT_RESET)
-		# restarts the reset, so a port that needed longer than 50ms
-		# was interrupted and restarted three times and never
-		# converged. It reported 0x0311 every attempt: present,
-		# powered, low speed, and reset STILL ASSERTED.
-		#
-		# A hub clears the reset bit itself when it is done and sets
-		# enable. So poll for that, and only re-issue the reset if
-		# the hub has finished and still not enabled the port.
-		#
-		for(rtry := 0; rtry < 3; rtry++){
-			if(portfeature(d, port, Fportreset) < 0){
-				sys->print("init: %sport %d reset failed: %r\n",
-					indent, port);
-				break;
+		portsetup(d, name, port, indent);
+	}
+
+	#
+	# Keep watching, so plugging something in later works.
+	#
+	# Without this the bus is walked exactly once and never again: a
+	# keyboard connected after boot is invisible until the machine is
+	# restarted, which is indistinguishable from the keyboard being
+	# broken. Every hub reports port changes, so there is no reason
+	# for a device to go unnoticed.
+	#
+	spawn hubwatch(d, name, nports, indent);
+}
+
+#
+# Watch a hub's ports and act on what changes.
+#
+# Polled, not driven by the hub's status-change interrupt endpoint.
+# The endpoint is the tidier mechanism and this should move to it, but
+# it would be the third consumer of an interrupt endpoint on a
+# controller whose split-transaction handling has been the single
+# largest source of bugs in this port -- whereas GET_PORT_STATUS is an
+# ordinary control transfer over a path that is exercised at every
+# boot. Correct and boring first.
+#
+# A second a poll is imperceptible to a person plugging something in
+# and negligible beside what the HID drivers already ask of the bus.
+#
+hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string)
+{
+	was := array[nports+1] of int;
+	for(i := 1; i <= nports; i++){
+		st := portstatus(d, i);
+		was[i] = st >= 0 && (st & HPpresent);
+	}
+
+	for(;;){
+		sys->sleep(Watchival);
+		for(port := 1; port <= nports; port++){
+			status := portstatus(d, port);
+			if(status < 0)
+				continue;
+			now := (status & HPpresent) != 0;
+			if(now == was[port])
+				continue;
+			was[port] = now;
+
+			if(now){
+				sys->print("init: %s%s port %d: device attached\n",
+					indent, name, port);
+				#
+				# The same code the boot walk runs. A device
+				# that arrives later must not take a
+				# different path to one that was already
+				# there.
+				#
+				portsetup(d, name, port, indent);
+			}else{
+				#
+				# Say so, and leave it there.
+				#
+				# The driver notices on its own -- every
+				# transfer to a device that has gone fails,
+				# and kbdusb and mouseusb give up after a run
+				# of those. What is NOT done here is
+				# releasing the devusb endpoints, so the
+				# device number is not reused: plug the same
+				# keyboard back in and it enumerates as a new
+				# one. That needs devusb's detach, and doing
+				# it wrong orphans an endpoint a driver still
+				# holds, so it is deliberately left until the
+				# teardown can be tested properly.
+				#
+				sys->print("init: %s%s port %d: device removed\n",
+					indent, name, port);
 			}
-			for(w := 0; w < 25; w++){	# up to half a second
-				sys->sleep(20);
-				status = portstatus(d, port);
-				if(status < 0)
-					break;
-				if(status & HPenable)
-					break;
-				if((status & HPreset) == 0)
-					break;	# hub finished, port not enabled
-			}
-			if(status < 0 || (status & HPenable))
-				break;
-			sys->print("init: %sport %d %#4.4x not enabled after reset, retrying\n",
-				indent, port, status);
 		}
-
-		sys->print("init: %sport %d %#4.4x%s\n",
-			indent, port, status, statusflags(status));
-		if((status & HPenable) == 0)
-			continue;
-
-		#
-		# Let the device recover before speaking to it.
-		#
-		# A port that reports itself enabled is not yet a device
-		# that will answer: the spec gives one up to 10ms after
-		# reset (TRSTRCY) before it has to respond, and asking
-		# inside that window gets nothing back -- which arrives as
-		# a buffer still holding 0x55 rather than as an error,
-		# because a control transfer that returns no data does not
-		# report one. Fifty milliseconds costs nothing once per
-		# device.
-		#
-		sys->sleep(Resetrecovery);
-
-		enumerate("/usb/usb/" + name + "/ctl", port,
-			speedname(status), indent);
 	}
 }
 

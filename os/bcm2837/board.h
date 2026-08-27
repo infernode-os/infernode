@@ -42,6 +42,7 @@ void	fbfill(Fbinfo*, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 int	fbconsinit(Fbinfo*);
 int	fbconsadd(Fbinfo*);
+int	fbconsscreens(void);
 int	mboxfbdispnum(u32int);
 void	fbconsputs(char*, int);
 

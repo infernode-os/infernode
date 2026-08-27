@@ -1793,6 +1793,7 @@ startdis(void)
 	 * by character, before the line discipline and before any shell.
 	 */
 
+	kproc("display", displaywatch, nil, 0);
 	kproc("usb", usbkproc, nil, 0);
 	kproc("uart", uartkproc, nil, 0);
 	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);

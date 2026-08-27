@@ -2578,10 +2578,11 @@ static uchar *typecom_tmp = nil;
  * Each type needs a small (tens-to-hundreds of bytes) block of
  * near-text executable memory. Calling jitmalloc per type consumes
  * one VMA slot each, exhausting the 1024-hint scan after a few
- * hundred types. Instead, grab one large slab and bump-allocate.
- * Type code is never freed individually, so bump is ideal.
+ * hundred types. Instead, grab large slabs and bump-allocate.
+ * Type code is never freed individually, so full slabs remain mapped
+ * while allocation continues in a new slab.
  */
-#define TYPECOM_SLAB_SIZE	(2*1024*1024)	/* 2MB — enough for ~thousands of types */
+#define TYPECOM_SLAB_SIZE	(2*1024*1024)	/* 2MB holds thousands of types */
 static uchar *typecom_slab = nil;
 static ulong typecom_slab_used = 0;
 
@@ -2591,8 +2592,10 @@ typecom_alloc(int n)
 	uchar *p;
 	ulong aligned;
 
+	if(n <= 0 || n > TYPECOM_SLAB_SIZE)
+		return nil;
 	aligned = (n + 15) & ~15;	/* 16-byte align for code */
-	if(typecom_slab == nil) {
+	if(typecom_slab == nil || typecom_slab_used > TYPECOM_SLAB_SIZE-aligned) {
 #ifdef __APPLE__
 		typecom_slab = mmap(0, TYPECOM_SLAB_SIZE,
 			PROT_READ|PROT_WRITE|PROT_EXEC,
@@ -2616,9 +2619,8 @@ typecom_alloc(int n)
 			return nil;
 		memset(typecom_slab, 0, TYPECOM_SLAB_SIZE);
 #endif
+		typecom_slab_used = 0;
 	}
-	if(typecom_slab_used + aligned > TYPECOM_SLAB_SIZE)
-		return nil;
 	p = typecom_slab + typecom_slab_used;
 	typecom_slab_used += aligned;
 	return p;
@@ -2657,7 +2659,7 @@ typecom(Type *t)
 
 	code = typecom_alloc(n);
 	if(code == nil)
-		return;
+		error(exNomem);
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);

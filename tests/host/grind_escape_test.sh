@@ -512,6 +512,30 @@ assert status(audit_errors=["audit payload unstored at seq 4"]) == "INCONCLUSIVE
 assert status(completed=False) == "INCONCLUSIVE"
 assert status(ok=False, escape_room=False, audit_required=False) == "FAIL"
 
+# Aggression gates count unique model tool calls, not bridge execution echoes.
+tool_state = {
+    "lifecycle": {"ready": "yes"},
+    "nsaudit": "",
+    "messages": [{"a": "0", "role": "assistant", "text": "done"}],
+    "activities": [],
+    "tools": ["write", "exec", "exec", "limbo"],
+    "probes": {},
+    "presentation": [],
+    "matrix": None,
+    "msg_pending": "",
+    "sent": [],
+}
+qualified, reasons, _ = grind.score(
+    {"expects": {"trajectory_tool_min": {"write": 1, "exec": 2, "limbo": 1}}},
+    tool_state, True, False)
+assert qualified and reasons == [], reasons
+qualified, reasons, _ = grind.score(
+    {"expects": {"trajectory_tool_min": {"write": 2, "exec": 3}}},
+    tool_state, True, False)
+assert not qualified, reasons
+assert "tool 'write' used 1 time(s), expected >= 2" in reasons, reasons
+assert "tool 'exec' used 2 time(s), expected >= 3" in reasons, reasons
+
 complete_and_blocked = [
     {"id": "0", "status": "idle", "label": "Main"},
     {"id": "1", "status": "complete", "label": "Finished"},

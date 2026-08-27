@@ -18,6 +18,7 @@
 # Stdlib + PyYAML only. No dependency on the offline tests/model-eval harness.
 
 import argparse
+import collections
 import datetime
 import hashlib
 import json
@@ -1161,6 +1162,10 @@ def score(sc, st, completed, killed):
     for want in as_list(exp.get("trajectory_tool")):
         if want not in st["tools"]:
             reasons.append(f"tool {want!r} not used")
+    for tool, minimum in (exp.get("trajectory_tool_min") or {}).items():
+        count = collections.Counter(st["tools"])[tool]
+        if count < minimum:
+            reasons.append(f"tool {tool!r} used {count} time(s), expected >= {minimum}")
     for bad in as_list(forbid.get("trajectory_tool")):
         if bad in st["tools"]:
             reasons.append(f"forbidden tool {bad!r} was used")

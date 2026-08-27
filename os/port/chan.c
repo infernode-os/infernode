@@ -1008,11 +1008,91 @@ memrchr(void *va, int c, long n)
  * Since the functions that open Aaccess (sysstat, syswstat, sys_stat)
  * do not use the Cname*, this avoids an unnecessary clone.
  */
+/*
+ * walk() on behalf of a caller whose Chan* is volatile.
+ *
+ * The two requirements are in tension: namec's c must be volatile so
+ * that its waserror handler sees the CURRENT value after a longjmp (see
+ * the note in namec), and walk takes a plain Chan** because it stores
+ * through it. Passing a volatile pointer where a plain one is wanted
+ * discards the qualifier, and a cast to silence that would throw away
+ * exactly the guarantee this exists for.
+ *
+ * So walk through a plain temporary and store the result back at once,
+ * before anything else can raise. If walk itself longjmps -- a device's
+ * own walk may error rather than return nil -- the store does not
+ * happen and the caller's Chan* still names the channel it entered
+ * with, which is the one whose reference the caller still holds and
+ * must release.
+ */
+/*
+ * domount() on behalf of a volatile Chan*, for the same reason and by
+ * the same means as walkc below.
+ */
+static void
+domountc(Chan *volatile *cp, Mhead **mp)
+{
+	Chan *t;
+
+	t = *cp;
+	domount(&t, mp);
+	*cp = t;
+}
+
+static int
+walkc(Chan *volatile *cp, char **names, int nnames, int nomount, int *nerror)
+{
+	Chan *t;
+	int r;
+
+	t = *cp;
+	r = walk(&t, names, nnames, nomount, nerror);
+	*cp = t;
+	return r;
+}
+
 Chan*
 namec(char *aname, int amode, int omode, ulong perm)
 {
 	int n, prefix, len, t, nomount, npath;
-	Chan *c, *cnew;
+	/*
+	 * VOLATILE, and this is load-bearing rather than defensive.
+	 *
+	 * c is modified through a pointer -- walk(&c, ...) replaces it
+	 * and closes what it replaced -- and it is read again in the
+	 * waserror() handler below, which is reached by gotolabel(),
+	 * a longjmp. C says a local that is modified between setjmp and
+	 * longjmp and is not volatile has an indeterminate value in the
+	 * handler, and clang takes the invitation: it kept c in a
+	 * callee-saved register across the call to walk, and the longjmp
+	 * restored that register from the jmp_buf. The handler therefore
+	 * closed the chan c held BEFORE the walk -- the one walk had
+	 * already released.
+	 *
+	 * One extra close per failed namec, on whatever it started from.
+	 * Usually that is pgrp->slash, so the namespace root's reference
+	 * count walked down to zero, the allocator handed the same Chan
+	 * to the next attach, and the kernel panicked in cclose some
+	 * arbitrary time later on a channel that was already free. It
+	 * presented as almost everything: a USB device failing to
+	 * enumerate took the machine down, /prog vanished from a
+	 * namespace nobody had touched, a walk of "/mnt" came back
+	 * holding a channel belonging to an unrelated 9P mount, and the
+	 * window manager could not survive a right-click.
+	 *
+	 * The whole of it reproduces with one command:
+	 *
+	 *	; echo x > /dev
+	 *	panic: cclose ...
+	 *
+	 * Plan 9's compilers do not allocate across setlabel like this,
+	 * which is why upstream can write it plainly. This tree already
+	 * knows the hazard -- kmount and kunmount in os/port/sysfile.c
+	 * use "volatile struct { Chan *c; }" for the same reason -- and
+	 * namec is simply the one that was missed.
+	 */
+	Chan * volatile c;
+	Chan *cnew;
 	Cname *cname;
 	Elemlist e;
 	Rune r;
@@ -1109,7 +1189,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		e.nelems--;
 	}
 
-	if(walk(&c, e.elems, e.nelems, nomount, &npath) < 0){
+	if(walkc(&c, e.elems, e.nelems, nomount, &npath) < 0){
 		if(npath < 0 || npath > e.nelems){
 			print("namec %s walk error npath=%d\n", aname, npath);
 			nexterror();
@@ -1139,13 +1219,13 @@ namec(char *aname, int amode, int omode, ulong perm)
 	switch(amode){
 	case Aaccess:
 		if(!nomount)
-			domount(&c, nil);
+			domountc(&c, nil);
 		break;
 
 	case Abind:
 		m = nil;
 		if(!nomount)
-			domount(&c, &m);
+			domountc(&c, &m);
 		if(c->umh != nil)
 			putmhead(c->umh);
 		c->umh = m;
@@ -1159,7 +1239,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		incref(&cname->r);
 		m = nil;
 		if(!nomount)
-			domount(&c, &m);
+			domountc(&c, &m);
 
 		/* our own copy to open or remove */
 		c = cunique(c);
@@ -1227,7 +1307,7 @@ if(c->umh != nil){
 		 * If omode&OEXCL is set, just give up.
 		 */
 		e.nelems++;
-		if(walk(&c, e.elems+e.nelems-1, 1, nomount, nil) == 0){
+		if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) == 0){
 			if(omode&OEXCL)
 				error(Eexist);
 			omode |= OTRUNC;
@@ -1319,7 +1399,7 @@ if(c->umh != nil){
 		createerr = up->env->errstr;
 		up->env->errstr = tmperrbuf;
 		/* note: we depend that walk does not error */
-		if(walk(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0){
+		if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0){
 			up->env->errstr = createerr;
 			error(createerr);	/* report true error */
 		}

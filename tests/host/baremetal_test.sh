@@ -266,12 +266,20 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/drawtest.dis" \
             "$ROOT/os/init/drawtest.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The same, one layer up: build a widget through $Tk and check
+        # that it drew. Tk->toplevel takes a Display rather than a
+        # Wmcontext, so this runs without a window manager -- which is
+        # what makes it a test of Tk rather than of everything above it.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/tktest.dis" \
+            "$ROOT/os/init/tktest.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
             "/dis/drawtest.dis=$BUILD/drawtest.dis"
+            "/dis/tktest.dis=$BUILD/tktest.dis"
 
             # The FAT filesystem, as a program. Imported from upstream
             # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
@@ -528,6 +536,25 @@ build_kernel() {
         # libdraw's are never pulled in -- which is exactly how the
         # emulator's build behaves, since it links libdraw.a.
         #
+        libobjs+=("$o")
+    done
+
+    # libtk -- the widget set.
+    #
+    # Also an archive member set, and for a stronger reason than
+    # libdraw's: nothing in a kernel that never starts a window system
+    # references any of it, so on a build where tkmodinit() is not
+    # called none of these thirty-seven files is extracted at all and
+    # the whole widget set costs nothing.
+    #
+    # It sits on top of $Draw rather than beside it: Tk draws through
+    # the same Display and Image a Limbo program uses, which is why it
+    # could not be built until libdraw was linked whole.
+    for f in "$ROOT"/libtk/*.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/libtk-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$ROOT/libmemdraw" -I"$BUILD" -Wno-everything \
+             -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 
@@ -2303,6 +2330,37 @@ check "drawtest: display "             "Display.allocate attaches to the draw de
 check "drawtest: pixel r=0x33 g=0x66 b=0x99" \
                                        "readpixels returns the exact colour that was drawn"
 check "drew and read back the colour"  "the graphics stack is correct end to end"
+OUT="$OUT_SAVED"
+
+#
+# 3i3. Tk.
+#
+#      One layer up from $Draw, and the layer at which a GUI stops
+#      being "the screen works" and becomes something a program can be
+#      written against. What is asserted is the whole path: the module
+#      registers, a toplevel is allocated on a real Display, the
+#      command parser accepts good commands AND rejects bad ones, the
+#      packer computes a geometry, and the widget puts the pixels it
+#      was told to into the toplevel's image.
+#
+#      Not asserted: that any of it reaches the screen. Compositing a
+#      toplevel onto the display is a window manager's job and there is
+#      no window manager yet.
+#
+TKOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        "bind '#i' /dev" \
+        'tktest')"
+TKOUT="$(tr -d '\r' <<<"$TKOUT")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- tktest ---"; echo "$TKOUT"; }
+
+OUT_SAVED="$OUT"; OUT="$TKOUT"
+check "tktest: \$Tk loaded"            "a Limbo program can load the \$Tk builtin module"
+check "tktest: toplevel made"          "Tk allocates a toplevel on a Display without a window manager"
+check "parser rejects a bad option"    "the Tk command parser reports errors instead of accepting anything"
+check "tktest: widget pixel r=0x33 g=0x66 b=0x99" \
+                                       "a packed widget drew the colour it was given"
+check "the widget drew the colour"     "the widget set works end to end"
 OUT="$OUT_SAVED"
 
 if grep -qE 'x8r8g8b8' <<<"$DRAWOUT"; then

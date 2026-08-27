@@ -242,12 +242,14 @@ clockcheck(void)
  */
 extern void sysmodinit(void);
 extern void drawmodinit(void);
+extern void tkmodinit(void);
 
 void
 modinit(void)
 {
 	sysmodinit();
 	drawmodinit();
+	tkmodinit();
 }
 
 

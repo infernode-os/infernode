@@ -7,11 +7,15 @@
  * test injecting a click over 9P, and neither is privileged over the
  * other. Reading the file gives the current position and buttons.
  *
- * Derived from emu/port/devpointer.c and deliberately SMALLER than it.
- * The emu version also serves /dev/cursor, which takes an image and
- * hands it to drawcursor(); this kernel has no draw device yet, so that
- * file would be an entry point to code that does not exist. It can come
- * back with devdraw.
+ * Derived from emu/port/devpointer.c.
+ *
+ * /dev/cursor came back with the draw device, which is what it needs:
+ * a write hands a shape to drawcursor(), and os/bcm2837/screen.c paints
+ * it in software because this SoC's scanout path has no hardware
+ * cursor. Without it the pointer is invisible -- the mouse works
+ * perfectly and there is simply nothing on the screen to show where it
+ * is, which is not a difference a person can be expected to reason
+ * about.
  */
 
 #include	"u.h"
@@ -20,10 +24,28 @@
 #include	"dat.h"
 #include	"fns.h"
 #include	"../port/error.h"
+#include	<cursor.h>
+
+static Drawcursor cur;
+
+/*
+ * Little-endian 32-bit, as the cursor message carries them.
+ *
+ * include/draw.h has BGLONG for this, but cursor.h is a separate file
+ * precisely so that a driver need not include draw.h -- the comment at
+ * the top of it says so -- and four lines here is cheaper than the name
+ * conflicts that would come with it.
+ */
+static int
+getl(uchar *p)
+{
+	return p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24);
+}
 
 enum{
 	Qdir,
 	Qpointer,
+	Qcursor,
 };
 
 typedef struct Pointer Pointer;
@@ -49,6 +71,7 @@ static
 Dirtab pointertab[]={
 	".",		{Qdir, 0, QTDIR},	0,	0555,
 	"pointer",	{Qpointer},		0,	0666,
+	"cursor",	{Qcursor},		0,	0222,
 };
 
 enum {
@@ -120,6 +143,12 @@ mousetrack(int b, int x, int y, int isdelta)
 	lastb = mouse.v.b;
 	mouse.v.x = x;
 	mouse.v.y = y;
+	/*
+	 * Follow the pointer with the software cursor. Done here rather
+	 * than in the queueing below because MOVEMENT is what the cursor
+	 * tracks, and movement is deliberately not queued.
+	 */
+	swcursorat(x, y);
 	mouse.v.b = b;
 	mouse.v.msec = msec;
 
@@ -189,6 +218,8 @@ static Chan*
 pointeropen(Chan* c, int omode)
 {
 	c = devopen(c, omode, pointertab, nelem(pointertab), devgen);
+	if((ulong)c->qid.path == Qcursor && (omode & 3) == OREAD)
+		error(Eperm);
 	if((ulong)c->qid.path == Qpointer && (omode & 3) != OWRITE)
 		incref(&mouse.ref);
 	return c;
@@ -284,6 +315,36 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 			b = mouse.v.b;
 		mousetrack(b, x, y, isdelta);
 		break;
+
+	case Qcursor:
+		/*
+		 *  hotx[4] hoty[4] dx[4] dy[4] clr[dx/8 * dy/2] set[dx/8 * dy/2]
+		 *  dx must be a multiple of 8; dy must be a multiple of 2.
+		 *
+		 * Byte for byte what emu/port/devpointer.c accepts, so a
+		 * program that sets a cursor does not have to know which
+		 * kernel it is talking to. An empty write clears it.
+		 */
+		if(n == 0){
+			cur.data = nil;
+			drawcursor(&cur);
+			break;
+		}
+		if(n < 4*4)
+			error(Eshort);
+		cur.hotx = getl((uchar*)va+0*4);
+		cur.hoty = getl((uchar*)va+1*4);
+		cur.minx = 0;
+		cur.miny = 0;
+		cur.maxx = getl((uchar*)va+2*4);
+		cur.maxy = getl((uchar*)va+3*4);
+		if(cur.maxx%8 != 0 || cur.maxy%2 != 0
+		|| n-4*4 != (cur.maxx/8 * cur.maxy))
+			error(Ebadarg);
+		cur.data = (uchar*)va + 4*4;
+		drawcursor(&cur);
+		break;
+
 	default:
 		error(Ebadusefd);
 	}

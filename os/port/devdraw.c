@@ -1469,8 +1469,35 @@ printmesg(char *fmt, uchar *a, int plsprnt)
 	iprint("%.*s", (int)(q-buf), buf);
 }
 
+/*
+ * Draw a batch of operations with the software cursor off the screen.
+ *
+ * Coarse on purpose. The alternative -- teaching every operation to
+ * notice whether it overlaps the cursor -- puts the question in the
+ * wrong place: drawing should not have to know there is a cursor, and
+ * the cursor should not have to know what was drawn. Taking it off for
+ * the duration of one message batch costs a save and a restore per
+ * write and is always right.
+ */
+static void drawmesg1(Client*, void*, int);
+extern void swcursorhide(void);
+extern void swcursorshow(void);
+
 void
 drawmesg(Client *client, void *av, int n)
+{
+	swcursorhide();
+	if(waserror()){
+		swcursorshow();
+		nexterror();
+	}
+	drawmesg1(client, av, n);
+	poperror();
+	swcursorshow();
+}
+
+static void
+drawmesg1(Client *client, void *av, int n)
 {
 	int c, op, repl, m, y, dstid, scrnid, ni, ci, j, nw, e0, e1, ox, oy, esize, oesize, doflush;
 	uchar *u, *a, refresh;

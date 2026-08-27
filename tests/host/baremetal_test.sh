@@ -443,6 +443,10 @@ build_kernel() {
             # window is the one that matters: a Tk toplevel with a
             # text widget, keyboard input, and a shell behind it.
             "/dis/wm/clock.dis=$ROOT/dis/wm/clock.dis"
+            # wm's button-3 menu offers acme, wm/clock and wm/colors.
+            # colors needs nothing that is not already here, and a menu
+            # whose entries do nothing is worse than a shorter menu.
+            "/dis/wm/colors.dis=$ROOT/dis/wm/colors.dis"
             "/dis/wm/shell.dis=$ROOT/dis/wm/shell.dis"
             "/dis/lib/tkclient.dis=$ROOT/dis/lib/tkclient.dis"
             "/dis/lib/titlebar.dis=$ROOT/dis/lib/titlebar.dis"

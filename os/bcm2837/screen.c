@@ -136,3 +136,200 @@ blankscreen(int blank)
 {
 	USED(blank);
 }
+
+/*
+ * The cursor.
+ *
+ * There is no hardware cursor on this SoC's scanout path, so this is a
+ * software one: the pixels under it are saved, the cursor is painted
+ * over them, and they are put back before anything else touches that
+ * part of the screen. Without it the pointer is invisible and the
+ * machine is unusable with a mouse even though the mouse works
+ * perfectly -- which is exactly how it presented.
+ *
+ * The shape arrives through drawcursor(), which is the interface
+ * include/cursor.h declares and every emu graphics backend implements.
+ * Its format is not obvious and is taken from emu/MacOSX/win.c rather
+ * than guessed at:
+ *
+ *	the bounds cover BOTH masks, stacked, so the real height is
+ *	(maxy - miny) / 2;
+ *	bpl is bytesperline at ONE bit per pixel;
+ *	data holds the CLEAR mask for h rows, then the SET mask for h;
+ *	a pixel is opaque where clr|set, black where set, white where
+ *	clr and not set;
+ *	hotx and hoty are NEGATIVE offsets from the pointer to the
+ *	top-left of the shape.
+ */
+
+enum {
+	Curswid = 32,			/* the most this will render */
+	Curshgt = 32,
+};
+
+static struct {
+	Lock	l;
+	int	loaded;			/* a shape has been given */
+	int	shown;			/* it is currently on the screen */
+	int	w, h;			/* of the shape */
+	int	hotx, hoty;
+	uchar	clr[Curswid/8 * Curshgt];
+	uchar	set[Curswid/8 * Curshgt];
+	Point	pos;			/* where the pointer is */
+	Point	at;			/* where the saved pixels came from */
+	int	sw, sh;			/* how much was saved */
+	ulong	save[Curswid * Curshgt];
+} swc;
+
+/*
+ * Put back what the cursor is covering. Must be called with swc.l held.
+ */
+static void
+swcursoff(void)
+{
+	ulong *fb;
+	int x, y, stride;
+
+	if(!swc.shown || screenfb == nil)
+		return;
+	stride = screenfb->pitch / sizeof(ulong);
+	fb = (ulong*)screenfb->base;
+	for(y = 0; y < swc.sh; y++)
+		for(x = 0; x < swc.sw; x++)
+			fb[(swc.at.y + y) * stride + swc.at.x + x] =
+				swc.save[y * Curswid + x];
+	swc.shown = 0;
+}
+
+/*
+ * Save what is there and paint the cursor. Must be called with swc.l
+ * held.
+ */
+static void
+swcurson(void)
+{
+	ulong *fb;
+	int x, y, stride, bpl, bit, byte;
+	Point p;
+
+	if(swc.shown || !swc.loaded || screenfb == nil)
+		return;
+
+	p.x = swc.pos.x + swc.hotx;
+	p.y = swc.pos.y + swc.hoty;
+
+	/*
+	 * Clip to the screen. A cursor near an edge is drawn in part
+	 * rather than not at all, and -- more to the point -- a cursor
+	 * PAST an edge must not write outside the framebuffer.
+	 */
+	if(p.x < 0) p.x = 0;
+	if(p.y < 0) p.y = 0;
+	swc.sw = swc.w;
+	swc.sh = swc.h;
+	if(p.x + swc.sw > (int)screenfb->width)
+		swc.sw = (int)screenfb->width - p.x;
+	if(p.y + swc.sh > (int)screenfb->height)
+		swc.sh = (int)screenfb->height - p.y;
+	if(swc.sw <= 0 || swc.sh <= 0)
+		return;
+
+	stride = screenfb->pitch / sizeof(ulong);
+	fb = (ulong*)screenfb->base;
+	bpl = (swc.w + 7) / 8;
+
+	for(y = 0; y < swc.sh; y++){
+		for(x = 0; x < swc.sw; x++){
+			swc.save[y * Curswid + x] =
+				fb[(p.y + y) * stride + p.x + x];
+			byte = y * bpl + (x >> 3);
+			bit = 0x80 >> (x & 7);
+			if(swc.set[byte] & bit)
+				fb[(p.y + y) * stride + p.x + x] = 0x00000000;
+			else if(swc.clr[byte] & bit)
+				fb[(p.y + y) * stride + p.x + x] = 0x00FFFFFF;
+		}
+	}
+	swc.at = p;
+	swc.shown = 1;
+}
+
+/*
+ * Move the cursor. Called from the pointer device on every position
+ * change.
+ */
+void
+swcursorat(int x, int y)
+{
+	lock(&swc.l);
+	swcursoff();
+	swc.pos.x = x;
+	swc.pos.y = y;
+	swcurson();
+	unlock(&swc.l);
+}
+
+/*
+ * Take the cursor off the screen for the duration of somebody else's
+ * drawing, and put it back afterwards.
+ *
+ * Coarse on purpose: devdraw calls these around a whole message batch
+ * rather than per operation, so drawing never has to know where the
+ * cursor is and the cursor never has to know what was drawn.
+ */
+void
+swcursorhide(void)
+{
+	lock(&swc.l);
+	swcursoff();
+	unlock(&swc.l);
+}
+
+void
+swcursorshow(void)
+{
+	lock(&swc.l);
+	swcurson();
+	unlock(&swc.l);
+}
+
+void
+drawcursor(Drawcursor *c)
+{
+	int h, bpl, y, n;
+
+	lock(&swc.l);
+	swcursoff();
+
+	if(c == nil || c->data == nil || c->minx >= c->maxx){
+		swc.loaded = 0;
+		unlock(&swc.l);
+		return;
+	}
+
+	h = (c->maxy - c->miny) / 2;	/* the bounds cover both masks */
+	bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
+	swc.w = c->maxx - c->minx;
+	if(swc.w > Curswid)
+		swc.w = Curswid;
+	swc.h = h;
+	if(swc.h > Curshgt)
+		swc.h = Curshgt;
+	swc.hotx = c->hotx;
+	swc.hoty = c->hoty;
+
+	n = (swc.w + 7) / 8;
+	if(n > bpl)
+		n = bpl;
+	memset(swc.clr, 0, sizeof swc.clr);
+	memset(swc.set, 0, sizeof swc.set);
+	for(y = 0; y < swc.h; y++){
+		memmove(swc.clr + y * ((swc.w + 7) / 8), c->data + y * bpl, n);
+		memmove(swc.set + y * ((swc.w + 7) / 8),
+			c->data + h * bpl + y * bpl, n);
+	}
+	swc.loaded = 1;
+
+	swcurson();
+	unlock(&swc.l);
+}

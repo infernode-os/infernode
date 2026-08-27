@@ -46,6 +46,14 @@ int	fbconsadd(Fbinfo*);
 int	fbconsscreens(void);
 int	fbconsreleased(void);
 void	fbconsstop(void);
+
+/*
+ * The software cursor, in screen.c. devpointer moves it; devdraw takes
+ * it off the screen around its drawing.
+ */
+void	swcursorat(int, int);
+void	swcursorhide(void);
+void	swcursorshow(void);
 Fbinfo*	boardfb(void);
 int	mboxfbdispnum(u32int);
 void	fbconsputs(char*, int);

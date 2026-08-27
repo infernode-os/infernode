@@ -764,10 +764,36 @@ fbconsreleased(void)
  * console as well, and that is unaffected; screenputs is cleared so
  * devcons stops calling here at all rather than calling into a function
  * that would only return.
+ *
+ * PUT THE SCANOUT WINDOW BACK FIRST, and this is not tidying.
+ *
+ * This console scrolls by moving the GPU's virtual offset rather than
+ * by copying pixels: the buffer is twice the height of the display and
+ * the visible window slides down it. After a boot's worth of messages
+ * that window is a long way from the top.
+ *
+ * The draw device knows nothing about that. attachscreen hands it the
+ * base of the buffer and it draws at 0,0 -- which is off the top of
+ * what the panel is showing. Everything worked and nothing appeared:
+ * the pixels were in the framebuffer, readpixels found them there
+ * because it reads the same memory, and the screen showed a region of
+ * the buffer nobody was drawing in.
  */
 void
 fbconsstop(void)
 {
+	int i;
+
+	for(i = 0; i < nscreens; i++){
+		if(screens[i].voff == 0)
+			continue;
+		mboxfbdispnum(screens[i].fb->disp);
+		mboxfbvoff(0, 0);
+		screens[i].voff = 0;
+	}
+	if(nscreens > 0)
+		mboxfbdispnum(0);
+
 	released = 1;
 	nscreens = 0;
 	screenputs = nil;

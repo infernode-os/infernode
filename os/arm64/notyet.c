@@ -139,7 +139,16 @@ exit(int code)
 	 */
 	if(!resetting){
 		resetting = 1;
-		uartputstr("kernel exit: resetting into serialboot\n");
+		/*
+		 * "resetting", not "resetting into serialboot".
+		 *
+		 * What the firmware loads after this is whatever config.txt
+		 * names, and that is no longer necessarily the loader: once
+		 * the kernel has been installed onto the card the machine
+		 * resets into ITSELF. Naming serialboot here was accurate
+		 * when the only way to get a kernel in was over the wire.
+		 */
+		uartputstr("kernel exit: resetting\n");
 		for(i = 0; i < 3000; i++)
 			microdelay(1000);
 		boardreboot();

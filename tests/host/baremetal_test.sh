@@ -2014,7 +2014,7 @@ sys.stdout.write(bytes(buf).decode(errors="replace"))
 PYEOF
 
 BOOTS="$(grep -c 'InferNode bare-metal' "$BUILD/$PLAT-rebootkey.txt")"
-if grep -q 'resetting into serialboot' "$BUILD/$PLAT-rebootkey.txt" && [[ "$BOOTS" -ge 2 ]]; then
+if grep -q 'kernel exit: resetting' "$BUILD/$PLAT-rebootkey.txt" && [[ "$BOOTS" -ge 2 ]]; then
     pass "Ctrl-T Ctrl-T r reboots the machine without a shell (booted $BOOTS times)"
 else
     fail "the reboot debug key did not restart the machine (boots=$BOOTS)"

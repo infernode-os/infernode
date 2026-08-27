@@ -210,6 +210,11 @@ build_kernel() {
         # loads; Tk is the widget set on top of it.
         "$LIMBO" -t Draw -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/drawmod.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Tk -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/tkmod.h" 2>>"$BUILD/cc.log" || return 1
+
+        # $Math, which is not optional once there are clock hands to
+        # draw: appl/wm/clock.b loads it for sin and cos, and a module
+        # that fails to load is a window that never opens.
+        "$LIMBO" -t Math -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/mathmod.h" 2>>"$BUILD/cc.log" || return 1
     fi
 
 
@@ -290,6 +295,7 @@ build_kernel() {
             "/net="
             "/prog="
             "/usb="
+            "/chan="
             "/env="
             "/dis/sh.dis=$ROOT/dis/sh.dis"
             "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
@@ -316,6 +322,16 @@ build_kernel() {
             # /n/dos, and a mount needs its target to exist.
             "/n="
             "/n/dos="
+
+            # Mount points for the window system. mount(2) will not
+            # create its target, so /mnt/wm has to exist before wm/wm
+            # can put its namespace there -- and a missing directory
+            # reads as "'/mnt' file does not exist", which looks like a
+            # broken program rather than a root image that was never
+            # given the directory.
+            "/mnt="
+            "/mnt/wm="
+            "/tmp="
 
             # Somewhere to mount a file server, which is how a native
             # Inferno is actually meant to get its userspace: upstream's
@@ -394,6 +410,48 @@ build_kernel() {
             "/dis/lib/names.dis=$ROOT/dis/lib/names.dis"
             "/dis/lib/regex.dis=$ROOT/dis/lib/regex.dis"
             "/dis/lib/styxpersist.dis=$ROOT/dis/lib/styxpersist.dis"
+
+            #
+            # The window system.
+            #
+            # wm/wm is the window manager: it owns the screen, hands
+            # each client a window, and moves and resizes them. Its
+            # clients are ordinary Limbo programs -- there is nothing
+            # privileged about it beyond having been started first.
+            #
+            # The module list is not a guess. It is the transitive
+            # closure of "load X X->PATH" from appl/wm/wm.b and from
+            # each client below, resolved against the PATH constants in
+            # module/*.m. A missing library does not report itself
+            # missing: the program fails to LOAD, which surfaces as a
+            # window that never appears.
+            #
+            "/dis/wm/wm.dis=$ROOT/dis/wm/wm.dis"
+            "/dis/lib/wmclient.dis=$ROOT/dis/lib/wmclient.dis"
+            "/dis/lib/wmsrv.dis=$ROOT/dis/lib/wmsrv.dis"
+            "/dis/lib/wmlib.dis=$ROOT/dis/lib/wmlib.dis"
+            "/dis/lib/winplace.dis=$ROOT/dis/lib/winplace.dis"
+            "/dis/lib/menuhit.dis=$ROOT/dis/lib/menuhit.dis"
+            "/dis/lib/lucitheme.dis=$ROOT/dis/lib/lucitheme.dis"
+            "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
+
+            # Two clients, chosen for what they exercise rather than
+            # for what they do. The clock is the smallest thing that
+            # draws continuously and is the only reason $Math is
+            # linked -- it wants sin and cos for the hands. The shell
+            # window is the one that matters: a Tk toplevel with a
+            # text widget, keyboard input, and a shell behind it.
+            "/dis/wm/clock.dis=$ROOT/dis/wm/clock.dis"
+            "/dis/wm/shell.dis=$ROOT/dis/wm/shell.dis"
+            "/dis/lib/tkclient.dis=$ROOT/dis/lib/tkclient.dis"
+            "/dis/lib/titlebar.dis=$ROOT/dis/lib/titlebar.dis"
+            "/dis/lib/daytime.dis=$ROOT/dis/lib/daytime.dis"
+            "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
+            "/dis/lib/bufio.dis=$ROOT/dis/lib/bufio.dis"
+            "/dis/lib/dis.dis=$ROOT/dis/lib/dis.dis"
+            "/dis/lib/debug.dis=$ROOT/dis/lib/debug.dis"
+            "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
+            "/dis/lib/plumbmsg.dis=$ROOT/dis/lib/plumbmsg.dis"
         )
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
@@ -539,6 +597,37 @@ build_kernel() {
         libobjs+=("$o")
     done
 
+    # libmath -- fdlibm, for $Math.
+    #
+    # The module is thin: libinterp/math.c is mostly argument shuffling
+    # in front of the real implementations, which are Sun's fdlibm.
+    # Without them $Math links against nothing and every transcendental
+    # is an undefined symbol.
+    #
+    # FPcontrol-Inferno.c is the one FPcontrol of eighteen: they are per
+    # HOST, and this kernel is not hosted -- it IS Inferno. The others
+    # are for the emulator on Linux, macOS, Windows and so on, and each
+    # defines the same three functions, so linking more than one is a
+    # duplicate symbol.
+    #
+    # libmath/pow10.c is NOT built. It defines ipow10 as pow(10., n)
+    # and includes <math.h>, which a kernel does not have. libkernfp
+    # already carries an exact table of powers of ten for atof, so
+    # ipow10 is defined there instead, over that table.
+    #
+    # Into the archive, like libtk: a kernel whose Limbo never loads
+    # $Math extracts none of it.
+    for f in "$ROOT"/libmath/fdlibm/*.c "$ROOT"/libmath/dtoa.c \
+             "$ROOT"/libmath/fdim.c "$ROOT"/libmath/g_fmt.c \
+             "$ROOT"/libmath/gfltconv.c "$ROOT"/libmath/blas.c \
+             "$ROOT"/libmath/gemm.c "$ROOT"/libmath/FPcontrol-Inferno.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/libmath-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$ROOT/libmath/fdlibm" -I"$BUILD" -Wno-everything \
+             -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
     # libtk -- the widget set.
     #
     # Also an archive member set, and for a stronger reason than
@@ -591,7 +680,7 @@ build_kernel() {
         case "$(basename "$f")" in
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
-        gpu.c|crypt.c|ipint.c|math.c) continue;;
+        gpu.c|crypt.c|ipint.c) continue;;
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
         "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1

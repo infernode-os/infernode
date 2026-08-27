@@ -159,6 +159,24 @@ init()
 		sys->print("init: cannot bind #u on /usb: %r\n");
 
 	#
+	# And the server device on /chan, which is where a Limbo program
+	# that wants to BE a file server puts its names.
+	#
+	# sys->file2chan(dir, file) makes a file whose reads and writes
+	# arrive on a channel the program owns. The kernel side of that is
+	# #s, and by convention it lives at /chan -- so the argument
+	# programs actually pass is the literal "/chan", and without this
+	# bind they get "'/chan' file does not exist" and stop. wm/wm does
+	# exactly that on its first line of work, because the window
+	# manager reaches its clients through a served namespace and not
+	# through anything privileged.
+	#
+	# MCREATE, because serving a name means CREATING it.
+	#
+	if(sys->bind("#s", "/chan", Sys->MREPL|Sys->MCREATE) < 0)
+		sys->print("init: cannot bind #s on /chan: %r\n");
+
+	#
 	# Bring up loopback.
 	#
 	# This is the first thing that exercises the stack rather than

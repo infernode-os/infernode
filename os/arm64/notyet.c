@@ -65,6 +65,7 @@ extern Dev sddevtab;
 extern Dev bootdevtab;
 extern Dev benchdevtab;
 extern Dev drawdevtab;
+extern Dev srvdevtab;
 
 Dev*	devtab[] =
 {
@@ -81,6 +82,7 @@ Dev*	devtab[] =
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
 	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
+	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
 	nil,
 };
 
@@ -236,13 +238,19 @@ clockcheck(void)
  * from having a screen -- a kernel with no display still has $Draw, and
  * Draw->Display.allocate simply finds nothing to attach to.
  *
- * keyring and math are still absent: math needs its own generated
- * header and hardware FP in the kernel, and keyring pulls in the whole
- * crypto stack. Neither is on the way to a window system.
+ * mathmodinit() registers $Math, which stops being optional as soon as
+ * there is a clock face to draw: appl/wm/clock.b loads it for sin and
+ * cos, and a module that fails to load is a window that never opens.
+ * libinterp is already compiled with hardware FP available -- Dis has
+ * a floating point type -- so it costs nothing new.
+ *
+ * keyring is still absent. It pulls in the whole crypto stack and
+ * nothing on the way to a window system needs it.
  */
 extern void sysmodinit(void);
 extern void drawmodinit(void);
 extern void tkmodinit(void);
+extern void mathmodinit(void);
 
 void
 modinit(void)
@@ -250,35 +258,22 @@ modinit(void)
 	sysmodinit();
 	drawmodinit();
 	tkmodinit();
+	mathmodinit();
 }
 
 
 /*
- * exportfs.c -- serve a namespace over 9P. Nothing exports anything yet.
+ * export() was refused here. os/port/exportfs.c provides the real one
+ * now -- it is how a Limbo program hands a whole namespace to another
+ * process down a pipe, and it is what wmsrv gives each window-system
+ * client instead of access to everyone else's windows.
  */
-int
-export(int fd, char *dir, int flag)
-{
-	USED(fd); USED(dir); USED(flag);
-	error("exportfs not imported");
-	return -1;
-}
 
 
 /*
- * devsrv.c -- convert a Sys->FileIO channel into a server Chan.
- *
- * inferno.c calls this to implement Sys->file2chan. devsrv is not
- * imported, and unlike the teardown stubs this has a return value a
- * caller would use, so it refuses rather than handing back nil.
+ * srvf2c -- Sys->file2chan -- was refused here. os/port/devsrv.c
+ * provides the real one now.
  */
-Chan*
-srvf2c(char *name, char *desc, Sys_FileIO *io)
-{
-	USED(name); USED(desc); USED(io);
-	error("devsrv not imported: file2chan unavailable");
-	return nil;
-}
 
 /*
  * Discard temporary kernel mappings.
@@ -472,17 +467,10 @@ char*	(*bootp)(Ipifc*);
 int	(*bootpread)(char*, ulong, int);
 
 /*
- * devsrv.c -- the Dis channel types for a served file.
- *
- * devprog.c compares a heap value's type against these when it walks a
- * process's heap, to tell a read/write channel from an ordinary one.
- * devsrv is not imported, so nothing ever creates one: leaving them nil
- * makes that comparison answer "not a served channel", which is both
- * true and the conservative branch. They must be DELETED when
- * devsrv.c lands, and the linker will insist.
+ * Trdchan and Twrchan were defined here while devsrv was absent.
+ * os/port/devsrv.c defines them now -- and the linker insisted, as the
+ * note that used to be here predicted it would.
  */
-Type*	Trdchan;
-Type*	Twrchan;
 
 
 

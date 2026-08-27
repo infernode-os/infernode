@@ -49,3 +49,18 @@ pow10(int n)
 	m = n/2;
 	return pow10(m) * pow10(n-m);
 }
+
+/*
+ * ipow10, which libmath's callers reach for by that name.
+ *
+ * libmath/pow10.c defines it as pow(10., n) and includes <math.h>,
+ * which a kernel does not have -- so that file cannot be built here at
+ * all. There is no need to: the table above IS the answer, exactly,
+ * for every exponent that fits it, where pow(10., n) is a general
+ * exponential rounded twice.
+ */
+double
+ipow10(int n)
+{
+	return pow10(n);
+}

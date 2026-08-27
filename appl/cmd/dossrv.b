@@ -2612,8 +2612,23 @@ bootdump(b: ref Dosboot)
 
 xputtime(d: ref Dosdir, s: int)
 {
+	#
+	# Ask the clock, do not extrapolate from when we mounted.
+	#
+	# This used to take the time once in dossetup() and add elapsed
+	# milliseconds to it, which is a fair optimisation on a machine
+	# whose clock is already right when a filesystem is mounted. It is
+	# wrong here: the card is mounted during boot and the clock is set
+	# afterwards, from the network, so every file written was stamped
+	# relative to 1 January 1970 plus however long the machine had
+	# been up -- "Jan 01 00:01" on a system that knew perfectly well
+	# it was 2026.
+	#
+	# A read of /dev/time per timestamp is nothing beside the block
+	# I/O it accompanies.
+	#
 	if(s == 0)
-		t := daytime->local((sys->millisec() - nowt1)/1000 + nowt);
+		t := daytime->local(daytime->now());
 	else
 		t = daytime->local(s);
 	x := (t.hour<<11) | (t.min<<5) | (t.sec>>1);

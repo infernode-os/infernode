@@ -303,7 +303,8 @@ tc: chan of ref Tmsg;
 srv: ref Styxserver;
 rxq: chan of (int, array of byte);
 
-dev: string;			# "ep3.0"
+dev: string;
+ntpserver: string;			# "ep3.0"
 ctl: ref Sys->FD;		# #u/usb/<dev>/ctl
 ep0: ref Sys->FD;		# #u/usb/<dev>/data -- the control endpoint
 reqid := 1;
@@ -797,6 +798,29 @@ netconfig()
 	}
 
 	#
+	# Set the clock.
+	#
+	# Time is not an ethernet driver's business, and this sits here
+	# for one reason: the address of a time server arrives in the
+	# DHCP lease, and moving the clock elsewhere would mean inventing
+	# a handoff for a single string. The Pi has no battery-backed
+	# clock, so without this every file the machine writes is stamped
+	# 1 January 1970 -- which it was, on the card, until now.
+	#
+	#
+	# Try each source in turn, most specific first.
+	#
+	# /env/ntpserver is how someone SAYS which server to use, and it
+	# wins because an explicit answer beats a guess. Then the DHCP
+	# lease, which is the network describing itself. Then the gateway,
+	# on the theory that a home router often serves time -- which is
+	# only a theory, and this one does not. Then a public server by
+	# address, because there is no resolver on this machine and a
+	# clock that is right matters more than avoiding a literal.
+	#
+	setclock(getenv("ntpserver") :: ntpserver :: gw :: Pubntp :: nil);
+
+	#
 	# The route table and the interface status are NOT printed here.
 	#
 	# They were how the routing arithmetic got verified during
@@ -884,6 +908,14 @@ Odreqaddr:	con 50;		# the address being requested
 Odmsgtype:	con 53;
 Odserverid:	con 54;
 Odparams:	con 55;
+Odntp:		con 42;		# NTP servers, in preference order
+
+#
+# A public time server, by address, because this machine has no
+# resolver. Cloudflare's, chosen for being anycast -- so it is the
+# nearest instance rather than one host that might move.
+#
+Pubntp:		con "162.159.200.123";
 Odend:		con 255;
 
 #
@@ -1076,7 +1108,24 @@ dhcp(): (string, string, string)
 		g := dhcpopt(ack, len ack, Odrouter);
 		if(g != nil && len g >= 4)
 			gw = dotted(g, 0);
+		#
+		# The time servers, if the lease named any.
+		#
+		# Asked for here rather than hardcoding an address because
+		# there is no resolver on this machine -- DNS would be one
+		# more thing to bring up before the clock could be set, and
+		# DHCP already carries the answer in option 42. A network
+		# that does not offer one falls back to the gateway, which
+		# on a home router is very often also its NTP server.
+		#
+		ntp := "";
+		nt := dhcpopt(ack, len ack, Odntp);
+		if(nt != nil && len nt >= 4)
+			ntp = dotted(nt, 0);
+		else
+			ntp = gw;
 		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
+		ntpserver = ntp;
 		return (addr, mask, gw);
 	}
 	sys->print("etherusb: no DHCP reply after 14 tries over ~45 seconds\n");
@@ -2679,4 +2728,144 @@ lanunwrap(buf: array of byte, n: int): (int, array of byte)
 	frame := array[datalen] of byte;
 	frame[0:] = buf[Lrxhdr:Lrxhdr+datalen];
 	return (Lrxhdr + datalen, frame);
+}
+
+#
+# Ask a time server what time it is, and tell the kernel.
+#
+# SNTP, which is the same wire format as NTP with none of the
+# discipline: one request, one reply, take the server's transmit
+# timestamp and believe it. That is the right trade here -- the clock
+# starts at 1970 and anything within a second of correct is an enormous
+# improvement, whereas a real NTP implementation is a daemon that
+# slews.
+#
+setclock(servers: list of string)
+{
+	for(; servers != nil; servers = tl servers){
+		s := hd servers;
+		if(s == "")
+			continue;
+		if(trytime(s) == 0)
+			return;
+	}
+	sys->print("etherusb: no time server answered; the clock stays at 1970\n");
+}
+
+#
+# Read the environment, which is a file like everything else.
+#
+getenv(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	v := string buf[0:n];
+	for(i := 0; i < len v; i++)
+		if(v[i] == '\n' || v[i] == 0)
+			return v[0:i];
+	return v;
+}
+
+trytime(server: string): int
+{
+	if(server == "")
+		return -1;
+
+	c := sys->open("/net/udp/clone", Sys->ORDWR);
+	if(c == nil)
+		return -1;
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0)
+		return -1;
+	conv := string nbuf[0:n];
+
+	if(sys->fprint(c, "connect %s!123", server) < 0)
+		return -1;
+
+	d := sys->open("/net/udp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil)
+		return -1;
+
+	#
+	# A 48-byte SNTP client request: leap 0, version 4, mode 3. Every
+	# other field may be zero -- the server fills in what matters.
+	#
+	req := array[48] of byte;
+	for(i := 0; i < len req; i++)
+		req[i] = byte 0;
+	req[0] = byte (4 << 3 | 3);
+	if(sys->write(d, req, len req) != len req)
+		return -1;
+
+	#
+	# Wait, but not for ever: a server that does not answer must not
+	# hold the boot. Read in a spawned process against a timer, the
+	# same shape the DHCP exchange uses and for the same reason --
+	# sys->read on a socket blocks.
+	#
+	rc := chan of array of byte;
+	spawn ntpreader(d, rc);
+	tc := chan of int;
+	spawn ntptimer(tc, 3000);
+	rep: array of byte;
+	alt {
+	rep = <-rc =>
+		;
+	<-tc =>
+		return -1;
+	}
+	if(rep == nil || len rep < 48)
+		return -1;
+
+	#
+	# Transmit timestamp, bytes 40-43: seconds since 1900.
+	#
+	# NTP counts from 1900 and Unix from 1970, so the difference is
+	# the 2208988800 seconds between them -- seventy years including
+	# seventeen leap days. Getting that constant wrong is the classic
+	# way to be exactly 70 years out.
+	#
+	secs := big 0;
+	for(i = 40; i < 44; i++)
+		secs = (secs << 8) | big (int rep[i] & 16rFF);
+	if(secs == big 0)
+		return -1;
+	unix := secs - big 2208988800;
+	if(unix <= big 0)
+		return -1;
+
+	t := sys->open("/dev/time", Sys->OWRITE);
+	if(t == nil)
+		return -1;
+	#
+	# The kernel keeps time in MICROseconds.
+	#
+	if(sys->fprint(t, "%bd", unix * big 1000000) < 0){
+		sys->print("etherusb: cannot set the clock: %r\n");
+		return -1;
+	}
+	sys->print("etherusb: clock set from %s\n", server);
+	return 0;
+}
+
+ntpreader(d: ref Sys->FD, rc: chan of array of byte)
+{
+	buf := array[128] of byte;
+	n := sys->read(d, buf, len buf);
+	if(n <= 0)
+		rc <-= nil;
+	else
+		rc <-= buf[0:n];
+}
+
+ntptimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }

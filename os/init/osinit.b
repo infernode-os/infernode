@@ -28,6 +28,8 @@ include "sys.m";
 
 include "draw.m";
 
+include "bench.m";
+
 include "sh.m";
 
 Init: module
@@ -1488,28 +1490,118 @@ jitfold(h, v: int): int
 	return h * 31 + v;
 }
 
+#
+# The measurement apparatus, per "Reliable Benchmarking with Limbo on
+# Inferno" (Vita Nuova, 1999, revised 2000).
+#
+# Three things distinguish this from timing something once:
+#
+#   MICROSECONDS. sys->millisec() cannot see a workload that takes less
+#   than a millisecond, and reports one that takes 1.6ms as either 1 or
+#   2. $Bench gives the generic timer directly -- 52ns a step here.
+#
+#   REPETITION, and the MINIMUM rather than the mean. Every disturbance
+#   -- an interrupt, a driver poll, a cache eviction caused by something
+#   else -- makes a sample LONGER, never shorter. So the minimum of many
+#   samples is the closest thing to the cost of the work itself, and the
+#   spread between minimum and median says how disturbed the machine
+#   was while measuring. A mean folds those together and hides both.
+#
+#   NO COLLECTOR. A garbage collection landing inside a sample is not
+#   part of what is being measured and is indistinguishable from a real
+#   outlier.
+#
+Nrep:	con 5;		# samples per workload
+
+bench: Bench;
+
 jitstress()
 {
+	bench = load Bench Bench->PATH;
+	if(bench == nil){
+		sys->print("jit: no $Bench; cannot measure\n");
+		return;
+	}
+
 	sys->print("jit: stress begins\n");
 
-	jitint();
-	jitbig();
-	jitreal();
-	jitarray();
-	jitstring();
-	jitcall();
-	jitchan();
+	#
+	# What it costs to take a measurement at all, subtracted from
+	# every sample below. Measured the same way it will be used --
+	# the doc's point is that this number is only meaningful if it is
+	# obtained under the same conditions as the thing it corrects.
+	#
+	base := big 0;
+	for(i := 0; i < Nrep; i++){
+		t := bench->microsec();
+		d := bench->microsec() - t;
+		if(i == 0 || d < base)
+			base = d;
+	}
+	sys->print("jit: measurement overhead %bd us\n", base);
+
+	sample("int", base);
+	sample("big", base);
+	sample("real", base);
+	sample("array", base);
+	sample("string", base);
+	sample("call", base);
+	sample("chan", base);
 
 	sys->print("jit: stress ends\n");
+}
+
+#
+# Run one workload Nrep times and report what the samples say.
+#
+sample(what: string, base: big)
+{
+	lo, hi, mid: big;
+	h := 0;
+
+	bench->disablegc();
+	for(i := 0; i < Nrep; i++){
+		t0 := bench->microsec();
+		case what {
+		"int" =>	h = jitint();
+		"big" =>	h = jitbig();
+		"real" =>	h = jitreal();
+		"array" =>	h = jitarray();
+		"string" =>	h = jitstring();
+		"call" =>	h = jitcall();
+		"chan" =>	h = jitchan();
+		}
+		d := bench->microsec() - t0 - base;
+		if(d < big 0)
+			d = big 0;
+		if(i == 0){
+			lo = d;
+			hi = d;
+			mid = d;
+		}else{
+			if(d < lo)
+				lo = d;
+			if(d > hi)
+				hi = d;
+		}
+	}
+	bench->enablegc();
+
+	#
+	# The checksum is the point of the whole exercise and the timings
+	# are secondary: it must be IDENTICAL to the interpreter's, and
+	# the harness compares the two kernels line by line. A JIT that is
+	# merely fast is a miscompilation waiting to be found.
+	#
+	sys->print("jit: %s %8.8ux min %bd us max %bd us\n", what, h, lo, hi);
 }
 
 #
 # Integer arithmetic, including the cases that are easy to get wrong:
 # negative operands, division and remainder truncation, and shifts.
 #
-jitint()
+jitint(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	for(i := -5000; i < 5000; i++){
 		h = jitfold(h, i + 7);
@@ -1527,16 +1619,15 @@ jitint()
 		if(i < 0)
 			h = jitfold(h, -i);
 	}
-	sys->print("jit: int %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #
 # 64-bit arithmetic. This tree is LP64 and the JIT is new; big is where
 # a 32-bit assumption would show up first.
 #
-jitbig()
+jitbig(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	b := big 1;
 	for(i := 0; i < 20000; i++){
@@ -1548,16 +1639,15 @@ jitbig()
 		h = jitfold(h, int b);
 		h = jitfold(h, int (b >> 16));
 	}
-	sys->print("jit: big %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #
 # Floating point, including comparisons and the int/real conversions
 # either side of it.
 #
-jitreal()
+jitreal(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	r := 1.0;
 	for(i := 1; i < 20000; i++){
@@ -1568,16 +1658,15 @@ jitreal()
 		if(r < 1.0)
 			h = jitfold(h, 1);
 	}
-	sys->print("jit: real %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #
 # Loads and stores: indexing, slicing and copying, which is where a
 # wrong addressing mode hides.
 #
-jitarray()
+jitarray(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	a := array[256] of int;
 	b := array[256] of byte;
@@ -1595,16 +1684,15 @@ jitarray()
 		for(i = 0; i < len c; i++)
 			h = jitfold(h, int c[i]);
 	}
-	sys->print("jit: array %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #
 # Strings: concatenation, comparison and indexing, which go through the
 # runtime rather than being open-coded.
 #
-jitstring()
+jitstring(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	for(n := 0; n < 2000; n++){
 		s := "";
@@ -1618,7 +1706,7 @@ jitstring()
 		if(s == "")
 			h = jitfold(h, 2);
 	}
-	sys->print("jit: string %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #
@@ -1632,13 +1720,12 @@ jitrec(n, a, b, c: int): int
 	return jitrec(n - 1, b + 1, c + 2, a + 3) + 1;
 }
 
-jitcall()
+jitcall(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	for(i := 0; i < 2000; i++)
 		h = jitfold(h, jitrec(100, i, i * 2, i * 3));
-	sys->print("jit: call %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #
@@ -1652,9 +1739,8 @@ jitproducer(c: chan of int, n: int)
 	c <-= -1;
 }
 
-jitchan()
+jitchan(): int
 {
-	t0 := sys->millisec();
 	h := 0;
 	c := chan of int;
 	spawn jitproducer(c, 20000);
@@ -1664,7 +1750,7 @@ jitchan()
 			break;
 		h = jitfold(h, v);
 	}
-	sys->print("jit: chan %8.8ux in %d ms\n", h, sys->millisec()-t0);
+	return h;
 }
 
 #

@@ -192,6 +192,14 @@ build_kernel() {
     if [[ -n "$LIMBO" && -f "$ROOT/module/runt.m" ]]; then
         "$LIMBO" -a -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/runt.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Sys -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/sysmod.h" 2>>"$BUILD/cc.log" || return 1
+
+        # $Bench, the same way: the C view of module/bench.m, which is
+        # the interface the standard Inferno benchmarking procedure is
+        # written against. Generated rather than committed for the same
+        # reason as runt.h -- so the C declarations cannot drift from
+        # the Limbo definitions they describe.
+        "$LIMBO" -a -I"$ROOT/module" "$ROOT/module/bench.m" > "$BUILD/bench.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t Bench -I"$ROOT/module" "$ROOT/module/bench.m" > "$BUILD/benchmod.h" 2>>"$BUILD/cc.log" || return 1
     fi
 
 
@@ -1148,6 +1156,55 @@ if build_kernel "$BUILD/$PLAT-nojit.img" "" "-DCFLAG=0"; then
         pass "compiled Dis is faster than interpreted (${nms}ms -> ${jms}ms, $((nms / jms))x)"
     else
         fail "JIT not faster: interpreter ${nms}ms vs JIT ${jms}ms"
+    fi
+
+    #
+    # Per opcode class, by the standard method.
+    #
+    # The single benchmark above is one arithmetic loop -- six opcodes.
+    # These seven classes cover the places a miscompilation actually
+    # hides: 64-bit arithmetic, floating point, arrays, strings, deep
+    # calls, channels. Each is sampled several times and reports its
+    # MINIMUM, because every disturbance makes a sample longer and never
+    # shorter, so the minimum is the closest thing to the cost of the
+    # work itself.
+    #
+    # The CHECKSUM is what is asserted. A class whose compiled result
+    # differs from the interpreted one is a miscompilation, and it is
+    # named rather than reported as "something, somewhere, is wrong".
+    # The times are recorded for the log; they are not a pass condition,
+    # because a machine that is busy is not a machine that is broken.
+    #
+    jitclasses=0
+    jitbad=0
+    while read -r cls jsum jmin; do
+        [[ -z "$cls" ]] && continue
+        nline="$(grep -oE "jit: $cls [0-9a-f]{8} min [0-9]+" <<<"$NOJITOUT" | head -1)"
+        nsum="$(awk '{print $3}' <<<"$nline")"
+        nmin="$(awk '{print $5}' <<<"$nline")"
+        jitclasses=$((jitclasses+1))
+        if [[ -z "$nsum" ]]; then
+            fail "class '$cls' produced no interpreter result to compare against"
+            jitbad=$((jitbad+1))
+        elif [[ "$jsum" != "$nsum" ]]; then
+            fail "JIT miscompiles '$cls': compiled $jsum, interpreted $nsum"
+            jitbad=$((jitbad+1))
+        else
+            info "  $cls: JIT ${jmin}us, interpreter ${nmin}us"
+        fi
+    done < <(grep -oE 'jit: [a-z]+ [0-9a-f]{8} min [0-9]+' <<<"$OUT" \
+             | awk '{print $2, $3, $5}')
+
+    if [[ "$jitclasses" -ge 7 && "$jitbad" -eq 0 ]]; then
+        pass "all $jitclasses opcode classes compile to the same results as the interpreter"
+    else
+        fail "opcode class comparison incomplete or wrong ($jitclasses classes, $jitbad bad)"
+    fi
+
+    if grep -q 'jit: measurement overhead' <<<"$OUT"; then
+        pass "the benchmark measures its own overhead before measuring anything else"
+    else
+        fail "no measurement-overhead baseline was taken"
     fi
 else
     fail "the JIT-off comparison kernel failed to build"

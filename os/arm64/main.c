@@ -16,6 +16,7 @@
 #include "kernel.h"
 
 extern Dev	mntdevtab;	/* #M, the 9P client */
+extern Dev	benchdevtab;	/* #b, microsecond timing */
 
 /*
  * The machine configuration os/port reads. Declared extern in dat.h and
@@ -1530,6 +1531,20 @@ probecons(void)
 	if(mntdevtab.reset != nil)
 		mntdevtab.reset();
 
+	/*
+	 * #b's reset is what REGISTERS $Bench as a builtin module.
+	 *
+	 * A device's reset is not called for its own sake here -- this
+	 * kernel does not run chandevreset() -- so a device whose reset
+	 * does real work has to be named. Without this, load Bench
+	 * returns nil and every measurement reports that it cannot
+	 * measure, which is at least honest but not useful.
+	 *
+	 * Like mnt's, it touches no hardware, so it is safe this early.
+	 */
+	if(benchdevtab.reset != nil)
+		benchdevtab.reset();
+
 	/* run every device's init, as a real kernel does at boot */
 	chandevinit();
 
@@ -2109,6 +2124,9 @@ kmain(void)
 
 	/* the running kernel, so it can be copied onto the card */
 	kbind("#B", "/dev", MAFTER);
+
+	/* microsecond timing, for measuring things honestly */
+	kbind("#b", "/dev", MAFTER);
 
 	uartputstr("\nboot OK\n");
 

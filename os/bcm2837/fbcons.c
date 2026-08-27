@@ -724,3 +724,24 @@ fbconsscreens(void)
 {
 	return nscreens;
 }
+
+/*
+ * Give up the framebuffer.
+ *
+ * Called when the draw device attaches: two things cannot own the same
+ * pixels, and between a text console and a window system the window
+ * system wins -- text scribbled over a compositor's output at
+ * unpredictable moments is worse than no framebuffer console at all.
+ *
+ * Nothing is really lost. Kernel output has always gone to the serial
+ * console as well, and that is unaffected; screenputs is cleared so
+ * devcons stops calling here at all rather than calling into a function
+ * that would only return.
+ */
+void
+fbconsstop(void)
+{
+	nscreens = 0;
+	screenputs = nil;
+	uartputstr("fb:   console released to the draw device\n");
+}

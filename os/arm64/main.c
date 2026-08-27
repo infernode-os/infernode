@@ -2128,6 +2128,23 @@ kmain(void)
 	/* microsecond timing, for measuring things honestly */
 	kbind("#b", "/dev", MAFTER);
 
+	/*
+	 * #i is deliberately NOT bound here.
+	 *
+	 * Binding a device ATTACHES it, and attaching the draw device is
+	 * what takes the framebuffer away from the text console -- so
+	 * binding it at boot meant every machine lost its console to a
+	 * window system that was never going to start. The console
+	 * stopped drawing before the first line of boot output reached
+	 * the panel.
+	 *
+	 * Whoever wants to draw binds it:  bind '#i' /dev
+	 *
+	 * which is how a namespace is supposed to be assembled in this
+	 * system, and it leaves a machine that never draws with the
+	 * console it had.
+	 */
+
 	uartputstr("\nboot OK\n");
 
 	/*

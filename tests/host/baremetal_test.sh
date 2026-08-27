@@ -448,6 +448,44 @@ build_kernel() {
         objs+=("$o")
     done
 
+    # libmemdraw and libmemlayer -- the drawing engine.
+    #
+    # Already in this tree, built for the hosted emulator; devdraw needs
+    # them linked into the KERNEL instead. Compiled with FP like
+    # libinterp: memdraw itself is integer work, but it is reached from
+    # the same call paths and the separation is not worth a second set
+    # of flags to discover the hard way.
+    # The file list comes from each library's own mkfile, not from a
+    # glob: libmemdraw/drawtest.c is a test PROGRAM that happens to live
+    # beside the library, and globbing pulled it in and failed to
+    # compile it.
+    #
+    # iprint.c is dropped as well. It is the library's own stand-in for
+    # a kernel facility, and in a kernel that facility already exists --
+    # linking both is a duplicate symbol.
+    #
+    # read.c, write.c, cread.c and openmemsubfont.c go the same way.
+    # They read and write images through open/read/write on FILES, which
+    # a kernel does not have -- the kernel serves images over the draw
+    # protocol rather than loading them from a path. Their absence is
+    # what the undefined open/readn/write were telling us.
+    #
+    # Four files from libdraw come too, and only four: memdraw needs the
+    # rectangle arithmetic (Rect, rectclip, rectXrect, rectinrect,
+    # bytesperline) and the channel descriptors (chantostr, chantodepth)
+    # and nothing else. The rest of libdraw is the CLIENT side of the
+    # draw protocol, which a kernel serving that protocol has no use
+    # for.
+    for f in "$ROOT"/libmemdraw/{arc,cmap,defont,ellipse,fillpoly,hwdraw,icossin,icossin2,line,poly,string,subfont,alloc,cload,draw,load,unload}.c \
+             "$ROOT"/libmemlayer/*.c \
+             "$ROOT"/libdraw/{arith,rectclip,bytesperline,chan,drawrepl,defont}.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/draw-$(basename "$(dirname "$f")")-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$ROOT/libmemdraw" -I"$BUILD" -Wno-everything \
+             -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
     # libinterp -- the Dis VM.
     #
     # Compiled WITHOUT -mgeneral-regs-only, unlike everything else here.
@@ -2132,6 +2170,55 @@ else
     else
         fail "the hotplugged device was never claimed by a driver"
     fi
+fi
+
+#
+# 3i. The draw device.
+#
+#     /dev/draw is the whole basis of a GUI here: Tk, wm and everything
+#     above them speak to it and to nothing else. What is asserted is
+#     the connection header the draw protocol hands back when a client
+#     attaches, because it carries the three things that have to be
+#     right for anything drawn to come out looking like what was meant:
+#
+#       the CHANNEL, x8r8g8b8, which is not a guess -- mailbox.c asks
+#       the firmware for byte order 0, putting blue at the lowest
+#       address, so a little-endian load reads 0xXXRRGGBB. Get it wrong
+#       and everything draws, in the wrong colours.
+#
+#       the GEOMETRY, which comes from the firmware's own idea of the
+#       display rather than from a constant here.
+#
+#     #i is bound by the test rather than at boot, because attaching
+#     the draw device is what takes the framebuffer away from the text
+#     console -- binding it at boot cost every machine its console to a
+#     window system that was never going to start.
+#
+DRAWOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        "bind '#i' /dev" \
+        'ls /dev/draw' \
+        'cat /dev/draw/new')"
+DRAWOUT="$(tr -d '\r' <<<"$DRAWOUT")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- draw ---"; echo "$DRAWOUT"; }
+
+OUT_SAVED="$OUT"; OUT="$DRAWOUT"
+check "/dev/draw/new"                "the draw device serves a namespace"
+check "console released to the draw" "attaching hands the framebuffer over from the text console"
+OUT="$OUT_SAVED"
+
+if grep -qE 'x8r8g8b8' <<<"$DRAWOUT"; then
+    pass "a draw client attaches and the screen is x8r8g8b8 as the firmware was asked for"
+else
+    fail "no draw connection, or the wrong pixel channel"
+fi
+
+# The geometry in the header must be the framebuffer's, not a constant.
+FBDIM="$(grep -oE 'fb:   [0-9]+x[0-9]+x32' <<<"$OUT" | head -1 | sed 's/fb:   //;s/x32//')"
+if [[ -n "$FBDIM" ]] && grep -qE "${FBDIM%x*} +${FBDIM#*x}" <<<"$DRAWOUT"; then
+    pass "the draw screen is the size the firmware reported ($FBDIM)"
+else
+    fail "draw screen geometry does not match the framebuffer ($FBDIM)"
 fi
 
 #

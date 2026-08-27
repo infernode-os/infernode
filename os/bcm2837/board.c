@@ -467,3 +467,19 @@ displaywatch(void *a)
 		fbconsadd(&fb2);
 	}
 }
+
+/*
+ * The display, for anything that needs the raw framebuffer.
+ *
+ * Returns display 0 -- whatever the firmware chose as primary. A second
+ * display is driven by the console, which mirrors onto it, but the draw
+ * device gets one screen: /dev/draw has no notion of two, and choosing
+ * which one a window system lives on is a decision for a window system.
+ */
+Fbinfo*
+boardfb(void)
+{
+	if(fb.base == 0)
+		return nil;
+	return &fb;
+}

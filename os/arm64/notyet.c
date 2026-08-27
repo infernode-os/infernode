@@ -64,6 +64,7 @@ extern Dev pointerdevtab;
 extern Dev sddevtab;
 extern Dev bootdevtab;
 extern Dev benchdevtab;
+extern Dev drawdevtab;
 
 Dev*	devtab[] =
 {
@@ -79,6 +80,7 @@ Dev*	devtab[] =
 	&sddevtab,		/* 'S' -- #S, the SD card as a file */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
 	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
+	&drawdevtab,		/* 'i' -- #i, the draw device */
 	nil,
 };
 

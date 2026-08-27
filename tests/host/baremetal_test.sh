@@ -200,6 +200,16 @@ build_kernel() {
         # the Limbo definitions they describe.
         "$LIMBO" -a -I"$ROOT/module" "$ROOT/module/bench.m" > "$BUILD/bench.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Bench -I"$ROOT/module" "$ROOT/module/bench.m" > "$BUILD/benchmod.h" 2>>"$BUILD/cc.log" || return 1
+
+        # $Draw and $Tk, the two builtin modules a GUI is made of.
+        #
+        # Both are C implementations of a Limbo interface, and both need
+        # the compiler's C view of that interface -- the same generated
+        # header libinterp's own mkfile makes, by the same recipe. Draw
+        # is the image and screen module every graphical Limbo program
+        # loads; Tk is the widget set on top of it.
+        "$LIMBO" -t Draw -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/drawmod.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t Tk -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/tkmod.h" 2>>"$BUILD/cc.log" || return 1
     fi
 
 
@@ -519,7 +529,7 @@ build_kernel() {
         case "$(basename "$f")" in
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
-        draw.c|gpu.c|crypt.c|ipint.c|math.c) continue;;
+        gpu.c|crypt.c|ipint.c|math.c) continue;;
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
         "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
@@ -667,9 +677,31 @@ try:
         p.stdin.write(c.encode() + b"\r")
         p.stdin.flush()
         time.sleep(1.0)
+
+    # Wait for the session to DRAIN, rather than guessing how long the
+    # last command takes.
+    #
+    # There used to be a flat two-second wait here, which is a guess
+    # about the slowest thing in the list -- and the list contains
+    # "sleep 1". Two checks near the end of it failed intermittently
+    # for exactly that reason: the machine was killed mid-command and
+    # the output the check looked for had not been printed yet. A test
+    # that fails on how busy the host is says nothing about the kernel.
+    #
+    # So type one more command whose output is unmistakable and wait
+    # for it. It appears twice -- once echoed as it is typed, once
+    # printed by echo -- and the second occurrence is the one that
+    # means every command before it has finished.
+    p.stdin.write(b"echo dRaInEd\r")
+    p.stdin.flush()
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if bytes(buf).count(b"dRaInEd") >= 2:
+            break
+        time.sleep(0.2)
 except Exception:
     pass
-time.sleep(2)                     # let the last command finish
+time.sleep(0.3)
 p.kill()
 p.wait()
 sys.stdout.write(bytes(buf).decode(errors="replace"))

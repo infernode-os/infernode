@@ -25,6 +25,7 @@ int	setpower(int, int);
 int	mboxfballoc(u32int, u32int, u32int, u32int, Fbinfo*);
 int	mboxfbnumdisplays(void);
 u32int	mboxclockrate(u32int);
+void	mboxlockon(void);
 int	mboxedid(u32int, uchar*);
 
 int	emmcinit(void);

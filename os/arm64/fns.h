@@ -38,6 +38,7 @@ void	boardclockcheck(void);
 void	boardfbprobe(void);
 void	boardsdprobe(void);
 void	displaywatch(void*);
+void	mboxlockon(void);
 void	bootimgsnap(void);
 
 /* arch.S -- AArch64 primitives that cannot be written in C */

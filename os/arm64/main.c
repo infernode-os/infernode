@@ -115,6 +115,13 @@ startmmu(void)
 {
 	mmuinit();
 
+	/*
+	 * Exclusive accesses work from here, so the mailbox can start
+	 * locking. Before this point it must not: a Lock is taken with
+	 * load-exclusive, and exclusives with the MMU off fault.
+	 */
+	mboxlockon();
+
 	uartputstr("mmu:  ");
 	if(!mmuon()){
 		uartputstr("FAILED to enable\n");

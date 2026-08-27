@@ -74,6 +74,31 @@ static volatile u32int mboxbuf[64] __attribute__((aligned(16)));
  *     down with it.
  */
 static Lock mboxlock;
+static int mboxlockable;
+
+/*
+ * Start locking. Called once the MMU is on.
+ *
+ * NOT an optimisation -- taking the lock before this point FAULTS. A
+ * Lock is acquired with load-exclusive/store-exclusive, and exclusive
+ * accesses are only architecturally supported on Normal memory with the
+ * MMU enabled; with it off the core takes a data abort (ESR ...0x35,
+ * the unsupported-exclusive fault) on the first one. The very first
+ * mailbox call reads the board revision and the memory size, and it has
+ * to happen BEFORE the MMU because the MMU tables are sized from what
+ * it returns.
+ *
+ * Nothing is lost by waiting: until the scheduler exists there is one
+ * thread of control, so there is nothing to serialise against.
+ *
+ * The emulator does not care -- QEMU permits exclusives with the MMU
+ * off -- so this could only ever have been found on the board.
+ */
+void
+mboxlockon(void)
+{
+	mboxlockable = 1;
+}
 
 static void
 dsb(void)
@@ -105,6 +130,9 @@ static int
 mboxcall(u32int chan, volatile u32int *buf)
 {
 	int r;
+
+	if(!mboxlockable)
+		return mboxcall1(chan, buf);
 
 	lock(&mboxlock);
 	r = mboxcall1(chan, buf);

@@ -258,11 +258,20 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/mouseusb.dis" \
             "$ROOT/os/init/mouseusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The end-to-end check for the graphics stack: load $Draw,
+        # attach a display, draw a rectangle and read a pixel of it
+        # back through the draw protocol's own read. It is a program
+        # rather than a kernel self-test because that is the thing
+        # being tested -- a Limbo program's view of the screen.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/drawtest.dis" \
+            "$ROOT/os/init/drawtest.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            "/dis/drawtest.dis=$BUILD/drawtest.dis"
 
             # The FAT filesystem, as a program. Imported from upstream
             # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
@@ -480,20 +489,46 @@ build_kernel() {
     # protocol rather than loading them from a path. Their absence is
     # what the undefined open/readn/write were telling us.
     #
-    # Four files from libdraw come too, and only four: memdraw needs the
+    # libdraw comes whole, and that is a change from when this kernel
+    # only served the draw protocol. It is the CLIENT side -- Display,
+    # Image, Font, allocwindow, string drawing -- and $Draw, the builtin
+    # module a graphical Limbo program loads, is written against exactly
+    # that API. So the kernel is now both ends: devdraw serves the
+    # protocol and libdraw speaks it back over /dev/draw.
+    #
+    # It used to be four files, because memdraw alone needs only the
     # rectangle arithmetic (Rect, rectclip, rectXrect, rectinrect,
-    # bytesperline) and the channel descriptors (chantostr, chantodepth)
-    # and nothing else. The rest of libdraw is the CLIENT side of the
-    # draw protocol, which a kernel serving that protocol has no use
-    # for.
+    # bytesperline) and the channel descriptors (chantostr, chantodepth).
     for f in "$ROOT"/libmemdraw/{arc,cmap,defont,ellipse,fillpoly,hwdraw,icossin,icossin2,line,poly,string,subfont,alloc,cload,draw,load,unload}.c \
              "$ROOT"/libmemlayer/*.c \
-             "$ROOT"/libdraw/{arith,rectclip,bytesperline,chan,drawrepl,defont}.c; do
+             "$ROOT"/libdraw/*.c; do
+        # test.c is a PROGRAM, not part of the library -- it has its
+        # own main(). mkfont.c is a font-building tool for the host.
+        # readcolmap.c reads a colour-map FILE through libbio, which a
+        # kernel does not have -- and a 32-bit direct-colour screen has
+        # no colour map to read into in the first place.
+        case "$(basename "$f")" in test.c|mkfont.c|readcolmap.c) continue;; esac
         [[ -e "$f" ]] || continue
         o="$BUILD/draw-$(basename "$(dirname "$f")")-$(basename "$f").o"
         "$CC" "${IFLAGS[@]}" -I"$ROOT/libmemdraw" -I"$BUILD" -Wno-everything \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
-        objs+=("$o")
+        #
+        # Into the ARCHIVE, not the object list -- for the same reason
+        # libkern is an archive, and it is load-bearing here too.
+        #
+        # libinterp/draw.c deliberately REPLACES four of libdraw's
+        # functions: freesubfont, subfontname, lookupsubfont and
+        # installsubfont. $Draw keeps subfonts on the Dis heap so the
+        # collector can see them, where libdraw keeps them in a static
+        # cache it frees itself. Linking both unconditionally is four
+        # duplicate symbols and a failed link.
+        #
+        # An archive member is extracted only if it resolves something
+        # still undefined, so draw.c's definitions are found first and
+        # libdraw's are never pulled in -- which is exactly how the
+        # emulator's build behaves, since it links libdraw.a.
+        #
+        libobjs+=("$o")
     done
 
     # libinterp -- the Dis VM.
@@ -2237,6 +2272,37 @@ DRAWOUT="$(tr -d '\r' <<<"$DRAWOUT")"
 OUT_SAVED="$OUT"; OUT="$DRAWOUT"
 check "/dev/draw/new"                "the draw device serves a namespace"
 check "console released to the draw" "attaching hands the framebuffer over from the text console"
+OUT="$OUT_SAVED"
+
+#
+# 3i2. A Limbo program's view of the screen.
+#
+#      The header above proves the CONNECTION. This proves the pixels,
+#      and proves them through the whole stack rather than around it:
+#      $Draw (libinterp/draw.c) is a client of the draw protocol,
+#      libdraw is the library it is written against, devdraw serves the
+#      protocol and does the compositing through libmemdraw, and
+#      screen.c says where the framebuffer is. drawtest asks for a
+#      colour, draws with it, and reads a pixel back with the protocol's
+#      own read.
+#
+#      The colour is checked channel by channel, which is what catches
+#      a byte-order mistake: red and blue swapped draws perfectly and
+#      reads back the wrong number.
+#
+DRAW2="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        "bind '#i' /dev" \
+        'drawtest')"
+DRAW2="$(tr -d '\r' <<<"$DRAW2")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- drawtest ---"; echo "$DRAW2"; }
+
+OUT_SAVED="$OUT"; OUT="$DRAW2"
+check "drawtest: \$Draw loaded"        "a Limbo program can load the \$Draw builtin module"
+check "drawtest: display "             "Display.allocate attaches to the draw device"
+check "drawtest: pixel r=0x33 g=0x66 b=0x99" \
+                                       "readpixels returns the exact colour that was drawn"
+check "drew and read back the colour"  "the graphics stack is correct end to end"
 OUT="$OUT_SAVED"
 
 if grep -qE 'x8r8g8b8' <<<"$DRAWOUT"; then

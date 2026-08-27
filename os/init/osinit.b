@@ -597,6 +597,9 @@ statusflags(status: int): string
 #
 # What dumpconfig last saw on a HID interface; 0 if none.
 hidproto := 0;
+hidep := -1;
+hidmaxpkt := 0;
+hidival := 0;
 
 speedname(status: int): string
 {
@@ -887,12 +890,23 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 
 	hidproto = 0;
+	hidep = -1;
 	dumpconfig(d, indent + "  ");
 
+	#
+	# Hand the endpoint over rather than making the driver find it.
+	#
+	# The walk has just read and parsed this device's configuration
+	# descriptor; the driver used to read and parse it AGAIN over the
+	# same fragile low-speed control pipe, for the same three numbers.
+	# Once was already a coin toss on this controller -- doing it
+	# twice doubled the chance of a device coming up without a driver,
+	# and the second attempt happens later, when the bus is busier.
+	#
 	if(hidproto == Hidkbd)
-		startdriver("/dis/kbdusb.dis", name);
+		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival);
 	else if(hidproto == Hidmouse)
-		startdriver("/dis/mouseusb.dis", name);
+		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's
@@ -915,7 +929,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# spawn a driver per unknown device and call that discovery.
 	#
 	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
-		startdriver("/dis/etherusb.dis", name);
+		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
 	return 0;
 }
 
@@ -1049,25 +1063,29 @@ sdsetup()
 # at all, since nothing drains the queue outside a walk.
 #
 walking := 0;
-pending: list of (string, string);
+pending: list of (string, string, int, int, int);
 
-startdriver(path, name: string)
+startdriver(path, name: string, ep, maxpkt, ival: int)
 {
 	if(walking){
-		pending = (path, name) :: pending;
+		pending = (path, name, ep, maxpkt, ival) :: pending;
 		return;
 	}
-	runstart(path, name);
+	runstart(path, name, ep, maxpkt, ival);
 }
 
-runstart(path, name: string)
+runstart(path, name: string, ep, maxpkt, ival: int)
 {
 	drv := load Command path;
 	if(drv == nil){
 		sys->print("init: cannot load %s: %r\n", path);
 		return;
 	}
-	spawn drv->init(nil, "etherusb" :: name :: nil);
+	argv := path :: name :: nil;
+	if(ep >= 0)
+		argv = path :: name :: string ep :: string maxpkt ::
+			string ival :: nil;
+	spawn drv->init(nil, argv);
 }
 
 #
@@ -1081,13 +1099,13 @@ runstart(path, name: string)
 startpending()
 {
 	walking = 0;
-	l: list of (string, string);
+	l: list of (string, string, int, int, int);
 	for(p := pending; p != nil; p = tl p)
 		l = hd p :: l;
 	pending = nil;
 	for(; l != nil; l = tl l){
-		(path, name) := hd l;
-		runstart(path, name);
+		(path, name, ep, maxpkt, ival) := hd l;
+		runstart(path, name, ep, maxpkt, ival);
 	}
 }
 
@@ -1268,6 +1286,20 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				sys->print("init: %s    ep%d %s %s maxpkt %d\n",
 					indent, addr & 16rF, dir,
 					eptype(attr & 3), mx);
+				#
+				# Keep the first interrupt-IN endpoint that
+				# follows a HID interface. Endpoint
+				# descriptors belong to the interface they
+				# come after, so this is that interface's,
+				# and the first is the one a boot-protocol
+				# device reports on.
+				#
+				if(hidproto != 0 && hidep < 0
+				&& (addr & 16r80) && (attr & 3) == 3){
+					hidep = addr & 16rF;
+					hidmaxpkt = mx;
+					hidival = int cfg[i+6];
+				}
 			}
 		* =>
 			;

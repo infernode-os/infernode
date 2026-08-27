@@ -91,7 +91,31 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
-	(epnum, maxpkt, ival) := intrendpoint();
+	#
+	# The endpoint comes from the bus walk when it is given.
+	#
+	# It has just read this device's configuration descriptor to
+	# decide which driver to start, so it already knows the endpoint,
+	# its packet size and its interval. Reading the descriptor a
+	# second time here asked the same fragile low-speed control pipe
+	# for the same three numbers -- and that read happens later, once
+	# other drivers are running and the bus is busy, which is exactly
+	# when it comes back as 0x55 and the device ends up with no
+	# driver.
+	#
+	# intrendpoint() is kept for a device started by hand from a
+	# shell, where there is no walk to be told by.
+	#
+	epnum := -1;
+	maxpkt := 0;
+	ival := 0;
+	args = tl args;
+	if(len args >= 3){
+		epnum = int hd args;
+		maxpkt = int hd tl args;
+		ival = int hd tl tl args;
+	} else
+		(epnum, maxpkt, ival) = intrendpoint();
 	if(epnum < 0){
 		sys->print("mouseusb: %s has no interrupt endpoint\n", dev);
 		return;

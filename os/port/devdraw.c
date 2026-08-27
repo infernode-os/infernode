@@ -871,6 +871,32 @@ initscreenimage(void)
 	if(screenimage != nil)
 		return 1;
 
+	/*
+	 * Start the drawing library. Nothing here works without it, and
+	 * the ways it does not work are quiet.
+	 *
+	 * memimageinit builds the replication tables memdraw converts
+	 * depths with, the colour map, and four one-pixel replicated
+	 * images -- memones, memzeros, memopaque, memtransparent. The
+	 * emulator calls it from its own start-up; a kernel has no
+	 * equivalent, and this file never called it, so on this port it
+	 * had never run at all.
+	 *
+	 * That was survivable for most drawing, which is why it went
+	 * unnoticed: every operation a CLIENT asks for carries its own
+	 * mask image, and a 32-bit copy needs no replication table. What
+	 * it broke is the drawing devdraw does on its OWN behalf, which
+	 * passes memopaque -- and memopaque was nil, so those draws
+	 * quietly did nothing.
+	 *
+	 * There is exactly one such path that matters, and it is the
+	 * whole of text: loading a glyph into a font's cache image.
+	 * Every layer above reported success. The font opened, the
+	 * subfont loaded, the widths were right, the string advanced the
+	 * correct number of pixels, and the screen stayed empty.
+	 */
+	memimageinit();
+
 	screendata.base = nil;
 	screendata.bdata = attachscreen(&r, &chan, &depth, &width, &sdraw.softscreen);
 	if(screendata.bdata == nil)

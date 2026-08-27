@@ -2330,6 +2330,11 @@ check "drawtest: display "             "Display.allocate attaches to the draw de
 check "drawtest: pixel r=0x33 g=0x66 b=0x99" \
                                        "readpixels returns the exact colour that was drawn"
 check "drew and read back the colour"  "the graphics stack is correct end to end"
+check "opened the built-in font"       "the font compiled into libdraw opens on a machine with no font files"
+check "through a full mask r=0x33 g=0x66 b=0x99" \
+                                       "a one-bit mask passes the source colour through -- the path glyphs are drawn by"
+check "text drew with the built-in font" \
+                                       "string drawing puts ink on the screen, not just advance"
 OUT="$OUT_SAVED"
 
 #
@@ -2361,6 +2366,8 @@ check "parser rejects a bad option"    "the Tk command parser reports errors ins
 check "tktest: widget pixel r=0x33 g=0x66 b=0x99" \
                                        "a packed widget drew the colour it was given"
 check "the widget drew the colour"     "the widget set works end to end"
+check "text rendered with the built-in font" \
+                                       "a label draws glyphs with libdraw's compiled-in font, with no /fonts on the machine"
 OUT="$OUT_SAVED"
 
 if grep -qE 'x8r8g8b8' <<<"$DRAWOUT"; then

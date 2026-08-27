@@ -145,6 +145,23 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	if(cmd(t, "pack .f") < 0)
 		return;
+
+	#
+	# And a label, which is where FONTS come in.
+	#
+	# Tk's default face is /fonts/combined/unicode.sans.14.font and
+	# this root filesystem has no /fonts at all, so that open fails
+	# and libtk falls back to "*default*" -- the font compiled into
+	# libdraw as defont.c, which needs no files. That fallback is
+	# the only reason a machine with no font files can show text, so
+	# it is worth asserting rather than assuming: the widget below is
+	# measured with that font and drawn with it.
+	#
+	if(cmd(t, "label .l -text {Tk on bare metal} -bg #ffffff -fg #000000") < 0)
+		return;
+	if(cmd(t, "pack .l") < 0)
+		return;
+
 	if(mapwindow(t) < 0)
 		return;
 	if(cmd(t, "update") < 0)
@@ -168,8 +185,20 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 
+	#
+	# Sample the widget's OWN rectangle, not a fixed offset into the
+	# toplevel. Packing two widgets moved the frame -- pack centres a
+	# narrow widget in a toplevel that a wider one has stretched --
+	# and a hard-coded (20,20) that had been inside the frame landed
+	# in the toplevel's background instead, reporting the wrong
+	# colour for a frame that had drawn perfectly.
+	#
+	fr := tk->rect(t, ".f", 0);
+	sys->print("tktest: toplevel at (%d,%d) frame at (%d,%d) %dx%d\n",
+		r.min.x, r.min.y, fr.min.x, fr.min.y, fr.dx(), fr.dy());
+
 	px := array[16] of byte;
-	p := Point(r.min.x + 20, r.min.y + 20);
+	p := Point(fr.min.x + fr.dx() / 2, fr.min.y + fr.dy() / 2);
 	one := Rect(p, Point(p.x + 1, p.y + 1));
 	n := im.readpixels(one, px);
 	if(n < 4){
@@ -186,4 +215,50 @@ init(nil: ref Draw->Context, nil: list of string)
 		sys->print("tktest: the widget drew the colour it was given\n");
 	else
 		sys->print("tktest: WRONG COLOUR -- wanted r=33 g=66 b=99\n");
+
+	#
+	# Did the text actually get drawn?
+	#
+	# A label whose font failed to load is not an error the caller
+	# sees: it lays out at some size and draws nothing, which looks
+	# like a working program with an empty widget. So read a row
+	# straight through the middle of the label and count how many
+	# pixels are NOT the background it was given. Glyphs are dark on
+	# white, so a row through them has both.
+	#
+	# The row, not a single pixel: a single pixel through a
+	# proportional font is as likely to land in a gap as in a stroke,
+	# and a test that depends on which is a test that fails on a
+	# different font.
+	#
+	lr := tk->rect(t, ".l", 0);
+	if(lr.dx() <= 0 || lr.dy() <= 0){
+		sys->print("tktest: label has no geometry\n");
+		return;
+	}
+	sys->print("tktest: label at (%d,%d) %dx%d\n",
+		lr.min.x, lr.min.y, lr.dx(), lr.dy());
+
+	y := lr.min.y + lr.dy() / 2;
+	row := Rect(Point(lr.min.x, y), Point(lr.max.x, y + 1));
+	rowpx := array[lr.dx() * 4] of byte;
+	n = im.readpixels(row, rowpx);
+	if(n < len rowpx){
+		sys->print("tktest: label readpixels gave %d of %d: %r\n",
+			n, len rowpx);
+		return;
+	}
+
+	ink := 0;
+	for(x := 0; x < lr.dx(); x++)
+		if(int rowpx[x*4] != 16rFF || int rowpx[x*4+1] != 16rFF
+		|| int rowpx[x*4+2] != 16rFF)
+			ink++;
+
+	sys->print("tktest: %d of %d pixels on that row are not background\n",
+		ink, lr.dx());
+	if(ink > 0)
+		sys->print("tktest: text rendered with the built-in font\n");
+	else
+		sys->print("tktest: NO TEXT -- the label drew nothing\n");
 }

@@ -282,6 +282,15 @@ build_kernel() {
             "/n="
             "/n/dos="
 
+            # Somewhere to mount a file server, which is how a native
+            # Inferno is actually meant to get its userspace: upstream's
+            # own native roots (os/pc/pc, os/gum/gum) create /n/remote
+            # for exactly this, and os/init/bootinit.b mounts it before
+            # reading anything real. A mount needs its target to exist,
+            # and the root filesystem is read-only, so it cannot be
+            # made later.
+            "/n/remote="
+
             # A few commands, so the shell has something to run. Each
             # is a Dis module the shell loads by name out of $path, and
             # ls pulls in Readdir and Daytime on top of what sh already

@@ -1786,13 +1786,17 @@ static Buffer
 boolcopy32(Buffer bdst, Buffer bsrc, Buffer bmask, int dx, int i, int o)
 {
 	uchar *m;
-	ulong *r, *w, *ew;
+	/*
+	 * u32int, not ulong: the 32 in the name is the PIXEL width, and
+	 * ulong is 8 bytes under LP64. See the note in chardraw.
+	 */
+	u32int *r, *w, *ew;
 
 	USED(i);
 	USED(o);
 	m = bmask.grey;
-	w = (ulong*)bdst.red;
-	r = (ulong*)bsrc.red;
+	w = (u32int*)bdst.red;
+	r = (u32int*)bsrc.red;
 	ew = w+dx;
 	for(; w < ew; w++,r++)
 		if(*m++)
@@ -2353,7 +2357,21 @@ chardraw(Memdrawparam *par)
 	ulong v, maskwid, dstwid;
 	uchar *wp, *rp, *q, *wc;
 	ushort *ws;
-	ulong *wl;
+	/*
+	 * A 32-BIT PIXEL IS NOT A ulong on this port.
+	 *
+	 * ulong is 8 bytes under LP64, so writing a pixel through a
+	 * ulong* wrote TWO pixels and advanced the pointer by two.
+	 * Glyphs came out at double width, overwriting their
+	 * neighbours -- text on the framebuffer was legible as smear
+	 * and nothing else. The same cast also read 8 bytes out of the
+	 * 4-byte sp[] below.
+	 *
+	 * memfillcolor already carries this lesson, in the comment
+	 * above its memset32 call; these were the two sites that had
+	 * not been found yet.
+	 */
+	u32int *wl;
 	uchar sp[4];
 	Rectangle r, mr;
 	Memimage *mask, *src, *dst;
@@ -2455,8 +2473,8 @@ DBG print("bits %lux sh %d...", bits, i);
 			}
 			break;
 		case 32:
-			wl = (ulong*)wp;
-			v = *(ulong*)sp;
+			wl = (u32int*)wp;
+			v = *(u32int*)sp;
 			for(x=bx; x>ex; x--, wl++){
 				i = x&7;
 				if(i == 8-1)

@@ -303,6 +303,20 @@ static Screen screens[Maxscreens];
 static int nscreens;
 
 /*
+ * Set once the draw device has taken the framebuffer, and never
+ * cleared.
+ *
+ * The count of screens cannot answer "is the console still running",
+ * because stopping sets it to zero -- which reads exactly like "no
+ * screens yet" to anything that might add one. The display watcher
+ * asked precisely that question and got precisely that wrong answer:
+ * after a draw client attached, it saw no screens, decided the second
+ * display was not connected yet, and installed a text console back on
+ * top of the window system's framebuffer -- once per poll.
+ */
+static int released;
+
+/*
  * Clear virtual scanlines [y0, y0+nl) on one screen.
  */
 static void
@@ -613,6 +627,8 @@ fbconsadd(Fbinfo *fb)
 	Screen *s;
 	int i;
 
+	if(released)			/* the draw device owns the screen */
+		return -1;
 	if(fb == nil || fb->base == 0 || fb->pitch == 0)
 		return -1;
 	if(fb->depth != 32)		/* the glyph writer assumes it */
@@ -726,6 +742,17 @@ fbconsscreens(void)
 }
 
 /*
+ * Whether the framebuffer has been handed to the draw device. One way:
+ * a console that has given the screen up does not take it back, because
+ * a window system is drawing on it.
+ */
+int
+fbconsreleased(void)
+{
+	return released;
+}
+
+/*
  * Give up the framebuffer.
  *
  * Called when the draw device attaches: two things cannot own the same
@@ -741,6 +768,7 @@ fbconsscreens(void)
 void
 fbconsstop(void)
 {
+	released = 1;
 	nscreens = 0;
 	screenputs = nil;
 	uartputstr("fb:   console released to the draw device\n");

@@ -430,10 +430,11 @@ void
 displaywatch(void *a)
 {
 	static uchar edid[128];
-	int ndisp;
+	int ndisp, have;
 
 	USED(a);
 
+	have = 0;
 	ndisp = mboxfbnumdisplays();
 	if(ndisp <= 1)
 		return;			/* nowhere for one to appear */
@@ -441,8 +442,24 @@ displaywatch(void *a)
 	for(;;){
 		tsleep(&up->sleep, return0, nil, Dispwatchival);
 
-		if(fbconsscreens() > 1)
-			continue;	/* already have it */
+		/*
+		 * Nothing to watch for once a draw client has the screen.
+		 * Adding a text console to a framebuffer a window system
+		 * is drawing on puts two writers on the same pixels.
+		 */
+		if(fbconsreleased())
+			return;
+
+		/*
+		 * Whether display 1 has been brought up, tracked here
+		 * rather than inferred from the console's screen count.
+		 * The count is not that question: it is zero both before
+		 * the first screen is added and after the console gives
+		 * them all up, so a watcher reading it re-added the same
+		 * display on every poll.
+		 */
+		if(have)
+			continue;
 
 		if(mboxfbdispnum(1) < 0)
 			continue;
@@ -464,7 +481,8 @@ displaywatch(void *a)
 		uartputstr("\n");
 
 		mmunormalnc(fb2.base, fb2.size);
-		fbconsadd(&fb2);
+		if(fbconsadd(&fb2) == 0)
+			have = 1;
 	}
 }
 

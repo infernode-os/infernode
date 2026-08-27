@@ -923,6 +923,39 @@ def build_manifest(args, scenarios, emu, gateway, stamp):
 
 # ── run one scenario in a fresh emu ─────────────────────────────────
 
+def gdb_wrap(cmd):
+    """Run the emulator under gdb so a native fault names itself (INFR-421).
+
+    A campaign crash costs minutes of model time and leaves only whatever
+    the emulator wrote. Twice that was a bare rc=-11: the guest core limit
+    was 0 and apport kept no report, so there was no PC and no symbol, and
+    diagnosis needed another live run. gdb needs no root and no change to
+    the VM image, and dumps every thread -- which matters, because the one
+    fault we did capture was taken while a lock was held, so the faulting
+    frame may not be the interesting one.
+
+    SIGUSR1 is passed through untouched: oshostintr() uses it to interrupt
+    blocking syscalls, so gdb's default stop-and-report would halt the
+    emulator on every proc kill and present as a hang.
+
+    gdb inherits stdout, so the @@GRIND markers this function streams for
+    still arrive; the trace is interleaved into the same captured log.
+    """
+    if not shutil.which("gdb"):
+        raise SystemExit("grind: EMUDEBUG=gdb set but gdb is not installed")
+    return ["gdb", "-q", "-batch",
+            "-ex", "handle SIGUSR1 nostop noprint pass",
+            "-ex", "handle SIGCHLD nostop noprint pass",
+            "-ex", "handle SIGPIPE nostop noprint pass",
+            "-ex", "handle SIGSEGV stop print nopass",
+            "-ex", "handle SIGBUS stop print nopass",
+            "-ex", "run",
+            "-ex", "echo \\n=== EMUDEBUG FAULT: all threads ===\\n",
+            "-ex", "thread apply all bt full",
+            "-ex", "info registers",
+            "--args"] + cmd
+
+
 def run_emu(emu, timeout):
     # emu does not self-exit after the driver finishes: llmsrv/lucibridge/
     # tools9p run as background procs and keep the VM alive. So we stream the
@@ -930,6 +963,8 @@ def run_emu(emu, timeout):
     # (or on timeout). Start a new process group so we can kill the whole tree.
     cmd = [emu, "-c1", "-pheap=1024m", "-pmain=1024m", "-pimage=1024m",
            f"-r{REPO}", "sh", "-c", f"run {DRIVER_INEMU}"]
+    if os.environ.get("EMUDEBUG") == "gdb":
+        cmd = gdb_wrap(cmd)
     t0 = time.monotonic()
     p = subprocess.Popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, bufsize=1, text=True,

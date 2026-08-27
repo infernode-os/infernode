@@ -668,7 +668,9 @@ usbwalk()
 		return;
 	}
 
+	walking = 1;
 	enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
+	startpending();
 }
 
 #
@@ -1017,7 +1019,48 @@ sdsetup()
 	}
 }
 
+#
+# Class drivers are started AFTER the bus walk, not during it.
+#
+# A driver begins talking to its device the moment it starts, and on
+# this controller that traffic is not innocent: the DWC has eight
+# channels and one periodic schedule shared by every device on the
+# bus, and a low-speed device behind a hub reaches it through split
+# transactions that have to be issued in the right microframe. Bulk
+# transfers from a high-speed device -- which is what etherusb starts
+# doing immediately, and at line rate -- take channels and shift that
+# schedule.
+#
+# The symptom was a mouse whose device descriptor read cleanly and
+# whose configuration descriptor then came back as 0x55 repeating
+# three times running, while the log showed etherusb's LAN78xx bring-up
+# interleaved line for line with the walk that was failing. The same
+# mouse enumerates perfectly on a boot where the ordering happens to
+# differ, which is the signature of a timing collision rather than a
+# bad device.
+#
+# So collect them and start them at the end. This is also what Plan 9's
+# usbd does -- it enumerates the bus, then execs a driver per device --
+# and for the same reason.
+#
+# Deferral only applies WHILE a walk is running. A device plugged in
+# later is a walk of one device with nothing to collide with, so its
+# driver starts straight away; queueing it would mean it never started
+# at all, since nothing drains the queue outside a walk.
+#
+walking := 0;
+pending: list of (string, string);
+
 startdriver(path, name: string)
+{
+	if(walking){
+		pending = (path, name) :: pending;
+		return;
+	}
+	runstart(path, name);
+}
+
+runstart(path, name: string)
 {
 	drv := load Command path;
 	if(drv == nil){
@@ -1025,6 +1068,27 @@ startdriver(path, name: string)
 		return;
 	}
 	spawn drv->init(nil, "etherusb" :: name :: nil);
+}
+
+#
+# Start what the walk found, in the order it was found.
+#
+# pending is built by prepending, so it is reversed here. The order is
+# not cosmetic: the first device found is the one closest to the root
+# hub, and bringing the bus up outward from there is the order the
+# devices themselves were enumerated in.
+#
+startpending()
+{
+	walking = 0;
+	l: list of (string, string);
+	for(p := pending; p != nil; p = tl p)
+		l = hd p :: l;
+	pending = nil;
+	for(; l != nil; l = tl l){
+		(path, name) := hd l;
+		runstart(path, name);
+	}
 }
 
 #

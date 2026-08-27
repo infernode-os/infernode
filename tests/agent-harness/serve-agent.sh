@@ -101,4 +101,37 @@ serve-agent: $(date -Iseconds) starting
   keyfile = $KEY_HOSTPATH (in-emu: $KEY_INFPATH)
 EOF
 
+# EMUDEBUG=gdb captures a full native fault trace if emu dies (INFR-421).
+#
+# A campaign crash is expensive: minutes of model time, and the evidence is
+# whatever the emulator left behind. Twice now that has been a bare rc=-11,
+# because the guest core limit was 0 and apport kept no report. Running
+# under gdb needs no root and no image changes, and reports every thread -
+# which matters, since the one fault we did capture happened while a lock
+# was held, so the interesting frame may not be the faulting one.
+#
+# SIGUSR1 must pass through untouched: oshostintr() uses it to interrupt
+# blocking syscalls, so gdb's default stop-and-report would halt the
+# emulator on every proc kill and look exactly like a hang.
+if [ "${EMUDEBUG:-}" = "gdb" ]; then
+	command -v gdb >/dev/null 2>&1 || {
+		echo "serve-agent: EMUDEBUG=gdb set but gdb is not installed" >&2
+		exit 1
+	}
+	ulimit -c unlimited 2>/dev/null || true
+	echo "serve-agent: EMUDEBUG=gdb - emu runs under gdb, fault trace on stderr" >&2
+	exec gdb -q -batch \
+		-ex 'handle SIGUSR1 nostop noprint pass' \
+		-ex 'handle SIGCHLD nostop noprint pass' \
+		-ex 'handle SIGPIPE nostop noprint pass' \
+		-ex 'handle SIGSEGV stop print nopass' \
+		-ex 'handle SIGBUS stop print nopass' \
+		-ex run \
+		-ex 'echo \n=== FAULT: all threads ===\n' \
+		-ex 'thread apply all bt full' \
+		-ex 'info registers' \
+		-ex 'info sharedlibrary' \
+		--args "$EMU" -c1 "-r$ROOT" sh "$PROFILE_INF"
+fi
+
 exec "$EMU" -c1 "-r$ROOT" sh "$PROFILE_INF"

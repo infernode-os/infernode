@@ -290,7 +290,24 @@ int
 export(int fd, char *dir, int flag)
 {
 	USED(fd); USED(dir); USED(flag);
-	error("exportfs not imported");
+
+	/*
+	 * FAIL, do not RAISE.
+	 *
+	 * error() here becomes a Limbo exception, and sys->export's
+	 * callers do not catch one -- they read the return value. wm's
+	 * export process was therefore killed rather than told no:
+	 *
+	 *     [$Sys] Broken: "exportfs not imported"
+	 *     panic: cclose ...
+	 *
+	 * and the namespace corruption that follows an error unwinding
+	 * out of a Limbo process (INFR-432) took the board down a moment
+	 * later, every time, on a machine that was otherwise running a
+	 * window system quite happily. Refusing by return value costs the
+	 * caller nothing it was not already prepared for.
+	 */
+	kstrcpy(up->env->errstr, "exportfs not imported", ERRMAX);
 	return -1;
 }
 

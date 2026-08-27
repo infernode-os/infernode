@@ -497,6 +497,28 @@ build_kernel() {
     fi
 
     for f in "$ROOT"/os/port/*.c; do
+        #
+        # exportfs.c is imported and NOT YET BUILT. See INFR-436.
+        #
+        # It is the 9P side of handing a namespace to another process,
+        # and two genuine bugs in the port are already fixed in it: the
+        # emu-only blocking primitives, and -- much worse -- exslave
+        # adopting the exporting process's groups without taking a
+        # reference, so every slave decremented a namespace it never
+        # increfed and closepgrp eventually tore down a live one.
+        #
+        # A third defect remains: with exportfs linked, wm/wm still
+        # corrupts the namespace within seconds of starting, ending in
+        # a lock loop inside walk() on a structure whose lock was never
+        # held. Nothing else needs exportfs -- the window manager wants
+        # it only for an OPTIONAL export of /chan at /mnt/wm, for
+        # processes outside its namespace -- so it is left out until it
+        # is right, rather than left in to take the machine down.
+        #
+        # os/arm64/notyet.c refuses export() while this is so, which is
+        # a printed line and a window manager that carries on.
+        #
+        case "$(basename "$f")" in exportfs.c) continue;; esac
         [[ -e "$f" ]] || continue
         o="$BUILD/osport-$(basename "$f").o"
         # devprog.c formats Dis values -- reading /prog/N/heap prints a

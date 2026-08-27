@@ -17,6 +17,7 @@
 
 extern Dev	mntdevtab;	/* #M, the 9P client */
 extern Dev	benchdevtab;	/* #b, microsecond timing */
+extern Dev	srvdevtab;	/* #s, names a Limbo program serves */
 
 /*
  * The machine configuration os/port reads. Declared extern in dat.h and
@@ -1544,6 +1545,29 @@ probecons(void)
 	 */
 	if(benchdevtab.reset != nil)
 		benchdevtab.reset();
+
+	/*
+	 * #s's reset, and this one is not a convenience either.
+	 *
+	 * srvinit() creates the two Dis channel types a served file's
+	 * reads and writes are typed with, allocates the heap types for
+	 * the Rread and Rwrite replies, and -- quietly the most important
+	 * -- sets dev.pathgen to 1 so that no served file is ever handed
+	 * qid path 0, which is the srv root's own.
+	 *
+	 * None of that ran, because this kernel has no chandevreset().
+	 * The result was not a device that failed: it was a device that
+	 * WORKED, with a nil reply type and every file colliding with the
+	 * root on qid 0. The window manager brought it down a few seconds
+	 * after starting -- /prog disappeared from a namespace nobody had
+	 * touched, a walk of "/mnt" came back with a chan belonging to an
+	 * unrelated 9P mount, and the kernel panicked in cclose closing a
+	 * channel that had already been freed.
+	 *
+	 * Touches no hardware, so it belongs here with the other two.
+	 */
+	if(srvdevtab.reset != nil)
+		srvdevtab.reset();
 
 	/* run every device's init, as a real kernel does at boot */
 	chandevinit();

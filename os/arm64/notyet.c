@@ -263,11 +263,25 @@ modinit(void)
 
 
 /*
- * export() was refused here. os/port/exportfs.c provides the real one
- * now -- it is how a Limbo program hands a whole namespace to another
- * process down a pipe, and it is what wmsrv gives each window-system
- * client instead of access to everyone else's windows.
+ * exportfs.c -- serve a namespace over 9P.
+ *
+ * IMPORTED but not yet built; see INFR-436 and the note in
+ * tests/host/baremetal_test.sh. Two real bugs in the port are already
+ * fixed in that file and a third is not, and with it linked the window
+ * manager corrupts the namespace within seconds of starting.
+ *
+ * Refusing here is not a loss of function anyone will notice yet: the
+ * only caller is the OPTIONAL export of wm's /chan at /mnt/wm, for
+ * processes outside its namespace, and wm prints the refusal and
+ * carries on.
  */
+int
+export(int fd, char *dir, int flag)
+{
+	USED(fd); USED(dir); USED(flag);
+	error("exportfs not imported");
+	return -1;
+}
 
 
 /*

@@ -741,9 +741,55 @@ exslave(void *a)
 		unlock(&fs->l);
 		unlock(&exq.l);
 
-		up->env->pgrp = q->export->pgrp;
-		up->env->egrp = q->export->egrp;
-		up->env->fgrp = q->export->fgrp;
+		/*
+		 * Adopt the exporting process's namespace, WITH A
+		 * REFERENCE, and let go of whatever this slave was
+		 * holding before.
+		 *
+		 * Upstream simply assigns these three pointers. That is
+		 * survivable in the emulator and is not survivable here:
+		 * a kproc's exit path closes the groups its env points
+		 * at, so a slave that adopted a namespace it never
+		 * increfed decremented it on the way out. Slaves are a
+		 * POOL, dispatched per request, so it happened once per
+		 * slave -- and when the count reached zero closepgrp tore
+		 * down a namespace that was still in use, cclosing its
+		 * root and freeing every mount in it.
+		 *
+		 * The symptoms were spectacular and looked unrelated to
+		 * exportfs. /prog disappeared from a namespace nobody had
+		 * touched. A walk of "/mnt" came back holding a channel
+		 * that belonged to an unrelated 9P mount -- the root
+		 * Chan had been freed and the allocator had handed the
+		 * same memory to the next attach. Then the kernel
+		 * panicked in cclose on a channel that was already free.
+		 *
+		 * incref BEFORE close, in that order, because the group
+		 * being adopted may be the one already held: closing
+		 * first could take the last reference to the thing about
+		 * to be adopted.
+		 */
+		{
+			Pgrp *opg;
+			Egrp *oeg;
+			Fgrp *ofg;
+
+			incref(&q->export->pgrp->r);
+			incref(&q->export->egrp->r);
+			incref(&q->export->fgrp->r);
+
+			opg = up->env->pgrp;
+			oeg = up->env->egrp;
+			ofg = up->env->fgrp;
+
+			up->env->pgrp = q->export->pgrp;
+			up->env->egrp = q->export->egrp;
+			up->env->fgrp = q->export->fgrp;
+
+			closepgrp(opg);
+			closeegrp(oeg);
+			closefgrp(ofg);
+		}
 		up->env->uid = q->export->uid;
 		up->env->gid = q->export->gid;
 		kstrdup(&up->env->user, q->export->user);

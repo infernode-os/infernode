@@ -121,7 +121,18 @@ exit(int code)
 	int i;
 
 	USED(code);
-	print("\nkernel exit\n");
+	/*
+	 * SAY WHO ASKED. exit() is reached from four different places --
+	 * panic, the ^T^Tr debug key, halt(), and the clock's
+	 * active.exiting check -- and three of them are silent. A board
+	 * that reset with nothing but "kernel exit" on the wire left no
+	 * way to tell a deliberate reboot from a window manager taking
+	 * the machine down.
+	 */
+	print("\nkernel exit (called from %p, pid %lud %s)\n",
+		(void*)getcallerpc(&code),
+		up != nil? (ulong)up->pid : 0UL,
+		up != nil? up->text : "-");
 	splhi();
 
 	/*

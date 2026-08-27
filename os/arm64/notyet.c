@@ -265,7 +265,7 @@ modinit(void)
 /*
  * exportfs.c -- serve a namespace over 9P.
  *
- * IMPORTED but not yet built; see INFR-436 and the note in
+ * IMPORTED but not yet built; see INFR-431 and the note in
  * tests/host/baremetal_test.sh. Two real bugs in the port are already
  * fixed in that file and a third is not, and with it linked the window
  * manager corrupts the namespace within seconds of starting.

@@ -498,7 +498,7 @@ build_kernel() {
 
     for f in "$ROOT"/os/port/*.c; do
         #
-        # exportfs.c is imported and NOT YET BUILT. See INFR-436.
+        # exportfs.c is imported and NOT YET BUILT. See INFR-431.
         #
         # It is the 9P side of handing a namespace to another process,
         # and two genuine bugs in the port are already fixed in it: the

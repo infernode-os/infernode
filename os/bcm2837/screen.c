@@ -34,6 +34,9 @@
 
 static Fbinfo *screenfb;
 
+extern Cursor arrow;			/* Inferno's own, defined below */
+void	setcursor(Cursor*);
+
 /*
  * Hand devdraw the screen.
  *
@@ -81,6 +84,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	*d = 32;
 	*width = fb->pitch / sizeof(ulong);
 	*softscreen = 0;
+
+	/*
+	 * Give the screen a pointer the moment it becomes a screen.
+	 * Waiting for a program to set one means waiting for ever.
+	 */
+	setcursor(&arrow);
 
 	return (uchar*)fb->base;
 }
@@ -289,6 +298,55 @@ void
 swcursorshow(void)
 {
 	lock(&swc.l);
+	swcurson();
+	unlock(&swc.l);
+}
+
+/*
+ * The cursor to start with, and it is Inferno's own.
+ *
+ * Taken verbatim from upstream os/pc/screen.c, where it has been since
+ * long before this port. It is 16x16, two bytes a row, clear mask then
+ * set mask -- which is exactly the shape of the Cursor struct
+ * screen.h already declares here, CURSWID and CURSHGT both 16.
+ *
+ * A default is needed at all because nothing supplies one: Inferno's
+ * Draw module has no cursor call, and wmlib writes /dev/cursor only
+ * when a program wants a DIFFERENT shape. On a hosted system the arrow
+ * you see belongs to the host's window system. There is no host here,
+ * which is why the mouse worked and the screen showed nothing to say
+ * where it was.
+ */
+Cursor arrow = {
+	{ -1, -1 },
+	{ 0xFF, 0xFF, 0x80, 0x01, 0x80, 0x02, 0x80, 0x0C, 
+	  0x80, 0x10, 0x80, 0x10, 0x80, 0x08, 0x80, 0x04, 
+	  0x80, 0x02, 0x80, 0x01, 0x80, 0x02, 0x8C, 0x04, 
+	  0x92, 0x08, 0x91, 0x10, 0xA0, 0xA0, 0xC0, 0x40, 
+	},
+	{ 0x00, 0x00, 0x7F, 0xFE, 0x7F, 0xFC, 0x7F, 0xF0, 
+	  0x7F, 0xE0, 0x7F, 0xE0, 0x7F, 0xF0, 0x7F, 0xF8, 
+	  0x7F, 0xFC, 0x7F, 0xFE, 0x7F, 0xFC, 0x73, 0xF8, 
+	  0x61, 0xF0, 0x60, 0xE0, 0x40, 0x40, 0x00, 0x00, 
+	},
+};
+
+/*
+ * Load a Cursor -- the kernel's own form, as above -- rather than a
+ * Drawcursor, which is the form a program writes to /dev/cursor.
+ */
+void
+setcursor(Cursor *c)
+{
+	lock(&swc.l);
+	swcursoff();
+	swc.w = CURSWID;
+	swc.h = CURSHGT;
+	swc.hotx = c->offset.x;
+	swc.hoty = c->offset.y;
+	memmove(swc.clr, c->clr, sizeof c->clr);
+	memmove(swc.set, c->set, sizeof c->set);
+	swc.loaded = 1;
 	swcurson();
 	unlock(&swc.l);
 }

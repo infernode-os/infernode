@@ -2133,7 +2133,24 @@ writefile(f: ref Xfile, buf: array of byte, offset,count: int): int
 		d.length[2] = byte (length>>16);
 		d.length[3] = byte (length>>24);
 	}
-	puttime(d);
+	#
+	# Stamp the time if we can, but WRITE THE ENTRY BACK REGARDLESS.
+	#
+	# The data sectors were written at the top of this function. The
+	# directory entry is what records how much of the file is now
+	# valid, so if anything between the two aborts, the bytes are on
+	# the card and nothing points at them -- a file that has silently
+	# not grown, which is far worse than one with a doubtful date.
+	# puttime is the only thing in that gap and it depends on the
+	# clock, which on a machine with no RTC is exactly the thing least
+	# to be relied on.
+	#
+	{
+		puttime(d);
+	} exception {
+	* =>
+		;	# a bad clock must not cost us the file
+	}
 	dp.p.flags |= BMOD;
 	dp.p.iobuf[dp.offset:] = Dosdir.Dd2arr(d);
 	return rcnt;
@@ -2634,7 +2651,24 @@ xputtime(d: ref Dosdir, s: int)
 	x := (t.hour<<11) | (t.min<<5) | (t.sec>>1);
 	d.time[0] = byte x;
 	d.time[1] = byte (x>>8);
-	x = ((t.year-80)<<9) | ((t.mon+1)<<5) | t.mday;
+	#
+	# FAT counts years from 1980 and cannot represent anything
+	# earlier, so a date before then is clamped rather than encoded.
+	#
+	# Without this, t.year-80 goes NEGATIVE and shifts a negative
+	# number into the date field -- and a machine with no
+	# battery-backed clock starts at 1970, so that is every file
+	# written before the network sets the time. A wrong-but-valid
+	# 1980 stamp is a great deal better than a field whose value
+	# depends on how a negative shift happens to land.
+	#
+	yr := t.year - 80;
+	if(yr < 0){
+		yr = 0;
+		t.mon = 0;
+		t.mday = 1;
+	}
+	x = (yr<<9) | ((t.mon+1)<<5) | t.mday;
 	d.date[0] = byte x;
 	d.date[1] = byte (x>>8);
 }

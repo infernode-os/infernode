@@ -1751,7 +1751,10 @@ QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
 FSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'ls /n/dos' \
-        'cat /n/dos/HELLO.TXT')"
+        'cat /n/dos/HELLO.TXT' \
+        'echo first > /n/dos/RW.TXT' \
+        'echo second >> /n/dos/RW.TXT' \
+        'cat /n/dos/RW.TXT')"
 QEMUARGS="$SAVEDARGS"
 FSOUT="$(tr -d '\r' <<<"$FSOUT")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- filesystem ---"; echo "$FSOUT"; }
@@ -1764,6 +1767,16 @@ if grep -q 'hello from the SD card' <<<"$FSOUT"; then
     pass "a file is read from the card through dossrv, block driver to shell"
 else
     fail "could not read a file from the mounted filesystem"
+fi
+
+# Creating a file is one path; EXTENDING one is a different path and it
+# is the one that goes wrong quietly. A failed append does not report an
+# error -- the bytes reach the card and the directory entry is not
+# updated, so the file simply has not grown. Both lines must come back.
+if grep -q '^first$' <<<"$FSOUT" && grep -q '^second$' <<<"$FSOUT"; then
+    pass "a file can be created and then appended to"
+else
+    fail "appending to a file on the card did not take"
 fi
 
 #

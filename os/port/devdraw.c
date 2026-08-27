@@ -18,6 +18,14 @@ enum
 	Qnew,
 	Q3rd,
 	Q2nd,
+	/*
+	 * Qscreen sits BEFORE Qcolormap deliberately. The test for "this
+	 * file belongs to no client" throughout this file is
+	 * QID(c->qid) < Qcolormap, and /dev/screen belongs to no client:
+	 * it is the whole display, readable by anyone, not a per-client
+	 * image.
+	 */
+	Qscreen,
 	Qcolormap,
 	Qctl,
 	Qdata,
@@ -230,11 +238,30 @@ drawgen(Chan *c, char*, Dirtab*, int, int s, Dir *dp)
 	 * Top level directory contains the name of the device.
 	 */
 	t = QID(c->qid);
-	if(t == Qtopdir){
+	/*
+	 * Qscreen as well as Qtopdir, because devstat and devwalk hand
+	 * this the FILE's qid and expect the parent directory's listing
+	 * to be generated -- which is why the Q2nd case below also
+	 * matches Qnew, and the Q3rd case matches Qctl. Without it a
+	 * stat of /dev/screen failed with "devstat i 4" and every tool
+	 * that stats before reading, which is most of them, reported the
+	 * file as not existing.
+	 */
+	if(t == Qtopdir || t == Qscreen){
 		switch(s){
 		case 0:
 			mkqid(&q, Q2nd, 0, QTDIR);
 			devdir(c, q, "draw", 0, eve, 0555, dp);
+			break;
+		case 1:
+			/*
+			 * screen: the display, as an image file. Length 0
+			 * because it is not known until it is read and a
+			 * directory entry that lied about it would be
+			 * worse than one that says nothing.
+			 */
+			mkqid(&q, Qscreen, 0, QTFILE);
+			devdir(c, q, "screen", 0, eve, 0444, dp);
 			break;
 		default:
 			return -1;
@@ -976,6 +1003,10 @@ drawopen(Chan *c, int omode)
 	case Qnew:
 		break;
 
+	case Qscreen:
+		/* no client, nothing to allocate: it is just the screen */
+		break;
+
 	case Qctl:
 		cl = drawclient(c);
 		if(cl->busy)
@@ -1050,6 +1081,100 @@ drawclose(Chan *c)
 	poperror();
 }
 
+/*
+ * Serve /dev/screen. See the note in drawread.
+ */
+static long
+drawreadscreen(void *a, long n, vlong off)
+{
+	Memimage *i;
+	Rectangle r;
+	uchar *p, *q;
+	char hdr[5*12+1];
+	char cbuf[16];
+	int bpl, dy, hdrsz, y, k, o;
+	vlong tot;
+	long have;
+
+	if(n <= 0 || off < 0)
+		return 0;
+
+	qlock(&sdraw.l);
+	if(waserror()){
+		qunlock(&sdraw.l);
+		nexterror();
+	}
+	i = screenimage;
+	if(i == nil)
+		error(Enodrawimage);
+
+	r = i->r;
+	dy = Dy(r);
+	bpl = bytesperline(r, i->depth);
+	hdrsz = 5*12;
+	tot = (vlong)hdrsz + (vlong)bpl * dy;
+
+	if(off >= tot){
+		qunlock(&sdraw.l);
+		poperror();
+		return 0;
+	}
+	if(off + n > tot)
+		n = tot - off;
+
+	/*
+	 * The header, byte for byte as libdraw/writeimage.c writes it --
+	 * minus its "compressed\n" prefix, since this is the
+	 * uncompressed form, which readimage() accepts as the other of
+	 * the two cases it handles.
+	 *
+	 * %11s and not %-11s: readimage tells a channel string from an
+	 * old ldepth by looking for a non-space in the first ten bytes,
+	 * and it then requires byte 11 to be a space. Right justification
+	 * is what makes both true, and strtochan skips the leading
+	 * blanks that leaves.
+	 */
+	chantostr(cbuf, i->chan);
+	snprint(hdr, sizeof hdr, "%11s %11d %11d %11d %11d ",
+		cbuf, r.min.x, r.min.y, r.max.x, r.max.y);
+
+	p = a;
+	have = 0;
+
+	/* the header, or the part of it this read still wants */
+	if(off < hdrsz){
+		k = hdrsz - off;
+		if(k > n)
+			k = n;
+		memmove(p, hdr + (int)off, k);
+		p += k;
+		have += k;
+		off += k;
+		n -= k;
+	}
+
+	/* then whole or partial rows */
+	while(n > 0){
+		o = (int)(off - hdrsz);
+		y = o / bpl;
+		k = bpl - (o % bpl);
+		if(k > n)
+			k = n;
+		if(y >= dy)
+			break;
+		q = byteaddr(i, Pt(r.min.x, r.min.y + y)) + (o % bpl);
+		memmove(p, q, k);
+		p += k;
+		have += k;
+		off += k;
+		n -= k;
+	}
+
+	qunlock(&sdraw.l);
+	poperror();
+	return have;
+}
+
 long
 drawread(Chan *c, void *a, long n, vlong off)
 {
@@ -1065,6 +1190,35 @@ drawread(Chan *c, void *a, long n, vlong off)
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, a, n, 0, 0, drawgen);
+
+	/*
+	 * /dev/screen -- the display as an image file.
+	 *
+	 * Handled before drawclient() because it has no client: it is the
+	 * screen, not somebody's window, and anyone may read it.
+	 *
+	 * The format is Plan 9's uncompressed image file, which is what
+	 * libdraw's readimage() parses and what every tool that turns one
+	 * into a picture expects:
+	 *
+	 *	char	chan[12]	channel descriptor, blank padded
+	 *	char	r[4][12]	min.x min.y max.x max.y, %11d and a space
+	 *	uchar	data[]		bytesperline(r, depth) * Dy(r)
+	 *
+	 * Rows are copied one at a time rather than as one block, because
+	 * the framebuffer's stride is the firmware's business and is
+	 * routinely wider than the pixels: a screen 800 wide at 32 bits
+	 * has 3200 bytes of pixels in a line that may be longer. Copying
+	 * straight through would shear the picture by the difference.
+	 *
+	 * This exists so that "what is on the screen" is a question that
+	 * can be answered from a shell rather than by asking someone to
+	 * look at the panel. That it could not be answered any other way
+	 * has already cost more than this device did.
+	 */
+	if(QID(c->qid) == Qscreen)
+		return drawreadscreen(a, n, off);
+
 	cl = drawclient(c);
 	qlock(&sdraw.l);
 	if(waserror()){

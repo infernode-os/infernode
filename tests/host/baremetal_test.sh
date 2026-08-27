@@ -322,6 +322,7 @@ build_kernel() {
             # /n/dos, and a mount needs its target to exist.
             "/n="
             "/n/dos="
+            "/n/remote="
 
             # Mount points for the window system. mount(2) will not
             # create its target, so /mnt/wm has to exist before wm/wm

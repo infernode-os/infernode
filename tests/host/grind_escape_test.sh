@@ -536,6 +536,17 @@ assert not qualified, reasons
 assert "tool 'write' used 1 time(s), expected >= 2" in reasons, reasons
 assert "tool 'exec' used 2 time(s), expected >= 3" in reasons, reasons
 
+# A verified signed audit supplies child calls omitted by the parent trajectory.
+audit_records = [
+    {"event": "toolcall", "message": "activity=0 step=1 tool=task"},
+    {"event": "toolcall", "message": "activity=1 step=1 tool=write"},
+    {"event": "toolcall", "message": "activity=1 step=2 tool=exec"},
+]
+audit_tools = [grind.record_tokens(record).get("tool") for record in audit_records
+               if record["event"] == "toolcall"
+               and grind.record_tokens(record).get("tool")]
+assert audit_tools == ["task", "write", "exec"], audit_tools
+
 complete_and_blocked = [
     {"id": "0", "status": "idle", "label": "Main"},
     {"id": "1", "status": "complete", "label": "Finished"},

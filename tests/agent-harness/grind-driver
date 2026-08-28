@@ -52,6 +52,8 @@ matrixcomp=none
 if {ftest -f $stage/matrixcomp} { matrixcomp=`{cat $stage/matrixcomp} }
 followthrough=no
 if {ftest -f $stage/followthrough} { followthrough=`{cat $stage/followthrough} }
+campaignwait=no
+if {ftest -f $stage/campaign-wait} { campaignwait=`{cat $stage/campaign-wait} }
 auditwant=no
 if {ftest -f $stage/audit} { auditwant=`{cat $stage/audit} }
 sourcewant=no
@@ -65,6 +67,7 @@ if {~ $#settle 0}      { settle=4 }
 if {~ $#msgmode 0}     { msgmode=none }
 if {~ $#matrixcomp 0}  { matrixcomp=none }
 if {~ $#followthrough 0} { followthrough=no }
+if {~ $#campaignwait 0} { campaignwait=no }
 if {~ $#auditwant 0} { auditwant=no }
 if {~ $#sourcewant 0} { sourcewant=no }
 if {~ $#nsauditwant 0} { nsauditwant=no }
@@ -289,10 +292,18 @@ if {~ $followthrough yes} {
 	}
 	if {~ $anychild yes} {
 		echo '@@GRIND followthrough begin'
-		# wait until no child activity is in a working-ish status (~240s budget)
+		# Wait until no child activity is working. Ordinary scenarios retain the
+		# ~240s budget; an explicit campaign wait permits ~1200s for concurrent
+		# source-assisted red-team branches.
+		childrounds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+		childpolls=(1 2 3 4 5)
+		if {~ $campaignwait yes} {
+			childrounds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
+			childpolls=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
+		}
 		cdone=no
-		for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16) {
-			for (i in 1 2 3 4 5) {
+		for (r in $childrounds) {
+			for (i in $childpolls) {
 				if {~ $cdone no} {
 					sleep 3
 					working=no

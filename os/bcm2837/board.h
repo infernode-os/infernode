@@ -52,6 +52,7 @@ void	fbconsstop(void);
  * it off the screen around its drawing.
  */
 void	swcursorat(int, int);
+void	screendumpkey(void);
 void	swcursorhide(void);
 void	swcursorshow(void);
 Fbinfo*	boardfb(void);

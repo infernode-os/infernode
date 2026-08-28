@@ -757,6 +757,15 @@ consinit(void)
 	debugkey('f', "files/6", fddump, 0);
 	debugkey('q', "panic", qpanic, 1);
 	debugkey('r', "exit", rexit, 1);
+	{
+	extern void screendumpkey(void);
+	/*
+	 * Show the screen on the console. See screendump in
+	 * os/bcm2837/screen.c for why a kernel needs this when it
+	 * already serves /dev/screen.
+	 */
+	debugkey('S', "screen", screendumpkey, 1);
+	}
 	klogq = qopen(128*1024, 0, 0, 0);
 
 	/*

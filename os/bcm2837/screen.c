@@ -172,6 +172,8 @@ blankscreen(int blank)
  */
 
 enum {
+	Dumpcols = 100,			/* the console dump's shape */
+	Dumprows = 40,
 	Curswid = 32,			/* the most this will render */
 	Curshgt = 32,
 };
@@ -187,7 +189,7 @@ static struct {
 	Point	pos;			/* where the pointer is */
 	Point	at;			/* where the saved pixels came from */
 	int	sw, sh;			/* how much was saved */
-	ulong	save[Curswid * Curshgt];
+	u32int	save[Curswid * Curshgt];
 } swc;
 
 /*
@@ -196,13 +198,13 @@ static struct {
 static void
 swcursoff(void)
 {
-	ulong *fb;
+	u32int *fb;
 	int x, y, stride;
 
 	if(!swc.shown || screenfb == nil)
 		return;
-	stride = screenfb->pitch / sizeof(ulong);
-	fb = (ulong*)screenfb->base;
+	stride = screenfb->pitch / sizeof(u32int);
+	fb = (u32int*)screenfb->base;
 	for(y = 0; y < swc.sh; y++)
 		for(x = 0; x < swc.sw; x++)
 			fb[(swc.at.y + y) * stride + swc.at.x + x] =
@@ -217,7 +219,7 @@ swcursoff(void)
 static void
 swcurson(void)
 {
-	ulong *fb;
+	u32int *fb;
 	int x, y, stride, bpl, bit, byte;
 	Point p;
 
@@ -243,8 +245,8 @@ swcurson(void)
 	if(swc.sw <= 0 || swc.sh <= 0)
 		return;
 
-	stride = screenfb->pitch / sizeof(ulong);
-	fb = (ulong*)screenfb->base;
+	stride = screenfb->pitch / sizeof(u32int);
+	fb = (u32int*)screenfb->base;
 	bpl = (swc.w + 7) / 8;
 
 	for(y = 0; y < swc.sh; y++){
@@ -390,4 +392,95 @@ drawcursor(Drawcursor *c)
 
 	swcurson();
 	unlock(&swc.l);
+}
+
+/*
+ * Show the screen on the serial console.
+ *
+ * Bound to a debug key so that "what is on the display" can be answered
+ * from here, over the one wire that always works, without a network, a
+ * 9P mount, a filesystem or a command typed at a shell -- every one of
+ * which failed at some point while trying to answer exactly that
+ * question, and each failure looked like a fault in something else.
+ *
+ * /dev/screen is the real interface and is the one a program should
+ * use; this is for when there is no working way to run a program.
+ *
+ * It prints characters, not pixels: the framebuffer is 1.5MB and the
+ * console is 115200 baud, so a faithful dump would take two minutes and
+ * still not be readable as a picture. Each character is one cell of the
+ * screen, shaded by the average brightness of the pixels in it, which
+ * is enough to tell a blank screen from a desktop, and a desktop from a
+ * desktop with a window on it.
+ */
+static void
+screendump(void)
+{
+	static char shade[] = " .:-=+*#%@";
+	u32int *fb;
+	int cx, cy, x, y, stride, cw, ch, sum, n, i;
+	char line[Dumpcols+2];
+
+	if(screenfb == nil || screenfb->base == 0){
+		uartputstr("screen: no framebuffer\n");
+		return;
+	}
+
+	stride = screenfb->pitch / sizeof(u32int);
+	fb = (u32int*)screenfb->base;
+	cw = screenfb->width / Dumpcols;
+	ch = screenfb->height / Dumprows;
+	if(cw < 1) cw = 1;
+	if(ch < 1) ch = 1;
+
+	uartputstr("screen: ");
+	uartputd(screenfb->width);
+	uartputstr("x");
+	uartputd(screenfb->height);
+	uartputstr(", one character per ");
+	uartputd(cw);
+	uartputstr("x");
+	uartputd(ch);
+	uartputstr(" pixels\n");
+
+	for(cy = 0; cy < Dumprows; cy++){
+		for(cx = 0; cx < Dumpcols; cx++){
+			sum = 0;
+			n = 0;
+			/*
+			 * Sample rather than average every pixel: four
+			 * points a cell is plenty to shade by and keeps
+			 * this from taking longer than the thing it is
+			 * meant to diagnose.
+			 */
+			for(y = cy*ch; y < (cy+1)*ch; y += (ch+1)/2){
+				for(x = cx*cw; x < (cx+1)*cw; x += (cw+1)/2){
+					if(x >= (int)screenfb->width
+					|| y >= (int)screenfb->height)
+						continue;
+					i = fb[y*stride + x];
+					/* rough luminance, integer only */
+					sum += ((i>>16 & 0xFF)*77
+						+ (i>>8 & 0xFF)*151
+						+ (i & 0xFF)*28) >> 8;
+					n++;
+				}
+			}
+			if(n == 0)
+				n = 1;
+			i = (sum/n) * (nelem(shade)-1) / 255;
+			if(i < 0) i = 0;
+			if(i > nelem(shade)-2) i = nelem(shade)-2;
+			line[cx] = shade[i];
+		}
+		line[Dumpcols] = '\n';
+		line[Dumpcols+1] = 0;
+		uartputstr(line);
+	}
+}
+
+void
+screendumpkey(void)
+{
+	screendump();
 }

@@ -447,6 +447,15 @@ build_kernel() {
             # colors needs nothing that is not already here, and a menu
             # whose entries do nothing is worse than a shorter menu.
             "/dis/wm/colors.dis=$ROOT/dis/wm/colors.dis"
+
+            # acme, the third entry on wm's menu. Its closure is only
+            # four files this image does not already have -- complete,
+            # libc, styx and acme itself, about 75KB -- so the menu no
+            # longer offers something that cannot run.
+            "/dis/acme.dis=$ROOT/dis/acme.dis"
+            "/dis/lib/complete.dis=$ROOT/dis/lib/complete.dis"
+            "/dis/lib/libc.dis=$ROOT/dis/lib/libc.dis"
+            "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
             "/dis/wm/shell.dis=$ROOT/dis/wm/shell.dis"
             "/dis/lib/tkclient.dis=$ROOT/dis/lib/tkclient.dis"
             "/dis/lib/titlebar.dis=$ROOT/dis/lib/titlebar.dis"

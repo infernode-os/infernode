@@ -51,6 +51,7 @@
 #   CODEX_GATE_MODEL      default model; empty = let the CLI use its own
 #   CODEX_GATE_MODELS     comma-separated list advertised on /v1/models
 #   CODEX_GATE_TIMEOUT    seconds one `codex exec` may run (default 900)
+#   CODEX_GATE_HEARTBEAT  seconds between SSE keepalives (default 30)
 #   CODEX_GATE_CONCURRENCY  max simultaneous codex processes (default 4)
 #   CODEX_GATE_SANDBOX    --sandbox value (default read-only)
 #   CODEX_GATE_WORKDIR    --cd value (default ~/.cache/codex-gate/workdir)
@@ -93,6 +94,7 @@ MOCK_ERROR = os.environ.get("CODEX_GATE_MOCK_ERROR", "")
 CODEX_BIN = os.environ.get("CODEX_GATE_BIN", "codex")
 DEFAULT_MODEL = os.environ.get("CODEX_GATE_MODEL", "")
 EXEC_TIMEOUT = float(os.environ.get("CODEX_GATE_TIMEOUT", "900"))
+HEARTBEAT = max(0.05, float(os.environ.get("CODEX_GATE_HEARTBEAT", "30")))
 CONCURRENCY = int(os.environ.get("CODEX_GATE_CONCURRENCY", "4"))
 SANDBOX = os.environ.get("CODEX_GATE_SANDBOX", "read-only")
 
@@ -561,7 +563,8 @@ def toolcalls_json(calls):
     return out
 
 
-async def respond(request, model, text, calls, usage_tokens, stream):
+async def respond(request, model, text, calls, usage_tokens, stream,
+                  stream_response=None):
     tcs = toolcalls_json(calls) if calls else None
     finish = "tool_calls" if tcs else "stop"
     body = completion_body(model, text, tcs, finish, usage_tokens)
@@ -571,11 +574,13 @@ async def respond(request, model, text, calls, usage_tokens, stream):
 
     # Single-chunk SSE: llmclient's SSE parser accumulates deltas, so one
     # complete delta chunk + usage + [DONE] is valid and sufficient.
-    resp = web.StreamResponse(headers={
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-    })
-    await resp.prepare(request)
+    resp = stream_response
+    if resp is None:
+        resp = web.StreamResponse(headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+        })
+        await resp.prepare(request)
     choice = body["choices"][0]
     delta = {"role": "assistant", "content": choice["message"]["content"]}
     if choice["message"].get("tool_calls"):
@@ -748,6 +753,11 @@ async def run_codex(model, prompt, schema):
         try:
             out, err = await asyncio.wait_for(
                 proc.communicate(prompt.encode()), timeout=EXEC_TIMEOUT)
+        except asyncio.CancelledError:
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+            raise
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -815,6 +825,9 @@ async def mock_turn(model, system_prompt, prompt, tooldefs, trailing_tools):
     held turn.  `MOCK_TOOL_CALL <name> <json>` triggers one tool call."""
     if MOCK_ERROR:
         raise CodexError(MOCK_ERROR)
+    delay = float(os.environ.get("CODEX_GATE_MOCK_DELAY", "0"))
+    if delay > 0:
+        await asyncio.sleep(delay)
     if trailing_tools:
         content = trailing_tools[-1].get("content") or ""
         suffix = " (is_error)" if is_error_result(content) else ""
@@ -854,26 +867,60 @@ async def chat_completions(request):
         return web.json_response(
             {"error": {"message": "no user content in messages"}}, status=400)
 
+    trailing = [m for m in history if m.get("role") == "tool"]
+    if MOCK:
+        turn = mock_turn(model, system_prompt, prompt, tooldefs, trailing)
+    else:
+        turn = codex_turn(model, system_prompt, prompt, tooldefs)
+
+    stream_response = None
+    task = None
     try:
-        if MOCK:
-            trailing = [m for m in history if m.get("role") == "tool"]
-            content, calls, usage = await mock_turn(
-                model, system_prompt, prompt, tooldefs, trailing)
+        if stream:
+            # Commit the HTTP response before invoking Codex, then keep the
+            # caller's per-read watchdog alive while a long reasoning turn is
+            # making progress inside the CLI. SSE comments are protocol-valid
+            # and ignored by OpenAI clients.
+            stream_response = web.StreamResponse(headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+            })
+            await stream_response.prepare(request)
+            task = asyncio.create_task(turn)
+            while not task.done():
+                done, _ = await asyncio.wait((task,), timeout=HEARTBEAT)
+                if not done:
+                    await stream_response.write(b": codex-gate working\n\n")
+            content, calls, usage = await task
         else:
-            content, calls, usage = await codex_turn(
-                model, system_prompt, prompt, tooldefs)
+            content, calls, usage = await turn
     except CodexError as e:
         log.error("turn failed: %s", e)
+        if stream_response is not None:
+            return await respond(request, model, "ERROR: codex-gate: %s" % e,
+                                 [], 0, True, stream_response)
         return web.json_response(
             {"error": {"message": "codex-gate: %s" % e, "type": "gate_error"}},
             status=502)
+    except (ConnectionResetError, asyncio.CancelledError):
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        raise
     except Exception as e:                              # noqa: BLE001
         log.exception("turn failed")
+        if stream_response is not None:
+            return await respond(request, model, "ERROR: codex-gate: %s" % e,
+                                 [], 0, True, stream_response)
         return web.json_response(
             {"error": {"message": "codex-gate: %s" % e, "type": "gate_error"}},
             status=502)
 
-    return await respond(request, model, content, calls, usage, stream)
+    return await respond(request, model, content, calls, usage, stream,
+                         stream_response)
 
 
 async def models(request):

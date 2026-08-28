@@ -567,12 +567,13 @@ assert any("no signed terminal record" in e for e in lifecycle_errors), lifecycl
 assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
 
 cancelled = [dict(a) for a in complete_and_blocked]
-cancelled[2]["status"] = "timeout"
 child_records.append(
     {"seq": "7", "event": "childtimeout", "message": "activity=2 status=read"})
 lifecycle_errors = grind.audit_lifecycle_errors(child_records, cancelled)
 assert any("activity 2 timed out" in e and "step=1 tool=read" in e
            for e in lifecycle_errors), lifecycle_errors
+assert not any("non-terminal" in e or "disagrees" in e
+               for e in lifecycle_errors), lifecycle_errors
 assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
 
 all_done = complete_and_blocked[:2]
@@ -612,8 +613,11 @@ assert grind.audit_lifecycle_errors(
     audit_only_done, [{"id": "0", "status": "idle", "label": "Main"}]) == []
 
 driver = (root / "tests/agent-harness/grind-driver").read_text()
-assert "grind childtimeout activity=" in driver and "operation=" in driver
-assert "echo timeout > $ad/status" in driver
+assert "grind childtimeout activity=" in driver and "observed=" in driver
+assert "echo timeout > $ad/status" not in driver
+assert "if {! ~ $cs complete completed done idle failed error timeout closed hidden}" in driver
+assert "if {~ $cdone yes}" in driver
+assert "@@GRIND followthrough children-timeout" in driver
 assert "@@GRIND children terminal=" in driver
 assert "ls /mnt/ui/activity" in driver
 assert "for (a in 1 2 3 4 5 6 7 8 9)" not in driver

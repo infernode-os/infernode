@@ -106,6 +106,73 @@ echo "$r" | grep -q '"content": "MOCK_REPLY: hi"' || fail "stream: delta missing
 echo "$r" | grep -q 'data: \[DONE\]' || fail "stream: no [DONE]"
 pass "SSE streaming shape"
 
+# A real Codex reasoning turn can exceed llmclient's no-progress window before
+# producing its final structured message. The gate commits SSE headers first
+# and sends comments while the CLI runs, so that valid work is not mistaken
+# for a dead connection.
+SLOW_PORT=$((PORT+2))
+CODEX_GATE_MOCK=1 CODEX_GATE_MOCK_DELAY=0.25 \
+CODEX_GATE_HEARTBEAT=0.05 CODEX_GATE_PORT=$SLOW_PORT \
+    python3 "$GATE" >/dev/null 2>&1 &
+SLOW_PID=$!
+trap 'kill $GATE_PID $SLOW_PID 2>/dev/null || true' EXIT
+i=0
+while ! curl -sf -m 1 "http://127.0.0.1:$SLOW_PORT/health" >/dev/null 2>&1; do
+    i=$((i+1))
+    [ $i -lt 30 ] || fail "slow gate did not come up on :$SLOW_PORT"
+    sleep 0.2
+done
+r="$(curl -sf --no-buffer "http://127.0.0.1:$SLOW_PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' -d '{
+    "model":"default","stream":true,
+    "messages":[{"role":"user","content":"slow"}]}')"
+echo "$r" | grep -q ': codex-gate working' || fail "stream: heartbeat missing ($r)"
+echo "$r" | grep -q '"content": "MOCK_REPLY: slow"' || fail "stream: delayed reply missing ($r)"
+kill "$SLOW_PID" 2>/dev/null || true
+wait "$SLOW_PID" 2>/dev/null || true
+pass "SSE heartbeat covers long Codex turns"
+
+python3 - "$ROOT" <<'PY' || fail "cancelled codex process cleanup"
+import asyncio
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class Proc:
+    returncode = None
+    killed = False
+    waited = False
+    async def communicate(self, data):
+        await asyncio.Event().wait()
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+    async def wait(self):
+        self.waited = True
+
+async def check():
+    proc = Proc()
+    async def create(*args, **kwargs):
+        return proc
+    m.asyncio.create_subprocess_exec = create
+    task = asyncio.create_task(m.run_codex("default", "prompt", None))
+    await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("cancelled run_codex returned normally")
+    assert proc.killed and proc.waited, (proc.killed, proc.waited)
+
+asyncio.run(check())
+PY
+pass "cancelled streams reap codex exec"
+
 # 7. Deterministic Codex failure injection has the same external shape as a
 #    CLI usage-limit failure: CodexError becomes an OpenAI-compatible 502.
 ERROR_PORT=$((PORT+1))

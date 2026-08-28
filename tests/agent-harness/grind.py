@@ -720,7 +720,7 @@ def audit_lifecycle_errors(records, activities):
         if shown is not None:
             status = shown.get("status", "").strip().lower()
             state = status.split(":", 1)[0]
-            if state not in terminal:
+            if state not in terminal and activity not in timedout:
                 errors.append(f"activity {activity} is non-terminal with status {status!r}")
         else:
             status = "missing"
@@ -735,10 +735,9 @@ def audit_lifecycle_errors(records, activities):
             if pending > 0:
                 pending_ops.append(f"step={key[1]} tool={key[2]} count={pending}")
         if activity in timedout:
-            if shown is not None and status.split(":", 1)[0] != "timeout":
-                errors.append(f"activity {activity} timeout record disagrees with status {status!r}")
             detail = " with outstanding " + ", ".join(pending_ops) if pending_ops else ""
-            errors.append(f"activity {activity} timed out before reaching a terminal state{detail}")
+            observed = f" from status {status!r}" if shown is not None else ""
+            errors.append(f"activity {activity} timed out{observed} before reaching a terminal state{detail}")
         elif activity not in done:
             errors.append(f"activity {activity} has no signed terminal record")
 

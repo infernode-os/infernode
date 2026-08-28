@@ -416,6 +416,18 @@ putep(Ep *ep)
 	}
 }
 
+/*
+ * What this layer costs, between the system call and the driver.
+ *
+ * The Limbo caller times a bulk write at 22.8ms; usbdwc times its own
+ * epwrite for the same call at 3.2ms; and a bare release-and-acquire
+ * of the Dis machine beside it costs 13us, so it is not contention
+ * for the interpreter. Nineteen milliseconds are unaccounted for
+ * between those two points, and this is the only layer in between.
+ */
+static ulong nbulkwr, nbulkrd;
+static uvlong bulkwrns, bulkrdns;
+
 static void
 dumpeps(void)
 {
@@ -444,6 +456,10 @@ dumpeps(void)
 			putep(ep);
 		}
 	}
+	print("usb: bulk epwrite %lud calls mean %llud us; epread %lud mean %llud us"
+		" (devusb's own view)\n",
+		nbulkwr, nbulkwr ? bulkwrns/1000/nbulkwr : (uvlong)0,
+		nbulkrd, nbulkrd ? bulkrdns/1000/nbulkrd : (uvlong)0);
 	print("usb dump hcis:\n");
 	for(i = 0; i < Nhcis; i++)
 		if(hcis[i] != nil)
@@ -1425,6 +1441,7 @@ static long
 usbwrite(Chan *c, void *a, long n, vlong off)
 {
 	int nr, q;
+	uvlong tenter;
 	Ep *ep;
 
 	if(c->qid.type == QTDIR)
@@ -1459,7 +1476,12 @@ usbwrite(Chan *c, void *a, long n, vlong off)
 		/* else fall */
 	default:
 		ddeprint("\nusbwrite q %#x fid %d cnt %ld off %lld\n",q, c->fid, n, off);
+		tenter = fastticks(nil);
 		ep->hp->epwrite(ep, a, n);
+		if(ep->ttype == Tbulk){
+			nbulkwr++;
+			bulkwrns += fastticks2ns(fastticks(nil) - tenter);
+		}
 	}
 	putep(ep);
 	poperror();

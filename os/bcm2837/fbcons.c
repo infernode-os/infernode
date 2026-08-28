@@ -753,6 +753,26 @@ fbconsreleased(void)
 }
 
 /*
+ * How far down the buffer the visible window currently sits.
+ *
+ * The console scrolls by moving the GPU's scanout offset, so the top of
+ * the framebuffer is NOT what the panel is showing. Anything reading
+ * the framebuffer back to see what a person sees has to add this --
+ * screendump did not, and reported a blank screen while the console
+ * was full of text.
+ *
+ * Zero once the draw device has the screen: fbconsstop puts the window
+ * back before letting go.
+ */
+int
+fbconsvoff(void)
+{
+	if(released || nscreens == 0)
+		return 0;
+	return screens[0].voff;
+}
+
+/*
  * Give up the framebuffer.
  *
  * Called when the draw device attaches: two things cannot own the same

@@ -211,6 +211,18 @@ init(nil: ref Draw->Context, nil: list of string)
 	rr := int px[2];
 	sys->print("tktest: widget pixel r=%#2.2x g=%#2.2x b=%#2.2x\n", rr, g, b);
 
+	#
+	# And the same point read from the SCREEN rather than from the
+	# window. A layered window's pixels are supposed to be the
+	# screen's pixels; if these two disagree, the window is drawing
+	# somewhere the display never shows.
+	#
+	sp := array[16] of byte;
+	ns := disp.image.readpixels(one, sp);
+	if(ns >= 4)
+		sys->print("tktest: same point on the SCREEN r=%#2.2x g=%#2.2x b=%#2.2x\n",
+			int sp[2], int sp[1], int sp[0]);
+
 	if(rr == 16r33 && g == 16r66 && b == 16r99)
 		sys->print("tktest: the widget drew the colour it was given\n");
 	else

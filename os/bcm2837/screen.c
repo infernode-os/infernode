@@ -428,6 +428,13 @@ screendump(void)
 
 	stride = screenfb->pitch / sizeof(u32int);
 	fb = (u32int*)screenfb->base;
+	/*
+	 * Start where the PANEL is looking, not at the top of the
+	 * buffer: the console scrolls by moving the scanout window, and
+	 * dumping from the top reported a blank screen while the console
+	 * was full of text.
+	 */
+	fb += (ulong)fbconsvoff() * stride;
 	cw = screenfb->width / Dumpcols;
 	ch = screenfb->height / Dumprows;
 	if(cw < 1) cw = 1;

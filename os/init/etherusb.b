@@ -2710,6 +2710,27 @@ lanwrap(frame: array of byte): array of byte
 # up. A frame flagged in error is consumed and discarded rather than
 # passed on: it is the device saying the bytes are not trustworthy.
 #
+# A record is HEADER, frame, then padding to a four-byte boundary, and
+# the padding is not optional to parse. The device packs as many
+# records into one bulk transfer as it has frames waiting, and it lays
+# the next RX_CMD_A on a four-byte boundary -- so the record length is
+# Lrxhdr + datalen rounded up to a multiple of four, not Lrxhdr +
+# datalen.
+#
+# Getting this wrong is invisible for as long as only one frame arrives
+# per transfer, which is the whole of ping, ARP and a shell session:
+# there is no following record for the misalignment to land in. It
+# appears the moment traffic is heavy enough for the device to batch,
+# and then it is not a small error. The next header is read from the
+# middle of the previous frame, fails its length check, and the parse
+# loop discards THE REST OF THE BUFFER -- so every frame after the
+# first short one in a transfer is lost. TCP recovers by retransmitting,
+# which produces more batching, which loses more frames. Bulk transfer
+# collapsed to about 5KB/s and stayed there.
+#
+# Only lengths congruent to 2 mod 4 need no padding, which is why a
+# 1514-byte full frame is fine and a 60-byte ack is not.
+#
 lanunwrap(buf: array of byte, n: int): (int, array of byte)
 {
 	if(n < Lrxhdr)
@@ -2719,15 +2740,28 @@ lanunwrap(buf: array of byte, n: int): (int, array of byte)
 	datalen := cmda & Lrxlen;
 	if(datalen < 14 || datalen > Maxframe)
 		return (-1, nil);
+
+	used := Lrxhdr + datalen;
+	used += (4 - (used % 4)) % 4;		# to the next four-byte boundary
+
+	#
+	# The padding after the LAST record in a transfer need not be
+	# there: the device stops at the end of the frame. So a record
+	# whose frame is complete is complete, even if its padding is
+	# not -- otherwise the final frame of every transfer waits for
+	# bytes that are not coming, and is delivered late or not at all.
+	#
 	if(Lrxhdr + datalen > n)
 		return (0, nil);
+	if(used > n)
+		used = n;
 
 	if(cmda & Lrxerr)
-		return (Lrxhdr + datalen, nil);
+		return (used, nil);
 
 	frame := array[datalen] of byte;
 	frame[0:] = buf[Lrxhdr:Lrxhdr+datalen];
-	return (Lrxhdr + datalen, frame);
+	return (used, frame);
 }
 
 #

@@ -169,6 +169,25 @@ static int debug;
 /* interrupts this controller has raised */
 static ulong nusbintr;
 
+/*
+ * What every transfer actually costs, which is the number that decides
+ * whether this controller can carry a network.
+ *
+ * A wait that returns because the controller said so costs
+ * microseconds. A wait that returns because tsleep gave up costs
+ * Chantmout -- 200ms -- and at one transfer per 200ms no amount of
+ * work higher up matters: that is about five kilobytes a second, which
+ * is slower than the serial line this port is trying to replace.
+ *
+ * The two are indistinguishable from outside, so count them. nwake
+ * against ntmout says whether the interrupt path works, and does it
+ * without depending on the story anyone has written about it.
+ */
+static ulong nchanwait;		/* waits entered */
+static ulong nchanfast;		/* already complete; never slept */
+static ulong nchanwake;		/* slept, and the wait was ended by a wakeup */
+static ulong nchantmout;	/* slept, and tsleep timed out */
+
 /* how many interrupt failures still to report; see eptrans */
 static int dwcintrerr;
 
@@ -434,7 +453,16 @@ restart:
 		 * that is to make the USB interrupt actually arrive -- see
 		 * the note in eptrans -- not to keep shaving this timeout.
 		 */
-		tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
+		nchanwait++;
+		if(chandone(hc))
+			nchanfast++;
+		else {
+			tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
+			if(chandone(hc))
+				nchanwake++;
+			else
+				nchantmout++;
+		}
 		if(!chandone(hc)){
 			hc->hcintmsk = 0;
 			splx(x);
@@ -1375,6 +1403,10 @@ dump(Hci *hp)
 	ctlr = hp->aux;
 	print("usbotg: %lud interrupts taken, gintsts %8.8ux hport0 %8.8ux\n",
 		nusbintr, ctlr->regs->gintsts, ctlr->regs->hport0);
+	print("usbotg: %lud waits: %lud done on entry, %lud woken, %lud timed out\n",
+		nchanwait, nchanfast, nchanwake, nchantmout);
+	print("usbotg: gintmsk %8.8ux gahbcfg %8.8ux haintmsk %8.8ux\n",
+		ctlr->regs->gintmsk, ctlr->regs->gahbcfg, ctlr->regs->haintmsk);
 }
 
 static void

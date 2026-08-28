@@ -643,6 +643,7 @@ void
 iphtadd(Ipht *ht, Conv *c)
 {
 	ulong hv;
+	int i;
 	Iphash *h, *p;
 
 	hv = iphash(c->raddr, c->rport, c->laddr, c->lport);
@@ -666,29 +667,37 @@ iphtadd(Ipht *ht, Conv *c)
 
 	lock(&ht->lk);
 	/*
-	 * Refuse to hash the same conversation twice.
+	 * Refuse to hash the same conversation twice, and look in EVERY
+	 * bucket rather than in the one this address pair hashes to.
 	 *
 	 * udp announces AND connects through here, and closes once. A
 	 * conversation that did both is added twice and removed once, so
 	 * an entry survives pointing at a Conv the stack believes it has
-	 * finished with -- and the bucket a removal searches is computed
-	 * from the conversation's CURRENT addresses, which a connect
-	 * changes, so the leftover is not even in the bucket that would
-	 * be searched next time.
+	 * finished with. Searching only bucket hv does not catch it: the
+	 * announce hashed with no remote address and the connect hashes
+	 * with one, so the two land in different buckets and neither
+	 * sees the other.
+	 *
+	 * That is also why the leftover is unreachable afterwards. The
+	 * bucket a removal searches is computed from the conversation's
+	 * CURRENT addresses, so a conversation that connected after
+	 * announcing is looked for where it is not, and the entry stays
+	 * in the table pointing at freed memory.
 	 *
 	 * The board faulted in iphtlook walking a chain into freed
 	 * memory: the faulting address was an Iphash.next read from a
-	 * pointer that was not one. This says whether that is where it
-	 * came from.
+	 * pointer that was not one.
+	 *
+	 * Sixty-four buckets is a short walk and this is connection
+	 * setup, not the packet path.
 	 */
-	for(p = ht->tab[hv]; p != nil; p = p->next)
-		if(p->c == c){
-			unlock(&ht->lk);
-			print("iphtadd: conv %p already hashed in bucket %lud\n",
-				c, hv);
-			free(h);
-			return;
-		}
+	for(i = 0; i < Nhash; i++)
+		for(p = ht->tab[i]; p != nil; p = p->next)
+			if(p->c == c){
+				unlock(&ht->lk);
+				free(h);
+				return;
+			}
 	h->next = ht->tab[hv];
 	ht->tab[hv] = h;
 	unlock(&ht->lk);
@@ -697,30 +706,34 @@ iphtadd(Ipht *ht, Conv *c)
 void
 iphtrem(Ipht *ht, Conv *c)
 {
-	ulong hv;
-	int found;
+	int i;
 	Iphash **l, *h;
 
-	hv = iphash(c->raddr, c->rport, c->laddr, c->lport);
-	lock(&ht->lk);
-	found = 0;
-	for(l = &ht->tab[hv]; (*l) != nil; l = &(*l)->next)
-		if((*l)->c == c){
-			h = *l;
-			(*l) = h->next;
-			free(h);
-			found = 1;
-			break;
-		}
-	unlock(&ht->lk);
-
 	/*
-	 * A removal that removes nothing leaves the entry behind for
-	 * ever, and says the bucket was computed from addresses that
-	 * changed after the entry was made.
+	 * Search every bucket, not the one this conversation's addresses
+	 * hash to NOW.
+	 *
+	 * The entry was filed under the addresses the conversation had
+	 * when it was added, and connect changes them. Hashing here and
+	 * searching only that bucket therefore looks in the wrong place
+	 * for exactly the conversations that did anything interesting,
+	 * finds nothing, and leaves an entry in the table pointing at a
+	 * Conv that is about to be reused -- which iphtlook then walks.
+	 *
+	 * Removing by identity has no such failure mode: it does not
+	 * matter where the entry was filed or what has changed since.
 	 */
-	if(!found)
-		print("iphtrem: conv %p not in bucket %lud\n", c, hv);
+	lock(&ht->lk);
+	for(i = 0; i < Nhash; i++)
+		for(l = &ht->tab[i]; (*l) != nil; l = &(*l)->next)
+			if((*l)->c == c){
+				h = *l;
+				(*l) = h->next;
+				free(h);
+				unlock(&ht->lk);
+				return;
+			}
+	unlock(&ht->lk);
 }
 
 /* look for a matching conversation with the following precedence

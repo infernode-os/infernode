@@ -245,7 +245,24 @@ Qcbase:		con 16;		# per-connection qids start here
 # the four files of a connection, in qid order
 Qcdir, Qcctl, Qcdata, Qcstats: con iota;
 
-Qmax:		con 16;		# frames buffered per connection
+#
+# Frames buffered per connection, and sixteen was far too few.
+#
+# The IP stack collects with ONE outstanding read per conversation, so
+# everything that arrives while that read is being answered has to
+# wait here. A burst is not unusual -- it is what a TCP window IS --
+# and at sixteen frames a 64k window overran the queue on every
+# transfer: measured, 30 frames dropped in one 256k transfer, about
+# ten per cent, each one costing a retransmission and a collapsed
+# congestion window. Inbound ran at 7.9KB/s while outbound, which does
+# not go through this queue, ran at 75KB/s.
+#
+# A hundred and twenty-eight holds a full window with room to spare.
+# The cost is a pointer each until the frames arrive, and the frames
+# are allocated whether or not there is room for them here -- so the
+# shallow queue was not saving the memory it appeared to.
+#
+Qmax:		con 128;	# frames buffered per connection
 Npend:		con 8;		# reads outstanding per connection
 
 #

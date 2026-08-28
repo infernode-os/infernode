@@ -321,6 +321,8 @@ datams: int;			# milliseconds spent in those reads
 nempty: int;			# bulk reads that returned nothing
 emptyms: int;			# milliseconds spent in those
 nsleep: int;			# times the loop backed off to Rxidle
+rxpollms := 1;			# ms between polls while the link is busy
+rxactive := Rxactive;		# polls to take at that rate after traffic
 nempty0: int;			# empty reads that took no measurable time
 emptymax: int;			# longest empty read seen, ms
 ntx: int;			# frames written to the bulk OUT endpoint
@@ -1751,6 +1753,34 @@ ctlwrite(n: int, s: string): string
 		# out of a queue or deferred, so nothing blocks the client
 		# that this could switch off.
 		;
+	"rxpoll" =>
+		#
+		# How hard the receive loop asks, settable while it runs.
+		#
+		# The endpoint has to be polled -- a drained bulk IN
+		# answers with a zero-length packet, so there is nothing
+		# to block on -- and how often to ask is a trade this
+		# driver cannot make on its own: every poll is a Dis
+		# system call, and Limbo runs one process at a time, so
+		# asking more often for lower receive latency directly
+		# takes the machine away from the process doing the
+		# transmitting.
+		#
+		# Finding the right numbers meant measuring both, and a
+		# constant would have meant rebuilding and reloading the
+		# kernel for each pair. So it is a file, and mechanism
+		# rather than policy: write "rxpoll <ms> <n>" to poll
+		# every <ms> milliseconds for <n> polls after traffic
+		# before backing off to the idle interval.
+		#
+		if(nf != 3)
+			return "usage: rxpoll <ms> <count>";
+		ms := int hd tl flds;
+		cnt := int hd tl tl flds;
+		if(ms < 0 || cnt < 0)
+			return "rxpoll: negative";
+		rxpollms = ms;
+		rxactive = cnt;
 	* =>
 		return "unknown control request";
 	}
@@ -1772,12 +1802,14 @@ stats(n: int): string
 		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
 		"reads with data: %d in %d ms\nempty reads: %d in %d ms\n" +
 		"idle sleeps: %d\nframes parsed: %d\n" +
+		"rxpoll: %d ms for %d polls\n" +
 		"instant empty reads: %d\nslowest empty read: %d ms\n" +
 		"writes: %d in %d ms\nslowest write: %d ms\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
+		rxpollms, rxactive,
 		nempty0, emptymax, ntx, txms, txmax);
 }
 
@@ -1931,9 +1963,10 @@ rxproc()
 			# than "some time before the next tick", which is
 			# the whole reason this can be a poll at all.
 			#
-			if(idle < Rxactive){
+			if(idle < rxactive){
 				idle++;
-				sys->sleep(1);
+				if(rxpollms > 0)
+					sys->sleep(rxpollms);
 				continue;
 			}
 			nsleep++;

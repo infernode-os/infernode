@@ -1025,7 +1025,7 @@ fi
 #
 # 3. It boots and reports.
 #
-# 30 seconds, not 10.
+# 120 seconds, not 30, and not 10.
 #
 # The DHCP client waits two seconds for the switch to start forwarding
 # and then retries for twenty, because a link that has just come up does
@@ -1033,7 +1033,23 @@ fi
 # spends the whole of that budget before the network configuration is
 # printed -- and a boot window shorter than the code's own timeouts
 # tests how fast the kernel gives up, not what it does.
-OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 30)"
+#
+# It went from 30 when the clock went to 1000Hz. That is ten times as
+# many timer interrupts for QEMU's TCG to emulate, which costs nothing
+# on real silicon and a great deal here, and the address and route
+# checks began failing on a kernel that configures both perfectly well
+# on hardware.
+#
+# The number is measured, not guessed -- twice, because the first
+# guess was wrong. The driver's own message says "14 tries over ~45
+# seconds", which is what the schedule asks for in wall-clock terms
+# and NOT what it costs under emulation: timing the lines out of a
+# QEMU boot puts "serving /net/ether0" at 11.6s and the fallback at
+# 83.8s. 75 was still short. The schedule itself is deliberate --
+# fourteen tries is for real networks that are slow to start
+# forwarding, not for an emulator that never answers DHCP at all -- so
+# the window moves rather than the timeouts.
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 120)"
 info "--- serial output ---"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
 

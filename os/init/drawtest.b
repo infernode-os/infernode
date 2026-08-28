@@ -94,6 +94,20 @@ init(nil: ref Draw->Context, nil: list of string)
 	scr.draw(r, col, nil, Point(0, 0));
 
 	#
+	# The colour the window manager fills its desktop with, checked
+	# the same way. It came back from the screen as 0x080808 under
+	# wm -- nearly black -- where it should be mid grey.
+	#
+	grey := disp.color(16r777777FF);
+	gr := Rect(Point(300, 200), Point(360, 240));
+	scr.draw(gr, grey, nil, Point(0, 0));
+	gp := array[16] of byte;
+	ng := scr.readpixels(Rect(Point(320, 220), Point(321, 221)), gp);
+	if(ng >= 4)
+		sys->print("drawtest: 0x777777 came back r=%#2.2x g=%#2.2x b=%#2.2x\n",
+			int gp[2], int gp[1], int gp[0]);
+
+	#
 	# Read one pixel back. The rectangle is a single pixel, so the
 	# reply is exactly one pixel's worth of bytes -- four here, and
 	# checked rather than assumed, because a short read that is not

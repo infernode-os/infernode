@@ -448,7 +448,17 @@ screendump(void)
 	uartputd(cw);
 	uartputstr("x");
 	uartputd(ch);
-	uartputstr(" pixels\n");
+	uartputstr(" pixels, base ");
+	uartputx((ulong)screenfb->base);
+	uartputstr(" stride ");
+	uartputd(stride);
+	uartputstr(" voff ");
+	uartputd(fbconsvoff());
+	uartputstr(" px(5,5)=");
+	uartputx(fb[5*stride + 5]);
+	uartputstr(" px(320,240)=");
+	uartputx(fb[240*stride + 320]);
+	uartputstr("\n");
 
 	for(cy = 0; cy < Dumprows; cy++){
 		for(cx = 0; cx < Dumpcols; cx++){

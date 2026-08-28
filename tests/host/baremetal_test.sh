@@ -512,27 +512,17 @@ build_kernel() {
 
     for f in "$ROOT"/os/port/*.c; do
         #
-        # exportfs.c is imported and NOT YET BUILT. See INFR-431.
         #
-        # It is the 9P side of handing a namespace to another process,
-        # and two genuine bugs in the port are already fixed in it: the
-        # emu-only blocking primitives, and -- much worse -- exslave
-        # adopting the exporting process's groups without taking a
-        # reference, so every slave decremented a namespace it never
-        # increfed and closepgrp eventually tore down a live one.
+        # exportfs.c IS built again. It was held out because the window
+        # manager corrupted the namespace within seconds of starting
+        # with it linked, ending in a lock loop inside walk() on a
+        # structure whose lock was never held. That is the signature of
+        # a Chan used after it was freed, and the cause of that was
+        # found afterwards and fixed: namec's Chan* was not volatile
+        # across its waserror handler, so every failed namec released
+        # one reference too many (see os/port/chan.c). Re-enabled to
+        # find out whether anything of its own is still wrong.
         #
-        # A third defect remains: with exportfs linked, wm/wm still
-        # corrupts the namespace within seconds of starting, ending in
-        # a lock loop inside walk() on a structure whose lock was never
-        # held. Nothing else needs exportfs -- the window manager wants
-        # it only for an OPTIONAL export of /chan at /mnt/wm, for
-        # processes outside its namespace -- so it is left out until it
-        # is right, rather than left in to take the machine down.
-        #
-        # os/arm64/notyet.c refuses export() while this is so, which is
-        # a printed line and a window manager that carries on.
-        #
-        case "$(basename "$f")" in exportfs.c) continue;; esac
         [[ -e "$f" ]] || continue
         o="$BUILD/osport-$(basename "$f").o"
         # devprog.c formats Dis values -- reading /prog/N/heap prints a

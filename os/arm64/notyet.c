@@ -274,42 +274,11 @@ modinit(void)
 
 
 /*
- * exportfs.c -- serve a namespace over 9P.
- *
- * IMPORTED but not yet built; see INFR-431 and the note in
- * tests/host/baremetal_test.sh. Two real bugs in the port are already
- * fixed in that file and a third is not, and with it linked the window
- * manager corrupts the namespace within seconds of starting.
- *
- * Refusing here is not a loss of function anyone will notice yet: the
- * only caller is the OPTIONAL export of wm's /chan at /mnt/wm, for
- * processes outside its namespace, and wm prints the refusal and
- * carries on.
+ * export() -- serve a namespace over 9P -- lives in os/port/exportfs.c
+ * again. The refusal that stood here while that file was held out of
+ * the build is gone; see INFR-431 for what was wrong with it and what
+ * was fixed.
  */
-int
-export(int fd, char *dir, int flag)
-{
-	USED(fd); USED(dir); USED(flag);
-
-	/*
-	 * FAIL, do not RAISE.
-	 *
-	 * error() here becomes a Limbo exception, and sys->export's
-	 * callers do not catch one -- they read the return value. wm's
-	 * export process was therefore killed rather than told no:
-	 *
-	 *     [$Sys] Broken: "exportfs not imported"
-	 *     panic: cclose ...
-	 *
-	 * and the namespace corruption that follows an error unwinding
-	 * out of a Limbo process (INFR-432) took the board down a moment
-	 * later, every time, on a machine that was otherwise running a
-	 * window system quite happily. Refusing by return value costs the
-	 * caller nothing it was not already prepared for.
-	 */
-	kstrcpy(up->env->errstr, "exportfs not imported", ERRMAX);
-	return -1;
-}
 
 
 /*

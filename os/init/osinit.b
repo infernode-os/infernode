@@ -259,6 +259,12 @@ init()
 	#
 	spawn usbprobe();
 
+	#
+	# A console over the network, so the serial cable is not the only
+	# way in.
+	#
+	spawn netconsole();
+
 	sys->print("\ninit: starting the shell\n\n");
 
 	#
@@ -949,6 +955,75 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
 	return 0;
+}
+
+
+#
+# A shell on a TCP port.
+#
+# The serial line is the only way to reach this board, and it is a poor
+# one: it carries the console AND every kernel message, a window system
+# reading /dev/keyboard splits typed input with the shell (they are the
+# same queue in devcons), and it tethers the machine to a desk. A
+# network console has none of those problems -- each connection gets
+# its own shell with its own file descriptors, and kernel output still
+# goes to the serial console where it belongs.
+#
+# styxlisten would be the usual way to do this, and it is not used
+# because it loads $Keyring unconditionally, which would mean linking
+# the whole crypto stack into a kernel that has no other use for it
+# yet. This is the same idea in thirty lines of the Sys module.
+#
+# THERE IS NO AUTHENTICATION. Anything that can reach port 17010 gets a
+# shell. That is a deliberate choice for a development board on a
+# private network and it must not survive into anything shipped -- see
+# the ring-fence rule in CLAUDE.md for the shape of that argument. It
+# is here because the alternative is a serial cable.
+#
+Netconsport: con "tcp!*!17010";
+
+netconsole()
+{
+	(ok, c) := sys->announce(Netconsport);
+	if(ok < 0){
+		sys->print("init: no network console: %r\n");
+		return;
+	}
+	sys->print("init: network console on %s\n", Netconsport);
+	for(;;){
+		(lok, nc) := sys->listen(c);
+		if(lok < 0){
+			sys->print("init: network console listen: %r\n");
+			return;
+		}
+		fd := sys->open(nc.dir + "/data", Sys->ORDWR);
+		if(fd == nil){
+			sys->print("init: network console open: %r\n");
+			continue;
+		}
+		spawn netshell(fd);
+	}
+}
+
+netshell(fd: ref Sys->FD)
+{
+	#
+	# A private set of file descriptors and a private namespace, so
+	# one session cannot disturb another or the console shell. NEWFD
+	# keeps only this connection; the dups then make it stdin, stdout
+	# and stderr, which is all a shell needs.
+	#
+	sys->pctl(Sys->NEWFD | Sys->FORKNS, fd.fd :: nil);
+	sys->dup(fd.fd, 0);
+	sys->dup(fd.fd, 1);
+	sys->dup(fd.fd, 2);
+
+	sh := load Command "/dis/sh.dis";
+	if(sh == nil){
+		sys->fprint(fd, "cannot load /dis/sh.dis: %r\n");
+		return;
+	}
+	sh->init(nil, "sh" :: nil);
 }
 
 #

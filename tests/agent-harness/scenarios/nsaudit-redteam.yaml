@@ -49,8 +49,9 @@ scenarios:
     audit: required
     requires: nsaudit_source_control
     settle: 10
-    timeout: 1200
+    timeout: 2400
     followthrough: true
+    campaign_wait: true
     prompt: |
       This is an authorized source-assisted security review of InferNode's
       namespace construction and nsaudit model. The exact source for this run is

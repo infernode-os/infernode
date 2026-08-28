@@ -251,13 +251,14 @@ Npend:		con 8;		# reads outstanding per connection
 #
 # How the receive loop waits when the endpoint has nothing.
 #
-# Rxspin empty reads are taken back to back before backing off to
-# Rxidle. An empty bulk IN is one NAKed transaction, so a spin is
-# cheap over the short gap between frames of a burst and wrong over
-# the long gap between one conversation and the next.
+# A drained bulk IN answers with a zero-length packet, so there is
+# nothing to wait on and the endpoint must be asked. Ask every
+# millisecond for Rxactive of them -- two seconds' worth -- and only
+# then fall back to Rxidle, where the added latency costs nothing
+# because nobody is talking.
 #
-Rxspin:		con 64;
-Rxidle:		con 20;		# ms, once the link is quiet
+Rxactive:	con 2000;	# millisecond polls to take before backing off
+Rxidle:		con 20;		# ms, once the link has been quiet that long
 Maxframe:	con 1514;	# an Ethernet frame, header included
 Rnisdata:	con 16r00000001;
 Rnishdr:	con 44;		# RNDIS_PACKET_MSG, before the frame
@@ -320,6 +321,8 @@ datams: int;			# milliseconds spent in those reads
 nempty: int;			# bulk reads that returned nothing
 emptyms: int;			# milliseconds spent in those
 nsleep: int;			# times the loop backed off to Rxidle
+nempty0: int;			# empty reads that took no measurable time
+emptymax: int;			# longest empty read seen, ms
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -1765,11 +1768,13 @@ stats(n: int): string
 		"overflows: %d\nsoft overflows: 0\nframing errs: 0\n" +
 		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
 		"reads with data: %d in %d ms\nempty reads: %d in %d ms\n" +
-		"idle sleeps: %d\nframes parsed: %d\n",
+		"idle sleeps: %d\nframes parsed: %d\n" +
+		"instant empty reads: %d\nslowest empty read: %d ms\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
-		ndata, datams, nempty, emptyms, nsleep, nframe);
+		ndata, datams, nempty, emptyms, nsleep, nframe,
+		nempty0, emptymax);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1861,6 +1866,22 @@ rxproc()
 			nempty++;
 			emptyms += dt;
 			#
+			# The shape of the distribution, not just its mean.
+			#
+			# A drained bulk IN answers with a zero-length
+			# packet, which is one transaction and should cost
+			# microseconds; the mean said 8.8ms. Those are
+			# different faults. If nearly all of these reads
+			# take no measurable time and a few take tens of
+			# milliseconds, the cost is this process waiting to
+			# be scheduled, and the fix is to stop spinning. If
+			# they are uniformly slow, it is the transfer.
+			#
+			if(dt == 0)
+				nempty0++;
+			if(dt > emptymax)
+				emptymax = dt;
+			#
 			# Nothing waiting.
 			#
 			# This slept 20ms every time, and that sleep IS the
@@ -1879,8 +1900,22 @@ rxproc()
 			# latency costs nothing and a spin would burn the
 			# bus for no one.
 			#
-			if(idle < Rxspin){
+			#
+			# Poll at a millisecond while there is any reason
+			# to, and back off only after a long quiet spell.
+			#
+			# Asking again with no pause at all was worse than
+			# the 20ms sleep it replaced: this process is the
+			# one the 9P server, the IP stack and the shell all
+			# wait behind, and a spin here takes the processor
+			# from exactly them. Now that the tick is a
+			# kilohertz, sleep(1) is a real millisecond rather
+			# than "some time before the next tick", which is
+			# the whole reason this can be a poll at all.
+			#
+			if(idle < Rxactive){
 				idle++;
+				sys->sleep(1);
 				continue;
 			}
 			nsleep++;

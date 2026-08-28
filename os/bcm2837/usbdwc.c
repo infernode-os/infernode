@@ -184,6 +184,8 @@ static ulong nusbintr;
  * without depending on the story anyone has written about it.
  */
 static ulong nchanwait;		/* waits entered */
+static uvlong chanwaitns;	/* nanoseconds spent asleep in them */
+static uvlong chanwaitmax;	/* the longest one, nanoseconds */
 static ulong nchanfast;		/* already complete; never slept */
 static ulong nchanwake;		/* slept, and the wait was ended by a wakeup */
 static ulong nchantmout;	/* slept, and tsleep timed out */
@@ -457,7 +459,30 @@ restart:
 		if(chandone(hc))
 			nchanfast++;
 		else {
+			uvlong t0, el;
+
+			/*
+			 * How long the sleep ACTUALLY lasts.
+			 *
+			 * Counting wakeups against timeouts said the
+			 * interrupt path works -- 63114 against one -- and
+			 * that turned out not to answer the question. A
+			 * bulk OUT of a 1522-byte frame takes 24ms against
+			 * 13 microseconds of wire time, with only about
+			 * two and a half of these waits per transfer, so
+			 * the time is INSIDE the waits and being woken is
+			 * not the same as being woken promptly. This says
+			 * whether an interrupt-driven wait costs
+			 * microseconds, as it should, or milliseconds --
+			 * which would make it a scheduling latency and not
+			 * a USB problem at all.
+			 */
+			t0 = fastticks(nil);
 			tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
+			el = fastticks2ns(fastticks(nil) - t0);
+			chanwaitns += el;
+			if(el > chanwaitmax)
+				chanwaitmax = el;
 			if(chandone(hc))
 				nchanwake++;
 			else
@@ -1405,6 +1430,10 @@ dump(Hci *hp)
 		nusbintr, ctlr->regs->gintsts, ctlr->regs->hport0);
 	print("usbotg: %lud waits: %lud done on entry, %lud woken, %lud timed out\n",
 		nchanwait, nchanfast, nchanwake, nchantmout);
+	print("usbotg: asleep %llud us total, longest %llud us, mean %llud us\n",
+		chanwaitns/1000, chanwaitmax/1000,
+		nchanwake+nchantmout ?
+			chanwaitns/1000/(nchanwake+nchantmout) : (uvlong)0);
 	print("usbotg: gintmsk %8.8ux gahbcfg %8.8ux haintmsk %8.8ux\n",
 		ctlr->regs->gintmsk, ctlr->regs->gahbcfg, ctlr->regs->haintmsk);
 }

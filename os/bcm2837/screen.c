@@ -501,3 +501,67 @@ screendumpkey(void)
 {
 	screendump();
 }
+
+/*
+ * The screen as an actual picture, over the console, in hex.
+ *
+ * The shaded-character dump above answers "is anything there". This
+ * answers "what is it", which sometimes only a picture can. It is here
+ * because the alternatives are not dependable on this board: the 9P
+ * mount that carries /dev/screen drops the connection part way through
+ * a transfer, and typing the commands to start one cannot be done once
+ * a window system is running -- /dev/cons and /dev/keyboard are the
+ * same queue in devcons, so the shell and the window system split the
+ * keystrokes between them. A debug key needs neither.
+ *
+ * Every fourth pixel in each direction. That is 200x120 for this panel,
+ * about 150KB of hex, thirteen seconds at 115200 -- where the whole
+ * screen would be 1.5MB and two minutes. Enough to see a desktop, a
+ * window, a menu and a cursor.
+ */
+static void
+screenhex(void)
+{
+	static char hex[] = "0123456789abcdef";
+	u32int *fb;
+	int x, y, stride, w, h;
+	ulong v;
+	char line[7];
+
+	if(screenfb == nil || screenfb->base == 0){
+		uartputstr("IMG none\n");
+		return;
+	}
+	stride = screenfb->pitch / sizeof(u32int);
+	fb = (u32int*)screenfb->base + (ulong)fbconsvoff() * stride;
+	w = screenfb->width / 4;
+	h = screenfb->height / 4;
+
+	uartputstr("IMG ");
+	uartputd(w);
+	uartputstr(" ");
+	uartputd(h);
+	uartputstr("\n");
+
+	line[6] = 0;
+	for(y = 0; y < h; y++){
+		for(x = 0; x < w; x++){
+			v = fb[(y*4)*stride + x*4];
+			line[0] = hex[(v>>20) & 0xF];
+			line[1] = hex[(v>>16) & 0xF];
+			line[2] = hex[(v>>12) & 0xF];
+			line[3] = hex[(v>>8) & 0xF];
+			line[4] = hex[(v>>4) & 0xF];
+			line[5] = hex[v & 0xF];
+			uartputstr(line);
+		}
+		uartputstr("\n");
+	}
+	uartputstr("IMGEND\n");
+}
+
+void
+screenhexkey(void)
+{
+	screenhex();
+}

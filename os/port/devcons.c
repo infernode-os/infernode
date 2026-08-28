@@ -765,6 +765,10 @@ consinit(void)
 	 * already serves /dev/screen.
 	 */
 	debugkey('S', "screen", screendumpkey, 1);
+	{
+	extern void screenhexkey(void);
+	debugkey('D', "screen as hex", screenhexkey, 1);
+	}
 	}
 	klogq = qopen(128*1024, 0, 0, 0);
 
@@ -828,11 +832,41 @@ consopen(Chan *c, int omode)
 
 	case Qkeyboard:
 		if((omode & 3) != OWRITE) {
-			qlock(&kbd.q);
+			/*
+			 * DIVERGENCE FROM UPSTREAM: no qlock(&kbd.q) here.
+			 *
+			 * consread holds kbd.q across a BLOCKING qread while
+			 * it assembles a line, so whenever something is
+			 * waiting for input on /dev/cons -- a shell at its
+			 * prompt, which is the normal state of this board --
+			 * that lock is held indefinitely. Opening
+			 * /dev/keyboard then blocked for ever behind it.
+			 *
+			 * That is exactly what happened to the window
+			 * manager. wmlib's startinput opens /dev/keyboard,
+			 * and wm hung there, before it had filled its
+			 * desktop: the screen kept the dark background
+			 * wmclient pre-fills a new window with, and nothing
+			 * else was ever drawn. It appeared to work now and
+			 * then, which made it look like a drawing bug rather
+			 * than a lock -- those were the times the shell had
+			 * not yet got back to its read.
+			 *
+			 * Upstream can hold the lock because a window system
+			 * is never started from a shell reading the console;
+			 * the shell runs INSIDE the window system. On a board
+			 * whose console is the only way in, it is.
+			 *
+			 * Dropping it is safe here. kbd.kbdr and kbd.raw are
+			 * single words the reader samples once at the top of
+			 * a read, and flushkbdline goes through the queue's
+			 * own locking. The worst case is a reader part way
+			 * through a line when raw mode arrives, which is what
+			 * flushkbdline is for.
+			 */
 			kbd.kbdr++;
 			flushkbdline(kbdq);
 			kbd.raw = 1;
-			qunlock(&kbd.q);
 		}
 		break;
 

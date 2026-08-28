@@ -54,6 +54,7 @@ void	fbconsstop(void);
  */
 void	swcursorat(int, int);
 void	screendumpkey(void);
+void	screenhexkey(void);
 void	swcursorhide(void);
 void	swcursorshow(void);
 Fbinfo*	boardfb(void);

@@ -344,24 +344,23 @@ Sys_chdir(void *fp)
 }
 
 /*
- * The whole system call, from the caller's side of it.
+ * This was timed end to end for a while, along with kwrite inside it,
+ * to find where a USB bulk write's 22.5ms went when the driver
+ * accounted for only 2.7ms of it. The answer was that it does not go
+ * anywhere here: Sys_write measured 5.6ms of which kwrite was 5.5ms,
+ * so release and acquire together cost 64us, and the difference the
+ * Limbo caller sees is that caller being descheduled BETWEEN its own
+ * two clock reads while other Dis processes run.
  *
- * Every layer under this one has now been timed and none of them
- * account for what Limbo sees: a bulk USB write measures 22.5ms from
- * Limbo, 2.74ms in the driver, 2.73ms in devusb, and 72us to get the
- * interpreter back. Whatever the remaining nineteen milliseconds are,
- * they are inside this function, and it is the last one that was
- * never measured.
+ * The measurement is gone rather than left switchable because this is
+ * the hottest path in the system -- two fastticks reads on every write
+ * any Limbo program makes -- and a question that has been answered is
+ * not worth paying for on every call.
  */
-uvlong	syswrns;	/* nanoseconds in Sys_write */
-uvlong	syswrkns;	/* of which, in kwrite */
-ulong	nsyswr;
-
 void
 Sys_write(void *fp)
 {
 	int n;
-	uvlong t0, t1;
 	F_Sys_write *f;
 
 	f = fp;
@@ -373,14 +372,9 @@ Sys_write(void *fp)
 	if(n > f->buf->len)
 		n = f->buf->len;
 
-	t0 = fastticks(nil);
 	release();
-	t1 = fastticks(nil);
 	*f->ret = kwrite(fdchk(f->fd), f->buf->data, n);
-	syswrkns += fastticks2ns(fastticks(nil) - t1);
 	acquire();
-	syswrns += fastticks2ns(fastticks(nil) - t0);
-	nsyswr++;
 }
 
 void

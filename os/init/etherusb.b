@@ -282,8 +282,20 @@ Rnishdr:	con 44;		# RNDIS_PACKET_MSG, before the frame
 
 Conv: adt {
 	etype:	int;			# ether type, -1 until connected
+	#
+	# Frames waiting for a reader, as a RING.
+	#
+	# This was a plain array dequeued from the front, which moved
+	# every remaining entry down by one on each frame taken. That is
+	# cheap at the sixteen entries it used to hold and quadratic as
+	# the queue deepens -- and deepening it is exactly what the
+	# overflow measurement asked for. A head and a tail cost two
+	# integers and make taking a frame the same work whether one is
+	# queued or a hundred.
+	#
 	q:	array of array of byte;	# frames waiting for a reader
-	nq:	int;
+	qhd:	int;			# next to hand out
+	nq:	int;			# how many are queued
 	pend:	array of int;		# tags of reads waiting for a frame
 	npend:	int;
 	drops:	int;
@@ -734,7 +746,7 @@ serve()
 {
 	convs = array[Nconv] of ref Conv;
 	for(i := 0; i < Nconv; i++)
-		convs[i] = ref Conv(-1, array[Qmax] of array of byte, 0,
+		convs[i] = ref Conv(-1, array[Qmax] of array of byte, 0, 0,
 			array[Npend] of int, 0, 0, 0, 0);
 
 	(tree, treeop) := nametree->start();
@@ -1741,9 +1753,9 @@ readreq(tm: ref Tmsg.Read): int
 			return 0;
 		}
 		if(cv.nq > 0){
-			frame := cv.q[0];
-			for(i := 1; i < cv.nq; i++)
-				cv.q[i-1] = cv.q[i];
+			frame := cv.q[cv.qhd];
+			cv.q[cv.qhd] = nil;	# let the collector have it
+			cv.qhd = (cv.qhd + 1) % Qmax;
 			cv.nq--;
 			srv.reply(ref Rmsg.Read(tm.tag, frame));
 		}else if(cv.npend < Npend)
@@ -1896,9 +1908,10 @@ deliver(ci: int, frame: array of byte)
 		srv.reply(ref Rmsg.Read(tag, frame));
 		return;
 	}
-	if(cv.nq < Qmax)
-		cv.q[cv.nq++] = frame;
-	else
+	if(cv.nq < Qmax){
+		cv.q[(cv.qhd + cv.nq) % Qmax] = frame;
+		cv.nq++;
+	}else
 		cv.drops++;
 }
 

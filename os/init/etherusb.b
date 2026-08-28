@@ -247,6 +247,17 @@ Qcdir, Qcctl, Qcdata, Qcstats: con iota;
 
 Qmax:		con 16;		# frames buffered per connection
 Npend:		con 8;		# reads outstanding per connection
+
+#
+# How the receive loop waits when the endpoint has nothing.
+#
+# Rxspin empty reads are taken back to back before backing off to
+# Rxidle. An empty bulk IN is one NAKed transaction, so a spin is
+# cheap over the short gap between frames of a burst and wrong over
+# the long gap between one conversation and the next.
+#
+Rxspin:		con 64;
+Rxidle:		con 20;		# ms, once the link is quiet
 Maxframe:	con 1514;	# an Ethernet frame, header included
 Rnisdata:	con 16r00000001;
 Rnishdr:	con 44;		# RNDIS_PACKET_MSG, before the frame
@@ -302,6 +313,14 @@ bulkoutfd: ref Sys->FD;		# bulk OUT; the same fd when one endpoint serves both
 tc: chan of ref Tmsg;
 srv: ref Styxserver;
 rxq: chan of (int, array of byte);
+
+# Receive-path accounting; reported by stats().
+ndata: int;			# bulk reads that returned a frame
+datams: int;			# milliseconds spent in those reads
+nempty: int;			# bulk reads that returned nothing
+emptyms: int;			# milliseconds spent in those
+nsleep: int;			# times the loop backed off to Rxidle
+nframe: int;			# frames handed to the demultiplex
 
 dev: string;
 ntpserver: string;			# "ep3.0"
@@ -1735,12 +1754,22 @@ ctlwrite(n: int, s: string): string
 stats(n: int): string
 {
 	cv := convs[n];
+	#
+	# The receive-path timings go out with the standard counters
+	# rather than into a print, because what they are for is
+	# comparing one build against the next: a round trip on this
+	# board costs tens of milliseconds and the whole of that is
+	# somewhere in these four numbers.
+	#
 	return sys->sprint("in: %d\nlink: 1\nout: %d\ncrc errs: 0\n" +
 		"overflows: %d\nsoft overflows: 0\nframing errs: 0\n" +
-		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n",
+		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
+		"reads with data: %d in %d ms\nempty reads: %d in %d ms\n" +
+		"idle sleeps: %d\nframes parsed: %d\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
-		int mac[3], int mac[4], int mac[5]);
+		int mac[3], int mac[4], int mac[5],
+		ndata, datams, nempty, emptyms, nsleep, nframe);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1815,24 +1844,52 @@ rxproc()
 	#
 	acc := array[2 * (Rnishdr + Maxframe)] of byte;
 	nacc := 0;
+	idle := 0;
 
 	for(;;){
 		if(nacc >= len acc)			# desynchronised; start over
 			nacc = 0;
 
+		t0 := sys->millisec();
 		n := sys->read(bulkfd, acc[nacc:], len acc - nacc);
+		dt := sys->millisec() - t0;
 		if(n < 0){
 			sys->print("etherusb: bulk read failed: %r\n");
 			return;
 		}
 		if(n == 0){
+			nempty++;
+			emptyms += dt;
 			#
-			# Nothing waiting. Pause before asking again: without
-			# it this is a busy loop on the bus.
+			# Nothing waiting.
 			#
-			sys->sleep(20);
+			# This slept 20ms every time, and that sleep IS the
+			# receive latency of the machine: a frame arriving
+			# just after a read that found nothing waits out the
+			# rest of the interval before anyone looks again. A
+			# request and its answer pay it, so a round trip on
+			# a wire measured in microseconds cost 44ms, and a
+			# TCP window of a few kilobytes divided by that is
+			# the 23KB/s this port was getting.
+			#
+			# A bulk IN that finds nothing costs one NAKed
+			# transaction, which is cheap, so for a short while
+			# after traffic just ask again. Back off only once
+			# the link is genuinely quiet, where 20ms of added
+			# latency costs nothing and a spin would burn the
+			# bus for no one.
+			#
+			if(idle < Rxspin){
+				idle++;
+				continue;
+			}
+			nsleep++;
+			sys->sleep(Rxidle);
 			continue;
 		}
+		ndata++;
+		datams += dt;
+		idle = 0;
 		nacc += n;
 
 		off := 0;
@@ -1856,6 +1913,7 @@ rxproc()
 			# os/ip's business.
 			#
 			etype := (int frame[12] << 8) | int frame[13];
+			nframe++;
 			for(i := 0; i < Nconv; i++)
 				if(convs[i].etype == etype){
 					rxq <-= (i, frame);

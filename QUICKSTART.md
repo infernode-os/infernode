@@ -71,11 +71,25 @@ This hook runs automatically after every `git pull` or `git merge`. It detects w
 
 ### Why are `.dis` files in git?
 
-Inferno is a self-hosting OS — the `dis/` directory is its runtime, like `/usr/bin` on Unix. The runtime tree (`dis/`) is tracked so that a downloaded release runs without building anything, and so a checkout is runnable the moment the emulator is built.
+Inferno is a self-hosting OS and the `dis/` directory is its runtime, like
+`/usr/bin` on Unix. It holds compiled bytecode, so it is a **build product and
+is not tracked in git** — the same as the emulator binary. A fresh clone has
+neither, which is why the build step below is not optional.
 
-It is not a bootstrap requirement: `mk` and `limbo` are C programs, and `emu/*/o.emu` is not tracked at all, so a fresh clone must build the toolchain and the emulator regardless. Rebuilding the whole runtime tree from source afterwards takes about 20 seconds. What tracking buys is the release, not the clone.
+Rebuild the runtime whenever you clone, pull, or edit a `.b` or `.m`:
 
-Because it is tracked, `dis/` can drift from the source that produced it. CI rebuilds the tree on every pull request and requires the result to be byte-identical to what is committed (`tools/verify-dis-reproducible.sh`) — so if you change a `.b`, commit the rebuilt `.dis` with it.
+```sh
+export ROOT=$PWD
+export PATH="$ROOT/$SYSHOST/$OBJTYPE/bin:$PATH"    # e.g. Linux/arm64/bin
+for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done
+```
+
+That takes about 20 seconds. Installing the git hooks (`./hooks/install.sh`)
+makes `git pull` do it for you. All four directories matter: `appl/mpeg` and
+`appl/veltro` are not reached by `cd appl && mk install` on its own.
+
+A downloaded **release** already contains a built runtime — the packaging job
+builds it before staging, so nothing is required of you there.
 
 Build artifacts in source directories (`appl/**/*.dis`, `tests/**/*.dis`) are **not** tracked — only the runtime tree.
 

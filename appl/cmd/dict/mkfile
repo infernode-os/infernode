@@ -29,13 +29,19 @@ install:V:	$BINTARG $ROOT/dis/dict.dis $ROOT/acme/dis/adict.dis
 %.installall:V:	$DISBIN/%
 
 $ROOT/dis/dict.dis:	dict.dis
-	rm -f $target && cp dict.dis $target
+	mkdir -p $ROOT/dis
+	rm -f $target
+	cp dict.dis $target
 
 $ROOT/acme/dis/adict.dis: adict.dis
-	rm -f $target && cp adict.dis $target
+	mkdir -p $ROOT/acme/dis
+	rm -f $target
+	cp adict.dis $target
 
 $DISBIN/%:	%.sh
-	cp $stem.sh $target && chmod a+rx $target
+	mkdir -p $DISBIN
+	cp $stem.sh $target
+	chmod a+rx $target
 
 nuke:V:
 	rm -f $ROOT/dis/dict.dis

@@ -241,7 +241,9 @@ InferNode uses Plan 9's `mk` (not GNU make). Important points:
 - Use InferNode's **native build tools** (`mk`, `limbo`), not Plan 9 Port
 - Build from your host OS terminal, not inside the Inferno emulator
 - `mkfile` in each directory defines build rules
-- `mk install` compiles and copies output to `dis/`
+- `mk install` compiles and copies output to `dis/`, which is a build product and is **not** tracked;
+  rebuild with `for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done`
+- Never commit `.dis` files. If a change adds or removes a module, update `tools/dis-manifest.txt` in the same commit
 - `mk nuke` cleans build artifacts
 - Don't use `&&` to chain commands in mkfiles — use `;` or separate rules
 

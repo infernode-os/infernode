@@ -22,4 +22,6 @@ install:V:	$BINTARG
 %.installall:V:	$DISBIN/%
 
 $DISBIN/%:	%.sh
-	cp $stem.sh $target && chmod a+rx $target
+	mkdir -p $DISBIN
+	cp $stem.sh $target
+	chmod a+rx $target

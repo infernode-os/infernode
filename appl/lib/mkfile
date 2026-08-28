@@ -313,8 +313,12 @@ DISBIN=$ROOT/dis/lib
 <$ROOT/mkfiles/mksubdirs
 
 $DISBIN/arg.dis: arg.dis
-	rm -f $DISBIN/arg.dis && cat arg.dis > $DISBIN/arg.dis
+	mkdir -p $DISBIN
+	rm -f $DISBIN/arg.dis
+	cat arg.dis > $DISBIN/arg.dis
 
 $DISBIN/readdir.dis: readdir.dis
-	rm -f $DISBIN/readdir.dis && cat readdir.dis > $DISBIN/readdir.dis
+	mkdir -p $DISBIN
+	rm -f $DISBIN/readdir.dis
+	cat readdir.dis > $DISBIN/readdir.dis
 	

@@ -812,15 +812,32 @@ schedmod(Module *m)
 	return p;
 }
 
+/*
+ * What it costs to get the interpreter back.
+ *
+ * Every system call gives the Dis machine up and queues to take it
+ * again. Measured from Limbo, a USB bulk write on the bare-metal Pi
+ * takes 24ms; measured inside the USB driver, the same call takes
+ * 3ms; and the layer between them does nothing that could account for
+ * the difference. This is the only other thing in the path, and
+ * nothing has ever timed it.
+ */
+uvlong	acqns;		/* nanoseconds spent queued for the interpreter */
+uvlong	acqmax;		/* the longest single wait */
+ulong	nacq;		/* waits that had to queue */
+ulong	nacqfree;	/* times it was simply free */
+
 void
 acquire(void)
 {
 	int empty;
+	uvlong t0;
 	Prog *p;
 
 	lock(&isched.l);
 	if(isched.idle) {
 		isched.idle = 0;
+		nacqfree++;
 		unlock(&isched.l);
 	}
 	else {
@@ -839,7 +856,13 @@ acquire(void)
 		unlock(&isched.l);
 		if(empty)
 			wakeup(&isched.irend);
+		t0 = fastticks(nil);
 		sched();
+		t0 = fastticks2ns(fastticks(nil) - t0);
+		nacq++;
+		acqns += t0;
+		if(t0 > acqmax)
+			acqmax = t0;
 	}
 
 	if(up->type == Interp) {
@@ -1018,6 +1041,8 @@ disfault(void *reg, char *msg)
 	error(msg);
 }
 
+static ulong acqreported;
+
 void
 vmachine(void*)
 {
@@ -1042,6 +1067,18 @@ vmachine(void*)
 	cycles = 0;
 	for(;;) {
 		if(tready(nil) == 0) {
+			/*
+			 * Reported from here rather than from acquire():
+			 * this is a safe moment, with no lock held and
+			 * nothing waiting, whereas acquire() is called
+			 * with the scheduler in hand.
+			 */
+			if(nacq - acqreported >= 20000){
+				acqreported = nacq;
+				print("dis: interpreter handback: %lud waits mean %llud us max %llud us, %lud free\n",
+					nacq, nacq ? acqns/1000/nacq : (uvlong)0,
+					acqmax/1000, nacqfree);
+			}
 			execatidle();
 			sleep(&isched.irend, tready, 0);
 		}

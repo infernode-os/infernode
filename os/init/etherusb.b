@@ -330,6 +330,8 @@ txms: int;			# milliseconds spent in those writes
 txmax: int;			# longest single write, ms
 nyield: int;			# bare yields taken beside those writes
 yieldms: int;			# milliseconds they cost
+nslp: int;			# one-millisecond sleeps taken beside them
+slpms: int;			# milliseconds those actually took
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -1807,13 +1809,15 @@ stats(n: int): string
 		"rxpoll: %d ms for %d polls\n" +
 		"instant empty reads: %d\nslowest empty read: %d ms\n" +
 		"writes: %d in %d ms\nslowest write: %d ms\n" +
-		"bare yields: %d in %d ms\n",
+		"bare yields: %d in %d ms\n" +
+		"1ms sleeps: %d in %d ms\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
 		rxpollms, rxactive,
-		nempty0, emptymax, ntx, txms, txmax, nyield, yieldms);
+		nempty0, emptymax, ntx, txms, txmax, nyield, yieldms,
+		nslp, slpms);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1884,10 +1888,25 @@ transmit(frame: array of byte): int
 	# milliseconds then no amount of work on the USB driver matters;
 	# if it is nothing, the cost is inside the write path after all.
 	#
+	#
+	# A yield taken here reads as nothing, and that was misleading:
+	# at this instant this process holds the machine and nobody else
+	# has queued for it yet, so release-and-acquire finds it free.
+	# The acquire at the END of a system call happens after the
+	# kernel work, by which time others have. So block for a real
+	# millisecond, which gives the machine up properly, and see what
+	# getting it back costs then. Subtract the millisecond that was
+	# asked for; the rest is the wait.
+	#
 	t1 := sys->millisec();
 	sys->sleep(0);
 	nyield++;
 	yieldms += sys->millisec() - t1;
+
+	t2 := sys->millisec();
+	sys->sleep(1);
+	nslp++;
+	slpms += sys->millisec() - t2;
 
 	if(r != len buf)
 		return -1;
@@ -2859,14 +2878,28 @@ lansetup(): int
 # TX_CMD_A carries the length and asks the device to append the FCS;
 # TX_CMD_B is unused for a plain frame.
 #
+#
+# Into a buffer that is kept, not one allocated per frame.
+#
+# The Dis garbage collector runs from the same loop that executes
+# Limbo, after every quantum, so anything allocated on a per-frame
+# path is paid for twice: once to allocate and again in every
+# collection until it is freed. A frame is handed straight to the USB
+# write and is finished with when that returns, so one buffer serves
+# every frame and none of them reach the collector.
+#
+txbuf := array[Ltxhdr + Maxframe] of byte;
+
 lanwrap(frame: array of byte): array of byte
 {
-	buf := array[Ltxhdr + len frame] of byte;
+	n := len frame;
+	if(n > Maxframe)
+		n = Maxframe;
 
-	put4(buf, 0, (len frame & Ltxlen) | Ltxfcs);
-	put4(buf, 4, 0);
-	buf[Ltxhdr:] = frame;
-	return buf;
+	put4(txbuf, 0, (n & Ltxlen) | Ltxfcs);
+	put4(txbuf, 4, 0);
+	txbuf[Ltxhdr:] = frame[0:n];
+	return txbuf[0:Ltxhdr+n];
 }
 
 #

@@ -196,6 +196,20 @@ static uvlong chanwaitmax;	/* the longest one, nanoseconds */
  */
 static ulong nbulkin, nbulkout;
 static uvlong bulkinns, bulkoutns;
+
+/*
+ * The whole call, measured in the kernel, against what the caller
+ * sees from Limbo.
+ *
+ * The bulk pair's channel waits are fast -- 50us in, 496us out -- and
+ * the driver above still measures 24ms for a write and 6.6ms for a
+ * read that returns nothing. Almost none of that is USB. Either it is
+ * spent inside this driver but outside the wait, or the process is
+ * simply not running: those need separating, and only a measurement
+ * taken on both sides of the same call can do it.
+ */
+static ulong nepwr, neprd;
+static uvlong epwrns, eprdns, epwrmax;
 static ulong nchanfast;		/* already complete; never slept */
 static ulong nchanwake;		/* slept, and the wait was ended by a wakeup */
 static ulong nchantmout;	/* slept, and tsleep timed out */
@@ -1456,6 +1470,9 @@ dump(Hci *hp)
 	print("usbotg: bulk in %lud waits mean %llud us; bulk out %lud waits mean %llud us\n",
 		nbulkin, nbulkin ? bulkinns/1000/nbulkin : (uvlong)0,
 		nbulkout, nbulkout ? bulkoutns/1000/nbulkout : (uvlong)0);
+	print("usbotg: epwrite %lud calls mean %llud us max %llud us; epread %lud mean %llud us\n",
+		nepwr, nepwr ? epwrns/1000/nepwr : (uvlong)0, epwrmax/1000,
+		neprd, neprd ? eprdns/1000/neprd : (uvlong)0);
 	print("usbotg: gintmsk %8.8ux gahbcfg %8.8ux haintmsk %8.8ux\n",
 		ctlr->regs->gintmsk, ctlr->regs->gahbcfg, ctlr->regs->haintmsk);
 }
@@ -1591,9 +1608,11 @@ epread(Ep *ep, void *a, long n)
 	ulong elapsed;
 	long nr;
 	QLock *lk;
+	uvlong tenter;
 
 	ddprint("epread ep%d.%d %ld\n", ep->dev->nb, ep->nb, n);
 	epio = ep->aux;
+	tenter = fastticks(nil);
 	b = nil;
 	/*
 	 * Control reads take ql, everything else rl -- see Epio. Taking
@@ -1635,6 +1654,10 @@ epread(Ep *ep, void *a, long n)
 		qunlock(lk);
 		freeb(b);
 		poperror();
+		if(ep->ttype == Tbulk){
+			neprd++;
+			eprdns += fastticks2ns(fastticks(nil) - tenter);
+		}
 		return nr;
 	}
 }
@@ -1646,9 +1669,11 @@ epwrite(Ep *ep, void *a, long n)
 	Block *b;
 	uchar *p;
 	ulong elapsed;
+	uvlong tenter;
 
 	ddprint("epwrite ep%d.%d %ld\n", ep->dev->nb, ep->nb, n);
 	epio = ep->aux;
+	tenter = fastticks(nil);
 	b = nil;
 	qlock(&epio->ql);
 	if(waserror()){
@@ -1681,6 +1706,15 @@ epwrite(Ep *ep, void *a, long n)
 		qunlock(&epio->ql);
 		freeb(b);
 		poperror();
+		if(ep->ttype == Tbulk){
+			uvlong el;
+
+			el = fastticks2ns(fastticks(nil) - tenter);
+			nepwr++;
+			epwrns += el;
+			if(el > epwrmax)
+				epwrmax = el;
+		}
 		return n;
 	}
 }

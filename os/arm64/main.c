@@ -367,7 +367,9 @@ probeclock(void)
 	if(clockticks() >= 5){
 		uartputstr("firing, ");
 		uartputd(clockticks());
-		uartputstr(" ticks at 100Hz OK\n");
+		uartputstr(" ticks at ");
+		uartputd(HZ);
+		uartputstr("Hz OK\n");
 	}else{
 		uartputstr("NOT firing (");
 		uartputd(clockticks());

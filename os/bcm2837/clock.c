@@ -34,7 +34,7 @@
 
 enum
 {
-	Hz		= 100,		/* scheduler ticks per second */
+	Hz		= HZ,		/* scheduler ticks per second */
 };
 
 static u64int cntfrq;		/* generic timer rate, from CNTFRQ_EL0 */

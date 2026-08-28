@@ -31,12 +31,30 @@
 #define	ROUND(s, sz)	(((s)+((sz)-1))&~((sz)-1))
 
 /*
- * Clock rate. Must agree with the Hz enum in clock.c, which is what
- * actually programs the timer comparator -- os/port converts
- * milliseconds to ticks with MS2TK, so a mismatch makes every sleep and
- * timeout wrong by that ratio without anything looking broken.
+ * Clock rate. clock.c programs the timer comparator from this same
+ * number rather than a second copy of it: os/port converts
+ * milliseconds to ticks with MS2TK, so a mismatch between the two
+ * would make every sleep and timeout wrong by that ratio without
+ * anything looking broken.
+ *
+ * A thousand, not the hundred every other Plan 9 ARM port uses, and the
+ * reason is measured rather than aesthetic.
+ *
+ * MS2TK divides by 1000/HZ, so at a hundred ticks a second MS2TK(1) is
+ * ZERO and a one-millisecond sleep means "until the next tick" -- up to
+ * ten milliseconds. The USB driver retries a NAKed bulk IN on exactly
+ * such a sleep, which is how the ethernet receive path came to poll its
+ * endpoint about fifty times a second: the driver's own counters showed
+ * 10219 empty reads costing 21.4ms each, and a round trip through the
+ * board taking 44ms on a wire whose transit time is microseconds. A TCP
+ * window divided by that round trip was the whole of this port's
+ * network throughput.
+ *
+ * Nothing here counts wall-clock time in ticks without scaling, so the
+ * cost is the extra timer interrupts, which a 1.2GHz Cortex-A53 does
+ * not notice, and the gain is that a millisecond means a millisecond.
  */
-#define	HZ		100			/* clock ticks per second */
+#define	HZ		1000			/* clock ticks per second */
 #define	MS2HZ		(1000/HZ)		/* milliseconds per tick */
 #define	TK2SEC(t)	((t)/HZ)		/* ticks to seconds */
 #define	MS2TK(t)	((t)/MS2HZ)		/* milliseconds to ticks */

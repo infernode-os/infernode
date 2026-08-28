@@ -323,6 +323,9 @@ emptyms: int;			# milliseconds spent in those
 nsleep: int;			# times the loop backed off to Rxidle
 nempty0: int;			# empty reads that took no measurable time
 emptymax: int;			# longest empty read seen, ms
+ntx: int;			# frames written to the bulk OUT endpoint
+txms: int;			# milliseconds spent in those writes
+txmax: int;			# longest single write, ms
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -1769,12 +1772,13 @@ stats(n: int): string
 		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
 		"reads with data: %d in %d ms\nempty reads: %d in %d ms\n" +
 		"idle sleeps: %d\nframes parsed: %d\n" +
-		"instant empty reads: %d\nslowest empty read: %d ms\n",
+		"instant empty reads: %d\nslowest empty read: %d ms\n" +
+		"writes: %d in %d ms\nslowest write: %d ms\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
-		nempty0, emptymax);
+		nempty0, emptymax, ntx, txms, txmax);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1819,7 +1823,21 @@ transmit(frame: array of byte): int
 {
 	buf := family.wrap(frame);
 
-	if(sys->write(bulkoutfd, buf, len buf) != len buf)
+	#
+	# Timed, because the arithmetic points here and nothing has
+	# measured it. One direction out of this board runs at about
+	# 36 frames a second, which is 28ms a frame, and a frame is
+	# 12 microseconds of wire time at a hundred megabits.
+	#
+	t0 := sys->millisec();
+	r := sys->write(bulkoutfd, buf, len buf);
+	dt := sys->millisec() - t0;
+	ntx++;
+	txms += dt;
+	if(dt > txmax)
+		txmax = dt;
+
+	if(r != len buf)
 		return -1;
 	return 0;
 }

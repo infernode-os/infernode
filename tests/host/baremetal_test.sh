@@ -362,6 +362,12 @@ build_kernel() {
             # given the directory.
             "/mnt="
             "/mnt/wm="
+            # acme mounts its own file server at /mnt/acme, and mount(2)
+            # does not create its target. Without this the mount failed
+            # and fsysmount returned nil WITHOUT a message, so acme drew
+            # its background, cleaned up and vanished with nothing on
+            # the console to say why.
+            "/mnt/acme="
             "/tmp="
 
             # Somewhere to mount a file server, which is how a native

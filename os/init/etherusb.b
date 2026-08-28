@@ -302,6 +302,7 @@ Family: adt {
 	setup:	ref fn(): int;
 	wrap:	ref fn(frame: array of byte): array of byte;
 	unwrap:	ref fn(buf: array of byte, n: int): (int, array of byte);
+	txalign: int;		# boundary the NEXT record must start on
 };
 
 families: array of Family;
@@ -328,10 +329,17 @@ emptymax: int;			# longest empty read seen, ms
 ntx: int;			# frames written to the bulk OUT endpoint
 txms: int;			# milliseconds spent in those writes
 txmax: int;			# longest single write, ms
-nyield: int;			# bare yields taken beside those writes
-yieldms: int;			# milliseconds they cost
-nslp: int;			# one-millisecond sleeps taken beside them
-slpms: int;			# milliseconds those actually took
+txframes: int;			# frames carried by those writes
+
+#
+# Frames waiting to go out in one transfer. Sixteen is a TCP window's
+# worth at this frame size and costs 24k of the heap, which is
+# nothing beside what one avoided write is worth.
+#
+Txbatch: con 16;
+txpend := array[Txbatch * (Ltxhdr + Maxframe + 4)] of byte;
+ntxpend := 0;			# bytes filled
+nqueued := 0;			# frames in them
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -371,7 +379,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	families = array[] of {
-		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap),
+		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap, 1),
 		#
 		# Microchip. -1 matches any product because the 3B+ carries a
 		# LAN7515 while the family covers 7800 and 7850 too, and
@@ -379,7 +387,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		# is a better check than a number in a table, since it also
 		# proves register access works.
 		#
-		Family("lan78xx", 16r0424, -1, lansetup, lanwrap, lanunwrap),
+		Family("lan78xx", 16r0424, -1, lansetup, lanwrap, lanunwrap, 4),
 	};
 
 	#
@@ -1565,14 +1573,38 @@ loop(tree: ref Tree)
 	done := 0;
 
 	while(done == 0){
-		alt {
-		tmsg := <-tc =>
-			if(tmsg == nil)
-				done = 1;
-			else
-				done = request(tmsg);
-		(ci, frame) := <-rxq =>
-			deliver(ci, frame);
+		#
+		# Take everything that is ALREADY waiting before sending.
+		#
+		# The alt below has a default case, so it never blocks: it
+		# gathers what has already arrived and sends the moment
+		# there is nothing more in hand. Frames therefore wait for
+		# each other only for as long as they were going to be
+		# queued anyway, and a lone frame goes out immediately --
+		# batching that cost latency would not be worth having.
+		#
+		if(ntxpend > 0){
+			alt {
+			tmsg := <-tc =>
+				if(tmsg == nil)
+					done = 1;
+				else
+					done = request(tmsg);
+			(ci, frame) := <-rxq =>
+				deliver(ci, frame);
+			* =>
+				flushtx();
+			}
+		}else{
+			alt {
+			tmsg := <-tc =>
+				if(tmsg == nil)
+					done = 1;
+				else
+					done = request(tmsg);
+			(ci, frame) := <-rxq =>
+				deliver(ci, frame);
+			}
 		}
 	}
 	tree.quit();
@@ -1809,15 +1841,13 @@ stats(n: int): string
 		"rxpoll: %d ms for %d polls\n" +
 		"instant empty reads: %d\nslowest empty read: %d ms\n" +
 		"writes: %d in %d ms\nslowest write: %d ms\n" +
-		"bare yields: %d in %d ms\n" +
-		"1ms sleeps: %d in %d ms\n",
+		"frames sent by those writes: %d\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
 		rxpollms, rxactive,
-		nempty0, emptymax, ntx, txms, txmax, nyield, yieldms,
-		nslp, slpms);
+		nempty0, emptymax, ntx, txms, txmax, txframes);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1858,57 +1888,68 @@ deliver(ci: int, frame: array of byte)
 #
 # Wrap an Ethernet frame in an RNDIS packet message and send it.
 #
+#
+# Queue a frame, and send whatever is queued.
+#
+# These are separate because one bulk transfer can carry many frames
+# and a transfer is expensive out of all proportion to what it moves.
+# Measured on this board a single-frame write costs about 24ms, of
+# which the USB driver accounts for 3ms and the wire for 12
+# microseconds. The rest is this process giving up the Dis machine for
+# the system call and queueing to get it back, and that cost is per
+# WRITE and not per frame -- so the way to be rid of it is to write
+# less often rather than to make each write faster.
+#
+# TCP hands frames over in bursts, a window's worth back to back, so
+# when one has been queued there is nearly always another already
+# waiting. The server loop takes those and calls flushtx once.
+#
+# The device's framing allows it: a bulk OUT may carry several
+# records, each a header and a frame, with the next starting on the
+# boundary the family declares -- the same rule the receive side
+# follows, from the same part of the datasheet.
+#
 transmit(frame: array of byte): int
 {
 	buf := family.wrap(frame);
+	n := len buf;
 
-	#
-	# Timed, because the arithmetic points here and nothing has
-	# measured it. One direction out of this board runs at about
-	# 36 frames a second, which is 28ms a frame, and a frame is
-	# 12 microseconds of wire time at a hundred megabits.
-	#
+	pad := 0;
+	if(family.txalign > 1)
+		pad = (family.txalign - (n % family.txalign)) % family.txalign;
+
+	if(ntxpend + n + pad > len txpend)
+		if(flushtx() < 0)
+			return -1;
+	if(ntxpend + n + pad > len txpend)
+		return -1;		# one frame larger than the whole buffer
+
+	txpend[ntxpend:] = buf;
+	ntxpend += n;
+	for(i := 0; i < pad; i++)
+		txpend[ntxpend++] = byte 0;
+	nqueued++;
+	return 0;
+}
+
+flushtx(): int
+{
+	if(ntxpend == 0)
+		return 0;
+
 	t0 := sys->millisec();
-	r := sys->write(bulkoutfd, buf, len buf);
+	r := sys->write(bulkoutfd, txpend[0:ntxpend], ntxpend);
 	dt := sys->millisec() - t0;
 	ntx++;
 	txms += dt;
+	txframes += nqueued;
 	if(dt > txmax)
 		txmax = dt;
 
-	#
-	# The same measurement with the USB taken out of it.
-	#
-	# The kernel times its own half of that write at 3.0ms and this
-	# side sees 24ms, so most of a transmit is this process not
-	# running. Limbo runs one process at a time, and every system
-	# call gives the machine up and queues to get it back -- so a
-	# call that does NOTHING costs exactly what getting the machine
-	# back costs, and nothing else. If this is also twenty
-	# milliseconds then no amount of work on the USB driver matters;
-	# if it is nothing, the cost is inside the write path after all.
-	#
-	#
-	# A yield taken here reads as nothing, and that was misleading:
-	# at this instant this process holds the machine and nobody else
-	# has queued for it yet, so release-and-acquire finds it free.
-	# The acquire at the END of a system call happens after the
-	# kernel work, by which time others have. So block for a real
-	# millisecond, which gives the machine up properly, and see what
-	# getting it back costs then. Subtract the millisecond that was
-	# asked for; the rest is the wait.
-	#
-	t1 := sys->millisec();
-	sys->sleep(0);
-	nyield++;
-	yieldms += sys->millisec() - t1;
-
-	t2 := sys->millisec();
-	sys->sleep(1);
-	nslp++;
-	slpms += sys->millisec() - t2;
-
-	if(r != len buf)
+	n := ntxpend;
+	ntxpend = 0;
+	nqueued = 0;
+	if(r != n)
 		return -1;
 	return 0;
 }

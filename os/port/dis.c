@@ -1041,6 +1041,9 @@ disfault(void *reg, char *msg)
 	error(msg);
 }
 
+extern uvlong syswrns, syswrkns;
+extern ulong nsyswr;
+
 static ulong acqreported;
 
 void
@@ -1078,6 +1081,9 @@ vmachine(void*)
 				print("dis: interpreter handback: %lud waits mean %llud us max %llud us, %lud free\n",
 					nacq, nacq ? acqns/1000/nacq : (uvlong)0,
 					acqmax/1000, nacqfree);
+				print("dis: Sys_write %lud calls mean %llud us, of which kwrite %llud us\n",
+					nsyswr, nsyswr ? syswrns/1000/nsyswr : (uvlong)0,
+					nsyswr ? syswrkns/1000/nsyswr : (uvlong)0);
 			}
 			execatidle();
 			sleep(&isched.irend, tready, 0);

@@ -343,10 +343,25 @@ Sys_chdir(void *fp)
 	acquire();
 }
 
+/*
+ * The whole system call, from the caller's side of it.
+ *
+ * Every layer under this one has now been timed and none of them
+ * account for what Limbo sees: a bulk USB write measures 22.5ms from
+ * Limbo, 2.74ms in the driver, 2.73ms in devusb, and 72us to get the
+ * interpreter back. Whatever the remaining nineteen milliseconds are,
+ * they are inside this function, and it is the last one that was
+ * never measured.
+ */
+uvlong	syswrns;	/* nanoseconds in Sys_write */
+uvlong	syswrkns;	/* of which, in kwrite */
+ulong	nsyswr;
+
 void
 Sys_write(void *fp)
 {
 	int n;
+	uvlong t0, t1;
 	F_Sys_write *f;
 
 	f = fp;
@@ -358,9 +373,14 @@ Sys_write(void *fp)
 	if(n > f->buf->len)
 		n = f->buf->len;
 
+	t0 = fastticks(nil);
 	release();
+	t1 = fastticks(nil);
 	*f->ret = kwrite(fdchk(f->fd), f->buf->data, n);
+	syswrkns += fastticks2ns(fastticks(nil) - t1);
 	acquire();
+	syswrns += fastticks2ns(fastticks(nil) - t0);
+	nsyswr++;
 }
 
 void

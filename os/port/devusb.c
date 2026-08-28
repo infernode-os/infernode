@@ -1440,18 +1440,30 @@ ctlwrite(Chan *c, void *a, long n)
 static long
 usbwrite(Chan *c, void *a, long n, vlong off)
 {
-	int nr, q;
+	int nr, q, bulk;
 	uvlong tenter;
 	Ep *ep;
 
 	if(c->qid.type == QTDIR)
 		error(Eisdir);
 
+	bulk = 0;
 	q = QID(c->qid);
 
 	if(q == Qctl || isqtype(q, Qepctl))
 		return ctlwrite(c, a, n);
 
+	/*
+	 * From here, not from the driver call below.
+	 *
+	 * Bracketing only ep->hp->epwrite left getep() and putep()
+	 * outside the measurement, and those take epslck -- one QLock
+	 * shared by every endpoint on the machine, taken twice per
+	 * transfer, by a receive loop running thirty thousand times as
+	 * often as this. That is the only thing in this function that
+	 * was never timed.
+	 */
+	tenter = fastticks(nil);
 	ep = getep(qid2epidx(q));
 	if(ep == nil)
 		error(Eio);
@@ -1476,15 +1488,15 @@ usbwrite(Chan *c, void *a, long n, vlong off)
 		/* else fall */
 	default:
 		ddeprint("\nusbwrite q %#x fid %d cnt %ld off %lld\n",q, c->fid, n, off);
-		tenter = fastticks(nil);
 		ep->hp->epwrite(ep, a, n);
-		if(ep->ttype == Tbulk){
-			nbulkwr++;
-			bulkwrns += fastticks2ns(fastticks(nil) - tenter);
-		}
+		bulk = ep->ttype == Tbulk;
 	}
 	putep(ep);
 	poperror();
+	if(bulk){
+		nbulkwr++;
+		bulkwrns += fastticks2ns(fastticks(nil) - tenter);
+	}
 	return n;
 }
 

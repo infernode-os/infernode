@@ -308,6 +308,36 @@ build_kernel() {
             # lives outside the kernel has to publish a file interface
             # to be reachable from it, and this is what serves one.
             "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
+
+            # acme is not one module. /dis/acme.dis is a loader for the
+            # twenty-four in /dis/acme/, which it loads by path at run
+            # time -- so a dependency scan that follows "load X X->PATH"
+            # never sees them, and acme failed with the least helpful
+            # message Limbo has: "module not loaded". 288KB in total.
+            "/dis/acme/acme.dis=$ROOT/dis/acme/acme.dis"
+            "/dis/acme/buff.dis=$ROOT/dis/acme/buff.dis"
+            "/dis/acme/col.dis=$ROOT/dis/acme/col.dis"
+            "/dis/acme/dat.dis=$ROOT/dis/acme/dat.dis"
+            "/dis/acme/disk.dis=$ROOT/dis/acme/disk.dis"
+            "/dis/acme/ecmd.dis=$ROOT/dis/acme/ecmd.dis"
+            "/dis/acme/edit.dis=$ROOT/dis/acme/edit.dis"
+            "/dis/acme/elog.dis=$ROOT/dis/acme/elog.dis"
+            "/dis/acme/exec.dis=$ROOT/dis/acme/exec.dis"
+            "/dis/acme/file.dis=$ROOT/dis/acme/file.dis"
+            "/dis/acme/frame.dis=$ROOT/dis/acme/frame.dis"
+            "/dis/acme/fsys.dis=$ROOT/dis/acme/fsys.dis"
+            "/dis/acme/graph.dis=$ROOT/dis/acme/graph.dis"
+            "/dis/acme/gui.dis=$ROOT/dis/acme/gui.dis"
+            "/dis/acme/look.dis=$ROOT/dis/acme/look.dis"
+            "/dis/acme/regx.dis=$ROOT/dis/acme/regx.dis"
+            "/dis/acme/row.dis=$ROOT/dis/acme/row.dis"
+            "/dis/acme/scrl.dis=$ROOT/dis/acme/scrl.dis"
+            "/dis/acme/styxaux.dis=$ROOT/dis/acme/styxaux.dis"
+            "/dis/acme/text.dis=$ROOT/dis/acme/text.dis"
+            "/dis/acme/time.dis=$ROOT/dis/acme/time.dis"
+            "/dis/acme/util.dis=$ROOT/dis/acme/util.dis"
+            "/dis/acme/wind.dis=$ROOT/dis/acme/wind.dis"
+            "/dis/acme/xfid.dis=$ROOT/dis/acme/xfid.dis"
             "/dis/lib/styxservers.dis=$ROOT/dis/lib/styxservers.dis"
             "/dis/lib/nametree.dis=$ROOT/dis/lib/nametree.dis"
             "/dis/lib/tables.dis=$ROOT/dis/lib/tables.dis"

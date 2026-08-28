@@ -328,6 +328,8 @@ emptymax: int;			# longest empty read seen, ms
 ntx: int;			# frames written to the bulk OUT endpoint
 txms: int;			# milliseconds spent in those writes
 txmax: int;			# longest single write, ms
+nyield: int;			# bare yields taken beside those writes
+yieldms: int;			# milliseconds they cost
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -1804,13 +1806,14 @@ stats(n: int): string
 		"idle sleeps: %d\nframes parsed: %d\n" +
 		"rxpoll: %d ms for %d polls\n" +
 		"instant empty reads: %d\nslowest empty read: %d ms\n" +
-		"writes: %d in %d ms\nslowest write: %d ms\n",
+		"writes: %d in %d ms\nslowest write: %d ms\n" +
+		"bare yields: %d in %d ms\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
 		rxpollms, rxactive,
-		nempty0, emptymax, ntx, txms, txmax);
+		nempty0, emptymax, ntx, txms, txmax, nyield, yieldms);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1868,6 +1871,23 @@ transmit(frame: array of byte): int
 	txms += dt;
 	if(dt > txmax)
 		txmax = dt;
+
+	#
+	# The same measurement with the USB taken out of it.
+	#
+	# The kernel times its own half of that write at 3.0ms and this
+	# side sees 24ms, so most of a transmit is this process not
+	# running. Limbo runs one process at a time, and every system
+	# call gives the machine up and queues to get it back -- so a
+	# call that does NOTHING costs exactly what getting the machine
+	# back costs, and nothing else. If this is also twenty
+	# milliseconds then no amount of work on the USB driver matters;
+	# if it is nothing, the cost is inside the write path after all.
+	#
+	t1 := sys->millisec();
+	sys->sleep(0);
+	nyield++;
+	yieldms += sys->millisec() - t1;
 
 	if(r != len buf)
 		return -1;

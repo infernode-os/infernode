@@ -186,6 +186,16 @@ static ulong nusbintr;
 static ulong nchanwait;		/* waits entered */
 static uvlong chanwaitns;	/* nanoseconds spent asleep in them */
 static uvlong chanwaitmax;	/* the longest one, nanoseconds */
+
+/*
+ * The same, split by what the endpoint is, because the mean over all
+ * of them answers nothing: a low-speed keyboard polled through a hub
+ * is SUPPOSED to spend milliseconds in here, and it is most of the
+ * traffic on this bus. Only the bulk pair carries the network, and
+ * only its own numbers say what a frame costs.
+ */
+static ulong nbulkin, nbulkout;
+static uvlong bulkinns, bulkoutns;
 static ulong nchanfast;		/* already complete; never slept */
 static ulong nchanwake;		/* slept, and the wait was ended by a wakeup */
 static ulong nchantmout;	/* slept, and tsleep timed out */
@@ -483,6 +493,15 @@ restart:
 			chanwaitns += el;
 			if(el > chanwaitmax)
 				chanwaitmax = el;
+			if(ep->ttype == Tbulk){
+				if(hc->hcchar & Epin){
+					nbulkin++;
+					bulkinns += el;
+				}else{
+					nbulkout++;
+					bulkoutns += el;
+				}
+			}
 			if(chandone(hc))
 				nchanwake++;
 			else
@@ -1434,6 +1453,9 @@ dump(Hci *hp)
 		chanwaitns/1000, chanwaitmax/1000,
 		nchanwake+nchantmout ?
 			chanwaitns/1000/(nchanwake+nchantmout) : (uvlong)0);
+	print("usbotg: bulk in %lud waits mean %llud us; bulk out %lud waits mean %llud us\n",
+		nbulkin, nbulkin ? bulkinns/1000/nbulkin : (uvlong)0,
+		nbulkout, nbulkout ? bulkoutns/1000/nbulkout : (uvlong)0);
 	print("usbotg: gintmsk %8.8ux gahbcfg %8.8ux haintmsk %8.8ux\n",
 		ctlr->regs->gintmsk, ctlr->regs->gahbcfg, ctlr->regs->haintmsk);
 }

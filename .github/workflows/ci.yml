@@ -118,6 +118,11 @@ jobs:
         # the #F device would ship as a stub. Same guard as the GUI jobs.
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/amd64/bin/limbo"
@@ -1214,6 +1219,11 @@ jobs:
             echo "  MISSING: $f"
           fi
         done
+
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |

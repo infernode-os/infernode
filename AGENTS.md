@@ -30,11 +30,45 @@ Use the platform scripts instead of inventing local build flows.
 - `./build-linux-amd64.sh headless`: Linux build without SDL3.
 - `./build-macos-sdl3.sh` or `./build-macos-headless.sh`: macOS builds.
 - `powershell -ExecutionPolicy Bypass -File build-windows-amd64.ps1`: Windows build.
-- `cd appl/cmd && mk install`: rebuild one Limbo subtree and install tracked runtime output into `dis/`.
-- `cd tests && mk install && cd ..`: rebuild Limbo tests into the tracked runtime tree.
+- `cd appl/cmd && mk install`: rebuild one Limbo subtree into `dis/`.
+- `cd tests && mk install && cd ..`: rebuild the Limbo tests into `dis/tests/`.
 - `./run-tests.sh`: run host and emulator tests.
 - `./run-tests.sh -h` or `./run-tests.sh -i -v`: run only host tests, or only emulator tests with verbose output.
 - `./emu/<Platform>/o.emu -r. /tests/runner.dis -v`: run the native Limbo test runner directly when working inside the emulator workflow.
+
+## Compiled bytecode is not in the repository
+
+`dis/` holds compiled Dis bytecode. **It is a build product and is not
+tracked**, exactly like `emu/*/o.emu`. A fresh clone has no runtime until you
+build one. Do not commit `.dis` files, and do not treat a missing one as a
+bug in the tree.
+
+**Standard procedure after cloning, pulling, or changing any `.b` or `.m`:**
+
+```sh
+export ROOT=$PWD
+export PATH="$ROOT/$SYSHOST/$OBJTYPE/bin:$PATH"   # e.g. Linux/arm64/bin
+for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done
+```
+
+`hooks/post-merge` does this automatically after `git pull` — install it once
+with `./hooks/install.sh`. Rebuilding the whole tree takes about 20 seconds.
+
+Those four directories are the complete set: `appl/mpeg` and `appl/veltro` are
+**not** in `appl/mkfile`'s `DIRS`, so `cd appl && mk install` alone does not
+reach them. This catches people out; use the loop.
+
+**If a change makes the build produce a different set of modules**, update
+`tools/dis-manifest.txt` in the same commit. It lists every module the build
+must produce, and `tools/verify-dis-build.sh` (run by CI and by every release
+job) fails when one goes missing. Adding a module means adding a target to an
+mkfile `TARG` *and* a line to the manifest; removing one means deleting both.
+A module that is not in any `TARG` is never compiled — 45 were in that state
+and only appeared to work because their bytecode had been committed by hand.
+
+**Never run `limbo -o <path>` by hand.** Use `tools/compile-limbo.sh` or
+`mk install` from the source directory. Choosing an output path yourself is
+how modules end up somewhere no build installs to and no runtime loads from.
 
 ## Coding Style & Naming Conventions
 
@@ -44,7 +78,7 @@ Use Inferno `mk`, not GNU make, for subtree builds. In `mkfile`s, do not chain c
 
 ## Testing Guidelines
 
-Behavior changes should include tests. Prefer the repository’s Limbo test setup instead of ad hoc harnesses: build tests with `mk install`, then run them through `tests/runner.dis` or `./run-tests.sh`. Host integration checks belong in `tests/host/`. If a change regenerates runtime `.dis` files under `dis/`, make sure they result from `mk install` in the corresponding source directory rather than manual edits.
+Behavior changes should include tests. Prefer the repository’s Limbo test setup instead of ad hoc harnesses: build tests with `mk install`, then run them through `tests/runner.dis` or `./run-tests.sh`. Host integration checks belong in `tests/host/`. `.dis` files are never committed; if a change adds or removes a module, update `tools/dis-manifest.txt` to match (see above).
 
 ## Security Review Priorities
 
@@ -60,4 +94,4 @@ When proposing fixes, prefer namespace, mount, process-group, file-permission, a
 
 Recent history uses scoped, imperative subjects such as `fix(theme): ...`, `build: ...`, and `test: ...`. Keep the first line under 72 characters, explain why in the body when needed, and reference issue IDs like `INFR-28` when relevant. PRs should stay focused, describe the motivation, include test coverage, update docs for interface changes, and include screenshots for UI work in Lucia/Xenith.
 
-Know what CI will check before you push: `verify-dis-paths` (every source's declared `.dis` exists and is fresh — the wrong-target trap), `verify-sh-exec` (Inferno-side test scripts committed mode 755), the ring-fence job (`tests/agent-harness/` material must never appear elsewhere), the advisory style gate (rc-violations, JSON inside `appl/`, new file interfaces with no linked proposal issue), plus builds, the test suites, CodeQL, and nsaudit fixture checks. The PR template's design-principles checklist is expected to be filled honestly.
+Know what CI will check before you push: `verify-dis-build` (the tree builds and produces every module `tools/dis-manifest.txt` lists), `verify-sh-exec` (Inferno-side test scripts committed mode 755), the ring-fence job (`tests/agent-harness/` material must never appear elsewhere), the advisory style gate (rc-violations, JSON inside `appl/`, new file interfaces with no linked proposal issue), plus builds, the test suites, CodeQL, and nsaudit fixture checks. The PR template's design-principles checklist is expected to be filled honestly.

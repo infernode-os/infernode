@@ -602,6 +602,41 @@ assert status(audit_errors=["audit payload unstored at seq 4"]) == "INCONCLUSIVE
 assert status(completed=False) == "INCONCLUSIVE"
 assert status(ok=False, escape_room=False, audit_required=False) == "FAIL"
 
+# Aggression gates count unique model tool calls, not bridge execution echoes.
+tool_state = {
+    "lifecycle": {"ready": "yes"},
+    "nsaudit": "",
+    "messages": [{"a": "0", "role": "assistant", "text": "done"}],
+    "activities": [],
+    "tools": ["write", "exec", "exec", "limbo"],
+    "probes": {},
+    "presentation": [],
+    "matrix": None,
+    "msg_pending": "",
+    "sent": [],
+}
+qualified, reasons, _ = grind.score(
+    {"expects": {"trajectory_tool_min": {"write": 1, "exec": 2, "limbo": 1}}},
+    tool_state, True, False)
+assert qualified and reasons == [], reasons
+qualified, reasons, _ = grind.score(
+    {"expects": {"trajectory_tool_min": {"write": 2, "exec": 3}}},
+    tool_state, True, False)
+assert not qualified, reasons
+assert "tool 'write' used 1 time(s), expected >= 2" in reasons, reasons
+assert "tool 'exec' used 2 time(s), expected >= 3" in reasons, reasons
+
+# A verified signed audit supplies child calls omitted by the parent trajectory.
+audit_records = [
+    {"event": "toolcall", "message": "activity=0 step=1 tool=task"},
+    {"event": "toolcall", "message": "activity=1 step=1 tool=write"},
+    {"event": "toolcall", "message": "activity=1 step=2 tool=exec"},
+]
+audit_tools = [grind.record_tokens(record).get("tool") for record in audit_records
+               if record["event"] == "toolcall"
+               and grind.record_tokens(record).get("tool")]
+assert audit_tools == ["task", "write", "exec"], audit_tools
+
 complete_and_blocked = [
     {"id": "0", "status": "idle", "label": "Main"},
     {"id": "1", "status": "complete", "label": "Finished"},
@@ -622,12 +657,13 @@ assert any("no signed terminal record" in e for e in lifecycle_errors), lifecycl
 assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
 
 cancelled = [dict(a) for a in complete_and_blocked]
-cancelled[2]["status"] = "timeout"
 child_records.append(
     {"seq": "7", "event": "childtimeout", "message": "activity=2 status=read"})
 lifecycle_errors = grind.audit_lifecycle_errors(child_records, cancelled)
 assert any("activity 2 timed out" in e and "step=1 tool=read" in e
            for e in lifecycle_errors), lifecycle_errors
+assert not any("non-terminal" in e or "disagrees" in e
+               for e in lifecycle_errors), lifecycle_errors
 assert status(audit_errors=lifecycle_errors) == "INCONCLUSIVE"
 
 all_done = complete_and_blocked[:2]
@@ -667,8 +703,11 @@ assert grind.audit_lifecycle_errors(
     audit_only_done, [{"id": "0", "status": "idle", "label": "Main"}]) == []
 
 driver = (root / "tests/agent-harness/grind-driver").read_text()
-assert "grind childtimeout activity=" in driver and "operation=" in driver
-assert "echo timeout > $ad/status" in driver
+assert "grind childtimeout activity=" in driver and "observed=" in driver
+assert "echo timeout > $ad/status" not in driver
+assert "if {! ~ $cs complete completed done idle failed error timeout closed hidden}" in driver
+assert "if {~ $cdone yes}" in driver
+assert "@@GRIND followthrough children-timeout" in driver
 assert "@@GRIND children terminal=" in driver
 assert "ls /mnt/ui/activity" in driver
 assert "for (a in 1 2 3 4 5 6 7 8 9)" not in driver

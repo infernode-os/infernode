@@ -11,6 +11,7 @@ TARG=\
 	tftpd.dis\
 	virgild.dis\
 	sntp.dis\
+	dhcp.dis\
 
 SYSMODULES=\
 	attrdb.m\

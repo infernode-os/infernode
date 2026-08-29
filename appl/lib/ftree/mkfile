@@ -1,0 +1,21 @@
+<../../../mkconfig
+
+TARG=\
+	cptree.dis\
+	items.dis\
+
+MODULES=\
+	cptree.m\
+	items.m\
+
+SYSMODULES=\
+	draw.m\
+	readdir.m\
+	string.m\
+	sys.m\
+	tk.m\
+	tkclient.m\
+
+DISBIN=$ROOT/dis/lib/ftree
+
+<$ROOT/mkfiles/mkdis

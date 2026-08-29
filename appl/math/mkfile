@@ -10,6 +10,7 @@ TARG=\
 	genprimes.dis\
 	geodesy.dis\
 	graph0.dis\
+	gr.dis\
 #	gr.dis\
 	hist0.dis\
 	linalg.dis\

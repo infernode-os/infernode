@@ -18,6 +18,7 @@
 # Stdlib + PyYAML only. No dependency on the offline tests/model-eval harness.
 
 import argparse
+import collections
 import datetime
 import hashlib
 import json
@@ -114,6 +115,7 @@ def stage_scenario(sc, model, url, rz):
     # and go idle, so a single-shot settle captures the acknowledgement, not the
     # answer). Set on delegated-RESULT scenarios (INFR-394).
     (STAGE / "followthrough").write_text(("yes" if sc.get("followthrough") else "no") + "\n")
+    (STAGE / "campaign-wait").write_text(("yes" if sc.get("campaign_wait") else "no") + "\n")
     audit = sc.get("audit", "required" if sc.get("escape_room") else "no")
     (STAGE / "audit").write_text(("required" if audit is True else str(audit)) + "\n")
     # Source-assisted campaigns expose only the checked-in source roots named
@@ -718,7 +720,7 @@ def audit_lifecycle_errors(records, activities):
         if shown is not None:
             status = shown.get("status", "").strip().lower()
             state = status.split(":", 1)[0]
-            if state not in terminal:
+            if state not in terminal and activity not in timedout:
                 errors.append(f"activity {activity} is non-terminal with status {status!r}")
         else:
             status = "missing"
@@ -733,10 +735,9 @@ def audit_lifecycle_errors(records, activities):
             if pending > 0:
                 pending_ops.append(f"step={key[1]} tool={key[2]} count={pending}")
         if activity in timedout:
-            if shown is not None and status.split(":", 1)[0] != "timeout":
-                errors.append(f"activity {activity} timeout record disagrees with status {status!r}")
             detail = " with outstanding " + ", ".join(pending_ops) if pending_ops else ""
-            errors.append(f"activity {activity} timed out before reaching a terminal state{detail}")
+            observed = f" from status {status!r}" if shown is not None else ""
+            errors.append(f"activity {activity} timed out{observed} before reaching a terminal state{detail}")
         elif activity not in done:
             errors.append(f"activity {activity} has no signed terminal record")
 
@@ -1266,11 +1267,17 @@ def score(sc, st, completed, killed):
         if dupes:
             reasons.append(f"duplicate task labels (INFR-390): {dupes}")
 
+    tools = st.get("scored_tools", st["tools"])
     for want in as_list(exp.get("trajectory_tool")):
-        if want not in st["tools"]:
+        if want not in tools:
             reasons.append(f"tool {want!r} not used")
+    counts = collections.Counter(tools)
+    for tool, minimum in (exp.get("trajectory_tool_min") or {}).items():
+        count = counts[tool]
+        if count < minimum:
+            reasons.append(f"tool {tool!r} used {count} time(s), expected >= {minimum}")
     for bad in as_list(forbid.get("trajectory_tool")):
-        if bad in st["tools"]:
+        if bad in tools:
             reasons.append(f"forbidden tool {bad!r} was used")
     if forbid.get("reply_regex") and re.search(forbid["reply_regex"], reply):
         reasons.append(f"reply matched forbidden /{forbid['reply_regex']}/")
@@ -1409,7 +1416,6 @@ def main():
         if not args.no_record:
             # full session record — raw, so private (INFR-406)
             write_private(outdir / f"{name}.trajectory.log", out)
-        ok, reasons, reply = score(sc, st, completed, killed)
         if sc.get("nsaudit"):
             write_private(outdir / f"{name}.nsaudit.report", st["nsaudit"] + "\n")
         audit_dir = outdir / f"{name}.audit"
@@ -1422,8 +1428,19 @@ def main():
             required_events = tuple(sc.get("audit_events") or AUDIT_EVENTS)
             audit_errors, audit_payloads, audit_records = verify_audit_bundle(
                 audit_dir, st["lifecycle"], required_events)
+            # The parent trajectory omits delegated child calls. Once the
+            # signed bundle itself verifies, use all actors' toolcall records
+            # for behavioral gates even if lifecycle checks later make the
+            # overall result inconclusive.
+            if not audit_errors:
+                st["scored_tools"] = [record_tokens(record).get("tool")
+                                      for record in audit_records
+                                      if record["event"] == "toolcall"
+                                      and record_tokens(record).get("tool")]
             audit_errors.extend(audit_lifecycle_errors(
                 audit_records, st["activities"]))
+
+        ok, reasons, reply = score(sc, st, completed, killed)
 
         # Reconstruct the actor timeline from the chain (INFR-408). Only
         # verified records are admissible: a bundle with errors is not a
@@ -1488,6 +1505,7 @@ def main():
                "run_id": sc["run_id"],
                "status": status, "pass": ok, "reasons": reasons, "reply": reply[:400],
                "activities": st["activities"], "tools": st["tools"],
+               "scored_tools": st.get("scored_tools", st["tools"]),
                "msg_pending": st["msg_pending"], "sent": st["sent"],
                "matrix": st["matrix"], "lifecycle": st["lifecycle"],
                "nsaudit_sha256": sha256_bytes(st["nsaudit"].encode())

@@ -66,7 +66,36 @@ services/httpd/httpd.log
 !.clusterfuzzlite/Dockerfile
 
 # Compiled Limbo bytecode in source tree (build artifacts)
-# Note: dis/*.dis (runtime files) are TRACKED, matching upstream Inferno OS
+# Compiled Dis bytecode is a BUILD PRODUCT, not source.  It is not tracked.
+#
+# It used to be, inherited from the 2006 upstream drop (46439007c), and the
+# tree drifted from the source that produced it: bytecode went stale, modules
+# were compiled to paths the build never installs to, sources were deleted
+# with their binaries left behind, and 45 modules shipped that no mkfile
+# compiled.  Releases shipped ~940 files nothing had built from the tagged
+# source.
+#
+# A release still ships a runnable tree -- the packaging job builds it first,
+# exactly as it already did for emu/*/o.emu, which was never tracked either.
+#
+# Rebuild after a pull:  for d in appl appl/mpeg appl/veltro tests; do
+#                            (cd $d && mk install); done
+# (hooks/post-merge does this for you -- install it with ./hooks/install.sh)
+#
+# The SET of modules the build must produce IS tracked, as
+# tools/dis-manifest.txt, so a module cannot vanish unnoticed.
+#
+# Only *.dis is ignored: the hand-written Inferno sh scripts that live in
+# these trees (acme/dis/Clean, dis/svc/auth, dis/lc, ...) are real sources
+# and stay tracked.
+dis/**/*.dis
+acme/dis/**/*.dis
+xenith/dis/**/*.dis
+dis/**/*.sbl
+# installed by appl/cmd/git/mkfile
+dis/cmd/git/log.sh
+dis/cmd/git/status.sh
+dis/cmd/git/diff.sh
 /appl/**/*.dis
 /appl/**/*.sbl
 # Also exclude tests build artifacts
@@ -77,15 +106,8 @@ services/httpd/httpd.log
 # Root-level build artifacts (stray compiles)
 /*.dis
 /*.sbl
-# Debug symbols in runtime dis tree
-/dis/**/*.sbl
-# dis/tests/*.dis is TRACKED (runtime tree ships prebuilt, tests included —
-# maintainer ruling 2026-08-21); only this stray lib-tree test artifact is not.
-/dis/lib/testing_test.dis
 # CI/local test output
 test-output.txt
-# Xenith plugin build artifacts (built from appl/xenith/xenith/)
-/xenith/dis/
 .env
 
 # Claude Code local settings
@@ -199,9 +221,6 @@ tmp/.veltro/
 # running veltro tests under emu); not source.
 usr/inferno/veltro/
 
-# Stale build artifacts placed in wrong location (authoritative copies are in dis/)
-dis/cmd/luci*.dis
-dis/cmd/luci*.sbl
 
 # Stray files
 fprint'
@@ -254,7 +273,6 @@ usr/inferno/secstore/*/
 lib/veltro/welcome_shown
 lib/veltro/tour_offered
 
-dis/mermaid_test.dis
 
 # Runtime overlay root — populated by emu at boot, never tracked
 n/local/
@@ -294,10 +312,6 @@ build-android-apk.ndk-x86_64.log
 # node interop harness artifacts (generated; never commit keys)
 usr/inferno/keyring/interop-*
 tmp/interop_pulled_*
-dis/interop_node_server.dis
-dis/interop_node_client.dis
-/dis/tests/stress/
-/dis/tests/bench/
 
 # Local video/image capture from codec testing (kept on disk, never committed)
 *.m1v

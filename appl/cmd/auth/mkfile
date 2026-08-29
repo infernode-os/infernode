@@ -19,6 +19,11 @@ TARG=\
 	secstore.dis\
 	secstored.dis\
 	secstore-setup.dis\
+	aescbc.dis\
+	ai2key.dis\
+	createuser.dis\
+	dsagen.dis\
+	rsagen.dis\
 
 SYSMODULES=\
 	arg.m\

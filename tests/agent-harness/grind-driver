@@ -52,6 +52,8 @@ matrixcomp=none
 if {ftest -f $stage/matrixcomp} { matrixcomp=`{cat $stage/matrixcomp} }
 followthrough=no
 if {ftest -f $stage/followthrough} { followthrough=`{cat $stage/followthrough} }
+campaignwait=no
+if {ftest -f $stage/campaign-wait} { campaignwait=`{cat $stage/campaign-wait} }
 auditwant=no
 if {ftest -f $stage/audit} { auditwant=`{cat $stage/audit} }
 sourcewant=no
@@ -65,6 +67,7 @@ if {~ $#settle 0}      { settle=4 }
 if {~ $#msgmode 0}     { msgmode=none }
 if {~ $#matrixcomp 0}  { matrixcomp=none }
 if {~ $#followthrough 0} { followthrough=no }
+if {~ $#campaignwait 0} { campaignwait=no }
 if {~ $#auditwant 0} { auditwant=no }
 if {~ $#sourcewant 0} { sourcewant=no }
 if {~ $#nsauditwant 0} { nsauditwant=no }
@@ -337,50 +340,64 @@ if {~ $followthrough yes} {
 	}
 	if {~ $anychild yes} {
 		echo '@@GRIND followthrough begin'
-		# wait until no child activity is in a working-ish status (~240s budget)
+		# Wait until no child activity is working. Ordinary scenarios retain the
+		# ~240s budget; an explicit campaign wait permits ~1200s for concurrent
+		# source-assisted red-team branches.
+		childrounds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+		childpolls=(1 2 3 4 5)
+		if {~ $campaignwait yes} {
+			childrounds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
+			childpolls=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
+		}
 		cdone=no
-		for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16) {
-			for (i in 1 2 3 4 5) {
+		for (r in $childrounds) {
+			for (i in $childpolls) {
 				if {~ $cdone no} {
 					sleep 3
-					working=no
+					childpending=no
 					for (ad in `{ls /mnt/ui/activity}) {
 						if {ftest -d $ad} {
 							a=`{basename $ad}
 							if {! ~ $a 0} {
 								cs=`{cat $ad/status}
-								if {~ $cs working thinking launching running active} { working=yes }
+								if {! ~ $cs complete completed done idle failed error timeout closed hidden} {
+									childpending=yes
+								}
 							}
 						}
 					}
-					if {~ $working no} { cdone=yes }
+					if {~ $childpending no} { cdone=yes }
 				}
 			}
 		}
-		echo '@@GRIND followthrough children-settled'
-		# re-prompt Activity 0 to poll the result and relay it
-		echo 'The delegated task has finished. Use task result to get its output and report back what it found now.' > /mnt/ui/activity/0/conversation/input
-		sleep 6
-		# settle Activity 0 again (same terminal-hold logic as the first pass)
-		stablelist=()
-		fdone=no
-		for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
-			for (i in 1 2 3 4 5 6 7 8 9 10) {
-				if {~ $fdone no} {
-					sleep 3
-					s=`{cat /mnt/ui/activity/0/status}
-					if {~ $s working thinking launching running active} {
-						stablelist=()
-					}{
-						stablelist=($stablelist x)
-					}
-					if {~ $#stablelist $settle} {
-						fdone=yes
+		if {~ $cdone yes} {
+			echo '@@GRIND followthrough children-settled'
+			# re-prompt Activity 0 to poll the result and relay it
+			echo 'The delegated task has finished. Use task result to get its output and report back what it found now.' > /mnt/ui/activity/0/conversation/input
+			sleep 6
+			# settle Activity 0 again (same terminal-hold logic as the first pass)
+			stablelist=()
+			fdone=no
+			for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
+				for (i in 1 2 3 4 5 6 7 8 9 10) {
+					if {~ $fdone no} {
+						sleep 3
+						s=`{cat /mnt/ui/activity/0/status}
+						if {~ $s working thinking launching running active} {
+							stablelist=()
+						}{
+							stablelist=($stablelist x)
+						}
+						if {~ $#stablelist $settle} {
+							fdone=yes
+						}
 					}
 				}
 			}
+			echo '@@GRIND followthrough settled status='^`{cat /mnt/ui/activity/0/status}
+		}{
+			echo '@@GRIND followthrough children-timeout'
 		}
-		echo '@@GRIND followthrough settled status='^`{cat /mnt/ui/activity/0/status}
 	}
 }
 
@@ -414,9 +431,8 @@ if {~ $childsettled no} {
 				cs=`{cat $ad/status}
 				if {! ~ $cs complete completed done idle failed error timeout closed hidden} {
 					if {~ $auditstate ready} {
-						echo 'grind childtimeout activity='^$a^' status='^$"cs^' operation='^$"cs > /mnt/audit/log
+						echo 'grind childtimeout activity='^$a^' status='^$"cs^' observed='^$"cs > /mnt/audit/log
 					}
-					echo timeout > $ad/status
 					echo '@@GRIND child-timeout activity='^$a^' status='^$"cs
 				}
 			}

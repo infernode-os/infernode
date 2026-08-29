@@ -45,7 +45,7 @@ standard.
 | **F4** | **SP 800-90A/B DRBG + entropy** — approved DRBG with documented entropy source and health tests | RNG is `genrandom`/`prng` (`include/libsec.h:486-489`); not documented as an SP 800-90A DRBG with 90B entropy assessment | Document/￼align the DRBG; entropy-source analysis. See `docs/TLS-ENTROPY.md` for prior entropy work. |
 | **F5** | **Module spec & security policy documents** — finite-state model, ports/interfaces, roles/services, SSP | Not authored | Documentation deliverables for the CMVP package. |
 | **F6** | **CAVP algorithm certificates** — each approved algorithm independently CAVP-tested | Not obtained | Run the CAVP test harness against `libsec` and submit. The existing KAT suites are the starting material. |
-| **F7** | **Operational environment / integrity test** — module integrity self-check (e.g. signature/HMAC over the module image) at load | Build-time integrity exists (cosign, SLSA, `verify-dis-paths`) but no *runtime* module-integrity self-test | Add an integrity check at module init. |
+| **F7** | **Operational environment / integrity test** — module integrity self-check (e.g. signature/HMAC over the module image) at load | Build-time integrity exists (cosign, SLSA, `verify-dis-build`) but no *runtime* module-integrity self-test | Add an integrity check at module init. |
 
 ## 3. What is already met (do not re-do)
 

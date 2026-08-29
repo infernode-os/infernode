@@ -159,8 +159,12 @@ init(nil: ref Draw->Context, args: list of string)
 	if(perr != nil)
 		fail("writepack: " + perr);
 
-	# Read credentials
-	creds := git->readcredentials(gitdir);
+	# Read credentials.  Deliberately done here rather than in the Git
+	# library: #338 removed readcredentials() from Git so that a module
+	# loaded by an agent tool cannot read a credentials file.  The command
+	# reads it in its own namespace, where visibility of .git/credentials
+	# is the capability that decides whether a push can authenticate.
+	creds := readcredentials(gitdir);
 	if(creds == nil)
 		fail("no credentials found; create .git/credentials with user:token");
 
@@ -175,6 +179,29 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("To %s\n", remoteurl);
 	sys->print("   %s..%s  %s -> %s\n",
 		oldhash.hex()[:7], localhash.hex()[:7], srcbranch, dstbranch);
+}
+
+readcredentials(gitdir: string): string
+{
+	fd := sys->open(gitdir + "/credentials", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array [1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return strtrim(string buf[:n]);
+}
+
+strtrim(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n' || s[j-1] == '\r'))
+		j--;
+	return s[i:j];
 }
 
 splitcolon(s: string): (string, string)

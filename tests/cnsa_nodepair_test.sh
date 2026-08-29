@@ -9,8 +9,8 @@
 #   3. both nodes CNSA, ML-DSA-87 signer   -> ML-KEM-1024 + CNSA signer succeeds
 #   4. mixed 1024 listener / 768 dialer    -> handshake FAILS (no silent downgrade)
 #
-# Requires a built emu and dis/authnode.dis
-#   (limbo -gw -Imodule -o dis/authnode.dis tests/authnode.b).
+# Requires a built emu and dis/tests/authnode.dis
+#   (cd tests && mk install -- never hand-roll a limbo -o path).
 #
 set -u
 
@@ -43,9 +43,9 @@ start_node() {  # start_node <out> <mode: plain|cnsa> <args...> -> prints pid
 	local out="$1"; shift
 	local mode="$1"; shift
 	if [ "$mode" = "cnsa" ]; then
-		( CNSAMODE=1 "$EMU" -r"$ROOT" /dis/authnode.dis "$@" 2>&1 </dev/null ) > "$out" &
+		( CNSAMODE=1 "$EMU" -r"$ROOT" /dis/tests/authnode.dis "$@" 2>&1 </dev/null ) > "$out" &
 	else
-		( "$EMU" -r"$ROOT" /dis/authnode.dis "$@" 2>&1 </dev/null ) > "$out" &
+		( "$EMU" -r"$ROOT" /dis/tests/authnode.dis "$@" 2>&1 </dev/null ) > "$out" &
 	fi
 	local pid=$!
 	pids="$pids $pid"

@@ -72,7 +72,7 @@ All endpoints bind `127.0.0.1` only.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/v1/chat/completions` | POST | OpenAI chat completions. Accepts `messages`, `tools` (OpenAI function format), `model`, `stream`. Returns `choices[0].message.content` / `.tool_calls` (`arguments` is a JSON string), `finish_reason` `stop`/`tool_calls`, `usage.total_tokens`. `stream:true` yields single-chunk SSE ending in `data: [DONE]`. |
+| `/v1/chat/completions` | POST | OpenAI chat completions. Accepts `messages`, `tools` (OpenAI function format), `model`, `stream`. Returns `choices[0].message.content` / `.tool_calls` (`arguments` is a JSON string), `finish_reason` `stop`/`tool_calls`, `usage.total_tokens`. `stream:true` sends SSE keepalive comments while Codex reasons, then one result chunk ending in `data: [DONE]`. |
 | `/v1/models` | GET | Advertised model ids — what llmsrv's `/mnt/llm/models` and the Settings picker show. Set with `CODEX_GATE_MODELS`; whatever a request names is passed straight to `codex -m`, so the list is a convenience, not a whitelist. |
 | `/health` | GET | Liveness + gauges. |
 
@@ -137,6 +137,7 @@ Config (env, read at start):
 | `CODEX_GATE_MODEL` | *(empty)* | model when the request names none; empty = let the CLI use its own configured default (no `-m` passed) |
 | `CODEX_GATE_MODELS` | `default` | advertised on `/v1/models`; `default` omits `codex -m` so the CLI chooses its configured current model |
 | `CODEX_GATE_TIMEOUT` | `900` | seconds one `codex exec` may run |
+| `CODEX_GATE_HEARTBEAT` | `30` | seconds between protocol-valid SSE comments while `codex exec` is still running; keep below the caller's no-progress timeout |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
 | `CODEX_GATE_WORKDIR` | `~/.cache/codex-gate/workdir` | `--cd` value |

@@ -59,16 +59,29 @@ scenarios:
       https://github.com/infernode-os/infernode, but stay offline and use this
       pinned local snapshot.
 
-      Delegate one task with agenttype=redteam and tools=read,list,find,grep,write,exec,limbo,plan,todo.
-      Grant it paths=/appl,/module,/emu,/libinterp,/libsec,/tests,/docs,/formal-verification,/tools,/tmp/veltro/probe-sdk.
+      Delegate one task with label=InferNodeRedteamGate, agenttype=redteam, and
+      tools=read,list,find,grep,write,exec,limbo,plan,todo. Grant it exactly
+      paths=/appl,/module,/emu,/libinterp,/libsec,/tests,/docs,/formal-verification,/tools,/tmp/veltro/probe-sdk.
       Have it inspect appl/cmd/nsaudit.b, appl/veltro/nsconstruct.b,
       appl/veltro/tools9p.b, the nsaudit authority manifests and rules under
       /lib/veltro/nsaudit, and every fixture under /tests/nsaudit-fixtures and
       /tests/nsaudit-rules.
 
+      Before the analysis, use the limbo tool to author a bounded command that
+      prints exactly INFR434_PROBE_OK and exits. Write only that returned source
+      to /tmp/veltro/probe-sdk/qualification-probe.b. Compile it with the staged
+      /tmp/veltro/probe-sdk/dis/limbo.dis and module tree, using an explicit
+      -o /tmp/veltro/probe-sdk/qualification-probe.dis output path. Then execute
+      that Dis module and preserve its INFR434_PROBE_OK output. These must be
+      separate exec calls.
+
       For every nsaudit rule, construct or verify a vulnerable fixture and a
-      minimally changed safe counterpart in private scratch. Run nsaudit -m on
-      both. Identify false negatives, false positives, missing authority axes,
+      minimally changed safe counterpart in private scratch. Use
+      /tmp/veltro/probe-sdk/dis/nsaudit.dis -m to audit at least one safe profile
+      under /tmp/veltro/probe-sdk/tests/nsaudit-fixtures and at least one
+      vulnerable profile under /tmp/veltro/probe-sdk/tests/nsaudit-rules;
+      preserve both full results. Identify false negatives, false positives,
+      missing authority axes,
       untruthful manifests, and compositions whose safety depends on runtime
       behavior nsaudit cannot see. Read the implementation behind each serious
       hypothesis. Produce a compact matrix of safe and vulnerable namespace
@@ -76,7 +89,50 @@ scenarios:
       modify the read-only source and do not use the Internet.
     expects:
       trajectory_tool: task
-      activity_spawned: nsaudit
+      activities_min: 1
+      activities_max: 1
+      child_agenttype: redteam
+      child_count_exact: 1
+      child_paths_exact:
+        - "/appl ro"
+        - "/module ro"
+        - "/emu ro"
+        - "/libinterp ro"
+        - "/libsec ro"
+        - "/tests ro"
+        - "/docs ro"
+        - "/formal-verification ro"
+        - "/tools ro"
+        - "/tmp/veltro/probe-sdk rw"
+      successful_tools:
+        limbo: 1
+        write: 1
+        exec: 2
+      successful_tool_results:
+        - tool: write
+          contains: /tmp/veltro/probe-sdk/qualification-probe.b
+        - tool: exec
+          call_contains:
+            - /tmp/veltro/probe-sdk/dis/limbo.dis
+            - /tmp/veltro/probe-sdk/qualification-probe.b
+            - -o
+            - /tmp/veltro/probe-sdk/qualification-probe.dis
+        - tool: exec
+          call_contains: /tmp/veltro/probe-sdk/qualification-probe.dis
+          contains: INFR434_PROBE_OK
+      signed_tool_results:
+        - tool: exec
+          status: success
+          call_contains:
+            - /tmp/veltro/probe-sdk/dis/nsaudit.dis
+            - /tmp/veltro/probe-sdk/tests/nsaudit-fixtures
+          contains: "nsaudit=caps"
+        - tool: exec
+          status: error
+          call_contains:
+            - /tmp/veltro/probe-sdk/dis/nsaudit.dis
+            - /tmp/veltro/probe-sdk/tests/nsaudit-rules
+          contains: "nsaudit=caps"
       nsaudit_contains: "nsaudit=caps"
       reply_regex: "(?is)(safe).*(vulnerable|unsafe)|(vulnerable|unsafe).*(safe)"
 

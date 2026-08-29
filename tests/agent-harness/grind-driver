@@ -71,6 +71,33 @@ if {~ $#nsauditwant 0} { nsauditwant=no }
 
 echo '@@GRIND begin url='^$grind_url^' model='^$grind_model^' msg='^$msgmode
 
+if {~ $sourcewant yes} {
+	sourcemissing=()
+	for (p in /appl /module /emu /libinterp /libsec /tests /docs /formal-verification /tools) {
+		if {! ftest -d $p} { sourcemissing=($sourcemissing $p) }
+	}
+	rm -r /tmp/veltro/probe-sdk >[2] /dev/null
+	mkdir -p /tmp/veltro/probe-sdk/dis /tmp/veltro/probe-sdk/tests
+	cp /dis/nsaudit.dis /tmp/veltro/probe-sdk/dis/nsaudit.dis
+	cp /dis/limbo.dis /tmp/veltro/probe-sdk/dis/limbo.dis
+	cp -r /module /tmp/veltro/probe-sdk/module
+	cp -r /tests/nsaudit-fixtures /tmp/veltro/probe-sdk/tests/nsaudit-fixtures
+	cp -r /tests/nsaudit-rules /tmp/veltro/probe-sdk/tests/nsaudit-rules
+	for (p in /tmp/veltro/probe-sdk/dis/nsaudit.dis /tmp/veltro/probe-sdk/dis/limbo.dis /tmp/veltro/probe-sdk/module/sys.m) {
+		if {! ftest -f $p} { sourcemissing=($sourcemissing $p) }
+	}
+	for (p in /tmp/veltro/probe-sdk/tests/nsaudit-fixtures /tmp/veltro/probe-sdk/tests/nsaudit-rules) {
+		if {! ftest -d $p} { sourcemissing=($sourcemissing $p) }
+	}
+	if {~ $#sourcemissing 0} {
+		echo '@@GRIND source-stage ready'
+	}{
+		echo '@@GRIND source failed missing' $sourcemissing
+		echo '@@GRIND done'
+		exit
+	}
+}
+
 # Optional sealed provenance capture. The required marker is created only
 # after auditfs, its factotum-held signing key, and the Venti payload store are
 # all live. From that point lucibridge and Veltro fail closed on capture loss.
@@ -182,19 +209,40 @@ sourcep=()
 if {~ $sourcewant yes} {
 	# Explicit source roots only. Binding / would alias the dynamic canaries and
 	# evidence directories into the agent namespace and invalidate the trial.
-	rm -r /tmp/veltro/probe-sdk >[2] /dev/null
-	mkdir -p /tmp/veltro/probe-sdk/dis /tmp/veltro/probe-sdk/tests
-	cp /dis/nsaudit.dis /tmp/veltro/probe-sdk/dis/nsaudit.dis
-	cp /dis/limbo.dis /tmp/veltro/probe-sdk/dis/limbo.dis
-	cp -r /module /tmp/veltro/probe-sdk/module
-	cp -r /tests/nsaudit-fixtures /tmp/veltro/probe-sdk/tests/nsaudit-fixtures
-	cp -r /tests/nsaudit-rules /tmp/veltro/probe-sdk/tests/nsaudit-rules
+	rm -f /tmp/veltro/.ns/manifest >[2] /dev/null
 	sourcep=(-p /appl:ro -p /module:ro -p /emu:ro -p /libinterp:ro
 		-p /libsec:ro -p /tests:ro -p /docs:ro
 		-p /formal-verification:ro -p /tools:ro
 		-p /tmp/veltro/probe-sdk:rw)
 }
 /dis/veltro/tools9p -N -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,keyring,present,gap,limbo,matrix -p /dis/wm $msgp $sourcep read list find present say hear task memory gap keyring editor shell limbo >[2] /dev/null
+
+if {~ $sourcewant yes} {
+	sourcemissing=()
+	for (p in /appl /module /emu /libinterp /libsec /tests /docs /formal-verification /tools) {
+		if {! grep -s $p^' ro' /tool/paths} { sourcemissing=($sourcemissing $p^:ro) }
+	}
+	if {! grep -s '^/tmp/veltro/probe-sdk rw$' /tool/paths} {
+		sourcemissing=($sourcemissing /tmp/veltro/probe-sdk:rw)
+	}
+	for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
+		if {! ftest -f /tmp/veltro/.ns/manifest} { sleep 1 }
+	}
+	for (p in /appl /module /emu /libinterp /libsec /tests /docs /formal-verification /tools) {
+		if {! grep -s 'path='^$p^' .*perm=ro' /tmp/veltro/.ns/manifest} {
+			sourcemissing=($sourcemissing $p^:effective-ro)
+		}
+	}
+	if {! grep -s 'path=/tmp/veltro/probe-sdk .*perm=cow' /tmp/veltro/.ns/manifest} {
+		sourcemissing=($sourcemissing /tmp/veltro/probe-sdk:effective-cow)
+	}
+	if {! ~ $#sourcemissing 0} {
+		echo '@@GRIND source failed unregistered' $sourcemissing
+		echo '@@GRIND done'
+		exit
+	}
+	echo '@@GRIND source ready'
+}
 
 if {~ $nsauditwant yes} {
 	sleep 2

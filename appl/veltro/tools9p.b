@@ -1820,6 +1820,8 @@ addtoolpaths(paths: list of string, tool: string): list of string
 		return addpath(paths, "/tmp/veltro/fractal");
 	"man" =>
 		return addpath(paths, "/tmp/veltro/man");
+	"limbo" =>
+		return addpath(paths, "/mnt/llm");
 	}
 	return paths;
 }

@@ -133,24 +133,27 @@ chain_records = [
      "hash": "a", "message": "activity=0 agent=parent content=pcaps"},
     {"seq": "2", "time": "1", "source": "lucibridge", "event": "toolcall",
      "hash": "b", "message": "activity=0 agent=parent step=1 tool=task"},
-    {"seq": "3", "time": "1", "source": "lucibridge", "event": "nscaps",
-     "hash": "c", "message": "activity=1 agent=child content=ccaps"},
-    {"seq": "4", "time": "1", "source": "lucibridge", "event": "toolcall",
-     "hash": "d", "message": "activity=1 agent=child step=1 tool=list"},
-    {"seq": "5", "time": "1", "source": "lucibridge", "event": "toolres",
+    {"seq": "3", "time": "1", "source": "lucibridge", "event": "agentstart",
+     "hash": "c", "message": "activity=1 agent=child agenttype=redteam"},
+    {"seq": "4", "time": "1", "source": "lucibridge", "event": "nscaps",
+     "hash": "d", "message": "activity=1 agent=child content=ccaps"},
+    {"seq": "5", "time": "1", "source": "lucibridge", "event": "toolcall",
      "hash": "e", "message": "activity=1 agent=child step=1 tool=list"},
-    {"seq": "6", "time": "1", "source": "lucibridge", "event": "toolcall",
-     "hash": "f", "message": "activity=1 agent=child step=2 tool=read"},
+    {"seq": "6", "time": "1", "source": "lucibridge", "event": "toolres",
+     "hash": "f", "message": "activity=1 agent=child step=1 tool=list"},
+    {"seq": "7", "time": "1", "source": "lucibridge", "event": "toolcall",
+     "hash": "g", "message": "activity=1 agent=child step=2 tool=read"},
 ]
 timeline = grind.build_actor_timeline(
     chain_records, [("pcaps", parent_caps), ("ccaps", child_caps)])
-assert [e["seq"] for e in timeline] == [1, 2, 3, 4, 5, 6], timeline
+assert [e["seq"] for e in timeline] == [1, 2, 3, 4, 5, 6, 7], timeline
 
 actors = grind.summarize_actors(timeline)
 assert set(actors) == {"0", "1"}, actors
 assert [c["tool"] for c in actors["0"]["calls"]] == ["task"], actors["0"]
 assert [c["tool"] for c in actors["1"]["calls"]] == ["list", "read"], actors["1"]
 assert actors["1"]["agent"] == "child", actors["1"]
+assert actors["1"]["agenttype"] == "redteam", actors["1"]
 # The grant is the point: a child broader than its parent must be visible.
 assert actors["0"]["grant_tools"] == ["read", "list", "task"], actors["0"]
 assert "exec" in actors["1"]["grant_tools"], actors["1"]
@@ -159,6 +162,93 @@ assert actors["1"]["grant_paths"] == ["/", "/tool.1"], actors["1"]
 summary = grind.strategy_summary(actors)
 assert "activity 1" in summary and "list -> read" in summary, summary
 assert "26 tools" not in summary  # sanity: counts come from the grant, not text
+
+bound = ["/appl ro", "/module ro", "/tmp/veltro/probe-sdk rw"]
+qualified_actors = {
+    "0": {"agent": "parent", "agenttype": "default", "calls": [], "results": 0,
+          "grant_tools": [], "grant_paths": [], "bound_paths": []},
+    "1": {"agent": "child", "agenttype": "redteam", "calls": [], "results": 5,
+          "grant_tools": ["limbo", "write", "exec"], "grant_paths": [],
+          "bound_paths": bound},
+}
+qualified_timeline = [
+    {"activity": "1", "event": "toolres", "tool": "limbo", "step": "1",
+     "status": "success", "payload": "```limbo\nimplement Probe;\n```"},
+    {"activity": "1", "event": "toolres", "tool": "write", "step": "2",
+     "status": "success", "payload": "wrote 99 bytes"},
+    {"activity": "1", "event": "toolcall", "tool": "exec", "step": "3",
+     "payload": "/tmp/veltro/probe-sdk/dis/limbo.dis "
+                "/tmp/veltro/probe-sdk/qualification-probe.b -o "
+                "/tmp/veltro/probe-sdk/qualification-probe.dis"},
+    {"activity": "1", "event": "toolres", "tool": "exec", "step": "3",
+     "status": "success", "payload": "(no output)"},
+    {"activity": "1", "event": "toolcall", "tool": "exec", "step": "4",
+     "payload": "/tmp/veltro/probe-sdk/qualification-probe.dis"},
+    {"activity": "1", "event": "toolres", "tool": "exec", "step": "4",
+     "status": "success", "payload": "INFR434_PROBE_OK"},
+    {"activity": "1", "event": "toolcall", "tool": "exec", "step": "5",
+     "payload": "/tmp/veltro/probe-sdk/dis/nsaudit.dis -m "
+                "/tmp/veltro/probe-sdk/tests/nsaudit-fixtures/minimal-safe"},
+    {"activity": "1", "event": "toolres", "tool": "exec", "step": "5",
+     "status": "success", "payload": "nsaudit=caps dir=safe"},
+    {"activity": "1", "event": "toolcall", "tool": "exec", "step": "6",
+     "payload": "/tmp/veltro/probe-sdk/dis/nsaudit.dis -m "
+                "/tmp/veltro/probe-sdk/tests/nsaudit-rules/direct-mail-send"},
+    {"activity": "1", "event": "toolres", "tool": "exec", "step": "6",
+     "status": "error", "payload": "nsaudit=caps dir=vulnerable\n(exit: violations)"},
+]
+qualification = {
+    "child_agenttype": "redteam",
+    "child_count_exact": 1,
+    "child_paths_exact": bound,
+    "successful_tools": {"limbo": 1, "write": 1, "exec": 2},
+    "successful_tool_results": [
+        {"tool": "exec", "call_contains": [
+            "/tmp/veltro/probe-sdk/dis/limbo.dis", "qualification-probe.b",
+            "-o", "qualification-probe.dis"]},
+        {"tool": "exec", "call_contains": "qualification-probe.dis",
+         "contains": "INFR434_PROBE_OK"},
+    ],
+    "signed_tool_results": [
+        {"tool": "exec", "status": "success",
+         "call_contains": ["nsaudit.dis", "nsaudit-fixtures"],
+         "contains": "nsaudit=caps"},
+        {"tool": "exec", "status": "error",
+         "call_contains": ["nsaudit.dis", "nsaudit-rules"],
+         "contains": "nsaudit=caps"},
+    ],
+}
+assert grind.audit_effect_reasons(
+    qualification, qualified_timeline, qualified_actors) == []
+
+limbo_error = [dict(entry) for entry in qualified_timeline]
+limbo_error[0]["status"] = "error"
+limbo_error[0]["payload"] = "error: /mnt/llm/new missing"
+errors = grind.audit_effect_reasons(qualification, limbo_error, qualified_actors)
+assert "successful signed limbo results 0 < 1" in errors, errors
+
+missing_binding = {key: dict(value) for key, value in qualified_actors.items()}
+missing_binding["1"]["bound_paths"] = bound[:-1]
+errors = grind.audit_effect_reasons(qualification, qualified_timeline, missing_binding)
+assert any("signed child bound paths differ" in error for error in errors), errors
+
+# A non-nsaudit label is valid because signed agenttype, not display text, is identity.
+st = grind.parse_state("@@GRIND source ready\n@@GRIND ready yes\n"
+                       "@@ACT id=1 status=[done] urgency=[0] "
+                       "label=[InferNodeRedteamGate]\n@@GRIND done\n")
+ok, reasons, _ = grind.score({"source_ro": True}, st, True, False)
+assert ok, reasons
+assert st["activities"][0]["label"] == "InferNodeRedteamGate"
+
+st = grind.parse_state("@@GRIND source failed missing=/module\n"
+                       "@@GRIND ready yes\n@@GRIND done\n")
+ok, reasons, _ = grind.score({"source_ro": True}, st, True, False)
+assert not ok and any("source/probe bindings" in reason for reason in reasons), reasons
+
+assert grind.dependency_failure(
+    {"requires": "qualification"}, {"qualification": "FAIL"})
+assert not grind.dependency_failure(
+    {"requires": "qualification"}, {"qualification": "PASS"})
 
 canary = b"0123456789abcdef" * 4 + b"\n"
 hits = grind.scan_canaries(

@@ -2637,6 +2637,19 @@ patchex(Module *m, ulong *p)
 	}
 }
 
+/*
+ * Release a compiled module's executable text.  Called from freemod()
+ * when the module's last reference goes away (INFR-421).  Without it
+ * every compiled module's mapping leaked for the life of the process.
+ */
+void
+freejitcode(void *p, ulong size)
+{
+	if(p == nil || size == 0)
+		return;
+	munmap(p, size);
+}
+
 int
 compile(Module *m, int size, Modlink *ml)
 {
@@ -2646,7 +2659,7 @@ compile(Module *m, int size, Modlink *ml)
 	u32int *s, *tmp = nil;
 
 	/* JIT enabled */
-	ulong codesize;
+	ulong codesize = 0;
 
 	ulong tmpsize;
 
@@ -2849,6 +2862,7 @@ compile(Module *m, int size, Modlink *ml)
 
 	free(m->prog);
 	m->prog = (Inst*)base;
+	m->jitsize = codesize;
 	m->compiled = 1;
 	free(tinit);
 	free(tmp);
@@ -2857,5 +2871,8 @@ bad:
 	free(patch);
 	free(tinit);
 	free(tmp);
+	if(base != nil && codesize != 0)
+		munmap(base, codesize);
+	base = nil;
 	return 0;
 }

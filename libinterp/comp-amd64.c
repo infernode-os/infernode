@@ -2712,6 +2712,24 @@ patchex(Module *m, uvlong *p)
 }
 
 /*
+ * Release a compiled module's executable text.  Called from freemod()
+ * when the module's last reference goes away (INFR-421).
+ */
+void
+freejitcode(void *p, ulong size)
+{
+	if(p == nil || size == 0)
+		return;
+#ifdef _WIN32
+	/* jitmalloc() hands back a pointer past an unwind header, and the
+	 * registration has to be undone before the memory is released. */
+	jitfree(p, size);
+#else
+	munmap(p, size);
+#endif
+}
+
+/*
  * Main compilation entry point
  */
 static uchar *compile_tmp = nil;
@@ -2876,6 +2894,7 @@ compile(Module *m, int size, Modlink *ml)
 	free(tinit);
 	free(m->prog);
 	m->prog = (Inst*)base;
+	m->jitsize = n + nlit;
 	m->compiled = 1;
 
 #ifndef __APPLE__

@@ -2572,6 +2572,37 @@ comi(Type *t)
 }
 
 static uchar *typecom_tmp = nil;
+static ulong typecom_tmp_size = 0;
+
+/*
+ * Upper bound on the code comi() + comd() emit for t.
+ *
+ * Both walk t->map, which holds t->np bytes of pointer bitmap, so at most
+ * t->np*8 pointer slots.  Per slot comi() emits one modrm (8 bytes worst
+ * case: REX, opcode, modrm, SIB, disp32) and comd() emits one modrm plus
+ * one rbra (5 bytes), so 21 bytes across the two; 24 leaves headroom.  The
+ * fixed part is a con64 (11) and two RETs.
+ *
+ * This bound is the only thing standing between a pointer-rich type and a
+ * wild write off the end of the measurement buffer, so it is deliberately
+ * generous and is checked after the fact below (INFR-421).
+ */
+#define TYPECOM_FIXED	64
+#define TYPECOM_PERPTR	24
+#define TYPECOM_SLACK	4096	/* absorbs an under-estimate so the check can fire */
+
+static ulong
+typecom_bound(Type *t)
+{
+	uvlong n;
+
+	if(t->np < 0)
+		return 0;
+	n = (uvlong)TYPECOM_FIXED + (uvlong)t->np * 8 * TYPECOM_PERPTR;
+	if(n > 64*1024*1024)		/* refuse absurd type maps rather than try */
+		return 0;
+	return (ulong)n;
+}
 
 /*
  * Slab allocator for typecom init/destroy code blocks.
@@ -2631,23 +2662,41 @@ typecom(Type *t)
 {
 	int n;
 	uchar *tmp;
+	ulong need;
 
 	if(t == nil || t->initialize != 0)
 		return;
 
+	/*
+	 * The scratch buffer must hold everything comi() and comd() can emit
+	 * for this type.  It used to be a fixed 8KB, which a type with a large
+	 * pointer map overruns: /dis/limbo.dis carries one with np=542, needing
+	 * ~100KB, and the overrun wrote past the end of the mapping (INFR-421).
+	 */
+	need = typecom_bound(t);
+	if(need == 0)
+		error(exNomem);
+	if(need > typecom_tmp_size) {
+		if(typecom_tmp != nil) {
 #ifdef __APPLE__
-	if(typecom_tmp == nil) {
-		typecom_tmp = mallocz(8192*sizeof(uchar), 0);
+			free(typecom_tmp);
+#else
+			jitfree(typecom_tmp, typecom_tmp_size);
+#endif
+			typecom_tmp = nil;
+			typecom_tmp_size = 0;
+		}
+#ifdef __APPLE__
+		typecom_tmp = mallocz(need + TYPECOM_SLACK, 0);
 		if(typecom_tmp == nil)
 			error(exNomem);
-	}
 #else
-	if(typecom_tmp == nil) {
-		typecom_tmp = jitmalloc(8192*sizeof(uchar));
+		typecom_tmp = jitmalloc(need + TYPECOM_SLACK);
 		if(typecom_tmp == NULL)
 			error(exNomem);
-	}
 #endif
+		typecom_tmp_size = need + TYPECOM_SLACK;
+	}
 	tmp = typecom_tmp;
 
 	code = tmp;
@@ -2656,6 +2705,16 @@ typecom(Type *t)
 	code = tmp;
 	comd(t);
 	n += code - tmp;
+
+	/*
+	 * If this ever trips the bound above is wrong for the current
+	 * generators.  The slack means we are still inside the buffer, so fail
+	 * loudly here rather than corrupt whatever follows it.
+	 */
+	if((ulong)n > need) {
+		print("typecom: emitted %d > bound %lud for np=%d\n", n, need, t->np);
+		urk();
+	}
 
 	code = typecom_alloc(n);
 	if(code == nil)
@@ -2709,6 +2768,24 @@ patchex(Module *m, uvlong *p)
 		if(e->pc != -1)
 			e->pc = p[e->pc];
 	}
+}
+
+/*
+ * Release a compiled module's executable text.  Called from freemod()
+ * when the module's last reference goes away (INFR-421).
+ */
+void
+freejitcode(void *p, ulong size)
+{
+	if(p == nil || size == 0)
+		return;
+#ifdef _WIN32
+	/* jitmalloc() hands back a pointer past an unwind header, and the
+	 * registration has to be undone before the memory is released. */
+	jitfree(p, size);
+#else
+	munmap(p, size);
+#endif
 }
 
 /*
@@ -2876,6 +2953,7 @@ compile(Module *m, int size, Modlink *ml)
 	free(tinit);
 	free(m->prog);
 	m->prog = (Inst*)base;
+	m->jitsize = n + nlit;
 	m->compiled = 1;
 
 #ifndef __APPLE__

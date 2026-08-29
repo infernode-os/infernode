@@ -136,11 +136,18 @@ trapBUS(int signo, siginfo_t *info, void *context)
                 Dl_info di;
                 void *pc = (void*)uc->uc_mcontext->__ss.__pc;
                 void *lr = (void*)uc->uc_mcontext->__ss.__lr;
-                if(dladdr(pc, &di) && di.dli_sname != nil)
+                /* dladdr() sees only exported symbols: a static function
+                 * resolves the image but not a name, which must not be
+                 * reported as "not in any image" (INFR-421). */
+                if(dladdr(pc, &di) == 0)
+                    fprint(2, "  PC not in any loaded image (JIT-generated code?)\n");
+                else if(di.dli_sname != nil)
                     fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
                         (ulong)((uintptr)pc - (uintptr)di.dli_saddr));
                 else
-                    fprint(2, "  PC not in any image (JIT-generated code?)\n");
+                    fprint(2, "  PC in %s+%#lx (no exported symbol; static function)\n",
+                        di.dli_fname != nil ? di.dli_fname : "?",
+                        (ulong)((uintptr)pc - (uintptr)di.dli_fbase));
                 if(dladdr(lr, &di) && di.dli_sname != nil)
                     fprint(2, "  LR in %s+%#lx\n", di.dli_sname,
                         (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
@@ -210,11 +217,18 @@ trapSEGV(int signo, siginfo_t *info, void *context)
                 Dl_info di;
                 void *pc = (void*)uc->uc_mcontext->__ss.__pc;
                 void *lr = (void*)uc->uc_mcontext->__ss.__lr;
-                if(dladdr(pc, &di) && di.dli_sname != nil)
+                /* dladdr() sees only exported symbols: a static function
+                 * resolves the image but not a name, which must not be
+                 * reported as "not in any image" (INFR-421). */
+                if(dladdr(pc, &di) == 0)
+                    fprint(2, "  PC not in any loaded image (JIT-generated code?)\n");
+                else if(di.dli_sname != nil)
                     fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
                         (ulong)((uintptr)pc - (uintptr)di.dli_saddr));
                 else
-                    fprint(2, "  PC not in any image (JIT-generated code?)\n");
+                    fprint(2, "  PC in %s+%#lx (no exported symbol; static function)\n",
+                        di.dli_fname != nil ? di.dli_fname : "?",
+                        (ulong)((uintptr)pc - (uintptr)di.dli_fbase));
                 if(dladdr(lr, &di) && di.dli_sname != nil)
                     fprint(2, "  LR in %s+%#lx\n", di.dli_sname,
                         (ulong)((uintptr)lr - (uintptr)di.dli_saddr));

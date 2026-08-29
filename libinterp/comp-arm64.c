@@ -2563,17 +2563,39 @@ comd(Type *t)
 	RET_X30();
 }
 
+/*
+ * Worst-case instructions comi() + comd() emit per pointer slot: a mem()
+ * that may need its offset materialised, a con() of a 64-bit address, and
+ * a BLR.  24 leaves headroom over the ~16 they actually take.
+ */
+#define TYPECOM_FIXED	64
+#define TYPECOM_PERPTR	24
+#define TYPECOM_SLACK	1024
+
 void
 typecom(Type *t)
 {
 	int n;
 	u32int *tmp, *start;
-	ulong sz;
+	ulong sz, need;
 
 	if(t == nil || t->initialize != 0)
 		return;
 
-	tmp = mallocz(4096 * sizeof(u32int), 0);
+	/*
+	 * The scratch buffer must hold every instruction comi() and comd() can
+	 * emit for this type.  It used to be a fixed 4096 words, which a type
+	 * with a large pointer map overruns: both walk t->map's t->np bytes, so
+	 * up to t->np*8 pointer slots, and comd() alone emits a mem(), a con()
+	 * of the MacFRP address and a BLR per slot.  /dis/limbo.dis carries a
+	 * type with np=542.  The overrun scribbled past a heap buffer
+	 * (INFR-421; the amd64 side of the same defect faulted outright).
+	 */
+	if(t->np < 0 || (uvlong)t->np * 8 * TYPECOM_PERPTR > 16*1024*1024)
+		error(exNomem);
+	need = TYPECOM_FIXED + (ulong)t->np * 8 * TYPECOM_PERPTR;
+
+	tmp = mallocz((need + TYPECOM_SLACK) * sizeof(u32int), 0);
 	if(tmp == nil)
 		error(exNomem);
 
@@ -2583,6 +2605,17 @@ typecom(Type *t)
 	code = tmp;
 	comd(t);
 	n += code - tmp;
+
+	/*
+	 * If this trips, the bound is wrong for the current generators.  The
+	 * slack keeps us inside the buffer, so fail loudly rather than corrupt
+	 * whatever follows it.
+	 */
+	if((ulong)n > need) {
+		free(tmp);
+		print("typecom: emitted %d > bound %lud for np=%d\n", n, need, t->np);
+		error(exCompile);
+	}
 	free(tmp);
 
 	sz = n * sizeof(u32int);
@@ -2637,6 +2670,19 @@ patchex(Module *m, ulong *p)
 	}
 }
 
+/*
+ * Release a compiled module's executable text.  Called from freemod()
+ * when the module's last reference goes away (INFR-421).  Without it
+ * every compiled module's mapping leaked for the life of the process.
+ */
+void
+freejitcode(void *p, ulong size)
+{
+	if(p == nil || size == 0)
+		return;
+	munmap(p, size);
+}
+
 int
 compile(Module *m, int size, Modlink *ml)
 {
@@ -2646,7 +2692,7 @@ compile(Module *m, int size, Modlink *ml)
 	u32int *s, *tmp = nil;
 
 	/* JIT enabled */
-	ulong codesize;
+	ulong codesize = 0;
 
 	ulong tmpsize;
 
@@ -2849,6 +2895,7 @@ compile(Module *m, int size, Modlink *ml)
 
 	free(m->prog);
 	m->prog = (Inst*)base;
+	m->jitsize = codesize;
 	m->compiled = 1;
 	free(tinit);
 	free(tmp);
@@ -2857,5 +2904,8 @@ bad:
 	free(patch);
 	free(tinit);
 	free(tmp);
+	if(base != nil && codesize != 0)
+		munmap(base, codesize);
+	base = nil;
 	return 0;
 }

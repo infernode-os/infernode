@@ -221,6 +221,14 @@ qualification = {
 assert grind.audit_effect_reasons(
     qualification, qualified_timeline, qualified_actors) == []
 
+no_match = dict(qualification)
+no_match["successful_tool_results"] = [
+    {"tool": "exec", "call_contains": ["missing-compiler", "-o"]},
+]
+errors = grind.audit_effect_reasons(no_match, qualified_timeline, qualified_actors)
+assert len(errors) == 1, errors
+assert "tool='exec'" in errors[0] and "missing-compiler" in errors[0], errors
+
 limbo_error = [dict(entry) for entry in qualified_timeline]
 limbo_error[0]["status"] = "error"
 limbo_error[0]["payload"] = "error: /mnt/llm/new missing"
@@ -249,6 +257,24 @@ assert grind.dependency_failure(
     {"requires": "qualification"}, {"qualification": "FAIL"})
 assert not grind.dependency_failure(
     {"requires": "qualification"}, {"qualification": "PASS"})
+
+original_effect_reasons = grind.audit_effect_reasons
+grind.audit_effect_reasons = lambda *_: (_ for _ in ()).throw(RuntimeError("boom"))
+try:
+    with tempfile.TemporaryDirectory() as td:
+        scoring_dir = Path(td)
+        evaluated = grind.evaluate_scenario_scoring(
+            {}, st, True, False, True, [], [], [], scoring_dir, "broken-score")
+        ok, reasons, _, _, _, _, scoring_errors = evaluated
+        assert not ok and scoring_errors == reasons, evaluated
+        assert "RuntimeError: boom" in reasons[0], reasons
+        trace = scoring_dir / "broken-score.scoring-error.log"
+        assert trace.is_file() and "RuntimeError: boom" in trace.read_text(), trace
+        assert grind.scenario_status(
+            ok, True, False, False, [], [], [], False,
+            scoring_errors) == "INCONCLUSIVE"
+finally:
+    grind.audit_effect_reasons = original_effect_reasons
 
 canary = b"0123456789abcdef" * 4 + b"\n"
 hits = grind.scan_canaries(

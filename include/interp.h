@@ -294,6 +294,7 @@ struct Module
 	Import**	ldt;	/* Internal linkage descriptor tables */
 	Handler*	htab;	/* Exception handler table */
 	ulong*	pctab;	/* dis pc to code pc when compiled */
+	ulong	jitsize;	/* bytes of executable memory at prog when compiled */
 	void*	dlm;		/* dynamic C module */
 };
 
@@ -401,6 +402,7 @@ extern	void*		checktype(void*, Type*, char*, int);
 extern	void		cmovw(void*, void*);
 extern	Channel*	cnewc(Type*, void (*)(void), int);
 extern	int		compile(Module*, int, Modlink*);
+extern	void		freejitcode(void*, ulong);
 extern	void		cqadd(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);

@@ -735,6 +735,8 @@ assert "if {! ~ $cs complete completed done idle failed error timeout closed hid
 assert "if {~ $cdone yes}" in driver
 assert "@@GRIND followthrough children-timeout" in driver
 assert "@@GRIND children terminal=" in driver
+assert "cat $stage/quota-events > /mnt/audit/log" in driver
+assert "@@QUOTA begin" in driver and "@@QUOTA end" in driver
 assert "ls /mnt/ui/activity" in driver
 assert "for (a in 1 2 3 4 5 6 7 8 9)" not in driver
 
@@ -745,6 +747,39 @@ assert "for (a in 1 2 3 4 5 6 7 8 9)" not in driver
 # the campaign instead of letting the next one run over an unexplained crash.
 import contextlib
 import io
+
+# A trusted gateway pause freezes active time and produces evidence at both
+# boundaries. Unreachable/ordinary health never grants extra time.
+quota_lines = []
+grind.append_quota_event = quota_lines.append
+clock = grind.ActiveClock(100.0)
+with contextlib.redirect_stdout(io.StringIO()):
+    clock.observe({"state": "paused_quota", "quota": {
+        "paused_turns": 2, "retry_at": "2026-08-30T17:06:00+07:00"}}, 110.0)
+    assert clock.active_elapsed(130.0) == 10.0
+    clock.observe({"state": "ready", "quota": {}}, 140.0)
+assert clock.active_elapsed(145.0) == 15.0
+assert [event["event"] for event in clock.events] == ["pause", "resume"]
+assert clock.events[1]["paused_seconds"] == 30.0
+assert quota_lines[0].startswith("quota pause reason=usage_limit")
+assert quota_lines[1].startswith("quota resume reason=usage_limit")
+
+plain = grind.ActiveClock(100.0)
+plain.observe({}, 120.0)
+assert plain.active_elapsed(120.0) == 20.0
+
+exhausted_lines = []
+grind.append_quota_event = exhausted_lines.append
+exhausted = grind.ActiveClock(100.0)
+with contextlib.redirect_stdout(io.StringIO()):
+    exhausted.observe({"state": "paused_quota", "quota": {
+        "paused_turns": 1, "retry_at": None}}, 105.0)
+    exhausted.observe({"state": "ready", "quota": {"last_pause": {
+        "state": "exhausted", "paused_at": "start", "ended_at": "end",
+        "duration_seconds": 10.0}}}, 115.0)
+assert [event["event"] for event in exhausted.events] == \
+    ["pause", "resume", "exhausted"]
+assert exhausted_lines[-1].startswith("quota exhausted reason=usage_limit")
 
 with tempfile.TemporaryDirectory() as td:
     base = Path(td)
@@ -766,17 +801,17 @@ with tempfile.TemporaryDirectory() as td:
         "  - name: after_the_stop\n"
         "    category: adversarial-containment\n")
 
-    # (out, rc, completed, killed, duration)
+    # (out, rc, completed, killed, active duration, wall duration, quota events)
     runs = iter([
-        (bare, -1, False, False, 3.0),        # flaky_boot: pre-readiness crash
-        (FINISHED, 0, True, False, 30.0),     # flaky_boot: clean second attempt
-        (PROMPTED, -1, False, False, 412.0),  # sealed_trial: crash while live
+        (bare, -1, False, False, 3.0, 3.0, []),
+        (FINISHED, 0, True, False, 30.0, 30.0, []),
+        (PROMPTED, -1, False, False, 412.0, 412.0, []),
     ])
     started = []
 
-    def fake_run_emu(emu, timeout):
+    def fake_run_emu(emu, timeout, gateway_url):
         result = next(runs)
-        started.append(timeout)
+        started.append((timeout, gateway_url))
         return result
 
     grind.run_emu = fake_run_emu
@@ -793,6 +828,7 @@ with tempfile.TemporaryDirectory() as td:
         raise AssertionError("grind.main() did not exit")
 
     assert len(started) == 3, started       # after_the_stop never booted
+    assert all(url == grind.DEFAULT_URL for _, url in started), started
     console = printed.getvalue()
     assert "campaign stopped, failing closed" in console, console
 

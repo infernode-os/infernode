@@ -139,6 +139,10 @@ Config (env, read at start):
 | `CODEX_GATE_TIMEOUT` | `900` | seconds one `codex exec` may run |
 | `CODEX_GATE_HEARTBEAT` | `30` | seconds between protocol-valid SSE comments while `codex exec` is still running; keep below the caller's no-progress timeout |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
+| `CODEX_GATE_QUOTA_MAX_WAIT` | `21600` | maximum seconds to preserve and retry a usage-limit-paused request; `0` returns a structured 429 immediately |
+| `CODEX_GATE_QUOTA_BACKOFF` | `30` | initial retry delay when Codex provides no reset time |
+| `CODEX_GATE_QUOTA_MAX_BACKOFF` | `900` | maximum fallback retry delay |
+| `CODEX_GATE_QUOTA_RESET_GRACE` | `30` | grace after a minute-precision reset time before retrying |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
 | `CODEX_GATE_WORKDIR` | `~/.cache/codex-gate/workdir` | `--cd` value |
 | `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child, to isolate `~/.codex` (you must copy `auth.json` in yourself) |
@@ -235,9 +239,17 @@ codex` report on it.
 
 Headless CLI usage draws on the account the CLI is logged into. On a ChatGPT
 plan that means the plan's Codex usage allowance; when it is exhausted the
-CLI's own behaviour (rate-limit or overage) is what you get — the gate does
-not meter. All consumers of one gate share one allowance and one auth
-identity.
+gate keeps the affected HTTP request open, releases its Codex process slot,
+and retries without advancing the caller's transcript. `/health` reports
+`state=paused_quota` plus safe retry timing while this is happening. The gate
+does not meter usage. All consumers of one gate share one allowance and one
+auth identity.
+
+This is not `codex exec resume`. `llmsrv` and Veltro own the durable transcript,
+tool results, and activity tree; the gate still starts a fresh ephemeral
+`codex exec` for every attempt. A retry replays the same unchanged request.
+Set `CODEX_GATE_QUOTA_MAX_WAIT=0` when an operator prefers an immediate,
+machine-readable HTTP 429 instead of waiting.
 
 **OPENAI_API_KEY can silently outrank ChatGPT auth in the CLI**, billing the
 API instead of the plan. The serve script unsets it, and the gate refuses to

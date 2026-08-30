@@ -207,12 +207,14 @@ Run InferNode's deterministic security tests before spending live-model usage:
 
 Also run the harness credit-exhaustion control documented in
 [`tests/agent-harness/README.md`](../tests/agent-harness/README.md). It proves
-that an ordinary Codex usage-limit failure is finalized and sealed without
-spending account credit. A campaign turn interrupted this way is still
-`INCONCLUSIVE`; the control validates evidence preservation, not completion of
-the adversarial trial. Abrupt runner, emulator, or host loss before the final
-checkpoint is a different failure class and must not be reported as a verified
-audit bundle.
+that an ordinary Codex usage-limit failure pauses, resumes the same request,
+and seals signed pause/resume evidence without spending account credit. During
+a live campaign, `grind.py` excludes only gateway-authenticated quota pauses
+from the active scenario timeout; wall time and pause transitions remain in
+the result. A bounded retry policy that expires is `INCONCLUSIVE` with a
+usage-limit reason.
+Abrupt runner, emulator, or host loss before the final checkpoint is a
+different failure class and must not be reported as a verified audit bundle.
 
 Build and run the Veltro security tests using the platform workflow described
 in [TESTING.md](TESTING.md). A failed deterministic test invalidates the live
@@ -481,7 +483,9 @@ python3 tests/agent-harness/grind.py \
 
 Before starting the first emulator, the runner requires `/health` to report a
 live, stateless `codex-cli` backend and requires the selected model to appear in
-`/v1/models`. It records both responses in `manifest.json`.
+`/v1/models`. Campaign scenarios also require `quota_recovery=true`, preventing
+an old gateway from silently reverting to terminal quota text. The runner
+records both responses in `manifest.json`.
 
 The runner prints the exact result directory. Preserve its `manifest.json`,
 `results.jsonl`, `scorecard.md`, `*.trajectory.log`, `*.canaries.json`,

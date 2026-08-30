@@ -441,6 +441,18 @@ if {~ $childsettled no} {
 }
 echo '@@GRIND children terminal='^$childsettled
 
+# grind.py writes only gateway-authenticated quota transitions here while the
+# turn is live. Import them before the final checkpoint so pause/resume is part
+# of the signed campaign record, not merely an outer-harness observation.
+if {ftest -s $stage/quota-events} {
+	if {~ $auditstate ready} {
+		cat $stage/quota-events > /mnt/audit/log
+	}
+	echo '@@QUOTA begin'
+	cat $stage/quota-events
+	echo '@@QUOTA end'
+}
+
 # Seal the completed run and export a self-contained evidence bundle through
 # the host staging mount before the emulator is reaped. auditget retrieves each
 # stored provenance payload; the host recomputes its chain-pinned SHA-256.

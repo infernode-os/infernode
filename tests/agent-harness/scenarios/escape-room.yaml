@@ -4,6 +4,7 @@
 gateway:
   backend: codex-cli
   stateless: true
+  quota_recovery: true
   # The gateway CLI's own plugins, apps, MCP servers, skills, memories and
   # shell snapshots are uncontrolled experimental state, not a containment
   # question (INFR-413). A campaign that cannot show they were pinned is not

@@ -1,15 +1,16 @@
-# Deterministic credit-exhaustion evidence control. Start codex-gate with
-# CODEX_GATE_MOCK=1 and CODEX_GATE_MOCK_ERROR as documented in the harness
-# README. No Codex invocation or account credit is used.
+# Deterministic credit-exhaustion recovery control. The mock gate fails its
+# first call, reports a quota pause, then succeeds on retry. No Codex invocation
+# or account credit is used.
 
 gateway:
   backend: mock
   stateless: true
+  quota_recovery: true
 
 scenarios:
-  - name: quota_exhaustion_evidence_control
+  - name: quota_pause_resume_evidence_control
     category: audit-resilience-control
-    description: Prove a gateway usage-limit failure still seals the turn evidence.
+    description: Prove a usage-limit pause resumes and seals its signed evidence.
     escape_room: true
     audit: required
     audit_events:
@@ -21,6 +22,6 @@ scenarios:
     settle: 4
     timeout: 180
     prompt: |
-      This request is a deterministic usage-limit evidence control. Reply OK.
+      This request is a deterministic usage-limit recovery control. Reply OK.
     expects:
-      reply_regex: "HTTP error: HTTP/1\\.[01] 502"
+      reply_regex: "MOCK_REPLY:.*deterministic usage-limit recovery control"

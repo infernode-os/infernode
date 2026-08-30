@@ -47,12 +47,18 @@
 #   CODEX_GATE_PORT       default 11436
 #   CODEX_GATE_MOCK       "1" = deterministic mock backend (tests; no CLI)
 #   CODEX_GATE_MOCK_ERROR non-empty = fail every mock turn with this message
+#   CODEX_GATE_MOCK_ERROR_COUNT fail this many mock calls (-1 = every call)
 #   CODEX_GATE_BIN        codex binary (default "codex", found on PATH)
 #   CODEX_GATE_MODEL      default model; empty = let the CLI use its own
 #   CODEX_GATE_MODELS     comma-separated list advertised on /v1/models
 #   CODEX_GATE_TIMEOUT    seconds one `codex exec` may run (default 900)
 #   CODEX_GATE_HEARTBEAT  seconds between SSE keepalives (default 30)
 #   CODEX_GATE_CONCURRENCY  max simultaneous codex processes (default 4)
+#   CODEX_GATE_QUOTA_MAX_WAIT max seconds to preserve/retry a quota-paused turn
+#                             (default 21600; 0 = return structured 429)
+#   CODEX_GATE_QUOTA_BACKOFF initial retry delay without reset metadata (30)
+#   CODEX_GATE_QUOTA_MAX_BACKOFF maximum fallback retry delay (900)
+#   CODEX_GATE_QUOTA_RESET_GRACE seconds after a minute-precision reset (30)
 #   CODEX_GATE_SANDBOX    --sandbox value (default read-only)
 #   CODEX_GATE_WORKDIR    --cd value (default ~/.cache/codex-gate/workdir)
 #   CODEX_GATE_CODEX_HOME CODEX_HOME for the child (isolates ~/.codex; you
@@ -72,10 +78,12 @@
 # refuse to start unless CODEX_GATE_ALLOW_API_KEY=1 explicitly overrides.
 
 import asyncio
+import datetime
 import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -91,12 +99,25 @@ HOST = os.environ.get("CODEX_GATE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CODEX_GATE_PORT", "11436"))
 MOCK = os.environ.get("CODEX_GATE_MOCK", "") == "1"
 MOCK_ERROR = os.environ.get("CODEX_GATE_MOCK_ERROR", "")
+MOCK_ERROR_COUNT = int(os.environ.get("CODEX_GATE_MOCK_ERROR_COUNT", "-1"))
 CODEX_BIN = os.environ.get("CODEX_GATE_BIN", "codex")
 DEFAULT_MODEL = os.environ.get("CODEX_GATE_MODEL", "")
 EXEC_TIMEOUT = float(os.environ.get("CODEX_GATE_TIMEOUT", "900"))
 HEARTBEAT = max(0.05, float(os.environ.get("CODEX_GATE_HEARTBEAT", "30")))
 CONCURRENCY = int(os.environ.get("CODEX_GATE_CONCURRENCY", "4"))
 SANDBOX = os.environ.get("CODEX_GATE_SANDBOX", "read-only")
+QUOTA_MAX_WAIT = max(0.0, float(os.environ.get(
+    "CODEX_GATE_QUOTA_MAX_WAIT", "21600")))
+QUOTA_BACKOFF = max(0.05, float(os.environ.get(
+    "CODEX_GATE_QUOTA_BACKOFF", "30")))
+QUOTA_MAX_BACKOFF = max(QUOTA_BACKOFF, float(os.environ.get(
+    "CODEX_GATE_QUOTA_MAX_BACKOFF", "900")))
+QUOTA_RESET_GRACE = max(0.0, float(os.environ.get(
+    "CODEX_GATE_QUOTA_RESET_GRACE", "30")))
+
+_mock_errors_remaining = MOCK_ERROR_COUNT
+_quota_pauses = {}
+_last_quota_pause = None
 
 # Models advertised on /v1/models — what llmsrv's `/mnt/llm/models` and the
 # Settings picker show.  Codex's model lineup moves faster than this file
@@ -609,6 +630,130 @@ class CodexError(Exception):
     pass
 
 
+class UsageLimitError(CodexError):
+    def __init__(self, message, metadata=None):
+        super().__init__(message)
+        self.metadata = metadata or {}
+
+
+def quota_metadata(message, now=None):
+    """Return safe retry metadata for a Codex account limit, or None.
+
+    Codex currently reports account exhaustion as human-readable stderr/event
+    text. Classification happens only at this trusted CLI boundary; callers
+    must not infer quota state by matching assistant output.
+    """
+    lower = message.lower()
+    if not any(token in lower for token in (
+            "usage limit", "usage_limit", "quota exceeded",
+            "insufficient_quota")):
+        return None
+
+    now = now or datetime.datetime.now().astimezone()
+    metadata = {"reason": "usage_limit", "retryable": True}
+    delay = None
+    match = re.search(
+        r"try again in\s+(\d+(?:\.\d+)?)\s*(second|minute|hour)s?", lower)
+    if match:
+        scale = {"second": 1, "minute": 60, "hour": 3600}[match.group(2)]
+        delay = float(match.group(1)) * scale
+    else:
+        match = re.search(r"try again at\s+(\d{1,2}:\d{2}\s*[ap]m)", lower)
+        if match:
+            parsed = datetime.datetime.strptime(
+                re.sub(r"\s+", " ", match.group(1)).upper(), "%I:%M %p")
+            target = now.replace(hour=parsed.hour, minute=parsed.minute,
+                                 second=0, microsecond=0) + \
+                datetime.timedelta(seconds=QUOTA_RESET_GRACE)
+            if target <= now:
+                target += datetime.timedelta(days=1)
+            delay = (target - now).total_seconds()
+    if delay is not None:
+        delay = max(0.0, delay)
+        metadata["retry_after"] = round(delay, 3)
+        metadata["reset_at"] = (now + datetime.timedelta(seconds=delay)).isoformat()
+    return metadata
+
+
+def quota_error_body(error):
+    metadata = dict(getattr(error, "metadata", {}) or {})
+    metadata.setdefault("reason", "usage_limit")
+    metadata.setdefault("retryable", True)
+    return {"error": {
+        "message": "codex-gate: account usage limit reached",
+        "type": "usage_limit",
+        "code": "usage_limit",
+        **metadata,
+    }}
+
+
+async def run_with_quota_recovery(factory):
+    """Retry one stateless turn without advancing the caller transcript."""
+    global _last_quota_pause
+    turn_id = uuid.uuid4().hex
+    started = None
+    started_at = None
+    retries = 0
+    try:
+        while True:
+            try:
+                if turn_id in _quota_pauses:
+                    _quota_pauses[turn_id]["state"] = "resuming"
+                result = await factory()
+                if started is not None:
+                    finished = dict(_quota_pauses.get(turn_id, {}))
+                    finished.update({
+                        "state": "resumed",
+                        "resumed_at": datetime.datetime.now().astimezone().isoformat(),
+                        "duration_seconds": round(time.monotonic() - started, 3),
+                    })
+                    _last_quota_pause = finished
+                return result
+            except CodexError as error:
+                metadata = quota_metadata(str(error))
+                if metadata is None:
+                    raise
+                qerror = UsageLimitError(str(error), metadata)
+                if QUOTA_MAX_WAIT <= 0:
+                    raise qerror
+                now_mono = time.monotonic()
+                if started is None:
+                    started = now_mono
+                    started_at = datetime.datetime.now().astimezone().isoformat()
+                remaining = QUOTA_MAX_WAIT - (now_mono - started)
+                if remaining <= 0:
+                    exhausted = dict(_quota_pauses.get(turn_id, {}))
+                    exhausted.update({
+                        "state": "exhausted",
+                        "ended_at": datetime.datetime.now().astimezone().isoformat(),
+                        "duration_seconds": round(now_mono - started, 3),
+                    })
+                    _last_quota_pause = exhausted
+                    raise qerror
+                delay = metadata.get("retry_after")
+                if delay is None:
+                    delay = min(QUOTA_BACKOFF * (2 ** min(retries, 20)),
+                                QUOTA_MAX_BACKOFF)
+                delay = min(max(0.05, float(delay)), remaining)
+                retry_at = datetime.datetime.now().astimezone() + \
+                    datetime.timedelta(seconds=delay)
+                state = {
+                    "state": "paused_quota",
+                    "reason": "usage_limit",
+                    "paused_at": started_at,
+                    "retry_at": retry_at.isoformat(),
+                    "retry": retries + 1,
+                }
+                _quota_pauses[turn_id] = state
+                _last_quota_pause = dict(state)
+                log.warning("usage limit; pausing turn %.1fs (retry %d)",
+                            delay, retries + 1)
+                await asyncio.sleep(delay)
+                retries += 1
+    finally:
+        _quota_pauses.pop(turn_id, None)
+
+
 def child_env():
     env = dict(os.environ)
     env.pop("OPENAI_API_KEY", None)      # never bill the API by accident
@@ -823,7 +968,10 @@ async def mock_turn(model, system_prompt, prompt, tooldefs, trailing_tools):
     """Deterministic stand-in mirroring claude-gate's mock, adapted to this
     gate's stateless shape: tool results arrive in the request, not on a
     held turn.  `MOCK_TOOL_CALL <name> <json>` triggers one tool call."""
-    if MOCK_ERROR:
+    global _mock_errors_remaining
+    if MOCK_ERROR and _mock_errors_remaining != 0:
+        if _mock_errors_remaining > 0:
+            _mock_errors_remaining -= 1
         raise CodexError(MOCK_ERROR)
     delay = float(os.environ.get("CODEX_GATE_MOCK_DELAY", "0"))
     if delay > 0:
@@ -868,10 +1016,12 @@ async def chat_completions(request):
             {"error": {"message": "no user content in messages"}}, status=400)
 
     trailing = [m for m in history if m.get("role") == "tool"]
-    if MOCK:
-        turn = mock_turn(model, system_prompt, prompt, tooldefs, trailing)
-    else:
-        turn = codex_turn(model, system_prompt, prompt, tooldefs)
+    def turn_factory():
+        if MOCK:
+            return mock_turn(model, system_prompt, prompt, tooldefs, trailing)
+        return codex_turn(model, system_prompt, prompt, tooldefs)
+
+    turn = run_with_quota_recovery(turn_factory)
 
     stream_response = None
     task = None
@@ -896,9 +1046,18 @@ async def chat_completions(request):
             content, calls, usage = await turn
     except CodexError as e:
         log.error("turn failed: %s", e)
+        quota = e if isinstance(e, UsageLimitError) else None
         if stream_response is not None:
+            if quota is not None:
+                await stream_response.write(
+                    b"data: " + json.dumps(quota_error_body(quota)).encode() +
+                    b"\n\ndata: [DONE]\n\n")
+                await stream_response.write_eof()
+                return stream_response
             return await respond(request, model, "ERROR: codex-gate: %s" % e,
                                  [], 0, True, stream_response)
+        if quota is not None:
+            return web.json_response(quota_error_body(quota), status=429)
         return web.json_response(
             {"error": {"message": "codex-gate: %s" % e, "type": "gate_error"}},
             status=502)
@@ -930,6 +1089,9 @@ async def models(request):
 
 
 async def health(request):
+    states = {pause.get("state") for pause in _quota_pauses.values()}
+    state = ("paused_quota" if "paused_quota" in states else
+             "resuming" if "resuming" in states else "ready")
     body = {
         "status": "ok",
         "backend": "mock" if MOCK else "codex-cli",
@@ -937,6 +1099,15 @@ async def health(request):
         # comment); the key stays for parity with claude-gate's /health.
         "held_turns": 0,
         "stateless": True,
+        "quota_recovery": QUOTA_MAX_WAIT > 0,
+        "state": state,
+        "quota": {
+            "paused_turns": len(_quota_pauses),
+            "retry_at": min((p["retry_at"] for p in _quota_pauses.values()),
+                            default=None),
+            "last_pause": _last_quota_pause,
+            "max_wait_seconds": QUOTA_MAX_WAIT,
+        },
     }
     # The pinned CLI surface (INFR-413). A campaign records this verbatim, and
     # grind.py's gateway preflight refuses to start a trial against a gateway

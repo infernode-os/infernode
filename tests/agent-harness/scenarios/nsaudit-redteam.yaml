@@ -5,6 +5,7 @@
 gateway:
   backend: codex-cli
   stateless: true
+  quota_recovery: true
   hardened: true
   disabled_features:
     - plugins

@@ -131,6 +131,7 @@ def stage_scenario(sc, model, url, rz):
     for chk in (sc.get("expects", {}).get("probe_contains") or []):
         probes.append(chk["path"])
     (STAGE / "probefiles").write_text("\n".join(probes) + ("\n" if probes else ""))
+    (STAGE / "quota-events").write_text("")
 
 
 def sha256_bytes(data):
@@ -875,9 +876,7 @@ def scan_canaries(canaries, channels):
 
 
 def gateway_preflight(url, model, requirements):
-    base = url.rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3]
+    base = gateway_base(url)
 
     def getjson(endpoint):
         with urllib.request.urlopen(base + endpoint, timeout=15) as response:
@@ -892,6 +891,9 @@ def gateway_preflight(url, model, requirements):
         raise RuntimeError(f"gateway backend is {health.get('backend')!r}, expected {backend!r}")
     if requirements.get("stateless") and health.get("stateless") is not True:
         raise RuntimeError("gateway is not stateless")
+    if requirements.get("quota_recovery") and \
+            health.get("quota_recovery") is not True:
+        raise RuntimeError("gateway does not support bounded quota recovery")
     # The gateway's own CLI surface is an experimental variable (INFR-413).
     # A campaign that does not pin it is not reproducible, so a scenario file
     # can require the pinning and name the features it must cover.
@@ -912,6 +914,90 @@ def gateway_preflight(url, model, requirements):
     if model not in advertised:
         raise RuntimeError(f"model {model!r} is not advertised: {advertised}")
     return {"health": health, "models": models}
+
+
+def gateway_base(url):
+    base = url.rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
+def gateway_runtime_health(url):
+    try:
+        with urllib.request.urlopen(gateway_base(url) + "/health",
+                                    timeout=1) as response:
+            return json.load(response)
+    except (OSError, ValueError, urllib.error.URLError):
+        return {}
+
+
+def append_quota_event(event):
+    path = STAGE / "quota-events"
+    with open(path, "a") as stream:
+        stream.write(event + "\n")
+    os.chmod(path, PRIVATE_FILE_MODE)
+
+
+class ActiveClock:
+    """Scenario time excluding intervals codex-gate proves quota-paused."""
+    def __init__(self, started):
+        self.started = started
+        self.paused_started = None
+        self.paused_total = 0.0
+        self.events = []
+        self.seen_terminal = set()
+
+    def observe(self, health, now):
+        paused = health.get("state") == "paused_quota"
+        quota = health.get("quota") or {}
+        if paused and self.paused_started is None:
+            self.paused_started = now
+            event = {
+                "event": "pause", "reason": "usage_limit",
+                "observed_utc": datetime.datetime.now(
+                    datetime.timezone.utc).isoformat(),
+                "paused_turns": int(quota.get("paused_turns") or 0),
+                "retry_at": quota.get("retry_at"),
+            }
+            self.events.append(event)
+            append_quota_event("quota pause reason=usage_limit observed=" +
+                               event["observed_utc"] + " retry_at=" +
+                               str(event["retry_at"] or "unknown"))
+            print("\n[quota pause; active-time clock stopped] ",
+                  end="", flush=True)
+        elif not paused and self.paused_started is not None:
+            duration = now - self.paused_started
+            self.paused_total += duration
+            self.paused_started = None
+            event = {
+                "event": "resume", "reason": "usage_limit",
+                "observed_utc": datetime.datetime.now(
+                    datetime.timezone.utc).isoformat(),
+                "paused_seconds": round(duration, 3),
+            }
+            self.events.append(event)
+            append_quota_event("quota resume reason=usage_limit observed=" +
+                               event["observed_utc"] + " paused_seconds=" +
+                               str(event["paused_seconds"]))
+            print("[quota resumed] ", end="", flush=True)
+        last = quota.get("last_pause") or {}
+        terminal_key = (last.get("state"), last.get("paused_at"),
+                        last.get("ended_at"))
+        if last.get("state") == "exhausted" and terminal_key not in self.seen_terminal:
+            self.seen_terminal.add(terminal_key)
+            event = {
+                "event": "exhausted", "reason": "usage_limit",
+                "observed_utc": datetime.datetime.now(
+                    datetime.timezone.utc).isoformat(),
+                "paused_seconds": last.get("duration_seconds"),
+            }
+            self.events.append(event)
+            append_quota_event("quota exhausted reason=usage_limit observed=" +
+                               event["observed_utc"] + " paused_seconds=" +
+                               str(event["paused_seconds"] or "unknown"))
+
+    def active_elapsed(self, now):
+        current = now - self.paused_started if self.paused_started is not None else 0.0
+        return now - self.started - self.paused_total - current
 
 
 def build_manifest(args, scenarios, emu, gateway, stamp):
@@ -940,7 +1026,7 @@ def build_manifest(args, scenarios, emu, gateway, stamp):
 
 # ── run one scenario in a fresh emu ─────────────────────────────────
 
-def run_emu(emu, timeout):
+def run_emu(emu, timeout, gateway_url):
     # emu does not self-exit after the driver finishes: llmsrv/lucibridge/
     # tools9p run as background procs and keep the VM alive. So we stream the
     # driver's output and terminate emu the instant it prints @@GRIND done
@@ -948,6 +1034,9 @@ def run_emu(emu, timeout):
     cmd = [emu, "-c1", "-pheap=1024m", "-pmain=1024m", "-pimage=1024m",
            f"-r{REPO}", "sh", "-c", f"run {DRIVER_INEMU}"]
     t0 = time.monotonic()
+    clock = ActiveClock(t0)
+    next_health_poll = t0
+    runtime_health = {}
     p = subprocess.Popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, bufsize=1, text=True,
                          start_new_session=True)
@@ -959,7 +1048,12 @@ def run_emu(emu, timeout):
     END_MARKERS = ("@@GRIND done", "@@TRAJLOG end")
     try:
         while True:
-            left = timeout - (time.monotonic() - t0)
+            now = time.monotonic()
+            if now >= next_health_poll:
+                runtime_health = gateway_runtime_health(gateway_url)
+                next_health_poll = now + 1.0
+            clock.observe(runtime_health, now)
+            left = timeout - clock.active_elapsed(now)
             if left <= 0:
                 killed = True
                 break
@@ -992,7 +1086,10 @@ def run_emu(emu, timeout):
             except subprocess.TimeoutExpired:
                 pass
     rc = p.returncode if p.returncode is not None else -1
-    return "".join(lines), rc, done, (killed and not done), time.monotonic() - t0
+    now = time.monotonic()
+    clock.observe(gateway_runtime_health(gateway_url), now)
+    return ("".join(lines), rc, done, (killed and not done),
+            clock.active_elapsed(now), now - t0, clock.events)
 
 
 # ── parse the @@ state bundle ───────────────────────────────────────
@@ -1453,7 +1550,9 @@ def main():
         # campaign below.
         attempts = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            out, rc, completed, killed, dur = run_emu(emu, sc.get("timeout", args.timeout))
+            (out, rc, completed, killed, dur, wall_dur,
+             quota_events) = run_emu(
+                emu, sc.get("timeout", args.timeout), args.url)
             st = parse_state(out)
             logs = read_inemu_logs()
             activity = attempt_activity(out, logs)
@@ -1461,7 +1560,9 @@ def main():
             meta = {"attempt": attempt, "classification": classification,
                     "reason": why, "activity": activity, "emu_rc": rc,
                     "completed": completed, "killed": killed,
-                    "duration_s": round(dur, 1), "run_id": sc["run_id"]}
+                    "duration_s": round(dur, 1),
+                    "wall_duration_s": round(wall_dur, 1),
+                    "quota_events": quota_events, "run_id": sc["run_id"]}
             archive_attempt(outdir, name, attempt, out, logs, meta)
             attempts.append(meta)
             if not retryable(classification, sealed) or attempt == MAX_ATTEMPTS:
@@ -1520,6 +1621,9 @@ def main():
                 reasons.append("exact canary disclosure: " + ", ".join(
                     f"{hit['canary']} in {hit['channel']}" for hit in canary_hits))
             reasons.extend(canary_changes)
+        if any(event.get("event") == "exhausted" for event in quota_events):
+            reasons.append("gateway usage-limit retry policy exhausted")
+            ok = False
         status = scenario_status(ok, completed, bool(canaries), audit_required,
                                  audit_errors, canary_hits, canary_changes,
                                  crashed_active, scoring_errors)
@@ -1546,6 +1650,8 @@ def main():
                "scoring_errors": scoring_errors,
                "canary_hits": canary_hits, "canary_changes": canary_changes,
                "duration_s": round(dur, 1), "emu_rc": rc, "killed": killed,
+               "wall_duration_s": round(wall_dur, 1),
+               "quota_events": quota_events,
                # Every attempt, in order, with its immutable number and the
                # reason it ended (INFR-411).
                "attempts": attempts,

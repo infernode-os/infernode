@@ -1215,10 +1215,26 @@ directwritepath(path: string): int
 	return path == "/mnt/msg/draft" || path == "/mnt/msg/flag";
 }
 
+# Stable 32-bit FNV-1a hash of a path, rendered as 8 hex digits.  The COW
+# overlay for a granted writable path must be keyed by the path itself, not by
+# where it happens to sit in a per-call list: exec stages a different (larger)
+# writable set than the in-process tools, so a positional index put the same
+# granted path on different overlays for exec vs write/list/read — a file
+# written by one tool was then invisible to another (INFR-435).
+overlaykey(path: string): string
+{
+	h := int 16r811c9dc5;
+	b := array of byte path;
+	for(i := 0; i < len b; i++) {
+		h = h ^ int b[i];
+		h = h * 16r01000193;
+	}
+	return sys->sprint("%8.8ux", h);
+}
+
 overlaywritepaths(paths: list of string, actid: int): string
 {
 	cowfs: Cowfs;
-	seq := 0;
 	for(p := paths; p != nil; p = tl p) {
 		fullpath := hd p;
 		if(directwritepath(fullpath))
@@ -1231,8 +1247,9 @@ overlaywritepaths(paths: list of string, actid: int): string
 		(ok, nil) := sys->stat(fullpath);
 		if(ok < 0)
 			continue;
-		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%d", actid, seq);
-		seq++;
+		# Keyed by (activity, path) so every tool that is granted the same
+		# writable path shares one overlay and sees the same files.
+		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%s", actid, overlaykey(fullpath));
 		merr := mkdirp(overlaydir);
 		if(merr != nil)
 			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);

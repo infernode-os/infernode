@@ -923,10 +923,17 @@ single frame crosses -- `os/ip` to a 9P read or write on
 Shortening that means either moving the data path into the kernel as C
 -- which gives up the property that made this design worth having, that
 device protocols live outside the kernel -- or carrying more frames per
-9P transaction so the fixed cost is amortised. The second keeps the
-architecture and is where to start; `etherusb` already has the
-transmit-side batching machinery (`transmit`/`flushtx`), and it never
-fires, because TCP hands frames down one at a time.
+9P transaction so the fixed cost is amortised. The second was built,
+both directions, as a second file beside `data`: `packed` carries
+several frames per 9P message, each behind a two-byte length, and
+opening it is the whole negotiation. Receive came first (~585-690 ->
+~850-960 KB/s, 3.2 frames per read); then the write side, with
+`etherbwrite` queueing to a kernel writer process instead of paying a
+synchronous 9P transaction per frame -- that freed the TCP ack path
+too, and took outbound from ~1.4 to ~1.9-2.2 MB/s. A 2MB round trip
+verifies byte-identical at ~630 KB/s each way. The remaining distance
+to wire speed is the per-message cost times how many messages remain;
+the lever from here is deeper batches, not new machinery.
 
 ### RESOLVED: the "console wedge" was silent type-ahead loss
 

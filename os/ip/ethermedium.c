@@ -122,6 +122,12 @@ struct Etherrock
 	Proc	*read6p;	/* reading process (v6)*/
 	Chan	*mchan4;	/* Data channel for v4 */
 	Chan	*pchan4;	/* packed data channel for v4, nil if none */
+	Proc	*wproc;		/* packed writer, nil if none */
+	Lock	wl;		/* guards the outbound chain */
+	Block	*whead;		/* frames waiting for the writer */
+	Block	*wtail;
+	int	wcount;		/* how many */
+	Rendez	wr;		/* where the writer waits */
 	Chan	*achan;		/* Arp channel */
 	Chan	*cchan4;	/* Control channel for v4 */
 	Chan	*mchan6;	/* Data channel for v6 */
@@ -129,6 +135,7 @@ struct Etherrock
 };
 
 static void	etherreadpacked(Ipifc *ifc, Etherrock *er);
+static void	etherwritepacked(void *a);
 
 /*
  *  ethernet arp request
@@ -298,9 +305,9 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	 *  while others sat behind it.
 	 */
 	snprint(addr, sizeof(addr), "%s/packed", dir4);
-	fd = kopen(addr, OREAD);
+	fd = kopen(addr, ORDWR);
 	if(fd >= 0){
-		pchan4 = commonfdtochan(fd, OREAD, 0, 1);
+		pchan4 = commonfdtochan(fd, ORDWR, 0, 1);
 		kclose(fd);
 	}
 
@@ -320,6 +327,8 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	kproc("etherread4", etherread4, ifc, 0);
 	kproc("recvarpproc", recvarpproc, ifc, 0);
 	kproc("etherread6", etherread6, ifc, 0);
+	if(pchan4 != nil)
+		kproc("etherwpacked", etherwritepacked, ifc, 0);
 }
 
 /*
@@ -336,11 +345,15 @@ etherunbind(Ipifc *ifc)
 		postnote(er->read6p, 1, "unbind", 0);
 	if(er->arpp)
 		postnote(er->arpp, 1, "unbind", 0);
+	if(er->wproc)
+		postnote(er->wproc, 1, "unbind", 0);
 
 	/* wait for readers to die */
-	while(er->arpp != 0 || er->read4p != 0 || er->read6p != 0)
+	while(er->arpp != 0 || er->read4p != 0 || er->read6p != 0 || er->wproc != 0)
 		tsleep(&up->sleep, return0, 0, 300);
 
+	if(er->pchan4 != nil)
+		cclose(er->pchan4);
 	if(er->mchan4 != nil)
 		cclose(er->mchan4);
 	if(er->achan != nil)
@@ -402,6 +415,43 @@ etherbwrite(Ipifc *ifc, Block *bp, int version, uchar *ip)
 	case V4:
 		eh->t[0] = 0x08;
 		eh->t[1] = 0x00;
+		if(er->wproc != nil){
+			/*
+			 * Hand the frame to the writer and return.
+			 *
+			 * The write used to happen here, synchronously: one
+			 * 9P transaction per frame, with the IP stack's
+			 * caller blocked through all of it. On this system
+			 * that transaction costs about two milliseconds --
+			 * every TCP ack paid it, which capped the INBOUND
+			 * direction too, since acks gate the sender's
+			 * window. Queueing lets acks and data that arrive
+			 * close together cross to the driver in one write.
+			 *
+			 * The cap is Ethernet honesty, not tidiness: if the
+			 * writer has fallen 256 frames behind, the link is
+			 * not delivering, and dropping here is what any
+			 * interface does when its transmit ring is full.
+			 * TCP recovers; a queue that grows without bound
+			 * does not.
+			 */
+			lock(&er->wl);
+			if(er->wcount >= 256){
+				unlock(&er->wl);
+				freeb(bp);
+				break;
+			}
+			bp->next = nil;
+			if(er->whead == nil)
+				er->whead = bp;
+			else
+				er->wtail->next = bp;
+			er->wtail = bp;
+			er->wcount++;
+			unlock(&er->wl);
+			wakeup(&er->wr);
+			break;
+		}
 		devtab[er->mchan4->type]->bwrite(er->mchan4, bp, 0);
 		break;
 	case V6:
@@ -530,6 +580,89 @@ etherreadpacked(Ipifc *ifc, Etherrock *er)
 			poperror();
 			p += len;
 		}
+	}
+}
+
+static int
+wready(void *a)
+{
+	Etherrock *er = a;
+
+	return er->whead != nil;
+}
+
+/*
+ *  Write several frames per 9P message.
+ *
+ *  Mirror of etherreadpacked: take whatever etherbwrite has queued,
+ *  pack each frame behind a two-byte little-endian length, and hand
+ *  the lot to the driver in one write. The driver puts them on the
+ *  wire in one bulk transfer.
+ *
+ *  The batch is sized by how long the previous write took and nothing
+ *  else -- the same discipline as the driver's own transmit side. A
+ *  lone frame on a quiet link is written at once; frames that arrive
+ *  while a write is in flight join the next one.
+ */
+static void
+etherwritepacked(void *a)
+{
+	Ipifc *ifc;
+	Etherrock *er;
+	Block *bp, *next;
+	uchar *buf;
+	long want, o;
+	int len;
+
+	ifc = a;
+	er = ifc->arg;
+	er->wproc = up;
+	want = (long)er->pchan4->iounit;
+	if(want <= 0)
+		want = 8192;
+	buf = smalloc(want);
+	if(waserror()){
+		free(buf);
+		er->wproc = nil;
+		pexit("hangup", 1);
+	}
+	for(;;){
+		sleep(&er->wr, wready, er);
+
+		lock(&er->wl);
+		bp = er->whead;
+		er->whead = er->wtail = nil;
+		er->wcount = 0;
+		unlock(&er->wl);
+
+		o = 0;
+		for(; bp != nil; bp = next){
+			next = bp->next;
+			len = BLEN(bp);
+			if(o + 2 + len > want){
+				/*
+				 * Flush what is packed and start over with
+				 * this frame. A frame larger than the whole
+				 * buffer cannot happen -- maxtu fits several
+				 * times over -- but guard the arithmetic
+				 * anyway rather than trusting it.
+				 */
+				if(o > 0)
+					devtab[er->pchan4->type]->write(er->pchan4, buf, o, 0);
+				o = 0;
+				if(2 + len > want){
+					freeb(bp);
+					continue;
+				}
+			}
+			buf[o++] = len;
+			buf[o++] = len >> 8;
+			memmove(buf+o, bp->rp, len);
+			o += len;
+			freeb(bp);
+		}
+		if(o > 0)
+			devtab[er->pchan4->type]->write(er->pchan4, buf, o, 0);
 	}
 }
 

@@ -406,6 +406,9 @@ nqmax: int;			# deepest the queue ever got
 npacked: int;			# packed reads answered with at least one frame
 npackedframes: int;		# frames those replies carried
 npackedmax: int;		# most frames in any one reply
+npackedwr: int;			# packed writes taken
+npackedwrframes: int;		# frames they carried
+npackedwrmax: int;		# most frames in any one write
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -795,7 +798,7 @@ serve()
 		tree.create(big (cd+Qcdir), dir("ctl", 8r666, cd+Qcctl));
 		tree.create(big (cd+Qcdir), dir("data", 8r666, cd+Qcdata));
 		tree.create(big (cd+Qcdir), dir("stats", 8r444, cd+Qcstats));
-		tree.create(big (cd+Qcdir), dir("packed", 8r444, cd+Qcpacked));
+		tree.create(big (cd+Qcdir), dir("packed", 8r666, cd+Qcpacked));
 	}
 
 	p := array[2] of ref Sys->FD;
@@ -1870,6 +1873,47 @@ writereq(tm: ref Tmsg.Write): int
 			srv.reply(ref Rmsg.Error(tm.tag, e));
 		else
 			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+	Qcpacked =>
+		#
+		# Several frames in one write, the mirror of the packed
+		# read: each behind a two-byte little-endian length. They
+		# all land in the pending buffer and go to the device in
+		# one bulk transfer -- this is the path that finally lets
+		# the transmit batching batch, because the kernel's plain
+		# data file carries one frame per write and the batch
+		# machinery never saw a second frame in hand.
+		#
+		# A malformed length fails the whole write rather than
+		# guessing at a resynchronisation point: the writer and
+		# this driver disagreeing about framing is a bug to
+		# surface, not to paper over.
+		#
+		buf := tm.data;
+		o := 0;
+		nf := 0;
+		while(o + 2 <= len buf){
+			flen := int buf[o] | (int buf[o+1] << 8);
+			o += 2;
+			if(flen <= 0 || o + flen > len buf)
+				break;
+			if(transmit(buf[o:o+flen]) < 0){
+				srv.reply(ref Rmsg.Error(tm.tag, "write failed"));
+				return 0;
+			}
+			o += flen;
+			nf++;
+		}
+		if(o != len buf){
+			srv.reply(ref Rmsg.Error(tm.tag, "malformed packed write"));
+			return 0;
+		}
+		flushtx();
+		convs[n].outpkt += nf;
+		npackedwr++;
+		npackedwrframes += nf;
+		if(nf > npackedwrmax)
+			npackedwrmax = nf;
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 	Qcdata =>
 		if(transmit(tm.data) < 0)
 			srv.reply(ref Rmsg.Error(tm.tag, "write failed"));
@@ -1954,7 +1998,8 @@ stats(n: int): string
 		"frames sent by those writes: %d\nfailed writes: %d\n" +
 		"rx to a waiting read: %d\nrx queued: %d\n" +
 		"queue depth sum: %d\ndeepest queue: %d\n" +
-		"packed reads: %d\nframes in them: %d\nlargest: %d\n",
+		"packed reads: %d\nframes in them: %d\nlargest: %d\n" +
+		"packed writes: %d\nframes in them: %d\nlargest: %d\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
@@ -1962,7 +2007,8 @@ stats(n: int): string
 		rxpollms, rxactive,
 		nempty0, emptymax, ntx, txms, txmax, txframes, ntxerr,
 		ndirect, nqueue, nqdepth, nqmax,
-		npacked, npackedframes, npackedmax);
+		npacked, npackedframes, npackedmax,
+		npackedwr, npackedwrframes, npackedwrmax);
 }
 
 unpend(cv: ref Conv, tag: int)

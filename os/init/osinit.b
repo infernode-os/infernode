@@ -974,22 +974,109 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 # the whole crypto stack into a kernel that has no other use for it
 # yet. This is the same idea in thirty lines of the Sys module.
 #
-# THERE IS NO AUTHENTICATION. Anything that can reach port 17010 gets a
-# shell. That is a deliberate choice for a development board on a
-# private network and it must not survive into anything shipped -- see
-# the ring-fence rule in CLAUDE.md for the shape of that argument. It
-# is here because the alternative is a serial cable.
+# OFF UNLESS THE CARD SAYS OTHERWISE, and this is the important part.
+#
+# It hands a shell to whoever connects. Started unconditionally and
+# announced on every interface, as it was, that is an unauthenticated
+# shell on whatever network the board happens to be plugged into --
+# which is not a posture any default should have. It is the same
+# argument the ring-fence rule in CLAUDE.md makes about the evaluation
+# harness, and it applies here for the same reason.
+#
+# So it starts only if a file exists on the boot partition, which takes
+# physical access to the card to create the first time. No file, no
+# listener, nothing open: that is what a fresh build does.
+#
+# The file's first line, if it has one, is a token the caller must send
+# before it is given a shell. Be honest about what that is worth: the
+# token crosses the wire in the clear, on a kernel with no $Keyring to
+# do better with -- see the modinit list in os/arm64/main.c, there is
+# no crypto linked here. It stops a port scan and a curious neighbour.
+# It does not stop anyone who can watch the traffic, and it is not a
+# substitute for the authentication this wants once libsec is in the
+# kernel.
 #
 Netconsport: con "tcp!*!17010";
+Netconsfile: con "/n/dos/netconsole";
+
+#
+# The token, and whether the console should run at all.
+#
+# Returns (token, enabled). An empty token with enabled set means the
+# file was there and said nothing -- the operator asked for a console
+# with no check on it, which is their call to make and is announced
+# loudly rather than quietly honoured.
+#
+netconstoken(): (string, int)
+{
+	fd := sys->open(Netconsfile, Sys->OREAD);
+	if(fd == nil)
+		return ("", 0);
+
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return ("", 1);
+
+	s := string buf[0:n];
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r')
+			return (s[0:i], 1);
+	return (s, 1);
+}
+
+#
+# Read one line, bounded.
+#
+# A caller that opens the connection and says nothing must not hold a
+# process for ever, and one that sends no newline must not be able to
+# make this read without limit.
+#
+netconsline(fd: ref Sys->FD): string
+{
+	buf := array[256] of byte;
+	nb := 0;
+	while(nb < len buf){
+		n := sys->read(fd, buf[nb:], len buf - nb);
+		if(n <= 0)
+			break;
+		nb += n;
+		s := string buf[0:nb];
+		for(i := 0; i < len s; i++)
+			if(s[i] == '\n' || s[i] == '\r')
+				return s[0:i];
+	}
+	if(nb == 0)
+		return "";
+	return string buf[0:nb];
+}
 
 netconsole()
 {
+	(tok, enabled) := netconstoken();
+	if(!enabled){
+		#
+		# Said once, and not as a warning: this is the default and
+		# the default is correct. Somebody looking for the console
+		# needs to know which file turns it on.
+		#
+		sys->print("init: no network console (create %s to enable)\n",
+			Netconsfile);
+		return;
+	}
+
 	(ok, c) := sys->announce(Netconsport);
 	if(ok < 0){
 		sys->print("init: no network console: %r\n");
 		return;
 	}
-	sys->print("init: network console on %s\n", Netconsport);
+	if(tok == "")
+		sys->print("init: network console on %s, NO TOKEN SET -- "
+			+ "anything that can reach this port gets a shell\n",
+			Netconsport);
+	else
+		sys->print("init: network console on %s, token required\n",
+			Netconsport);
 	for(;;){
 		(lok, nc) := sys->listen(c);
 		if(lok < 0){
@@ -1001,12 +1088,25 @@ netconsole()
 			sys->print("init: network console open: %r\n");
 			continue;
 		}
-		spawn netshell(fd);
+		spawn netshell(fd, tok);
 	}
 }
 
-netshell(fd: ref Sys->FD)
+netshell(fd: ref Sys->FD, tok: string)
 {
+	#
+	# Checked before anything else, and before the namespace is
+	# forked: a caller that cannot say the word gets no process
+	# state of ours at all.
+	#
+	if(tok != ""){
+		sys->fprint(fd, "token: ");
+		if(netconsline(fd) != tok){
+			sys->fprint(fd, "no\n");
+			return;
+		}
+	}
+
 	#
 	# A private set of file descriptors and a private namespace, so
 	# one session cannot disturb another or the console shell. NEWFD

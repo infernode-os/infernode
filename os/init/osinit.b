@@ -257,6 +257,23 @@ init()
 	# from a pristine copy and re-applying changes in groups, rather
 	# than reasoning about which one looked guilty.
 	#
+	#
+	# A writable /tmp before anything wants one.
+	#
+	# The root filesystem is compiled into the kernel image and is
+	# read-only by construction, so every program that opens a
+	# temporary file fails -- acme reports "can't create temp file
+	# permission denied", which reads like a bug in acme rather than
+	# a missing filesystem.
+	#
+	# CALLED, not spawned, for the same reason dossrv is: memfs
+	# mounts in the namespace of the process that calls it and
+	# returns once mounted. Spawning it puts the mount in a namespace
+	# nobody else shares, and /tmp stays empty with no error
+	# anywhere.
+	#
+	tmpsetup();
+
 	spawn usbprobe();
 
 	#
@@ -1143,6 +1160,25 @@ netshell(fd: ref Sys->FD, tok: string)
 # an ordinary Limbo program with no special privilege -- turns the FAT
 # one into a namespace.
 #
+#
+# Mount an in-memory filesystem on /tmp.
+#
+tmpsetup()
+{
+	mfs := load Command "/dis/memfs.dis";
+	if(mfs == nil){
+		sys->print("init: cannot load memfs: %r\n");
+		return;
+	}
+	{
+		mfs->init(nil, "memfs" :: "-m" :: "8388608" :: "/tmp" :: nil);
+		sys->print("init: 8MB of memory mounted on /tmp\n");
+	} exception e {
+	"*" =>
+		sys->print("init: memfs on /tmp failed: %s\n", e);
+	}
+}
+
 sdsetup()
 {
 	fd := sys->open("/dev/sdcard", Sys->OREAD);

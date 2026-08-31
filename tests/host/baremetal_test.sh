@@ -502,6 +502,13 @@ build_kernel() {
             "/dis/lib/debug.dis=$ROOT/dis/lib/debug.dis"
             "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
             "/dis/lib/plumbmsg.dis=$ROOT/dis/lib/plumbmsg.dis"
+
+            # A writable /tmp, which acme needs and the compiled-in
+            # root cannot be: the whole image is read-only, so anything
+            # that opens a temporary file fails with a permission
+            # error that reads like a bug in the program.
+            "/dis/memfs.dis=$ROOT/dis/memfs.dis"
+            "/dis/lib/styxlib.dis=$ROOT/dis/lib/styxlib.dis"
         )
         # A font, so acme has something to draw with.
         #

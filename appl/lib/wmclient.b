@@ -190,26 +190,7 @@ putimage(w: ref Window, i: ref Image)
 		ir.max.y = ir.min.y;
 	if(ir.dy() < 0)
 		ir.max.y = ir.min.y;
-	#
-	# Refbackup, not Refnone -- this is what the ghosting was.
-	#
-	# Refnone means the layer keeps no backing store, so when a
-	# window is deleted or uncovered memlayer has nothing to put
-	# back and repaints the area with the SCREEN'S FILL. Every
-	# client allocates its own Screen a few lines above with that
-	# fill set to the theme background, so an app exiting or
-	# redrawing left a themed rectangle sitting on a desktop that
-	# was painted some other colour. It looks like a redraw fault
-	# and is not one: the layer is faithfully painting a fill that
-	# has nothing to do with what was underneath.
-	#
-	# Lucifer's presentation zone has never shown this, and it is
-	# the reference worth copying rather than guessing against: it
-	# allocates ONE shared Screen and every app window on it is
-	# Refbackup (appl/cmd/lucifer.b, presscr.newwindow), so
-	# uncovering restores what was there. Same fix here.
-	#
-	w.image = w.screen.newwindow(ir, Draw->Refbackup, Draw->Nofill);
+	w.image = w.screen.newwindow(ir, Draw->Refnone, Draw->Nofill);
 	# INFR-27: Pre-fill w.image with the screen background so that
 	# any region the app doesn't paint (notably the 1-pixel ring
 	# inside w.image when an app uses w.imager(w.image.r) for its

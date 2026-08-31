@@ -15,6 +15,26 @@ sysmodinit(void)
 	builtinmod("$Sys", Sysmodtab, Sysmodlen);
 }
 
+/*
+ * Every verb write below is guarded by b < eb, and the guard is not
+ * politeness. Literal characters were always bounded, so a long format
+ * fills the buffer and leaves b sitting exactly at eb -- at which point
+ * an unguarded verb called snprint(b, 0, ...). vseprint answers a
+ * zero-length buffer with nil, the caller adds nil - b to b, and from
+ * then on b is wild: subsequent literals are stored megabytes from the
+ * buffer and the returned length is a pointer difference with no
+ * meaning. Sys_sprint then writes its terminating NUL through that
+ * length. Found on the bcm2837 board when a stats file first exceeded
+ * 512 bytes: the corrupt length happened to break bigxprint's retry
+ * loop early, and what came back was an unterminated buffer read to
+ * whatever byte the heap had left behind.
+ *
+ * A full buffer must instead do what the literal path always did: stop
+ * writing, keep consuming arguments so the walk stays in step, and
+ * return a length near the cap so bigxprint retries with a bigger
+ * buffer. Truncation is bigxprint's signal, never this function's
+ * private disaster.
+ */
 int
 xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 {
@@ -100,7 +120,8 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 					ss->Sascii[ss->len] = '\0';
 					p = ss->Sascii;
 				}
-				b += snprint(b, eb-b, fmt, p);
+				if(b < eb)
+					b += snprint(b, eb-b, fmt, p);
 				break;
 			case 'E':
 				f--;
@@ -115,7 +136,8 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 				while((va - fp) & (sizeof(REAL)-1))
 					va++;
 				d = *(REAL*)va;
-				b += snprint(b, eb-b, fmt, d);
+				if(b < eb)
+					b += snprint(b, eb-b, fmt, d);
 				va += sizeof(REAL);
 				break;
 			case 'd':
@@ -127,7 +149,8 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 					while((va - fp) & (IBY2LG-1))
 						va++;
 					bg = *(LONG*)va;
-					b += snprint(b, eb-b, fmt, bg);
+					if(b < eb)
+						b += snprint(b, eb-b, fmt, bg);
 					va += IBY2LG;
 				}
 				else {
@@ -135,12 +158,14 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 					/* always a unicode character */
 					if(c == 'c')
 						f[-1] = 'C';
-					b += snprint(b, eb-b, fmt, i);
+					if(b < eb)
+						b += snprint(b, eb-b, fmt, i);
 					va += IBY2WD;
 				}
 				break;
 			case 'r':
-				b = syserr(b, eb, xp);
+				if(b < eb)
+					b = syserr(b, eb, xp);
 				break;
 /* Debugging formats - may disappear */
 			case 'H':
@@ -151,7 +176,8 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 					c = D2H(ptr)->ref;
 					t = D2H(ptr)->t;
 				}
-				b += snprint(b, eb-b, "%d.%.8lux", c, (ulong)t);
+				if(b < eb)
+					b += snprint(b, eb-b, "%d.%.8lux", c, (ulong)t);
 				va += IBY2WD;
 				break;
 			}

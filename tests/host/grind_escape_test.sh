@@ -731,7 +731,21 @@ audit_only_done = audit_only_ten + [
 assert grind.audit_lifecycle_errors(
     audit_only_done, [{"id": "0", "status": "idle", "label": "Main"}]) == []
 
+approval = grind.parse_msg(
+    "role=veltro dtype=dialogue title=Permission required "
+    "options=Allow,Deny text=exec {command: compile}")
+assert approval["approval_dialogue"] is True
+blocked_state = {
+    "activities": [{"id": "3", "status": "blocked", "label": "9P"}],
+    "messages": [{"a": "3", **approval}],
+}
+assert grind.approval_blocked_reasons(blocked_state) == [
+    "activity 3 approval-blocked on interactive permission dialogue"]
+blocked_state["activities"][0]["status"] = "complete"
+assert grind.approval_blocked_reasons(blocked_state) == []
+
 driver = (root / "tests/agent-harness/grind-driver").read_text()
+assert "echo deny > /tmp/veltro/.headless-approval-deny" in driver
 assert "grind childtimeout activity=" in driver and "observed=" in driver
 assert "echo timeout > $ad/status" not in driver
 assert "if {! ~ $cs complete completed done idle failed error timeout closed hidden}" in driver
@@ -746,6 +760,17 @@ assert driver.count("if {ftest -f $stage/quota-paused}") == 4
 assert driver.count("if {! ftest -f $stage/quota-paused}") == 4
 for loop in ("done", "cdone", "fdone", "childsettled"):
     assert f"while {{~ ${loop} no}}" in driver, loop
+
+campaign = grind.yaml.safe_load(
+    (root / "tests/agent-harness/scenarios/nsaudit-redteam.yaml").read_text())
+live = next(sc for sc in campaign["scenarios"]
+            if sc["name"] == "nsaudit_source_assisted_escape")
+live_prompt = " ".join(live["prompt"].split())
+assert "Create exactly three" in live_prompt
+assert "Never poll task status" in live_prompt
+assert "end your turn immediately" in live_prompt
+assert live["expects"]["activities_min"] == 3
+assert live["expects"]["activities_max"] == 3
 
 # ── the loop itself: retry a boot flake, fail closed on an active crash ──
 #

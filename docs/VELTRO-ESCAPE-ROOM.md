@@ -595,6 +595,13 @@ emulator root also holds dynamic canaries and in-flight evidence; that alias
 would disclose the answer through the test apparatus. `source_ro: true` in
 `nsaudit-redteam.yaml` installs the explicit grants above.
 
+The live campaign is unattended. Its driver selects a deny-only approval mode:
+an operation that would normally open an Allow/Deny dialogue instead returns an
+audited `headless-denied` tool result. This never preauthorizes a dangerous
+operation or widens the trial namespace. The parent creates exactly three
+red-team children and ends its turn; the driver, rather than the model, owns
+waiting and result followthrough.
+
 The driver separately creates `/tmp/veltro/probe-sdk` in the activity's
 cowfs-staged writable view. It contains copies of `nsaudit.dis`, `limbo.dis`,
 the module interfaces, and the nsaudit fixtures. `exec` intentionally cannot

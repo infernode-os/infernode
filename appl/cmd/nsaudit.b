@@ -29,6 +29,7 @@ implement Nsaudit;
 #   DIR/meta/xenith              "1" or "0"
 #   DIR/meta/actid               integer
 #   DIR/meta/nodevs              "set" or "unset"
+#   DIR/walletbudget             "<positive uint256> ETH|USDC|USD" (base units)
 #
 # Manifest format: ndb attribute files at
 #   /lib/veltro/nsaudit/authorities/<tool>
@@ -77,14 +78,16 @@ Caps: adt {
 	role:      string;    # "toplevel" | "child"
 	xenith:    int;
 	actid:     int;
-	nodevs:    string;    # "set" | "unset"
+	nodevs:    string;    # "set" | "unset" | "invalid"
+	nodevsstatus: string; # "valid" | "missing" | "invalid"
 	# Optional caps-level constraints. These are not part of the /tool
 	# shape tools9p exposes today; when a caps dir provides them they
 	# narrow the corresponding rule. Absent => unconstrained (rules that
 	# key off them fire). Sources named in SECURITY.md "Authority axes".
 	shellcmds:    list of string;  # caps.shellcmds — exec allowlist
 	mcproviders:  list of string;  # caps.mcproviders — permitted net peers
-	walletbudget: string;          # per-call spend bound; "" => ungated
+	walletbudget: string;          # "<positive uint256> ETH|USDC|USD"
+	walletbudgetstatus: string;    # "bounded" | "missing" | "invalid"
 };
 
 # Per-tool manifest entry loaded from the authorities dir.
@@ -200,7 +203,9 @@ parseCaps(dir: string): ref Caps
 	c := ref Caps;
 	c.dir = dir;
 	c.role = "toplevel";
-	c.nodevs = "unset";
+	c.nodevs = "invalid";
+	c.nodevsstatus = "missing";
+	c.walletbudgetstatus = "missing";
 	c.actid = -1;
 	c.xenith = 0;
 
@@ -229,16 +234,57 @@ parseCaps(dir: string): ref Caps
 	if(a != "")
 		c.actid = int a;
 	n := readScalar(dir + "/meta/nodevs");
-	if(n != "")
+	if(n == "set" || n == "unset") {
 		c.nodevs = n;
+		c.nodevsstatus = "valid";
+	} else if(n != "")
+		c.nodevsstatus = "invalid";
 
 	# Optional caps-level constraints (see Caps adt). Missing files leave
 	# the lists nil / the scalar "", which the rules read as unconstrained.
 	c.shellcmds = readLines(dir + "/shellcmds");
 	c.mcproviders = readLines(dir + "/mcproviders");
 	c.walletbudget = readScalar(dir + "/walletbudget");
+	if(c.walletbudget != "") {
+		if(validWalletBudget(c.walletbudget))
+			c.walletbudgetstatus = "bounded";
+		else
+			c.walletbudgetstatus = "invalid";
+	}
 
 	return c;
+}
+
+# walletbudget mirrors wallet9p's budget units: a strict positive uint256 in
+# integer base units followed by its currency.  It is configuration evidence,
+# so malformed or ambiguous text must never attest to a bounded wallet.
+validWalletBudget(s: string): int
+{
+	toks := splitws(s);
+	if(toks == nil || tl toks == nil || tl tl toks != nil)
+		return 0;
+	amount := hd toks;
+	currency := hd tl toks;
+	if(!(currency == "ETH" || currency == "USDC" || currency == "USD"))
+		return 0;
+	if(amount == "" || amount == "0" || (len amount > 1 && amount[0] == '0'))
+		return 0;
+	for(i := 0; i < len amount; i++)
+		if(amount[i] < '0' || amount[i] > '9')
+			return 0;
+	# 2^256-1, the same numeric domain wallet9p accepts for budget values.
+	max := "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+	if(len amount > len max)
+		return 0;
+	if(len amount == len max) {
+		for(j := 0; j < len max; j++) {
+			if(amount[j] < max[j])
+				break;
+			if(amount[j] > max[j])
+				return 0;
+		}
+	}
+	return 1;
 }
 
 readLines(path: string): list of string
@@ -429,12 +475,13 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 	if(inv.writes_durable != nil && !contains(inv.auths, "writes_fs_durable"))
 		inv.auths = "writes_fs_durable" :: inv.auths;
 
-	# Kernel device attach: role=toplevel and nodevs=unset => unrestricted.
-	# role=child and nodevs=unset => subagent missing NODEVS (flagged by rule).
-	if(caps.nodevs == "unset" && caps.role == "toplevel") {
+	# Anything except the canonical "set" value is unsafe. This makes missing
+	# and malformed metadata fail closed while reporting their distinct state.
+	if(caps.nodevs != "set" && caps.role == "toplevel") {
 		if(!contains(inv.auths, "attaches_device"))
 			inv.auths = "attaches_device" :: inv.auths;
-		inv.sources = ("attaches_device", "role=toplevel, nodevs=unset") :: inv.sources;
+		inv.sources = ("attaches_device", "role=toplevel, nodevs=" +
+			caps.nodevsstatus) :: inv.sources;
 	}
 
 	# Xenith grants sends_ui and window access.
@@ -456,10 +503,11 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		}
 	}
 
-	# A spend authority with no caps-level budget is ungated spend.
-	if(contains(inv.auths, "spends") && caps.walletbudget == "") {
+	# Only a semantically valid caps-level budget attests to bounded spend.
+	if(contains(inv.auths, "spends") && caps.walletbudgetstatus != "bounded") {
 		inv.auths = "spend_ungated" :: inv.auths;
-		inv.sources = ("spend_ungated", "spends granted, no caps.walletbudget") :: inv.sources;
+		inv.sources = ("spend_ungated", "spends granted, walletbudget=" +
+			caps.walletbudgetstatus) :: inv.sources;
 	}
 
 	for(pl3 := caps.paths; pl3 != nil; pl3 = tl pl3) {
@@ -812,6 +860,8 @@ conditionTrue(inv: ref Inventory, cond: string): int
 	}
 	if(prefix(cond, "nodevs=")) {
 		want := cond[7:];
+		if(want == "unset")
+			return inv.caps.nodevs != "set";
 		return inv.caps.nodevs == want;
 	}
 	if(prefix(cond, "has_tool_")) {
@@ -1033,8 +1083,9 @@ mquote(s: string): string
 runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rule)
 {
 	c := inv.caps;
-	sys->fprint(stdout, "nsaudit=caps\tdir=%s\trole=%s\tnodevs=%s\tactid=%d\txenith=%d\n",
-		mquote(c.dir), c.role, c.nodevs, c.actid, c.xenith);
+	sys->fprint(stdout, "nsaudit=caps\tdir=%s\trole=%s\tnodevs=%s\tnodevs_status=%s\tactid=%d\txenith=%d\twalletbudget=%s\twalletbudget_status=%s\n",
+		mquote(c.dir), c.role, c.nodevs, c.nodevsstatus, c.actid, c.xenith,
+		mquote(c.walletbudget), c.walletbudgetstatus);
 
 	for(al := inv.auths; al != nil; al = tl al)
 		sys->fprint(stdout, "authority=%s\n", hd al);

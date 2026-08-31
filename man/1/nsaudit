@@ -94,7 +94,19 @@ exposes at
 	dir/meta/xenith         "1" or "0"
 	dir/meta/actid          integer or "-1"
 	dir/meta/nodevs         "set" or "unset"
+	dir/walletbudget        positive uint256 and ETH, USDC, or USD
 .fi
+.PP
+Wallet budget amounts are strict decimal integers in the currency's base
+units, matching the
+.B budget
+interface served by
+.BR wallet9p .
+Missing, zero, negative, overflowing, or malformed values are treated as
+unbounded spend. Missing or non-canonical
+.B nodevs
+values are treated as NODEVS unset. Machine output reports both validity
+states explicitly.
 .PP
 For live audit, point
 .I nsaudit
@@ -185,6 +197,7 @@ matches
 .B nodevs=VALUE
 matches
 .B meta/nodevs
+(a missing or invalid value fails closed as unset)
 .br
 .B has_tool_NAME
 tool is present in
@@ -223,7 +236,7 @@ record per line. Records are distinguished by their first attribute:
 .PP
 .B
 .nf
-	nsaudit=caps       the caps header (dir, role, nodevs, actid, xenith)
+	nsaudit=caps       caps plus nodevs_status and walletbudget_status
 	authority=NAME     one authority axis present in the inventory
 	reads_fs=PATH      one granted reads_fs path
 	writes_fs=PATH     one granted writes_fs path with reversibility tag

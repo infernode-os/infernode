@@ -39,6 +39,11 @@ trfs '#U*' /n/local
 ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 stage=$ghome/.infernode/grind/current
 
+# No trusted operator is present in a headless campaign. Dangerous calls must
+# terminate with an audited denial instead of blocking forever on UI input.
+mkdir -p /tmp/veltro
+echo deny > /tmp/veltro/.headless-approval-deny
+
 # --- read staged scenario params (single-token files; prompt read verbatim) --
 grind_url=`{cat $stage/url}
 grind_model=`{cat $stage/model}

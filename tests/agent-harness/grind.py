@@ -1225,7 +1225,24 @@ def parse_msg(raw):
     idx = raw.find("text=")
     if idx >= 0:
         text = raw[idx + len("text="):]
-    return {"role": role, "text": text.strip()}
+    return {
+        "role": role,
+        "text": text.strip(),
+        "dtype": "dialogue" if re.search(r"(?:^|\s)dtype=dialogue(?:\s|$)", raw) else "",
+        "approval_dialogue": "title=Permission required" in raw and
+                             "options=Allow,Deny" in raw,
+    }
+
+
+def approval_blocked_reasons(st):
+    """Name an unresolved operator dialogue separately from quota pauses."""
+    blocked = {str(a["id"]) for a in st["activities"]
+               if a.get("status", "").strip().lower().split(":", 1)[0] == "blocked"}
+    approvals = {str(m["a"]) for m in st["messages"]
+                 if m.get("approval_dialogue")}
+    return [f"activity {activity} approval-blocked on interactive permission dialogue"
+            for activity in sorted(blocked & approvals,
+                                   key=lambda value: (len(value), value))]
 
 
 # Each real model tool call appears in lucibridge -v output as the llmsrv wire
@@ -1632,6 +1649,8 @@ def main():
          scoring_errors) = evaluate_scenario_scoring(
             sc, st, completed, killed, audit_required, audit_errors,
             audit_records, audit_payloads, outdir, name)
+        reasons.extend(approval_blocked_reasons(st))
+        ok = len(reasons) == 0
 
         canary_hits, canary_changes, canary_after = [], [], {}
         if canaries:

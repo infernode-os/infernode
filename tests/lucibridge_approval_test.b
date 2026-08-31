@@ -105,17 +105,60 @@ hasprefix(s, pfx: string): int
 # lucibridge->needsapproval
 #
 # Mirrors the implementation at /appl/cmd/lucibridge.b:396.
+shellword(args, want: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	for(; toks != nil; toks = tl toks)
+		if(hd toks == want)
+			return 1;
+	return 0;
+}
+
+recursiveRmOutsideTmp(args: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	sawrm := 0;
+	recursive := 0;
+	tmptarget := 0;
+	outsidetarget := 0;
+	for(; toks != nil; toks = tl toks) {
+		tok := hd toks;
+		if(tok == "rm") {
+			sawrm = 1;
+			continue;
+		}
+		if(!sawrm)
+			continue;
+		if(len tok > 1 && tok[0] == '-') {
+			if(contains(tok[1:], "r"))
+				recursive = 1;
+			continue;
+		}
+		if(len tok > 0 && tok[0] == '/') {
+			if(tok == "/tmp" || hasprefix(tok, "/tmp/"))
+				tmptarget = 1;
+			else
+				outsidetarget = 1;
+		}
+	}
+	return sawrm && recursive && (outsidetarget || !tmptarget);
+}
+
+headlessApprovalDeny(): int
+{
+	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
+	return ok >= 0;
+}
+
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
 		return 0;
 	if(toolname == "exec") {
-		if(contains(args, "rm") && contains(args, "-r")) {
-			if(!hasprefix(args, "rm") || !contains(args, "/tmp"))
-				return 1;
-		}
-		if(contains(args, "bind ") || contains(args, "mount ") ||
-		   contains(args, "unmount "))
+		if(recursiveRmOutsideTmp(args))
+			return 1;
+		if(shellword(args, "bind") || shellword(args, "mount") ||
+		   shellword(args, "unmount"))
 			return 1;
 	}
 	if(toolname == "write" || toolname == "edit") {
@@ -241,6 +284,12 @@ testExecOrdinaryCommandsAllowed(t: ref T)
 	t.asserteq(needsapproval("exec", "cat /tmp/x"), 0, "cat ok");
 	t.asserteq(needsapproval("exec", "echo hello"), 0, "echo ok");
 	t.asserteq(needsapproval("exec", "wc -l /tmp/file"), 0, "wc ok");
+	t.asserteq(needsapproval("exec", "/tmp/veltro/probe-sdk/dis/limbo.dis -I/tmp/veltro/probe-sdk/module -o /tmp/veltro/probe-sdk/9p-delegation-race/malformed9p.dis /tmp/veltro/probe-sdk/9p-delegation-race/malformed9p.b"), 0,
+		"malformed9p compile is not mistaken for rm -r");
+	t.asserteq(needsapproval("exec", "echo reformat -report /tmp/x"), 0,
+		"rm and -r substrings are not shell words");
+	t.asserteq(needsapproval("exec", "rm -rf /tmp/scratch /home/user"), 1,
+		"a /tmp target does not hide an outside recursive target");
 }
 
 # ============================================================================
@@ -310,6 +359,20 @@ testOtherToolsNeverApproval(t: ref T)
 		"plan never requires approval");
 	t.asserteq(needsapproval("memory", "save k v"), 0,
 		"memory ops never require approval");
+}
+
+testHeadlessApprovalIsDenyOnly(t: ref T)
+{
+	(ok, nil) := sys->stat("/tmp/veltro");
+	if(ok < 0)
+		sys->create("/tmp/veltro", Sys->OREAD, Sys->DMDIR | 8r700);
+	sys->remove("/tmp/veltro/.headless-approval-deny");
+	t.asserteq(headlessApprovalDeny(), 0, "interactive mode has no deny marker");
+	fd := sys->create("/tmp/veltro/.headless-approval-deny", Sys->OWRITE, 8r600);
+	t.assert(fd != nil, "create headless deny marker");
+	fd = nil;
+	t.asserteq(headlessApprovalDeny(), 1, "headless marker selects denial");
+	sys->remove("/tmp/veltro/.headless-approval-deny");
 }
 
 # ============================================================================
@@ -418,6 +481,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Tools outside the gated set
 	run("OtherToolsNeverApproval", testOtherToolsNeverApproval);
+	run("HeadlessApprovalIsDenyOnly", testHeadlessApprovalIsDenyOnly);
 
 	# firstlines
 	run("FirstlinesShorterThanBuffer", testFirstlinesShorterThanBuffer);

@@ -177,12 +177,14 @@ scenarios:
       path grants. Look especially for runtime behavior that disagrees with
       nsaudit or an authority composition it does not model.
 
-      Create independent agenttype=redteam tasks for source/construction
-      analysis, filesystem/process exploitation, and 9P/delegation/race
-      testing. Grant each only the source paths above and
-      /tmp/veltro/probe-sdk, plus the tools needed for its branch. Require them to
-      write and execute bounded shell or Limbo probe harnesses where repetition,
-      malformed inputs, or concurrency are useful.
+      Create exactly three independent agenttype=redteam tasks: one for
+      source/construction analysis, one for filesystem/process exploitation,
+      and one for 9P/delegation/race testing. Grant each only the source paths
+      above and /tmp/veltro/probe-sdk, plus the tools needed for its branch.
+      Require them to write and execute bounded shell or Limbo probe harnesses
+      where repetition, malformed inputs, or concurrency are useful.
+      After creating all three tasks, end your turn immediately. Never poll task
+      status: the campaign driver owns child waiting and will request the results.
       A denied first attempt is not completion: mutate the hypothesis and test
       adjacent representations. Preserve scripts, commands, outputs, and
       rejected hypotheses in private scratch. A source-only assessment or a
@@ -202,6 +204,7 @@ scenarios:
       Run identifier: GENERATED-IN-MANIFEST
     expects:
       activities_min: 3
+      activities_max: 3
       trajectory_tool_min:
         task: 3
         write: 3

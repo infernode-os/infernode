@@ -535,17 +535,60 @@ readuserinput(): string
 }
 
 # Determine if a tool call needs user approval.
+shellword(args, want: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	for(; toks != nil; toks = tl toks)
+		if(hd toks == want)
+			return 1;
+	return 0;
+}
+
+recursiveRmOutsideTmp(args: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	sawrm := 0;
+	recursive := 0;
+	tmptarget := 0;
+	outsidetarget := 0;
+	for(; toks != nil; toks = tl toks) {
+		tok := hd toks;
+		if(tok == "rm") {
+			sawrm = 1;
+			continue;
+		}
+		if(!sawrm)
+			continue;
+		if(len tok > 1 && tok[0] == '-') {
+			if(agentlib->contains(tok[1:], "r"))
+				recursive = 1;
+			continue;
+		}
+		if(len tok > 0 && tok[0] == '/') {
+			if(tok == "/tmp" || agentlib->hasprefix(tok, "/tmp/"))
+				tmptarget = 1;
+			else
+				outsidetarget = 1;
+		}
+	}
+	return sawrm && recursive && (outsidetarget || !tmptarget);
+}
+
+headlessApprovalDeny(): int
+{
+	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
+	return ok >= 0;
+}
+
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
 		return 0;
 	if(toolname == "exec") {
-		if(agentlib->contains(args, "rm") && agentlib->contains(args, "-r")) {
-			if(!agentlib->hasprefix(args, "rm") || !agentlib->contains(args, "/tmp"))
-				return 1;
-		}
-		if(agentlib->contains(args, "bind ") || agentlib->contains(args, "mount ") ||
-		   agentlib->contains(args, "unmount "))
+		if(recursiveRmOutsideTmp(args))
+			return 1;
+		if(shellword(args, "bind") || shellword(args, "mount") ||
+		   shellword(args, "unmount"))
 			return 1;
 	}
 	if(toolname == "write" || toolname == "edit") {
@@ -556,11 +599,18 @@ needsapproval(toolname, args: string): int
 	return 0;
 }
 
-# Pre-tool approval gate. Returns "allow" or "deny".
+# Pre-tool approval gate. Returns "allow", "deny", or "headless-deny".
 pretoolapproval(toolname, args: string): string
 {
 	if(!needsapproval(toolname, args))
 		return "allow";
+	# An unattended grind campaign has no trusted operator surface. Its marker
+	# can only make a request fail, never grant authority, so spoofing it cannot
+	# cross a namespace boundary.
+	if(headlessApprovalDeny()) {
+		log("pretool: denied by headless campaign policy for " + toolname);
+		return "headless-deny";
+	}
 	desc := toolname + " " + agentlib->truncate(args, 120);
 	didx := writedialogue("Permission required",
 		desc, "", "Allow,Deny");
@@ -1783,11 +1833,16 @@ agentturn(input: string)
 
 				# Pre-tool approval for destructive operations
 				approval := pretoolapproval(nm, eargs);
-				if(approval == "deny") {
+				if(approval == "deny" || approval == "headless-deny") {
 					denied := "error: operation denied by operator";
+					status := "denied";
+					if(approval == "headless-deny") {
+						denied = "error: operation denied by headless campaign policy";
+						status = "headless-denied";
+					}
 					results = (id, denied) :: results;
-					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=denied",
-						actid, sessionid, step + 1, name), array of byte denied);
+					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
+						actid, sessionid, step + 1, name, status), array of byte denied);
 					writefile(ctxpath, "resource update path=" + nm + " status=idle");
 					if(fpath != nil)
 						writefile(ctxpath, "resource update path=" + fpath + " status=idle");

@@ -691,8 +691,11 @@ Current fixtures under `tests/nsaudit-fixtures/`:
 - `profile-messaging` — base profile plus the message read/proposal surface
   (`/mnt/msg`, `/mnt/msg/draft`). Trusted message controls remain excluded.
 - `profile-payments` — base profile plus wallet proposal authority
-  (`/n/wallet`) and a declared `walletbudget`. Trusted wallet controls remain
-  excluded.
+  (`/n/wallet`) and a declared `walletbudget`. The declaration is exactly a
+  positive uint256 integer in base units followed by `ETH`, `USDC`, or `USD`
+  (for example, `1000000 USDC`). Missing, zero, negative, overflowing, or
+  malformed declarations fail closed as unbounded spend. Trusted wallet
+  controls remain excluded.
 
 The important design rule is additive composition. Start with a small base
 namespace, then overlay only the capability layer required for the job:

@@ -57,28 +57,30 @@ extern int nserialbootimg;
 enum {
 	Recovchar	= 0x03,		/* ETX; serialboot's own handshake byte */
 	/*
-	 * A quarter of a second, and it does not want to be longer.
+	 * Fifty milliseconds, arrived at by walking it down.
 	 *
-	 * The first version waited a second and a half and cost seven
-	 * checks in the harness -- the framebuffer screenshot, the shell
+	 * Every boot pays this whether or not anyone ever needs it, and
+	 * the harness measured what that costs: a second and a half took
+	 * SEVEN checks with it -- the framebuffer screenshot, the shell
 	 * session, the keyboard enumeration -- none of them broken, all
-	 * of them simply given a second and a half less boot inside
-	 * their own windows. Every boot pays this, so it is not free.
+	 * simply given that much less boot inside their own windows. A
+	 * quarter of a second still took two.
 	 *
-	 * It does not need to be long. The host asks by SENDING ETX
-	 * continuously from the moment it resets the board, so by the
-	 * time this runs the byte is already sitting in the receive
-	 * FIFO; the window is covering jitter between the reset and this
-	 * check, not waiting for a human to decide.
+	 * It does not need to be long, because it is not waiting for a
+	 * person. The host asks by SENDING ETX continuously from the
+	 * moment it resets the board, and the board takes far longer than
+	 * this to reset and reach here, so the byte is already sitting in
+	 * the receive FIFO when this looks. The window covers jitter, and
+	 * a miss is not fatal -- ask again.
 	 */
-	Recovwait	= 250,		/* ms to wait before giving up on it */
+	Recovwait	= 50,		/* ms to wait before giving up on it */
 	Recovaddr	= 32*1024*1024,	/* where serialboot is linked to run */
 };
 
 /*
  * Wait briefly for the host to ask for the loader, and hand over if it
  * does. Returns normally if nobody asked, which is the ordinary case
- * and must stay cheap -- a quarter of a second on every boot, paid
+ * and must stay cheap -- fifty milliseconds on every boot, paid
  * whether or not anyone ever needs it.
  */
 void
@@ -98,13 +100,20 @@ serialrecover(void)
 	 * from the generic timer's fixed frequency and works from reset.
 	 */
 	asked = 0;
-	for(i = 0; i < Recovwait; i++){
-		c = uartgetc();
-		if(c == Recovchar){
-			asked = 1;
-			break;
-		}
-		microdelay(1000);
+	for(i = 0; i < Recovwait && !asked; i++){
+		/*
+		 * Drain what is already there before spending any time.
+		 * The host has been sending since the reset, so in the case
+		 * this exists for the answer is waiting and costs nothing
+		 * to find.
+		 */
+		while((c = uartgetc()) >= 0)
+			if(c == Recovchar){
+				asked = 1;
+				break;
+			}
+		if(!asked)
+			microdelay(1000);
 	}
 	if(!asked)
 		return;

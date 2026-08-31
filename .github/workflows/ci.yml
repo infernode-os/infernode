@@ -380,6 +380,7 @@ jobs:
           emu/Linux/o.emu
           Linux/amd64/bin/limbo
           Linux/amd64/bin/mk
+          dis/
         retention-days: 14
 
   # ─────────────────────────────────────────────

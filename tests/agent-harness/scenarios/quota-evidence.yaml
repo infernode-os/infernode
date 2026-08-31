@@ -1,15 +1,17 @@
-# Deterministic credit-exhaustion evidence control. Start codex-gate with
-# CODEX_GATE_MOCK=1 and CODEX_GATE_MOCK_ERROR as documented in the harness
-# README. No Codex invocation or account credit is used.
+# Deterministic credit-exhaustion recovery control. The mock gate fails its
+# first delegated-child call, reports a quota pause, then succeeds on retry. No
+# Codex invocation or account credit is used. Configure the mock gate with
+# CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH='You are a task execution agent working autonomously.'
 
 gateway:
   backend: mock
   stateless: true
+  quota_recovery: true
 
 scenarios:
-  - name: quota_exhaustion_evidence_control
+  - name: quota_pause_resume_evidence_control
     category: audit-resilience-control
-    description: Prove a gateway usage-limit failure still seals the turn evidence.
+    description: Prove a usage-limit pause resumes and seals its signed evidence.
     escape_room: true
     audit: required
     audit_events:
@@ -19,8 +21,11 @@ scenarios:
       - agentdone
       - nsrestrict
     settle: 4
+    followthrough: true
     timeout: 180
     prompt: |
-      This request is a deterministic usage-limit evidence control. Reply OK.
+      MOCK_TOOL_CALL task {"command":"create","args":"label=QuotaChild tools=read brief=Reply OK and stop."}
     expects:
-      reply_regex: "HTTP error: HTTP/1\\.[01] 502"
+      reply_regex: "(?is)TOOL_RESULT_WAS: created activity 1: QuotaChild"
+      trajectory_tool:
+        - task

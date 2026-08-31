@@ -57,7 +57,7 @@ first; they are the controls a generic Linux/Windows host cannot evidence as cle
 | **IA** Identification & Auth | MFA, PKI, AAL3 | Technical | Factotum credential agent; FIDO2 UV (AAL3) login; PQ-capable X.509 / mTLS | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md); `docs/AUTHENTICATION.md`, `docs/DISTRIBUTED-AUTH.md` | **Strong** (AAL3 verifier shipped) |
 | **SC** System & Comms Protection | Crypto, boundary, transport | Technical | `libsec` (AES-256-GCM, SHA-384/512, full PQC); hybrid TLS + hybrid native STS; namespace boundaries | [`CNSA-2.0.md`](CNSA-2.0.md); `docs/CRYPTO-MODERNIZATION.md` | **Strong** (CNSA-strict params tracked) |
 | **SI** System & Information Integrity | Memory safety, malware, flaws | Technical | Dis VM: type-safe, memory-safe, sandboxed bytecode → eliminates whole CWE classes (no raw pointers, bounds-checked); CodeQL + fuzzing in CI | `doc/dis.ms`; `.github/workflows/security.yml` (CodeQL), `fuzz.yml`; `tests/handshake_fuzz_test.b` | **Strong** (see §5.SI) |
-| **CM** Configuration Management | Baselines, integrity of components | Technical | Reproducible Plan 9 `mk` builds; `.dis` path-integrity verifier; SHA-pinned CI actions; tracked `dis/` runtime tree | `.github/workflows/verify-dis-paths.yml`; `tools/verify-dis-paths.sh`; `CLAUDE.md` (dis integrity) | **Strong** (see §5.CM) |
+| **CM** Configuration Management | Baselines, integrity of components | Technical | Reproducible Plan 9 `mk` builds; bytecode built from source in CI and at release, checked against a tracked module manifest; SHA-pinned CI actions | `.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`; `tools/dis-manifest.txt`; `CLAUDE.md` (dis is a build product) | **Strong** (see §5.CM) |
 | **SR** Supply Chain Risk | Provenance, integrity of artifacts | Technical | SLSA build provenance attestations; cosign keyless (Sigstore) signing; SHA256SUMS; OpenSSF Scorecard | `.github/workflows/release.yml:1257-1288`; `scorecard.yml` | **Strong** (see §5.SR) |
 | **CA** Assessment, Auth & Monitoring | Continuous assessment | Technical+Org | Formal verification in CI (TLA+/SPIN/CBMC); CodeQL/Scorecard/fuzz continuous scanning; ring-fence guard | `formal-verification/`; `.github/workflows/` (formal-verification, security, scorecard, fuzz); `CLAUDE.md` (ring-fence) | **Strong (technical)**; assessment process = operator |
 | **RA** Risk Assessment | Vuln scanning, risk | Technical+Org | CodeQL, fuzzing, OpenSSF Scorecard, formal verification feed risk posture; threat models in security docs | `.github/workflows/{security,fuzz,scorecard}.yml`; `docs/NAMESPACE_SECURITY_REVIEW.md` §3 (threat model) | **Partial** (tooling ✅; org RA process = operator) |
@@ -102,9 +102,11 @@ dispositions, noreturn FPs); tracked, not silent.
 ### 5.CM — Configuration Management
 - **Reproducible builds** via Inferno-native `mk` (same toolchain builds the system and the
   apps; `CLAUDE.md` "Why Native Tools").
-- **Bytecode integrity:** `tools/verify-dis-paths.sh` + the `verify-dis-paths` CI workflow
-  refuse any commit where a compiled `.dis` is missing or older than its source — preventing
-  the "stale/ wrong-target bytecode" class. Pre-commit hook enforces locally; CI is the
+- **Bytecode integrity:** compiled `.dis` is not committed at all — it is built from the
+  tagged source by CI and by every release job, which removes the "stale / wrong-target
+  bytecode" class by construction rather than policing it. `tools/dis-manifest.txt` tracks
+  the set of modules the build must produce and `tools/verify-dis-build.sh` fails if any is
+  missing, so a component cannot silently leave the baseline. CI is the
   universal backstop.
 - **Pinned dependencies:** CI actions are pinned to commit SHAs (see `release.yml`), not
   floating tags — a CM-2/CM-7 supply-integrity property.

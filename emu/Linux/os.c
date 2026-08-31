@@ -121,11 +121,23 @@ faultwhere(void *a)
 	return;
 #endif
 	fprint(2, "  PC=%p\n", pc);
-	if(dladdr(pc, &di) && di.dli_sname != nil)
+	/*
+	 * dladdr() only sees the dynamic symbol table, so a fault in a static
+	 * function (e.g. the JIT's own genw/typecom) resolves the image but
+	 * leaves dli_sname nil.  Reporting that as "not in any image" is wrong
+	 * and actively misleading: it sent INFR-421 chasing JIT-generated code
+	 * when the PC was in emu's own text the whole time.  Distinguish the
+	 * three cases: named symbol, image-but-no-symbol, and truly no image.
+	 */
+	if(dladdr(pc, &di) == 0)
+		fprint(2, "  PC not in any loaded image (JIT-generated code?)\n");
+	else if(di.dli_sname != nil)
 		fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
 			(ulong)((uintptr)pc - (uintptr)di.dli_saddr));
 	else
-		fprint(2, "  PC not in any image (JIT-generated code?)\n");
+		fprint(2, "  PC in %s+%#lx (no exported symbol; static function — addr2line the offset)\n",
+			di.dli_fname != nil ? di.dli_fname : "?",
+			(ulong)((uintptr)pc - (uintptr)di.dli_fbase));
 	if(up != nil && up->nlocks > 0)
 		fprint(2, "  holding %d lock(s)\n", up->nlocks);
 }

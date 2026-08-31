@@ -106,11 +106,79 @@ echo "$r" | grep -q '"content": "MOCK_REPLY: hi"' || fail "stream: delta missing
 echo "$r" | grep -q 'data: \[DONE\]' || fail "stream: no [DONE]"
 pass "SSE streaming shape"
 
-# 7. Deterministic Codex failure injection has the same external shape as a
-#    CLI usage-limit failure: CodexError becomes an OpenAI-compatible 502.
+# A real Codex reasoning turn can exceed llmclient's no-progress window before
+# producing its final structured message. The gate commits SSE headers first
+# and sends comments while the CLI runs, so that valid work is not mistaken
+# for a dead connection.
+SLOW_PORT=$((PORT+2))
+CODEX_GATE_MOCK=1 CODEX_GATE_MOCK_DELAY=0.25 \
+CODEX_GATE_HEARTBEAT=0.05 CODEX_GATE_PORT=$SLOW_PORT \
+    python3 "$GATE" >/dev/null 2>&1 &
+SLOW_PID=$!
+trap 'kill $GATE_PID $SLOW_PID 2>/dev/null || true' EXIT
+i=0
+while ! curl -sf -m 1 "http://127.0.0.1:$SLOW_PORT/health" >/dev/null 2>&1; do
+    i=$((i+1))
+    [ $i -lt 30 ] || fail "slow gate did not come up on :$SLOW_PORT"
+    sleep 0.2
+done
+r="$(curl -sf --no-buffer "http://127.0.0.1:$SLOW_PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' -d '{
+    "model":"default","stream":true,
+    "messages":[{"role":"user","content":"slow"}]}')"
+echo "$r" | grep -q ': codex-gate working' || fail "stream: heartbeat missing ($r)"
+echo "$r" | grep -q '"content": "MOCK_REPLY: slow"' || fail "stream: delayed reply missing ($r)"
+kill "$SLOW_PID" 2>/dev/null || true
+wait "$SLOW_PID" 2>/dev/null || true
+pass "SSE heartbeat covers long Codex turns"
+
+python3 - "$ROOT" <<'PY' || fail "cancelled codex process cleanup"
+import asyncio
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class Proc:
+    returncode = None
+    killed = False
+    waited = False
+    async def communicate(self, data):
+        await asyncio.Event().wait()
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+    async def wait(self):
+        self.waited = True
+
+async def check():
+    proc = Proc()
+    async def create(*args, **kwargs):
+        return proc
+    m.asyncio.create_subprocess_exec = create
+    task = asyncio.create_task(m.run_codex("default", "prompt", None))
+    await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("cancelled run_codex returned normally")
+    assert proc.killed and proc.waited, (proc.killed, proc.waited)
+
+asyncio.run(check())
+PY
+pass "cancelled streams reap codex exec"
+
+# 7. A terminal usage-limit failure is structured and distinct from model
+#    output. Disable recovery here to exercise the exhausted-policy response.
 ERROR_PORT=$((PORT+1))
 CODEX_GATE_MOCK=1 \
 CODEX_GATE_MOCK_ERROR='usage limit reached; retry after reset' \
+CODEX_GATE_QUOTA_MAX_WAIT=0 \
 CODEX_GATE_PORT=$ERROR_PORT python3 "$GATE" >/dev/null 2>&1 &
 ERROR_PID=$!
 ERROR_BODY="$(mktemp "${TMPDIR:-/tmp}/codex-gate-error.XXXXXX")"
@@ -125,12 +193,121 @@ status="$(curl -s -o "$ERROR_BODY" -w '%{http_code}' \
     "http://127.0.0.1:$ERROR_PORT/v1/chat/completions" \
     -H 'Content-Type: application/json' \
     -d '{"model":"default","messages":[{"role":"user","content":"hello"}]}')"
-[ "$status" = 502 ] || fail "fault injection returned HTTP $status"
-grep -q 'usage limit reached' "$ERROR_BODY" || \
-    fail "fault injection lost the CLI error"
-pass "usage-limit fault injection returns the production error shape"
+[ "$status" = 429 ] || fail "fault injection returned HTTP $status"
+grep -q '"type": "usage_limit"' "$ERROR_BODY" || \
+    fail "fault injection lost structured usage-limit type"
+grep -q '"retryable": true' "$ERROR_BODY" || \
+    fail "fault injection is not marked retryable"
+if grep -q 'retry after reset' "$ERROR_BODY"; then
+    fail "raw provider quota text escaped into the response"
+fi
+pass "usage-limit exhaustion returns structured HTTP 429"
 
-# 8. The prompt-level tool protocol parses into OpenAI tool_calls
+stream_error="$(curl -sf --no-buffer \
+    "http://127.0.0.1:$ERROR_PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"default","stream":true,"messages":[{"role":"user","content":"hello"}]}')"
+echo "$stream_error" | grep -q '"type": "usage_limit"' || \
+    fail "streaming quota failure lost structured error ($stream_error)"
+if echo "$stream_error" | grep -q '"content"'; then
+    fail "streaming quota failure was emitted as assistant content"
+fi
+pass "streaming usage-limit error is not assistant content"
+
+# 8. A transient limit pauses and retries the exact request. While sleeping,
+#    /health exposes machine-readable state; the successful response contains
+#    no quota text and requires no client-side transcript mutation.
+RECOVER_PORT=$((PORT+3))
+RECOVER_BODY="$(mktemp "${TMPDIR:-/tmp}/codex-gate-recover.XXXXXX")"
+CODEX_GATE_MOCK=1 \
+CODEX_GATE_MOCK_ERROR='usage limit reached; try again in 1 second' \
+CODEX_GATE_MOCK_ERROR_COUNT=1 \
+CODEX_GATE_QUOTA_BACKOFF=0.05 \
+CODEX_GATE_QUOTA_MAX_WAIT=5 \
+CODEX_GATE_PORT=$RECOVER_PORT python3 "$GATE" >/dev/null 2>&1 &
+RECOVER_PID=$!
+trap 'kill $GATE_PID $ERROR_PID $RECOVER_PID 2>/dev/null || true; rm -f "$ERROR_BODY" "$RECOVER_BODY"' EXIT
+i=0
+while ! curl -sf -m 1 "http://127.0.0.1:$RECOVER_PORT/health" >/dev/null 2>&1; do
+    i=$((i+1))
+    [ $i -lt 30 ] || fail "recovery gate did not come up on :$RECOVER_PORT"
+    sleep 0.2
+done
+curl -sf "http://127.0.0.1:$RECOVER_PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"default","messages":[{"role":"user","content":"resume me"}]}' \
+    >"$RECOVER_BODY" &
+RECOVER_CURL_PID=$!
+sleep 0.2
+out="$(curl -sf "http://127.0.0.1:$RECOVER_PORT/health")"
+echo "$out" | grep -q '"state": "paused_quota"' || \
+    fail "gateway did not expose quota pause ($out)"
+echo "$out" | grep -q '"paused_turns": 1' || \
+    fail "gateway did not count paused turn ($out)"
+wait "$RECOVER_CURL_PID"
+grep -q 'MOCK_REPLY: resume me' "$RECOVER_BODY" || \
+    fail "paused request did not resume"
+if grep -qi 'usage limit' "$RECOVER_BODY"; then
+    fail "quota text was returned as model output"
+fi
+out="$(curl -sf "http://127.0.0.1:$RECOVER_PORT/health")"
+echo "$out" | grep -q '"state": "ready"' || fail "gateway did not return to ready"
+echo "$out" | grep -q '"state": "resumed"' || fail "gateway lost resume evidence"
+pass "usage-limit pause resumes the same request"
+
+python3 - "$ROOT" <<'PY' || fail "bounded quota exhaustion"
+import asyncio
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.QUOTA_MAX_WAIT = 0.12
+m.QUOTA_BACKOFF = 0.05
+m.QUOTA_MAX_BACKOFF = 0.05
+calls = 0
+
+async def fail():
+    global calls
+    calls += 1
+    raise m.CodexError("usage limit reached")
+
+async def check():
+    try:
+        await m.run_with_quota_recovery(fail)
+    except m.UsageLimitError:
+        pass
+    else:
+        raise AssertionError("unbounded quota retry returned")
+    assert calls >= 2, calls
+    assert m._last_quota_pause["state"] == "exhausted", m._last_quota_pause
+    assert m._last_quota_pause["duration_seconds"] >= 0.12, m._last_quota_pause
+    assert not m._quota_pauses, m._quota_pauses
+
+    # The campaign control can target a delegated child without spending the
+    # one-shot fault on its parent request.
+    selector = "You are a task execution agent working autonomously."
+    m.MOCK_ERROR = "usage limit reached"
+    m.MOCK_ERROR_COUNT = 1
+    m.MOCK_ERROR_SYSTEM_MATCH = selector
+    m._mock_errors_remaining = 1
+    parent = await m.mock_turn("default", "parent", "create child", [], [])
+    assert parent[0].startswith("MOCK_REPLY:"), parent
+    try:
+        await m.mock_turn("default", selector, "child brief", [], [])
+    except m.CodexError as error:
+        assert "usage limit" in str(error)
+    else:
+        raise AssertionError("selected child mock did not fail")
+    resumed = await m.mock_turn("default", selector, "child brief", [], [])
+    assert resumed[0] == "MOCK_REPLY: child brief", resumed
+
+asyncio.run(check())
+PY
+pass "quota retries are bounded and can target a delegated child"
+
+# 9. The prompt-level tool protocol parses into OpenAI tool_calls
 python3 - "$ROOT" <<'PY' || fail "tool-reply parser"
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location(
@@ -356,6 +533,7 @@ echo "$out" | grep -q '"disabled_features"' || fail "health: no feature list ($o
 echo "$out" | grep -q '"shell_tool"' || fail "health: shell_tool not pinned ($out)"
 echo "$out" | grep -q '"exec_flags"' || fail "health: no exec flags ($out)"
 echo "$out" | grep -q '"adapter_instructions_sha256"' || fail "health: adapter contract unhashed ($out)"
+echo "$out" | grep -q '"quota_recovery": true' || fail "health: quota recovery not advertised ($out)"
 pass "health reports the pinned CLI profile"
 
 # 14. grind.py's gateway preflight refuses an unpinned gateway.
@@ -374,6 +552,7 @@ url = "http://127.0.0.1:%s/v1" % port
 for requirements, expect in (
         ({"backend": "codex-cli"}, "backend"),
         ({"hardened": True, "backend": "mock"}, None),
+        ({"quota_recovery": True, "backend": "mock"}, None),
         ({"disabled_features": ["plugins"], "backend": "mock"}, None),
         ({"disabled_features": ["no_such_feature"], "backend": "mock"}, "does not disable"),
         ({"codex_version": "codex-cli 9.9.9", "backend": "mock"}, "pins")):

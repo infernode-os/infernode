@@ -72,7 +72,7 @@ All endpoints bind `127.0.0.1` only.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/v1/chat/completions` | POST | OpenAI chat completions. Accepts `messages`, `tools` (OpenAI function format), `model`, `stream`. Returns `choices[0].message.content` / `.tool_calls` (`arguments` is a JSON string), `finish_reason` `stop`/`tool_calls`, `usage.total_tokens`. `stream:true` yields single-chunk SSE ending in `data: [DONE]`. |
+| `/v1/chat/completions` | POST | OpenAI chat completions. Accepts `messages`, `tools` (OpenAI function format), `model`, `stream`. Returns `choices[0].message.content` / `.tool_calls` (`arguments` is a JSON string), `finish_reason` `stop`/`tool_calls`, `usage.total_tokens`. `stream:true` sends SSE keepalive comments while Codex reasons, then one result chunk ending in `data: [DONE]`. |
 | `/v1/models` | GET | Advertised model ids — what llmsrv's `/mnt/llm/models` and the Settings picker show. Set with `CODEX_GATE_MODELS`; whatever a request names is passed straight to `codex -m`, so the list is a convenience, not a whitelist. |
 | `/health` | GET | Liveness + gauges. |
 
@@ -137,7 +137,12 @@ Config (env, read at start):
 | `CODEX_GATE_MODEL` | *(empty)* | model when the request names none; empty = let the CLI use its own configured default (no `-m` passed) |
 | `CODEX_GATE_MODELS` | `default` | advertised on `/v1/models`; `default` omits `codex -m` so the CLI chooses its configured current model |
 | `CODEX_GATE_TIMEOUT` | `900` | seconds one `codex exec` may run |
+| `CODEX_GATE_HEARTBEAT` | `30` | seconds between protocol-valid SSE comments while `codex exec` is still running; keep below the caller's no-progress timeout |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
+| `CODEX_GATE_QUOTA_MAX_WAIT` | `21600` | maximum seconds to preserve and retry a usage-limit-paused request; `0` returns a structured 429 immediately |
+| `CODEX_GATE_QUOTA_BACKOFF` | `30` | initial retry delay when Codex provides no reset time |
+| `CODEX_GATE_QUOTA_MAX_BACKOFF` | `900` | maximum fallback retry delay |
+| `CODEX_GATE_QUOTA_RESET_GRACE` | `30` | grace after a minute-precision reset time before retrying |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
 | `CODEX_GATE_WORKDIR` | `~/.cache/codex-gate/workdir` | `--cd` value |
 | `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child, to isolate `~/.codex` (you must copy `auth.json` in yourself) |
@@ -147,6 +152,7 @@ Config (env, read at start):
 | `CODEX_GATE_DISABLE_FEATURES` | *(unset)* | comma list replacing the pinned disable set |
 | `CODEX_GATE_HOME_ALLOW` | `auth.json,auth.json.lock,version.json,installation_id` | what the isolated Codex home may contain at startup |
 | `CODEX_GATE_MOCK`, `CODEX_GATE_DEBUG` | — | test backend, verbose logs |
+| `CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH` | *(empty)* | mock-only fault selector; inject the configured mock error only when the system prompt contains this exact text |
 
 ## Pinned CLI surface
 
@@ -234,9 +240,17 @@ codex` report on it.
 
 Headless CLI usage draws on the account the CLI is logged into. On a ChatGPT
 plan that means the plan's Codex usage allowance; when it is exhausted the
-CLI's own behaviour (rate-limit or overage) is what you get — the gate does
-not meter. All consumers of one gate share one allowance and one auth
-identity.
+gate keeps the affected HTTP request open, releases its Codex process slot,
+and retries without advancing the caller's transcript. `/health` reports
+`state=paused_quota` plus safe retry timing while this is happening. The gate
+does not meter usage. All consumers of one gate share one allowance and one
+auth identity.
+
+This is not `codex exec resume`. `llmsrv` and Veltro own the durable transcript,
+tool results, and activity tree; the gate still starts a fresh ephemeral
+`codex exec` for every attempt. A retry replays the same unchanged request.
+Set `CODEX_GATE_QUOTA_MAX_WAIT=0` when an operator prefers an immediate,
+machine-readable HTTP 429 instead of waiting.
 
 **OPENAI_API_KEY can silently outrank ChatGPT auth in the CLI**, billing the
 API instead of the plan. The serve script unsets it, and the gate refuses to

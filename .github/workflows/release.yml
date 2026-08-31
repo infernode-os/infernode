@@ -171,6 +171,14 @@ jobs:
           echo "WARNING: libfido2 not linked — /dev/2fa will be a stub in this artifact" >&2
         fi
 
+        # dis/ is not tracked, so the tree must be built before it can be
+        # staged -- exactly as emu/*/o.emu already is.  This also checks the
+        # build against tools/dis-manifest.txt, so a release cannot quietly
+        # ship with a module missing.
+        PATH="$ROOT/$(uname -s | sed 's/Darwin/MacOSX/')/$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')/bin:$PATH"
+        export PATH
+        "$ROOT/tools/verify-dis-build.sh"
+
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
@@ -449,6 +457,14 @@ jobs:
         cp Linux/amd64/bin/limbo Linux/amd64/bin/mk "$STAGE/bin/"
         strip "$STAGE/bin/emu" "$STAGE/bin/limbo" "$STAGE/bin/mk"
 
+        # dis/ is not tracked, so the tree must be built before it can be
+        # staged -- exactly as emu/*/o.emu already is.  This also checks the
+        # build against tools/dis-manifest.txt, so a release cannot quietly
+        # ship with a module missing.
+        PATH="$ROOT/$(uname -s | sed 's/Darwin/MacOSX/')/$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')/bin:$PATH"
+        export PATH
+        "$ROOT/tools/verify-dis-build.sh"
+
         # Runtime tree into resources/
         for d in dis lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
@@ -642,6 +658,14 @@ jobs:
         else
           echo "WARNING: libfido2 not linked — /dev/2fa will be a stub in this artifact" >&2
         fi
+
+        # dis/ is not tracked, so the tree must be built before it can be
+        # staged -- exactly as emu/*/o.emu already is.  This also checks the
+        # build against tools/dis-manifest.txt, so a release cannot quietly
+        # ship with a module missing.
+        PATH="$ROOT/$(uname -s | sed 's/Darwin/MacOSX/')/$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')/bin:$PATH"
+        export PATH
+        "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do
@@ -919,6 +943,14 @@ jobs:
         # Native tools
         cp Linux/arm64/bin/limbo Linux/arm64/bin/mk "$STAGE/bin/"
 
+        # dis/ is not tracked, so the tree must be built before it can be
+        # staged -- exactly as emu/*/o.emu already is.  This also checks the
+        # build against tools/dis-manifest.txt, so a release cannot quietly
+        # ship with a module missing.
+        PATH="$ROOT/$(uname -s | sed 's/Darwin/MacOSX/')/$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')/bin:$PATH"
+        export PATH
+        "$ROOT/tools/verify-dis-build.sh"
+
         # Runtime tree into resources/
         for d in dis lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
@@ -1114,6 +1146,14 @@ jobs:
 
         # Strip debug symbols before signing
         strip "$MACOS/emu" "$MACOS/tools/limbo" "$MACOS/tools/mk"
+
+        # dis/ is not tracked, so the tree must be built before it can be
+        # staged -- exactly as emu/*/o.emu already is.  This also checks the
+        # build against tools/dis-manifest.txt, so a release cannot quietly
+        # ship with a module missing.
+        PATH="$ROOT/$(uname -s | sed 's/Darwin/MacOSX/')/$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')/bin:$PATH"
+        export PATH
+        "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree goes in Contents/Resources/
         for d in dis lib fonts module services locale usr mnt; do
@@ -1335,6 +1375,14 @@ jobs:
         cp emu/MacOSX/*.dylib "$STAGE/emu/MacOSX/" 2>/dev/null || true
         cp MacOSX/arm64/bin/limbo MacOSX/arm64/bin/mk "$STAGE/MacOSX/arm64/bin/"
         strip "$STAGE/emu/MacOSX/o.emu" "$STAGE/MacOSX/arm64/bin/limbo" "$STAGE/MacOSX/arm64/bin/mk" 2>/dev/null || true
+
+        # dis/ is not tracked, so the tree must be built before it can be
+        # staged -- exactly as emu/*/o.emu already is.  This also checks the
+        # build against tools/dis-manifest.txt, so a release cannot quietly
+        # ship with a module missing.
+        PATH="$ROOT/$(uname -s | sed 's/Darwin/MacOSX/')/$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')/bin:$PATH"
+        export PATH
+        "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
         for d in dis lib fonts module services locale usr mnt; do

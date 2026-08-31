@@ -55,6 +55,8 @@ uninstall:V:
 	rm -f $INS
 
 $ROOT/dis/sh.dis:	sh.dis
-	rm -f $ROOT/dis/sh.dis && cp sh.dis $ROOT/dis/sh.dis
+	mkdir -p $ROOT/dis
+	rm -f $ROOT/dis/sh.dis
+	cp sh.dis $ROOT/dis/sh.dis
 
 %.dis: ${SYSMODULES:%=$MODDIR/%}

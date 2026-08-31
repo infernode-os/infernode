@@ -611,6 +611,18 @@ checkandcompact_ui()
 	}
 }
 
+toolresultstatus(name, content: string): string
+{
+	lower := str->tolower(content);
+	if(agentlib->hasprefix(lower, "error:") ||
+	   agentlib->hasprefix(lower, "error —") ||
+	   agentlib->contains(lower, "(exit:") ||
+	   agentlib->contains(lower, "... (timeout") ||
+	   (name == "limbo" && agentlib->contains(lower, "status: failed")))
+		return "error";
+	return "success";
+}
+
 # Track consecutive tool failures with UI notification.
 updatefailstreak_ui(tools: list of (string, string, string), results: list of (string, string)): string
 {
@@ -726,12 +738,13 @@ initsession(): string
 	# override the default task prompt by writing /tmp/veltro/tasks/agenttype.<id>
 	# (e.g. "coder" -> /lib/veltro/agents/coder.txt) — see INFR-55.
 	suffix := BRIDGE_SUFFIX;
+	atype := "";
 	if(actid == 0) {
 		meta := agentlib->readfile(META_PROMPT_PATH);
 		if(meta != nil)
 			suffix = "\n\n" + agentlib->strip(meta);
 	} else {
-		atype := agentlib->strip(agentlib->readfile(
+		atype = agentlib->strip(agentlib->readfile(
 			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
 		promptpath := "/lib/veltro/agents/task.txt";
 		if(atype != "" && safeagenttype(atype))
@@ -833,7 +846,10 @@ initsession(): string
 	# Register namespace entries (services, devices, filesystems) as resources
 	registernamespace();
 
-	prov("agentstart", sys->sprint("activity=%d agent=%s", actid, sessionid), nil);
+	if(atype == "")
+		atype = "default";
+	prov("agentstart", sys->sprint("activity=%d agent=%s agenttype=%s", actid, sessionid,
+		atype), nil);
 	prov("nscaps", sys->sprint("activity=%d agent=%s", actid, sessionid), array of byte ns);
 	prov("sysprompt", sys->sprint("activity=%d agent=%s", actid, sessionid),
 		array of byte sysprompt);
@@ -1280,7 +1296,7 @@ applypathchanges()
 			continue;
 		if(len p >= 9 && p[0:9] == "/n/local/") {
 			log("path accessible: " + p);
-		} else if(len p >= 5 && p[0:5] == "/dis/") {
+		} else if(agentlib->pathexists(p)) {
 			log("path accessible (Inferno-native): " + p);
 		} else {
 			base := pathbase(p);
@@ -1306,7 +1322,7 @@ applypathchanges()
 		p := hd op;
 		if(p == "" || strcontains(newpaths, p))
 			continue;
-		if(!(len p >= 9 && p[0:9] == "/n/local/")) {
+		if(!(len p >= 9 && p[0:9] == "/n/local/") && !agentlib->pathexists(p)) {
 			base := pathbase(p);
 			if(base == nil || base == "")
 				base = "path";
@@ -1793,8 +1809,8 @@ agentturn(input: string)
 				setstatus(nm);
 				log("tool " + name + ": calling with " + string len eargs + " bytes");
 				result := agentlib->calltool(name, eargs);
-				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s",
-					actid, sessionid, step + 1, name), array of byte result);
+				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
+					actid, sessionid, step + 1, name, toolresultstatus(nm, result)), array of byte result);
 				agentlib->deduprecord(nm, eargs, result, step);
 				setstatus("working");
 				writefile(ctxpath, "resource update path=" + nm + " status=idle");

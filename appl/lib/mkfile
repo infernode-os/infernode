@@ -2,6 +2,7 @@
 
 DIRS=\
 	convcs\
+	ftree\
 	crypt\
 	ecmascript\
 	encoding\
@@ -12,6 +13,8 @@ DIRS=\
 
 TARG=\
 	aadraw.dis\
+	popup.dis\
+	scoretable.dis\
 	acmewin.dis\
 	arg.dis\
 	audit.dis\
@@ -160,6 +163,10 @@ TARG=\
 	writegif.dis\
 	x402.dis\
 	xml.dis\
+	bioauth.dis\
+	keyringinst.dis\
+	softkbd.dis\
+	viewport.dis\
 
 
 MODULES=
@@ -306,8 +313,12 @@ DISBIN=$ROOT/dis/lib
 <$ROOT/mkfiles/mksubdirs
 
 $DISBIN/arg.dis: arg.dis
-	rm -f $DISBIN/arg.dis && cat arg.dis > $DISBIN/arg.dis
+	mkdir -p $DISBIN
+	rm -f $DISBIN/arg.dis
+	cat arg.dis > $DISBIN/arg.dis
 
 $DISBIN/readdir.dis: readdir.dis
-	rm -f $DISBIN/readdir.dis && cat readdir.dis > $DISBIN/readdir.dis
+	mkdir -p $DISBIN
+	rm -f $DISBIN/readdir.dis
+	cat readdir.dis > $DISBIN/readdir.dis
 	

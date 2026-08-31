@@ -119,6 +119,6 @@ assuming it exercises behavior.
   suite passed — read the job log when it matters.
 - Gating: nsaudit fixture checks, wallet/secstore integration, the
   presentation file-open GUI regression, JIT correctness and boot smoke,
-  `verify-dis-paths`, `verify-sh-exec`, and the ring-fence job.
+  `verify-dis-build`, `verify-sh-exec`, and the ring-fence job.
 - Benchmarks (`tests/bench/`), stress (`tests/stress/`), and interop
   (`tests/interop/`) are deliberately outside the auto-run suite.

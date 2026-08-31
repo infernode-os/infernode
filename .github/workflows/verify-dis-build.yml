@@ -1,0 +1,42 @@
+name: Verify dis build
+
+# dis/ is a build product and is not tracked, so it cannot go stale.  What
+# it CAN do is quietly lose a module: drop a target from an mkfile's TARG
+# and the module simply stops being built, with nothing to say so until
+# something fails to load at runtime.  45 modules were already in that
+# state and only kept working because their bytecode happened to be
+# committed.
+#
+# tools/dis-manifest.txt tracks the set of modules the build must produce.
+# This job builds the tree and compares.  A module appearing or vanishing
+# is a reviewable one-line diff instead of a binary blob.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  dis-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build native toolchain
+        run: |
+          set -e
+          export ROOT="$PWD"
+          SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+          export PATH="$ROOT/Linux/amd64/bin:$PATH"
+          for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+            (cd "$d" && mk install)
+          done
+
+      - name: Build the runtime tree and check the manifest
+        run: |
+          export ROOT="$PWD"
+          export PATH="$ROOT/Linux/amd64/bin:$PATH"
+          ./tools/verify-dis-build.sh

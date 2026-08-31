@@ -32,9 +32,14 @@ cd appl/cmd; mk install                 # installs to the canonical path
 ```
 
 If a fix "isn't taking effect" — same bug after recompile, diagnostic
-prints not appearing — run `tools/verify-dis-paths.sh` before chasing
-anything else. The pre-commit hook (`./hooks/install.sh`) and CI both run
-it.
+prints not appearing — you almost certainly compiled to a path nothing
+loads. `dis/` is a build product and is not tracked; rebuild it properly:
+
+    for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done
+
+Never hand-roll `limbo -o <path>`; use `tools/compile-limbo.sh` or
+`mk install`. `tools/verify-dis-build.sh` (run by CI) checks the build
+against `tools/dis-manifest.txt`.
 
 **2. A changed `.m` interface stales every dependent `.dis`.** The Dis VM
 rejects stale modules at load time with `link typecheck` errors — blank
@@ -71,7 +76,7 @@ Verify every modified file's pre-image matches master tip (rebase, then
 `git diff master...HEAD` and check the base blobs). A branch cut from — or
 contaminated by — another unmerged branch can carry someone else's change
 through a textually clean merge, silently. Then run
-`tools/verify-dis-paths.sh` and fill the PR template's design-principles
+`tools/verify-dis-build.sh` and fill the PR template's design-principles
 checklist honestly.
 
 ## Running what you built

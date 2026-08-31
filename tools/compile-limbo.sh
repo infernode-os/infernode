@@ -52,7 +52,8 @@ fi
 
 scan_module_path() {
 	# Print the PATH constant of the module the file IMPLEMENTS.
-	# See tools/verify-dis-paths.sh for matching rules — kept in sync.
+	# The module's own PATH constant decides where the .dis goes; never
+	# pick an -o path by hand.
 	awk '
 		/^implement[[:space:]]+[A-Za-z][A-Za-z0-9_]*[[:space:]]*;/ {
 			match($0, /[A-Za-z][A-Za-z0-9_]*[[:space:]]*;/)

@@ -4,6 +4,10 @@ DIRS=\
 
 TARG=\
 	about.dis\
+	task.dis\
+	sh.dis\
+	date.dis\
+	bounce.dis\
 	logon.dis\
 	clock.dis\
 	colors.dis\

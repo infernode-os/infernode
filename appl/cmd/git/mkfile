@@ -34,6 +34,7 @@ DISBIN=$ROOT/dis/cmd/git
 <$ROOT/mkfiles/mkdis
 
 installsh:V:
+	mkdir -p $DISBIN
 	cp log.sh $DISBIN/log.sh
 	cp status.sh $DISBIN/status.sh
 	cp diff.sh $DISBIN/diff.sh

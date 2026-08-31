@@ -221,8 +221,14 @@ exec(args: string): string
 	# Buffered capacity 1: goroutines can complete their send and exit
 	# even after the alt has moved on, preventing indefinite blocking.
 	result := chan[1] of string;
-	spawn runcommand(cmd, fds[1], result);
+	pidch := chan[1] of int;
+	spawn runcommand(cmd, fds[1], result, pidch);
 	fds[1] = nil;
+
+	# The worker reports its process-group id before it execs anything, so a
+	# timed-out or over-long command can be killed as a unit below rather
+	# than abandoned to keep running after this tool returns (INFR-421).
+	workerpid := <-pidch;
 
 	# Read output with timeout
 	output := "";
@@ -255,13 +261,20 @@ exec(args: string): string
 	# Close read fd to unblock readoutput goroutine if still blocked on read
 	fds[0] = nil;
 
-	# Wait for result
+	# Collect the command's exit status.  If it has not finished on its own
+	# it is still running after we stopped reading (timeout or output cap):
+	# leaving it alive orphans a process outside this tool's accounting.
+	# Two abandoned limbo.dis compiles left this way are what faulted the
+	# emulator in the escape campaign (INFR-421).  Kill the worker's whole
+	# process group so nothing survives the return; a killed group leader
+	# will not report back, so do not block waiting for it.
 	err := "";
 	alt {
 	e := <-result =>
 		err = e;
 	* =>
-		;  # Already done
+		killgrp(workerpid);
+		output += "\n... (command still running at return; process group terminated)";
 	}
 
 	if(output == "" && err != "")
@@ -278,12 +291,17 @@ exec(args: string): string
 
 # Run command in a separate thread with isolated fd group.
 # NEWFD prevents dup from affecting other goroutines' stdout/stderr.
-runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string)
+runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan of int)
 {
+	# Become a process-group leader so the parent can kill this command and
+	# everything it spawns as one unit if it overruns its deadline (INFR-421).
+	# NEWPGRP returns this proc's pid, which is also the new group id.
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	pidch <-= pid;
+
 	# Open this worker's wait channel before NODEVS. The shell normally reaches
 	# it through #p or ambient /prog; retaining this one FD lets the namespace
 	# hide every process directory, including writable sibling ctl files.
-	pid := sys->pctl(0, nil);
 	waitfd := sys->open("#p/" + string pid + "/wait", Sys->OREAD);
 	if(waitfd == nil) {
 		result <-= sys->sprint("cannot open private wait channel: %r");
@@ -306,6 +324,20 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string)
 
 	err := sh->systemfd(nil, cmd, waitfd);
 	result <-= err;
+}
+
+# Kill a worker's whole process group.  The exec tool is exempt from the
+# NODEVS restriction that hides /prog from other tools, so it can write here;
+# best-effort, so if /prog is absent the command keeps the pre-fix behaviour.
+killgrp(pid: int)
+{
+	if(pid <= 0)
+		return;
+	ctl := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(ctl == nil)
+		return;
+	msg := array of byte "killgrp";
+	sys->write(ctl, msg, len msg);
 }
 
 # Timer thread

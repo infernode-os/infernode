@@ -593,7 +593,27 @@ kbdputc(Queue *q, int ch)
 		return 0;
 	if(!isdbgkey(r)) {
 		echo(r, buf, n);
-		qproduce(q, buf, n);
+		if(qproduce(q, buf, n) != n){
+			/*
+			 * The queue is full and the character is gone --
+			 * AFTER being echoed, so the user has watched the
+			 * kernel accept input it is now discarding. That
+			 * must never be silent: it presents as a shell
+			 * waiting forever for a line that cannot complete,
+			 * and it took a byte-level audit of this whole path
+			 * to find the one branch that was quietly losing
+			 * nine bytes. Rate-limited, since a stuffed queue
+			 * drops in bursts.
+			 */
+			static ulong ndrop, lastsaid;
+
+			ndrop++;
+			if(TK2MS(MACHP(0)->ticks) - lastsaid > 1000){
+				lastsaid = TK2MS(MACHP(0)->ticks);
+				print("kbd: input queue full, %lud dropped\n",
+					ndrop);
+			}
+		}
 	}
 	return 0;
 }
@@ -785,7 +805,34 @@ consinit(void)
 	 *
 	 * which is the shell asking for its first line of input.
 	 */
-	kbdq = qopen(4*1024, 0, nil, nil);
+	/*
+	 * 64K, and the size is not generosity -- it is arithmetic that
+	 * cost two days to learn.
+	 *
+	 * A queue's limit is enforced against ALLOCATED bytes, and
+	 * console input arrives one character at a time: each qproduce
+	 * of one byte allocates a whole Block -- header, headroom and
+	 * alignment, about 150 bytes -- so a 4K limit was really a
+	 * type-ahead capacity of about 27 CHARACTERS. (Qcoalesce cannot
+	 * help: _allocb leaves exactly the requested room at the tail,
+	 * so a one-byte block has one byte of it.)
+	 *
+	 * Type 30 characters while the reader is busy and qproduce
+	 * starts returning -1, which kbdputc ignored -- after echoing.
+	 * The characters appeared on screen and were never delivered: a
+	 * command arrived without its newline and the shell waited
+	 * forever for the rest of a line the kernel had discarded, which
+	 * looks exactly like a hung machine. It took a byte ledger
+	 * across the whole console path to find, because every layer
+	 * below and above this queue was provably correct.
+	 *
+	 * 64K of allocated bytes is roughly 450 characters of backlog:
+	 * seconds of full-rate typing against a busy reader, against a
+	 * producer -- a keyboard -- that physically cannot run away. And
+	 * kbdputc now says so when the queue overflows anyway, because
+	 * input that vanishes without a trace is this bug again.
+	 */
+	kbdq = qopen(64*1024, 0, nil, nil);
 	if(kbdq == nil)
 		panic("consinit: cannot allocate kbdq");
 }

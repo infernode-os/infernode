@@ -928,44 +928,46 @@ architecture and is where to start; `etherusb` already has the
 transmit-side batching machinery (`transmit`/`flushtx`), and it never
 fires, because TCP hands frames down one at a time.
 
-### OPEN: console input wedges intermittently under QEMU
+### RESOLVED: the "console wedge" was silent type-ahead loss
 
-Since the idle-collector bound (perf(dis): bound the idle collector),
-the harness's shell-session check fails about three runs in four under
-QEMU: at some point mid-session the shell stops executing lines. Typed
-characters still echo -- the uart kproc and the line discipline are
-alive -- and background Limbo processes keep running, but the read on
-/dev/cons never completes again.
+What looked like an intermittent hang -- the shell stops executing
+lines mid-session, typed characters still echo -- was the kernel
+discarding console input after echoing it, with a straight face.
 
-What three rounds of instrumentation established, so the next session
-does not repeat them:
+A queue's limit is enforced against ALLOCATED bytes, and console input
+arrives one character at a time: each one-byte qproduce allocates a
+whole Block (header, headroom, alignment -- about 150 bytes), so
+kbdq's 4K limit was really a type-ahead capacity of about 27
+characters. Type thirty while the shell is busy and qproduce starts
+returning -1, which kbdputc ignored -- after echoing. A command then
+arrived without its newline, and the shell waited forever for the rest
+of a line the kernel had already thrown away. Every layer below and
+above that one branch was checked and proved correct first: run-queue
+consistency, the Dis token protocol, sleep/wakeup, the interrupt-pool
+and mainmem allocators. The byte ledger that closed it read: handed to
+qproduce 460, accepted 451.
 
-- Bisected cleanly: 4/4 sessions pass on the commit before the idle
-  bound, 4/4 pass with the collector throttle alone, ~1/4 pass from
-  the idle bound onward. The bound removed a milliseconds-long grind
-  the machine used to do before every sleep, so wakeups now interleave
-  at full speed; the fault it exposes is elsewhere and older.
-- It is NOT a lost run-queue entry: at wedge time every Ready proc is
-  correctly linked, nrdy and occupied agree, and the ready() path was
-  instrumented against double-enqueue and never fired.
-- It is NOT the Dis scheduler: the interpreter idles legitimately --
-  run queue empty, vmq empty, the extra vmachine kprocs parked on
-  idlevmq, the active one asleep on irend with tready as its
-  condition, which double-checks under the rendez lock and is sound.
-- The CPU is genuinely idle: every clock-tick sample lands in the
-  spllo unmask window of the scheduler's WFI loop, up == nil.
-- So every Limbo process is blocked in a kernel sleep, and the one
-  that matters -- the console reader -- never wakes although complete
-  lines were echoed. The loss is between kbdputc's qproduce into kbdq
-  and the qread sleeper in consread's cooked-mode loop, or in that
-  loop's own state. That seam (os/port/qio.c qproduce/qread, and
-  devcons.c around kbd.line) is where to look next.
+Why it bisected to the idle-collector bound: before it, the machine
+ground the collector before every sleep, which throttled how fast the
+uart drainer could stuff the queue -- accidental flow control. The
+bound removed the grind and the forty-year-old capacity assumption
+surfaced. The board rarely shows it because a human at 115200 baud
+cannot type thirty characters into a busy second; a script driving
+QEMU's pty can.
 
-The board has not shown it: serial input there is exercised mainly by
-the ^T^Tr debug key, which bypasses the cooked path, so hardware is
-unproven either way. The harness check that fails is the last shell
-command of the session; the wedge can strike earlier commands too --
-whichever line is being read when it hits.
+Three fixes, in devcons.c and the uart drainer:
+
+- kbdq is 64K -- roughly 450 characters of real backlog -- with the
+  BALLOC arithmetic written down where the number is chosen.
+- kbdputc now says "kbd: input queue full, N dropped" (rate-limited)
+  if the queue overflows anyway. Input must never vanish silently.
+- The uart drainer, being a process and not an interrupt, now pauses
+  while more than 512 bytes sit undelivered, leaving bytes in the
+  PL011 FIFO where the emulator's chardev backpressure holds the rest
+  at the source. Nothing is lost end to end.
+
+Ten consecutive scripted shell sessions pass where one in four
+survived before; the full harness is 147/147 twice over.
 
 ### Smaller things still open
 

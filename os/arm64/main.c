@@ -1670,6 +1670,21 @@ uartkproc(void *a)
 
 	USED(a);
 	for(;;){
+		/*
+		 * Do not outrun the reader.
+		 *
+		 * This is a process, so unlike an interrupt-time keyboard
+		 * it can afford to wait -- and waiting is flow control:
+		 * bytes left in the PL011 FIFO make the emulator's chardev
+		 * hold the rest at the source, so nothing is lost, where
+		 * pushing on regardless fills kbdq until qproduce starts
+		 * discarding. Half a kilobyte of undelivered type-ahead
+		 * means the reader is seconds behind; there is no hurry.
+		 */
+		if(qlen(kbdq) > 512){
+			tsleep(&up->sleep, return0, nil, 10);
+			continue;
+		}
 		c = uartgetc();
 		if(c < 0){
 			/*

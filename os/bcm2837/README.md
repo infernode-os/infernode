@@ -842,6 +842,92 @@ the kernel, decides what that reference is:
 `infernode8.img` is kept alongside as a fallback: swapping the
 `kernel=` line boots a kernel directly, without a host feeding one.
 
+### Network throughput: where the time actually went
+
+The network worked correctly long before it worked quickly. Corrected
+first -- zero overflows, a megabyte round-tripping byte-identical --
+it still ran at a few hundredths of what the hardware can do, and the
+time was not where any of the obvious answers put it.
+
+What it measures now, on the board, against where it started:
+
+    1MB TCP round trip, bytes verified	  20 KB/s  ->  340-450 KB/s
+    board -> host, one way			  75 KB/s  ->  ~1.4 MB/s
+    host -> board, one way			  55 KB/s  ->  ~580 KB/s
+
+**Both fixes were in the collector, and neither was in the driver.**
+
+`rungc()` ran a collection quantum after every Prog quantum. The
+emulator has not done that for years -- `emu/port/dis.c` throttles on a
+counter and falls back to collecting always once `memlow()` says the
+heap is half gone -- and the two schedulers are otherwise the same
+code. The divergence is visible in this tree: `gcbusy`, `gcidle`,
+`gcidlepass` and `gcpartial` are declared in `os/port/dis.c` and none
+of them was ever assigned, because the throttle that counts them never
+came across. `memlow()` was likewise absent from `os/port/alloc.c`
+beside the `memusehigh()` it mirrors.
+
+That was worth having but was not the main cost: throttling it alone
+moved the round trip from 20 to 28 KB/s.
+
+The main cost was `execatidle()`, which ran the collector until it had
+completed **three whole epochs** and only then let the machine sleep.
+"Idle" there does not mean there is nothing to do -- it means no Limbo
+process is ready this instant, which on an I/O-bound workload is just
+the gap between one packet and the next. And an epoch is not a bounded
+amount of work: `rungc()` ends one only when a full traversal finds
+nothing left to propagate, so three epochs is however many passes the
+mark phase needs to converge, three times over, with the interpreter
+lock held and the Ethernet driver -- itself a Limbo process -- unable
+to run until it ends.
+
+    3 epochs (as it was)	 28 KB/s
+    1 epoch			 79 KB/s
+    none at all			324 KB/s
+
+No knee to sit on; that is the cost of finishing a traversal at all.
+So the bound is now on quanta rather than epochs -- `rungc()` visits at
+most `MaxQuanta` blocks and returns, so a cap on quanta is a real cap
+on the time before the sleep. Idle time still collects and the heap
+stays flat under load: across 5MB of further traffic and 182,000
+allocations it moved from 522944 to 523200 bytes.
+
+**Two standing hypotheses died here, and both are worth not
+re-testing.**
+
+*The `multitrans` split.* The section above says that if networking on
+the board is slow, the packet-at-a-time bulk OUT is the first place to
+look. It was, and it is not the problem. A 1514-byte frame is three
+channel operations, and all three together cost **188us** -- that is
+the whole of `epwrite`, `qlock` and cache writeback included, measured
+by `dump` on `#u/usb/ctl`. Interrupts arrive and are prompt: 609301
+waits woken against one timed out, mean 60us. The USB layer is not
+where the milliseconds are.
+
+*The interpreter hand-back.* A process returning from a blocking system
+call queues on `isched.vmq` and waits up to three Prog quanta to get
+the interpreter back, which looks like exactly the thing to shorten.
+Shortening it does not help -- see the note on `Vmcycles` in
+`os/port/dis.c` for the measurements and for the harness regression it
+costs. `release` and `acquire` together were separately measured at
+64us.
+
+**What is left is architectural.** The remaining per-frame cost is not
+in USB, not in the collector, and not in the scheduler's hand-back: it
+is the Limbo caller being descheduled between its own two clock reads
+while other Dis processes run. The machine is busy rather than
+stalled, and the work it is busy with is the 9P server path that every
+single frame crosses -- `os/ip` to a 9P read or write on
+`/net/ether0`, into `styxservers` in Limbo, into `etherusb`, into USB.
+
+Shortening that means either moving the data path into the kernel as C
+-- which gives up the property that made this design worth having, that
+device protocols live outside the kernel -- or carrying more frames per
+9P transaction so the fixed cost is amortised. The second keeps the
+architecture and is where to start; `etherusb` already has the
+transmit-side batching machinery (`transmit`/`flushtx`), and it never
+fires, because TCP hands frames down one at a time.
+
 ### Smaller things still open
 
 `sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,

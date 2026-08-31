@@ -146,6 +146,45 @@ accountant(void)
 #define Idlequanta 8
 #endif
 
+/*
+ * How many Prog quanta to run before handing the interpreter to a
+ * process waiting in acquire().
+ *
+ * A Limbo process that makes a blocking system call drops the
+ * interpreter and must queue on isched.vmq to get it back. Until it
+ * does, it has finished its I/O and is doing nothing -- so on an
+ * I/O-bound workload this looks like an obvious thing to shorten, and
+ * it was tried. It is not, and the knob is left here at the value it
+ * has always had so the next person does not have to spend the
+ * afternoon finding out.
+ *
+ * Measured on the board, 1MB TCP round trip and one-way both ways:
+ *
+ *	2 (as it is)	round trip 111-411 KB/s, out 1384, in 585
+ *	1		round trip 159-453 KB/s, out 1414, in 575
+ *	0 (yield always) round trip 343-447 KB/s, out unchanged
+ *
+ * One-way throughput does not move at all, which is the number that
+ * says whether the machine goes faster. Only the round trip appears to
+ * improve, and it is far too noisy across three samples to carry that
+ * conclusion on its own -- the ranges overlap.
+ *
+ * Against that, both 0 and 1 cost a harness failure, the same one each
+ * time: /lib/sh/profile has not finished "load std" by the time the
+ * shell takes input. The interpreter is fine -- "load std" by hand
+ * then works -- so it is boot ORDERING that changed, and a shell that
+ * becomes interactive before its profile is ready is a real
+ * regression, cheaply bought.
+ *
+ * The time this looked like it would recover is not here anyway. See
+ * the note on Idlequanta above for where it actually was, and the
+ * roadmap for where the rest of it is: the 9P server path that every
+ * frame crosses, which no scheduler tuning can shorten.
+ */
+#ifndef Vmcycles
+#define Vmcycles 2
+#endif
+
 static void
 execatidle(void)
 {
@@ -1091,7 +1130,7 @@ vmachine(void*)
 			sleep(&isched.irend, tready, 0);
 		}
 
-		if(isched.vmq != nil && (isched.runhd == nil || ++cycles > 2)){
+		if(isched.vmq != nil && (isched.runhd == nil || ++cycles > Vmcycles)){
 			iyield();
 			cycles = 0;
 		}

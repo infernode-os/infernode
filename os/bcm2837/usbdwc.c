@@ -694,7 +694,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	Ctlr *ctlr;
 	int nleft, n, nt, i, maxpkt, npkt, nprog;
 	uint hcdma, hctsiz, lasti;
-	int splitphase, nyets;
+	int splitphase, nyets, doping;
 
 	ctlr = ep->hp->aux;
 	maxpkt = ep->maxpkt;
@@ -743,6 +743,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	lasti = 0;
 	splitphase = 0;
 	nyets = 0;
+	doping = 0;
 	nleft = len;
 	logstart(ep);
 	for(;;){
@@ -754,7 +755,25 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 				ep->dev->nb, ep->nb, hctsiz, nprog);
 			break;
 		}
-		hc->hctsiz = hctsiz & ~Dopng;
+		/*
+		 * DoPing, when the device has said it is not ready.
+		 *
+		 * This unconditionally CLEARED the bit, and that is why a
+		 * multi-packet OUT programmed in one go never completed.
+		 * A high-speed device answers NYET to mean "took that one,
+		 * not ready for the next"; the controller's answer to that
+		 * is the PING protocol, where the next transaction is a
+		 * one-byte token asking whether there is room yet. With
+		 * the bit cleared every time round, each NYET was answered
+		 * by re-sending the whole data packet, which the device
+		 * NYETs again -- so the transfer made no progress and the
+		 * driver concluded, reasonably, that a single-shot OUT
+		 * does not work on this controller.
+		 */
+		if(doping)
+			hc->hctsiz = hctsiz | Dopng;
+		else
+			hc->hctsiz = hctsiz & ~Dopng;
 		if(hc->hcchar&Chen){
 			dprint("ep%d.%d before chanio hcchar=%8.8ux\n",
 				ep->dev->nb, ep->nb, hc->hcchar);
@@ -844,6 +863,15 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		lasti = i;
 
 		hc->hcint = i;
+
+		/*
+		 * A ping answered Ack means there is room now, so the next
+		 * transaction carries data rather than another ping.
+		 * Without this a channel that once pinged goes on pinging,
+		 * which is the same stall in the other direction.
+		 */
+		if(doping && (i & Ack) && (i & Nyet) == 0)
+			doping = 0;
 
 		if(hc->hcsplt & Spltena){
 			hc->hcsplt &= ~Compsplt;
@@ -949,8 +977,12 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		if((i & Xfercomp) == 0 && i != (Chhltd|Ack) && i != Chhltd){
 			if(i & Stall)
 				error(Estalled);
-			if(i & (Nyet|Frmovrun))
+			if(i & (Nyet|Frmovrun)){
+				/* ask with a ping rather than the data again */
+				if(dir == Epout && (i & Nyet))
+					doping = 1;
 				continue;
+			}
 			if(i & Nak){
 				if(ep->ttype == Tintr)
 					tsleep(&up->sleep, return0, 0, ep->pollival);
@@ -1128,15 +1160,35 @@ eptrans(Ep *ep, int rw, void *a, long n)
 	 * Upstream only does this for bulk reads, on the reasoning that
 	 * an IN transfer can end short so the host must drive it packet
 	 * by packet, while an OUT transfer is entirely the host's to
-	 * schedule and can be programmed once for the whole length. That
-	 * is true of the hardware and not of this controller model: a
-	 * two-packet OUT programmed in one go never reports completion,
-	 * exactly as a two-packet control IN did not.
+	 * schedule and can be programmed once for the whole length.
 	 *
-	 * The first frame this driver ever tried to send was a 60-byte
-	 * gratuitous ARP, 104 bytes once wrapped for RNDIS, and it
-	 * stopped here -- with the interface bound and everything above
-	 * it convinced the write was in progress.
+	 * That is true of the hardware and not of this controller: a
+	 * two-packet OUT programmed in one go never reports completion,
+	 * exactly as a two-packet control IN did not. The first frame
+	 * this driver ever tried to send was a 60-byte gratuitous ARP,
+	 * 104 bytes once wrapped for RNDIS, and it stopped here -- with
+	 * the interface bound and everything above it convinced the
+	 * write was in progress.
+	 *
+	 * THE STATED REASON FOR THAT WAS WRONG AND THE CONCLUSION IS
+	 * STILL RIGHT, which is worth recording so the experiment is not
+	 * run a third time. It was originally explained by this driver
+	 * never taking a USB interrupt, so that a completion nobody was
+	 * waiting for looked like one that never came. That premise is
+	 * false -- measured, 63114 channel waits ended in a wakeup
+	 * against ONE that timed out. Programming the whole transfer in
+	 * one go was therefore re-tried on the strength of the premise
+	 * being gone, with the PING protocol added as well so a device
+	 * answering NYET was asked again with a token rather than the
+	 * whole packet. It failed anyway: 22 of 147 checks, USB broken
+	 * well beyond the network. Whatever the mechanism is, it is not
+	 * the missing interrupt.
+	 *
+	 * The upside was bounded in any case. A bulk write costs about
+	 * 24ms of wall clock and this driver accounts for under 3ms of
+	 * it; the rest is the Limbo side of the network path waiting for
+	 * the interpreter. Removing two of three channel operations
+	 * could not have been worth more than a tenth of a frame.
 	 *
 	 * Splits still have to be one channel operation, so they keep the
 	 * single-shot path; see chansetup and ctltrans, which draw the

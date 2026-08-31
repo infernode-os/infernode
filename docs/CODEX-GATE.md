@@ -152,6 +152,7 @@ Config (env, read at start):
 | `CODEX_GATE_DISABLE_FEATURES` | *(unset)* | comma list replacing the pinned disable set |
 | `CODEX_GATE_HOME_ALLOW` | `auth.json,auth.json.lock,version.json,installation_id` | what the isolated Codex home may contain at startup |
 | `CODEX_GATE_MOCK`, `CODEX_GATE_DEBUG` | — | test backend, verbose logs |
+| `CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH` | *(empty)* | mock-only fault selector; inject the configured mock error only when the system prompt contains this exact text |
 
 ## Pinned CLI surface
 

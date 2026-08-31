@@ -285,9 +285,27 @@ async def check():
     assert m._last_quota_pause["duration_seconds"] >= 0.12, m._last_quota_pause
     assert not m._quota_pauses, m._quota_pauses
 
+    # The campaign control can target a delegated child without spending the
+    # one-shot fault on its parent request.
+    selector = "You are a task execution agent working autonomously."
+    m.MOCK_ERROR = "usage limit reached"
+    m.MOCK_ERROR_COUNT = 1
+    m.MOCK_ERROR_SYSTEM_MATCH = selector
+    m._mock_errors_remaining = 1
+    parent = await m.mock_turn("default", "parent", "create child", [], [])
+    assert parent[0].startswith("MOCK_REPLY:"), parent
+    try:
+        await m.mock_turn("default", selector, "child brief", [], [])
+    except m.CodexError as error:
+        assert "usage limit" in str(error)
+    else:
+        raise AssertionError("selected child mock did not fail")
+    resumed = await m.mock_turn("default", selector, "child brief", [], [])
+    assert resumed[0] == "MOCK_REPLY: child brief", resumed
+
 asyncio.run(check())
 PY
-pass "quota retries stop at the configured maximum"
+pass "quota retries are bounded and can target a delegated child"
 
 # 9. The prompt-level tool protocol parses into OpenAI tool_calls
 python3 - "$ROOT" <<'PY' || fail "tool-reply parser"

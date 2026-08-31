@@ -112,6 +112,7 @@ credit:
 CODEX_GATE_MOCK=1 \
 CODEX_GATE_MOCK_ERROR='usage limit reached; try again in 3 seconds' \
 CODEX_GATE_MOCK_ERROR_COUNT=1 \
+CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH='You are a task execution agent working autonomously.' \
 CODEX_GATE_QUOTA_MAX_WAIT=30 \
 CODEX_GATE_PORT=11436 \
   python3 tools/codex-gate/codex_gate.py
@@ -134,9 +135,12 @@ contains the pause/resume transition, completion, and namespace records.
 
 In a live campaign the gateway uses reset timing from Codex when available and
 bounded exponential backoff otherwise. `grind.py` records active and wall time
-separately and stops only the active-time clock. If the configured maximum wait
-expires, or the runner/VM is lost, the trial remains `INCONCLUSIVE` with a
-usage-limit reason; no later retry can retroactively certify it.
+separately and mirrors authenticated pause state into the host-backed stage so
+the driver's parent-settlement and delegated-child followthrough budgets stop
+on exactly the same interval. The outer active-time limit remains the
+fail-closed backstop. If the configured maximum wait expires, or the runner/VM
+is lost, the trial remains `INCONCLUSIVE` with a usage-limit reason; no later
+retry can retroactively certify it.
 
 This control covers graceful backend failure. `SIGKILL`, host power loss, or
 loss of the emulator before the driver checkpoint are not equivalent: retain

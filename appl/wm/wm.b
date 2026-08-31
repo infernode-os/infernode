@@ -8,6 +8,7 @@ include "wmsrv.m";
 	wmsrv: Wmsrv;
 	Window, Client: import wmsrv;
 include "wmclient.m";
+include "lucitheme.m";
 	wmclient: Wmclient;
 include "string.m";
 	str: String;
@@ -605,7 +606,29 @@ sendctl2(ctl: chan of string, msg1, msg2: string)
 
 makescreen(img: ref Image): ref Screen
 {
-	screen = Screen.allocate(img, img.display.color(Background), 0);
+	#
+	# The desktop and its windows must agree on what is behind them.
+	#
+	# This painted Draw->Background, a mid grey, while wmclient fills
+	# every client's screen with the THEME's background -- near-black
+	# under Brimstone. Under Lucifer both come from the theme and
+	# match; under plain wm they did not, so every area a window
+	# stopped covering was repainted near-black against a grey
+	# desktop. That is the black ghosting seen when a window exits or
+	# redraws, and it is not a drawing bug: memlayer is correctly
+	# painting a fill that disagrees with the desktop it sits on.
+	#
+	# wmclient took its colour from the theme in 3375ca27, to stop a
+	# white flash when a window closed. This is the other half of
+	# that change.
+	#
+	bg := Background;
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme != nil){
+		th := lucitheme->gettheme();
+		bg = th.bg;
+	}
+	screen = Screen.allocate(img, img.display.color(bg), 0);
 	img.draw(img.r, screen.fill, nil, screen.fill.r.min);
 	return screen;
 }

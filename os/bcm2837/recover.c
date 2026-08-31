@@ -56,15 +56,30 @@ extern int nserialbootimg;
 
 enum {
 	Recovchar	= 0x03,		/* ETX; serialboot's own handshake byte */
-	Recovwait	= 1500,		/* ms to wait before giving up on it */
+	/*
+	 * A quarter of a second, and it does not want to be longer.
+	 *
+	 * The first version waited a second and a half and cost seven
+	 * checks in the harness -- the framebuffer screenshot, the shell
+	 * session, the keyboard enumeration -- none of them broken, all
+	 * of them simply given a second and a half less boot inside
+	 * their own windows. Every boot pays this, so it is not free.
+	 *
+	 * It does not need to be long. The host asks by SENDING ETX
+	 * continuously from the moment it resets the board, so by the
+	 * time this runs the byte is already sitting in the receive
+	 * FIFO; the window is covering jitter between the reset and this
+	 * check, not waiting for a human to decide.
+	 */
+	Recovwait	= 250,		/* ms to wait before giving up on it */
 	Recovaddr	= 32*1024*1024,	/* where serialboot is linked to run */
 };
 
 /*
  * Wait briefly for the host to ask for the loader, and hand over if it
  * does. Returns normally if nobody asked, which is the ordinary case
- * and must stay cheap: one and a half seconds of a boot that then
- * takes a minute.
+ * and must stay cheap -- a quarter of a second on every boot, paid
+ * whether or not anyone ever needs it.
  */
 void
 serialrecover(void)
@@ -75,7 +90,7 @@ serialrecover(void)
 	if(nserialbootimg <= 0)
 		return;
 
-	uartputstr("boot: press ^C within 1.5s for the serial loader\n");
+	uartputstr("boot: send ^C now for the serial loader\n");
 
 	/*
 	 * Polled, not timed off the clock: this runs before clockinit,

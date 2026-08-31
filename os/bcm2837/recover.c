@@ -75,6 +75,7 @@ enum {
 	 */
 	Recovwait	= 50,		/* ms to wait before giving up on it */
 	Recovaddr	= 32*1024*1024,	/* where serialboot is linked to run */
+	Drainmax	= 64,		/* bytes to look at per millisecond */
 };
 
 /*
@@ -86,7 +87,7 @@ enum {
 void
 serialrecover(void)
 {
-	int i, c, asked;
+	int i, n, c, asked;
 	void (*loader)(void);
 
 	if(nserialbootimg <= 0)
@@ -106,12 +107,26 @@ serialrecover(void)
 		 * The host has been sending since the reset, so in the case
 		 * this exists for the answer is waiting and costs nothing
 		 * to find.
+		 *
+		 * BOUNDED, and that bound is load-bearing. Written as a
+		 * plain "read until empty" this never returns while bytes
+		 * keep arriving, and a host that is streaming at the
+		 * console -- which happens, a stray transfer is a megabyte
+		 * of them -- pins the kernel here for ever, before the MMU,
+		 * before anything that could report it. The board goes
+		 * silent at boot and looks bricked. A window that exists to
+		 * make the machine recoverable must not itself be a way to
+		 * hang it.
 		 */
-		while((c = uartgetc()) >= 0)
+		for(n = 0; n < Drainmax; n++){
+			c = uartgetc();
+			if(c < 0)
+				break;
 			if(c == Recovchar){
 				asked = 1;
 				break;
 			}
+		}
 		if(!asked)
 			microdelay(1000);
 	}

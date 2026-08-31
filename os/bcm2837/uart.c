@@ -42,9 +42,36 @@ uartinit(void)
 
 	UART(Icr) = 0x7FF;		/* clear all pending interrupts */
 
-	/* 115200 baud from the 48MHz UART reference clock */
-	UART(Ibrd) = 26;
-	UART(Fbrd) = 3;
+	/*
+	 * 921600 baud from the 48MHz UART reference clock.
+	 *
+	 * PL011 divisor: 48e6/(16*921600) = 3.2552, so IBRD 3 and FBRD
+	 * round(0.2552*64) = 16. That gives 48e6/(16*3.25) = 923077, an
+	 * error of 0.16% -- an order inside the 2-3% a UART pair
+	 * tolerates. (115200 was IBRD 26, FBRD 3, for 115177.)
+	 *
+	 * WHY IT IS WORTH CHANGING. Every kernel iteration on this board
+	 * pushes the whole image down this wire, and the image is now
+	 * 1.68MB: measured, 159.5 seconds at 115200. At this rate it is
+	 * about eighteen. That is the difference between a three-minute
+	 * edit-test cycle and a thirty-second one, and this port does a
+	 * lot of them.
+	 *
+	 * The reference clock is 48MHz because UART0 is fed by
+	 * init_uart_clock, not by core_freq -- the clock that moves with
+	 * the mini-UART is not this one. Empirically confirmed by 26/3
+	 * having produced working 115200 all along.
+	 *
+	 * SERIALBOOT IS DELIBERATELY NOT CHANGED WITH THIS. It lives on
+	 * the card and the only way to replace it is a copy from a
+	 * running kernel, so a loader that talks at a rate the host does
+	 * not expect is unreachable and means taking the card out. The
+	 * kernel is the recoverable half: if this is wrong, the console
+	 * garbles and the loader -- still at 115200 -- takes a corrected
+	 * kernel. Change that one only once this one is proven.
+	 */
+	UART(Ibrd) = 3;
+	UART(Fbrd) = 16;
 
 	UART(Lcrh) = Fen | Wlen8;
 	UART(Imsc) = 0;			/* polled; no interrupts yet */

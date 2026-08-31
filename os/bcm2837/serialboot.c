@@ -28,6 +28,7 @@ void jumpflush(void);
 
 #define PHYSIO		0x3F000000UL
 #define UARTREGS	(PHYSIO + 0x201000)
+#define SYSTIMER	(PHYSIO + 0x003000)	/* free-running, 1MHz, no init */
 #define GPIOREGS	(PHYSIO + 0x200000)
 
 #define REG(a)		(*(volatile u32int*)(unsigned long)(a))
@@ -51,7 +52,35 @@ enum {
 	Txe	= 1<<8,
 	Rxe	= 1<<9,
 
+	Clo	= 0x04,		/* system timer, low 32 bits */
+
 	Kernel	= 0x80000,	/* where the boot ROM would have put it */
+
+	/*
+	 * A PREFIX BEFORE THE SIZE, and a timeout behind it.
+	 *
+	 * Without these this protocol cannot tell a size from anything
+	 * else that happens to arrive: four bytes are read and believed.
+	 * A host that sends a stray byte between the size and its
+	 * intended value -- or a tool probing to see whether the loader
+	 * is even there -- produces a number nobody meant, and the loader
+	 * then sits reading that many bytes, swallowing everything sent
+	 * to it including the probes used to ask whether it is alive.
+	 * There is no kernel running to reset, so that is a trip to the
+	 * power switch. It has cost two of them.
+	 *
+	 * The magic makes a size deliberate: bytes that are not the
+	 * prefix are discarded rather than accumulated, so probing is
+	 * safe by construction. The timeout makes a stall recoverable:
+	 * a transfer that stops part way is abandoned and the loop
+	 * starts again, so the loader talks again instead of waiting
+	 * for bytes that are never coming.
+	 */
+	Magic0	= 0x1B,		/* ESC K R N -- not text, not CR, not ETX */
+	Magic1	= 'K',
+	Magic2	= 'R',
+	Magic3	= 'N',
+	Stalus	= 5000000,	/* give up on a stalled read after 5s */
 	Maxsize	= 16*1024*1024,
 };
 
@@ -100,6 +129,27 @@ getc(void)
 	return REG(UARTREGS + Dr) & 0xFF;
 }
 
+static u32int
+now(void)
+{
+	return REG(SYSTIMER + Clo);
+}
+
+/*
+ * A character, or -1 if none arrived within us microseconds.
+ */
+static int
+getctmo(u32int us)
+{
+	u32int start;
+
+	start = now();
+	while((REG(UARTREGS + Fr) & Rxfe) != 0)
+		if(now() - start > us)
+			return -1;
+	return REG(UARTREGS + Dr) & 0xFF;
+}
+
 static void
 puts(char *s)
 {
@@ -116,6 +166,7 @@ unsigned long
 bmain(void)
 {
 	u32int size, i;
+	int c;
 	uchar *p;
 
 	uartinit();
@@ -123,6 +174,23 @@ bmain(void)
 
 	for(;;){
 		putc(3); putc(3); putc(3);
+
+		/*
+		 * Wait for the prefix, discarding anything else.
+		 *
+		 * Blocking, because with nothing to load there is nothing
+		 * else to do -- but every byte that is not the prefix is
+		 * thrown away rather than kept, which is what makes it safe
+		 * for a host to probe this line.
+		 */
+		if(getc() != Magic0)
+			continue;
+		if(getc() != Magic1)
+			continue;
+		if(getc() != Magic2)
+			continue;
+		if(getc() != Magic3)
+			continue;
 
 		size  = (u32int)getc();
 		size |= (u32int)getc() << 8;
@@ -136,8 +204,21 @@ bmain(void)
 		puts("OK");
 
 		p = (uchar*)(unsigned long)Kernel;
-		for(i = 0; i < size; i++)
-			p[i] = getc();
+		for(i = 0; i < size; i++){
+			c = getctmo(Stalus);
+			if(c < 0){
+				/*
+				 * Abandoned, not waited on for ever. The
+				 * image is incomplete and jumping into it
+				 * would be worse than saying so.
+				 */
+				puts("\r\nserialboot: transfer stalled\r\n");
+				break;
+			}
+			p[i] = (uchar)c;
+		}
+		if(i < size)
+			continue;
 
 		puts("\r\nserialboot: GO\r\n");
 		jumpflush();

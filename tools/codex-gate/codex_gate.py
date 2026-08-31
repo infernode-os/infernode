@@ -48,6 +48,8 @@
 #   CODEX_GATE_MOCK       "1" = deterministic mock backend (tests; no CLI)
 #   CODEX_GATE_MOCK_ERROR non-empty = fail every mock turn with this message
 #   CODEX_GATE_MOCK_ERROR_COUNT fail this many mock calls (-1 = every call)
+#   CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH only fail mock turns whose system prompt
+#                                      contains this string
 #   CODEX_GATE_BIN        codex binary (default "codex", found on PATH)
 #   CODEX_GATE_MODEL      default model; empty = let the CLI use its own
 #   CODEX_GATE_MODELS     comma-separated list advertised on /v1/models
@@ -100,6 +102,8 @@ PORT = int(os.environ.get("CODEX_GATE_PORT", "11436"))
 MOCK = os.environ.get("CODEX_GATE_MOCK", "") == "1"
 MOCK_ERROR = os.environ.get("CODEX_GATE_MOCK_ERROR", "")
 MOCK_ERROR_COUNT = int(os.environ.get("CODEX_GATE_MOCK_ERROR_COUNT", "-1"))
+MOCK_ERROR_SYSTEM_MATCH = os.environ.get(
+    "CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH", "")
 CODEX_BIN = os.environ.get("CODEX_GATE_BIN", "codex")
 DEFAULT_MODEL = os.environ.get("CODEX_GATE_MODEL", "")
 EXEC_TIMEOUT = float(os.environ.get("CODEX_GATE_TIMEOUT", "900"))
@@ -969,7 +973,9 @@ async def mock_turn(model, system_prompt, prompt, tooldefs, trailing_tools):
     gate's stateless shape: tool results arrive in the request, not on a
     held turn.  `MOCK_TOOL_CALL <name> <json>` triggers one tool call."""
     global _mock_errors_remaining
-    if MOCK_ERROR and _mock_errors_remaining != 0:
+    selected = not MOCK_ERROR_SYSTEM_MATCH or \
+        MOCK_ERROR_SYSTEM_MATCH in system_prompt
+    if MOCK_ERROR and selected and _mock_errors_remaining != 0:
         if _mock_errors_remaining > 0:
             _mock_errors_remaining -= 1
         raise CodexError(MOCK_ERROR)

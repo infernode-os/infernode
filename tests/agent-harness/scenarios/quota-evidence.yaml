@@ -1,6 +1,7 @@
 # Deterministic credit-exhaustion recovery control. The mock gate fails its
-# first call, reports a quota pause, then succeeds on retry. No Codex invocation
-# or account credit is used.
+# first delegated-child call, reports a quota pause, then succeeds on retry. No
+# Codex invocation or account credit is used. Configure the mock gate with
+# CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH='You are a task execution agent working autonomously.'
 
 gateway:
   backend: mock
@@ -20,8 +21,11 @@ scenarios:
       - agentdone
       - nsrestrict
     settle: 4
+    followthrough: true
     timeout: 180
     prompt: |
-      This request is a deterministic usage-limit recovery control. Reply OK.
+      MOCK_TOOL_CALL task {"command":"create","args":"label=QuotaChild tools=read brief=Reply OK and stop."}
     expects:
-      reply_regex: "MOCK_REPLY:.*deterministic usage-limit recovery control"
+      reply_regex: "(?is)TOOL_RESULT_WAS: created activity 1: QuotaChild"
+      trajectory_tool:
+        - task

@@ -132,6 +132,10 @@ def stage_scenario(sc, model, url, rz):
         probes.append(chk["path"])
     (STAGE / "probefiles").write_text("\n".join(probes) + ("\n" if probes else ""))
     (STAGE / "quota-events").write_text("")
+    try:
+        (STAGE / "quota-paused").unlink()
+    except FileNotFoundError:
+        pass
 
 
 def sha256_bytes(data):
@@ -938,19 +942,37 @@ def append_quota_event(event):
 
 
 class ActiveClock:
-    """Scenario time excluding intervals codex-gate proves quota-paused."""
-    def __init__(self, started):
+    """Scenario time excluding intervals codex-gate proves quota-paused.
+
+    The driver has shorter in-guest settlement budgets so it can export audit
+    and canary evidence before the outer timeout reaps the emulator. Mirror the
+    authenticated gateway state into its host-backed stage directory so those
+    budgets stop on the same intervals as this clock.
+    """
+    def __init__(self, started, pause_marker):
         self.started = started
+        self.pause_marker = Path(pause_marker)
         self.paused_started = None
         self.paused_total = 0.0
         self.events = []
         self.seen_terminal = set()
+        self.clear_pause_marker()
+
+    def set_pause_marker(self):
+        write_private(self.pause_marker, "gateway-authenticated quota pause\n")
+
+    def clear_pause_marker(self):
+        try:
+            self.pause_marker.unlink()
+        except FileNotFoundError:
+            pass
 
     def observe(self, health, now):
         paused = health.get("state") == "paused_quota"
         quota = health.get("quota") or {}
         if paused and self.paused_started is None:
             self.paused_started = now
+            self.set_pause_marker()
             event = {
                 "event": "pause", "reason": "usage_limit",
                 "observed_utc": datetime.datetime.now(
@@ -968,6 +990,7 @@ class ActiveClock:
             duration = now - self.paused_started
             self.paused_total += duration
             self.paused_started = None
+            self.clear_pause_marker()
             event = {
                 "event": "resume", "reason": "usage_limit",
                 "observed_utc": datetime.datetime.now(
@@ -1034,7 +1057,7 @@ def run_emu(emu, timeout, gateway_url):
     cmd = [emu, "-c1", "-pheap=1024m", "-pmain=1024m", "-pimage=1024m",
            f"-r{REPO}", "sh", "-c", f"run {DRIVER_INEMU}"]
     t0 = time.monotonic()
-    clock = ActiveClock(t0)
+    clock = ActiveClock(t0, STAGE / "quota-paused")
     next_health_poll = t0
     runtime_health = {}
     p = subprocess.Popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE,
@@ -1085,11 +1108,18 @@ def run_emu(emu, timeout, gateway_url):
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
+        # The emulator can no longer consume in-guest polling time. Never
+        # leave a stale pause signal behind if output parsing or process
+        # cleanup raises before the final health observation.
+        clock.clear_pause_marker()
     rc = p.returncode if p.returncode is not None else -1
     now = time.monotonic()
-    clock.observe(gateway_runtime_health(gateway_url), now)
-    return ("".join(lines), rc, done, (killed and not done),
-            clock.active_elapsed(now), now - t0, clock.events)
+    try:
+        clock.observe(gateway_runtime_health(gateway_url), now)
+        return ("".join(lines), rc, done, (killed and not done),
+                clock.active_elapsed(now), now - t0, clock.events)
+    finally:
+        clock.clear_pause_marker()
 
 
 # ── parse the @@ state bundle ───────────────────────────────────────

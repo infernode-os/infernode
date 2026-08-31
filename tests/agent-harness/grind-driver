@@ -298,15 +298,20 @@ if {~ $#promptval 0} {
 # 'working' (thinking/launching/running/active) for the whole turn and returns
 # to a terminal status only at end_turn — a stable terminal status is the true
 # completion signal. Gate on a reply existing (conversation/1) so we don't fire
-# on the pre-response idle state. rc-sh has no break/arith: grow a list, compare
-# length ($#), guard with a flag. ~420s budget; ends early once terminal held
-# `settle` polls.
+# on the pre-response idle state. Grow a list to count active polls. The host
+# creates quota-paused only while its authenticated gateway health says quota
+# is paused; paused wall time must not consume this ~420s budget (INFR-437).
 stablelist=()
+settlebudget=()
 done=no
-for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
-	for (i in 1 2 3 4 5 6 7 8 9 10) {
-		if {~ $done no} {
-			sleep 3
+while {~ $done no} {
+	if {ftest -f $stage/quota-paused} {
+		sleep 1
+	}{
+		sleep 3
+		# Do not charge a poll whose sleep crossed into a quota pause.
+		if {! ftest -f $stage/quota-paused} {
+			settlebudget=($settlebudget x)
 			s=`{cat /mnt/ui/activity/0/status}
 			if {~ $s working thinking launching running active} {
 				stablelist=()
@@ -319,6 +324,8 @@ for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
 			}
 			if {~ $#stablelist $settle} {
 				done=yes
+			}{
+				if {~ $#settlebudget 140} { done=timeout }
 			}
 		}
 	}
@@ -342,18 +349,18 @@ if {~ $followthrough yes} {
 		echo '@@GRIND followthrough begin'
 		# Wait until no child activity is working. Ordinary scenarios retain the
 		# ~240s budget; an explicit campaign wait permits ~1200s for concurrent
-		# source-assisted red-team branches.
-		childrounds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
-		childpolls=(1 2 3 4 5)
-		if {~ $campaignwait yes} {
-			childrounds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
-			childpolls=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
-		}
+		# source-assisted red-team branches. Only unpaused polls spend it.
+		childlimit=80
+		if {~ $campaignwait yes} { childlimit=400 }
+		childbudget=()
 		cdone=no
-		for (r in $childrounds) {
-			for (i in $childpolls) {
-				if {~ $cdone no} {
-					sleep 3
+		while {~ $cdone no} {
+			if {ftest -f $stage/quota-paused} {
+				sleep 1
+			}{
+				sleep 3
+				if {! ftest -f $stage/quota-paused} {
+					childbudget=($childbudget x)
 					childpending=no
 					for (ad in `{ls /mnt/ui/activity}) {
 						if {ftest -d $ad} {
@@ -366,7 +373,11 @@ if {~ $followthrough yes} {
 							}
 						}
 					}
-					if {~ $childpending no} { cdone=yes }
+					if {~ $childpending no} {
+						cdone=yes
+					}{
+						if {~ $#childbudget $childlimit} { cdone=timeout }
+					}
 				}
 			}
 		}
@@ -377,11 +388,15 @@ if {~ $followthrough yes} {
 			sleep 6
 			# settle Activity 0 again (same terminal-hold logic as the first pass)
 			stablelist=()
+			followbudget=()
 			fdone=no
-			for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14) {
-				for (i in 1 2 3 4 5 6 7 8 9 10) {
-					if {~ $fdone no} {
-						sleep 3
+			while {~ $fdone no} {
+				if {ftest -f $stage/quota-paused} {
+					sleep 1
+				}{
+					sleep 3
+					if {! ftest -f $stage/quota-paused} {
+						followbudget=($followbudget x)
 						s=`{cat /mnt/ui/activity/0/status}
 						if {~ $s working thinking launching running active} {
 							stablelist=()
@@ -390,6 +405,8 @@ if {~ $followthrough yes} {
 						}
 						if {~ $#stablelist $settle} {
 							fdone=yes
+						}{
+							if {~ $#followbudget 140} { fdone=timeout }
 						}
 					}
 				}
@@ -402,28 +419,35 @@ if {~ $followthrough yes} {
 }
 
 childsettled=no
-for (r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) {
-	if {~ $childsettled no} {
-		childpending=no
-		for (ad in `{ls /mnt/ui/activity}) {
-			if {ftest -d $ad} {
-				a=`{basename $ad}
-				if {! ~ $a 0} {
-					cs=`{cat $ad/status}
-					if {! ~ $cs complete completed done idle failed error timeout closed hidden} {
-						childpending=yes
+finalchildbudget=()
+while {~ $childsettled no} {
+	if {ftest -f $stage/quota-paused} {
+		sleep 1
+	}{
+		sleep 3
+		if {! ftest -f $stage/quota-paused} {
+			finalchildbudget=($finalchildbudget x)
+			childpending=no
+			for (ad in `{ls /mnt/ui/activity}) {
+				if {ftest -d $ad} {
+					a=`{basename $ad}
+					if {! ~ $a 0} {
+						cs=`{cat $ad/status}
+						if {! ~ $cs complete completed done idle failed error timeout closed hidden} {
+							childpending=yes
+						}
 					}
 				}
 			}
-		}
-		if {~ $childpending no} {
-			childsettled=yes
-		}{
-			sleep 3
+			if {~ $childpending no} {
+				childsettled=yes
+			}{
+				if {~ $#finalchildbudget 20} { childsettled=timeout }
+			}
 		}
 	}
 }
-if {~ $childsettled no} {
+if {! ~ $childsettled yes} {
 	for (ad in `{ls /mnt/ui/activity}) {
 		if {ftest -d $ad} {
 			a=`{basename $ad}

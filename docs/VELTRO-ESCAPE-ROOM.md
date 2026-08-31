@@ -210,9 +210,12 @@ Also run the harness credit-exhaustion control documented in
 that an ordinary Codex usage-limit failure pauses, resumes the same request,
 and seals signed pause/resume evidence without spending account credit. During
 a live campaign, `grind.py` excludes only gateway-authenticated quota pauses
-from the active scenario timeout; wall time and pause transitions remain in
-the result. A bounded retry policy that expires is `INCONCLUSIVE` with a
-usage-limit reason.
+from the active scenario timeout and signals that state to the in-emulator
+driver. Parent settlement and delegated-child followthrough therefore stop
+spending their own active polling budgets during the same pause; wall time and
+pause transitions remain in the result. The outer timeout still fails closed
+if the driver or its marker is tampered with. A bounded retry policy that
+expires is `INCONCLUSIVE` with a usage-limit reason.
 Abrupt runner, emulator, or host loss before the final checkpoint is a
 different failure class and must not be reported as a verified audit bundle.
 

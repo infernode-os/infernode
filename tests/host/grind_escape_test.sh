@@ -33,12 +33,15 @@ with tempfile.TemporaryDirectory() as td:
     oldtmp = grind.INEMU_TMP
     grind.STAGE = Path(td) / "stage"
     grind.INEMU_TMP = Path(td) / "tmp"
+    grind.STAGE.mkdir(parents=True)
+    (grind.STAGE / "quota-paused").write_text("stale\n")
     grind.stage_scenario({"source_ro": True, "nsaudit": True,
                           "prompt": "inspect source", "run_id": "RUN-TEST"},
                          "default", "http://127.0.0.1:1/v1", "high")
     assert (grind.STAGE / "source-ro").read_text() == "yes\n"
     assert (grind.STAGE / "nsaudit").read_text() == "yes\n"
     assert (grind.STAGE / "rz").read_text() == "high\n"
+    assert not (grind.STAGE / "quota-paused").exists()
     grind.STAGE = oldstage
     grind.INEMU_TMP = oldtmp
 
@@ -739,6 +742,10 @@ assert "cat $stage/quota-events > /mnt/audit/log" in driver
 assert "@@QUOTA begin" in driver and "@@QUOTA end" in driver
 assert "ls /mnt/ui/activity" in driver
 assert "for (a in 1 2 3 4 5 6 7 8 9)" not in driver
+assert driver.count("if {ftest -f $stage/quota-paused}") == 4
+assert driver.count("if {! ftest -f $stage/quota-paused}") == 4
+for loop in ("done", "cdone", "fdone", "childsettled"):
+    assert f"while {{~ ${loop} no}}" in driver, loop
 
 # ── the loop itself: retry a boot flake, fail closed on an active crash ──
 #
@@ -752,34 +759,49 @@ import io
 # boundaries. Unreachable/ordinary health never grants extra time.
 quota_lines = []
 grind.append_quota_event = quota_lines.append
-clock = grind.ActiveClock(100.0)
-with contextlib.redirect_stdout(io.StringIO()):
-    clock.observe({"state": "paused_quota", "quota": {
-        "paused_turns": 2, "retry_at": "2026-08-30T17:06:00+07:00"}}, 110.0)
-    assert clock.active_elapsed(130.0) == 10.0
-    clock.observe({"state": "ready", "quota": {}}, 140.0)
-assert clock.active_elapsed(145.0) == 15.0
-assert [event["event"] for event in clock.events] == ["pause", "resume"]
-assert clock.events[1]["paused_seconds"] == 30.0
-assert quota_lines[0].startswith("quota pause reason=usage_limit")
-assert quota_lines[1].startswith("quota resume reason=usage_limit")
+with tempfile.TemporaryDirectory() as td:
+    marker = Path(td) / "quota-paused"
+    marker.write_text("stale\n")
+    clock = grind.ActiveClock(100.0, marker)
+    assert not marker.exists()
+    with contextlib.redirect_stdout(io.StringIO()):
+        clock.observe({"state": "paused_quota", "quota": {
+            "paused_turns": 3,
+            "retry_at": "2026-08-30T17:06:00+07:00"}}, 110.0)
+        assert marker.read_text() == "gateway-authenticated quota pause\n"
+        assert marker.stat().st_mode & 0o777 == 0o600
+        # Multiple child requests do not create multiple pause intervals.
+        clock.observe({"state": "paused_quota", "quota": {
+            "paused_turns": 3,
+            "retry_at": "2026-08-30T17:06:00+07:00"}}, 130.0)
+        assert clock.active_elapsed(130.0) == 10.0
+        clock.observe({"state": "ready", "quota": {}}, 140.0)
+    assert not marker.exists()
+    assert clock.active_elapsed(145.0) == 15.0
+    assert [event["event"] for event in clock.events] == ["pause", "resume"]
+    assert clock.events[1]["paused_seconds"] == 30.0
+    assert quota_lines[0].startswith("quota pause reason=usage_limit")
+    assert quota_lines[1].startswith("quota resume reason=usage_limit")
 
-plain = grind.ActiveClock(100.0)
-plain.observe({}, 120.0)
-assert plain.active_elapsed(120.0) == 20.0
+    plain = grind.ActiveClock(100.0, marker)
+    plain.observe({}, 120.0)
+    assert plain.active_elapsed(120.0) == 20.0
+    assert not marker.exists()
 
-exhausted_lines = []
-grind.append_quota_event = exhausted_lines.append
-exhausted = grind.ActiveClock(100.0)
-with contextlib.redirect_stdout(io.StringIO()):
-    exhausted.observe({"state": "paused_quota", "quota": {
-        "paused_turns": 1, "retry_at": None}}, 105.0)
-    exhausted.observe({"state": "ready", "quota": {"last_pause": {
-        "state": "exhausted", "paused_at": "start", "ended_at": "end",
-        "duration_seconds": 10.0}}}, 115.0)
-assert [event["event"] for event in exhausted.events] == \
-    ["pause", "resume", "exhausted"]
-assert exhausted_lines[-1].startswith("quota exhausted reason=usage_limit")
+    exhausted_lines = []
+    grind.append_quota_event = exhausted_lines.append
+    exhausted = grind.ActiveClock(100.0, marker)
+    with contextlib.redirect_stdout(io.StringIO()):
+        exhausted.observe({"state": "paused_quota", "quota": {
+            "paused_turns": 1, "retry_at": None}}, 105.0)
+        assert marker.exists()
+        exhausted.observe({"state": "ready", "quota": {"last_pause": {
+            "state": "exhausted", "paused_at": "start", "ended_at": "end",
+            "duration_seconds": 10.0}}}, 115.0)
+    assert not marker.exists()
+    assert [event["event"] for event in exhausted.events] == \
+        ["pause", "resume", "exhausted"]
+    assert exhausted_lines[-1].startswith("quota exhausted reason=usage_limit")
 
 with tempfile.TemporaryDirectory() as td:
     base = Path(td)

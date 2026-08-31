@@ -242,8 +242,17 @@ Qdir:		con 0;
 Qclone:		con 1;
 Qcbase:		con 16;		# per-connection qids start here
 
-# the four files of a connection, in qid order
-Qcdir, Qcctl, Qcdata, Qcstats: con iota;
+# the files of a connection, in qid order
+#
+# "packed" carries several frames in one reply, each behind a two-byte
+# little-endian length. It exists beside "data" rather than replacing
+# it because one read returning one packet is the documented meaning of
+# an Ethernet data file, and a reader that has not asked for the other
+# thing must keep getting that. Which one a client uses is settled by
+# which one it opens -- the namespace says what is on offer, so there
+# is no mode to set and no version to agree.
+Qcdir, Qcctl, Qcdata, Qcstats, Qcpacked: con iota;
+Qcnf:		con 5;		# files per connection; the qid stride
 
 #
 # Frames buffered per connection, and sixteen was far too few.
@@ -298,6 +307,14 @@ Conv: adt {
 	nq:	int;			# how many are queued
 	pend:	array of int;		# tags of reads waiting for a frame
 	npend:	int;
+	#
+	# Which file the parked reads came from, and so how a frame
+	# arriving for them must be shaped. A connection is read one way
+	# or the other -- ethermedium opens "packed" or it opens "data",
+	# never both on the same conversation -- so one flag covers every
+	# tag in pend.
+	#
+	packed:	int;
 	drops:	int;
 	inpkt:	int;
 	outpkt:	int;
@@ -365,10 +382,30 @@ txframes: int;			# frames carried by those writes
 # worth at this frame size and costs 24k of the heap, which is
 # nothing beside what one avoided write is worth.
 #
+# TWO buffers, and the second one is the whole point. The batching
+# below only ever collected one frame per transfer while the server
+# loop did the write itself: the loop queued a frame, found nothing
+# else waiting, wrote it, and only THEN went back to listening -- so
+# the frames that arrived during the write could not be seen until it
+# was over, and each one got a transfer of its own. Filling one buffer
+# while the other is being written is what lets a batch form.
+#
 Txbatch: con 16;
+Txbufs:	con 2;			# one being filled, one being written
 txpend := array[Txbatch * (Ltxhdr + Maxframe + 4)] of byte;
 ntxpend := 0;			# bytes filled
 nqueued := 0;			# frames in them
+txq: chan of (array of byte, int, int);	# buffer, bytes, frames
+txfree: chan of array of byte;		# buffers not in use
+txasync := 0;			# is txproc running?
+ntxerr: int;			# transfers the device did not take
+ndirect: int;			# frames handed straight to a waiting read
+nqueue: int;			# frames that had to be queued instead
+nqdepth: int;			# sum of the queue depth at those moments
+nqmax: int;			# deepest the queue ever got
+npacked: int;			# packed reads answered with at least one frame
+npackedframes: int;		# frames those replies carried
+npackedmax: int;		# most frames in any one reply
 nframe: int;			# frames handed to the demultiplex
 
 dev: string;
@@ -747,17 +784,18 @@ serve()
 	convs = array[Nconv] of ref Conv;
 	for(i := 0; i < Nconv; i++)
 		convs[i] = ref Conv(-1, array[Qmax] of array of byte, 0, 0,
-			array[Npend] of int, 0, 0, 0, 0);
+			array[Npend] of int, 0, 0, 0, 0, 0);
 
 	(tree, treeop) := nametree->start();
 	tree.create(big Qdir, dir(".", Sys->DMDIR|8r555, Qdir));
 	tree.create(big Qdir, dir("clone", 8r666, Qclone));
 	for(i = 0; i < Nconv; i++){
-		cd := Qcbase + i*4;
+		cd := Qcbase + i*Qcnf;
 		tree.create(big Qdir, dir(string i, Sys->DMDIR|8r555, cd+Qcdir));
 		tree.create(big (cd+Qcdir), dir("ctl", 8r666, cd+Qcctl));
 		tree.create(big (cd+Qcdir), dir("data", 8r666, cd+Qcdata));
 		tree.create(big (cd+Qcdir), dir("stats", 8r444, cd+Qcstats));
+		tree.create(big (cd+Qcdir), dir("packed", 8r444, cd+Qcpacked));
 	}
 
 	p := array[2] of ref Sys->FD;
@@ -769,6 +807,19 @@ serve()
 
 	rxq = chan of (int, array of byte);
 	spawn rxproc();
+
+	#
+	# The writer, and the spare buffer it hands back and forth with
+	# the loop. Started here rather than at setup so that everything
+	# before this point -- the loopback self-test in particular --
+	# still writes synchronously and sees its frame leave.
+	#
+	txq = chan of (array of byte, int, int);
+	txfree = chan[Txbufs] of array of byte;
+	for(b := 1; b < Txbufs; b++)
+		txfree <-= array[Txbatch * (Ltxhdr + Maxframe + 4)] of byte;
+	txasync = 1;
+	spawn txproc();
 
 	#
 	# The mount happens in ANOTHER process, and that is not a style
@@ -1578,12 +1629,12 @@ dir(name: string, perm: int, path: int): Sys->Dir
 
 qconv(path: int): int
 {
-	return (path - Qcbase) / 4;
+	return (path - Qcbase) / Qcnf;
 }
 
 qkind(path: int): int
 {
-	return (path - Qcbase) % 4;
+	return (path - Qcbase) % Qcnf;
 }
 
 #
@@ -1603,14 +1654,22 @@ loop(tree: ref Tree)
 
 	while(done == 0){
 		#
-		# Take everything that is ALREADY waiting before sending.
+		# With frames pending, wait on the writer as well.
 		#
-		# The alt below has a default case, so it never blocks: it
-		# gathers what has already arrived and sends the moment
-		# there is nothing more in hand. Frames therefore wait for
-		# each other only for as long as they were going to be
-		# queued anyway, and a lone frame goes out immediately --
-		# batching that cost latency would not be worth having.
+		# The offer to txq is a third thing to wait for, not a
+		# default case, and that distinction is what makes the
+		# batching work without costing latency. If the writer is
+		# free it takes the buffer at once, so a lone frame on an
+		# idle link is delayed by nothing. If it is busy inside a
+		# transfer the offer simply is not taken, and this keeps
+		# serving 9P -- so the frames that arrive during the
+		# transfer join the batch instead of waiting for one of
+		# their own.
+		#
+		# The batch is therefore sized by how long the device takes
+		# and nothing else. A default case here would busy-wait
+		# against a writer that is not ready, and a timer would put
+		# latency on a link that is quiet.
 		#
 		if(ntxpend > 0){
 			alt {
@@ -1621,8 +1680,10 @@ loop(tree: ref Tree)
 					done = request(tmsg);
 			(ci, frame) := <-rxq =>
 				deliver(ci, frame);
-			* =>
-				flushtx();
+			txq <-= (txpend, ntxpend, nqueued) =>
+				txpend = <-txfree;
+				ntxpend = 0;
+				nqueued = 0;
 			}
 		}else{
 			alt {
@@ -1700,7 +1761,7 @@ openreq(tm: ref Tmsg.Open): int
 	}
 	convs[n].etype = 0;		# taken, not yet connected
 
-	q := Sys->Qid(big (Qcbase + n*4 + Qcctl), 0, Sys->QTFILE);
+	q := Sys->Qid(big (Qcbase + n*Qcnf + Qcctl), 0, Sys->QTFILE);
 	c.open(mode, q);
 	srv.reply(ref Rmsg.Open(tm.tag, q, srv.iounit()));
 	return 0;
@@ -1758,6 +1819,26 @@ readreq(tm: ref Tmsg.Read): int
 			cv.qhd = (cv.qhd + 1) % Qmax;
 			cv.nq--;
 			srv.reply(ref Rmsg.Read(tm.tag, frame));
+		}else if(cv.npend < Npend)
+			cv.pend[cv.npend++] = tm.tag;
+		else
+			srv.reply(ref Rmsg.Error(tm.tag, "too many reads outstanding"));
+	Qcpacked =>
+		cv := convs[n];
+		cv.packed = 1;
+		if(tm.count == 0){		# see the note under Qcdata
+			srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
+			return 0;
+		}
+		if(cv.nq > 0){
+			b := packq(cv, tm.count);
+			if(b == nil){
+				srv.reply(ref Rmsg.Error(tm.tag,
+					"read too small for a frame"));
+				return 0;
+			}
+			npacked++;
+			srv.reply(ref Rmsg.Read(tm.tag, b));
 		}else if(cv.npend < Npend)
 			cv.pend[cv.npend++] = tm.tag;
 		else
@@ -1870,13 +1951,18 @@ stats(n: int): string
 		"rxpoll: %d ms for %d polls\n" +
 		"instant empty reads: %d\nslowest empty read: %d ms\n" +
 		"writes: %d in %d ms\nslowest write: %d ms\n" +
-		"frames sent by those writes: %d\n",
+		"frames sent by those writes: %d\nfailed writes: %d\n" +
+		"rx to a waiting read: %d\nrx queued: %d\n" +
+		"queue depth sum: %d\ndeepest queue: %d\n" +
+		"packed reads: %d\nframes in them: %d\nlargest: %d\n",
 		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
 		rxpollms, rxactive,
-		nempty0, emptymax, ntx, txms, txmax, txframes);
+		nempty0, emptymax, ntx, txms, txmax, txframes, ntxerr,
+		ndirect, nqueue, nqdepth, nqmax,
+		npacked, npackedframes, npackedmax);
 }
 
 unpend(cv: ref Conv, tag: int)
@@ -1900,19 +1986,97 @@ deliver(ci: int, frame: array of byte)
 	cv := convs[ci];
 	cv.inpkt++;
 
+	#
+	# Which of these two branches runs says who is behind.
+	#
+	# Taking the first means a read was already waiting when the
+	# frame arrived: the kernel is keeping up and this driver is
+	# what it is waiting for. Taking the second means frames are
+	# piling up because the kernel has not come back for them.
+	#
+	# Worth counting because it decides whether batching can help
+	# at all. Carrying several frames per 9P message is only worth
+	# doing if there are several to carry, and the transmit side
+	# has already shown what happens when there are not: the
+	# machinery works perfectly and every batch holds one frame.
+	#
 	if(cv.npend > 0){
 		tag := cv.pend[0];
 		for(i := 1; i < cv.npend; i++)
 			cv.pend[i-1] = cv.pend[i];
 		cv.npend--;
-		srv.reply(ref Rmsg.Read(tag, frame));
+		ndirect++;
+		if(cv.packed)
+			srv.reply(ref Rmsg.Read(tag, withlen(frame)));
+		else
+			srv.reply(ref Rmsg.Read(tag, frame));
 		return;
 	}
 	if(cv.nq < Qmax){
 		cv.q[(cv.qhd + cv.nq) % Qmax] = frame;
 		cv.nq++;
+		nqueue++;
+		nqdepth += cv.nq;
+		if(cv.nq > nqmax)
+			nqmax = cv.nq;
 	}else
 		cv.drops++;
+}
+
+#
+# One frame in the packed form: a two-byte little-endian length, then
+# the frame. Used when a frame arrives for a read that is already
+# parked, which by then is committed to a reply of one frame -- the
+# saving is in the reads that find several waiting, not in this one.
+#
+withlen(frame: array of byte): array of byte
+{
+	n := len frame;
+	b := array[2 + n] of byte;
+	b[0] = byte n;
+	b[1] = byte (n >> 8);
+	b[2:] = frame;
+	return b;
+}
+
+#
+# As many queued frames as fit in count, each behind its length.
+#
+# Returns nil only when not even the first one fits, which is a caller
+# asking with a buffer too small to be useful rather than a condition
+# to paper over: answering it with a truncated frame would corrupt the
+# stream, and answering with nothing would spin.
+#
+packq(cv: ref Conv, count: int): array of byte
+{
+	tot := 0;
+	nf := 0;
+	while(nf < cv.nq){
+		f := cv.q[(cv.qhd + nf) % Qmax];
+		if(tot + 2 + len f > count)
+			break;
+		tot += 2 + len f;
+		nf++;
+	}
+	if(nf == 0)
+		return nil;
+
+	b := array[tot] of byte;
+	o := 0;
+	for(i := 0; i < nf; i++){
+		f := cv.q[cv.qhd];
+		cv.q[cv.qhd] = nil;	# let the collector have it
+		cv.qhd = (cv.qhd + 1) % Qmax;
+		cv.nq--;
+		b[o++] = byte (len f);
+		b[o++] = byte ((len f) >> 8);
+		b[o:] = f;
+		o += len f;
+	}
+	npackedframes += nf;
+	if(nf > npackedmax)
+		npackedmax = nf;
+	return b;
 }
 
 #
@@ -1962,26 +2126,79 @@ transmit(frame: array of byte): int
 	return 0;
 }
 
+#
+# Put the pending frames on the wire.
+#
+# Two callers with different needs. The server loop hands the buffer to
+# txproc and carries on, which is what makes batching possible; but the
+# loopback self-test runs before that process exists and has to see the
+# frame actually leave, so with no writer running this still does the
+# write itself.
+#
 flushtx(): int
 {
 	if(ntxpend == 0)
 		return 0;
 
+	if(txasync){
+		txq <-= (txpend, ntxpend, nqueued);
+		txpend = <-txfree;
+		ntxpend = 0;
+		nqueued = 0;
+		return 0;
+	}
+
+	r := txwrite(txpend, ntxpend, nqueued);
+	ntxpend = 0;
+	nqueued = 0;
+	return r;
+}
+
+#
+# One bulk OUT transfer, and the accounting for it.
+#
+txwrite(buf: array of byte, n: int, nf: int): int
+{
 	t0 := sys->millisec();
-	r := sys->write(bulkoutfd, txpend[0:ntxpend], ntxpend);
+	r := sys->write(bulkoutfd, buf[0:n], n);
 	dt := sys->millisec() - t0;
 	ntx++;
 	txms += dt;
-	txframes += nqueued;
+	txframes += nf;
 	if(dt > txmax)
 		txmax = dt;
-
-	n := ntxpend;
-	ntxpend = 0;
-	nqueued = 0;
-	if(r != n)
+	if(r != n){
+		ntxerr++;
 		return -1;
+	}
 	return 0;
+}
+
+#
+# The writer.
+#
+# It exists so that the process serving 9P is never the one waiting on
+# USB. While this is inside a transfer the server loop stays in its
+# alt, still answering writes and still queueing the frames they carry,
+# and the next batch is however many arrived in the meantime. The size
+# of a batch is therefore set by how long the device takes rather than
+# by any timer, and a lone frame on an idle link waits for nothing --
+# the loop offers the buffer the moment it has one, and this is sitting
+# here ready to take it.
+#
+# A failed transfer is counted and dropped rather than reported back.
+# By the time it fails the write has been acknowledged; Ethernet does
+# not promise delivery, and the layer above recovers by retransmitting.
+#
+txproc()
+{
+	for(;;){
+		(buf, n, nf) := <-txq;
+		if(buf == nil)
+			break;
+		txwrite(buf, n, nf);
+		txfree <-= buf;
+	}
 }
 
 #
@@ -2614,7 +2831,15 @@ lanloopback(mode: int): int
 	# registers says which.
 	#
 
-	if(transmit(tx) < 0){
+	#
+	# Queue it AND send it. transmit() only fills the pending buffer;
+	# without the flush the frame sat there and the test waited for
+	# something that had never been put on the wire, then reported
+	# that nothing came back. It only runs when there is no link, so
+	# the one path that would have shown this up is the one nobody
+	# takes.
+	#
+	if(transmit(tx) < 0 || flushtx() < 0){
 		sys->print("etherusb: loopback transmit failed: %r\n");
 		lanunloop(cr);
 		return -1;

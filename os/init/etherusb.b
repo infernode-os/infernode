@@ -117,6 +117,9 @@ Rreadreg:	con 16rA1;
 
 Lidrev:		con 16r000;
 Lhwcfg:		con 16r010;
+Lusbcfg0:	con 16r080;
+Lburstcap:	con 16r090;
+Lbulkindly:	con 16r094;
 Lfctrxctl:	con 16r0C0;
 Lfcttxctl:	con 16r0C4;
 Lmacrx:		con 16r104;
@@ -178,6 +181,11 @@ Mbmsrlink:	con 16r0004;		# BMSR: link is up
 Mbmsraneg:	con 16r0020;		# BMSR: auto-negotiation complete
 
 Lhwlrst:	con 16r00000002;	# HW_CFG: soft reset
+Lhwmef:		con 16r00000010;	# HW_CFG: multiple frames per transfer
+Lusbbce:	con 16r00000020;	# USB_CFG0: honour BURST_CAP
+Lusbbir:	con 16r00000040;	# USB_CFG0: NAK an IN with nothing to say
+Rxburst:	con 16*1024;		# what one aggregated bulk IN may carry
+Bindly:		con 16r2000;		# BULK_IN_DLY -- how long to gather
 # 1<<31, not 16r80000000: bit 31 does not fit a Limbo int, which
 # is signed 32-bit, so the literal would be a big and the argument
 # types would not match.
@@ -2270,7 +2278,14 @@ rxproc()
 	# to the next read. What counts as a whole message is the family's
 	# business, not this loop's.
 	#
-	acc := array[2 * (Rnishdr + Maxframe)] of byte;
+	#
+	# Big enough for one aggregated transfer plus a message that
+	# straddles into the next -- the lan78xx gathers up to Rxburst
+	# per bulk IN once burst is enabled, and a buffer sized for the
+	# single-frame regime would truncate the gathered form back into
+	# one read per frame.
+	#
+	acc := array[Rxburst + 2 * (Rnishdr + Maxframe)] of byte;
 	nacc := 0;
 	idle := 0;
 
@@ -3155,6 +3170,40 @@ lansetup(): int
 			sys->print("etherusb: LAN78xx cannot set its MAC: %r\n");
 			return -1;
 		}
+	}
+
+	#
+	# Several frames per bulk IN, gathered by the device.
+	#
+	# By default the chip answers each IN transfer with ONE frame, so
+	# receiving costs a USB transaction round trip per frame -- about
+	# two milliseconds through this stack -- no matter how fast the
+	# wire delivers. The part can instead gather frames in its FIFO
+	# and hand over up to BURST_CAP packets' worth in one transfer,
+	# waiting at most BULK_IN_DLY for more to arrive. This is the same
+	# configuration Linux's lan78xx driver has used from its first
+	# version: 16K per transfer at high speed, which is about ten full
+	# frames, and the receive path already walks records rather than
+	# assuming one, because the datasheet said it must.
+	#
+	# The order matters: burst configuration before the FIFOs and MAC
+	# are enabled, so the first frame ever received is already under
+	# the regime the driver expects.
+	#
+	if(lanwr(Lburstcap, Rxburst / 512) < 0 ||
+	   lanwr(Lbulkindly, Bindly) < 0){
+		sys->print("etherusb: LAN78xx burst setup failed: %r\n");
+		return -1;
+	}
+	(ehw, hw2) := lanrd(Lhwcfg);
+	if(ehw < 0 || lanwr(Lhwcfg, hw2 | Lhwmef) < 0){
+		sys->print("etherusb: LAN78xx MEF enable failed: %r\n");
+		return -1;
+	}
+	(eus, uc) := lanrd(Lusbcfg0);
+	if(eus < 0 || lanwr(Lusbcfg0, uc | Lusbbce | Lusbbir) < 0){
+		sys->print("etherusb: LAN78xx burst enable failed: %r\n");
+		return -1;
 	}
 
 	#

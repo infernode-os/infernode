@@ -928,6 +928,45 @@ architecture and is where to start; `etherusb` already has the
 transmit-side batching machinery (`transmit`/`flushtx`), and it never
 fires, because TCP hands frames down one at a time.
 
+### OPEN: console input wedges intermittently under QEMU
+
+Since the idle-collector bound (perf(dis): bound the idle collector),
+the harness's shell-session check fails about three runs in four under
+QEMU: at some point mid-session the shell stops executing lines. Typed
+characters still echo -- the uart kproc and the line discipline are
+alive -- and background Limbo processes keep running, but the read on
+/dev/cons never completes again.
+
+What three rounds of instrumentation established, so the next session
+does not repeat them:
+
+- Bisected cleanly: 4/4 sessions pass on the commit before the idle
+  bound, 4/4 pass with the collector throttle alone, ~1/4 pass from
+  the idle bound onward. The bound removed a milliseconds-long grind
+  the machine used to do before every sleep, so wakeups now interleave
+  at full speed; the fault it exposes is elsewhere and older.
+- It is NOT a lost run-queue entry: at wedge time every Ready proc is
+  correctly linked, nrdy and occupied agree, and the ready() path was
+  instrumented against double-enqueue and never fired.
+- It is NOT the Dis scheduler: the interpreter idles legitimately --
+  run queue empty, vmq empty, the extra vmachine kprocs parked on
+  idlevmq, the active one asleep on irend with tready as its
+  condition, which double-checks under the rendez lock and is sound.
+- The CPU is genuinely idle: every clock-tick sample lands in the
+  spllo unmask window of the scheduler's WFI loop, up == nil.
+- So every Limbo process is blocked in a kernel sleep, and the one
+  that matters -- the console reader -- never wakes although complete
+  lines were echoed. The loss is between kbdputc's qproduce into kbdq
+  and the qread sleeper in consread's cooked-mode loop, or in that
+  loop's own state. That seam (os/port/qio.c qproduce/qread, and
+  devcons.c around kbd.line) is where to look next.
+
+The board has not shown it: serial input there is exercised mainly by
+the ^T^Tr debug key, which bypasses the cooked path, so hardware is
+unproven either way. The harness check that fails is the last shell
+command of the session; the wedge can strike earlier commands too --
+whichever line is being read when it hits.
+
 ### Smaller things still open
 
 `sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,

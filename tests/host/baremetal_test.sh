@@ -503,6 +503,25 @@ build_kernel() {
             "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
             "/dis/lib/plumbmsg.dis=$ROOT/dis/lib/plumbmsg.dis"
         )
+        # A font, so acme has something to draw with.
+        #
+        # acme opens /fonts/vera/Vera/unicode.14.font and there was no
+        # /fonts at all in the image, which is why it drew a background
+        # and vanished -- the missing /mnt/acme fixed earlier was real
+        # but was not the whole of it.
+        #
+        # The stock file references dozens of subfonts out of the 10646
+        # set and pulling all of those in would cost far more than the
+        # rest of the image. Latin-1 is what a shell session and a
+        # source file need, and Vera.14.0000 covers exactly that in
+        # 12KB, so the font file is trimmed here to the one line that
+        # names it rather than checking a second copy into the tree.
+        printf '16\t13\n0x0000\t0x0100\tVera.14.0000\n' > "$BUILD/unicode.14.font"
+        rootmanifest+=(
+            "/fonts/vera/Vera/unicode.14.font=$BUILD/unicode.14.font"
+            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/Vera/Vera.14.0000"
+        )
+
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \

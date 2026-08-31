@@ -510,6 +510,32 @@ build_kernel() {
         objs+=("$BUILD/rootfs.o")
     fi
 
+    # serialboot, carried INSIDE the kernel.
+    #
+    # The kernel offers the loader back at the start of every boot, so
+    # that a kernel installed as the boot file is still reachable when
+    # it does not work -- see os/bcm2837/recover.c for why that matters
+    # and how the handover is done. Generated from the same
+    # serialboot.img that gets written to the card, so the copy the
+    # kernel carries and the copy on the card cannot drift apart.
+    if [[ -f "$BUILD/serialboot.img" ]]; then
+        python3 - "$BUILD/serialboot.img" "$BUILD/serialbootimg.c" <<'SBEOF'
+import sys
+data = open(sys.argv[1], "rb").read()
+with open(sys.argv[2], "w") as f:
+    f.write("/* generated from serialboot.img -- do not edit */\n")
+    f.write("typedef unsigned char uchar;\n")
+    f.write("uchar serialbootimg[] = {\n")
+    for i in range(0, len(data), 16):
+        f.write("\t" + ",".join("0x%02x" % b for b in data[i:i+16]) + ",\n")
+    f.write("};\n")
+    f.write("int nserialbootimg = %d;\n" % len(data))
+SBEOF
+        "$CC" "${CFLAGS[@]}" -c "$BUILD/serialbootimg.c" \
+            -o "$BUILD/serialbootimg.o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$BUILD/serialbootimg.o")
+    fi
+
     # errstr.h is GENERATED from os/port/error.h, exactly as upstream's
     # os/port/portmkfile does it: the sed rewrites each
     # "extern char Efoo[]; /* text */" declaration into

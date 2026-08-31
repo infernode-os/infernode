@@ -6,6 +6,7 @@
 void	uartinit(void);
 void	uartputc(int);
 int	uartgetc(void);
+void	serialrecover(void);
 int	hwrandom(uchar*, int);
 void	uartputstr(char*);
 void	uartputx(u64int);

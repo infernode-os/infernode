@@ -1987,6 +1987,17 @@ kmain(void)
 
 	checktraps();
 
+	/*
+	 * The way back, offered before anything else is configured.
+	 *
+	 * Deliberately here and not later: serialboot runs with the MMU
+	 * and caches off, which is the state the board is still in at
+	 * this point, so handing over needs no teardown. It also means
+	 * almost nothing a later change can break is able to break the
+	 * recovery path. See os/bcm2837/recover.c.
+	 */
+	serialrecover();
+
 	boardprobe();
 	startmmu();
 

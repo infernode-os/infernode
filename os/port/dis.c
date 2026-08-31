@@ -108,10 +108,48 @@ accountant(void)
 		p->ticks++;
 }
 
+/*
+ * How much collection to do before going to sleep, in rungc() calls.
+ *
+ * WHY THIS IS A COUNT OF QUANTA AND NOT, AS IT WAS, A COUNT OF EPOCHS.
+ * "Idle" here does not mean the machine has nothing to do. It means no
+ * Limbo process is ready THIS INSTANT, which on an I/O-bound workload
+ * is simply the gap between one packet and the next -- so this runs to
+ * completion before the sleep that waits for the packet, and the
+ * network pays it on every single round trip.
+ *
+ * That would be tolerable if the work were bounded, and an epoch is
+ * not. rungc() ends an epoch only when a full traversal finds nothing
+ * left to propagate (nprop == 0); until then it traverses the heap
+ * again. So "three epochs" is not three passes over the heap, it is
+ * however many passes the mark phase needs to converge, three times
+ * over, with the interpreter lock held throughout and the Ethernet
+ * driver -- itself a Limbo process -- unable to run until it ends.
+ *
+ * Measured on the board, 1MB TCP round trip, bytes verified each time:
+ *
+ *	3 epochs (as it was)	 28 KB/s
+ *	1 epoch			 79 KB/s
+ *	none at all		324 KB/s
+ *
+ * That is not a curve with a knee to sit on; it is the cost of
+ * finishing a traversal at all. A quantum, by contrast, is bounded by
+ * construction -- rungc() visits at most MaxQuanta blocks and returns
+ * -- so a cap on quanta is a real cap on the time before the sleep.
+ *
+ * The point of collecting at idle is preserved: spare moments still do
+ * collection, and a machine with genuinely nothing to do still makes
+ * progress every time round. What is given up is the insistence on
+ * FINISHING, which is what nobody was waiting for.
+ */
+#ifndef Idlequanta
+#define Idlequanta 8
+#endif
+
 static void
 execatidle(void)
 {
-	int done;
+	int i;
 
 	if(tready(nil))
 		return;
@@ -121,8 +159,7 @@ execatidle(void)
 	up->iprog = nil;
 	addrun(up->prog);
 
-	done = gccolor+3;
-	while(gccolor < done && gcruns()) {
+	for(i = 0; i < Idlequanta && gcruns(); i++) {
 		if(isched.vmq != nil || isched.runhd != isched.runtl) {
 			gcpartial++;
 			break;

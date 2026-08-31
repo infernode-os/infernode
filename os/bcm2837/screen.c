@@ -362,8 +362,21 @@ drawcursor(Drawcursor *c)
 	swcursoff();
 
 	if(c == nil || c->data == nil || c->minx >= c->maxx){
-		swc.loaded = 0;
+		/*
+		 * BACK TO THE ARROW, not to nothing.
+		 *
+		 * Clearing the cursor is how a program says "I am done with
+		 * mine" -- acme does it from acmeexit through
+		 * cursorswitch(nil) -- and it means restore the default,
+		 * which is what Plan 9's devmouse does for a zero-length
+		 * write to /dev/cursor. Blanking instead leaves the machine
+		 * with no pointer at all, and the kernel's arrow is set
+		 * once at startup and never set again, so it never comes
+		 * back: run acme once and the cursor is gone for the rest
+		 * of the session.
+		 */
 		unlock(&swc.l);
+		setcursor(&arrow);
 		return;
 	}
 

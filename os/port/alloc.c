@@ -121,6 +121,23 @@ memusehigh(void)
 			imagmem->cursize > imagmem->ressize;
 }
 
+/*
+ * True once the heap is more than half spent.
+ *
+ * The scheduler collects lazily -- see the throttle in vmachine() --
+ * and this is the valve that makes that safe: while it is false there
+ * is room to let garbage float, and the moment it goes true collection
+ * happens on every pass again, which is what this kernel did
+ * unconditionally before. Half is the same fraction the emulator has
+ * used for years against a heap it can grow; here the heap is fixed at
+ * 16MB, so the reserve this leaves is a real 8MB rather than a hint.
+ */
+int
+memlow(void)
+{
+	return heapmem->cursize > (heapmem->maxsize)/2;
+}
+
 void
 poolimmutable(void *v)
 {

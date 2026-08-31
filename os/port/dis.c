@@ -1031,6 +1031,7 @@ vmachine(void*)
 	Prog *r;
 	Osenv *o;
 	int cycles;
+	static int gccounter;
 
 	startup();
 
@@ -1076,8 +1077,46 @@ vmachine(void*)
 				isched.runtl = r;
 			}
 			up->env = &up->defenv;
+			/*
+			 * Collect periodically, and immediately once the heap
+			 * is half gone.
+			 *
+			 * This used to run a collection quantum after EVERY
+			 * Prog quantum, which is what the native kernel has
+			 * always done and what the emulator stopped doing long
+			 * ago -- emu/port/dis.c has carried this same counter
+			 * and this same memlow() valve for years. The two
+			 * files are otherwise the same code, and the giveaway
+			 * that they diverged rather than differing by design
+			 * is right above: gcbusy, gcidle, gcidlepass and
+			 * gcpartial are all declared in this file and none of
+			 * them was ever assigned, because the throttle that
+			 * counts them never came across.
+			 *
+			 * It costs more here than it ever did in emu. Every
+			 * Limbo process pays it, and on this machine the
+			 * Ethernet driver, its 9P server and the application
+			 * are all Limbo -- so a packet crosses the collector
+			 * several times on its way through. Measured on the
+			 * hardware: a 1MB TCP round trip went from 20KB/s to
+			 * 347KB/s with the collector held off entirely, and
+			 * board-to-host from 75KB/s to 2.2MB/s. That is not
+			 * the collector being slow, it is the collector being
+			 * asked to run tens of thousands of times a second.
+			 *
+			 * Holding it off is not an option -- it leaks by
+			 * construction. Running it 1/256 as often is, because
+			 * the heap here is 16MB and memlow() trips at half of
+			 * that: with room to spare collection is lazy, and
+			 * under real pressure the second test fires on every
+			 * pass and the old behaviour comes straight back. The
+			 * throttle gives away floating garbage, which is
+			 * bounded by the valve, and buys back the time.
+			 */
 			if(isched.runhd != nil)
+			if((++gccounter & 0xFF) == 0 || memlow())
 			if (up->iprog == nil) {
+				gcbusy++;
 				up->type = BusyGC;
 				pushrun(up->prog);
 				rungc(isched.head);

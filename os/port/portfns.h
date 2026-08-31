@@ -164,6 +164,7 @@ extern ulong	machnextaddr(Ureg *ur);
 void*		malloc(ulong);
 void*		mallocz(ulong, int);
 Block*		mem2bl(uchar*, int);
+int			memlow(void);
 int			memusehigh(void);
 void		microdelay(int);
 uvlong		mk64fract(uvlong, uvlong);

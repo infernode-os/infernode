@@ -43,7 +43,30 @@ uartinit(void)
 	UART(Icr) = 0x7FF;		/* clear all pending interrupts */
 
 	/*
-	 * 921600 baud from the 48MHz UART reference clock.
+	 * 115200 baud from the 48MHz UART reference clock.
+ *
+ * REVERTED FROM 921600, AND HERE IS WHAT HAPPENED, because the next
+ * attempt should not start from scratch.
+ *
+ * IBRD 3 / FBRD 16 is the correct divisor pair for 921600 -- 923077,
+ * 0.16% error -- and the write order here is right: the PL011 latches
+ * the divisors when LCRH is written, and LCRH is written after them.
+ * The adapter is a CH340 and macOS accepted 921600 on it. It still
+ * came back as garbage, with MORE bytes arriving at 921600 than at any
+ * other rate, which says the board was transmitting somewhere near but
+ * not at that rate.
+ *
+ * The suspect is FBRD not taking effect, which would leave IBRD 3
+ * alone: 48e6/(16*3) is exactly 1000000, an 8.5% mismatch against
+ * 921600 -- garbage, and unreachable besides, because macOS refuses to
+ * set 1000000 on this adapter. That fits every symptom including
+ * being locked out of the board entirely.
+ *
+ * WHAT TO DO DIFFERENTLY. Do not change the rate the early console
+ * comes up at. Bring the console up at 115200, PRINT the divisors and
+ * the intended rate, and only then switch -- so a failure is visible
+ * and the machine is still talking. Better still, prove the divisors
+ * by reading IBRD and FBRD back before relying on them.
 	 *
 	 * PL011 divisor: 48e6/(16*921600) = 3.2552, so IBRD 3 and FBRD
 	 * round(0.2552*64) = 16. That gives 48e6/(16*3.25) = 923077, an
@@ -70,8 +93,8 @@ uartinit(void)
 	 * garbles and the loader -- still at 115200 -- takes a corrected
 	 * kernel. Change that one only once this one is proven.
 	 */
-	UART(Ibrd) = 3;
-	UART(Fbrd) = 16;
+	UART(Ibrd) = 26;
+	UART(Fbrd) = 3;
 
 	UART(Lcrh) = Fen | Wlen8;
 	UART(Imsc) = 0;			/* polled; no interrupts yet */

@@ -104,11 +104,6 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
  * memory, and mmu.c maps it Normal non-cacheable, so a store is visible
  * to the GPU without any maintenance.
  */
-void
-flushmemscreen(Rectangle r)
-{
-	USED(r);
-}
 
 /*
  * No palette on a 32-bit direct-colour screen. Returning failure is the
@@ -263,6 +258,56 @@ swcurson(void)
 	}
 	swc.at = p;
 	swc.shown = 1;
+}
+
+void
+flushmemscreen(Rectangle r)
+{
+	u32int *fb;
+	int x, y, px, py, stride;
+
+	/*
+	 * NOT a no-op, and the reason is the software cursor.
+	 *
+	 * attachscreen hands back the real scanout memory, so drawing
+	 * goes straight to the panel and nothing needs copying out --
+	 * which is why this was empty. But the cursor is painted INTO
+	 * that same memory and keeps the pixels it covered in swc.save,
+	 * so anything drawn under a displayed cursor makes that save
+	 * stale. The next time the cursor moves it puts the stale pixels
+	 * back, painting old content over new: rectangles of whatever was
+	 * there before, appearing and disappearing as the mouse moves.
+	 *
+	 * That is the "glitchy drawing" and the ghosting, and it is why
+	 * the same wm and wmclient code is clean inside Lucifer on the
+	 * hosted emulator -- there the host draws the pointer and nothing
+	 * of ours is in the draw buffer.
+	 *
+	 * devdraw calls this with the rectangle it has just drawn, which
+	 * is exactly the information needed: put back the saved pixels
+	 * ONLY where the draw did not touch, keep the new content where
+	 * it did, then save the lot afresh and repaint the cursor. A
+	 * blanket restore would paint the stale pixels back over the new
+	 * drawing, and a blanket discard would leave cursor-shaped
+	 * residue in the part that was not drawn over.
+	 */
+	lock(&swc.l);
+	if(swc.shown && screenfb != nil){
+		stride = screenfb->pitch / sizeof(u32int);
+		fb = (u32int*)screenfb->base;
+		for(y = 0; y < swc.sh; y++)
+			for(x = 0; x < swc.sw; x++){
+				px = swc.at.x + x;
+				py = swc.at.y + y;
+				if(px >= r.min.x && px < r.max.x
+				&& py >= r.min.y && py < r.max.y)
+					continue;	/* just drawn; leave it */
+				fb[py * stride + px] = swc.save[y * Curswid + x];
+			}
+		swc.shown = 0;
+		swcurson();
+	}
+	unlock(&swc.l);
 }
 
 /*

@@ -47,6 +47,22 @@ uvlong	gcpartial;
 int keepbroken = 1;
 static Prog*	proghash[64];
 
+/*
+ * Every Prog pointer stored into the run queue must point at RAM, and
+ * RAM ends well below 4GB on this board. A value with the high word
+ * set is corruption in flight -- catch it at the store, with the
+ * storer named, instead of as a data abort one dequeue later. The
+ * checks cost a compare per queue operation, and they helped convict
+ * the usbdwc bounce-buffer use-after-free; they stay.
+ */
+static void
+chkprog(Prog *p, char *who)
+{
+	if(p != nil && ((uvlong)(uintptr)p >> 32) != 0)
+		panic("runq poison: %s stores %#p cpu%d pc %#lux",
+			who, p, m->machno, getcallerpc(&p));
+}
+
 static Progs*	delgrp(Prog*);
 static void	addgrp(Prog*, Prog*);
 void	printgrp(Prog*, char*);
@@ -795,6 +811,8 @@ addrun(Prog *p)
 		panic("addrun of ready prog %8.8p by %8.8lux\n", p, getcallerpc(&p));
 	p->state = Pready;
 	p->link = nil;
+	chkprog(p, "addrun");
+	chkprog(isched.runtl, "addrun.tl");
 	if(isched.runhd == nil)
 		isched.runhd = p;
 	else
@@ -809,6 +827,8 @@ delrun(int state)
 	Prog *p;
 
 	p = isched.runhd;
+	chkprog(p, "delrun");
+	chkprog(p->link, "delrun.link");
 	p->state = state;
 	isched.runhd = p->link;
 	if(p->link == nil)
@@ -824,6 +844,7 @@ delrunq(Prog *p)
 
 	prev = nil;
 	for(f = isched.runhd; f; f = f->link) {
+		chkprog(f, "delrunq.scan");
 		if(f == p)
 			break;
 		prev = f;
@@ -934,6 +955,7 @@ acquire(void)
 		p = up->prog;
 
 	p->state = Pready;
+	chkprog(p, "irestore.push");
 	p->link = isched.runhd;
 	isched.runhd = p;
 	if(p->link == nil)
@@ -1147,6 +1169,7 @@ vmachine(void*)
 			if(isched.runhd != nil)
 			if(r == isched.runhd)
 			if(isched.runhd != isched.runtl) {
+				chkprog(r->link, "rotate");
 				isched.runhd = r->link;
 				r->link = nil;
 				isched.runtl->link = r;
@@ -1266,6 +1289,7 @@ pushrun(Prog *p)
 	if(p->addrun != nil)
 		panic("pushrun addrun");
 	p->state = Pready;
+	chkprog(p, "pushrun");
 	p->link = isched.runhd;
 	isched.runhd = p;
 	if(p->link == nil)

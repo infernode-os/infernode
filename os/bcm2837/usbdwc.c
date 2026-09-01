@@ -161,6 +161,29 @@ struct Epio {
 	QLock	ql;		/* writes, and control transfers entire */
 	QLock	rl;		/* reads on bulk and interrupt endpoints */
 	Block	*cb;
+	/*
+	 * Persistent DMA bounce buffers, one per direction, living as
+	 * long as the endpoint.
+	 *
+	 * They used to be allocated and freed around every transfer, and
+	 * that was a use-after-free by construction: a bulk IN that ends
+	 * on a NAK is halted by this driver ("halt-then-decide"), but the
+	 * packet the device was asked for can still arrive -- QEMU's
+	 * controller model completes the in-flight packet to the hcdma it
+	 * captured, halt or no halt. With a per-transfer buffer that DMA
+	 * landed in freed pool memory, and whatever the pool had handed
+	 * out since -- a Prog, an Osenv, a free-tree node -- got a stray
+	 * RNDIS message written over it. Four cores made the window real:
+	 * boot-time DHCP corrupted the kernel about once in six boots,
+	 * and the crashes surfaced as far away as the Dis scheduler.
+	 *
+	 * A buffer owned by the endpoint turns that late completion into
+	 * a harmless write into memory that is still ours and is
+	 * overwritten by the next read anyway. It also saves an
+	 * allocb/freeb per transfer.
+	 */
+	Block	*rbounce;
+	Block	*wbounce;
 	ulong	lastpoll;
 };
 
@@ -236,6 +259,15 @@ chanalloc(Ep *ep)
 		if((bitmap & (1<<i)) == 0){
 			ctlr->chanbusy = bitmap | 1<<i;
 			qunlock(&ctlr->chanlock);
+			/*
+			 * A channel leaving the free pool with its enable
+			 * still set is a transfer somebody abandoned with
+			 * the DMA engine live -- the next completion lands
+			 * in whoever owns that memory now.
+			 */
+			if(ctlr->regs->hchan[i].hcchar & Chen)
+				panic("chanalloc: channel %d still enabled hcchar %8.8ux cpu%d",
+					i, ctlr->regs->hchan[i].hcchar, m->machno);
 			return &ctlr->regs->hchan[i];
 		}
 	qunlock(&ctlr->chanlock);
@@ -251,6 +283,15 @@ chanrelease(Ep *ep, Hostchan *chan)
 
 	ctlr = ep->hp->aux;
 	i = chan - ctlr->regs->hchan;
+	/*
+	 * Releasing a channel that is still enabled hands a live DMA
+	 * engine back to the free pool. A NAK-parked IN channel stays
+	 * enabled indefinitely and writes its next packet at hcdma no
+	 * matter who owns that memory by then.
+	 */
+	if(chan->hcchar & Chen)
+		panic("chanrelease: ep%d.%d channel %d still enabled hcchar %8.8ux hcdma %8.8ux cpu%d",
+			ep->dev->nb, ep->nb, i, chan->hcchar, chan->hcdma, m->machno);
 	qlock(&ctlr->chanlock);
 	ctlr->chanbusy &= ~(1<<i);
 	qunlock(&ctlr->chanlock);
@@ -1164,6 +1205,21 @@ account:
 	}
 	logdump(ep);
 	/*
+	 * The DMA pointer the channel finished with must lie inside the
+	 * buffer this call programmed. Anywhere else means the controller
+	 * was serving somebody else's transfer under this call's
+	 * accounting -- exactly the confusion that writes a packet over a
+	 * freed buffer's new owner.
+	 */
+	{
+		uint dstart, dend;
+		dstart = BUSADDR(PADDR(a));
+		dend = dstart + ROUND(len, maxpkt);
+		if(hc->hcdma != 0 && (hc->hcdma < dstart || hc->hcdma > dend))
+			panic("chanio: ep%d.%d dma %8.8ux outside %8.8ux..%8.8ux cpu%d",
+				ep->dev->nb, ep->nb, hc->hcdma, dstart, dend, m->machno);
+	}
+	/*
 	 * Say once whether any of this was interrupt-driven.
 	 *
 	 * The board reports nusbintr == 0 on every timeout: the
@@ -1751,6 +1807,10 @@ epclose(Ep *ep)
 		freeb(((Epio*)ep->aux)->cb);
 		/* fall through */
 	default:
+		if(((Epio*)ep->aux)->rbounce != nil)
+			freeb(((Epio*)ep->aux)->rbounce);
+		if(((Epio*)ep->aux)->wbounce != nil)
+			freeb(((Epio*)ep->aux)->wbounce);
 		free(ep->aux);
 		break;
 	}
@@ -1770,7 +1830,6 @@ epread(Ep *ep, void *a, long n)
 	ddprint("epread ep%d.%d %ld\n", ep->dev->nb, ep->nb, n);
 	epio = ep->aux;
 	tenter = fastticks(nil);
-	b = nil;
 	/*
 	 * Control reads take ql, everything else rl -- see Epio. Taking
 	 * the right one matters more than it looks: this lock is held
@@ -1782,9 +1841,13 @@ epread(Ep *ep, void *a, long n)
 		lk = &epio->rl;
 	qlock(lk);
 	if(waserror()){
+		/*
+		 * The bounce buffer is NOT freed here, and that is the
+		 * point of it: an errored IN may still have a completion
+		 * on the way to its hcdma. The buffer stays with the
+		 * endpoint, where a late write is harmless. See Epio.
+		 */
 		qunlock(lk);
-		if(b)
-			freeb(b);
 		nexterror();
 	}
 	switch(ep->ttype){
@@ -1802,14 +1865,19 @@ epread(Ep *ep, void *a, long n)
 		/* fall through */
 	case Tbulk:
 		/* XXX cache madness */
-		b = allocb(ROUND(n, ep->maxpkt) + CACHELINESZ);
+		if(epio->rbounce == nil || BALLOC(epio->rbounce) < ROUND(n, ep->maxpkt) + CACHELINESZ){
+			b = epio->rbounce;
+			epio->rbounce = allocb(ROUND(n, ep->maxpkt) + CACHELINESZ);
+			if(b != nil)
+				freeb(b);
+		}
+		b = epio->rbounce;
 		p = (uchar*)ROUND((uintptr)b->base, CACHELINESZ);
 		cachedwbinvse(p, n);
 		nr = eptrans(ep, Read, p, n);
 		epio->lastpoll = TK2MS(m->ticks);
 		memmove(a, p, nr);
 		qunlock(lk);
-		freeb(b);
 		poperror();
 		if(ep->ttype == Tbulk){
 			neprd++;
@@ -1831,12 +1899,10 @@ epwrite(Ep *ep, void *a, long n)
 	ddprint("epwrite ep%d.%d %ld\n", ep->dev->nb, ep->nb, n);
 	epio = ep->aux;
 	tenter = fastticks(nil);
-	b = nil;
 	qlock(&epio->ql);
 	if(waserror()){
+		/* the bounce stays with the endpoint; see epread */
 		qunlock(&epio->ql);
-		if(b)
-			freeb(b);
 		nexterror();
 	}
 	switch(ep->ttype){
@@ -1850,7 +1916,13 @@ epwrite(Ep *ep, void *a, long n)
 	case Tctl:
 	case Tbulk:
 		/* XXX cache madness */
-		b = allocb(n + CACHELINESZ);
+		if(epio->wbounce == nil || BALLOC(epio->wbounce) < n + CACHELINESZ){
+			b = epio->wbounce;
+			epio->wbounce = allocb(n + CACHELINESZ);
+			if(b != nil)
+				freeb(b);
+		}
+		b = epio->wbounce;
 		p = (uchar*)ROUND((uintptr)b->base, CACHELINESZ);
 		memmove(p, a, n);
 		cachedwbse(p, n);
@@ -1861,7 +1933,6 @@ epwrite(Ep *ep, void *a, long n)
 			epio->lastpoll = TK2MS(m->ticks);
 		}
 		qunlock(&epio->ql);
-		freeb(b);
 		poperror();
 		if(ep->ttype == Tbulk){
 			uvlong el;

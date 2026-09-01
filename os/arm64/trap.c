@@ -130,6 +130,33 @@ dumpureg(Ureg *u)
 		uartputstr((i % 2) ? "\n" : "   ");
 	}
 	uartputstr("\n");
+
+	/*
+	 * The call chain of the code that FAULTED, walked from the saved
+	 * x29 -- not from here, which would only show the trap handler
+	 * looking at itself. Each credible frame stores the caller's
+	 * {x29, x30} at [x29]; the bound is RAM, because kprocs run on
+	 * pool-allocated stacks and any tighter guess (the old
+	 * "m + KSTACK", from when m sat on the boot stack) rejects every
+	 * real frame and prints an empty trace at the exact moment one
+	 * is needed.
+	 */
+	uartputstr("  trace:  ");
+	{
+		uintptr fp, pc;
+		fp = u->r[29];
+		for(i = 0; i < 16; i++){
+			if((fp & 7) != 0 || fp < 0x1000 || fp >= mmuramtop())
+				break;
+			pc = *(uintptr*)(fp + 8);
+			if(pc < 0x1000 || pc >= mmuramtop())
+				break;
+			uartputx(pc);
+			uartputstr(" ");
+			fp = *(uintptr*)fp;
+		}
+	}
+	uartputstr("\n");
 }
 
 /* kernel image bounds, from the linker script */
@@ -253,10 +280,16 @@ dumpstack(void)
 
 	__asm__ volatile("mov %0, x29" : "=r"(fp));
 
-	top = (uintptr)m + KSTACK;
+	/*
+	 * Bound by RAM. The old bound was "m + KSTACK" from the days when
+	 * m lived on the boot stack; m is machs[] in .bss now, so that
+	 * bound rejected every pool-allocated kproc stack and this
+	 * function printed nothing exactly when it was wanted.
+	 */
+	top = mmuramtop();
 	print("stack trace:\n");
 	for(i = 0; i < 32 && fp != 0; i++){
-		if((fp & 7) != 0 || fp < conf.base0 || fp >= top + KSTACK)
+		if((fp & 7) != 0 || fp < 0x1000 || fp >= top)
 			break;			/* chain is not credible */
 		pc = *(uintptr*)(fp + 8);
 		if(pc == 0)

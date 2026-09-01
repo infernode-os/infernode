@@ -334,6 +334,13 @@ poolalloc(Pool *p, ulong asize)
 		if(t->size == size) {
 			t = t->fwd;
 			pooldel(p, t);
+			/* A block leaving the free tree must still be marked
+			 * free; anything else means the tree and the magics
+			 * disagree -- caught here with the culprit on the
+			 * stack instead of three owners later. */
+			if(t->magic != MAGIC_F)
+				panic("poolalloc %s: tree block %#p magic %#lux cpu%d",
+					p->name, t, t->magic, m->machno);
 			t->magic = MAGIC_A;
 			p->cursize += t->size;
 			if(p->cursize > p->hw)
@@ -350,6 +357,9 @@ poolalloc(Pool *p, ulong asize)
 	}
 	if(q != nil) {
 		pooldel(p, q);
+		if(q->magic != MAGIC_F)
+			panic("poolalloc %s: split block %#p magic %#lux cpu%d",
+				p->name, q, q->magic, m->machno);
 		q->magic = MAGIC_A;
 		frag = q->size - size;
 		if(frag < (size>>2) && frag < 0x8000) {

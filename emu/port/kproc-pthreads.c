@@ -256,8 +256,9 @@ osyield(void)
 void
 ospause(void)
 {
-	/* main just wants this thread to go away */
-	pthread_exit(0);
+	/* Keep the process leader visible while the emulator workers run. */
+	for(;;)
+		pause();
 }
 
 void

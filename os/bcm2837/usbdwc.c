@@ -1214,7 +1214,18 @@ account:
 	{
 		uint dstart, dend;
 		dstart = BUSADDR(PADDR(a));
-		dend = dstart + ROUND(len, maxpkt);
+		/*
+		 * Sixteen bytes of slack past the programmed end: real
+		 * silicon advances hcdma in AHB bursts (INCR4 = 16
+		 * bytes), so a completed transfer can legitimately read
+		 * back one burst past the buffer -- observed +8 past an
+		 * 8-byte interrupt transfer on the first four-core
+		 * hardware boot, where QEMU's model had always shown the
+		 * exact end. The check still catches what it exists for:
+		 * a transfer served under another call's accounting lands
+		 * whole buffers away, not one burst.
+		 */
+		dend = dstart + ROUND(len, maxpkt) + 16;
 		if(hc->hcdma != 0 && (hc->hcdma < dstart || hc->hcdma > dend))
 			panic("chanio: ep%d.%d dma %8.8ux outside %8.8ux..%8.8ux cpu%d",
 				ep->dev->nb, ep->nb, hc->hcdma, dstart, dend, m->machno);

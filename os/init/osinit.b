@@ -1259,7 +1259,142 @@ sdsetup()
 	} exception {
 	* =>
 		sys->print("init: dossrv could not serve /dev/%s\n", dos);
+		return;
 	}
+
+	rootpolicy();
+}
+
+#
+# Which userspace to run, decided by DATA ON THE CARD -- never by the
+# build. The kernel's compiled-in root is a recovery floor, not a
+# system; the real /dis and /lib come from wherever /n/dos/rootpath
+# says, in the order it says it:
+#
+#	local			the card's own dis/ and lib/ trees
+#	net tcp!host!port	a styx server, mounted without auth
+#
+# One line per source, applied top to bottom, every one a union bind
+# AFTER the kernel root -- so the 47 recovery commands always resolve,
+# and everything they lack falls through to the card or the network.
+# No file, or no matching trees, means the machine simply runs its
+# built-in root, which is exactly what it did before this existed.
+#
+# This is the same choice upstream native Inferno hard-wired the other
+# way: its bootinit.b mounts /n/remote and takes the whole system from
+# a server, because 1996's native target was a diskless network
+# computer. The mechanism is theirs; making the policy a card file is
+# ours. A thin client writes "net ...", an autonomous node writes
+# "local", a bench machine writes "local" and binds a development
+# server over it by hand.
+#
+rootpolicy()
+{
+	spec := "local";
+	fd := sys->open("/n/dos/rootpath", Sys->OREAD);
+	if(fd != nil){
+		buf := array[256] of byte;
+		n := sys->read(fd, buf, len buf);
+		fd = nil;
+		if(n > 0)
+			spec = string buf[0:n];
+	}
+
+	(nil, lines) := sys->tokenize(spec, "\r\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, toks) := sys->tokenize(hd lines, " \t");
+		if(toks == nil)
+			continue;
+		case hd toks {
+		"local" =>
+			rootbind("/n/dos");
+		"net" =>
+			if(tl toks == nil){
+				sys->print("init: rootpath: net needs an address\n");
+				continue;
+			}
+			addr := hd tl toks;
+			(dok, conn) := sys->dial(addr, nil);
+			if(dok < 0){
+				sys->print("init: rootpath: dial %s: %r\n", addr);
+				continue;
+			}
+			if(sys->mount(conn.dfd, nil, "/n/remote", Sys->MREPL, "") < 0){
+				sys->print("init: rootpath: mount %s: %r\n", addr);
+				continue;
+			}
+			sys->print("init: root server %s on /n/remote\n", addr);
+			rootbind("/n/remote");
+		* =>
+			sys->print("init: rootpath: unknown source %s\n", hd toks);
+		}
+	}
+}
+
+#
+# Union a root candidate's dis/ and lib/ over the system's, if it has
+# them. Checked first, because a bind of a directory that is not there
+# succeeds and then fails at every walk through it, which reads as a
+# corrupt filesystem rather than a missing tree.
+#
+rootbind(base: string)
+{
+	if(rootunion(base + "/dis", "/dis"))
+		sys->print("init: /dis grown from %s/dis\n", base);
+	if(rootunion(base + "/lib", "/lib"))
+		sys->print("init: /lib grown from %s/lib\n", base);
+	if(rootunion(base + "/fonts", "/fonts"))
+		sys->print("init: /fonts grown from %s/fonts\n", base);
+}
+
+#
+# Union src over dst -- and then union each shared SUBDIRECTORY too.
+#
+# A union binds one level: after "bind -a card/dis /dis", the name
+# /dis/lib still resolves to the FIRST lib in the union, the kernel
+# root's, and the card's dis/lib behind it might as well not exist.
+# Every directory both trees carry (lib, sh, wm...) needs its own
+# union or the kernel's copy silently hides the card's -- which
+# presented as /dis/lib/auth "not existing" on a card that plainly
+# held it. Directories only the card has need nothing: the top-level
+# union already reaches them.
+#
+rootunion(src, dst: string): int
+{
+	(ok, nil) := sys->stat(src);
+	if(ok < 0)
+		return 0;
+
+	# Which subdirectories BOTH trees carry -- decided BEFORE the
+	# bind, because afterwards the union itself answers every stat
+	# and a card-only directory would get pointlessly unioned with
+	# itself, listing its entries twice.
+	shared: list of string;
+	fd := sys->open(src, Sys->OREAD);
+	if(fd != nil){
+		for(;;){
+			(n, dirs) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++){
+				d := dirs[i];
+				if((d.mode & Sys->DMDIR) == 0)
+					continue;
+				(dok, nil) := sys->stat(dst + "/" + d.name);
+				if(dok >= 0)
+					shared = d.name :: shared;
+			}
+		}
+		fd = nil;
+	}
+
+	if(sys->bind(src, dst, Sys->MAFTER) < 0){
+		sys->print("init: bind %s: %r\n", src);
+		return 0;
+	}
+	for(; shared != nil; shared = tl shared)
+		rootunion(src + "/" + hd shared, dst + "/" + hd shared);
+	return 1;
 }
 
 #

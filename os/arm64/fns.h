@@ -81,6 +81,7 @@ int	xmerge(void*, void*);
 
 /* clock.c */
 void	clockinit(void);
+void	secclockinit(void);
 u64int	clockcount(void);
 u64int	clockfreq(void);
 u64int	clockticks(void);
@@ -173,6 +174,7 @@ extern void	(*screenputs)(char*, int);
 
 /* platform hooks os/port/proc.c calls */
 void	idlehands(void);
+void	idlewake(void);
 void	procsave(Proc*);
 void	procrestore(Proc*);
 void	confinit(void);

@@ -162,6 +162,24 @@ clockinit(void)
 }
 
 /*
+ * A secondary core's clock. clockinit() proper ran once on core 0 and
+ * calibrated tickinterval against the fixed-frequency system timer;
+ * the other cores reuse that number, route their own CNTPNSIRQ through
+ * their own slot in the local interrupt block, and arm their first
+ * tick. From then on clockintr() -- which reads only per-core
+ * registers -- serves them exactly as it serves core 0, which is what
+ * makes tsleep(), preemption and the portable timer chain work on
+ * every core rather than only where the boot happened.
+ */
+void
+secclockinit(void)
+{
+	LOCAL(Ltimerirq0 + 4*m->machno) = Cntpnsirq;
+	coherence();
+	armtick();
+}
+
+/*
  * Called from the IRQ path.  Returns non-zero if this was our timer.
  */
 int
@@ -336,7 +354,7 @@ irqdispatch(Ureg *u)
 	 * Everything that is not the timer arrives as one bit. Ask the
 	 * VideoCore controller which of its 72 sources actually fired.
 	 */
-	if(LOCAL(Lirqsource0) & Igpu)
+	if(LOCAL(Lirqsource0 + 4*m->machno) & Igpu)
 		handled |= intrgpu(u);
 
 	if(handled)

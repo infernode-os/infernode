@@ -502,7 +502,7 @@ struct Proc
 	Label		errlab[NERR];
 	char	genbuf[128];	/* buffer used e.g. for last name element from namec */
 	Mach*		mp;		/* machine this process last ran on */
-	Mach*		wired;
+	Mach*		wired;		/* non-nil: only this core may run it */
 	ulong		movetime;	/* next time process should switch processors */
 	ulong		delaysched;
 	int			preempted;	/* process yielding in interrupt */

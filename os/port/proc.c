@@ -63,37 +63,60 @@ char *statename[] =
 void
 schedinit(void)		/* never returns */
 {
+	Proc *p;
+
 	setlabel(&m->sched);
-	if(up) {
-/*
-		if((e = up->edf) && (e->flags & Admitted))
-			edfrecord(up);
-*/
+	/*
+	 * CAPTURE the outgoing process before clearing m->proc -- and
+	 * understand why, because this line held the whole SMP port
+	 * hostage for a day. `up` is not a variable any more: it is
+	 * m->proc behind a macro. Upstream's code nils m->proc early
+	 * and goes on handling `up`, which upstream could do because
+	 * its `up` was a separate global that kept its value. Here the
+	 * nil went through the macro and every following reference --
+	 * the state switch, ready(), the mach clear -- quietly operated
+	 * on address zero. Preempted processes were never re-queued,
+	 * sleeping processes kept a stale mach forever, and runproc
+	 * rejected them on the mach test until the machine sat with
+	 * four idle cores, two Ready processes, and half a billion
+	 * futile lock acquisitions. The trace that convicted it was a
+	 * SETm with no CLRm ever following.
+	 */
+	p = up;
+	if(p) {
 		m->proc = nil;
-		switch(up->state) {
+		/*
+		 * mach is cleared BEFORE the proc becomes visible on the
+		 * run queue: by the time this label resumes, setlabel()
+		 * on the outgoing side has completed and the old core
+		 * has no further claim. Clearing it after ready() would
+		 * publish a Ready process that other cores' runproc
+		 * must reject on the mach test.
+		 */
+		p->mach = nil;
+		coherence();
+		switch(p->state) {
 		case Running:
-			ready(up);
+			ready(p);
 			break;
 		case Moribund:
-			up->state = Dead;
+			p->state = Dead;
 /*
-			edfstop(up);
-			if(up->edf){
-				free(up->edf);
-				up->edf = nil;
+			edfstop(p);
+			if(p->edf){
+				free(p->edf);
+				p->edf = nil;
 			}
 */
 			/*
 			 * Holding locks from pexit:
 			 * 	procalloc
 			 */
-			up->qnext = procalloc.free;
-			procalloc.free = up;
+			p->qnext = procalloc.free;
+			procalloc.free = p;
 			unlock(&procalloc.l);
 			break;
 		}
-		up->mach = nil;
-		up = nil;
 	}
 	sched();
 }
@@ -197,6 +220,7 @@ ready(Proc *p)
 	p->state = Ready;
 	unlock(&runq[0].l);
 	splx(s);
+	idlewake();	/* an idle core may be waiting in wfe for exactly this */
 }
 
 int
@@ -235,15 +259,62 @@ runproc(void)
 	erq = runq + Nrq - 1;
 loop:
 	splhi();
-	for(rq = runq; rq->head == 0; rq++)
-		if(rq >= erq) {
+	/*
+	 * Walk EVERY priority looking for something this core may run,
+	 * and only idle when none of them holds one. The first SMP
+	 * version restarted the whole search whenever the best queue
+	 * held only processes wired to another core -- which, with the
+	 * run queue non-empty, is a hard spin at splhi hammering the run
+	 * queue lock from every idle core at once. Three cores did
+	 * exactly that to the fourth within a second of the first wired
+	 * process becoming ready, and the machine stalled inside its own
+	 * scheduler.
+	 */
+	for(rq = runq; ; rq++){
+		if(rq > erq){
 			idlehands();
 			spllo();
 			goto loop;
 		}
-
-	if(!canlock(&runq[0].l))
-		goto loop;
+		if(rq->head == 0)
+			continue;
+		/*
+		 * Peek WITHOUT the lock first. Three idle cores taking
+		 * the run-queue lock just to discover a queue holds only
+		 * work wired to somebody else turned the scheduler into
+		 * a lock convoy -- every PC sample on every core landed
+		 * in runproc, canlock or _tas, and the machine stalled
+		 * inside its own scheduler with all four cores busy.
+		 * The peek races with concurrent dequeues, harmlessly:
+		 * a stale sighting is re-checked under the lock, a
+		 * missed one is caught on the next pass, and ready()'s
+		 * sev ends any wait that matters.
+		 */
+		for(p = rq->head; p != nil; p = p->rnext)
+			if(p->wired == nil || p->wired == MACHP(m->machno))
+				break;
+		if(p == nil)
+			continue;	/* nothing here for this core */
+		if(!canlock(&runq[0].l))
+			continue;	/* busy; try the next queue, not the world */
+		l = nil;
+		for(p = rq->head; p != nil; l = p, p = p->rnext){
+			if(p->wired != nil && p->wired != MACHP(m->machno))
+				continue;
+			if(p->mp == nil || p->mp == MACHP(m->machno) ||
+			   p->movetime < MACHP(0)->ticks)
+				break;
+		}
+		if(p == nil){
+			/* second pass: anything here this core MAY run */
+			for(p = rq->head, l = nil; p != nil; l = p, p = p->rnext)
+				if(p->wired == nil || p->wired == MACHP(m->machno))
+					break;
+		}
+		if(p != nil)
+			break;		/* found one; rq and l are set */
+		unlock(&runq[0].l);	/* the peek was stale; move on */
+	}
 	/*
 	 * Choose the first one we last ran on this processor at this
 	 * level, or that hasn't moved recently.
@@ -267,15 +338,19 @@ loop:
 	 * the head, so l has to be reset -- at that point it is the TAIL,
 	 * not the head's predecessor.
 	 */
-	l = nil;
-	for(p = rq->head; p != nil; l = p, p = p->rnext)
-		if(p->mp == nil || p->mp == MACHP(m->machno) || p->movetime < MACHP(0)->ticks)
-			break;
-	if(p == nil){
-		p = rq->head;
-		l = nil;
-	}
-	/* p->mach==0 only when process state is saved */
+	/*
+	 * p->mach==0 only when the process's state is fully saved. A
+	 * nonzero mach here means the proc was readied while its old
+	 * core is still in the act of switching away from it -- a real
+	 * window on SMP -- and running it now would resume a context
+	 * that is still being written. Upstream answered with "goto
+	 * loop", which on a uniprocessor retried into progress; with
+	 * this core looping and the queue otherwise empty it became an
+	 * invisible infinite rejection -- half a billion lock
+	 * acquisitions, five dequeues, and a scheduler that looked
+	 * haunted. Say so (rate-limited) while the window is studied,
+	 * and retry.
+	 */
 	if(p == 0 || p->mach) {
 		unlock(&runq[0].l);
 		goto loop;
@@ -354,6 +429,8 @@ newproc(void)
 	p->killed = 0;
 	p->swipend = 0;
 	p->mp = 0;
+	p->wired = nil;		/* stale wiring on a recycled Proc is a proc
+				 * no core will ever agree to run */
 	p->movetime = 0;
 	p->delaysched = 0;
 	p->edf = nil;

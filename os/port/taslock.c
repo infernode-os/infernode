@@ -38,7 +38,17 @@ lock(Lock *l)
 	for(i=0; ; i++) {
 		if(_tas(&l->key) == 0)
 			break;
-		if (i >= 1000) {
+		/*
+		 * A bound sized for contention that can actually happen.
+		 * The inherited 1000 was a uniprocessor's tripwire --
+		 * there, a spin that long meant the holder was never
+		 * coming back. With four cores a lock is legitimately
+		 * held across another core's real work, a thousand
+		 * ldaxr attempts pass in under a microsecond, and the
+		 * first genuinely contended moment of SMP bring-up
+		 * panicked the machine for being multiprocessor.
+		 */
+		if (i >= 100*1000*1000) {
 			lockloop(l, pc);
 			break;
 		}

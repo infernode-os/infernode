@@ -144,7 +144,17 @@ setlabel:
 	stp	x21, x22, [x0, #32]
 	stp	x23, x24, [x0, #48]
 	stp	x25, x26, [x0, #64]
-	stp	x27, x28, [x0, #80]
+	/*
+	 * x27 saved alone: x28 is the per-core Mach pointer and must
+	 * NEVER travel through a label. A fresh kproc's label would
+	 * hand the new process x28=0 -- m becomes nil the instant
+	 * gotolabel lands, and the machine dies on the first up
+	 * dereference (found exactly that way). Worse, a process
+	 * resumed on a different core would drag the old core's Mach
+	 * with it. The current core's x28 is always already correct;
+	 * the label leaves it untouched.
+	 */
+	str	x27, [x0, #80]
 	str	x29, [x0, #96]
 
 	mov	x0, #0			/* first return: 0 */
@@ -156,7 +166,7 @@ gotolabel:
 	ldp	x21, x22, [x0, #32]
 	ldp	x23, x24, [x0, #48]
 	ldp	x25, x26, [x0, #64]
-	ldp	x27, x28, [x0, #80]
+	ldr	x27, [x0, #80]		/* x28 stays: see setlabel */
 	ldr	x29, [x0, #96]
 
 	ldr	x1, [x0, #0]

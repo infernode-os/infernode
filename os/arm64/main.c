@@ -38,8 +38,7 @@ Conf conf;
  */
 uintptr	dtbptr;
 
-Mach	mach0;
-Mach	*m = &mach0;
+Mach	machs[MAXMACH];
 
 struct Active active;
 
@@ -61,7 +60,6 @@ void	(*screenputs)(char*, int);
  * replaces it with the real per-core current-process pointer.
  */
 static Proc mainproc;
-Proc *up = &mainproc;
 
 static u64int
 currentel(void)
@@ -823,9 +821,18 @@ static int cpass;
 static int __attribute__((noinline))
 checkcalleesaved(void)
 {
+	/*
+	 * x19, x24, x25 -- and NOT x28, which an earlier version of this
+	 * test also sentineled. x28 is the per-core Mach pointer now:
+	 * labels deliberately neither save nor restore it (a label that
+	 * did would hand a migrating process its old core's Mach), so
+	 * the old test both failed and, far worse, left m pointing at
+	 * its sentinel garbage for the whole rest of the boot -- the
+	 * lbl check "failing" was the least of what it broke.
+	 */
 	register uintptr a __asm__("x19");
 	register uintptr b __asm__("x24");
-	register uintptr c __asm__("x28");
+	register uintptr c __asm__("x25");
 
 	a = 0x1111111111111111ULL;
 	b = 0x2222222222222222ULL;
@@ -836,8 +843,8 @@ checkcalleesaved(void)
 	if(setlabel(&clabel) == 0){
 		cpass = 1;
 		/* clobber them, then jump back */
-		__asm__ volatile("mov x19, #0\n\tmov x24, #0\n\tmov x28, #0"
-			::: "x19", "x24", "x28");
+		__asm__ volatile("mov x19, #0\n\tmov x24, #0\n\tmov x25, #0"
+			::: "x19", "x24", "x25");
 		gotolabel(&clabel);
 		return 0;
 	}
@@ -1937,7 +1944,33 @@ kprocchild(Proc *p, void (*func)(void*), void *arg)
 void
 idlehands(void)
 {
-	__asm__ volatile("wfi");
+	/*
+	 * Interrupts OPEN across the wait, whichever wait it is. The
+	 * scheduler idles at splhi, and a wfe at splhi wakes when an
+	 * interrupt becomes pending but never TAKES it -- so a
+	 * secondary core's own clock tick sat pending while the core
+	 * cycled wake/scan/sleep, its timer queue was never serviced,
+	 * and every tsleep() whose timer had landed on that core slept
+	 * forever. The USB bring-up was the first caller to die of it:
+	 * one tsleep on core 2, and the whole boot stopped at
+	 * "setpower ON" with two cores idling politely around the
+	 * corpse.
+	 *
+	 * Core 0 waits for interrupts (it owns the devices); the others
+	 * wait for events, because their wakeups are ready()'s sev.
+	 * Both do it with DAIF clear and restore the caller's splhi
+	 * afterwards.
+	 */
+	if(m->machno == 0)
+		__asm__ volatile(
+			"msr daifclr, #2\n\t"
+			"wfi\n\t"
+			"msr daifset, #2" ::: "memory");
+	else
+		__asm__ volatile(
+			"msr daifclr, #2\n\t"
+			"wfe\n\t"
+			"msr daifset, #2" ::: "memory");
 }
 
 /*
@@ -1979,9 +2012,199 @@ procrestore(Proc *p)
 	FPrestore(&p->fpsave);
 }
 
+/*
+ * Secondary-core bring-up.
+ *
+ * l.S parks cores 1-3 in wfe before any C runs. launchsmp() fills a
+ * per-core parameter block -- stack top, Mach pointer, C entry --
+ * cleans it to the point of coherency (the parked cores run with
+ * caches off and read physical memory), and issues sev. Each released
+ * core drops to EL1, enables its own SMP coherency bit, loads its
+ * stack and its x28, and lands in squidboy(), named as Plan 9 has
+ * always named it.
+ *
+ * A core that never answers is reported and abandoned: QEMU's virt
+ * machine boots this same kernel with -smp 1, and three absent cores
+ * must cost three timeouts, not a hang.
+ */
+typedef struct Smpboot Smpboot;
+struct Smpboot {
+	uvlong	sp;
+	uvlong	mach;
+	uvlong	entry;		/* nonzero releases the core */
+};
+Smpboot smpboot[MAXMACH];
+
+
+extern void secentry(void);	/* l.S: the released core's first steps */
+
+void
+squidboy(void)
+{
+	uvlong mpidr;
+
+	/*
+	 * Vectors FIRST: until VBAR_EL1 points at our table, any fault
+	 * on this core lands at whatever garbage address reset left,
+	 * and under QEMU that garbage is the firmware's spin shim -- so
+	 * a crashing secondary does not stop, it re-launches itself
+	 * through the still-armed spin table, forever, and the only
+	 * symptom is a core whose PC samples land in the wake sequence.
+	 * A day may come when that costs someone an afternoon; the
+	 * ordering here is why it should not.
+	 *
+	 * Then the MMU, on the tables core 0 built: RAM is mapped
+	 * inner-shareable and SMPEN went on in the assembly before any
+	 * cache did, so from mmuenable() onward this core is coherent
+	 * with the others.
+	 *
+	 * machno is derived here, in C, from mpidr -- not stored by the
+	 * assembly before the caches came on. A pre-coherency store to
+	 * a line core 0 also holds dirty is a coin-toss over which
+	 * write survives; deriving it after joining coherency has no
+	 * race to lose.
+	 */
+	trapinit();
+	mmuenable();
+
+	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+	m->machno = mpidr & 3;
+	m->ticks = 1;		/* nonzero: some code divides by ticks */
+	m->proc = nil;
+
+	/*
+	 * A clock of its own, or tsleep() on this core would insert into
+	 * a per-core timer queue that nothing ever services -- a sleep
+	 * with a timeout that cannot fire, which is a hang wearing a
+	 * timeout's clothes. This also gives the core hzclock preemption
+	 * for free.
+	 */
+	secclockinit();
+	{
+		uvlong ctl, tval, cnt;
+		u32int lroute;
+
+		__asm__ volatile("mrs %0, cntp_ctl_el0" : "=r"(ctl));
+		__asm__ volatile("mrs %0, cntp_tval_el0" : "=r"(tval));
+		__asm__ volatile("mrs %0, cntpct_el0" : "=r"(cnt));
+		lroute = *(volatile u32int*)(uintptr)(0x40000040 + 4*m->machno);
+		iprint("CLK%d ctl=%llux tval=%llud route=%ux cnt=%llud\n",
+			m->machno, ctl, tval, lroute, cnt);
+	}
+
+	/*
+	 * The up-and-running ack: clear this core's own entry word.
+	 * Each core writes only its own slot, so there is no
+	 * read-modify-write to race -- unlike active.machs, which
+	 * three cores updating with |= at once turned into a lottery
+	 * over whose bit survived. Core 0 folds the acks into
+	 * active.machs alone.
+	 */
+	coherence();
+	smpboot[m->machno].entry = 0;
+	coherence();
+	iprint("cpu%d: up\n", m->machno);	/* iprint: no up, no qlock */
+
+	/*
+	 * Straight into the scheduler. No devices are routed here, no
+	 * clock ticks here; this core exists to run whatever processes
+	 * core0's interrupts make ready. Preemption on this core is
+	 * voluntary for now -- every kernel process sleeps or yields,
+	 * and the one CPU-bound process this system has (the Dis VM)
+	 * yields through its own scheduler. A per-core timer can come
+	 * later if a workload appears that needs it.
+	 */
+	schedinit();
+}
+
+static void
+launchsmp(void)
+{
+	uvlong *rel;
+	int i, n, tries;
+
+	for(i = 1; i < MAXMACH; i++){
+		uchar *stk;
+
+		/*
+		 * Scheduler stacks from the allocator, not from .bss. The
+		 * trap path's sanity check refuses a stack pointer inside
+		 * the kernel image -- with reason, that is where a wild
+		 * jump lands -- and a static array is inside the image by
+		 * definition. The first boot with static stacks panicked
+		 * on all three cores at once, in a storm of interleaved
+		 * register dumps, the moment real exceptions started.
+		 */
+		stk = malloc(8192);
+		if(stk == nil)
+			panic("launchsmp: no stack for cpu%d", i);
+		smpboot[i].sp = (uvlong)(uintptr)(stk + 8192);
+		smpboot[i].mach = (uvlong)(uintptr)MACHP(i);
+		coherence();
+		smpboot[i].entry = (uvlong)(uintptr)secentry;
+		cachedwbse(&smpboot[i], sizeof smpboot[i]);
+	}
+	/*
+	 * The actual release. Under the real boot chain (and QEMU's
+	 * model of it) the secondaries never reached our own park loop:
+	 * the ARM stub holds them spinning on the spin-table words,
+	 * indexed by CORE NUMBER from a base of 0xd8 -- so core 1 waits
+	 * at 0xe0, core 2 at 0xe8, core 3 at 0xf0. (Core 0's slot at
+	 * 0xd8 exists and is nobody's; the first attempt wrote core 1's
+	 * address there and three cores kept spinning.) Write secentry there, clean the lines
+	 * (the spinners run uncached), and sev. Cores that WERE in our
+	 * park loop wake on the same sev and take the smpboot route;
+	 * both roads meet at secwake.
+	 */
+	for(i = 1; i < MAXMACH; i++){
+		rel = (uvlong*)(uintptr)(0xd8 + 8*i);
+		*rel = (uvlong)(uintptr)secentry;
+		cachedwbse(rel, sizeof *rel);
+	}
+	__asm__ volatile("dsb sy; sev" ::: "memory");
+
+	for(tries = 0; tries < 5000; tries++){
+		n = 0;
+		for(i = 1; i < MAXMACH; i++)
+			if(smpboot[i].entry == 0)
+				n++;
+		if(n == MAXMACH-1)
+			break;
+		microdelay(1000);
+	}
+	for(i = 1; i < MAXMACH; i++){
+		if(smpboot[i].entry == 0)
+			active.machs |= 1<<i;
+		else
+			print("cpu%d: did not answer\n", i);
+	}
+}
+
+/*
+ * Wake any core idling in wfe. Called by ready() so a process made
+ * runnable by core0's interrupt is picked up by an idle secondary
+ * immediately rather than at its next spontaneous wakeup. sev is
+ * broadcast and spurious wakeups are the idle loop's normal diet, so
+ * there is nothing to get wrong.
+ */
+void
+idlewake(void)
+{
+	__asm__ volatile("sev");
+}
+
 void
 kmain(void)
 {
+	/*
+	 * The very first statement, because `up` is m->proc now and
+	 * half the kernel dereferences it: l.S loaded x28 with
+	 * MACHP(0), and this gives that Mach a current process before
+	 * any code can ask for one.
+	 */
+	m->proc = &mainproc;
+	m->machno = 0;
+
 	/*
 	 * Copy the loaded image before anything writes to .data.
 	 *
@@ -2234,6 +2457,8 @@ kmain(void)
 	 * the Proc probesysfile borrowed would make the scheduler try to
 	 * re-queue or reap it.
 	 */
+	launchsmp();
+
 	up = nil;
 	spllo();
 	schedinit();

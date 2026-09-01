@@ -204,15 +204,48 @@ extern struct Active
 	int	thunderbirdsarego;	/* secondaries may enter schedinit */
 } active;
 
-extern Mach	*m;
-extern Proc	*up;
-extern Mach	mach0;
+/*
+ * The per-core pointer, and the convention that carries SMP.
+ *
+ * m lives in x28, reserved kernel-wide by -ffixed-x28: each core's
+ * boot path loads its own Mach* there before running any C, exception
+ * entry saves and restores it with the rest of the frame, and C never
+ * assigns it -- so every core that executes kernel code sees its own
+ * Mach through the same name, with no addressing, no lock, and no
+ * chance of reading another core's.
+ *
+ * up is not a variable at all: it is this core's Mach's proc field,
+ * which makes "up = p" per-core automatically and leaves nothing to
+ * keep in sync. The name is safe to define away -- no struct field or
+ * local in the tree is called up; the build would say so if one ever
+ * appeared.
+ *
+ * The JIT was audited for x28 before this convention was adopted:
+ * generated code touches only x0-x5, x20-x22 and x30. Any future code
+ * generator must keep to that.
+ */
+register Mach	*m asm("x28");
 
 /*
- * Single core for now.  When the secondary cores are released from the
- * park loop in l.S this becomes an array indexed by machno.
+ * up reads x28 through the assembler, not through the identifier m --
+ * because locals named m are everywhere in inherited code, they
+ * legally shadow the register variable, and a macro that mentioned m
+ * by name dereferenced whatever integer the nearest scope kept under
+ * that letter. The first build found that in devsd.c inside
+ * waserror(), as "member reference type 'long' is not a pointer".
  */
-#define	MACHP(n)	((n) == 0 ? &mach0 : (Mach*)0)
+static inline Proc**
+_upaddr(void)
+{
+	Mach *mm;
+
+	__asm__("mov %0, x28" : "=r"(mm));
+	return &mm->proc;
+}
+#define	up	(*_upaddr())
+
+extern Mach	machs[];
+#define	MACHP(n)	(&machs[n])
 
 /*
  * A framebuffer as the VideoCore firmware handed it back.  pitch is the

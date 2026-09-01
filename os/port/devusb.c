@@ -112,6 +112,7 @@ enum
 	CMdebugep,		/* debug n (set/clear debug for this ep) */
 	CMname,			/* name str (show up as #u/name as well) */
 	CMtmout,		/* timeout n (activate timeouts for ep) */
+	CMsingleshot,		/* singleshot n (bulk: one channel op per transfer) */
 	CMpreset,		/* reset the port */
 
 	/* Hub feature selectors */
@@ -147,6 +148,7 @@ static Cmdtab epctls[] =
 	{CMhz,		"hz",		2},
 	{CMinfo,	"info",		0},
 	{CMdetach,	"detach",	1},
+	{CMsingleshot,	"singleshot",	2},
 	{CMaddress,	"address",	1},
 	{CMdebugep,	"debug",	2},
 	{CMclrhalt,	"clrhalt",	1},
@@ -1236,6 +1238,25 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 			error("maxpkt not in [1:1024]");
 		qlock(&ep->ql);
 		ep->maxpkt = l;
+		qunlock(&ep->ql);
+		break;
+	case CMsingleshot:
+		/*
+		 * Opt-in, per endpoint, by the driver that knows the
+		 * device -- because whether whole-transfer channel
+		 * programming is SAFE is a property of the far end.
+		 * The LAN78xx on real silicon completes multi-packet
+		 * transfers exactly as the DWC databook says; QEMU's
+		 * model of the same controller does not, and every
+		 * regression of this experiment before the gate existed
+		 * took the whole harness down with it. The kernel
+		 * carries the mechanism; the policy lives with whoever
+		 * wrote "singleshot 1" into the endpoint's ctl.
+		 */
+		l = strtoul(cb->f[1], nil, 0);
+		deprint("usb epctl %s %d\n", cb->f[0], l);
+		qlock(&ep->ql);
+		ep->singleshot = l != 0;
 		qunlock(&ep->ql);
 		break;
 	case CMntds:

@@ -178,6 +178,10 @@ Mbmcrfull:	con 16r0100;		# BMCR: full duplex
 Mbmcraneg:	con 16r1000;		# BMCR: auto-negotiation enable
 Mbmcrrestart:	con 16r0200;		# BMCR: restart auto-negotiation
 Mbmsrlink:	con 16r0004;		# BMSR: link is up
+Mlpa:		con 5;			# link partner ability (10/100)
+Mstat1000:	con 16r0A;		# 1000BASE-T status
+Mlpa100:	con 16r0180;		# LPA: partner does 100, either duplex
+Mlp1000:	con 16r0C00;		# STAT1000: partner does 1000, either duplex
 Mbmsraneg:	con 16r0020;		# BMSR: auto-negotiation complete
 
 Lhwlrst:	con 16r00000002;	# HW_CFG: soft reset
@@ -419,6 +423,7 @@ npackedwrframes: int;		# frames they carried
 npackedwrmax: int;		# most frames in any one write
 nframe: int;			# frames handed to the demultiplex
 
+phymbps := 100;			# what autonegotiation settled on
 dev: string;
 ntpserver: string;			# "ep3.0"
 ctl: ref Sys->FD;		# #u/usb/<dev>/ctl
@@ -684,8 +689,25 @@ init(nil: ref Draw->Context, argv: list of string)
 			sys->print("etherusb: cannot open #l clone: %r\n");
 			return;
 		}
+		#
+		# lan78xx on real silicon: whole transfers in one channel
+		# operation. This is the driver that knows the device, so
+		# this is where the policy belongs -- QEMU's controller
+		# model cannot do it, and its RNDIS device never sets it.
+		#
+		if(family.name == "lan78xx"){
+			for(el := inname :: outname :: nil; el != nil; el = tl el){
+				sfd := sys->open("/usb/usb/" + hd el + "/ctl",
+					Sys->OWRITE);
+				if(sfd == nil ||
+				   sys->fprint(sfd, "singleshot 1") < 0)
+					sys->print("etherusb: singleshot on %s: %r\n",
+						hd el);
+				sfd = nil;
+			}
+		}
 		if(sys->fprint(cfd, "bind %s %s %d %d %s %s",
-		    family.name, macstr, 100, burst, inpath, outpath) < 0){
+		    family.name, macstr, phymbps, burst, inpath, outpath) < 0){
 			sys->print("etherusb: kernel bind failed: %r\n");
 			return;
 		}
@@ -2746,10 +2768,28 @@ lanphy(): int
 		if(e < 0)
 			return -1;
 		if(sr & Mbmsrlink){
-			how := "";
-			if(sr & Mbmsraneg)
-				how = " (autonegotiated)";
-			sys->print("etherusb: LAN78xx link up%s\n", how);
+			#
+			# What the negotiation actually settled on, read
+			# from the partner-ability registers rather than
+			# asserted. The stats file carried a hardwired
+			# "mbps: 100" for weeks; on a gigabit switch this
+			# link is 1000BASE-T, and a diagnostic that reports
+			# configuration as measurement is how that goes
+			# unnoticed. (Throughput is capped by USB2 long
+			# before the wire either way.)
+			#
+			if(sr & Mbmsraneg){
+				(eg, gs) := lanmiird(Mstat1000);
+				(el, lp) := lanmiird(Mlpa);
+				if(eg >= 0 && (gs & Mlp1000))
+					phymbps = 1000;
+				else if(el >= 0 && (lp & Mlpa100))
+					phymbps = 100;
+				else
+					phymbps = 10;
+			}
+			sys->print("etherusb: LAN78xx link up, %d Mb/s\n",
+				phymbps);
 			return 0;
 		}
 		sys->sleep(100);

@@ -245,6 +245,7 @@ struct Ep
 	long	samplesz;	/* sample size (iso) */
 	int	ntds;		/* nb. of Tds per µframe */
 	int	tmout;		/* 0 or timeout for transfers (ms) */
+	int	singleshot;	/* bulk: whole transfers in one channel op */
 };
 
 /*

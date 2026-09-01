@@ -1014,25 +1014,41 @@ Hunting lessons written in blood, for the next person here:
   implies every dropped fd on this kernel leaks until its process
   exits.
 
-### OPEN: LAN78xx burst framing desynchronises ~0.1% of transfers
+### Single-shot bulk transfers, and the two bugs that forbade them
 
-Down from ~0.5%: the bulk of the desyncs were the DWC NAK-wake race
-(fix(usbdwc): a NAK wake must not abandon a live channel), and the
-missing-pad question became decidable once reads ask for exactly one
-aggregation cap -- a full read is the stream chopped mid-flight (never
-clamp; the pad is in flight), a short read ended at a real short
-packet or NAK pause (clamp; the device may omit a final record's
-padding). See the comments in devether.c's lanunwrap and rx loop.
+The experiment the eptrans comment said never to run a third time ran
+a third time, because both earlier failures finally had names: the
+NAK-wake race (previous commits), and chandone() refusing the one
+wakeup a multi-packet transfer depends on. This core halts a fresh
+bulk IN after its FIRST packet with exactly Chhltd|Ack, then streams
+the entire remainder once re-enabled (measured: 4+ packets per 50us);
+chandone filtered Chhltd|Ack as "split phase, keep waiting" on every
+channel, so that turning-point wakeup became a 200ms timeout, per
+packet. The filter is now scoped to split channels, where it belongs.
 
-What remains is ~25 desyncs per 20k frames under sustained load, TCP-
-healed, every 4MB transfer verifying byte-identical. The two nameable
-DWC races are closed (the NAK window, and stale-interrupt accounting
-after the halt -- both in chanio); the residue has some third source.
-To chase it: put the byte-capture probe back in devether.c's used<0
-branch (print off/nacc/n plus the first 12 bytes; the FRERR recipe in
-the git history of this hunt), and read what the stream actually held.
-Do not guess -- five parser variants were measured here and the bytes
-settled it every time a theory could not.
+Single-shot is opt-in per endpoint -- devusb ctl "singleshot 1", set
+by etherusb.b for lan78xx only -- because QEMU's controller model
+still cannot do it and the harness proved that three times. One
+channel operation per transfer instead of one per 512 bytes.
+
+The stats file's mbps is now read from the PHY's partner-ability
+registers at link-up instead of being a hardwired 100: this board on
+a gigabit switch negotiates 1000BASE-T (throughput is capped by USB2
+regardless).
+
+Measured on the board with all of this together, 8MB transfers:
+
+	host -> board		2.3-2.6 MB/s, steady
+	8MB round trip		2.17 MB/s each way, byte-identical
+	framing errs		6 per 30k frames (0.02%)
+
+### OPEN: residual ~0.02% framing desync under burst
+
+Down from ~0.5% at the start of the hunt: the NAK race, the stale
+post-halt interrupt word, and the per-packet timeout chaos each fed
+it. What remains is a handful per tens of thousands of frames,
+TCP-healed, byte-verified end to end. Resume with the byte-capture
+probe in devether.c's used<0 branch, never with theories.
 
 ### Smaller things still open
 

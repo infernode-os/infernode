@@ -393,7 +393,17 @@ chandone(void *a)
 	Hostchan *hc;
 
 	hc = a;
-	if(hc->hcint == (Chhltd|Ack))
+	/*
+	 * Chhltd|Ack means "phase done, more to come" ONLY for a split
+	 * transaction, where chanintr uses it to schedule the
+	 * complete-split. Filtering it unconditionally put non-split
+	 * multi-packet transfers to sleep on a halted channel: this
+	 * core halts a fresh bulk IN after its first packet with
+	 * exactly Chhltd|Ack -- and then streams the rest on re-enable
+	 * -- so the wait refused a wakeup that was the whole transfer's
+	 * turning point, and every one cost a 200ms timeout.
+	 */
+	if(hc->hcint == (Chhltd|Ack) && (hc->hcsplt & Spltena))
 		return 0;
 	return (hc->hcint & hc->hcintmsk) != 0;
 }
@@ -1266,7 +1276,30 @@ eptrans(Ep *ep, int rw, void *a, long n)
 	 * single-shot path; see chansetup and ctltrans, which draw the
 	 * same line for the same reason.
 	 */
-	if(ep->ttype == Tbulk && (rw == Read || (hc->hcsplt & Spltena) == 0))
+	/*
+	 * THE THIRD RUN OF THE EXPERIMENT, and what changed to justify
+	 * it: both earlier failures predate the NAK-wake fix and the
+	 * chandone scoping above. A NAK mid-transfer used to corrupt
+	 * the channel outright, and the one wakeup a multi-packet
+	 * transfer NEEDS -- this core halts a fresh bulk IN after its
+	 * first packet with Chhltd|Ack, then streams the remainder once
+	 * re-enabled -- was exactly the wakeup chandone refused. Two
+	 * bugs, both now named; "whatever the mechanism is" is retired.
+	 *
+	 * Single-shot is OPT-IN per endpoint (devusb's "singleshot"
+	 * ctl), set by the driver that knows the device: the LAN78xx on
+	 * real silicon completes multi-packet transfers; QEMU's model
+	 * of this controller does not, and its RNDIS device never asks.
+	 * One channel operation per transfer instead of one per 512
+	 * bytes is the difference between ~60us of setup-and-interrupt
+	 * per packet and per transfer.
+	 *
+	 * Splits keep multitrans regardless: a split transaction is one
+	 * channel operation per packet by construction.
+	 */
+	if(ep->ttype == Tbulk &&
+	   (!ep->singleshot || (hc->hcsplt & Spltena) != 0) &&
+	   (rw == Read || (hc->hcsplt & Spltena) == 0))
 		n = multitrans(ep, hc, rw, a, n);
 	else{
 		n = chanio(ep, hc, rw == Read? Epin : Epout, ep->toggle[rw],

@@ -122,6 +122,7 @@ startmmu(void)
 	 * load-exclusive, and exclusives with the MMU off fault.
 	 */
 	mboxlockon();
+	uartlockon();
 
 	uartputstr("mmu:  ");
 	if(!mmuon()){

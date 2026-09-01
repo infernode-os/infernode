@@ -166,21 +166,41 @@ uartgetc(void)
  */
 static ulong uartmutex;
 
+/*
+ * ...and NOT ONE writer before the MMU is on. _tas is a load/store
+ * exclusive, and exclusives with the MMU off FAULT on real silicon --
+ * the same lesson the mailbox lock taught (see mboxlockon), relearned
+ * here when the first SMP kernel on hardware printed its probe
+ * letters and died at the banner: QEMU permits MMU-off exclusives,
+ * so 147 green checks never noticed. Locking starts when kmain says
+ * so, and before that there is one thread of control anyway.
+ */
+static int uartlocking;
+
+void
+uartlockon(void)
+{
+	uartlocking = 1;
+}
+
 void
 uartputstr(char *s)
 {
 	int i;
 
-	for(i = 0; i < 1000000; i++)
-		if(_tas(&uartmutex) == 0)
-			break;
+	if(uartlocking)
+		for(i = 0; i < 1000000; i++)
+			if(_tas(&uartmutex) == 0)
+				break;
 	while(*s){
 		if(*s == '\n')
 			uartputc('\r');
 		uartputc(*s++);
 	}
-	coherence();
-	uartmutex = 0;
+	if(uartlocking){
+		coherence();
+		uartmutex = 0;
+	}
 }
 
 void
@@ -233,14 +253,17 @@ uartputs(char *s, int n)
 {
 	int i;
 
-	for(i = 0; i < 1000000; i++)
-		if(_tas(&uartmutex) == 0)
-			break;
+	if(uartlocking)
+		for(i = 0; i < 1000000; i++)
+			if(_tas(&uartmutex) == 0)
+				break;
 	for(i = 0; i < n; i++){
 		if(s[i] == '\n')
 			uartputc('\r');
 		uartputc(s[i]);
 	}
-	coherence();
-	uartmutex = 0;
+	if(uartlocking){
+		coherence();
+		uartmutex = 0;
+	}
 }

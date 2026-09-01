@@ -183,11 +183,12 @@ jobs:
     # ─────────────────────────────────────────────
     # Gradle assemble — produces app-debug.apk.
     #
-    # JDK 17 is mandatory for AGP 8.7 (the gradle.properties pin). The
-    # actions/setup-java action wires JAVA_HOME automatically. The
-    # Android SDK comes from setup-android, which installs platforms;35
-    # + build-tools;35.0.0 — that pair matches what
-    # android-app/app/build.gradle.kts compiles against.
+    # JDK 17 is mandatory for AGP 8.13 (the version pinned in
+    # android-app/build.gradle.kts). The actions/setup-java action wires
+    # JAVA_HOME automatically. The Android SDK comes from setup-android,
+    # which installs platforms;36 + build-tools;36.0.0 — that pair matches
+    # the compileSdk/targetSdk 36 (Android 16) android-app/app/build.gradle.kts
+    # compiles against.
     #
     # The local-property pattern (write a local.properties file with
     # sdk.dir=...) is the standard way to tell Gradle where the SDK
@@ -204,7 +205,7 @@ jobs:
     - name: Set up Android SDK
       uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       with:
-        packages: 'platforms;android-35 build-tools;35.0.0'
+        packages: 'platforms;android-36 build-tools;36.0.0'
 
     - name: Cache Gradle
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -263,9 +264,14 @@ jobs:
   #     the onCreate crash fires, Android instantly restarts the
   #     activity, so `pidof` reports a live PID even on the broken build.
   #     A liveness check would falsely pass; the signature is definitive.
+  #
+  # The emulator runs API 36 (Android 16) — the level the app now targets.
+  # That is deliberate: the targetSdk 36 behaviour changes (mandatory
+  # edge-to-edge, predictive back) only bite on an Android 16 image, so a
+  # smoke test on an older image would not exercise them.
   # ─────────────────────────────────────────────
   android-smoke:
-    name: Emulator launch smoke (x86_64, fresh-install perms)
+    name: Emulator launch smoke (x86_64, API 36, fresh-install perms)
     needs: android-apk-staging
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -296,7 +302,7 @@ jobs:
     - name: Launch smoke test on x86_64 emulator
       uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
       with:
-        api-level: 34
+        api-level: 36
         arch: x86_64
         target: google_apis
         force-avd-creation: false

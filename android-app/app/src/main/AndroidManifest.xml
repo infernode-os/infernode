@@ -59,11 +59,25 @@
       square variant; ic_launcher_round.png is the same logo with a
       circular alpha mask for launchers that prefer circular icons.
     -->
+    <!--
+      enableOnBackInvokedCallback="false" — targetSdk 36 turns predictive
+      back on by default, which stops the platform dispatching
+      KEYCODE_BACK and calling Activity.onBackPressed(). The vendored SDL3
+      activity (org/libsdl/app/SDLActivity.java) still routes back through
+      exactly those legacy hooks — onBackPressed() honours the
+      SDL_ANDROID_TRAP_BACK_BUTTON hint, and dispatchKeyEvent consumes
+      mouse BUTTON_BACK. Opting out keeps SDL's tested behaviour instead of
+      letting the system silently finish() the activity out from under the
+      emu thread (no nativeQuit, no clean Inferno shutdown). The opt-out is
+      honoured at targetSdk 36, but the legacy back path is deprecated —
+      revisit when the SDL3 vendor drop migrates to OnBackInvokedCallback.
+    -->
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="false"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">
 

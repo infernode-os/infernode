@@ -666,11 +666,26 @@ toolresultstatus(name, content: string): string
 	lower := str->tolower(content);
 	if(agentlib->hasprefix(lower, "error:") ||
 	   agentlib->hasprefix(lower, "error —") ||
-	   agentlib->contains(lower, "(exit:") ||
-	   agentlib->contains(lower, "... (timeout") ||
+	   (name == "exec" && (agentlib->contains(lower, "(exit:") ||
+		agentlib->contains(lower, "... (timeout"))) ||
 	   (name == "limbo" && agentlib->contains(lower, "status: failed")))
 		return "error";
 	return "success";
+}
+
+# lucibridge is a trusted process outside the activity namespace. The read
+# tool sees this backing directory mounted at AgentLib->SCRATCH_PATH, so write
+# there but return the path visible to the agent.
+writescratch(content: string, step: int): string
+{
+	path := sys->sprint("%s/%d/step%d.txt", AgentLib->SCRATCH_PATH, actid, step);
+	fd := sys->create(path, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return "(cannot create activity scratch file)";
+	b := array of byte content;
+	if(sys->write(fd, b, len b) != len b)
+		return "(cannot write activity scratch file)";
+	return sys->sprint("%s/step%d.txt", AgentLib->SCRATCH_PATH, step);
 }
 
 # Track consecutive tool failures with UI notification.
@@ -1883,7 +1898,7 @@ agentturn(input: string)
 						result = result[0:AgentLib->STREAM_THRESHOLD] +
 							"\n... (truncated — content continues in " + eargs + ")";
 					} else {
-						scratch := agentlib->writescratch(result, step);
+						scratch := writescratch(result, step);
 						# Keep first 3 lines inline so LLM has examples to act on immediately.
 						# IMPORTANT: stay small — TOOL_RESULTS must fit in one 9P Write (~8KB).
 						# 3 lines x ~80 bytes x 20 parallel tools < 5KB, safely under msize.

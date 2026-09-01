@@ -836,9 +836,16 @@ with tempfile.TemporaryDirectory() as td:
     grind.find_emu = lambda: str(base / "emu")
     grind.ensure_mountpoints = lambda: None
     grind.build_manifest = lambda *a, **k: {"stamp": "deterministic-test"}
+    grind.gateway_preflight = lambda *a, **k: {"status": "ok"}
+    grind.gateway_runtime_health = lambda *a, **k: {
+        "status": "ok", "session_stateless": True,
+        "codex_home_current": {"files": 72,
+                               "persistent_cli_state_files": 71}}
 
     scenarios = base / "scenarios.yaml"
     scenarios.write_text(
+        "gateway:\n"
+        "  backend: mock\n"
         "scenarios:\n"
         "  - name: flaky_boot\n"
         "    category: functional\n"
@@ -906,6 +913,10 @@ with tempfile.TemporaryDirectory() as td:
     assert (outdir / "sealed_trial.attempt1" / "emulator.log").read_text() == PROMPTED
     assert not (outdir / "sealed_trial.attempt2").exists()
     assert not (outdir / "after_the_stop.attempt1").exists()
+    final_gateway = json.loads((outdir / "gateway-final.json").read_text())
+    assert final_gateway["codex_home_current"]["persistent_cli_state_files"] == 71
+    sums = (outdir / "SHA256SUMS").read_text()
+    assert "gateway-final.json" in sums, sums
 
 print("grind_escape_test: PASS")
 PY

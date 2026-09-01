@@ -57,11 +57,15 @@ should make. So this gate bridges at the **prompt** level:
    as `role=tool` messages on the next request and are replayed into a fresh
    `codex exec`.
 
-**The gate is therefore stateless.** There are no held turns to orphan (a
-restart mid-tool-loop costs nothing) and no `CODEX_GATE_HOLD_TIMEOUT`; the
+**The CLI session is therefore stateless.** There are no held CLI sessions
+and no `CODEX_GATE_HOLD_TIMEOUT`; the
 price is that no CLI session spans a tool round-trip — each request is one
 `codex exec` with the transcript replayed. `/health` still reports
-`held_turns` for surface parity with claude-gate; it is always 0.
+`held_turns` for surface parity with claude-gate; it is always 0. This does
+not mean `CODEX_HOME` is stateless: the CLI writes operational files there
+even when each invocation uses `--ephemeral`. An in-flight HTTP request,
+including a quota-paused one, is also not durable across a gateway restart;
+the caller must retry it.
 
 A reply that isn't the agreed JSON object is treated as plain content rather
 than an error — degraded, never fatal.
@@ -80,11 +84,14 @@ All endpoints bind `127.0.0.1` only.
 
 ```json
 {"status": "ok", "backend": "codex-cli", "held_turns": 0, "stateless": true,
+ "session_stateless": true,
  "hardened": true, "codex_version": "codex-cli 0.149.0",
  "sandbox": "read-only", "exec_flags": ["--sandbox", "read-only", "..."],
  "disabled_features": ["plugins", "..."], "features_sha256": "…",
  "adapter_instructions_sha256": "…",
- "codex_home_baseline": {"files": 1, "bytes": 4156, "sha256": "…"}}
+ "codex_home_baseline": {"files": 1, "bytes": 4156, "sha256": "…"},
+ "codex_home_current": {"files": 72, "persistent_cli_state_files": 71,
+                         "persistent_cli_state": true, "sha256": "…"}}
 ```
 
 - `status` — `"ok"` if the daemon is serving. Non-mock startup first runs
@@ -95,6 +102,8 @@ All endpoints bind `127.0.0.1` only.
   `CODEX_GATE_MOCK=1` (deterministic test backend, no CLI, no billing).
 - `held_turns` — always 0 here (see above); present so monitoring can treat
   both gates alike.
+- `stateless` / `session_stateless` — the HTTP and CLI session contract only.
+  They make no claim that the isolated Codex home remains empty.
 - `hardened`, `codex_version`, `exec_flags`, `disabled_features`,
   `features_sha256`, `adapter_instructions_sha256`, `codex_home_baseline` —
   the pinned CLI surface (see below). `grind.py` copies these into a
@@ -168,7 +177,8 @@ no run record named, and the next run would carry different ones.
 So the gate pins the surface rather than inheriting it (INFR-413). Every
 `codex exec` gets:
 
-- `--ephemeral`, so no session files are written;
+- `--ephemeral`, so no resumable Codex session spans requests; the CLI may
+  still write caches, databases, installation metadata, and bundled skills;
 - `--ignore-user-config`, so no `config.toml` is loaded;
 - `--ignore-rules`, so no user or project execpolicy `.rules` file is loaded;
 - `--disable` for plugins (and plugin sharing, remote plugins, the recommended
@@ -197,8 +207,9 @@ tools/codex-gate/serve-codex-gate.sh --inventory    # or: --inventory PATH
 ```
 
 That prints every file under the Codex home with its size, mode and SHA-256,
-plus one digest over the whole listing, so two campaigns can be compared by a
-single value.
+separate credential and persistent-state counts, and one digest over the whole
+listing. `/health` exposes the same current summary without file names, and
+the campaign runner saves its final value as `gateway-final.json`.
 
 ## Setup (pointing InferNode at it)
 
@@ -251,6 +262,15 @@ tool results, and activity tree; the gate still starts a fresh ephemeral
 `codex exec` for every attempt. A retry replays the same unchanged request.
 Set `CODEX_GATE_QUOTA_MAX_WAIT=0` when an operator prefers an immediate,
 machine-readable HTTP 429 instead of waiting.
+
+After resetting account quota manually, send `SIGHUP` to the gateway process.
+It immediately retries every quota-paused request with its original, unchanged
+HTTP body; a still-exhausted account returns the request to bounded backoff.
+For a systemd user service:
+
+```sh
+systemctl --user kill --kill-whom=main -s HUP codex-gate
+```
 
 **OPENAI_API_KEY can silently outrank ChatGPT auth in the CLI**, billing the
 API instead of the plan. The serve script unsets it, and the gate refuses to

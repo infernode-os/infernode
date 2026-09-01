@@ -31,11 +31,11 @@
 #      tool results come back as ordinary role=tool messages on the next
 #      request and are replayed into a fresh `codex exec`.
 #
-# Consequence worth knowing: this gate is STATELESS.  There are no held
-# turns to orphan (a restart mid-tool-loop costs nothing), but there is also
-# no live CLI session across a tool round-trip — each request is one
-# `codex exec`.  /health reports held_turns for surface parity with
-# claude-gate; it is always 0.
+# Consequence worth knowing: CLI SESSIONS are stateless. There is no live CLI
+# session across a tool round-trip — each request is one `codex exec`.
+# In-flight HTTP requests, including quota-paused requests, are not durable
+# across a gateway restart and must be retried by the caller. /health reports
+# held_turns for surface parity with claude-gate; it is always 0.
 #
 # Endpoints (bind 127.0.0.1 only — no auth of its own):
 #   POST /v1/chat/completions    (non-streaming + single-chunk SSE)
@@ -61,6 +61,7 @@
 #   CODEX_GATE_QUOTA_BACKOFF initial retry delay without reset metadata (30)
 #   CODEX_GATE_QUOTA_MAX_BACKOFF maximum fallback retry delay (900)
 #   CODEX_GATE_QUOTA_RESET_GRACE seconds after a minute-precision reset (30)
+#   SIGHUP                    retry quota-paused requests immediately
 #   CODEX_GATE_SANDBOX    --sandbox value (default read-only)
 #   CODEX_GATE_WORKDIR    --cd value (default ~/.cache/codex-gate/workdir)
 #   CODEX_GATE_CODEX_HOME CODEX_HOME for the child (isolates ~/.codex; you
@@ -87,6 +88,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -121,7 +123,9 @@ QUOTA_RESET_GRACE = max(0.0, float(os.environ.get(
 
 _mock_errors_remaining = MOCK_ERROR_COUNT
 _quota_pauses = {}
+_quota_wakes = {}
 _last_quota_pause = None
+_home_inventory_cache = None
 
 # Models advertised on /v1/models — what llmsrv's `/mnt/llm/models` and the
 # Settings picker show.  Codex's model lineup moves faster than this file
@@ -297,9 +301,27 @@ def codex_home_inventory(home):
                 entries.append({"path": rel, "error": str(e)})
     listing = "\n".join("%s %s" % (e["path"], e.get("sha256", "unreadable"))
                         for e in entries)
+    credential_names = {"auth.json", "auth.json.lock"}
+    credential_files = sum(
+        1 for entry in entries if entry["path"].split(os.sep, 1)[0]
+        in credential_names)
     return {"home": home, "files": len(entries), "bytes": total,
+            "credential_files": credential_files,
+            "persistent_cli_state_files": len(entries) - credential_files,
+            "persistent_cli_state": len(entries) > credential_files,
             "sha256": hashlib.sha256(listing.encode()).hexdigest(),
             "entries": entries}
+
+
+def codex_home_summary(home):
+    """Cached inventory summary, invalidated whenever a Codex child exits."""
+    global _home_inventory_cache
+    if _home_inventory_cache is None:
+        _home_inventory_cache = {
+            k: v for k, v in codex_home_inventory(home).items()
+            if k != "entries"
+        }
+    return dict(_home_inventory_cache)
 
 
 def codex_version():
@@ -698,6 +720,8 @@ async def run_with_quota_recovery(factory):
     started = None
     started_at = None
     retries = 0
+    wake = asyncio.Event()
+    _quota_wakes[turn_id] = wake
     try:
         while True:
             try:
@@ -752,10 +776,36 @@ async def run_with_quota_recovery(factory):
                 _last_quota_pause = dict(state)
                 log.warning("usage limit; pausing turn %.1fs (retry %d)",
                             delay, retries + 1)
-                await asyncio.sleep(delay)
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=delay)
+                    wake.clear()
+                    log.warning("operator requested immediate quota retry")
+                except asyncio.TimeoutError:
+                    pass
                 retries += 1
     finally:
         _quota_pauses.pop(turn_id, None)
+        _quota_wakes.pop(turn_id, None)
+
+
+def request_quota_retry():
+    """Wake quota-paused requests so they recheck the account immediately."""
+    now = datetime.datetime.now().astimezone().isoformat()
+    woken = 0
+    for turn_id, wake in list(_quota_wakes.items()):
+        pause = _quota_pauses.get(turn_id)
+        if pause is None or pause.get("state") != "paused_quota":
+            continue
+        pause["state"] = "resuming"
+        pause["retry_at"] = now
+        pause["operator_retry_at"] = now
+        wake.set()
+        woken += 1
+    if woken:
+        log.warning("SIGHUP: retrying %d quota-paused turn(s)", woken)
+    else:
+        log.info("SIGHUP: no quota-paused turns to retry")
+    return woken
 
 
 def child_env():
@@ -875,6 +925,7 @@ def parse_events(stdout):
 
 async def run_codex(model, prompt, schema):
     """One `codex exec`.  Returns (final_text, usage_tokens)."""
+    global _home_inventory_cache
     tmpdir = tempfile.mkdtemp(prefix="codex-gate-")
     schema_path = os.path.join(tmpdir, "schema.json")
     last_path = os.path.join(tmpdir, "last-message.txt")
@@ -912,6 +963,9 @@ async def run_codex(model, prompt, schema):
             await proc.wait()
             raise CodexError("codex exec exceeded CODEX_GATE_TIMEOUT (%.0fs)"
                              % EXEC_TIMEOUT)
+        finally:
+            # The CLI may have changed its isolated home even on failure.
+            _home_inventory_cache = None
 
         stdout = out.decode("utf-8", "replace")
         stderr = err.decode("utf-8", "replace")
@@ -1104,7 +1158,10 @@ async def health(request):
         # No live CLI session spans a tool round-trip here (see the module
         # comment); the key stays for parity with claude-gate's /health.
         "held_turns": 0,
+        # Protocol turns are stateless. CODEX_HOME is deliberately isolated,
+        # but the CLI may still write operational state there between turns.
         "stateless": True,
+        "session_stateless": True,
         "quota_recovery": QUOTA_MAX_WAIT > 0,
         "state": state,
         "quota": {
@@ -1119,6 +1176,9 @@ async def health(request):
     # grind.py's gateway preflight refuses to start a trial against a gateway
     # that is not running the profile the scenario asked for.
     body.update(PROFILE)
+    home = os.environ.get("CODEX_GATE_CODEX_HOME")
+    if home and not MOCK:
+        body["codex_home_current"] = codex_home_summary(home)
     return web.json_response(body)
 
 
@@ -1186,6 +1246,12 @@ def main():
     async def make_sem(app):
         global _sem
         _sem = asyncio.Semaphore(CONCURRENCY)
+        if hasattr(signal, "SIGHUP"):
+            try:
+                asyncio.get_running_loop().add_signal_handler(
+                    signal.SIGHUP, request_quota_retry)
+            except (NotImplementedError, RuntimeError):
+                log.warning("SIGHUP quota retry is unavailable on this platform")
     app.on_startup.append(make_sem)
 
     log.info("listening on http://%s:%d/v1 (%s backend)",

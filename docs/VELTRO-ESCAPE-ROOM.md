@@ -216,6 +216,11 @@ spending their own active polling budgets during the same pause; wall time and
 pause transitions remain in the result. The outer timeout still fails closed
 if the driver or its marker is tampered with. A bounded retry policy that
 expires is `INCONCLUSIVE` with a usage-limit reason.
+If quota was reset manually while a request is sleeping, send `SIGHUP` to the
+gateway process (for example,
+`systemctl --user kill --kill-whom=main -s HUP codex-gate`). The held request
+is retried immediately with no transcript mutation; if quota is still
+unavailable it returns to the bounded wait.
 Abrupt runner, emulator, or host loss before the final checkpoint is a
 different failure class and must not be reported as a verified audit bundle.
 
@@ -338,6 +343,10 @@ exact flags, which validates every pinned name against that build, and reports
 the CLI version, the flags, the disabled set and a hash of the effective
 configuration on `/health`. See [CODEX-GATE.md](CODEX-GATE.md).
 
+Here `--ephemeral` means no resumable Codex session crosses requests. It does
+not promise an empty `CODEX_HOME`: current CLI releases still write operational
+state there. `/health` reports that state separately from session statelessness.
+
 The campaign consumes all of that:
 
 - `grind.py` records the whole `/health` response in `manifest.json`, so the
@@ -351,10 +360,11 @@ The campaign consumes all of that:
   tools/codex-gate/serve-codex-gate.sh --inventory "$CODEX_GATE_CODEX_HOME"
   ```
 
-  That prints every file with its size, mode and SHA-256 plus one digest over
-  the listing. Put it in the evidence bundle; it is the account of the
-  model-side state the trials actually carried. Do not put `auth.json`'s
-  contents anywhere near it — inventory the hash, not the credential.
+  That prints every file with its size, mode and SHA-256, persistent-state
+  counts, and one digest over the listing. Put it in the evidence bundle; it
+  is the account of the model-side state the trials actually carried. Do not
+  put `auth.json`'s contents anywhere near it — inventory the hash, not the
+  credential.
 
 Deterministic coverage for the pinning, the isolated-home preflight and the
 inventory is in `tests/host/codex_gate_test.sh`. It bills nothing, and CI runs
@@ -509,11 +519,13 @@ Before starting the first emulator, the runner requires `/health` to report a
 live, stateless `codex-cli` backend and requires the selected model to appear in
 `/v1/models`. Campaign scenarios also require `quota_recovery=true`, preventing
 an old gateway from silently reverting to terminal quota text. The runner
-records both responses in `manifest.json`.
+records both responses in `manifest.json`, then writes the final gateway health
+(including the post-campaign Codex-home summary) to `gateway-final.json`
+before sealing checksums.
 
 The runner prints the exact result directory. Preserve its `manifest.json`,
 `results.jsonl`, `scorecard.md`, `*.trajectory.log`, `*.canaries.json`,
-`*.attemptN/`, and `*.audit/` trees. Each audit tree includes the chain,
+`gateway-final.json`, `*.attemptN/`, and `*.audit/` trees. Each audit tree includes the chain,
 public key, pre/post anchors, strict verifier output, retrieved payloads, and
 the Venti data/index files. The trajectory and payloads may contain a
 disclosed canary; treat the whole bundle as sensitive until scoring is

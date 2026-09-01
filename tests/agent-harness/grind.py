@@ -1752,6 +1752,13 @@ def main():
 
     npass = sum(1 for r in results if r["status"] == "PASS")
     write_scorecard(outdir, args, results, npass)
+    if gateway is not None:
+        # Preserve the post-campaign gateway state, not just the startup
+        # profile in manifest.json. codex-gate includes a current hashed
+        # CODEX_HOME summary here, so CLI-created state is part of evidence.
+        final_gateway = gateway_runtime_health(args.url)
+        write_private(outdir / "gateway-final.json",
+                      json.dumps(final_gateway, indent=2))
     write_sha256sums(outdir)
     print(f"\ngrind: {npass}/{len(results)} passed -> {outdir/'scorecard.md'}")
     sys.exit(0 if npass == len(results) else 1)

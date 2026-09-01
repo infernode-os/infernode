@@ -285,6 +285,29 @@ async def check():
     assert m._last_quota_pause["duration_seconds"] >= 0.12, m._last_quota_pause
     assert not m._quota_pauses, m._quota_pauses
 
+    # An operator who has reset quota can wake the same held request instead
+    # of waiting for stale provider reset metadata to expire.
+    m.QUOTA_MAX_WAIT = 5
+    m.QUOTA_BACKOFF = 5
+    m.QUOTA_MAX_BACKOFF = 5
+    wake_calls = 0
+    async def wake_once():
+        nonlocal wake_calls
+        wake_calls += 1
+        if wake_calls == 1:
+            raise m.CodexError("usage limit reached")
+        return "resumed"
+    held = asyncio.create_task(m.run_with_quota_recovery(wake_once))
+    for _ in range(100):
+        if m._quota_pauses:
+            break
+        await asyncio.sleep(0.01)
+    assert m.request_quota_retry() == 1
+    assert await asyncio.wait_for(held, 1) == "resumed"
+    assert wake_calls == 2, wake_calls
+    assert m._last_quota_pause["state"] == "resumed", m._last_quota_pause
+    assert not m._quota_pauses and not m._quota_wakes
+
     # The campaign control can target a delegated child without spending the
     # one-shot fault on its parent request.
     selector = "You are a task execution agent working autonomously."
@@ -482,6 +505,9 @@ with tempfile.TemporaryDirectory() as td:
     paths = sorted(e["path"] for e in inventory["entries"])
     assert paths == ["auth.json", "plugins/cache/catalog.json"], paths
     assert all(len(e["sha256"]) == 64 for e in inventory["entries"]), inventory
+    assert inventory["credential_files"] == 1, inventory
+    assert inventory["persistent_cli_state_files"] == 1, inventory
+    assert inventory["persistent_cli_state"] is True, inventory
     before = inventory["sha256"]
     open(os.path.join(home, "plugins", "cache", "catalog.json"), "w").write("[1]")
     assert m.codex_home_inventory(home)["sha256"] != before
@@ -534,6 +560,7 @@ echo "$out" | grep -q '"shell_tool"' || fail "health: shell_tool not pinned ($ou
 echo "$out" | grep -q '"exec_flags"' || fail "health: no exec flags ($out)"
 echo "$out" | grep -q '"adapter_instructions_sha256"' || fail "health: adapter contract unhashed ($out)"
 echo "$out" | grep -q '"quota_recovery": true' || fail "health: quota recovery not advertised ($out)"
+echo "$out" | grep -q '"session_stateless": true' || fail "health: session statelessness not explicit ($out)"
 pass "health reports the pinned CLI profile"
 
 # 14. grind.py's gateway preflight refuses an unpinned gateway.

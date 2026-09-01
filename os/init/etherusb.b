@@ -359,7 +359,7 @@ Family: adt {
 	pid:	int;
 	setup:	ref fn(): int;
 	wrap:	ref fn(frame: array of byte): array of byte;
-	unwrap:	ref fn(buf: array of byte, n: int): (int, array of byte);
+	unwrap:	ref fn(buf: array of byte, n, atend: int): (int, array of byte);
 	txalign: int;		# boundary the NEXT record must start on
 };
 
@@ -422,6 +422,7 @@ npackedwr: int;			# packed writes taken
 npackedwrframes: int;		# frames they carried
 npackedwrmax: int;		# most frames in any one write
 nframe: int;			# frames handed to the demultiplex
+nframing: int;			# record walks that lost the stream
 
 phymbps := 100;			# what autonegotiation settled on
 dev: string;
@@ -571,6 +572,26 @@ init(nil: ref Draw->Context, argv: list of string)
 	sys->print("etherusb: %s bulk in %s out %s, maxpkt %d\n",
 		dev, inname, outname, mp);
 
+	#
+	# lan78xx on real silicon: whole transfers in one channel
+	# operation. This is the driver that knows the device, so this
+	# is where the policy belongs -- QEMU's controller model cannot
+	# do it, and its RNDIS device never asks. Set here, before the
+	# path split, so the Limbo 9P server and the kernel data path
+	# ride the same transfer regime and their numbers compare.
+	#
+	if(family.name == "lan78xx"){
+		for(el := inname :: outname :: nil; el != nil; el = tl el){
+			sfd := sys->open("/usb/usb/" + hd el + "/ctl",
+				Sys->OWRITE);
+			if(sfd == nil ||
+			   sys->fprint(sfd, "singleshot 1") < 0)
+				sys->print("etherusb: singleshot on %s: %r\n",
+					hd el);
+			sfd = nil;
+		}
+	}
+
 	if(family.setup() < 0)
 		return;
 
@@ -651,6 +672,31 @@ init(nil: ref Draw->Context, argv: list of string)
 	# Where #l does not exist, serve() carries on exactly as before;
 	# the namespace decides, not a build flag.
 	#
+	#
+	# WHICH data path, selectable per card -- the same convention as
+	# the network-console token: a file the operator writes on the
+	# boot partition. "limbo" keeps the driver here, serving 9P, the
+	# way the whole port ran before #l existed; anything else (or no
+	# file) hands the endpoints to the kernel. Both implementations
+	# stay live in the tree so their performance can be compared on
+	# the same boot media, and the portable one remains one file
+	# edit away from being the one that runs.
+	#
+	sfd := sys->open("/n/dos/etherpath", Sys->OREAD);
+	if(sfd != nil){
+		sbuf := array[32] of byte;
+		sn := sys->read(sfd, sbuf, len sbuf);
+		sfd = nil;
+		if(sn > 0){
+			(nil, sfl) := sys->tokenize(string sbuf[0:sn], " \t\r\n");
+			if(sfl != nil && hd sfl == "limbo"){
+				sys->print("etherusb: /n/dos/etherpath says limbo; serving 9P\n");
+				serve();
+				return;
+			}
+		}
+	}
+
 	probe := sys->open("#l/ether0/addr", Sys->OREAD);
 	if(probe != nil){
 		probe = nil;
@@ -688,23 +734,6 @@ init(nil: ref Draw->Context, argv: list of string)
 		if(cfd == nil){
 			sys->print("etherusb: cannot open #l clone: %r\n");
 			return;
-		}
-		#
-		# lan78xx on real silicon: whole transfers in one channel
-		# operation. This is the driver that knows the device, so
-		# this is where the policy belongs -- QEMU's controller
-		# model cannot do it, and its RNDIS device never sets it.
-		#
-		if(family.name == "lan78xx"){
-			for(el := inname :: outname :: nil; el != nil; el = tl el){
-				sfd := sys->open("/usb/usb/" + hd el + "/ctl",
-					Sys->OWRITE);
-				if(sfd == nil ||
-				   sys->fprint(sfd, "singleshot 1") < 0)
-					sys->print("etherusb: singleshot on %s: %r\n",
-						hd el);
-				sfd = nil;
-			}
 		}
 		if(sys->fprint(cfd, "bind %s %s %d %d %s %s",
 		    family.name, macstr, phymbps, burst, inpath, outpath) < 0){
@@ -2105,8 +2134,8 @@ stats(n: int): string
 	# somewhere in these four numbers.
 	#
 	return sys->sprint("in: %d\nlink: 1\nout: %d\ncrc errs: 0\n" +
-		"overflows: %d\nsoft overflows: 0\nframing errs: 0\n" +
-		"buffer size: %d\nmbps: 100\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
+		"overflows: %d\nsoft overflows: 0\nframing errs: %d\n" +
+		"buffer size: %d\nmbps: %d\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
 		"reads with data: %d in %d ms\nempty reads: %d in %d ms\n" +
 		"idle sleeps: %d\nframes parsed: %d\n" +
 		"rxpoll: %d ms for %d polls\n" +
@@ -2117,7 +2146,7 @@ stats(n: int): string
 		"queue depth sum: %d\ndeepest queue: %d\n" +
 		"packed reads: %d\nframes in them: %d\nlargest: %d\n" +
 		"packed writes: %d\nframes in them: %d\nlargest: %d\n",
-		cv.inpkt, cv.outpkt, cv.drops, Maxframe,
+		cv.inpkt, cv.outpkt, cv.drops, nframing, Maxframe, phymbps,
 		int mac[0], int mac[1], int mac[2],
 		int mac[3], int mac[4], int mac[5],
 		ndata, datams, nempty, emptyms, nsleep, nframe,
@@ -2402,8 +2431,20 @@ rxproc()
 		if(nacc >= len acc)			# desynchronised; start over
 			nacc = 0;
 
+		#
+		# Exactly one aggregation cap per read, for the same reason
+		# the kernel driver asks that way: offered more buffer, a
+		# transfer that fills the cap completes by length with no
+		# short packet to stop at, and the read glues it to the
+		# next transfer -- after which the record walk cannot be
+		# right. Ending short of the cap is what marks a real
+		# transfer boundary.
+		#
+		want := len acc - nacc;
+		if(family.name == "lan78xx" && want > Rxburst)
+			want = Rxburst;
 		t0 := sys->millisec();
-		n := sys->read(bulkfd, acc[nacc:], len acc - nacc);
+		n := sys->read(bulkfd, acc[nacc:nacc+want], want);
 		dt := sys->millisec() - t0;
 		if(n < 0){
 			sys->print("etherusb: bulk read failed: %r\n");
@@ -2475,10 +2516,14 @@ rxproc()
 		idle = 0;
 		nacc += n;
 
+		atend := 1;
+		if(family.name == "lan78xx" && n == want)
+			atend = 0;	# cap filled; the stream continues
 		off := 0;
 		while(off < nacc){
-			(used, frame) := family.unwrap(acc[off:nacc], nacc - off);
+			(used, frame) := family.unwrap(acc[off:nacc], nacc - off, atend);
 			if(used < 0){		# never going to parse; drop it
+				nframing++;
 				off = nacc;
 				break;
 			}
@@ -2605,7 +2650,7 @@ rndiswrap(frame: array of byte): array of byte
 # Returns (bytes consumed, frame), (0, nil) if buf does not yet hold a
 # whole message, or (-1, nil) if it never will.
 #
-rndisunwrap(buf: array of byte, n: int): (int, array of byte)
+rndisunwrap(buf: array of byte, n, nil: int): (int, array of byte)
 {
 	if(n < Rnishdr)
 		return (0, nil);
@@ -3043,7 +3088,7 @@ lanloopback(mode: int): int
 			sys->sleep(50);
 			continue;
 		}
-		(nil, frame) := family.unwrap(buf, n);
+		(nil, frame) := family.unwrap(buf, n, 1);
 		if(frame == nil)
 			continue;
 		if(len frame >= 14 && sameaddr(frame, mac)){
@@ -3464,7 +3509,7 @@ lanwrap(frame: array of byte): array of byte
 # Only lengths congruent to 2 mod 4 need no padding, which is why a
 # 1514-byte full frame is fine and a 60-byte ack is not.
 #
-lanunwrap(buf: array of byte, n: int): (int, array of byte)
+lanunwrap(buf: array of byte, n, atend: int): (int, array of byte)
 {
 	if(n < Lrxhdr)
 		return (0, nil);
@@ -3478,16 +3523,23 @@ lanunwrap(buf: array of byte, n: int): (int, array of byte)
 	used += (4 - (used % 4)) % 4;		# to the next four-byte boundary
 
 	#
-	# The padding after the LAST record in a transfer need not be
-	# there: the device stops at the end of the frame. So a record
-	# whose frame is complete is complete, even if its padding is
-	# not -- otherwise the final frame of every transfer waits for
-	# bytes that are not coming, and is delivered late or not at all.
+	# The missing-pad question, decided rather than guessed -- the
+	# same rule the kernel driver (os/port/devether.c) arrived at,
+	# ported back so the two paths are honest against each other.
+	# At a true end of transfer (the read came back short of the
+	# aggregation cap) the padding after a final record may
+	# legitimately be absent: the record is complete. Mid-stream
+	# (the read filled the cap exactly) nothing ended; the pad is
+	# still in flight, and clamping here is how two stray pad bytes
+	# get parsed as a header of garbage.
 	#
 	if(Lrxhdr + datalen > n)
 		return (0, nil);
-	if(used > n)
+	if(used > n){
+		if(!atend)
+			return (0, nil);
 		used = n;
+	}
 
 	if(cmda & Lrxerr)
 		return (used, nil);

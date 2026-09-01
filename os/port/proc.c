@@ -93,8 +93,20 @@ schedinit(void)		/* never returns */
 		 * publish a Ready process that other cores' runproc
 		 * must reject on the mach test.
 		 */
-		p->mach = nil;
+		/*
+		 * The barrier comes BEFORE the publish. mach=nil is the
+		 * signal that this process may be resumed elsewhere; the
+		 * stores it licenses are the context setlabel() just
+		 * saved. Written the other way round -- nil first,
+		 * barrier after -- another core can observe mach==0,
+		 * dequeue, and gotolabel into a half-saved Label. That
+		 * is not a theoretical ordering nicety: it presented as
+		 * PC-alignment faults on addresses that decode as ASCII
+		 * and error-stack overflows in processes that were
+		 * momentarily running on two cores' worth of state.
+		 */
 		coherence();
+		p->mach = nil;
 		switch(p->state) {
 		case Running:
 			ready(p);
@@ -163,6 +175,24 @@ sched(void)
 		gotolabel(&m->sched);
 	}
 	up = runproc();
+	/*
+	 * Reader half of schedinit's publish: mach==0 was checked under
+	 * the run-queue lock, but the Label about to be jumped through
+	 * was written on another core after that core's last
+	 * synchronising store. Pair the barrier so the context is fully
+	 * visible before gotolabel trusts it.
+	 */
+	coherence();
+	/*
+	 * Tripwire: a dequeued process whose mach is still set is about
+	 * to run on two cores at once. runproc checked this under the
+	 * lock; if it trips HERE the corruption raced in after -- and
+	 * naming both cores at the instant is worth infinitely more
+	 * than the wild-PC panic thirty milliseconds later.
+	 */
+	if(up->mach != nil)
+		panic("double-run: %s mach=cpu%d on cpu%d",
+			up->text, (int)((Mach*)up->mach - MACHP(0)), m->machno);
 	up->state = Running;
 	up->mach = MACHP(m->machno);	/* m might be a fixed address; use MACHP */
 	m->proc = up;
@@ -208,6 +238,14 @@ ready(Proc *p)
 */
 	rq = &runq[p->pri];
 	lock(&runq[0].l);
+	/*
+	 * Tripwire: readying a proc that is already Ready means two
+	 * paths raced to enqueue it -- the queue would hold it twice
+	 * and two cores would dequeue one context.
+	 */
+	if(p->state == Ready)
+		panic("ready: %s already Ready (cpu%d, caller %#p)",
+			p->text, m->machno, getcallerpc(&p));
 	p->rnext = 0;
 	if(rq->tail)
 		rq->tail->rnext = p;

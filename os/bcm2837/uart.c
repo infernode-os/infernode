@@ -152,14 +152,35 @@ uartgetc(void)
 	return d & 0xFF;
 }
 
+/*
+ * One writer at a time, whole string. Four cores printing through
+ * this interleaved CHARACTER BY CHARACTER: "cpu1: up" and "cpu2: up"
+ * came out as "cpuccp1: uppuu2", which is comedy until a panic
+ * message does it, and the first SMP panic did exactly that -- the
+ * one line that would have named the bug was shredded across three
+ * cores' output. A plain spin Lock is enough: emission is short,
+ * bounded, and already runs at splhi from the callers that matter.
+ * _tas directly rather than lock() so a panic INSIDE the lock
+ * machinery can still print: after a bounded spin, print anyway --
+ * garbled beats silent.
+ */
+static ulong uartmutex;
+
 void
 uartputstr(char *s)
 {
+	int i;
+
+	for(i = 0; i < 1000000; i++)
+		if(_tas(&uartmutex) == 0)
+			break;
 	while(*s){
 		if(*s == '\n')
 			uartputc('\r');
 		uartputc(*s++);
 	}
+	coherence();
+	uartmutex = 0;
 }
 
 void
@@ -212,9 +233,14 @@ uartputs(char *s, int n)
 {
 	int i;
 
+	for(i = 0; i < 1000000; i++)
+		if(_tas(&uartmutex) == 0)
+			break;
 	for(i = 0; i < n; i++){
 		if(s[i] == '\n')
 			uartputc('\r');
 		uartputc(s[i]);
 	}
+	coherence();
+	uartmutex = 0;
 }

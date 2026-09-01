@@ -317,6 +317,40 @@ boardreboot(void)
 }
 
 /*
+ * Reset with the firmware's one-shot TRYBOOT flag raised.
+ *
+ * The VideoCore reads PM_RSTS at boot; with this bit set it clears
+ * the bit and loads tryboot.txt instead of config.txt, exactly once.
+ * That is the whole A/B kernel mechanism on this platform: config.txt
+ * names the known-good kernel, tryboot.txt names the candidate, and a
+ * candidate that crashes costs one watchdog reset back to known-good
+ * -- no loader work, no card surgery, no serial rescue. The bit is
+ * survived by the reset on purpose; everything else about the reset
+ * is boardreboot()'s.
+ *
+ * PM_RSTS also holds partition-select and reset-cause bits the
+ * firmware owns, so read-modify-write rather than store: clobbering
+ * them has no documented recovery.
+ */
+void
+boardtryboot(void)
+{
+	volatile u32int *rstc, *rsts, *wdog;
+
+	rstc = (u32int*)(uintptr)(PMREGS + Pmrstc);
+	rsts = (u32int*)(uintptr)(PMREGS + Pmrsts);
+	wdog = (u32int*)(uintptr)(PMREGS + Pmwdog);
+
+	*rsts = Pmpassword | *rsts | Pmrststryboot;
+	*wdog = Pmpassword | 16;
+	*rstc = Pmpassword | (*rstc & Pmwrcfgclr) | Pmwrcfgfull;
+	coherence();
+
+	for(;;)
+		;
+}
+
+/*
  * Read sector 0 and say what is on the card.
  *
  * A driver that initialises and is never asked for a block proves

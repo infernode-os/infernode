@@ -211,6 +211,18 @@ reboot(void)
 	exit(0);
 }
 
+/*
+ * Reset with the firmware's tryboot flag up: the next boot -- and only
+ * the next -- comes from tryboot.txt's kernel. See boardtryboot().
+ */
+void
+tryboot(void)
+{
+	uartputstr("tryboot: resetting; next boot is the CANDIDATE kernel\n");
+	boardtryboot();
+	exit(0);
+}
+
 void
 halt(void)
 {

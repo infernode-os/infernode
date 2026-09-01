@@ -105,6 +105,7 @@ void		excinit(void);
 void		exhausted(char*);
 void		exit(int);
 void		reboot(void);
+void		tryboot(void);
 void		halt(void);
 int		export(int, char*, int);
 uvlong		fastticks(uvlong*);

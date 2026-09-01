@@ -202,3 +202,5 @@ void	kprocchild(Proc*, void(*)(void*), void*);
 
 #include "../port/portfns.h"
 void	boardreboot(void);
+void	boardtryboot(void);
+void	tryboot(void);

@@ -95,10 +95,12 @@ enum
 	 * ignored silently.
 	 */
 	Pmrstc		= 0x1C,
+	Pmrsts		= 0x20,
 	Pmwdog		= 0x24,
 	Pmpassword	= 0x5A000000,
 	Pmwrcfgclr	= 0xFFFFFFCF,
 	Pmwrcfgfull	= 0x00000020,	/* full reset */
+	Pmrststryboot	= 0x00000020,	/* one-shot: firmware loads tryboot.txt */
 
 	TmrEnable	= 1<<7,
 	TmrIntEnable	= 1<<5,

@@ -239,7 +239,20 @@ _upaddr(void)
 {
 	Mach *mm;
 
-	__asm__("mov %0, x28" : "=r"(mm));
+	/*
+	 * volatile, and it is the whole ballgame. Without it the
+	 * compiler treats this asm as a pure function of nothing,
+	 * computes x28+offset once, and caches the result in a
+	 * callee-saved register -- which SURVIVES preemption and
+	 * migration. A process moved to another core then reads `up`
+	 * through its OLD core's Mach: an idle old core has proc==nil
+	 * there, &up->sleep becomes an address in the zero page, and
+	 * two drivers ended up asleep on Rendez 0x4a8 while every
+	 * fresh read (like the one inside tsleep's own null check)
+	 * looked perfectly healthy. volatile forces a live x28 read at
+	 * every use, which is the entire meaning of a per-core pointer.
+	 */
+	__asm__ __volatile__("mov %0, x28" : "=r"(mm));
 	return &mm->proc;
 }
 #define	up	(*_upaddr())

@@ -588,6 +588,16 @@ tsleep(Rendez *r, int (*fn)(void*), void *arg, int ms)
 
 	if(up == nil)
 		panic("tsleep() not in process (0x%lux)", getcallerpc(&r));
+	/*
+	 * Tripwire: a Rendez in the zero page is &up->sleep computed
+	 * through a NULL up -- the caller read the macro on a core
+	 * whose m->proc was nil and the null-check above never saw it
+	 * because up was re-read non-null by the time control got here.
+	 * Catch it by the address, at the callsite, with the core named.
+	 */
+	if((uintptr)r < 0x1000)
+		panic("tsleep: zero-page rendez %#p caller %#lux cpu%d proc %s",
+			r, getcallerpc(&r), m->machno, up->text);
 
 	when = MS2TK(ms)+MACHP(0)->ticks;
 	lock(&talarm.l);

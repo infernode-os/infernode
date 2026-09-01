@@ -2688,13 +2688,22 @@ cat > "$VARIANT" <<'EOF'
 #include "ureg.h"
 #include "fns.h"
 
-/* main.c normally defines these; the variant replaces main.c */
+/* main.c normally defines these; the variant replaces main.c.
+ * m is not defined here: since the SMP work it is the x28 register
+ * (dat.h), and l.S points it at machs[0] before kmain runs.  up is a
+ * macro over it for the same reason.  The secondary-core plumbing
+ * (machs, smpboot, squidboy) is referenced from l.S even though this
+ * variant never releases a secondary, so stub it. */
 Conf conf;
-Mach mach0;
-Mach *m = &mach0;
+Mach machs[MAXMACH];
 struct Active active;
-Proc *up;
 uintptr dtbptr;		/* l.S stores it; see os/arm64/fns.h */
+
+typedef struct Smpboot Smpboot;
+struct Smpboot { uvlong sp; uvlong mach; uvlong entry; };
+Smpboot smpboot[MAXMACH];
+void squidboy(void) { for(;;) __asm__ volatile("wfe"); }
+void idlewake(void) { }
 void (*kproftick)(ulong);
 void (*proctrace)(Proc*, int, vlong);
 void (*screenputs)(char*, int);

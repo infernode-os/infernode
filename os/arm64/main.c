@@ -2123,6 +2123,15 @@ launchsmp(void)
 	uvlong *rel;
 	int i, n, tries;
 
+	/*
+	 * Multiprocessor from this line on. taslock's ilock treats
+	 * nmach<2 as "a held lock at splhi can never be released --
+	 * panic now": true with one core, and the first cross-core
+	 * allocator collision panicked the boot through an assumption
+	 * set at confinit and never revisited.
+	 */
+	conf.nmach = MAXMACH;
+
 	for(i = 1; i < MAXMACH; i++){
 		uchar *stk;
 

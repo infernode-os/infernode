@@ -192,7 +192,21 @@ excreturn:
 	ldp	x22, x23, [sp, #16*11]
 	ldp	x24, x25, [sp, #16*12]
 	ldp	x26, x27, [sp, #16*13]
-	ldp	x28, x29, [sp, #16*14]
+	/*
+	 * x29 only: x28 is the per-core Mach pointer and must NEVER be
+	 * restored from a saved frame. A preempted process that resumes
+	 * on a different core erets through this path -- restoring the
+	 * Ureg's x28 would plant the OLD core's Mach in the new core's
+	 * register, and every m-> and up-> reference afterwards would
+	 * read and write another CPU's state. That presented as a
+	 * process computing &up->sleep through a transiently-nil
+	 * m->proc: a Rendez in the zero page, two drivers asleep on
+	 * address 0x4a8, and cross-core corruption radiating outward.
+	 * The save above still records x28 (harmless, and useful in a
+	 * register dump); only the restore is asymmetric -- the same
+	 * law setlabel/gotolabel already follow.
+	 */
+	ldr	x29, [sp, #16*14 + 8]
 	ldr	x30, [sp, #16*15]
 
 	add	sp, sp, #UREGSIZE

@@ -82,7 +82,16 @@ ilock(Lock *l)
 			if(l->key == 0)
 				break;
 			clockcheck();
-			if (i > 100000) {
+			/*
+			 * Same story as lock() above: the inherited bound was
+			 * a uniprocessor's tripwire, and it fires on the first
+			 * legitimately long hold. The allocator zeroes what it
+			 * hands out while holding the pool lock under ilock, so
+			 * one core's large allocation is another core's long
+			 * spin right here -- poolfree waiting out poolalloc's
+			 * memset was the reboot loop that sized this number.
+			 */
+			if (i > 100*1000*1000) {
 				lockloop(l, pc);
 				break;
 			}

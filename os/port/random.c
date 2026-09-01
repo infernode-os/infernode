@@ -47,19 +47,50 @@ rbnotempty(void*)
 	return rb.wp != rb.rp;
 }
 
+/*
+ * The producer, rewritten around the hardware generator.
+ *
+ * Upstream's producer spins a counter to 100000 and lets the clock
+ * interrupt sample the jitter between them -- the right design for
+ * hardware with no RNG, and a measured 18% of this machine's busy CPU
+ * for two bits of doubtful entropy every 13ms. Every port in this
+ * tree already provides hwrandom() (randominit() below refuses to
+ * work without it), so the producer's job reduces to: when the pool
+ * has room, move bytes from the generator into it, and otherwise cost
+ * nothing at all.
+ *
+ * randomclock() still runs off the clock link and still no-ops --
+ * randomcount never advances now, so its first test fails -- which
+ * keeps this file one diff away from a port that genuinely has no
+ * generator and needs the jitter loop back.
+ */
 static void
 genrandom(void*)
 {
+	uchar tmp[64], *p;
+	int i, got;
+
 	setpri(PriBackground);
 
 	for(;;) {
-		for(;;)
-			if(++rb.randomcount > 100000)
-				break;
-		if(anyhigher())
-			sched();
-		if(rb.filled || !rbnotfull(0))
-			sleep(&rb.producer, rbnotfull, 0);
+		sleep(&rb.producer, rbnotfull, 0);
+		while(rbnotfull(0)){
+			got = hwrandom(tmp, sizeof tmp);
+			if(got <= 0){
+				/* generator dry; do not turn into a spin */
+				tsleep(&up->sleep, return0, 0, 100);
+				continue;
+			}
+			for(i = 0; i < got && rbnotfull(0); i++){
+				*rb.wp ^= tmp[i];
+				p = rb.wp + 1;
+				if(p == rb.ep)
+					p = rb.buf;
+				rb.wp = p;
+			}
+			if(rb.wakeme)
+				wakeup(&rb.consumer);
+		}
 	}
 }
 

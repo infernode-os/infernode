@@ -1035,6 +1035,24 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 								ep->dev->nb, ep->nb, hc->hcchar);
 						hc->hcint = Chhltd;
 					}
+					/*
+					 * Pick up whatever completed during
+					 * the halt. The accounting below
+					 * consults i for Xfercomp, and a
+					 * raced-in transfer that ended on an
+					 * exact packet boundary looks, with
+					 * a stale i, like a transfer still
+					 * in flight -- the loop then goes
+					 * round and re-enables a finished
+					 * channel, which is the same
+					 * corruption this branch exists to
+					 * stop, in a narrower window.
+					 */
+					nt = hc->hcint;
+					if(nt){
+						hc->hcint = nt;
+						i |= nt;
+					}
 					if(hc->hcdma == hcdma)
 						break;	/* a true pause; end the read */
 					goto account;	/* raced-in data: not an error */

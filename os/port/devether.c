@@ -183,7 +183,7 @@ rndisunwrap(uchar *p, long n, uchar **fp, long *lp)
 }
 
 static long
-lanunwrap(uchar *p, long n, uchar **fp, long *lp)
+lanunwrap(uchar *p, long n, int atend, uchar **fp, long *lp)
 {
 	long datalen, used;
 	ulong cmda;
@@ -196,26 +196,29 @@ lanunwrap(uchar *p, long n, uchar **fp, long *lp)
 	if(datalen < 14 || datalen > Maxframe)
 		return -1;
 	/*
-	 * Records are padded to a four-byte boundary -- except that the
-	 * padding after the LAST one in a transfer need not arrive: the
-	 * device stops at the end of the frame. A record whose frame is
-	 * complete is therefore complete.
+	 * Records are padded to a four-byte boundary, and the missing-pad
+	 * question is now DECIDABLE, which it was not before the DWC
+	 * layer learned to end reads honestly.
 	 *
-	 * That rule is AMBIGUOUS when a transfer ends on an exact
-	 * 512-byte multiple, because the read layer cannot see that
-	 * boundary and the next transfer's first bytes sit where the
-	 * pad would be. Both readings were implemented and measured on
-	 * the board; this one -- the original -- loses the least
-	 * (~0.5% of buffers, healed by TCP, counted in framing errs).
-	 * The unambiguous fix is zero-length-packet handling in the
-	 * DWC layer, not a cleverer guess here; see the README.
+	 * Reads ask for exactly one aggregation cap. A read that comes
+	 * back SHORT ended at a real device pause -- a short packet or a
+	 * NAK -- and there the device may legitimately have stopped
+	 * after a final record without its padding: clamp, the record is
+	 * complete. A read that comes back FULL is the device chopping
+	 * its gathered stream at the cap; nothing ended, the pad is
+	 * simply still in flight, and clamping here is how two stray pad
+	 * bytes used to end up parsed as a header of garbage. The caller
+	 * says which case this is.
 	 */
 	used = Lrxhdr + datalen;
 	used += (4 - (used % 4)) % 4;
 	if(Lrxhdr + datalen > n)
 		return 0;
-	if(used > n)
+	if(used > n){
+		if(!atend)
+			return 0;	/* the pad is still in flight */
 		used = n;
+	}
 	if(cmda & Lrxerr)
 		return used;
 	*fp = p + Lrxhdr;
@@ -292,9 +295,20 @@ etherrxproc(void *a)
 		pexit("hangup", 1);
 	}
 	for(;;){
-		if(e->nacc >= e->nrxbuf)
+		if(e->nacc >= e->nrxbuf - e->burst)
 			e->nacc = 0;	/* desynchronised; start over */
-		n = kchanio(e->inchan, e->rxbuf + e->nacc, e->nrxbuf - e->nacc, OREAD);
+		/*
+		 * Exactly one aggregation cap per read. Ask for more and a
+		 * transfer that fills the cap completes by LENGTH, with no
+		 * short packet for the read layer to stop at -- the read
+		 * runs on into the next transfer and glues them together.
+		 * Ask for exactly the cap and every read ends at one of
+		 * three honest places: the cap (stream chopped, more
+		 * coming), a short packet, or a NAK pause (both real
+		 * boundaries). That distinction is what lanunwrap's atend
+		 * decides the missing-pad question with.
+		 */
+		n = kchanio(e->inchan, e->rxbuf + e->nacc, e->burst, OREAD);
 		if(n < 0)
 			error(Ehungup);
 		if(n == 0){
@@ -313,7 +327,8 @@ etherrxproc(void *a)
 		for(;;){
 			used = e->family == Frndis ?
 				rndisunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen) :
-				lanunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen);
+				lanunwrap(e->rxbuf+off, e->nacc-off,
+					n < e->burst, &fp, &flen);
 			if(used == 0)
 				break;
 			if(used < 0){

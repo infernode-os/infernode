@@ -1014,31 +1014,25 @@ Hunting lessons written in blood, for the next person here:
   implies every dropped fd on this kernel leaks until its process
   exits.
 
-### OPEN: LAN78xx burst framing desynchronises ~0.5% of transfers
+### OPEN: LAN78xx burst framing desynchronises ~0.1% of transfers
 
-With burst aggregation on, the record walk occasionally loses the
-stream at a transfer boundary and drops one buffer's remainder
-(counted in the stats file's "framing errs"; TCP retransmits; every
-transfer still verifies byte-identical). Both causes are understood
-and neither has a clean fix above the USB layer:
+Down from ~0.5%: the bulk of the desyncs were the DWC NAK-wake race
+(fix(usbdwc): a NAK wake must not abandon a live channel), and the
+missing-pad question became decidable once reads ask for exactly one
+aggregation cap -- a full read is the stream chopped mid-flight (never
+clamp; the pad is in flight), a short read ended at a real short
+packet or NAK pause (clamp; the device may omit a final record's
+padding). See the comments in devether.c's lanunwrap and rx loop.
 
-- the device may omit the padding after a transfer's final record, and
-- a transfer ending on an exact 512-byte multiple produces no short
-  packet, so multitrans() glues it to the next transfer; pad-absent
-  and next-header-where-pad-should-be are then byte-identical.
-
-Every cheaper reading was implemented and measured on the board:
-clamp-always 74-177 desyncs per ~20k frames, never-clamp 183,
-stream-end-only clamp 143, burst off 330-399 (the chip's reset
-defaults aggregate regardless, and clearing MEF/BCE explicitly still
-measured worse than configured burst). The honest fix is transfer
-atomicity in the read layer: teach the DWC driver zero-length packets
-and make one read return exactly one transfer, as Linux's URB layer
-guarantees. A phantom-read signature also turned up during this hunt
--- repeated identical 1264-byte all-zero returns from epread under
-load, consistent with the composite Chhltd|Ack|Nak interrupt path
-retrying an already-acknowledged packet -- and that is where the DWC
-investigation should start.
+What remains is ~25 desyncs per 20k frames under sustained load, TCP-
+healed, every 4MB transfer verifying byte-identical. The two nameable
+DWC races are closed (the NAK window, and stale-interrupt accounting
+after the halt -- both in chanio); the residue has some third source.
+To chase it: put the byte-capture probe back in devether.c's used<0
+branch (print off/nacc/n plus the first 12 bytes; the FRERR recipe in
+the git history of this hunt), and read what the stream actually held.
+Do not guess -- five parser variants were measured here and the bytes
+settled it every time a theory could not.
 
 ### Smaller things still open
 

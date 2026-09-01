@@ -1069,6 +1069,53 @@ transfer could be 1 if the fresh-channel Chhltd|Ack halt has a
 register cause); and the GC/scheduler costs that INFR-404's earlier
 collector work already halved once.
 
+### The full speed ledger: a number for every layer
+
+Measured on the board, 2026-09-01, each layer isolated:
+
+    USB, instantaneous          ~28 MB/s   (13.8KB per 487us read,
+                                            near-full bursts back to back)
+    wire path, sustained        12.4 MB/s  (UDP flood into the driver's
+                                            blackhole sink: USB + record
+                                            walk + counter; single rx
+                                            process; 3 framing errs per
+                                            82k frames)
+    full TCP through a Limbo
+    consumer                    2.6-2.8 MB/s in, ~4 MB/s out,
+                                1.8 MB/s round trip byte-verified
+
+The gap between 12.4 and 2.6 is not the driver: a receive cycle is
+~430us of USB and ~2.3ms of serialized IP/TCP/VM work on the same
+core, and the cycle is their SUM because the reader parses before it
+reposts. The levers, in order: overlap read with processing (a second
+buffer and the parse moved off the repost path -- approaches the
+12MB/s wire ceiling for kernel consumers), then SMP so the VM runs
+beside the network instead of inside its cycle.
+
+Two tools this bought, both permanent: `blackhole` on any ether ctl
+toggles a surgical sink (IPv4/UDP/port-9 counted and dropped, control
+plane untouched -- floods measure the wire path with nothing else in
+frame), and `rxstats` prints and resets read-size/turnaround
+accounting. The gap numbers exclude intervals over 50ms; the first
+version summed idle time between test runs into "gap" and an
+afternoon went into optimising that mirage -- including a parked-
+channel NAK scheme whose autopsy is in the git history: the NAK wake
+is the transfer DELIMITER, and every design that suppressed it
+(tick-paced re-arm, ISR fast-lane re-arm) glued aggregates beyond
+parsing. It is load-bearing; leave it.
+
+### The portable timer chain never ran (fixed)
+
+addclock0link() timers are dispatched by timerintr(), and nothing on
+this port ever called it -- clockintr went straight to hzclock. The
+whole runway was built (timersinit, todinit, a real timerset) and the
+plane never landed; randomclock never ticked once in the life of this
+port, unnoticed because the entropy pool grew a hardware source.
+clockintr now calls timerintr(u, 0), whose periodic nil-tf entry
+calls hzclock at HZ exactly as before; armtick's TVAL re-arm keeps
+the tick fixed at the millisecond, which every ms-scale periodic is
+fine with.
+
 ### OPEN: residual ~0.02% framing desync under burst
 
 Down from ~0.5% at the start of the hunt: the NAK race, the stale

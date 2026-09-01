@@ -107,6 +107,14 @@ struct Ether {
 	uchar	*rxbuf;
 	long	nrxbuf;
 	long	nacc;		/* bytes carried over between reads */
+
+	/* rx timing: where a receive cycle's time actually goes */
+	ulong	nrd;		/* reads that returned data */
+	uvlong	rdns;		/* ns inside kchanio for those */
+	uvlong	gapns;		/* ns between one read's end and the next's start */
+	uvlong	rdbytes;	/* bytes those reads returned */
+	long	rdmax;		/* largest single read */
+	int	blackhole;	/* count arrivals, deliver nothing: the sink */
 };
 
 static Ether ether[1];
@@ -166,6 +174,22 @@ etheriq(Ether *e, uchar *frame, int len)
 
 	nif = &e->nif;
 	nif->inpackets++;
+	/*
+	 * The measurement sink. With blackhole set, every frame is
+	 * counted and none is delivered -- no allocation, no queues, no
+	 * IP stack, no VM. Flood the board with UDP and read inpackets
+	 * against a clock, and what you have is the ceiling of the wire
+	 * path alone: USB, the record walk, and this counter. It exists
+	 * because every ordinary benchmark on this system terminates in
+	 * a Limbo process, and the profiler showed the network path
+	 * under six percent of busy CPU -- a claim that deserved a
+	 * number with nothing else in the frame.
+	 */
+	if(e->blackhole && len >= 38 &&
+	   frame[12] == 0x08 && frame[13] == 0x00 &&	/* IPv4 */
+	   frame[23] == 17 &&				/* UDP */
+	   frame[36] == 0 && frame[37] == 9)		/* dport 9, discard */
+		return;
 	t = (frame[12]<<8) | frame[13];
 	for(i = 0; i < nif->nfile; i++){
 		f = nif->f[i];
@@ -341,7 +365,36 @@ etherrxproc(void *a)
 		 * boundaries). That distinction is what lanunwrap's atend
 		 * decides the missing-pad question with.
 		 */
-		n = kchanio(e->inchan, e->rxbuf + e->nacc, e->burst, OREAD);
+		{
+			uvlong t0;
+			static uvlong tlast;
+
+			t0 = fastticks(nil);
+			/*
+			 * Only gaps short enough to be part of a transfer
+			 * train count. The first cut of this summed EVERY
+			 * inter-read interval, so seconds of idle between
+			 * test runs landed in "gap" and made the read path
+			 * look ten times more expensive than it was -- an
+			 * afternoon was spent optimising that mirage.
+			 */
+			if(tlast != 0){
+				uvlong g;
+
+				g = fastticks2ns(t0 - tlast);
+				if(g < 50000000ULL)
+					e->gapns += g;
+			}
+			n = kchanio(e->inchan, e->rxbuf + e->nacc, e->burst, OREAD);
+			tlast = fastticks(nil);
+			if(n > 0){
+				e->nrd++;
+				e->rdns += fastticks2ns(tlast - t0);
+				e->rdbytes += n;
+				if(n > e->rdmax)
+					e->rdmax = n;
+			}
+		}
 		if(n < 0)
 			error(Ehungup);
 		if(n == 0){
@@ -623,6 +676,24 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		 */
 		if(n >= 11 && strncmp(buf, "nonblocking", 11) == 0)
 			return n;
+		if(n >= 9 && strncmp(buf, "blackhole", 9) == 0){
+			e->blackhole ^= 1;
+			print("ether0: blackhole %s\n",
+				e->blackhole ? "on" : "off");
+			return n;
+		}
+		if(n >= 7 && strncmp(buf, "rxstats", 7) == 0){
+			print("rx: %lud reads %llud KB mean %llud B max %ld; "
+				"in-read %llud us gap %llud us (means %llud/%llud us)\n",
+				e->nrd, e->rdbytes/1024,
+				e->nrd ? e->rdbytes/e->nrd : 0, e->rdmax,
+				e->rdns/1000, e->gapns/1000,
+				e->nrd ? e->rdns/1000/e->nrd : 0,
+				e->nrd ? e->gapns/1000/e->nrd : 0);
+			e->nrd = 0; e->rdns = 0; e->gapns = 0;
+			e->rdbytes = 0; e->rdmax = 0;
+			return n;
+		}
 		if(n > 5 && strncmp(buf, "bind ", 5) == 0){
 			s = malloc(n+1);
 			if(s == nil)

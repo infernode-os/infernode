@@ -200,7 +200,27 @@ clockintr(Ureg *u)
 	 * hand-rolled version calls it during boot when there is nothing
 	 * safe to wake.
 	 */
-	hzclock(u);
+	/*
+	 * timerintr, not hzclock directly -- and the difference is every
+	 * consumer of addclock0link().
+	 *
+	 * The portable timer layer was fully initialised here
+	 * (timersinit, todinit, a real timerset) and its dispatcher was
+	 * never called: this line went straight to hzclock, so the
+	 * Timer queue -- including the periodic entry timersinit creates
+	 * whose whole purpose is to CALL hzclock -- never ran, and
+	 * every addclock0link timer on the system was silently dead.
+	 * randomclock never ticked in the life of this port; nobody
+	 * noticed because the entropy pool grew a second source. The
+	 * USB driver's channel re-arm tick is what finally needed the
+	 * chain alive.
+	 *
+	 * timerintr's timerset() programs CVAL for the earliest
+	 * deadline, and armtick() below immediately re-arms TVAL for
+	 * the fixed millisecond -- TVAL wins, so dispatch stays at HZ
+	 * granularity, which every ms-scale periodic here is fine with.
+	 */
+	timerintr(u, 0);
 
 	/*
 	 * A sampling profiler, one array index per tick.

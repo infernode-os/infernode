@@ -984,11 +984,64 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 				continue;
 			}
 			if(i & Nak){
-				if(ep->ttype == Tintr)
+				if(ep->ttype == Tintr){
 					tsleep(&up->sleep, return0, 0, ep->pollival);
-				else
+					continue;
+				}
+				if(dir == Epin && ep->ttype == Tbulk){
+					/*
+					 * A NAK wake leaves the channel LIVE
+					 * -- this controller neither halts on
+					 * NAK nor stops retrying -- and the
+					 * old "sleep a tick and go round"
+					 * answer opened a window that took a
+					 * day to find: frames arriving during
+					 * the sleep completed into the still-
+					 * enabled channel, the loop-top then
+					 * cleared the completion interrupt
+					 * unexamined, re-read hcdma as its
+					 * new baseline (silently skipping the
+					 * received bytes from the count), and
+					 * re-enabled a finished channel with
+					 * whatever hctsiz it died holding.
+					 * The symptoms were phantom reads --
+					 * repeated identical returns of bytes
+					 * nobody sent -- and mid-frame gaps
+					 * in the receive stream, surfacing as
+					 * framing errors three layers up.
+					 *
+					 * So: halt the channel FIRST, then
+					 * look at what actually happened.
+					 * No progress means the device truly
+					 * paused -- between frames, between
+					 * aggregated transfers -- and that
+					 * is both the right moment to end
+					 * the read and a boundary the record
+					 * walk above can trust. Progress
+					 * means data raced the halt, and it
+					 * must be accounted like any other
+					 * completion, never retried over.
+					 */
+					if(hc->hcchar & Chen){
+						hc->hcchar |= Chen | Chdis;
+						for(nt = 0; nt < Chandislimit; nt++){
+							if((hc->hcchar & Chen) == 0)
+								break;
+							microdelay(10);
+						}
+						if(nt >= Chandislimit)
+							print("usbotg: ep%d.%d channel will not "
+								"halt on Nak (hcchar %8.8ux)\n",
+								ep->dev->nb, ep->nb, hc->hcchar);
+						hc->hcint = Chhltd;
+					}
+					if(hc->hcdma == hcdma)
+						break;	/* a true pause; end the read */
+					goto account;	/* raced-in data: not an error */
+				} else {
 					tsleep(&up->sleep, return0, 0, 1);
-				continue;
+					continue;
+				}
 			}
 			/*
 			 * Report a run of errors a few times, then stop.
@@ -1019,6 +1072,7 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 				print("usbotg: weird hcdma %x->%x intr %x->%x\n",
 					hcdma, hc->hcdma, i, hc->hcint);
 		}
+account:
 		n = hc->hcdma - hcdma;
 		if(n == 0){
 			/*

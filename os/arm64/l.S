@@ -112,11 +112,7 @@ secel1:
 	ldr	x2, [x19]
 	mov	sp, x2
 
-	/* SMPEN before this core's caches exist; see atel1 */
-	mrs	x2, S3_1_C15_C2_1
-	orr	x2, x2, #(1 << 6)
-	msr	S3_1_C15_C2_1, x2
-	isb
+	/* SMPEN is EL3 firmware's job; see atel1 */
 
 	/* FP/SIMD on, same reasoning as core 0 */
 	mov	x2, #(3 << 20)
@@ -183,16 +179,19 @@ atel1:
 	mov	sp, x0
 
 	/*
-	 * CPUECTLR.SMPEN, before any cache is enabled. Without it a
-	 * Cortex-A53 core does not participate in coherency: caches
-	 * work, locks appear to work, and two cores quietly disagree
-	 * about memory. Set on every core, in the path it boots
-	 * through, ahead of the first cacheable access.
+	 * CPUECTLR.SMPEN is NOT set here, and must not be. Without it a
+	 * Cortex-A53 core does not participate in coherency -- but the
+	 * register is EL3-gated: at EL1 (and at EL2 unless EL3 grants
+	 * ACTLR access) the msr is UNDEFINED, and with VBAR still unset
+	 * that is a hang with no output. Real silicon enforces this;
+	 * QEMU does not model the trap, so the write looked fine under
+	 * emulation and killed the first hardware boot of the SMP
+	 * kernel before the banner. The stock Pi armstub8 sets SMPEN at
+	 * EL3 on every core before handing over, which is the only
+	 * place it can be set -- coherency is firmware's job on this
+	 * boat, and any firmware that skips it cannot be repaired from
+	 * a lower exception level anyway.
 	 */
-	mrs	x0, S3_1_C15_C2_1
-	orr	x0, x0, #(1 << 6)
-	msr	S3_1_C15_C2_1, x0
-	isb
 
 	/*
 	 * This core's Mach, in the register the whole kernel is

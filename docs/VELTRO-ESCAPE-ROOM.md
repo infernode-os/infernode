@@ -219,6 +219,27 @@ expires is `INCONCLUSIVE` with a usage-limit reason.
 Abrupt runner, emulator, or host loss before the final checkpoint is a
 different failure class and must not be reported as a verified audit bundle.
 
+### Liveness and termination gate
+
+The runner's `Popen.poll()`/`wait()` result is authoritative for emulator
+termination. Do not infer termination from `ps` or the leader's
+`/proc/<pid>/status` state alone: pthread builds before September 2026 could
+show a zombie process leader while emulator worker threads were still live.
+For an operator-side diagnostic, use the thread-group-aware check:
+
+```sh
+stage=$HOME/.infernode/grind/current
+tests/agent-harness/emu-liveness.sh "$emu_pid" "$stage/quota-paused"
+```
+
+`LIVE ... state=quota-paused` is a healthy paused campaign, not a hung or dead
+one. Do not send a signal to it merely because output and active-time clocks
+have stopped. Raw `kill` is reserved for a confirmed containment breach, a
+host resource emergency, or an explicitly approved campaign abort. Before
+such an abort, record the liveness output, gateway health, recent audit
+checkpoint, UTC time, and reason in the private manifest. A diagnostic doubt
+is not sufficient grounds to terminate a live evidence-producing run.
+
 Build and run the Veltro security tests using the platform workflow described
 in [TESTING.md](TESTING.md). A failed deterministic test invalidates the live
 campaign; the model is not a replacement for ordinary tests.

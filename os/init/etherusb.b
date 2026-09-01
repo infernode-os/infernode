@@ -626,6 +626,94 @@ init(nil: ref Draw->Context, argv: list of string)
 	#
 	if(family.name == "lan78xx")
 		lanselftest();
+
+	#
+	# Hand the data path to the kernel, when there is a kernel to
+	# hand it to.
+	#
+	# Everything above -- enumeration, the register bring-up, the
+	# self-test -- is discovery and policy, runs once, and stays
+	# here. Moving bytes is mechanism, runs per frame, and lives in
+	# #l (os/port/devether.c): measured through this process and its
+	# 9P server, a frame paid about two milliseconds of scheduling
+	# and protocol per message, which capped the network at a few
+	# percent of the wire.
+	#
+	# The endpoints are exclusive-open, so OUR fds must close before
+	# the kernel can take them -- which is also the interlock: the
+	# 9P data path and the kernel one cannot both be attached.
+	#
+	# Where #l does not exist, serve() carries on exactly as before;
+	# the namespace decides, not a build flag.
+	#
+	probe := sys->open("#l/ether0/addr", Sys->OREAD);
+	if(probe != nil){
+		probe = nil;
+		#
+		# Close the endpoints DETERMINISTICALLY, by dup'ing the
+		# null device over their descriptor numbers. Dropping the
+		# last Limbo reference ought to do it -- freeFD closes the
+		# number when the FD object is destroyed -- but measured
+		# on this kernel the destructor does not run at the
+		# assignment: the endpoint stayed inuse until process
+		# exit, and the kernel's open of it got "already in use"
+		# no matter how long the handoff waited. dup replaces the
+		# chan under the number inline, in the kernel, with no
+		# destructor in the loop. (Why =nil is not prompt here is
+		# a separate hunt -- if it is real it leaks every dropped
+		# fd on the system until its process exits.)
+		#
+		nullfd := sys->open("#c/null", Sys->ORDWR);
+		if(nullfd != nil){
+			sys->dup(nullfd.fd, bulkfd.fd);
+			if(bulkoutfd.fd != bulkfd.fd)
+				sys->dup(nullfd.fd, bulkoutfd.fd);
+		}
+		bulkfd = nil;
+		bulkoutfd = nil;
+		burst := 3116;			# two RNDIS messages' worth
+		if(family.name == "lan78xx")
+			burst = Rxburst;
+		macstr := sys->sprint("%2.2x%2.2x%2.2x%2.2x%2.2x%2.2x",
+			int mac[0], int mac[1], int mac[2],
+			int mac[3], int mac[4], int mac[5]);
+		inpath := "/usb/usb/" + inname + "/data";
+		outpath := "/usb/usb/" + outname + "/data";
+		cfd := sys->open("#l/ether0/clone", Sys->ORDWR);
+		if(cfd == nil){
+			sys->print("etherusb: cannot open #l clone: %r\n");
+			return;
+		}
+		if(sys->fprint(cfd, "bind %s %s %d %d %s %s",
+		    family.name, macstr, 100, burst, inpath, outpath) < 0){
+			sys->print("etherusb: kernel bind failed: %r\n");
+			return;
+		}
+		cfd = nil;
+		#
+		# Bind the kernel interface EXACTLY over the mount-point
+		# stub. The compiled-in root carries an empty /net/ether0
+		# for the 9P server to mount on, and a union bind of #l
+		# after /net leaves that stub in front: the walk finds the
+		# empty directory, not the netif behind it, and everything
+		# downstream reports "clone does not exist" about a tree
+		# that is entirely present. Replacing the stub itself has
+		# no order to get wrong.
+		#
+		if(sys->bind("#l/ether0", "/net/ether0", Sys->MREPL) < 0){
+			sys->print("etherusb: cannot bind #l/ether0: %r\n");
+			return;
+		}
+		sys->print("etherusb: serving /net/ether0 (kernel data path)\n");
+		#
+		# The same interface configuration the 9P path runs from
+		# mountproc: bind the ipifc, speak DHCP, install routes.
+		# /net/ether0 is the kernel's netif now, but nothing in
+		# netconfig can tell -- it opens the same names.
+		#
+		netconfig();
+		return;
+	}
 	serve();
 }
 
@@ -903,7 +991,6 @@ netconfig()
 		sys->print("etherusb: add 0.0.0.0 failed: %r\n");
 		return;
 	}
-
 	(addr, mask, gw) := dhcp();
 	if(addr == nil){
 		sys->print("etherusb: no DHCP answer; falling back to QEMU's addresses\n");
@@ -3189,6 +3276,24 @@ lansetup(): int
 	# The order matters: burst configuration before the FIFOs and MAC
 	# are enabled, so the first frame ever received is already under
 	# the regime the driver expects.
+	#
+	#
+	# Several frames per bulk IN, gathered by the device -- the
+	# configuration Linux's lan78xx has used from its first version.
+	#
+	# KNOWN DEFECT, measured and bounded: roughly 0.5% of transfers
+	# desynchronise the record walk at a transfer boundary (the
+	# device may omit the final record's padding, and a transfer
+	# ending on an exact 512-byte multiple is invisible to the host's
+	# read layer, which glues it to the next). Each desync drops one
+	# buffer's remainder; TCP retransmits and every transfer still
+	# verifies byte-identical. The Limbo driver had the same defect
+	# and printed a hardwired "framing errs: 0", so it was never
+	# seen. Alternatives measured worse: burst off scored 330-399
+	# desyncs against this configuration's 74-177, because the
+	# chip's reset defaults aggregate anyway. The real fix is
+	# zero-length-packet awareness in the DWC read path, recorded in
+	# the README.
 	#
 	if(lanwr(Lburstcap, Rxburst / 512) < 0 ||
 	   lanwr(Lbulkindly, Bindly) < 0){

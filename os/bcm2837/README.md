@@ -976,6 +976,70 @@ Three fixes, in devcons.c and the uart drainer:
 Ten consecutive scripted shell sessions pass where one in four
 survived before; the full harness is 147/147 twice over.
 
+### The Ethernet data path is in the kernel (#l)
+
+The architectural cost measured at the end of the throughput work --
+every frame crossing the Dis interpreter and a 9P transaction -- is
+gone: `os/port/devether.c` serves /net/ether0 from the kernel through
+os/port/netif.c, with the frame walk and the USB read/write loops as
+kernel processes. Board-to-host doubled to ~4MB/s; a 4MB TCP round
+trip verifies byte-identical.
+
+What stayed in Limbo is everything that runs once: enumeration, RNDIS
+negotiation, the LAN78xx register bring-up. When the device is ready,
+etherusb.b closes its endpoint fds and hands the open endpoints to #l
+with one ctl write ("bind <family> <mac> <mbps> <burst> <in> <out>");
+the endpoint paths are resolved in the writer's namespace, and
+exclusive-open endpoints are the interlock that keeps both data paths
+from ever attaching at once. Where #l does not exist the old 9P server
+still runs -- the namespace decides, not a build flag.
+
+Hunting lessons written in blood, for the next person here:
+
+- devether.reset() must be called from main.c by hand -- this kernel
+  has no chandevreset(), and an uninitialised netif is not a device
+  that fails but a directory with an empty name that walks miss.
+- The compiled-in root carries an EMPTY /net/ether0 stub for the 9P
+  mount; a union bind of #l after /net leaves the stub in front and
+  every walk lands in it. Bind #l/ether0 OVER the stub, MREPL.
+- ethermedium writes "nonblocking" to every ether ctl; netifwrite
+  rejects unknown tokens with -1, and escalating that to an error
+  unwinds the whole ipifc bind. Accept it and ignore it, as the Limbo
+  server always did.
+- Limbo `fd = nil` did NOT close the endpoint before the kernel tried
+  to take it -- the FD destructor provably did not run at the
+  assignment (the ep stayed inuse until process exit). The handoff
+  closes by sys->dup of #c/null over the descriptor, which replaces
+  the chan inline. WHY the destructor is late is an OPEN QUESTION that
+  implies every dropped fd on this kernel leaks until its process
+  exits.
+
+### OPEN: LAN78xx burst framing desynchronises ~0.5% of transfers
+
+With burst aggregation on, the record walk occasionally loses the
+stream at a transfer boundary and drops one buffer's remainder
+(counted in the stats file's "framing errs"; TCP retransmits; every
+transfer still verifies byte-identical). Both causes are understood
+and neither has a clean fix above the USB layer:
+
+- the device may omit the padding after a transfer's final record, and
+- a transfer ending on an exact 512-byte multiple produces no short
+  packet, so multitrans() glues it to the next transfer; pad-absent
+  and next-header-where-pad-should-be are then byte-identical.
+
+Every cheaper reading was implemented and measured on the board:
+clamp-always 74-177 desyncs per ~20k frames, never-clamp 183,
+stream-end-only clamp 143, burst off 330-399 (the chip's reset
+defaults aggregate regardless, and clearing MEF/BCE explicitly still
+measured worse than configured burst). The honest fix is transfer
+atomicity in the read layer: teach the DWC driver zero-length packets
+and make one read return exactly one transfer, as Linux's URB layer
+guarantees. A phantom-read signature also turned up during this hunt
+-- repeated identical 1264-byte all-zero returns from epread under
+load, consistent with the composite Chhltd|Ack|Nak interrupt path
+retrying an already-acknowledged packet -- and that is where the DWC
+investigation should start.
+
 ### Smaller things still open
 
 `sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,

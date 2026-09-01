@@ -66,6 +66,7 @@ extern Dev bootdevtab;
 extern Dev benchdevtab;
 extern Dev drawdevtab;
 extern Dev srvdevtab;
+extern Dev etherdevtab;
 
 Dev*	devtab[] =
 {
@@ -83,6 +84,7 @@ Dev*	devtab[] =
 	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
+	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	nil,
 };
 

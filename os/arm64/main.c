@@ -18,6 +18,7 @@
 extern Dev	mntdevtab;	/* #M, the 9P client */
 extern Dev	benchdevtab;	/* #b, microsecond timing */
 extern Dev	srvdevtab;	/* #s, names a Limbo program serves */
+extern Dev	etherdevtab;	/* #l, the kernel Ethernet data path */
 
 /*
  * The machine configuration os/port reads. Declared extern in dat.h and
@@ -1570,6 +1571,18 @@ probecons(void)
 	 */
 	if(srvdevtab.reset != nil)
 		srvdevtab.reset();
+
+	/*
+	 * devether's reset builds the netif file tree and the outbound
+	 * queue. Same story as devsrv above: this kernel has no
+	 * chandevreset(), and a netif that was never initialised is not
+	 * a device that fails -- it is a directory whose interface name
+	 * is empty, so the walk to ether0 misses and the Limbo driver
+	 * concludes, wrongly, that there is no kernel data path to hand
+	 * over to. Touches no hardware; belongs here.
+	 */
+	if(etherdevtab.reset != nil)
+		etherdevtab.reset();
 
 	/* run every device's init, as a real kernel does at boot */
 	chandevinit();

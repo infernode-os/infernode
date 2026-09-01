@@ -112,6 +112,39 @@ struct Ether {
 static Ether ether[1];
 
 /*
+ * The sampling profiler's buckets and readout, parked on
+ * #l/ether0/ifstats because it was an empty file nobody else used and
+ * the first question profiled was the network path. Each line is
+ * "textoffset count" (offset from the load address, 64-byte buckets);
+ * a read from offset 0 resets the counts, so two reads bracket a
+ * workload. The clock interrupt fills the buckets -- see clockintr.
+ */
+ulong profbuck[24576];
+
+static long
+profread(Chan *c, void *a, long n, vlong off)
+{
+	char *buf, *p, *e;
+	int i;
+	long r;
+
+	USED(c);
+	buf = smalloc(96*1024);
+	p = buf;
+	e = buf + 96*1024 - 32;
+	for(i = 0; i < 24576 && p < e; i++){
+		if(profbuck[i] == 0)
+			continue;
+		p += snprint(p, e-p, "%ux %lud\n", i<<6, profbuck[i]);
+	}
+	if(off == 0)
+		memset(profbuck, 0, sizeof profbuck);
+	r = readstr(off, a, n, buf);
+	free(buf);
+	return r;
+}
+
+/*
  * Hand every open conversation that asked for this type a copy.
  *
  * The predicate is netif's own: type < 0 is a sniffer and sees
@@ -546,6 +579,8 @@ etherclose(Chan *c)
 static long
 etherread(Chan *c, void *buf, long n, vlong off)
 {
+	if((c->qid.type & QTDIR) == 0 && NETTYPE(c->qid.path) == Nifstatqid)
+		return profread(c, buf, n, off);
 	return netifread(&ether[0].nif, c, buf, n, off);
 }
 

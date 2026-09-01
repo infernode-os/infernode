@@ -27,6 +27,7 @@
 #include "dat.h"
 #include "io.h"
 #include "fns.h"
+#include "../arm64/ureg.h"	/* the profiler reads u->pc */
 #include "board.h"
 
 #define ST(r)	(*(volatile u32int*)((uintptr)SYSTIMERREGS + (r)))
@@ -200,6 +201,27 @@ clockintr(Ureg *u)
 	 * safe to wake.
 	 */
 	hzclock(u);
+
+	/*
+	 * A sampling profiler, one array index per tick.
+	 *
+	 * Every tick buckets the interrupted PC at 64-byte granularity;
+	 * the ELF's symbol table turns offsets back into function names
+	 * offline. Reading #l/ether0/ifstats returns "offset count"
+	 * lines and resets the counts, so two reads bracket a workload.
+	 * This is how the question "where does the CPU actually go at
+	 * 2.4MB/s?" was answered with numbers instead of theories --
+	 * the answer (GC and scheduler, not the network path) is in the
+	 * README.
+	 */
+	{
+		extern ulong profbuck[24576];
+		ulong ix;
+
+		ix = (u->pc - 0x80000) >> 6;
+		if(ix < 24576)
+			profbuck[ix]++;
+	}
 
 	armtick();
 	return 1;

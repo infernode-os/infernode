@@ -1042,6 +1042,33 @@ Measured on the board with all of this together, 8MB transfers:
 	8MB round trip		2.17 MB/s each way, byte-identical
 	framing errs		6 per 30k frames (0.02%)
 
+### Where the CPU goes at 2.4MB/s, measured
+
+A tick-driven sampling profiler now lives in clockintr (readout on
+#l/ether0/ifstats; 64-byte buckets, offset->name via the build's ELF).
+Profiling a sustained 32MB inbound push, with the idle signature
+(excreturn/wfi) separated out, busy CPU divides roughly:
+
+    ~36%  Dis garbage collector (markheap + rungc)
+    ~27%  scheduler (ready + anyready + sched + splx)
+    ~18%  genrandom (the pool-stirring kproc)
+    < 6%  the entire network path: ptclbsum, memmove, chanio, qio
+
+The kernel data path is nearly free. What remains is the CONSUMER:
+the measurement endpoint is a Limbo cat, and its per-read allocations
+keep the collector and scheduler busy -- the same architectural line
+item as ever, now with numbers. Two parallel streams aggregate ~3MB/s
+against 2.4 for one, confirming a shared CPU ceiling rather than a
+per-stream window.
+
+Levers from here, in order of expected value: a kernel-side sink for
+measuring the wire path alone (the ~30MB/s USB2 budget is otherwise
+unobservable through a Limbo endpoint); genrandom's appetite; the
+per-packet first-halt in singleshot transfers (2 channel ops per
+transfer could be 1 if the fresh-channel Chhltd|Ack halt has a
+register cause); and the GC/scheduler costs that INFR-404's earlier
+collector work already halved once.
+
 ### OPEN: residual ~0.02% framing desync under burst
 
 Down from ~0.5% at the start of the hunt: the NAK race, the stale

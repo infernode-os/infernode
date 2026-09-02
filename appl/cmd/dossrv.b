@@ -751,6 +751,29 @@ rremove(t: ref Tmsg.Remove): ref Rmsg
 		return e(Eperm);
 	}
 
+	#
+	# A damaged entry, reached by its badent alias, is removed by
+	# zapping the DIRECTORY ENTRY ALONE. Every other word of it is
+	# garbage: its attributes cannot veto (a random DRONLY bit is
+	# not a decision anyone made), and truncfile() must not run --
+	# the start-cluster word is garbage too, and freeing a random
+	# chain through the FAT is the one way this cleanup could
+	# deepen the damage it exists to undo. Whatever clusters the
+	# entry may once have owned are deliberately leaked for an
+	# offline fsck to sweep.
+	#
+	if(getfile(f) >= 0){
+		bd := dostat(f);
+		if(len bd.name >= 7 && bd.name[0:7] == "badent-"){
+			doremove(f.xf, f.ptr);
+			putfile(f);
+			xfile(t.fid, Clunk);
+			sync();
+			return ref Rmsg.Remove(t.tag);
+		}
+		putfile(f);
+	}
+
 	# check on parent directory of file to be deleted
 	parp := getsect(f.xf, f.ptr.paddr);
 	if(parp == nil) {
@@ -876,7 +899,44 @@ dostat(f: ref Xfile): ref Sys->Dir
 	}
 	if(islong)
 		dir.name = longnamebuf;
+	fixname(dir);
 	return dir;
+}
+
+#
+# FAT damage tolerance.
+#
+# A directory entry whose name cannot legally cross Styx -- control
+# characters, '/', an empty string: the shapes an interrupted write
+# leaves behind -- used to make its whole PARENT unlistable: the
+# kernel refuses the name at dirread and the client sees "bad
+# character in file name" for the directory, hiding every healthy
+# entry beside the damaged one. Damage to one entry must cost one
+# entry. On the way out such a name is replaced by a stable alias
+# derived from the entry's on-disk location (which is exactly what
+# the qid already encodes), so the listing survives, the damaged
+# entry is VISIBLE, and walk/remove understand the alias -- rm can
+# take it out.
+#
+badentname(qp: big): string
+{
+	return sys->sprint("badent-%bux", qp);
+}
+
+fixname(dir: ref Sys->Dir)
+{
+	name := dir.name;
+	if(name == "" || name == "." || name == ".."){
+		dir.name = badentname(dir.qid.path);
+		return;
+	}
+	for(i := 0; i < len name; i++){
+		c := name[i];
+		if(c < 16r20 || c == 16r7f || c == '/'){
+			dir.name = badentname(dir.qid.path);
+			return;
+		}
+	}
 }
 
 nameok(elem: string): int
@@ -1665,7 +1725,8 @@ searchdir(f: ref Xfile, name: string, cflag: int, lflag: int): (int, ref Dosptr)
 
 			if(debug)
 				chat(sys->sprint("cmp: [%s] [%s]", buf, name));
-			if(mystrcmp(buf, name) != 0) {
+			if(mystrcmp(buf, name) != 0
+			   && name != badentname(big (addr*(Sectorsize/DOSDIRSIZE) + o/DOSDIRSIZE))) {
 				buf="";
 				continue;
 			}
@@ -1810,6 +1871,7 @@ Read:
 				longnamebuf = "";
 				islong = 0;
 			}
+			fixname(dir);
 			d := styx->packdir(*dir);
 			if(offset > 0) {
 				offset -= len d;

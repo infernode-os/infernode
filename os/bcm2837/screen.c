@@ -64,6 +64,9 @@ void	setcursor(Cursor*);
  */
 static ulong screenoff;
 
+/* diagnostic counters, printed by the S debug key: what the pointer path costs */
+ulong ncursorat, ndrawcursor, nflushscreen;
+
 static uchar*
 screenbase(void)
 {
@@ -106,7 +109,20 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	*chan = XRGB32;
 	*d = 32;
 	*width = fb->pitch / sizeof(ulong);
-	*softscreen = 0;
+	/*
+	 * "Soft" screen, although the pixels go straight into scanout
+	 * memory and nothing is ever copied: devdraw only reports the
+	 * rectangles it has drawn through flushmemscreen() for a soft
+	 * screen (addflush returns at once for a hard one), and that
+	 * report is what keeps the SOFTWARE CURSOR honest. Declared
+	 * hard, a whole desktop session produced fourteen flushes:
+	 * every window draw under the shown cursor silently invalidated
+	 * its saved patch, and each mouse move then put stale pixels
+	 * back -- a flicker that followed the cursor across whatever had
+	 * repainted last. Counted, not guessed: pointer moves in the
+	 * dozens per second, draw flushes zero.
+	 */
+	*softscreen = 1;
 
 	/*
 	 * Give the screen a pointer the moment it becomes a screen.
@@ -314,6 +330,7 @@ flushmemscreen(Rectangle r)
 	 * drawing, and a blanket discard would leave cursor-shaped
 	 * residue in the part that was not drawn over.
 	 */
+	nflushscreen++;
 	lock(&swc.l);
 	if(swc.shown && screenfb != nil){
 		stride = screenfb->pitch / sizeof(u32int);
@@ -340,6 +357,7 @@ flushmemscreen(Rectangle r)
 void
 swcursorat(int x, int y)
 {
+	ncursorat++;
 	lock(&swc.l);
 	swcursoff();
 	swc.pos.x = x;
@@ -424,6 +442,7 @@ setcursor(Cursor *c)
 void
 drawcursor(Drawcursor *c)
 {
+	ndrawcursor++;
 	int h, bpl, y, n;
 
 	lock(&swc.l);
@@ -529,6 +548,13 @@ screendump(void)
 	uartputstr("x");
 	uartputd(ch);
 	uartputstr(" pixels, base ");
+	uartputstr("  cursorat=");
+	uartputd(ncursorat);
+	uartputstr(" drawcursor=");
+	uartputd(ndrawcursor);
+	uartputstr(" flushes=");
+	uartputd(nflushscreen);
+	uartputstr("\n  base=");
 	uartputx((ulong)screenfb->base);
 	uartputstr(" stride ");
 	uartputd(stride);

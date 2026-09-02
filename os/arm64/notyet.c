@@ -67,6 +67,7 @@ extern Dev benchdevtab;
 extern Dev drawdevtab;
 extern Dev srvdevtab;
 extern Dev etherdevtab;
+extern Dev ssldevtab;
 
 Dev*	devtab[] =
 {
@@ -85,6 +86,7 @@ Dev*	devtab[] =
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
+	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	nil,
 };
 
@@ -273,9 +275,26 @@ clockcheck(void)
  * nothing on the way to a window system needs it.
  */
 extern void sysmodinit(void);
+/*
+ * getenv, for the ONE call libinterp makes: keyring.c consults
+ * CNSAMODE to decide whether to refuse non-CNSA algorithms. The
+ * hosted emulator answers from the host environment; this kernel has
+ * no environment at C level and no deployment has asked for strict
+ * mode on bare metal yet, so the answer is nil -- CNSA gating off.
+ * When a deployment wants it, the honest source is the env device
+ * (#e), read at boot; a build flag would be policy in the binary.
+ */
+char*
+getenv(char *name)
+{
+	USED(name);
+	return nil;
+}
+
 extern void drawmodinit(void);
 extern void tkmodinit(void);
 extern void mathmodinit(void);
+extern void keyringmodinit(void);
 
 void
 modinit(void)
@@ -284,6 +303,7 @@ modinit(void)
 	drawmodinit();
 	tkmodinit();
 	mathmodinit();
+	keyringmodinit();
 }
 
 

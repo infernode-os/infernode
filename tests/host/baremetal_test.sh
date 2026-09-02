@@ -221,6 +221,11 @@ build_kernel() {
         "$LIMBO" -t Draw -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/drawmod.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Tk -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/tkmod.h" 2>>"$BUILD/cc.log" || return 1
 
+        # $Keyring's C view, and $IPints' -- the bignum module keyring's
+        # public-key paths stand on. Same recipe as every other builtin.
+        "$LIMBO" -t Keyring -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/keyringmod.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t IPints -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/ipintsmod.h" 2>>"$BUILD/cc.log" || return 1
+
         # $Math, which is not optional once there are clock hands to
         # draw: appl/wm/clock.b loads it for sin and cos, and a module
         # that fails to load is a window that never opens.
@@ -379,6 +384,7 @@ build_kernel() {
             # the console to say why.
             "/mnt/acme="
             "/tmp="
+            "/usr="
 
             # Somewhere to mount a file server, which is how a native
             # Inferno is actually meant to get its userspace: upstream's
@@ -804,10 +810,31 @@ SBEOF
         case "$(basename "$f")" in
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
-        gpu.c|crypt.c|ipint.c) continue;;
+        gpu.c|crypt.c) continue;;
+        # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
         "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
+    # The crypto stack $Keyring stands on: bignums, ciphers and digests,
+    # and the key I/O helpers. All portable integer C -- the same files
+    # the hosted emulator links -- so they take the kernel's own flags,
+    # general-regs included. "os.h" is libmp's three-line shim (lib9.h,
+    # truerand, nsec; the kernel provides both), reached by putting
+    # libmp on the include path for all three. Members land in the
+    # archive, so nothing is paid for until keyringmodinit() pulls it.
+    for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
+        [[ -e "$f" ]] || continue
+        case "$(basename "$f")" in
+        # standalone test programs and demo mains, not library members
+        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
+        decodepem.c) continue;;		# wants Plan 9 libc.h; PEM is not a kernel concern
+        prng.c) continue;;		# host entropy (getentropy/urandom); the kernel's own random.c stands in
+        esac
+        o="$BUILD/crypto-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 

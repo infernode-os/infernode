@@ -142,3 +142,22 @@ genrandom(uchar *p, int n)
 	while(got < n)
 		p[got++] = 0;
 }
+
+/*
+ * libsec's entropy entry points, which its host build (prng.c) fills
+ * from getentropy/urandom. On bare metal the hardware generator is the
+ * secure source, so both delegate here -- and prngtry never fails,
+ * because there is no "no secure source" case to report.
+ */
+void
+prng(uchar *p, int n)
+{
+	genrandom(p, n);
+}
+
+int
+prngtry(uchar *p, int n)
+{
+	genrandom(p, n);
+	return 0;
+}

@@ -982,11 +982,8 @@ consclose(Chan *c)
 		break;
 
 	case Qkeyboard:
-		if(c->mode != OWRITE) {
-			qlock(&kbd.q);
-			--kbd.kbdr;
-			qunlock(&kbd.q);
-		}
+		if(c->mode != OWRITE)
+			--kbd.kbdr;	/* a single word; see the open side for why no lock */
 		break;
 
 	case Qscancode:
@@ -1013,6 +1010,7 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	int l;
 	Osenv *o;
 	int ch, eol, i;
+	uchar c1;
 	char *p, tmp[128];
 	char *cbuf = buf;
 
@@ -1027,11 +1025,19 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	case Qkeyboard:
 		return qread(kbdrawq, buf, n);
 	case Qcons:
-		qlock(&kbd.q);
-		if(waserror()) {
-			qunlock(&kbd.q);
-			nexterror();
-		}
+		/*
+		 * kbd.q is NOT held across the blocking reads below.
+		 *
+		 * Upstream holds it for the whole call, which on this board
+		 * means for ever: the serial shell sits in this read at its
+		 * prompt, and every other path that takes kbd.q -- closing
+		 * /dev/keyboard when a window exits, consctl's rawon/rawoff
+		 * as an editor starts -- blocked behind it. An exiting
+		 * window then hung in consclose holding its namespace, and
+		 * the whole desktop piled up in findmount behind THAT. The
+		 * lock guards the line buffer, so it is taken only while
+		 * the line buffer is touched.
+		 */
 		if(kbd.raw) {
 			if(qcanread(lineq))
 				n = qread(lineq, buf, n);
@@ -1044,10 +1050,20 @@ consread(Chan *c, void *buf, long n, vlong offset)
 				} while(n>0 && qcanread(kbdq));
 				n = cbuf - (char*)buf;
 			}
-		} else {
+			return n;
+		}
+		qlock(&kbd.q);
+		if(waserror()) {
+			qunlock(&kbd.q);
+			nexterror();
+		}
+		{
 			while(!qcanread(lineq)) {
-				qread(kbdq, &kbd.line[kbd.x], 1);
-				ch = kbd.line[kbd.x];
+				qunlock(&kbd.q);
+				qread(kbdq, &c1, 1);
+				qlock(&kbd.q);
+				ch = c1;
+				kbd.line[kbd.x] = ch;
 				eol = 0;
 				switch(ch){
 				case '\b':

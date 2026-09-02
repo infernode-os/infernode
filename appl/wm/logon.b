@@ -481,6 +481,19 @@ redraw()
 			dots += "\u2022";
 		screen.text(Point(fx + 6, y + 6), textcol, ZP, bodyfont, dots);
 
+		# Insertion caret after the dots. The field is the only
+		# focus on this screen and it is ALWAYS focused, but a
+		# field with no caret reads as a field that has not
+		# noticed you -- the first thing typed at it feels like
+		# a gamble. One accent-coloured bar says "type here".
+		# Position is computed from the field, not taken from
+		# text()'s return: for an empty string that return is
+		# not anchored to the field and the caret drew at the
+		# screen edge.
+		cax := fx + 6 + bodyfont.width(dots);
+		caretr := Rect((cax + 1, y + 4), (cax + 3, y + fh - 4));
+		screen.draw(caretr, accentcol, nil, ZP);
+
 		y += fh + PADDING;
 
 		# Status message (centered)

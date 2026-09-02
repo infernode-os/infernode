@@ -26,3 +26,11 @@ path=(/dis .)
 # running only the built-in root this line must be silence, not a
 # complaint about a daemon the image never promised.
 auth/secstored &
+
+# The desktop, when the userspace provides it. Backgrounded for the
+# same reason secstored's errors are dropped: this console must come
+# up as a shell no matter what the card holds, and the GUI belongs to
+# the framebuffer, not to the serial line.
+# stderr stays on the console: a dying logon must be SEEN. The
+# no-userspace case prints one open error, which is honest.
+sh /lib/lucifer/boot-baremetal.sh >[2] /dev/cons &

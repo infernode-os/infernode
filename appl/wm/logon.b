@@ -4,7 +4,16 @@ implement WmLogon;
 # InferNode Login Screen / Secstore Unlock
 #
 # Fullscreen login displayed at boot before the window manager starts.
-# Uses raw Draw (no wmclient/wmsrv needed) so it can run before lucifer.
+#
+# The form is Tk. There is no window manager yet, but Tk has never
+# needed one: it needs a window to draw in, and this allocates a
+# screen over the display and gives Tk a backed window covering it.
+# That buys everything a text field is expected to do -- click to
+# place the caret, arrow keys, Home/End, drag to select, masking --
+# and a backing store, so the panel never shows a half-painted frame.
+# The first version of this screen drew with the raw draw library and
+# hand-rolled a field that could append and backspace and nothing
+# else; on bare metal every one of its shortcuts showed.
 #
 # Shows brand image, password field, version info.
 # On Enter: unlocks secstore and loads keys into factotum.
@@ -23,6 +32,9 @@ include "sys.m";
 include "draw.m";
 	draw: Draw;
 	Display, Font, Screen, Image, Point, Rect, Pointer: import draw;
+
+include "tk.m";
+	tk: Tk;
 
 include "lucitheme.m";
 	lucitheme: Lucitheme;
@@ -53,11 +65,10 @@ WmLogon: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-ZP := Point(0, 0);
-
 IMGPATH:  con "/lib/lucifer/login-screen.png";
-IMGW:     con 300;
-IMGH:     con 205;
+BODYFONT: con "/fonts/combined/unicode.sans.14.font";
+SMALLFONT: con "/fonts/combined/unicode.sans.12.font";
+FIELDW:   con 300;
 PADDING:  con 16;
 
 # Login states
@@ -69,19 +80,15 @@ STATE_RECOVERY:		con 4;
 STATE_FIDOPIN:		con 5;
 
 display_g: ref Display;
-screen: ref Image;
-bodyfont: ref Font;
-smallfont: ref Font;
+top: ref Tk->Toplevel;
 logo_g: ref Image;	# cached brand image
 
 # Password state
 passbuf: string;
-back: ref Image;		# redraw() paints here, then copies once
 confirmbuf: string;
 savedpass: string;
 savedloginpass: string;	# secstore password held while prompting for the recovery passphrase
 current2fadkhex: string;	# 2FA data key (hex) for this session — for DK-encrypted secstore save-back
-cursor: int;
 statusmsg: string;
 state: int;
 escpending: int;
@@ -93,6 +100,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
 	draw = load Draw Draw->PATH;
+	tk = load Tk Tk->PATH;
 	bufio = load Bufio Bufio->PATH;
 	kr = load Keyring Keyring->PATH;
 	secstore = load Secstore Secstore->PATH;
@@ -110,14 +118,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			return;
 		}
 	}
-	screen = display_g.image;
-
-	bodyfont = Font.open(display_g, "/fonts/combined/unicode.sans.14.font");
-	if(bodyfont == nil)
-		bodyfont = Font.open(display_g, "*default*");
-	smallfont = Font.open(display_g, "/fonts/combined/unicode.sans.10.font");
-	if(smallfont == nil)
-		smallfont = bodyfont;
 
 	# If factotum was already started with secstore backing (e.g. headless
 	# mode with $SECSTORE_PASSWORD), skip the login screen entirely.
@@ -129,7 +129,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	passbuf = "";
 	confirmbuf = "";
 	savedpass = "";
-	cursor = 0;
 	escpending = 0;
 
 	# Load brand image once (reloading per-redraw can fail under resource pressure)
@@ -141,50 +140,123 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	if(!secstoreacctexists()) {
 		state = STATE_SETUP_PASS;
-		statusmsg = "First boot \u2014 choose a secstore password";
+		statusmsg = "First boot — choose a secstore password";
 	} else {
 		state = STATE_LOGIN;
 		statusmsg = "Enter password to unlock";
 	}
 
+	if(tk == nil || !buildform()) {
+		sys->fprint(stderr, "logon: cannot build the login form: %r\n");
+		headlessprompt();
+		return;
+	}
 	redraw();
 
-	# Read keyboard input directly from /dev/keyboard
+	# Input straight from the devices: there is no window manager to
+	# route it yet. Enter and Escape drive the state machine here;
+	# everything else is the field's business and goes to Tk.
 	kbdfd := sys->open("/dev/keyboard", Sys->OREAD);
 	if(kbdfd == nil) {
 		sys->fprint(stderr, "logon: cannot open /dev/keyboard: %r\n");
 		headlessprompt();
 		return;
 	}
+	ptrfd := sys->open("/dev/pointer", Sys->OREAD);
 
-	kbdbuf := array[12] of byte;
-	for(;;) {
-		n := sys->read(kbdfd, kbdbuf, len kbdbuf);
+	kbdch := chan of int;
+	ptrch := chan of ref Pointer;
+	pids := chan of int;
+	spawn kbdreader(kbdfd, kbdch, pids);
+	kbdpid := <-pids;
+	ptrpid := -1;
+	if(ptrfd != nil){
+		spawn ptrreader(ptrfd, ptrch, pids);
+		ptrpid = <-pids;
+	}
+
+	for(;;) alt {
+	k := <-kbdch =>
+		if(k < 0)
+			break;
+		case k {
+		'\n' or '\r' =>
+			escpending = 0;
+			passbuf = fieldtext();
+			if(handleenter())
+				break;
+			continue;
+		27 =>	# Escape
+			passbuf = fieldtext();
+			if(handleescape())
+				break;
+			continue;
+		* =>
+			escpending = 0;
+			tk->keyboard(top, k);
+			tk->cmd(top, "update");
+			continue;
+		}
+		break;
+	p := <-ptrch =>
+		tk->pointer(top, *p);
+		tk->cmd(top, "update");
+		continue;
+	}
+
+	# The readers are blocked in read; left alone they would go on
+	# eating the desktop's keystrokes after this screen is gone.
+	kill(kbdpid);
+	if(ptrpid >= 0)
+		kill(ptrpid);
+}
+
+kbdreader(fd: ref Sys->FD, out: chan of int, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	buf := array[64] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
-
-		s := string kbdbuf[0:n];
-		for(j := 0; j < len s; j++) {
-			k := s[j];
-			case k {
-			'\n' or '\r' =>
-				escpending = 0;
-				if(handleenter())
-					return;
-			27 =>	# Escape
-				if(handleescape())
-					return;
-			'\b' =>
-				escpending = 0;
-				handlebackspace();
-			* =>
-				if(k >= 16r20) {
-					escpending = 0;
-					handlechar(k);
-				}
-			}
-		}
+		s := string buf[0:n];
+		for(i := 0; i < len s; i++)
+			out <-= s[i];
 	}
+	out <-= -1;
+}
+
+ptrreader(fd: ref Sys->FD, out: chan of ref Pointer, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	buf := array[64] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s := string buf[0:n];
+		if(len s < 2 || s[0] != 'm')
+			continue;
+		(nf, f) := sys->tokenize(s[1:], " ");
+		if(nf < 3)
+			continue;
+		x := int hd f; f = tl f;
+		y := int hd f; f = tl f;
+		b := int hd f;
+		out <-= ref Pointer(b, Point(x, y), 0);
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+fieldtext(): string
+{
+	return tk->cmd(top, ".f.pw get");
 }
 
 # Returns 1 if login screen should exit
@@ -206,7 +278,7 @@ handleenter(): int
 
 	STATE_SETUP_CONFIRM =>
 		if(passbuf != savedpass) {
-			statusmsg = "Passwords don't match \u2014 try again";
+			statusmsg = "Passwords don't match — try again";
 			passbuf = "";
 			savedpass = "";
 			state = STATE_SETUP_PASS;
@@ -329,148 +401,142 @@ handleescape(): int
 	}
 }
 
-handlebackspace()
+# A Tk colour from a packed lucitheme colour (0xRRGGBBAA).
+tkcol(c: int): string
 {
-	if(len passbuf > 0) {
-		passbuf = passbuf[0:len passbuf - 1];
-		redraw();
+	return sys->sprint("#%06x", (c >> 8) & 16rffffff);
+}
+
+#
+# The form. A screen over the display, a backed window covering it,
+# and the widgets; redraw() decides which of them show.
+#
+buildform(): int
+{
+	di := display_g.image;
+
+	bg := int 16r1a1a1aff;
+	input := int 16r2a2a2aff;
+	accent := int 16rff5500ff;
+	text := int 16rffffffff;
+	dim := int 16r666666ff;
+	red := int 16rff4444ff;
+	if(lucitheme != nil){
+		th := lucitheme->gettheme();
+		if(th != nil){
+			bg = th.bg;
+			input = th.input;
+			accent = th.accent;
+			text = th.text;
+			dim = th.dim;
+			red = th.red;
+		}
 	}
+
+	scr := Screen.allocate(di, display_g.color(bg), 0);
+	if(scr == nil)
+		return 0;
+	di.draw(di.r, scr.fill, nil, scr.fill.r.min);
+	win := scr.newwindow(di.r, Draw->Refbackup, bg);
+	if(win == nil)
+		return 0;
+
+	top = tk->toplevel(display_g, "-bd 0 -bg " + tkcol(bg));
+	if(top == nil)
+		return 0;
+	top.screenr = di.r;
+	e := tk->putimage(top, ".", win, nil);
+	if(e != nil){
+		sys->fprint(stderr, "logon: tk window: %s\n", e);
+		return 0;
+	}
+
+	cmds := array[] of {
+		". configure -width " + string di.r.dx() + " -height " + string di.r.dy(),
+		"pack propagate . 0",
+		"frame .f -bd 0 -bg " + tkcol(bg),
+		"label .f.prompt -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + BODYFONT,
+		"entry .f.pw -show • -width " + string FIELDW + " -bd 0 -relief flat"
+			+ " -bg " + tkcol(input) + " -fg " + tkcol(text)
+			+ " -highlightthickness 1 -highlightcolor " + tkcol(accent)
+			+ " -selectbackground " + tkcol(accent)
+			+ " -font " + BODYFONT,
+		"label .f.status -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + BODYFONT,
+		"label .f.err -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(red) + " -font " + BODYFONT,
+		"label .f.choice -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text) + " -font " + BODYFONT,
+		"label .f.warn1 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT
+			+ " -text {Keys and secrets will not be available.}",
+		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT
+			+ " -text {AI integration may not work.}",
+		"frame .b -bd 0 -bg " + tkcol(bg),
+		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT,
+		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT,
+		"pack .b.version .b.copy -side top",
+		"pack .b -side bottom -pady " + string PADDING,
+		"pack .f -expand 1",
+	};
+	for(i := 0; i < len cmds; i++){
+		e = tk->cmd(top, cmds[i]);
+		if(e != nil && e[0] == '!')
+			sys->fprint(stderr, "logon: tk: %s: %s\n", cmds[i], e);
+	}
+
+	if(logo_g != nil){
+		# The brand image is RGBA. Composite it over the background
+		# here, once, and hand Tk an opaque image of known geometry.
+		flat := display_g.newimage(Rect((0, 0), (logo_g.r.dx(), logo_g.r.dy())), di.chans, 0, bg);
+		if(flat != nil){
+			flat.draw(flat.r, logo_g, nil, logo_g.r.min);
+			logo_g = flat;
+		}
+		tk->cmd(top, "image create bitmap logo");
+		tk->putimage(top, "logo", logo_g, nil);
+		tk->cmd(top, "label .f.logo -bd 0 -image logo -bg " + tkcol(bg));
+	}
+	# There is no window manager to say so: this window has the keyboard.
+	tk->cmd(top, "focus -global 1");
+
+	version := rf("/dev/sysctl");
+	if(version == nil)
+		version = brandname();
+	tk->cmd(top, ".b.version configure -text " + tk->quote(version));
+	tk->cmd(top, ".b.copy configure -text " + tk->quote(brandcopyright()));
+	return 1;
 }
 
-handlechar(k: int)
-{
-	passbuf[len passbuf] = k;
-	redraw();
-}
-
-# Build a Draw colour from a packed lucitheme colour. lucitheme stores each
-# colour as 0xRRGGBBAA with the alpha byte always FF, so drop the low byte
-# and take the top three (a 0xRRGGBB shift would read the alpha as blue).
-rgbint(c: int): ref Image
-{
-	return display_g.rgb((c >> 24) & 16rff, (c >> 16) & 16rff, (c >> 8) & 16rff);
-}
-
+#
+# Show the state: which widgets are packed and what they say. Every
+# state change in the handlers ends by calling this.
+#
 redraw()
 {
-	if(screen == nil)
+	if(top == nil)
 		return;
 
-	r := screen.r;
+	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2"}; w != nil; w = tl w)
+		tk->cmd(top, "pack forget " + hd w);
 
-	#
-	# Draw into a backing image and copy it to the screen in one pass.
-	# On bare metal the screen IS the scanout memory: painting the
-	# background and then the logo and text straight into it shows
-	# the panel each intermediate state -- a visible flicker on every
-	# keystroke. Hosted never showed it because a window system's
-	# backing store hid the intermediate states. Lucifer's own windows
-	# have that store; this screen runs before any of that exists, so
-	# it keeps its own.
-	#
-	if(back == nil || !back.r.eq(r))
-		back = display_g.newimage(r, screen.chans, 0, Draw->Black);
-	dst := screen;
-	if(back != nil)
-		dst = back;
-	cx := (r.min.x + r.max.x) / 2;
-	cy := (r.min.y + r.max.y) / 2;
-
-	# Theme palette. logon runs very early in boot, so if lucitheme is
-	# unavailable we fall back to the historical hardcoded colours and
-	# never block login. gettheme() itself substitutes Brimstone defaults
-	# for any missing key, so a loaded module always yields a full palette.
-	th: ref Lucitheme->Theme;
-	if(lucitheme != nil)
-		th = lucitheme->gettheme();
-	bgcol, fieldbg, accentcol, textcol, dimcol, redcol: ref Image;
-	if(th != nil) {
-		bgcol     = rgbint(th.bg);
-		fieldbg   = rgbint(th.input);
-		accentcol = rgbint(th.accent);
-		textcol   = rgbint(th.text);
-		dimcol    = rgbint(th.dim);
-		redcol    = rgbint(th.red);
-	} else {
-		bgcol     = display_g.rgb(16r1a, 16r1a, 16r1a);
-		fieldbg   = display_g.rgb(16r2a, 16r2a, 16r2a);
-		accentcol = display_g.rgb(16rff, 16r55, 16r00);
-		textcol   = display_g.rgb(16rff, 16rff, 16rff);
-		dimcol    = display_g.rgb(16r66, 16r66, 16r66);
-		redcol    = display_g.rgb(16rff, 16r44, 16r44);
-	}
-
-	# Background
-	dst.draw(r, bgcol, nil, ZP);
-
-	# Field dimensions (declared early so we can size the centered group)
-	fh := bodyfont.height + 12;
-	fw := 300;
-
-	# Total height of the logo + prompt + field + status group. The
-	# status line below the field is part of the visible group, so
-	# include it when present — otherwise the group's visual centroid
-	# sits below cy and the grouping reads as too low.
-	grouph := 0;
 	if(logo_g != nil)
-		grouph += logo_g.r.dy() + PADDING * 2;
-	else
-		grouph += PADDING * 4;
-	grouph += bodyfont.height + 4;	# prompt + spacing
-	grouph += fh;			# password field
-	if(state != STATE_LOGIN_FAILED && statusmsg != nil && statusmsg != "")
-		grouph += PADDING + bodyfont.height;	# gap + status line
-
-	# Small upward optical bias: the bottom-anchored version/copyright
-	# adds visual weight near r.max.y, so pure geometric centre reads
-	# as low. Nudging up by ~1/24 of the viewport balances it.
-	y := cy - grouph / 2 - r.dy() / 24;
-	if(y < r.min.y + PADDING)
-		y = r.min.y + PADDING;
-
-	# Draw cached brand image (centered)
-	if(logo_g != nil) {
-		lw := logo_g.r.dx();
-		lh := logo_g.r.dy();
-		lx := cx - lw / 2;
-		dst.draw(Rect((lx, y), (lx + lw, y + lh)), logo_g, nil, logo_g.r.min);
-		y += lh + PADDING * 2;
-	} else
-		y += PADDING * 4;
+		tk->cmd(top, "pack .f.logo -side top -pady " + string PADDING);
 
 	if(state == STATE_LOGIN_FAILED) {
 		# Failed state: show error and choices, no password field
-
-		# Error message
 		errline := statusmsg;
-		# Split on \n — first line is the error, second is the choices
-		nl := -1;
+		choiceline := "";
 		for(si := 0; si < len errline; si++)
-			if(errline[si] == '\n') { nl = si; break; }
-		if(nl >= 0) {
-			ew := bodyfont.width(errline[0:nl]);
-			dst.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline[0:nl]);
-			y += bodyfont.height + PADDING;
-			choiceline := errline[nl+1:];
-			cw2 := bodyfont.width(choiceline);
-			dst.text(Point(cx - cw2 / 2, y), textcol, ZP, bodyfont, choiceline);
-			y += bodyfont.height + PADDING;
-		} else {
-			ew := bodyfont.width(errline);
-			dst.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline);
-			y += bodyfont.height + PADDING;
+			if(errline[si] == '\n') {
+				choiceline = errline[si+1:];
+				errline = errline[0:si];
+				break;
+			}
+		tk->cmd(top, ".f.err configure -text " + tk->quote(errline));
+		tk->cmd(top, "pack .f.err -side top -pady 8");
+		if(choiceline != "") {
+			tk->cmd(top, ".f.choice configure -text " + tk->quote(choiceline));
+			tk->cmd(top, "pack .f.choice -side top -pady 8");
 		}
-
-		# Warning about consequences
-		warn := "Keys and secrets will not be available.";
-		ww := smallfont.width(warn);
-		dst.text(Point(cx - ww / 2, y), dimcol, ZP, smallfont, warn);
-		y += smallfont.height;
-		warn2 := "AI integration may not work.";
-		ww2 := smallfont.width(warn2);
-		dst.text(Point(cx - ww2 / 2, y), dimcol, ZP, smallfont, warn2);
+		tk->cmd(top, "pack .f.warn1 .f.warn2 -side top");
 	} else {
-		# Normal states: show prompt + password field
 		prompt := "Password:";
 		case state {
 		STATE_SETUP_PASS =>
@@ -482,61 +548,17 @@ redraw()
 		STATE_FIDOPIN =>
 			prompt = "Security key PIN:";
 		}
-		pw := bodyfont.width(prompt);
-		dst.text(Point(cx - pw / 2, y), dimcol, ZP, bodyfont, prompt);
-		y += bodyfont.height + 4;
-
-		# Field background (centered)
-		fx := cx - fw / 2;
-		fieldr := Rect((fx, y), (fx + fw, y + fh));
-		dst.draw(fieldr, fieldbg, nil, ZP);
-		dst.border(fieldr, 1, accentcol, ZP);
-
-		# Masked password (dots)
-		dots := "";
-		for(i := 0; i < len passbuf; i++)
-			dots += "\u2022";
-		dst.text(Point(fx + 6, y + 6), textcol, ZP, bodyfont, dots);
-
-		# Insertion caret after the dots. The field is the only
-		# focus on this screen and it is ALWAYS focused, but a
-		# field with no caret reads as a field that has not
-		# noticed you -- the first thing typed at it feels like
-		# a gamble. One accent-coloured bar says "type here".
-		# Position is computed from the field, not taken from
-		# text()'s return: for an empty string that return is
-		# not anchored to the field and the caret drew at the
-		# screen edge.
-		cax := fx + 6 + bodyfont.width(dots);
-		caretr := Rect((cax + 1, y + 4), (cax + 3, y + fh - 4));
-		dst.draw(caretr, accentcol, nil, ZP);
-
-		y += fh + PADDING;
-
-		# Status message (centered)
-		if(statusmsg != nil && statusmsg != "") {
-			sw := bodyfont.width(statusmsg);
-			dst.text(Point(cx - sw / 2, y), dimcol, ZP, bodyfont, statusmsg);
-		}
+		tk->cmd(top, ".f.prompt configure -text " + tk->quote(prompt));
+		tk->cmd(top, "pack .f.prompt -side top -pady 2");
+		if(passbuf == "")
+			tk->cmd(top, ".f.pw delete 0 end");
+		tk->cmd(top, "pack .f.pw -side top");
+		tk->cmd(top, ".f.status configure -text " + tk->quote(statusmsg));
+		if(statusmsg != nil && statusmsg != "")
+			tk->cmd(top, "pack .f.status -side top -pady " + string PADDING);
+		tk->cmd(top, "focus .f.pw");
 	}
-
-	# Build info at bottom (dim, small)
-	by := r.max.y - smallfont.height * 2 - PADDING;
-
-	version := rf("/dev/sysctl");
-	if(version == nil)
-		version = brandname();
-	vw := smallfont.width(version);
-	dst.text(Point(cx - vw / 2, by), dimcol, ZP, smallfont, version);
-	by += smallfont.height + 2;
-
-	ctext := brandcopyright();
-	cw := smallfont.width(ctext);
-	dst.text(Point(cx - cw / 2, by), dimcol, ZP, smallfont, ctext);
-
-	if(back != nil)
-		screen.draw(r, back, nil, r.min);
-	screen.flush(Draw->Flushnow);
+	tk->cmd(top, "update");
 }
 
 # First boot: create secstore account, then unlock

@@ -500,7 +500,7 @@ decode(k, mod: int): int
 	16r49 =>	return 16rE063;		# Insert
 	16r4A =>	return 16rE010;		# Home
 	16r4B =>	return 16rE016;		# Page Up
-	16r4C =>	return 16rE064;		# Delete (forward)
+	16r4C =>	return 16r7F;		# Delete (forward): DEL, as the hosted emulator sends it and Tk's entry binds it
 	16r4D =>	return 16rE011;		# End
 	16r4E =>	return 16rE017;		# Page Down
 	16r4F =>	return 16rE015;		# Right

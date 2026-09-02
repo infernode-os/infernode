@@ -45,6 +45,7 @@ BASE="http://127.0.0.1:$PORT"
 out="$(curl -sf "$BASE/health")"
 echo "$out" | grep -q '"backend": "mock"' || fail "health: wrong backend ($out)"
 echo "$out" | grep -q '"held_turns": 0' || fail "health: held_turns missing ($out)"
+echo "$out" | grep -q '"idle_timeout_seconds": 300' || fail "health: idle timeout missing ($out)"
 pass "health reports mock backend"
 
 # 2. /v1/models lists the aliases llmsrv's model picker shows
@@ -145,20 +146,36 @@ class Proc:
     returncode = None
     killed = False
     waited = False
-    async def communicate(self, data):
-        await asyncio.Event().wait()
+    pid = 12345
+    def __init__(self):
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self.stdin = self.Stdin()
+        self.exited = asyncio.Event()
+    class Stdin:
+        def write(self, data):
+            pass
+        async def drain(self):
+            pass
+        def close(self):
+            pass
     def kill(self):
         self.killed = True
         self.returncode = -9
+        self.exited.set()
     async def wait(self):
         self.waited = True
+        await self.exited.wait()
+        return self.returncode
 
 async def check():
     proc = Proc()
     async def create(*args, **kwargs):
         return proc
     m.asyncio.create_subprocess_exec = create
+    m.os.killpg = lambda pid, sig: proc.kill()
     task = asyncio.create_task(m.run_codex("default", "prompt", None))
+    await asyncio.sleep(0)
     await asyncio.sleep(0)
     task.cancel()
     try:
@@ -372,6 +389,45 @@ assert "-m" not in argv, argv
 PY
 pass "codex exec argv is sandboxed and stdin-fed"
 
+# A CLI that starts a turn and then stops producing events must not consume the
+# rest of a child campaign deadline. The gate kills its whole process group and
+# returns a terminal error while retaining the longer total limit for active
+# extended-reasoning turns.
+python3 - "$ROOT" <<'PY' || fail "idle Codex process was not reaped"
+import asyncio
+import importlib.util
+import os
+import stat
+import sys
+import tempfile
+
+root = sys.argv[1]
+with tempfile.TemporaryDirectory() as td:
+    fake = os.path.join(td, "fake-codex")
+    with open(fake, "w") as stream:
+        stream.write("#!/bin/sh\ncat >/dev/null\nprintf '{\\\"type\\\":\\\"turn.started\\\"}\\n'\nsleep 30\n")
+    os.chmod(fake, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    os.environ["CODEX_GATE_BIN"] = fake
+    os.environ["CODEX_GATE_TIMEOUT"] = "5"
+    os.environ["CODEX_GATE_IDLE_TIMEOUT"] = "0.1"
+    os.environ["CODEX_GATE_WORKDIR"] = td
+    spec = importlib.util.spec_from_file_location(
+        "codex_gate_idle", root + "/tools/codex-gate/codex_gate.py")
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+
+    async def check():
+        try:
+            await gate.run_codex("default", "prompt", None)
+        except gate.CodexError as error:
+            assert "IDLE_TIMEOUT" in str(error), error
+        else:
+            raise AssertionError("hung CLI returned")
+
+    asyncio.run(check())
+PY
+pass "silent Codex turns fail within the idle deadline"
+
 # 10. Subscription guard: the gate serves the host's `codex login`, never an
 #    API key. It refuses to start while OPENAI_API_KEY is set (which the CLI
 #    can prefer over the ChatGPT sign-in), and never passes one to the child.
@@ -580,6 +636,8 @@ for requirements, expect in (
         ({"backend": "codex-cli"}, "backend"),
         ({"hardened": True, "backend": "mock"}, None),
         ({"quota_recovery": True, "backend": "mock"}, None),
+        ({"idle_timeout_max": 300, "backend": "mock"}, None),
+        ({"idle_timeout_max": 299, "backend": "mock"}, "idle timeout"),
         ({"disabled_features": ["plugins"], "backend": "mock"}, None),
         ({"disabled_features": ["no_such_feature"], "backend": "mock"}, "does not disable"),
         ({"codex_version": "codex-cli 9.9.9", "backend": "mock"}, "pins")):

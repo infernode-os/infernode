@@ -102,6 +102,9 @@ All endpoints bind `127.0.0.1` only.
   `CODEX_GATE_MOCK=1` (deterministic test backend, no CLI, no billing).
 - `held_turns` — always 0 here (see above); present so monitoring can treat
   both gates alike.
+- `turn_timeout_seconds` / `idle_timeout_seconds` — the total and no-output
+  deadlines applied to each Codex process. Escape-room preflight rejects a
+  gateway whose idle deadline is disabled or exceeds the campaign maximum.
 - `stateless` / `session_stateless` — the HTTP and CLI session contract only.
   They make no claim that the isolated Codex home remains empty.
 - `hardened`, `codex_version`, `exec_flags`, `disabled_features`,
@@ -146,6 +149,7 @@ Config (env, read at start):
 | `CODEX_GATE_MODEL` | *(empty)* | model when the request names none; empty = let the CLI use its own configured default (no `-m` passed) |
 | `CODEX_GATE_MODELS` | `default` | advertised on `/v1/models`; `default` omits `codex -m` so the CLI chooses its configured current model |
 | `CODEX_GATE_TIMEOUT` | `900` | seconds one `codex exec` may run |
+| `CODEX_GATE_IDLE_TIMEOUT` | `300` | seconds a `codex exec` may produce no stdout/stderr before its process group is killed; `0` disables this deadline |
 | `CODEX_GATE_HEARTBEAT` | `30` | seconds between protocol-valid SSE comments while `codex exec` is still running; keep below the caller's no-progress timeout |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
 | `CODEX_GATE_QUOTA_MAX_WAIT` | `21600` | maximum seconds to preserve and retry a usage-limit-paused request; `0` returns a structured 429 immediately |

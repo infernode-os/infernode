@@ -54,6 +54,7 @@
 #   CODEX_GATE_MODEL      default model; empty = let the CLI use its own
 #   CODEX_GATE_MODELS     comma-separated list advertised on /v1/models
 #   CODEX_GATE_TIMEOUT    seconds one `codex exec` may run (default 900)
+#   CODEX_GATE_IDLE_TIMEOUT seconds with no CLI output before abort (default 300)
 #   CODEX_GATE_HEARTBEAT  seconds between SSE keepalives (default 30)
 #   CODEX_GATE_CONCURRENCY  max simultaneous codex processes (default 4)
 #   CODEX_GATE_QUOTA_MAX_WAIT max seconds to preserve/retry a quota-paused turn
@@ -108,7 +109,8 @@ MOCK_ERROR_SYSTEM_MATCH = os.environ.get(
     "CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH", "")
 CODEX_BIN = os.environ.get("CODEX_GATE_BIN", "codex")
 DEFAULT_MODEL = os.environ.get("CODEX_GATE_MODEL", "")
-EXEC_TIMEOUT = float(os.environ.get("CODEX_GATE_TIMEOUT", "900"))
+EXEC_TIMEOUT = max(0.05, float(os.environ.get("CODEX_GATE_TIMEOUT", "900")))
+IDLE_TIMEOUT = max(0.0, float(os.environ.get("CODEX_GATE_IDLE_TIMEOUT", "300")))
 HEARTBEAT = max(0.05, float(os.environ.get("CODEX_GATE_HEARTBEAT", "30")))
 CONCURRENCY = int(os.environ.get("CODEX_GATE_CONCURRENCY", "4"))
 SANDBOX = os.environ.get("CODEX_GATE_SANDBOX", "read-only")
@@ -942,27 +944,21 @@ async def run_codex(model, prompt, schema):
         argv = build_argv(model, schema_path, last_path, prompt)
         log.debug("exec: %s", " ".join(argv))
         try:
+            process_group = {"start_new_session": True} if os.name == "posix" else {}
             proc = await asyncio.create_subprocess_exec(
                 *argv, cwd=WORKDIR, env=child_env(),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE)
+                stderr=asyncio.subprocess.PIPE,
+                **process_group)
         except FileNotFoundError:
             raise CodexError("codex CLI not found (%s) — install it or set "
                              "CODEX_GATE_BIN" % CODEX_BIN)
         try:
-            out, err = await asyncio.wait_for(
-                proc.communicate(prompt.encode()), timeout=EXEC_TIMEOUT)
+            out, err = await communicate_with_deadlines(proc, prompt.encode())
         except asyncio.CancelledError:
-            if proc.returncode is None:
-                proc.kill()
-            await proc.wait()
+            await kill_process_group(proc)
             raise
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise CodexError("codex exec exceeded CODEX_GATE_TIMEOUT (%.0fs)"
-                             % EXEC_TIMEOUT)
         finally:
             # The CLI may have changed its isolated home even on failure.
             _home_inventory_cache = None
@@ -998,6 +994,96 @@ async def run_codex(model, prompt, schema):
             raise CodexError(stderr.strip().splitlines()[-1])
         return text, usage
     raise CodexError("codex exec failed")
+
+
+async def capture_output(stream, chunks, progress):
+    while True:
+        data = await stream.read(8192)
+        if not data:
+            return
+        chunks.append(data)
+        progress.put_nowait(1)
+
+
+async def feed_input(stream, data):
+    try:
+        stream.write(data)
+        await stream.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        stream.close()
+
+
+async def kill_process_group(proc):
+    if proc.returncode is None:
+        try:
+            if os.name == "posix":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except OSError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    await proc.wait()
+
+
+async def communicate_with_deadlines(proc, input_data):
+    """Capture CLI output while enforcing total and no-output deadlines."""
+    out_chunks, err_chunks = [], []
+    progress = asyncio.Queue()
+    readers = [
+        asyncio.create_task(capture_output(proc.stdout, out_chunks, progress)),
+        asyncio.create_task(capture_output(proc.stderr, err_chunks, progress)),
+    ]
+    loop = asyncio.get_running_loop()
+    total_deadline = loop.time() + EXEC_TIMEOUT
+    idle_deadline = loop.time() + IDLE_TIMEOUT if IDLE_TIMEOUT > 0 else total_deadline
+    input_task = asyncio.create_task(feed_input(proc.stdin, input_data))
+    wait_task = asyncio.create_task(proc.wait())
+    progress_task = None
+    try:
+        while not wait_task.done():
+            now = loop.time()
+            remaining = min(total_deadline - now, idle_deadline - now)
+            if remaining <= 0:
+                break
+            progress_task = asyncio.create_task(progress.get())
+            done, _ = await asyncio.wait(
+                (wait_task, progress_task), timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED)
+            if progress_task in done:
+                idle_deadline = loop.time() + IDLE_TIMEOUT
+                progress_task = None
+            elif progress_task is not None:
+                progress_task.cancel()
+                progress_task = None
+
+        if not wait_task.done():
+            now = loop.time()
+            idle = IDLE_TIMEOUT > 0 and idle_deadline <= now and total_deadline > now
+            await kill_process_group(proc)
+            if idle:
+                raise CodexError(
+                    "codex exec produced no output for CODEX_GATE_IDLE_TIMEOUT (%.0fs)"
+                    % IDLE_TIMEOUT)
+            raise CodexError("codex exec exceeded CODEX_GATE_TIMEOUT (%.0fs)"
+                             % EXEC_TIMEOUT)
+        await asyncio.gather(*readers)
+        return b"".join(out_chunks), b"".join(err_chunks)
+    finally:
+        if progress_task is not None:
+            progress_task.cancel()
+        if not wait_task.done():
+            wait_task.cancel()
+        if not input_task.done():
+            input_task.cancel()
+        for task in readers:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(input_task, *readers, return_exceptions=True)
 
 
 async def codex_turn(model, system_prompt, prompt, tooldefs):
@@ -1163,6 +1249,8 @@ async def health(request):
         "stateless": True,
         "session_stateless": True,
         "quota_recovery": QUOTA_MAX_WAIT > 0,
+        "turn_timeout_seconds": EXEC_TIMEOUT,
+        "idle_timeout_seconds": IDLE_TIMEOUT,
         "state": state,
         "quota": {
             "paused_turns": len(_quota_pauses),

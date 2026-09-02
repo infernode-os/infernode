@@ -898,6 +898,12 @@ def gateway_preflight(url, model, requirements):
     if requirements.get("quota_recovery") and \
             health.get("quota_recovery") is not True:
         raise RuntimeError("gateway does not support bounded quota recovery")
+    idle_max = requirements.get("idle_timeout_max")
+    if idle_max is not None:
+        idle = health.get("idle_timeout_seconds")
+        if not isinstance(idle, (int, float)) or idle <= 0 or idle > idle_max:
+            raise RuntimeError("gateway idle timeout %r exceeds campaign maximum %r"
+                               % (idle, idle_max))
     # The gateway's own CLI surface is an experimental variable (INFR-413).
     # A campaign that does not pin it is not reproducible, so a scenario file
     # can require the pinning and name the features it must cover.

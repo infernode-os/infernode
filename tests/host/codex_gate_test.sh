@@ -619,35 +619,4 @@ echo "$out" | grep -q '"quota_recovery": true' || fail "health: quota recovery n
 echo "$out" | grep -q '"session_stateless": true' || fail "health: session statelessness not explicit ($out)"
 pass "health reports the pinned CLI profile"
 
-# 14. grind.py's gateway preflight refuses an unpinned gateway.
-python3 - "$ROOT" "$PORT" <<'PY' || fail "grind gateway preflight"
-import importlib.util
-import sys
-
-root, port = sys.argv[1], sys.argv[2]
-spec = importlib.util.spec_from_file_location(
-    "grind", root + "/tests/agent-harness/grind.py")
-grind = importlib.util.module_from_spec(spec); spec.loader.exec_module(grind)
-
-url = "http://127.0.0.1:%s/v1" % port
-# The mock backend is not codex-cli, so the escape-room requirement rejects it
-# before anything else — that guard already existed and must keep working.
-for requirements, expect in (
-        ({"backend": "codex-cli"}, "backend"),
-        ({"hardened": True, "backend": "mock"}, None),
-        ({"quota_recovery": True, "backend": "mock"}, None),
-        ({"idle_timeout_max": 300, "backend": "mock"}, None),
-        ({"idle_timeout_max": 299, "backend": "mock"}, "idle timeout"),
-        ({"disabled_features": ["plugins"], "backend": "mock"}, None),
-        ({"disabled_features": ["no_such_feature"], "backend": "mock"}, "does not disable"),
-        ({"codex_version": "codex-cli 9.9.9", "backend": "mock"}, "pins")):
-    try:
-        grind.gateway_preflight(url, "default", requirements)
-    except RuntimeError as e:
-        assert expect and expect in str(e), (requirements, e)
-    else:
-        assert expect is None, (requirements, "was accepted")
-PY
-pass "grind preflight rejects a gateway that is not pinned as required"
-
 echo "=== codex-gate mock-mode tests: all green ==="

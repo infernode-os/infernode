@@ -1261,8 +1261,8 @@ async def health(request):
         },
     }
     # The pinned CLI surface (INFR-413). A campaign records this verbatim, and
-    # grind.py's gateway preflight refuses to start a trial against a gateway
-    # that is not running the profile the scenario asked for.
+    # the external escape-room harness refuses to start a trial against a
+    # gateway that is not running the profile the scenario asked for.
     body.update(PROFILE)
     home = os.environ.get("CODEX_GATE_CODEX_HOME")
     if home and not MOCK:

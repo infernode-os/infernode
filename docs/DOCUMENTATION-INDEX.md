@@ -68,7 +68,7 @@
 |----------|-------------|
 | [SECURITY.md](../SECURITY.md) | Security vulnerability reporting policy |
 | [SECURITY.md (Veltro)](../appl/veltro/SECURITY.md) | Veltro agent namespace security model (v3) |
-| [VELTRO-ESCAPE-ROOM.md](VELTRO-ESCAPE-ROOM.md) | Repeatable live adversarial-model protocol for testing Veltro namespace containment |
+| [InferNode Escape Room](https://github.com/infernode-os/infernode-escape-room) | External live adversarial-model protocol and campaign harness for testing namespace containment |
 | [NAMESPACE_SECURITY_REVIEW.md](NAMESPACE_SECURITY_REVIEW.md) | Namespace security deep analysis |
 | [VELTRO_NAMESPACE_SECURITY.md](VELTRO_NAMESPACE_SECURITY.md) | Veltro namespace security details |
 

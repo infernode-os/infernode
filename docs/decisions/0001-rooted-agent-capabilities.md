@@ -180,8 +180,10 @@ The implementation is not complete until automated tests demonstrate:
 - delegated child actions appear in the verified audit timeline; and
 - private evidence modes and public redaction are deterministic.
 
-The live escape-room traversal regression remains a release gate. Unit and
-emulator tests are necessary but do not replace an end-to-end adversarial run.
+The external
+[escape-room campaign](https://github.com/infernode-os/infernode-escape-room)
+remains a release criterion. Unit and emulator tests are necessary but do not
+replace an end-to-end adversarial run.
 
 ## Rollout
 

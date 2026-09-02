@@ -110,9 +110,10 @@ dispositions, noreturn FPs); tracked, not silent.
   universal backstop.
 - **Pinned dependencies:** CI actions are pinned to commit SHAs (see `release.yml`), not
   floating tags — a CM-2/CM-7 supply-integrity property.
-- **Ring-fence guard:** CI fails the build if testing-only harness files (`serve-agent*`,
-  `*agent-harness*`) leak into a release artifact (`CLAUDE.md` "Ring-fence rule";
-  `release.yml`, `ci.yml`). A configuration-baseline control enforced in CI.
+- **Ring-fence guard:** CI fails the build if external escape-room harness files
+  (`serve-agent*`, `*agent-harness*`) enter the product tree or a release
+  artifact (`CLAUDE.md` "External harness ring-fence"; `release.yml`,
+  `ci.yml`). A configuration-baseline control enforced in CI.
 
 ### 5.SR — Supply Chain Risk Management
 The release pipeline (`.github/workflows/release.yml`) produces, for every artifact:

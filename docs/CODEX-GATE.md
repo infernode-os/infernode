@@ -109,9 +109,11 @@ All endpoints bind `127.0.0.1` only.
   They make no claim that the isolated Codex home remains empty.
 - `hardened`, `codex_version`, `exec_flags`, `disabled_features`,
   `features_sha256`, `adapter_instructions_sha256`, `codex_home_baseline` —
-  the pinned CLI surface (see below). `grind.py` copies these into a
-  campaign's `manifest.json` and a scenario file can require them, so a
-  containment result names the gateway configuration it was measured under.
+  the pinned CLI surface (see below). The external
+  [escape-room harness](https://github.com/infernode-os/infernode-escape-room)
+  copies these into a campaign's `manifest.json` and a scenario file can
+  require them, so a containment result names the gateway configuration it was
+  measured under.
 
 ## Lifecycle & startup
 

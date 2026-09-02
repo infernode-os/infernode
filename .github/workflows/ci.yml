@@ -15,12 +15,11 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────
-  # Ring-fence pre-flight: testing-only harness files must live
-  # under tests/agent-harness/. Catches "someone moved serve-agent
-  # back into lib/sh/" before any release build runs. See CLAUDE.md.
+  # Ring-fence pre-flight: adversarial campaign infrastructure lives in the
+  # external infernode-escape-room repository, never in product artifacts.
   # ─────────────────────────────────────────────
   ring-fence:
-    name: Ring-fence (tests/agent-harness/)
+    name: Ring-fence (external harness)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -29,22 +28,19 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Verify serve-agent* files only under tests/agent-harness/
+    - name: Reject external harness files in the product tree
       run: |
         offenders=$(find . -path ./.git -prune -o \
           \( -name 'serve-agent*' -o -path '*agent-harness*' \) \
-          -not -path './tests/agent-harness/*' \
-          -not -path './tests/agent-harness' \
           -print 2>/dev/null | grep -v '^$' || true)
         if [ -n "$offenders" ]; then
-          echo "FATAL: testing-only harness files found outside tests/agent-harness/:" >&2
+          echo "FATAL: external escape-room harness files found in InferNode:" >&2
           echo "$offenders" >&2
           echo "" >&2
-          echo "These files must live under tests/agent-harness/ so CI guards" >&2
-          echo "in release.yml can keep them out of shipped artefacts." >&2
+          echo "Keep campaign infrastructure in infernode-os/infernode-escape-room." >&2
           exit 1
         fi
-        echo "Ring-fence OK: no testing-only harness files outside tests/agent-harness/."
+        echo "Ring-fence OK: external harness material is absent."
 
     - name: Verify local-only config files are not tracked
       run: |
@@ -184,24 +180,6 @@ jobs:
         ROOT=. bash tests/host/namespace_path_policy_test.sh
         ROOT=. bash tests/host/namespace_manifest_invariants_test.sh
         ROOT=. bash tests/host/veltro_namespace_failclosed_test.sh
-
-    - name: Run escape-room evidence checks
-      run: |
-        # Gates audit-bundle verification, canary scanning, the
-        # evidence-privacy invariants (INFR-406) — raw evidence is 0700/0600
-        # and the derived public artifact carries no canary value — and the
-        # attempt-preservation / fail-closed retry rules (INFR-411).
-        chmod +x tests/host/grind_escape_test.sh
-        ROOT=. bash tests/host/grind_escape_test.sh
-
-    - name: Run outer escape-lab evidence checks
-      run: |
-        # INFR-412: the outer lab creates pcap, console, command log and
-        # manifest private, refuses to start over an exposure, and seals
-        # 0700/0600 at the end.
-        chmod +x tests/agent-harness/escape-lab.sh
-        chmod +x tests/host/escape_lab_evidence_test.sh
-        ROOT=. sh tests/host/escape_lab_evidence_test.sh
 
     - name: Run codex-gate preflight checks
       run: |

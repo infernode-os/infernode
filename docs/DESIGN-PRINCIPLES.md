@@ -457,10 +457,9 @@ the file — however convenient it was to generate at install time.
 **Placement is shipping.** The release copy loop packs `dis lib fonts
 module services locale usr mnt` into every tarball, .app, and .zip. A
 "dev-only" helper placed under `lib/` is in every user's install — its
-placement *is* a release decision. Development-rig material lives
-outside those directories; `tests/agent-harness/` and its CI
-ring-fence are the precedent for keeping something out of artifacts
-deliberately.
+placement *is* a release decision. Development-rig material lives in the
+external `infernode-os/infernode-escape-room` repository; CI and release
+ring-fences keep it out of product artifacts deliberately.
 
 
 ## The honest boundaries

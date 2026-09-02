@@ -489,7 +489,39 @@ decode(k, mod: int): int
 	16r36 =>	if(shift) return '<'; else return ',';
 	16r37 =>	if(shift) return '>'; else return '.';
 	16r38 =>	if(shift) return '?'; else return '/';
+
+	#
+	# Navigation keys, as the runes in module/keyboard.m: Spec|View
+	# is 16rE010, and Home..BackTab count up from there. These are
+	# what the editor, the file tree and Tk's text widgets read for
+	# cursor movement and paging; a keyboard without them can type
+	# but cannot move.
+	#
+	16r49 =>	return 16rE063;		# Insert
+	16r4A =>	return 16rE010;		# Home
+	16r4B =>	return 16rE016;		# Page Up
+	16r4C =>	return 16rE064;		# Delete (forward)
+	16r4D =>	return 16rE011;		# End
+	16r4E =>	return 16rE017;		# Page Down
+	16r4F =>	return 16rE015;		# Right
+	16r50 =>	return 16rE014;		# Left
+	16r51 =>	return 16rE013;		# Down
+	16r52 =>	return 16rE012;		# Up
+
+	#
+	# Keypad, always as digits: there is no Num Lock state to keep
+	# and a keypad that types numbers is what everyone reaches for.
+	#
+	16r54 =>	return '/';
+	16r55 =>	return '*';
+	16r56 =>	return '-';
+	16r57 =>	return '+';
+	16r58 =>	return '\n';
+	16r62 =>	return '0';
+	16r63 =>	return '.';
 	}
+	if(k >= 16r59 && k <= 16r61)		# keypad 1-9
+		return k - 16r59 + '1';
 	return 0;
 }
 

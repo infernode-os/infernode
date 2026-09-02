@@ -226,6 +226,32 @@ poll(fd, ptr: ref Sys->FD, ival: int, maxpkt: int)
 			sys->print("mouseusb: write to /dev/pointer failed: %r\n");
 			return;
 		}
+
+		#
+		# The wheel, when the report carries one: byte 3, signed,
+		# positive rolling away from the hand. Delivered the way the
+		# hosted emulator delivers it (emu/MacOSX/win.c): one pointer
+		# event per tick with button 8 for up or 16 for down, and the
+		# bit cleared again straight after, so an application counts
+		# each event as one tick rather than seeing a wheel button
+		# "held" across every later motion. Every wm application in
+		# the tree already scrolls on exactly these bits; none of
+		# them could, because this byte was read and dropped.
+		#
+		if(nr >= 4){
+			w := signed(int buf[3]);
+			bit := 8;
+			if(w < 0){
+				bit = 16;
+				w = -w;
+			}
+			for(; w > 0; w--){
+				t := sys->sprint("d0 0 %d", b | bit);
+				sys->write(ptr, array of byte t, len array of byte t);
+				t = sys->sprint("d0 0 %d", b);
+				sys->write(ptr, array of byte t, len array of byte t);
+			}
+		}
 	}
 }
 

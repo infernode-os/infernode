@@ -24,6 +24,7 @@ void	(*serwrite)(char *, int);
 Queue*	kscanq;			/* keyboard raw scancodes (when needed) */
 char*	kscanid;		/* name of raw scan format (if defined) */
 Queue*	kbdq;			/* unprocessed console input */
+Queue*	kbdrawq;		/* the local keyboard, while a /dev/keyboard reader holds it */
 Queue*	lineq;			/* processed console input */
 Queue*	printq;			/* console output */
 Queue*	klogq;			/* kernel print (log) output */
@@ -837,6 +838,9 @@ consinit(void)
 	kbdq = qopen(64*1024, 0, nil, nil);
 	if(kbdq == nil)
 		panic("consinit: cannot allocate kbdq");
+	kbdrawq = qopen(64*1024, 0, nil, nil);
+	if(kbdrawq == nil)
+		panic("consinit: cannot allocate kbdrawq");
 }
 
 static Chan*
@@ -913,9 +917,17 @@ consopen(Chan *c, int omode)
 			 * through a line when raw mode arrives, which is what
 			 * flushkbdline is for.
 			 */
+			/*
+			 * A /dev/keyboard reader takes the LOCAL keyboard
+			 * for itself -- see the Qkeyboard write case -- and
+			 * leaves the console alone. It used to put the
+			 * console into raw mode as well, so a shell reading
+			 * /dev/cons and a login screen reading /dev/keyboard
+			 * drained the same queue byte by byte: every
+			 * keystroke went to whichever read happened to be
+			 * waiting, and neither side got a whole word.
+			 */
 			kbd.kbdr++;
-			flushkbdline(kbdq);
-			kbd.raw = 1;
 		}
 		break;
 
@@ -1012,14 +1024,15 @@ consread(Chan *c, void *buf, long n, vlong offset)
 		return devdirread(c, buf, n, consdir, nelem(consdir), devgen);
 	case Qsysctl:
 		return readstr(offset, buf, n, VERSION);
-	case Qcons:
 	case Qkeyboard:
+		return qread(kbdrawq, buf, n);
+	case Qcons:
 		qlock(&kbd.q);
 		if(waserror()) {
 			qunlock(&kbd.q);
 			nexterror();
 		}
-		if(kbd.raw || kbd.kbdr) {
+		if(kbd.raw) {
 			if(qcanread(lineq))
 				n = qread(lineq, buf, n);
 			else {
@@ -1193,6 +1206,21 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		break;
 
 	case Qkeyboard:
+		/*
+		 * Keys written here come from the local keyboard driver.
+		 * While something holds /dev/keyboard open for reading --
+		 * a login screen, a window system -- they are ITS keys,
+		 * delivered whole and raw on their own queue. With no such
+		 * reader they feed the console as they always did, so a
+		 * machine with no GUI still types at its shell. Serial
+		 * input never comes through here: it belongs to the
+		 * console regardless, which is what keeps a serial session
+		 * from typing into somebody's password field.
+		 */
+		if(kbd.kbdr > 0){
+			qproduce(kbdrawq, a, n);
+			break;
+		}
 		for(x=0; x<n; ) {
 			Rune r;
 			x += chartorune(&r, &a[x]);

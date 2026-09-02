@@ -18,3 +18,11 @@ load std
 # that it is stated somewhere a person can read and change, rather than
 # being a constant compiled into the shell.
 path=(/dis .)
+
+# The secstore daemon, when the userspace provides one. The kernel
+# image does not carry it; a card or network root grown by the
+# rootpath policy does (dis/auth/secstored.dis), and wm/logon's unlock
+# dials it on localhost. Errors are dropped deliberately: on a machine
+# running only the built-in root this line must be silence, not a
+# complaint about a daemon the image never promised.
+auth/secstored &

@@ -661,7 +661,7 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	filekey := secstore->mkfilekey2(pass);
 	legacykey := secstore->mkfilekey(pass);
 
-	(conn, nil, diag) := secstore->connect2("tcp!localhost!5356", user, pwhash, pwhash2);
+	(conn, nil, diag) := secstore->connect2("tcp!127.0.0.1!5356", user, pwhash, pwhash2);
 	if(conn == nil) {
 		if(diag != nil)
 			return "secstore: " + diag;
@@ -888,7 +888,7 @@ enablesecstoresave(pass: string)
 	# For a 2FA account, hand factotum the data key so its save-back stays
 	# DK-encrypted (auth still uses the password). Ordinary accounts pass no
 	# DK and factotum encrypts under the password-derived root key as before.
-	cmd := "secstore tcp!localhost!5356 " + user + " " + pass;
+	cmd := "secstore tcp!127.0.0.1!5356 " + user + " " + pass;
 	if(current2fadkhex != "")
 		cmd += " " + current2fadkhex;
 	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);

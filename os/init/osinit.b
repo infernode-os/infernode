@@ -1345,6 +1345,21 @@ rootbind(base: string)
 		sys->print("init: /lib grown from %s/lib\n", base);
 	if(rootunion(base + "/fonts", "/fonts"))
 		sys->print("init: /fonts grown from %s/fonts\n", base);
+
+	#
+	# /usr is not a union and not read-only: it is the machine's
+	# writable home ground -- secstore accounts, keyrings, user state
+	# all live under it. MREPL because the kernel root's /usr is an
+	# empty mount point with nothing to preserve; MCREATE because
+	# the entire purpose is that things get created here.
+	#
+	(ok, nil) := sys->stat(base + "/usr");
+	if(ok >= 0){
+		if(sys->bind(base + "/usr", "/usr", Sys->MREPL|Sys->MCREATE) < 0)
+			sys->print("init: bind %s/usr: %r\n", base);
+		else
+			sys->print("init: /usr from %s/usr (writable)\n", base);
+	}
 }
 
 #

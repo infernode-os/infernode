@@ -238,7 +238,14 @@ init(nil: ref Draw->Context, args: list of string)
 	# service lives on a trusted auth network; InferNode's common case is a
 	# single host with logon/factotum connecting over localhost. Exposing the
 	# service on all interfaces should therefore be explicit via -a.
-	addr := "tcp!localhost!5356";
+	#
+	# 127.0.0.1 by NUMBER, not "localhost" by name. This is a
+	# same-host control connection; making it depend on a name
+	# service means the login chain fails on any system where cs is
+	# not (yet) running -- which is every bare-metal boot. Hosted
+	# systems resolve either form identically.
+	#
+	addr := "tcp!127.0.0.1!5356";
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);

@@ -1015,11 +1015,17 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 	if(dir.mtime != wdir.mtime || ((dir.mode^wdir.mode) & 8r777))
 		changes = 1;
 
-	if((wdir.mode & 7) != ((wdir.mode >> 3) & 7)
-	|| (wdir.mode & 7) != ((wdir.mode >> 6) & 7)){
-		putfile(f);
-		return e(Eperm);
-	}
+	#
+	# FAT stores one permission bit: read-only. Rejecting a wstat
+	# whose user/group/other classes differ pretended this server
+	# could express a distinction it cannot -- and made every
+	# archive extractor's mode restore (0644 is asymmetric) fail
+	# noisily for no one's benefit. The owner bits decide the one
+	# real question, writable or not; the rest is accepted and
+	# forgotten, which is what storing it on FAT would amount to
+	# anyway.
+	#
+	wdir.mode = (wdir.mode & ~8r777) | ((wdir.mode >> 6) & 7) * 8r111;
 
 	if(dir.name != wdir.name){
 		# temporarily disable this

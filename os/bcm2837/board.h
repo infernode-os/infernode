@@ -35,6 +35,7 @@ int	emmcpresent(void);
 uvlong	emmcnblocks(void);
 void	boardsdprobe(void);
 int	mboxfbvoff(u32int, u32int);
+int	mboxfbgetvoff(void);
 
 /* fb.c */
 int	fbinit(Fbinfo*);

@@ -495,6 +495,29 @@ mboxfbvoff(u32int x, u32int y)
 }
 
 /*
+ * What the GPU is ACTUALLY scanning from, asked of the firmware.
+ *
+ * This exists because trusting the software copy of the offset cost a
+ * day: the console had scrolled the scanout window down, the reset at
+ * draw-attach silently failed to move it back, and every software-side
+ * check -- including the debug-key screen capture -- read the
+ * framebuffer at offset zero and reported a login screen the glass was
+ * not showing. The person at the panel was the only honest instrument
+ * in the loop. Verification of what is on screen starts HERE.
+ */
+int
+mboxfbgetvoff(void)
+{
+	u32int buf[2];
+
+	buf[0] = 0;
+	buf[1] = 0;
+	if(mboxprop(Tagfbgetvoff, buf, 2, 2) < 0)
+		return -1;
+	return (int)buf[1];
+}
+
+/*
  * How many displays the firmware knows about.
  *
  * Returns 1 when it cannot say. An unimplemented tag comes back with the

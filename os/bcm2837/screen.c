@@ -75,6 +75,13 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	 */
 	fbconsstop();
 
+	/*
+	 * Belt and braces on the scanout offset: the draw client paints
+	 * at offset zero, so the glass must scan offset zero, whatever
+	 * the console was doing when it died.
+	 */
+	mboxfbvoff(0, 0);
+
 	r->min.x = 0;
 	r->min.y = 0;
 	r->max.x = fb->width;
@@ -591,15 +598,32 @@ screenhex(void)
 		return;
 	}
 	stride = screenfb->pitch / sizeof(u32int);
-	fb = (u32int*)screenfb->base + (ulong)fbconsvoff() * stride;
+	/*
+	 * From the offset the FIRMWARE reports, not the one software
+	 * thinks it set: the two disagreed for a day, and every capture
+	 * taken through the software value showed a screen the glass
+	 * was not displaying. When the firmware will not answer, fall
+	 * back to the console's number -- and SAY so in the header, so
+	 * a capture can never again silently claim glass truth it does
+	 * not have.
+	 */
+	{
+		int gv;
+
+		gv = mboxfbgetvoff();
+		if(gv < 0)
+			gv = fbconsvoff();
+		fb = (u32int*)screenfb->base + (ulong)gv * stride;
+		uartputstr("IMG ");
+		uartputd(screenfb->width / 4);
+		uartputstr(" ");
+		uartputd(screenfb->height / 4);
+		uartputstr(" voff=");
+		uartputd(gv);
+		uartputstr("\n");
+	}
 	w = screenfb->width / 4;
 	h = screenfb->height / 4;
-
-	uartputstr("IMG ");
-	uartputd(w);
-	uartputstr(" ");
-	uartputd(h);
-	uartputstr("\n");
 
 	line[6] = 0;
 	for(y = 0; y < h; y++){

@@ -317,6 +317,48 @@ static int nscreens;
 static int released;
 
 /*
+ * One writer OR the release, never both. The scanout offset is shared
+ * state between every console print (a scroll moves it) and the
+ * moment the draw device takes the screen (which must put it back to
+ * zero and KEEP it there). Without exclusion, a print already inside
+ * this file on another core scrolls after the reset, and the glass
+ * shows a console window under a freshly painted login screen --
+ * found by a person at the panel after every software check said the
+ * screen was fine. Bounded _tas like the uart mutex, so a panic can
+ * still print through a dead holder: garbled beats silent.
+ */
+static ulong fbmutex;
+
+static int
+fbconslock(void)
+{
+	int i;
+
+	/*
+	 * Time-scaled, not iteration-scaled: the holder may be mid
+	 * scroll-fold, a 1.5MB memmove plus a mailbox call that takes
+	 * tens of milliseconds. An iteration bound sized for a quick
+	 * glyph declared that holder stuck, released the screen
+	 * underneath it, and its final scroll moved the scanout right
+	 * back off the login screen -- the same class of premature
+	 * tripwire as the UP-era lock bounds.
+	 */
+	for(i = 0; i < 500; i++){
+		if(_tas(&fbmutex) == 0)
+			return 1;
+		microdelay(1000);
+	}
+	return 0;	/* print anyway; do not wedge a panic */
+}
+
+static void
+fbconsunlock(void)
+{
+	coherence();
+	fbmutex = 0;
+}
+
+/*
  * Clear virtual scanlines [y0, y0+nl) on one screen.
  */
 static void
@@ -592,16 +634,28 @@ fbconsputs(char *s, int n)
 	static int npend;
 	Rune r;
 	int i, k;
+	int locked;
 
 	if(nscreens == 0)
 		return;
+
+	locked = fbconslock();
+	if(released){
+		/* the draw device took the screen while we waited */
+		if(locked)
+			fbconsunlock();
+		return;
+	}
 
 	for(i = 0; i < n; ){
 		if(npend > 0){
 			while(npend < UTFmax && i < n && !fullrune(pend, npend))
 				pend[npend++] = s[i++];
-			if(!fullrune(pend, npend))
+			if(!fullrune(pend, npend)){
+				if(locked)
+					fbconsunlock();
 				return;		/* still short; wait */
+			}
 			chartorune(&r, pend);
 			npend = 0;
 			fbputrune(r);
@@ -611,11 +665,15 @@ fbconsputs(char *s, int n)
 			for(k = 0; i < n && k < UTFmax; k++)
 				pend[k] = s[i++];
 			npend = k;
+			if(locked)
+				fbconsunlock();
 			return;
 		}
 		i += chartorune(&r, s + i);
 		fbputrune(r);
 	}
+	if(locked)
+		fbconsunlock();
 }
 
 /*
@@ -802,20 +860,57 @@ fbconsvoff(void)
 void
 fbconsstop(void)
 {
-	int i;
+	int i, n;
 
-	for(i = 0; i < nscreens; i++){
-		if(screens[i].voff == 0)
-			continue;
-		mboxfbdispnum(screens[i].fb->disp);
-		mboxfbvoff(0, 0);
-		screens[i].voff = 0;
-	}
-	if(nscreens > 0)
-		mboxfbdispnum(0);
-
+	/*
+	 * Stop the console FIRST, then reset the scanout offsets --
+	 * in that order, with a barrier and a settle between.
+	 *
+	 * The other order lost the screen: a print in flight on another
+	 * core could scroll and push the GPU offset back nonzero AFTER
+	 * the reset here, and nothing ever resets it again -- the glass
+	 * scans the old console window forever while the draw client
+	 * paints, correctly, at offset zero. Software said login
+	 * screen; the panel said frozen console; both were telling the
+	 * truth about different offsets. Timing-dependent, so some
+	 * boots worked and the ones with boot spew still streaming did
+	 * not.
+	 */
+	if(!fbconslock())
+		uartputstr("fb:   console writer stuck; releasing anyway\n");
+	n = nscreens;
+	screenputs = nil;
 	released = 1;
 	nscreens = 0;
-	screenputs = nil;
+	coherence();
+
+	/*
+	 * Secondary displays first, display 0 LAST -- the display-select
+	 * tag is known unreliable, and ending on display 0 leaves the
+	 * selector where the draw device and any later reset expect it.
+	 * And VERIFIED: ask the firmware where the scanout actually is
+	 * and retry until it answers zero, because a set that silently
+	 * did not take is exactly how the glass kept showing a scrolled
+	 * console under a freshly painted login screen.
+	 */
+	for(i = n - 1; i >= 0; i--){
+		int t, gv;
+
+		mboxfbdispnum(screens[i].fb->disp);
+		for(t = 0; t < 5; t++){
+			mboxfbvoff(0, 0);
+			gv = mboxfbgetvoff();
+			if(gv <= 0)
+				break;
+		}
+		if(t == 5){
+			uartputstr("fb:   display ");
+			uartputd(screens[i].fb->disp);
+			uartputstr(" scanout offset WILL NOT reset\n");
+		}
+		screens[i].voff = 0;
+	}
+
+	fbconsunlock();
 	uartputstr("fb:   console released to the draw device\n");
 }

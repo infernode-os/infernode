@@ -377,6 +377,10 @@ build_kernel() {
             # given the directory.
             "/mnt="
             "/mnt/wm="
+            "/mnt/ui="
+            "/mnt/llm="
+            "/mnt/msg="
+            "/tool="
             # acme mounts its own file server at /mnt/acme, and mount(2)
             # does not create its target. Without this the mount failed
             # and fsysmount returned nil WITHOUT a message, so acme drew

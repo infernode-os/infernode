@@ -736,11 +736,24 @@ fbconsadd(Fbinfo *fb)
 	 * scrolled with an offset that never moves shows one screenful
 	 * for ever. Ask for one line down and require that exact answer.
 	 */
+	/*
+	 * Hardware scrolling for the FIRST screen only. A mirror scrolls
+	 * by copying pixels, never by moving a scanout window, because
+	 * the display-select tag proved unreliable: a mirror's offset
+	 * writes landed on the primary panel, whose window then drifted
+	 * to wherever the mirror's console had scrolled -- and a login
+	 * screen painted where the primary's bookkeeping said the
+	 * window was appeared on the glass as two footer lines above a
+	 * page of stale console text. One display moves its window;
+	 * every other one copies.
+	 */
 	s->hwscroll = 0;
-	mboxfbdispnum(fb->disp);
-	if(s->vh >= s->h + Fh && mboxfbvoff(0, Fh) == Fh)
-		s->hwscroll = 1;
-	mboxfbvoff(0, 0);
+	if(nscreens == 0){
+		mboxfbdispnum(fb->disp);
+		if(s->vh >= s->h + Fh && mboxfbvoff(0, Fh) == Fh)
+			s->hwscroll = 1;
+		mboxfbvoff(0, 0);
+	}
 
 	/*
 	 * One line at a time when the window can be moved, because that

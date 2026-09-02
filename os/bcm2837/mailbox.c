@@ -489,8 +489,23 @@ mboxfbvoff(u32int x, u32int y)
 
 	buf[0] = x;
 	buf[1] = y;
-	if(mboxprop(Tagfbsetvoff, buf, 2, 2) < 0)
+	if(mboxprop(Tagfbsetvoff, buf, 2, 2) < 0){
+		uartputstr("fb:   voff set FAILED\n");
 		return -1;
+	}
+	/*
+	 * Say so when the firmware grants something other than what was
+	 * asked. Every caller used to discard this value, and one silent
+	 * refusal -- the fold's move back to row zero -- left the panel
+	 * scanning a stale window under a freshly painted login screen.
+	 */
+	if(buf[1] != y){
+		uartputstr("fb:   voff asked ");
+		uartputd(y);
+		uartputstr(" granted ");
+		uartputd(buf[1]);
+		uartputstr("\n");
+	}
 	return (int)buf[1];
 }
 

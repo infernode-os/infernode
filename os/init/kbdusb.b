@@ -146,11 +146,23 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->print("kbdusb: SET_PROTOCOL(boot) failed: %r\n");
 
 	#
-	# Idle 0: report only when something changes. Without it the
-	# keyboard repeats the current state forever and every read
-	# returns the same keys held down, which reads as a stuck key.
+	# Idle rate: report the current state every Idlems, changed or
+	# not, as well as on every change.
 	#
-	if(ctlout(Rh2d|Rclass|Riface, Rsetidle, 0, 0) < 0)
+	# This used to be idle 0 -- report only on change -- and key
+	# repeat was built on top of it by assuming a key held down is
+	# silence and a key let go is a report. On this controller a
+	# report CAN be missed between polls (the HID endpoints share
+	# the bus with the mouse and the network), and a missed release
+	# meant a key that repeated for ever, dots marching off the edge
+	# of the login screen. Silence cannot be trusted to mean "still
+	# held"; a report saying so can. With a periodic report the
+	# repeater repeats only while the keyboard keeps confirming the
+	# key is down, and a lost report stops the repeat instead of
+	# running it away. Identical reports cost nothing: the loop only
+	# acts on keys that were not already held.
+	#
+	if(ctlout(Rh2d|Rclass|Riface, Rsetidle, (Idlems / 4) << 8, 0) < 0)
 		sys->print("kbdusb: SET_IDLE failed: %r\n");
 
 	fd := openintr(epnum, maxpkt, ival);
@@ -329,6 +341,7 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		}
 		nempty = 0;
 
+		lastreport = sys->millisec();
 		mod := int buf[0];
 
 		#
@@ -383,10 +396,13 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 #
 Repeatdelay:	con 500;	# ms before the first repeat
 Repeatrate:	con 33;		# ms between repeats
+Idlems:		con 100;	# how often the keyboard restates what is held
+Stalems:	con 350;	# no report for this long = do not trust the held state
 
 heldk := 0;			# HID usage of the key held down, 0 = none
 heldc := 0;			# what it decoded to
 heldat := 0;			# when it went down, sys->millisec()
+lastreport := 0;		# when the keyboard last said anything at all
 
 repeater(kbd: ref Sys->FD)
 {
@@ -394,8 +410,11 @@ repeater(kbd: ref Sys->FD)
 		sys->sleep(Repeatrate);
 		if(heldc == 0)
 			continue;
-		if(sys->millisec() - heldat < Repeatdelay)
+		now := sys->millisec();
+		if(now - heldat < Repeatdelay)
 			continue;
+		if(now - lastreport > Stalems)
+			continue;	# the keyboard has gone quiet; a release may have been lost
 		emit(kbd, heldc);
 	}
 }

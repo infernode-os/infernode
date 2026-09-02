@@ -315,6 +315,7 @@ static int nscreens;
  * top of the window system's framebuffer -- once per poll.
  */
 static int released;
+static int	frozenvoff;	/* display 0's window at release; see fbconsstop */
 
 /*
  * One writer OR the release, never both. The scanout offset is shared
@@ -825,7 +826,9 @@ fbconsreleased(void)
 int
 fbconsvoff(void)
 {
-	if(released || nscreens == 0)
+	if(released)
+		return frozenvoff;	/* where the glass was when the draw device took over */
+	if(nscreens == 0)
 		return 0;
 	return screens[0].voff;
 }
@@ -885,32 +888,30 @@ fbconsstop(void)
 	coherence();
 
 	/*
-	 * Secondary displays first, display 0 LAST -- the display-select
-	 * tag is known unreliable, and ending on display 0 leaves the
-	 * selector where the draw device and any later reset expect it.
-	 * And VERIFIED: ask the firmware where the scanout actually is
-	 * and retry until it answers zero, because a set that silently
-	 * did not take is exactly how the glass kept showing a scrolled
-	 * console under a freshly painted login screen.
+	 * The scanout window is NOT moved. It is frozen where it is and
+	 * its position handed to the draw device, which paints THERE.
+	 *
+	 * Every attempt to put the window back to zero at this point
+	 * failed on real firmware while reporting success: the offset
+	 * SET tag did not move the panel, the GET tag answers zero for
+	 * every display id whether or not it is true, and the display-
+	 * select tag takes firmware ids (0 main LCD, 2 HDMI0) that do
+	 * not match our enumeration. The glass kept showing a scrolled
+	 * console window under a login screen painted at row zero,
+	 * shifted by one more text line per boot as the spew varied.
+	 *
+	 * The console's own software offset, by contrast, is the one
+	 * number proven true: it is what put the console where a person
+	 * could read it. So the draw device inherits that window.
+	 * Alignment by construction, no mailbox in the loop.
 	 */
-	for(i = n - 1; i >= 0; i--){
-		int t, gv;
-
-		mboxfbdispnum(screens[i].fb->disp);
-		for(t = 0; t < 5; t++){
-			mboxfbvoff(0, 0);
-			gv = mboxfbgetvoff();
-			if(gv <= 0)
-				break;
-		}
-		if(t == 5){
-			uartputstr("fb:   display ");
-			uartputd(screens[i].fb->disp);
-			uartputstr(" scanout offset WILL NOT reset\n");
-		}
-		screens[i].voff = 0;
-	}
+	frozenvoff = 0;
+	if(n > 0)
+		frozenvoff = screens[0].voff;
+	USED(i);
 
 	fbconsunlock();
-	uartputstr("fb:   console released to the draw device\n");
+	uartputstr("fb:   console released to the draw device at row ");
+	uartputd(frozenvoff);
+	uartputstr("\n");
 }

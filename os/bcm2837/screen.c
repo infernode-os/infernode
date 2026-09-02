@@ -55,6 +55,21 @@ void	setcursor(Cursor*);
  * softscreen is 0: drawing goes straight into the framebuffer the GPU
  * scans out, so there is no second copy to flush from.
  */
+/*
+ * Row of the framebuffer the glass is scanning from, fixed at the
+ * moment the draw device took the screen. Everything that touches
+ * screen pixels -- the draw device, the software cursor, the debug
+ * captures -- addresses the framebuffer through screenbase() so they
+ * all agree with the panel, not with row zero.
+ */
+static ulong screenoff;
+
+static uchar*
+screenbase(void)
+{
+	return (uchar*)screenfb->base + screenoff * screenfb->pitch;
+}
+
 uchar*
 attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 {
@@ -76,11 +91,12 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	fbconsstop();
 
 	/*
-	 * Belt and braces on the scanout offset: the draw client paints
-	 * at offset zero, so the glass must scan offset zero, whatever
-	 * the console was doing when it died.
+	 * Paint where the glass is looking. The console froze its window
+	 * in place (see fbconsstop for why it is not moved back to zero);
+	 * the draw device's screen is that window, so the pixels it
+	 * writes are the pixels being scanned out.
 	 */
-	mboxfbvoff(0, 0);
+	screenoff = fbconsvoff();
 
 	r->min.x = 0;
 	r->min.y = 0;
@@ -98,7 +114,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	 */
 	setcursor(&arrow);
 
-	return (uchar*)fb->base;
+	return screenbase();
 }
 
 /*
@@ -206,7 +222,7 @@ swcursoff(void)
 	if(!swc.shown || screenfb == nil)
 		return;
 	stride = screenfb->pitch / sizeof(u32int);
-	fb = (u32int*)screenfb->base;
+	fb = (u32int*)screenbase();
 	for(y = 0; y < swc.sh; y++)
 		for(x = 0; x < swc.sw; x++)
 			fb[(swc.at.y + y) * stride + swc.at.x + x] =
@@ -248,7 +264,7 @@ swcurson(void)
 		return;
 
 	stride = screenfb->pitch / sizeof(u32int);
-	fb = (u32int*)screenfb->base;
+	fb = (u32int*)screenbase();
 	bpl = (swc.w + 7) / 8;
 
 	for(y = 0; y < swc.sh; y++){
@@ -301,7 +317,7 @@ flushmemscreen(Rectangle r)
 	lock(&swc.l);
 	if(swc.shown && screenfb != nil){
 		stride = screenfb->pitch / sizeof(u32int);
-		fb = (u32int*)screenfb->base;
+		fb = (u32int*)screenbase();
 		for(y = 0; y < swc.sh; y++)
 			for(x = 0; x < swc.sw; x++){
 				px = swc.at.x + x;
@@ -492,14 +508,13 @@ screendump(void)
 	}
 
 	stride = screenfb->pitch / sizeof(u32int);
-	fb = (u32int*)screenfb->base;
+	fb = (u32int*)screenbase();
 	/*
 	 * Start where the PANEL is looking, not at the top of the
 	 * buffer: the console scrolls by moving the scanout window, and
 	 * dumping from the top reported a blank screen while the console
 	 * was full of text.
 	 */
-	fb += (ulong)fbconsvoff() * stride;
 	cw = screenfb->width / Dumpcols;
 	ch = screenfb->height / Dumprows;
 	if(cw < 1) cw = 1;
@@ -607,21 +622,14 @@ screenhex(void)
 	 * a capture can never again silently claim glass truth it does
 	 * not have.
 	 */
-	{
-		int gv;
-
-		gv = mboxfbgetvoff();
-		if(gv < 0)
-			gv = fbconsvoff();
-		fb = (u32int*)screenfb->base + (ulong)gv * stride;
-		uartputstr("IMG ");
-		uartputd(screenfb->width / 4);
-		uartputstr(" ");
-		uartputd(screenfb->height / 4);
-		uartputstr(" voff=");
-		uartputd(gv);
-		uartputstr("\n");
-	}
+	fb = (u32int*)screenbase();
+	uartputstr("IMG ");
+	uartputd(screenfb->width / 4);
+	uartputstr(" ");
+	uartputd(screenfb->height / 4);
+	uartputstr(" row=");
+	uartputd(screenoff);
+	uartputstr("\n");
 	w = screenfb->width / 4;
 	h = screenfb->height / 4;
 

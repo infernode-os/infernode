@@ -981,6 +981,32 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 	dir := dostat(f);
 	wdir := ref t.stat;
 
+	#
+	# The Styx convention this server ignored for twenty years:
+	# empty strings and all-ones numeric fields in a wstat mean
+	# "leave unchanged". Taking them literally instead made every
+	# nulldir-based tool fail with permission denied -- chmod
+	# (empty uid compared against "dos"), mv's cross-name rename,
+	# gettar's mode/mtime restore -- and each grew a workaround
+	# before the actual rule was consulted. Normalise the dont-care
+	# fields to the current values first; every check below then
+	# judges what the CLIENT actually asked to change.
+	#
+	if(wdir.uid == "")
+		wdir.uid = dir.uid;
+	if(wdir.gid == "")
+		wdir.gid = dir.gid;
+	if(wdir.name == "")
+		wdir.name = dir.name;
+	if(wdir.mode == ~0)
+		wdir.mode = dir.mode;
+	if(wdir.mtime == ~0)
+		wdir.mtime = dir.mtime;
+	if(wdir.atime == ~0)
+		wdir.atime = dir.atime;
+	if(wdir.length == big -1)
+		wdir.length = dir.length;
+
 	if(dir.uid != wdir.uid || dir.gid != wdir.gid){
 		putfile(f);
 		return e(Eperm);

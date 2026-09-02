@@ -76,6 +76,7 @@ logo_g: ref Image;	# cached brand image
 
 # Password state
 passbuf: string;
+back: ref Image;		# redraw() paints here, then copies once
 confirmbuf: string;
 savedpass: string;
 savedloginpass: string;	# secstore password held while prompting for the recovery passphrase
@@ -356,6 +357,22 @@ redraw()
 		return;
 
 	r := screen.r;
+
+	#
+	# Draw into a backing image and copy it to the screen in one pass.
+	# On bare metal the screen IS the scanout memory: painting the
+	# background and then the logo and text straight into it shows
+	# the panel each intermediate state -- a visible flicker on every
+	# keystroke. Hosted never showed it because a window system's
+	# backing store hid the intermediate states. Lucifer's own windows
+	# have that store; this screen runs before any of that exists, so
+	# it keeps its own.
+	#
+	if(back == nil || !back.r.eq(r))
+		back = display_g.newimage(r, screen.chans, 0, Draw->Black);
+	dst := screen;
+	if(back != nil)
+		dst = back;
 	cx := (r.min.x + r.max.x) / 2;
 	cy := (r.min.y + r.max.y) / 2;
 
@@ -384,7 +401,7 @@ redraw()
 	}
 
 	# Background
-	screen.draw(r, bgcol, nil, ZP);
+	dst.draw(r, bgcol, nil, ZP);
 
 	# Field dimensions (declared early so we can size the centered group)
 	fh := bodyfont.height + 12;
@@ -416,7 +433,7 @@ redraw()
 		lw := logo_g.r.dx();
 		lh := logo_g.r.dy();
 		lx := cx - lw / 2;
-		screen.draw(Rect((lx, y), (lx + lw, y + lh)), logo_g, nil, logo_g.r.min);
+		dst.draw(Rect((lx, y), (lx + lw, y + lh)), logo_g, nil, logo_g.r.min);
 		y += lh + PADDING * 2;
 	} else
 		y += PADDING * 4;
@@ -432,26 +449,26 @@ redraw()
 			if(errline[si] == '\n') { nl = si; break; }
 		if(nl >= 0) {
 			ew := bodyfont.width(errline[0:nl]);
-			screen.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline[0:nl]);
+			dst.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline[0:nl]);
 			y += bodyfont.height + PADDING;
 			choiceline := errline[nl+1:];
 			cw2 := bodyfont.width(choiceline);
-			screen.text(Point(cx - cw2 / 2, y), textcol, ZP, bodyfont, choiceline);
+			dst.text(Point(cx - cw2 / 2, y), textcol, ZP, bodyfont, choiceline);
 			y += bodyfont.height + PADDING;
 		} else {
 			ew := bodyfont.width(errline);
-			screen.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline);
+			dst.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline);
 			y += bodyfont.height + PADDING;
 		}
 
 		# Warning about consequences
 		warn := "Keys and secrets will not be available.";
 		ww := smallfont.width(warn);
-		screen.text(Point(cx - ww / 2, y), dimcol, ZP, smallfont, warn);
+		dst.text(Point(cx - ww / 2, y), dimcol, ZP, smallfont, warn);
 		y += smallfont.height;
 		warn2 := "AI integration may not work.";
 		ww2 := smallfont.width(warn2);
-		screen.text(Point(cx - ww2 / 2, y), dimcol, ZP, smallfont, warn2);
+		dst.text(Point(cx - ww2 / 2, y), dimcol, ZP, smallfont, warn2);
 	} else {
 		# Normal states: show prompt + password field
 		prompt := "Password:";
@@ -466,20 +483,20 @@ redraw()
 			prompt = "Security key PIN:";
 		}
 		pw := bodyfont.width(prompt);
-		screen.text(Point(cx - pw / 2, y), dimcol, ZP, bodyfont, prompt);
+		dst.text(Point(cx - pw / 2, y), dimcol, ZP, bodyfont, prompt);
 		y += bodyfont.height + 4;
 
 		# Field background (centered)
 		fx := cx - fw / 2;
 		fieldr := Rect((fx, y), (fx + fw, y + fh));
-		screen.draw(fieldr, fieldbg, nil, ZP);
-		screen.border(fieldr, 1, accentcol, ZP);
+		dst.draw(fieldr, fieldbg, nil, ZP);
+		dst.border(fieldr, 1, accentcol, ZP);
 
 		# Masked password (dots)
 		dots := "";
 		for(i := 0; i < len passbuf; i++)
 			dots += "\u2022";
-		screen.text(Point(fx + 6, y + 6), textcol, ZP, bodyfont, dots);
+		dst.text(Point(fx + 6, y + 6), textcol, ZP, bodyfont, dots);
 
 		# Insertion caret after the dots. The field is the only
 		# focus on this screen and it is ALWAYS focused, but a
@@ -492,14 +509,14 @@ redraw()
 		# screen edge.
 		cax := fx + 6 + bodyfont.width(dots);
 		caretr := Rect((cax + 1, y + 4), (cax + 3, y + fh - 4));
-		screen.draw(caretr, accentcol, nil, ZP);
+		dst.draw(caretr, accentcol, nil, ZP);
 
 		y += fh + PADDING;
 
 		# Status message (centered)
 		if(statusmsg != nil && statusmsg != "") {
 			sw := bodyfont.width(statusmsg);
-			screen.text(Point(cx - sw / 2, y), dimcol, ZP, bodyfont, statusmsg);
+			dst.text(Point(cx - sw / 2, y), dimcol, ZP, bodyfont, statusmsg);
 		}
 	}
 
@@ -510,13 +527,15 @@ redraw()
 	if(version == nil)
 		version = brandname();
 	vw := smallfont.width(version);
-	screen.text(Point(cx - vw / 2, by), dimcol, ZP, smallfont, version);
+	dst.text(Point(cx - vw / 2, by), dimcol, ZP, smallfont, version);
 	by += smallfont.height + 2;
 
 	ctext := brandcopyright();
 	cw := smallfont.width(ctext);
-	screen.text(Point(cx - cw / 2, by), dimcol, ZP, smallfont, ctext);
+	dst.text(Point(cx - cw / 2, by), dimcol, ZP, smallfont, ctext);
 
+	if(back != nil)
+		screen.draw(r, back, nil, r.min);
 	screen.flush(Draw->Flushnow);
 }
 

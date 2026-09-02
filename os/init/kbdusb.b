@@ -276,6 +276,8 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 	for(i := 0; i < len prev; i++)
 		prev[i] = byte 0;
 
+	spawn repeater(kbd);
+
 	nempty := 0;
 	nerr := 0;
 	nslow := 0;
@@ -349,10 +351,52 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 			if(held(prev, k))
 				continue;
 			c := decode(k, mod);
-			if(c > 0)
+			if(c > 0){
 				emit(kbd, c);
+				heldk = k;
+				heldc = c;
+				heldat = sys->millisec();
+			}
+		}
+		#
+		# The held key, for the repeater: the report says what is
+		# down NOW, so a key that has left the report is up.
+		#
+		if(heldk != 0 && !held(buf, heldk)){
+			heldk = 0;
+			heldc = 0;
 		}
 		prev[0:] = buf[0:Reportlen];
+	}
+}
+
+#
+# Key repeat.
+#
+# Hosted InferNode never needed this: the host's keyboard driver
+# repeats a held key and the emulator only ever sees the stream. A
+# boot keyboard reports only CHANGES (idle 0), so a key held down is a
+# single report followed by silence, and without this holding
+# Backspace deleted one character. The report loop records the key it
+# last pressed; this thread re-emits it after the usual half-second,
+# then thirty times a second, until the report loop sees it go up.
+#
+Repeatdelay:	con 500;	# ms before the first repeat
+Repeatrate:	con 33;		# ms between repeats
+
+heldk := 0;			# HID usage of the key held down, 0 = none
+heldc := 0;			# what it decoded to
+heldat := 0;			# when it went down, sys->millisec()
+
+repeater(kbd: ref Sys->FD)
+{
+	for(;;){
+		sys->sleep(Repeatrate);
+		if(heldc == 0)
+			continue;
+		if(sys->millisec() - heldat < Repeatdelay)
+			continue;
+		emit(kbd, heldc);
 	}
 }
 

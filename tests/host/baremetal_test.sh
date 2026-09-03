@@ -5,19 +5,21 @@
 # Build and boot the bare-metal AArch64 kernels under QEMU and assert on
 # what they report over the PL011 console.
 #
-# Two machines, from one shared os/arm64 tree:
+# One machine, from a tree laid out for two:
 #
 #   bcm2837  QEMU raspi3b -- the Raspberry Pi 3B+ SoC, the hardware
 #            target. Has a VideoCore mailbox, a firmware framebuffer,
 #            GPIO and a second fixed-rate clock; has no NIC model.
-#   virt     QEMU virt    -- a synthetic machine, the development
-#            target. Has a GICv2 and virtio-mmio (net, gpu, input);
-#            has no framebuffer and no second clock.
 #
-# Running both is the point rather than a convenience: the two boards
-# share os/port and os/arm64, so a failure on one and not the other
-# localises itself. It also stops the shared tree from quietly growing a
-# dependency on one machine's peculiarities.
+# A second, QEMU's synthetic `virt` machine (GICv2, virtio-mmio, no
+# framebuffer), was designed for -- it is why os/arm64 and os/bcm2837
+# are split -- and this file used to describe running it. It was never
+# written: no os/virt/ has existed in this repository and no
+# run_platform virt call was ever made. The argument for it stands (a
+# failure on one board and not the other localises itself), and the
+# scope of building it is recorded under "There is no second board" in
+# os/bcm2837/README.md. Until it exists this file says one machine, so
+# that a green run is not read as two.
 #
 # This covers the parts of early bring-up that otherwise fail as a silent
 # hang: dropping EL2->EL1, installing VBAR_EL1, and the exception
@@ -58,7 +60,7 @@ fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
 skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
 info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
 
-echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837 + virt)${NC}"
+echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837)${NC}"
 echo ""
 
 #
@@ -562,6 +564,49 @@ build_kernel() {
             # error that reads like a bug in the program.
             "/dis/memfs.dis=$ROOT/dis/memfs.dis"
             "/dis/lib/styxlib.dis=$ROOT/dis/lib/styxlib.dis"
+
+            #
+            # The login screen, and the authentication stack under it.
+            #
+            # wm/logon is what a person meets first on the board, and
+            # the eight commits before this one -- the Tk login form,
+            # key repeat, the wheel, Delete-as-DEL -- were all made to
+            # it without a single emulated run: nothing here staged it.
+            # Its closure, resolved the same way as wm's above:
+            #
+            #   logon -> Secstore, Factotum, Keyring($), Bufio, Tk($),
+            #            Lucitheme, RImagefile(readpng), Imageremap,
+            #            Twofaslot
+            #   secstore -> random, ssl        twofaslot -> twofa
+            #   readpng  -> crc, inflate       secstored -> dial, audit,
+            #                                  daytime, arg, base64, ssl
+            #
+            # auth/secstored is the daemon logon dials on loopback to
+            # prove a password (PAK). os/init/profile has always started
+            # it with "&" and dropped the error; the image simply never
+            # carried it, so that line was silence. Now it is a daemon.
+            #
+            "/dis/wm/logon.dis=$ROOT/dis/wm/logon.dis"
+            "/dis/lib/secstore.dis=$ROOT/dis/lib/secstore.dis"
+            "/dis/lib/twofaslot.dis=$ROOT/dis/lib/twofaslot.dis"
+            "/dis/lib/twofa.dis=$ROOT/dis/lib/twofa.dis"
+            "/dis/lib/random.dis=$ROOT/dis/lib/random.dis"
+            "/dis/lib/ssl.dis=$ROOT/dis/lib/ssl.dis"
+            "/dis/lib/lucitheme.dis=$ROOT/dis/lib/lucitheme.dis"
+            "/dis/lib/readpng.dis=$ROOT/dis/lib/readpng.dis"
+            "/dis/lib/imageremap.dis=$ROOT/dis/lib/imageremap.dis"
+            "/dis/lib/crc.dis=$ROOT/dis/lib/crc.dis"
+            "/dis/lib/inflate.dis=$ROOT/dis/lib/inflate.dis"
+            "/dis/auth/secstored.dis=$ROOT/dis/auth/secstored.dis"
+            "/dis/lib/dial.dis=$ROOT/dis/lib/dial.dis"
+            "/dis/lib/audit.dis=$ROOT/dis/lib/audit.dis"
+            "/dis/lib/encoding/base64.dis=$ROOT/dis/lib/encoding/base64.dis"
+            "/lib/lucifer/login-screen.png=$ROOT/lib/lucifer/login-screen.png"
+            # Where factotum mounts, when something starts one. Nothing
+            # in the bare-metal profile does today -- see the logon test
+            # below for what that means -- but a mount point costs
+            # nothing and its absence would read as a factotum bug.
+            "/mnt/factotum="
         )
         # A font, so acme has something to draw with.
         #
@@ -580,6 +625,40 @@ build_kernel() {
         rootmanifest+=(
             "/fonts/vera/Vera/unicode.14.font=$BUILD/unicode.14.font"
             "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/vera/vera.14.0000"
+        )
+
+        # The same trimming for the two fonts wm/logon names on every
+        # widget it builds. This is not cosmetic: a per-widget -font that
+        # cannot be opened makes the widget command fail (TkBadft in
+        # libtk/parse.c), buildform() returns 0, and logon falls back to
+        # its headless prompt and returns WITHOUT DRAWING -- a login
+        # screen that silently is not there. Tk's default font falls
+        # back to *default* when missing; a widget's explicit one does
+        # not. The real unicode.sans.14.font names 286 subfonts and 7MB.
+        #
+        # Two ranges, not one. Latin-1 is what a person types, but the
+        # form itself draws two runes outside it: U+2022 BULLET, the
+        # entry's -show mask, and U+2014 EM DASH in its status lines
+        # ("First boot -- choose a secstore password"). A font with no
+        # range for a rune fails EVERY measurement of a string containing
+        # it -- "stringwidth: bad character set", 417 times in one login
+        # on the first run of this test, reporting rune 0x0000 because
+        # libdraw decodes the rune from a pointer cachechars has already
+        # advanced. The form drew its background and accent and not one
+        # glyph, and a password field whose dots do not appear looks like
+        # a keyboard that does not work. The font file opens eagerly and
+        # subfonts load lazily, so a missing range is invisible until the
+        # first such string is measured. Headers (height, ascent) are the
+        # real files'; subfonts sit beside the font file as Vera's does.
+        printf '16\t12\n0x0000\t0x00FF\tDejaVuSans.14.0000\n0x2000\t0x20FF\tDejaVuSans.14.2000\n' > "$BUILD/unicode.sans.14.font"
+        printf '14\t10\n0x0000\t0x00FF\tDejaVuSans.12.0000\n0x2000\t0x20FF\tDejaVuSans.12.2000\n' > "$BUILD/unicode.sans.12.font"
+        rootmanifest+=(
+            "/fonts/combined/unicode.sans.14.font=$BUILD/unicode.sans.14.font"
+            "/fonts/combined/unicode.sans.12.font=$BUILD/unicode.sans.12.font"
+            "/fonts/combined/DejaVuSans.14.0000=$ROOT/fonts/dejavu/DejaVuSans/DejaVuSans.14.0000"
+            "/fonts/combined/DejaVuSans.14.2000=$ROOT/fonts/dejavu/DejaVuSans/DejaVuSans.14.2000"
+            "/fonts/combined/DejaVuSans.12.0000=$ROOT/fonts/dejavu/DejaVuSans/DejaVuSans.12.0000"
+            "/fonts/combined/DejaVuSans.12.2000=$ROOT/fonts/dejavu/DejaVuSans/DejaVuSans.12.2000"
         )
 
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
@@ -1004,8 +1083,30 @@ while time.time() < deadline:
     time.sleep(0.2)
 time.sleep(1.5)                   # let sh load and print its prompt
 
+# Type each command only once the shell has printed the prompt for it.
+#
+# This used to type at one-second intervals regardless, which put the
+# whole script into the kernel's type-ahead: the shell-commands session
+# is ~450 bytes and kbdq holds about 450 (see "RESOLVED: the console
+# wedge" in os/bcm2837/README.md -- a limit enforced on allocated bytes,
+# ~150 per typed character). The shell was seen executing eight
+# commands behind the typing, and one run lost the middle of the
+# session -- cd, date and basename failed with their output simply
+# absent -- and left nothing to inspect. A person never types thirty
+# characters into a busy second; a script does. Waiting for the prompt
+# keeps at most one line in flight, so the capacity never matters, and
+# is faster than the fixed sleep when the shell is quick. Bounded, so a
+# command that never returns costs one timeout rather than the session.
+def prompts():
+    b = bytes(buf)
+    return b.count(b"\n; ") + b.count(b"\r; ")
 try:
+    seen = prompts()
     for c in cmds:
+        deadline = time.time() + 15
+        while time.time() < deadline and prompts() <= seen:
+            time.sleep(0.05)
+        seen = prompts()
         # CR, not NL -- this is what a terminal's Enter key sends, and
         # what anything driving the line from a script sends. Typing NL
         # here for eight months meant the cooked-mode line discipline was
@@ -1015,7 +1116,6 @@ try:
         # kbd.line and the line was never terminated.
         p.stdin.write(c.encode() + b"\r")
         p.stdin.flush()
-        time.sleep(1.0)
 
     # Wait for the session to DRAIN, rather than guessing how long the
     # last command takes.
@@ -1412,6 +1512,10 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ps | wc -l' \
         'sleep 0; echo slept-ok' \
         'for(i in x y z){ echo loop2-$i }')"
+# Kept: when one of the checks below fails, this is the only record of
+# what the shell actually said, and a failure with nothing to read is a
+# failure that gets re-run instead of understood.
+printf '%s\n' "$SHOUT" > "$BUILD/$PLAT-shell.txt"
 
 # Strip carriage returns once, here.
 #
@@ -1813,17 +1917,18 @@ fi
 #     part of a second behind the key. The framebuffer is now allocated
 #     taller than the display and scrolling sets a GPU offset instead.
 #
-#     That path cannot run under a plain emulated boot: QEMU grants the
-#     offset but reports a screen-sized allocation, so the safety gate
-#     -- rightly -- keeps the fast path off, and the code that only runs
-#     on hardware would be the code nothing tests. So build a variant
-#     that gives the console half the panel and uses the other half as
-#     headroom. The offset arithmetic, the fold, and the line clearing
-#     then all execute inside the allocation QEMU really did give us.
-#
-#     What this proves is bounded but is the part that matters: the
-#     window moves, a full cycle folds back to the top, no write lands
-#     outside the buffer, and the kernel still finishes booting.
+#     Under QEMU 8.2 the fast path IS taken -- the emulator reports the
+#     double-height allocation and grants the offset -- but its display
+#     never follows it: bcm2835_fb applies the virtual offset only when
+#     the virtual buffer is wider AND taller than the display
+#     (fb_use_offsets), and this kernel asks for taller only. So the
+#     QEMU window freezes on the first screenful while the console, and
+#     everything painted after it, lives further down the buffer. Real
+#     firmware follows the offset. This variant halves the console's
+#     height so the fold and the range checks execute within a shorter
+#     window; what is asserted here is read from the serial log, and
+#     the logon test below reads pixels from guest memory at the row the
+#     console reports, which is what a panel shows.
 #
 if build_kernel "$BUILD/$PLAT-fbscroll.img" "" "-DFBSCROLLTEST"; then
     FBOUT="$(boot_kernel "$BUILD/$PLAT-fbscroll.img" 20)"
@@ -2718,6 +2823,307 @@ check "text rendered with the built-in font" \
                                        "a label draws glyphs with libdraw's compiled-in font, with no /fonts on the machine"
 OUT="$OUT_SAVED"
 
+#
+# 3i4. The login screen.
+#
+#      The first thing a person meets on the board, and until now the
+#      one part of the GUI stack with no emulated run at all: the harness
+#      boots wm/wm and a Tk toplevel, but never wm/logon, and the eight
+#      commits before this test were all made to logon by typing at a
+#      Pi. This drives the whole thing the way a person does -- the
+#      password on a USB keyboard, into a Tk entry, over a real DWC
+#      controller -- and asserts each layer from the outside.
+#
+#      Two runs in one boot, because they prove different things:
+#
+#        first boot   no account exists. logon asks for a password
+#                     twice, writes the PAK verifier under /usr, then
+#                     AUTHENTICATES TO IT through secstored over the
+#                     kernel's own TCP stack on loopback. That is the
+#                     crypto (mkfilekey3, PAK) running as JIT-compiled
+#                     AArch64 with os/ip underneath -- nothing here is
+#                     mocked.
+#        second boot  the account exists. One password, one PAK round
+#                     trip, exit 0. This is every boot after the first,
+#                     and the one that would lock a person out.
+#
+#      What a green result does NOT say: that factotum received any
+#      keys. os/init/profile starts secstored and not factotum, and
+#      logon tolerates that -- the open of /mnt/factotum/ctl fails and
+#      it carries on -- so on the board today a login completes and
+#      loads nothing. The test records that state rather than hiding
+#      it: "secstore has no factotum file" is asserted PRESENT, because
+#      it is what proves the PAK exchange got as far as fetching a file.
+#      When factotum is started on bare metal, that line changes and so
+#      should this test.
+#
+#      /usr is made writable with memfs from the shell first. The image
+#      root is read-only and both logon and secstored create under
+#      /usr/inferno/secstore; the profile's secstored started before
+#      that mount, and sees it anyway because sh forks its namespace
+#      once at startup and "&" jobs share it -- the same reason the
+#      later commands see it.
+#
+#      The panel is detected from pixels, not from a sleep: the console
+#      background (0x101018) stops being the dominant colour when logon
+#      paints, and a form has more than one colour on it. The second
+#      run cannot use that -- logon's last frame is still on screen --
+#      so it waits for the frame to CHANGE from a snapshot taken before
+#      logon is typed.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" "$BUILD/$PLAT-logon.ppm" <<'PYEOF' > "$BUILD/$PLAT-logon.txt" 2>&1
+import subprocess, socket, json, time, sys, threading, os, re
+qemu, img, extra, ppm = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+PORT = 4481
+PASSWORD = "qemu1234"                  # qcodes: letters and digits only
+p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-kbd",
+                     "-kernel", img, "-display", "none", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+
+def waitfor(needle, secs, count=1):
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        if bytes(buf).count(needle) >= count:
+            return True
+        time.sleep(0.2)
+    return False
+
+def serial(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush()
+    time.sleep(settle)
+
+CONSOLE = {(0x10, 0x10, 0x18), (0xC8, 0xC8, 0xC8)}   # fbcons bg and fg
+
+# Where the framebuffer is and which row of it the glass shows.
+#
+# NOT a QMP screendump. QEMU's bcm2835_fb applies the virtual offset
+# only when the virtual buffer is wider AND taller than the display
+# (fb_use_offsets, hw/display/bcm2835_fb.c); this kernel asks for one
+# that is taller only, so QEMU allocates the double-height buffer,
+# grants and reads back every offset the console sets -- and never
+# scans out from it. Its display shows rows 0..h of the buffer for
+# ever, while the console, and then logon, paint at the row the
+# console's own bookkeeping says the glass is on. Real firmware
+# follows the offset; that row IS the panel there. So read the pixels
+# the kernel painted, at the row it says, from guest memory: that is
+# what a person at the board sees, and the emulator's window is not.
+FB = {}
+def fbgeom():
+    m = re.search(rb"fb:\s+(\d+)x(\d+)x32 pitch=(\d+) base=0x([0-9a-fA-F]+)", bytes(buf))
+    if m:
+        FB.update(w=int(m.group(1)), h=int(m.group(2)), pitch=int(m.group(3)), base=int(m.group(4), 16))
+    return bool(FB)
+
+def frozenrow():
+    # The last handover the console reported; logon's attach prints one.
+    rows = re.findall(rb"released to the draw device at row (\d+)", bytes(buf))
+    return int(rows[-1]) if rows else None
+
+def screen(f, save=None):
+    # The h rows the glass shows, read from guest memory: (dominant
+    # colour, pixels that are neither console colour, raw bytes) or
+    # None. save= writes them as a P6 PPM for a human to look at.
+    if not FB and not fbgeom():
+        return None
+    row = frozenrow()
+    if row is None:
+        return None
+    w, h, pitch, base = FB["w"], FB["h"], FB["pitch"], FB["base"]
+    if os.path.exists(ppm):
+        os.unlink(ppm)
+    f.write(json.dumps({"execute": "pmemsave", "arguments":
+        {"val": base + row * pitch, "size": h * pitch, "filename": ppm}}) + "\n")
+    f.flush()
+    while True:                        # past async events to the reply
+        line = f.readline()
+        if not line:
+            return None
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if "return" in msg or "error" in msg:
+            break
+    if not os.path.exists(ppm) or os.path.getsize(ppm) < h * pitch:
+        return None
+    px = open(ppm, "rb").read()
+    hist = {}
+    for y in range(0, h, 2):
+        rb = y * pitch
+        for x in range(0, w, 2):
+            o = rb + x * 4                 # pixel order 0: B,G,R,X in memory
+            c = (px[o+2], px[o+1], px[o])
+            hist[c] = hist.get(c, 0) + 1
+    dom = max(hist, key=hist.get)
+    other = sum(n for c, n in hist.items() if c not in CONSOLE)
+    if save:
+        with open(save, "wb") as out:
+            out.write(b"P6\n%d %d\n255\n" % (w, h))
+            for y in range(h):
+                rb = y * pitch
+                out.write(b"".join(bytes((px[rb+x*4+2], px[rb+x*4+1], px[rb+x*4])) for x in range(w)))
+    return dom, other, px
+
+def press(f, *keys):
+    for k in keys:
+        for down in (True, False):
+            f.write(json.dumps({"execute": "input-send-event", "arguments":
+                {"events": [{"type": "key", "data": {"down": down,
+                 "key": {"type": "qcode", "data": k}}}]}}) + "\n")
+            f.flush(); f.readline()
+            time.sleep(0.06)
+
+def typepassword(f):
+    press(f, *list(PASSWORD))
+    time.sleep(0.5)
+    press(f, "ret")
+
+try:
+    if not waitfor(b"init: starting the shell", 90):
+        print("NO-SHELL"); sys.exit(0)
+    time.sleep(1.5)
+
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); sys.exit(0)
+    s.settimeout(20)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+
+    if not waitfor(b"ready on endpoint", 60):
+        print("KBD-NOT-READY")
+    time.sleep(2)
+
+    # Setup over the serial line: not what is under test.
+    serial("path=(/dis .)")
+    serial("memfs -m 2097152 /usr")
+    # The card's /usr tree carries /usr/inferno; a fresh memfs does not,
+    # and logon creates only secstore/ and the user's directory beneath
+    # it -- so without this the first boot fails with "can't create
+    # /usr/inferno/secstore/inferno: '/usr/inferno' file does not
+    # exist", on the panel and nowhere else. Mirror what the card
+    # provides rather than what an empty filesystem does.
+    serial("mkdir /usr/inferno")
+    serial("bind -a '#i' /dev")
+
+    # The completion markers are typed as d^one -- sh's concatenation,
+    # which echo prints as "done" -- because the line discipline echoes
+    # every character typed, and the first run of this test matched its
+    # own command line the instant it was echoed, then typed passwords
+    # at a form that was not up and read "ls" output that was never
+    # produced. What is waited for must be something only the SHELL can
+    # print.
+    # ── First boot: no account. ──
+    serial("wm/logon; echo LOGON1 d^one $status", settle=0.5)
+    started = time.time(); up = None
+    while time.time() < started + 60:
+        m = screen(f)
+        if m and m[1] >= 5000:
+            up = m; break
+        time.sleep(1)
+    if up:
+        print("PANEL1 UP row=%s dominant=#%02x%02x%02x painted=%d after %.1fs" % ((frozenrow(),) + up[0] + (up[1], time.time() - started)))
+        screen(f, save=ppm + ".1up.ppm")
+    else:
+        print("PANEL1 MISSING (nothing but the console at the frozen row)")
+    time.sleep(1)
+    typepassword(f)                    # choose
+    time.sleep(2)
+    screen(f, save=ppm + ".1chosen.ppm")
+    t0 = time.time()
+    typepassword(f)                    # confirm
+    time.sleep(3)
+    screen(f, save=ppm + ".1confirmed.ppm")
+    if waitfor(b"LOGON1 done", 240):
+        print("LOGON1 EXITED after %.1fs (account creation + PAK unlock under TCG)" % (time.time() - t0))
+    else:
+        print("LOGON1 TIMEOUT")
+        screen(f, save=ppm + ".1timeout.ppm")
+
+    serial("ls /usr/inferno/secstore/inferno")     # prints PAK on its own line
+    serial("echo sentinel `{cat /tmp/.secstore-unlocked}")
+
+    # ── Second boot: the account exists. ──
+    before = screen(f)
+    serial("wm/logon; echo LOGON2 d^one $status", settle=0.5)
+    started = time.time(); changed = None
+    while time.time() < started + 60:
+        m = screen(f)
+        if m and before and m[2] != before[2] and m[1] >= 2000:
+            changed = m; break
+        time.sleep(1)
+    if changed:
+        print("PANEL2 UP row=%s dominant=#%02x%02x%02x painted=%d after %.1fs" % ((frozenrow(),) + changed[0] + (changed[1], time.time() - started)))
+        screen(f, save=ppm + ".2up.ppm")
+    else:
+        print("PANEL2 MISSING (window never changed)")
+    time.sleep(1)
+    t0 = time.time()
+    typepassword(f)                    # unlock
+    if waitfor(b"LOGON2 done", 240):
+        print("LOGON2 EXITED after %.1fs (PAK unlock under TCG)" % (time.time() - t0))
+    else:
+        print("LOGON2 TIMEOUT")
+        screen(f, save=ppm + ".2timeout.ppm")
+
+    p.stdin.write(b"echo dRaInEd\r"); p.stdin.flush()
+    waitfor(b"dRaInEd", 30, count=2)
+    s.close()
+except Exception as e:
+    print("DRIVER-ERROR %r" % (e,))
+finally:
+    p.kill(); p.wait()
+
+sys.stdout.write(bytes(buf).decode("utf-8", "replace"))
+PYEOF
+
+LOGONOUT="$(tr -d '\r' < "$BUILD/$PLAT-logon.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- logon ---"; echo "$LOGONOUT"; }
+
+if grep -q '^SKIP' <<<"$LOGONOUT"; then
+    skip "login screen ($(grep '^SKIP' <<<"$LOGONOUT" | head -1))"
+else
+    OUT_SAVED="$OUT"; OUT="$LOGONOUT"
+    check "secstored: listening on tcp!127.0.0.1!5356" \
+                                       "auth/secstored starts from the profile once the image carries it"
+    if grep -q 'tk: font not found\|cannot build the login form' <<<"$LOGONOUT"; then
+        fail "logon could not build its Tk form (a font it names is not in the image)"
+    else
+        pass "logon's Tk form builds with the fonts staged for it"
+    fi
+    check "PANEL1 UP"                  "wm/logon paints the login panel over the console"
+    check "logon: secstore account created for inferno" \
+                                       "first boot creates the secstore account from a password typed twice on the USB keyboard"
+    check "^LOGON1 done *$"            "logon exits successfully after first-boot setup"
+    check "\(^\|/\)PAK$"             "the PAK verifier is on /usr where the next boot will look for it"
+    check "^sentinel 1"                "the unlocked sentinel is written for the desktop to read"
+    check "PANEL2 UP"                  "a second wm/logon presents the unlock form"
+    check "^LOGON2 done *$"            "the password unlocks the existing account"
+    if [[ "$(grep -c 'secstore has no factotum file' <<<"$LOGONOUT")" -ge 2 ]]; then
+        pass "PAK authentication to secstored over loopback TCP succeeded on both runs (no factotum on bare metal: recorded, not hidden)"
+    else
+        fail "PAK authentication did not reach secstore's file fetch on both runs"
+    fi
+    OUT="$OUT_SAVED"
+fi
+
 if grep -qE 'x8r8g8b8' <<<"$DRAWOUT"; then
     pass "a draw client attaches and the screen is x8r8g8b8 as the firmware was asked for"
 else
@@ -2911,7 +3317,9 @@ fi
 run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0"
 
 #
-# The virt machine.
+# The virt machine -- NOT RUN. Kept as the design note for whoever builds
+# os/virt, because two of these are the kind of thing that costs a day
+# to rediscover:
 #
 # -cpu cortex-a53 is NOT optional, and is the single most confusing
 # thing about this target: -M virt defaults to cortex-a15, a 32-bit
@@ -2920,13 +3328,17 @@ run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0"
 # because the CPU is decoding the image as ARM32. Picking the same A53
 # the Pi has also keeps the MIDR assertion common to both platforms.
 #
-# -m 1024 matches the Pi 3B+'s 1GB, and is asserted on: it proves the
-# device-tree parse read a real number rather than falling back to a
-# default that happened to look plausible.
+# -m 1024 matches the Pi 3B+'s 1GB, and would be asserted on: it proves
+# the device-tree parse read a real number rather than falling back to
+# a default that happened to look plausible.
 #
-# The virtio devices are attached so the transport scan has something to
-# find. They are not driven -- there are no drivers yet -- but their
-# presence is what makes virt worth having, so the test asserts it.
+# The virtio devices would be attached so the transport scan has
+# something to find. When the board exists, the line is:
+#
+#   run_platform virt "-M virt -cpu cortex-a53 -m 1024 ..."
+#
+# and the machine-model probe near the top of this file, which already
+# requires virt to be present in QEMU, stops being a check on nothing.
 #
 
 

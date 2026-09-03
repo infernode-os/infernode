@@ -706,12 +706,18 @@ fbconsadd(Fbinfo *fb)
 	 * Give the console only half of this screen so the other half
 	 * becomes the scrolling headroom.
 	 *
-	 * QEMU grants the offset but reports a screen-sized allocation,
-	 * so the gate below -- correctly -- keeps the fast path off
-	 * there, and the code that only runs on hardware would be the
-	 * code no test ever touches. Halving makes the headroom real
-	 * WITHIN the allocation the emulator did give us, so the offset
-	 * arithmetic, the fold and the clearing all execute under test.
+	 * QEMU 8.2 reports the double-height allocation and grants the
+	 * offset, so the gate below lets the fast path through there --
+	 * and then never scans out from the offset: bcm2835_fb applies
+	 * it only when the virtual buffer is wider AND taller than the
+	 * display (fb_use_offsets), and this kernel asks for taller only.
+	 * The emulator's window freezes on the first screenful while the
+	 * console paints further down the buffer. Nothing in software
+	 * can tell: the offset reads back exactly as set. Real firmware
+	 * follows it, which is why the board is right and the emulator is
+	 * not, and why the harness reads pixels from guest memory at the
+	 * row this console reports rather than from QEMU's display.
+	 * Halving here makes the fold execute within a shorter window.
 	 */
 	s->h /= 2;
 	s->h -= s->h % Fh;

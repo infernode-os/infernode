@@ -1506,9 +1506,11 @@ jobs:
   # through QMP.
   #
   # What this job cannot cover is recorded in that README under "QEMU vs
-  # real hardware", and is not weakened by a green run here: TCG models
-  # no split I/D caches, so the Dis JIT's icache maintenance is invisible
-  # to this job and stays unaccepted until it has run on silicon.
+  # real hardware", and a green run here is not hardware acceptance: TCG
+  # models no split I/D caches, so the Dis JIT's icache maintenance is
+  # invisible to this job and can only be exercised on the board -- where
+  # it has run. ffc253b is the last commit that ran on a Pi 3B+; every
+  # commit since changes the harness and documentation, not kernel code.
   # ─────────────────────────────────────────────
   baremetal:
     name: Bare-metal AArch64 (QEMU raspi3b + virt)

@@ -393,7 +393,7 @@ BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
 
 `tests/host/baremetal_test.sh` is both the build system and the test
 suite — it is the only supported way to build the kernel, and it boots
-what it builds under `qemu-system-aarch64` (`raspi3b` and `virt`),
+what it builds under `qemu-system-aarch64` (`raspi3b`; a `virt` board is designed for but not written),
 driving real shell sessions over the serial line and reading framebuffer
 pixels back through QMP. The `baremetal` job in `.github/workflows/ci.yml`
 runs it on every PR.

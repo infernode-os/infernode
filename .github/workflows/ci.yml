@@ -1486,3 +1486,98 @@ jobs:
           Nt\amd64\bin\limbo.exe
           Nt\amd64\bin\mk.exe
         retention-days: 14
+
+  # ─────────────────────────────────────────────
+  # Bare-metal AArch64: build the native kernel and boot it under QEMU
+  #
+  # os/ is the *native* port -- InferNode as the firmware on the board,
+  # with no host OS underneath. It shares no build path with the emu/
+  # jobs above (it links against libinterp, libsec and libmath but not
+  # against emu's POSIX layer), so none of those jobs can catch a
+  # regression in it. Until this job existed, tests/host/baremetal_test.sh
+  # -- ~2800 lines and roughly a hundred assertions -- gated nothing and
+  # ran only on one developer's machine.
+  #
+  # There is no Raspberry Pi in CI and there does not need to be: QEMU's
+  # raspi3b and virt machine models are the port's primary development
+  # target (os/bcm2837/README.md), and the harness drives real boots --
+  # interactive shell sessions over the serial line, USB enumeration,
+  # SD card reads and writes, and framebuffer pixels read back out
+  # through QMP.
+  #
+  # What this job cannot cover is recorded in that README under "QEMU vs
+  # real hardware", and is not weakened by a green run here: TCG models
+  # no split I/D caches, so the Dis JIT's icache maintenance is invisible
+  # to this job and stays unaccepted until it has run on silicon.
+  # ─────────────────────────────────────────────
+  baremetal:
+    name: Bare-metal AArch64 (QEMU raspi3b + virt)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install the cross toolchain and QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          clang lld llvm qemu-system-arm
+        # clang cross-compiles to aarch64-elf with no GNU cross-gcc;
+        # lld supplies the ELF-capable linker; llvm supplies objcopy,
+        # ar and nm; qemu-system-arm supplies qemu-system-aarch64.
+
+    - name: Bootstrap the host tools (mk, limbo)
+      run: |
+        export ROOT=$PWD
+        # makemk.sh defaults to MacOSX/arm64 and honours these.
+        SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+        export PATH=$ROOT/Linux/amd64/bin:$PATH
+        # makemk.sh builds only the subset of lib9 that mk itself needs,
+        # so lib9 is rebuilt in full here -- limbo links against symbols
+        # (argv0 among them) that the bootstrap subset does not carry.
+        for d in lib9 libbio libmath libsec libmp limbo; do
+          ( cd "$d" && mk install ) || { echo "FATAL: $d failed to build" >&2; exit 1; }
+        done
+
+    - name: Verify the harness will actually run
+      run: |
+        # baremetal_test.sh SKIPs and exits 0 when a tool is missing.
+        # That is right on a developer box and wrong here: CI installs
+        # these itself, so a missing one means this job is broken, not
+        # that the host is unsupported. Without this check the job can
+        # report success having built and booted nothing at all.
+        for t in clang ld.lld llvm-objcopy llvm-ar llvm-nm qemu-system-aarch64; do
+          command -v "$t" >/dev/null || { echo "FATAL: $t is missing" >&2; exit 1; }
+        done
+        for m in raspi3b virt; do
+          qemu-system-aarch64 -machine help | grep -q "^$m" \
+            || { echo "FATAL: this QEMU has no $m machine model" >&2; exit 1; }
+        done
+        # No limbo means no Dis VM, no shell and no Limbo drivers in the
+        # image -- the harness warns and carries on, which must not be
+        # allowed to pass silently here.
+        test -x "$PWD/Linux/amd64/bin/limbo" \
+          || { echo "FATAL: limbo was not bootstrapped" >&2; exit 1; }
+
+    - name: Build the kernel and boot it under QEMU
+      run: |
+        export ROOT=$PWD
+        export PATH=$ROOT/Linux/amd64/bin:$PATH
+        # Keep the build directory: on a failure the reported PCs can
+        # only be symbolised against the ELF that produced them.
+        export BAREMETAL_BUILD_DIR=$PWD/bm-build
+        ./tests/host/baremetal_test.sh
+
+    - name: Upload kernel images and build log
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: baremetal-aarch64
+        path: |
+          bm-build/*.img
+          bm-build/*.elf
+          bm-build/cc.log
+        retention-days: 14

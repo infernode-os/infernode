@@ -369,6 +369,47 @@ timeoutTask(ch: chan of int, ms: int)
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
+## Bare-metal (os/) — the native port
+
+`os/` is InferNode running as the firmware on the board, with no host OS
+underneath. It shares no build path with anything under `emu/`, so the
+normal `mk install` loop does not touch it and the normal test suites
+cannot catch a regression in it.
+
+**It does not need a Raspberry Pi.** QEMU is the primary development
+target, so this port can be worked on entirely from a Linux cloud
+instance:
+
+```sh
+sudo apt-get install -y clang lld llvm qemu-system-arm
+
+export ROOT=$PWD
+SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh        # makemk.sh defaults to MacOSX/arm64
+export PATH=$ROOT/Linux/amd64/bin:$PATH
+for d in lib9 libbio libmath libsec libmp limbo; do (cd $d; mk install); done
+
+BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
+```
+
+`tests/host/baremetal_test.sh` is both the build system and the test
+suite — it is the only supported way to build the kernel, and it boots
+what it builds under `qemu-system-aarch64` (`raspi3b` and `virt`),
+driving real shell sessions over the serial line and reading framebuffer
+pixels back through QMP. The `baremetal` job in `.github/workflows/ci.yml`
+runs it on every PR.
+
+Two cautions:
+
+- **The harness SKIPs and exits 0 when a tool is missing.** A clean run
+  with no kernel output means the toolchain was not found, not that
+  everything passed. Without `limbo` in particular the Dis VM, the shell
+  and every Limbo driver silently drop out of the image.
+- **Green under QEMU is not hardware acceptance.** TCG models no split
+  I/D caches, so missing JIT icache maintenance is invisible here and
+  fails on silicon. See "QEMU vs real hardware" in
+  [os/bcm2837/README.md](os/bcm2837/README.md), which is the design
+  record for this port.
+
 ## Project Structure
 
 ```
@@ -386,6 +427,13 @@ infernode/
 │   ├── acme/            #   Acme text editor
 │   ├── wm/              #   Window manager
 │   └── svc/             #   Services (httpd, etc.)
+├── os/                  # Bare-metal kernel — InferNode as the firmware,
+│   │                    #   no host OS underneath (contrast emu/)
+│   ├── arm64/           #   Shared AArch64: boot, vectors, traps, kmain
+│   ├── bcm2837/         #   Raspberry Pi 3B+ SoC: MMU map, PL011, mailbox
+│   ├── ip/              #   In-kernel TCP/IP stack
+│   ├── port/            #   Portable kernel: scheduler, namespace, alloc
+│   └── init/            #   Limbo that ships inside the image
 ├── module/              # Limbo module interfaces (.m files)
 ├── tests/               # Unit tests (Limbo + shell)
 │   ├── host/            #   Host-side shell tests

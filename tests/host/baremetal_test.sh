@@ -101,12 +101,37 @@ LLD="$(find_lld)"
 OBJCOPY="$(find_objcopy)"
 AR="$(command -v llvm-ar 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-ar)"
 
-# The Limbo compiler, for generating runt.h/sysmod.h. Not fatal if
-# absent: the files that need them simply will not be in the build.
-LIMBO="$(command -v limbo 2>/dev/null)"
-[[ -z "$LIMBO" && -x "$ROOT/MacOSX/arm64/bin/limbo" ]] && LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
-[[ -z "$LIMBO" && -x /Users/pdfinn/github.com/infernode-os/infernode/MacOSX/arm64/bin/limbo ]] \
-    && LIMBO=/Users/pdfinn/github.com/infernode-os/infernode/MacOSX/arm64/bin/limbo
+# The Limbo compiler, for generating runt.h/sysmod.h and for compiling
+# the Limbo that goes into the image.
+#
+# Absent, it is not fatal -- but it is very far from harmless, so it is
+# announced below rather than left to be inferred. Without limbo the Dis
+# VM, the shell, and every driver written in Limbo drop out of the image,
+# and the run still reports PASS for the handful of C-only checks that
+# remain. A green run would then mean much less than it looks like.
+#
+# The host tree is probed via uname using the same mapping mkconfig
+# makes, so a bootstrapped tree finds the limbo it just built even when
+# PATH was not set up for it. That matters on Linux, where the previous
+# MacOSX/arm64-only fallback could never hit.
+find_limbo() {
+    local syshost objtype c
+    case "$(uname -s)" in Darwin) syshost=MacOSX;; *) syshost="$(uname -s)";; esac
+    case "$(uname -m)" in
+        x86_64)       objtype=amd64;;
+        aarch64|arm64) objtype=arm64;;
+        *)            objtype=amd64;;
+    esac
+    for c in \
+        "$(command -v limbo 2>/dev/null)" \
+        "$ROOT/$syshost/$objtype/bin/limbo" \
+        "$ROOT/MacOSX/arm64/bin/limbo"
+    do
+        [[ -n "$c" && -x "$c" ]] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+LIMBO="$(find_limbo)"
 
 if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" ]]; then
     skip "AArch64 cross toolchain not available (need clang, ld.lld, llvm-objcopy)"
@@ -133,6 +158,14 @@ info "cc:      $CC"
 info "ld:      $LLD"
 info "objcopy: $OBJCOPY"
 info "qemu:    $QEMU"
+if [[ -n "$LIMBO" ]]; then
+    info "limbo:   $LIMBO"
+else
+    echo -e "${YELLOW}WARNING${NC}: no Limbo compiler found -- building a kernel with no"
+    echo "         Dis VM, no shell and no Limbo drivers. The checks that need"
+    echo "         them will not run, and a clean result does NOT mean they passed."
+    echo "         Bootstrap one with ./makemk.sh then (cd limbo; mk install)."
+fi
 
 # The build directory is normally a temporary that is removed on exit.
 # That is right for a test run and wrong for a debugging session: when the
@@ -546,7 +579,7 @@ build_kernel() {
         printf '16\t13\n0x0000\t0x0100\tVera.14.0000\n' > "$BUILD/unicode.14.font"
         rootmanifest+=(
             "/fonts/vera/Vera/unicode.14.font=$BUILD/unicode.14.font"
-            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/Vera/Vera.14.0000"
+            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/vera/vera.14.0000"
         )
 
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \

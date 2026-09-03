@@ -129,6 +129,58 @@ If any of those is missing the harness SKIPS rather than fails, so a
 clean run with no output about the kernel means the toolchain was not
 found, not that everything passed.
 
+### Linux, and CI
+
+The same harness runs on Linux. That is what lets this port be worked on
+with no Mac and no board in the room -- a cloud instance is enough, and
+it is where the QEMU loop below actually happens now. Everything the
+list above wants is packaged:
+
+    sudo apt-get install -y clang lld llvm qemu-system-arm
+
+The host tools are not checked in, so bootstrap them once. `makemk.sh`
+defaults to `MacOSX/arm64` and honours the environment:
+
+    export ROOT=$PWD
+    SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+    export PATH=$ROOT/Linux/amd64/bin:$PATH
+    for d in lib9 libbio libmath libsec libmp limbo; do (cd $d; mk install); done
+
+`lib9` is rebuilt in full deliberately: `makemk.sh` compiles only the
+subset `mk` itself needs, and `limbo` then fails to link against it with
+an undefined `argv0`.
+
+Then, exactly as on macOS:
+
+    BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
+
+**CI runs this on every pull request** — the `baremetal` job in
+`.github/workflows/ci.yml`. Before that job existed this harness gated
+nothing: `os/` shares no build path with the `emu/` jobs, so no other
+job could catch a regression in it. Because CI installs the toolchain
+itself, the job asserts the tools are present rather than inheriting the
+harness's SKIP — a missing compiler there means the job is broken, not
+that the host is unsupported.
+
+None of this changes what QEMU can and cannot tell us; see "QEMU vs real
+hardware" below. A green `baremetal` job is not hardware acceptance.
+
+Two assumptions were macOS-only until this first ran on Linux, and both
+failed quietly rather than loudly:
+
+- The font staged into the image was read from the host as
+  `fonts/vera/Vera/Vera.14.0000`. The file on disk is
+  `fonts/vera/vera/vera.14.0000` — the path only ever resolved because
+  APFS is case-insensitive by default. On Linux the kernel did not
+  build at all. (The *in-image* path is unchanged: it is what the
+  programs ask for, and the compiled-in root is case-sensitive.)
+- `limbo` was looked for on `PATH`, then at `MacOSX/arm64/bin/limbo` —
+  a fallback that can never hit on Linux. Its absence is not fatal, and
+  that is the danger: the Dis VM, the shell and every Limbo driver drop
+  out of the image while the run still reports PASS for the C-only
+  checks that remain. It is now probed under the host tree `uname`
+  implies, and a miss is announced rather than left to be inferred.
+
 ## Running under QEMU
 
 QEMU's `raspi3b` machine model is the BCM2837, and is the primary

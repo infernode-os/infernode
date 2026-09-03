@@ -1664,47 +1664,6 @@ python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$BUILD/$PLAT-screen.ppm" <<'PYEOF' 
 import subprocess, socket, time, json, os, sys
 qemu, img, ppm = sys.argv[1], sys.argv[2], sys.argv[3]
 
-# A free-ish high port; QMP over TCP because the AF_UNIX path limit
-# (~104 chars) is easy to exceed under a temp dir.
-PORT = 4477
-p = subprocess.Popen([qemu, "-M", "raspi3b", "-kernel", img,
-                      "-display", "none", "-serial", "null",
-                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-try:
-    deadline = time.time() + 15
-    s = None
-    while time.time() < deadline:
-        try:
-            s = socket.create_connection(("127.0.0.1", PORT), timeout=1); break
-        except OSError:
-            time.sleep(0.3)
-    if s is None:
-        print("SKIP no QMP"); sys.exit(0)
-    time.sleep(3)                      # let kmain reach the draw
-    f = s.makefile("rw")
-    f.readline()
-    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
-    f.write(json.dumps({"execute": "screendump",
-                        "arguments": {"filename": ppm}}) + "\n"); f.flush()
-    f.readline()
-    s.close()
-finally:
-    p.kill(); p.communicate()
-
-if not os.path.exists(ppm):
-    print("SKIP no screendump"); sys.exit(0)
-
-d = open(ppm, "rb").read()
-parts = d.split(b"\n", 3)
-if parts[0] != b"P6":
-    print("SKIP not a P6 ppm"); sys.exit(0)
-w, h = map(int, parts[1].split()); px = parts[3]
-
-def pix(x, y):
-    o = (y*w + x)*3
-    return tuple(px[o:o+3])
-
 # The console has taken the screen, so the boot test pattern is gone --
 # correctly: a console clears what was there. What replaces the pattern
 # check proves strictly more.
@@ -1717,26 +1676,122 @@ def pix(x, y):
 BG = (0x10, 0x10, 0x18)
 FG = (0xC8, 0xC8, 0xC8)
 
-nbg = nfg = 0
-rows = set()
-for y in range(h):
-    for x in range(0, w, 2):        # every other column is plenty
-        c = pix(x, y)
-        if c == BG:
-            nbg += 1
-        elif c == FG:
-            nfg += 1
-            rows.add(y)
+def measure(path):
+    d = open(path, "rb").read()
+    parts = d.split(b"\n", 3)
+    if len(parts) < 4 or parts[0] != b"P6":
+        return None
+    w, h = map(int, parts[1].split()); px = parts[3]
+    if len(px) < w * h * 3:
+        return None
+    nbg = nfg = 0
+    rows = set()
+    for y in range(h):
+        base = y * w
+        for x in range(0, w, 2):        # every other column is plenty
+            o = (base + x) * 3
+            c = (px[o], px[o+1], px[o+2])
+            if c == BG:
+                nbg += 1
+            elif c == FG:
+                nfg += 1
+                rows.add(y)
+    return w, h, nbg, nfg, len(rows)
 
-bad = []
-if nbg < (w // 2) * h // 4:
-    bad.append(f"background {BG} covers only {nbg} sampled pixels")
-if nfg < 500:
-    bad.append(f"only {nfg} text pixels -- console drew nothing legible")
-if len(rows) < 32:
-    bad.append(f"text spans {len(rows)} scanlines -- expected many lines")
+def verdict(m):
+    w, h, nbg, nfg, nrows = m
+    bad = []
+    if nbg < (w // 2) * h // 4:
+        bad.append(f"background {BG} covers only {nbg} sampled pixels")
+    if nfg < 500:
+        bad.append(f"only {nfg} text pixels -- console drew nothing legible")
+    if nrows < 32:
+        bad.append(f"text spans {nrows} scanlines -- expected many lines")
+    return bad
 
-print("DIMS %dx%d bg=%d fg=%d rows=%d" % (w, h, nbg, nfg, len(rows)))
+def rpc(f, cmd):
+    # Read past asynchronous QMP events to the reply for this command.
+    # A bare readline() desynchronises the moment QEMU emits one, and
+    # this loop issues many commands rather than the single screendump
+    # it used to.
+    f.write(json.dumps(cmd) + "\n"); f.flush()
+    while True:
+        line = f.readline()
+        if not line:
+            return None
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if "return" in msg or "error" in msg:
+            return msg
+
+# A free-ish high port; QMP over TCP because the AF_UNIX path limit
+# (~104 chars) is easy to exceed under a temp dir.
+PORT = 4477
+p = subprocess.Popen([qemu, "-M", "raspi3b", "-kernel", img,
+                      "-display", "none", "-serial", "null",
+                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+m = None
+bad = ["no screendump"]
+waited = 0.0
+try:
+    deadline = time.time() + 15
+    s = None
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1); break
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); sys.exit(0)
+    s.settimeout(15)
+    f = s.makefile("rw")
+    f.readline()                       # the greeting
+    rpc(f, {"execute": "qmp_capabilities"})
+
+    # Sample until the console has finished drawing, rather than sleeping
+    # a fixed interval and hoping.
+    #
+    # This used to be time.sleep(3), which is not enough even on an idle
+    # machine: at three seconds the console has drawn around eleven rows
+    # of a screen this asserts has at least thirty-two, so the check was
+    # passing on margin rather than on merit. Under load -- which is what
+    # a shared CI runner is -- it sampled a screen with a single pixel
+    # drawn and failed a kernel that was fine.
+    #
+    # Polling is also strictly faster in the good case: it returns as
+    # soon as the screen is complete instead of always paying the wait.
+    started = time.time()
+    pixdeadline = started + 45
+    while True:
+        if os.path.exists(ppm):
+            os.unlink(ppm)             # never measure the previous dump
+        if rpc(f, {"execute": "screendump",
+                   "arguments": {"filename": ppm}}) is None:
+            break
+        if os.path.exists(ppm):
+            mm = measure(ppm)
+            if mm is not None:
+                m, bad = mm, verdict(mm)
+                if not bad:
+                    break
+        if time.time() >= pixdeadline:
+            break
+        time.sleep(1)
+    waited = time.time() - started
+    s.close()
+except (socket.timeout, OSError) as e:
+    if m is None:
+        print(f"SKIP QMP failed: {e}"); sys.exit(0)
+finally:
+    p.kill(); p.communicate()
+
+if m is None:
+    print("SKIP no usable screendump"); sys.exit(0)
+
+print("DIMS %dx%d bg=%d fg=%d rows=%d after %.1fs" % (m + (waited,)))
 print("OK" if not bad else "BAD " + "; ".join(bad))
 PYEOF
 

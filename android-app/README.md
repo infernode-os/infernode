@@ -51,8 +51,9 @@ strictly responsible for the Android shell.
 What's in this scaffold:
 
 * `settings.gradle.kts`, `build.gradle.kts`, `app/build.gradle.kts` —
-  Gradle structure pinned to AGP 8.7 / Kotlin 2.0.20 / NDK r29 /
-  minSdk 28 / compileSdk 35.
+  Gradle structure pinned to AGP 8.13.2 / Gradle 8.13 / Kotlin 2.1.21 /
+  NDK r29 / minSdk 28 / compileSdk 36 / targetSdk 36 (Android 16 — the
+  Play target-API floor from Nov 1, 2026).
 * `AndroidManifest.xml` — Activity + foreground Service, the four
   permissions we'll need (`RECORD_AUDIO`, `INTERNET`,
   `FOREGROUND_SERVICE` + `_DATA_SYNC`, `POST_NOTIFICATIONS`).

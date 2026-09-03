@@ -87,6 +87,16 @@ idiom silently produces the wrong value. Sign-extend explicitly
 (`if(x > 128) x -= 256;` for a byte). This has caused real bugs
 in this tree.
 
+**`break` leaves a `case` or `alt`, not the loop around it.** Exactly
+as Go's `break` inside `select` or `switch` leaves only the `select`
+or `switch`: in Limbo an unlabelled `break` terminates the innermost
+`for`, `while`, `do`, `case`, `alt` or `pick`. The idiom
+`for(;;) alt { ... break; }` therefore never exits the `for`. Label
+the loop and break it by name — `loop: for(;;) alt { ... break loop; }`
+— which this tree does in a dozen places. A missed label in `wm/logon`
+left the login screen running for ever after a successful login, with
+the code meant to run on exit unreachable.
+
 **No `defer`.** Clean up at exit points, or structure with a
 single return path. Exceptions (`{ ... } exception e { ... }`)
 exist for the error path.

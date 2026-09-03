@@ -175,33 +175,37 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		ptrpid = <-pids;
 	}
 
+	# Labelled, because in Limbo an unlabelled break leaves the
+	# innermost case, alt or pick as well as a loop. Inside "case k"
+	# inside "alt" inside "for", a plain break left the case, the one
+	# after it left the alt, and the for went round again -- so after
+	# a successful login this screen sat on "Starting desktop..." for
+	# ever and the boot script waiting on its exit never started the
+	# desktop. The kill() calls below were unreachable. Found by the
+	# bare-metal harness's login test.
+Input:
 	for(;;) alt {
 	k := <-kbdch =>
 		if(k < 0)
-			break;
+			break Input;
 		case k {
 		'\n' or '\r' =>
 			escpending = 0;
 			passbuf = fieldtext();
 			if(handleenter())
-				break;
-			continue;
+				break Input;
 		27 =>	# Escape
 			passbuf = fieldtext();
 			if(handleescape())
-				break;
-			continue;
+				break Input;
 		* =>
 			escpending = 0;
 			tk->keyboard(top, k);
 			tk->cmd(top, "update");
-			continue;
 		}
-		break;
 	p := <-ptrch =>
 		tk->pointer(top, *p);
 		tk->cmd(top, "update");
-		continue;
 	}
 
 	# The readers are blocked in read; left alone they would go on

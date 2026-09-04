@@ -1123,6 +1123,20 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 		#	g.errno = Eperm;
 		#	return;
 		# }
+		#
+		# Room for the new name BEFORE the old entry goes. A rename
+		# that cannot complete has to leave the file where it was;
+		# removing first and discovering the directory was full
+		# second is how a file on the card vanished.
+		#
+		(r0, nil) := searchdir(pf, wdir.name, 1, 1);
+		if(r0 < 0){
+			putsect(parp);
+			if(r0 == -2)
+				return e(Efull);
+			return e(Eexist);
+		}
+
 		if(getfile(f) < 0){
 			putsect(parp);
 			return e(Eio);
@@ -1146,6 +1160,8 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 		(r, dp) = searchdir(pf, wdir.name, 1, 1);
 		if(r < 0){
 			putsect(parp);
+			if(r == -2)
+				return e(Efull);
 			return e(Ephase);
 		}
 		if((r = mkdentry(pf.xf, dp, wdir.name, sname, islong, attr, start, length)) != 0){
@@ -1631,6 +1647,26 @@ chainclust(xf: ref Xfs, start: int, nskip: int): int
 	return clust;
 }
 
+#
+# The FAT32 root's cluster with ordinal iclust, allocating (zeroed, by
+# falloc) and linking whatever the chain lacks on the way there.
+#
+growroot(xf: ref Xfs, iclust: int): int
+{
+	clust := xf.ptr.rootclust;
+	for(i := 0; i < iclust; i++){
+		next := getfat(xf, clust);
+		if(next <= 0){
+			next = falloc(xf);
+			if(next <= 0)
+				return -1;
+			putfat(xf, clust, next);
+		}
+		clust = next;
+	}
+	return clust;
+}
+
 fileaddr(f: ref Xfile, isect: int, cflag: int): int
 {
 	bp := f.xf.ptr;
@@ -1644,8 +1680,21 @@ fileaddr(f: ref Xfile, isect: int, cflag: int): int
 		if(bp.rootclust != 0) {
 			clust := chainclust(f.xf, bp.rootclust,
 				isect/bp.clustsize);
-			if(clust < 0)
-				return -1;
+			if(clust < 0){
+				#
+				# Past the end of the chain. A FAT32 root is a
+				# cluster chain like any other directory and
+				# grows the same way; this used to answer "file
+				# system full" for a root whose one cluster had
+				# filled with entries, and a rename into it lost
+				# the file (the old entry was already gone).
+				#
+				if(!cflag)
+					return -1;
+				clust = growroot(f.xf, isect/bp.clustsize);
+				if(clust < 0)
+					return -1;
+			}
 			return clust2sect(bp, clust) + isect%bp.clustsize;
 		}
 		if(isect*bp.sectsize >= bp.rootsize*DOSDIRSIZE)

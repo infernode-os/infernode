@@ -138,3 +138,25 @@ gpiogetfunc(int pin)
 
 	return (GPIO(Gpfsel0 + reg) >> shift) & Fselmask;
 }
+
+/*
+ * Pins the kernel drives itself. A driver claims its pins at init and
+ * #G refuses to change them: an echo into the wrong ctl file must not
+ * be able to take the console down. The name is what the refusal says.
+ */
+static char *claimed[Npin];
+
+void
+gpioclaim(int pin, char *who)
+{
+	if(pin >= 0 && pin < Npin)
+		claimed[pin] = who;
+}
+
+char*
+gpioclaimed(int pin)
+{
+	if(pin < 0 || pin >= Npin)
+		return "nobody";
+	return claimed[pin];
+}

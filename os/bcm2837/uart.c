@@ -39,6 +39,8 @@ uartinit(void)
 	gpiofunc(15, Gpioalt0);
 	gpiopull(14, Pullnone);
 	gpiopull(15, Pullnone);
+	gpioclaim(14, "uart");
+	gpioclaim(15, "uart");
 
 	UART(Icr) = 0x7FF;		/* clear all pending interrupts */
 

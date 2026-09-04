@@ -223,6 +223,11 @@ emmcappcmd(int idx, u32int arg, u32int flags, u32int *resp)
 int
 emmcinit(void)
 {
+	int pin;
+
+	/* the card's lines, muxed by the firmware; #G must not touch them */
+	for(pin = 48; pin <= 53; pin++)
+		gpioclaim(pin, "sd");
 	u32int resp[4], c1;
 	int i, ok, nofail;
 

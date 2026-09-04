@@ -2420,6 +2420,7 @@ kmain(void)
 
 	/* the running kernel, so it can be copied onto the card */
 	kbind("#B", "/dev", MAFTER);
+	kbind("#G", "/dev", MAFTER);	/* /dev/gpio/N/{ctl,level} */
 
 	/* microsecond timing, for measuring things honestly */
 	kbind("#b", "/dev", MAFTER);

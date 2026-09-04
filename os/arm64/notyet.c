@@ -68,6 +68,7 @@ extern Dev drawdevtab;
 extern Dev srvdevtab;
 extern Dev etherdevtab;
 extern Dev ssldevtab;
+extern Dev gpiodevtab;
 
 Dev*	devtab[] =
 {
@@ -87,6 +88,7 @@ Dev*	devtab[] =
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
+	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */
 	nil,
 };
 

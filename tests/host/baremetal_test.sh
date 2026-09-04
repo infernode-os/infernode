@@ -1177,6 +1177,7 @@ check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdar
 KIMG="$BUILD/$PLAT-kernel.img"
 check "init: /dev/bootimage $(stat -f%z "$KIMG") bytes stat $(stat -f%z "$KIMG") sha1 $(shasum "$KIMG" | cut -c1-40)" \
     "/dev/bootimage reproduces the image the loader was given, byte for byte"
+check "init: gpio 21 out 1->1 0->0; pin 14: in use by uart" "GPIO pins are files: an output reads back what was written, the console pin refuses"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"

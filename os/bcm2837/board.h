@@ -18,6 +18,8 @@ void	gpiopull(int, int);
 void	gpioout(int, int);
 int	gpioin(int);
 int	gpiogetfunc(int);
+void	gpioclaim(int, char*);
+char*	gpioclaimed(int);
 
 /* mailbox.c */
 int	mboxprop(u32int, u32int*, int, int);

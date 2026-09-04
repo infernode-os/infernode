@@ -90,6 +90,7 @@ init()
 	}
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
 	kernelimage();
+	gpiocheck();
 
 	#
 	# A fixed arithmetic loop, timed. Reported so the harness can run
@@ -2284,4 +2285,42 @@ kernelimage()
 			dig += sys->sprint("%.2x", int h[i]);
 	}
 	sys->print("init: /dev/bootimage %d bytes stat %bd sha1 %s\n", n, d.length, dig);
+}
+
+#
+# GPIO through the namespace: a spare pin driven as an output reads
+# back what was written (QEMU models the level registers, the board
+# has the real ones), and the console UART's pin refuses to be
+# reconfigured. Pin 21 has nothing on it on any Pi header use here.
+#
+gpiocheck()
+{
+	ctl := sys->open("/dev/gpio/21/ctl", Sys->OWRITE);
+	if(ctl == nil){
+		sys->print("init: gpio: no /dev/gpio/21/ctl: %r\n");
+		return;
+	}
+	sys->fprint(ctl, "function out");
+	lv := sys->open("/dev/gpio/21/level", Sys->ORDWR);
+	if(lv == nil){
+		sys->print("init: gpio: no level file: %r\n");
+		return;
+	}
+	r := "";
+	for(i := 0; i < 2; i++){
+		sys->fprint(lv, "%d", 1 - i);
+		sys->seek(lv, big 0, Sys->SEEKSTART);
+		buf := array[16] of byte;
+		n := sys->read(lv, buf, len buf);
+		v := "?";
+		if(n > 0)
+			v = string buf[0:n-1];
+		r += sys->sprint(" %d->%s", 1 - i, v);
+	}
+	sys->fprint(ctl, "function in");
+	u := sys->open("/dev/gpio/14/ctl", Sys->OWRITE);
+	refused := "not refused";
+	if(u != nil && sys->fprint(u, "function in") < 0)
+		refused = sys->sprint("%r");
+	sys->print("init: gpio 21 out%s; pin 14: %s\n", r, refused);
 }

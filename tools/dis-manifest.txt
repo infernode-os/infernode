@@ -693,6 +693,7 @@ dis/tests/imap_test.dis
 dis/tests/imgload_test.dis
 dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
+dis/tests/intsem_test.dis
 dis/tests/jit_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis

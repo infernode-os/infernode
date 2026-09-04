@@ -25,6 +25,19 @@ String	snil;			/* String known to be zero length */
 #define T(r)	*((void**)(R.r))
 #define JMP(r)	R.PC = *(Inst**)(R.r)
 #define SH(r)	*((SHORT*)(R.r))
+
+/*
+ * A Limbo int is 32 bits. On this VM a WORD is the pointer size, 64
+ * bits, and an int lives in a 64-bit slot; the invariant that makes
+ * that work is that the slot always holds the int SIGN-EXTENDED.
+ * Every comparison and every conversion reads the whole slot, so a
+ * result left with junk in its upper half is a value that prints as
+ * -1 and is not equal to -1 (a dossrv wstat that ignored nulldir,
+ * a shift that would not sign-extend). CW() is that invariant: every
+ * w-typed result goes through it. The JITs keep the same invariant
+ * with a sign-extension before each store.
+ */
+#define CW(v)	((WORD)(int)(v))
 #define SR(r)	*((SREAL*)(R.r))
 
 /*
@@ -57,40 +70,40 @@ OP(cvtws){ SH(d) = W(s); }
 OP(cvtsw){ W(d) = SH(s); }
 OP(cvtwf){ F(d) = W(s); }
 OP(addb) { B(d) = B(m) + B(s); }
-OP(addw) { W(d) = W(m) + W(s); }
+OP(addw) { W(d) = CW(W(m) + W(s)); }
 OP(addl) { V(d) = V(m) + V(s); }
 OP(addf) { F(d) = F(m) + F(s); }
 OP(subb) { B(d) = B(m) - B(s); }
-OP(subw) { W(d) = W(m) - W(s); }
+OP(subw) { W(d) = CW(W(m) - W(s)); }
 OP(subl) { V(d) = V(m) - V(s); }
 OP(subf) { F(d) = F(m) - F(s); }
 OP(divb) { if(B(s) == 0) error(exZdiv); B(d) = B(m) / B(s); }
-OP(divw) { if(W(s) == 0) error(exZdiv); W(d) = W(m) / W(s); }
+OP(divw) { if(W(s) == 0) error(exZdiv); W(d) = CW((vlong)(int)W(m) / (vlong)(int)W(s)); }
 OP(divl) { if(V(s) == 0) error(exZdiv); V(d) = V(m) / V(s); }
 OP(divf) { F(d) = F(m) / F(s); }
 OP(modb) { if(B(s) == 0) error(exZdiv); B(d) = B(m) % B(s); }
-OP(modw) { if(W(s) == 0) error(exZdiv); W(d) = W(m) % W(s); }
+OP(modw) { if(W(s) == 0) error(exZdiv); W(d) = CW((vlong)(int)W(m) % (vlong)(int)W(s)); }
 OP(modl) { if(V(s) == 0) error(exZdiv); V(d) = V(m) % V(s); }
 OP(mulb) { B(d) = B(m) * B(s); }
-OP(mulw) { W(d) = W(m) * W(s); }
+OP(mulw) { W(d) = CW((UWORD)W(m) * (UWORD)W(s)); }
 OP(mull) { V(d) = V(m) * V(s); }
 OP(mulf) { F(d) = F(m) * F(s); }
 OP(andb) { B(d) = B(m) & B(s); }
-OP(andw) { W(d) = W(m) & W(s); }
+OP(andw) { W(d) = CW(W(m) & W(s)); }
 OP(andl) { V(d) = V(m) & V(s); }
 OP(xorb) { B(d) = B(m) ^ B(s); }
-OP(xorw) { W(d) = W(m) ^ W(s); }
+OP(xorw) { W(d) = CW(W(m) ^ W(s)); }
 OP(xorl) { V(d) = V(m) ^ V(s); }
 OP(orb)  { B(d) = B(m) | B(s); }
-OP(orw)  { W(d) = W(m) | W(s); }
+OP(orw)  { W(d) = CW(W(m) | W(s)); }
 OP(orl)  { V(d) = V(m) | V(s); }
 OP(shlb) { B(d) = B(m) << W(s); }
-OP(shlw) { W(d) = W(m) << W(s); }
+OP(shlw) { W(d) = CW((uvlong)(u32int)W(m) << (W(s) & 63)); }
 OP(shll) { V(d) = V(m) << W(s); }
 OP(shrb) { B(d) = B(m) >> W(s); }
-OP(shrw) { W(d) = W(m) >> W(s); }
+OP(shrw) { W(d) = CW((vlong)(int)W(m) >> (W(s) & 63)); }
 OP(shrl) { V(d) = V(m) >> W(s); }
-OP(lsrw) { W(d) = UW(m) >> W(s); }
+OP(lsrw) { W(d) = CW((uvlong)(u32int)W(m) >> (W(s) & 63)); }
 OP(lsrl) { V(d) = UV(m) >> W(s); }
 OP(beqb) { if(B(s) == B(m)) JMP(d); }
 OP(bneb) { if(B(s) != B(m)) JMP(d); }
@@ -124,7 +137,7 @@ OP(bgtc) { if(stringcmp(S(s), S(m)) >  0) JMP(d); }
 OP(bgec) { if(stringcmp(S(s), S(m)) >= 0) JMP(d); }
 OP(iexit){ error(""); }
 OP(cvtwl){ V(d) = W(s); }
-OP(cvtlw){ W(d) = V(s); }
+OP(cvtlw){ W(d) = CW(V(s)); }
 OP(cvtlf){ F(d) = V(s); }
 OP(cvtfl)
 {
@@ -138,7 +151,7 @@ OP(cvtfw)
 	REAL f;
 
 	f = F(s);
-	W(d) = f < 0 ? f - .5 : f + .5;
+	W(d) = CW((vlong)(f < 0 ? f - .5 : f + .5));
 }
 OP(cvtcl)
 {
@@ -172,7 +185,7 @@ OP(iexpw)
 	}
 	if(inv)
 		r = 1/r;
-	W(d) = r;
+	W(d) = CW(r);
 }
 OP(iexpl)
 {
@@ -1484,7 +1497,7 @@ OP(mulx)
 		r <<= p;
 	else
 		r >>= (-p);
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(divx)
 {
@@ -1498,7 +1511,7 @@ OP(divx)
 	else
 		s >>= (-p);
 	s /= (LONG)W(s);
-	W(d) = (WORD)s;
+	W(d) = CW(s);
 }
 OP(cvtxx)
 {
@@ -1511,7 +1524,7 @@ OP(cvtxx)
 		r <<= p;
 	else
 		r >>= (-p);
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(mulx0)
 {
@@ -1532,7 +1545,7 @@ OP(mulx0)
 	else
 		r >>= (-p);
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(divx0)
 {
@@ -1553,7 +1566,7 @@ OP(divx0)
 	else
 		s >>= (-p);
 	s /= (LONG)y;
-	W(d) = (WORD)s;
+	W(d) = CW(s);
 }
 OP(cvtxx0)
 {
@@ -1573,7 +1586,7 @@ OP(cvtxx0)
 	else
 		r >>= (-p);
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(mulx1)
 {
@@ -1611,7 +1624,7 @@ OP(mulx1)
 		r >>= (-p);
 	r += (LONG)v;
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(divx1)
 {
@@ -1683,7 +1696,7 @@ OP(cvtxx1)
 		r >>= (-p);
 	r += (LONG)v;
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 /*
 OP(cvtxx)

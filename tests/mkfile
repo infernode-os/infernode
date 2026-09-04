@@ -40,6 +40,7 @@ TARG=\
 	goroutine_leak_test.dis\
 	gpu_test.dis\
 	hello_test.dis\
+	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
 	imap_test.dis\

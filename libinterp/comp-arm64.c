@@ -1555,28 +1555,39 @@ comp(Inst *i)
 		break;
 
 	/* ---- Arithmetic (word) ---- */
+	/*
+	 * Every w result is sign-extended before it is stored: a Limbo int
+	 * is 32 bits living in a 64-bit slot, and the slot must hold it
+	 * canonically or 64-bit compares and conversions read junk (CW()
+	 * in xec.c says why). A 64-bit operation followed by SXTW is
+	 * exactly 32-bit wraparound.
+	 */
 	case IADDW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ADD_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ISUBW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		SUB_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IMULW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
 		MUL_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IDIVW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
 		SDIV_REG(RA0, RA0, RA1);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IMODW:
@@ -1584,6 +1595,7 @@ comp(Inst *i)
 		mid(i, Ldw, RA0);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1658,18 +1670,21 @@ comp(Inst *i)
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		AND_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IORW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ORR_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IXORW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		EOR_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1718,18 +1733,22 @@ comp(Inst *i)
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		LSLV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ISHRW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ASRV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ILSRW:
+		/* logical: shift the 32-bit value zero-extended, or the slot's sign bits would shift in */
 		mid(i, Ldw, RA1);
-		opwld(i, Ldw, RA0);
+		opwld(i, Ldw32, RA0);
 		LSRV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 

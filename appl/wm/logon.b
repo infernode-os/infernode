@@ -175,33 +175,32 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		ptrpid = <-pids;
 	}
 
-	for(;;) alt {
+	#
+	# A break inside an alt arm leaves the alt, not the loop (the
+	# first version of this loop did exactly that and the desktop
+	# never started), so the loop's exit is a flag.
+	#
+	done := 0;
+	while(!done) alt {
 	k := <-kbdch =>
 		if(k < 0)
-			break;
-		case k {
+			done = 1;
+		else case k {
 		'\n' or '\r' =>
 			escpending = 0;
 			passbuf = fieldtext();
-			if(handleenter())
-				break;
-			continue;
+			done = handleenter();
 		27 =>	# Escape
 			passbuf = fieldtext();
-			if(handleescape())
-				break;
-			continue;
+			done = handleescape();
 		* =>
 			escpending = 0;
 			tk->keyboard(top, k);
 			tk->cmd(top, "update");
-			continue;
 		}
-		break;
 	p := <-ptrch =>
 		tk->pointer(top, *p);
 		tk->cmd(top, "update");
-		continue;
 	}
 
 	# The readers are blocked in read; left alone they would go on

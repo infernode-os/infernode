@@ -467,7 +467,7 @@ ropen(t: ref Tmsg.Open): ref Rmsg
 	return ref Rmsg.Open(t.tag, f.qid, Styx->MAXFDATA);
 }
 
-mkdentry(xf: ref Xfs, ndp: ref Dosptr, name: string, sname: string, islong: int, nattr: byte, start: array of byte, length: array of byte): int
+mkdentry(xf: ref Xfs, ndp: ref Dosptr, name: string, sname: string, islong: int, nattr: byte, start: int, length: array of byte): int
 {
 	ndp.p = getsect(xf, ndp.addr);
 	if(ndp.p == nil)
@@ -485,7 +485,7 @@ mkdentry(xf: ref Xfs, ndp: ref Dosptr, name: string, sname: string, islong: int,
 
 	nd.attr = nattr;
 	puttime(nd);
-	nd.start[0: ] = start[0: 2];
+	putstart(xf, nd, start);	# both halves: on FAT32 the high one lives in "reserved"
 	nd.length[0: ] = length[0: 4];
 
 	if(islong)
@@ -1058,10 +1058,20 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 		oaddr := dp.addr;
 		ooffset := dp.offset;
 		d := dpd;
-#		od := *d;
-		# start := getstart(f.xf, d);
-		start := d.start;
-		length := d.length;
+		#
+		# The whole start cluster. Taking the two low bytes alone
+		# renamed every FAT32 file past cluster 65535 into garbage.
+		#
+		start := getstart(f.xf, d);
+		#
+		# A copy, not d.length itself: arr2Dd slices the sector
+		# buffer, so d.length IS the old entry's bytes, and the old
+		# slot is about to be reused for the new name's entries.
+		# The length of the renamed file used to be whatever a
+		# long-name entry left there.
+		#
+		length := array[4] of byte;
+		length[0:] = d.length[0:4];
 		attr := d.attr;
 
 		#
@@ -1087,9 +1097,16 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 		if(nds > 0) {
 			# long file name, find "new" short name
 			i := 1;
+			#
+			# The short alias must be unique in the PARENT: pf.
+			# Searching f -- the file itself -- walked the file's
+			# data as if it were a directory, and on a fid whose
+			# sector had just been released that was a panic in
+			# fileclust before a single byte was renamed.
+			#
 			for(;;) {
 				sname = long2short(wdir.name, i);
-				(r1, tmpdp) := searchdir(f, sname, 0, 0);
+				(r1, tmpdp) := searchdir(pf, sname, 0, 0);
 				if(r1 < 0)
 					break;
 				putsect(tmpdp.p);
@@ -1118,8 +1135,15 @@ rwstat(t: ref Tmsg.Wstat): ref Rmsg
 		# and we need to set up the naddr field if a long name spans the block.
 		# create new entry.
 		#
+		#
+		# Room for the NEW name, as rcreate asks for it: the slot
+		# count comes from the long name (one entry per thirteen
+		# runes, plus the short one). Asking with the short alias
+		# reserved one slot too few for any long name over
+		# thirteen runes and the entries spilled past the run.
+		#
 		r := 0;
-		(r, dp) = searchdir(pf, sname, 1, islong);
+		(r, dp) = searchdir(pf, wdir.name, 1, 1);
 		if(r < 0){
 			putsect(parp);
 			return e(Ephase);

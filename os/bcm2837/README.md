@@ -435,6 +435,49 @@ Not `#I`, not the scheduler, not `usbdwc`. Those are the first category,
 and nothing here is an argument for moving them. In particular this is
 not a staged plan to arrive at a microkernel by increments.
 
+### Why `usbdwc.c` is twice the length of 9front's, and what not to delete
+
+Counting lines invites the wrong surgery. `usbdwc.c` is 2179 lines against
+9front's 1080 for the same controller; of ours, 907 are comment and 1167
+are code, and 9front's file is nearly all code. The controller-driver
+*code* is about 1.1x the reference. The rest is the explanation, written
+next to the thing it explains, of what this driver does that a minimal
+one does not. `chanio()` looks like the culprit at 504 lines; it is 206
+lines of code and 288 of comment. The diagnostics -- the channel log,
+`dump`, `setdebug` -- are 66 lines and four call sites, compiled always
+and switched at run time, and they are what the next controller's
+bring-up will want; do not put them behind an `#ifdef`, which is how
+debugging code decays.
+
+The code that is here and not in the reference, each item a debugging
+session on hardware, each with its reasoning in a comment at the point
+of use in `chanio()`:
+
+- **PING** for high-speed bulk OUT once the device has said it is not
+  ready, instead of resending the data until it is.
+- **A NAK wake that leaves the channel live** and picks up what
+  completed while it was parked, rather than tearing down and
+  re-enabling every time.
+- **A bounded wait on channel enable**: a channel that never ran was
+  indistinguishable from one that hung.
+- **The DMA pointer tripwire**: the address the channel finished with
+  must lie inside the buffer it was given, with sixteen bytes of slack
+  for the AHB burst real silicon does and QEMU does not. The slack looks
+  like a typo. It is not.
+- **Persistent per-endpoint bounce buffers**: a NAK-halted IN transfer
+  completes late and DMAs into whatever now owns the freed memory. This
+  was the one-in-six boot heap corruption.
+- **Split transactions** for low-speed devices behind the hub, driven as
+  two halves with the hub's acceptance checked between them.
+
+If a tidy-up wants to make this file shorter, the comments can be
+condensed once the lessons are elsewhere; the code above cannot go
+without bringing back the bug it fixed. The portability boundary is
+`#u`, not this file: a Pi 4 or 5 needs an XHCI driver in any design, XHCI
+is an open specification rather than licensed IP so that driver should
+be smaller and reusable across vendors, and every Limbo class driver
+above `#u` rides free either way.
+
 ### How it attaches, concretely
 
 The important discovery is that **`os/ip` attaches to a name, not to a

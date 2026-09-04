@@ -2709,7 +2709,13 @@ freejitcode(void *p, ulong size)
 {
 	if(p == nil || size == 0)
 		return;
+#ifdef INFERNO_NATIVE
+	/* the text came from malloc: see the allocation sites above */
+	USED(size);
+	free(p);
+#else
 	munmap(p, size);
+#endif
 }
 
 int
@@ -2947,7 +2953,11 @@ bad:
 	free(tinit);
 	free(tmp);
 	if(base != nil && codesize != 0)
+#ifdef INFERNO_NATIVE
+		free(base);
+#else
 		munmap(base, codesize);
+#endif
 	base = nil;
 	return 0;
 }

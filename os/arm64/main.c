@@ -2223,8 +2223,6 @@ kmain(void)
 	 * kernel that has been running, which is not something worth
 	 * writing to a card and booting.
 	 */
-	bootimgsnap();
-
 	uartinit();
 
 	uartputstr("\nInferNode bare-metal (");

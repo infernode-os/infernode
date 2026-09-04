@@ -1175,8 +1175,8 @@ check "midr_el1:        0x00000000410fd0" \
     check "exception level: EL1"      "drops from EL2 to EL1"
 check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdarg)"
 KIMG="$BUILD/$PLAT-kernel.img"
-check "init: /dev/kernel $(stat -f%z "$KIMG") bytes stat $(stat -f%z "$KIMG") sha1 $(shasum "$KIMG" | cut -c1-40)" \
-    "/dev/kernel reproduces the image the loader was given, byte for byte"
+check "init: /dev/bootimage $(stat -f%z "$KIMG") bytes stat $(stat -f%z "$KIMG") sha1 $(shasum "$KIMG" | cut -c1-40)" \
+    "/dev/bootimage reproduces the image the loader was given, byte for byte"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"

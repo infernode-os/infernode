@@ -34,48 +34,24 @@
 enum{
 	Qdir,
 	Qimage,
-
-	/*
-	 * Room for the image, in .bss so it costs nothing in the file it
-	 * is holding a copy of. The kernel is around 750KB; four
-	 * megabytes is headroom rather than a limit worth tuning, and the
-	 * snapshot refuses rather than truncates if it is ever exceeded.
-	 */
-	Maxbootimg = 4*1024*1024,
 };
 
-/* edata is already declared as char[] by the portable headers */
-
-static uchar bootimg[Maxbootimg];
-static long bootimglen;
+/*
+ * The image is reproduced rather than copied: .text and .rodata are
+ * never written and are read straight from where they run; .data is
+ * read from the copy l.S takes into __datastash before any C code
+ * runs, which is the only moment it is still what was loaded (see
+ * kernel.ld). That is byte-identical to the file the loader was given
+ * -- the harness compares SHA-1s -- and costs ~100KB of .bss for the
+ * data copy instead of a four-megabyte buffer and a two-megabyte
+ * memmove at boot.
+ */
+extern char _start[], __data_start[], edata[], __datastash[];
 
 static Dirtab boottab[]={
 	".",		{Qdir, 0, QTDIR},	0,	0555,
 	"bootimage",	{Qimage},		0,	0444,
 };
-
-/*
- * Copy the loaded image out of the way of the running kernel.
- *
- * Called from kmain before anything else, because "before anything
- * else" is the only time this is the image that was loaded rather than
- * the image plus however far it has run.
- */
-void
-bootimgsnap(void)
-{
-	uchar *start;
-	long n;
-
-	start = (uchar*)KTZERO;
-	n = (uchar*)edata - start;
-	if(n <= 0 || n > Maxbootimg){
-		bootimglen = 0;
-		return;
-	}
-	memmove(bootimg, start, n);
-	bootimglen = n;
-}
 
 static Chan*
 bootattach(char *spec)
@@ -92,14 +68,14 @@ bootwalk(Chan *c, Chan *nc, char **name, int nname)
 static int
 bootstat(Chan *c, uchar *db, int n)
 {
-	boottab[Qimage].length = bootimglen;
+	boottab[Qimage].length = edata - _start;
 	return devstat(c, db, n, boottab, nelem(boottab), devgen);
 }
 
 static Chan*
 bootopen(Chan *c, int omode)
 {
-	boottab[Qimage].length = bootimglen;
+	boottab[Qimage].length = edata - _start;
 	return devopen(c, omode, boottab, nelem(boottab), devgen);
 }
 
@@ -117,14 +93,25 @@ bootread(Chan *c, void *a, long n, vlong off)
 	if((ulong)c->qid.path != Qimage)
 		error(Ebadusefd);
 
-	if(bootimglen == 0)
-		error("no boot image was captured");
-	if(off >= bootimglen)
-		return 0;
-	if(off + n > bootimglen)
-		n = bootimglen - off;
-	memmove(a, bootimg + off, n);
-	return n;
+	{
+		ulong tlen, len;
+		uchar *src;
+
+		tlen = __data_start - _start;
+		len = edata - _start;
+		if(off < 0 || off >= len)
+			return 0;
+		if(off + n > len)
+			n = len - off;
+		if(off < tlen){
+			if(off + n > tlen)
+				n = tlen - off;	/* one segment per read */
+			src = (uchar*)_start + off;
+		}else
+			src = (uchar*)__datastash + (off - tlen);
+		memmove(a, src, n);
+		return n;
+	}
 }
 
 static long

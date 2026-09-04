@@ -2249,7 +2249,7 @@ devnum(name: string): int
 }
 
 #
-# /dev/kernel is the running kernel's own image, reproduced from
+# /dev/bootimage is the running kernel's own image, reproduced from
 # memory. Read it back and print its size and SHA-1: the harness
 # compares both with the file it handed the loader, which is the
 # whole claim -- that a kernel can install itself on the card and
@@ -2257,9 +2257,9 @@ devnum(name: string): int
 #
 kernelimage()
 {
-	fd := sys->open("/dev/kernel", Sys->OREAD);
+	fd := sys->open("/dev/bootimage", Sys->OREAD);
 	if(fd == nil){
-		sys->print("init: /dev/kernel: %r\n");
+		sys->print("init: /dev/bootimage: %r\n");
 		return;
 	}
 	(nil, d) := sys->fstat(fd);
@@ -2283,5 +2283,5 @@ kernelimage()
 		for(i := 0; i < len h; i++)
 			dig += sys->sprint("%.2x", int h[i]);
 	}
-	sys->print("init: /dev/kernel %d bytes stat %bd sha1 %s\n", n, d.length, dig);
+	sys->print("init: /dev/bootimage %d bytes stat %bd sha1 %s\n", n, d.length, dig);
 }

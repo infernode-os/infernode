@@ -662,7 +662,6 @@ enum{
 	Qtime,
 	Quser,
 	Qjit,
-	Qkernel,
 };
 
 static Dirtab consdir[]=
@@ -686,7 +685,6 @@ static Dirtab consdir[]=
 	"time",		{Qtime},	0,		0664,
 	"user",		{Quser},	0,	0644,
 	"jit",		{Qjit},	0,	0666,
-	"kernel",	{Qkernel},	0,	0444,
 };
 
 ulong	boottime;		/* seconds since epoch at boot */
@@ -845,22 +843,9 @@ consinit(void)
 		panic("consinit: cannot allocate kbdrawq");
 }
 
-/*
- * The kernel image as loaded: .text and .rodata straight from memory,
- * .data from the copy l.S took before anything wrote to it (see
- * kernel.ld). Byte-identical to the file the loader was given, so
- * `cp /dev/kernel /n/dos/infernode8.img` installs the running kernel.
- */
-extern char _start[], __data_start[], edata[], __datastash[];
-
 static Chan*
 consattach(char *spec)
 {
-	int i;
-
-	for(i = 0; i < nelem(consdir); i++)
-		if(consdir[i].qid.path == Qkernel)
-			consdir[i].length = edata - _start;
 	return devattach('c', spec);
 }
 
@@ -1117,26 +1102,6 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	case Qtime:
 		snprint(tmp, sizeof(tmp), "%.lld", (vlong)mseconds()*1000);
 		return readstr(offset, buf, n, tmp);
-
-	case Qkernel: {
-		ulong tlen, len;
-		uchar *src;
-
-		tlen = __data_start - _start;
-		len = edata - _start;
-		if(offset < 0 || offset >= len)
-			return 0;
-		if(offset + n > len)
-			n = len - offset;
-		if(offset < tlen){
-			if(offset + n > tlen)
-				n = tlen - offset;	/* one segment per read */
-			src = (uchar*)_start + offset;
-		}else
-			src = (uchar*)__datastash + (offset - tlen);
-		memmove(buf, src, n);
-		return n;
-	}
 
 	case Qhostowner:
 		return readstr(offset, buf, n, eve);

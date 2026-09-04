@@ -40,6 +40,9 @@ VeltroSecurityTest: module {
 include "nsconstruct.m";
 	nsconstruct: NsConstruct;
 
+include "sh.m";
+	sh: Sh;
+
 # Source file path for clickable error addresses
 SRCFILE: con "/tests/veltro_security_test.b";
 
@@ -562,6 +565,10 @@ testActivityScratchIsolation(t: ref T)
 	spawn activityScratchWriter(result, 41001);
 	r := <-result;
 	if(r == "") {
+		spawn activityScratchPersistenceReader(result, 41001);
+		r = <-result;
+	}
+	if(r == "") {
 		spawn activityScratchReader(result, 41002);
 		r = <-result;
 	}
@@ -574,6 +581,235 @@ testActivityScratchIsolation(t: ref T)
 	sys->remove("/tmp/veltro/scratch/41002");
 	if(r != "")
 		t.error(r);
+}
+
+# Parent-traversal containment across every restricted boundary.
+#
+# The previous version of this test probed exactly one path —
+# /tmp/veltro/scratch/../../../<canary> — with the canary planted in the
+# physical /tmp. Three parent walks land at the EMULATOR ROOT, where that name
+# never existed, so the stat failed and the test passed while the hole stood
+# wide open. It certified commit 5b5a963b as a fix; it was not one. Two parent
+# walks reach the physical /tmp, and /dis/lib/../.. reaches the emulator root.
+#
+# So: probe a matrix, plant a canary at each depth the traversal can actually
+# reach, and probe WRITES as well as reads. The escape is not read-only — an
+# agent granted only read and list can create files anywhere under the
+# emulator root, which makes it a persistence and next-boot code-execution
+# primitive, not an information leak.
+#
+# Every escape is reported, not just the first, so the output measures how far
+# containment is from holding rather than stopping at one symptom.
+
+TRAVERSAL_TMP_CANARY: con "/tmp/veltro-traversal-canary";
+TRAVERSAL_ROOT_CANARY: con "/veltro-traversal-canary-root";
+TRAVERSAL_TMP_ESCAPE: con "/tmp/veltro-traversal-escape";
+TRAVERSAL_ROOT_ESCAPE: con "/veltro-traversal-escape-root";
+
+testNamespaceTraversalContainment(t: ref T)
+{
+	cleanuptraversal();
+	result := chan of string;
+	spawn traversalWorker(result);
+	r := <-result;
+
+	# Adjudicate the writes from OUTSIDE the restricted namespace: did a file
+	# actually land at a physical path the agent was never granted?
+	escapes := "";
+	outside := array[] of {TRAVERSAL_TMP_ESCAPE, TRAVERSAL_ROOT_ESCAPE};
+	for(i := 0; i < len outside; i++) {
+		(ok, nil) := sys->stat(outside[i]);
+		if(ok >= 0)
+			escapes += sys->sprint("  WRITE landed outside the namespace at %s\n",
+				outside[i]);
+	}
+	cleanuptraversal();
+	if(r != "" || escapes != "")
+		t.error("namespace traversal escaped:\n" + r + escapes);
+}
+
+cleanuptraversal()
+{
+	sys->remove(TRAVERSAL_TMP_CANARY);
+	sys->remove(TRAVERSAL_ROOT_CANARY);
+	sys->remove(TRAVERSAL_TMP_ESCAPE);
+	sys->remove(TRAVERSAL_ROOT_ESCAPE);
+}
+
+# Directory entry names at a path, for probes that care about how much is
+# visible rather than whether one name resolves.
+lsnames(path: string): list of string
+{
+	names: list of string;
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			names = d[i].name :: names;
+	}
+	return names;
+}
+
+# Containment must hold for code that is not a Veltro tool. Rooted filesystem
+# grants (ADR 0001) confine the tools; they do nothing for a shell command,
+# which resolves paths itself in the process namespace. This is the coverage
+# gap in the ADR's execution clause, and the case a kernel-level fix has to
+# carry if it is to be sufficient on its own.
+testExecTraversalContainment(t: ref T)
+{
+	sys->remove(EXEC_ESCAPE);
+	result := chan of string;
+	spawn execTraversalWorker(result);
+	r := <-result;
+	escaped := 0;
+	(ok, nil) := sys->stat(EXEC_ESCAPE);
+	if(ok >= 0)
+		escaped = 1;
+	sys->remove(EXEC_ESCAPE);
+	if(r != "")
+		t.error(r);
+	else if(escaped)
+		t.error("a shell command created " + EXEC_ESCAPE +
+			" outside the namespace via parent traversal");
+}
+
+EXEC_ESCAPE: con "/veltro-exec-escape-root";
+
+execTraversalWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	# shellcmds non-nil grants sh.dis + cat.dis (field 3, not 6).
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, "cat" :: nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, 41004, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict exec traversal worker: %s", err);
+		return;
+	}
+	# The real Sh interface — sh.dis does not implement a bare init-only
+	# module, and loading it as one fails at link time and proves nothing.
+	sh = load Sh Sh->PATH;
+	if(sh == nil) {
+		result <-= sys->sprint("shellcmds granted but Sh will not load: %r");
+		return;
+	}
+	# The command itself need not succeed. Shell redirection CREATES the
+	# target before running the command, so the redirect alone is the escape:
+	# a confined shell must not be able to name a file outside its namespace,
+	# whether or not anything is written into it.
+	{
+		sh->system(nil, "cat /dev/null > /dis/lib/../.." + EXEC_ESCAPE);
+	} exception {
+	"*" =>
+		;	# a shell that refuses is the outcome we want
+	}
+	result <-= "";
+}
+
+traversalWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	createfile(TRAVERSAL_TMP_CANARY);
+	createfile(TRAVERSAL_ROOT_CANARY);
+
+	caps := ref NsConstruct->Capabilities(
+		"read" :: "write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, 41003, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict traversal worker: %s", err);
+		return;
+	}
+
+	report := "";
+
+	# Reads. Each entry is a path that must NOT resolve to a canary planted
+	# outside every grant. The scratch shapes are what the live escape-room
+	# model used; the /dis and /lib shapes show the same hole is a property of
+	# restrictdir generally, not of the activity scratch mount.
+	reads := array[] of {
+		"/tmp/veltro/scratch/../../veltro-traversal-canary",
+		"/tmp/veltro/scratch/../../../veltro-traversal-canary-root",
+		"/tmp/veltro/scratch/../../../../veltro-traversal-canary-root",
+		"/tmp/veltro/../../veltro-traversal-canary",
+		"/dis/lib/../../veltro-traversal-canary-root",
+		"/dis/veltro/../../veltro-traversal-canary-root",
+		"/lib/veltro/../../veltro-traversal-canary-root",
+	};
+	for(i := 0; i < len reads; i++) {
+		(ok, nil) := sys->stat(reads[i]);
+		if(ok >= 0)
+			report += sys->sprint("  READ  %s reached a canary outside the namespace\n",
+				reads[i]);
+	}
+
+	# Relative resolution after chdir. Plan 9 4e keeps the mount-point stack on
+	# the channel, so a relative walk from the working directory must clamp the
+	# same way an absolute one does. Nothing before this exercised pg->dot, and
+	# it is where a Path port most plausibly goes wrong.
+	if(sys->chdir("/dis/lib") >= 0) {
+		rels := array[] of {
+			"../../veltro-traversal-canary-root",
+			"../../../veltro-traversal-canary-root",
+			"../../..",
+		};
+		for(ri := 0; ri < len rels; ri++) {
+			(rok, nil) := sys->stat(rels[ri]);
+			if(rok >= 0 && rels[ri] != "../../..")
+				report += sys->sprint("  CHDIR %s reached a canary outside the namespace\n",
+					rels[ri]);
+		}
+		# A relative walk to the root must not list the physical tree.
+		if(len lsnames("../../..") > 20)
+			report += "  CHDIR ../../.. from /dis/lib listed the physical tree\n";
+		sys->chdir("/");
+	}
+
+	# Writes. A confined agent must not be able to create a file outside its
+	# granted writable view by any traversal.
+	writes := array[] of {
+		"/tmp/veltro/scratch/../../veltro-traversal-escape",
+		"/dis/lib/../../veltro-traversal-escape-root",
+		"/lib/veltro/../../veltro-traversal-escape-root",
+	};
+	# A successful create is not by itself an escape: once ".." clamps, the
+	# same path resolves to somewhere legitimately inside the namespace and
+	# creating there is correct. What matters is whether the file appears at
+	# the physical location outside, which only the unrestricted parent can
+	# see — so record the attempt and let the caller adjudicate.
+	for(i = 0; i < len writes; i++) {
+		fd := sys->create(writes[i], Sys->OWRITE, 8r600);
+		if(fd != nil)
+			fd = nil;
+	}
+
+	result <-= report;
+}
+
+activityScratchPersistenceReader(result: chan of string, id: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, id, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrict persistent scratch reader: %s", err);
+		return;
+	}
+	if(readfilecontent("/tmp/veltro/scratch/canary") != "activity-secret") {
+		result <-= "activity scratch did not persist across restrictions";
+		return;
+	}
+	result <-= "";
 }
 
 activityScratchWriter(result: chan of string, id: int)
@@ -1502,6 +1738,7 @@ toolCtlHiddenWorker(result: chan of string)
 	# behavior without requiring a running tools9p instance.
 	mkdirp("/tool");
 	createfile("/tool/tools");
+	createfile("/tool/grantable");
 	createfile("/tool/help");
 	createfile("/tool/_registry");
 	createfile("/tool/ctl");
@@ -1534,6 +1771,12 @@ toolCtlHiddenWorker(result: chan of string)
 	(provok, nil) := sys->stat("/tool/provision");
 	if(provok < 0) {
 		result <-= "/tool/provision should remain visible for task delegation";
+		return;
+	}
+
+	(grantok, nil) := sys->stat("/tool/grantable");
+	if(grantok < 0) {
+		result <-= "/tool/grantable should remain visible for delegation planning";
 		return;
 	}
 
@@ -1886,6 +2129,27 @@ testStagedWriteOverlay(t: ref T)
 		"manifest generation does not mutate the underlying file");
 }
 
+testDirectWriteManifest(t: ref T)
+{
+	mkdirp("/mnt/msg");
+	writefilecontent("/mnt/msg/draft", "");
+	manifest := "/tmp/veltro/.ns/test-manifest-direct";
+	sys->remove(manifest);
+	caps := ref NsConstruct->Capabilities(
+		"write" :: nil,
+		"/mnt/msg/draft" :: nil,
+		nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, 42,
+		"/mnt/msg/draft" :: nil
+	, nil);
+	nsconstruct->emitmanifest(caps, manifest);
+	mdata := readfilecontent(manifest);
+	t.assert(contains(mdata, "path=/mnt/msg/draft"), "manifest includes transactional endpoint");
+	t.assert(contains(mdata, "path=/mnt/msg/draft label=mnt/msg/draft perm=rw"),
+		"manifest marks transactional endpoint as direct rw");
+}
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -2160,6 +2424,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
 	run("TmpVeltroTrustedIpcNotGrantable", testTmpVeltroTrustedIpcNotGrantable);
 	run("ActivityScratchIsolation", testActivityScratchIsolation);
+	run("NamespaceTraversalContainment", testNamespaceTraversalContainment);
+	run("ExecTraversalContainment", testExecTraversalContainment);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
 	run("ProgAllowlist", testProgAllowlist);
@@ -2186,6 +2452,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SafeGrantPathsAccepted", testSafeGrantPathsAccepted);
 	run("InvalidGrantTypeRejected", testInvalidGrantTypeRejected);
 	run("StagedWriteOverlay", testStagedWriteOverlay);
+	run("DirectWriteManifest", testDirectWriteManifest);
 
 	# Print summary
 	if(testing->summary(passed, failed, skipped) > 0)

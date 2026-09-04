@@ -190,36 +190,41 @@ testConcurrentRestrictNs(t: ref T)
 
 restrictnsworker(done: chan of int, errors: chan of string)
 {
-	# Each worker forks its own namespace
-	sys->pctl(Sys->FORKNS, nil);
+	{
+		# Each worker forks its own namespace
+		sys->pctl(Sys->FORKNS, nil);
 
-	caps := ref NsConstruct->Capabilities(
-		"read" :: nil,
-		nil,
-		nil,
-		nil,
-		0 :: 1 :: 2 :: nil,
-		nil,
-		0,
-		0,
-		-1,
-		nil
-	, nil);
+		caps := ref NsConstruct->Capabilities(
+			"read" :: nil,
+			nil,
+			nil,
+			nil,
+			0 :: 1 :: 2 :: nil,
+			nil,
+			0,
+			0,
+			-1,
+			nil
+		, nil);
 
-	err := nsconstruct->restrictns(caps);
-	if(err != nil) {
-		errors <-= sys->sprint("restrictns failed: %s", err);
-		return;
+		err := nsconstruct->restrictns(caps);
+		if(err != nil) {
+			errors <-= sys->sprint("restrictns failed: %s", err);
+			return;
+		}
+
+		# Verify basic restrictions held
+		(ok, nil) := sys->stat("/dis/lib");
+		if(ok < 0) {
+			errors <-= "/dis/lib should exist after restrictns";
+			return;
+		}
+
+		done <-= 1;
+	} exception e {
+	"*" =>
+		errors <-= "restrictns raised: " + e;
 	}
-
-	# Verify basic restrictions held
-	(ok, nil) := sys->stat("/dis/lib");
-	if(ok < 0) {
-		errors <-= "/dis/lib should exist after restrictns";
-		return;
-	}
-
-	done <-= 1;
 }
 
 # ============================================================================

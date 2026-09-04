@@ -20,6 +20,7 @@ implement Tools9p;
 # Filesystem structure:
 #   /tool/
 #   ├── tools        (r)   List available tool names
+#   ├── grantable    (r)   Tools this agent may delegate, with summaries
 #   ├── help         (rw)  Write name, read documentation
 #   ├── ctl          (rw)  trusted control plane (user/UI only)
 #   ├── provision    (rw)  child-task provisioning (narrowing only)
@@ -64,7 +65,7 @@ Tools9p: module {
 
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
-	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs: con iota;
+	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -114,6 +115,15 @@ SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
 
 # Buffered channel for async shadow dir cleanup; asyncexec sends PID when done
 cleanupchan: chan of int;
+# `activity create` plus the following activity-list read is one allocation
+# transaction. The long-lived dispatcher owns its serialization (INFR-362).
+taskcreatelock: chan of int;
+provisiondelay := 0;
+ProvisionState: adt {
+	id: int;
+	state: string;
+};
+provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifest_written := 0;  # Set after first emitmanifest() call
 
@@ -191,12 +201,13 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] [-z ms] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
 	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
+	sys->fprint(stderr, "  -z ms         Delay child namespace setup (test harness only)\n");
 	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
 	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
 	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable; :ro/:rw\n");
@@ -266,6 +277,11 @@ init(nil: ref Draw->Context, args: list of string)
 			agentrole = rarg;
 		'N' =>	agentnodevs = "set";
 		'm' =>	mountpt = arg->earg();
+		'z' =>
+			(zarg, nil) := str->toint(arg->earg(), 10);
+			if(zarg < 0 || zarg > 10000)
+				usage();
+			provisiondelay = zarg;
 		'p' =>
 			parg := arg->earg();
 			explicitperm := "";
@@ -322,6 +338,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Clean shadow dirs left by previous session (crash or kill).
 	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
 	cleanupchan = chan[32] of int;
+	taskcreatelock = chan[1] of int;
 	cleanshadows();
 	spawn shadowcleanloop();
 
@@ -381,6 +398,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# restrictns + emitmanifest — its namespace is discarded after.
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
+	if(agentrole == "child" && provisiondelay > 0)
+		sys->sleep(provisiondelay);
 	spawn emitmanifestnow(manifestpath(mountpt));
 }
 
@@ -1016,6 +1035,41 @@ genbudgetlist(): string
 	return result;
 }
 
+toolsummary(name: string): string
+{
+	doc := readfile("/lib/veltro/tools/" + name + ".txt");
+	for(i := 0; i < len doc; i++)
+		if(doc[i] == '\n' || doc[i] == '\r')
+			break;
+	if(i == 0)
+		return name + " - no description available";
+	line := doc[0:i];
+	if(len line >= 6 && line[0:3] == "== " && line[len line - 3:] == " ==")
+		line = line[3:len line - 3];
+	if(len line >= len name && str->tolower(line[0:len name]) == name) {
+		j := len name;
+		for(; j < len line; j++) {
+			c := line[j];
+			if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+				break;
+		}
+		if(j < len line)
+			line = line[j:];
+	}
+	return name + " - " + line;
+}
+
+gengrantablelist(): string
+{
+	result := "";
+	for(b := childbudget(); b != nil; b = tl b) {
+		if(result != "")
+			result += "\n";
+		result += toolsummary(hd b);
+	}
+	return result;
+}
+
 # Generate list of tool names (newline-separated for /tool/tools)
 gentoollist(): string
 {
@@ -1139,12 +1193,36 @@ exectool(name, args: string): string
 # Namespace restriction is applied HERE (not in serveloop) so each
 # invocation uses the current boundpaths at call time — essential for
 # paths bound via the GUI after the server was already running.
+istaskcreate(ti: ref ToolInfo, data: string): int
+{
+	return ti != nil && ti.name == "task" &&
+		(data == "create" || (len data > 7 && data[0:7] == "create "));
+}
+
+releasetaskcreate(locked: int)
+{
+	if(locked) {
+		<-taskcreatelock;
+		if(verbose) sys->fprint(stderr, "tools9p: task create released transaction lock\n");
+	}
+}
+
 asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
+	# Keep batched creates single-file before either invocation forks its
+	# namespace. This covers the whole allocation/provision transaction and
+	# leaves status/list/result calls independently responsive.
+	locked := istaskcreate(ti, data);
+	if(locked) {
+		if(verbose) sys->fprint(stderr, "tools9p: task create waiting for transaction lock\n");
+		taskcreatelock <-= 1;
+		if(verbose) sys->fprint(stderr, "tools9p: task create acquired transaction lock\n");
+	}
 	mypid := sys->pctl(Sys->FORKNS, nil);
 	if(mypid < 0) {
 		ti.result = array of byte "error: cannot fork namespace";
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
+		releasetaskcreate(locked);
 		return;
 	}
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
@@ -1152,6 +1230,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
 		ti.result = array of byte "error: cannot disable device attachment";
 		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
+		releasetaskcreate(locked);
 		return;
 	}
 	# Bind our mount point over /tool BEFORE namespace restriction.
@@ -1164,22 +1243,24 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
 		ti.result = array of byte "error: cannot bind activity tool service";
 		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
+		releasetaskcreate(locked);
 		return;
 	}
-	nserr := applynsrestriction(ti.name);
+	nserr: string;
+	if(!locked)
+		nserr = applynsrestriction(ti.name);
 	if(nserr != nil) {
 		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
 		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
 		cleanupchan <-= mypid;
+		releasetaskcreate(locked);
 		return;
 	}
 	result := exectool(ti.name, data);
-	# Assign result before replying so it's visible for subsequent reads.
-	# NOTE: concurrent writes to the same tool will overwrite each other's
-	# result — this is a known limitation. A per-fid result map would fix it.
-	rbytes := array of byte result;
-	ti.result = rbytes;
+	# Assign result before replying so it is visible for subsequent reads.
+	ti.result = array of byte result;
 	srv.reply(ref Rmsg.Write(tag, count));
+	releasetaskcreate(locked);
 	# Hand this invocation's shadow dirs to the cleanup goroutine.
 	#
 	# This send used to be non-blocking, dropping the pid whenever the
@@ -1331,21 +1412,24 @@ ShCommand: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-provisiontask(args: string)
+# Validate a provision request and build the child tools9p argument list.
+# Runs INLINE on the serveloop (INFR-405) so a rejected request fails the
+# ctl write itself: the caller learns provisioning was refused instead of
+# being told an activity was created and silently getting a default grant.
+# Every check aborts. A denied tool or path is a refused delegation, never a
+# quietly narrowed one — partial provisioning is how a child ends up with the
+# broad default authority the request never asked for.
+provisionparse(args: string): (int, string, list of string, string)
 {
 	# Parse id and optional key=value attrs
 	(nil, toks) := sys->tokenize(args, " ");
-	if(toks == nil) {
-		sys->fprint(stderr, "tools9p: provision: no activity id\n");
-		return;
-	}
+	if(toks == nil)
+		return (-1, nil, nil, "no activity id");
 	idstr := hd toks;
 	toks = tl toks;
 	(id, iderr) := parseactivityid(idstr);
-	if(iderr != nil) {
-		sys->fprint(stderr, "tools9p: provision: invalid id %s: %s\n", idstr, iderr);
-		return;
-	}
+	if(iderr != nil)
+		return (-1, nil, nil, sys->sprint("invalid id %s: %s", idstr, iderr));
 
 	# Parse optional tools= and paths= attrs
 	toolsarg := "";
@@ -1355,22 +1439,17 @@ provisiontask(args: string)
 	for(; toks != nil; toks = tl toks) {
 		tok := hd toks;
 		if(len tok > 6 && tok[0:6] == "tools=") {
-			if(seentools) {
-				sys->fprint(stderr, "tools9p: provision: duplicate tools= attr\n");
-				return;
-			}
+			if(seentools)
+				return (id, nil, nil, "duplicate tools= attr");
 			seentools = 1;
 			toolsarg = tok[6:];
 		} else if(len tok > 6 && tok[0:6] == "paths=") {
-			if(seenpaths) {
-				sys->fprint(stderr, "tools9p: provision: duplicate paths= attr\n");
-				return;
-			}
+			if(seenpaths)
+				return (id, nil, nil, "duplicate paths= attr");
 			seenpaths = 1;
 			pathsarg = tok[6:];
 		} else {
-			sys->fprint(stderr, "tools9p: provision: unknown attr %s\n", tok);
-			return;
+			return (id, nil, nil, sys->sprint("unknown attr %s", tok));
 		}
 	}
 
@@ -1378,31 +1457,31 @@ provisiontask(args: string)
 	# budget and be loaded (active OR pre-loaded inactive). The budget,
 	# not the parent's active set, is the delegation boundary — a child
 	# may receive any budget tool even when the parent holds it inactive.
-	# Child tasks may narrow, never expand beyond the budget.
+	# Child tasks may narrow, never expand beyond the budget. A tool the
+	# budget denies aborts the whole request: dropping it would launch a
+	# child whose authority nobody asked for and nobody was told about.
 	toollist: list of string;
 	if(toolsarg != "") {
 		(nil, ttoks) := sys->tokenize(toolsarg, ",");
 		for(; ttoks != nil; ttoks = tl ttoks) {
 			tname := hd ttoks;
-			if(!validtooltoken(tname)) {
-				sys->fprint(stderr, "tools9p: provision: invalid tool name %s\n", tname);
-				return;
-			}
-			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname)) {
-				sys->fprint(stderr, "tools9p: provision: denied tool %s\n", tname);
-				continue;
-			}
+			if(!validtooltoken(tname))
+				return (id, nil, nil, sys->sprint("invalid tool name %s", tname));
+			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname))
+				return (id, nil, nil, sys->sprint("denied tool %s (not in delegation budget)", tname));
 			toollist = tname :: toollist;
 		}
-	} else {
-		# Default: delegate all budget tools
-		for(b := childbudget(); b != nil; b = tl b)
-			toollist = hd b :: toollist;
 	}
 
 	# Baseline tools are read-only namespace navigation. Persistence, recursive
 	# delegation, planning state, and UI effects are explicit capabilities and
 	# must never appear merely because the subject is a child agent.
+	#
+	# An omitted tools= is a request for the baseline, NOT for the whole
+	# delegation budget (INFR-405). Defaulting to the budget let a parent
+	# holding thirteen read-mostly tools mint a child holding twenty-six,
+	# including write, exec, launch and spawn — delegation that amplifies
+	# rather than narrows. Authority beyond the baseline must be named.
 	basics := "read" :: "list" :: "find" :: "search" :: "grep" :: nil;
 	for(bl := basics; bl != nil; bl = tl bl)
 		if(findtool(hd bl) != nil && !strlist_contains(toollist, hd bl))
@@ -1414,17 +1493,13 @@ provisiontask(args: string)
 		for(; ptoks0 != nil; ptoks0 = tl ptoks0) {
 			raw := hd ptoks0;
 			if(raw == "")
-				continue;
+				return (id, nil, nil, "empty path in paths=");
 			(ppath, pperm) := splitpathperm(raw);
 			perr := validatepath(ppath);
-			if(perr != nil) {
-				sys->fprint(stderr, "tools9p: provision: denied invalid path %s: %s\n", ppath, perr);
-				continue;
-			}
-			if(!childpathallowed(ppath)) {
-				sys->fprint(stderr, "tools9p: provision: denied path %s\n", ppath);
-				continue;
-			}
+			if(perr != nil)
+				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
+			if(!childpathallowed(ppath))
+				return (id, nil, nil, sys->sprint("denied path %s (outside this agent's grants)", ppath));
 			if(pathperm(ppath) == "ro")
 				pperm = "ro";
 			pathcaps = ref BoundPath(ppath, pperm) :: pathcaps;
@@ -1460,23 +1535,100 @@ provisiontask(args: string)
 	rargs = "child" :: rargs;
 	rargs = "-r" :: rargs;
 	rargs = "-N" :: rargs;
+	if(provisiondelay > 0) {
+		rargs = string provisiondelay :: rargs;
+		rargs = "-z" :: rargs;
+	}
 	if(verbose)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;
 
-	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
+	return (id, mpt, rargs, nil);
+}
 
-	# Load and spawn child tools9p as a module (new data segment per load).
-	# This avoids the unreliable shell-based approach — direct module loading
-	# guarantees the server starts and we can poll for mount readiness.
+setprovisionstate(id: int, state: string)
+{
+	for(ps := provisionstates; ps != nil; ps = tl ps)
+		if((hd ps).id == id) {
+			(hd ps).state = state;
+			return;
+		}
+	provisionstates = ref ProvisionState(id, state) :: provisionstates;
+}
+
+getprovisionstate(id: int): string
+{
+	for(ps := provisionstates; ps != nil; ps = tl ps)
+		if((hd ps).id == id)
+			return (hd ps).state;
+	return "";
+}
+
+genprovisionstates(): string
+{
+	out := "";
+	for(ps := provisionstates; ps != nil; ps = tl ps)
+		out += sys->sprint("%d %s\n", (hd ps).id, (hd ps).state);
+	return out;
+}
+
+provisionstatus(id: int, status: string)
+{
+	fd := sys->open(sys->sprint("/mnt/ui/activity/%d/status", id), Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte status;
+	sys->write(fd, b, len b);
+}
+
+provisioncleanup(mpt: string)
+{
+	sys->unmount(nil, controlmount(mpt));
+	sys->unmount(nil, mpt);
+}
+
+provisionfail(id: int, mpt, reason: string): string
+{
+	setprovisionstate(id, "failed: " + reason);
+	provisionstatus(id, "failed: " + reason);
+	provisioncleanup(mpt);
+	return "provision failed: " + reason;
+}
+
+runprovisionedagent(lb: ShCommand, id: int, lbargs: list of string)
+{
+	{
+		lb->init(nil, lbargs);
+	} exception e {
+	"*" =>
+		provisionstatus(id, "failed: task agent exited");
+		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
+	}
+}
+
+# Launch the validated child and publish a narrow lifecycle result only after
+# the namespace manifest exists. This keeps trusted readiness metadata out of
+# the task tool's namespace.
+provisionrun(id: int, mpt: string, rargs: list of string)
+{
+	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
+	mpath := manifestpath(mpt);
+	sys->remove(mpath);
+
 	t9p := load ShCommand "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load tools9p.dis: %r\n");
+		provisionfail(id, mpt, "cannot load tools9p");
+		return;
+	}
+	lb := load ShCommand "/dis/lucibridge.dis";
+	if(lb == nil) {
+		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
+		provisionfail(id, mpt, "cannot load lucibridge");
 		return;
 	}
 	spawn t9p->init(nil, rargs);
 
-	# Poll for mount readiness — wait until the trusted control alias exists
 	ctlpath := controlmount(mpt) + "/ctl";
 	ready := 0;
 	for(i := 0; i < 20; i++) {
@@ -1489,22 +1641,36 @@ provisiontask(args: string)
 	}
 	if(!ready) {
 		sys->fprint(stderr, "tools9p: provision: %s did not mount after 10s\n", mpt);
+		provisionfail(id, mpt, "child tool service did not mount");
 		return;
 	}
 
-	sys->fprint(stderr, "tools9p: provision: %s mounted, starting lucibridge\n", mpt);
-
-	# Load and start lucibridge — this blocks (runs agent loop),
-	# which is fine since provisiontask is already a spawned goroutine.
-	lb := load ShCommand "/dis/lucibridge.dis";
-	if(lb == nil) {
-		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
+	nsready := 0;
+	for(i = 0; i < 400; i++) {
+		(ok, nil) := sys->stat(mpath);
+		if(ok >= 0) {
+			nsready = 1;
+			break;
+		}
+		sys->sleep(50);
+	}
+	if(!nsready) {
+		sys->fprint(stderr, "tools9p: provision: activity %d did not finish namespace setup\n", id);
+		provisionfail(id, mpt, "child did not finish namespace setup");
 		return;
 	}
+
+	if(getprovisionstate(id) == "cancelled") {
+		provisioncleanup(mpt);
+		return;
+	}
+	sys->fprint(stderr, "tools9p: provision: %s confined\n", mpt);
+	setprovisionstate(id, "ready");
+	provisionstatus(id, "ready");
 	lbargs := "lucibridge" :: "-a" :: string id :: "-s" :: nil;
 	if(verbose)
 		lbargs = "lucibridge" :: "-v" :: "-a" :: string id :: "-s" :: nil;
-	lb->init(nil, lbargs);
+	spawn runprovisionedagent(lb, id, lbargs);
 }
 
 # Return manifest file path for a given tools9p mount point.
@@ -1654,6 +1820,8 @@ addtoolpaths(paths: list of string, tool: string): list of string
 		return addpath(paths, "/tmp/veltro/fractal");
 	"man" =>
 		return addpath(paths, "/tmp/veltro/man");
+	"limbo" =>
+		return addpath(paths, "/mnt/llm");
 	}
 	return paths;
 }
@@ -1730,6 +1898,9 @@ Serve:
 				data := array of byte gentoollist();
 				srv.reply(styxservers->readbytes(m, data));
 
+			Qgrantable =>
+				srv.reply(styxservers->readbytes(m, array of byte gengrantablelist()));
+
 			Qhelp =>
 				# Return last help query result (stored globally so
 				# separate write/read fids see the same data)
@@ -1755,6 +1926,9 @@ Serve:
 
 			Qactivity =>
 				srv.reply(styxservers->readbytes(m, array of byte string activityid));
+
+			Qprovision =>
+				srv.reply(styxservers->readbytes(m, array of byte genprovisionstates()));
 
 			Qmetarole =>
 				srv.reply(styxservers->readbytes(m, array of byte (agentrole + "\n")));
@@ -1784,8 +1958,6 @@ Serve:
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
 					Qtool_ctl or Qtool_run =>
-						# ctl and run share ti.result: write args to either,
-						# read either back. run is the INFR-2 alias.
 						if(ti.result == nil)
 							ti.result = array of byte "error: no result (write arguments first)";
 						srv.reply(styxservers->readbytes(m, ti.result));
@@ -1906,19 +2078,49 @@ Serve:
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				} else if(len data > 10 && data[0:10] == "provision ") {
 					# "provision <id> [tools=<csv>] [paths=<csv>]"
-					# Spawn child tools9p + lucibridge in the UNRESTRICTED
-					# parent namespace (serveloop runs before any restrictns).
-					spawn provisiontask(data[10:]);
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					# Validate inline so a refused delegation fails THIS write
+					# (INFR-405); only a fully-granted request is launched, and
+					# it launches in the UNRESTRICTED parent namespace
+					# (serveloop runs before any restrictns).
+					(pid0, pmpt, prargs, perr0) := provisionparse(data[10:]);
+					if(perr0 != nil) {
+						sys->fprint(stderr, "tools9p: provision: %s\n", perr0);
+						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
+					} else {
+						setprovisionstate(pid0, "starting");
+						spawn provisionrun(pid0, pmpt, prargs);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					}
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, "usage: add|remove <tool> or bindpath|unbindpath <path> [ro|rw] or setperm <path> <ro|rw> or budget-add|budget-remove <tool> or provision <id>"));
 				}
 
 			Qprovision =>
 				# Agent-visible provisioning is intentionally narrow: the child task
-				# may only receive subsets of the current tool/path grants.
-				spawn provisiontask(data);
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				# may only receive subsets of the current tool/path grants. A request
+				# naming anything outside them is refused here, in the write, so the
+				# caller cannot mistake a dropped grant for a provisioned child.
+				if(len data > 7 && data[0:7] == "cancel ") {
+					(cid, cerr) := parseactivityid(data[7:]);
+					if(cerr != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, "invalid cancellation: " + cerr));
+					} else {
+						setprovisionstate(cid, "cancelled");
+						provisionstatus(cid, "failed: provisioning cancelled");
+						provisioncleanup("/tool." + string cid);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					}
+				} else {
+					(qid0, qmpt, qrargs, qerr) := provisionparse(data);
+					if(qerr != nil) {
+						sys->fprint(stderr, "tools9p: provision: %s\n", qerr);
+						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
+					} else {
+						setprovisionstate(qid0, "starting");
+						spawn provisionrun(qid0, qmpt, qrargs);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					}
+				}
 
 			* =>
 				# Tool ctl writes - execute asynchronously to avoid blocking serveloop.
@@ -1982,6 +2184,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 
 	Qtools =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "tools", big 0, 8r444), nil);
+
+	Qgrantable =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "grantable", big 0, 8r444), nil);
 
 	Qhelp =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "help", big 0, 8r644), nil);
@@ -2055,6 +2260,8 @@ navigator(navops: chan of ref Navop)
 					;  # stay at root
 				"tools" =>
 					n.path = big Qtools;
+				"grantable" =>
+					n.path = big Qgrantable;
 				"help" =>
 					n.path = big Qhelp;
 				"_registry" =>
@@ -2135,8 +2342,8 @@ navigator(navops: chan of ref Navop)
 
 			case qtype {
 			Qroot =>
-				# Root contains: tools, help, _registry, ctl, paths, budget, activity,
-				# optional provision, and tool directories.
+				# Root contains: tools, grantable, help, _registry, ctl, paths, budget,
+				# activity, optional provision, and tool directories.
 				i := n.offset;
 				count := n.count;
 
@@ -2196,16 +2403,23 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
-				if(findtool("task") != nil && i <= 8 && count > 0) {
+				# Entry 8: grantable delegation catalogue
+				if(i <= 8 && count > 0) {
+					n.reply <-= dirgen(big Qgrantable);
+					count--;
+					i++;
+				}
+
+				if(findtool("task") != nil && i <= 9 && count > 0) {
 					n.reply <-= dirgen(big Qprovision);
 					count--;
 					i++;
 				}
 
 				# Remaining entries: registered tool directories
-				baseoff := 8;
+				baseoff := 9;
 				if(findtool("task") != nil)
-					baseoff = 9;
+					baseoff = 10;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;

@@ -251,6 +251,17 @@ else
     fail "list tool exec test failed"
 fi
 
+if emu_c "limbo_service_scope" 15 \
+    "mkdir -p /mnt/llm; tools9p limbo & sleep 3; cat /tmp/veltro/.ns/manifest"; then
+    if echo "$OUTPUT" | grep -q '^path=/mnt/llm label=LLM Service perm=rw$'; then
+        pass "limbo receives its fixed-purpose LLM service capability"
+    else
+        fail "limbo namespace is missing its required LLM service (output: $OUTPUT)"
+    fi
+else
+    fail "limbo service capability test failed"
+fi
+
 # ── /tool/paths ──────────────────────────────────────────────────────────────
 
 echo ""
@@ -294,6 +305,19 @@ if emu_c "provision_subset" 14 \
     fi
 else
     fail "child provision narrowing test failed"
+fi
+
+if emu_c "provision_probe_compile_run" 28 \
+    "mkdir -p /tmp/veltro/probe-sdk/dis /tmp/veltro/probe-sdk/module; cp /dis/limbo.dis /tmp/veltro/probe-sdk/dis/limbo.dis; cp /module/*.m /tmp/veltro/probe-sdk/module; cp /tests/qualification_probe.b /tmp/veltro/probe-sdk/qualification-probe.b; tools9p -b exec -p /tmp/veltro/probe-sdk:rw read task & sleep 3; echo '31 tools=exec paths=/tmp/veltro/probe-sdk:rw' > /tool/provision; sleep 5; echo '/tmp/veltro/probe-sdk/dis/limbo.dis -I /tmp/veltro/probe-sdk/module -o /tmp/veltro/probe-sdk/qualification-probe.dis /tmp/veltro/probe-sdk/qualification-probe.b' > /tool.31/exec/run; echo COMPILE; cat /tool.31/exec/run; echo '/tmp/veltro/probe-sdk/qualification-probe.dis' > /tool.31/exec/run; echo EXECUTE; cat /tool.31/exec/run; echo PATHS; cat /mnt/toolctl.31/paths"; then
+    if echo "$OUTPUT" | grep -q "exit:" || ! echo "$OUTPUT" | grep -q "INFR434_PROBE_OK"; then
+        fail "delegated probe did not compile and execute successfully (output: $OUTPUT)"
+    elif [[ "$(echo "$OUTPUT" | grep -c '^/tmp/veltro/probe-sdk rw$')" -ne 1 ]]; then
+        fail "delegated probe did not receive exactly its writable SDK path (output: $OUTPUT)"
+    else
+        pass "delegated child compiles and executes a bounded probe in its writable SDK"
+    fi
+else
+    fail "delegated probe compile/execute test failed"
 fi
 
 if emu_c "provision_msg_draft_denied" 14 \
@@ -382,6 +406,21 @@ if emu_c "provision_msg_draft_exact" 14 \
     fi
 else
     fail "exact message draft delegation test failed"
+fi
+
+if emu_c "provision_msg_draft_write" 24 \
+    "msg9p >[2] /tmp/msg-draft-write.log & sleep 2; echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl; tools9p -b write -p /mnt/msg/draft:rw read task & sleep 3; echo '25 tools=write paths=/mnt/msg/draft:rw' > /tool/provision; sleep 5; echo '/mnt/msg/draft email\\n1\\ndelegated reply' > /tool.25/write/run; echo RESULT; cat /tool.25/write/run; echo PENDING; cat /mnt/msg/pending"; then
+    if ! echo "$OUTPUT" | grep -q "wrote .* bytes to /mnt/msg/draft"; then
+        fail "child write tool could not use the exact draft capability (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "^[0-9][0-9]* email 1 "; then
+        fail "delegated draft did not reach the trusted pending queue (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "cowfs /mnt/msg/draft"; then
+        fail "transactional draft endpoint was incorrectly sent through cowfs"
+    else
+        pass "child exact draft grant writes a pending reply proposal"
+    fi
+else
+    fail "delegated message draft write test failed"
 fi
 
 if emu_c "provision_specific_ro" 14 \

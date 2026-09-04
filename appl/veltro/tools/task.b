@@ -61,6 +61,8 @@ models: list of string;
 # verify: an adversarial "run it, don't read it" checker (exec + read tools,
 # no write/edit — read-only on the project) that emits a PASS/FAIL/PARTIAL
 # verdict backed by captured output.
+# redteam: an authorized source-assisted security tester. It inherits the
+# parent model so a campaign can pin model identity and reasoning at the gate.
 # Tools must still be in the delegation budget; missing ones are dropped at
 # provision time.
 agentdefs: list of (string, string, string);
@@ -83,6 +85,7 @@ init(): string
 		("coder", "daedalus", "read,write,edit,find,grep,list,limbo") ::
 		("research", "gpt-oss", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
 		("verify", "gpt-oss", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
+		("redteam", "", "read,list,find,search,grep,write,exec,limbo,plan,todo,spawn") ::
 		nil;
 
 	return nil;
@@ -275,6 +278,18 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
+readprovisionstate(id: int): string
+{
+	raw := readfile("/tool/provision");
+	if(raw == nil)
+		return "";
+	prefix := string id + " ";
+	for(lines := splitlines(strip(raw)); lines != nil; lines = tl lines)
+		if(hasprefix(hd lines, prefix))
+			return strip((hd lines)[len prefix:]);
+	return "";
+}
+
 docreate(args: string): string
 {
 	attrs := parseattrs(args);
@@ -448,26 +463,35 @@ docreate(args: string): string
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
 
-	# INFR-362: serialize provisioning. Provisioning runs asynchronously in the
-	# parent namespace; a sibling `task create` issued in the SAME turn (parallel
-	# tool calls — e.g. Mistral emits all at once) would otherwise overlap this
-	# child's namespace setup and find /mnt/ui transiently hidden, silently
-	# dropping the task. Wait for this child's manifest, which is written only
-	# AFTER its restrictns completes — by then the racy bind-replace window is
-	# closed. Remove any stale manifest first (/tmp persists across runs).
-	manifestp := sys->sprint("/tmp/veltro/.ns/manifest.%d", newid);
-	sys->remove(manifestp);
+	# Provisioning is now atomic (INFR-405): tools9p validates the request on
+	# this write and refuses it outright rather than dropping the tools and
+	# paths it will not grant. Trusted tools9p publishes a narrow lifecycle result
+	# after observing confinement; the task tool cannot read the hidden manifest
+	# and does not report success while provisioning is still starting.
+	# A refusal must not surface as a created
+	# activity — the caller would poll an activity that has no agent behind
+	# it, or worse, assume the narrowing it asked for was applied. Tear the
+	# activity down and report the reason.
+	writefile(sys->sprint("%s/activity/%d/status", UI_MOUNT, newid), "provisioning");
 	perr := writefile("/tool/provision", provcmd[10:]);
-	if(perr != nil)
-		sys->fprint(sys->fildes(2), "task: provision warning: %s\n", perr);
-	for(w := 0; w < 120; w++) {		# bounded ~6s
-		(mok, nil) := sys->stat(manifestp);
-		if(mok >= 0)
-			break;
-		sys->sleep(50);
+	if(perr != nil) {
+		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+		return sys->sprint("error: task not created — %s", perr);
 	}
 
-	return sys->sprint("created activity %d: %s", newid, label);
+	for(w := 0; w < 700; w++) {
+		pstatus := readprovisionstate(newid);
+		if(hasprefix(pstatus, "failed")) {
+			writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+			return sys->sprint("error: task not created — activity %d %s", newid, pstatus);
+		}
+		if(pstatus == "ready")
+			return sys->sprint("created activity %d: %s", newid, label);
+		sys->sleep(50);
+	}
+	writefile("/tool/provision", "cancel " + string newid);
+	writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+	return sys->sprint("error: task not created — activity %d provisioning timed out", newid);
 }
 
 dostatus(args: string): string
@@ -533,8 +557,11 @@ doresult(args: string): string
 		if(role != "human" && role != "" && text != "")
 			last = text;
 	}
-	if(last == "")
+	if(last == "") {
+		if(hasprefix(status, "failed"))
+			return sys->sprint("task %d [%s] result: task failed before producing a reply", id, status);
 		return sys->sprint("task %d [%s]: no result yet — it has not produced a reply. Poll 'task status %d' until it reports done, then read the result.", id, status, id);
+	}
 	return sys->sprint("task %d [%s] result:\n%s", id, status, last);
 }
 

@@ -6,6 +6,7 @@ LIMBOFLAGS=-I$MODDIR -I.
 DISBIN=$ROOT/dis/veltro
 
 MAIN=\
+    taskboard9p.dis\
     agentlib.dis\
     veltro.dis\
     repl.dis\
@@ -22,10 +23,12 @@ MAIN=\
     wallet9p.dis\
 
 SOURCES=\
+    sources/sms.dis\
     sources/email.dis\
     sources/mockmail.dis\
 
 TOOLS=\
+    tools/contacts.dis\
     tools/read.dis\
     tools/list.dis\
     tools/find.dis\
@@ -266,6 +269,15 @@ tools/payfetch.dis: tools/payfetch.b tool.m
 # Wallet operations tool
 tools/wallet.dis: tools/wallet.b tool.m
 	limbo $LIMBOFLAGS -gw -o tools/wallet.dis tools/wallet.b
+
+tools/contacts.dis: tools/contacts.b tool.m
+	limbo $LIMBOFLAGS -gw -o tools/contacts.dis tools/contacts.b
+
+sources/sms.dis: sources/sms.b
+	limbo $LIMBOFLAGS -gw -o sources/sms.dis sources/sms.b
+
+taskboard9p.dis: taskboard9p.b
+	limbo $LIMBOFLAGS -gw -o taskboard9p.dis taskboard9p.b
 
 install:V: all
 	mkdir -p $DISBIN $DISBIN/tools $DISBIN/sources

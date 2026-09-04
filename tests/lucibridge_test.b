@@ -20,6 +20,8 @@ implement LucibridgeTest;
 #   - extractpaths: path extraction from "path perm" lines
 #   - lookuppathperm: permission lookup from path list
 #   - strcontains: list membership check
+#   - toolresultstatus: only direct execution failures taint provenance
+#   - scratchpaths: trusted backing path and activity-visible path agree
 #
 
 include "sys.m";
@@ -113,6 +115,34 @@ tolower(s: string): string
 		if(r[i] >= 'A' && r[i] <= 'Z')
 			r[i] = r[i] + ('a' - 'A');
 	return r;
+}
+
+contains(s, sub: string): int
+{
+	if(sub == "")
+		return 1;
+	for(i := 0; i <= len s - len sub; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+toolresultstatus(name, content: string): string
+{
+	lower := tolower(content);
+	if(hasprefix(lower, "error:") ||
+	   hasprefix(lower, "error —") ||
+	   (name == "exec" && (contains(lower, "(exit:") ||
+		contains(lower, "... (timeout"))) ||
+	   (name == "limbo" && contains(lower, "status: failed")))
+		return "error";
+	return "success";
+}
+
+scratchpaths(aid, step: int): (string, string)
+{
+	return (sys->sprint("/tmp/veltro/scratch/%d/step%d.txt", aid, step),
+		sys->sprint("/tmp/veltro/scratch/step%d.txt", step));
 }
 
 cleanresponse(response: string): string
@@ -709,6 +739,26 @@ testStrcontainsEmpty(t: ref T)
 	t.asserteq(strcontains(nil, "anything"), 0, "strcontains empty list");
 }
 
+testToolresultstatusEmbeddedExit(t: ref T)
+{
+	t.assertseq(toolresultstatus("task",
+		"child completed its checks; diagnostic included (exit: high-violations)"),
+		"success", "task reports may quote an exec exit marker");
+	t.assertseq(toolresultstatus("exec", "scan complete (exit: 2)"),
+		"error", "direct exec non-zero exit is an error");
+	t.assertseq(toolresultstatus("limbo", "status: failed\ncompile error"),
+		"error", "direct limbo failure is an error");
+}
+
+testScratchpathsActivityView(t: ref T)
+{
+	(backing, visible) := scratchpaths(17, 3);
+	t.assertseq(backing, "/tmp/veltro/scratch/17/step3.txt",
+		"bridge writes the activity backing directory");
+	t.assertseq(visible, "/tmp/veltro/scratch/step3.txt",
+		"agent receives its mounted scratch path");
+}
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -802,6 +852,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("StrcontainsFound", testStrcontainsFound);
 	run("StrcontainsNotFound", testStrcontainsNotFound);
 	run("StrcontainsEmpty", testStrcontainsEmpty);
+
+	# provenance and activity scratch regressions
+	run("ToolresultstatusEmbeddedExit", testToolresultstatusEmbeddedExit);
+	run("ScratchpathsActivityView", testScratchpathsActivityView);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

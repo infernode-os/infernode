@@ -133,6 +133,39 @@ fsfree(Chan *c)
 	free(FS(c));
 }
 
+/*
+ * Allocate a Chan's Fsinfo.
+ *
+ * smalloc() is emu's pool allocator (alloc.c); it does not zero, so a
+ * recycled block arrives holding whatever the previous occupant left.
+ * Fsinfo embeds a QLock (oq), which fsread() takes on every directory
+ * read.  qlock() on a QLock built from stale bytes either spins for ever
+ * on a non-zero use.val, or - when use.val happens to be zero and
+ * locked/tail do not - writes through the stale tail pointer:
+ *
+ *	SEGV: addr=aaaaaaaaaaaaaaca  PC in qlock+0x34
+ *
+ * A fresh arena is zero-filled by the host, so this stayed latent until a
+ * long-running process recycled enough memory: an agent campaign churning
+ * thousands of namespace shadow directories, every walk allocating and
+ * freeing an Fsinfo.  Zero the whole struct so each field, present and
+ * future, starts defined; then set the non-zero defaults.  (INFR-421)
+ *
+ * Every Fsinfo must come from here.  Allocating one directly at a call
+ * site reintroduces the fault; tests/host/devfs_fsinfo_init_test.sh pins
+ * that.
+ */
+static Fsinfo*
+fsinfoalloc(void)
+{
+	Fsinfo *f;
+
+	f = smalloc(sizeof(Fsinfo));
+	memset(f, 0, sizeof(Fsinfo));
+	f->fd = -1;
+	return f;
+}
+
 Chan*
 fsattach(char *spec)
 {
@@ -150,11 +183,7 @@ fsattach(char *spec)
 
 	c = devattach('U', spec);
 	c->qid = fsqid(&st);
-	c->aux = smalloc(sizeof(Fsinfo));
-	FS(c)->dir = nil;
-	FS(c)->de = nil;
-	FS(c)->fd = -1;
-	FS(c)->issocket = 0;
+	c->aux = fsinfoalloc();
 	FS(c)->gid = st.st_gid;
 	FS(c)->uid = st.st_uid;
 	FS(c)->mode = st.st_mode;
@@ -241,7 +270,7 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 			cclose(wq->clone);
 		wq->clone = nil;
 	}else if(wq->clone){
-		nc->aux = smalloc(sizeof(Fsinfo));
+		nc->aux = fsinfoalloc();
 		nc->type = c->type;
 		if(nname > 0 && gotstat) {
 			FS(nc)->gid = st.st_gid;
@@ -257,9 +286,6 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 		FS(nc)->name = current;
 		FS(nc)->spec = FS(c)->spec;
 		FS(nc)->rootqid = rootqid;
-		FS(nc)->fd = -1;
-		FS(nc)->dir = nil;
-		FS(nc)->de = nil;
 	}
 	return wq;
 }

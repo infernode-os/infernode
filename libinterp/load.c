@@ -831,7 +831,18 @@ freemod(Module *m)
 	}
 	free(m->name);
 #if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-	if(!m->compiled)
+	/*
+	 * On these targets a compiled module's text is an executable
+	 * mapping from the JIT allocator, not pool memory: free() would
+	 * be wrong, so it must be unmapped instead.  Omitting this leaked
+	 * every compiled module's code for the life of the process, which
+	 * an agent can drive without bound simply by running commands
+	 * (INFR-421).  The 32-bit compilers mallocz() their code buffer,
+	 * so free() below is still correct for them.
+	 */
+	if(m->compiled)
+		freejitcode(m->prog, m->jitsize);
+	else
 #endif
 	free(m->prog);
 	free(m->path);

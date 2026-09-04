@@ -174,8 +174,8 @@ Threat model priority is adversarial input and protocol/emulator compromise
   MUST use keyring auth (`mount -k <keyfile>`), consistent with serve-llm
   (INFR-16) and the `lib/sh` profiles. The shipped/headless posture keeps auth
   on — never expose `/mnt/video` anonymously off-box.
-- **Not ring-fenced.** This is a general capability and ships normally; it is not
-  part of `tests/agent-harness/`.
+- **Not ring-fenced.** This is a general capability and ships normally; it is
+  not part of the external escape-room campaign harness.
 
 ## 5. The 9P boundary decision (recorded)
 

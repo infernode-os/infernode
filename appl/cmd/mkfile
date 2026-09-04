@@ -202,6 +202,19 @@ TARG=\
 	xd.dis\
 	yacc.dis\
 	zeros.dis\
+	audiotone.dis\
+	bioget.dis\
+	gateprobe.dis\
+	jitbench.dis\
+	jitbench2.dis\
+	jitbug.dis\
+	jitbug2.dis\
+	jitcrash.dis\
+	jitshift.dis\
+	jittest.dis\
+	mermaid_test.dis\
+	test9p.dis\
+	tlsperf.dis\
 
 
 MODULES=\

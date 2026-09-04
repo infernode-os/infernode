@@ -89,7 +89,6 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucifer) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
-- **Go on Dis** — the [GoDis compiler](tools/godis/README.md) translates Go source to Dis bytecode; 190+ test programs pass end-to-end.
 - **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
 - **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).
 - **Complete** — 800+ Limbo source files, a full shell, TCP/IP, 9P, and 815 compiled utilities.
@@ -116,7 +115,6 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 - [docs/matrix-architecture.md](docs/matrix-architecture.md) — Matrix compositional module runtime
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — wallet, x402, secstore, key management
 - [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) — Veltro agent security model
-- [tools/godis/README.md](tools/godis/README.md) — Go-to-Dis compiler architecture
 - [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md) — Windows build and SDL3 GUI
 - [docs/DIFFERENCES-FROM-STANDARD-INFERNO.md](docs/DIFFERENCES-FROM-STANDARD-INFERNO.md) — how InferNode differs from upstream
 - [formal-verification/README.md](formal-verification/README.md) — TLA+, SPIN, CBMC proofs

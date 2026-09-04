@@ -282,7 +282,7 @@ evaluation would still require. It restates, in ST form, the gap table of
 |-----------------|------------------|--------------------------|---------------------------|
 | **ADV** Development | Functional spec, TOE design, and (EAL5+) a formal/semiformal security-policy model + correspondence | The load-bearing property (namespace isolation) has a **formal model and machine-checked proof** across three tools; CBMC verifies actual C. `formal-verification/METHODOLOGY.md` | Full ADV_FSP / ADV_TDS / ADV_SPM / ADV_ARC documents to author; correspondence to the *whole* TSF |
 | **AGD** Guidance | Operational + preparative guidance | `QUICKSTART.md`, `docs/`, ops runbooks | Restructure to CC AGD_OPE/AGD_PRE form |
-| **ALC** Life-cycle | CM, flaw remediation, delivery, dev security | Reproducible Inferno-`mk` builds, SLSA-3 provenance + Sigstore signing, SBOM, `verify-dis-paths`, pinned CI actions, ring-fence guard | CC-form ALC_CMC/CMS/DEL/DVS/FLR documentation |
+| **ALC** Life-cycle | CM, flaw remediation, delivery, dev security | Reproducible Inferno-`mk` builds, SLSA-3 provenance + Sigstore signing, SBOM, `verify-dis-build`, pinned CI actions, ring-fence guard | CC-form ALC_CMC/CMS/DEL/DVS/FLR documentation |
 | **ATE** Tests | Functional coverage + depth | In-emu regression suite incl. `tests/veltro_security_test.b`, crypto tests, formal-verification CI | Coverage-to-SFR mapping (ATE_COV/DPT); independent ATE_IND |
 | **AVA** Vulnerability | Independent vuln assessment | CodeQL (`security.yml`), fuzzing (`fuzz.yml`), formal verification feed it | Accredited-lab AVA_VAN penetration test |
 | **ASE** Security Target | A complete ST | **This document** (self-produced baseline) | Evaluator review; PP instantiation |

@@ -14,7 +14,11 @@ clean:V: 	clean-std
 nuke:V:		nuke-std
 
 $DISBIN/%.dis:	%.dis
-	rm -f $DISBIN/$stem.dis && cp $stem.dis $DISBIN/$stem.dis
+	# dis/ is a build product and git does not track empty directories,
+	# so the target directory may not exist in a fresh clone.
+	mkdir -p $DISBIN
+	rm -f $DISBIN/$stem.dis
+	cp $stem.dis $DISBIN/$stem.dis
 
 %.dis:		$MODULES $SYS_MODULE
 

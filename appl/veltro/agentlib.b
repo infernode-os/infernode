@@ -314,6 +314,10 @@ discovernamespace(): string
 	else
 		result += "(none)";
 
+	grantable := readfile(toolmount_g + "/grantable");
+	if(grantable != "")
+		result += "\n\nGRANTABLE TO CHILD TASKS:\n" + grantable;
+
 	# List accessible paths
 	result += "\n\nPATHS:\n";
 	paths := array[] of {"/", toolmount_g, "/n", "/tmp"};

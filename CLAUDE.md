@@ -47,15 +47,40 @@ The native tools are built to:
 - `MacOSX/arm64/bin/mk` - Plan 9 mk (Inferno's build tool)
 - `MacOSX/arm64/bin/limbo` - Limbo compiler
 
-### Dis Files: What's Tracked and What's Not
+### Dis Files: A Build Product
 
-The `dis/` directory (the Inferno runtime tree) **is tracked in git**. This is intentional — Inferno is a self-hosting OS, and `dis/` is its `/usr/bin`. Without pre-built `.dis` files, a fresh clone can't boot: no shell, no `cat`, no `ls`. Upstream Inferno OS tracks them for the same reason.
+The `dis/` directory holds compiled Dis bytecode. **It is a build product and
+is not tracked in git**, exactly like `emu/*/o.emu`. A fresh clone has no
+runtime until you build one — and it has no emulator either, so you were
+building regardless.
 
-However, **build artifacts in source directories are not tracked**:
-- `appl/**/*.dis` — intermediate build outputs (`.gitignore`d)
-- `tests/**/*.dis` — compiled tests (`.gitignore`d)
+It used to be tracked, inherited from the 2006 upstream drop (`46439007c`,
+still in this history). The cost was a tree free to drift from the source that
+produced it: bytecode went stale (`dis/acme.dis` shipped font paths the source
+had abandoned five months earlier), modules were compiled to paths the build
+never installs to, sources were deleted with their binaries left behind, and 45
+modules shipped that no mkfile ever compiled. Releases carried ~940 files that
+nothing had built from the tagged source.
 
-This means: the runtime tree ships pre-built — including `dis/tests/`, whose test bytecode is tracked and updated via `mk install` like the rest of `dis/` — but you never commit `.dis` files from the `appl/` or `tests/` source directories.
+Releases still ship a runnable tree: the packaging job builds it before
+staging, which is how `o.emu` has always worked.
+
+**Rebuild after cloning, pulling, or editing any `.b` or `.m`:**
+
+```sh
+export ROOT=$PWD
+export PATH="$ROOT/$SYSHOST/$OBJTYPE/bin:$PATH"
+for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done
+```
+
+Takes about 20 seconds. `hooks/post-merge` does it for you after `git pull`
+(`./hooks/install.sh` once). All four directories are needed: `appl/mpeg` and
+`appl/veltro` are not in `appl/mkfile`'s `DIRS`.
+
+**The set of modules the build must produce is tracked**, as
+`tools/dis-manifest.txt`. `tools/verify-dis-build.sh` builds the tree and fails
+if anything on that list is missing; CI and every release job run it. Add or
+remove a module and you update the manifest in the same commit.
 
 **The stale bytecode problem:** When a `.m` interface file changes (e.g. `module/widget.m`), every `.dis` compiled against the old interface becomes stale. The Dis VM rejects stale modules at load time with `link typecheck` errors — apps show blank tabs, commands fail to load, and everything looks broken even though the source is fine. This is the most common class of post-pull breakage.
 
@@ -67,15 +92,31 @@ This means: the runtime tree ships pre-built — including `dis/tests/`, whose t
 
 After that, every `git pull` triggers an automatic rebuild of stale bytecode. See `hooks/post-merge` for details.
 
-**The wrong-target trap (READ THIS BEFORE COMPILING ANYTHING).** A separate class of stale-bytecode bug: a module declares `PATH: con "/dis/foo.dis";` so the runtime loads `dis/foo.dis`. The mkfile installs to `dis/foo.dis`. But there is *also* an `appl/cmd/foo.dis` (intermediate) and there used to be a parallel `dis/cmd/foo.dis` tree. If you manually compile with `limbo -o dis/cmd/foo.dis ...` (or any path that is NOT what the module's PATH constant declares), `emu` cheerfully keeps loading the old `dis/foo.dis` while your "fix" silently lands in a directory it never reads from. This has burned multiple debug sessions. The defences:
+**The wrong-target trap (READ THIS BEFORE COMPILING ANYTHING).** A module
+declares `PATH: con "/dis/foo.dis";` so the runtime loads `dis/foo.dis`, and its
+mkfile installs there. If you hand-compile with `limbo -o dis/cmd/foo.dis ...`
+— any path that is not what the build installs to — `emu` keeps loading the old
+`dis/foo.dis` while your "fix" lands in a directory it never reads from. This
+burned multiple debug sessions, and `dis/cmd/` accumulated seven stale
+duplicates that way before it was cleaned out.
+
+Untracking `dis/` removes most of this: you can no longer commit bytecode, so a
+wrongly-placed file is a local mess rather than something that ships. What
+remains is that your own tree can lie to you for an afternoon. The defences:
 
 - **Never run `limbo -o ...` directly.** Use one of:
-  - `tools/compile-limbo.sh <source.b>` — reads the module's `PATH` constant and emits to that exact location. No `-o` to get wrong.
-  - `mk install` from the appropriate `appl/<dir>/` — also installs to the canonical path (`DISBIN=$ROOT/dis`).
-- **Pre-commit hook** (installed by `./hooks/install.sh`) runs `tools/verify-dis-paths.sh`, which refuses any commit where a source's `dis/<PATH>.dis` is missing or older than the source.
-- **CI** (`.github/workflows/verify-dis-paths.yml`) runs the same verifier on every PR — universal backstop for contributors who didn't install the local hook.
+  - `tools/compile-limbo.sh <source.b>` — reads the module's `PATH` constant and
+    emits to that exact location. No `-o` to get wrong.
+  - `mk install` from the appropriate source directory — installs to the
+    canonical path the mkfile's `DISBIN` names.
+- **`tools/verify-dis-build.sh`** builds the tree and checks it against
+  `tools/dis-manifest.txt`. A module that no mkfile compiles shows up as
+  missing. CI and every release job run it.
 
-If you see "my fix isn't taking effect" symptoms (the bug looks the same after recompile, diagnostic prints don't appear in logs), check `tools/verify-dis-paths.sh` immediately before chasing anything else.
+If you see "my fix isn't taking effect" symptoms — the bug looks identical after
+a recompile, diagnostic prints never appear — you almost certainly compiled to a
+path nothing loads. Rebuild properly with the loop above before chasing anything
+else.
 
 ### Build Commands
 
@@ -391,8 +432,7 @@ infernode/
 │   ├── host/            #   Host-side shell tests
 │   ├── inferno/         #   Inferno-side shell tests
 │   ├── testing/         #   Testing framework self-tests
-│   └── agent-harness/   #   Ring-fenced eval-harness gateway (see Ring-fence rule)
-├── dis/                 # Compiled Dis bytecode (~630 .dis files)
+├── dis/                 # Compiled Dis bytecode (build product, NOT tracked)
 ├── lib/                 # Runtime data (fonts, shell profile, etc.)
 │   └── veltro/          #   Veltro tools, agents, reminders
 ├── libinterp/           # Dis VM interpreter and JIT compilers
@@ -405,12 +445,11 @@ infernode/
 └── build-*.sh           # Platform build scripts
 ```
 
-## Ring-fence rule (tests/agent-harness/)
+## External harness ring-fence
 
-`tests/agent-harness/` holds the in-tree pieces of the external evaluation
-harness — currently `serve-agent` (an Inferno rc profile that starts the
-headless agent stack) and `serve-agent.sh` (its host launcher). These
-files are **testing-only and must never ship in a release**:
+Adversarial campaign infrastructure lives in
+`infernode-os/infernode-escape-room`, with InferNode pinned as a dependency.
+It is **testing-only and must never ship in an InferNode release**:
 
 - The release tarballs / .app bundle / DMG / .zip would each expose
   `/mnt/ui` over a 9P port if they included these files. That is not the
@@ -426,13 +465,10 @@ Two CI guards enforce this, and they are load-bearing:
    `find` (bash) or `Get-ChildItem` (PowerShell) over the stage dir and
    fails the build if anything matches `serve-agent*` or `*agent-harness*`.
 2. **`.github/workflows/ci.yml`** — a separate `ring-fence` job runs on
-   every PR and fails if those patterns appear in the source tree
-   outside `tests/agent-harness/`.
+   every PR and fails if those patterns appear anywhere in the source tree.
 
-**Do not move serve-agent files into `lib/sh/` or any path that the
-release copy loop touches** (currently `dis lib fonts module services
-locale usr mnt`, in `release.yml`). If the harness ever genuinely
-becomes a shippable feature, that decision needs explicit design work
+**Do not copy serve-agent files into this repository.** If the harness ever
+genuinely becomes a shippable feature, that decision needs explicit design work
 and the CI guards updated together — never silently.
 
 The subagent trajectory logging added in `appl/veltro/{spawn,subagent}.b`

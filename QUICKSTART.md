@@ -71,7 +71,25 @@ This hook runs automatically after every `git pull` or `git merge`. It detects w
 
 ### Why are `.dis` files in git?
 
-Inferno is a self-hosting OS — the `dis/` directory is its runtime, like `/usr/bin` on Unix. Without pre-built `.dis` files, a fresh clone has no shell, no `cat`, no `ls`. The runtime tree (`dis/`) is tracked so the system boots immediately after clone.
+Inferno is a self-hosting OS and the `dis/` directory is its runtime, like
+`/usr/bin` on Unix. It holds compiled bytecode, so it is a **build product and
+is not tracked in git** — the same as the emulator binary. A fresh clone has
+neither, which is why the build step below is not optional.
+
+Rebuild the runtime whenever you clone, pull, or edit a `.b` or `.m`:
+
+```sh
+export ROOT=$PWD
+export PATH="$ROOT/$SYSHOST/$OBJTYPE/bin:$PATH"    # e.g. Linux/arm64/bin
+for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done
+```
+
+That takes about 20 seconds. Installing the git hooks (`./hooks/install.sh`)
+makes `git pull` do it for you. All four directories matter: `appl/mpeg` and
+`appl/veltro` are not reached by `cd appl && mk install` on its own.
+
+A downloaded **release** already contains a built runtime — the packaging job
+builds it before staging, so nothing is required of you there.
 
 Build artifacts in source directories (`appl/**/*.dis`, `tests/**/*.dis`) are **not** tracked — only the runtime tree.
 

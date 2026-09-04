@@ -56,7 +56,7 @@ they are the *evaluation evidence* CC mandates.
 | **ASE** Security Target | A complete ST (TOE description, SFRs, rationale) | Not authored |
 | **ADV** Development | Functional spec, TOE design, and (EAL5+) a **formal/semiformal** security-policy model + correspondence | Isolation proof exists; full ADV_SPM / ADV_FSP / ADV_TDS to write |
 | **AGD** Guidance | Operational user + prep guidance | Partial (QUICKSTART, ops docs); not CC-structured |
-| **ALC** Life-cycle | CM, flaw remediation, delivery, dev security | Strong technical base (reproducible builds, SLSA L3, signed artifacts, `verify-dis-paths`, security.md) — needs CC-form documentation |
+| **ALC** Life-cycle | CM, flaw remediation, delivery, dev security | Strong technical base (reproducible builds, SLSA L3, signed artifacts, `verify-dis-build`, security.md) — needs CC-form documentation |
 | **ATE** Tests | Functional test coverage + depth | Strong test base (in-emu suite, `veltro_security_test`, crypto KATs) — needs coverage-to-SFR mapping |
 | **AVA** Vulnerability | Independent vuln assessment / pen-test | CodeQL + fuzzing + formal verification feed it; independent AVA is lab work |
 
@@ -65,7 +65,7 @@ they are the *evaluation evidence* CC mandates.
 - **ADV (formal core):** the namespace isolation theorem and CBMC harnesses are exactly the
   kind of high-EAL evidence labs rarely see pre-engagement — `formal-verification/`.
 - **ALC:** reproducible Inferno `mk` builds, SLSA L3 provenance + Sigstore signing, SBOM,
-  `verify-dis-paths`, ring-fence guard — see [`SLSA.md`](SLSA.md), [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) §5.CM/SR.
+  `verify-dis-build`, ring-fence guard — see [`SLSA.md`](SLSA.md), [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) §5.CM/SR.
 - **ATE:** the in-emu regression suite and `tests/veltro_security_test.b` exercise the access
   mechanism directly.
 - **Small TCB** keeps every above class tractable — the whole point.

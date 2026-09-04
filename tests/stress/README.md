@@ -12,10 +12,8 @@ trustworthy.
 > through, and eventually even a trivial test is killed at exit. There was
 > **no OOM** (`dmesg` clean, RAM free) and the thread/proc count stayed flat,
 > so those deaths are a *sandbox watchdog*, **not** an InferNode leak or
-> crash. Host RSS introspection is also unreliable there because the emu forks
-> a worker and the visible pid is a zombie stub. **Run these on a real host
-> (bare metal / VM you control) to get a real verdict.** Tracked for hardware
-> validation alongside the IPv6 task.
+> crash. **Run these on a real host (bare metal / VM you control) to get a real
+> verdict.** Tracked for hardware validation alongside the IPv6 task.
 
 ## churn — connection-churn leak / stability
 

@@ -96,7 +96,7 @@ and the four-family itemization in
 |---------|--------------------------|-----------------------------|--------------------|---------------|------------------|-------|
 | **SI-2** / 3.14.1 | Flaw remediation | CodeQL + fuzzing in CI; formal verification; security-advisory process | Configurable / Integrator | `.github/workflows/security.yml`, `fuzz.yml`; `SECURITY.md` | FPT_TST | Remediation SLA is operator process |
 | **SI-3** / 3.14.2 | Malicious-code protection | Application layer is type-/memory-safe Dis bytecode; modules type-checked at load | By construction | `libinterp/`; `CLAUDE.md` (link typecheck) | FPT_TDC.1 | Eliminates whole CWE classes for ~700 Limbo apps |
-| **SI-7** / 3.14.x | Software/firmware/information integrity | `.dis` path-integrity verifier; tracked `dis/` tree; hash-chained audit | By construction | `.github/workflows/verify-dis-paths.yml`; `tools/verify-dis-paths.sh` | FPT_TST | |
+| **SI-7** / 3.14.x | Software/firmware/information integrity | bytecode built from source at release and checked against a tracked module manifest; hash-chained audit | By construction | `.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`; `tools/dis-manifest.txt` | FPT_TST | |
 | **SI-16** | Memory protection | No raw pointers; bounds-checked arrays in Dis VM | By construction | `libinterp/` | FPT_TDC.1 | C TCB (emu/libsec) is *not* memory-safe — covered by CodeQL/fuzz/formal only |
 | **SI (TCB race residual)** | Integrity of the TSF itself | Namespace primitives formally verified; **3 emu-host UAF races open** | Partial | `formal-verification/TODO-RACE-CONDITIONS.md` | FPT_SEP.1 | **gap (F-1)** — formally confirmed defects |
 
@@ -105,7 +105,7 @@ and the four-family itemization in
 | Control | Requirement (paraphrase) | How InferNode satisfies it | Satisfaction basis | Evidence path | CC SFR crosswalk | Notes |
 |---------|--------------------------|-----------------------------|--------------------|---------------|------------------|-------|
 | **CM-2** / 3.4.1 | Baseline configuration | Reproducible Inferno-`mk` builds; tracked `dis/` runtime tree | By construction | `CLAUDE.md` ("Why Native Tools") | ALC (Part 3) | |
-| **CM-5** | Access restrictions for change | Pre-commit + CI verifiers gate commits/PRs | Configurable | `hooks/`, `.github/workflows/verify-dis-paths.yml` | ALC | |
+| **CM-5** | Access restrictions for change | CI verifiers gate PRs; `hooks/post-merge` keeps working trees current | Configurable | `hooks/`, `.github/workflows/verify-dis-build.yml` | ALC | |
 | **CM-6** / 3.4.2 | Configuration settings | CNSA mode (`/env/cnsamode`), `NODEVS`, export scope are explicit settings | Configurable | `appl/lib/crypt/tls.b` (`cnsamode`); `CNSA-2.0.md` | FMT_SMF.1 | Secure settings are opt-in — integrator must set |
 | **CM-7** / 3.4.6–3.4.7 | Least functionality | Small TCB; `NODEVS`; compose only needed file services; ring-fence guard keeps test-only harness out of releases | By construction | `CLAUDE.md` (Ring-fence rule); `.github/workflows/ci.yml`, `release.yml` | FMT_MSA.3 | |
 | **CM-14 / SR** | Signed components / provenance | SHA-pinned CI actions; Sigstore cosign; SLSA provenance; SBOM | By construction | `.github/workflows/release.yml`, `scorecard.yml`, `sbom.yml` | ALC / (SR family) | See §7 |

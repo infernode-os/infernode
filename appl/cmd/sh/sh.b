@@ -690,9 +690,13 @@ runasync(ctxt: ref Context, copyenv: int, argv: list of ref Listnode, redirs: re
 
 	pid := sys->pctl(sys->FORKFD, nil);
 	if (DEBUG) debug(sprint("in async (len redirs: %d)", len redirs.r));
-	ctxt = ctxt.copy(copyenv);
 	exprop := ref Expropagate;
 	{
+		# copy() reopens the wait file, which can fail under a restricted
+		# namespace (INFR-436).  Keep it inside the guarded block so the
+		# failure is reported to the parent through startchan below rather
+		# than killing this process before it ever syncs.
+		ctxt = ctxt.copy(copyenv);
 		newfdl := doredirs(ctxt, redirs);
 		redirs = nil;
 		if (newfdl != nil)
@@ -1061,7 +1065,14 @@ waitfd(): ref Sys->FD
 	if (waitfd == nil)
 		waitfd = sys->open("/prog/"+wf, Sys->OREAD);
 	if (waitfd == nil)
-		panic(sys->sprint("cannot open wait file: %r"));
+		# A process that cannot open its own wait file cannot reap
+		# children.  In normal operation this never happens; it does when
+		# a command runs in a namespace with the process filesystem hidden
+		# (e.g. the Veltro exec tool applies NODEVS for containment, so a
+		# forked sub-shell cannot open #p).  Raise a catchable failure
+		# rather than panic() the interpreter (INFR-436): the caller turns
+		# it into a clean command error instead of a broken shell.
+		raise "fail:cannot open wait file (process filesystem not available): " + sys->sprint("%r");
 	return waitfd;
 }
 

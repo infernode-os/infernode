@@ -119,8 +119,9 @@ When `tools9p` is started, two flags shape what agents see:
   read list find present say hear ...            # tools loaded for THIS agent
 ```
 
-- The **positional tools** are loaded for the agent running this `tools9p`.
+- The **positional tools** are loaded for the agent running this `tools9p` and listed by `/tool/tools`.
 - The `-b` budget is the **maximum a child can be granted**. Subagents can never exceed it.
+- `/tool/grantable` lists that effective budget as `name - summary` records. Agent namespace discovery injects this live catalogue so a coordinator can delegate capabilities it does not hold directly without relying on a hand-maintained prompt list.
 
 The Lucia launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical configuration. Edit them to lock down a deployment.
 

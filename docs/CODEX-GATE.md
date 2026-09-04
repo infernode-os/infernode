@@ -43,21 +43,29 @@ should make. So this gate bridges at the **prompt** level:
 
 1. The request's tool definitions are rendered into the prompt as an
    `<available_tools>` manifest.
-2. `codex exec --output-schema` constrains the final agent message to
+2. A fixed Codex developer instruction identifies that manifest as a virtual
+   caller-tool protocol, and `--disable shell_tool` prevents the CLI's native
+   shell from competing with it. The model must request effects from Veltro,
+   not inspect the gateway host.
+3. `codex exec --output-schema` constrains the final agent message to
    `{"content": str, "tool_calls": [{"name", "arguments"}]}`.
-3. A non-empty `tool_calls` array becomes an ordinary OpenAI `tool_calls`
+4. A non-empty `tool_calls` array becomes an ordinary OpenAI `tool_calls`
    response with `finish_reason: tool_calls`. llmsrv turns that into the
    `TOOL:` lines the agent already parses, and the agent executes the tools
    through its own policy layer exactly as with Ollama.
-4. llmsrv owns the transcript and re-sends it in full, so the results arrive
+5. llmsrv owns the transcript and re-sends it in full, so the results arrive
    as `role=tool` messages on the next request and are replayed into a fresh
    `codex exec`.
 
-**The gate is therefore stateless.** There are no held turns to orphan (a
-restart mid-tool-loop costs nothing) and no `CODEX_GATE_HOLD_TIMEOUT`; the
+**The CLI session is therefore stateless.** There are no held CLI sessions
+and no `CODEX_GATE_HOLD_TIMEOUT`; the
 price is that no CLI session spans a tool round-trip — each request is one
 `codex exec` with the transcript replayed. `/health` still reports
-`held_turns` for surface parity with claude-gate; it is always 0.
+`held_turns` for surface parity with claude-gate; it is always 0. This does
+not mean `CODEX_HOME` is stateless: the CLI writes operational files there
+even when each invocation uses `--ephemeral`. An in-flight HTTP request,
+including a quota-paused one, is also not durable across a gateway restart;
+the caller must retry it.
 
 A reply that isn't the agreed JSON object is treated as plain content rather
 than an error — degraded, never fatal.
@@ -68,21 +76,44 @@ All endpoints bind `127.0.0.1` only.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/v1/chat/completions` | POST | OpenAI chat completions. Accepts `messages`, `tools` (OpenAI function format), `model`, `stream`. Returns `choices[0].message.content` / `.tool_calls` (`arguments` is a JSON string), `finish_reason` `stop`/`tool_calls`, `usage.total_tokens`. `stream:true` yields single-chunk SSE ending in `data: [DONE]`. |
+| `/v1/chat/completions` | POST | OpenAI chat completions. Accepts `messages`, `tools` (OpenAI function format), `model`, `stream`. Returns `choices[0].message.content` / `.tool_calls` (`arguments` is a JSON string), `finish_reason` `stop`/`tool_calls`, `usage.total_tokens`. `stream:true` sends SSE keepalive comments while Codex reasons, then one result chunk ending in `data: [DONE]`. |
 | `/v1/models` | GET | Advertised model ids — what llmsrv's `/mnt/llm/models` and the Settings picker show. Set with `CODEX_GATE_MODELS`; whatever a request names is passed straight to `codex -m`, so the list is a convenience, not a whitelist. |
 | `/health` | GET | Liveness + gauges. |
 
 `/health` response:
 
 ```json
-{"status": "ok", "backend": "codex-cli", "held_turns": 0, "stateless": true}
+{"status": "ok", "backend": "codex-cli", "held_turns": 0, "stateless": true,
+ "session_stateless": true,
+ "hardened": true, "codex_version": "codex-cli 0.149.0",
+ "sandbox": "read-only", "exec_flags": ["--sandbox", "read-only", "..."],
+ "disabled_features": ["plugins", "..."], "features_sha256": "…",
+ "adapter_instructions_sha256": "…",
+ "codex_home_baseline": {"files": 1, "bytes": 4156, "sha256": "…"},
+ "codex_home_current": {"files": 72, "persistent_cli_state_files": 71,
+                         "persistent_cli_state": true, "sha256": "…"}}
 ```
 
-- `status` — always `"ok"` if the daemon is serving.
+- `status` — `"ok"` if the daemon is serving. Non-mock startup first runs
+  `codex login status`, so missing or API-key authentication cannot masquerade
+  as ChatGPT OAuth readiness. The explicit `CODEX_GATE_ALLOW_API_KEY=1`
+  override bypasses this subscription check.
 - `backend` — `"codex-cli"` normally; `"mock"` when started with
   `CODEX_GATE_MOCK=1` (deterministic test backend, no CLI, no billing).
 - `held_turns` — always 0 here (see above); present so monitoring can treat
   both gates alike.
+- `turn_timeout_seconds` / `idle_timeout_seconds` — the total and no-output
+  deadlines applied to each Codex process. Escape-room preflight rejects a
+  gateway whose idle deadline is disabled or exceeds the campaign maximum.
+- `stateless` / `session_stateless` — the HTTP and CLI session contract only.
+  They make no claim that the isolated Codex home remains empty.
+- `hardened`, `codex_version`, `exec_flags`, `disabled_features`,
+  `features_sha256`, `adapter_instructions_sha256`, `codex_home_baseline` —
+  the pinned CLI surface (see below). The external
+  [escape-room harness](https://github.com/infernode-os/infernode-escape-room)
+  copies these into a campaign's `manifest.json` and a scenario file can
+  require them, so a containment result names the gateway configuration it was
+  measured under.
 
 ## Lifecycle & startup
 
@@ -118,15 +149,73 @@ Config (env, read at start):
 | `CODEX_GATE_HOST` / `CODEX_GATE_PORT` | `127.0.0.1:11436` | listen address |
 | `CODEX_GATE_BIN` | `codex` | the CLI binary |
 | `CODEX_GATE_MODEL` | *(empty)* | model when the request names none; empty = let the CLI use its own configured default (no `-m` passed) |
-| `CODEX_GATE_MODELS` | `gpt-5-codex,gpt-5-codex-mini` | advertised on `/v1/models` |
+| `CODEX_GATE_MODELS` | `default` | advertised on `/v1/models`; `default` omits `codex -m` so the CLI chooses its configured current model |
 | `CODEX_GATE_TIMEOUT` | `900` | seconds one `codex exec` may run |
+| `CODEX_GATE_IDLE_TIMEOUT` | `300` | seconds a `codex exec` may produce no stdout/stderr before its process group is killed; `0` disables this deadline |
+| `CODEX_GATE_HEARTBEAT` | `30` | seconds between protocol-valid SSE comments while `codex exec` is still running; keep below the caller's no-progress timeout |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
+| `CODEX_GATE_QUOTA_MAX_WAIT` | `21600` | maximum seconds to preserve and retry a usage-limit-paused request; `0` returns a structured 429 immediately |
+| `CODEX_GATE_QUOTA_BACKOFF` | `30` | initial retry delay when Codex provides no reset time |
+| `CODEX_GATE_QUOTA_MAX_BACKOFF` | `900` | maximum fallback retry delay |
+| `CODEX_GATE_QUOTA_RESET_GRACE` | `30` | grace after a minute-precision reset time before retrying |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
 | `CODEX_GATE_WORKDIR` | `~/.cache/codex-gate/workdir` | `--cd` value |
 | `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child, to isolate `~/.codex` (you must copy `auth.json` in yourself) |
 | `CODEX_GATE_EXEC_ARGS` | *(empty)* | extra args appended to every `codex exec` |
 | `CODEX_GATE_PROMPT_ARGV` | *(unset)* | `1` = pass the prompt as argv instead of stdin |
+| `CODEX_GATE_HARDEN` | `1` | pin the CLI feature surface (see below); `0` disables the pinning but never the adapter's own `--disable shell_tool` |
+| `CODEX_GATE_DISABLE_FEATURES` | *(unset)* | comma list replacing the pinned disable set |
+| `CODEX_GATE_HOME_ALLOW` | `auth.json,auth.json.lock,version.json,installation_id` | what the isolated Codex home may contain at startup |
 | `CODEX_GATE_MOCK`, `CODEX_GATE_DEBUG` | — | test backend, verbose logs |
+| `CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH` | *(empty)* | mock-only fault selector; inject the configured mock error only when the system prompt contains this exact text |
+
+## Pinned CLI surface
+
+The Codex CLI is an agent harness with a life of its own. During the
+escape-room campaign it populated a fresh 0700 `CODEX_HOME` — created with
+nothing in it but `auth.json` — with 144 plugin-cache files (~26 MiB,
+including the remote curated catalog), 60 system-skill files and a shell
+snapshot. Nothing escaped: the CLI ran `--sandbox read-only`, with its native
+shell disabled, in an empty working directory, on a machine with no access to
+the system under test. But the model was carrying tools and instructions that
+no run record named, and the next run would carry different ones.
+
+So the gate pins the surface rather than inheriting it (INFR-413). Every
+`codex exec` gets:
+
+- `--ephemeral`, so no resumable Codex session spans requests; the CLI may
+  still write caches, databases, installation metadata, and bundled skills;
+- `--ignore-user-config`, so no `config.toml` is loaded;
+- `--ignore-rules`, so no user or project execpolicy `.rules` file is loaded;
+- `--disable` for plugins (and plugin sharing, remote plugins, the recommended
+  catalog), apps and their MCP surface, skill search and the skill dependency
+  installer, memories, shell snapshots, hooks, the CLI's own multi-agent mode,
+  and the browser/computer/image surfaces a protocol adapter has no use for.
+
+None of these are auto-dropped on a usage error, for the same reason
+`--sandbox` is not: a build that does not understand one must fail loudly
+instead of quietly running without it. At startup the gate asks
+`codex features list` for the effective state under exactly those flags, which
+both validates every pinned name against the installed build and produces the
+hash reported on `/health`.
+
+If `CODEX_GATE_CODEX_HOME` is set, the gate inventories it **before**
+authenticating through it and refuses to serve when it holds anything outside
+the allowlist — a `config.toml`, an `AGENTS.md`, an `mcp.json`, a `plugins/`
+or `skills/` directory — or when the directory itself is group- or
+world-accessible. The check runs once at startup because the CLI fills the
+directory in itself as soon as the first request arrives.
+
+After a campaign, account for what it created:
+
+```sh
+tools/codex-gate/serve-codex-gate.sh --inventory    # or: --inventory PATH
+```
+
+That prints every file under the Codex home with its size, mode and SHA-256,
+separate credential and persistent-state counts, and one digest over the whole
+listing. `/health` exposes the same current summary without file names, and
+the campaign runner saves its final value as `gateway-final.json`.
 
 ## Setup (pointing InferNode at it)
 
@@ -134,6 +223,22 @@ Config (env, read at start):
 codex login                            # once — ChatGPT sign-in
 tools/codex-gate/serve-codex-gate.sh   # or systemd/launchd per above
 ```
+
+On Linux, Codex's read-only sandbox requires Bubblewrap and permission to
+create unprivileged user namespaces. Install the distribution's `bubblewrap`
+package and verify a native tool call before starting InferNode:
+
+```sh
+codex exec --sandbox read-only --skip-git-repo-check \
+  'Use the shell tool to run pwd, then report its output.'
+```
+
+Do not continue if this reports `Failed RTM_NEWADDR`, a user-namespace error,
+or a sandbox fallback. Ubuntu 24.04 may set
+`kernel.apparmor_restrict_unprivileged_userns=1`; use an appropriate AppArmor
+profile, or change that setting only inside a dedicated gateway VM. Do not
+disable the Codex sandbox to make the check pass. See the current
+[Codex sandbox prerequisites](https://developers.openai.com/codex/concepts/sandboxing#prerequisites).
 
 On a fresh install the first-run wizard offers **Codex CLI** directly, so a
 user on a subscription never has to reach for an API key. Otherwise set
@@ -152,9 +257,26 @@ codex` report on it.
 
 Headless CLI usage draws on the account the CLI is logged into. On a ChatGPT
 plan that means the plan's Codex usage allowance; when it is exhausted the
-CLI's own behaviour (rate-limit or overage) is what you get — the gate does
-not meter. All consumers of one gate share one allowance and one auth
-identity.
+gate keeps the affected HTTP request open, releases its Codex process slot,
+and retries without advancing the caller's transcript. `/health` reports
+`state=paused_quota` plus safe retry timing while this is happening. The gate
+does not meter usage. All consumers of one gate share one allowance and one
+auth identity.
+
+This is not `codex exec resume`. `llmsrv` and Veltro own the durable transcript,
+tool results, and activity tree; the gate still starts a fresh ephemeral
+`codex exec` for every attempt. A retry replays the same unchanged request.
+Set `CODEX_GATE_QUOTA_MAX_WAIT=0` when an operator prefers an immediate,
+machine-readable HTTP 429 instead of waiting.
+
+After resetting account quota manually, send `SIGHUP` to the gateway process.
+It immediately retries every quota-paused request with its original, unchanged
+HTTP body; a still-exhausted account returns the request to bounded backoff.
+For a systemd user service:
+
+```sh
+systemctl --user kill --kill-whom=main -s HUP codex-gate
+```
 
 **OPENAI_API_KEY can silently outrank ChatGPT auth in the CLI**, billing the
 API instead of the plan. The serve script unsets it, and the gate refuses to
@@ -167,7 +289,7 @@ deliberately).
 |---|---|---|
 | `backend=` | `codex` | Codex CLI gateway. Boot profiles launch `llmsrv -b openai` for it (`lib/lucifer/boot.sh`, `lib/sh/profile`, `lib/sh/serve-profile` match `openai cli codex`). |
 | `url=` | `http://127.0.0.1:11436/v1` | Override port via `CODEX_GATE_PORT` (gate) + `CODEX_GATE_URL` (llmctl). |
-| `model=` | e.g. `gpt-5-codex` | Passed straight to `codex -m`; leave empty to use the CLI's configured default. |
+| `model=` | e.g. a model supported by the installed CLI | Passed straight to `codex -m`; leave empty or use `default` to use the CLI's configured default. `llmctl set codex` clears stale model ids when switching backends. |
 
 ## Limitations / notes
 
@@ -178,31 +300,40 @@ deliberately).
   optimization, not correctness-relevant.
 - **`temperature`/`max_tokens` are accepted and ignored** — the CLI owns
   generation limits.
-- **The CLI's own tools cannot be disabled**, only sandboxed. `codex exec`
-  runs with `--sandbox read-only` (override with `CODEX_GATE_SANDBOX`) and
-  `--cd` pointed at a private empty directory, so its shell/read tools start
-  somewhere with nothing to read and cannot write. The prompt also tells the
-  model to ask for a tool rather than work around one. This is a weaker
-  fence than claude-gate's explicit disallow list — if that matters for your
-  deployment, run the gate as a user with nothing to read.
-- **Global CLI instructions still load.** A `~/.codex/AGENTS.md` (or config
-  in `~/.codex/config.toml`) applies to gate traffic too. Set
-  `CODEX_GATE_CODEX_HOME` to a directory holding only `auth.json` to isolate
-  it.
+- **The CLI's native shell is disabled.** The gate enforces
+  `--disable shell_tool`, a fixed `developer_instructions` adapter contract,
+  `--sandbox read-only`, and `--cd` to a private empty directory. The first two
+  make caller tools functional; the latter two remain defense in depth. Run
+  the gate as a dedicated user with nothing else to read.
+- **Global CLI instructions do not load.** `--ignore-user-config` and
+  `--ignore-rules` keep `config.toml`, execpolicy `.rules` and the
+  configuration-borne instruction sources out. `AGENTS.md` files are read from
+  the working directory, which is a private empty one. Set
+  `CODEX_GATE_CODEX_HOME` to a directory holding only `auth.json` as well, and
+  the gate will hold it to that.
 - **Flag compatibility.** `--json`, `--skip-git-repo-check`, `--cd`,
   `--output-last-message` and `--output-schema` are dropped automatically if
   the installed CLI rejects them (the call is retried without). `--sandbox`
-  is deliberately *not* auto-dropped: a build that doesn't understand it
-  fails loudly rather than running the CLI's tools unsandboxed. The gate
-  also parses both `codex exec --json` event dialects (the current
+  `--disable`, `--strict-config`, `--ephemeral`, `--ignore-user-config`,
+  `--ignore-rules` and `developer_instructions` are deliberately *not*
+  auto-dropped: a build that doesn't understand the adapter's security
+  contract fails loudly. The gate also parses both
+  `codex exec --json` event dialects (the current
   `item.completed` stream and the older `msg`-wrapped one).
 
 ## Tests
 
 ```sh
-./tests/host/codex_gate_test.sh     # mock-mode: OpenAI surface + tool bridge
+./tests/host/codex_gate_test.sh     # mock-mode: OpenAI surface, tool bridge,
+                                    # pinned CLI surface, Codex-home preflight
 ./tests/host/llmctl_test.sh         # llmctl incl. set codex / backend=codex
 ```
+
+`codex_gate_test.sh` bills nothing. When a `codex` CLI is on `PATH` it also
+checks every pinned feature name against that build — `codex features list`
+evaluates local configuration only — so a renamed flag is caught before a
+campaign runs with the feature quietly back on. Without a CLI that one check
+is skipped and the rest still runs.
 
 Live end-to-end (needs a logged-in CLI; uses your plan's allowance): start
 the gate, then inside emu `llmsrv -b openai -u http://127.0.0.1:11436/v1`

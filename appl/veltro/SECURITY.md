@@ -346,7 +346,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Capability attenuation | Child forks restricted parent, can only narrow |
 | Bounded process visibility | `/prog` is self-only for non-exec tools and empty for exec, with or without `shellcmds` |
 | Shadow cleanup | tools9p reclaims per-call physical shadows and sweeps crash leftovers at startup |
-| Auditable construction | `emitauditlog()` records restrictions; `verifyns()` is a test/debug helper, not an automatic runtime gate |
+| Auditable construction | `restrictns()` pre-opens only the write-only audit append FD, `emitauditlog()` seals the completed restriction through it, then closes it before tool execution; the audit tree never enters the tool namespace |
 | No cross-window access | `/chan` hidden unless `caps.xenith` is set; REPL opens FDs before restriction |
 | exec grants sh.dis only | `sh.dis` bound when `exec` is in caps.tools; named commands require `shellcmds` |
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
@@ -577,7 +577,7 @@ parser in `appl/cmd/ndb/`.
 exposes at `/tool/`):
 
     /tool/tools       one tool name per line
-    /tool/paths       one path grant per line
+    /tool/paths       one `path ro|rw` grant per line (legacy fixtures imply rw)
     /tool/meta/role   "toplevel" or "child"
     /tool/meta/xenith "1" or "0"
     /tool/meta/actid  integer or "-1"
@@ -691,8 +691,11 @@ Current fixtures under `tests/nsaudit-fixtures/`:
 - `profile-messaging` — base profile plus the message read/proposal surface
   (`/mnt/msg`, `/mnt/msg/draft`). Trusted message controls remain excluded.
 - `profile-payments` — base profile plus wallet proposal authority
-  (`/n/wallet`) and a declared `walletbudget`. Trusted wallet controls remain
-  excluded.
+  (`/n/wallet`) and a declared `walletbudget`. The declaration is exactly a
+  positive uint256 integer in base units followed by `ETH`, `USDC`, or `USD`
+  (for example, `1000000 USDC`). Missing, zero, negative, overflowing, or
+  malformed declarations fail closed as unbounded spend. Trusted wallet
+  controls remain excluded.
 
 The important design rule is additive composition. Start with a small base
 namespace, then overlay only the capability layer required for the job:

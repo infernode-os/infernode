@@ -38,10 +38,10 @@ if {test -e /mnt/llm/00000000000000000000000000000000/model} {
 	raise 'fail:guessed session token is walkable'
 }
 
-# Server default model.
+# OpenAI-compatible servers choose their own default when -M is omitted.
 m=`{cat /mnt/llm/$id/model}
-if {! ~ $"m claude-sonnet-4-5-20250929} {
-	raise 'fail:unexpected default model: '^$"m
+if {! ~ $"m ''} {
+	raise 'fail:openai backend inherited a model: '^$"m
 }
 
 # Alias resolved on write.

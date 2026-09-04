@@ -34,6 +34,12 @@ include "arg.m";
 include "agentlib.m";
 	agentlib: AgentLib;
 
+include "audit.m";
+	audit: Audit;
+
+include "auditprov.m";
+	auditprov: AuditProv;
+
 LuciBridge: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
@@ -46,6 +52,10 @@ verbose := 0;
 autospeak := 0;
 maxsteps := DEFAULT_MAX_STEPS;
 stderr: ref Sys->FD;
+
+# Agent provenance. Optional when auditing is disabled; fail-closed when the
+# install marker says auditing is required.
+provrequired := 0;
 
 # LLM session state
 sessionid := "";
@@ -106,6 +116,43 @@ fatal(msg: string)
 {
 	sys->fprint(stderr, "lucibridge: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+initprovenance()
+{
+	(aonok, nil) := sys->stat(Audit->ONFILE);
+	provrequired = aonok >= 0;
+	(alogok, nil) := sys->stat(Audit->LOGFILE);
+	if(!provrequired && alogok < 0)
+		return;
+	if(provrequired && alogok < 0)
+		fatal("this install requires auditing but /mnt/audit/log is not mounted");
+
+	auditprov = load AuditProv AuditProv->PATH;
+	err := "cannot load audit provenance module";
+	if(auditprov != nil)
+		err = auditprov->init();
+	if(err != nil) {
+		auditprov = nil;
+		if(provrequired)
+			fatal("required provenance unavailable: " + err);
+		return;
+	}
+	err = auditprov->attach(nil);
+	if(err != nil && provrequired)
+		fatal("required provenance unavailable: " + err);
+}
+
+prov(event, msg: string, payload: array of byte)
+{
+	if(auditprov == nil) {
+		if(provrequired)
+			fatal("required provenance module unavailable");
+		return;
+	}
+	rc := auditprov->log("lucibridge", event, msg, payload);
+	if(provrequired && rc != 0)
+		fatal("required provenance write failed");
 }
 
 writefile(path, data: string): int
@@ -488,17 +535,60 @@ readuserinput(): string
 }
 
 # Determine if a tool call needs user approval.
+shellword(args, want: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	for(; toks != nil; toks = tl toks)
+		if(hd toks == want)
+			return 1;
+	return 0;
+}
+
+recursiveRmOutsideTmp(args: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	sawrm := 0;
+	recursive := 0;
+	tmptarget := 0;
+	outsidetarget := 0;
+	for(; toks != nil; toks = tl toks) {
+		tok := hd toks;
+		if(tok == "rm") {
+			sawrm = 1;
+			continue;
+		}
+		if(!sawrm)
+			continue;
+		if(len tok > 1 && tok[0] == '-') {
+			if(agentlib->contains(tok[1:], "r"))
+				recursive = 1;
+			continue;
+		}
+		if(len tok > 0 && tok[0] == '/') {
+			if(tok == "/tmp" || agentlib->hasprefix(tok, "/tmp/"))
+				tmptarget = 1;
+			else
+				outsidetarget = 1;
+		}
+	}
+	return sawrm && recursive && (outsidetarget || !tmptarget);
+}
+
+headlessApprovalDeny(): int
+{
+	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
+	return ok >= 0;
+}
+
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
 		return 0;
 	if(toolname == "exec") {
-		if(agentlib->contains(args, "rm") && agentlib->contains(args, "-r")) {
-			if(!agentlib->hasprefix(args, "rm") || !agentlib->contains(args, "/tmp"))
-				return 1;
-		}
-		if(agentlib->contains(args, "bind ") || agentlib->contains(args, "mount ") ||
-		   agentlib->contains(args, "unmount "))
+		if(recursiveRmOutsideTmp(args))
+			return 1;
+		if(shellword(args, "bind") || shellword(args, "mount") ||
+		   shellword(args, "unmount"))
 			return 1;
 	}
 	if(toolname == "write" || toolname == "edit") {
@@ -509,11 +599,18 @@ needsapproval(toolname, args: string): int
 	return 0;
 }
 
-# Pre-tool approval gate. Returns "allow" or "deny".
+# Pre-tool approval gate. Returns "allow", "deny", or "headless-deny".
 pretoolapproval(toolname, args: string): string
 {
 	if(!needsapproval(toolname, args))
 		return "allow";
+	# An unattended grind campaign has no trusted operator surface. Its marker
+	# can only make a request fail, never grant authority, so spoofing it cannot
+	# cross a namespace boundary.
+	if(headlessApprovalDeny()) {
+		log("pretool: denied by headless campaign policy for " + toolname);
+		return "headless-deny";
+	}
 	desc := toolname + " " + agentlib->truncate(args, 120);
 	didx := writedialogue("Permission required",
 		desc, "", "Allow,Deny");
@@ -562,6 +659,33 @@ checkandcompact_ui()
 		if(didx >= 0)
 			updatedialogue(didx, "100", "Context compacted", "Session history summarized.");
 	}
+}
+
+toolresultstatus(name, content: string): string
+{
+	lower := str->tolower(content);
+	if(agentlib->hasprefix(lower, "error:") ||
+	   agentlib->hasprefix(lower, "error —") ||
+	   (name == "exec" && (agentlib->contains(lower, "(exit:") ||
+		agentlib->contains(lower, "... (timeout"))) ||
+	   (name == "limbo" && agentlib->contains(lower, "status: failed")))
+		return "error";
+	return "success";
+}
+
+# lucibridge is a trusted process outside the activity namespace. The read
+# tool sees this backing directory mounted at AgentLib->SCRATCH_PATH, so write
+# there but return the path visible to the agent.
+writescratch(content: string, step: int): string
+{
+	path := sys->sprint("%s/%d/step%d.txt", AgentLib->SCRATCH_PATH, actid, step);
+	fd := sys->create(path, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return "(cannot create activity scratch file)";
+	b := array of byte content;
+	if(sys->write(fd, b, len b) != len b)
+		return "(cannot write activity scratch file)";
+	return sys->sprint("%s/step%d.txt", AgentLib->SCRATCH_PATH, step);
 }
 
 # Track consecutive tool failures with UI notification.
@@ -679,12 +803,13 @@ initsession(): string
 	# override the default task prompt by writing /tmp/veltro/tasks/agenttype.<id>
 	# (e.g. "coder" -> /lib/veltro/agents/coder.txt) — see INFR-55.
 	suffix := BRIDGE_SUFFIX;
+	atype := "";
 	if(actid == 0) {
 		meta := agentlib->readfile(META_PROMPT_PATH);
 		if(meta != nil)
 			suffix = "\n\n" + agentlib->strip(meta);
 	} else {
-		atype := agentlib->strip(agentlib->readfile(
+		atype = agentlib->strip(agentlib->readfile(
 			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
 		promptpath := "/lib/veltro/agents/task.txt";
 		if(atype != "" && safeagenttype(atype))
@@ -785,6 +910,14 @@ initsession(): string
 
 	# Register namespace entries (services, devices, filesystems) as resources
 	registernamespace();
+
+	if(atype == "")
+		atype = "default";
+	prov("agentstart", sys->sprint("activity=%d agent=%s agenttype=%s", actid, sessionid,
+		atype), nil);
+	prov("nscaps", sys->sprint("activity=%d agent=%s", actid, sessionid), array of byte ns);
+	prov("sysprompt", sys->sprint("activity=%d agent=%s", actid, sessionid),
+		array of byte sysprompt);
 
 	log(sys->sprint("session %s, prompt %d bytes", sessionid, len array of byte sysprompt));
 	return nil;
@@ -1228,7 +1361,7 @@ applypathchanges()
 			continue;
 		if(len p >= 9 && p[0:9] == "/n/local/") {
 			log("path accessible: " + p);
-		} else if(len p >= 5 && p[0:5] == "/dis/") {
+		} else if(agentlib->pathexists(p)) {
 			log("path accessible (Inferno-native): " + p);
 		} else {
 			base := pathbase(p);
@@ -1254,7 +1387,7 @@ applypathchanges()
 		p := hd op;
 		if(p == "" || strcontains(newpaths, p))
 			continue;
-		if(!(len p >= 9 && p[0:9] == "/n/local/")) {
+		if(!(len p >= 9 && p[0:9] == "/n/local/") && !agentlib->pathexists(p)) {
 			base := pathbase(p);
 			if(base == nil || base == "")
 				base = "path";
@@ -1499,6 +1632,7 @@ cowrevert(arg: string): string
 agentturn(input: string)
 {
 	agentlib->dedupreset();	# fresh read-cache per turn
+	prov("prompt", sys->sprint("activity=%d agent=%s", actid, sessionid), array of byte input);
 
 	# Sync convcount with actual server message count before streaming.
 	syncconvcount();
@@ -1529,7 +1663,10 @@ agentturn(input: string)
 	streambase := "/mnt/llm/" + sessionid;
 
 	hitlimit := 1;
+	laststep := 0;
+	stopstate := "max-steps";
 	for(step := 0; step < maxsteps; step++) {
+		laststep = step + 1;
 		log(sys->sprint("step %d: writing %d bytes to LLM", step + 1, len array of byte prompt));
 
 		# Start async generation — returns immediately with new llmsrv,
@@ -1601,12 +1738,15 @@ agentturn(input: string)
 		response := readllmfd(llmfd);
 		log(sys->sprint("step %d: LLM response %d bytes", step + 1, len array of byte response));
 		if(response == "") {
+			stopstate = "empty";
 			if(placeholder_idx >= 0)
 				updateliveconvmsg(placeholder_idx, "(no response from LLM)");
 			else
 				writemsg("veltro", "(no response from LLM)");
 			break;
 		}
+		prov("llm", sys->sprint("activity=%d agent=%s step=%d", actid, sessionid, step + 1),
+			array of byte response);
 
 		log("llm: " + agentlib->truncate(response, 200));
 
@@ -1665,6 +1805,9 @@ agentturn(input: string)
 		# Plain text or end_turn: done.
 		if(stopreason != "tool_use" || tools == nil) {
 			hitlimit = 0;
+			stopstate = stopreason;
+			if(stopstate == "")
+				stopstate = "end-turn";
 			break;
 		}
 
@@ -1672,9 +1815,13 @@ agentturn(input: string)
 		results: list of (string, string);
 		for(tc := tools; tc != nil; tc = tl tc) {
 			(id, name, args) := hd tc;
+			prov("toolcall", sys->sprint("activity=%d agent=%s step=%d tool=%s",
+				actid, sessionid, step + 1, name), array of byte args);
 			if(str->tolower(name) == "say") {
 				writemsg("veltro", args);
 				results = (id, "said") :: results;
+				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s",
+					actid, sessionid, step + 1, name), array of byte "said");
 			} else {
 				# Mark the tool as active in the context zone for the full duration.
 				nm := str->tolower(name);
@@ -1701,8 +1848,16 @@ agentturn(input: string)
 
 				# Pre-tool approval for destructive operations
 				approval := pretoolapproval(nm, eargs);
-				if(approval == "deny") {
-					results = (id, "error: operation denied by operator") :: results;
+				if(approval == "deny" || approval == "headless-deny") {
+					denied := "error: operation denied by operator";
+					status := "denied";
+					if(approval == "headless-deny") {
+						denied = "error: operation denied by headless campaign policy";
+						status = "headless-denied";
+					}
+					results = (id, denied) :: results;
+					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
+						actid, sessionid, step + 1, name, status), array of byte denied);
 					writefile(ctxpath, "resource update path=" + nm + " status=idle");
 					if(fpath != nil)
 						writefile(ctxpath, "resource update path=" + fpath + " status=idle");
@@ -1714,6 +1869,8 @@ agentturn(input: string)
 				dcskip := agentlib->dedupcheck(nm, eargs);
 				if(dcskip != "") {
 					results = (id, dcskip) :: results;
+					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=cached",
+						actid, sessionid, step + 1, name), array of byte dcskip);
 					writefile(ctxpath, "resource update path=" + nm + " status=idle");
 					if(fpath != nil)
 						writefile(ctxpath, "resource update path=" + fpath + " status=idle");
@@ -1722,6 +1879,8 @@ agentturn(input: string)
 				setstatus(nm);
 				log("tool " + name + ": calling with " + string len eargs + " bytes");
 				result := agentlib->calltool(name, eargs);
+				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
+					actid, sessionid, step + 1, name, toolresultstatus(nm, result)), array of byte result);
 				agentlib->deduprecord(nm, eargs, result, step);
 				setstatus("working");
 				writefile(ctxpath, "resource update path=" + nm + " status=idle");
@@ -1739,7 +1898,7 @@ agentturn(input: string)
 						result = result[0:AgentLib->STREAM_THRESHOLD] +
 							"\n... (truncated — content continues in " + eargs + ")";
 					} else {
-						scratch := agentlib->writescratch(result, step);
+						scratch := writescratch(result, step);
 						# Keep first 3 lines inline so LLM has examples to act on immediately.
 						# IMPORTANT: stay small — TOOL_RESULTS must fit in one 9P Write (~8KB).
 						# 3 lines x ~80 bytes x 20 parallel tools < 5KB, safely under msize.
@@ -1809,6 +1968,8 @@ agentturn(input: string)
 		if(actid > 0 && !userinteracted)
 			seturgency(1);
 	}
+	prov("agentdone", sys->sprint("activity=%d agent=%s steps=%d stop=%s",
+		actid, sessionid, laststep, stopstate), nil);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -1891,6 +2052,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(actid > 0)
 		toolmount = "/tool." + string actid;
 	agentlib->settoolmount(toolmount);
+	initprovenance();
 
 	# Verify prerequisites
 	if(sys->open("/mnt/ui/ctl", Sys->OREAD) == nil)
@@ -2080,6 +2242,8 @@ init(nil: ref Draw->Context, args: list of string)
 			log("injected task brief into system prompt: " + agentlib->truncate(taskbrief, 100));
 			if(taskinstr != "")
 				log("injected instructions: " + agentlib->truncate(taskinstr, 100));
+			prov("task", sys->sprint("activity=%d agent=%s", actid, sessionid),
+				array of byte (taskbrief + "\n" + taskinstr));
 		}
 	}
 

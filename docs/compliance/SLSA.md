@@ -28,8 +28,10 @@ isolated CI build that emits **non-forgeable provenance** and are **signed**. Bu
 - **Continuous posture scoring:** OpenSSF Scorecard (`.github/workflows/scorecard.yml`).
 - **Artifact-content guard:** ring-fence CI fails the build if testing-only harness files leak
   into a release (`CLAUDE.md` "Ring-fence rule"; `release.yml`, `ci.yml`).
-- **Bytecode integrity:** `verify-dis-paths` ensures shipped `.dis` matches source
-  (`.github/workflows/verify-dis-paths.yml`; `tools/verify-dis-paths.sh`).
+- **Bytecode integrity:** shipped `.dis` is built from the tagged source by the release
+  job rather than committed, and checked against a tracked module manifest
+  (`.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`;
+  `tools/dis-manifest.txt`).
 
 ## 3. Open items (tracked, not blocking the L3 close)
 
@@ -46,8 +48,8 @@ flagged for review.
 
 **SBOM scope note (honest):** InferNode's core is first-party C and Limbo with no
 package-manager manifests, so the generated SPDX SBOM principally captures the
-third-party components that *do* carry external provenance (e.g. the Go modules under
-`tools/godis`, Android/Gradle deps) plus detected binaries — which is the set an SBOM
+third-party components that *do* carry external provenance (e.g. Android/Gradle
+deps) plus detected binaries — which is the set an SBOM
 exists to track for vulnerability management. The validation step fails CI if generation
 yields zero packages, so an empty/broken SBOM is caught.
 
@@ -62,4 +64,4 @@ hermetic/reproducible builds — tracked under INFR-340.
 ## 5. References
 
 - SLSA v1.0 (slsa.dev); OpenSSF Scorecard; Sigstore/cosign; SPDX / CycloneDX; in-toto.
-- `.github/workflows/release.yml`, `sbom.yml`, `scorecard.yml`, `verify-dis-paths.yml`.
+- `.github/workflows/release.yml`, `sbom.yml`, `scorecard.yml`, `verify-dis-build.yml`.

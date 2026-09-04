@@ -97,7 +97,9 @@ all:V:	xenith.dis
 install:V:	$ROOT/dis/xenith.dis
 
 $ROOT/dis/xenith.dis:	xenith.dis
-	rm -f $target && cp xenith.dis $target
+	mkdir -p $ROOT/dis
+	rm -f $target
+	cp xenith.dis $target
 
 xenith.dis:	$MODULES $SYS_MODULE
 

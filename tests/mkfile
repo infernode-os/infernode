@@ -4,6 +4,7 @@ DIRS=\
 	testing\
 
 TARG=\
+	authnode.dis\
 	9p_export_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
@@ -80,6 +81,8 @@ TARG=\
 	sdl3_test.dis\
 	sort_test.dis\
 	spawn_test.dis\
+	task_concurrent_probe.dis\
+	task_consistency_test.dis\
 	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
@@ -150,6 +153,12 @@ TARG=\
 	bioauth_test.dis\
 	softkbd_test.dis\
 	voice_scripts_test.dis\
+	gpu_bench.dis\
+	gpu_smoke.dis\
+	llmclient_sse_fallback_test.dis\
+	tlsclient.dis\
+	veltro_cc_alignment_test.dis\
+	webfs_test.dis\
 
 MODULES=
 

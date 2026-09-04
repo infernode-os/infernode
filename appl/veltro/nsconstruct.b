@@ -140,6 +140,15 @@ restrictns(caps: ref Capabilities): string
 	if(sys == nil)
 		init();
 
+	# Preserve only the append capability while constructing the namespace.
+	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;
+	# keeping the FD local also avoids exposing the audit tree to the tool worker.
+	(auditon, nil) := sys->stat(Audit->ONFILE);
+	auditrequired := auditon >= 0;
+	auditfd := sys->open(Audit->LOGFILE, Sys->OWRITE);
+	if(auditrequired && auditfd == nil)
+		return "required audit sink unavailable";
+
 	err := validatecapnames(caps.tools, "tool");
 	if(err != nil)
 		return err;
@@ -529,7 +538,7 @@ restrictns(caps: ref Capabilities): string
 	# trusted /mnt/toolctl* alias outside the restricted root.
 	(toolok, nil) := sys->stat("/tool");
 	if(toolok >= 0) {
-		toolallow := "tools" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
+		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
@@ -569,7 +578,24 @@ restrictns(caps: ref Capabilities): string
 	err = mkdirp(scratchdir);
 	if(err != nil)
 		return sys->sprint("create activity scratch: %s", err);
-	if(sys->bind(scratchdir, "/tmp/veltro/scratch", Sys->MREPL|Sys->MCREATE) < 0)
+
+	# Never bind the descendant backing directory over its ancestor. Walking
+	# ".." from that bind root follows the source channel back through the
+	# physical /tmp hierarchy and can recover the pre-restriction root. Serve
+	# the persistent backing directory through cowfs instead: its 9P navigator
+	# clamps ".." at the mount root and validates every relative component.
+	scratchbase := "/tmp/.veltro-ns/scratch-base";
+	err = mkdirp(scratchbase);
+	if(err != nil)
+		return sys->sprint("create activity scratch base: %s", err);
+	scratchfs := load Cowfs Cowfs->PATH;
+	if(scratchfs == nil)
+		return sys->sprint("cannot load scratch cowfs: %r");
+	(scratchfd, scratcherr) := scratchfs->start(scratchbase, scratchdir);
+	if(scratcherr != nil)
+		return sys->sprint("start activity scratch: %s", scratcherr);
+	if(sys->mount(scratchfd, nil, "/tmp/veltro/scratch",
+		Sys->MREPL|Sys->MCREATE, nil) < 0)
 		return sys->sprint("isolate activity scratch: %r");
 
 	# Task briefs contain untrusted message bodies and user instructions. They
@@ -596,7 +622,10 @@ restrictns(caps: ref Capabilities): string
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
-	emitauditlog(sys->sprint("%d", sys->pctl(0, nil)), auditops);
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd) != 0 &&
+	   auditrequired)
+		return "required namespace audit write failed";
+	auditfd = nil;
 
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
 	# constructed first; their backing channels remain valid after the trusted
@@ -1181,20 +1210,46 @@ componentcount(path: string): int
 	return nc;
 }
 
+directwritepath(path: string): int
+{
+	return path == "/mnt/msg/draft" || path == "/mnt/msg/flag";
+}
+
+# Stable 32-bit FNV-1a hash of a path, rendered as 8 hex digits.  The COW
+# overlay for a granted writable path must be keyed by the path itself, not by
+# where it happens to sit in a per-call list: exec stages a different (larger)
+# writable set than the in-process tools, so a positional index put the same
+# granted path on different overlays for exec vs write/list/read — a file
+# written by one tool was then invisible to another (INFR-435).
+overlaykey(path: string): string
+{
+	h := int 16r811c9dc5;
+	b := array of byte path;
+	for(i := 0; i < len b; i++) {
+		h = h ^ int b[i];
+		h = h * 16r01000193;
+	}
+	return sys->sprint("%8.8ux", h);
+}
+
 overlaywritepaths(paths: list of string, actid: int): string
 {
-	cowfs := load Cowfs Cowfs->PATH;
-	if(cowfs == nil)
-		return sys->sprint("cannot load cowfs: %r");
-
-	seq := 0;
+	cowfs: Cowfs;
 	for(p := paths; p != nil; p = tl p) {
 		fullpath := hd p;
+		if(directwritepath(fullpath))
+			continue;
+		if(cowfs == nil) {
+			cowfs = load Cowfs Cowfs->PATH;
+			if(cowfs == nil)
+				return sys->sprint("cannot load cowfs: %r");
+		}
 		(ok, nil) := sys->stat(fullpath);
 		if(ok < 0)
 			continue;
-		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%d", actid, seq);
-		seq++;
+		# Keyed by (activity, path) so every tool that is granted the same
+		# writable path shares one overlay and sees the same files.
+		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%s", actid, overlaykey(fullpath));
 		merr := mkdirp(overlaydir);
 		if(merr != nil)
 			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
@@ -1335,6 +1390,8 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		for(wp2 := caps.writepaths; wp2 != nil; wp2 = tl wp2)
 			if(pathwithin(hd wp2, p))
 				perm = "cow";
+		if(directwritepath(p) && inlist(p, caps.writepaths))
+			perm = "rw";
 		if(caps.actid < 0)
 			perm = "ro";
 		if(ok >= 0)
@@ -1396,6 +1453,14 @@ verifyns(expected: list of string): string
 # Emit audit log of namespace restriction operations
 emitauditlog(id: string, ops: list of string)
 {
+	# -1: a direct caller outside restrictns has no activity to attribute the
+	# restriction to. The field is still emitted so a reader can tell an
+	# unattributed record from one written before attribution existed.
+	emitauditlogto(id, -1, ops, nil);
+}
+
+emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD): int
+{
 	if(sys == nil)
 		init();
 
@@ -1426,25 +1491,40 @@ emitauditlog(id: string, ops: list of string)
 
 	# Provenance (INFR-355): seal the manifest hash into the audit chain.
 	# The full manifest stays in AUDIT_DIR; the chain pins it so it cannot
-	# be quietly edited after the fact. No-op when the install does not
-	# audit — /mnt/audit/log is simply not bound and audit->log returns -1.
+	# be quietly edited after the fact. restrictns passes a pre-opened append
+	# FD because /mnt/audit is deliberately absent from the completed namespace;
+	# direct callers fall back to Audit->log and may no-op when auditing is off.
 	if(audit == nil) {
-		audit = load Audit Audit->PATH;
-		if(audit != nil)
-			audit->init();
+		a := load Audit Audit->PATH;
+		if(a != nil) {
+			a->init();
+			audit = a;
+		}
 	}
 	if(kr == nil)
 		kr = load Keyring Keyring->PATH;
-	if(audit != nil && kr != nil) {
+	if(kr != nil) {
 		mb := array of byte content;
 		digest := array[Keyring->SHA256dlen] of byte;
 		kr->sha256(mb, len mb, digest, nil);
 		hex := "";
 		for(i := 0; i < len digest; i++)
 			hex += sys->sprint("%.2ux", int digest[i]);
-		audit->log("veltro", "nsrestrict",
-			sys->sprint("id=%s sha256=%s size=%d", id, hex, len mb));
+		# id names the emitting process; it is not an activity id, so on its
+		# own it cannot tie a restriction to the agent it restricted
+		# (INFR-409). Carry the activity explicitly.
+		msg := sys->sprint("id=%s activity=%d manifest=%s.ns sha256=%s size=%d",
+			id, actid, id, hex, len mb);
+		if(auditfd != nil) {
+			line := array of byte ("veltro nsrestrict " + msg + "\n");
+			if(sys->write(auditfd, line, len line) != len line)
+				return -1;
+			return 0;
+		}
+		if(audit != nil)
+			return audit->log("veltro", "nsrestrict", msg);
 	}
+	return -1;
 }
 
 # Helper: create directory with parents

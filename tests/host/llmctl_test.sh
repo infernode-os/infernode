@@ -251,7 +251,9 @@ new_url="$(sed -n 's/^url=//p' "$WORK/home/.infernode/lib/ndb/llm")"
 [ "$new_url" = "http://127.0.0.1:11436/v1" ] || fail "set codex: ndb url not updated (got '$new_url')"
 new_backend="$(sed -n 's/^backend=//p' "$WORK/home/.infernode/lib/ndb/llm")"
 [ "$new_backend" = "codex" ] || fail "set codex: ndb backend should be codex (got '$new_backend')"
-pass "set codex starts gate + writes url + backend=codex"
+new_model="$(sed -n 's/^model=//p' "$WORK/home/.infernode/lib/ndb/llm")"
+[ -z "$new_model" ] || fail "set codex: stale model should be cleared (got '$new_model')"
+pass "set codex starts gate + writes url/backend and clears stale model"
 
 # 18. `set claude` after codex stops the codex gate (mutual exclusion)
 "$LLMCTL" set claude >/dev/null

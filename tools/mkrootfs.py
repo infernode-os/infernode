@@ -100,7 +100,7 @@ def main():
         for node in order:
             if node.isdir:
                 continue
-            f.write("static uchar rootdata%d[] = {\n" % node.qid)
+            f.write("static const uchar rootdata%d[] = {\n" % node.qid)
             d = node.data
             for j in range(0, len(d), 12):
                 f.write("\t" + ",".join("0x%02x" % b for b in d[j:j + 12]) + ",\n")
@@ -128,7 +128,7 @@ def main():
                 else:
                     f.write("\t{ %d,\tnil,\t0,\tnil },\n" % node.parent)
             else:
-                f.write("\t{ %d,\trootdata%d,\t%d,\tnil },\n"
+                f.write("\t{ %d,\t(void*)rootdata%d,\t%d,\tnil },\n"
                         % (node.parent, node.qid, len(node.data)))
         f.write("};\n")
 

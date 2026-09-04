@@ -16,7 +16,7 @@ SECTIONS
 	}
 
 	.rodata : { *(.rodata*) }
-	.data   : { *(.data*) }
+	.data   : { __data_start = .; *(.data*) }
 
 	/*
 	 * The last byte that is IN the image file.
@@ -38,6 +38,16 @@ SECTIONS
 	}
 	. = ALIGN(16);
 	__bss_end = .;
+	/*
+	 * A copy of .data as it was loaded, taken by l.S before anything
+	 * writes to it. /dev/kernel reproduces the image from .text and
+	 * .rodata in place plus this copy, so the running kernel can
+	 * install itself on the card. Not in the file: NOLOAD.
+	 */
+	.datastash (NOLOAD) : {
+		__datastash = .;
+		. += SIZEOF(.data) + 16;
+	}
 
 	/*
 	 * First address past the kernel image. Everything from here to

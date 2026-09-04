@@ -215,9 +215,28 @@ atel1:
 	ldr	x2, =__bss_end
 clrbss:
 	cmp	x1, x2
-	b.ge	callmain
+	b.ge	savedata
 	str	xzr, [x1], #8
 	b	clrbss
+
+	/*
+	 * Save .data as it was loaded, before anything writes to it.
+	 * /dev/kernel reproduces the image from .text and .rodata in
+	 * place plus this copy, so the running kernel can install
+	 * itself. Eight bytes at a time: the last step may read a few
+	 * bytes past edata (the aligned gap before .bss, harmless) and
+	 * the stash is sized with slack for the matching over-write.
+	 */
+savedata:
+	ldr	x1, =__data_start
+	ldr	x2, =edata
+	ldr	x3, =__datastash
+savedata1:
+	cmp	x1, x2
+	b.hs	callmain
+	ldr	x4, [x1], #8
+	str	x4, [x3], #8
+	b	savedata1
 
 callmain:
 	/* .bss is clear, so the device tree pointer can be recorded */

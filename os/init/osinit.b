@@ -31,6 +31,7 @@ include "draw.m";
 include "bench.m";
 
 include "sh.m";
+include "keyring.m";
 
 Init: module
 {
@@ -88,6 +89,7 @@ init()
 		total += len s;
 	}
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
+	kernelimage();
 
 	#
 	# A fixed arithmetic loop, timed. Reported so the harness can run
@@ -2244,4 +2246,42 @@ devnum(name: string): int
 			break;
 	}
 	return n;
+}
+
+#
+# /dev/kernel is the running kernel's own image, reproduced from
+# memory. Read it back and print its size and SHA-1: the harness
+# compares both with the file it handed the loader, which is the
+# whole claim -- that a kernel can install itself on the card and
+# the card then boots what was tested.
+#
+kernelimage()
+{
+	fd := sys->open("/dev/kernel", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: /dev/kernel: %r\n");
+		return;
+	}
+	(nil, d) := sys->fstat(fd);
+	kr := load Keyring Keyring->PATH;
+	st: ref Keyring->DigestState;
+	buf := array[65536] of byte;
+	n := 0;
+	for(;;){
+		m := sys->read(fd, buf, len buf);
+		if(m <= 0)
+			break;
+		if(kr != nil)
+			st = kr->sha1(buf[0:m], m, nil, st);
+		n += m;
+	}
+	dig := "no-keyring";
+	if(kr != nil){
+		h := array[Keyring->SHA1dlen] of byte;
+		kr->sha1(nil, 0, h, st);
+		dig = "";
+		for(i := 0; i < len h; i++)
+			dig += sys->sprint("%.2x", int h[i]);
+	}
+	sys->print("init: /dev/kernel %d bytes stat %bd sha1 %s\n", n, d.length, dig);
 }

@@ -46,7 +46,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 
 	arg->init(args);
-	arg->setusage("mount [-a|-b] [-coA9] [-C cryptoalg] [-k keyfile] net!addr|file|{command} mountpoint [spec]");
+	arg->setusage("mount [-a|-b] [-cRoA9] [-C cryptoalg] [-k keyfile] net!addr|file|{command} mountpoint [spec]");
 	flags := 0;
 	while((o := arg->opt()) != 0){
 		case o {
@@ -56,6 +56,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 			flags |= Sys->MBEFORE;
 		'c' =>
 			flags |= Sys->MCREATE;
+		'R' =>
+			flags |= Sys->MREADONLY;
 		'C' =>
 			alg = arg->earg();
 			algset = 1;

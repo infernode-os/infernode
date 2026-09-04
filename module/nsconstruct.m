@@ -59,9 +59,9 @@ NsConstruct: module {
 	init: fn();
 
 	# Restrict a directory to only the allowed entries.
-	# Creates shadow dir, binds allowed items into it, replaces target with MREPL.
-	# writable=1 adds Sys->MCREATE to the final and inner binds. Use it only
-	# for explicitly writable views such as /tmp and proposal endpoints.
+	# Creates a shadow dir whose entries and outer view are MREADONLY, or uses
+	# MCREATE when writable=1. Service allowlists with writable protocol files
+	# use a separate internal filtering primitive.
 	# Items not in allowed list become invisible after the bind-replace.
 	# Returns nil on success, error string on failure.
 	restrictdir: fn(target: string, allowed: list of string, writable: int): string;

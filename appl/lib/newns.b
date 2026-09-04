@@ -207,6 +207,7 @@ mopt(argv: list of string): (ref Moptres, string)
 		'a' => r.flags |= sys->MAFTER;
 		'b' => r.flags |= sys->MBEFORE;
 		'c' => r.flags |= sys->MCREATE;
+		'R' => r.flags |= sys->MREADONLY;
 		'r' => r.flags |= sys->MREPL;
 		'k' =>
 			if((r.keyfile = arg->arg()) == nil)

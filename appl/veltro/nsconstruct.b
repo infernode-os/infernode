@@ -63,6 +63,19 @@ init()
 # Creates a shadow dir with only the allowed items, then replaces target
 restrictdir(target: string, allowed: list of string, writable: int): string
 {
+	return restrictdirx(target, allowed, writable, !writable);
+}
+
+# Filter a directory without claiming its existing entries are read-only.
+# This is for writable file protocols such as /mnt services and /tool.
+filterdir(target: string, allowed: list of string, creatable: int): string
+{
+	return restrictdirx(target, allowed, creatable, 0);
+}
+
+restrictdirx(target: string, allowed: list of string,
+	creatable, readonly: int): string
+{
 	if(sys == nil)
 		init();
 
@@ -92,7 +105,12 @@ restrictdir(target: string, allowed: list of string, writable: int): string
 			dfd := sys->create(dstpath, Sys->OREAD, DIR_MODE);
 			if(dfd != nil)
 				dfd = nil;
-			sys->bind(srcpath, dstpath, Sys->MREPL);
+			rootflags := Sys->MREPL;
+			if(creatable)
+				rootflags |= Sys->MCREATE;
+			else if(readonly)
+				rootflags |= Sys->MREADONLY;
+			sys->bind(srcpath, dstpath, rootflags);
 		} else {
 			# Check if source exists and get type
 			(ok, dir) := sys->stat(srcpath);
@@ -116,18 +134,22 @@ restrictdir(target: string, allowed: list of string, writable: int): string
 			# Without MCREATE on the inner bind, the kernel returns
 			# "mounted directory forbids creation" for any create inside that subdir.
 			innerbindflags := Sys->MREPL;
-			if(writable)
+			if(creatable)
 				innerbindflags |= Sys->MCREATE;
+			else if(readonly)
+				innerbindflags |= Sys->MREADONLY;
 			if(sys->bind(srcpath, dstpath, innerbindflags) < 0)
 				return sys->sprint("cannot bind %s: %r", srcpath);
 		}
 	}
 
-	# Replace target with shadow — only allowed items visible.
-	# MCREATE allows file creation at the mount point (needed for /tmp).
+	# MCREATE controls new directory entries; MREADONLY separately prevents
+	# mutation of existing entries reached through the restricted view.
 	bindflags := Sys->MREPL;
-	if(writable)
+	if(creatable)
 		bindflags |= Sys->MCREATE;
+	else if(readonly)
+		bindflags |= Sys->MREADONLY;
 	if(sys->bind(shadowdir, target, bindflags) < 0)
 		return sys->sprint("cannot replace %s: %r", target);
 
@@ -208,9 +230,11 @@ restrictns(caps: ref Capabilities): string
 
 	# 3. Restrict /dev to: cons, null, time
 	# time is read-only clock; required by daytime->now() for TLS cert validation.
-	err = restrictdir("/dev", "cons" :: "null" :: "time" :: nil, 0);
+	err = filterdir("/dev", "cons" :: "null" :: "time" :: nil, 0);
 	if(err != nil)
 		return sys->sprint("restrict /dev: %s", err);
+	if(sys->bind("/dev/time", "/dev/time", Sys->MREPL|Sys->MREADONLY) < 0)
+		return sys->sprint("protect /dev/time: %r");
 
 	# 4-5. Restrict /n to explicitly granted entries only.
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
@@ -275,7 +299,7 @@ restrictns(caps: ref Capabilities): string
 		if(localpaths != nil)
 			nallow = "local" :: nallow;
 
-		err = restrictdir("/n", nallow, 0);
+		err = filterdir("/n", nallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
 
@@ -374,7 +398,7 @@ restrictns(caps: ref Capabilities): string
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
 		if(mntok >= 0) {
-			err = restrictpath("/mnt", mntpaths);
+			err = filterpath("/mnt", mntpaths);
 			if(err != nil)
 				return sys->sprint("restrict /mnt: %s", err);
 			keepmnt = 1;
@@ -383,7 +407,7 @@ restrictns(caps: ref Capabilities): string
 				uiallow := "activity" :: nil;
 				if(inlist("task", caps.tools))
 					uiallow = "ctl" :: uiallow;
-				uerr := restrictdir("/mnt/ui", uiallow, 0);
+				uerr := filterdir("/mnt/ui", uiallow, 0);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
 			}
@@ -403,7 +427,11 @@ restrictns(caps: ref Capabilities): string
 					msgallow = "flag" :: msgallow;
 					msgwrite = 1;
 				}
-				merr := restrictdir("/mnt/msg", msgallow, msgwrite);
+				merr: string;
+				if(msgwrite)
+					merr = filterdir("/mnt/msg", msgallow, 1);
+				else
+					merr = restrictdir("/mnt/msg", msgallow, 0);
 				if(merr != nil)
 					return sys->sprint("restrict /mnt/msg: %s", merr);
 			}
@@ -525,7 +553,7 @@ restrictns(caps: ref Capabilities): string
 		safe = (hd ed) :: safe;
 
 	{
-		err = restrictdir("/", safe, 0);
+		err = filterdir("/", safe, 0);
 	} exception e {
 	"*" =>
 		return sys->sprint("restrictdir / exception: %s", e);
@@ -544,7 +572,7 @@ restrictns(caps: ref Capabilities): string
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
 			if(!inlist(hd tl2, toolallow))
 				toolallow = hd tl2 :: toolallow;
-		terr := restrictdir("/tool", toolallow, 0);
+		terr := filterdir("/tool", toolallow, 0);
 		if(terr != nil)
 			return sys->sprint("restrict /tool: %s", terr);
 	}
@@ -707,7 +735,7 @@ restrictwallet(): string
 		if(!inlist(hd a, allow))
 			allow = hd a :: allow;
 
-	err := restrictdir("/n/wallet", allow, 0);
+	err := filterdir("/n/wallet", allow, 0);
 	if(err != nil)
 		return err;
 
@@ -761,6 +789,16 @@ safename(s: string): int
 # then recurses for deeper components.
 restrictpath(dir: string, paths: list of string): string
 {
+	return restrictpathx(dir, paths, 1);
+}
+
+filterpath(dir: string, paths: list of string): string
+{
+	return restrictpathx(dir, paths, 0);
+}
+
+restrictpathx(dir: string, paths: list of string, readonly: int): string
+{
 	# Pass 1: collect unique first components
 	allow: list of string;
 	for(p := paths; p != nil; p = tl p) {
@@ -770,7 +808,11 @@ restrictpath(dir: string, paths: list of string): string
 	}
 
 	# Restrict this level (read-only — /n/local paths are read-only by default)
-	err := restrictdir(dir, allow, 0);
+	err: string;
+	if(readonly)
+		err = restrictdir(dir, allow, 0);
+	else
+		err = filterdir(dir, allow, 0);
 	if(err != nil)
 		return err;
 
@@ -784,7 +826,7 @@ restrictpath(dir: string, paths: list of string): string
 				subpaths = rest :: subpaths;
 		}
 		if(subpaths != nil) {
-			serr := restrictpath(dir + "/" + name, subpaths);
+			serr := restrictpathx(dir + "/" + name, subpaths, readonly);
 			if(serr != nil)
 				return serr;
 		}
@@ -849,7 +891,7 @@ restrictmcptools(toolsdir: string, deny: list of string): string
 	fd = nil;
 	if(denied == 0)
 		return nil;	# nothing denied here — leave tools/ as-is
-	return restrictdir(toolsdir, allow, 0);
+	return filterdir(toolsdir, allow, 0);
 }
 
 needsnet(tools: list of string): int

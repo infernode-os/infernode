@@ -193,6 +193,7 @@ newchan(void)
 	c->mqid.path = 0;
 	c->mqid.vers = 0;
 	c->mqid.type = 0;
+	c->mflag = 0;
 	c->name = 0;
 	return c;
 }
@@ -541,13 +542,14 @@ if(old->umh)
 		/*
 		 *  copy a union when binding it onto a directory
 		 */
-		flg = order;
+		flg = order | (flag&MREADONLY);
 		if(order == MREPL)
-			flg = MAFTER;
+			flg = MAFTER | (flag&MREADONLY);
 		h = &nm->next;
 		um = mh->mount;
 		for(um = um->next; um; um = um->next) {
-			f = newmount(m, um->to, flg, um->spec);
+			f = newmount(m, um->to,
+				flg | (um->mflag&MREADONLY), um->spec);
 			*h = f;
 			h = &f->next;
 		}
@@ -663,6 +665,7 @@ cclone(Chan *c)
 	nc = wq->clone;
 	free(wq);
 	nc->name = c->name;
+	nc->mflag = c->mflag;
 	if(c->name)
 		incref(&c->name->r);
 	return nc;
@@ -709,6 +712,36 @@ int
 domount(Chan **cp, Mhead **mp)
 {
 	return findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid);
+}
+
+static int
+mheadflag(Mhead *m)
+{
+	int flag;
+
+	if(m == nil)
+		return 0;
+	rlock(&m->lock);
+	flag = m->mount != nil ? m->mount->mflag : 0;
+	runlock(&m->lock);
+	return flag;
+}
+
+int
+mutatingmode(int mode)
+{
+	int rwmode;
+
+	rwmode = mode & 3;
+	return rwmode == OWRITE || rwmode == ORDWR ||
+		(mode & (OTRUNC|ORCLOSE));
+}
+
+void
+checkwritable(Chan *c)
+{
+	if(c->mflag & MREADONLY)
+		error(Eperm);
 }
 
 Chan*
@@ -763,7 +796,7 @@ static char Edoesnotexist[] = "does not exist";
 int
 walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 {
-	int dev, didmount, dotdot, i, n, nhave, ntry, type;
+	int dev, didmount, dotdot, i, mflag, n, nhave, ntry, type;
 	Chan *c, *nc;
 	Cname *cname;
 	Mount *f;
@@ -810,6 +843,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
   	 */
 	didmount = 0;
 	for(nhave=0; nhave<nnames; nhave+=n){
+		mflag = c->mflag;
 		if((c->qid.type&QTDIR)==0){
 			if(nerror)
 				*nerror = nhave;
@@ -836,7 +870,8 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 		}
 
 		if(!dotdot && !nomount && !didmount)
-			domount(&c, &mh);
+			if(domount(&c, &mh))
+				mflag = mheadflag(mh);
 
 		type = c->type;
 		dev = c->dev;
@@ -851,11 +886,12 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				for(f = mh->mount->next; f; f = f->next)
 					if((wq = devtab[f->to->type]->walk(f->to, nil, names+nhave, ntry)) != nil)
 						break;
-				runlock(&mh->lock);
 				if(f != nil){
 					type = f->to->type;
 					dev = f->to->dev;
+					mflag = f->mflag;
 				}
+				runlock(&mh->lock);
 			}
 			if(wq == nil){
 				cclose(c);
@@ -867,6 +903,8 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				return -1;
 			}
 		}
+		if(wq->clone != nil)
+			wq->clone->mflag = mflag;
 
 		nmh = nil;
 		didmount = 0;
@@ -911,6 +949,8 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				nc = wq->clone;
 			}else{		/* stopped early, at a mount point */
 				didmount = 1;
+				nc = cunique(nc);
+				nc->mflag = mheadflag(nmh);
 				if(wq->clone != nil){
 					cclose(wq->clone);
 					wq->clone = nil;
@@ -976,8 +1016,9 @@ createdir(Chan *c, Mhead *m)
 		nexterror();
 	}
 	for(f = m->mount; f; f = f->next) {
-		if(f->mflag&MCREATE) {
+		if((f->mflag&(MCREATE|MREADONLY)) == MCREATE) {
 			nc = cclone(f->to);
+			nc->mflag = f->mflag;
 			runlock(&m->lock);
 			poperror();
 			cclose(c);
@@ -1244,14 +1285,20 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 	switch(amode){
 	case Aaccess:
-		if(!nomount)
-			domount(&c, nil);
+		m = nil;
+		if(!nomount && domount(&c, &m)){
+			c = cunique(c);
+			c->mflag = mheadflag(m);
+		}
+		putmhead(m);
 		break;
 
 	case Abind:
 		m = nil;
-		if(!nomount)
-			domount(&c, &m);
+		if(!nomount && domount(&c, &m)){
+			c = cunique(c);
+			c->mflag = mheadflag(m);
+		}
 		if(c->umh != nil)
 			putmhead(c->umh);
 		c->umh = m;
@@ -1269,6 +1316,8 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 		/* our own copy to open or remove */
 		c = cunique(c);
+		if(m != nil)
+			c->mflag = mheadflag(m);
 
 		/* now it's our copy anyway, we can put the name back */
 		cnameclose(c->name);
@@ -1276,11 +1325,19 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 		switch(amode){
 		case Aremove:
+			if(c->mflag & MREADONLY){
+				putmhead(m);
+				error(Eperm);
+			}
 			putmhead(m);
 			break;
 
 		case Aopen:
 		case Acreate:
+			if((c->mflag & MREADONLY) && mutatingmode(omode)){
+				putmhead(m);
+				error(Eperm);
+			}
 if(c->umh != nil){
 	print("cunique umh\n");
 	putmhead(c->umh);
@@ -1397,6 +1454,8 @@ if(c->umh != nil){
 			 * if findmount gave us a new Chan.
 			 */
 			cnew = cunique(cnew);
+			if(cnew->mflag & MREADONLY)
+				error(Eperm);
 			cnameclose(cnew->name);
 			cnew->name = c->name;
 			incref(&cnew->name->r);

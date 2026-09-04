@@ -406,6 +406,7 @@ kfwstat(int fd, uchar *buf, int n)
 	}
 	validstat(buf, n);
 	c.c = fdtochan(up->env->fgrp, fd, -1, 1, 1);
+	checkwritable(c.c);
 	n = devtab[c.c->type]->wstat(c.c, buf, n);
 	poperror();
 	cclose(c.c);
@@ -418,8 +419,13 @@ bindmount(Chan *c, char *old, int flag, char *spec)
 	int ret;
 	volatile struct { Chan *c; } c1;
 
-	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER))
+	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER) ||
+	   (flag&(MCREATE|MREADONLY)) == (MCREATE|MREADONLY))
 		error(Ebadarg);
+	if(c->mflag & MREADONLY){
+		flag &= ~MCREATE;
+		flag |= MREADONLY;
+	}
 
 	c1.c = namec(old, Amount, 0, 0);
 	if(waserror()){
@@ -890,6 +896,7 @@ kwstat(char *path, uchar *buf, int n)
 	}
 	validstat(buf, n);
 	c.c = namec(path, Aaccess, 0, 0);
+	checkwritable(c.c);
 	n = devtab[c.c->type]->wstat(c.c, buf, n);
 	poperror();
 	cclose(c.c);

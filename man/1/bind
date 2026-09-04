@@ -194,6 +194,11 @@ option.
 If that directory has not got write permission,
 the create fails.
 .TP
+.B -R
+Make the mounted view read-only. Write opens, truncation, remove-on-close,
+creation, removal, and metadata changes through the view fail. Rebinding a
+path reached through this view preserves the restriction.
+.TP
 .B -q
 Exit quietly without printing a diagnostic if the bind or mount fails.
 .TP

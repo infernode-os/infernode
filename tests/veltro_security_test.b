@@ -96,8 +96,10 @@ restrictDirWorker(result: chan of string)
 	testdir := "/tmp/veltro/test-restrict";
 	mkdirp(testdir);
 	mkdirp(testdir + "/keepdir");
+	mkdirp(testdir + "/keepdir/overlay");
 	mkdirp(testdir + "/removedir");
-	createfile(testdir + "/keep.txt");
+	writefilecontent(testdir + "/keep.txt", "original");
+	writefilecontent(testdir + "/keepdir/nested.txt", "nested");
 	createfile(testdir + "/remove.txt");
 
 	# Restrict to only "keepdir" and "keep.txt"
@@ -130,6 +132,97 @@ restrictDirWorker(result: chan of string)
 	(ok4, nil) := sys->stat(testdir + "/remove.txt");
 	if(ok4 >= 0) {
 		result <-= "remove.txt should NOT be visible after restrictdir";
+		return;
+	}
+
+	# writable=0 must protect existing entries, not merely forbid creates.
+	# The backing file is owned by this same emulator user, matching the
+	# condition that exposed /dis/sh.dis in the escape-room campaign.
+	fd := sys->open(testdir + "/keep.txt", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "read-only entry accepted write open";
+		return;
+	}
+	fd = sys->create(testdir + "/keep.txt", Sys->OWRITE, 8r644);
+	if(fd != nil) {
+		result <-= "read-only entry accepted truncating create";
+		return;
+	}
+	if(sys->remove(testdir + "/keep.txt") >= 0) {
+		result <-= "read-only entry accepted remove";
+		return;
+	}
+	(ok5, d) := sys->stat(testdir + "/keep.txt");
+	if(ok5 < 0) {
+		result <-= "cannot stat read-only entry";
+		return;
+	}
+	d.mode = 8r666;
+	if(sys->wstat(testdir + "/keep.txt", d) >= 0) {
+		result <-= "read-only entry accepted wstat";
+		return;
+	}
+
+	# Rebinding a read-only capability must not strip its attenuation.
+	escape := "/tmp/veltro/test-restrict-rebind";
+	mkdirp(escape);
+	if(sys->bind(testdir + "/keepdir", escape, Sys->MREPL) < 0) {
+		result <-= sys->sprint("cannot rebind read-only directory: %r");
+		return;
+	}
+	fd = sys->open(escape + "/nested.txt", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "rebind stripped read-only attenuation";
+		return;
+	}
+
+	# Exporting a read-only projection over 9P must not launder it into a
+	# writable service when the client mounts it without MREADONLY.
+	remote := "/tmp/veltro/test-restrict-remote";
+	mkdirp(remote);
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0) {
+		result <-= sys->sprint("cannot create export pipe: %r");
+		return;
+	}
+	if(sys->export(fds[0], testdir, Sys->EXPASYNC) < 0) {
+		result <-= sys->sprint("cannot export read-only directory: %r");
+		return;
+	}
+	fds[0] = nil;
+	if(sys->mount(fds[1], nil, remote, Sys->MREPL, nil) < 0) {
+		result <-= sys->sprint("cannot mount read-only export: %r");
+		return;
+	}
+	fds[1] = nil;
+	fd = sys->open(remote + "/keep.txt", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "9P export stripped read-only attenuation";
+		return;
+	}
+	if(readfilecontent(remote + "/keep.txt") != "original") {
+		result <-= "cannot read through read-only 9P export";
+		return;
+	}
+	sys->unmount(nil, remote);
+
+	# A deliberate deeper writable mount is a new capability and overrides
+	# the read-only parent for that subtree only.
+	writablebase := "/tmp/veltro/test-restrict-writable-base";
+	mkdirp(writablebase);
+	if(sys->bind(writablebase, testdir + "/keepdir/overlay",
+		Sys->MREPL|Sys->MCREATE) < 0) {
+		result <-= sys->sprint("cannot install deeper writable mount: %r");
+		return;
+	}
+	fd = sys->create(testdir + "/keepdir/overlay/new.txt", Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		result <-= sys->sprint("deeper writable mount remained read-only: %r");
+		return;
+	}
+	fd = nil;
+	if(readfilecontent(testdir + "/keep.txt") != "original") {
+		result <-= "read-only mutation attempt changed backing content";
 		return;
 	}
 
@@ -924,6 +1017,11 @@ shellWorker(result: chan of string)
 	(shok, nil) := sys->stat("/dis/sh.dis");
 	if(shok < 0) {
 		result <-= "shellcmds should grant /dis/sh.dis";
+		return;
+	}
+	fd := sys->open("/dis/sh.dis", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "exec grant exposes /dis/sh.dis for writing";
 		return;
 	}
 

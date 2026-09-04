@@ -98,6 +98,7 @@ Sys: module
 	MBEFORE:	con 1;
 	MAFTER:		con 2;
 	MCREATE:	con 4;
+	MREADONLY:	con 8;
 	MCACHE:		con 16;
 
 	NEWFD:		con (1<<0);

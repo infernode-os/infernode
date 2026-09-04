@@ -339,8 +339,9 @@ extern	void	wunlock(RWLock*);
 #define	MBEFORE	0x0001
 #define	MAFTER	0x0002
 #define	MCREATE	0x0004
+#define	MREADONLY	0x0008
 #define	MCACHE	0x0010
-#define	MMASK	0x0017
+#define	MMASK	0x001f
 
 #define	OREAD	0
 #define	OWRITE	1

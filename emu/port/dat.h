@@ -123,6 +123,7 @@ struct Chan
 	int	uri;			/* union read index */
 	int	dri;			/* devdirread index */
 	ulong	mountid;
+	int	mflag;			/* flags of mount entry used to reach this channel */
 	Mntcache *mcp;			/* Mount cache pointer */
 	Mnt		*mux;		/* Mnt for clients using me for messages */
 	void*	aux;		/* device specific data */

@@ -318,8 +318,9 @@ enum
 #define	MBEFORE		0x0001		/* mount goes before others in union directory */
 #define	MAFTER		0x0002		/* mount goes after others in union directory */
 #define	MCREATE		0x0004		/* permit creation in mounted directory */
+#define	MREADONLY	0x0008		/* reject mutation through this mount */
 #define	MCACHE	0x0010	/* cache some data */
-#define	MMASK		0x0007		/* all bits on */
+#define	MMASK		0x000f		/* all bits on */
 
 #define	OREAD		0		/* open for read */
 #define	OWRITE		1		/* write */
@@ -390,4 +391,3 @@ extern	void	werrstr(char*, ...);
  */
 
 #define	setbinmode()
-

@@ -145,6 +145,25 @@ the
 .B create
 fails.
 .PP
+The
+.B Sys->MREADONLY
+flag can instead be OR'd with a mount order flag to reject mutation through
+that mount entry. Write and read-write opens, truncation, remove-on-close,
+create, remove, and
+.B wstat
+fail, while read, execute, walk, and stat remain available. A bind made from
+a path reached through a read-only mount remains read-only, even if the caller
+omits the flag; this preserves capability attenuation. A separately acquired
+writable capability may be mounted deeper in the tree and governs that subtree.
+An export of a read-only view preserves these restrictions for remote 9P
+clients. The flag does not revoke file descriptors that were opened before the
+read-only mount was installed; callers constructing a sandbox must separately
+close or restrict inherited descriptors.
+.B Sys->MREADONLY
+and
+.B Sys->MCREATE
+cannot be combined on one mount entry.
+.PP
 With
 .BR mount ,
 the file descriptor

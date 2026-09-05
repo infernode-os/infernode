@@ -332,6 +332,16 @@ jobs:
           fi
         fi
 
+    - name: Run walk-leak regression test
+      run: |
+        # A failed name lookup must not leak main-pool memory: namec's
+        # handler freed the parsed name through non-volatile locals and
+        # clang folded the frees away (3 blocks per miss). Deterministic --
+        # it counts live pool blocks across 2000 misses in one emulator --
+        # so it is fatal, unlike the GUI-timing tests above.
+        chmod +x tests/host/walk_leak_test.sh
+        ROOT=. bash tests/host/walk_leak_test.sh
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."

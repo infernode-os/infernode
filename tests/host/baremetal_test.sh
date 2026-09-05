@@ -96,6 +96,12 @@ find_objcopy() {
 }
 
 QEMU="$(command -v qemu-system-aarch64 2>/dev/null)"
+# QMP listens on TCP. Every QEMU this harness talks to through QMP gets a
+# port from a per-run base, so two harness runs on one host (a verifier
+# beside a build, say) cannot bind the same socket -- or worse, connect
+# to each other's QEMU and take the other kernel's answer for their own.
+export QMPBASE=$((10000 + $$ % 40000))
+
 CC="$(command -v clang 2>/dev/null)"
 LLD="$(find_lld)"
 OBJCOPY="$(find_objcopy)"
@@ -1653,7 +1659,7 @@ qemu, img, ppm = sys.argv[1], sys.argv[2], sys.argv[3]
 
 # A free-ish high port; QMP over TCP because the AF_UNIX path limit
 # (~104 chars) is easy to exceed under a temp dir.
-PORT = 4477
+PORT = int(os.environ["QMPBASE"]) + 0   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu, "-M", "raspi3b", "-kernel", img,
                       "-display", "none", "-serial", "null",
                       "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
@@ -1919,7 +1925,7 @@ OUT="$OUT_SAVED"
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-keys.txt" 2>&1
 import subprocess, socket, json, time, sys, threading
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
-PORT = 4479
+PORT = int(os.environ["QMPBASE"]) + 2   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-kbd",
                      "-kernel", img, "-display", "none", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
@@ -2011,7 +2017,7 @@ fi
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-mouse.txt" 2>&1
 import subprocess, socket, json, time, sys, threading
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
-PORT = 4481
+PORT = int(os.environ["QMPBASE"]) + 4   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-mouse",
                      "-kernel", img, "-display", "none", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
@@ -2481,7 +2487,7 @@ fi
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt" 2>&1
 import subprocess, socket, json, time, sys, threading
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
-PORT = 4483
+PORT = int(os.environ["QMPBASE"]) + 6   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
                      "-display", "none", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],

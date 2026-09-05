@@ -165,8 +165,27 @@ uartgetc(void)
  * _tas directly rather than lock() so a panic INSIDE the lock
  * machinery can still print: after a bounded spin, print anyway --
  * garbled beats silent.
+ *
+ * uartowner is the core holding uartmutex, or -1. It does two jobs.
+ *
+ * First, a writer that gave up waiting must not release the lock on
+ * its way out. The first version did: "spin, print, store 0" with no
+ * memory of whether the spin had succeeded, so a core that had timed
+ * out and printed over the holder then also FREED THE HOLDER'S LOCK,
+ * and a third core walked straight in. Only the acquirer stores the 0.
+ *
+ * Second, the same core re-enters this file while holding the lock:
+ * uartputs() is writing a console line at spllo, an interrupt arrives
+ * on that core, and the handler prints. Before, that inner print spun
+ * out the whole bound -- a million exclusive loads at splhi -- and
+ * then printed anyway. Now it recognises its own core as the holder
+ * and writes through at once, leaving the release to the outer call.
+ * The inner text lands inside the outer line, which is the same result
+ * as before minus the stall; the alternative, a queue, is what print()
+ * already is, and this is the path for when print() cannot be trusted.
  */
 static ulong uartmutex;
+static int uartowner = -1;
 
 /*
  * ...and NOT ONE writer before the MMU is on. _tas is a load/store
@@ -185,58 +204,103 @@ uartlockon(void)
 	uartlocking = 1;
 }
 
-void
-uartputstr(char *s)
+/*
+ * Take the console for one emission. Returns whether THIS call took the
+ * lock, and that value -- not a guess -- is what uartunlock() wants
+ * back: 0 means locking is off, or this core already holds it from an
+ * outer call, or the bounded spin gave up and the text is going out
+ * over somebody else's. In none of those cases is the lock ours to free.
+ *
+ * Exported so a multi-line report (dumpureg, intrdump) can hold the
+ * console across all of its lines rather than only within each one;
+ * the nested-owner rule above is what makes that safe for the
+ * uartputstr() calls inside it.
+ */
+int
+uartlock(void)
 {
 	int i;
 
-	if(uartlocking)
-		for(i = 0; i < 1000000; i++)
-			if(_tas(&uartmutex) == 0)
-				break;
+	if(!uartlocking)
+		return 0;
+	if(uartowner == m->machno)
+		return 0;
+	for(i = 0; i < 1000000; i++)
+		if(_tas(&uartmutex) == 0){
+			uartowner = m->machno;
+			return 1;
+		}
+	return 0;
+}
+
+void
+uartunlock(int held)
+{
+	if(!held)
+		return;
+	uartowner = -1;
+	coherence();
+	uartmutex = 0;
+}
+
+void
+uartputstr(char *s)
+{
+	int held;
+
+	held = uartlock();
 	while(*s){
 		if(*s == '\n')
 			uartputc('\r');
 		uartputc(*s++);
 	}
-	if(uartlocking){
-		coherence();
-		uartmutex = 0;
-	}
+	uartunlock(held);
 }
 
+/*
+ * The numbers are emitted under the lock too, as one piece. They used
+ * to go out by bare uartputc() after a locked "0x", so a register dump
+ * from one core could carry another core's digits in the middle of a
+ * value -- and a value with foreign digits in it is not a wrong value
+ * that can be spotted, it is a plausible one.
+ */
 void
 uartputx(u64int v)
 {
 	char buf[16];
-	int i;
+	int i, held;
 
 	for(i = 15; i >= 0; i--){
 		buf[i] = "0123456789abcdef"[v & 0xF];
 		v >>= 4;
 	}
-	uartputstr("0x");
+	held = uartlock();
+	uartputc('0');
+	uartputc('x');
 	for(i = 0; i < 16; i++)
 		uartputc(buf[i]);
+	uartunlock(held);
 }
 
 void
 uartputd(u64int v)
 {
 	char buf[20];
-	int i;
+	int i, held;
 
-	if(v == 0){
+	held = uartlock();
+	if(v == 0)
 		uartputc('0');
-		return;
+	else{
+		i = 0;
+		while(v > 0 && i < (int)sizeof(buf)){
+			buf[i++] = '0' + (int)(v % 10);
+			v /= 10;
+		}
+		while(--i >= 0)
+			uartputc(buf[i]);
 	}
-	i = 0;
-	while(v > 0 && i < (int)sizeof(buf)){
-		buf[i++] = '0' + (int)(v % 10);
-		v /= 10;
-	}
-	while(--i >= 0)
-		uartputc(buf[i]);
+	uartunlock(held);
 }
 
 /*
@@ -253,19 +317,13 @@ uartputd(u64int v)
 void
 uartputs(char *s, int n)
 {
-	int i;
+	int i, held;
 
-	if(uartlocking)
-		for(i = 0; i < 1000000; i++)
-			if(_tas(&uartmutex) == 0)
-				break;
+	held = uartlock();
 	for(i = 0; i < n; i++){
 		if(s[i] == '\n')
 			uartputc('\r');
 		uartputc(s[i]);
 	}
-	if(uartlocking){
-		coherence();
-		uartmutex = 0;
-	}
+	uartunlock(held);
 }

@@ -1526,6 +1526,66 @@ which QEMU tolerates whether or not the card agreed. High-speed mode
 (CMD6, 50MHz) is deliberately not attempted: 25MHz is the conservative
 first thing to run on silicon that has never run this driver.
 
+## The WiFi firmware lives on the card, not in the tree
+
+The CYW43455 is a FullMAC radio with no firmware of its own: at every
+boot the driver (ether4330, being imported) uploads an image into the
+dongle's RAM, then the board's NVRAM calibration and a regulatory
+table. It asks for them as `/n/dos/firmware/brcmfmac43455-sdio.bin`,
+`.txt` and `.clm_blob` — the card's FAT partition, mounted by osinit
+before the driver is told where to look, so the kernel itself names
+no path.
+
+**Why the card.** The `.bin` and `.clm_blob` are Cypress's, under the
+"Cypress Wireless Connectivity Devices Driver End User License
+Agreement" (`binary-redist-Cypress` in Raspberry Pi's packaging):
+object form only, only with Cypress silicon, no derivative works. That
+is not MIT and we cannot relicense it, so nothing of it is committed
+and nothing of it goes into a release artefact — the tarball, the
+`.app`, the `.zip`. The NVRAM `.txt` is under the same stanza in
+RPi-Distro's `debian/copyright` and under GPLv2 in linux-firmware's
+`WHENCE`; either way it takes the same route. `.gitignore` refuses
+the filenames as a second line of defence. What the tree carries is a
+fetch tool and a manifest of pins: a commit of
+`RPi-Distro/firmware-nonfree`, a revision URL per file, and a SHA256
+per file, per `docs/DESIGN-PRINCIPLES.md` ("The host boundary" —
+anything fetched is pinned and verified before it is installed).
+
+**Which build.** Raspberry Pi ships two tunings of the 43455 image.
+`standard` keeps roaming, DFS channels and antenna diversity;
+`minimal` trades them for more clients in AP mode. This port is a
+client, so `standard`, installed under the name Miller's firmware
+table looks up for chip 0x4345 rev 6.
+
+**Putting it on a card.** With the card mounted (on macOS it appears
+under `/Volumes/`), from the project root:
+
+    tools/pi-firmware.sh /Volumes/INFERNODE
+
+fetches the three files at the pinned commit, refuses to install if a
+hash does not match the manifest, copies them to
+`/Volumes/INFERNODE/firmware/`, and hashes the copies on the card —
+a FAT card that stored something other than what it was given
+reports success to `cp` and fails later as `firmware load failed`.
+It runs as whoever mounted the card and never asks for `sudo`.
+`tools/pi-firmware.sh --verify /Volumes/INFERNODE` checks a card
+that already has files; `--from DIR` installs from a local copy
+without a network, which is how `tests/host/pi_firmware_test.sh`
+exercises the verification path in CI. Repinning is a manifest edit
+whose hashes come from a download at the new commit, never from
+anywhere else; the manifest's header says how.
+
+**What the kernel should print.** Miller's driver uploads the image
+and reads it back before starting the dongle, so a wrong or truncated
+blob fails loudly as `firmware load failed offset N` rather than as a
+radio that never associates. A good upload ends with the dongle's
+`ver` string — the image at the current pin identifies itself as
+`43455c0-roml ... Version 7.45.265 (28bca26 CY) ... FWID 01-b677b91b`
+— and `ether4330: addr` followed by the MAC. None of this runs under
+QEMU: `raspi3b` has no CYW43455 and no SDIO function device, so the
+harness can only show that nothing about the boot or the card on
+SDHOST changed. The upload is a board test.
+
 ## Next
 
 Revised 2026-09-05 from a review of the branch's 49 commits against the

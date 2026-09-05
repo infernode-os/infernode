@@ -1207,7 +1207,7 @@ longer.
 
 ## The SD card is on SDHOST, and the Arasan is free (WiFi milestone 1)
 
-**Status: proven under QEMU, never run on the board.** Every claim in
+**Status: proven under QEMU; ran on the board on 2026-09-06 (kernel cc7bf87a): the card came up on SDHOST as 118912 MB, high capacity, all six pins read back ALT0, the partition table parsed and the desktop loaded its userspace through it. Not yet measured on the board: sustained write throughput, and the parked-state handling in the transfer wait (which QEMU cannot exercise) under a long soak.** Every claim in
 this section about the silicon is taken from the Linux bcm2835 driver
 (there is no public SDHOST datasheet; the BCM2835 peripherals manual
 documents only the Arasan), from Miller's Plan 9 driver, from 9front's,
@@ -1465,9 +1465,15 @@ shows the panel mirrored, is an inversion flag in that program and never
 a change to the kernel file. QEMU implements neither tag, so under
 emulation the device refuses to attach, `/dev/touch` is absent, the
 driver exits with one line, and the harness checks exactly that plus the
-decoder's self-test (`touch -t`). Which tag answers on real firmware,
-the orientation, and the cost of a 60Hz poll on one core are the board
-test, and this stays "built" until a Tk tap has been seen.
+decoder's self-test (`touch -t`). On the board (2026-09-06, current firmware) GET answered with a
+buffer at bus 0xff433000 that the firmware never wrote: the driver
+polled it for minutes and the cursor never moved. SET was accepted and
+the firmware wrote our buffer within 20ms, so the probe now tries SET
+first and, on either path, plants the consumed mark and waits up to
+200ms for the firmware to overwrite it before claiming a panel. Cursor
+tracking follows the finger with the panel in its natural orientation
+(no inversion needed). The cost of the 60Hz poll on one core, and taps
+and drags inside Tk, are the remaining board measurements.
 
 **6. WiFi** (CYW43455 over SDIO), which needs everything above plus an
 SDIO driver on the Arasan and a firmware blob upload. Milestone 1 —

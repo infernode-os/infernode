@@ -701,6 +701,7 @@ dis/tests/keyringinst_test.dis
 dis/tests/lists_test.dis
 dis/tests/llmclient_reqshape_test.dis
 dis/tests/llmclient_sse_fallback_test.dis
+dis/tests/llmclient_texttools_test.dis
 dis/tests/llmclient_think_gating_test.dis
 dis/tests/llmsrv_test.dis
 dis/tests/lucibridge_approval_test.dis

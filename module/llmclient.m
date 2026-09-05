@@ -94,6 +94,10 @@ Llmclient: module
 	# bytes matter for Anthropic prompt-cache prefix matching.
 	buildanthropicrequest: fn(req: ref AskRequest): string;
 
+	# Recover tool calls embedded in assistant text when the model
+	# did not use the structured tool_calls field. Exposed for tests.
+	extracttexttoolcalls: fn(content: string, tooldefs: list of ref ToolDef): (string, list of (string, string, string));
+
 	# JSON escape helper
 	jsonescapestr:  fn(s: string): string;
 };

@@ -2566,7 +2566,7 @@ PYEOF
 }
 
 SAVEDARGS="$QEMUARGS"
-SDOUT="$(sd_boot "$BUILD/$PLAT-kernel.img" "$SDIMG" 4485)"
+SDOUT="$(sd_boot "$BUILD/$PLAT-kernel.img" "$SDIMG" $((QMPBASE+8)))"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- sd ---"; grep 'sd\|gpio: pin48\|QTREE' <<<"$SDOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$SDOUT"
@@ -3128,7 +3128,7 @@ fi
 #     check is not telling the controllers apart.
 #
 if build_kernel "$BUILD/$PLAT-sdarasan.img" "" "-DSDCARD_ARASAN"; then
-    SDAOUT="$(sd_boot "$BUILD/$PLAT-sdarasan.img" "$SDIMG" 4487)"
+    SDAOUT="$(sd_boot "$BUILD/$PLAT-sdarasan.img" "$SDIMG" $((QMPBASE+10)))"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- sd (arasan) ---"; grep 'sd\|gpio: pin48\|QTREE' <<<"$SDAOUT"; }
     OUT_SAVED="$OUT"; OUT="$SDAOUT"
     check "sd: emmc: card ready, standard capacity (byte addressed), 64 MB" \

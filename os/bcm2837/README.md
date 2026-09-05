@@ -33,8 +33,11 @@ Working, in the kernel (`os/arm64/notyet.c` holds the device table):
   (`#G`), the framebuffer console (`fbcons`), the draw device (`#i`),
   the pointer (`#m`), the keyboard on `/dev/keyboard`, SSL (`#D`), a
   hardware-fed entropy pool, a tick-driven sampling profiler
-- **tryboot**: the firmware's one-shot flag for A/B kernels (but see
-  "Next" — it is not yet a safe A/B path)
+- **tryboot**: A/B kernels through the firmware's one-shot flag — a
+  candidate is installed under its own name, booted once under a boot
+  watchdog, and promoted from its own shell (see "Working on the board
+  without moving the card"; the firmware handshake itself is still to
+  be proved on the board)
 
 Working, in Limbo on top (`os/init/`, plus the card): `osinit` — the USB
 bus walk, the hub watcher, the SD mount, the rootpath policy, `/usr`;
@@ -51,9 +54,11 @@ the end of this file:
 - cores 1–3 have no clock tick, so nothing preempts on them
 - every process is the host owner, and the desktop namespace holds the
   raw card, the pins and `/dev/sysctl`
-- tryboot installs over the known-good kernel, not beside it
+- the tryboot firmware handshake and the watchdog countdown are proved
+  against QEMU's model only, which has neither; the board has not yet
+  run them
 - the login screen can be bypassed by design and by failure
-- the harness tests none of tryboot, logon, secstore, rootpath or the
+- the harness tests none of logon, secstore, rootpath or the
   dossrv fixes, and no CI job runs the harness at all
 - WiFi, touch, USB storage, audio; the Pi 4
 
@@ -209,12 +214,24 @@ QEMU is the fast loop, but it is not the truth. Known divergences:
   runtime — JIT bring-up must be validated on the board, not just here.
 - **Peripherals.** SD/EMMC timing, USB and the VideoCore mailbox
   framebuffer are modelled loosely or not at all.
+- **The watchdog.** QEMU's `hw/misc/bcm2835_powermgt.c` stores
+  `PM_WDOG` and never counts it down; a write to `PM_RSTC` with the
+  full-reset `WRCFG` resets the machine *immediately*, whatever the
+  count. So under QEMU, arming the boot watchdog is the reset — which
+  is how the harness proves the arming write reaches the block with
+  the right password and bits, and why the countdown, the reload from
+  the clock tick and the disarm can only be watched on the board. The
+  property mailbox likewise acknowledges every tag, known or not, so
+  the firmware's answer to `SET_REBOOT_FLAGS` means nothing here.
+  `PM_RSTS` reads its reset value `0x1000` after every QEMU reset; on
+  the board it carries the reset cause.
 
 Real-hardware bring-up needs a USB-serial cable on GPIO 14/15 (the
 console is mirrored to the display once `fbcons` is up, but that is
 some way into boot) and a FAT32 SD card carrying the
 Broadcom firmware blobs (`bootcode.bin`, `start.elf`, `fixup.dat`) plus
-`kernel8.img` and a `config.txt` setting `arm_64bit=1`.
+the kernel and the `config.txt` under "Working on the board without
+moving the card" below — the one recipe in this file.
 
 ## Prior art, and where the driver code will actually come from
 
@@ -925,23 +942,87 @@ investigation.
 
 ### Working on the board without moving the card
 
-`serialboot` lives on the card and pulls the kernel over the UART on
-every reset -- see the commit that added it. The loop is: build, send
-(about a minute for 618KB at 115200), watch. `reboot()` is implemented
-via the watchdog, since this SoC has no reset line, so once the
-console accepts input the loop needs nobody at the power switch.
+Two ways in, and the card never needs to come out for either.
 
-The `config.txt` recipe that works, with `init_uart_clock` pinned
-because uart.c divides for 115200 assuming 48MHz and the firmware, not
-the kernel, decides what that reference is:
+**Over the wire.** `serialboot` pulls a kernel over the UART: build,
+send (about a minute for 618KB at 115200), watch. It lives on the card
+as `serialboot.img` for a card with no kernel yet, and every installed
+kernel carries the same loader and offers it in a window at the start
+of each boot (`recover.c`), so a kernel that boots far enough to print
+can always be replaced by one fed from the host. `reboot` on
+`/dev/sysctl` resets through the watchdog, since this SoC has no reset
+line, so once the console accepts input the loop needs nobody at the
+power switch.
 
-    kernel=serialboot.img
+**From the card, as A/B.** The kernel `config.txt` names is the
+known-good one and nothing overwrites it in place. A new kernel is
+installed under a *candidate* name, booted exactly once under a boot
+watchdog, and promoted from its own shell:
+
+    cp /dev/bootimage /n/dos/tryboot.img       # the running kernel, or one serialboot fed in
+    echo tryboot > /dev/sysctl                 # reset; the next boot is the candidate
+
+The candidate comes up saying so — `boot: command line: tryboot`,
+`wdog: armed, 90 s boot budget`, and from osinit `CANDIDATE kernel`
+with the two commands below — and releases the watchdog when the shell
+is loaded (`wdog: released after N ms`). Then:
+
+    mv /n/dos/tryboot.img /n/dos/infernode8.img   # keep it
+    echo reboot > /dev/sysctl                     # or reject it: boots infernode8.img
+
+A candidate that panics resets through `exit()`; one that *hangs* is
+reset by the watchdog at the 90-second budget, or within 15 seconds if
+it hung with interrupts off. Either way the firmware's tryboot flag was
+spent on the way in, and the reset boots `infernode8.img`. The budget
+and the reasons for arming only candidate boots are in the comment
+above `boardbootwatchdog()` in `board.c`; the words the kernel reads
+from the command line are `tryboot` (candidate: arm and announce),
+`bootwatchdog` (arm any boot; a hang then loops, which is what an
+unattended board wants), `nowatchdog` (never arm — for a kernel being
+stepped under a debugger) and `wdogtest` (arm, and ignore the release,
+so the reset at the budget can be watched on the board).
+
+The one `config.txt`, with `init_uart_clock` pinned because uart.c
+divides for 115200 assuming 48MHz and the firmware, not the kernel,
+decides what that reference is:
+
     arm_64bit=1
     dtoverlay=disable-bt
     init_uart_clock=48000000
+    kernel=infernode8.img
+    cmdline=cmdline.txt
 
-`infernode8.img` is kept alongside as a fallback: swapping the
-`kernel=` line boots a kernel directly, without a host feeding one.
+    [tryboot]
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+
+`tryboot.cmd` holds the single word `tryboot`; `cmdline.txt` may be
+empty or absent. The `[tryboot]` section is the firmware's conditional
+filter for a boot made with the flag set; on firmware old enough not to
+know it, a `tryboot.txt` that is a copy of `config.txt` with the two
+`[tryboot]` lines in place of the two above it does the same job, and
+that is the file the firmware documentation historically described.
+For a card with no kernel yet, `kernel=serialboot.img` in place of the
+`kernel=infernode8.img` line, and the first candidate is installed from
+a serial-fed kernel exactly as above.
+
+*Status, 2026-09-05.* Everything on this path that emulation can prove
+is in the harness: the command line reaching the kernel and `osinit`
+through `#B/bootargs`, the candidate announcement and promotion text,
+the arming write reaching the PM block, the `booted` release
+handshake, and `echo tryboot > /dev/sysctl` resetting the machine.
+What only the board can prove, and has not yet: that the firmware
+honours `SET_REBOOT_FLAGS` from this kernel and boots the `[tryboot]`
+section (the candidate's `boot: command line:` line is the evidence;
+`tryboot: firmware acknowledged ...` on the way out is the firmware's
+own word, meaningless under QEMU); that `PM_WDOG` counts down and the
+tick's reloads hold it off for 90 seconds (`bootwatchdog wdogtest` on
+`cmdline.txt`, and the board should reset at 90 s and come back with
+`pm:   rsts` showing the watchdog-reset bit 0x20); that the
+`PM_RSTC` disarm write leaves the machine up. The earlier
+`boardtryboot` set bit 5 of `PM_RSTS` and called it the tryboot bit;
+the downstream Linux tree shows the flag is a mailbox tag and bit 5 is
+the watchdog reset-cause bit, and the code now does what Linux does.
 
 ### Network throughput: where the time actually went
 
@@ -1328,6 +1409,18 @@ Fix: install to a candidate filename; arm the hardware watchdog in
 PM_RSTS handshake on the board once, with the result written here; a
 harness check for the flag write. Two or three days.
 
+*DONE 2026-09-05, except the board.* The install is to `tryboot.img`,
+the boot watchdog is armed in `kmain` for a boot whose command line
+says `tryboot` and released by osinit's `booted` on `/dev/sysctl`, the
+firmware flag is requested through the mailbox tag Linux uses rather
+than a `PM_RSTS` bit (which turned out to be the watchdog reset-cause
+bit), and `#B/bootargs` tells osinit which boot it is. The harness
+checks the arming line, the release line, the candidate announcement,
+`-append`-driven command lines and that `tryboot` on `/dev/sysctl`
+resets QEMU; it cannot check the countdown or the firmware's answer,
+because QEMU models neither — the recipe and the remaining board proof
+are under "Working on the board without moving the card".
+
 **5. The login screen is bypassable in two ways, one deliberate.**
 `boot-baremetal.sh` treats `wm/logon` exiting 0 as a login. Escape
 twice is a designed skip ("Keys won't persist") and exits 0 — fine,
@@ -1457,7 +1550,7 @@ parked"; `notyet.c` "tcp and udp are not here yet" and "nothing installs
 a screenputs"; `etherusb.b` "never run against the silicon" and "bulk
 endpoint assumed to be 2"; two conflicting `config.txt` recipes in this
 file (under "Working on the board" and the old bring-up item), neither
-mentioning `tryboot.txt`; `docs/TLS-ENTROPY.md` (the pool is
+mentioning `tryboot.txt` (unified 2026-09-05); `docs/TLS-ENTROPY.md` (the pool is
 hardware-fed now) and `docs/PERSISTENCE.md` (the `/usr` question is
 decided: on the card). The top-level `README.md` and `QUICKSTART.md`
 still describe the Pi only as a hosted Linux target.

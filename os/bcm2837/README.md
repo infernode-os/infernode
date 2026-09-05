@@ -1447,7 +1447,7 @@ wrong-answer failure mode, and `tcp.c`'s sequence comparisons survive
 LP64 by accident through `(int)` truncation — which is worse than
 breaking, because it passes a smoke test and stalls under real traffic.
 
-**5. FT5406 touch** — built, not yet seen on the board. The firmware
+**5. FT5406 touch** — done; seen working on the board 2026-09-06. The firmware
 polls the panel's controller into a 64-byte buffer, so there is no I2C
 driver; the split is the usual one. `os/bcm2837/devtouch.c` (`#T`, bound
 as `/dev/touch`) does what a Limbo program cannot: asks for the buffer
@@ -1472,8 +1472,9 @@ the firmware wrote our buffer within 20ms, so the probe now tries SET
 first and, on either path, plants the consumed mark and waits up to
 200ms for the firmware to overwrite it before claiming a panel. Cursor
 tracking follows the finger with the panel in its natural orientation
-(no inversion needed). The cost of the 60Hz poll on one core, and taps
-and drags inside Tk, are the remaining board measurements.
+(no inversion needed), and taps and touch-scrolling work inside the Tk
+desktop. The cost of the 60Hz poll on one core is the remaining board
+measurement.
 
 **6. WiFi** (CYW43455 over SDIO), which needs everything above plus an
 SDIO driver on the Arasan and a firmware blob upload. Milestone 1 —

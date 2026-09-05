@@ -1586,6 +1586,191 @@ QEMU: `raspi3b` has no CYW43455 and no SDIO function device, so the
 harness can only show that nothing about the boot or the card on
 SDHOST changed. The upload is a board test.
 
+## SDIO on the Arasan, and the radio brought up to its firmware (WiFi milestone 2)
+
+**Status: the Arasan SDIO path, the second Ethernet instance and the
+absent-radio refusal are proven under QEMU; the radio itself has not
+run on the board.** QEMU's `raspi3b` models the Arasan but hangs no
+SDIO function device on it and has no CYW43455 at all, so everything
+from CMD5 answering onward -- the backplane, the upload, the
+firmware's first word -- is code that has compiled and been read, not
+code that has run. The board test below is the first thing to do with
+the serial cable, and until it has been done this section describes
+intent, not fact.
+
+**What the Arasan backend now speaks.** `emmc.c` gained the SDIO
+command set Miller's driver asks of it, expressed through the `SDio`
+flags that already existed: CMD5 `IO_SEND_OP_COND` (R4, no CRC),
+CMD52 `IO_RW_DIRECT` (R5) and CMD53 `IO_RW_EXTENDED` (R5 with data).
+CMD53 takes its direction from bit 31 of its own argument rather than
+trusting the caller's flags, and is issued multi-block with the count
+enabled whenever the last `iosetup` named more than one block, which
+is how Miller's `emmccmd` decides it. CMD0 drops the bus width and
+high-speed bit and returns the clock to 400kHz, because a card or
+radio that has just been reset is at one bit whatever this end
+remembers. The data mover waits for the buffer-ready bit once *per
+block* rather than once per transfer: the Arasan's buffer holds one
+block, reading past it does not fail, it returns the previous
+contents, and the card path is the one-block case of the same loop.
+Any command or transfer that fails resets the affected circuit
+(`Srstcmd`, `Srstdata`) so the next command does not wait out its
+bound behind an inhibited line, and a plain command timeout is kept
+quiet, since that is how an empty slot or an absent radio presents.
+
+**The register-write delay.** Miller's `WR()` pauses 2µs (fast
+clock) or 20µs (identification clock) before every register write,
+and the Linux `sdhci-bcm2835` driver documents why: the controller can
+lose the second of two writes that land within two SD-clock cycles of
+each other, a clock-domain crossing. The block path never showed it
+because a read intervened between its writes; a CMD53 stream would
+not be so lucky. `emmcwr()` now paces every control-register write.
+The data port is exempt, as the same Linux comment records, so a
+block is not paced word by word.
+
+**The card interrupt.** `SDio` gained one entry, `cardintr(wait)`:
+DAT1 pulled low by an SDIO function that wants attention. It is
+polled a tick at a time (HZ is 1000 here) with `tsleep`, not
+delivered through GPU IRQ 62, which stays masked; the kproc waiting
+on it yields the core meanwhile. SDHOST sets the entry `nil`: no
+SDIO device reaches that controller. Enabling the interrupt is the
+change to make when the radio's throughput is what is being
+measured, and not before.
+
+**The radio driver, in two halves.** `ether4330.c` is the first
+~1170 lines of Miller's driver: SDIO bring-up, the Sonics backplane,
+the firmware upload and the command path to the running firmware.
+The halves are split by *when a file can be found*:
+
+- The **probe** runs at board init, from `boardsdprobe()`
+  immediately after the card probe -- the radio's SDIO lines can only
+  be driven by the Arasan and the Arasan is free only once `sdmmc.c`
+  has moved the card to SDHOST, so calling it from there makes the
+  ordering a fact of one file. It runs in `kmain`'s context with no
+  scheduler, so it is written with return codes and `microdelay` and
+  reports through the uart. It routes GPIO 34–39 to ALT3 (Miller: "not
+  officially documented", and what Linux's device tree selects; 34 is
+  the clock and gets no pull, the rest pull-ups), resets the Arasan,
+  sends CMD0, CMD5 until the OCR's ready bit, CMD3, CMD7, sets the
+  CCCR to high speed and four bits, the F1/F2 block sizes (64/512),
+  enables F1, then scans the backplane: chip id, the core enumeration
+  ROM, the ARM held, the 802.11 core reset, the RAM sized. Its verdict
+  is one line: `ether4330: no radio` (two command timeouts, nothing
+  answered CMD5), or `ether4330: chip 0x4345 rev 6 type N` followed by
+  `ether4330: radio present, N KB of RAM; firmware loads on bind`.
+  With `-DSDCARD_ARASAN` the controller is not free and the probe says
+  so and returns.
+- The **upload** runs at attach, in the process that binds `#l1`,
+  because the firmware is a file and a file is found in a namespace:
+  on this system the card is mounted at `/n/dos` by init, long after
+  board init, and a kernel process has no namespace at all. The files
+  are looked for in `/boot/<name>`, `/sys/lib/firmware/<name>` (where
+  Miller's driver looks) and `/n/dos/firmware/<name>` (this system's
+  card), in that order. The firmware goes into the dongle's RAM from
+  the base up, the condensed NVRAM at the top with a length-and-
+  checksum word after it, and both are read back and compared
+  (`Firmwarecmp`), because an upload that went wrong does not fail
+  here, it fails later as a firmware that never answers. Then the HT
+  clock, F2 enabled, the reader kproc started, the CLM table pushed
+  through `clmload`, and `wlinit`: the MAC address, the constants the
+  firmware wants, `UP`, and `ver`.
+
+**Every wait is bounded.** Miller's core-reset and clock loops spin
+without limit; here they poll a bounded number of times and error. A
+firmware that loads and then does not answer is a five-second `tsleep`
+in the binding process and an error, never a stuck kernel. A missing
+radio costs two command timeouts at boot; a missing firmware costs the
+bind that asked for it and one line naming the file and the three
+places it was not. The boot continues in every case.
+
+**`/net/ether1`.** `devether.c` now serves two instances the way Plan
+9's does: `#l` is ether0, the USB path, untouched; `#l1` is ether1,
+which a kernel link driver fills in with the vtable in
+`os/port/etherif.h` (`attach`, `transmit`, `ifstat`, `ctl`,
+`shutdown`, with `ctlr` and `ea` beside them). The instance is
+recorded in the Chan's `dev` field at attach and copied by every
+clone, so every entry point looks it up. `ether4330probe()` registers
+whether or not it found a radio, so that `bind -a '#l1' /net` says
+`ether4330: no radio` rather than finding no device -- the answer to
+"why is there no ether1" is in the bind's error and the boot log
+both. A kernel with no driver linked at all refuses `#l1` with
+`Enodev`. In this milestone `transmit` and `ctl` are left `nil`: a
+data write to ether1 refuses with `Enodev` and the reader kproc counts
+data frames and drops them. Frames, scan and join are milestones 3
+and 4; `ifstats` already carries the `status:` line a supplicant will
+poll, saying `unassociated`.
+
+**Firmware, and why it is not here.** `brcmfmac43455-sdio.bin`,
+`.txt` (NVRAM) and `.clm_blob` (regulatory) are Cypress binaries under
+`binary-redist-Cypress` -- object form only, Cypress ICs only, no
+derivative works -- and are not MIT, so they are not in this tree and
+must never be packed into a release ("placement is shipping"). What is
+committed is `tools/pi-firmware-manifest.txt`, pinning the commit of
+`RPi-Distro/firmware-nonfree` they come from and the SHA256 of each,
+and `tools/pi-firmware.sh`, which fetches them by that commit,
+refuses anything that does not hash as pinned, and copies what passed
+into `<card>/firmware/` under the names the driver expects. The `.bin`
+is Raspberry Pi's "standard" build: linux-firmware's own image was
+dropped from that packaging in 2025, and the "minimal" sibling trades
+roaming and DFS for AP client count. Note the risk this carries:
+Miller shipped 43455 support against the linux-firmware image of his
+day, and this is a different build of the same firmware.
+
+**What the harness proves.** Section 3g of `tests/host/baremetal_test.sh`
+now also checks: the boot log carries `ether4330: no radio` and
+`boot OK` comes *after* it, so the probe ran and did not stop the boot;
+the `-DSDCARD_ARASAN` kernel says `ether4330: the Arasan holds the
+card` instead; the FAT shell session opens `#l1/addr` and gets
+`cat: cannot open #l1/addr: ether4330: no radio` (devether selected
+instance 1, the driver's attach ran in the shell's process and refused
+with its own words), while `#l/addr` in the same session still reads
+the USB adapter's MAC, so ether0 is unchanged; and every check that
+existed before -- the SDHOST card, the QMP bus test, both FAT
+sessions, hot-plug, the network -- still passes. It cannot prove
+anything past CMD5: there is nothing on QEMU's Arasan to answer it.
+
+**The board test, exactly.** With the card holding the firmware
+(`tools/pi-firmware.sh /Volumes/BOOT` on the host, or wherever the
+card's FAT partition is mounted) and the serial console up:
+
+1. Boot. Expect, after the `sd: sdhost: card ready` lines:
+   `ether4330: chip 0x4345 rev 6 type N` and
+   `ether4330: radio present, N KB of RAM; firmware loads on bind`.
+   `ether4330: no radio` here means CMD5 was not answered: check
+   `WL_REG_ON` first (below), then the ALT3 routing, before the SDIO
+   path.
+2. Wait for `init: /dev/... mounted on /n/dos` and the shell.
+3. `bind -a '#l1' /net`. Expect, in order:
+   `ether4330: firmware 609309 bytes loaded, verified` (the size in the
+   manifest), possibly `ether4330: firmware ready`,
+   `ether4330: addr b8:27:eb:xx:xx:xx` (a Raspberry Pi OUI), and the
+   `ver` line, `ether4330: wl0: ... version 7.45.xxx ...`.
+   `ether4330: firmware load failed offset N` means the read-back
+   differed: the upload path or the RAM map, not the file.
+   `ether4330: firmware does not answer` means the upload verified and
+   the firmware did not start: NVRAM, the reset vector, or the wrong
+   build.
+4. `cat /net/ether1/addr` prints the same MAC without the colons;
+   `cat /net/ether1/ifstats` prints `radio: present`, the chip line,
+   `firmware: <ver>`, and `status: unassociated`.
+5. `cat /net/ether0/addr` still prints the USB adapter's MAC: ether0
+   was not disturbed.
+
+**What only the board can prove, and what to suspect first.**
+`WL_REG_ON` on the 3B+ is on the firmware's GPIO expander (Linux's
+`wifi_pwrseq` uses `expgpio 1`), not a BCM GPIO; this driver never
+touches it, on the assumption -- Miller's, since he shipped 43455
+support -- that the firmware leaves it asserted. If CMD5 is never
+answered, drive expander pin 1 through mailbox tag `0x00038041`
+(`SET_GPIO_STATE`, pin 128+1) before blaming the SDIO path. Whether
+the pads follow the ALT3 write; whether the write pacing is enough at
+25MHz; the per-block PIO of a multi-block CMD53 against the real
+state machine; the CCCR high-speed bit with the host clock left at
+25MHz (Miller's arrangement); and whether Raspberry Pi's standard
+firmware build answers Miller's command sequence as linux-firmware's
+did. High-speed (50MHz) and the card interrupt line are deliberately
+not attempted: they are the changes to make once the polled 25MHz
+path has run.
+
 ## Next
 
 Revised 2026-09-05 from a review of the branch's 49 commits against the

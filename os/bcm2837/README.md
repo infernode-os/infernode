@@ -1386,8 +1386,25 @@ with the interrupted holder on the same core, and `mboxfballoc` and
 `setpower` read the shared buffer after unlocking; the mutex is now a
 bounded `_tas` held with interrupts off across fill, post and copy-out,
 with a two-second wait that proceeds unlocked for a holder that cannot
-return. Verified by the harness under QEMU: @@COUNT@@ checks pass,
-including the five added for these.
+return. Verified by the harness under QEMU: 158 checks pass, 152
+before, six added for these (two for the DHCP reader, two for the
+double detach, two for `badent-1`).
+
+*What that verification does and does not show, 2026-09-05.* The
+`dossrv` fix is the one check that discriminates: the old code leaves
+one lost cluster, the new none, and the same fixture now runs hosted as
+`tests/host/dossrv_badent_test.sh` (also asserting that a genuinely
+damaged entry is still zapped with its cluster deliberately left),
+which CI runs. The DHCP-reader check is behavioural: the "exited" line
+is printed only after `/prog/N` has gone. The double-detach check does
+NOT reach the `epslck` compare-and-set -- two writes typed in sequence
+are serial, and the second was already refused by `ctlwrite`, so that
+check passes on the unfixed kernel; it pins the refusal and the
+driver-exits-once contract, and the race fix is correct by inspection
+only (one assignment of Ddetach in the tree, `epslck` taken in process
+context with nothing else held). The `mailbox.c` rewrite is likewise
+inspection-only; the harness shows the mailbox still works, not that
+the lock is right.
 
 ### Tier 2 — make what exists trustworthy
 
@@ -1438,7 +1455,12 @@ every hub watcher, so two hubs enumerating at once can cross names.
 name flows back through `portsetup`, and a device that failed to come
 up is detached on the spot by `portsetup` and `usbwalk` instead of
 holding its ep0 until unplugged -- or for ever, on the boot walk. The
-hotplug and keyboard harness checks pass unchanged.
+hotplug and keyboard harness checks pass unchanged, which shows the
+success path was not broken; the new detach-on-failure path is
+exercised by nothing -- no QEMU session makes enumeration fail (no
+descriptor timeout, no failed configure, no mid-walk unplug) -- and a
+device that never answered `newdev` returns no name, so there is
+nothing to detach and nothing is.
 
 ### Tier 3 — the machine as a product
 

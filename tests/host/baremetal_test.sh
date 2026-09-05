@@ -1884,15 +1884,27 @@ OUT="$OUT_SAVED"
 #
 #     Detaching a device twice.
 #
-#     osinit writes "detach" once when a hub port empties. A second
-#     write to the same device -- a second watcher, a person at the
-#     shell -- used to run devusb's release loop again and drop
-#     references the open files still held, freeing endpoints under
-#     their owners. Typed as one block, both writes go down ONE open fd,
-#     so the second reaches the device rather than a path that has
-#     already gone. The keyboard is the victim because it is the device
-#     the machine can spare; what must be seen is the driver exiting
-#     once, the second write REFUSED, and the shell still answering.
+#     osinit writes "detach" once when a hub port empties. devusb's
+#     CMdetach runs a release loop that drops the file system's one
+#     reference to each endpoint, and a second pass through it drops
+#     references the open files hold, freeing endpoints under their
+#     owners. Two writers that arrive TOGETHER both used to run it; the
+#     transition to Ddetach is now made under epslck so only one does.
+#
+#     This check does not reach that race, and is not claimed to: two
+#     writes typed one after the other are serial, and the second is
+#     turned away by ctlwrite's pre-existing Ddetach check before epctl
+#     is called -- so this passes on the unfixed kernel too. What it
+#     pins is the contract the fix depends on, which nothing else
+#     asserted: a detach written at the shell reaches the driver, which
+#     exits once; a second write down the SAME open fd (typed as one
+#     block, so it reaches the device rather than a path that has gone)
+#     is refused with the device's own error and not "i/o error"; and
+#     the shell still answers. The compare-and-set itself is verified
+#     by inspection only -- there is one assignment of Ddetach in the
+#     tree, and epslck is taken in process context with no other lock
+#     held. The keyboard is the victim because it is the device the
+#     machine can spare.
 #
 #     The sleep first is not padding. The prompt appears while the hub
 #     walk is still powering ports, and a detach typed then reaches a

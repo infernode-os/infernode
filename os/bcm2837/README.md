@@ -279,6 +279,34 @@ firmware rather than hardcoded because the split is configurable in
 the load address. Real hardware enters directly. Boot code must not
 assume its entry PC.
 
+**A local set after `waserror()` and read in its handler must be
+`volatile`.** `setlabel`/`gotolabel` are setjmp/longjmp, and C leaves a
+non-volatile local modified between the two indeterminate; clang `-O2`
+takes the offer and folds the value the local had at `setlabel` into the
+handler. `devwalk` and `mntwalk` set `alloc = 1` after `waserror()` and
+closed the cloned Chan `if(alloc)` -- compiled, the handler was `bl free;
+b epilogue`, no `cclose`. `namec` initialised its `Elemlist` to nil
+before `waserror()` and freed it in the handler: three `free(nil)`.
+Four blocks per failed name lookup, and the idle desktop fails three
+lookups a second (`lucictx` polls `/tmp/veltro/.ns/manifest` and
+`/tool/{paths,tools}`, none of which exist on the board), so the main
+pool grew ~1 MB every ten minutes while the login screen, which probes
+nothing, stayed flat. `qbwrite` and `etherbind` had the same shape with
+worse consequences: an unconditional `freeb` of a Block already on the
+queue if the writer was interrupted, and a failed bind that left every
+conversation it had opened open, so the retry failed too. Note what does
+NOT fix it: `returns_twice` on `setlabel` (it stops register caching
+across the call, a different hazard; the fold is on the value and the
+output is byte-identical with or without the attribute). Only `volatile`
+-- or the `volatile struct { ... }` idiom `kmount` already uses -- makes
+the handler read memory. The hosted emu had the walkers right since the
+2007 upstream drop and `namec` wrong, and its soaks were flat only
+because nothing in them ever missed. Check the compiler's output, not the
+source: `clang -S` with the harness flags and read the block after `bl
+setlabel; cbz w0`. `tests/host/baremetal_test.sh` counts live main-pool
+blocks across 1000 failing lookups; `tests/host/walk_leak_test.sh` does
+the same in emu.
+
 ## What has been imported from upstream so far
 
 Upstream Inferno is MIT and its copyright holders — Lucent, Vita Nuova,

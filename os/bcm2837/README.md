@@ -1205,6 +1205,111 @@ and `os/port/dev.c:105` hands it a `smalloc(4+strlen(spec)+1)`. It fits
 today and will not survive the first caller that formats something
 longer.
 
+## The SD card is on SDHOST, and the Arasan is free (WiFi milestone 1)
+
+**Status: proven under QEMU, never run on the board.** Every claim in
+this section about the silicon is taken from the datasheet, from
+Miller's Plan 9 driver and from the Linux driver that the Pi runs
+every day; none of it has been observed on this board's SDHOST by this
+kernel. The board test is the first thing to do with a serial cable.
+
+**Two controllers, one set of pins.** The BCM2837 has two SD
+controllers. The Arasan SDHCI block at `0x3F300000` (`EMMCREGS`, GPU
+IRQ 62) is the one `start.elf` loads `kernel8.img` through, so it is
+the one a kernel finds already running. The BCM2835 SDHOST block at
+`0x3F202000` (`SDHOSTREGS`, GPU IRQ 56) is Broadcom's own older
+design. The Pi 3B+ has two SD *devices*: the card slot on GPIO 48–53
+and the CYW43455 WiFi chip, which speaks SDIO on GPIO 34–39. Only the
+Arasan can be routed to 34–39, so a kernel that keeps the card on the
+Arasan has no controller left for the radio. Moving the card to SDHOST
+is the whole of this milestone; the radio itself is later work and
+none of it is here.
+
+**Pin mux.** Pins 48–53 reach SDHOST at ALT0 and the Arasan at ALT3.
+The firmware leaves them at ALT3. `sdhost.c` writes ALT0 to all six
+before touching a register, and that write is what moves the card —
+on the silicon it re-routes the pads, and in QEMU `hw/gpio/bcm2835_gpio.c`
+reparents the `sd-card` device from the SDHCI bus to the SDHOST bus
+when, and only when, all six read 4. QEMU's mux recognises exactly two
+settings: ALT0 (SDHOST) and function 0 (back to SDHCI, the reset
+value). ALT3 means nothing to it. So "reclaim the Arasan" is ALT3 on
+the board and 0 under emulation, and a runtime switch between the two
+would pass the harness and fail on the board or the reverse. That is
+why the choice is made at build time — `sdmmc.c` holds one pointer,
+SDHOST by default, `-DSDCARD_ARASAN` for the other, the same shape as
+`-DFBSCROLLTEST` — and why the Arasan backend does not write the mux
+at all: "as the firmware left them" is the one setting that is right
+in both places. The other reason there is no runtime choice is that
+there is nothing to make it from: this port parses neither the device
+tree nor `cmdline.txt`, and QEMU's `raspi3b` passes a bare `kernel8.img`
+no device tree.
+
+**The layers.** `sdmmc.c` is the card protocol — identification, the
+CSD, one block in or out — written against the `SDio` vtable in
+`board.h` and against no register. `sdhost.c` and `emmc.c` are the two
+implementations of that vtable. `devsd.c`'s five entry points kept
+their `emmc*` names so that nothing above them moved. Both backends
+are always compiled; only the pointer changes.
+
+**The raw response layout.** A 136-bit response (CID, CSD) is stored
+differently by the two controllers, and the difference does not
+produce an error. SDHOST stores it raw: `Sdrsp3` holds bits 127:96 of
+the register as the specification numbers them. The Arasan drops the
+CRC byte and stores bits 127:104 in its `RESP3`, 103:72 in `RESP2` and
+so on — shifted by eight. A CSD parsed in the wrong layout reports a
+plausible wrong capacity and then reads plausible wrong sectors. The
+parse therefore exists once, in `sdmmc.c`'s `identify()`, in the raw
+layout, and the Arasan backend shifts its responses into that layout
+(`resp[0] = RESP0<<8`, `resp[1] = RESP0>>24 | RESP1<<8`, …), which is
+what Miller's `emmc.c` does. The harness asserts the fixture's size —
+`64 MB` — on both controllers for exactly this reason.
+
+**FIFO thresholds and the busy interrupt.** `Sdedm` carries the
+read and write FIFO thresholds; both are set to 4 words, the Linux
+driver's value with its comment "limit fifo usage due to silicon
+bug", and the driver moves data in bursts of up to 8 words after
+reading the fill count once. `Sdhcfg`'s `Hcfgbusyinten` is set even
+though this kernel takes no SD interrupt: the bit is not just a
+delivery enable, it is what makes the controller *latch* the busy
+completion of an R1b command (`Hstbusyint` after CMD7 and CMD12) at
+all, in the datasheet and in QEMU's model alike. Without it every card
+select waits out its full bound and the driver looks like it has a
+slow card. Interrupt 56 stays disabled in the VideoCore controller, so
+the status bit rising is harmless. After a write, the card layer polls
+CMD13 for `READY_FOR_DATA` rather than trusting either controller's
+idea of busy.
+
+**What the harness proves.** Section 3g of `tests/host/baremetal_test.sh`
+boots the SDHOST kernel with the 64MB FAT16 image and checks: the
+card-ready line names `sdhost` and says `64 MB`; GPIO 48–53 read back
+`func=4`; the MBR reads and the partition table holds the values the
+fixture was built with; no `sdhost:` fault line appeared. Then it asks
+QEMU over QMP for `info qtree` and requires the `sd-card` device to be
+listed under `bcm2835-sdhost-bus` and not under `sdhci-bus`. That last
+check is the load-bearing one: a driver that prints `sdhost` and then
+keeps talking to the Arasan passes every text check, because the card
+works either way, and QEMU's device tree is the one witness that cannot
+be talked round. The FAT16 and FAT32 shell sessions, the append test,
+the kernel installing itself onto the card, and the write round trip
+all run through SDHOST unchanged. A `-DSDCARD_ARASAN` kernel is built
+and booted too: it must still identify the card at 64MB and read the
+MBR, and the same QMP question must put its card under `sdhci-bus` —
+the negative case, without which the bus check would not be known to
+discriminate.
+
+**What only the board can prove.** Whether the pads actually follow
+the ALT0 write on this board; whether the pull-ups the firmware set
+for the Arasan suit SDHOST (Linux's pinctrl uses pull-up on 49–53 and
+none on 48; `gpiopull()` is there if they do not); whether the
+divider computed from the mailbox's core-clock reading survives the
+firmware scaling that clock (the divider is computed once, so a core
+clock that rises later overclocks the card — pin `core_freq` in
+`config.txt` if this bites, or compute from the maximum rate); the
+FIFO behaviour of the real state machine at 25MHz; and the 4-bit bus,
+which QEMU tolerates whether or not the card agreed. High-speed mode
+(CMD6, 50MHz) is deliberately not attempted: 25MHz is the conservative
+first thing to run on silicon that has never run this driver.
+
 ## Next
 
 Done: exception vectors, EL2→EL1, MMU, timer and IRQ, the `os/port`
@@ -1362,7 +1467,10 @@ the orientation, and the cost of a 60Hz poll on one core are the board
 test, and this stays "built" until a Tk tap has been seen.
 
 **6. WiFi** (CYW43455 over SDIO), which needs everything above plus an
-SDIO/EMMC driver and a firmware blob upload.
+SDIO driver on the Arasan and a firmware blob upload. Milestone 1 —
+freeing the Arasan by moving the card to SDHOST — is done under QEMU;
+see "The SD card is on SDHOST, and the Arasan is free" above for what
+the board still has to confirm.
 
 Smaller, and worth doing whenever they block something: `devtab` holds
 root, cons, prog and pipe, so there is still no `/env` (`#e`) and no

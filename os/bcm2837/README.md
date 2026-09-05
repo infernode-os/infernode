@@ -1109,11 +1109,19 @@ Hunting lessons written in blood, for the next person here:
   server always did.
 - Limbo `fd = nil` did NOT close the endpoint before the kernel tried
   to take it -- the FD destructor provably did not run at the
-  assignment (the ep stayed inuse until process exit). The handoff
-  closes by sys->dup of #c/null over the descriptor, which replaces
-  the chan inline. WHY the destructor is late is an OPEN QUESTION that
-  implies every dropped fd on this kernel leaks until its process
-  exits.
+  assignment (the ep stayed inuse until process exit). For a while the
+  handoff closed by sys->dup of #c/null over the descriptor instead.
+  RESOLVED 2026-09-05: it was the JIT. `comp-arm64.c` `macfrp()`
+  decremented the refcount with `SUB_IMM`, which sets no flags, then
+  `BCOND(NE)`'d on the flags the nil check had left -- always NE for
+  a non-nil pointer -- so `rdestroy` was unreachable and compiled code
+  never ran any destructor; every dropped fd waited for the
+  collector. The macro now has comp-amd64.c's shape (compare with 1,
+  branch to rdestroy on equal, else decrement and store), the dup is
+  gone, and the handoff is a plain `fd = nil`. Pinned by
+  `tests/fdclose_test.b` (hosted, both -c0 and -c1), by osinit's
+  `init: fd:` self-checks, and by the harness asserting the "(kernel
+  data path)" handoff line.
 
 ### Single-shot bulk transfers, and the two bugs that forbade them
 
@@ -1279,6 +1287,21 @@ in compiled code and checks `#u`'s endpoint `inuse` (or a pipe's other
 end seeing EOF) *without* the dup workaround; then remove the
 workaround. Run the hosted runner on macOS with `-c1` in CI. Half a day
 of code; the test is the point.
+
+**DONE 2026-09-05.** `macfrp()` now compares the refcount with 1 and
+branches to `rdestroy` on equal without storing a decrement, else
+decrements and stores; an audit of every other `BCOND` in the file
+found each one directly preceded by its own compare. `tests/fdclose_test.b`
+drops a pipe's write end by assignment, by frame return, through a ref
+adt and through `tl` on a list cell, and reads EOF from the other end
+within a bound; it also proves a second reference keeps the file open.
+It passes on hosted Linux under both `-c0` and `-c1` (amd64 JIT). On
+AArch64 the fixed macro is exercised by osinit's `init: fd:` self-checks
+(assignment and return drops, each read to EOF) which the harness
+asserts with the JIT on, and by the `#l` handoff in `etherusb.b`, which
+is now a plain `fd = nil` -- the `#c/null` dup is gone and the harness
+asserts the "(kernel data path)" line. The macOS `-c1` CI run is still
+to do.
 
 **2. Cores 1–3 have no clock tick.** `timersinit()`
 (`os/port/portclock.c`) creates the one periodic Timer whose purpose is

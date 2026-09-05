@@ -160,13 +160,13 @@ uartgetc(void)
  * came out as "cpuccp1: uppuu2", which is comedy until a panic
  * message does it, and the first SMP panic did exactly that -- the
  * one line that would have named the bug was shredded across three
- * cores' output. A plain spin Lock is enough: emission is short,
- * bounded, and already runs at splhi from the callers that matter.
- * _tas directly rather than lock() so a panic INSIDE the lock
+ * cores' output. A plain spin lock is enough: emission is short and
+ * bounded. _tas directly rather than lock() so a panic INSIDE the lock
  * machinery can still print: after a bounded spin, print anyway --
  * garbled beats silent.
  *
- * uartowner is the core holding uartmutex, or -1. It does two jobs.
+ * uartowner is the core holding uartmutex, or -1, and the lock is
+ * held at splhi. Together they do three jobs.
  *
  * First, a writer that gave up waiting must not release the lock on
  * its way out. The first version did: "spin, print, store 0" with no
@@ -175,17 +175,37 @@ uartgetc(void)
  * and a third core walked straight in. Only the acquirer stores the 0.
  *
  * Second, the same core re-enters this file while holding the lock:
- * uartputs() is writing a console line at spllo, an interrupt arrives
- * on that core, and the handler prints. Before, that inner print spun
- * out the whole bound -- a million exclusive loads at splhi -- and
- * then printed anyway. Now it recognises its own core as the holder
- * and writes through at once, leaving the release to the outer call.
- * The inner text lands inside the outer line, which is the same result
- * as before minus the stall; the alternative, a queue, is what print()
- * already is, and this is the path for when print() cannot be trusted.
+ * dumpureg holds it across a whole report and calls uartputstr for
+ * each line, and a fault taken INSIDE an emission -- the panic path --
+ * prints from the same core again. Before, that inner print spun out
+ * the whole bound -- a million exclusive loads at splhi -- and then
+ * printed anyway. Now it recognises its own core as the holder and
+ * writes through at once, leaving the release to the outer call.
+ *
+ * Third, and this is why splhi: the owner is named by CORE, but the
+ * holder that matters is a PROCESS. uartputs() is the console write,
+ * called from putstrn0 in process context at spllo, and hzclock now
+ * preempts on every core. Held at spllo, a process could be
+ * descheduled mid-line with the lock, be picked up by any idle core
+ * (runproc's second pass ignores affinity) and resume writing there;
+ * back on the core it left, uartowner still named that core, so the
+ * next print there took the "my own core holds it" exit and wrote
+ * straight through -- two cores emitting at once, which is the one
+ * thing the lock exists to prevent -- while an interrupt-time print on
+ * the new core saw a foreign owner and spun the whole bound. Raising
+ * splhi before the spin and holding it until the release means the
+ * holder cannot be preempted, so it cannot migrate, so the core IS the
+ * holder for as long as the lock is held; the same discipline as
+ * ilock. The cost is interrupts masked on one core for one emission:
+ * conswrite chunks at 256 bytes, about 22ms at 115200 baud on the
+ * board, and a pending tick is delayed, not lost. The nested case
+ * above is unchanged by it -- with interrupts masked, the only way
+ * back into this file on the holding core is a synchronous exception
+ * or a direct call, and both are the same core.
  */
 static ulong uartmutex;
 static int uartowner = -1;
+static int uartspl;		/* the acquirer's level, for uartunlock */
 
 /*
  * ...and NOT ONE writer before the MMU is on. _tas is a load/store
@@ -219,28 +239,48 @@ uartlockon(void)
 int
 uartlock(void)
 {
-	int i;
+	int i, s;
 
 	if(!uartlocking)
 		return 0;
-	if(uartowner == m->machno)
+	/*
+	 * splhi before the test-and-set, not after: a tick between a
+	 * successful _tas and a later splhi would leave a Ready process
+	 * holding the console lock with interrupts on -- the migration
+	 * case described above, in a narrower window.
+	 */
+	s = splhi();
+	if(uartowner == m->machno){
+		splx(s);
 		return 0;
+	}
 	for(i = 0; i < 1000000; i++)
 		if(_tas(&uartmutex) == 0){
 			uartowner = m->machno;
+			uartspl = s;
 			return 1;
 		}
+	/*
+	 * Gave up: the text goes out over the holder's, at the caller's
+	 * level. Nothing was taken, so nothing is held and nothing is
+	 * restored later; put the level back here.
+	 */
+	splx(s);
 	return 0;
 }
 
 void
 uartunlock(int held)
 {
+	int s;
+
 	if(!held)
 		return;
+	s = uartspl;
 	uartowner = -1;
 	coherence();
 	uartmutex = 0;
+	splx(s);
 }
 
 void

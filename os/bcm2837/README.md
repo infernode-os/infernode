@@ -1366,7 +1366,13 @@ logged-in / skipped / failed, and the script honours them. Hours.
   never acquired it; `uartputx`/`uartputd` and `dumpureg` bypass it.
   DONE 2026-09-05: `uartlock()`/`uartunlock()` release only what the
   caller took, are re-entrant per core, and `uartputx`/`uartputd`,
-  `dumpureg` and `intrdump` emit under it as whole pieces.
+  `dumpureg` and `intrdump` emit under it as whole pieces. Review of
+  that change found the owner-by-core rule unsound at spllo once every
+  core preempts (the holding process could migrate mid-line and the
+  old core would then write through unlocked), so the lock is now held
+  at splhi, ilock-style: the holder cannot be preempted, so the core
+  is the holder. Verified by the full harness under QEMU raspi3b (159
+  checks passing, console output unshredded through four-core boot).
 - Unlocked multi-core writers: `ticks++` and the profiler buckets in
   `clock.c`, `nspurious` and `irqenabled |=` in `intr.c`. Lossy at
   best; `irqenabled` from a kproc on another core is the one to fix.

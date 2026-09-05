@@ -1195,11 +1195,17 @@ check "boot OK"                       "completes boot without faulting"
 # queue and returned. The three checks below are the three claims.
 #
 # "cpuN: up" is squidboy's ack, printed after the core has its vectors,
-# MMU and clock. "did not answer" is launchsmp giving up on a core.
+# MMU and clock. "cpuN: did not answer" is launchsmp giving up on a core.
+# The refutation is anchored to launchsmp's exact form because osinit
+# has a "did not answer" of its own -- "init: port N did not answer;
+# resetting it again", from reresetport() -- and that one is a device
+# failing to enumerate on the first try, which its own comment says is
+# routine on this board. A bare "did not answer" would fail an SMP check
+# for a USB retry.
 check "cpu1: up"                      "core 1 answers the release and enters its scheduler"
 check "cpu2: up"                      "core 2 answers the release and enters its scheduler"
 check "cpu3: up"                      "core 3 answers the release and enters its scheduler"
-refute "did not answer"               "no secondary core failed to answer the release"
+refute "cpu[0-9]*: did not answer"    "no secondary core failed to answer the release"
 # osinit reads /dev/sysstat twice, 200ms apart, and counts the cores
 # whose tick count moved. A core with a live interrupt and a dead
 # hzclock shows here as "3 of 4".

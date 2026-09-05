@@ -42,6 +42,23 @@
  * because netif's ctl speaks the same "connect" protocol the Limbo
  * server spoke. Binding "#l" after /net is all the boot script owes it.
  *
+ * A SECOND INSTANCE, FOR A KERNEL LINK DRIVER. The attach spec picks
+ * the instance the way Plan 9's devether does: "#l" is ether0, the
+ * USB path above; "#l1" is ether1, which a driver linked into the
+ * kernel (the CYW43455 radio, os/bcm2837/ether4330.c) fills in with
+ * the vtable in etherif.h -- attach, transmit, ifstat, ctl, shutdown
+ * -- and devether.c calls those where instance 0 moves bytes itself.
+ * The instance is chosen from c->dev, which devattach leaves at 0 and
+ * etherattach sets, so every entry point below looks it up rather
+ * than naming ether[0]. A kernel with no driver linked, or a driver
+ * whose hardware is absent, has an ether1 that refuses to attach with
+ * Enodev or the driver's own words: nothing under /net, no directory
+ * to walk into, and ether0 exactly as it was.
+ *
+ * The profiler readout, the blackhole sink and the rx statistics are
+ * instance 0's debugging surface and stay there; ether1's ifstats is
+ * whatever its driver reports, which is what a supplicant will poll.
+ *
  * THE FRAMING LIVES HERE TOO, and that is a change of position worth
  * being honest about: RNDIS and LAN78xx record formats were "device
  * protocol outside the kernel" until the crossings they forced became
@@ -56,6 +73,7 @@
 #include	"fns.h"
 #include	"../port/error.h"
 #include	"../port/netif.h"
+#include	"../port/etherif.h"
 
 enum {
 	Maxframe	= 1514,		/* an Ethernet frame, header included */
@@ -87,37 +105,34 @@ enum {
 	 * by any timer, so a lone frame on a quiet link never waits.
 	 */
 	Txbatch		= 16,
+
+	Nether		= 2,		/* #l and #l1 */
 };
 
-typedef struct Ether Ether;
-struct Ether {
-	Netif	nif;		/* MUST be first: netif.c casts the pointer */
+/* the struct is in etherif.h, where a link driver can see it */
+static Ether ether[Nether];
 
-	QLock	bindlk;		/* one bind, ever */
-	int	bound;
+Ether*
+etherinstance(int n)
+{
+	if(n < 0 || n >= Nether)
+		return nil;
+	return &ether[n];
+}
 
-	int	family;
-	long	burst;		/* how much one bulk IN may carry */
-	Chan	*inchan;	/* the endpoints, held open forever */
-	Chan	*outchan;
-
-	Queue	*oq;		/* outbound frames, one Block each */
-	uchar	*txbuf;
-	long	ntxbuf;
-	uchar	*rxbuf;
-	long	nrxbuf;
-	long	nacc;		/* bytes carried over between reads */
-
-	/* rx timing: where a receive cycle's time actually goes */
-	ulong	nrd;		/* reads that returned data */
-	uvlong	rdns;		/* ns inside kchanio for those */
-	uvlong	gapns;		/* ns between one read's end and the next's start */
-	uvlong	rdbytes;	/* bytes those reads returned */
-	long	rdmax;		/* largest single read */
-	int	blackhole;	/* count arrivals, deliver nothing: the sink */
-};
-
-static Ether ether[1];
+/*
+ * The instance a Chan belongs to. c->dev was set by etherattach and
+ * copied by every clone since; a value outside the table would mean
+ * a Chan this device never attached, which is a bug rather than a
+ * request, so it is refused rather than mapped to ether0.
+ */
+static Ether*
+etherof(Chan *c)
+{
+	if(c->dev >= Nether)
+		error(Enodev);
+	return &ether[c->dev];
+}
 
 /*
  * The sampling profiler's buckets and readout, parked on
@@ -633,54 +648,101 @@ etherbindctl(Ether *e, char *args)
 static void
 etherreset(void)
 {
-	netifinit(&ether[0].nif, "ether0", Nfiles, Qlimit);
-	ether[0].oq = qopen(Oqlimit, 0, nil, nil);
-	if(ether[0].oq == nil)
-		panic("devether: no memory for the output queue");
+	char name[KNAMELEN];
+	int i;
+
+	for(i = 0; i < Nether; i++){
+		snprint(name, sizeof name, "ether%d", i);
+		netifinit(&ether[i].nif, name, Nfiles, Qlimit);
+		ether[i].ctlrno = i;
+		ether[i].oq = qopen(Oqlimit, 0, nil, nil);
+		if(ether[i].oq == nil)
+			panic("devether: no memory for the output queue");
+	}
 }
 
+/*
+ * "#l" is ether0, "#lN" is etherN. An instance without a driver
+ * exists only as number 0, the USB path; any other refuses with
+ * Enodev, so a kernel with no radio driver linked has no /net/ether1
+ * to walk into rather than an empty one. A driver's attach runs here,
+ * in the binding process, and its error is the bind's error.
+ */
 static Chan*
 etherattach(char *spec)
 {
-	return devattach('l', spec);
+	Chan *c;
+	Ether *e;
+	int n;
+
+	n = 0;
+	if(*spec != 0){
+		if(*spec < '0' || *spec > '9' || spec[1] != 0)
+			error(Ebadspec);
+		n = *spec - '0';
+	}
+	if(n >= Nether)
+		error(Enodev);
+	e = &ether[n];
+	if(n != 0 && e->attach == nil)
+		error(Enodev);
+
+	c = devattach('l', spec);
+	c->dev = n;
+	if(e->attach != nil){
+		if(waserror()){
+			cclose(c);
+			nexterror();
+		}
+		e->attach(e);
+		poperror();
+	}
+	return c;
 }
 
 static Walkqid*
 etherwalk(Chan *c, Chan *nc, char **name, int nname)
 {
-	return netifwalk(&ether[0].nif, c, nc, name, nname);
+	return netifwalk(&etherof(c)->nif, c, nc, name, nname);
 }
 
 static int
 etherstat(Chan *c, uchar *dp, int n)
 {
-	return netifstat(&ether[0].nif, c, dp, n);
+	return netifstat(&etherof(c)->nif, c, dp, n);
 }
 
 static Chan*
 etheropen(Chan *c, int omode)
 {
-	return netifopen(&ether[0].nif, c, omode);
+	return netifopen(&etherof(c)->nif, c, omode);
 }
 
 static void
 etherclose(Chan *c)
 {
-	netifclose(&ether[0].nif, c);
+	netifclose(&etherof(c)->nif, c);
 }
 
 static long
 etherread(Chan *c, void *buf, long n, vlong off)
 {
-	if((c->qid.type & QTDIR) == 0 && NETTYPE(c->qid.path) == Nifstatqid)
-		return profread(c, buf, n, off);
-	return netifread(&ether[0].nif, c, buf, n, off);
+	Ether *e;
+
+	e = etherof(c);
+	if((c->qid.type & QTDIR) == 0 && NETTYPE(c->qid.path) == Nifstatqid){
+		if(e->ifstat != nil)
+			return e->ifstat(e, buf, n, off);
+		if(e->ctlrno == 0)
+			return profread(c, buf, n, off);
+	}
+	return netifread(&e->nif, c, buf, n, off);
 }
 
 static Block*
 etherbread(Chan *c, long n, ulong offset)
 {
-	return netifbread(&ether[0].nif, c, n, offset);
+	return netifbread(&etherof(c)->nif, c, n, offset);
 }
 
 static long
@@ -692,20 +754,35 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 	long r;
 
 	USED(off);
-	e = &ether[0];
+	e = etherof(c);
 	if((c->qid.type & QTDIR) == 0)
 	switch(NETTYPE(c->qid.path)){
 	case Ndataqid:
-		if(!e->bound)
-			error(Enodev);
 		if(n > Maxframe)
 			error(Etoobig);
+		if(e->transmit != nil){
+			b = allocb(n);
+			memmove(b->wp, buf, n);
+			b->wp += n;
+			qbwrite(e->oq, b);
+			e->transmit(e);
+			return n;
+		}
+		if(e->ctlrno != 0 || !e->bound)
+			error(Enodev);
 		b = allocb(n);
 		memmove(b->wp, buf, n);
 		b->wp += n;
 		qbwrite(e->oq, b);
 		return n;
 	case Nctlqid:
+		/*
+		 * The verbs below are instance 0's: the USB handoff and
+		 * its measurement switches. A driver-backed instance
+		 * gets netif's verbs and then its own.
+		 */
+		if(e->ctlrno != 0)
+			break;
 		/*
 		 * Accepted and ignored, as the Limbo server it replaces
 		 * accepted and ignored it: ethermedium asks every ether
@@ -756,8 +833,11 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		break;
 	}
 	r = netifwrite(&e->nif, c, buf, n);
-	if(r < 0)
+	if(r < 0){
+		if(e->ctl != nil)
+			return e->ctl(e, buf, n);
 		error(Ebadctl);
+	}
 	return r;
 }
 
@@ -767,9 +847,15 @@ etherbwrite(Chan *c, Block *bp, ulong offset)
 	Ether *e;
 	long n;
 
-	e = &ether[0];
+	e = etherof(c);
 	if((c->qid.type & QTDIR) == 0 && NETTYPE(c->qid.path) == Ndataqid){
-		if(!e->bound){
+		if(e->transmit != nil){
+			n = BLEN(bp);
+			qbwrite(e->oq, bp);
+			e->transmit(e);
+			return n;
+		}
+		if(e->ctlrno != 0 || !e->bound){
 			freeb(bp);
 			error(Enodev);
 		}
@@ -788,7 +874,17 @@ etherbwrite(Chan *c, Block *bp, ulong offset)
 static int
 etherwstat(Chan *c, uchar *dp, int n)
 {
-	return netifwstat(&ether[0].nif, c, dp, n);
+	return netifwstat(&etherof(c)->nif, c, dp, n);
+}
+
+static void
+ethershutdown(void)
+{
+	int i;
+
+	for(i = 0; i < Nether; i++)
+		if(ether[i].shutdown != nil)
+			ether[i].shutdown(&ether[i]);
 }
 
 Dev etherdevtab = {
@@ -797,7 +893,7 @@ Dev etherdevtab = {
 
 	etherreset,
 	devinit,
-	devshutdown,
+	ethershutdown,
 	etherattach,
 	etherwalk,
 	etherstat,

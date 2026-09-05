@@ -177,6 +177,7 @@ dis/disk/mkext.dis
 dis/disk/mkfs.dis
 dis/disk/pedit.dis
 dis/disk/prep.dis
+dis/dossrv.dis
 dis/du.dis
 dis/echo.dis
 dis/ed.dis

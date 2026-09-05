@@ -1454,6 +1454,15 @@ check "intr: device interrupt delivered" "a device interrupt reaches the CPU thr
 
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 
+# The radio driver (os/bcm2837/ether4330.c) probes at board init, after
+# sdmmc.c has moved the card off the Arasan. QEMU's raspi3b has no
+# CYW43455 and hangs no SDIO function on the Arasan, so the one outcome
+# it can prove is the absent-radio path: the probe answers CMD5 twice,
+# gets nothing, and says so in one line. That the shell line above was
+# reached at all is the proof the probe did not hang the boot on
+# hardware that never answers -- a bounded wait, exercised.
+check "ether4330: no radio"             "the radio probe reports an absent radio in one line under QEMU, and the boot went on to a shell"
+
 #
 # The shell, driven for real.
 #
@@ -2621,7 +2630,9 @@ FSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /n/dos/HELLO.TXT' \
         'echo first > /n/dos/RW.TXT' \
         'echo second >> /n/dos/RW.TXT' \
-        'cat /n/dos/RW.TXT')"
+        'cat /n/dos/RW.TXT' \
+        'cat '\''#l1/ether1/addr'\''' \
+        'cat '\''#l/ether0/addr'\''')"
 QEMUARGS="$SAVEDARGS"
 FSOUT="$(tr -d '\r' <<<"$FSOUT")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- filesystem ---"; echo "$FSOUT"; }
@@ -2644,6 +2655,27 @@ if grep -q '^first$' <<<"$FSOUT" && grep -q '^second$' <<<"$FSOUT"; then
     pass "a file can be created and then appended to"
 else
     fail "appending to a file on the card did not take"
+fi
+
+# The second Ethernet instance, from the shell. Walking "#l1" attaches
+# ether1, which runs the radio driver's attach in the shell's own
+# process; with no radio present it refuses with the driver's own
+# words, and cat reports them. That the message is "ether4330: no
+# radio" and not "no such device" is the proof devether selected
+# instance 1 and handed the attach to the driver rather than to
+# instance 0. "#l" in the same session still attaches ether0 and reads
+# its addr without that error, so the second instance did not disturb
+# the first -- and every etherusb/ether0 check in the network section
+# above passed unchanged in this same run.
+if grep -q 'ether4330: no radio' <<<"$FSOUT"; then
+    pass "#l1 attaches the radio driver, which refuses cleanly with 'ether4330: no radio' when no radio is present"
+else
+    fail "#l1 did not report the absent radio (no 'ether4330: no radio' from the shell)"
+fi
+if grep -q 'cannot open .#l/ether0/addr' <<<"$FSOUT"; then
+    fail "reading #l/ether0/addr errored: the second instance disturbed ether0"
+else
+    pass "#l/ether0 still attaches and reads in the same session: ether0 is unchanged"
 fi
 
 #
@@ -3136,6 +3168,8 @@ if build_kernel "$BUILD/$PLAT-sdarasan.img" "" "-DSDCARD_ARASAN"; then
     check "sd: MBR ok"              "-DSDCARD_ARASAN: sector 0 reads back with a valid boot signature"
     check "start 2048 sectors 65536" "-DSDCARD_ARASAN: the partition table holds the values the image was built with"
     refute "sd: cannot read"        "-DSDCARD_ARASAN: no read failed"
+    check "ether4330: the Arasan holds the card" \
+                                    "-DSDCARD_ARASAN: the radio is not probed because the card owns the Arasan"
     OUT="$OUT_SAVED"
     if grep -q 'QTREE-SDCARD-BUS: sdhci-bus' <<<"$SDAOUT"; then
         pass "-DSDCARD_ARASAN: QEMU shows the sd-card under sdhci-bus, so the bus check tells the controllers apart"

@@ -412,7 +412,16 @@ mntchan(void)
 static Walkqid*
 mntwalk(Chan *c, Chan *nc, char **name, int nname)
 {
-	int i, alloc;
+	int i;
+	/*
+	 * volatile for the same reason as devwalk's alloc (os/port/dev.c):
+	 * set after waserror(), read in its handler, and clang -O2 folded
+	 * the pre-setlabel 0 into the handler and dropped the cclose. Here
+	 * the miss is an Rerror from the server, so every failed lookup
+	 * under a 9P mount -- memfs on /tmp, dossrv, /mnt/ui -- leaked the
+	 * cloned Chan.
+	 */
+	volatile int alloc;
 	Mnt *m;
 	Mntrpc *r;
 	Walkqid *wq;

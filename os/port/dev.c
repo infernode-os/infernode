@@ -149,7 +149,22 @@ devclone(Chan *c)
 Walkqid*
 devwalk(Chan *c, Chan *nc, char **name, int nname, Dirtab *tab, int ntab, Devgen *gen)
 {
-	int i, j, alloc;
+	int i, j;
+	/*
+	 * volatile is load-bearing. alloc is 0 at waserror() and set to 1
+	 * after it, and the handler reads it to decide whether the clone
+	 * is ours to close. C leaves a non-volatile local modified between
+	 * setjmp and longjmp indeterminate, and clang -O2 takes that
+	 * literally: it folded the 0 into the handler and deleted the
+	 * cclose outright -- the handler compiled to "bl free; b epilogue".
+	 * So every first-element miss in a device directory (the
+	 * error(Enonexist) at Notfound below) leaked one Chan, 384 bytes
+	 * in the main pool, for as long as the desktop's 1 Hz /tool poll
+	 * ran. returns_twice on setlabel does not restore the read; only
+	 * volatile does. emu/port/dev.c has carried this since the 2007
+	 * upstream drop; the kernel copy never got it.
+	 */
+	volatile int alloc;
 	Walkqid *wq;
 	char *n;
 	Dir dir;

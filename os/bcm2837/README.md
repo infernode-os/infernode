@@ -1661,6 +1661,8 @@ compile-checked only.
   probed the leaf tripped over it. A leaf now lists its pin's entries
   as the pin's directory does, and the harness stats
   `/dev/gpio/21/level`.
+  DONE 2026-09-05 on the base (01f7324): `postnote` interrupts the
+  target's sleep, which is the one effect os/ip asks of it.
 
 **DONE 2026-09-05 -- the four non-SMP bullets** (`irqorphan`, the uart
 mutex, the unlocked multi-core writers, the `lock()` bounds and
@@ -1739,6 +1741,18 @@ endpoints; `etherusb.b` has no detach handling although `#u` now
 reports detach; `nif.link` is set to 1 at bind and never updated;
 `lanphy` returns success without link; DHCP has no renewal. A NIC
 unplugged is dead for the boot. Two or three days.
+
+*Mostly DONE 2026-09-05, on `feat/baremetal-pi` itself (01f7324, merged
+here):* `#l` unbinds when a data-path process dies or on an "unbind"
+verb and rebinds; `etherusb` confines its DHCP, ping and time readers
+to their descriptor and kills them when the exchange is over, closes
+the control endpoint when done, and clears a stale interface before
+making a new one; a replugged keyboard keeps its device; `postnote`
+is real, so an interface unbind can wake its readers. The harness
+releases the data path from the console and runs the driver again.
+Mouse unplug and replug verified on the board. Still open: link
+monitoring (`nif.link` is 1 for ever), `lanphy` returning success
+without link, DHCP renewal.
 
 **10. The DWC read path, hardware edition.** No cache *invalidate*
 after DMA completes (`usbdwc.c` cleans before, `memmove`s after) —

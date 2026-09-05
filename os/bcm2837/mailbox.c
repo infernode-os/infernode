@@ -32,8 +32,8 @@
 #define MBOX(r)	(*(volatile u32int*)((uintptr)MBOXREGS + (r)))
 
 /*
- * Shared request buffer.  Single-threaded for now; when there is a
- * scheduler this needs a lock.
+ * Shared request buffer, one for the whole kernel, guarded by mboxmutex
+ * below -- see there for why it is the shape of lock it is.
  *
  * volatile is load-bearing, not decoration.  Until the MMU is up, ARMv8
  * treats all memory as Device-nGnRnE, which forbids unaligned access --
@@ -50,37 +50,86 @@
 static volatile u32int mboxbuf[64] __attribute__((aligned(16)));
 
 /*
- * One buffer, therefore one lock.
+ * One buffer, therefore one lock -- and it is the BUFFER that is
+ * protected, not just the exchange with the firmware.
  *
- * Every caller hands mboxcall the same mboxbuf, so two callers at once
- * interleave their requests into it and both get an answer to a
- * question neither asked. That is not hypothetical: the framebuffer
- * console sets a GPU offset through this on EVERY scroll, from whatever
- * process happened to be printing, so any two processes printing at
- * once already race here -- and it becomes routine the moment more than
- * one core is running.
+ * Every caller fills mboxbuf, posts it, and reads the reply back out of
+ * it. Two callers at once interleave their requests into it and both
+ * get an answer to a question neither asked. That is routine now, not
+ * hypothetical: the framebuffer console moves the scanout window
+ * through here on every scroll, from whatever process is printing on
+ * whatever core, while draw and the pointer run on the others. So the
+ * lock is held from the first word written to the last word read; an
+ * earlier version took it around the post-and-wait alone and left
+ * mboxfballoc reading its tags, and setpower its response word, out of
+ * a buffer the next caller was free to overwrite.
  *
- * A plain Lock, deliberately, not a QLock and not an ilock:
+ * Not lock() and not ilock(), but the bounded _tas mutex fbcons and the
+ * uart use, held with interrupts off. The reasons, in order:
  *
- *   - it is taken before the scheduler exists (board revision and
- *     memory size are read from kmain), which rules out sleeping locks;
- *   - a mailbox call can spin for a long time if the firmware never
- *     answers, and an ilock would hold interrupts off for all of it,
- *     turning a stalled firmware into a dead machine;
- *   - nothing takes it from interrupt context, so there is no handler
- *     to deadlock against. That last point rests on iprint reaching the
- *     screen only when iprintscreenputs is set, and it is not set. If
- *     that ever changes, this becomes an ilock and Mboxspin has to come
- *     down with it.
+ *   - the print path reaches here from INTERRUPT AND PANIC CONTEXT.
+ *     panic() is putstrn(), which is screenputs(), which scrolls the
+ *     console, which is a mailbox call; a trap handler that print()s
+ *     does the same. lock() spinning at splhi on a mutex whose holder
+ *     is the process this very core interrupted can never see it
+ *     released, and ends in lockloop(), which panics, which prints,
+ *     which takes the lock: the message that mattered is lost in the
+ *     recursion. The old comment here rested on iprint never reaching
+ *     the screen, and overlooked that panic does not use iprint.
+ *   - holding it with interrupts OFF is what rules the same-core case
+ *     out: a holder cannot be interrupted, so no interrupt-time print
+ *     on its core can arrive while it holds. What remains is another
+ *     core, which releases within one call's time, or a holder that
+ *     took an exception inside the call -- and that is the panic path.
+ *   - so the wait is bounded, and a waiter that times out proceeds
+ *     anyway, unlocked, and says so on the uart. The only way to reach
+ *     that is a holder that will never release (a dead core, an
+ *     exception mid-call, a firmware that stopped answering), and for a
+ *     panic message garbled beats silent. A waiter that arrives with
+ *     interrupts on spins with them on, so waiting costs nothing but
+ *     this core's time.
+ *
+ * Interrupts off while HELD means a call the firmware never answers
+ * keeps them off for the Mboxspin bound, on one core, once. The
+ * previous version avoided that in exchange for the recursion above;
+ * the trade is deliberate. A stalled mailbox is the display, the USB
+ * power domain and the memory map, and everything else happening on
+ * the machine then is the failure being reported.
+ *
+ * A per-caller buffer was the other way out and was rejected: the
+ * mailbox FIFO matches replies to channels, not to buffers, so two
+ * requests in flight on the property channel hand each other their
+ * answers whatever memory they came from. Separate buffers would move
+ * the corruption from the message to the reply, not remove it.
  */
-static Lock mboxlock;
+static ulong mboxmutex;
 static int mboxlockable;
+
+typedef struct Mboxhold Mboxhold;
+struct Mboxhold
+{
+	int	spl;		/* interrupt state to put back */
+	int	held;		/* the mutex is ours to release */
+};
+
+enum
+{
+	/*
+	 * In 10us steps: two seconds. An answered mailbox call takes
+	 * microseconds to tens of milliseconds, so a holder still there
+	 * after this is not coming back, and the waiter is better off
+	 * corrupting one exchange than waiting for ever with interrupts
+	 * off. Sized against the fbcons scroll-fold, the longest legitimate
+	 * hold on the console path, with a wide margin.
+	 */
+	Mboxlockwait = 200*1000,
+};
 
 /*
  * Start locking. Called once the MMU is on.
  *
  * NOT an optimisation -- taking the lock before this point FAULTS. A
- * Lock is acquired with load-exclusive/store-exclusive, and exclusive
+ * mutex is acquired with load-exclusive/store-exclusive, and exclusive
  * accesses are only architecturally supported on Normal memory with the
  * MMU enabled; with it off the core takes a data abort (ESR ...0x35,
  * the unsupported-exclusive fault) on the first one. The very first
@@ -98,6 +147,46 @@ void
 mboxlockon(void)
 {
 	mboxlockable = 1;
+}
+
+static void
+mboxacquire(Mboxhold *h)
+{
+	int i;
+
+	h->held = 0;
+	h->spl = 0;
+	if(!mboxlockable)
+		return;
+	for(i = 0; i < Mboxlockwait; i++){
+		h->spl = splhi();
+		if(_tas(&mboxmutex) == 0){
+			h->held = 1;
+			return;
+		}
+		splx(h->spl);
+		microdelay(10);
+	}
+	/*
+	 * The holder is not coming back. Go in anyway, with interrupts
+	 * off like a holder would have them, and leave the mutex to whoever
+	 * does own it: clearing it here would let a THIRD caller in on top
+	 * of both of us.
+	 */
+	uartputstr("mbox: lock held too long; proceeding unlocked\n");
+	h->spl = splhi();
+}
+
+static void
+mboxrelease(Mboxhold *h)
+{
+	if(!mboxlockable)
+		return;
+	if(h->held){
+		coherence();
+		mboxmutex = 0;
+	}
+	splx(h->spl);
 }
 
 static void
@@ -124,9 +213,10 @@ enum
 /*
  * Post the buffer to a channel and wait for the reply.  Returns 0 on
  * success, -1 if the firmware rejected the request.
+ *
+ * The caller holds the mutex (mboxacquire) for the whole of fill, post
+ * and copy-out; this does the middle third.
  */
-static int mboxcall1(u32int, volatile u32int*, int);
-
 /*
  * size is the buffer's length in bytes: the cache maintenance below
  * has to cover the whole of what the firmware will read and write, and
@@ -134,20 +224,6 @@ static int mboxcall1(u32int, volatile u32int*, int);
  */
 static int
 mboxcall(u32int chan, volatile u32int *buf, int size)
-{
-	int r;
-
-	if(!mboxlockable)
-		return mboxcall1(chan, buf, size);
-
-	lock(&mboxlock);
-	r = mboxcall1(chan, buf, size);
-	unlock(&mboxlock);
-	return r;
-}
-
-static int
-mboxcall1(u32int chan, volatile u32int *buf, int size)
 {
 	u32int v, want;
 	long i;
@@ -237,20 +313,6 @@ mboxcall1(u32int chan, volatile u32int *buf, int size)
 }
 
 /* the buffer lock, for a caller that fills and reads mboxbuf itself */
-static void
-mboxlockbuf(void)
-{
-	if(mboxlockable)
-		lock(&mboxlock);
-}
-
-static void
-mboxunlockbuf(void)
-{
-	if(mboxlockable)
-		unlock(&mboxlock);
-}
-
 /*
  * Issue a single-tag property request.
  *
@@ -261,20 +323,20 @@ mboxunlockbuf(void)
  * the firmware wrote, with Propok set if it understood the tag -- into
  * *tagresp if that is not nil.
  *
- * The lock is held from the first word written to the last word read,
- * NOT only around the mailbox exchange. mboxcall's lock covers the
- * exchange; but mboxbuf is one buffer, and a caller that reads the
- * reply out of it after mboxcall has returned reads whatever the next
- * caller has by then written there. That next caller is routine: the
- * framebuffer console makes a mailbox call on every scroll, from
- * whichever process is printing, so a reply read after the unlock
- * could be a scroll offset's. The first reader of the tag response
- * word (mboxreboot) did exactly that, and the line it prints is the
- * board evidence the README asks for, so it had to be made true.
+ * The mutex is held from the first word written to the last word read,
+ * NOT only around the mailbox exchange. mboxbuf is one buffer, and a
+ * caller that reads the reply out of it after the exchange has been
+ * released reads whatever the next caller has by then written there.
+ * That next caller is routine: the framebuffer console makes a mailbox
+ * call on every scroll, from whichever process is printing, so a reply
+ * read late could be a scroll offset's. The first reader of the tag
+ * response word (mboxreboot) did exactly that, and the line it prints
+ * is the board evidence the README asks for, so it had to be made true.
  */
 int
 mboxprop1(u32int tag, u32int *data, int nreq, int nresp, u32int *tagresp)
 {
+	Mboxhold h;
 	int i, nval, r;
 
 	nval = nreq > nresp ? nreq : nresp;
@@ -287,7 +349,7 @@ mboxprop1(u32int tag, u32int *data, int nreq, int nresp, u32int *tagresp)
 	if(nval > Maxvalwords)
 		return -1;
 
-	mboxlockbuf();
+	mboxacquire(&h);
 
 	mboxbuf[0] = (nval + 6) * 4;	/* total size in bytes */
 	mboxbuf[1] = Propreq;
@@ -302,7 +364,7 @@ mboxprop1(u32int tag, u32int *data, int nreq, int nresp, u32int *tagresp)
 
 	mboxbuf[5 + nval] = Tagend;
 
-	r = mboxcall1(Mboxchanprop, mboxbuf, Mboxbufsize);
+	r = mboxcall(Mboxchanprop, mboxbuf, Mboxbufsize);
 	if(r == 0){
 		for(i = 0; i < nresp; i++)
 			data[i] = mboxbuf[5 + i];
@@ -310,7 +372,7 @@ mboxprop1(u32int tag, u32int *data, int nreq, int nresp, u32int *tagresp)
 			*tagresp = mboxbuf[4];
 	}
 
-	mboxunlockbuf();
+	mboxrelease(&h);
 	return r;
 }
 
@@ -349,6 +411,7 @@ static volatile u32int cmdlinebuf[8 + Cmdlinewords] __attribute__((aligned(16)))
 int
 mboxcmdline(char *buf, int n)
 {
+	Mboxhold h;
 	int i, len;
 	volatile uchar *p;
 
@@ -362,18 +425,30 @@ mboxcmdline(char *buf, int n)
 	cmdlinebuf[5 + Cmdlinewords] = Tagend;
 
 	buf[0] = 0;
-	if(mboxcall(Mboxchanprop, cmdlinebuf, sizeof cmdlinebuf) < 0)
+	/*
+	 * A private buffer, but the mailbox is one channel: the exchange
+	 * itself is serialised by the same mutex as everyone else's.
+	 */
+	mboxacquire(&h);
+	if(mboxcall(Mboxchanprop, cmdlinebuf, sizeof cmdlinebuf) < 0){
+		mboxrelease(&h);
 		return -1;
-	if((cmdlinebuf[4] & Propok) == 0)
+	}
+	if((cmdlinebuf[4] & Propok) == 0){
+		mboxrelease(&h);
 		return -1;			/* the tag was not answered */
+	}
 
 	len = cmdlinebuf[4] & ~Propok;	/* the firmware's own length */
-	if(len > Mboxcmdlinemax)
+	if(len > Mboxcmdlinemax){
+		mboxrelease(&h);
 		return len;		/* it copied nothing; buf stays empty */
+	}
 	p = (volatile uchar*)&cmdlinebuf[5];
 	for(i = 0; i < len && i < n - 1 && p[i] != 0; i++)
 		buf[i] = p[i];
 	buf[i] = 0;
+	mboxrelease(&h);
 	return len;
 }
 
@@ -408,7 +483,7 @@ mboxreboot(int tryboot)
 		v[0] = Rebootflagtryboot;
 		/*
 		 * mboxprop1, for the tag response word: read under the
-		 * buffer lock, so it is this tag's answer and not the
+		 * mailbox mutex, so it is this tag's answer and not the
 		 * next framebuffer scroll's.
 		 */
 		if(mboxprop1(Tagsetrebootflags, v, 1, 1, &resp) < 0 || (resp & Propok) == 0)
@@ -429,7 +504,14 @@ int
 mboxfballoc(u32int disp, u32int w, u32int h, u32int depth, Fbinfo *fb)
 {
 	volatile u32int *p, *tagalloc, *tagpitch, *tagdisp;
+	Mboxhold hold;
 
+	/*
+	 * Held until the tags have been read back: they are read out of
+	 * the shared buffer, and a console scroll on another core between
+	 * the call returning and the reads would replace them.
+	 */
+	mboxacquire(&hold);
 	p = mboxbuf;
 	*p++ = 0;			/* size, patched below */
 	*p++ = Propreq;
@@ -491,13 +573,16 @@ mboxfballoc(u32int disp, u32int w, u32int h, u32int depth, Fbinfo *fb)
 
 	mboxbuf[0] = (u32int)((p - mboxbuf) * 4);
 
-	if(mboxcall(Mboxchanprop, mboxbuf, Mboxbufsize) < 0)
+	if(mboxcall(Mboxchanprop, mboxbuf, Mboxbufsize) < 0){
+		mboxrelease(&hold);
 		return -1;
+	}
 
 	fb->disp = tagdisp[3];
 	fb->base = tagalloc[3] & 0x3FFFFFFF;	/* bus -> ARM physical */
 	fb->size = tagalloc[4];
 	fb->pitch = tagpitch[3];
+	mboxrelease(&hold);
 	fb->width = w;
 	fb->height = h;
 	fb->depth = depth;
@@ -529,7 +614,7 @@ enum
 int
 setpower(int dev, int on)
 {
-	u32int buf[2];
+	u32int buf[2], resp;
 
 	buf[0] = dev;
 	buf[1] = Powerwait | (on ? 1 : 0);
@@ -554,7 +639,8 @@ setpower(int dev, int on)
 	 *
 	 * The result was also discarded, so none of this was visible.
 	 */
-	if(mboxprop(TagSetpower, buf, 2, 2) < 0){
+	resp = 0;
+	if(mboxprop1(TagSetpower, buf, 2, 2, &resp) < 0){
 		print("setpower: dev %d: property call failed\n", dev);
 		return -1;
 	}
@@ -565,12 +651,12 @@ setpower(int dev, int on)
 	 * Bit 1 is Powerwait on the way in and "device does not exist" on
 	 * the way back -- the same bit meaning two different things -- so
 	 * a verdict derived from it is worth exactly as much as the
-	 * assumption behind it. mboxbuf[4] carries the firmware's
-	 * per-tag response word, which says whether the tag was
-	 * processed at all.
+	 * assumption behind it. resp is the firmware's per-tag response
+	 * word, which says whether the tag was processed at all -- taken
+	 * from the shared buffer while it was still ours, not after.
 	 */
 	print("setpower: dev %d -> resp %8.8ux, dev %ud, state %8.8ux%s%s\n",
-		dev, mboxbuf[4], buf[0], buf[1],
+		dev, resp, buf[0], buf[1],
 		buf[1] & 1 ? " ON" : " OFF",
 		buf[1] & Powernodevice ? " NODEVICE" : "");
 

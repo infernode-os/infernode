@@ -1570,6 +1570,47 @@ logged-in / skipped / failed, and the script honours them. Hours.
   kicked; the comment there already says it is "wrong to leave
   permanently".
 
+**DONE 2026-09-05 -- the four non-SMP bullets** (`irqorphan`, the uart
+mutex, the unlocked multi-core writers, the `lock()` bounds and
+`postnote` are not covered by this note). `devusb.c` `CMdetach` makes
+the Ddetach transition under `epslck`, so of two writers arriving
+together exactly one runs the release loop -- the serial second write
+was already refused by `ctlwrite`, which the review missed; the harness
+now detaches the keyboard twice down one shell fd and requires the
+driver to exit once and the shell to still answer. `etherusb.b`'s three
+readers hand their pid to the spawner, which kills them through `/prog`
+when the exchange is over (`killprog` finds them in Prelease and
+`swiproc` wakes the read with "interrupted"); the boot log says `dhcp
+reader N exited` and the harness checks for it. `dossrv.b` decides
+"damaged" from the on-disk name (`rawstat`, `badname`) rather than from
+the alias it hands out; the FAT32 fixture creates and removes a healthy
+`badent-1` and a host-side walk of the image asserts no lost clusters.
+`mailbox.c`'s "single-threaded" comment was stale -- a `lock()` had
+been added -- but `panic()` reaches the mailbox through `screenputs`
+with the interrupted holder on the same core, and `mboxfballoc` and
+`setpower` read the shared buffer after unlocking; the mutex is now a
+bounded `_tas` held with interrupts off across fill, post and copy-out,
+with a two-second wait that proceeds unlocked for a holder that cannot
+return. Verified by the harness under QEMU: 158 checks pass, 152
+before, six added for these (two for the DHCP reader, two for the
+double detach, two for `badent-1`).
+
+*What that verification does and does not show, 2026-09-05.* The
+`dossrv` fix is the one check that discriminates: the old code leaves
+one lost cluster, the new none, and the same fixture now runs hosted as
+`tests/host/dossrv_badent_test.sh` (also asserting that a genuinely
+damaged entry is still zapped with its cluster deliberately left),
+which CI runs. The DHCP-reader check is behavioural: the "exited" line
+is printed only after `/prog/N` has gone. The double-detach check does
+NOT reach the `epslck` compare-and-set -- two writes typed in sequence
+are serial, and the second was already refused by `ctlwrite`, so that
+check passes on the unfixed kernel; it pins the refusal and the
+driver-exits-once contract, and the race fix is correct by inspection
+only (one assignment of Ddetach in the tree, `epslck` taken in process
+context with nothing else held). The `mailbox.c` rewrite is likewise
+inspection-only; the harness shows the mailbox still works, not that
+the lock is right.
+
 ### Tier 2 — make what exists trustworthy
 
 **7. Test what the board relies on.** The harness (`baremetal_test.sh`)
@@ -1615,6 +1656,16 @@ now" in `mmu.c`, and JIT text is RWX); secondary scheduler stacks are
 have answered; `up->inpreempt`-style invariants have no SMP
 counterparts. Also `lastdev` in `osinit.b` is one global shared by
 every hub watcher, so two hubs enumerating at once can cross names.
+*`lastdev` DONE 2026-09-05:* `enumerate` returns `(status, name)`, the
+name flows back through `portsetup`, and a device that failed to come
+up is detached on the spot by `portsetup` and `usbwalk` instead of
+holding its ep0 until unplugged -- or for ever, on the boot walk. The
+hotplug and keyboard harness checks pass unchanged, which shows the
+success path was not broken; the new detach-on-failure path is
+exercised by nothing -- no QEMU session makes enumeration fail (no
+descriptor timeout, no failed configure, no mid-walk unplug) -- and a
+device that never answered `newdev` returns no name, so there is
+nothing to detach and nothing is.
 
 ### Tier 3 — the machine as a product
 

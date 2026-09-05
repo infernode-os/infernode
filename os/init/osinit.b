@@ -554,7 +554,6 @@ Fportreset:	con 4;
 #
 Resetrecovery:	con 50;
 Watchival:	con 1000;	# how often a hub's ports are re-read, ms
-lastdev := "";		# the device enumerate() last created, for the port that owns it
 Enumattempts:	con 3;
 Fportpower:	con 8;
 
@@ -734,7 +733,14 @@ usbwalk()
 	}
 
 	walking = 1;
-	enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
+	(ok, dev) := enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
+	#
+	# The root port has no watcher to clean up after it: a device that
+	# failed to come up here would otherwise hold its ep0 for the life
+	# of the machine.
+	#
+	if(ok < 0 && dev != "")
+		detachdev(dev);
 	startpending();
 }
 
@@ -778,12 +784,20 @@ reresetport(d: ref Sys->FD, port: int, indent: string): int
 	return 0;
 }
 
-enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): int
+#
+# Returns (status, device): status is 0 if the device came up, and
+# device is the devusb name newdev gave it -- "" if it never got one,
+# and otherwise the name WHETHER OR NOT it came up, because a device
+# that failed half way through still exists in devusb and the caller
+# has to be able to detach it. Nothing about the device is kept in a
+# global: this runs concurrently, once per hub watcher.
+#
+enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): (int, string)
 {
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: cannot open %s: %r\n", hubctl);
-		return -1;
+		return (-1, "");
 	}
 
 	#
@@ -794,7 +808,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	if(sys->fprint(c, "newdev %s %d", speed, port) < 0){
 		sys->print("init: usb newdev failed: %r\n");
-		return -1;
+		return (-1, "");
 	}
 
 	#
@@ -809,15 +823,14 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	n := sys->pread(c, nbuf, len nbuf, big 0);
 	if(n <= 0){
 		sys->print("init: usb newdev gave no name (%d)\n", n);
-		return -1;
+		return (-1, "");
 	}
 	name := string nbuf[0:n];
-	lastdev = name;
 
 	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
 	if(d == nil){
 		sys->print("init: cannot open %s: %r\n", name);
-		return -1;
+		return (-1, name);
 	}
 
 	#
@@ -883,7 +896,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 	if(!ok){
 		sys->print("init: %s%s never answered after reset\n", indent, name);
-		return -1;
+		return (-1, name);
 	}
 	if(try > 0)
 		sys->print("init: %sdescriptor read succeeded on attempt %d\n",
@@ -916,7 +929,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	dctl := sys->open("/usb/usb/" + name + "/ctl", Sys->ORDWR);
 	if(dctl == nil){
 		sys->print("init: cannot open %s ctl: %r\n", name);
-		return -1;
+		return (-1, name);
 	}
 	sys->fprint(dctl, "maxpkt %d", maxpkt);
 
@@ -924,7 +937,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	rep := array[4] of byte;
 	if(ctlreq(d, Rh2d, Rsetaddress, nb, 0, 0, rep) < 0){
 		sys->print("init: %s set address %d failed: %r\n", name, nb);
-		return -1;
+		return (-1, name);
 	}
 	sys->fprint(dctl, "address");
 
@@ -945,11 +958,11 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# entitled to ignore it in that state.
 	#
 	if(configure(name, d, indent) < 0)
-		return -1;
+		return (-1, name);
 
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
-		return -1;
+		return (0, name);
 	}
 
 	hidproto = 0;
@@ -993,7 +1006,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
-	return 0;
+	return (0, name);
 }
 
 
@@ -1789,9 +1802,27 @@ portsetup(d: ref Sys->FD, name: string, port: int, indent: string): string
 	#
 	sys->sleep(Resetrecovery);
 
-	lastdev = "";
-	enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
-	return lastdev;
+	#
+	# The device's name comes back from enumerate rather than through
+	# a global: this runs in every hub's watcher at once, and two hubs
+	# enumerating together through one shared variable handed each
+	# other's device names to the wrong port -- so an unplug on one
+	# hub could detach a device on the other.
+	#
+	# A device that did not make it through enumeration is detached
+	# HERE, on the spot. It exists in devusb from the moment newdev
+	# answered, and until now nothing released it: the boot walk has
+	# no watcher yet, so a device pulled out mid-enumerate at boot left
+	# its ep0 allocated for good, and even under the watcher a dead
+	# device sat on the port until it was unplugged. What is returned
+	# is only ever a device that is alive and owned by this port.
+	#
+	(ok, dev) := enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
+	if(ok < 0 && dev != ""){
+		detachdev(dev);
+		return "";
+	}
+	return dev;
 }
 
 

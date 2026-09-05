@@ -1344,7 +1344,29 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 			error("can't detach a root hub");
 		deprint("usb epctl %s ep%d.%d\n",
 			cb->f[0], ep->dev->nb, ep->nb);
+		/*
+		 * Once, and only once. Each putep below drops the file
+		 * system's ONE reference to an endpoint; a second pass
+		 * drops references that belong to the open channels, and
+		 * the endpoints are freed under whoever still holds them.
+		 * ctlwrite turns away every write to a device already in
+		 * Ddetach, so a second "detach" typed at the ctl file never
+		 * gets here -- but two writers arriving together both pass
+		 * that check, and both ran this loop. The transition is made
+		 * under epslck so exactly one of them proceeds; the other
+		 * finds the device detached, which is what it asked for, and
+		 * succeeds quietly. epslck rather than the device's ep0 lock
+		 * because ep->ql is held across a whole control transfer,
+		 * and a transfer to a device that has just been unplugged is
+		 * exactly what is stalling when detach is written.
+		 */
+		qlock(&epslck);
+		if(ep->dev->state == Ddetach){
+			qunlock(&epslck);
+			break;
+		}
 		ep->dev->state = Ddetach;
+		qunlock(&epslck);
 		/* Release file system ref. for its endpoints */
 		for(i = 0; i < nelem(ep->dev->eps); i++)
 			putep(ep->dev->eps[i]);

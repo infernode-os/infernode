@@ -415,6 +415,9 @@ build_kernel() {
             # needs.
             "/dis/echo.dis=$ROOT/dis/echo.dis"
             "/dis/cat.dis=$ROOT/dis/cat.dis"
+            # rm, for removing a file through dossrv and looking at
+            # what it left on the card afterwards.
+            "/dis/rm.dis=$ROOT/dis/rm.dis"
             "/dis/pwd.dis=$ROOT/dis/pwd.dis"
             "/dis/ls.dis=$ROOT/dis/ls.dis"
             "/dis/lib/readdir.dis=$ROOT/dis/lib/readdir.dis"
@@ -1392,6 +1395,16 @@ check "etherusb: serving /net/ether0"          "the driver publishes a netif fil
 check "10.0.2.15 mask 255.255.255.0 on ipifc"       "os/ip binds an interface to a driver outside the kernel"
 check "default route via 10.0.2.2"             "a default route is installed"
 
+# The DHCP client's reader lives exactly as long as the exchange. It is
+# parked in a read the kernel returns from only when a datagram arrives,
+# so it used to outlive its caller for the life of the machine, holding
+# port 68's conversation open. The client now kills it and says whether
+# it went. Under QEMU the exchange ends in the fallback, which is the
+# path that matters: a client that gets no answer is the one that used
+# to leave its reader behind.
+check "etherusb: dhcp reader [0-9]* exited"    "the DHCP reader is reaped when the exchange is over"
+refute "dhcp reader [0-9]* still running"      "no DHCP reader outlives its exchange"
+
 # Interrupts, asserted rather than assumed.
 #
 # The clock probe elsewhere tests the generic timer, which is PER-CORE
@@ -2032,6 +2045,70 @@ refute "configuration unreadable"   "every device configuration was readable"
 OUT="$OUT_SAVED"
 
 #
+#     Detaching a device twice.
+#
+#     osinit writes "detach" once when a hub port empties. devusb's
+#     CMdetach runs a release loop that drops the file system's one
+#     reference to each endpoint, and a second pass through it drops
+#     references the open files hold, freeing endpoints under their
+#     owners. Two writers that arrive TOGETHER both used to run it; the
+#     transition to Ddetach is now made under epslck so only one does.
+#
+#     This check does not reach that race, and is not claimed to: two
+#     writes typed one after the other are serial, and the second is
+#     turned away by ctlwrite's pre-existing Ddetach check before epctl
+#     is called -- so this passes on the unfixed kernel too. What it
+#     pins is the contract the fix depends on, which nothing else
+#     asserted: a detach written at the shell reaches the driver, which
+#     exits once; a second write down the SAME open fd (typed as one
+#     block, so it reaches the device rather than a path that has gone)
+#     is refused with the device's own error and not "i/o error"; and
+#     the shell still answers. The compare-and-set itself is verified
+#     by inspection only -- there is one assignment of Ddetach in the
+#     tree, and epslck is taken in process context with no other lock
+#     held. The keyboard is the victim because it is the device the
+#     machine can spare.
+#
+#     The sleep first is not padding. The prompt appears while the hub
+#     walk is still powering ports, and a detach typed then reaches a
+#     device the driver has not yet opened: the endpoint is freed under
+#     kbdusb's own open, which is a different failure from the one this
+#     is written to catch. Fifteen seconds is what the keyboard boot
+#     check above allows the driver, with margin.
+#
+KBDEP="$(grep -oE 'kbdusb: ep[0-9]+\.0 ready' <<<"$KBDOUT" | head -1 | sed 's/kbdusb: //;s/ ready//')"
+if [[ -n "$KBDEP" ]]; then
+    SAVEDARGS="$QEMUARGS"
+    QEMUARGS="$QEMUARGS -device usb-kbd"
+    DETOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+            'path=(/dis .)' \
+            'sleep 15' \
+            "{echo detach; echo detach} > /usb/usb/$KBDEP/ctl" \
+            'echo detach-twice-survived' \
+            "cat /usb/usb/$KBDEP/ctl")"
+    QEMUARGS="$SAVEDARGS"
+    DETOUT="$(tr -d '\r' <<<"$DETOUT")"
+    [[ "$VERBOSE" -eq 1 ]] && { echo "  --- double detach ---"; echo "$DETOUT"; }
+    if grep -q "kbdusb: $KBDEP detached" <<<"$DETOUT"; then
+        pass "detach written at the shell detaches the keyboard and its driver exits"
+    else
+        fail "the first detach of $KBDEP did not reach the driver"
+    fi
+    # Refused with the device's own error, not "i/o error": that would
+    # mean the endpoint had been freed between the two writes, i.e.
+    # nobody -- not even the driver -- still held it.
+    if grep -q 'echo: write error: device is detached' <<<"$DETOUT" \
+       && grep -v 'echo ' <<<"$DETOUT" | grep -q 'detach-twice-survived' \
+       && ! grep -qi 'panic' <<<"$DETOUT"; then
+        pass "a second detach of the same device is refused and the machine carries on"
+    else
+        fail "the second detach of $KBDEP was not refused cleanly"
+    fi
+else
+    skip "double detach (no keyboard endpoint name in the keyboard boot)"
+fi
+
+#
 # 3d. A keystroke, from the HID device to the shell.
 #
 #     3c proves the keyboard is found and claimed. It does NOT prove a
@@ -2499,7 +2576,11 @@ QEMUARGS="$SAVEDARGS -drive file=$SD32,if=sd,format=raw"
 FS32="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'ls /n/dos' \
-        'cat /n/dos/HELLO32.TXT')"
+        'cat /n/dos/HELLO32.TXT' \
+        'echo cluster-owner > /n/dos/badent-1' \
+        'ls -l /n/dos' \
+        'rm /n/dos/badent-1' \
+        'ls /n/dos')"
 QEMUARGS="$SAVEDARGS"
 FS32="$(tr -d '\r' <<<"$FS32")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- fat32 ---"; echo "$FS32"; }
@@ -2508,6 +2589,100 @@ if grep -q 'fat32 works on bare metal' <<<"$FS32"; then
     pass "a FAT32 filesystem is mounted and read (the Pi boot partition's format)"
 else
     fail "FAT32 could not be read"
+fi
+
+#
+#     A healthy file that merely LOOKS like a damage alias.
+#
+#     dossrv names an entry it cannot present -- control characters, a
+#     slash, an empty name -- badent-<location>, and rm on that alias
+#     zaps the directory entry alone, deliberately leaving the clusters
+#     (the start-cluster word of a damaged entry is not to be trusted).
+#     The test for "is this the damaged case" used to be a prefix match
+#     on the name handed OUT, so a healthy file someone had called
+#     badent-1 took the same path: gone from the directory, its cluster
+#     chain still allocated and reachable from nowhere.
+#
+#     The check is made from outside, on the image the guest wrote,
+#     the way fsck would: every allocated cluster must be reachable
+#     from the root directory. The deleted entry has to be there too,
+#     or a session that never created the file passes for free.
+#
+python3 - "$SD32" <<'PYEOF' > "$BUILD/$PLAT-badent.txt" 2>&1
+import struct, sys
+img = open(sys.argv[1], "rb").read()
+SEC = 512
+pstart = struct.unpack_from("<I", img, 446 + 8)[0]
+bs = img[pstart*SEC : pstart*SEC + SEC]
+spc = bs[13]
+resv = struct.unpack_from("<H", bs, 14)[0]
+nfat = bs[16]
+fatsz = struct.unpack_from("<I", bs, 36)[0]
+rootclus = struct.unpack_from("<I", bs, 44)[0]
+fatoff = (pstart + resv) * SEC
+data = (pstart + resv + nfat*fatsz) * SEC
+nclus = fatsz * SEC // 4
+
+def fat(n):
+    return struct.unpack_from("<I", img, fatoff + 4*n)[0] & 0x0FFFFFFF
+
+def chain(n):
+    out = []
+    while 2 <= n < 0x0FFFFFF8 and n not in out and len(out) < nclus:
+        out.append(n)
+        n = fat(n)
+    return out
+
+def cluster(n):
+    off = data + (n-2)*spc*SEC
+    return img[off : off + spc*SEC]
+
+reachable = set()
+deleted = 0
+def walk(start, depth):
+    global deleted
+    ch = chain(start)
+    reachable.update(ch)
+    for c in ch:
+        b = cluster(c)
+        for o in range(0, len(b), 32):
+            e = b[o:o+32]
+            if e[0] == 0:
+                return
+            if e[0] == 0xE5:
+                if e[1:6] == b"ADENT":
+                    deleted += 1
+                continue
+            if e[11] & 0x08:                 # long-name piece or volume label
+                continue
+            if e[0:1] == b".":
+                continue
+            if e[0:6] == b"BADENT":
+                print("LIVE-BADENT")
+            st = (struct.unpack_from("<H", e, 20)[0] << 16) | struct.unpack_from("<H", e, 26)[0]
+            if st >= 2:
+                if e[11] & 0x10 and depth < 8:
+                    walk(st, depth + 1)
+                else:
+                    reachable.update(chain(st))
+
+walk(rootclus, 0)
+allocated = {n for n in range(2, nclus) if fat(n) != 0}
+lost = sorted(allocated - reachable)
+print("DELETED-BADENT" if deleted else "NO-DELETED-BADENT")
+print("LOST %d %s" % (len(lost), lost[:8]))
+PYEOF
+BADOUT="$(cat "$BUILD/$PLAT-badent.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- badent ---"; echo "$BADOUT"; }
+if grep -q 'DELETED-BADENT' <<<"$BADOUT" && ! grep -q 'LIVE-BADENT' <<<"$BADOUT"; then
+    pass "a file named badent-1 is created and removed through dossrv"
+else
+    fail "the badent-1 fixture was not created and removed ($(tr '\n' ' ' <<<"$BADOUT"))"
+fi
+if grep -q '^LOST 0 ' <<<"$BADOUT"; then
+    pass "removing a healthy file that is merely named badent-* frees its clusters"
+else
+    fail "clusters left allocated and unreachable after rm ($(grep '^LOST' <<<"$BADOUT"))"
 fi
 
 #

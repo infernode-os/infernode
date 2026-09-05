@@ -46,8 +46,6 @@ a Tk form; `luciuisrv` and `lucifer`.
 Not done, in one line each; the detail and the order are in "Next" at
 the end of this file:
 
-- a confirmed JIT bug means compiled code never runs a reference's
-  destructor, so dropped fds and heap cells wait for the collector
 - cores 1–3 have no clock tick, so nothing preempts on them
 - every process is the host owner, and the desktop namespace holds the
   raw card, the pins and `/dev/sysctl`
@@ -1301,7 +1299,11 @@ AArch64 the fixed macro is exercised by osinit's `init: fd:` self-checks
 asserts with the JIT on, and by the `#l` handoff in `etherusb.b`, which
 is now a plain `fd = nil` -- the `#c/null` dup is gone and the harness
 asserts the "(kernel data path)" line. The macOS `-c1` CI run is still
-to do.
+to do. Follow-up 2026-09-05: `dis/tests/fdclose_test.dis` added to
+`tools/dis-manifest.txt`, the stale "not done" bullet at the top of this
+file removed, and the hosted amd64 `-c1` `altrdy` SEGV that the first
+draft of the test hit (unreproduced since) is recorded under "Open
+faults" in `docs/JIT.md` so it gets its own ticket.
 
 **2. Cores 1–3 have no clock tick.** `timersinit()`
 (`os/port/portclock.c`) creates the one periodic Timer whose purpose is

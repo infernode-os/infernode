@@ -126,6 +126,28 @@ These are the values the [Lucia launch scripts](LUCIA.md#launching) use. Lower v
 
 For deep debug stories — what worked, what didn't, every blind alley — the [arm64-jit/](arm64-jit/) directory has 27 session logs.
 
+### Open faults
+
+Known, unreproduced, and not yet ticketed — recorded here so they are
+not lost. Anyone who hits one should attach the module and the exact
+command line to a ticket and remove the entry.
+
+- **amd64 `-c1`: SEGV in `altrdy()` (`libinterp/alt.c`) on an `alt`
+  over two unbuffered channels inside a helper function.** Seen
+  2026-09-05 while writing `tests/fdclose_test.b`: the first draft had a
+  helper that spawned a reader and a timer, each with its own unbuffered
+  `chan of int`, and `alt`ed on both; it faulted in `altrdy` under
+  `-c1` in every test case, and passed under `-c0`. The `Testing` module
+  was loaded and a `ref T` was live in the caller's frame at the time.
+  Five later probes with the same channel shape, and eight runs of a
+  bare module with the identical helper and no `Testing`, did not
+  reproduce it, so the `alt` alone is not the trigger; something in the
+  surrounding frame is, and it has not been isolated. The draft that
+  faulted was not kept. The shipped test avoids `alt` entirely
+  (one buffered channel; comment in the test explains). Nothing on the
+  AArch64 side was affected: `comp-arm64.c`'s `macfrp` fix was proven
+  under QEMU by the bare-metal harness, not by this test.
+
 ## When to leave JIT off
 
 - **Tiny scripts / shell pipelines.** JIT compilation has a one-time per-module cost; a script that runs for 2 ms gains nothing and pays the compile.

@@ -113,6 +113,7 @@ init()
 	sys->print("bench: %d iterations in %d ms (acc=%d)\n", 2000000, t1-t0, acc);
 
 	jitstress();
+	fdcheck();
 
 	#
 	# Put the IP stack where Inferno expects it.
@@ -2053,6 +2054,103 @@ jitfold(h, v: int): int
 Nrep:	con 5;		# samples per workload
 
 bench: Bench;
+
+#
+# Does dropping an fd close it NOW, in compiled code?
+#
+# Limbo has no close(): "fd = nil" closes the file by running the FD's
+# destructor when the last reference goes. Under the JIT that drop is
+# the MacFRP macro in comp-arm64.c, and until it was fixed the macro
+# branched on stale flags and never reached rdestroy -- no compiled
+# code ever ran a destructor, every dropped fd stayed open until the
+# collector swept it, and etherusb had to dup #c/null over its
+# endpoints to hand them to #l. This is the check that would have
+# caught it, and the harness asserts on both lines with the JIT on.
+#
+# The observable is a pipe: hold the read end, drop the write end,
+# read. EOF within Fdms means the destructor ran at the drop. Two
+# drops, because they are two code paths in the compiler: assignment
+# (movp) and a local going out of scope with its frame (macret and
+# the frame's own destructor).
+#
+# Reader and timer are processes that both send into one buffered
+# channel, and this receives whichever comes first. No alt, so that
+# the check exercises as little of the VM as possible beyond the
+# thing under test.
+#
+Fdms: con 2000;
+Fdtimedout: con -2;
+
+fdreader(fd: ref Sys->FD, c: chan of int)
+{
+	buf := array[16] of byte;
+	c <-= sys->read(fd, buf, len buf);
+}
+
+fdtimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= Fdtimedout;
+}
+
+# A pipe whose write end has gone with this frame: only the read end
+# comes back, and the FD holding the other end is dropped by the
+# function's return, not by an assignment.
+fdreadend(): ref Sys->FD
+{
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return nil;
+	rd := p[0];
+	wr := p[1];
+	p = nil;
+	if(wr == nil)
+		return nil;
+	return rd;
+}
+
+fdreport(what: string, n: int, t0: int)
+{
+	if(n == 0)
+		sys->print("init: fd: %s closed its pipe (EOF after %d ms)\n",
+			what, sys->millisec() - t0);
+	else if(n == Fdtimedout)
+		sys->print("init: fd: %s did NOT close its pipe within %d ms -- the FD destructor did not run\n",
+			what, Fdms);
+	else
+		sys->print("init: fd: %s: read returned %d (%r)\n", what, n);
+}
+
+fdcheck()
+{
+	# By assignment.
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("init: fd: cannot make a pipe: %r\n");
+		return;
+	}
+	rd := p[0];
+	wr := p[1];
+	p = nil;
+	res := chan[4] of int;
+	t0 := sys->millisec();
+	spawn fdreader(rd, res);
+	wr = nil;
+	spawn fdtimer(res, Fdms);
+	fdreport("dropped fd", <-res, t0);
+
+	# By return.
+	rd = fdreadend();
+	if(rd == nil){
+		sys->print("init: fd: cannot make the second pipe: %r\n");
+		return;
+	}
+	res = chan[4] of int;
+	t0 = sys->millisec();
+	spawn fdreader(rd, res);
+	spawn fdtimer(res, Fdms);
+	fdreport("fd dropped on return", <-res, t0);
+}
 
 jitstress()
 {

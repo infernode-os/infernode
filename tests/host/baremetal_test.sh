@@ -1392,6 +1392,13 @@ check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 # The reply comes back too, now; the race that once ate it is under
 # "Networking works, intermittently (RESOLVED)" in os/bcm2837/README.md.
 check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
+# The kernel data path specifically. The endpoints are exclusive-open,
+# so this line only appears if etherusb's "fd = nil" actually closed
+# them before #l tried to take them -- the "init: fd:" destructor
+# checks after the JIT section, exercised on a real device rather than
+# a pipe. It used to be reached only through a sys->dup of #c/null
+# over the descriptors.
+check "etherusb: serving /net/ether0 (kernel data path)" "the endpoints are free for #l when etherusb drops its fds, with no dup workaround"
 check "10.0.2.15 mask 255.255.255.0 on ipifc"       "os/ip binds an interface to a driver outside the kernel"
 check "default route via 10.0.2.2"             "a default route is installed"
 
@@ -1787,6 +1794,19 @@ if build_kernel "$BUILD/$PLAT-nojit.img" "" "-DCFLAG=0"; then
 else
     fail "the JIT-off comparison kernel failed to build"
 fi
+
+# Destructors run in compiled code. The opcode classes above compute
+# the right ANSWERS; this is about what compiled code does when it
+# drops a reference. comp-arm64.c's macfrp() used to branch on the nil
+# check's flags and never reach rdestroy, so "fd = nil" closed nothing
+# and every dropped fd waited for the collector -- the reason etherusb
+# once needed a sys->dup of #c/null to free its endpoints for #l.
+# osinit drops a pipe's write end two ways (assignment, and a local
+# going out of scope with its frame) and reads the other end; EOF
+# within two seconds means the destructor ran at the drop. The main
+# boot runs with the JIT on, so these lines come from compiled code.
+check "init: fd: dropped fd closed its pipe"           "compiled code runs the FD destructor when the last reference is assigned away"
+check "init: fd: fd dropped on return closed its pipe" "compiled code runs the FD destructor when a frame holding the last reference returns"
 
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 

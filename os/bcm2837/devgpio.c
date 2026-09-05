@@ -108,10 +108,32 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 		devdir(c, q, nm, 0, eve, DMDIR|0555, dp);
 		return 1;
 	case Qpin:
+	case Qctl:
+	case Qlevel:
+		/*
+		 * A pin's directory and the two files in it answer alike
+		 * for s >= 0: the entries of the pin's directory. That is
+		 * what devstat and devopen need of a gen called on a LEAF
+		 * -- they walk the leaf's siblings looking for its own qid
+		 * -- and this case used to answer -1 for every s >= 0 on a
+		 * leaf, so stat(2) on /dev/gpio/N/ctl printed "devstat G"
+		 * and failed with "file does not exist" while the
+		 * directory listing showed the file and reads worked (open
+		 * takes gen's -1 as "no entry to permission-check" and
+		 * carries on). ls on a leaf, and ftest -e, were the ways to
+		 * see it. Only ".." differs: the pin's parent is the gpio
+		 * directory, a file's is the pin.
+		 */
 		pin = QPIN(c->qid.path);
 		if(s == DEVDOTDOT){
-			mkqid(&q, Qgpio, 0, QTDIR);
-			devdir(c, q, "gpio", 0, eve, DMDIR|0555, dp);
+			if(QTYPE(c->qid.path) == Qpin){
+				mkqid(&q, Qgpio, 0, QTDIR);
+				devdir(c, q, "gpio", 0, eve, DMDIR|0555, dp);
+				return 1;
+			}
+			snprint(nm, sizeof nm, "%d", pin);
+			mkqid(&q, QPATH(pin, Qpin), 0, QTDIR);
+			devdir(c, q, nm, 0, eve, DMDIR|0555, dp);
 			return 1;
 		}
 		if(s == 0){
@@ -125,16 +147,8 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 			return 1;
 		}
 		return -1;
-	default:
-		if(s == DEVDOTDOT){
-			pin = QPIN(c->qid.path);
-			snprint(nm, sizeof nm, "%d", pin);
-			mkqid(&q, QPATH(pin, Qpin), 0, QTDIR);
-			devdir(c, q, nm, 0, eve, DMDIR|0555, dp);
-			return 1;
-		}
-		return -1;
 	}
+	return -1;
 }
 
 static Chan*

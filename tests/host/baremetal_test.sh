@@ -457,6 +457,15 @@ build_kernel() {
             "/dis/ns.dis=$ROOT/dis/ns.dis"
             "/dis/bind.dis=$ROOT/dis/bind.dis"
             "/dis/mount.dis=$ROOT/dis/mount.dis"
+            # unmount is how a namespace is narrowed -- boot-baremetal.sh
+            # takes the card and the pins out of the desktop's /dev with
+            # it -- and a recovery shell that can bind but not unbind is
+            # half a tool.
+            "/dis/unmount.dis=$ROOT/dis/unmount.dis"
+            # ftest is what boot-baremetal.sh's fail-closed check asks
+            # whether the card and the pins are still there with, and
+            # the namespace session below types that check verbatim.
+            "/dis/ftest.dis=$ROOT/dis/ftest.dis"
             "/dis/mkdir.dis=$ROOT/dis/mkdir.dis"
             "/dis/rm.dis=$ROOT/dis/rm.dis"
             "/dis/cp.dis=$ROOT/dis/cp.dis"
@@ -2496,6 +2505,172 @@ if grep -q '^first$' <<<"$FSOUT" && grep -q '^second$' <<<"$FSOUT"; then
     pass "a file can be created and then appended to"
 else
     fail "appending to a file on the card did not take"
+fi
+
+#
+#     The desktop's namespace can be narrowed, and the console's is not.
+#
+#     Every process on this machine is the host owner, so the only thing
+#     between a desktop program and the raw card is what its namespace
+#     does not contain. lib/lucifer/boot-baremetal.sh builds that
+#     namespace before it starts logon: forks it, unmounts #S and #G
+#     from /dev, binds /dev/null over /dev/sysctl and /dev/hostowner,
+#     and refuses the desktop if any of them is still there. This types
+#     those lines -- read out of the script here, not copied into this
+#     file, so that the two cannot drift apart and deleting them from
+#     the script turns these checks red -- into a child shell, and
+#     asserts both halves: inside, the card, the pins and sysctl are
+#     gone and the script's own check says so; back outside, the
+#     console shell still has every one of them. Both halves matter. A
+#     narrowing that leaked into the parent would take the management
+#     plane's card away, and pass a test that only looked inside.
+#
+#     What this does NOT run is the script: it needs the card userspace
+#     (wm/logon, luciuisrv, lucifer) this kernel image does not carry.
+#     The $status handling and the retry loop below the narrowing are
+#     exercised on the hosted emulator against child shells, not here.
+#
+#     "echo halt > /dev/sysctl" inside is the check that means it: were
+#     /dev/sysctl still #c's, the machine would stop there and nothing
+#     after it would print. The marker lines are echoed on their own so
+#     the extraction below can tell the command being typed (which
+#     carries the marker word too) from its output.
+#
+#     The outer probe lists the pin's DIRECTORY, /dev/gpio/21, whose
+#     listing names both files; a stat of the leaf itself is a separate
+#     check further down, because until devgpio's gen answered for a
+#     leaf that stat failed on every kernel, narrowed or not, and a
+#     namespace check that trips over it says nothing about namespaces.
+#
+#     The card image is the FAT16 one, attached so that #S has a card
+#     to bind and /dev/sdcard is there to take away.
+#
+BOOTSH="$ROOT/lib/lucifer/boot-baremetal.sh"
+NARROW=()
+while IFS= read -r l; do NARROW+=("$l"); done \
+    < <(sed -n '/^pctl forkns$/,/^bind \/dev\/null \/dev\/hostowner$/p' "$BOOTSH")
+# The check block, from narrowed=1 to the close of the if that refuses
+# the desktop. Leading tabs are dropped: the shell does not need them
+# and the serial line discipline should not be asked about them here.
+NARROWCHK=()
+while IFS= read -r l; do NARROWCHK+=("$l"); done \
+    < <(sed -n '/^narrowed=1$/,/^}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
+
+if [[ ${#NARROW[@]} -ge 5 && "${NARROW[0]}" == 'pctl forkns' ]] \
+   && printf '%s\n' "${NARROW[@]}" | grep -q "^unmount '#S' /dev$" \
+   && printf '%s\n' "${NARROW[@]}" | grep -q "^unmount '#G' /dev$" \
+   && printf '%s\n' "${NARROW[@]}" | grep -q '^bind /dev/null /dev/sysctl$' \
+   && [[ ${#NARROWCHK[@]} -ge 6 && "${NARROWCHK[0]}" == 'narrowed=1' ]] \
+   && printf '%s\n' "${NARROWCHK[@]}" | grep -q '^exit$'; then
+    pass "boot-baremetal.sh carries the narrowing (forkns, unmount #S #G, null over sysctl) and a fail-closed check after it"
+else
+    fail "could not read the narrowing or its check out of boot-baremetal.sh (${#NARROW[@]} and ${#NARROWCHK[@]} lines)"
+fi
+
+QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
+NSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'load std' \
+        'sh' \
+        'load std' \
+        "${NARROW[@]}" \
+        "${NARROWCHK[@]}" \
+        'echo INNER' \
+        'echo narrowed $narrowed' \
+        'ls /dev/sdcard /dev/sdctl /dev/gpio' \
+        'v=`{cat /dev/sysctl}; echo inner-sysctl-words $#v' \
+        'echo halt > /dev/sysctl' \
+        'echo inner-still-alive' \
+        'echo INNER-END' \
+        'exit' \
+        'echo OUTER' \
+        'ls /dev/sdcard /dev/sdctl /dev/gpio/21' \
+        'v=`{cat /dev/sysctl}; echo outer-sysctl-words $#v' \
+        'echo OUTER-END' \
+        'echo LEAF' \
+        'ls /dev/gpio/21/level' \
+        'echo LEAF-END')"
+QEMUARGS="$SAVEDARGS"
+# The prompt is "; " with no newline. A command that takes longer than
+# the typing interval -- the first `{cat ...} in a fresh child shell
+# does, it loads cat -- lets the lines typed after it echo as
+# type-ahead, and the prompts for those lines are then printed just
+# before the output that was waited for, as a prefix on it: the first
+# run of this session saw "; ; inner-still-alive" and "; LEAF", and two
+# checks that the transcript itself showed passing went red on the
+# anchored match. So leading prompt fragments are stripped before any
+# line is matched. An output line never begins with "; ".
+NSOUT="$(tr -d '\r' <<<"$NSOUT" | sed 's/^\(; \)*//')"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- namespace ---"; echo "$NSOUT"; }
+
+# Only whole-line markers delimit the sections: the typed command line
+# carries "echo INNER" and is not a match for ^INNER$.
+NSIN="$(sed -n '/^INNER$/,/^INNER-END$/p' <<<"$NSOUT")"
+NSOUTER="$(sed -n '/^OUTER$/,/^OUTER-END$/p' <<<"$NSOUT")"
+NSLEAF="$(sed -n '/^LEAF$/,/^LEAF-END$/p' <<<"$NSOUT")"
+
+if grep -q 'INNER-END' <<<"$NSIN" && grep -q 'OUTER-END' <<<"$NSOUTER"; then
+    pass "a child shell forks its namespace, narrows it, exits, and the console shell comes back"
+else
+    fail "the narrowed-namespace session did not run to both markers"
+fi
+
+if grep -q '^narrowed 1$' <<<"$NSIN"; then
+    pass "boot-baremetal.sh's own fail-closed check (ftest on the card and the pins, an empty sysctl) passes in the narrowed namespace"
+else
+    fail "the script's narrowed= check did not come out 1 in the narrowed namespace (or its exit fired)"
+fi
+
+if grep -q "/dev/sdcard.*does not exist" <<<"$NSIN" \
+   && grep -q "/dev/sdctl.*does not exist" <<<"$NSIN"; then
+    pass "unmount '#S' /dev takes the raw card and its partition table out of the namespace"
+else
+    fail "/dev/sdcard or /dev/sdctl is still reachable after unmount '#S' /dev"
+fi
+
+if grep -q "/dev/gpio.*does not exist" <<<"$NSIN"; then
+    pass "unmount '#G' /dev takes the pins out of the namespace"
+else
+    fail "/dev/gpio is still reachable after unmount '#G' /dev"
+fi
+
+if grep -q '^inner-sysctl-words 0$' <<<"$NSIN"; then
+    pass "bind /dev/null /dev/sysctl: sysctl reads empty in the narrowed namespace"
+else
+    fail "/dev/sysctl still reads the kernel's version line after bind /dev/null over it"
+fi
+
+if grep -q '^inner-still-alive$' <<<"$NSIN"; then
+    pass "'echo halt > /dev/sysctl' in the narrowed namespace does not halt the machine"
+else
+    fail "the machine did not answer after a halt written to the narrowed /dev/sysctl"
+fi
+
+if grep -q '^/dev/sdcard$' <<<"$NSOUTER" && grep -q '^/dev/sdctl$' <<<"$NSOUTER" \
+   && grep -q '^/dev/gpio/21/ctl$' <<<"$NSOUTER" && grep -q '^/dev/gpio/21/level$' <<<"$NSOUTER"; then
+    pass "the console shell still has /dev/sdcard, /dev/sdctl and the pins after the child narrowed its own"
+else
+    fail "the narrowing leaked into the console shell's namespace (card or pins missing outside)"
+fi
+
+if grep -q '^outer-sysctl-words [1-9]' <<<"$NSOUTER"; then
+    pass "the console shell's /dev/sysctl is still the kernel's"
+else
+    fail "the console shell's /dev/sysctl reads empty: the null bind leaked out of the child"
+fi
+
+#
+#     A GPIO leaf file can be stat'ed. devgpio's gen used to answer -1
+#     for every s >= 0 when called on /dev/gpio/N/ctl or /level, so
+#     devstat printed "devstat G <qid>" and raised "file does not
+#     exist" for a file the directory listing showed and reads worked
+#     on -- ls on the leaf, and ftest -e, were the ways to see it.
+#
+if grep -q '^/dev/gpio/21/level$' <<<"$NSLEAF" \
+   && ! grep -q 'devstat G\|does not exist' <<<"$NSLEAF"; then
+    pass "stat of a GPIO leaf file (/dev/gpio/21/level) succeeds"
+else
+    fail "stat of /dev/gpio/21/level failed: devgpio's gen does not answer for a leaf"
 fi
 
 #

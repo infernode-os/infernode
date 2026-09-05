@@ -2494,15 +2494,36 @@ try:
     f.flush(); f.readline()
 
     time.sleep(15)
+    mid = bytes(buf)
+
+    # Pull it out again: the watcher must say so, devusb must detach
+    # it so the driver exits at once rather than after a run of
+    # timeouts, and the endpoints must come back.
+    f.write(json.dumps({"execute": "device_del",
+        "arguments": {"id": "hotkbd"}}) + "\n")
+    f.flush(); f.readline()
+    time.sleep(8)
+    gone = bytes(buf)
+
+    # And plug it back in: enumerated and claimed a second time.
+    f.write(json.dumps({"execute": "device_add",
+        "arguments": {"driver": "usb-kbd", "id": "hotkbd2"}}) + "\n")
+    f.flush(); f.readline()
+    time.sleep(15)
     s.close()
 finally:
     p.kill(); p.wait()
 
 after = bytes(buf)
 print("BEFORE-CLEAN" if b"kbdusb:" not in before else "BEFORE-DIRTY")
-tail = after[len(before):]
+tail = mid[len(before):]
 print("ATTACH-SEEN" if b"device attached" in tail else "ATTACH-MISSED")
 print("CLAIMED" if b"kbdusb:" in tail and b"ready on endpoint" in tail else "NOT-CLAIMED")
+t2 = gone[len(mid):]
+print("REMOVE-SEEN" if b"device removed" in t2 else "REMOVE-MISSED")
+print("DRIVER-EXITED" if b"detached" in t2 else "DRIVER-STUCK")
+t3 = after[len(gone):]
+print("RECLAIMED" if b"kbdusb:" in t3 and b"ready on endpoint" in t3 else "NOT-RECLAIMED")
 PYEOF
 
 HOTOUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
@@ -2527,6 +2548,21 @@ else
         pass "a device plugged in after boot is enumerated and claimed by its driver"
     else
         fail "the hotplugged device was never claimed by a driver"
+    fi
+    if grep -q 'REMOVE-SEEN' <<<"$HOTOUT"; then
+        pass "the hub watcher notices a device being unplugged"
+    else
+        fail "unplugging a device went unnoticed"
+    fi
+    if grep -q 'DRIVER-EXITED' <<<"$HOTOUT"; then
+        pass "the unplugged device is detached in devusb and its driver exits at once"
+    else
+        fail "the driver of an unplugged device did not exit"
+    fi
+    if grep -q 'RECLAIMED' <<<"$HOTOUT"; then
+        pass "a device plugged back in is enumerated and claimed again"
+    else
+        fail "the replugged device was not claimed again"
     fi
 fi
 

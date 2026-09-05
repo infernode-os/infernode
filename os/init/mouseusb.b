@@ -177,6 +177,10 @@ poll(fd, ptr: ref Sys->FD, ival: int, maxpkt: int)
 	for(;;){
 		nr := sys->read(fd, buf, len buf);
 		if(nr < 0){
+			if(isdetached()){
+				sys->print("mouseusb: %s detached\n", dev);
+				return;
+			}
 		#
 		# A run of read ERRORS means the device is gone.
 		#
@@ -403,4 +407,17 @@ ctlin(rtype, req, value: int, data: array of byte): int
 	if(sys->write(ep0, buf, len buf) != len buf)
 		return -1;
 	return sys->read(ep0, data, len data);
+}
+
+#
+# devusb answers every transfer to a detached device with this, at
+# once; there is nothing to wait out.
+#
+isdetached(): int
+{
+	e := sys->sprint("%r");
+	for(i := 0; i + 8 <= len e; i++)
+		if(e[i:i+8] == "detached")
+			return 1;
+	return 0;
 }

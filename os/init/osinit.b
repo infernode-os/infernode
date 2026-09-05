@@ -537,6 +537,7 @@ Fportreset:	con 4;
 #
 Resetrecovery:	con 50;
 Watchival:	con 1000;	# how often a hub's ports are re-read, ms
+lastdev := "";		# the device enumerate() last created, for the port that owns it
 Enumattempts:	con 3;
 Fportpower:	con 8;
 
@@ -794,6 +795,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 		return -1;
 	}
 	name := string nbuf[0:n];
+	lastdev = name;
 
 	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
 	if(d == nil){
@@ -1710,7 +1712,7 @@ eptype(t: int): string
 # goes through -- if the two paths differ, one of them is the one that
 # never gets exercised.
 #
-portsetup(d: ref Sys->FD, name: string, port: int, indent: string): int
+portsetup(d: ref Sys->FD, name: string, port: int, indent: string): string
 {
 	#
 	# Reset, and try again if the port does not enable.
@@ -1735,7 +1737,7 @@ portsetup(d: ref Sys->FD, name: string, port: int, indent: string): int
 	for(rtry := 0; rtry < 3; rtry++){
 		if(portfeature(d, port, Fportreset) < 0){
 			sys->print("init: %sport %d reset failed: %r\n", indent, port);
-			return -1;
+			return "";
 		}
 		for(w := 0; w < 25; w++){		# up to half a second
 			sys->sleep(20);
@@ -1756,7 +1758,7 @@ portsetup(d: ref Sys->FD, name: string, port: int, indent: string): int
 	sys->print("init: %sport %d %#4.4x%s\n",
 		indent, port, status, statusflags(status));
 	if(status < 0 || (status & HPenable) == 0)
-		return -1;
+		return "";
 
 	#
 	# Let the device recover before speaking to it.
@@ -1770,8 +1772,9 @@ portsetup(d: ref Sys->FD, name: string, port: int, indent: string): int
 	#
 	sys->sleep(Resetrecovery);
 
+	lastdev = "";
 	enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
-	return 0;
+	return lastdev;
 }
 
 
@@ -1827,6 +1830,7 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 	}
 	sys->sleep(pwrgood);
 
+	devs := array[nports+1] of { * => "" };	# port -> the device on it
 	for(port = 1; port <= nports; port++){
 		#
 		# Poll, rather than asking once.
@@ -1863,7 +1867,7 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		if((status & HPpresent) == 0)
 			continue;
 
-		portsetup(d, name, port, indent);
+		devs[port] = portsetup(d, name, port, indent);
 	}
 
 	#
@@ -1875,7 +1879,22 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 	# broken. Every hub reports port changes, so there is no reason
 	# for a device to go unnoticed.
 	#
-	spawn hubwatch(d, name, nports, indent);
+	spawn hubwatch(d, name, nports, indent, devs);
+}
+
+#
+# Tell devusb a device has gone: every transfer to its endpoints
+# fails at once with "device is detached" instead of timing out, the
+# driver polling it sees that and exits, and when the last open file
+# on it closes the endpoints are freed and the device number can be
+# used again. Without this a replugged mouse was a new device every
+# time and the old one's endpoints were held for ever.
+#
+detachdev(dev: string)
+{
+	c := sys->open("/usb/usb/" + dev + "/ctl", Sys->OWRITE);
+	if(c == nil || sys->fprint(c, "detach") < 0)
+		sys->print("init: detach %s: %r\n", dev);
 }
 
 #
@@ -1892,7 +1911,7 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 # A second a poll is imperceptible to a person plugging something in
 # and negligible beside what the HID drivers already ask of the bus.
 #
-hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string)
+hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array of string)
 {
 	was := array[nports+1] of int;
 	for(i := 1; i <= nports; i++){
@@ -1920,25 +1939,20 @@ hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string)
 				# different path to one that was already
 				# there.
 				#
-				portsetup(d, name, port, indent);
+				devs[port] = portsetup(d, name, port, indent);
 			}else{
 				#
-				# Say so, and leave it there.
+				# Gone. Detach it in devusb so its driver's next
+				# transfer fails now rather than after a run of
+				# timeouts, and so its endpoints are released
+				# once the driver has closed them.
 				#
-				# The driver notices on its own -- every
-				# transfer to a device that has gone fails,
-				# and kbdusb and mouseusb give up after a run
-				# of those. What is NOT done here is
-				# releasing the devusb endpoints, so the
-				# device number is not reused: plug the same
-				# keyboard back in and it enumerates as a new
-				# one. That needs devusb's detach, and doing
-				# it wrong orphans an endpoint a driver still
-				# holds, so it is deliberately left until the
-				# teardown can be tested properly.
-				#
-				sys->print("init: %s%s port %d: device removed\n",
-					indent, name, port);
+				sys->print("init: %s%s port %d: device removed (%s)\n",
+					indent, name, port, devs[port]);
+				if(devs[port] != ""){
+					detachdev(devs[port]);
+					devs[port] = "";
+				}
 			}
 		}
 	}

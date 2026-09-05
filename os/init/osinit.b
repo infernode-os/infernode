@@ -277,6 +277,13 @@ init()
 	#
 	tmpsetup();
 
+	#
+	# The touch panel, if the kernel found one. Spawned because it is
+	# a poll loop; it exits with one line on every machine without the
+	# ribbon, which is expected and not an error.
+	#
+	touchstart();
+
 	spawn usbprobe();
 
 	#
@@ -653,6 +660,16 @@ speedname(status: int): string
 	if(status & HPslow)
 		return "low";
 	return "full";
+}
+
+touchstart()
+{
+	t := load Command "/dis/touch.dis";
+	if(t == nil){
+		sys->print("init: cannot load /dis/touch.dis: %r\n");
+		return;
+	}
+	spawn t->init(nil, "touch" :: nil);
 }
 
 usbprobe()

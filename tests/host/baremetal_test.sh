@@ -1188,6 +1188,30 @@ check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"
 
+# SMP. Until these lines nothing here asserted that the secondaries came
+# up at all, let alone that they keep time: the kernel claimed in two
+# comments that cores 1-3 ticked and preempted, and for months neither
+# was true -- each secondary's clock interrupt walked an empty Timer
+# queue and returned. The three checks below are the three claims.
+#
+# "cpuN: up" is squidboy's ack, printed after the core has its vectors,
+# MMU and clock. "did not answer" is launchsmp giving up on a core.
+check "cpu1: up"                      "core 1 answers the release and enters its scheduler"
+check "cpu2: up"                      "core 2 answers the release and enters its scheduler"
+check "cpu3: up"                      "core 3 answers the release and enters its scheduler"
+refute "did not answer"               "no secondary core failed to answer the release"
+# osinit reads /dev/sysstat twice, 200ms apart, and counts the cores
+# whose tick count moved. A core with a live interrupt and a dead
+# hzclock shows here as "3 of 4".
+check "init: clock ticks on 4 of 4 cores" \
+                                      "every core's clock advances (hzclock runs on cpu1-3, read back through /dev/sysstat)"
+# smpcheck (main.c) wires a spinning kproc to each secondary, then a
+# second kproc to the same core, and times how long the second waits to
+# run there. Preemption makes that a tick or two; without it the probe
+# waits for the hog to finish, 250ms, and the line says BROKEN.
+check "smp:  preempt cpu1 [0-9]*us cpu2 [0-9]*us cpu3 [0-9]*us OK" \
+                                      "a kproc wired to a busy secondary is preempted onto it within the tick budget"
+
 # The mailbox round trip. 0xa02082 is a real Pi 3B board revision, so
 # this also confirms we are talking to a plausible BCM2837 and not just
 # reading back zeroes.
@@ -1388,6 +1412,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo grep-found-it | grep found' \
         'ps | wc -l' \
         'sleep 0; echo slept-ok' \
+        'cat /dev/sysstat' \
         'for(i in x y z){ echo loop2-$i }')"
 
 # Strip carriage returns once, here.
@@ -1412,6 +1437,15 @@ if grep -q "/dis/sh.dis" <<<"$SHOUT"; then
     pass "ls lists the in-kernel root filesystem"
 else
     fail "ls did not list /dis"
+fi
+
+# The per-core clock is readable from the shell, not only asserted at
+# boot: one line per core that came up, and the fourth core's line is
+# the one that proves the file is not merely core 0 talking about itself.
+if grep -q "^cpu3 ticks [0-9][0-9]* intrs [0-9][0-9]* timers [0-9][0-9]*$" <<<"$SHOUT"; then
+    pass "/dev/sysstat reports every core's ticks, interrupts and timer callbacks"
+else
+    fail "/dev/sysstat did not show a line for cpu3"
 fi
 
 # Pipelines and command substitution both go through #|. Before the pipe

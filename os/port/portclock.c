@@ -244,18 +244,41 @@ timerintr(Ureg *u, uvlong)
 	iunlock(&tt->l);
 }
 
+/*
+ * The periodic Timer whose whole job is to make timerintr() call
+ * hzclock(): tf is nil, and timerintr counts a nil tf as "run the
+ * clock" rather than as a callback. One is needed PER CORE, because
+ * timeradd() queues onto timers[m->machno] and timerintr() walks only
+ * the calling core's queue -- so the Timer core 0 makes in timersinit()
+ * is invisible to every other core's clock interrupt.
+ *
+ * That is what left cores 1-3 of the bcm2837 port without a tick: their
+ * clockintr() called timerintr() faithfully, found an empty queue, and
+ * returned. No preemption, m->ticks frozen, active.exiting never seen.
+ * A secondary calls this from its own clock setup so that the Timer
+ * lands on ITS queue; todinit() is not repeated, tod is one machine-wide
+ * clock and was initialised by core 0 before any secondary ran.
+ */
 void
-timersinit(void)
+timersinitmach(void)
 {
 	Timer *t;
 
-	todinit();
 	t = malloc(sizeof(*t));
+	if(t == nil)
+		panic("timersinitmach: no memory for cpu%d's clock", m->machno);
 	t->tmode = Tperiodic;
 	t->tt = nil;
 	t->tns = 1000000000/HZ;
 	t->tf = nil;
 	timeradd(t);
+}
+
+void
+timersinit(void)
+{
+	todinit();
+	timersinitmach();
 }
 
 Timer*

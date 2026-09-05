@@ -304,6 +304,7 @@ ulong		_tas(ulong*);
 void		timeradd(Timer*);
 void		timerdel(Timer*);
 void		timersinit(void);
+void		timersinitmach(void);
 void		timerintr(Ureg*, uvlong);
 void		timerset(uvlong);
 ulong	tk2ms(ulong);

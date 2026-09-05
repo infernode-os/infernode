@@ -1298,6 +1298,21 @@ harness asserts `cpu1..3: up`, and a busy Limbo loop pinned by chance to
 a secondary is preempted by a second one. Nothing in the harness
 currently asserts that SMP came up at all.
 
+**DONE 2026-09-05.** `secclockinit` now calls `timersinitmach()`
+(`portclock.c`), which puts a periodic nil-`tf` Timer on the calling
+core's own queue without re-running `todinit`; `checkalarms` already
+tolerates concurrent callers (`canlock`) and the runq path is the one
+the secondaries' schedulers already used. Observable as `/dev/sysstat`
+(one `cpuN ticks T intrs I timers F` line per running core), asserted
+by `osinit` ("init: clock ticks on 4 of 4 cores") and by a boot-time
+preemption proof in `main.c` (`smpcheck`: a kproc wired to a spinning
+core runs there within a tick budget, ~1ms with preemption, 250ms
+without). The harness now checks `cpu1..3: up`, both lines, and the
+shell's `cat /dev/sysstat`. Verified with the full harness under QEMU
+raspi3b (159 checks, up from 152, all passing) plus five further boots
+of the same image, each showing all four cores ticking, preemption
+latencies of a few milliseconds and no fault.
+
 **3. Every process is the host owner.** `main.c` sets the user to
 `inferno`, which is `eve`, for every process, so `iseve()` is always
 true, and `#S`, `#G` and `/dev/sysctl` are bound into the `/dev` the
@@ -1344,13 +1359,19 @@ logged-in / skipped / failed, and the script honours them. Hours.
 - `irqorphan` (`intr.c`) is reset by *every* core's timer interrupt
   (`clock.c`), so a genuinely unhandled GPU interrupt on core 0 can be
   reported "spurious" by a tick on core 1 and storm silently.
+  DONE 2026-09-05: per-core (`irqorphan[MAXMACH]`).
 - `devusb.c` `CMdetach` releases every endpoint on every write; a
   second "detach" double-frees. `osinit` writes once today.
 - `uart.c` zeroes the console mutex after a bounded spin even when it
   never acquired it; `uartputx`/`uartputd` and `dumpureg` bypass it.
+  DONE 2026-09-05: `uartlock()`/`uartunlock()` release only what the
+  caller took, are re-entrant per core, and `uartputx`/`uartputd`,
+  `dumpureg` and `intrdump` emit under it as whole pieces.
 - Unlocked multi-core writers: `ticks++` and the profiler buckets in
   `clock.c`, `nspurious` and `irqenabled |=` in `intr.c`. Lossy at
   best; `irqenabled` from a kproc on another core is the one to fix.
+  DONE 2026-09-05: `irqenabled` under an `ilock`; `nspurious` and the
+  buckets through `ainc` (`arch.S`, ldxr/stxr); `ticks` is core 0's.
 - `lock()` has two different spin bounds (1M with `up == nil`, 100M
   otherwise) and `schedinit`/interrupt-time wakeups use the short one
   against locks that are held across a memset.

@@ -166,16 +166,33 @@ clockinit(void)
  * calibrated tickinterval against the fixed-frequency system timer;
  * the other cores reuse that number, route their own CNTPNSIRQ through
  * their own slot in the local interrupt block, and arm their first
- * tick. From then on clockintr() -- which reads only per-core
- * registers -- serves them exactly as it serves core 0, which is what
- * makes tsleep(), preemption and the portable timer chain work on
- * every core rather than only where the boot happened.
+ * tick.
+ *
+ * Routing and arming are not enough, and for a long time they were all
+ * this did. clockintr() hands every tick to portclock.c's timerintr(),
+ * which walks timers[m->machno] -- THIS core's queue -- and the only
+ * thing that makes a tick into a clock (m->ticks, checkalarms, the
+ * active.exiting check, preemption) is a periodic Timer with a nil tf
+ * sitting on that queue. timersinit() made exactly one, on core 0's
+ * queue, and so cores 1-3 took a thousand interrupts a second and did
+ * nothing with any of them: their m->ticks stayed at the 1 squidboy
+ * wrote, and a process spinning on one of them ran until it chose to
+ * stop. (tsleep() never noticed, because it goes through the global
+ * talarm list that core 0's checkalarms services.) An earlier version
+ * of this comment claimed the opposite, which is why the claim is now
+ * asserted at boot -- smpcheck() in main.c -- and readable afterwards
+ * in /dev/sysstat.
+ *
+ * timersinitmach() puts this core's hzclock Timer on this core's queue.
+ * It does not re-run todinit(): time of day is one machine-wide clock,
+ * initialised by core 0 before any secondary was released.
  */
 void
 secclockinit(void)
 {
 	LOCAL(Ltimerirq0 + 4*m->machno) = Cntpnsirq;
 	coherence();
+	timersinitmach();
 	armtick();
 }
 

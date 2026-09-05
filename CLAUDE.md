@@ -428,6 +428,11 @@ infernode/
 │   ├── wm/              #   Window manager
 │   └── svc/             #   Services (httpd, etc.)
 ├── module/              # Limbo module interfaces (.m files)
+├── os/                  # NATIVE (bare-metal) kernel: os/arm64 shared AArch64,
+│                        #   os/bcm2837 Raspberry Pi 3B+, os/port portable kernel,
+│                        #   os/ip TCP/IP, os/init the Dis that boots it.
+│                        #   Built and tested ONLY via tests/host/baremetal_test.sh;
+│                        #   status and roadmap in os/bcm2837/README.md.
 ├── tests/               # Unit tests (Limbo + shell)
 │   ├── host/            #   Host-side shell tests
 │   ├── inferno/         #   Inferno-side shell tests

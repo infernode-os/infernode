@@ -6,15 +6,15 @@
  * covered by the permissive MIT licence", and this tree's LICENSE
  * already credits Vita Nuova's revisions.
  *
- * NOT YET IN THE BUILD. The test harness compiles os/port and the board
- * directory; os/ip is landed first so tests/host/iproute_test.sh can
- * extract the real code and check it, before any of it is ported.
- *
- * That order is deliberate. iproute.c is the one file in os/ip with a
- * SILENT WRONG ANSWER failure mode -- a route table that returns the
- * wrong route does not crash, it misroutes -- and it holds three
- * separate width bugs under LP64. Getting a test in front of it is
- * worth more than getting it compiling.
+ * In the build (tests/host/baremetal_test.sh compiles all of os/ip),
+ * and guarded by tests/host/iproute_test.sh, which extracts the
+ * route-range arithmetic and checks it under LP64 on the host. That
+ * test landed BEFORE this file was compiled, deliberately: iproute.c is
+ * the one file in os/ip with a SILENT WRONG ANSWER failure mode -- a
+ * route table that returns the wrong route does not crash, it
+ * misroutes -- and it held three separate width bugs under LP64.
+ * Getting a test in front of it was worth more than getting it
+ * compiling. Keep the test ahead of any change here.
  */
 #include	"u.h"
 #include	"../port/lib.h"

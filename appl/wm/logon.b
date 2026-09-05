@@ -23,7 +23,25 @@ implement WmLogon;
 # First boot: prompts for new password + confirmation, creates secstore account.
 # Subsequent boots: prompts for password, unlocks secstore, loads keys.
 #
-# For headless: profile detects no display and falls back to console prompt.
+# The exit status is the contract with the boot script, and there are
+# three outcomes it has to tell apart. Inferno sh treats a command
+# that returns as success and one that raises "fail:<reason>" as a
+# failure with $status set to <reason>, so:
+#
+#	logged in	init returns; factotum holds the keys
+#	skipped		raise "fail:skipped" -- the user chose to go
+#			on without secstore (Escape twice, or Escape
+#			after a failed unlock). Deliberate, and the
+#			desktop may start, but not silently: it has
+#			no factotum and the script must say so.
+#	anything else	raise "fail:<why>" -- no display, no keyboard,
+#			the form would not build, the keyboard closed.
+#			Nothing was authenticated and nothing was
+#			chosen; a crash is not a login.
+#
+# Before this, every one of those returned normally, and the bare-metal
+# boot script -- which starts the desktop on success -- could not tell
+# a login from a login screen that had died before it drew.
 #
 
 include "sys.m";
@@ -93,6 +111,13 @@ statusmsg: string;
 state: int;
 escpending: int;
 
+# How this screen ended, for the exit status described at the top:
+# nil means logged in; anything else is raised as "fail:<outcome>"
+# once the input readers are dead. The handlers set it when they
+# return 1 to leave the loop.
+outcome: string;
+SKIPPED: con "skipped";
+
 stderr: ref Sys->FD;
 
 init(ctxt: ref Draw->Context, nil: list of string)
@@ -112,11 +137,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		display_g = ctxt.display;
 	if(display_g == nil) {
 		display_g = Display.allocate(nil);
-		if(display_g == nil) {
-			# No display — headless fallback
-			headlessprompt();
-			return;
-		}
+		if(display_g == nil)
+			giveup(sys->sprint("no display: %r"));
 	}
 
 	# If factotum was already started with secstore backing (e.g. headless
@@ -130,6 +152,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	confirmbuf = "";
 	savedpass = "";
 	escpending = 0;
+	outcome = nil;
 
 	# Load brand image once (reloading per-redraw can fail under resource pressure)
 	logo_g = loadpng(IMGPATH);
@@ -146,22 +169,16 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		statusmsg = "Enter password to unlock";
 	}
 
-	if(tk == nil || !buildform()) {
-		sys->fprint(stderr, "logon: cannot build the login form: %r\n");
-		headlessprompt();
-		return;
-	}
+	if(tk == nil || !buildform())
+		giveup(sys->sprint("cannot build the login form: %r"));
 	redraw();
 
 	# Input straight from the devices: there is no window manager to
 	# route it yet. Enter and Escape drive the state machine here;
 	# everything else is the field's business and goes to Tk.
 	kbdfd := sys->open("/dev/keyboard", Sys->OREAD);
-	if(kbdfd == nil) {
-		sys->fprint(stderr, "logon: cannot open /dev/keyboard: %r\n");
-		headlessprompt();
-		return;
-	}
+	if(kbdfd == nil)
+		giveup(sys->sprint("cannot open /dev/keyboard: %r"));
 	ptrfd := sys->open("/dev/pointer", Sys->OREAD);
 
 	kbdch := chan of int;
@@ -183,9 +200,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	done := 0;
 	while(!done) alt {
 	k := <-kbdch =>
-		if(k < 0)
+		if(k < 0){
+			# The keyboard went away under us. Nobody typed a
+			# password and nobody chose to skip.
+			outcome = "keyboard closed";
 			done = 1;
-		else case k {
+		}else case k {
 		'\n' or '\r' =>
 			escpending = 0;
 			passbuf = fieldtext();
@@ -205,9 +225,24 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	# The readers are blocked in read; left alone they would go on
 	# eating the desktop's keystrokes after this screen is gone.
+	# Killed BEFORE the raise below, on every path: a raise leaves
+	# init at once and would otherwise leave them running.
 	kill(kbdpid);
 	if(ptrpid >= 0)
 		kill(ptrpid);
+
+	if(outcome != nil)
+		raise "fail:" + outcome;
+}
+
+# Fail before the input loop ever ran: nothing to kill, nothing on
+# screen worth a delay, and the reason goes to stderr as well as to
+# the shell -- on a bare-metal boot stderr is the serial console and
+# the only place the reason can be read.
+giveup(why: string)
+{
+	sys->fprint(stderr, "logon: %s\n", why);
+	raise "fail:" + why;
 }
 
 kbdreader(fd: ref Sys->FD, out: chan of int, pids: chan of int)
@@ -285,10 +320,21 @@ handleenter(): int
 			return 0;
 		}
 		# Passwords match — create account and unlock
-		dosetupandunlock(passbuf);
+		err := dosetupandunlock(passbuf);
 		passbuf = "";
 		savedpass = "";
-		return 1;
+		if(err == nil)
+			return 1;
+		# It used to exit here whatever dosetupandunlock had done,
+		# which on a first boot with no secstored running meant a
+		# desktop with no factotum and no account, two seconds after
+		# an error nobody had time to read. Offer the same two ways
+		# out a failed unlock gets; Enter goes back to setup, since
+		# there is still no account.
+		state = STATE_LOGIN_FAILED;
+		statusmsg = err + "\nEnter: try again  |  Escape: continue without secstore";
+		redraw();
+		return 0;
 
 	STATE_LOGIN =>
 		r := dounlock();
@@ -305,10 +351,16 @@ handleenter(): int
 		return 0;
 
 	STATE_LOGIN_FAILED =>
-		# Enter from failed state — go back to password entry
+		# Enter from failed state — go back to password entry, or
+		# to account setup if the failure was there and left none.
 		passbuf = "";
-		state = STATE_LOGIN;
-		statusmsg = "Enter password to unlock";
+		if(secstoreacctexists()){
+			state = STATE_LOGIN;
+			statusmsg = "Enter password to unlock";
+		}else{
+			state = STATE_SETUP_PASS;
+			statusmsg = "First boot — choose a secstore password";
+		}
 		redraw();
 		return 0;
 
@@ -383,6 +435,7 @@ handleescape(): int
 		statusmsg = "Continuing without secstore";
 		redraw();
 		sys->sleep(500);
+		outcome = SKIPPED;
 		return 1;
 
 	* =>
@@ -391,6 +444,7 @@ handleescape(): int
 			statusmsg = "Skipped";
 			redraw();
 			sys->sleep(300);
+			outcome = SKIPPED;
 			return 1;
 		}
 		escpending = 1;
@@ -560,18 +614,15 @@ redraw()
 	tk->cmd(top, "update");
 }
 
-# First boot: create secstore account, then unlock
-dosetupandunlock(pass: string)
+# First boot: create secstore account, then unlock.
+# Returns nil on success, else what went wrong, for the caller to show.
+dosetupandunlock(pass: string): string
 {
 	statusmsg = "Creating secstore account...";
 	redraw();
 	err := createsecstoreacct(pass);
-	if(err != nil) {
-		statusmsg = "Setup failed: " + err;
-		redraw();
-		sys->sleep(2000);
-		return;
-	}
+	if(err != nil)
+		return "Setup failed: " + err;
 
 	statusmsg = "Unlocking (this may take a moment)...";
 	redraw();
@@ -584,14 +635,11 @@ dosetupandunlock(pass: string)
 
 	pass = "";
 
-	if(err != nil) {
-		statusmsg = err;
-		redraw();
-		sys->sleep(2000);
-		return;
-	}
+	if(err != nil)
+		return err;
 
 	finishunlock();
+	return nil;
 }
 
 # Normal boot: unlock secstore and load keys.
@@ -973,15 +1021,6 @@ secstoreacctexists(): int
 		user = "inferno";
 	(ok, nil) := sys->stat("/usr/inferno/secstore/" + user + "/PAK");
 	return ok >= 0;
-}
-
-headlessprompt()
-{
-	# Fallback for headless: use factotum's built-in console prompt
-	sys->fprint(stderr, "logon: no display, using console\n");
-	# Nothing to do — factotum -S will prompt on its own if needed,
-	# or the user can manually run:
-	#   auth/factotum -S tcp!localhost!5356
 }
 
 loadpng(path: string): ref Image

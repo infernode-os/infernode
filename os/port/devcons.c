@@ -18,6 +18,8 @@
 
 extern int cflag;
 extern int keepbroken;
+extern ulong intrcount[];	/* portclock.c: clock interrupts, per core */
+extern ulong fcallcount[];	/* portclock.c: Timer callbacks run, per core */
 
 void	(*serwrite)(char *, int);
 
@@ -59,6 +61,7 @@ enum
 {
 	CMreboot,
 	CMtryboot,
+	CMbooted,
 	CMhalt,
 	CMpanic,
 	CMbroken,
@@ -70,6 +73,7 @@ static Cmdtab sysctlcmd[] =
 {
 	CMreboot,	"reboot",	0,
 	CMtryboot,	"tryboot",	0,
+	CMbooted,	"booted",	0,	/* the boot is over: release its watchdog */
 	CMhalt,	"halt", 0,
 	CMpanic,	"panic", 0,
 	CMconsole,	"console", 1,
@@ -662,6 +666,7 @@ enum{
 	Qtime,
 	Quser,
 	Qjit,
+	Qsysstat,
 };
 
 static Dirtab consdir[]=
@@ -685,6 +690,7 @@ static Dirtab consdir[]=
 	"time",		{Qtime},	0,		0664,
 	"user",		{Quser},	0,	0644,
 	"jit",		{Qjit},	0,	0666,
+	"sysstat",	{Qsysstat},	0,	0444,
 };
 
 ulong	boottime;		/* seconds since epoch at boot */
@@ -1134,6 +1140,41 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	case Qmemory:
 		return poolread(buf, n, offset);
 
+	/*
+	 * One line per running core: its tick count, how many clock
+	 * interrupts it has taken and how many Timer callbacks it has
+	 * run. Plan 9's #c/sysstat is the precedent; the fields are
+	 * labelled here because the reader is a person at a serial
+	 * console or a shell script, not a program with the layout
+	 * compiled in.
+	 *
+	 * The tick count is the one that earns the file its place. A
+	 * core whose clock interrupt arrives but whose hzclock never runs
+	 * -- cores 1-3 of the bcm2837 port, for months -- shows intrs
+	 * climbing and ticks frozen, and nothing else in the system can
+	 * tell the two apart from outside. osinit reads this twice at
+	 * boot and reports which cores' clocks move.
+	 */
+	case Qsysstat:
+		p = malloc(READSTR);
+		if(p == nil)
+			error(Enomem);
+		l = 0;
+		for(i = 0; i < conf.nmach; i++){
+			if((active.machs & (1<<i)) == 0)
+				continue;
+			l += snprint(p+l, READSTR-l, "cpu%d ticks %lud intrs %lud timers %lud\n",
+				i, MACHP(i)->ticks, intrcount[i], fcallcount[i]);
+		}
+		if(waserror()){
+			free(p);
+			nexterror();
+		}
+		n = readstr(offset, buf, n, p);
+		poperror();
+		free(p);
+		return n;
+
 	case Qdrivers:
 		p = malloc(READSTR);
 		if(p == nil)
@@ -1325,6 +1366,9 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		case CMtryboot:
 			tryboot();
+			break;
+		case CMbooted:
+			booted();
 			break;
 		case CMhalt:
 			halt();

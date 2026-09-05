@@ -2,36 +2,46 @@
 #
 # tests/host/baremetal_test.sh
 #
-# Build and boot the bare-metal AArch64 kernels under QEMU and assert on
-# what they report over the PL011 console.
+# Build the bare-metal AArch64 kernel (os/arm64 + os/bcm2837), boot it
+# under QEMU's raspi3b machine, and assert on what it reports over the
+# PL011 console -- and, where the console cannot tell, on what QMP shows
+# (framebuffer pixels, USB hotplug) and on what comes back through the
+# emulated network (TCP echo, DHCP) and SD card (the install image).
 #
-# Two machines, from one shared os/arm64 tree:
+# This is also the only supported way to BUILD the kernel; see
+# os/bcm2837/README.md "Building" for why. BAREMETAL_BUILD_DIR keeps the
+# artefacts (bcm2837-kernel.img is the kernel8.img for a card).
 #
-#   bcm2837  QEMU raspi3b -- the Raspberry Pi 3B+ SoC, the hardware
-#            target. Has a VideoCore mailbox, a firmware framebuffer,
-#            GPIO and a second fixed-rate clock; has no NIC model.
-#   virt     QEMU virt    -- a synthetic machine, the development
-#            target. Has a GICv2 and virtio-mmio (net, gpu, input);
-#            has no framebuffer and no second clock.
+# What it covers, in boot order: EL2->EL1 and the exception round trip
+# (with an injected fault to prove the panic path reports), the MMU,
+# clocks and interrupts, allocators, the scheduler, the namespace and
+# devices, the Dis VM and the JIT (bit-identical against the interpreter,
+# and faster), the shell, os/ip over the USB Ethernet driver, USB
+# keyboard and mouse including hot-plug and unplug, the SD card and
+# dossrv, GPIO, #B/bootimage against the file it booted, and this side
+# of the tryboot A/B path: the command line reaching the kernel and
+# osinit, the boot watchdog's arming write and its "booted" release,
+# and "tryboot" on /dev/sysctl resetting the machine.
 #
-# Running both is the point rather than a convenience: the two boards
-# share os/port and os/arm64, so a failure on one and not the other
-# localises itself. It also stops the shared tree from quietly growing a
-# dependency on one machine's peculiarities.
+# What it cannot cover, and only the board does: split I/D caches (the
+# JIT's icache maintenance), bus vs physical DMA addresses, the LAN78xx
+# family (QEMU's usb-net speaks RNDIS), SMP timing, the firmware's side
+# of tryboot and the watchdog's countdown (QEMU acknowledges every
+# property tag and resets on the arming write; see the tryboot section
+# below), the DSI panel, and anything the userspace on a card does
+# after osinit (logon, secstored, the desktop). See the README's "Next".
 #
-# This covers the parts of early bring-up that otherwise fail as a silent
-# hang: dropping EL2->EL1, installing VBAR_EL1, and the exception
-# save/dispatch/restore round trip. It also injects a deliberate fault to
-# prove the panic path still reports rather than wedging.
+# There was once a second machine here (QEMU virt). It is not in the
+# tree; the shared os/arm64 split it forced is.
 #
-# Deliberately does NOT source common.sh: that resolves $EMU and the Limbo
-# toolchain, and this test needs neither -- it exercises a cross-built
-# AArch64 kernel, not anything running inside emu.
+# Does NOT source common.sh: that resolves $EMU, and nothing here runs
+# inside emu. The native limbo IS needed, for runt.h/sysmod.h and the
+# Dis modules compiled into the image.
 #
 # Skips cleanly when the cross toolchain or QEMU is absent, so it is safe
 # to run anywhere.
 #
-# Run from project root: ./tests/host/baremetal_pi_test.sh [-v]
+# Run from project root: ./tests/host/baremetal_test.sh [-v]
 #
 
 ROOT="${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -58,7 +68,7 @@ fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
 skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
 info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
 
-echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837 + virt)${NC}"
+echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837)${NC}"
 echo ""
 
 #
@@ -126,7 +136,7 @@ if [[ -z "$QEMU" ]]; then
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
-for mach in raspi3b virt; do
+for mach in raspi3b; do
     if ! "$QEMU" -machine help 2>/dev/null | grep -q "^$mach"; then
         skip "this QEMU build has no $mach machine model"
         echo ""
@@ -418,6 +428,9 @@ build_kernel() {
             # needs.
             "/dis/echo.dis=$ROOT/dis/echo.dis"
             "/dis/cat.dis=$ROOT/dis/cat.dis"
+            # rm, for removing a file through dossrv and looking at
+            # what it left on the card afterwards.
+            "/dis/rm.dis=$ROOT/dis/rm.dis"
             "/dis/pwd.dis=$ROOT/dis/pwd.dis"
             "/dis/ls.dis=$ROOT/dis/ls.dis"
             "/dis/lib/readdir.dis=$ROOT/dis/lib/readdir.dis"
@@ -457,6 +470,15 @@ build_kernel() {
             "/dis/ns.dis=$ROOT/dis/ns.dis"
             "/dis/bind.dis=$ROOT/dis/bind.dis"
             "/dis/mount.dis=$ROOT/dis/mount.dis"
+            # unmount is how a namespace is narrowed -- boot-baremetal.sh
+            # takes the card and the pins out of the desktop's /dev with
+            # it -- and a recovery shell that can bind but not unbind is
+            # half a tool.
+            "/dis/unmount.dis=$ROOT/dis/unmount.dis"
+            # ftest is what boot-baremetal.sh's fail-closed check asks
+            # whether the card and the pins are still there with, and
+            # the namespace session below types that check verbatim.
+            "/dis/ftest.dis=$ROOT/dis/ftest.dis"
             "/dis/mkdir.dis=$ROOT/dis/mkdir.dis"
             "/dis/rm.dis=$ROOT/dis/rm.dis"
             "/dis/cp.dis=$ROOT/dis/cp.dis"
@@ -559,7 +581,7 @@ build_kernel() {
         printf '16\t13\n0x0000\t0x0100\tVera.14.0000\n' > "$BUILD/unicode.14.font"
         rootmanifest+=(
             "/fonts/vera/Vera/unicode.14.font=$BUILD/unicode.14.font"
-            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/Vera/Vera.14.0000"
+            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/vera/vera.14.0000"
         )
 
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
@@ -919,14 +941,20 @@ SBEOF
 
 # Boot an image and capture the serial output. The kernel never exits, so
 # it must be killed; partial output is what we want.
+# The optional third argument is a kernel command line, handed to QEMU
+# as -append, which its firmware model returns for the GET_COMMAND_LINE
+# property tag exactly as the Pi's firmware returns cmdline.txt. It is
+# a separate argument rather than part of $QEMUARGS because that string
+# is split on spaces and a command line has spaces in it.
 boot_kernel() {
-    local img="$1" secs="${2:-10}"
-    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" <<'PYEOF'
+    local img="$1" secs="${2:-10}" append="${3:-}"
+    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "$append" <<'PYEOF'
 import subprocess, sys
-qemu, img, secs, extra = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
-                      "-display", "none", "-serial", "stdio"],
-                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+qemu, img, secs, extra, append = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+args = [qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio"]
+if append:
+    args += ["-append", append]
+p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 try:
     out, _ = p.communicate(timeout=secs)
 except subprocess.TimeoutExpired:
@@ -1188,12 +1216,60 @@ check "midr_el1:        0x00000000410fd0" \
     check "exception level: EL1"      "drops from EL2 to EL1"
 check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdarg)"
 KIMG="$BUILD/$PLAT-kernel.img"
-check "init: /dev/bootimage $(stat -f%z "$KIMG") bytes stat $(stat -f%z "$KIMG") sha1 $(shasum "$KIMG" | cut -c1-40)" \
+kimgsz=$(wc -c < "$KIMG" | tr -d ' ')
+check "init: /dev/bootimage $kimgsz bytes stat $kimgsz sha1 $(shasum "$KIMG" | cut -c1-40)" \
     "/dev/bootimage reproduces the image the loader was given, byte for byte"
 check "init: gpio 21 out 1->1 0->0; pin 14: in use by uart" "GPIO pins are files: an output reads back what was written, the console pin refuses"
+
+# The boot watchdog's two ends on a boot that does not arm it.
+#
+# Only a boot whose command line says "tryboot" (or "bootwatchdog") is
+# put under the watchdog; this boot has no -append, so the kernel must
+# say it read an empty command line and chose not to arm -- and osinit
+# must still write "booted", because the release line is how the
+# handshake is known to reach the board hook at all. The PM registers
+# are printed so that a wrong PMREGS base would show as garbage here
+# rather than as a watchdog write that lands nowhere. 0x1000 and 0x102
+# are the reset values QEMU's model reports; the board reports the
+# reset cause.
+check "boot: command line: (empty)"  "the kernel reads the firmware command line through the mailbox"
+check "pm:   rsts 0x0000000000001000 rstc 0x0000000000000102" "the PM block reads back at PMREGS (QEMU's reset values)"
+check "wdog: not armed (not a tryboot candidate)" "a boot the command line does not mark is not put under the watchdog"
+check "init: bootargs: (none)"        "#B/bootargs serves the command line to osinit"
+check "wdog: boot complete; no watchdog was armed" "osinit's booted on /dev/sysctl reaches the board hook"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"
+
+# SMP. Until these lines nothing here asserted that the secondaries came
+# up at all, let alone that they keep time: the kernel claimed in two
+# comments that cores 1-3 ticked and preempted, and for months neither
+# was true -- each secondary's clock interrupt walked an empty Timer
+# queue and returned. The three checks below are the three claims.
+#
+# "cpuN: up" is squidboy's ack, printed after the core has its vectors,
+# MMU and clock. "cpuN: did not answer" is launchsmp giving up on a core.
+# The refutation is anchored to launchsmp's exact form because osinit
+# has a "did not answer" of its own -- "init: port N did not answer;
+# resetting it again", from reresetport() -- and that one is a device
+# failing to enumerate on the first try, which its own comment says is
+# routine on this board. A bare "did not answer" would fail an SMP check
+# for a USB retry.
+check "cpu1: up"                      "core 1 answers the release and enters its scheduler"
+check "cpu2: up"                      "core 2 answers the release and enters its scheduler"
+check "cpu3: up"                      "core 3 answers the release and enters its scheduler"
+refute "cpu[0-9]*: did not answer"    "no secondary core failed to answer the release"
+# osinit reads /dev/sysstat twice, 200ms apart, and counts the cores
+# whose tick count moved. A core with a live interrupt and a dead
+# hzclock shows here as "3 of 4".
+check "init: clock ticks on 4 of 4 cores" \
+                                      "every core's clock advances (hzclock runs on cpu1-3, read back through /dev/sysstat)"
+# smpcheck (main.c) wires a spinning kproc to each secondary, then a
+# second kproc to the same core, and times how long the second waits to
+# run there. Preemption makes that a tick or two; without it the probe
+# waits for the hog to finish, 250ms, and the line says BROKEN.
+check "smp:  preempt cpu1 [0-9]*us cpu2 [0-9]*us cpu3 [0-9]*us OK" \
+                                      "a kproc wired to a busy secondary is preempted onto it within the tick budget"
 
 # The mailbox round trip. 0xa02082 is a real Pi 3B board revision, so
 # this also confirms we are talking to a plausible BCM2837 and not just
@@ -1335,11 +1411,28 @@ check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 #   ARP, Request who-has 10.0.2.2 tell 10.0.2.15
 #   ARP, Reply 10.0.2.2 is-at 52:55:0a:00:02:02
 #
-# The reply is on the wire; receiving it does not work yet. See
-# "Receive does not complete" in os/bcm2837/README.md.
+# The reply comes back too, now; the race that once ate it is under
+# "Networking works, intermittently (RESOLVED)" in os/bcm2837/README.md.
 check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
+# The kernel data path specifically. The endpoints are exclusive-open,
+# so this line only appears if etherusb's "fd = nil" actually closed
+# them before #l tried to take them -- the "init: fd:" destructor
+# checks after the JIT section, exercised on a real device rather than
+# a pipe. It used to be reached only through a sys->dup of #c/null
+# over the descriptors.
+check "etherusb: serving /net/ether0 (kernel data path)" "the endpoints are free for #l when etherusb drops its fds, with no dup workaround"
 check "10.0.2.15 mask 255.255.255.0 on ipifc"       "os/ip binds an interface to a driver outside the kernel"
 check "default route via 10.0.2.2"             "a default route is installed"
+
+# The DHCP client's reader lives exactly as long as the exchange. It is
+# parked in a read the kernel returns from only when a datagram arrives,
+# so it used to outlive its caller for the life of the machine, holding
+# port 68's conversation open. The client now kills it and says whether
+# it went. Under QEMU the exchange ends in the fallback, which is the
+# path that matters: a client that gets no answer is the one that used
+# to leave its reader behind.
+check "etherusb: dhcp reader [0-9]* exited"    "the DHCP reader is reaped when the exchange is over"
+refute "dhcp reader [0-9]* still running"      "no DHCP reader outlives its exchange"
 
 # Interrupts, asserted rather than assumed.
 #
@@ -1395,6 +1488,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo grep-found-it | grep found' \
         'ps | wc -l' \
         'sleep 0; echo slept-ok' \
+        'cat /dev/sysstat' \
         'for(i in x y z){ echo loop2-$i }')"
 
 # Strip carriage returns once, here.
@@ -1419,6 +1513,15 @@ if grep -q "/dis/sh.dis" <<<"$SHOUT"; then
     pass "ls lists the in-kernel root filesystem"
 else
     fail "ls did not list /dis"
+fi
+
+# The per-core clock is readable from the shell, not only asserted at
+# boot: one line per core that came up, and the fourth core's line is
+# the one that proves the file is not merely core 0 talking about itself.
+if grep -q "^cpu3 ticks [0-9][0-9]* intrs [0-9][0-9]* timers [0-9][0-9]*$" <<<"$SHOUT"; then
+    pass "/dev/sysstat reports every core's ticks, interrupts and timer callbacks"
+else
+    fail "/dev/sysstat did not show a line for cpu3"
 fi
 
 # Pipelines and command substitution both go through #|. Before the pipe
@@ -1537,6 +1640,101 @@ fi
 #
 # The JIT, measured against itself.
 #
+#
+# tryboot and the boot watchdog, this side of the firmware.
+#
+# The A/B path is: install the running kernel as tryboot.img, write
+# "tryboot" to /dev/sysctl, and the firmware boots the [tryboot]
+# section of config.txt exactly once -- a different kernel file and a
+# command line carrying the word "tryboot". That word is what makes the
+# kernel arm the boot watchdog in kmain and osinit print the promotion
+# step; "booted" on /dev/sysctl releases the watchdog once the shell is
+# loaded. See os/bcm2837/board.c and the README's "Working on the board
+# without moving the card".
+#
+# What QEMU can and cannot show here is settled by two facts about its
+# model, both read in the source (hw/misc/bcm2835_powermgt.c and
+# bcm2835_property.c, v8.2) and confirmed by the boots below:
+#
+#   - PM_WDOG is stored and never counted down, and a write to PM_RSTC
+#     with the full-reset WRCFG resets the machine on the spot. So a
+#     candidate boot under QEMU prints "wdog: armed" and is reset by
+#     the arming write itself, and boots again, for ever. That is
+#     asserted below as at least two boot banners in eight seconds. It
+#     proves the write reached the PM block with the right password
+#     and bits -- a wrong password is dropped without a reset -- and
+#     nothing about the countdown or the reload from the clock tick,
+#     which only the board can show (README: "wdogtest").
+#
+#   - The property mailbox sets the response bit on every tag, known
+#     or not, so "firmware acknowledged reboot flags" is what the
+#     message round trip looks like and not the firmware's opinion.
+#
+# Because arming under QEMU is a reset, the candidate boot that runs
+# to the shell -- osinit recognising the word, printing the promotion
+# step, and writing "booted" -- is driven with "nowatchdog" on the same
+# command line, which is the word a kernel under a debugger uses. A
+# variant image that skips the release and must reset at the budget
+# would be the natural third check; it is not here because the model
+# has no budget to reach, and a check that cannot fail is not one.
+# For the same reason nothing here exercises the reload -- the tick's
+# or microdelay's poll for the interrupts-masked half of kmain -- nor
+# the unreadable-command-line arming: -append is short, and QEMU
+# answers GET_COMMAND_LINE. Those are board results (README).
+#
+WDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 8 tryboot)"
+OUT_SAVED="$OUT"; OUT="$WDOUT"
+check "boot: command line: tryboot"  "-append reaches the kernel as the firmware command line"
+check "wdog: armed, 90 s boot budget; a hang resets to config.txt's kernel" \
+      "a candidate boot arms the boot watchdog before the MMU is on"
+nboot="$(grep -c 'InferNode bare-metal' <<<"$WDOUT")"
+if [[ "$nboot" -ge 2 ]]; then
+    pass "the arming write reached the PM block with the password and WRCFG bits (QEMU resets on it: $nboot boots in 8s)"
+else
+    fail "the arming write did not reset QEMU's PM model ($nboot boot banner(s) in 8s)"
+fi
+OUT="$OUT_SAVED"
+
+# 45 seconds: the shell is loaded at about 12s under emulation, and the
+# release line follows it directly; the rest is margin for a busy host.
+CANDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 45 "tryboot nowatchdog")"
+OUT_SAVED="$OUT"; OUT="$CANDOUT"
+check "wdog: not armed (nowatchdog on the command line)" "nowatchdog overrides a candidate's arming"
+check "init: bootargs: tryboot nowatchdog" "osinit reads the command line through #B/bootargs"
+check "init: CANDIDATE kernel: this boot came from the tryboot configuration" "osinit recognises a candidate boot"
+check "init: to keep it:     mv /n/dos/tryboot.img /n/dos/infernode8.img" "osinit prints the promotion step, from a candidate name"
+check "wdog: boot complete; no watchdog was armed" "the candidate's booted handshake reaches the board hook"
+OUT="$OUT_SAVED"
+
+# "tryboot" typed at the shell. The reset is asserted the only way a
+# reset can be from outside: the boot banner appears a second time.
+# shell_session waits up to 30s for a drain marker the reset machine
+# never echoes, which is what gives the second boot time to print.
+#
+# Honest accounting: of these three, only the middle one is new with
+# the mailbox handshake. The first line and the reset were already
+# there when boardtryboot set a PM_RSTS bit -- notyet.c's print and
+# the PM_RSTC full reset predate the change -- so those two PIN the
+# path from /dev/sysctl to the PM block against regression rather than
+# test the fix; and the middle one shows only that the tag message was
+# well formed, since QEMU acknowledges every tag. Nothing QEMU prints
+# distinguishes the SET_REBOOT_FLAGS tag from the old PM_RSTS write,
+# and this block does not pretend otherwise.
+TBOUT="$(shell_session "$BUILD/$PLAT-kernel.img" 'echo tryboot > /dev/sysctl')"
+TBOUT="$(tr -d '\r' <<<"$TBOUT")"
+OUT_SAVED="$OUT"; OUT="$TBOUT"
+check "tryboot: resetting; next boot is the CANDIDATE kernel" \
+      "tryboot on /dev/sysctl reaches the board's reset path (pre-existing path, pinned)"
+check "tryboot: firmware acknowledged reboot flags 0x1 (tryboot)" \
+      "the reboot-flags tag round-trips the mailbox (the firmware's real answer is a board result)"
+nboot="$(grep -c 'InferNode bare-metal' <<<"$TBOUT")"
+if [[ "$nboot" -ge 2 ]]; then
+    pass "tryboot reset the machine: it booted again ($nboot banners; pre-existing reset, pinned)"
+else
+    fail "tryboot did not reset the machine ($nboot boot banner(s))"
+fi
+OUT="$OUT_SAVED"
+
 # Build a second image differing ONLY by -DCFLAG=0 and compare the same
 # fixed arithmetic loop. Two things are being checked and they are not
 # the same: that compiled code computes the RIGHT ANSWER (the accumulator
@@ -1618,6 +1816,19 @@ if build_kernel "$BUILD/$PLAT-nojit.img" "" "-DCFLAG=0"; then
 else
     fail "the JIT-off comparison kernel failed to build"
 fi
+
+# Destructors run in compiled code. The opcode classes above compute
+# the right ANSWERS; this is about what compiled code does when it
+# drops a reference. comp-arm64.c's macfrp() used to branch on the nil
+# check's flags and never reach rdestroy, so "fd = nil" closed nothing
+# and every dropped fd waited for the collector -- the reason etherusb
+# once needed a sys->dup of #c/null to free its endpoints for #l.
+# osinit drops a pipe's write end two ways (assignment, and a local
+# going out of scope with its frame) and reads the other end; EOF
+# within two seconds means the destructor ran at the drop. The main
+# boot runs with the JIT on, so these lines come from compiled code.
+check "init: fd: dropped fd closed its pipe"           "compiled code runs the FD destructor when the last reference is assigned away"
+check "init: fd: fd dropped on return closed its pipe" "compiled code runs the FD destructor when a frame holding the last reference returns"
 
 check "pool: smprint/strdup OK"       "libkern allocator-dependent entry points work"
 
@@ -1895,6 +2106,70 @@ refute "value 85"                   "no configuration was selected from a corrup
 refute "is not one"                 "no descriptor had to be rejected as malformed"
 refute "configuration unreadable"   "every device configuration was readable"
 OUT="$OUT_SAVED"
+
+#
+#     Detaching a device twice.
+#
+#     osinit writes "detach" once when a hub port empties. devusb's
+#     CMdetach runs a release loop that drops the file system's one
+#     reference to each endpoint, and a second pass through it drops
+#     references the open files hold, freeing endpoints under their
+#     owners. Two writers that arrive TOGETHER both used to run it; the
+#     transition to Ddetach is now made under epslck so only one does.
+#
+#     This check does not reach that race, and is not claimed to: two
+#     writes typed one after the other are serial, and the second is
+#     turned away by ctlwrite's pre-existing Ddetach check before epctl
+#     is called -- so this passes on the unfixed kernel too. What it
+#     pins is the contract the fix depends on, which nothing else
+#     asserted: a detach written at the shell reaches the driver, which
+#     exits once; a second write down the SAME open fd (typed as one
+#     block, so it reaches the device rather than a path that has gone)
+#     is refused with the device's own error and not "i/o error"; and
+#     the shell still answers. The compare-and-set itself is verified
+#     by inspection only -- there is one assignment of Ddetach in the
+#     tree, and epslck is taken in process context with no other lock
+#     held. The keyboard is the victim because it is the device the
+#     machine can spare.
+#
+#     The sleep first is not padding. The prompt appears while the hub
+#     walk is still powering ports, and a detach typed then reaches a
+#     device the driver has not yet opened: the endpoint is freed under
+#     kbdusb's own open, which is a different failure from the one this
+#     is written to catch. Fifteen seconds is what the keyboard boot
+#     check above allows the driver, with margin.
+#
+KBDEP="$(grep -oE 'kbdusb: ep[0-9]+\.0 ready' <<<"$KBDOUT" | head -1 | sed 's/kbdusb: //;s/ ready//')"
+if [[ -n "$KBDEP" ]]; then
+    SAVEDARGS="$QEMUARGS"
+    QEMUARGS="$QEMUARGS -device usb-kbd"
+    DETOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+            'path=(/dis .)' \
+            'sleep 15' \
+            "{echo detach; echo detach} > /usb/usb/$KBDEP/ctl" \
+            'echo detach-twice-survived' \
+            "cat /usb/usb/$KBDEP/ctl")"
+    QEMUARGS="$SAVEDARGS"
+    DETOUT="$(tr -d '\r' <<<"$DETOUT")"
+    [[ "$VERBOSE" -eq 1 ]] && { echo "  --- double detach ---"; echo "$DETOUT"; }
+    if grep -q "kbdusb: $KBDEP detached" <<<"$DETOUT"; then
+        pass "detach written at the shell detaches the keyboard and its driver exits"
+    else
+        fail "the first detach of $KBDEP did not reach the driver"
+    fi
+    # Refused with the device's own error, not "i/o error": that would
+    # mean the endpoint had been freed between the two writes, i.e.
+    # nobody -- not even the driver -- still held it.
+    if grep -q 'echo: write error: device is detached' <<<"$DETOUT" \
+       && grep -v 'echo ' <<<"$DETOUT" | grep -q 'detach-twice-survived' \
+       && ! grep -qi 'panic' <<<"$DETOUT"; then
+        pass "a second detach of the same device is refused and the machine carries on"
+    else
+        fail "the second detach of $KBDEP was not refused cleanly"
+    fi
+else
+    skip "double detach (no keyboard endpoint name in the keyboard boot)"
+fi
 
 #
 # 3d. A keystroke, from the HID device to the shell.
@@ -2372,6 +2647,172 @@ else
 fi
 
 #
+#     The desktop's namespace can be narrowed, and the console's is not.
+#
+#     Every process on this machine is the host owner, so the only thing
+#     between a desktop program and the raw card is what its namespace
+#     does not contain. lib/lucifer/boot-baremetal.sh builds that
+#     namespace before it starts logon: forks it, unmounts #S and #G
+#     from /dev, binds /dev/null over /dev/sysctl and /dev/hostowner,
+#     and refuses the desktop if any of them is still there. This types
+#     those lines -- read out of the script here, not copied into this
+#     file, so that the two cannot drift apart and deleting them from
+#     the script turns these checks red -- into a child shell, and
+#     asserts both halves: inside, the card, the pins and sysctl are
+#     gone and the script's own check says so; back outside, the
+#     console shell still has every one of them. Both halves matter. A
+#     narrowing that leaked into the parent would take the management
+#     plane's card away, and pass a test that only looked inside.
+#
+#     What this does NOT run is the script: it needs the card userspace
+#     (wm/logon, luciuisrv, lucifer) this kernel image does not carry.
+#     The $status handling and the retry loop below the narrowing are
+#     exercised on the hosted emulator against child shells, not here.
+#
+#     "echo halt > /dev/sysctl" inside is the check that means it: were
+#     /dev/sysctl still #c's, the machine would stop there and nothing
+#     after it would print. The marker lines are echoed on their own so
+#     the extraction below can tell the command being typed (which
+#     carries the marker word too) from its output.
+#
+#     The outer probe lists the pin's DIRECTORY, /dev/gpio/21, whose
+#     listing names both files; a stat of the leaf itself is a separate
+#     check further down, because until devgpio's gen answered for a
+#     leaf that stat failed on every kernel, narrowed or not, and a
+#     namespace check that trips over it says nothing about namespaces.
+#
+#     The card image is the FAT16 one, attached so that #S has a card
+#     to bind and /dev/sdcard is there to take away.
+#
+BOOTSH="$ROOT/lib/lucifer/boot-baremetal.sh"
+NARROW=()
+while IFS= read -r l; do NARROW+=("$l"); done \
+    < <(sed -n '/^pctl forkns$/,/^bind \/dev\/null \/dev\/hostowner$/p' "$BOOTSH")
+# The check block, from narrowed=1 to the close of the if that refuses
+# the desktop. Leading tabs are dropped: the shell does not need them
+# and the serial line discipline should not be asked about them here.
+NARROWCHK=()
+while IFS= read -r l; do NARROWCHK+=("$l"); done \
+    < <(sed -n '/^narrowed=1$/,/^}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
+
+if [[ ${#NARROW[@]} -ge 5 && "${NARROW[0]}" == 'pctl forkns' ]] \
+   && printf '%s\n' "${NARROW[@]}" | grep -q "^unmount '#S' /dev$" \
+   && printf '%s\n' "${NARROW[@]}" | grep -q "^unmount '#G' /dev$" \
+   && printf '%s\n' "${NARROW[@]}" | grep -q '^bind /dev/null /dev/sysctl$' \
+   && [[ ${#NARROWCHK[@]} -ge 6 && "${NARROWCHK[0]}" == 'narrowed=1' ]] \
+   && printf '%s\n' "${NARROWCHK[@]}" | grep -q '^exit$'; then
+    pass "boot-baremetal.sh carries the narrowing (forkns, unmount #S #G, null over sysctl) and a fail-closed check after it"
+else
+    fail "could not read the narrowing or its check out of boot-baremetal.sh (${#NARROW[@]} and ${#NARROWCHK[@]} lines)"
+fi
+
+QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
+NSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'load std' \
+        'sh' \
+        'load std' \
+        "${NARROW[@]}" \
+        "${NARROWCHK[@]}" \
+        'echo INNER' \
+        'echo narrowed $narrowed' \
+        'ls /dev/sdcard /dev/sdctl /dev/gpio' \
+        'v=`{cat /dev/sysctl}; echo inner-sysctl-words $#v' \
+        'echo halt > /dev/sysctl' \
+        'echo inner-still-alive' \
+        'echo INNER-END' \
+        'exit' \
+        'echo OUTER' \
+        'ls /dev/sdcard /dev/sdctl /dev/gpio/21' \
+        'v=`{cat /dev/sysctl}; echo outer-sysctl-words $#v' \
+        'echo OUTER-END' \
+        'echo LEAF' \
+        'ls /dev/gpio/21/level' \
+        'echo LEAF-END')"
+QEMUARGS="$SAVEDARGS"
+# The prompt is "; " with no newline. A command that takes longer than
+# the typing interval -- the first `{cat ...} in a fresh child shell
+# does, it loads cat -- lets the lines typed after it echo as
+# type-ahead, and the prompts for those lines are then printed just
+# before the output that was waited for, as a prefix on it: the first
+# run of this session saw "; ; inner-still-alive" and "; LEAF", and two
+# checks that the transcript itself showed passing went red on the
+# anchored match. So leading prompt fragments are stripped before any
+# line is matched. An output line never begins with "; ".
+NSOUT="$(tr -d '\r' <<<"$NSOUT" | sed 's/^\(; \)*//')"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- namespace ---"; echo "$NSOUT"; }
+
+# Only whole-line markers delimit the sections: the typed command line
+# carries "echo INNER" and is not a match for ^INNER$.
+NSIN="$(sed -n '/^INNER$/,/^INNER-END$/p' <<<"$NSOUT")"
+NSOUTER="$(sed -n '/^OUTER$/,/^OUTER-END$/p' <<<"$NSOUT")"
+NSLEAF="$(sed -n '/^LEAF$/,/^LEAF-END$/p' <<<"$NSOUT")"
+
+if grep -q 'INNER-END' <<<"$NSIN" && grep -q 'OUTER-END' <<<"$NSOUTER"; then
+    pass "a child shell forks its namespace, narrows it, exits, and the console shell comes back"
+else
+    fail "the narrowed-namespace session did not run to both markers"
+fi
+
+if grep -q '^narrowed 1$' <<<"$NSIN"; then
+    pass "boot-baremetal.sh's own fail-closed check (ftest on the card and the pins, an empty sysctl) passes in the narrowed namespace"
+else
+    fail "the script's narrowed= check did not come out 1 in the narrowed namespace (or its exit fired)"
+fi
+
+if grep -q "/dev/sdcard.*does not exist" <<<"$NSIN" \
+   && grep -q "/dev/sdctl.*does not exist" <<<"$NSIN"; then
+    pass "unmount '#S' /dev takes the raw card and its partition table out of the namespace"
+else
+    fail "/dev/sdcard or /dev/sdctl is still reachable after unmount '#S' /dev"
+fi
+
+if grep -q "/dev/gpio.*does not exist" <<<"$NSIN"; then
+    pass "unmount '#G' /dev takes the pins out of the namespace"
+else
+    fail "/dev/gpio is still reachable after unmount '#G' /dev"
+fi
+
+if grep -q '^inner-sysctl-words 0$' <<<"$NSIN"; then
+    pass "bind /dev/null /dev/sysctl: sysctl reads empty in the narrowed namespace"
+else
+    fail "/dev/sysctl still reads the kernel's version line after bind /dev/null over it"
+fi
+
+if grep -q '^inner-still-alive$' <<<"$NSIN"; then
+    pass "'echo halt > /dev/sysctl' in the narrowed namespace does not halt the machine"
+else
+    fail "the machine did not answer after a halt written to the narrowed /dev/sysctl"
+fi
+
+if grep -q '^/dev/sdcard$' <<<"$NSOUTER" && grep -q '^/dev/sdctl$' <<<"$NSOUTER" \
+   && grep -q '^/dev/gpio/21/ctl$' <<<"$NSOUTER" && grep -q '^/dev/gpio/21/level$' <<<"$NSOUTER"; then
+    pass "the console shell still has /dev/sdcard, /dev/sdctl and the pins after the child narrowed its own"
+else
+    fail "the narrowing leaked into the console shell's namespace (card or pins missing outside)"
+fi
+
+if grep -q '^outer-sysctl-words [1-9]' <<<"$NSOUTER"; then
+    pass "the console shell's /dev/sysctl is still the kernel's"
+else
+    fail "the console shell's /dev/sysctl reads empty: the null bind leaked out of the child"
+fi
+
+#
+#     A GPIO leaf file can be stat'ed. devgpio's gen used to answer -1
+#     for every s >= 0 when called on /dev/gpio/N/ctl or /level, so
+#     devstat printed "devstat G <qid>" and raised "file does not
+#     exist" for a file the directory listing showed and reads worked
+#     on -- ls on the leaf, and ftest -e, were the ways to see it.
+#
+if grep -q '^/dev/gpio/21/level$' <<<"$NSLEAF" \
+   && ! grep -q 'devstat G\|does not exist' <<<"$NSLEAF"; then
+    pass "stat of a GPIO leaf file (/dev/gpio/21/level) succeeds"
+else
+    fail "stat of /dev/gpio/21/level failed: devgpio's gen does not answer for a leaf"
+fi
+
+#
 #     The same again on FAT32, which is a different filesystem.
 #
 #     Not a variation on a theme: FAT32 announces itself by leaving the
@@ -2469,7 +2910,11 @@ QEMUARGS="$SAVEDARGS -drive file=$SD32,if=sd,format=raw"
 FS32="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'ls /n/dos' \
-        'cat /n/dos/HELLO32.TXT')"
+        'cat /n/dos/HELLO32.TXT' \
+        'echo cluster-owner > /n/dos/badent-1' \
+        'ls -l /n/dos' \
+        'rm /n/dos/badent-1' \
+        'ls /n/dos')"
 QEMUARGS="$SAVEDARGS"
 FS32="$(tr -d '\r' <<<"$FS32")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- fat32 ---"; echo "$FS32"; }
@@ -2478,6 +2923,100 @@ if grep -q 'fat32 works on bare metal' <<<"$FS32"; then
     pass "a FAT32 filesystem is mounted and read (the Pi boot partition's format)"
 else
     fail "FAT32 could not be read"
+fi
+
+#
+#     A healthy file that merely LOOKS like a damage alias.
+#
+#     dossrv names an entry it cannot present -- control characters, a
+#     slash, an empty name -- badent-<location>, and rm on that alias
+#     zaps the directory entry alone, deliberately leaving the clusters
+#     (the start-cluster word of a damaged entry is not to be trusted).
+#     The test for "is this the damaged case" used to be a prefix match
+#     on the name handed OUT, so a healthy file someone had called
+#     badent-1 took the same path: gone from the directory, its cluster
+#     chain still allocated and reachable from nowhere.
+#
+#     The check is made from outside, on the image the guest wrote,
+#     the way fsck would: every allocated cluster must be reachable
+#     from the root directory. The deleted entry has to be there too,
+#     or a session that never created the file passes for free.
+#
+python3 - "$SD32" <<'PYEOF' > "$BUILD/$PLAT-badent.txt" 2>&1
+import struct, sys
+img = open(sys.argv[1], "rb").read()
+SEC = 512
+pstart = struct.unpack_from("<I", img, 446 + 8)[0]
+bs = img[pstart*SEC : pstart*SEC + SEC]
+spc = bs[13]
+resv = struct.unpack_from("<H", bs, 14)[0]
+nfat = bs[16]
+fatsz = struct.unpack_from("<I", bs, 36)[0]
+rootclus = struct.unpack_from("<I", bs, 44)[0]
+fatoff = (pstart + resv) * SEC
+data = (pstart + resv + nfat*fatsz) * SEC
+nclus = fatsz * SEC // 4
+
+def fat(n):
+    return struct.unpack_from("<I", img, fatoff + 4*n)[0] & 0x0FFFFFFF
+
+def chain(n):
+    out = []
+    while 2 <= n < 0x0FFFFFF8 and n not in out and len(out) < nclus:
+        out.append(n)
+        n = fat(n)
+    return out
+
+def cluster(n):
+    off = data + (n-2)*spc*SEC
+    return img[off : off + spc*SEC]
+
+reachable = set()
+deleted = 0
+def walk(start, depth):
+    global deleted
+    ch = chain(start)
+    reachable.update(ch)
+    for c in ch:
+        b = cluster(c)
+        for o in range(0, len(b), 32):
+            e = b[o:o+32]
+            if e[0] == 0:
+                return
+            if e[0] == 0xE5:
+                if e[1:6] == b"ADENT":
+                    deleted += 1
+                continue
+            if e[11] & 0x08:                 # long-name piece or volume label
+                continue
+            if e[0:1] == b".":
+                continue
+            if e[0:6] == b"BADENT":
+                print("LIVE-BADENT")
+            st = (struct.unpack_from("<H", e, 20)[0] << 16) | struct.unpack_from("<H", e, 26)[0]
+            if st >= 2:
+                if e[11] & 0x10 and depth < 8:
+                    walk(st, depth + 1)
+                else:
+                    reachable.update(chain(st))
+
+walk(rootclus, 0)
+allocated = {n for n in range(2, nclus) if fat(n) != 0}
+lost = sorted(allocated - reachable)
+print("DELETED-BADENT" if deleted else "NO-DELETED-BADENT")
+print("LOST %d %s" % (len(lost), lost[:8]))
+PYEOF
+BADOUT="$(cat "$BUILD/$PLAT-badent.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- badent ---"; echo "$BADOUT"; }
+if grep -q 'DELETED-BADENT' <<<"$BADOUT" && ! grep -q 'LIVE-BADENT' <<<"$BADOUT"; then
+    pass "a file named badent-1 is created and removed through dossrv"
+else
+    fail "the badent-1 fixture was not created and removed ($(tr '\n' ' ' <<<"$BADOUT"))"
+fi
+if grep -q '^LOST 0 ' <<<"$BADOUT"; then
+    pass "removing a healthy file that is merely named badent-* frees its clusters"
+else
+    fail "clusters left allocated and unreachable after rm ($(grep '^LOST' <<<"$BADOUT"))"
 fi
 
 #
@@ -3113,22 +3652,10 @@ fi
 run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
 
 #
-# The virt machine.
-#
-# -cpu cortex-a53 is NOT optional, and is the single most confusing
-# thing about this target: -M virt defaults to cortex-a15, a 32-bit
-# ARMv7 CPU, even under qemu-system-aarch64. An AArch64 kernel booted
-# without it does not fail -- it produces absolutely no output at all,
-# because the CPU is decoding the image as ARM32. Picking the same A53
-# the Pi has also keeps the MIDR assertion common to both platforms.
-#
-# -m 1024 matches the Pi 3B+'s 1GB, and is asserted on: it proves the
-# device-tree parse read a real number rather than falling back to a
-# default that happened to look plausible.
-#
-# The virtio devices are attached so the transport scan has something to
-# find. They are not driven -- there are no drivers yet -- but their
-# presence is what makes virt worth having, so the test asserts it.
+# A second machine (QEMU virt) once ran here too. If one comes back,
+# remember: -M virt defaults to cortex-a15, a 32-bit CPU, even under
+# qemu-system-aarch64, and an AArch64 kernel booted without
+# -cpu cortex-a53 produces no output at all.
 #
 
 

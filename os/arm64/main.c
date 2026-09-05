@@ -265,6 +265,7 @@ probeuartin(void)
 	n = 0;
 	deadline = clockcount() + 3*clockfreq();
 	while(clockcount() < deadline){
+		boardwatchdogpoll();	/* interrupts are masked: no tick reloads it */
 		c = uartgetc();
 		if(c >= 0){
 			n++;
@@ -2073,11 +2074,18 @@ squidboy(void)
 	m->proc = nil;
 
 	/*
-	 * A clock of its own, or tsleep() on this core would insert into
-	 * a per-core timer queue that nothing ever services -- a sleep
-	 * with a timeout that cannot fire, which is a hang wearing a
-	 * timeout's clothes. This also gives the core hzclock preemption
-	 * for free.
+	 * A clock of its own. portclock.c keeps a Timer queue per core
+	 * and services it only from that core's clock interrupt, so this
+	 * core must take ticks or its queue is dead. secclockinit() also
+	 * puts this core's hzclock Timer on that queue -- the entry with
+	 * no callback that timerintr() turns into hzclock() -- which is
+	 * what makes the tick a clock here: m->ticks advances,
+	 * active.exiting is honoured, and a process that will not yield
+	 * is preempted at HZ. Without that entry the interrupt arrived a
+	 * thousand times a second and did nothing, which is how cores 1-3
+	 * ran for the first months of SMP. (tsleep() was never the
+	 * casualty it looked like: it uses the global talarm list, which
+	 * whichever core ticks first services.)
 	 */
 	secclockinit();
 	{
@@ -2106,15 +2114,163 @@ squidboy(void)
 	iprint("cpu%d: up\n", m->machno);	/* iprint: no up, no qlock */
 
 	/*
-	 * Straight into the scheduler. No devices are routed here, no
-	 * clock ticks here; this core exists to run whatever processes
-	 * core0's interrupts make ready. Preemption on this core is
-	 * voluntary for now -- every kernel process sleeps or yields,
-	 * and the one CPU-bound process this system has (the Dis VM)
-	 * yields through its own scheduler. A per-core timer can come
-	 * later if a workload appears that needs it.
+	 * Straight into the scheduler. No devices are routed here -- every
+	 * GPU interrupt goes to core 0 -- so this core runs whatever
+	 * processes core 0's interrupts make ready, plus its own clock:
+	 * the tick set up above preempts here exactly as on core 0, and
+	 * smpcheck() proves that on every boot rather than asserting it
+	 * in a comment, which is what the previous version of this
+	 * paragraph did, wrongly, for months.
 	 */
 	schedinit();
+}
+
+/*
+ * Prove the secondaries preempt, once, at every boot.
+ *
+ * The claim "cores 1-3 tick" lived in comments for months while it was
+ * false: each secondary's clock interrupt ran, found an empty Timer
+ * queue and returned, so a process that did not yield owned its core
+ * until it chose to stop. Nothing noticed, because every kproc this
+ * system runs sleeps or yields, and the one CPU-bound one -- the Dis VM
+ * -- yields through its own scheduler. A comment cannot be regression
+ * tested. This can.
+ *
+ * The proof, per secondary: wire a kproc to the core and have it spin
+ * without yielding for Spinms; once it reports it is spinning, wire a
+ * second kproc to the same core and time how long that one waits to run
+ * there. With hzclock preempting on the core the wait is a tick or two;
+ * without it the probe runs only when the hog exits, Spinms later. The
+ * budget between those is wide, and the two outcomes are two hundred
+ * times apart, so this cannot pass by timing luck on a slow emulator.
+ *
+ * Wiring is what makes the test exact: runproc() honours p->wired, so
+ * neither kproc can be picked up by another core and the only way the
+ * probe runs is the hog being taken off its core by the tick. It costs
+ * three quarters of a second of one core each at boot, while the Dis
+ * boot proceeds on the others.
+ */
+enum
+{
+	Spinms	= 250,		/* the hog's run if nothing preempts it */
+	Preemptbudget	= 25000,	/* µs: 25 ticks at HZ=1000; a tick or two is normal */
+};
+
+typedef struct Preempt Preempt;
+struct Preempt
+{
+	int	core;
+	int	hogging;	/* the hog is on its core and spinning */
+	int	done;		/* the probe has run on its core */
+	uvlong	waited;		/* fastticks from the probe wiring itself to running there */
+};
+
+static Preempt preempt[MAXMACH];	/* static: the kprocs outlive a timed-out wait */
+
+/*
+ * Restrict the calling process to one core and go there. sched() puts
+ * us back on the run queue, from which only the named core will take
+ * us; when it returns we are running on that core.
+ *
+ * mp is set as well as wired, as Plan 9's procwired() does, and the
+ * first version of this did not: runproc() passes over a process whose
+ * last core was a different one until its movetime (HZ/10 after the
+ * move) has expired, preferring one that ran here -- and the hog ran
+ * here. So the probe, freshly arrived from wherever kproc() first ran
+ * it, was skipped at every tick for a hundred milliseconds in favour of
+ * the very process it was meant to displace, and the proof read
+ * 150-220ms: preemption working, affinity hiding it. Claiming the core
+ * as the last one run on is what "wired here" means to runproc.
+ */
+static void
+wireto(int core)
+{
+	up->wired = MACHP(core);
+	up->mp = MACHP(core);
+	sched();
+}
+
+static void
+preempthog(void *a)
+{
+	Preempt *pp;
+	uvlong end, hz;
+
+	pp = a;
+	wireto(pp->core);
+	fastticks(&hz);
+	end = fastticks(nil) + hz*Spinms/1000;
+	pp->hogging = 1;
+	coherence();
+	/*
+	 * No yield, no lock, no sleep: the point is a process that
+	 * gives the scheduler no opening but the clock interrupt.
+	 */
+	while(fastticks(nil) < end)
+		;
+	pexit("", 0);
+}
+
+static void
+preemptprobe(void *a)
+{
+	Preempt *pp;
+	uvlong t0;
+
+	pp = a;
+	t0 = fastticks(nil);
+	wireto(pp->core);
+	pp->waited = fastticks(nil) - t0;
+	coherence();
+	pp->done = 1;
+	pexit("", 0);
+}
+
+static void
+smpcheck(void *)
+{
+	Preempt *pp;
+	int core, i, ok;
+	uvlong hz, us;
+	char buf[128], *p, *e;
+
+	fastticks(&hz);
+	ok = 1;
+	p = buf;
+	e = buf + sizeof buf;
+	for(core = 1; core < conf.nmach; core++){
+		if((active.machs & (1<<core)) == 0){
+			p = seprint(p, e, " cpu%d absent", core);
+			ok = 0;
+			continue;
+		}
+		pp = &preempt[core];
+		pp->core = core;
+		kproc("preempthog", preempthog, pp, 0);
+		for(i = 0; i < 100 && !pp->hogging; i++)
+			tsleep(&up->sleep, return0, nil, 10);
+		if(!pp->hogging){
+			p = seprint(p, e, " cpu%d hog never ran", core);
+			ok = 0;
+			continue;
+		}
+		kproc("preemptprobe", preemptprobe, pp, 0);
+		for(i = 0; i < 100 && !pp->done; i++)
+			tsleep(&up->sleep, return0, nil, 10);
+		if(!pp->done){
+			p = seprint(p, e, " cpu%d probe never ran", core);
+			ok = 0;
+			continue;
+		}
+		us = pp->waited * 1000000 / hz;
+		p = seprint(p, e, " cpu%d %lludus", core, us);
+		if(us > Preemptbudget)
+			ok = 0;
+	}
+	USED(p);
+	print("smp:  preempt%s %s\n", buf,
+		ok ? "OK" : "BROKEN (a kproc wired to a busy core did not run within the tick budget)");
+	pexit("", 0);
 }
 
 static void
@@ -2257,6 +2413,15 @@ kmain(void)
 	serialrecover();
 
 	boardprobe();
+
+	/*
+	 * Read the command line and, if this is a tryboot candidate, arm
+	 * the boot watchdog -- here, before the MMU, the allocators or
+	 * any driver, so that nothing a candidate can get wrong runs
+	 * unguarded. Released by osinit's "booted"; see board.c.
+	 */
+	boardbootwatchdog();
+
 	startmmu();
 
 	/*
@@ -2473,6 +2638,13 @@ kmain(void)
 	 * re-queue or reap it.
 	 */
 	launchsmp();
+
+	/*
+	 * After launchsmp, so active.machs says which cores answered;
+	 * before schedinit, because kproc() wants a current process to
+	 * copy from and mainproc is the last one there is.
+	 */
+	kproc("smpcheck", smpcheck, nil, 0);
 
 	up = nil;
 	spllo();

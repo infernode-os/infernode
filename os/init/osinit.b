@@ -1,26 +1,27 @@
 implement Init;
 
 #
-# Initial Dis program for the bare-metal AArch64 ports.
-#
-# Shared by os/bcm2837 and os/virt: nothing in it is board-specific,
-# and having one file means a divergence between the two ports cannot
-# hide in a second copy of the first program either of them runs.
+# Initial Dis program for the bare-metal AArch64 port.
 #
 # This is what disinit() loads and schedmod() runs -- the first Limbo
 # code the kernel executes, and the point at which the machine stops
-# being a C program and starts being Inferno.
+# being a C program and starts being Inferno. Nothing in it is
+# board-specific; the board's own facts (the SD device, the pins the
+# kernel claims) are read from the namespace, not compiled in.
 #
-# Deliberately smaller than upstream's geninit.b, which loads the
-# keyring, binds a mouse and serial device, starts a ramfile server for
-# DNS, and finally execs /dis/sh.dis. None of those exist in this
-# kernel's root filesystem yet: it carries this module and nothing else,
-# because every file in it is compiled into the kernel image. Adding the
-# shell means adding sh.dis and everything it loads.
+# It is the counterpart of upstream's geninit.b, and it has grown the
+# way that one did: it proves the VM and the namespace, walks the USB
+# bus and starts the class drivers (etherusb, kbdusb, mouseusb), runs
+# the built-in self-checks the harness asserts on, mounts the SD card
+# on /n/dos, applies the rootpath policy (which root the card asks
+# for), binds a writable /usr, and finally starts the shell with the
+# profile -- which is where the userspace on the card takes over
+# (auth/secstored, wm/logon, the desktop).
 #
-# So this does the one thing worth proving: that Dis bytecode runs, that
-# it can reach the namespace the C kernel built, and that Sys calls
-# cross back into the kernel correctly.
+# Every file the kernel image carries is a recovery floor: enough to
+# boot to a shell and repair a card, and no more. What a usable machine
+# runs comes from the card or the network, so that fixing it does not
+# mean reflashing a kernel.
 #
 
 include "sys.m";
@@ -91,6 +92,8 @@ init()
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
 	kernelimage();
 	gpiocheck();
+	smpticks();
+	bootargs();
 
 	#
 	# A fixed arithmetic loop, timed. Reported so the harness can run
@@ -110,6 +113,7 @@ init()
 	sys->print("bench: %d iterations in %d ms (acc=%d)\n", 2000000, t1-t0, acc);
 
 	jitstress();
+	fdcheck();
 
 	#
 	# Put the IP stack where Inferno expects it.
@@ -311,6 +315,20 @@ init()
 		sys->print("init: cannot load %s: %r\n", Command->PATH);
 		return;
 	}
+
+	#
+	# The boot is over: tell the kernel, which releases the boot
+	# watchdog a tryboot candidate armed in kmain.
+	#
+	# Here, and not earlier, because "booted" means "a shell can be
+	# typed at": the module is loaded and the next statement runs it.
+	# Not later, because sh->init does not return while the shell
+	# runs. The USB walk and the network are still in flight in their
+	# own threads and are deliberately NOT waited for -- a keyboard
+	# behind a slow hub or a DHCP server that never answers must not
+	# be what resets a working candidate back to the old kernel.
+	#
+	booted();
 
 	#
 	# -l, so the shell reads /lib/sh/profile.
@@ -544,7 +562,6 @@ Fportreset:	con 4;
 #
 Resetrecovery:	con 50;
 Watchival:	con 1000;	# how often a hub's ports are re-read, ms
-lastdev := "";		# the device enumerate() last created, for the port that owns it
 Enumattempts:	con 3;
 Fportpower:	con 8;
 
@@ -734,7 +751,14 @@ usbwalk()
 	}
 
 	walking = 1;
-	enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
+	(ok, dev) := enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
+	#
+	# The root port has no watcher to clean up after it: a device that
+	# failed to come up here would otherwise hold its ep0 for the life
+	# of the machine.
+	#
+	if(ok < 0 && dev != "")
+		detachdev(dev);
 	startpending();
 }
 
@@ -778,12 +802,20 @@ reresetport(d: ref Sys->FD, port: int, indent: string): int
 	return 0;
 }
 
-enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): int
+#
+# Returns (status, device): status is 0 if the device came up, and
+# device is the devusb name newdev gave it -- "" if it never got one,
+# and otherwise the name WHETHER OR NOT it came up, because a device
+# that failed half way through still exists in devusb and the caller
+# has to be able to detach it. Nothing about the device is kept in a
+# global: this runs concurrently, once per hub watcher.
+#
+enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): (int, string)
 {
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: cannot open %s: %r\n", hubctl);
-		return -1;
+		return (-1, "");
 	}
 
 	#
@@ -794,7 +826,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	if(sys->fprint(c, "newdev %s %d", speed, port) < 0){
 		sys->print("init: usb newdev failed: %r\n");
-		return -1;
+		return (-1, "");
 	}
 
 	#
@@ -809,15 +841,14 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	n := sys->pread(c, nbuf, len nbuf, big 0);
 	if(n <= 0){
 		sys->print("init: usb newdev gave no name (%d)\n", n);
-		return -1;
+		return (-1, "");
 	}
 	name := string nbuf[0:n];
-	lastdev = name;
 
 	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
 	if(d == nil){
 		sys->print("init: cannot open %s: %r\n", name);
-		return -1;
+		return (-1, name);
 	}
 
 	#
@@ -883,7 +914,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 	if(!ok){
 		sys->print("init: %s%s never answered after reset\n", indent, name);
-		return -1;
+		return (-1, name);
 	}
 	if(try > 0)
 		sys->print("init: %sdescriptor read succeeded on attempt %d\n",
@@ -916,7 +947,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	dctl := sys->open("/usb/usb/" + name + "/ctl", Sys->ORDWR);
 	if(dctl == nil){
 		sys->print("init: cannot open %s ctl: %r\n", name);
-		return -1;
+		return (-1, name);
 	}
 	sys->fprint(dctl, "maxpkt %d", maxpkt);
 
@@ -924,7 +955,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	rep := array[4] of byte;
 	if(ctlreq(d, Rh2d, Rsetaddress, nb, 0, 0, rep) < 0){
 		sys->print("init: %s set address %d failed: %r\n", name, nb);
-		return -1;
+		return (-1, name);
 	}
 	sys->fprint(dctl, "address");
 
@@ -945,11 +976,11 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# entitled to ignore it in that state.
 	#
 	if(configure(name, d, indent) < 0)
-		return -1;
+		return (-1, name);
 
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
-		return -1;
+		return (0, name);
 	}
 
 	hidproto = 0;
@@ -1003,7 +1034,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
-	return 0;
+	return (0, name);
 }
 
 
@@ -1799,9 +1830,27 @@ portsetup(d: ref Sys->FD, name: string, port: int, indent: string): string
 	#
 	sys->sleep(Resetrecovery);
 
-	lastdev = "";
-	enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
-	return lastdev;
+	#
+	# The device's name comes back from enumerate rather than through
+	# a global: this runs in every hub's watcher at once, and two hubs
+	# enumerating together through one shared variable handed each
+	# other's device names to the wrong port -- so an unplug on one
+	# hub could detach a device on the other.
+	#
+	# A device that did not make it through enumeration is detached
+	# HERE, on the spot. It exists in devusb from the moment newdev
+	# answered, and until now nothing released it: the boot walk has
+	# no watcher yet, so a device pulled out mid-enumerate at boot left
+	# its ep0 allocated for good, and even under the watcher a dead
+	# device sat on the port until it was unplugged. What is returned
+	# is only ever a device that is alive and owned by this port.
+	#
+	(ok, dev) := enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
+	if(ok < 0 && dev != ""){
+		detachdev(dev);
+		return "";
+	}
+	return dev;
 }
 
 
@@ -2032,6 +2081,103 @@ jitfold(h, v: int): int
 Nrep:	con 5;		# samples per workload
 
 bench: Bench;
+
+#
+# Does dropping an fd close it NOW, in compiled code?
+#
+# Limbo has no close(): "fd = nil" closes the file by running the FD's
+# destructor when the last reference goes. Under the JIT that drop is
+# the MacFRP macro in comp-arm64.c, and until it was fixed the macro
+# branched on stale flags and never reached rdestroy -- no compiled
+# code ever ran a destructor, every dropped fd stayed open until the
+# collector swept it, and etherusb had to dup #c/null over its
+# endpoints to hand them to #l. This is the check that would have
+# caught it, and the harness asserts on both lines with the JIT on.
+#
+# The observable is a pipe: hold the read end, drop the write end,
+# read. EOF within Fdms means the destructor ran at the drop. Two
+# drops, because they are two code paths in the compiler: assignment
+# (movp) and a local going out of scope with its frame (macret and
+# the frame's own destructor).
+#
+# Reader and timer are processes that both send into one buffered
+# channel, and this receives whichever comes first. No alt, so that
+# the check exercises as little of the VM as possible beyond the
+# thing under test.
+#
+Fdms: con 2000;
+Fdtimedout: con -2;
+
+fdreader(fd: ref Sys->FD, c: chan of int)
+{
+	buf := array[16] of byte;
+	c <-= sys->read(fd, buf, len buf);
+}
+
+fdtimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= Fdtimedout;
+}
+
+# A pipe whose write end has gone with this frame: only the read end
+# comes back, and the FD holding the other end is dropped by the
+# function's return, not by an assignment.
+fdreadend(): ref Sys->FD
+{
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return nil;
+	rd := p[0];
+	wr := p[1];
+	p = nil;
+	if(wr == nil)
+		return nil;
+	return rd;
+}
+
+fdreport(what: string, n: int, t0: int)
+{
+	if(n == 0)
+		sys->print("init: fd: %s closed its pipe (EOF after %d ms)\n",
+			what, sys->millisec() - t0);
+	else if(n == Fdtimedout)
+		sys->print("init: fd: %s did NOT close its pipe within %d ms -- the FD destructor did not run\n",
+			what, Fdms);
+	else
+		sys->print("init: fd: %s: read returned %d (%r)\n", what, n);
+}
+
+fdcheck()
+{
+	# By assignment.
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("init: fd: cannot make a pipe: %r\n");
+		return;
+	}
+	rd := p[0];
+	wr := p[1];
+	p = nil;
+	res := chan[4] of int;
+	t0 := sys->millisec();
+	spawn fdreader(rd, res);
+	wr = nil;
+	spawn fdtimer(res, Fdms);
+	fdreport("dropped fd", <-res, t0);
+
+	# By return.
+	rd = fdreadend();
+	if(rd == nil){
+		sys->print("init: fd: cannot make the second pipe: %r\n");
+		return;
+	}
+	res = chan[4] of int;
+	t0 = sys->millisec();
+	spawn fdreader(rd, res);
+	spawn fdtimer(res, Fdms);
+	fdreport("fd dropped on return", <-res, t0);
+}
 
 jitstress()
 {
@@ -2291,6 +2437,61 @@ devnum(name: string): int
 }
 
 #
+# Declare the boot finished. The kernel side is devcons's "booted"
+# sysctl word; what it does to the hardware is in os/bcm2837/board.c.
+# The kernel prints its own line either way, which is what the harness
+# checks; this one only reports a write that did not get there.
+#
+booted()
+{
+	fd := sys->open("/dev/sysctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "booted") < 0)
+		sys->print("init: cannot write booted to /dev/sysctl: %r\n");
+}
+
+#
+# The command line the firmware handed this boot, from #B/bootargs.
+#
+# The one word that matters here is "tryboot": the tryboot
+# configuration on the card puts it there and config.txt's does not,
+# so it is how a kernel image -- the same bytes either way -- learns
+# that it is the candidate and not the incumbent. A candidate that got
+# this far has booted to a shell under the watchdog and is about to
+# have that watchdog released, which is exactly the moment to say how
+# it is promoted. The commands are printed rather than run: promotion
+# is the operator's decision, and a candidate that boots but has a
+# broken keyboard driver is one they will not want to keep.
+#
+bootargs()
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: /dev/bootargs: %r\n");
+		return;
+	}
+	buf := array[1100] of byte;
+	n := sys->read(fd, buf, len buf);
+	args := "";
+	if(n > 0)
+		args = string buf[0:n];
+	(nil, words) := sys->tokenize(args, " \t\r\n");
+	if(words == nil){
+		sys->print("init: bootargs: (none)\n");
+		return;
+	}
+	sys->print("init: bootargs: %s\n", args);
+	candidate := 0;
+	for(w := words; w != nil; w = tl w)
+		if(hd w == "tryboot")
+			candidate = 1;
+	if(!candidate)
+		return;
+	sys->print("init: CANDIDATE kernel: this boot came from the tryboot configuration\n");
+	sys->print("init: to keep it:     mv /n/dos/tryboot.img /n/dos/infernode8.img\n");
+	sys->print("init: to reject it:   echo reboot > /dev/sysctl   (boots infernode8.img)\n");
+}
+
+#
 # /dev/bootimage is the running kernel's own image, reproduced from
 # memory. Read it back and print its size and SHA-1: the harness
 # compares both with the file it handed the loader, which is the
@@ -2326,6 +2527,81 @@ kernelimage()
 			dig += sys->sprint("%.2x", int h[i]);
 	}
 	sys->print("init: /dev/bootimage %d bytes stat %bd sha1 %s\n", n, d.length, dig);
+}
+
+#
+# Every core's clock, read through the namespace.
+#
+# /dev/sysstat has one line per running core -- "cpuN ticks T intrs I
+# timers F" -- and a core whose tick count does not move between two
+# reads a fifth of a second apart has a clock interrupt that arrives
+# and does nothing. That was cores 1-3 until secclockinit gave each its
+# own hzclock Timer: their interrupt count climbed, their ticks sat at
+# 1, and no process on them was ever preempted. The kernel's own
+# comments said otherwise, which is why this is measured rather than
+# believed. One line, so the harness can assert it.
+#
+smpticks()
+{
+	a := cputicks();
+	if(a == nil){
+		sys->print("init: clock: /dev/sysstat gave no cpu lines\n");
+		return;
+	}
+	sys->sleep(200);
+	b := cputicks();
+	moving := 0;
+	total := 0;
+	r := "";
+	for(l := a; l != nil; l = tl l){
+		(name, t0) := hd l;
+		t1 := lookup(b, name);
+		total++;
+		d := t1 - t0;
+		if(t1 >= 0 && d > 0)
+			moving++;
+		r += sys->sprint(" %s +%d", name, d);
+	}
+	sys->print("init: clock ticks on %d of %d cores (%s)\n", moving, total, r);
+}
+
+#
+# The per-core tick counts, in cpu order. Returns nil if the file is
+# missing or holds nothing recognisable, so the caller can say so.
+#
+cputicks(): list of (string, int)
+{
+	fd := sys->open("/dev/sysstat", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: clock: cannot open /dev/sysstat: %r\n");
+		return nil;
+	}
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	res: list of (string, int);
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " ");
+		if(nf >= 3 && hd tl f == "ticks")
+			res = (hd f, int hd tl tl f) :: res;
+	}
+	# tokenize gave the lines in order; consing reversed them
+	rev: list of (string, int);
+	for(; res != nil; res = tl res)
+		rev = hd res :: rev;
+	return rev;
+}
+
+lookup(l: list of (string, int), name: string): int
+{
+	for(; l != nil; l = tl l){
+		(n, v) := hd l;
+		if(n == name)
+			return v;
+	}
+	return -1;
 }
 
 #

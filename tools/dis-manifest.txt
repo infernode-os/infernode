@@ -679,6 +679,7 @@ dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
 dis/tests/factotum_test.dis
+dis/tests/fdclose_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
 dis/tests/geomap_test.dis

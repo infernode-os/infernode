@@ -4,7 +4,7 @@
 #
 # Guard os/ip/iproute.c's route-range arithmetic against LP64.
 #
-# WHY THIS TEST EXISTS BEFORE THE PORT DOES
+# WHY THIS TEST WAS WRITTEN BEFORE iproute.c WAS COMPILED
 #
 # iproute.c is the one file in os/ip with a silent-wrong-answer failure
 # mode. A route table that returns the wrong route does not crash and

@@ -96,14 +96,35 @@ enum
 	 * line to pull. Arm it with a short timeout and let it expire.
 	 * Every write needs the password in the top half or it is
 	 * ignored silently.
+	 *
+	 * The same block is the boot watchdog (board.c): PM_WDOG is a
+	 * 20-bit down-counter at 65536Hz -- 16 seconds is the longest
+	 * timeout it can hold, which is why a 90-second boot budget is
+	 * kept by re-arming from the clock tick rather than by one write.
+	 * PM_RSTC's WRCFG field (bits 5:4) is what makes expiry reset the
+	 * chip; writing PM_RSTC's reset value 0x102 back, with the
+	 * password, clears that field and disarms it. That is the disarm
+	 * every reference driver uses -- Linux bcm2835_wdt.c and FreeBSD
+	 * bcm2835_wdog.c both write PM_PASSWORD|0x102 -- and the Broadcom
+	 * documentation of the block is not public, so the drivers ARE the
+	 * register description.
+	 *
+	 * PM_RSTS is the firmware's: reset cause and boot-partition bits.
+	 * Bit 5 (0x20) is HADWRQ, "the last reset was the watchdog", not
+	 * a tryboot request; the tryboot flag is asked for through the
+	 * mailbox (Tagsetrebootflags) and the firmware keeps it where it
+	 * likes. An earlier version of board.c set 0x20 here and called it
+	 * tryboot; see boardtryboot() for how that was found.
 	 */
 	Pmrstc		= 0x1C,
 	Pmrsts		= 0x20,
 	Pmwdog		= 0x24,
 	Pmpassword	= 0x5A000000,
 	Pmwrcfgclr	= 0xFFFFFFCF,
-	Pmwrcfgfull	= 0x00000020,	/* full reset */
-	Pmrststryboot	= 0x00000020,	/* one-shot: firmware loads tryboot.txt */
+	Pmwrcfgfull	= 0x00000020,	/* WRCFG = full reset on expiry */
+	Pmrstcreset	= 0x00000102,	/* PM_RSTC's reset value: watchdog disarmed */
+	Pmwdogmask	= 0x000FFFFF,	/* the 20-bit count */
+	Pmwdoghz	= 65536,	/* the count's rate */
 
 	TmrEnable	= 1<<7,
 	TmrIntEnable	= 1<<5,
@@ -197,7 +218,27 @@ enum
 	Taggetmaxclockrate= 0x00030004,	/* the most the firmware will ever run it at */
 	Taggetedidblock	= 0x00030020,	/* the display's own description */
 
-	Clkemmc		= 1,		/* clock id for the Arasan controller */
+	/*
+	 * The kernel command line, as the firmware assembled it from
+	 * cmdline.txt plus its own additions (vc_mem.*, the MAC, ...).
+	 * QEMU answers it with -append. It is the one channel through
+	 * which config.txt -- and so a [tryboot] section or a tryboot.txt
+	 * -- can tell a kernel which boot it is.
+	 */
+	Taggetcmdline	= 0x00050001,
+
+	/*
+	 * How Linux on a Pi asks for a tryboot: SET_REBOOT_FLAGS with bit
+	 * 0, then NOTIFY_REBOOT, then the ordinary watchdog reset
+	 * (drivers/firmware/raspberrypi.c, rpi_firmware_notify_reboot).
+	 * The firmware records the flag itself; nothing in PM_RSTS is
+	 * ours to set.
+	 */
+	Tagnotifyreboot	= 0x00030048,
+	Tagsetrebootflags = 0x00038064,
+	Rebootflagtryboot = 1,
+
+	Clkemmc		= 1,		/* clock id for the SD controller */
 	Clkcore		= 4,		/* the VPU core clock; SDHOST divides it */
 
 	Tagend		= 0x00000000,

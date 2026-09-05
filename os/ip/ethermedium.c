@@ -175,11 +175,24 @@ static char *nbmsg = "nonblocking";
 static void
 etherbind(Ipifc *ifc, int argc, char **argv)
 {
-	Chan *mchan4, *cchan4, *achan, *mchan6, *cchan6, *pchan4;
+	/*
+	 * Every one of these is opened after waserror() and closed by
+	 * its handler, so they must be volatile: C leaves a non-volatile
+	 * local modified between setjmp and longjmp indeterminate, and
+	 * clang -O2 gave the handler the nils they held at setlabel --
+	 * it compiled to a bare nexterror, every cclose deleted. A bind
+	 * that failed halfway (the v6 dial, the stats read) left its
+	 * conversations open, and since a dial fails when the type is
+	 * already open on the device, every retry then failed the same
+	 * way. Same hazard and same idiom as kmount in os/port/sysfile.c.
+	 */
+	volatile struct {
+		Chan *mchan4, *cchan4, *achan, *mchan6, *cchan6, *pchan4;
+		char *buf;
+	} v;
 	char addr[Maxpath];	//char addr[2*KNAMELEN];
 	char dir[Maxpath];	//char dir[2*KNAMELEN];
 	char dir4[Maxpath];
-	char *buf;
 	int fd, cfd, n;
 	char *ptr;
 	Etherrock *er;
@@ -187,23 +200,23 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	if(argc < 2)
 		error(Ebadarg);
 
-	mchan4 = cchan4 = achan = mchan6 = cchan6 = pchan4 = nil;
-	buf = nil;
+	v.mchan4 = v.cchan4 = v.achan = v.mchan6 = v.cchan6 = v.pchan4 = nil;
+	v.buf = nil;
 	if(waserror()){
-		if(mchan4 != nil)
-			cclose(mchan4);
-		if(cchan4 != nil)
-			cclose(cchan4);
-		if(achan != nil)
-			cclose(achan);
-		if(mchan6 != nil)
-			cclose(mchan6);
-		if(cchan6 != nil)
-			cclose(cchan6);
-		if(pchan4 != nil)
-			cclose(pchan4);
-		if(buf != nil)
-			free(buf);
+		if(v.mchan4 != nil)
+			cclose(v.mchan4);
+		if(v.cchan4 != nil)
+			cclose(v.cchan4);
+		if(v.achan != nil)
+			cclose(v.achan);
+		if(v.mchan6 != nil)
+			cclose(v.mchan6);
+		if(v.cchan6 != nil)
+			cclose(v.cchan6);
+		if(v.pchan4 != nil)
+			cclose(v.pchan4);
+		if(v.buf != nil)
+			free(v.buf);
 		nexterror(); 
 	}
 
@@ -217,8 +230,8 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	fd = kdial(addr, nil, dir, &cfd);
 	if(fd < 0)
 		errorf("dial 0x800 failed: %s", up->env->errstr);
-	mchan4 = commonfdtochan(fd, ORDWR, 0, 1);
-	cchan4 = commonfdtochan(cfd, ORDWR, 0, 1);
+	v.mchan4 = commonfdtochan(fd, ORDWR, 0, 1);
+	v.cchan4 = commonfdtochan(cfd, ORDWR, 0, 1);
 	kclose(fd);
 	kclose(cfd);
 	kstrcpy(dir4, dir, sizeof(dir4));	/* the v6 dial below reuses dir */
@@ -226,7 +239,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	/*
 	 *  make it non-blocking
 	 */
-	devtab[cchan4->type]->write(cchan4, nbmsg, strlen(nbmsg), 0);
+	devtab[v.cchan4->type]->write(v.cchan4, nbmsg, strlen(nbmsg), 0);
 
 	/*
 	 *  get mac address and speed
@@ -236,20 +249,20 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	if(fd < 0)
 		errorf("can't open ether stats: %s", up->env->errstr);
 
-	buf = smalloc(512);
-	n = kread(fd, buf, 511);
+	v.buf = smalloc(512);
+	n = kread(fd, v.buf, 511);
 	kclose(fd);
 	if(n <= 0)
 		error(Eio);
-	buf[n] = 0;
+	v.buf[n] = 0;
 
-	ptr = strstr(buf, "addr: ");
+	ptr = strstr(v.buf, "addr: ");
 	if(!ptr)
 		error(Eio);
 	ptr += 6;
 	parsemac(ifc->mac, ptr, 6);
 
-	ptr = strstr(buf, "mbps: ");
+	ptr = strstr(v.buf, "mbps: ");
 	if(ptr){
 		ptr += 6;
 		ifc->mbps = atoi(ptr);
@@ -263,7 +276,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	fd = kdial(addr, nil, nil, nil);
 	if(fd < 0)
 		errorf("dial 0x806 failed: %s", up->env->errstr);
-	achan = commonfdtochan(fd, ORDWR, 0, 1);
+	v.achan = commonfdtochan(fd, ORDWR, 0, 1);
 	kclose(fd);
 
 	/*
@@ -276,15 +289,15 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	fd = kdial(addr, nil, dir, &cfd);
 	if(fd < 0)
 		errorf("dial 0x86DD failed: %s", up->env->errstr);
-	mchan6 = commonfdtochan(fd, ORDWR, 0, 1);
-	cchan6 = commonfdtochan(cfd, ORDWR, 0, 1);
+	v.mchan6 = commonfdtochan(fd, ORDWR, 0, 1);
+	v.cchan6 = commonfdtochan(cfd, ORDWR, 0, 1);
 	kclose(fd);
 	kclose(cfd);
 
 	/*
 	 *  make it non-blocking
 	 */
-	devtab[cchan6->type]->write(cchan6, nbmsg, strlen(nbmsg), 0);
+	devtab[v.cchan6->type]->write(v.cchan6, nbmsg, strlen(nbmsg), 0);
 
 	/*
 	 *  Ask for the packed data file, and do without it if it is not
@@ -307,27 +320,27 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	snprint(addr, sizeof(addr), "%s/packed", dir4);
 	fd = kopen(addr, ORDWR);
 	if(fd >= 0){
-		pchan4 = commonfdtochan(fd, ORDWR, 0, 1);
+		v.pchan4 = commonfdtochan(fd, ORDWR, 0, 1);
 		kclose(fd);
 	}
 
 	er = smalloc(sizeof(*er));
-	er->pchan4 = pchan4;
-	er->mchan4 = mchan4;
-	er->cchan4 = cchan4;
-	er->achan = achan;
-	er->mchan6 = mchan6;
-	er->cchan6 = cchan6;
+	er->pchan4 = v.pchan4;
+	er->mchan4 = v.mchan4;
+	er->cchan4 = v.cchan4;
+	er->achan = v.achan;
+	er->mchan6 = v.mchan6;
+	er->cchan6 = v.cchan6;
 	er->f = ifc->conv->p->f;
 	ifc->arg = er;
 
-	free(buf);
+	free(v.buf);
 	poperror();
 
 	kproc("etherread4", etherread4, ifc, 0);
 	kproc("recvarpproc", recvarpproc, ifc, 0);
 	kproc("etherread6", etherread6, ifc, 0);
-	if(pchan4 != nil)
+	if(v.pchan4 != nil)
 		kproc("etherwpacked", etherwritepacked, ifc, 0);
 }
 

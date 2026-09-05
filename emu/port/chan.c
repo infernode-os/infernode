@@ -1013,8 +1013,13 @@ cleancname(Cname *n)
 	n->len = strlen(n->s);
 }
 
+/*
+ * growparse and parsename take a volatile Elemlist because namec's is
+ * one: its handler frees what these allocate, and only a volatile read
+ * makes that handler see it (see namec).
+ */
 static void
-growparse(Elemlist *e)
+growparse(volatile Elemlist *e)
 {
 	char **new;
 	int *inew;
@@ -1044,11 +1049,14 @@ growparse(Elemlist *e)
  * rather than a directory.
  */
 static void
-parsename(char *name, Elemlist *e)
+parsename(char *name, volatile Elemlist *e)
 {
-	char *slash;
+	char *slash, *copy;
 
-	kstrdup(&e->name, name);
+	/* through a plain local: kstrdup wants a char**, not a volatile one */
+	copy = nil;
+	kstrdup(&copy, name);
+	e->name = copy;
 	name = e->name;
 	e->nelems = 0;
 	e->elems = nil;
@@ -1114,7 +1122,19 @@ namec(char *aname, int amode, int omode, ulong perm)
 	int n, prefix, len, t, nomount, npath;
 	Chan *c, *cnew;
 	Cname *cname;
-	Elemlist e;
+	/*
+	 * volatile is load-bearing. e.name, e.elems and e.off are nil at
+	 * waserror() and allocated by parsename after it, and the handler
+	 * frees all three. C leaves a non-volatile local modified between
+	 * setjmp and longjmp indeterminate, and clang -O takes that
+	 * literally: it folded the nils into the handler -- three
+	 * "mov x0, xzr; bl free" -- so every failed lookup leaked the
+	 * parsed copy of the name and its two index arrays, ~400 bytes of
+	 * main pool per miss, measured at 3 blocks per failing ftest -e.
+	 * An agent probing optional files, a shell PATH miss, a poller
+	 * waiting for a file to appear: all of them paid it.
+	 */
+	volatile Elemlist e;
 	Rune r;
 	Mhead *m;
 	Pgrp *pg;

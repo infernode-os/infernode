@@ -1173,6 +1173,18 @@ long
 qbwrite(Queue *q, Block *b)
 {
 	int n, dowakeup;
+	/*
+	 * The handler frees the block unless it has been queued, and
+	 * cb.b is cleared after waserror() to say so. It has to be
+	 * volatile: C leaves a non-volatile local modified between
+	 * setjmp and longjmp indeterminate, and clang -O2 compiled the
+	 * old "if(b != nil) freeb(b)" to an unconditional freeb of the
+	 * parameter. A writer interrupted in the flow-control sleep
+	 * below would have freed a Block already on the queue.
+	 * emu/port/qio.c has carried this struct since the 2007 upstream
+	 * drop; see os/port/dev.c devwalk for the same hazard here.
+	 */
+	volatile struct {Block *b;} cb;
 
 	n = BLEN(b);
 
@@ -1180,12 +1192,13 @@ qbwrite(Queue *q, Block *b)
 		(*q->bypass)(q->arg, b);
 		return n;
 	}
+	cb.b = b;
 
 	dowakeup = 0;
 	qlock(&q->wlock);
 	if(waserror()){
-		if(b != nil)
-			freeb(b);
+		if(cb.b != nil)
+			freeb(cb.b);
 		qunlock(&q->wlock);
 		nexterror();
 	}
@@ -1202,6 +1215,7 @@ qbwrite(Queue *q, Block *b)
 	if(q->len >= q->limit){
 		if(q->noblock){
 			iunlock(&q->l);
+			cb.b = nil;
 			freeb(b);
 			noblockcnt += n;
 			qunlock(&q->wlock);
@@ -1220,7 +1234,7 @@ qbwrite(Queue *q, Block *b)
 	q->len += BALLOC(b);
 	q->dlen += n;
 	QDEBUG checkb(b, "qbwrite");
-	b = nil;
+	cb.b = nil;
 
 	/* make sure other end gets awakened */
 	if(q->state & Qstarve){

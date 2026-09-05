@@ -920,8 +920,13 @@ cleancname(Cname *n)
 	n->len = strlen(n->s);
 }
 
+/*
+ * growparse and parsename take a volatile Elemlist because namec's is
+ * one: its handler frees what these allocate, and only a volatile read
+ * makes that handler see it (see namec).
+ */
 static void
-growparse(Elemlist *e)
+growparse(volatile Elemlist *e)
 {
 	char **new;
 	int *inew;
@@ -949,11 +954,14 @@ growparse(Elemlist *e)
  * rather than a directory.
  */
 static void
-parsename(char *name, Elemlist *e)
+parsename(char *name, volatile Elemlist *e)
 {
-	char *slash;
+	char *slash, *copy;
 
-	kstrdup(&e->name, name);
+	/* through a plain local: kstrdup wants a char**, not a volatile one */
+	copy = nil;
+	kstrdup(&copy, name);
+	e->name = copy;
 	name = e->name;
 	e->nelems = 0;
 	e->elems = nil;
@@ -1094,7 +1102,18 @@ namec(char *aname, int amode, int omode, ulong perm)
 	Chan * volatile c;
 	Chan *cnew;
 	Cname *cname;
-	Elemlist e;
+	/*
+	 * volatile for the same reason as c above, and found the same way.
+	 * e.name, e.elems and e.off are nil at waserror() and allocated by
+	 * parsename after it; the handler frees all three. Not volatile,
+	 * clang -O2 folded the nils into the handler -- three "mov x0, xzr;
+	 * bl free" -- so every failed lookup leaked the parsed copy of the
+	 * name and its two index arrays, on top of the Chan devwalk and
+	 * mntwalk were leaking (os/port/dev.c, os/port/devmnt.c). Together
+	 * they were the idle desktop's ~1 MB per 10 minutes on the board:
+	 * lucictx probes three absent names every second.
+	 */
+	volatile Elemlist e;
 	Rune r;
 	Mhead *m;
 	char *createerr, tmperrbuf[ERRMAX];

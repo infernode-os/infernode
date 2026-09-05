@@ -612,8 +612,14 @@ rcreate(t: ref Tmsg.Create): ref Rmsg
 		nd.attr |= byte DRONLY;
 
 	puttime(nd);
-	nd.start[0] = byte start;
-	nd.start[1] = byte (start>>8);
+	#
+	# All 32 bits of the start cluster. 5388d97e fixed rename's copy
+	# of this through putstart() and missed create: a directory made
+	# once allocation had passed cluster 65535 recorded only the low
+	# half, pointed at some other file's data, and its listing was
+	# that file's bytes read as directory entries.
+	#
+	putstart(f.xf, nd, start);
 
 	if(islong)
 		putname(sname[0:8]+"."+sname[8:11], nd);
@@ -1601,7 +1607,20 @@ fileclust(f: ref Xfile, iclust: int, cflag: int): int
 			next = getfat(f.xf, clust);
 			if(debug & CLUSTER_INFO)
 				chat(sys->sprint(".%d", next));
-			if(next <= 0){
+			#
+			# getfat() answers -1 at the end of a chain and 0 for a
+			# cluster the FAT holds as FREE. A chain that runs into a
+			# free cluster is broken -- a start cluster recorded by
+			# the low-16-bit create bug pointed exactly here -- and
+			# extending it would hand that cluster to falloc() again
+			# and write a fresh directory into another file's data.
+			# Refuse; the directory reads as damaged instead.
+			#
+			if(next == 0){
+				chat(sys->sprint("cluster chain from %d runs into free cluster %d\n", dp.clust, clust));
+				return -1;
+			}
+			if(next < 0){
 				if(!cflag)
 					break;
 				next = falloc(f.xf);
@@ -3488,15 +3507,56 @@ deverror(name: string, xf: ref Xfs, addr,n,nret: int): int
 	return -1;
 }
 
+#
+# How many bytes of the track starting at sector addr lie inside the
+# volume. Tracks are sect2trk sectors aligned to sector 0, and a volume
+# whose sector count is not a multiple of that (eight geometries in
+# nine) has a short last track. The device, or the partition on the
+# board, answers a read past its end with a short count, and deverror()
+# made that a panic: the server died the first time the last track was
+# flushed -- which is when the card fills -- and took every dirty FAT
+# and directory sector in the cache with it. Where a partition follows,
+# the read succeeds instead and the write scribbles into the neighbour.
+#
+# The volume size comes from the BPB once dosfs() has read it and from
+# the device length before that; whichever is smaller bounds the I/O.
+# Sectors beyond the bound read as zero and are never written.
+#
+devvalid(xf: ref Xfs, addr: int): int
+{
+	limit := -1;
+	if(xf.ptr != nil && xf.ptr.volsize > 0)
+		limit = xf.ptr.volsize;
+	(ok, d) := sys->fstat(xf.dev);
+	if(ok >= 0 && d.length > big 0){
+		dl := int ((d.length - big (xf.offset*Sectorsize)) / big Sectorsize);
+		if(limit < 0 || dl < limit)
+			limit = dl;
+	}
+	if(limit < 0)
+		return trksize;
+	n := limit - addr;
+	if(n > sect2trk)
+		n = sect2trk;
+	if(n <= 0)
+		return 0;
+	return n*Sectorsize;
+}
+
 devread(xf: ref Xfs, addr: int, buf: array of byte): int
 {
 	if(xf.dev==nil)
 		return -1;
 
+	nvalid := devvalid(xf, addr);
+	if(nvalid <= 0)
+		return deverror("read", xf, addr, trksize, 0);
 	sys->seek(xf.dev, big (xf.offset+addr*Sectorsize), sys->SEEKSTART);
-	nread := sys->read(xf.dev, buf, trksize);
-	if(nread != trksize)
-		return deverror("read", xf, addr, trksize, nread);
+	nread := sys->read(xf.dev, buf, nvalid);
+	if(nread != nvalid)
+		return deverror("read", xf, addr, nvalid, nread);
+	for(i := nvalid; i < trksize; i++)
+		buf[i] = byte 0;
 
 	return 0;
 }
@@ -3506,10 +3566,13 @@ devwrite(xf: ref Xfs, addr: int, buf: array of byte): int
 	if(xf.dev == nil)
 		return -1;
 
+	nvalid := devvalid(xf, addr);
+	if(nvalid <= 0)
+		return deverror("write", xf, addr, trksize, 0);
 	sys->seek(xf.dev, big (xf.offset+addr*Sectorsize), 0);
-	nwrite := sys->write(xf.dev, buf, trksize);
-	if(nwrite != trksize)
-		return deverror("write", xf, addr, trksize , nwrite);
+	nwrite := sys->write(xf.dev, buf[0:nvalid], nvalid);
+	if(nwrite != nvalid)
+		return deverror("write", xf, addr, nvalid, nwrite);
 
 	return 0;
 }

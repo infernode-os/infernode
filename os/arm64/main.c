@@ -1786,38 +1786,6 @@ usbkproc(void *a)
 	if(usbdevtab.init != nil)
 		usbdevtab.init();
 
-	/*
-	 * The IP stack.
-	 *
-	 * ipreset() registers the media types and installs the address
-	 * format verbs (%I, %E, %V and friends), which os/ip uses in
-	 * nearly every diagnostic it prints -- without them an error
-	 * message about an address prints the verb instead of the
-	 * address.
-	 *
-	 * loopbackmediumlink() is called here rather than in ipreset()
-	 * because upstream's ipreset links only null and pkt; loopback is
-	 * a separate medium a configuration opts into. It is the one that
-	 * matters most right now: it gives a stack that can be exercised
-	 * end to end with no network hardware at all, which is the only
-	 * kind this board has until USB enumeration exists.
-	 */
-	loopbackmediumlink();
-
-	/*
-	 * The Ethernet medium, for the same reason loopback is linked
-	 * here: upstream's ipreset() links only null and pkt, and
-	 * everything else is a medium a particular configuration opts
-	 * into.
-	 *
-	 * It attaches by NAME (see the header of os/ip/ethermedium.c), so
-	 * linking it commits this kernel to nothing about where the
-	 * driver lives -- which is the point, because on this board it
-	 * lives outside the kernel.
-	 */
-	ethermediumlink();
-	if(ipdevtab.reset != nil)
-		ipdevtab.reset();
 
 	pexit("", 0);
 }
@@ -1876,6 +1844,37 @@ startdis(void)
 	 * the power switch. A debug key is handled in kbdputc, character
 	 * by character, before the line discipline and before any shell.
 	 */
+
+	/*
+	 * The IP stack, on the boot path and before any process exists.
+	 *
+	 * This used to run at the end of usbkproc, after the DWC
+	 * controller reset. That reset is a tsleep() of real duration on
+	 * the board and of no duration under QEMU, and the Dis process
+	 * starts at the same moment as the USB one: osinit reached its
+	 * "bind loopback" about a second in, and whether the medium was
+	 * registered by then was a race the board lost and QEMU never
+	 * did -- "unknown interface type", no 127.0.0.1, secstored unable
+	 * to announce, and a login that timed out on a kernel that passed
+	 * every harness check.
+	 *
+	 * Nothing here sleeps: addipmedium() fills a static table and
+	 * ipreset() installs format verbs, so the boot stack is the right
+	 * place, and it removes the ordering from the schedule entirely.
+	 *
+	 * loopbackmediumlink() and ethermediumlink() are called here
+	 * rather than in ipreset() because upstream's ipreset links only
+	 * null and pkt; the others are media a configuration opts into.
+	 * Loopback gives a stack that can be exercised end to end with no
+	 * network hardware at all. The Ethernet medium attaches by NAME
+	 * (see the header of os/ip/ethermedium.c), so linking it commits
+	 * this kernel to nothing about where the driver lives -- which is
+	 * the point, because on this board it lives outside the kernel.
+	 */
+	loopbackmediumlink();
+	ethermediumlink();
+	if(ipdevtab.reset != nil)
+		ipdevtab.reset();
 
 	kproc("display", displaywatch, nil, 0);
 	kproc("usb", usbkproc, nil, 0);

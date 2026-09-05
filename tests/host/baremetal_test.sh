@@ -278,6 +278,12 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/mouseusb.dis" \
             "$ROOT/os/init/mouseusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The touch panel's frames as pointer events. Under QEMU there is
+        # no panel, so what gets exercised is the driver noticing that
+        # and its decoder self-test.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/touch.dis" \
+            "$ROOT/os/init/touch.b" 2>>"$BUILD/cc.log" || return 1
+
         # The end-to-end check for the graphics stack: load $Draw,
         # attach a display, draw a rectangle and read a pixel of it
         # back through the draw protocol's own read. It is a program
@@ -298,6 +304,7 @@ build_kernel() {
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            "/dis/touch.dis=$BUILD/touch.dis"
             "/dis/drawtest.dis=$BUILD/drawtest.dis"
             "/dis/tktest.dis=$BUILD/tktest.dis"
 
@@ -1619,6 +1626,15 @@ check "clk:  cntfrq [0-9]"            "generic timer reports a frequency"
 check "clk:  irq firing"              "timer interrupts are delivered"
 
     check "fb:   [0-9]"               "framebuffer allocated"
+
+    # The touch panel: QEMU implements neither firmware tag, so the
+    # kernel must say there is no panel (and say what the firmware
+    # answered), refuse to serve /dev/touch, and the driver must notice
+    # the file is absent and exit -- rather than any of them inventing
+    # a panel. The driver's line carries the %r suffix, hence the colon.
+    check "touch: no panel (get resp"  "the kernel reports no touch panel, with the firmware's answer"
+    check "touch: no panel: "          "the touch driver finds /dev/touch absent and exits"
+    refute "touch: buffer at"          "nothing claims a touch buffer under emulation"
     check "test pattern drawn"        "framebuffer written without faulting"
 
 #
@@ -2694,6 +2710,25 @@ check "through a full mask r=0x33 g=0x66 b=0x99" \
                                        "a one-bit mask passes the source colour through -- the path glyphs are drawn by"
 check "text drew with the built-in font" \
                                        "string drawing puts ink on the screen, not just advance"
+OUT="$OUT_SAVED"
+
+#
+# 3i2b. The touch decoder, without a panel.
+#
+#      QEMU has no panel to offer, so this is the one part of the touch
+#      path an emulator can check: the driver's decoder and clamp,
+#      against bytes laid out the way the firmware lays them out.
+#
+TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'touch -t' \
+        'ls /dev/touch')"
+TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
+
+OUT_SAVED="$OUT"; OUT="$TOUCH2"
+check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
+check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 OUT="$OUT_SAVED"
 
 #

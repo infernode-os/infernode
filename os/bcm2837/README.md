@@ -4,42 +4,66 @@ Tracked as **INFR-404**. This is InferNode running *native* — as the
 firmware on the board, with no host OS underneath — rather than *hosted*,
 which is what everything under `emu/` does.
 
-Status: **there is a shell, networking, and a JIT.** The system boots to
-an interactive prompt, runs pipelines and command substitution as
-JIT-compiled AArch64, answers pings and completes TCP connections over
-its own IP stack, and enumerates the USB bus end to end.
+Status, 2026-09-05: **it is a machine.** A Pi 3B+ boots this kernel from
+its SD card to a Tk login screen on HDMI, with a USB keyboard and
+mouse, wired Ethernet configured by DHCP, a writable `/usr` on the
+card, secstore-backed keys, and the Lucifer desktop — and a shell on
+the serial console the whole time. All four cores schedule. The Dis JIT
+runs on the A53 at 27× the interpreter with bit-identical results.
+Everything below has been exercised on the board, not only in QEMU,
+except where a section says otherwise.
 
-Working:
+Working, in the kernel (`os/arm64/notyet.c` holds the device table):
 
-- boot, secondary-core parking, EL2 → EL1, PL011 console
-- AArch64 exception vectors, ESR decoding, register dump on fault
-- MMU with an identity map, caches on, correct memory attributes
-- VideoCore mailbox; framebuffer, verified pixel-exact; GPIO
-- ARM generic timer at 100Hz; device interrupts through the VideoCore
-  controller, asserted at boot rather than assumed
-- `xalloc`, the pool allocator (`malloc`/`free`), Blocks
-- the scheduler: process table, context switch, blocking locks
-- namespace: channels, path composition, process groups, the root
-  device, `kopen`/`kread`/`kwrite`/`kbind`
-- a console on `/dev/cons`, `#p` (processes), `#|` (pipes)
-- the Dis VM, and the **JIT**: 27× the interpreter, bit-identical results
-- an interactive shell: pipelines, command substitution, `for` loops
-- **`os/ip`**: ICMP and TCP over loopback, route table, `ptclbsum`
-- **USB**: `#u`, the DWC OTG host stack, and enumeration through a hub
-  to the CDC Ethernet device behind it
+- boot, EL2 → EL1, MMU with caches on, all four cores up, exception
+  vectors with a register dump on fault, the ARM generic timer, device
+  interrupts through the VideoCore controller
+- `xalloc`, the pool allocator, Blocks; the scheduler with per-process
+  preemption guards; the namespace, channels, mounts (`#M`), process
+  groups, `#p`, `#|`, `#e`, `#s`
+- the Dis VM and the **JIT**; a sign-extension fix that makes a Limbo
+  `int` 32 bits on a 64-bit word (both JITs and the interpreter)
+- **`os/ip`** (`#I`): the full stack, ARP, ICMP, TCP, UDP, routing
+- **USB**: `#u`, the DWC OTG host stack with split transactions,
+  single-shot bulk transfers, hot-plug and unplug
+- **`#l`**: the Ethernet data path in the kernel (~2.6 MB/s in, ~4 MB/s
+  out), bound to endpoints a Limbo driver has set up
+- the SD card as a file (`#S`), the running kernel image as a file
+  (`#B/bootimage`), microsecond timing (`#b`), GPIO pins as files
+  (`#G`), the framebuffer console (`fbcons`), the draw device (`#i`),
+  the pointer (`#m`), the keyboard on `/dev/keyboard`, SSL (`#D`), a
+  hardware-fed entropy pool, a tick-driven sampling profiler
+- **tryboot**: the firmware's one-shot flag for A/B kernels (but see
+  "Next" — it is not yet a safe A/B path)
 
-Not done: no packet has yet been sent or received on a real network —
-that needs the class driver described under "Decision: device protocols
-live outside the kernel, mechanism inside". And **nothing here has run
-on real hardware**; everything above is QEMU. The JIT in particular is
-not accepted until it has, because TCG does not model split I/D caches,
-so missing icache maintenance is invisible in emulation.
+Working, in Limbo on top (`os/init/`, plus the card): `osinit` — the USB
+bus walk, the hub watcher, the SD mount, the rootpath policy, `/usr`;
+`etherusb` (RNDIS for QEMU, LAN78xx with PHY autonegotiation for the
+board, DHCP, and the `#l` handoff); `kbdusb`, `mouseusb`; `dossrv` on
+FAT32 with the fixes the card demanded; `auth/secstored`; `wm/logon` as
+a Tk form; `luciuisrv` and `lucifer`.
+
+Not done, in one line each; the detail and the order are in "Next" at
+the end of this file:
+
+- a confirmed JIT bug means compiled code never runs a reference's
+  destructor, so dropped fds and heap cells wait for the collector
+- cores 1–3 have no clock tick, so nothing preempts on them
+- every process is the host owner, and the desktop namespace holds the
+  raw card, the pins and `/dev/sysctl`
+- tryboot installs over the known-good kernel, not beside it
+- the login screen can be bypassed by design and by failure
+- the harness tests none of tryboot, logon, secstore, rootpath or the
+  dossrv fixes, and no CI job runs the harness at all
+- WiFi, touch, USB storage, audio; the Pi 4
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the
-port, boots it under QEMU, and asserts on the result — including pulling
-the framebuffer back out via QMP and checking pixel values. That harness
-runs **both** boards: see [os/virt](../virt/README.md), the QEMU `virt`
-port that shares this kernel.
+port, boots it under QEMU's `raspi3b`, and asserts on the result —
+pulling the framebuffer back through QMP, hot-plugging USB devices,
+round-tripping TCP through the emulated network, and comparing the
+served kernel image with the file it booted. ~150 checks. A second
+QEMU machine (`virt`) once shared this kernel and forced the
+`os/arm64` split; it is not in the tree today.
 
 ## Why `os/` and not `emu/<Platform>`
 
@@ -64,12 +88,16 @@ genuinely this SoC — the memory map, PL011 wiring, VideoCore mailbox,
 GPIO, framebuffer, the system timer and the MMU map — plus `board.c`,
 the five hooks `../arm64/fns.h` declares.
 
-That split was forced by [os/virt](../virt/README.md) and is the honest
-place for the line: with one board, "shared" and "BCM2837" were
-indistinguishable, and `main.c` had grown to 1700 lines of mostly
-board-independent bring-up checks. A sixth board hook should be read as
-an argument for moving code into `os/arm64`, not for widening the
-interface.
+That split was forced by a second QEMU machine (`virt`) that shared the
+kernel for a while, and it is the honest place for the line: with one
+board, "shared" and "BCM2837" were indistinguishable, and `main.c` had
+grown to 1700 lines of mostly board-independent bring-up checks. The
+`virt` port is not in the tree today; the line it drew held. Since then
+`os/bcm2837` has also grown the drivers that are this SoC's — `usbdwc`,
+`emmc`/`devsd`, `devgpio`, `fbcons`/`screen`, `random`, `serialboot` —
+which is the right side of the line for them. A further board hook
+should be read as an argument for moving code into `os/arm64`, not for
+widening the interface.
 
 ## Why the Pi 3B+
 
@@ -182,8 +210,9 @@ QEMU is the fast loop, but it is not the truth. Known divergences:
 - **Peripherals.** SD/EMMC timing, USB and the VideoCore mailbox
   framebuffer are modelled loosely or not at all.
 
-Real-hardware bring-up needs a USB-serial cable on GPIO 14/15 (there is no
-video output until the framebuffer works) and a FAT32 SD card carrying the
+Real-hardware bring-up needs a USB-serial cable on GPIO 14/15 (the
+console is mirrored to the display once `fbcons` is up, but that is
+some way into boot) and a FAT32 SD card carrying the
 Broadcom firmware blobs (`bootcode.bin`, `start.elf`, `fixup.dat`) plus
 `kernel8.img` and a `config.txt` setting `arm_64bit=1`.
 
@@ -250,8 +279,10 @@ mechanism inside" below. `usbdwc.c` and `devusb.c` were imported;
 `etherusb.c` will not be, because it is an in-kernel `Ether` driver and
 that layer is now a program.
 
-None of this reduces the other hard dependency: **this tree has no
-TCP/IP stack at all**, so `os/ip` is required for any networking path.
+None of this reduced the other hard dependency at the time: the tree
+had no TCP/IP stack at all. `os/ip` has since been imported, ported to
+LP64 and is in the build (`#I`); see "The Ethernet data path is in the
+kernel" for how it attaches.
 
 ## Lessons that cost time
 
@@ -548,8 +579,28 @@ ordering was chosen.
   needed**: `ip.h` declares it, but `ethermedium` reaches its device
   with `kdial()` and `kopen()`, which this tree already has.
 - **Already imported and unaffected:** `usbdwc.c`, `devusb.c`.
-- **To write:** a Dis program speaking CDC (for QEMU's `usb-net`) and
-  LAN78xx (for the board), serving the ether interface sketched above.
+- **Written:** `os/init/etherusb.b`, speaking RNDIS (QEMU's `usb-net`)
+  and LAN78xx (the board), with DHCP.
+
+### Where the line was redrawn, and why it still holds
+
+The data path did not stay in Limbo. Once the whole system worked, the
+per-frame cost of crossing the interpreter and a 9P transaction was
+measured and was the ceiling (see "Network throughput" and "The
+Ethernet data path is in the kernel"), so `os/port/devether.c` (`#l`)
+now shuttles frames between USB endpoints and `os/ip` as kernel
+processes. What stays outside is everything that is one device's
+*protocol*: enumeration, RNDIS negotiation, the LAN78xx register and
+PHY bring-up. `etherusb.b` does that and then hands the two open
+endpoints to `#l` with one ctl write.
+
+That is the rule above applied, not abandoned: moving bytes between a
+bus endpoint and the IP stack is mechanism, shared by every user of the
+network; knowing what a LAN7800's registers mean is policy, and it is
+still a program. The USB keyboard and mouse drivers are still programs
+too. A storage or audio class driver should expect the same shape —
+setup in Limbo, and a kernel data path only when a measurement says
+so.
 
 ## VM bring-up: the four bugs that were in the way
 
@@ -721,7 +772,14 @@ Raising `KSTACK` from 16K to 64K did **not** help -- 5 of 8 boots still
 overflowed -- and that is what proved it recursion rather than depth.
 `KSTACK` is back at upstream's 16K.
 
-### Networking works, intermittently (open)
+### Networking works, intermittently (RESOLVED)
+
+*Resolved after this was written: the consumed 64 bytes were a NAK wake
+that re-baselined the DMA pointer and abandoned a live channel
+(c911449), on top of a late IN completing into freed memory (d7a7e20,
+the persistent bounce buffers). The harness has been clean since. The
+account is kept because the wrong hypothesis it records is the one the
+next person will reach for.*
 
 The whole path works. os/ip resolves an address by ARP, sends an ICMP
 echo through an interface bound to a driver that is not in the kernel,
@@ -1106,7 +1164,8 @@ per-stream window.
 
 Levers from here, in order of expected value: a kernel-side sink for
 measuring the wire path alone (the ~30MB/s USB2 budget is otherwise
-unobservable through a Limbo endpoint); genrandom's appetite; the
+unobservable through a Limbo endpoint); genrandom's appetite (since
+pulled: `random.c` feeds the pool from the hardware generator); the
 per-packet first-halt in singleshot transfers (2 channel ops per
 transfer could be 1 if the fresh-channel Chhltd|Ack halt has a
 register cause); and the GC/scheduler costs that INFR-404's earlier
@@ -1133,7 +1192,10 @@ core, and the cycle is their SUM because the reader parses before it
 reposts. The levers, in order: overlap read with processing (a second
 buffer and the parse moved off the repost path -- approaches the
 12MB/s wire ceiling for kernel consumers), then SMP so the VM runs
-beside the network instead of inside its cycle.
+beside the network instead of inside its cycle. SMP has since landed
+(all four cores schedule); the throughput with it has not been
+measured, and the review recorded in "Next" found that the secondary
+cores do not yet tick, so the number is not worth taking until they do.
 
 Two tools this bought, both permanent: `blackhole` on any ether ctl
 toggles a surgical sink (IPv4/UDP/port-9 counted and dropped, control
@@ -1169,157 +1231,239 @@ probe in devether.c's used<0 branch, never with theories.
 
 ### Smaller things still open
 
-`sprint()` in `devcons.c` assumes every caller's buffer is `PRINTSIZE`,
-and `os/port/dev.c:105` hands it a `smalloc(4+strlen(spec)+1)`. It fits
-today and will not survive the first caller that formats something
-longer.
+The `sprint()`/`PRINTSIZE` hazard once recorded here is fixed:
+`os/port/dev.c` uses `snprint` with the buffer's real size. What is
+still small and open is gathered under "Next", tier 1, item 6.
 
 ## Next
 
-Done: exception vectors, EL2→EL1, MMU, timer and IRQ, the `os/port`
-import and 64-bit port, the Dis VM, and an interactive shell. What
-follows is ordered by dependency, with the reasoning kept where a later
-reader needs it.
+Revised 2026-09-05 from a review of the branch's 49 commits against the
+tree, file by file, rather than from the commit messages. The previous
+version of this list was written before the board arrived and had
+drifted badly: it still called the JIT, LAN78xx and `os/ip` outstanding.
+All three are done. What the review found instead is below, and the
+ordering principle is: **make what exists correct and tested before
+adding hardware.** Every item names the code so it can be checked
+rather than believed.
 
-**1. The JIT — done in emulation, hardware validation outstanding.**
+The port lives on `feat/baremetal-pi`. `master` has no `os/` directory,
+and no workflow in `.github/workflows` runs the harness. Until tier 2
+is done, "it works" means "it worked on one board and one developer's
+QEMU".
 
-Dis is compiled to AArch64 rather than interpreted. Measured on the
-same kernel, differing only by `-DCFLAG=0`:
+### Tier 1 — defects the review found; fix before anything new
 
-    JIT:    2000000 iterations in   80 ms (acc=1048429888)
-    no JIT: 2000000 iterations in 2160 ms (acc=1048429888)
+**1. The AArch64 JIT never runs a reference's destructor.**
+`libinterp/comp-arm64.c` `macfrp()`: after the nil check, the refcount
+is loaded, decremented with `SUB_IMM` — which does not set flags — and
+stored, and then `BCOND(NE)` branches on the flags the *nil check* left,
+which are always NE for a non-nil pointer. `rdestroy` is unreachable.
+And if the branch were fixed alone it would still be wrong: `destroy()`
+in `heap.c` decrements again, `Heap.ref` is unsigned, and the wrapped
+value reads as "still referenced". `comp-386.c` and `comp-amd64.c` get
+this right by branching at `ref == 1` *without* decrementing.
 
-**27×**, against 10× measured for the same code generator in the hosted
-emulator on an M-series Mac. That direction was predicted and the
-reason holds: `xec`'s inner loop costs two indirect calls per Dis
-instruction, and an in-order Cortex-A53 cannot hide them the way an
-out-of-order core does. 12/12 clean boots; the shell, pipelines and
-command substitution all run as compiled code.
+The consequence is exactly the "OPEN QUESTION" recorded under "The
+Ethernet data path is in the kernel": a Limbo `fd = nil` did not close
+the endpoint, and etherusb.b still carries the `sys->dup` of `#c/null`
+workaround. Every last-reference drop in compiled code — `movp`,
+`headp`, `tail`, frame destructors — leaks until a GC sweep. The
+interpreter path in `xec.c` is correct, so a `-DCFLAG=0` kernel hides
+it. **This is not a bare-metal bug: hosted macOS on Apple Silicon runs
+the same macro under `-c1`,** and the macOS CI job runs the suite
+without `-c1` — interpreter only — so nothing there would have caught it.
 
-The suite checks two things that are not the same: that compiled code
-computes the **same answer** as the interpreter, bit for bit, and that
-it is faster. A JIT that is merely fast is a miscompilation waiting to
-be found. The interpreter stays the reference, so any disagreement is
-bisectable against it.
+Fix: mirror the amd64 shape (compare with 1, branch to `rdestroy` on
+equal, else decrement and return). Test: a Limbo test that drops an fd
+in compiled code and checks `#u`'s endpoint `inuse` (or a pipe's other
+end seeing EOF) *without* the dup workaround; then remove the
+workaround. Run the hosted runner on macOS with `-c1` in CI. Half a day
+of code; the test is the point.
 
-`comp-arm64.c` gained an `INFERNO_NATIVE` arm beside the `APPLE_JIT`
-one it already had. Its only host dependencies were `mmap(PROT_EXEC)`
-and an icache flush; this kernel maps all RAM without PXN/UXN so
-`malloc()` returns executable memory, and `cacheiflush()` is
-CTR_EL0-driven.
+**2. Cores 1–3 have no clock tick.** `timersinit()`
+(`os/port/portclock.c`) creates the one periodic Timer whose purpose is
+to call `hzclock()`, and `timeradd()` puts it on `timers[m->machno]` —
+core 0, where `clockinit()` ran. A secondary's `clockintr` calls
+`timerintr`, which walks its own queue, which is empty. So on cores 1–3
+there is no preemption, `m->ticks` never advances and `active.exiting`
+is never checked; the comment in `secclockinit` (`clock.c`) claiming
+otherwise is wrong, and the one in `squidboy` (`main.c`, "voluntary for
+now") is right. With `lock()` never yielding when `nmach > 1`
+(`taslock.c`), a process spinning at spllo on a lock whose holder was
+preempted holds its core until the holder runs elsewhere.
 
-**Still gated on hardware.** QEMU's TCG does not model split I/D
-caches, so a JIT that skips its icache maintenance works perfectly in
-emulation and executes stale instructions on a Cortex-A53. Acceptance
-is not complete until JIT-generated code has run on the board.
+Fix: each secondary adds its own periodic Timer in `secclockinit`, or
+`clockintr` calls `hzclock` directly when `m->machno != 0`. Test: the
+harness asserts `cpu1..3: up`, and a busy Limbo loop pinned by chance to
+a secondary is preempted by a second one. Nothing in the harness
+currently asserts that SMP came up at all.
 
-*Two harness bugs it exposed, both stale build state:* libinterp ships
-ten `comp-*.c` files each defining `compile()`, and excluding only
-`comp-amd64.c` left the linker free to pick `comp-68020.c` — so the
-first time `cflag` went above zero, the kernel compiled a Dis module
-with a 68020 code generator and branched into it. Then, after
-narrowing the build, it *still* did: `ar r` replaces and adds members
-but never removes one, so the stale object was still in `libkern.a`.
-That is the third time on this branch that stale build state has
-produced confident wrong behaviour.
+**3. Every process is the host owner.** `main.c` sets the user to
+`inferno`, which is `eve`, for every process, so `iseve()` is always
+true, and `#S`, `#G` and `/dev/sysctl` are bound into the `/dev` the
+desktop shares. Any desktop program — any agent tool — can `echo
+tryboot > /dev/sysctl`, write `/dev/sdcard` raw, repartition through
+`/dev/sdctl` (`sdaddpart` in `devsd.c` has no overlap check), or
+rewrite `/dev/hostowner`. This is the opposite of the namespace
+discipline the rest of InferNode is built on
+(`docs/DESIGN-PRINCIPLES.md`).
 
-*And a real kernel bug,* found stress-testing the JIT through the
-shell: a backquote substitution killed the machine with
-`panic: devno | 0x7c`. `kpipe()` reached `devtab` through
-`devno('|', 0)`, and `devno` panics on a miss when `user == 0` — so any
-Limbo program calling `sys->pipe()` on a kernel without `#|` took the
-system down. Both halves fixed: `#|` imported, and a missing device is
-now an error to the caller rather than a panic.
+Fix, smallest first: build the desktop's namespace in
+`boot-baremetal.sh` without `#S`, `#G` and the console ctl (the
+mechanism — `bind`, `newns` — already exists), then a non-eve user for
+the desktop and agents. A week for the second; an afternoon for the
+first.
 
-**2. Hardware bring-up.** The card needs a FAT32 partition holding the
-Broadcom blobs (`bootcode.bin`, `start.elf`, `fixup.dat` from
-raspberrypi/firmware), a `config.txt`, and this kernel named
-`kernel8.img`:
+**4. tryboot is a one-shot flag, not yet an A/B path.**
+`cp /dev/bootimage /n/dos/infernode8.img` (`devboot.c`) overwrites the
+file `config.txt` names — the known-good kernel. A/B exists only if the
+operator hand-edits `tryboot.txt`. No watchdog is armed while a
+candidate boots, so a candidate that *hangs* (the classic JIT icache
+failure) needs the power switch; only a candidate that panics reboots
+itself. And `boardtryboot` (`board.c`) is a PM_RSTS write that has not
+been tested against the firmware; the harness has no tryboot check.
 
-    BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
-    cp /tmp/bm/bcm2837-kernel.img /Volumes/<card>/kernel8.img
+Fix: install to a candidate filename; arm the hardware watchdog in
+`kmain` and clear it from `osinit` once the shell answers; prove the
+PM_RSTS handshake on the board once, with the result written here; a
+harness check for the flag write. Two or three days.
 
-`config.txt` wants four lines:
+**5. The login screen is bypassable in two ways, one deliberate.**
+`boot-baremetal.sh` treats `wm/logon` exiting 0 as a login. Escape
+twice is a designed skip ("Keys won't persist") and exits 0 — fine,
+but the script's comment claims fail-closed and it is not. Worse,
+`headlessprompt()` in `logon.b` does nothing and returns normally when
+the display or `/dev/keyboard` cannot be opened, which is precisely the
+"logon died, desktop starts anyway" case the script says it blocks.
+Also `if {! ~ $#skiplogon 0}` enables the skip for `skiplogon=0`, unlike
+the hosted `~ $skiplogon 1`. Fix: distinct exit statuses for
+logged-in / skipped / failed, and the script honours them. Hours.
 
-    arm_64bit=1
-    enable_uart=1
-    dtoverlay=disable-bt
-    init_uart_clock=48000000
+**6. Smaller confirmed defects, each a line or two:**
 
-The last one is not optional here even though it is often described as
-a default. `uart.c` divides for 115200 assuming a 48MHz reference --
-IBRD 26, FBRD 3, which is 48000000/(16*115200) = 26.04 -- and the
-firmware, not the kernel, decides what that reference actually is. If
-it differs, the divisor is wrong by the same ratio and the console
-produces framing errors and garbage rather than nothing, which reads
-as a broken kernel rather than a misconfigured clock. Pinning it costs
-one line.
+- `irqorphan` (`intr.c`) is reset by *every* core's timer interrupt
+  (`clock.c`), so a genuinely unhandled GPU interrupt on core 0 can be
+  reported "spurious" by a tick on core 1 and storm silently.
+- `devusb.c` `CMdetach` releases every endpoint on every write; a
+  second "detach" double-frees. `osinit` writes once today.
+- `uart.c` zeroes the console mutex after a bounded spin even when it
+  never acquired it; `uartputx`/`uartputd` and `dumpureg` bypass it.
+- Unlocked multi-core writers: `ticks++` and the profiler buckets in
+  `clock.c`, `nspurious` and `irqenabled |=` in `intr.c`. Lossy at
+  best; `irqenabled` from a kproc on another core is the one to fix.
+- `lock()` has two different spin bounds (1M with `up == nil`, 100M
+  otherwise) and `schedinit`/interrupt-time wakeups use the short one
+  against locks that are held across a memset.
+- `etherusb.b`: `dhcpreader`, `pingreader` and `ntpreader` never exit;
+  the UDP conversation on port 68 is never closed.
+- `dossrv.b`: a real file whose name matches `badent-*` is removed
+  without `truncfile`, leaking its clusters.
+- `mailbox.c` says "single-threaded for now" over one shared request
+  buffer; `fbcons` now calls it from the console path while draw and
+  pointer run on other cores.
+- `notyet.c` `postnote` is a stub, so a blocked reader cannot be
+  kicked; the comment there already says it is "wrong to leave
+  permanently".
 
-The third is the one that costs an afternoon if it is missing. On a Pi
-3 the PL011 is wired to Bluetooth by default and the mini-UART is on
-the header instead -- so the console comes out of a different device at
-a different clock, and the symptom is a board that boots to silence.
-`kernel.ld` links at 0x80000, which is where the boot ROM loads
-`kernel8.img` in 64-bit mode, so no `kernel_address` is needed.
+### Tier 2 — make what exists trustworthy
 
-Console is a 3.3V USB-serial adapter on GPIO 14/15 (pins 8 and 10),
-ground to pin 6. **Not 5V**: the Pi's GPIO is not 5V tolerant.
+**7. Test what the board relies on.** The harness (`baremetal_test.sh`)
+covers the kernel well and the userspace not at all: no check for
+tryboot, `wm/logon`, `secstored`, the rootpath policy, `/usr`, or any
+of the five dossrv fixes (its two FAT fixtures are read-only plus one
+append). DHCP "passes" through the static fallback because QEMU's
+user network never answers. SMP is not asserted. Add: a populated
+FAT32 card image booting through rootpath to logon under QEMU; dossrv
+rename/growroot/badent fixtures; four cores up; a DHCP server on the
+QEMU side. Three or four days, and it is what makes tier 1 provable.
 
-Two things are known to be untested on hardware and are the first to
-watch. The JIT has never run on a real Cortex-A53, and QEMU's TCG does
-not model split I/D caches, so missing icache maintenance is invisible
-in emulation and would present as executing stale instructions. And
-every USB finding on this branch is against QEMU's DWC model; the
-board's controller is the real thing behind a real high-speed hub, so
-the split-transaction paths that never execute under emulation will
-execute there.
+**8. CI, then master.** Add a Linux job with clang (`--target
+aarch64-elf`), `ld.lld`, `llvm-objcopy`, `qemu-system-aarch64` with
+`raspi3b`, the native `limbo` and python3; the harness already skips
+when they are absent, so it is safe to add before it is green
+everywhere. Remove the hard-coded personal path the harness falls back
+to for `limbo`. Then merge `feat/baremetal-pi` to `master`. The branch
+also changes hosted behaviour — Limbo `int` semantics in both JITs and
+the interpreter, `runt.c` print bounds, `draw.h`'s `BGLONG` — and those
+need the hosted suite on both architectures before the merge.
 
-**3. USB — a class driver exists; LAN78xx is unvalidated.** The RNDIS
-family works end to end under QEMU. The LAN78xx family, which is what
-the 3B+'s LAN7515 actually speaks, is written but **has never been run
-against the silicon**, and its register map came from knowledge rather
-than from a datasheet on the desk. It is built to fail loudly rather
-than half-work: `lansetup()` reads ID_REV first and refuses a device
-that answers 0 or all-ones, and refuses again if the MAC reads back as
-all zeroes, because a NIC that is misprogrammed comes up and silently
-carries nothing.
+**9. Network device lifecycle.** `#l` binds once, ever (`devether.c`);
+its reader and writer kprocs exit on error without closing their
+endpoints; `etherusb.b` has no detach handling although `#u` now
+reports detach; `nif.link` is set to 1 at bind and never updated;
+`lanphy` returns success without link; DHCP has no renewal. A NIC
+unplugged is dead for the boot. Two or three days.
 
-The PHY is not done. Link needs the internal PHY brought up and
-auto-negotiation completed through MII_ACC and MII_DATA, which is more
-than a handful of writes; the driver says so on the console rather
-than leaving it to be inferred from a dead interface.
+**10. The DWC read path, hardware edition.** No cache *invalidate*
+after DMA completes (`usbdwc.c` cleans before, `memmove`s after) —
+speculative prefetch on an A53 across four cores can read stale lines,
+and QEMU is coherent so the harness cannot see it. The residual ~0.02%
+framing desync under burst is still open; resume with the byte-capture
+probe in `devether.c`, not with theories. Completion is polled through
+`tsleep` timeouts rather than interrupt-driven. Hubs are polled rather
+than read through their status-change endpoint. About a week, and it
+is where the next hardware-only bug lives.
 
-**3a. The old item, for reference —** The 3B+'s
-LAN7515 sits behind USB, so a DWC2 host stack gates wired Ethernet
-*and* WiFi. `usbdwc.c` and `devusb.c` are imported and the bus
-enumerates end to end under QEMU: root hub, a real hub addressed and
-interrogated over the wire, and the CDC Ethernet device behind it.
+**11. Kernel hygiene the review flagged:** the identity map ("for
+now" in `mmu.c`, and JIT text is RWX); secondary scheduler stacks are
+8K `malloc` with no guard word; `conf.nmach` is set before the cores
+have answered; `up->inpreempt`-style invariants have no SMP
+counterparts. Also `lastdev` in `osinit.b` is one global shared by
+every hub watcher, so two hubs enumerating at once can cross names.
 
-The design decision this item used to be waiting on is made and written
-up — see "Decision: device protocols live outside the kernel, mechanism
-inside". The class driver is a Dis program, not `etherusb.c`. Remaining:
-`ethermedium.c` and `chandial.c` into `os/ip`, then the program itself,
-speaking CDC against QEMU's `usb-net` and LAN78xx against the board.
+### Tier 3 — the machine as a product
 
-**4. `os/ip`.** No TCP/IP stack exists in this tree at all, so it is a
-hard dependency under every networking path. Write the route-table test
-*before* touching `iproute.c`: it is the one file with a silent
-wrong-answer failure mode, and `tcp.c`'s sequence comparisons survive
-LP64 by accident through `(int)` truncation — which is worse than
-breaking, because it passes a smoke test and stalls under real traffic.
+**12. The userspace on the card.** `boot-baremetal.sh` starts
+`secstored`, `logon`, `luciuisrv` and `lucifer`. Against the hosted
+`boot.sh` it lacks `ndb/cs` (no name resolution — which is why
+secstore is dialled by number), the plumber, `mntgen`, `llmsrv` (so
+`/mnt/llm` is an empty mount point), `tools9p` at `/tool` (so Veltro
+has no tools), `msg9p`, `wallet9p`, `lucibridge`. Order: `ndb/cs` and
+the plumber first, because everything else assumes them. The mount
+points already exist in the root skeleton.
 
-**5. FT5406 touch**, via mailbox tag `0x0004000F` — the firmware polls
-the controller into a buffer, so no I2C driver is needed. Note QEMU
-declares that tag but never handles it, so this is hardware-only.
+**13. Throughput.** The ledger stands: 12.4 MB/s through the wire path,
+2.6 MB/s through a Limbo TCP consumer. The levers are still the two
+named there — a second receive buffer so USB and parsing overlap, and
+the VM on another core — but the second waits on item 2, and the
+number should be re-taken once it lands.
 
-**6. WiFi** (CYW43455 over SDIO), which needs everything above plus an
-SDIO/EMMC driver and a firmware blob upload.
+**14. Hardware not started, smallest first.** FT5406 touch via mailbox
+tag `0x0004000F` (firmware polls the controller; hardware-only, QEMU
+declares the tag and ignores it). A USB storage class driver in Limbo
+over `#u`, the same shape as `etherusb.b`. WiFi: CYW43455 over SDIO on
+the second controller, plus a firmware blob upload — the large one; the
+EMMC driver exists for SD but SDIO is different. Audio (PWM or HDMI).
+Bluetooth is on the PL011 the console uses; it would mean the
+mini-UART for the console first.
 
-Smaller, and worth doing whenever they block something: `devtab` holds
-root, cons, prog and pipe, so there is still no `/env` (`#e`) and no
-`/fd` (`#d`). `sysfile.c:514` reaches the mount device through
-`devno('M', 0)` — the same panic-on-miss hazard `#|` had, harmless only
-while nothing mounts anything. `sprint()` in `devcons.c` still assumes
-every caller's buffer is `PRINTSIZE` while `os/port/dev.c:105` hands it
-a `smalloc(4+strlen(spec)+1)` — it fits today and will not survive the
-first longer format.
+**15. The next board.** BCM2711 (Pi 4) needs a GIC-400 interrupt
+controller, xHCI over PCIe (the VL805) and the GENET MAC. The `#u`
+boundary means `etherusb.b`, `kbdusb.b` and `mouseusb.b` carry over
+unchanged above a new host controller driver; XHCI is an open
+specification and should be smaller than `usbdwc.c`. The Zero 2 W and
+CM3+ are this SoC and should boot this kernel, minus the hub (USB OTG
+only) and plus WiFi. The Pi 5 is blocked on RP1 having no public
+register documentation.
+
+### Housekeeping the review also found
+
+Comments that now say the opposite of the code, to fix as the files are
+touched: `fns.h` says four board hooks and declares five; `dat.h` says
+exception entry restores x28 (it deliberately does not) and that nothing
+saves FPU state (`FPsave`/`FPrestore` exist); `main.c` "one core for
+now" and "not yet exercised: sched()"; `taslock.c` "secondary cores are
+parked"; `notyet.c` "tcp and udp are not here yet" and "nothing installs
+a screenputs"; `etherusb.b` "never run against the silicon" and "bulk
+endpoint assumed to be 2"; two conflicting `config.txt` recipes in this
+file (under "Working on the board" and the old bring-up item), neither
+mentioning `tryboot.txt`; `docs/TLS-ENTROPY.md` (the pool is
+hardware-fed now) and `docs/PERSISTENCE.md` (the `/usr` question is
+decided: on the card). The top-level `README.md` and `QUICKSTART.md`
+still describe the Pi only as a hosted Linux target.
+
+### What was on this list before, for the record
+
+The JIT (validated on the board), hardware bring-up, the LAN78xx driver
+and PHY, `os/ip`, `#e`. All done. `#d` (`/fd`) is still absent and
+nothing has needed it.

@@ -1,26 +1,27 @@
 implement Init;
 
 #
-# Initial Dis program for the bare-metal AArch64 ports.
-#
-# Shared by os/bcm2837 and os/virt: nothing in it is board-specific,
-# and having one file means a divergence between the two ports cannot
-# hide in a second copy of the first program either of them runs.
+# Initial Dis program for the bare-metal AArch64 port.
 #
 # This is what disinit() loads and schedmod() runs -- the first Limbo
 # code the kernel executes, and the point at which the machine stops
-# being a C program and starts being Inferno.
+# being a C program and starts being Inferno. Nothing in it is
+# board-specific; the board's own facts (the SD device, the pins the
+# kernel claims) are read from the namespace, not compiled in.
 #
-# Deliberately smaller than upstream's geninit.b, which loads the
-# keyring, binds a mouse and serial device, starts a ramfile server for
-# DNS, and finally execs /dis/sh.dis. None of those exist in this
-# kernel's root filesystem yet: it carries this module and nothing else,
-# because every file in it is compiled into the kernel image. Adding the
-# shell means adding sh.dis and everything it loads.
+# It is the counterpart of upstream's geninit.b, and it has grown the
+# way that one did: it proves the VM and the namespace, walks the USB
+# bus and starts the class drivers (etherusb, kbdusb, mouseusb), runs
+# the built-in self-checks the harness asserts on, mounts the SD card
+# on /n/dos, applies the rootpath policy (which root the card asks
+# for), binds a writable /usr, and finally starts the shell with the
+# profile -- which is where the userspace on the card takes over
+# (auth/secstored, wm/logon, the desktop).
 #
-# So this does the one thing worth proving: that Dis bytecode runs, that
-# it can reach the namespace the C kernel built, and that Sys calls
-# cross back into the kernel correctly.
+# Every file the kernel image carries is a recovery floor: enough to
+# boot to a shell and repair a card, and no more. What a usable machine
+# runs comes from the card or the network, so that fixing it does not
+# mean reflashing a kernel.
 #
 
 include "sys.m";

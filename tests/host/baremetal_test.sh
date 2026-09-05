@@ -2,36 +2,41 @@
 #
 # tests/host/baremetal_test.sh
 #
-# Build and boot the bare-metal AArch64 kernels under QEMU and assert on
-# what they report over the PL011 console.
+# Build the bare-metal AArch64 kernel (os/arm64 + os/bcm2837), boot it
+# under QEMU's raspi3b machine, and assert on what it reports over the
+# PL011 console -- and, where the console cannot tell, on what QMP shows
+# (framebuffer pixels, USB hotplug) and on what comes back through the
+# emulated network (TCP echo, DHCP) and SD card (the install image).
 #
-# Two machines, from one shared os/arm64 tree:
+# This is also the only supported way to BUILD the kernel; see
+# os/bcm2837/README.md "Building" for why. BAREMETAL_BUILD_DIR keeps the
+# artefacts (bcm2837-kernel.img is the kernel8.img for a card).
 #
-#   bcm2837  QEMU raspi3b -- the Raspberry Pi 3B+ SoC, the hardware
-#            target. Has a VideoCore mailbox, a firmware framebuffer,
-#            GPIO and a second fixed-rate clock; has no NIC model.
-#   virt     QEMU virt    -- a synthetic machine, the development
-#            target. Has a GICv2 and virtio-mmio (net, gpu, input);
-#            has no framebuffer and no second clock.
+# What it covers, in boot order: EL2->EL1 and the exception round trip
+# (with an injected fault to prove the panic path reports), the MMU,
+# clocks and interrupts, allocators, the scheduler, the namespace and
+# devices, the Dis VM and the JIT (bit-identical against the interpreter,
+# and faster), the shell, os/ip over the USB Ethernet driver, USB
+# keyboard and mouse including hot-plug and unplug, the SD card and
+# dossrv, GPIO, and #B/bootimage against the file it booted.
 #
-# Running both is the point rather than a convenience: the two boards
-# share os/port and os/arm64, so a failure on one and not the other
-# localises itself. It also stops the shared tree from quietly growing a
-# dependency on one machine's peculiarities.
+# What it cannot cover, and only the board does: split I/D caches (the
+# JIT's icache maintenance), bus vs physical DMA addresses, the LAN78xx
+# family (QEMU's usb-net speaks RNDIS), SMP timing, tryboot, the DSI
+# panel, and anything the userspace on a card does after osinit
+# (logon, secstored, the desktop). See the README's "Next".
 #
-# This covers the parts of early bring-up that otherwise fail as a silent
-# hang: dropping EL2->EL1, installing VBAR_EL1, and the exception
-# save/dispatch/restore round trip. It also injects a deliberate fault to
-# prove the panic path still reports rather than wedging.
+# There was once a second machine here (QEMU virt). It is not in the
+# tree; the shared os/arm64 split it forced is.
 #
-# Deliberately does NOT source common.sh: that resolves $EMU and the Limbo
-# toolchain, and this test needs neither -- it exercises a cross-built
-# AArch64 kernel, not anything running inside emu.
+# Does NOT source common.sh: that resolves $EMU, and nothing here runs
+# inside emu. The native limbo IS needed, for runt.h/sysmod.h and the
+# Dis modules compiled into the image.
 #
 # Skips cleanly when the cross toolchain or QEMU is absent, so it is safe
 # to run anywhere.
 #
-# Run from project root: ./tests/host/baremetal_pi_test.sh [-v]
+# Run from project root: ./tests/host/baremetal_test.sh [-v]
 #
 
 ROOT="${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -58,7 +63,7 @@ fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
 skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
 info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
 
-echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837 + virt)${NC}"
+echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837)${NC}"
 echo ""
 
 #
@@ -120,7 +125,7 @@ if [[ -z "$QEMU" ]]; then
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
-for mach in raspi3b virt; do
+for mach in raspi3b; do
     if ! "$QEMU" -machine help 2>/dev/null | grep -q "^$mach"; then
         skip "this QEMU build has no $mach machine model"
         echo ""
@@ -1322,8 +1327,8 @@ check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 #   ARP, Request who-has 10.0.2.2 tell 10.0.2.15
 #   ARP, Reply 10.0.2.2 is-at 52:55:0a:00:02:02
 #
-# The reply is on the wire; receiving it does not work yet. See
-# "Receive does not complete" in os/bcm2837/README.md.
+# The reply comes back too, now; the race that once ate it is under
+# "Networking works, intermittently (RESOLVED)" in os/bcm2837/README.md.
 check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
 check "10.0.2.15 mask 255.255.255.0 on ipifc"       "os/ip binds an interface to a driver outside the kernel"
 check "default route via 10.0.2.2"             "a default route is installed"
@@ -2863,22 +2868,10 @@ fi
 run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0"
 
 #
-# The virt machine.
-#
-# -cpu cortex-a53 is NOT optional, and is the single most confusing
-# thing about this target: -M virt defaults to cortex-a15, a 32-bit
-# ARMv7 CPU, even under qemu-system-aarch64. An AArch64 kernel booted
-# without it does not fail -- it produces absolutely no output at all,
-# because the CPU is decoding the image as ARM32. Picking the same A53
-# the Pi has also keeps the MIDR assertion common to both platforms.
-#
-# -m 1024 matches the Pi 3B+'s 1GB, and is asserted on: it proves the
-# device-tree parse read a real number rather than falling back to a
-# default that happened to look plausible.
-#
-# The virtio devices are attached so the transport scan has something to
-# find. They are not driven -- there are no drivers yet -- but their
-# presence is what makes virt worth having, so the test asserts it.
+# A second machine (QEMU virt) once ran here too. If one comes back,
+# remember: -M virt defaults to cortex-a15, a 32-bit CPU, even under
+# qemu-system-aarch64, and an AArch64 kernel booted without
+# -cpu cortex-a53 produces no output at all.
 #
 
 

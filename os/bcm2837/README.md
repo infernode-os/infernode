@@ -352,10 +352,12 @@ the handler read memory. The hosted emu had the walkers right since the
 2007 upstream drop and `namec` wrong, and its soaks were flat only
 because nothing in them ever missed. Check the compiler's output, not the
 source: `clang -S` with the harness flags and read the block after `bl
-setlabel; cbz w0`. That compiler-output check is the only verification
-the bare-metal walkers have: `tests/host/baremetal_test.sh` does not yet
-count pool blocks across failing lookups on the kernel, and that runtime
-check is an open gap. `tests/host/walk_leak_test.sh` counts live
+setlabel; cbz w0`. On the kernel the runtime evidence is the board
+itself: with the fixes, an idle desktop's main pool stayed flat (11.04,
+10.92, 10.94 MB across three readings over 25 minutes on 2026-09-06)
+where it had grown 0.9 MB every ten minutes before.
+`tests/host/baremetal_test.sh` still does not count pool blocks across
+failing lookups under QEMU; that automated check is the open gap. `tests/host/walk_leak_test.sh` counts live
 main-pool blocks across 1000 failing lookups in the hosted emu, which
 shares `namec` with the kernel but not its `devwalk`/`mntwalk` objects.
 

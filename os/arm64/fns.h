@@ -10,6 +10,8 @@ void	serialrecover(void);
 int	hwrandom(uchar*, int);
 void	uartputstr(char*);
 void	uartlockon(void);
+int	uartlock(void);
+void	uartunlock(int);
 void	uartputx(u64int);
 void	uartputd(u64int);
 
@@ -88,12 +90,13 @@ u64int	clockticks(void);
 void	microdelay(int);
 int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
-extern int irqorphan;
+extern int irqorphan[];
 void	intrdump(void);
 int	intrpending(void);
 int	getmacaddr(uchar*);
 void	mmunormalnc(uintptr, usize);
 extern ulong nspurious;
+ulong	ainc(ulong*);
 /*
  * intr.c -- the board's interrupt controller.
  *

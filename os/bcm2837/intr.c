@@ -74,8 +74,30 @@ static Vctl vctl[Nirq];
  */
 static u32int irqenabled[3];
 
-/* the last source that arrived with no handler; -1 if none has */
-int irqorphan = -1;
+/*
+ * Guards irqenabled[] and the enable/disable registers behind it.
+ *
+ * intrenable() is called from kprocs, and a kproc runs on whichever core
+ * picks it up; two drivers enabling their sources at once from two
+ * cores would each read-modify-write the same word and one of the bits
+ * would be lost -- a driver whose interrupt is unmasked in hardware and
+ * masked in the software copy intrgpu() filters by, so it fires and is
+ * never dispatched. The reads in intrgpu() and intrpending() are single
+ * aligned words and need no lock; ilock because the writers may be
+ * called with interrupts already off.
+ */
+static Lock intrlock;
+
+/*
+ * The last source that arrived with no handler, per core; -1 if none.
+ *
+ * Per core because irqdispatch() clears it at the top of every dispatch
+ * and tests it at the bottom, and every core's clock tick is a dispatch.
+ * With one word, a tick on core 1 could wipe out what intrrun() on core
+ * 0 had just recorded, and the unhandled interrupt on core 0 would be
+ * counted as spurious -- and left asserted, to fire again, for ever.
+ */
+int irqorphan[MAXMACH];
 
 /* interrupts that had already gone away by the time we looked */
 ulong nspurious;
@@ -117,6 +139,7 @@ intrenable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 	if(f == nil)
 		panic("intrenable: nil handler for irq %d (%s)", irq, name);
 
+	ilock(&intrlock);
 	vctl[irq].f = f;
 	vctl[irq].a = a;
 	vctl[irq].name = name;
@@ -132,6 +155,7 @@ intrenable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 		irqenabled[2] |= 1 << (irq - 64);
 		INTREGS->ARMenable = 1 << (irq - 64);
 	}
+	iunlock(&intrlock);
 }
 
 void
@@ -142,6 +166,7 @@ intrdisable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 	if(irq < 0 || irq >= Nirq)
 		return;
 
+	ilock(&intrlock);
 	if(irq < 32)
 		INTREGS->GPUdisable[0] = 1 << irq;
 	else if(irq < 64)
@@ -160,6 +185,7 @@ intrdisable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char *name)
 	vctl[irq].f = nil;
 	vctl[irq].a = nil;
 	vctl[irq].name = nil;
+	iunlock(&intrlock);
 }
 
 /*
@@ -177,7 +203,7 @@ intrrun(Ureg *u, int irq)
 		 * claimed. "unhandled IRQ" with no number sent the last
 		 * diagnosis to the register dump and a guess.
 		 */
-		irqorphan = irq;
+		irqorphan[m->machno] = irq;
 		return 0;
 	}
 	vctl[irq].f(u, vctl[irq].a);
@@ -238,6 +264,8 @@ intrinit(void)
 		vctl[i].a = nil;
 		vctl[i].name = nil;
 	}
+	for(i = 0; i < MAXMACH; i++)
+		irqorphan[i] = -1;
 
 	/*
 	 * Report what we inherited before changing it.
@@ -283,13 +311,23 @@ intrinit(void)
  * none of which were being printed.
  *
  * uartputstr rather than print: this runs at splhi from the trap path,
- * where the console queue has no reader.
+ * where the console queue has no reader. The whole dump is emitted under
+ * the console lock so that another core's output cannot land between
+ * its pieces -- one line of register values with another core's line
+ * spliced into the middle is exactly the report that cannot be read.
+ * Lirqsource0 is core 0's summary register; this core's own is the slot
+ * at 4*machno, and it is the one the dispatch on this core consulted.
  */
 void
 intrdump(void)
 {
-	uartputstr("intr: Lirqsource0 ");
-	uartputx(LOCAL(Lirqsource0));
+	int held;
+
+	held = uartlock();
+	uartputstr("intr: cpu");
+	uartputd(m->machno);
+	uartputstr(" Lirqsource ");
+	uartputx(LOCAL(Lirqsource0 + 4*m->machno));
 	uartputstr(" GPUpending ");
 	uartputx(INTREGS->GPUpending[0]);
 	uartputstr(" ");
@@ -305,8 +343,12 @@ intrdump(void)
 	uartputstr(" spurious ");
 	uartputd(nspurious);
 	uartputstr(" orphan ");
-	uartputd(irqorphan);
+	if(irqorphan[m->machno] < 0)
+		uartputstr("none");
+	else
+		uartputd(irqorphan[m->machno]);
 	uartputstr("\n");
+	uartunlock(held);
 }
 
 /*

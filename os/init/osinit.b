@@ -92,6 +92,7 @@ init()
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
 	kernelimage();
 	gpiocheck();
+	smpticks();
 
 	#
 	# A fixed arithmetic loop, timed. Reported so the harness can run
@@ -2300,6 +2301,81 @@ kernelimage()
 			dig += sys->sprint("%.2x", int h[i]);
 	}
 	sys->print("init: /dev/bootimage %d bytes stat %bd sha1 %s\n", n, d.length, dig);
+}
+
+#
+# Every core's clock, read through the namespace.
+#
+# /dev/sysstat has one line per running core -- "cpuN ticks T intrs I
+# timers F" -- and a core whose tick count does not move between two
+# reads a fifth of a second apart has a clock interrupt that arrives
+# and does nothing. That was cores 1-3 until secclockinit gave each its
+# own hzclock Timer: their interrupt count climbed, their ticks sat at
+# 1, and no process on them was ever preempted. The kernel's own
+# comments said otherwise, which is why this is measured rather than
+# believed. One line, so the harness can assert it.
+#
+smpticks()
+{
+	a := cputicks();
+	if(a == nil){
+		sys->print("init: clock: /dev/sysstat gave no cpu lines\n");
+		return;
+	}
+	sys->sleep(200);
+	b := cputicks();
+	moving := 0;
+	total := 0;
+	r := "";
+	for(l := a; l != nil; l = tl l){
+		(name, t0) := hd l;
+		t1 := lookup(b, name);
+		total++;
+		d := t1 - t0;
+		if(t1 >= 0 && d > 0)
+			moving++;
+		r += sys->sprint(" %s +%d", name, d);
+	}
+	sys->print("init: clock ticks on %d of %d cores (%s)\n", moving, total, r);
+}
+
+#
+# The per-core tick counts, in cpu order. Returns nil if the file is
+# missing or holds nothing recognisable, so the caller can say so.
+#
+cputicks(): list of (string, int)
+{
+	fd := sys->open("/dev/sysstat", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: clock: cannot open /dev/sysstat: %r\n");
+		return nil;
+	}
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	res: list of (string, int);
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " ");
+		if(nf >= 3 && hd tl f == "ticks")
+			res = (hd f, int hd tl tl f) :: res;
+	}
+	# tokenize gave the lines in order; consing reversed them
+	rev: list of (string, int);
+	for(; res != nil; res = tl res)
+		rev = hd res :: rev;
+	return rev;
+}
+
+lookup(l: list of (string, int), name: string): int
+{
+	for(; l != nil; l = tl l){
+		(n, v) := hd l;
+		if(n == name)
+			return v;
+	}
+	return -1;
 }
 
 #

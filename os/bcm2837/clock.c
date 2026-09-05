@@ -40,7 +40,7 @@ enum
 
 static u64int cntfrq;		/* generic timer rate, from CNTFRQ_EL0 */
 static u64int tickinterval;	/* generic timer ticks between interrupts */
-static u64int ticks;		/* ticks since clockinit */
+static u64int ticks;		/* core 0's ticks since clockinit; see clockintr */
 
 static u64int
 rdcntfrq(void)
@@ -166,16 +166,33 @@ clockinit(void)
  * calibrated tickinterval against the fixed-frequency system timer;
  * the other cores reuse that number, route their own CNTPNSIRQ through
  * their own slot in the local interrupt block, and arm their first
- * tick. From then on clockintr() -- which reads only per-core
- * registers -- serves them exactly as it serves core 0, which is what
- * makes tsleep(), preemption and the portable timer chain work on
- * every core rather than only where the boot happened.
+ * tick.
+ *
+ * Routing and arming are not enough, and for a long time they were all
+ * this did. clockintr() hands every tick to portclock.c's timerintr(),
+ * which walks timers[m->machno] -- THIS core's queue -- and the only
+ * thing that makes a tick into a clock (m->ticks, checkalarms, the
+ * active.exiting check, preemption) is a periodic Timer with a nil tf
+ * sitting on that queue. timersinit() made exactly one, on core 0's
+ * queue, and so cores 1-3 took a thousand interrupts a second and did
+ * nothing with any of them: their m->ticks stayed at the 1 squidboy
+ * wrote, and a process spinning on one of them ran until it chose to
+ * stop. (tsleep() never noticed, because it goes through the global
+ * talarm list that core 0's checkalarms services.) An earlier version
+ * of this comment claimed the opposite, which is why the claim is now
+ * asserted at boot -- smpcheck() in main.c -- and readable afterwards
+ * in /dev/sysstat.
+ *
+ * timersinitmach() puts this core's hzclock Timer on this core's queue.
+ * It does not re-run todinit(): time of day is one machine-wide clock,
+ * initialised by core 0 before any secondary was released.
  */
 void
 secclockinit(void)
 {
 	LOCAL(Ltimerirq0 + 4*m->machno) = Cntpnsirq;
 	coherence();
+	timersinitmach();
 	armtick();
 }
 
@@ -193,7 +210,15 @@ clockintr(Ureg *u)
 	if((ctl & (1<<2)) == 0)
 		return 0;
 
-	ticks++;
+	/*
+	 * Core 0's count only. This is the counter the boot-time rate
+	 * check reads through clockticks(), before any other core exists;
+	 * it has no per-core meaning, and four cores doing ++ on one word
+	 * without a lock lose increments. The per-core count that matters
+	 * is m->ticks, which hzclock() advances below.
+	 */
+	if(m->machno == 0)
+		ticks++;
 
 	/*
 	 * m->ticks is not bookkeeping -- os/port reads it directly.
@@ -252,13 +277,19 @@ clockintr(Ureg *u)
 	 * the answer (GC and scheduler, not the network path) is in the
 	 * README.
 	 */
+	/*
+	 * ainc, not ++: every core runs this on every tick, and two cores
+	 * sampling into the same bucket at once would otherwise lose one
+	 * of the samples -- a profiler that quietly under-reports the hot
+	 * spot is worse than one that is honestly noisy.
+	 */
 	{
 		extern ulong profbuck[24576];
 		ulong ix;
 
 		ix = (u->pc - 0x80000) >> 6;
 		if(ix < 24576)
-			profbuck[ix]++;
+			ainc(&profbuck[ix]);
 	}
 
 	armtick();
@@ -344,8 +375,16 @@ irqdispatch(Ureg *u)
 	 * intrrun could not place, and the decision below is about THIS
 	 * interrupt -- a stale value from an earlier one would condemn a
 	 * later spurious interrupt for something it did not do.
+	 *
+	 * And per core, not per machine. Every core's timer tick comes
+	 * through here, so with one shared word core 1's tick could clear
+	 * the orphan core 0 had just recorded, between intrrun setting it
+	 * and the test below reading it -- and a genuinely unhandled GPU
+	 * interrupt on core 0 would be counted spurious and left asserted,
+	 * storming silently. Each core's dispatch now has a word nobody
+	 * else writes.
 	 */
-	irqorphan = -1;
+	irqorphan[m->machno] = -1;
 
 	if(clockintr(u))
 		handled = 1;
@@ -402,8 +441,8 @@ irqdispatch(Ureg *u)
 	 * -1: nothing enabled and pending had been rejected, so there was
 	 * nothing to panic about.
 	 */
-	if(irqorphan < 0){
-		nspurious++;
+	if(irqorphan[m->machno] < 0){
+		ainc(&nspurious);
 		return 1;
 	}
 

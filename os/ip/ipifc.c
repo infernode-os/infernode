@@ -128,8 +128,21 @@ ipifcbind(Conv *c, char **argv, int argc)
 
 	/* bind the device to the interface */
 	m = ipfindmedium(argv[1]);
-	if(m == nil)
+	if(m == nil){
+		/*
+		 * Say what IS registered. This has failed on real hardware
+		 * with a kernel that binds the same medium under QEMU, and
+		 * "unknown" on its own cannot tell an empty table from a
+		 * corrupted one.
+		 */
+		Medium **mp;
+
+		print("ipifc: no medium %s; registered:", argv[1]);
+		for(mp = media; *mp != nil; mp++)
+			print(" %s", (*mp)->name);
+		print(" (%d slots, table at %p)\n", (int)nelem(media), media);
 		return "unknown interface type";
+	}
 
 	wlock(&ifc->rwl);
 	if(ifc->m != nil){

@@ -724,8 +724,10 @@ dis/tests/mlkem_test.dis
 dis/tests/msg_approval_test.dis
 dis/tests/msg_badsrc.dis
 dis/tests/msg_capability_test.dis
+dis/tests/msg_inject_test.dis
 dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
+dis/tests/msg_triage_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
 dis/tests/outlinefont_test.dis
@@ -786,6 +788,7 @@ dis/tests/veltro_security_test.dis
 dis/tests/veltro_test.dis
 dis/tests/veltro_tools_test.dis
 dis/tests/voice_scripts_test.dis
+dis/tests/wallet9p_test.dis
 dis/tests/wallet_capability_test.dis
 dis/tests/wallet_policy_test.dis
 dis/tests/webclient_test.dis

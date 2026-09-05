@@ -18,10 +18,8 @@ init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
 	fd := sys->open("/tmp/mw.log", Sys->OREAD);
-	if(fd == nil) {
-		sys->print("MSGTRIAGE: FAIL cannot open msgwatch log: %r\n");
-		return;
-	}
+	if(fd == nil)
+		raise "skip:msgwatch log /tmp/mw.log unavailable (run tests/inferno/msg_triage.sh)";
 	buf := array[32768] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0) {

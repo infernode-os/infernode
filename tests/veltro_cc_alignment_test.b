@@ -426,11 +426,10 @@ testSystemTxtTodoMandate(t: ref T)
 		t.skip("system.txt not readable");
 		return;
 	}
-	# The CC-style emphasis ("non-trivial", "EXTREMELY helpful") was
-	# deliberately dropped when the prompt was reworked for small-model
-	# reliability (5ce3fea0, b781e9f5). The surviving mandate is the
-	# planning-discipline line.
-	t.assert(agentlib->contains(content, "use plan or todo BEFORE acting"),
+	# The planning rule was reworded for small-model reliability. Keep this
+	# assertion aligned with the wording used by the current complex-task rule.
+	t.assert(agentlib->contains(content,
+		"Plan first. Use plan (or todo) to record the steps before acting."),
 		"Fix1: system.txt mandates plan/todo before acting");
 	t.assert(!agentlib->contains(content, "3+ steps"),
 		"Fix1: old '3+ steps' threshold removed");

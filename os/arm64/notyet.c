@@ -500,18 +500,26 @@ commonerror(void)
 /*
  * postnote -- deliver a note to a process.
  *
- * os/port/proc.c has no note mechanism in this port yet.
- * loopbackmedium.c uses it only to kick its reader out of a blocking
- * read when the interface is unbound, so the consequence of doing
- * nothing is a reader that stays blocked until its queue is closed --
- * which is what actually frees it. Wrong to leave permanently, wrong
- * to fake.
+ * os/port/proc.c has no note mechanism in this port. The one thing
+ * os/ip asks of it -- ethermedium.c and loopbackmedium.c post "unbind"
+ * to their reader and writer processes and then WAIT for them to die
+ * -- needs exactly one effect: the target's blocking read must return.
+ * So a note interrupts the target's sleep, the way a kill does but
+ * without marking it killed: sleep() raises Eintr, the reader's error
+ * path exits, and the unbind completes. Until this did that, the
+ * second run of the USB Ethernet driver hung for ever inside
+ * "unbind", waiting for a reader that nothing would ever wake, and
+ * took the console shell with it. The note's text is not delivered;
+ * no reader here looks at it.
  */
 int
 postnote(Proc *p, int dolock, char *n, int flag)
 {
-	USED(p); USED(dolock); USED(n); USED(flag);
-	return 0;
+	USED(dolock); USED(n); USED(flag);
+	if(p == nil)
+		return 0;
+	swiproc(p, 1);
+	return 1;
 }
 
 /*

@@ -338,20 +338,54 @@ wrap(Ether *e, uchar *frame, long len, long o)
  * remainder is dropped, because a stream that has lost its framing
  * does not resynchronise by optimism.
  */
+/*
+ * Undo a bind: bound cleared so a later bind is accepted, the link
+ * reported down, the output queue hung up so the writer wakes and
+ * leaves, and the reader told to leave at its next turn. The
+ * endpoint channels are NOT closed here: each data-path process closes
+ * the one it reads or writes when it exits, because closing a channel
+ * out from under a process inside a read on it is a use of freed
+ * memory -- that was a kernel panic on the first try. Called by
+ * whichever process dies first (a detached device fails their
+ * transfers) and by the unbind verb; the second caller finds bound
+ * already clear and does nothing. Without this a USB Ethernet device
+ * unplugged and plugged back could never be bound again: Einuse, for
+ * ever, from channels to endpoints that no longer existed.
+ */
+static void
+etherunbind(Ether *e)
+{
+	qlock(&e->bindlk);
+	if(!e->bound){
+		qunlock(&e->bindlk);
+		return;
+	}
+	e->bound = 0;
+	e->nif.link = 0;
+	qhangup(e->oq, "unbound");
+	qunlock(&e->bindlk);
+	print("ether0: kernel data path unbound\n");
+}
+
 static void
 etherrxproc(void *a)
 {
 	Ether *e;
+	Chan *in;
 	long n, used, flen, off;
 	uchar *fp;
 
 	e = a;
+	in = e->inchan;
 	if(waserror()){
 		print("ether0: reader exits: %s\n", up->env->errstr);
-		e->nif.link = 0;
+		etherunbind(e);
+		cclose(in);
 		pexit("hangup", 1);
 	}
 	for(;;){
+		if(!e->bound)
+			error("unbound");
 		if(e->nacc >= e->nrxbuf - e->burst)
 			e->nacc = 0;	/* desynchronised; start over */
 		/*
@@ -385,7 +419,7 @@ etherrxproc(void *a)
 				if(g < 50000000ULL)
 					e->gapns += g;
 			}
-			n = kchanio(e->inchan, e->rxbuf + e->nacc, e->burst, OREAD);
+			n = kchanio(in, e->rxbuf + e->nacc, e->burst, OREAD);
 			tlast = fastticks(nil);
 			if(n > 0){
 				e->nrd++;
@@ -446,15 +480,20 @@ etherrxproc(void *a)
 static void
 ethertxproc(void *a)
 {
+	Chan *out, *in;
 	Ether *e;
 	Block *b;
 	long o, no;
 	int nf;
 
 	e = a;
+	in = e->inchan;
+	out = e->outchan;
 	if(waserror()){
 		print("ether0: writer exits: %s\n", up->env->errstr);
-		e->nif.link = 0;
+		etherunbind(e);
+		if(out != in)
+			cclose(out);
 		pexit("hangup", 1);
 	}
 	for(;;){
@@ -477,7 +516,7 @@ ethertxproc(void *a)
 				break;
 		}
 		if(o > 0){
-			if(kchanio(e->outchan, e->txbuf, o, OWRITE) != o)
+			if(kchanio(out, e->txbuf, o, OWRITE) != o)
 				e->nif.oerrs++;
 			e->nif.outpackets += nf;
 		}
@@ -578,6 +617,7 @@ etherbindctl(Ether *e, char *args)
 	e->ntxbuf = Txbatch * (Rnishdr + Maxframe + 4);
 	e->txbuf = smalloc(e->ntxbuf);
 	e->nacc = 0;
+	qreopen(e->oq);	/* hung up by the last unbind */
 	e->nif.link = 1;
 	e->bound = 1;
 
@@ -676,6 +716,10 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		 */
 		if(n >= 11 && strncmp(buf, "nonblocking", 11) == 0)
 			return n;
+		if(n >= 6 && strncmp(buf, "unbind", 6) == 0){
+			etherunbind(e);
+			return n;
+		}
 		if(n >= 9 && strncmp(buf, "blackhole", 9) == 0){
 			e->blackhole ^= 1;
 			print("ether0: blackhole %s\n",

@@ -971,6 +971,16 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	dumpconfig(d, indent + "  ");
 
 	#
+	# Let go of the device's control endpoint and ctl file BEFORE the
+	# driver is started, and explicitly. They are exclusive-open in
+	# devusb and the driver is a separate process that opens them the
+	# moment it runs. Nothing below needs them; the driver is told the
+	# name.
+	#
+	d = nil;
+	dctl = nil;
+
+	#
 	# Hand the endpoint over rather than making the driver find it.
 	#
 	# The walk has just read and parsed this device's configuration

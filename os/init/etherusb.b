@@ -455,7 +455,16 @@ init(nil: ref Draw->Context, argv: list of string)
 	dev = hd argv;
 
 	ctl = sys->open("/usb/usb/" + dev + "/ctl", Sys->ORDWR);
+	#
+	# The enumerator that found this device may still be letting go of
+	# its control endpoint, which is exclusive-open; its release is not
+	# instantaneous. Ask a few times before calling it in use.
+	#
 	ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	for(retry := 0; ep0 == nil && retry < 40 && isinuse(); retry++){
+		sys->sleep(50);
+		ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	}
 	if(ctl == nil || ep0 == nil){
 		sys->print("etherusb: cannot open %s: %r\n", dev);
 		return;
@@ -539,16 +548,22 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	inname := "";
 	outname := "";
+	#
+	# An endpoint devusb already has -- from an earlier run of this
+	# driver for the same device, which is what a hot-unplugged and
+	# replugged, or simply re-run, driver is -- answers "already in
+	# use" to new. It exists with the numbers we want; use it.
+	#
 	if(inep == outep){
-		if(sys->fprint(ctl, "new %d bulk rw", inep) < 0){
+		if(sys->fprint(ctl, "new %d bulk rw", inep) < 0 && !epexists()){
 			sys->print("etherusb: cannot create the bulk endpoint: %r\n");
 			return;
 		}
 		inname = epname(dev, inep);
 		outname = inname;
 	}else{
-		if(sys->fprint(ctl, "new %d bulk r", inep) < 0 ||
-		   sys->fprint(ctl, "new %d bulk w", outep) < 0){
+		if((sys->fprint(ctl, "new %d bulk r", inep) < 0 && !epexists()) ||
+		   (sys->fprint(ctl, "new %d bulk w", outep) < 0 && !epexists())){
 			sys->print("etherusb: cannot create the bulk endpoints: %r\n");
 			return;
 		}
@@ -761,6 +776,16 @@ init(nil: ref Draw->Context, argv: list of string)
 		# netconfig can tell -- it opens the same names.
 		#
 		netconfig();
+		#
+		# Close the control endpoint, explicitly. It is a global of
+		# this module, and the module lives as long as any process of
+		# it does -- the DHCP, ping and time readers block for a good
+		# while after this returns -- so without this the endpoint,
+		# which is exclusive-open, stayed open long after the driver
+		# was done with it and a second run for the same device was
+		# refused with "already in use".
+		#
+		ep0 = nil;
 		return;
 	}
 	serve();
@@ -1013,6 +1038,15 @@ mountproc(fd: ref Sys->FD)
 #
 netconfig()
 {
+	#
+	# Running again after the device was unplugged and plugged back:
+	# the interface the first run bound to /net/ether0 is still there,
+	# bound to a medium that has gone. Unbind it, or the stack has two
+	# interfaces on one wire and the live one is not the one routes
+	# point at.
+	#
+	unbindstale("/net/ether0");
+
 	ifc := sys->open("/net/ipifc/clone", Sys->ORDWR);
 	if(ifc == nil){
 		sys->print("etherusb: cannot clone an interface: %r\n");
@@ -1314,10 +1348,15 @@ dhcp(): (string, string, string)
 		return (nil, nil, nil);
 	}
 
-	rc := chan of array of byte;
-	pidc := chan of int;
-	spawn dhcpreader(d, rc, pidc);
-	rpid := <-pidc;
+	#
+	# Buffered: a reply that lands after the caller has moved on must
+	# not leave the reader blocked for ever on a send nobody will
+	# receive, holding the conversation and the module with it.
+	#
+	rc := chan[16] of array of byte;
+	pc := chan of int;
+	spawn dhcpreader(d, rc, pc);
+	rpid := <-pc;
 
 	#
 	# Give the switch time to start forwarding.
@@ -1434,18 +1473,18 @@ dhcpxchg(d: ref Sys->FD, pkt: array of byte, xid, kind: int,
 # with no DHCP server can never be reached. The boot hangs on the one
 # case the fallback was written for.
 #
-#
-# It lives exactly as long as the exchange. The reader has no way to
-# know when the caller has its answer -- it is parked in a read the
-# kernel will not return from until a datagram arrives -- so the caller
-# is told the reader's pid and kills it when done (dhcpdone). Left
-# alone, every one of these used to sit on port 68 for the life of the
-# machine, holding the conversation open, and each later broadcast on
-# the port woke it to block for ever on a channel nobody reads.
-#
-dhcpreader(d: ref Sys->FD, c: chan of array of byte, pidc: chan of int)
+dhcpreader(d: ref Sys->FD, c: chan of array of byte, pids: chan of int)
 {
-	pidc <-= sys->pctl(0, nil);
+	#
+	# Only this descriptor. A reader that waits for an answer that
+	# never comes would otherwise keep every open file of the run
+	# that spawned it -- the device's control endpoint among them,
+	# which is exclusive-open, so the driver could never be run again
+	# for that device: "already in use", from a process blocked in a
+	# read for ever.
+	#
+	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: d.fd :: nil);
+	pids <-= sys->pctl(0, nil);
 	for(;;){
 		buf := array[Udphdr7 + 576] of byte;
 		n := sys->read(d, buf, len buf);
@@ -1461,25 +1500,6 @@ dhcptimer(c: chan of int, ms: int)
 	c <-= 1;
 }
 
-#
-# Kill a reader parked in sys->read. A kill through /prog reaches a
-# process blocked inside the kernel: killprog finds it in Prelease and
-# swiproc wakes its sleep with "interrupted", so the read returns an
-# error and the process is gone by its next instruction. That is what
-# makes "kill it" honest here -- a reader that could not be woken would
-# be marked dead and still hold the conversation.
-#
-# Silent when /prog has nothing by that pid: a reader that got its
-# datagram has already exited on its own.
-#
-killreader(pid: int, what: string)
-{
-	c := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
-	if(c == nil)
-		return;
-	if(sys->fprint(c, "kill") < 0)
-		sys->print("etherusb: cannot kill %s reader %d: %r\n", what, pid);
-}
 
 #
 # The DHCP exchange is over, one way or the other: reap the reader and
@@ -1490,7 +1510,7 @@ killreader(pid: int, what: string)
 #
 dhcpdone(pid: int)
 {
-	killreader(pid, "dhcp");
+	killproc(pid);
 	for(i := 0; i < 50; i++){
 		(ok, nil) := sys->stat("/prog/" + string pid);
 		if(ok < 0){
@@ -1594,10 +1614,15 @@ pingout(dest: string)
 	# neither a reply nor a failure -- which is what a blocked read
 	# looks like from outside.
 	#
-	rc := chan of array of byte;
-	pidc := chan of int;
-	spawn pingreader(d, rc, pidc);
-	rpid := <-pidc;
+	#
+	# Buffered: a reply that lands after the caller has moved on must
+	# not leave the reader blocked for ever on a send nobody will
+	# receive, holding the conversation and the module with it.
+	#
+	rc := chan[16] of array of byte;
+	pc := chan of int;
+	spawn pingreader(d, rc, pc);
+	rpid := <-pc;
 	tc := chan of int;
 	spawn dhcptimer(tc, 3000);
 
@@ -1607,19 +1632,28 @@ pingout(dest: string)
 			dest, len rep, int rep[20]);
 	<-tc =>
 		sys->print("etherusb: no echo reply from %s\n", dest);
-		#
-		# No reply means the reader is still in its read, and
-		# would be for ever: the conversation it holds open is
-		# not closed until it is gone. A reply means it has
-		# already exited on its own, so only this arm needs it.
-		#
-		killreader(rpid, "icmp");
 	}
+	#
+	# Either way the reader is killed: after a reply it has already
+	# exited on its own and the kill finds nothing; after a timeout it
+	# is parked in a read that would never return, holding the
+	# conversation open until it is gone.
+	#
+	killproc(rpid);
 }
 
-pingreader(d: ref Sys->FD, c: chan of array of byte, pidc: chan of int)
+pingreader(d: ref Sys->FD, c: chan of array of byte, pids: chan of int)
 {
-	pidc <-= sys->pctl(0, nil);
+	#
+	# Only this descriptor. A reader that waits for an answer that
+	# never comes would otherwise keep every open file of the run
+	# that spawned it -- the device's control endpoint among them,
+	# which is exclusive-open, so the driver could never be run again
+	# for that device: "already in use", from a process blocked in a
+	# read for ever.
+	#
+	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: d.fd :: nil);
+	pids <-= sys->pctl(0, nil);
 	rep := array[128] of byte;
 	n := sys->read(d, rep, len rep);
 	if(n > 0)
@@ -3691,10 +3725,15 @@ trytime(server: string): int
 	# same shape the DHCP exchange uses and for the same reason --
 	# sys->read on a socket blocks.
 	#
-	rc := chan of array of byte;
-	pidc := chan of int;
-	spawn ntpreader(d, rc, pidc);
-	rpid := <-pidc;
+	#
+	# Buffered: a reply that lands after the caller has moved on must
+	# not leave the reader blocked for ever on a send nobody will
+	# receive, holding the conversation and the module with it.
+	#
+	rc := chan[16] of array of byte;
+	pc := chan of int;
+	spawn ntpreader(d, rc, pc);
+	rpid := <-pc;
 	tc := chan of int;
 	spawn ntptimer(tc, 3000);
 	rep: array of byte;
@@ -3702,12 +3741,11 @@ trytime(server: string): int
 	rep = <-rc =>
 		;
 	<-tc =>
-		# As for the echo reader: a timeout leaves it parked, and
-		# it holds the conversation until killed.
-		killreader(rpid, "ntp");
+		killproc(rpid);
 		return -1;
 	}
 	if(rep == nil || len rep < 48)
+		killproc(rpid);
 		return -1;
 
 	#
@@ -3722,28 +3760,42 @@ trytime(server: string): int
 	for(i = 40; i < 44; i++)
 		secs = (secs << 8) | big (int rep[i] & 16rFF);
 	if(secs == big 0)
+		killproc(rpid);
 		return -1;
 	unix := secs - big 2208988800;
 	if(unix <= big 0)
+		killproc(rpid);
 		return -1;
 
 	t := sys->open("/dev/time", Sys->OWRITE);
 	if(t == nil)
+		killproc(rpid);
 		return -1;
 	#
 	# The kernel keeps time in MICROseconds.
 	#
 	if(sys->fprint(t, "%bd", unix * big 1000000) < 0){
 		sys->print("etherusb: cannot set the clock: %r\n");
+		killproc(rpid);
 		return -1;
 	}
 	sys->print("etherusb: clock set from %s\n", server);
+	killproc(rpid);
 	return 0;
 }
 
-ntpreader(d: ref Sys->FD, rc: chan of array of byte, pidc: chan of int)
+ntpreader(d: ref Sys->FD, rc: chan of array of byte, pids: chan of int)
 {
-	pidc <-= sys->pctl(0, nil);
+	#
+	# Only this descriptor. A reader that waits for an answer that
+	# never comes would otherwise keep every open file of the run
+	# that spawned it -- the device's control endpoint among them,
+	# which is exclusive-open, so the driver could never be run again
+	# for that device: "already in use", from a process blocked in a
+	# read for ever.
+	#
+	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: d.fd :: nil);
+	pids <-= sys->pctl(0, nil);
 	buf := array[128] of byte;
 	n := sys->read(d, buf, len buf);
 	if(n <= 0)
@@ -3756,4 +3808,72 @@ ntptimer(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
 	c <-= 1;
+}
+
+#
+# Unbind any IP interface whose status says it sits on dev.
+#
+unbindstale(dev: string)
+{
+	for(i := 0; i < 16; i++){
+		st := readfile(sys->sprint("/net/ipifc/%d/status", i));
+		if(st == nil)
+			continue;
+		found := 0;
+		for(j := 0; j + len dev <= len st; j++)
+			if(st[j:j+len dev] == dev){
+				found = 1;
+				break;
+			}
+		if(!found)
+			continue;
+		c := sys->open(sys->sprint("/net/ipifc/%d/ctl", i), Sys->OWRITE);
+		if(c != nil && sys->fprint(c, "unbind") >= 0)
+			sys->print("etherusb: unbound stale interface %d\n", i);
+	}
+}
+
+readfile(name: string): string
+{
+	fd := sys->open(name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+isinuse(): int
+{
+	e := sys->sprint("%r");
+	for(i := 0; i + 6 <= len e; i++)
+		if(e[i:i+6] == "in use")
+			return 1;
+	return 0;
+}
+
+epexists(): int
+{
+	e := sys->sprint("%r");
+	for(i := 0; i + 14 <= len e; i++)
+		if(e[i:i+14] == "already in use")
+			return 1;
+	return 0;
+}
+
+#
+# Kill a reader that is still blocked in its conversation. The readers
+# are confined to their own descriptor and block until something
+# arrives, and the IP stack has no hangup for UDP or ICMP, so the way
+# to end the conversation is to end the process holding it. That frees
+# DHCP's port 68 for the driver's next run, and with the last process
+# gone the module can die.
+#
+killproc(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }

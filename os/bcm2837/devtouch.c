@@ -43,8 +43,8 @@
  * attach -- no panel, no file, the same rule #S applies to a missing
  * card.
  *
- * One reader at a time: two consumers would race each other for the
- * consumed mark and each see half the frames.
+ * Readers are serialised by a lock but not made exclusive; see
+ * touchopen() for why.
  */
 
 enum{
@@ -68,7 +68,6 @@ static struct {
 	volatile uchar *buf;	/* the frame, wherever it lives; nil = no panel */
 	int	ours;		/* buf is setbuf: cache maintenance needed */
 	u32int	bus;
-	int	inuse;
 } touch;
 
 /*
@@ -164,35 +163,29 @@ touchstat(Chan *c, uchar *db, int n)
 	return devstat(c, db, n, touchtab, nelem(touchtab), devgen);
 }
 
+/*
+ * Not exclusive. The first version refused a second opener so two
+ * readers could not race each other for the consumed mark, and the
+ * flag outlived its owner: on this kernel a killed process's files
+ * are not closed promptly, so after the driver was killed the device
+ * answered "in use" to everyone with no process holding it, and the
+ * one time the raw frame was needed for diagnosis it could not be
+ * read without a reboot. A second reader costs the first some frames;
+ * a flag nobody can clear costs the panel. Reads are still serialised
+ * by the lock, so a frame is never torn by two readers at once.
+ */
 static Chan*
 touchopen(Chan *c, int omode)
 {
-	if(c->qid.path == Qtouch){
-		if(omode != OREAD)
-			error(Eperm);
-		qlock(&touch.lk);
-		if(touch.inuse){
-			qunlock(&touch.lk);
-			error(Einuse);
-		}
-		touch.inuse = 1;
-		qunlock(&touch.lk);
-		if(waserror()){
-			touch.inuse = 0;
-			nexterror();
-		}
-		c = devopen(c, omode, touchtab, nelem(touchtab), devgen);
-		poperror();
-		return c;
-	}
+	if(c->qid.path == Qtouch && omode != OREAD)
+		error(Eperm);
 	return devopen(c, omode, touchtab, nelem(touchtab), devgen);
 }
 
 static void
 touchclose(Chan *c)
 {
-	if(c->qid.path == Qtouch && (c->flag & COPEN))
-		touch.inuse = 0;
+	USED(c);
 }
 
 /*

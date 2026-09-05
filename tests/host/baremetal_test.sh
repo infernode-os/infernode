@@ -551,7 +551,7 @@ build_kernel() {
         printf '16\t13\n0x0000\t0x0100\tVera.14.0000\n' > "$BUILD/unicode.14.font"
         rootmanifest+=(
             "/fonts/vera/Vera/unicode.14.font=$BUILD/unicode.14.font"
-            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/Vera/Vera.14.0000"
+            "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/vera/vera.14.0000"
         )
 
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
@@ -1180,7 +1180,8 @@ check "midr_el1:        0x00000000410fd0" \
     check "exception level: EL1"      "drops from EL2 to EL1"
 check "types:           arm64 u.h OK" "arm64 type foundation holds (LP64 + stdarg)"
 KIMG="$BUILD/$PLAT-kernel.img"
-check "init: /dev/bootimage $(stat -f%z "$KIMG") bytes stat $(stat -f%z "$KIMG") sha1 $(shasum "$KIMG" | cut -c1-40)" \
+kimgsz=$(wc -c < "$KIMG" | tr -d ' ')
+check "init: /dev/bootimage $kimgsz bytes stat $kimgsz sha1 $(shasum "$KIMG" | cut -c1-40)" \
     "/dev/bootimage reproduces the image the loader was given, byte for byte"
 check "init: gpio 21 out 1->1 0->0; pin 14: in use by uart" "GPIO pins are files: an output reads back what was written, the console pin refuses"
 check "vectors:         installed"    "installs VBAR_EL1"

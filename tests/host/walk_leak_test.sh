@@ -12,7 +12,8 @@
 # shell PATH misses under a 9P-served /dis, a poller waiting for a file
 # to appear -- all of them paid it. The bare-metal kernel shares the
 # code (os/port/chan.c) and had the same bug in devwalk and mntwalk on
-# top; tests/host/baremetal_test.sh guards that side.
+# top; those were fixed the same way and verified from the compiler's
+# output only -- a runtime leak check on the kernel is still an open gap.
 #
 # Runs 100 successful lookups so lazily loaded modules are resident,
 # then 1000 misses in a kernel device (#c) and 1000 under a 9P mount

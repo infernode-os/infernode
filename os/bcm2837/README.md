@@ -303,9 +303,12 @@ the handler read memory. The hosted emu had the walkers right since the
 2007 upstream drop and `namec` wrong, and its soaks were flat only
 because nothing in them ever missed. Check the compiler's output, not the
 source: `clang -S` with the harness flags and read the block after `bl
-setlabel; cbz w0`. `tests/host/baremetal_test.sh` counts live main-pool
-blocks across 1000 failing lookups; `tests/host/walk_leak_test.sh` does
-the same in emu.
+setlabel; cbz w0`. That compiler-output check is the only verification
+the bare-metal walkers have: `tests/host/baremetal_test.sh` does not yet
+count pool blocks across failing lookups on the kernel, and that runtime
+check is an open gap. `tests/host/walk_leak_test.sh` counts live
+main-pool blocks across 1000 failing lookups in the hosted emu, which
+shares `namec` with the kernel but not its `devwalk`/`mntwalk` objects.
 
 ## What has been imported from upstream so far
 

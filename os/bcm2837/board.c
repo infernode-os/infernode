@@ -805,8 +805,8 @@ boardsdmuxprobe(void)
 		uartputstr(" (as the firmware left them, for the Arasan)\n");
 }
 
-void
-boardsdprobe(void)
+static void
+sdprobe(void)
 {
 	static uchar sec[512];
 	uchar *p;
@@ -882,6 +882,28 @@ boardsdprobe(void)
 		uartputd(len);
 		uartputstr("\n");
 	}
+}
+
+/*
+ * The card, then the radio, in that order and from here.
+ *
+ * The two share a story: the radio's SDIO lines can only be driven
+ * by the Arasan, and the Arasan is free only once sdmmc.c has moved
+ * the card to SDHOST (or, with -DSDCARD_ARASAN, is not free at all,
+ * which ether4330probe() knows). Calling the radio probe from the
+ * card probe is what makes that ordering a fact of this file rather
+ * than of main.c's call sequence, and it keeps os/arm64/fns.h's
+ * board contract as it was: the next board owes main.c a card
+ * probe, not a radio it may not have.
+ *
+ * Neither probe stops the boot. No card is a board that runs from
+ * its image; no radio is one line and an ether1 that says so.
+ */
+void
+boardsdprobe(void)
+{
+	sdprobe();
+	ether4330probe();
 }
 
 /*

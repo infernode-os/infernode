@@ -1,0 +1,69 @@
+# tools/pi-firmware-manifest.txt -- the CYW43455 firmware the Pi 3B+ kernel
+# uploads at boot, pinned by commit and SHA256.  Read by tools/pi-firmware.sh.
+#
+# Format: 'key value' lines; anything else is a comment.
+#     commit <sha1 of RPi-Distro/firmware-nonfree>
+#     file <name on the card> <sha256> <bytes> <licence> <revision URL>
+# Every URL must name the commit; the tool refuses a manifest where one
+# file has floated to a different revision.
+#
+# WHY THESE FILES ARE NOT IN THE TREE
+#
+# The .bin and .clm_blob are Cypress Semiconductor's, distributed under
+# the "CYPRESS WIRELESS CONNECTIVITY DEVICES DRIVER END USER LICENSE
+# AGREEMENT" (debian/copyright names it binary-redist-Cypress): object
+# form only, for use with Cypress integrated circuits only, no
+# derivative works.  That is not MIT and cannot be re-licensed by us, so
+# the blobs are never committed and never packed into a release
+# artefact.  They live on the card's FAT partition, where the driver
+# reads them from /n/dos/firmware, and this manifest plus the fetch tool
+# are the whole of what the tree carries.  .gitignore refuses the
+# filenames as a second line of defence.
+#
+# The NVRAM .txt is the board's radio calibration.  In linux-firmware
+# the same file (brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt)
+# is listed under "Licence: GPLv2" in WHENCE; in RPi-Distro's packaging
+# every debian/config/brcm80211/*/*43455* path is under the Cypress
+# stanza.  Either way it is not MIT, so it takes the same route: card
+# only.
+#
+# WHICH BUILD
+#
+# Raspberry Pi ships two tunings of the 43455 image.  'standard' is the
+# one with roaming (802.11k/v/r), DFS channels, auto channel selection
+# and antenna diversity; 'minimal' trades those for more clients in AP
+# mode (debian/config/brcm80211/cypress/README.txt).  This port is a
+# client, so 'standard'.  The image identifies itself, once uploaded,
+# as 43455c0-roml Version 7.45.265 (28bca26 CY) FWID 01-b677b91b, dated
+# 2023-08-29; the kernel prints that 'ver' string when the dongle comes
+# up, which is how a board test confirms which blob it ran.
+#
+# The names on the card are the ones Richard Miller's ether4330 firmware
+# table looks up for chip 0x4345 rev 6, which is why cyfmac43455-sdio-
+# standard.bin is installed as brcmfmac43455-sdio.bin.
+#
+# THE NVRAM PATH
+#
+# At this commit debian/config/brcm80211/brcm/brcmfmac43455-sdio.raspberrypi,
+# 3-model-b-plus.txt is a git symlink to brcmfmac43455-sdio.txt beside it
+# (the raw endpoint serves the 22-byte link target for the former, the
+# contents API resolves it to the 2074-byte file).  The URL below is the
+# link target, so a plain fetch gets the calibration data and not the
+# link text.
+#
+# REPINNING
+#
+# To move to a newer commit: change the commit line and the URLs, run
+# tools/pi-firmware.sh into a scratch directory (it will refuse on the
+# old hashes), take the hashes it prints as 'got', and put them here in
+# the same commit.  Never take a hash from anywhere but a download you
+# performed at the commit you are pinning.
+#
+# Pinned: RPi-Distro/firmware-nonfree, branch bookworm as of 2025-09-30,
+# package version 1:20240709-2~bpo12+1+rpt4.
+
+commit c91cd2804cf7463aab913e7247c176049f16bbd6
+
+file brcmfmac43455-sdio.bin d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3 609309 binary-redist-Cypress https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/c91cd2804cf7463aab913e7247c176049f16bbd6/debian/config/brcm80211/cypress/cyfmac43455-sdio-standard.bin
+file brcmfmac43455-sdio.clm_blob 9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1 2676 binary-redist-Cypress https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/c91cd2804cf7463aab913e7247c176049f16bbd6/debian/config/brcm80211/cypress/cyfmac43455-sdio.clm_blob
+file brcmfmac43455-sdio.txt ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d 2074 binary-redist-Cypress https://raw.githubusercontent.com/RPi-Distro/firmware-nonfree/c91cd2804cf7463aab913e7247c176049f16bbd6/debian/config/brcm80211/brcm/brcmfmac43455-sdio.txt

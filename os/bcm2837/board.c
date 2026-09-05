@@ -364,7 +364,39 @@ boardtryboot(void)
  * wrong sector is likely to pass, and the four partition entries in
  * front of it are what a filesystem will need next anyway.
  */
-enum { Emmctestblock = 10000 };
+enum { Sdtestblock = 10000 };
+
+/*
+ * Read back the pin mux the card driver set, the way boardioprobe does
+ * for the UART and for the same reason: a mux that did not take is
+ * otherwise invisible, and on this board it is the mux, not the
+ * driver, that decides which controller the card is wired to. With
+ * the card on SDHOST all six pins must read ALT0; on the Arasan they
+ * read whatever the firmware left, which is ALT3 on the board and 0
+ * under QEMU, and neither is asserted on.
+ */
+static void
+boardsdmuxprobe(void)
+{
+	int pin, f, alt0;
+
+	alt0 = 1;
+	uartputstr("gpio:");
+	for(pin = 48; pin <= 53; pin++){
+		f = gpiogetfunc(pin);
+		uartputstr(" pin");
+		uartputd(pin);
+		uartputstr(" func=");
+		uartputd(f);
+		if(f != Gpioalt0)
+			alt0 = 0;
+	}
+	if(strcmp(sdcontroller(), "sdhost") == 0)
+		uartputstr(alt0? " (ALT0/SDHOST as set) OK\n"
+			: " UNEXPECTED (wanted ALT0 on all six)\n");
+	else
+		uartputstr(" (as the firmware left them, for the Arasan)\n");
+}
 
 void
 boardsdprobe(void)
@@ -374,22 +406,24 @@ boardsdprobe(void)
 	int i, type;
 	u32int start, len;
 
-	if(emmcinit() < 0)
+	i = emmcinit();
+	boardsdmuxprobe();
+	if(i < 0)
 		return;
 
 	if(emmcread(0, sec) < 0){
-		uartputstr("emmc: cannot read sector 0\n");
+		uartputstr("sd: cannot read sector 0\n");
 		return;
 	}
 
 	if(sec[510] != 0x55 || sec[511] != 0xAA){
-		uartputstr("emmc: sector 0 has no boot signature "
+		uartputstr("sd: sector 0 has no boot signature "
 			"(not a partitioned card?)\n");
 		return;
 	}
-	uartputstr("emmc: MBR ok, partitions:\n");
+	uartputstr("sd: MBR ok, partitions:\n");
 
-#ifdef EMMCWRITETEST
+#ifdef SDWRITETEST
 	/*
 	 * Write a block and read it back.
 	 *
@@ -407,19 +441,19 @@ boardsdprobe(void)
 
 		for(j = 0; j < 512; j++)
 			wbuf[j] = (uchar)(j ^ 0x5A);
-		if(emmcwrite(Emmctestblock, wbuf) < 0)
-			uartputstr("emmc: write failed\n");
-		else if(emmcread(Emmctestblock, rbuf) < 0)
-			uartputstr("emmc: read back failed\n");
+		if(emmcwrite(Sdtestblock, wbuf) < 0)
+			uartputstr("sd: write failed\n");
+		else if(emmcread(Sdtestblock, rbuf) < 0)
+			uartputstr("sd: read back failed\n");
 		else{
 			bad = 0;
 			for(j = 0; j < 512; j++)
 				if(rbuf[j] != wbuf[j])
 					bad++;
 			if(bad)
-				uartputstr("emmc: WRITE ROUND TRIP CORRUPT\n");
+				uartputstr("sd: WRITE ROUND TRIP CORRUPT\n");
 			else
-				uartputstr("emmc: write/read round trip OK\n");
+				uartputstr("sd: write/read round trip OK\n");
 		}
 	}
 #endif
@@ -431,7 +465,7 @@ boardsdprobe(void)
 			continue;
 		start = p[8] | p[9]<<8 | p[10]<<16 | (u32int)p[11]<<24;
 		len   = p[12] | p[13]<<8 | p[14]<<16 | (u32int)p[15]<<24;
-		uartputstr("emmc:   ");
+		uartputstr("sd:   ");
 		uartputd(i);
 		uartputstr(": type ");
 		uartputx(type);

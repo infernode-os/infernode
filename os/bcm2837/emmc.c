@@ -1,18 +1,23 @@
 /*
- * The SD card, as blocks.
+ * The Arasan SDHCI controller, as an SDio backend.
  *
- * This is the mechanism half only: bring the controller up, get the
- * card out of its identification states, and read or write 512-byte
- * blocks. What is ON the card -- a partition table, a filesystem -- is
- * policy and belongs outside the kernel, the same argument that keeps
- * the USB class drivers in Limbo.
+ * This is where the SD card protocol used to live. It moved to
+ * sdmmc.c when the card moved to the SDHOST controller (sdhost.c says
+ * why: the CYW43455 WiFi chip can only be reached through THIS
+ * controller, so the card had to give it up). What is left here is
+ * the register half only -- reset, clock, one command, one block --
+ * and it is kept, buildable with -DSDCARD_ARASAN, for two reasons:
+ * the WiFi work will need an Arasan command path, and a working card
+ * driver on the other controller is what makes a SDHOST failure
+ * bisectable rather than a mystery.
+ *
+ * The register layout is SDHCI's at a non-standard spacing, which is
+ * why io.h names the offsets rather than borrowing a generic header.
  *
  * Polled, not interrupt-driven, like everything else on this board's
- * slow paths. The card is read at boot and rarely afterwards, an
- * interrupt would have to be routed through the VideoCore controller
- * for no gain at these rates, and a polled driver is one that cannot
- * lose a wakeup -- which is the failure mode that cost the most time in
- * the USB driver.
+ * slow paths: the interrupt bits latch whether or not delivery is
+ * enabled, so polling them is the same information a handler would
+ * get, and a polled driver cannot lose a wakeup.
  */
 
 #include	"u.h"
@@ -25,45 +30,16 @@
 
 enum
 {
-	/* SD commands, by index */
-	Goidle		= 0,
-	Allsendcid	= 2,
-	Sendrelativeaddr= 3,
-	Selectcard	= 7,
-	Sendcsd		= 9,
-	Sendifcond	= 8,
-	Stoptransmission= 12,
-	Setblocklen	= 16,
-	Readsingle	= 17,
-	Readmultiple	= 18,
-	Writesingle	= 24,
-	Writemultiple	= 25,
-	Appcmd		= 55,
-	Sdsendopcond	= 41,		/* ACMD41 */
-	Setbuswidth	= 6,		/* ACMD6 */
-
-	Blocksize	= 512,
+	Initfreq	= 400000,	/* identification, per the spec */
+	Corefallback	= 41666667,	/* the usual base clock if unasked */
 
 	/*
-	 * How long to wait, in microseconds, and why it is bounded.
-	 *
-	 * A card that never answers must produce an error, not a hung
-	 * kernel: this runs during boot, and a board that stops here
-	 * stops before there is a console to ask what happened. Every
-	 * wait in this file has a limit for that reason.
+	 * How long to wait, in microseconds. Bounded, because this runs
+	 * during boot and a board that stops here stops before there is
+	 * a console to ask what happened.
 	 */
-	Cmdtimeout	= 200000,	/* 200ms for a command to complete */
-	Inittimeout	= 2000000,	/* 2s for the card to power up */
-	Maxnocard	= 3,		/* consecutive dead commands = no card */
+	Cmdwait		= 200000,	/* 200ms for a command to complete */
 };
-
-static struct
-{
-	int	valid;		/* a card was found and initialised */
-	int	hcs;		/* high capacity: addresses are blocks */
-	u32int	rca;		/* the card's relative address */
-	uvlong	nblocks;	/* 0 if unknown */
-} sdcard;
 
 static u32int
 emmcrd(int off)
@@ -86,7 +62,7 @@ emmcwaitstatus(u32int mask)
 {
 	int i;
 
-	for(i = 0; i < Cmdtimeout; i += 10){
+	for(i = 0; i < Cmdwait; i += 10){
 		if((emmcrd(Emmcstatus) & mask) == 0)
 			return 0;
 		microdelay(10);
@@ -96,11 +72,9 @@ emmcwaitstatus(u32int mask)
 
 /*
  * Wait for an interrupt-status bit, bounded, WITHOUT taking an
- * interrupt: the bits latch in the register whether or not delivery is
- * enabled, so polling them is the same information a handler would get.
- *
- * Returns -1 on timeout or if the controller reports an error, and
- * clears whatever it saw so the next command starts from a known state.
+ * interrupt. Returns -1 on timeout or if the controller reports an
+ * error, and clears whatever it saw so the next command starts from a
+ * known state.
  */
 static int
 emmcwaitintr(u32int mask)
@@ -108,7 +82,7 @@ emmcwaitintr(u32int mask)
 	int i;
 	u32int intr;
 
-	for(i = 0; i < Cmdtimeout; i += 10){
+	for(i = 0; i < Cmdwait; i += 10){
 		intr = emmcrd(Emmcinterrupt);
 		if(intr & Interrorbit){
 			emmcwr(Emmcinterrupt, intr);
@@ -139,7 +113,7 @@ emmcsetclock(u32int hz)
 
 	base = mboxclockrate(Clkemmc);
 	if(base == 0)
-		base = 41666667;	/* the usual BCM2837 core clock */
+		base = Corefallback;
 
 	for(div = 1; div < 0x400; div++)
 		if(base / (div * 2) <= hz)
@@ -157,7 +131,7 @@ emmcsetclock(u32int hz)
 	c1 |= 0xE << 16;			/* data timeout, the maximum */
 	emmcwr(Emmccontrol1, c1);
 
-	for(i = 0; i < Cmdtimeout; i += 10){
+	for(i = 0; i < Cmdwait; i += 10){
 		if(emmcrd(Emmccontrol1) & Clkstable)
 			break;
 		microdelay(10);
@@ -171,78 +145,31 @@ emmcsetclock(u32int hz)
 }
 
 /*
- * Issue one command. resp is filled with as much of the response as the
- * command's type carries.
+ * Reset the host controller.
+ *
+ * The firmware has already used this controller to load the kernel,
+ * so it is not in its power-on state: it has a clock running, a card
+ * selected, and a block length set. Starting from whatever it left is
+ * how a driver works on one boot and not the next.
+ *
+ * The pins are NOT touched. The card reaches this controller through
+ * GPIO 48-53 at ALT3, which is where start.elf leaves them on the
+ * board; under QEMU the same routing is function 0, the reset value,
+ * and ALT3 means nothing to its mux. Both are "as found", so the one
+ * setting that is right in both places is the one already there.
+ * They are claimed so that #G cannot move them from under the card.
  */
 static int
-emmccmd(int idx, u32int arg, u32int flags, u32int *resp)
+arasaninit(void)
 {
-	u32int cmd;
+	int pin, i;
 
-	if(emmcwaitstatus(Cmdinhibit) < 0)
-		return -1;
-	if((flags & Cmdisdata) || (flags & Cmdrsp48busy) == Cmdrsp48busy)
-		if(emmcwaitstatus(Datinhibit) < 0)
-			return -1;
-
-	emmcwr(Emmcinterrupt, emmcrd(Emmcinterrupt));	/* clear stale bits */
-	emmcwr(Emmcarg1, arg);
-
-	cmd = (idx << 24) | flags;
-	emmcwr(Emmccmdtm, cmd);
-
-	if(emmcwaitintr(Cmddone) < 0)
-		return -1;
-
-	if(resp != nil){
-		resp[0] = emmcrd(Emmcresp0);
-		if((flags & Cmdrsp136) == Cmdrsp136){
-			resp[1] = emmcrd(Emmcresp1);
-			resp[2] = emmcrd(Emmcresp2);
-			resp[3] = emmcrd(Emmcresp3);
-		}
-	}
-	return 0;
-}
-
-/*
- * An application command: CMD55 first, addressed to the card, then the
- * ACMD itself.
- */
-static int
-emmcappcmd(int idx, u32int arg, u32int flags, u32int *resp)
-{
-	if(emmccmd(Appcmd, sdcard.rca << 16, Cmdrsp48 | Cmdcrcchk | Cmdidxchk, nil) < 0)
-		return -1;
-	return emmccmd(idx, arg, flags, resp);
-}
-
-/*
- * Bring the controller and the card up. Returns 0 if there is a card.
- */
-int
-emmcinit(void)
-{
-	int pin;
-
-	/* the card's lines, muxed by the firmware; #G must not touch them */
 	for(pin = 48; pin <= 53; pin++)
-		gpioclaim(pin, "sd");
-	u32int resp[4], c1;
-	int i, ok, nofail;
+		gpioclaim(pin, "emmc");
 
-	/*
-	 * Reset the host controller before anything else.
-	 *
-	 * The firmware has already used this controller to load the
-	 * kernel, so it is not in its power-on state: it has a clock
-	 * running, a card selected, and a block length set. Starting from
-	 * whatever it left is how a driver works on one boot and not the
-	 * next.
-	 */
 	emmcwr(Emmccontrol0, 0);
 	emmcwr(Emmccontrol1, emmcrd(Emmccontrol1) | Srsthc);
-	for(i = 0; i < Cmdtimeout; i += 10){
+	for(i = 0; i < Cmdwait; i += 10){
 		if((emmcrd(Emmccontrol1) & (Srsthc|Srstcmd|Srstdata)) == 0)
 			break;
 		microdelay(10);
@@ -251,273 +178,147 @@ emmcinit(void)
 		uartputstr("emmc: controller will not reset\n");
 		return -1;
 	}
+	return 0;
+}
 
-	/* identification happens at 400kHz, per the spec */
-	if(emmcsetclock(400000) < 0){
+static void
+arasanenable(void)
+{
+	if(emmcsetclock(Initfreq) < 0)
 		uartputstr("emmc: no clock\n");
-		return -1;
-	}
-
 	emmcwr(Emmcirpten, 0);
 	emmcwr(Emmcirptmask, ~0);	/* latch everything; we poll it */
 	emmcwr(Emmcinterrupt, ~0);
+}
 
-	sdcard.rca = 0;
-	if(emmccmd(Goidle, 0, Cmdrspnone, nil) < 0){
-		uartputstr("emmc: card will not go idle\n");
-		return -1;
+/*
+ * Issue one command.
+ *
+ * The 136-bit response is stored the SDHCI way, with the CRC byte
+ * dropped: RESP3 holds bits 127:104, RESP2 103:72, RESP1 71:40 and
+ * RESP0 39:8. The card layer wants the raw layout SDHOST produces,
+ * RESP3 = bits 127:96, so it is shifted into that form here, the way
+ * Miller's emmc.c does it -- the bit numbers in the specification
+ * then mean the same thing whichever controller answered.
+ */
+static int
+arasancmd(int idx, u32int arg, int flags, u32int *resp)
+{
+	u32int cmd, r0, r1, r2, r3;
+
+	cmd = (u32int)idx << 24;
+	switch(flags & Rmask){
+	case Rnone:
+		cmd |= Cmdrspnone;
+		break;
+	case R48:
+		cmd |= Cmdrsp48;
+		if((flags & Rnocrc) == 0)
+			cmd |= Cmdcrcchk | Cmdidxchk;
+		break;
+	case R48busy:
+		cmd |= Cmdrsp48busy | Cmdcrcchk | Cmdidxchk;
+		break;
+	case R136:
+		cmd |= Cmdrsp136 | Cmdcrcchk;
+		break;
 	}
+	if(flags & Dread)
+		cmd |= Cmdisdata | Tmdatdirread;
+	if(flags & Dwrite)
+		cmd |= Cmdisdata;
 
-	/*
-	 * CMD8 separates SD 2.0 and later from older cards, and its reply
-	 * has to be checked rather than merely received: a card that does
-	 * not understand it simply does not answer, and one that does
-	 * echoes back the check pattern. Only a card that echoes it may
-	 * be offered the high-capacity bit below.
-	 */
-	ok = 0;
-	if(emmccmd(Sendifcond, 0x1AA, Cmdrsp48 | Cmdcrcchk | Cmdidxchk, resp) == 0)
-		if((resp[0] & 0xFFF) == 0x1AA)
-			ok = 1;
+	if(emmcwaitstatus(Cmdinhibit) < 0)
+		return -1;
+	if((flags & (Dread|Dwrite)) || (flags & Rmask) == R48busy)
+		if(emmcwaitstatus(Datinhibit) < 0)
+			return -1;
 
-	/*
-	 * ACMD41 until the card says it has finished powering up. The
-	 * busy bit is inverted -- bit 31 SET means ready -- which is easy
-	 * to read the wrong way round and produces a driver that gives up
-	 * exactly when the card becomes usable.
-	 */
-	resp[0] = 0;
-	nofail = 0;
-	for(i = 0; i < Inittimeout; i += 1000){
-		if(emmcappcmd(Sdsendopcond, (ok? 0x40000000 : 0) | 0x00FF8000,
-		    Cmdrsp48, resp) < 0){
-			/*
-			 * Give up quickly on a card that is not there.
-			 *
-			 * "Busy" and "absent" both present as ACMD41 not
-			 * reporting ready, but they differ in whether the
-			 * command COMPLETES: a card powering up answers and
-			 * says it is busy, an empty slot answers nothing
-			 * and every command times out. Retrying an empty
-			 * slot for the full two seconds is time spent
-			 * during boot on a certainty -- and it showed up
-			 * as the console having drawn less by the time
-			 * anything looked at it.
-			 */
-			if(++nofail >= Maxnocard){
-				uartputstr("emmc: no card in the slot\n");
-				return -1;
-			}
-			microdelay(1000);
-			continue;
-		}
-		nofail = 0;
-		if(resp[0] & 0x80000000)
+	emmcwr(Emmcinterrupt, emmcrd(Emmcinterrupt));	/* clear stale bits */
+	emmcwr(Emmcarg1, arg);
+	emmcwr(Emmccmdtm, cmd);
+
+	if(emmcwaitintr(Cmddone) < 0)
+		return -1;
+
+	if(resp != nil){
+		resp[0] = resp[1] = resp[2] = resp[3] = 0;
+		switch(flags & Rmask){
+		case R136:
+			r0 = emmcrd(Emmcresp0);
+			r1 = emmcrd(Emmcresp1);
+			r2 = emmcrd(Emmcresp2);
+			r3 = emmcrd(Emmcresp3);
+			resp[0] = r0 << 8;
+			resp[1] = r0 >> 24 | r1 << 8;
+			resp[2] = r1 >> 24 | r2 << 8;
+			resp[3] = r2 >> 24 | r3 << 8;
 			break;
-		microdelay(1000);
-	}
-	if((resp[0] & 0x80000000) == 0){
-		uartputstr("emmc: card never came ready\n");
-		return -1;
-	}
-	sdcard.hcs = (resp[0] & 0x40000000) != 0;
-
-	if(emmccmd(Allsendcid, 0, Cmdrsp136 | Cmdcrcchk, resp) < 0){
-		uartputstr("emmc: no CID\n");
-		return -1;
-	}
-	if(emmccmd(Sendrelativeaddr, 0, Cmdrsp48 | Cmdcrcchk | Cmdidxchk, resp) < 0){
-		uartputstr("emmc: no relative address\n");
-		return -1;
-	}
-	sdcard.rca = resp[0] >> 16;
-
-	/*
-	 * The card's size, from the CSD, and it must be asked for HERE.
-	 *
-	 * SEND_CSD is only answered in the stand-by state -- after the
-	 * card has an address and before it is selected -- so this sits
-	 * between CMD3 and CMD7 rather than anywhere more convenient.
-	 *
-	 * The 136-bit response arrives with the start and CRC bits
-	 * stripped, so RESP3 holds bits 127..104, RESP2 103..72, RESP1
-	 * 71..40 and RESP0 39..8. Every field below is indexed off that,
-	 * which is the part worth writing down: the bit numbers in the
-	 * specification are NOT the bit numbers in these registers.
-	 */
-	if(emmccmd(Sendcsd, sdcard.rca << 16, Cmdrsp136 | Cmdcrcchk, resp) == 0){
-		u32int csz, ver;	/* NOT csize: pool.h has a macro of that name */
-
-		ver = (resp[3] >> 22) & 3;	/* CSD_STRUCTURE, bits 127:126 */
-		if(ver == 1){
-			/* v2: C_SIZE is bits 69:48, and the unit is 512KB */
-			csz = (resp[1] >> 8) & 0x3FFFFF;
-			sdcard.nblocks = ((uvlong)csz + 1) * 1024;
-		}else{
-			/*
-			 * v1: capacity is (C_SIZE+1) * 2^(C_SIZE_MULT+2)
-			 * blocks of 2^READ_BL_LEN bytes, which is the older
-			 * and more awkward encoding.
-			 */
-			u32int mult, blen;
-
-			/*
-			 * C_SIZE is bits 73:62, so it STRADDLES resp2 and
-			 * resp1: two bits at the bottom of resp2 (73:72)
-			 * and ten at the top of resp1 (71:62). Getting the
-			 * halves the wrong way round is what reported a
-			 * 64MB card as 30736MB.
-			 */
-			csz = ((resp[2] & 3) << 10) | ((resp[1] >> 22) & 0x3FF);
-			mult = (resp[1] >> 7) & 7;	/* C_SIZE_MULT, 49:47 */
-			blen = (resp[2] >> 8) & 0xF;	/* READ_BL_LEN, 83:80 */
-			sdcard.nblocks = ((uvlong)csz + 1) << (mult + 2);
-			if(blen > 9)
-				sdcard.nblocks <<= blen - 9;
+		case R48:
+		case R48busy:
+			resp[0] = emmcrd(Emmcresp0);
+			break;
 		}
 	}
-
-	if(emmccmd(Selectcard, sdcard.rca << 16, Cmdrsp48busy | Cmdcrcchk, resp) < 0){
-		uartputstr("emmc: card will not select\n");
-		return -1;
-	}
-
-	/*
-	 * A standard-capacity card addresses BYTES and needs to be told
-	 * the block length; a high-capacity one addresses BLOCKS and
-	 * ignores this. Sending it either way is harmless and means the
-	 * read path does not have to care which kind it has beyond the
-	 * address it computes.
-	 */
-	if(emmccmd(Setblocklen, Blocksize, Cmdrsp48 | Cmdcrcchk | Cmdidxchk, resp) < 0){
-		uartputstr("emmc: cannot set block length\n");
-		return -1;
-	}
-
-	/* identification is over; run at a useful speed */
-	if(emmcsetclock(25000000) < 0){
-		uartputstr("emmc: cannot raise the clock\n");
-		return -1;
-	}
-
-	/*
-	 * Four-bit bus, and BOTH ends have to agree.
-	 *
-	 * Setting the host controller's width without telling the card is
-	 * the whole bug: the host then clocks four data lines while the
-	 * card is still driving one, so commands keep working -- they go
-	 * over CMD, which is unaffected -- and every DATA transfer
-	 * returns nothing. The controller comes up, the card is
-	 * identified, and sector 0 will not read. QEMU's model tolerates
-	 * the mismatch, so it only appears on real silicon.
-	 *
-	 * ACMD6 first, and the host follows only if the card agreed. A
-	 * card that refuses stays at one bit, which is slower and
-	 * correct.
-	 */
-	if(emmcappcmd(Setbuswidth, 2, Cmdrsp48 | Cmdcrcchk | Cmdidxchk, resp) == 0){
-		c1 = emmcrd(Emmccontrol0);
-		emmcwr(Emmccontrol0, c1 | Hctldwidth4);
-	}else
-		uartputstr("emmc: card kept a 1-bit bus\n");
-
-	sdcard.valid = 1;
-
-	uartputstr("emmc: card ready, ");
-	uartputstr(sdcard.hcs? "high capacity (block addressed), "
-		: "standard capacity (byte addressed), ");
-	uartputd(sdcard.nblocks / 2048);
-	uartputstr(" MB\n");
 	return 0;
 }
 
-/*
- * Read one 512-byte block. Returns 0 on success.
- */
-int
-emmcread(uvlong blockno, void *a)
+static void
+arasanbus(int width, int hz)
 {
-	u32int *p, addr;
+	u32int c0;
+
+	if(width == 4 || width == 1){
+		c0 = emmcrd(Emmccontrol0) & ~Hctldwidth4;
+		if(width == 4)
+			c0 |= Hctldwidth4;
+		emmcwr(Emmccontrol0, c0);
+	}
+	if(hz > 0)
+		if(emmcsetclock(hz) < 0)
+			uartputstr("emmc: cannot set the clock\n");
+}
+
+static void
+arasaniosetup(int write, int bsize, int bcount)
+{
+	USED(write);
+	emmcwr(Emmcblksizecnt, (bcount << 16) | bsize);
+}
+
+/*
+ * Move the data of a command already issued with Dread or Dwrite:
+ * wait for the controller to say the buffer is ready, move the words,
+ * wait for it to say the transfer is over.
+ */
+static int
+arasanio(int write, void *a, int len)
+{
+	u32int *p;
 	int i;
 
-	if(!sdcard.valid)
+	if(emmcwaitintr(write? Writerdy : Readrdy) < 0)
 		return -1;
-
-	/*
-	 * A high-capacity card is addressed in BLOCKS and a
-	 * standard-capacity one in BYTES. Getting this backwards does not
-	 * fail: it reads a different, valid part of the card, which is
-	 * far worse than an error.
-	 */
-	addr = sdcard.hcs? (u32int)blockno : (u32int)(blockno * Blocksize);
-
-	emmcwr(Emmcblksizecnt, (1 << 16) | Blocksize);
-	if(emmccmd(Readsingle, addr,
-	    Cmdrsp48 | Cmdcrcchk | Cmdidxchk | Cmdisdata | Tmdatdirread, nil) < 0){
-		/*
-		 * Which step failed is the whole diagnosis here. The
-		 * command not completing means the card never accepted the
-		 * request; data never becoming ready means it accepted it
-		 * and the data lines are not working, which is a different
-		 * fault with a different cause.
-		 */
-		uartputstr("emmc: read command refused\n");
-		return -1;
-	}
-
-	if(emmcwaitintr(Readrdy) < 0){
-		uartputstr("emmc: no data from the card\n");
-		return -1;
-	}
 
 	p = a;
-	for(i = 0; i < Blocksize/4; i++)
-		p[i] = emmcrd(Emmcdata);
+	for(i = 0; i < len/4; i++){
+		if(write)
+			emmcwr(Emmcdata, p[i]);
+		else
+			p[i] = emmcrd(Emmcdata);
+	}
 
 	if(emmcwaitintr(Datadone) < 0)
 		return -1;
 	return 0;
 }
 
-/*
- * Write one 512-byte block. Returns 0 on success.
- */
-int
-emmcwrite(uvlong blockno, void *a)
-{
-	u32int *p, addr;
-	int i;
-
-	if(!sdcard.valid)
-		return -1;
-
-	addr = sdcard.hcs? (u32int)blockno : (u32int)(blockno * Blocksize);
-
-	emmcwr(Emmcblksizecnt, (1 << 16) | Blocksize);
-	if(emmccmd(Writesingle, addr,
-	    Cmdrsp48 | Cmdcrcchk | Cmdidxchk | Cmdisdata, nil) < 0)
-		return -1;
-
-	if(emmcwaitintr(Writerdy) < 0)
-		return -1;
-
-	p = a;
-	for(i = 0; i < Blocksize/4; i++)
-		emmcwr(Emmcdata, p[i]);
-
-	if(emmcwaitintr(Datadone) < 0)
-		return -1;
-	return 0;
-}
-
-int
-emmcpresent(void)
-{
-	return sdcard.valid;
-}
-
-uvlong
-emmcnblocks(void)
-{
-	return sdcard.nblocks;
-}
+SDio emmcio = {
+	"emmc",
+	arasaninit,
+	arasanenable,
+	arasancmd,
+	arasanbus,
+	arasaniosetup,
+	arasanio,
+};

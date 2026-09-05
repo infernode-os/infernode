@@ -69,6 +69,8 @@ enum
 {
 	Nirq		= 72,
 	IRQusb		= 9,		/* DWC OTG host controller */
+	IRQsdhost	= 56,		/* the BCM2835 SDHOST controller */
+	IRQmmc		= 62,		/* the Arasan SDHCI controller */
 	IRQbasic	= 64,		/* first ARM-private source */
 	IRQtimerArm	= IRQbasic + 0,	/* the ARM-side timer below */
 };
@@ -86,7 +88,8 @@ enum
 {
 	ARMTIMERREGS	= PHYSIO+0x00B400,
 	PMREGS		= PHYSIO+0x100000,	/* power management / watchdog */
-	EMMCREGS	= PHYSIO+0x300000,	/* SD card host controller */
+	SDHOSTREGS	= PHYSIO+0x202000,	/* BCM2835 SDHOST: the card */
+	EMMCREGS	= PHYSIO+0x300000,	/* Arasan SDHCI: for the WiFi chip */
 
 	/*
 	 * The watchdog, which is how this SoC reboots: there is no reset
@@ -193,7 +196,8 @@ enum
 	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
 	Taggetedidblock	= 0x00030020,	/* the display's own description */
 
-	Clkemmc		= 1,		/* clock id for the SD controller */
+	Clkemmc		= 1,		/* clock id for the Arasan controller */
+	Clkcore		= 4,		/* the VPU core clock; SDHOST divides it */
 
 	Tagend		= 0x00000000,
 };
@@ -343,4 +347,82 @@ enum
 	Cmdcrcchk	= 1<<19,
 	Cmdidxchk	= 1<<20,
 	Cmdisdata	= 1<<21,
+};
+
+/*
+ * SDHOST register offsets.
+ *
+ * The BCM2835's own SD controller, older and simpler than the Arasan
+ * above: a 16-word FIFO at Sddata, a state machine readable through
+ * Sdedm, and responses stored RAW -- Sdrsp3 holds bits 127:96 of a
+ * 136-bit response, where the Arasan drops the CRC byte and stores bits
+ * 127:104 in its RESP3. The two controllers share the card's six GPIO
+ * pins and the mux decides which one is wired to them: ALT0 for this
+ * one, ALT3 for the Arasan. See sdhost.c for why the card lives here.
+ */
+enum
+{
+	Sdcmd		= 0x00,		/* command and its flags */
+	Sdarg		= 0x04,
+	Sdtout		= 0x08,		/* data timeout, in SD clocks */
+	Sdcdiv		= 0x0C,		/* clock divider: sdclk = core/(div+2) */
+	Sdrsp0		= 0x10,		/* response bits 31:0 */
+	Sdrsp1		= 0x14,		/* 63:32 */
+	Sdrsp2		= 0x18,		/* 95:64 */
+	Sdrsp3		= 0x1C,		/* 127:96 */
+	Sdhsts		= 0x20,		/* status; write 1 to clear */
+	Sdvdd		= 0x30,		/* power */
+	Sdedm		= 0x34,		/* state machine and FIFO thresholds */
+	Sdhcfg		= 0x38,		/* host configuration */
+	Sdhbct		= 0x3C,		/* block size */
+	Sddata		= 0x40,		/* the FIFO */
+	Sdhblc		= 0x50,		/* block count; writing it arms a transfer */
+
+	/* Sdcmd */
+	Cmdstart	= 1<<15,	/* set to issue; clear when done */
+	Cmdfailed	= 1<<14,	/* set, with Cmdstart clear, on error */
+	Cmdbusywait	= 1<<11,	/* R1b: wait for the card to leave busy */
+	Cmdnoresp	= 1<<10,
+	Cmdlongresp	= 1<<9,		/* 136-bit response */
+	Cmdhost2card	= 1<<7,		/* data follows, out */
+	Cmdcard2host	= 1<<6,		/* data follows, in */
+	Cmdindexmask	= 0x3F,
+
+	/* Sdhsts */
+	Hstbusyint	= 1<<10,	/* the R1b busy period ended */
+	Hstblkint	= 1<<9,
+	Hstsdioint	= 1<<8,
+	Hstrewtimeout	= 1<<7,		/* read/erase/write data timeout */
+	Hstcmdtimeout	= 1<<6,		/* no response: the usual "no card" */
+	Hstcrc16	= 1<<5,
+	Hstcrc7		= 1<<4,
+	Hstfifoerror	= 1<<3,
+	Hstdataflag	= 1<<0,		/* the FIFO has data, or room */
+	Hsterrors	= Hstrewtimeout|Hstcmdtimeout|Hstcrc16|Hstcrc7|Hstfifoerror,
+	Hstall		= 0xFFFF,
+
+	/* Sdhcfg */
+	Hcfgbusyinten	= 1<<10,	/* needed even when polling; see sdhost.c */
+	Hcfgblkinten	= 1<<8,
+	Hcfgsdiointen	= 1<<5,
+	Hcfgdatainten	= 1<<4,
+	Hcfgslowcard	= 1<<3,
+	Hcfgextbus4	= 1<<2,		/* four data lines to the card */
+	Hcfgintbuswide	= 1<<1,
+	Hcfgcmdrelease	= 1<<0,
+
+	/* Sdedm */
+	Edmfsmmask	= 0xF,
+	Edmfsmident	= 0,		/* idle, identification clock */
+	Edmfsmdata	= 1,		/* idle, data clock */
+	Edmfsmread	= 2,
+	Edmfsmwrite	= 3,
+	Edmfifoshift	= 4,		/* words in the FIFO, 5 bits */
+	Edmfifomask	= 0x1F,
+	Edmwrthreshshift= 9,
+	Edmrdthreshshift= 14,
+	Edmthreshmask	= 0x1F,
+
+	Sdfifowords	= 16,
+	Sdcdivmax	= 0x7FF,
 };

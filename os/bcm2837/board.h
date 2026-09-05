@@ -23,6 +23,7 @@ char*	gpioclaimed(int);
 
 /* mailbox.c */
 int	mboxprop(u32int, u32int*, int, int);
+u32int	mboxresp(void);
 int	setpower(int, int);
 int	mboxfballoc(u32int, u32int, u32int, u32int, Fbinfo*);
 int	mboxfbnumdisplays(void);

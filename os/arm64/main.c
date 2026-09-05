@@ -2417,6 +2417,13 @@ kmain(void)
 	 */
 	kbind("#S", "/dev", MAFTER);
 
+	/*
+	 * The touch panel's firmware buffer, as /dev/touch. Like #S it
+	 * refuses to attach when the hardware is absent -- no panel, no
+	 * file -- and the bind failing is not an error.
+	 */
+	kbind("#T", "/dev", MAFTER);
+
 	/* the running kernel, so it can be copied onto the card */
 	kbind("#B", "/dev", MAFTER);
 	kbind("#G", "/dev", MAFTER);	/* /dev/gpio/N/{ctl,level} */

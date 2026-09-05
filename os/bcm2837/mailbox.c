@@ -238,6 +238,19 @@ mboxcall1(u32int chan, volatile u32int *buf)
  * that the firmware has room to answer in place.  On success the reply is
  * copied back into data.
  */
+/*
+ * The firmware's per-tag response word from the last property call.
+ * mboxprop() cannot tell an unimplemented tag from success -- the
+ * message as a whole succeeds either way -- so a caller that must
+ * distinguish "the firmware says no" from "the firmware never looked"
+ * reads this: Propok set means the tag was processed.
+ */
+u32int
+mboxresp(void)
+{
+	return mboxbuf[4];
+}
+
 int
 mboxprop(u32int tag, u32int *data, int nreq, int nresp)
 {

@@ -69,6 +69,7 @@ extern Dev srvdevtab;
 extern Dev etherdevtab;
 extern Dev ssldevtab;
 extern Dev gpiodevtab;
+extern Dev touchdevtab;
 
 Dev*	devtab[] =
 {
@@ -89,6 +90,7 @@ Dev*	devtab[] =
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */
+	&touchdevtab,		/* 'T' -- #T, the DSI panel's touch buffer */
 	nil,
 };
 

@@ -2510,6 +2510,33 @@ try:
         "arguments": {"driver": "usb-kbd", "id": "hotkbd2"}}) + "\n")
     f.flush(); f.readline()
     time.sleep(15)
+    kbdback = bytes(buf)
+
+    # The Ethernet. QEMU cannot unplug it: device_del of a usb-net with
+    # a transfer in flight trips an assertion in QEMU's USB core
+    # (usb_ep_get: dev != NULL) and QEMU dies. What a detached device
+    # does to the kernel data path -- the reader's transfer fails and
+    # it unbinds -- is the same release the unbind verb performs, so
+    # ask for that from the guest's console, then run the driver again
+    # for the same device: it must bind again, unbind the interface
+    # the first run left on /net/ether0, and configure an address.
+    # The driver's first run must have finished -- its last act is a
+    # ping to 8.8.8.8 -- or it still holds the device's endpoints and
+    # the second run cannot open them.
+    deadline = time.time() + 150
+    while time.time() < deadline and b"8.8.8.8" not in buf:
+        time.sleep(0.5)
+    time.sleep(8)
+    p.stdin.write(b"echo unbind > '#l/ether0/clone'\r"); p.stdin.flush()
+    time.sleep(6)
+    ethgone = bytes(buf)
+    p.stdin.write(b"etherusb ep3.0\r"); p.stdin.flush()
+    # DHCP takes its full ~45s of retries before the fallback address
+    # is configured; wait for the address line rather than a guess.
+    deadline = time.time() + 150
+    while time.time() < deadline and b"on ipifc" not in buf[len(ethgone):]:
+        time.sleep(0.5)
+    time.sleep(3)
     s.close()
 finally:
     p.kill(); p.wait()
@@ -2522,8 +2549,15 @@ print("CLAIMED" if b"kbdusb:" in tail and b"ready on endpoint" in tail else "NOT
 t2 = gone[len(mid):]
 print("REMOVE-SEEN" if b"device removed" in t2 else "REMOVE-MISSED")
 print("DRIVER-EXITED" if b"detached" in t2 else "DRIVER-STUCK")
-t3 = after[len(gone):]
+t3 = kbdback[len(gone):]
 print("RECLAIMED" if b"kbdusb:" in t3 and b"ready on endpoint" in t3 else "NOT-RECLAIMED")
+t4 = ethgone[len(kbdback):]
+print("ETH-UNBOUND" if b"kernel data path unbound" in t4 else "ETH-STUCK")
+print("ETH-PROCS-EXITED" if b"reader exits" in t4 and b"writer exits" in t4 else "ETH-PROCS-STUCK")
+t5 = after[len(ethgone):]
+print("ETH-REBOUND" if b"kernel data path bound" in t5 else "ETH-NOT-REBOUND")
+print("ETH-STALE-CLEARED" if b"unbound stale interface" in t5 else "ETH-STALE-LEFT")
+print("ETH-READDRESSED" if b"on ipifc" in t5 else "ETH-NO-ADDRESS")
 PYEOF
 
 HOTOUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
@@ -2563,6 +2597,31 @@ else
         pass "a device plugged back in is enumerated and claimed again"
     else
         fail "the replugged device was not claimed again"
+    fi
+    if grep -q 'ETH-UNBOUND' <<<"$HOTOUT"; then
+        pass "the kernel Ethernet data path can be released (what a detached device causes)"
+    else
+        fail "the kernel Ethernet data path would not let go"
+    fi
+    if grep -q 'ETH-PROCS-EXITED' <<<"$HOTOUT"; then
+        pass "both kernel data-path processes leave when the path is released"
+    else
+        fail "a kernel data-path process stayed behind after the release"
+    fi
+    if grep -q 'ETH-REBOUND' <<<"$HOTOUT"; then
+        pass "the Ethernet driver run again binds the kernel data path again"
+    else
+        fail "the Ethernet could not be bound a second time"
+    fi
+    if grep -q 'ETH-STALE-CLEARED' <<<"$HOTOUT"; then
+        pass "the interface the first run left on /net/ether0 is unbound before a new one is made"
+    else
+        fail "a stale IP interface was left bound to /net/ether0"
+    fi
+    if grep -q 'ETH-READDRESSED' <<<"$HOTOUT"; then
+        pass "the Ethernet run again gets an address again"
+    else
+        fail "the Ethernet run again was never configured"
     fi
 fi
 
@@ -2860,7 +2919,7 @@ else
     pass "every mboxprop call passes element counts, not sizeof"
 fi
 
-run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0"
+run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
 
 #
 # The virt machine.

@@ -85,7 +85,16 @@ init(nil: ref Draw->Context, args: list of string)
 	# fresh fd for every request leaves replies behind for the next
 	# one to trip over.
 	#
+	#
+	# The enumerator that found this device may still be letting go of
+	# its control endpoint, which is exclusive-open; its release is not
+	# instantaneous. Ask a few times before calling it in use.
+	#
 	ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	for(retry := 0; ep0 == nil && retry < 40 && isinuse(); retry++){
+		sys->sleep(50);
+		ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	}
 	if(ep0 == nil){
 		sys->print("mouseusb: cannot open %s data: %r\n", dev);
 		return;
@@ -418,6 +427,15 @@ isdetached(): int
 	e := sys->sprint("%r");
 	for(i := 0; i + 8 <= len e; i++)
 		if(e[i:i+8] == "detached")
+			return 1;
+	return 0;
+}
+
+isinuse(): int
+{
+	e := sys->sprint("%r");
+	for(i := 0; i + 6 <= len e; i++)
+		if(e[i:i+6] == "in use")
 			return 1;
 	return 0;
 }

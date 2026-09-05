@@ -916,6 +916,14 @@ epclose(Ep *ep)
 {
 	qlock(&ep->ql);
 	if(waserror()){
+		/*
+		 * The controller's close failed. The endpoint is still no
+		 * longer open: leaving inuse set here made it unopenable
+		 * for the rest of the machine's life -- "device or object
+		 * already in use" with no process holding it, one boot in
+		 * three, the USB Ethernet never coming up.
+		 */
+		ep->inuse = 0;
 		qunlock(&ep->ql);
 		nexterror();
 	}

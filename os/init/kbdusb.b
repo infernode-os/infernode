@@ -100,7 +100,16 @@ init(nil: ref Draw->Context, args: list of string)
 	# fresh fd for every request leaves replies behind for the next
 	# one to trip over -- which osinit's ctlreq says in as many words.
 	#
+	#
+	# The enumerator that found this device may still be letting go of
+	# its control endpoint, which is exclusive-open; its release is not
+	# instantaneous. Ask a few times before calling it in use.
+	#
 	ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	for(retry := 0; ep0 == nil && retry < 40 && isinuse(); retry++){
+		sys->sleep(50);
+		ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	}
 	if(ep0 == nil){
 		sys->print("kbdusb: cannot open %s data: %r\n", dev);
 		return;
@@ -300,6 +309,7 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		if(n < 0){
 			if(isdetached()){
 				sys->print("kbdusb: %s detached\n", dev);
+				alive = 0;
 				return;
 			}
 		#
@@ -317,6 +327,7 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		#
 			if(++nerr >= Maxerr){
 				sys->print("kbdusb: %s stopped responding; unplugged?\n", dev);
+				alive = 0;
 				return;
 			}
 			sys->sleep(ival);
@@ -406,11 +417,12 @@ Stalems:	con 350;	# no report for this long = do not trust the held state
 heldk := 0;			# HID usage of the key held down, 0 = none
 heldc := 0;			# what it decoded to
 heldat := 0;			# when it went down, sys->millisec()
+alive := 1;			# cleared when the report loop ends, so the repeater leaves too and the module can die
 lastreport := 0;		# when the keyboard last said anything at all
 
 repeater(kbd: ref Sys->FD)
 {
-	for(;;){
+	for(; alive;){
 		sys->sleep(Repeatrate);
 		if(heldc == 0)
 			continue;
@@ -596,6 +608,15 @@ isdetached(): int
 	e := sys->sprint("%r");
 	for(i := 0; i + 8 <= len e; i++)
 		if(e[i:i+8] == "detached")
+			return 1;
+	return 0;
+}
+
+isinuse(): int
+{
+	e := sys->sprint("%r");
+	for(i := 0; i + 6 <= len e; i++)
+		if(e[i:i+6] == "in use")
 			return 1;
 	return 0;
 }

@@ -203,3 +203,14 @@ void	kprocchild(Proc*, void(*)(void*), void*);
 void	boardreboot(void);
 void	boardtryboot(void);
 void	tryboot(void);
+
+/*
+ * The boot watchdog and the command line that controls it -- see
+ * os/bcm2837/board.c. booted() is devcons's "booted" sysctl word;
+ * boardbooted() is what it means to the hardware.
+ */
+void	booted(void);
+void	boardbooted(void);
+void	boardbootwatchdog(void);
+int	boardcandidate(void);
+char*	boardcmdline(void);

@@ -92,6 +92,7 @@ init()
 	sys->print("init: allocated %d bytes through the Dis heap\n", total);
 	kernelimage();
 	gpiocheck();
+	bootargs();
 
 	#
 	# A fixed arithmetic loop, timed. Reported so the harness can run
@@ -305,6 +306,20 @@ init()
 		sys->print("init: cannot load %s: %r\n", Command->PATH);
 		return;
 	}
+
+	#
+	# The boot is over: tell the kernel, which releases the boot
+	# watchdog a tryboot candidate armed in kmain.
+	#
+	# Here, and not earlier, because "booted" means "a shell can be
+	# typed at": the module is loaded and the next statement runs it.
+	# Not later, because sh->init does not return while the shell
+	# runs. The USB walk and the network are still in flight in their
+	# own threads and are deliberately NOT waited for -- a keyboard
+	# behind a slow hub or a DHCP server that never answers must not
+	# be what resets a working candidate back to the old kernel.
+	#
+	booted();
 
 	#
 	# -l, so the shell reads /lib/sh/profile.
@@ -2262,6 +2277,61 @@ devnum(name: string): int
 			break;
 	}
 	return n;
+}
+
+#
+# Declare the boot finished. The kernel side is devcons's "booted"
+# sysctl word; what it does to the hardware is in os/bcm2837/board.c.
+# The kernel prints its own line either way, which is what the harness
+# checks; this one only reports a write that did not get there.
+#
+booted()
+{
+	fd := sys->open("/dev/sysctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "booted") < 0)
+		sys->print("init: cannot write booted to /dev/sysctl: %r\n");
+}
+
+#
+# The command line the firmware handed this boot, from #B/bootargs.
+#
+# The one word that matters here is "tryboot": the tryboot
+# configuration on the card puts it there and config.txt's does not,
+# so it is how a kernel image -- the same bytes either way -- learns
+# that it is the candidate and not the incumbent. A candidate that got
+# this far has booted to a shell under the watchdog and is about to
+# have that watchdog released, which is exactly the moment to say how
+# it is promoted. The commands are printed rather than run: promotion
+# is the operator's decision, and a candidate that boots but has a
+# broken keyboard driver is one they will not want to keep.
+#
+bootargs()
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: /dev/bootargs: %r\n");
+		return;
+	}
+	buf := array[1100] of byte;
+	n := sys->read(fd, buf, len buf);
+	args := "";
+	if(n > 0)
+		args = string buf[0:n];
+	(nil, words) := sys->tokenize(args, " \t\r\n");
+	if(words == nil){
+		sys->print("init: bootargs: (none)\n");
+		return;
+	}
+	sys->print("init: bootargs: %s\n", args);
+	candidate := 0;
+	for(w := words; w != nil; w = tl w)
+		if(hd w == "tryboot")
+			candidate = 1;
+	if(!candidate)
+		return;
+	sys->print("init: CANDIDATE kernel: this boot came from the tryboot configuration\n");
+	sys->print("init: to keep it:     mv /n/dos/tryboot.img /n/dos/infernode8.img\n");
+	sys->print("init: to reject it:   echo reboot > /dev/sysctl   (boots infernode8.img)\n");
 }
 
 #

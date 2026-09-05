@@ -118,30 +118,36 @@ enum
 	/* every caller hands mboxcall the one shared buffer */
 	Mboxbufsize = 64 * sizeof(u32int),
 	Maxvalwords = 64 - 8,	/* room for the header, the tag and Tagend */
+	Cmdlinewords = 256,	/* 1KB of command line; see mboxcmdline */
 };
 
 /*
  * Post the buffer to a channel and wait for the reply.  Returns 0 on
  * success, -1 if the firmware rejected the request.
  */
-static int mboxcall1(u32int, volatile u32int*);
+static int mboxcall1(u32int, volatile u32int*, int);
 
+/*
+ * size is the buffer's length in bytes: the cache maintenance below
+ * has to cover the whole of what the firmware will read and write, and
+ * the command line needs a buffer four times the size of mboxbuf.
+ */
 static int
-mboxcall(u32int chan, volatile u32int *buf)
+mboxcall(u32int chan, volatile u32int *buf, int size)
 {
 	int r;
 
 	if(!mboxlockable)
-		return mboxcall1(chan, buf);
+		return mboxcall1(chan, buf, size);
 
 	lock(&mboxlock);
-	r = mboxcall1(chan, buf);
+	r = mboxcall1(chan, buf, size);
 	unlock(&mboxlock);
 	return r;
 }
 
 static int
-mboxcall1(u32int chan, volatile u32int *buf)
+mboxcall1(u32int chan, volatile u32int *buf, int size)
 {
 	u32int v, want;
 	long i;
@@ -168,7 +174,7 @@ mboxcall1(u32int chan, volatile u32int *buf)
 	 * may rely on -- and would show up as calls that succeed early in
 	 * boot and fail later, once more code has been through the cache.
 	 */
-	cachedwbse((void*)buf, Mboxbufsize);
+	cachedwbse((void*)buf, size);
 	dsb();
 
 	/*
@@ -225,7 +231,7 @@ mboxcall1(u32int chan, volatile u32int *buf)
 	 * That ordering is load-bearing -- doing this without the clean
 	 * above would risk exactly the corruption it is meant to prevent.
 	 */
-	cachedwbinvse((void*)buf, Mboxbufsize);
+	cachedwbinvse((void*)buf, size);
 
 	return buf[1] == Propok ? 0 : -1;
 }
@@ -266,13 +272,98 @@ mboxprop(u32int tag, u32int *data, int nreq, int nresp)
 
 	mboxbuf[5 + nval] = Tagend;
 
-	if(mboxcall(Mboxchanprop, mboxbuf) < 0)
+	if(mboxcall(Mboxchanprop, mboxbuf, Mboxbufsize) < 0)
 		return -1;
 
 	for(i = 0; i < nresp; i++)
 		data[i] = mboxbuf[5 + i];
 
 	return 0;
+}
+
+/*
+ * The firmware's kernel command line: cmdline.txt as named by the
+ * config.txt (or tryboot.txt) that was in force, plus whatever the
+ * firmware appends of its own. Copied into buf as a NUL-terminated
+ * string, truncated to n-1 bytes; the return is the length the
+ * firmware reported, or -1.
+ *
+ * A buffer of its own, four times mboxbuf. A real Pi's command line
+ * runs to several hundred bytes -- the firmware adds vc_mem.mem_base,
+ * the Ethernet MAC and the framebuffer geometry unasked -- and the
+ * property protocol copies NOTHING when the value buffer is too short:
+ * it reports the needed length and leaves the buffer empty, which
+ * through mboxprop's 224 bytes would read as "no command line" on
+ * exactly the machines that have one. QEMU answers with -append, so
+ * the whole path is testable there; the length problem is not.
+ */
+static volatile u32int cmdlinebuf[8 + Cmdlinewords] __attribute__((aligned(16)));
+
+int
+mboxcmdline(char *buf, int n)
+{
+	int i, len;
+	volatile uchar *p;
+
+	cmdlinebuf[0] = (Cmdlinewords + 6) * 4;
+	cmdlinebuf[1] = Propreq;
+	cmdlinebuf[2] = Taggetcmdline;
+	cmdlinebuf[3] = Cmdlinewords * 4;
+	cmdlinebuf[4] = Propreq;
+	for(i = 0; i < Cmdlinewords; i++)
+		cmdlinebuf[5 + i] = 0;
+	cmdlinebuf[5 + Cmdlinewords] = Tagend;
+
+	if(mboxcall(Mboxchanprop, cmdlinebuf, sizeof cmdlinebuf) < 0)
+		return -1;
+	if((cmdlinebuf[4] & Propok) == 0)
+		return -1;			/* the tag was not answered */
+
+	len = cmdlinebuf[4] & ~Propok;	/* the firmware's own length */
+	if(len > Cmdlinewords * 4)
+		len = Cmdlinewords * 4;	/* it copied nothing; see above */
+	p = (volatile uchar*)&cmdlinebuf[5];
+	for(i = 0; i < len && i < n - 1 && p[i] != 0; i++)
+		buf[i] = p[i];
+	buf[i] = 0;
+	return len;
+}
+
+/*
+ * Tell the firmware what the coming reset is for.
+ *
+ * With tryboot set, the boot after the reset -- and only that one --
+ * takes its configuration from tryboot.txt, or from the [tryboot]
+ * section of config.txt. The flag is the firmware's to keep: it is
+ * asked for here, through the same tag Linux's reboot notifier uses,
+ * and the kernel never learns where it is stored. NOTIFY_REBOOT is
+ * what Linux sends next, always, flag or no flag.
+ *
+ * The check is on the TAG's response bit, not only the message's:
+ * the message succeeds whenever the firmware parsed it, and what this
+ * caller needs to know is whether this particular tag was understood.
+ * QEMU's property model sets the bit for every tag it is handed,
+ * known or not, so under emulation the answer is always yes and proves
+ * only that the message was well formed. The board is where the
+ * answer means something, and the line printed from it is the
+ * evidence the README asks for.
+ */
+int
+mboxreboot(int tryboot)
+{
+	u32int v[1];
+	int r;
+
+	r = 0;
+	v[0] = 0;
+	if(tryboot){
+		v[0] = Rebootflagtryboot;
+		if(mboxprop(Tagsetrebootflags, v, 1, 1) < 0 || (mboxbuf[4] & Propok) == 0)
+			r = -1;
+	}
+	if(mboxprop(Tagnotifyreboot, v, 0, 0) < 0)
+		r = -1;
+	return r;
 }
 
 /*
@@ -347,7 +438,7 @@ mboxfballoc(u32int disp, u32int w, u32int h, u32int depth, Fbinfo *fb)
 
 	mboxbuf[0] = (u32int)((p - mboxbuf) * 4);
 
-	if(mboxcall(Mboxchanprop, mboxbuf) < 0)
+	if(mboxcall(Mboxchanprop, mboxbuf, Mboxbufsize) < 0)
 		return -1;
 
 	fb->disp = tagdisp[3];

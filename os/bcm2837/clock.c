@@ -195,6 +195,10 @@ clockintr(Ureg *u)
 
 	ticks++;
 
+	/* the boot watchdog is core 0's to keep alive; see board.c */
+	if(m->machno == 0)
+		boardwatchdogtick();
+
 	/*
 	 * m->ticks is not bookkeeping -- os/port reads it directly.
 	 *

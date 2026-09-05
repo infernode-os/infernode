@@ -29,6 +29,11 @@ int	mboxfbnumdisplays(void);
 u32int	mboxclockrate(u32int);
 void	mboxlockon(void);
 int	mboxedid(u32int, uchar*);
+int	mboxcmdline(char*, int);
+int	mboxreboot(int);
+
+/* board.c: the boot watchdog's reload, called from clockintr on core 0 */
+void	boardwatchdogtick(void);
 
 int	emmcinit(void);
 int	emmcread(uvlong, void*);

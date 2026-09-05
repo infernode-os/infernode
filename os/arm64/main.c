@@ -2258,6 +2258,15 @@ kmain(void)
 	serialrecover();
 
 	boardprobe();
+
+	/*
+	 * Read the command line and, if this is a tryboot candidate, arm
+	 * the boot watchdog -- here, before the MMU, the allocators or
+	 * any driver, so that nothing a candidate can get wrong runs
+	 * unguarded. Released by osinit's "booted"; see board.c.
+	 */
+	boardbootwatchdog();
+
 	startmmu();
 
 	/*

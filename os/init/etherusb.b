@@ -1317,7 +1317,9 @@ dhcp(): (string, string, string)
 	}
 
 	rc := chan of array of byte;
-	spawn dhcpreader(d, rc);
+	pidc := chan of int;
+	spawn dhcpreader(d, rc, pidc);
+	rpid := <-pidc;
 
 	#
 	# Give the switch time to start forwarding.
@@ -1394,9 +1396,11 @@ dhcp(): (string, string, string)
 			ntp = gw;
 		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
 		ntpserver = ntp;
+		dhcpdone(rpid);
 		return (addr, mask, gw);
 	}
 	sys->print("etherusb: no DHCP reply after 14 tries over ~45 seconds\n");
+	dhcpdone(rpid);
 	return (nil, nil, nil);
 }
 
@@ -1432,8 +1436,18 @@ dhcpxchg(d: ref Sys->FD, pkt: array of byte, xid, kind: int,
 # with no DHCP server can never be reached. The boot hangs on the one
 # case the fallback was written for.
 #
-dhcpreader(d: ref Sys->FD, c: chan of array of byte)
+#
+# It lives exactly as long as the exchange. The reader has no way to
+# know when the caller has its answer -- it is parked in a read the
+# kernel will not return from until a datagram arrives -- so the caller
+# is told the reader's pid and kills it when done (dhcpdone). Left
+# alone, every one of these used to sit on port 68 for the life of the
+# machine, holding the conversation open, and each later broadcast on
+# the port woke it to block for ever on a channel nobody reads.
+#
+dhcpreader(d: ref Sys->FD, c: chan of array of byte, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	for(;;){
 		buf := array[Udphdr7 + 576] of byte;
 		n := sys->read(d, buf, len buf);
@@ -1447,6 +1461,47 @@ dhcptimer(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
 	c <-= 1;
+}
+
+#
+# Kill a reader parked in sys->read. A kill through /prog reaches a
+# process blocked inside the kernel: killprog finds it in Prelease and
+# swiproc wakes its sleep with "interrupted", so the read returns an
+# error and the process is gone by its next instruction. That is what
+# makes "kill it" honest here -- a reader that could not be woken would
+# be marked dead and still hold the conversation.
+#
+# Silent when /prog has nothing by that pid: a reader that got its
+# datagram has already exited on its own.
+#
+killreader(pid: int, what: string)
+{
+	c := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(c == nil)
+		return;
+	if(sys->fprint(c, "kill") < 0)
+		sys->print("etherusb: cannot kill %s reader %d: %r\n", what, pid);
+}
+
+#
+# The DHCP exchange is over, one way or the other: reap the reader and
+# say whether it went. The print is what the boot log -- and the test
+# harness reading it -- gets to see; without it a reader that quietly
+# outlived its purpose would look exactly like one that did not.
+# Bounded, because a check that can hang is worse than no check.
+#
+dhcpdone(pid: int)
+{
+	killreader(pid, "dhcp");
+	for(i := 0; i < 50; i++){
+		(ok, nil) := sys->stat("/prog/" + string pid);
+		if(ok < 0){
+			sys->print("etherusb: dhcp reader %d exited\n", pid);
+			return;
+		}
+		sys->sleep(10);
+	}
+	sys->print("etherusb: dhcp reader %d still running\n", pid);
 }
 
 #
@@ -1542,7 +1597,9 @@ pingout(dest: string)
 	# looks like from outside.
 	#
 	rc := chan of array of byte;
-	spawn pingreader(d, rc);
+	pidc := chan of int;
+	spawn pingreader(d, rc, pidc);
+	rpid := <-pidc;
 	tc := chan of int;
 	spawn dhcptimer(tc, 3000);
 
@@ -1552,11 +1609,19 @@ pingout(dest: string)
 			dest, len rep, int rep[20]);
 	<-tc =>
 		sys->print("etherusb: no echo reply from %s\n", dest);
+		#
+		# No reply means the reader is still in its read, and
+		# would be for ever: the conversation it holds open is
+		# not closed until it is gone. A reply means it has
+		# already exited on its own, so only this arm needs it.
+		#
+		killreader(rpid, "icmp");
 	}
 }
 
-pingreader(d: ref Sys->FD, c: chan of array of byte)
+pingreader(d: ref Sys->FD, c: chan of array of byte, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	rep := array[128] of byte;
 	n := sys->read(d, rep, len rep);
 	if(n > 0)
@@ -3629,7 +3694,9 @@ trytime(server: string): int
 	# sys->read on a socket blocks.
 	#
 	rc := chan of array of byte;
-	spawn ntpreader(d, rc);
+	pidc := chan of int;
+	spawn ntpreader(d, rc, pidc);
+	rpid := <-pidc;
 	tc := chan of int;
 	spawn ntptimer(tc, 3000);
 	rep: array of byte;
@@ -3637,6 +3704,9 @@ trytime(server: string): int
 	rep = <-rc =>
 		;
 	<-tc =>
+		# As for the echo reader: a timeout leaves it parked, and
+		# it holds the conversation until killed.
+		killreader(rpid, "ntp");
 		return -1;
 	}
 	if(rep == nil || len rep < 48)
@@ -3673,8 +3743,9 @@ trytime(server: string): int
 	return 0;
 }
 
-ntpreader(d: ref Sys->FD, rc: chan of array of byte)
+ntpreader(d: ref Sys->FD, rc: chan of array of byte, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	buf := array[128] of byte;
 	n := sys->read(d, buf, len buf);
 	if(n <= 0)

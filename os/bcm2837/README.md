@@ -1365,6 +1365,30 @@ logged-in / skipped / failed, and the script honours them. Hours.
   kicked; the comment there already says it is "wrong to leave
   permanently".
 
+**DONE 2026-09-05 -- the four non-SMP bullets** (`irqorphan`, the uart
+mutex, the unlocked multi-core writers, the `lock()` bounds and
+`postnote` are not covered by this note). `devusb.c` `CMdetach` makes
+the Ddetach transition under `epslck`, so of two writers arriving
+together exactly one runs the release loop -- the serial second write
+was already refused by `ctlwrite`, which the review missed; the harness
+now detaches the keyboard twice down one shell fd and requires the
+driver to exit once and the shell to still answer. `etherusb.b`'s three
+readers hand their pid to the spawner, which kills them through `/prog`
+when the exchange is over (`killprog` finds them in Prelease and
+`swiproc` wakes the read with "interrupted"); the boot log says `dhcp
+reader N exited` and the harness checks for it. `dossrv.b` decides
+"damaged" from the on-disk name (`rawstat`, `badname`) rather than from
+the alias it hands out; the FAT32 fixture creates and removes a healthy
+`badent-1` and a host-side walk of the image asserts no lost clusters.
+`mailbox.c`'s "single-threaded" comment was stale -- a `lock()` had
+been added -- but `panic()` reaches the mailbox through `screenputs`
+with the interrupted holder on the same core, and `mboxfballoc` and
+`setpower` read the shared buffer after unlocking; the mutex is now a
+bounded `_tas` held with interrupts off across fill, post and copy-out,
+with a two-second wait that proceeds unlocked for a holder that cannot
+return. Verified by the harness under QEMU: @@COUNT@@ checks pass,
+including the five added for these.
+
 ### Tier 2 — make what exists trustworthy
 
 **7. Test what the board relies on.** The harness (`baremetal_test.sh`)
@@ -1410,6 +1434,11 @@ now" in `mmu.c`, and JIT text is RWX); secondary scheduler stacks are
 have answered; `up->inpreempt`-style invariants have no SMP
 counterparts. Also `lastdev` in `osinit.b` is one global shared by
 every hub watcher, so two hubs enumerating at once can cross names.
+*`lastdev` DONE 2026-09-05:* `enumerate` returns `(status, name)`, the
+name flows back through `portsetup`, and a device that failed to come
+up is detached on the spot by `portsetup` and `usbwalk` instead of
+holding its ep0 until unplugged -- or for ever, on the boot walk. The
+hotplug and keyboard harness checks pass unchanged.
 
 ### Tier 3 — the machine as a product
 

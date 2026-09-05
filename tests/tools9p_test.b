@@ -515,8 +515,16 @@ testPathsReadable(t: ref T)
 		return;
 	}
 
-	paths := readfile(TOOLMNT + "/paths");
-	t.assert(paths != nil, "/tool/paths is readable");
+	fd := sys->open(TOOLMNT + "/paths", Sys->OREAD);
+	t.assert(fd != nil, "/tool/paths is readable");
+	if(fd == nil)
+		return;
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	t.assert(n >= 0, "/tool/paths read succeeds");
+	if(n < 0)
+		return;
+	paths := string buf[0:n];
 	t.log("/tool/paths content: '" + paths + "'");
 	# May be empty if no paths are registered — that's valid
 }

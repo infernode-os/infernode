@@ -175,6 +175,13 @@ run_internal_tests() {
         RUNNER_ARGS=""
     fi
 
+    # Explicit offline opt-out: the runner declares the environment so
+    # network-dependent tests skip deterministically instead of inferring
+    # it from a dial that may block forever (host firewall in ask mode).
+    if [ "$INFERNODE_TESTS_OFFLINE" = "1" ]; then
+        RUNNER_ARGS="$RUNNER_ARGS -o"
+    fi
+
     # Run the emulator with the test runner
     # Capture output and parse results
     echo ""

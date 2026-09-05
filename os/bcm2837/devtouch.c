@@ -25,7 +25,8 @@
  * answers with, read memory that must be reached uncached, and keep the
  * cache honest when the buffer is ours.
  *
- * Two ways to find the buffer, tried in order at first attach:
+ * Two ways to find the buffer, tried at first attach, SET first (see
+ * touchprobe):
  *
  *   GET (0x0004000F): the firmware allocated one. It lives in VideoCore
  *   memory above ramtop, which mmu.c maps Device-nGnRnE -- uncached, so
@@ -76,18 +77,63 @@ static struct {
  */
 static uchar setbuf[Framelen] __attribute__((aligned(64)));
 
+/*
+ * Wait for the firmware to overwrite a consumed mark: the one test that
+ * says a panel is being polled into this buffer. Returns the number of
+ * milliseconds it took, or -1.
+ */
+static int
+touchlive(volatile uchar *buf, int ours)
+{
+	int i;
+
+	for(i = 0; i < Probems/10; i++){
+		microdelay(10000);
+		if(ours)
+			cachedwbinvse((void*)buf, Framelen);
+		if(buf[Npoint] != Consumed)
+			return (i+1)*10;
+	}
+	return -1;
+}
+
 static int
 touchprobe(void)
 {
 	u32int v[1], getresp, getval, setresp;
 	uintptr pa;
-	int i;
+	int ms;
 
 	if(touch.probed)
 		return touch.buf != nil;
 	touch.probed = 1;
 
+	/*
+	 * SET first. Current firmware polls the panel only into a buffer
+	 * the driver hands it; GET can still answer with a buffer of the
+	 * firmware's own that it no longer updates, and a driver that
+	 * trusted GET first read the same stale frame forever. Either way
+	 * the buffer is believed only once the firmware has been seen to
+	 * write it.
+	 */
 	getresp = getval = setresp = 0;
+	memset(setbuf, 0, Framelen);
+	setbuf[Npoint] = Consumed;
+	cachedwbse(setbuf, Framelen);
+	v[0] = BUSADDR(setbuf);
+	if(mboxprop(Tagsettouchbuf, v, 1, 1) == 0 && (mboxresp() & Propok)){
+		setresp = mboxresp();
+		ms = touchlive(setbuf, 1);
+		if(ms >= 0){
+			touch.buf = setbuf;
+			touch.ours = 1;
+			touch.bus = BUSADDR(setbuf);
+			print("touch: buffer at bus %#8.8ux (set, ours; live after %dms, resp %#8.8ux)\n",
+				touch.bus, ms, setresp);
+			return 1;
+		}
+	}
+
 	v[0] = 0;
 	if(mboxprop(Taggettouchbuf, v, 1, 1) == 0){
 		getresp = mboxresp();
@@ -104,42 +150,22 @@ touchprobe(void)
 				print("touch: firmware buffer at bus %#8.8ux is below ramtop %#p; refusing\n",
 					getval, (void*)mmuramtop());
 			}else{
-				touch.buf = (volatile uchar*)pa;
-				touch.ours = 0;
-				touch.bus = getval;
-				print("touch: buffer at bus %#8.8ux phys %#p (get, resp %#8.8ux)\n",
-					getval, (void*)pa, getresp);
-				return 1;
+				((volatile uchar*)pa)[Npoint] = Consumed;
+				ms = touchlive((volatile uchar*)pa, 0);
+				if(ms >= 0){
+					touch.buf = (volatile uchar*)pa;
+					touch.ours = 0;
+					touch.bus = getval;
+					print("touch: buffer at bus %#8.8ux phys %#p (get; live after %dms, resp %#8.8ux)\n",
+						getval, (void*)pa, ms, getresp);
+					return 1;
+				}
+				print("touch: firmware buffer at bus %#8.8ux (get) is never written; stale\n", getval);
 			}
 		}
 	}
-
-	memset(setbuf, 0, Framelen);
-	setbuf[Npoint] = Consumed;
-	cachedwbse(setbuf, Framelen);
-	v[0] = BUSADDR(setbuf);
-	if(mboxprop(Tagsettouchbuf, v, 1, 1) == 0 && (mboxresp() & Propok)){
-		setresp = mboxresp();
-		for(i = 0; i < Probems/10; i++){
-			microdelay(10000);
-			cachedwbinvse(setbuf, Framelen);
-			if(setbuf[Npoint] != Consumed)
-				break;
-		}
-		if(setbuf[Npoint] != Consumed){
-			touch.buf = setbuf;
-			touch.ours = 1;
-			touch.bus = BUSADDR(setbuf);
-			print("touch: buffer at bus %#8.8ux (set, ours; live after %dms; get resp %#8.8ux value %#ux)\n",
-				touch.bus, (i+1)*10, getresp, getval);
-			return 1;
-		}
-		print("touch: no panel (set accepted, resp %#8.8ux, never written in %dms; get resp %#8.8ux value %#ux)\n",
-			setresp, Probems, getresp, getval);
-		return 0;
-	}
-	print("touch: no panel (get resp %#8.8ux value %#ux, set resp %#8.8ux)\n",
-		getresp, getval, mboxresp());
+	print("touch: no panel (set resp %#8.8ux%s; get resp %#8.8ux value %#ux)\n",
+		setresp, setresp & Propok ? " accepted, never written" : "", getresp, getval);
 	return 0;
 }
 

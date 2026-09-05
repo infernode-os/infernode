@@ -1656,16 +1656,20 @@ The halves are split by *when a file can be found*:
   ROM, the ARM held, the 802.11 core reset, the RAM sized. Its verdict
   is one line: `ether4330: no radio` (two command timeouts, nothing
   answered CMD5), or `ether4330: chip 0x4345 rev 6 type N` followed by
-  `ether4330: radio present, N KB of RAM; firmware loads on bind`.
+  `ether4330: radio present, N KB of RAM; firmware loads when its files are named on ctl`.
   With `-DSDCARD_ARASAN` the controller is not free and the probe says
   so and returns.
-- The **upload** runs at attach, in the process that binds `#l1`,
+- The **upload** runs when a process writes `firmware <bin> <nvram>
+  <clm>` to `#l1/ether1/ctl`, and the three paths are opened in that
+  writer's namespace -- the same trick devether's `bind` verb uses --
   because the firmware is a file and a file is found in a namespace:
   on this system the card is mounted at `/n/dos` by init, long after
-  board init, and a kernel process has no namespace at all. The files
-  are looked for in `/boot/<name>`, `/sys/lib/firmware/<name>` (where
-  Miller's driver looks) and `/n/dos/firmware/<name>` (this system's
-  card), in that order. The firmware goes into the dongle's RAM from
+  board init, and a kernel process has no namespace at all. The kernel
+  carries no path; osinit names `/n/dos/firmware/brcmfmac43455-sdio.*`
+  right after mounting the card, and with no radio prints the driver's
+  refusal in one line and carries on. Attaching `#l1` proves only that
+  a radio is there; `ifstats` says `firmware: not loaded` until the
+  verb has run. The firmware goes into the dongle's RAM from
   the base up, the condensed NVRAM at the top with a length-and-
   checksum word after it, and both are read back and compared
   (`Firmwarecmp`), because an upload that went wrong does not fail
@@ -1717,16 +1721,20 @@ day, and this is a different build of the same firmware.
 
 **What the harness proves.** Section 3g of `tests/host/baremetal_test.sh`
 now also checks: the boot log carries `ether4330: no radio` and
-`boot OK` comes *after* it, so the probe ran and did not stop the boot;
-the `-DSDCARD_ARASAN` kernel says `ether4330: the Arasan holds the
-card` instead; the FAT shell session opens `#l1/addr` and gets
-`cat: cannot open #l1/addr: ether4330: no radio` (devether selected
-instance 1, the driver's attach ran in the shell's process and refused
-with its own words), while `#l/addr` in the same session still reads
-the USB adapter's MAC, so ether0 is unchanged; and every check that
-existed before -- the SDHOST card, the QMP bus test, both FAT
-sessions, hot-plug, the network -- still passes. It cannot prove
-anything past CMD5: there is nothing on QEMU's Arasan to answer it.
+`init: starting the shell` (both are unordered greps, so the shell
+line is the evidence the probe did not stop the boot, not proof of
+their order); osinit's `init: radio: ether4330: no radio`, the
+driver's refusal of the firmware verb; the `-DSDCARD_ARASAN` kernel
+says `ether4330: the Arasan holds the card` instead; the FAT shell
+session runs `cat '#l1/ether1/addr'` and the check requires that
+session's own error line, `cat: cannot open ... #l1/ether1/addr ...
+ether4330: no radio` (devether selected instance 1 and the driver's
+attach ran in the shell's process and refused with its own words),
+while `#l/ether0/addr` in the same session still reads the USB
+adapter's MAC, so ether0 is unchanged; and every check that existed
+before -- the SDHOST card, the QMP bus test, both FAT sessions,
+hot-plug, the network -- still passes. It cannot prove anything past
+CMD5: there is nothing on QEMU's Arasan to answer it.
 
 **The board test, exactly.** With the card holding the firmware
 (`tools/pi-firmware.sh /Volumes/BOOT` on the host, or wherever the
@@ -1734,7 +1742,7 @@ card's FAT partition is mounted) and the serial console up:
 
 1. Boot. Expect, after the `sd: sdhost: card ready` lines:
    `ether4330: chip 0x4345 rev 6 type N` and
-   `ether4330: radio present, N KB of RAM; firmware loads on bind`.
+   `ether4330: radio present, N KB of RAM; firmware loads when its files are named on ctl`.
    `ether4330: no radio` here means CMD5 was not answered: check
    `WL_REG_ON` first (below), then the ALT3 routing, before the SDIO
    path.

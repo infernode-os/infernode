@@ -246,6 +246,12 @@ init()
 	sdsetup();
 
 	#
+	# The radio's firmware lives on the card just mounted. The kernel
+	# names no path: this is where the paths come from.
+	#
+	radiosetup();
+
+	#
 	# Spawned, and the shell starts straight after it.
 	#
 	# Making the shell WAIT for this walk was tried, so that the
@@ -1226,6 +1232,22 @@ netshell(fd: ref Sys->FD, tok: string)
 #
 # Mount an in-memory filesystem on /tmp.
 #
+Firmwaredir: con "/n/dos/firmware";
+
+radiosetup()
+{
+	fd := sys->open("#l1/ether1/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: radio: %r\n");
+		return;
+	}
+	if(sys->fprint(fd, "firmware %s/brcmfmac43455-sdio.bin %s/brcmfmac43455-sdio.txt %s/brcmfmac43455-sdio.clm_blob",
+			Firmwaredir, Firmwaredir, Firmwaredir) < 0)
+		sys->print("init: radio: firmware: %r\n");
+	else
+		sys->print("init: radio: firmware loaded\n");
+}
+
 tmpsetup()
 {
 	mfs := load Command "/dis/memfs.dis";

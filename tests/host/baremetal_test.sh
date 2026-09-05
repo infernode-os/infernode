@@ -1462,6 +1462,8 @@ check "init: starting the shell"        "the initial Dis program hands over to /
 # reached at all is the proof the probe did not hang the boot on
 # hardware that never answers -- a bounded wait, exercised.
 check "ether4330: no radio"             "the radio probe reports an absent radio in one line under QEMU, and the boot went on to a shell"
+check "init: radio: ether4330: no radio" "osinit's attempt to name the firmware files is refused with the driver's words, and init carries on"
+refute "init: radio: firmware loaded"   "nothing claims a firmware load under emulation"
 
 #
 # The shell, driven for real.

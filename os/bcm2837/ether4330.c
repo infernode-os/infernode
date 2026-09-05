@@ -219,6 +219,7 @@ struct Ctlr
 	int	chiprev;
 	int	armcore;
 	char	*regufile;
+	Chan	*fwchan[3];	/* bin, nvram, clm -- named by the firmware ctl verb */
 	union {
 		u32int	i;
 		uchar	c[4];
@@ -290,7 +291,6 @@ static struct
 	{ 0x4345, 6,	"brcmfmac43455-sdio.bin", "brcmfmac43455-sdio.txt", "brcmfmac43455-sdio.clm_blob" },
 };
 
-static char *fwdirs[] = { "/boot", "/sys/lib/firmware", "/n/dos/firmware" };
 
 static Ctlr ctlr4330;
 static SDio *sdio = &emmcio;	/* the radio is wired to the Arasan and nothing else */
@@ -1143,34 +1143,6 @@ condense(uchar *buf, int n)
 }
 
 /*
- * Open a firmware file from the first of the directories in fwdirs
- * that has it, in the namespace of the process that is attaching.
- * One line names the file and every place it was not, and the
- * error carries the same words to whoever bound the device.
- */
-static Chan*
-findfirmware(char *file)
-{
-	char nbuf[128], msg[ERRMAX];
-	Chan *c;
-	int i;
-
-	for(i = 0; i < (int)nelem(fwdirs); i++){
-		snprint(nbuf, sizeof nbuf, "%s/%s", fwdirs[i], file);
-		if(waserror())
-			continue;
-		c = namec(nbuf, Aopen, OREAD, 0);
-		poperror();
-		return c;
-	}
-	snprint(msg, sizeof msg, "ether4330: firmware %s not found, looked in %s, %s, %s",
-		file, fwdirs[0], fwdirs[1], fwdirs[2]);
-	print("%s\n", msg);
-	error(msg);
-	return nil;
-}
-
-/*
  * Upload one file into the dongle's RAM: the firmware from the base
  * up, the condensed config at the top with its length word to
  * follow. Then, with Firmwarecmp, read the whole of it back and
@@ -1179,17 +1151,14 @@ findfirmware(char *file)
  * of bytes uploaded.
  */
 static int
-upload(Ctlr *ctl, char *file, int isconfig)
+upload(Ctlr *ctl, Chan *c, int isconfig)
 {
-	Chan *c;
 	uchar *buf;
 	uchar *cbuf;
 	int off, n, total;
 
 	buf = cbuf = nil;
-	c = findfirmware(file);
 	if(waserror()){
-		cclose(c);
 		free(buf);
 		free(cbuf);
 		nexterror();
@@ -1251,7 +1220,6 @@ upload(Ctlr *ctl, char *file, int isconfig)
 	}
 	if(FWDEBUG) print("\n");
 	poperror();
-	cclose(c);
 	free(buf);
 	free(cbuf);
 	return isconfig? n : total;
@@ -1265,9 +1233,8 @@ static void wlsetvar(Ctlr*, char*, void*, int);
  *	[2]flag [2]type [4]len [4]crc [len]data
  */
 static void
-reguload(Ctlr *ctl, char *file)
+reguload(Ctlr *ctl, Chan *c)
 {
-	Chan *c;
 	uchar *buf;
 	int off, n, flag;
 	enum {
@@ -1280,9 +1247,7 @@ reguload(Ctlr *ctl, char *file)
 	};
 
 	buf = nil;
-	c = findfirmware(file);
 	if(waserror()){
-		cclose(c);
 		free(buf);
 		nexterror();
 	}
@@ -1311,7 +1276,6 @@ reguload(Ctlr *ctl, char *file)
 		flag &= ~Firstpkt;
 	}
 	poperror();
-	cclose(c);
 	free(buf);
 }
 
@@ -1348,10 +1312,10 @@ fwload(Ctlr *ctl)
 	if(sbmem(1, buf, 4, ctl->rambase + ctl->socramsize - 4) < 0)
 		error("ether4330: cannot write the dongle's RAM");
 	if(FWDEBUG) print("firmware load...");
-	ctl->fwbytes = upload(ctl, firmware[i].fwfile, 0);
+	ctl->fwbytes = upload(ctl, ctl->fwchan[0], 0);
 	print("ether4330: firmware %d bytes loaded, verified\n", ctl->fwbytes);
 	if(FWDEBUG) print("config load...");
-	n = upload(ctl, firmware[i].cfgfile, 1);
+	n = upload(ctl, ctl->fwchan[1], 1);
 	n /= 4;
 	n = (n & 0xFFFF) | (~n << 16);
 	put4(buf, n);
@@ -1885,23 +1849,95 @@ etherbcmattach(Ether *edev)
 		qunlock(&ctl->alock);
 		nexterror();
 	}
-	if(!ctl->running){
-		if(!ctl->present)
-			error("ether4330: no radio");
-		fwload(ctl);
-		sbenable(ctl);
-		if(!ctl->reader){
-			kproc("wifireader", rproc, edev, 0);
-			ctl->reader = 1;
-		}
-		if(ctl->regufile)
-			reguload(ctl, ctl->regufile);
-		wlinit(edev, ctl);
-		ctl->running = 1;
-		edev->nif.link = 0;	/* up is not associated */
-	}
+	/*
+	 * Attaching proves a radio is there and nothing more. The
+	 * firmware is not loaded here because the kernel does not know
+	 * where it is: the files are named by whoever writes
+	 * "firmware <bin> <nvram> <clm>" to the ctl file, and opened in
+	 * that writer's namespace. Until then ifstats says "not loaded".
+	 */
+	if(!ctl->present)
+		error("ether4330: no radio");
 	qunlock(&ctl->alock);
 	poperror();
+}
+
+static void
+closefw(Ctlr *ctl)
+{
+	int i;
+
+	for(i = 0; i < nelem(ctl->fwchan); i++){
+		if(ctl->fwchan[i] != nil)
+			cclose(ctl->fwchan[i]);
+		ctl->fwchan[i] = nil;
+	}
+}
+
+/*
+ * Load the named firmware, NVRAM and regulatory files and bring the
+ * dongle up. Called with alock held and the three Chans open.
+ */
+static void
+bringup(Ether *edev)
+{
+	Ctlr *ctl;
+
+	ctl = edev->ctlr;
+	fwload(ctl);
+	sbenable(ctl);
+	if(!ctl->reader){
+		kproc("wifireader", rproc, edev, 0);
+		ctl->reader = 1;
+	}
+	if(ctl->fwchan[2] != nil)
+		reguload(ctl, ctl->fwchan[2]);
+	wlinit(edev, ctl);
+	ctl->running = 1;
+	edev->nif.link = 0;	/* up is not associated */
+}
+
+/*
+ * The ctl verbs. "firmware <bin> <nvram> <clm>" names the three files
+ * the dongle needs, as paths in the WRITER's namespace -- the same
+ * trick devether's bind verb uses -- so the kernel carries no path
+ * and whoever mounted the card says where they are.
+ */
+static long
+etherbcmctl(Ether *edev, void *a, long n)
+{
+	Ctlr *ctl;
+	Cmdbuf *cb;
+	int i;
+
+	ctl = edev->ctlr;
+	cb = parsecmd(a, n);
+	if(waserror()){
+		free(cb);
+		nexterror();
+	}
+	if(cb->nf == 4 && strcmp(cb->f[0], "firmware") == 0){
+		if(!ctl->present)
+			error("ether4330: no radio");
+		qlock(&ctl->alock);
+		if(waserror()){
+			closefw(ctl);
+			qunlock(&ctl->alock);
+			nexterror();
+		}
+		if(ctl->running)
+			error("ether4330: firmware already running");
+		for(i = 0; i < 3; i++)
+			ctl->fwchan[i] = namec(cb->f[1+i], Aopen, OREAD, 0);
+		bringup(edev);
+		closefw(ctl);
+		poperror();
+		qunlock(&ctl->alock);
+	}else
+		error(Ebadctl);
+	poperror();
+	free(cb);
+	return n;
 }
 
 /*
@@ -1969,6 +2005,7 @@ ether4330probe(void)
 	e->attach = etherbcmattach;
 	e->ifstat = etherbcmifstat;
 	e->shutdown = etherbcmshutdown;
+	e->ctl = etherbcmctl;
 	/* transmit and ctl stay nil: no frames, no verbs, until milestone 4 */
 
 #ifdef SDCARD_ARASAN
@@ -1984,5 +2021,5 @@ ether4330probe(void)
 	ctl->present = 1;
 	uartputstr("ether4330: radio present, ");
 	uartputd(ctl->socramsize / 1024);
-	uartputstr(" KB of RAM; firmware loads on bind\n");
+	uartputstr(" KB of RAM; firmware loads when its files are named on ctl\n");
 }

@@ -159,7 +159,16 @@ sdhostinit(void)
 	 * from a rate that is too LOW overclocks the card, so if the
 	 * mailbox is silent this errs towards the slower reading.
 	 */
-	sdhost.core = mboxclockrate(Clkcore);
+	/*
+	 * The maximum core rate, not the momentary one: the firmware
+	 * scales the core clock under load (core_freq/core_freq_min in
+	 * config.txt bound it), and a divider from a low reading would
+	 * overclock the card when it scales up. From the maximum the
+	 * card only ever runs slower than asked.
+	 */
+	sdhost.core = mboxmaxclockrate(Clkcore);
+	if(sdhost.core == 0)
+		sdhost.core = mboxclockrate(Clkcore);
 	if(sdhost.core == 0){
 		sdhost.core = Corefallback;
 		uartputstr("sdhost: mailbox gave no core clock, assuming 250MHz\n");

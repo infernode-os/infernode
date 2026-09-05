@@ -194,6 +194,7 @@ enum
 	Taggettouchbuf	= 0x0004000F,
 	Tagsettouchbuf	= 0x0004801F,	/* hand the firmware a buffer of ours instead */
 	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
+	Taggetmaxclockrate= 0x00030004,	/* the most the firmware will ever run it at */
 	Taggetedidblock	= 0x00030020,	/* the display's own description */
 
 	Clkemmc		= 1,		/* clock id for the Arasan controller */

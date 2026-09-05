@@ -605,6 +605,25 @@ mboxclockrate(u32int id)
 }
 
 /*
+ * The most a clock will ever run at. A divider computed from the
+ * momentary rate is wrong the moment the firmware scales the core
+ * clock up under load, and the SDHOST is clocked from the core: the
+ * card would be overclocked. Dividing the maximum instead gives a card
+ * clock that is only ever slower than asked, which SD tolerates.
+ */
+u32int
+mboxmaxclockrate(u32int id)
+{
+	u32int buf[2];
+
+	buf[0] = id;
+	buf[1] = 0;
+	if(mboxprop(Taggetmaxclockrate, buf, 1, 2) < 0)
+		return 0;
+	return buf[1];
+}
+
+/*
  * Read one 128-byte EDID block from the display.
  *
  * This is how "is anything actually plugged in?" is answered. The

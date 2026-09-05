@@ -18,7 +18,7 @@
 # artefact.  They live on the card's FAT partition, where the driver
 # reads them from /n/dos/firmware, and this manifest plus the fetch tool
 # are the whole of what the tree carries.  .gitignore refuses the
-# filenames as a second line of defence.
+# filenames as a second guard.
 #
 # The NVRAM .txt is the board's radio calibration.  In linux-firmware
 # the same file (brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt)

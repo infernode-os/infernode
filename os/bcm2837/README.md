@@ -1545,7 +1545,7 @@ and nothing of it goes into a release artefact — the tarball, the
 `.app`, the `.zip`. The NVRAM `.txt` is under the same stanza in
 RPi-Distro's `debian/copyright` and under GPLv2 in linux-firmware's
 `WHENCE`; either way it takes the same route. `.gitignore` refuses
-the filenames as a second line of defence. What the tree carries is a
+the filenames as a second guard. What the tree carries is a
 fetch tool and a manifest of pins: a commit of
 `RPi-Distro/firmware-nonfree`, a revision URL per file, and a SHA256
 per file, per `docs/DESIGN-PRINCIPLES.md` ("The host boundary" —

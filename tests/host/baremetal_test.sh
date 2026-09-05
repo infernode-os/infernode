@@ -1668,29 +1668,55 @@ try:
             time.sleep(0.3)
     if s is None:
         print("SKIP no QMP"); sys.exit(0)
-    time.sleep(3)                      # let kmain reach the draw
     f = s.makefile("rw")
     f.readline()
     f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
-    f.write(json.dumps({"execute": "screendump",
-                        "arguments": {"filename": ppm}}) + "\n"); f.flush()
-    f.readline()
+
+    # Dump the screen until the console has drawn a page or 25 s have
+    # passed. A fixed delay here was the harness's own flake: under a
+    # loaded host the same kernel had drawn one line at the 3 s mark
+    # and a page a few seconds later, and the check read the one line
+    # as "nothing legible".
+    BG = (0x10, 0x10, 0x18)
+    FG = (0xC8, 0xC8, 0xC8)
+    w = h = nbg = nfg = 0
+    rows = set()
+    deadline = time.time() + 25
+    while True:
+        time.sleep(1)
+        if os.path.exists(ppm):
+            os.unlink(ppm)
+        f.write(json.dumps({"execute": "screendump",
+                            "arguments": {"filename": ppm}}) + "\n"); f.flush()
+        f.readline()
+        if os.path.exists(ppm):
+            d = open(ppm, "rb").read()
+            parts = d.split(b"\n", 3)
+            if parts[0] == b"P6":
+                w, h = map(int, parts[1].split()); px = parts[3]
+                nbg = nfg = 0
+                rows = set()
+                for y in range(h):
+                    for x in range(0, w, 2):        # every other column is plenty
+                        o = (y*w + x)*3
+                        c = tuple(px[o:o+3])
+                        if c == BG:
+                            nbg += 1
+                        elif c == FG:
+                            nfg += 1
+                            rows.add(y)
+                if nfg >= 500 and len(rows) >= 32:
+                    break
+        if time.time() > deadline:
+            break
     s.close()
 finally:
     p.kill(); p.communicate()
 
 if not os.path.exists(ppm):
     print("SKIP no screendump"); sys.exit(0)
-
-d = open(ppm, "rb").read()
-parts = d.split(b"\n", 3)
-if parts[0] != b"P6":
+if w == 0:
     print("SKIP not a P6 ppm"); sys.exit(0)
-w, h = map(int, parts[1].split()); px = parts[3]
-
-def pix(x, y):
-    o = (y*w + x)*3
-    return tuple(px[o:o+3])
 
 # The console has taken the screen, so the boot test pattern is gone --
 # correctly: a console clears what was there. What replaces the pattern
@@ -1701,20 +1727,6 @@ def pix(x, y):
 # caught. Glyph pixels prove the font rendered and that pitch and base
 # put it where it belongs -- which the pattern also proved, except that
 # a console exercises far more of the path to get there.
-BG = (0x10, 0x10, 0x18)
-FG = (0xC8, 0xC8, 0xC8)
-
-nbg = nfg = 0
-rows = set()
-for y in range(h):
-    for x in range(0, w, 2):        # every other column is plenty
-        c = pix(x, y)
-        if c == BG:
-            nbg += 1
-        elif c == FG:
-            nfg += 1
-            rows.add(y)
-
 bad = []
 if nbg < (w // 2) * h // 4:
     bad.append(f"background {BG} covers only {nbg} sampled pixels")

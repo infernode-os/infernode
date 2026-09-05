@@ -2100,12 +2100,14 @@ fi
 #
 # 3g. The SD card, as blocks.
 #
-#     QEMU's raspi3b models the Arasan controller and takes a card
-#     image, so the whole driver can be exercised here rather than
-#     against the one card on the one board -- which matters more than
-#     usual for this device: the only card a real Pi has is the one
-#     holding the firmware and the loader that put this kernel in
-#     memory.
+#     QEMU's raspi3b models both of the SoC's SD controllers -- the
+#     BCM2835 SDHOST the card now lives on and the Arasan it used to --
+#     and the GPIO mux that decides which one the card is wired to, and
+#     takes a card image. So the whole driver can be exercised here
+#     rather than against the one card on the one board, which matters
+#     more than usual for this device: the only card a real Pi has is
+#     the one holding the firmware and the loader that put this kernel
+#     in memory.
 #
 #     The image is built with a known partition table, so the assertion
 #     is on VALUES rather than on plausibility. An initialised
@@ -2188,7 +2190,7 @@ part[dataoff:dataoff+len(CONTENT)] = CONTENT
 #
 # 64MB exactly, because QEMU's SD model requires a power-of-two image
 # and silently refuses to present a card otherwise -- which arrives as
-# "emmc: no card in the slot" and reads like a driver fault.
+# "sd: no card in the slot" and reads like a driver fault.
 buf = bytearray(64*1024*1024)
 e = bytearray(16)
 e[0] = 0x80                               # bootable
@@ -2201,24 +2203,127 @@ buf[PSTART*SEC : PSTART*SEC + len(part)] = part
 open(sys.argv[1], "wb").write(buf)
 PYEOF
 
+#     Boot with a card, wait for the driver's verdict on it, and then
+#     ask QEMU which controller the card is on.
+#
+#     The serial output alone cannot prove the card moved. A driver
+#     that prints "sdhost" and then quietly keeps talking to the Arasan
+#     -- because the mux write was wrong, or never happened -- passes
+#     every text check in this section, since the card works either
+#     way. QEMU's device tree is the one witness that cannot be talked
+#     round: its GPIO model reparents the sd-card device from the SDHCI
+#     bus to the SDHOST bus only when all six pins read ALT0, so
+#     "info qtree" over QMP says which bus the card is actually on.
+#     The answer comes back as a QTREE-SDCARD-BUS line after the
+#     serial output.
+#
+sd_boot() {
+    local img="$1" sdimg="$2" port="$3"
+    python3 - "$QEMU" "$img" "$QEMUARGS" "$sdimg" "$port" <<'PYEOF'
+import subprocess, socket, json, time, sys, threading
+qemu, img, extra, sd, port = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
+                     "-drive", "file=%s,if=sd,format=raw" % sd,
+                     "-display", "none", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+qtree = None
+try:
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+
+    # The mux is written by the driver, so the tree is only worth
+    # reading once the driver has finished with the card -- one way or
+    # the other.
+    deadline = time.time() + 40
+    while time.time() < deadline and not any(k in buf for k in
+            (b"sd: MBR ok", b"sd: no card", b"sd: cannot read",
+             b"sd: sector 0 has no boot signature")):
+        time.sleep(0.2)
+    time.sleep(1)
+
+    if s is not None:
+        f = s.makefile("rw")
+        f.readline()
+        f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+        f.write(json.dumps({"execute": "human-monitor-command",
+                            "arguments": {"command-line": "info qtree"}}) + "\n")
+        f.flush()
+        qtree = json.loads(f.readline()).get("return", "")
+        s.close()
+    time.sleep(3)                      # let init name the partitions
+finally:
+    p.kill(); p.wait()
+
+sys.stdout.write(bytes(buf).decode("utf-8", "replace"))
+
+# In qtree's indented listing every bus prints "bus: <name>" then
+# "type <bus type>" and then its devices, so the last type seen before
+# "dev: sd-card" is the bus the card sits on.
+bus = "absent"
+if qtree is None:
+    bus = "no-qmp"
+else:
+    seen = "unknown"
+    for line in qtree.splitlines():
+        t = line.strip()
+        if t.startswith("type "):
+            seen = t[5:].strip()
+        elif t.startswith("dev: sd-card"):
+            bus = seen
+            break
+print("\nQTREE-SDCARD-BUS: " + bus)
+PYEOF
+}
+
 SAVEDARGS="$QEMUARGS"
-QEMUARGS="$QEMUARGS -drive file=$SDIMG,if=sd,format=raw"
-SDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 20)"
-QEMUARGS="$SAVEDARGS"
-[[ "$VERBOSE" -eq 1 ]] && { echo "  --- sd ---"; grep emmc <<<"$SDOUT"; }
+SDOUT="$(sd_boot "$BUILD/$PLAT-kernel.img" "$SDIMG" 4485)"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- sd ---"; grep 'sd\|gpio: pin48\|QTREE' <<<"$SDOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$SDOUT"
-check "emmc: card ready"            "the SD controller initialises a card"
-check "emmc: MBR ok"                "sector 0 reads back with a valid boot signature"
+check "sd: sdhost: card ready"      "the SDHOST controller initialises a card"
+# The capacity is the raw-layout proof. SDHOST stores a 136-bit response
+# with bits 127:96 in RSP3 where the Arasan stores 127:104, and a CSD
+# parsed in the wrong layout does not fail: it reports a wrong size and
+# reads wrong sectors. The fixture is 64MB, so the driver must say so.
+check "sd: sdhost: card ready, standard capacity (byte addressed), 64 MB" \
+                                    "the CSD is decoded in the raw response layout: the 64MB fixture reads as 64MB"
+check "gpio: pin48 func=4 pin49 func=4 pin50 func=4 pin51 func=4 pin52 func=4 pin53 func=4" \
+                                    "GPIO 48-53 read back ALT0: the card's pins are muxed to SDHOST"
+check "sd: MBR ok"                  "sector 0 reads back with a valid boot signature"
 check "start 2048 sectors 65536"    "the partition table holds the values the image was built with"
-refute "emmc: cannot read"          "no read failed"
+refute "sd: cannot read"            "no read failed"
+refute "^sdhost: "                  "the SDHOST driver reported no fault"
+refute "QTREE-SDCARD-BUS: sdhci-bus" "the card is not still on the Arasan's bus"
 OUT="$OUT_SAVED"
+
+if grep -q 'QTREE-SDCARD-BUS: bcm2835-sdhost-bus' <<<"$SDOUT"; then
+    pass "QEMU's device tree shows the sd-card under bcm2835-sdhost-bus"
+elif grep -q 'QTREE-SDCARD-BUS: no-qmp' <<<"$SDOUT"; then
+    skip "no QMP connection, so the card's bus could not be read from QEMU"
+else
+    fail "the card is not on the SDHOST bus ($(grep -o 'QTREE-SDCARD-BUS: .*' <<<"$SDOUT"))"
+fi
 
 #
 #     A filesystem, end to end.
 #
 #     This is the check that ties the whole stack together and the only
-#     one that would catch most of it breaking: the EMMC driver reads
+#     one that would catch most of it breaking: the SDHOST driver reads
 #     blocks, #S turns a range of them into a file, init reads the
 #     partition table and names that range, dossrv reads a FAT
 #     filesystem out of the named file and mounts it, and the shell
@@ -2443,10 +2548,10 @@ fi
 #     A write test needs somewhere to write, and picking a sector that
 #     "looks free" on a real board eventually destroys the machine the
 #     test runs on. So the write path is compiled in ONLY under
-#     -DEMMCWRITETEST, against a scratch image, and is not in the kernel
+#     -DSDWRITETEST, against a scratch image, and is not in the kernel
 #     that goes to hardware.
 #
-if build_kernel "$BUILD/$PLAT-sdwrite.img" "" "-DEMMCWRITETEST"; then
+if build_kernel "$BUILD/$PLAT-sdwrite.img" "" "-DSDWRITETEST"; then
     cp "$SDIMG" "$BUILD/$PLAT-sdw.img"
     QEMUARGS="$SAVEDARGS -drive file=$BUILD/$PLAT-sdw.img,if=sd,format=raw"
     SDWOUT="$(boot_kernel "$BUILD/$PLAT-sdwrite.img" 20)"
@@ -2469,6 +2574,39 @@ sys.exit(0 if b == bytes((i ^ 0x5A) & 0xff for i in range(512)) else 1)
     fi
 else
     fail "the SD write-test kernel failed to build"
+fi
+
+#
+#     The same card through the Arasan, in a kernel built only for this.
+#
+#     The card left the Arasan so that the WiFi chip can have it, and
+#     the Arasan backend stayed in the tree so that the old path is
+#     still there to bisect against: a card that reads on one
+#     controller and not the other is a controller fault, and one that
+#     reads on neither is the card layer's. This boot keeps that path
+#     honest, and it is also the negative case for the bus check above
+#     -- the SAME question to QEMU must give the OTHER answer, or the
+#     check is not telling the controllers apart.
+#
+if build_kernel "$BUILD/$PLAT-sdarasan.img" "" "-DSDCARD_ARASAN"; then
+    SDAOUT="$(sd_boot "$BUILD/$PLAT-sdarasan.img" "$SDIMG" 4487)"
+    [[ "$VERBOSE" -eq 1 ]] && { echo "  --- sd (arasan) ---"; grep 'sd\|gpio: pin48\|QTREE' <<<"$SDAOUT"; }
+    OUT_SAVED="$OUT"; OUT="$SDAOUT"
+    check "sd: emmc: card ready, standard capacity (byte addressed), 64 MB" \
+                                    "-DSDCARD_ARASAN: the Arasan path identifies the card, its responses normalised to the raw layout"
+    check "sd: MBR ok"              "-DSDCARD_ARASAN: sector 0 reads back with a valid boot signature"
+    check "start 2048 sectors 65536" "-DSDCARD_ARASAN: the partition table holds the values the image was built with"
+    refute "sd: cannot read"        "-DSDCARD_ARASAN: no read failed"
+    OUT="$OUT_SAVED"
+    if grep -q 'QTREE-SDCARD-BUS: sdhci-bus' <<<"$SDAOUT"; then
+        pass "-DSDCARD_ARASAN: QEMU shows the sd-card under sdhci-bus, so the bus check tells the controllers apart"
+    elif grep -q 'QTREE-SDCARD-BUS: no-qmp' <<<"$SDAOUT"; then
+        skip "no QMP connection, so the Arasan variant's bus could not be read from QEMU"
+    else
+        fail "-DSDCARD_ARASAN: the card is not on the Arasan's bus ($(grep -o 'QTREE-SDCARD-BUS: .*' <<<"$SDAOUT"))"
+    fi
+else
+    fail "the -DSDCARD_ARASAN kernel failed to build"
 fi
 
 #

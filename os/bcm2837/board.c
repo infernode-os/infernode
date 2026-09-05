@@ -286,6 +286,415 @@ boardfbprobe(void)
 }
 
 /*
+ * The kernel command line, and the boot watchdog it controls.
+ *
+ * THE PROBLEM. A candidate kernel is one nobody has seen boot on this
+ * board. If it panics, exit() resets the machine and the firmware --
+ * its tryboot flag now spent -- loads the known-good kernel again; that
+ * path has always worked. If it HANGS, nothing happens at all: the
+ * classic failure of a JIT that forgot its instruction-cache
+ * maintenance is a machine that prints half a boot and stops, and the
+ * only way out was the power switch. A watchdog armed before the
+ * candidate has done anything, and disarmed only once it has proved it
+ * can run a shell, turns that hang into the same reset a panic gets.
+ *
+ * WHICH BOOTS ARM IT. Only the ones the command line says to: the word
+ * "tryboot" marks a candidate boot, and "bootwatchdog" asks for the
+ * guard without the candidate semantics; "nowatchdog" wins over both,
+ * for a boot that is legitimately slow -- a kernel being stepped under
+ * a debugger, say, whose budget would otherwise expire on a
+ * breakpoint. "wdogtest" arms and then IGNORES the release, so that the
+ * one thing emulation cannot show -- the count reaching zero and the
+ * chip resetting -- can be watched on the board with a stopwatch. The
+ * default is NOT to arm, for two reasons that were weighed against the
+ * obvious alternative of guarding every boot.
+ *
+ * One is emulation. QEMU's model of this block (hw/misc/
+ * bcm2835_powermgt.c) has no countdown: a write to PM_RSTC with the
+ * full-reset WRCFG resets the machine on the spot, whatever PM_WDOG
+ * holds. A kernel that armed unconditionally could not boot under
+ * QEMU at all, and QEMU is where every check in the harness runs.
+ * The other is that a known-good kernel which hangs has nowhere to
+ * fall back to: a watchdog there produces a machine that resets every
+ * ninety seconds and wipes its own console each time, which is a
+ * worse thing to find than a hang with the last line still on the
+ * screen. The candidate is the case a reset helps, and the operator
+ * who wants the reset regardless has a word for it.
+ *
+ * HOW THE WORD GETS HERE. The firmware assembles the command line
+ * from the cmdline file that the config in force names, and a
+ * [tryboot] section of config.txt -- or a tryboot.txt -- can name a
+ * different one from the known-good boot's. That is the whole channel:
+ * the same kernel image can be booted as a candidate or as the
+ * incumbent, and it learns which from the firmware rather than from
+ * the build. QEMU's -append lands in the same place, which is what
+ * lets the harness drive this. The line is published as
+ * #B/bootargs so osinit can read it too.
+ *
+ * Because of that choice, the guard on a candidate rests on two
+ * firmware behaviours, neither yet seen on this board: that the
+ * SET_REBOOT_FLAGS tag makes the next boot take the [tryboot]
+ * section at all, and that the section's cmdline= line is what the
+ * firmware then hands GET_COMMAND_LINE. The second is the same
+ * conditional-filter machinery that applies the section's kernel=
+ * line, so a firmware that boots tryboot.img from the section but
+ * serves the other cmdline would be a firmware bug rather than a
+ * documented gap; but it is untested, and the failure would be
+ * quiet: the candidate boots, prints "wdog: not armed (not a tryboot
+ * candidate)", and runs unguarded. That line, on a boot that should
+ * have been marked, is the tell -- and "bootwatchdog" in the
+ * KNOWN-GOOD cmdline.txt is the way round it, since that file is
+ * read on every boot the section does not override.
+ *
+ * WHEN THE LINE CANNOT BE READ. An unanswered GET_COMMAND_LINE, or a
+ * line longer than the buffer (the protocol then copies nothing and
+ * reports the length), leaves the kernel unable to say which boot
+ * this is. It arms. A boot that reaches the shell releases the
+ * watchdog and has lost nothing but a line explaining why; a
+ * candidate that hangs unarmed because its line was 1100 bytes
+ * would have lost the machine to the power switch, which is the one
+ * outcome this whole mechanism exists to remove. "nowatchdog" cannot
+ * be honoured on such a boot, because it cannot be seen.
+ *
+ * THE BUDGET. Ninety seconds, because a boot to the shell takes a few
+ * seconds and the only things that legitimately take longer -- USB
+ * enumeration behind a slow hub, a DHCP server that is not answering
+ * -- are done in threads osinit spawns, so the shell is not behind
+ * them. PM_WDOG cannot hold ninety seconds: it is a 20-bit count at
+ * 65536Hz, sixteen seconds at most. So the hardware is loaded with
+ * fifteen seconds and reloaded for as long as the budget has not run
+ * out, and then left to expire.
+ *
+ * Two things reload it, because the boot path has two halves. Once
+ * kmain's final spllo has let interrupts run, the clock tick on core 0
+ * reloads it every 64 ticks. Before that -- from the arming write
+ * through startmmu, the allocators, the probes, the SMP launch and
+ * the card, up to schedinit -- interrupts are masked except for the
+ * moments probeclock and probeintr open them, and the tick cannot
+ * help; and that half is not short. probeuartin waits a deliberate
+ * three seconds for a keypress, launchsmp waits up to five for cores
+ * that never answer, emmcinit two for a card to power up plus its
+ * command timeouts, and the sum on a bad day is past ten seconds
+ * against a count that started at fifteen. So the same reload is
+ * polled from microdelay(), which every one of those waits loops
+ * around, and from probeuartin's own loop, whenever five seconds have
+ * passed since the last reload. The count therefore never falls below
+ * ten seconds in code that is waiting on purpose, however long it
+ * waits, and reaches zero only when nothing has polled for fifteen
+ * seconds -- a hang, or a spin that does not go through microdelay,
+ * and the mailbox spin is the one of those worth knowing about. A
+ * kernel that hangs with interrupts running is caught at the budget;
+ * one that hangs with them off, or before they were ever on, within
+ * fifteen seconds. Both end in the same place.
+ *
+ * The poll takes the watchdog lock, and exclusives fault with the
+ * MMU off (see mboxlockon). It is safe because nothing between the
+ * arming write and mmuon calls microdelay -- startmmu is table
+ * building and register writes -- and because a poll returns before
+ * the lock unless five seconds have passed since arming, which the
+ * MMU set-up does not take. QEMU cannot show any of this: its PM
+ * model resets on the arming write, so no poll ever runs armed
+ * there; the reload interval is a board result.
+ *
+ * WHAT RELEASES IT. osinit writes "booted" to /dev/sysctl once the
+ * shell is loaded and about to run; devcons calls booted(), which
+ * lands in boardbooted() below. The disarm is PM_RSTC's reset value
+ * written back with the password, which clears WRCFG -- the write
+ * every reference driver uses (see io.h). One line is printed when
+ * the watchdog is armed and one when it is released, so the harness
+ * can see both ends of the handshake.
+ */
+enum
+{
+	Bootbudgetms	= 90*1000,	/* see above */
+	Wdogmaxms	= 15*1000,	/* under the 16 s the 20-bit count can hold */
+	Wdogkickevery	= 64,		/* ticks between reloads; well inside 15 s */
+	Wdogpollms	= 5*1000,	/* microdelay reloads after this long without one */
+};
+
+static char cmdline[Mboxcmdlinemax];
+static Lock wdoglock;
+static int wdogarmed;		/* being kicked */
+static int wdogspent;		/* budget ran out; the reset is coming */
+static u64int wdogt0;		/* systimer() when armed */
+static u64int wdoglast;		/* systimer() at the last reload */
+
+char*
+boardcmdline(void)
+{
+	return cmdline;
+}
+
+/*
+ * A whole whitespace-delimited word, so that "tryboot" cannot be
+ * found inside "tryboot.img" or "notryboot".
+ */
+static int
+cmdlineword(char *w)
+{
+	char *p, *q;
+	int n;
+
+	n = strlen(w);
+	for(p = cmdline; *p != 0; p = q){
+		while(*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+			p++;
+		for(q = p; *q != 0 && *q != ' ' && *q != '\t' && *q != '\r' && *q != '\n'; q++)
+			;
+		if(q - p == n && memcmp(p, w, n) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+int
+boardcandidate(void)
+{
+	return cmdlineword("tryboot");
+}
+
+/*
+ * Load the count, then make its expiry a full reset. In that order:
+ * with WRCFG already set, a stale count could expire between the two
+ * writes.
+ */
+static void
+pmwdogset(int ms)
+{
+	volatile u32int *rstc, *wdog;
+	u32int t;
+
+	t = ((u64int)ms * Pmwdoghz) / 1000;
+	if(t > Pmwdogmask)
+		t = Pmwdogmask;
+	if(t == 0)
+		t = 1;
+	rstc = (u32int*)(uintptr)(PMREGS + Pmrstc);
+	wdog = (u32int*)(uintptr)(PMREGS + Pmwdog);
+	*wdog = Pmpassword | t;
+	*rstc = Pmpassword | (*rstc & Pmwrcfgclr) | Pmwrcfgfull;
+	coherence();
+	wdoglast = systimer();
+}
+
+static void
+pmwdogoff(void)
+{
+	volatile u32int *rstc;
+
+	rstc = (u32int*)(uintptr)(PMREGS + Pmrstc);
+	*rstc = Pmpassword | Pmrstcreset;
+	coherence();
+}
+
+/*
+ * The block's three registers as the firmware left them. PM_RSTS is
+ * the interesting one on the board: it holds the reset cause, and
+ * after a tryboot it is where the firmware's own bookkeeping would
+ * show if it used the register. QEMU reports its reset values,
+ * 0x102/0x1000/0.
+ */
+static void
+pmdump(void)
+{
+	uartputstr("pm:   rsts ");
+	uartputx(*(volatile u32int*)(uintptr)(PMREGS + Pmrsts));
+	uartputstr(" rstc ");
+	uartputx(*(volatile u32int*)(uintptr)(PMREGS + Pmrstc));
+	uartputstr(" wdog ");
+	uartputx(*(volatile u32int*)(uintptr)(PMREGS + Pmwdog));
+	uartputstr("\n");
+}
+
+/*
+ * Called from kmain right after the mailbox has been proved to work
+ * and before anything slow. uartputstr throughout: this runs before
+ * print() has a queue, and the "armed" line must be out before the
+ * arming write, because under QEMU that write IS the reset.
+ */
+void
+boardbootwatchdog(void)
+{
+	int n, unread;
+
+	n = mboxcmdline(cmdline, sizeof cmdline);
+	unread = 0;
+	uartputstr("boot: command line: ");
+	if(n < 0){
+		uartputstr("(UNREAD: the firmware did not answer GET_COMMAND_LINE)");
+		unread = 1;
+	}else if(n > Mboxcmdlinemax){
+		/*
+		 * The protocol copied nothing; see mboxcmdline. Say the
+		 * length, so that the fix -- a bigger buffer, or a
+		 * shorter cmdline.txt -- is obvious from the line.
+		 */
+		uartputstr("(UNREAD: the firmware reports ");
+		uartputd(n);
+		uartputstr(" bytes, more than the ");
+		uartputd(Mboxcmdlinemax);
+		uartputstr("-byte buffer)");
+		unread = 1;
+	}else if(cmdline[0] == 0)
+		uartputstr("(empty)");
+	else
+		uartputstr(cmdline);
+	uartputstr("\n");
+	pmdump();
+
+	if(unread){
+		/*
+		 * Which boot this is cannot be known, so guard it as if
+		 * it were the candidate; see "WHEN THE LINE CANNOT BE
+		 * READ" above.
+		 */
+		uartputstr("wdog: armed, ");
+		uartputd(Bootbudgetms / 1000);
+		uartputstr(" s boot budget; the command line could not be read, "
+			"so this boot is guarded as a candidate would be\n");
+	}else{
+		if(cmdlineword("nowatchdog")){
+			uartputstr("wdog: not armed (nowatchdog on the command line)\n");
+			return;
+		}
+		if(!boardcandidate() && !cmdlineword("bootwatchdog") && !cmdlineword("wdogtest")){
+			uartputstr("wdog: not armed (not a tryboot candidate)\n");
+			return;
+		}
+
+		uartputstr("wdog: armed, ");
+		uartputd(Bootbudgetms / 1000);
+		uartputstr(" s boot budget; a hang resets");
+		if(boardcandidate())
+			uartputstr(" to config.txt's kernel");
+		uartputstr("\n");
+	}
+
+	wdogt0 = systimer();
+	wdogarmed = 1;
+	coherence();
+	pmwdogset(Wdogmaxms);
+}
+
+/*
+ * Reload the count from what is left of the budget, or stop when the
+ * budget is spent. canlock rather than lock, for both callers: the
+ * tick is interrupt context, the poll runs inside arbitrary drivers'
+ * delays, and if boardbooted() holds the lock the reload can simply
+ * wait for the next tick or the next delay.
+ */
+static void
+wdogkick(void)
+{
+	u64int ms;
+
+	if(!canlock(&wdoglock))
+		return;
+	if(wdogarmed){
+		ms = (systimer() - wdogt0) / 1000;
+		if(ms >= Bootbudgetms){
+			/*
+			 * Stop kicking. The last reload was for exactly the
+			 * time that was left, so the reset lands at the budget,
+			 * not fifteen seconds after it.
+			 */
+			wdogarmed = 0;
+			wdogspent = 1;
+			uartputstr("wdog: boot budget spent; the reset is coming\n");
+		}else{
+			ms = Bootbudgetms - ms;
+			pmwdogset(ms < Wdogmaxms ? (int)ms : Wdogmaxms);
+		}
+	}
+	unlock(&wdoglock);
+}
+
+/* from clockintr on core 0, every tick */
+void
+boardwatchdogtick(void)
+{
+	static int n;
+
+	if(!wdogarmed)
+		return;
+	if(++n < Wdogkickevery)
+		return;
+	n = 0;
+	wdogkick();
+}
+
+/*
+ * From microdelay(), and from the boot path's own busy-waits: the
+ * reload for the stretch of kmain that runs with interrupts masked.
+ * The first test is the whole cost on a boot that is not armed. The
+ * second keeps a tight loop of short delays from reloading the count
+ * on every pass; it also keeps the lock from being touched before the
+ * MMU is on, as the comment on the budget explains.
+ */
+void
+boardwatchdogpoll(void)
+{
+	if(!wdogarmed)
+		return;
+	if(systimer() - wdoglast < (u64int)Wdogpollms * 1000)
+		return;
+	wdogkick();
+}
+
+/*
+ * "booted" on /dev/sysctl: the machine has a shell, so the boot is no
+ * longer the thing the watchdog is guarding. Prints in every case,
+ * because the release line is the harness's evidence that the write
+ * reached this far -- including on a boot that never armed.
+ */
+void
+boardbooted(void)
+{
+	int s, was;
+	u64int ms;
+
+	if(cmdlineword("wdogtest") && wdogarmed){
+		print("wdog: NOT released (wdogtest): the reset should come at %d s\n",
+			Bootbudgetms / 1000);
+		return;
+	}
+
+	ms = 0;
+	s = splhi();
+	lock(&wdoglock);
+	was = wdogarmed;
+	if(was){
+		wdogarmed = 0;
+		pmwdogoff();
+		ms = (systimer() - wdogt0) / 1000;
+	}
+	unlock(&wdoglock);
+	splx(s);
+
+	if(was)
+		print("wdog: released after %llud ms; boot complete\n", ms);
+	else if(wdogspent)
+		print("wdog: boot complete AFTER the budget; the reset is already coming\n");
+	else
+		print("wdog: boot complete; no watchdog was armed\n");
+}
+
+/*
+ * Before a deliberate reset: stop the tick from reloading PM_WDOG
+ * under it. The flag alone is not enough -- a kick on core 0 that has
+ * already passed its check would reload fifteen seconds over the
+ * sixteen ticks below -- so wait out more than one tick as well. No
+ * lock: this is called from exit(), where locks may be what broke.
+ */
+static void
+wdogquiet(void)
+{
+	wdogarmed = 0;
+	coherence();
+	microdelay(2000);
+}
+
+/*
  * Reset the machine.
  *
  * This SoC has no reset line to assert: rebooting means arming the
@@ -305,6 +714,8 @@ boardreboot(void)
 {
 	volatile u32int *rstc, *wdog;
 
+	wdogquiet();
+
 	rstc = (u32int*)(uintptr)(PMREGS + Pmrstc);
 	wdog = (u32int*)(uintptr)(PMREGS + Pmwdog);
 
@@ -317,37 +728,33 @@ boardreboot(void)
 }
 
 /*
- * Reset with the firmware's one-shot TRYBOOT flag raised.
+ * Reset with the firmware's one-shot tryboot flag raised, so that the
+ * next boot -- and only the next -- takes its configuration from the
+ * [tryboot] section of config.txt (or tryboot.txt). config.txt names
+ * the known-good kernel, the tryboot configuration names the candidate
+ * and marks its command line, and a candidate that crashes or hangs
+ * costs one reset back to known-good: no loader work, no card surgery,
+ * no serial rescue.
  *
- * The VideoCore reads PM_RSTS at boot; with this bit set it clears
- * the bit and loads tryboot.txt instead of config.txt, exactly once.
- * That is the whole A/B kernel mechanism on this platform: config.txt
- * names the known-good kernel, tryboot.txt names the candidate, and a
- * candidate that crashes costs one watchdog reset back to known-good
- * -- no loader work, no card surgery, no serial rescue. The bit is
- * survived by the reset on purpose; everything else about the reset
- * is boardreboot()'s.
- *
- * PM_RSTS also holds partition-select and reset-cause bits the
- * firmware owns, so read-modify-write rather than store: clobbering
- * them has no documented recovery.
+ * The flag is asked for through the mailbox, which is how Linux does
+ * it (SET_REBOOT_FLAGS then NOTIFY_REBOOT; see io.h). An earlier
+ * version of this function set bit 5 of PM_RSTS instead and called it
+ * the tryboot bit, with a comment saying the VideoCore reads it. That
+ * was never tested against the firmware, and reading the downstream
+ * Linux tree while writing the boot watchdog found that bit 5 is
+ * HADWRQ -- a reset-cause bit the firmware sets -- and that Linux
+ * never touches PM_RSTS for tryboot at all. Whether the firmware
+ * honours the tag from THIS kernel is still the one thing here that
+ * only the board can say: the line below records its answer.
  */
 void
 boardtryboot(void)
 {
-	volatile u32int *rstc, *rsts, *wdog;
-
-	rstc = (u32int*)(uintptr)(PMREGS + Pmrstc);
-	rsts = (u32int*)(uintptr)(PMREGS + Pmrsts);
-	wdog = (u32int*)(uintptr)(PMREGS + Pmwdog);
-
-	*rsts = Pmpassword | *rsts | Pmrststryboot;
-	*wdog = Pmpassword | 16;
-	*rstc = Pmpassword | (*rstc & Pmwrcfgclr) | Pmwrcfgfull;
-	coherence();
-
-	for(;;)
-		;
+	if(mboxreboot(1) < 0)
+		uartputstr("tryboot: firmware did NOT acknowledge the reboot flags; resetting anyway\n");
+	else
+		uartputstr("tryboot: firmware acknowledged reboot flags 0x1 (tryboot)\n");
+	boardreboot();
 }
 
 /*

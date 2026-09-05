@@ -118,30 +118,36 @@ enum
 	/* every caller hands mboxcall the one shared buffer */
 	Mboxbufsize = 64 * sizeof(u32int),
 	Maxvalwords = 64 - 8,	/* room for the header, the tag and Tagend */
+	Cmdlinewords = Mboxcmdlinemax / 4,	/* the value buffer; see mboxcmdline */
 };
 
 /*
  * Post the buffer to a channel and wait for the reply.  Returns 0 on
  * success, -1 if the firmware rejected the request.
  */
-static int mboxcall1(u32int, volatile u32int*);
+static int mboxcall1(u32int, volatile u32int*, int);
 
+/*
+ * size is the buffer's length in bytes: the cache maintenance below
+ * has to cover the whole of what the firmware will read and write, and
+ * the command line needs a buffer four times the size of mboxbuf.
+ */
 static int
-mboxcall(u32int chan, volatile u32int *buf)
+mboxcall(u32int chan, volatile u32int *buf, int size)
 {
 	int r;
 
 	if(!mboxlockable)
-		return mboxcall1(chan, buf);
+		return mboxcall1(chan, buf, size);
 
 	lock(&mboxlock);
-	r = mboxcall1(chan, buf);
+	r = mboxcall1(chan, buf, size);
 	unlock(&mboxlock);
 	return r;
 }
 
 static int
-mboxcall1(u32int chan, volatile u32int *buf)
+mboxcall1(u32int chan, volatile u32int *buf, int size)
 {
 	u32int v, want;
 	long i;
@@ -168,7 +174,7 @@ mboxcall1(u32int chan, volatile u32int *buf)
 	 * may rely on -- and would show up as calls that succeed early in
 	 * boot and fail later, once more code has been through the cache.
 	 */
-	cachedwbse((void*)buf, Mboxbufsize);
+	cachedwbse((void*)buf, size);
 	dsb();
 
 	/*
@@ -225,9 +231,24 @@ mboxcall1(u32int chan, volatile u32int *buf)
 	 * That ordering is load-bearing -- doing this without the clean
 	 * above would risk exactly the corruption it is meant to prevent.
 	 */
-	cachedwbinvse((void*)buf, Mboxbufsize);
+	cachedwbinvse((void*)buf, size);
 
 	return buf[1] == Propok ? 0 : -1;
+}
+
+/* the buffer lock, for a caller that fills and reads mboxbuf itself */
+static void
+mboxlockbuf(void)
+{
+	if(mboxlockable)
+		lock(&mboxlock);
+}
+
+static void
+mboxunlockbuf(void)
+{
+	if(mboxlockable)
+		unlock(&mboxlock);
 }
 
 /*
@@ -236,12 +257,25 @@ mboxcall1(u32int chan, volatile u32int *buf)
  * nreq words of request data are taken from data, and the tag's value
  * buffer is sized to the larger of the request and the expected reply so
  * that the firmware has room to answer in place.  On success the reply is
- * copied back into data.
+ * copied back into data, and the tag's own response word -- the length
+ * the firmware wrote, with Propok set if it understood the tag -- into
+ * *tagresp if that is not nil.
+ *
+ * The lock is held from the first word written to the last word read,
+ * NOT only around the mailbox exchange. mboxcall's lock covers the
+ * exchange; but mboxbuf is one buffer, and a caller that reads the
+ * reply out of it after mboxcall has returned reads whatever the next
+ * caller has by then written there. That next caller is routine: the
+ * framebuffer console makes a mailbox call on every scroll, from
+ * whichever process is printing, so a reply read after the unlock
+ * could be a scroll offset's. The first reader of the tag response
+ * word (mboxreboot) did exactly that, and the line it prints is the
+ * board evidence the README asks for, so it had to be made true.
  */
 int
-mboxprop(u32int tag, u32int *data, int nreq, int nresp)
+mboxprop1(u32int tag, u32int *data, int nreq, int nresp, u32int *tagresp)
 {
-	int i, nval;
+	int i, nval, r;
 
 	nval = nreq > nresp ? nreq : nresp;
 	/*
@@ -252,6 +286,8 @@ mboxprop(u32int tag, u32int *data, int nreq, int nresp)
 	 */
 	if(nval > Maxvalwords)
 		return -1;
+
+	mboxlockbuf();
 
 	mboxbuf[0] = (nval + 6) * 4;	/* total size in bytes */
 	mboxbuf[1] = Propreq;
@@ -266,13 +302,121 @@ mboxprop(u32int tag, u32int *data, int nreq, int nresp)
 
 	mboxbuf[5 + nval] = Tagend;
 
-	if(mboxcall(Mboxchanprop, mboxbuf) < 0)
+	r = mboxcall1(Mboxchanprop, mboxbuf, Mboxbufsize);
+	if(r == 0){
+		for(i = 0; i < nresp; i++)
+			data[i] = mboxbuf[5 + i];
+		if(tagresp != nil)
+			*tagresp = mboxbuf[4];
+	}
+
+	mboxunlockbuf();
+	return r;
+}
+
+int
+mboxprop(u32int tag, u32int *data, int nreq, int nresp)
+{
+	return mboxprop1(tag, data, nreq, nresp, nil);
+}
+
+/*
+ * The firmware's kernel command line: cmdline.txt as named by the
+ * config.txt (or tryboot.txt) that was in force, plus whatever the
+ * firmware appends of its own. Copied into buf as a NUL-terminated
+ * string, truncated to n-1 bytes.
+ *
+ * The return is the length the firmware REPORTED, unclamped, or -1 if
+ * the tag went unanswered. That number is the caller's to judge: if
+ * it exceeds Mboxcmdlinemax the firmware copied nothing and buf is
+ * empty -- the protocol's response to a value buffer that is too
+ * short is to say how much it needed and write none of it -- and an
+ * empty buf then means "unread", not "no command line". An earlier
+ * version clamped the length to the buffer, so the two cases were
+ * indistinguishable to the caller and an over-long line would have
+ * booted a tryboot candidate with the watchdog unarmed, silently.
+ *
+ * A buffer of its own, four times mboxbuf. A real Pi's command line
+ * runs to several hundred bytes -- the firmware adds vc_mem.mem_base,
+ * the Ethernet MAC and the framebuffer geometry unasked -- and
+ * through mboxprop's 224 bytes it would have read as "no command
+ * line" on exactly the machines that have one. QEMU answers with
+ * -append, so the whole path is testable there; the length problem
+ * is not.
+ */
+static volatile u32int cmdlinebuf[8 + Cmdlinewords] __attribute__((aligned(16)));
+
+int
+mboxcmdline(char *buf, int n)
+{
+	int i, len;
+	volatile uchar *p;
+
+	cmdlinebuf[0] = (Cmdlinewords + 6) * 4;
+	cmdlinebuf[1] = Propreq;
+	cmdlinebuf[2] = Taggetcmdline;
+	cmdlinebuf[3] = Mboxcmdlinemax;
+	cmdlinebuf[4] = Propreq;
+	for(i = 0; i < Cmdlinewords; i++)
+		cmdlinebuf[5 + i] = 0;
+	cmdlinebuf[5 + Cmdlinewords] = Tagend;
+
+	buf[0] = 0;
+	if(mboxcall(Mboxchanprop, cmdlinebuf, sizeof cmdlinebuf) < 0)
 		return -1;
+	if((cmdlinebuf[4] & Propok) == 0)
+		return -1;			/* the tag was not answered */
 
-	for(i = 0; i < nresp; i++)
-		data[i] = mboxbuf[5 + i];
+	len = cmdlinebuf[4] & ~Propok;	/* the firmware's own length */
+	if(len > Mboxcmdlinemax)
+		return len;		/* it copied nothing; buf stays empty */
+	p = (volatile uchar*)&cmdlinebuf[5];
+	for(i = 0; i < len && i < n - 1 && p[i] != 0; i++)
+		buf[i] = p[i];
+	buf[i] = 0;
+	return len;
+}
 
-	return 0;
+/*
+ * Tell the firmware what the coming reset is for.
+ *
+ * With tryboot set, the boot after the reset -- and only that one --
+ * takes its configuration from tryboot.txt, or from the [tryboot]
+ * section of config.txt. The flag is the firmware's to keep: it is
+ * asked for here, through the same tag Linux's reboot notifier uses,
+ * and the kernel never learns where it is stored. NOTIFY_REBOOT is
+ * what Linux sends next, always, flag or no flag.
+ *
+ * The check is on the TAG's response bit, not only the message's:
+ * the message succeeds whenever the firmware parsed it, and what this
+ * caller needs to know is whether this particular tag was understood.
+ * QEMU's property model sets the bit for every tag it is handed,
+ * known or not, so under emulation the answer is always yes and proves
+ * only that the message was well formed. The board is where the
+ * answer means something, and the line printed from it is the
+ * evidence the README asks for.
+ */
+int
+mboxreboot(int tryboot)
+{
+	u32int v[1], resp;
+	int r;
+
+	r = 0;
+	v[0] = 0;
+	if(tryboot){
+		v[0] = Rebootflagtryboot;
+		/*
+		 * mboxprop1, for the tag response word: read under the
+		 * buffer lock, so it is this tag's answer and not the
+		 * next framebuffer scroll's.
+		 */
+		if(mboxprop1(Tagsetrebootflags, v, 1, 1, &resp) < 0 || (resp & Propok) == 0)
+			r = -1;
+	}
+	if(mboxprop(Tagnotifyreboot, v, 0, 0) < 0)
+		r = -1;
+	return r;
 }
 
 /*
@@ -347,7 +491,7 @@ mboxfballoc(u32int disp, u32int w, u32int h, u32int depth, Fbinfo *fb)
 
 	mboxbuf[0] = (u32int)((p - mboxbuf) * 4);
 
-	if(mboxcall(Mboxchanprop, mboxbuf) < 0)
+	if(mboxcall(Mboxchanprop, mboxbuf, Mboxbufsize) < 0)
 		return -1;
 
 	fb->disp = tagdisp[3];

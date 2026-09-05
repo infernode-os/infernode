@@ -100,12 +100,22 @@ systimer(void)
 /*
  * Busy-wait, timed off the system timer because its 1MHz rate is fixed
  * by the hardware rather than reported by firmware.
+ *
+ * The boot watchdog is polled from here, once per call. Until kmain's
+ * final spllo the clock interrupt that reloads the count is masked,
+ * and every wait the boot path makes in that window -- the SMP
+ * launch, the card's power-up, a command timeout -- is a loop around
+ * this function; so this is the one place a reload can be hung on
+ * that covers them all. It costs a load of one flag when nothing is
+ * armed, which is every call after osinit's "booted" and every call
+ * on a boot the command line did not mark. See board.c.
  */
 void
 microdelay(int us)
 {
 	u64int end;
 
+	boardwatchdogpoll();
 	end = systimer() + (u64int)(uint)us;
 	while(systimer() < end)
 		;
@@ -219,6 +229,10 @@ clockintr(Ureg *u)
 	 */
 	if(m->machno == 0)
 		ticks++;
+
+	/* the boot watchdog is core 0's to keep alive; see board.c */
+	if(m->machno == 0)
+		boardwatchdogtick();
 
 	/*
 	 * m->ticks is not bookkeeping -- os/port reads it directly.

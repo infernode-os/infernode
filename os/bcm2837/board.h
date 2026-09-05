@@ -22,13 +22,27 @@ void	gpioclaim(int, char*);
 char*	gpioclaimed(int);
 
 /* mailbox.c */
+enum
+{
+	Mboxcmdlinemax	= 1024,	/* the GET_COMMAND_LINE value buffer, in bytes */
+};
 int	mboxprop(u32int, u32int*, int, int);
+int	mboxprop1(u32int, u32int*, int, int, u32int*);
 int	setpower(int, int);
 int	mboxfballoc(u32int, u32int, u32int, u32int, Fbinfo*);
 int	mboxfbnumdisplays(void);
 u32int	mboxclockrate(u32int);
 void	mboxlockon(void);
 int	mboxedid(u32int, uchar*);
+int	mboxcmdline(char*, int);
+int	mboxreboot(int);
+
+/*
+ * board.c: the boot watchdog's reload. The tick is core 0's clockintr;
+ * the poll is microdelay's, for the boot path before interrupts run.
+ */
+void	boardwatchdogtick(void);
+void	boardwatchdogpoll(void);
 
 int	emmcinit(void);
 int	emmcread(uvlong, void*);

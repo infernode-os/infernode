@@ -227,6 +227,18 @@ tryboot(void)
 	exit(0);
 }
 
+/*
+ * "booted" on /dev/sysctl: osinit's word that the shell is loaded and
+ * about to run. What that means to the hardware is the board's
+ * business -- on the BCM2837 it releases the boot watchdog a tryboot
+ * candidate armed in kmain; see boardbooted().
+ */
+void
+booted(void)
+{
+	boardbooted();
+}
+
 void
 halt(void)
 {

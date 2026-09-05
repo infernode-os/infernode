@@ -61,6 +61,7 @@ enum
 {
 	CMreboot,
 	CMtryboot,
+	CMbooted,
 	CMhalt,
 	CMpanic,
 	CMbroken,
@@ -72,6 +73,7 @@ static Cmdtab sysctlcmd[] =
 {
 	CMreboot,	"reboot",	0,
 	CMtryboot,	"tryboot",	0,
+	CMbooted,	"booted",	0,	/* the boot is over: release its watchdog */
 	CMhalt,	"halt", 0,
 	CMpanic,	"panic", 0,
 	CMconsole,	"console", 1,
@@ -1364,6 +1366,9 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		case CMtryboot:
 			tryboot();
+			break;
+		case CMbooted:
+			booted();
 			break;
 		case CMhalt:
 			halt();

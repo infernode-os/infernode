@@ -18,13 +18,18 @@
 # devices, the Dis VM and the JIT (bit-identical against the interpreter,
 # and faster), the shell, os/ip over the USB Ethernet driver, USB
 # keyboard and mouse including hot-plug and unplug, the SD card and
-# dossrv, GPIO, and #B/bootimage against the file it booted.
+# dossrv, GPIO, #B/bootimage against the file it booted, and this side
+# of the tryboot A/B path: the command line reaching the kernel and
+# osinit, the boot watchdog's arming write and its "booted" release,
+# and "tryboot" on /dev/sysctl resetting the machine.
 #
 # What it cannot cover, and only the board does: split I/D caches (the
 # JIT's icache maintenance), bus vs physical DMA addresses, the LAN78xx
-# family (QEMU's usb-net speaks RNDIS), SMP timing, tryboot, the DSI
-# panel, and anything the userspace on a card does after osinit
-# (logon, secstored, the desktop). See the README's "Next".
+# family (QEMU's usb-net speaks RNDIS), SMP timing, the firmware's side
+# of tryboot and the watchdog's countdown (QEMU acknowledges every
+# property tag and resets on the arming write; see the tryboot section
+# below), the DSI panel, and anything the userspace on a card does
+# after osinit (logon, secstored, the desktop). See the README's "Next".
 #
 # There was once a second machine here (QEMU virt). It is not in the
 # tree; the shared os/arm64 split it forced is.
@@ -911,14 +916,20 @@ SBEOF
 
 # Boot an image and capture the serial output. The kernel never exits, so
 # it must be killed; partial output is what we want.
+# The optional third argument is a kernel command line, handed to QEMU
+# as -append, which its firmware model returns for the GET_COMMAND_LINE
+# property tag exactly as the Pi's firmware returns cmdline.txt. It is
+# a separate argument rather than part of $QEMUARGS because that string
+# is split on spaces and a command line has spaces in it.
 boot_kernel() {
-    local img="$1" secs="${2:-10}"
-    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" <<'PYEOF'
+    local img="$1" secs="${2:-10}" append="${3:-}"
+    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "$append" <<'PYEOF'
 import subprocess, sys
-qemu, img, secs, extra = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
-                      "-display", "none", "-serial", "stdio"],
-                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+qemu, img, secs, extra, append = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+args = [qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio"]
+if append:
+    args += ["-append", append]
+p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 try:
     out, _ = p.communicate(timeout=secs)
 except subprocess.TimeoutExpired:
@@ -1184,6 +1195,23 @@ kimgsz=$(wc -c < "$KIMG" | tr -d ' ')
 check "init: /dev/bootimage $kimgsz bytes stat $kimgsz sha1 $(shasum "$KIMG" | cut -c1-40)" \
     "/dev/bootimage reproduces the image the loader was given, byte for byte"
 check "init: gpio 21 out 1->1 0->0; pin 14: in use by uart" "GPIO pins are files: an output reads back what was written, the console pin refuses"
+
+# The boot watchdog's two ends on a boot that does not arm it.
+#
+# Only a boot whose command line says "tryboot" (or "bootwatchdog") is
+# put under the watchdog; this boot has no -append, so the kernel must
+# say it read an empty command line and chose not to arm -- and osinit
+# must still write "booted", because the release line is how the
+# handshake is known to reach the board hook at all. The PM registers
+# are printed so that a wrong PMREGS base would show as garbage here
+# rather than as a watchdog write that lands nowhere. 0x1000 and 0x102
+# are the reset values QEMU's model reports; the board reports the
+# reset cause.
+check "boot: command line: (empty)"  "the kernel reads the firmware command line through the mailbox"
+check "pm:   rsts 0x0000000000001000 rstc 0x0000000000000102" "the PM block reads back at PMREGS (QEMU's reset values)"
+check "wdog: not armed (not a tryboot candidate)" "a boot the command line does not mark is not put under the watchdog"
+check "init: bootargs: (none)"        "#B/bootargs serves the command line to osinit"
+check "wdog: boot complete; no watchdog was armed" "osinit's booted on /dev/sysctl reaches the board hook"
 check "vectors:         installed"    "installs VBAR_EL1"
 check "save/restore OK"               "exception save/dispatch/restore round trips"
 check "boot OK"                       "completes boot without faulting"
@@ -1570,6 +1598,101 @@ fi
 #
 # The JIT, measured against itself.
 #
+#
+# tryboot and the boot watchdog, this side of the firmware.
+#
+# The A/B path is: install the running kernel as tryboot.img, write
+# "tryboot" to /dev/sysctl, and the firmware boots the [tryboot]
+# section of config.txt exactly once -- a different kernel file and a
+# command line carrying the word "tryboot". That word is what makes the
+# kernel arm the boot watchdog in kmain and osinit print the promotion
+# step; "booted" on /dev/sysctl releases the watchdog once the shell is
+# loaded. See os/bcm2837/board.c and the README's "Working on the board
+# without moving the card".
+#
+# What QEMU can and cannot show here is settled by two facts about its
+# model, both read in the source (hw/misc/bcm2835_powermgt.c and
+# bcm2835_property.c, v8.2) and confirmed by the boots below:
+#
+#   - PM_WDOG is stored and never counted down, and a write to PM_RSTC
+#     with the full-reset WRCFG resets the machine on the spot. So a
+#     candidate boot under QEMU prints "wdog: armed" and is reset by
+#     the arming write itself, and boots again, for ever. That is
+#     asserted below as at least two boot banners in eight seconds. It
+#     proves the write reached the PM block with the right password
+#     and bits -- a wrong password is dropped without a reset -- and
+#     nothing about the countdown or the reload from the clock tick,
+#     which only the board can show (README: "wdogtest").
+#
+#   - The property mailbox sets the response bit on every tag, known
+#     or not, so "firmware acknowledged reboot flags" is what the
+#     message round trip looks like and not the firmware's opinion.
+#
+# Because arming under QEMU is a reset, the candidate boot that runs
+# to the shell -- osinit recognising the word, printing the promotion
+# step, and writing "booted" -- is driven with "nowatchdog" on the same
+# command line, which is the word a kernel under a debugger uses. A
+# variant image that skips the release and must reset at the budget
+# would be the natural third check; it is not here because the model
+# has no budget to reach, and a check that cannot fail is not one.
+# For the same reason nothing here exercises the reload -- the tick's
+# or microdelay's poll for the interrupts-masked half of kmain -- nor
+# the unreadable-command-line arming: -append is short, and QEMU
+# answers GET_COMMAND_LINE. Those are board results (README).
+#
+WDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 8 tryboot)"
+OUT_SAVED="$OUT"; OUT="$WDOUT"
+check "boot: command line: tryboot"  "-append reaches the kernel as the firmware command line"
+check "wdog: armed, 90 s boot budget; a hang resets to config.txt's kernel" \
+      "a candidate boot arms the boot watchdog before the MMU is on"
+nboot="$(grep -c 'InferNode bare-metal' <<<"$WDOUT")"
+if [[ "$nboot" -ge 2 ]]; then
+    pass "the arming write reached the PM block with the password and WRCFG bits (QEMU resets on it: $nboot boots in 8s)"
+else
+    fail "the arming write did not reset QEMU's PM model ($nboot boot banner(s) in 8s)"
+fi
+OUT="$OUT_SAVED"
+
+# 45 seconds: the shell is loaded at about 12s under emulation, and the
+# release line follows it directly; the rest is margin for a busy host.
+CANDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 45 "tryboot nowatchdog")"
+OUT_SAVED="$OUT"; OUT="$CANDOUT"
+check "wdog: not armed (nowatchdog on the command line)" "nowatchdog overrides a candidate's arming"
+check "init: bootargs: tryboot nowatchdog" "osinit reads the command line through #B/bootargs"
+check "init: CANDIDATE kernel: this boot came from the tryboot configuration" "osinit recognises a candidate boot"
+check "init: to keep it:     mv /n/dos/tryboot.img /n/dos/infernode8.img" "osinit prints the promotion step, from a candidate name"
+check "wdog: boot complete; no watchdog was armed" "the candidate's booted handshake reaches the board hook"
+OUT="$OUT_SAVED"
+
+# "tryboot" typed at the shell. The reset is asserted the only way a
+# reset can be from outside: the boot banner appears a second time.
+# shell_session waits up to 30s for a drain marker the reset machine
+# never echoes, which is what gives the second boot time to print.
+#
+# Honest accounting: of these three, only the middle one is new with
+# the mailbox handshake. The first line and the reset were already
+# there when boardtryboot set a PM_RSTS bit -- notyet.c's print and
+# the PM_RSTC full reset predate the change -- so those two PIN the
+# path from /dev/sysctl to the PM block against regression rather than
+# test the fix; and the middle one shows only that the tag message was
+# well formed, since QEMU acknowledges every tag. Nothing QEMU prints
+# distinguishes the SET_REBOOT_FLAGS tag from the old PM_RSTS write,
+# and this block does not pretend otherwise.
+TBOUT="$(shell_session "$BUILD/$PLAT-kernel.img" 'echo tryboot > /dev/sysctl')"
+TBOUT="$(tr -d '\r' <<<"$TBOUT")"
+OUT_SAVED="$OUT"; OUT="$TBOUT"
+check "tryboot: resetting; next boot is the CANDIDATE kernel" \
+      "tryboot on /dev/sysctl reaches the board's reset path (pre-existing path, pinned)"
+check "tryboot: firmware acknowledged reboot flags 0x1 (tryboot)" \
+      "the reboot-flags tag round-trips the mailbox (the firmware's real answer is a board result)"
+nboot="$(grep -c 'InferNode bare-metal' <<<"$TBOUT")"
+if [[ "$nboot" -ge 2 ]]; then
+    pass "tryboot reset the machine: it booted again ($nboot banners; pre-existing reset, pinned)"
+else
+    fail "tryboot did not reset the machine ($nboot boot banner(s))"
+fi
+OUT="$OUT_SAVED"
+
 # Build a second image differing ONLY by -DCFLAG=0 and compare the same
 # fixed arithmetic loop. Two things are being checked and they are not
 # the same: that compiled code computes the RIGHT ANSWER (the accumulator

@@ -49,22 +49,25 @@ a Tk form; `luciuisrv` and `lucifer`.
 Not done, in one line each; the detail and the order are in "Next" at
 the end of this file:
 
-- cores 1–3 have no clock tick, so nothing preempts on them
-- every process is the host owner, and the desktop namespace holds the
-  raw card, the pins and `/dev/sysctl`
+- every process is still the host owner. The desktop's namespace no
+  longer holds the raw card, the pins or `/dev/sysctl`, but a non-eve
+  user for the desktop and agents is not done
 - the tryboot firmware handshake and the watchdog countdown are proved
   against QEMU's model only, which has neither; the board has not yet
   run them
-- the login screen can be bypassed by design and by failure
-- the harness tests none of logon, secstore, rootpath or the
-  dossrv fixes, and no CI job runs the harness at all
+- the harness types the boot script's namespace lines into a shell
+  and tests dossrv on the host, but does not boot a populated card
+  through rootpath, logon and secstore under QEMU, and no CI job runs
+  the bare-metal harness at all
+- the fixes of 2026-09-05 (below) have run under QEMU only; none has
+  been on the board
 - WiFi, touch, USB storage, audio; the Pi 4
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the
 port, boots it under QEMU's `raspi3b`, and asserts on the result —
 pulling the framebuffer back through QMP, hot-plugging USB devices,
 round-tripping TCP through the emulated network, and comparing the
-served kernel image with the file it booted. ~150 checks. A second
+served kernel image with the file it booted. 194 checks. A second
 QEMU machine (`virt`) once shared this kernel and forced the
 `os/arm64` split; it is not in the tree today.
 
@@ -1398,7 +1401,16 @@ and no workflow in `.github/workflows` runs the harness. Until tier 2
 is done, "it works" means "it worked on one board and one developer's
 QEMU".
 
-### Tier 1 — defects the review found; fix before anything new
+*Later the same day:* tier 1 was worked through, one branch per item,
+each reviewed adversarially and re-run through the harness before it
+was merged. Items 1, 2, 5 and the four non-SMP bullets of 6 are done;
+4 is done except for the board; 3 is half done (the namespace, not the
+user). Each carries a harness check that fails on the unfixed tree.
+The merged tree passes 194 checks against 152 before, and the hosted
+suite still passes with the JIT on. Every "DONE" note below says what
+was verified and what was not; the board has run none of it yet.
+
+### Tier 1 — defects the review found; worked through 2026-09-05
 
 **1. The AArch64 JIT never runs a reference's destructor.**
 `libinterp/comp-arm64.c` `macfrp()`: after the nil check, the refcount

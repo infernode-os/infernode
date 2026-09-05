@@ -44,7 +44,13 @@ load std
 # initdisplay binds it the first time a program opens a display, so
 # it lands in THIS namespace when logon starts, and the panel stays a
 # console until then. /n, /usr, /dis, /lib, /fonts, /net, /prog, /env
-# and /chan are inherited as they are.
+# and /chan are inherited as they are -- and "as they are" includes
+# /n/dos read-write: the FAT boot partition, holding config.txt and
+# the kernel image the firmware loads. A desktop program can no longer
+# write the raw card, but it can still overwrite the kernel it booted
+# from through the filesystem. Inferno has no read-only bind, so that
+# is not closed here; it belongs with the second half of this item
+# (a non-eve user for the desktop, and a /n it does not own).
 #
 # #S and #G are whole devices unioned onto /dev, so they come out with
 # unmount. /dev/sysctl and /dev/hostowner are two files of #c, and #c
@@ -53,6 +59,16 @@ load std
 # is empty, and the version line logon shows falls back to the brand
 # name. (Verified: Inferno's cmount takes a file over a file with
 # MREPL, and pgrpcpy gives this process its own mount table.)
+#
+# One consequence is deliberate and must be known: lucifer's Quit
+# (shutdown() in appl/cmd/lucifer.b) and xenith's killwins() write
+# "halt" to /dev/sysctl before they exit. Here that write lands in
+# null and succeeds, so Quit ends the desktop and the board stays up
+# with the serial console alive -- which is the point: a desktop
+# program, or anything it spawned, must not be able to stop the
+# machine. Halting is the management plane's, and the line printed
+# when lucifer returns (bottom of this script) says so on the console
+# so that a dead panel is not mistaken for a hung board.
 #
 # pctl forkns first. sh forks its namespace as it starts, so this
 # script already has its own copy -- but that is a property of how the
@@ -142,6 +158,13 @@ if {~ $ok 1} {
 	sleep 1
 	echo activity create Main > /mnt/ui/ctl
 	lucifer
+	#
+	# The desktop's own Quit wrote "halt" into the null bound over
+	# its /dev/sysctl (see the namespace comment above), so the board
+	# is still running, with a dead panel. Say so where it can be
+	# read; halt or reboot from the serial console.
+	#
+	echo 'boot: the desktop has exited. The machine is still up: a Quit from the panel cannot halt the board (its /dev/sysctl is null). Halt or reboot from the serial console.'
 }{
 	echo 'boot: logon would not run; NOT starting the desktop.'
 	echo 'boot: fix logon, or create /n/dos/skiplogon for a no-auth desktop.'

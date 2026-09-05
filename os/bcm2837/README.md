@@ -1318,15 +1318,29 @@ first.
 namespace before anything of the desktop's starts, unmounts `#S` and
 `#G` from `/dev`, binds `/dev/null` over `/dev/sysctl` and
 `/dev/hostowner`, and refuses to start the desktop if `/dev/sdcard`,
-`/dev/gpio` or a readable `sysctl` is still there afterwards; the
+`/dev/gpio` or a readable `sysctl` is still there afterwards. The
 comment in the script is the record of what the desktop's `/dev`
-holds (`#i` arrives there through libdraw's own bind when logon opens
-the display, as before). Verified by a new harness session that types
-the same sequence into a child shell over the serial line with the
-FAT16 card attached: inside, the card, the pins and sysctl are gone
-and `echo halt > /dev/sysctl` does not stop the machine; back in the
-console shell all three are still there (seven checks). The second
-half — a non-eve user — is untouched.
+holds (`#i` arrives through libdraw's own bind when logon opens the
+display, as before) and of two things this does not close: the
+desktop's own Quit writes `halt` into the null over `/dev/sysctl`, so
+Quit now ends the desktop and leaves the board up — deliberate, and
+the script says so on the console when lucifer returns; halting is
+the serial console's — and `/n/dos`, config.txt and the kernel image,
+stays read-write (Inferno has no read-only bind). Verified by a
+harness session (`baremetal_test.sh`, "The desktop's namespace can be
+narrowed") that reads the narrowing lines and the fail-closed check
+out of the script — not a copy of them — and types them into a child
+shell over the serial line with the FAT16 card attached: inside, the
+card, the pins and sysctl are gone, the script's own check comes out
+`narrowed 1`, and `echo halt > /dev/sysctl` does not stop the machine;
+back in the console shell the card, `/dev/gpio/21/{ctl,level}` and the
+kernel's sysctl are all still there. Nine checks, run to a green
+summary (162 passed, 0 failed) on 2026-09-05. What the harness does
+not run is the script itself — the kernel image carries no card
+userspace — so its `$status` handling and retry loop are exercised
+only on the hosted emulator against child shells (item 5). The
+second half — a non-eve user, and a `/n` the desktop does not own —
+is untouched.
 
 **4. tryboot is a one-shot flag, not yet an A/B path.**
 `cp /dev/bootimage /n/dos/infernode8.img` (`devboot.c`) overwrites the
@@ -1396,6 +1410,15 @@ compile-checked only.
 - `notyet.c` `postnote` is a stub, so a blocked reader cannot be
   kicked; the comment there already says it is "wrong to leave
   permanently".
+- *DONE 2026-09-05.* `devgpio.c` `gpiogen` answered −1 for every
+  `s >= 0` when called on a leaf (`ctl`, `level`), so `stat(2)` on
+  `/dev/gpio/N/ctl` printed `devstat G <qid>` and failed "file does
+  not exist" while the directory listing showed the file and reads
+  worked (`devopen` takes gen's −1 as nothing to permission-check).
+  `ls` on the leaf, or `ftest -e`, showed it; a harness check that
+  probed the leaf tripped over it. A leaf now lists its pin's entries
+  as the pin's directory does, and the harness stats
+  `/dev/gpio/21/level`.
 
 ### Tier 2 — make what exists trustworthy
 

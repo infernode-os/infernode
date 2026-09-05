@@ -71,6 +71,15 @@ struct SDio
 	void	(*bus)(int, int);	/* width (0 = keep), clock in Hz (0 = keep) */
 	void	(*iosetup)(int, int, int);	/* write, block size, block count */
 	int	(*io)(int, void*, int);	/* write, buffer, bytes */
+
+	/*
+	 * SDIO only, and nil on a controller that has no SDIO device:
+	 * the card interrupt, DAT1 pulled low by an SDIO function that
+	 * wants attention. wait = 0 asks whether it is pending and
+	 * returns; wait = 1 sleeps a tick at a time until it is. Either
+	 * way the latched bit is cleared on return.
+	 */
+	int	(*cardintr)(int);	/* wait; returns the status bits seen */
 };
 
 /* SDio.cmd flags: what kind of answer to expect, and whether data follows */

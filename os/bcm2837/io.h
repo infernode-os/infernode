@@ -375,7 +375,9 @@ enum
 	Datadone	= 1<<1,
 	Writerdy	= 1<<4,
 	Readrdy		= 1<<5,
+	Cardintr	= 1<<8,		/* the card pulled DAT1 low: SDIO interrupt */
 	Interrorbit	= 1<<15,	/* any error; the detail is above */
+	Ctoerr		= 1<<16,	/* command timeout: nothing answered */
 
 	/* Emmccmdtm */
 	Tmblkcnten	= 1<<1,

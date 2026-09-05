@@ -482,4 +482,5 @@ SDio sdhostio = {
 	sdhostbus,
 	sdhostiosetup,
 	sdhostdata,
+	nil,		/* no SDIO device reaches this controller */
 };

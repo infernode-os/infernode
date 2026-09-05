@@ -265,6 +265,7 @@ probeuartin(void)
 	n = 0;
 	deadline = clockcount() + 3*clockfreq();
 	while(clockcount() < deadline){
+		boardwatchdogpoll();	/* interrupts are masked: no tick reloads it */
 		c = uartgetc();
 		if(c >= 0){
 			n++;

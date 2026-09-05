@@ -982,6 +982,36 @@ unattended board wants), `nowatchdog` (never arm — for a kernel being
 stepped under a debugger) and `wdogtest` (arm, and ignore the release,
 so the reset at the budget can be watched on the board).
 
+The hardware count is 15 seconds at most (20 bits at 65536Hz), so the
+90-second budget is kept by reloading it, and the boot path has two
+halves to reload it in. After `kmain`'s final `spllo` the clock tick on
+core 0 does it every 64 ticks. Before that — the allocators, the
+probes, the SMP launch, the card, everything up to `schedinit` —
+interrupts are masked and the tick cannot run, and that half is not
+short: `probeuartin` waits three seconds on purpose, `launchsmp` up to
+five for cores that never answer, `emmcinit` two for a card to power
+up plus its command timeouts. So `microdelay()`, which every one of
+those waits loops around, and `probeuartin`'s own loop poll the same
+reload whenever five seconds have passed since the last one. In code
+that is waiting on purpose the count never falls below ten seconds;
+it reaches zero only when nothing has polled for fifteen — a hang, or
+a spin that does not go through `microdelay` (the mailbox spin is the
+one that matters). QEMU cannot show the reload at all, since its model
+resets on the arming write; the interval is a board result.
+
+A boot whose command line *cannot be read* — `GET_COMMAND_LINE`
+unanswered, or a line longer than the kernel's 1024-byte buffer, which
+the protocol answers by copying nothing and reporting the length —
+arms. The kernel cannot tell which boot it is, and a boot that reaches
+the shell releases the watchdog and has lost nothing but the line
+`boot: command line: (UNREAD: the firmware reports N bytes, ...)`
+saying why, while a candidate left unarmed because its line was
+1100 bytes would have cost the power switch. `nowatchdog` cannot be
+honoured on such a boot, because it cannot be seen; the fix is a
+shorter `cmdline.txt` or a bigger buffer (`Mboxcmdlinemax` in
+`board.h`). A real Pi's line, with the firmware's additions, runs to
+a few hundred bytes.
+
 The one `config.txt`, with `init_uart_clock` pinned because uart.c
 divides for 115200 assuming 48MHz and the firmware, not the kernel,
 decides what that reference is:
@@ -1006,20 +1036,50 @@ For a card with no kernel yet, `kernel=serialboot.img` in place of the
 `kernel=infernode8.img` line, and the first candidate is installed from
 a serial-fed kernel exactly as above.
 
+Be clear about what the guard on a candidate rests on: **two** firmware
+behaviours, stacked, and neither yet seen on a Pi 3. First, that
+`SET_REBOOT_FLAGS` from this kernel makes the next boot take the
+`[tryboot]` section at all. Second, that the section's `cmdline=` is
+what the firmware then hands `GET_COMMAND_LINE`, so the word reaches
+the kernel. The second is the same conditional-filter machinery that
+applies the section's `kernel=` — the firmware documentation lists
+`cmdline` as an ordinary `config.txt` property and `[tryboot]` as an
+ordinary conditional filter, restricting neither to a model — so a
+firmware that boots `tryboot.img` from
+the section but serves the other file's line would be a firmware bug
+rather than a documented gap; but it is untested, and the failure is
+quiet. If the first behaviour fails the candidate never boots and the
+known-good kernel does, which is safe. If the second fails the
+candidate boots *unguarded* and the only tell is its own `wdog: not
+armed (not a tryboot candidate)` line on a boot that should have said
+`armed`. Watch for that line on the first candidate boot; and if it
+appears, `bootwatchdog` in the **known-good** `cmdline.txt` puts the
+guard on every boot regardless of which section the firmware applied,
+since that file is read whenever the section does not override it.
+
 *Status, 2026-09-05.* Everything on this path that emulation can prove
 is in the harness: the command line reaching the kernel and `osinit`
 through `#B/bootargs`, the candidate announcement and promotion text,
 the arming write reaching the PM block, the `booted` release
 handshake, and `echo tryboot > /dev/sysctl` resetting the machine.
-What only the board can prove, and has not yet: that the firmware
-honours `SET_REBOOT_FLAGS` from this kernel and boots the `[tryboot]`
-section (the candidate's `boot: command line:` line is the evidence;
-`tryboot: firmware acknowledged ...` on the way out is the firmware's
-own word, meaningless under QEMU); that `PM_WDOG` counts down and the
-tick's reloads hold it off for 90 seconds (`bootwatchdog wdogtest` on
-`cmdline.txt`, and the board should reset at 90 s and come back with
-`pm:   rsts` showing the watchdog-reset bit 0x20); that the
-`PM_RSTC` disarm write leaves the machine up. The earlier
+Sixteen checks were added (152 → 168), and the count should be read
+honestly: fourteen fail on the code before the change, and two — the
+`tryboot: resetting` line and the reboot after it — passed before it
+too, because `notyet.c`'s print and the `PM_RSTC` full reset predate
+the mailbox handshake; they pin that path against regression and are
+labelled so in the script. What only the board can prove, and has not
+yet: that the firmware honours `SET_REBOOT_FLAGS` from this kernel and
+boots the `[tryboot]` section, and that the section's `cmdline=` is
+what reaches the kernel (the candidate's `boot: command line:` line is
+the evidence for both; `tryboot: firmware acknowledged ...` on the way
+out is the firmware's own word, meaningless under QEMU); that `PM_WDOG`
+counts down and the reloads — the tick's after `spllo`, `microdelay`'s
+poll before it — hold it off for 90 seconds (`bootwatchdog wdogtest`
+on `cmdline.txt`, and the board should reset at 90 s and come back
+with `pm:   rsts` showing the watchdog-reset bit 0x20); that the
+`PM_RSTC` disarm write leaves the machine up; and the real length of
+the firmware's command line against the 1024-byte buffer, which the
+`boot: command line:` line now reports if it does not fit. The earlier
 `boardtryboot` set bit 5 of `PM_RSTS` and called it the tryboot bit;
 the downstream Linux tree shows the flag is a mailbox tag and bit 5 is
 the watchdog reset-cause bit, and the code now does what Linux does.
@@ -1420,6 +1480,31 @@ checks the arming line, the release line, the candidate announcement,
 resets QEMU; it cannot check the countdown or the firmware's answer,
 because QEMU models neither — the recipe and the remaining board proof
 are under "Working on the board without moving the card".
+
+*Review follow-up, 2026-09-05.* Two reviewers read the change. The
+budget analysis had a hole: the 64-tick reload cannot run until
+`kmain`'s final `spllo`, so the whole pre-scheduler boot — the
+three-second UART probe, up to five seconds waiting for secondary
+cores, the card's two-second power-up — ran on the 15-second hardware
+count alone, and the comments called that "a hang with interrupts
+off". `microdelay()` and `probeuartin`'s loop now poll the reload
+(`boardwatchdogpoll`, `board.c`) once five seconds have passed since
+the last one. `mboxreboot` read the tag response out of the shared
+mailbox buffer after the lock was dropped, so the "firmware
+acknowledged" line — the board evidence — could have been a
+framebuffer scroll's answer; `mboxprop1` now holds the lock through
+the copy-back and returns the tag word. A command line longer than the
+buffer was reported as "(empty)" and booted a candidate unarmed;
+`mboxcmdline` now returns the firmware's length unclamped, the kernel
+prints `UNREAD` with the length, and arms. The two shell-tryboot checks
+that pass on the old code are labelled as pins, above and in the
+script. Verification: the changed files compile under the harness's
+flags, and the harness run made after the change had passed 85 of its
+168 checks with no failure — the tryboot arming and reset checks among
+them — when the orchestrating session was closed before it finished;
+the full run should be confirmed at merge. None of the three fixes
+changes QEMU output: the reload interval, the unread-line arming and
+the lock's effect on the board line remain board results.
 
 **5. The login screen is bypassable in two ways, one deliberate.**
 `boot-baremetal.sh` treats `wm/logon` exiting 0 as a login. Escape

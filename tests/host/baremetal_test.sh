@@ -1595,6 +1595,10 @@ fi
 # variant image that skips the release and must reset at the budget
 # would be the natural third check; it is not here because the model
 # has no budget to reach, and a check that cannot fail is not one.
+# For the same reason nothing here exercises the reload -- the tick's
+# or microdelay's poll for the interrupts-masked half of kmain -- nor
+# the unreadable-command-line arming: -append is short, and QEMU
+# answers GET_COMMAND_LINE. Those are board results (README).
 #
 WDOUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 8 tryboot)"
 OUT_SAVED="$OUT"; OUT="$WDOUT"
@@ -1624,15 +1628,26 @@ OUT="$OUT_SAVED"
 # reset can be from outside: the boot banner appears a second time.
 # shell_session waits up to 30s for a drain marker the reset machine
 # never echoes, which is what gives the second boot time to print.
+#
+# Honest accounting: of these three, only the middle one is new with
+# the mailbox handshake. The first line and the reset were already
+# there when boardtryboot set a PM_RSTS bit -- notyet.c's print and
+# the PM_RSTC full reset predate the change -- so those two PIN the
+# path from /dev/sysctl to the PM block against regression rather than
+# test the fix; and the middle one shows only that the tag message was
+# well formed, since QEMU acknowledges every tag. Nothing QEMU prints
+# distinguishes the SET_REBOOT_FLAGS tag from the old PM_RSTS write,
+# and this block does not pretend otherwise.
 TBOUT="$(shell_session "$BUILD/$PLAT-kernel.img" 'echo tryboot > /dev/sysctl')"
 TBOUT="$(tr -d '\r' <<<"$TBOUT")"
 OUT_SAVED="$OUT"; OUT="$TBOUT"
-check "tryboot: resetting; next boot is the CANDIDATE kernel" "tryboot on /dev/sysctl reaches the board's reset path"
+check "tryboot: resetting; next boot is the CANDIDATE kernel" \
+      "tryboot on /dev/sysctl reaches the board's reset path (pre-existing path, pinned)"
 check "tryboot: firmware acknowledged reboot flags 0x1 (tryboot)" \
       "the reboot-flags tag round-trips the mailbox (the firmware's real answer is a board result)"
 nboot="$(grep -c 'InferNode bare-metal' <<<"$TBOUT")"
 if [[ "$nboot" -ge 2 ]]; then
-    pass "tryboot reset the machine: it booted again ($nboot banners)"
+    pass "tryboot reset the machine: it booted again ($nboot banners; pre-existing reset, pinned)"
 else
     fail "tryboot did not reset the machine ($nboot boot banner(s))"
 fi

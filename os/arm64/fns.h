@@ -212,5 +212,6 @@ void	tryboot(void);
 void	booted(void);
 void	boardbooted(void);
 void	boardbootwatchdog(void);
+void	boardwatchdogpoll(void);
 int	boardcandidate(void);
 char*	boardcmdline(void);

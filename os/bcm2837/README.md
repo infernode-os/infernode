@@ -1314,6 +1314,20 @@ mechanism — `bind`, `newns` — already exists), then a non-eve user for
 the desktop and agents. A week for the second; an afternoon for the
 first.
 
+*First half DONE 2026-09-05.* `boot-baremetal.sh` now forks its
+namespace before anything of the desktop's starts, unmounts `#S` and
+`#G` from `/dev`, binds `/dev/null` over `/dev/sysctl` and
+`/dev/hostowner`, and refuses to start the desktop if `/dev/sdcard`,
+`/dev/gpio` or a readable `sysctl` is still there afterwards; the
+comment in the script is the record of what the desktop's `/dev`
+holds (`#i` arrives there through libdraw's own bind when logon opens
+the display, as before). Verified by a new harness session that types
+the same sequence into a child shell over the serial line with the
+FAT16 card attached: inside, the card, the pins and sysctl are gone
+and `echo halt > /dev/sysctl` does not stop the machine; back in the
+console shell all three are still there (seven checks). The second
+half — a non-eve user — is untouched.
+
 **4. tryboot is a one-shot flag, not yet an A/B path.**
 `cp /dev/bootimage /n/dos/infernode8.img` (`devboot.c`) overwrites the
 file `config.txt` names — the known-good kernel. A/B exists only if the
@@ -1338,6 +1352,24 @@ the display or `/dev/keyboard` cannot be opened, which is precisely the
 Also `if {! ~ $#skiplogon 0}` enables the skip for `skiplogon=0`, unlike
 the hosted `~ $skiplogon 1`. Fix: distinct exit statuses for
 logged-in / skipped / failed, and the script honours them. Hours.
+
+*DONE 2026-09-05.* `logon.b` returns only on a login, raises
+`fail:skipped` for the deliberate skip (Escape twice, or Escape after
+a failed unlock or a failed first-boot setup, which now offers that
+choice instead of exiting), and `fail:<reason>` when there is no
+display, no form or no keyboard or the keyboard closes; the input
+readers are killed before the raise on every path. `boot-baremetal.sh`
+copies `$status` (an `if` resets it from every condition it runs,
+`~` included), starts the desktop on a login, starts it on a skip with
+a console line saying there is no factotum, and after three failures
+refuses; the skiplogon test is `~ $skiplogon 1`. The hosted
+`boot.sh` prints which of the three it was and goes on as before.
+Verified on the hosted emulator with the boot-script logic run
+against child shells raising the three statuses, and by reading
+`builtin_if`; the display and keyboard paths of `logon.b` itself
+could not be driven here — the Linux emulator on the build host has
+no display backend and faults on the draw attach — so those are
+compile-checked only.
 
 **6. Smaller confirmed defects, each a line or two:**
 

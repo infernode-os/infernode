@@ -449,6 +449,11 @@ build_kernel() {
             "/dis/ns.dis=$ROOT/dis/ns.dis"
             "/dis/bind.dis=$ROOT/dis/bind.dis"
             "/dis/mount.dis=$ROOT/dis/mount.dis"
+            # unmount is how a namespace is narrowed -- boot-baremetal.sh
+            # takes the card and the pins out of the desktop's /dev with
+            # it -- and a recovery shell that can bind but not unbind is
+            # half a tool.
+            "/dis/unmount.dis=$ROOT/dis/unmount.dis"
             "/dis/mkdir.dis=$ROOT/dis/mkdir.dis"
             "/dis/rm.dis=$ROOT/dis/rm.dis"
             "/dis/cp.dis=$ROOT/dis/cp.dis"
@@ -2236,6 +2241,106 @@ if grep -q '^first$' <<<"$FSOUT" && grep -q '^second$' <<<"$FSOUT"; then
     pass "a file can be created and then appended to"
 else
     fail "appending to a file on the card did not take"
+fi
+
+#
+#     The desktop's namespace can be narrowed, and the console's is not.
+#
+#     Every process on this machine is the host owner, so the only thing
+#     between a desktop program and the raw card is what its namespace
+#     does not contain. lib/lucifer/boot-baremetal.sh builds that
+#     namespace before it starts logon: forks it, unmounts #S and #G
+#     from /dev, and binds /dev/null over /dev/sysctl. This types the
+#     same sequence into a child shell -- the boot script itself needs
+#     a card userspace this kernel image does not carry -- and asserts
+#     both halves: inside, the card, the pins and sysctl are gone; back
+#     outside, the console shell still has every one of them. Both
+#     halves matter. A narrowing that leaked into the parent would take
+#     the management plane's card away, and pass a test that only
+#     looked inside.
+#
+#     "echo halt > /dev/sysctl" inside is the check that means it: were
+#     /dev/sysctl still #c's, the machine would stop there and nothing
+#     after it would print. The marker lines are echoed on their own so
+#     the extraction below can tell the command being typed (which
+#     carries the marker word too) from its output.
+#
+#     The card image is the FAT16 one, attached so that #S has a card
+#     to bind and /dev/sdcard is there to take away.
+#
+QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
+NSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'load std' \
+        'sh' \
+        'load std' \
+        'pctl forkns' \
+        "unmount '#S' /dev" \
+        "unmount '#G' /dev" \
+        'bind /dev/null /dev/sysctl' \
+        'bind /dev/null /dev/hostowner' \
+        'echo INNER' \
+        'ls /dev/sdcard /dev/sdctl /dev/gpio' \
+        'v=`{cat /dev/sysctl}; echo inner-sysctl-words $#v' \
+        'echo halt > /dev/sysctl' \
+        'echo inner-still-alive' \
+        'echo INNER-END' \
+        'exit' \
+        'echo OUTER' \
+        'ls /dev/sdcard /dev/sdctl /dev/gpio/21/ctl' \
+        'v=`{cat /dev/sysctl}; echo outer-sysctl-words $#v' \
+        'echo OUTER-END')"
+QEMUARGS="$SAVEDARGS"
+NSOUT="$(tr -d '\r' <<<"$NSOUT")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- namespace ---"; echo "$NSOUT"; }
+
+# Only whole-line markers delimit the sections: the typed command line
+# carries "echo INNER" and is not a match for ^INNER$.
+NSIN="$(sed -n '/^INNER$/,/^INNER-END$/p' <<<"$NSOUT")"
+NSOUTER="$(sed -n '/^OUTER$/,/^OUTER-END$/p' <<<"$NSOUT")"
+
+if grep -q 'INNER-END' <<<"$NSIN" && grep -q 'OUTER-END' <<<"$NSOUTER"; then
+    pass "a child shell forks its namespace, narrows it, exits, and the console shell comes back"
+else
+    fail "the narrowed-namespace session did not run to both markers"
+fi
+
+if grep -q "/dev/sdcard.*does not exist" <<<"$NSIN" \
+   && grep -q "/dev/sdctl.*does not exist" <<<"$NSIN"; then
+    pass "unmount '#S' /dev takes the raw card and its partition table out of the namespace"
+else
+    fail "/dev/sdcard or /dev/sdctl is still reachable after unmount '#S' /dev"
+fi
+
+if grep -q "/dev/gpio.*does not exist" <<<"$NSIN"; then
+    pass "unmount '#G' /dev takes the pins out of the namespace"
+else
+    fail "/dev/gpio is still reachable after unmount '#G' /dev"
+fi
+
+if grep -q '^inner-sysctl-words 0$' <<<"$NSIN"; then
+    pass "bind /dev/null /dev/sysctl: sysctl reads empty in the narrowed namespace"
+else
+    fail "/dev/sysctl still reads the kernel's version line after bind /dev/null over it"
+fi
+
+if grep -q '^inner-still-alive$' <<<"$NSIN"; then
+    pass "'echo halt > /dev/sysctl' in the narrowed namespace does not halt the machine"
+else
+    fail "the machine did not answer after a halt written to the narrowed /dev/sysctl"
+fi
+
+if grep -q '^/dev/sdcard$' <<<"$NSOUTER" && grep -q '^/dev/sdctl$' <<<"$NSOUTER" \
+   && grep -q '^/dev/gpio/21/ctl$' <<<"$NSOUTER"; then
+    pass "the console shell still has /dev/sdcard, /dev/sdctl and the pins after the child narrowed its own"
+else
+    fail "the narrowing leaked into the console shell's namespace (card or pins missing outside)"
+fi
+
+if grep -q '^outer-sysctl-words [1-9]' <<<"$NSOUTER"; then
+    pass "the console shell's /dev/sysctl is still the kernel's"
+else
+    fail "the console shell's /dev/sysctl reads empty: the null bind leaked out of the child"
 fi
 
 #

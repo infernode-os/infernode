@@ -10,6 +10,8 @@ void	serialrecover(void);
 int	hwrandom(uchar*, int);
 void	uartputstr(char*);
 void	uartlockon(void);
+int	uartlock(void);
+void	uartunlock(int);
 void	uartputx(u64int);
 void	uartputd(u64int);
 
@@ -88,12 +90,13 @@ u64int	clockticks(void);
 void	microdelay(int);
 int	clockintr(Ureg*);
 int	irqdispatch(Ureg*);
-extern int irqorphan;
+extern int irqorphan[];
 void	intrdump(void);
 int	intrpending(void);
 int	getmacaddr(uchar*);
 void	mmunormalnc(uintptr, usize);
 extern ulong nspurious;
+ulong	ainc(ulong*);
 /*
  * intr.c -- the board's interrupt controller.
  *
@@ -203,3 +206,15 @@ void	kprocchild(Proc*, void(*)(void*), void*);
 void	boardreboot(void);
 void	boardtryboot(void);
 void	tryboot(void);
+
+/*
+ * The boot watchdog and the command line that controls it -- see
+ * os/bcm2837/board.c. booted() is devcons's "booted" sysctl word;
+ * boardbooted() is what it means to the hardware.
+ */
+void	booted(void);
+void	boardbooted(void);
+void	boardbootwatchdog(void);
+void	boardwatchdogpoll(void);
+int	boardcandidate(void);
+char*	boardcmdline(void);

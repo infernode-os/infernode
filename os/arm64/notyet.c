@@ -227,6 +227,18 @@ tryboot(void)
 	exit(0);
 }
 
+/*
+ * "booted" on /dev/sysctl: osinit's word that the shell is loaded and
+ * about to run. What that means to the hardware is the board's
+ * business -- on the BCM2837 it releases the boot watchdog a tryboot
+ * candidate armed in kmain; see boardbooted().
+ */
+void
+booted(void)
+{
+	boardbooted();
+}
+
 void
 halt(void)
 {
@@ -239,11 +251,12 @@ halt(void)
  *
  * Upstream uses it to notice that the clock interrupt has been masked
  * for too long while spinning, and to run the timer callbacks that
- * would otherwise be starved. This port drives its tick from clock.c
- * rather than portclock.c's Timer machinery, and runs on one core where
- * a contended ilock means a deadlock rather than a wait -- so there is
- * nothing useful to do here yet, and taslock.c's spin limit is what
- * actually catches the deadlock.
+ * would otherwise be starved. Here every core's tick goes through
+ * portclock.c's timerintr() (clock.c hands it over; each core owns a
+ * periodic hzclock Timer on its own queue), and a contended ilock is a
+ * wait for another core rather than a deadlock -- so there is nothing
+ * to rescue here, and taslock.c's spin limit is what catches the case
+ * where the holder never comes back.
  */
 void
 clockcheck(void)

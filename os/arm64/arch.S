@@ -61,6 +61,33 @@ coherence:
 	ret
 
 /*
+ * ulong ainc(ulong *addr)
+ *
+ * Atomic increment; returns the NEW value, as Plan 9's ainc does.
+ *
+ * For counters that several cores bump without a lock: nspurious and the
+ * profiler's buckets are written from every core's interrupt path, and a
+ * plain ++ there is a load, an add and a store that another core's ++ can
+ * land between -- a lost count, not a crash, which is exactly the kind
+ * of wrongness that survives for months. A lock would be heavier than the
+ * counter it guards; a load/store-exclusive loop is the right size.
+ *
+ * ldxr/stxr rather than ldadd: the Cortex-A53 is ARMv8.0 and has no LSE
+ * atomics, and the kernel is compiled for the base architecture. No
+ * acquire/release ordering is asked for -- these are statistics, and
+ * nothing is published through them.
+ */
+	.global	ainc
+ainc:
+1:
+	ldxr	x1, [x0]
+	add	x1, x1, #1
+	stxr	w2, x1, [x0]
+	cbnz	w2, 1b			/* store lost the race; retry */
+	mov	x0, x1
+	ret
+
+/*
  * Cache maintenance for instructions written as data.
  *
  * void cacheiflush(void *addr, ulong len)

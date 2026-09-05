@@ -716,25 +716,23 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(probe != nil){
 		probe = nil;
 		#
-		# Close the endpoints DETERMINISTICALLY, by dup'ing the
-		# null device over their descriptor numbers. Dropping the
-		# last Limbo reference ought to do it -- freeFD closes the
-		# number when the FD object is destroyed -- but measured
-		# on this kernel the destructor does not run at the
-		# assignment: the endpoint stayed inuse until process
-		# exit, and the kernel's open of it got "already in use"
-		# no matter how long the handoff waited. dup replaces the
-		# chan under the number inline, in the kernel, with no
-		# destructor in the loop. (Why =nil is not prompt here is
-		# a separate hunt -- if it is real it leaks every dropped
-		# fd on the system until its process exits.)
+		# Close the endpoints by dropping our last references to
+		# them. The endpoints are exclusive-open, so this MUST
+		# close them before the ctl write below asks the kernel
+		# to open them, and it does: freeFD runs when the FD's
+		# last reference goes, synchronously, in this assignment.
 		#
-		nullfd := sys->open("#c/null", Sys->ORDWR);
-		if(nullfd != nil){
-			sys->dup(nullfd.fd, bulkfd.fd);
-			if(bulkoutfd.fd != bulkfd.fd)
-				sys->dup(nullfd.fd, bulkoutfd.fd);
-		}
+		# It did not always. This used to sys->dup #c/null over
+		# the descriptor numbers first, because on this kernel the
+		# endpoints stayed inuse after the assignment and the
+		# kernel's open got "already in use". That was the JIT:
+		# comp-arm64.c's macfrp() branched on stale flags and never
+		# reached rdestroy, so compiled code never ran ANY
+		# destructor -- every dropped fd waited for the collector.
+		# Fixed in macfrp; tests/fdclose_test.b and osinit's fd
+		# self-check pin it. If this handoff ever reports "already
+		# in use" again, suspect that macro before anything here.
+		#
 		bulkfd = nil;
 		bulkoutfd = nil;
 		burst := 3116;			# two RNDIS messages' worth
@@ -1435,11 +1433,11 @@ dhcp(): (string, string, string)
 			ntp = gw;
 		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
 		ntpserver = ntp;
-		killproc(rpid);
+		dhcpdone(rpid);
 		return (addr, mask, gw);
 	}
 	sys->print("etherusb: no DHCP reply after 14 tries over ~45 seconds\n");
-	killproc(rpid);
+	dhcpdone(rpid);
 	return (nil, nil, nil);
 }
 
@@ -1500,6 +1498,28 @@ dhcptimer(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
 	c <-= 1;
+}
+
+
+#
+# The DHCP exchange is over, one way or the other: reap the reader and
+# say whether it went. The print is what the boot log -- and the test
+# harness reading it -- gets to see; without it a reader that quietly
+# outlived its purpose would look exactly like one that did not.
+# Bounded, because a check that can hang is worse than no check.
+#
+dhcpdone(pid: int)
+{
+	killproc(pid);
+	for(i := 0; i < 50; i++){
+		(ok, nil) := sys->stat("/prog/" + string pid);
+		if(ok < 0){
+			sys->print("etherusb: dhcp reader %d exited\n", pid);
+			return;
+		}
+		sys->sleep(10);
+	}
+	sys->print("etherusb: dhcp reader %d still running\n", pid);
 }
 
 #
@@ -1613,6 +1633,12 @@ pingout(dest: string)
 	<-tc =>
 		sys->print("etherusb: no echo reply from %s\n", dest);
 	}
+	#
+	# Either way the reader is killed: after a reply it has already
+	# exited on its own and the kill finds nothing; after a timeout it
+	# is parked in a read that would never return, holding the
+	# conversation open until it is gone.
+	#
 	killproc(rpid);
 }
 

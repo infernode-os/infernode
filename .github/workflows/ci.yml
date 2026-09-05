@@ -199,6 +199,19 @@ jobs:
         chmod +x tests/host/llmsrv_session_capability_test.sh
         ROOT=. tests/host/llmsrv_session_capability_test.sh
 
+    - name: Run dossrv badent alias check
+      run: |
+        # dossrv must decide "damaged entry" from the on-disk name, not
+        # the badent- alias it hands out: a healthy file named badent-1
+        # has to have its clusters freed by rm. The same fixture runs
+        # under QEMU in baremetal_test.sh, which no workflow runs; this
+        # is the hosted copy, against the emu built above. 77 = skip
+        # (no emu or python3).
+        chmod +x tests/host/dossrv_badent_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_badent_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test

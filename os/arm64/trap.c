@@ -72,11 +72,23 @@ slotname(u64int t)
 	return from[(t >> 2) & 3];
 }
 
+/*
+ * Held under the console lock for the whole dump, on purpose. This is
+ * the report a panic leaves behind, and with four cores it is the one
+ * most likely to be written while another core is also talking -- the
+ * first SMP panic on the board was three cores' dumps shuffled together
+ * line by line, and none of them could be read. uartlock() is
+ * re-entrant for the calling core, so the uartputstr/uartputx calls
+ * inside write straight through; a core that cannot get the lock within
+ * the bound prints anyway, so a dump is delayed, never lost. It does not
+ * bypass the lock: bypassing was the old behaviour, by accident.
+ */
 void
 dumpureg(Ureg *u)
 {
-	int i;
+	int i, held;
 
+	held = uartlock();
 	uartputstr("\n  vector:  ");
 	uartputstr(slotname(u->type));
 	uartputstr("\n  esr:     ");
@@ -157,6 +169,7 @@ dumpureg(Ureg *u)
 		}
 	}
 	uartputstr("\n");
+	uartunlock(held);
 }
 
 /* kernel image bounds, from the linker script */

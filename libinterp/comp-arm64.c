@@ -2240,22 +2240,44 @@ preamble(void)
 /*
  * Macro implementations.
  */
+/*
+ * Free-pointer macro: drop one reference to the heap cell in RA0.
+ *
+ * The shape is comp-amd64.c's, and the two things it gets right are
+ * both load-bearing. The test is "ref == 1" BEFORE any decrement, and
+ * the last-reference path does not store one: destroy() in heap.c
+ * does its own --ref, so a macro that stored ref-1 first would hand
+ * it a zero, the unsigned decrement would wrap, and the cell would
+ * read as referenced for ever. And the flags the branch consumes are
+ * set by the compare on the refcount, not left over from the nil
+ * check. The previous version did SUB_IMM (which sets no flags) and
+ * then BCOND(NE) on the nil check's flags, always NE for a non-nil
+ * pointer, so rdestroy was unreachable and no compiled code ever ran
+ * a destructor: a dropped fd stayed open until the collector found
+ * it. Found by reading; confirmed by etherusb's #l handoff, whose
+ * endpoint stayed "inuse" after fd = nil.
+ */
 static void
 macfrp(void)
 {
-	u32int *nilcheck, *notzero;
+	u32int *nilcheck, *lastref;
 
-	CMN_IMM(RA0, 1);
+	CMN_IMM(RA0, 1);		/* H is (void*)-1: nothing to count */
 	nilcheck = code;
 	BCOND(EQ, 0);
 
 	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
+	CMP_IMM(RA2, 1);
+	lastref = code;
+	BCOND(EQ, 0);
+
+	/* ref > 1: one fewer, and done */
 	SUB_IMM(RA2, RA2, 1);
 	mem(Stw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
-	notzero = code;
-	BCOND(NE, 0);
+	RET_X30();
 
-	/* ref == 0: save state, call rdestroy */
+	/* ref == 1: save state, let rdestroy take the last one */
+	PATCH_BCOND(lastref);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, s), RREG, RA0);
 	mem(Stw, O(REG, st), RREG, 30);
@@ -2267,7 +2289,6 @@ macfrp(void)
 	mem(Ldw, O(REG, MP), RREG, RMP);
 
 	PATCH_BCOND(nilcheck);
-	PATCH_BCOND(notzero);
 	RET_X30();
 }
 

@@ -762,9 +762,16 @@ rremove(t: ref Tmsg.Remove): ref Rmsg
 	# entry may once have owned are deliberately leaked for an
 	# offline fsck to sweep.
 	#
+	# Damaged is decided from the name ON THE DISK, not the name
+	# handed out. This used to match the prefix of the presented
+	# name, and a perfectly healthy file that happened to be called
+	# badent-1 -- a legal name, and one a person cleaning up after
+	# this very code might well type -- was removed by this path,
+	# with its cluster chain left allocated and unreachable.
+	#
 	if(getfile(f) >= 0){
-		bd := dostat(f);
-		if(len bd.name >= 7 && bd.name[0:7] == "badent-"){
+		bd := rawstat(f);
+		if(badname(bd.name)){
 			doremove(f.xf, f.ptr);
 			putfile(f);
 			xfile(t.fid, Clunk);
@@ -854,7 +861,14 @@ rstat(t: ref Tmsg.Stat): ref Rmsg
 	return ref Rmsg.Stat(t.tag, *dir);
 }
 
-dostat(f: ref Xfile): ref Sys->Dir
+#
+# The entry as it is on the disk: the name is the real one, however
+# damaged. dostat() below is this plus the badent alias, and is what
+# every reply to a client goes through. rremove needs this one, because
+# "is the name an alias?" cannot be answered from the aliased name -- a
+# real file is free to be CALLED badent-anything.
+#
+rawstat(f: ref Xfile): ref Sys->Dir
 {
 	islong :=0;
 	prevdo: int;
@@ -899,6 +913,12 @@ dostat(f: ref Xfile): ref Sys->Dir
 	}
 	if(islong)
 		dir.name = longnamebuf;
+	return dir;
+}
+
+dostat(f: ref Xfile): ref Sys->Dir
+{
+	dir := rawstat(f);
 	fixname(dir);
 	return dir;
 }
@@ -923,20 +943,27 @@ badentname(qp: big): string
 	return sys->sprint("badent-%bux", qp);
 }
 
-fixname(dir: ref Sys->Dir)
+#
+# Is this on-disk name one the kernel would refuse at dirread? The
+# single definition of "damaged", shared by the alias on the way out
+# and by rremove deciding whether it is looking at damage.
+#
+badname(name: string): int
 {
-	name := dir.name;
-	if(name == "" || name == "." || name == ".."){
-		dir.name = badentname(dir.qid.path);
-		return;
-	}
+	if(name == "" || name == "." || name == "..")
+		return 1;
 	for(i := 0; i < len name; i++){
 		c := name[i];
-		if(c < 16r20 || c == 16r7f || c == '/'){
-			dir.name = badentname(dir.qid.path);
-			return;
-		}
+		if(c < 16r20 || c == 16r7f || c == '/')
+			return 1;
 	}
+	return 0;
+}
+
+fixname(dir: ref Sys->Dir)
+{
+	if(badname(dir.name))
+		dir.name = badentname(dir.qid.path);
 }
 
 nameok(elem: string): int

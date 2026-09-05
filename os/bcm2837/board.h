@@ -106,6 +106,13 @@ int	emmcpresent(void);
 uvlong	emmcnblocks(void);
 char*	sdcontroller(void);
 void	boardsdprobe(void);
+
+/*
+ * ether4330.c: the CYW43455 radio on the Arasan. Probed at board init
+ * after the card has left that controller; registers as #l1 whether
+ * or not a radio was found, so the bind says why when there is none.
+ */
+void	ether4330probe(void);
 int	mboxfbvoff(u32int, u32int);
 int	mboxfbgetvoff(void);
 

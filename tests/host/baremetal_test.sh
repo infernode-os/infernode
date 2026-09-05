@@ -1923,7 +1923,7 @@ OUT="$OUT_SAVED"
 #     no glyph". Alt then apostrophe then e is U+00E9, which is C3 A9.
 #
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-keys.txt" 2>&1
-import subprocess, socket, json, time, sys, threading
+import subprocess, socket, json, time, sys, threading, os
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 2   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-kbd",
@@ -2015,7 +2015,7 @@ fi
 #     remapping, /dev/pointer, and the shell reading it back.
 #
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-mouse.txt" 2>&1
-import subprocess, socket, json, time, sys, threading
+import subprocess, socket, json, time, sys, threading, os
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 4   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-mouse",
@@ -2485,7 +2485,7 @@ fi
 #     that the driver claims it without a reboot.
 #
 python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt" 2>&1
-import subprocess, socket, json, time, sys, threading
+import subprocess, socket, json, time, sys, threading, os
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 6   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,

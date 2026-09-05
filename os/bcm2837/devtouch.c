@@ -135,8 +135,8 @@ touchprobe(void)
 				touch.bus, (i+1)*10, getresp, getval);
 			return 1;
 		}
-		print("touch: firmware took our buffer (resp %#8.8ux) but never wrote it in %dms; no panel\n",
-			setresp, Probems);
+		print("touch: no panel (set accepted, resp %#8.8ux, never written in %dms; get resp %#8.8ux value %#ux)\n",
+			setresp, Probems, getresp, getval);
 		return 0;
 	}
 	print("touch: no panel (get resp %#8.8ux value %#ux, set resp %#8.8ux)\n",

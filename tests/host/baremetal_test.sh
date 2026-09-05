@@ -1632,7 +1632,7 @@ check "clk:  irq firing"              "timer interrupts are delivered"
     # answered), refuse to serve /dev/touch, and the driver must notice
     # the file is absent and exit -- rather than any of them inventing
     # a panel. The driver's line carries the %r suffix, hence the colon.
-    check "touch: no panel (get resp"  "the kernel reports no touch panel, with the firmware's answer"
+    check "touch: no panel ("          "the kernel reports no touch panel, with the firmware's answer"
     check "touch: no panel: "          "the touch driver finds /dev/touch absent and exits"
     refute "touch: buffer at"          "nothing claims a touch buffer under emulation"
     check "test pattern drawn"        "framebuffer written without faulting"

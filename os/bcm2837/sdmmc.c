@@ -1,8 +1,9 @@
 /*
  * The SD card, as blocks: the protocol half.
  *
- * Derived from Richard Miller's sdmmc.c in Plan 9 (sys/src/9/bcm,
- * Copyright © 2012 Richard Miller <r.miller@acm.org>, MIT): the
+ * Derived from Richard Miller's sdmmc.c (sys/src/9/bcm in the
+ * 0intro/plan9-contrib mirror, repo-root LICENSE: Plan 9 Foundation, MIT;
+ * Copyright © 2012 Richard Miller <r.miller@acm.org>): the
  * identification sequence, the raw-layout CSD parse and the SDio
  * split are his. Reduced to single-block transfers, return codes
  * instead of error(), and the five entry points devsd.c already used

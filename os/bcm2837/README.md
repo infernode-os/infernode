@@ -1208,8 +1208,10 @@ longer.
 ## The SD card is on SDHOST, and the Arasan is free (WiFi milestone 1)
 
 **Status: proven under QEMU, never run on the board.** Every claim in
-this section about the silicon is taken from the datasheet, from
-Miller's Plan 9 driver and from the Linux driver that the Pi runs
+this section about the silicon is taken from the Linux bcm2835 driver
+(there is no public SDHOST datasheet; the BCM2835 peripherals manual
+documents only the Arasan), from Miller's Plan 9 driver, from 9front's,
+and from QEMU's model -- the Linux driver that the Pi runs
 every day; none of it has been observed on this board's SDHOST by this
 kernel. The board test is the first thing to do with a serial cable.
 
@@ -1272,7 +1274,8 @@ reading the fill count once. `Sdhcfg`'s `Hcfgbusyinten` is set even
 though this kernel takes no SD interrupt: the bit is not just a
 delivery enable, it is what makes the controller *latch* the busy
 completion of an R1b command (`Hstbusyint` after CMD7 and CMD12) at
-all, in the datasheet and in QEMU's model alike. Without it every card
+all, in the controller as the Linux driver describes it and in QEMU's
+model alike. Without it every card
 select waits out its full bound and the driver looks like it has a
 slow card. Interrupt 56 stays disabled in the VideoCore controller, so
 the status bit rising is harmless. After a write, the card layer polls

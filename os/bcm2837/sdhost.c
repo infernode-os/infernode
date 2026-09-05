@@ -1,8 +1,9 @@
 /*
  * The BCM2835 SDHOST controller: the SD card's controller from now on.
  *
- * Derived from Richard Miller's sdhost.c in Plan 9 (sys/src/9/bcm,
- * Copyright © 2016 Richard Miller <r.miller@acm.org>, MIT), with the
+ * Derived from Richard Miller's sdhost.c (sys/src/9/bcm in the
+ * 0intro/plan9-contrib mirror, repo-root LICENSE: Plan 9 Foundation, MIT;
+ * Copyright © 2016 Richard Miller <r.miller@acm.org>), with the
  * register semantics cross-checked against 9front's sdhost.c and the
  * Linux bcm2835 driver. Reduced to what a polled block driver needs:
  * no DMA engine (this tree has none) and no interrupt, so the FIFO is
@@ -195,7 +196,7 @@ sdhostinit(void)
  * Hcfgbusyinten is set even though no interrupt is ever taken. It is
  * not merely an enable for delivery: the BUSY status bit that an R1b
  * command completes with is only LATCHED when it is set, in the
- * datasheet's controller and in QEMU's model of it alike. Without it
+ * controller as the Linux driver describes it and in QEMU's model of it alike. Without it
  * every CMD7 and CMD12 waits out its full bound and the driver looks
  * like it has a slow card.
  */
@@ -214,7 +215,7 @@ sdhostenable(void)
 static int
 sdhostcmd(int idx, u32int arg, int flags, u32int *resp)
 {
-	u32int c, v, sts;
+	u32int errs, c, v, sts;
 	int i, state;
 
 	/*
@@ -267,15 +268,23 @@ sdhostcmd(int idx, u32int arg, int flags, u32int *resp)
 		uartputstr(" never completed\n");
 		return -1;
 	}
+	/*
+	 * R3 (the OCR reply to ACMD41) carries no CRC; a controller
+	 * that flags CRC7 on it is reporting the format, not a fault,
+	 * and treating it as one would call an occupied slot empty.
+	 */
+	errs = Hsterrors;
+	if(flags & Rnocrc)
+		errs &= ~Hstcrc7;
 	sts = rd(Sdhsts);
-	if((v & Cmdfailed) || (sts & Hsterrors)){
+	if((v & Cmdfailed) || (sts & errs)){
 		wr(Sdhsts, sts & Hsterrors);
 		/*
 		 * A bare command timeout is what an empty slot looks
 		 * like, and the card layer probes for one deliberately,
 		 * so it is reported by return value rather than noise.
 		 */
-		if((sts & Hsterrors) != Hstcmdtimeout){
+		if((sts & errs) != Hstcmdtimeout){
 			uartputstr("sdhost: cmd ");
 			uartputd(idx);
 			uartputstr(" failed, status ");
@@ -420,7 +429,30 @@ sdhostdata(int write, void *a, int len)
 		state = fsm();
 		if(state == Edmfsmident || state == Edmfsmdata)
 			break;
+		/*
+		 * With no stop command -- the only shape this driver
+		 * sends -- the silicon parks after the last block in a
+		 * wait state and stays there. Linux's transfer-complete
+		 * path treats those two states as done and forces the
+		 * machine back to data idle; QEMU's model never enters
+		 * them, which is why a driver that only ever waited for
+		 * idle could pass every emulated check and hang on the
+		 * board.
+		 */
+		if((!write && state == Edmfsmreadwait) || (write && state == Edmfsmwritestart1)){
+			wr(Sdedm, rd(Sdedm) | Edmforcedata);
+			break;
+		}
 		microdelay(Pollstep);
+	}
+	if(i >= Datawait){
+		uartputstr("sdhost: transfer never completed, fsm ");
+		uartputd(fsm());
+		uartputstr(" status ");
+		uartputx(rd(Sdhsts));
+		uartputstr("\n");
+		wr(Sdhsts, Hsterrors | Hstdataflag | Hstblkint);
+		return -1;
 	}
 	sts = rd(Sdhsts);
 	wr(Sdhsts, Hsterrors | Hstdataflag | Hstblkint);

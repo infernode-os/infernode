@@ -399,7 +399,7 @@ enum
 	Hstfifoerror	= 1<<3,
 	Hstdataflag	= 1<<0,		/* the FIFO has data, or room */
 	Hsterrors	= Hstrewtimeout|Hstcmdtimeout|Hstcrc16|Hstcrc7|Hstfifoerror,
-	Hstall		= 0xFFFF,
+	Hstall		= 0x7F8,	/* every W1C bit (3..10); above are reserved -- Linux's SDHSTS_CLEAR_MASK */
 
 	/* Sdhcfg */
 	Hcfgbusyinten	= 1<<10,	/* needed even when polling; see sdhost.c */
@@ -417,6 +417,9 @@ enum
 	Edmfsmdata	= 1,		/* idle, data clock */
 	Edmfsmread	= 2,
 	Edmfsmwrite	= 3,
+	Edmfsmreadwait	= 4,		/* parked after a read with no stop command */
+	Edmfsmwritestart1= 0xA,		/* parked after a write with no stop command */
+	Edmforcedata	= 1<<19,	/* kick a parked state machine back to data idle */
 	Edmfifoshift	= 4,		/* words in the FIFO, 5 bits */
 	Edmfifomask	= 0x1F,
 	Edmwrthreshshift= 9,

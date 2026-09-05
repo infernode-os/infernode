@@ -2667,10 +2667,10 @@ fi
 # its addr without that error, so the second instance did not disturb
 # the first -- and every etherusb/ether0 check in the network section
 # above passed unchanged in this same run.
-if grep -q 'ether4330: no radio' <<<"$FSOUT"; then
+if grep -q "cannot open.*#l1/ether1/addr.*ether4330: no radio" <<<"$FSOUT"; then
     pass "#l1 attaches the radio driver, which refuses cleanly with 'ether4330: no radio' when no radio is present"
 else
-    fail "#l1 did not report the absent radio (no 'ether4330: no radio' from the shell)"
+    fail "#l1 did not report the absent radio (no 'cat: cannot open #l1/ether1/addr: ether4330: no radio' from the shell)"
 fi
 if grep -q 'cannot open .#l/ether0/addr' <<<"$FSOUT"; then
     fail "reading #l/ether0/addr errored: the second instance disturbed ether0"

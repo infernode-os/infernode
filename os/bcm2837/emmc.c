@@ -379,7 +379,14 @@ arasancmd(int idx, u32int arg, int flags, u32int *resp)
 		 * reports that in its own words. Anything else is the
 		 * controller objecting, and worth the detail once.
 		 */
-		if(sts != 0 && (sts & ~Interrorbit) != Ctoerr){
+		/*
+		 * Cmddone can be latched beside the timeout (QEMU's Arasan
+		 * does; the datasheet allows it), and an absent device --
+		 * the radio slot with nothing in it -- answers every probe
+		 * this way. A bare timeout, with or without Cmddone, is the
+		 * quiet case the caller asked to distinguish.
+		 */
+		if(sts != 0 && (sts & ~(Interrorbit|Cmddone)) != Ctoerr){
 			uartputstr("emmc: cmd ");
 			uartputd(idx);
 			uartputstr(" error intr ");

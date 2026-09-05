@@ -1339,9 +1339,27 @@ wrong-answer failure mode, and `tcp.c`'s sequence comparisons survive
 LP64 by accident through `(int)` truncation — which is worse than
 breaking, because it passes a smoke test and stalls under real traffic.
 
-**5. FT5406 touch**, via mailbox tag `0x0004000F` — the firmware polls
-the controller into a buffer, so no I2C driver is needed. Note QEMU
-declares that tag but never handles it, so this is hardware-only.
+**5. FT5406 touch** — built, not yet seen on the board. The firmware
+polls the panel's controller into a 64-byte buffer, so there is no I2C
+driver; the split is the usual one. `os/bcm2837/devtouch.c` (`#T`, bound
+as `/dev/touch`) does what a Limbo program cannot: asks for the buffer
+with `0x0004000F` (GET, a buffer the firmware allocated in VideoCore
+memory above ramtop, already Device-mapped so uncached) or, failing
+that, hands it a cache-line-aligned buffer of ours with `0x0004801F`
+(SET, accepted only if the firmware writes it within 200ms — a firmware
+that takes the buffer and never writes it has no panel behind it), and
+serves one read-only, exclusive-open file whose every read is one whole
+frame, marked consumed as the firmware expects (point count := 99). The
+byte layout is the panel's protocol and `os/init/touch.b` decodes it,
+writing absolute `m x y b` events to `/dev/pointer`: first finger is the
+pointer with button 1 held, lifting releases. Orientation, if the board
+shows the panel mirrored, is an inversion flag in that program and never
+a change to the kernel file. QEMU implements neither tag, so under
+emulation the device refuses to attach, `/dev/touch` is absent, the
+driver exits with one line, and the harness checks exactly that plus the
+decoder's self-test (`touch -t`). Which tag answers on real firmware,
+the orientation, and the cost of a 60Hz poll on one core are the board
+test, and this stays "built" until a Tk tap has been seen.
 
 **6. WiFi** (CYW43455 over SDIO), which needs everything above plus an
 SDIO/EMMC driver and a firmware blob upload.

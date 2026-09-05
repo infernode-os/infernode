@@ -148,6 +148,25 @@ command line to a ticket and remove the entry.
   AArch64 side was affected: `comp-arm64.c`'s `macfrp` fix was proven
   under QEMU by the bare-metal harness, not by this test.
 
+  *Later the same day, reproduced and attributed.* The full hosted
+  runner (`emu -c1 /dis/tests/runner.dis`) hits it deterministically:
+  all fifteen cases of `tests/asyncio_test.b` die with
+  `sys: segmentation violation addr=0xffffffffd8ab86a0` (and nearby),
+  PC in `altrdy` at `alt.c:98`, the `c = ac->c` load. The same runner
+  against an emulator built from `origin/master` passes `asyncio`. The
+  only commit on `feat/baremetal-pi` that touches `comp-amd64.c` or
+  `xec.c` is fb64f77 ("dis: a Limbo int is 32 bits on a 64-bit word"),
+  and the faulting address is exactly a 32-bit value sign-extended into
+  a 64-bit pointer -- so a `w`-typed store the JIT now sign-extends is
+  carrying a pointer-sized value somewhere on the `alt` path (the `Alt`
+  block's channel slots, or the count/index words next to them). That
+  commit's own tests (`intsem_test`, `jit_test`) pass; the runner is
+  the only thing that covers it. **This blocks merging the branch to
+  `master`**; see os/bcm2837/README.md, tier 2 item 8. Two unrelated
+  pre-existing `-c1` failures (`Aes256Sha256`, `cipher_matrix`, SEGV in
+  JIT-generated code) also appear with master's own emulator on a Linux
+  amd64 host and are not this branch's.
+
 ## When to leave JIT off
 
 - **Tiny scripts / shell pipelines.** JIT compilation has a one-time per-module cost; a script that runs for 2 ms gains nothing and pays the compile.

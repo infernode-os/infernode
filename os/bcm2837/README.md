@@ -1725,6 +1725,14 @@ also changes hosted behaviour — Limbo `int` semantics in both JITs and
 the interpreter, `runt.c` print bounds, `draw.h`'s `BGLONG` — and those
 need the hosted suite on both architectures before the merge.
 
+*Blocker found 2026-09-05:* the hosted runner under `-c1` on Linux
+amd64 crashes every `asyncio_test` case in `altrdy` (`alt.c:98`) with
+this branch's emulator and passes with `master`'s. The only suspect is
+fb64f77, the Limbo-`int` sign-extension change to `comp-amd64.c`: the
+fault address is a 32-bit value sign-extended into a pointer. Details
+under "Open faults" in `docs/JIT.md`. Fix and prove it with the full
+runner before merging; `intsem_test` and `jit_test` do not cover it.
+
 **9. Network device lifecycle.** `#l` binds once, ever (`devether.c`);
 its reader and writer kprocs exit on error without closing their
 endpoints; `etherusb.b` has no detach handling although `#u` now

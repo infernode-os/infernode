@@ -995,7 +995,7 @@ sbinit(Ctlr *ctl)
 		bootsay("chip not supported: id", chipid, 1);
 		return -1;
 	}
-	uartputstr("ether4330: chip 0x");
+	uartputstr("ether4330: chip ");	/* uartputx prints its own 0x */
 	uartputx(chipid);
 	uartputstr(" rev ");
 	uartputd(ctl->chiprev);

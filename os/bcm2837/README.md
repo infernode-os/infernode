@@ -1660,7 +1660,7 @@ The halves are split by *when a file can be found*:
   With `-DSDCARD_ARASAN` the controller is not free and the probe says
   so and returns.
 - The **upload** runs when a process writes `firmware <bin> <nvram>
-  <clm>` to `#l1/ether1/ctl`, and the three paths are opened in that
+  <clm>` to `#l1/ether1/clone`, and the three paths are opened in that
   writer's namespace -- the same trick devether's `bind` verb uses --
   because the firmware is a file and a file is found in a namespace:
   on this system the card is mounted at `/n/dos` by init, long after

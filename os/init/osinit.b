@@ -1236,7 +1236,16 @@ Firmwaredir: con "/n/dos/firmware";
 
 radiosetup()
 {
-	fd := sys->open("#l1/ether1/ctl", Sys->OWRITE);
+	#
+	# The radio's ctl verbs go to a conversation, not to a file named
+	# ctl: netif serves addr, clone, stats and ifstats at the top of
+	# an interface and puts ctl inside each numbered conversation, so
+	# opening clone is how a writer gets one. The first version wrote
+	# to "#l1/ether1/ctl", which does not exist; under emulation the
+	# attach refused before the walk got that far and the mistake did
+	# not show until a board had a radio that answered.
+	#
+	fd := sys->open("#l1/ether1/clone", Sys->OWRITE);
 	if(fd == nil){
 		sys->print("init: radio: %r\n");
 		return;

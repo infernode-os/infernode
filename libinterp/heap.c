@@ -26,6 +26,43 @@ void	(*heapmonitor)(int, void*, ulong);
 
 #define	BIT(bt, nb)	(bt & (1<<nb))
 
+/*
+ * Release a Type's compiled initialize/destroy code.
+ *
+ * Whether that pointer can be freed depends on where this build's
+ * typecom() put it, which is a property of the BUILD, not of the
+ * architecture -- and the four places that used to do this inline all
+ * decided it on the architecture alone.
+ *
+ * The 64-bit JITs were given a blanket "never free it", with the
+ * workaround's own comment saying what it cost: "This leaks type code
+ * on module unload." The reason was real for a hosted build, where
+ * typecom() maps type code with mmap() and handing that pointer to
+ * free() panics the pool.
+ *
+ * The native kernel has no mmap. typecom() there calls malloc(), so the
+ * pointer is ordinary pool memory and the guard was suppressing a free
+ * that had been correct all along. It cost the whole pool, slowly:
+ * running a command loads a module, compiles its types and unloads it
+ * again, and every cycle left its type code behind. Measured on a Pi
+ * 3B+ with a loop spawning about twenty processes a second, the main
+ * pool grew 2 MB every six minutes, and walking it by allocation site
+ * put 7452 of the 7468 blocks gained over four minutes on this one
+ * malloc.
+ *
+ * Hosted 64-bit builds still leak here. Unmapping needs a length and
+ * Type carries none; giving it one is a separate change.
+ */
+static void
+freetypecode(Type *t)
+{
+#if !defined(INFERNO_NATIVE) && (defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64))
+	USED(t);
+#else
+	free(t->initialize);
+#endif
+}
+
 void
 freeptrs(void *v, Type *t)
 {
@@ -129,10 +166,7 @@ freearray(Heap *h, int swept)
 		}
 	}
 	if(t->ref-- == 1) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-		if(t->initialize == nil)
-#endif
-		free(t->initialize);
+		freetypecode(t);
 		free(t);
 	}
 }
@@ -152,10 +186,7 @@ freelist(Heap *h, int swept)
 			freeptrs(l->data, t);
 		t->ref--;
 		if(t->ref == 0) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-			if(t->initialize == nil)
-#endif
-			free(t->initialize);
+			freetypecode(t);
 			free(t);
 		}
 	}
@@ -173,10 +204,7 @@ freelist(Heap *h, int swept)
 				freeptrs(l->data, t);
 			t->ref--;
 			if(t->ref == 0) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-				if(t->initialize == nil)
-#endif
-				free(t->initialize);
+				freetypecode(t);
 				free(t);
 			}
 		}
@@ -286,12 +314,7 @@ freetype(Type *t)
 	if(t == nil || --t->ref > 0)
 		return;
 
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-	/* JIT typecom() uses mmap/VirtualAlloc for type code; skip free() to avoid pool panic.
-	 * This leaks type code on module unload. */
-	if(t->initialize == nil)
-#endif
-	free(t->initialize);
+	freetypecode(t);
 	free(t);
 }
 

@@ -237,6 +237,16 @@ jobs:
         rc=0
         ROOT=. bash tests/host/wpa_join_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # And what it says while it cannot get a usable link. A board
+        # with only a serial console was made unusable by a supplicant
+        # that reported every retry; the join test above pipes its log
+        # through `sort -u` and so could never have seen it. This one
+        # counts lines, and counts the ctl writes beside them so that
+        # "quiet" cannot be a supplicant that gave up.
+        chmod +x tests/host/wpa_backoff_test.sh
+        rc=0
+        ROOT=. bash tests/host/wpa_backoff_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run test suite
       run: |

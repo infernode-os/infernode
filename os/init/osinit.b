@@ -1395,15 +1395,15 @@ wifijoin(essid, pass: string)
 	# what makes the boot work while it stands.
 	#
 	pids := chan of int;
-	for(try := 0; try < 2; try++){
+	for(try := 0; try < 3; try++){
 		spawn wparun(wpa, essid, pids);
 		pid := <-pids;
-		for(w := 0; w < 20; w++){
+		for(w := 0; w < 25; w++){
 			sys->sleep(1000);
-			if(associated())
+			if(keyed())
 				break;
 		}
-		if(associated())
+		if(keyed())
 			break;
 		#
 		# Stop it before trying again. Two supplicants on one radio
@@ -1414,27 +1414,47 @@ wifijoin(essid, pass: string)
 		killproc(pid);
 		sys->sleep(2000);
 	}
-	if(!associated()){
-		sys->print("init: wifi: %s did not associate\n", essid);
+	if(!keyed()){
+		sys->print("init: wifi: %s did not authenticate; see %s\n", essid, Wpalog);
 		return;
 	}
-	sys->print("init: wifi: associated with %s\n", essid);
-	#
-	# Associated is the radio's state, not the network's. The
-	# four-way handshake follows it, and until the group key is
-	# installed nothing broadcast can be decrypted -- which is
-	# exactly what a DHCP offer is. Asking for an address the moment
-	# the radio associated sent four requests into a link that could
-	# not yet carry the answers.
-	#
-	sys->sleep(5000);
+	sys->print("init: wifi: authenticated to %s\n", essid);
+	sys->sleep(1000);
 	wifiaddr();
 }
 
+Wpalog: con "/tmp/wpa.log";
+
+#
+# The supplicant, with its own file descriptors so its diagnostics can
+# be caught in a file. What it says is the only honest signal that the
+# network is usable: the radio reports itself associated as soon as it
+# has joined, which happens again by itself after a handshake fails, so
+# a boot that waited on the radio went on to ask for an address over a
+# link that had no keys.
+#
 wparun(wpa: Command, essid: string, pids: chan of int)
 {
 	pids <-= sys->pctl(0, nil);
+	sys->pctl(Sys->FORKFD, nil);
+	fd := sys->create(Wpalog, Sys->OWRITE, 8r600);
+	if(fd != nil)
+		sys->dup(fd.fd, 2);
 	wpa->init(nil, "wpa" :: "-s" :: essid :: "/net/ether1" :: nil);
+}
+
+#
+# The supplicant says "group key N installed" last, after both
+# pairwise keys. Nothing else it prints means the link can carry
+# traffic.
+#
+keyed(): int
+{
+	(log, nil) := slurp(Wpalog);
+	for(i := 0; i + 9 <= len log; i++)
+		if(log[i:i+9] == "group key")
+			return 1;
+	return 0;
 }
 
 killproc(pid: int)

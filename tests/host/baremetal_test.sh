@@ -3658,6 +3658,117 @@ else
     [[ "$VERBOSE" -eq 1 ]] && tail -20 "$BUILD/cc.log"
 fi
 
+#
+# 3j. The radio's file interface, with no radio underneath it.
+#
+#     WHAT THIS CAN AND CANNOT PROVE. QEMU's raspi3b has no CYW43455
+#     and no SDIO function device of any kind, so nothing here says
+#     anything about frames, scanning or joining a network -- those
+#     are board work and the README says so. What it does say is that
+#     the file interface exists and behaves: the verbs are known, the
+#     arguments are parsed and refused before anything is changed, the
+#     refusals name the driver, and a verb that is NOT in the table is
+#     still rejected. That last one is the control: if the switch were
+#     empty, every check below except it would pass on the same
+#     "unknown control message" the kernel already gave.
+#
+#     It needs a kernel built with -DETHER4330STUB, which declares the
+#     radio present without probing for it and does nothing else. With
+#     a real probe the attach refuses (that check is in the filesystem
+#     section above, and is the one that proves devether selects
+#     instance 1) and the whole tree beneath #l1 is unreachable, so
+#     the alternative to this variant is not a weaker test -- it is no
+#     test of the interface at all.
+#
+#     Nothing here greps the boot log for a string the boot log would
+#     have carried anyway. Every message asserted below is produced by
+#     a write this session made, and is attributed to that write by the
+#     marker printed immediately before it.
+#
+if build_kernel "$BUILD/$PLAT-wifi.img" "" "-DETHER4330STUB"; then
+    WOUT="$(shell_session "$BUILD/$PLAT-wifi.img" \
+        'bind -a '\''#l1'\'' /net' \
+        'cat /net/ether1/ifstats' \
+        'cat /net/ether1/clone' \
+        'echo WIFI1; echo essid mynet > /net/ether1/0/ctl' \
+        'echo WIFI2; echo scanbs 5 > /net/ether1/0/ctl' \
+        'echo WIFI3; echo crypt wep > /net/ether1/0/ctl' \
+        'echo WIFI4; echo txkey zz ccmp:000102030405060708090a0b0c0d0e0f@0 > /net/ether1/0/ctl' \
+        'echo WIFI5; echo txkey b827eb9f19db ccmp:000102030405060708090a0b0c0d0e0f@0 > /net/ether1/0/ctl' \
+        'echo WIFI6; echo auth 3014 > /net/ether1/0/ctl' \
+        'echo WIFI7; echo channel 99 > /net/ether1/0/ctl' \
+        'echo WIFI8; echo wibble 1 > /net/ether1/0/ctl' \
+        'echo WIFI9; cat /net/ether1/ifstats')"
+    WOUT="$(tr -d '\r' <<<"$WOUT")"
+    [[ "$VERBOSE" -eq 1 ]] && { echo "  --- radio ctl ---"; echo "$WOUT"; }
+
+    # The text a session produced between one marker and the next.
+    wifiseg() {
+        awk -v a="$1" -v b="$2" \
+            'index($0,a){f=1} f&&index($0,b){exit} f' <<<"$WOUT"
+    }
+    wifisays() {   # marker-from, marker-to, expected text, description
+        if grep -q -- "$3" <<<"$(wifiseg "$1" "$2")"; then
+            pass "$4"
+        else
+            fail "$4 (no '$3' between $1 and $2)"
+        fi
+    }
+
+    #
+    # The interface is reachable and reports itself. "radio: present"
+    # is the variant's doing; every other line is the driver's.
+    #
+    OUT_SAVED="$OUT"; OUT="$WOUT"
+    check "radio: present"      "-DETHER4330STUB: #l1 attaches and ifstats is readable"
+    check "firmware: not loaded" "ifstats says the firmware has not been loaded"
+    check "status: unassociated" "ifstats carries the status line a supplicant polls"
+    check "crypt: off"          "ifstats reports no encryption configured"
+    check "channel: 0"          "ifstats reports the channel a join would use"
+    check "bssid: 000000000000" "ifstats reports no station joined"
+    check "scan: 0"             "ifstats reports no scan interval set"
+    check "txwin: 0"            "ifstats reports the firmware's transmit credit"
+    check "txseq: 0"            "ifstats reports the transmit sequence"
+    check "oq: 0"               "ifstats reports the output queue length"
+    OUT="$OUT_SAVED"
+
+    wifisays WIFI1 WIFI2 "ether4330: firmware not loaded" \
+        "'essid' is a known verb and is refused for want of a firmware"
+    wifisays WIFI2 WIFI3 "ether4330: firmware not loaded" \
+        "'scanbs' reaches the driver through netif and is refused the same way"
+    wifisays WIFI3 WIFI4 "ether4330: firmware not loaded" \
+        "'crypt' is refused for want of a firmware"
+    wifisays WIFI4 WIFI5 "bad ether addr" \
+        "'txkey' with a malformed station address is refused on the ARGUMENT, radio or no radio"
+    wifisays WIFI5 WIFI6 "ether4330: firmware not loaded" \
+        "'txkey' with a well-formed address gets as far as needing a firmware"
+    wifisays WIFI6 WIFI7 "bad wpa ie syntax" \
+        "'auth' with an information element whose length field disagrees is refused"
+    wifisays WIFI7 WIFI8 "bad channel number" \
+        "'channel 99' is refused: the argument is checked, not accepted and stored"
+    wifisays WIFI8 WIFI9 "unknown control message" \
+        "a verb that is not in the table is still rejected -- the control that makes the eight above mean something"
+
+    #
+    # And nothing above changed the interface. A verb refused for want
+    # of a firmware must not leave the driver describing a state it
+    # was never put into -- "crypt wep" was refused, so "crypt:" must
+    # still say off, and the channel must still be the one a join
+    # would use rather than 99.
+    #
+    WEND="$(wifiseg WIFI9 'dRaInEd')"
+    if grep -q "crypt: off" <<<"$WEND" && grep -q "channel: 0" <<<"$WEND" \
+       && grep -q "status: unassociated" <<<"$WEND"; then
+        pass "eight refused verbs left the interface exactly as they found it"
+    else
+        fail "a refused verb changed the interface's reported state"
+        [[ "$VERBOSE" -eq 1 ]] && echo "$WEND"
+    fi
+else
+    fail "the -DETHER4330STUB kernel failed to build"
+    [[ "$VERBOSE" -eq 1 ]] && tail -20 "$BUILD/cc.log"
+fi
+
 echo ""
 }
 

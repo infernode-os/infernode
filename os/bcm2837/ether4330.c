@@ -3189,6 +3189,25 @@ ether4330probe(void)
 	bootsay("the Arasan holds the card (-DSDCARD_ARASAN), radio not probed", 0, -1);
 	return;
 #endif
+#ifdef ETHER4330STUB
+	/*
+	 * A kernel built for the harness: the radio is DECLARED present
+	 * and nothing else is done -- no pins, no bus, no firmware.
+	 *
+	 * The emulator has no CYW43455 and never will, so with a real
+	 * probe #l1 refuses at attach and the file tree beneath it is
+	 * unreachable: nothing above "there is no radio" can be tested
+	 * off the board at all. This variant makes the tree reachable
+	 * and leaves every other gate exactly where it is, so what the
+	 * harness exercises is the verb table, the argument parsing and
+	 * the refusals -- each of which must say "firmware not loaded",
+	 * and would say "unknown control message" if the verb were not
+	 * there. Nothing but the test build defines this.
+	 */
+	bootsay("declared present without probing (-DETHER4330STUB)", 0, -1);
+	ctl->present = 1;
+	return;
+#endif
 	/*
 	 * WL_REG_ON, the radio's power enable, is on the firmware's GPIO
 	 * expander, not a BCM pin: pin 129 on the 3B+ (Linux's

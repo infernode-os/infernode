@@ -1885,7 +1885,7 @@ up:
    Nothing is printed. `cat /mnt/factotum/ctl` must then list a line
    with `proto=wpapsk` and no password.
 3. `ip/wpa -s '<name>' /net/ether1 &`. Expect, in order:
-   - `wpa: /net/ether1: network '<name>'` — check the name is exactly
+   - `wpa: /net/ether1: network <name>` — check the name is exactly
      the network's, since it is the salt of the key derivation and a
      wrong one fails identically to a wrong passphrase;
    - `wpa: associated; starting the four-way handshake`, within a few

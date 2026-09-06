@@ -90,7 +90,7 @@ Every line begins `wpa: `.
 
 | line | meaning |
 |---|---|
-| `/net/ether1: network 'home'` | the name it will derive the key from — check it |
+| `/net/ether1: network home` | the name it will derive the key from — check it. A name containing spaces is printed quoted |
 | `still waiting for the radio to associate` | 20 seconds with `ifstats` still reporting `unassociated` or `connecting`. The radio has not found or not joined the network: wrong name, out of range, or the firmware never started |
 | `associated; starting the four-way handshake` | the radio joined, and the RSN element has been written to `ctl` |
 | `pairwise receive key installed` | message 3 arrived and verified: the access point has the same passphrase |

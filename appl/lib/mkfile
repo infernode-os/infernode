@@ -160,6 +160,7 @@ TARG=\
 	wmlib.dis\
 	wmsrv.dis\
 	workdir.dis\
+	wpakey.dis\
 	writegif.dis\
 	x402.dis\
 	xml.dis\
@@ -302,6 +303,7 @@ SYSMODULES=\
 	wmlib.m\
 	wmsrv.m\
 	workdir.m\
+	wpakey.m\
 	x402.m\
 	xml.m\
 

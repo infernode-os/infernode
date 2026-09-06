@@ -1,0 +1,159 @@
+.TH WPAKEY 2
+.SH NAME
+wpakey \- WPA2-PSK key derivation and the EAPOL four-way handshake
+.SH SYNOPSIS
+.EX
+include "wpakey.m";
+wpakey := load Wpakey Wpakey->PATH;
+
+Asend, Actl, Adelay: con iota;
+
+Action: adt {
+    kind:  int;
+    frame: array of byte;
+    text:  string;
+    ms:    int;
+};
+
+Supp: adt {
+    pmk, smac, amac, rsne, ptk: array of byte;
+    lastrepc: big;
+    newptk:   int;
+
+    mk:    fn(pmk, smac, rsne: array of byte): ref Supp;
+    reset: fn(s: self ref Supp);
+    recv:  fn(s: self ref Supp, frame, snonce: array of byte):
+               (list of ref Action, string);
+};
+
+init:        fn();
+pbkdf2_sha1: fn(pass, salt: array of byte, rounds, dklen: int): array of byte;
+psk:         fn(passphrase, essid: string): array of byte;
+prf:         fn(key: array of byte, label: string, seed: array of byte,
+                 nbits: int): array of byte;
+ptk:         fn(pmk, smac, amac, snonce, anonce: array of byte): array of byte;
+mic:         fn(vers: int, kck, frame: array of byte): array of byte;
+aesunwrap:   fn(kek, data: array of byte): array of byte;
+rsnie:       fn(): array of byte;
+hex:         fn(a: array of byte): string;
+unhex:       fn(s: string): array of byte;
+eaddr:       fn(a: array of byte): string;
+.EE
+.SH DESCRIPTION
+.B Wpakey
+holds the arithmetic and the state machine of a WPA2 personal
+supplicant.
+It opens no file, reads no clock and installs no key:
+.B recv
+takes one received EAPOL frame and returns the list of things its
+caller must then do.
+.IR wpa (8)
+is the program that does them.
+The split is what lets a test drive an entire association with no radio.
+.PP
+.B Init
+loads
+.IR keyring (2)
+and must be called first.
+.PP
+.B Pbkdf2_sha1
+is PBKDF2 with HMAC-SHA1 as its pseudorandom function (RFC 2898
+section 5.2).
+The password and salt are byte arrays rather than strings because the
+published test vectors contain NUL bytes.
+.B Psk
+is the pairwise master key of a WPA2 personal network: 4096 rounds of
+.B pbkdf2_sha1
+over the passphrase, salted with the network name, to 32 bytes
+(IEEE 802.11i-2004 Annex H.4).
+.PP
+.B Prf
+is the IEEE 802.11 pseudorandom function: HMAC-SHA1 of the label, a NUL,
+the seed and a counter byte, concatenated until
+.I nbits
+are available.
+Every output is a prefix of every longer one.
+.B Ptk
+derives the 64-byte pairwise transient key from the master key, the two
+ethernet addresses and the two nonces; the seed orders each pair so that
+both ends compute the same thing without agreeing which is which.
+The result is the key confirmation key (bytes 0-15), the key encryption
+key (16-31) and the CCMP temporal key (32-47).
+.PP
+.B Mic
+is the message integrity check over a whole EAPOL frame whose own MIC
+field has been zeroed, keyed by the key confirmation key.
+Key descriptor version 2 is WPA2 with CCMP and HMAC-SHA1; version 1 is
+WPA with TKIP and HMAC-MD5.
+.PP
+.B Aesunwrap
+is AES key unwrap (RFC 3394 section 2.2.2), which is how message 3 of
+the handshake carries the group key.
+It returns
+.B nil
+if the integrity check fails \(em a wrong key encryption key, or a
+tampered wrap.
+.PP
+.B Rsnie
+returns the RSN information element this supplicant offers: WPA2, CCMP
+for both ciphers, PSK authentication.
+.PP
+.B Supp.mk
+makes a supplicant for one master key, one station address and the RSN
+element that was claimed when associating.
+.B Reset
+clears the replay counter, the derived key and the
+key-installation gate; call it whenever the link drops, because none of
+those is meaningful across an association.
+.PP
+.B Recv
+takes a received ethernet frame, complete with its 14-byte header, and
+.I snonce
+\(em 32 fresh random bytes, which the caller supplies on every call and
+which are used only if the frame turns out to be message 1.
+Randomness is thus the caller's business, and this module has no opinion
+about where it comes from.
+It returns the actions to perform, in order, and a diagnostic.
+An action is one of:
+.TF Adelay
+.TP
+.B Asend
+write
+.B frame
+to the conversation's data file.
+.TP
+.B Actl
+write
+.B text
+to its ctl file.
+.I Text
+contains key material and must not be logged.
+.TP
+.B Adelay
+wait
+.B ms
+milliseconds before the next action.
+.PD
+.PP
+A frame that is simply not this station's business returns no actions
+and no diagnostic.
+A frame that was addressed to this station and looked like part of a
+handshake but could not be used returns no actions and a diagnostic:
+a bad integrity check, a stale replay counter, key data that did not
+unwrap, a truncated frame, or a key descriptor version this module does
+not implement.
+.SH SOURCE
+.B /appl/lib/wpakey.b
+.SH SEE ALSO
+.IR keyring (2),
+.IR wpa (8)
+.PP
+Plan 9's
+.B aux/wpa
+is the specification this was written from.
+.SH BUGS
+Only WPA2 personal with CCMP is implemented.
+.B Recv
+refuses key descriptor version 1 (WPA1/TKIP) with a diagnostic:
+the RC4 unwrap of its key data is not implemented, so accepting the
+earlier messages would only fail later and less clearly.

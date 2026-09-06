@@ -124,6 +124,7 @@ TARG=\
 	xenith_concurrency_test.dis\
 	xenith_exit_test.dis\
 	wmsrv_zorder_test.dis\
+	wpa_test.dis\
 	spawn_helpers_test.dis\
 	shell_tool_test.dis\
 	fractal_tool_test.dis\
@@ -204,6 +205,7 @@ SYSMODULES=\
 	tk.m\
 	tls.m\
 	webclient.m\
+	wpakey.m\
 	x509.m\
 	xml.m\
 

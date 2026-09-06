@@ -58,6 +58,13 @@ stderr: ref Sys->FD;
 debug := 0;
 dev: string;
 
+#
+# The RSN information element for WPA2-PSK with CCMP: element 0x30,
+# twenty bytes, version 1, group cipher CCMP, one pairwise cipher
+# CCMP, one authentication suite PSK, no capabilities.
+#
+RSNE: con "30140100000fac040100000fac040100000fac020000";
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -131,6 +138,20 @@ init(nil: ref Draw->Context, args: list of string)
 	# the essid once and this program follow it.
 	#
 	if(essid != ""){
+		#
+		# The security element FIRST, then the name. Writing the
+		# name is what starts the association, and a radio told to
+		# associate before it has been told what protection to ask
+		# for offers none: the access point refuses and the driver
+		# reports "join failed", which is exactly what a board did
+		# against a real WPA2 network. The element says WPA2-PSK
+		# with CCMP for both the pairwise and the group cipher,
+		# which is the only thing this program implements; a
+		# driver that published what the access point advertised
+		# would let us echo that instead, and ours does not yet.
+		#
+		if(sys->fprint(cfd, "auth %s", RSNE) < 0)
+			fatal(sys->sprint("auth: %r"));
 		#
 		# Quoted, because the kernel's ctl parser splits on
 		# spaces and an unquoted "My Network" would reach the

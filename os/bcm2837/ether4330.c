@@ -15,10 +15,13 @@
  * radio's pins, find the radio on the SDIO bus, scan its backplane
  * for the cores the upload needs, upload the firmware and NVRAM into
  * its RAM and read them back to check, start the firmware, and ask it
- * for its MAC address and version. That is "dongle up". No frames are
- * moved, no scan is issued and no network is joined: those are the
- * next milestones, and each adds to this file rather than to the
- * kernel around it.
+ * for its MAC address and version. That is "dongle up". Then move
+ * frames: the output queue is drained onto function 2 under the
+ * firmware's credit window, and what arrives on the data channel has
+ * its two headers stripped and goes to the conversations under
+ * /net/ether1. No scan is issued and no network is joined yet: those
+ * are the next milestones, and each adds to this file rather than to
+ * the kernel around it.
  *
  * WHEN EACH HALF RUNS. The probe -- pins, SDIO identification,
  * backplane scan -- runs at board init, after sdhost.c has taken the
@@ -199,6 +202,11 @@ enum
 	Nocard		= 2,		/* consecutive silent CMD5s = no radio */
 	Ioreadytries	= 10,		/* x100ms: a function to enable */
 	Cmdtimeout	= 5000,		/* ms: the firmware to answer a command */
+
+	/* the link, as ifstats reports it and a supplicant polls it */
+	Disconnected	= 0,
+	Connecting,
+	Connected,
 };
 
 typedef struct Ctlr Ctlr;
@@ -207,10 +215,13 @@ struct Ctlr
 	Ether	*edev;
 	QLock	cmdlock;	/* one command in flight */
 	QLock	pktlock;	/* one packet on the bus */
+	QLock	tlock;		/* one transmitter draining the output queue */
 	QLock	alock;		/* one attach at a time */
+	Lock	txwinlock;	/* the flow-control pair, written by rproc */
 	Rendez	cmdr;
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 
+	int	status;		/* Disconnected, Connecting, Connected */
 	int	present;	/* the probe found a radio */
 	int	running;	/* firmware running and answering */
 	int	reader;		/* rproc has been started */
@@ -1486,10 +1497,136 @@ wlreadpkt(Ctlr *ctl)
 static void bcmevent(Ctlr*, uchar*, int);
 
 /*
+ * Frames out: the output queue, drained onto function 2.
+ *
+ * THE FIRMWARE'S FLOW CONTROL is a credit window, and it is the whole
+ * of the transmit discipline. Every packet the dongle sends up
+ * carries a window byte and a flow-control mask; the host may send
+ * while its sequence number differs from the window, and must stop
+ * when they meet or when bit 2 of the mask is set. Both come from
+ * rproc, which is a different process, so the pair is read under a
+ * spin lock and rproc restarts the drain when it widens -- otherwise
+ * a queue that stopped on a closed window would wait for the next
+ * write to notice that it had opened.
+ *
+ * THE HEADERS. Each frame goes out under an SDPCM header (length, its
+ * ones-complement check, the sequence number, a channel of 2 for
+ * data, and the offset to the payload) followed by a four-byte BDC
+ * header. The Block is padded at the front to carry both, and the pad
+ * is sized so the payload keeps its four-byte alignment on the bus:
+ * the controller moves words, and a misaligned frame is a slow frame
+ * at best.
+ *
+ * NOT RUNNING. Frames written to an interface whose firmware has not
+ * been loaded are dropped and counted here rather than left on the
+ * queue. devether puts the Block on oq before it calls transmit, so
+ * the alternative is a queue that fills and then blocks every writer
+ * for ever on a radio that was never going to send anything.
+ */
+static void
+txstart(Ether *edev)
+{
+	Ctlr *ctl;
+	Sdpcm *p;
+	Block *b;
+	int len, off;
+
+	ctl = edev->ctlr;
+	if(!canqlock(&ctl->tlock))
+		return;
+	if(waserror()){
+		qunlock(&ctl->tlock);
+		return;
+	}
+	for(;;){
+		if(!ctl->running){
+			while((b = qget(edev->oq)) != nil){
+				edev->nif.oerrs++;
+				freeb(b);
+			}
+			break;
+		}
+		lock(&ctl->txwinlock);
+		if(ctl->txseq == ctl->txwindow || (ctl->fcmask & 1<<2)){
+			unlock(&ctl->txwinlock);
+			break;		/* the firmware has no credit for us */
+		}
+		unlock(&ctl->txwinlock);
+		if((b = qget(edev->oq)) == nil)
+			break;
+		off = ((uintptr)b->rp & 3) + sizeof(Sdpcm);
+		b = padblock(b, off + 4);
+		len = BLEN(b);
+		p = (Sdpcm*)b->rp;
+		memset(p, 0, off);
+		put2(p->len, len);
+		put2(p->lenck, ~len);
+		p->chanflg = 2;
+		p->seq = ctl->txseq;
+		p->doffset = off;
+		put4(b->rp + off, 0x20);	/* BDC header */
+		if(iodebug) dump("send", b->rp, len);
+		qlock(&ctl->pktlock);
+		if(packetrw(1, b->rp, len) < 0){
+			/*
+			 * The frame did not reach the dongle. Halt the write
+			 * frame the controller was in the middle of and drain
+			 * the count, or the next frame is appended to half of
+			 * this one and the dongle loses framing on the
+			 * channel rather than one packet.
+			 */
+			cfgw(Framectl, Wfhalt);
+			while(cfgr(Wfrmcnt+1) > 0)
+				;
+			while(cfgr(Wfrmcnt) > 0)
+				;
+			qunlock(&ctl->pktlock);
+			edev->nif.oerrs++;
+			freeb(b);
+			break;
+		}
+		ctl->txseq++;
+		qunlock(&ctl->pktlock);
+		edev->nif.outpackets++;
+		freeb(b);
+	}
+	poperror();
+	qunlock(&ctl->tlock);
+}
+
+/*
+ * The link has gone. Say so on the interface, and send end-of-file to
+ * every conversation carrying 0x888e: a supplicant blocked on a read
+ * of its EAPOL conversation learns that the association it was
+ * negotiating no longer exists, which is the only way it can know.
+ */
+static void
+linkdown(Ctlr *ctl)
+{
+	Ether *edev;
+	Netif *nif;
+	Netfile *f;
+	int i;
+
+	edev = ctl->edev;
+	if(edev == nil || ctl->status != Connected)
+		return;
+	ctl->status = Disconnected;
+	nif = &edev->nif;
+	nif->link = 0;
+	for(i = 0; i < nif->nfile; i++){
+		f = nif->f[i];
+		if(f == nil || f->in == nil || f->inuse == 0 || f->type != 0x888e)
+			continue;
+		qwrite(f->in, 0, 0);
+	}
+}
+
+/*
  * The reader: one kproc, forever, taking packets off function 2.
- * Command responses wake wlcmd; events are decoded; data frames are
- * COUNTED AND DROPPED in this milestone -- the netif has nowhere to
- * put them yet, and delivering them is the next milestone's work.
+ * Command responses wake wlcmd; events are decoded; data frames have
+ * their two headers stripped and go to the conversations under
+ * /net/ether1.
  */
 static void
 rproc(void *a)
@@ -1499,10 +1636,11 @@ rproc(void *a)
 	Block *b;
 	Sdpcm *p;
 	Cmd *q;
-	int bdc;
+	int bdc, flowstart;
 
 	edev = a;
 	ctl = edev->ctlr;
+	flowstart = 0;
 	for(;;){
 		if(waserror()){
 			print("ether4330: reader: %s\n", up->env->errstr);
@@ -1513,6 +1651,16 @@ rproc(void *a)
 			}
 			continue;
 		}
+		/*
+		 * The window opened or the flow-control bit cleared while
+		 * the queue had frames on it and no writer was coming: the
+		 * transmitter stopped on a closed window and only this
+		 * process knows it has reopened.
+		 */
+		if(flowstart){
+			flowstart = 0;
+			txstart(edev);
+		}
 		b = wlreadpkt(ctl);
 		poperror();
 		if(b == nil){
@@ -1520,10 +1668,20 @@ rproc(void *a)
 			continue;
 		}
 		p = (Sdpcm*)b->rp;
-		if(p->window != ctl->txwindow)
-			ctl->txwindow = p->window;
-		if(p->fcmask != ctl->fcmask)
-			ctl->fcmask = p->fcmask;
+		if(p->window != ctl->txwindow || p->fcmask != ctl->fcmask){
+			lock(&ctl->txwinlock);
+			if(p->window != ctl->txwindow){
+				if(ctl->txseq == ctl->txwindow)
+					flowstart = 1;
+				ctl->txwindow = p->window;
+			}
+			if(p->fcmask != ctl->fcmask){
+				if((p->fcmask & 1<<2) == 0)
+					flowstart = 1;
+				ctl->fcmask = p->fcmask;
+			}
+			unlock(&ctl->txwinlock);
+		}
 		switch(p->chanflg & 0xF){
 		case 0:
 			if(iodebug) dump("rsp", b->rp, BLEN(b));
@@ -1550,7 +1708,24 @@ rproc(void *a)
 			break;
 		case 2:
 			if(iodebug) dump("packet", b->rp, BLEN(b));
-			edev->nif.inpackets++;	/* seen, not delivered: milestone 4 */
+			/*
+			 * A data frame. The SDPCM header says where the BDC
+			 * header starts and the BDC header's fourth byte says
+			 * how many four-byte words of its own follow, so the
+			 * Ethernet frame begins at doffset + 4 + 4*that. Both
+			 * are bytes off the wire: a frame that does not have
+			 * room for its own headers plus an Ethernet header is
+			 * dropped rather than trusted.
+			 */
+			if(BLEN(b) > p->doffset + 4){
+				bdc = 4 + (b->rp[p->doffset + 3] << 2);
+				if(BLEN(b) >= p->doffset + bdc + ETHERHDRSIZE){
+					b->rp += p->doffset + bdc;
+					etheriqb(edev, b);
+					continue;
+				}
+			}
+			edev->nif.frames++;
 			break;
 		default:
 			dump("ether4330: bad packet", b->rp, BLEN(b));
@@ -1673,9 +1848,14 @@ evstring(uint event)
 }
 
 /*
- * Events from the firmware. Nothing is joined in this milestone, so
- * nothing here changes state; what it does is name an event that
- * carries an error, which is what a board test will want to see.
+ * Events from the firmware: what the dongle says has happened to it,
+ * arriving on channel 1 while everything else waits. The link ones
+ * are the reason this exists -- an association is not something the
+ * host does and then knows about, it is something the firmware
+ * reports afterwards, and a station that has been deauthenticated
+ * says so here and nowhere else. An event carrying an error status
+ * that this switch does not name is printed with its name and dumped,
+ * because during bring-up the useful thing is to see it at all.
  */
 static void
 bcmevent(Ctlr *ctl, uchar *p, int len)
@@ -1683,7 +1863,6 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 	int flags;
 	long event, status, reason;
 
-	USED(ctl);
 	if(len < ETHERHDRSIZE + 10 + 46)
 		return;
 	p += ETHERHDRSIZE + 10;			/* skip bcm_ether header */
@@ -1696,9 +1875,17 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 		print("ether4330: [%s] status %ld flags %#x reason %ld\n",
 			evstring(event), status, flags, reason);
 	switch(event){
+	case 16:	/* E_LINK */
+		if(flags & 1)		/* link up: the join path reports that */
+			break;
+		/* fall through */
+	case 5:		/* E_DEAUTH */
+	case 6:		/* E_DEAUTH_IND */
+	case 12:	/* E_DISASSOC_IND */
+		linkdown(ctl);
+		break;
 	case 26:	/* E_SCAN_COMPLETE */
 	case 69:	/* E_ESCAN_RESULT */
-	case 16:	/* E_LINK */
 		break;
 	default:
 		if(status){
@@ -2003,9 +2190,27 @@ etherbcmctl(Ether *edev, void *a, long n)
 }
 
 /*
- * What a reader of /net/ether1/ifstats sees. "status:" is the line a
- * supplicant will poll; it can only say unassociated until there is
- * a join.
+ * Frames are on the output queue: send them. devether calls this
+ * after every write to a conversation's data file, so it is also
+ * where a frame written to an interface with no running firmware is
+ * disposed of.
+ */
+static void
+etherbcmtransmit(Ether *edev)
+{
+	txstart(edev);
+}
+
+/*
+ * What a reader of /net/ether1/ifstats sees.
+ *
+ * "status:" is the line a supplicant polls, and its three values --
+ * unassociated, connecting, associated -- are named here exactly as
+ * Plan 9's driver names them, because that vocabulary is the contract
+ * and not a message. The transmit pair is here for the same reason
+ * the queue length is: when frames stop, the question is whether the
+ * host has run out of credit or the queue has run dry, and txseq
+ * equal to txwin answers it.
  */
 static long
 etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
@@ -2013,6 +2218,11 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	Ctlr *ctl;
 	char *p;
 	int l;
+	static char *connectstate[] = {
+		[Disconnected]	= "unassociated",
+		[Connecting]	= "connecting",
+		[Connected]	= "associated",
+	};
 
 	ctl = edev->ctlr;
 	p = malloc(512);
@@ -2025,20 +2235,28 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	l += snprint(p+l, 512-l, "firmware: %s\n", ctl->running? ctl->ver : "not loaded");
 	if(ctl->running)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
-	l += snprint(p+l, 512-l, "status: unassociated\n");
+	l += snprint(p+l, 512-l, "oq: %d\n", qlen(edev->oq));
+	l += snprint(p+l, 512-l, "txwin: %d\n", ctl->txwindow);
+	l += snprint(p+l, 512-l, "txseq: %d\n", ctl->txseq);
+	l += snprint(p+l, 512-l, "status: %s\n", connectstate[ctl->status]);
 	USED(l);
 	n = readstr(offset, a, n, p);
 	free(p);
 	return n;
 }
 
+/*
+ * The machine is going down. A dongle that never took its firmware
+ * has nothing to reset and answers no commands, so resetting it costs
+ * two bus timeouts on the way to the halt and changes nothing.
+ */
 static void
 etherbcmshutdown(Ether *edev)
 {
 	Ctlr *ctl;
 
 	ctl = edev->ctlr;
-	if(ctl->present)
+	if(ctl->running)
 		sdioreset();
 }
 
@@ -2068,7 +2286,7 @@ ether4330probe(void)
 	e->ifstat = etherbcmifstat;
 	e->shutdown = etherbcmshutdown;
 	e->ctl = etherbcmctl;
-	/* transmit and ctl stay nil: no frames, no verbs, until milestone 4 */
+	e->transmit = etherbcmtransmit;
 
 #ifdef SDCARD_ARASAN
 	bootsay("the Arasan holds the card (-DSDCARD_ARASAN), radio not probed", 0, -1);

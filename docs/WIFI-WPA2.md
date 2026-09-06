@@ -13,7 +13,7 @@ the walkthrough.
 A CYW43455 is a *fullMAC* radio: the scanning, the 802.11 authentication
 and the association all happen inside its firmware, and the kernel driver
 publishes the result as an ordinary ethernet interface. Nothing about
-WiFi is visible above the driver except three ctl verbs and one line of
+WiFi is visible above the driver except four ctl verbs and two lines of
 `ifstats`.
 
 What the firmware cannot do is prove the machine knows the network's

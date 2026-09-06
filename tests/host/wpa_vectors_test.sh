@@ -9,8 +9,9 @@
 # its own, but what it checks is the difference between a machine that
 # joins a home network and one that silently cannot: PBKDF2-HMAC-SHA1
 # (RFC 6070), the passphrase-to-PSK mapping and the PRF (IEEE 802.11i
-# Annex H), AES key unwrap (RFC 3394), and a whole four-way handshake
-# driven from synthetic frames.  A failure there is not a flaky test,
+# Annex H), AES key unwrap (RFC 3394), AES-CMAC (RFC 4493), and whole
+# four-way handshakes at key descriptor versions 2 and 3 driven from
+# synthetic frames.  A failure there is not a flaky test,
 # it is a supplicant that will never authenticate, and it should be
 # legible in the job list without reading a suite summary.
 #
@@ -48,7 +49,7 @@ fi
 
 # And require that the cases actually ran, so an empty or truncated run
 # cannot be mistaken for a green one.
-for c in Pbkdf2 Psk Prf Keyunwrap Handshake Ignored; do
+for c in Pbkdf2 Psk Prf Keyunwrap Cmac Micversions Handshake HandshakeV3 Unknownversion Ignored; do
 	if ! echo "$out" | grep -q "^--- PASS: $c"; then
 		echo "FAIL: $c did not run"
 		exit 1

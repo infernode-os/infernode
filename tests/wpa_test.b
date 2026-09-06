@@ -183,6 +183,124 @@ testKeyunwrap(t: ref T)
 }
 
 #
+#	RFC 4493 section 4: AES-CMAC under the AES-128 key of FIPS-197.
+#	The four published examples are the four shapes the construction
+#	has -- an empty message, one that is exactly a block, one whose
+#	last block is partial, and one that is several whole blocks --
+#	and between them they exercise both subkeys and the chain.
+#
+#	This is the primitive behind key descriptor version 3, and it is
+#	here because implementing an integrity check that no document can
+#	be held against would be worse than refusing the version.
+#
+Cmackey: con "2b7e151628aed2a6abf7158809cf4f3c";
+Cmacm :=
+	"6bc1bee22e409f96e93d7e117393172a"+
+	"ae2d8a571e03ac9c9eb76fac45af8e51"+
+	"30c81c46a35ce411e5fbc1191a0a52ef"+
+	"f69f2445df4f9b17ad2b417be66c3710";
+
+testCmac(t: ref T)
+{
+	k := wpakey->unhex(Cmackey);
+	m := wpakey->unhex(Cmacm);
+
+	t.assertseq(wpakey->hex(wpakey->aescmac(k, nil)),
+		"bb1d6929e95937287fa37d129b756746", "RFC 4493 example 1, the empty message");
+	t.assertseq(wpakey->hex(wpakey->aescmac(k, m[0:16])),
+		"070a16b46b4d4144f79bdd9dd04a287c", "RFC 4493 example 2, one whole block");
+	t.assertseq(wpakey->hex(wpakey->aescmac(k, m[0:40])),
+		"dfa66747de9ae63030ca32611497c827", "RFC 4493 example 3, a partial last block");
+	t.assertseq(wpakey->hex(wpakey->aescmac(k, m[0:64])),
+		"51f0bebf7e3b9d92fc49741779363cfe", "RFC 4493 example 4, four whole blocks");
+
+	# A zero-length array is the same message as nil.
+	t.assertseq(wpakey->hex(wpakey->aescmac(k, array[0] of byte)),
+		"bb1d6929e95937287fa37d129b756746", "an empty array is the empty message");
+
+	#
+	# The last block is where the two subkeys diverge, so a message
+	# that fills its block and the same message with one more byte
+	# must not agree by accident.
+	#
+	t.assertsne(wpakey->hex(wpakey->aescmac(k, m[0:16])),
+		wpakey->hex(wpakey->aescmac(k, m[0:17])),
+		"padding changes the subkey and so the result");
+
+	# One flipped bit anywhere changes it.
+	bad := array[64] of byte;
+	bad[0:] = m[0:64];
+	bad[33] ^= byte 1;
+	t.assertsne(wpakey->hex(wpakey->aescmac(k, bad)),
+		"51f0bebf7e3b9d92fc49741779363cfe", "a flipped bit changes the MAC");
+
+	# A key length AES does not have.
+	t.assert(wpakey->aescmac(k[0:15], m[0:16]) == nil, "a 15-byte key is refused");
+}
+
+#
+#	mic() dispatches on the key descriptor version, and getting that
+#	wrong is silent: a MIC computed with the wrong algorithm simply
+#	never matches, which looks exactly like a wrong passphrase.
+#
+testMicversions(t: ref T)
+{
+	kck := wpakey->unhex(Cmackey);
+	m := wpakey->unhex(Cmacm);
+
+	v1 := wpakey->mic(1, kck, m);
+	v2 := wpakey->mic(2, kck, m);
+	v3 := wpakey->mic(3, kck, m);
+
+	t.asserteq(len v1, 16, "version 1 fills the MIC field");
+	t.asserteq(len v2, 16, "version 2 fills the MIC field");
+	t.asserteq(len v3, 16, "version 3 fills the MIC field");
+
+	#
+	# Version 3 is AES-CMAC and nothing else: pinned to the published
+	# vector, not merely to whatever this module computes.
+	#
+	t.assertseq(wpakey->hex(v3), "51f0bebf7e3b9d92fc49741779363cfe",
+		"version 3 is the RFC 4493 CMAC of the frame");
+
+	#
+	# And again over a message that does not fill its last block,
+	# because that is the other subkey.  A 64-byte message takes K1
+	# and a 40-byte one takes K2, and under this key only K2 picks up
+	# the field polynomial -- so a fault in that step is invisible to
+	# the line above and visible here.  Real EAPOL frames are not a
+	# whole number of blocks, so this is the path that matters.
+	#
+	t.assertseq(wpakey->hex(wpakey->mic(3, kck, m[0:40])),
+		"dfa66747de9ae63030ca32611497c827",
+		"version 3 over a partial last block");
+
+	t.assertsne(wpakey->hex(v1), wpakey->hex(v2), "versions 1 and 2 differ");
+	t.assertsne(wpakey->hex(v2), wpakey->hex(v3), "versions 2 and 3 differ");
+
+	#
+	# Everything else is a version this module was never told about,
+	# and nil is what makes recv refuse the frame.
+	#
+	t.assert(wpakey->mic(0, kck, m) == nil, "version 0 has no algorithm");
+	t.assert(wpakey->mic(4, kck, m) == nil, "version 4 has no algorithm");
+	t.assert(wpakey->mic(7, kck, m) == nil, "version 7 has no algorithm");
+
+	#
+	# And a refusal has to name what was asked for.  The old message
+	# called every version it did not implement TKIP, which is right
+	# for 1 and wrong for 3.
+	#
+	t.assertseq(wpakey->micname(1), "HMAC-MD5, for WPA1 with TKIP", "version 1 named");
+	t.assertseq(wpakey->micname(2), "HMAC-SHA1, for WPA2 with CCMP", "version 2 named");
+	t.assertseq(wpakey->micname(3),
+		"AES-128-CMAC, for WPA2 with CCMP and protected management frames",
+		"version 3 named");
+	t.assertsne(wpakey->micname(5), wpakey->micname(1),
+		"an undefined version is not called TKIP");
+}
+
+#
 #	The synthetic handshake.  passphrase "InfernodeTest" on network
 #	"infernode", station 02:00:00:00:00:01, access point
 #	02:00:00:00:00:02, with fixed nonces.
@@ -297,6 +415,157 @@ testHandshake(t: ref T)
 }
 
 #
+#	The same handshake at key descriptor version 3, whose integrity
+#	check is AES-128-CMAC rather than HMAC-SHA1 (IEEE 802.11-2016
+#	12.7.2).  An access point that negotiates protected management
+#	frames asks for this one, and the supplicant used to refuse it
+#	with a message calling it TKIP.
+#
+#	The EAPOL protocol version is 3 as well, because an access point
+#	new enough to ask for the AES-CMAC descriptor stamps 802.1X-2010
+#	in the header; refusing that would make the descriptor
+#	unreachable in the case it exists for.
+#
+#	The key schedule is the same, so the master key and the temporal
+#	key are the same constants as the version 2 handshake above --
+#	which is the check that only the integrity algorithm changed.
+#
+V3msg1 :=
+	"020000000001020000000002888e0303005f0200cb0010000000000000000120212223242526"+
+	"2728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f00000000000000000000000000"+
+	"00000000000000000000000000000000000000000000000000000000000000000000000000";
+V3msg2 :=
+	"020000000002020000000001888e0303007502010b0010000000000000000180818283848586"+
+	"8788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f00000000000000000000000000"+
+	"00000000000000000000000000000000000000e6ea457c5ec305ef3b76505691708ccd001630"+
+	"140100000fac040100000fac040100000fac020000";
+V3msg3 :=
+	"020000000001020000000002888e0303007f0213cb0010000000000000000220212223242526"+
+	"2728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f00000000000000000000000000"+
+	"00000001020304050600000000000000000000f60361dbac386a2119940ddb7b42d7140020fe"+
+	"94e760aafc989cea36ec488d3ffdc0b0c689972b1251a943f17091956d7470";
+V3msg4 :=
+	"020000000002020000000001888e0303005f02030b0010000000000000000200000000000000"+
+	"0000000000000000000000000000000000000000000000000000000000000000000000000000"+
+	"00000000000000000000000000000000000000d4c963c24fbb478582d5c74878c26fcb0000";
+
+testHandshakeV3(t: ref T)
+{
+	pmk := wpakey->psk("InfernodeTest", "infernode");
+	t.assertseq(wpakey->hex(pmk), Pmk, "the master key does not depend on the MIC algorithm");
+
+	smac := wpakey->unhex("020000000001");
+	snonce := wpakey->unhex(Snonce);
+	supp := Supp.mk(pmk, smac, wpakey->rsnie());
+
+	(a1, e1) := supp.recv(wpakey->unhex(V3msg1), snonce);
+	t.assertnil(e1, "a version 3 message 1 is accepted");
+	if(len a1 != 1){
+		t.fatal(sys->sprint("message 1 produced %d actions, want 1", len a1));
+		return;
+	}
+	act := hd a1;
+	t.asserteq(act.kind, Wpakey->Asend, "message 1 is answered with a frame");
+	#
+	# Message 2 is where the new code is proved: its MIC is a CMAC
+	# this module computed, and these bytes came from an independent
+	# implementation of RFC 4493 and of the key schedule.
+	#
+	t.assertseq(wpakey->hex(act.frame), V3msg2, "message 2, with an AES-CMAC MIC");
+
+	(a3, e3) := supp.recv(wpakey->unhex(V3msg3), snonce);
+	t.assertnil(e3, "a version 3 message 3 verifies");
+	if(len a3 != 5){
+		t.fatal(sys->sprint("message 3 produced %d actions, want 5", len a3));
+		return;
+	}
+	acts := a3;
+	act = hd acts; acts = tl acts;
+	t.assertseq(act.text, "rxkey 020000000002 ccmp:" + Tk + "@0",
+		"the same temporal key as version 2");
+	act = hd acts; acts = tl acts;
+	t.assertseq(wpakey->hex(act.frame), V3msg4, "message 4, with an AES-CMAC MIC");
+	acts = tl acts;			# the pause
+	act = hd acts; acts = tl acts;
+	t.assertseq(act.text, "txkey 020000000002 ccmp:" + Tk + "@0", "txkey");
+	act = hd acts;
+	t.assertseq(act.text, "rxkey1 020000000002 ccmp:" + Gtk1 + "@60504030201",
+		"the group key unwrapped with the same key encryption key");
+
+	#
+	# And the check is real: one bit of the CMAC changed must not
+	# verify.  Without this the test would pass against a supplicant
+	# that computed no MIC at all.
+	#
+	# This handshake cannot replace the vectors above, and here is
+	# why: CMAC only touches the field polynomial when a subkey
+	# doubling carries, and under this network's key confirmation key
+	# neither doubling does.  Breaking that step deliberately leaves
+	# every assertion in this function passing and fails the RFC 4493
+	# cases -- which is the whole argument for pinning a primitive to
+	# a document rather than to a scenario.
+	#
+	supp2 := Supp.mk(pmk, smac, wpakey->rsnie());
+	supp2.recv(wpakey->unhex(V3msg1), snonce);
+	bad := wpakey->unhex(V3msg3);
+	bad[18+77] ^= byte 1;
+	(ab, eb) := supp2.recv(bad, snonce);
+	t.asserteq(len ab, 0, "a bad CMAC produces no actions");
+	t.assertseq(eb, "bad MIC", "and is named");
+}
+
+#
+#	A key descriptor version this supplicant does not implement must
+#	be refused by name.  The old message called every one of them
+#	TKIP, which was true of version 1 and false of version 3.
+#
+testUnknownversion(t: ref T)
+{
+	pmk := wpakey->psk("InfernodeTest", "infernode");
+	smac := wpakey->unhex("020000000001");
+	snonce := wpakey->unhex(Snonce);
+	supp := Supp.mk(pmk, smac, wpakey->rsnie());
+
+	#
+	# Version 1 really is TKIP, and saying so is right.  The low
+	# three bits of the key information field are the version.
+	#
+	f := wpakey->unhex(Msg1);
+	f[18+2] = byte ((int f[18+2] & 16rF8) | 1);
+	(a, e) := supp.recv(f, snonce);
+	t.asserteq(len a, 0, "a version 1 frame produces no actions");
+	t.assertnotnil(e, "and says why");
+	t.assert(has(e, "version 1"), "the refusal names the version asked for");
+	t.assert(has(e, "TKIP"), "and version 1 is TKIP");
+
+	#
+	# Version 5 is not defined by the standard at all, and must not
+	# be described as anything in particular.
+	#
+	f = wpakey->unhex(Msg1);
+	f[18+2] = byte ((int f[18+2] & 16rF8) | 5);
+	(a2, e2) := supp.recv(f, snonce);
+	t.asserteq(len a2, 0, "a version 5 frame produces no actions");
+	t.assert(has(e2, "version 5"), "the refusal names the version asked for");
+	t.assert(!has(e2, "TKIP"), "and does not call an undefined version TKIP");
+	t.assert(has(e2, "does 2 and 3"), "and says what is implemented");
+
+	# Versions 2 and 3 are not refused.
+	f = wpakey->unhex(Msg1);
+	(a3, e3) := supp.recv(f, snonce);
+	t.asserteq(len a3, 1, "version 2 is implemented");
+	t.assertnil(e3, "and not refused");
+}
+
+has(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+#
 #	Frames that are not this station's business, and frames that are
 #	malformed, must be dropped without a word and without state.
 #
@@ -360,7 +629,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Psk", testPsk);
 	run("Prf", testPrf);
 	run("Keyunwrap", testKeyunwrap);
+	run("Cmac", testCmac);
+	run("Micversions", testMicversions);
 	run("Handshake", testHandshake);
+	run("HandshakeV3", testHandshakeV3);
+	run("Unknownversion", testUnknownversion);
 	run("Ignored", testIgnored);
 
 	if(testing->summary(passed, failed, skipped) > 0)

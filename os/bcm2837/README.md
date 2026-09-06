@@ -1559,9 +1559,14 @@ never executed, holding
     essid    My Network
     password the passphrase, to the end of the line
 
-Anyone holding the card holds the key. That is the whole of the
-protection, it is what plan9.nvr offers, and this document will not
-dress it up as more.
+Anyone holding the card holds the key, and so does every process on
+the running machine: the card is FAT, which stores no permissions, so
+the file reads back mode 666 no matter what it was created with. That
+is weaker than the systems this follows -- plan9.nvr sits on a
+filesystem that does have permissions, even if the protection it
+offers against someone holding the disk is the same none. Both facts
+belong here rather than in a footnote: if the key matters more than
+the convenience, do not write the file, and log in.
 
 The feature is off unless the file exists: a board nobody has
 configured behaves exactly as it did before. When it does exist, init

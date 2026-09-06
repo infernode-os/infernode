@@ -425,6 +425,7 @@ nframe: int;			# frames handed to the demultiplex
 nframing: int;			# record walks that lost the stream
 
 phymbps := 100;			# what autonegotiation settled on
+nocarrier := 0;			# the PHY positively reported no link
 dev: string;
 ntpserver: string;			# "ep3.0"
 ctl: ref Sys->FD;		# #u/usb/<dev>/ctl
@@ -1070,6 +1071,18 @@ netconfig()
 	# stack will not send from an interface that has none. 0.0.0.0 is
 	# what the protocol expects a client to be using at this point.
 	#
+	#
+	# Not on a cable that is not there. Asking anyway cost 45 seconds
+	# of boot, left a default route to an address invented for an
+	# emulator, and held UDP port 68 while it did it -- which on this
+	# board is the port the radio's own client needs, so a wireless
+	# machine with an empty ethernet socket could not get an address
+	# at all.
+	#
+	if(nocarrier){
+		sys->print("etherusb: no carrier; leaving /net/ether0 unconfigured\n");
+		return;
+	}
 	if(sys->fprint(ifc, "add 0.0.0.0 0.0.0.0") < 0){
 		sys->print("etherusb: add 0.0.0.0 failed: %r\n");
 		return;
@@ -2936,6 +2949,7 @@ lanphy(): int
 		}
 		sys->sleep(100);
 	}
+	nocarrier = 1;
 	sys->print("etherusb: LAN78xx no link (cable unplugged?)\n");
 	return 0;
 }

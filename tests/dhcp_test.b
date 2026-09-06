@@ -87,6 +87,7 @@ run(name: string, testfn: ref fn(t: ref T))
 Udphdrlen:	con 52;
 Bootpsize:	con 236;
 
+Bootrequest:	con 0;		# no message type option: plain BOOTP
 Discover:	con 1;
 Offer:		con 2;
 Request:	con 3;
@@ -266,6 +267,17 @@ ack2opts(): array of byte
 		endopt() :: nil);
 }
 
+#
+# A BOOTP reply: the RFC 1497 extensions, and no message type.
+#
+bootpopts(): array of byte
+{
+	return cat(
+		opt(1, ipb("255.255.255.0")) ::
+		opt(3, ipb(Server)) ::
+		endopt() :: nil);
+}
+
 nakopts(): array of byte
 {
 	return cat(
@@ -413,6 +425,14 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 		# finding about the client.
 		#
 		case ty {
+		Bootrequest =>
+			#
+			# No message type option at all: RFC 951, whose reply
+			# has no message type either and whose file field is
+			# a name rather than more options.
+			#
+			replies = mkreply(xid, mac, Ouraddr, bootpopts(),
+				array of byte "/boot/kernel", nil) :: nil;
 		Discover =>
 			if(phase == 0){
 				#
@@ -625,6 +645,26 @@ exchange1(res: chan of ref Result, done: chan of int)
 	if(lease2 != nil)
 		lease2.release();
 
+	#
+	# And the older protocol underneath, which dhcpclient(2) exports
+	# as well: a BOOTREQUEST carries no message type at all, and the
+	# reply is a plain BOOTREPLY whose file field is a boot file name.
+	#
+	cfg3 := Bootconf.new();
+	(conf3, be) := dhcpclient->bootp(Netdir, nil, Addrfile, cfg3);
+	res <-= ref Result(be == nil, "a BOOTP exchange completes: "+nonnil(be));
+	if(conf3 != nil){
+		res <-= ref Result(conf3.ip == Ouraddr, "BOOTP address from yiaddr: "+conf3.ip);
+		res <-= ref Result(conf3.ipmask == "255.255.255.0",
+			"BOOTP mask from option 1: "+conf3.ipmask);
+		res <-= ref Result(conf3.siaddr == Server, "BOOTP siaddr: "+conf3.siaddr);
+		res <-= ref Result(conf3.bootf == "/boot/kernel",
+			"BOOTP boot file from the file field: "+conf3.bootf);
+		res <-= ref Result(conf3.lease == 0,
+			sys->sprint("a BOOTP reply grants no lease: %d", conf3.lease));
+	}else
+		res <-= ref Result(0, "the BOOTP exchange returned no configuration");
+
 	# what the client actually put on the wire
 	sent: list of array of byte;
 	for(;;){
@@ -669,15 +709,19 @@ iplist(l: list of string): string
 checksent(res: chan of ref Result, sent: list of array of byte)
 {
 	types := "";
-	n := ndiscover := nrequest := nrelease := nother := 0;
-	prev := 0;
+	n := ndiscover := nrequest := nrelease := nbootp := nother := 0;
+	prev := -1;
 	pairs := 1;			# every REQUEST follows a DISCOVER
-	first, request, rel: array of byte;
+	first, request, rel, boot: array of byte;
 	for(l := sent; l != nil; l = tl l){
 		p := hd l;
 		ty := msgtype(p);
 		types += string ty + " ";
 		case ty {
+		Bootrequest =>
+			nbootp++;
+			if(boot == nil)
+				boot = p;
 		Discover =>
 			ndiscover++;
 		Request =>
@@ -706,7 +750,12 @@ checksent(res: chan of ref Result, sent: list of array of byte)
 	# the client back to the beginning rather than on to an address it
 	# was refused.
 	#
-	res <-= ref Result(nother == 0, "nothing but DISCOVER, REQUEST and RELEASE went out: "+types);
+	res <-= ref Result(nother == 0,
+		"nothing but DISCOVER, REQUEST, RELEASE and one BOOTREQUEST went out: "+types);
+	res <-= ref Result(nbootp == 1, "one message carried no message type at all: "+types);
+	if(boot != nil)
+		res <-= ref Result(findopt(boot, 53) == nil && findopt(boot, 55) == nil,
+			"a BOOTP request carries neither a message type nor a parameter request list");
 	res <-= ref Result(msgtype(first) == Discover, "the first message is a DHCPDISCOVER: "+types);
 	res <-= ref Result(pairs, "every DHCPREQUEST follows a DHCPDISCOVER: "+types);
 	res <-= ref Result(ndiscover >= 3, "the DHCPNAK sent the client back to DISCOVER: "+types);

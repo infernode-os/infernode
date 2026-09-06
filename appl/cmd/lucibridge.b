@@ -574,12 +574,6 @@ recursiveRmOutsideTmp(args: string): int
 	return sawrm && recursive && (outsidetarget || !tmptarget);
 }
 
-headlessApprovalDeny(): int
-{
-	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
-	return ok >= 0;
-}
-
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
@@ -599,18 +593,11 @@ needsapproval(toolname, args: string): int
 	return 0;
 }
 
-# Pre-tool approval gate. Returns "allow", "deny", or "headless-deny".
+# Pre-tool approval gate. Returns "allow" or "deny".
 pretoolapproval(toolname, args: string): string
 {
 	if(!needsapproval(toolname, args))
 		return "allow";
-	# An unattended grind campaign has no trusted operator surface. Its marker
-	# can only make a request fail, never grant authority, so spoofing it cannot
-	# cross a namespace boundary.
-	if(headlessApprovalDeny()) {
-		log("pretool: denied by headless campaign policy for " + toolname);
-		return "headless-deny";
-	}
 	desc := toolname + " " + agentlib->truncate(args, 120);
 	didx := writedialogue("Permission required",
 		desc, "", "Allow,Deny");
@@ -1848,16 +1835,11 @@ agentturn(input: string)
 
 				# Pre-tool approval for destructive operations
 				approval := pretoolapproval(nm, eargs);
-				if(approval == "deny" || approval == "headless-deny") {
+				if(approval == "deny") {
 					denied := "error: operation denied by operator";
-					status := "denied";
-					if(approval == "headless-deny") {
-						denied = "error: operation denied by headless campaign policy";
-						status = "headless-denied";
-					}
 					results = (id, denied) :: results;
-					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
-						actid, sessionid, step + 1, name, status), array of byte denied);
+					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=denied",
+						actid, sessionid, step + 1, name), array of byte denied);
 					writefile(ctxpath, "resource update path=" + nm + " status=idle");
 					if(fpath != nil)
 						writefile(ctxpath, "resource update path=" + fpath + " status=idle");

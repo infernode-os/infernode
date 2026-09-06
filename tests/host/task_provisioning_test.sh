@@ -29,7 +29,7 @@ mkdir -p /tmp/veltro/.ns
 luciuisrv &
 sleep 3
 echo 'activity create Main' > /mnt/ui/ctl
-tools9p -v -z 750 -b read,list,find,search,grep task read list find search grep &
+tools9p -v -b read,list,find,search,grep task read list find search grep &
 sleep 5
 rm -f /tmp/task-a /tmp/task-b /tmp/task-c /tmp/task-a.done /tmp/task-b.done /tmp/task-c.done
 

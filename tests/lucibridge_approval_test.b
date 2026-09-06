@@ -144,12 +144,6 @@ recursiveRmOutsideTmp(args: string): int
 	return sawrm && recursive && (outsidetarget || !tmptarget);
 }
 
-headlessApprovalDeny(): int
-{
-	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
-	return ok >= 0;
-}
-
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
@@ -361,20 +355,6 @@ testOtherToolsNeverApproval(t: ref T)
 		"memory ops never require approval");
 }
 
-testHeadlessApprovalIsDenyOnly(t: ref T)
-{
-	(ok, nil) := sys->stat("/tmp/veltro");
-	if(ok < 0)
-		sys->create("/tmp/veltro", Sys->OREAD, Sys->DMDIR | 8r700);
-	sys->remove("/tmp/veltro/.headless-approval-deny");
-	t.asserteq(headlessApprovalDeny(), 0, "interactive mode has no deny marker");
-	fd := sys->create("/tmp/veltro/.headless-approval-deny", Sys->OWRITE, 8r600);
-	t.assert(fd != nil, "create headless deny marker");
-	fd = nil;
-	t.asserteq(headlessApprovalDeny(), 1, "headless marker selects denial");
-	sys->remove("/tmp/veltro/.headless-approval-deny");
-}
-
 # ============================================================================
 # firstlines: preview truncation
 # ============================================================================
@@ -481,7 +461,6 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Tools outside the gated set
 	run("OtherToolsNeverApproval", testOtherToolsNeverApproval);
-	run("HeadlessApprovalIsDenyOnly", testHeadlessApprovalIsDenyOnly);
 
 	# firstlines
 	run("FirstlinesShorterThanBuffer", testFirstlinesShorterThanBuffer);

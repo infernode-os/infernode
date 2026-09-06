@@ -131,7 +131,6 @@ cleanupchan: chan of int;
 # `activity create` plus the following activity-list read is one allocation
 # transaction. The long-lived dispatcher owns its serialization (INFR-362).
 taskcreatelock: chan of int;
-provisiondelay := 0;
 ProvisionState: adt {
 	id: int;
 	state: string;
@@ -214,14 +213,13 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-DvN] [-P profile] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] [-z ms] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-P profile] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
 	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
 	sys->fprint(stderr, "  -P profile    Materialize /lib/veltro/profiles/<profile> (repeatable)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
-	sys->fprint(stderr, "  -z ms         Delay child namespace setup (test harness only)\n");
 	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
 	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
 	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable; :ro/:rw\n");
@@ -429,11 +427,6 @@ init(nil: ref Draw->Context, args: list of string)
 			agentrole = rarg;
 		'N' =>	agentnodevs = "set";
 		'm' =>	mountpt = arg->earg();
-		'z' =>
-			(zarg, nil) := str->toint(arg->earg(), 10);
-			if(zarg < 0 || zarg > 10000)
-				usage();
-			provisiondelay = zarg;
 		'p' =>
 			parg := arg->earg();
 			explicitperm := "";
@@ -561,8 +554,6 @@ init(nil: ref Draw->Context, args: list of string)
 	# restrictns + emitmanifest — its namespace is discarded after.
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
-	if(agentrole == "child" && provisiondelay > 0)
-		sys->sleep(provisiondelay);
 	spawn emitmanifestnow(manifestpath(mountpt));
 }
 
@@ -1758,10 +1749,6 @@ provisionparse(args: string): (int, string, list of string, string)
 	rargs = "child" :: rargs;
 	rargs = "-r" :: rargs;
 	rargs = "-N" :: rargs;
-	if(provisiondelay > 0) {
-		rargs = string provisiondelay :: rargs;
-		rargs = "-z" :: rargs;
-	}
 	if(verbose)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;

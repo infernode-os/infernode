@@ -10,8 +10,10 @@
 #
 #	The cryptography is published and every piece of it has published
 #	test vectors: PBKDF2-HMAC-SHA1 (RFC 2898, vectors in RFC 6070 and
-#	IEEE 802.11i Annex H.4), the IEEE 802.11 PRF (Annex H.3), and AES
-#	key unwrap (RFC 3394).  tests/wpa_test.b checks each against them.
+#	IEEE 802.11i Annex H.4), the IEEE 802.11 PRF (Annex H.3), AES key
+#	unwrap (RFC 3394) and AES-CMAC (RFC 4493).  tests/wpa_test.b
+#	checks each against them.  Nothing goes in here that a document
+#	cannot be held against.
 #
 
 Wpakey: module
@@ -61,7 +63,18 @@ Wpakey: module
 	psk:		fn(passphrase, essid: string): array of byte;
 	prf:		fn(key: array of byte, label: string, seed: array of byte, nbits: int): array of byte;
 	ptk:		fn(pmk, smac, amac, snonce, anonce: array of byte): array of byte;
+
+	#
+	# The integrity check, and what keys it.  vers is the key
+	# descriptor version: 1 is HMAC-MD5, 2 is HMAC-SHA1 and 3 is
+	# AES-128-CMAC; anything else returns nil, which is how recv
+	# tells a version it does not implement from a bad frame.
+	# aescmac is separate so that RFC 4493's vectors can reach it.
+	#
 	mic:		fn(vers: int, kck, frame: array of byte): array of byte;
+	aescmac:	fn(key, msg: array of byte): array of byte;
+	micname:	fn(vers: int): string;
+
 	aesunwrap:	fn(kek, data: array of byte): array of byte;
 
 	# The RSN information element this supplicant offers: WPA2, CCMP

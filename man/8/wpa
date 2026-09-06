@@ -63,6 +63,20 @@ When the driver drops the association it closes the queue,
 .I wpa
 reads end of file, and the whole sequence begins again.
 .PP
+It begins again on a growing pause \(em a tenth of a second, then
+doubling to a minute \(em and it says so on a slower schedule still:
+the first line at once, then never again for twenty seconds, then at
+twice the previous interval up to ten minutes.
+A link that will not come up therefore costs about twenty lines an hour
+rather than a hundred thousand, and the lines that survive carry how
+many attempts have been made and over how long, which is what
+distinguishes a supplicant that is still trying from one that is
+wedged.
+An association that installs a key and lasts a second clears that
+history: the next drop is announced at once and retried at once.
+This matters because the machine this runs on may have nothing but a
+serial console, and a supplicant that fills it cannot be typed at.
+.PP
 The options are:
 .TP
 .B -d
@@ -130,6 +144,21 @@ Every line begins
 .B associated; starting the four-way handshake
 means the radio reported an association and the RSN element has been
 written.
+It is printed for the first association, after any wait long enough to
+have been reported, and after a link that would not hold was mentioned
+\(em not for every re-association, because a driver that grants one
+instantly grants thousands.
+.B "still waiting for the radio to associate (\fIt\fP)"
+means
+.B ifstats
+has reported
+.BR unassociated ,
+.B connecting
+or
+.B unauthenticated
+for
+.I t
+so far.
 .B pairwise receive key installed
 and
 .B pairwise transmit key installed
@@ -144,12 +173,25 @@ point rejects the second message silently and the handshake stops,
 so a handshake that begins and never completes should be read as a
 wrong passphrase before anything else.
 .B link lost; re-associating
-means the driver deassociated.
+means the driver deassociated; it is printed once, when the link goes.
+.B "the link will not hold: \fIn\fP attempts over \fIt\fP, still trying every \fId\fP"
+replaces it when the association keeps being granted and keeps carrying
+nothing.
+Both numbers climbing across two such lines is a supplicant still at
+work; neither climbing is one that has stopped.
 .SH BUGS
 Only WPA2 personal with CCMP is implemented.
-WPA1 and TKIP (key descriptor version 1) are refused with a diagnostic;
+Key descriptor versions 2 (HMAC-SHA1) and 3 (AES-128-CMAC) are both
+handled; WPA1 and TKIP (version 1) are refused with a diagnostic naming
+what was asked for.
 WPA3/SAE, WPA enterprise (802.1X/EAP) and fast roaming are not
 implemented at all.
+.PP
+Understanding the version 3 descriptor is not the same as supporting
+protected management frames: the RSN element
+.I wpa
+offers advertises no such capability, so an access point that requires
+them refuses the association before any of this runs.
 .PP
 The supplicant does not fork into the background; run it with
 .BR & .

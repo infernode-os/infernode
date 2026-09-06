@@ -91,7 +91,7 @@ Every line begins `wpa: `.
 | line | meaning |
 |---|---|
 | `/net/ether1: network home` | the name it will derive the key from — check it. A name containing spaces is printed quoted |
-| `still waiting for the radio to associate` | 20 seconds with `ifstats` still reporting `unassociated` or `connecting`. The radio has not found or not joined the network: wrong name, out of range, or the firmware never started |
+| `still waiting for the radio to associate (40s)` | `ifstats` has said `unassociated`, `connecting` or `unauthenticated` for that long. The radio has not found or not joined the network: wrong name, out of range, or the firmware never started. The time in brackets is the point — see *How loudly it complains* below |
 | `associated; starting the four-way handshake` | the radio joined, and the RSN element has been written to `ctl` |
 | `pairwise receive key installed` | message 3 arrived and verified: the access point has the same passphrase |
 | `pairwise transmit key installed` | message 4 has gone out and the transmit key is in |
@@ -99,13 +99,45 @@ Every line begins `wpa: `.
 | `bad MIC` | a frame's integrity check did not match. One against a noisy network is nothing. Note that a wrong passphrase more often shows as a handshake that stops after our second message, with no `bad MIC` at all |
 | `stale replay counter N` | a retransmitted or replayed frame, ignored. Normal on a lossy link |
 | `the wrapped key data did not unwrap` | message 3's group key did not decrypt: the key encryption key is wrong, which again means the passphrase is |
-| `key descriptor version 1 (TKIP) is not implemented` | the network is WPA1, not WPA2. See below |
+| `key descriptor version 1 (HMAC-MD5, for WPA1 with TKIP) is not implemented; this supplicant does 2 and 3` | the network is WPA1, not WPA2. See below |
 | `link lost; re-associating` | the driver deassociated and closed the queue; everything starts again |
+| `the link will not hold: 9 attempts over 25s, still trying every 12s` | the driver keeps granting an association that carries nothing. Both numbers climbing between two of these lines is a supplicant still at work |
 | `no passphrase for 'home' in factotum` | no key with that `essid` — add one as above |
 
 `-d` adds every frame in hexadecimal and prints the derived master key.
 It is for debugging a handshake and it prints key material; do not leave
 it on.
+
+## How loudly it complains
+
+A board may have nothing but a serial line for a console, and on
+2026-09-06 one of them proved what that costs. The association dropped,
+`ip/wpa` re-associated, found the queue closed, said so, and went round
+again — about fifty lines a second, for ever. There was no way to type a
+command to stop it; the board had to be power-cycled. Retrying was
+right. Narrating every retry was not.
+
+So two schedules run, and they are deliberately different:
+
+- **How often it retries.** A tenth of a second after the first failure,
+  doubling to a ceiling of one minute. Short, because a link that comes
+  back should be picked up quickly.
+- **How often it says anything.** The first line immediately, then
+  nothing for twenty seconds, then at twice the previous interval, up to
+  ten minutes.
+
+An hour of a link that will not come up is therefore about twenty lines
+and about seventy attempts. Silence would have been the wrong fix: you
+have to be able to tell a supplicant that is trying from one that is
+stuck, so the lines that survive carry the elapsed time and the number
+of attempts, and it is those numbers *changing* between two lines that
+says the program is alive.
+
+An association that installs a key and lasts more than a second counts
+as real: it clears the history, so an ordinary drop on a working network
+is still announced at once and retried at once. The one-second floor is
+there so a radio that reports a link and drops it again immediately
+cannot reset the backoff every time and bring the flood back.
 
 ## When it will not join
 
@@ -140,11 +172,11 @@ In order, because each one makes the next unreadable:
   (EAPOL type 0), so an enterprise network associates and then times out.
   Plan 9's `aux/wpa` implements this; it is a large amount of TLS
   plumbing and was left out deliberately.
-- **WPA1 / TKIP.** Refused with a diagnostic. The message integrity
-  check for key descriptor version 1 is implemented, but the RC4 unwrap
-  of its key data is not, so accepting the earlier messages would only
-  fail later and less clearly. WPA1 has been deprecated for over a
-  decade.
+- **WPA1 / TKIP.** Refused with a diagnostic that names what was asked
+  for. The message integrity check for key descriptor version 1 is
+  implemented, but the RC4 unwrap of its key data is not, so accepting
+  the earlier messages would only fail later and less clearly. WPA1 has
+  been deprecated for over a decade.
 - **WEP.** No.
 - **Roaming.** There is none: no 802.11r fast transition, no scanning
   for a better access point, no band steering. If the association drops,
@@ -154,7 +186,18 @@ In order, because each one makes the next unreadable:
 - **PMKSA caching.** Every association is a full four-way handshake.
 - **Management frame protection (802.11w).** The RSN element this
   supplicant offers has empty capabilities, so protected management
-  frames are not negotiated.
+  frames are not negotiated, and an access point that *requires* them
+  refuses the association before the handshake begins.
+
+  What *is* implemented is the integrity check that goes with them. Key
+  descriptor version 3 keys the MIC with AES-128-CMAC rather than
+  HMAC-SHA1 (IEEE 802.11-2016 12.7.2), and `wpakey` now does both;
+  versions 2 and 3 differ in nothing else, since they wrap their key
+  data identically. Before, version 3 was refused with a message calling
+  it TKIP, which sent whoever was holding the board looking for a WPA1
+  network that did not exist. Advertising the capability, so that a
+  PMF-required network can be joined at all, is a separate change to
+  `rsnie` and to what the driver is told, and has not been made.
 - **Choosing a cipher.** WPA2 with CCMP for both the pairwise and the
   group cipher, and nothing else. The driver does not publish the access
   point's RSN element, so there is nothing to negotiate against; if a
@@ -164,10 +207,34 @@ In order, because each one makes the next unreadable:
 
 `tests/wpa_test.b` checks the cryptography against published vectors —
 RFC 6070 for PBKDF2, IEEE 802.11i Annex H for the passphrase-to-PSK
-mapping and the PRF, RFC 3394 for the key unwrap — and drives a whole
-four-way handshake from synthetic frames, asserting on the exact bytes
-of the replies and the exact ctl lines. `tests/host/wpa_vectors_test.sh`
-runs it as a named CI step.
+mapping and the PRF, RFC 3394 for the key unwrap, RFC 4493 for AES-CMAC
+— and drives whole four-way handshakes at key descriptor versions 2 and
+3 from synthetic frames, asserting on the exact bytes of the replies and
+the exact ctl lines. `tests/host/wpa_vectors_test.sh` runs it as a named
+CI step.
+
+The RFC 4493 cases are not ceremony, and the tree has the receipt.
+CMAC touches the field polynomial only when a subkey doubling carries,
+and under the synthetic network's key confirmation key neither doubling
+does — so breaking that step deliberately leaves every assertion in the
+version 3 *handshake* passing and fails only the published vectors. A
+primitive gets pinned to a document, not to a scenario.
+
+`tests/host/wpa_backoff_test.sh` covers what the supplicant *says*,
+which turns out to need its own test: it runs `ip/wpa` against an
+interface that reports a link and then gives end of file on every read,
+counts the console lines over thirty seconds, and counts the `auth`
+writes on the ctl file over the same window. It has to be quiet (at most
+fifteen lines, against about a thousand before the fix), still trying
+(more attempts than lines), and still legible (a surviving line naming
+the attempts and the elapsed time). A second pass holds the radio at
+`unassociated` and requires the waiting lines to be few, to carry an
+elapsed time, and to be all different from one another.
+
+Note why CI never caught the original flood: `wpa_join_test.sh` pipes
+the supplicant's log through `sort -u`, which collapses fifty lines a
+second into three. It still does — the repetition there is legitimate —
+but it now prints the line count beside them.
 
 `tests/host/wpa_join_test.sh` covers the other half, the part that is
 I/O rather than arithmetic: it builds an interface out of plain files —

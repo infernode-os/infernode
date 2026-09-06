@@ -33,6 +33,8 @@ prf:         fn(key: array of byte, label: string, seed: array of byte,
                  nbits: int): array of byte;
 ptk:         fn(pmk, smac, amac, snonce, anonce: array of byte): array of byte;
 mic:         fn(vers: int, kck, frame: array of byte): array of byte;
+aescmac:     fn(key, msg: array of byte): array of byte;
+micname:     fn(vers: int): string;
 aesunwrap:   fn(kek, data: array of byte): array of byte;
 rsnie:       fn(): array of byte;
 hex:         fn(a: array of byte): string;
@@ -83,8 +85,27 @@ key (16-31) and the CCMP temporal key (32-47).
 .B Mic
 is the message integrity check over a whole EAPOL frame whose own MIC
 field has been zeroed, keyed by the key confirmation key.
-Key descriptor version 2 is WPA2 with CCMP and HMAC-SHA1; version 1 is
-WPA with TKIP and HMAC-MD5.
+The key descriptor version chooses the algorithm: version 1 is
+HMAC-MD5 (WPA1 with TKIP), version 2 is HMAC-SHA1 (WPA2 with CCMP) and
+version 3 is AES-128-CMAC, which is what an access point asks for when
+protected management frames are in play (IEEE 802.11-2016 12.7.2).
+Any other version returns
+.BR nil ,
+which is how
+.B recv
+tells a version it does not implement from a frame it merely dislikes.
+.B Micname
+gives the same versions in words, so that a refusal can name what was
+asked for.
+.PP
+.B Aescmac
+is AES-CMAC (RFC 4493) on its own, exported so that the published
+vectors can reach it directly.
+It is CBC-MAC with the last block corrected by one of two subkeys
+derived by doubling the encryption of a zero block in GF(2^128);
+which subkey depends on whether the message fills its last block.
+A key that is not a valid AES length returns
+.BR nil .
 .PP
 .B Aesunwrap
 is AES key unwrap (RFC 3394 section 2.2.2), which is how message 3 of
@@ -157,3 +178,9 @@ Only WPA2 personal with CCMP is implemented.
 refuses key descriptor version 1 (WPA1/TKIP) with a diagnostic:
 the RC4 unwrap of its key data is not implemented, so accepting the
 earlier messages would only fail later and less clearly.
+Versions 2 and 3 are both accepted \(em they differ only in the
+integrity check and wrap their key data identically \(em but accepting
+version 3 does not amount to supporting protected management frames,
+which
+.B rsnie
+does not offer.

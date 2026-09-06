@@ -46,13 +46,73 @@ include "wpakey.m";
 Wpa: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
+
+	#
+	# The rate limit on anything said about a condition that
+	# persists.  See Sparse.due below.
+	#
+	Sparse: adt {
+		elapsed:	int;	# ms this condition has lasted
+		gap:		int;	# ms between the last line and the next
+		left:		int;	# ms still to go before the next one
+		said:		int;	# lines said about it so far
+
+		mk:	fn(first: int): ref Sparse;
+		due:	fn(s: self ref Sparse, ms: int): int;
+	};
 };
 
 Defaultdev:	con "/net/ether1";
 
-# How long to wait for the radio to associate before saying so.
-Assocwait:	con 20000;	# ms
+#
+#	How often the interface is asked whether it has associated.  This
+#	stays short: the point of the poll is to notice an association
+#	the moment the firmware makes one.  What backs off is not the
+#	polling, it is the talking.
+#
 Assocpoll:	con 100;	# ms
+
+#
+#	The reporting schedule.  A condition is announced, then not again
+#	for Sayfirst, then at twice the previous interval each time, up
+#	to Saymax.
+#
+#	This exists because of what a board did on 2026-09-06.  The
+#	supplicant lost its association, re-associated, found the queue
+#	closed, and said so -- fifty-odd lines a second, on a machine
+#	whose only console is a serial line.  There was no way to type a
+#	command to stop it; the board had to be power-cycled.  Retrying
+#	was right.  Narrating every retry was not.
+#
+#	Silence is not the fix either: a person watching a board has to
+#	be able to tell a supplicant that is trying from one that is
+#	stuck.  So the lines that survive carry how long the trouble has
+#	lasted and how many attempts it has taken, and an hour of a link
+#	that will not come up costs about a dozen of them.
+#
+Sayfirst:	con 20000;	# ms
+Saymax:		con 600000;	# ms
+
+#
+#	And the pause before another association is attempted, which
+#	doubles on its own, shorter, schedule: a link that comes back
+#	should be picked up within a minute even after an hour of
+#	failure, so this is capped far below Saymax.
+#
+Retryfirst:	con 100;	# ms
+Retrymax:	con 60000;	# ms
+
+#
+#	An association that lasted less than this and installed no key
+#	did not really work, whatever the driver said.  Without the
+#	floor, a radio that reports a link and drops it again inside a
+#	millisecond would reset the backoff every time and the flood
+#	would come straight back.
+#
+Realassoc:	con 1000;	# ms
+
+#	The largest int, as a millisecond count: about twenty-five days.
+Maxms:		con 16r7FFFFFFF;
 
 stderr: ref Sys->FD;
 debug := 0;
@@ -178,43 +238,186 @@ init(nil: ref Draw->Context, args: list of string)
 	rsne := wpakey->rsnie();
 	supp := Supp.mk(pmk, smac, rsne);
 
+	#
+	# One association attempt per turn of this loop, for as long as
+	# the machine is on the network.
+	#
+	# Two things are throttled here and they are not the same thing.
+	# retry is how long to wait before asking the radio again, and it
+	# is kept short so a link that comes back is picked up quickly.
+	# say is how often any of it may be mentioned, and it is much
+	# slower, because the console is a serial line and a person
+	# reading it needs the shape of the trouble, not a transcript.
+	#
 	frame := array[4096] of byte;
+	retry := 0;			# ms waited before this attempt
+	tries := 0;			# associations attempted since the last real one
+	say := Sparse.mk(0);		# what may be said about a link that will not hold
+	announce := 1;			# the next association is worth mentioning
 	for(;;){
+		tries++;
+		if(retry > 0)
+			sys->sleep(retry);
+
 		#
 		# The firmware associates on its own once it has an essid
 		# and an authentication mode; all this waits for is the
 		# moment it says so.
 		#
-		associate(cfd, rsne);
+		waited := associate(cfd, rsne, announce);
+		announce = 0;
 		supp.reset();
+		began := sys->millisec();
+		keyed := 0;
 
 		for(;;){
 			n = sys->read(dfd, frame, len frame);
 			if(n < 0)
 				fatal(sys->sprint("%s/%s/data: %r", dev, conv));
-			if(n == 0){
-				#
-				# The driver closed the queue: deassociated.
-				# The pause is not politeness. A driver that
-				# reports an association it cannot carry
-				# frames for would otherwise spin this
-				# program at full speed; the same interval
-				# the association poll uses makes it a loop
-				# rather than a spin.
-				#
-				report("link lost; re-associating");
-				sys->sleep(Assocpoll);
-				break;
-			}
+			if(n == 0)
+				break;		# the driver closed the queue: deassociated
 			(acts, err) := supp.recv(frame[0:n], nonce());
 			if(err != nil){
 				report(err);
 				continue;
 			}
 			for(; acts != nil; acts = tl acts)
-				perform(cfd, dfd, hd acts);
+				keyed |= perform(cfd, dfd, hd acts);
+		}
+
+		#
+		# An association that installed a key and lasted a moment
+		# was a real one.  Losing it is ordinary, worth one line,
+		# and worth retrying at once -- and it clears the record of
+		# whatever went wrong before, because whatever it was has
+		# stopped.
+		#
+		if(keyed && sys->millisec() - began >= Realassoc){
+			report("link lost; re-associating");
+			retry = Retryfirst;
+			tries = 0;
+			say = Sparse.mk(0);
+			announce = 1;
+			continue;
+		}
+
+		#
+		# And an association that carried nothing is the case that
+		# floods.  The driver reports a link, the queue ends at
+		# once, and the whole cycle can turn tens of times a
+		# second; every line about it is therefore rationed, and
+		# the ones that get through say how long this has been
+		# going on and how many attempts it has taken.
+		#
+		if(say.due(retry + waited)){
+			if(say.said == 1)
+				report("link lost; re-associating");
+			else
+				#
+				# tries, not say.said: the attempts are the
+				# thing being rationed away, so the line that
+				# survives has to carry how many of them
+				# there were.  A reader comparing two of
+				# these lines sees both numbers climbing,
+				# which is a supplicant still working, or
+				# sees them stop, which is not.
+				#
+				report(sys->sprint(
+					"the link will not hold: %d attempts over %s, still trying every %s",
+					tries, duration(say.elapsed), duration(retry)));
+			announce = 1;
+		}
+		if(retry < Retryfirst)
+			retry = Retryfirst;
+		else{
+			retry *= 2;
+			if(retry > Retrymax || retry <= 0)
+				retry = Retrymax;
 		}
 	}
+}
+
+#
+#	Whether a condition that has now lasted another ms may be spoken
+#	about again.
+#
+#	The first line falls due after first ms -- 0 for a condition that
+#	should be announced the moment it appears, Sayfirst for one that
+#	is only worth mentioning if it persists.  After that the interval
+#	doubles to Saymax and stays there, so an hour of trouble is
+#	roughly a dozen lines whose intervals grow: the timestamps
+#	themselves are what tell a reader that this is a supplicant
+#	still trying rather than one wedged.
+#
+Sparse.mk(first: int): ref Sparse
+{
+	return ref Sparse(0, 0, first, 0);
+}
+
+Sparse.due(s: self ref Sparse, ms: int): int
+{
+	#
+	# elapsed is only ever printed, and it is milliseconds in an int,
+	# which runs out after about twenty-five days.  Saturate it: a
+	# supplicant left failing for a month should say "25d" for ever
+	# rather than have the sum go negative.  What must not depend on
+	# it is whether to speak at all, which is why the schedule below
+	# counts down rather than comparing against a growing total --
+	# a wrapped total would have silenced the program permanently at
+	# exactly the moment someone wanted to know it was still alive.
+	#
+	if(ms > 0 && s.elapsed > Maxms - ms)
+		s.elapsed = Maxms;
+	else
+		s.elapsed += ms;
+
+	s.left -= ms;
+	if(s.left > 0)
+		return 0;
+	if(s.gap == 0)
+		s.gap = Sayfirst;
+	else{
+		s.gap *= 2;
+		if(s.gap > Saymax || s.gap <= 0)
+			s.gap = Saymax;
+	}
+	s.left = s.gap;
+	s.said++;
+	return 1;
+}
+
+#
+#	A length of time a person reads at a glance.  Two lines about the
+#	same condition differ by this, and that difference is the whole
+#	of what distinguishes "trying" from "stuck" once the lines are
+#	rationed.
+#
+duration(ms: int): string
+{
+	if(ms < 1000)
+		return sys->sprint("%dms", ms);
+	secs := ms / 1000;
+	if(secs >= 24*60*60){
+		days := secs / (24*60*60);
+		hrs := (secs % (24*60*60)) / 3600;
+		if(hrs == 0)
+			return sys->sprint("%dd", days);
+		return sys->sprint("%dd%dh", days, hrs);
+	}
+	if(secs < 60)
+		return sys->sprint("%ds", secs);
+	mins := secs / 60;
+	secs %= 60;
+	if(mins < 60){
+		if(secs == 0)
+			return sys->sprint("%dm", mins);
+		return sys->sprint("%dm%ds", mins, secs);
+	}
+	hours := mins / 60;
+	mins %= 60;
+	if(mins == 0)
+		return sys->sprint("%dh", hours);
+	return sys->sprint("%dh%dm", hours, mins);
 }
 
 #
@@ -241,20 +444,47 @@ nonce(): array of byte
 #	the RSN element arrives, so writing the element is what turns an
 #	open join into an encrypted one.
 #
-associate(cfd: ref Sys->FD, rsne: array of byte)
+#	Returns how long it waited, which is the caller's measure of how
+#	long the trouble has lasted.
+#
+#	Nothing is said for the first Sayfirst of waiting, because a
+#	radio takes a second or two to join and saying so every time
+#	would be noise.  After that the same doubling schedule as
+#	everywhere else applies, and each line carries the elapsed time:
+#	"20s", then "40s", then "1m20s", then "2m40s" is a radio that has
+#	not found the network, and it reads as one at a glance.
+#
+associate(cfd: ref Sys->FD, rsne: array of byte, announce: int): int
 {
 	waited := 0;
+	say := Sparse.mk(Sayfirst);
 	while(!connected()){
-		if(waited >= Assocwait){
-			report("still waiting for the radio to associate");
-			waited = 0;
-		}
 		sys->sleep(Assocpoll);
-		waited += Assocpoll;
+		#
+		# Saturating for the same reason Sparse.due is: a radio
+		# that never associates would otherwise wrap this after
+		# twenty-five days and start reporting negative times.
+		#
+		if(waited > Maxms - Assocpoll)
+			waited = Maxms;
+		else
+			waited += Assocpoll;
+		if(say.due(Assocpoll))
+			report(sys->sprint("still waiting for the radio to associate (%s)",
+				duration(waited)));
 	}
-	report("associated; starting the four-way handshake");
+	#
+	# Said when the caller asked for it, and whenever the radio kept
+	# us waiting long enough to have complained.  A re-association
+	# the driver grants instantly says nothing: that is the case that
+	# repeats without end, and announcing it is what filled the
+	# console.
+	#
+	if(announce || say.said > 0)
+		report("associated; starting the four-way handshake");
 	if(sys->fprint(cfd, "auth %s", wpakey->hex(rsne)) < 0)
 		fatal(sys->sprint("auth: %r"));
+	return waited;
 }
 
 #
@@ -274,7 +504,14 @@ connected(): int
 	return 1;
 }
 
-perform(cfd, dfd: ref Sys->FD, a: ref Action)
+#
+#	Do one thing the supplicant asked for, and answer whether it was
+#	a key going into the radio.  That answer is what tells the loop
+#	above the difference between an association that worked and one
+#	that only looked like it, and so whether to retry at once or to
+#	back off and go quiet.
+#
+perform(cfd, dfd: ref Sys->FD, a: ref Action): int
 {
 	case a.kind {
 	Wpakey->Asend =>
@@ -289,11 +526,14 @@ perform(cfd, dfd: ref Sys->FD, a: ref Action)
 		#
 		if(sys->fprint(cfd, "%s", a.text) < 0)
 			report(sys->sprint("%s: %r", verb(a.text)));
-		else
+		else{
 			report(sys->sprint("%s installed", keyname(a.text)));
+			return 1;
+		}
 	Wpakey->Adelay =>
 		sys->sleep(a.ms);
 	}
+	return 0;
 }
 
 #

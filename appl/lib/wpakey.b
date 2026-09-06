@@ -21,6 +21,7 @@ include "wpakey.m";
 
 SHA1dlen:	con Keyring->SHA1dlen;
 MD5dlen:	con Keyring->MD5dlen;
+Aesbsize:	con Keyring->AESbsize;
 
 init()
 {
@@ -126,9 +127,114 @@ ptk(pmk, smac, amac, snonce, anonce: array of byte): array of byte
 }
 
 #
+#	One AES block encrypted under key, in place.
+#
+#	keyring offers no single-block cipher, but a one-block CBC
+#	encryption under a zero initialisation vector is exactly an ECB
+#	encryption, and a state made fresh for each block starts from
+#	that zero vector.  aesunwrap above uses the same identity in the
+#	other direction.
+#
+aesblock(key, b: array of byte)
+{
+	st := keyring->aessetup(key, nil);
+	keyring->aescbc(st, b, Aesbsize, Keyring->Encrypt);
+}
+
+#
+#	Doubling in GF(2^128), which is a shift left by one bit and, when
+#	a one was shifted off the top, an exclusive-or with the low byte
+#	of the field's polynomial.  RFC 4493 section 2.3 calls this the
+#	left-shift-and-xor-Rb step of the subkey generation.
+#
+dbl(a: array of byte)
+{
+	carry := (int a[0] >> 7) & 1;
+	for(i := 0; i < Aesbsize-1; i++)
+		a[i] = byte ((((int a[i] << 1) | ((int a[i+1] >> 7) & 1))) & 16rFF);
+	a[Aesbsize-1] = byte ((int a[Aesbsize-1] << 1) & 16rFF);
+	if(carry)
+		a[Aesbsize-1] ^= byte 16r87;
+}
+
+#
+#	AES-CMAC, RFC 4493.  Key descriptor version 3 keys the message
+#	integrity check with this rather than with HMAC-SHA1.
+#
+#	CMAC is CBC-MAC -- chain the blocks through the cipher and keep
+#	the last output -- with the final block corrected by a subkey,
+#	which is what makes it sound for messages whose length is not
+#	announced.  Both subkeys come from encrypting a block of zeros
+#	and doubling: K1 for a message that fills its last block, K2 for
+#	one that must be padded with a one bit and zeros.
+#
+#	Every step of this is checked against the vectors published in
+#	RFC 4493 section 4 by tests/wpa_test.b, which is the only reason
+#	it is here rather than refused: an integrity check that is wrong
+#	in a way no vector catches is worse than one that is absent.
+#
+aescmac(key, msg: array of byte): array of byte
+{
+	if(len key != 16 && len key != 24 && len key != 32)
+		return nil;
+
+	k1 := array[Aesbsize] of {* => byte 0};
+	aesblock(key, k1);
+	dbl(k1);
+	k2 := array[Aesbsize] of byte;
+	k2[0:] = k1;
+	dbl(k2);
+
+	#
+	# The last block, padded and corrected.  A message that is a
+	# whole number of blocks takes K1 and no padding; anything else,
+	# the empty message included, takes a one bit, zeros, and K2.
+	#
+	nblk := (len msg + Aesbsize - 1) / Aesbsize;
+	last := array[Aesbsize] of {* => byte 0};
+	sub := k2;
+	if(nblk == 0)
+		last[0] = byte 16r80;		# the empty message: pad only
+	else if((len msg % Aesbsize) == 0){
+		last[0:] = msg[(nblk-1)*Aesbsize:];
+		sub = k1;
+	}else{
+		r := len msg - (nblk-1)*Aesbsize;
+		last[0:] = msg[(nblk-1)*Aesbsize:];
+		last[r] = byte 16r80;		# the rest is already zero
+	}
+	for(i := 0; i < Aesbsize; i++)
+		last[i] ^= sub[i];
+
+	x := array[Aesbsize] of {* => byte 0};
+	b := array[Aesbsize] of byte;
+	for(i = 0; i < nblk-1; i++){
+		for(j := 0; j < Aesbsize; j++)
+			b[j] = x[j] ^ msg[i*Aesbsize + j];
+		aesblock(key, b);
+		x[0:] = b;
+	}
+	for(i = 0; i < Aesbsize; i++)
+		b[i] = x[i] ^ last[i];
+	aesblock(key, b);
+	return b;
+}
+
+#
 #	The message integrity check over a whole EAPOL frame whose own
-#	MIC field has been zeroed.  Key descriptor version 2 is WPA2 with
-#	CCMP and HMAC-SHA1; version 1 is WPA with TKIP and HMAC-MD5.
+#	MIC field has been zeroed.
+#
+#	The key descriptor version chooses the algorithm, and the
+#	standard has named three: version 1 is WPA with TKIP and
+#	HMAC-MD5, version 2 is WPA2 with CCMP and HMAC-SHA1, and version
+#	3 is AES-128-CMAC, which is what an access point asks for when
+#	protected management frames are in play (IEEE 802.11-2016
+#	12.7.2).  All three produce at least MIClen bytes and the field
+#	takes the first MIClen of them.
+#
+#	Any other value is a version this module has never been told
+#	about, and returning nil for it is what makes recv refuse the
+#	frame rather than compare against arithmetic it invented.
 #
 mic(vers: int, kck, frame: array of byte): array of byte
 {
@@ -141,8 +247,27 @@ mic(vers: int, kck, frame: array of byte): array of byte
 		d := array[SHA1dlen] of byte;
 		keyring->hmac_sha1(frame, len frame, kck, d, nil);
 		return d[0:MIClen];
+	3 =>
+		d := aescmac(kck, frame);
+		if(d == nil)
+			return nil;
+		return d[0:MIClen];
 	}
 	return nil;
+}
+
+#
+#	What a key descriptor version asks for, in words, so that a
+#	refusal names the thing that was asked for instead of guessing.
+#
+micname(vers: int): string
+{
+	case vers {
+	1 =>	return "HMAC-MD5, for WPA1 with TKIP";
+	2 =>	return "HMAC-SHA1, for WPA2 with CCMP";
+	3 =>	return "AES-128-CMAC, for WPA2 with CCMP and protected management frames";
+	}
+	return "a value the standard does not define";
 }
 
 #
@@ -257,7 +382,16 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 	if(len frame - m < 4)
 		return (nil, nil);
 	vers := int frame[m];
-	if(vers != 1 && vers != 2)
+	#
+	# The EAPOL protocol version, not the key descriptor version
+	# checked below.  IEEE 802.1X-2001 was 1, 802.1X-2004 is 2 and
+	# 802.1X-2010 is 3; the frame layout this parses is the same in
+	# all three, and an access point new enough to ask for the
+	# AES-CMAC descriptor is new enough to stamp 3 here.  Refusing 3
+	# would make the descriptor version below unreachable in exactly
+	# the case it exists for.
+	#
+	if(vers < 1 || vers > 3)
 		return (nil, nil);
 	if(int frame[m+1] != Eapolkey)
 		return (nil, nil);		# EAP, which only enterprise networks use
@@ -277,8 +411,19 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 	datalen := get2(frame, kd+93);
 	if(kd + Keydescrlen + datalen > e)
 		return (nil, "key data runs past the frame");
-	if(kvers != 2)
-		return (nil, sys->sprint("key descriptor version %d (TKIP) is not implemented", kvers));
+	#
+	# Versions 2 and 3 differ only in the integrity check -- HMAC-SHA1
+	# against AES-128-CMAC -- and mic() does both.  Both wrap their
+	# key data with the same AES key wrap, so nothing below this line
+	# has to know which arrived.  Version 1 is the one that would
+	# need more: its key data is unwrapped with RC4, which is not
+	# implemented, so accepting its earlier messages would only fail
+	# later and less clearly.
+	#
+	if(kvers != 2 && kvers != 3)
+		return (nil, sys->sprint(
+			"key descriptor version %d (%s) is not implemented; this supplicant does 2 and 3",
+			kvers, micname(kvers)));
 
 	amac := copyb(frame, Eaddrlen, 2*Eaddrlen);
 

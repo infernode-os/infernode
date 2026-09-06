@@ -81,6 +81,15 @@ timeout 30 "$EMU" -c1 -r"$ROOT" sh "/tmp/$(basename "$SCRIPT")" > "$LOG" 2>&1
 rc=$?
 emu_timeout_ok "$rc" || { cat "$LOG"; echo "FAIL: emu exited $rc"; exit 1; }
 
+#
+# Deduplicated, because the supplicant legitimately repeats itself here:
+# a plain file is not a queue, so it re-associates for as long as the run
+# lasts.  Note what that hides -- before the reporting backoff went in,
+# this collapsed about fifty lines a second into three, which is why CI
+# never saw the flood that made a board unusable.  The line count, not
+# the lines, is the check: tests/host/wpa_backoff_test.sh makes it.
+#
+echo "  ($(grep -c '^wpa: ' "$LOG" || true) console lines, deduplicated below)"
 sort -u "$LOG" | sed 's/^/  emu: /'
 
 fail=0

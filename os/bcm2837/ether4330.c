@@ -21,9 +21,11 @@
  * its two headers stripped and goes to the conversations under
  * /net/ether1. Then find out what is on the air: a conversation that
  * writes "scanbs <secs>" to its ctl reads one line per network from
- * its own data file. No network is joined yet: that is the next
- * milestone, and it adds to this file rather than to the kernel
- * around it.
+ * its own data file. Then join one: "essid <name>" on the same ctl
+ * associates, ifstats says unassociated, connecting or associated
+ * throughout, and the auth and key verbs are there for a supplicant
+ * outside the kernel to install what it derived. Which network, and
+ * with what passphrase, is a question this file never asks.
  *
  * WHEN EACH HALF RUNS. The probe -- pins, SDIO identification,
  * backplane scan -- runs at board init, after sdhost.c has taken the
@@ -204,11 +206,32 @@ enum
 	Nocard		= 2,		/* consecutive silent CMD5s = no radio */
 	Ioreadytries	= 10,		/* x100ms: a function to enable */
 	Cmdtimeout	= 5000,		/* ms: the firmware to answer a command */
+	Jointimeout	= 5000,		/* ms: the firmware to report an association */
 
 	/* the link, as ifstats reports it and a supplicant polls it */
 	Disconnected	= 0,
 	Connecting,
 	Connected,
+
+	/* what "crypt:" says, and what the key verbs install */
+	Wpa		= 1,
+	Wep		= 2,
+	Wpa2		= 3,
+
+	WNameLen	= 32,		/* an ssid, at most */
+	WNKeys		= 4,
+	WKeyLen		= 32,
+	WMinKeyLen	= 5,		/* WEP-40 */
+	WMaxKeyLen	= 13,		/* WEP-104 */
+
+	Wifichan	= 0,		/* 0: let the firmware pick */
+};
+
+typedef struct WKey WKey;
+struct WKey
+{
+	ushort	len;
+	char	dat[WKeyLen];
 };
 
 typedef struct Ctlr Ctlr;
@@ -221,9 +244,17 @@ struct Ctlr
 	QLock	alock;		/* one attach at a time */
 	Lock	txwinlock;	/* the flow-control pair, written by rproc */
 	Rendez	cmdr;
+	Rendez	joinr;
+	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 	Block	*scanb;		/* the scan being assembled, one line per network */
 	int	scansecs;	/* rescan this often, or 0 for not at all */
+
+	int	cryptotype;	/* 0, Wep, Wpa, Wpa2 */
+	int	chanid;		/* the channel to join on, 0 for any */
+	char	essid[WNameLen + 1];
+	uchar	bssid[Eaddrlen];	/* the station joined, as the firmware reports it */
+	WKey	keys[WNKeys];
 
 	int	status;		/* Disconnected, Connecting, Connected */
 	int	present;	/* the probe found a radio */
@@ -258,6 +289,73 @@ struct Ctlr
 	uchar	txwindow;
 	uchar	txseq;
 	uchar	rxseq;
+};
+
+/*
+ * The ctl verbs. Written to any conversation's ctl file -- there is
+ * no ctl at the top of the interface -- and reached through
+ * devether's fallthrough, after netif has had its own verbs
+ * (connect, promiscuous, scanbs, ...). The forms are Plan 9's, and
+ * deliberately so: a supplicant written against wifi(3) writes the
+ * same bytes here.
+ *
+ *	firmware <bin> <nvram> <clm>	name the three files, in the
+ *					writer's own namespace
+ *	essid <name>			join this network ("default"
+ *					clears the name)
+ *	channel <n>			0-16; 0 lets the firmware pick
+ *	crypt off|none|wep|on		what protection to expect
+ *	auth <hex ie>			the RSN or WPA information
+ *					element a supplicant built
+ *	join <essid> <chan> <crypt|hex ie>	all four at once
+ *	key1..key4 <wepkey>		a WEP key, text or hex
+ *	txkey <bssid> <cipher>:<hexkey>@<iv>	the pairwise key
+ *	rxkey0..rxkey3 <bssid> <cipher>:<hexkey>@<iv>	a group key
+ *	rxkey <bssid> ...		accepted, group id 0
+ *	debug <n>			dump packets to the console
+ *
+ * <cipher> is tkip or ccmp; <iv> is the replay counter in hex.
+ */
+enum
+{
+	CMauth,
+	CMchannel,
+	CMcrypt,
+	CMdebug,
+	CMessid,
+	CMfirmware,
+	CMjoin,
+	CMkey1,
+	CMkey2,
+	CMkey3,
+	CMkey4,
+	CMrxkey,
+	CMrxkey0,
+	CMrxkey1,
+	CMrxkey2,
+	CMrxkey3,
+	CMtxkey,
+};
+
+static Cmdtab cmds[] =
+{
+	{CMauth,	"auth",		2},
+	{CMchannel,	"channel",	2},
+	{CMcrypt,	"crypt",	2},
+	{CMdebug,	"debug",	2},
+	{CMessid,	"essid",	2},
+	{CMfirmware,	"firmware",	4},
+	{CMjoin,	"join",		4},
+	{CMkey1,	"key1",		2},
+	{CMkey2,	"key2",		2},
+	{CMkey3,	"key3",		2},
+	{CMkey4,	"key4",		2},
+	{CMrxkey,	"rxkey",	3},
+	{CMrxkey0,	"rxkey0",	3},
+	{CMrxkey1,	"rxkey1",	3},
+	{CMrxkey2,	"rxkey2",	3},
+	{CMrxkey3,	"rxkey3",	3},
+	{CMtxkey,	"txkey",	3},
 };
 
 typedef struct Sdpcm Sdpcm;
@@ -1887,6 +1985,14 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 		print("ether4330: [%s] status %ld flags %#x reason %ld\n",
 			evstring(event), status, flags, reason);
 	switch(event){
+	case 19:	/* E_ROAM: a successful roam is not a join result */
+		if(status == 0)
+			break;
+		/* fall through */
+	case 0:		/* E_SET_SSID: the answer to a join */
+		ctl->joinstatus = 1 + status;
+		wakeup(&ctl->joinr);
+		break;
 	case 16:	/* E_LINK */
 		if(flags & 1)		/* link up: the join path reports that */
 			break;
@@ -2031,6 +2137,190 @@ wlsetint(Ctlr *ctl, char *name, int val)
 
 	put4(buf, val);
 	wlsetvar(ctl, name, buf, 4);
+}
+
+/*
+ * JOINING A NETWORK.
+ *
+ * The dongle does the association itself: this is a FullMAC radio, so
+ * there is no state machine here for authentication frames or
+ * four-way handshakes. What the host does is name a network, say what
+ * kind of protection it uses, and -- for WPA -- install the keys that
+ * a supplicant outside the kernel derived. Everything below is
+ * mechanism for that and no policy: which network, and with what
+ * passphrase, is a question this file never asks.
+ *
+ * The wait for an association is BOUNDED. Plan 9's driver sleeps
+ * until the firmware reports one, which on a network that is not
+ * there is until the machine is restarted; a write to ctl that never
+ * returns is not a diagnosis. Five seconds and an error naming what
+ * happened is.
+ */
+
+static int
+joindone(void *a)
+{
+	return ((Ctlr*)a)->joinstatus;
+}
+
+/*
+ * Returns the firmware's E_SET_SSID status, or -1 for "nothing was
+ * reported in time". 0 is an association.
+ */
+static int
+waitjoin(Ctlr *ctl)
+{
+	int n;
+
+	tsleep(&ctl->joinr, joindone, ctl, Jointimeout);
+	n = ctl->joinstatus;
+	ctl->joinstatus = 0;
+	return n - 1;
+}
+
+/*
+ * A WEP key, in the firmware's wsec_key structure.
+ */
+static void
+wlwepkey(Ctlr *ctl, int i)
+{
+	uchar params[164];
+	uchar *p;
+
+	memset(params, 0, sizeof params);
+	p = params;
+	p = put4(p, i);		/* index */
+	p = put4(p, ctl->keys[i].len);
+	memmove(p, ctl->keys[i].dat, ctl->keys[i].len);
+	p += 32 + 18*4;		/* keydata, pad */
+	if(ctl->keys[i].len == WMinKeyLen)
+		p = put4(p, 1);		/* algo = WEP1 */
+	else
+		p = put4(p, 3);		/* algo = WEP128 */
+	put4(p, 2);		/* flags = Primarykey */
+
+	wlsetvar(ctl, "wsec_key", params, sizeof params);
+}
+
+/*
+ * A WPA key, in the same structure. A pairwise key (txkey) belongs to
+ * one station and carries its address; a group key (rxkeyN) belongs
+ * to the network and carries the replay counter the supplicant read
+ * out of the handshake.
+ */
+static void
+wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
+{
+	uchar params[164];
+	uchar *p;
+	int pairwise;
+
+	pairwise = id == CMtxkey;
+	memset(params, 0, sizeof params);
+	p = params;
+	if(pairwise)
+		p = put4(p, 0);
+	else
+		p = put4(p, groupid);
+	p = put4(p, ctl->keys[0].len);
+	memmove((char*)p, ctl->keys[0].dat, ctl->keys[0].len);
+	p += 32 + 18*4;		/* keydata, pad */
+	if(ctl->cryptotype == Wpa)
+		p = put4(p, 2);		/* algo = TKIP */
+	else
+		p = put4(p, 4);		/* algo = AES_CCM */
+	if(pairwise)
+		p = put4(p, 0);
+	else
+		p = put4(p, 2);		/* flags = Primarykey */
+	p += 3*4;
+	p = put4(p, 0);		/* iv initialised */
+	p += 4;
+	p = put4(p, iv>>16);	/* iv high */
+	p = put2(p, iv&0xFFFF);	/* iv low */
+	p += 2 + 2*4;		/* align, pad */
+	if(pairwise)
+		memmove(p, ea, Eaddrlen);
+
+	wlsetvar(ctl, "wsec_key", params, sizeof params);
+}
+
+/*
+ * Ask the firmware to associate, and wait for it to say what
+ * happened. The parameter block is the firmware's "join" iovar: the
+ * ssid, a scan specification, and either one channel or none.
+ */
+static void
+wljoin(Ctlr *ctl, char *ssid, int chan)
+{
+	uchar params[72];
+	uchar *p;
+	int n;
+
+	if(chan != 0)
+		chan |= 0x2b00;		/* 20MHz channel width */
+	p = params;
+	n = strlen(ssid);
+	n = MIN(n, WNameLen);
+	p = put4(p, n);
+	memmove(p, ssid, n);
+	memset(p + n, 0, WNameLen - n);
+	p += WNameLen;
+	p = put4(p, 0xff);	/* scan type */
+	if(chan != 0){
+		p = put4(p, 2);		/* num probes */
+		p = put4(p, 120);	/* active time */
+		p = put4(p, 390);	/* passive time */
+	}else{
+		p = put4(p, -1);	/* num probes */
+		p = put4(p, -1);	/* active time */
+		p = put4(p, -1);	/* passive time */
+	}
+	p = put4(p, -1);	/* home time */
+	memset(p, 0xFF, Eaddrlen);	/* bssid: any */
+	p += Eaddrlen;
+	p = put2(p, 0);		/* pad */
+	if(chan != 0){
+		p = put4(p, 1);		/* num chans */
+		p = put2(p, chan);	/* chan spec */
+		p = put2(p, 0);		/* pad */
+	}else
+		p = put4(p, 0);		/* num chans */
+
+	ctl->joinstatus = 0;
+	ctl->status = Connecting;
+	memset(ctl->bssid, 0, Eaddrlen);
+	wlsetvar(ctl, "join", params, chan? sizeof params : sizeof params - 4);
+	switch(waitjoin(ctl)){
+	case 0:
+		ctl->status = Connected;
+		ctl->edev->nif.link = 1;
+		/*
+		 * Which station was joined. A supplicant needs it for the
+		 * pairwise key derivation and cannot get it from a scan --
+		 * an ssid may be answered by several -- so it is read back
+		 * from the firmware here and published in ifstats. A
+		 * firmware that will not say does not undo the
+		 * association.
+		 */
+		if(!waserror()){
+			wlcmd(ctl, 0, 23, nil, 0, ctl->bssid, Eaddrlen);
+			poperror();
+		}
+		break;
+	case 3:
+		ctl->status = Disconnected;
+		error("ether4330: network not found");
+	case 1:
+		ctl->status = Disconnected;
+		error("ether4330: join failed");
+	case -1:
+		ctl->status = Disconnected;
+		error("ether4330: the firmware did not report an association");
+	default:
+		ctl->status = Disconnected;
+		error("ether4330: join error");
+	}
 }
 
 /*
@@ -2459,16 +2749,182 @@ bringup(Ether *edev)
 }
 
 /*
- * The ctl verbs. "firmware <bin> <nvram> <clm>" names the three files
- * the dongle needs, as paths in the WRITER's namespace -- the same
- * trick devether's bind verb uses -- so the kernel carries no path
- * and whoever mounted the card says where they are.
+ * Hex, into a buffer of a known size. Returns the number of bytes, or
+ * -1 for an odd number of digits -- half a byte is not a value.
+ */
+static int
+parsehex(char *buf, int buflen, char *a)
+{
+	int i, k, n;
+
+	k = 0;
+	for(i = 0; k < buflen && *a; i++){
+		if(*a >= '0' && *a <= '9')
+			n = *a++ - '0';
+		else if(*a >= 'a' && *a <= 'f')
+			n = *a++ - 'a' + 10;
+		else if(*a >= 'A' && *a <= 'F')
+			n = *a++ - 'A' + 10;
+		else
+			break;
+		if(i & 1)
+			buf[k++] |= n;
+		else
+			buf[k] = n<<4;
+	}
+	if(i & 1)
+		return -1;
+	return k;
+}
+
+/*
+ * A WEP key: five or thirteen characters of text, or twice that many
+ * hex digits.
+ */
+static int
+wepparsekey(WKey *key, char *a)
+{
+	int len, k;
+	char buf[WMaxKeyLen];
+
+	len = strlen(a);
+	if(len == WMinKeyLen || len == WMaxKeyLen){
+		memset(key->dat, 0, sizeof key->dat);
+		memmove(key->dat, a, len);
+		key->len = len;
+		return 0;
+	}
+	if(len == WMinKeyLen*2 || len == WMaxKeyLen*2){
+		k = parsehex(buf, sizeof buf, a);
+		if(k != len/2)
+			return -1;
+		memset(key->dat, 0, sizeof key->dat);
+		memmove(key->dat, buf, k);
+		key->len = k;
+		return 0;
+	}
+	return -1;
+}
+
+/*
+ * A WPA key as a supplicant writes one: "<cipher>:<hexkey>@<iv>",
+ * where the cipher is tkip or ccmp and the iv is the replay counter
+ * in hex.
+ */
+static int
+wpaparsekey(WKey *key, uvlong *ivp, char *a)
+{
+	int len;
+	char *e;
+
+	if(cistrncmp(a, "tkip:", 5) == 0 || cistrncmp(a, "ccmp:", 5) == 0)
+		a += 5;
+	else
+		return -1;
+	len = parsehex(key->dat, sizeof key->dat, a);
+	if(len <= 0)
+		return -1;
+	key->len = len;
+	a += 2*len;
+	if(*a++ != '@')
+		return -1;
+	*ivp = strtoull(a, &e, 16);
+	if(e == a)
+		return -1;
+	return 0;
+}
+
+/*
+ * The authentication verb: the information element the supplicant
+ * built, verbatim, plus the handful of firmware variables that have
+ * to agree with it. The element is not synthesised here and not
+ * checked beyond its own length field -- what cipher suites to ask
+ * for is the supplicant's decision, and this driver's business is to
+ * pass it on.
+ */
+static void
+setauth(Ctlr *ctlr, Cmdbuf *cb, char *a)
+{
+	uchar wpaie[32];
+	int i;
+
+	i = parsehex((char*)wpaie, sizeof wpaie, a);
+	if(i < 2 || i != wpaie[1] + 2)
+		cmderror(cb, "bad wpa ie syntax");
+	if(wpaie[0] == 0xdd)
+		ctlr->cryptotype = Wpa;
+	else if(wpaie[0] == 0x30)
+		ctlr->cryptotype = Wpa2;
+	else
+		cmderror(cb, "bad wpa ie");
+	wlsetvar(ctlr, "wpaie", wpaie, i);
+	if(ctlr->cryptotype == Wpa){
+		wlsetint(ctlr, "wpa_auth", 4|2);	/* psk | unspecified */
+		wlsetint(ctlr, "auth", 0);
+		wlsetint(ctlr, "wsec", 2);		/* tkip */
+		wlsetint(ctlr, "wpa_auth", 4);		/* psk */
+	}else{
+		wlsetint(ctlr, "wpa_auth", 0x80|0x40);	/* psk | unspecified */
+		wlsetint(ctlr, "auth", 0);
+		wlsetint(ctlr, "wsec", 4);		/* aes */
+		wlsetint(ctlr, "wpa_auth", 0x80);	/* psk */
+	}
+}
+
+/*
+ * "crypt off" and its spellings. This only decides what the word
+ * meant; the firmware is told separately, by whoever called it, once
+ * there is a firmware to tell.
+ */
+static int
+setcrypt(Ctlr *ctlr, char *a)
+{
+	if(cistrcmp(a, "wep") == 0 || cistrcmp(a, "on") == 0)
+		ctlr->cryptotype = Wep;
+	else if(cistrcmp(a, "off") == 0 || cistrcmp(a, "none") == 0)
+		ctlr->cryptotype = 0;
+	else
+		return 0;
+	return 1;
+}
+
+/*
+ * Everything that needs a running firmware says so here, in one
+ * place and in the driver's own words. A machine with no radio and a
+ * machine whose firmware files were never named are different
+ * situations with different fixes, so they are different errors.
+ */
+static void
+wlrunning(Ctlr *ctl)
+{
+	if(!ctl->present)
+		error("ether4330: no radio");
+	if(!ctl->running)
+		error("ether4330: firmware not loaded");
+}
+
+/*
+ * The ctl verbs, the table above being the list of them.
+ *
+ * "firmware <bin> <nvram> <clm>" names the three files the dongle
+ * needs, as paths in the WRITER's namespace -- the same trick
+ * devether's bind verb uses -- so the kernel carries no path and
+ * whoever mounted the card says where they are.
+ *
+ * The rest are the ones a network needs. Note the ORDER inside each:
+ * arguments are parsed and refused before the firmware is required,
+ * so "bad ether addr" is what a mistyped address gets on any machine,
+ * with or without a radio in it, rather than the answer depending on
+ * how far the boot got.
  */
 static long
 etherbcmctl(Ether *edev, void *a, long n)
 {
 	Ctlr *ctl;
 	Cmdbuf *cb;
+	Cmdtab *ct;
+	uchar ea[Eaddrlen];
+	uvlong iv;
 	int i;
 
 	ctl = edev->ctlr;
@@ -2477,7 +2933,9 @@ etherbcmctl(Ether *edev, void *a, long n)
 		free(cb);
 		nexterror();
 	}
-	if(cb->nf == 4 && strcmp(cb->f[0], "firmware") == 0){
+	ct = lookupcmd(cb, cmds, nelem(cmds));
+	switch(ct->index){
+	case CMfirmware:
 		if(!ctl->present)
 			error("ether4330: no radio");
 		qlock(&ctl->alock);
@@ -2494,8 +2952,86 @@ etherbcmctl(Ether *edev, void *a, long n)
 		closefw(ctl);
 		poperror();
 		qunlock(&ctl->alock);
-	}else
-		error(Ebadctl);
+		break;
+	case CMauth:
+		wlrunning(ctl);
+		setauth(ctl, cb, cb->f[1]);
+		if(ctl->essid[0])
+			wljoin(ctl, ctl->essid, ctl->chanid);
+		break;
+	case CMchannel:
+		if((i = atoi(cb->f[1])) < 0 || i > 16)
+			cmderror(cb, "bad channel number");
+		ctl->chanid = i;
+		break;
+	case CMcrypt:
+		if(!setcrypt(ctl, cb->f[1]))
+			cmderror(cb, "bad crypt type");
+		wlrunning(ctl);
+		wlsetint(ctl, "auth", ctl->cryptotype);
+		if(ctl->essid[0])
+			wljoin(ctl, ctl->essid, ctl->chanid);
+		break;
+	case CMessid:
+		wlrunning(ctl);
+		if(cistrcmp(cb->f[1], "default") == 0)
+			memset(ctl->essid, 0, sizeof ctl->essid);
+		else{
+			strncpy(ctl->essid, cb->f[1], sizeof ctl->essid - 1);
+			ctl->essid[sizeof ctl->essid - 1] = 0;
+		}
+		if(ctl->essid[0])
+			wljoin(ctl, ctl->essid, ctl->chanid);
+		break;
+	case CMjoin:	/* join essid chan crypt|authie */
+		if((i = atoi(cb->f[2])) < 0 || i > 16)
+			cmderror(cb, "bad channel number");
+		wlrunning(ctl);
+		if(strcmp(cb->f[1], "") != 0){
+			if(cistrcmp(cb->f[1], "default") != 0){
+				strncpy(ctl->essid, cb->f[1], sizeof ctl->essid - 1);
+				ctl->essid[sizeof ctl->essid - 1] = 0;
+			}else
+				memset(ctl->essid, 0, sizeof ctl->essid);
+		}else if(ctl->essid[0] == 0)
+			cmderror(cb, "essid not set");
+		ctl->chanid = i;
+		if(setcrypt(ctl, cb->f[3]))
+			wlsetint(ctl, "auth", ctl->cryptotype);
+		else
+			setauth(ctl, cb, cb->f[3]);
+		if(ctl->essid[0])
+			wljoin(ctl, ctl->essid, ctl->chanid);
+		break;
+	case CMkey1:
+	case CMkey2:
+	case CMkey3:
+	case CMkey4:
+		i = ct->index - CMkey1;
+		if(wepparsekey(&ctl->keys[i], cb->f[1]) < 0)
+			cmderror(cb, "bad WEP key syntax");
+		wlrunning(ctl);
+		wlsetint(ctl, "wsec", 1);	/* wep enabled */
+		wlwepkey(ctl, i);
+		break;
+	case CMrxkey:
+	case CMrxkey0:
+	case CMrxkey1:
+	case CMrxkey2:
+	case CMrxkey3:
+	case CMtxkey:
+		if(parseether(ea, cb->f[1]) < 0)
+			cmderror(cb, "bad ether addr");
+		if(wpaparsekey(&ctl->keys[0], &iv, cb->f[2]) < 0)
+			cmderror(cb, "bad wpa key");
+		wlrunning(ctl);
+		i = ct->index == CMrxkey? 0 : ct->index - CMrxkey0;
+		wlwpakey(ctl, ct->index, iv, ea, i);
+		break;
+	case CMdebug:
+		iodebug = atoi(cb->f[1]);
+		break;
+	}
 	poperror();
 	free(cb);
 	return n;
@@ -2535,6 +3071,12 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 		[Connecting]	= "connecting",
 		[Connected]	= "associated",
 	};
+	static char *cryptoname[4] = {
+		[0]	= "off",
+		[Wep]	= "wep",
+		[Wpa]	= "wpa",
+		[Wpa2]	= "wpa2",
+	};
 
 	ctl = edev->ctlr;
 	p = malloc(512);
@@ -2547,6 +3089,10 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	l += snprint(p+l, 512-l, "firmware: %s\n", ctl->running? ctl->ver : "not loaded");
 	if(ctl->running)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
+	l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
+	l += snprint(p+l, 512-l, "essid: %s\n", ctl->essid);
+	l += snprint(p+l, 512-l, "bssid: %E\n", ctl->bssid);
+	l += snprint(p+l, 512-l, "crypt: %s\n", cryptoname[ctl->cryptotype]);
 	l += snprint(p+l, 512-l, "scan: %d\n", ctl->scansecs);
 	l += snprint(p+l, 512-l, "oq: %d\n", qlen(edev->oq));
 	l += snprint(p+l, 512-l, "txwin: %d\n", ctl->txwindow);
@@ -2595,6 +3141,7 @@ ether4330probe(void)
 		return;
 	e->ctlr = ctl;
 	ctl->edev = e;
+	ctl->chanid = Wifichan;
 	e->attach = etherbcmattach;
 	e->ifstat = etherbcmifstat;
 	e->shutdown = etherbcmshutdown;

@@ -2154,9 +2154,16 @@ KBDEP="$(grep -oE 'kbdusb: ep[0-9]+\.0 ready' <<<"$KBDOUT" | head -1 | sed 's/kb
 if [[ -n "$KBDEP" ]]; then
     SAVEDARGS="$QEMUARGS"
     QEMUARGS="$QEMUARGS -device usb-kbd"
+    # Wait for the keyboard's endpoint to exist rather than for a
+    # fixed fifteen seconds: enumeration is a bus walk plus a 1 Hz hub
+    # poll plus the driver's start, and on a loaded host it has taken
+    # longer than the guess, at which point the detach went to a file
+    # that was not there yet and the check blamed the driver.
     DETOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
             'path=(/dis .)' \
-            'sleep 15' \
+            'load std' \
+            "while {! ftest -e /usb/usb/$KBDEP/ctl} {sleep 1}" \
+            'sleep 3' \
             "{echo detach; echo detach} > /usb/usb/$KBDEP/ctl" \
             'echo detach-twice-survived' \
             "cat /usb/usb/$KBDEP/ctl")"

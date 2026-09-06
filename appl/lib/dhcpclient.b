@@ -1258,7 +1258,7 @@ writendb(net: string, conf: ref Bootconf)
 	old := readfile(net+"/ndb");
 	if(ndbtext != nil)
 		old = without(old, ndbtext);
-	fd := sys->create(net+"/ndb", Sys->OWRITE, 8r664);
+	fd := ndbfd(net);
 	if(fd == nil){
 		trace(sys->sprint("cannot write %s/ndb: %r", net));
 		return;
@@ -1270,12 +1270,28 @@ writendb(net: string, conf: ref Bootconf)
 	ndbtext = s;
 }
 
+#
+# Open it, or make it. In the IP stack net/ndb is a device file that
+# already exists and cannot be created (a write at offset zero replaces
+# what it holds); in a namespace where it is an ordinary file it may
+# have to be made, and must be truncated when it is not.
+#
+ndbfd(net: string): ref Sys->FD
+{
+	fd := sys->open(net+"/ndb", Sys->OWRITE|Sys->OTRUNC);
+	if(fd == nil)
+		fd = sys->open(net+"/ndb", Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->create(net+"/ndb", Sys->OWRITE, 8r664);
+	return fd;
+}
+
 dropndb(net: string)
 {
 	if(ndbtext == nil)
 		return;
 	old := without(readfile(net+"/ndb"), ndbtext);
-	fd := sys->create(net+"/ndb", Sys->OWRITE, 8r664);
+	fd := ndbfd(net);
 	if(fd != nil){
 		b := array of byte old;
 		sys->write(fd, b, len b);

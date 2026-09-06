@@ -404,9 +404,17 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 		xid := getxid(buf);
 		ty := msgtype(buf);
 		replies: list of array of byte;
-		case phase {
-		0 =>
-			if(ty == Discover){
+		#
+		# Answers depend on what arrived, not on how many messages
+		# have gone by. A client whose two-second wait expires on a
+		# loaded machine retransmits, and a server that had counted
+		# messages would then be answering the wrong question for
+		# the rest of the run -- which is a flaky test, not a
+		# finding about the client.
+		#
+		case ty {
+		Discover =>
+			if(phase == 0){
 				#
 				# Two replies a correct client must throw
 				# away -- one with another transaction's id,
@@ -419,33 +427,26 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 					mkreply(xid, ipb(Decoyaddr)[0:4], Decoyaddr, offeropts(), nil, nil) ::
 					mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
 				phase = 1;
-			}
-		1 =>
-			if(ty == Request){
+			}else
+				replies = mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
+		Request =>
+			case phase {
+			0 or 1 =>
+				# the first exchange: an ACK whose options are
+				# overloaded into the file field
 				replies = mkreply(xid, mac, Ouraddr, ackopts(),
 					fileopts(), array of byte "hostfromsname") :: nil;
 				phase = 2;
-			}
-		2 =>
-			if(ty == Discover){
-				replies = mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
-				phase = 3;
-			}
-		3 =>
-			if(ty == Request){
+			2 =>
+				# the second exchange: refused once
 				replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
-				phase = 4;
-			}
-		4 =>
-			if(ty == Discover){
-				replies = mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
-				phase = 5;
-			}
-		5 =>
-			if(ty == Request){
+				phase = 3;
+			* =>
+				# and then granted, with no overload, so the
+				# file and sname fields are names
 				replies = mkreply(xid, mac, Ouraddr, ack2opts(),
 					array of byte "/boot/kernel", array of byte "srv1") :: nil;
-				phase = 6;
+				phase = 4;
 			}
 		}
 		for(; replies != nil; replies = tl replies){
@@ -496,12 +497,16 @@ setupnet(): (ref FileIO, ref FileIO, string)
 		return (nil, nil, sys->sprint("cannot create the udp files: %r"));
 	if(sys->bind("#s", Netdir+"/srv", Sys->MREPL|Sys->MCREATE) < 0)
 		return (nil, nil, sys->sprint("cannot bind the srv device: %r"));
-	clone := sys->file2chan(Netdir+"/srv", "clone");
-	data := sys->file2chan(Netdir+"/srv", "data");
+	#
+	# Names of their own: the srv device is shared by everything in
+	# this emu, and "clone" is not a name to claim in it.
+	#
+	clone := sys->file2chan(Netdir+"/srv", "dhcptestclone");
+	data := sys->file2chan(Netdir+"/srv", "dhcptestdata");
 	if(clone == nil || data == nil)
 		return (nil, nil, sys->sprint("file2chan: %r"));
-	if(sys->bind(Netdir+"/srv/clone", Netdir+"/udp/clone", Sys->MREPL) < 0 ||
-	   sys->bind(Netdir+"/srv/data", Netdir+"/udp/1/data", Sys->MREPL) < 0)
+	if(sys->bind(Netdir+"/srv/dhcptestclone", Netdir+"/udp/clone", Sys->MREPL) < 0 ||
+	   sys->bind(Netdir+"/srv/dhcptestdata", Netdir+"/udp/1/data", Sys->MREPL) < 0)
 		return (nil, nil, sys->sprint("cannot bind the udp files: %r"));
 	return (clone, data, nil);
 }
@@ -664,22 +669,49 @@ iplist(l: list of string): string
 checksent(res: chan of ref Result, sent: list of array of byte)
 {
 	types := "";
-	n := 0;
+	n := ndiscover := nrequest := nrelease := nother := 0;
+	prev := 0;
+	pairs := 1;			# every REQUEST follows a DISCOVER
 	first, request, rel: array of byte;
 	for(l := sent; l != nil; l = tl l){
 		p := hd l;
 		ty := msgtype(p);
-		types += sys->sprint("%d ", ty);
+		types += string ty + " ";
+		case ty {
+		Discover =>
+			ndiscover++;
+		Request =>
+			nrequest++;
+			if(prev != Discover)
+				pairs = 0;
+		Release =>
+			nrelease++;
+		* =>
+			nother++;
+		}
 		if(n == 0)
 			first = p;
-		if(n == 1)
+		if(request == nil && ty == Request)
 			request = p;
 		if(ty == Release && rel == nil)
 			rel = p;
+		prev = ty;
 		n++;
 	}
-	res <-= ref Result(types == "1 3 7 1 3 1 3 7 ",
-		"the message sequence, releases included: "+types);
+	#
+	# Not an exact string: a client whose wait expires on a loaded
+	# machine retransmits, and that is correct behaviour. What must
+	# hold is the shape. Three DISCOVERs is the point -- one for the
+	# first exchange, two for the second, because the DHCPNAK sends
+	# the client back to the beginning rather than on to an address it
+	# was refused.
+	#
+	res <-= ref Result(nother == 0, "nothing but DISCOVER, REQUEST and RELEASE went out: "+types);
+	res <-= ref Result(msgtype(first) == Discover, "the first message is a DHCPDISCOVER: "+types);
+	res <-= ref Result(pairs, "every DHCPREQUEST follows a DHCPDISCOVER: "+types);
+	res <-= ref Result(ndiscover >= 3, "the DHCPNAK sent the client back to DISCOVER: "+types);
+	res <-= ref Result(nrequest >= 3, "three DHCPREQUESTs, one of them refused: "+types);
+	res <-= ref Result(nrelease == 2, "both leases were given back: "+types);
 	if(first != nil){
 		b := Udphdrlen;
 		res <-= ref Result(int first[b] == 1 && int first[b+1] == 1 && int first[b+2] == 6,

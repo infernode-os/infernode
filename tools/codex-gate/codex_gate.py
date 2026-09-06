@@ -33,8 +33,8 @@
 #
 # Consequence worth knowing: CLI SESSIONS are stateless. There is no live CLI
 # session across a tool round-trip — each request is one `codex exec`.
-# In-flight HTTP requests, including quota-paused requests, are not durable
-# across a gateway restart and must be retried by the caller. /health reports
+# In-flight HTTP requests are not durable across a gateway restart and must
+# be retried by the caller. /health reports
 # held_turns for surface parity with claude-gate; it is always 0.
 #
 # Endpoints (bind 127.0.0.1 only — no auth of its own):
@@ -48,8 +48,6 @@
 #   CODEX_GATE_MOCK       "1" = deterministic mock backend (tests; no CLI)
 #   CODEX_GATE_MOCK_ERROR non-empty = fail every mock turn with this message
 #   CODEX_GATE_MOCK_ERROR_COUNT fail this many mock calls (-1 = every call)
-#   CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH only fail mock turns whose system prompt
-#                                      contains this string
 #   CODEX_GATE_BIN        codex binary (default "codex", found on PATH)
 #   CODEX_GATE_MODEL      default model; empty = let the CLI use its own
 #   CODEX_GATE_MODELS     comma-separated list advertised on /v1/models
@@ -57,12 +55,7 @@
 #   CODEX_GATE_IDLE_TIMEOUT seconds with no CLI output before abort (default 300)
 #   CODEX_GATE_HEARTBEAT  seconds between SSE keepalives (default 30)
 #   CODEX_GATE_CONCURRENCY  max simultaneous codex processes (default 4)
-#   CODEX_GATE_QUOTA_MAX_WAIT max seconds to preserve/retry a quota-paused turn
-#                             (default 21600; 0 = return structured 429)
-#   CODEX_GATE_QUOTA_BACKOFF initial retry delay without reset metadata (30)
-#   CODEX_GATE_QUOTA_MAX_BACKOFF maximum fallback retry delay (900)
 #   CODEX_GATE_QUOTA_RESET_GRACE seconds after a minute-precision reset (30)
-#   SIGHUP                    retry quota-paused requests immediately
 #   CODEX_GATE_SANDBOX    --sandbox value (default read-only)
 #   CODEX_GATE_WORKDIR    --cd value (default ~/.cache/codex-gate/workdir)
 #   CODEX_GATE_CODEX_HOME CODEX_HOME for the child (isolates ~/.codex; you
@@ -73,9 +66,6 @@
 #   CODEX_GATE_HARDEN     "0" = do not pin the CLI feature surface (see below)
 #   CODEX_GATE_DISABLE_FEATURES  comma list replacing the pinned disable set
 #   CODEX_GATE_HOME_ALLOW comma list of entries allowed in CODEX_GATE_CODEX_HOME
-#
-# Also: `codex_gate.py --inventory [CODEX_HOME]` prints a hashed inventory of
-# the model-side state the CLI created, and exits.  Run it after a campaign.
 #
 # Billing guard: OPENAI_API_KEY in the environment can make the CLI bill the
 # API instead of the ChatGPT plan.  serve-codex-gate.sh unsets it; we also
@@ -91,7 +81,6 @@ import re
 import shlex
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -105,8 +94,6 @@ PORT = int(os.environ.get("CODEX_GATE_PORT", "11436"))
 MOCK = os.environ.get("CODEX_GATE_MOCK", "") == "1"
 MOCK_ERROR = os.environ.get("CODEX_GATE_MOCK_ERROR", "")
 MOCK_ERROR_COUNT = int(os.environ.get("CODEX_GATE_MOCK_ERROR_COUNT", "-1"))
-MOCK_ERROR_SYSTEM_MATCH = os.environ.get(
-    "CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH", "")
 CODEX_BIN = os.environ.get("CODEX_GATE_BIN", "codex")
 DEFAULT_MODEL = os.environ.get("CODEX_GATE_MODEL", "")
 EXEC_TIMEOUT = max(0.05, float(os.environ.get("CODEX_GATE_TIMEOUT", "900")))
@@ -114,20 +101,10 @@ IDLE_TIMEOUT = max(0.0, float(os.environ.get("CODEX_GATE_IDLE_TIMEOUT", "300")))
 HEARTBEAT = max(0.05, float(os.environ.get("CODEX_GATE_HEARTBEAT", "30")))
 CONCURRENCY = int(os.environ.get("CODEX_GATE_CONCURRENCY", "4"))
 SANDBOX = os.environ.get("CODEX_GATE_SANDBOX", "read-only")
-QUOTA_MAX_WAIT = max(0.0, float(os.environ.get(
-    "CODEX_GATE_QUOTA_MAX_WAIT", "21600")))
-QUOTA_BACKOFF = max(0.05, float(os.environ.get(
-    "CODEX_GATE_QUOTA_BACKOFF", "30")))
-QUOTA_MAX_BACKOFF = max(QUOTA_BACKOFF, float(os.environ.get(
-    "CODEX_GATE_QUOTA_MAX_BACKOFF", "900")))
 QUOTA_RESET_GRACE = max(0.0, float(os.environ.get(
     "CODEX_GATE_QUOTA_RESET_GRACE", "30")))
 
 _mock_errors_remaining = MOCK_ERROR_COUNT
-_quota_pauses = {}
-_quota_wakes = {}
-_last_quota_pause = None
-_home_inventory_cache = None
 
 # Models advertised on /v1/models — what llmsrv's `/mnt/llm/models` and the
 # Settings picker show.  Codex's model lineup moves faster than this file
@@ -171,15 +148,10 @@ PROMPT_ARGV = os.environ.get("CODEX_GATE_PROMPT_ARGV", "") == "1"
 
 # ── pinned CLI feature surface (INFR-413) ──────────────────────────
 #
-# During the escape-room campaign, Codex CLI 0.149.0 populated a fresh 0700
-# CODEX_HOME that held only auth.json with 144 plugin-cache files (~26 MiB,
-# the remote curated catalog included), 60 system-skill files, and a shell
-# snapshot.  Nothing escaped — the CLI ran --sandbox read-only, with its
-# native shell disabled, in an empty working directory on a VM with no target
-# filesystem — but the model was carrying tools and instructions nobody
-# recorded, and the next campaign would carry different ones.  So the gateway
-# pins the surface instead of inheriting whatever the installed CLI defaults
-# to, and reports what it pinned on /health for the campaign manifest.
+# The Codex CLI can discover plugins, skills, configuration, and host tools of
+# its own. This protocol adapter pins that surface rather than inheriting
+# whatever an installed CLI enables by default, and reports the effective
+# configuration on /health.
 #
 # `--disable X` is `-c features.X=false`.  An unknown name is a hard error
 # from the CLI, and that is the point: a build that renames one must fail
@@ -242,7 +214,7 @@ def profile_flags():
     """The invariant, security-relevant part of every `codex exec`.
 
     build_argv() and the /health profile are both built from this, so the
-    flags a campaign records cannot drift from the flags it ran under.
+    reported configuration cannot drift from the flags actually passed.
     """
     flags = ["--sandbox", SANDBOX, "--strict-config"]
     for feature in disabled_features():
@@ -268,62 +240,6 @@ def codex_home_violations(home, allow):
         kind = "directory" if os.path.isdir(os.path.join(home, name)) else "file"
         violations.append("unexpected %s %r" % (kind, name))
     return violations
-
-
-def file_sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def codex_home_inventory(home):
-    """Every file under a Codex home, hashed.
-
-    The CLI populates this directory itself while a campaign runs, so an
-    inventory taken afterwards is the only account of what model-side state
-    the trials actually carried.  The top-level `sha256` covers the whole
-    listing, so two campaigns can be compared by one value.
-    """
-    entries = []
-    total = 0
-    for dirpath, dirnames, filenames in os.walk(home):
-        dirnames.sort()
-        for name in sorted(filenames):
-            path = os.path.join(dirpath, name)
-            rel = os.path.relpath(path, home)
-            try:
-                stat = os.stat(path)
-                entries.append({"path": rel, "size": stat.st_size,
-                                "mode": oct(stat.st_mode & 0o777),
-                                "sha256": file_sha256(path)})
-                total += stat.st_size
-            except OSError as e:
-                entries.append({"path": rel, "error": str(e)})
-    listing = "\n".join("%s %s" % (e["path"], e.get("sha256", "unreadable"))
-                        for e in entries)
-    credential_names = {"auth.json", "auth.json.lock"}
-    credential_files = sum(
-        1 for entry in entries if entry["path"].split(os.sep, 1)[0]
-        in credential_names)
-    return {"home": home, "files": len(entries), "bytes": total,
-            "credential_files": credential_files,
-            "persistent_cli_state_files": len(entries) - credential_files,
-            "persistent_cli_state": len(entries) > credential_files,
-            "sha256": hashlib.sha256(listing.encode()).hexdigest(),
-            "entries": entries}
-
-
-def codex_home_summary(home):
-    """Cached inventory summary, invalidated whenever a Codex child exits."""
-    global _home_inventory_cache
-    if _home_inventory_cache is None:
-        _home_inventory_cache = {
-            k: v for k, v in codex_home_inventory(home).items()
-            if k != "entries"
-        }
-    return dict(_home_inventory_cache)
 
 
 def codex_version():
@@ -357,8 +273,8 @@ def effective_features(disabled):
     """Ask the installed CLI what its feature set is under our flags.
 
     Two jobs at once: it validates every pinned name against this build (the
-    CLI errors on one it does not know) and it produces the hashable record
-    the campaign manifest needs.  It evaluates the same CODEX_HOME the child
+    CLI errors on one it does not know) and it produces a hashable record for
+    operators. It evaluates the same CODEX_HOME the child
     will use, so a config.toml smuggled in there would show up here too.
     """
     argv = [CODEX_BIN, "features", "list"]
@@ -382,8 +298,8 @@ def effective_features(disabled):
     return features, hashlib.sha256(canonical.encode()).hexdigest()
 
 
-# Filled in at startup by gate_profile(); reported on /health so a campaign
-# manifest records the CLI version and effective configuration it ran against.
+# Filled in at startup by gate_profile(); reported on /health so operators can
+# verify the CLI version and effective configuration in use.
 PROFILE = {}
 
 
@@ -404,10 +320,6 @@ def gate_profile():
     features, digest = effective_features(disabled_features())
     profile["features_sha256"] = digest
     profile["features_enabled"] = sorted(k for k, on in features.items() if on)
-    home = os.environ.get("CODEX_GATE_CODEX_HOME")
-    if home:
-        profile["codex_home_baseline"] = {
-            k: v for k, v in codex_home_inventory(home).items() if k != "entries"}
     return profile
 
 _sem = None     # asyncio.Semaphore, created on startup
@@ -715,101 +627,6 @@ def quota_error_body(error):
     }}
 
 
-async def run_with_quota_recovery(factory):
-    """Retry one stateless turn without advancing the caller transcript."""
-    global _last_quota_pause
-    turn_id = uuid.uuid4().hex
-    started = None
-    started_at = None
-    retries = 0
-    wake = asyncio.Event()
-    _quota_wakes[turn_id] = wake
-    try:
-        while True:
-            try:
-                if turn_id in _quota_pauses:
-                    _quota_pauses[turn_id]["state"] = "resuming"
-                result = await factory()
-                if started is not None:
-                    finished = dict(_quota_pauses.get(turn_id, {}))
-                    finished.update({
-                        "state": "resumed",
-                        "resumed_at": datetime.datetime.now().astimezone().isoformat(),
-                        "duration_seconds": round(time.monotonic() - started, 3),
-                    })
-                    _last_quota_pause = finished
-                return result
-            except CodexError as error:
-                metadata = quota_metadata(str(error))
-                if metadata is None:
-                    raise
-                qerror = UsageLimitError(str(error), metadata)
-                if QUOTA_MAX_WAIT <= 0:
-                    raise qerror
-                now_mono = time.monotonic()
-                if started is None:
-                    started = now_mono
-                    started_at = datetime.datetime.now().astimezone().isoformat()
-                remaining = QUOTA_MAX_WAIT - (now_mono - started)
-                if remaining <= 0:
-                    exhausted = dict(_quota_pauses.get(turn_id, {}))
-                    exhausted.update({
-                        "state": "exhausted",
-                        "ended_at": datetime.datetime.now().astimezone().isoformat(),
-                        "duration_seconds": round(now_mono - started, 3),
-                    })
-                    _last_quota_pause = exhausted
-                    raise qerror
-                delay = metadata.get("retry_after")
-                if delay is None:
-                    delay = min(QUOTA_BACKOFF * (2 ** min(retries, 20)),
-                                QUOTA_MAX_BACKOFF)
-                delay = min(max(0.05, float(delay)), remaining)
-                retry_at = datetime.datetime.now().astimezone() + \
-                    datetime.timedelta(seconds=delay)
-                state = {
-                    "state": "paused_quota",
-                    "reason": "usage_limit",
-                    "paused_at": started_at,
-                    "retry_at": retry_at.isoformat(),
-                    "retry": retries + 1,
-                }
-                _quota_pauses[turn_id] = state
-                _last_quota_pause = dict(state)
-                log.warning("usage limit; pausing turn %.1fs (retry %d)",
-                            delay, retries + 1)
-                try:
-                    await asyncio.wait_for(wake.wait(), timeout=delay)
-                    wake.clear()
-                    log.warning("operator requested immediate quota retry")
-                except asyncio.TimeoutError:
-                    pass
-                retries += 1
-    finally:
-        _quota_pauses.pop(turn_id, None)
-        _quota_wakes.pop(turn_id, None)
-
-
-def request_quota_retry():
-    """Wake quota-paused requests so they recheck the account immediately."""
-    now = datetime.datetime.now().astimezone().isoformat()
-    woken = 0
-    for turn_id, wake in list(_quota_wakes.items()):
-        pause = _quota_pauses.get(turn_id)
-        if pause is None or pause.get("state") != "paused_quota":
-            continue
-        pause["state"] = "resuming"
-        pause["retry_at"] = now
-        pause["operator_retry_at"] = now
-        wake.set()
-        woken += 1
-    if woken:
-        log.warning("SIGHUP: retrying %d quota-paused turn(s)", woken)
-    else:
-        log.info("SIGHUP: no quota-paused turns to retry")
-    return woken
-
-
 def child_env():
     env = dict(os.environ)
     env.pop("OPENAI_API_KEY", None)      # never bill the API by accident
@@ -927,7 +744,6 @@ def parse_events(stdout):
 
 async def run_codex(model, prompt, schema):
     """One `codex exec`.  Returns (final_text, usage_tokens)."""
-    global _home_inventory_cache
     tmpdir = tempfile.mkdtemp(prefix="codex-gate-")
     schema_path = os.path.join(tmpdir, "schema.json")
     last_path = os.path.join(tmpdir, "last-message.txt")
@@ -959,10 +775,6 @@ async def run_codex(model, prompt, schema):
         except asyncio.CancelledError:
             await kill_process_group(proc)
             raise
-        finally:
-            # The CLI may have changed its isolated home even on failure.
-            _home_inventory_cache = None
-
         stdout = out.decode("utf-8", "replace")
         stderr = err.decode("utf-8", "replace")
         if proc.returncode != 0:
@@ -1113,9 +925,7 @@ async def mock_turn(model, system_prompt, prompt, tooldefs, trailing_tools):
     gate's stateless shape: tool results arrive in the request, not on a
     held turn.  `MOCK_TOOL_CALL <name> <json>` triggers one tool call."""
     global _mock_errors_remaining
-    selected = not MOCK_ERROR_SYSTEM_MATCH or \
-        MOCK_ERROR_SYSTEM_MATCH in system_prompt
-    if MOCK_ERROR and selected and _mock_errors_remaining != 0:
+    if MOCK_ERROR and _mock_errors_remaining != 0:
         if _mock_errors_remaining > 0:
             _mock_errors_remaining -= 1
         raise CodexError(MOCK_ERROR)
@@ -1162,12 +972,10 @@ async def chat_completions(request):
             {"error": {"message": "no user content in messages"}}, status=400)
 
     trailing = [m for m in history if m.get("role") == "tool"]
-    def turn_factory():
-        if MOCK:
-            return mock_turn(model, system_prompt, prompt, tooldefs, trailing)
-        return codex_turn(model, system_prompt, prompt, tooldefs)
-
-    turn = run_with_quota_recovery(turn_factory)
+    if MOCK:
+        turn = mock_turn(model, system_prompt, prompt, tooldefs, trailing)
+    else:
+        turn = codex_turn(model, system_prompt, prompt, tooldefs)
 
     stream_response = None
     task = None
@@ -1192,7 +1000,8 @@ async def chat_completions(request):
             content, calls, usage = await turn
     except CodexError as e:
         log.error("turn failed: %s", e)
-        quota = e if isinstance(e, UsageLimitError) else None
+        metadata = quota_metadata(str(e))
+        quota = UsageLimitError(str(e), metadata) if metadata else None
         if stream_response is not None:
             if quota is not None:
                 await stream_response.write(
@@ -1235,9 +1044,6 @@ async def models(request):
 
 
 async def health(request):
-    states = {pause.get("state") for pause in _quota_pauses.values()}
-    state = ("paused_quota" if "paused_quota" in states else
-             "resuming" if "resuming" in states else "ready")
     body = {
         "status": "ok",
         "backend": "mock" if MOCK else "codex-cli",
@@ -1248,25 +1054,12 @@ async def health(request):
         # but the CLI may still write operational state there between turns.
         "stateless": True,
         "session_stateless": True,
-        "quota_recovery": QUOTA_MAX_WAIT > 0,
         "turn_timeout_seconds": EXEC_TIMEOUT,
         "idle_timeout_seconds": IDLE_TIMEOUT,
-        "state": state,
-        "quota": {
-            "paused_turns": len(_quota_pauses),
-            "retry_at": min((p["retry_at"] for p in _quota_pauses.values()),
-                            default=None),
-            "last_pause": _last_quota_pause,
-            "max_wait_seconds": QUOTA_MAX_WAIT,
-        },
     }
-    # The pinned CLI surface (INFR-413). A campaign records this verbatim, and
-    # the external escape-room harness refuses to start a trial against a
-    # gateway that is not running the profile the scenario asked for.
+    # The pinned CLI surface lets operators verify that the adapter is not
+    # inheriting an uncontrolled set of native Codex tools or instructions.
     body.update(PROFILE)
-    home = os.environ.get("CODEX_GATE_CODEX_HOME")
-    if home and not MOCK:
-        body["codex_home_current"] = codex_home_summary(home)
     return web.json_response(body)
 
 
@@ -1275,18 +1068,6 @@ def main():
         level=logging.DEBUG if os.environ.get("CODEX_GATE_DEBUG") else logging.INFO,
         format="codex-gate: %(levelname)s %(message)s")
 
-    # `codex_gate.py --inventory [HOME]` — the post-campaign account of the
-    # model-side state the CLI created for itself (INFR-413). Not a server
-    # mode; it prints and exits.
-    argv = sys.argv[1:]
-    if argv and argv[0] == "--inventory":
-        home = (argv[1] if len(argv) > 1 else
-                os.environ.get("CODEX_GATE_CODEX_HOME") or
-                os.environ.get("CODEX_HOME") or
-                os.path.expanduser("~/.codex"))
-        print(json.dumps(codex_home_inventory(home), indent=2))
-        return
-
     if os.environ.get("OPENAI_API_KEY") and not MOCK \
             and os.environ.get("CODEX_GATE_ALLOW_API_KEY") != "1":
         raise SystemExit(
@@ -1294,9 +1075,8 @@ def main():
             "instead of your ChatGPT plan. Unset it (serve-codex-gate.sh "
             "does) or set CODEX_GATE_ALLOW_API_KEY=1 to override.")
 
-    # An isolated Codex home is only isolated if nothing else got in. Checked
-    # before the first request, because the CLI populates the directory itself
-    # once one arrives and the baseline is gone (INFR-413).
+    # An isolated Codex home is only isolated if nothing else got in. Check it
+    # before the first request, because the CLI may populate it once serving.
     home = os.environ.get("CODEX_GATE_CODEX_HOME")
     if home and not MOCK:
         violations = codex_home_violations(home, home_allowlist())
@@ -1334,12 +1114,6 @@ def main():
     async def make_sem(app):
         global _sem
         _sem = asyncio.Semaphore(CONCURRENCY)
-        if hasattr(signal, "SIGHUP"):
-            try:
-                asyncio.get_running_loop().add_signal_handler(
-                    signal.SIGHUP, request_quota_retry)
-            except (NotImplementedError, RuntimeError):
-                log.warning("SIGHUP quota retry is unavailable on this platform")
     app.on_startup.append(make_sem)
 
     log.info("listening on http://%s:%d/v1 (%s backend)",

@@ -195,7 +195,6 @@ pass "cancelled streams reap codex exec"
 ERROR_PORT=$((PORT+1))
 CODEX_GATE_MOCK=1 \
 CODEX_GATE_MOCK_ERROR='usage limit reached; retry after reset' \
-CODEX_GATE_QUOTA_MAX_WAIT=0 \
 CODEX_GATE_PORT=$ERROR_PORT python3 "$GATE" >/dev/null 2>&1 &
 ERROR_PID=$!
 ERROR_BODY="$(mktemp "${TMPDIR:-/tmp}/codex-gate-error.XXXXXX")"
@@ -230,122 +229,6 @@ if echo "$stream_error" | grep -q '"content"'; then
     fail "streaming quota failure was emitted as assistant content"
 fi
 pass "streaming usage-limit error is not assistant content"
-
-# 8. A transient limit pauses and retries the exact request. While sleeping,
-#    /health exposes machine-readable state; the successful response contains
-#    no quota text and requires no client-side transcript mutation.
-RECOVER_PORT=$((PORT+3))
-RECOVER_BODY="$(mktemp "${TMPDIR:-/tmp}/codex-gate-recover.XXXXXX")"
-CODEX_GATE_MOCK=1 \
-CODEX_GATE_MOCK_ERROR='usage limit reached; try again in 1 second' \
-CODEX_GATE_MOCK_ERROR_COUNT=1 \
-CODEX_GATE_QUOTA_BACKOFF=0.05 \
-CODEX_GATE_QUOTA_MAX_WAIT=5 \
-CODEX_GATE_PORT=$RECOVER_PORT python3 "$GATE" >/dev/null 2>&1 &
-RECOVER_PID=$!
-trap 'kill $GATE_PID $ERROR_PID $RECOVER_PID 2>/dev/null || true; rm -f "$ERROR_BODY" "$RECOVER_BODY"' EXIT
-i=0
-while ! curl -sf -m 1 "http://127.0.0.1:$RECOVER_PORT/health" >/dev/null 2>&1; do
-    i=$((i+1))
-    [ $i -lt 30 ] || fail "recovery gate did not come up on :$RECOVER_PORT"
-    sleep 0.2
-done
-curl -sf "http://127.0.0.1:$RECOVER_PORT/v1/chat/completions" \
-    -H 'Content-Type: application/json' \
-    -d '{"model":"default","messages":[{"role":"user","content":"resume me"}]}' \
-    >"$RECOVER_BODY" &
-RECOVER_CURL_PID=$!
-sleep 0.2
-out="$(curl -sf "http://127.0.0.1:$RECOVER_PORT/health")"
-echo "$out" | grep -q '"state": "paused_quota"' || \
-    fail "gateway did not expose quota pause ($out)"
-echo "$out" | grep -q '"paused_turns": 1' || \
-    fail "gateway did not count paused turn ($out)"
-wait "$RECOVER_CURL_PID"
-grep -q 'MOCK_REPLY: resume me' "$RECOVER_BODY" || \
-    fail "paused request did not resume"
-if grep -qi 'usage limit' "$RECOVER_BODY"; then
-    fail "quota text was returned as model output"
-fi
-out="$(curl -sf "http://127.0.0.1:$RECOVER_PORT/health")"
-echo "$out" | grep -q '"state": "ready"' || fail "gateway did not return to ready"
-echo "$out" | grep -q '"state": "resumed"' || fail "gateway lost resume evidence"
-pass "usage-limit pause resumes the same request"
-
-python3 - "$ROOT" <<'PY' || fail "bounded quota exhaustion"
-import asyncio
-import importlib.util
-import sys
-
-spec = importlib.util.spec_from_file_location(
-    "codex_gate", sys.argv[1] + "/tools/codex-gate/codex_gate.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.QUOTA_MAX_WAIT = 0.12
-m.QUOTA_BACKOFF = 0.05
-m.QUOTA_MAX_BACKOFF = 0.05
-calls = 0
-
-async def fail():
-    global calls
-    calls += 1
-    raise m.CodexError("usage limit reached")
-
-async def check():
-    try:
-        await m.run_with_quota_recovery(fail)
-    except m.UsageLimitError:
-        pass
-    else:
-        raise AssertionError("unbounded quota retry returned")
-    assert calls >= 2, calls
-    assert m._last_quota_pause["state"] == "exhausted", m._last_quota_pause
-    assert m._last_quota_pause["duration_seconds"] >= 0.12, m._last_quota_pause
-    assert not m._quota_pauses, m._quota_pauses
-
-    # An operator who has reset quota can wake the same held request instead
-    # of waiting for stale provider reset metadata to expire.
-    m.QUOTA_MAX_WAIT = 5
-    m.QUOTA_BACKOFF = 5
-    m.QUOTA_MAX_BACKOFF = 5
-    wake_calls = 0
-    async def wake_once():
-        nonlocal wake_calls
-        wake_calls += 1
-        if wake_calls == 1:
-            raise m.CodexError("usage limit reached")
-        return "resumed"
-    held = asyncio.create_task(m.run_with_quota_recovery(wake_once))
-    for _ in range(100):
-        if m._quota_pauses:
-            break
-        await asyncio.sleep(0.01)
-    assert m.request_quota_retry() == 1
-    assert await asyncio.wait_for(held, 1) == "resumed"
-    assert wake_calls == 2, wake_calls
-    assert m._last_quota_pause["state"] == "resumed", m._last_quota_pause
-    assert not m._quota_pauses and not m._quota_wakes
-
-    # The campaign control can target a delegated child without spending the
-    # one-shot fault on its parent request.
-    selector = "You are a task execution agent working autonomously."
-    m.MOCK_ERROR = "usage limit reached"
-    m.MOCK_ERROR_COUNT = 1
-    m.MOCK_ERROR_SYSTEM_MATCH = selector
-    m._mock_errors_remaining = 1
-    parent = await m.mock_turn("default", "parent", "create child", [], [])
-    assert parent[0].startswith("MOCK_REPLY:"), parent
-    try:
-        await m.mock_turn("default", selector, "child brief", [], [])
-    except m.CodexError as error:
-        assert "usage limit" in str(error)
-    else:
-        raise AssertionError("selected child mock did not fail")
-    resumed = await m.mock_turn("default", selector, "child brief", [], [])
-    assert resumed[0] == "MOCK_REPLY: child brief", resumed
-
-asyncio.run(check())
-PY
-pass "quota retries are bounded and can target a delegated child"
 
 # 9. The prompt-level tool protocol parses into OpenAI tool_calls
 python3 - "$ROOT" <<'PY' || fail "tool-reply parser"
@@ -389,10 +272,9 @@ assert "-m" not in argv, argv
 PY
 pass "codex exec argv is sandboxed and stdin-fed"
 
-# A CLI that starts a turn and then stops producing events must not consume the
-# rest of a child campaign deadline. The gate kills its whole process group and
-# returns a terminal error while retaining the longer total limit for active
-# extended-reasoning turns.
+# A CLI that starts a turn and then stops producing events must not occupy a
+# process slot indefinitely. The gate kills its whole process group and returns
+# a terminal error while retaining the longer total limit for active turns.
 python3 - "$ROOT" <<'PY' || fail "idle Codex process was not reaped"
 import asyncio
 import importlib.util
@@ -483,10 +365,7 @@ else:
 PY
 pass "startup readiness requires a ChatGPT OAuth login"
 
-# 11. The CLI's own plugin/skill/MCP surface is pinned, not inherited.
-#     Codex CLI 0.149.0 filled a fresh CODEX_HOME (auth.json only) with 144
-#     plugin-cache files, 60 system-skill files and a shell snapshot during
-#     the escape-room campaign (INFR-413). None of it was recorded anywhere.
+# 11. The CLI's own plugin, skill, and MCP surface is pinned, not inherited.
 python3 - "$ROOT" <<'PY' || fail "gateway hardening"
 import importlib.util
 import json
@@ -511,8 +390,8 @@ for feature in ("plugins", "apps", "skill_search", "memories",
                 "shell_snapshot", "shell_tool", "hooks", "multi_agent"):
     assert feature in disabled, (feature, disabled)
 assert disabled == list(m.disabled_features()), (disabled, m.disabled_features())
-# The recorded profile is built from the same function as the argv, so a
-# campaign manifest cannot describe flags the gate did not actually pass.
+# The reported profile is built from the same function as the argv, so it
+# cannot describe flags the gate did not actually pass.
 flags = m.profile_flags()
 assert flags == argv[2:2 + len(flags)], (flags, argv)
 
@@ -553,21 +432,6 @@ with tempfile.TemporaryDirectory() as td:
     assert any("credentials" in v for v in violations), violations
     os.chmod(home, 0o700)
 
-    # The post-campaign inventory accounts for what the CLI created itself.
-    os.makedirs(os.path.join(home, "plugins", "cache"))
-    open(os.path.join(home, "plugins", "cache", "catalog.json"), "w").write("[]")
-    inventory = m.codex_home_inventory(home)
-    assert inventory["files"] == 2, inventory
-    paths = sorted(e["path"] for e in inventory["entries"])
-    assert paths == ["auth.json", "plugins/cache/catalog.json"], paths
-    assert all(len(e["sha256"]) == 64 for e in inventory["entries"]), inventory
-    assert inventory["credential_files"] == 1, inventory
-    assert inventory["persistent_cli_state_files"] == 1, inventory
-    assert inventory["persistent_cli_state"] is True, inventory
-    before = inventory["sha256"]
-    open(os.path.join(home, "plugins", "cache", "catalog.json"), "w").write("[1]")
-    assert m.codex_home_inventory(home)["sha256"] != before
-
 # `codex features list` output → the effective state the manifest records.
 features = m.parse_features(
     "plugins                     stable             false\n"
@@ -575,7 +439,7 @@ features = m.parse_features(
     "web_search                  stable             true\n")
 assert features == {"plugins": False, "shell_tool": False, "web_search": True}, features
 PY
-pass "hardening flags, home preflight and state inventory"
+pass "hardening flags and home preflight"
 
 # 12. The pinned feature names must exist in the installed CLI. This is the
 #     forward-compatibility gate: a renamed flag would otherwise silently stop
@@ -607,15 +471,13 @@ else
     echo "skip: codex CLI not on PATH — pinned feature names not validated"
 fi
 
-# 13. /health carries the pinned profile, so a campaign manifest records the
-#     configuration the trial actually ran under.
+# 13. /health carries the pinned profile for operational verification.
 out="$(curl -sf "$BASE/health")"
 echo "$out" | grep -q '"hardened": true' || fail "health: no hardening flag ($out)"
 echo "$out" | grep -q '"disabled_features"' || fail "health: no feature list ($out)"
 echo "$out" | grep -q '"shell_tool"' || fail "health: shell_tool not pinned ($out)"
 echo "$out" | grep -q '"exec_flags"' || fail "health: no exec flags ($out)"
 echo "$out" | grep -q '"adapter_instructions_sha256"' || fail "health: adapter contract unhashed ($out)"
-echo "$out" | grep -q '"quota_recovery": true' || fail "health: quota recovery not advertised ($out)"
 echo "$out" | grep -q '"session_stateless": true' || fail "health: session statelessness not explicit ($out)"
 pass "health reports the pinned CLI profile"
 

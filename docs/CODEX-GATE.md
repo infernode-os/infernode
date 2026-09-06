@@ -62,10 +62,9 @@ and no `CODEX_GATE_HOLD_TIMEOUT`; the
 price is that no CLI session spans a tool round-trip — each request is one
 `codex exec` with the transcript replayed. `/health` still reports
 `held_turns` for surface parity with claude-gate; it is always 0. This does
-not mean `CODEX_HOME` is stateless: the CLI writes operational files there
-even when each invocation uses `--ephemeral`. An in-flight HTTP request,
-including a quota-paused one, is also not durable across a gateway restart;
-the caller must retry it.
+not mean `CODEX_HOME` is stateless: the CLI may write operational files there
+even when each invocation uses `--ephemeral`. An in-flight HTTP request is not
+durable across a gateway restart; the caller must retry it.
 
 A reply that isn't the agreed JSON object is treated as plain content rather
 than an error — degraded, never fatal.
@@ -88,10 +87,7 @@ All endpoints bind `127.0.0.1` only.
  "hardened": true, "codex_version": "codex-cli 0.149.0",
  "sandbox": "read-only", "exec_flags": ["--sandbox", "read-only", "..."],
  "disabled_features": ["plugins", "..."], "features_sha256": "…",
- "adapter_instructions_sha256": "…",
- "codex_home_baseline": {"files": 1, "bytes": 4156, "sha256": "…"},
- "codex_home_current": {"files": 72, "persistent_cli_state_files": 71,
-                         "persistent_cli_state": true, "sha256": "…"}}
+ "adapter_instructions_sha256": "…"}
 ```
 
 - `status` — `"ok"` if the daemon is serving. Non-mock startup first runs
@@ -103,17 +99,12 @@ All endpoints bind `127.0.0.1` only.
 - `held_turns` — always 0 here (see above); present so monitoring can treat
   both gates alike.
 - `turn_timeout_seconds` / `idle_timeout_seconds` — the total and no-output
-  deadlines applied to each Codex process. Escape-room preflight rejects a
-  gateway whose idle deadline is disabled or exceeds the campaign maximum.
+  deadlines applied to each Codex process.
 - `stateless` / `session_stateless` — the HTTP and CLI session contract only.
   They make no claim that the isolated Codex home remains empty.
 - `hardened`, `codex_version`, `exec_flags`, `disabled_features`,
-  `features_sha256`, `adapter_instructions_sha256`, `codex_home_baseline` —
-  the pinned CLI surface (see below). The external
-  [escape-room harness](https://github.com/infernode-os/infernode-escape-room)
-  copies these into a campaign's `manifest.json` and a scenario file can
-  require them, so a containment result names the gateway configuration it was
-  measured under.
+  `features_sha256`, `adapter_instructions_sha256` — the pinned CLI surface
+  available to operators and monitoring (see below).
 
 ## Lifecycle & startup
 
@@ -154,10 +145,7 @@ Config (env, read at start):
 | `CODEX_GATE_IDLE_TIMEOUT` | `300` | seconds a `codex exec` may produce no stdout/stderr before its process group is killed; `0` disables this deadline |
 | `CODEX_GATE_HEARTBEAT` | `30` | seconds between protocol-valid SSE comments while `codex exec` is still running; keep below the caller's no-progress timeout |
 | `CODEX_GATE_CONCURRENCY` | `4` | max simultaneous codex processes |
-| `CODEX_GATE_QUOTA_MAX_WAIT` | `21600` | maximum seconds to preserve and retry a usage-limit-paused request; `0` returns a structured 429 immediately |
-| `CODEX_GATE_QUOTA_BACKOFF` | `30` | initial retry delay when Codex provides no reset time |
-| `CODEX_GATE_QUOTA_MAX_BACKOFF` | `900` | maximum fallback retry delay |
-| `CODEX_GATE_QUOTA_RESET_GRACE` | `30` | grace after a minute-precision reset time before retrying |
+| `CODEX_GATE_QUOTA_RESET_GRACE` | `30` | grace added to a minute-precision reset time reported to callers |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
 | `CODEX_GATE_WORKDIR` | `~/.cache/codex-gate/workdir` | `--cd` value |
 | `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child, to isolate `~/.codex` (you must copy `auth.json` in yourself) |
@@ -167,20 +155,13 @@ Config (env, read at start):
 | `CODEX_GATE_DISABLE_FEATURES` | *(unset)* | comma list replacing the pinned disable set |
 | `CODEX_GATE_HOME_ALLOW` | `auth.json,auth.json.lock,version.json,installation_id` | what the isolated Codex home may contain at startup |
 | `CODEX_GATE_MOCK`, `CODEX_GATE_DEBUG` | — | test backend, verbose logs |
-| `CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH` | *(empty)* | mock-only fault selector; inject the configured mock error only when the system prompt contains this exact text |
 
 ## Pinned CLI surface
 
-The Codex CLI is an agent harness with a life of its own. During the
-escape-room campaign it populated a fresh 0700 `CODEX_HOME` — created with
-nothing in it but `auth.json` — with 144 plugin-cache files (~26 MiB,
-including the remote curated catalog), 60 system-skill files and a shell
-snapshot. Nothing escaped: the CLI ran `--sandbox read-only`, with its native
-shell disabled, in an empty working directory, on a machine with no access to
-the system under test. But the model was carrying tools and instructions that
-no run record named, and the next run would carry different ones.
-
-So the gate pins the surface rather than inheriting it (INFR-413). Every
+The Codex CLI is an agent harness with a life of its own. It can discover
+plugins, skills, configuration, and host tools that are outside this adapter's
+virtual-tool protocol. The gate therefore pins the surface rather than
+inheriting installed defaults (INFR-413). Every
 `codex exec` gets:
 
 - `--ephemeral`, so no resumable Codex session spans requests; the CLI may
@@ -199,23 +180,12 @@ instead of quietly running without it. At startup the gate asks
 both validates every pinned name against the installed build and produces the
 hash reported on `/health`.
 
-If `CODEX_GATE_CODEX_HOME` is set, the gate inventories it **before**
-authenticating through it and refuses to serve when it holds anything outside
+If `CODEX_GATE_CODEX_HOME` is set, the gate checks it **before** authenticating
+through it and refuses to serve when it holds anything outside
 the allowlist — a `config.toml`, an `AGENTS.md`, an `mcp.json`, a `plugins/`
 or `skills/` directory — or when the directory itself is group- or
 world-accessible. The check runs once at startup because the CLI fills the
-directory in itself as soon as the first request arrives.
-
-After a campaign, account for what it created:
-
-```sh
-tools/codex-gate/serve-codex-gate.sh --inventory    # or: --inventory PATH
-```
-
-That prints every file under the Codex home with its size, mode and SHA-256,
-separate credential and persistent-state counts, and one digest over the whole
-listing. `/health` exposes the same current summary without file names, and
-the campaign runner saves its final value as `gateway-final.json`.
+directory itself as soon as the first request arrives.
 
 ## Setup (pointing InferNode at it)
 
@@ -256,27 +226,12 @@ codex` report on it.
 ## Billing — read this once
 
 Headless CLI usage draws on the account the CLI is logged into. On a ChatGPT
-plan that means the plan's Codex usage allowance; when it is exhausted the
-gate keeps the affected HTTP request open, releases its Codex process slot,
-and retries without advancing the caller's transcript. `/health` reports
-`state=paused_quota` plus safe retry timing while this is happening. The gate
-does not meter usage. All consumers of one gate share one allowance and one
-auth identity.
-
-This is not `codex exec resume`. `llmsrv` and Veltro own the durable transcript,
-tool results, and activity tree; the gate still starts a fresh ephemeral
-`codex exec` for every attempt. A retry replays the same unchanged request.
-Set `CODEX_GATE_QUOTA_MAX_WAIT=0` when an operator prefers an immediate,
-machine-readable HTTP 429 instead of waiting.
-
-After resetting account quota manually, send `SIGHUP` to the gateway process.
-It immediately retries every quota-paused request with its original, unchanged
-HTTP body; a still-exhausted account returns the request to bounded backoff.
-For a systemd user service:
-
-```sh
-systemctl --user kill --kill-whom=main -s HUP codex-gate
-```
+plan that means the plan's Codex usage allowance. When it is exhausted the gate
+returns a machine-readable HTTP 429 with `type=usage_limit`, `retryable=true`,
+and safe reset timing when the CLI supplied it. The gate does not meter usage
+or retain and retry requests. Callers that need durable retry own that policy
+and their transcript state. All consumers of one gate share one allowance and
+one auth identity.
 
 **OPENAI_API_KEY can silently outrank ChatGPT auth in the CLI**, billing the
 API instead of the plan. The serve script unsets it, and the gate refuses to
@@ -331,9 +286,9 @@ deliberately).
 
 `codex_gate_test.sh` bills nothing. When a `codex` CLI is on `PATH` it also
 checks every pinned feature name against that build — `codex features list`
-evaluates local configuration only — so a renamed flag is caught before a
-campaign runs with the feature quietly back on. Without a CLI that one check
-is skipped and the rest still runs.
+evaluates local configuration only — so a renamed flag cannot quietly turn a
+disabled feature back on. Without a CLI that one check is skipped and the rest
+still runs.
 
 Live end-to-end (needs a logged-in CLI; uses your plan's allowance): start
 the gate, then inside emu `llmsrv -b openai -u http://127.0.0.1:11436/v1`

@@ -326,6 +326,7 @@ dis/lib/debsrc.dis
 dis/lib/debug.dis
 dis/lib/deflate.dis
 dis/lib/devpointer.dis
+dis/lib/dhcpclient.dis
 dis/lib/dial.dis
 dis/lib/dialnorm.dis
 dis/lib/dialog.dis

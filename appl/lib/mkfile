@@ -42,6 +42,7 @@ TARG=\
 	mermaid.dis\
 	deflate.dis\
 	devpointer.dis\
+	dhcpclient.dis\
 	dial.dis\
 	dialnorm.dis\
 	dialog.dis\

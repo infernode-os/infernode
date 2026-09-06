@@ -2442,6 +2442,18 @@ gettlv(uchar *p, uchar *ep, int tag)
 }
 
 /*
+ * One network, as a record.
+ *
+ * The channel is the low BYTE of the firmware's chanspec, not the low
+ * nibble. Miller's driver masks four bits, which can only express
+ * channels 1 to 15, and the board showed what that costs: every 5 GHz
+ * access point in range reported a 2.4 GHz channel it was not on --
+ * one of them called itself 5G in its own name while claiming channel
+ * 14, which is a channel almost nowhere allows. The rest of the
+ * chanspec is band, width and sideband, and none of that belongs in a
+ * field called chan.
+ *
+
  * One bss_info from the firmware, as one record. The offsets are the
  * firmware's wl_bss_info layout, which is what Miller's driver reads;
  * everything taken out of it is bounds-checked against the length the
@@ -2501,7 +2513,7 @@ addscan(Block *bp, uchar *p, int len)
 		auth = "open";
 
 	bp->wp = (uchar*)seprint((char*)bp->wp, (char*)bp->lim, "%s %d %d %d %s",
-		bssid, get2(p+72) & 0xF, (short)get2(p+78),
+		bssid, get2(p+72) & 0xFF, (short)get2(p+78),
 		(signed char)p[80], auth);
 	if(ssidlen > 0)
 		bp->wp = (uchar*)seprint((char*)bp->wp, (char*)bp->lim, " %s", ssid);

@@ -154,9 +154,27 @@ trace(s: string)
 
 # --- Bootconf ------------------------------------------------------
 
+#
+# dhcpclient(2): "values initialised to nil or 0". Said in full,
+# because "ref Bootconf" allocates without initialising and lease is an
+# integer: it would otherwise start out holding whatever the memory
+# held before, and a caller that read it before an exchange would be
+# told the length of a lease it does not have.
+#
 Bootconf.new(): ref Bootconf
 {
 	c := ref Bootconf;
+	c.ip = nil;
+	c.ipgw = nil;
+	c.ipmask = nil;
+	c.bootf = nil;
+	c.bootip = nil;
+	c.dhcpip = nil;
+	c.siaddr = nil;
+	c.serverid = nil;
+	c.sys = nil;
+	c.dom = nil;
+	c.lease = 0;
 	c.options = array[256] of array of byte;
 	c.vendor = array[256] of array of byte;
 	return c;
@@ -289,9 +307,15 @@ lenl(l: list of string): int
 
 # --- dotted quads --------------------------------------------------
 
+#
+# Not sprint, for the same reason there is no IP module here: every
+# Bootconf operation must work on a value built before init() was
+# called, and sys is not loaded until then.
+#
 dotted(a: array of byte, o: int): string
 {
-	return sys->sprint("%d.%d.%d.%d", int a[o], int a[o+1], int a[o+2], int a[o+3]);
+	return string int a[o] + "." + string int a[o+1] + "." +
+		string int a[o+2] + "." + string int a[o+3];
 }
 
 parsev4(s: string): (int, array of byte)
@@ -691,11 +715,31 @@ mkmsg(s: ref Session, body: array of byte, kind: int, ciaddr, reqaddr, srvid: ar
 
 newsession(net: string, ctlifc: ref Sys->FD, device: string, req: ref Bootconf): (ref Session, string)
 {
+	#
+	# Every field, including the ones that are plainly zero.
+	#
+	# "ref Session" allocates; it does not initialise. The reference
+	# fields come back nil because the collector requires it, and the
+	# integers come back holding whatever the memory held before. This
+	# was not a theory: the second exchange in a process began with
+	# halt set to -1 from a previous allocation and gave up before
+	# sending anything, roughly one run in three.
+	#
 	s := ref Session;
 	s.net = net;
 	s.ctlifc = ctlifc;
-	s.req = req;
+	s.cfd = nil;
+	s.dfd = nil;
+	s.mac = nil;
+	s.xid = 0;
 	s.t0 = sys->millisec();
+	s.rc = nil;
+	s.rpid = 0;
+	s.req = req;
+	s.params = nil;
+	s.conf = nil;
+	s.lease = nil;
+	s.halt = 0;
 	s.stop = chan[1] of int;
 	s.done = chan[1] of int;
 	(mac, e) := readmac(device);

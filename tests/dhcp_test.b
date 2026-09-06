@@ -749,6 +749,18 @@ iszero(a: array of byte, o: int): int
 testOptions(t: ref T)
 {
 	c := Bootconf.new();
+	#
+	# dhcpclient(2) promises a new Bootconf is nil and zero throughout.
+	# In Limbo that is a promise about every scalar field by name: a
+	# ref allocated without an initialiser holds what the memory held
+	# before, and lease is an integer.
+	#
+	t.asserteq(c.lease, 0, "a new Bootconf has no lease");
+	t.assertnil(c.ip, "a new Bootconf has no address");
+	t.assertnil(c.ipmask, "a new Bootconf has no mask");
+	t.assertnil(c.ipgw, "a new Bootconf has no gateway");
+	t.assertnil(c.serverid, "a new Bootconf names no server");
+	t.assertnil(c.bootf, "a new Bootconf names no boot file");
 	t.asserteq(c.getint(Dhcpclient->Olease), 0, "an option nobody set reads as zero");
 	t.assertnil(c.getip(Dhcpclient->Omask), "an option nobody set has no address");
 	t.assert(c.get(Dhcpclient->Orouter) == nil, "an option nobody set has no bytes");

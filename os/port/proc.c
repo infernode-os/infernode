@@ -472,6 +472,29 @@ newproc(void)
 	p->movetime = 0;
 	p->delaysched = 0;
 	p->edf = nil;
+
+	/*
+	 * The previous occupant's user name, freed here because this is
+	 * the last instant anyone can see it.
+	 *
+	 * Procs are recycled through procalloc.free, and defenv comes
+	 * back with them. Nothing on the way out frees defenv.user:
+	 * pexit() closes the four groups and stops, and the Moribund arm
+	 * of sched() only relinks the Proc. So the string kstrdup()'d
+	 * below -- and again in kproc(), which replaces "*nouser" with
+	 * the real name -- was still allocated when the Proc was reused,
+	 * and the memset that follows overwrote the only pointer to it.
+	 * One leaked allocation per process, forever, which on a board
+	 * that spawns and reaps constantly is the whole pool given away
+	 * a few bytes at a time.
+	 *
+	 * free(nil) is a no-op and the arena arrives zeroed from
+	 * xalloc(), so the first use of each Proc frees nothing. Nothing
+	 * aliases this pointer either: every other holder of a user name
+	 * -- Prog osenvs in dis.c, srv, exportfs, ssl -- takes its own
+	 * kstrdup() copy, and delprog() frees the Prog's.
+	 */
+	free(p->defenv.user);
 	memset(&p->defenv, 0, sizeof(p->defenv));
 	p->env = &p->defenv;
 	p->dbgreg = 0;

@@ -288,6 +288,19 @@ kill(pid: int)
 		sys->fprint(fd, "kill");
 }
 
+#
+# " -font <path>" if that font exists, otherwise nothing at all.
+#
+fontopt(path: string): string
+{
+	(ok, nil) := sys->stat(path);
+	if(ok < 0){
+		sys->fprint(stderr, "logon: %s is missing; using the built-in font\n", path);
+		return "";
+	}
+	return " -font " + path;
+}
+
 fieldtext(): string
 {
 	return tk->cmd(top, ".f.pw get");
@@ -504,26 +517,37 @@ buildform(): int
 		return 0;
 	}
 
+	#
+	# A named font that will not open takes its whole widget with it:
+	# Tk fails the create, nothing is packed, and the screen shows the
+	# logo and nothing else -- which is what a card whose font
+	# directory had been emptied did. Tk's own default (libtk's
+	# utils.c) already falls back to the font built into libdraw, so
+	# the fix is to stop naming a font that is not there.
+	#
+	bodyf := fontopt(BODYFONT);
+	smallf := fontopt(SMALLFONT);
+
 	cmds := array[] of {
 		". configure -width " + string di.r.dx() + " -height " + string di.r.dy(),
 		"pack propagate . 0",
 		"frame .f -bd 0 -bg " + tkcol(bg),
-		"label .f.prompt -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + BODYFONT,
+		"label .f.prompt -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf,
 		"entry .f.pw -show • -width " + string FIELDW + " -bd 0 -relief flat"
 			+ " -bg " + tkcol(input) + " -fg " + tkcol(text)
 			+ " -highlightthickness 1 -highlightcolor " + tkcol(accent)
 			+ " -selectbackground " + tkcol(accent)
-			+ " -font " + BODYFONT,
-		"label .f.status -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + BODYFONT,
-		"label .f.err -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(red) + " -font " + BODYFONT,
-		"label .f.choice -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text) + " -font " + BODYFONT,
-		"label .f.warn1 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT
+			+ bodyf,
+		"label .f.status -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf,
+		"label .f.err -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(red) + bodyf,
+		"label .f.choice -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text) + bodyf,
+		"label .f.warn1 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
 			+ " -text {Keys and secrets will not be available.}",
-		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT
+		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
 			+ " -text {AI integration may not work.}",
 		"frame .b -bd 0 -bg " + tkcol(bg),
-		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT,
-		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + " -font " + SMALLFONT,
+		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
+		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
 		"pack .b.version .b.copy -side top",
 		"pack .b -side bottom -pady " + string PADDING,
 		"pack .f -expand 1",

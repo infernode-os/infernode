@@ -177,6 +177,7 @@ dis/disk/mkext.dis
 dis/disk/mkfs.dis
 dis/disk/pedit.dis
 dis/disk/prep.dis
+dis/dossrv.dis
 dis/du.dis
 dis/echo.dis
 dis/ed.dis
@@ -678,6 +679,7 @@ dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
 dis/tests/factotum_test.dis
+dis/tests/fdclose_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
 dis/tests/geomap_test.dis
@@ -693,6 +695,7 @@ dis/tests/imap_test.dis
 dis/tests/imgload_test.dis
 dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
+dis/tests/intsem_test.dis
 dis/tests/jit_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis

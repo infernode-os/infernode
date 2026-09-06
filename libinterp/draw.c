@@ -2144,6 +2144,28 @@ lookupsubfont(Display *d, char *name)
 {
 	Cache *c;
 
+	/*
+	 * The built-in font is not in the cache and never will be: it is
+	 * built by getdefont() when the Display is allocated and kept on
+	 * the Display itself, not installed through installsubfont.
+	 *
+	 * libdraw's own lookupsubfont -- the one this replaces, in
+	 * libdraw/subfontcache.c -- answers this name from
+	 * d->defaultsubfont, and dropping that case is why "*default*"
+	 * could be opened and MEASURED but never drawn. The metrics live
+	 * in the Font, which buildfont fills in from the same byte array,
+	 * so a program asking for the width of a string got a sensible
+	 * number; the glyphs live in the subfont, which loadchar could
+	 * not find, so nothing appeared. A label that lays out at the
+	 * right size and draws nothing.
+	 *
+	 * It goes unnoticed on any machine with /fonts, because then
+	 * "*default*" is never asked for. This kernel has no font files
+	 * at all, which is how it turned up.
+	 */
+	if(strcmp(name, deffontname) == 0)
+		return d->defaultsubfont;
+
 	c = cachelookup(sfcache, d, name);
 	if(c == nil)
 		return nil;

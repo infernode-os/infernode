@@ -329,3 +329,9 @@ tests/inferno/claude-gate-e2e.sh
 
 # codex-gate runtime scratch (venv is bootstrapped by serve-codex-gate.sh)
 tools/codex-gate/.venv/
+
+# CYW43455 WiFi firmware for the bare-metal Pi port: Cypress binary-
+# redistribution licence, never committed. tools/pi-firmware.sh puts the
+# files on the card; tools/pi-firmware-manifest.txt pins them by SHA256.
+brcmfmac43455-sdio.*
+cyfmac43455-sdio*

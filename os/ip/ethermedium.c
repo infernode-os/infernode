@@ -1,0 +1,1087 @@
+/*
+ * IMPORTED from upstream Inferno (inferno-os/inferno-os), os/ip/ethermedium.c.
+ * The NOTICE at that tree's root states "The bulk of the tree is
+ * covered by the permissive MIT licence"; this tree's LICENSE already
+ * credits Vita Nuova's revisions.
+ *
+ * WHY THIS FILE IS HERE, AND WHY etherusb.c IS NOT.
+ *
+ * This is the medium that attaches os/ip to an Ethernet device, and the
+ * important thing about it is in etherbind() below: it reaches its
+ * device with kdial() and kopen() -- BY NAME. It has no idea whether
+ * what answers is a driver compiled into this kernel or a 9P server
+ * mounted into the kernel's namespace, and it does not need one.
+ *
+ * That is what makes the driver-placement decision in
+ * os/bcm2837/README.md cheap rather than a rewrite. The USB Ethernet
+ * class driver is a program, not kernel code; it serves the netif file
+ * interface that this file dials, and everything below the dial --
+ * ARP, Ethernet framing, demultiplexing by ether type -- stays here,
+ * where arp.c already implements it.
+ *
+ * The interface it requires of whatever answers, taken from the code
+ * rather than from memory (os/port/dial.c call(), and etherbind here):
+ *
+ *     <dev>/clone           open, read -> the connection number
+ *     <dev>/<n>/ctl         "connect 0x800"; then "nonblocking"
+ *     <dev>/<n>/data        read and write Ethernet frames of that type
+ *     <dev>/<n>/stats       must contain "addr: <12 hex digits>"
+ *                           and "mbps: <n>"
+ *
+ * Three connections are opened: 0x800 (IPv4), 0x806 (ARP) and 0x86DD
+ * (IPv6), so the server must demultiplex inbound frames by ether type.
+ *
+ * Ported to 64-bit along with the rest of os/ip. The wire structures
+ * here are uchar arrays, so they are already exact; what needed care is
+ * the Plan 9 C dialect, since this tree compiles with clang and has no
+ * -fplan9-extensions (see the decision recorded in os/bcm2837/README.md).
+ */
+#include "u.h"
+#include "../port/lib.h"
+#include "mem.h"
+#include "dat.h"
+#include "fns.h"
+#include "../port/error.h"
+
+#include "ip.h"
+#include "ipv6.h"
+#include "kernel.h"
+
+typedef struct Etherhdr Etherhdr;
+struct Etherhdr
+{
+	uchar	d[6];
+	uchar	s[6];
+	uchar	t[2];
+};
+
+static uchar ipbroadcast[IPaddrlen] = {
+	0xff,0xff,0xff,0xff,  
+	0xff,0xff,0xff,0xff,  
+	0xff,0xff,0xff,0xff,  
+	0xff,0xff,0xff,0xff,
+};
+
+static uchar etherbroadcast[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+static void	etherread4(void *a);
+static void	etherread6(void *a);
+static void	etherbind(Ipifc *ifc, int argc, char **argv);
+static void	etherunbind(Ipifc *ifc);
+static void	etherbwrite(Ipifc *ifc, Block *bp, int version, uchar *ip);
+static void	etheraddmulti(Ipifc *ifc, uchar *a, uchar *ia);
+static void	etherremmulti(Ipifc *ifc, uchar *a, uchar *ia);
+static Block*	multicastarp(Fs *f, Arpent *a, Medium*, uchar *mac);
+static void	sendarp(Ipifc *ifc, Arpent *a);
+static void	sendgarp(Ipifc *ifc, uchar*);
+static int	multicastea(uchar *ea, uchar *ip);
+static void	recvarpproc(void*);
+static void	resolveaddr6(Ipifc *ifc, Arpent *a);
+static void	etherpref2addr(uchar *pref, uchar *ea);
+
+Medium ethermedium =
+{
+.name=		"ether",
+.hsize=		14,
+.mintu=		60,
+.maxtu=		1514,
+.maclen=	6,
+.bind=		etherbind,
+.unbind=	etherunbind,
+.bwrite=	etherbwrite,
+.addmulti=	etheraddmulti,
+.remmulti=	etherremmulti,
+.ares=		arpenter,
+.areg=		sendgarp,
+.pref2addr=	etherpref2addr,
+};
+
+Medium gbemedium =
+{
+.name=		"gbe",
+.hsize=		14,
+.mintu=		60,
+.maxtu=		9014,
+.maclen=	6,
+.bind=		etherbind,
+.unbind=	etherunbind,
+.bwrite=	etherbwrite,
+.addmulti=	etheraddmulti,
+.remmulti=	etherremmulti,
+.ares=		arpenter,
+.areg=		sendgarp,
+.pref2addr=	etherpref2addr,
+};
+
+typedef struct	Etherrock Etherrock;
+struct Etherrock
+{
+	Fs	*f;		/* file system we belong to */
+	Proc	*arpp;		/* arp process */
+	Proc	*read4p;	/* reading process (v4)*/
+	Proc	*read6p;	/* reading process (v6)*/
+	Chan	*mchan4;	/* Data channel for v4 */
+	Chan	*pchan4;	/* packed data channel for v4, nil if none */
+	Proc	*wproc;		/* packed writer, nil if none */
+	Lock	wl;		/* guards the outbound chain */
+	Block	*whead;		/* frames waiting for the writer */
+	Block	*wtail;
+	int	wcount;		/* how many */
+	Rendez	wr;		/* where the writer waits */
+	Chan	*achan;		/* Arp channel */
+	Chan	*cchan4;	/* Control channel for v4 */
+	Chan	*mchan6;	/* Data channel for v6 */
+	Chan	*cchan6;	/* Control channel for v6 */
+};
+
+static void	etherreadpacked(Ipifc *ifc, Etherrock *er);
+static void	etherwritepacked(void *a);
+
+/*
+ *  ethernet arp request
+ */
+enum
+{
+	ETARP		= 0x0806,
+	ETIP4		= 0x0800,
+	ETIP6		= 0x86DD,
+	ARPREQUEST	= 1,
+	ARPREPLY	= 2,
+};
+
+typedef struct Etherarp Etherarp;
+struct Etherarp
+{
+	uchar	d[6];
+	uchar	s[6];
+	uchar	type[2];
+	uchar	hrd[2];
+	uchar	pro[2];
+	uchar	hln;
+	uchar	pln;
+	uchar	op[2];
+	uchar	sha[6];
+	uchar	spa[4];
+	uchar	tha[6];
+	uchar	tpa[4];
+};
+
+static char *nbmsg = "nonblocking";
+
+/*
+ *  called to bind an IP ifc to an ethernet device
+ *  called with ifc wlock'd
+ */
+static void
+etherbind(Ipifc *ifc, int argc, char **argv)
+{
+	/*
+	 * Every one of these is opened after waserror() and closed by
+	 * its handler, so they must be volatile: C leaves a non-volatile
+	 * local modified between setjmp and longjmp indeterminate, and
+	 * clang -O2 gave the handler the nils they held at setlabel --
+	 * it compiled to a bare nexterror, every cclose deleted. A bind
+	 * that failed halfway (the v6 dial, the stats read) left its
+	 * conversations open, and since a dial fails when the type is
+	 * already open on the device, every retry then failed the same
+	 * way. Same hazard and same idiom as kmount in os/port/sysfile.c.
+	 */
+	volatile struct {
+		Chan *mchan4, *cchan4, *achan, *mchan6, *cchan6, *pchan4;
+		char *buf;
+	} v;
+	char addr[Maxpath];	//char addr[2*KNAMELEN];
+	char dir[Maxpath];	//char dir[2*KNAMELEN];
+	char dir4[Maxpath];
+	int fd, cfd, n;
+	char *ptr;
+	Etherrock *er;
+
+	if(argc < 2)
+		error(Ebadarg);
+
+	v.mchan4 = v.cchan4 = v.achan = v.mchan6 = v.cchan6 = v.pchan4 = nil;
+	v.buf = nil;
+	if(waserror()){
+		if(v.mchan4 != nil)
+			cclose(v.mchan4);
+		if(v.cchan4 != nil)
+			cclose(v.cchan4);
+		if(v.achan != nil)
+			cclose(v.achan);
+		if(v.mchan6 != nil)
+			cclose(v.mchan6);
+		if(v.cchan6 != nil)
+			cclose(v.cchan6);
+		if(v.pchan4 != nil)
+			cclose(v.pchan4);
+		if(v.buf != nil)
+			free(v.buf);
+		nexterror(); 
+	}
+
+	/*
+	 *  open ip converstation
+	 *
+	 *  the dial will fail if the type is already open on
+	 *  this device.
+	 */
+	snprint(addr, sizeof(addr), "%s!0x800", argv[2]);
+	fd = kdial(addr, nil, dir, &cfd);
+	if(fd < 0)
+		errorf("dial 0x800 failed: %s", up->env->errstr);
+	v.mchan4 = commonfdtochan(fd, ORDWR, 0, 1);
+	v.cchan4 = commonfdtochan(cfd, ORDWR, 0, 1);
+	kclose(fd);
+	kclose(cfd);
+	kstrcpy(dir4, dir, sizeof(dir4));	/* the v6 dial below reuses dir */
+
+	/*
+	 *  make it non-blocking
+	 */
+	devtab[v.cchan4->type]->write(v.cchan4, nbmsg, strlen(nbmsg), 0);
+
+	/*
+	 *  get mac address and speed
+	 */
+	snprint(addr, sizeof(addr), "%s/stats", dir4);
+	fd = kopen(addr, OREAD);
+	if(fd < 0)
+		errorf("can't open ether stats: %s", up->env->errstr);
+
+	v.buf = smalloc(512);
+	n = kread(fd, v.buf, 511);
+	kclose(fd);
+	if(n <= 0)
+		error(Eio);
+	v.buf[n] = 0;
+
+	ptr = strstr(v.buf, "addr: ");
+	if(!ptr)
+		error(Eio);
+	ptr += 6;
+	parsemac(ifc->mac, ptr, 6);
+
+	ptr = strstr(v.buf, "mbps: ");
+	if(ptr){
+		ptr += 6;
+		ifc->mbps = atoi(ptr);
+	} else
+		ifc->mbps = 100;
+
+	/*
+ 	 *  open arp conversation
+	 */
+	snprint(addr, sizeof(addr), "%s!0x806", argv[2]);
+	fd = kdial(addr, nil, nil, nil);
+	if(fd < 0)
+		errorf("dial 0x806 failed: %s", up->env->errstr);
+	v.achan = commonfdtochan(fd, ORDWR, 0, 1);
+	kclose(fd);
+
+	/*
+	 *  open ip conversation
+	 *
+	 *  the dial will fail if the type is already open on
+	 *  this device.
+	 */
+	snprint(addr, sizeof(addr), "%s!0x86DD", argv[2]);
+	fd = kdial(addr, nil, dir, &cfd);
+	if(fd < 0)
+		errorf("dial 0x86DD failed: %s", up->env->errstr);
+	v.mchan6 = commonfdtochan(fd, ORDWR, 0, 1);
+	v.cchan6 = commonfdtochan(cfd, ORDWR, 0, 1);
+	kclose(fd);
+	kclose(cfd);
+
+	/*
+	 *  make it non-blocking
+	 */
+	devtab[v.cchan6->type]->write(v.cchan6, nbmsg, strlen(nbmsg), 0);
+
+	/*
+	 *  Ask for the packed data file, and do without it if it is not
+	 *  there.
+	 *
+	 *  A read of "data" returns one packet, which is what an
+	 *  Ethernet data file has always meant and what every other
+	 *  reader still gets. A driver that can hand over several frames
+	 *  at once offers a second file beside it; opening that file IS
+	 *  the negotiation, so there is no version to agree and no mode
+	 *  to set, and a driver without one is not asked to care.
+	 *
+	 *  Worth having because the frames really are waiting. Measured
+	 *  on the bcm2837 board under a one-megabyte inbound transfer,
+	 *  594 of 1137 arrivals found no reader waiting and had to be
+	 *  queued, at a mean depth of 4.5 and a peak of 16 -- so half the
+	 *  9P round trips on the receive path were fetching one frame
+	 *  while others sat behind it.
+	 */
+	snprint(addr, sizeof(addr), "%s/packed", dir4);
+	fd = kopen(addr, ORDWR);
+	if(fd >= 0){
+		v.pchan4 = commonfdtochan(fd, ORDWR, 0, 1);
+		kclose(fd);
+	}
+
+	er = smalloc(sizeof(*er));
+	er->pchan4 = v.pchan4;
+	er->mchan4 = v.mchan4;
+	er->cchan4 = v.cchan4;
+	er->achan = v.achan;
+	er->mchan6 = v.mchan6;
+	er->cchan6 = v.cchan6;
+	er->f = ifc->conv->p->f;
+	ifc->arg = er;
+
+	free(v.buf);
+	poperror();
+
+	kproc("etherread4", etherread4, ifc, 0);
+	kproc("recvarpproc", recvarpproc, ifc, 0);
+	kproc("etherread6", etherread6, ifc, 0);
+	if(v.pchan4 != nil)
+		kproc("etherwpacked", etherwritepacked, ifc, 0);
+}
+
+/*
+ *  called with ifc wlock'd
+ */
+static void
+etherunbind(Ipifc *ifc)
+{
+	Etherrock *er = ifc->arg;
+
+	if(er->read4p)
+		postnote(er->read4p, 1, "unbind", 0);
+	if(er->read6p)
+		postnote(er->read6p, 1, "unbind", 0);
+	if(er->arpp)
+		postnote(er->arpp, 1, "unbind", 0);
+	if(er->wproc)
+		postnote(er->wproc, 1, "unbind", 0);
+
+	/* wait for readers to die */
+	while(er->arpp != 0 || er->read4p != 0 || er->read6p != 0 || er->wproc != 0)
+		tsleep(&up->sleep, return0, 0, 300);
+
+	if(er->pchan4 != nil)
+		cclose(er->pchan4);
+	if(er->mchan4 != nil)
+		cclose(er->mchan4);
+	if(er->achan != nil)
+		cclose(er->achan);
+	if(er->cchan4 != nil)
+		cclose(er->cchan4);
+	if(er->mchan6 != nil)
+		cclose(er->mchan6);
+	if(er->cchan6 != nil)
+		cclose(er->cchan6);
+
+	free(er);
+}
+
+/*
+ *  called by ipoput with a single block to write with ifc rlock'd
+ */
+static void
+etherbwrite(Ipifc *ifc, Block *bp, int version, uchar *ip)
+{
+	Etherhdr *eh;
+	Arpent *a;
+	uchar mac[6];
+	Etherrock *er = ifc->arg;
+
+	/* get mac address of destination */
+	a = arpget(er->f->arp, bp, version, ifc, ip, mac);
+	if(a){
+		/* check for broadcast or multicast */
+		bp = multicastarp(er->f, a, ifc->m, mac);
+		if(bp==nil){
+			switch(version){
+			case V4:
+				sendarp(ifc, a);
+				break;
+			case V6: 
+				resolveaddr6(ifc, a);
+				break;
+			default:
+				panic("etherbwrite: version %d", version);
+			}
+			return;
+		}
+	}
+
+	/* make it a single block with space for the ether header */
+	bp = padblock(bp, ifc->m->hsize);
+	if(bp->next)
+		bp = concatblock(bp);
+	if(BLEN(bp) < ifc->mintu)
+		bp = adjustblock(bp, ifc->mintu);
+	eh = (Etherhdr*)bp->rp;
+
+	/* copy in mac addresses and ether type */
+	memmove(eh->s, ifc->mac, sizeof(eh->s));
+	memmove(eh->d, mac, sizeof(eh->d));
+
+ 	switch(version){
+	case V4:
+		eh->t[0] = 0x08;
+		eh->t[1] = 0x00;
+		if(er->wproc != nil){
+			/*
+			 * Hand the frame to the writer and return.
+			 *
+			 * The write used to happen here, synchronously: one
+			 * 9P transaction per frame, with the IP stack's
+			 * caller blocked through all of it. On this system
+			 * that transaction costs about two milliseconds --
+			 * every TCP ack paid it, which capped the INBOUND
+			 * direction too, since acks gate the sender's
+			 * window. Queueing lets acks and data that arrive
+			 * close together cross to the driver in one write.
+			 *
+			 * The cap is Ethernet honesty, not tidiness: if the
+			 * writer has fallen 256 frames behind, the link is
+			 * not delivering, and dropping here is what any
+			 * interface does when its transmit ring is full.
+			 * TCP recovers; a queue that grows without bound
+			 * does not.
+			 */
+			lock(&er->wl);
+			if(er->wcount >= 256){
+				unlock(&er->wl);
+				freeb(bp);
+				break;
+			}
+			bp->next = nil;
+			if(er->whead == nil)
+				er->whead = bp;
+			else
+				er->wtail->next = bp;
+			er->wtail = bp;
+			er->wcount++;
+			unlock(&er->wl);
+			wakeup(&er->wr);
+			break;
+		}
+		devtab[er->mchan4->type]->bwrite(er->mchan4, bp, 0);
+		break;
+	case V6:
+		eh->t[0] = 0x86;
+		eh->t[1] = 0xDD;
+		devtab[er->mchan6->type]->bwrite(er->mchan6, bp, 0);
+		break;
+	default:
+		panic("etherbwrite2: version %d", version);
+	}
+	ifc->out++;
+}
+
+
+/*
+ *  process to read from the ethernet
+ */
+static void
+etherread4(void *a)
+{
+	Ipifc *ifc;
+	Block *bp;
+	Etherrock *er;
+
+	ifc = a;
+	er = ifc->arg;
+	er->read4p = up;	/* hide identity under a rock for unbind */
+	if(waserror()){
+		er->read4p = 0;
+		pexit("hangup", 1);
+	}
+	if(er->pchan4 != nil)
+		etherreadpacked(ifc, er);	/* does not return */
+	for(;;){
+		bp = devtab[er->mchan4->type]->bread(er->mchan4, ifc->maxtu, 0);
+		if(!canrlock(&ifc->rwl)){
+			freeb(bp);
+			continue;
+		}
+		if(waserror()){
+			runlock(&ifc->rwl);
+			nexterror();
+		}
+		ifc->in++;
+		bp->rp += ifc->m->hsize;
+		if(ifc->lifc == nil)
+			freeb(bp);
+		else
+			ipiput4(er->f, ifc, bp);
+		runlock(&ifc->rwl);
+		poperror();
+	}
+}
+
+
+/*
+ *  Read several frames per 9P message.
+ *
+ *  Same work per frame as the loop above -- take the interface read
+ *  lock, step over the Ethernet header, hand the packet up -- and one
+ *  read where there were several. Each frame in the reply is preceded
+ *  by its length, two bytes little-endian, and the reply holds as many
+ *  whole frames as the driver could fit in what was asked for.
+ *
+ *  A malformed reply costs the remainder of that one message and
+ *  nothing more: a length that runs past the end is treated as the end.
+ *  That is the right response to a driver disagreeing with us about
+ *  framing -- carrying on into the next message would turn a bounded
+ *  confusion into a stream of corrupt packets.
+ *
+ *  iounit is what the mount will actually carry in one reply, so it is
+ *  the honest size to ask for. Asking for more only produces a short
+ *  read, which costs a round trip to discover.
+ */
+static void
+etherreadpacked(Ipifc *ifc, Etherrock *er)
+{
+	enum { Packfallback = 8192 };	/* if the mount did not say */
+	Block *bp;
+	uchar *buf, *p, *e;
+	long n, want;
+	int len;
+
+	want = (long)er->pchan4->iounit;
+	if(want <= 0)
+		want = Packfallback;
+	buf = smalloc(want);
+	if(waserror()){
+		free(buf);
+		nexterror();
+	}
+	for(;;){
+		n = devtab[er->pchan4->type]->read(er->pchan4, buf, want, 0);
+		if(n <= 0)
+			continue;
+		p = buf;
+		e = buf + n;
+		while(p + 2 <= e){
+			len = p[0] | (p[1] << 8);
+			p += 2;
+			if(len <= 0 || p + len > e)
+				break;
+			if(len <= ifc->m->hsize){
+				p += len;
+				continue;	/* header and nothing else */
+			}
+			if(!canrlock(&ifc->rwl)){
+				p += len;
+				continue;
+			}
+			if(waserror()){
+				runlock(&ifc->rwl);
+				nexterror();
+			}
+			ifc->in++;
+			if(ifc->lifc == nil)
+				;
+			else{
+				bp = allocb(len);
+				memmove(bp->wp, p, len);
+				bp->wp += len;
+				bp->rp += ifc->m->hsize;
+				ipiput4(er->f, ifc, bp);
+			}
+			runlock(&ifc->rwl);
+			poperror();
+			p += len;
+		}
+	}
+}
+
+static int
+wready(void *a)
+{
+	Etherrock *er = a;
+
+	return er->whead != nil;
+}
+
+/*
+ *  Write several frames per 9P message.
+ *
+ *  Mirror of etherreadpacked: take whatever etherbwrite has queued,
+ *  pack each frame behind a two-byte little-endian length, and hand
+ *  the lot to the driver in one write. The driver puts them on the
+ *  wire in one bulk transfer.
+ *
+ *  The batch is sized by how long the previous write took and nothing
+ *  else -- the same discipline as the driver's own transmit side. A
+ *  lone frame on a quiet link is written at once; frames that arrive
+ *  while a write is in flight join the next one.
+ */
+static void
+etherwritepacked(void *a)
+{
+	Ipifc *ifc;
+	Etherrock *er;
+	Block *bp, *next;
+	uchar *buf;
+	long want, o;
+	int len;
+
+	ifc = a;
+	er = ifc->arg;
+	er->wproc = up;
+	want = (long)er->pchan4->iounit;
+	if(want <= 0)
+		want = 8192;
+	buf = smalloc(want);
+	if(waserror()){
+		free(buf);
+		er->wproc = nil;
+		pexit("hangup", 1);
+	}
+	for(;;){
+		sleep(&er->wr, wready, er);
+
+		lock(&er->wl);
+		bp = er->whead;
+		er->whead = er->wtail = nil;
+		er->wcount = 0;
+		unlock(&er->wl);
+
+		o = 0;
+		for(; bp != nil; bp = next){
+			next = bp->next;
+			len = BLEN(bp);
+			if(o + 2 + len > want){
+				/*
+				 * Flush what is packed and start over with
+				 * this frame. A frame larger than the whole
+				 * buffer cannot happen -- maxtu fits several
+				 * times over -- but guard the arithmetic
+				 * anyway rather than trusting it.
+				 */
+				if(o > 0)
+					devtab[er->pchan4->type]->write(er->pchan4, buf, o, 0);
+				o = 0;
+				if(2 + len > want){
+					freeb(bp);
+					continue;
+				}
+			}
+			buf[o++] = len;
+			buf[o++] = len >> 8;
+			memmove(buf+o, bp->rp, len);
+			o += len;
+			freeb(bp);
+		}
+		if(o > 0)
+			devtab[er->pchan4->type]->write(er->pchan4, buf, o, 0);
+	}
+}
+
+/*
+ *  process to read from the ethernet, IPv6
+ */
+static void
+etherread6(void *a)
+{
+	Ipifc *ifc;
+	Block *bp;
+	Etherrock *er;
+
+	ifc = a;
+	er = ifc->arg;
+	er->read6p = up;	/* hide identity under a rock for unbind */
+	if(waserror()){
+		er->read6p = 0;
+		pexit("hangup", 1);
+	}
+	for(;;){
+		bp = devtab[er->mchan6->type]->bread(er->mchan6, ifc->maxtu, 0);
+		if(!canrlock(&ifc->rwl)){
+			freeb(bp);
+			continue;
+		}
+		if(waserror()){
+			runlock(&ifc->rwl);
+			nexterror();
+		}
+		ifc->in++;
+		bp->rp += ifc->m->hsize;
+		if(ifc->lifc == nil)
+			freeb(bp);
+		else
+			ipiput6(er->f, ifc, bp);
+		runlock(&ifc->rwl);
+		poperror();
+	}
+}
+
+static void
+etheraddmulti(Ipifc *ifc, uchar *a, uchar *)
+{
+	uchar mac[6];
+	char buf[64];
+	Etherrock *er = ifc->arg;
+	int version;
+
+	version = multicastea(mac, a);
+	sprint(buf, "addmulti %E", mac);
+	switch(version){
+	case V4:
+		devtab[er->cchan4->type]->write(er->cchan4, buf, strlen(buf), 0);
+		break;
+	case V6:
+		devtab[er->cchan6->type]->write(er->cchan6, buf, strlen(buf), 0);
+		break;
+	default:
+		panic("etheraddmulti: version %d", version);
+	}
+}
+
+static void
+etherremmulti(Ipifc *ifc, uchar *a, uchar *)
+{
+	uchar mac[6];
+	char buf[64];
+	Etherrock *er = ifc->arg;
+	int version;
+
+	version = multicastea(mac, a);
+	sprint(buf, "remmulti %E", mac);
+	switch(version){
+	case V4:
+		devtab[er->cchan4->type]->write(er->cchan4, buf, strlen(buf), 0);
+		break;
+	case V6:
+		devtab[er->cchan6->type]->write(er->cchan6, buf, strlen(buf), 0);
+		break;
+	default:
+		panic("etherremmulti: version %d", version);
+	}
+}
+
+/*
+ *  send an ethernet arp
+ *  (only v4, v6 uses the neighbor discovery, rfc1970)
+ */
+static void
+sendarp(Ipifc *ifc, Arpent *a)
+{
+	int n;
+	Block *bp;
+	Etherarp *e;
+	Etherrock *er = ifc->arg;
+
+	/* don't do anything if it's been less than a second since the last */
+	if(NOW - a->ctime < 1000){
+		arprelease(er->f->arp, a);
+		return;
+	}
+
+	/* remove all but the last message */
+	while((bp = a->hold) != nil){
+		if(bp == a->last)
+			break;
+		a->hold = bp->list;
+		freeblist(bp);
+	}
+
+	/* try to keep it around for a second more */
+	a->ctime = NOW;
+	arprelease(er->f->arp, a);
+
+	n = sizeof(Etherarp);
+	if(n < a->type->mintu)
+		n = a->type->mintu;
+	bp = allocb(n);
+	memset(bp->rp, 0, n);
+	e = (Etherarp*)bp->rp;
+	memmove(e->tpa, a->ip+IPv4off, sizeof(e->tpa));
+	ipv4local(ifc, e->spa);
+	memmove(e->sha, ifc->mac, sizeof(e->sha));
+	memset(e->d, 0xff, sizeof(e->d));		/* ethernet broadcast */
+	memmove(e->s, ifc->mac, sizeof(e->s));
+
+	hnputs(e->type, ETARP);
+	hnputs(e->hrd, 1);
+	hnputs(e->pro, ETIP4);
+	e->hln = sizeof(e->sha);
+	e->pln = sizeof(e->spa);
+	hnputs(e->op, ARPREQUEST);
+	bp->wp += n;
+
+	n = devtab[er->achan->type]->bwrite(er->achan, bp, 0);
+	if(n < 0)
+		print("arp: send: %r\n");
+}
+
+static void
+resolveaddr6(Ipifc *ifc, Arpent *a)
+{
+	int sflag;
+	Block *bp;
+	Etherrock *er = ifc->arg;
+	uchar ipsrc[IPaddrlen];
+
+	/* don't do anything if it's been less than a second since the last */
+	if(NOW - a->ctime < ReTransTimer){
+		arprelease(er->f->arp, a);
+		return;
+	}
+
+	/* remove all but the last message */
+	while((bp = a->hold) != nil){
+		if(bp == a->last)
+			break;
+		a->hold = bp->list;
+		freeblist(bp);
+	}
+
+	/* try to keep it around for a second more */
+	a->ctime = NOW;
+	a->rtime = NOW + ReTransTimer;
+	if(a->rxtsrem <= 0) {
+		arprelease(er->f->arp, a);
+		return;
+	}
+
+	a->rxtsrem--;
+	arprelease(er->f->arp, a);
+
+	if(sflag = ipv6anylocal(ifc, ipsrc)) 
+		icmpns(er->f, ipsrc, sflag, a->ip, TARG_MULTI, ifc->mac);
+}
+
+/*
+ *  send a gratuitous arp to refresh arp caches
+ */
+static void
+sendgarp(Ipifc *ifc, uchar *ip)
+{
+	int n;
+	Block *bp;
+	Etherarp *e;
+	Etherrock *er = ifc->arg;
+
+	/* don't arp for our initial non address */
+	if(ipcmp(ip, IPnoaddr) == 0)
+		return;
+
+	n = sizeof(Etherarp);
+	if(n < ifc->m->mintu)
+		n = ifc->m->mintu;
+	bp = allocb(n);
+	memset(bp->rp, 0, n);
+	e = (Etherarp*)bp->rp;
+	memmove(e->tpa, ip+IPv4off, sizeof(e->tpa));
+	memmove(e->spa, ip+IPv4off, sizeof(e->spa));
+	memmove(e->sha, ifc->mac, sizeof(e->sha));
+	memset(e->d, 0xff, sizeof(e->d));		/* ethernet broadcast */
+	memmove(e->s, ifc->mac, sizeof(e->s));
+
+	hnputs(e->type, ETARP);
+	hnputs(e->hrd, 1);
+	hnputs(e->pro, ETIP4);
+	e->hln = sizeof(e->sha);
+	e->pln = sizeof(e->spa);
+	hnputs(e->op, ARPREQUEST);
+	bp->wp += n;
+
+	n = devtab[er->achan->type]->bwrite(er->achan, bp, 0);
+	if(n < 0)
+		print("garp: send: %r\n");
+}
+
+static void
+recvarp(Ipifc *ifc)
+{
+	int n;
+	Block *ebp, *rbp;
+	Etherarp *e, *r;
+	uchar ip[IPaddrlen];
+	static uchar eprinted[4];
+	Etherrock *er = ifc->arg;
+
+	ebp = devtab[er->achan->type]->bread(er->achan, ifc->maxtu, 0);
+	if(ebp == nil) {
+		print("arp: rcv: %r\n");
+		return;
+	}
+
+	e = (Etherarp*)ebp->rp;
+	switch(nhgets(e->op)) {
+	default:
+		break;
+
+	case ARPREPLY:
+		/* check for machine using my ip address */
+		v4tov6(ip, e->spa);
+		if(iplocalonifc(ifc, ip) || ipproxyifc(er->f, ifc, ip)){
+			if(memcmp(e->sha, ifc->mac, sizeof(e->sha)) != 0){
+				print("arprep: 0x%E/0x%E also has ip addr %V\n",
+					e->s, e->sha, e->spa);
+				break;
+			}
+		}
+
+		/* make sure we're not entering broadcast addresses */
+		if(ipcmp(ip, ipbroadcast) == 0 ||
+			!memcmp(e->sha, etherbroadcast, sizeof(e->sha))){
+			print("arprep: 0x%E/0x%E cannot register broadcast address %I\n",
+				e->s, e->sha, e->spa);
+			break;
+		}
+
+		arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 0);
+		break;
+
+	case ARPREQUEST:
+		/* don't answer arps till we know who we are */
+		if(ifc->lifc == 0)
+			break;
+
+		/* check for machine using my ip or ether address */
+		v4tov6(ip, e->spa);
+		if(iplocalonifc(ifc, ip) || ipproxyifc(er->f, ifc, ip)){
+			if(memcmp(e->sha, ifc->mac, sizeof(e->sha)) != 0){
+				if (memcmp(eprinted, e->spa, sizeof(e->spa))){
+					/* print only once */
+					print("arpreq: 0x%E also has ip addr %V\n", e->sha, e->spa);
+					memmove(eprinted, e->spa, sizeof(e->spa));
+				}
+			}
+		} else {
+			if(memcmp(e->sha, ifc->mac, sizeof(e->sha)) == 0){
+				print("arpreq: %V also has ether addr %E\n", e->spa, e->sha);
+				break;
+			}
+		}
+
+		/* refresh what we know about sender */
+		arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 1);
+
+		/* answer only requests for our address or systems we're proxying for */
+		v4tov6(ip, e->tpa);
+		if(!iplocalonifc(ifc, ip))
+		if(!ipproxyifc(er->f, ifc, ip))
+			break;
+
+		n = sizeof(Etherarp);
+		if(n < ifc->mintu)
+			n = ifc->mintu;
+		rbp = allocb(n);
+		r = (Etherarp*)rbp->rp;
+		memset(r, 0, sizeof(Etherarp));
+		hnputs(r->type, ETARP);
+		hnputs(r->hrd, 1);
+		hnputs(r->pro, ETIP4);
+		r->hln = sizeof(r->sha);
+		r->pln = sizeof(r->spa);
+		hnputs(r->op, ARPREPLY);
+		memmove(r->tha, e->sha, sizeof(r->tha));
+		memmove(r->tpa, e->spa, sizeof(r->tpa));
+		memmove(r->sha, ifc->mac, sizeof(r->sha));
+		memmove(r->spa, e->tpa, sizeof(r->spa));
+		memmove(r->d, e->sha, sizeof(r->d));
+		memmove(r->s, ifc->mac, sizeof(r->s));
+		rbp->wp += n;
+
+		n = devtab[er->achan->type]->bwrite(er->achan, rbp, 0);
+		if(n < 0)
+			print("arp: write: %r\n");
+	}
+	freeb(ebp);
+}
+
+static void
+recvarpproc(void *v)
+{
+	Ipifc *ifc = v;
+	Etherrock *er = ifc->arg;
+
+	er->arpp = up;
+	if(waserror()){
+		er->arpp = 0;
+		pexit("hangup", 1);
+	}
+	for(;;)
+		recvarp(ifc);
+}
+
+static int
+multicastea(uchar *ea, uchar *ip)
+{
+	int x;
+
+	switch(x = ipismulticast(ip)){
+	case V4:
+		ea[0] = 0x01;
+		ea[1] = 0x00;
+		ea[2] = 0x5e;
+		ea[3] = ip[13] & 0x7f;
+		ea[4] = ip[14];
+		ea[5] = ip[15];
+		break;
+ 	case V6:
+ 		ea[0] = 0x33;
+ 		ea[1] = 0x33;
+ 		ea[2] = ip[12];
+		ea[3] = ip[13];
+ 		ea[4] = ip[14];
+ 		ea[5] = ip[15];
+ 		break;
+	}
+	return x;
+}
+
+/*
+ *  fill in an arp entry for broadcast or multicast
+ *  addresses.  Return the first queued packet for the
+ *  IP address.
+ */
+static Block*
+multicastarp(Fs *f, Arpent *a, Medium *medium, uchar *mac)
+{
+	/* is it broadcast? */
+	switch(ipforme(f, a->ip)){
+	case Runi:
+		return nil;
+	case Rbcast:
+		memset(mac, 0xff, 6);
+		return arpresolve(f->arp, a, medium, mac);
+	default:
+		break;
+	}
+
+	/* if multicast, fill in mac */
+	switch(multicastea(mac, a->ip)){
+	case V4:
+	case V6:
+		return arpresolve(f->arp, a, medium, mac);
+	}
+
+	/* let arp take care of it */
+	return nil;
+}
+
+void
+ethermediumlink(void)
+{
+	addipmedium(&ethermedium);
+	addipmedium(&gbemedium);
+}
+
+
+static void 
+etherpref2addr(uchar *pref, uchar *ea)
+{
+	pref[8]  = ea[0] | 0x2;
+	pref[9]  = ea[1];
+	pref[10] = ea[2];
+	pref[11] = 0xFF;
+	pref[12] = 0xFE;
+	pref[13] = ea[3];
+	pref[14] = ea[4];
+	pref[15] = ea[5];
+}

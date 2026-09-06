@@ -553,6 +553,81 @@ with tempfile.TemporaryDirectory() as td:
     assert any("credentials" in v for v in violations), violations
     os.chmod(home, 0o700)
 
+    # A current device login creates log/ and tmp/ before the first gateway
+    # request. The canonical handoff copies only its private OAuth credential
+    # into a new home; it never broadens the gateway startup allowlist.
+    login = os.path.join(td, "fresh-login")
+    campaign = os.path.join(td, "campaign-home")
+    os.mkdir(login, 0o700)
+    auth = os.path.join(login, "auth.json")
+    with open(auth, "w") as f:
+        f.write("fresh-oauth-state")
+    os.chmod(auth, 0o600)
+    os.mkdir(os.path.join(login, "log"), 0o700)
+    os.mkdir(os.path.join(login, "tmp"), 0o700)
+    open(os.path.join(login, "version.json"), "w").write("{}")
+    prepared = m.prepare_codex_home(login, campaign)
+    assert prepared == campaign
+    assert sorted(os.listdir(campaign)) == ["auth.json"]
+    assert open(os.path.join(campaign, "auth.json")).read() == \
+        "fresh-oauth-state"
+    assert os.stat(campaign).st_mode & 0o777 == 0o700
+    assert os.stat(os.path.join(campaign, "auth.json")).st_mode & 0o777 == 0o600
+    assert m.codex_home_violations(campaign, m.home_allowlist()) == []
+    assert os.path.isdir(os.path.join(login, "log"))
+
+    try:
+        m.prepare_codex_home(login, campaign)
+    except SystemExit as e:
+        assert "already exists" in str(e), e
+    else:
+        raise AssertionError("existing campaign home was replaced")
+
+    config = os.path.join(login, "config.toml")
+    open(config, "w").write("untrusted = true")
+    try:
+        m.prepare_codex_home(login, os.path.join(td, "with-config"))
+    except SystemExit as e:
+        assert "unsanctioned state" in str(e), e
+    else:
+        raise AssertionError("login source configuration was accepted")
+    os.unlink(config)
+
+    os.chmod(auth, 0o644)
+    try:
+        m.prepare_codex_home(login, os.path.join(td, "public-auth"))
+    except SystemExit as e:
+        assert "mode 0600" in str(e), e
+    else:
+        raise AssertionError("public OAuth credential was accepted")
+    os.chmod(auth, 0o600)
+
+    symlink_login = os.path.join(td, "symlink-login")
+    os.mkdir(symlink_login, 0o700)
+    os.symlink(auth, os.path.join(symlink_login, "auth.json"))
+    try:
+        m.prepare_codex_home(symlink_login, os.path.join(td, "symlink-auth"))
+    except SystemExit as e:
+        assert "symlink" in str(e), e
+    else:
+        raise AssertionError("symlinked OAuth credential was accepted")
+
+    try:
+        m.prepare_codex_home(login, os.path.join(login, "nested-campaign"))
+    except SystemExit as e:
+        assert "must not be inside" in str(e), e
+    else:
+        raise AssertionError("campaign home inside login source was accepted")
+
+    os.chmod(login, 0o755)
+    try:
+        m.prepare_codex_home(login, os.path.join(td, "public-login"))
+    except SystemExit as e:
+        assert "mode 0700" in str(e), e
+    else:
+        raise AssertionError("public login source was accepted")
+    os.chmod(login, 0o700)
+
     # The post-campaign inventory accounts for what the CLI created itself.
     os.makedirs(os.path.join(home, "plugins", "cache"))
     open(os.path.join(home, "plugins", "cache", "catalog.json"), "w").write("[]")

@@ -74,8 +74,9 @@
 #   CODEX_GATE_DISABLE_FEATURES  comma list replacing the pinned disable set
 #   CODEX_GATE_HOME_ALLOW comma list of entries allowed in CODEX_GATE_CODEX_HOME
 #
-# Also: `codex_gate.py --inventory [CODEX_HOME]` prints a hashed inventory of
-# the model-side state the CLI created, and exits.  Run it after a campaign.
+# Maintenance modes:
+#   --inventory [CODEX_HOME]              hash model-side state and exit
+#   --prepare-home LOGIN_HOME CAMPAIGN_HOME copy only fresh OAuth state
 #
 # Billing guard: OPENAI_API_KEY in the environment can make the CLI bill the
 # API instead of the ChatGPT plan.  serve-codex-gate.sh unsets it; we also
@@ -90,6 +91,7 @@ import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -217,6 +219,11 @@ DEFAULT_DISABLED_FEATURES = (
 DEFAULT_HOME_ALLOW = ("auth.json", "auth.json.lock", "version.json",
                       "installation_id")
 
+# A fresh device login may create these operational directories before the
+# gateway ever runs. They are acceptable only as input to --prepare-home and
+# are never copied into the campaign home.
+LOGIN_SOURCE_ALLOW = frozenset(DEFAULT_HOME_ALLOW + ("log", "tmp"))
+
 
 def disabled_features():
     """The features every `codex exec` turns off.
@@ -268,6 +275,123 @@ def codex_home_violations(home, allow):
         kind = "directory" if os.path.isdir(os.path.join(home, name)) else "file"
         violations.append("unexpected %s %r" % (kind, name))
     return violations
+
+
+def prepare_codex_home(source, destination):
+    """Copy only fresh OAuth state into a new, private gateway home.
+
+    The login source remains untouched.  Refusing an existing destination is
+    deliberate: replacing or merging OAuth state can resurrect a rotated
+    refresh token or carry model-side state between campaigns.
+    """
+    source = os.path.abspath(os.path.expanduser(source))
+    destination = os.path.abspath(os.path.expanduser(destination))
+    if source == destination:
+        raise SystemExit("codex-gate: login source and campaign home are the same")
+    if os.path.commonpath((os.path.realpath(source),
+                           os.path.realpath(destination))) == os.path.realpath(source):
+        raise SystemExit("codex-gate: campaign home must not be inside login source")
+
+    try:
+        source_stat = os.lstat(source)
+    except OSError as e:
+        raise SystemExit("codex-gate: cannot inspect login source: %s" % e)
+    if not stat.S_ISDIR(source_stat.st_mode):
+        raise SystemExit("codex-gate: login source must be a real directory")
+    if stat.S_IMODE(source_stat.st_mode) != 0o700:
+        raise SystemExit("codex-gate: login source holds credentials and must be mode 0700")
+    if hasattr(os, "geteuid") and source_stat.st_uid != os.geteuid():
+        raise SystemExit("codex-gate: login source is not owned by this user")
+
+    try:
+        names = set(os.listdir(source))
+    except OSError as e:
+        raise SystemExit("codex-gate: cannot read login source: %s" % e)
+    unexpected = sorted(names - LOGIN_SOURCE_ALLOW)
+    if unexpected:
+        raise SystemExit(
+            "codex-gate: login source contains unsanctioned state: %s"
+            % ", ".join(repr(name) for name in unexpected))
+    if "auth.json" not in names:
+        raise SystemExit("codex-gate: login source has no auth.json")
+    for name in sorted(names):
+        path = os.path.join(source, name)
+        try:
+            entry_stat = os.lstat(path)
+        except OSError as e:
+            raise SystemExit("codex-gate: cannot inspect login source entry: %s" % e)
+        if stat.S_ISLNK(entry_stat.st_mode):
+            raise SystemExit("codex-gate: login source entry %r is a symlink" % name)
+        if name in ("log", "tmp"):
+            valid = stat.S_ISDIR(entry_stat.st_mode)
+        else:
+            valid = stat.S_ISREG(entry_stat.st_mode)
+        if not valid:
+            raise SystemExit("codex-gate: login source entry %r has wrong type" % name)
+
+    auth_path = os.path.join(source, "auth.json")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        auth_fd = os.open(auth_path, os.O_RDONLY | nofollow)
+    except OSError as e:
+        raise SystemExit("codex-gate: cannot open login auth.json safely: %s" % e)
+    try:
+        auth_stat = os.fstat(auth_fd)
+        if not stat.S_ISREG(auth_stat.st_mode) or auth_stat.st_size == 0:
+            raise SystemExit("codex-gate: login auth.json must be a non-empty regular file")
+        if stat.S_IMODE(auth_stat.st_mode) != 0o600:
+            raise SystemExit("codex-gate: login auth.json must be mode 0600")
+        if hasattr(os, "geteuid") and auth_stat.st_uid != os.geteuid():
+            raise SystemExit("codex-gate: login auth.json is not owned by this user")
+
+        try:
+            os.mkdir(destination, 0o700)
+        except FileExistsError:
+            raise SystemExit(
+                "codex-gate: campaign home already exists; use a new path")
+        except OSError as e:
+            raise SystemExit("codex-gate: cannot create campaign home: %s" % e)
+
+        tmp_name = ".auth.json.tmp-%d" % os.getpid()
+        tmp_path = os.path.join(destination, tmp_name)
+        try:
+            out_fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             nofollow, 0o600)
+            try:
+                while True:
+                    chunk = os.read(auth_fd, 1 << 20)
+                    if not chunk:
+                        break
+                    view = memoryview(chunk)
+                    while view:
+                        written = os.write(out_fd, view)
+                        if written <= 0:
+                            raise OSError("short write preparing campaign home")
+                        view = view[written:]
+                os.fsync(out_fd)
+            finally:
+                os.close(out_fd)
+            os.replace(tmp_path, os.path.join(destination, "auth.json"))
+            dir_fd = os.open(destination, os.O_RDONLY |
+                             getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            try:
+                os.rmdir(destination)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(auth_fd)
+
+    return destination
 
 
 def file_sha256(path):
@@ -1285,6 +1409,14 @@ def main():
                 os.environ.get("CODEX_HOME") or
                 os.path.expanduser("~/.codex"))
         print(json.dumps(codex_home_inventory(home), indent=2))
+        return
+
+    if argv and argv[0] == "--prepare-home":
+        if len(argv) != 3:
+            raise SystemExit(
+                "usage: codex_gate.py --prepare-home LOGIN_HOME CAMPAIGN_HOME")
+        destination = prepare_codex_home(argv[1], argv[2])
+        print("codex-gate: prepared auth-only CODEX_HOME at %s" % destination)
         return
 
     if os.environ.get("OPENAI_API_KEY") and not MOCK \

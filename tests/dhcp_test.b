@@ -562,6 +562,12 @@ exchange1(res: chan of ref Result, done: chan of int)
 
 	cfg := Bootconf.new();
 	cfg.puts(Dhcpclient->Ohostname, "testclient");
+	#
+	# A server's option, in the Bootconf the caller hands in. It has no
+	# business going out in a client's message, and the same Bootconf
+	# comes back out of a completed exchange full of options like it.
+	#
+	cfg.put(Dhcpclient->Omask, ipb("255.255.255.0"));
 	(conf, lease, de) := dhcpclient->dhcp(Netdir, nil, Addrfile, cfg, nil);
 	res <-= ref Result(de == nil, "first exchange completes: "+nonnil(de));
 	if(conf != nil){
@@ -694,6 +700,8 @@ checksent(res: chan of ref Result, sent: list of array of byte)
 			"the parameter request list asks for mask, router and DNS");
 		res <-= ref Result(findopt(first, 12) != nil,
 			"a host name the caller supplied is sent");
+		res <-= ref Result(findopt(first, 1) == nil,
+			"a subnet mask the caller supplied is not sent back at the server");
 		res <-= ref Result(iszero(first, b+12),
 			"ciaddr is zero in a DISCOVER");
 		res <-= ref Result(int first[10] == 16rFF && int first[11] == 16rFF &&

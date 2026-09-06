@@ -582,6 +582,20 @@ mkparams(options: array of int): array of int
 }
 
 #
+# The options a DHCP client may sensibly put in a message of its own:
+# who it is, what it can receive, how long a lease it would like
+# (RFC 2132 3.14, 9.2, 9.10, 9.13, 9.14).
+#
+clientopt(n: int): int
+{
+	case n {
+	Ohostname or Ovendorclass or Oclientid or Omaxmsg or Olease or Ovendorinfo =>
+		return 1;
+	}
+	return 0;
+}
+
+#
 # Build one message. Returns the length of the body.
 #
 mkmsg(s: ref Session, body: array of byte, kind: int, ciaddr, reqaddr, srvid: array of byte): int
@@ -640,19 +654,20 @@ mkmsg(s: ref Session, body: array of byte, kind: int, ciaddr, reqaddr, srvid: ar
 		o = putopt(body, o, Ovendorclass, array of byte "plan9_386");
 
 	#
-	# Whatever else the caller put in the Bootconf it handed us: a
-	# host name from ip/dhcp -h, a client identifier of its own. The
-	# fields this exchange controls are not taken from there.
+	# What else the caller put in the Bootconf it handed us: a host
+	# name from ip/dhcp -h, a client identifier or a lease length of
+	# its own.
+	#
+	# Only the options a client has any business sending. The same
+	# Bootconf comes back out of a completed exchange full of the
+	# server's answers, and a caller that hands it back in -- to renew
+	# by hand, or to suggest the address it held before -- should not
+	# thereby tell the server what its own subnet mask is.
 	#
 	if(req != nil && req.options != nil)
-		for(k := 0; k < 256; k++){
-			case k {
-			Opad or Oend or Otype or Oipaddr or Oserverid or Oparams =>
-				continue;
-			}
-			if(req.options[k] != nil)
+		for(k := 0; k < 256; k++)
+			if(req.options[k] != nil && clientopt(k))
 				o = putopt(body, o, k, req.options[k]);
-		}
 
 	if(kind != 0 && kind != Release && kind != Decline && s.params != nil){
 		pl := array[len s.params] of byte;

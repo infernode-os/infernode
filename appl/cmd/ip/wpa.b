@@ -451,8 +451,8 @@ nonce(): array of byte
 #	radio takes a second or two to join and saying so every time
 #	would be noise.  After that the same doubling schedule as
 #	everywhere else applies, and each line carries the elapsed time:
-#	"20s", then "1m", then "2m20s" is a radio that has not found the
-#	network, and it reads as one at a glance.
+#	"20s", then "40s", then "1m20s", then "2m40s" is a radio that has
+#	not found the network, and it reads as one at a glance.
 #
 associate(cfd: ref Sys->FD, rsne: array of byte, announce: int): int
 {
@@ -460,7 +460,15 @@ associate(cfd: ref Sys->FD, rsne: array of byte, announce: int): int
 	say := Sparse.mk(Sayfirst);
 	while(!connected()){
 		sys->sleep(Assocpoll);
-		waited += Assocpoll;
+		#
+		# Saturating for the same reason Sparse.due is: a radio
+		# that never associates would otherwise wrap this after
+		# twenty-five days and start reporting negative times.
+		#
+		if(waited > Maxms - Assocpoll)
+			waited = Maxms;
+		else
+			waited += Assocpoll;
 		if(say.due(Assocpoll))
 			report(sys->sprint("still waiting for the radio to associate (%s)",
 				duration(waited)));

@@ -217,6 +217,18 @@ jobs:
         chmod +x tests/host/pi_firmware_test.sh
         ROOT=. bash tests/host/pi_firmware_test.sh
 
+    - name: Run WPA2 supplicant vector checks
+      run: |
+        # The supplicant's cryptography against RFC 6070, IEEE 802.11i
+        # Annex H and RFC 3394, plus a whole four-way handshake driven
+        # from synthetic frames. No radio is involved and none can be:
+        # this is the only part of the WiFi work a runner can prove.
+        # 77 = skip (no emulator built).
+        chmod +x tests/host/wpa_vectors_test.sh
+        rc=0
+        ROOT=. bash tests/host/wpa_vectors_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test

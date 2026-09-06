@@ -674,6 +674,7 @@ dis/tests/cowfs_test.dis
 dis/tests/crypto_props_test.dis
 dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
+dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis

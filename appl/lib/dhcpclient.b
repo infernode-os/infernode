@@ -822,10 +822,28 @@ reader(d: ref Sys->FD, c: chan of array of byte, pids: chan of int)
 	}
 }
 
-timerproc(c: chan of int, ms: int)
+#
+# A timer that can be cancelled, which matters more than it looks.
+#
+# A timer process left asleep is a process, and a hosted emu does not
+# exit while one is running: a lease whose renewal wait was interrupted
+# by release() would otherwise hold the whole system open for the rest
+# of a sleep measured in minutes. So every wait here hands back the
+# sleeper's pid, and every path that leaves the wait early kills it.
+#
+timerproc(c: chan of int, ms: int, pc: chan of int)
 {
+	pc <-= sys->pctl(0, nil);
 	sys->sleep(ms);
 	c <-= 1;			# buffered, so this always returns
+}
+
+starttimer(ms: int): (chan of int, int)
+{
+	c := chan[1] of int;
+	pc := chan of int;
+	spawn timerproc(c, ms, pc);
+	return (c, <-pc);
 }
 
 killproc(pid: int)
@@ -887,16 +905,18 @@ v4map(a: array of byte, o: int, v: array of byte)
 #
 waitreply(s: ref Session, kinds: list of int, ms: int): array of byte
 {
-	t := chan[1] of int;
-	spawn timerproc(t, ms);
+	(t, tpid) := starttimer(ms);
 	for(;;){
 		alt {
 		buf := <-s.rc =>
 			b := match(s, buf, kinds);
-			if(b != nil)
+			if(b != nil){
+				killproc(tpid);
 				return b;
+			}
 		<-s.stop =>
 			s.halt = 1;
+			killproc(tpid);
 			return nil;
 		<-t =>
 			return nil;
@@ -1280,11 +1300,10 @@ Lease.release(l: self ref Lease)
 	# a caller that asked for its address back does not deserve to
 	# block for ever, so it gets killed instead.
 	#
-	t := chan[1] of int;
-	spawn timerproc(t, Stopwait);
+	(t, tpid) := starttimer(Stopwait);
 	alt {
 	<-s.done =>
-		;
+		killproc(tpid);
 	<-t =>
 		killproc(l.pid);
 		closesession(s);
@@ -1303,13 +1322,13 @@ napsecs(s: ref Session, secs: int): int
 		n := secs;
 		if(n > Napmax)
 			n = Napmax;
-		t := chan[1] of int;
-		spawn timerproc(t, n*1000);
+		(t, tpid) := starttimer(n*1000);
 		alt {
 		<-t =>
 			;
 		<-s.stop =>
 			s.halt = 1;
+			killproc(tpid);
 			return 1;
 		}
 		secs -= n;

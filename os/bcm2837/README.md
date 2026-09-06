@@ -65,10 +65,11 @@ the end of this file:
   (2026-09-06), and frames, scan, join and the supplicant are written,
   but nothing has associated with an access point. No build machine has
   a radio and QEMU models none, so everything above the firmware upload
-  is untested outside a board. The scan sweeps the 2.4 GHz channels
-  only: the escan request names the fourteen 2.4 GHz chanspecs and the
-  join verb bounds a channel at 16, so a 5 GHz network will not be
-  found or joined even though the part is dual-band
+  is untested outside a board. The scan does return 5 GHz networks
+  (the board saw channels 126 and 134 in a real room) even though the
+  escan request names only the fourteen 2.4 GHz chanspecs, so the
+  firmware is sweeping more than it is asked to; joining one is a
+  different matter, because the join verb bounds a channel at 16
 - touch, USB storage, audio; the Pi 4
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the

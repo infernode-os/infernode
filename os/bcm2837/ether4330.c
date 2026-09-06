@@ -19,9 +19,11 @@
  * frames: the output queue is drained onto function 2 under the
  * firmware's credit window, and what arrives on the data channel has
  * its two headers stripped and goes to the conversations under
- * /net/ether1. No scan is issued and no network is joined yet: those
- * are the next milestones, and each adds to this file rather than to
- * the kernel around it.
+ * /net/ether1. Then find out what is on the air: a conversation that
+ * writes "scanbs <secs>" to its ctl reads one line per network from
+ * its own data file. No network is joined yet: that is the next
+ * milestone, and it adds to this file rather than to the kernel
+ * around it.
  *
  * WHEN EACH HALF RUNS. The probe -- pins, SDIO identification,
  * backplane scan -- runs at board init, after sdhost.c has taken the
@@ -220,11 +222,14 @@ struct Ctlr
 	Lock	txwinlock;	/* the flow-control pair, written by rproc */
 	Rendez	cmdr;
 	Block	*rsp;		/* the response rproc caught for wlcmd */
+	Block	*scanb;		/* the scan being assembled, one line per network */
+	int	scansecs;	/* rescan this often, or 0 for not at all */
 
 	int	status;		/* Disconnected, Connecting, Connected */
 	int	present;	/* the probe found a radio */
 	int	running;	/* firmware running and answering */
 	int	reader;		/* rproc has been started */
+	int	timer;		/* lproc has been started */
 	int	fwbytes;	/* size of the firmware uploaded */
 	char	ver[128];	/* what the firmware says it is */
 
@@ -327,6 +332,12 @@ put4(uchar *p, u32int v)
 	p[2] = v >> 16;
 	p[3] = v >> 24;
 	return p + 4;
+}
+
+static int
+get2(uchar *p)
+{
+	return p[0] | p[1]<<8;
 }
 
 static u32int
@@ -1495,6 +1506,7 @@ wlreadpkt(Ctlr *ctl)
 }
 
 static void bcmevent(Ctlr*, uchar*, int);
+static void wlscanresult(Ether*, uchar*, int);
 
 /*
  * Frames out: the output queue, drained onto function 2.
@@ -1885,7 +1897,10 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 		linkdown(ctl);
 		break;
 	case 26:	/* E_SCAN_COMPLETE */
+		break;
 	case 69:	/* E_ESCAN_RESULT */
+		if(len > 48)
+			wlscanresult(ctl->edev, p + 48, len - 48);
 		break;
 	default:
 		if(status){
@@ -2019,6 +2034,299 @@ wlsetint(Ctlr *ctl, char *name, int val)
 }
 
 /*
+ * THE SCAN IS A FILE.
+ *
+ * A conversation asks for one by writing "scanbs <secs>" to its ctl,
+ * and reads the answer from its own data file: one line per network,
+ * a fresh set every <secs> seconds until the conversation is closed.
+ * netif already carries that mechanism -- the verb, the per-file scan
+ * flag and the count of scanners -- so what the driver supplies is
+ * the hook underneath it and the records themselves. There is no
+ * "scan" file to read and no scan command: a reader that wants
+ * results holds a conversation open, which is also what makes
+ * stopping the radio scanning again automatic when it lets go.
+ *
+ * THE RECORD, and it is an interface, not a message. Six fields,
+ * space-separated, most significant first, per
+ * docs/9p-data-conventions.md:
+ *
+ *	bssid chan signal noise auth ssid
+ *
+ *	bssid	twelve lower-case hex digits, no separators -- the
+ *		form %E prints and /net/ether1/addr holds, and the form
+ *		the rxkey/txkey verbs accept back
+ *	chan	the channel number, decimal
+ *	signal	RSSI in dBm, signed decimal
+ *	noise	the phy noise floor in dBm, signed decimal
+ *	auth	one word: open, wep, wpa, wpa2, or wpa+wpa2 for a
+ *		network advertising both
+ *	ssid	THE REST OF THE LINE, verbatim, because an SSID may
+ *		contain spaces. A hidden network ends the line after
+ *		auth, so there is never a trailing space to trip a
+ *		reader that splits on one.
+ *
+ * Plan 9's driver emits ";"-joined attr=value tuples here. This is
+ * the same information in the form the rest of this namespace uses,
+ * and it is chosen rather than inherited: the fields are all present
+ * on every record, so naming each one buys nothing, and the one
+ * field that cannot be a fixed column -- the ssid -- is last, which
+ * is what makes tokenize work at all.
+ *
+ * An SSID is bytes chosen by whoever is transmitting, so control
+ * characters in it become '.' before the record is written. Without
+ * that, an access point can name itself with a newline and forge
+ * however many records it likes in a file whose whole contract is
+ * one network per line.
+ */
+
+/*
+ * Has this network already been recorded? The bssid is the first
+ * field of every line, so the comparison is anchored at a line start
+ * and cannot match hex that happens to appear inside an ssid.
+ */
+static int
+seenbssid(Block *bp, char *bssid)
+{
+	char *s, *e, *lim;
+
+	lim = (char*)bp->wp;
+	for(s = (char*)bp->rp; s < lim; s = e < lim? e+1 : e){
+		for(e = s; e < lim && *e != '\n'; e++)
+			;
+		if(e - s >= 12 && strncmp(s, bssid, 12) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+static uchar*
+gettlv(uchar *p, uchar *ep, int tag)
+{
+	int len;
+
+	while(p + 1 < ep){
+		len = p[1];
+		if(p + 2 + len > ep)
+			return nil;
+		if(p[0] == tag)
+			return p;
+		p += 2 + len;
+	}
+	return nil;
+}
+
+/*
+ * One bss_info from the firmware, as one record. The offsets are the
+ * firmware's wl_bss_info layout, which is what Miller's driver reads;
+ * everything taken out of it is bounds-checked against the length the
+ * firmware declared, because the whole structure arrived over the air.
+ */
+static void
+addscan(Block *bp, uchar *p, int len)
+{
+	char bssid[16], ssid[33], *auth;
+	uchar *t, *et;
+	int ielen, ssidlen, i, c, wpa1, wpa2;
+
+	if(len < 0x7c)
+		return;
+	if(bp->lim - bp->wp < 128)	/* no room for a whole record */
+		return;
+	snprint(bssid, sizeof bssid, "%E", p + 8);
+	if(seenbssid(bp, bssid))
+		return;
+
+	ssidlen = p[18];
+	if(ssidlen > 32)
+		ssidlen = 32;
+	for(i = 0; i < ssidlen; i++){
+		c = p[19+i];
+		ssid[i] = (c < 0x20 || c == 0x7f)? '.' : c;
+	}
+	ssid[ssidlen] = 0;
+
+	wpa1 = wpa2 = 0;
+	ielen = get4(p + 0x78);
+	if(ielen > 0 && get4(p + 0x74) <= (u32int)len &&
+	   (u32int)ielen <= len - get4(p + 0x74)){
+		static uchar wpaie1[4] = { 0x00, 0x50, 0xf2, 0x01 };
+
+		t = p + get4(p + 0x74);
+		et = t + ielen;
+		if(gettlv(t, et, 0x30) != nil)
+			wpa2 = 1;
+		while((t = gettlv(t, et, 0xdd)) != nil){
+			if(t[1] > 4 && memcmp(t+2, wpaie1, 4) == 0){
+				wpa1 = 1;
+				break;
+			}
+			t += 2 + t[1];
+		}
+	}
+	if(wpa1 && wpa2)
+		auth = "wpa+wpa2";
+	else if(wpa2)
+		auth = "wpa2";
+	else if(wpa1)
+		auth = "wpa";
+	else if(get2(p + 16) & 0x10)	/* capability: privacy */
+		auth = "wep";
+	else
+		auth = "open";
+
+	bp->wp = (uchar*)seprint((char*)bp->wp, (char*)bp->lim, "%s %d %d %d %s",
+		bssid, get2(p+72) & 0xF, (short)get2(p+78),
+		(signed char)p[80], auth);
+	if(ssidlen > 0)
+		bp->wp = (uchar*)seprint((char*)bp->wp, (char*)bp->lim, " %s", ssid);
+	bp->wp = (uchar*)seprint((char*)bp->wp, (char*)bp->lim, "\n");
+}
+
+/*
+ * An escan result event. The firmware sends one of these per network
+ * found and then a final one with a count of zero, which is what says
+ * the sweep is over -- so records accumulate in one Block and the
+ * empty result is what hands it to the readers. Each scanning
+ * conversation gets a copy and the last gets the original.
+ */
+static void
+wlscanresult(Ether *edev, uchar *p, int len)
+{
+	Ctlr *ctlr;
+	Netif *nif;
+	Netfile *f;
+	Block *bp;
+	int nbss, i, last;
+
+	ctlr = edev->ctlr;
+	nif = &edev->nif;
+	if(len < 12 || get4(p) > (u32int)len)
+		return;
+	if((bp = ctlr->scanb) == nil){
+		bp = allocb(8192);
+		ctlr->scanb = bp;
+	}
+	nbss = get2(p+10);
+	p += 12;
+	len -= 12;
+	if(nbss){
+		addscan(bp, p, len);
+		return;
+	}
+	last = -1;
+	for(i = 0; i < nif->nfile; i++){
+		f = nif->f[i];
+		if(f != nil && f->scan && f->in != nil)
+			last = i;
+	}
+	ctlr->scanb = nil;
+	if(last < 0){
+		freeb(bp);
+		return;
+	}
+	for(i = 0; i <= last; i++){
+		f = nif->f[i];
+		if(f == nil || f->scan == 0 || f->in == nil)
+			continue;
+		qpass(f->in, i == last? bp : copyblock(bp, BLEN(bp)));
+	}
+}
+
+/*
+ * Ask the firmware to sweep the 2.4 GHz channels. The parameter block
+ * is Miller's, laid out little-endian by hand because that is the
+ * order the firmware reads it in and this machine writes it in.
+ */
+static void
+wlscanstart(Ctlr *ctl)
+{
+	/* version[4] action[2] sync_id[2] ssidlen[4] ssid[32] bssid[6] bss_type[1]
+		scan_type[1] nprobes[4] active_time[4] passive_time[4] home_time[4]
+		nchans[2] nssids[2] chans[nchans][2] ssids[nssids][32] */
+	static uchar params[4+2+2+4+32+6+1+1+4*4+2+2+14*2+32+4] = {
+		1,0,0,0,
+		1,0,
+		0x34,0x12,
+		0,0,0,0,
+		0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+		0xff,0xff,0xff,0xff,0xff,0xff,
+		2,
+		0,
+		0xff,0xff,0xff,0xff,
+		0xff,0xff,0xff,0xff,
+		0xff,0xff,0xff,0xff,
+		0xff,0xff,0xff,0xff,
+		14,0,
+		1,0,
+		0x01,0x2b,0x02,0x2b,0x03,0x2b,0x04,0x2b,0x05,0x2e,0x06,0x2e,0x07,0x2e,
+		0x08,0x2b,0x09,0x2b,0x0a,0x2b,0x0b,0x2b,0x0c,0x2b,0x0d,0x2b,0x0e,0x2b,
+		0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	};
+
+	wlcmdint(ctl, 49, 0);	/* PASSIVE_SCAN */
+	wlsetvar(ctl, "escan", params, sizeof params);
+}
+
+/*
+ * The rescan timer: one kproc, a second at a time. A scan that fails
+ * turns rescanning off rather than repeating a command the firmware
+ * has already refused once a second for ever.
+ */
+static void
+lproc(void *a)
+{
+	Ether *edev;
+	Ctlr *ctlr;
+	int secs;
+
+	edev = a;
+	ctlr = edev->ctlr;
+	secs = 0;
+	for(;;){
+		if(waserror()){
+			ctlr->scansecs = 0;
+			secs = 0;
+			continue;
+		}
+		tsleep(&up->sleep, return0, nil, 1000);
+		if(ctlr->scansecs == 0)
+			secs = 0;
+		else{
+			if(secs == 0){
+				wlscanstart(ctlr);
+				secs = ctlr->scansecs;
+			}
+			--secs;
+		}
+		poperror();
+	}
+}
+
+/*
+ * netif's scanbs verb. Refuses when there is no firmware to ask --
+ * that refusal is the whole of what a machine with no radio can be
+ * told about scanning -- but never when it is being turned OFF,
+ * because netif calls that path when a conversation is closed and an
+ * error there would unwind a close.
+ */
+static void
+etherbcmscan(void *a, uint secs)
+{
+	Ether *edev;
+	Ctlr *ctlr;
+
+	edev = a;
+	ctlr = edev->ctlr;
+	if(secs != 0){
+		if(!ctlr->present)
+			error("ether4330: no radio");
+		if(!ctlr->running)
+			error("ether4330: firmware not loaded");
+	}
+	ctlr->scansecs = secs;
+}
+
+/*
  * The dongle up: read its MAC address, set the constants the
  * firmware wants set before it is any use, bring it UP and ask what
  * version it is. Miller's wlinit, minus the WEP key it seeds for a
@@ -2139,6 +2447,10 @@ bringup(Ether *edev)
 		kproc("wifireader", rproc, edev, 0);
 		ctl->reader = 1;
 	}
+	if(!ctl->timer){
+		kproc("wifitimer", lproc, edev, 0);
+		ctl->timer = 1;
+	}
 	if(ctl->fwchan[2] != nil)
 		reguload(ctl, ctl->fwchan[2]);
 	wlinit(edev, ctl);
@@ -2235,6 +2547,7 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	l += snprint(p+l, 512-l, "firmware: %s\n", ctl->running? ctl->ver : "not loaded");
 	if(ctl->running)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
+	l += snprint(p+l, 512-l, "scan: %d\n", ctl->scansecs);
 	l += snprint(p+l, 512-l, "oq: %d\n", qlen(edev->oq));
 	l += snprint(p+l, 512-l, "txwin: %d\n", ctl->txwindow);
 	l += snprint(p+l, 512-l, "txseq: %d\n", ctl->txseq);
@@ -2287,6 +2600,14 @@ ether4330probe(void)
 	e->shutdown = etherbcmshutdown;
 	e->ctl = etherbcmctl;
 	e->transmit = etherbcmtransmit;
+	/*
+	 * The scan hook is netif's, not devether's: "scanbs <secs>" is a
+	 * netif verb and netif calls this through nif.arg. Both are set
+	 * here, after etherreset has run netifinit and before anything
+	 * can walk #l1.
+	 */
+	e->nif.arg = e;
+	e->nif.scanbs = etherbcmscan;
 
 #ifdef SDCARD_ARASAN
 	bootsay("the Arasan holds the card (-DSDCARD_ARASAN), radio not probed", 0, -1);

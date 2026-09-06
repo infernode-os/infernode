@@ -54,7 +54,7 @@ Wpa: module
 	Sparse: adt {
 		elapsed:	int;	# ms this condition has lasted
 		gap:		int;	# ms between the last line and the next
-		next:		int;	# elapsed at which another line falls due
+		left:		int;	# ms still to go before the next one
 		said:		int;	# lines said about it so far
 
 		mk:	fn(first: int): ref Sparse;
@@ -110,6 +110,9 @@ Retrymax:	con 60000;	# ms
 #	would come straight back.
 #
 Realassoc:	con 1000;	# ms
+
+#	The largest int, as a millisecond count: about twenty-five days.
+Maxms:		con 16r7FFFFFFF;
 
 stderr: ref Sys->FD;
 debug := 0;
@@ -353,8 +356,23 @@ Sparse.mk(first: int): ref Sparse
 
 Sparse.due(s: self ref Sparse, ms: int): int
 {
-	s.elapsed += ms;
-	if(s.elapsed < s.next)
+	#
+	# elapsed is only ever printed, and it is milliseconds in an int,
+	# which runs out after about twenty-five days.  Saturate it: a
+	# supplicant left failing for a month should say "25d" for ever
+	# rather than have the sum go negative.  What must not depend on
+	# it is whether to speak at all, which is why the schedule below
+	# counts down rather than comparing against a growing total --
+	# a wrapped total would have silenced the program permanently at
+	# exactly the moment someone wanted to know it was still alive.
+	#
+	if(ms > 0 && s.elapsed > Maxms - ms)
+		s.elapsed = Maxms;
+	else
+		s.elapsed += ms;
+
+	s.left -= ms;
+	if(s.left > 0)
 		return 0;
 	if(s.gap == 0)
 		s.gap = Sayfirst;
@@ -363,7 +381,7 @@ Sparse.due(s: self ref Sparse, ms: int): int
 		if(s.gap > Saymax || s.gap <= 0)
 			s.gap = Saymax;
 	}
-	s.next = s.elapsed + s.gap;
+	s.left = s.gap;
 	s.said++;
 	return 1;
 }
@@ -379,6 +397,13 @@ duration(ms: int): string
 	if(ms < 1000)
 		return sys->sprint("%dms", ms);
 	secs := ms / 1000;
+	if(secs >= 24*60*60){
+		days := secs / (24*60*60);
+		hrs := (secs % (24*60*60)) / 3600;
+		if(hrs == 0)
+			return sys->sprint("%dd", days);
+		return sys->sprint("%dd%dh", days, hrs);
+	}
 	if(secs < 60)
 		return sys->sprint("%ds", secs);
 	mins := secs / 60;

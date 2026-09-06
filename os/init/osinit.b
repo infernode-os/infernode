@@ -1,0 +1,2674 @@
+implement Init;
+
+#
+# Initial Dis program for the bare-metal AArch64 port.
+#
+# This is what disinit() loads and schedmod() runs -- the first Limbo
+# code the kernel executes, and the point at which the machine stops
+# being a C program and starts being Inferno. Nothing in it is
+# board-specific; the board's own facts (the SD device, the pins the
+# kernel claims) are read from the namespace, not compiled in.
+#
+# It is the counterpart of upstream's geninit.b, and it has grown the
+# way that one did: it proves the VM and the namespace, walks the USB
+# bus and starts the class drivers (etherusb, kbdusb, mouseusb), runs
+# the built-in self-checks the harness asserts on, mounts the SD card
+# on /n/dos, applies the rootpath policy (which root the card asks
+# for), binds a writable /usr, and finally starts the shell with the
+# profile -- which is where the userspace on the card takes over
+# (auth/secstored, wm/logon, the desktop).
+#
+# Every file the kernel image carries is a recovery floor: enough to
+# boot to a shell and repair a card, and no more. What a usable machine
+# runs comes from the card or the network, so that fixing it does not
+# mean reflashing a kernel.
+#
+
+include "sys.m";
+	sys: Sys;
+
+include "draw.m";
+
+include "bench.m";
+
+include "sh.m";
+include "keyring.m";
+
+Init: module
+{
+	init:	fn();
+};
+
+init()
+{
+	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		return;
+
+	sys->print("*** Dis is running on bare metal ***\n");
+
+	#
+	# Prove the namespace the C kernel built is reachable from Limbo.
+	# fd 0/1/2 are already #c/cons, opened by disinit before we ran.
+	#
+	sys->print("init: reading /dev/sysname ... ");
+	fd := sys->open("/dev/sysname", Sys->OREAD);
+	if(fd == nil)
+		sys->print("cannot open: %r\n");
+	else {
+		buf := array[64] of byte;
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			sys->print("empty\n");
+		else
+			sys->print("%q\n", string buf[0:n]);
+	}
+
+	#
+	# Write through the namespace, from Limbo, to the device the C
+	# kernel registered. If this line appears, the whole stack works:
+	# Dis -> Sys module -> sysfile -> chan -> devcons -> UART.
+	#
+	sys->print("init: writing to /dev/cons ... ");
+	cons := sys->open("/dev/cons", Sys->OWRITE);
+	if(cons == nil)
+		sys->print("cannot open: %r\n");
+	else {
+		msg := array of byte "hello from Limbo\n";
+		if(sys->write(cons, msg, len msg) != len msg)
+			sys->print("write failed: %r\n");
+	}
+
+	#
+	# Exercise the allocator and the garbage collector from Limbo,
+	# which is the part of the VM the C kernel's pool allocator is
+	# actually underneath.
+	#
+	total := 0;
+	for(i := 0; i < 1000; i++){
+		s := array[256] of byte;
+		total += len s;
+	}
+	sys->print("init: allocated %d bytes through the Dis heap\n", total);
+	kernelimage();
+	gpiocheck();
+	smpticks();
+	bootargs();
+
+	#
+	# A fixed arithmetic loop, timed. Reported so the harness can run
+	# the same kernel with the JIT on and off and compare -- which is
+	# the only comparison that means anything, since everything else
+	# about the two images is identical.
+	#
+	# Deliberately integer-only and allocation-free: this measures the
+	# code the JIT generates, not the allocator or the garbage
+	# collector.
+	#
+	t0 := sys->millisec();
+	acc := 0;
+	for(k := 0; k < 2000000; k++)
+		acc += (k*3) ^ (k>>2);
+	t1 := sys->millisec();
+	sys->print("bench: %d iterations in %d ms (acc=%d)\n", 2000000, t1-t0, acc);
+
+	jitstress();
+	fdcheck();
+
+	#
+	# Put the IP stack where Inferno expects it.
+	#
+	# #I is the device; /net is the conventional path, and everything
+	# that speaks to the network -- including the shell -- looks there
+	# rather than at the device name. It also makes the stack
+	# reachable by typing: in the shell a bare '#' begins a comment,
+	# so '#I/ipifc' cannot be written without quoting it.
+	#
+	# MBEFORE, not MREPL. devip's files must come first, but the
+	# directory underneath carries /net/ether0 -- the mount point the
+	# USB Ethernet driver publishes itself on -- and MREPL would hide
+	# it, leaving the driver with nowhere to appear.
+	if(sys->bind("#I", "/net", Sys->MBEFORE) < 0)
+		sys->print("init: cannot bind #I on /net: %r\n");
+
+	#
+	# And the process device on /prog. sh reaches it as #p directly
+	# for its wait file, so nothing has needed the conventional path
+	# until now -- but a system you cannot list the processes of is
+	# one you cannot diagnose, and that is exactly what #p is for.
+	#
+	if(sys->bind("#p", "/prog", Sys->MREPL) < 0)
+		sys->print("init: cannot bind #p on /prog: %r\n");
+
+	#
+	# And the environment on /env.
+	#
+	# Inferno has no environ array: a variable IS a file, and
+	# inheritance is a namespace operation rather than a copy. Until
+	# #e was imported this kernel had noenv.c -- whose own header
+	# said "use this when devenv.c not used" -- so a Limbo program
+	# could not read or set a variable at all.
+	#
+	# MCREATE as well as MREPL: setting a variable CREATES a file, so
+	# a mount point that forbids creation makes the environment
+	# readable and not writable -- "mounted directory forbids
+	# creation" from the shell, on what looks like an ordinary
+	# assignment.
+	if(sys->bind("#e", "/env", Sys->MREPL|Sys->MCREATE) < 0)
+		sys->print("init: cannot bind #e on /env: %r\n");
+
+	#
+	# And the USB device framework on /usb. Same reason as the others:
+	# '#' begins a comment in the shell, so the device name cannot be
+	# typed, and a bus you cannot look at is a bus you cannot bring up.
+	#
+	if(sys->bind("#u", "/usb", Sys->MREPL) < 0)
+		sys->print("init: cannot bind #u on /usb: %r\n");
+
+	#
+	# And the server device on /chan, which is where a Limbo program
+	# that wants to BE a file server puts its names.
+	#
+	# sys->file2chan(dir, file) makes a file whose reads and writes
+	# arrive on a channel the program owns. The kernel side of that is
+	# #s, and by convention it lives at /chan -- so the argument
+	# programs actually pass is the literal "/chan", and without this
+	# bind they get "'/chan' file does not exist" and stop. wm/wm does
+	# exactly that on its first line of work, because the window
+	# manager reaches its clients through a served namespace and not
+	# through anything privileged.
+	#
+	# MCREATE, because serving a name means CREATING it.
+	#
+	if(sys->bind("#s", "/chan", Sys->MREPL|Sys->MCREATE) < 0)
+		sys->print("init: cannot bind #s on /chan: %r\n");
+
+	#
+	# Bring up loopback.
+	#
+	# This is the first thing that exercises the stack rather than
+	# merely linking it: cloning an interface, binding a medium to it,
+	# and assigning an address all run real code, and the address
+	# assignment is what inserts a route -- the v4addroute path whose
+	# end-address arithmetic was wrong under LP64 until it was fixed.
+	#
+	# Loopback needs no hardware, which is the point. This board has
+	# no usable network device until USB enumeration exists, so
+	# loopback is the only way to exercise the stack at all.
+	#
+	ifc := sys->open("/net/ipifc/clone", Sys->ORDWR);
+	if(ifc == nil)
+		sys->print("init: cannot clone an interface: %r\n");
+	else {
+		nbuf := array[32] of byte;
+		n := sys->read(ifc, nbuf, len nbuf);
+		if(n <= 0)
+			sys->print("init: cloned interface has no number: %r\n");
+		else {
+			ifcno := string nbuf[0:n];
+			sys->print("init: ipifc %s cloned\n", ifcno);
+
+			# The medium first: an address cannot be assigned to
+			# an interface that is not bound to anything.
+			if(sys->fprint(ifc, "bind loopback") < 0)
+				sys->print("init: bind loopback failed: %r\n");
+			else if(sys->fprint(ifc, "add 127.0.0.1 255.0.0.0") < 0)
+				sys->print("init: add 127.0.0.1 failed: %r\n");
+			else
+				sys->print("init: 127.0.0.1/8 configured on ipifc %s\n", ifcno);
+		}
+	}
+
+	#
+	# Send a packet.
+	#
+	# Everything above proves the stack is present and configured.
+	# This proves it MOVES DATA: an ICMP echo request goes out through
+	# ipoput4, across the loopback medium, back in through ipiput4, is
+	# recognised by icmp.c, answered, and delivered back to this
+	# conversation. Checksums, the route lookup, the interface's self
+	# addresses and the protocol demultiplexer are all on that path,
+	# and none of them can be verified by reading a stats file.
+	#
+	# The write is 20 bytes of IP header the stack fills in itself,
+	# then the ICMP header at offset 20 -- that layout is icmpkick's
+	# contract, not a convention: it requires at least
+	# ICMP_IPSIZE + ICMP_HDRSIZE and overwrites the addresses,
+	# protocol, id and checksum.
+	#
+	#
+	# In its own thread: if it blocks, the shell still comes up and
+	# the machine stays inspectable. A diagnostic that takes the
+	# system down with it cannot be used to diagnose anything.
+	#
+	spawn pingit();
+	spawn tcpecho();
+	sdsetup();
+
+	#
+	# The radio's firmware lives on the card just mounted. The kernel
+	# names no path: this is where the paths come from.
+	#
+	radiosetup();
+
+	#
+	# Spawned, and the shell starts straight after it.
+	#
+	# Making the shell WAIT for this walk was tried, so that the
+	# prompt would be the last thing on screen rather than buried
+	# under two screens of enumeration. It has to be reverted: every
+	# build carrying that change failed to enumerate the low-speed
+	# keyboard -- control transfers coming back as 0x55 -- and every
+	# build without it enumerated cleanly, five to nothing against
+	# four to nothing for. The mechanism is not understood, which is
+	# exactly why the change does not stay: a prompt in a tidier
+	# place is not worth a keyboard that does not work, and shipping
+	# it while calling the failure intermittent would be shipping a
+	# known regression under a friendlier name.
+	#
+	# What made it findable was building the last known-good commit
+	# from a pristine copy and re-applying changes in groups, rather
+	# than reasoning about which one looked guilty.
+	#
+	#
+	# A writable /tmp before anything wants one.
+	#
+	# The root filesystem is compiled into the kernel image and is
+	# read-only by construction, so every program that opens a
+	# temporary file fails -- acme reports "can't create temp file
+	# permission denied", which reads like a bug in acme rather than
+	# a missing filesystem.
+	#
+	# CALLED, not spawned, for the same reason dossrv is: memfs
+	# mounts in the namespace of the process that calls it and
+	# returns once mounted. Spawning it puts the mount in a namespace
+	# nobody else shares, and /tmp stays empty with no error
+	# anywhere.
+	#
+	tmpsetup();
+
+	#
+	# The touch panel, if the kernel found one. Spawned because it is
+	# a poll loop; it exits with one line on every machine without the
+	# ribbon, which is expected and not an error.
+	#
+	touchstart();
+
+	spawn usbprobe();
+
+	#
+	# A console over the network, so the serial cable is not the only
+	# way in.
+	#
+	spawn netconsole();
+
+	sys->print("\ninit: starting the shell\n\n");
+
+	#
+	# Hand over to /dis/sh.dis.
+	#
+	# Inferno has no exec(2): a command IS a Dis module, so running the
+	# shell means loading it and calling its init(). It never returns
+	# while the shell is running.
+	#
+	# sh's own initialise() loads Filepat, String, Bufio, Env and Arg
+	# and calls badmodule() -- which is fatal -- on any that are
+	# missing, so all five have to be in the kernel's root filesystem
+	# alongside sh.dis itself.
+	#
+	sh := load Command Command->PATH;
+	if(sh == nil){
+		sys->print("init: cannot load %s: %r\n", Command->PATH);
+		return;
+	}
+
+	#
+	# The boot is over: tell the kernel, which releases the boot
+	# watchdog a tryboot candidate armed in kmain.
+	#
+	# Here, and not earlier, because "booted" means "a shell can be
+	# typed at": the module is loaded and the next statement runs it.
+	# Not later, because sh->init does not return while the shell
+	# runs. The USB walk and the network are still in flight in their
+	# own threads and are deliberately NOT waited for -- a keyboard
+	# behind a slow hub or a DHCP server that never answers must not
+	# be what resets a working candidate back to the old kernel.
+	#
+	booted();
+
+	#
+	# -l, so the shell reads /lib/sh/profile.
+	#
+	# That is where "load std" happens, and without it sh can run
+	# commands and pipelines but has no control flow whatever: if,
+	# while and for live in loadable modules under /dis/sh rather than
+	# in the shell itself, so "for(i in 1 2 3)" fails looking for
+	# ./for.
+	#
+	sh->init(nil, "sh" :: "-l" :: nil);
+
+	sys->print("init: the shell returned\n");
+}
+
+#
+# How long boot may hold the prompt back for the bus walk, in
+# milliseconds. Generous, because the walk is known to finish and the
+# keyboard driver is on the other side of it; bounded, because a walk
+# that hangs must not cost the shell.
+#
+
+Echoreq:	con 8;		# ICMP type: echo request
+Echoreply:	con 0;		# ICMP type: echo reply
+Ipsize:		con 20;		# icmp.c ICMP_IPSIZE
+Hdrsize:	con 8;		# icmp.c ICMP_HDRSIZE
+
+pingit()
+{
+	c := sys->open("/net/icmp/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: cannot clone an icmp conversation: %r\n");
+		return;
+	}
+
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("init: icmp clone gave no number: %r\n");
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	#
+	# The "!1" is not a port ICMP has any use for -- it has none. The
+	# generic connect parser in devip.c requires an addr!port pair and
+	# rejects a bare address as "malformed address", so every protocol
+	# has to supply one whether it means anything or not.
+	#
+	if(sys->fprint(c, "connect 127.0.0.1!1") < 0){
+		sys->print("init: icmp connect failed: %r\n");
+		return;
+	}
+
+	d := sys->open("/net/icmp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open icmp data: %r\n");
+		return;
+	}
+
+	req := array[Ipsize + Hdrsize + 8] of byte;
+	for(i := 0; i < len req; i++)
+		req[i] = byte 0;
+	req[Ipsize] = byte Echoreq;		# type
+	req[Ipsize + 1] = byte 0;		# code
+	req[Ipsize + 6] = byte 0;		# sequence, high
+	req[Ipsize + 7] = byte 1;		# sequence, low
+
+	if(sys->write(d, req, len req) != len req){
+		sys->print("init: icmp write failed: %r\n");
+		return;
+	}
+
+	rep := array[256] of byte;
+	n = sys->read(d, rep, len rep);
+	if(n < Ipsize + Hdrsize){
+		sys->print("init: no echo reply (read %d): %r\n", n);
+		return;
+	}
+
+	if(int rep[Ipsize] == Echoreply)
+		sys->print("init: ICMP echo reply from 127.0.0.1 (%d bytes)\n", n);
+	else
+		sys->print("init: unexpected ICMP type %d\n", int rep[Ipsize]);
+}
+
+#
+# A TCP connection to ourselves over loopback.
+#
+# ICMP proves the stack moves packets. TCP proves it does the hard
+# part: a three-way handshake, sequence numbers advancing on both
+# sides, windows, and an ordered byte stream in each direction. It is
+# also the direct exercise of the arithmetic that was wrong under LP64
+# -- every segment compares sequence numbers through seq_lt and
+# friends, and the connection simply stalls if they answer wrongly.
+#
+# The listener has to be a separate thread because opening the listen
+# file blocks until somebody connects.
+#
+Tcpport:	con "9999";
+
+tcpecho()
+{
+	sync := chan of int;
+
+	spawn tcplistener(sync);
+	if(<-sync != 1){
+		sys->print("init: tcp listener failed to announce\n");
+		return;
+	}
+
+	c := sys->open("/net/tcp/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: cannot clone a tcp conversation: %r\n");
+		return;
+	}
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("init: tcp clone gave no number: %r\n");
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	if(sys->fprint(c, "connect 127.0.0.1!" + Tcpport) < 0){
+		sys->print("init: tcp connect failed: %r\n");
+		return;
+	}
+
+	d := sys->open("/net/tcp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open tcp data: %r\n");
+		return;
+	}
+
+	msg := array of byte "hello-tcp";
+	if(sys->write(d, msg, len msg) != len msg){
+		sys->print("init: tcp write failed: %r\n");
+		return;
+	}
+
+	rbuf := array[64] of byte;
+	rn := sys->read(d, rbuf, len rbuf);
+	if(rn <= 0){
+		sys->print("init: tcp read failed: %r\n");
+		return;
+	}
+
+	sys->print("init: TCP echo over loopback returned %q\n",
+		string rbuf[0:rn]);
+}
+
+tcplistener(sync: chan of int)
+{
+	a := sys->open("/net/tcp/clone", Sys->ORDWR);
+	if(a == nil){
+		sync <-= 0;
+		return;
+	}
+	nbuf := array[32] of byte;
+	n := sys->read(a, nbuf, len nbuf);
+	if(n <= 0){
+		sync <-= 0;
+		return;
+	}
+	conv := string nbuf[0:n];
+
+	if(sys->fprint(a, "announce " + Tcpport) < 0){
+		sync <-= 0;
+		return;
+	}
+	sync <-= 1;
+
+	# Blocks until the other side connects; returns the NEW
+	# conversation carrying the accepted connection.
+	l := sys->open("/net/tcp/" + conv + "/listen", Sys->ORDWR);
+	if(l == nil)
+		return;
+	ln := sys->read(l, nbuf, len nbuf);
+	if(ln <= 0)
+		return;
+	nconv := string nbuf[0:ln];
+
+	d := sys->open("/net/tcp/" + nconv + "/data", Sys->ORDWR);
+	if(d == nil)
+		return;
+
+	buf := array[64] of byte;
+	rn := sys->read(d, buf, len buf);
+	if(rn > 0)
+		sys->write(d, buf[0:rn], rn);
+}
+
+#
+# Ask the USB root hub about its port.
+#
+# This is the first thing that drives the DWC OTG controller through
+# the interface a real enumerator would use: an 8-byte setup packet
+# written to the root hub's control endpoint, and the reply read back.
+# devusb.c intercepts requests to the root hub and turns them into
+# hp->portstatus(), so a correct answer means the whole chain works --
+# #u's endpoint machinery, the Hci binding, and usbdwc's register
+# access.
+#
+# The root hub is ep1.0, not ep0.0: devusb numbers devices from 1 and
+# the hub is the first device on the bus.
+#
+Rd2h:		con 16r80;	# device to host
+Rh2d:		con 16r00;	# host to device
+Rclass:		con 16r20;	# class request
+Rother:		con 3;		# recipient: other (a port)
+
+Rgetstatus:	con 0;
+Rsetfeature:	con 3;
+Rsetaddress:	con 5;
+Rsetconfig:	con 9;
+Rgetdesc:	con 6;
+
+#
+# Hub feature selectors. The root hub understands only the first two,
+# because devusb answers for it and switches on wValue rather than on
+# the request code. A REAL hub is a device like any other: the request
+# code matters, and it also has to be told to turn its ports on.
+#
+Fportenable:	con 1;
+Fportreset:	con 4;
+
+#
+# How long to let a device settle after its port is reset, and how many
+# times to reset it before giving up on it.
+#
+Resetrecovery:	con 50;
+Watchival:	con 1000;	# how often a hub's ports are re-read, ms
+Enumattempts:	con 3;
+Fportpower:	con 8;
+
+Ddev:		con 1;		# descriptor type: device
+Dconf:		con 2;		# descriptor type: configuration
+Dhub:		con 16r29;	# descriptor type: hub
+Clhub:		con 9;		# device class: hub
+Clhid:		con 3;		# interface class: human interface
+Hidkbd:		con 1;		# HID boot protocol: keyboard
+Hidmouse:	con 2;		# HID boot protocol: mouse
+Clvendor:	con 255;	# device class: vendor-specific
+Vmicrochip:	con 16r0424;	# Microchip/SMSC: the LAN78xx family
+Clcomm:		con 2;		# device class: communications
+
+HPpresent:	con 16r1;
+HPenable:	con 16r2;
+HPreset:	con 16r10;	# the hub clears this itself when the reset is done
+HPpower:	con 16r100;
+HPslow:		con 16r200;
+HPhigh:		con 16r400;
+
+#
+# A control request is eight bytes on the wire in every case, so one
+# helper covers the whole protocol: write the setup packet, read the
+# reply. The endpoint file is the transaction -- there is no ioctl, no
+# submit-and-poll, and nothing to free.
+#
+ctlreq(d: ref Sys->FD, rtype, req, value, index, length: int, rep: array of byte): int
+{
+	setup := array[8] of byte;
+	setup[0] = byte rtype;
+	setup[1] = byte req;
+	setup[2] = byte (value & 16rFF);
+	setup[3] = byte ((value >> 8) & 16rFF);
+	setup[4] = byte (index & 16rFF);
+	setup[5] = byte ((index >> 8) & 16rFF);
+	setup[6] = byte (length & 16rFF);
+	setup[7] = byte ((length >> 8) & 16rFF);
+
+	if(sys->write(d, setup, len setup) != len setup)
+		return -1;
+
+	#
+	# The reply must always be collected, even when it is not wanted.
+	# devusb stashes it in ep->rhrepl and rhubread refuses to answer
+	# twice; leaving one behind means the NEXT request reads a stale
+	# value, or falls through to the controller and blocks there.
+	#
+	return sys->read(d, rep, len rep);
+}
+
+#
+# GET_STATUS on a hub port. wValue is 0 for a real hub because the
+# standard says so, and 0 for the root hub because devusb switches on
+# wValue and 0 is what selects portstatus there -- so one shape serves
+# both.
+#
+portstatus(d: ref Sys->FD, port: int): int
+{
+	rep := array[4] of byte;
+
+	if(ctlreq(d, Rd2h|Rclass|Rother, Rgetstatus, 0, port, len rep, rep) < len rep)
+		return -1;
+	return int rep[0] | (int rep[1] << 8);
+}
+
+#
+# SET_FEATURE on a hub port, with no data stage. The read still has to
+# happen: for the root hub devusb parks the reply in ep->rhrepl and
+# refuses to answer twice, so an uncollected one is handed to the NEXT
+# request instead.
+#
+portfeature(d: ref Sys->FD, port, feature: int): int
+{
+	rep := array[4] of byte;
+
+	return ctlreq(d, Rh2d|Rclass|Rother, Rsetfeature, feature, port, 0, rep);
+}
+
+statusflags(status: int): string
+{
+	# Limbo has no conditional expression -- if is a statement.
+	flags := "";
+	if(status & HPpresent)
+		flags += " present";
+	if(status & HPenable)
+		flags += " enabled";
+	if(status & HPpower)
+		flags += " powered";
+	if(status & HPslow)
+		flags += " lowspeed";
+	if(status & HPhigh)
+		flags += " highspeed";
+	return flags;
+}
+
+#
+# Speed is only meaningful after a reset: before one the port has not
+# yet negotiated, so asking is guesswork. Read it rather than assume it
+# -- newdev takes the speed as an argument and gets the maximum packet
+# size wrong if it is told the wrong one.
+#
+# What dumpconfig last saw on a HID interface; 0 if none.
+hidproto := 0;
+hidep := -1;
+hidmaxpkt := 0;
+hidival := 0;
+
+speedname(status: int): string
+{
+	if(status & HPhigh)
+		return "high";
+	if(status & HPslow)
+		return "low";
+	return "full";
+}
+
+touchstart()
+{
+	t := load Command "/dis/touch.dis";
+	if(t == nil){
+		sys->print("init: cannot load /dis/touch.dis: %r\n");
+		return;
+	}
+	spawn t->init(nil, "touch" :: nil);
+}
+
+usbprobe()
+{
+	#
+	# Signal completion however this returns.
+	#
+	# Every early exit below is a plain "return", and the shell is
+	# waiting on this channel; a probe that gives up quietly must not
+	# also hold the prompt back.
+	#
+	{
+		usbwalk();
+	} exception {
+	* =>
+		sys->print("init: usb probe failed\n");
+	}
+}
+
+usbwalk()
+{
+	d := sys->open("/usb/usb/ep1.0/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open the usb root hub: %r\n");
+		return;
+	}
+
+	status := portstatus(d, 1);
+	if(status < 0){
+		sys->print("init: usb port status failed: %r\n");
+		return;
+	}
+	sys->print("init: USB root hub port 1 status %#4.4x%s\n",
+		status, statusflags(status));
+
+	if((status & HPpresent) == 0){
+		sys->print("init: USB bus is empty\n");
+		return;
+	}
+
+	#
+	# Reset the port. A device that is merely present is not yet
+	# addressable: until the port is reset it has not negotiated a
+	# speed and does not answer on the default address.
+	#
+	if(portfeature(d, 1, Fportreset) < 0){
+		sys->print("init: usb port reset failed: %r\n");
+		return;
+	}
+
+	status = portstatus(d, 1);
+	if(status < 0){
+		sys->print("init: usb port status after reset failed: %r\n");
+		return;
+	}
+	sys->print("init: USB port 1 after reset %#4.4x%s\n",
+		status, statusflags(status));
+
+	if((status & HPenable) == 0){
+		sys->print("init: USB port did not enable\n");
+		return;
+	}
+
+	walking = 1;
+	(ok, dev) := enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
+	#
+	# The root port has no watcher to clean up after it: a device that
+	# failed to come up here would otherwise hold its ep0 for the life
+	# of the machine.
+	#
+	if(ok < 0 && dev != "")
+		detachdev(dev);
+	startpending();
+}
+
+#
+# Bring one device up on a port of some hub, and if it turns out to be
+# a hub itself, walk it too.
+#
+# hubctl is the ctl file of the hub the device hangs off -- the root
+# hub's for the first call, a real hub's for the recursive ones. depth
+# is only used to indent the report.
+#
+#
+# Reset a hub port again and wait for the device to come back.
+#
+# Takes the hub's OPEN fd rather than reopening it by path. Reopening
+# was wrong twice over: devusb hands out an endpoint to one opener, so
+# the second open failed and the retry gave up immediately -- and the
+# failed namespace walk left a channel that was then closed twice,
+# panicking the kernel with "cclose" the moment any device failed to
+# enumerate. A device failing to enumerate is common enough on this
+# board that it took the machine down on most boots.
+#
+reresetport(d: ref Sys->FD, port: int, indent: string): int
+{
+	sys->print("init: %sport %d did not answer; resetting it again\n",
+		indent, port);
+	if(portfeature(d, port, Fportreset) < 0)
+		return -1;
+
+	for(w := 0; w < 25; w++){		# up to half a second
+		sys->sleep(20);
+		status := portstatus(d, port);
+		if(status < 0)
+			return -1;
+		if(status & HPenable)
+			break;
+		if((status & HPreset) == 0)
+			break;
+	}
+	sys->sleep(Resetrecovery);
+	return 0;
+}
+
+#
+# Returns (status, device): status is 0 if the device came up, and
+# device is the devusb name newdev gave it -- "" if it never got one,
+# and otherwise the name WHETHER OR NOT it came up, because a device
+# that failed half way through still exists in devusb and the caller
+# has to be able to detach it. Nothing about the device is kept in a
+# global: this runs concurrently, once per hub watcher.
+#
+enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): (int, string)
+{
+	c := sys->open(hubctl, Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: cannot open %s: %r\n", hubctl);
+		return (-1, "");
+	}
+
+	#
+	# newdev allocates the endpoint and leaves its NAME to be read
+	# back from the same fd -- devusb stashes it in Chan.aux. So the
+	# ctl file has to be held open across both operations; opening it
+	# twice would allocate a device and then lose its name.
+	#
+	if(sys->fprint(c, "newdev %s %d", speed, port) < 0){
+		sys->print("init: usb newdev failed: %r\n");
+		return (-1, "");
+	}
+
+	#
+	# pread at 0, not read. The write above advanced the fd's offset
+	# past the end of the (not yet written) name, and ctlread ends in
+	# readstr(offset, ...), which answers 0 for any offset past the
+	# string. That looks exactly like an empty ctl file, and %r then
+	# prints whatever unrelated error was last set. Plan 9's usbd
+	# preads at 0 for the same reason.
+	#
+	nbuf := array[32] of byte;
+	n := sys->pread(c, nbuf, len nbuf, big 0);
+	if(n <= 0){
+		sys->print("init: usb newdev gave no name (%d)\n", n);
+		return (-1, "");
+	}
+	name := string nbuf[0:n];
+
+	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open %s: %r\n", name);
+		return (-1, name);
+	}
+
+	#
+	# GET_DESCRIPTOR(DEVICE) on the default address. The device has
+	# not been given an address yet and does not need one for this:
+	# usbdwc leaves the address field zero while the device is in
+	# Dconfig, which is what the bus expects of a device that has just
+	# been reset.
+	#
+	#
+	# Retried, because the first attempt is also how the driver
+	# discovers which DMA address form this controller understands:
+	# it flips after a timeout, and the retry is what tests the
+	# other one. A device that answers on the second attempt has
+	# told us something the first attempt could not.
+	#
+	#
+	# Check the descriptor, do not just count the bytes.
+	#
+	# A device descriptor begins with its own length (18) and its type
+	# (1). Accepting any 18 bytes means accepting 18 bytes of
+	# anything -- which is exactly what happened: a low-speed
+	# keyboard whose transfer returned 0x55 repeating was reported as
+	# "0x5555:0x5555 class 85 maxpkt 85 usb 85.5", the retry loop saw
+	# a full-length read and stopped, and the driver then programmed
+	# a maximum packet size of 85 from a field that was never a
+	# field.
+	#
+	# Two bytes of validation turn that into a retry, and a retry is
+	# worth having: the identical device on the next port enumerates
+	# correctly, so this is a transfer that fails sometimes rather
+	# than a device that cannot be read.
+	#
+	#
+	# Between attempts, RESET THE PORT AGAIN -- on this same device.
+	#
+	# Re-reading a descriptor does not help one that came out of reset
+	# wrong; only another reset does. But it has to be another reset
+	# of the device already allocated, not another trip through
+	# enumeration: newdev hands out a fresh device each time it is
+	# called, so retrying from the top left the same keyboard
+	# enumerated twice, and the second copy -- ep8.0 -- had no
+	# endpoints for the driver to open.
+	#
+	desc := array[18] of byte;
+	ok := 0;
+	for(try := 0; try < Enumattempts; try++){
+		if(try > 0 && reresetport(hubd, port, indent) < 0)
+			break;
+		n = ctlreq(d, Rd2h, Rgetdesc, Ddev << 8, 0, len desc, desc);
+		if(n < len desc){
+			sys->print("init: %sdevice descriptor read failed (%d): %r\n",
+				indent, n);
+			continue;
+		}
+		if(int desc[0] != len desc || int desc[1] != Ddev){
+			sys->print("init: %sdevice descriptor is not one (len %d type %d)\n",
+				indent, int desc[0], int desc[1]);
+			continue;
+		}
+		ok = 1;
+		break;
+	}
+	if(!ok){
+		sys->print("init: %s%s never answered after reset\n", indent, name);
+		return (-1, name);
+	}
+	if(try > 0)
+		sys->print("init: %sdescriptor read succeeded on attempt %d\n",
+			indent, try+1);
+
+	vendor := int desc[8] | (int desc[9] << 8);
+	product := int desc[10] | (int desc[11] << 8);
+	class := int desc[4];
+	maxpkt := int desc[7];
+
+	what := "";
+	if(class == Clhub)
+		what = " (hub)";
+
+	sys->print("init: %sUSB %s %#4.4x:%#4.4x class %d%s maxpkt %d usb %d.%d\n",
+		indent, name, vendor, product, class, what, maxpkt,
+		int desc[3], int desc[2] >> 4);
+
+	#
+	# Now give it an address. Two steps that must happen in this
+	# order: the request goes out on the wire while the device is
+	# still answering on address 0, and only then is the kernel told,
+	# because that is what makes usbdwc start putting the address in
+	# the channel register.
+	#
+	# maxpkt first. devusb assumes 64 for anything not low speed, and
+	# this device says 8; a control transfer split into the wrong
+	# packet size is a bus error rather than a short read.
+	#
+	dctl := sys->open("/usb/usb/" + name + "/ctl", Sys->ORDWR);
+	if(dctl == nil){
+		sys->print("init: cannot open %s ctl: %r\n", name);
+		return (-1, name);
+	}
+	sys->fprint(dctl, "maxpkt %d", maxpkt);
+
+	nb := devnum(name);
+	rep := array[4] of byte;
+	if(ctlreq(d, Rh2d, Rsetaddress, nb, 0, 0, rep) < 0){
+		sys->print("init: %s set address %d failed: %r\n", name, nb);
+		return (-1, name);
+	}
+	sys->fprint(dctl, "address");
+
+	#
+	# SET_CONFIGURATION, which was missing entirely.
+	#
+	# SET_ADDRESS leaves the device in the Address state, where the
+	# spec requires it to answer standard requests and nothing else.
+	# Class-specific requests -- which is all of the hub port status
+	# and port feature traffic below -- are only defined once the
+	# device is Configured.
+	#
+	# QEMU's hub answered them anyway, so the bus walk worked in
+	# emulation and the omission was invisible. The 3B+'s USB2514
+	# follows the spec: every one of its four ports read back 0x0000,
+	# with not even PORT_POWER set, and the SET_FEATURE that was meant
+	# to turn that power on reported no error because the hub is
+	# entitled to ignore it in that state.
+	#
+	if(configure(name, d, indent) < 0)
+		return (-1, name);
+
+	if(class == Clhub){
+		hubwalk(name, d, dctl, indent + "  ");
+		return (0, name);
+	}
+
+	hidproto = 0;
+	hidep = -1;
+	dumpconfig(d, indent + "  ");
+
+	#
+	# Let go of the device's control endpoint and ctl file BEFORE the
+	# driver is started, and explicitly. They are exclusive-open in
+	# devusb and the driver is a separate process that opens them the
+	# moment it runs. Nothing below needs them; the driver is told the
+	# name.
+	#
+	d = nil;
+	dctl = nil;
+
+	#
+	# Hand the endpoint over rather than making the driver find it.
+	#
+	# The walk has just read and parsed this device's configuration
+	# descriptor; the driver used to read and parse it AGAIN over the
+	# same fragile low-speed control pipe, for the same three numbers.
+	# Once was already a coin toss on this controller -- doing it
+	# twice doubled the chance of a device coming up without a driver,
+	# and the second attempt happens later, when the bus is busier.
+	#
+	if(hidproto == Hidkbd)
+		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival);
+	else if(hidproto == Hidmouse)
+		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival);
+
+	#
+	# Hand it to a class driver, which is a program. The bus walk's
+	# job ends at "there is a device of this class at this endpoint";
+	# what to say to it is not the kernel's business.
+	#
+	#
+	# Hand over on class OR on identity.
+	#
+	# CDC devices announce themselves by class. The LAN78xx does not:
+	# the 3B+'s onboard Ethernet enumerates as 0424:7800 with class
+	# 255, vendor-specific, because its control interface is a set of
+	# vendor register reads and writes rather than anything the CDC
+	# spec describes. Dispatching on class alone finds every USB
+	# Ethernet device except the one soldered to this board.
+	#
+	# The id check is deliberately narrow -- Microchip's vendor id,
+	# which covers the LAN78xx family etherusb knows -- rather than
+	# "start the driver for anything vendor-specific", which would
+	# spawn a driver per unknown device and call that discovery.
+	#
+	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
+		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
+	return (0, name);
+}
+
+
+#
+# A shell on a TCP port.
+#
+# The serial line is the only way to reach this board, and it is a poor
+# one: it carries the console AND every kernel message, a window system
+# reading /dev/keyboard splits typed input with the shell (they are the
+# same queue in devcons), and it tethers the machine to a desk. A
+# network console has none of those problems -- each connection gets
+# its own shell with its own file descriptors, and kernel output still
+# goes to the serial console where it belongs.
+#
+# styxlisten would be the usual way to do this, and it is not used
+# because it loads $Keyring unconditionally, which would mean linking
+# the whole crypto stack into a kernel that has no other use for it
+# yet. This is the same idea in thirty lines of the Sys module.
+#
+# OFF UNLESS THE CARD SAYS OTHERWISE, and this is the important part.
+#
+# It hands a shell to whoever connects. Started unconditionally and
+# announced on every interface, as it was, that is an unauthenticated
+# shell on whatever network the board happens to be plugged into --
+# which is not a posture any default should have. It is the same
+# argument the ring-fence rule in CLAUDE.md makes about the evaluation
+# harness, and it applies here for the same reason.
+#
+# So it starts only if a file exists on the boot partition, which takes
+# physical access to the card to create the first time. No file, no
+# listener, nothing open: that is what a fresh build does.
+#
+# The file's first line, if it has one, is a token the caller must send
+# before it is given a shell. Be honest about what that is worth: the
+# token crosses the wire in the clear, on a kernel with no $Keyring to
+# do better with -- see the modinit list in os/arm64/main.c, there is
+# no crypto linked here. It stops a port scan and a curious neighbour.
+# It does not stop anyone who can watch the traffic, and it is not a
+# substitute for the authentication this wants once libsec is in the
+# kernel.
+#
+Netconsport: con "tcp!*!17010";
+Netconsfile: con "/n/dos/netconsole";
+
+#
+# The token, and whether the console should run at all.
+#
+# Returns (token, enabled). An empty token with enabled set means the
+# file was there and said nothing -- the operator asked for a console
+# with no check on it, which is their call to make and is announced
+# loudly rather than quietly honoured.
+#
+netconstoken(): (string, int)
+{
+	fd := sys->open(Netconsfile, Sys->OREAD);
+	if(fd == nil)
+		return ("", 0);
+
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return ("", 1);
+
+	s := string buf[0:n];
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r')
+			return (s[0:i], 1);
+	return (s, 1);
+}
+
+#
+# Read one line, bounded.
+#
+# A caller that opens the connection and says nothing must not hold a
+# process for ever, and one that sends no newline must not be able to
+# make this read without limit.
+#
+netconsline(fd: ref Sys->FD): string
+{
+	buf := array[256] of byte;
+	nb := 0;
+	while(nb < len buf){
+		n := sys->read(fd, buf[nb:], len buf - nb);
+		if(n <= 0)
+			break;
+		nb += n;
+		s := string buf[0:nb];
+		for(i := 0; i < len s; i++)
+			if(s[i] == '\n' || s[i] == '\r')
+				return s[0:i];
+	}
+	if(nb == 0)
+		return "";
+	return string buf[0:nb];
+}
+
+netconsole()
+{
+	(tok, enabled) := netconstoken();
+	if(!enabled){
+		#
+		# Said once, and not as a warning: this is the default and
+		# the default is correct. Somebody looking for the console
+		# needs to know which file turns it on.
+		#
+		sys->print("init: no network console (create %s to enable)\n",
+			Netconsfile);
+		return;
+	}
+
+	(ok, c) := sys->announce(Netconsport);
+	if(ok < 0){
+		sys->print("init: no network console: %r\n");
+		return;
+	}
+	if(tok == "")
+		sys->print("init: network console on %s, NO TOKEN SET -- "
+			+ "anything that can reach this port gets a shell\n",
+			Netconsport);
+	else
+		sys->print("init: network console on %s, token required\n",
+			Netconsport);
+	for(;;){
+		(lok, nc) := sys->listen(c);
+		if(lok < 0){
+			sys->print("init: network console listen: %r\n");
+			return;
+		}
+		fd := sys->open(nc.dir + "/data", Sys->ORDWR);
+		if(fd == nil){
+			sys->print("init: network console open: %r\n");
+			continue;
+		}
+		spawn netshell(fd, tok);
+	}
+}
+
+netshell(fd: ref Sys->FD, tok: string)
+{
+	#
+	# Checked before anything else, and before the namespace is
+	# forked: a caller that cannot say the word gets no process
+	# state of ours at all.
+	#
+	if(tok != ""){
+		sys->fprint(fd, "token: ");
+		if(netconsline(fd) != tok){
+			sys->fprint(fd, "no\n");
+			return;
+		}
+	}
+
+	#
+	# A private set of file descriptors and a private namespace, so
+	# one session cannot disturb another or the console shell. NEWFD
+	# keeps only this connection; the dups then make it stdin, stdout
+	# and stderr, which is all a shell needs.
+	#
+	sys->pctl(Sys->NEWFD | Sys->FORKNS, fd.fd :: nil);
+	sys->dup(fd.fd, 0);
+	sys->dup(fd.fd, 1);
+	sys->dup(fd.fd, 2);
+
+	sh := load Command "/dis/sh.dis";
+	if(sh == nil){
+		sys->fprint(fd, "cannot load /dis/sh.dis: %r\n");
+		return;
+	}
+	sh->init(nil, "sh" :: nil);
+}
+
+#
+# Load a class driver and let it run in its own process.
+#
+# A command in Inferno is a Dis module -- there is no exec(2) -- so
+# starting one means loading it and calling init(). It is spawned
+# rather than called so that a driver which blocks waiting for its
+# device does not stop the rest of the bus walk.
+#
+#
+# Name the partitions on the SD card, and serve the FAT one.
+#
+# The kernel offers named byte ranges and knows nothing about partition
+# tables; reading the master boot record is policy, so it happens here.
+# Whoever reads it decides what the ranges are called, and dossrv --
+# an ordinary Limbo program with no special privilege -- turns the FAT
+# one into a namespace.
+#
+#
+# Mount an in-memory filesystem on /tmp.
+#
+Firmwaredir: con "/n/dos/firmware";
+
+radiosetup()
+{
+	#
+	# The radio's ctl verbs go to a conversation, not to a file named
+	# ctl: netif serves addr, clone, stats and ifstats at the top of
+	# an interface and puts ctl inside each numbered conversation, so
+	# opening clone is how a writer gets one. The first version wrote
+	# to "#l1/ether1/ctl", which does not exist; under emulation the
+	# attach refused before the walk got that far and the mistake did
+	# not show until a board had a radio that answered.
+	#
+	fd := sys->open("#l1/ether1/clone", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: radio: %r\n");
+		return;
+	}
+	if(sys->fprint(fd, "firmware %s/brcmfmac43455-sdio.bin %s/brcmfmac43455-sdio.txt %s/brcmfmac43455-sdio.clm_blob",
+			Firmwaredir, Firmwaredir, Firmwaredir) < 0)
+		sys->print("init: radio: firmware: %r\n");
+	else
+		sys->print("init: radio: firmware loaded\n");
+}
+
+tmpsetup()
+{
+	mfs := load Command "/dis/memfs.dis";
+	if(mfs == nil){
+		sys->print("init: cannot load memfs: %r\n");
+		return;
+	}
+	{
+		mfs->init(nil, "memfs" :: "-m" :: "8388608" :: "/tmp" :: nil);
+		sys->print("init: 8MB of memory mounted on /tmp\n");
+	} exception e {
+	"*" =>
+		sys->print("init: memfs on /tmp failed: %s\n", e);
+	}
+}
+
+sdsetup()
+{
+	fd := sys->open("/dev/sdcard", Sys->OREAD);
+	if(fd == nil)
+		return;			# no card, which is not an error
+
+	sec := array[512] of byte;
+	if(sys->pread(fd, sec, len sec, big 0) != len sec){
+		sys->print("init: cannot read the card\n");
+		return;
+	}
+	if(int sec[510] != 16r55 || int sec[511] != 16rAA){
+		sys->print("init: card has no partition table\n");
+		return;
+	}
+
+	ctl := sys->open("/dev/sdctl", Sys->OWRITE);
+	if(ctl == nil){
+		sys->print("init: cannot open /dev/sdctl: %r\n");
+		return;
+	}
+
+	dos := "";
+	for(i := 0; i < 4; i++){
+		p := 446 + i*16;
+		ptype := int sec[p+4];	# 'type' is a Limbo keyword
+		if(ptype == 0)
+			continue;
+		start := int sec[p+8] | (int sec[p+9] << 8) |
+			(int sec[p+10] << 16) | (int sec[p+11] << 24);
+		nsec := int sec[p+12] | (int sec[p+13] << 8) |
+			(int sec[p+14] << 16) | (int sec[p+15] << 24);
+
+		name := sys->sprint("sd%d", i);
+		if(sys->fprint(ctl, "part %s %d %d", name, start, nsec) < 0){
+			sys->print("init: cannot name partition %d: %r\n", i);
+			continue;
+		}
+		sys->print("init: /dev/%s: type %#2.2x, %d sectors\n",
+			name, ptype, nsec);
+
+		#
+		# The FAT types, and only the first one found.
+		#
+		# 0x0B and 0x0C are FAT32, 0x06 and 0x0E FAT16, 0x04 small
+		# FAT16, 0x01 FAT12. The Pi's boot partition is 0x0C.
+		#
+		if(dos == "" && (ptype == 16r01 || ptype == 16r04 ||
+		    ptype == 16r06 || ptype == 16r0B || ptype == 16r0C ||
+		    ptype == 16r0E))
+			dos = name;
+	}
+
+	if(dos == "")
+		return;
+
+	srv := load Command "/dis/dossrv.dis";
+	if(srv == nil){
+		sys->print("init: cannot load dossrv: %r\n");
+		return;
+	}
+	#
+	# Called, NOT spawned, and that is the whole difference between
+	# this working and not.
+	#
+	# dossrv mounts the filesystem in the process that calls it and
+	# returns once the mount is done; the server itself carries on in
+	# a process it spawned. sh, meanwhile, forks its namespace the
+	# moment it starts -- so a mount that lands after that is made in
+	# a namespace the shell does not share, and /n/dos stays the empty
+	# directory it was in the image. Spawning this raced the shell and
+	# lost.
+	#
+	{
+		srv->init(nil, "dossrv" :: "-f" :: "/dev/" + dos ::
+			"-m" :: "/n/dos" :: nil);
+		sys->print("init: /dev/%s mounted on /n/dos\n", dos);
+	} exception {
+	* =>
+		sys->print("init: dossrv could not serve /dev/%s\n", dos);
+		return;
+	}
+
+	rootpolicy();
+}
+
+#
+# Which userspace to run, decided by DATA ON THE CARD -- never by the
+# build. The kernel's compiled-in root is a recovery floor, not a
+# system; the real /dis and /lib come from wherever /n/dos/rootpath
+# says, in the order it says it:
+#
+#	local			the card's own dis/ and lib/ trees
+#	net tcp!host!port	a styx server, mounted without auth
+#
+# One line per source, applied top to bottom, every one a union bind
+# AFTER the kernel root -- so the 47 recovery commands always resolve,
+# and everything they lack falls through to the card or the network.
+# No file, or no matching trees, means the machine simply runs its
+# built-in root, which is exactly what it did before this existed.
+#
+# This is the same choice upstream native Inferno hard-wired the other
+# way: its bootinit.b mounts /n/remote and takes the whole system from
+# a server, because 1996's native target was a diskless network
+# computer. The mechanism is theirs; making the policy a card file is
+# ours. A thin client writes "net ...", an autonomous node writes
+# "local", a bench machine writes "local" and binds a development
+# server over it by hand.
+#
+rootpolicy()
+{
+	spec := "local";
+	fd := sys->open("/n/dos/rootpath", Sys->OREAD);
+	if(fd != nil){
+		buf := array[256] of byte;
+		n := sys->read(fd, buf, len buf);
+		fd = nil;
+		if(n > 0)
+			spec = string buf[0:n];
+	}
+
+	(nil, lines) := sys->tokenize(spec, "\r\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, toks) := sys->tokenize(hd lines, " \t");
+		if(toks == nil)
+			continue;
+		case hd toks {
+		"local" =>
+			rootbind("/n/dos");
+		"net" =>
+			if(tl toks == nil){
+				sys->print("init: rootpath: net needs an address\n");
+				continue;
+			}
+			addr := hd tl toks;
+			(dok, conn) := sys->dial(addr, nil);
+			if(dok < 0){
+				sys->print("init: rootpath: dial %s: %r\n", addr);
+				continue;
+			}
+			if(sys->mount(conn.dfd, nil, "/n/remote", Sys->MREPL, "") < 0){
+				sys->print("init: rootpath: mount %s: %r\n", addr);
+				continue;
+			}
+			sys->print("init: root server %s on /n/remote\n", addr);
+			rootbind("/n/remote");
+		* =>
+			sys->print("init: rootpath: unknown source %s\n", hd toks);
+		}
+	}
+}
+
+#
+# Union a root candidate's dis/ and lib/ over the system's, if it has
+# them. Checked first, because a bind of a directory that is not there
+# succeeds and then fails at every walk through it, which reads as a
+# corrupt filesystem rather than a missing tree.
+#
+rootbind(base: string)
+{
+	if(rootunion(base + "/dis", "/dis"))
+		sys->print("init: /dis grown from %s/dis\n", base);
+	if(rootunion(base + "/lib", "/lib"))
+		sys->print("init: /lib grown from %s/lib\n", base);
+	if(rootunion(base + "/fonts", "/fonts"))
+		sys->print("init: /fonts grown from %s/fonts\n", base);
+
+	#
+	# /usr is not a union and not read-only: it is the machine's
+	# writable home ground -- secstore accounts, keyrings, user state
+	# all live under it. MREPL because the kernel root's /usr is an
+	# empty mount point with nothing to preserve; MCREATE because
+	# the entire purpose is that things get created here.
+	#
+	(ok, nil) := sys->stat(base + "/usr");
+	if(ok >= 0){
+		if(sys->bind(base + "/usr", "/usr", Sys->MREPL|Sys->MCREATE) < 0)
+			sys->print("init: bind %s/usr: %r\n", base);
+		else
+			sys->print("init: /usr from %s/usr (writable)\n", base);
+	}
+}
+
+#
+# Union src over dst -- and then union each shared SUBDIRECTORY too.
+#
+# A union binds one level: after "bind -a card/dis /dis", the name
+# /dis/lib still resolves to the FIRST lib in the union, the kernel
+# root's, and the card's dis/lib behind it might as well not exist.
+# Every directory both trees carry (lib, sh, wm...) needs its own
+# union or the kernel's copy silently hides the card's -- which
+# presented as /dis/lib/auth "not existing" on a card that plainly
+# held it. Directories only the card has need nothing: the top-level
+# union already reaches them.
+#
+rootunion(src, dst: string): int
+{
+	(ok, nil) := sys->stat(src);
+	if(ok < 0)
+		return 0;
+
+	# Which subdirectories BOTH trees carry -- decided BEFORE the
+	# bind, because afterwards the union itself answers every stat
+	# and a card-only directory would get pointlessly unioned with
+	# itself, listing its entries twice.
+	shared: list of string;
+	fd := sys->open(src, Sys->OREAD);
+	if(fd != nil){
+		for(;;){
+			(n, dirs) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++){
+				d := dirs[i];
+				if((d.mode & Sys->DMDIR) == 0)
+					continue;
+				(dok, nil) := sys->stat(dst + "/" + d.name);
+				if(dok >= 0)
+					shared = d.name :: shared;
+			}
+		}
+		fd = nil;
+	}
+
+	if(sys->bind(src, dst, Sys->MAFTER) < 0){
+		sys->print("init: bind %s: %r\n", src);
+		return 0;
+	}
+	for(; shared != nil; shared = tl shared)
+		rootunion(src + "/" + hd shared, dst + "/" + hd shared);
+	return 1;
+}
+
+#
+# Class drivers are started AFTER the bus walk, not during it.
+#
+# A driver begins talking to its device the moment it starts, and on
+# this controller that traffic is not innocent: the DWC has eight
+# channels and one periodic schedule shared by every device on the
+# bus, and a low-speed device behind a hub reaches it through split
+# transactions that have to be issued in the right microframe. Bulk
+# transfers from a high-speed device -- which is what etherusb starts
+# doing immediately, and at line rate -- take channels and shift that
+# schedule.
+#
+# The symptom was a mouse whose device descriptor read cleanly and
+# whose configuration descriptor then came back as 0x55 repeating
+# three times running, while the log showed etherusb's LAN78xx bring-up
+# interleaved line for line with the walk that was failing. The same
+# mouse enumerates perfectly on a boot where the ordering happens to
+# differ, which is the signature of a timing collision rather than a
+# bad device.
+#
+# So collect them and start them at the end. This is also what Plan 9's
+# usbd does -- it enumerates the bus, then execs a driver per device --
+# and for the same reason.
+#
+# Deferral only applies WHILE a walk is running. A device plugged in
+# later is a walk of one device with nothing to collide with, so its
+# driver starts straight away; queueing it would mean it never started
+# at all, since nothing drains the queue outside a walk.
+#
+walking := 0;
+pending: list of (string, string, int, int, int);
+
+startdriver(path, name: string, ep, maxpkt, ival: int)
+{
+	if(walking){
+		pending = (path, name, ep, maxpkt, ival) :: pending;
+		return;
+	}
+	runstart(path, name, ep, maxpkt, ival);
+}
+
+runstart(path, name: string, ep, maxpkt, ival: int)
+{
+	drv := load Command path;
+	if(drv == nil){
+		sys->print("init: cannot load %s: %r\n", path);
+		return;
+	}
+	argv := path :: name :: nil;
+	if(ep >= 0)
+		argv = path :: name :: string ep :: string maxpkt ::
+			string ival :: nil;
+	spawn drv->init(nil, argv);
+}
+
+#
+# Start what the walk found, in the order it was found.
+#
+# pending is built by prepending, so it is reversed here. The order is
+# not cosmetic: the first device found is the one closest to the root
+# hub, and bringing the bus up outward from there is the order the
+# devices themselves were enumerated in.
+#
+startpending()
+{
+	walking = 0;
+	l: list of (string, string, int, int, int);
+	for(p := pending; p != nil; p = tl p)
+		l = hd p :: l;
+	pending = nil;
+	for(; l != nil; l = tl l){
+		(path, name, ep, maxpkt, ival) := hd l;
+		runstart(path, name, ep, maxpkt, ival);
+	}
+}
+
+#
+# Read the configuration descriptor and report what the device offers.
+#
+# A device descriptor says what the device IS; the configuration
+# descriptor says what it can DO -- which interfaces it has, and which
+# endpoints each one needs. That is what a class driver has to read
+# before it can open anything, because endpoint numbers are the
+# device's choice, not a convention.
+#
+# It arrives as a run of variable-length descriptors packed end to end,
+# each "length, type, ...", so it is walked rather than indexed.
+#
+#
+# Read the configuration descriptor for its bConfigurationValue and
+# select it. Returns -1 if the device cannot be configured, in which
+# case nothing class-specific will work and there is no point going on.
+#
+configure(name: string, d: ref Sys->FD, indent: string): int
+{
+	hdr := array[9] of byte;
+	rep := array[4] of byte;
+
+	#
+	# Read it, and CHECK IT, and retry if it is nonsense.
+	#
+	# A control transfer that comes back wrong does not report an
+	# error -- it hands over whatever the buffer held, and on this
+	# board a failed low-speed split fills it with 0x55, alternating
+	# bits, a bus sampled at the wrong rate. Accepting that meant
+	# SET_CONFIGURATION with a value of 85, which the device rejects
+	# or ignores, so no endpoint ever worked and the keyboard driver
+	# was never started -- with nothing in the log but a plausible
+	# looking "configured (value 85)".
+	#
+	# A configuration descriptor names its own length and type, so it
+	# can say whether it is one. The device descriptor is already
+	# validated this way for the same reason; this is the other half.
+	#
+	cfgval := 0;
+	for(try := 0; try < 3; try++){
+		n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
+		if(n < len hdr){
+			sys->print("init: %s%s config descriptor failed (%d): %r\n",
+				indent, name, n);
+			continue;
+		}
+		if(int hdr[0] != 9 || int hdr[1] != Dconf){
+			sys->print("init: %s%s bad config descriptor (len %d type %d), retrying\n",
+				indent, name, int hdr[0], int hdr[1]);
+			continue;
+		}
+		# byte 5 is bConfigurationValue; 0 would mean "unconfigured"
+		cfgval = int hdr[5];
+		break;
+	}
+	if(cfgval == 0){
+		sys->print("init: %s%s offers no configuration to select\n",
+			indent, name);
+		return -1;
+	}
+
+	if(ctlreq(d, Rh2d, Rsetconfig, cfgval, 0, 0, rep) < 0){
+		sys->print("init: %s%s set configuration %d failed: %r\n",
+			indent, name, cfgval);
+		return -1;
+	}
+	sys->print("init: %s%s configured (value %d)\n", indent, name, cfgval);
+	return 0;
+}
+
+dumpconfig(d: ref Sys->FD, indent: string)
+{
+	#
+	# Read it until it looks like a configuration descriptor.
+	#
+	# Control transfers to a low-speed device behind a translator come
+	# back as 0x55 -- alternating bits -- often enough that a single
+	# attempt is a coin toss, and the failure does NOT arrive as an
+	# error: the length field reads 21845, which is 0x5555, and the
+	# type reads 85. This device descriptor and this device's own
+	# nine-byte config header both succeeded moments earlier, so it is
+	# a transfer that fails sometimes and not a device that cannot be
+	# read.
+	#
+	# It is worth retrying rather than reporting, because what is lost
+	# is not a diagnostic: the interface class lives in here, and the
+	# class is how a device is matched to a driver. A keyboard whose
+	# configuration cannot be read is a keyboard with no driver, which
+	# is the whole of "the keys do nothing".
+	#
+	total := 0;
+	hdr := array[9] of byte;
+	cfg: array of byte;
+	for(try := 0; try < Enumattempts; try++){
+		n := ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, len hdr, hdr);
+		if(n < len hdr){
+			sys->print("init: %sconfig descriptor header failed (%d)\n",
+				indent, n);
+			continue;
+		}
+		if(int hdr[0] != 9 || int hdr[1] != Dconf){
+			sys->print("init: %sconfig header is not one (len %d type %d)\n",
+				indent, int hdr[0], int hdr[1]);
+			continue;
+		}
+		total = int hdr[2] | (int hdr[3] << 8);
+		if(total < len hdr || total > 512){
+			sys->print("init: %sconfig descriptor length %d unreasonable\n",
+				indent, total);
+			total = 0;
+			continue;
+		}
+
+		cfg = array[total] of byte;
+		n = ctlreq(d, Rd2h, Rgetdesc, Dconf << 8, 0, total, cfg);
+		if(n < total){
+			sys->print("init: %sconfig descriptor short (%d of %d)\n",
+				indent, n, total);
+			total = 0;
+			continue;
+		}
+		#
+		# The full read repeats the header, so it can be checked
+		# against itself: a second transfer that returned garbage
+		# disagrees with the first about what this descriptor is.
+		#
+		if(int cfg[0] != 9 || int cfg[1] != Dconf){
+			sys->print("init: %sconfig body is not one (len %d type %d)\n",
+				indent, int cfg[0], int cfg[1]);
+			total = 0;
+			continue;
+		}
+		break;
+	}
+	if(total == 0){
+		sys->print("init: %sconfiguration unreadable; no driver can be matched\n",
+			indent);
+		return;
+	}
+
+	sys->print("init: %sconfig: %d interface(s), %d bytes, value %d\n",
+		indent, int cfg[4], total, int cfg[5]);
+
+	for(i := 0; i + 2 <= total; ){
+		dlen := int cfg[i];
+		dtype := int cfg[i+1];
+		if(dlen < 2)
+			break;
+
+		case dtype {
+		4 =>	# interface
+			if(i + 9 <= total){
+				sys->print("init: %s  if %d alt %d: class %d.%d.%d, %d endpoint(s)\n",
+					indent, int cfg[i+2], int cfg[i+3],
+					int cfg[i+5], int cfg[i+6], int cfg[i+7],
+					int cfg[i+4]);
+				#
+				# HID lives on the INTERFACE, not the device:
+				# a keyboard's device class is 0 and its
+				# interface class is 3.1.1. Dispatching on
+				# the device class alone therefore never sees
+				# an input device at all.
+				#
+				if(int cfg[i+5] == Clhid && hidproto == 0)
+					hidproto = int cfg[i+7];
+			}
+		5 =>	# endpoint
+			if(i + 7 <= total){
+				addr := int cfg[i+2];
+				attr := int cfg[i+3];
+				mx := int cfg[i+4] | (int cfg[i+5] << 8);
+				dir := "out";
+				if(addr & 16r80)
+					dir = "in";
+				sys->print("init: %s    ep%d %s %s maxpkt %d\n",
+					indent, addr & 16rF, dir,
+					eptype(attr & 3), mx);
+				#
+				# Keep the first interrupt-IN endpoint that
+				# follows a HID interface. Endpoint
+				# descriptors belong to the interface they
+				# come after, so this is that interface's,
+				# and the first is the one a boot-protocol
+				# device reports on.
+				#
+				if(hidproto != 0 && hidep < 0
+				&& (addr & 16r80) && (attr & 3) == 3){
+					hidep = addr & 16rF;
+					hidmaxpkt = mx;
+					hidival = int cfg[i+6];
+				}
+			}
+		* =>
+			;
+		}
+		i += dlen;
+	}
+}
+
+eptype(t: int): string
+{
+	case t {
+	0 =>	return "control";
+	1 =>	return "iso";
+	2 =>	return "bulk";
+	3 =>	return "interrupt";
+	}
+	return "?";
+}
+
+#
+# Reset a port and enumerate whatever is on it.
+#
+# Split out of the boot walk so the hub watcher can call exactly the
+# same code when something is plugged in later. A device that arrives
+# after boot has to go through precisely what a device present at boot
+# goes through -- if the two paths differ, one of them is the one that
+# never gets exercised.
+#
+portsetup(d: ref Sys->FD, name: string, port: int, indent: string): string
+{
+	#
+	# Reset, and try again if the port does not enable.
+	#
+	# The root port needed exactly this and for the same reason: a
+	# device that fluffs its reset handshake usually manages on a
+	# second attempt, and giving up after one leaves it invisible.
+	#
+	# Issue the reset, then WAIT for the hub to finish it. An earlier
+	# version slept a flat 50ms and re-issued the reset if the port
+	# was not enabled, which made things worse: re-issuing
+	# SET_FEATURE(PORT_RESET) RESTARTS the reset, so a port needing
+	# longer than 50ms was interrupted and restarted three times and
+	# never converged -- reporting 0x0311 (present, powered, low
+	# speed, reset still asserted) every attempt.
+	#
+	# A hub clears the reset bit itself when it is done and sets
+	# enable, so poll for that and only re-issue if the hub has
+	# finished and still not enabled the port.
+	#
+	status := -1;
+	for(rtry := 0; rtry < 3; rtry++){
+		if(portfeature(d, port, Fportreset) < 0){
+			sys->print("init: %sport %d reset failed: %r\n", indent, port);
+			return "";
+		}
+		for(w := 0; w < 25; w++){		# up to half a second
+			sys->sleep(20);
+			status = portstatus(d, port);
+			if(status < 0)
+				break;
+			if(status & HPenable)
+				break;
+			if((status & HPreset) == 0)
+				break;		# hub finished, port not enabled
+		}
+		if(status < 0 || (status & HPenable))
+			break;
+		sys->print("init: %sport %d %#4.4x not enabled after reset, retrying\n",
+			indent, port, status);
+	}
+
+	sys->print("init: %sport %d %#4.4x%s\n",
+		indent, port, status, statusflags(status));
+	if(status < 0 || (status & HPenable) == 0)
+		return "";
+
+	#
+	# Let the device recover before speaking to it.
+	#
+	# A port that reports itself enabled is not yet a device that will
+	# answer: the spec gives one up to 10ms after reset (TRSTRCY)
+	# before it has to respond, and asking inside that window gets
+	# nothing back -- which arrives as a buffer still holding 0x55
+	# rather than as an error, because a control transfer that returns
+	# no data does not report one.
+	#
+	sys->sleep(Resetrecovery);
+
+	#
+	# The device's name comes back from enumerate rather than through
+	# a global: this runs in every hub's watcher at once, and two hubs
+	# enumerating together through one shared variable handed each
+	# other's device names to the wrong port -- so an unplug on one
+	# hub could detach a device on the other.
+	#
+	# A device that did not make it through enumeration is detached
+	# HERE, on the spot. It exists in devusb from the moment newdev
+	# answered, and until now nothing released it: the boot walk has
+	# no watcher yet, so a device pulled out mid-enumerate at boot left
+	# its ep0 allocated for good, and even under the watcher a dead
+	# device sat on the port until it was unplugged. What is returned
+	# is only ever a device that is alive and owned by this port.
+	#
+	(ok, dev) := enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), indent);
+	if(ok < 0 && dev != ""){
+		detachdev(dev);
+		return "";
+	}
+	return dev;
+}
+
+
+
+#
+# Walk a real hub: read how many ports it has, power them, and
+# enumerate whatever is plugged into each.
+#
+# Nothing here is intercepted by the kernel. Every one of these is a
+# control transfer to a device on the wire, which is the difference
+# between this and the root hub -- there the request code was ignored
+# and only wValue mattered.
+#
+hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
+{
+	#
+	# devusb refuses newdev on anything that has not been declared a
+	# hub, because a hub is the only kind of device that can have
+	# something behind it.
+	#
+	sys->fprint(dctl, "hub");
+
+	# Not "hd": that is the list-head operator, and using it as a
+	# variable makes the parser reject every later line that touches
+	# it rather than the declaration itself.
+	hubd := array[8] of byte;
+	n := ctlreq(d, Rd2h|Rclass, Rgetdesc, Dhub << 8, 0, len hubd, hubd);
+	if(n < 5){
+		sys->print("init: %s hub descriptor failed (%d): %r\n", name, n);
+		return;
+	}
+
+	nports := int hubd[2];
+
+	#
+	# bPwrOn2PwrGood is in units of 2ms: how long after switching a
+	# port on before its power is good. Reading a port before then
+	# reports it empty, which looks exactly like nothing being
+	# plugged in.
+	#
+	pwrgood := int hubd[5] * 2;
+	if(pwrgood < 10)
+		pwrgood = 10;
+
+	sys->print("init: %s%s is a hub with %d port(s), power good in %dms\n",
+		indent, name, nports, pwrgood);
+
+	for(port := 1; port <= nports; port++){
+		if(portfeature(d, port, Fportpower) < 0){
+			sys->print("init: %sport %d power failed: %r\n", indent, port);
+			continue;
+		}
+	}
+	sys->sleep(pwrgood);
+
+	devs := array[nports+1] of { * => "" };	# port -> the device on it
+	for(port = 1; port <= nports; port++){
+		#
+		# Poll, rather than asking once.
+		#
+		# Powering a port is not the same as a device having
+		# signalled attach on it: the hub reports power good after
+		# pwrgood ms, but the device downstream then has to be seen
+		# to connect, and that is its own timescale. Asking exactly
+		# once at pwrgood reports an empty port for anything slower
+		# than the hub -- which is every port on this board except
+		# the one whose device was already up.
+		#
+		status := -1;
+		for(try := 0; try < 10; try++){
+			status = portstatus(d, port);
+			if(status < 0 || (status & HPpresent))
+				break;
+			sys->sleep(50);
+		}
+		if(status < 0){
+			sys->print("init: %sport %d status failed: %r\n", indent, port);
+			continue;
+		}
+		#
+		# Report every port, not only the ones with something on
+		# them. A port that is skipped silently is indistinguishable
+		# from a port that was never looked at: the 3B+'s hub walk
+		# printed nothing at all for all four ports, which could
+		# equally have meant an empty hub, a failed status read or a
+		# loop that never ran.
+		#
+		sys->print("init: %sport %d %#4.4x%s\n",
+			indent, port, status, statusflags(status));
+		if((status & HPpresent) == 0)
+			continue;
+
+		devs[port] = portsetup(d, name, port, indent);
+	}
+
+	#
+	# Keep watching, so plugging something in later works.
+	#
+	# Without this the bus is walked exactly once and never again: a
+	# keyboard connected after boot is invisible until the machine is
+	# restarted, which is indistinguishable from the keyboard being
+	# broken. Every hub reports port changes, so there is no reason
+	# for a device to go unnoticed.
+	#
+	spawn hubwatch(d, name, nports, indent, devs);
+}
+
+#
+# Tell devusb a device has gone: every transfer to its endpoints
+# fails at once with "device is detached" instead of timing out, the
+# driver polling it sees that and exits, and when the last open file
+# on it closes the endpoints are freed and the device number can be
+# used again. Without this a replugged mouse was a new device every
+# time and the old one's endpoints were held for ever.
+#
+detachdev(dev: string)
+{
+	c := sys->open("/usb/usb/" + dev + "/ctl", Sys->OWRITE);
+	if(c == nil || sys->fprint(c, "detach") < 0)
+		sys->print("init: detach %s: %r\n", dev);
+}
+
+#
+# Watch a hub's ports and act on what changes.
+#
+# Polled, not driven by the hub's status-change interrupt endpoint.
+# The endpoint is the tidier mechanism and this should move to it, but
+# it would be the third consumer of an interrupt endpoint on a
+# controller whose split-transaction handling has been the single
+# largest source of bugs in this port -- whereas GET_PORT_STATUS is an
+# ordinary control transfer over a path that is exercised at every
+# boot. Correct and boring first.
+#
+# A second a poll is imperceptible to a person plugging something in
+# and negligible beside what the HID drivers already ask of the bus.
+#
+hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array of string)
+{
+	was := array[nports+1] of int;
+	for(i := 1; i <= nports; i++){
+		st := portstatus(d, i);
+		was[i] = st >= 0 && (st & HPpresent);
+	}
+
+	for(;;){
+		sys->sleep(Watchival);
+		for(port := 1; port <= nports; port++){
+			status := portstatus(d, port);
+			if(status < 0)
+				continue;
+			now := (status & HPpresent) != 0;
+			if(now == was[port])
+				continue;
+			was[port] = now;
+
+			if(now){
+				sys->print("init: %s%s port %d: device attached\n",
+					indent, name, port);
+				#
+				# The same code the boot walk runs. A device
+				# that arrives later must not take a
+				# different path to one that was already
+				# there.
+				#
+				devs[port] = portsetup(d, name, port, indent);
+			}else{
+				#
+				# Gone. Detach it in devusb so its driver's next
+				# transfer fails now rather than after a run of
+				# timeouts, and so its endpoints are released
+				# once the driver has closed them.
+				#
+				sys->print("init: %s%s port %d: device removed (%s)\n",
+					indent, name, port, devs[port]);
+				if(devs[port] != ""){
+					detachdev(devs[port]);
+					devs[port] = "";
+				}
+			}
+		}
+	}
+}
+
+#
+# Exercise the JIT across the instruction set, not across one loop.
+#
+# The existing benchmark runs "acc += (k*3) ^ (k>>2)" two million times.
+# That is six opcodes. A miscompilation in loads and stores, calls,
+# 64-bit arithmetic, floating point, arrays, strings or channels would
+# pass it without a murmur -- and comp-arm64.c is the riskiest thing in
+# this tree running somewhere it has never run.
+#
+# Each class folds its results into a checksum and prints it. The value
+# itself means nothing; what means something is that the JIT and the
+# interpreter produce the SAME one. The harness builds both kernels and
+# compares every line, so a divergence names the class it is in rather
+# than reporting that something, somewhere, is wrong.
+#
+# Timings are printed per class too, which is what makes "benchmarked"
+# more than a single arithmetic loop.
+#
+jitfold(h, v: int): int
+{
+	return h * 31 + v;
+}
+
+#
+# The measurement apparatus, per "Reliable Benchmarking with Limbo on
+# Inferno" (Vita Nuova, 1999, revised 2000).
+#
+# Three things distinguish this from timing something once:
+#
+#   MICROSECONDS. sys->millisec() cannot see a workload that takes less
+#   than a millisecond, and reports one that takes 1.6ms as either 1 or
+#   2. $Bench gives the generic timer directly -- 52ns a step here.
+#
+#   REPETITION, and the MINIMUM rather than the mean. Every disturbance
+#   -- an interrupt, a driver poll, a cache eviction caused by something
+#   else -- makes a sample LONGER, never shorter. So the minimum of many
+#   samples is the closest thing to the cost of the work itself, and the
+#   spread between minimum and median says how disturbed the machine
+#   was while measuring. A mean folds those together and hides both.
+#
+#   NO COLLECTOR. A garbage collection landing inside a sample is not
+#   part of what is being measured and is indistinguishable from a real
+#   outlier.
+#
+Nrep:	con 5;		# samples per workload
+
+bench: Bench;
+
+#
+# Does dropping an fd close it NOW, in compiled code?
+#
+# Limbo has no close(): "fd = nil" closes the file by running the FD's
+# destructor when the last reference goes. Under the JIT that drop is
+# the MacFRP macro in comp-arm64.c, and until it was fixed the macro
+# branched on stale flags and never reached rdestroy -- no compiled
+# code ever ran a destructor, every dropped fd stayed open until the
+# collector swept it, and etherusb had to dup #c/null over its
+# endpoints to hand them to #l. This is the check that would have
+# caught it, and the harness asserts on both lines with the JIT on.
+#
+# The observable is a pipe: hold the read end, drop the write end,
+# read. EOF within Fdms means the destructor ran at the drop. Two
+# drops, because they are two code paths in the compiler: assignment
+# (movp) and a local going out of scope with its frame (macret and
+# the frame's own destructor).
+#
+# Reader and timer are processes that both send into one buffered
+# channel, and this receives whichever comes first. No alt, so that
+# the check exercises as little of the VM as possible beyond the
+# thing under test.
+#
+Fdms: con 2000;
+Fdtimedout: con -2;
+
+fdreader(fd: ref Sys->FD, c: chan of int)
+{
+	buf := array[16] of byte;
+	c <-= sys->read(fd, buf, len buf);
+}
+
+fdtimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= Fdtimedout;
+}
+
+# A pipe whose write end has gone with this frame: only the read end
+# comes back, and the FD holding the other end is dropped by the
+# function's return, not by an assignment.
+fdreadend(): ref Sys->FD
+{
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return nil;
+	rd := p[0];
+	wr := p[1];
+	p = nil;
+	if(wr == nil)
+		return nil;
+	return rd;
+}
+
+fdreport(what: string, n: int, t0: int)
+{
+	if(n == 0)
+		sys->print("init: fd: %s closed its pipe (EOF after %d ms)\n",
+			what, sys->millisec() - t0);
+	else if(n == Fdtimedout)
+		sys->print("init: fd: %s did NOT close its pipe within %d ms -- the FD destructor did not run\n",
+			what, Fdms);
+	else
+		sys->print("init: fd: %s: read returned %d (%r)\n", what, n);
+}
+
+fdcheck()
+{
+	# By assignment.
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("init: fd: cannot make a pipe: %r\n");
+		return;
+	}
+	rd := p[0];
+	wr := p[1];
+	p = nil;
+	res := chan[4] of int;
+	t0 := sys->millisec();
+	spawn fdreader(rd, res);
+	wr = nil;
+	spawn fdtimer(res, Fdms);
+	fdreport("dropped fd", <-res, t0);
+
+	# By return.
+	rd = fdreadend();
+	if(rd == nil){
+		sys->print("init: fd: cannot make the second pipe: %r\n");
+		return;
+	}
+	res = chan[4] of int;
+	t0 = sys->millisec();
+	spawn fdreader(rd, res);
+	spawn fdtimer(res, Fdms);
+	fdreport("fd dropped on return", <-res, t0);
+}
+
+jitstress()
+{
+	bench = load Bench Bench->PATH;
+	if(bench == nil){
+		sys->print("jit: no $Bench; cannot measure\n");
+		return;
+	}
+
+	sys->print("jit: stress begins\n");
+
+	#
+	# What it costs to take a measurement at all, subtracted from
+	# every sample below. Measured the same way it will be used --
+	# the doc's point is that this number is only meaningful if it is
+	# obtained under the same conditions as the thing it corrects.
+	#
+	base := big 0;
+	for(i := 0; i < Nrep; i++){
+		t := bench->microsec();
+		d := bench->microsec() - t;
+		if(i == 0 || d < base)
+			base = d;
+	}
+	sys->print("jit: measurement overhead %bd us\n", base);
+
+	sample("int", base);
+	sample("big", base);
+	sample("real", base);
+	sample("array", base);
+	sample("string", base);
+	sample("call", base);
+	sample("chan", base);
+
+	sys->print("jit: stress ends\n");
+}
+
+#
+# Run one workload Nrep times and report what the samples say.
+#
+sample(what: string, base: big)
+{
+	lo, hi, mid: big;
+	h := 0;
+
+	bench->disablegc();
+	for(i := 0; i < Nrep; i++){
+		t0 := bench->microsec();
+		case what {
+		"int" =>	h = jitint();
+		"big" =>	h = jitbig();
+		"real" =>	h = jitreal();
+		"array" =>	h = jitarray();
+		"string" =>	h = jitstring();
+		"call" =>	h = jitcall();
+		"chan" =>	h = jitchan();
+		}
+		d := bench->microsec() - t0 - base;
+		if(d < big 0)
+			d = big 0;
+		if(i == 0){
+			lo = d;
+			hi = d;
+			mid = d;
+		}else{
+			if(d < lo)
+				lo = d;
+			if(d > hi)
+				hi = d;
+		}
+	}
+	bench->enablegc();
+
+	#
+	# The checksum is the point of the whole exercise and the timings
+	# are secondary: it must be IDENTICAL to the interpreter's, and
+	# the harness compares the two kernels line by line. A JIT that is
+	# merely fast is a miscompilation waiting to be found.
+	#
+	sys->print("jit: %s %8.8ux min %bd us max %bd us\n", what, h, lo, hi);
+}
+
+#
+# Integer arithmetic, including the cases that are easy to get wrong:
+# negative operands, division and remainder truncation, and shifts.
+#
+jitint(): int
+{
+	h := 0;
+	for(i := -5000; i < 5000; i++){
+		h = jitfold(h, i + 7);
+		h = jitfold(h, i - 9);
+		h = jitfold(h, i * 3);
+		if(i != 0){
+			h = jitfold(h, 1000000 / i);
+			h = jitfold(h, 1000000 % i);
+		}
+		h = jitfold(h, i & 16r5A5A);
+		h = jitfold(h, i | 16r0F0F);
+		h = jitfold(h, i ^ 16r1234);
+		h = jitfold(h, i << (i & 7));
+		h = jitfold(h, i >> (i & 7));
+		if(i < 0)
+			h = jitfold(h, -i);
+	}
+	return h;
+}
+
+#
+# 64-bit arithmetic. This tree is LP64 and the JIT is new; big is where
+# a 32-bit assumption would show up first.
+#
+jitbig(): int
+{
+	h := 0;
+	b := big 1;
+	for(i := 0; i < 20000; i++){
+		b = b * big 3 + big i;
+		b = b ^ big 16r5A5A5A5A;
+		if(b < big 0)
+			b = -b;
+		b = b % big 1000000007;
+		h = jitfold(h, int b);
+		h = jitfold(h, int (b >> 16));
+	}
+	return h;
+}
+
+#
+# Floating point, including comparisons and the int/real conversions
+# either side of it.
+#
+jitreal(): int
+{
+	h := 0;
+	r := 1.0;
+	for(i := 1; i < 20000; i++){
+		r = r * 1.0000001 + real i / 1000.0;
+		if(r > 1000000.0)
+			r = r / 1000.0;
+		h = jitfold(h, int (r * 100.0));
+		if(r < 1.0)
+			h = jitfold(h, 1);
+	}
+	return h;
+}
+
+#
+# Loads and stores: indexing, slicing and copying, which is where a
+# wrong addressing mode hides.
+#
+jitarray(): int
+{
+	h := 0;
+	a := array[256] of int;
+	b := array[256] of byte;
+	for(i := 0; i < len a; i++){
+		a[i] = i * i;
+		b[i] = byte (i & 16rFF);
+	}
+	for(n := 0; n < 200; n++){
+		for(i = 0; i < len a; i++){
+			a[i] = a[i] + a[(i + n) & 16rFF];
+			h = jitfold(h, a[i]);
+		}
+		c := array[64] of byte;
+		c[0:] = b[n & 16r7F : (n & 16r7F) + 64];
+		for(i = 0; i < len c; i++)
+			h = jitfold(h, int c[i]);
+	}
+	return h;
+}
+
+#
+# Strings: concatenation, comparison and indexing, which go through the
+# runtime rather than being open-coded.
+#
+jitstring(): int
+{
+	h := 0;
+	for(n := 0; n < 2000; n++){
+		s := "";
+		for(i := 0; i < 16; i++)
+			s += string ((n + i) & 16rF);
+		h = jitfold(h, len s);
+		for(i = 0; i < len s; i++)
+			h = jitfold(h, s[i]);
+		if(s < "9")
+			h = jitfold(h, 1);
+		if(s == "")
+			h = jitfold(h, 2);
+	}
+	return h;
+}
+
+#
+# Calls: deep recursion and several arguments, exercising frame setup
+# and the return path rather than the body.
+#
+jitrec(n, a, b, c: int): int
+{
+	if(n <= 0)
+		return a ^ b ^ c;
+	return jitrec(n - 1, b + 1, c + 2, a + 3) + 1;
+}
+
+jitcall(): int
+{
+	h := 0;
+	for(i := 0; i < 2000; i++)
+		h = jitfold(h, jitrec(100, i, i * 2, i * 3));
+	return h;
+}
+
+#
+# Channels and spawn: the Dis operations with no C equivalent, and the
+# ones a compiler is most likely to leave to the interpreter.
+#
+jitproducer(c: chan of int, n: int)
+{
+	for(i := 0; i < n; i++)
+		c <-= i * 7;
+	c <-= -1;
+}
+
+jitchan(): int
+{
+	h := 0;
+	c := chan of int;
+	spawn jitproducer(c, 20000);
+	for(;;){
+		v := <-c;
+		if(v < 0)
+			break;
+		h = jitfold(h, v);
+	}
+	return h;
+}
+
+#
+# "ep2.0" -> 2. The device number is what SET_ADDRESS has to carry:
+# devusb allocated it, the device does not know it yet, and the two
+# only agree once the request has gone out on the wire.
+#
+devnum(name: string): int
+{
+	n := 0;
+
+	for(i := 0; i < len name; i++){
+		c := name[i];
+		if(c >= '0' && c <= '9')
+			n = n * 10 + (c - '0');
+		else if(n != 0)
+			break;
+	}
+	return n;
+}
+
+#
+# Declare the boot finished. The kernel side is devcons's "booted"
+# sysctl word; what it does to the hardware is in os/bcm2837/board.c.
+# The kernel prints its own line either way, which is what the harness
+# checks; this one only reports a write that did not get there.
+#
+booted()
+{
+	fd := sys->open("/dev/sysctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "booted") < 0)
+		sys->print("init: cannot write booted to /dev/sysctl: %r\n");
+}
+
+#
+# The command line the firmware handed this boot, from #B/bootargs.
+#
+# The one word that matters here is "tryboot": the tryboot
+# configuration on the card puts it there and config.txt's does not,
+# so it is how a kernel image -- the same bytes either way -- learns
+# that it is the candidate and not the incumbent. A candidate that got
+# this far has booted to a shell under the watchdog and is about to
+# have that watchdog released, which is exactly the moment to say how
+# it is promoted. The commands are printed rather than run: promotion
+# is the operator's decision, and a candidate that boots but has a
+# broken keyboard driver is one they will not want to keep.
+#
+bootargs()
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: /dev/bootargs: %r\n");
+		return;
+	}
+	buf := array[1100] of byte;
+	n := sys->read(fd, buf, len buf);
+	args := "";
+	if(n > 0)
+		args = string buf[0:n];
+	(nil, words) := sys->tokenize(args, " \t\r\n");
+	if(words == nil){
+		sys->print("init: bootargs: (none)\n");
+		return;
+	}
+	sys->print("init: bootargs: %s\n", args);
+	candidate := 0;
+	for(w := words; w != nil; w = tl w)
+		if(hd w == "tryboot")
+			candidate = 1;
+	if(!candidate)
+		return;
+	sys->print("init: CANDIDATE kernel: this boot came from the tryboot configuration\n");
+	sys->print("init: to keep it:     mv /n/dos/tryboot.img /n/dos/infernode8.img\n");
+	sys->print("init: to reject it:   echo reboot > /dev/sysctl   (boots infernode8.img)\n");
+}
+
+#
+# /dev/bootimage is the running kernel's own image, reproduced from
+# memory. Read it back and print its size and SHA-1: the harness
+# compares both with the file it handed the loader, which is the
+# whole claim -- that a kernel can install itself on the card and
+# the card then boots what was tested.
+#
+kernelimage()
+{
+	fd := sys->open("/dev/bootimage", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: /dev/bootimage: %r\n");
+		return;
+	}
+	(nil, d) := sys->fstat(fd);
+	kr := load Keyring Keyring->PATH;
+	st: ref Keyring->DigestState;
+	buf := array[65536] of byte;
+	n := 0;
+	for(;;){
+		m := sys->read(fd, buf, len buf);
+		if(m <= 0)
+			break;
+		if(kr != nil)
+			st = kr->sha1(buf[0:m], m, nil, st);
+		n += m;
+	}
+	dig := "no-keyring";
+	if(kr != nil){
+		h := array[Keyring->SHA1dlen] of byte;
+		kr->sha1(nil, 0, h, st);
+		dig = "";
+		for(i := 0; i < len h; i++)
+			dig += sys->sprint("%.2x", int h[i]);
+	}
+	sys->print("init: /dev/bootimage %d bytes stat %bd sha1 %s\n", n, d.length, dig);
+}
+
+#
+# Every core's clock, read through the namespace.
+#
+# /dev/sysstat has one line per running core -- "cpuN ticks T intrs I
+# timers F" -- and a core whose tick count does not move between two
+# reads a fifth of a second apart has a clock interrupt that arrives
+# and does nothing. That was cores 1-3 until secclockinit gave each its
+# own hzclock Timer: their interrupt count climbed, their ticks sat at
+# 1, and no process on them was ever preempted. The kernel's own
+# comments said otherwise, which is why this is measured rather than
+# believed. One line, so the harness can assert it.
+#
+smpticks()
+{
+	a := cputicks();
+	if(a == nil){
+		sys->print("init: clock: /dev/sysstat gave no cpu lines\n");
+		return;
+	}
+	sys->sleep(200);
+	b := cputicks();
+	moving := 0;
+	total := 0;
+	r := "";
+	for(l := a; l != nil; l = tl l){
+		(name, t0) := hd l;
+		t1 := lookup(b, name);
+		total++;
+		d := t1 - t0;
+		if(t1 >= 0 && d > 0)
+			moving++;
+		r += sys->sprint(" %s +%d", name, d);
+	}
+	sys->print("init: clock ticks on %d of %d cores (%s)\n", moving, total, r);
+}
+
+#
+# The per-core tick counts, in cpu order. Returns nil if the file is
+# missing or holds nothing recognisable, so the caller can say so.
+#
+cputicks(): list of (string, int)
+{
+	fd := sys->open("/dev/sysstat", Sys->OREAD);
+	if(fd == nil){
+		sys->print("init: clock: cannot open /dev/sysstat: %r\n");
+		return nil;
+	}
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	res: list of (string, int);
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " ");
+		if(nf >= 3 && hd tl f == "ticks")
+			res = (hd f, int hd tl tl f) :: res;
+	}
+	# tokenize gave the lines in order; consing reversed them
+	rev: list of (string, int);
+	for(; res != nil; res = tl res)
+		rev = hd res :: rev;
+	return rev;
+}
+
+lookup(l: list of (string, int), name: string): int
+{
+	for(; l != nil; l = tl l){
+		(n, v) := hd l;
+		if(n == name)
+			return v;
+	}
+	return -1;
+}
+
+#
+# GPIO through the namespace: a spare pin driven as an output reads
+# back what was written (QEMU models the level registers, the board
+# has the real ones), and the console UART's pin refuses to be
+# reconfigured. Pin 21 has nothing on it on any Pi header use here.
+#
+gpiocheck()
+{
+	ctl := sys->open("/dev/gpio/21/ctl", Sys->OWRITE);
+	if(ctl == nil){
+		sys->print("init: gpio: no /dev/gpio/21/ctl: %r\n");
+		return;
+	}
+	sys->fprint(ctl, "function out");
+	lv := sys->open("/dev/gpio/21/level", Sys->ORDWR);
+	if(lv == nil){
+		sys->print("init: gpio: no level file: %r\n");
+		return;
+	}
+	r := "";
+	for(i := 0; i < 2; i++){
+		sys->fprint(lv, "%d", 1 - i);
+		sys->seek(lv, big 0, Sys->SEEKSTART);
+		buf := array[16] of byte;
+		n := sys->read(lv, buf, len buf);
+		v := "?";
+		if(n > 0)
+			v = string buf[0:n-1];
+		r += sys->sprint(" %d->%s", 1 - i, v);
+	}
+	sys->fprint(ctl, "function in");
+	u := sys->open("/dev/gpio/14/ctl", Sys->OWRITE);
+	refused := "not refused";
+	if(u != nil && sys->fprint(u, "function in") < 0)
+		refused = sys->sprint("%r");
+	sys->print("init: gpio 21 out%s; pin 14: %s\n", r, refused);
+}

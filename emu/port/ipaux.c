@@ -508,12 +508,30 @@ hnputs(void *p, unsigned short v)
 	a[1] = v;
 }
 
+/*
+ * The casts are load-bearing on LP64, where ulong is 64 bits.
+ *
+ * Without them a[0] promotes to int, so a[0]<<24 sets the int sign bit
+ * for any first byte >= 0x80, and converting that negative int to a
+ * 64-bit ulong sign-extends it.  nhgetl("192.168.1.1") then returns
+ * 0xFFFFFFFFC0A80101 rather than 0x00000000C0A80101 -- and likewise for
+ * every netmask, every multicast address, and every TCP sequence number
+ * with the high bit set.
+ *
+ * That is currently latent rather than harmful: emu has no IP stack of
+ * its own (ipif-posix.c delegates to host sockets), and the only in-tree
+ * consumers compare the result against 0, which sign extension does not
+ * affect.  It stops being latent the moment a real stack is linked in,
+ * where route ranges are computed as (start | ~mask) and TCP compares
+ * sequence numbers -- both of which silently produce wrong answers
+ * rather than failing, which is the worst way for this to surface.
+ */
 ulong
 nhgetl(void *p)
 {
 	unsigned char *a;
 	a = p;
-	return (a[0]<<24)|(a[1]<<16)|(a[2]<<8)|(a[3]<<0);
+	return ((ulong)a[0]<<24)|((ulong)a[1]<<16)|((ulong)a[2]<<8)|((ulong)a[3]<<0);
 }
 
 unsigned short

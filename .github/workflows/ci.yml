@@ -199,6 +199,24 @@ jobs:
         chmod +x tests/host/llmsrv_session_capability_test.sh
         ROOT=. tests/host/llmsrv_session_capability_test.sh
 
+    - name: Run dossrv badent alias check
+      run: |
+        # dossrv must decide "damaged entry" from the on-disk name, not
+        # the badent- alias it hands out: a healthy file named badent-1
+        # has to have its clusters freed by rm. The same fixture runs
+        # under QEMU in baremetal_test.sh, which no workflow runs; this
+        # is the hosted copy, against the emu built above. 77 = skip
+        # (no emu or python3).
+        chmod +x tests/host/dossrv_badent_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_badent_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # The radio firmware tool's verification path: a mismatched
+        # checksum must refuse to install. Network-free (--from a
+        # fixture directory), under a second.
+        chmod +x tests/host/pi_firmware_test.sh
+        ROOT=. bash tests/host/pi_firmware_test.sh
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test
@@ -331,6 +349,16 @@ jobs:
             echo "presentation file-open test: SKIP/FAIL (GUI boot timing-sensitive in CI)"
           fi
         fi
+
+    - name: Run walk-leak regression test
+      run: |
+        # A failed name lookup must not leak main-pool memory: namec's
+        # handler freed the parsed name through non-volatile locals and
+        # clang folded the frees away (3 blocks per miss). Deterministic --
+        # it counts live pool blocks across 2000 misses in one emulator --
+        # so it is fatal, unlike the GUI-timing tests above.
+        chmod +x tests/host/walk_leak_test.sh
+        ROOT=. bash tests/host/walk_leak_test.sh
 
     - name: Run JIT correctness tests
       run: |

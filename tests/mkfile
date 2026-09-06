@@ -35,11 +35,13 @@ TARG=\
 	editor_test.dis\
 	example_test.dis\
 	factotum_test.dis\
+	fdclose_test.dis\
 	font_format_test.dis\
 	git_test.dis\
 	goroutine_leak_test.dis\
 	gpu_test.dis\
 	hello_test.dis\
+	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
 	imap_test.dis\

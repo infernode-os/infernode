@@ -10,8 +10,16 @@
 #include "interp.h"
 #include "raise.h"
 
+/*
+ * INFERNO_NATIVE: built into a bare-metal kernel (os/), which has no
+ * mmap and needs none. See the allocation sites below.
+ */
+#ifdef INFERNO_NATIVE
+extern void	cacheiflush(void*, ulong);
+#else
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 /*
  * Apple's per-thread W^X JIT controls (pthread_jit_write_protect_np and
@@ -1547,28 +1555,39 @@ comp(Inst *i)
 		break;
 
 	/* ---- Arithmetic (word) ---- */
+	/*
+	 * Every w result is sign-extended before it is stored: a Limbo int
+	 * is 32 bits living in a 64-bit slot, and the slot must hold it
+	 * canonically or 64-bit compares and conversions read junk (CW()
+	 * in xec.c says why). A 64-bit operation followed by SXTW is
+	 * exactly 32-bit wraparound.
+	 */
 	case IADDW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ADD_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ISUBW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		SUB_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IMULW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
 		MUL_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IDIVW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
 		SDIV_REG(RA0, RA0, RA1);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IMODW:
@@ -1576,6 +1595,7 @@ comp(Inst *i)
 		mid(i, Ldw, RA0);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1650,18 +1670,21 @@ comp(Inst *i)
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		AND_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IORW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ORR_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IXORW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		EOR_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1710,18 +1733,22 @@ comp(Inst *i)
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		LSLV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ISHRW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ASRV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ILSRW:
+		/* logical: shift the 32-bit value zero-extended, or the slot's sign bits would shift in */
 		mid(i, Ldw, RA1);
-		opwld(i, Ldw, RA0);
+		opwld(i, Ldw32, RA0);
 		LSRV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -2124,7 +2151,20 @@ preamble(void)
 		return;
 
 	sz = 64 * sizeof(u32int);
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	/*
+	 * No mmap on bare metal, and no need for one: the kernel maps all
+	 * RAM without PXN/UXN, so ordinary kernel memory is already
+	 * executable. That is RWX everywhere -- a weaker posture than the
+	 * hosted builds, which deliberately keep JIT pages off the heap
+	 * (see the module-code site below). Making it W^X here means an
+	 * executable-only pool and page-granular mappings; this port maps
+	 * in 2MB blocks today.
+	 */
+	comvec = malloc(sz);
+	if(comvec == nil)
+		error(exNomem);
+#elif defined(APPLE_JIT)
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
@@ -2180,7 +2220,9 @@ preamble(void)
 		code = save;
 	}
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	cacheiflush(start, sz);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2198,22 +2240,44 @@ preamble(void)
 /*
  * Macro implementations.
  */
+/*
+ * Free-pointer macro: drop one reference to the heap cell in RA0.
+ *
+ * The shape is comp-amd64.c's, and the two things it gets right are
+ * both load-bearing. The test is "ref == 1" BEFORE any decrement, and
+ * the last-reference path does not store one: destroy() in heap.c
+ * does its own --ref, so a macro that stored ref-1 first would hand
+ * it a zero, the unsigned decrement would wrap, and the cell would
+ * read as referenced for ever. And the flags the branch consumes are
+ * set by the compare on the refcount, not left over from the nil
+ * check. The previous version did SUB_IMM (which sets no flags) and
+ * then BCOND(NE) on the nil check's flags, always NE for a non-nil
+ * pointer, so rdestroy was unreachable and no compiled code ever ran
+ * a destructor: a dropped fd stayed open until the collector found
+ * it. Found by reading; confirmed by etherusb's #l handoff, whose
+ * endpoint stayed "inuse" after fd = nil.
+ */
 static void
 macfrp(void)
 {
-	u32int *nilcheck, *notzero;
+	u32int *nilcheck, *lastref;
 
-	CMN_IMM(RA0, 1);
+	CMN_IMM(RA0, 1);		/* H is (void*)-1: nothing to count */
 	nilcheck = code;
 	BCOND(EQ, 0);
 
 	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
+	CMP_IMM(RA2, 1);
+	lastref = code;
+	BCOND(EQ, 0);
+
+	/* ref > 1: one fewer, and done */
 	SUB_IMM(RA2, RA2, 1);
 	mem(Stw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
-	notzero = code;
-	BCOND(NE, 0);
+	RET_X30();
 
-	/* ref == 0: save state, call rdestroy */
+	/* ref == 1: save state, let rdestroy take the last one */
+	PATCH_BCOND(lastref);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, s), RREG, RA0);
 	mem(Stw, O(REG, st), RREG, 30);
@@ -2225,7 +2289,6 @@ macfrp(void)
 	mem(Ldw, O(REG, MP), RREG, RMP);
 
 	PATCH_BCOND(nilcheck);
-	PATCH_BCOND(notzero);
 	RET_X30();
 }
 
@@ -2620,7 +2683,11 @@ typecom(Type *t)
 
 	sz = n * sizeof(u32int);
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	start = malloc(sz);
+	if(start == nil)
+		return;
+#elif defined(APPLE_JIT)
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(start == MAP_FAILED)
@@ -2639,7 +2706,9 @@ typecom(Type *t)
 	t->destroy = code;
 	comd(t);
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	cacheiflush(start, sz);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2680,7 +2749,13 @@ freejitcode(void *p, ulong size)
 {
 	if(p == nil || size == 0)
 		return;
+#ifdef INFERNO_NATIVE
+	/* the text came from malloc: see the allocation sites above */
+	USED(size);
+	free(p);
+#else
 	munmap(p, size);
+#endif
 }
 
 int
@@ -2768,7 +2843,11 @@ compile(Module *m, int size, Modlink *ml)
 		codesize += pagesz;	/* extra guard page */
 	}
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	base = malloc(codesize);
+	if(base == nil)
+		goto bad;
+#elif defined(APPLE_JIT)
 	base = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(base == MAP_FAILED) {
@@ -2876,7 +2955,16 @@ compile(Module *m, int size, Modlink *ml)
 	}
 	m->pctab = patch;
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	/*
+	 * The icache maintenance is load-bearing on real silicon and
+	 * invisible under emulation: QEMU's TCG does not model split
+	 * I/D caches, so a JIT that skips this works perfectly in QEMU
+	 * and executes stale instructions on a Cortex-A53. Any change
+	 * here has to be validated on the board.
+	 */
+	cacheiflush(base, codesize);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(base, codesize);
 #else
@@ -2905,7 +2993,11 @@ bad:
 	free(tinit);
 	free(tmp);
 	if(base != nil && codesize != 0)
+#ifdef INFERNO_NATIVE
+		free(base);
+#else
 		munmap(base, codesize);
+#endif
 	base = nil;
 	return 0;
 }

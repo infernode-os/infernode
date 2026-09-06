@@ -990,7 +990,7 @@ corrupted(char *str, char *msg, Pool *p, Bhdr *b, void *v)
 {
 	print("%s(%p): pool %s CORRUPT: %s at %p'%lud(magic=%lux)\n",
 		str, v, p->name, msg, b, b->size, b->magic);
-	dumpvl("bad Bhdr", (ulong *)((ulong)b & ~3)-4, 10);
+	dumpvl("bad Bhdr", (ulong *)((ulong)b & ~7)-4, 10);
 }
 
 static void
@@ -1070,7 +1070,7 @@ badchunk:
 			print(" is %s '%lux\n", fmsg, fsz);
 		else
 			print(" in %s at %p'%lux\n", fmsg, fb, fsz);
-		dumpvl("area", (ulong *)((ulong)v & ~3)-4, 20);
+		dumpvl("area", (ulong *)((ulong)v & ~7)-4, 20);
 	}
 }
 

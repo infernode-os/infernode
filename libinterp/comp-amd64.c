@@ -982,20 +982,27 @@ mid(Inst *i, uchar mi, int r)
 static void
 arith(Inst *i, int op2, int rm)
 {
+	/*
+	 * The result is computed in RAX and sign-extended from 32 bits
+	 * before it is stored: a Limbo int is 32 bits in a 64-bit slot,
+	 * and the slot must hold it canonically (CW() in xec.c). The
+	 * memory-destination forms cannot do that, so every form loads,
+	 * operates, extends, stores.
+	 */
 	if(UXSRC(i->add) != SRC(AIMM)) {
 		if(i->add&ARM) {
 			mid(i, Oldw, RAX);
 			opwld(i, op2|2, RAX);
-			opwst(i, Ostw, RAX);
-			return;
+		} else {
+			opwld(i, Oldw, RRTMP);
+			opwst(i, Oldw, RAX);
+			modrr(op2, RAX, RRTMP);
 		}
-		opwld(i, Oldw, RAX);
-		opwst(i, op2, RAX);
-		return;
-	}
-	/* Immediate source */
-	if(i->add&ARM) {
-		mid(i, Oldw, RAX);
+	} else {
+		if(i->add&ARM)
+			mid(i, Oldw, RAX);
+		else
+			opwst(i, Oldw, RAX);
 		if(bc(i->s.imm)) {
 			modrr(0x83, RAX, rm);
 			genb(i->s.imm);
@@ -1003,16 +1010,9 @@ arith(Inst *i, int op2, int rm)
 			modrr(0x81, RAX, rm);
 			genw(i->s.imm);
 		}
-		opwst(i, Ostw, RAX);
-		return;
 	}
-	if(bc(i->s.imm)) {
-		opwst(i, 0x83, rm);
-		genb(i->s.imm);
-		return;
-	}
-	opwst(i, 0x81, rm);
-	genw(i->s.imm);
+	modrr(Omovsxd, RAX, RAX);
+	opwst(i, Ostw, RAX);
 }
 
 /*
@@ -1043,6 +1043,8 @@ shift(Inst *i, int ld, int st, int op, int r)
 	mid(i, ld, RAX);
 	opwld(i, Oldw, RCX);
 	modrr(op, RAX, r);
+	if(st == Ostw)
+		modrr(Omovsxd, RAX, RAX);	/* a w result is stored sign-extended from 32 bits */
 	opwst(i, st, RAX);
 }
 
@@ -1806,6 +1808,7 @@ comp(Inst *i)
 			break;
 		}
 		opwld(i, Oldw, RAX);
+		modrr(Omovsxd, RAX, RAX);
 		opwst(i, Ostw, RAX);
 		break;
 	case ICVTWL:
@@ -1877,6 +1880,7 @@ comp(Inst *i)
 			if(i->op == IMODW)
 				modrr(Oxchg, RAX, RDX);
 		}
+		modrr(Omovsxd, RAX, RAX);
 		opwst(i, Ostw, RAX);
 		break;
 	case IMODB:

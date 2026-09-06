@@ -62,7 +62,17 @@ T.fatal(t: self ref T, msg: string)
 # T.skip: skip this test
 T.skip(t: self ref T, msg: string)
 {
-	t.skipped = 1;
+	# Skipping cannot retract a failure that has already been recorded.
+	#
+	# Several tests call t.error() when an operation fails and then
+	# t.skip() to stop, treating the failure as an unavailable feature.
+	# Leaving skipped set there loses the failure twice over: done()
+	# would report SKIP, and the standard run() helper in every test
+	# file tallies "else if(t.skipped) skipped++" before it reaches
+	# failed++, so the count would be wrong even once done() got the
+	# precedence right. Not setting the flag fixes both at the source.
+	if(!t.failed)
+		t.skipped = 1;
 	t.log(msg);
 	raise "fail:skip";
 }
@@ -156,16 +166,25 @@ done(t: ref T): int
 	elapsed := sys->millisec() - t.start;
 	elapsedSec := real elapsed / 1000.0;
 
-	if(t.skipped) {
-		sys->fprint(sys->fildes(2), "--- SKIP: %s (%.2fs)\n", t.name, elapsedSec);
-		if(!verbosemode && t.output != nil)
-			printoutput(t);
-		return 0;
-	} else if(t.failed) {
+	# A recorded failure outranks a skip.
+	#
+	# These were the other way round, so a test that called t.error()
+	# and then t.skip() -- which several do when an operation fails and
+	# they treat it as an unavailable feature -- reported SKIP, and the
+	# failure was discarded. summary() counts skips as non-failures, so
+	# the suite still exited 0. A test that has already established
+	# something is broken must not be able to retract that by skipping
+	# afterwards; the skip can only mean "and I could not continue".
+	if(t.failed) {
 		sys->fprint(sys->fildes(2), "--- FAIL: %s (%.2fs)\n", t.name, elapsedSec);
 		# Print clickable address: file:/testname/ format for Xenith plumbing
 		if(t.srcfile != nil)
 			sys->fprint(sys->fildes(2), "    %s:/test%s/\n", t.srcfile, t.name);
+		if(!verbosemode && t.output != nil)
+			printoutput(t);
+		return 0;
+	} else if(t.skipped) {
+		sys->fprint(sys->fildes(2), "--- SKIP: %s (%.2fs)\n", t.name, elapsedSec);
 		if(!verbosemode && t.output != nil)
 			printoutput(t);
 		return 0;

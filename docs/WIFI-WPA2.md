@@ -163,6 +163,16 @@ four-way handshake from synthetic frames, asserting on the exact bytes
 of the replies and the exact ctl lines. `tests/host/wpa_vectors_test.sh`
 runs it as a named CI step.
 
+`tests/host/wpa_join_test.sh` covers the other half, the part that is
+I/O rather than arithmetic: it builds an interface out of plain files —
+`addr`, `clone`, `ifstats`, and `0/data` holding a real message 1 — puts
+the passphrase in a running factotum, runs `ip/wpa` against it, and
+reads back what it wrote. The `connect`, `essid` and `auth` verbs must
+appear on the ctl file and message 2 must be well formed, with its
+integrity check recomputed independently from the station nonce the
+supplicant actually drew from `/dev/random`. A wrong passphrase fails
+it.
+
 None of that involves a radio, and none of it can. **No part of this has
 spoken to a real access point.** The board test is in
 `os/bcm2837/README.md`.

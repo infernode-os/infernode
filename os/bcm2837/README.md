@@ -1859,6 +1859,20 @@ passphrase, to a program running as the same user that could read the
 key file anyway. Moving the derivation inside is the improvement to make
 when there is a second consumer to justify widening the interface.
 
+**What has been proven off the board.** `tests/wpa_test.b` pins every
+piece of the cryptography to a published vector and drives a whole
+four-way handshake from synthetic frames, asserting the exact bytes of
+both replies and the exact ctl lines in the exact order.
+`tests/host/wpa_join_test.sh` covers the other half by building an
+interface out of plain files -- `addr`, `clone`, `ifstats` and a
+`0/data` holding one real message 1 -- putting the passphrase in a
+running factotum and running `ip/wpa` against it: the conversation, the
+number read back from `clone`, the `connect`, `essid` and `auth` writes,
+the `ifstats` parsing and the wpapsk protocol are exercised rather than
+reasoned about, and message 2 is checked by recomputing its integrity
+check from the nonce the supplicant actually drew from `/dev/random`. A
+wrong passphrase fails it. Both run in CI.
+
 **Board test.** With the firmware loaded and the radio up (milestone 2's
 test passing), a WPA2-PSK access point in range, and the serial console
 up:

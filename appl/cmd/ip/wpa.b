@@ -166,8 +166,18 @@ init(nil: ref Draw->Context, args: list of string)
 			if(n < 0)
 				fatal(sys->sprint("%s/%s/data: %r", dev, conv));
 			if(n == 0){
+				#
+				# The driver closed the queue: deassociated.
+				# The pause is not politeness. A driver that
+				# reports an association it cannot carry
+				# frames for would otherwise spin this
+				# program at full speed; the same interval
+				# the association poll uses makes it a loop
+				# rather than a spin.
+				#
 				report("link lost; re-associating");
-				break;		# the driver closed the queue: deassociated
+				sys->sleep(Assocpoll);
+				break;
 			}
 			(acts, err) := supp.recv(frame[0:n], nonce());
 			if(err != nil){

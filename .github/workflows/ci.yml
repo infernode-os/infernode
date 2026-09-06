@@ -228,6 +228,15 @@ jobs:
         rc=0
         ROOT=. bash tests/host/wpa_vectors_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # And the other half: the supplicant driven against an
+        # interface made of plain files, so the conversation, the ctl
+        # verbs, the ifstats parsing and the factotum protocol are
+        # exercised rather than reasoned about. Message 2's integrity
+        # check is recomputed from the nonce it actually used.
+        chmod +x tests/host/wpa_join_test.sh
+        rc=0
+        ROOT=. bash tests/host/wpa_join_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run test suite
       run: |

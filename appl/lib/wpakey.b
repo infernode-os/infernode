@@ -181,9 +181,15 @@ aesunwrap(kek, data: array of byte): array of byte
 			r[(i-1)*8:] = b[8:16];
 		}
 	}
-	for(i := 0; i < 8; i++)
-		if(int a[i] != 16rA6)
-			return nil;		# wrong key, or the data was tampered with
+	#
+	# The integrity check, which is the whole of the standard's
+	# guarantee that this was wrapped with this key. Compared without
+	# an early exit, like every other check on a value an attacker
+	# supplies.
+	#
+	iv := array[8] of {* => byte 16rA6};
+	if(!eqct(a, iv))
+		return nil;		# wrong key, or the data was tampered with
 	return r;
 }
 
@@ -307,7 +313,7 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 	got := copyb(frame, kd+77, kd+93);
 	zero(msg, (kd - m) + 77, MIClen);
 	want := mic(kvers, kck, msg);
-	if(want == nil || cmpb(got, want) != 0)
+	if(want == nil || !eqct(got, want))
 		return (nil, "bad MIC");
 
 	repc := big 0;
@@ -510,6 +516,22 @@ zero(a: array of byte, o, n: int)
 {
 	for(i := 0; i < n; i++)
 		a[o+i] = byte 0;
+}
+
+#
+#	Equality without an early exit, for the two comparisons an
+#	attacker chooses one side of: the message integrity check and the
+#	key unwrap's integrity check. cmpb below is for ordering nonces
+#	and addresses, which are public.
+#
+eqct(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	d := 0;
+	for(i := 0; i < len a; i++)
+		d |= int a[i] ^ int b[i];
+	return d == 0;
 }
 
 cmpb(a, b: array of byte): int

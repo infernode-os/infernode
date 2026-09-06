@@ -873,22 +873,28 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		return n;
 	case Nctlqid:
 		/*
-		 * The verbs below are instance 0's: the USB handoff and
-		 * its measurement switches. A driver-backed instance
-		 * gets netif's verbs and then its own.
-		 */
-		if(e->ctlrno != 0)
-			break;
-		/*
 		 * Accepted and ignored, as the Limbo server it replaces
 		 * accepted and ignored it: ethermedium asks every ether
 		 * ctl for "nonblocking", and nothing here blocks a client
 		 * that this could switch off -- reads come out of queues,
 		 * writes go into one. Rejecting it unwinds the whole
 		 * ipifc bind, which is a large price for a word.
+		 *
+		 * Every instance, not only the first: this is the IP
+		 * stack's word to a medium, and the board proved the cost
+		 * of scoping it to instance 0 -- the radio associated,
+		 * authenticated and passed frames, and then "bind ether
+		 * /net/ether1" failed on this one word.
 		 */
 		if(n >= 11 && strncmp(buf, "nonblocking", 11) == 0)
 			return n;
+		/*
+		 * The verbs below are instance 0's: the USB handoff and
+		 * its measurement switches. A driver-backed instance
+		 * gets netif's verbs and then its own.
+		 */
+		if(e->ctlrno != 0)
+			break;
 		if(n >= 6 && strncmp(buf, "unbind", 6) == 0){
 			etherunbind(e);
 			return n;

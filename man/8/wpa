@@ -137,8 +137,12 @@ mean the handshake completed;
 .B group key \fIn\fP installed
 follows.
 .B bad MIC
-means a frame's integrity check did not match, which for a whole
-handshake means the passphrase is wrong.
+means a frame's integrity check did not match; one on a noisy link is
+unremarkable.
+A wrong passphrase more often gives no diagnostic at all: the access
+point rejects the second message silently and the handshake stops,
+so a handshake that begins and never completes should be read as a
+wrong passphrase before anything else.
 .B link lost; re-associating
 means the driver deassociated.
 .SH BUGS

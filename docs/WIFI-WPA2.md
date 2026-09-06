@@ -96,7 +96,7 @@ Every line begins `wpa: `.
 | `pairwise receive key installed` | message 3 arrived and verified: the access point has the same passphrase |
 | `pairwise transmit key installed` | message 4 has gone out and the transmit key is in |
 | `group key 1 installed` | the broadcast key from message 3 |
-| `bad MIC` | a frame's integrity check did not match. One of these against a noisy network is nothing. Every frame of a handshake failing means **the passphrase is wrong**, or the network name is |
+| `bad MIC` | a frame's integrity check did not match. One against a noisy network is nothing. Note that a wrong passphrase more often shows as a handshake that stops after our second message, with no `bad MIC` at all |
 | `stale replay counter N` | a retransmitted or replayed frame, ignored. Normal on a lossy link |
 | `the wrapped key data did not unwrap` | message 3's group key did not decrypt: the key encryption key is wrong, which again means the passphrase is |
 | `key descriptor version 1 (TKIP) is not implemented` | the network is WPA1, not WPA2. See below |
@@ -120,8 +120,14 @@ In order, because each one makes the next unreadable:
 3. **Does the radio associate?** `status:` in `ifstats` goes
    `unassociated` → `connecting` → `associated` by itself. If it never
    leaves `unassociated`, the problem is below the supplicant.
-4. **Does the handshake complete?** If `bad MIC` appears on every
-   message 3, the passphrase is wrong. There is no other common cause.
+4. **Does the handshake complete?** A wrong passphrase is usually
+   *silence*, not a diagnostic: the access point checks the integrity
+   of our second message, finds it wrong, and simply stops, so no third
+   message ever arrives and the supplicant times out waiting. Read a
+   handshake that begins and does not finish as a wrong passphrase
+   first. `bad MIC` on our side means the opposite direction failed,
+   which happens on a noisy link and, for every frame, on a wrong
+   passphrase reached the other way about.
 
 ## What is not implemented
 

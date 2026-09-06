@@ -61,9 +61,14 @@ the end of this file:
   the bare-metal harness at all
 - the fixes of 2026-09-05 (below) have run under QEMU only; none has
   been on the board
-- WiFi associates and the supplicant is written, but nothing has
-  joined a network: no build machine has a radio and QEMU models none,
-  so the whole WiFi stack above SDIO is untested outside a board
+- WiFi: the radio identifies itself and runs its firmware on the board
+  (2026-09-06), and frames, scan, join and the supplicant are written,
+  but nothing has associated with an access point. No build machine has
+  a radio and QEMU models none, so everything above the firmware upload
+  is untested outside a board. The scan sweeps the 2.4 GHz channels
+  only: the escan request names the fourteen 2.4 GHz chanspecs and the
+  join verb bounds a channel at 16, so a 5 GHz network will not be
+  found or joined even though the part is dual-band
 - touch, USB storage, audio; the Pi 4
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the

@@ -1419,6 +1419,15 @@ wifijoin(essid, pass: string)
 		return;
 	}
 	sys->print("init: wifi: associated with %s\n", essid);
+	#
+	# Associated is the radio's state, not the network's. The
+	# four-way handshake follows it, and until the group key is
+	# installed nothing broadcast can be decrypted -- which is
+	# exactly what a DHCP offer is. Asking for an address the moment
+	# the radio associated sent four requests into a link that could
+	# not yet carry the answers.
+	#
+	sys->sleep(5000);
 	wifiaddr();
 }
 
@@ -1433,6 +1442,19 @@ killproc(pid: int)
 	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "kill");
+}
+
+#
+# An interface with an address: its status file lists them one per
+# line after the header, each indented.
+#
+hasaddress(ifcno: string): int
+{
+	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
+	for(i := 0; i + 1 < len st; i++)
+		if(st[i] == '\n' && st[i+1] == '\t')
+			return 1;
+	return 0;
 }
 
 associated(): int
@@ -1492,7 +1514,17 @@ wifiaddr()
 		sys->print("init: wifi: cannot load ip/dhcp: %r\n");
 		return;
 	}
-	dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
+	for(try := 0; try < 2; try++){
+		dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
+		if(hasaddress(ifcno))
+			break;
+		sys->print("init: wifi: no address yet; asking again\n");
+		sys->sleep(5000);
+	}
+	if(!hasaddress(ifcno)){
+		sys->print("init: wifi: associated but no address\n");
+		return;
+	}
 	(ndb, nil) := slurp("/net/ndb");
 	sys->print("init: wifi: %s\n", ndb);
 }

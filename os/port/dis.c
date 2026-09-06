@@ -1136,12 +1136,53 @@ vmachine(void*)
 	while(waserror()) {
 		if(up->type != Interp)
 			panic("vmachine: non-interp kproc");
+
+		/*
+		 * An error raised while handling an error must not unwind
+		 * past this process.
+		 *
+		 * The label this loop's waserror() pushed was consumed by
+		 * the longjmp that got us here, and it is not pushed again
+		 * until the loop condition is re-evaluated at the bottom.
+		 * For the length of this handler the only label left is the
+		 * catch-all in the kproc trampoline, so anything below that
+		 * calls error() -- acquire(), handler(), propex(),
+		 * progexit() -- unwinds straight out of the kproc.
+		 *
+		 * That kills the machine, not just the process. A dis kproc
+		 * dying here dies holding the interpreter: isched.idle is
+		 * never set, the Progs queued on isched.runhd are never
+		 * picked up again, and every other dis kproc stays parked
+		 * in idlevmq waiting for a wakeup with no owner left to
+		 * send it. Userspace stops dead while the kernel carries on
+		 * -- still answering ping, still holding the last frame on
+		 * the display. A soak run watched exactly that happen after
+		 * a single anonymous "error() underflow", and the machine
+		 * had to be power-cycled.
+		 *
+		 * An empty error string reaches here easily, which is how
+		 * this path gets exercised at all: handler() returns 0 for
+		 * one without looking at anything, so propex() and
+		 * progexit() run on a Prog whose state nobody has
+		 * established.
+		 *
+		 * Catching it costs the Prog whose error was being handled
+		 * and keeps the interpreter.
+		 */
+		if(waserror()){
+			print("vmachine: error while handling an error: %s\n",
+				up->env != nil && up->env->errstr != nil ?
+					up->env->errstr : "");
+			up->env = &up->defenv;
+			continue;
+		}
 		if(up->iprog != nil)
 			acquire();
 		if(handler(up->env->errstr) == 0) {
 			propex(currun(), up->env->errstr);
 			progexit();
 		}
+		poperror();
 		up->env = &up->defenv;
 	}
 

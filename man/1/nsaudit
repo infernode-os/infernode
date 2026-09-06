@@ -89,7 +89,7 @@ exposes at
 .B
 .nf
 	dir/tools               one tool name per line
-	dir/paths               one path grant per line
+	dir/paths               one path ro|rw|cow capability per line
 	dir/meta/role           "toplevel" or "child"
 	dir/meta/xenith         "1" or "0"
 	dir/meta/actid          integer or "-1"

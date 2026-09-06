@@ -24,7 +24,7 @@ implement Nsaudit;
 # Input format: DIR is a directory of scalar files (one value per file
 # or one value per line), mirroring what tools9p exposes at /tool:
 #   DIR/tools                    one tool name per line
-#   DIR/paths                    one path grant per line
+#   DIR/paths                    one "path ro|rw|cow" capability per line
 #   DIR/meta/role                "toplevel" or "child"
 #   DIR/meta/xenith              "1" or "0"
 #   DIR/meta/actid               integer
@@ -66,7 +66,7 @@ ALWAYS_READS := array[] of {
 	"/dis/lib", "/dis/veltro",
 	"/dev/cons", "/dev/null", "/dev/time",
 	"/lib/certs", "/lib/veltro",
-	"/tmp/veltro",
+	"/tmp/veltro/scratch",
 };
 
 # Caps parsed from a caps directory.
@@ -220,7 +220,7 @@ parseCaps(dir: string): ref Caps
 		if(p == "")
 			continue;
 		c.paths = appendstr(c.paths, p);
-		if(perm == "rw")
+		if(perm == "rw" || perm == "cow")
 			c.writepaths = appendstr(c.writepaths, p);
 	}
 
@@ -322,7 +322,7 @@ splitPathPerm(s: string): (string, string)
 		if(s[i] == ' ' || s[i] == '\t') {
 			p := trim(s[0:i]);
 			perm := trim(s[i+1:]);
-			if(perm == "ro" || perm == "rw")
+			if(perm == "ro" || perm == "rw" || perm == "cow")
 				return (p, perm);
 			break;
 		}
@@ -456,13 +456,14 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		}
 	}
 
-	# Always-on /tmp/veltro is writable, reversibly (ephemeral).
-	if(!contains(inv.writes_fs, "/tmp/veltro")) {
-		inv.writes_fs = "/tmp/veltro" :: inv.writes_fs;
-		inv.sources = ("writes_fs:/tmp/veltro", "always-on ephemeral") :: inv.sources;
+	# Scratch is the only ambient writable workspace. It is a per-activity
+	# cowfs projection; the parent /tmp/veltro tree is not broad authority.
+	if(!contains(inv.writes_fs, "/tmp/veltro/scratch")) {
+		inv.writes_fs = "/tmp/veltro/scratch" :: inv.writes_fs;
+		inv.sources = ("writes_fs:/tmp/veltro/scratch", "always-on activity cowfs") :: inv.sources;
 	}
 
-	# writes_fs_durable = writes_fs entries that are not /tmp/veltro
+	# writes_fs_durable = writes_fs entries that are not activity workspace
 	# and are not covered by the activity's cowfs-staged writable grants.
 	for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 		p := hd wl;

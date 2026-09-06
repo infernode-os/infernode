@@ -345,6 +345,18 @@ restrictns(caps: ref Capabilities): string
 	# SECURITY INVARIANT: changes here must keep the negative, positive, and
 	# composition cases in tests/veltro_security_test.b in sync.
 	mntpaths := filterpaths(caps.paths, "/mnt/");
+	# Message descendants are separate proposal capabilities but /mnt/msg has
+	# its own protocol-aware filter below. Recursing through them here and then
+	# filtering the service a second time creates inconsistent stacked mounts.
+	mnttop: list of string;
+	for(mp0 := mntpaths; mp0 != nil; mp0 = tl mp0) {
+		if(prefix(hd mp0, "msg/")) {
+			if(!inlist("msg", mnttop))
+				mnttop = "msg" :: mnttop;
+		} else
+			mnttop = hd mp0 :: mnttop;
+	}
+	mntpaths = mnttop;
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
 	# Matrix is a fixed-function capability. Derive its control filesystem from
@@ -566,7 +578,8 @@ restrictns(caps: ref Capabilities): string
 	# trusted /mnt/toolctl* alias outside the restricted root.
 	(toolok, nil) := sys->stat("/tool");
 	if(toolok >= 0) {
-		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
+		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" ::
+			"budget" :: "walletbudget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
@@ -646,6 +659,7 @@ restrictns(caps: ref Capabilities): string
 	# above, so the record comes from inside the restricted namespace.
 	# ops are consumed newest-first (emitauditlog reverses them).
 	auditops := "restrict /tmp -> veltro (final, after this manifest)" ::
+		"effectivepath=/tmp/veltro/scratch perm=cow" ::
 		("shellcmds=" + joincsv(caps.shellcmds)) ::
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
@@ -1279,6 +1293,10 @@ overlaywritepaths(paths: list of string, actid: int): string
 	cowfs: Cowfs;
 	for(p := paths; p != nil; p = tl p) {
 		fullpath := hd p;
+		# Scratch already has a dedicated per-activity cowfs projection below.
+		# Recursively staging that mount can block while its manifest is built.
+		if(fullpath == "/tmp/veltro/scratch")
+			continue;
 		if(directwritepath(fullpath))
 			continue;
 		if(cowfs == nil) {
@@ -1341,7 +1359,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/lib/certs",     "Certificates",     "ro"),
 		("/lib/veltro",    "Veltro Config",    "ro"),
 		("/dis/veltro",    "Veltro Tools",     "ro"),
-		("/tmp/veltro",    "Veltro Workspace", "rw"),
+		("/tmp/veltro/scratch", "Activity Scratch", "cow"),
 	};
 
 	for(i := 0; i < len infra; i++) {

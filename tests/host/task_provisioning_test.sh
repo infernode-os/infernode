@@ -136,7 +136,7 @@ for label in ConcurrentA ConcurrentB ConcurrentC; do
 done
 for id in 1 2 3; do
 	if ! grep -A10 "^MANIFEST-$id$" "$log" |
-	   grep -q "^path=/tmp/veltro label=Veltro Workspace perm=rw$"; then
+	   grep -q "^path=/tmp/veltro/scratch label=Activity Scratch perm=cow$"; then
 		echo "FAIL: activity $id returned without trusted namespace completion"
 		cat "$log"
 		exit 1

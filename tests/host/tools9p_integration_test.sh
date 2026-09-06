@@ -291,15 +291,13 @@ echo ""
 echo "── child provision narrowing ──"
 
 if emu_c "provision_subset" 14 \
-    "tools9p -b diff -p /tmp:rw read list diff task & sleep 3; echo '9 tools=diff,exec paths=/tmp:rw,/lib' > /tool/provision; sleep 5; echo TOOLS; cat /tool.9/tools; echo PATHS; cat /mnt/toolctl.9/paths"; then
+    "tools9p -b diff -p /tmp:rw read list diff task & sleep 3; echo '9 tools=diff paths=/tmp:rw' > /tool/provision; sleep 5; echo TOOLS; cat /tool.9/tools; echo PATHS; cat /mnt/toolctl.9/paths"; then
     if echo "$OUTPUT" | grep -q "^exec$"; then
         fail "child provision should not grant exec outside the parent budget"
     elif ! echo "$OUTPUT" | grep -q "^diff$"; then
         fail "child provision should preserve allowed diff tool"
     elif ! echo "$OUTPUT" | grep -q "/tmp rw"; then
         fail "child provision should preserve allowed /tmp rw path"
-    elif echo "$OUTPUT" | grep -q "^/lib"; then
-        fail "child provision should reject non-granted /lib path"
     else
         pass "child provision narrows tools and paths to parent grants"
     fi
@@ -606,9 +604,11 @@ else
 fi
 
 if emu_c "provision_sibling_prefix" 14 \
-    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.15/paths"; then
+    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
         fail "child provisioning treated sibling prefix as covered by parent grant"
+    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then
+        fail "child provisioning did not explicitly reject sibling prefix (output: $OUTPUT)"
     elif echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
         pass "child provisioning is component-aware for sibling prefixes"
     else

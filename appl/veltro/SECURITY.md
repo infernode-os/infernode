@@ -585,7 +585,7 @@ parser in `appl/cmd/ndb/`.
 exposes at `/tool/`):
 
     /tool/tools       one tool name per line
-    /tool/paths       one `path ro|rw` grant per line (legacy fixtures imply rw)
+    /tool/paths       one `path ro|rw|cow` effective capability per line
     /tool/meta/role   "toplevel" or "child"
     /tool/meta/xenith "1" or "0"
     /tool/meta/actid  integer or "-1"
@@ -678,16 +678,23 @@ under `tests/nsaudit-rules/`. New rules land as (file, test) pairs.
 implementation detail into a checked profile property. A child fixture with
 `nodevs=unset` fires the rule and fails CI.
 
-### Lightweight profile invariants
+### Executable runtime profiles
 
-The first `nsaudit` profile fixtures are deliberately not full shipping
-snapshots. InferNode is still moving too quickly for every ordinary tool list
-or read path to be frozen as a release contract. The current fixtures are
-executable assumptions: they describe the shape of authority we intend, and
-`tests/host/nsaudit_profiles_test.sh` enforces only hard namespace-security
-invariants.
+Canonical production declarations live under `lib/veltro/profiles/`. They use
+the scalar-file shape served at `/tool`: `tools`, `paths`, `meta/*`, and an
+optional `walletbudget`. `tools9p -P profile-name` materializes one declaration;
+repeat `-P` to form an additive composition. Conflicting path permissions or
+wallet budgets fail closed. The matching directories under
+`tests/nsaudit-fixtures/` are exact test mirrors, not a second configuration
+source.
 
-Current fixtures under `tests/nsaudit-fixtures/`:
+`/tmp/veltro/scratch` is special. Every runtime receives a per-activity cowfs
+projection, so declarations record it as `cow`. `tools9p` reports that effective
+capability in `/tool/paths` but never passes it back through generic `-p` or
+writepath staging. The signed namespace manifest records the narrowed scratch
+path and does not claim broad `/tmp/veltro rw` authority.
+
+Current production profiles:
 
 - `profile-minimal-headless` — base compute agent: read/list/find/grep,
   no GUI/window authority, no payments, `nodevs=set`.
@@ -705,12 +712,20 @@ Current fixtures under `tests/nsaudit-fixtures/`:
   malformed declarations fail closed as unbounded spend. Trusted wallet
   controls remain excluded.
 
+A non-empty `/tool/walletbudget` is emitted only when `tools9p` has installed
+the matching aggregate reservation gate. The gate reserves before dispatch,
+serializes concurrent proposals, rejects a different currency, and retains a
+reservation after an ambiguous or failed backend result. This is intentionally
+conservative: metadata must never attest to a limit that another execution path
+can bypass. A budgeted profile permits `wallet` but rejects unmetered
+`payfetch`.
+
 The important design rule is additive composition. Start with a small base
 namespace, then overlay only the capability layer required for the job:
 messaging, payments, local GUI, or future remote administration. This is a
-natural Plan 9/Inferno shape: profile layers can later be implemented with
-ordinary namespace operations, including union binds where appropriate, without
-turning the audit model into a separate policy engine.
+natural Plan 9/Inferno shape: the declarations compose into ordinary namespace
+construction inputs rather than turning the audit model into a separate policy
+engine.
 
 Headless and desktop are distinct because `/mnt/ui` is authority. A headless
 container should not receive `/mnt/ui` or `/chan` just because a UI service is
@@ -723,6 +738,9 @@ be explicit:
   `reads_windows`.
 - `profile-desktop-gui`: local GUI/UI interaction is allowed through
   fixed-function tools; raw `/mnt/ui` path grants are rejected.
+  Its `meta/xenith` remains `0`: that scalar means broad `/chan` window
+  authority, not all UI effects. `nsaudit` derives `sends_ui` from the
+  fixed-function tools themselves.
 - future `profile-remote-admin-ui`: explicit remote UI grant, with separate
   authentication/provenance assumptions.
 - future `profile-observe-ui`: possible read-only/event-only UI view if the

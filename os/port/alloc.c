@@ -1020,8 +1020,115 @@ poolaudit(char*(*audit)(int, Bhdr *))
 	return r;
 }
 
+/*
+ * Debug key 'l': the main pool, counted by who allocated each block.
+ *
+ * "The pool is growing" is where a leak hunt starts and not where it
+ * ends; the next question is always which caller is holding the blocks,
+ * and answering it by reading code does not scale. Every allocation
+ * already knows: this kernel compiles alloc.c with tracing on
+ * (Npadlong 2), so malloc() stashes its caller's PC in the two longs
+ * ahead of the pointer it returns and getmalloctag() reads it back.
+ * Nothing walked the pool to collect them.
+ *
+ * This does. It reports the busiest allocation sites by live block
+ * count, which is the number a leak shows up in -- a site that has
+ * leaked ten thousand blocks stands out from one holding a handful,
+ * where total bytes can hide it behind a few large legitimate buffers.
+ * Take one reading, do the thing you suspect a few thousand times, take
+ * another, and the site whose count moved is the leak.
+ *
+ * PCs come out raw. Symbolise them on the host against the .elf that
+ * built the running image, the same way a panic trace is read.
+ *
+ * The walk holds the pool's ilock, so it runs with interrupts off for
+ * as long as the pool is big: a few million comparisons on a pool of
+ * tens of thousands of blocks, which is milliseconds, not seconds. The
+ * printing is deliberately outside the lock. Registered with iflag 0,
+ * so it runs in the debug process rather than at interrupt time.
+ */
+enum {
+	Nsite	= 128,	/* distinct allocation sites tracked */
+	Nshow	= 20,	/* how many to print */
+};
+
+typedef struct Site Site;
+struct Site {
+	ulong	pc;
+	ulong	n;
+	ulong	bytes;
+};
+
+static Site sites[Nsite];
+
+static void
+poolbysite(void)
+{
+	Pool *p;
+	Bhdr *a, *b, *lim;
+	ulong pc, nblk, nbytes, nover, nnosite;
+	int nsite, i, j, best;
+
+	p = mainmem;
+	memset(sites, 0, sizeof sites);
+	nsite = 0;
+	nblk = nbytes = nover = nnosite = 0;
+
+	ilock(&p->l);
+	for(a = p->chain; a != nil; a = a->clink){
+		lim = B2LIMIT(a);
+		for(b = B2NB(a); b < lim && b->magic != MAGIC_E; b = B2NB(b)){
+			if(b->size == 0)	/* would not advance: corrupt */
+				break;
+			if(b->magic != MAGIC_A && b->magic != MAGIC_I)
+				continue;
+			nblk++;
+			nbytes += b->size;
+			pc = ((ulong*)B2D(b))[MallocOffset];
+			if(pc == 0){
+				nnosite++;
+				continue;
+			}
+			for(i = 0; i < nsite; i++)
+				if(sites[i].pc == pc)
+					break;
+			if(i == nsite){
+				if(nsite >= Nsite){
+					nover++;
+					continue;
+				}
+				sites[nsite].pc = pc;
+				sites[nsite].n = 0;
+				sites[nsite].bytes = 0;
+				nsite++;
+			}
+			sites[i].n++;
+			sites[i].bytes += b->size;
+		}
+	}
+	iunlock(&p->l);
+
+	print("\n%s: %lud live blocks, %lud bytes, %d sites"
+		" (%lud blocks untagged, %lud beyond %d sites)\n",
+		p->name, nblk, nbytes, nsite, nnosite, nover, Nsite);
+	print("      blocks        bytes  allocated at\n");
+	for(j = 0; j < Nshow; j++){
+		best = -1;
+		for(i = 0; i < nsite; i++)
+			if(sites[i].n != 0 && (best < 0 || sites[i].n > sites[best].n))
+				best = i;
+		if(best < 0)
+			break;
+		print("%12lud %12lud  %#lux\n",
+			sites[best].n, sites[best].bytes, sites[best].pc);
+		sites[best].n = 0;
+	}
+	print("\n");
+}
+
 void
 poolinit(void)
 {
 	debugkey('m', "memory pools", poolsummary, 0);
+	debugkey('l', "main pool by allocation site", poolbysite, 0);
 }

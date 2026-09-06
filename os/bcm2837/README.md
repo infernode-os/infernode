@@ -1697,11 +1697,11 @@ whether or not it found a radio, so that `bind -a '#l1' /net` says
 `ether4330: no radio` rather than finding no device -- the answer to
 "why is there no ether1" is in the bind's error and the boot log
 both. A kernel with no driver linked at all refuses `#l1` with
-`Enodev`. In this milestone `transmit` and `ctl` are left `nil`: a
-data write to ether1 refuses with `Enodev` and the reader kproc counts
-data frames and drops them. Frames, scan and join are milestones 3
-and 4; `ifstats` already carries the `status:` line a supplicant will
-poll, saying `unassociated`.
+`Enodev`. In this milestone `transmit` and `ctl` were left `nil`: a
+data write to ether1 refused with `Enodev` and the reader kproc
+counted data frames and dropped them. Both are filled in by milestones
+3 and 4, in the section after next; `ifstats` already carried the
+`status:` line a supplicant polls, saying `unassociated`.
 
 **Firmware, and why it is not here.** `brcmfmac43455-sdio.bin`,
 `.txt` (NVRAM) and `.clm_blob` (regulatory) are Cypress binaries under
@@ -1778,6 +1778,273 @@ firmware build answers Miller's command sequence as linux-firmware's
 did. High-speed (50MHz) and the card interrupt line are deliberately
 not attempted: they are the changes to make once the polled 25MHz
 path has run.
+
+## Frames, the scan, and joining a network (WiFi milestones 3 and 4)
+
+The dongle has been up and answering commands since the milestone
+above. What it could not do was move a byte of anyone's traffic, say
+what networks were in range, or associate with one. This is all three,
+and it is the last of the kernel's side: after it, what is missing
+between a Pi and an address on a WiFi network is a supplicant and a
+DHCP client, and both of those are Limbo programs outside the kernel.
+
+**The frame path.** Out, the discipline is the firmware's. Every
+packet the dongle sends up carries a credit window byte and a
+flow-control mask, and the host may send only while its own sequence
+number differs from that window and bit 2 of that mask is clear.
+`txstart` drains `edev->oq` under those two conditions, prepending an
+SDPCM header (length, its ones-complement check, the sequence number,
+channel 2 for data, and the offset to the payload) and a four-byte BDC
+header, and writing the result over SDIO function 2. The Block is
+padded at the front so the payload keeps its four-byte alignment on
+the bus. The window pair is written by the reader process and read by
+the transmitter, so it is held under a spin lock, and the reader
+restarts a drain that stopped on a closed window -- without that, a
+queue that stopped would wait for the next *write* to notice the
+firmware had made room, which on a flow that is only receiving is
+never. A frame that fails to reach the dongle halts the write frame
+and drains the frame count before the next is offered: the
+alternative is not one lost packet but a channel that has lost its
+framing.
+
+In, `rproc` strips both headers -- the SDPCM header says where the BDC
+header begins, and the BDC header's fourth byte says how many
+four-byte words of its own follow -- and hands the Ethernet frame to
+`etheriqb()`, which is `etheriq()` for a caller that already has a
+Block: it gives the original to the last conversation whose type
+matches and copies for the others. A frame with no room for its own
+headers plus an Ethernet header is dropped and counted, since both
+offsets arrived over the air.
+
+Link state reaches `nif.link` from the firmware's events and from
+nowhere else: `E_LINK` down, `E_DEAUTH`, `E_DEAUTH_IND` and
+`E_DISASSOC_IND` all lower it and send end-of-file to every
+conversation carrying `0x888e`, which is how a supplicant blocked on
+a read of its EAPOL conversation learns the association has gone.
+
+Frames written to an interface whose firmware was never loaded are
+dropped and counted, not left queued: `devether` puts the Block on
+`oq` before it calls `transmit`, so the alternative is a queue that
+fills once and blocks every writer for ever.
+
+**The scan is a file, and the record format is an interface.** A
+conversation asks for a scan by writing `scanbs <secs>` to its own
+ctl and reads the results from its own data file; the radio stops
+sweeping when the last such conversation is closed. That mechanism is
+netif's already (`Netfile.scan`, `Netif.scanbs`), so the driver
+supplies the hook and the records. There is no `scan` file and no
+`scan` command: holding a conversation open is the request.
+
+One line per network, six space-separated fields, most significant
+first, per `docs/9p-data-conventions.md`:
+
+```
+bssid chan signal noise auth ssid
+```
+
+| field | form |
+|---|---|
+| `bssid` | twelve lower-case hex digits, no separators -- the form `%E` prints, `/net/ether1/addr` holds, and the key verbs accept back |
+| `chan` | channel number, decimal |
+| `signal` | RSSI in dBm, signed decimal |
+| `noise` | phy noise floor in dBm, signed decimal |
+| `auth` | one word: `open`, `wep`, `wpa`, `wpa2`, or `wpa+wpa2` |
+| `ssid` | **the rest of the line**, verbatim, because an SSID may contain spaces |
+
+```
+b827eb9f19db 6 -47 -92 wpa2 The Lab
+0011223344ff 11 -71 -94 open
+```
+
+A hidden network ends the line after `auth`, so there is never a
+trailing space to trip a reader that splits on one. A reader
+tokenizes the first five fields and takes the remainder of the line as
+the ssid.
+
+Plan 9's driver emits `;`-joined `attr=value` tuples here. This is the
+same information in the form the rest of this namespace uses, and the
+choice is deliberate rather than inherited: all six fields are present
+on every record, so naming each one buys nothing, and the one field
+that cannot be a fixed column is last, which is what makes `tokenize`
+work at all. **The format is stable**: a supplicant is being written
+against it.
+
+Control characters in an SSID become `.` before the record is
+written. Without that, an access point can name itself with a newline
+and forge as many records as it likes in a file whose entire contract
+is one network per line. Every offset taken out of the firmware's
+`bss_info` is bounds-checked against the length the firmware declared,
+for the same reason.
+
+**Joining.** The dongle is FullMAC: it associates, and there is no
+state machine here for authentication frames or four-way handshakes.
+The host names a network, says what protection to expect, and hands
+over keys a supplicant derived. The verbs go to a conversation's ctl
+file -- netif serves `addr`, `clone`, `stats` and `ifstats` at the top
+of an interface and puts `ctl` inside each numbered conversation, so
+there is no top-level ctl to write to -- and are reached through
+devether's fallthrough after netif has had its own (`connect`,
+`promiscuous`, `scanbs`, ...).
+
+| verb | meaning |
+|---|---|
+| `firmware <bin> <nvram> <clm>` | name the three files, resolved in the writer's namespace |
+| `essid <name>` | join this network; `default` clears the name |
+| `channel <n>` | 0–16; 0 lets the firmware choose |
+| `crypt off\|none\|wep\|on` | what protection to expect |
+| `auth <hex ie>` | the RSN (`30...`) or WPA (`dd...`) information element a supplicant built |
+| `join <essid> <chan> <crypt\|hex ie>` | all of the above at once |
+| `key1`…`key4 <wepkey>` | a WEP key, 5/13 characters or 10/26 hex digits |
+| `txkey <bssid> <cipher>:<hexkey>@<iv>` | the pairwise key |
+| `rxkey0`…`rxkey3 <bssid> <cipher>:<hexkey>@<iv>` | a group key, by id |
+| `rxkey <bssid> ...` | accepted and does nothing: the pairwise receive key is the one `txkey` installed |
+| `debug <n>` | dump packets to the console |
+
+`<cipher>` is `tkip` or `ccmp`; `<iv>` is the replay counter in hex;
+`<bssid>` is twelve hex digits, with or without `:` separators. The
+vocabulary is Plan 9's `wifi(3)`, deliberately: a supplicant written
+against that manual page writes these same bytes.
+
+`ifstats` is what a supplicant polls:
+
+```
+radio: present
+chip: 0x4345 rev 6
+firmware: wl0: Aug 29 2023 01:47:08 version 7.45.265 (28bca26 CY) FWID 01-b677b91b
+firmware bytes: 609312
+channel: 0
+essid: The Lab
+bssid: b827eb9f19db
+crypt: wpa2
+scan: 0
+oq: 0
+txwin: 4
+txseq: 2
+status: associated
+```
+
+`status:` takes exactly three values -- `unassociated`, `connecting`,
+`associated` -- and they are Plan 9's words because that vocabulary is
+the contract. `bssid:` is read back from the firmware on a successful
+join rather than taken from the scan, because one SSID may be answered
+by several stations and the pairwise key derivation needs the one that
+actually answered. `txwin:` and `txseq:` are there so that "frames
+stopped" can be told apart into "no credit left" and "nothing to
+send".
+
+Two deliberate departures from Plan 9's driver, both about failing
+honestly. The wait for an association is **bounded** at five seconds
+and the timeout is its own error, where the original sleeps until the
+firmware speaks -- on a network that is not there, that is a write to
+a ctl file that never returns, which is not a diagnosis. And arguments
+are parsed and refused **before** a running firmware is required, so a
+mistyped Ethernet address is `bad ether addr` on any machine rather
+than an answer that depends on how far the boot got; the two ways to
+have no firmware -- no radio at all, and files never named -- are
+different errors because they have different fixes. Five seconds is a
+bound, not a measurement: if a real AP is slower than that on this
+board, raise `Jointimeout` and say so here.
+
+`parseether()` had been declared in `os/port/lib.h` since the tree was
+imported and defined nowhere. The key verbs are its first caller, so
+it is defined now, in `devether.c` where Plan 9 keeps it.
+
+**What the harness proves, and what it cannot.** QEMU's raspi3b has no
+CYW43455 and no SDIO function device of any kind, so **nothing under
+QEMU says anything about frames, scanning or associating**. Section 3j
+of `tests/host/baremetal_test.sh` proves the file interface instead,
+in a kernel built with `-DETHER4330STUB` -- which declares the radio
+present without probing for it and does nothing else, because with a
+real probe the attach refuses and the whole tree beneath `#l1` is
+unreachable, so the alternative to the variant is not a weaker test
+but no test of the interface at all. In that kernel the session binds
+`#l1`, reads `ifstats` (all twelve lines, including `status:
+unassociated`, `crypt: off`, `bssid: 000000000000`), and writes eight
+ctl verbs, each preceded by a marker so its answer is attributed to
+it rather than to the session as a whole:
+
+- `essid`, `scanbs`, `crypt` and a well-formed `txkey` are refused
+  with `ether4330: firmware not loaded` -- they are known verbs that
+  got as far as needing hardware;
+- `txkey zz ...` is refused with `bad ether addr` and `auth 3014`
+  with `bad wpa ie syntax`, on the argument, before any firmware is
+  required;
+- `channel 99` is refused with `bad channel number`;
+- `wibble 1` is refused with `unknown control message` — **the
+  control**: without it, an empty switch would produce that same
+  message for all nine and every other check would still pass;
+- and `ifstats` read again afterwards still says `crypt: off`,
+  `channel: 0` and `status: unassociated`, so nothing that was
+  refused changed the interface on its way out.
+
+Every string asserted there is produced by a write that session made.
+None is grepped out of the boot log, which is how an earlier check in
+this file came to assert a string the boot already printed and could
+therefore never fail.
+
+**The board test, exactly.** Continues from the milestone-2 procedure
+(card carrying the firmware, serial console up, through step 3's
+`ether4330: addr ...`). Ten metres from an access point:
+
+1. `bind -a '#l1' /net`; `cat /net/ether1/ifstats` shows
+   `radio: present`, `firmware: wl0: ...`, `status: unassociated`.
+2. The scan. A conversation must stay OPEN for the sweep to keep
+   running -- netif clears the scan flag and stops the radio when the
+   last opener of that conversation closes it -- so the request and
+   the read must overlap. `cat /net/ether1/clone` prints a
+   conversation number, call it *N*; then
+
+   ```
+   {echo scanbs 5; sleep 60} > /net/ether1/N/ctl &
+   cat /net/ether1/N/data
+   ```
+
+   The block holds the ctl file open for a minute while `cat` reads
+   the results, and `cat` blocks between sweeps: interrupt it after
+   the first. Expect one line per access point, arriving in a burst
+   about five seconds apart:
+   `b827eb9f19db 6 -47 -92 wpa2 The Lab`. **Acceptance: more than
+   zero lines, the lab AP's BSSID among them, and every line
+   splitting into at least five fields.** No lines and no error means
+   the escan command was accepted and no `E_ESCAN_RESULT` event
+   arrived: turn on `echo debug 1 > /net/ether1/N/ctl` and look for
+   channel-1 packets.
+3. `echo crypt off > /net/ether1/N/ctl` then
+   `echo essid <open network> > /net/ether1/N/ctl`. Expect the write
+   to return without error within five seconds, and
+   `cat /net/ether1/ifstats` to show `status: associated`,
+   `essid: <name>` and a non-zero `bssid:`. `ether4330: network not
+   found` means the firmware swept and did not see it (try step 2's
+   scan again); `ether4330: join failed` means it saw it and the
+   association was refused; `ether4330: the firmware did not report
+   an association` means five seconds passed in silence, which is the
+   new bound and not a hang.
+4. Frames. From the shell, with the interface associated, bind an
+   ipifc to `/net/ether1` and give it an address on the AP's subnet
+   (osinit does this for ether0 today; the ether1 equivalent is one
+   line of the same shape), then `ping <the AP>`. **Acceptance:
+   replies.** `cat /net/ether1/ifstats` after it: `oq: 0` (the queue
+   drained) and `txseq` advanced. `txseq` stuck equal to `txwin` is
+   the credit window closed and not reopening -- the flow-control
+   restart in `rproc` is the code to look at.
+5. `cat /net/ether1/stats` for the counters; a non-zero `oerrs` with
+   traffic flowing means frames are being dropped in `txstart`, which
+   at this stage means `packetrw` failing.
+6. Pull the AP's power. Expect `status:` to return to `unassociated`
+   within a few seconds (the firmware's `E_DEAUTH`/`E_LINK`), and any
+   reader of a `0x888e` conversation to see end-of-file.
+
+**What only the board can prove.** All of the above. Also: whether the
+credit window ever actually closes under load on this firmware build
+(if it never does, the flow-control restart path is untested code);
+whether a multi-block CMD53 write of a 1514-byte frame goes through
+the Arasan's FIFO at 25MHz without the pacing problems Miller warned
+about; the throughput the polled path reaches, which should be
+measured and recorded here as the USB work was; whether
+`E_ESCAN_RESULT` records from Raspberry Pi's firmware build carry the
+same `bss_info` offsets Miller's driver reads; and the WPA2 path
+end to end, which needs the supplicant that is being written against
+the verbs above.
 
 ## Next
 

@@ -1685,27 +1685,74 @@ extern void	ethermediumlink(void);
  * kbdputc does the line discipline -- echo, backspace, kill -- and
  * hands complete lines to kbdq, which is what /dev/cons reads.
  */
+enum{
+	Kbdhiwat	= 512,	/* undelivered type-ahead we will wait behind */
+	Kbdstallms	= 10000,/* ... but only for this long */
+};
+
 static void
 uartkproc(void *a)
 {
-	int c;
+	int c, stalling;
+	ulong stalledat, now;
 
 	USED(a);
+	stalling = 0;
+	stalledat = 0;
 	for(;;){
 		/*
-		 * Do not outrun the reader.
+		 * Do not outrun the reader -- but do not wait on a reader
+		 * that is never coming back.
 		 *
-		 * This is a process, so unlike an interrupt-time keyboard
-		 * it can afford to wait -- and waiting is flow control:
-		 * bytes left in the PL011 FIFO make the emulator's chardev
-		 * hold the rest at the source, so nothing is lost, where
-		 * pushing on regardless fills kbdq until qproduce starts
-		 * discarding. Half a kilobyte of undelivered type-ahead
-		 * means the reader is seconds behind; there is no hurry.
+		 * Waiting here is flow control: bytes left in the PL011
+		 * FIFO make the sender hold the rest at the source, so
+		 * nothing is lost, where pushing on regardless fills kbdq
+		 * until qproduce starts discarding. Half a kilobyte of
+		 * undelivered type-ahead means the reader is seconds
+		 * behind, and there is no hurry.
+		 *
+		 * That reasoning holds only while the reader is slow. When
+		 * it is DEAD the same code turns the console permanently
+		 * deaf, and it does so silently: kbdq stops draining, this
+		 * loop stops calling uartgetc(), and with it the debug keys
+		 * stop working -- because ^T^T is recognised in kbdputc(),
+		 * which is downstream of the read we are no longer doing.
+		 * A soak run lost a machine to exactly that. Userspace died
+		 * at 01:44; the console kept echoing until the queue passed
+		 * this mark at 02:29 and then went silent, and from that
+		 * moment the one tool that could have said what died -- the
+		 * kernel's own debug keys -- was gone too. The board stayed
+		 * up, answered ping, and could not be asked a single
+		 * question.
+		 *
+		 * So the wait is bounded. Past Kbdstallms the reader is
+		 * treated as gone rather than slow, and we read on: debug
+		 * keys are handled before the queue is touched, so they
+		 * work again immediately, and ordinary characters are
+		 * dropped by kbdputc with the rate-limited complaint it
+		 * already makes. Losing type-ahead into a dead shell costs
+		 * nothing. Losing the console costs the machine.
 		 */
-		if(qlen(kbdq) > 512){
-			tsleep(&up->sleep, return0, nil, 10);
-			continue;
+		now = TK2MS(MACHP(0)->ticks);
+		if(qlen(kbdq) > Kbdhiwat){
+			if(!stalling){
+				stalling = 1;
+				stalledat = now;
+			}
+			if(now - stalledat < Kbdstallms){
+				tsleep(&up->sleep, return0, nil, 10);
+				continue;
+			}
+			if(stalling == 1){
+				stalling = 2;
+				print("uart: console reader stalled %lud ms with %d bytes queued;"
+					" reading on so debug keys still work\n",
+					now - stalledat, (int)qlen(kbdq));
+			}
+		}else if(stalling){
+			if(stalling == 2)
+				print("uart: console reader caught up\n");
+			stalling = 0;
 		}
 		c = uartgetc();
 		if(c < 0){
@@ -1915,9 +1962,29 @@ static void
 linkproc(void)
 {
 	spllo();
-	if(waserror())
-		print("linkproc: error() underflow: %s\n", up->env->errstr);
-	else
+	if(waserror()){
+		char *e;
+
+		/*
+		 * Name the corpse.
+		 *
+		 * This used to print the error string and nothing else,
+		 * which is next to useless: every kernel process in the
+		 * system enters through here, so "error() underflow"
+		 * identified the trampoline rather than the process that
+		 * fell through it. A soak run hit exactly that -- one
+		 * anonymous underflow, then userspace stopped answering
+		 * for ninety minutes with no way to tell which kproc had
+		 * died. The string was empty as well, because a process
+		 * that unwinds past its own handlers is usually one whose
+		 * env was never given an error to carry.
+		 */
+		e = "(no error string)";
+		if(up->env != nil && up->env->errstr != nil && up->env->errstr[0] != '\0')
+			e = up->env->errstr;
+		print("linkproc: error() underflow in %lud:%s (kpfun %#p): %s\n",
+			up->pid, up->text, up->kpfun, e);
+	}else
 		(*up->kpfun)(up->arg);
 	pexit("end proc", 1);
 }

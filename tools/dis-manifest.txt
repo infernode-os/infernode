@@ -79,6 +79,7 @@ dis/auth/proto/infauth.dis
 dis/auth/proto/p9any.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
+dis/auth/proto/wpapsk.dis
 dis/auth/rpc.dis
 dis/auth/rsagen.dis
 dis/auth/secstore-setup.dis
@@ -269,6 +270,7 @@ dis/ip/rip.dis
 dis/ip/sntp.dis
 dis/ip/tftpd.dis
 dis/ip/virgild.dis
+dis/ip/wpa.dis
 dis/jitbench.dis
 dis/jitbench2.dis
 dis/jitbug.dis
@@ -463,6 +465,7 @@ dis/lib/wmclient.dis
 dis/lib/wmlib.dis
 dis/lib/wmsrv.dis
 dis/lib/workdir.dis
+dis/lib/wpakey.dis
 dis/lib/writegif.dis
 dis/lib/x402.dis
 dis/lib/xenithwin.dis

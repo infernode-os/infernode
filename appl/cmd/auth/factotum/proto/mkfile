@@ -5,6 +5,7 @@ TARG=\
 	pass.dis\
 	sign.dis\
 	infauth.dis\
+	wpapsk.dis\
 
 SYSMODULES=\
 	factotum.m\

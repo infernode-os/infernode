@@ -311,7 +311,7 @@ struct Ctlr
  *	key1..key4 <wepkey>		a WEP key, text or hex
  *	txkey <bssid> <cipher>:<hexkey>@<iv>	the pairwise key
  *	rxkey0..rxkey3 <bssid> <cipher>:<hexkey>@<iv>	a group key
- *	rxkey <bssid> ...		accepted, group id 0
+ *	rxkey <bssid> ...		accepted, and does nothing
  *	debug <n>			dump packets to the console
  *
  * <cipher> is tkip or ccmp; <iv> is the replay counter in hex.
@@ -2207,6 +2207,14 @@ wlwepkey(Ctlr *ctl, int i)
  * one station and carries its address; a group key (rxkeyN) belongs
  * to the network and carries the replay counter the supplicant read
  * out of the handshake.
+ *
+ * Plain "rxkey" is the pairwise RECEIVE key, which a soft-MAC part
+ * installs separately from the transmit half. This one does not: the
+ * firmware takes one pairwise key for both directions, and it arrived
+ * as txkey. So the verb is accepted and does nothing, which is what
+ * Plan 9's driver does with it -- writing it into group slot 0 would
+ * overwrite the group key with the pairwise one and break multicast
+ * silently.
  */
 static void
 wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
@@ -2215,6 +2223,8 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
 	uchar *p;
 	int pairwise;
 
+	if(id == CMrxkey)
+		return;
 	pairwise = id == CMtxkey;
 	memset(params, 0, sizeof params);
 	p = params;
@@ -2835,28 +2845,36 @@ wpaparsekey(WKey *key, uvlong *ivp, char *a)
 }
 
 /*
- * The authentication verb: the information element the supplicant
- * built, verbatim, plus the handful of firmware variables that have
- * to agree with it. The element is not synthesised here and not
- * checked beyond its own length field -- what cipher suites to ask
- * for is the supplicant's decision, and this driver's business is to
- * pass it on.
+ * The information element a supplicant built, from hex. Checked for
+ * its own length field and for being one of the two elements this
+ * means anything for, and no further: WHICH cipher suites to ask for
+ * is the supplicant's decision, and this driver's business is to pass
+ * it on unaltered.
  */
-static void
-setauth(Ctlr *ctlr, Cmdbuf *cb, char *a)
+static int
+parseauthie(Cmdbuf *cb, uchar *ie, int len, char *a)
 {
-	uchar wpaie[32];
 	int i;
 
-	i = parsehex((char*)wpaie, sizeof wpaie, a);
-	if(i < 2 || i != wpaie[1] + 2)
+	i = parsehex((char*)ie, len, a);
+	if(i < 2 || i != ie[1] + 2)
 		cmderror(cb, "bad wpa ie syntax");
+	if(ie[0] != 0xdd && ie[0] != 0x30)
+		cmderror(cb, "bad wpa ie");
+	return i;
+}
+
+/*
+ * The element, and the handful of firmware variables that have to
+ * agree with it.
+ */
+static void
+setauth(Ctlr *ctlr, uchar *wpaie, int i)
+{
 	if(wpaie[0] == 0xdd)
 		ctlr->cryptotype = Wpa;
-	else if(wpaie[0] == 0x30)
-		ctlr->cryptotype = Wpa2;
 	else
-		cmderror(cb, "bad wpa ie");
+		ctlr->cryptotype = Wpa2;
 	wlsetvar(ctlr, "wpaie", wpaie, i);
 	if(ctlr->cryptotype == Wpa){
 		wlsetint(ctlr, "wpa_auth", 4|2);	/* psk | unspecified */
@@ -2872,20 +2890,19 @@ setauth(Ctlr *ctlr, Cmdbuf *cb, char *a)
 }
 
 /*
- * "crypt off" and its spellings. This only decides what the word
- * meant; the firmware is told separately, by whoever called it, once
- * there is a firmware to tell.
+ * "crypt off" and its spellings, decided and nothing more: -1 for a
+ * word that is neither. Nothing is changed here, so a verb that is
+ * going to be refused for want of a firmware does not leave the
+ * interface describing a state it was never put into.
  */
 static int
-setcrypt(Ctlr *ctlr, char *a)
+crypttype(char *a)
 {
 	if(cistrcmp(a, "wep") == 0 || cistrcmp(a, "on") == 0)
-		ctlr->cryptotype = Wep;
-	else if(cistrcmp(a, "off") == 0 || cistrcmp(a, "none") == 0)
-		ctlr->cryptotype = 0;
-	else
+		return Wep;
+	if(cistrcmp(a, "off") == 0 || cistrcmp(a, "none") == 0)
 		return 0;
-	return 1;
+	return -1;
 }
 
 /*
@@ -2923,9 +2940,9 @@ etherbcmctl(Ether *edev, void *a, long n)
 	Ctlr *ctl;
 	Cmdbuf *cb;
 	Cmdtab *ct;
-	uchar ea[Eaddrlen];
+	uchar ea[Eaddrlen], wpaie[32];
 	uvlong iv;
-	int i;
+	int i, t, nie;
 
 	ctl = edev->ctlr;
 	cb = parsecmd(a, n);
@@ -2954,21 +2971,28 @@ etherbcmctl(Ether *edev, void *a, long n)
 		qunlock(&ctl->alock);
 		break;
 	case CMauth:
+		i = parseauthie(cb, wpaie, sizeof wpaie, cb->f[1]);
 		wlrunning(ctl);
-		setauth(ctl, cb, cb->f[1]);
+		setauth(ctl, wpaie, i);
 		if(ctl->essid[0])
 			wljoin(ctl, ctl->essid, ctl->chanid);
 		break;
 	case CMchannel:
+		/*
+		 * A parameter of the next join, not a state of the radio,
+		 * so it is settable before there is one -- what ifstats
+		 * reports on this line is the channel a join will use.
+		 */
 		if((i = atoi(cb->f[1])) < 0 || i > 16)
 			cmderror(cb, "bad channel number");
 		ctl->chanid = i;
 		break;
 	case CMcrypt:
-		if(!setcrypt(ctl, cb->f[1]))
+		if((t = crypttype(cb->f[1])) < 0)
 			cmderror(cb, "bad crypt type");
 		wlrunning(ctl);
-		wlsetint(ctl, "auth", ctl->cryptotype);
+		ctl->cryptotype = t;
+		wlsetint(ctl, "auth", t);
 		if(ctl->essid[0])
 			wljoin(ctl, ctl->essid, ctl->chanid);
 		break;
@@ -2986,6 +3010,10 @@ etherbcmctl(Ether *edev, void *a, long n)
 	case CMjoin:	/* join essid chan crypt|authie */
 		if((i = atoi(cb->f[2])) < 0 || i > 16)
 			cmderror(cb, "bad channel number");
+		t = crypttype(cb->f[3]);
+		nie = 0;
+		if(t < 0)
+			nie = parseauthie(cb, wpaie, sizeof wpaie, cb->f[3]);
 		wlrunning(ctl);
 		if(strcmp(cb->f[1], "") != 0){
 			if(cistrcmp(cb->f[1], "default") != 0){
@@ -2996,10 +3024,11 @@ etherbcmctl(Ether *edev, void *a, long n)
 		}else if(ctl->essid[0] == 0)
 			cmderror(cb, "essid not set");
 		ctl->chanid = i;
-		if(setcrypt(ctl, cb->f[3]))
-			wlsetint(ctl, "auth", ctl->cryptotype);
-		else
-			setauth(ctl, cb, cb->f[3]);
+		if(t >= 0){
+			ctl->cryptotype = t;
+			wlsetint(ctl, "auth", t);
+		}else
+			setauth(ctl, wpaie, nie);
 		if(ctl->essid[0])
 			wljoin(ctl, ctl->essid, ctl->chanid);
 		break;

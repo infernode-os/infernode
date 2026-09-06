@@ -102,7 +102,7 @@ asked for.
 is AES-CMAC (RFC 4493) on its own, exported so that the published
 vectors can reach it directly.
 It is CBC-MAC with the last block corrected by one of two subkeys
-derived by doubling the encryption of a zero block in GF(2\u\s-2128\s+2\d);
+derived by doubling the encryption of a zero block in GF(2^128);
 which subkey depends on whether the message fills its last block.
 A key that is not a valid AES length returns
 .BR nil .

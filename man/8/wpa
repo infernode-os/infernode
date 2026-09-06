@@ -148,7 +148,7 @@ It is printed for the first association, after any wait long enough to
 have been reported, and after a link that would not hold was mentioned
 \(em not for every re-association, because a driver that grants one
 instantly grants thousands.
-.B still waiting for the radio to associate (\fIt\fP)
+.B "still waiting for the radio to associate (\fIt\fP)"
 means
 .B ifstats
 has reported
@@ -174,7 +174,7 @@ so a handshake that begins and never completes should be read as a
 wrong passphrase before anything else.
 .B link lost; re-associating
 means the driver deassociated; it is printed once, when the link goes.
-.B the link will not hold: \fIn\fP attempts over \fIt\fP, still trying every \fId\fP
+.B "the link will not hold: \fIn\fP attempts over \fIt\fP, still trying every \fId\fP"
 replaces it when the association keeps being granted and keeps carrying
 nothing.
 Both numbers climbing across two such lines is a supplicant still at

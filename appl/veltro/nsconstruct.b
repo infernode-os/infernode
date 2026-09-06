@@ -664,7 +664,7 @@ restrictns(caps: ref Capabilities): string
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
-	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd) != 0 &&
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd, 0) != 0 &&
 	   auditrequired)
 		return "required namespace audit write failed";
 	auditfd = nil;
@@ -1516,10 +1516,11 @@ emitauditlog(id: string, ops: list of string)
 	# -1: a direct caller outside restrictns has no activity to attribute the
 	# restriction to. The field is still emitted so a reader can tell an
 	# unattributed record from one written before attribution existed.
-	emitauditlogto(id, -1, ops, nil);
+	emitauditlogto(id, -1, ops, nil, 1);
 }
 
-emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD): int
+emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD,
+	allowfallback: int): int
 {
 	if(sys == nil)
 		init();
@@ -1554,7 +1555,9 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 	# be quietly edited after the fact. restrictns passes a pre-opened append
 	# FD because /mnt/audit is deliberately absent from the completed namespace;
 	# direct callers fall back to Audit->log and may no-op when auditing is off.
-	if(audit == nil) {
+	# restrictns must not use that fallback: /mnt has already been narrowed, and
+	# opening a hidden or stale 9P audit mount can block namespace construction.
+	if(allowfallback && audit == nil) {
 		a := load Audit Audit->PATH;
 		if(a != nil) {
 			a->init();
@@ -1581,7 +1584,7 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 				return -1;
 			return 0;
 		}
-		if(audit != nil)
+		if(allowfallback && audit != nil)
 			return audit->log("veltro", "nsrestrict", msg);
 	}
 	return -1;

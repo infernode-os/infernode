@@ -268,6 +268,22 @@ ack2opts(): array of byte
 }
 
 #
+# A lease short enough that its renewal happens while a test is
+# running: RFC 2131 4.4.5 puts the first renewal at half the lease.
+#
+Shortlease: con 4;
+
+ack3opts(): array of byte
+{
+	return cat(
+		opt1(53, Ack) ::
+		opt(54, ipb(Server)) ::
+		opt(1, ipb("255.255.255.0")) ::
+		opt(51, be4(Shortlease)) ::
+		endopt() :: nil);
+}
+
+#
 # A BOOTP reply: the RFC 1497 extensions, and no message type.
 #
 bootpopts(): array of byte
@@ -462,12 +478,21 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 				# the second exchange: refused once
 				replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
 				phase = 3;
-			* =>
+			3 =>
 				# and then granted, with no overload, so the
 				# file and sname fields are names
 				replies = mkreply(xid, mac, Ouraddr, ack2opts(),
 					array of byte "/boot/kernel", array of byte "srv1") :: nil;
 				phase = 4;
+			* =>
+				#
+				# The third exchange, and every renewal of it:
+				# a lease of four seconds, so the renewal the
+				# client owes at half of that happens while the
+				# test is still watching.
+				#
+				replies = mkreply(xid, mac, Ouraddr, ack3opts(), nil, nil) :: nil;
+				phase = 5;
 			}
 		}
 		for(; replies != nil; replies = tl replies){
@@ -650,6 +675,24 @@ exchange1(res: chan of ref Result, done: chan of int, pids: chan of int)
 		lease2.release();
 
 	#
+	# A third time, for a lease of four seconds, so that the process
+	# dhcp() leaves behind has to renew it while this test is still
+	# watching. Nothing else exercises the renewal timer, and it is
+	# the part of the client that runs for hours on a live machine.
+	#
+	cfg4 := Bootconf.new();
+	(conf4, lease4, de4) := dhcpclient->dhcp(Netdir, nil, Addrfile, cfg4, nil);
+	res <-= ref Result(de4 == nil, "a short lease is granted: "+nonnil(de4));
+	if(conf4 != nil)
+		res <-= ref Result(conf4.lease == Shortlease,
+			sys->sprint("the short lease: %d", conf4.lease));
+	else
+		res <-= ref Result(0, "the third exchange returned no configuration");
+	sys->sleep((Shortlease + 2) * 1000);	# past T1, with room to spare
+	if(lease4 != nil)
+		lease4.release();
+
+	#
 	# And the older protocol underneath, which dhcpclient(2) exports
 	# as well: a BOOTREQUEST carries no message type at all, and the
 	# reply is a plain BOOTREPLY whose file field is a boot file name.
@@ -715,8 +758,8 @@ checksent(res: chan of ref Result, sent: list of array of byte)
 	types := "";
 	n := ndiscover := nrequest := nrelease := nbootp := nother := 0;
 	prev := -1;
-	pairs := 1;			# every REQUEST follows a DISCOVER
-	first, request, rel, boot: array of byte;
+	pairs := 1;			# every new REQUEST follows a DISCOVER
+	first, request, rel, boot, renewal: array of byte;
 	for(l := sent; l != nil; l = tl l){
 		p := hd l;
 		ty := msgtype(p);
@@ -730,7 +773,15 @@ checksent(res: chan of ref Result, sent: list of array of byte)
 			ndiscover++;
 		Request =>
 			nrequest++;
-			if(prev != Discover)
+			#
+			# A renewal is a REQUEST with the address already in
+			# ciaddr, and it does not follow a DISCOVER: it is
+			# the client keeping what it has (RFC 2131 4.3.2).
+			#
+			if(!iszero(p, Udphdrlen+12)){
+				if(renewal == nil)
+					renewal = p;
+			}else if(prev != Discover)
 				pairs = 0;
 		Release =>
 			nrelease++;
@@ -764,7 +815,26 @@ checksent(res: chan of ref Result, sent: list of array of byte)
 	res <-= ref Result(pairs, "every DHCPREQUEST follows a DHCPDISCOVER: "+types);
 	res <-= ref Result(ndiscover >= 3, "the DHCPNAK sent the client back to DISCOVER: "+types);
 	res <-= ref Result(nrequest >= 3, "three DHCPREQUESTs, one of them refused: "+types);
-	res <-= ref Result(nrelease == 2, "both leases were given back: "+types);
+	res <-= ref Result(nrelease == 3, "every lease was given back: "+types);
+	#
+	# The renewal, which nothing else here would notice: half a
+	# four-second lease later, unicast to the server that granted it,
+	# carrying the address in ciaddr and neither a requested address
+	# nor a server identifier (RFC 2131 4.3.2 and table 4).
+	#
+	if(renewal != nil){
+		b := Udphdrlen;
+		res <-= ref Result(eqb(renewal[b+12:b+16], ipb(Ouraddr)),
+			"the renewal carries its address in ciaddr");
+		res <-= ref Result(findopt(renewal, 50) == nil && findopt(renewal, 54) == nil,
+			"a renewal asks for no address and names no server");
+		res <-= ref Result(int renewal[12] == 192 && int renewal[13] == 168 &&
+			int renewal[14] == 7 && int renewal[15] == 1,
+			"a renewal is unicast to the server, not broadcast");
+		res <-= ref Result((int renewal[b+10] & 16r80) == 0,
+			"a client that has an address does not ask to be answered by broadcast");
+	}else
+		res <-= ref Result(0, "the lease was never renewed: "+types);
 	if(first != nil){
 		b := Udphdrlen;
 		res <-= ref Result(int first[b] == 1 && int first[b+1] == 1 && int first[b+2] == 6,

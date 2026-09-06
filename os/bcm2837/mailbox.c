@@ -835,6 +835,25 @@ mboxclockrate(u32int id)
 }
 
 /*
+ * A pin on the firmware's GPIO expander: 128 + n, driven by the
+ * VideoCore over its own I2C. The radio's WL_REG_ON is expander pin 1
+ * (129) on the 3B+; Linux's wifi_pwrseq drives it before the first
+ * SDIO command. The firmware usually leaves it asserted, and asserting
+ * it again costs one mailbox call.
+ */
+int
+mboxsetgpio(u32int pin, int on)
+{
+	u32int buf[2];
+
+	buf[0] = pin;
+	buf[1] = on != 0;
+	if(mboxprop(Tagsetgpiostate, buf, 2, 2) < 0)
+		return -1;
+	return 0;
+}
+
+/*
  * The most a clock will ever run at. A divider computed from the
  * momentary rate is wrong the moment the firmware scales the core
  * clock up under load, and the SDHOST is clocked from the core: the

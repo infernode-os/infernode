@@ -34,6 +34,7 @@ int	mboxfballoc(u32int, u32int, u32int, u32int, Fbinfo*);
 int	mboxfbnumdisplays(void);
 u32int	mboxclockrate(u32int);
 u32int	mboxmaxclockrate(u32int);
+int	mboxsetgpio(u32int, int);
 void	mboxlockon(void);
 int	mboxedid(u32int, uchar*);
 int	mboxcmdline(char*, int);

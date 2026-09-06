@@ -88,7 +88,9 @@ enum
 	FWDEBUG		= 0,
 
 	Corescansz	= 512,
+	Wlregon		= 129,		/* WL_REG_ON on the firmware GPIO expander (128+1) */
 	Uploadsz	= 2048,
+	Cfgmax		= 16*1024,	/* the NVRAM text, whole; the pinned file is ~2 KB */
 
 	Firmwarecmp	= 1,		/* read the upload back and compare */
 
@@ -192,7 +194,7 @@ enum
 	 * Bounds, in polls of the step given, for waits that have none
 	 * in the original.
 	 */
-	Sbpolls		= 1000,		/* x10us: a core to reset or a clock to come */
+	Sbpolls		= 100000,	/* x10us = 1 s: a core to reset or a clock to come; Linux bounds the PMU at a second and says ALP alone may take 15 ms */
 	Ocrtries	= 5,		/* x100ms: the OCR ready bit */
 	Nocard		= 2,		/* consecutive silent CMD5s = no radio */
 	Ioreadytries	= 10,		/* x100ms: a function to enable */
@@ -398,6 +400,8 @@ sdiocmd(int cmd, u32int arg, int flags, u32int *resp)
  * CMD52: one byte, and the R5 response says whether the function
  * took it. Returns the byte read (or written) or -1.
  */
+static int sdiobit(int, int, int);
+
 static int
 sdiord(int fn, int addr)
 {
@@ -589,7 +593,7 @@ sdioinit(void)
 		return -1;
 	}
 	for(i = 0; ; i++){
-		if(sdiord(Fn0, Ioready) & 1<<Fn1)
+		if(sdiobit(Fn0, Ioready, 1<<Fn1))
 			break;
 		if(i == Ioreadytries){
 			bootsay("function 1 never became ready", 0, -1);
@@ -620,6 +624,23 @@ static int
 cfgr(u32int off)
 {
 	return sdiord(Fn1, off);
+}
+
+/*
+ * A bit of a register, or 0 when the read itself failed. sdiord()
+ * answers -1 on a bus failure, and -1 has every bit set: a caller
+ * that masks it reads a dead bus as "ready", "clock available", or
+ * whatever it was hoping for, and carries on into the dark.
+ */
+static int
+sdiobit(int fn, int addr, int mask)
+{
+	int v;
+
+	v = sdiord(fn, addr);
+	if(v < 0)
+		return 0;
+	return v & mask;
 }
 
 static int
@@ -1012,7 +1033,7 @@ sbinit(Ctlr *ctl)
 		return -1;
 	for(i = 0; ; i++){
 		v = cfgr(Clkcsr);
-		if(v & (HTavail|ALPavail))
+		if(v >= 0 && (v & (HTavail|ALPavail)))
 			break;
 		if(i == Sbpolls){
 			bootsay("backplane clock never came", 0, -1);
@@ -1063,7 +1084,7 @@ sbenable(Ctlr *ctl)
 	cfgw(Clkcsr, 0);
 	pause(1);
 	cfgw(Clkcsr, ReqHT);
-	for(i = 0; (cfgr(Clkcsr) & HTavail) == 0; i++){
+	for(i = 0; sdiobit(Fn1, Clkcsr, HTavail) == 0; i++){
 		if(i == 50){
 			print("ether4330: can't enable HT clock: csr %x\n", cfgr(Clkcsr));
 			error("ether4330: no HT clock");
@@ -1079,7 +1100,7 @@ sbenable(Ctlr *ctl)
 		error("ether4330: cannot set up the SDIO core");
 	if(sdioset(Fn0, Ioenable, 1<<Fn2) < 0)
 		error("ether4330: cannot enable function 2");
-	for(i = 0; !(sdiord(Fn0, Ioready) & 1<<Fn2); i++){
+	for(i = 0; !sdiobit(Fn0, Ioready, 1<<Fn2); i++){
 		if(i == Ioreadytries){
 			print("ether4330: can't enable SDIO function 2 - ioready %x\n", sdiord(Fn0, Ioready));
 			error("ether4330: function 2 never became ready");
@@ -1163,24 +1184,46 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 		free(cbuf);
 		nexterror();
 	}
-	buf = malloc(Uploadsz);
+	buf = malloc(isconfig? Cfgmax : Uploadsz);
 	if(buf == nil)
 		error(Enomem);
 	if(Firmwarecmp){
-		cbuf = malloc(Uploadsz);
+		cbuf = malloc(isconfig? Cfgmax : Uploadsz);
 		if(cbuf == nil)
 			error(Enomem);
 	}
 	off = 0;
 	total = 0;
 	for(;;){
-		n = devtab[c->type]->read(c, buf, Uploadsz, off);
-		if(n <= 0)
-			break;
 		if(isconfig){
+			/*
+			 * The NVRAM text is condensed as a whole: a chunk
+			 * boundary falls mid-line, and the first version
+			 * condensed one 2048-byte read of a 2074-byte file
+			 * and dropped its last two settings -- which the
+			 * read-back verify, comparing the upload with
+			 * itself, could never see. Read it all, then condense.
+			 */
+			for(n = 0;;){
+				int m;
+
+				if(n >= Cfgmax)
+					error("ether4330: NVRAM file too large");
+				m = devtab[c->type]->read(c, buf+n, Cfgmax-n, n);
+				if(m <= 0)
+					break;
+				n += m;
+			}
+			if(n <= 0)
+				error("ether4330: NVRAM file is empty");
 			n = condense(buf, n);
 			off = ctl->socramsize - n - 4;
-		}else if(off == 0)
+		}else{
+			n = devtab[c->type]->read(c, buf, Uploadsz, off);
+			if(n <= 0)
+				break;
+		}
+		if(!isconfig && off == 0)
 			memmove(ctl->resetvec.c, buf, sizeof(ctl->resetvec.c));
 		while(n&3)
 			buf[n++] = 0;
@@ -1303,7 +1346,7 @@ fwload(Ctlr *ctl)
 	}
 	ctl->regufile = firmware[i].regufile;
 	cfgw(Clkcsr, ReqALP);
-	for(j = 0; (cfgr(Clkcsr) & ALPavail) == 0; j++){
+	for(j = 0; sdiobit(Fn1, Clkcsr, ALPavail) == 0; j++){
 		if(j == Sbpolls)
 			error("ether4330: ALP clock never came");
 		microdelay(10);
@@ -1347,7 +1390,7 @@ fwload(Ctlr *ctl)
  * firmware's "ready"; a frame interrupt means a packet is waiting.
  */
 static void
-intwait(Ctlr *ctlr, int wait)
+intwait1(Ctlr *ctlr, int wait)
 {
 	u32int ints, mbox;
 	int i;
@@ -1378,6 +1421,21 @@ intwait(Ctlr *ctlr, int wait)
 			break;
 	}
 }
+
+/*
+ * tsleep() raises when the process is killed, and a kproc that
+ * sleeps with no error label in place takes the longjmp into whatever
+ * label was last pushed. Miller's version began the same way.
+ */
+static void
+intwait(Ctlr *ctlr, int wait)
+{
+	if(waserror())
+		return;
+	intwait1(ctlr, wait);
+	poperror();
+}
+
 
 static Block*
 wlreadpkt(Ctlr *ctl)
@@ -1448,7 +1506,11 @@ rproc(void *a)
 	for(;;){
 		if(waserror()){
 			print("ether4330: reader: %s\n", up->env->errstr);
-			pause(1000);
+			/* the pause can itself raise (a kill); it needs its own label */
+			if(!waserror()){
+				pause(1000);
+				poperror();
+			}
 			continue;
 		}
 		b = wlreadpkt(ctl);
@@ -2012,6 +2074,17 @@ ether4330probe(void)
 	bootsay("the Arasan holds the card (-DSDCARD_ARASAN), radio not probed", 0, -1);
 	return;
 #endif
+	/*
+	 * WL_REG_ON, the radio's power enable, is on the firmware's GPIO
+	 * expander, not a BCM pin: pin 129 on the 3B+ (Linux's
+	 * wifi_pwrseq, expgpio 1). The firmware normally leaves it on;
+	 * asserting it here and giving the regulator its 150ms is what
+	 * Linux does before the first CMD5, and costs nothing if it was
+	 * already on.
+	 */
+	if(mboxsetgpio(Wlregon, 1) < 0)
+		uartputstr("ether4330: WL_REG_ON: mailbox refused; trying anyway\n");
+	microdelay(150000);
 	booting = 1;
 	if(sdioinit() < 0 || sbinit(ctl) < 0){
 		booting = 0;

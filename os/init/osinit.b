@@ -250,7 +250,6 @@ init()
 	# names no path: this is where the paths come from.
 	#
 	radiosetup();
-	wifisetup();
 
 	#
 	# Spawned, and the shell starts straight after it.
@@ -287,6 +286,15 @@ init()
 	# anywhere.
 	#
 	tmpsetup();
+
+	#
+	# After tmpsetup, not before: the join needs a writable directory
+	# to put a factotum mount point in, and until /tmp is a memory
+	# filesystem the only /mnt available is the read-only one compiled
+	# into the kernel. Ordered wrongly it announced itself only as
+	# factotum failing to bind, which is a long way from the cause.
+	#
+	wifisetup();
 
 	#
 	# The touch panel, if the kernel found one. Spawned because it is
@@ -1345,7 +1353,15 @@ wifijoin(essid, pass: string)
 		sys->print("init: wifi: cannot make /mnt writable: %r\n");
 		return;
 	}
-	sys->create("/mnt/factotum", Sys->OREAD, Sys->DMDIR|8r700);
+	d := sys->create("/mnt/factotum", Sys->OREAD, Sys->DMDIR|8r700);
+	if(d == nil){
+		(ok, nil) := sys->stat("/mnt/factotum");
+		if(ok < 0){
+			sys->print("init: wifi: no /mnt/factotum: %r\n");
+			return;
+		}
+	}
+	d = nil;
 	fact := load Command "/dis/auth/factotum.dis";
 	if(fact == nil){
 		sys->print("init: wifi: cannot load factotum: %r\n");

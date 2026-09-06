@@ -370,8 +370,9 @@ Quit: con -1;
 # in the order RFC 2131 4.4 says a client sends it, and hands back
 # messages a client must ignore before the ones it must not.
 #
-server(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
+server(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int, pids: chan of int)
 {
+	pids <-= sys->pctl(0, nil);
 	#
 	# A server that died quietly would look exactly like a network
 	# with nothing on it, and the client would spend its whole retry
@@ -561,10 +562,10 @@ Result: adt {
 # it replaces /n with a memfs and binds the srv device into it; the
 # runner and every test after this one must not see that.
 #
-exchange(res: chan of ref Result, done: chan of int)
+exchange(res: chan of ref Result, done: chan of int, pids: chan of int)
 {
 	{
-		exchange1(res, done);
+		exchange1(res, done, pids);
 	} exception e {
 	"*" =>
 		res <-= ref Result(0, "the exchange raised: "+e);
@@ -572,9 +573,10 @@ exchange(res: chan of ref Result, done: chan of int)
 	}
 }
 
-exchange1(res: chan of ref Result, done: chan of int)
+exchange1(res: chan of ref Result, done: chan of int, pids: chan of int)
 {
 	sys->pctl(Sys->FORKNS, nil);
+	pids <-= sys->pctl(0, nil);
 	(clone, data, e) := setupnet();
 	if(e != nil){
 		res <-= ref Result(0, "setup: "+e);
@@ -583,7 +585,9 @@ exchange1(res: chan of ref Result, done: chan of int)
 	}
 	obs := chan[32] of array of byte;
 	quit := chan of int;
-	spawn server(clone, data, obs, quit);
+	spid := chan of int;
+	spawn server(clone, data, obs, quit, spid);
+	pids <-= <-spid;
 
 	cfg := Bootconf.new();
 	cfg.puts(Dhcpclient->Ohostname, "testclient");
@@ -900,9 +904,15 @@ testOptions(t: ref T)
 #
 testExchange(t: ref T)
 {
-	res := chan of ref Result;
+	#
+	# Buffered past the number of checks the run can make, so that a
+	# result sent after this process has given up waiting cannot leave
+	# the exchange blocked for ever on a send nobody will receive.
+	#
+	res := chan[64] of ref Result;
 	done := chan of int;
-	spawn exchange(res, done);
+	pids := chan[4] of int;
+	spawn exchange(res, done, pids);
 	#
 	# Bounded, because a test that can hang is worse than one that
 	# fails: the client's own retries end well inside this.
@@ -917,6 +927,14 @@ testExchange(t: ref T)
 		t.assert(r.ok, r.what);
 		n++;
 	<-late =>
+		#
+		# And reap what it left behind. A process blocked in an alt
+		# is still a process, and a hosted emu does not exit while
+		# one is running: without this the deadline would turn a
+		# failing run into a hung one, which is the thing it exists
+		# to prevent.
+		#
+		reap(pids);
 		t.fatal(sys->sprint("the exchange never finished; %d checks made", n));
 		return;
 	<-done =>
@@ -946,6 +964,17 @@ killproc(pid: int)
 	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "kill");
+}
+
+reap(pids: chan of int)
+{
+	for(;;)
+		alt {
+		pid := <-pids =>
+			killproc(pid);
+		* =>
+			return;
+		}
 }
 
 init(nil: ref Draw->Context, args: list of string)

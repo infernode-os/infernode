@@ -1394,8 +1394,10 @@ wifijoin(essid, pass: string)
 	# That is a defect in its own right, recorded as such; retrying is
 	# what makes the boot work while it stands.
 	#
+	pids := chan of int;
 	for(try := 0; try < 2; try++){
-		spawn wpa->init(nil, "wpa" :: "-s" :: essid :: "/net/ether1" :: nil);
+		spawn wparun(wpa, essid, pids);
+		pid := <-pids;
 		for(w := 0; w < 20; w++){
 			sys->sleep(1000);
 			if(associated())
@@ -1403,6 +1405,14 @@ wifijoin(essid, pass: string)
 		}
 		if(associated())
 			break;
+		#
+		# Stop it before trying again. Two supplicants on one radio
+		# take turns re-associating over each other and neither
+		# finishes a handshake; the board showed that plainly, and a
+		# retry that left the first one running reproduced it.
+		#
+		killproc(pid);
+		sys->sleep(2000);
 	}
 	if(!associated()){
 		sys->print("init: wifi: %s did not associate\n", essid);
@@ -1410,6 +1420,19 @@ wifijoin(essid, pass: string)
 	}
 	sys->print("init: wifi: associated with %s\n", essid);
 	wifiaddr();
+}
+
+wparun(wpa: Command, essid: string, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	wpa->init(nil, "wpa" :: "-s" :: essid :: "/net/ether1" :: nil);
+}
+
+killproc(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
 associated(): int

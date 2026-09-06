@@ -343,7 +343,7 @@ static Cmdtab cmds[] =
 	{CMchannel,	"channel",	2},
 	{CMcrypt,	"crypt",	2},
 	{CMdebug,	"debug",	2},
-	{CMessid,	"essid",	2},
+	{CMessid,	"essid",	0},	/* the rest of the line: an SSID may contain spaces */
 	{CMfirmware,	"firmware",	4},
 	{CMjoin,	"join",		4},
 	{CMkey1,	"key1",		2},
@@ -1724,11 +1724,25 @@ linkdown(Ctlr *ctl)
 	ctl->status = Disconnected;
 	nif = &edev->nif;
 	nif->link = 0;
+	/*
+	 * The zero-length message a supplicant reads as "the association
+	 * is gone". qpassnolim rather than qwrite: this runs in the
+	 * reader kproc, which is the whole receive and flow-control path,
+	 * and qwrite both sleeps until the conversation's queue drains
+	 * and raises if it has been closed. A supplicant that had stopped
+	 * reading would have stopped the radio, and a closed queue would
+	 * have taken the kproc out through an error label it does not
+	 * have. Each conversation gets its own label as well, so one that
+	 * cannot be told does not stop the others being told.
+	 */
 	for(i = 0; i < nif->nfile; i++){
 		f = nif->f[i];
 		if(f == nil || f->in == nil || f->inuse == 0 || f->type != 0x888e)
 			continue;
-		qwrite(f->in, 0, 0);
+		if(waserror())
+			continue;
+		qpassnolim(f->in, allocb(0));
+		poperror();
 	}
 }
 
@@ -2032,7 +2046,19 @@ cmddone(void *a)
 static void
 wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 {
-	Block *b;
+	/*
+	 * One owner for the Block, and it is the error label. Two things
+	 * were wrong here. The local was written after waserror(), and C
+	 * leaves such a local indeterminate after a longjmp -- the same
+	 * hazard os/port/dev.c and namec were fixed for -- so the handler
+	 * could free whatever the pointer held when the label was set,
+	 * which by then had been freed and reused. And the two failure
+	 * paths below freed it themselves and then raised, so the handler
+	 * freed it a second time even when the compiler was honest.
+	 * Nothing frees it now except the handler and the last line, and
+	 * every free clears it.
+	 */
+	volatile struct { Block *b; } v;
 	Sdpcm *p;
 	Cmd *q;
 	int len, tlen;
@@ -2042,66 +2068,66 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	else
 		tlen = MAX(dlen, rlen);
 	len = sizeof(Sdpcm) + sizeof(Cmd) + tlen;
-	b = allocb(len);
+	v.b = allocb(len);
 	qlock(&ctl->cmdlock);
 	if(waserror()){
-		freeb(b);
+		freeb(v.b);
+		v.b = nil;
 		qunlock(&ctl->cmdlock);
 		nexterror();
 	}
-	memset(b->wp, 0, len);
+	memset(v.b->wp, 0, len);
 	qlock(&ctl->pktlock);
-	p = (Sdpcm*)b->wp;
+	p = (Sdpcm*)v.b->wp;
 	put2(p->len, len);
 	put2(p->lenck, ~len);
 	p->seq = ctl->txseq;
 	p->doffset = sizeof(Sdpcm);
-	b->wp += sizeof(*p);
+	v.b->wp += sizeof(*p);
 
-	q = (Cmd*)b->wp;
+	q = (Cmd*)v.b->wp;
 	put4(q->cmd, op);
 	put4(q->len, tlen);
 	put2(q->flags, write? 2 : 0);
 	put2(q->id, ++ctl->reqid);
 	put4(q->status, 0);
-	b->wp += sizeof(*q);
+	v.b->wp += sizeof(*q);
 
 	if(dlen > 0)
-		memmove(b->wp, data, dlen);
+		memmove(v.b->wp, data, dlen);
 	if(write)
-		memmove(b->wp + dlen, res, rlen);
-	b->wp += tlen;
+		memmove(v.b->wp + dlen, res, rlen);
+	v.b->wp += tlen;
 
-	if(iodebug) dump("cmd", b->rp, len);
-	if(packetrw(1, b->rp, len) < 0){
+	if(iodebug) dump("cmd", v.b->rp, len);
+	if(packetrw(1, v.b->rp, len) < 0){
 		qunlock(&ctl->pktlock);
 		error("ether4330: cannot send a command to the firmware");
 	}
 	ctl->txseq++;
 	qunlock(&ctl->pktlock);
-	freeb(b);
-	b = nil;
-	USED(b);
+	freeb(v.b);
+	v.b = nil;
 	tsleep(&ctl->cmdr, cmddone, ctl, Cmdtimeout);
-	b = ctl->rsp;
+	v.b = ctl->rsp;
 	ctl->rsp = nil;
-	if(b == nil){
+	if(v.b == nil){
 		print("ether4330: no answer to cmd %d\n", op);
 		error("ether4330: firmware does not answer");
 	}
-	p = (Sdpcm*)b->rp;
-	q = (Cmd*)(b->rp + p->doffset);
+	p = (Sdpcm*)v.b->rp;
+	q = (Cmd*)(v.b->rp + p->doffset);
 	if(q->status[0] | q->status[1] | q->status[2] | q->status[3]){
 		print("ether4330: cmd %d error status %ud\n", op, get4(q->status));
-		dump("ether4330: cmd error", b->rp, BLEN(b));
-		freeb(b);
+		dump("ether4330: cmd error", v.b->rp, BLEN(v.b));
 		error("ether4330: firmware refused a command");
 	}
 	if(!write)
 		memmove(res, q + 1, rlen);
-	freeb(b);
-	qunlock(&ctl->cmdlock);
+	freeb(v.b);
+	v.b = nil;
 	poperror();
+	qunlock(&ctl->cmdlock);
 }
 
 static void
@@ -2934,6 +2960,27 @@ wlrunning(Ctlr *ctl)
  * with or without a radio in it, rather than the answer depending on
  * how far the boot got.
  */
+/*
+ * The fields from n onward, rejoined with single spaces: what a verb
+ * whose last argument is free text (a network name) takes.
+ */
+static void
+joinfields(char *buf, int nbuf, Cmdbuf *cb, int from)
+{
+	int i, l;
+
+	l = 0;
+	buf[0] = 0;
+	for(i = from; i < cb->nf; i++){
+		if(l > 0 && l < nbuf-1)
+			buf[l++] = ' ';
+		l += snprint(buf+l, nbuf-l, "%s", cb->f[i]);
+		if(l >= nbuf-1)
+			break;
+	}
+	buf[nbuf-1] = 0;
+}
+
 static long
 etherbcmctl(Ether *edev, void *a, long n)
 {
@@ -2943,6 +2990,8 @@ etherbcmctl(Ether *edev, void *a, long n)
 	uchar ea[Eaddrlen], wpaie[32];
 	uvlong iv;
 	int i, t, nie;
+	WKey kbuf;
+	char namebuf[64];
 
 	ctl = edev->ctlr;
 	cb = parsecmd(a, n);
@@ -2997,11 +3046,20 @@ etherbcmctl(Ether *edev, void *a, long n)
 			wljoin(ctl, ctl->essid, ctl->chanid);
 		break;
 	case CMessid:
+		/*
+		 * The name is everything after the verb, rejoined: an SSID
+		 * may contain spaces, the scan record puts it last for that
+		 * reason, and a fixed field count made the README's own
+		 * example -- a network called The Lab -- impossible to give.
+		 */
+		if(cb->nf < 2)
+			cmderror(cb, Ecmdargs);
+		joinfields(namebuf, sizeof namebuf, cb, 1);
 		wlrunning(ctl);
-		if(cistrcmp(cb->f[1], "default") == 0)
+		if(cistrcmp(namebuf, "default") == 0)
 			memset(ctl->essid, 0, sizeof ctl->essid);
 		else{
-			strncpy(ctl->essid, cb->f[1], sizeof ctl->essid - 1);
+			strncpy(ctl->essid, namebuf, sizeof ctl->essid - 1);
 			ctl->essid[sizeof ctl->essid - 1] = 0;
 		}
 		if(ctl->essid[0])
@@ -3037,9 +3095,10 @@ etherbcmctl(Ether *edev, void *a, long n)
 	case CMkey3:
 	case CMkey4:
 		i = ct->index - CMkey1;
-		if(wepparsekey(&ctl->keys[i], cb->f[1]) < 0)
+		if(wepparsekey(&kbuf, cb->f[1]) < 0)
 			cmderror(cb, "bad WEP key syntax");
 		wlrunning(ctl);
+		ctl->keys[i] = kbuf;
 		wlsetint(ctl, "wsec", 1);	/* wep enabled */
 		wlwepkey(ctl, i);
 		break;
@@ -3051,9 +3110,10 @@ etherbcmctl(Ether *edev, void *a, long n)
 	case CMtxkey:
 		if(parseether(ea, cb->f[1]) < 0)
 			cmderror(cb, "bad ether addr");
-		if(wpaparsekey(&ctl->keys[0], &iv, cb->f[2]) < 0)
+		if(wpaparsekey(&kbuf, &iv, cb->f[2]) < 0)
 			cmderror(cb, "bad wpa key");
 		wlrunning(ctl);
+		ctl->keys[0] = kbuf;
 		i = ct->index == CMrxkey? 0 : ct->index - CMrxkey0;
 		wlwpakey(ctl, ct->index, iv, ea, i);
 		break;

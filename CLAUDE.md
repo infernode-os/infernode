@@ -407,6 +407,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
+| `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

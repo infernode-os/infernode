@@ -61,7 +61,10 @@ the end of this file:
   the bare-metal harness at all
 - the fixes of 2026-09-05 (below) have run under QEMU only; none has
   been on the board
-- WiFi, touch, USB storage, audio; the Pi 4
+- WiFi associates and the supplicant is written, but nothing has
+  joined a network: no build machine has a radio and QEMU models none,
+  so the whole WiFi stack above SDIO is untested outside a board
+- touch, USB storage, audio; the Pi 4
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the
 port, boots it under QEMU's `raspi3b`, and asserts on the result —
@@ -1778,6 +1781,135 @@ firmware build answers Miller's command sequence as linux-firmware's
 did. High-speed (50MHz) and the card interrupt line are deliberately
 not attempted: they are the changes to make once the polled 25MHz
 path has run.
+
+## The WPA2 supplicant (WiFi milestone 5)
+
+**Status: the cryptography and the handshake are proven against
+published test vectors and a synthetic capture on the host; nothing has
+spoken to an access point.** No build machine has a radio, and QEMU's
+`raspi3b` has no CYW43455, so what can be proven off the board is
+exactly the arithmetic — and the arithmetic is where a supplicant goes
+wrong silently, so proving it is worth the trouble. The board test
+below is the whole of the remaining evidence.
+
+**Why a supplicant at all, on a fullMAC part.** The dongle's firmware
+scans, authenticates and associates by itself; `ether4330` publishes the
+result as an ethernet interface and the 802.11 layer is invisible above
+it. What the firmware cannot do is prove the machine knows the network's
+passphrase, because the passphrase is not the radio's to hold — the
+whole point of a pre-shared key is that possession of the radio is not
+possession of the network. That proof is the four-way EAPOL handshake:
+four frames of ethernet type `0x888e` exchanged with the access point
+after association, ending with a pairwise key and a group key handed
+down to the firmware through ctl. Mechanism in the kernel, policy
+outside it: the driver moves frames and installs keys, and a Limbo
+program decides which network, which passphrase and what to do when the
+link drops.
+
+**The shape.** `appl/lib/wpakey.b` is the arithmetic and the state
+machine, written as a pure function of the frames that arrive:
+`Supp.recv` takes one received frame and 32 fresh random bytes and
+returns the list of things its caller must then do — a frame to send, a
+ctl line to write, a pause to observe. It opens no file, reads no clock
+and installs no key. `appl/cmd/ip/wpa.b` is the I/O and the policy: it
+opens the conversation, waits on `ifstats`, asks factotum for the
+passphrase, and performs whatever `recv` returns. The split is not
+tidiness; it is the only reason any of this could be tested before
+hardware existed, and `tests/wpa_test.b` drives an entire association
+through it with no radio.
+
+**The contract with the driver**, which is what to check if the two
+halves disagree:
+
+- the interface is `/net/ether1` (`#l1/ether1` before it is bound);
+- a conversation comes from opening `clone` and reading back its number;
+  `netif` puts `ctl` inside the conversation, not at the top of the
+  interface;
+- `connect 0x888e` on that ctl selects EAPOL frames, which arrive on the
+  conversation's `data` file complete with their 14-byte ethernet
+  headers and go out the same way;
+- `essid <name>` and `auth <hex RSN IE>` on that ctl, in that order,
+  because the driver joins on the essid it already has when the element
+  arrives;
+- `ifstats` carries `essid:` and a `status:` line reading `unassociated`,
+  `connecting` or `associated`;
+- keys go in as `rxkey <bssid> ccmp:<32 hex>@0`, then message 4, then a
+  100ms pause, then `txkey <bssid> ccmp:<32 hex>@0`, then
+  `rxkey<n> <bssid> ccmp:<32 hex>@<hex RSC>`. Addresses are twelve
+  hexadecimal digits with no separators; the initialisation vector after
+  the `@` is hexadecimal with no `0x` and no leading zeros.
+
+The order of those key writes is not arbitrary and is asserted by the
+test: message 4 has to leave under the old key, so the receive key goes
+in before it and the transmit key after it.
+
+**What is not implemented, deliberately:** WPA3/SAE, WPA enterprise
+(802.1X/EAP — `aux/wpa`'s TLS tunnels are a large amount of plumbing for
+a home network), WPA1/TKIP (refused with a diagnostic rather than half
+done), roaming, PMKSA caching and protected management frames. The full
+list, with what each failure looks like, is in `docs/WIFI-WPA2.md`.
+
+**The passphrase comes from factotum**, as
+`proto=wpapsk role=client essid=<name>`, which needed a new protocol
+module (`appl/cmd/auth/factotum/proto/wpapsk.b`). It is not an argument,
+because arguments are readable through `/prog`, and not a file in the
+tree. Plan 9's factotum derives the pairwise transient key inside
+itself so that only a session key ever leaves; ours hands out the
+passphrase, to a program running as the same user that could read the
+key file anyway. Moving the derivation inside is the improvement to make
+when there is a second consumer to justify widening the interface.
+
+**Board test.** With the firmware loaded and the radio up (milestone 2's
+test passing), a WPA2-PSK access point in range, and the serial console
+up:
+
+1. `bind -a '#l1' /net`, then `cat /net/ether1/ifstats`. Expect
+   `radio: present`, the chip line, a `firmware:` version and
+   `status: unassociated`. If `firmware: not loaded`, stop: this
+   milestone cannot be tested and milestone 2 is what failed.
+2. `echo 'key proto=wpapsk role=client essid=<name> !password=<secret>' >/mnt/factotum/ctl`.
+   Nothing is printed. `cat /mnt/factotum/ctl` must then list a line
+   with `proto=wpapsk` and no password.
+3. `ip/wpa -s '<name>' /net/ether1 &`. Expect, in order:
+   - `wpa: /net/ether1: network '<name>'` — check the name is exactly
+     the network's, since it is the salt of the key derivation and a
+     wrong one fails identically to a wrong passphrase;
+   - `wpa: associated; starting the four-way handshake`, within a few
+     seconds. `wpa: still waiting for the radio to associate` repeating
+     means the firmware never joined: the supplicant is not the problem,
+     `status:` in `ifstats` is where to look;
+   - `wpa: pairwise receive key installed`
+   - `wpa: pairwise transmit key installed`
+   - `wpa: group key <n> installed`
+   All five within about a second of each other. `wpa: bad MIC` instead
+   of the third line means the passphrase or the network name is wrong;
+   it is the only common cause.
+4. `cat /net/ether1/ifstats` again. `status: associated`, and the driver
+   should now report `crypt: wpa2`.
+5. `bind -a '#I' /net; ip/dhcp /net/ether1`. Expect an address, and
+   `ip/ping <gateway>` to answer. This is the only step that proves the
+   keys the firmware was given are the keys the access point is using:
+   everything before it would look identical with a transmit key that
+   encrypts to noise.
+6. Take the access point down, or walk out of range, for ten seconds.
+   Expect `wpa: link lost; re-associating`, then the same five lines
+   again when it returns, and DHCP to still hold. This is the path that
+   is easiest to get wrong and impossible to test off the board: the
+   replay counter and the key-installation gate have to be reset, or the
+   second handshake is refused as a replay of the first.
+
+**What only the board can prove.** Whether the driver's `auth` verb
+accepts the RSN element this program builds and puts the dongle into
+WPA2 mode; whether `txkey`/`rxkey` reach `wsec_key` in the shape the
+firmware wants; whether the initialisation-vector format (`@` followed
+by hexadecimal, no `0x`) is parsed as intended; whether EAPOL frames
+survive the conversation in both directions with their headers intact;
+whether an access point's message 3 carries the group key as the KDE
+this parses; and whether re-association after a deauthentication
+produces a clean second handshake rather than a wedged one. Every one of
+those is a place where the two halves of the contract above could
+disagree without either being obviously wrong.
+
 
 ## Next
 

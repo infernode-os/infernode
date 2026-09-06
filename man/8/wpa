@@ -1,0 +1,148 @@
+.TH WPA 8
+.SH NAME
+wpa \- WPA2-PSK supplicant
+.SH SYNOPSIS
+.B ip/wpa
+[
+.B -d
+] [
+.BI -s " essid"
+]
+[
+.I interface
+]
+.SH DESCRIPTION
+.I Wpa
+authenticates this machine to a WPA2 personal (pre-shared key) wireless
+network and installs the resulting keys in the radio.
+.PP
+The radio does the rest by itself.
+A fullMAC part such as the CYW43455 on a Raspberry Pi 3B+ scans,
+authenticates and associates in its own firmware, and the kernel driver
+publishes the result as an ordinary ethernet interface,
+by default
+.BR /net/ether1 .
+What the firmware cannot do is prove the machine knows the network's
+passphrase, because the passphrase is not the radio's to hold.
+That proof is the four-way EAPOL handshake, and that is
+.IR wpa .
+.PP
+.I Wpa
+opens a conversation on
+.IR interface ,
+connects it to ethernet type
+.BR 0x888e ,
+writes
+.BI essid " name"
+to the conversation's
+.B ctl
+file if
+.B -s
+was given,
+waits for the interface's
+.B ifstats
+to report
+.BR "status: associated" ,
+and then writes
+.BI auth " ie"
+\- the RSN information element naming WPA2 with CCMP and PSK
+authentication.
+From then on it reads EAPOL frames from the conversation's
+.B data
+file, answers them, and installs the pairwise and group keys with
+.BI txkey " bssid " ccmp: key @ iv
+and
+.BI rxkey n " bssid " ccmp: key @ iv
+on the same
+.B ctl
+file.
+When the driver drops the association it closes the queue,
+.I wpa
+reads end of file, and the whole sequence begins again.
+.PP
+The options are:
+.TP
+.B -d
+Report each frame sent and received, and the derived master key.
+For debugging only: it prints key material.
+.TP
+.BI -s " essid"
+Set the network name, and write it to the interface.
+Without it the name is read from the interface's
+.B ifstats
+and
+.I wpa
+fails if there is none, because the name is the salt of the key
+derivation and a wrong one produces a wrong key silently.
+.SH FILES
+.TF /mnt/factotum/rpc
+.TP
+.B /net/ether1/clone
+opened to obtain a conversation; the number read back names the
+conversation's directory.
+.TP
+.B /net/ether1/ifstats
+read for
+.B essid:
+and
+.BR status: .
+.TP
+.B /net/ether1/\fIn\fB/ctl
+written with
+.BR essid ,
+.BR auth ,
+.B txkey
+and
+.BR rxkey .
+.TP
+.B /net/ether1/\fIn\fB/data
+EAPOL frames, with their ethernet headers.
+.TP
+.B /mnt/factotum/rpc
+the passphrase, as
+.BR "proto=wpapsk role=client essid=\fIname\fP" .
+.TP
+.B /dev/random
+the station nonce.
+.SH SOURCE
+.B /appl/cmd/ip/wpa.b
+.br
+.B /appl/lib/wpakey.b
+.SH SEE ALSO
+.IR factotum (4),
+.IR wpakey (2)
+.PP
+The passphrase is never an argument and never a file in the tree.
+Give it to
+.IR factotum (4)
+once:
+.IP
+.EX
+echo 'key proto=wpapsk role=client essid=home !password=secret' \e
+	>/mnt/factotum/ctl
+.EE
+.SH DIAGNOSTICS
+Every line begins
+.BR "wpa: " .
+.B associated; starting the four-way handshake
+means the radio reported an association and the RSN element has been
+written.
+.B pairwise receive key installed
+and
+.B pairwise transmit key installed
+mean the handshake completed;
+.B group key \fIn\fP installed
+follows.
+.B bad MIC
+means a frame's integrity check did not match, which for a whole
+handshake means the passphrase is wrong.
+.B link lost; re-associating
+means the driver deassociated.
+.SH BUGS
+Only WPA2 personal with CCMP is implemented.
+WPA1 and TKIP (key descriptor version 1) are refused with a diagnostic;
+WPA3/SAE, WPA enterprise (802.1X/EAP) and fast roaming are not
+implemented at all.
+.PP
+The supplicant does not fork into the background; run it with
+.BR & .

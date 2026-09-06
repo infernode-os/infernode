@@ -203,7 +203,8 @@ void		panic(char*, ...);
 Cmdbuf*		parsecmd(char*, int);
 void		pexit(char*, int);
 void		pgrpcpy(Pgrp*, Pgrp*);
-#define		poperror()		up->nerrlab--
+void		poperrunder(void);
+#define		poperror()		(up->nerrlab > 0 ? (void)(up->nerrlab--) : poperrunder())
 int		poolread(char*, int, ulong);
 void		poolsize(Pool *, int, int);
 int		postnote(Proc *, int, char *, int);

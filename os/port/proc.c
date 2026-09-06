@@ -817,6 +817,40 @@ errlabcheck(void)
 	if(up->nerrlab >= NERR)
 		panic("waserror: error stack overflow, nerrlab %d pc %lux",
 			up->nerrlab, getcallerpc(&up));
+	/*
+	 * A NEGATIVE count is worse than a deep one, and this is the last
+	 * place it can be caught for free. waserror() is about to
+	 * setlabel(&up->errlab[up->nerrlab]) -- at -1 that writes a whole
+	 * Label, 104 bytes on this machine, BEFORE the array: over
+	 * nerrlab itself, over inpreempt and scallnr, and into the tail
+	 * of the FP save area. After that the process is telling lies
+	 * about its own error stack and the damage surfaces somewhere
+	 * else entirely.
+	 */
+	if(up->nerrlab < 0)
+		panic("waserror: error stack underflowed to %d in %lud:%s pc %lux",
+			up->nerrlab, up->pid, up->text, getcallerpc(&up));
+}
+
+/*
+ * poperror() with nothing to pop.
+ *
+ * An unmatched poperror() is a bug in whoever wrote it, and until now
+ * it was a silent one: nerrlab simply went negative and the next
+ * waserror() or nexterror() indexed off the front of the array. Naming
+ * it here costs one predicted branch on a hot path and turns a
+ * corruption that surfaces later, somewhere else, into a line that says
+ * which process and which caller.
+ *
+ * The count is clamped rather than left negative, because everything
+ * that makes this fatal happens at errlab[-1].
+ */
+void
+poperrunder(void)
+{
+	print("poperror: error stack underflow in %lud:%s pc %lux\n",
+		up->pid, up->text, getcallerpc(&up));
+	up->nerrlab = 0;
 }
 
 void
@@ -883,9 +917,31 @@ werrstr(char *fmt, ...)
 	kstrcpy(up->env->errstr, buf, ERRMAX);
 }
 
+/*
+ * Unwind to the next handler -- or say so when there is not one.
+ *
+ * Unguarded, this decremented past zero and gotolabel()'d through
+ * up->errlab[-1]. A Label here is 104 bytes, so errlab[-1] is not a
+ * stale label but the tail of the FP save area read as one: the jump
+ * goes to whatever an FP register happened to hold. That is how a
+ * missing handler presented on this board -- a PC-alignment fault at
+ * pc=1, with no hint of where it came from.
+ *
+ * Clamping to the outermost label instead means the unwind lands in
+ * the kproc trampoline's catch-all, which names the process on its way
+ * out. Every process here is a kernel process and enters through that
+ * trampoline, so errlab[0] is always a live frame to land on.
+ */
 void
 nexterror(void)
 {
+	if(up->nerrlab <= 0){
+		print("nexterror: error stack underflow in %lud:%s pc %lux: %s\n",
+			up->pid, up->text, getcallerpc(&up),
+			up->env != nil && up->env->errstr != nil ?
+				up->env->errstr : "");
+		up->nerrlab = 1;
+	}
 	gotolabel(&up->errlab[--up->nerrlab]);
 }
 
@@ -901,6 +957,10 @@ waserr(void)
 void
 poperr(void)
 {
+	if(up->nerrlab <= 0){
+		poperrunder();
+		return;
+	}
 	up->nerrlab--;
 }
 

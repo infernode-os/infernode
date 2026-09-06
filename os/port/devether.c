@@ -221,6 +221,102 @@ etheriq(Ether *e, uchar *frame, int len)
 }
 
 /*
+ * The same delivery, for a driver that already holds the frame in a
+ * Block, and the ownership rule that goes with it: this TAKES the
+ * Block, and the caller must not touch it after the call.
+ *
+ * A radio's receive path allocates one Block per frame off the bus and
+ * would otherwise pay a second allocation and a copy to reach the loop
+ * above. The conversation that matches LAST gets the original and
+ * every other gets a copy, so the ordinary case -- one conversation on
+ * 0x800, or two with ARP -- copies one time less than etheriq() does,
+ * and the sniffer case costs exactly what it cost before.
+ *
+ * A frame too short to carry an Ethernet header has no type field to
+ * demultiplex on. It is counted as a framing error rather than indexed
+ * into, which is what reading bytes 12 and 13 of a four-byte Block
+ * would be.
+ */
+void
+etheriqb(Ether *e, Block *b)
+{
+	int i, t, last;
+	Netfile *f;
+	Netif *nif;
+
+	nif = &e->nif;
+	nif->inpackets++;
+	if(BLEN(b) < ETHERHDRSIZE){
+		nif->frames++;
+		freeb(b);
+		return;
+	}
+	t = (b->rp[12]<<8) | b->rp[13];
+	last = -1;
+	for(i = 0; i < nif->nfile; i++){
+		f = nif->f[i];
+		if(f == nil || f->in == nil)
+			continue;
+		if(f->type != t && f->type >= 0)
+			continue;
+		last = i;
+	}
+	if(last < 0){
+		nif->misses++;
+		freeb(b);
+		return;
+	}
+	for(i = 0; i <= last; i++){
+		f = nif->f[i];
+		if(f == nil || f->in == nil)
+			continue;
+		if(f->type != t && f->type >= 0)
+			continue;
+		if(qpass(f->in, i == last? b : copyblock(b, BLEN(b))) < 0)
+			nif->soverflows++;
+	}
+}
+
+/*
+ * An Ethernet address from text, in either of the two forms this
+ * system writes one: twelve hex digits as %E prints them
+ * (b827eb9f19db, which is what /net/etherN/addr holds), or the same
+ * digits with a separator between the octets. Declared in
+ * os/port/lib.h since the tree was imported and defined nowhere until
+ * a ctl verb had to be told which station a key belongs to.
+ *
+ * Strict about the digits and lax about the separator. A short
+ * address, or one with a non-hex digit in it, is refused rather than
+ * completed with zeroes: a key installed against the wrong station
+ * decrypts nothing and reports nothing, which is the failure that
+ * takes an afternoon to find.
+ */
+int
+parseether(uchar *to, char *from)
+{
+	char nip[3], *p, *e;
+	int i;
+
+	p = from;
+	for(i = 0; i < Eaddrlen; i++){
+		if(p[0] == 0 || p[1] == 0)
+			return -1;
+		nip[0] = p[0];
+		nip[1] = p[1];
+		nip[2] = 0;
+		to[i] = strtoul(nip, &e, 16);
+		if(e != nip + 2)
+			return -1;
+		p += 2;
+		if(*p == ':' || *p == '-')
+			p++;
+	}
+	if(*p != 0)
+		return -1;
+	return 0;
+}
+
+/*
  * The record walks, transcribed from the Limbo driver.
  *
  * Each returns how many bytes of the buffer it consumed -- 0 for "not

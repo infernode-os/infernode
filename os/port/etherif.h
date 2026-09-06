@@ -72,3 +72,10 @@ struct Ether
  * anyone binds #lN. nil if there is no such instance.
  */
 Ether*	etherinstance(int);
+
+/*
+ * A received frame, delivered to the conversations that asked for its
+ * type. TAKES the Block: the caller must not touch it afterwards, and
+ * a frame nobody wants is freed here.
+ */
+void	etheriqb(Ether*, Block*);

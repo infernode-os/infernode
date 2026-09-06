@@ -50,13 +50,15 @@ and then writes
 authentication.
 From then on it reads EAPOL frames from the conversation's
 .B data
-file, answers them, and installs the pairwise and group keys with
-.BI txkey " bssid " ccmp: key @ iv
-and
-.BI rxkey n " bssid " ccmp: key @ iv
-on the same
+file, answers them, and installs the pairwise and group keys on the same
 .B ctl
-file.
+file:
+.IP
+.EX
+txkey \fIbssid\fP ccmp:\fIkey\fP@\fIiv\fP
+rxkey\fIn\fP \fIbssid\fP ccmp:\fIkey\fP@\fIiv\fP
+.EE
+.PP
 When the driver drops the association it closes the queue,
 .I wpa
 reads end of file, and the whole sequence begins again.

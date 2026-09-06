@@ -160,7 +160,7 @@ Config (env, read at start):
 | `CODEX_GATE_QUOTA_RESET_GRACE` | `30` | grace after a minute-precision reset time before retrying |
 | `CODEX_GATE_SANDBOX` | `read-only` | `--sandbox` value |
 | `CODEX_GATE_WORKDIR` | `~/.cache/codex-gate/workdir` | `--cd` value |
-| `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child; use `--prepare-home` for an isolated campaign |
+| `CODEX_GATE_CODEX_HOME` | *(unset)* | `CODEX_HOME` for the child, to isolate `~/.codex` (you must copy `auth.json` in yourself) |
 | `CODEX_GATE_EXEC_ARGS` | *(empty)* | extra args appended to every `codex exec` |
 | `CODEX_GATE_PROMPT_ARGV` | *(unset)* | `1` = pass the prompt as argv instead of stdin |
 | `CODEX_GATE_HARDEN` | `1` | pin the CLI feature surface (see below); `0` disables the pinning but never the adapter's own `--disable shell_tool` |
@@ -168,30 +168,6 @@ Config (env, read at start):
 | `CODEX_GATE_HOME_ALLOW` | `auth.json,auth.json.lock,version.json,installation_id` | what the isolated Codex home may contain at startup |
 | `CODEX_GATE_MOCK`, `CODEX_GATE_DEBUG` | — | test backend, verbose logs |
 | `CODEX_GATE_MOCK_ERROR_SYSTEM_MATCH` | *(empty)* | mock-only fault selector; inject the configured mock error only when the system prompt contains this exact text |
-
-For an isolated campaign, never reuse a previous campaign's OAuth file. Create
-a fresh login source and hand only its newly issued credential to a new gateway
-home:
-
-```sh
-login_home=$(mktemp -d "${TMPDIR:-/tmp}/codex-login.XXXXXX")
-campaign_home="${TMPDIR:-/tmp}/codex-campaign-$(date -u +%Y%m%dT%H%M%SZ)"
-chmod 700 "$login_home"
-CODEX_HOME="$login_home" codex login --device-auth
-tools/codex-gate/serve-codex-gate.sh \
-  --prepare-home "$login_home" "$campaign_home"
-CODEX_GATE_CODEX_HOME="$campaign_home" \
-  tools/codex-gate/serve-codex-gate.sh
-```
-
-Current Codex releases may create `log/` and `tmp/` during login. The handoff
-accepts those only in the private login source and copies only a non-empty,
-regular, mode-0600 `auth.json` into a newly created mode-0700 destination. It
-rejects an existing destination, symlinks, configuration, plugins, skills, and
-other inherited state. The login source is left untouched: retain it privately
-until the campaign is over, log out using the active campaign home, then remove
-both credential directories. Do not archive either directory with evidence;
-use `--inventory` to record hashes and metadata only.
 
 ## Pinned CLI surface
 

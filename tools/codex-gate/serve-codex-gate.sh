@@ -10,11 +10,10 @@
 #   serve-codex-gate.sh              # 127.0.0.1:11436, codex CLI backend
 #   serve-codex-gate.sh --mock       # deterministic mock backend (tests)
 #   serve-codex-gate.sh --inventory  # hash the CLI's model-side state, exit
-#   serve-codex-gate.sh --prepare-home LOGIN_HOME CAMPAIGN_HOME
 #   serve-codex-gate.sh --help
 #
-# Auth: the Codex CLI's own login is used. For an isolated campaign, run login
-# in a fresh home, then use --prepare-home to copy only its OAuth credential.
+# Auth: the Codex CLI's own login is used — run `codex login` once for this
+# user (ChatGPT sign-in). The gate never handles credentials itself.
 
 set -euo pipefail
 
@@ -22,7 +21,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 VENV="$HERE/.venv"
 
 print_help() {
-	sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -49,5 +48,6 @@ fi
 # Billing guard: an inherited API key can override ChatGPT auth in the CLI.
 unset OPENAI_API_KEY
 
-# Remaining maintenance arguments go to the gate; the server mode takes none.
+# Remaining arguments (--inventory [HOME]) go to the gate; the server mode
+# takes none.
 exec "$VENV/bin/python" "$HERE/codex_gate.py" "$@"

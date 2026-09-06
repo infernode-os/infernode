@@ -38,7 +38,8 @@ to the conversation's
 .B ctl
 file if
 .B -s
-was given,
+was given \(em quoted, so a name containing spaces survives the
+kernel's ctl parser \(em
 waits for the interface's
 .B ifstats
 to report

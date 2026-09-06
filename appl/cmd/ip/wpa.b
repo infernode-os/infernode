@@ -131,8 +131,14 @@ init(nil: ref Draw->Context, args: list of string)
 	# the essid once and this program follow it.
 	#
 	if(essid != ""){
-		if(sys->fprint(cfd, "essid %s", essid) < 0)
-			fatal(sys->sprint("essid %s: %r", essid));
+		#
+		# Quoted, because the kernel's ctl parser splits on
+		# spaces and an unquoted "My Network" would reach the
+		# driver as two fields and be refused. Its tokenizer
+		# takes rc-style single quotes, which is what %q emits.
+		#
+		if(sys->fprint(cfd, "essid %q", essid) < 0)
+			fatal(sys->sprint("essid %q: %r", essid));
 	}else{
 		essid = ifstats("essid:");
 		if(essid == nil || essid == "")

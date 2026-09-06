@@ -1797,6 +1797,14 @@ and it is the last of the kernel's side: after it, what is missing
 between a Pi and an address on a WiFi network is a supplicant and a
 DHCP client, and both of those are Limbo programs outside the kernel.
 
+*Both exist now.* The supplicant is `appl/cmd/ip/wpa.b`; the DHCP
+client is `appl/lib/dhcpclient.b`, which `ip/dhcp` loads. Until
+2026-09-06 that library was a `module/dhcp.m` interface with no source
+anywhere in the tree, so the `ip/dhcp /net/ether1` this document and
+`docs/WIFI-WPA2.md` both end with failed with "module not loaded" —
+a board with an associated, keyed, frame-passing radio and no way to
+ask for an address. See `dhcpclient(2)`.
+
 **The frame path.** Out, the discipline is the firmware's. Every
 packet the dongle sends up carries a credit window byte and a
 flow-control mask, and the host may send only while its own sequence
@@ -2601,6 +2609,13 @@ releases the data path from the console and runs the driver again.
 Mouse unplug and replug verified on the board. Still open: link
 monitoring (`nif.link` is 1 for ever), `lanphy` returning success
 without link, DHCP renewal.
+
+*Renewal, partly, 2026-09-06:* `appl/lib/dhcpclient.b` renews at T1,
+rebinds at T2 and gives the address up when the lease is gone, and
+`ip/dhcp` uses it. `etherusb.b` still speaks its own one-shot exchange
+and does not renew; a boot that gets its address from the driver keeps
+it until it stops working. Making the driver load the library is the
+remaining half.
 
 **10. The DWC read path, hardware edition.** No cache *invalidate*
 after DMA completes (`usbdwc.c` cleans before, `memmove`s after) —

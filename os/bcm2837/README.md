@@ -1535,6 +1535,46 @@ which QEMU tolerates whether or not the card agreed. High-speed mode
 (CMD6, 50MHz) is deliberately not attempted: 25MHz is the conservative
 first thing to run on silicon that has never run this driver.
 
+## Joining a network before anyone logs in
+
+A board left at a login screen has no user, and so no user's secstore,
+and so no key. Every system this port descends from answers that the
+same way, and none of them by encryption.
+
+Plan 9's `factotum -S` takes the machine's key from NVRAM at boot,
+"typically used by the kernel at boot time" (factotum(4)); and
+`readnvram` (authsrv(2)) on a PC tries, in order, the partition named
+by `$nvram`, the partition `#S/sdC0/nvram`, and then *a file called
+`plan9.nvr` in the FAT boot partition*. Inferno's own `keyfs -n`
+reads its master key from a file rather than prompting, and its manual
+says what that costs: "obviously that file should be well-protected
+from ordinary observers". 9front inherits the same NVRAM mechanism,
+and for wireless in particular its `wpa(8)` says the key "has to be
+already present in factotum" -- there is no upstream automation for an
+unattended wireless key at all.
+
+So: a plain file on the card, `/n/dos/wifi`, read at boot as DATA and
+never executed, holding
+
+    essid    My Network
+    password the passphrase, to the end of the line
+
+Anyone holding the card holds the key. That is the whole of the
+protection, it is what plan9.nvr offers, and this document will not
+dress it up as more.
+
+The feature is off unless the file exists: a board nobody has
+configured behaves exactly as it did before. When it does exist, init
+starts a factotum **in a namespace of its own** -- so the desktop's
+factotum, which login puts at the same place from your secstore, is
+untouched -- hands it the key the way a person would, runs the
+supplicant, and asks for an address. The supplicant still takes its
+passphrase only from factotum; that rule is not bent here, the key
+simply arrives from the card instead of from a person.
+
+For a machine someone logs in to, none of this is wanted: put the key
+in your secstore, where login already finds the rest of them.
+
 ## The WiFi firmware lives on the card, not in the tree
 
 The CYW43455 is a FullMAC radio with no firmware of its own: at every

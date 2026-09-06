@@ -250,6 +250,7 @@ init()
 	# names no path: this is where the paths come from.
 	#
 	radiosetup();
+	wifisetup();
 
 	#
 	# Spawned, and the shell starts straight after it.
@@ -1233,6 +1234,7 @@ netshell(fd: ref Sys->FD, tok: string)
 # Mount an in-memory filesystem on /tmp.
 #
 Firmwaredir: con "/n/dos/firmware";
+Wififile: con "/n/dos/wifi";
 
 radiosetup()
 {
@@ -1255,6 +1257,205 @@ radiosetup()
 		sys->print("init: radio: firmware: %r\n");
 	else
 		sys->print("init: radio: firmware loaded\n");
+}
+
+#
+# Join a wireless network before anyone has logged in.
+#
+# The key has to come from somewhere the machine can read by itself,
+# and on a board with no secure store that means a plain file on the
+# card, protected by whoever can hold the card and by nothing else.
+# That is what Plan 9 does -- factotum -S takes the machine's key from
+# NVRAM at boot, and on a PC readnvram's last resorts are a partition
+# called nvram and a file called plan9.nvr in the FAT boot partition --
+# and what Inferno's own keyfs(4) does with -n, whose manual says
+# plainly that "obviously that file should be well-protected from
+# ordinary observers". We say it too, in those words, in the README.
+#
+# The file is DATA and is never executed: "name value" a line, unknown
+# names ignored, and the whole feature off unless the file exists, so a
+# board nobody has configured behaves exactly as it did before.
+#
+#	essid    My Network
+#	password the passphrase, rest of line
+#
+# The supplicant takes its passphrase only from factotum, which is
+# right and is not weakened here: this hands factotum the key the way a
+# person would, in a namespace of its own so the desktop's factotum is
+# untouched.
+#
+wifisetup()
+{
+	(txt, found) := slurp(Wififile);
+	if(!found)
+		return;			# not configured; nothing to say
+	(essid, pass) := wifikey(txt);
+	if(essid == nil){
+		sys->print("init: wifi: %s names no essid\n", Wififile);
+		return;
+	}
+	if(pass == nil){
+		sys->print("init: wifi: %s has no password for %s\n", Wififile, essid);
+		return;
+	}
+	spawn wifijoin(essid, pass);
+	pass = nil;
+}
+
+#
+# One "name value" line at a time; the value is the rest of the line,
+# because a network name and a passphrase may both contain spaces.
+#
+wifikey(txt: string): (string, string)
+{
+	essid, pass: string;
+
+	for(i := 0; i < len txt;){
+		j := i;
+		while(j < len txt && txt[j] != '\n')
+			j++;
+		line := txt[i:j];
+		i = j + 1;
+		k := 0;
+		while(k < len line && line[k] != ' ' && line[k] != '\t')
+			k++;
+		name := line[0:k];
+		while(k < len line && (line[k] == ' ' || line[k] == '\t'))
+			k++;
+		val := line[k:];
+		case name {
+		"essid" =>	essid = val;
+		"password" =>	pass = val;
+		}
+	}
+	return (essid, pass);
+}
+
+wifijoin(essid, pass: string)
+{
+	#
+	# A namespace of its own. factotum binds itself on /mnt/factotum
+	# and the root filesystem is read only, so the mount point has to
+	# be made in the memory filesystem -- and doing that in the shared
+	# namespace would put this factotum where the desktop expects to
+	# put its own after login.
+	#
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("/tmp", "/mnt", Sys->MBEFORE|Sys->MCREATE) < 0){
+		sys->print("init: wifi: cannot make /mnt writable: %r\n");
+		return;
+	}
+	sys->create("/mnt/factotum", Sys->OREAD, Sys->DMDIR|8r700);
+	fact := load Command "/dis/auth/factotum.dis";
+	if(fact == nil){
+		sys->print("init: wifi: cannot load factotum: %r\n");
+		return;
+	}
+	fact->init(nil, "factotum" :: nil);
+	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: wifi: factotum did not start: %r\n");
+		return;
+	}
+	if(sys->fprint(fd, "key proto=wpapsk role=client essid=%q !password=%q", essid, pass) < 0){
+		sys->print("init: wifi: factotum refused the key: %r\n");
+		return;
+	}
+	fd = nil;
+	pass = nil;
+	if(sys->bind("#l1", "/net", Sys->MAFTER) < 0){
+		sys->print("init: wifi: no radio: %r\n");
+		return;
+	}
+	wpa := load Command "/dis/ip/wpa.dis";
+	if(wpa == nil){
+		sys->print("init: wifi: cannot load ip/wpa: %r\n");
+		return;
+	}
+	#
+	# Twice, because the first association after a boot fails on this
+	# board about as often as it succeeds and the second does not.
+	# That is a defect in its own right, recorded as such; retrying is
+	# what makes the boot work while it stands.
+	#
+	for(try := 0; try < 2; try++){
+		spawn wpa->init(nil, "wpa" :: "-s" :: essid :: "/net/ether1" :: nil);
+		for(w := 0; w < 20; w++){
+			sys->sleep(1000);
+			if(associated())
+				break;
+		}
+		if(associated())
+			break;
+	}
+	if(!associated()){
+		sys->print("init: wifi: %s did not associate\n", essid);
+		return;
+	}
+	sys->print("init: wifi: associated with %s\n", essid);
+	wifiaddr();
+}
+
+associated(): int
+{
+	(st, nil) := slurp("/net/ether1/ifstats");
+	for(i := 0; i + 11 <= len st; i++)
+		if(st[i:i+11] == "associated\n")
+			return 1;
+	return 0;
+}
+
+#
+# A whole small file, and whether it was there at all -- the two are
+# different questions and an empty file answers only the second.
+#
+slurp(name: string): (string, int)
+{
+	fd := sys->open(name, Sys->OREAD);
+	if(fd == nil)
+		return ("", 0);
+	s := "";
+	buf := array[512] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s += string buf[0:n];
+	}
+	return (s, 1);
+}
+
+#
+# An address for the radio: an interface of our own bound to it, and
+# the DHCP client, which adds and removes the placeholder address the
+# stack needs before it will send anything.
+#
+wifiaddr()
+{
+	c := sys->open("/net/ipifc/clone", Sys->ORDWR);
+	if(c == nil){
+		sys->print("init: wifi: cannot clone an interface: %r\n");
+		return;
+	}
+	nbuf := array[32] of byte;
+	n := sys->read(c, nbuf, len nbuf);
+	if(n <= 0){
+		sys->print("init: wifi: ipifc clone gave no number\n");
+		return;
+	}
+	ifcno := string nbuf[0:n];
+	if(sys->fprint(c, "bind ether /net/ether1") < 0){
+		sys->print("init: wifi: bind ether failed: %r\n");
+		return;
+	}
+	dhcp := load Command "/dis/ip/dhcp.dis";
+	if(dhcp == nil){
+		sys->print("init: wifi: cannot load ip/dhcp: %r\n");
+		return;
+	}
+	dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
+	(ndb, nil) := slurp("/net/ndb");
+	sys->print("init: wifi: %s\n", ndb);
 }
 
 tmpsetup()

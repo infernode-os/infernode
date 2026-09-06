@@ -1144,9 +1144,28 @@ dhcp(net: string, ctlifc: ref Sys->FD, device: string, req: ref Bootconf,
 	(s, e) := newsession(net, ctlifc, device, req);
 	if(e != nil)
 		return (nil, nil, e);
+	#
+	# The stack will not send from an interface that has no address
+	# at all, and an interface about to ask for one has none by
+	# definition. 0.0.0.0 is what makes the interface speakable;
+	# applycfg takes it off again when a real address arrives, and
+	# the failure path below takes it off when none does. A caller
+	# that has already put one there loses nothing: adding it twice
+	# is not an error, and we only remove what we added.
+	#
+	placeheld := 0;
+	if(ctlifc != nil && !hasaddr(net, ctlifc)){
+		if(sys->fprint(ctlifc, "add %s %s", Anyaddr, Anyaddr) < 0){
+			closesession(s);
+			return (nil, nil, sys->sprint("cannot add %s to the interface: %r", Anyaddr));
+		}
+		placeheld = 1;
+	}
 	s.params = mkparams(options);
 	(conf, de) := discover(s);
 	if(de != nil){
+		if(placeheld)
+			sys->fprint(ctlifc, "remove %s %s", Anyaddr, Anyaddr);
 		closesession(s);
 		return (nil, nil, de);
 	}
@@ -1173,6 +1192,32 @@ dhcp(net: string, ctlifc: ref Sys->FD, device: string, req: ref Bootconf,
 }
 
 # --- applying a configuration --------------------------------------
+
+#
+# Whether the interface behind this ctl file already has an address.
+# The ctl file's directory holds a status file listing them, one per
+# line after the first; an interface with none has only the header.
+#
+hasaddr(net: string, ctlifc: ref Sys->FD): int
+{
+	if(ctlifc == nil)
+		return 0;
+	#
+	# The ctl and status files sit side by side, and the caller named
+	# the directory to open ctl in the first place, so status is one
+	# name away. Read it whole: it is a handful of lines.
+	#
+	for(i := 0; i < 16; i++){
+		st := readfile(sys->sprint("%s/ipifc/%d/status", net, i));
+		if(st == nil)
+			continue;
+		# a line beginning with a tab is an address on this interface
+		for(j := 0; j + 1 < len st; j++)
+			if(st[j] == '\n' && st[j+1] == '\t')
+				return 1;
+	}
+	return 0;
+}
 
 applycfg(net: string, ctlifc: ref Sys->FD, conf: ref Bootconf): string
 {

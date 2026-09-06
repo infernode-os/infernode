@@ -32,15 +32,22 @@ opens a conversation on
 .IR interface ,
 connects it to ethernet type
 .BR 0x888e ,
-writes
-.BI essid " name"
-to the conversation's
+writes the RSN information element for WPA2-PSK with CCMP to the
+conversation's
 .B ctl
-file if
+file as
+.BI auth " ie"\fR,
+then
+.BI essid " name"
+if
 .B -s
 was given \(em quoted, so a name containing spaces survives the
-kernel's ctl parser \(em
-waits for the interface's
+kernel's ctl parser.
+The order is load-bearing: writing the name is what starts the
+association, and a radio told to associate before it has been told
+what protection to ask for offers none, so the access point refuses it.
+.I Wpa
+then waits for the interface's
 .B ifstats
 to report
 .BR "status: associated" ,

@@ -1800,7 +1800,7 @@ DHCP client, and both of those are Limbo programs outside the kernel.
 *Both exist now.* The supplicant is `appl/cmd/ip/wpa.b`; the DHCP
 client is `appl/lib/dhcpclient.b`, which `ip/dhcp` loads. Until
 2026-09-06 that library was a `module/dhcp.m` interface with no source
-anywhere in the tree, so the `ip/dhcp /net/ether1` this document and
+anywhere in the tree, so the `ip/dhcp` this document and
 `docs/WIFI-WPA2.md` both end with failed with "module not loaded" —
 a board with an associated, keyed, frame-passing radio and no way to
 ask for an address. See `dhcpclient(2)`.
@@ -2181,7 +2181,10 @@ up:
    it is the only common cause.
 4. `cat /net/ether1/ifstats` again. `status: associated`, and the driver
    should now report `crypt: wpa2`.
-5. `bind -a '#I' /net; ip/dhcp /net/ether1`. Expect an address, and
+5. Clone an IP interface, bind it to the radio, and ask for an
+   address -- `ip/dhcp` takes an ipifc directory, not an ether device:
+   `` n=`{cat /net/ipifc/clone} ``, `echo bind ether /net/ether1 >
+   /net/ipifc/$n/ctl`, `ip/dhcp /net/ipifc/$n`. Expect an address, and
    `ip/ping <gateway>` to answer. This is the only step that proves the
    keys the firmware was given are the keys the access point is using:
    everything before it would look identical with a transmit key that

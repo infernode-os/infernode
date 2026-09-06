@@ -131,7 +131,6 @@ Session: adt {
 
 sessions: list of ref Session;
 lock: chan of int;
-ndbtext: string;		# the block applycfg appended to net/ndb
 
 init()
 {
@@ -1221,7 +1220,7 @@ removecfg(net: string, ctlifc: ref Sys->FD, conf: ref Bootconf): string
 		if(r != nil)
 			sys->fprint(r, "delete %s %s", Anyaddr, Anyaddr);
 	}
-	dropndb(net);
+	dropndb(net, conf.ip);
 	if(conf.ip == nil)
 		return nil;
 	mask := conf.ipmask;
@@ -1255,9 +1254,15 @@ writendb(net: string, conf: ref Bootconf)
 		s += sys->sprint("\tfs=%s\n", hd l);
 	for(l = conf.getips(OP9auth); l != nil; l = tl l)
 		s += sys->sprint("\tauth=%s\n", hd l);
-	old := readfile(net+"/ndb");
-	if(ndbtext != nil)
-		old = without(old, ndbtext);
+	#
+	# Keyed by the address, not by a module global. The global was
+	# one string for the whole program, so a second interface
+	# configured in the same process stripped the first one's block
+	# on its way past. A block is ours if its first line names the
+	# address we are writing, which is true no matter how many
+	# interfaces a process brings up or in what order.
+	#
+	old := stripblock(readfile(net+"/ndb"), conf.ip);
 	fd := ndbfd(net);
 	if(fd == nil){
 		trace(sys->sprint("cannot write %s/ndb: %r", net));
@@ -1267,7 +1272,6 @@ writendb(net: string, conf: ref Bootconf)
 	b := array of byte t;
 	if(sys->write(fd, b, len b) != len b)
 		trace(sys->sprint("short write to %s/ndb: %r", net));
-	ndbtext = s;
 }
 
 #
@@ -1286,17 +1290,48 @@ ndbfd(net: string): ref Sys->FD
 	return fd;
 }
 
-dropndb(net: string)
+#
+# The text with the block for this address removed: its first line is
+# "ip=<ip> ...", and the lines that belong to it are the indented ones
+# that follow.
+#
+stripblock(text: string, ip: string): string
 {
-	if(ndbtext == nil)
+	if(text == nil || ip == nil)
+		return text;
+	pfx := "ip=" + ip + " ";
+	out := "";
+	skipping := 0;
+	for(i := 0; i < len text;){
+		j := i;
+		while(j < len text && text[j] != '\n')
+			j++;
+		if(j < len text)
+			j++;
+		line := text[i:j];
+		if(len line > 0 && (line[0] == ' ' || line[0] == '\t')){
+			if(!skipping)
+				out += line;
+		}else{
+			skipping = len line >= len pfx && line[0:len pfx] == pfx;
+			if(!skipping)
+				out += line;
+		}
+		i = j;
+	}
+	return out;
+}
+
+dropndb(net: string, ip: string)
+{
+	if(ip == nil)
 		return;
-	old := without(readfile(net+"/ndb"), ndbtext);
+	old := stripblock(readfile(net+"/ndb"), ip);
 	fd := ndbfd(net);
 	if(fd != nil){
 		b := array of byte old;
 		sys->write(fd, b, len b);
 	}
-	ndbtext = nil;
 }
 
 readfile(f: string): string
@@ -1493,8 +1528,21 @@ watchdog(s: ref Session, pc: chan of int)
 		lease := s.conf.lease;
 		if(lease <= 0)
 			break;
-		t1 := lease / 2;
-		t2 := (lease * 7) / 8;
+		#
+		# The server's own T1 and T2 when it sent them (options 58
+		# and 59), which RFC 2131 4.4.5 says are its to choose;
+		# half and seven-eighths of the lease only when it did
+		# not. They were requested and decoded and then ignored,
+		# so a server that wanted an early renewal did not get one.
+		# Nonsense values -- zero, out of order, past the lease --
+		# fall back rather than being obeyed.
+		#
+		t1 := s.conf.getint(Orenewaltime);
+		t2 := s.conf.getint(Orebindingtime);
+		if(t1 <= 0 || t1 >= lease)
+			t1 = lease / 2;
+		if(t2 <= t1 || t2 >= lease)
+			t2 = (lease * 7) / 8;
 		if(napsecs(s, t1))
 			break;
 		e := "";
@@ -1504,9 +1552,22 @@ watchdog(s: ref Session, pc: chan of int)
 			e = "no server identifier";
 		if(e != nil){
 			trace("renewal failed: " + e);
-			if(napsecs(s, t2 - t1))
-				break;
-			e = renew(s, Bcast, 2);	# rebinding
+			#
+			# A NAK is not a timeout. The server has refused
+			# this address, so re-asserting it in REBINDING
+			# would be asking a second server to honour a
+			# lease the first has just taken away; RFC 2131
+			# 4.4.5 sends the client back to the beginning.
+			#
+			if(e == "DHCPNAK")
+				e = "refused";
+			else{
+				if(napsecs(s, t2 - t1))
+					break;
+				e = renew(s, Bcast, 2);	# rebinding
+				if(e == "DHCPNAK")
+					e = "refused";
+			}
 		}
 		if(e == nil)
 			continue;

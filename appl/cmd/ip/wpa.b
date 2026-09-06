@@ -309,7 +309,14 @@ init(nil: ref Draw->Context, args: list of string)
 		# the ones that get through say how long this has been
 		# going on and how many attempts it has taken.
 		#
-		if(say.due(retry + waited)){
+		#
+		# Added, not summed: both terms saturate at Maxms on their
+		# own and their sum wraps negative, which Sparse.due's
+		# guard (ms > 0) then lets straight through -- so the
+		# rationing would have failed open at exactly the moment
+		# it had been running longest.
+		#
+		if(say.due(addms(retry, waited))){
 			if(say.said == 1)
 				report("link lost; re-associating");
 			else
@@ -454,6 +461,20 @@ nonce(): array of byte
 #	"20s", then "40s", then "1m20s", then "2m40s" is a radio that has
 #	not found the network, and it reads as one at a glance.
 #
+#
+# Two millisecond counts, added without wrapping. Every caller of
+# Sparse.due passes an interval, and a negative one is not an
+# interval.
+#
+addms(a, b: int): int
+{
+	if(a < 0 || b < 0)
+		return Maxms;
+	if(a > Maxms - b)
+		return Maxms;
+	return a + b;
+}
+
 associate(cfd: ref Sys->FD, rsne: array of byte, announce: int): int
 {
 	waited := 0;

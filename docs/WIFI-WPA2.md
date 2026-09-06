@@ -81,7 +81,9 @@ ethernet interface and the rest is the usual:
 
 ```
 bind -a '#I' /net
-ip/dhcp /net/ether1
+n=`{cat /net/ipifc/clone}
+echo bind ether /net/ether1 > /net/ipifc/$n/ctl
+ip/dhcp /net/ipifc/$n
 ```
 
 ## What the console says

@@ -460,6 +460,9 @@ enum
 	Nrq
 };
 
+/* INFR-458 canary value; see the guards inside struct Proc */
+#define	Procguard	0x9E77ED9E77EDULL
+
 struct Proc
 {
 	Label		sched;		/* known to l.s */
@@ -498,7 +501,35 @@ struct Proc
 	FPU		fpsave;
 	int		scallnr;
 	int		inpreempt;	/* preemption in flight for this proc */
+	/*
+	 * Canaries, and they are an experiment, not decoration.
+	 *
+	 * INFR-458: nerrlab is repeatedly found holding 0x12000000 --
+	 * an ordinary RAM address on this 948MB board -- a few
+	 * instructions after errlabcheck() validated it as being under
+	 * NERR. waserror() then computes &errlab[nerrlab-1] and stores a
+	 * Label 0x750000000 (which is 0x12000000 * sizeof(Label)) past a
+	 * perfectly good Proc.
+	 *
+	 * So something writes a pointer into these four bytes. Bracketing
+	 * them says WHAT KIND of something:
+	 *
+	 *   guard1 hit  -> the store is 64 bits landing at the old
+	 *                  nerrlab offset, i.e. aimed by an offset that
+	 *                  no longer matches this struct
+	 *   guard2 hit  -> it overruns forwards from nerrlab
+	 *   neither hit, nerrlab still corrupted at its NEW offset
+	 *               -> the writer computes the offset from the
+	 *                  current definition, so it is type confusion
+	 *                  rather than a stale layout
+	 *
+	 * Moving nerrlab by eight bytes is the whole point: if the
+	 * corruption follows the field it is computed, and if it stays
+	 * behind it is hardcoded.
+	 */
+	uvlong		guard1;
 	int		nerrlab;
+	uvlong		guard2;
 	Label		errlab[NERR];
 	char	genbuf[128];	/* buffer used e.g. for last name element from namec */
 	Mach*		mp;		/* machine this process last ran on */

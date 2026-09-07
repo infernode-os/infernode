@@ -504,6 +504,8 @@ newproc(void)
 	kstrdup(&p->env->user, "*nouser");
 	p->env->errstr = p->env->errbuf0;
 	p->env->syserrstr = p->env->errbuf1;
+	p->guard1 = Procguard;
+	p->guard2 = Procguard;
 
 	p->pid = incref(&pidalloc);
 	if(p->pid == 0)
@@ -897,6 +899,11 @@ errlabcheck(void)
 		panic("waserror: up %#p is outside the Proc arena %#p..%#p, pc %lux",
 			p, procalloc.arena, procalloc.arena + conf.nproc,
 			getcallerpc(&up));
+	if(p->guard1 != Procguard || p->guard2 != Procguard)
+		panic("waserror: Proc canaries broken in %lud:%s -- "
+			"guard1 %#llux guard2 %#llux nerrlab %#ux pc %lux",
+			p->pid, p->text, p->guard1, p->guard2,
+			(uint)p->nerrlab, getcallerpc(&up));
 	n = p->nerrlab;
 	if(n >= NERR)
 		panic("waserror: error stack overflow, nerrlab %d in %lud:%s pc %lux",

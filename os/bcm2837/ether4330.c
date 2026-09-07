@@ -206,6 +206,7 @@ enum
 	Nocard		= 2,		/* consecutive silent CMD5s = no radio */
 	Ioreadytries	= 10,		/* x100ms: a function to enable */
 	Cmdtimeout	= 5000,		/* ms: the firmware to answer a command */
+	Intwaitmax	= 5000,		/* ms: the dongle to say anything at all */
 	Jointimeout	= 5000,		/* ms: the firmware to report an association */
 
 	/* the link, as ifstats reports it and a supplicant polls it */
@@ -1514,8 +1515,21 @@ intwait1(Ctlr *ctlr, int wait)
 {
 	u32int ints, mbox;
 	int i;
+	ulong start;
 
+	/*
+	 * Bounded for the same reason the card-interrupt wait below it
+	 * is: this loop polls until the dongle says something, and a
+	 * dongle that has stopped saying anything kept this process here
+	 * for ever. Returning is safe -- the reader simply calls back in
+	 * -- and it is what lets a bind holding the IP write lock finish
+	 * and release it instead of taking the whole machine down with a
+	 * dead radio (INFR-467).
+	 */
+	start = TK2MS(MACHP(0)->ticks);
 	for(;;){
+		if(TK2MS(MACHP(0)->ticks) - start >= Intwaitmax)
+			return;
 		sdio->cardintr(wait);
 		if(sbwindow(ctlr->sdregs) < 0)
 			return;

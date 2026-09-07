@@ -70,6 +70,7 @@ enum
 	Datawait	= 500000,	/* 500ms for a block to move */
 	Resetwait	= 100000,	/* 100ms for a circuit reset to finish */
 	Pollstep	= 10,
+	Cardintrwait	= 2000,		/* ms: a card interrupt, before giving up */
 };
 
 static struct
@@ -543,10 +544,31 @@ static int
 arasancardintr(int wait)
 {
 	u32int i;
+	ulong start;
 
 	emmcwr(Emmcinterrupt, Cardintr);
+	start = TK2MS(MACHP(0)->ticks);
 	while(((i = emmcrd(Emmcinterrupt)) & Cardintr) == 0){
 		if(!wait)
+			return 0;
+		/*
+		 * Bounded, because the caller is holding more than its own
+		 * progress.
+		 *
+		 * This used to wait forever for the card to raise its
+		 * interrupt. When the radio stops answering it never does,
+		 * and the process that called this is typically deep inside
+		 * an interface bind with the IP stack's write lock held --
+		 * so everything that touches /net queues behind a driver
+		 * waiting on hardware that is gone, and the machine looks
+		 * dead while the kernel is perfectly healthy. That was
+		 * INFR-467 and INFR-469, seen every ten minutes on some
+		 * boots.
+		 *
+		 * Giving up leaves a broken radio, which is a bad
+		 * afternoon. Not giving up takes the machine.
+		 */
+		if(TK2MS(MACHP(0)->ticks) - start >= Cardintrwait)
 			return 0;
 		tsleep(&arasan.cardr, cardintready, nil, 1);
 	}

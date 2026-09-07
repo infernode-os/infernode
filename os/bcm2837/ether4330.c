@@ -3283,11 +3283,29 @@ ether4330probe(void)
 	/*
 	 * WL_REG_ON, the radio's power enable, is on the firmware's GPIO
 	 * expander, not a BCM pin: pin 129 on the 3B+ (Linux's
-	 * wifi_pwrseq, expgpio 1). The firmware normally leaves it on;
-	 * asserting it here and giving the regulator its 150ms is what
-	 * Linux does before the first CMD5, and costs nothing if it was
-	 * already on.
+	 * wifi_pwrseq, expgpio 1).
+	 *
+	 * Taken LOW first, then high. This used to assert it high and
+	 * nothing else, on the reasoning that the firmware normally
+	 * leaves it on so raising it costs nothing. True, and it means
+	 * the line is never lowered, so the radio is never actually
+	 * reset -- a soft reboot hands the next kernel a chip in
+	 * whatever state the last one left it in.
+	 *
+	 * That is not hypothetical. Once the SDIO path wedged
+	 * (INFR-467), every subsequent soft reboot came up with the
+	 * radio either refusing to associate or associating and never
+	 * completing DHCP, and only pulling the board's power cleared
+	 * it. A driver that cannot reset its own device has to borrow
+	 * the operator's hands.
+	 *
+	 * 20ms low is what Linux's wifi_pwrseq holds for; 150ms high
+	 * afterwards is the regulator's own settling time, which was
+	 * already here and is what the first CMD5 waits on.
 	 */
+	if(mboxsetgpio(Wlregon, 0) < 0)
+		uartputstr("ether4330: WL_REG_ON low: mailbox refused; trying anyway\n");
+	microdelay(20000);
 	if(mboxsetgpio(Wlregon, 1) < 0)
 		uartputstr("ether4330: WL_REG_ON: mailbox refused; trying anyway\n");
 	microdelay(150000);

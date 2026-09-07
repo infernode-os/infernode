@@ -335,6 +335,11 @@ build_kernel() {
             "/usb="
             "/chan="
             "/env="
+            # Empty, like /usr: a mount point for the card's artwork.
+            # /dis, /lib and /fonts exist because files are compiled
+            # into them; /icons has none, so it has to be declared or
+            # init has nothing to bind the card's icons over.
+            "/icons="
             "/dis/sh.dis=$ROOT/dis/sh.dis"
             "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
             "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"

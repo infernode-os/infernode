@@ -19,6 +19,9 @@
 #include "ureg.h"
 #include "fns.h"
 
+/* kernel image bounds, from the linker script */
+extern char _start[], end[];
+
 /* ESR_EL1 exception class, bits 31:26 */
 #define ESRECSHIFT	26
 #define ESRECMASK	0x3F
@@ -169,11 +172,48 @@ dumpureg(Ureg *u)
 		}
 	}
 	uartputstr("\n");
+
+	/*
+	 * The same question asked a cruder way, because the polite way
+	 * fails exactly when it is needed.
+	 *
+	 * The walk above needs a credible x29, and a corrupted frame
+	 * pointer is the SIGNATURE of the bug this kernel keeps hitting.
+	 * A panic caught on 2026-09-07 arrived with x29 holding
+	 * 0xbadc0c0a -- the pool's free-block magic -- and so printed an
+	 * empty trace at the one moment a call chain would have named the
+	 * caller (INFR-458).
+	 *
+	 * So read the stack directly as well and print every word on it
+	 * that falls inside the kernel image. That finds saved link
+	 * registers wherever they lie, trusting no chain. It also finds
+	 * values that merely look like code addresses, so this is a list
+	 * of candidates to symbolise rather than a call stack; the order
+	 * still runs newest first, and the noise is obvious once
+	 * resolved. A stack full of candidates beats "trace:" followed by
+	 * nothing.
+	 */
+	if(up != nil && up->kstack != nil &&
+	   u->sp >= (uintptr)up->kstack && u->sp < (uintptr)up->kstack + KSTACK){
+		uintptr *p, *top, v;
+		int n;
+
+		uartputstr("  stack:  ");
+		p = (uintptr*)(u->sp & ~(uintptr)7);
+		top = (uintptr*)((uintptr)up->kstack + KSTACK);
+		for(n = 0; p < top && n < 24; p++){
+			v = *p;
+			if(v >= (uintptr)_start && v < (uintptr)end){
+				uartputx(v);
+				uartputstr(" ");
+				n++;
+			}
+		}
+		uartputstr("\n");
+	}
 	uartunlock(held);
 }
 
-/* kernel image bounds, from the linker script */
-extern char _start[], end[];
 
 static int panicking;
 

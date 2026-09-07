@@ -204,6 +204,7 @@ Cmdbuf*		parsecmd(char*, int);
 void		pexit(char*, int);
 void		pgrpcpy(Pgrp*, Pgrp*);
 void		poperrunder(void);
+int		procok(Proc*);
 #define		poperror()		(up->nerrlab > 0 ? (void)(up->nerrlab--) : poperrunder())
 int		poolread(char*, int, ulong);
 void		poolsize(Pool *, int, int);

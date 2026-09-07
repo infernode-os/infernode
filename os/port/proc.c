@@ -175,6 +175,9 @@ sched(void)
 		gotolabel(&m->sched);
 	}
 	up = runproc();
+	if(!procok(up))
+		panic("sched: runproc gave %#p, outside the Proc arena %#p..%#p",
+			up, procalloc.arena, procalloc.arena + conf.nproc);
 	/*
 	 * Reader half of schedinit's publish: mach==0 was checked under
 	 * the run-queue lock, but the Label about to be jumped through
@@ -832,6 +835,29 @@ errorf(char *fmt, ...)
  * simply overflows into the rest of Proc and the damage surfaces later
  * as a jump to a nonsense address.
  */
+/*
+ * Is this a Proc the allocator actually issued?
+ *
+ * procinit() takes the whole Proc array from xalloc in one go, so every
+ * legitimate Proc* is inside [arena, arena+conf.nproc) and nil is fine.
+ * Anything else did not come from here.
+ *
+ * This exists because of INFR-458. Three panics, weeks apart, on two
+ * different cores and through two unrelated drivers, all had `up`
+ * holding a real Proc address with 0x750000000 set in the top bits --
+ * the SAME constant every time, and one that appears nowhere in this
+ * tree as a literal. An invariant like that is one operation producing
+ * one wrong value, not memory being scribbled on, and the way to find
+ * it is to test the pointer somewhere it is cheap and say so loudly.
+ */
+int
+procok(Proc *p)
+{
+	if(p == nil)
+		return 1;
+	return p >= procalloc.arena && p < procalloc.arena + conf.nproc;
+}
+
 void
 errlabcheck(void)
 {
@@ -860,6 +886,17 @@ errlabcheck(void)
 	p = up;
 	if(p == nil)
 		panic("waserror: not in a process");
+	/*
+	 * Say what is wrong with it, rather than leaving the next reader
+	 * to work it out from a fault address. If this fires and the
+	 * check in sched() never did, the pointer was written correctly
+	 * and then overwritten, which is a very different bug from one
+	 * that was computed wrong.
+	 */
+	if(!procok(p))
+		panic("waserror: up %#p is outside the Proc arena %#p..%#p, pc %lux",
+			p, procalloc.arena, procalloc.arena + conf.nproc,
+			getcallerpc(&up));
 	n = p->nerrlab;
 	if(n >= NERR)
 		panic("waserror: error stack overflow, nerrlab %d in %lud:%s pc %lux",

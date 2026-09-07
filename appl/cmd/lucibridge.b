@@ -71,6 +71,11 @@ MAX_TOOL_FAILURES: con 3;
 lb_failstreak_tool := "";
 lb_failstreak_count := 0;
 
+# A native tool is a 9P request and may block on a faulty backend or special
+# file. Keep the bridge responsive so it can record the failed result and
+# drive the activity to a signed terminal state.
+TOOL_TIMEOUT: con 60000;
+
 # Tool tracking: raw string from /tool/tools; updated when tool set changes
 currenttoolsraw := "";
 toolmount := "/tool";	# "/tool" for activity 0, "/tool.N" for child N
@@ -658,6 +663,34 @@ toolresultstatus(name, content: string): string
 	   (name == "limbo" && agentlib->contains(lower, "status: failed")))
 		return "error";
 	return "success";
+}
+
+calltoolworker(name, args: string, resultch: chan of string)
+{
+	resultch <-= agentlib->calltool(name, args);
+}
+
+tooltimer(timeoutch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	timeoutch <-= 1;
+}
+
+calltoolbounded(name, args: string): string
+{
+	# Buffered channels let whichever sender loses the alt complete rather than
+	# leaving a timer or a late tool response blocked on its one-shot send.
+	resultch := chan[1] of string;
+	timeoutch := chan[1] of int;
+	spawn calltoolworker(name, args, resultch);
+	spawn tooltimer(timeoutch, TOOL_TIMEOUT);
+	alt {
+	result := <-resultch =>
+		return result;
+	<-timeoutch =>
+		return sys->sprint("error: tool '%s' timed out after %d seconds",
+			name, TOOL_TIMEOUT / 1000);
+	}
 }
 
 # lucibridge is a trusted process outside the activity namespace. The read
@@ -1860,7 +1893,7 @@ agentturn(input: string)
 				}
 				setstatus(nm);
 				log("tool " + name + ": calling with " + string len eargs + " bytes");
-				result := agentlib->calltool(name, eargs);
+				result := calltoolbounded(name, eargs);
 				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
 					actid, sessionid, step + 1, name, toolresultstatus(nm, result)), array of byte result);
 				agentlib->deduprecord(nm, eargs, result, step);

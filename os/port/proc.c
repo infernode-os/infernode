@@ -835,11 +835,35 @@ errorf(char *fmt, ...)
 void
 errlabcheck(void)
 {
-	if(up == nil)
+	Proc *p;
+	int n;
+
+	/*
+	 * up once, and the count once.
+	 *
+	 * `up` is not a variable: it is a volatile read of this core's
+	 * x28 followed by ->proc, so every mention of it is a fresh load
+	 * from memory. The old code named it twice in the same statement
+	 * -- test the count, then print the count -- and on 2026-09-07
+	 * that produced a panic which contradicted itself:
+	 *
+	 *   panic: waserror: error stack overflow, nerrlab 3 pc b3560
+	 *
+	 * NERR is 30. The value that tripped the test and the value that
+	 * reached the message were different reads, so the message named
+	 * a number that had never overflowed anything and cost an hour
+	 * of chasing a limit that had not been reached. Whatever is
+	 * writing that field from outside the process is a real bug and
+	 * still open, but the diagnostic must report the number it
+	 * actually judged.
+	 */
+	p = up;
+	if(p == nil)
 		panic("waserror: not in a process");
-	if(up->nerrlab >= NERR)
-		panic("waserror: error stack overflow, nerrlab %d pc %lux",
-			up->nerrlab, getcallerpc(&up));
+	n = p->nerrlab;
+	if(n >= NERR)
+		panic("waserror: error stack overflow, nerrlab %d in %lud:%s pc %lux",
+			n, p->pid, p->text, getcallerpc(&up));
 	/*
 	 * A NEGATIVE count is worse than a deep one, and this is the last
 	 * place it can be caught for free. waserror() is about to
@@ -850,9 +874,9 @@ errlabcheck(void)
 	 * about its own error stack and the damage surfaces somewhere
 	 * else entirely.
 	 */
-	if(up->nerrlab < 0)
+	if(n < 0)
 		panic("waserror: error stack underflowed to %d in %lud:%s pc %lux",
-			up->nerrlab, up->pid, up->text, getcallerpc(&up));
+			n, p->pid, p->text, getcallerpc(&up));
 }
 
 /*

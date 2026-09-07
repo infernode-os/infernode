@@ -579,7 +579,7 @@ restrictns(caps: ref Capabilities): string
 	(toolok, nil) := sys->stat("/tool");
 	if(toolok >= 0) {
 		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" ::
-			"budget" :: "walletbudget" :: "activity" :: nil;
+			"budget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)

@@ -7,16 +7,20 @@ tools9p \- serve a restricted Veltro tool and capability namespace
 .B -DvN
 ]
 [
-.B -P
-.I profile
-]
-[
 .B -a
 .I activity
 ]
 [
+.B -r
+.I role
+]
+[
 .B -m
 .I mountpoint
+]
+[
+.B -b
+.I tool,...
 ]
 [
 .B -p
@@ -30,67 +34,54 @@ serves the active Veltro tools and their effective namespace capabilities at
 Only named tools exist. Each invocation receives a namespace constructed by
 .IR nsconstruct .
 .PP
-Production profile declarations are directories below
-.BR /lib/veltro/profiles .
-Their scalar-file shape matches the read-only audit surface served at
-.BR /tool :
-.PP
-.nf
-	tools
-	paths
-	meta/role
-	meta/nodevs
-	meta/xenith
-	meta/actid
-	walletbudget        optional
-.fi
-.PP
-Use
-.B -P
-to materialize a profile. The option may be repeated; tools and paths form an
-additive union, while conflicting permissions or wallet budgets are errors.
-.PP
 The effective paths file uses records of the form
 .IR "path ro|rw|cow" .
 Activity scratch is always
 .B /tmp/veltro/scratch cow
 and is constructed specially. Passing that path with
 .B -p
-does not recursively grant or stage it.
-.PP
-A non-empty
-.B /tool/walletbudget
-is returned only when the dispatcher is enforcing that positive uint256,
-currency-specific aggregate limit before wallet tool dispatch. Budgeted
-profiles reject unmetered payment tools.
+does not recursively grant or stage it. Tools and ordinary path capabilities
+are selected explicitly on the command line; child provisioning can only
+narrow the declared delegation budget.
 .SH OPTIONS
 .TP
-.BI -P " profile"
-Load a canonical runtime profile. Repeat for additive composition.
+.B -D
+Enable 9P protocol tracing.
+.TP
+.B -v
+Enable verbose server logging.
 .TP
 .B -N
-Declare the NODEVS agent profile.
+Record that the agent namespace has NODEVS applied. This metadata must match
+the namespace constructed by the trusted launcher.
 .TP
 .BI -a " activity"
 Set the activity identity used for scratch and staged writes.
 .TP
+.BI -r " role"
+Declare the audit role as
+.B toplevel
+or
+.BR child .
+.TP
 .BI -m " mountpoint"
 Serve somewhere other than
 .BR /tool .
+.TP
+.BI -b " tool,..."
+Set the maximum tool set that may be delegated to child tasks. Children can
+narrow this set but cannot expand it.
 .TP
 .BI -p " path[:ro|:rw]"
 Add an ordinary filesystem capability. Repeat as needed.
 .SH EXAMPLES
 .PP
 .nf
-	tools9p -P profile-minimal-headless
-	tools9p -P profile-desktop-gui -P profile-messaging
+	tools9p -N read list find grep
+	tools9p -N -p /mnt/msg:ro -p /mnt/msg/draft:rw read write
 	nsaudit -m /tool
 .fi
 .SH FILES
-.TP
-.B /lib/veltro/profiles
-Canonical production profile declarations.
 .TP
 .B /tmp/veltro/.ns/manifest
 Effective restricted namespace manifest, sealed into the audit chain when

@@ -26,7 +26,6 @@ implement Tools9p;
 #   ├── provision    (rw)  child-task provisioning (narrowing only)
 #   ├── _registry    (r)   Space-separated tool names
 #   ├── paths        (r)   Effective namespace capabilities
-#   ├── walletbudget (r)   Enforced aggregate wallet cap, when configured
 #   ├── activity     (r)   Activity identifier
 #   ├── meta/        (dir) Audit metadata scalars
 #   └── <tool>/      (dir) Per-tool directory
@@ -62,17 +61,13 @@ include "tool.m";
 include "nsconstruct.m";
 	nsc: NsConstruct;
 
-include "ethcrypto.m";
-	ethcrypto: Ethcrypto;
-
 Tools9p: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
 };
 
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
-	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable,
-	Qwalletbudget: con iota;
+	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -95,7 +90,6 @@ user: string;
 tools: list of ref ToolInfo;     # active (exposed) tools; mutated by serveloop, read by asyncexec (snapshot-safe)
 alltools: list of ref ToolInfo;  # pre-loaded inactive tools (available for ctl-add)
 extpaths: list of string;  # Legacy untyped path grants (kept for callers)
-profiletools: list of string;
 
 # Bound namespace paths with per-path permissions.
 # Each entry is "path perm" where perm is "ro" or "rw".
@@ -106,11 +100,6 @@ BoundPath: adt {
 };
 boundpaths: list of ref BoundPath;  # Explicit ordinary path capabilities
 budget: list of string;    # Tools delegatable to child tasks (-b flag)
-walletbudget := "";       # Enforced aggregate cap: "<uint256> CURRENCY"
-walletlimit: array of byte;
-walletspent: array of byte;
-walletcurrency := "";
-walletlock: chan of int;
 activityid := 0;           # Activity ID this tools9p serves (-a flag)
 mountpt_g := "/tool";      # This instance's mount point (set from -m flag)
 verbose := 0;              # Verbose logging (-v flag); forwarded to child lucibridge
@@ -213,12 +202,11 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-DvN] [-P profile] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
 	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
-	sys->fprint(stderr, "  -P profile    Materialize /lib/veltro/profiles/<profile> (repeatable)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
 	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
 	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
@@ -232,138 +220,6 @@ usage()
 	sys->fprint(stderr, "  Utils:   diff, json, webfetch, git, memory, todo, websearch\n");
 	sys->fprint(stderr, "  Vision:  vision, gpu\n");
 	raise "fail:usage";
-}
-
-profilescalar(path: string): string
-{
-	s := readfile(path);
-	(nil, toks) := sys->tokenize(s, " \t\r\n");
-	if(toks == nil)
-		return "";
-	if(tl toks != nil)
-		return "!invalid";
-	return hd toks;
-}
-
-validprofilename(name: string): int
-{
-	if(name == "" || name == "." || name == "..")
-		return 0;
-	for(i := 0; i < len name; i++) {
-		c := name[i];
-		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
-			continue;
-		return 0;
-	}
-	return 1;
-}
-
-setwalletbudget(s: string): string
-{
-	(nil, toks) := sys->tokenize(s, " \t\r\n");
-	if(toks == nil || tl toks == nil || tl tl toks != nil)
-		return "walletbudget must be '<positive uint256> ETH|USDC|USD'";
-	amount := hd toks;
-	currency := hd tl toks;
-	if(!(currency == "ETH" || currency == "USDC" || currency == "USD"))
-		return "walletbudget has invalid currency";
-	if(ethcrypto == nil) {
-		ethcrypto = load Ethcrypto Ethcrypto->PATH;
-		if(ethcrypto == nil)
-			return sys->sprint("cannot load %s: %r", Ethcrypto->PATH);
-		if(ethcrypto->init() != nil)
-			return "cannot initialize ethcrypto";
-	}
-	limit := ethcrypto->dectobe(amount);
-	if(limit == nil || len limit == 0)
-		return "walletbudget amount must be a positive uint256";
-	canonical := ethcrypto->betodec(limit) + " " + currency;
-	if(walletbudget != "" && walletbudget != canonical)
-		return "composed profiles declare different wallet budgets";
-	walletlimit = limit;
-	walletspent = array[0] of byte;
-	walletcurrency = currency;
-	walletbudget = canonical;
-	return nil;
-}
-
-# Load a production profile from the same scalar-file shape served at /tool.
-# Repeating -P forms an additive union; conflicting scalar constraints fail.
-loadprofile(name: string): string
-{
-	if(!validprofilename(name))
-		return "invalid profile name";
-	base := "/lib/veltro/profiles/" + name;
-	(ok, d) := sys->stat(base);
-	if(ok < 0 || (d.mode & Sys->DMDIR) == 0)
-		return "profile does not exist: " + name;
-
-	(nil, tl0) := sys->tokenize(readfile(base + "/tools"), " \t\r\n");
-	sawtool := 0;
-	for(; tl0 != nil; tl0 = tl tl0) {
-		sawtool = 1;
-		if(!validtooltoken(hd tl0))
-			return "invalid tool name in " + name;
-		if(!strlist_contains(profiletools, hd tl0))
-			profiletools = hd tl0 :: profiletools;
-	}
-	if(!sawtool)
-		return "profile has no tools";
-
-	paths := readfile(base + "/paths");
-	(nil, lines) := sys->tokenize(paths, "\n");
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		(nil, fields) := sys->tokenize(line, " \t\r");
-		if(fields == nil)
-			continue;
-		path := hd fields;
-		if(tl fields == nil || tl tl fields != nil)
-			return "profile path records require an explicit permission";
-		perm := hd tl fields;
-		perr := validatepath(path);
-		if(perr != nil)
-			return "invalid profile path " + path + ": " + perr;
-		if(path == "/tmp/veltro/scratch") {
-			if(perm != "cow")
-				return "activity scratch must be declared cow";
-			continue;
-		}
-		if(perm != "ro" && perm != "rw")
-			return "path permission must be ro, rw, or scratch cow";
-		if(!bindpathallowed(path))
-			return "privileged profile path not grantable: " + path;
-		existing := findboundpath(path);
-		if(existing == nil)
-			boundpaths = ref BoundPath(path, perm) :: boundpaths;
-		else if(existing.perm != perm)
-			return "composed profiles disagree on path permission: " + path;
-	}
-
-	role := profilescalar(base + "/meta/role");
-	if(role != "toplevel" && role != "child")
-		return "profile has invalid role";
-	agentrole = role;
-	nodevs := profilescalar(base + "/meta/nodevs");
-	if(nodevs != "set")
-		return "runtime profiles must require nodevs=set";
-	agentnodevs = "set";
-	xenith := profilescalar(base + "/meta/xenith");
-	if(xenith != "0")
-		return "profile xenith=1 requires the explicit xenith tool";
-	astr := profilescalar(base + "/meta/actid");
-	(aid, rest) := str->toint(astr, 10);
-	if(astr == "" || rest != "" || aid < 0)
-		return "profile has invalid activity id";
-	activityid = aid;
-
-	wb := readfile(base + "/walletbudget");
-	if(wb != nil && wb != "") {
-		werr := setwalletbudget(wb);
-		if(werr != nil)
-			return werr;
-	}
-	return nil;
 }
 
 controlmount(mpt: string): string
@@ -412,12 +268,6 @@ init(nil: ref Draw->Context, args: list of string)
 		case o {
 		'D' =>	styxservers->traceset(1);
 		'v' =>	verbose = 1;
-		'P' =>
-			perr := loadprofile(arg->earg());
-			if(perr != nil) {
-				sys->fprint(stderr, "tools9p: profile: %s\n", perr);
-				raise "fail:usage";
-			}
 		'r' =>
 			rarg := arg->earg();
 			if(rarg != "toplevel" && rarg != "child") {
@@ -465,10 +315,6 @@ init(nil: ref Draw->Context, args: list of string)
 	args = arg->argv();
 	arg = nil;
 	mountpt_g = mountpt;
-	for(pt := profiletools; pt != nil; pt = tl pt)
-		if(!strlist_contains(args, hd pt))
-			args = hd pt :: args;
-
 	# Remaining args are tool names to register
 	if(args == nil)
 		usage();  # Need at least one tool
@@ -483,14 +329,6 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "tools9p: no valid tools specified\n");
 		raise "fail:no tools";
 	}
-	if(walletbudget != "") {
-		if(findtool("wallet") == nil || findtool("payfetch") != nil) {
-			sys->fprint(stderr, "tools9p: walletbudget requires wallet and forbids unmetered payfetch\n");
-			raise "fail:usage";
-		}
-		walletlock = chan[1] of int;
-	}
-
 	# Clean shadow dirs left by previous session (crash or kill).
 	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
 	cleanupchan = chan[32] of int;
@@ -688,8 +526,6 @@ toolavailable(name: string): int
 ctladd(name: string): string
 {
 	lname := str->tolower(name);
-	if(walletbudget != "" && lname == "payfetch")
-		return "payfetch bypasses the enforced wallet budget";
 	if(findtool(lname) != nil)
 		return nil;  # already active
 	ti := findalltool(lname);
@@ -1145,47 +981,6 @@ pathperm(path: string): string
 	return perm;
 }
 
-reservewallet(data: string): string
-{
-	if(walletbudget == "")
-		return nil;
-	s := data;
-	if(len s >= 2 && ((s[0] == '"' && s[len s-1] == '"') ||
-	   (s[0] == '\'' && s[len s-1] == '\'')))
-		s = s[1:len s-1];
-	(nil, toks) := sys->tokenize(s, " \t\r\n");
-	if(toks != nil && hd toks == "wallet")
-		toks = tl toks;
-	if(toks == nil || hd toks != "pay")
-		return nil;
-	toks = tl toks;
-	if(toks == nil || tl toks == nil)
-		return "wallet budget: malformed pay request";
-	toks = tl toks; # account
-	currency := "ETH";
-	if(hd toks == "usdc") {
-		currency = "USDC";
-		toks = tl toks;
-	}
-	if(toks == nil)
-		return "wallet budget: missing amount";
-	if(currency != walletcurrency)
-		return "wallet budget: cannot evaluate " + currency + " against " + walletcurrency;
-	amount := ethcrypto->dectobe(hd toks);
-	if(amount == nil || len amount == 0)
-		return "wallet budget: amount must be a positive uint256";
-
-	walletlock <-= 1;
-	total := ethcrypto->beadd(walletspent, amount);
-	if(total == nil || ethcrypto->becmp(total, walletlimit) > 0) {
-		<-walletlock;
-		return "wallet budget exceeded: cap " + walletbudget;
-	}
-	walletspent = total;
-	<-walletlock;
-	return nil;
-}
-
 genwritepaths(): list of string
 {
 	paths: list of string;
@@ -1459,15 +1254,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 		releasetaskcreate(locked);
 		return;
 	}
-	result: string;
-	if(ti.name == "wallet") {
-		werr := reservewallet(data);
-		if(werr != nil)
-			result = "error: " + werr;
-		else
-			result = exectool(ti.name, data);
-	} else
-		result = exectool(ti.name, data);
+	result := exectool(ti.name, data);
 	# Assign result before replying so it is visible for subsequent reads.
 	ti.result = array of byte result;
 	srv.reply(ref Rmsg.Write(tag, count));
@@ -1678,9 +1465,6 @@ provisionparse(args: string): (int, string, list of string, string)
 			tname := hd ttoks;
 			if(!validtooltoken(tname))
 				return (id, nil, nil, sys->sprint("invalid tool name %s", tname));
-			lname := str->tolower(tname);
-			if(walletbudget != "" && (lname == "wallet" || lname == "payfetch"))
-				return (id, nil, nil, sys->sprint("denied tool %s (wallet budget is not delegatable)", tname));
 			if(!strlist_contains(childbudget(), tname) || !toolavailable(tname))
 				return (id, nil, nil, sys->sprint("denied tool %s (not in delegation budget)", tname));
 			toollist = tname :: toollist;
@@ -2134,9 +1918,6 @@ Serve:
 			Qbudget =>
 				srv.reply(styxservers->readbytes(m, array of byte genbudgetlist()));
 
-			Qwalletbudget =>
-				srv.reply(styxservers->readbytes(m, array of byte walletbudget));
-
 			Qactivity =>
 				srv.reply(styxservers->readbytes(m, array of byte string activityid));
 
@@ -2420,9 +2201,6 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qbudget =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "budget", big 0, 8r444), nil);
 
-	Qwalletbudget =>
-		return (dir(Qid(p, vers, Sys->QTFILE), "walletbudget", big 0, 8r444), nil);
-
 	Qactivity =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "activity", big 0, 8r444), nil);
 
@@ -2492,8 +2270,6 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qpaths;
 				"budget" =>
 					n.path = big Qbudget;
-				"walletbudget" =>
-					n.path = big Qwalletbudget;
 				"activity" =>
 					n.path = big Qactivity;
 				"meta" =>
@@ -2611,44 +2387,37 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
-				# Entry 6: wallet budget (empty unless an enforced cap is active)
+				# Entry 6: activity
 				if(i <= 6 && count > 0) {
-					n.reply <-= dirgen(big Qwalletbudget);
-					count--;
-					i++;
-				}
-
-				# Entry 7: activity
-				if(i <= 7 && count > 0) {
 					n.reply <-= dirgen(big Qactivity);
 					count--;
 					i++;
 				}
 
-				# Entry 8: meta (always present)
-				if(i <= 8 && count > 0) {
+				# Entry 7: meta (always present)
+				if(i <= 7 && count > 0) {
 					n.reply <-= dirgen(big Qmeta);
 					count--;
 					i++;
 				}
 
-				# Entry 9: grantable delegation catalogue
-				if(i <= 9 && count > 0) {
+				# Entry 8: grantable delegation catalogue
+				if(i <= 8 && count > 0) {
 					n.reply <-= dirgen(big Qgrantable);
 					count--;
 					i++;
 				}
 
-				if(findtool("task") != nil && i <= 10 && count > 0) {
+				if(findtool("task") != nil && i <= 9 && count > 0) {
 					n.reply <-= dirgen(big Qprovision);
 					count--;
 					i++;
 				}
 
 				# Remaining entries: registered tool directories
-				baseoff := 10;
+				baseoff := 9;
 				if(findtool("task") != nil)
-					baseoff = 11;
+					baseoff = 10;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;

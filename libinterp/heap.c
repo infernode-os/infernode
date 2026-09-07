@@ -53,14 +53,38 @@ void	(*heapmonitor)(int, void*, ulong);
  * Hosted 64-bit builds still leak here. Unmapping needs a length and
  * Type carries none; giving it one is a separate change.
  */
+/*
+ * EXPERIMENT, INFR-458, and it is meant to be reverted.
+ *
+ * 7a1641a1 started freeing this on the native kernel, correctly: the
+ * pointer is pool memory there, the guard that suppressed the free was
+ * written on the architecture when it is a property of the build, and
+ * the leak it closed was measured at 2MB every six minutes under load.
+ *
+ * Since then the board has produced repeated panics whose signature is
+ * a call through a garbage function pointer -- once to 0x8228d0, which
+ * is pool memory 8MB up where the kernel's text ends at 1.5MB, and
+ * once to 0x340. The stack under the second has freeptrs in it, which
+ * is the collector walking a Type's pointer map. The ARM64 JIT reads a
+ * type's compiled-code address out of the Type at run time rather than
+ * baking it in, so compiled code holding a Type that has been freed
+ * reads whatever is in the recycled block and calls it.
+ *
+ * Freeing the Type itself is upstream behaviour and predates all of
+ * this, so the dangling read is not created here. But before 7a1641a1
+ * a stale read would still have found valid code, because the code
+ * outlived the Type. That accident is what this removed.
+ *
+ * So: put the leak back, and see whether the garbage-pointer panics
+ * stop. A leak that fills a 123MB pool in four hours is recoverable.
+ * Executing arbitrary heap is not. If they stop, Type lifetime is the
+ * bug and this is where to fix it. If they continue, this was never
+ * implicated and the free goes straight back in.
+ */
 static void
 freetypecode(Type *t)
 {
-#if !defined(INFERNO_NATIVE) && (defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64))
 	USED(t);
-#else
-	free(t->initialize);
-#endif
 }
 
 void

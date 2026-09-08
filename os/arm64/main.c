@@ -568,6 +568,77 @@ confinit(void)
 	uartputstr(" to ");
 	uartputx(top);
 	uartputstr("\n");
+
+	/*
+	 * Where the firmware left the device tree, and whether we are
+	 * about to hand that memory out.
+	 *
+	 * l.S saves the DTB pointer to dtbptr "for ../arm64/fdt.c". There
+	 * is no fdt.c in this tree; the file was never written, so dtbptr
+	 * is assigned and never read again. Nothing reserves the blob
+	 * either: the bank above starts at PGROUND(end) and runs to the
+	 * top of RAM, with no hole for it.
+	 *
+	 * That matters because of INFR-458. A Proc was found holding the
+	 * four bytes "/soc" in its error-stack counter -- a device-tree
+	 * node path, in a field that should never hold anything but a
+	 * small integer. If the blob sits inside this bank then Procs get
+	 * allocated on top of it, which is at least where those bytes
+	 * come from.
+	 *
+	 * Printing both is what settles it. If the blob is outside the
+	 * bank, that theory dies here and costs one line of boot output.
+	 */
+	/*
+	 * Reserve the device tree, by splitting the bank around it.
+	 *
+	 * The firmware leaves the blob in RAM and hands us its address,
+	 * which l.S saves to dtbptr "for ../arm64/fdt.c". There is no
+	 * fdt.c in this tree -- the file was never written -- so nothing
+	 * has ever read it, and nothing has ever kept the allocator off
+	 * it either. Measured on this board it sits at 0x2eff6b00, well
+	 * inside a bank running 0x2fd000..0x3b400000. Memory the firmware
+	 * handed us with contents in it was simply given away.
+	 *
+	 * xalloc already understands two banks, so use them: bank 0 below
+	 * the blob, bank 1 above it. A blob whose header does not check
+	 * out is treated as absent rather than guessed at, because an
+	 * over-large reservation would quietly lose real memory.
+	 *
+	 * The size comes from the FDT header: magic 0xd00dfeed then
+	 * totalsize, both big-endian.
+	 */
+	if(dtbptr >= base && dtbptr < top){
+		uchar *h = (uchar*)dtbptr;
+		u32int magic, dtbsize;
+		uintptr dstart, dend;
+
+		magic = h[0]<<24 | h[1]<<16 | h[2]<<8 | h[3];
+		dtbsize = h[4]<<24 | h[5]<<16 | h[6]<<8 | h[7];
+		if(magic == 0xd00dfeed && dtbsize >= 8 && dtbsize <= 4*1024*1024){
+			dstart = dtbptr & ~(BY2PG-1);
+			dend = PGROUND(dtbptr + dtbsize);
+			if(dend > top)
+				dend = top;
+			conf.npage0 = (dstart - base) / BY2PG;
+			conf.base1 = dend;
+			conf.npage1 = (top - dend) / BY2PG;
+			conf.npage = conf.npage0 + conf.npage1;
+			uartputstr("conf: dtb at ");
+			uartputx(dtbptr);
+			uartputstr(" size ");
+			uartputd(dtbsize);
+			uartputstr(" -- reserved, bank split\n");
+		}else{
+			uartputstr("conf: dtb at ");
+			uartputx(dtbptr);
+			uartputstr(" has no FDT header; NOT reserved\n");
+		}
+	}else{
+		uartputstr("conf: dtb at ");
+		uartputx(dtbptr);
+		uartputstr(" -- outside the allocatable bank\n");
+	}
 }
 
 /*

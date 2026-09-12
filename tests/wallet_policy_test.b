@@ -347,10 +347,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# wallet9p must already be mounted at /n/wallet (the host harness
 	# starts factotum and the server before running this).
 	(ok, nil) := sys->stat(W + "/accounts");
-	if(ok < 0) {
-		sys->fprint(sys->fildes(2), "wallet9p not mounted at %s\n", W);
-		raise "fail:no wallet9p";
-	}
+	if(ok < 0)
+		raise "skip:wallet9p not mounted at /n/wallet (run tests/host/wallet9p_test.sh)";
 
 	run("Account/Setup", testAccountSetup);
 	run("Account/RejectBadKeys", testRejectBadKeys);

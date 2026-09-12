@@ -47,6 +47,8 @@ TARG=\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
 	llmclient_reqshape_test.dis\
+	llmclient_texttools_test.dis\
+	llmclient_sse_fallback_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
 	mail_provision_test.dis\

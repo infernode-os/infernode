@@ -32,6 +32,9 @@ include "json.m";
 include "wirefmt.m";
 	wirefmt: WireFmt;
 
+include "srv.m";
+	srvmod: Srv;
+
 include "llmclient.m";
 
 stderr: ref Sys->FD;
@@ -58,6 +61,12 @@ init()
 	wirefmt = load WireFmt WireFmt->PATH;
 	if(wirefmt == nil)
 		raise "fail:llmclient: cannot load WireFmt";
+
+	# $Srv is a hosted builtin and absent on native builds. Name resolution
+	# is therefore optional: dialaddr() falls back to the literal host.
+	srvmod = load Srv Srv->PATH;
+	if(srvmod != nil)
+		srvmod->init();
 	wirefmt->init();
 }
 
@@ -538,7 +547,7 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 			if(terr != nil)
 				return (nil, "openai: TLS init: " + terr);
 		}
-		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+		(ok, conn) := sys->dial(dialaddr(host, port), nil);
 		if(ok < 0)
 			return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
 		config := tlsmod->defaultconfig();
@@ -561,7 +570,7 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 	}
 
 	# Plain HTTP path (typical: Ollama at localhost:11434).
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	(ok, conn) := sys->dial(dialaddr(host, port), nil);
 	if(ok < 0)
 		return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
 	d := array of byte reqdata;
@@ -1849,7 +1858,7 @@ _httpreadloop(conn: Sys->Connection): (string, string)
 
 httppost(host, port, path, headers, body: string): (string, string)
 {
-	addr := "tcp!" + host + "!" + port;
+	addr := dialaddr(host, port);
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0)
 		return (nil, sys->sprint("cannot connect to %s: %r", addr));
@@ -1877,7 +1886,7 @@ httppost(host, port, path, headers, body: string): (string, string)
 # Plain-HTTP GET — mirror of httppost with no body/Content-Length.
 httpget(host, port, path, headers: string): (string, string)
 {
-	addr := "tcp!" + host + "!" + port;
+	addr := dialaddr(host, port);
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0)
 		return (nil, sys->sprint("cannot connect to %s: %r", addr));
@@ -2008,7 +2017,7 @@ httpspost(host, port, path, headers, body: string): (string, string)
 			return (nil, "TLS init: " + terr);
 	}
 
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	(ok, conn) := sys->dial(dialaddr(host, port), nil);
 	if(ok < 0)
 		return (nil, sys->sprint("cannot connect to %s: %r", host));
 
@@ -2061,7 +2070,7 @@ httpsget(host, port, path, headers: string): (string, string)
 			return (nil, "TLS init: " + terr);
 	}
 
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+	(ok, conn) := sys->dial(dialaddr(host, port), nil);
 	if(ok < 0)
 		return (nil, sys->sprint("cannot connect to %s: %r", host));
 
@@ -2134,6 +2143,33 @@ parsehttpresponse(response: string): (string, string, string)
 		bodys = response[bodystart:];
 
 	return (status, headers, bodys);
+}
+
+# Turn a host and port into a dial string, resolving a name to an address
+# first. devip only accepts a literal address, and this build ships no
+# connection server, so dialing a name fails with "invalid IP address".
+# IPv4 is preferred because the dial string is !-separated and an IPv6
+# literal is ambiguous in that form. Same approach as tlsperf.
+dialaddr(host, port: string): string
+{
+	if(srvmod == nil)
+		return "tcp!" + host + "!" + port;
+	addrs := srvmod->iph2a(host);
+	if(addrs == nil)
+		return "tcp!" + host + "!" + port;
+	chosen := hd addrs;
+	for(l := addrs; l != nil; l = tl l) {
+		a := hd l;
+		isv4 := 1;
+		for(i := 0; i < len a; i++)
+			if(a[i] == ':')
+				isv4 = 0;
+		if(isv4) {
+			chosen = a;
+			break;
+		}
+	}
+	return "tcp!" + chosen + "!" + port;
 }
 
 parseurl(url: string): (string, string, string, string, string)

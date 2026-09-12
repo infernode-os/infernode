@@ -47,12 +47,32 @@ echo "Building for: SYSHOST=$SYSHOST OBJTYPE=$OBJTYPE"
 echo "GUI Backend: SDL3"
 echo ""
 
-# Stamp build version (matches CI workflow)
+# Stamp build version (matches CI workflow). Anchor on the unstamped form so
+# a second run cannot stamp an already-stamped string. Restore from a copy
+# taken here rather than from git, so an in-progress edit to version.h
+# survives the build.
 BUILD_DATE=$(date +%Y%m%d)
 SHORT_SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD 2>/dev/null || echo "local")
-sed -i '' "s|InferNode 0.1|InferNode 0.1 build ${BUILD_DATE}-${SHORT_SHA}|" "$ROOT/include/version.h"
+VERSION_H="$ROOT/include/version.h"
+VERSION_H_SAVED=$(mktemp "${TMPDIR:-/tmp}/version.h.XXXXXX")
+cp "$VERSION_H" "$VERSION_H_SAVED"
+restore_version_h() {
+    cp "$VERSION_H_SAVED" "$VERSION_H"
+    rm -f "$VERSION_H_SAVED"
+}
+trap restore_version_h EXIT
+sed -i '' "s|InferNode 0.1 (|InferNode 0.1 build ${BUILD_DATE}-${SHORT_SHA} (|" "$VERSION_H"
 echo "Version: $(grep VERSION "$ROOT/include/version.h")"
 echo ""
+
+# mkhost-MacOSX sets NDATE=ndate and resolves it through PATH. BSD date has
+# no -n, so without utils/ndate built the emulator compiles KERNDATE from an
+# empty string and fails on `ulong kerndate = ;`. The EMUDIRS walk builds it
+# before emu; these scripts go straight to the emulator, so build it here.
+if [[ ! -x "$ROOT/MacOSX/arm64/bin/ndate" ]]; then
+    echo "Building utils/ndate (needed for KERNDATE)..."
+    (cd "$ROOT/utils/ndate" && mk install)
+fi
 
 # Build emulator
 cd "$ROOT/emu/MacOSX"
@@ -62,9 +82,6 @@ mk clean 2>/dev/null || true
 
 echo "Building SDL3 GUI emulator..."
 mk GUIBACK=sdl3
-
-# Restore version.h so repeated builds don't accumulate stamps
-git -C "$ROOT" checkout -- "$ROOT/include/version.h" 2>/dev/null || true
 
 if [[ -f o.emu ]]; then
     echo ""

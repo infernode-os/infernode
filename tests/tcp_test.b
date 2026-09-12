@@ -62,41 +62,79 @@ run(name: string, testfn: ref fn(t: ref T))
 # ── bounded dial ──────────────────────────────────────────────────────────
 # sys->dial blocks in the host connect() until the kernel's SYN timeout, which
 # on an offline host is tens of seconds -- long enough to look like a hang and
-# stall the whole runner. Bound it: dial in a child proc, race it against a
-# timer, and report a timeout to the caller so the test can skip.
+# stall the whole runner. Worse: a host firewall in ask mode never completes
+# or fails the connect at all -- it blocks until a human answers a dialog.
+# Bound it: dial in a child proc, race it against a timer, and kill the child
+# on timeout. The kill matters as much as the timer: a proc left blocked in a
+# host connect keeps the emulator (and its bound ports) alive at exit even
+# after every test has reported.
 
 Dialres: adt {
 	ok:	int;
 	c:	Sys->Connection;
+	err:	string;
 };
 
-dialer(addr: string, ch: chan of ref Dialres)
+dialer(addr: string, pch: chan of int, ch: chan of ref Dialres)
 {
+	pch <-= sys->pctl(0, nil);
 	r := ref Dialres;
 	(r.ok, r.c) = sys->dial(addr, nil);
-	ch <-= r;
+	if(r.ok < 0)
+		r.err = sys->sprint("dial %s: %r", addr);
+	alt {
+	ch <-= r =>
+		;
+	* =>
+		;
+	}
 }
 
 timer(ch: chan of int, ms: int)
 {
 	sys->sleep(ms);
-	ch <-= 1;
+	alt {
+	ch <-= 1 =>
+		;
+	* =>
+		;
+	}
 }
 
-# returns (ok, connection, timedout). timedout=1 means the dial did not
-# complete within DIALMS (treat as "network unavailable", skip).
-dialTimeout(addr: string, ms: int): (int, Sys->Connection, int)
+# returns (ok, connection, timedout, errstr). timedout=1 means the dial did
+# not complete within DIALMS (treat as "network unavailable", skip). errstr
+# comes from the dialer proc: a failed dial sets errstr there, not here.
+dialTimeout(addr: string, ms: int): (int, Sys->Connection, int, string)
 {
 	dc := chan of ref Dialres;
+	pc := chan of int;
+	spawn dialer(addr, pc, dc);
+	pid := <-pc;
 	tc := chan of int;
-	spawn dialer(addr, dc);
 	spawn timer(tc, ms);
 	alt {
 	r := <-dc =>
-		return (r.ok, r.c, 0);
+		return (r.ok, r.c, 0, r.err);
 	<-tc =>
-		return (-1, Sys->Connection(nil, nil, nil), 1);
+		killproc(pid);
+		return (-1, Sys->Connection(nil, nil, nil), 1, "timeout");
 	}
+}
+
+killproc(pid: int)
+{
+	ctl := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(ctl != nil)
+		sys->write(ctl, array of byte "kill", 4);
+}
+
+# A runner can declare the environment offline (INFERNODE_TESTS_OFFLINE=1
+# via run-tests.sh, which the runner turns into this env file) instead of
+# having the tests infer it from a dial that may never return.
+offline(): int
+{
+	(s, nil) := sys->stat("/env/INFERNODE_TESTS_OFFLINE");
+	return s >= 0;
 }
 
 # ── loopback (self-contained, always runs with any IP stack) ────────────────
@@ -160,27 +198,30 @@ testLoopback(t: ref T)
 # ── outbound Internet (opt-in; skip cleanly when offline) ───────────────────
 testTcpDialIp(t: ref T)
 {
-	(ok, c, tout) := dialTimeout("tcp!8.8.8.8!53", DIALMS);
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
+	(ok, c, tout, derr) := dialTimeout("tcp!8.8.8.8!53", DIALMS);
 	if(tout){ t.skip("dial timed out (offline)"); return; }
-	if(ok < 0){ t.skip(sys->sprint("network unavailable: %r")); return; }
+	if(ok < 0){ t.skip("network unavailable: " + derr); return; }
 	t.assert(c.dfd != nil, "data fd should be valid");
 	t.log(sys->sprint("connected to 8.8.8.8:53, fd=%d", c.dfd.fd));
 }
 
 testTcpDialHostname(t: ref T)
 {
-	(ok, c, tout) := dialTimeout("tcp!google.com!80", DIALMS);
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
+	(ok, c, tout, derr) := dialTimeout("tcp!google.com!80", DIALMS);
 	if(tout){ t.skip("dial timed out (offline)"); return; }
-	if(ok < 0){ t.skip(sys->sprint("network unavailable or DNS failed: %r")); return; }
+	if(ok < 0){ t.skip("network unavailable or DNS failed: " + derr); return; }
 	t.assert(c.dfd != nil, "data fd should be valid");
 	t.log("connected to google.com:80");
 }
 
 testTcpWrite(t: ref T)
 {
-	(ok, c, tout) := dialTimeout("tcp!8.8.8.8!53", DIALMS);
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
+	(ok, c, tout, derr) := dialTimeout("tcp!8.8.8.8!53", DIALMS);
 	if(tout){ t.skip("dial timed out (offline)"); return; }
-	if(ok < 0){ t.skip(sys->sprint("network unavailable: %r")); return; }
+	if(ok < 0){ t.skip("network unavailable: " + derr); return; }
 	buf := array[1] of byte;
 	buf[0] = byte 0;
 	n := sys->write(c.dfd, buf, 1);
@@ -189,9 +230,10 @@ testTcpWrite(t: ref T)
 
 testHttpRequest(t: ref T)
 {
-	(ok, c, tout) := dialTimeout("tcp!google.com!80", DIALMS);
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
+	(ok, c, tout, derr) := dialTimeout("tcp!google.com!80", DIALMS);
 	if(tout){ t.skip("dial timed out (offline)"); return; }
-	if(ok < 0){ t.skip(sys->sprint("network unavailable: %r")); return; }
+	if(ok < 0){ t.skip("network unavailable: " + derr); return; }
 
 	request := "GET / HTTP/1.0\r\nHost: google.com\r\n\r\n";
 	buf := array of byte request;

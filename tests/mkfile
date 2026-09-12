@@ -19,6 +19,7 @@ TARG=\
 	tooluse_test.dis\
 	awk_test.dis\
 	asyncio_test.dis\
+	audioctl_readback_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\

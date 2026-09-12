@@ -650,6 +650,7 @@ dis/tests/agentlib_test.dis
 dis/tests/alpha_test.dis
 dis/tests/arrayinit_test.dis
 dis/tests/asyncio_test.dis
+dis/tests/audioctl_readback_test.dis
 dis/tests/auditchain_test.dis
 dis/tests/auditprov_test.dis
 dis/tests/auditsign_test.dis

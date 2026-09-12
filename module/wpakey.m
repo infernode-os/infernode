@@ -61,6 +61,13 @@ Wpakey: module
 	#
 	pbkdf2_sha1:	fn(pass, salt: array of byte, rounds, dklen: int): array of byte;
 	psk:		fn(passphrase, essid: string): array of byte;
+
+	#
+	# The master key from whatever the operator stored, which may be
+	# a passphrase to stretch or the key itself.  psk stays the plain
+	# Annex H.4 mapping; this is the rule for telling the two apart.
+	#
+	pmkfor:		fn(cred, essid: string): array of byte;
 	prf:		fn(key: array of byte, label: string, seed: array of byte, nbits: int): array of byte;
 	ptk:		fn(pmk, smac, amac, snonce, anonce: array of byte): array of byte;
 

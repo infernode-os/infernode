@@ -79,6 +79,41 @@ psk(passphrase, essid: string): array of byte
 }
 
 #
+#	The master key from whatever was stored for this network: a
+#	passphrase to stretch, or the 32-byte key already derived.
+#
+#	A WPA passphrase is 8 to 63 characters, so exactly 64
+#	hexadecimal digits cannot be one and is read as the key itself.
+#	wpa_supplicant draws the line in the same place, for the same
+#	reason: it is the only discrimination the specification hands
+#	over for free.
+#
+#	Worth drawing because of where a board's key has to live.  It
+#	sits unattended on the card the machine boots from -- there is
+#	nowhere else, and os/init/osinit.b's wifisetup says so -- and of
+#	the two forms the key is the weaker secret to leave there.  It
+#	is salted with the network name, so it opens that network and is
+#	useless against any other, and it is not a string a person chose
+#	and may have used elsewhere.  A passphrase is both.
+#
+#	Anything 64 characters long that is not hexadecimal falls
+#	through to the passphrase path, so a stored credential is never
+#	refused for being the wrong shape.  A 64-character passphrase is
+#	outside the specification; one made only of hex digits would be
+#	read as a key, which is the single ambiguity here and is the same
+#	one every other supplicant lives with.
+#
+pmkfor(cred, essid: string): array of byte
+{
+	if(len cred == 2*PMKlen){
+		pmk := unhex(cred);
+		if(pmk != nil)
+			return pmk;
+	}
+	return psk(cred, essid);
+}
+
+#
 #	The IEEE 802.11 pseudorandom function: HMAC-SHA1 of the label, a
 #	NUL, the seed and a counter byte, concatenated until nbits are
 #	available.  Every output length is a prefix of every longer one.

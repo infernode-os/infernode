@@ -21,7 +21,9 @@ implement Wpa;
 #
 #	The passphrase comes from factotum and from nowhere else.  It is
 #	never an argument -- arguments are readable in /prog -- and never
-#	a file in the tree.
+#	a file in the tree.  What factotum holds for a network may be the
+#	passphrase or the master key already derived from it; wpakey(2)'s
+#	pmkfor is where that is decided, not here.
 #
 
 include "sys.m";
@@ -230,7 +232,13 @@ init(nil: ref Draw->Context, args: list of string)
 	pass := passphrase(essid);
 	if(pass == nil)
 		fatal(sys->sprint("no passphrase for %q in factotum: %r", essid));
-	pmk := wpakey->psk(pass, essid);
+	#
+	# What factotum held may be the passphrase or the key it derives
+	# to; pmkfor tells the two apart.  Nothing here needs to know
+	# which, and a board that stores the key keeps a secret off its
+	# card that a person might have used somewhere else.
+	#
+	pmk := wpakey->pmkfor(pass, essid);
 	pass = nil;
 	if(debug)
 		report(sys->sprint("pmk %s", wpakey->hex(pmk)));

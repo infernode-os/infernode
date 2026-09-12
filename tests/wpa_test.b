@@ -120,6 +120,55 @@ testPsk(t: ref T)
 }
 
 #
+#	The credential as it is actually stored, in either form.
+#
+#	The passphrase cases are Annex H.4's again, so the stretched path
+#	is still held against the document.  The key cases assert the
+#	other half of the rule: 64 hexadecimal digits are the key itself,
+#	and that reading does not depend on the network name, which is
+#	the whole point -- a stored key is already salted with its essid.
+#	The remaining cases pin the boundary, because a credential read
+#	as the wrong kind produces a handshake that fails with no hint
+#	why.
+#
+testPmkfor(t: ref T)
+{
+	# 802.11i H.4 case 1: a passphrase is still stretched.
+	h4 := "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e";
+	t.assertseq(wpakey->hex(wpakey->pmkfor("password", "IEEE")), h4,
+		"a passphrase is still stretched (H.4 case 1)");
+
+	# 64 hexadecimal digits are the key, whatever the essid.
+	t.assertseq(wpakey->hex(wpakey->pmkfor(h4, "IEEE")), h4,
+		"64 hex digits taken verbatim");
+	t.assertseq(wpakey->hex(wpakey->pmkfor(h4, "some other network")), h4,
+		"a stored key does not depend on the essid");
+
+	# hexval takes A-F as well as a-f, so upper case is a key too.
+	t.assertseq(wpakey->hex(wpakey->pmkfor(
+			"F42C6FC52DF0EBEF9EBB4B90B38A5F902E83FE1B135A70E23AED762E9710A12E",
+			"IEEE")),
+		h4, "upper case hex is a key");
+
+	# 63 characters cannot be a key, so they are a passphrase.
+	t.assertseq(wpakey->hex(wpakey->pmkfor(h4[0:63], "IEEE")),
+		wpakey->hex(wpakey->psk(h4[0:63], "IEEE")),
+		"63 hex digits is a passphrase");
+
+	# 64 characters that are not hexadecimal are a passphrase.
+	pw := "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+	t.assertseq(wpakey->hex(wpakey->pmkfor(pw, "IEEE")),
+		wpakey->hex(wpakey->psk(pw, "IEEE")),
+		"64 non-hex characters is a passphrase");
+
+	# One non-hex digit among 63 hex ones is still a passphrase: the
+	# length test alone must not decide it.
+	t.assertseq(wpakey->hex(wpakey->pmkfor("z"+h4[1:], "IEEE")),
+		wpakey->hex(wpakey->psk("z"+h4[1:], "IEEE")),
+		"64 characters, one not hex, is a passphrase");
+}
+
+#
 #	IEEE 802.11i-2004 Annex H.3: the PRF.  The published cases are
 #	PRF-192; PRF-512 is the length the handshake actually uses, and
 #	the construction makes every shorter output a prefix of every
@@ -627,6 +676,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Pbkdf2", testPbkdf2);
 	run("Psk", testPsk);
+	run("Pmkfor", testPmkfor);
 	run("Prf", testPrf);
 	run("Keyunwrap", testKeyunwrap);
 	run("Cmac", testCmac);

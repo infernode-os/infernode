@@ -210,6 +210,7 @@ Lmacspdmask:	con 16r00000006;	# MAC_CR: speed field
 #
 Lrxmaxshift:	con 16;
 Lrxfcsstrip:	con 16r00000010;	# MAC_RX: strip the FCS
+Lrxfcslen:	con 4;			# ... which the max-size field still counts
 
 # which loop lanloopback() should close
 Lpby:		con 0;			# inside the PHY
@@ -3547,6 +3548,36 @@ lansetup(): int
 	# Both were missing, and either alone is enough to produce a link
 	# that looks fine and a receiver that never delivers a frame.
 	#
+	# THE MAX SIZE INCLUDES THE FCS, and the field is written with the
+	# FCS ADDED even though the same register is told to strip it.
+	# The check happens on the wire, before the strip.
+	#
+	# Written as Maxframe, this field admitted frames up to 1510 bytes
+	# and no more: 1510 plus the four FCS bytes is 1514, the limit, and
+	# a standard full-size 1514-byte frame is 1518 against it. So every
+	# maximum-size frame was dropped BY THE MAC, where no counter in
+	# this driver or the kernel can see it -- crc, framing, overflow
+	# and buffer errors all stayed zero while the frames vanished.
+	#
+	# What that looks like from above is not a frame size problem. It
+	# looks like bulk transfer being broken while everything small
+	# works: DHCP, ARP, ICMP, 9P stat and walk, a console line, all
+	# sub-maximum and all fine, and then not one byte of any file
+	# arriving. A sender retransmits the same full-size segment for
+	# ever and the connection dies with nothing delivered (#608).
+	#
+	# Measured, same board and same code, the only variable being the
+	# segment size the sender was allowed: at MSS 1460 (a 1518-byte
+	# frame) 0 of 20000 bytes arrived; at MSS 1400 (1458 bytes) all
+	# 20000 did. The boundary sits exactly at a 1510-byte wire frame.
+	#
+	# Linux's lan78xx writes this field the same way -- its
+	# lan78xx_set_rx_max_frame_length adds 4 for the FCS -- which is
+	# the authority for the +4 rather than a guess from the datasheet.
+	# A VLAN-tagged frame is four bytes longer again; this driver's
+	# Maxframe is the untagged 1514, so tagged traffic would need
+	# both constants raised together.
+	#
 	(ec, cr) := lanrd(Lmaccr);
 	if(ec < 0)
 		return -1;
@@ -3556,7 +3587,7 @@ lansetup(): int
 	}
 
 	if(lanwr(Lmactx, Ltxen) < 0 ||
-	   lanwr(Lmacrx, (Maxframe << Lrxmaxshift) | Lrxfcsstrip | Lrxen) < 0){
+	   lanwr(Lmacrx, ((Maxframe + Lrxfcslen) << Lrxmaxshift) | Lrxfcsstrip | Lrxen) < 0){
 		sys->print("etherusb: LAN78xx MAC enable failed: %r\n");
 		return -1;
 	}

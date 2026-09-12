@@ -158,11 +158,19 @@ counters frozen and `link: 0`. A *soft* reboot does clear it on current kernels
 need the operator to pull the power, which is what the INFR-467 comments
 describe. `echo reboot > '#c/sysctl'` reboots; watch it come up on serial.
 
-**Two interfaces on one subnet is one live path and one ornament.** ARP is
-answered per-interface (`ethermedium.c`, `iplocalonifc`), so a wifi address is
-unreachable from the wired segment while both are in the same `/24`, and the
-route for that prefix picks one interface for everything outbound. Test wifi
-with the cable out, not alongside it.
+**Two interfaces on one subnet give asymmetric paths, not redundancy.** The
+wifi address does answer: ARP is answered per-interface (`ethermedium.c`,
+`iplocalonifc`) and the access point bridges the request to the station, so it
+resolves to the radio's MAC. But the route for the shared prefix picks one
+interface for everything outbound, so the replies leave by the cable. Measured
+with five pings to the wifi address: the radio's `in` rose by 35 and its `out`
+by **0**, while ether0's `pktout` rose by 11. The radio carries inbound only,
+and its transmit path is not exercised at all — so a board that pings fine this
+way has proved nothing about its radio. Test wifi with the cable out.
+
+If a wifi address does not answer ARP at all, suspect the radio rather than the
+stack: check `link:` in `#l1/ether1/stats` first. A deassociated radio produces
+exactly the same symptom and is the more likely cause.
 
 ## Testing Guidelines
 

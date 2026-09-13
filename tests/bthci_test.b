@@ -27,6 +27,8 @@ include "bthci.m";
 	bthci: Bthci;
 	Pkt, Event, Deframer, Transport, Hci, Version, Found: import bthci;
 
+include "l2cap.m";
+	l2cap: L2cap;
 include "btmock.m";
 	btmock: Btmock;
 	Ctlr: import btmock;
@@ -634,7 +636,13 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "cannot load %s: %r\n", Btmock->PATH);
 		raise "fail:cannot load btmock";
 	}
-	btmock->init(bthci);
+	l2cap = load L2cap L2cap->PATH;
+	if(l2cap == nil){
+		sys->fprint(sys->fildes(2), "cannot load %s: %r\n", L2cap->PATH);
+		raise "fail:cannot load l2cap";
+	}
+	l2cap->init(bthci);
+	btmock->init(bthci, l2cap);
 
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")

@@ -15,6 +15,13 @@ implement Btmockcmd;
 # to check the /net/bt contract, and what anyone developing above bt9p
 # can run in hosted emu.
 #
+# A second file, <path>ctl, is the far side's telephone: writing
+# "call <addr> <psm> <text>" makes the nearby device addr connect to
+# the host and send text on psm once the L2CAP channel is up; reading
+# it lists what the peers received on their channels, one "recv <addr>
+# <psm> <text>" per line. Every nearby device also answers L2CAP
+# connections to PSM 0x1001 by echoing whatever it is sent.
+#
 # Usage:
 #   btmock [-a addr] [-n 'addr class rssi name']... [-s] [-t ms] [path]
 #     -a   the controller's BD_ADDR (default b8:27:eb:00:00:01)
@@ -32,6 +39,8 @@ include "arg.m";
 include "bthci.m";
 	bthci: Bthci;
 	Found: import bthci;
+include "l2cap.m";
+	l2cap: L2cap;
 include "btmock.m";
 	btmock: Btmock;
 	Ctlr: import btmock;
@@ -50,12 +59,14 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	bthci = load Bthci Bthci->PATH;
 	btmock = load Btmock Btmock->PATH;
-	if(arg == nil || bthci == nil || btmock == nil){
+	l2cap = load L2cap L2cap->PATH;
+	if(arg == nil || bthci == nil || btmock == nil || l2cap == nil){
 		sys->fprint(stderr, "btmock: cannot load modules: %r\n");
 		raise "fail:load";
 	}
 	bthci->init();
-	btmock->init(bthci);
+	l2cap->init(bthci);
+	btmock->init(bthci, l2cap);
 
 	addr := "b8:27:eb:00:00:01";
 	nearby: list of ref Found;
@@ -102,11 +113,12 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:bind";
 	}
 	fio := sys->file2chan(dir, file);
-	if(fio == nil){
+	cio := sys->file2chan(dir, file + "ctl");
+	if(fio == nil || cio == nil){
 		sys->fprint(stderr, "btmock: file2chan %s: %r\n", path);
 		raise "fail:file2chan";
 	}
-	spawn serve(c, fio, tickms);
+	spawn serve(c, fio, cio, tickms);
 }
 
 #
@@ -176,7 +188,7 @@ ticker(c: chan of int, ms: int)
 # Reads are served in order and each gets at most what it asked for,
 # as a UART would.
 #
-serve(c: ref Ctlr, fio: ref Sys->FileIO, tickms: int)
+serve(c: ref Ctlr, fio, cio: ref Sys->FileIO, tickms: int)
 {
 	tick := chan of int;
 	spawn ticker(tick, tickms);
@@ -197,6 +209,41 @@ serve(c: ref Ctlr, fio: ref Sys->FileIO, tickms: int)
 			waiting = appendp(waiting, ref Pending(count, rc));
 		<-tick =>
 			q = cat(q, c.tick());
+		(nil, data, nil, wc) := <-cio.write =>
+			if(wc == nil)
+				continue;
+			(nf, f) := sys->tokenize(string data, " \t\r\n");
+			if(nf < 4 || hd f != "call"){
+				wc <-= (0, "usage: call <addr> <psm> <text>");
+				continue;
+			}
+			(psm, nil) := hexint(hd tl tl f);
+			text := "";
+			for(t := tl tl tl f; t != nil; t = tl t){
+				if(text != "")
+					text += " ";
+				text += hd t;
+			}
+			err := c.call(hd tl f, psm, text);
+			if(err != nil)
+				wc <-= (0, err);
+			else
+				wc <-= (len data, nil);
+		(off, count, nil, rc) := <-cio.read =>
+			if(rc == nil)
+				continue;
+			s := "";
+			for(rl := c.received; rl != nil; rl = tl rl)
+				s = hd rl + "\n" + s;
+			b := array of byte s;
+			if(off >= len b)
+				rc <-= (nil, nil);
+			else{
+				e := off + count;
+				if(e > len b)
+					e = len b;
+				rc <-= (b[off:e], nil);
+			}
 		}
 		# satisfy readers, oldest first, while there is anything
 		while(waiting != nil && len q > 0){

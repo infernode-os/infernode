@@ -42,8 +42,8 @@ for (f in addr status ctl scan lescan event hci) {
 		raise 'fail:'^$f^' missing'
 	}
 }
-if {ftest -f $BT/clone} {
-	raise 'fail:clone is served before milestone 5 -- the spec says not yet'
+if {! ftest -f $BT/clone} {
+	raise 'fail:clone missing'
 }
 
 # Modes: ctl is write-only, addr and status read-only. The failing
@@ -203,5 +203,135 @@ if {! ~ $"v 'b8:27:eb:00:00:42'} {
 	raise 'fail:addr after patched up: '^$"v
 }
 rm -f $HCD
+
+# Conversations. clone yields a directory; connect to the mock's echo
+# PSM waits for the L2CAP channel, then one SDU written is one SDU
+# read back; hangup closes it; the last close frees the directory.
+# The clone fd is held open for the block, as dial(2) holds it: a
+# conversation lives while a file of it is open.
+{
+	id=`{read 10}
+	if {! ftest -d $BT/$id} {
+		raise 'fail:clone did not make a conversation directory'
+	}
+	for (f in ctl data status local remote listen) {
+		if {! ftest -f $BT/$id/$f} {
+			raise 'fail:conversation is missing '^$f
+		}
+	}
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Closed} {
+		raise 'fail:new conversation status: '^$"v
+	}
+	echo 'connect 94:bb:43:44:61:04!0x1001' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v '94:bb:43:44:61:04!4097'} {
+		raise 'fail:remote: '^$"v
+	}
+	v=`{cat $BT/$id/local}
+	if {! ~ $"v 'b8:27:eb:00:00:42!4097'} {
+		raise 'fail:local: '^$"v
+	}
+	echo -n 'one sdu over l2cap' > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v 'one sdu over l2cap'} {
+		raise 'fail:echo round trip: '^$"v
+	}
+	echo -n second > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v second} {
+		raise 'fail:second round trip: '^$"v
+	}
+	echo hangup >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Closed} {
+		raise 'fail:status after hangup: '^$"v
+	}
+	CONV=$id
+} <> $BT/clone
+sleep 1
+if {ftest -d $BT/$CONV} {
+	raise 'fail:conversation directory survived its last close'
+}
+
+# Refusals say why: a PSM the peer does not serve, a device that is
+# not there.
+{
+	id=`{read 10}
+	if {echo 'connect 94:bb:43:44:61:04!0x1005' >[1=0] >[2] /dev/null} {
+		raise 'fail:connect to an unserved PSM succeeded'
+	}
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v 'Hangup connection refused: PSM not supported'} {
+		raise 'fail:status after refusal: '^$"v
+	}
+} <> $BT/clone
+{
+	if {echo 'connect 00:11:22:33:44:55!0x1001' >[1=0] >[2] /dev/null} {
+		raise 'fail:connect to an absent device succeeded'
+	}
+} <> $BT/clone
+{
+	if {echo 'connect nonsense' >[1=0] >[2] /dev/null} {
+		raise 'fail:a malformed connect was accepted'
+	}
+} <> $BT/clone
+
+# announce and listen: the mock's peer calls in on the PSM, the listen
+# open returns with the accepted conversation's number, data flows
+# both ways, and the peer records what it got.
+{
+	id=`{read 10}
+	echo 'announce 0x1003' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Listen} {
+		raise 'fail:status after announce: '^$"v
+	}
+	echo 'call 94:bb:43:44:61:04 0x1003 ping from peer' > $MNT/chan/btmockctl
+	{
+		nid=`{read 10}
+		v=`{cat $BT/$nid/status}
+		if {! ~ $"v Connected} {
+			raise 'fail:accepted conversation status: '^$"v
+		}
+		v=`{cat $BT/$nid/remote}
+		if {! ~ $"v '94:bb:43:44:61:04!4099'} {
+			raise 'fail:accepted remote: '^$"v
+		}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v 'ping from peer'} {
+			raise 'fail:what the peer sent: '^$"v
+		}
+		echo -n 'pong from host' > $BT/$nid/data
+		sleep 1
+		v=`{cat $MNT/chan/btmockctl}
+		if {! ~ $"v *'recv 94:bb:43:44:61:04 0x1003 pong from host'*} {
+			raise 'fail:the peer did not record our reply: '^$"v
+		}
+	} < $BT/$id/listen
+	if {echo 'announce 0x1003' >[1=0] >[2] /dev/null} {
+		raise 'fail:announce on a Listen conversation was accepted'
+	}
+} <> $BT/clone
+
+# dial(2), unchanged: the kernel's dial against this tree. The dial
+# command runs its argument with the connection on fds 0 and 1.
+v=`{dial -A $MNT/bt^'!94:bb:43:44:61:04!4097' sh -c 'echo -n via-dial; read 100 >[1=2]' >[2=1]}
+if {! ~ $"v via-dial} {
+	raise 'fail:dial(2) round trip: '^$"v
+}
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:a link outlived every conversation on it: '^$"v
+}
+v=`{cat $BT/status | grep '^conversations '}
+if {! ~ $"v 'conversations 0'} {
+	raise 'fail:conversations outlived their files: '^$"v
+}
 
 echo PASS

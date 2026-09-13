@@ -421,6 +421,50 @@ hex(a: array of byte): string
 	return s;
 }
 
+conncomplete(e: ref Event): (int, int, string, int)
+{
+	if(e == nil || e.code != EvConnComplete || len e.params < 11)
+		return (-1, 0, nil, 0);
+	p := e.params;
+	return (int p[0], get2(p, 1) & 16rfff, bdaddr(p, 3), int p[9]);
+}
+
+connrequest(e: ref Event): (string, int, int)
+{
+	if(e == nil || e.code != EvConnRequest || len e.params < 10)
+		return (nil, 0, 0);
+	p := e.params;
+	return (bdaddr(p, 0), int p[6] | (int p[7] << 8) | (int p[8] << 16), int p[9]);
+}
+
+disconncomplete(e: ref Event): (int, int, int)
+{
+	if(e == nil || e.code != EvDisconnComplete || len e.params < 4)
+		return (-1, 0, 0);
+	p := e.params;
+	return (int p[0], get2(p, 1) & 16rfff, int p[3]);
+}
+
+numcompleted(e: ref Event): list of (int, int)
+{
+	l: list of (int, int);
+	if(e == nil || e.code != EvNumCompleted || len e.params < 1)
+		return nil;
+	p := e.params;
+	n := int p[0];
+	for(i := 0; i < n && 1 + 4*i + 4 <= len p; i++)
+		l = (get2(p, 1 + 4*i) & 16rfff, get2(p, 3 + 4*i)) :: l;
+	return l;
+}
+
+aclheader(p: ref Pkt): (int, int)
+{
+	if(p == nil || p.kind != Hacl || len p.data < 4)
+		return (-1, 0);
+	hf := get2(p.data, 0);
+	return (hf & 16rfff, (hf >> 12) & 3);
+}
+
 hcdrecords(hcd: array of byte): (list of (int, array of byte), int)
 {
 	l: list of (int, array of byte);

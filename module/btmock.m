@@ -21,7 +21,9 @@ Btmock: module
 {
 	PATH:	con "/dis/lib/btmock.dis";
 
-	init:	fn(b: Bthci);
+	init:	fn(b: Bthci, l: L2cap);
+
+	Echopsm:	con 16r1001;	# the L2CAP service every mock offers: it echoes
 
 	Ctlr: adt {
 		addr:	array of byte;		# little-endian, as on the wire
@@ -39,10 +41,34 @@ Btmock: module
 		leadv:	list of ref Bthci->Found;	# advertising reports not yet emitted
 		log:	list of string;		# "cmd 0x0c03 <hex params>", newest first
 		d:	ref Bthci->Deframer;
+		links:	list of ref Peer;	# ACL links to the devices nearby
+		pendconn:	list of ref Peer;	# Connection Completes to emit
+		nexthandle:	int;
+		received:	list of string;	# what peers were sent on their channels, newest first
 
 		new:	fn(addr: string): ref Ctlr;
 		feed:	fn(c: self ref Ctlr, b: array of byte): array of byte;
 		tick:	fn(c: self ref Ctlr): array of byte;
 		seen:	fn(c: self ref Ctlr, op: int): int;	# how many times this opcode arrived
+		# a nearby device calls us: a Connection Request, then once the
+		# link is up an L2CAP connection to psm carrying text
+		call:	fn(c: self ref Ctlr, addr: string, psm: int, text: string): string;
+	};
+
+	#
+	# The far end of an ACL link: a device nearby with an L2CAP peer on
+	# it. It answers Connection Requests to Echopsm and echoes every
+	# SDU back; a call() it makes carries text and records what comes
+	# back in received.
+	#
+	Peer: adt {
+		addr:	string;
+		handle:	int;
+		state:	int;			# 0 connecting, 1 up, 2 requested (incoming to the host)
+		l2:	ref L2cap->Link;
+		calling:	int;		# an L2CAP connect to make once the link is up
+		callpsm:	int;
+		calltext:	string;
+		acks:	int;			# ACL packets received, owed as Number Of Completed Packets
 	};
 };

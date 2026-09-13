@@ -76,6 +76,10 @@ Bthci: module
 	InquiryCancel:		con (1<<10) | 16r02;
 	CreateConnection:	con (1<<10) | 16r05;
 	Disconnect:		con (1<<10) | 16r06;
+	AcceptConnection:	con (1<<10) | 16r09;
+	RejectConnection:	con (1<<10) | 16r0a;
+	LinkKeyNegative:	con (1<<10) | 16r0c;
+	PinCodeNegative:	con (1<<10) | 16r0e;
 	RemoteNameRequest:	con (1<<10) | 16r19;
 	SetEventMask:		con (3<<10) | 16r01;
 	Reset:			con (3<<10) | 16r03;
@@ -112,7 +116,13 @@ Bthci: module
 	EvCmdComplete:		con 16r0e;
 	EvCmdStatus:		con 16r0f;
 	EvHwError:		con 16r10;
+	EvRoleChange:		con 16r12;
 	EvNumCompleted:		con 16r13;
+	EvModeChange:		con 16r14;
+	EvPinRequest:		con 16r16;
+	EvLinkKeyRequest:	con 16r17;
+	EvLinkKeyNotify:	con 16r18;
+	EvMaxSlots:		con 16r1b;
 	EvInquiryResultRssi:	con 16r22;
 	EvExtInquiryResult:	con 16r2f;
 	EvLeMeta:		con 16r3e;
@@ -185,6 +195,16 @@ Bthci: module
 	leadvreports:	fn(e: ref Event): list of ref Found;
 	# a Remote Name Request Complete: status, address, name
 	remotename:	fn(e: ref Event): (int, string, string);
+	# a Connection Complete: status, handle, address, link type (1 ACL)
+	conncomplete:	fn(e: ref Event): (int, int, string, int);
+	# a Connection Request: address, class, link type
+	connrequest:	fn(e: ref Event): (string, int, int);
+	# a Disconnection Complete: status, handle, reason
+	disconncomplete: fn(e: ref Event): (int, int, int);
+	# a Number Of Completed Packets: (handle, count) per entry
+	numcompleted:	fn(e: ref Event): list of (int, int);
+	# ACL packet header: handle, flags (start/continue in bits 12-13)
+	aclheader:	fn(p: ref Pkt): (int, int);
 
 	#
 	# The transport: an fd and a reader process turning its bytes into

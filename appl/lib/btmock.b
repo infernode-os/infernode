@@ -5,20 +5,26 @@ include "sys.m";
 include "bthci.m";
 	bthci: Bthci;
 	Pkt, Found, Deframer: import bthci;
+include "l2cap.m";
+	l2cap: L2cap;
+	Link, Chan, Ev: import l2cap;
 include "btmock.m";
 
-init(b: Bthci)
+init(b: Bthci, l: L2cap)
 {
 	sys = load Sys Sys->PATH;
 	bthci = b;
+	l2cap = l;
 }
+
+Aclmtu: con 1021;	# what Read_Buffer_Size promises
 
 Ctlr.new(addr: string): ref Ctlr
 {
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new());
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new(), nil, nil, 1, nil);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -84,6 +90,10 @@ Ctlr.feed(c: self ref Ctlr, b: array of byte): array of byte
 	out := array[0] of byte;
 	for(l := c.d.feed(b); l != nil; l = tl l){
 		p := hd l;
+		if(p.kind == Bthci->Hacl){
+			out = cat(out, acl(c, p));
+			continue;
+		}
 		if(p.kind != Bthci->Hcmd || len p.data < 3)
 			continue;
 		op := bthci->get2(p.data, 0);
@@ -174,6 +184,53 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		c.inquiring = c.nearby;
 		c.inquirydone = 1;
 		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->CreateConnection =>
+		if(len params < 13)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		addr := bthci->bdaddr(params, 0);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0);
+		if(lookup(c, addr) != nil)
+			pr.handle = c.nexthandle++;
+		# unknown devices page out: Connection Complete with page timeout, on the tick
+		c.pendconn = appendpeer(c.pendconn, pr);
+		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->AcceptConnection =>
+		if(len params < 7)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		addr := bthci->bdaddr(params, 0);
+		pr := findpeer(c, addr);
+		if(pr == nil || pr.state != 2)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		pr.handle = c.nexthandle++;
+		pr.state = 0;
+		c.pendconn = appendpeer(c.pendconn, pr);
+		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->RejectConnection or Bthci->LinkKeyNegative or Bthci->PinCodeNegative =>
+		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->Disconnect =>
+		if(len params < 3)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		h := bthci->get2(params, 0) & 16rfff;
+		pr := findhandle(c, h);
+		if(pr == nil)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		droppeer(c, pr);
+		out := cmdstatus(c, op, Bthci->Sok);
+		# what it had not yet acknowledged, it acknowledges now
+		if(pr.acks > 0){
+			a := array[5] of byte;
+			a[0] = byte 1;
+			bthci->put2(a, 1, h);
+			bthci->put2(a, 3, pr.acks);
+			pr.acks = 0;
+			out = cat(out, event(Bthci->EvNumCompleted, a));
+		}
+		# Disconnection Complete: status, handle, reason (the one asked for)
+		d := array[4] of byte;
+		d[0] = byte 0;
+		bthci->put2(d, 1, h);
+		d[3] = byte params[2];
+		return cat(out, event(Bthci->EvDisconnComplete, d));
 	Bthci->BcmDownloadMinidriver or Bthci->BcmWriteRam or Bthci->BcmLaunchRam
 	or Bthci->BcmUpdateBaudrate =>
 		return complete(c, op, Bthci->Sok, nil);
@@ -201,10 +258,96 @@ lookup(c: ref Ctlr, addr: string): ref Found
 	return nil;
 }
 
+appendpeer(l: list of ref Peer, p: ref Peer): list of ref Peer
+{
+	if(l == nil)
+		return p :: nil;
+	return hd l :: appendpeer(tl l, p);
+}
+
+findpeer(c: ref Ctlr, addr: string): ref Peer
+{
+	for(l := c.links; l != nil; l = tl l)
+		if((hd l).addr == addr)
+			return hd l;
+	for(l = c.pendconn; l != nil; l = tl l)
+		if((hd l).addr == addr)
+			return hd l;
+	return nil;
+}
+
+findhandle(c: ref Ctlr, h: int): ref Peer
+{
+	for(l := c.links; l != nil; l = tl l)
+		if((hd l).handle == h)
+			return hd l;
+	return nil;
+}
+
+droppeer(c: ref Ctlr, p: ref Peer)
+{
+	keep: list of ref Peer;
+	for(l := c.links; l != nil; l = tl l)
+		if(hd l != p)
+			keep = hd l :: keep;
+	c.links = keep;
+}
+
+#
+# ACL data from the host, for one of our peers: run it through the
+# peer's L2CAP and do what the peer would -- answer, echo, record.
+#
+acl(c: ref Ctlr, p: ref Pkt): array of byte
+{
+	(h, nil) := bthci->aclheader(p);
+	pr := findhandle(c, h);
+	if(pr == nil || pr.l2 == nil)
+		return array[0] of byte;
+	pr.acks++;
+	return peerevents(c, pr, pr.l2.recv(p));
+}
+
+peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
+{
+	out := array[0] of byte;
+	for(; evs != nil; evs = tl evs){
+		pick e := hd evs {
+		Send =>
+			for(pl := l2cap->fragment(pr.handle, e.frame, Aclmtu); pl != nil; pl = tl pl)
+				out = cat(out, bthci->frame(hd pl));
+		Opened =>
+			if(pr.calling && e.c.psm == pr.callpsm){
+				pr.calling = 0;
+				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, array of byte pr.calltext)));
+			}
+		Data =>
+			if(e.c.psm == Echopsm)
+				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, e.sdu)));
+			else
+				c.received = sys->sprint("recv %s 0x%4.4ux %s", pr.addr, e.c.psm, string e.sdu) :: c.received;
+		* =>
+			;
+		}
+	}
+	return out;
+}
+
+Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
+{
+	if(lookup(c, addr) == nil)
+		return "no such device nearby: " + addr;
+	if(findpeer(c, addr) != nil)
+		return "already connected: " + addr;
+	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0);
+	c.pendconn = appendpeer(c.pendconn, pr);
+	return nil;
+}
+
 #
 # What happens with time: a withheld credit comes back, an inquiry
 # finds one more device or finishes, a name request is answered, an
-# LE scan hears one more advertisement.
+# LE scan hears one more advertisement, a connection completes, a
+# peer that was asked to call does.
 #
 Ctlr.tick(c: self ref Ctlr): array of byte
 {
@@ -259,6 +402,64 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 		if(a != nil)
 			p[1:] = a;
 		out = cat(out, event(Bthci->EvRemoteName, p));
+	}
+	if(c.pendconn != nil){
+		pr := hd c.pendconn;
+		c.pendconn = tl c.pendconn;
+		a := bthci->parsebdaddr(pr.addr);
+		if(a == nil)
+			a = array[6] of { * => byte 0 };
+		if(pr.state == 2){
+			# an incoming call: Connection Request (addr, class, ACL); the
+			# host must Accept, which moves the peer to state 0 below
+			d := array[10] of byte;
+			d[0:] = a;
+			f := lookup(c, pr.addr);
+			cls := 0;
+			if(f != nil)
+				cls = f.class;
+			d[6] = byte cls;
+			d[7] = byte (cls >> 8);
+			d[8] = byte (cls >> 16);
+			d[9] = byte 1;
+			c.links = pr :: c.links;
+			out = cat(out, event(Bthci->EvConnRequest, d));
+		}else{
+			# Connection Complete: status, handle, addr, link type ACL, no encryption
+			d := array[11] of byte;
+			if(pr.handle == 0)
+				d[0] = byte Bthci->Spagetimeout;
+			else
+				d[0] = byte Bthci->Sok;
+			bthci->put2(d, 1, pr.handle);
+			d[3:] = a;
+			d[9] = byte 1;
+			d[10] = byte 0;
+			if(pr.handle != 0){
+				pr.state = 1;
+				pr.l2 = Link.new(pr.handle);
+				pr.l2.accept = Echopsm :: nil;
+				droppeer(c, pr);
+				c.links = pr :: c.links;
+			}
+			out = cat(out, event(Bthci->EvConnComplete, d));
+			if(pr.state == 1 && pr.calling){
+				(nil, evs) := pr.l2.connect(pr.callpsm);
+				out = cat(out, peerevents(c, pr, evs));
+			}
+		}
+	}
+	# Number Of Completed Packets for what the host sent us
+	for(pl := c.links; pl != nil; pl = tl pl){
+		pr := hd pl;
+		if(pr.acks > 0){
+			d := array[5] of byte;
+			d[0] = byte 1;
+			bthci->put2(d, 1, pr.handle);
+			bthci->put2(d, 3, pr.acks);
+			pr.acks = 0;
+			out = cat(out, event(Bthci->EvNumCompleted, d));
+		}
 	}
 	if(c.lescanning && c.leadv != nil){
 		# LE Advertising Report, one device: subevent, n, type, addrtype, addr, dlen, data, rssi

@@ -31,10 +31,25 @@ implement Bt9p;
 #     hci       read/write raw H4 packets, exclusive. While held, ctl verbs
 #                     that would issue commands are refused: the stack has
 #                     lent the controller to whoever holds this.
+#     clone     open  a new conversation N; the open fid is N's ctl and reads "N"
+#     N/ctl     write "connect <addr>!<psm>" -- the reply waits until the L2CAP
+#                     channel is open, or fails saying why; "announce <psm>";
+#                     "hangup"
+#     N/data    read  one SDU per read (a whole L2CAP frame); write one SDU
+#     N/status  read  Connected | Connecting | Listen | Closed | Hangup <why>
+#     N/local   read  "<our addr>!<psm>"
+#     N/remote  read  "<peer addr>!<psm>"
+#     N/listen  open  on an announced conversation, blocks until a peer connects
+#                     to its PSM; reading gives the new conversation's number
 #
-# Not here yet: clone and the conversation directories (L2CAP, M5),
-# keys (M6). The ctl verbs for what is not done refuse with "not yet",
-# not silence.
+# Because clone and the conversation directories have /net/tcp's
+# shape, dial(2)'s dial("bt!addr!psm"), announce("bt!*!psm") and
+# listen() work with no change to dial. Conversations live until their
+# last file is closed; a link (an ACL connection to one peer) lives
+# while anything on it does.
+#
+# Not here yet: keys and pairing (M6). A peer that demands
+# authentication is told no, and the connection fails with its reason.
 #
 # The firmware. A Broadcom controller boots from ROM and takes a patch
 # over HCI: "firmware <path>" names a .hcd file (on the board,
@@ -85,12 +100,63 @@ include "bthci.m";
 	bthci: Bthci;
 	Pkt, Event, Transport, Hci, Version, Found: import bthci;
 
+include "l2cap.m";
+	l2cap: L2cap;
+	Link, Chan, Ev: import l2cap;
+
 Bt9p: module
 {
 	init:	fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-Qroot, Qbt, Qaddr, Qstatus, Qctl, Qscan, Qlescan, Qevent, Qhci: con iota;
+Qroot, Qbt, Qaddr, Qstatus, Qctl, Qscan, Qlescan, Qevent, Qhci, Qclone: con iota;
+
+# a conversation's files: path is (id+1)<<8 | one of these
+Qcdir, Qcctl, Qcdata, Qcstatus, Qclocal, Qcremote, Qclisten: con 1 + iota;
+CPATH(id, q: int): int { return ((id + 1) << 8) | q; }
+CONVID(path: int): int { return (path >> 8) - 1; }
+CTYPE(path: int): int { return path & 16rff; }
+
+#
+# Links and conversations. A Lnk is an ACL connection to one peer with
+# its L2CAP on top; a Conv is one directory under /net/bt, an L2CAP
+# channel or a listener for a PSM.
+#
+Lconnecting, Lup: con iota;
+
+Lnk: adt {
+	addr:	string;
+	handle:	int;
+	state:	int;
+	l2:	ref Link;
+	waiting: list of ref Conv;	# to connect once the link is up
+};
+links: list of ref Lnk;
+aclmtu := 27;			# the controller's ACL packet size, from Read_Buffer_Size
+aclcredits := 1;		# ACL packets the controller can take now
+aclq: list of ref Pkt;		# waiting for a credit
+inflight: list of (int, int);	# per handle, packets sent and not yet completed
+
+Conv: adt {
+	id:	int;
+	state:	string;
+	lnk:	ref Lnk;
+	ch:	ref Chan;
+	psm:	int;
+	raddr:	string;
+	opens:	int;
+	listening: int;
+	accepted: int;			# an incoming call, held for a listener
+	rq:	list of array of byte;	# SDUs waiting to be read
+	rpending: ref Tmsg.Read;
+	cpending: ref Tmsg.Write;	# a connect waiting for the channel
+	lpending: ref Tmsg.Open;	# a listen waiting for a call
+	lq:	list of int;		# calls accepted, not yet handed to a listener
+};
+convs: list of ref Conv;
+nconv := 0;
+clonefids: list of (int, int);	# fid -> conversation, for opens of clone and listen
+thetree: ref Tree;
 
 Cmdms: con 3000;		# a command that takes longer than this has not been answered
 
@@ -153,6 +219,8 @@ Ctlres: adt {
 	conn:	int;			# -1: unchanged
 	uploaded: int;			# records the patch upload sent
 	baud:	int;			# rate set, 0 if none
+	aclmtu:	int;			# from Read_Buffer_Size on up
+	aclnum:	int;
 };
 ctldone: chan of ref Ctlres;
 busy := 0;			# a worker is talking to the controller
@@ -206,6 +274,9 @@ init(nil: ref Draw->Context, args: list of string)
 	bthci = load Bthci Bthci->PATH;
 	if(bthci == nil)
 		badmod(Bthci->PATH);
+	l2cap = load L2cap L2cap->PATH;
+	if(l2cap == nil)
+		badmod(L2cap->PATH);
 
 	mountpt := "/net";
 	arg->init(args);
@@ -228,6 +299,7 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers->init(styx);
 	nametree->init();
 	bthci->init();
+	l2cap->init(bthci);
 
 	fd := opentransport(transportname);
 	if(fd == nil){
@@ -246,6 +318,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qbt, dir("lescan", 8r440, Qlescan));
 	tree.create(big Qbt, dir("event", 8r400, Qevent));
 	tree.create(big Qbt, dir("hci", Sys->DMEXCL|8r600, Qhci));
+	tree.create(big Qbt, dir("clone", 8r666, Qclone));
+	thetree = tree;
 
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0){
@@ -355,10 +429,22 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 			}
 			dropsub(old.fid);
 		}
+		if(c != nil && CONVID(int c.path) >= 0){
+			if(!convopen(srv, tm, c))
+				return 1;
+		}
+		if(c != nil && int c.path == Qclone && !up){
+			srv.reply(ref Rmsg.Error(tm.tag, "controller not up"));
+			return 1;
+		}
 		c = srv.open(tm);
 		if(c == nil)
 			return 1;
 		case int c.path {
+		Qclone =>
+			cv := newconv();
+			cv.opens++;
+			clonefids = (tm.fid, cv.id) :: clonefids;
 		Qhci =>
 			hcifid = tm.fid;
 			hciq = nil;
@@ -372,9 +458,19 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 			srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
 			return 1;
 		}
+		if(CONVID(int c.path) >= 0){
+			convread(srv, tm, c);
+			return 1;
+		}
 		case int c.path {
 		Qroot or Qbt =>
 			srv.read(tm);
+		Qclone =>
+			cv := clonefid(tm.fid);
+			if(cv == nil)
+				srv.reply(ref Rmsg.Error(tm.tag, "phase error -- no conversation"));
+			else
+				srv.reply(styxservers->readstr(tm, sys->sprint("%d", cv.id)));
 		Qaddr =>
 			if(!up)
 				srv.reply(ref Rmsg.Error(tm.tag, "controller not up"));
@@ -451,9 +547,19 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 			srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
 			return 1;
 		}
+		if(CONVID(int c.path) >= 0){
+			convwrite(srv, tm, c);
+			return 1;
+		}
 		case int c.path {
 		Qctl =>
 			ctl(srv, tm);
+		Qclone =>
+			cv := clonefid(tm.fid);
+			if(cv == nil)
+				srv.reply(ref Rmsg.Error(tm.tag, "phase error -- no conversation"));
+			else
+				convctl(srv, tm, cv);
 		Qhci =>
 			if(len tm.data < 1){
 				srv.reply(ref Rmsg.Error(tm.tag, "empty packet"));
@@ -470,6 +576,12 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 	Clunk =>
 		c := srv.clunk(tm);
 		if(c != nil){
+			if(CONVID(int c.path) >= 0 || int c.path == Qclone){
+				# a walk that was never opened -- a stat -- holds nothing
+				if(c.isopen)
+					convclunk(srv, tm.fid, c);
+				return 1;
+			}
 			case int c.path {
 			Qhci =>
 				if(tm.fid == hcifid){
@@ -526,6 +638,15 @@ cancel(tag: int)
 	}
 	if(hcipending != nil && hcipending.tag == tag)
 		hcipending = nil;
+	for(cl := convs; cl != nil; cl = tl cl){
+		cv := hd cl;
+		if(cv.rpending != nil && cv.rpending.tag == tag)
+			cv.rpending = nil;
+		if(cv.cpending != nil && cv.cpending.tag == tag)
+			cv.cpending = nil;
+		if(cv.lpending != nil && cv.lpending.tag == tag)
+			cv.lpending = nil;
+	}
 }
 
 #
@@ -652,6 +773,41 @@ event(srv: ref Styxserver, e: ref Event)
 		}
 		s.naming = nil;
 		nextname(srv, s);
+	Bthci->EvConnComplete =>
+		(st, h, who, nil) := bthci->conncomplete(e);
+		linkup(srv, who, h, st);
+	Bthci->EvConnRequest =>
+		(who, nil, ltype) := bthci->connrequest(e);
+		if(ltype != 1)
+			return;
+		# a peer calls: accept, as a peripheral. The link then completes
+		# like one we asked for.
+		if(linkbyaddr(who) == nil)
+			links = ref Lnk(who, 0, Lconnecting, nil, nil) :: links;
+		spawn accept(who);
+	Bthci->EvDisconnComplete =>
+		(nil, h, reason) := bthci->disconncomplete(e);
+		lk := linkbyhandle(h);
+		if(lk != nil)
+			linkdown(srv, lk, "link lost: " + bthci->statusname(reason));
+		# whatever was still in the controller for that handle is
+		# gone with it, and so is the room it took (Vol 4 Part E 7.7.5)
+		aclcredits += completed(h, -1);
+		aclpump();
+	Bthci->EvNumCompleted =>
+		for(nl := bthci->numcompleted(e); nl != nil; nl = tl nl){
+			(h, n) := hd nl;
+			aclcredits += completed(h, n);
+		}
+		aclpump();
+	Bthci->EvLinkKeyRequest or Bthci->EvPinRequest =>
+		# no keys yet (M6): say so, and let the peer decide
+		if(len e.params >= 6){
+			op := Bthci->LinkKeyNegative;
+			if(e.code == Bthci->EvPinRequest)
+				op = Bthci->PinCodeNegative;
+			spawn fire(op, e.params[0:6]);
+		}
 	Bthci->EvLeMeta =>
 		s := findsub(Qlescan);
 		if(s == nil || s.done)
@@ -712,7 +868,7 @@ nextname(srv: ref Styxserver, s: ref Sub)
 
 namework(addr: string)
 {
-	r := ref Ctlres(nil, nil, 0, "name", addr, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r := ref Ctlres(nil, nil, 0, "name", addr, 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
 	a := bthci->parsebdaddr(addr);
 	p := array[10] of { * => byte 0 };
 	if(a == nil)
@@ -733,7 +889,7 @@ namework(addr: string)
 #
 lescanwork(secs: int)
 {
-	r := ref Ctlres(nil, nil, 0, "lestart", nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r := ref Ctlres(nil, nil, 0, "lestart", nil, 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
 	if(!up)
 		r.err = "controller not up";
 	else{
@@ -753,7 +909,7 @@ lescanwork(secs: int)
 	if(err != nil)
 		return;
 	sys->sleep(secs * 1000);
-	r = ref Ctlres(nil, nil, 0, "ledone", nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r = ref Ctlres(nil, nil, 0, "ledone", nil, 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
 	(nil, r.err) = must("le set scan enable", Bthci->LeSetScanEnable, array[] of { byte 0, byte 0 });
 	ctldone <-= r;
 }
@@ -762,8 +918,17 @@ data(srv: ref Styxserver, p: ref Pkt)
 {
 	if(debug)
 		sys->fprint(stderr, "bt9p: data kind %d %d bytes\n", p.kind, len p.data);
-	if(hcifid >= 0)
+	if(hcifid >= 0){
 		rawpost(srv, p);
+		return;
+	}
+	if(p.kind != Bthci->Hacl)
+		return;
+	(h, nil) := bthci->aclheader(p);
+	lk := linkbyhandle(h);
+	if(lk == nil || lk.l2 == nil)
+		return;
+	l2events(srv, lk, lk.l2.recv(p));
 }
 
 rawpost(srv: ref Styxserver, p: ref Pkt)
@@ -828,6 +993,13 @@ status(): string
 	s += sys->sprint("events dropped %d\n", hci.dropped);
 	if(hcifid >= 0)
 		s += "hci held\n";
+	nl := 0;
+	for(ll := links; ll != nil; ll = tl ll)
+		nl++;
+	nc := 0;
+	for(cl := convs; cl != nil; cl = tl cl)
+		nc++;
+	s += sys->sprint("links %d\nconversations %d\nacl mtu %d credits %d\n", nl, nc, aclmtu, aclcredits);
 	return s;
 }
 
@@ -969,7 +1141,7 @@ scanenable(): array of byte
 
 ctlwork(tm: ref Tmsg.Write, verb: string, args: list of string)
 {
-	r := ref Ctlres(tm, nil, 0, nil, nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r := ref Ctlres(tm, nil, 0, nil, nil, 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
 	case verb {
 	"up" =>
 		r.err = bringup(r);
@@ -1076,6 +1248,14 @@ bringup(r: ref Ctlres): string
 	(nil, err) = must("set event mask", Bthci->SetEventMask, mask);
 	if(err != nil)
 		return err;
+	# how big an ACL packet the controller takes, and how many at once
+	(ret, err) = must("read buffer size", Bthci->ReadBufferSize, nil);
+	if(err != nil)
+		return err;
+	if(len ret >= 7){
+		r.aclmtu = bthci->get2(ret, 0);
+		r.aclnum = bthci->get2(ret, 3);
+	}
 	# inquiry results with RSSI, if the controller will; not fatal if it will not
 	cmd(Bthci->WriteInquiryMode, array[] of { byte 1 });
 	(nil, err) = must("scan enable", Bthci->WriteScanEnable, scanenable());
@@ -1159,6 +1339,16 @@ setbaud(r: ref Ctlres, n: int): string
 finished(srv: ref Styxserver, r: ref Ctlres)
 {
 	case r.kind {
+	"conntimeout" =>
+		cv := conv(int r.who);
+		if(cv != nil && cv.state == "Connecting" && !cv.accepted)
+			hangup(srv, cv, "connection timed out");
+		return;
+	"linkfail" =>
+		lk := linkbyaddr(r.who);
+		if(lk != nil && lk.state == Lconnecting)
+			linkdown(srv, lk, "connection failed: " + r.err);
+		return;
 	"name" =>
 		# a Remote Name Request refused outright: the device goes out nameless
 		if(r.err != nil){
@@ -1217,10 +1407,16 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 		addr = r.addr;
 		name = r.name;
 		version = r.version;
+		if(r.aclmtu > 0){
+			aclmtu = r.aclmtu;
+			aclcredits = r.aclnum;
+		}
 		if(firmware != nil)
 			uploaded = r.uploaded;
 	}else if(r.setup < 0){
 		up = 0;
+		for(ll := links; ll != nil; ll = tl ll)
+			linkdown(srv, hd ll, "controller down");
 	}else if(r.baud > 0){
 		baud = r.baud;
 	}else{
@@ -1243,7 +1439,7 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 #
 inquire()
 {
-	r := ref Ctlres(nil, nil, 1, nil, nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r := ref Ctlres(nil, nil, 1, nil, nil, 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
 	if(!up)
 		r.err = "controller not up";
 	else{
@@ -1266,4 +1462,701 @@ inquire()
 cancelinquiry()
 {
 	cmd(Bthci->InquiryCancel, nil);
+}
+
+#
+# Conversations.
+#
+
+newconv(): ref Conv
+{
+	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil);
+	convs = cv :: convs;
+	id := cv.id;
+	nm := sys->sprint("%d", id);
+	thetree.create(big Qbt, dir(nm, Sys->DMDIR|8r555, CPATH(id, Qcdir)));
+	thetree.create(big CPATH(id, Qcdir), dir("ctl", 8r666, CPATH(id, Qcctl)));
+	thetree.create(big CPATH(id, Qcdir), dir("data", 8r666, CPATH(id, Qcdata)));
+	thetree.create(big CPATH(id, Qcdir), dir("status", 8r444, CPATH(id, Qcstatus)));
+	thetree.create(big CPATH(id, Qcdir), dir("local", 8r444, CPATH(id, Qclocal)));
+	thetree.create(big CPATH(id, Qcdir), dir("remote", 8r444, CPATH(id, Qcremote)));
+	thetree.create(big CPATH(id, Qcdir), dir("listen", 8r444, CPATH(id, Qclisten)));
+	return cv;
+}
+
+freeconv(cv: ref Conv)
+{
+	keep: list of ref Conv;
+	for(cl := convs; cl != nil; cl = tl cl)
+		if(hd cl != cv)
+			keep = hd cl :: keep;
+	convs = keep;
+	id := cv.id;
+	thetree.remove(big CPATH(id, Qcctl));
+	thetree.remove(big CPATH(id, Qcdata));
+	thetree.remove(big CPATH(id, Qcstatus));
+	thetree.remove(big CPATH(id, Qclocal));
+	thetree.remove(big CPATH(id, Qcremote));
+	thetree.remove(big CPATH(id, Qclisten));
+	thetree.remove(big CPATH(id, Qcdir));
+}
+
+conv(id: int): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).id == id)
+			return hd cl;
+	return nil;
+}
+
+clonefid(fid: int): ref Conv
+{
+	for(l := clonefids; l != nil; l = tl l){
+		(f, id) := hd l;
+		if(f == fid)
+			return conv(id);
+	}
+	return nil;
+}
+
+dropclonefid(fid: int)
+{
+	keep: list of (int, int);
+	for(l := clonefids; l != nil; l = tl l){
+		(f, nil) := hd l;
+		if(f != fid)
+			keep = hd l :: keep;
+	}
+	clonefids = keep;
+}
+
+# listeners announced for a PSM
+listener(psm: int): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).listening && (hd cl).psm == psm)
+			return hd cl;
+	return nil;
+}
+
+announced(): list of int
+{
+	l: list of int;
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).listening)
+			l = (hd cl).psm :: l;
+	return l;
+}
+
+# an Open on a conversation's file; returns 0 if it has been answered
+convopen(srv: ref Styxserver, tm: ref Tmsg.Open, c: ref Fid): int
+{
+	cv := conv(CONVID(int c.path));
+	if(cv == nil){
+		srv.reply(ref Rmsg.Error(tm.tag, "conversation gone"));
+		return 0;
+	}
+	case CTYPE(int c.path) {
+	Qclisten =>
+		if(!cv.listening){
+			srv.reply(ref Rmsg.Error(tm.tag, "not announced"));
+			return 0;
+		}
+		if(cv.lpending != nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "listen already pending"));
+			return 0;
+		}
+		if(cv.lq == nil){
+			# nobody has called yet: the open waits
+			cv.lpending = tm;
+			cv.opens++;
+			return 0;
+		}
+		nc := srv.open(tm);
+		if(nc == nil)
+			return 0;
+		clonefids = (tm.fid, hd cv.lq) :: clonefids;
+		cv.lq = tl cv.lq;
+		cv.opens++;
+		return 0;
+	Qcctl or Qcdata =>
+		nc := srv.open(tm);
+		if(nc != nil)
+			cv.opens++;
+		return 0;
+	}
+	srv.open(tm);
+	return 0;
+}
+
+# a listen that was waiting: a call has come in
+listenwake(srv: ref Styxserver, cv: ref Conv)
+{
+	if(cv.lpending == nil || cv.lq == nil)
+		return;
+	tm := cv.lpending;
+	cv.lpending = nil;
+	c := srv.getfid(tm.fid);
+	if(c == nil)
+		return;
+	clonefids = (tm.fid, hd cv.lq) :: clonefids;
+	cv.lq = tl cv.lq;
+	c.open(Styx->OREAD, Sys->Qid(big CPATH(cv.id, Qclisten), 0, Sys->QTFILE));
+	srv.reply(ref Rmsg.Open(tm.tag, Sys->Qid(big CPATH(cv.id, Qclisten), 0, Sys->QTFILE), srv.iounit()));
+}
+
+convread(srv: ref Styxserver, tm: ref Tmsg.Read, c: ref Fid)
+{
+	cv := conv(CONVID(int c.path));
+	if(cv == nil){
+		srv.reply(ref Rmsg.Error(tm.tag, "conversation gone"));
+		return;
+	}
+	case CTYPE(int c.path) {
+	Qcdir =>
+		srv.read(tm);
+	Qcctl =>
+		srv.reply(styxservers->readstr(tm, sys->sprint("%d", cv.id)));
+	Qcstatus =>
+		srv.reply(styxservers->readstr(tm, cv.state + "\n"));
+	Qclocal =>
+		srv.reply(styxservers->readstr(tm, sys->sprint("%s!%d\n", addr, cv.psm)));
+	Qcremote =>
+		if(cv.raddr == nil)
+			srv.reply(styxservers->readstr(tm, "\n"));
+		else
+			srv.reply(styxservers->readstr(tm, sys->sprint("%s!%d\n", cv.raddr, cv.psm)));
+	Qclisten =>
+		# the accepted conversation's number, as dial(2) reads it
+		acc := clonefid(tm.fid);
+		if(acc == nil)
+			srv.reply(ref Rmsg.Error(tm.tag, "phase error -- no call"));
+		else
+			srv.reply(styxservers->readstr(tm, sys->sprint("%d", acc.id)));
+	Qcdata =>
+		if(cv.rq != nil){
+			sdu := hd cv.rq;
+			cv.rq = tl cv.rq;
+			tm.offset = big 0;
+			srv.reply(styxservers->readbytes(tm, sdu));
+		}else if(cv.state != "Connected" && cv.state != "Connecting")
+			srv.reply(ref Rmsg.Read(tm.tag, nil));	# EOF: hung up
+		else if(cv.rpending != nil)
+			srv.reply(ref Rmsg.Error(tm.tag, "read already pending"));
+		else
+			cv.rpending = tm;
+	* =>
+		srv.reply(ref Rmsg.Error(tm.tag, "phase error -- bad path"));
+	}
+}
+
+convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
+{
+	cv := conv(CONVID(int c.path));
+	if(cv == nil){
+		srv.reply(ref Rmsg.Error(tm.tag, "conversation gone"));
+		return;
+	}
+	case CTYPE(int c.path) {
+	Qcctl =>
+		convctl(srv, tm, cv);
+	Qcdata =>
+		if(cv.state != "Connected" || cv.lnk == nil || cv.ch == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
+			return;
+		}
+		if(len tm.data > cv.ch.mtu){
+			srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("SDU too large: peer MTU is %d", cv.ch.mtu)));
+			return;
+		}
+		l2events(srv, cv.lnk, cv.lnk.l2.send(cv.ch, tm.data));
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+	* =>
+		srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
+	}
+}
+
+convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
+{
+	(nf, f) := sys->tokenize(string tm.data, " \t\r\n");
+	if(nf == 0){
+		srv.reply(ref Rmsg.Error(tm.tag, "empty ctl"));
+		return;
+	}
+	case hd f {
+	"connect" =>
+		if(nf != 2){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>"));
+			return;
+		}
+		(na, parts) := sys->tokenize(hd tl f, "!");
+		if(na != 2 || bthci->parsebdaddr(hd parts) == nil || (psm := parsepsm(hd tl parts)) <= 0){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>"));
+			return;
+		}
+		if(cv.state != "Closed"){
+			srv.reply(ref Rmsg.Error(tm.tag, "conversation in use: " + cv.state));
+			return;
+		}
+		if(!up){
+			srv.reply(ref Rmsg.Error(tm.tag, "controller not up"));
+			return;
+		}
+		if(hcifid >= 0){
+			srv.reply(ref Rmsg.Error(tm.tag, "hci file is held"));
+			return;
+		}
+		cv.raddr = hd parts;
+		cv.psm = psm;
+		cv.state = "Connecting";
+		cv.cpending = tm;
+		connect(srv, cv);
+		spawn conntimer(cv.id);
+	"announce" =>
+		if(nf != 2 || (psm := parsepsm(hd tl f)) <= 0){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: announce <psm>"));
+			return;
+		}
+		if(cv.state != "Closed"){
+			srv.reply(ref Rmsg.Error(tm.tag, "conversation in use: " + cv.state));
+			return;
+		}
+		if(listener(psm) != nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "PSM already announced"));
+			return;
+		}
+		cv.psm = psm;
+		cv.listening = 1;
+		cv.state = "Listen";
+		for(ll := links; ll != nil; ll = tl ll)
+			if((hd ll).l2 != nil)
+				(hd ll).l2.accept = announced();
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+	"hangup" =>
+		hangup(srv, cv, "hangup");
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+	* =>
+		srv.reply(ref Rmsg.Error(tm.tag, "unknown ctl verb: " + hd f));
+	}
+}
+
+# a PSM: decimal, or 0x hex; odd, as the specification requires
+parsepsm(s: string): int
+{
+	v := -1;
+	if(len s > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+		v = parsehex(s);
+	else{
+		(n, rest) := str->toint(s, 10);
+		if(rest == nil)
+			v = n;
+	}
+	if(v <= 0 || v > 16rffff || (v & 1) == 0)
+		return -1;
+	return v;
+}
+
+convclunk(srv: ref Styxserver, fid: int, c: ref Fid)
+{
+	cv: ref Conv;
+	if(int c.path == Qclone || CTYPE(int c.path) == Qclisten){
+		# the clone fid was a conversation's ctl; a listen fid holds
+		# the accepted conversation, and the listener's count too
+		acc := clonefid(fid);
+		dropclonefid(fid);
+		if(CTYPE(int c.path) == Qclisten){
+			# the listener's count, and the accepted conversation's
+			# hold, which the listen fid carried
+			ls := conv(CONVID(int c.path));
+			if(ls != nil)
+				release(srv, ls);
+			if(acc != nil)
+				release(srv, acc);
+			return;
+		}
+		cv = acc;
+	}else
+		cv = conv(CONVID(int c.path));
+	if(cv == nil)
+		return;
+	case CTYPE(int c.path) {
+	Qcctl or Qcdata =>
+		release(srv, cv);
+	* =>
+		if(int c.path == Qclone)
+			release(srv, cv);
+	}
+}
+
+release(srv: ref Styxserver, cv: ref Conv)
+{
+	if(--cv.opens > 0)
+		return;
+	cv.opens = 0;
+	if(cv.lpending != nil){
+		srv.reply(ref Rmsg.Error(cv.lpending.tag, "listener closed"));
+		cv.lpending = nil;
+	}
+	if(cv.state == "Connected" || cv.state == "Connecting")
+		hangup(srv, cv, "closed");
+	if(cv.listening){
+		cv.listening = 0;
+		for(ll := links; ll != nil; ll = tl ll)
+			if((hd ll).l2 != nil)
+				(hd ll).l2.accept = announced();
+		# calls accepted that no listen ever read
+		for(q := cv.lq; q != nil; q = tl q){
+			acc := conv(hd q);
+			if(acc != nil)
+				release(srv, acc);
+		}
+		cv.lq = nil;
+	}
+	freeconv(cv);
+	idlelinks();
+}
+
+# a link nobody uses goes down; it is forgotten now rather than at
+# its Disconnection Complete, so a new connect to the same peer makes
+# a new link instead of using one on its way out. A channel still
+# waiting for its Disconnection Response keeps the link until it comes.
+idlelinks()
+{
+	for(ll := links; ll != nil; ll = tl ll){
+		lk := hd ll;
+		if(lk.state == Lup && lk.l2 != nil && lk.l2.chans == nil && lk.waiting == nil && !linkwanted(lk)){
+			forgetlink(lk);
+			spawn disconnect(lk.handle);
+		}
+	}
+}
+
+forgetlink(lk: ref Lnk)
+{
+	keep: list of ref Lnk;
+	for(ll := links; ll != nil; ll = tl ll)
+		if(hd ll != lk)
+			keep = hd ll :: keep;
+	links = keep;
+}
+
+linkwanted(lk: ref Lnk): int
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).lnk == lk)
+			return 1;
+	return 0;
+}
+
+hangup(srv: ref Styxserver, cv: ref Conv, why: string)
+{
+	if(cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && cv.state == "Connected")
+		l2events(srv, cv.lnk, cv.lnk.l2.disconnect(cv.ch));
+	if(cv.state == "Connecting" && cv.lnk != nil)
+		cv.lnk.waiting = without(cv.lnk.waiting, cv);
+	closed(srv, cv, why);
+}
+
+# the conversation is over, one way or another
+closed(srv: ref Styxserver, cv: ref Conv, why: string)
+{
+	if(why == "hangup" || why == "closed")
+		cv.state = "Closed";
+	else
+		cv.state = "Hangup " + why;
+	cv.ch = nil;
+	if(cv.cpending != nil){
+		srv.reply(ref Rmsg.Error(cv.cpending.tag, why));
+		cv.cpending = nil;
+	}
+	if(cv.rpending != nil){
+		srv.reply(ref Rmsg.Read(cv.rpending.tag, nil));
+		cv.rpending = nil;
+	}
+	cv.lnk = nil;
+}
+
+without(l: list of ref Conv, cv: ref Conv): list of ref Conv
+{
+	keep: list of ref Conv;
+	for(; l != nil; l = tl l)
+		if(hd l != cv)
+			keep = hd l :: keep;
+	return keep;
+}
+
+#
+# Links.
+#
+
+linkbyaddr(a: string): ref Lnk
+{
+	for(ll := links; ll != nil; ll = tl ll)
+		if((hd ll).addr == a)
+			return hd ll;
+	return nil;
+}
+
+linkbyhandle(h: int): ref Lnk
+{
+	for(ll := links; ll != nil; ll = tl ll)
+		if((hd ll).state == Lup && (hd ll).handle == h)
+			return hd ll;
+	return nil;
+}
+
+# connect a conversation: over the link to its peer, made if need be
+connect(srv: ref Styxserver, cv: ref Conv)
+{
+	lk := linkbyaddr(cv.raddr);
+	if(lk == nil){
+		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil);
+		links = lk :: links;
+		spawn createconn(cv.raddr);
+	}
+	cv.lnk = lk;
+	if(lk.state != Lup){
+		lk.waiting = cv :: lk.waiting;
+		return;
+	}
+	l2connect(srv, lk, cv);
+}
+
+l2connect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
+{
+	(ch, evs) := lk.l2.connect(cv.psm);
+	cv.ch = ch;
+	l2events(srv, lk, evs);
+}
+
+# a Connection Complete: the link is up, or it is not
+linkup(srv: ref Styxserver, who: string, h, st: int)
+{
+	lk := linkbyaddr(who);
+	if(lk == nil)
+		return;
+	if(st != Bthci->Sok){
+		linkdown(srv, lk, "connection failed: " + bthci->statusname(st));
+		return;
+	}
+	lk.handle = h;
+	lk.state = Lup;
+	lk.l2 = Link.new(h);
+	lk.l2.accept = announced();
+	w := lk.waiting;
+	lk.waiting = nil;
+	for(; w != nil; w = tl w)
+		l2connect(srv, lk, hd w);
+}
+
+linkdown(srv: ref Styxserver, lk: ref Lnk, why: string)
+{
+	forgetlink(lk);
+	for(w := lk.waiting; w != nil; w = tl w)
+		closed(srv, hd w, why);
+	lk.waiting = nil;
+	if(lk.l2 != nil)
+		l2events(srv, lk, lk.l2.down(why));
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).lnk == lk)
+			closed(srv, hd cl, why);
+}
+
+# what L2CAP asked for: frames out, channels up and down, data in
+l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
+{
+	for(; evs != nil; evs = tl evs){
+		pick e := hd evs {
+		Send =>
+			for(pl := l2cap->fragment(lk.handle, e.frame, aclmtu); pl != nil; pl = tl pl)
+				aclq = appendp(aclq, hd pl);
+			aclpump();
+		Opened =>
+			cv := convbychan(lk, e.c);
+			if(cv == nil)
+				continue;
+			cv.state = "Connected";
+			if(cv.cpending != nil){
+				srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
+				cv.cpending = nil;
+			}
+			# an accepted call, now open: hand it to the listener
+			if(cv.accepted){
+				ls := listener(cv.psm);
+				if(ls == nil)
+					release(srv, cv);
+				else{
+					ls.lq = appendi(ls.lq, cv.id);
+					listenwake(srv, ls);
+				}
+			}
+		Incoming =>
+			ls := listener(e.c.psm);
+			if(ls == nil)
+				continue;
+			nc := newconv();
+			nc.lnk = lk;
+			nc.ch = e.c;
+			nc.psm = e.c.psm;
+			nc.raddr = lk.addr;
+			nc.state = "Connecting";
+			nc.accepted = 1;
+			nc.opens = 1;		# held for the listener until a listen takes it
+		Closed =>
+			cv := convbychan(lk, e.c);
+			if(cv != nil){
+				held := cv.accepted && cv.state == "Connecting";
+				closed(srv, cv, e.reason);
+				if(held)
+					release(srv, cv);	# a call that died before any listen saw it
+			}
+		Data =>
+			cv := convbychan(lk, e.c);
+			if(cv == nil)
+				continue;
+			if(cv.rpending != nil){
+				tm := cv.rpending;
+				cv.rpending = nil;
+				tm.offset = big 0;
+				srv.reply(styxservers->readbytes(tm, e.sdu));
+			}else
+				cv.rq = appendb(cv.rq, e.sdu);
+		}
+	}
+	idlelinks();
+}
+
+convbychan(lk: ref Lnk, ch: ref Chan): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).lnk == lk && (hd cl).ch == ch)
+			return hd cl;
+	return nil;
+}
+
+appendi(l: list of int, i: int): list of int
+{
+	if(l == nil)
+		return i :: nil;
+	return hd l :: appendi(tl l, i);
+}
+
+appendb(l: list of array of byte, b: array of byte): list of array of byte
+{
+	if(l == nil)
+		return b :: nil;
+	return hd l :: appendb(tl l, b);
+}
+
+# ACL packets go out as the controller has room, Read_Buffer_Size's
+# count at a time, Number Of Completed Packets giving room back
+aclpump()
+{
+	while(aclcredits > 0 && aclq != nil){
+		p := hd aclq;
+		aclq = tl aclq;
+		if(hci.send(p) < 0)
+			continue;
+		aclcredits--;
+		(h, nil) := bthci->aclheader(p);
+		sent(h);
+	}
+}
+
+sent(h: int)
+{
+	l: list of (int, int);
+	found := 0;
+	for(il := inflight; il != nil; il = tl il){
+		(ih, n) := hd il;
+		if(ih == h){
+			n++;
+			found = 1;
+		}
+		l = (ih, n) :: l;
+	}
+	if(!found)
+		l = (h, 1) :: l;
+	inflight = l;
+}
+
+# n packets on handle h completed, or all of them if n < 0; returns
+# how many credits that gives back
+completed(h, n: int): int
+{
+	l: list of (int, int);
+	back := 0;
+	for(il := inflight; il != nil; il = tl il){
+		(ih, m) := hd il;
+		if(ih == h){
+			if(n < 0 || n > m)
+				n = m;
+			back = n;
+			m -= n;
+		}
+		if(m > 0)
+			l = (ih, m) :: l;
+	}
+	inflight = l;
+	return back;
+}
+
+#
+# The HCI commands a link needs, from workers: their events do the
+# rest, so nothing waits for them here.
+#
+createconn(who: string)
+{
+	a := bthci->parsebdaddr(who);
+	p := array[13] of { * => byte 0 };
+	p[0:] = a;
+	bthci->put2(p, 6, 16rcc18);	# DM1 DH1 DM3 DH3 DM5 DH5
+	p[8] = byte 1;			# page scan repetition mode R1
+	p[12] = byte 1;			# allow role switch
+	(st, nil, err) := cmd(Bthci->CreateConnection, p);
+	if(err != nil || st != Bthci->Sok){
+		# no Connection Complete will come: say so through one
+		r := ref Ctlres(nil, nil, 0, "linkfail", who, 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
+		if(err != nil)
+			r.err = err;
+		else
+			r.err = bthci->statusname(st);
+		ctldone <-= r;
+	}
+}
+
+accept(who: string)
+{
+	a := bthci->parsebdaddr(who);
+	p := array[7] of { * => byte 0 };
+	p[0:] = a;
+	p[6] = byte 1;			# remain peripheral
+	cmd(Bthci->AcceptConnection, p);
+}
+
+disconnect(h: int)
+{
+	p := array[3] of byte;
+	bthci->put2(p, 0, h);
+	p[2] = byte Bthci->Slocalterm;
+	cmd(Bthci->Disconnect, p);
+}
+
+fire(op: int, params: array of byte)
+{
+	cmd(op, params);
+}
+
+#
+# A connect that neither completes nor fails -- a peer that never
+# answers the L2CAP request, a link that pages for ever -- is failed
+# from here, so a write to ctl always returns.
+#
+Connms: con 15000;
+
+conntimer(id: int)
+{
+	sys->sleep(Connms);
+	r := ref Ctlres(nil, nil, 0, "conntimeout", sys->sprint("%d", id), 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
+	ctldone <-= r;
 }

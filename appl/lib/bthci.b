@@ -313,7 +313,7 @@ inquiryresults(e: ref Event): list of ref Found
 			addr := bdaddr(p, 1 + 6*i);
 			cls := p[1 + 9*n + 3*i:] ;
 			class := int cls[0] | (int cls[1] << 8) | (int cls[2] << 16);
-			r = ref Found(addr, class, 0, nil) :: r;
+			r = ref Found(addr, class, 0, nil, -1) :: r;
 		}
 	EvInquiryResultRssi =>
 		n := int p[0];
@@ -327,7 +327,7 @@ inquiryresults(e: ref Event): list of ref Found
 			rssi := int p[1 + 13*n + i];
 			if(rssi >= 128)
 				rssi -= 256;
-			r = ref Found(addr, class, rssi, nil) :: r;
+			r = ref Found(addr, class, rssi, nil, -1) :: r;
 		}
 	EvExtInquiryResult =>
 		# n is always 1: addr 6, psrm 1, reserved 1, class 3, clock 2, rssi 1, EIR 240
@@ -338,9 +338,57 @@ inquiryresults(e: ref Event): list of ref Found
 		rssi := int p[14];
 		if(rssi >= 128)
 			rssi -= 256;
-		r = ref Found(addr, class, rssi, eirname(p[15:])) :: nil;
+		r = ref Found(addr, class, rssi, eirname(p[15:]), -1) :: nil;
 	}
 	return r;
+}
+
+#
+# LE Advertising Reports: an LE Meta event, subevent 2, then per
+# report -- laid out one report after another, as every controller in
+# practice sends them one at a time -- event type, address type,
+# address, data length, data, RSSI. The name is in the data, in the
+# same AD structures as an EIR.
+#
+leadvreports(e: ref Event): list of ref Found
+{
+	r: list of ref Found;
+
+	if(e == nil || e.code != EvLeMeta || len e.params < 2 || int e.params[0] != LeAdvReport)
+		return nil;
+	p := e.params;
+	n := int p[1];
+	i := 2;
+	for(k := 0; k < n; k++){
+		if(i + 9 > len p)
+			break;
+		letype := int p[i+1];
+		addr := bdaddr(p, i+2);
+		dlen := int p[i+8];
+		if(i + 9 + dlen + 1 > len p)
+			break;
+		nm := eirname(p[i+9:i+9+dlen]);
+		rssi := int p[i+9+dlen];
+		if(rssi >= 128)
+			rssi -= 256;
+		r = ref Found(addr, 0, rssi, nm, letype) :: r;
+		i += 10 + dlen;
+	}
+	l: list of ref Found;
+	for(; r != nil; r = tl r)
+		l = hd r :: l;
+	return l;
+}
+
+remotename(e: ref Event): (int, string, string)
+{
+	if(e == nil || e.code != EvRemoteName || len e.params < 7)
+		return (-1, nil, nil);
+	p := e.params;
+	n := 7;
+	while(n < len p && p[n] != byte 0)
+		n++;
+	return (int p[0], bdaddr(p, 1), string p[7:n]);
 }
 
 # the name in an Extended Inquiry Response: type 9 complete, type 8 shortened

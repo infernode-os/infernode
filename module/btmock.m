@@ -34,6 +34,9 @@ Btmock: module
 		owed:	int;			# a credit refund is pending
 		inquiring:	list of ref Bthci->Found;	# results not yet emitted
 		inquirydone:	int;		# Inquiry Complete not yet emitted
+		naming:	list of string;		# Remote Name Requests to answer, by address
+		lescanning:	int;		# LE scan enabled
+		leadv:	list of ref Bthci->Found;	# advertising reports not yet emitted
 		log:	list of string;		# "cmd 0x0c03 <hex params>", newest first
 		d:	ref Bthci->Deframer;
 

@@ -20,8 +20,12 @@ implement Bt9p;
 #     ctl       write up | down | reset | name <s> | class <hex>
 #                     discoverable on|off | connectable on|off | scan <secs>
 #                     firmware <path> | baud <n>
-#     scan      read  runs an inquiry; one device per line as found,
-#                     "<addr> <class> <rssi> <name>"; EOF at Inquiry Complete
+#     scan      read  runs an inquiry; one device per line, "<addr> <class>
+#                     <rssi> <name>", each written once its name is known
+#                     (from the EIR, or a Remote Name Request after the
+#                     inquiry; "-" if it will not say); EOF after the last
+#     lescan    read  the same for LE: "<addr> public|random <rssi> <name>",
+#                     one line per device heard, EOF when the scan time is up
 #     event     read  the HCI event stream as text, "event 0x0e 01 03 0c 00",
 #                     one per line, as long as the file is held open. Debugging.
 #     hci       read/write raw H4 packets, exclusive. While held, ctl verbs
@@ -29,8 +33,8 @@ implement Bt9p;
 #                     lent the controller to whoever holds this.
 #
 # Not here yet: clone and the conversation directories (L2CAP, M5),
-# lescan (M4), keys (M6). The ctl verbs for what is not done refuse
-# with "not yet", not silence.
+# keys (M6). The ctl verbs for what is not done refuse with "not yet",
+# not silence.
 #
 # The firmware. A Broadcom controller boots from ROM and takes a patch
 # over HCI: "firmware <path>" names a .hcd file (on the board,
@@ -86,7 +90,7 @@ Bt9p: module
 	init:	fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-Qroot, Qbt, Qaddr, Qstatus, Qctl, Qscan, Qevent, Qhci: con iota;
+Qroot, Qbt, Qaddr, Qstatus, Qctl, Qscan, Qlescan, Qevent, Qhci: con iota;
 
 Cmdms: con 3000;		# a command that takes longer than this has not been answered
 
@@ -120,6 +124,9 @@ Sub: adt {
 	dropped: int;
 	started: int;			# the inquiry has been asked for (scan)
 	done:	int;			# EOF once lines are drained (scan)
+	found:	list of ref Found;	# scan: devices whose names are still to be asked for
+	naming:	string;			# scan: the address a Remote Name Request is out for
+	seen:	list of string;		# lescan: addresses already reported
 };
 subs: list of ref Sub;
 Maxlines: con 1000;
@@ -134,6 +141,8 @@ Ctlres: adt {
 	tm:	ref Tmsg.Write;
 	err:	string;
 	scanning: int;			# this was an Inquiry
+	kind:	string;			# nil: a ctl verb; else "name", "lestart", "ledone"
+	who:	string;			# the address a name request was for
 	# what the worker learned, applied by the serve loop
 	setup:	int;			# 1: up; -1: down or reset
 	addr:	string;
@@ -234,6 +243,7 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qbt, dir("status", 8r444, Qstatus));
 	tree.create(big Qbt, dir("ctl", 8r220, Qctl));
 	tree.create(big Qbt, dir("scan", 8r440, Qscan));
+	tree.create(big Qbt, dir("lescan", 8r440, Qlescan));
 	tree.create(big Qbt, dir("event", 8r400, Qevent));
 	tree.create(big Qbt, dir("hci", Sys->DMEXCL|8r600, Qhci));
 
@@ -335,12 +345,12 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 			srv.reply(ref Rmsg.Error(tm.tag, "hci file is held"));
 			return 1;
 		}
-		if(c != nil && int c.path == Qscan && (old := findsub(Qscan)) != nil){
+		if(c != nil && (int c.path == Qscan || int c.path == Qlescan) && (old := findsub(int c.path)) != nil){
 			# a finished scan whose reader has not been clunked yet
 			# -- a process's fds close after it exits -- is not in
 			# the way; a running one is
 			if(!old.done){
-				srv.reply(ref Rmsg.Error(tm.tag, "inquiry in progress"));
+				srv.reply(ref Rmsg.Error(tm.tag, "scan in progress"));
 				return 1;
 			}
 			dropsub(old.fid);
@@ -353,8 +363,8 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 			hcifid = tm.fid;
 			hciq = nil;
 			hcipending = nil;
-		Qevent or Qscan =>
-			subs = ref Sub(tm.fid, int c.path, nil, nil, 0, 0, 0, 0) :: subs;
+		Qevent or Qscan or Qlescan =>
+			subs = ref Sub(tm.fid, int c.path, nil, nil, 0, 0, 0, 0, nil, nil, nil) :: subs;
 		}
 	Read =>
 		c := srv.getfid(tm.fid);
@@ -394,6 +404,26 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 				s.started = 1;
 				busy = 1;
 				spawn inquire();
+			}
+			streamread(srv, s, tm);
+		Qlescan =>
+			s := findfid(tm.fid);
+			if(s == nil){
+				srv.reply(ref Rmsg.Read(tm.tag, nil));
+				return 1;
+			}
+			if(!s.started){
+				if(hcifid >= 0){
+					srv.reply(ref Rmsg.Error(tm.tag, "hci file is held"));
+					return 1;
+				}
+				if(busy){
+					srv.reply(ref Rmsg.Error(tm.tag, "busy: another ctl is talking to the controller"));
+					return 1;
+				}
+				s.started = 1;
+				busy = 1;
+				spawn lescanwork(scansecs);
 			}
 			streamread(srv, s, tm);
 		Qevent =>
@@ -452,7 +482,7 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 				dropsub(tm.fid);
 				if(s != nil && s.started && !s.done)
 					spawn cancelinquiry();
-			Qevent =>
+			Qlescan or Qevent =>
 				dropsub(tm.fid);
 			}
 		}
@@ -590,20 +620,142 @@ event(srv: ref Styxserver, e: ref Event)
 	case e.code {
 	Bthci->EvInquiryResult or Bthci->EvInquiryResultRssi or Bthci->EvExtInquiryResult =>
 		s := findsub(Qscan);
-		if(s == nil)
+		if(s == nil || s.done)
 			return;
 		for(f := bthci->inquiryresults(e); f != nil; f = tl f){
 			d := hd f;
-			nm := d.name;
-			if(nm == nil)
-				nm = "-";
-			post(srv, s, sys->sprint("%s 0x%6.6ux %d %s\n", d.addr, d.class, d.rssi, nm));
+			if(knows(s, d.addr))
+				continue;
+			s.seen = d.addr :: s.seen;
+			if(d.name != nil)
+				post(srv, s, foundline(d));
+			else
+				s.found = appendf(s.found, d);
 		}
 	Bthci->EvInquiryComplete =>
 		s := findsub(Qscan);
-		if(s != nil)
-			finish(srv, s);
+		if(s != nil && !s.done)
+			nextname(srv, s);
+	Bthci->EvRemoteName =>
+		s := findsub(Qscan);
+		if(s == nil || s.done || s.naming == nil)
+			return;
+		(st, who, nm) := bthci->remotename(e);
+		if(who != s.naming)
+			return;
+		if(s.found != nil){
+			d := hd s.found;
+			s.found = tl s.found;
+			if(st == Bthci->Sok && nm != nil)
+				d.name = nm;
+			post(srv, s, foundline(d));
+		}
+		s.naming = nil;
+		nextname(srv, s);
+	Bthci->EvLeMeta =>
+		s := findsub(Qlescan);
+		if(s == nil || s.done)
+			return;
+		for(f := bthci->leadvreports(e); f != nil; f = tl f){
+			d := hd f;
+			if(knows(s, d.addr))
+				continue;
+			s.seen = d.addr :: s.seen;
+			post(srv, s, foundline(d));
+		}
 	}
+}
+
+knows(s: ref Sub, addr: string): int
+{
+	for(l := s.seen; l != nil; l = tl l)
+		if(hd l == addr)
+			return 1;
+	return 0;
+}
+
+appendf(l: list of ref Found, f: ref Found): list of ref Found
+{
+	if(l == nil)
+		return f :: nil;
+	return hd l :: appendf(tl l, f);
+}
+
+foundline(d: ref Found): string
+{
+	nm := d.name;
+	if(nm == nil)
+		nm = "-";
+	if(d.letype < 0)
+		return sys->sprint("%s 0x%6.6ux %d %s\n", d.addr, d.class, d.rssi, nm);
+	t := "public";
+	if(d.letype == 1)
+		t = "random";
+	return sys->sprint("%s %s %d %s\n", d.addr, t, d.rssi, nm);
+}
+
+#
+# After the inquiry, the names: one Remote Name Request at a time for
+# each device that did not say its own, its line written when the
+# answer comes; EOF after the last.
+#
+nextname(srv: ref Styxserver, s: ref Sub)
+{
+	if(s.found == nil){
+		finish(srv, s);
+		return;
+	}
+	d := hd s.found;
+	s.naming = d.addr;
+	spawn namework(d.addr);
+}
+
+namework(addr: string)
+{
+	r := ref Ctlres(nil, nil, 0, "name", addr, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	a := bthci->parsebdaddr(addr);
+	p := array[10] of { * => byte 0 };
+	if(a == nil)
+		r.err = "bad address";
+	else{
+		p[0:] = a;
+		p[6] = byte 1;		# page scan repetition mode R1
+		(nil, r.err) = must("remote name request", Bthci->RemoteNameRequest, p);
+	}
+	ctldone <-= r;
+}
+
+#
+# An LE scan: active, for scansecs, duplicates filtered by the
+# controller and again here. The worker enables, reports that it
+# has, sleeps, disables, and reports that it is over; the
+# advertisements arrive as events between.
+#
+lescanwork(secs: int)
+{
+	r := ref Ctlres(nil, nil, 0, "lestart", nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	if(!up)
+		r.err = "controller not up";
+	else{
+		# active scan, interval and window 10ms, public own address, no filter
+		p := array[7] of byte;
+		p[0] = byte 1;
+		bthci->put2(p, 1, 16r10);
+		bthci->put2(p, 3, 16r10);
+		p[5] = byte 0;
+		p[6] = byte 0;
+		(nil, r.err) = must("le set scan parameters", Bthci->LeSetScanParameters, p);
+		if(r.err == nil)
+			(nil, r.err) = must("le set scan enable", Bthci->LeSetScanEnable, array[] of { byte 1, byte 1 });
+	}
+	err := r.err;
+	ctldone <-= r;
+	if(err != nil)
+		return;
+	sys->sleep(secs * 1000);
+	r = ref Ctlres(nil, nil, 0, "ledone", nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	(nil, r.err) = must("le set scan enable", Bthci->LeSetScanEnable, array[] of { byte 0, byte 0 });
+	ctldone <-= r;
 }
 
 data(srv: ref Styxserver, p: ref Pkt)
@@ -817,7 +969,7 @@ scanenable(): array of byte
 
 ctlwork(tm: ref Tmsg.Write, verb: string, args: list of string)
 {
-	r := ref Ctlres(tm, nil, 0, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r := ref Ctlres(tm, nil, 0, nil, nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
 	case verb {
 	"up" =>
 		r.err = bringup(r);
@@ -1006,6 +1158,39 @@ setbaud(r: ref Ctlres, n: int): string
 # the serve loop applies what a worker learned and answers the write
 finished(srv: ref Styxserver, r: ref Ctlres)
 {
+	case r.kind {
+	"name" =>
+		# a Remote Name Request refused outright: the device goes out nameless
+		if(r.err != nil){
+			s := findsub(Qscan);
+			if(s != nil && !s.done && s.naming == r.who){
+				if(s.found != nil){
+					post(srv, s, foundline(hd s.found));
+					s.found = tl s.found;
+				}
+				s.naming = nil;
+				nextname(srv, s);
+			}
+		}
+		return;
+	"lestart" =>
+		busy = 0;
+		s := findsub(Qlescan);
+		if(r.err != nil && s != nil){
+			s.done = 1;
+			if(s.pending != nil){
+				srv.reply(ref Rmsg.Error(s.pending.tag, r.err));
+				s.pending = nil;
+			}
+		}
+		return;
+	"ledone" =>
+		s := findsub(Qlescan);
+		if(s != nil)
+			finish(srv, s);
+		scans++;
+		return;
+	}
 	busy = 0;
 	if(r.scanning){
 		# the inquiry's Command Status: the read is parked or streaming already
@@ -1058,7 +1243,7 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 #
 inquire()
 {
-	r := ref Ctlres(nil, nil, 1, 0, nil, nil, nil, -1, -1, -1, 0, 0);
+	r := ref Ctlres(nil, nil, 1, nil, nil, 0, nil, nil, nil, -1, -1, -1, 0, 0);
 	if(!up)
 		r.err = "controller not up";
 	else{

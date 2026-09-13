@@ -75,7 +75,7 @@ init(nil: ref Draw->Context, args: list of string)
 			if(nf > 3)
 				nm = hd tl tl tl f;
 			(cls, nil) := hexint(hd tl f);
-			nearby = ref Found(hd f, cls, int hd tl tl f, nm) :: nearby;
+			nearby = ref Found(hd f, cls, int hd tl tl f, nm, -1) :: nearby;
 		's' =>	stingy = 1;
 		't' =>	tickms = int arg->earg();
 		'H' =>	hcd = arg->earg();

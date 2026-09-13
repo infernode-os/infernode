@@ -37,7 +37,7 @@ sleep 1
 BT=$MNT/bt
 
 # The tree.
-for (f in addr status ctl scan event hci) {
+for (f in addr status ctl scan lescan event hci) {
 	if {! ftest -f $BT/$f} {
 		raise 'fail:'^$f^' missing'
 	}
@@ -120,22 +120,38 @@ if {! ~ $"v 'discoverable 1'} {
 	raise 'fail:discoverable after write: '^$"v
 }
 
-# A scan: one line per device as found, EOF at Inquiry Complete. Two
-# devices were given to the mock; both come back with class and RSSI.
+# A scan: one line per device, written once its name is known -- a
+# Remote Name Request after the inquiry -- EOF after the last. Two
+# devices were given to the mock, one with a name; the other's name
+# request is a page timeout, and it goes out as "-".
 echo scan 1 > $BT/ctl
 scan=`{cat $BT/scan}
 n=`{cat $BT/scan | wc -l}
 if {! ~ $"n 2} {
 	raise 'fail:scan returned '^$"n^' lines, wanted 2'
 }
-if {! ~ $"scan *94:bb:43:44:61:04*0x1c010c*-61*} {
-	raise 'fail:scan is missing the first device: '^$"scan
+if {! ~ $"scan *94:bb:43:44:61:04*0x1c010c*-61*hephaestus*} {
+	raise 'fail:scan is missing the first device or its name: '^$"scan
 }
-if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*} {
-	raise 'fail:scan is missing the second device: '^$"scan
+if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
+	raise 'fail:scan is missing the nameless second device: '^$"scan
+}
+
+# An LE scan: one line per device heard, address type, RSSI, the
+# name from its advertising data; EOF when the scan time is up.
+le=`{cat $BT/lescan}
+n=`{cat $BT/lescan | wc -l}
+if {! ~ $"n 2} {
+	raise 'fail:lescan returned '^$"n^' lines, wanted 2'
+}
+if {! ~ $"le *94:bb:43:44:61:04*public*-61*hephaestus*} {
+	raise 'fail:lescan is missing the first device: '^$"le
+}
+if {! ~ $"le *aa:bb:cc:dd:ee:ff*public*-80*-*} {
+	raise 'fail:lescan is missing the second device: '^$"le
 }
 v=`{cat $BT/status | grep '^scans '}
-if {! ~ $"v 'scans 2'} {
+if {! ~ $"v 'scans 4'} {
 	raise 'fail:scans counted: '^$"v
 }
 

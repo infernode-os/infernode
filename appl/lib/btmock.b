@@ -18,7 +18,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, Deframer.new());
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new());
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -141,12 +141,26 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		c.class = int params[0] | (int params[1] << 8) | (int params[2] << 16);
 		return complete(c, op, Bthci->Sok, nil);
 	Bthci->SetEventMask or Bthci->WriteInquiryMode or Bthci->InquiryCancel
-	or Bthci->LeSetScanParameters or Bthci->LeSetScanEnable =>
+	or Bthci->LeSetScanParameters =>
 		if(op == Bthci->InquiryCancel){
 			c.inquiring = nil;
 			c.inquirydone = 0;
 		}
 		return complete(c, op, Bthci->Sok, nil);
+	Bthci->LeSetScanEnable =>
+		if(len params < 2)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		c.lescanning = int params[0];
+		if(c.lescanning)
+			c.leadv = c.nearby;
+		else
+			c.leadv = nil;
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->RemoteNameRequest =>
+		if(len params < 10)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		c.naming = appendn(c.naming, bthci->bdaddr(params, 0));
+		return cmdstatus(c, op, Bthci->Sok);
 	Bthci->ReadBufferSize =>
 		r := array[7] of byte;
 		bthci->put2(r, 0, 1021);
@@ -172,9 +186,25 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 	return cmdstatus(c, op, Bthci->Sunknowncmd);
 }
 
+appendn(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendn(tl l, s);
+}
+
+lookup(c: ref Ctlr, addr: string): ref Found
+{
+	for(l := c.nearby; l != nil; l = tl l)
+		if((hd l).addr == addr)
+			return hd l;
+	return nil;
+}
+
 #
-# What happens with time: a withheld credit comes back, and an
-# inquiry finds one more device or finishes.
+# What happens with time: a withheld credit comes back, an inquiry
+# finds one more device or finishes, a name request is answered, an
+# LE scan hears one more advertisement.
 #
 Ctlr.tick(c: self ref Ctlr): array of byte
 {
@@ -208,6 +238,53 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 	}else if(c.inquirydone){
 		c.inquirydone = 0;
 		out = cat(out, event(Bthci->EvInquiryComplete, array[] of { byte Bthci->Sok }));
+	}
+	if(c.naming != nil){
+		# Remote Name Request Complete: status, addr, name[248]; a
+		# device with no name to give is a page timeout, as one that
+		# is out of range would be
+		addr := hd c.naming;
+		c.naming = tl c.naming;
+		p := array[255] of { * => byte 0 };
+		f := lookup(c, addr);
+		if(f == nil || f.name == nil)
+			p[0] = byte Bthci->Spagetimeout;
+		else{
+			nm := array of byte f.name;
+			if(len nm > 247)
+				nm = nm[0:247];
+			p[7:] = nm;
+		}
+		a := bthci->parsebdaddr(addr);
+		if(a != nil)
+			p[1:] = a;
+		out = cat(out, event(Bthci->EvRemoteName, p));
+	}
+	if(c.lescanning && c.leadv != nil){
+		# LE Advertising Report, one device: subevent, n, type, addrtype, addr, dlen, data, rssi
+		f := hd c.leadv;
+		c.leadv = tl c.leadv;
+		data := array[0] of byte;
+		if(f.name != nil){
+			nm := array of byte f.name;
+			data = array[2 + len nm] of byte;
+			data[0] = byte (1 + len nm);
+			data[1] = byte 16r09;
+			data[2:] = nm;
+		}
+		p := array[11 + len data + 1] of byte;
+		p[0] = byte Bthci->LeAdvReport;
+		p[1] = byte 1;
+		p[2] = byte 0;			# ADV_IND
+		p[3] = byte 0;			# public
+		a := bthci->parsebdaddr(f.addr);
+		if(a == nil)
+			a = array[6] of { * => byte 0 };
+		p[4:] = a;
+		p[10] = byte len data;
+		p[11:] = data;
+		p[11 + len data] = byte f.rssi;
+		out = cat(out, event(Bthci->EvLeMeta, p));
 	}
 	return out;
 }

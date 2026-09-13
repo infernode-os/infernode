@@ -225,10 +225,13 @@ pins; they are a separate proposal.
                         "firmware <path>"        the .hcd, named by the caller
                                                  (kernel and bt9p name no path;
                                                  boot script says /n/dos/firmware/BCM4345C0.hcd)
-      scan        read  runs a BR/EDR inquiry; each line as found:
-                        "<addr> <class> <rssi> <name>"
-                        EOF at Inquiry Complete (default 10 s; "scan <secs>" on ctl adjusts)
-      lescan      read  same for LE advertising: "<addr> <addrtype> <rssi> <name-or-->"
+      scan        read  runs a BR/EDR inquiry; one line per device:
+                        "<addr> <class> <rssi> <name>", written once the
+                        name is known (EIR, or a Remote Name Request after
+                        the inquiry; "-" if it will not say); EOF after the
+                        last (default 10 s; "scan <secs>" on ctl adjusts)
+      lescan      read  same for LE advertising: "<addr> public|random <rssi> <name-or-->"
+                        EOF when the scan time is up
       event       read  the HCI event stream as text, one event per line,
                         for debugging -- what btmon shows. Root only.
       hci         read/write raw H4 packets. Exclusive open; takes the
@@ -393,8 +396,14 @@ parses the file and is unit-tested; the contract test uploads a
 three-record patch through the mock. What is not done is the only
 thing that matters here: a CYW43455 has not seen any of it.
 
-**M4 — discovery.** `scan`, `lescan`, remote name requests. Verified
-against this host's `hci0`, which is discoverable on demand.
+**M4 — discovery.** `scan`, `lescan`, remote name requests. *Done
+against the mock 2026-09-13:* a device's `scan` line is written once
+its name is known -- from the EIR, or from a Remote Name Request made
+after the inquiry, one at a time, `-` on a page timeout -- and
+`lescan` is an active LE scan for the `scan` time, one line per
+device heard with its address type and the name from its advertising
+data. Still to do: run it against this host's `hci0`, which is
+discoverable on demand, through the bridge (below).
 
 **M5 — L2CAP and conversations.** `clone`, `N/`, `dial` and `listen`
 over L2CAP; SDP client as a library (`sdp.m`); the board and the host
@@ -426,9 +435,9 @@ comparison via the confirmation path; legacy PIN for old peripherals.
 1. *Closed:* the power line is `#G/gpio/128`, not a `power` verb on
    `eia0ctl` and not a separate `#G/exp/N` directory. One schema for
    pins; a radio's switch is a pin whoever drives it.
-2. `scan` as a blocking streamed read that ends at Inquiry Complete,
-   versus a table refreshed by a ctl verb. Streaming is proposed
-   because `cat` then does the whole job.
+2. *Closed:* `scan` is a streamed read; `cat` does the whole job. One
+   refinement from building it: a device's line waits for its name,
+   so a line is complete when it appears and there are no corrections.
 3. Whether RFCOMM belongs in `bt9p` or in a separate `bt/rfcomm`
    composing over L2CAP conversations. Proposed: separate, decided at
    M7 when there is a measurement of what the extra hop costs.

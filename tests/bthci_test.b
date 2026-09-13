@@ -489,8 +489,8 @@ testInquiry(t: ref T)
 	f := startfake("00:11:22:33:44:55", 30);
 	if(f == nil)
 		t.fatal("cannot make a pipe");
-	f.ctlr.nearby = ref Found("94:bb:43:44:61:04", 16r1c010c, -61, nil) ::
-			ref Found("aa:bb:cc:dd:ee:ff", 16r000104, -80, nil) :: nil;
+	f.ctlr.nearby = ref Found("94:bb:43:44:61:04", 16r1c010c, -61, nil, -1) ::
+			ref Found("aa:bb:cc:dd:ee:ff", 16r000104, -80, nil, -1) :: nil;
 	h := Hci.new(Transport.h4(f.host));
 	params := bytes(16r33 :: 16r8b :: 16r9e :: 8 :: 0 :: nil);	# GIAC, 8*1.28s, unlimited
 	(st, nil, err) := h.cmd(Bthci->Inquiry, params, Ms);
@@ -544,6 +544,48 @@ testBroadcomVendor(t: ref T)
 	t.assertseq(bthci->bdaddr(ret, 0), "b8:27:eb:00:00:01", "and Read_BD_ADDR returns the new one");
 	h.stop();
 	stopfake(f);
+}
+
+testLeAndNames(t: ref T)
+{
+	# an LE Advertising Report: subevent 2, one report, ADV_IND, public,
+	# addr, 12 bytes of data carrying a complete name, RSSI -70
+	nm := array of byte "hephaestus";
+	p := array[11 + 2 + len nm + 1] of byte;
+	p[0] = byte Bthci->LeAdvReport;
+	p[1] = byte 1;
+	p[2] = byte 0;
+	p[3] = byte 1;
+	p[4:] = bthci->parsebdaddr("c0:ff:ee:00:00:01");
+	p[10] = byte (2 + len nm);
+	p[11] = byte (1 + len nm);
+	p[12] = byte 16r09;
+	p[13:] = nm;
+	p[13 + len nm] = byte 16rba;
+	l := bthci->leadvreports(ref Event(Bthci->EvLeMeta, p));
+	t.asserteq(len l, 1, "one advertising report");
+	if(l != nil){
+		f := hd l;
+		t.assertseq(f.addr, "c0:ff:ee:00:00:01", "its address");
+		t.asserteq(f.letype, 1, "a random address");
+		t.asserteq(f.rssi, -70, "its RSSI, signed");
+		t.assertseq(f.name, "hephaestus", "its name from the advertising data");
+	}
+	t.assert(bthci->leadvreports(ref Event(Bthci->EvLeMeta, bytes(16r01 :: 0 :: nil))) == nil,
+		"another subevent yields nothing");
+
+	# Remote Name Request Complete: status, addr, name[248]
+	q := array[255] of { * => byte 0 };
+	q[0] = byte 0;
+	q[1:] = bthci->parsebdaddr("94:bb:43:44:61:04");
+	q[7:] = array of byte "kiln";
+	(st, who, name) := bthci->remotename(ref Event(Bthci->EvRemoteName, q));
+	t.asserteq(st, Bthci->Sok, "name request succeeded");
+	t.assertseq(who, "94:bb:43:44:61:04", "for this address");
+	t.assertseq(name, "kiln", "with this name");
+	q[0] = byte Bthci->Spagetimeout;
+	(st, nil, nil) = bthci->remotename(ref Event(Bthci->EvRemoteName, q));
+	t.asserteq(st, Bthci->Spagetimeout, "a page timeout is reported as its status");
 }
 
 testHcdRecords(t: ref T)
@@ -613,6 +655,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Inquiry", testInquiry);
 	run("BroadcomVendor", testBroadcomVendor);
 	run("HcdRecords", testHcdRecords);
+	run("LeAndNames", testLeAndNames);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -116,6 +116,7 @@ Bthci: module
 	EvInquiryResultRssi:	con 16r22;
 	EvExtInquiryResult:	con 16r2f;
 	EvLeMeta:		con 16r3e;
+	LeAdvReport:		con 16r02;	# LE Meta subevent: Advertising Report
 
 	# HCI status codes worth naming
 	Sok:			con 16r00;
@@ -171,14 +172,19 @@ Bthci: module
 	vername:	fn(v: int): string;
 	manufacturer:	fn(m: int): string;
 
-	# an Inquiry Result (with or without RSSI) decoded: one entry per device
+	# a device found: by an Inquiry Result (with or without RSSI, or
+	# extended with an EIR) or by an LE Advertising Report
 	Found: adt {
 		addr:	string;
-		class:	int;
+		class:	int;		# BR/EDR class of device; 0 for LE
 		rssi:	int;		# 0 when the event carried none
-		name:	string;		# filled in by a later Remote Name event, if any
+		name:	string;		# from the EIR or advertising data, or a Remote Name event
+		letype:	int;		# -1 BR/EDR; else the LE address type, 0 public 1 random
 	};
 	inquiryresults:	fn(e: ref Event): list of ref Found;
+	leadvreports:	fn(e: ref Event): list of ref Found;
+	# a Remote Name Request Complete: status, address, name
+	remotename:	fn(e: ref Event): (int, string, string);
 
 	#
 	# The transport: an fd and a reader process turning its bytes into

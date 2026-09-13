@@ -151,14 +151,24 @@ on the port first
 .TP
 .B scan
 Read-only, one reader at a time. The first read starts an inquiry;
-each read returns the devices found since the last, one per line,
+each read returns the devices whose lines are ready, one per line,
 .IR "addr class rssi name" ,
-class in hex, rssi in dBm, name
+class in hex, rssi in dBm. A device's line is written once its name
+is known: from its extended inquiry response, or from a Remote Name
+Request made for it after the inquiry, or
 .B -
-until milestone 4 asks for it; EOF at Inquiry Complete. Closing the
-file early cancels the inquiry. A second open while one runs fails
-with
-.BR "inquiry in progress" .
+if it will not say. EOF after the last. Closing the file early
+cancels the inquiry. A second open while one runs fails with
+.BR "scan in progress" .
+.TP
+.B lescan
+The same for Bluetooth Low Energy: an active scan for the
+.B scan
+time, one line per device heard,
+.IR "addr public|random rssi name" ,
+the name from its advertising data or
+.BR - ;
+EOF when the time is up.
 .TP
 .B event
 Read-only. The HCI event stream as text, one event per line,
@@ -179,9 +189,7 @@ Owner-only.
 .PP
 Not served yet, by design:
 .B clone
-and the conversation directories (L2CAP, milestone 5),
-.B lescan
-(milestone 4). See
+and the conversation directories (L2CAP, milestone 5). See
 .B docs/BLUETOOTH.md
 for the whole tree and the order it arrives in.
 .SH BTMOCK

@@ -262,16 +262,64 @@ init(nil: ref Draw->Context, args: list of string)
 	tries := 0;			# associations attempted since the last real one
 	say := Sparse.mk(0);		# what may be said about a link that will not hold
 	announce := 1;			# the next association is worth mentioning
+	first := 1;			# the startup path has already asked for this join
 	for(;;){
 		tries++;
 		if(retry > 0)
 			sys->sleep(retry);
 
 		#
-		# The firmware associates on its own once it has an essid
-		# and an authentication mode; all this waits for is the
-		# moment it says so.
+		# JOIN AGAIN, THE WAY THE COLD BOOT DOES. The belief that
+		# stood here -- that "the firmware associates on its own
+		# once it has an essid and an authentication mode" -- is
+		# false on this driver: a join is an effect of writing the
+		# ctl, and nothing re-issued one. After "link lost" the
+		# radio sat unassociated until a reboot.
 		#
+		# THE LATCH IS THE WHOLE DIFFICULTY. The driver keeps the
+		# last essid written, and CMauth joins it if there is one
+		# (ether4330.c: "if(ctl->essid[0]) wljoin(...)"). At cold
+		# boot nothing is stored, so the auth write is inert and
+		# the essid write performs the one join -- and that works.
+		# After a drop the old name is still stored, so writing the
+		# element FIRES A JOIN BY ITSELF, which blocks inside wljoin
+		# and fails with "the firmware did not report an
+		# association", and a loop that then skipped the essid
+		# write -- as five versions of this one did, each a
+		# different way -- left the radio in "connecting" for ever.
+		#
+		# Proved on the board with the driver's own event trace
+		# (debug 1 on the ctl): a fresh supplicant started right
+		# after a drop hung exactly so; the same supplicant after
+		# "essid default" recovered in seconds, keys and all.
+		# Timing, descriptors and process identity were each
+		# eliminated first. Clearing the name is what makes the
+		# element write inert again, and then the sequence below is
+		# byte for byte what the startup path above writes.
+		#
+		# The essid write blocks for the join and may fail; that is
+		# one rationed line and another turn of a loop that already
+		# backs off -- never fatal, because a supplicant that exits
+		# on the condition it exists to survive is a worse bug than
+		# the one being fixed.
+		#
+		#
+		# NOT "tries > 1": the link-lost branch below resets tries
+		# to zero so its rationing starts afresh, which made that
+		# gate false on exactly the turn this exists for. Measured:
+		# a natural drop at 17:05:59, "link lost; re-associating",
+		# and then "still waiting" for ever with no join issued.
+		#
+		if(!first && !connected()){
+			if(sys->fprint(cfd, "essid default") < 0 && say.due(retry))
+				report(sys->sprint("essid default: %r"));
+			if(sys->fprint(cfd, "auth %s", RSNE) < 0 && say.due(retry))
+				report(sys->sprint("auth: %r"));
+			if(sys->fprint(cfd, "essid %q", essid) < 0 && say.due(retry))
+				report(sys->sprint("essid %q: %r", essid));
+		}
+
+		first = 0;
 		waited := associate(cfd, rsne, announce);
 		announce = 0;
 		supp.reset();

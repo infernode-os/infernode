@@ -371,7 +371,9 @@ harness assertions pass. `raspi3b` gives `-serial` #0 to the PL011 and
 source and by boot.
 
 **M1 — the console moves to the mini-UART; `#t` returns.** *Landed
-under QEMU 2026-09-13; not yet run on the board.* `os/port/devuart.c`
+under QEMU 2026-09-13; on the board the same night: console clean at
+115200 first boot, core clock 400MHz (asked, not assumed), PL011 receive
+path proven byte for byte.* `os/port/devuart.c`
 and `uart.h` reinstated with the locks named; `os/bcm2837/uartmini.c`
 (from 9front, MIT) and `uartpl011.c` as `PhysUart`s; `uart.c` reduced
 to console policy over the polled mini-UART. Console input arrives on
@@ -408,12 +410,19 @@ name: `-t /dev/eia0`, `-t tcp!host!port`, `-t /chan/btmock`.
 115200, `.hcd` uploaded, baud raised to 921600 then 3 Mbaud with
 `m1`, `Read_BD_ADDR` returns the board's own address. The first
 hardware milestone and the first that needs the board at all.
-*The code is in place (2026-09-13):* `firmware <path>` names the
-`.hcd`, `up` uploads it in BlueZ's order and resets, `baud <n>` tells
-the controller and then the transport's ctl file; `bthci->hcdrecords`
-parses the file and is unit-tested; the contract test uploads a
-three-record patch through the mock. What is not done is the only
-thing that matters here: a CYW43455 has not seen any of it.
+*Done on the board 2026-09-14.* The ROM answered once two things
+were understood: the controller holds its transmitter until CTS is
+asserted (`bt9p` now sets `m1` on any serial transport itself), and a
+`bt9p` left over from an earlier console session was reading the
+port (`os/bcm2837/README.md`, "What the board showed"). `firmware`
+uploaded the 323 records of `BCM4345C0.hcd`; the controller came back
+as `BCM43455 37.4MHz Raspberry Pi 3+-0190`, HCI 5.0, Cypress. Its
+address after the patch is the patch's default `43:45:c0:00:1f:ac`;
+a `bdaddr` verb (Broadcom `Write_BD_ADDR`) for the board's own is
+still to write. `baud` above 115200 has not been tried on silicon.
+Also found on the way: the firmware's mailbox reply word trails its
+mailbox reply, so `#G/gpio/128/level` reported *refused* for writes
+that took effect; `mboxcall` now waits for it.
 
 **M4 — discovery.** `scan`, `lescan`, remote name requests. *Done
 against the mock 2026-09-13:* a device's `scan` line is written once
@@ -421,8 +430,10 @@ its name is known -- from the EIR, or from a Remote Name Request made
 after the inquiry, one at a time, `-` on a page timeout -- and
 `lescan` is an active LE scan for the `scan` time, one line per
 device heard with its address type and the name from its advertising
-data. Still to do: run it against this host's `hci0`, which is
-discoverable on demand, through the bridge (below).
+data. *On silicon 2026-09-14:* the board's `scan` found the host's
+controller (behind the bridge, made discoverable by a hosted `bt9p`)
+at -33dBm with its name; `lescan` ran clean and heard nothing, there
+being no LE advertiser in the room to hear.
 
 **M5 — L2CAP and conversations.** `clone`, `N/`, `dial` and `listen`
 over L2CAP; SDP client as a library (`sdp.m`); the board and the host
@@ -438,7 +449,14 @@ echo service on PSM 0x1001, an incoming call on request, and it
 records what it is sent. The contract test connects, echoes, hangs up,
 is refused by PSM and by page timeout, announces and takes a call,
 and runs the kernel's `dial(2)` against the tree with no change to
-`dial`. SDP is deferred to when a profile needs it (M7).
+`dial`. SDP is deferred to when a profile needs it (M7). *On silicon
+2026-09-14:* the host's `dial(2)` on `bt!<board>!4099` against a
+hosted `bt9p` on the bridge, the board's `listen` accepting, and a
+line each way over the air; the board reported `Hangup remote hangup`
+after. The one thing real controllers corrected: the Disconnect
+command's reason was 16r16, which the mock accepted and a Realtek
+refused as a parameter error -- 16r13 is the reason a host gives, and
+the mock now refuses the rest as the controller did.
 
 **M6 — pairing through factotum.** `proto=btlink`; SSP numeric
 comparison via the confirmation path; legacy PIN for old peripherals.

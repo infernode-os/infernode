@@ -126,7 +126,7 @@ ProvisionState: adt {
 };
 provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
-manifest_written := 0;  # Set after first emitmanifest() call
+manifestgate: chan of int;  # Closed startup manifest phase before tool calls
 
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
@@ -333,6 +333,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
 	cleanupchan = chan[32] of int;
 	taskcreatelock = chan[1] of int;
+	manifestgate = chan[1] of int;
 	cleanshadows();
 	spawn shadowcleanloop();
 
@@ -392,7 +393,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# restrictns + emitmanifest — its namespace is discarded after.
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
-	spawn emitmanifestnow(manifestpath(mountpt));
+	spawn emitmanifestnow(manifestpath(mountpt), manifestgate);
 }
 
 # Look up tool path by name
@@ -1227,6 +1228,11 @@ isolateenv(): string
 
 asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
+	# The trusted startup manifest needs a restricted namespace in which .ns
+	# remains writable. Finish that one-time probe before model-facing workers
+	# use restricttoolns(), which hides .ns before sealing /tmp.
+	<-manifestgate;
+	manifestgate <-= 1;
 	# Keep batched creates single-file before either invocation forks its
 	# namespace. This covers the whole allocation/provision transaction and
 	# leaves status/list/result calls independently responsive.
@@ -1712,11 +1718,13 @@ manifestpath(mpt: string): string
 # namespace before any tool calls happen. Runs in a throwaway goroutine
 # with its own FORKNS — the restricted namespace is discarded after
 # emitmanifest completes.
-emitmanifestnow(mpath: string)
+emitmanifestnow(mpath: string, ready: chan of int)
 {
 	nsconstruct := load NsConstruct NsConstruct->PATH;
-	if(nsconstruct == nil)
+	if(nsconstruct == nil) {
+		ready <-= 1;
 		return;
+	}
 	nsconstruct->init();
 	sys->pctl(Sys->FORKNS, nil);
 
@@ -1747,12 +1755,12 @@ emitmanifestnow(mpath: string)
 			sys->fprint(stderr, "tools9p: manifest restrictns failed: %s\n", nserr);
 		else {
 			nsconstruct->emitmanifest(caps, mpath);
-			manifest_written = 1;
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: manifest exception: %s\n", e);
 	}
+	ready <-= 1;
 }
 
 # Apply namespace restriction to the current (already-forked) namespace.
@@ -1805,25 +1813,16 @@ applynsrestriction(invokedtool: string): string
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, writepaths
 	, nil);
 	{
-		nserr := nsconstruct->restrictns(caps);
+		nserr := nsconstruct->restricttoolns(caps);
 		if(nserr != nil) {
 			sys->fprint(stderr, "tools9p: restrictns failed: %s\n", nserr);
 			return nserr;
-		} else if(!manifest_written) {
-			nsconstruct->emitmanifest(caps, manifestpath(mountpt_g));
-			manifest_written = 1;
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: restrictns exception: %s\n", e);
 		return e;
 	}
-	# The manifest is trusted UI/audit metadata for Lucifer's context view.
-	# tools9p may write it from this private namespace, but the model-run tool
-	# code must not be able to spoof or corrupt it afterward.
-	herr := nsconstruct->restrictdir("/tmp/veltro/.ns", nil, 0);
-	if(herr != nil)
-		return "hide namespace manifest: " + herr;
 	return nil;
 }
 

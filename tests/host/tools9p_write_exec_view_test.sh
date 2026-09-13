@@ -38,6 +38,7 @@ if grep -q 'cow/%d-%d", actid, seq' "$NS"; then
 DRIVE="$ROOT/tmp/tools9p_write_exec_view_drive.sh"
 LOG="$(mktemp)"
 trap 'rm -f "$DRIVE" "$LOG"' EXIT HUP INT TERM
+mkdir -p "$ROOT/tmp"
 
 cat >"$DRIVE" <<'EOF'
 path=(/dis/veltro /dis/cmd /dis .)
@@ -80,6 +81,9 @@ echo '/tmp/veltro/probe-sdk/../../..' > /tool/list/ctl
 cat /tool/list/ctl
 echo '@@BOUNDARY_INTERNAL'
 echo '/tmp/veltro/probe-sdk/../../../.veltro-ns' > /tool/list/ctl
+cat /tool/list/ctl
+echo '@@BOUNDARY_DIRECT'
+echo '/tmp/.veltro-ns' > /tool/list/ctl
 cat /tool/list/ctl
 echo '@@BOUNDARY_DONE'
 echo '@@COMPILE'

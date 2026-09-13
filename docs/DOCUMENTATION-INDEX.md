@@ -93,6 +93,8 @@
 | [JETSON-PORT-PLAN.md](JETSON-PORT-PLAN.md) | NVIDIA Jetson porting plan |
 | [JETSON-PORT-ESTIMATE.md](JETSON-PORT-ESTIMATE.md) | Jetson port effort estimate |
 | [COMPLETE-PORT-SUMMARY.md](COMPLETE-PORT-SUMMARY.md) | Port completion summary |
+| [../os/bcm2837/README.md](../os/bcm2837/README.md) | Bare-metal Raspberry Pi 3B+ kernel: status, decisions, board runbook |
+| [BLUETOOTH.md](BLUETOOTH.md) | Bluetooth design: `#t` serial, mini-UART console, `bt9p` at `/net/bt` (proposed) |
 
 ## ARM64 JIT Compiler
 

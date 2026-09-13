@@ -854,6 +854,54 @@ mboxsetgpio(u32int pin, int on)
 }
 
 /*
+ * The other direction, for #G/gpio/128+n/level: what the firmware says
+ * the line is at. Returns the level, or -1 if the firmware did not
+ * answer with one -- which is different from the call failing. QEMU's
+ * model accepts the tag and writes nothing back (response length 0),
+ * exactly as it does for the touch panel's; a real firmware answers
+ * with two words. The caller falls back to what it last wrote, if
+ * anything, and says so rather than inventing a level.
+ */
+int
+mboxgetgpio(u32int pin)
+{
+	u32int buf[2], resp;
+
+	buf[0] = pin;
+	buf[1] = 0;
+	if(mboxprop1(Taggetgpiostate, buf, 1, 2, &resp) < 0)
+		return -1;
+	if((resp & ~Propok) < 2*sizeof(u32int))
+		return -1;
+	return buf[1] != 0;
+}
+
+/*
+ * An expander line's configuration: direction (0 in, 1 out) and
+ * whether a pull-up is enabled, as GET_GPIO_CONFIG reports them. The
+ * response is five words -- pin, direction, polarity, termination
+ * enable, pull-up -- and, as above, a firmware that answers with fewer
+ * has not answered; -1 then, and the caller reports "unknown".
+ */
+int
+mboxgpioconfig(u32int pin, int *dir, int *pullup)
+{
+	u32int buf[5], resp;
+	int i;
+
+	buf[0] = pin;
+	for(i = 1; i < 5; i++)
+		buf[i] = 0;
+	if(mboxprop1(Taggetgpioconfig, buf, 1, 5, &resp) < 0)
+		return -1;
+	if((resp & ~Propok) < 5*sizeof(u32int))
+		return -1;
+	*dir = buf[1] != 0;
+	*pullup = buf[3] != 0 && buf[4] != 0;
+	return 0;
+}
+
+/*
  * The most a clock will ever run at. A divider computed from the
  * momentary rate is wrong the moment the firmware scales the core
  * clock up under load, and the SDHOST is clocked from the core: the

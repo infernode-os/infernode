@@ -12,6 +12,15 @@
  * Include after dat.h, like fns.h.
  */
 
+/* uartmini.c: the polled mini-UART, for uart.c's console */
+ulong	miniconsinit(void);
+void	miniputc(int);
+int	minigetc(void);
+int	minitxidle(void);
+
+/* uart.c: console policy over it */
+int	consuartputc(Queue*, int);
+
 /* gpio.c */
 void	gpiofunc(int, int);
 void	gpiopull(int, int);
@@ -35,6 +44,8 @@ int	mboxfbnumdisplays(void);
 u32int	mboxclockrate(u32int);
 u32int	mboxmaxclockrate(u32int);
 int	mboxsetgpio(u32int, int);
+int	mboxgetgpio(u32int);
+int	mboxgpioconfig(u32int, int*, int*);
 void	mboxlockon(void);
 int	mboxedid(u32int, uchar*);
 int	mboxcmdline(char*, int);

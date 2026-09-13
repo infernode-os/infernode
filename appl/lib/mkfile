@@ -29,6 +29,8 @@ TARG=\
 	auth.dis\
 	auth9.dis\
 	bloomfilter.dis\
+	bthci.dis\
+	btmock.dis\
 	bufio.dis\
 	cfg.dis\
 	cfgfile.dis\
@@ -79,6 +81,7 @@ TARG=\
 	llmclient.dis\
 	wirefmt.dis\
 	keyset.dis\
+	l2cap.dis\
 	libc.dis\
 	libc0.dis\
 	lists.dis\
@@ -182,7 +185,10 @@ SYSMODULES=\
 	attrdb.m\
 	auth9.m\
 	bloomfilter.m\
+	bthci.m\
+	btmock.m\
 	bufio.m\
+	l2cap.m\
 	cfg.m\
 	cfgfile.m\
 	complete.m\

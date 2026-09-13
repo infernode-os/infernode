@@ -70,6 +70,7 @@ extern Dev etherdevtab;
 extern Dev ssldevtab;
 extern Dev gpiodevtab;
 extern Dev touchdevtab;
+extern Dev uartdevtab;
 
 Dev*	devtab[] =
 {
@@ -91,6 +92,7 @@ Dev*	devtab[] =
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */
 	&touchdevtab,		/* 'T' -- #T, the DSI panel's touch buffer */
+	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, eia1 the mini-UART */
 	nil,
 };
 

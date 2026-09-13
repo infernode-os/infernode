@@ -143,20 +143,42 @@ gpiogetfunc(int pin)
  * Pins the kernel drives itself. A driver claims its pins at init and
  * #G refuses to change them: an echo into the wrong ctl file must not
  * be able to take the console down. The name is what the refusal says.
+ *
+ * The firmware's GPIO expander lines, 128..135 (io.h Gpioexpbase), are
+ * claimable too: they are the radios' power enables and the Ethernet
+ * chip's reset, and a driver that owns one says so here for the same
+ * reason. They are not this file's registers -- the mailbox drives
+ * them, devgpio.c and mailbox.c -- only its claim table.
  */
-static char *claimed[Npin];
+static char *claimed[Npin + Nexppin];
+
+static int
+claimslot(int pin)
+{
+	if(pin >= 0 && pin < Npin)
+		return pin;
+	if(pin >= Gpioexpbase && pin < Gpioexpbase + Nexppin)
+		return Npin + pin - Gpioexpbase;
+	return -1;
+}
 
 void
 gpioclaim(int pin, char *who)
 {
-	if(pin >= 0 && pin < Npin)
-		claimed[pin] = who;
+	int i;
+
+	i = claimslot(pin);
+	if(i >= 0)
+		claimed[i] = who;
 }
 
 char*
 gpioclaimed(int pin)
 {
-	if(pin < 0 || pin >= Npin)
+	int i;
+
+	i = claimslot(pin);
+	if(i < 0)
 		return "nobody";
-	return claimed[pin];
+	return claimed[i];
 }

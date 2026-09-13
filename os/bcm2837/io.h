@@ -12,7 +12,8 @@ enum
 	PHYSIO		= 0x3F000000,	/* peripheral base */
 
 	GPIOREGS	= PHYSIO+0x200000,
-	UART0REGS	= PHYSIO+0x201000,	/* PL011 */
+	UART0REGS	= PHYSIO+0x201000,	/* PL011: the radio's HCI UART on a Pi 3 */
+	AUXREGS		= PHYSIO+0x215000,	/* AUX block: the mini-UART (UART1) is at +0x40 */
 	MBOXREGS	= PHYSIO+0x00B880,	/* VideoCore mailbox */
 	SYSTIMERREGS	= PHYSIO+0x003000,	/* free-running 1MHz counter */
 
@@ -69,7 +70,9 @@ enum
 {
 	Nirq		= 72,
 	IRQusb		= 9,		/* DWC OTG host controller */
+	IRQaux		= 29,		/* the AUX block: mini-UART (and SPI1/2, unused) */
 	IRQsdhost	= 56,		/* the BCM2835 SDHOST controller */
+	IRQuart		= 57,		/* the PL011 */
 	IRQmmc		= 62,		/* the Arasan SDHCI controller */
 	IRQbasic	= 64,		/* first ARM-private source */
 	IRQtimerArm	= IRQbasic + 0,	/* the ARM-side timer below */
@@ -216,7 +219,9 @@ enum
 	Tagsettouchbuf	= 0x0004801F,	/* hand the firmware a buffer of ours instead */
 	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
 	Taggetmaxclockrate= 0x00030004,	/* the most the firmware will ever run it at */
-	Tagsetgpiostate	= 0x00038041,	/* a pin on the firmware's GPIO expander (128+n) */
+	Taggetgpiostate	= 0x00030041,	/* a pin on the firmware's GPIO expander (128+n) */
+	Tagsetgpiostate	= 0x00038041,
+	Taggetgpioconfig= 0x00030043,	/* its direction, polarity, termination */
 	Taggetedidblock	= 0x00030020,	/* the display's own description */
 
 	/*
@@ -240,7 +245,8 @@ enum
 	Rebootflagtryboot = 1,
 
 	Clkemmc		= 1,		/* clock id for the SD controller */
-	Clkcore		= 4,		/* the VPU core clock; SDHOST divides it */
+	Clkuart		= 2,		/* the PL011's reference (init_uart_clock) */
+	Clkcore		= 4,		/* the VPU core clock; SDHOST and the mini-UART divide it */
 
 	Tagend		= 0x00000000,
 };
@@ -255,28 +261,46 @@ enum
 	Fbrd		= 0x28,		/* fractional baud rate divisor */
 	Lcrh		= 0x2C,		/* line control */
 	Cr		= 0x30,		/* control */
+	Ifls		= 0x34,		/* FIFO interrupt levels */
 	Imsc		= 0x38,		/* interrupt mask */
+	Mis		= 0x40,		/* masked interrupt status */
 	Icr		= 0x44,		/* interrupt clear */
 };
 
 /* Fr bits */
 enum
 {
-	Txff		= 1<<5,		/* transmit FIFO full */
+	Frcts		= 1<<0,		/* clear to send (the peer's RTS) */
+	Frbusy		= 1<<3,		/* transmitting */
 	Rxfe		= 1<<4,		/* receive FIFO empty */
+	Txff		= 1<<5,		/* transmit FIFO full */
+	Frrxff		= 1<<6,		/* receive FIFO full */
+	Frtxfe		= 1<<7,		/* transmit FIFO empty */
 };
 
 /* Dr bits: the receive errors ride along with the byte */
 enum
 {
 	Rxerrors	= 0xF<<8,	/* framing, parity, break, overrun */
+	Rxfe_err	= 1<<8,		/* framing */
+	Rxpe_err	= 1<<9,		/* parity */
+	Rxbe_err	= 1<<10,	/* break */
+	Rxoe_err	= 1<<11,	/* overrun */
 };
 
 /* Lcrh bits */
 enum
 {
+	Lcrbrk		= 1<<0,		/* send break */
+	Lcrpen		= 1<<1,		/* parity enable */
+	Lcreps		= 1<<2,		/* even parity */
+	Lcrstp2		= 1<<3,		/* two stop bits */
 	Fen		= 1<<4,		/* enable FIFOs */
+	Wlen5		= 0<<5,
+	Wlen6		= 1<<5,
+	Wlen7		= 2<<5,
 	Wlen8		= 3<<5,		/* 8-bit words */
+	Wlenmask	= 3<<5,
 };
 
 /* Cr bits */
@@ -285,6 +309,63 @@ enum
 	Uarten		= 1<<0,
 	Txe		= 1<<8,
 	Rxe		= 1<<9,
+	Crrts		= 1<<11,	/* drive RTS (active low on the pin) */
+	Crrtsen		= 1<<14,	/* hardware flow control: RTS follows FIFO room */
+	Crctsen		= 1<<15,	/* hardware flow control: transmit only while CTS */
+};
+
+/* Imsc / Mis / Icr bits */
+enum
+{
+	Imcts		= 1<<1,		/* CTS changed */
+	Imrx		= 1<<4,		/* receive FIFO at level */
+	Imtx		= 1<<5,		/* transmit FIFO at level */
+	Imrt		= 1<<6,		/* receive timeout: bytes waiting below level */
+	Imfe		= 1<<7,
+	Impe		= 1<<8,
+	Imbe		= 1<<9,
+	Imoe		= 1<<10,
+	Imrxerr		= Imfe|Impe|Imbe|Imoe,
+};
+
+/* Ifls: 1/8 full for receive so a single HCI byte is seen promptly */
+enum
+{
+	Txiflsel1_8	= 0<<0,
+	Rxiflsel1_8	= 0<<3,
+	Rxiflsel1_2	= 2<<3,
+};
+
+/*
+ * The AUX block. Everything is at AUXREGS; the mini-UART's registers
+ * start at 0x40. Word offsets, as uartmini.c indexes them.
+ */
+enum
+{
+	Auxirq		= 0x00>>2,
+	Auxenables	= 0x04>>2,
+	Auxuarten	= 1<<0,
+	Muio		= 0x40>>2,	/* data */
+	Muier		= 0x44>>2,	/* interrupt enable */
+	Murxien		= 1<<0,
+	Mutxien		= 1<<1,
+	Muiir		= 0x48>>2,	/* interrupt status; write clears FIFOs */
+	Mulcr		= 0x4C>>2,	/* line control */
+	Mubits7		= 2<<0,
+	Mubits8		= 3<<0,
+	Mubitsmask	= 3<<0,
+	Mumcr		= 0x50>>2,	/* modem control */
+	Murtsn		= 1<<1,
+	Mulsr		= 0x54>>2,	/* line status */
+	Murxrdy		= 1<<0,
+	Murxoverrun	= 1<<1,
+	Mutxrdy		= 1<<5,		/* room in the FIFO */
+	Mutxdone	= 1<<6,		/* FIFO and shifter empty */
+	Mucntl		= 0x60>>2,	/* control */
+	Murxen		= 1<<0,
+	Mutxen		= 1<<1,
+	Muctsflow	= 1<<3,		/* stop transmitting when CTS is deasserted */
+	Mubaud		= 0x68>>2,	/* baud divisor: core_clk / (8 * (n+1)) */
 };
 
 /*
@@ -307,6 +388,16 @@ enum
 /* GPIO pin functions, as encoded in GPFSEL */
 enum
 {
+	/*
+	 * The firmware's GPIO expander: eight lines the VideoCore drives
+	 * over its own I2C, numbered 128+n by the firmware and by 9front.
+	 * On the 3B+: 0 BT_ON, 1 WL_ON, 2 PWR_LED_R, 3 LAN_RUN, 4 HDMI
+	 * hot-plug (an input), 5-6 CAM_GPIO, 7 unused (the device tree's
+	 * gpio-line-names). Reached through the mailbox, not GPIOREGS.
+	 */
+	Gpioexpbase	= 128,
+	Nexppin		= 8,
+
 	Gpioin		= 0,
 	Gpioout		= 1,
 	Gpioalt0	= 4,

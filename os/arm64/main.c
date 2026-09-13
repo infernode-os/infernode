@@ -19,6 +19,7 @@ extern Dev	mntdevtab;	/* #M, the 9P client */
 extern Dev	benchdevtab;	/* #b, microsecond timing */
 extern Dev	srvdevtab;	/* #s, names a Limbo program serves */
 extern Dev	etherdevtab;	/* #l, the kernel Ethernet data path */
+extern Dev	uartdevtab;	/* #t, serial ports; the console's input arrives through it */
 
 /*
  * The machine configuration os/port reads. Declared extern in dat.h and
@@ -1664,6 +1665,17 @@ probecons(void)
 	if(etherdevtab.reset != nil)
 		etherdevtab.reset();
 
+	/*
+	 * #t's reset enumerates the board's UARTs and, for the one marked
+	 * console, enables it with interrupts: from here the console's
+	 * received bytes arrive on the mini-UART's IRQ and go to kbdq
+	 * through consuartputc (os/bcm2837/uart.c). Until this line the
+	 * console is output-only, which is fine -- nothing is reading yet.
+	 * Needs intrinit() and clockinit(), both long done by now.
+	 */
+	if(uartdevtab.reset != nil)
+		uartdevtab.reset();
+
 	/* run every device's init, as a real kernel does at boot */
 	chandevinit();
 
@@ -1742,136 +1754,17 @@ extern void	ethermediumlink(void);
 #endif
 
 /*
- * Feed the serial line into the console input queue.
- *
- * This board has no keyboard: the only way to type at it is the UART,
- * on GPIO 14/15 through a USB-serial cable, or -serial stdio under
- * QEMU. Polling rather than taking the PL011 receive interrupt keeps
- * the driver honest about what it has been tested with -- the transmit
- * path has been polled since the first boot, and an interrupt-driven
- * receive path would be the first untested interrupt source in the
- * kernel. It can become one later; a shell that answers is worth more
- * now than a tidy one that does not exist.
- *
- * kbdputc does the line discipline -- echo, backspace, kill -- and
- * hands complete lines to kbdq, which is what /dev/cons reads.
+ * Console input used to be fed here by a kproc polling uartgetc() every
+ * 10ms, with a stall-and-wait against a slow reader and a bound on
+ * that wait so a DEAD reader did not make the console deaf to the
+ * debug keys (a soak run lost a board exactly that way). Both problems
+ * are gone with the polling: #t's console Uart delivers each byte from
+ * the mini-UART's receive interrupt through consuartputc
+ * (os/bcm2837/uart.c) to kbdputc, which drops into a full queue with
+ * a rate-limited complaint and handles the debug keys before it looks
+ * at the queue at all. And a burst no longer loses everything past the
+ * FIFO, which is what a 10ms poll of a 16-byte FIFO did to scripts.
  */
-enum{
-	Kbdhiwat	= 512,	/* undelivered type-ahead we will wait behind */
-	Kbdstallms	= 10000,/* ... but only for this long */
-};
-
-static void
-uartkproc(void *a)
-{
-	int c, stalling;
-	ulong stalledat, now;
-
-	USED(a);
-	stalling = 0;
-	stalledat = 0;
-	for(;;){
-		/*
-		 * Do not outrun the reader -- but do not wait on a reader
-		 * that is never coming back.
-		 *
-		 * Waiting here is flow control: bytes left in the PL011
-		 * FIFO make the sender hold the rest at the source, so
-		 * nothing is lost, where pushing on regardless fills kbdq
-		 * until qproduce starts discarding. Half a kilobyte of
-		 * undelivered type-ahead means the reader is seconds
-		 * behind, and there is no hurry.
-		 *
-		 * That reasoning holds only while the reader is slow. When
-		 * it is DEAD the same code turns the console permanently
-		 * deaf, and it does so silently: kbdq stops draining, this
-		 * loop stops calling uartgetc(), and with it the debug keys
-		 * stop working -- because ^T^T is recognised in kbdputc(),
-		 * which is downstream of the read we are no longer doing.
-		 * A soak run lost a machine to exactly that. Userspace died
-		 * at 01:44; the console kept echoing until the queue passed
-		 * this mark at 02:29 and then went silent, and from that
-		 * moment the one tool that could have said what died -- the
-		 * kernel's own debug keys -- was gone too. The board stayed
-		 * up, answered ping, and could not be asked a single
-		 * question.
-		 *
-		 * So the wait is bounded. Past Kbdstallms the reader is
-		 * treated as gone rather than slow, and we read on: debug
-		 * keys are handled before the queue is touched, so they
-		 * work again immediately, and ordinary characters are
-		 * dropped by kbdputc with the rate-limited complaint it
-		 * already makes. Losing type-ahead into a dead shell costs
-		 * nothing. Losing the console costs the machine.
-		 */
-		now = TK2MS(MACHP(0)->ticks);
-		if(qlen(kbdq) > Kbdhiwat){
-			if(!stalling){
-				stalling = 1;
-				stalledat = now;
-			}
-			if(now - stalledat < Kbdstallms){
-				tsleep(&up->sleep, return0, nil, 10);
-				continue;
-			}
-			if(stalling == 1){
-				stalling = 2;
-				print("uart: console reader stalled %lud ms with %d bytes queued;"
-					" reading on so debug keys still work\n",
-					now - stalledat, (int)qlen(kbdq));
-			}
-		}else if(stalling){
-			if(stalling == 2)
-				print("uart: console reader caught up\n");
-			stalling = 0;
-		}
-		c = uartgetc();
-		if(c < 0){
-			/*
-			 * Nothing waiting. Sleep briefly rather than spin:
-			 * this shares one core with everything else, and a
-			 * tight poll would starve the process that is
-			 * supposed to be reading what we produce.
-			 */
-			tsleep(&up->sleep, return0, nil, 10);
-			continue;
-		}
-		/*
-		 * Enter sends CR, not NL -- every terminal emulator does,
-		 * and so does anything driving this line from a script.
-		 * consread()'s cooked-mode line discipline ends a line on
-		 * NL (or ^D) and nothing else, so an untranslated CR is
-		 * appended to kbd.line as an ordinary character and the
-		 * line is never terminated: the characters arrive, the
-		 * kernel holds them, and the shell waits for a line that
-		 * can never be completed.
-		 *
-		 * This is what ICRNL does on any other system. A board
-		 * whose only console is a UART has to do it somewhere, and
-		 * the driver that owns the line is the place.
-		 */
-		if(c == '\r')
-			c = '\n';
-
-		/*
-		 * Echo here too, because nothing else will. echo() in
-		 * devcons writes to printq or to a bitmapped display;
-		 * printq is never set in this tree and this board has no
-		 * screen, so without this the console is blind -- you type
-		 * and see nothing, which reads exactly like input being
-		 * dropped.
-		 *
-		 * Not via screenputs: putstrn0 already sends kernel output
-		 * down the same wire through serwrite, so borrowing the
-		 * screen hook would double every line the kernel prints.
-		 */
-		if(c == '\n')
-			uartputc('\r');
-		uartputc(c);
-
-		kbdputc(kbdq, c);
-	}
-}
 
 /*
  * Bring up USB, from a process rather than from the boot path.
@@ -1997,7 +1890,6 @@ startdis(void)
 
 	kproc("display", displaywatch, nil, 0);
 	kproc("usb", usbkproc, nil, 0);
-	kproc("uart", uartkproc, nil, 0);
 	kproc("dis", disinit, "/osinit.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
 }
 
@@ -2528,7 +2420,8 @@ kmain(void)
 	uartputx(midr());
 	uartputstr("\n  mpidr_el1:       ");
 	uartputx(mpidr());
-	uartputstr("\n  console:         PL011 UART0, polled");
+	uartputstr("\n  console:         ");
+	uartputstr(uartdescribe());
 	uartputstr("\n  types:           ");
 	uartputstr(typecheck() ? "arm64 u.h OK (LP64, stdarg)" : "TYPE FOUNDATION BROKEN");
 	uartputstr("\n");

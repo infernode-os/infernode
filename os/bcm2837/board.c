@@ -79,10 +79,10 @@ boardioprobe(void)
 	uartputd(f14);
 	uartputstr(" pin15 func=");
 	uartputd(f15);
-	if(f14 == Gpioalt0 && f15 == Gpioalt0)
-		uartputstr(" (ALT0/UART as set) OK\n");
+	if(f14 == Gpioalt5 && f15 == Gpioalt5)
+		uartputstr(" (ALT5/mini-UART as set) OK\n");
 	else
-		uartputstr(" UNEXPECTED (wanted ALT0 on both)\n");
+		uartputstr(" UNEXPECTED (wanted ALT5 on both)\n");
 }
 
 /*

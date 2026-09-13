@@ -2,6 +2,8 @@ intro 0intro
 9srvfs 9srvfs
 acme acme
 archfs archfs
+bt9p bt9p
+btmock bt9p
 countfs countfs
 cpu cpu
 dbfs dbfs

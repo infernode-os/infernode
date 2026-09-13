@@ -4,7 +4,7 @@
 #
 # Build the bare-metal AArch64 kernel (os/arm64 + os/bcm2837), boot it
 # under QEMU's raspi3b machine, and assert on what it reports over the
-# PL011 console -- and, where the console cannot tell, on what QMP shows
+# serial console -- and, where the console cannot tell, on what QMP shows
 # (framebuffer pixels, USB hotplug) and on what comes back through the
 # emulated network (TCP echo, DHCP) and SD card (the install image).
 #
@@ -433,6 +433,9 @@ build_kernel() {
             # needs.
             "/dis/echo.dis=$ROOT/dis/echo.dis"
             "/dis/cat.dis=$ROOT/dis/cat.dis"
+            # read, for taking a bounded number of bytes off a serial
+            # port: cat would wait for an EOF a UART never sends.
+            "/dis/read.dis=$ROOT/dis/read.dis"
             # rm, for removing a file through dossrv and looking at
             # what it left on the card afterwards.
             "/dis/rm.dis=$ROOT/dis/rm.dis"
@@ -951,12 +954,20 @@ SBEOF
 # property tag exactly as the Pi's firmware returns cmdline.txt. It is
 # a separate argument rather than part of $QEMUARGS because that string
 # is split on spaces and a command line has spaces in it.
+#
+# Two -serial arguments, everywhere a QEMU is started here. raspi3b
+# hands the first to the PL011 (uart0) and the second to the AUX
+# mini-UART (uart1) -- hw/arm/bcm2835_peripherals.c, serial_hd(0) and
+# serial_hd(1). The console is on the mini-UART, as on a Pi 3 under
+# Plan 9 or Linux, because the PL011 is wired to the radio
+# (docs/BLUETOOTH.md); so the PL011 gets null and the console gets
+# stdio. A test that wants the PL011 -- /dev/eia0 -- replaces the null.
 boot_kernel() {
     local img="$1" secs="${2:-10}" append="${3:-}"
     python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "$append" <<'PYEOF'
 import subprocess, sys
 qemu, img, secs, extra, append = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
-args = [qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio"]
+args = [qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio"]
 if append:
     args += ["-append", append]
 p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -984,7 +995,7 @@ import subprocess, sys, time, threading
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 cmds = sys.argv[4:]
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
-                      "-display", "none", "-serial", "stdio"],
+                      "-display", "none", "-serial", "null", "-serial", "stdio"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
 
@@ -1057,6 +1068,88 @@ time.sleep(0.3)
 p.kill()
 p.wait()
 sys.stdout.write(bytes(buf).decode(errors="replace"))
+PYEOF
+}
+
+# A shell session with a PEER on the PL011.
+#
+# The same as shell_session, except that the PL011 -- /dev/eia0, the
+# radio's UART on a Pi 3 -- is attached to a host socket instead of
+# null, and a thread on this side echoes back every byte it receives,
+# keeping a copy. So a command that writes to /dev/eia0 sees its own
+# bytes come back through the receive path, and what the peer saw is
+# appended to the output as a PL011-PEER-SAW line for the checks. The
+# port comes from the per-run QMP base like every other socket here.
+pl011_session() {
+    local img="$1"; shift
+    python3 - "$QEMU" "$img" "$QEMUARGS" "$@" <<'PYEOF'
+import subprocess, sys, time, threading, socket, os
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+cmds = sys.argv[4:]
+PORT = int(os.environ["QMPBASE"]) + 12   # per-run base: two harnesses on one host must not share sockets
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
+                      "-display", "none",
+                      "-chardev", "socket,id=pl011,host=127.0.0.1,port=%d,server=on,wait=off" % PORT,
+                      "-serial", "chardev:pl011", "-serial", "stdio"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+
+seen = bytearray()
+def peer():
+    s = None
+    for _ in range(100):
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT))
+            break
+        except OSError:
+            time.sleep(0.1)
+    if s is None:
+        return
+    while True:
+        try:
+            d = s.recv(4096)
+        except OSError:
+            return
+        if not d:
+            return
+        seen.extend(d)
+        s.sendall(d)
+threading.Thread(target=peer, daemon=True).start()
+
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+
+try:
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if b"init: starting the shell" in buf:
+            break
+        time.sleep(0.2)
+    time.sleep(1.5)
+    for c in cmds:
+        p.stdin.write(c.encode() + b"\r")
+        p.stdin.flush()
+        time.sleep(1.0)
+    p.stdin.write(b"echo dRaInEd\r")
+    p.stdin.flush()
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if bytes(buf).count(b"dRaInEd") >= 2:
+            break
+        time.sleep(0.2)
+except Exception:
+    pass
+time.sleep(0.3)
+p.kill()
+p.wait()
+sys.stdout.write(bytes(buf).decode(errors="replace"))
+sys.stdout.write("\nPL011-PEER-SAW: " + bytes(seen).decode(errors="replace") + "\n")
 PYEOF
 }
 
@@ -1290,7 +1383,9 @@ check "smp:  preempt cpu1 [0-9]*us cpu2 [0-9]*us cpu3 [0-9]*us OK" \
 # accidentally mapped Device would still boot and still show a working
 # identity map, then fail unpredictably wherever the compiler merged
 # stores.
-    check "gpio: pin14 func=4 pin15 func=4" "GPIO pin-mux readback matches what UART set"
+# func=2 is ALT5 in GPFSEL's encoding: the mini-UART on the header pins.
+# It read 4 (ALT0, the PL011) until the console moved (docs/BLUETOOTH.md).
+    check "gpio: pin14 func=2 pin15 func=2 (ALT5/mini-UART as set) OK" "GPIO pin-mux readback matches what the console UART set"
 check "mmu:  on, caches on"           "MMU and caches enabled"
 check "unaligned 64-bit access OK"    "RAM is mapped Normal (unaligned access legal)"
 # The clock. "clocks AGREE" is the load-bearing one: CNTFRQ_EL0 is a
@@ -1505,7 +1600,15 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ps | wc -l' \
         'sleep 0; echo slept-ok' \
         'cat /dev/sysstat' \
-        'for(i in x y z){ echo loop2-$i }')"
+        'for(i in x y z){ echo loop2-$i }' \
+        "ls '#G/gpio/128' '#G/gpio/135'" \
+        "ls '#G/gpio/136'" \
+        "cat '#G/gpio/128/level'" \
+        "echo 1 > '#G/gpio/128/level'" \
+        "cat '#G/gpio/128/level'" \
+        "echo 0 > '#G/gpio/129/level'" \
+        "echo function out > '#G/gpio/128/ctl'" \
+        "cat '#G/gpio/129/ctl'")"
 
 # Strip carriage returns once, here.
 #
@@ -2082,6 +2185,142 @@ else
 fi
 
 #
+# 3a'. The firmware GPIO expander as pins 128..135 of #G.
+#
+#     The radios' power enables and the Ethernet chip's reset are on a
+#     GPIO expander the firmware drives over I2C; they are pins in the
+#     same directory, with the same two files, numbered as the firmware
+#     numbers them. 128 is BT_ON and belongs to a program (bt9p); 129
+#     is WL_ON and belongs to ether4330, which claims it, so it reads
+#     but refuses writes -- the same refusal the console pins make.
+#     QEMU accepts the set tag and answers no get, so a level reads "?"
+#     until something is written and the last write afterwards; on a
+#     board the firmware answers and the "?" never appears.
+#
+if grep -A4 "ls '#G/gpio/128' '#G/gpio/135'" <<<"$SHOUT" | grep -q '#G/gpio/135/level'; then
+    pass "expander lines are pins 128..135 in #G/gpio, each with ctl and level"
+else
+    fail "#G/gpio/128 and 135 did not list as pin directories"
+fi
+if grep -A1 "ls '#G/gpio/136'" <<<"$SHOUT" | grep -q 'does not exist\|file does not exist\|not found'; then
+    pass "the expander stops at 135: #G/gpio/136 does not exist"
+else
+    fail "#G/gpio/136 should not exist"
+fi
+if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | head -2 | grep -q '^?$'; then
+    pass "an expander level the firmware will not report and nothing has written reads as ?"
+else
+    fail "#G/gpio/128/level did not read ? before the first write under QEMU"
+fi
+if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | tail -1 | grep -q '^1$'; then
+    pass "writing 1 to #G/gpio/128/level (BT_ON) goes to the firmware and reads back"
+else
+    fail "#G/gpio/128/level did not read 1 after the write"
+fi
+if grep -A1 "echo 0 > '#G/gpio/129/level'" <<<"$SHOUT" | grep -q 'in use by ether4330'; then
+    pass "#G/gpio/129 (WL_ON) is claimed by ether4330: the radio's power cannot be pulled from under its driver"
+else
+    fail "a write to #G/gpio/129/level was not refused as ether4330's"
+fi
+if grep -A1 "echo function out > '#G/gpio/128/ctl'" <<<"$SHOUT" | grep -q 'no function select'; then
+    pass "an expander line's ctl refuses function/pull truthfully: the hardware has neither"
+else
+    fail "#G/gpio/128/ctl did not refuse a function write"
+fi
+if grep -A2 "^; cat '#G/gpio/129/ctl'" <<<"$SHOUT" | grep -q '^function \(unknown\|out\|in\)$'; then
+    pass "an expander line's ctl reads its configuration as the firmware reports it (or unknown, under QEMU)"
+else
+    fail "#G/gpio/129/ctl did not read as a function/pull report"
+fi
+
+#
+# 3b. Serial ports as files: #t, and the console that now comes in
+#     through it.
+#
+#     eia1 is the mini-UART the shell above was typed at; this session
+#     was typed at it too, byte by byte through the receive interrupt
+#     rather than the 10ms poll it replaced. eia0 is the PL011, which
+#     on a Pi 3 is wired to the radio and here to a socket with an echo
+#     peer on it (pl011_session), so a write comes back as a read.
+#
+#     The port is held open by a background sleep for the duration:
+#     #t enables a UART on its first open and disables it on its last
+#     close, and a receiver disabled between two shell commands would
+#     lose the peer's echo in the gap. That is not a bug to work around
+#     -- a program that owns the port keeps it open -- it is how the
+#     test has to hold the port to stand in for one.
+#
+#     The long echo is the burst check. The old polled console lost
+#     everything past the 16-byte FIFO of anything a script sent at it
+#     (AGENTS.md); QEMU's chardev never overran it, so this cannot fail
+#     here for that reason, but it pins the interrupt path taking a
+#     whole line, and it is the assertion to run on the board.
+#
+LONGLINE="burst-0123456789abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmnopqrstuvwxyz-end"
+PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
+        "bind -a '#t' /dev" \
+        'ls /dev/eia0 /dev/eia0ctl /dev/eia0status /dev/eia1 /dev/eia1ctl /dev/eia1status' \
+        'cat /dev/eia1status' \
+        'cat /dev/eia0status' \
+        'sleep 40 <> /dev/eia0 &' \
+        'sleep 1' \
+        'echo b921600 > /dev/eia0ctl' \
+        'echo m1 > /dev/eia0ctl' \
+        'cat /dev/eia0status' \
+        'echo zzz > /dev/eia0ctl' \
+        'echo -n PL011-LOOPBACK-42 > /dev/eia0' \
+        'read 100 < /dev/eia0' \
+        'echo -n second-frame > /dev/eia0' \
+        'read 100 < /dev/eia0' \
+        "echo $LONGLINE")"
+PLOUT="$(tr -d '\r' <<<"$PLOUT")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
+
+OUT_SAVED="$OUT"; OUT="$PLOUT"
+check "/dev/eia1status"                 "#t binds at /dev: eia0 (PL011) and eia1 (mini-UART) with ctl and status files"
+if grep -A1 'cat /dev/eia1status' <<<"$PLOUT" | grep -q '^b115200 c0 d0 e0 l8 m0 pn r1 s1'; then
+    pass "eia1status describes the console: 115200 8n1, no flow control"
+else
+    fail "eia1status did not read back as the console's settings"
+fi
+if grep -A1 'cat /dev/eia0status' <<<"$PLOUT" | grep -q '^b115200 c0 d0 e0 l8 m0 pn r0 s1'; then
+    pass "eia0status reads before the port is ever opened: 115200 8n1, nothing asserted"
+else
+    fail "eia0status did not read back sensibly before the first open"
+fi
+check "clock(default)"                  "the PL011 disbelieved QEMU's 3MHz UART clock and used the firmware default (48MHz)"
+if grep -A1 'cat /dev/eia0status' <<<"$PLOUT" | tail -n +3 | grep -q '^b921600 c0 d0 e0 l8 m1 pn r1 s1'; then
+    pass "eia0ctl took b921600 and m1: baud and hardware flow control are set through the file"
+else
+    fail "eia0ctl's b921600/m1 did not show in eia0status"
+fi
+check "bad arg"                         "an unknown ctl verb is refused with an error, not swallowed"
+# read prints the bytes with no newline, so the prompt and the next typed
+# command follow on the same line; the output is the copy at column 0,
+# the typed command is the one after the prompt.
+if grep -q '^PL011-LOOPBACK-42' <<<"$PLOUT"; then
+    pass "bytes written to /dev/eia0 came back through the PL011's receive interrupt"
+else
+    fail "the loopback through /dev/eia0 did not return PL011-LOOPBACK-42"
+fi
+if grep -q '^second-frame' <<<"$PLOUT"; then
+    pass "a second write/read round trip on the still-open port"
+else
+    fail "the second /dev/eia0 round trip did not return"
+fi
+if grep 'PL011-PEER-SAW' <<<"$PLOUT" | grep -q 'PL011-LOOPBACK-42second-frame'; then
+    pass "the peer on the PL011 saw exactly the bytes written, in order, with nothing between"
+else
+    fail "the PL011 peer did not see PL011-LOOPBACK-42 then second-frame back to back"
+fi
+if [[ "$(grep -c "$LONGLINE" <<<"$PLOUT")" -ge 2 ]]; then
+    pass "a ${#LONGLINE}-byte line typed at the console arrived intact through the receive interrupt (echo and output)"
+else
+    fail "the long line typed at the console did not come back whole (got $(grep -c "$LONGLINE" <<<"$PLOUT") copies, wanted 2)"
+fi
+OUT="$OUT_SAVED"
+
+#
 # 3c. A USB keyboard, enumerated and typed on.
 #
 #     This is the regression guard for the failure that cost an entire
@@ -2225,7 +2464,7 @@ import subprocess, socket, json, time, sys, threading, os
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 2   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-kbd",
-                     "-kernel", img, "-display", "none", "-serial", "stdio",
+                     "-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
@@ -2317,7 +2556,7 @@ import subprocess, socket, json, time, sys, threading, os
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 4   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-mouse",
-                     "-kernel", img, "-display", "none", "-serial", "stdio",
+                     "-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
@@ -2522,7 +2761,7 @@ import subprocess, socket, json, time, sys, threading
 qemu, img, extra, sd, port = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
                      "-drive", "file=%s,if=sd,format=raw" % sd,
-                     "-display", "none", "-serial", "stdio",
+                     "-display", "none", "-serial", "null", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"],
                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
@@ -3089,7 +3328,7 @@ import subprocess, sys, time, threading
 qemu, img, extra, sd = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
                      "-drive", "file=%s,if=sd,format=raw" % sd,
-                     "-display", "none", "-serial", "stdio"],
+                     "-display", "none", "-serial", "null", "-serial", "stdio"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -3214,7 +3453,7 @@ import subprocess, socket, json, time, sys, threading, os
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 6   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
-                     "-display", "none", "-serial", "stdio",
+                     "-display", "none", "-serial", "null", "-serial", "stdio",
                      "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
@@ -3545,7 +3784,7 @@ python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLA
 import subprocess, sys, time, threading
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
-                      "-display", "none", "-serial", "stdio"],
+                      "-display", "none", "-serial", "null", "-serial", "stdio"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
 buf = bytearray()

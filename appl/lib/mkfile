@@ -81,6 +81,7 @@ TARG=\
 	llmclient.dis\
 	wirefmt.dis\
 	keyset.dis\
+	l2cap.dis\
 	libc.dis\
 	libc0.dis\
 	lists.dis\
@@ -187,6 +188,7 @@ SYSMODULES=\
 	bthci.m\
 	btmock.m\
 	bufio.m\
+	l2cap.m\
 	cfg.m\
 	cfgfile.m\
 	complete.m\

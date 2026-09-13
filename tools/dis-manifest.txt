@@ -299,6 +299,7 @@ dis/lib/bloomfilter.dis
 dis/lib/bthci.dis
 dis/lib/btmock.dis
 dis/lib/bufio.dis
+dis/lib/l2cap.dis
 dis/lib/cfg.dis
 dis/lib/cfgfile.dis
 dis/lib/chanfill.dis
@@ -679,6 +680,7 @@ dis/tests/crypto_props_test.dis
 dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
 dis/tests/bthci_test.dis
+dis/tests/l2cap_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/dial_test.dis

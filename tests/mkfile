@@ -20,6 +20,7 @@ TARG=\
 	awk_test.dis\
 	asyncio_test.dis\
 	bthci_test.dis\
+	l2cap_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\

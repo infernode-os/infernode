@@ -178,18 +178,28 @@ QEMU's `raspi3b` machine model is the BCM2837, and is the primary
 development target:
 
 ```sh
-qemu-system-aarch64 -M raspi3b -kernel kernel8.img -display none -serial stdio
+qemu-system-aarch64 -M raspi3b -kernel kernel8.img -display none -serial null -serial stdio
 ```
+
+Two `-serial`s: `raspi3b` gives the first to the PL011 and the second
+to the AUX mini-UART, and the console is on the mini-UART (see "The
+console is on the mini-UART"). With a single `-serial stdio` the boot
+appears to hang -- the output is going to a UART nothing is listening
+to. QEMU 6.2 (Ubuntu 22.04's) does not pass `-append` to this machine
+and fails seven harness checks for that reason alone; 9.2 does.
 
 Expected output:
 
 ```
 InferNode bare-metal (BCM2837 / Raspberry Pi 3B+)
-  exception level: EL2
+  exception level: EL1
+  midr_el1:        0x00000000410fd034
   mpidr_el1:       0x0000000080000000
-  console:         PL011 UART0, polled
-boot OK
+  console:         mini-UART (UART1), polled; core clock 350000000 Hz, 115200 baud
 ```
+
+(350MHz is what QEMU's firmware model reports for the core clock; a
+board with `enable_uart=1` reports 250000000.)
 
 ### Debugging
 
@@ -198,7 +208,7 @@ instruction — the only way to debug early boot, MMU and exception-vector
 code, which runs before any console exists.
 
 ```sh
-qemu-system-aarch64 -M raspi3b -kernel kernel8.img -display none -serial stdio -s -S
+qemu-system-aarch64 -M raspi3b -kernel kernel8.img -display none -serial null -serial stdio -s -S
 ```
 
 Then, since macOS ships `lldb` rather than `gdb`:
@@ -1055,12 +1065,20 @@ shorter `cmdline.txt` or a bigger buffer (`Mboxcmdlinemax` in
 `board.h`). A real Pi's line, with the firmware's additions, runs to
 a few hundred bytes.
 
-The one `config.txt`, with `init_uart_clock` pinned because uart.c
-divides for 115200 assuming 48MHz and the firmware, not the kernel,
-decides what that reference is:
+The one `config.txt`. `init_uart_clock` is pinned because serialboot
+divides for 115200 assuming 48MHz and the firmware, not the loader,
+decides what that reference is; `enable_uart=1` because the console is
+on the mini-UART now, whose divisor comes off the core clock, and on a
+Pi 3 that line is what pins `core_freq` to 250MHz so the rate holds
+(the kernel asks the mailbox for the rate and prints it in its banner
+either way). `dtoverlay=disable-bt` is gone: it told the firmware to
+route the PL011 to the header and leave the radio's Bluetooth side
+unpowered, and the PL011 now belongs to the radio (`docs/BLUETOOTH.md`).
+serialboot does not depend on the overlay -- it sets GPIO 14/15 to ALT0
+itself -- so the loader is unaffected:
 
     arm_64bit=1
-    dtoverlay=disable-bt
+    enable_uart=1
     init_uart_clock=48000000
     kernel=infernode8.img
     cmdline=cmdline.txt
@@ -2254,6 +2272,74 @@ those is a place where the two halves of the contract above could
 disagree without either being obviously wrong.
 
 
+## The console is on the mini-UART, and the PL011 is a file (Bluetooth milestone 1)
+
+`docs/BLUETOOTH.md` is the design; this is what landed for its first
+milestone and what QEMU could and could not show about it. Nothing
+below has run on the board yet.
+
+**What changed.** The console moved from the PL011 (UART0) to the AUX
+mini-UART (UART1), on the same header pins -- GPIO 14/15 carry either,
+on ALT0 or ALT5 -- so the cable does not move. The PL011 is now
+`/dev/eia0`, the radio's HCI UART on GPIO 32/33 with CTS/RTS on 30/31,
+which is where the Pi 3's device tree wires it. Both are served by `#t`,
+Inferno's own `os/port/devuart.c`, which this tree had until the
+migration commit deleted it with the rest of the 32-bit `os/`; it is
+back with the embedded locks named (the de-anonymization rule above),
+and `man/3/eia` is its interface. The two `PhysUart`s under it are
+`uartmini.c`, from 9front's `bcm/uartmini.c` (MIT), and `uartpl011.c`,
+which is the register code `uart.c` ran polled since the first boot
+plus what a radio needs and a console never did: hardware flow control
+(`m1` sets RTSEN|CTSEN), the receive-timeout interrupt so a lone HCI
+byte does not wait for company, a correct FBRD, and error counters.
+
+**Console input is interrupt-driven now.** The 10ms polling kproc in
+`main.c` is gone; `#t`'s console Uart delivers each byte from the
+mini-UART's IRQ through `consuartputc` (`uart.c`: CR to NL, echo,
+`kbdputc`). Output stays polled and synchronous, on purpose -- it is
+the panic path -- and `printq` is still never set. The board notes'
+warning that scripted writes lose everything past 16 bytes was this
+poll against the PL011's FIFO; it should be gone, and the harness's
+154-byte line is the assertion to run on the board to say so.
+
+**The clock is asked for, not assumed.** The mini-UART divides the VPU
+core clock, which the firmware scales unless `config.txt` pins it.
+`miniconsinit()` asks the mailbox for the rate before it prints a
+character -- nothing printed with the wrong divisor is readable,
+including the complaint -- and the banner says what it used. QEMU's
+model reports 350MHz. The PL011 asks for `Clkuart` the same way and
+disbelieves anything under 16MHz, because QEMU reports 3MHz for it, a
+model constant; status says `clock(firmware)` or `clock(default)`.
+
+**The transmit interrupt is level.** PL011 TXI is asserted for as long
+as the FIFO is at or below its trigger, i.e. for ever with nothing to
+send. `uartpl011.c` enables it only in `kick()` when bytes remain and
+masks it when they are drained, as the mini-UART driver does with
+TxIen. QEMU's model asserts it once, so an always-on TXIM would have
+passed every check here and pinned a core on the board.
+
+**What the harness shows (QEMU 9.2.4).** Banner on the second
+`-serial`; `#t` binds at `/dev` with six files; `eia1status` reads
+`b115200 c0 d0 e0 l8 m0 pn r1 s1`; `eia0ctl` takes `b921600` and `m1`
+and refuses `zzz` with *bad arg*; bytes written to `/dev/eia0` come
+back through the receive interrupt from a socket peer, twice, in
+order; the long line arrives whole. The port is held open across the
+session by a background `sleep 40 <> /dev/eia0`, because `#t` enables
+on first open and disables on last close, and a receiver disabled
+between two commands drops the peer's echo -- which is not a bug but
+how a program that owns a port has to hold it.
+
+**What QEMU cannot show.** Whether the board's core clock reads 250MHz
+(`enable_uart=1` on the card, recipe above) and the console comes up
+readable on the first try. Whether GPIO 30-33 on ALT3 reach the radio.
+Whether the FIFO-clear in `enable()` -- which waits for the transmitter
+to drain first, since `#t`'s reset runs it a second time mid-boot-log
+-- ever eats a character. Whether the PL011's RT interrupt fires on
+real silicon at the 1/8 trigger. Whether `probeuartin` still sees a
+typed byte on the mini-UART. All of that is the first board session,
+and it should be done with the network console token on the card,
+because a console that comes up garbled otherwise leaves no way in.
+
 ## Next
 
 Revised 2026-09-05 from a review of the branch's 49 commits against the
@@ -2715,8 +2801,10 @@ declares the tag and ignores it). A USB storage class driver in Limbo
 over `#u`, the same shape as `etherusb.b`. WiFi: CYW43455 over SDIO on
 the second controller, plus a firmware blob upload — the large one; the
 EMMC driver exists for SD but SDIO is different. Audio (PWM or HDMI).
-Bluetooth is on the PL011 the console uses; it would mean the
-mini-UART for the console first.
+Bluetooth is on the PL011 the console used to use; the mini-UART took
+the console over (below, "The console is on the mini-UART") and the
+PL011 is `/dev/eia0`. The design is `docs/BLUETOOTH.md`, the proposal
+issue #615, the branch `feat/baremetal-bt`.
 
 **15. The next board.** BCM2711 (Pi 4) needs a GIC-400 interrupt
 controller, xHCI over PCIe (the VL805) and the GENET MAC. The `#u`

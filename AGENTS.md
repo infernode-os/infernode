@@ -114,7 +114,9 @@ useless for making a change stick.
 past the first 16 bytes of a burst, so a scripted `write()` of a whole command
 line arrives truncated at exactly 16 characters and executes as garbage. About
 8ms per character is reliable. Interactive typing is unaffected, which is why
-this only shows up in automation.
+this only shows up in automation. (The cause is the console's 10ms poll of the
+PL011's 16-byte FIFO; `feat/baremetal-bt` replaces it with an interrupt-driven
+console on the mini-UART, and this note should be re-measured there.)
 
 **On the host, `brltty` steals CH340 adapters.** The generic `1a86:7523`
 USB-serial ID is also a Baum braille display, so a running `brltty` claims the

@@ -321,22 +321,29 @@ control, event parsing and the patch-upload state machine in
 
 Each lands separately, with tests, and each leaves the board no worse.
 
-**M0 — a QEMU that models the machine.** Build or install QEMU ≥ 8.x on
-the development host; confirm `-append` and both serial ports; the 7
-failing harness assertions go green. No tree change beyond notes.
+**M0 — a QEMU that models the machine.** *Done 2026-09-13.* QEMU 9.2.4
+built from source into `~/.local` on the development host (Ubuntu
+22.04's 6.2 does not deliver `-append` to `raspi3b`); the 7 failing
+harness assertions pass. `raspi3b` gives `-serial` #0 to the PL011 and
+#1 to the mini-UART (`hw/arm/bcm2835_peripherals.c`), confirmed from
+source and by boot.
 
-**M1 — the console moves to the mini-UART; `#t` returns.** Import
-`devuart.c`/`uart.h`; port 9front's `uartmini.c` to a `PhysUart`; turn
-`uart.c`'s PL011 code into a `PhysUart` too; early `bootsay` output
-moves to the mini-UART (polled, as now). Console on `eia1`,
-interrupt-driven, `kbdq` fed by `devuart`. PL011 idle on GPIO 32/33 as
-`eia0`. Harness: banner on `-serial` #1; `cat /dev/eia0status`;
-loopback through a host pty on `eia0`; a 200-byte burst pasted at the
-console arrives intact (the FIFO fix). Board: cable unchanged,
-`enable_uart=1` on the card, serial loader untouched (it runs before
-the kernel and still speaks PL011 on 14/15 — this is checked, not
-assumed, before the change is called done). `#G/exp/N`. Manifest and
-README updated.
+**M1 — the console moves to the mini-UART; `#t` returns.** *Landed
+under QEMU 2026-09-13; not yet run on the board.* `os/port/devuart.c`
+and `uart.h` reinstated with the locks named; `os/bcm2837/uartmini.c`
+(from 9front, MIT) and `uartpl011.c` as `PhysUart`s; `uart.c` reduced
+to console policy over the polled mini-UART. Console input arrives on
+the mini-UART's receive interrupt through `consuartputc`; the 10ms
+polling kproc is gone. Both drivers ask the mailbox for their clock.
+The PL011's level-triggered TXI is masked except while bytes remain.
+Harness: banner on `-serial` #1, six files under `#t`, `eia0ctl` takes
+`b921600`/`m1` and refuses a bad verb, a socket peer on the PL011 sees
+two writes come back through the receive path in order, a 157-byte line
+typed at the console arrives whole. `os/bcm2837/README.md` "The console
+is on the mini-UART" records what QEMU could not show, for the first
+board session: `enable_uart=1` on the card, `dtoverlay=disable-bt`
+removed, serialboot unaffected (it muxes 14/15 itself).
+Still to do in this milestone: `#G/exp/N` for BT_ON.
 
 **M2 — `bt9p` exists and speaks HCI.** `bttransport.m`, `h4`, the HCI
 core (command queue honouring Num_HCI_Command_Packets, event dispatch,

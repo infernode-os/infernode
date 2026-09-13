@@ -263,11 +263,17 @@ For ordinary tools the ordering remains security-critical:
 ```
 asyncexec(tool):
   1. pctl(FORKNS)
-  2. pctl(NODEVS)
-  3. bind /tool.N over /tool
-  4. restrictns(Capabilities(tools = [tool], ...))
-  5. execute only that tool module
+  2. pctl(NEWENV), then copy only VELTRO_SESSION
+  3. pctl(NODEVS)
+  4. bind /tool.N over /tool
+  5. restrictns(Capabilities(tools = [tool], ...))
+  6. execute only that tool module
 ```
+
+The fresh environment group is required even though `restrictns()` narrows
+`/env`: Inferno deliberately permits a process to name its private `#e`
+device after `NODEVS`. Without `NEWENV`, that alias would recover the
+launcher's unfiltered environment behind the restricted `/env` view.
 
 `exec` defers `NODEVS` to its trusted wrapper. The wrapper opens the current
 worker's `#p/<pid>/wait`, retains only that FD and its I/O across `NEWFD`, then
@@ -344,7 +350,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 |----------|-----------|
 | No ambient host filesystem | `/n/local` is absent unless exactly granted; `#U` attachment is blocked by `NODEVS` at every execution boundary |
 | No project file exposure | Root restriction hides `.env`, `.git`, `CLAUDE.md`, source tree |
-| No env secrets | `/env` is allowlisted; spawned children also use `NEWENV` |
+| No env secrets | Every tool worker and spawned child uses `NEWENV`; workers copy only `VELTRO_SESSION`, then `/env` is allowlisted |
 | No ambient child FDs | Spawn uses `NEWFD`; exec keeps only I/O and its private wait FD |
 | Safe FD 0-2 | `verifysafefds()` redirects nil FDs to `/dev/null` |
 | Empty srv registry | NEWPGRP first (child) |

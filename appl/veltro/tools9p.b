@@ -1205,6 +1205,26 @@ releasetaskcreate(locked: int)
 	}
 }
 
+# A tool worker must not inherit the launcher's environment group.  /env is
+# narrowed later by restrictns(), but the private #e device otherwise names
+# the inherited group directly.  Preserve only the session pointer that the
+# plan and todo tools consume through the canonical /env path.
+isolateenv(): string
+{
+	session := rf("/env/VELTRO_SESSION");
+	if(sys->pctl(Sys->NEWENV, nil) < 0)
+		return sys->sprint("cannot create private environment: %r");
+	if(session == nil)
+		return nil;
+	fd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return sys->sprint("cannot restore session environment: %r");
+	b := array of byte session;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("cannot restore session environment: %r");
+	return nil;
+}
+
 asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
 	# Keep batched creates single-file before either invocation forks its
@@ -1220,6 +1240,14 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	if(mypid < 0) {
 		ti.result = array of byte "error: cannot fork namespace";
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
+		releasetaskcreate(locked);
+		return;
+	}
+	enverr := isolateenv();
+	if(enverr != nil) {
+		ti.result = array of byte ("error: " + enverr);
+		srv.reply(ref Rmsg.Error(tag, "cannot isolate tool environment"));
+		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
 		return;
 	}

@@ -41,5 +41,15 @@ init(nil: ref Draw->Context, nil: list of string)
 		sys->print("FAIL: /fd is visible in restricted exec namespace\n");
 		return;
 	}
+	fd = sys->open("#e/INFR480_SECRET", Sys->OREAD);
+	if(fd != nil) {
+		sys->print("FAIL: exec inherited the launcher environment device\n");
+		return;
+	}
+	fd = sys->open("/env/INFR480_SECRET", Sys->OREAD);
+	if(fd != nil) {
+		sys->print("FAIL: exec inherited the launcher environment namespace\n");
+		return;
+	}
 	sys->print("PASS: exec process and device capabilities are confined\n");
 }

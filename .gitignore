@@ -114,6 +114,23 @@ test-output.txt
 .claude/settings.local.json
 .claude/worktrees/
 
+# Runtime namespace residue. Running `emu -r$PWD` makes the repo root the
+# Inferno root, so 9P services mounted during a session leave their file
+# names behind on the host as empty stubs (/llm/ctl, /n/wallet/accounts,
+# /phone/sms, ...). They are recreated by the next boot. Ignore the
+# service trees, not the mount points themselves: n/ is tracked via
+# n/.gitkeep because a bind target has to exist.
+/llm/
+/phone/
+/n/*
+!/n/.gitkeep
+# scap(1) writes this beside the image it captured.
+/scap.status
+
+# Python bytecode from the host-side tooling (codex-gate, harness scripts).
+__pycache__/
+*.pyc
+
 # Veltro API keys (secrets)
 lib/veltro/keys/
 

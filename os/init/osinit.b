@@ -1394,11 +1394,23 @@ wifijoin(essid, pass: string)
 	# That is a defect in its own right, recorded as such; retrying is
 	# what makes the boot work while it stands.
 	#
+	#
+	# 90 seconds, not 25. The supplicant now re-joins on its own after
+	# a failed or lost association (ip/wpa: clear the latched essid,
+	# write the element, write the name), and measured on the board
+	# that takes about 40 seconds from "link lost" to "group key
+	# installed". A 25-second budget killed it mid-handshake on every
+	# boot whose first association flaked -- and a supplicant killed
+	# mid-join leaves the radio in a state the next one could not join
+	# from either, so all three tries failed where the old passive
+	# loop's kill-and-restart had succeeded. The budget has to cover
+	# one in-loop recovery, with margin.
+	#
 	pids := chan of int;
 	for(try := 0; try < 3; try++){
 		spawn wparun(wpa, essid, pids);
 		pid := <-pids;
-		for(w := 0; w < 25; w++){
+		for(w := 0; w < 90; w++){
 			sys->sleep(1000);
 			if(keyed())
 				break;

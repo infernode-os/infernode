@@ -262,7 +262,7 @@ init(nil: ref Draw->Context, args: list of string)
 	tries := 0;			# associations attempted since the last real one
 	say := Sparse.mk(0);		# what may be said about a link that will not hold
 	announce := 1;			# the next association is worth mentioning
-	first := 1;			# the startup path has already asked for this join
+	everkeyed := 0;			# in-loop recovery is for a link that once worked
 	for(;;){
 		tries++;
 		if(retry > 0)
@@ -304,13 +304,23 @@ init(nil: ref Draw->Context, args: list of string)
 		# the one being fixed.
 		#
 		#
-		# NOT "tries > 1": the link-lost branch below resets tries
-		# to zero so its rationing starts afresh, which made that
-		# gate false on exactly the turn this exists for. Measured:
-		# a natural drop at 17:05:59, "link lost; re-associating",
-		# and then "still waiting" for ever with no join issued.
+		# ONLY FOR A LINK THAT HAS KEYED. The two ways to arrive here
+		# disconnected are not the same case. After a drop from a
+		# working link this recovery is proved: 41 seconds from
+		# "link lost" to "group key installed", on the board, under
+		# a natural drop. After a FIRST association that never keyed
+		# -- which happens on about half of this board's boots -- the
+		# same re-join associates and the handshake then fails again,
+		# and two boots in a row ended "did not authenticate" where
+		# osinit's kill-and-restart of a passive loop had always
+		# succeeded. So the boot flake keeps the behaviour that works
+		# for it, and a lost link gets the one that works for that.
 		#
-		if(!first && !connected()){
+		# (Not "tries > 1": the link-lost branch resets tries to zero
+		# for its rationing, which made that gate false on exactly the
+		# turn this exists for.)
+		#
+		if(everkeyed && !connected()){
 			if(sys->fprint(cfd, "essid default") < 0 && say.due(retry))
 				report(sys->sprint("essid default: %r"));
 			if(sys->fprint(cfd, "auth %s", RSNE) < 0 && say.due(retry))
@@ -319,7 +329,6 @@ init(nil: ref Draw->Context, args: list of string)
 				report(sys->sprint("essid %q: %r", essid));
 		}
 
-		first = 0;
 		waited := associate(cfd, rsne, announce);
 		announce = 0;
 		supp.reset();
@@ -348,6 +357,8 @@ init(nil: ref Draw->Context, args: list of string)
 		# whatever went wrong before, because whatever it was has
 		# stopped.
 		#
+		if(keyed)
+			everkeyed = 1;
 		if(keyed && sys->millisec() - began >= Realassoc){
 			report("link lost; re-associating");
 			retry = Retryfirst;

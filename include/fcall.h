@@ -125,6 +125,7 @@ uint	convS2M(Fcall*, uchar*, uint);
 uint	sizeS2M(Fcall*);
 
 int	statcheck(uchar *abuf, uint nbuf);
+int	statcheckbuf(uchar *abuf, uint navail);
 uint	convM2D(uchar*, uint, Dir*, char*);
 uint	convD2M(Dir*, uchar*, uint);
 uint	sizeD2M(Dir*);

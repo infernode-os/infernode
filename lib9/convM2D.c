@@ -4,26 +4,45 @@
 int
 statcheck(uchar *buf, uint nbuf)
 {
-	uchar *ebuf;
+	uint n, remain;
 	int i;
-
-	ebuf = buf + nbuf;
 
 	if(nbuf < STATFIXLEN || nbuf != BIT16SZ + GBIT16(buf))
 		return -1;
 
 	buf += STATFIXLEN - 4 * BIT16SZ;
+	remain = nbuf - (STATFIXLEN - 4 * BIT16SZ);
 
 	for(i = 0; i < 4; i++){
-		if(buf + BIT16SZ > ebuf)
+		if(remain < BIT16SZ)
 			return -1;
-		buf += BIT16SZ + GBIT16(buf);
+		n = GBIT16(buf);
+		buf += BIT16SZ;
+		remain -= BIT16SZ;
+		if(n > remain)
+			return -1;
+		buf += n;
+		remain -= n;
 	}
 
-	if(buf != ebuf)
+	if(remain != 0)
 		return -1;
 
 	return 0;
+}
+
+/* Check one stat inside a buffer that may contain following entries. */
+int
+statcheckbuf(uchar *buf, uint navail)
+{
+	uint nbuf;
+
+	if(navail < BIT16SZ)
+		return -1;
+	nbuf = BIT16SZ + GBIT16(buf);
+	if(nbuf > navail || statcheck(buf, nbuf) < 0)
+		return -1;
+	return nbuf;
 }
 
 static char nullstring[] = "";

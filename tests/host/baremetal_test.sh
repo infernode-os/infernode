@@ -1600,7 +1600,15 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ps | wc -l' \
         'sleep 0; echo slept-ok' \
         'cat /dev/sysstat' \
-        'for(i in x y z){ echo loop2-$i }')"
+        'for(i in x y z){ echo loop2-$i }' \
+        "ls '#G/gpio/128' '#G/gpio/135'" \
+        "ls '#G/gpio/136'" \
+        "cat '#G/gpio/128/level'" \
+        "echo 1 > '#G/gpio/128/level'" \
+        "cat '#G/gpio/128/level'" \
+        "echo 0 > '#G/gpio/129/level'" \
+        "echo function out > '#G/gpio/128/ctl'" \
+        "cat '#G/gpio/129/ctl'")"
 
 # Strip carriage returns once, here.
 #
@@ -2174,6 +2182,55 @@ if grep -v 'echo ' <<<"$SHOUT" | grep -q 'loop2-y'; then
     pass "control flow works without typing 'load std' first (the profile ran)"
 else
     fail "for(){} did not run -- /lib/sh/profile did not load std"
+fi
+
+#
+# 3a'. The firmware GPIO expander as pins 128..135 of #G.
+#
+#     The radios' power enables and the Ethernet chip's reset are on a
+#     GPIO expander the firmware drives over I2C; they are pins in the
+#     same directory, with the same two files, numbered as the firmware
+#     numbers them. 128 is BT_ON and belongs to a program (bt9p); 129
+#     is WL_ON and belongs to ether4330, which claims it, so it reads
+#     but refuses writes -- the same refusal the console pins make.
+#     QEMU accepts the set tag and answers no get, so a level reads "?"
+#     until something is written and the last write afterwards; on a
+#     board the firmware answers and the "?" never appears.
+#
+if grep -A4 "ls '#G/gpio/128' '#G/gpio/135'" <<<"$SHOUT" | grep -q '#G/gpio/135/level'; then
+    pass "expander lines are pins 128..135 in #G/gpio, each with ctl and level"
+else
+    fail "#G/gpio/128 and 135 did not list as pin directories"
+fi
+if grep -A1 "ls '#G/gpio/136'" <<<"$SHOUT" | grep -q 'does not exist\|file does not exist\|not found'; then
+    pass "the expander stops at 135: #G/gpio/136 does not exist"
+else
+    fail "#G/gpio/136 should not exist"
+fi
+if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | head -2 | grep -q '^?$'; then
+    pass "an expander level the firmware will not report and nothing has written reads as ?"
+else
+    fail "#G/gpio/128/level did not read ? before the first write under QEMU"
+fi
+if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | tail -1 | grep -q '^1$'; then
+    pass "writing 1 to #G/gpio/128/level (BT_ON) goes to the firmware and reads back"
+else
+    fail "#G/gpio/128/level did not read 1 after the write"
+fi
+if grep -A1 "echo 0 > '#G/gpio/129/level'" <<<"$SHOUT" | grep -q 'in use by ether4330'; then
+    pass "#G/gpio/129 (WL_ON) is claimed by ether4330: the radio's power cannot be pulled from under its driver"
+else
+    fail "a write to #G/gpio/129/level was not refused as ether4330's"
+fi
+if grep -A1 "echo function out > '#G/gpio/128/ctl'" <<<"$SHOUT" | grep -q 'no function select'; then
+    pass "an expander line's ctl refuses function/pull truthfully: the hardware has neither"
+else
+    fail "#G/gpio/128/ctl did not refuse a function write"
+fi
+if grep -A2 "^; cat '#G/gpio/129/ctl'" <<<"$SHOUT" | grep -q '^function \(unknown\|out\|in\)$'; then
+    pass "an expander line's ctl reads its configuration as the firmware reports it (or unknown, under QEMU)"
+else
+    fail "#G/gpio/129/ctl did not read as a function/pull report"
 fi
 
 #

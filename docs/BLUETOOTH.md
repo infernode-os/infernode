@@ -272,7 +272,7 @@ does, and an RFCOMM serial port has every reason to present as
     b8:27:eb:5a:6b:7c
     ; cat /net/bt/scan
     94:bb:43:44:61:04 0x1c010c -61 hephaestus
-    ; dial bt!94:bb:43:44:61:04!1                    # SDP, psm 1
+    ; dial -A 'bt!94:bb:43:44:61:04!4097' sh -c 'echo -n hello; read 100 >[1=2]'
 
 ### What it composes with, and does not do
 
@@ -413,7 +413,19 @@ discoverable on demand, through the bridge (below).
 
 **M5 — L2CAP and conversations.** `clone`, `N/`, `dial` and `listen`
 over L2CAP; SDP client as a library (`sdp.m`); the board and the host
-exchange bytes.
+exchange bytes. *Done against the mock 2026-09-13, SDP excepted:*
+`module/l2cap.m` + `appl/lib/l2cap.b` is basic-mode L2CAP as a state
+machine with no I/O (`tests/l2cap_test.b`, two Links against each
+other through 27-byte fragments); `bt9p` has links (Create_Connection,
+Accept, Disconnect, Number_Of_Completed_Packets credits per handle,
+reclaimed at Disconnection Complete), `clone` and `N/{ctl,data,status,
+local,remote,listen}` with `/net/tcp`'s semantics, and a link is torn
+down when its last channel goes. The mock has a peer side: an L2CAP
+echo service on PSM 0x1001, an incoming call on request, and it
+records what it is sent. The contract test connects, echoes, hangs up,
+is refused by PSM and by page timeout, announces and takes a call,
+and runs the kernel's `dial(2)` against the tree with no change to
+`dial`. SDP is deferred to when a profile needs it (M7).
 
 **M6 — pairing through factotum.** `proto=btlink`; SSP numeric
 comparison via the confirmation path; legacy PIN for old peripherals.

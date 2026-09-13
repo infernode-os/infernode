@@ -29,6 +29,8 @@ TARG=\
 	auth.dis\
 	auth9.dis\
 	bloomfilter.dis\
+	bthci.dis\
+	btmock.dis\
 	bufio.dis\
 	cfg.dis\
 	cfgfile.dis\
@@ -182,6 +184,8 @@ SYSMODULES=\
 	attrdb.m\
 	auth9.m\
 	bloomfilter.m\
+	bthci.m\
+	btmock.m\
 	bufio.m\
 	cfg.m\
 	cfgfile.m\

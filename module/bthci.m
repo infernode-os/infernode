@@ -229,4 +229,13 @@ Bthci: module
 	};
 
 	hex:	fn(a: array of byte): string;	# "01 03 0c 00", for the event file
+
+	#
+	# A Broadcom .hcd patch file is HCI command packets laid end to
+	# end without indicators -- opcode, length, parameters -- almost
+	# all of them Write_RAM, the last a Launch_RAM. Returns them in
+	# file order, or nil with the byte offset of the first malformed
+	# record.
+	#
+	hcdrecords:	fn(hcd: array of byte): (list of (int, array of byte), int);
 };

@@ -386,6 +386,12 @@ name: `-t /dev/eia0`, `-t tcp!host!port`, `-t /chan/btmock`.
 115200, `.hcd` uploaded, baud raised to 921600 then 3 Mbaud with
 `m1`, `Read_BD_ADDR` returns the board's own address. The first
 hardware milestone and the first that needs the board at all.
+*The code is in place (2026-09-13):* `firmware <path>` names the
+`.hcd`, `up` uploads it in BlueZ's order and resets, `baud <n>` tells
+the controller and then the transport's ctl file; `bthci->hcdrecords`
+parses the file and is unit-tested; the contract test uploads a
+three-record patch through the mock. What is not done is the only
+thing that matters here: a CYW43455 has not seen any of it.
 
 **M4 — discovery.** `scan`, `lescan`, remote name requests. Verified
 against this host's `hci0`, which is discoverable on demand.

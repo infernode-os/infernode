@@ -25,7 +25,8 @@ MNT=/tmp/btns
 mkdir -p $MNT
 mkdir -p $MNT/chan
 
-btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -t 100 $MNT/chan/btmock &
+HCD=/tmp/btns.hcd
+btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -t 100 -H $HCD $MNT/chan/btmock &
 sleep 1
 if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
@@ -70,8 +71,11 @@ if {cat $BT/addr > /dev/null >[2] /dev/null} {
 if {echo frobnicate > $BT/ctl >[2] /dev/null} {
 	raise 'fail:unknown ctl verb was accepted'
 }
-if {echo firmware /n/dos/firmware/x.hcd > $BT/ctl >[2] /dev/null} {
-	raise 'fail:firmware verb accepted before milestone 3 -- it must say not yet'
+if {echo firmware /n/dos/firmware/no-such.hcd > $BT/ctl >[2] /dev/null} {
+	raise 'fail:firmware accepted a file that does not exist'
+}
+if {echo baud 115200 > $BT/ctl >[2] /dev/null} {
+	raise 'fail:baud accepted on a transport with no ctl file'
 }
 if {echo scan 0 > $BT/ctl >[2] /dev/null} {
 	raise 'fail:scan 0 accepted'
@@ -164,5 +168,24 @@ v=`{cat $BT/status | grep '^up '}
 if {! ~ $"v 'up 0'} {
 	raise 'fail:status after reset: '^$"v
 }
+
+# The patch upload: name the file, and the next up sends its records
+# -- Download_Minidriver, each record, Launch_RAM -- then resets and
+# asks again. Status says how many went.
+echo firmware $HCD > $BT/ctl
+v=`{cat $BT/status | grep '^firmware '}
+if {! ~ $"v 'firmware '^$HCD^' (not uploaded yet)'} {
+	raise 'fail:firmware named but status says: '^$"v
+}
+echo up > $BT/ctl
+v=`{cat $BT/status | grep '^firmware '}
+if {! ~ $"v 'firmware '^$HCD^' (uploaded 3 records)'} {
+	raise 'fail:after up with firmware, status says: '^$"v
+}
+v=`{cat $BT/addr}
+if {! ~ $"v 'b8:27:eb:00:00:42'} {
+	raise 'fail:addr after patched up: '^$"v
+}
+rm -f $HCD
 
 echo PASS

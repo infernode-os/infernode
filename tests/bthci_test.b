@@ -546,6 +546,31 @@ testBroadcomVendor(t: ref T)
 	stopfake(f);
 }
 
+testHcdRecords(t: ref T)
+{
+	# two Write_RAM records and a Launch_RAM, as a .hcd lays them out
+	hcd := bytes(16r4c :: 16rfc :: 3 :: 1 :: 2 :: 3 ::
+		16r4c :: 16rfc :: 1 :: 16raa ::
+		16r4e :: 16rfc :: 4 :: 16rff :: 16rff :: 16rff :: 16rff :: nil);
+	(l, bad) := bthci->hcdrecords(hcd);
+	t.asserteq(len l, 3, "three records");
+	t.asserteq(bad, -1, "none malformed");
+	if(len l == 3){
+		(op, p) := hd l;
+		t.asserteq(op, Bthci->BcmWriteRam, "the first is Write_RAM");
+		t.asserteq(len p, 3, "with three bytes");
+		(op, p) = hd tl tl l;
+		t.asserteq(op, Bthci->BcmLaunchRam, "the last is Launch_RAM");
+		t.asserteq(bthci->get4(p, 0), -1, "to address 0xffffffff");
+	}
+	# a record whose length runs past the end is refused, and where
+	(l, bad) = bthci->hcdrecords(bytes(16r4c :: 16rfc :: 9 :: 1 :: 2 :: nil));
+	t.assert(l == nil, "a truncated record yields nothing");
+	t.asserteq(bad, 0, "and names the offset");
+	(l, bad) = bthci->hcdrecords(bytes(16r4c :: 16rfc :: 1 :: 16raa :: 16r4e :: nil));
+	t.asserteq(bad, 4, "a trailing partial header names its offset");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -587,6 +612,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TimeoutAndDeath", testTimeoutAndDeath);
 	run("Inquiry", testInquiry);
 	run("BroadcomVendor", testBroadcomVendor);
+	run("HcdRecords", testHcdRecords);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

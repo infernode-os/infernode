@@ -21,6 +21,8 @@ implement Btmockcmd;
 #     -n   a device an inquiry finds; repeatable
 #     -s   stingy: withhold command credits and refund them on the tick
 #     -t   the tick, in ms (default 200): one inquiry result per tick
+#     -H   write a small .hcd patch file there, for exercising bt9p's
+#          firmware upload against this controller
 #
 
 include "sys.m";
@@ -60,7 +62,8 @@ init(nil: ref Draw->Context, args: list of string)
 	stingy := 0;
 	tickms := 200;
 	arg->init(args);
-	arg->setusage("btmock [-a addr] [-n 'addr class rssi name']... [-s] [-t ms] [path]");
+	hcd := "";
+	arg->setusage("btmock [-a addr] [-n 'addr class rssi name']... [-s] [-t ms] [-H hcdfile] [path]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'a' =>	addr = arg->earg();
@@ -75,6 +78,7 @@ init(nil: ref Draw->Context, args: list of string)
 			nearby = ref Found(hd f, cls, int hd tl tl f, nm) :: nearby;
 		's' =>	stingy = 1;
 		't' =>	tickms = int arg->earg();
+		'H' =>	hcd = arg->earg();
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -85,6 +89,11 @@ init(nil: ref Draw->Context, args: list of string)
 	c := Ctlr.new(addr);
 	c.nearby = nearby;
 	c.stingy = stingy;
+
+	if(hcd != nil && writehcd(hcd) < 0){
+		sys->fprint(stderr, "btmock: %s: %r\n", hcd);
+		raise "fail:hcd";
+	}
 
 	(dir, file) := splitpath(path);
 	# the file lives in a srv device; give the directory one, as ramfile does
@@ -98,6 +107,25 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:file2chan";
 	}
 	spawn serve(c, fio, tickms);
+}
+
+#
+# A patch file with the shape of a real one: two Write_RAM records
+# and a Launch_RAM, opcode and length and parameters, no indicators.
+#
+writehcd(path: string): int
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return -1;
+	b := array[] of {
+		byte 16r4c, byte 16rfc, byte 8,  byte 0, byte 16r10, byte 0, byte 0, byte 16rde, byte 16rad, byte 16rbe, byte 16ref,
+		byte 16r4c, byte 16rfc, byte 6,  byte 4, byte 16r10, byte 0, byte 0, byte 16rca, byte 16rfe,
+		byte 16r4e, byte 16rfc, byte 4,  byte 16rff, byte 16rff, byte 16rff, byte 16rff,
+	};
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return 0;
 }
 
 hexint(s: string): (int, string)

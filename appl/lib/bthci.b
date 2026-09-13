@@ -373,6 +373,28 @@ hex(a: array of byte): string
 	return s;
 }
 
+hcdrecords(hcd: array of byte): (list of (int, array of byte), int)
+{
+	l: list of (int, array of byte);
+	i := 0;
+	while(i < len hcd){
+		if(i + 3 > len hcd)
+			return (nil, i);
+		op := get2(hcd, i);
+		n := int hcd[i+2];
+		if(i + 3 + n > len hcd)
+			return (nil, i);
+		p := array[n] of byte;
+		p[0:] = hcd[i+3:i+3+n];
+		l = (op, p) :: l;
+		i += 3 + n;
+	}
+	r: list of (int, array of byte);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return (r, -1);
+}
+
 #
 # The transport.
 #

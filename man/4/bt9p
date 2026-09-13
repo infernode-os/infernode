@@ -125,7 +125,28 @@ Write_Scan_Enable, inquiry scan and page scan respectively.
 How long the next inquiry runs, 1 to 61 (default 10).
 .TP
 .BI firmware " path"
-Not yet: the patch upload is milestone 3 and the verb says so.
+Name a Broadcom
+.B .hcd
+patch file; the next
+.B up
+uploads it -- Download_Minidriver, every record, Launch_RAM -- then
+resets and asks the controller who it is now. On the board the file
+is
+.BR /n/dos/firmware/BCM4345C0.hcd ,
+on the card and never in the tree.
+.B status
+reports how many records went, or that the upload failed.
+.TP
+.BI baud " rate"
+Update_UART_Baud_Rate to the controller, at the old rate, then
+.BI b rate
+to the transport's own ctl file
+.RB ( /dev/eia0ctl
+for
+.BR /dev/eia0 );
+refused for a transport that has none. Enable hardware flow control
+on the port first
+.RB ( "echo m1 > /dev/eia0ctl" ).
 .RE
 .TP
 .B scan

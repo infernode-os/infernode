@@ -19,6 +19,7 @@ implement Bt9p;
 #                     transport, scans, events dropped
 #     ctl       write up | down | reset | name <s> | class <hex>
 #                     discoverable on|off | connectable on|off | scan <secs>
+#                     firmware <path> | baud <n>
 #     scan      read  runs an inquiry; one device per line as found,
 #                     "<addr> <class> <rssi> <name>"; EOF at Inquiry Complete
 #     event     read  the HCI event stream as text, "event 0x0e 01 03 0c 00",
@@ -28,8 +29,17 @@ implement Bt9p;
 #                     lent the controller to whoever holds this.
 #
 # Not here yet: clone and the conversation directories (L2CAP, M5),
-# lescan (M4), the firmware patch upload (M3), keys (M6). The ctl verbs
-# for what is not done refuse with "not yet", not silence.
+# lescan (M4), keys (M6). The ctl verbs for what is not done refuse
+# with "not yet", not silence.
+#
+# The firmware. A Broadcom controller boots from ROM and takes a patch
+# over HCI: "firmware <path>" names a .hcd file (on the board,
+# /n/dos/firmware/BCM4345C0.hcd, never in the tree -- docs/BLUETOOTH.md)
+# and the next "up" uploads it, Download_Minidriver then every record
+# then Launch_RAM, then resets and asks the controller who it is now.
+# "baud <n>" tells the controller to change rate (Update_UART_Baud_Rate)
+# and then changes the transport's own rate through its ctl file, so
+# it wants a transport that has one: /dev/eia0 does.
 #
 # Usage:
 #   bt9p -t /dev/eia0                    the board
@@ -96,6 +106,9 @@ discoverable := 0;
 connectable := 1;
 scansecs := 10;
 scans := 0;			# inquiries run
+firmware := "";			# a .hcd to upload on up
+uploaded := 0;			# records sent by the last up, or -1 if the upload failed
+baud := 0;			# what the transport was last told, 0 if never
 
 # a parked read on a streaming file, and what it will get
 Sub: adt {
@@ -129,6 +142,8 @@ Ctlres: adt {
 	class:	int;			# -1: unchanged
 	disc:	int;			# -1: unchanged
 	conn:	int;			# -1: unchanged
+	uploaded: int;			# records the patch upload sent
+	baud:	int;			# rate set, 0 if none
 };
 ctldone: chan of ref Ctlres;
 busy := 0;			# a worker is talking to the controller
@@ -645,6 +660,16 @@ status(): string
 		s += sys->sprint("discoverable %d\nconnectable %d\n", discoverable, connectable);
 	}
 	s += sys->sprint("transport %s\n", transportname);
+	if(baud > 0)
+		s += sys->sprint("baud %d\n", baud);
+	if(firmware != nil){
+		if(uploaded > 0)
+			s += sys->sprint("firmware %s (uploaded %d records)\n", firmware, uploaded);
+		else if(uploaded < 0)
+			s += sys->sprint("firmware %s (upload failed)\n", firmware);
+		else
+			s += sys->sprint("firmware %s (not uploaded yet)\n", firmware);
+	}
 	if(hci.dead)
 		s += "controller gone\n";
 	s += sys->sprint("scans %d\n", scans);
@@ -677,9 +702,20 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 		return;
 	"firmware" =>
-		srv.reply(ref Rmsg.Error(tm.tag, "not yet: the patch upload is milestone 3"));
+		if(nf != 2){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: firmware <path>"));
+			return;
+		}
+		fd := sys->open(hd args, Sys->OREAD);
+		if(fd == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("%s: %r", hd args)));
+			return;
+		}
+		firmware = hd args;
+		uploaded = 0;
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 		return;
-	"up" or "down" or "reset" or "name" or "class" or "discoverable" or "connectable" =>
+	"up" or "down" or "reset" or "name" or "class" or "discoverable" or "connectable" or "baud" =>
 		;
 	* =>
 		srv.reply(ref Rmsg.Error(tm.tag, "unknown ctl verb: " + verb));
@@ -712,6 +748,15 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 	"discoverable" or "connectable" =>
 		if(nf != 2 || (hd args != "on" && hd args != "off")){
 			srv.reply(ref Rmsg.Error(tm.tag, "usage: " + verb + " on|off"));
+			return;
+		}
+	"baud" =>
+		if(nf != 2 || (n := int hd args) < 9600 || n > 4000000){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: baud <9600..4000000>"));
+			return;
+		}
+		if(sys->open(transportname + "ctl", Sys->OWRITE) == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("transport has no ctl file: %sctl: %r", transportname)));
 			return;
 		}
 	}
@@ -772,10 +817,12 @@ scanenable(): array of byte
 
 ctlwork(tm: ref Tmsg.Write, verb: string, args: list of string)
 {
-	r := ref Ctlres(tm, nil, 0, 0, nil, nil, nil, -1, -1, -1);
+	r := ref Ctlres(tm, nil, 0, 0, nil, nil, nil, -1, -1, -1, 0, 0);
 	case verb {
 	"up" =>
 		r.err = bringup(r);
+	"baud" =>
+		r.err = setbaud(r, int hd args);
 	"down" =>
 		(nil, r.err) = must("scan enable", Bthci->WriteScanEnable, array[] of { byte 0 });
 		r.setup = -1;
@@ -843,6 +890,21 @@ bringup(r: ref Ctlres): string
 	if(err != nil)
 		return err;
 	r.version = Version.parse(ret);
+	if(firmware != nil){
+		(r.uploaded, err) = bcmpatch(firmware);
+		if(err != nil){
+			r.uploaded = -1;
+			return err;
+		}
+		# the controller has rebooted into the patch: start again
+		(nil, err) = must("reset after patch", Bthci->Reset, nil);
+		if(err != nil)
+			return "no controller after the patch: " + err;
+		(ret, err) = must("read local version", Bthci->ReadLocalVersion, nil);
+		if(err != nil)
+			return err;
+		r.version = Version.parse(ret);
+	}
 	(ret, err) = must("read bd_addr", Bthci->ReadBdaddr, nil);
 	if(err != nil)
 		return err;
@@ -868,6 +930,76 @@ bringup(r: ref Ctlres): string
 	if(err != nil)
 		return err;
 	r.setup = 1;
+	return nil;
+}
+
+#
+# The Broadcom patch: Download_Minidriver puts the ROM into its
+# loader; the .hcd's records are then sent as the commands they are,
+# each answered; Launch_RAM, the last, restarts the controller on the
+# patched firmware, which takes a moment and forgets everything,
+# including any baud rate change. This is what BlueZ's hciattach
+# bcm43xx and Linux's btbcm do, in the order they do it.
+#
+Bcmsettle: con 50;		# ms after Download_Minidriver, before the first record
+Bcmrelaunch: con 250;		# ms after Launch_RAM, before the controller answers again
+
+bcmpatch(path: string): (int, string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return (0, sys->sprint("firmware %s: %r", path));
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0 || d.length <= big 0 || d.length > big (4*1024*1024))
+		return (0, sys->sprint("firmware %s: bad size", path));
+	hcd := array[int d.length] of byte;
+	n := 0;
+	while(n < len hcd){
+		m := sys->read(fd, hcd[n:], len hcd - n);
+		if(m <= 0)
+			return (0, sys->sprint("firmware %s: short read: %r", path));
+		n += m;
+	}
+	(recs, bad) := bthci->hcdrecords(hcd);
+	if(recs == nil)
+		return (0, sys->sprint("firmware %s: malformed record at byte %d", path, bad));
+
+	(nil, err) := must("download minidriver", Bthci->BcmDownloadMinidriver, nil);
+	if(err != nil)
+		return (0, err);
+	sys->sleep(Bcmsettle);
+	sent := 0;
+	for(; recs != nil; recs = tl recs){
+		(op, params) := hd recs;
+		(nil, err) = must(sys->sprint("patch record %d (0x%4.4ux)", sent, op), op, params);
+		if(err != nil)
+			return (sent, err);
+		sent++;
+	}
+	sys->sleep(Bcmrelaunch);
+	return (sent, nil);
+}
+
+#
+# Change rate: the controller first, at the old rate, then our side
+# through the transport's ctl file. Update_UART_Baud_Rate takes two
+# zero bytes (encoded baud, unused) and the rate little-endian.
+#
+setbaud(r: ref Ctlres, n: int): string
+{
+	p := array[6] of byte;
+	p[0] = byte 0;
+	p[1] = byte 0;
+	bthci->put4(p, 2, n);
+	(nil, err) := must("update baud rate", Bthci->BcmUpdateBaudrate, p);
+	if(err != nil)
+		return err;
+	fd := sys->open(transportname + "ctl", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("%sctl: %r", transportname);
+	if(sys->fprint(fd, "b%d", n) < 0)
+		return sys->sprint("%sctl: b%d: %r", transportname, n);
+	r.baud = n;
 	return nil;
 }
 
@@ -900,8 +1032,12 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 		addr = r.addr;
 		name = r.name;
 		version = r.version;
+		if(firmware != nil)
+			uploaded = r.uploaded;
 	}else if(r.setup < 0){
 		up = 0;
+	}else if(r.baud > 0){
+		baud = r.baud;
 	}else{
 		if(r.name != nil)
 			name = r.name;
@@ -922,7 +1058,7 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 #
 inquire()
 {
-	r := ref Ctlres(nil, nil, 1, 0, nil, nil, nil, -1, -1, -1);
+	r := ref Ctlres(nil, nil, 1, 0, nil, nil, nil, -1, -1, -1, 0, 0);
 	if(!up)
 		r.err = "controller not up";
 	else{

@@ -323,6 +323,12 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 	Bthci->Disconnect =>
 		if(len params < 3)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		# the reasons a host may give (Core 5, Vol 4 Part E, 7.1.6);
+		# a real controller refuses the rest, so this one does too
+		case int params[2] {
+		16r05 or 16r13 or 16r14 or 16r15 or 16r1a or 16r29 or 16r3b => ;
+		* =>	return cmdstatus(c, op, Bthci->Sinvalidparams);
+		}
 		h := bthci->get2(params, 0) & 16rfff;
 		pr := findhandle(c, h);
 		if(pr == nil)
@@ -338,11 +344,12 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 			pr.acks = 0;
 			out = cat(out, event(Bthci->EvNumCompleted, a));
 		}
-		# Disconnection Complete: status, handle, reason (the one asked for)
+		# Disconnection Complete: status, handle, reason -- which on the
+		# side that asked is always "terminated by local host"
 		d := array[4] of byte;
 		d[0] = byte 0;
 		bthci->put2(d, 1, h);
-		d[3] = byte params[2];
+		d[3] = byte Bthci->Slocalterm;
 		return cat(out, event(Bthci->EvDisconnComplete, d));
 	Bthci->BcmDownloadMinidriver or Bthci->BcmWriteRam or Bthci->BcmLaunchRam
 	or Bthci->BcmUpdateBaudrate =>

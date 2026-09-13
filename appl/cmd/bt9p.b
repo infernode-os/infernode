@@ -389,6 +389,19 @@ readfile(f: string): string
 # The transport is an fd. A dial string -- anything with a '!' in it --
 # is dialled; anything else is opened read-write.
 #
+# A serial port gets hardware flow control turned on, through the ctl
+# file eia(3) puts beside it. The Broadcom controller will not
+# transmit until its CTS is asserted -- on the Pi 3B+ the first HCI
+# Reset times out with the PL011's RTS undriven and answers at once
+# with it driven -- and hciattach sets CRTSCTS for bcm43xx for the
+# same reason. Nothing else about the port is touched: the rate is
+# the controller's default until "baud" says otherwise.
+#
+# The port is identified before it is touched: eia(3)'s status file
+# begins "b<rate> c<n> ...", and only a file that reads that way is
+# one whose ctl understands "m1". btmock(4) has a ctl beside its
+# file too, and it does not.
+#
 opentransport(spec: string): ref Sys->FD
 {
 	for(i := 0; i < len spec; i++)
@@ -398,7 +411,30 @@ opentransport(spec: string): ref Sys->FD
 				return nil;
 			return c.dfd;
 		}
-	return sys->open(spec, Sys->ORDWR);
+	fd := sys->open(spec, Sys->ORDWR);
+	if(fd == nil)
+		return nil;
+	if(iseia(spec)){
+		ctl := sys->open(spec + "ctl", Sys->OWRITE);
+		if(ctl == nil || sys->fprint(ctl, "m1") < 0)
+			sys->fprint(stderr, "bt9p: %sctl: m1: %r\n", spec);
+	}
+	return fd;
+}
+
+iseia(spec: string): int
+{
+	fd := sys->open(spec + "status", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 3 || buf[0] != byte 'b')
+		return 0;
+	for(i := 1; i < n && buf[i] != byte ' '; i++)
+		if(buf[i] < byte '0' || buf[i] > byte '9')
+			return 0;
+	return i > 1 && i < n;
 }
 
 #
@@ -2272,11 +2308,18 @@ accept(who: string)
 	cmd(Bthci->AcceptConnection, p);
 }
 
+#
+# The reason is what the OTHER end will be told, and the command
+# admits only a few: "remote user terminated" (16r13) is the one for
+# an ordinary hangup. 16r16, "terminated by local host", is what our
+# own Disconnection Complete then says; sent as the reason it is a
+# parameter error -- the mock let it pass, a Realtek controller did not.
+#
 disconnect(h: int)
 {
 	p := array[3] of byte;
 	bthci->put2(p, 0, h);
-	p[2] = byte Bthci->Slocalterm;
+	p[2] = byte Bthci->Sremoteterm;
 	cmd(Bthci->Disconnect, p);
 }
 

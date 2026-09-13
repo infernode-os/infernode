@@ -46,8 +46,14 @@ or a dial string such as
 .BR tcp!host!port ,
 anything with a
 .B !
-in it is dialled -- and speaks H4 over it. Nothing in the kernel knows
-the word Bluetooth; the controller's power line is a pin in
+in it is dialled -- and speaks H4 over it. A file transport with a
+.B ctl
+file beside it
+.RB ( /dev/eia0ctl )
+is a serial port, and gets hardware flow control turned on
+.RB ( m1 ):
+the Broadcom controller does not transmit until its CTS is asserted.
+Nothing in the kernel knows the word Bluetooth; the controller's power line is a pin in
 .B #G
 .RB ( os/bcm2837/devgpio.c ,
 pin 128 on a Pi 3B+) and its UART is a port in
@@ -169,9 +175,7 @@ to the transport's own ctl file
 .RB ( /dev/eia0ctl
 for
 .BR /dev/eia0 );
-refused for a transport that has none. Enable hardware flow control
-on the port first
-.RB ( "echo m1 > /dev/eia0ctl" ).
+refused for a transport that has none.
 .RE
 .TP
 .B scan
@@ -428,6 +432,15 @@ cat /net/bt/status
 .IR dial (2),
 .B docs/BLUETOOTH.md
 .SH BUGS
-Has run against
+On a Pi 3B+ the CYW43455 has answered
+.BR up ,
+taken its firmware, found a peer by inquiry and carried an L2CAP
+conversation each way; pairing and
+.B baud
+above 115200 have run against
 .I btmock
-only; no CYW43455 has answered it yet.
+only. The address after the firmware is the patch's default, not the
+board's; there is no verb yet to set it.
+Started from the network console it outlives the session and keeps the
+port, and the next instance's Reset is answered to the first one:
+kill it before starting another.

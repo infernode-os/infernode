@@ -4,6 +4,7 @@
 
 /* uart.c */
 void	uartinit(void);
+char*	uartdescribe(void);	/* one line for the banner: which UART, what clock */
 void	uartputc(int);
 int	uartgetc(void);
 void	serialrecover(void);

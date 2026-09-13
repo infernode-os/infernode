@@ -1,11 +1,26 @@
 /*
- * PL011 UART0 on BCM2837, polled output only.
+ * The serial console: policy over uartmini.c's polled mini-UART.
  *
  * This is the console of last resort: it works before the MMU, before
  * interrupts, and before any framebuffer exists, which makes it the only
- * way to see anything at all during early bring-up.  On real hardware it
+ * way to see anything at all during early bring-up. On real hardware it
  * comes out of GPIO 14/15 and needs a USB-serial cable; under QEMU it is
- * serial0, so plain -serial stdio picks it up.
+ * serial1 -- the second -serial -- because the first is the PL011.
+ *
+ * It WAS the PL011, polled, from the first boot until the Bluetooth
+ * work (docs/BLUETOOTH.md): on a Pi 3 that UART is wired to the radio,
+ * so the console moved to the mini-UART, which is where Plan 9 and
+ * Linux put it for the same reason. The header pins did not change --
+ * 14/15 carry either UART, on ALT0 or ALT5 -- and serialboot, which
+ * runs before this kernel and still speaks PL011 on them, did not
+ * change either. The PL011 register code became uartpl011.c, a
+ * PhysUart under #t as /dev/eia0.
+ *
+ * What this file keeps is the console's policy, which is the same on
+ * either UART: output is synchronous and polled, because this is the
+ * path a panic takes and a panic that queues its output can lose it;
+ * one core emits at a time; and input is echoed here, at the driver,
+ * because nothing above it will (see consuartputc).
  */
 
 #include "u.h"
@@ -15,143 +30,137 @@
 #include "io.h"
 #include "fns.h"
 #include "board.h"
+#include "../port/uart.h"
 
-enum
-{
-	Txspin = 10*1000*1000,	/* generous; only a wedged line reaches it */
+/*
+ * The board's UARTs, in the order that names them under #t:
+ * eia0 is the PL011 (the radio's), eia1 the mini-UART (the console's).
+ * docs/BLUETOOTH.md fixes those names; bt9p opens /dev/eia0.
+ */
+extern PhysUart pl011physuart;
+extern PhysUart miniphysuart;
+
+PhysUart* physuart[] = {
+	&pl011physuart,
+	&miniphysuart,
+	nil,
 };
 
-#define UART(r)	(*(volatile u32int*)((uintptr)UART0REGS + (r)))
+static ulong corehz;	/* what the mini-UART's divisor was computed from */
 
+/*
+ * Bring the console up. uartmini.c asks the firmware for the core
+ * clock before it enables anything, since a divisor from the wrong
+ * clock makes every later character unreadable; the rate it used is
+ * announced by kmain's banner so that a garbled console at least has
+ * a number to argue with (uartdescribe).
+ *
+ * The rate is NOT changed from 115200 here, and the reasoning that
+ * used to sit at this spot about 921600 still stands: bring the
+ * console up at the rate the cable expects, print the divisors, and
+ * only then switch -- so a failure is visible and the machine is
+ * still talking. Nobody has needed the switch since the network
+ * console arrived. serialboot is separate and stays at 115200.
+ */
 void
 uartinit(void)
 {
-	UART(Cr) = 0;			/* disable while reconfiguring */
+	corehz = miniconsinit();
+}
 
-	/*
-	 * GPIO 14 and 15 carry TXD0/RXD0 on alternate function 0, with no
-	 * pull needed since the line is actively driven at both ends.
-	 * Going through the GPIO driver rather than poking GPFSEL here
-	 * keeps one owner of the pin mux -- and means every boot exercises
-	 * that driver before anything else depends on it.
-	 */
-	gpiofunc(14, Gpioalt0);
-	gpiofunc(15, Gpioalt0);
-	gpiopull(14, Pullnone);
-	gpiopull(15, Pullnone);
-	gpioclaim(14, "uart");
-	gpioclaim(15, "uart");
+/*
+ * For the banner, before print() works: no snprint, no allocation,
+ * so the decimal is built in place. Under QEMU the firmware model
+ * reports 350000000; a board with enable_uart=1 reports 250000000, and
+ * one without it reports whatever the firmware scaled to, which is
+ * the number to look at when the console reads as noise.
+ */
+char*
+uartdescribe(void)
+{
+	static char buf[80];
+	char num[24];
+	char *p, *s;
+	int i;
+	ulong v;
 
-	UART(Icr) = 0x7FF;		/* clear all pending interrupts */
-
-	/*
-	 * 115200 baud from the 48MHz UART reference clock.
- *
- * REVERTED FROM 921600, AND HERE IS WHAT HAPPENED, because the next
- * attempt should not start from scratch.
- *
- * IBRD 3 / FBRD 16 is the correct divisor pair for 921600 -- 923077,
- * 0.16% error -- and the write order here is right: the PL011 latches
- * the divisors when LCRH is written, and LCRH is written after them.
- * The adapter is a CH340 and macOS accepted 921600 on it. It still
- * came back as garbage, with MORE bytes arriving at 921600 than at any
- * other rate, which says the board was transmitting somewhere near but
- * not at that rate.
- *
- * The suspect is FBRD not taking effect, which would leave IBRD 3
- * alone: 48e6/(16*3) is exactly 1000000, an 8.5% mismatch against
- * 921600 -- garbage, and unreachable besides, because macOS refuses to
- * set 1000000 on this adapter. That fits every symptom including
- * being locked out of the board entirely.
- *
- * WHAT TO DO DIFFERENTLY. Do not change the rate the early console
- * comes up at. Bring the console up at 115200, PRINT the divisors and
- * the intended rate, and only then switch -- so a failure is visible
- * and the machine is still talking. Better still, prove the divisors
- * by reading IBRD and FBRD back before relying on them.
-	 *
-	 * PL011 divisor: 48e6/(16*921600) = 3.2552, so IBRD 3 and FBRD
-	 * round(0.2552*64) = 16. That gives 48e6/(16*3.25) = 923077, an
-	 * error of 0.16% -- an order inside the 2-3% a UART pair
-	 * tolerates. (115200 was IBRD 26, FBRD 3, for 115177.)
-	 *
-	 * WHY IT IS WORTH CHANGING. Every kernel iteration on this board
-	 * pushes the whole image down this wire, and the image is now
-	 * 1.68MB: measured, 159.5 seconds at 115200. At this rate it is
-	 * about eighteen. That is the difference between a three-minute
-	 * edit-test cycle and a thirty-second one, and this port does a
-	 * lot of them.
-	 *
-	 * The reference clock is 48MHz because UART0 is fed by
-	 * init_uart_clock, not by core_freq -- the clock that moves with
-	 * the mini-UART is not this one. Empirically confirmed by 26/3
-	 * having produced working 115200 all along.
-	 *
-	 * SERIALBOOT IS DELIBERATELY NOT CHANGED WITH THIS. It lives on
-	 * the card and the only way to replace it is a copy from a
-	 * running kernel, so a loader that talks at a rate the host does
-	 * not expect is unreachable and means taking the card out. The
-	 * kernel is the recoverable half: if this is wrong, the console
-	 * garbles and the loader -- still at 115200 -- takes a corrected
-	 * kernel. Change that one only once this one is proven.
-	 */
-	UART(Ibrd) = 26;
-	UART(Fbrd) = 3;
-
-	UART(Lcrh) = Fen | Wlen8;
-	UART(Imsc) = 0;			/* polled; no interrupts yet */
-	UART(Cr) = Uarten | Txe | Rxe;
+	s = "mini-UART (UART1), polled; core clock ";
+	p = buf;
+	while(*s)
+		*p++ = *s++;
+	v = corehz;
+	i = 0;
+	do{
+		num[i++] = '0' + v % 10;
+		v /= 10;
+	}while(v > 0);
+	while(--i >= 0)
+		*p++ = num[i];
+	s = " Hz, 115200 baud";
+	while(*s)
+		*p++ = *s++;
+	*p = 0;
+	return buf;
 }
 
 void
 uartputc(int c)
 {
-	long i;
-
-	/*
-	 * Bounded: a transmitter that never drains would otherwise hang
-	 * every print(), including the one trying to report the fault.
-	 * Dropping the character is the right failure -- the console is
-	 * a diagnostic, not a contract.
-	 */
-	for(i = 0; UART(Fr) & Txff; i++)
-		if(i >= Txspin)
-			return;
-	UART(Dr) = c;
+	miniputc(c);
 }
 
 /*
  * Non-blocking read of one character, or -1 if the receive FIFO is
- * empty.
- *
- * The console has been write-only until now, which was enough to watch
- * the kernel boot and nothing more: a shell that cannot be typed at is
- * a log, not a session.
+ * empty. The polled path: probeuartin and the recovery console use
+ * it, before or instead of interrupts. Ordinary console input does
+ * not come this way any more -- it arrives on the mini-UART's receive
+ * interrupt and goes through consuartputc below.
  */
 int
 uartgetc(void)
 {
-	u32int d;
+	return minigetc();
+}
 
-	if(UART(Fr) & Rxfe)
-		return -1;
-
-	/*
-	 * The data register carries the receive ERROR flags in bits 8-11
-	 * alongside the byte: framing, parity, break and overrun. They
-	 * latch, and they are cleared by writing the receive-status
-	 * register -- not by reading the data. Ignoring them entirely, as
-	 * this did, means an overrun during boot leaves a flag set for
-	 * ever and the byte itself is returned with high bits that are
-	 * not data.
-	 *
-	 * Under emulation nothing ever overruns, so this could not have
-	 * shown up before there was a real line with real timing on it.
-	 */
-	d = UART(Dr);
-	if(d & Rxerrors)
-		UART(Rsrecr) = 0;
-	return d & 0xFF;
+/*
+ * Console input at interrupt time: what #t's console Uart does with
+ * each received byte (uartrecv -> putc). This replaced a kproc that
+ * polled uartgetc() every 10ms and, the board notes recorded, lost
+ * everything past the 16-byte FIFO of any burst a script sent.
+ *
+ * Enter sends CR, not NL -- every terminal emulator does, and so does
+ * anything driving this line from a script. consread()'s cooked-mode
+ * line discipline ends a line on NL (or ^D) and nothing else, so an
+ * untranslated CR would be appended to kbd.line as an ordinary
+ * character and the line never terminated. This is what ICRNL does on
+ * any other system, and the driver that owns the line is the place.
+ *
+ * Echo here too, because nothing else will. echo() in devcons writes
+ * to printq or to a bitmapped display; printq is deliberately never
+ * set in this tree (console output stays synchronous, above) and this
+ * board has no screen, so without this the console is blind -- you
+ * type and see nothing, which reads exactly like input being dropped.
+ * Not via screenputs: putstrn0 already sends kernel output down the
+ * same wire through serwrite, so borrowing the screen hook would
+ * double every line the kernel prints.
+ *
+ * kbdputc does the line discipline -- backspace, kill, the debug keys
+ * -- and hands complete lines to kbdq, which is what /dev/cons reads.
+ * When kbdq is full it drops the byte and says so, rate-limited; the
+ * stall-and-wait the old kproc did is gone with it, and so is the
+ * failure mode where a dead reader made the console deaf to the debug
+ * keys that could have said what died.
+ */
+int
+consuartputc(Queue *q, int c)
+{
+	USED(q);
+	if(c == '\r')
+		c = '\n';
+	if(c == '\n')
+		uartputc('\r');
+	uartputc(c);
+	return kbdputc(kbdq, c);
 }
 
 /*

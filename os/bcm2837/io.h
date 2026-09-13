@@ -219,7 +219,9 @@ enum
 	Tagsettouchbuf	= 0x0004801F,	/* hand the firmware a buffer of ours instead */
 	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
 	Taggetmaxclockrate= 0x00030004,	/* the most the firmware will ever run it at */
-	Tagsetgpiostate	= 0x00038041,	/* a pin on the firmware's GPIO expander (128+n) */
+	Taggetgpiostate	= 0x00030041,	/* a pin on the firmware's GPIO expander (128+n) */
+	Tagsetgpiostate	= 0x00038041,
+	Taggetgpioconfig= 0x00030043,	/* its direction, polarity, termination */
 	Taggetedidblock	= 0x00030020,	/* the display's own description */
 
 	/*
@@ -386,6 +388,16 @@ enum
 /* GPIO pin functions, as encoded in GPFSEL */
 enum
 {
+	/*
+	 * The firmware's GPIO expander: eight lines the VideoCore drives
+	 * over its own I2C, numbered 128+n by the firmware and by 9front.
+	 * On the 3B+: 0 BT_ON, 1 WL_ON, 2 PWR_LED_R, 3 LAN_RUN, 4 HDMI
+	 * hot-plug (an input), 5-6 CAM_GPIO, 7 unused (the device tree's
+	 * gpio-line-names). Reached through the mailbox, not GPIOREGS.
+	 */
+	Gpioexpbase	= 128,
+	Nexppin		= 8,
+
 	Gpioin		= 0,
 	Gpioout		= 1,
 	Gpioalt0	= 4,

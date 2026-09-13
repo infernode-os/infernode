@@ -653,6 +653,14 @@ sdioinit(void)
 		gpiopull(i, i == 34? Pullnone : Pullup);
 		gpioclaim(i, "ether4330");
 	}
+	/*
+	 * And the radio's power enable, which is #G/gpio/129: claimed so
+	 * that it can be READ from the shell -- is the radio powered? --
+	 * but not written from under this driver, which cycles it itself
+	 * (see the WL_REG_ON reset below). The same rule as the six pins
+	 * above, and the same one bt9p relies on for 128 being its own.
+	 */
+	gpioclaim(Wlregon, "ether4330");
 	if(sdio->init() < 0){
 		bootsay("controller will not reset", 0, -1);
 		return -1;

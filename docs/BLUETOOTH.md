@@ -66,8 +66,13 @@ made the decisions that matter.
    pin 0 of the VideoCore's GPIO expander, reached through the mailbox
    (`mailbox.c` "A pin on the firmware's GPIO expander: 128 + n");
    `ether4330.c` drives `WL_REG_ON`, expander pin 1, through exactly
-   that call. `#G` today exposes only the 54 SoC pins, one directory per
-   pin so that a namespace can hand a program one pin.
+   that call. `#G` exposes pins one directory each so that a namespace
+   can hand a program one pin; the expander's eight join it as
+   `128..135`, the firmware's own numbering (and 9front's `egpset()`),
+   so a power switch is a pin and there is one schema for pins. In
+   every earlier port -- the old Inferno Pi port, Plan 9, 9front -- these
+   lines were switched by a kernel-internal function call that nothing
+   outside could see or ask; this is the first to make them files.
 
 5. **Firmware lives on the card**, README §"The WiFi firmware lives on
    the card, not in the tree": asked for as `/n/dos/firmware/<name>`,
@@ -119,7 +124,7 @@ side effect; the harness should assert it.
 ```
                     kernel (C)                    │      programs (Limbo)
                                                   │
-  mailbox ── #G/exp/0/level  (BT_ON)  ────────────┼──► bt9p ─────────────► /net/bt/...
+  mailbox ── #G/gpio/128/level (BT_ON) ───────────┼──► bt9p ─────────────► /net/bt/...
                                                   │     │                   ctl addr status
   PL011  ── PhysUart pl011 ─┐                     │     │ h4 over            scan lescan
                             ├── devuart.c (#t) ───┼──► /dev/eia0 ◄──────── event hci
@@ -133,8 +138,8 @@ side effect; the harness should assert it.
 ```
 
 **Kernel.** Three things, all mechanism: `#t` (the import), two
-`PhysUart`s, and `#G` learning about the expander. No Bluetooth word
-appears in kernel code.
+`PhysUart`s, and `#G` learning about the expander's pins. No Bluetooth
+word appears in kernel code.
 
 **Limbo.** One program, `bt9p`, owns the controller: it is the HCI host.
 It opens a *transport* and serves `/net/bt`. Everything the Bluetooth
@@ -176,16 +181,31 @@ Bound at `/dev`. Nothing new to design; the interface is `man/3/eia`.
 Only what the PL011 cannot do is refused (`p e`, `l7` may be; `m1`
 must work).
 
-### `#G/exp/N` — the firmware GPIO expander (kernel; small extension)
+### `#G/gpio/128..135` — the firmware GPIO expander (kernel; same schema)
 
-    #G/exp/0/level   read "0\n"|"1\n"; write "1" drives BT_ON
-    #G/exp/1/level   WL_ON -- claimed by ether4330, refuses writes
-    ...
+    #G/gpio/128/level   read "0\n"|"1\n" (or "?\n" if the firmware will not say
+                        and nothing was written); write "1" drives BT_ON
+    #G/gpio/128/ctl     read "function out\npull none\n" as the firmware reports;
+                        write refused: "no function select or pull to set"
+    #G/gpio/129/level   WL_ON -- claimed by ether4330: reads, refuses writes
+    #G/gpio/131/level   LAN_RUN, the Ethernet chip's reset -- unclaimed until
+                        something needs to own it
+    #G/gpio/132/level   HDMI hot-plug, an input: "not an output" on write
 
-Level only: the expander has no function select or pull. Same claiming
-rule as SoC pins: a driver that owns a line makes `#G` refuse it, so a
-stray echo cannot power the radio off under the WiFi driver. A
-namespace can hand `bt9p` exactly `#G/exp/0` and nothing else.
+Same directory, same two files, same claiming rule as the SoC pins:
+a driver that owns a line makes `#G` refuse it by name, so a stray echo
+cannot power the WiFi radio off under its driver, and WiFi's power
+becomes *readable* as a side effect. A namespace can hand `bt9p`
+exactly `#G/gpio/128` and `/dev/eia0` and nothing else. What the
+expander cannot do is refused truthfully rather than modelled.
+
+Ethernet, WiFi and Bluetooth are thereby consistent: each radio or
+chip has a power/reset line that is a pin in `#G`, owned by its
+driver if the driver is in the kernel (`ether4330`, 129) and by a
+program if the driver is a program (`bt9p`, 128). Firmware *power
+domains* (the USB block, SD, the UARTs) are a different resource,
+switched by a different mailbox tag, and are deliberately **not**
+pins; they are a separate proposal.
 
 ### `/net/bt` — the controller and its links (Limbo, `bt9p`)
 
@@ -241,7 +261,7 @@ does, and an RFCOMM serial port has every reason to present as
 ### Example session
 
     ; bind -a '#t' /dev
-    ; echo 1 > '#G/exp/0/level'
+    ; echo 1 > '#G/gpio/128/level'
     ; bt9p -t /dev/eia0
     ; echo 'firmware /n/dos/firmware/BCM4345C0.hcd' > /net/bt/ctl
     ; echo up > /net/bt/ctl
@@ -268,7 +288,7 @@ does, and an RFCOMM serial port has every reason to present as
 same as `/net`. If granted: conversation directories `N/` are
 grantable (a pipe to one peer); `ctl`, `hci`, `event`, `scan` are
 control plane and are not — `scan` in particular pairs a sensitive read
-(who is nearby) with nothing an agent needs. `#G/exp/0` is a power
+(who is nearby) with nothing an agent needs. `#G/gpio/128` is a power
 switch and is never granted.
 
 ## Firmware
@@ -343,7 +363,8 @@ typed at the console arrives whole. `os/bcm2837/README.md` "The console
 is on the mini-UART" records what QEMU could not show, for the first
 board session: `enable_uart=1` on the card, `dtoverlay=disable-bt`
 removed, serialboot unaffected (it muxes 14/15 itself).
-Still to do in this milestone: `#G/exp/N` for BT_ON.
+`#G/gpio/128..135` landed the same day: the expander as pins, `ether4330`
+claiming 129, seven harness checks.
 
 **M2 — `bt9p` exists and speaks HCI.** `bttransport.m`, `h4`, the HCI
 core (command queue honouring Num_HCI_Command_Packets, event dispatch,
@@ -351,7 +372,7 @@ timeouts), `/net/bt/{addr,status,ctl,event,hci}`. Unit tests against
 the mock. Reports "no controller" cleanly when the transport is silent,
 the way `ether4330: no radio` does under QEMU.
 
-**M3 — first light on the board.** `BT_ON` up, ROM firmware answers at
+**M3 — first light on the board.** `#G/gpio/128` up, ROM firmware answers at
 115200, `.hcd` uploaded, baud raised to 921600 then 3 Mbaud with
 `m1`, `Read_BD_ADDR` returns the board's own address. The first
 hardware milestone and the first that needs the board at all.
@@ -386,9 +407,9 @@ comparison via the confirmation path; legacy PIN for old peripherals.
 
 ## Open questions for review
 
-1. `#G/exp/N` versus a `power` verb on `eia0ctl` (Inferno's `PhysUart`
-   has a `.power` op). The pin is the module's, not the UART's, so the
-   file is proposed; the verb is the smaller change.
+1. *Closed:* the power line is `#G/gpio/128`, not a `power` verb on
+   `eia0ctl` and not a separate `#G/exp/N` directory. One schema for
+   pins; a radio's switch is a pin whoever drives it.
 2. `scan` as a blocking streamed read that ends at Inquiry Complete,
    versus a table refreshed by a ctl verb. Streaming is proposed
    because `cat` then does the whole job.

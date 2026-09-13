@@ -1,6 +1,6 @@
 # Bluetooth for InferNode
 
-Status: Proposed. Branch `feat/baremetal-bt`, off `feat/baremetal-pi`.
+Status: Proposed — issue [#615](https://github.com/infernode-os/infernode/issues/615). Branch `feat/baremetal-bt`, off `feat/baremetal-pi`.
 Board: Raspberry Pi 3B+ (BCM2837, CYW43455 combo radio). Nothing here
 applies to hosted `emu` except where it says so.
 

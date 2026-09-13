@@ -2365,6 +2365,100 @@ The merged tree passes 194 checks against 152 before, and the hosted
 suite still passes with the JIT on. Every "DONE" note below says what
 was verified and what was not; the board has run none of it yet.
 
+*Stock taken 2026-09-13, after a day on the board.* Everything in this
+paragraph was measured on the Pi 3B+, and the numbers replace earlier
+ones taken under QEMU or by inference. Where a measurement contradicts
+a note below, this paragraph is the correction and the note is left
+standing so the reasoning that led to it can be read.
+
+- **Inbound bulk TCP did not work at all** -- not slowly, not
+  intermittently: any transfer whose frame exceeded 1510 bytes on the
+  wire delivered zero bytes while the sender retransmitted to death.
+  `etherusb.b` wrote `MAC_RX`'s max-size field as `Maxframe` (1514),
+  and the LAN78xx compares that against the frame INCLUDING the FCS it
+  is simultaneously told to strip, so standard 1514-byte frames were
+  dropped by the MAC where no driver counter can see them. Fixed by
+  adding the FCS length (`e9ac55de7`), A/B'd against the previous
+  kernel with the running image verified from `/dev/bootimage`.
+  Everything small -- DHCP, ARP, ICMP, 9P stat and walk, a console
+  line -- had always worked, which is how this went unnoticed. #608.
+  **There is no regression test for it in the tree**; QEMU's
+  `usb-net` is RNDIS and cannot express it. Item 7 should start here.
+- **Throughput, re-taken (item 13's ledger is superseded).** Both
+  directions are ERRATIC, and were on the original kernel too: outbound
+  41-103 Mbit/s, inbound 10-24, run to run, same payload. The "12.4
+  MB/s" recorded below was three consecutive lucky runs quoted as a
+  figure. The cause is now localised with the controller's own
+  counters (`dump` on `/usb/usb/ctl`, `rxstats` on `ether0`'s ctl):
+  a 9 KB read costs ~76 channel operations -- about four per 512-byte
+  USB packet, each an interrupt and a sleep/wake -- and at idle the
+  reader polls at exactly 1000 bulk INs/s. The 200 ms channel timeout
+  pathology is NOT occurring (one in 37 s). The fix is item 10, and
+  `etherusb.b`'s own note names it: zero-length-packet awareness in
+  the DWC read path. Wifi over SDIO measured 37 out / 38 in Mbit/s --
+  symmetric, and better inbound than USB ethernet -- which confirms
+  the cost is in the USB path, not `os/ip`. #610.
+- **Item 2 is done, and its diagnostic is wrong.** `smpticks()` prints
+  `cpu1 +0` on every boot; a steady-state measurement shows all four
+  cores at 999 Hz. It samples a 200 ms window before cpu1's first tick
+  has landed and reports a transient as a defect. Item 13's "waits on
+  item 2" blocker therefore does not exist.
+- **WiFi (item 6) joins, keys, and now survives a drop.** The stored
+  credential is a 64-hex PSK (`wpakey->pmkfor`), so the card holds no
+  passphrase. The supplicant never re-joined after a link loss -- a
+  join is an effect of writing the ctl and nothing re-issued one --
+  and one drop ended the link until a reboot. Fixed in `ip/wpa`
+  (`6d039cdf6`, `66aaa3927`): the latched essid is cleared before the
+  element and name are written, and only for a link that has keyed
+  once; boot flakes keep osinit's kill-and-restart, and osinit's
+  per-try budget is 90 s. Verified under a NATURAL drop, twice; drops
+  forced by writing the ctl go through `wljoin()` and never notify
+  the supplicant, so every forced test is void. The drops themselves
+  were the access point's idle timer: with both interfaces on one
+  subnet the route table gave ethernet the `/24`, the radio never
+  transmitted, and JANSOM_5G deauthenticated a silent station every
+  8-12 minutes; radio-only for 35 minutes, no drop. A deployed
+  wifi-only board never provokes this. #614.
+- **memfs grew its block table by exactly one write's worth, every
+  write.** Quadratic; 2.15x at 2 MB widening to 6.2x at 6 MB, fixed by
+  doubling (`e3c610839`) with the store accounting moved to a field
+  that means what it says, and a shell test that fails when the refund
+  is wrong. #609. Earlier figures of 150-191 KB/s in that issue were
+  an artifact of polling the board from a second console session while
+  measuring; the real unpatched rate was 3.9 MB/s.
+- **The console moved to the mini-UART and it works on the board**
+  (#620 merged, #615): clean at 115200 off a core clock the mailbox
+  reports as 400 MHz, not the 250 expected under `enable_uart=1`. The
+  Bluetooth controller does not yet answer an HCI Reset: nothing routes
+  the PL011 to GPIO 32/33 (ALT3), and the firmware refused the
+  `BT_ON` expander write that QEMU's model accepts. Both are recorded
+  on #615 with the raw output.
+- **tryboot's firmware flag is refused on this board** (`tryboot:
+  firmware did NOT acknowledge the reboot flags`), where QEMU's
+  mailbox test passes. Item 4's board half is therefore not done; A/B
+  is by `config.txt` swap and rename, which works and is what every
+  kernel today went through.
+- **Uncommanded reboots**: four to six between noon and 17:18, none
+  in the six hours after. Nothing recorded them -- `/tmp` is memory
+  and the network console dies with the board. A read-only serial
+  capture with boot and reset-cause marking now runs continuously on
+  the host, alongside a soak that samples wifi state, interfaces,
+  ethernet errors, process count, `/dev/memory` and throughput every
+  minute. The next one will explain itself.
+- **Loop costs, measured**: kernel build and QEMU suite ~8 min; a
+  2 MB kernel onto the FAT card 126-266 s (dossrv writes at ~17 KB/s,
+  worth its own look); promote by rename, instant; reboot to console
+  ~70 s. QEMU 6.2 (Ubuntu 22.04) does not deliver `-append` to
+  `raspi3b` and fails seven checks for that reason alone.
+
+New items this adds, in priority order: a hardware regression test
+for #608 (item 7); item 10 with the ZLP note as its specification;
+the two Bluetooth board gaps (#615); a supervisor for the supplicant
+in osinit that outlives the boot; FAT write speed; and the three
+unexplained things -- the boot flake on first association (~50%), the
+afternoon's reboots, and why a never-keyed association behaves
+differently from a lost one.
+
 ### Tier 1 — defects the review found; worked through 2026-09-05
 
 **1. The AArch64 JIT never runs a reference's destructor.**

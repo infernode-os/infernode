@@ -266,7 +266,7 @@ asyncexec(tool):
   2. pctl(NEWENV), then copy only VELTRO_SESSION
   3. pctl(NODEVS)
   4. bind /tool.N over /tool
-  5. restrictns(Capabilities(tools = [tool], ...))
+  5. restricttoolns(Capabilities(tools = [tool], ...))
   6. execute only that tool module
 ```
 
@@ -274,6 +274,11 @@ The fresh environment group is required even though `restrictns()` narrows
 `/env`: Inferno deliberately permits a process to name its private `#e`
 device after `NODEVS`. Without `NEWENV`, that alias would recover the
 launcher's unfiltered environment behind the restricted `/env` view.
+
+`restricttoolns()` hides trusted `/tmp/veltro/.ns` metadata before the final
+`/tmp` replacement. No model-facing operation may call `restrictdir()` after
+that replacement: doing so would recreate `/tmp/.veltro-ns` inside the
+worker's writable, restricted `/tmp` view and expose its shadow backing.
 
 `exec` defers `NODEVS` to its trusted wrapper. The wrapper opens the current
 worker's `#p/<pid>/wait`, retains only that FD and its I/O across `NEWFD`, then
